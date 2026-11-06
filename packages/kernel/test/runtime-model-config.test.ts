@@ -147,9 +147,8 @@ describe('全局模型来源优先级', { timeout: 60_000 }, () => {
       assertRequestModel(await lastAssistantEntry(k1, conv.id), 'faux', 'faux-1')
       await k1.close()
       k1 = undefined
-      delete process.env['HELM_MODEL']
 
-      // options.model 最高优先：重启后既有会话按新全局对齐。
+      // options.model 最高优先：环境仍指向 faux-1，重启后应使用显式 faux-2。
       const k2 = await openRuntime(dir, { model: 'faux/faux-2', ids: ['faux-1', 'faux-2'] })
       try {
         assert.equal(k2.getConversation(conv.id).model, 'faux/faux-2')
@@ -238,17 +237,18 @@ describe('assistant 根 Profile 模型', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('create 显式 profileId 校验', { timeout: 60_000 }, () => {
-  it('不存在时 validation_error（不回落 assistant）；创建后正常绑定并可配置模型', { timeout: 60_000 }, async () => {
+  it('显式 default 不存在时拒绝；创建真实 default 后按原 ID 绑定', { timeout: 60_000 }, async () => {
     const dir = join(root, 'p5')
     const kernel = await openRuntime(dir)
     try {
+      assert.equal((await kernel.createConversation()).profileId, 'assistant', '仅缺省时选 assistant')
       await assert.rejects(
-        () => kernel.createConversation({ profileId: 'ghost' }),
+        () => kernel.createConversation({ profileId: 'default' }),
         isHelm('validation_error'),
       )
-      writeProfile(dir, 'ghost', { name: 'G', model: 'faux/faux-1' })
-      const conv = await kernel.createConversation({ profileId: 'ghost' })
-      assert.equal(conv.profileId, 'ghost')
+      writeProfile(dir, 'default', { name: 'D', model: 'faux/faux-1' })
+      const conv = await kernel.createConversation({ profileId: 'default' })
+      assert.equal(conv.profileId, 'default')
       assert.equal(conv.model, 'faux/faux-1')
       // 模型引用格式边界同样显式拒绝。
       await assert.rejects(
