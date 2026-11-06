@@ -104,8 +104,6 @@ export interface AgentSpawnRequest {
   model?: string
   effort?: string
   isolation?: 'worktree'
-  /** 原生子会话创建后通知编排宿主。 */
-  onCreated?: (conversationId: number) => void
   /**
    * 执行环境确定后回传（原生子会话或外部运行时均适用）；
    * 编排宿主据此把 conversationId / worktree 等元数据写回节点状态。

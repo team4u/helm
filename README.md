@@ -30,7 +30,7 @@ pnpm helm status --json
 pnpm helm conversations list --json
 ```
 
-`setup` 只允许首次初始化；后续终端使用 `pnpm helm login` 登录。CLI 将登录凭据 JSON（Hub 地址与 Token）写入数据目录中的 `cli-token`，权限为 `0600`；模型和插件密钥继续保存在 `credentials.json`。旧版 `credentials.json.cli` 在首次读取时持锁迁移，其他密钥保留。`HELM_TOKEN` 优先于磁盘凭据，显式提供时不读取凭据文件。
+`setup` 只允许首次初始化；后续终端使用 `pnpm helm login` 登录。CLI 将登录凭据 JSON（Hub 地址与 Token）写入数据目录中的 `cli-token`，权限为 `0600`；模型和插件密钥保存在 `credentials.json`。`HELM_TOKEN` 优先于磁盘凭据，显式提供时不读取凭据文件。
 
 CLI 使用 `HELM_HUB_URL` 指定 Hub，默认 `http://127.0.0.1:3202`。支持指定会话的命令可通过 `--current` 读取 `HELM_CONVERSATION_ID`。内核受管 Shell 自动获得仅本进程有效的 `HELM_TOKEN` 和当前会话环境，可直接调用 CLI；该 Token 随进程关闭失效，其回显通过统一出站脱敏处理。
 
@@ -42,4 +42,4 @@ CLI 使用 `HELM_HUB_URL` 指定 Hub，默认 `http://127.0.0.1:3202`。支持�
 
 SSE 首帧包含会话、审批、启用插件 UI 和工作流运行摘要；随后推送时间线条目、流式状态、公开插件文档和工作流更新。插件文档必须显式声明 `public: true` 才能通过 `helm plugins doc <id> <name>` 读取，仍需 Hub 鉴权。`helm workflows runs --json` 可查看运行摘要。
 
-升级旧数据前应停机备份整个数据目录。模型迁移会把旧会话当前使用的非空模型保留为显式覆盖，因为旧版没有记录其来源；清除覆盖后可使用新继承规则。需要回退数据格式时恢复配套备份，并重新登录 CLI。Web 组件渲染与 `client.tsx` 编译交付随 Web 阶段实现。
+项目处于开发阶段，不考虑向后兼容，不做数据迁移。代码、接口、配置和数据库结构可直接按最新设计调整；结构变化时可以清理开发数据并重新初始化。同一结构下的会话、记忆和工作流重启恢复仍需保证。Web 组件渲染与 `client.tsx` 编译交付随 Web 阶段实现。
