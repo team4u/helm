@@ -12,6 +12,7 @@ export async function createHelm(options: HelmOptions = {}) {
     const workflows = new WorkflowService({
       dataDir: kernel.dataDir,
       state: kernel.documentStore,
+      redact: (text) => kernel.stash.redact(text),
       host: {
         spawnAgent: (request) => kernel.spawnAgent(request),
         runGate: (command, context) => kernel.runGate(command, context),
@@ -25,6 +26,7 @@ export async function createHelm(options: HelmOptions = {}) {
         emitEvent: (type, payload) => kernel.events.publish(type, payload),
       },
     });
+    await workflows.init();
     kernel.setWorkflowRunner(async (request, conversationId) => workflows.run({ ...request, conversationId }));
     await kernel.start();
     return {
