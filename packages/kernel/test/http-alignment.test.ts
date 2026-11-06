@@ -26,6 +26,8 @@ import {
   HelmError,
   ROOT_CONVERSATION_ID,
   type ConversationDetail,
+  type ConversationInputResult,
+  type ConversationPatch,
   type ConversationSummary,
   type HelmPluginContext,
   type WorkflowRunSummary,
@@ -80,8 +82,9 @@ const state = {
   detail: undefined as ConversationDetail | undefined,
   detailCalls: [] as Array<{ id: number; opts?: { limit?: number; cursor?: string } }>,
   submitted: [] as Array<{ id: number; text: string; opts?: Record<string, unknown> }>,
+  updateCalls: [] as Array<{ id: number; patch: ConversationPatch }>,
   waitForInputCalls: [] as Array<{ id: number; submissionId: string }>,
-  waitForInputResult: undefined as ConversationDetail['entries'] extends never ? never : unknown,
+  waitForInputResult: undefined as ConversationInputResult | undefined,
   waitForInputError: undefined as HelmError | undefined,
   setHubUrlCalls: [] as string[],
 }
@@ -123,6 +126,7 @@ function makeKernel(): KernelRuntimeLike {
       return created
     },
     async updateConversation(id, patch) {
+      state.updateCalls.push({ id, patch: { ...patch } })
       const found = state.conversations.get(id)
       if (!found) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
       const next = { ...found, ...patch }
@@ -139,6 +143,9 @@ function makeKernel(): KernelRuntimeLike {
     async waitForInput(id, submissionId) {
       state.waitForInputCalls.push({ id, submissionId })
       if (state.waitForInputError) throw state.waitForInputError
+      if (state.waitForInputResult === undefined) {
+        throw new HelmError('test_fixture_missing', '测试基座缺少 waitForInputResult fixture（用例需先设置 state.waitForInputResult）', 500)
+      }
       return state.waitForInputResult
     },
     async abortConversation() {},
@@ -329,6 +336,44 @@ test('GET /api/conversations?profileId 过滤透传（与 tag/status 可组合�
   assert.equal(res.body[0].profileId, 'worker')
   const none = await call(handler, 'GET', '/api/conversations?profileId=nobody')
   assert.deepEqual(none.body, [])
+})
+
+test('PATCH /:id model 覆盖与空串清覆盖边界；其他字段不受空串影响', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  // 合法 provider/model 覆盖透传
+  const set = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, {
+    body: { model: 'openai/gpt-4o' },
+  })
+  assert.equal(set.status, 200)
+  assert.deepEqual(state.updateCalls.at(-1)?.patch, { model: 'openai/gpt-4o' })
+
+  // 空串 = 清除覆盖（边界接受并透传；语义由 kernel.updateConversation 落实）
+  const clear = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, {
+    body: { model: '' },
+  })
+  assert.equal(clear.status, 200)
+  assert.deepEqual(state.updateCalls.at(-1)?.patch, { model: '' })
+
+  // 错误形状仍 400：缺 provider、含空白、多斜杠、纯空格
+  for (const bad of ['gpt-4o', 'openai /gpt', 'openai/gpt/4o', 'openai/ gpt', ' ']) {
+    const res = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, { body: { model: bad } })
+    assert.equal(res.status, 400, `model=${JSON.stringify(bad)} 应 400`)
+    assert.equal(res.body.error.code, 'validation_error')
+  }
+  // 非字符串类型拒绝
+  const num = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, { body: { model: 42 } })
+  assert.equal(num.status, 400)
+})
+
+test('POST /api/conversations（create）model 不接受空串：仍需 provider/model', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const res = await call(handler, 'POST', '/api/conversations', { body: { model: '' } })
+  assert.equal(res.status, 400)
+  assert.equal(res.body.error.code, 'validation_error')
+  const bad = await call(handler, 'POST', '/api/conversations', { body: { model: 'gpt-4o' } })
+  assert.equal(bad.status, 400)
+  const ok = await call(handler, 'POST', '/api/conversations', { body: { model: 'openai/gpt-4o' } })
+  assert.equal(ok.status, 201)
 })
 
 // ---------------------------------------------------------------------------

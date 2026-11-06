@@ -160,7 +160,11 @@ export function parseConversationPatch(body: Record<string, unknown>): Conversat
   }
   const model = optionalString(body, 'model')
   if (model !== undefined) {
-    if (!/^[^/\s]+\/[^/\s]+$/.test(model)) throw new ValidationError('model 需为 provider/model 形式')
+    // PATCH 专属语义：'' = 清除显式覆盖（重算 Profile/全局继承链）；
+    // create（parseConversationInit）仍要求 provider/model，不接受空串。
+    if (model !== '' && !/^[^/\s]+\/[^/\s]+$/.test(model)) {
+      throw new ValidationError("model 需为 provider/model 形式或空串（空串 = 清除覆盖）")
+    }
     patch.model = model
   }
   const unread = optionalBoolean(body, 'unread')

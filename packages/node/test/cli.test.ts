@@ -180,6 +180,18 @@ test('conversations create/send/abort/update/delete 的路径、body 与 --curre
     const patchHit = hub.recorded.hits.find((h) => h.method === 'PATCH')!
     assert.deepEqual(patchHit.body, { pinned: true, unread: false })
 
+    // --model 空串 = 清除模型覆盖（PATCH {model:''}）；服务端已支持，CLI 必须能表达
+    const cleared = await run(['conversations', 'update', '7', '--model', '', '--json'], env)
+    assert.equal(cleared.code, 0, cleared.err)
+    assert.deepEqual(hub.recorded.hits.at(-1)?.body, { model: '' })
+    const clearedInline = await run(['conversations', 'update', '7', '--model=', '--json'], env)
+    assert.equal(clearedInline.code, 0, clearedInline.err)
+    assert.deepEqual(hub.recorded.hits.at(-1)?.body, { model: '' })
+    // 正常覆盖仍原样透传
+    const overridden = await run(['conversations', 'update', '7', '--model', 'openai/gpt-4o', '--json'], env)
+    assert.equal(overridden.code, 0, overridden.err)
+    assert.deepEqual(hub.recorded.hits.at(-1)?.body, { model: 'openai/gpt-4o' })
+
     const deleted = await run(['conversations', 'delete', '7', '--json'], env)
     assert.equal(deleted.code, 0, deleted.err)
 

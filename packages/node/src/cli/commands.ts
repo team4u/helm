@@ -341,7 +341,14 @@ export function coreCommands(): CommandSpec[] {
   cmds.push({
     path: ['conversations', 'update'],
     description: '更新会话（PATCH /api/conversations/:id）',
-    flags: [...convFlags, { name: 'title', type: 'string' }, { name: 'model', type: 'string' }, { name: 'profile-id', type: 'string' }, { name: 'pinned', type: 'boolean' }, { name: 'unread', type: 'boolean' }],
+    flags: [
+      ...convFlags,
+      { name: 'title', type: 'string' },
+      { name: 'model', type: 'string', help: '显式覆盖模型 provider/model；空串（--model= 或 --model ""）清除覆盖并重算继承链' },
+      { name: 'profile-id', type: 'string' },
+      { name: 'pinned', type: 'boolean' },
+      { name: 'unread', type: 'boolean' },
+    ],
     positional: '[id]',
     async run(ctx) {
       const parsed = parseFlags(

@@ -665,10 +665,22 @@ test('集成6: HTTP 真实往返——鉴权/根会话保护/动作校验同权/
     assert.equal(conv.status, 200)
     assert.equal(JSON.parse(conv.body).id, ROOT_CONVERSATION_ID)
     env.faux.setResponses([fauxAssistantMessage('HTTP 回合完成')])
+    // 非等待提交：路由默认 submission accepted（202 + {submissionId}），不伪造同步回答
     const sent = await call('POST', '/api/conversations/1/input', { body: { text: '你好，集成测试' } })
-    assert.equal(sent.status, 200)
+    assert.equal(sent.status, 202)
+    const submission = JSON.parse(sent.body) as { submissionId: string }
+    assert.ok(typeof submission.submissionId === 'string' && submission.submissionId.length > 0, '202 应携带 submissionId')
     await env.app.kernel.waitForIdle(ROOT_CONVERSATION_ID)
     assert.ok(env.faux.state.callCount >= 1, 'HTTP submit 应触发真实模型回合')
+
+    // 显式等待链：?wait=1 精确等待本次提交的回答（200 ConversationInputResult）
+    env.faux.setResponses([fauxAssistantMessage('HTTP 等待回答')])
+    const waited = await call('POST', '/api/conversations/1/input?wait=1', { body: { text: '等待链验证' } })
+    assert.equal(waited.status, 200, `wait=1 应返回本次回答：${waited.body}`)
+    const waitResult = JSON.parse(waited.body) as { submissionId: string; text: string; entry: { id: string; kind: string } }
+    assert.ok(waitResult.submissionId.length > 0)
+    assert.equal(waitResult.text, 'HTTP 等待回答')
+    assert.ok(waitResult.entry.id, 'wait 结果应含精确回答 entry')
 
     // --- 动作校验同权：HTTP 非法入参 400 validation_error（与 invokeAction 同一校验器）
     const actionList = await call('GET', '/api/actions')
