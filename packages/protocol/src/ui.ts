@@ -110,70 +110,36 @@ export interface PluginUiRegistry {
 // 标准组件 Props（纯数据形状，供 client.tsx 实现与宿主传递；不引 React 类型）
 // ---------------------------------------------------------------------------
 
-/** 所有 UI 扩展点组件的公共 Props。 */
-export interface UiComponentBaseProps {
-  /** 所属插件 ID（宿主注入，实现无需自行导入）。 */
-  pluginId: string
-  /** 扩展点内 ID（UiSpecBase.id）。 */
-  id: string
-  /** 声明式 spec 原样（json / scope / title 等）。 */
-  spec: Record<string, unknown>
-}
-
 /** screen：全屏自定义视图（支持左右 Split View 并排展示）。 */
-export interface ScreenProps extends UiComponentBaseProps {
-  /** 当前会话摘要（screen 可感知会话上下文）；无会话上下文时缺省。 */
-  conversation?: ConversationSummary
-  /** 工具栏/动作请求出口（由宿主实现，组件不直接 fetch）。 */
-  actions: UiActionSink
+export interface ScreenProps {
+  pluginId: string
+  screenId: string
 }
 
 /** timeline.renderer：接管单条时间线条目的渲染。 */
-export interface TimelineRendererProps extends UiComponentBaseProps {
+export interface TimelineRendererProps {
   entry: ConversationEntry
-  /** 宿主默认渲染结果（如折叠摘要文本），可原样展示或替换。 */
-  fallback?: string
-}
-
-/** tool.view：接管工具调用内联卡片。 */
-export interface ToolViewProps extends UiComponentBaseProps {
   conversationId: number
-  call: ToolCallView
 }
 
-/** 工具调用卡片数据（ConversationLive.tools 单项加 callId 外相同形状）。 */
-export interface ToolCallView {
+/** tool.view：工具调用过程与结果的可序列化数据。 */
+export interface ToolViewProps {
   callId: string
   toolName: string
   input?: unknown
   status: 'running' | 'done' | 'error'
   result?: unknown
+  conversationId: number
 }
 
 /** composer.pill / composer.widget：输入区扩展。 */
-export interface ComposerScopeProps extends UiComponentBaseProps {
-  conversationId: number
-  /** 当前草稿文本（只读展示；提交仍走宿主主入口）。 */
-  draft?: string
-  /** 写入/追加草稿（宿主实现）。 */
-  setDraft(text: string): void
-  /** 以给定 meta 提交本轮输入（宿主实现，含边界校验）。 */
-  submit(text: string, opts?: { meta?: Record<string, unknown> }): void
+export interface ComposerScopeProps {
+  conversation: ConversationSummary
 }
 
 /** workbench.panel：会话感知右栏抽屉面板。 */
-export interface WorkbenchPanelProps extends UiComponentBaseProps {
+export interface WorkbenchPanelProps {
   conversation: ConversationSummary
-  actions: UiActionSink
-}
-
-/**
- * UI 发起的动作请求出口（invoke ctx.action / 跳转等）；纯数据命令形状，
- * 由宿主解释执行，组件不直接发 HTTP。
- */
-export interface UiActionSink {
-  invokeAction(pluginId: string, actionId: string, input?: unknown): Promise<unknown>
-  openTarget(target: string): void
 }
 
 /**

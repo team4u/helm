@@ -157,7 +157,7 @@ export interface ConversationDetail extends ConversationSummary {
 /** 会话实时增量视图（SSE `conversation.live` 事件载荷）。 */
 export interface ConversationLive {
   conversationId: number
-  /** 最新助手可见文本增量（零 Token 摘要级）。 */
+  /** 当前流式助手文本的累计快照；客户端直接替换此前实时文本。 */
   text: string
   tools: Array<{
     callId: string
