@@ -3,10 +3,10 @@ import { WorkflowService } from './workflow/index.js';
 import { createAssistantPlugin } from './builtin-plugins/assistant.js';
 import { redactJsonValue } from './redact.js';
 
-export type HelmOptions = Parameters<typeof KernelRuntime.open>[0];
+export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'>;
 
 export async function createHelm(options: HelmOptions = {}) {
-  const kernel = await KernelRuntime.open(options);
+  const kernel = await KernelRuntime.open({ ...options, autoResume: false });
   try {
     await kernel.plugins.register(createAssistantPlugin(kernel));
     const workflows = new WorkflowService({
@@ -25,6 +25,7 @@ export async function createHelm(options: HelmOptions = {}) {
       },
     });
     kernel.setWorkflowRunner(async (request, conversationId) => workflows.run({ ...request, conversationId }));
+    await kernel.start();
     return {
       kernel,
       workflows,
