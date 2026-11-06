@@ -65,6 +65,16 @@ export interface NotificationEvent {
   conversationId?: number
 }
 
+/**
+ * 插件/工作流自定义事件（`ctx.host.emitEvent` 的非 core type 出口）。
+ * payload 原样透传（宿主已在发布侧统一 JSON 校验与脱敏）；type 为任意非空字符串，
+ * 不与六个 core 类型冲突（宿主在边界校验）。
+ */
+export interface CustomHelmEvent {
+  type: string
+  payload: unknown
+}
+
 export type HelmEvent =
   | ConversationUpsertEvent
   | ConversationDeletedEvent
@@ -72,6 +82,7 @@ export type HelmEvent =
   | AskResolvedEvent
   | PluginChangedEvent
   | NotificationEvent
+  | CustomHelmEvent
 
 /** SSE 增量事件帧：`data: JSON.stringify({ seq, event })`。 */
 export interface HelmEventFrame {
