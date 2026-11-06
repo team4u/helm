@@ -2,6 +2,8 @@
  * AuthService：单用户 scrypt 鉴权。
  * - setup 仅首次成功（已配置即拒绝），login 校验密码并签发随机 token；
  * - token 仅持久化 SHA-256 摘要，明文只在返回值中出现一次；
+ * - createProcessToken 签发进程内受管 token：仅存内存摘要（同 dataDir 的
+ *   实例共享注册表），verifyToken 识别，dispose 即失效，绝不落盘；
  * - 全部摘要比对使用 timingSafeEqual，密码长度 >= 8。
  * config.json 的并发更新经 ConfigService 串行化，保留其他模块写入的键。
  *
@@ -86,14 +88,33 @@ function safeEqualHex(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB)
 }
 
+/**
+ * 进程内受管 token 注册表：dataDir → 摘要集合。仅内存（绝不持久化原文或
+ * 摘要）；按 dataDir 共享使同进程内任意实例签发的受管 token 都能被验证方
+ * （HTTP hub）识别——与持久化 token 的跨实例语义保持一致。
+ */
+const processTokenRegistry = new Map<string, Set<string>>()
+
+function processTokenDigests(dataDir: string): Set<string> {
+  let digests = processTokenRegistry.get(dataDir)
+  if (digests === undefined) {
+    digests = new Set()
+    processTokenRegistry.set(dataDir, digests)
+  }
+  return digests
+}
+
 export class AuthService {
   private readonly config: ConfigService
   /** auth 操作锁 key：按 dataDir 共享（同一 dataDir 的全部实例互斥）。 */
   private readonly lockPath: string
+  /** 进程内受管 token 注册表 key（与构造入参同形）。 */
+  private readonly dataDir: string
 
   constructor(dataDir: string) {
     this.config = new ConfigService(dataDir)
     this.lockPath = join(dataDir, 'auth')
+    this.dataDir = dataDir
   }
 
   private async readState(): Promise<AuthPersistedState | undefined> {
@@ -187,12 +208,38 @@ export class AuthService {
     })
   }
 
-  /** 校验 token（比对持久化摘要，恒时比较，不存在伪成功）。 */
+  /**
+   * 签发进程内受管 token：仅存内存摘要，verifyToken 识别；dispose 后立即
+   * 失效（幂等）。不写 config.json/SQLite，也不要求先完成 setup——内核受管
+   * 子进程鉴权独立于密码体系。空串/任意匿名值永不被 verifyToken 放行。
+   */
+  createProcessToken(): { token: string; dispose(): void } {
+    const token = randomBytes(TOKEN_BYTES).toString('hex')
+    const digest = sha256Hex(token)
+    processTokenDigests(this.dataDir).add(digest)
+    let disposed = false
+    return {
+      token,
+      dispose: () => {
+        if (disposed) return
+        disposed = true
+        processTokenDigests(this.dataDir).delete(digest)
+      },
+    }
+  }
+
+  /**
+   * 校验 token：先查进程内受管 token（仅内存，未 setup 也可用），再比对
+   * 持久化摘要；全部恒时比较，不存在伪成功，匿名/空值永不放行。
+   */
   async verifyToken(token: string): Promise<boolean> {
     if (typeof token !== 'string' || token === '') return false
+    const digest = sha256Hex(token)
+    for (const stored of processTokenDigests(this.dataDir)) {
+      if (safeEqualHex(digest, stored)) return true
+    }
     const state = await this.readState()
     if (state === undefined) return false
-    const digest = sha256Hex(token)
     for (const record of Object.values(state.tokens)) {
       if (safeEqualHex(digest, record.digest)) return true
     }

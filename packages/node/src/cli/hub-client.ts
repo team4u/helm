@@ -1,7 +1,7 @@
 /**
  * Hub HTTP 客户端：CLI 的唯一网络边界。
  * 成功：直接实体/数组；失败：{error:{code,message,details?}}（ApiErrorBody）。
- * 凭据优先级：HELM_TOKEN / HELM_HUB_URL env > credentials.json 的 cli 键 > 默认 3202。
+ * 凭据优先级：HELM_TOKEN / HELM_HUB_URL env > cli-token 文件 > 默认 3202。
  */
 import type { ApiErrorBody } from '@helm/protocol'
 import { CliError } from './errors.js'

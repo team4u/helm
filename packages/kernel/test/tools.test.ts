@@ -21,6 +21,7 @@ import assert from 'node:assert/strict'
 import { KernelRuntime } from '../src/runtime/index.js'
 import {
   ArtifactService,
+  AuthService,
   InMemoryArtifactRepository,
   SecretStash,
   ensureDataDir,
@@ -196,9 +197,10 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.ok(!result.output.includes('AAAA'), '超限后不得回显截断内容冒充结果')
   })
 
-  it('buildToolEnv：宿主四变量固定覆盖 stash 同名注入', { timeout: 60_000 }, () => {
+  it('buildToolEnv：宿主六变量固定覆盖 stash 同名注入；HELM_DATA_DIR 来自 deps', { timeout: 60_000 }, () => {
     const stash = new SecretStash()
     stash.put(7, 'HELM_CWD', '/evil')
+    stash.put(7, 'HELM_DATA_DIR', '/evil-data')
     const deps: HelmToolDeps = {
       dataDir: '/d',
       defaultCwd: '/base',
@@ -212,6 +214,70 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.equal(env['HELM_HUB_URL'], 'http://127.0.0.1:3202')
     assert.equal(env['HELM_CONVERSATION_ID'], '7')
     assert.equal(env['HELM_CWD'], '/work')
+    assert.equal(env['HELM_DATA_DIR'], '/d')
+    // 无 provider：继承的 HELM_TOKEN 必须被剥除（不泄漏宿主 token）
+    assert.equal(env['HELM_TOKEN'], undefined)
+  })
+
+  it('buildToolEnv：无 provider 时剥除继承 HELM_TOKEN；有 provider 时受管 token 优先于 stash 同名值', { timeout: 60_000 }, () => {
+    const stash = new SecretStash()
+    // 其他会话 stash 里的同名 HELM_TOKEN 不可冒充受管 token
+    stash.put(8, 'HELM_TOKEN', 'stash-spoofed-token')
+    const base: HelmToolDeps = {
+      dataDir: '/d',
+      defaultCwd: '/base',
+      hubUrl: 'http://127.0.0.1:3202',
+      stashEnvFor: (id) => stash.envFor(id),
+      redact: (t) => t,
+      artifacts: null as never,
+    }
+    // 有 provider：受管 token 固定注入，stash 同名注入被覆盖
+    const withProvider = buildToolEnv({ ...base, processToken: () => 'managed-tok-1' }, '/work', 8)
+    assert.equal(withProvider['HELM_TOKEN'], 'managed-tok-1')
+    // 无 provider：剥除（不因 stash 存在同名值而透传其他会话秘密）
+    const noProvider = buildToolEnv(base, '/work', 8)
+    assert.equal(noProvider['HELM_TOKEN'], undefined)
+  })
+
+  it('runShell：子进程持受管 HELM_TOKEN 且输出脱敏内外 token；无 provider 时子进程无 HELM_TOKEN', { timeout: 60_000 }, async () => {
+    // 有 provider：子进程可见受管 token（诚实边界：可信代码固有权限），但输出脱敏
+    const auth = new AuthService(join(rootDir, 'rs10'))
+    const managed = auth.createProcessToken()
+    const releaseRedaction = (() => {
+      const stash = new SecretStash()
+      return { stash, release: stash.addRedaction(managed.token) }
+    })()
+    const depsManaged = await makeRealDeps(join(rootDir, 'rs11'), releaseRedaction.stash)
+    const depsWithToken: HelmToolDeps = {
+      ...depsManaged,
+      processToken: () => managed.token,
+    }
+    const echo = await runShell(depsWithToken, 'printf %s "$HELM_TOKEN" | dd bs=1 2>/dev/null', { conversationId: 1 })
+    assert.equal(echo.ok, true)
+    assert.ok(!echo.output.includes(managed.token), '受管 token 明文不得出现在输出')
+    assert.ok(echo.output.includes('[REDACTED]'), '应替换为 REDACTED 标记')
+
+    // 同时含继承宿主 token 与受管 token 的输出：两个都不得泄漏
+    const hostEnv = process.env['HELM_TOKEN']
+    const both = await runShell(
+      depsWithToken,
+      `printf '%s %s' "${hostEnv ?? 'inherited-host-token'}" "$HELM_TOKEN" | dd bs=1 2>/dev/null`,
+      { conversationId: 1 },
+    )
+    assert.equal(both.ok, true)
+    assert.ok(!both.output.includes(managed.token), '受管 token 不得泄漏')
+    assert.ok(!hostEnv || !both.output.includes(hostEnv), '继承宿主 token 不得泄漏')
+
+    // 无 provider：子进程环境里没有 HELM_TOKEN（继承值被剥除）
+    const depsPlain = await makeRealDeps(join(rootDir, 'rs12'))
+    const absent = await runShell(depsPlain, 'echo "${HELM_TOKEN:-UNSET}"', { conversationId: 1 })
+    assert.equal(absent.ok, true)
+    assert.ok(absent.output.includes('UNSET'), '无 provider 时子进程不得继承 HELM_TOKEN')
+
+    // dispose 后受管 token 失效（进程内生命周期）
+    managed.dispose()
+    assert.equal(await new AuthService(join(rootDir, 'rs10')).verifyToken(managed.token), false)
+    releaseRedaction.release()
   })
 })
 

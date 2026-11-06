@@ -366,6 +366,42 @@ test('stash: put 返回 REDACTED 占位符、envFor 注入、redact 按会话隔
   assert.equal(stash.stats().secrets, 0)
 })
 
+test('stash: addRedaction 全局逐值脱敏——非 env、不计 stats、clear(id) 不清、引用计数', { timeout: 60_000 }, async () => {
+  const stash = new SecretStash()
+  const managed = 'managed-token-value-abc123'
+  const release = stash.addRedaction(managed)
+
+  // 任意会话上下文（含无上下文）均脱敏；与 stash 占位符可共存
+  const stashPh = stash.put(1, 'MY_KEY', 'session-secret-value')
+  assert.equal(stash.redact(`token=${managed}`), 'token=[REDACTED]')
+  assert.equal(stash.redact(`token=${managed}`, 1), 'token=[REDACTED]')
+  assert.equal(stash.redact(`token=${managed}`, 99), 'token=[REDACTED]')
+  assert.equal(stash.redact(`session=${'session-secret-value'} managed=${managed}`), `session=${stashPh} managed=[REDACTED]`)
+
+  // 非 env、不计 stats、不入 envFor
+  assert.deepEqual(stash.envFor(1), { MY_KEY: 'session-secret-value' })
+  assert.deepEqual(stash.envFor(2), {})
+  assert.equal(stash.stats().secrets, 1)
+
+  // clear(单会话) 不清全局登记；clear() 全清（含全局）
+  stash.clear(1)
+  assert.equal(stash.redact(managed), '[REDACTED]')
+  stash.clear()
+  assert.equal(stash.redact(managed), managed, 'clear() 应连全局登记一并清除')
+
+  // 引用计数：同一值叠放两次，全部解除才停止脱敏；解除函数幂等
+  const r1 = stash.addRedaction(managed)
+  const r2 = stash.addRedaction(managed)
+  r1()
+  r1()
+  assert.equal(stash.redact(managed), '[REDACTED]')
+  r2()
+  assert.equal(stash.redact(managed), managed)
+
+  // 非法入参拒绝
+  assert.throws(() => stash.addRedaction(''), /非空/)
+})
+
 // ---------------------------------------------------------------------------
 // AuthService
 // ---------------------------------------------------------------------------
@@ -410,6 +446,37 @@ test('auth: setup 仅首次、弱密码拒绝、login 签发、token 摘要持�
   const digests = Object.values(config.auth?.tokens ?? {})
   assert.ok(digests.length >= 1)
   assert.ok(digests.every((d) => /^[0-9a-f]{64}$/.test(d.digest)))
+})
+
+test('auth: createProcessToken 仅内存生命周期——识别、dispose 失效、不落盘、匿名不放行', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const auth = new AuthService(dataDir)
+  // 未 setup 也可用：内核受管子进程鉴权独立于密码体系
+  assert.deepEqual(await auth.status(), { configured: false })
+  const managed = auth.createProcessToken()
+  assert.ok(managed.token.length >= 32)
+  assert.equal(await auth.verifyToken(managed.token), true)
+
+  // 跨实例可验证（同 dataDir 注册表共享，与持久 token 语义一致）
+  assert.equal(await new AuthService(dataDir).verifyToken(managed.token), true)
+
+  // 不写 config.json/SQLite：无明文也无摘要落盘
+  const configText = await readTextFile(join(dataDir, 'config.json')).catch(() => '')
+  assert.ok(!configText.includes(managed.token), '受管 token 明文不得落盘')
+  assert.ok(!configText.includes(managed.token.slice(0, 16)), '受管 token 不得以任何形态落盘')
+
+  // dispose 后立即失效（幂等）；持久化 token 不受影响
+  const { token: persisted } = await auth.setup('process token pw 12345678')
+  assert.equal(await auth.verifyToken(persisted), true)
+  managed.dispose()
+  managed.dispose() // 幂等
+  assert.equal(await auth.verifyToken(managed.token), false)
+  assert.equal(await auth.verifyToken(persisted), true)
+
+  // 匿名/空值/伪值永不放行（不得因受管通道存在而放宽）
+  assert.equal(await auth.verifyToken(''), false)
+  assert.equal(await auth.verifyToken('anonymous'), false)
+  assert.equal(await auth.verifyToken('0'.repeat(64)), false)
 })
 
 test('auth: 并发 setup 只成功一次、并发 update 不覆盖其他配置键', { timeout: 60_000 }, async () => {

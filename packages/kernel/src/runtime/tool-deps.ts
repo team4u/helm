@@ -12,6 +12,8 @@ export interface HelmToolDeps {
   defaultCwd: string
   /** 按 HELM_PORT 生成的 hub URL（如 http://127.0.0.1:3202；测试可注入）。 */
   hubUrl: string
+  /** 内核受管子进程 token 取值器（仅内存生命周期；缺省则不注入 HELM_TOKEN）。 */
+  processToken?: () => string
   /** SecretStash 值的会话级环境注入。 */
   stashEnvFor(conversationId: number): Record<string, string>
   /** 文本脱敏（stash 明文 -> marker；绝不反向还原）。 */

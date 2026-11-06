@@ -156,21 +156,26 @@ export async function runGate(
   return { ok: result.ok, output: result.output }
 }
 
-/** 组装工具环境：宿主四变量固定覆盖 stash 注入的同名项。 */
+/** 组装工具环境：宿主六变量固定覆盖 stash 注入的同名项（HELM_TOKEN 见下）。 */
 export function buildToolEnv(
   deps: HelmToolDeps,
   cwd: string,
   conversationId?: number,
 ): Record<string, string> {
   const stashEnv = conversationId === undefined ? {} : deps.stashEnvFor(conversationId)
-  return {
+  const managedToken = deps.processToken?.()
+  const env: Record<string, string> = {
     ...process.env,
     ...stashEnv,
     HELM_ENV: '1',
     HELM_HUB_URL: deps.hubUrl,
     HELM_CONVERSATION_ID: String(conversationId ?? 0),
     HELM_CWD: cwd,
+    HELM_DATA_DIR: deps.dataDir,
   }
+  if (managedToken === undefined) delete env['HELM_TOKEN']
+  else env['HELM_TOKEN'] = managedToken
+  return env
 }
 
 const bashParameters = obj({

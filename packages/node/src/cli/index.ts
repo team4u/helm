@@ -16,7 +16,7 @@ import { loadDynamicCommands } from './actions.js'
 import { HubClient, resolveEndpoint } from './hub-client.js'
 import { buildIo, type Io, type RunCliOptions } from './options.js'
 import { CliError, describeError, errorEnvelope } from './errors.js'
-import { cliCredentialOf, dataDirFor, readCredentials } from './credentials.js'
+import { credentialsPath, dataDirFor, loadCliCredential } from './credentials.js'
 
 export interface CompletedRun {
   exitCode: number
@@ -119,9 +119,15 @@ function printCommandDetail(io: Io, cmd: CommandSpec): void {
   }
 }
 
-/** 读凭据并构建 HubClient；凭据损坏时抛错（不吞成「无凭据」）。 */
+/**
+ * 读凭据并构建 HubClient；凭据损坏时抛错（不吞成「无凭据」）。
+ * HELM_TOKEN 优先：显式给出时短路磁盘，不触碰任何凭据文件。
+ */
 async function hubFromEnv(env: NodeJS.ProcessEnv, dataDir: string, io: Io): Promise<HubClient> {
-  const credential = cliCredentialOf(await readCredentials(dataDir))
+  if (env['HELM_TOKEN']) {
+    return new HubClient(resolveEndpoint(env, {}), io)
+  }
+  const credential = await loadCliCredential(dataDir)
   return new HubClient(resolveEndpoint(env, credential), io)
 }
 

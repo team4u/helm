@@ -2,12 +2,17 @@
  * 纯内存 SecretStash：秘密只存在进程内存，绝不落盘、绝不进模型上下文。
  * 模型与持久层只看到 `[REDACTED:stash:<uuid>]` 占位符。
  *
+ * addRedaction 登记全局逐值脱敏（如内核受管 HELM_TOKEN）：非环境变量、
+ * 不计入 stats、不随 clear(conversationId) 清除；多个登记可叠放同一值，
+ * 全部解除后才停止脱敏；clear() 全清时一并移除。
+ *
  * 诚实边界（如实声明）：stash 无法防御同进程内的 shell 命令与插件代码
  * 读取环境变量或进程内存——那是可信代码的固有权限，本模块不承诺零泄漏。
  */
 import { randomUUID } from 'node:crypto'
 
 export const REDACTED_PREFIX = '[REDACTED:stash:'
+export const REDACTED_MARKER = '[REDACTED]'
 
 export interface StashedSecret {
   readonly conversationId: number
@@ -38,6 +43,8 @@ export class SecretStash {
   private readonly byConversation = new Map<number, Map<string, StashedSecret>>()
   /** key: uuid → secret（redact 快速索引）。 */
   private readonly byUuid = new Map<string, StashedSecret>()
+  /** 全局逐值脱敏登记：value → 引用计数（多登记叠放，全解除才停止）。 */
+  private readonly globalRedactions = new Map<string, number>()
 
   /**
    * 存入秘密，返回 `[REDACTED:stash:<uuid>]` 占位符。
@@ -74,6 +81,24 @@ export class SecretStash {
     return env
   }
 
+  /**
+   * 登记全局逐值脱敏：redact() 将该值替换为 `[REDACTED]`（任意会话上下文均
+   * 生效）。非环境变量、不进 envFor/stats；同一值可重复登记，返回的解除
+   * 函数引用计数归零后才停止脱敏。返回 `[REDACTED]` 占位供调用方留存。
+   */
+  addRedaction(value: string): () => void {
+    if (typeof value !== 'string' || value === '') throw new Error('addRedaction 需要非空字符串')
+    this.globalRedactions.set(value, (this.globalRedactions.get(value) ?? 0) + 1)
+    let removed = false
+    return () => {
+      if (removed) return
+      removed = true
+      const count = this.globalRedactions.get(value) ?? 0
+      if (count <= 1) this.globalRedactions.delete(value)
+      else this.globalRedactions.set(value, count - 1)
+    }
+  }
+
   /** 是否存在该秘密（按会话隔离判定）。 */
   has(conversationId: number, name: string): boolean {
     return this.byConversation.get(conversationId)?.has(name) ?? false
@@ -82,6 +107,10 @@ export class SecretStash {
   /** 将已登记的秘密替换为占位符；已有占位符始终保持脱敏。 */
   redact(text: string, conversationId?: number): string {
     const values = new Map<string, string>()
+    // 全局逐值脱敏优先于 stash 占位符：受管 token 等宿主秘密不可被任何会话回显
+    for (const value of this.globalRedactions.keys()) {
+      values.set(value, REDACTED_MARKER)
+    }
     for (const secret of this.byUuid.values()) {
       if (secret.value && (conversationId === undefined || secret.conversationId === conversationId)) {
         values.set(secret.value, secret.placeholder)
@@ -95,11 +124,12 @@ export class SecretStash {
     return text.replace(pattern, (value) => values.get(value) ?? value)
   }
 
-  /** 清空指定会话的全部秘密；省略 conversationId 则清空整个 stash。 */
+  /** 清空指定会话的全部秘密；省略 conversationId 则清空整个 stash（含全局脱敏登记）。 */
   clear(conversationId?: number): void {
     if (conversationId === undefined) {
       this.byConversation.clear()
       this.byUuid.clear()
+      this.globalRedactions.clear()
       return
     }
     for (const [uuid, secret] of this.byUuid) {
