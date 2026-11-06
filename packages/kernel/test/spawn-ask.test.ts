@@ -5,7 +5,7 @@
  * - schema：AJV 全量（enum/nested/多类型/ additionalProperties）、$async 拒绝、
  *   null/标量合法顶层、跨行对象、StructuredOutput 工具自愈、两次失败显式报错；
  * - abort：创建前拒绝、运行中 conversation.abort、无遗留任务；
- * - resume：错误 ref 绝不新建、父归属校验、agentId 映射、onCreated 上报原 id；
+ * - resume：错误 ref 绝不新建、父归属校验、agentId 映射、onResolved 上报原 id；
  * - profile：无效 profile 报错、herdr runtime 显式 unsupported、effort 非法拒绝；
  * - gate：cwd 用子会话实际 cwd；
  * - Ask：CAS 冲突 409 / 无 resolver ask_state_unavailable / seq 回退 superseded /
@@ -73,7 +73,7 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
     getLastAssistantText: (id) => lastTexts.get(id),
     resolveModel: () => ({ provider: 'faux', modelId: 'faux-1' }),
     agentSessions: new Map(),
-    registerChildConversation: async (childId, parentId) => {
+    registerChildConversation: async (childId, parentId, _profileId, _childCwd, _modelMirror, _tags) => {
       parents.set(childId, parentId)
       const conv = await harness.conversation(childId as never, BACKGROUND_CONTEXT)
       if (!conv) return
@@ -106,6 +106,7 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
       return { model: p.model, cwd: p.cwd, runtime: p.runtime as never }
     },
     getParentOfConversation: (childId) => parents.get(childId),
+    getModelOverride: () => undefined,
     installChildExtension: (extension) => {
       registry.install(extension)
     },
@@ -383,7 +384,7 @@ describe('spawn resume：绝不新建假续接', { timeout: 60_000 }, () => {
     }
   })
 
-  it('agentId 映射 resume：复用原会话，onCreated 上报原 id', { timeout: 60_000 }, async () => {
+  it('agentId 映射 resume：复用原会话，onResolved 上报原 id', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([fauxAssistantMessage('第一段'), fauxAssistantMessage('续接结果')])
@@ -392,23 +393,23 @@ describe('spawn resume：绝不新建假续接', { timeout: 60_000 }, () => {
         parentConversationId: 1,
         prompt: '第一段',
         agentId: 'agent-a',
-        onCreated: (id: number) => {
-          createdId = id
+        onResolved: (info) => {
+          createdId = info.conversationId
         },
       } as never)
       assert.equal(first, '第一段')
-      const resumeCreated: number[] = []
+      const resumeResolved: Array<number | undefined> = []
       const second = await runNativeSpawn(th.deps, {
         parentConversationId: 1,
         prompt: '继续',
         resume: 'agent-a',
-        onCreated: (id: number) => {
-          resumeCreated.push(id)
+        onResolved: (info) => {
+          resumeResolved.push(info.conversationId)
         },
       } as never)
       assert.equal(second, '续接结果')
-      assert.equal(resumeCreated.length, 1)
-      assert.equal(resumeCreated[0], createdId, 'resume onCreated 上报原 convId')
+      assert.equal(resumeResolved.length, 1)
+      assert.equal(resumeResolved[0], createdId, 'resume onResolved 上报原 convId')
     } finally {
       await th.close()
     }

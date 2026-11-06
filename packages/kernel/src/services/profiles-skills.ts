@@ -6,6 +6,7 @@
 import { lstat, readdir, realpath, rm } from 'node:fs/promises'
 import { join, sep } from 'node:path'
 import type { Profile, SkillSummary } from '@helm/protocol'
+import { isValidEnvName } from './secret-stash.js'
 
 export type { Profile, SkillSummary }
 import {
@@ -87,7 +88,36 @@ export function validateProfileInput(input: unknown): Profile {
     if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== 'string'))) {
       throw new Error(`profile '${id}' runtime.args 必须是字符串数组`)
     }
-    profile.runtime = { kind, agent, ...(args !== undefined ? { args } : {}) }
+    const machine = runtime['machine']
+    if (machine !== undefined && (typeof machine !== 'string' || machine === '')) {
+      throw new Error(`profile '${id}' runtime.machine 若存在必须是非空字符串（SSH 目标机标识）`)
+    }
+    const workspace = runtime['workspace']
+    if (workspace !== undefined && (typeof workspace !== 'string' || workspace === '')) {
+      throw new Error(`profile '${id}' runtime.workspace 若存在必须是非空字符串（绝对路径）`)
+    }
+    const env = runtime['env']
+    if (env !== undefined) {
+      if (!isPlainObject(env) || Object.keys(env).length === 0) {
+        throw new Error(`profile '${id}' runtime.env 若存在必须是非空对象`)
+      }
+      for (const [name, value] of Object.entries(env)) {
+        if (!isValidEnvName(name)) {
+          throw new Error(`profile '${id}' runtime.env 的键 '${name}' 必须是合法环境变量名`)
+        }
+        if (typeof value !== 'string') {
+          throw new Error(`profile '${id}' runtime.env['${name}'] 必须是字符串（如需机密请用 credentials/secret stash，不入 profile）`)
+        }
+      }
+    }
+    profile.runtime = {
+      kind,
+      agent,
+      ...(args !== undefined ? { args } : {}),
+      ...(machine !== undefined ? { machine } : {}),
+      ...(workspace !== undefined ? { workspace } : {}),
+      ...(env !== undefined ? { env: { ...(env as Record<string, string>) } } : {}),
+    }
   }
   return profile
 }

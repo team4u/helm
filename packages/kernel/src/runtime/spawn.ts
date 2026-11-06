@@ -47,22 +47,28 @@ export interface NativeSpawnDeps extends HelmToolDeps {
   harness: Harness
   /** conversationId -> 最近 assistant 文本（由 tracker 维护）。 */
   getLastAssistantText(conversationId: number): string | undefined
-  /** 默认模型 'provider/model'（未配置时抛 HelmError）。 */
+  /** 全局默认模型 'provider/model'（未配置时抛 HelmError）。 */
   resolveModel(): { provider: string; modelId: string }
   /** agentId -> child convId（resume 映射，进程内稳定）。 */
   agentSessions: Map<string, number>
   /**
    * 记录子会话与父会话关系并校验 profile 合法性；无效 profileId 必须抛
    * HelmError('not_found')。childCwd 为子会话将使用的实际 cwd（gate 也用它）。
+   * modelMirror 为本子会话最终生效的模型（'provider/model'，写入镜像；空串 = 未配置）。
+   * tags 为子会话标签（宿主决定；原生 spawn 不打业务角色标签）。
    */
   registerChildConversation(
     childId: number,
     parentId: number,
     profileId: string,
     childCwd: string,
+    modelMirror: string,
+    tags: string[],
   ): Promise<void>
   /** 按 profileId 读取真实 Profile（model/cwd/runtime）；不存在返回 undefined。 */
   resolveProfile(profileId: string): Promise<ResolvedProfile | undefined>
+  /** 会话显式模型覆盖（modelOverride）；无覆盖返回 undefined。 */
+  getModelOverride(childId: number): string | undefined
   /**
    * 校验子会话归属：resume 时确认 childId 的 parentConversationId 与请求一致。
    * 返回该会话记录的父 ID；会话不存在返回 undefined。
@@ -131,12 +137,6 @@ export async function runNativeSpawn(
     )
   }
 
-  const modelRef = request.model ? parseSpawnModel(request.model) : undefined
-  const resolvedModel = modelRef ?? (profile.model ? parseSpawnModel(profile.model) : undefined) ?? deps.resolveModel()
-  const childCwd = request.cwd ?? profile.cwd ?? deps.defaultCwd
-  // gate 与子会话同 cwd（请求缺省时用 profile/宿主缺省，不依赖 main cwd）。
-  const gateCwd = childCwd
-
   // ---- resume 解析：纯数字 convId 或 agentId 映射；绝不猜测续接（'12abc' 拒绝）。----
   let childId: number | undefined
   let isResume = false
@@ -152,7 +152,26 @@ export async function runNativeSpawn(
       )
     }
     isResume = true
-    request.onCreated?.(childId)
+  }
+
+  const childCwd = request.cwd ?? profile.cwd ?? deps.defaultCwd
+
+  // 模型解析链（与会话策略同构）：请求显式 model > resume 子会话的既有 override
+  // > profile.model > 全局默认。resume + 显式 model 视为本次改写（不因链路回退）。
+  const modelRef = request.model ? parseSpawnModel(request.model) : undefined
+  const inheritedOverride =
+    isResume && modelRef === undefined ? deps.getModelOverride(childId ?? -1) : undefined
+  const overrideRef = inheritedOverride !== undefined && inheritedOverride !== ''
+    ? parseSpawnModel(inheritedOverride)
+    : undefined
+  const profileModelRef = profile.model ? parseSpawnModel(profile.model) : undefined
+  const resolvedModel = modelRef ?? overrideRef ?? profileModelRef ?? deps.resolveModel()
+  const resolvedModelRef = `${resolvedModel.provider}/${resolvedModel.modelId}`
+  // gate 与子会话同 cwd（请求缺省时用 profile/宿主缺省，不依赖 main cwd）。
+  const gateCwd = childCwd
+
+  if (isResume) {
+    request.onResolved?.({ conversationId: childId!, effectiveCwd: childCwd })
   }
 
   let structured: StructuredOutputSession | undefined
@@ -185,8 +204,16 @@ export async function runNativeSpawn(
     )
     childId = conv.id as number
     if (request.agentId) deps.agentSessions.set(request.agentId, childId)
-    await deps.registerChildConversation(childId, request.parentConversationId, profileId, childCwd)
-    request.onCreated?.(childId)
+    // 原生 spawn 不打业务角色标签（tags 由宿主策略决定，内核零角色硬编码）。
+    await deps.registerChildConversation(
+      childId,
+      request.parentConversationId,
+      profileId,
+      childCwd,
+      resolvedModelRef,
+      [],
+    )
+    request.onResolved?.({ conversationId: childId, effectiveCwd: childCwd })
   }
 
   const conversation = await deps.harness.conversation(childId as never, bg)
@@ -373,6 +400,8 @@ async function settleGate(
   // cwd 用子会话实际工作目录，不依赖请求缺省 main cwd；gate 是验收命令，
   // 输出直接进错误诊断（不挂会话，避免误注入会话级 stash 环境）。
   const gate = await runGate(deps, request.gate, { cwd, signal: request.signal })
+  // 执行环境内恰好一次执行后回传结果（宿主引擎据此免二次执行）。
+  request.onGateResult?.({ ok: gate.ok, output: gate.output })
   if (!gate.ok) {
     throw new HelmError(
       'gate_failed',

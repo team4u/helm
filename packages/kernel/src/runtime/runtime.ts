@@ -34,9 +34,13 @@ import { GenerationTask, ToolTask } from '@earendil-works/pi-durable'
 import type {
   AgentSpawnRequest,
   AskCreateSpec,
+  AskResult,
   AskSpec,
+  ConversationDetail,
+  ConversationEntry,
   ConversationInit,
   ConversationInput,
+  ConversationInputResult,
   ConversationPatch,
   ConversationSummary,
   ExternalTriggerEnvelope,
@@ -70,6 +74,7 @@ import type { Models } from '@earendil-works/pi-ai/models'
 import { openHelmDatabase, type HelmDatabase } from './sqlite.js'
 import { HelmStore } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
+import { toConversationEntry } from './entries.js'
 import { createBashTool, createReadArtifactTool, createReadTool, runGate } from './tools.js'
 import { runNativeSpawn } from './spawn.js'
 import { HelmPluginConfigStore } from './plugin-config-store.js'
@@ -94,6 +99,11 @@ export interface KernelRuntimeOptions {
    * 再 await start() 启动恢复，防止恢复任务在工具未注册时被判 orphaned。
    */
   autoResume?: boolean
+  /**
+   * watchdog 巡检间隔毫秒（默认 15000；start 后启动 singleflight 定时器）。
+   * 传 0 关闭定时巡检（测试用；仍可手动 watchdogTick）。
+   */
+  watchdogIntervalMs?: number
 }
 
 export interface WorkflowRunnerFn {
@@ -104,6 +114,7 @@ export interface WorkflowRunnerFn {
 interface PluginChangedEmit {
   type: 'plugin.changed'
   plugin: unknown
+  ui?: unknown[]
 }
 
 type HookDecision =
@@ -120,6 +131,25 @@ function escapeXml(text: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
 }
+
+/** watchdog 默认巡检间隔（singleflight 定时器；0 关闭）。 */
+const DEFAULT_WATCHDOG_INTERVAL_MS = 15_000
+
+/** entry.model 消息数组 -> assistant 文本块拼接（waitForInput 提取回答用）。 */
+function assistantTextOfModel(model: unknown[] | undefined): string {
+  if (model === undefined) return ''
+  const out: string[] = []
+  for (const message of model) {
+    const blocks = (message as { content?: ReadonlyArray<{ type: string; text?: string }> }).content
+    if (!blocks) continue
+    for (const block of blocks) {
+      if (block.type === 'text' && typeof block.text === 'string') out.push(block.text)
+    }
+  }
+  return out.join('\n')
+}
+
+/** SDK pi.live 快照 -> 协议 ConversationLive 已由 entries.ts deriveConversationLive 提供。 */
 
 /** 内核/插件工具 execute 包装：tool_call handled 接管结果优先返回（不执行真实工具）。 */
 function wrapToolExecute(
@@ -183,11 +213,25 @@ export class KernelRuntime {
   private defaultModel: string | undefined
   private pluginHost: PluginHost | undefined
   private workflowRunner: WorkflowRunnerFn | undefined
+  /** workflow run 摘要 provider（SSE snapshot 用；缺省 []）。 */
+  private workflowRunProvider: () => WorkflowRunSummary[] = () => []
+  /** onWorkflowSettled 监听器（app 接线；每 run 终态通知一次）。 */
+  private readonly workflowSettledListeners = new Set<(run: WorkflowRunSummary) => void | Promise<void>>()
+  /** 会话插件管理权：conversationId -> 持有 pluginId 集合（删除保护）。 */
+  private readonly managedConversations = new Map<number, Set<string>>()
+  /** 受管进程 token（createProcessToken 产物；close dispose）。 */
+  private processTokenHandle: { tokenOf(): string | undefined; dispose(): void } | undefined
+  /** watchdog 定时器（singleflight；unref 不阻退出）。 */
+  private watchdogTimer: NodeJS.Timeout | undefined
+  private watchdogInflight = false
   /** turn_settled 钩子的在途执行（waitForIdle 前等待）。 */
   private settledInflight: Promise<void> = Promise.resolve()
   /** tool_call handled 接管缓存（callId -> 结果；execute 层包装器消费）。 */
   private readonly handledToolCalls = new Map<string, { output: Array<{ type: 'text'; text: string }>; isError: boolean }>()
   private closed = false
+  /** 实际 hub URL（setHubUrl 可更新；工具 env 每次读取最新值）。 */
+  private hubUrlValue: string
+  private readonly watchdogIntervalMs: number
   /** start() 幂等守护：组合层完成插件/Workflow 挂接后显式启动调度。 */
   private started = false
   private startPromise: Promise<void> | undefined
@@ -226,6 +270,9 @@ export class KernelRuntime {
 
     // Harness models 槽位：open 作用域可变引用，reloadModels 时经 setModels 热替换。
     const modelsSlot = { current: modelsInstance }
+    // 脱敏槽位：onReport 先于 runtime 构造注册，经槽位引用 runtime stash
+    // （受管 token 创建后生效）；此前保持原样（startup 阶段尚无内部 token）。
+    const redactSlot: { current: (text: string) => string } = { current: (t) => t }
 
     const harness = await Harness.open(
       database.storage,
@@ -245,7 +292,9 @@ export class KernelRuntime {
               : report.kind === 'task_faulted' || report.kind === 'task_interrupted'
                 ? `${report.kind}(${report.task.kind})`
                 : report.kind
-          console.error('[helm] durable report:', description, (report as { error?: unknown }).error)
+          // 错误诊断统一过全局脱敏：宿主自身输出不得主动泄受管 token。
+          const errorText = String((report as { error?: unknown }).error ?? '')
+          console.error('[helm] durable report:', description, redactSlot.current(errorText))
         },
       },
       BACKGROUND_CONTEXT,
@@ -268,8 +317,18 @@ export class KernelRuntime {
       seedKeyCache: apiKeyCache,
       autoResume: options.autoResume !== false,
       externalModels: modelsExternal,
+      watchdogIntervalMs: options.watchdogIntervalMs ?? DEFAULT_WATCHDOG_INTERVAL_MS,
+      redactReport: (fn: (text: string) => string) => {
+        redactSlot.current = fn
+      },
     })
-    await runtime.initialize()
+    try {
+      await runtime.initialize()
+    } catch (error) {
+      // 初始化失败同样释放本轮已创建资源（受管 token、SDK、数据库），不留泄漏。
+      await runtime.close().catch(() => {})
+      throw error
+    }
     return runtime
   }
 
@@ -288,6 +347,9 @@ export class KernelRuntime {
     seedKeyCache: Record<string, string>
     autoResume: boolean
     externalModels?: Models
+    watchdogIntervalMs: number
+    /** 接管 Harness onReport 诊断脱敏（stash 就绪后由构造器调用）。 */
+    redactReport(fn: (text: string) => string): void
   }) {
     this.dataDir = init.dataDir
     this.database = init.database
@@ -327,15 +389,36 @@ export class KernelRuntime {
 
     const hubUrl =
       init.hubUrl ?? `http://127.0.0.1:${process.env['HELM_PORT'] ?? '3202'}`
+    this.hubUrlValue = hubUrl
+    this.watchdogIntervalMs = init.watchdogIntervalMs
+    const runtimeSelf: KernelRuntime = this
     this.toolDeps = {
       dataDir: init.dataDir,
       defaultCwd: init.cwd,
-      hubUrl,
+      // getter 每次读最新值：setHubUrl（如 port:0 真实端口）后新 exec 即生效。
+      get hubUrl(): string {
+        return runtimeSelf.hubUrlValue
+      },
       stashEnvFor: (id) => this.stashService.envFor(id),
       redact: (t) => this.stashService.redact(t),
+      processToken: () => this.processTokenHandle?.tokenOf(),
       artifacts: this.artifactsSvc,
     }
     this.store.ftsRedact = (t) => this.stashService.redact(t)
+
+    // 受管进程 token：仅内存、入全局脱敏（任何落库/模型上下文/日志不可见明文）。
+    const managed = this.authSvc.createProcessToken()
+    this.processTokenHandle = {
+      tokenOf: () => managed.token,
+      dispose: () => managed.dispose(),
+    }
+    this.stashService.addRedaction(managed.token)
+    // 继承的 HELM_TOKEN（宿主自身凭据）同样登记脱敏：工具子进程用受管 token。
+    if (process.env['HELM_TOKEN']) {
+      this.stashService.addRedaction(process.env['HELM_TOKEN'])
+    }
+    // Harness onReport 的诊断脱敏接线（槽位在此接管）。
+    this.init.redactReport((t) => this.stashService.redact(t))
 
     this.events = new EventHub({
       initialSeq: this.store.eventSeqNow,
@@ -345,8 +428,7 @@ export class KernelRuntime {
         pendingAsks: this.asks.listAsks('pending'),
         plugins: this.pluginHost ? this.pluginHost.list() : [],
         ui: this.pluginHost ? this.pluginHost.listUi() : [],
-        // 工作流 run 摘要：引擎未挂接时为空（真实状态，非兼容垫片）。
-        workflowRuns: this.listWorkflowRuns(),
+        workflowRuns: this.workflowRunProvider(),
       }),
       persistSeq: (seq) => this.store.setEventSeq(seq),
     })
@@ -355,6 +437,8 @@ export class KernelRuntime {
     this.asks = new AskService({
       store: this.store,
       stash: this.stashService,
+      // 创建前校验会话存在：不存在时在 putAsk 之前拒绝，不留孤儿审批。
+      validateConversation: (id) => this.store.getConv(id) !== undefined,
       onEvent: (type, payload) => this.events.publish(type, payload),
       onConvPendingChanged: (id) => {
         this.tracker.setPendingAskCount(id, this.asks.pendingCount(id))
@@ -373,6 +457,13 @@ export class KernelRuntime {
           this.tracker.recordAssistantText(conversationId, entryId, text)
           this.store.indexFts(conversationId, `entry:${entryId}`, this.store.getConv(conversationId)?.title ?? '', text)
         },
+        onEntryCommitted: (conversationId, entry) => {
+          // entry 已是协议形状（entries.ts 统一转换）；publish 边界统一脱敏。
+          this.events.publish('conversation.entry', { conversationId, entry })
+        },
+        onLiveChanged: (live) => {
+          this.events.publish('conversation.live', { live })
+        },
         onTurnSettled: (payload, consumed) => {
           const run = this.dispatchTurnSettled(payload, consumed)
           this.settledInflight = run
@@ -384,11 +475,9 @@ export class KernelRuntime {
 
   private async initialize(): Promise<void> {
     // 1) 默认 profiles 先于 root 创建（root 绑定 assistant profile）。
-    const rootProfile = await this.profilesSvc.ensureDefault()
-    if (!this.defaultModel && rootProfile.model) {
-      this.defaultModel = rootProfile.model
-    }
-    // hooks 载荷校验要求 model 非空；未配置时用显式占位并上报（提交时才硬报错）。
+    // 全局默认模型只来自 options.model / HELM_MODEL（config 链在 app 层）；
+    // 绝不把 assistant profile 的 model 提升为全局（那是单 profile 策略）。
+    await this.profilesSvc.ensureDefault()
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
 
     // 2) 内核工具（bash/read/read_artifact + subagent/SubagentWorkflow/run_action）
@@ -411,8 +500,14 @@ export class KernelRuntime {
         createConversation: (init) => this.createConversation(init),
         listConversations: (filter) => this.listConversations(filter),
         getConversation: (id) => this.getConversation(id),
+        updateConversation: (id, patch) => this.updateConversation(id, patch),
+        // PluginHost 在插件侧绑定身份，后端必须接收明确的 pluginId。
+        manageConversation: (id, pluginId) => this.manageConversation(id, pluginId),
+        markConversationOwnership: (id, owner) => this.markConversationOwnership(id, owner),
         createAsk: (spec) => this.createAsk(spec),
         cancelAsk: (askId, reason) => this.cancelAsk(askId, reason),
+        registerAskSeqResolver: (resolver) => this.registerAskSeqResolver(resolver),
+        onWorkflowSettled: (listener) => this.onWorkflowSettled(listener),
         emitEvent: (type, payload) => this.emitHostEvent(type, payload),
       },
       docs: this.documentStore,
@@ -422,7 +517,10 @@ export class KernelRuntime {
 
     // 5) root #1（不注入业务 system；SYSTEM/MEMORY 由 assistant 插件 before_turn
     //    sections 注入，经 SDK PromptSection 真实进入模型请求）。
-    const modelRef = this.defaultModel ? requireModelRef(this.defaultModel) : undefined
+    // root 模型与普通会话同链：显式 override（无）> assistant profile.model > 全局。
+    const rootProfileModel = (await this.profilesSvc.get('assistant'))?.model
+    const rootEffective = this.defaultModel ?? rootProfileModel
+    const modelRef = rootEffective ? requireModelRef(rootEffective) : undefined
     const root = await this.harness.root(BACKGROUND_CONTEXT, {
       agent: modelRef
         ? { model: { provider: modelRef.provider, modelId: modelRef.modelId } }
@@ -435,7 +533,7 @@ export class KernelRuntime {
         profileId: 'assistant',
         tags: ['assistant'],
         cwd: this.init.cwd,
-        model: this.defaultModel ?? this.modelPlaceholder,
+        model: rootEffective ?? '',
         unread: false,
         pinned: false,
         stateChangeSeq: 1,
@@ -443,6 +541,12 @@ export class KernelRuntime {
         createdAt: Date.now(),
         updatedAt: Date.now(),
       })
+    } else if (rootEffective !== undefined) {
+      // 已存在 root（重启）：对齐 SDK 配置与镜像（profile/全局变化后重启一致）。
+      const meta = this.store.getConv(root.id as number)!
+      if (meta.model !== rootEffective) {
+        this.store.upsertConv({ ...meta, model: rootEffective, updatedAt: Date.now() })
+      }
     }
     await this.tracker.observe(root.id as number)
 
@@ -635,13 +739,18 @@ export class KernelRuntime {
     } as never)
   }
 
-  /** 插件宿主事件：plugin.changed 携带完整事件对象（{type, plugin}）。 */
+  /** 插件宿主事件：plugin.changed 携带完整事件对象（{type, plugin, ui}）。 */
   private emitHostEvent(type: string, payload: unknown): void {
     if (type === 'plugin.changed') {
       this.refreshPluginTools()
-      const plugin = (payload as PluginChangedEmit | undefined)?.plugin
-      // 快照 plugins 由 host.list() 实时提供；事件只透传 plugin 摘要。
-      this.events.publish('plugin.changed', plugin ?? {})
+      const envelope = payload as { type?: string; plugin?: unknown; ui?: unknown } | undefined
+      // 完整透传新 payload（含 ui 贡献）：快照 plugins 由 host.list() 实时提供，
+      // 事件只透传插件摘要与当前 UI 贡献，不丢弃字段。
+      this.events.publish('plugin.changed', {
+        type: 'plugin.changed',
+        plugin: envelope?.plugin ?? {},
+        ui: Array.isArray(envelope?.ui) ? envelope!.ui : [],
+      })
       return
     }
     this.events.publish(type, payload)
@@ -658,9 +767,36 @@ export class KernelRuntime {
     if (this.startPromise) return this.startPromise
     this.startPromise = (async () => {
       this.harness.resume()
+      this.startWatchdogTimer()
       this.started = true
     })()
     return this.startPromise
+  }
+
+  /**
+   * watchdog 定时巡检（默认 15s；intervalMs=0 关闭）：unref 不阻进程退出，
+   * singleflight 防重入；tick 异常显式通知（不静默吞）。
+   */
+  private startWatchdogTimer(): void {
+    if (this.watchdogIntervalMs <= 0 || this.watchdogTimer !== undefined) return
+    this.watchdogTimer = setInterval(() => {
+      void this.watchdogTick().catch((error) => {
+        this.events.publish('notification', {
+          level: 'error',
+          title: 'watchdog 巡检失败',
+          body: String(error instanceof Error ? error.message : error),
+        })
+      })
+    }, this.watchdogIntervalMs)
+    this.watchdogTimer.unref()
+  }
+
+  /** 更新实际 hub URL（startHub(port:0) 拿到真实端口后调用；工具 env 即时生效）。 */
+  setHubUrl(url: string): void {
+    if (typeof url !== 'string' || url === '') {
+      throw new HelmError('validation_error', `hub URL 必须是非空字符串：${String(url)}`, 400)
+    }
+    this.hubUrlValue = url
   }
 
   /** 产物授权：当前会话或其父链（子会话可读父会话产物）。 */
@@ -703,7 +839,7 @@ export class KernelRuntime {
             model:
               agent?.model !== undefined
                 ? `${agent.model.provider}/${agent.model.modelId}`
-                : (this.defaultModel ?? ''),
+                : '',
             unread: false,
             pinned: false,
             stateChangeSeq: 1,
@@ -712,6 +848,9 @@ export class KernelRuntime {
             updatedAt: now,
           })
         }
+        // 启动对齐：无显式 override 的会话按 profile/全局重算生效模型，
+        // SDK 配置与镜像同步（profile 文件改动后重启即生效）。
+        await this.alignConversationModel(id)
         await this.tracker.observe(id)
       }
       if (!page.next) break
@@ -1011,10 +1150,11 @@ export class KernelRuntime {
   // public：conversations
   // ------------------------------------------------------------------
 
-  listConversations(filter?: { tag?: string; status?: string }): ConversationSummary[] {
+  listConversations(filter?: { profileId?: string; tag?: string; status?: string }): ConversationSummary[] {
     return this.store
       .listConvs()
       .map((meta) => this.tracker.summaryOf(meta.id))
+      .filter((s) => (filter?.profileId ? s.profileId === filter.profileId : true))
       .filter((s) => (filter?.tag ? s.tags.includes(filter.tag) : true))
       .filter((s) => (filter?.status ? s.status === filter.status : true))
   }
@@ -1025,6 +1165,80 @@ export class KernelRuntime {
     return this.tracker.summaryOf(id)
   }
 
+  /** cursor 最大编码长度（base64url 后；超长拒绝防滥用）。 */
+  private static readonly DETAIL_CURSOR_MAX_LENGTH = 2048
+
+  /**
+   * 会话详情（摘要 + 分页时间线）：
+   * - 默认最新 100 条，SDK descending 取页后 reverse 为显示（升序）顺序；
+   * - cursor 是 base64url(JSON{conversationId,cursor:SDK next})：绑定会话、
+   *   长度/JSON 合法性校验、limit 钳制 1..500；不静默截断；
+   * - entry 保留 model 消息与 data，出界前经事件同源脱敏（发布路径统一）。
+   */
+  async getConversationDetail(
+    id: number,
+    options?: { limit?: number; cursor?: string },
+  ): Promise<ConversationDetail> {
+    const summary = this.getConversation(id)
+    const limit = options?.limit ?? 100
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      throw new HelmError('validation_error', `limit 必须是 1..500 的整数（收到 ${limit}）`, 400, {
+        limit,
+      })
+    }
+    const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
+    if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+
+    let sdkCursor: unknown = undefined
+    if (options?.cursor !== undefined) {
+      sdkCursor = this.decodeDetailCursor(id, options.cursor)
+    }
+    // SDK descending（最新在前）取页，再 reverse 为时间正序（展示顺序）。
+    const page = await conversation.entries({ order: 'descending' }, limit, sdkCursor as never, BACKGROUND_CONTEXT)
+    const entries = [...page.items]
+      .reverse()
+      .map((raw) => toConversationEntry(raw as { id: number; kind: string }))
+    return {
+      ...summary,
+      entries,
+      ...(page.next !== undefined ? { nextCursor: this.encodeDetailCursor(id, page.next) } : {}),
+    }
+  }
+
+  /** 编码分页 cursor：base64url(JSON{conversationId,cursor})。 */
+  private encodeDetailCursor(conversationId: number, sdkCursor: Readonly<Record<string, unknown>>): string {
+    const json = JSON.stringify({ conversationId, cursor: sdkCursor })
+    return Buffer.from(json, 'utf8').toString('base64url')
+  }
+
+  /** 解码并校验分页 cursor：绑定会话、长度与 JSON 合法性（非法显式拒绝）。 */
+  private decodeDetailCursor(conversationId: number, encoded: string): unknown {
+    if (encoded.length > KernelRuntime.DETAIL_CURSOR_MAX_LENGTH) {
+      throw new HelmError('validation_error', 'cursor 超过最大长度', 400)
+    }
+    let decoded: unknown
+    try {
+      decoded = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))
+    } catch {
+      throw new HelmError('validation_error', 'cursor 不是合法的 base64url JSON', 400)
+    }
+    const shape = decoded as { conversationId?: unknown; cursor?: unknown }
+    if (
+      shape === null ||
+      typeof shape !== 'object' ||
+      Number(shape.conversationId) !== conversationId ||
+      typeof shape.cursor !== 'object' ||
+      shape.cursor === null
+    ) {
+      throw new HelmError(
+        'validation_error',
+        `cursor 不属于会话 ${conversationId} 或结构非法`,
+        400,
+      )
+    }
+    return shape.cursor
+  }
+
   /** 校验 'provider/model' 引用（create/update 共用）。 */
   private parseModelRefOrThrow(ref: string): { provider: string; modelId: string } {
     const slash = ref.indexOf('/')
@@ -1032,6 +1246,42 @@ export class KernelRuntime {
       throw new HelmError('validation_error', `模型引用格式应为 'provider/model'：${ref}`)
     }
     return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
+  }
+
+  /**
+   * 会话生效模型解析链（统一入口）：
+   * 显式 override > 实际 profile.model > 全局 default（options.model/HELM_MODEL）。
+   * profile 每次实时读取（文件改动下一轮生效）；全部缺失返回 undefined
+   * （submit 时才显式 model_not_configured，不伪造默认）。
+   */
+  private async resolveEffectiveModel(
+    override: string | undefined,
+    profileId: string,
+  ): Promise<string | undefined> {
+    if (override !== undefined && override !== '') return override
+    const profile = await this.profilesSvc.get(profileId).catch(() => undefined)
+    return profile?.model ?? this.defaultModel
+  }
+
+  /** 启动/恢复时对齐：无 override 的会话按当前链重算镜像（并同步 SDK 配置）。 */
+  private async alignConversationModel(id: number): Promise<void> {
+    const meta = this.store.getConv(id)
+    if (!meta) return
+    const effective = await this.resolveEffectiveModel(meta.modelOverride, meta.profileId)
+    if (effective === undefined) {
+      if (meta.model !== '') this.store.upsertConv({ ...meta, model: '', updatedAt: Date.now() })
+      return
+    }
+    if (meta.model === effective) return
+    this.parseModelRefOrThrow(effective)
+    const ref = this.parseModelRefOrThrow(effective)
+    const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT).catch(() => undefined)
+    if (!conversation) return
+    await conversation.configure(
+      { model: { provider: ref.provider, modelId: ref.modelId } },
+      BACKGROUND_CONTEXT,
+    )
+    this.store.upsertConv({ ...meta, model: effective, updatedAt: Date.now() })
   }
 
   /** 校验 profileId 真实存在（不存在时确保 default 兜底目录，不伪造）。 */
@@ -1051,11 +1301,10 @@ export class KernelRuntime {
 
   async createConversation(init: ConversationInit = {}): Promise<ConversationSummary> {
     const profileId = await this.resolveProfileForCreate(init)
-    const requestedModel = init.model ?? this.defaultModel
-    const modelRef = requestedModel ? this.parseModelRefOrThrow(requestedModel) : undefined
-    const profile = init.profileId ? await this.profilesSvc.get(init.profileId).catch(() => undefined) : undefined
-    const effectiveModel = init.model ?? profile?.model ?? this.defaultModel
-    const effectiveRef = effectiveModel ? this.parseModelRefOrThrow(effectiveModel) : modelRef
+    // init.model 是显式覆盖（非全局继承）：仅在提供时校验并落 override。
+    if (init.model !== undefined && init.model !== '') this.parseModelRefOrThrow(init.model)
+    const effectiveModel = await this.resolveEffectiveModel(init.model, profileId)
+    const effectiveRef = effectiveModel ? this.parseModelRefOrThrow(effectiveModel) : undefined
     const conv = await this.harness.createConversation(
       {
         ownership: { kind: 'ownerless' },
@@ -1080,6 +1329,7 @@ export class KernelRuntime {
       parentConversationId: init.parentConversationId,
       cwd: init.cwd ?? this.toolDeps.defaultCwd,
       model: effectiveModel ?? '',
+      ...(init.model !== undefined && init.model !== '' ? { modelOverride: init.model } : {}),
       unread: false,
       pinned: false,
       stateChangeSeq: 1,
@@ -1102,40 +1352,44 @@ export class KernelRuntime {
         throw new HelmError('validation_error', `profile 不存在：${patch.profileId}`, 400)
       }
     }
-    const nextModel = patch.model !== undefined ? patch.model : meta.model
-    if (patch.model !== undefined && patch.model !== '') {
+    // model 语义：'' = 清除显式覆盖（重算继承链）；非空 = 显式覆盖（校验格式）。
+    let nextOverride: string | undefined
+    if (patch.model === undefined) {
+      nextOverride = meta.modelOverride
+    } else if (patch.model !== '') {
       this.parseModelRefOrThrow(patch.model)
+      nextOverride = patch.model
     }
+    const nextProfileId = patch.profileId ?? meta.profileId
+    // 换 profile 且无 override 时重算生效模型（跨 profile 隔离不残留旧模型）。
+    const effectiveModel = await this.resolveEffectiveModel(nextOverride, nextProfileId)
+    const effectiveRef = effectiveModel ? this.parseModelRefOrThrow(effectiveModel) : undefined
     // 先改 SDK（失败即抛，元数据不落），成功后写 helm 镜像——不允许镜像声称
     // 成功而 SDK configure 失败。
-    let configureChange: Record<string, unknown> | undefined
-    if (patch.cwd !== undefined || patch.model !== undefined) {
-      if (patch.cwd !== undefined) configureChange = { ...configureChange, cwd: patch.cwd }
-      if (patch.model !== undefined && patch.model !== '') {
-        const ref = this.parseModelRefOrThrow(patch.model)
-        configureChange = {
-          ...configureChange,
-          model: { provider: ref.provider, modelId: ref.modelId },
-        }
+    if (patch.cwd !== undefined || effectiveRef !== undefined) {
+      const configureChange: Record<string, unknown> = {}
+      if (patch.cwd !== undefined) configureChange['cwd'] = patch.cwd
+      if (effectiveRef !== undefined) {
+        configureChange['model'] = { provider: effectiveRef.provider, modelId: effectiveRef.modelId }
       }
       const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
       if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
       await conversation.configure(configureChange as never, BACKGROUND_CONTEXT)
     }
-    const updated = {
+    const updated: typeof meta = {
       ...meta,
       ...(patch.title !== undefined ? { title: patch.title } : {}),
       ...(patch.profileId !== undefined ? { profileId: patch.profileId } : {}),
       ...(patch.tags !== undefined ? { tags: patch.tags } : {}),
       ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
-      ...(patch.model !== undefined ? { model: patch.model } : {}),
+      model: effectiveModel ?? '',
+      ...(nextOverride !== undefined ? { modelOverride: nextOverride } : { modelOverride: undefined }),
       ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
       // unread 仅人类显式 PATCH 清零；API 读取不清零。
       ...(patch.unread !== undefined ? { unread: patch.unread } : {}),
       stateChangeSeq: meta.stateChangeSeq + 1,
       updatedAt: Date.now(),
     }
-    void nextModel
     this.store.upsertConv(updated)
     const summary = this.tracker.summaryOf(id)
     this.events.publish('conversation.upsert', summary)
@@ -1154,8 +1408,20 @@ export class KernelRuntime {
     }
     const meta = this.store.getConv(id)
     if (!meta) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    // 插件管理权保护：任何活跃 owner 持有时拒绝（在一切清理副作用之前）。
+    const owners = [...(this.managedConversations.get(id) ?? [])]
+    if (owners.length > 0) {
+      throw new HelmError(
+        'conversation_managed_by_plugin',
+        `会话 ${id} 正被插件管理（${owners.join(', ')}），先释放管理权再删除`,
+        409,
+        { conversationId: id, owners },
+      )
+    }
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (conversation) await conversation.abort(BACKGROUND_CONTEXT)
+    // 级联取消等待真实落盘；IO 失败必须向上 reject（阻止后续删除副作用），
+    // 绝不吞错很成功。
     await this.asks.cancelByConversation(id)
     await this.artifactsSvc.deleteConversation(id)
     this.events.publish('notification', {
@@ -1176,15 +1442,20 @@ export class KernelRuntime {
   async submitInput(
     id: number,
     text: string,
-    opts?: { origin?: InputOrigin; whenBusy?: WhenBusy },
+    opts?: { origin?: InputOrigin; whenBusy?: WhenBusy; meta?: Record<string, unknown> },
   ): Promise<{ submissionId: string }> {
-    const meta = this.store.getConv(id)
-    if (!meta) throw new HelmError('not_found', `会话不存在：${id}`, 404)
-    // 模型校验：会话自身 model 优先，退回全局 default（都缺才显式拒绝）。
-    const effectiveModelRef = meta.model !== '' && meta.model !== 'unconfigured'
-      ? meta.model
-      : this.defaultModel
-    if (!effectiveModelRef) requireModelRef(this.defaultModel)
+    const convMeta = this.store.getConv(id)
+    if (!convMeta) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    // 模型解析链统一入口：全部缺失时只在提交时显式拒绝（其他读路径不报错）。
+    const effectiveModelRef = await this.resolveEffectiveModel(convMeta.modelOverride, convMeta.profileId)
+    if (!effectiveModelRef) {
+      throw new HelmError(
+        'model_not_configured',
+        `会话 ${id}（profile ${convMeta.profileId}）与全局均未配置模型：请在 profile 中配置 model、设置 HELM_MODEL 或为会话指定 model`,
+        503,
+        { conversationId: id, profileId: convMeta.profileId },
+      )
+    }
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
 
@@ -1192,9 +1463,14 @@ export class KernelRuntime {
     let effectiveText = text
     const inputId = randomUUID()
     const createdAt = Date.now()
+    // 边界脱敏：meta 值经 stash redact 后入库（受管 Token 等绝不经 meta 透传）。
+    const safeMeta =
+      opts?.meta !== undefined
+        ? (redactJsonValue(opts.meta, (t) => this.stash.redact(t)) as Record<string, unknown>)
+        : undefined
     const payload: { conversationId: number; input: ConversationInput } = {
       conversationId: id,
-      input: { id: inputId, text, origin, whenBusy: opts?.whenBusy, createdAt },
+      input: { id: inputId, text, origin, whenBusy: opts?.whenBusy, createdAt, ...(safeMeta !== undefined ? { meta: safeMeta } : {}) },
     }
     const hookOutcome = await this.runHookChain('input', payload)
     if (hookOutcome?.action === 'block') {
@@ -1217,12 +1493,19 @@ export class KernelRuntime {
       finalInput = value.input
       effectiveText = finalInput.text
       finalWhenBusy = finalInput.whenBusy ?? finalWhenBusy
+      // transform 产物同样过边界脱敏（插件可能回填新 meta）。
+      if (finalInput.meta !== undefined) {
+        finalInput = {
+          ...finalInput,
+          meta: redactJsonValue(finalInput.meta, (t) => this.stash.redact(t)) as Record<string, unknown>,
+        }
+      }
     }
 
     // 首输入自动标题。
-    if (meta.title === '') {
+    if (convMeta.title === '') {
       const title = deriveTitle(effectiveText)
-      this.store.upsertConv({ ...meta, title, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
+      this.store.upsertConv({ ...convMeta, title, stateChangeSeq: convMeta.stateChangeSeq + 1, updatedAt: Date.now() })
     }
 
     const key = this.tracker.registerInput(id, finalInput)
@@ -1232,7 +1515,7 @@ export class KernelRuntime {
           type: 'input',
           content: effectiveText,
           whenBusy: finalWhenBusy ?? 'followUp',
-          // 最终 payload 的 origin/id 落入 helm.input entry（模型可见来源标记）。
+          // 最终 payload 的 origin/id/meta 落入 helm.input entry（模型可见来源标记）。
           entry: {
             kind: 'helm.input',
             data: {
@@ -1240,7 +1523,8 @@ export class KernelRuntime {
               text: effectiveText,
               origin: finalInput.origin,
               createdAt: finalInput.createdAt,
-            },
+              ...(finalInput.meta !== undefined ? { meta: finalInput.meta } : {}),
+            } as unknown as JsonValue,
           },
           requestId: finalInput.id,
         },
@@ -1252,6 +1536,104 @@ export class KernelRuntime {
       this.tracker.dropInput(id, key)
       throw normalizeBusyError(error)
     }
+  }
+
+  /**
+   * 等待单次提交的精确结果（send --wait / POST ?wait=1）：
+   * - 以 harness.submission 核对身份（conversationId/id/type）后 await wait；
+   * - done 后按 answer entryId 精确读取条目（minEntryId=maxEntryId），保留 model
+   *   消息，assistant 文本逐值脱敏；
+   * - failed/aborted 显式抛错（turn_failed/turn_aborted），绝不伪造回答；
+   * - handled:* 的提交没有真实 SDK submission，显式不适用而非造成功。
+   */
+  async waitForInput(id: number, submissionId: string): Promise<ConversationInputResult> {
+    if (submissionId.startsWith('handled:')) {
+      throw new HelmError(
+        'wait_not_applicable',
+        `提交 ${submissionId} 被 input 钩子接管，无真实回合可等待`,
+        409,
+        { conversationId: id, submissionId },
+      )
+    }
+    const numericId = Number(submissionId)
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+      throw new HelmError('validation_error', `非法 submissionId：${submissionId}`, 400)
+    }
+    if (!this.store.getConv(id)) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    const submission = await this.harness.submission(numericId as never, BACKGROUND_CONTEXT)
+    if (!submission) {
+      throw new HelmError('not_found', `提交不存在：${submissionId}`, 404, {
+        conversationId: id,
+        submissionId,
+      })
+    }
+    const status = (await submission.status(BACKGROUND_CONTEXT)) as unknown as {
+      conversationId?: unknown
+      id?: unknown
+      type?: string
+    }
+    if (
+      String(status.conversationId) !== String(id) ||
+      String(status.id) !== submissionId ||
+      status.type !== 'input'
+    ) {
+      throw new HelmError('not_found', `提交 ${submissionId} 不属于会话 ${id}`, 404, {
+        conversationId: id,
+        submissionId,
+      })
+    }
+    const settled = (await submission.wait(BACKGROUND_CONTEXT)) as unknown as {
+      status: 'queued' | 'placed' | 'done' | 'unanswered'
+      answer?: number
+      reason?: string
+      detail?: unknown
+    }
+    if (settled.status === 'unanswered') {
+      // 终态未获回答：按 reason 区分失败/中止（aborted/faulted/model_error 等），
+      // 绝不伪造回答文本。
+      const reason = settled.reason ?? 'unknown'
+      const aborted = reason === 'aborted' || reason === 'interrupted' || reason === 'reset'
+      throw new HelmError(
+        aborted ? 'turn_aborted' : 'turn_failed',
+        `会话 ${id} 本轮未获回答（${reason}${settled.detail !== undefined ? `：${String(settled.detail)}` : ''}）`,
+        aborted ? 499 : 502,
+        {
+          conversationId: id,
+          submissionId,
+          reason,
+          detail: settled.detail,
+        },
+      )
+    }
+    if (settled.status !== 'done' || settled.answer === undefined) {
+      // 理论不可达（wait 只回终态）；防御性显式报错而非吞。
+      throw new HelmError('turn_failed', `提交 ${submissionId} 结算为非终态 ${settled.status}`, 502, {
+        conversationId: id,
+        submissionId,
+        status: settled.status,
+      })
+    }
+    // 精确读取 answer entry（保留 model；文本逐值脱敏）。
+    const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
+    if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    const page = await conversation.entries(
+      { minEntryId: settled.answer as never, maxEntryId: settled.answer as never, order: 'ascending' },
+      1,
+      undefined,
+      BACKGROUND_CONTEXT,
+    )
+    const raw = page.items[0] as
+      | { id: number; kind: string; data?: unknown; model?: unknown[] }
+      | undefined
+    if (raw === undefined || raw.id !== settled.answer) {
+      throw new HelmError('not_found', `回答条目缺失：${settled.answer}`, 502, {
+        conversationId: id,
+        submissionId,
+      })
+    }
+    const entry = toConversationEntry(raw)
+    const text = this.stash.redact(assistantTextOfModel(entry.model))
+    return { conversationId: id, submissionId, text, entry }
   }
 
   async abortConversation(id: number): Promise<void> {
@@ -1318,16 +1700,18 @@ export class KernelRuntime {
           return ref
         },
         agentSessions: this.agentSessions,
-        registerChildConversation: async (childId, parentId, profileId, childCwd) => {
+        registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags) => {
           const now = Date.now()
           this.store.upsertConv({
             id: childId,
             title: `子代理 ${childId}`,
             profileId,
-            tags: ['worker'],
+            // 内核零角色硬编码：tags 由调用方策略决定（原生 spawn 传 []）。
+            tags,
             parentConversationId: parentId,
             cwd: childCwd,
-            model: finalRequest.model ?? this.defaultModel ?? '',
+            model: modelMirror,
+            ...(finalRequest.model !== undefined && finalRequest.model !== '' ? { modelOverride: finalRequest.model } : {}),
             unread: false,
             pinned: false,
             stateChangeSeq: 1,
@@ -1335,6 +1719,8 @@ export class KernelRuntime {
             createdAt: now,
             updatedAt: now,
           })
+          // 原生 spawn 自动 helm 归属（Watchdog 红线判定唯一可信来源）。
+          this.markConversationOwnership(childId, 'helm')
           await this.tracker.observe(childId)
         },
         resolveProfile: async (profileId) => {
@@ -1345,6 +1731,7 @@ export class KernelRuntime {
             ...(profile.runtime !== undefined ? { runtime: profile.runtime } : {}),
           }
         },
+        getModelOverride: (childId) => this.store.getConv(childId)?.modelOverride,
         getParentOfConversation: (childId) =>
           this.store.getConv(childId)?.parentConversationId,
         installChildExtension: (extension) => {
@@ -1365,21 +1752,32 @@ export class KernelRuntime {
     this.workflowRunner = fn
   }
 
-  /** 快照 workflowRuns：从 documentStore 的 workflow 索引读全部 run 摘要。 */
-  private listWorkflowRuns(): WorkflowRunSummary[] {
-    const index = this.documentStore.get<Array<{ id: string }>>('workflow/runs', [])
-    const out: WorkflowRunSummary[] = []
-    for (const entry of index) {
-      const raw = this.store.getPluginDoc('__global', `workflow/run/${entry.id}`)
-      if (raw === undefined) continue
-      try {
-        const record = JSON.parse(raw) as { summary?: WorkflowRunSummary }
-        if (record.summary !== undefined) out.push(record.summary)
-      } catch {
-        // 单条损坏不阻断快照（诚实性：跳过而非伪造），引擎侧 load 时显式报错。
-      }
+  /** workflow run 摘要 provider（SSE snapshot.workflowRuns 用；缺省 []）。 */
+  setWorkflowRunProvider(provider: () => WorkflowRunSummary[]): void {
+    this.workflowRunProvider = provider
+  }
+
+  /**
+   * 订阅工作流 run 终态（completed/failed/aborted，每 run 恰好一次）；
+   * 返回解除函数。监听器异常向上抛（app->kernel 通知插件清理失败必须显式，
+   * 禁止吞错伪成功）。
+   */
+  onWorkflowSettled(listener: (run: WorkflowRunSummary) => void | Promise<void>): () => void {
+    this.workflowSettledListeners.add(listener)
+    return () => {
+      this.workflowSettledListeners.delete(listener)
     }
-    return out
+  }
+
+  /**
+   * 工作流 run 终态通知（app 接线 WorkflowService.onRunSettled -> 此处）：
+   * 串行执行全部监听器；任一异常原样向上抛（调用方据此让清理失败显式），
+   * 绝不假成功。
+   */
+  async notifyWorkflowSettled(run: WorkflowRunSummary): Promise<void> {
+    for (const listener of [...this.workflowSettledListeners]) {
+      await listener(run)
+    }
   }
 
   /** 内部使用的 workflow 执行（spawnAgent 同源的 hook 链）。 */
@@ -1390,29 +1788,48 @@ export class KernelRuntime {
     return this.workflowRunner(request, conversationId, signal)
   }
 
-  /** watchdog tick：只采集通用事实，无业务策略、不自动操作。 */
+  /**
+   * watchdog tick（singleflight）：只采集真实事实，无业务策略、不自动恢复；
+   * probe 携带 getProbeFacts 的真实 stalledMs/consecutiveErrors；
+   * human 归属仅只读诊断（红线由插件与 host 共同遵守）。
+   */
   async watchdogTick(): Promise<unknown> {
-    const summaries = this.listConversations()
-    const probes = summaries.map((summary) => ({
-      targetId: String(summary.id),
-      /**
-       * 归属权判定依据 spawn 显式登记的 ownership 标记（helm_spawn_ownership
-       * plugin doc），绝不依赖用户可改的 tags/parent 推断；判不准一律 human
-       * 只读（红线：宁可漏管不可越权）。
-       */
-      ownedBy: this.watchdogOwnershipOf(summary) as 'human' | 'helm',
-      status: summary.status,
-      facts: { doing: summary.doing, pendingAskCount: summary.pendingAskCount },
-    }))
-    const payload = { timestamp: Date.now(), conversations: summaries, probes }
-    await this.runHookChain('watchdog_tick', payload)
-    return payload
+    if (this.watchdogInflight) {
+      // singleflight：上一轮未结束时不叠加执行（事实采集不重入）。
+      return { skipped: true, reason: 'watchdog tick already running' }
+    }
+    this.watchdogInflight = true
+    try {
+      const summaries = this.listConversations()
+      const probes = summaries.map((summary) => {
+        const facts = this.tracker.getProbeFacts(summary.id)
+        return {
+          targetId: String(summary.id),
+          /**
+           * 归属权判定依据显式登记的 ownership 标记（conversation-ownership doc），
+           * 绝不依赖用户可改的 tags/parent 推断；判不准一律 human 只读
+           * （红线：宁可漏管不可越权）。
+           */
+          ownedBy: this.watchdogOwnershipOf(summary.id),
+          status: summary.status,
+          ...(facts.stalledMs !== undefined ? { stalledMs: facts.stalledMs } : {}),
+          ...(facts.consecutiveErrors > 0 ? { consecutiveErrors: facts.consecutiveErrors } : {}),
+          facts: { doing: summary.doing, pendingAskCount: summary.pendingAskCount },
+        }
+      })
+      const payload = { timestamp: Date.now(), conversations: summaries, probes }
+      await this.runHookChain('watchdog_tick', payload)
+      return payload
+    } finally {
+      this.watchdogInflight = false
+    }
   }
 
-  private watchdogOwnershipOf(summary: ConversationSummary): 'human' | 'helm' {
-    if (summary.id === PROTO_ROOT) return 'human'
-    const owners = this.documentStore.get<Record<string, string>>('spawn-ownership', {})
-    return owners[String(summary.id)] === 'helm' ? 'helm' : 'human'
+  private watchdogOwnershipOf(conversationId: number): 'helm' | 'bot' | 'human' {
+    if (conversationId === PROTO_ROOT) return 'human'
+    const owners = this.documentStore.get<Record<string, string>>('conversation-ownership', {})
+    const marked = owners[String(conversationId)]
+    return marked === 'helm' || marked === 'bot' ? marked : 'human'
   }
 
   // ------------------------------------------------------------------
@@ -1423,7 +1840,7 @@ export class KernelRuntime {
     return this.asks.listAsks(status)
   }
 
-  async createAsk(spec: AskCreateSpec): Promise<Record<string, string>> {
+  async createAsk(spec: AskCreateSpec): Promise<AskResult> {
     return this.asks.createAsk(spec)
   }
 
@@ -1513,12 +1930,60 @@ export class KernelRuntime {
     flush: () => this.store.flushPublic(),
   }
 
-  /** spawn 归属权登记：子会话 -> 宿主标记（watchdog 判定唯一可信来源）。 */
-  markSpawnOwnership(childConversationId: number, owner: 'helm' | 'human'): void {
-    const key = 'spawn-ownership'
+  /**
+   * 会话归属权标记（Watchdog 红线判定唯一可信来源）：
+   * - 不依赖用户可改的 tags/parent 推断；未标记一律视为 human（宁漏管不越权）；
+   * - root #1 恒 human，禁止改写（个人助理主入口是人类直连会话）；
+   * - 持久化于全局 doc（'conversation-ownership'），重启保留。
+   */
+  markConversationOwnership(conversationId: number, owner: 'helm' | 'bot' | 'human'): void {
+    if (conversationId === PROTO_ROOT && owner !== 'human') {
+      throw new HelmError(
+        'root_ownership_immutable',
+        `根会话 #1 归属恒为 human，禁止标记为 ${owner}`,
+        403,
+        { conversationId, owner },
+      )
+    }
+    const key = 'conversation-ownership'
     const current = this.documentStore.get<Record<string, string>>(key, {})
-    current[String(childConversationId)] = owner
-    this.documentStore.set(key, current)
+    const next = owner === 'human'
+      ? (() => {
+          // 标记 human = 移除自动化归属（回退默认判定），不留冗余键。
+          const { [String(conversationId)]: _removed, ...rest } = current
+          void _removed
+          return rest
+        })()
+      : { ...current, [String(conversationId)]: owner }
+    this.documentStore.set(key, next)
+  }
+
+  /**
+   * 插件会话管理权（删除保护）：仅已启用插件可持有；返回释放函数。
+   * 同一插件重复 manage 幂等（一次 release 即全释）；插件停用生命周期由
+   * PluginHost 调 releaseConversationOwnership 释放。
+   */
+  manageConversation(conversationId: number, pluginId: string): () => void {
+    let owners = this.managedConversations.get(conversationId)
+    if (owners === undefined) {
+      owners = new Set()
+      this.managedConversations.set(conversationId, owners)
+    }
+    owners.add(pluginId)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.releaseConversationOwnership(conversationId, pluginId)
+    }
+  }
+
+  /** 释放指定插件对会话的管理权（无持有则幂等同式）。 */
+  private releaseConversationOwnership(conversationId: number, pluginId: string): void {
+    const owners = this.managedConversations.get(conversationId)
+    if (!owners) return
+    owners.delete(pluginId)
+    if (owners.size === 0) this.managedConversations.delete(conversationId)
   }
 
   /** HTTP 固定消费面：public services（与 contracts.KernelRuntimeLike 一致）。 */
@@ -1588,7 +2053,11 @@ export class KernelRuntime {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
-    // 1) 停资产监听（不再产生 reload 副作用）。
+    // 1) 停定时器与资产监听（不再产生新副作用）。
+    if (this.watchdogTimer !== undefined) {
+      clearInterval(this.watchdogTimer)
+      this.watchdogTimer = undefined
+    }
     this.watcher?.close()
     if (this.reloadTimer !== undefined) clearTimeout(this.reloadTimer)
     // 2) 等待在途 reloadModels（可能还在写 models 引用）。
@@ -1616,7 +2085,10 @@ export class KernelRuntime {
     await Promise.allSettled(this.closeAborts)
     await this.settledInflight
     await this.pluginHost?.dispose()
-    // 5) SDK 先关（此后无任何 SDK 写），再 flush store，最后关数据库。
+    // 5) 受管进程 token 销毁（此后工具子进程鉴权不再认它）。
+    this.processTokenHandle?.dispose()
+    this.processTokenHandle = undefined
+    // 6) SDK 先关（此后无任何 SDK 写），再 flush store，最后关数据库。
     await this.harness.close(BACKGROUND_CONTEXT)
     const storeError = await this.store.close()
     await this.database.close()

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS helm_conversations (
   parent_conversation_id INTEGER,
   cwd TEXT NOT NULL,
   model TEXT NOT NULL DEFAULT '',
+  model_override TEXT,
   unread INTEGER NOT NULL DEFAULT 0,
   pinned INTEGER NOT NULL DEFAULT 0,
   state_change_seq INTEGER NOT NULL DEFAULT 1,

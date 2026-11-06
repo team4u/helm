@@ -22,7 +22,10 @@ export interface ConvMeta {
   tags: string[]
   parentConversationId?: number
   cwd: string
+  /** 生效模型镜像（解析链结果；无配置时为空串，仅展示用）。 */
   model: string
+  /** 显式模型覆盖（'provider/model'）；undefined = 继承 profile/全局。 */
+  modelOverride?: string
   unread: boolean
   pinned: boolean
   stateChangeSeq: number
@@ -108,6 +111,7 @@ export class HelmStore {
       parent_conversation_id: number | null
       cwd: string
       model: string
+      model_override: string | null
       unread: number
       pinned: number
       state_change_seq: number
@@ -115,7 +119,7 @@ export class HelmStore {
       created_at: number
       updated_at: number
     }>(
-      'SELECT id, title, profile_id, tags, parent_conversation_id, cwd, model, unread, pinned, state_change_seq, completion_seq, created_at, updated_at FROM helm_conversations',
+      'SELECT id, title, profile_id, tags, parent_conversation_id, cwd, model, model_override, unread, pinned, state_change_seq, completion_seq, created_at, updated_at FROM helm_conversations',
     )) {
       this.convs.set(row.id, {
         id: row.id,
@@ -125,6 +129,7 @@ export class HelmStore {
         parentConversationId: row.parent_conversation_id ?? undefined,
         cwd: row.cwd,
         model: row.model,
+        modelOverride: row.model_override ?? undefined,
         unread: row.unread === 1,
         pinned: row.pinned === 1,
         stateChangeSeq: row.state_change_seq,
@@ -269,9 +274,9 @@ export class HelmStore {
     this.convs.set(snap.id, snap)
     this.enqueue(async () => {
       await this.db.run(
-        `INSERT INTO helm_conversations (id, title, profile_id, tags, parent_conversation_id, cwd, model, unread, pinned, state_change_seq, completion_seq, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, cwd=excluded.cwd, model=excluded.model, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, updated_at=excluded.updated_at`,
+        `INSERT INTO helm_conversations (id, title, profile_id, tags, parent_conversation_id, cwd, model, model_override, unread, pinned, state_change_seq, completion_seq, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, updated_at=excluded.updated_at`,
         snap.id,
         snap.title,
         snap.profileId,
@@ -279,6 +284,7 @@ export class HelmStore {
         snap.parentConversationId ?? null,
         snap.cwd,
         snap.model,
+        snap.modelOverride ?? null,
         snap.unread ? 1 : 0,
         snap.pinned ? 1 : 0,
         snap.stateChangeSeq,

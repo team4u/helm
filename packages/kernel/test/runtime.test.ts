@@ -391,11 +391,12 @@ describe('工具真实执行', { timeout: 60_000 }, () => {
 })
 
 describe('原生 subagent', { timeout: 60_000 }, () => {
-  it('schema 校验通过返回对象；onCreated 上报 convId', { timeout: 60_000 }, async () => {
+  it('schema 校验通过返回对象；onResolved 上报 convId/effectiveCwd', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't14'))
     try {
       kernel.__faux.setResponses([fauxAssistantMessage('{"answer": 42}')])
       let createdId: number | undefined
+      let resolvedCwd: string | undefined
       const result = await kernel.spawnAgent({
         parentConversationId: 1,
         prompt: '计算答案',
@@ -404,15 +405,17 @@ describe('原生 subagent', { timeout: 60_000 }, () => {
           properties: { answer: { type: 'number' } },
           required: ['answer'],
         },
-        onCreated: (id) => {
-          createdId = id
+        onResolved: (info) => {
+          createdId = info.conversationId
+          resolvedCwd = info.effectiveCwd
         },
       })
       assert.deepEqual(result, { answer: 42 })
       assert.ok(createdId !== undefined && createdId > 1)
-      // 子会话在列表中（tags worker）
+      assert.ok(typeof resolvedCwd === 'string' && resolvedCwd.length > 0)
+      // 子会话零业务标签（角色由 profileId 表达；内核不硬编码 worker）。
       const child = kernel.getConversation(createdId!)
-      assert.ok(child.tags.includes('worker'))
+      assert.deepEqual(child.tags, [])
     } finally {
       await kernel.close()
     }
@@ -830,7 +833,7 @@ describe('真实 PluginHost 集成', { timeout: 60_000 }, () => {
     }
   })
 
-  it('watchdog ownership：spawn 登记的子会话 helm；用户直连/无标记 human', { timeout: 60_000 }, async () => {
+  it('watchdog ownership：spawn 自动登记子会话 helm；用户直连/无标记 human', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 'p9'))
     try {
       kernel.__faux.setResponses([fauxAssistantMessage('worker 完成')])
@@ -838,13 +841,12 @@ describe('真实 PluginHost 集成', { timeout: 60_000 }, () => {
       await kernel.spawnAgent({
         parentConversationId: 1,
         prompt: '干活',
-        onCreated: (id) => {
-          childId = id
+        onResolved: (info) => {
+          childId = info.conversationId
         },
       })
       assert.ok(childId !== undefined)
-      // spawn 显式登记 ownership（不靠 tags/parent 推断）。
-      kernel.markSpawnOwnership(childId!, 'helm')
+      // 原生 spawn 自动 helm 归属（不靠 tags/parent 推断，无需手动登记）。
       const tick = (await kernel.watchdogTick()) as {
         probes: Array<{ targetId: string; ownedBy: string }>
       }
