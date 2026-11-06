@@ -109,6 +109,12 @@ export interface KernelRuntimeLike {
    * 服务端错误日志都先经它擦除已登记秘密，绝不外发明文或还原 marker。
    */
   readonly stash?: { redact(text: string): string }
+  /**
+   * 模型热重载端口：providers/credentials 变更后 await，使后续
+   * listModels 反映新配置（仅持久化 JSON 而不重载等于热配置无效）。
+   * 可选：runtime 未提供时 HTTP 层不阻塞写路径。
+   */
+  reloadModels?(): Promise<void>
 
   listConversations(filter?: {
     tag?: string

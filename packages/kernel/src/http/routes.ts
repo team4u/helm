@@ -272,7 +272,9 @@ async function route(
       // 接受。两种 body 都逐项严格校验，不因包裹形态放宽任何字段规则。
       const value = await readJsonValue(ctx.request)
       const providers = parseProvidersBodyValue(value)
-      return jsonOk(redactor, await kernel.providers.save(providers))
+      const saved = await kernel.providers.save(providers)
+      await reloadModels(kernel)
+      return jsonOk(redactor, saved)
     }
     return methodNotAllowed(redactor, method)
   }
@@ -287,10 +289,12 @@ async function route(
     if (third === undefined && method === 'PUT') {
       const body = await readJsonBody(ctx.request)
       await kernel.credentials.set(credId, parseCredentialBody(body))
+      await reloadModels(kernel)
       return jsonOk(redactor, { ok: true })
     }
     if (third === undefined && method === 'DELETE') {
       await kernel.credentials.delete(credId)
+      await reloadModels(kernel)
       return jsonOk(redactor, { ok: true })
     }
     return errorResponse(redactor, 404, 'not_found', '路由不存在')
@@ -476,6 +480,11 @@ async function dispatchPluginRoute(
 // ---------------------------------------------------------------------------
 // 辅助
 // ---------------------------------------------------------------------------
+
+/** providers/credentials 变更后热重载模型清单；未提供端口的 runtime 跳过。 */
+async function reloadModels(kernel: KernelRuntimeLike): Promise<void> {
+  await kernel.reloadModels?.()
+}
 
 function bearerToken(request: Request): string | undefined {
   const header = request.headers.get('authorization')
