@@ -327,7 +327,7 @@ export class WorkflowService {
             `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）：${record.error ?? ''}`.trim()
           this.state.set(runKey(entry.id), record)
           changed = true
-          this.host.emitEvent('workflow.updated', this.toSummary(record))
+          this.host.emitEvent('workflow.updated', { run: this.toSummary(record) })
         }
         if (changed) await this.state.flush?.()
         this.recovered = true
@@ -688,10 +688,9 @@ export class WorkflowService {
             }
             if (nodeBoundary && due) {
               run.lastNodeEventAt = stamp
-              this.host.emitEvent(
-                'workflow.updated',
-                this.redactSummaryNodes({ ...run.summary, updatedAt: stamp, nodes: this.nodesFromProgress(run.progress) }),
-              )
+              this.host.emitEvent('workflow.updated', {
+                run: this.redactSummaryNodes({ ...run.summary, updatedAt: stamp, nodes: this.nodesFromProgress(run.progress) }),
+              })
             }
           },
           journal: {

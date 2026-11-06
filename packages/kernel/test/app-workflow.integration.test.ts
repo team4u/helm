@@ -136,9 +136,8 @@ test('工作流1: agent schema/gate 真链路——原生 spawn + StructuredOutp
     const started = await workflows.run({ script, conversationId: ROOT_CONVERSATION_ID })
     assert.ok(started.id.startsWith('wf_'), 'runId 应为 wf_ 前缀')
     const result = (await workflows.wait(started.id)) as { answer: number }
-    assert.deepEqual(result, STRUCTURED, 'wait 应返回 Schema 校验通过的结构化对象')
-
     const summary = workflows.getRun(started.id)
+    assert.deepEqual(result, STRUCTURED, `wait 应返回 Schema 校验通过的结构化对象，节点诊断：${JSON.stringify(summary.nodes)}`)
     assert.equal(summary.status, 'completed', `run 应完成：${summary.error ?? ''}`)
 
     // gate 真实 shell 只执行一次（sentinel 文件追加计数）
