@@ -14,6 +14,7 @@ export async function createHelm(options: HelmOptions = {}) {
       state: kernel.documentStore,
       host: {
         spawnAgent: (request) => kernel.spawnAgent(request),
+        runGate: (command, context) => kernel.runGate(command, context),
         async invokeAction(pluginId, actionId, input, context) {
           const result = await kernel.plugins.invokeAction(pluginId, actionId, input, context);
           return redactJsonValue(result, (text) => kernel.stash.redact(text));

@@ -23,8 +23,12 @@ HELM_PORT=3202 pnpm dev:kernel
 
 ```bash
 pnpm helm --help
+pnpm helm setup --password '请替换为至少八位的管理员密码'
 pnpm helm status --json
+pnpm helm conversations list --json
 ```
+
+`setup` 只允许首次初始化；后续终端使用 `pnpm helm login` 登录。CLI 将登录凭据写入数据目录中的 `credentials.json`，权限为 `0600`。也可通过 `HELM_TOKEN` 指定令牌。
 
 CLI 使用 `HELM_HUB_URL` 指定 Hub，默认 `http://127.0.0.1:3202`。支持指定会话的命令可通过 `--current` 读取 `HELM_CONVERSATION_ID`。读取会话不会自动清除未读状态。删除会话会清理产物和搜索索引，并阻止后续访问；受 SDK 接口限制，SQLite 内部历史记录仍保留。
 
