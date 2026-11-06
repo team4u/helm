@@ -27,7 +27,7 @@ import {
   SecretStash,
   FileNotFoundError,
 } from '../src/services/index.js'
-import { PluginHost } from '../src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import {
   ROOT_CONVERSATION_ID,
   HelmError,
@@ -254,7 +254,7 @@ async function call(handler: (req: Request) => Promise<Response>, method: string
 let publicHandlerCalls: Request[] = []
 let privateHandlerCalls: Request[] = []
 
-function hostApiForPluginHost() {
+function hostApiForPluginHost(): PluginHostBackend {
   return {
     dispatchTrigger: async () => {},
     submitInput: async () => {},
@@ -265,8 +265,17 @@ function hostApiForPluginHost() {
       if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
       return found
     },
-    createAsk: async () => ({}),
+    updateConversation: async (id: number) => {
+      const found = conversations.get(id)
+      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      return found
+    },
+    manageConversation: () => () => {},
+    markConversationOwnership: () => {},
+    createAsk: async () => ({ id: 'ask-1', status: 'answered', answers: {} }),
     cancelAsk: async () => {},
+    registerAskSeqResolver: () => () => {},
+    onWorkflowSettled: () => () => {},
     emitEvent: () => {},
   }
 }
@@ -287,10 +296,10 @@ async function registerRoutePlugin(host: PluginHost): Promise<void> {
     id: 'builtin:triggers',
     name: 'triggers',
     async definePlugin(ctx: HelmPluginContext) {
-      // PluginHost 强制完整声明前缀 /api/plugins/<encodeURIComponent(id)>/routes/...
+      // PluginHost 声明相对路径，宿主自动拼接到 /api/plugins/<enc id>/routes/...
       ctx.route({
         method: 'POST',
-        path: '/api/plugins/builtin%3Atriggers/routes/webhook/:hookId',
+        path: '/webhook/:hookId',
         public: true,
         handler: (req) => {
           publicHandlerCalls.push(req)
@@ -299,7 +308,7 @@ async function registerRoutePlugin(host: PluginHost): Promise<void> {
       })
       ctx.route({
         method: 'GET',
-        path: '/api/plugins/builtin%3Atriggers/routes/status',
+        path: '/status',
         handler: (req) => {
           privateHandlerCalls.push(req)
           return Response.json({ ok: true })

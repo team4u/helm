@@ -11,7 +11,6 @@ import {
   HelmError,
   type ConversationSummary,
   type ExternalTriggerEnvelope,
-  type HelmHostApi,
   type PluginDefinition,
   type PluginDocHandle,
 } from '@helm/protocol';
@@ -21,6 +20,7 @@ import {
   validatePluginInput,
   type PluginDocStore,
   type PluginConfigStore,
+  type PluginHostBackend,
 } from '../src/plugins/index.js';
 
 // ---------------------------------------------------------------------------
@@ -46,7 +46,12 @@ function makeConversation(id: number): ConversationSummary {
   };
 }
 
-function makeHostApi(events: string[] = []): HelmHostApi {
+/**
+ * 插件宿主后端端口的完整 fake（新契约：AskResult 三态 + 生命周期端口）。
+ * 记录 manageConversation / onWorkflowSettled / registerAskSeqResolver 调用，
+ * 供生命周期释放测试断言。
+ */
+function makeHostApi(events: string[] = []): PluginHostBackend {
   return {
     dispatchTrigger: async () => {
       events.push('dispatchTrigger');
@@ -60,9 +65,24 @@ function makeHostApi(events: string[] = []): HelmHostApi {
     }),
     listConversations: () => [makeConversation(1)],
     getConversation: (id) => makeConversation(id),
-    createAsk: async () => ({ answer: 'y' }),
+    updateConversation: async (id) => makeConversation(id),
+    manageConversation: (id, pluginId) => {
+      events.push(`manage:${pluginId}:${id}`);
+      return () => events.push(`release:${pluginId}:${id}`);
+    },
+    markConversationOwnership: () => {},
+    createAsk: async () => ({ id: 'ask-1', status: 'answered', answers: {} }),
     cancelAsk: async () => {},
-    emitEvent: (type) => events.push(`event:${type}`),
+    registerAskSeqResolver: () => () => {
+      events.push('unregister-ask-seq');
+    },
+    onWorkflowSettled: () => () => {
+      events.push('unregister-workflow-settled');
+    },
+    emitEvent: (type, payload) => {
+      events.push(`event:${type}`);
+      eventPayloads.push({ type, payload });
+    },
   };
 }
 
@@ -99,6 +119,8 @@ function makeEnvelope(over: Partial<ExternalTriggerEnvelope> = {}): ExternalTrig
 let dataDir: string;
 let docs: MemoryDocStore;
 let events: string[];
+/** emitEvent 完整载荷（plugin.changed 的 ui 字段等断言用）。 */
+let eventPayloads: Array<{ type: string; payload: unknown }>;
 
 /** 断言 Promise 以指定 code/status 的 HelmError 拒。 */
 async function rejectsCode(promise: Promise<unknown>, code: string, status?: number): Promise<void> {
@@ -127,6 +149,7 @@ beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'helm-plugins-test-'));
   docs = new MemoryDocStore();
   events = [];
+  eventPayloads = [];
 });
 
 afterEach(() => {
@@ -723,14 +746,14 @@ test('未提供 ConfigStore 时 setConfig 显式 501，不假持久化；提供�
 // 路由 / UI 收集 / dispose
 // ---------------------------------------------------------------------------
 
-test('路由限定 /api/plugins/<enc>/routes 前缀：越界/点段/查询串/空段拒绝', { timeout: 60_000 }, async () => {
+test('路由声明相对路径：宿主拼接到插件命名空间，完整 /api 前缀/点段/查询串/空段拒绝', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'triggers',
     definePlugin: (ctx) => {
       ctx.route({
         method: 'POST',
-        path: '/api/plugins/triggers/routes/hook',
+        path: '/hook',
         public: true,
         handler: () => new Response('ok'),
       });
@@ -741,59 +764,65 @@ test('路由限定 /api/plugins/<enc>/routes 前缀：越界/点段/查询串/�
   assert.equal(routes[0]!.path, '/api/plugins/triggers/routes/hook');
   assert.equal(routes[0]!.public, true);
 
-  // 冒号插件 id 需 encodeURIComponent 前缀
+  // 冒号插件 id 经 encodeURIComponent 拼入前缀；参数段合法
   const h2 = makeHost();
   await h2.register({
     id: 'builtin:webhook',
     definePlugin: (ctx) => {
-      ctx.route({ method: 'GET', path: '/api/plugins/builtin%3Awebhook/routes/cb', handler: () => new Response('ok') });
+      ctx.route({ method: 'GET', path: '/cb', handler: () => new Response('ok') });
     },
   });
   assert.equal(h2.listRoutes()[0]!.path, '/api/plugins/builtin%3Awebhook/routes/cb');
+  await h2.register({
+    id: 'p:params',
+    definePlugin: (ctx) => {
+      ctx.route({ method: 'GET', path: '/webhook/:id', handler: () => new Response('ok') });
+    },
+  });
+  assert.ok(
+    h2
+      .listRoutes()
+      .some((r) => r.pluginId === 'p:params' && r.path === '/api/plugins/p%3Aparams/routes/webhook/:id'),
+  );
 
-  // 越界：内核路由、其他插件命名空间、plugins 下非 routes 子树一律拒绝
-  await assert.rejects(
+  // 完整 /api 前缀一律拒绝（新契约只收相对路径，命名空间由宿主负责）
+  await rejectsCode(
     host.register({
       id: 'p:evil',
       definePlugin: (ctx) => {
         ctx.route({ method: 'GET', path: '/api/conversations', handler: () => new Response('x') });
       },
     }),
-    (err: unknown) => {
-      assert.ok(err instanceof HelmError);
-      assert.equal(err.code, 'route_prefix_violation');
-      assert.equal(err.status, 403);
-      return true;
-    },
+    'invalid_route_path',
   );
-  // 同前缀但非 routes 子树（可覆盖 core config/disable 等路由的旧洞）
   await rejectsCode(
     host.register({
       id: 'p:evil2',
-      definePlugin: (ctx) => void ctx.route({ method: 'GET', path: '/api/plugins/triggers/config', handler: () => new Response('x') }),
+      definePlugin: (ctx) =>
+        void ctx.route({ method: 'GET', path: '/api/plugins/p%3Aevil2/routes/x', handler: () => new Response('x') }),
     }),
-    'route_prefix_violation',
+    'invalid_route_path',
   );
-  // 点段 / 编码点段 / 查询串 / 片段 / 空段 / 尾斜杠：前缀匹配但路径非法
-  const rejectPath = async (suffix: string, code: string) => {
+  // 点段 / 编码点段 / 查询串 / 片段 / 空段 / 尾斜杠 / 仅根：相对路径形态非法
+  const rejectPath = async (suffix: string) => {
     const pluginId = `p:seg-${suffix.length}-${suffix.replaceAll(/[^A-Za-z0-9]/g, 'p')}`;
     await rejectsCode(
       host.register({
         id: pluginId,
         definePlugin: (ctx) => {
-          const prefix = `/api/plugins/${encodeURIComponent(pluginId)}/routes`;
-          ctx.route({ method: 'GET', path: `${prefix}${suffix}`, handler: () => new Response('x') });
+          ctx.route({ method: 'GET', path: suffix, handler: () => new Response('x') });
         },
       }),
-      code,
+      'invalid_route_path',
     );
   };
-  await rejectPath('/../x', 'invalid_route_path');
-  await rejectPath('/%2E%2E/x', 'invalid_route_path');
-  await rejectPath('/a?b=1', 'invalid_route_path');
-  await rejectPath('/a#frag', 'invalid_route_path');
-  await rejectPath('//x', 'invalid_route_path');
-  await rejectPath('/x/', 'invalid_route_path');
+  await rejectPath('/../x');
+  await rejectPath('/%2E%2E/x');
+  await rejectPath('/a?b=1');
+  await rejectPath('/a#frag');
+  await rejectPath('//x');
+  await rejectPath('/x/');
+  await rejectPath('/');
 });
 
 test('UI 七类十函数统一收集可序列化 spec；不可序列化 spec 拒绝', { timeout: 60_000 }, async () => {
@@ -870,13 +899,13 @@ test('dispose 逆序停用全部插件；dispose 后调用显式报错', { timeo
   await host.dispose(); // 幂等
 });
 
-test('cli.command 语义化命令路径：合法声明透传 manifest，非法声明拒绝', { timeout: 60_000 }, async () => {
+test('cli.command 语义化命令路径：合法声明透传 manifest，动作 id 禁止点号', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'builtin:triggers',
     definePlugin: (ctx) => {
       ctx.action({
-        id: 'cron.create',
+        id: 'cron_create',
         description: '创建定时任务',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
@@ -885,8 +914,36 @@ test('cli.command 语义化命令路径：合法声明透传 manifest，非法�
       });
     },
   });
-  const manifest = host.listActions().find((a) => a.id === 'cron.create')!;
+  const manifest = host.listActions().find((a) => a.id === 'cron_create')!;
   assert.deepEqual(manifest.cli?.command, ['cron', 'create']);
+
+  // 动作 id 禁止点号：全限定 ID 以首个 '.' 分割，含点会产生歧义解析
+  const hDot = makeHost();
+  await rejectsCode(
+    hDot.register({
+      id: 'p:dot-action',
+      definePlugin: (ctx) => {
+        ctx.action({
+          id: 'cron.create',
+          description: 'x',
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object' },
+          handler: () => ({}),
+        });
+      },
+    }),
+    'invalid_action_spec',
+  );
+  assert.equal(hDot.list().length, 0);
+  // doc id / 服务 id 仍允许点号（禁令仅限动作 id，别误禁其他标识）
+  await hDot.register({
+    id: 'p:dot-ok',
+    definePlugin: (ctx) => {
+      ctx.doc('cron.create', { n: 0 });
+      ctx.service({ id: 'tick.keep', start: () => {}, stop: () => {} });
+    },
+  });
+  assert.equal(hDot.list().length, 1);
 
   const h2 = makeHost();
   await rejectsCode(
@@ -990,7 +1047,7 @@ test('旧 context 在 disable 后不允许继续注册/修改：epoch 使句柄�
   throwsCode(() => stolen!.action({ id: 'x', description: 'x', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, handler: () => ({}) }), 'plugin_context_closed');
   throwsCode(() => stolen!.hook.onTrigger(() => undefined), 'plugin_context_closed');
   throwsCode(() => stolen!.configSchema({ a: { type: 'string' } }), 'plugin_context_closed');
-  throwsCode(() => stolen!.route({ method: 'GET', path: `/api/plugins/${encodeURIComponent('p:steal')}/routes/x`, handler: () => new Response('x') }), 'plugin_context_closed');
+  throwsCode(() => stolen!.route({ method: 'GET', path: '/x', handler: () => new Response('x') }), 'plugin_context_closed');
   // 旧 doc 句柄：读写拒绝，且未污染持久层（仍是周期内写入的 0）
   throwsCode(() => stolenDoc!.set({ n: 1 }), 'plugin_context_expired');
   throwsCode(() => stolenDoc!.get(), 'plugin_context_expired');
@@ -1182,6 +1239,56 @@ test('register/enable/disable/unregister 成功后发 plugin.changed 事件；�
   assert.equal(events.length, before); // 失败未新增事件
 });
 
+test('plugin.changed 携带 ui 贡献：启用含全部声明，停用/卸载为空数组', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  await host.register({
+    id: 'p:ui-sync',
+    definePlugin: (ctx) => {
+      ctx.ui.screen({ id: 'graph', label: '图谱' });
+      ctx.ui.sidebarItem({ id: 'home', label: '主页' });
+    },
+  });
+  const changedEvents = () =>
+    eventPayloads
+      .filter((e) => e.type === 'plugin.changed')
+      .map((e) => e.payload as { plugin: { id: string }; ui: Array<{ surface: string; spec: { id?: string } }> });
+
+  // 注册（启用）事件：ui 含该插件全部贡献
+  const registered = changedEvents().at(-1)!;
+  assert.equal(registered.plugin.id, 'p:ui-sync');
+  assert.deepEqual(
+    registered.ui.map((u) => `${u.surface}:${String(u.spec.id)}`).sort(),
+    ['screen:graph', 'sidebar.item:home'],
+  );
+
+  // 停用：ui 为空数组（前端凭单帧移除该插件全部 UI，不靠轮询/重连）
+  await host.disable('p:ui-sync');
+  const disabled = changedEvents().at(-1)!;
+  assert.equal(disabled.plugin.id, 'p:ui-sync');
+  assert.deepEqual(disabled.ui, []);
+
+  // 重新启用：ui 恢复全部贡献
+  await host.enable('p:ui-sync');
+  const enabled = changedEvents().at(-1)!;
+  assert.equal(enabled.ui.length, 2);
+
+  // 卸载：ui 再次为空
+  await host.unregister('p:ui-sync');
+  const unregistered = changedEvents().at(-1)!;
+  assert.deepEqual(unregistered.ui, []);
+
+  // 只携带本插件的贡献：另一插件的事件不含别人的 UI
+  await host.register({
+    id: 'p:other',
+    definePlugin: (ctx) => {
+      ctx.ui.screen({ id: 'other-screen', label: '另一个' });
+    },
+  });
+  const other = changedEvents().at(-1)!;
+  assert.equal(other.plugin.id, 'p:other');
+  assert.ok(other.ui.every((u) => String(u.spec.id) === 'other-screen'));
+});
+
 // ---------------------------------------------------------------------------
 // 回归：JSON-safe 边界（ui spec / doc / action output）
 // ---------------------------------------------------------------------------
@@ -1353,8 +1460,8 @@ test('exposeAsTool 派生工具名 provider-safe：模拟 provider 请求工具�
     id: 'builtin:test',
     definePlugin: (ctx) => {
       ctx.action({
-        id: 'do.thing',
-        description: '含点动作',
+        id: 'do_thing',
+        description: '下划线动作',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         exposeAsTool: true,
@@ -1375,15 +1482,15 @@ test('exposeAsTool 派生工具名 provider-safe：模拟 provider 请求工具�
     assert.match(t.name, providerToolNameRegex, `工具名 ${t.name} 未通过 provider regex`);
   }
   const derived = tools.find((t) => t.sourceKind === 'action')!;
-  assert.equal(derived.qualifiedId, 'builtin:test.do.thing');
+  assert.equal(derived.qualifiedId, 'builtin:test.do_thing');
   // 别名稳定（跨 host 实例同名同 id 同 hash）
-  assert.equal(derived.name, actionToolAlias('builtin:test', 'do.thing'));
+  assert.equal(derived.name, actionToolAlias('builtin:test', 'do_thing'));
   // manifest 仍用原 ID：run_action / HTTP / CLI 不受别名影响
-  assert.equal(host.listActions().find((a) => a.id === 'do.thing')!.pluginId, 'builtin:test');
+  assert.equal(host.listActions().find((a) => a.id === 'do_thing')!.pluginId, 'builtin:test');
   // executeTool 别名映射回原动作并经 schema 校验
   assert.deepEqual(await host.executeTool(derived.name, {}, { conversationId: 1 }), { ok: true });
   // 全限定名仍可解析
-  assert.deepEqual(await host.executeTool('builtin:test.do.thing', {}, { conversationId: 1 }), { ok: true });
+  assert.deepEqual(await host.executeTool('builtin:test.do_thing', {}, { conversationId: 1 }), { ok: true });
 });
 
 test('ctx.tool 名 provider-safe 校验：点/超长拒绝；不同长 id 的别名不碰撞', { timeout: 60_000 }, async () => {
@@ -1426,7 +1533,7 @@ test('ctx.tool 名 provider-safe 校验：点/超长拒绝；不同长 id 的别
     id: 'p:one',
     definePlugin: (ctx) => {
       ctx.action({ id: 'run', description: 'x', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, exposeAsTool: true, handler: () => ({}) });
-      ctx.action({ id: 'run.x', description: 'x', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, exposeAsTool: true, handler: () => ({}) });
+      ctx.action({ id: 'run_x', description: 'x', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, exposeAsTool: true, handler: () => ({}) });
     },
   });
   await h2.register({
