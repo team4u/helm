@@ -128,9 +128,14 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
 
   const address = server.address() as AddressInfo
   const actualPort = address.port
+  const url = `http://${hostname}:${actualPort}`
+
+  // 监听后把真实 URL 回写 runtime（port:0 时工具端点/CLI 指向实际分配地址）。
+  // 未提供端口的 kernel 跳过；回调抛错如实上抛（不伤装成功）。
+  kernel.setHubUrl?.(url)
 
   return {
-    url: `http://${hostname}:${actualPort}`,
+    url,
     get port() {
       return actualPort
     },

@@ -150,10 +150,12 @@ function makeKernel(): KernelRuntimeLike {
     async listConversations() {
       return [...conversations.values()]
     },
-    async getConversation(id: number) {
+    async getConversationDetail(id: number, opts?: { limit?: number; cursor?: string }) {
       const found = conversations.get(id)
       if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
-      return found
+      // 模拟会话面：无持久时间线，返回空 entries（真实 kernel 由 SDK 分页提供）
+      void opts
+      return { ...found, entries: [] }
     },
     async createConversation(init) {
       const id = Math.max(0, ...conversations.keys()) + 1
@@ -176,6 +178,11 @@ function makeKernel(): KernelRuntimeLike {
     async submitInput(id, text, opts) {
       if (!conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
       submitted.push({ id, text, opts })
+      return { submissionId: 'sub-mock' }
+    },
+    async waitForInput(id: number, submissionId: string) {
+      void id
+      return { conversationId: id, submissionId, text: '', entry: { id: 'e', kind: 'pi.assistant' } }
     },
     async abortConversation(id) {
       aborted.push(id)
@@ -205,6 +212,7 @@ function makeKernel(): KernelRuntimeLike {
 
 const workflows: WorkflowServiceLike = {
   list: () => [{ name: 'demo' }],
+  listRuns: () => [{ id: 'run-1', name: 'demo', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }],
   run: async (request) => ({
     id: 'run-1',
     name: request.name ?? 'inline',
@@ -217,6 +225,9 @@ const workflows: WorkflowServiceLike = {
     runId === 'run-1'
       ? { id: 'run-1', name: 'demo', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }
       : undefined,
+  wait: async (runId) => {
+    void runId
+  },
   abort: () => {},
 }
 
@@ -521,7 +532,8 @@ test('POST /:id/input 校验 origin/whenBusy 枚举并透传 kernel.submitInput'
   const ok = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
     body: { text: '你好', origin: 'human', whenBusy: 'followUp' },
   })
-  assert.equal(ok.status, 200)
+  assert.equal(ok.status, 202)
+  assert.deepEqual(ok.body, { submissionId: 'sub-mock' })
   assert.equal(submitted.at(-1)?.text, '你好')
   assert.deepEqual(submitted.at(-1)?.opts, { origin: 'human', whenBusy: 'followUp' })
   const badOrigin = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {

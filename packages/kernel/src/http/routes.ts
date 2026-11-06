@@ -37,6 +37,8 @@ import {
   parseConversationInit,
   parseConversationPatch,
   parseCredentialBody,
+  parseDetailPagination,
+  parseDocNameParam,
   parseIdParam,
   parseInputBody,
   parsePluginConfigBody,
@@ -174,7 +176,9 @@ async function route(
     }
     const id = parseIdParam(second)
     if (third === undefined) {
-      if (method === 'GET') return jsonOk(redactor, await kernel.getConversation(id))
+      if (method === 'GET') {
+        return jsonOk(redactor, await kernel.getConversationDetail(id, parseDetailPagination(ctx.url)))
+      }
       if (method === 'PATCH') {
         const body = await readJsonBody(ctx.request)
         return jsonOk(redactor, await kernel.updateConversation(id, parseConversationPatch(body)))
@@ -190,9 +194,15 @@ async function route(
     }
     if (third === 'input' && method === 'POST' && fourth === undefined) {
       const body = await readJsonBody(ctx.request)
-      const { text, whenBusy, origin } = parseInputBody(body)
-      await kernel.submitInput(id, text, { ...(origin !== undefined ? { origin } : {}), ...(whenBusy !== undefined ? { whenBusy } : {}) })
-      return jsonOk(redactor, { ok: true })
+      const { text, whenBusy, origin, meta } = parseInputBody(body)
+      const wait = parseWaitFlag(ctx.url)
+      const { submissionId } = await kernel.submitInput(id, text, {
+        ...(origin !== undefined ? { origin } : {}),
+        ...(whenBusy !== undefined ? { whenBusy } : {}),
+        ...(meta !== undefined ? { meta } : {}),
+      })
+      if (!wait) return jsonOk(redactor, { submissionId }, { status: 202 })
+      return jsonOk(redactor, await kernel.waitForInput(id, submissionId))
     }
     if (third === 'abort' && method === 'POST' && fourth === undefined) {
       await kernel.abortConversation(id)
@@ -380,6 +390,12 @@ async function route(
       }
       return methodNotAllowed(redactor, method)
     }
+    // 插件公共文档：GET /api/plugins/:pluginId/docs/:name（私有/停用/不存在 404）
+    if (third === 'docs' && method === 'GET' && fifth === undefined) {
+      if (fourth === undefined) throw new ValidationError('缺少 doc name 路径段')
+      const name = parseDocNameParam(decodeSegment(fourth))
+      return jsonOk(redactor, await kernel.plugins.getPublicDoc(pluginId, name))
+    }
     // 插件自定义动态路由：强制命名空间 /api/plugins/:pluginId/routes/...，
     // 不允许覆盖核心路由（enable/disable/config 已在上面先匹配）。
     if (third === 'routes') {
@@ -413,6 +429,7 @@ async function route(
     }
     if (second === 'run' && method === 'POST' && third === undefined) {
       const body = await readJsonBody(ctx.request, MAX_WORKFLOW_BODY_BYTES)
+      const wait = parseWaitFlag(ctx.url)
       const runRequest = parseWorkflowRunBody(body)
       const started = await workflows.run(runRequest)
       const summary =
@@ -420,12 +437,40 @@ async function route(
           ? (started as WorkflowRunSummary)
           : undefined
       if (summary !== undefined) {
+        // wait=1：真实异步等待终态（不轮询），失败/中止终态如实返回错误信封。
+        if (wait) {
+          await workflows.wait(summary.id)
+          const terminal = await workflows.getRun(summary.id)
+          if (terminal !== undefined && (terminal.status === 'failed' || terminal.status === 'aborted')) {
+            throw new HelmError(
+              `workflow_${terminal.status}`,
+              terminal.error ?? `工作流运行 ${summary.id} 终态为 ${terminal.status}`,
+              500,
+              { runId: summary.id, status: terminal.status },
+            )
+          }
+          return jsonOk(redactor, terminal ?? summary)
+        }
         return jsonOk(redactor, summary, { status: 202 })
       }
       // 只拿到 runId 句柄：如实返回句柄，不伪造完整 Summary。
       return jsonOk(redactor, started, { status: 202 })
     }
     if (second === 'runs') {
+      // GET /api/workflows/runs：全部 run 摘要（可按 conversationId 过滤）。
+      if (method === 'GET' && third === undefined) {
+        const filterRaw = ctx.url.searchParams.get('conversationId')
+        let conversationId: number | undefined
+        if (filterRaw !== null) {
+          if (!/^\d+$/.test(filterRaw) || Number(filterRaw) < 1) {
+            throw new ValidationError('conversationId 需为正整数')
+          }
+          conversationId = Number(filterRaw)
+        }
+        const runs = await workflows.listRuns()
+        const filtered = conversationId === undefined ? runs : runs.filter((r) => r.conversationId === conversationId)
+        return jsonOk(redactor, filtered)
+      }
       const runId = requireIdParam(third ?? '', 'runId')
       if (method === 'GET' && fourth === undefined && fifth === undefined) {
         const run = await workflows.getRun(runId)
@@ -501,13 +546,26 @@ function requiredStringField(body: Record<string, unknown>, field: string): stri
   return value
 }
 
-function parseConversationFilter(url: URL): { tag?: string; status?: ConversationStatus } {
+function parseConversationFilter(url: URL): { profileId?: string; tag?: string; status?: ConversationStatus } {
+  const profileId = url.searchParams.get('profileId') ?? undefined
   const tag = url.searchParams.get('tag') ?? undefined
   const status = url.searchParams.get('status') ?? undefined
   if (status !== undefined && !['working', 'blocked', 'done', 'idle', 'error'].includes(status)) {
     throw new ValidationError('status 需为 working|blocked|done|idle|error')
   }
-  return { ...(tag !== undefined ? { tag } : {}), ...(status !== undefined ? { status: status as ConversationStatus } : {}) }
+  return {
+    ...(profileId !== undefined ? { profileId } : {}),
+    ...(tag !== undefined ? { tag } : {}),
+    ...(status !== undefined ? { status: status as ConversationStatus } : {}),
+  }
+}
+
+/** ?wait=1 查询参数：仅接受字面 '1'（true 同义）；其他值 400。 */
+function parseWaitFlag(url: URL): boolean {
+  const raw = url.searchParams.get('wait')
+  if (raw === null) return false
+  if (raw === '1' || raw === 'true') return true
+  throw new ValidationError('wait 需为 1（如 ?wait=1）')
 }
 
 function isSafeRelativePath(path: string): boolean {

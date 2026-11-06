@@ -70,6 +70,14 @@ function coerceTags(raw: unknown): string[] {
   return raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
 }
 
+/** --meta：JSON 对象（非对象 JSON 拒绝；边界校验在 Hub）。 */
+function coerceMetaFlag(raw: unknown, flagName: string): Record<string, unknown> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new CliError(`--${flagName} 需为 JSON 对象`, 'invalid_flag_value')
+  }
+  return raw as Record<string, unknown>
+}
+
 /** --input：必填 JSON。 */
 function requireJsonInput(flags: Map<string, unknown>): unknown {
   const value = flags.get('input')
@@ -223,24 +231,72 @@ export function coreCommands(): CommandSpec[] {
   cmds.push({
     path: ['conversations', 'list'],
     description: '列出会话（GET /api/conversations）',
+    flags: [
+      { name: 'profile', type: 'string', help: '按 profileId 过滤' },
+      { name: 'status', type: 'string', help: '按状态过滤（working|blocked|done|idle|error）' },
+      { name: 'tag', type: 'string', help: '按 tag 过滤' },
+    ],
     async run(ctx) {
-      parseFlags([], ctx.args)
+      const parsed = parseFlags(
+        [
+          { name: 'profile', type: 'string' },
+          { name: 'status', type: 'string' },
+          { name: 'tag', type: 'string' },
+        ],
+        ctx.args,
+      )
+      if (parsed.positionals.length > 0) throw new CliError(`多余位置参数：${parsed.positionals.join(' ')}`, 'unexpected_positional')
+      const query = new URLSearchParams()
+      const profile = flagValue<string>(parsed.flags, 'profile')
+      const status = flagValue<string>(parsed.flags, 'status')
+      const tag = flagValue<string>(parsed.flags, 'tag')
+      if (profile !== undefined) query.set('profileId', profile)
+      if (status !== undefined) {
+        if (!['working', 'blocked', 'done', 'idle', 'error'].includes(status)) {
+          throw new CliError(`--status 需为 working|blocked|done|idle|error，实得 "${status}"`, 'invalid_flag_value')
+        }
+        query.set('status', status)
+      }
+      if (tag !== undefined) query.set('tag', tag)
+      const qs = query.size > 0 ? `?${query.toString()}` : ''
       const hub = await ctx.hub()
-      printValue(ctx.io, await hub.get<ConversationSummary[]>('/api/conversations'), ctx.json)
+      printValue(ctx.io, await hub.get<ConversationSummary[]>(`/api/conversations${qs}`), ctx.json)
     },
   })
 
   cmds.push({
     path: ['conversations', 'get'],
-    description: '查看单个会话（GET /api/conversations/:id）',
-    flags: convFlags,
+    description: '查看会话详情（GET /api/conversations/:id；含分页时间线）',
+    flags: [
+      ...convFlags,
+      { name: 'limit', type: 'number', help: '时间线条数上限（缺省 50）' },
+      { name: 'cursor', type: 'string', help: '分页游标（上次响应 nextCursor 原样回传）' },
+    ],
     positional: '[id]',
     async run(ctx) {
-      const parsed = parseFlags([{ name: 'current', type: 'boolean' }], ctx.args)
+      const parsed = parseFlags(
+        [
+          { name: 'current', type: 'boolean' },
+          { name: 'limit', type: 'number' },
+          { name: 'cursor', type: 'string' },
+        ],
+        ctx.args,
+      )
       const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
       if (parsed.positionals.length > 1) throw new CliError(`多余位置参数：${parsed.positionals.slice(1).join(' ')}`, 'unexpected_positional')
+      const query = new URLSearchParams()
+      const limit = flagValue<number>(parsed.flags, 'limit')
+      const cursor = flagValue<string>(parsed.flags, 'cursor')
+      if (limit !== undefined) {
+        if (!Number.isInteger(limit) || limit < 1) {
+          throw new CliError(`--limit 需为正整数，实得 "${limit}"`, 'invalid_flag_value')
+        }
+        query.set('limit', String(limit))
+      }
+      if (cursor !== undefined) query.set('cursor', cursor)
+      const qs = query.size > 0 ? `?${query.toString()}` : ''
       const hub = await ctx.hub()
-      printValue(ctx.io, await hub.get<ConversationSummary>(`/api/conversations/${id}`), ctx.json)
+      printValue(ctx.io, await hub.get<unknown>(`/api/conversations/${id}${qs}`), ctx.json)
     },
   })
 
@@ -336,8 +392,14 @@ export function coreCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['send'],
-    description: '向会话提交输入（POST /api/conversations/:id/input）',
-    flags: [...convFlags, enumFlag('when-busy', WHEN_BUSY, '会话正忙时策略'), enumFlag('origin', ORIGINS, '输入来源，默认 human')],
+    description: '向会话提交输入（POST /api/conversations/:id/input；--wait 等待本次回答）',
+    flags: [
+      ...convFlags,
+      enumFlag('when-busy', WHEN_BUSY, '会话正忙时策略'),
+      enumFlag('origin', ORIGINS, '输入来源，默认 human'),
+      { name: 'meta', type: 'json', help: '自由元数据 JSON 对象（随输入传递到 turn_settled）' },
+      { name: 'wait', type: 'boolean', help: '等待本次输入的回答（?wait=1；成功返回 ConversationInputResult）' },
+    ],
     positional: '[id] <text>',
     async run(ctx) {
       const parsed = parseFlags(
@@ -345,6 +407,8 @@ export function coreCommands(): CommandSpec[] {
           { name: 'current', type: 'boolean' },
           { name: 'when-busy', type: 'string' },
           { name: 'origin', type: 'string' },
+          { name: 'meta', type: 'json' },
+          { name: 'wait', type: 'boolean' },
         ],
         ctx.args,
       )
@@ -361,8 +425,21 @@ export function coreCommands(): CommandSpec[] {
       const origin = flagValue<string>(parsed.flags, 'origin')
       if (whenBusy !== undefined) body.whenBusy = validateEnum(whenBusy, WHEN_BUSY, 'when-busy')
       if (origin !== undefined) body.origin = validateEnum(origin, ORIGINS, 'origin')
+      if (parsed.flags.has('meta')) body.meta = coerceMetaFlag(parsed.flags.get('meta'), 'meta')
       const hub = await ctx.hub()
-      printValue(ctx.io, await hub.post<unknown>(`/api/conversations/${id}/input`, body), ctx.json)
+      const wait = parsed.flags.get('wait') === true
+      const result = await hub.request<unknown>(
+        'POST',
+        `/api/conversations/${id}/input${wait ? '?wait=1' : ''}`,
+        { body, ...(wait ? { timeoutMs: 0 } : {}) },
+      )
+      if (wait && !ctx.json) {
+        // 人类模式：等待成功直出回答文本（entry.model 内 assistant 文本块）
+        const answer = assistantTextOfResult(result)
+        printText(ctx.io, answer !== '' ? answer : JSON.stringify(result))
+        return
+      }
+      printValue(ctx.io, result, ctx.json)
     },
   })
 
@@ -720,6 +797,36 @@ export function coreCommands(): CommandSpec[] {
   })
 
   cmds.push({
+    path: ['plugins', 'doc'],
+    description: '读取插件公共文档（GET /api/plugins/:id/docs/:name；私有/不存在 404）',
+    positional: '<pluginId> <name>',
+    async run(ctx) {
+      const parsed = parseFlags([], ctx.args)
+      const pluginId = parsed.positionals[0]
+      const name = parsed.positionals[1]
+      if (pluginId === undefined || name === undefined) {
+        throw new CliError('缺少位置参数：plugins doc <pluginId> <name>', 'missing_id')
+      }
+      if (parsed.positionals.length > 2) throw new CliError(`多余位置参数：${parsed.positionals.slice(2).join(' ')}`, 'unexpected_positional')
+      const hub = await ctx.hub()
+      const doc = await hub.get<{ pluginId: string; name: string; value: unknown }>(
+        `/api/plugins/${encodeURIComponent(pluginId)}/docs/${encodeURIComponent(name)}`,
+      )
+      if (ctx.json) {
+        printValue(ctx.io, doc, true)
+        return
+      }
+      // 人类模式：文档名 + 值（JSON 保真；文本值直出）
+      if (typeof doc.value === 'string') {
+        ctx.io.out(`${doc.name}\n`)
+        printText(ctx.io, doc.value)
+        return
+      }
+      printValue(ctx.io, doc.value, false)
+    },
+  })
+
+  cmds.push({
     path: ['actions', 'list'],
     description: '列出插件动作清单（GET /api/actions）',
     async run(ctx) {
@@ -742,11 +849,12 @@ export function coreCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['workflows', 'run'],
-    description: '运行工作流（POST /api/workflows/run；参数为已保存名称或本机 .js 文件路径）',
+    description: '运行工作流（POST /api/workflows/run；--wait 等待终态）',
     flags: [
       { name: 'args', type: 'json', help: '原样传给脚本的 args' },
       { name: 'resume-from-run-id', type: 'string', help: '断点重放 runId' },
       { name: 'current', type: 'boolean', help: '绑定 env HELM_CONVERSATION_ID 会话' },
+      { name: 'wait', type: 'boolean', help: '等待终态（?wait=1；failed/aborted 非零退出）' },
     ],
     positional: '<nameOrFile>',
     async run(ctx) {
@@ -755,6 +863,7 @@ export function coreCommands(): CommandSpec[] {
           { name: 'args', type: 'json' },
           { name: 'resume-from-run-id', type: 'string' },
           { name: 'current', type: 'boolean' },
+          { name: 'wait', type: 'boolean' },
         ],
         ctx.args,
       )
@@ -781,8 +890,38 @@ export function coreCommands(): CommandSpec[] {
       if (parsed.flags.get('current') === true) {
         body.conversationId = resolveConversationTarget(parsed.flags, undefined, ctx.env)
       }
+      const wait = parsed.flags.get('wait') === true
       const hub = await ctx.hub()
-      printValue(ctx.io, await hub.post<WorkflowRunSummary>('/api/workflows/run', body satisfies WorkflowRunRequest), ctx.json)
+      const summary = await hub.request<WorkflowRunSummary>(
+        'POST',
+        `/api/workflows/run${wait ? '?wait=1' : ''}`,
+        { body: body satisfies WorkflowRunRequest, ...(wait ? { timeoutMs: 0 } : {}) },
+      )
+      // --wait：终态 failed/aborted 已由 Hub 错误信封转为 CliError 非零退出；
+      // 此处只剩 completed。人类模式输出终端摘要行 + result（不把空 result 当成功文本）。
+      if (wait && !ctx.json) {
+        ctx.io.out(`run ${summary.id} ${summary.status}\n`)
+        if (summary.result !== undefined) printValue(ctx.io, summary.result, false)
+        return
+      }
+      printValue(ctx.io, summary, ctx.json)
+    },
+  })
+
+  cmds.push({
+    path: ['workflows', 'runs'],
+    description: '列出工作流运行（GET /api/workflows/runs；可选 --current 过滤本会话）',
+    flags: [...convFlags],
+    async run(ctx) {
+      const parsed = parseFlags([{ name: 'current', type: 'boolean' }], ctx.args)
+      if (parsed.positionals.length > 0) throw new CliError(`多余位置参数：${parsed.positionals.join(' ')}（查单个 run 用 helm workflows inspect <runId>）`, 'unexpected_positional')
+      let qs = ''
+      if (parsed.flags.get('current') === true) {
+        const conversationId = resolveConversationTarget(parsed.flags, undefined, ctx.env)
+        qs = `?conversationId=${conversationId}`
+      }
+      const hub = await ctx.hub()
+      printValue(ctx.io, await hub.get<WorkflowRunSummary[]>(`/api/workflows/runs${qs}`), ctx.json)
     },
   })
 
@@ -813,6 +952,34 @@ export function coreCommands(): CommandSpec[] {
   })
 
   return cmds
+}
+
+/** ConversationInputResult.entry.model -> assistant 回答文本块拼接。 */
+function assistantTextOfResult(result: unknown): string {
+  if (result === null || typeof result !== 'object') return ''
+  const entry = (result as { entry?: { model?: unknown } }).entry
+  if (!entry || !Array.isArray(entry.model)) return ''
+  const parts: string[] = []
+  for (const message of entry.model) {
+    if (message === null || typeof message !== 'object') continue
+    const content = (message as { content?: unknown }).content
+    if (typeof content === 'string') {
+      parts.push(content)
+      continue
+    }
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      if (
+        block !== null &&
+        typeof block === 'object' &&
+        (block as { type?: string }).type === 'text' &&
+        typeof (block as { text?: unknown }).text === 'string'
+      ) {
+        parts.push((block as { text: string }).text)
+      }
+    }
+  }
+  return parts.join('\n')
 }
 
 /** SSE 增量事件的人类可读单行摘要。 */

@@ -59,8 +59,7 @@ export class HubClient {
   }
 
   private signal(external?: AbortSignal): AbortSignal {
-    const timeout = AbortSignal.timeout(this.timeoutMs)
-    return external ? AbortSignal.any([timeout, external]) : timeout
+    return this.signalFor(undefined, external)
   }
 
   private async toCliError(response: Response, where: string, preloadedText?: string): Promise<CliError> {
@@ -97,11 +96,23 @@ export class HubClient {
   }
 
   /**
-   * JSON 请求；body 为 undefined 时不发送请求体。
+   * 本请求超时控制：缺省用实例默认；timeoutMs 显式给出时覆盖，0 表示
+   * 不施加请求超时（--wait 长等待路径），仅保留调用方 signal 取消。
+   */
+  private signalFor(timeoutMs: number | undefined, external?: AbortSignal): AbortSignal {
+    const ms = timeoutMs !== undefined ? timeoutMs : this.timeoutMs
+    if (ms <= 0) return external ?? new AbortController().signal
+    const timeout = AbortSignal.timeout(ms)
+    return external ? AbortSignal.any([timeout, external]) : timeout
+  }
+
+  /**
+   * JSON 请求；body 为 undefined 时不发送请求体。timeoutMs=0 表示不施加
+   * 默认请求超时（wait 长等待），其余值覆盖实例默认。
    * auth：true（默认）必须带 token；false 明确匿名；'optional' 有 token 附带、
    * 无 token 也放行（用于 status 等公开端点的鉴权状态探测）。
    */
-  async request<T>(method: string, path: string, opts: { body?: unknown; auth?: boolean | 'optional'; signal?: AbortSignal } = {}): Promise<T> {
+  async request<T>(method: string, path: string, opts: { body?: unknown; auth?: boolean | 'optional'; signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
     const headers: Record<string, string> = {}
     if (opts.auth === 'optional') Object.assign(headers, this.authHeaders({}, true))
     else if (opts.auth !== false) Object.assign(headers, this.authHeaders())
@@ -112,7 +123,7 @@ export class HubClient {
         method,
         headers,
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-        signal: this.signal(opts.signal),
+        signal: this.signalFor(opts.timeoutMs, opts.signal),
         redirect: 'error',
       })
     } catch (err) {

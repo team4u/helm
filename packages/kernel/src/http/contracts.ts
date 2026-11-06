@@ -8,13 +8,16 @@ import type {
   ActionManifest,
   ArtifactMetadata,
   AskSpec,
+  ConversationDetail,
   ConversationInit,
+  ConversationInputResult,
   ConversationPatch,
   ConversationStatus,
   ConversationSummary,
   PluginConfigFieldSchema,
   PluginSummary,
   ProviderConfig,
+  PublicPluginDoc,
   SkillSummary,
   WorkflowRunRequest,
   WorkflowRunSummary,
@@ -87,6 +90,8 @@ export interface PluginHost {
   setConfig(id: string, values: Record<string, unknown>): Promise<void> | void
   /** 动态路由清单（实际挂载命名空间 /api/plugins/<encodedId>/routes/...）。 */
   listRoutes(): PluginRouteInfo[]
+  /** 读取插件公共文档；私有/停用/不存在一律 404（鉴权不能绕过可见性）。 */
+  getPublicDoc(pluginId: string, name: string): Promise<PublicPluginDoc> | PublicPluginDoc
 }
 
 export interface SearchHit {
@@ -116,19 +121,39 @@ export interface KernelRuntimeLike {
    */
   reloadModels?(): Promise<void>
 
+  /**
+   * 实际 Hub URL 热更新端口：startHub(port:0) 监听后回调，使 shell 内
+   * CLI/工具端点指向真实地址。未提供时 HTTP 层不阻塞。
+   */
+  setHubUrl?(url: string): void
+
   listConversations(filter?: {
+    profileId?: string
     tag?: string
     status?: ConversationStatus
   }): Promise<ConversationSummary[]> | ConversationSummary[]
-  getConversation(id: number): Promise<ConversationSummary> | ConversationSummary
+  /** GET /api/conversations/:id 消费：摘要 + 分页时间线。 */
+  getConversationDetail(
+    id: number,
+    opts?: { limit?: number; cursor?: string },
+  ): Promise<ConversationDetail> | ConversationDetail
   createConversation(init?: ConversationInit): Promise<ConversationSummary> | ConversationSummary
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary> | ConversationSummary
   deleteConversation(id: number): Promise<void> | void
   submitInput(
     id: number,
     text: string,
-    opts?: { origin?: 'human' | 'agent' | 'trigger'; whenBusy?: 'steer' | 'followUp' | 'reject' },
-  ): Promise<unknown> | unknown
+    opts?: {
+      origin?: 'human' | 'agent' | 'trigger'
+      whenBusy?: 'steer' | 'followUp' | 'reject'
+      meta?: Record<string, unknown>
+    },
+  ): Promise<{ submissionId: string }> | { submissionId: string }
+  /** ?wait=1：等待单次提交终态并返回本次输入结果；失败/中止抛明确 HelmError。 */
+  waitForInput(
+    id: number,
+    submissionId: string,
+  ): Promise<ConversationInputResult> | ConversationInputResult
   abortConversation(id: number): Promise<void> | void
 
   listAsks(): Promise<AskSpec[]> | AskSpec[]
@@ -149,8 +174,12 @@ export interface WorkflowRunHandle {
 
 export interface WorkflowServiceLike {
   list(): Promise<unknown[]> | unknown[]
+  /** 已知全部 run 摘要（含运行中与终态）。 */
+  listRuns(): Promise<WorkflowRunSummary[]> | WorkflowRunSummary[]
   run(request: WorkflowRunRequest): Promise<WorkflowRunSummary | WorkflowRunHandle> | WorkflowRunSummary | WorkflowRunHandle
   getRun(runId: string): Promise<WorkflowRunSummary | undefined> | WorkflowRunSummary | undefined
+  /** 等待 run 终态并返回结果（历史 run 直接返回 result）。 */
+  wait(runId: string): Promise<unknown> | unknown
   abort(runId: string): Promise<void> | void
 }
 
@@ -170,4 +199,4 @@ export interface HubHandle {
 }
 
 // 导出供测试构造完整 Profile
-export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, PluginSummary, ActionManifest, WorkflowRunSummary, WorkflowRunRequest }
+export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, WorkflowRunSummary, WorkflowRunRequest, PublicPluginDoc }

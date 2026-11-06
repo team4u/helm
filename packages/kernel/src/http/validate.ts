@@ -174,12 +174,55 @@ export function parseConversationPatch(body: Record<string, unknown>): Conversat
   return patch
 }
 
-export function parseInputBody(body: Record<string, unknown>): { text: string; whenBusy?: WhenBusy; origin?: InputOrigin } {
+export function parseInputBody(body: Record<string, unknown>): {
+  text: string
+  whenBusy?: WhenBusy
+  origin?: InputOrigin
+  meta?: Record<string, unknown>
+} {
   const text = requireString(body, 'text', { maxLength: 512 * 1024 })
   const whenBusy = optionalEnum(body, 'whenBusy', ['steer', 'followUp', 'reject'] as const)
   const origin = optionalEnum(body, 'origin', ['human', 'agent', 'trigger'] as const)
-  rejectUnknownKeys(body, new Set(['text', 'whenBusy', 'origin']))
-  return { text, ...(whenBusy !== undefined ? { whenBusy } : {}), ...(origin !== undefined ? { origin } : {}) }
+  const meta = parseMetaObject(body.meta)
+  rejectUnknownKeys(body, new Set(['text', 'whenBusy', 'origin', 'meta']))
+  return {
+    text,
+    ...(whenBusy !== undefined ? { whenBusy } : {}),
+    ...(origin !== undefined ? { origin } : {}),
+    ...(meta !== undefined ? { meta } : {}),
+  }
+}
+
+/** 纯 JSON 对象校验（非对象 JSON——数组/标量拒绝）；逐值递归验证 JSON-safe。 */
+function parseMetaObject(raw: unknown): Record<string, unknown> | undefined {
+  if (raw === undefined) return undefined
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ValidationError('meta 需为 JSON 对象')
+  }
+  assertJsonSafe('meta', raw as Record<string, unknown>)
+  return structuredClone(raw) as Record<string, unknown>
+}
+
+/** 递归 JSON-safe 校验：undefined/函数/循环等非 JSON 值在边界拒绝。 */
+function assertJsonSafe(path: string, value: unknown): void {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return
+  if (typeof value === 'bigint' || typeof value === 'undefined' || typeof value === 'function' || typeof value === 'symbol') {
+    throw new ValidationError(`${path} 含非 JSON 值（${typeof value}）`)
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, i) => assertJsonSafe(`${path}[${i}]`, item))
+    return
+  }
+  if (typeof value === 'object') {
+    // 拒绝原型链污染对象：仅接受 plain object 与已克隆安全形态
+    const proto = Object.getPrototypeOf(value)
+    if (proto !== Object.prototype && proto !== null) {
+      throw new ValidationError(`${path} 仅接受纯 JSON 对象`)
+    }
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      assertJsonSafe(`${path}.${key}`, item)
+    }
+  }
 }
 
 export function parseAskAnswerBody(body: Record<string, unknown>): {
@@ -234,7 +277,7 @@ function parseProfileRuntime(raw: unknown): ProfileRuntime | undefined {
     throw new ValidationError('runtime 需为对象')
   }
   const runtime = raw as Record<string, unknown>
-  rejectUnknownKeys(runtime, new Set(['kind', 'agent', 'args']))
+  rejectUnknownKeys(runtime, new Set(['kind', 'agent', 'args', 'machine', 'workspace', 'env']))
   if (runtime.kind !== 'herdr') throw new ValidationError("runtime.kind 当前仅支持 'herdr'")
   if (typeof runtime.agent !== 'string' || runtime.agent.length === 0) {
     throw new ValidationError('runtime.agent 需为非空字符串')
@@ -243,7 +286,34 @@ function parseProfileRuntime(raw: unknown): ProfileRuntime | undefined {
   if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== 'string'))) {
     throw new ValidationError('runtime.args 需为字符串数组')
   }
-  return { kind: 'herdr', agent: runtime.agent, ...(args !== undefined ? { args } : {}) }
+  // machine / workspace：非空 string（缺省不限；空串拒绝）
+  const machine = runtime.machine
+  if (machine !== undefined && (typeof machine !== 'string' || machine.length === 0)) {
+    throw new ValidationError('runtime.machine 需为非空字符串')
+  }
+  const workspace = runtime.workspace
+  if (workspace !== undefined && (typeof workspace !== 'string' || workspace.length === 0)) {
+    throw new ValidationError('runtime.workspace 需为非空字符串')
+  }
+  // env：string -> string 映射；键非空，值一律字符串
+  const env = runtime.env
+  if (env !== undefined) {
+    if (typeof env !== 'object' || env === null || Array.isArray(env)) {
+      throw new ValidationError('runtime.env 需为字符串映射对象')
+    }
+    for (const [key, value] of Object.entries(env)) {
+      if (key.length === 0) throw new ValidationError('runtime.env 键需为非空字符串')
+      if (typeof value !== 'string') throw new ValidationError(`runtime.env.${key} 需为字符串`)
+    }
+  }
+  return {
+    kind: 'herdr',
+    agent: runtime.agent,
+    ...(args !== undefined ? { args } : {}),
+    ...(machine !== undefined ? { machine } : {}),
+    ...(workspace !== undefined ? { workspace } : {}),
+    ...(env !== undefined ? { env: { ...(env as Record<string, string>) } } : {}),
+  }
 }
 
 function requireValidId(body: Record<string, unknown>, field: string): string {
@@ -386,4 +456,38 @@ function rejectUnknownKeys(body: Record<string, unknown>, allowed: Set<string>):
   if (unknown.length > 0) {
     throw new ValidationError(`不支持的字段: ${unknown.join(', ')}`)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Query 解析（GET /api/conversations/:id）
+// ---------------------------------------------------------------------------
+
+const MAX_PAGE_LIMIT = 500
+
+/** 会话详情分页参数：limit 正整数≤上限；cursor 非空原始字符串（不透明透传）。 */
+export function parseDetailPagination(url: URL): { limit?: number; cursor?: string } {
+  const limitRaw = url.searchParams.get('limit')
+  let limit: number | undefined
+  if (limitRaw !== null) {
+    if (!/^\d+$/.test(limitRaw) || !Number.isSafeInteger(Number(limitRaw)) || Number(limitRaw) < 1) {
+      throw new ValidationError('limit 需为正整数')
+    }
+    limit = Number(limitRaw)
+    if (limit > MAX_PAGE_LIMIT) {
+      throw new ValidationError(`limit 需 <= ${MAX_PAGE_LIMIT}`)
+    }
+  }
+  const cursor = url.searchParams.get('cursor') ?? undefined
+  if (cursor !== undefined && cursor.length === 0) {
+    throw new ValidationError('cursor 需为非空字符串')
+  }
+  return { ...(limit !== undefined ? { limit } : {}), ...(cursor !== undefined ? { cursor } : {}) }
+}
+
+/** 插件公共文档名（GET /api/plugins/:id/docs/:name）：标识符约束同 doc 声明。 */
+export function parseDocNameParam(raw: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(raw)) {
+    throw new ValidationError('doc name 需为合法标识符（字母数字开头，可含 . _ -）')
+  }
+  return raw
 }
