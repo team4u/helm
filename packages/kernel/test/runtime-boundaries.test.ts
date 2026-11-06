@@ -30,11 +30,12 @@ test('真实组合：插件结果改写、机密脱敏与超长输出 Spill 共�
     const { kernel } = fixture.app;
     const secret = ['example"quoted', 'next line'].join('\n');
     const marker = kernel.stash.put(1, 'BOUNDARY_EXAMPLE', secret);
+    let executions = 0;
     await kernel.plugins.register({
       id: 'boundary:results',
       definePlugin(ctx) {
-        ctx.tool({ name: 'object_probe', description: '测试对象输出', inputSchema: { type: 'object' }, execute: () => ({ nested: { value: secret } }) });
-        ctx.tool({ name: 'transform_probe', description: '测试输出改写', inputSchema: { type: 'object' }, execute: () => 'original-output' });
+        ctx.tool({ name: 'object_probe', description: '测试对象输出', inputSchema: { type: 'object' }, execute: () => { executions++; return { nested: { value: secret } }; } });
+        ctx.tool({ name: 'transform_probe', description: '测试输出改写', inputSchema: { type: 'object' }, execute: () => { executions++; return 'original-output'; } });
         ctx.hook.onToolResult((payload) => payload.toolName === 'transform_probe'
           ? { action: 'transform', value: { ...payload, result: { output: [{ type: 'text', text: `transformed ${secret} ${'x'.repeat(40 * 1024)}` }] } } }
           : undefined);
@@ -47,6 +48,7 @@ test('真实组合：插件结果改写、机密脱敏与超长输出 Spill 共�
     ]);
     await kernel.submitInput(1, '检查插件输出');
     await kernel.waitForIdle(1);
+    assert.equal(executions, 2);
     assert.ok(observed.some((text) => text.includes(marker)));
     assert.ok(observed.some((text) => text.includes('transformed')));
     assert.ok(!observed.some((text) => text.includes('original-output')));

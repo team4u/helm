@@ -21,6 +21,8 @@ HELM_PORT=3202 pnpm dev:kernel
 
 默认监听 `127.0.0.1:3202`，数据目录为 `~/.helm`。通过 `HELM_DATA_DIR` 可指定独立数据目录；通过 `HELM_MODEL=provider/model` 选择启动模型。模型凭据使用凭据服务配置，未配置模型时提交输入会返回显式错误。
 
+自定义兼容网关目前按模型 ID 配置。SDK 所需的上下文窗口、输出上限和计价字段使用配置缺省值，未探测网关的实际能力，不能据此估算费用。官方模型目录由 SDK 提供。
+
 ```bash
 pnpm helm --help
 pnpm helm setup --password '请替换为至少八位的管理员密码'

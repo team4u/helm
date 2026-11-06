@@ -74,9 +74,7 @@ async function makeEnv(): Promise<TestEnv> {
     model: 'faux/faux-1',
     models,
   })
-  // 工具热装契约（runtime.test 同款消费路径）：注册后 refresh 生效于后续回合。
   // 待 runtime 修复（plugin.changed -> refreshPluginTools 自动热装）后可移除。
-  app.kernel.refreshPluginTools()
 
   const requests: TestEnv['requests'] = []
   faux.setResponses([])
@@ -419,7 +417,6 @@ test('集成4: 插件 ctx.action 共享 Schema 校验器——合法执行、非
       },
     }
     await host.register(probePlugin)
-    kernel.refreshPluginTools()
 
     // 合法输入真实执行
     const ok = (await host.invokeAction('test:probe', 'double', { n: 21 })) as { doubled: number }
@@ -554,7 +551,6 @@ async function makeHttpEnv() {
   const models = createModels()
   models.setProvider(faux.provider)
   const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
-  app.kernel.refreshPluginTools()
 
   // 集成探针插件：echo 动作回显 stash 真实值（验证出站脱敏链路）
   const stash = app.kernel.services.stash

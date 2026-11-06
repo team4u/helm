@@ -634,6 +634,7 @@ export class KernelRuntime {
   /** 插件宿主事件：plugin.changed 携带完整事件对象（{type, plugin}）。 */
   private emitHostEvent(type: string, payload: unknown): void {
     if (type === 'plugin.changed') {
+      this.refreshPluginTools()
       const plugin = (payload as PluginChangedEmit | undefined)?.plugin
       // 快照 plugins 由 host.list() 实时提供；事件只透传 plugin 摘要。
       this.events.publish('plugin.changed', plugin ?? {})

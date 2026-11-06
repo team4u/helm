@@ -62,7 +62,6 @@ async function makeWfEnv(): Promise<WfEnv> {
   const models = createModels()
   models.setProvider(faux.provider)
   const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
-  app.kernel.refreshPluginTools()
 
   const echoCalls: string[] = []
   await app.kernel.plugins!.register({
