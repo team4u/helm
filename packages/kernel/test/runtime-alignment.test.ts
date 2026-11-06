@@ -2,7 +2,7 @@
  * 核心对齐回归（新版设计）：真实 KernelRuntime + faux provider + 真实 SQLite。
  *
  * 覆盖：
- * 1. 模型解析链：全局(default)>profile.model 层级、显式 override 优先、
+ * 1. 模型解析链：显式 override > profile.model > 全局默认，
  *    PATCH model:'' 清除 override 换 profile 重算、跨 profile 隔离、
  *    子 spawn register 回传真实 resolvedModel（非 request/global 谎报）、
  *    重启后继承语义保持（fresh 无 override 即继承）；
@@ -88,7 +88,7 @@ after(async () => {
 // 1. 模型解析链
 // ---------------------------------------------------------------------------
 
-describe('模型解析链：全局 > profile.model；显式 override 优先', { timeout: 60_000 }, () => {
+describe('模型解析链：显式 override > profile.model > 全局默认', { timeout: 60_000 }, () => {
   it('全局 default 生效；profile.model 优先于全局；显式 model 落 override', { timeout: 60_000 }, async () => {
     const dir = join(root, 'm1')
     writeProfile(dir, 'worker-a', { name: 'A', model: 'faux/faux-1' })
