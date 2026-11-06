@@ -13,7 +13,7 @@
     "@earendil-works/pi-ai": "1.5.0",
     "@earendil-works/pi-durable": "1.5.0",
     "ajv": "^8.17.1",
-    "esbuild": "^0.25.0",
+    "esbuild": "0.28.2",
     "typebox": "^1.0.0"
   }
 }

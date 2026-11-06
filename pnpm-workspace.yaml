@@ -1,6 +1,7 @@
 packages:
   - packages/*
 
-onlyBuiltDependencies:
-  - esbuild
-  - better-sqlite3
+allowBuilds:
+  '@google/genai': false
+  esbuild: true
+  protobufjs: false
