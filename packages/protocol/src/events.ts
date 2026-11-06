@@ -76,6 +76,8 @@ export interface AskResolvedEvent {
 export interface PluginChangedEvent {
   type: 'plugin.changed'
   plugin: PluginSummary
+  /** 该插件当前的 UI 贡献；停用或卸载时为空，客户端据此替换其贡献。 */
+  ui: PluginUiContribution[]
 }
 
 /** 插件公共文档变更（仅 public doc；发布前已逐值校验/脱敏）。 */
