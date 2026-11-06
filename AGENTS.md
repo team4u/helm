@@ -30,9 +30,9 @@ pnpm build && pnpm typecheck && pnpm test
    - **后端 7 大可组合生命周期 Hook**（支持 `continue | transform | handled | block`）：`trigger`、`input`、`before_turn`、`tool_call / tool_result`、`agent_spawn`、`turn_settled`（统一覆盖 `completed | failed | aborted`）、`watchdog_tick`。
    - **前端 7 大全界面扩展点**（同时支持 `@json-render` JSON Spec 与 `client.tsx` React 组件）：`sidebar.item/section`、`screen`（全屏自定义视图，支持左右 Split View 并排展示）、`timeline.renderer`、`tool.view`、`composer.pill/widget`、`workbench.panel`、`commandPalette (⌘K) / settings.panel`。
 3. **四大内置插件正交职责**：
-   - `builtin:assistant`（**常驻不可卸载**，绑定根会话 `Conversation #1`）：全能个人助理主入口、`MEMORY.md`（`update_memory`）、支持按需加载 `references/*.md` 子文件的 `load_skill`。
+   - `builtin:assistant`（**常驻不可卸载**）：为所有会话按其绑定的 `profileId` 注入独立的 `SYSTEM.md` 与 `MEMORY.md`（提供按 `profileId` 原子写回的 `update_memory` 与支持按需加载 `references/*.md` 子文件的 `load_skill`），并守护常驻根会话 `Conversation #1` 作为单兵个人助理主入口。
    - `builtin:herdr`：拦截 `agent_spawn` 驱动本机 Herdr 的 23 种 CLI 工具（`herdr:agy`、`herdr:claude`、`herdr:codex`、`herdr:pi` 等），执行「后台标签页 + `.helm/wf-out-*` 文件交接与原地追问自愈」；监听 `herdr.sock` 实现带 `expectedStateSeq` CAS 乐观锁的 `blocked ↔ AskDoc` 远程审批桥；向终端侧栏投射 `$helm` 状态 Token。
-   - `builtin:superagent`（实验性双层中枢）：通过挂载 `trigger / before_turn / turn_settled / watchdog_tick` 钩子与自有 `ctx.doc`，叠加后台 Worker 派生与按 `origin` 自动汇报、`ThreadKey` 0ms 直通、`RecallGraph` 召回图谱与基于 `Skill(references/)` 的两层 Watchdog 巡检。
+   - `builtin:superagent`（实验性双层中枢）：首次启用时动态创建并持久化两个专属常驻会话——`routerConversationId`（`SuperAgent 中枢`，`tags: ['router']`）与 `watchdogConversationId`（`巡检看门狗`，`tags: ['watchdog']`）；通过挂载 `trigger / before_turn / turn_settled / watchdog_tick` 钩子与自有 `ctx.doc`，实现 0 阻塞总控路由、点名调用任意 `Profile` 专家 Bot 派生后台驻留 Worker、一键归档（`archive_worker`）、按 `origin` 自动向中枢汇报、`ThreadKey` 0ms 直通、`RecallGraph` 召回图谱与基于 `Skill(references/)` 的两层 Watchdog 巡检。
    - `builtin:triggers`：`cron` 与 `webhook` 入站连接器，经 `defang` 防逃逸信封投入 `trigger` 管道。
 4. **明确不做的事**：
    - 不做 `PiExtensionAdapter` 服务端 TUI 兼容层（真正的 `pi` 直接在 Herdr 终端窗格中运行）；
@@ -58,9 +58,9 @@ pnpm build && pnpm typecheck && pnpm test
 
 ## 并发与正确性
 
-- SDK 根会话 `ROOT_CONVERSATION_ID = 1` 固定作为常驻个人助理主入口（保护不可删除）；`superagent` 插件的 Watchdog 会话在插件首次启用时动态分配并持久化于 `SuperAgentIndexDoc`，不硬编码 ID。
+- SDK 根会话 `ROOT_CONVERSATION_ID = 1` 固定作为常驻个人助理主入口（保护不可删除，`403 root_conversation_protected`）；`superagent` 插件的 `routerConversationId`（SuperAgent 中枢）与 `watchdogConversationId`（巡检看门狗）在插件首次启用时动态分配并持久化于 `SuperAgentIndexDoc`（不硬编码 ID，启用期间同样受删除保护，`409 conversation_managed_by_plugin`）。
 - 会话正忙时 `whenBusy` 仅有 `steer | followUp | reject`；批处理用 `settings.followUpMode = 'all'`。
-- 输入来源（`origin: 'human' | 'agent' | 'trigger'`）附着在每次提交的 `helm.input` entry 上；`turn_settled` 钩子统一覆盖 `completed | failed | aborted` 三种终态，只要本回合消费的输入含任一 `agent / trigger` 来源即向 `#1` 汇报，纯 `human` 回合静默更新召回图谱。
+- 输入来源（`origin: 'human' | 'agent' | 'trigger'`）附着在每次提交的 `helm.input` entry 上；`turn_settled` 钩子统一覆盖 `completed | failed | aborted` 三种终态，后台 Worker 本回合消费的输入只要含任一 `agent / trigger` 来源即向 `routerConversationId`（SuperAgent 中枢）投递汇报卡片，纯 `human` 回合仅静默更新召回图谱。
 - `AskDoc` 支持 `expectedStateSeq` CAS 乐观锁：当终端窗格 `stateChangeSeq` 已推进（人类已在终端按键处理）时，Web 端对应的 `AskDoc` 自动流转为 `superseded` 销单，防止向终端重复发送回车。
 - 插件卸载遇在途任务（自定义任务、执行中 Tool、挂起 `agent_spawn`）时，显式拒绝并返回 `409 plugin_has_live_tasks`。
 - FTS5 是**可重建的派生索引**，不得写入 `pi_*` 表语义。
@@ -72,11 +72,13 @@ pnpm build && pnpm typecheck && pnpm test
 
 ## 测试与前端规范
 
+- **UI 极简无 Emoji 规范（重要）**：Web 界面与所有内置/外置插件 UI 遵循极简克制风格，**严禁在界面文案、左栏导航项、分组标题、按钮、状态徽章或卡片中使用任何 Emoji 表情图标**；图标统一使用 `lucide-react` 线性矢量图标或纯文本排版。
 - **单测防死锁**：单测显式声明 `{ timeout: 60_000 }`（runner 为 `tsx --test`）；测试命令必须加总超时（如 `timeout 50s ...`），保留完整日志，不用过滤管道隐藏失败。
 - **前端保 Fast Refresh**：`.tsx` 组件文件**只导出组件**；纯函数/常量放独立模块。
 
 ## 开发流程与安全
 
 - **主代理职责**：负责拆分任务、确定接口、协调子代理、审查结果与最终验收。重实现、大范围开发和成套测试交给子代理。
+- **子代理模型**：所有子代理统一使用 GLM（`glm-agent`），包括调查、审查、规划、实现与验收；除非用户明确变更此偏好。
 - **Worktree 隔离**：首 commit 之后并行开发一律在 `git worktree` 隔离目录进行；委派子代理提示词中必须附带本文件的核心约束（`cd /root/code/helm`、旧仓只读、诚实性纪律、API/CLI 同步）；启动与续接子代理时不设置 `max_turns`。
 - **Git 提交**：中文 Conventional Commits（如 `feat(kernel): ...`），不加 `Co-Authored-By`。
