@@ -26,7 +26,7 @@ pnpm helm --help
 pnpm helm status --json
 ```
 
-CLI 使用 `HELM_HUB_URL` 指定 Hub，默认 `http://127.0.0.1:3202`。支持指定会话的命令可通过 `--current` 读取 `HELM_CONVERSATION_ID`。读取会话不会自动清除未读状态。
+CLI 使用 `HELM_HUB_URL` 指定 Hub，默认 `http://127.0.0.1:3202`。支持指定会话的命令可通过 `--current` 读取 `HELM_CONVERSATION_ID`。读取会话不会自动清除未读状态。删除会话会清理产物和搜索索引，并阻止后续访问；受 SDK 接口限制，SQLite 内部历史记录仍保留。
 
 工作流在独立 Worker 中执行，使用 `vm` 约束确定性。所有外部操作通过宿主原语发起；`vm` 不作为恶意脚本的安全隔离边界。工作流恢复会复用成功的调用前缀；如果动作留下开始记录但没有完成记录，恢复会显式报告不确定状态。
 
