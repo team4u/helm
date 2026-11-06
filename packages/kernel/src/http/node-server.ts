@@ -97,8 +97,10 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
         const webRequest = await toWebRequest(req, controller.signal)
         const webResponse = await handler(webRequest)
         await writeWebResponse(webResponse, res)
-      } catch {
+      } catch (error) {
         // 连接在途断裂/转换失败：尽力给出 500 信封；res 不可写则静默。
+        // res 不可写时的静默仅指「无法再向客户端传达」，服务端日志仍如实记录。
+        console.error('[hub] node adapter error:', describeError(error))
         if (!res.headersSent) {
           res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
         }
@@ -147,4 +149,12 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
       })
     },
   } satisfies NodeHubHandle
+}
+
+/** 错误可打印形态：Error 取 name+message+stack，其他取 String()。 */
+function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}\n${error.stack ?? ''}`
+  }
+  return String(error)
 }

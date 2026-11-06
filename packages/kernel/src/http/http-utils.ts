@@ -4,8 +4,11 @@
  * - 成功：直接实体/数组（不包 data）。
  * - 失败：{ error: { code, message, details? } }；HelmError 携带 status/code。
  * - unexpected 500：绝不把异常堆栈/内部秘密返回客户端。
+ * - 出站 JSON 一律先经 redactJsonValue 按值脱敏（stash marker 保持脱敏，
+ *   含引号/换行的 secret 也不会因序列化转义而漏出），再序列化。
  */
 import { HelmError } from '@helm/protocol'
+import { redactJsonValue } from '../redact.js'
 
 export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024 // 1 MiB
 /** 超大 workflow 脚本上限（另行验证）。 */
@@ -17,8 +20,52 @@ export const ALLOWED_CORS_ORIGINS = [
   'http://127.0.0.1:3201',
 ]
 
-export function jsonOk(body: unknown, init?: ResponseInit): Response {
-  return new Response(JSON.stringify(body === undefined ? null : body), {
+/** 无 stash（未接机密服务）时的恒等脱敏：值本身已是安全产物。 */
+const identityRedact = (text: string): string => text
+
+/**
+ * 深度丢弃对象上的 undefined 属性（与 JSON.stringify 的对象语义一致：
+ * 可选字段缺省即省略）。数组元素中的 undefined 不在此豁免（仍由
+ * redactJsonValue 显式拒绝——那是真正的违约输出，不是缺省字段）。
+ */
+function omitUndefinedProperties(value: unknown, seen: WeakSet<object>): unknown {
+  if (value === null || typeof value !== 'object') return value
+  if (seen.has(value)) return value // 环结构交由 redactJsonValue 判定
+  seen.add(value)
+  if (Array.isArray(value)) {
+    return value.map((item) => omitUndefinedProperties(item, seen))
+  }
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) return value
+  const out: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (item === undefined) continue
+    out[key] = omitUndefinedProperties(item, seen)
+  }
+  return out
+}
+
+export function makeJsonRedactor(redact?: (text: string) => string): JsonRedactor {
+  if (redact === undefined) {
+    return (value: unknown): string => JSON.stringify(redactJsonValue(omitUndefinedProperties(value, new WeakSet()), identityRedact))
+  }
+  return (value: unknown): string => JSON.stringify(redactJsonValue(omitUndefinedProperties(value, new WeakSet()), redact))
+}
+
+/** 出站 JSON 脱敏器：递归处理字符串值后序列化；非法 JSON 值（循环/
+ *  undefined/NaN/稀疏数组/非 JSON 对象）由 redactJsonValue 显式抛错。 */
+export interface JsonRedactor {
+  (value: unknown): string
+}
+
+export function jsonOk(redact: JsonRedactor | undefined, body: unknown, init?: ResponseInit): Response {
+  // 合法 null 原样返回；undefined 是 output 边界违约（伪造成功即造假），
+  // 显式 500 交由上层定位。循环/非 JSON 值同理由 redactJsonValue 拒绝。
+  if (body === undefined) {
+    throw new HelmError('invalid_output', '服务返回 undefined，拒绝序列化为成功响应', 500)
+  }
+  const serialize = redact ?? makeJsonRedactor()
+  return new Response(serialize(body), {
     ...init,
     headers: {
       'content-type': 'application/json; charset=utf-8',
@@ -27,27 +74,40 @@ export function jsonOk(body: unknown, init?: ResponseInit): Response {
   })
 }
 
-export function errorResponse(status: number, code: string, message: string, details?: unknown): Response {
-  return new Response(
-    JSON.stringify({
-      error: {
-        code,
-        message,
-        ...(details !== undefined ? { details } : {}),
-      },
-    }),
-    { status, headers: { 'content-type': 'application/json; charset=utf-8' } },
-  )
+export function errorResponse(
+  redact: JsonRedactor | undefined,
+  status: number,
+  code: string,
+  message: string,
+  details?: unknown,
+): Response {
+  const serialize = redact ?? makeJsonRedactor()
+  const envelope: Record<string, unknown> = { code, message }
+  if (details !== undefined) envelope.details = details
+  return new Response(serialize({ error: envelope }), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+  })
 }
 
 /** HelmError -> Response；其他异常一律 500 internal 且不泄漏堆栈。 */
-export function errorToResponse(error: unknown): Response {
+export function errorToResponse(redactor: JsonRedactor | undefined, redactText: (text: string) => string, error: unknown): Response {
   if (error instanceof HelmError) {
-    return errorResponse(error.status, error.code, error.message, error.details)
+    // details 可能携带内部值（含 secret），同样经脱敏序列化。
+    return errorResponse(redactor, error.status, error.code, error.message, error.details)
   }
-  // 诚实但不泄密：服务端日志保留完整错误，客户端只收稳定信封。
-  console.error('[hub] unhandled error:', error)
-  return errorResponse(500, 'internal_error', '服务器内部错误')
+  // 诚实但不泄密：服务端日志保留可诊断信息（经 stash 脱敏），
+  // 客户端只收稳定信封，绝不回传堆栈。
+  console.error('[hub] unhandled error:', redactText(describeError(error)))
+  return errorResponse(undefined, 500, 'internal_error', '服务器内部错误')
+}
+
+/** 错误可打印形态：Error 取 name+message+stack，其他取 String()。 */
+function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}\n${error.stack ?? ''}`
+  }
+  return String(error)
 }
 
 // ---------------------------------------------------------------------------
@@ -87,20 +147,27 @@ export class BodyError extends HelmError {
   }
 }
 
-export async function readJsonBody(
+/** 读取任意 JSON 值（对象/数组/标量/null 均可）。 */
+export async function readJsonValue(
   request: Request,
   maxBytes: number = DEFAULT_MAX_BODY_BYTES,
-): Promise<Record<string, unknown>> {
+): Promise<unknown> {
   const raw = await readBody(request, maxBytes)
   if (raw.length === 0) {
     throw new BodyError('invalid_json', '请求体不能为空')
   }
-  let parsed: unknown
   try {
-    parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw))
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw))
   } catch {
     throw new BodyError('invalid_json', '请求体不是合法 JSON')
   }
+}
+
+export async function readJsonBody(
+  request: Request,
+  maxBytes: number = DEFAULT_MAX_BODY_BYTES,
+): Promise<Record<string, unknown>> {
+  const parsed = await readJsonValue(request, maxBytes)
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new BodyError('invalid_json', '请求体需为 JSON 对象')
   }

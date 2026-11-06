@@ -12,7 +12,6 @@ import type {
   ConversationPatch,
   ConversationStatus,
   ConversationSummary,
-  HelmEventType,
   PluginConfigFieldSchema,
   PluginSummary,
   ProviderConfig,
@@ -48,40 +47,23 @@ export type ProviderService = RealProviderService
 export type SkillService = RealSkillService
 
 // ---------------------------------------------------------------------------
-// Events
+// Events / Plugins
 // ---------------------------------------------------------------------------
 
-export interface HelmEventEnvelope {
-  type: HelmEventType | string
-  payload: unknown
-}
-
-/** 全局事件枢纽（kernel.events）。 */
+/**
+ * 全局事件枢纽（kernel.events）。HTTP 层只消费 response()：由 runtime
+ * 提供 Web Standard SSE Response（流式、帧内自行脱敏），客户端断开
+ * （request.signal abort）由实现负责清理。HTTP 层不做缓存/转换/兜底。
+ */
 export interface EventHub {
-  /** 订阅事件流；返回取消订阅函数。 */
-  subscribe(listener: (event: HelmEventEnvelope) => void): () => void
-  /**
-   * SSE 响应：立即返回 Response（流式），客户端断开（request.signal abort）
-   * 自动取消订阅。runtime 提供；HTTP 层仅透传。
-   */
+  /** SSE 响应：立即返回 Response（流式），客户端断开自动清理。 */
   response(request: Request): Response
-  /** 快照单帧响应（事件管道不可用时的兜底）。 */
-  snapshotResponse(): Response
-  publish(type: HelmEventType | string, payload: unknown): void
-}
-
-// ---------------------------------------------------------------------------
-// Models / Plugins / KernelRuntime
-// ---------------------------------------------------------------------------
-
-export interface ModelService {
-  list(): Promise<unknown[]> | unknown[]
 }
 
 export interface PluginRouteInfo {
   pluginId: string
   method: 'GET' | 'POST' | 'PUT' | 'DELETE'
-  /** 插件声明的相对 path（如 'webhook/:id'）；实际挂载命名空间由 HTTP 层强制。 */
+  /** 完整挂载路径（如 '/api/plugins/<id>/webhook/:t'）；声明时强制专属前缀。 */
   path: string
   public?: boolean
   handler(req: Request): Response | Promise<Response>
@@ -120,9 +102,13 @@ export interface KernelRuntimeLike {
   readonly skills: SkillService
   readonly credentials: CredentialService
   readonly providers: ProviderService
-  readonly models: ModelService
   readonly artifacts: ArtifactService
   readonly plugins: PluginHost
+  /**
+   * 机密脱敏钩子（真实 kernel 的 SecretStash）。出站 JSON 的字符串值与
+   * 服务端错误日志都先经它擦除已登记秘密，绝不外发明文或还原 marker。
+   */
+  readonly stash?: { redact(text: string): string }
 
   listConversations(filter?: {
     tag?: string

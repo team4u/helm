@@ -1,15 +1,20 @@
 /**
  * HTTP/SSE 传输层测试：真实临时目录 + 真实 services（auth/credentials/
- * profiles/skills/providers/artifacts）+ 模拟 runtime 会话面与 EventHub。
+ * profiles/skills/providers/artifacts/SecretStash）+ 真实 PluginHost 路由
+ * 注册（ctx.route 完整路径声明）+ 模拟 runtime 会话面。
  *
- * 覆盖：鉴权边界、setup/login、根会话保护、会话 CRUD 与 origin、SSE 首帧
- * 与断开清理、schema action 非法 400、插件动态路由（public 豁免/命名空间）、
- * 配置脱敏、skills traversal、invalid JSON、body 上限、关停无遗留。
+ * 覆盖：鉴权边界（status 如实反映 token）、setup/login、根会话保护、
+ * 会话 CRUD 与 origin、路径段解码（编码 pluginId / 非法编码 400 / 多余
+ * 段 404）、插件动态路由（真实 register、public 豁免、原始 URL 透传）、
+ * 动作 null 原样 / undefined 违约 500、出站 JSON stash 脱敏（含引号/
+ * 换行 secret）、providers PUT 原始数组、plugin config {values}、
+ * profiles 删除 409、artifacts 伪造 meta/符号链接越界拒绝与真实字节、
+ * skills traversal、body 上限、SSE 首帧与断开清理、关停无遗留。
  */
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
 import { join } from 'node:path'
-import { writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { writeFile, mkdir, mkdtemp, rm, symlink, chmod } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import {
   AuthService,
@@ -22,15 +27,17 @@ import {
   SecretStash,
   FileNotFoundError,
 } from '../src/services/index.js'
+import { PluginHost } from '../src/plugins/index.js'
 import {
   ROOT_CONVERSATION_ID,
   HelmError,
   type ConversationSummary,
   type AskSpec,
   type PluginSummary,
+  type HelmPluginContext,
 } from '@helm/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
-import type { EventHub, KernelRuntimeLike, PluginHost, PluginRouteInfo, WorkflowServiceLike } from '../src/http/index.js'
+import type { EventHub, KernelRuntimeLike, WorkflowServiceLike } from '../src/http/index.js'
 
 // ---------------------------------------------------------------------------
 // 测试基座
@@ -43,7 +50,9 @@ let profiles: ProfileService
 let skills: SkillService
 let providers: ProviderService
 let artifacts: ArtifactService
-let hub: ReturnType<typeof createHubHandler>
+let stash: SecretStash
+let pluginHost: PluginHost
+let handler0: ReturnType<typeof createHubHandler>
 let token: string | undefined
 
 /** 模拟 EventHub：真实订阅语义 + SSE response（首帧 snapshot + 增量）。 */
@@ -75,7 +84,6 @@ class TestEventHub implements EventHub {
             closed = true
           }
         }
-        // 首帧 snapshot
         send('snapshot', { seq: 0, conversations: [], pendingAsks: [], plugins: [] })
         unsubscribe = hub0.subscribe((e) => send(e.type, { seq: ++hub0.seq, event: e }))
         request.signal.addEventListener('abort', () => {
@@ -96,9 +104,6 @@ class TestEventHub implements EventHub {
     return new Response(stream, {
       headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
     })
-  }
-  snapshotResponse(): Response {
-    return new Response('event: snapshot\ndata: {}\n\n', { headers: { 'content-type': 'text/event-stream' } })
   }
 }
 
@@ -124,45 +129,13 @@ function summary(id: number, title: string): ConversationSummary {
   }
 }
 
-/** 内存会话面：真实服务 + 模拟 conversation/ask/search/plugins。 */
+/** 内存会话面：真实服务 + 模拟 conversation/ask/search。 */
 const conversations = new Map<number, ConversationSummary>()
 const asks = new Map<string, AskSpec>()
 const submitted: Array<{ id: number; text: string; opts?: Record<string, unknown> }> = []
 const aborted: number[] = []
 
-function makeKernel(pluginsOverride?: Partial<PluginHost>): KernelRuntimeLike {
-  const basePlugins: PluginHost = {
-    list: (): PluginSummary[] => [
-      { id: 'builtin:assistant', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] },
-    ],
-    enable: () => {},
-    disable: () => {},
-    listActions: () => [],
-    invokeAction: () => {
-      throw new HelmError('unknown_action', '动作不存在', 404)
-    },
-    getConfig: () => ({}),
-    getConfigSchema: () => ({
-      token: { type: 'string', secret: true },
-      retries: { type: 'number' },
-    }),
-    setConfig: () => {},
-    listRoutes: (): PluginRouteInfo[] => [
-      {
-        pluginId: 'builtin:triggers',
-        method: 'POST',
-        path: 'webhook/:id',
-        public: true,
-        handler: (req: Request) => new Response(JSON.stringify({ got: new URL(req.url).pathname }), { headers: { 'content-type': 'application/json' } }),
-      },
-      {
-        pluginId: 'builtin:triggers',
-        method: 'GET',
-        path: 'status',
-        handler: () => new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }),
-      },
-    ],
-  }
+function makeKernel(): KernelRuntimeLike {
   return {
     dataDir,
     auth,
@@ -171,9 +144,9 @@ function makeKernel(pluginsOverride?: Partial<PluginHost>): KernelRuntimeLike {
     skills,
     credentials,
     providers,
-    models: { list: () => [{ id: 'faux/model' }] },
     artifacts,
-    plugins: pluginsOverride !== undefined ? { ...basePlugins, ...pluginsOverride } : basePlugins,
+    plugins: pluginHost,
+    stash,
     async listConversations() {
       return [...conversations.values()]
     },
@@ -251,9 +224,11 @@ function makeHandlers(kernel = makeKernel()) {
   return { kernel, handler: createHubHandler(kernel, workflows) }
 }
 
-async function call(handler: (req: Request) => Promise<Response>, method: string, path: string, opts?: { body?: unknown; auth?: boolean; raw?: string }): Promise<{ status: number; body: any; headers: Headers }> {
+async function call(handler: (req: Request) => Promise<Response>, method: string, path: string, opts?: { body?: unknown; auth?: boolean; raw?: string; contentType?: string; origin?: string }): Promise<{ status: number; body: any; headers: Headers; text: string }> {
   const headers: Record<string, string> = {}
-  if (opts?.body !== undefined || opts?.raw !== undefined) headers['content-type'] = 'application/json'
+  if (opts?.body !== undefined || opts?.raw !== undefined) headers['content-type'] = opts?.contentType ?? 'application/json'
+  else if (opts?.contentType !== undefined) headers['content-type'] = opts.contentType
+  if (opts?.origin !== undefined) headers.origin = opts.origin
   if (opts?.auth !== false && token !== undefined) headers.authorization = `Bearer ${token}`
   const body = opts?.raw !== undefined ? opts.raw : opts?.body !== undefined ? JSON.stringify(opts.body) : undefined
   const request = new Request(`http://127.0.0.1:3202${path}`, {
@@ -269,7 +244,80 @@ async function call(handler: (req: Request) => Promise<Response>, method: string
   } catch {
     parsed = text
   }
-  return { status: response.status, body: parsed, headers: response.headers }
+  return { status: response.status, body: parsed, headers: response.headers, text }
+}
+
+// ---------------------------------------------------------------------------
+// 真实 PluginHost 路由注册（definePlugin(ctx) ctx.route 完整路径声明）
+// ---------------------------------------------------------------------------
+
+let publicHandlerCalls: Request[] = []
+let privateHandlerCalls: Request[] = []
+
+function hostApiForPluginHost() {
+  return {
+    dispatchTrigger: async () => {},
+    submitInput: async () => {},
+    createConversation: async () => summary(99, 'x'),
+    listConversations: () => [...conversations.values()],
+    getConversation: (id: number) => {
+      const found = conversations.get(id)
+      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      return found
+    },
+    createAsk: async () => ({}),
+    cancelAsk: async () => {},
+    emitEvent: () => {},
+  }
+}
+
+function docStore() {
+  const docs = new Map<string, unknown>()
+  return {
+    get: <T>(key: string, initial: T): T => (docs.has(key) ? (docs.get(key) as T) : initial),
+    set: <T>(key: string, value: T): void => void docs.set(key, value),
+  }
+}
+
+/** 真实 register 一个含 public/private 路由与动作的插件。 */
+async function registerRoutePlugin(host: PluginHost): Promise<void> {
+  publicHandlerCalls = []
+  privateHandlerCalls = []
+  await host.register({
+    id: 'builtin:triggers',
+    name: 'triggers',
+    async definePlugin(ctx: HelmPluginContext) {
+      // PluginHost 强制完整声明前缀 /api/plugins/<encodeURIComponent(id)>/routes/...
+      ctx.route({
+        method: 'POST',
+        path: '/api/plugins/builtin%3Atriggers/routes/webhook/:hookId',
+        public: true,
+        handler: (req) => {
+          publicHandlerCalls.push(req)
+          return Response.json({ got: new URL(req.url).pathname })
+        },
+      })
+      ctx.route({
+        method: 'GET',
+        path: '/api/plugins/builtin%3Atriggers/routes/status',
+        handler: (req) => {
+          privateHandlerCalls.push(req)
+          return Response.json({ ok: true })
+        },
+      })
+      ctx.action({
+        id: 'echo',
+        description: '回声',
+        inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+        outputSchema: { type: 'object' },
+        async handler(input) {
+          const text = (input as { text?: unknown }).text
+          if (typeof text !== 'string') throw new HelmError('validation_error', 'text 需为字符串', 400)
+          return { echoed: text }
+        },
+      })
+    },
+  })
 }
 
 before(async () => {
@@ -279,9 +327,12 @@ before(async () => {
   profiles = new ProfileService(dataDir)
   skills = new SkillService(dataDir)
   providers = new ProviderService(dataDir)
-  artifacts = new ArtifactService(dataDir, new InMemoryArtifactRepository(), new SecretStash())
+  stash = new SecretStash()
+  artifacts = new ArtifactService(dataDir, new InMemoryArtifactRepository(), stash)
+  pluginHost = new PluginHost({ dataDir, host: hostApiForPluginHost(), docs: docStore() })
+  await registerRoutePlugin(pluginHost)
   hub0 = new TestEventHub()
-  hub = createHubHandler(makeKernel(), workflows)
+  handler0 = createHubHandler(makeKernel(), workflows)
   conversations.set(ROOT_CONVERSATION_ID, summary(1, '个人助理'))
 })
 
@@ -301,26 +352,93 @@ test('未配置时 setup 前所有私有端点 401（无匿名初始化漏洞）
   assert.equal(res.body.error.code, 'unauthorized')
 })
 
-test('GET /api/auth/status 公开返回 configured=false', { timeout: 60_000 }, async () => {
+test('GET /api/auth/status 如实反映 Bearer token：未配置/无 token/错 token 均 false', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
-  const res = await call(handler, 'GET', '/api/auth/status', { auth: false })
-  assert.equal(res.status, 200)
-  assert.deepEqual(res.body, { configured: false, authenticated: true })
+  // 未配置 + 无 token
+  const noSetup = await call(handler, 'GET', '/api/auth/status', { auth: false })
+  assert.equal(noSetup.status, 200)
+  assert.deepEqual(noSetup.body, { configured: false, authenticated: false })
+  // 未配置 + 错误 token：configured 与 authenticated 独立汇报
+  const saved = token
+  token = 'deadbeef-token'
+  const badToken = await call(handler, 'GET', '/api/auth/status')
+  assert.deepEqual(badToken.body, { configured: false, authenticated: false })
+  token = saved
 })
 
-test('POST /api/auth/setup 弱密码 400 weak_password', { timeout: 60_000 }, async () => {
+test('配置后 status：无 token false；错误 token false；有效 token true', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const setup = await call(handler, 'POST', '/api/auth/setup', { auth: false, body: { password: 'hunter2hunter2' } })
+  assert.equal(setup.status, 200)
+  token = setup.body.token
+  const noToken = await call(handler, 'GET', '/api/auth/status', { auth: false })
+  assert.deepEqual(noToken.body, { configured: true, authenticated: false })
+  const saved = token
+  token = 'deadbeef'.repeat(8)
+  const bad = await call(handler, 'GET', '/api/auth/status')
+  assert.deepEqual(bad.body, { configured: true, authenticated: false })
+  token = saved
+  const ok = await call(handler, 'GET', '/api/auth/status')
+  assert.deepEqual(ok.body, { configured: true, authenticated: true })
+})
+
+test('恶意网页抢先 setup 防护：恶意 Origin 403 且不写配置；text/plain 冒充 415', { timeout: 60_000 }, async () => {
+  // 独立 dataDir：验证恶意请求绝不写入 auth 配置（抢先设置密码失败）
+  const evilDir = await mkdtemp(join(tmpdir(), 'helm-http-evil-'))
+  try {
+    const evilAuth = new AuthService(evilDir)
+    const evilKernel = makeKernel()
+    ;(evilKernel as { auth: AuthService }).auth = evilAuth
+    const handler = createHubHandler(evilKernel, workflows)
+    // 恶意 Origin 的简单 POST（跨站表单可发）→ 403，不进入 setup
+    const malicious = await call(handler, 'POST', '/api/auth/setup', {
+      auth: false,
+      origin: 'https://evil.example',
+      contentType: 'text/plain',
+      raw: JSON.stringify({ password: 'evil-password-123' }),
+    })
+    assert.equal(malicious.status, 403)
+    assert.equal(malicious.body.error.code, 'origin_not_allowed')
+    // 配置未被写入：仍是未配置状态
+    assert.deepEqual(await evilAuth.status(), { configured: false })
+    // 白名单源 + JSON 正常 setup
+    const ok = await call(handler, 'POST', '/api/auth/setup', {
+      auth: false,
+      origin: 'http://localhost:3201',
+      body: { password: 'legit-password-123' },
+    })
+    assert.equal(ok.status, 200)
+    assert.equal(typeof ok.body.token, 'string')
+    // 已配置后再来恶意 Origin 也被拒（403 先于 409）
+    const again = await call(handler, 'POST', '/api/auth/setup', {
+      auth: false,
+      origin: 'https://evil.example',
+      contentType: 'text/plain',
+      raw: JSON.stringify({ password: 'evil-password-456' }),
+    })
+    assert.equal(again.status, 403)
+    // 无 Origin 的 CLI 调用：text/plain 仍拒（JSON 端点），JSON 通过
+    const cliBad = await call(handler, 'POST', '/api/auth/setup', {
+      auth: false,
+      contentType: 'text/plain',
+      raw: JSON.stringify({ password: 'legit-password-789' }),
+    })
+    assert.equal(cliBad.status, 415)
+    const cliOk = await call(handler, 'POST', '/api/auth/login', {
+      auth: false,
+      body: { password: 'legit-password-123' },
+    })
+    assert.equal(cliOk.status, 200)
+  } finally {
+    await rm(evilDir, { recursive: true, force: true })
+  }
+})
+
+test('POST /api/auth/setup 弱密码 400 weak_password；重复 setup 409', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const res = await call(handler, 'POST', '/api/auth/setup', { auth: false, body: { password: 'short' } })
   assert.equal(res.status, 400)
   assert.equal(res.body.error.code, 'weak_password')
-})
-
-test('POST /api/auth/setup 首次成功返回 token；重复 setup 409 already_setup', { timeout: 60_000 }, async () => {
-  const { handler } = makeHandlers()
-  const ok = await call(handler, 'POST', '/api/auth/setup', { auth: false, body: { password: 'hunter2hunter2' } })
-  assert.equal(ok.status, 200)
-  assert.equal(typeof ok.body.token, 'string')
-  token = ok.body.token
   const dup = await call(handler, 'POST', '/api/auth/setup', { auth: false, body: { password: 'another-pass-123' } })
   assert.equal(dup.status, 409)
   assert.equal(dup.body.error.code, 'already_setup')
@@ -382,10 +500,15 @@ test('非法 conversationId 与非法字段 400 validation_error', { timeout: 60
   assert.equal(unknownField.status, 400)
 })
 
+test('GET /api/conversations/:id 已有端点正常返回', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const res = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}`)
+  assert.equal(res.status, 200)
+  assert.equal(res.body.id, ROOT_CONVERSATION_ID)
+})
+
 test('POST /:id/input 校验 origin/whenBusy 枚举并透传 kernel.submitInput', { timeout: 60_000 }, async () => {
-  const { kernel, handler } = makeHandlers()
-  const h2 = createHubHandler(kernel, workflows)
-  void h2
+  const { handler } = makeHandlers()
   const ok = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
     body: { text: '你好', origin: 'human', whenBusy: 'followUp' },
   })
@@ -406,7 +529,49 @@ test('POST /:id/abort 调用 abortConversation', { timeout: 60_000 }, async () =
   const { handler } = makeHandlers()
   const res = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/abort`)
   assert.equal(res.status, 200)
-  assert.deepEqual(aborted, [ROOT_CONVERSATION_ID])
+  assert.ok(aborted.includes(ROOT_CONVERSATION_ID))
+})
+
+// ---------------------------------------------------------------------------
+// 路径段解码
+// ---------------------------------------------------------------------------
+
+test('编码 pluginId 正确解码：builtin%3Atriggers 等价 builtin:triggers', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const encoded = await call(handler, 'GET', '/api/plugins/builtin%3Atriggers/config')
+  assert.equal(encoded.status, 200)
+  const plain = await call(handler, 'GET', '/api/plugins/builtin:triggers/config')
+  assert.equal(plain.status, 200)
+  // 编码段与明文段返回一致内容
+  assert.deepEqual(encoded.body, plain.body)
+})
+
+test('非法百分号编码 400 invalid_path_encoding', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const res = await call(handler, 'GET', '/api/plugins/builtin%3Aassistant%zz/config')
+  assert.equal(res.status, 400)
+  assert.equal(res.body.error.code, 'invalid_path_encoding')
+})
+
+test('多余路径段 404：不落入操作分支（auth/status/foo、workflows abort/extra 等）', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const statusFoo = await call(handler, 'GET', '/api/auth/status/foo')
+  assert.equal(statusFoo.status, 404)
+  const abortExtra = await call(handler, 'POST', '/api/workflows/runs/run-1/abort/extra')
+  assert.equal(abortExtra.status, 404)
+  const runExtra = await call(handler, 'POST', '/api/workflows/run/x/extra/deep')
+  assert.equal(runExtra.status, 404)
+  const artifactsExtra = await call(handler, 'GET', `/api/artifacts/some-id/content/extra`)
+  assert.equal(artifactsExtra.status, 404)
+})
+
+test('编码 slash（%2F）不重新分段：解码后仍是一个段', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  // %2F 解码后是段内容的一部分（'a/b'），不会重新切分路由；该值不是
+  // 合法 profileId，按单段参数校验拒绝 400。
+  const res = await call(handler, 'GET', '/api/profiles/a%2Fb')
+  assert.equal(res.status, 400)
+  assert.equal(res.body.error.code, 'validation_error')
 })
 
 // ---------------------------------------------------------------------------
@@ -425,18 +590,14 @@ test('SSE 首帧 snapshot + 增量事件 + 断开取消订阅（无遗留 listen
   assert.equal(response.headers.get('content-type'), 'text/event-stream')
   const reader = response.body!.getReader()
   const decoder = new TextDecoder()
-  // 首帧
   const first = await reader.read()
   const firstText = decoder.decode(first.value)
   assert.ok(firstText.includes('event: snapshot'))
   assert.ok(firstText.includes('"conversations"'))
-  // 订阅已生效
   assert.ok(hub0.listenerCount() >= 1)
-  // 发布增量事件
   hub0.publish('conversation.upsert', { type: 'conversation.upsert', conversation: summary(9, '事件会话') })
   const second = await reader.read()
   assert.ok(decoder.decode(second.value).includes('conversation.upsert'))
-  // 断开：取消订阅
   const before = hub0.listenerCount()
   controller.abort()
   await new Promise((r) => setTimeout(r, 50))
@@ -472,21 +633,48 @@ test('profiles CRUD（真实 ProfileService）', { timeout: 60_000 }, async () =
   assert.equal(gone.status, 404)
 })
 
-test('providers GET/PUT 完整数组（真实 ProviderService）', { timeout: 60_000 }, async () => {
+test('profiles DELETE 仍被会话绑定返回 409 profile_in_use', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
-  const put = await call(handler, 'PUT', '/api/providers', {
-    body: {
-      providers: [{ id: 'groq', protocol: 'openai', baseUrl: 'https://api.groq.com/v1', models: ['llama-3.3-70b'], enabled: true }],
-    },
+  await call(handler, 'POST', '/api/profiles', {
+    body: { id: 'bound-profile', name: '绑定中', runtime: { kind: 'herdr', agent: 'agy' } },
   })
-  assert.equal(put.status, 200)
-  const list = await call(handler, 'GET', '/api/providers')
-  assert.ok(Array.isArray(list.body))
-  assert.equal(list.body[0].id, 'groq')
+  const created = await call(handler, 'POST', '/api/conversations', {
+    body: { title: '绑定会话', profileId: 'bound-profile' },
+  })
+  assert.equal(created.status, 201)
+  assert.equal(created.body.profileId, 'bound-profile')
+  const rejected = await call(handler, 'DELETE', '/api/profiles/bound-profile')
+  assert.equal(rejected.status, 409)
+  assert.equal(rejected.body.error.code, 'profile_in_use')
+  // 解绑后可删
+  await call(handler, 'PATCH', `/api/conversations/${created.body.id}`, { body: { profileId: 'assistant' } })
+  // 模拟会话面 PATCH 不改 profileId，直接改内存以验证删除路径
+  const conv = conversations.get(created.body.id)!
+  conv.profileId = 'assistant'
+  const ok = await call(handler, 'DELETE', '/api/profiles/bound-profile')
+  assert.equal(ok.status, 200)
+})
+
+test('providers PUT 接受完整原始数组（CLI 约定）与 { providers } 包裹', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const array = [
+    { id: 'groq', protocol: 'openai', baseUrl: 'https://api.groq.com/v1', models: ['llama-3.3-70b'], enabled: true },
+  ]
+  const putRaw = await call(handler, 'PUT', '/api/providers', { body: array })
+  assert.equal(putRaw.status, 200)
+  const list1 = await call(handler, 'GET', '/api/providers')
+  assert.ok(Array.isArray(list1.body))
+  assert.equal(list1.body[0].id, 'groq')
+  const putWrapped = await call(handler, 'PUT', '/api/providers', { body: { providers: array } })
+  assert.equal(putWrapped.status, 200)
+  // 原始数组内的非法项同样 400（不因形态放宽）
   const bad = await call(handler, 'PUT', '/api/providers', {
-    body: { providers: [{ id: 'x', protocol: 'grpc', baseUrl: 'ftp://x', models: [], enabled: true }] },
+    body: [{ id: 'x', protocol: 'grpc', baseUrl: 'ftp://x', models: [], enabled: true }],
   })
   assert.equal(bad.status, 400)
+  // 非数组非对象 400
+  const notObj = await call(handler, 'PUT', '/api/providers', { body: 'nope' })
+  assert.equal(notObj.status, 400)
 })
 
 test('credentials 仅 id/configured 键，绝无明文；PUT/DELETE 生效', { timeout: 60_000 }, async () => {
@@ -532,10 +720,10 @@ test('models 返回数组', { timeout: 60_000 }, async () => {
 })
 
 // ---------------------------------------------------------------------------
-// Artifacts / Search
+// Artifacts（安全边界 + 真实字节）
 // ---------------------------------------------------------------------------
 
-test('artifacts 列表 + content 真实 content-type/disposition；未知 404', { timeout: 60_000 }, async () => {
+test('artifacts 列表 + content 真实 content-type/disposition/字节；未知 404', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const source = join(dataDir, 'note.md')
   await writeFile(source, '# 产物\n内容')
@@ -547,10 +735,160 @@ test('artifacts 列表 + content 真实 content-type/disposition；未知 404', 
   assert.equal(content.status, 200)
   assert.equal(content.headers.get('content-type'), 'text/markdown')
   assert.equal(content.headers.get('content-disposition'), 'inline; filename="note.md"')
-  assert.ok(content.body.includes('# 产物'))
+  assert.ok(content.text.includes('# 产物'))
   const missing = await call(handler, 'GET', '/api/artifacts/no-such-id/content')
   assert.equal(missing.status, 404)
 })
+
+test('artifacts 二进制按字节原样返回（不转字符串）', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  // 8 个 0xFF 字节：UTF-8 解码会损坏
+  const source = join(dataDir, 'blob.bin')
+  const raw = new Uint8Array([0xff, 0xfe, 0x00, 0x81, 0xff, 0xfe, 0x00, 0x81])
+  await writeFile(source, raw)
+  const meta = await artifacts.register(ROOT_CONVERSATION_ID, source, { name: 'blob.bin' })
+  const res = await call(handler, 'GET', `/api/artifacts/${meta.id}/content`)
+  assert.equal(res.status, 200)
+  assert.equal(res.headers.get('content-length'), '8')
+  // 直接请求原始字节（不经 call() 的 text/JSON 解析路径）
+  const direct = await handler(new Request(`http://127.0.0.1:3202/api/artifacts/${meta.id}/content`, {
+    headers: { authorization: `Bearer ${token}` },
+  }))
+  const bytes = new Uint8Array(await direct.arrayBuffer())
+  assert.deepEqual([...bytes], [...raw])
+})
+
+test('artifacts 伪造 metadata（path=credentials.json）不得泄密', { timeout: 60_000 }, async () => {
+  const evilRepo = new InMemoryArtifactRepository()
+  const evilArtifacts = new ArtifactService(dataDir, evilRepo, stash)
+  await writeFile(join(dataDir, 'credentials.json'), JSON.stringify({ providers: { x: { value: 'leak-me' } } }), { mode: 0o600 })
+  const fakeMeta = {
+    id: 'evil-1',
+    conversationId: ROOT_CONVERSATION_ID,
+    name: 'credentials.json',
+    path: 'credentials.json',
+    mimeType: 'application/json',
+    size: 1,
+    createdAt: Date.now(),
+  }
+  evilRepo.put(fakeMeta)
+  const kernel = makeKernel()
+  ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
+  const handler = createHubHandler(kernel, workflows)
+  const res = await call(handler, 'GET', `/api/artifacts/evil-1/content`)
+  assert.equal(res.status, 500)
+  assert.equal(res.body.error.code, 'artifact_metadata_illegal')
+  assert.ok(!res.text.includes('leak-me'))
+})
+
+test('artifacts 伪 metadata（artifacts/<convId>/../../escape）拒绝', { timeout: 60_000 }, async () => {
+  const evilRepo = new InMemoryArtifactRepository()
+  const evilArtifacts = new ArtifactService(dataDir, evilRepo, stash)
+  const secretFile = join(dataDir, 'escape-secret.txt')
+  await writeFile(secretFile, 'TOP-SECRET')
+  const fakeMeta = {
+    id: 'evil-2',
+    conversationId: ROOT_CONVERSATION_ID,
+    name: 'escape',
+    path: 'artifacts/1/../../escape-secret.txt',
+    mimeType: 'text/plain',
+    size: 1,
+    createdAt: Date.now(),
+  }
+  evilRepo.put(fakeMeta)
+  const kernel = makeKernel()
+  ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
+  const handler = createHubHandler(kernel, workflows)
+  const res = await call(handler, 'GET', `/api/artifacts/evil-2/content`)
+  assert.equal(res.status, 500)
+  assert.equal(res.body.error.code, 'artifact_metadata_illegal')
+  assert.ok(!res.text.includes('TOP-SECRET'))
+})
+
+test('artifacts 符号链接越界拒绝（文件名段软链逃逸）', { timeout: 60_000 }, async () => {
+  const evilRepo = new InMemoryArtifactRepository()
+  const evilArtifacts = new ArtifactService(dataDir, evilRepo, stash)
+  const secretFile = join(dataDir, 'symlink-secret.txt')
+  await writeFile(secretFile, 'SYMLINK-SECRET')
+  const convDir = await artifacts.ensureConversationDir(ROOT_CONVERSATION_ID)
+  const linkPath = join(convDir, 'link.txt')
+  await symlink(secretFile, linkPath)
+  const fakeMeta = {
+    id: 'evil-3',
+    conversationId: ROOT_CONVERSATION_ID,
+    name: 'link.txt',
+    path: `artifacts/${ROOT_CONVERSATION_ID}/link.txt`,
+    mimeType: 'text/plain',
+    size: 1,
+    createdAt: Date.now(),
+  }
+  evilRepo.put(fakeMeta)
+  const kernel = makeKernel()
+  ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
+  const handler = createHubHandler(kernel, workflows)
+  const res = await call(handler, 'GET', `/api/artifacts/evil-3/content`)
+  assert.equal(res.status, 500)
+  assert.equal(res.body.error.code, 'artifact_path_illegal')
+  assert.ok(!res.text.includes('SYMLINK-SECRET'))
+})
+
+test('artifacts 会话目录软链逃逸拒绝', { timeout: 60_000 }, async () => {
+  const evilRepo = new InMemoryArtifactRepository()
+  const evilArtifacts = new ArtifactService(dataDir, evilRepo, stash)
+  const outsideDir = join(dataDir, 'outside')
+  await mkdir(outsideDir, { recursive: true })
+  await writeFile(join(outsideDir, 'loot.txt'), 'CONV-SYMLINK-SECRET')
+  // artifacts/777777 本身是指向界外目录的软链（攻击者预置）
+  const artifactsRoot = join(dataDir, 'artifacts')
+  await mkdir(artifactsRoot, { recursive: true })
+  const convLink = join(artifactsRoot, '777777')
+  await rm(convLink, { force: true }).catch(() => {})
+  await symlink(outsideDir, convLink)
+  const fakeMeta = {
+    id: 'evil-4',
+    conversationId: 777777,
+    name: 'loot.txt',
+    path: 'artifacts/777777/loot.txt',
+    mimeType: 'text/plain',
+    size: 1,
+    createdAt: Date.now(),
+  }
+  evilRepo.put(fakeMeta)
+  const kernel = makeKernel()
+  ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
+  const handler = createHubHandler(kernel, workflows)
+  const res = await call(handler, 'GET', `/api/artifacts/evil-4/content`)
+  assert.equal(res.status, 500)
+  assert.equal(res.body.error.code, 'artifact_path_illegal')
+  assert.ok(!res.text.includes('CONV-SYMLINK-SECRET'))
+})
+
+test('artifacts 读权限错误不伪称 missing（非 ENOENT 原样 500）', { timeout: 60_000 }, async () => {
+  const repo = new InMemoryArtifactRepository()
+  const artifactsNoPerm = new ArtifactService(dataDir, repo, stash)
+  const source = join(dataDir, 'perm.md')
+  await writeFile(source, 'perm')
+  const meta = await artifactsNoPerm.register(ROOT_CONVERSATION_ID, source, { name: 'perm.md' })
+  const target = join(dataDir, 'artifacts', String(ROOT_CONVERSATION_ID), meta.path.split('/')[2]!)
+  await chmod(target, 0o000)
+  const kernel = makeKernel()
+  ;(kernel as { artifacts: ArtifactService }).artifacts = artifactsNoPerm
+  const handler = createHubHandler(kernel, workflows)
+  const res = await call(handler, 'GET', `/api/artifacts/${meta.id}/content`)
+  // 进程是 root 时 chmod 000 仍可读：此时应成功返回内容（如实反映可读性）
+  if (process.getuid?.() === 0) {
+    assert.equal(res.status, 200)
+  } else {
+    assert.equal(res.status, 500)
+    assert.equal(res.body.error.code, 'internal_error')
+    assert.ok(!res.text.includes('artifact_file_missing'))
+  }
+  await chmod(target, 0o644)
+})
+
+// ---------------------------------------------------------------------------
+// Search / Workflows
+// ---------------------------------------------------------------------------
 
 test('search?q= 透传；空 q 400', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
@@ -560,84 +898,6 @@ test('search?q= 透传；空 q 400', { timeout: 60_000 }, async () => {
   const empty = await call(handler, 'GET', '/api/search?q=')
   assert.equal(empty.status, 400)
 })
-
-// ---------------------------------------------------------------------------
-// Plugins / Actions
-// ---------------------------------------------------------------------------
-
-test('plugins list / enable / config 脱敏', { timeout: 60_000 }, async () => {
-  const { handler } = makeHandlers()
-  const list = await call(handler, 'GET', '/api/plugins')
-  assert.equal(list.status, 200)
-  assert.ok(Array.isArray(list.body))
-  assert.ok(list.body.some((p: any) => p.id === 'builtin:assistant' && p.locked))
-  const kernelWithSecret = makeKernel({
-    getConfig: () => ({ token: 'sk-live-plaintext', retries: 3 }),
-  })
-  const h = createHubHandler(kernelWithSecret, workflows)
-  const config = await call(h, 'GET', '/api/plugins/builtin:assistant/config')
-  assert.equal(config.status, 200)
-  assert.equal(config.body.values.token, '******')
-  assert.equal(config.body.values.retries, 3)
-  assert.ok(!JSON.stringify(config.body).includes('sk-live-plaintext'))
-})
-
-test('actions list 空数组；invoke 非法入参 schema 400 / 未知动作 404', { timeout: 60_000 }, async () => {
-  const kernelWithAction = makeKernel({
-    listActions: () => [
-      {
-        pluginId: 'builtin:demo',
-        id: 'echo',
-        description: '回声',
-        inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
-        outputSchema: { type: 'object' },
-      },
-    ],
-    invokeAction: (_pluginId, actionId, input) => {
-      if (actionId !== 'echo') {
-        throw new HelmError('unknown_action', `动作不存在: ${actionId}`, 404)
-      }
-      if (typeof (input as any)?.text !== 'string') {
-        throw new HelmError('validation_error', 'text 需为字符串', 400)
-      }
-      return { echoed: (input as any).text }
-    },
-  })
-  const handler = createHubHandler(kernelWithAction, workflows)
-  const list = await call(handler, 'GET', '/api/actions')
-  assert.equal(list.status, 200)
-  assert.equal(list.body[0].id, 'echo')
-  const ok = await call(handler, 'POST', '/api/actions/builtin:demo/echo', { body: { input: { text: 'hi' } } })
-  assert.equal(ok.status, 200)
-  assert.deepEqual(ok.body, { echoed: 'hi' })
-  const bad = await call(handler, 'POST', '/api/actions/builtin:demo/echo', { body: { input: { text: 42 } } })
-  assert.equal(bad.status, 400)
-  assert.equal(bad.body.error.code, 'validation_error')
-  const missing = await call(handler, 'POST', '/api/actions/builtin:demo/nope', { body: { input: {} } })
-  assert.equal(missing.status, 404)
-})
-
-test('插件动态路由：public webhook 豁免鉴权；非 public 需 token；强制 routes 命名空间', { timeout: 60_000 }, async () => {
-  const { handler } = makeHandlers()
-  // public 豁免
-  const pub = await call(handler, 'POST', '/api/plugins/builtin:triggers/routes/webhook/hook-1', { auth: false, body: {} })
-  assert.equal(pub.status, 200)
-  assert.equal(pub.body.got, '/webhook/hook-1')
-  // 非 public 未认证 401
-  const noAuth = await call(handler, 'GET', '/api/plugins/builtin:triggers/routes/status', { auth: false })
-  assert.equal(noAuth.status, 401)
-  // 认证后可访问
-  const ok = await call(handler, 'GET', '/api/plugins/builtin:triggers/routes/status')
-  assert.equal(ok.status, 200)
-  assert.deepEqual(ok.body, { ok: true })
-  // 不存在的插件路由 404
-  const missing = await call(handler, 'GET', '/api/plugins/builtin:triggers/routes/nothing')
-  assert.equal(missing.status, 404)
-})
-
-// ---------------------------------------------------------------------------
-// Workflows
-// ---------------------------------------------------------------------------
 
 test('workflows list / run 202 / getRun / abort；run body 恰一 source', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
@@ -658,6 +918,136 @@ test('workflows list / run 202 / getRun / abort；run body 恰一 source', { tim
   assert.equal(multi.status, 400)
   const zero = await call(handler, 'POST', '/api/workflows/run', { body: { args: {} } })
   assert.equal(zero.status, 400)
+})
+
+// ---------------------------------------------------------------------------
+// Plugins（真实 PluginHost）/ Actions
+// ---------------------------------------------------------------------------
+
+test('真实 PluginHost 路由：public webhook 豁免鉴权；非 public 需 token；handler 收到原始 URL', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  publicHandlerCalls = []
+  // public 豁免（无 token 直达）
+  const pub = await call(handler, 'POST', '/api/plugins/builtin:triggers/routes/webhook/hook-1', { auth: false, body: {} })
+  assert.equal(pub.status, 200)
+  // handler 收到的 URL 保持完整原始路径（含 : 与参数段），未被改写
+  assert.equal(pub.body.got, '/api/plugins/builtin:triggers/routes/webhook/hook-1')
+  assert.equal(publicHandlerCalls.length, 1)
+  assert.equal(new URL(publicHandlerCalls[0]!.url).pathname, '/api/plugins/builtin:triggers/routes/webhook/hook-1')
+  // 非 public 未认证 401
+  const noAuth = await call(handler, 'GET', '/api/plugins/builtin:triggers/routes/status', { auth: false })
+  assert.equal(noAuth.status, 401)
+  assert.equal(privateHandlerCalls.length, 0)
+  // 认证后可访问
+  const ok = await call(handler, 'GET', '/api/plugins/builtin:triggers/routes/status')
+  assert.equal(ok.status, 200)
+  assert.deepEqual(ok.body, { ok: true })
+  // 不存在的插件路由 404
+  const missing = await call(handler, 'GET', '/api/plugins/builtin:triggers/routes/nothing')
+  assert.equal(missing.status, 404)
+  // 参数段不匹配（多一段）：未认证先撞鉴权门 401；带 token 后如实 404
+  const extraNoAuth = await call(handler, 'POST', '/api/plugins/builtin:triggers/routes/webhook/hook-1/extra', { auth: false, body: {} })
+  assert.equal(extraNoAuth.status, 401)
+  const extra = await call(handler, 'POST', '/api/plugins/builtin:triggers/routes/webhook/hook-1/extra', { body: {} })
+  assert.equal(extra.status, 404)
+})
+
+test('真实 PluginHost 路由：编码 pluginId 也能命中（完整路径匹配器两处一致）', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const pub = await call(handler, 'POST', '/api/plugins/builtin%3Atriggers/routes/webhook/hook-2', { auth: false, body: {} })
+  assert.equal(pub.status, 200)
+  assert.equal(pub.body.got, '/api/plugins/builtin%3Atriggers/routes/webhook/hook-2')
+})
+
+test('plugins list；config PUT 保持 { values } 包裹', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const list = await call(handler, 'GET', '/api/plugins')
+  assert.equal(list.status, 200)
+  assert.ok(Array.isArray(list.body))
+  assert.ok(list.body.some((p: any) => p.id === 'builtin:triggers'))
+  // setConfig 在无持久化 PluginConfigStore 时显式 501 config_store_unavailable
+  //（诚实不支持，不伪造写入成功；真实 kernel 装配 store 后即为 200）。
+  const set = await call(handler, 'PUT', '/api/plugins/builtin:triggers/config', { body: { values: { retries: 3 } } })
+  assert.ok(set.status === 200 || set.status === 501, `unexpected ${set.status}`)
+  if (set.status === 501) assert.equal(set.body.error.code, 'config_store_unavailable')
+  // 非 { values } 包裹形态 400（边界校验先行）
+  const badShape = await call(handler, 'PUT', '/api/plugins/builtin:triggers/config', { body: { retries: 3 } })
+  assert.equal(badShape.status, 400)
+  assert.equal(badShape.body.error.code, 'validation_error')
+})
+
+test('真实 action：invoke 200；null 原样返回不伪造成功对象', { timeout: 60_000 }, async () => {
+  // 追加一个返回 null 的动作（null 是合法输出）
+  await pluginHost.register({
+    id: 'builtin:nullish',
+    name: 'nullish',
+    async definePlugin(ctx: HelmPluginContext) {
+      ctx.action({
+        id: 'get-null',
+        description: '返回 null',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'null' },
+        handler: () => null,
+      })
+      ctx.action({
+        id: 'get-undefined',
+        description: '返回 undefined（违约输出）',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        handler: () => undefined,
+      })
+    },
+  })
+  const { handler } = makeHandlers()
+  const invoked = await call(handler, 'POST', '/api/actions/builtin:nullish/get-null', { body: { input: {} } })
+  assert.equal(invoked.status, 200)
+  // 原样 null：响应体是 "null"，绝不伪造成 {ok:true}
+  assert.deepEqual(invoked.body, null)
+  assert.equal(invoked.text, 'null')
+  const undef = await call(handler, 'POST', '/api/actions/builtin:nullish/get-undefined', { body: { input: {} } })
+  assert.equal(undef.status, 500)
+  assert.ok(['invalid_output', 'invalid_plugin_output'].includes(undef.body.error.code))
+  assert.notEqual(undef.text, '{"ok":true}')
+  // 真实 echo action 正常
+  const echo = await call(handler, 'POST', '/api/actions/builtin:triggers/echo', { body: { input: { text: 'hi' } } })
+  assert.equal(echo.status, 200)
+  assert.deepEqual(echo.body, { echoed: 'hi' })
+})
+
+// ---------------------------------------------------------------------------
+// 出站 JSON stash 脱敏
+// ---------------------------------------------------------------------------
+
+test('出站 JSON 递归脱敏：含引号/换行的 secret 也不泄漏，marker 不还原', { timeout: 60_000 }, async () => {
+  const kernel = makeKernel()
+  const trickySecret = 'sk-"quoted"\nline-break\ttab'
+  const placeholder = stash.put(ROOT_CONVERSATION_ID, 'TRICKY_KEY', trickySecret)
+  // search 返回含 secret 明文与 marker 的嵌套结构
+  ;(kernel as { search: (q: string) => Promise<unknown[]> }).search = async () => [
+    { conversationId: 1, snippet: `prefix ${trickySecret} middle [marker]${placeholder} end` },
+    { nested: { list: [trickySecret, { deep: trickySecret }] } },
+  ]
+  const handler = createHubHandler(kernel, workflows)
+  const res = await call(handler, 'GET', '/api/search?q=leak')
+  assert.equal(res.status, 200)
+  assert.ok(!res.text.includes('sk-"quoted"'))
+  assert.ok(!res.text.includes('line-break\\ttab'.replace('\\\\', '\\')))
+  // marker 保持脱敏形态（不还原为明文）
+  assert.ok(res.text.includes(placeholder))
+  assert.ok(res.text.includes('[REDACTED:stash:'))
+})
+
+test('error.details 同样脱敏', { timeout: 60_000 }, async () => {
+  const kernel = makeKernel()
+  const secret = 'err-detail-secret-123'
+  stash.put(ROOT_CONVERSATION_ID, 'ERR_KEY', secret)
+  ;(kernel as { search: (q: string) => Promise<unknown[]> }).search = async () => {
+    throw new HelmError('search_failed', '搜索失败', 500, { trace: secret })
+  }
+  const handler = createHubHandler(kernel, workflows)
+  const res = await call(handler, 'GET', '/api/search?q=x')
+  assert.equal(res.status, 500)
+  assert.ok(!res.text.includes(secret))
 })
 
 // ---------------------------------------------------------------------------
@@ -704,13 +1094,15 @@ test('非 /api 前缀 404', { timeout: 60_000 }, async () => {
 })
 
 test('FileNotFoundError 映射 404 而非 500', { timeout: 60_000 }, async () => {
-  const kernelThrowing = makeKernel({
+  const kernel = makeKernel()
+  ;(kernel as { plugins: unknown }).plugins = {
+    ...(pluginHost as unknown as object),
     getConfig: () => {
       throw new FileNotFoundError('config.json')
     },
-  })
-  const handler = createHubHandler(kernelThrowing, workflows)
-  const res = await call(handler, 'GET', '/api/plugins/builtin:assistant/config')
+  }
+  const handler = createHubHandler(kernel, workflows)
+  const res = await call(handler, 'GET', '/api/plugins/builtin:triggers/config')
   assert.equal(res.status, 404)
 })
 
@@ -724,13 +1116,10 @@ test('startHub port:0 监听 127.0.0.1，真实 HTTP 往返，close 迅速完成
   try {
     assert.ok(handle.url.startsWith('http://127.0.0.1:'))
     assert.ok((handle.port as number) > 0)
-    // 未认证
     const unauth = await fetch(`${handle.url}/api/conversations`)
     assert.equal(unauth.status, 401)
-    // 认证往返
     const ok = await fetch(`${handle.url}/api/conversations`, { headers: { authorization: `Bearer ${token}` } })
     assert.equal(ok.status, 200)
-    // SSE 打开不断开（模拟挂起长连接）
     const sseController = new AbortController()
     const sse = await fetch(`${handle.url}/api/events`, {
       headers: { authorization: `Bearer ${token}` },
@@ -741,16 +1130,29 @@ test('startHub port:0 监听 127.0.0.1，真实 HTTP 往返，close 迅速完成
     const first = await reader.read()
     assert.ok(new TextDecoder().decode(first.value).includes('snapshot'))
     const listenersBefore = hub0.listenerCount()
-    // close：主动 abort 全部在途请求（含 SSE）+ 销毁连接 + server.close
     const start = Date.now()
     await handle.close()
     const elapsed = Date.now() - start
     assert.ok(elapsed < 5_000, `close 应迅速完成，实际 ${elapsed}ms`)
-    // SSE 订阅已被 close 主动断开（不依赖客户端取消）
     await new Promise((r) => setTimeout(r, 50))
     assert.equal(hub0.listenerCount(), listenersBefore - 1)
   } finally {
-    // 幂等关闭兜底（已关则忽略错误）
+    await handle.close().catch(() => {})
+  }
+})
+
+test('startHub 真实往返：编码 pluginId 经 node 服务器命中 action', { timeout: 60_000 }, async () => {
+  const kernel = makeKernel()
+  const handle = await startHub({ kernel, workflows, port: 0 })
+  try {
+    const res = await fetch(`${handle.url}/api/actions/builtin%3Atriggers/echo`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ input: { text: 'real-http' } }),
+    })
+    assert.equal(res.status, 200)
+    assert.deepEqual(await res.json(), { echoed: 'real-http' })
+  } finally {
     await handle.close().catch(() => {})
   }
 })

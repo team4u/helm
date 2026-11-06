@@ -257,6 +257,11 @@ function optionalValidId(body: Record<string, unknown>, field: string): string |
   return requireValidId(body, field)
 }
 
+/**
+ * providers PUT body（对象形态）：{ providers: [...] }。数组形态由路由层
+ * （parseProvidersBodyValue，CLI 完整原始数组约定）色装后复用本函数，
+ * 两种形态走同一套逐项严格校验。
+ */
 export function parseProvidersBody(body: Record<string, unknown>): ProviderConfig[] {
   const raw = body.providers
   if (!Array.isArray(raw)) {
