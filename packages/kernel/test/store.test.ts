@@ -362,7 +362,7 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('convStatusOf：blocked（pending Ask）优先于 working', () => {
+  it('convStatusOf：blocked（pending Ask）优先于 working', { timeout: 60_000 }, () => {
     const meta = conv(1)
     assert.equal(convStatusOf(meta, { run: { id: 'r' } }, 1), 'blocked')
     assert.equal(convStatusOf(meta, { run: { id: 'r' } }, 0), 'working')

@@ -82,7 +82,7 @@ after(async () => {
 })
 
 describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
-  it('成功与失败如实返回 exitCode；stdout/stderr 按到达序拼接', async () => {
+  it('成功与失败如实返回 exitCode；stdout/stderr 按到达序拼接', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs1'))
     const ok = await runShell(deps, 'echo out; echo err >&2; echo tail')
     assert.equal(ok.ok, true)
@@ -96,7 +96,7 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.ok(fail.output.includes('oops'))
   })
 
-  it('运行中 abort 杀进程组：sentinel 文件永不出现，不等待 120s 超时', async () => {
+  it('运行中 abort 杀进程组：sentinel 文件永不出现，不等待 120s 超时', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs2'))
     const sentinel = join(rootDir, 'rs2', 'sentinel.txt')
     const controller = new AbortController()
@@ -116,7 +116,7 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.ok(!existsSyncSafe(sentinel), 'abort 后 shell 不应存活写入 sentinel')
   })
 
-  it('预先 aborted 的 signal 绝不 spawn 命令', async () => {
+  it('预先 aborted 的 signal 绝不 spawn 命令', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs3'))
     const sentinel = join(rootDir, 'rs3', 'pre.txt')
     const controller = new AbortController()
@@ -128,7 +128,7 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.ok(!existsSyncSafe(sentinel), '预 aborted 不得 spawn 任何命令')
   })
 
-  it('timeoutMs 校验：非正数 / 非整数 / Infinity / 超上限均显式拒绝', async () => {
+  it('timeoutMs 校验：非正数 / 非整数 / Infinity / 超上限均显式拒绝', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs4'))
     for (const bad of [0, -5, 1.5, Number.POSITIVE_INFINITY, Number.NaN, 601_000]) {
       await assert.rejects(
@@ -139,7 +139,7 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     }
   })
 
-  it('超时杀组并显式标注 timeout', async () => {
+  it('超时杀组并显式标注 timeout', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs5'))
     const started = Date.now()
     const result = await runShell(deps, 'sleep 30', { timeoutMs: 500 })
@@ -148,7 +148,7 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.ok(Date.now() - started < 10_000)
   })
 
-  it('env 注入：stash 值注入子进程且从输出中脱敏消失', async () => {
+  it('env 注入：stash 值注入子进程且从输出中脱敏消失', { timeout: 60_000 }, async () => {
     const stash = new SecretStash()
     const secretValue = 'sk-super-secret-abcdef123456'
     stash.put(1, 'MY_TOKEN', secretValue)
@@ -160,7 +160,7 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.ok(result.output.includes('[REDACTED:stash:'), '应替换为占位符')
   })
 
-  it('跨 chunk 撕裂的 secret 在全文聚合后仍被完整脱敏', async () => {
+  it('跨 chunk 撕裂的 secret 在全文聚合后仍被完整脱敏', { timeout: 60_000 }, async () => {
     const stash = new SecretStash()
     const secretValue = 'sk-cross-chunk-secret-ZZZZ9999'
     stash.put(1, 'KEY', secretValue)
@@ -174,7 +174,7 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.ok(result.output.includes('[REDACTED:stash:'))
   })
 
-  it('多字节 UTF-8 字符跨 chunk 不撕裂（无替换符）', async () => {
+  it('多字节 UTF-8 字符跨 chunk 不撕裂（无替换符）', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs8'))
     // 中文字符 3 字节；dd bs=1 强制逐字节 chunk，StringDecoder 语义下应完整还原。
     const result = await runShell(
@@ -186,7 +186,7 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.ok(!result.output.includes('\uFFFD'), '不得出现 UTF-8 替换符')
   })
 
-  it('输出超 maxOutputBytes 显式 output_limit_exceeded，绝不截断当成功', async () => {
+  it('输出超 maxOutputBytes 显式 output_limit_exceeded，绝不截断当成功', { timeout: 60_000 }, async () => {
     const deps = await makeRealDeps(join(rootDir, 'rs9'))
     const result = await runShell(deps, `head -c 200000 /dev/zero | tr '\\0' 'A'`, {
       maxOutputBytes: 100_000,
@@ -196,7 +196,7 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.ok(!result.output.includes('AAAA'), '超限后不得回显截断内容冒充结果')
   })
 
-  it('buildToolEnv：宿主四变量固定覆盖 stash 同名注入', () => {
+  it('buildToolEnv：宿主四变量固定覆盖 stash 同名注入', { timeout: 60_000 }, () => {
     const stash = new SecretStash()
     stash.put(7, 'HELM_CWD', '/evil')
     const deps: HelmToolDeps = {
@@ -216,7 +216,7 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
 })
 
 describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
-  it('读取 cwd 内文件成功；内容经 spill 返回', async () => {
+  it('读取 cwd 内文件成功；内容经 spill 返回', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd1')
     const deps = await makeRealDeps(dir)
     writeFileSync(join(dir, 'note.md'), '# 标题\n正文')
@@ -231,7 +231,7 @@ describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
     assert.ok(structured.content.includes('# 标题'))
   })
 
-  it('../ 逃逸与绝对路径越界拒绝', async () => {
+  it('../ 逃逸与绝对路径越界拒绝', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd2')
     mkdirSync(join(dir, 'inner'), { recursive: true })
     const deps = await makeRealDeps(join(dir, 'inner'))
@@ -243,7 +243,7 @@ describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
     }
   })
 
-  it('软链越界拒绝（realpath 解析后 containment）', async () => {
+  it('软链越界拒绝（realpath 解析后 containment）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd3')
     const outer = join(rootDir, 'rd3-outer')
     mkdirSync(outer, { recursive: true })
@@ -262,7 +262,7 @@ describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
     assert.ok(text.includes('path_escape_denied'))
   })
 
-  it('目录拒绝；超大文件显式 file_too_large 并给出替代指引', async () => {
+  it('目录拒绝；超大文件显式 file_too_large 并给出替代指引', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd4')
     const deps = await makeRealDeps(dir)
     const tool = createReadTool(deps)
@@ -277,7 +277,7 @@ describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
     assert.ok(text.includes('read_artifact'), '错误信息应指引分页替代路径')
   })
 
-  it('读取错误脱敏（secret 不进错误文本）', async () => {
+  it('读取错误脱敏（secret 不进错误文本）', { timeout: 60_000 }, async () => {
     const stash = new SecretStash()
     const secretValue = 'sk-read-error-secret-777'
     stash.put(1, 'TOK', secretValue)
@@ -295,7 +295,7 @@ describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
 })
 
 describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () => {
-  it('读取成功：真实 spill 产物分页前进至读完', async () => {
+  it('读取成功：真实 spill 产物分页前进至读完', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra1')
     const deps = await makeRealDeps(dir)
     const fullText = '中文'.repeat(8000) // 48000 字节 > 32KiB 触发真实 spill
@@ -322,7 +322,7 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
     assert.equal(chunks, fullText, '分页拼接应还原全文（UTF-8 边界无损）')
   })
 
-  it('任意 offset 从不产生替换符；limit=1 遇多字节字符仍保证前进', async () => {
+  it('任意 offset 从不产生替换符；limit=1 遇多字节字符仍保证前进', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra2')
     const deps = await makeRealDeps(dir)
     const { artifact } = await deps.artifacts.spill(1, 'call-2', '漢字テスト'.repeat(3000))
@@ -363,7 +363,7 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
     assert.equal(total, fullText.slice(1), '从字符中间起读应跳过残缺首字符还原其余全文')
   })
 
-  it('越界会话拒绝（授权仅当前会话/父链）', async () => {
+  it('越界会话拒绝（授权仅当前会话/父链）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra3')
     const deps = await makeRealDeps(dir)
     const { artifact } = await deps.artifacts.spill(2, 'call-3', 'owner-2-content-'.repeat(3000))
@@ -377,7 +377,7 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
     assert.equal(!!allowed.isError, false)
   })
 
-  it('不存在产物 artifact_not_found；offset 超范围显式拒绝；nextOffset 不输出 undefined 字段', async () => {
+  it('不存在产物 artifact_not_found；offset 超范围显式拒绝；nextOffset 不输出 undefined 字段', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra4')
     const deps = await makeRealDeps(dir)
     const tool = createReadArtifactTool(deps, () => true)
@@ -415,7 +415,7 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
 })
 
 describe('bash 工具（SDK execute 直调，真实服务依赖）', { timeout: 60_000 }, () => {
-  it('成功执行并返回 structuredOutput（经真实 spill）', async () => {
+  it('成功执行并返回 structuredOutput（经真实 spill）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bt1')
     const deps = await makeRealDeps(dir)
     const tool = createBashTool(deps)
@@ -430,7 +430,7 @@ describe('bash 工具（SDK execute 直调，真实服务依赖）', { timeout: 
     assert.ok(structured.output.includes('hello-tools'))
   })
 
-  it('失败命令 isError 如实；timeoutMs 非法值显式拒绝', async () => {
+  it('失败命令 isError 如实；timeoutMs 非法值显式拒绝', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bt2')
     const deps = await makeRealDeps(dir)
     const tool = createBashTool(deps)
@@ -454,7 +454,7 @@ describe('bash 工具（SDK execute 直调，真实服务依赖）', { timeout: 
 })
 
 describe('SDK 真实链路（faux 模型驱动工具调用）', { timeout: 60_000 }, () => {
-  it('bash 工具经 harness 真实执行 + spill 产物登记 + read_artifact 分页读回', async () => {
+  it('bash 工具经 harness 真实执行 + spill 产物登记 + read_artifact 分页读回', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sdk1')
     const kernel = (await openRuntime(dir)) as never as ReturnType<typeof openRuntime> & {
       __faux: FauxHandle
@@ -488,7 +488,7 @@ describe('SDK 真实链路（faux 模型驱动工具调用）', { timeout: 60_00
     }
   })
 
-  it('运行中 abortConversation 杀掉 bash 工具 shell（不等 120s）', async () => {
+  it('运行中 abortConversation 杀掉 bash 工具 shell（不等 120s）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sdk2')
     const kernel = (await openRuntime(dir)) as never as ReturnType<typeof openRuntime> & {
       __faux: FauxHandle

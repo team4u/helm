@@ -30,10 +30,7 @@ import { HelmStore } from '../src/runtime/store.js'
 import { openHelmDatabase } from '../src/runtime/sqlite.js'
 import { ArtifactService, SecretStash } from '../src/services/index.js'
 
-interface FauxHandle {
-  setResponses(messages: unknown[]): void
-  appendResponses(messages: unknown[]): void
-}
+type FauxHandle = ReturnType<typeof fauxProvider>
 
 interface TestHarness {
   harness: Harness
@@ -49,18 +46,16 @@ interface TestHarness {
  */
 async function openSpawnHarness(options: { profiles?: Record<string, { model?: string; cwd?: string; runtime?: { kind: string; agent: string } }> } = {}): Promise<TestHarness> {
   const models = createModels()
-  const faux = fauxProvider() as unknown as FauxHandle
-  models.setProvider(faux.provider as never)
+  const faux = fauxProvider()
+  models.setProvider(faux.provider)
   const storage = new MemoryStorage()
   const registry = createRegistry()
   const harness = await Harness.open(
     storage,
-    { models: () => models as never, registry },
+    { models: () => models, registry },
     BACKGROUND_CONTEXT,
   )
 
-  const store = new HelmStore({ storage } as never)
-  await store.load().catch(() => {})
   const stash = new SecretStash()
   const parents = new Map<number, number>()
   const profiles = new Map<string, { model?: string; cwd?: string; runtime?: { kind: string; agent: string } }>(
@@ -124,7 +119,6 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
     faux,
     async close() {
       for (const detach of observers.values()) detach()
-      await store.close().catch(() => {})
       await harness.close(BACKGROUND_CONTEXT)
       await storage.close(BACKGROUND_CONTEXT)
     },
@@ -146,7 +140,7 @@ after(async () => {
 // ---------------------------------------------------------------------------
 
 describe('spawn schema：AJV 全量校验', { timeout: 60_000 }, () => {
-  it('enum / nested / additionalProperties 违约全部拒绝（不再只查一层）', async () => {
+  it('enum / nested / additionalProperties 违约全部拒绝（不再只查一层）', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       // 第一轮：enum 违约 + 非法嵌套 -> 工具拒绝 -> 第二轮工具给出合法值。
@@ -174,7 +168,7 @@ describe('spawn schema：AJV 全量校验', { timeout: 60_000 }, () => {
     }
   })
 
-  it('null 顶层合法：valid null 与 undefined 区分', async () => {
+  it('null 顶层合法：valid null 与 undefined 区分', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([
@@ -196,7 +190,7 @@ describe('spawn schema：AJV 全量校验', { timeout: 60_000 }, () => {
     }
   })
 
-  it('跨行对象文本候选（无工具调用）经全量校验通过', async () => {
+  it('跨行对象文本候选（无工具调用）经全量校验通过', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([
@@ -218,7 +212,7 @@ describe('spawn schema：AJV 全量校验', { timeout: 60_000 }, () => {
     }
   })
 
-  it('$async schema 显式拒绝', async () => {
+  it('$async schema 显式拒绝', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       await assert.rejects(
@@ -235,7 +229,7 @@ describe('spawn schema：AJV 全量校验', { timeout: 60_000 }, () => {
     }
   })
 
-  it('StructuredOutput 工具：错误参数被拒、同回合重试、最终经工具返回', async () => {
+  it('StructuredOutput 工具：错误参数被拒、同回合重试、最终经工具返回', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([
@@ -265,7 +259,7 @@ describe('spawn schema：AJV 全量校验', { timeout: 60_000 }, () => {
     }
   })
 
-  it('两次均失败显式 schema_validation_failed（含会话诊断）', async () => {
+  it('两次均失败显式 schema_validation_failed（含会话诊断）', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([
@@ -293,7 +287,7 @@ describe('spawn schema：AJV 全量校验', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('spawn abort：signal 接到 SDK', { timeout: 60_000 }, () => {
-  it('创建前已 abort：直接拒绝，不创建子会话', async () => {
+  it('创建前已 abort：直接拒绝，不创建子会话', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       const controller = new AbortController()
@@ -314,7 +308,7 @@ describe('spawn abort：signal 接到 SDK', { timeout: 60_000 }, () => {
     }
   })
 
-  it('运行中 abort：conversation.abort 生效且不留 live 任务', async () => {
+  it('运行中 abort：conversation.abort 生效且不留 live 任务', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       // 响应工厂挂起：不 resolve 则回合停在模型请求中，abort 才真正打断在途 token。
@@ -360,7 +354,7 @@ describe('spawn abort：signal 接到 SDK', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('spawn resume：绝不新建假续接', { timeout: 60_000 }, () => {
-  it('不存在 ref 拒绝，不创建新子会话', async () => {
+  it('不存在 ref 拒绝，不创建新子会话', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([fauxAssistantMessage('答案')])
@@ -389,7 +383,7 @@ describe('spawn resume：绝不新建假续接', { timeout: 60_000 }, () => {
     }
   })
 
-  it('agentId 映射 resume：复用原会话，onCreated 上报原 id', async () => {
+  it('agentId 映射 resume：复用原会话，onCreated 上报原 id', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([fauxAssistantMessage('第一段'), fauxAssistantMessage('续接结果')])
@@ -398,7 +392,7 @@ describe('spawn resume：绝不新建假续接', { timeout: 60_000 }, () => {
         parentConversationId: 1,
         prompt: '第一段',
         agentId: 'agent-a',
-        onCreated: (id) => {
+        onCreated: (id: number) => {
           createdId = id
         },
       } as never)
@@ -408,7 +402,7 @@ describe('spawn resume：绝不新建假续接', { timeout: 60_000 }, () => {
         parentConversationId: 1,
         prompt: '继续',
         resume: 'agent-a',
-        onCreated: (id) => {
+        onCreated: (id: number) => {
           resumeCreated.push(id)
         },
       } as never)
@@ -420,7 +414,7 @@ describe('spawn resume：绝不新建假续接', { timeout: 60_000 }, () => {
     }
   })
 
-  it('父归属错误拒绝 resume（防跨父会话劫持）', async () => {
+  it('父归属错误拒绝 resume（防跨父会话劫持）', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([fauxAssistantMessage('第一段'), fauxAssistantMessage('不该到达')])
@@ -443,7 +437,7 @@ describe('spawn resume：绝不新建假续接', { timeout: 60_000 }, () => {
     }
   })
 
-  it('resume 带 schema：补挂 StructuredOutput 工具并接受结果', async () => {
+  it('resume 带 schema：补挂 StructuredOutput 工具并接受结果', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       // 第一段无 schema（纯文本）；续接带 schema：需补挂工具并走工具提交。
@@ -483,7 +477,7 @@ describe('spawn resume：绝不新建假续接', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('spawn profile 与运行时声明', { timeout: 60_000 }, () => {
-  it('无效 profile 显式 not_found', async () => {
+  it('无效 profile 显式 not_found', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       await assert.rejects(
@@ -500,7 +494,7 @@ describe('spawn profile 与运行时声明', { timeout: 60_000 }, () => {
     }
   })
 
-  it('profile 声明 herdr runtime：无插件接管显式 unsupported_runtime', async () => {
+  it('profile 声明 herdr runtime：无插件接管显式 unsupported_runtime', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness({
       profiles: {
         default: {},
@@ -531,7 +525,7 @@ describe('spawn profile 与运行时声明', { timeout: 60_000 }, () => {
     }
   })
 
-  it('effort 非法枚举拒绝；合法值通过', async () => {
+  it('effort 非法枚举拒绝；合法值通过', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       await assert.rejects(
@@ -555,7 +549,7 @@ describe('spawn profile 与运行时声明', { timeout: 60_000 }, () => {
     }
   })
 
-  it('isolation 显式 unsupported_runtime', async () => {
+  it('isolation 显式 unsupported_runtime', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       await assert.rejects(
@@ -572,7 +566,7 @@ describe('spawn profile 与运行时声明', { timeout: 60_000 }, () => {
     }
   })
 
-  it('gate 用子会话实际 cwd（request.cwd），失败保留诊断', async () => {
+  it('gate 用子会话实际 cwd（request.cwd），失败保留诊断', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
       th.faux.setResponses([fauxAssistantMessage('答案'), fauxAssistantMessage('答案2')])
@@ -633,7 +627,7 @@ describe('Ask CAS 与结算诚实性', { timeout: 60_000 }, () => {
     })
   }
 
-  it('客户端 CAS seq 与持久水位不同：409 拒绝（不静默覆盖）', async () => {
+  it('客户端 CAS seq 与持久水位不同：409 拒绝（不静默覆盖）', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,
@@ -651,7 +645,7 @@ describe('Ask CAS 与结算诚实性', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('有 CAS 但无 resolver：ask_state_unavailable，不装作校验通过', async () => {
+  it('有 CAS 但无 resolver：ask_state_unavailable，不装作校验通过', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,
@@ -669,7 +663,7 @@ describe('Ask CAS 与结算诚实性', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('目标 seq 任何不一致（含回退）都 superseded；一致则通过', async () => {
+  it('目标 seq 任何不一致（含回退）都 superseded；一致则通过', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,
@@ -699,7 +693,7 @@ describe('Ask CAS 与结算诚实性', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('cancel/superseded：createAsk promise reject（不返回空 answers 冒充批准）', async () => {
+  it('cancel/superseded：createAsk promise reject（不返回空 answers 冒充批准）', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,
@@ -729,7 +723,7 @@ describe('Ask CAS 与结算诚实性', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('答案校验：未知字段 / 非 string / select 越界 / confirm 非法 / 必填缺失', async () => {
+  it('答案校验：未知字段 / 非 string / select 越界 / confirm 非法 / 必填缺失', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,
@@ -755,7 +749,7 @@ describe('Ask CAS 与结算诚实性', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('secret：env 名非法拒绝、声明保留原样不转大写合并、空值不入 stash', async () => {
+  it('secret：env 名非法拒绝、声明保留原样不转大写合并、空值不入 stash', { timeout: 60_000 }, async () => {
     await openAskService()
     // 非法 env 名（连字符）：创建即拒（stash.put 会抛，但现在在 createAsk 边界）。
     await assert.rejects(
@@ -798,7 +792,7 @@ describe('Ask CAS 与结算诚实性', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('createAsk 边界：重复 name / 非法 type / 会话不存在 / 缺 title', async () => {
+  it('createAsk 边界：重复 name / 非法 type / 会话不存在 / 缺 title', { timeout: 60_000 }, async () => {
     await openAskService({ validateConversation: (id) => id === 1 })
     const expectValidation = (promise: Promise<unknown>) =>
       assert.rejects(promise, (err: unknown) => err instanceof HelmError && err.code === 'validation_error')
@@ -832,7 +826,7 @@ describe('Ask CAS 与结算诚实性', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('重启遗留 pending：诊断通知提及 secret 引用失效', async () => {
+  it('重启遗留 pending：诊断通知提及 secret 引用失效', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,

@@ -106,7 +106,7 @@ async function waitFor(cond: () => boolean, ms = 2000): Promise<void> {
 // ---------------------------------------------------------------------------
 
 describe('EventHub.response SSE 协议', { timeout: 60_000 }, () => {
-  it('首帧 event:snapshot 携带 HelmSnapshot，增量帧 event:<type> 携带 {seq,event}', async () => {
+  it('首帧 event:snapshot 携带 HelmSnapshot，增量帧 event:<type> 携带 {seq,event}', { timeout: 60_000 }, async () => {
     const { hub, snapshotValue } = makeFixture()
     snapshotValue.conversations = [summary(1, '个人助理')]
     const controller = new AbortController()
@@ -142,7 +142,7 @@ describe('EventHub.response SSE 协议', { timeout: 60_000 }, () => {
     })
   })
 
-  it('Request.signal abort 退订并关流；重连凭新 snapshot 对齐', async () => {
+  it('Request.signal abort 退订并关流；重连凭新 snapshot 对齐', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
@@ -156,7 +156,7 @@ describe('EventHub.response SSE 协议', { timeout: 60_000 }, () => {
     assert.equal(hub.subscriberCount, 0)
   })
 
-  it('ReadableStream.cancel 同样退订（客户端主动断开）', async () => {
+  it('ReadableStream.cancel 同样退订（客户端主动断开）', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
@@ -171,7 +171,7 @@ describe('EventHub.response SSE 协议', { timeout: 60_000 }, () => {
     assert.equal(hub.subscriberCount, 0)
   })
 
-  it('close() 清空全部订阅（kernel 关停用）', async () => {
+  it('close() 清空全部订阅（kernel 关停用）', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     const c1 = new AbortController()
     const c2 = new AbortController()
@@ -185,7 +185,7 @@ describe('EventHub.response SSE 协议', { timeout: 60_000 }, () => {
     c2.abort()
   })
 
-  it('无事件时保持流（不回退 JSON/204），增量在任意时刻到达即达', async () => {
+  it('无事件时保持流（不回退 JSON/204），增量在任意时刻到达即达', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     const controller = new AbortController()
     const response = hub.response(new Request('http://x', { signal: controller.signal }))
@@ -209,7 +209,7 @@ describe('EventHub.response SSE 协议', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('EventHub 慢消费者背压', { timeout: 60_000 }, () => {
-  it('流式阶段未读字节超限：明确关流（不丢帧不静默续传）', async () => {
+  it('流式阶段未读字节超限：明确关流（不丢帧不静默续传）', { timeout: 60_000 }, async () => {
     // 1 KiB 上限：单帧约 100+ 字节，慢读 2 帧内必触发。
     const { hub } = makeFixture({ maxPendingBytes: 1024 })
     const controller = new AbortController()
@@ -241,7 +241,7 @@ describe('EventHub 慢消费者背压', { timeout: 60_000 }, () => {
     controller.abort()
   })
 
-  it('正常消费者逐块持续读取不受背压影响', async () => {
+  it('正常消费者逐块持续读取不受背压影响', { timeout: 60_000 }, async () => {
     // 16 KiB 预算远大于单帧，但同步 burst 会瞬间堆积（读取是异步的），
     // 故逐块交替发布/等待验证正常消费者水远不被误关。
     const { hub } = makeFixture({ maxPendingBytes: 16 * 1024 })
@@ -265,7 +265,7 @@ describe('EventHub 慢消费者背压', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('EventHub 快照竞态', { timeout: 60_000 }, () => {
-  it('快照取定后、冲刷前发布的事件（seq 更大）必达且不重复', async () => {
+  it('快照取定后、冲刷前发布的事件（seq 更大）必达且不重复', { timeout: 60_000 }, async () => {
     // initialSeq 与 snapshot.seq 对齐为 5；发布后的 seq=6 事件必须出现在流中。
     const { hub, snapshotValue } = makeFixture({ initialSeq: 5 })
     snapshotValue.conversations = [summary(1, '竞态基线')]
@@ -293,7 +293,7 @@ describe('EventHub 快照竞态', { timeout: 60_000 }, () => {
     assert.equal((eventFrames[0]?.data.event as { title?: string }).title, '竞态事件')
   })
 
-  it('snapshot provider 同步重入发布：订阅缓冲阶段溢出被明确关流', async () => {
+  it('snapshot provider 同步重入发布：订阅缓冲阶段溢出被明确关流', { timeout: 60_000 }, async () => {
     // provider 首次被调用同步发布 600 个事件（>512 缓冲上限）。
     let reentrant = false
     const persisted: number[] = []
@@ -332,7 +332,7 @@ describe('EventHub 快照竞态', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('EventHub 脱敏', { timeout: 60_000 }, () => {
-  it('首帧 snapshot 递归脱敏：secret 明文（含字段名）绝不出现', async () => {
+  it('首帧 snapshot 递归脱敏：secret 明文（含字段名）绝不出现', { timeout: 60_000 }, async () => {
     const { hub, snapshotValue } = makeFixture()
     hub.redactFn = (t) => t.replaceAll('sk-secret', '[REDACTED]')
     snapshotValue.conversations = [
@@ -351,7 +351,7 @@ describe('EventHub 脱敏', { timeout: 60_000 }, () => {
     assert.ok(text.includes('[REDACTED]'))
   })
 
-  it('publish 事件先字符串递归脱敏：带引号/换行的 payload 不漏', async () => {
+  it('publish 事件先字符串递归脱敏：带引号/换行的 payload 不漏', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture()
     hub.redactFn = (t) => t.replaceAll('leak-me', '[REDACTED]')
     const controller = new AbortController()
@@ -379,7 +379,7 @@ describe('EventHub 脱敏', { timeout: 60_000 }, () => {
     assert.ok(!JSON.stringify(frame).includes('leak-me'), '事件 payload 不得漏明文')
   })
 
-  it('快照含非法 JSON 值（Date）：currentSnapshot 显式抛 HelmError 不静默转换', () => {
+  it('快照含非法 JSON 值（Date）：currentSnapshot 显式抛 HelmError 不静默转换', { timeout: 60_000 }, () => {
     const { hub, snapshotValue } = makeFixture()
     snapshotValue.conversations = [
       { ...summary(1, 'x'), createdAt: new Date(0) as unknown as number },
@@ -393,7 +393,7 @@ describe('EventHub 脱敏', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
-  it('组装失败不推进 seq（mirror seq 一致），成功后 seq 连续持久化', () => {
+  it('组装失败不推进 seq（mirror seq 一致），成功后 seq 连续持久化', { timeout: 60_000 }, () => {
     const { hub, persistedSeqs } = makeFixture()
     hub.publish('notification', { level: 'info', title: 'a' })
     assert.equal(hub.seq, 1)
@@ -406,7 +406,7 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     assert.deepEqual(persistedSeqs, [1, 2])
   })
 
-  it('payload 含循环引用：publish 显式抛错，不静默降级', () => {
+  it('payload 含循环引用：publish 显式抛错，不静默降级', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const cyclic: Record<string, unknown> = { self: null }
     cyclic['self'] = cyclic
@@ -414,7 +414,7 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     assert.equal(hub.seq, 0)
   })
 
-  it('plugin.changed 接受完整信封 {type,plugin} 与直接 summary 两种形状，不二次嵌套', () => {
+  it('plugin.changed 接受完整信封 {type,plugin} 与直接 summary 两种形状，不二次嵌套', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const plugin = {
       id: 'builtin:herdr',
@@ -442,7 +442,7 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     assert.ok(!('type' in (e2.plugin as Record<string, unknown>)), '直传也不得嵌套 type')
   })
 
-  it('core 其他类型同样接受信封/直传双形状', () => {
+  it('core 其他类型同样接受信封/直传双形状', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const conv = summary(3, '双形状')
     const frames: HelmEventFrame[] = []
@@ -463,7 +463,7 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     assert.equal(del2.conversationId, 10)
   })
 
-  it('未知 type 透传 CustomHelmEvent {type,payload}，不伪装成 notification', () => {
+  it('未知 type 透传 CustomHelmEvent {type,payload}，不伪装成 notification', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const frames: HelmEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
@@ -485,7 +485,7 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     assert.equal(core.payload, undefined, 'notification 不携带 payload 字段')
   })
 
-  it('订阅回调抛错只隔离该订阅，不影响其他订阅者', () => {
+  it('订阅回调抛错只隔离该订阅，不影响其他订阅者', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const good: HelmEventFrame[] = []
     const bad = (): void => {
@@ -504,7 +504,7 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('EventHub.sseStream 可编程消费', { timeout: 60_000 }, () => {
-  it('返回退订句柄；消费 return false 即退订；退订后 publish 不再投递', () => {
+  it('返回退订句柄；消费 return false 即退订；退订后 publish 不再投递', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const frames: SseFrame[] = []
     const sub = hub.sseStream((frame) => {
@@ -521,7 +521,7 @@ describe('EventHub.sseStream 可编程消费', { timeout: 60_000 }, () => {
     assert.equal(hub.subscriberCount, 0)
   })
 
-  it('消费者抛错：退订清理且异常不逃逸到 publish', () => {
+  it('消费者抛错：退订清理且异常不逃逸到 publish', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const other: HelmEventFrame[] = []
     hub.subscribe((f) => other.push(f))
@@ -533,7 +533,7 @@ describe('EventHub.sseStream 可编程消费', { timeout: 60_000 }, () => {
     assert.equal(other.length, 1)
   })
 
-  it('sseStream 内快照后冲刷缓冲帧（无丢帧、seq 严格大于快照）', async () => {
+  it('sseStream 内快照后冲刷缓冲帧（无丢帧、seq 严格大于快照）', { timeout: 60_000 }, async () => {
     const { hub } = makeFixture({ initialSeq: 2 })
     const frames: SseFrame[] = []
     // 订阅回调中发布（快照刚取定、冲刷前的经典竞态）。
