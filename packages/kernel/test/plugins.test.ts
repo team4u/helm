@@ -1215,10 +1215,140 @@ test('disable 遇 stop 失败：状态落位已停用（不虚假 enabled=true�
 });
 
 // ---------------------------------------------------------------------------
+// 回归：stop 失败但状态已实际转换时，仍必须发布真实 plugin.changed 事件
+// （enabled:false / ui:[]），与「无状态变化的拒绝」严格区分
+// ---------------------------------------------------------------------------
+
+/** 当前全部 plugin.changed 载荷。 */
+function changedPayloads(): Array<{ plugin: { id: string; enabled: boolean }; ui: unknown[] }> {
+  return eventPayloads
+    .filter((e) => e.type === 'plugin.changed')
+    .map((e) => e.payload as { plugin: { id: string; enabled: boolean }; ui: unknown[] });
+}
+
+/** 声明带 UI / 动作 / 工具 / 服务 / 宿主资源的完整插件（stop 行为可注入）。 */
+function fullPlugin(id: string, stop: () => void): PluginDefinition {
+  return {
+    id,
+    definePlugin: (ctx) => {
+      ctx.ui.screen({ id: 'scr', label: '屏' });
+      ctx.ui.sidebarItem({ id: 'nav', label: '导航' });
+      ctx.action({
+        id: 'act',
+        description: '动作',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        exposeAsTool: true,
+        handler: () => ({ ok: true }),
+      });
+      ctx.tool({
+        name: 'direct_tool',
+        description: '工具',
+        inputSchema: { type: 'object' },
+        execute: () => 'ok',
+      });
+      ctx.service({ id: 'svc', start: () => {}, stop });
+      void ctx.host.manageConversation(7);
+    },
+  };
+}
+
+test('disable stop 失败：已落位停用，仍发一次 plugin.changed(enabled:false, ui:[])，原错误上抛，能力全部失效且托管释放', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  await host.register(fullPlugin('p:dfail', () => { throw new Error('svc 炸了'); }));
+  assert.equal(host.listUi().length, 2);
+  assert.equal(host.listTools().length, 2);
+  assert.ok(events.includes('manage:p:dfail:7'));
+
+  const changedBefore = changedPayloads().length;
+  await rejectsCode(host.disable('p:dfail'), 'plugin_service_stop_failed');
+
+  // plugin.changed 恰好一次、enabled:false、ui:[]（不靠重连 snapshot 才移除 UI）
+  const changed = changedPayloads();
+  assert.equal(changed.length, changedBefore + 1);
+  assert.equal(changed.at(-1)!.plugin.id, 'p:dfail');
+  assert.equal(changed.at(-1)!.plugin.enabled, false);
+  assert.deepEqual(changed.at(-1)!.ui, []);
+
+  // 实际状态：list/listUi/listTools/动作/工具全部失效
+  assert.deepEqual(host.listUi(), []);
+  assert.deepEqual(host.listTools(), []);
+  const summary = host.list().find((p) => p.id === 'p:dfail')!;
+  assert.equal(summary.enabled, false);
+  assert.deepEqual(summary.actions, []);
+  assert.deepEqual(summary.tools, []);
+  assert.deepEqual(summary.hooks, []);
+  await rejectsCode(host.invokeAction('p:dfail', 'act', {}), 'plugin_disabled');
+  await rejectsCode(host.executeTool('direct_tool', {}, { conversationId: 1 }), 'unknown_tool');
+
+  // 宿主托管资源在 stop 失败路径同样被释放
+  assert.ok(events.includes('release:p:dfail:7'));
+
+  // 再走 unregister（已停用路径）：照发真实移除事件（enabled:false / ui:[]）
+  const beforeUnregister = changedPayloads().length;
+  await host.unregister('p:dfail');
+  assert.equal(changedPayloads().length, beforeUnregister + 1);
+  const removed = changedPayloads().at(-1)!;
+  assert.equal(removed.plugin.id, 'p:dfail');
+  assert.equal(removed.plugin.enabled, false);
+  assert.deepEqual(removed.ui, []);
+  assert.equal(host.list().find((p) => p.id === 'p:dfail'), undefined);
+});
+
+test('unregister stop 失败：插件已移除仍发一次 plugin.changed(enabled:false, ui:[])，原错误上抛', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  await host.register(fullPlugin('p:ufail', () => { throw new Error('svc 崩了'); }));
+  assert.equal(host.listUi().length, 2);
+
+  const changedBefore = changedPayloads().length;
+  await rejectsCode(host.unregister('p:ufail'), 'plugin_service_stop_failed');
+
+  const changed = changedPayloads();
+  assert.equal(changed.length, changedBefore + 1);
+  assert.equal(changed.at(-1)!.plugin.id, 'p:ufail');
+  assert.equal(changed.at(-1)!.plugin.enabled, false);
+  assert.deepEqual(changed.at(-1)!.ui, []);
+
+  // 注册表已实际移除
+  assert.equal(host.list().find((p) => p.id === 'p:ufail'), undefined);
+  assert.deepEqual(host.listUi(), []);
+  assert.deepEqual(host.listTools(), []);
+  assert.ok(events.includes('release:p:ufail:7'));
+});
+
+test('stop 与事件发布同时失败：保留 stop 诊断（聚合 eventError），不掩盖原始错误', { timeout: 60_000 }, async () => {
+  const stopErr = new Error('stop 诊断');
+  // 让宿主 emitEvent 在 plugin.changed 时抛错（双失败）；其余事件正常入账
+  const backend = makeHostApi(events);
+  const originalEmit = backend.emitEvent;
+  let emitBroken = false;
+  backend.emitEvent = (type, payload) => {
+    if (emitBroken && type === 'plugin.changed') throw new Error('事件管道崩');
+    originalEmit.call(backend, type, payload);
+  };
+  const host = new PluginHost({ dataDir, host: backend, docs });
+  await host.register(fullPlugin('p:double', () => { throw stopErr; }));
+  emitBroken = true;
+
+  // teardown 聚合为 HelmError(plugin_service_stop_failed)，双重失败仍以它为主错误
+  await assert.rejects(host.disable('p:double'), (err: unknown) => {
+    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`);
+    assert.equal(err.code, 'plugin_service_stop_failed');
+    const details = err.details as { stopErrors?: Array<{ error: unknown }>; eventError?: unknown };
+    assert.ok(details.stopErrors?.some((e) => e.error === stopErr), 'stop 诊断保留在 details.stopErrors');
+    assert.ok(details.eventError instanceof Error, '事件发布错误聚合在 details.eventError');
+    assert.equal((details.eventError as Error).message, '事件管道崩');
+    return true;
+  });
+  // 实际状态仍落位：已停用（事件失败不回滚状态，也不伪报成功）
+  assert.equal(host.list().find((p) => p.id === 'p:double')!.enabled, false);
+});
+
+// ---------------------------------------------------------------------------
 // 回归：plugin.changed 事件与失败不伪报
 // ---------------------------------------------------------------------------
 
-test('register/enable/disable/unregister 成功后发 plugin.changed 事件；失败不发', { timeout: 60_000 }, async () => {
+test('register/enable/disable/unregister 成功后发 plugin.changed 事件；无状态变化的拒绝不发', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const changed = () => events.filter((e) => e === 'event:plugin.changed').length;
   await host.register({ id: 'p:ev', definePlugin: () => {} });
@@ -1230,13 +1360,15 @@ test('register/enable/disable/unregister 成功后发 plugin.changed 事件；�
   await host.unregister('p:ev');
   assert.equal(changed(), 4);
 
-  // 失败路径不伪报成功：locked 拒绝、在途任务拒绝都不发事件
+  // 拒绝但无状态变化（locked / 在途任务 / 不存在）不发伪变更事件
   const h2 = makeHost();
   await h2.register({ id: 'p:locked', locked: true, definePlugin: () => {} });
   const before = events.length;
   await rejectsCode(h2.disable('p:locked'), 'plugin_locked');
   await rejectsCode(h2.unregister('p:locked'), 'plugin_locked');
-  assert.equal(events.length, before); // 失败未新增事件
+  await rejectsCode(h2.disable('p:none'), 'unknown_plugin');
+  await rejectsCode(h2.unregister('p:none'), 'unknown_plugin');
+  assert.equal(events.length, before); // 拒绝未新增事件
 });
 
 test('plugin.changed 携带 ui 贡献：启用含全部声明，停用/卸载为空数组', { timeout: 60_000 }, async () => {

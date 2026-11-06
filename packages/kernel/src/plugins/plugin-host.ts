@@ -389,24 +389,24 @@ export class PluginHost {
         await this.teardownPlugin(state, { stopServices: false });
         this.plugins.delete(pluginId);
         this.tracker.removePlugin(pluginId);
+        // 已停用插件的卸载同样是真实注册表移除：照发一次 ui:[] 事件，
+        // 客户端凭它清掉残留条目，不依赖重连 snapshot
+        this.emitPluginChanged(state);
         return;
       }
       this.assertNoLiveTasks(pluginId);
       state.phase = 'deactivating';
-      let settleError: unknown;
+      let stopError: { err: unknown } | undefined;
       try {
         await this.teardownPlugin(state, { stopServices: true });
       } catch (err) {
-        settleError = err;
+        stopError = { err };
       }
       state.enabled = false;
       this.plugins.delete(pluginId);
       this.tracker.removePlugin(pluginId);
-      if (settleError) {
-        // 状态已一致（插件移除），但 stop 失败必须如实上抛
-        throw settleError;
-      }
-      this.emitPluginChanged(state);
+      // 状态已一致（插件已移除）；无论 stop 成败都发布实际移除事件，再如实上抛
+      this.settlePluginChanged(state, stopError);
     });
   }
 
@@ -464,19 +464,20 @@ export class PluginHost {
       // 先置 deactivating 再进入 await：新 invokeAction/executeTool/runHook
       // 与旧 doc 写入在 stop 期间即被隔离
       state.phase = 'deactivating';
-      let settleError: unknown;
+      let stopError: { err: unknown } | undefined;
       try {
         await this.teardownPlugin(state, { stopServices: true });
       } catch (err) {
-        settleError = err;
+        stopError = { err };
       }
       // stop 失败也不允许维持「enabled=true 但注册已清空」的虚假状态：
       // 统一落位为已停用（epoch 递增废黜旧句柄），错误如实上抛
       state.enabled = false;
       state.epoch += 1;
       state.phase = 'idle';
-      if (settleError) throw settleError;
-      this.emitPluginChanged(state);
+      // 已实际停用即发布真实状态事件（enabled:false / ui:[]），与 stop 成败无关；
+      // 双重失败语义见 settlePluginChanged
+      this.settlePluginChanged(state, stopError);
     });
   }
 
@@ -1387,7 +1388,8 @@ export class PluginHost {
     this.options.host.emitEvent('plugin.doc.updated', { type: 'plugin.doc.updated', doc });
   }
 
-  /** 生命周期操作最终成功后向宿主发 plugin.changed 事件（失败不伪报成功）。
+  /** 插件实际状态转换完成后向宿主发 plugin.changed 事件（转换失败但状态已落位时同样
+   * 发布真实状态，绝不伪报成功——见 settlePluginChanged）。
    * payload 携带该插件当前全部 UI 贡献（停用/卸载后为空数组）——前端凭单帧
    * 即可言时增删该插件的 UI，不依赖重连/轮询。 */
   private emitPluginChanged(state: PluginState): void {
@@ -1396,6 +1398,41 @@ export class PluginHost {
       plugin: this.summaryOf(state),
       ui: this.listUi().filter((u) => u.pluginId === state.definition.id),
     });
+  }
+
+  /**
+   * 生命周期操作的实际状态转换（disable 落位已停用 / unregister 移除）完成后收尾：
+   * 无论 stop 是否失败都发布一次 plugin.changed（enabled:false / ui:[]），再如实
+   * 上抛 stop 错误——状态已真实变化，客户端必须凭这一帧同步，不能只在成功路径发。
+   * stop 已失败且事件发布再失败时，按 register 回滚的既有聚合方式把事件错误并入
+   * stop 错误 details，绝不让事件异常掩盖 stop 诊断。
+   */
+  private settlePluginChanged(state: PluginState, stopError: { err: unknown } | undefined): void {
+    if (!stopError) {
+      this.emitPluginChanged(state);
+      return;
+    }
+    let eventError: unknown;
+    let eventFailed = false;
+    try {
+      this.emitPluginChanged(state);
+    } catch (err) {
+      eventError = err;
+      eventFailed = true;
+    }
+    if (!eventFailed) throw stopError.err;
+    if (stopError.err instanceof HelmError) {
+      throw new HelmError(stopError.err.code, stopError.err.message, stopError.err.status, {
+        ...((stopError.err.details as Record<string, unknown>) ?? {}),
+        eventError,
+      });
+    }
+    throw new HelmError(
+      'plugin_changed_emit_failed',
+      `插件 ${state.definition.id} 已完成实际停用/移除，但服务 stop 与 plugin.changed 事件发布双双失败`,
+      500,
+      { pluginId: state.definition.id, stopError: stopError.err, eventError },
+    );
   }
 
   private toManifest(entry: ActionEntry): ActionManifest {
