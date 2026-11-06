@@ -291,6 +291,30 @@ function idempotentRelease(release: () => void): () => void {
   };
 }
 
+/**
+ * 错误诊断的 JSON-safe 归一形态：出站错误信封（HTTP errorToResponse →
+ * redactJsonValue）严格拒绝 Error/类实例，原始异常必须在产生处规范化，
+ * 不允许留到序列化边界才炸（那会让 stop 失败根本无法返回错误信封）。
+ * 保留 name/message 与 HelmError code/status（不吞诊断）；stack 含绝对路径
+ * 与内部帧，一律丢弃（与 errorToResponse 对非 HelmError 不回堆栈的边界一致）。
+ */
+interface JsonSafeErrorInfo {
+  name: string;
+  message: string;
+  code?: string;
+  status?: number;
+}
+
+function toJsonSafeError(err: unknown): JsonSafeErrorInfo {
+  if (err instanceof HelmError) {
+    return { name: err.name, message: err.message, code: err.code, status: err.status };
+  }
+  if (err instanceof Error) {
+    return { name: err.name, message: err.message };
+  }
+  return { name: 'NonError', message: String(err) };
+}
+
 export class PluginHost {
   private plugins = new Map<string, PluginState>();
   private pipelines = new Map<HookName, HookPipeline<HookName>>();
@@ -352,12 +376,12 @@ export class PluginHost {
         state.phase = 'idle';
       } catch (err) {
         // rollback：清除本插件一切注册痕迹（含宿主生命周期资源释放）；rollback
-        // 失败不掩盖原始错误，聚合进 details
-        let rollbackError: unknown;
+        // 失败不掩盖原始错误，聚合进 details（双方均已 JSON-safe 归一）
+        let rollbackError: JsonSafeErrorInfo | undefined;
         try {
           await this.teardownPlugin(state, { stopServices: state.enabled });
         } catch (rollbackErr) {
-          rollbackError = rollbackErr;
+          rollbackError = toJsonSafeError(rollbackErr);
         }
         this.plugins.delete(definition.id);
         this.tracker.removePlugin(definition.id);
@@ -428,11 +452,11 @@ export class PluginHost {
         await this.startServices(state);
         state.phase = 'idle';
       } catch (err) {
-        let rollbackError: unknown;
+        let rollbackError: JsonSafeErrorInfo | undefined;
         try {
           await this.teardownPlugin(state, { stopServices: true });
         } catch (rollbackErr) {
-          rollbackError = rollbackErr;
+          rollbackError = toJsonSafeError(rollbackErr);
         }
         state.enabled = false;
         state.phase = 'idle';
@@ -518,15 +542,15 @@ export class PluginHost {
    * 能力注册表。stop / 释放失败聚合显式抛出，绝不静默吞掉。
    */
   private async teardownPlugin(state: PluginState, opts: { stopServices: boolean }): Promise<void> {
-    const stopErrors: Array<{ serviceId: string; error: unknown }> = [];
+    const stopErrors: Array<{ serviceId: string; error: JsonSafeErrorInfo }> = [];
     if (opts.stopServices) {
       for (const svc of [...state.services].reverse()) {
         if (!svc.started) continue;
         try {
           await svc.stop();
         } catch (err) {
-          // 不中断其余清理，但绝不静默吞掉：聚合后显式抛出
-          stopErrors.push({ serviceId: svc.id, error: err });
+          // 不中断其余清理，但绝不静默吞掉：聚合后显式抛出（JSON-safe 形态）
+          stopErrors.push({ serviceId: svc.id, error: toJsonSafeError(err) });
         } finally {
           svc.started = false;
         }
@@ -534,13 +558,13 @@ export class PluginHost {
     }
     // 释放本周期获取的宿主生命周期资源（会话管理保护/工作流监听/ask 解析器）。
     // 句柄已幂等化：插件提前释放过的再调一次是空操作。
-    const releaseErrors: Array<{ error: unknown }> = [];
+    const releaseErrors: Array<{ error: JsonSafeErrorInfo }> = [];
     for (const release of [...state.hostReleases]) {
       state.hostReleases.delete(release);
       try {
         release();
       } catch (err) {
-        releaseErrors.push({ error: err });
+        releaseErrors.push({ error: toJsonSafeError(err) });
       }
     }
     this.clearRegistrations(state);
@@ -572,12 +596,12 @@ export class PluginHost {
         started.push(svc);
       }
     } catch (err) {
-      const stopErrors: Array<{ serviceId: string; error: unknown }> = [];
+      const stopErrors: Array<{ serviceId: string; error: JsonSafeErrorInfo }> = [];
       for (const svc of started.reverse()) {
         try {
           await svc.stop();
         } catch (stopErr) {
-          stopErrors.push({ serviceId: svc.id, error: stopErr });
+          stopErrors.push({ serviceId: svc.id, error: toJsonSafeError(stopErr) });
         } finally {
           svc.started = false;
         }
@@ -940,14 +964,14 @@ export class PluginHost {
     await Promise.allSettled([...this.lifecycle.values()]);
     this.lifecycle.clear();
     // 逆向停用全部插件（最近注册先停）；单个清理失败不阻止其余，聚合显式抛出
-    const errors: Array<{ pluginId: string; error: unknown }> = [];
+    const errors: Array<{ pluginId: string; error: JsonSafeErrorInfo }> = [];
     for (const state of [...this.plugins.values()].reverse()) {
       state.phase = 'deactivating';
       try {
         await this.teardownPlugin(state, { stopServices: true });
         state.enabled = false;
       } catch (err) {
-        errors.push({ pluginId: state.definition.id, error: err });
+        errors.push({ pluginId: state.definition.id, error: toJsonSafeError(err) });
       } finally {
         state.phase = 'idle';
         this.tracker.removePlugin(state.definition.id);
@@ -1412,15 +1436,15 @@ export class PluginHost {
       this.emitPluginChanged(state);
       return;
     }
-    let eventError: unknown;
-    let eventFailed = false;
+    let eventError: JsonSafeErrorInfo | undefined;
     try {
       this.emitPluginChanged(state);
     } catch (err) {
-      eventError = err;
-      eventFailed = true;
+      eventError = toJsonSafeError(err);
     }
-    if (!eventFailed) throw stopError.err;
+    if (!eventError) throw stopError.err;
+    // 双重失败：stop 诊断为主，事件错误归一后聚合（原 stop 错误已在 details，
+    // 可序列化）；非 HelmError 的 stop 也包成显式 500，绝不静默变成功
     if (stopError.err instanceof HelmError) {
       throw new HelmError(stopError.err.code, stopError.err.message, stopError.err.status, {
         ...((stopError.err.details as Record<string, unknown>) ?? {}),
@@ -1431,7 +1455,7 @@ export class PluginHost {
       'plugin_changed_emit_failed',
       `插件 ${state.definition.id} 已完成实际停用/移除，但服务 stop 与 plugin.changed 事件发布双双失败`,
       500,
-      { pluginId: state.definition.id, stopError: stopError.err, eventError },
+      { pluginId: state.definition.id, stopError: toJsonSafeError(stopError.err), eventError },
     );
   }
 

@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SecretStash, AuthService } from '../src/services/index.js';
+import { createHubHandler, type KernelRuntimeLike, type WorkflowServiceLike } from '../src/http/index.js';
 import {
   HelmError,
   type ConversationSummary,
@@ -1261,7 +1263,22 @@ test('disable stop 失败：已落位停用，仍发一次 plugin.changed(enable
   assert.ok(events.includes('manage:p:dfail:7'));
 
   const changedBefore = changedPayloads().length;
-  await rejectsCode(host.disable('p:dfail'), 'plugin_service_stop_failed');
+  let disableDiag: HelmError | undefined;
+  await assert.rejects(host.disable('p:dfail'), (err: unknown) => {
+    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`);
+    assert.equal(err.code, 'plugin_service_stop_failed');
+    // 诊断 JSON-safe：服务 ID 与原始 stop message 均保留且可序列化（HTTP 错误信封红线）
+    const details = err.details as { pluginId: string; stopErrors: Array<{ serviceId: string; error: { message: string } }> };
+    assert.equal(details.pluginId, 'p:dfail');
+    assert.deepEqual(
+      details.stopErrors.map((e) => [e.serviceId, e.error.message]),
+      [['svc', 'svc 炸了']],
+    );
+    assert.doesNotThrow(() => JSON.stringify(err.details));
+    disableDiag = err;
+    return true;
+  });
+  assert.ok(disableDiag instanceof HelmError);
 
   // plugin.changed 恰好一次、enabled:false、ui:[]（不靠重连 snapshot 才移除 UI）
   const changed = changedPayloads();
@@ -1301,7 +1318,16 @@ test('unregister stop 失败：插件已移除仍发一次 plugin.changed(enable
   assert.equal(host.listUi().length, 2);
 
   const changedBefore = changedPayloads().length;
-  await rejectsCode(host.unregister('p:ufail'), 'plugin_service_stop_failed');
+  await assert.rejects(host.unregister('p:ufail'), (err: unknown) => {
+    assert.ok(err instanceof HelmError && err.code === 'plugin_service_stop_failed');
+    const details = err.details as { stopErrors: Array<{ serviceId: string; error: { message: string } }> };
+    assert.deepEqual(
+      details.stopErrors.map((e) => [e.serviceId, e.error.message]),
+      [['svc', 'svc 崩了']],
+    );
+    assert.doesNotThrow(() => JSON.stringify(err.details));
+    return true;
+  });
 
   const changed = changedPayloads();
   assert.equal(changed.length, changedBefore + 1);
@@ -1330,18 +1356,149 @@ test('stop 与事件发布同时失败：保留 stop 诊断（聚合 eventError�
   await host.register(fullPlugin('p:double', () => { throw stopErr; }));
   emitBroken = true;
 
-  // teardown 聚合为 HelmError(plugin_service_stop_failed)，双重失败仍以它为主错误
+  // teardown 聚合为 HelmError(plugin_service_stop_failed)，双重失败仍以它为主错误；
+  // 诊断已 JSON-safe 归一（Error 不可序列化）：按语义校验原 message/name，不要求引用相等
   await assert.rejects(host.disable('p:double'), (err: unknown) => {
     assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`);
     assert.equal(err.code, 'plugin_service_stop_failed');
-    const details = err.details as { stopErrors?: Array<{ error: unknown }>; eventError?: unknown };
-    assert.ok(details.stopErrors?.some((e) => e.error === stopErr), 'stop 诊断保留在 details.stopErrors');
-    assert.ok(details.eventError instanceof Error, '事件发布错误聚合在 details.eventError');
-    assert.equal((details.eventError as Error).message, '事件管道崩');
+    const details = err.details as {
+      stopErrors?: Array<{ serviceId: string; error: { name: string; message: string } }>;
+      eventError?: { name: string; message: string };
+    };
+    const stopDiag = details.stopErrors?.find((e) => e.serviceId === 'svc')?.error;
+    assert.equal(stopDiag?.message, 'stop 诊断', 'stop 诊断保留在 details.stopErrors（原 message）');
+    assert.equal(stopDiag?.name, 'Error');
+    assert.equal(details.eventError?.message, '事件管道崩', '事件发布错误聚合在 details.eventError（原 message）');
+    assert.equal(details.eventError?.name, 'Error');
+    // 整个 details 必须可序列化（HTTP 错误信封出站红线）
+    assert.doesNotThrow(() => JSON.stringify(details));
     return true;
   });
   // 实际状态仍落位：已停用（事件失败不回滚状态，也不伪报成功）
   assert.equal(host.list().find((p) => p.id === 'p:double')!.enabled, false);
+});
+
+test('真实 HTTP 桥：stop 失败的 disable 错误信封可序列化可脱敏（500 plugin_service_stop_failed），UI 事件仍到达', { timeout: 60_000 }, async () => {
+  // 真实 AuthService + SecretStash + createHubHandler：验证错误信封真正出得去
+  // （redactJsonValue 严格拒绝 Error——若诊断未在产生处归一，这里会变 500 invalid_json_value）
+  const auth = new AuthService(dataDir);
+  const stash = new SecretStash();
+  const secretValue = 'sk-stopfail-supersecret';
+  stash.addRedaction(secretValue);
+  const httpHost = new PluginHost({ dataDir, host: makeHostApi(events), docs });
+  await httpHost.register(fullPlugin('p:http', () => { throw new Error(`stop 失败含秘密 ${secretValue}`); }));
+
+  const kernel = {
+    dataDir,
+    auth,
+    events: { response: () => new Response(null, { status: 500 }) },
+    plugins: httpHost,
+    stash,
+  } as unknown as KernelRuntimeLike;
+  const workflows = {
+    list: () => [],
+    listRuns: () => [],
+    run: async () => ({}),
+    getRun: async () => undefined,
+    wait: async () => ({}),
+    abort: () => {},
+  } as unknown as WorkflowServiceLike;
+  const handler = createHubHandler(kernel, workflows);
+
+  const setup = await handler(new Request('http://127.0.0.1:3202/api/auth/setup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: 'pw-stopfail-test' }),
+  }));
+  assert.equal(setup.status, 200);
+  const token = ((await setup.json()) as { token: string }).token;
+  const authed = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+
+  const changedBefore = changedPayloads().length;
+  // POST /api/plugins/:id/disable：500 plugin_service_stop_failed，信封真实序列化成功
+  const res = await handler(new Request('http://127.0.0.1:3202/api/plugins/p:http/disable', { method: 'POST', headers: authed }));
+  assert.equal(res.status, 500);
+  assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8');
+  const body = (await res.json()) as {
+    error: {
+      code: string;
+      message: string;
+      details: { pluginId: string; stopErrors: Array<{ serviceId: string; error: { name: string; message: string } }> };
+    };
+  };
+  assert.equal(body.error.code, 'plugin_service_stop_failed');
+  assert.equal(body.error.details.pluginId, 'p:http');
+  assert.deepEqual(
+    body.error.details.stopErrors.map((e) => [e.serviceId, e.error.name, e.error.message]),
+    [['svc', 'Error', 'stop 失败含秘密 [REDACTED]']],
+    '服务 ID 与原 stop message 保留，秘密逐值脱敏',
+  );
+
+  // 状态已停用且 plugin.changed 事件在错误前已到达（enabled:false / ui:[]）
+  assert.equal(httpHost.list().find((p) => p.id === 'p:http')!.enabled, false);
+  assert.equal(changedPayloads().length, changedBefore + 1);
+  assert.deepEqual(changedPayloads().at(-1)!.ui, []);
+});
+
+test('真实 HTTP 桥：双失败（stop + 事件发布）信封同样可序列化且保留双诊断', { timeout: 60_000 }, async () => {
+  const auth = new AuthService(dataDir);
+  const backend = makeHostApi(events);
+  // 事件管道崩：emitEvent 在 plugin.changed 时抛错，与 stop 失败叠加
+  const originalEmit = backend.emitEvent;
+  let emitBroken = false;
+  backend.emitEvent = (type, payload) => {
+    if (emitBroken && type === 'plugin.changed') throw new Error('事件管道崩');
+    originalEmit.call(backend, type, payload);
+  };
+  const httpHost = new PluginHost({ dataDir, host: backend, docs });
+  await httpHost.register(fullPlugin('p:dbl', () => { throw new Error('stop 双失败诊断'); }));
+  emitBroken = true;
+
+  const kernel = {
+    dataDir,
+    auth,
+    events: { response: () => new Response(null, { status: 500 }) },
+    plugins: httpHost,
+  } as unknown as KernelRuntimeLike;
+  const workflows = {
+    list: () => [],
+    listRuns: () => [],
+    run: async () => ({}),
+    getRun: async () => undefined,
+    wait: async () => ({}),
+    abort: () => {},
+  } as unknown as WorkflowServiceLike;
+  const handler = createHubHandler(kernel, workflows);
+  const setup = await handler(new Request('http://127.0.0.1:3202/api/auth/setup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: 'pw-dbl-test' }),
+  }));
+  const token = ((await setup.json()) as { token: string }).token;
+
+  const res = await handler(new Request('http://127.0.0.1:3202/api/plugins/p:dbl/disable', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+  }));
+  assert.equal(res.status, 500);
+  const body = (await res.json()) as {
+    error: {
+      code: string;
+      details: {
+        stopErrors: Array<{ serviceId: string; error: { message: string } }>;
+        eventError: { name: string; message: string };
+      };
+    };
+  };
+  // 主错误仍是 stop 失败（不掩盖），双诊断均可序列化并保留原 message
+  assert.equal(body.error.code, 'plugin_service_stop_failed');
+  assert.deepEqual(
+    body.error.details.stopErrors.map((e) => [e.serviceId, e.error.message]),
+    [['svc', 'stop 双失败诊断']],
+  );
+  assert.deepEqual(body.error.details.eventError, { name: 'Error', message: '事件管道崩' });
+  // 状态仍落位已停用
+  assert.equal(httpHost.list().find((p) => p.id === 'p:dbl')!.enabled, false);
 });
 
 // ---------------------------------------------------------------------------
