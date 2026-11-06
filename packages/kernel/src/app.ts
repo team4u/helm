@@ -1,6 +1,7 @@
 import { KernelRuntime } from './runtime/index.js';
 import { WorkflowService } from './workflow/index.js';
 import { createAssistantPlugin } from './builtin-plugins/assistant.js';
+import { redactJsonValue } from './redact.js';
 
 export type HelmOptions = Parameters<typeof KernelRuntime.open>[0];
 
@@ -10,12 +11,12 @@ export async function createHelm(options: HelmOptions = {}) {
     await kernel.plugins.register(createAssistantPlugin(kernel));
     const workflows = new WorkflowService({
       dataDir: kernel.dataDir,
+      state: kernel.documentStore,
       host: {
         spawnAgent: (request) => kernel.spawnAgent(request),
         async invokeAction(pluginId, actionId, input, context) {
           const result = await kernel.plugins.invokeAction(pluginId, actionId, input, context);
-          const json = JSON.stringify(result);
-          return json === undefined ? undefined : JSON.parse(kernel.stash.redact(json));
+          return redactJsonValue(result, (text) => kernel.stash.redact(text));
         },
         listActions: () => kernel.plugins.listActions(),
         getConversation: (id) => kernel.getConversation(id),
