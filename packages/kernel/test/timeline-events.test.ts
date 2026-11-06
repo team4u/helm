@@ -127,8 +127,8 @@ describe('toConversationEntry', { timeout: 60_000 }, () => {
   })
 
   it('非法 id/kind 显式抛错（不伪造）', () => {
-    assert.throws(() => toConversationEntry({ id: null, kind: 'x' }), HelmError)
-    assert.throws(() => toConversationEntry({ id: 1, kind: 3 }), HelmError)
+    assert.throws(() => toConversationEntry({ id: null, kind: 'x' } as never), HelmError)
+    assert.throws(() => toConversationEntry({ id: 1, kind: 3 } as never), HelmError)
   })
 })
 
@@ -245,6 +245,7 @@ describe('EventHub 新 core 事件类型', { timeout: 60_000 }, () => {
       conversationId: number
       entry: ConversationEntry
     }>
+    assert.ok(e1 && e2)
     assert.equal(e1.type, 'conversation.entry')
     assert.equal(e1.conversationId, 3)
     assert.deepEqual(e1.entry, entry)
@@ -257,6 +258,7 @@ describe('EventHub 新 core 事件类型', { timeout: 60_000 }, () => {
     hub.publish('conversation.live', { live })
     hub.publish('conversation.live', { type: 'conversation.live', live })
     const [e1, e2] = frames.map((f) => f.event) as Array<{ live: ConversationLive }>
+    assert.ok(e1 && e2)
     assert.deepEqual(e1.live, live)
     assert.deepEqual(e2.live, live)
   })
@@ -266,6 +268,7 @@ describe('EventHub 新 core 事件类型', { timeout: 60_000 }, () => {
     hub.publish('plugin.doc.updated', { doc })
     hub.publish('plugin.doc.updated', { type: 'plugin.doc.updated', doc })
     const [e1, e2] = frames.map((f) => f.event) as Array<{ doc: typeof doc }>
+    assert.ok(e1 && e2)
     assert.deepEqual(e1.doc, doc)
     assert.deepEqual(e2.doc, doc)
   })
@@ -275,6 +278,7 @@ describe('EventHub 新 core 事件类型', { timeout: 60_000 }, () => {
     hub.publish('workflow.updated', { run })
     hub.publish('workflow.updated', { type: 'workflow.updated', run })
     const [e1, e2] = frames.map((f) => f.event) as Array<{ run: typeof run }>
+    assert.ok(e1 && e2)
     assert.deepEqual(e1.run, run)
     assert.deepEqual(e2.run, run)
   })

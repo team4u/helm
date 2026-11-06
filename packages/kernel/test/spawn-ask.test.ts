@@ -396,7 +396,7 @@ describe('spawn resume：绝不新建假续接', { timeout: 60_000 }, () => {
         onResolved: (info) => {
           createdId = info.conversationId
         },
-      } as never)
+      })
       assert.equal(first, '第一段')
       const resumeResolved: Array<number | undefined> = []
       const second = await runNativeSpawn(th.deps, {
@@ -406,7 +406,7 @@ describe('spawn resume：绝不新建假续接', { timeout: 60_000 }, () => {
         onResolved: (info) => {
           resumeResolved.push(info.conversationId)
         },
-      } as never)
+      })
       assert.equal(second, '续接结果')
       assert.equal(resumeResolved.length, 1)
       assert.equal(resumeResolved[0], createdId, 'resume onResolved 上报原 convId')

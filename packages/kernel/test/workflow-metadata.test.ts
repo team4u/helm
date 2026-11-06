@@ -431,9 +431,7 @@ describe('WorkflowService listRuns and settlement', () => {
     const state = makeStateStore()
     const settled: string[] = []
     let failNext = false
-    const host: WorkflowServiceHost & {
-      onRunSettled?: (summary: WorkflowRunSummary) => Promise<void>
-    } = makeExternalSpawnHost()
+    const host: WorkflowServiceHost = makeExternalSpawnHost()
     host.onRunSettled = async (summary) => {
       if (failNext) throw new Error('cleanup blew up')
       settled.push(summary.id)
