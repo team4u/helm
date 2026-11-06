@@ -7,6 +7,7 @@ export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>
 
 export async function createHelm(options: HelmOptions = {}) {
   const kernel = await KernelRuntime.open({ ...options, autoResume: false });
+  let closeWorkflows: (() => Promise<void>) | undefined;
   try {
     await kernel.plugins.register(createAssistantPlugin(kernel));
     const workflows = new WorkflowService({
@@ -26,6 +27,7 @@ export async function createHelm(options: HelmOptions = {}) {
         emitEvent: (type, payload) => kernel.events.publish(type, payload),
       },
     });
+    closeWorkflows = () => workflows.close();
     await workflows.init();
     kernel.setWorkflowRunner(async (request, conversationId) => workflows.run({ ...request, conversationId }));
     await kernel.start();
@@ -41,7 +43,11 @@ export async function createHelm(options: HelmOptions = {}) {
       },
     };
   } catch (error) {
-    await kernel.close();
+    try {
+      await closeWorkflows?.();
+    } finally {
+      await kernel.close();
+    }
     throw error;
   }
 }
