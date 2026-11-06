@@ -327,24 +327,28 @@ test('stash: put 返回 REDACTED 占位符、envFor 注入、redact 按会话隔
   // 非法环境变量名拒绝
   assert.throws(() => stash.put(1, '1BAD NAME', 'x'), /合法环境变量名/)
 
-  // 同名覆盖：旧占位符作废
-  const ph2 = stash.put(1, 'GITHUB_TOKEN', 'new_value_222')
+  // 同名覆盖仅更换环境变量，旧值仍须脱敏。
+  const nextValue = 'replacement-example-value'
+  const ph2 = stash.put(1, 'GITHUB_TOKEN', nextValue)
   assert.notEqual(ph, ph2)
-  assert.equal(stash.redact(ph), ph, '作废占位符不得还原')
-  assert.equal(stash.redact(ph2), 'new_value_222')
-
-  // 跨会话 redact：会话 2 拿到会话 1 的占位符不还原
+  assert.equal(stash.redact(ph), ph)
+  assert.equal(stash.redact(ph2), ph2)
+  assert.equal(stash.redact(nextValue, 1), ph2)
+  assert.equal(stash.redact('ghp_secret_value_111', 1), ph)
+  stash.put(2, 'GITHUB_TOKEN', 'other-example-value')
   stash.put(2, 'OTHER_KEY', 'other_value')
-  assert.equal(stash.redact(`token=${ph2} done`, 2), `token=${ph2} done`)
-  // 本会话 redact 还原
-  assert.equal(stash.redact(`token=${ph2} done`, 1), 'token=new_value_222 done')
-  // 不指定会话：全部还原（进程内可信方）
-  assert.equal(stash.redact(`token=${ph2} done`), 'token=new_value_222 done')
+  assert.equal(stash.redact(ph2, 2), ph2)
+  assert.equal(stash.redact(nextValue, 2), nextValue)
+  assert.equal(stash.redact(`token=${nextValue} done`, 1), `token=${ph2} done`)
+  assert.equal(stash.redact(`token=${nextValue} done`), `token=${ph2} done`)
+  const special = 'example.*+?^${}()|[]\\value'
+  const specialMarker = stash.put(1, 'REGEX_VALUE', special)
+  assert.equal(stash.redact(special), specialMarker)
 
   // clear 单会话
   stash.clear(1)
   assert.deepEqual(stash.envFor(1), {})
-  assert.deepEqual(stash.envFor(2), { OTHER_KEY: 'other_value' })
+  assert.deepEqual(stash.envFor(2), { GITHUB_TOKEN: 'other-example-value', OTHER_KEY: 'other_value' })
   stash.clear()
   assert.equal(stash.stats().secrets, 0)
 })
@@ -530,12 +534,7 @@ test('artifacts: spill 32KiB 阈值、4KiB UTF-8 安全预览、秘密不落盘�
   await ensureDataDir(dataDir)
   const repository = new InMemoryArtifactRepository()
   const stash = new SecretStash()
-  // 注意方向：ArtifactService 构造注入的 stash 仅提供 redact(text) 单参形态，
-  // 占位符保持脱敏（不还原），防止秘密进入落盘文件与预览。
-  const artifacts = new ArtifactService(dataDir, repository, {
-    redact: (text: string) => text,
-  })
-  void stash
+  const artifacts = new ArtifactService(dataDir, repository, stash)
 
   // 低于阈值：原样返回、无 artifact
   const small = 'x'.repeat(1024)
@@ -578,9 +577,8 @@ test('artifacts: spill 32KiB 阈值、4KiB UTF-8 安全预览、秘密不落盘�
   assert.ok(!r4.text.includes('\uFFFD'), 'UTF-8 截断不得撕裂多字节字符')
 
   // 含 stash 占位符的文本：落盘文件保持占位（秘密绝不落盘）
-  const stash2 = new SecretStash()
-  const placeholder = stash2.put(9, 'MY_KEY', 'super-secret-value')
-  const leak = `前缀${placeholder}` + 'q'.repeat(33 * 1024)
+  const placeholder = stash.put(9, 'MY_KEY', 'super-secret-value')
+  const leak = `前缀${placeholder} super-secret-value` + 'q'.repeat(33 * 1024)
   const r5 = await artifacts.spill(9, 'call-5', leak)
   assert.ok(r5.artifact !== undefined)
   const spilled = await artifacts.readContent(r5.artifact!.id)

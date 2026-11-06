@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 export const REDACTED_PREFIX = '[REDACTED:stash:'
 
 export interface StashedSecret {
+  readonly conversationId: number
   readonly uuid: string
   readonly placeholder: string
   readonly value: string
@@ -40,7 +41,7 @@ export class SecretStash {
 
   /**
    * 存入秘密，返回 `[REDACTED:stash:<uuid>]` 占位符。
-   * 同一 (conversationId, name) 重复 put 会覆盖旧值并作废旧占位符。
+   * 同一 (conversationId, name) 重复 put 会覆盖环境变量，旧值仍保留用于脱敏。
    */
   put(conversationId: number, name: string, value: string): string {
     if (!isValidEnvName(name)) {
@@ -51,10 +52,9 @@ export class SecretStash {
       bucket = new Map()
       this.byConversation.set(conversationId, bucket)
     }
-    const existing = bucket.get(name)
-    if (existing !== undefined) this.byUuid.delete(existing.uuid)
     const uuid = randomUUID()
     const secret: StashedSecret = {
+      conversationId,
       uuid,
       placeholder: makePlaceholder(uuid),
       value,
@@ -79,29 +79,20 @@ export class SecretStash {
     return this.byConversation.get(conversationId)?.has(name) ?? false
   }
 
-  /**
-   * 将文本中的已知占位符还原为秘密值。
-   * - 指定 conversationId 时仅还原该会话的秘密（跨会话占位符保持原样，防泄漏）；
-   * - 未指定时还原任意已知占位符（仅限进程内可信调用方）。
-   */
+  /** 将已登记的秘密替换为占位符；已有占位符始终保持脱敏。 */
   redact(text: string, conversationId?: number): string {
-    return text.replace(
-      /\[REDACTED:stash:[0-9a-f-]{36}\]/g,
-      (matched) => {
-        const uuid = parsePlaceholder(matched)
-        if (uuid === null) return matched
-        const secret = this.byUuid.get(uuid)
-        if (secret === undefined) return matched
-        if (
-          conversationId !== undefined &&
-          !this.byConversation.get(conversationId)?.has(secret.name)
-        ) {
-          // 占位符属于其他会话：保持脱敏，绝不跨会话还原。
-          return matched
-        }
-        return secret.value
-      },
-    )
+    const values = new Map<string, string>()
+    for (const secret of this.byUuid.values()) {
+      if (secret.value && (conversationId === undefined || secret.conversationId === conversationId)) {
+        values.set(secret.value, secret.placeholder)
+      }
+    }
+    if (values.size === 0) return text
+    const escaped = [...values.keys()]
+      .sort((a, b) => b.length - a.length)
+      .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    const pattern = new RegExp(`\\[REDACTED:stash:[0-9a-f-]{36}\\]|${escaped.join('|')}`, 'g')
+    return text.replace(pattern, (value) => values.get(value) ?? value)
   }
 
   /** 清空指定会话的全部秘密；省略 conversationId 则清空整个 stash。 */
@@ -111,9 +102,9 @@ export class SecretStash {
       this.byUuid.clear()
       return
     }
-    const bucket = this.byConversation.get(conversationId)
-    if (bucket === undefined) return
-    for (const secret of bucket.values()) this.byUuid.delete(secret.uuid)
+    for (const [uuid, secret] of this.byUuid) {
+      if (secret.conversationId === conversationId) this.byUuid.delete(uuid)
+    }
     this.byConversation.delete(conversationId)
   }
 

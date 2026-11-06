@@ -2,9 +2,7 @@
  * ArtifactService：会话产物落盘与超长工具输出 Spill。
  * - register 将来源文件复制进 artifacts/<convId>/ 并登记元数据；
  * - spill 对 > 32KiB（UTF-8 字节）的文本写全量文件，返回 4KiB 头部预览；
- * - 所有写盘文本先经 SecretStash 还原占位符检查——注意方向：spill 落盘的是
- *   「工具原始输出」，其中若含 stash 占位符则保持占位形态（秘密绝不落盘）；
- *   提供给模型上下文的预览同样只含占位符，不还原秘密。
+ * - 所有写盘文本与模型预览先经 SecretStash 脱敏，已存在的占位符保持原样。
  */
 import { mkdir, readdir, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -99,7 +97,7 @@ export class ArtifactService {
   constructor(
     private readonly dataDir: string,
     private readonly repository: ArtifactRepository,
-    /** 预留：落盘前的文本脱敏钩子（如未来需要擦除其他敏感模式）。 */
+    /** 落盘及上下文输出前过滤已登记的秘密。 */
     private readonly stash?: { redact(text: string): string },
   ) {}
 
