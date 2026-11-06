@@ -6,6 +6,7 @@ export { KernelRuntime, type KernelRuntimeOptions, type WorkflowRunnerFn } from 
 export { EventHub, type EventSubscription, type SnapshotProvider } from './events.js'
 export { AskService, type AskSeqResolver, type AskSettled } from './asks.js'
 export { ConversationTracker, deriveTitle, type TrackerEvents } from './conversations.js'
+export { toConversationEntry, deriveConversationLive, type EntryRecordLike } from './entries.js'
 export { openHelmDatabase, type HelmDatabase } from './sqlite.js'
 export { HelmStore, convStatusOf, summaryOf, type ConvMeta, type AskRow, type ArtifactRow } from './store.js'
 export { runShell, runGate, createBashTool, createReadTool, createReadArtifactTool, type ShellRunResult } from './tools.js'

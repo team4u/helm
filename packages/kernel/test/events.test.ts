@@ -44,7 +44,7 @@ function makeFixture(opts?: { maxPendingBytes?: number; initialSeq?: number }): 
   const persistedSeqs: number[] = []
   const initialSeq = opts?.initialSeq ?? 0
   const fixture: Fixture = {
-    snapshotValue: { seq: initialSeq, conversations: [], pendingAsks: [], plugins: [] },
+    snapshotValue: { seq: initialSeq, conversations: [], pendingAsks: [], plugins: [], ui: [], workflowRuns: [] },
     persistedSeqs,
     hub: undefined as unknown as Fixture['hub'],
   }
@@ -297,7 +297,7 @@ describe('EventHub 快照竞态', { timeout: 60_000 }, () => {
     // provider 首次被调用同步发布 600 个事件（>512 缓冲上限）。
     let reentrant = false
     const persisted: number[] = []
-    const snapValue: HelmSnapshot = { seq: 0, conversations: [], pendingAsks: [], plugins: [] }
+    const snapValue: HelmSnapshot = { seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], workflowRuns: [] }
     const hub = new EventHub({
       initialSeq: 0,
       snapshot: () => {
@@ -414,7 +414,7 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     assert.equal(hub.seq, 0)
   })
 
-  it('plugin.changed 接受完整信封 {type,plugin} 与直接 summary 两种形状，不二次嵌套', { timeout: 60_000 }, () => {
+  it('plugin.changed 接受完整信封 {type,plugin,ui} 与直接 {plugin,ui} 双形状；裸 summary 缺 ui 显式拒绝', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const plugin = {
       id: 'builtin:herdr',
@@ -425,21 +425,31 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
       actions: [],
       tools: [],
     }
+    const ui = [
+      { pluginId: 'builtin:herdr', surface: 'sidebar.item', spec: { id: 's1', label: 'Herdr' } },
+    ]
     const frames: HelmEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
-    // 信封形状（PluginHost emitEvent 现状）。
-    hub.publish('plugin.changed', { type: 'plugin.changed', plugin })
-    // 直接 summary 形状。
-    hub.publish('plugin.changed', plugin)
+    // 完整信封形状（PluginHost emitEvent 现状：{type, plugin, ui}）。
+    hub.publish('plugin.changed', { type: 'plugin.changed', plugin, ui })
+    // 直接 {plugin, ui} 形状。
+    hub.publish('plugin.changed', { plugin, ui })
     off()
-    const e1 = frames[0]?.event as { type: string; plugin: { id: string } }
-    const e2 = frames[1]?.event as { type: string; plugin: { id: string } }
+    const e1 = frames[0]?.event as { type: string; plugin: { id: string }; ui: unknown[] }
+    const e2 = frames[1]?.event as { type: string; plugin: { id: string }; ui: unknown[] }
     assert.equal(e1.type, 'plugin.changed')
     assert.equal(e1.plugin.id, 'builtin:herdr')
+    assert.deepEqual(e1.ui, ui, '信封形状 ui 完整携带')
     assert.ok(!('type' in (e1.plugin as Record<string, unknown>)), '信封拆包：plugin 内不得残留 type 嵌套')
     assert.equal(e2.type, 'plugin.changed')
     assert.equal(e2.plugin.id, 'builtin:herdr')
-    assert.ok(!('type' in (e2.plugin as Record<string, unknown>)), '直传也不得嵌套 type')
+    assert.deepEqual(e2.ui, ui, '直传形状 ui 完整携带')
+    // 旧裸 summary（缺 ui）不再接受：新契约无兼容垫片。
+    assert.throws(() => hub.publish('plugin.changed', plugin), /plugin\.changed|invalid_event/)
+    // 停用/卸载：ui 为空数组（客户端据此清除该插件贡献）。
+    hub.publish('plugin.changed', { plugin, ui: [] })
+    const off2 = hub.subscribe(() => {})
+    off2()
   })
 
   it('core 其他类型同样接受信封/直传双形状', { timeout: 60_000 }, () => {

@@ -12,13 +12,26 @@
  * - publish 侧统一 JSON 校验 + 脱敏（字符串与字段名都过 redact），payload 非法直接抛
  *   HelmError，绝不静默降级；core 类型入参同时接受调用方直接 payload 与完整事件信封
  *   （如 PluginHost emitEvent('plugin.changed', {type, plugin})），信封只拆包不二次嵌套；
+ *   新增四个 core 类型 conversation.entry / conversation.live / plugin.doc.updated /
+ *   workflow.updated 同样双形状，字段级校验；
  * - 未知 type 走 CustomHelmEvent {type, payload} 原样透传，不伪装成 notification；
  * - 背压有界：未决帧数/字节数超上限视为慢客户端，显式关流（客户端凭 snapshot 重连
  *   对齐），绝不静默丢帧；快照 provider 是同步的，无需异步快照系统。
  */
 
 import { HelmError } from '@helm/protocol'
-import type { AskSpec, ConversationSummary, CustomHelmEvent, HelmEvent, HelmEventFrame, HelmSnapshot } from '@helm/protocol'
+import type {
+  AskSpec,
+  ConversationEntry,
+  ConversationLive,
+  ConversationSummary,
+  CustomHelmEvent,
+  HelmEvent,
+  HelmEventFrame,
+  HelmSnapshot,
+  PublicPluginDoc,
+  WorkflowRunSummary,
+} from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 
 export type SnapshotProvider = () => HelmSnapshot
@@ -384,6 +397,46 @@ export class EventHub {
         }
         return { type, conversationId }
       }
+      case 'conversation.entry': {
+        const source = (envelope ?? record) as Record<string, unknown> | undefined
+        const conversationId = Number(source?.['conversationId'])
+        const entry = source?.['entry']
+        if (!Number.isInteger(conversationId)) {
+          throw new HelmError('invalid_event', 'conversation.entry 需要 number conversationId', 500)
+        }
+        if (
+          entry === null ||
+          typeof entry !== 'object' ||
+          typeof (entry as { id?: unknown }).id !== 'string' ||
+          typeof (entry as { kind?: unknown }).kind !== 'string'
+        ) {
+          throw new HelmError(
+            'invalid_event',
+            'conversation.entry 需要 { id: string; kind: string; ... } 形状的 entry',
+            500,
+          )
+        }
+        return { type, conversationId, entry: entry as ConversationEntry }
+      }
+      case 'conversation.live': {
+        const source = (envelope ?? record) as Record<string, unknown> | undefined
+        const live = source?.['live']
+        if (
+          live === null ||
+          typeof live !== 'object' ||
+          !Number.isInteger((live as { conversationId?: unknown }).conversationId) ||
+          typeof (live as { text?: unknown }).text !== 'string' ||
+          !Array.isArray((live as { tools?: unknown }).tools) ||
+          !Number.isFinite((live as { updatedAt?: unknown }).updatedAt)
+        ) {
+          throw new HelmError(
+            'invalid_event',
+            'conversation.live 需要 { conversationId, text, tools, updatedAt } 形状的 live',
+            500,
+          )
+        }
+        return { type, live: live as ConversationLive }
+      }
       case 'ask.upsert': {
         const ask = (envelope?.['ask'] ?? record) as AskSpec
         return { type, ask }
@@ -398,8 +451,58 @@ export class EventHub {
         return { type, askId, status }
       }
       case 'plugin.changed': {
-        const plugin = (envelope?.['plugin'] ?? record) as HelmSnapshot['plugins'][number]
-        return { type, plugin }
+        const source = (envelope ?? record) as Record<string, unknown> | undefined
+        const plugin = source?.['plugin']
+        const ui = source?.['ui']
+        if (
+          plugin === null ||
+          typeof plugin !== 'object' ||
+          typeof (plugin as { id?: unknown }).id !== 'string' ||
+          !Array.isArray(ui)
+        ) {
+          throw new HelmError(
+            'invalid_event',
+            'plugin.changed 需要 { plugin: PluginSummary; ui: PluginUiContribution[] }（停用/卸载时 ui 为空数组）',
+            500,
+          )
+        }
+        return { type, plugin: plugin as HelmSnapshot['plugins'][number], ui: ui as HelmSnapshot['ui'] }
+      }
+      case 'plugin.doc.updated': {
+        const source = (envelope ?? record) as Record<string, unknown> | undefined
+        const doc = source?.['doc']
+        if (
+          doc === null ||
+          typeof doc !== 'object' ||
+          typeof (doc as { pluginId?: unknown }).pluginId !== 'string' ||
+          typeof (doc as { name?: unknown }).name !== 'string' ||
+          !('value' in (doc as Record<string, unknown>))
+        ) {
+          throw new HelmError(
+            'invalid_event',
+            'plugin.doc.updated 需要 { pluginId: string; name: string; value } 形状的 doc',
+            500,
+          )
+        }
+        return { type, doc: doc as PublicPluginDoc }
+      }
+      case 'workflow.updated': {
+        const source = (envelope ?? record) as Record<string, unknown> | undefined
+        const run = source?.['run']
+        if (
+          run === null ||
+          typeof run !== 'object' ||
+          typeof (run as { id?: unknown }).id !== 'string' ||
+          !Number.isInteger((run as { conversationId?: unknown }).conversationId) ||
+          typeof (run as { status?: unknown }).status !== 'string'
+        ) {
+          throw new HelmError(
+            'invalid_event',
+            'workflow.updated 需要 { id: string; conversationId: number; status; ... } 形状的 run',
+            500,
+          )
+        }
+        return { type, run: run as WorkflowRunSummary }
       }
       case 'notification': {
         const source = (envelope ?? record) as Record<string, unknown> | undefined

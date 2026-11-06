@@ -43,6 +43,7 @@ import type {
   InputOrigin,
   WhenBusy,
   ToolResultHookPayload,
+  WorkflowRunSummary,
 } from '@helm/protocol'
 import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
@@ -343,6 +344,9 @@ export class KernelRuntime {
         conversations: this.listConversations(),
         pendingAsks: this.asks.listAsks('pending'),
         plugins: this.pluginHost ? this.pluginHost.list() : [],
+        ui: this.pluginHost ? this.pluginHost.listUi() : [],
+        // 工作流 run 摘要：引擎未挂接时为空（真实状态，非兼容垫片）。
+        workflowRuns: this.listWorkflowRuns(),
       }),
       persistSeq: (seq) => this.store.setEventSeq(seq),
     })
@@ -1359,6 +1363,23 @@ export class KernelRuntime {
   /** workflow 执行注入（主代理组合 WorkflowService 后调用）。 */
   setWorkflowRunner(fn: WorkflowRunnerFn): void {
     this.workflowRunner = fn
+  }
+
+  /** 快照 workflowRuns：从 documentStore 的 workflow 索引读全部 run 摘要。 */
+  private listWorkflowRuns(): WorkflowRunSummary[] {
+    const index = this.documentStore.get<Array<{ id: string }>>('workflow/runs', [])
+    const out: WorkflowRunSummary[] = []
+    for (const entry of index) {
+      const raw = this.store.getPluginDoc('__global', `workflow/run/${entry.id}`)
+      if (raw === undefined) continue
+      try {
+        const record = JSON.parse(raw) as { summary?: WorkflowRunSummary }
+        if (record.summary !== undefined) out.push(record.summary)
+      } catch {
+        // 单条损坏不阻断快照（诚实性：跳过而非伪造），引擎侧 load 时显式报错。
+      }
+    }
+    return out
   }
 
   /** 内部使用的 workflow 执行（spawnAgent 同源的 hook 链）。 */

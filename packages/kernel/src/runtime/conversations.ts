@@ -16,7 +16,9 @@
  */
 
 import type {
+  ConversationEntry,
   ConversationInput,
+  ConversationLive,
   ConversationStatus,
   ConversationSummary,
   InputOrigin,
@@ -29,11 +31,14 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness, ConversationView, Observation, Observer } from '@earendil-works/pi-durable'
 import type { ConvMeta, HelmStore } from './store.js'
 import { summaryOf } from './store.js'
+import { deriveConversationLive, toConversationEntry, type EntryRecordLike } from './entries.js'
 
-interface LiveStateShape {
+/** SDK pi.live 文档的结构子集（tracker 观察形状）。 */
+export interface LiveStateShape {
   run?: { taskId: number; inputs: number[]; turns?: number }
-  generation?: unknown
-  tools?: Array<{ callId: string; name: string; status: string; output?: string }>
+  generation?: { message?: unknown }
+  tools?: Array<{ callId: string; name: string; status: string; arguments?: unknown; output?: string }>
+  nestedTools?: Array<{ callId: string; name: string; status: string; arguments?: unknown; output?: string }>
   runFailure?: { taskId: number; inputs: number[]; reason: string; detail?: string }
 }
 
@@ -46,6 +51,10 @@ export interface TrackerEvents {
   onInputCommitted(conversationId: number, input: ConversationInput): void
   onAssistantText(conversationId: number, entryId: number, text: string): void
   onTurnSettled: TurnSettledListener
+  /** 新时间线条目落库（仅新条目，每 id 恰一次；初始 observe 历史不重发）。 */
+  onEntryCommitted?(conversationId: number, entry: ConversationEntry): void
+  /** 会话实时增量（流式文本累计快照 + 工具卡；节流推送，终态冲刷最终状态）。 */
+  onLiveChanged?(live: ConversationLive): void
 }
 
 interface TrackedInput {
@@ -54,6 +63,9 @@ interface TrackedInput {
   /** 已进入某 run 的消费清单（FTS/上报用）。 */
   consumed: boolean
 }
+
+/** live 节流窗口（毫秒）：50-100ms 区间取 75ms，兼顾 SSE 帧率与提交压力。 */
+const LIVE_THROTTLE_MS = 75
 
 export class ConversationTracker {
   private readonly harness: Harness
@@ -75,6 +87,20 @@ export class ConversationTracker {
   private readonly lastSettledRun = new Map<number, number>()
   /** 会话 -> 在途 turn_settled 回调链（waitForIdle 等待本会话而非全局）。 */
   private readonly settledWaiters = new Map<number, Array<() => void>>()
+  /** 会话 -> 已发过 conversation.entry 的最大 entry id（观察窗口内单调）。 */
+  private readonly lastEmittedEntry = new Map<number, number>()
+  /** 会话 -> 待发 live 快照（节流窗口内的最新值；终态时强制冲刷）。 */
+  private readonly pendingLive = new Map<number, ConversationLive>()
+  /** 会话 -> 节流冲刷 timer（stopObserving/close 必须清理，防删除后幽灵事件）。 */
+  private readonly liveTimers = new Map<number, ReturnType<typeof setTimeout>>()
+  /** 会话 -> 上次 live 内容指纹（相同快照不重复发帧）。 */
+  private readonly lastLiveKey = new Map<number, string>()
+  /** 会话 -> 最近一次真实活动时间（仅活动内容变更时刷新，非每次快照刷新）。 */
+  private readonly lastActivityAt = new Map<number, number>()
+  /** 会话 -> 最近一次活动内容指纹（重复快照不刷新时间）。 */
+  private readonly lastActivityKey = new Map<number, string>()
+  /** 会话 -> 连续失败回合数（completed 归零）。 */
+  private readonly consecutiveErrors = new Map<number, number>()
 
   constructor(options: { harness: Harness; store: HelmStore; events: TrackerEvents }) {
     this.harness = options.harness
@@ -92,6 +118,7 @@ export class ConversationTracker {
       },
       end: () => {
         this.detach.delete(id)
+        this.clearLiveTimer(id)
       },
     }
     const observation: Observation<ConversationView> = await this.harness.observeConversation(
@@ -100,13 +127,46 @@ export class ConversationTracker {
       BACKGROUND_CONTEXT,
     )
     this.detach.set(id, () => observation.detach())
-    this.adopt(id, observation.value)
+    // 初始快照：窗口内已有条目不重发（首次 attach 只对齐水位线）。
+    this.adoptInitial(id, observation.value)
+  }
+
+  /** 首次 attach：只登记水位线与内部镜像，不发 entry/live 事件。 */
+  private adoptInitial(id: number, view: ConversationView): void {
+    const live = view.docs['pi.live'] as LiveStateShape | undefined
+    this.liveViews.set(id, live ?? {})
+    let watermark = this.lastEmittedEntry.get(id) ?? 0
+    for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
+      const numeric = Number(raw.id)
+      if (Number.isFinite(numeric) && numeric > watermark) watermark = numeric
+    }
+    this.lastEmittedEntry.set(id, watermark)
+    this.rebuildFromEntries(id, view.entries as never)
+    if (live?.run) {
+      this.runTaskIds.set(id, live.run.taskId)
+      this.consumedInputs.set(id, new Set())
+      for (const submissionId of live.run.inputs) this.markConsumed(id, submissionId)
+      this.noteActivity(id, live)
+    }
   }
 
   stopObserving(id: number): void {
     this.detach.get(id)?.()
     this.detach.delete(id)
     this.liveViews.delete(id)
+    // 清 timer 且丢弃待发快照：删除/停观后绝不发出幽灵事件。
+    this.clearLiveTimer(id)
+    this.pendingLive.delete(id)
+    this.lastLiveKey.delete(id)
+  }
+
+  /** 清理 live 节流 timer（幂等）。 */
+  private clearLiveTimer(id: number): void {
+    const timer = this.liveTimers.get(id)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      this.liveTimers.delete(id)
+    }
   }
 
   /** 提交前登记 input 元数据（submit 返回后 bindSubmission 回填真实 submissionId）。 */
@@ -239,6 +299,10 @@ export class ConversationTracker {
     // helm.input entry 观察：从 entry 数据重建 trackedInputs（不依赖临时内存）。
     this.rebuildFromEntries(id, view.entries as never)
 
+    // 新落库条目：按 id 序对每条恰发一次（提交顺序保持，SDK 同 commit 折叠时
+    // 窗口仍是全序，逐条推进水位线）。
+    this.emitNewEntries(id, view.entries as never as ReadonlyArray<EntryRecordLike>)
+
     // 先结算已结束的 prev run（含同快照折叠：run1 结束 + run2 开始同 commit）。
     if (prev?.run && (!live?.run || live.run.taskId !== prev.run.taskId)) {
       const prevRun = prev.run
@@ -282,6 +346,91 @@ export class ConversationTracker {
       }
       // 完成期（answered，inputs 清空）不动 consumedInputs——保留已消费记录。
     }
+
+    // 实时视图：真实活动变更记录 + 节流推送（终态在 emitSettled 内强制冲刷）。
+    this.noteActivity(id, live)
+    this.emitLiveThrottled(id, live)
+  }
+
+  /** 新落库条目：按 id 序推进水位线，每条恰发一次。 */
+  private emitNewEntries(id: number, entries: ReadonlyArray<EntryRecordLike>): void {
+    const sink = this.events.onEntryCommitted
+    if (sink === undefined) return
+    let watermark = this.lastEmittedEntry.get(id) ?? 0
+    let advanced = false
+    for (const raw of entries) {
+      const numeric = Number(raw.id)
+      if (!Number.isFinite(numeric) || numeric <= watermark) continue
+      // 转换失败（非 JSON 载荷）显式抛出：SDK 会以 listener_error 结束观察，
+      // 绝不静默丢弃或伪造降级（诚实性纪律）。
+      sink(id, toConversationEntry(raw))
+      watermark = numeric
+      advanced = true
+    }
+    if (advanced) this.lastEmittedEntry.set(id, watermark)
+  }
+
+  /** 真实活动变更才刷新 lastActivityAt（重复快照不刷新，防 stall 误判）。 */
+  private noteActivity(id: number, live: LiveStateShape | undefined): void {
+    if (!live?.run) return
+    const tools = live.tools ?? []
+    const nested = live.nestedTools ?? []
+    const fingerprint = [
+      live.run.taskId,
+      live.run.turns ?? 0,
+      live.run.inputs.length,
+      ...tools.map((t) => `${t.callId}:${t.status}`),
+      ...nested.map((t) => `${t.callId}:${t.status}`),
+      streamedLengthOf(live.generation),
+    ].join('|')
+    if (this.lastActivityKey.get(id) === fingerprint) return
+    this.lastActivityKey.set(id, fingerprint)
+    this.lastActivityAt.set(id, Date.now())
+  }
+
+  /** 节流推送实时视图：窗口内只保留最新快照，同内容不重复发帧。 */
+  private emitLiveThrottled(id: number, live: LiveStateShape | undefined): void {
+    if (this.events.onLiveChanged === undefined) return
+    if (!live?.run && !live?.generation && (live?.tools?.length ?? 0) === 0 && (live?.nestedTools?.length ?? 0) === 0) {
+      // 空闲视图不推送（终态冲刷由 emitSettled 负责）。
+      return
+    }
+    const snapshot = deriveConversationLive(id, live, Date.now())
+    const key = JSON.stringify([snapshot.text, snapshot.tools])
+    if (key === this.lastLiveKey.get(id)) return
+    this.pendingLive.set(id, snapshot)
+    if (this.liveTimers.has(id)) return
+    const timer = setTimeout(() => {
+      this.liveTimers.delete(id)
+      this.flushPendingLive(id)
+    }, LIVE_THROTTLE_MS)
+    timer.unref?.()
+    this.liveTimers.set(id, timer)
+  }
+
+  /** 冲刷窗口内待发快照（timer 到期）。 */
+  private flushPendingLive(id: number): void {
+    const snapshot = this.pendingLive.get(id)
+    if (snapshot === undefined) return
+    this.pendingLive.delete(id)
+    this.lastLiveKey.set(id, JSON.stringify([snapshot.text, snapshot.tools]))
+    this.events.onLiveChanged?.(snapshot)
+  }
+
+  /** 终态强制冲刷：以当前 live 镜像为准同步发帧（清 timer，丢弃过期窗口快照）。 */
+  private flushLiveFinal(conversationId: number): void {
+    this.clearLiveTimer(conversationId)
+    this.pendingLive.delete(conversationId)
+    if (this.events.onLiveChanged === undefined) return
+    const snapshot = deriveConversationLive(
+      conversationId,
+      this.liveViews.get(conversationId),
+      Date.now(),
+    )
+    const key = JSON.stringify([snapshot.text, snapshot.tools])
+    if (key === this.lastLiveKey.get(conversationId)) return
+    this.lastLiveKey.set(conversationId, key)
+    this.events.onLiveChanged(snapshot)
   }
 
   /** 从 view.entries 的 helm.input 数据重建输入映射（含负 key 临时项合并）。 */
@@ -291,11 +440,21 @@ export class ConversationTracker {
     for (const raw of entries) {
       const entry = raw as {
         kind?: string
-        model?: ReadonlyArray<{ data?: unknown; content?: ReadonlyArray<{ type: string; text?: string }> }>
+        data?: unknown
       }
-      if (entry?.kind !== 'pi.user') continue
-      const data = entry.model?.[0] && 'data' in entry.model[0] ? (entry.model[0] as { data?: unknown }).data : undefined
-      const meta = data as { id?: string; text?: string; origin?: InputOrigin; whenBusy?: WhenBusy; createdAt?: number } | undefined
+      // 自定义 input entry：SDK pickInputEntry 把 {kind:'helm.input', data} 写入
+      // entry.data，model 只携带 UserMessage（不在 model[0].data）。
+      if (entry?.kind !== 'helm.input') continue
+      const meta = entry.data as
+        | {
+            id?: string
+            text?: string
+            origin?: InputOrigin
+            whenBusy?: WhenBusy
+            createdAt?: number
+            meta?: Record<string, unknown>
+          }
+        | undefined
       if (!meta || typeof meta.id !== 'string' || typeof meta.text !== 'string') continue
       const submissionKey = submissionKeyOfEntry(meta.id)
       if (submissionKey === undefined) continue
@@ -307,6 +466,9 @@ export class ConversationTracker {
             origin: meta.origin ?? 'human',
             ...(meta.whenBusy !== undefined ? { whenBusy: meta.whenBusy } : {}),
             createdAt: meta.createdAt ?? Date.now(),
+            // meta 从 entry.data 重建贯通回 turn_settled payload（边界已校验
+            // 为普通对象；非对象形状不伪造，直接丢弃该字段）。
+            ...(isPlainRecord(meta.meta) ? { meta: meta.meta } : {}),
           },
           submissionId: submissionKey,
           consumed: false,
@@ -354,6 +516,14 @@ export class ConversationTracker {
   ): void {
     this.beginSettled(conversationId)
     try {
+      // 实时视图终态冲刷：先于 turn_settled 发出（空 tools/文本表示流结束）。
+      this.flushLiveFinal(conversationId)
+      // 连续失败计数：failed 递增，completed 归零，aborted 保持（非模型失败）。
+      if (outcome === 'failed') {
+        this.consecutiveErrors.set(conversationId, (this.consecutiveErrors.get(conversationId) ?? 0) + 1)
+      } else if (outcome === 'completed') {
+        this.consecutiveErrors.set(conversationId, 0)
+      }
       const summary = this.summaryOf(conversationId, outcome)
       const payload: TurnSettledPayload = {
         conversation: summary,
@@ -384,8 +554,7 @@ export class ConversationTracker {
     }
   }
 
-  /** 由 store meta + live 镜像派生五态（blocked 优先于 working 派生冲突时）。 */
-  summaryOf(conversationId: number, pendingAskOverride?: number | TurnOutcome): ConversationSummary {
+  /** 由 store meta + live 镜像派生五态（blocked 优先于 working 派生冲突时）。 */  summaryOf(conversationId: number, pendingAskOverride?: number | TurnOutcome): ConversationSummary {
     const meta = this.store.getConv(conversationId)
     if (!meta) throw new HelmError('not_found', `会话不存在：${conversationId}`, 404)
     const live = this.liveViews.get(conversationId)
@@ -435,7 +604,6 @@ export class ConversationTracker {
 
   /** 观察到的最新 assistant 文本（getLastAssistantText 数据源）。 */
   private readonly lastAssistant = new Map<number, { entryId: number; text: string }>()
-
   recordAssistantText(conversationId: number, entryId: number, text: string): void {
     const prev = this.lastAssistant.get(conversationId)
     if (prev !== undefined && prev.entryId === entryId) return
@@ -444,6 +612,20 @@ export class ConversationTracker {
 
   getLastAssistantText(conversationId: number): string | undefined {
     return this.lastAssistant.get(conversationId)?.text
+  }
+
+  /**
+   * 看门狗探针事实：仅基于真实活动变更（noteActivity）与回合结算计数，
+   * 不依赖每次快照刷新；无在途 run 时不报 stalled（空闲非停滞）。
+   */
+  getProbeFacts(conversationId: number): { stalledMs?: number; consecutiveErrors: number } {
+    const consecutiveErrors = this.consecutiveErrors.get(conversationId) ?? 0
+    if (!this.liveViews.get(conversationId)?.run) {
+      return { consecutiveErrors }
+    }
+    const lastActivityAt = this.lastActivityAt.get(conversationId)
+    if (lastActivityAt === undefined) return { consecutiveErrors }
+    return { stalledMs: Date.now() - lastActivityAt, consecutiveErrors }
   }
 }
 
@@ -485,6 +667,34 @@ function assistantTextOf(entry: {
     .filter((b) => b.type === 'text' && typeof b.text === 'string')
     .map((b) => b.text as string)
     .join('\n')
+}
+
+/** 流式 generation.message 的可见文本长度（活动指纹用；非对象形状返回 -1 区分）。 */
+function streamedLengthOf(generation: LiveStateShape['generation']): number {
+  if (generation === null || typeof generation !== 'object') return -1
+  const message = (generation as { message?: unknown }).message
+  if (message === null || typeof message !== 'object') return -1
+  const content = (message as { content?: unknown }).content
+  if (!Array.isArray(content)) return -1
+  let length = 0
+  for (const block of content) {
+    if (
+      block !== null &&
+      typeof block === 'object' &&
+      (block as { type?: unknown }).type === 'text' &&
+      typeof (block as { text?: unknown }).text === 'string'
+    ) {
+      length += (block as { text: string }).text.length
+    }
+  }
+  return length
+}
+
+/** 普通对象判定（null 与非对象不算；类实例不算）。 */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object') return false
+  const proto = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
 }
 
 export { deriveTitle }
