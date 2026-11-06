@@ -934,6 +934,11 @@ test('真实 PluginHost 路由：public webhook 豁免鉴权；非 public 需 to
   assert.equal(pub.body.got, '/api/plugins/builtin:triggers/routes/webhook/hook-1')
   assert.equal(publicHandlerCalls.length, 1)
   assert.equal(new URL(publicHandlerCalls[0]!.url).pathname, '/api/plugins/builtin:triggers/routes/webhook/hook-1')
+  // 插件原始路由可接收非 JSON 正文；验签策略由插件声明。
+  const raw = await handler(new Request('http://localhost/api/plugins/builtin:triggers/routes/webhook/hook-raw', {
+    method: 'POST', headers: { 'content-type': 'text/plain' }, body: 'raw webhook example',
+  }))
+  assert.equal(raw.status, 200)
   // 非 public 未认证 401
   const noAuth = await call(handler, 'GET', '/api/plugins/builtin:triggers/routes/status', { auth: false })
   assert.equal(noAuth.status, 401)

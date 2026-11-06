@@ -75,9 +75,7 @@ export function createHubHandler(kernel: KernelRuntimeLike, workflows: WorkflowS
 
       // 插件 public 路由豁免（其 handler 自行验签）；与派发共用匹配器。
       const isPublic = isPublicPluginRoute(kernel, request.method, segments)
-      if (!isPublic && !isJsonEndpoint(request.method, normalized)) {
-        // 非 JSON 端点（仅插件 public 原始路由）：不强制 JSON content-type。
-      } else if (!jsonContentTypeOk(request)) {
+      if (!isPublic && isJsonEndpoint(request.method, normalized) && !jsonContentTypeOk(request)) {
         return withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON 端点需 content-type: application/json'), origin)
       }
       if (isPublic) {
