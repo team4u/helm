@@ -2,20 +2,22 @@
  * 单一 state.sqlite：pi-durable 原生表（pi_ 前缀）+ helm 自有表 + FTS5 派生索引。
  * 所有 SQL 一律经同一 NodeSqliteDatabase adapter 排队执行（事务期间 adapter 会
  * 排队其他操作，绕过 facade 的裸调用可能与 pi 事务互相回滚）——绝不另开连接。
+ * 持久化 PRAGMA 经 adapter 在打开时显式设置：journal_mode=WAL、
+ * synchronous=NORMAL、busy_timeout=5000ms、wal_autocheckpoint=1000 页。
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node'
+import { openNodeSqliteDatabase } from '@earendil-works/chord/sqlite/node'
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite'
 import type { SqliteStorage as SqliteStorageT } from '@earendil-works/pi-durable/storage/sqlite'
-import { DatabaseSync } from 'node:sqlite'
-import { mkdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import type { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node'
+import { join } from 'node:path'
 
 export interface HelmDatabase {
   storage: SqliteStorageT
   /** helm 自有表读写，同样排队在同一连接上。 */
   db: NodeSqliteDatabase
+  /** 幂等关闭：重复调用（如 harness.close 已关 storage 后）不抛错。 */
   close(): Promise<void>
 }
 
@@ -97,20 +99,28 @@ CREATE VIRTUAL TABLE IF NOT EXISTS helm_conversation_fts USING fts5(
 );
 `
 
-/** 打开（或创建）唯一 state.sqlite；pi 表与 helm 表共享同一连接与事务队列。 */
+/**
+ * 打开（或创建）唯一 state.sqlite；pi 表与 helm 表共享同一连接与事务队列。
+ * adapter 由 openNodeSqliteDatabase 构建（单连接、WAL、synchronous=NORMAL、
+ * busy_timeout=5s；不接触裸 node:sqlite 句柄）。
+ */
 export async function openHelmDatabase(dataDir: string): Promise<HelmDatabase> {
   const statePath = join(dataDir, 'state.sqlite')
-  mkdirSync(dirname(statePath), { recursive: true })
-  const nodeDb = new DatabaseSync(statePath)
-  const db = new NodeSqliteDatabase(nodeDb)
+  const db = await openNodeSqliteDatabase(statePath)
   const storage = await SqliteStorage.open(db, { prefix: 'pi_' })
   // helm 表 DDL 也走 adapter（排队，避免与 pi 迁移竞争）。
   await db.exec(HELM_SCHEMA)
   await db.exec(FTS_SCHEMA)
+  let closed = false
   return {
     storage,
     db,
     async close() {
+      // 幂等：SDK 侧（harness.close -> storage.close）可能已关闭同一连接，
+      // SqliteStorage.close 与 adapter.close 均缓存/置位幂等，这里再显式置位
+      // 防御未来 SDK 行为变化，保证重复关闭不抛错。
+      if (closed) return
+      closed = true
       await storage.close(BACKGROUND_CONTEXT)
       await db.close()
     },
