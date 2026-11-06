@@ -4,11 +4,13 @@
  * ConfigService / CredentialService 是不同实例，实例队列挡不住跨实例
  * 「并发读同一旧文件后互相覆盖」。以真实路径为 key 的进程级锁才能让
  * 同一 dataDir 的全部实例串行读改写。
- * 诚实边界：仅进程内互斥；跨进程（多 Hub 进程共用一个 dataDir）不在此承诺。
+ * 进程内互斥见 withFileLock；跨进程互斥见 withProcessFileLock。
  * 不可重入：fn 内部不得再对同一 path 加锁（会死锁）。
  */
-import { realpath } from 'node:fs/promises'
+import { realpath, readFile, rm, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
+import process from 'node:process'
 
 const locks = new Map<string, Promise<unknown>>()
 
@@ -33,4 +35,87 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T>): Promi
     if (locks.get(key) === tail) locks.delete(key)
   })
   return run
+}
+
+// ---------------------------------------------------------------------------
+// 跨进程文件锁：credentials.json 由 Hub 与 CLI 两个独立进程读改写，
+// 仅进程内串行挡不住跨进程「并发读同一旧文件后互相覆盖」。
+// 协议（与 @helm/node CLI 完全一致，双方互认）：
+//   锁文件为 <目标文件>.lock，O_EXCL 创建，内容首字段为持有者 PID（十进制）。
+//   只在 PID 确认死亡（ESRCH）时视为 stale 破除并重试；不按存活时长强拆
+//   （合法持锁者可能只是慢）。坏锁内容/无法判定时显式报错，绝不猜测。
+//   释放仅删除自己持有的锁文件（防误删他人紧接创建的新锁）。
+//   不可重入：同进程内先经 withFileLock 串行，再进本锁。
+// ---------------------------------------------------------------------------
+
+const PROCESS_LOCK_WAIT_MS = 10_000
+const PROCESS_LOCK_POLL_MS = 25
+
+interface LockOwner {
+  pid: number | undefined
+}
+
+function parseLockOwner(text: string): LockOwner | undefined {
+  const head = text.trim().split(/\s+/)[0] ?? ''
+  if (!/^\d+$/.test(head)) return undefined
+  return { pid: Number(head) }
+}
+
+async function isProcessAlive(pid: number): Promise<boolean> {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/**
+ * 跨进程排他锁下执行 fn；锁文件为 `${path}.lock`。
+ * 与 CLI 的锁实现协议兼容：双方可互相排队、互斥同一目标文件。
+ */
+export async function withProcessFileLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
+  const lockFile = `${path}.lock`
+  const owner = `${process.pid} ${randomUUID()}`
+  const deadline = Date.now() + PROCESS_LOCK_WAIT_MS
+  for (;;) {
+    try {
+      await writeFile(lockFile, `${owner}\n`, { flag: 'wx', mode: 0o600 })
+      break
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw new Error(`无法创建锁文件（${lockFile}）：${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    // 拿锁失败：仅在持有者 PID 确认死亡时破除 stale 锁（不按存活时长强拆）
+    try {
+      const raw = await readFile(lockFile, 'utf8')
+      const holder = parseLockOwner(raw)
+      if (holder === undefined) {
+        throw new Error(`锁文件内容损坏（${lockFile}）：${JSON.stringify(raw.slice(0, 120))}`)
+      }
+      if (holder.pid !== undefined && !(await isProcessAlive(holder.pid))) {
+        // 持有者已退出：原子抢占（unlink 与后续 wx 创建之间仍有竞态，失败即重试）
+        await rm(lockFile, { force: true })
+        continue
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('锁文件内容损坏')) throw err
+      // 读失败 = 锁刚被释放：直接进入下一轮争抢
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`文件被并发写入，等待锁超时（${lockFile}）`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, PROCESS_LOCK_POLL_MS))
+  }
+  try {
+    return await fn()
+  } finally {
+    try {
+      const raw = await readFile(lockFile, 'utf8')
+      if (raw.trim() === owner) await rm(lockFile, { force: true })
+    } catch {
+      /* 释放失败留给持有者死亡后的 stale 破除，不掩盖业务结果 */
+    }
+  }
 }

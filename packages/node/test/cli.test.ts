@@ -9,6 +9,9 @@ import http from 'node:http'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import { runCli } from '../src/cli/index.js'
 
 /** 命中记录：方法 + 路径（含 query）+ 解析后的 JSON body。 */
@@ -95,6 +98,17 @@ async function run(
 
 async function tempDir(): Promise<string> {
   return fsp.mkdtemp(path.join(os.tmpdir(), 'helm-cli-test-'))
+}
+
+/** 未存在的临时 dataDir 路径（跨进程锁回归用：目录不存在需首次创建）。 */
+function freshDataDirPath(): string {
+  return path.join(os.tmpdir(), `helm-cli-fresh-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+}
+
+/** 仓库内 tsx/cli 的绝对路径（跨进程子进程执行 TS 入口用），自 testDir 逐级向上解析。 */
+function resolveTscCli(): string {
+  const require = createRequire(import.meta.url)
+  return require.resolve('tsx/cli')
 }
 
 test('setup/login 换 token 并 0600 原子写凭据，保留 providers/pluginSecrets 键', { timeout: 60_000 }, async () => {
@@ -332,20 +346,38 @@ test('动态 action：schema 转 flag、类型转换、--input 互斥、cli.comm
   }
 })
 
-test('动态 action 命令冲突抢占核心路径时显式报错', { timeout: 60_000 }, async () => {
+test('动态命令抢占核心路径时核心仍执行；调用动态路径才拒绝', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
   const hub = await startHub({
     'GET /api/actions': () => ({
       body: [
+        // 与核心 ["conversations","list"] 全等冲突 + 与 ["asks"] 前缀冲突的父路径声明
         { pluginId: 'builtin:evil', id: 'list', description: '抢占', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, cli: { command: ['conversations', 'list'] } },
+        { pluginId: 'builtin:evil', id: 'asks-parent', description: '抢占父路径', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, cli: { command: ['asks'] } },
       ],
     }),
+    'GET /api/conversations': () => ({ body: [{ id: 9 }] }),
+    'GET /api/asks': () => ({ body: [] }),
+    'POST /api/plugins/builtin%3Aevil/disable': () => ({ body: { ok: true } }),
   })
   try {
+    // 核心命令精确匹配即执行：坏插件的冲突声明不得阻断核心管理面（故障隔离）。
+    // 即使动态声明了抢占性的父路径 ["asks"]，核心 asks list 仍直接执行、不拉 manifest
     const r = await run(['conversations', 'list', '--json'], makeEnv(hub.url, dir))
-    assert.equal(r.code, 1)
-    const parsed = JSON.parse(r.err) as { error: { code: string } }
-    assert.equal(parsed.error.code, 'command_conflict')
+    assert.equal(r.code, 0, r.err)
+    assert.equal(JSON.parse(r.out)[0]?.id, 9)
+
+    const coreAsks = await run(['asks', 'list', '--json'], makeEnv(hub.url, dir))
+    assert.equal(coreAsks.code, 0, coreAsks.err)
+
+    const disable = await run(['plugins', 'disable', 'builtin:evil', '--json'], makeEnv(hub.url, dir))
+    assert.equal(disable.code, 0, disable.err)
+    assert.equal(hub.recorded.hits.at(-1)?.path, '/api/plugins/builtin%3Aevil/disable')
+
+    // 只有真正解析动态命令（非核心精确匹配）时才拉 manifest 并显式拒绝冲突
+    const dyn = await run(['asks', 'bogus', '--json'], makeEnv(hub.url, dir))
+    assert.equal(dyn.code, 1)
+    assert.equal((JSON.parse(dyn.err) as { error: { code: string } }).error.code, 'command_conflict')
   } finally {
     await hub.close()
   }
@@ -622,5 +654,313 @@ test('动态 action 空 command 路径与非法段显式报错', { timeout: 60_0
     assert.equal((JSON.parse(r.err) as { error: { code: string } }).error.code, 'invalid_command_path')
   } finally {
     await hub.close()
+  }
+})
+
+test('动态 action 属性名撞保留 flag 名时仍可调用（仅经 --input 表达）', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startHub({
+    'GET /api/actions': () => ({
+      body: [
+        {
+          pluginId: 'builtin:test', id: 'odd', description: '奇怪属性名',
+          inputSchema: { type: 'object', properties: { input: { type: 'string' }, current: { type: 'string' }, title: { type: 'string' } } },
+          outputSchema: { type: 'object' },
+        },
+      ],
+    }),
+    'POST /api/actions/builtin%3Atest/odd': () => ({ body: { ok: true } }),
+  })
+  const env = makeEnv(hub.url, dir)
+  try {
+    // 撞保留名的属性不禁用整个动作：跳过独立 flag，经整体 --input 表达
+    const r = await run(['test', 'odd', '--input', '{"input":"raw","current":"c","title":"t"}', '--json'], env)
+    assert.equal(r.code, 0, r.err)
+    const hit = hub.recorded.hits.find((h) => h.path === '/api/actions/builtin%3Atest/odd')!
+    assert.deepEqual(hit.body, { input: { input: 'raw', current: 'c', title: 't' } })
+
+    // 帮助中说明这些属性只能经 --input 表达
+    const help = await run(['test', 'odd', '--help'], env)
+    assert.equal(help.code, 0)
+    assert.match(help.out, /--input/)
+    assert.match(help.out, /"input"/)
+
+    // 无位置参数语义：额外位置参数显式拒绝，绝不无声丢弃。
+    // `--` 之后的 token 均为字面位置参数（含 --json），故错误为纯文本而非 JSON
+    const extra = await run(['test', 'odd', 'stray', '--input', '{}', '--json'], env)
+    assert.equal(extra.code, 1)
+    assert.equal((JSON.parse(extra.err) as { error: { code: string } }).error.code, 'unexpected_positional')
+
+    const extraDash = await run(['test', 'odd', '--', 'stray', '--json'], env)
+    assert.equal(extraDash.code, 1)
+    assert.match(extraDash.err, /多余位置参数/)
+    assert.match(extraDash.err, /stray --json/)
+  } finally {
+    await hub.close()
+  }
+})
+
+test('camelCase 与 kebab 撞名属性不静默 last-wins，正常属性仍可用 flag', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startHub({
+    'GET /api/actions': () => ({
+      body: [
+        {
+          pluginId: 'builtin:test', id: 'dupe', description: '撞名',
+          inputSchema: { type: 'object', properties: { fooBar: { type: 'string' }, 'foo-bar': { type: 'string' }, other: { type: 'string' } } },
+          outputSchema: { type: 'object' },
+        },
+      ],
+    }),
+    'POST /api/actions/builtin%3Atest/dupe': () => ({ body: { ok: true } }),
+  })
+  const env = makeEnv(hub.url, dir)
+  try {
+    // 撞名属性经整体 --input 表达（两个键都原样送达，不丢失任何一个）
+    const whole = await run(['test', 'dupe', '--input', '{"fooBar":"camel","foo-bar":"kebab","other":"x"}', '--json'], env)
+    assert.equal(whole.code, 0, whole.err)
+    const hit = hub.recorded.hits.find((h) => h.path === '/api/actions/builtin%3Atest/dupe')!
+    assert.deepEqual((hit.body as { input: unknown }).input, { fooBar: 'camel', 'foo-bar': 'kebab', other: 'x' })
+
+    // 未撞名的 other 仍可用独立 flag；且撞名后不存在歧义的 --foo-bar flag
+    const partial = await run(['test', 'dupe', '--other', 'y', '--json'], env)
+    assert.equal(partial.code, 0, partial.err)
+    assert.deepEqual((hub.recorded.hits.at(-1)?.body as { input: unknown }).input, { other: 'y' })
+
+    const ambiguous = await run(['test', 'dupe', '--foo-bar', 'z', '--json'], env)
+    assert.equal(ambiguous.code, 1)
+    assert.equal((JSON.parse(ambiguous.err) as { error: { code: string } }).error.code, 'unknown_flag')
+
+    const help = await run(['test', 'dupe', '--help'], env)
+    assert.equal(help.code, 0)
+    assert.match(help.out, /fooBar/)
+  } finally {
+    await hub.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 凭据与故障隔离回归
+// ---------------------------------------------------------------------------
+
+test('凭据文件损坏不得被静默当无凭据；核心命令显式报错、--help 降级并诊断', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  await fsp.mkdir(dir, { recursive: true })
+  await fsp.writeFile(path.join(dir, 'credentials.json'), '{ broken json !!', 'utf8')
+  const hub = await startHub({
+    'GET /api/actions': () => ({ body: [] }),
+    'GET /api/conversations': () => ({ body: [] }),
+  })
+  try {
+    // 核心命令：损坏凭据显式报错（绝不静默当无凭据/默认 Hub 继续跑）
+    const r = await run(['conversations', 'list', '--json'], makeEnv(hub.url, dir))
+    assert.equal(r.code, 1)
+    assert.equal((JSON.parse(r.err) as { error: { code: string } }).error.code, 'credentials_unreadable')
+
+    // --help：核心帮助仍可用，凭据问题单独诊断到 stderr，不假称 Hub 没有动作
+    const help = await run(['--help'], makeEnv(hub.url, dir))
+    assert.equal(help.code, 0)
+    assert.match(help.out, /核心命令/)
+    assert.match(help.err, /凭据文件损坏/)
+    assert.doesNotMatch(help.out, /Hub 未提供插件动作命令/)
+
+    // 纯文本模式错误同样显式
+    const human = await run(['conversations', 'list'], makeEnv(hub.url, dir))
+    assert.equal(human.code, 1)
+    assert.match(human.err, /凭据文件损坏/)
+  } finally {
+    await hub.close()
+  }
+})
+
+test('status 无 token 也可请求，有 token 附带（authenticated 反映真实状态）', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  // 无任何已存 token：status 不因缺 token 报 unauthorized
+  const hub = await startHub({
+    'GET /api/auth/status': (body, req) => ({ body: { configured: true, authenticated: req.headers['authorization'] !== undefined } }),
+  })
+  try {
+    const noToken = await run(['status', '--json'], { HELM_HUB_URL: hub.url, HELM_DATA_DIR: dir })
+    assert.equal(noToken.code, 0, noToken.err)
+    assert.deepEqual(JSON.parse(noToken.out), { configured: true, authenticated: false })
+    assert.equal(hub.recorded.hits.at(-1)?.authorization, undefined)
+
+    // 已存 token（凭据文件）：status 附带 Authorization，Hub 可回真实 authenticated
+    await fsp.writeFile(
+      path.join(dir, 'credentials.json'),
+      JSON.stringify({ cli: { hubUrl: hub.url, token: 'tok-status' } }),
+      { mode: 0o600 },
+    )
+    const withToken = await run(['status', '--json'], { HELM_HUB_URL: hub.url, HELM_DATA_DIR: dir })
+    assert.equal(withToken.code, 0, withToken.err)
+    assert.deepEqual(JSON.parse(withToken.out), { configured: true, authenticated: true })
+    assert.equal(hub.recorded.hits.at(-1)?.authorization, 'Bearer tok-status')
+
+    // setup/login 仍显式匿名请求（不带 token）
+    const hub2 = await startHub({
+      'POST /api/auth/setup': (body, req) => {
+        assert.equal(req.headers['authorization'], undefined, 'setup 必须匿名')
+        return { body: { token: 'tok-new' } }
+      },
+    })
+    try {
+      const setup = await run(['setup', '--password', 'pw', '--json'], { HELM_HUB_URL: hub2.url, HELM_DATA_DIR: dir, HELM_TOKEN: 'ignored-env' })
+      assert.equal(setup.code, 0, setup.err)
+    } finally {
+      await hub2.close()
+    }
+  } finally {
+    await hub.close()
+  }
+})
+
+test('send 尊重 -- 分隔符：--json 作为文本发送而非被全局剥离', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startHub({
+    'POST /api/conversations/1/input': () => ({ body: { ok: true } }),
+  })
+  try {
+    // -- 之后的 --json 是待发送文本的一部分；提前出现的 --json 仍生效为全局输出开关
+    const r = await run(['send', '1', '--json', '--', '--json'], makeEnv(hub.url, dir))
+    assert.equal(r.code, 0, r.err)
+    const hit = hub.recorded.hits.find((h) => h.path === '/api/conversations/1/input')!
+    assert.deepEqual((hit.body as { text: string }).text, '--json')
+    // -- 之前的 --json 生效：输出为 JSON
+    assert.deepEqual(JSON.parse(r.out), { ok: true })
+
+    // 组合 flag 不受影响
+    const normal = await run(['send', '1', '普通 文本', '--origin', 'agent', '--json'], makeEnv(hub.url, dir))
+    assert.equal(normal.code, 0, normal.err)
+    assert.deepEqual((hub.recorded.hits.at(-1)?.body as { text: string; origin: string }), { text: '普通 文本', origin: 'agent' })
+  } finally {
+    await hub.close()
+  }
+})
+
+test('跨 Hub 不发旧 token：HELM_HUB_URL 指向新地址时忽略凭据中的 token', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  // 旧 Hub：凭据文件记录其地址与 token
+  const oldHub = await startHub({
+    'POST /api/auth/login': () => ({ body: { token: 'tok-old-hub' } }),
+    'GET /api/conversations': () => ({ body: [] }),
+  })
+  const newHub = await startHub({
+    'GET /api/auth/status': (body, req) => ({
+      body: { configured: true, authenticated: req.headers['authorization'] !== undefined },
+    }),
+    'GET /api/conversations': () => ({ body: [] }),
+  })
+  try {
+    const login = await run(['login', '--password', 'pw', '--json'], { HELM_HUB_URL: oldHub.url, HELM_DATA_DIR: dir })
+    assert.equal(login.code, 0, login.err)
+    const saved = JSON.parse(await fsp.readFile(path.join(dir, 'credentials.json'), 'utf8')) as { cli: { hubUrl: string; token: string } }
+    assert.equal(saved.cli.hubUrl, oldHub.url)
+    assert.equal(saved.cli.token, 'tok-old-hub')
+
+    // HELM_HUB_URL 改指新 Hub：凭据中的旧 token 不随行（status 匿名可探，请求确实发出）
+    const probe = await run(['status', '--json'], { HELM_HUB_URL: newHub.url, HELM_DATA_DIR: dir })
+    assert.equal(probe.code, 0, probe.err)
+    assert.deepEqual(JSON.parse(probe.out), { configured: true, authenticated: false }, '新 Hub 不得收到旧 Hub 的 token')
+    const leakHit = newHub.recorded.hits.find((h) => h.path === '/api/auth/status')!
+    assert.equal(leakHit.authorization, undefined, '不得把旧 Hub 的 token 发给新 Hub')
+
+    // 需鉴权路径无 token 时显式 unauthorized（不静默裸奔、也不用旧 token 补位）
+    const leaked = await run(['conversations', 'list', '--json'], { HELM_HUB_URL: newHub.url, HELM_DATA_DIR: dir })
+    assert.equal(leaked.code, 1)
+    assert.equal((JSON.parse(leaked.err) as { error: { code: string } }).error.code, 'unauthorized')
+
+    // 显式 HELM_TOKEN 仍优先（用户自己保证它属于目标 Hub）
+    const explicit = await run(['conversations', 'list', '--json'], { HELM_HUB_URL: newHub.url, HELM_DATA_DIR: dir, HELM_TOKEN: 'tok-new-hub' })
+    assert.equal(explicit.code, 0, explicit.err)
+    assert.equal(newHub.recorded.hits.at(-1)?.authorization, 'Bearer tok-new-hub')
+
+    // 无 env URL 时沿用凭据文件的 hubUrl + token（同源一致）
+    const sameHub = await run(['conversations', 'list', '--json'], { HELM_DATA_DIR: dir })
+    assert.equal(sameHub.code, 0, sameHub.err)
+    assert.equal(oldHub.recorded.hits.at(-1)?.authorization, 'Bearer tok-old-hub')
+  } finally {
+    await oldHub.close()
+    await newHub.close()
+  }
+})
+
+test('首次数据目录不存在时 setup 仍能落盘凭据（目录先建、锁后加）', { timeout: 60_000 }, async () => {
+  const dir = freshDataDirPath() // 目录不存在
+  const hub = await startHub({
+    'POST /api/auth/setup': () => ({ body: { token: 'tok-fresh' } }),
+  })
+  try {
+    const r = await run(['setup', '--password', 'pw', '--json'], { HELM_HUB_URL: hub.url, HELM_DATA_DIR: dir })
+    assert.equal(r.code, 0, r.err)
+    const saved = JSON.parse(await fsp.readFile(path.join(dir, 'credentials.json'), 'utf8')) as { cli: { token: string } }
+    assert.equal(saved.cli.token, 'tok-fresh')
+    const st = await fsp.stat(path.join(dir, 'credentials.json'))
+    assert.equal(st.mode & 0o777, 0o600)
+    // 锁与临时文件不残留
+    const leftovers = (await fsp.readdir(dir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
+    assert.deepEqual(leftovers, [])
+  } finally {
+    await hub.close()
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+})
+
+test('跨进程并发：真实子进程 CLI 写 cli 键 + 本进程 Hub CredentialService.set 均保留', { timeout: 60_000 }, async () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+  const tsxCli = resolveTscCli()
+  const dataDir = freshDataDirPath() // 目录不存在：验证双方首次创建
+  const cliEntry = path.join(repoRoot, 'packages', 'node', 'src', 'cli', 'index.ts')
+
+  // CLI 子进程：真实独立 Node 进程登录写 cli 键（Hub 换发 token）
+  const hub = await startHub({
+    'POST /api/auth/login': (body) => ({ body: { token: `tok-cli-${(body as { password: string }).password}` } }),
+  })
+  const runCliChild = (password: string): Promise<{ code: number | null; err: string }> =>
+    new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [tsxCli, cliEntry, 'login', '--password', password, '--json'], {
+        env: { ...process.env, HELM_HUB_URL: hub.url, HELM_DATA_DIR: dataDir, HELM_TOKEN: '' },
+        stdio: ['ignore', 'ignore', 'pipe'],
+      })
+      let err = ''
+      child.stderr.on('data', (c: Buffer) => (err += c.toString('utf8')))
+      child.on('error', reject)
+      child.on('close', (code) => resolve({ code, err }))
+    })
+  try {
+    // 预置服务端键，随后 4 个真实 CLI 子进程与 4 次进程内 CredentialService.set 并发读改写
+    const { CredentialService } = await import('../../kernel/src/services/index.js')
+    await fsp.mkdir(dataDir, { recursive: true })
+    await fsp.writeFile(path.join(dataDir, 'credentials.json'), JSON.stringify({ providers: {}, pluginSecrets: {} }), { mode: 0o600 })
+    const svc = new CredentialService(dataDir)
+    await svc.set('base', 'sk-base-0123456789')
+
+    const children: Promise<{ code: number | null; err: string }>[] = Array.from({ length: 4 }, (_, i) => runCliChild(`pw-${i}`))
+    const serverSets: Promise<void>[] = Array.from({ length: 4 }, (_, i) => svc.set(`provider-${i}`, `sk-value-${i}`))
+    const childResults = await Promise.all(children)
+    await Promise.all(serverSets)
+    for (const r of childResults) {
+      assert.equal(r.code, 0, `CLI 子进程失败: ${r.err}`)
+    }
+
+    // 双方键全部保留：cli 键（最后一次子进程写入者）+ 全部 provider 键
+    const final = JSON.parse(await fsp.readFile(path.join(dataDir, 'credentials.json'), 'utf8')) as {
+      cli: { hubUrl: string; token: string }
+      providers: Record<string, { value: string }>
+    }
+    assert.equal(final.cli.hubUrl, hub.url)
+    assert.match(final.cli.token, /^tok-cli-pw-[0-3]$/)
+    const ids = await svc.list()
+    assert.deepEqual(ids, ['base', 'provider-0', 'provider-1', 'provider-2', 'provider-3'])
+    for (let i = 0; i < 4; i++) {
+      assert.equal(final.providers[`provider-${i}`]?.value, `sk-value-${i}`)
+    }
+    // 0600 与无锁/临时文件残留
+    const st = await fsp.stat(path.join(dataDir, 'credentials.json'))
+    assert.equal(st.mode & 0o777, 0o600)
+    const leftovers = (await fsp.readdir(dataDir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
+    assert.deepEqual(leftovers, [])
+  } finally {
+    await hub.close()
+    await fsp.rm(dataDir, { recursive: true, force: true }).catch(() => {})
   }
 })

@@ -5,7 +5,8 @@
  * ArtifactService spill 阈值与 UTF-8 安全。
  */
 import { test } from 'node:test'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readdir, readFile, symlink, writeFile, rm, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -33,6 +34,7 @@ import {
   readJsonFile,
   readTextFile,
   resolveDataDir,
+  withProcessFileLock,
 } from '../src/services/index.js'
 
 const testDir = dirname(fileURLToPath(import.meta.url))
@@ -721,6 +723,147 @@ test('并发回归: 不同 CredentialService 实例并发 set 不丢凭据', { t
   assert.deepEqual(ids, ['provider-0', 'provider-1', 'provider-2', 'provider-3', 'provider-4'])
   for (let i = 0; i < 5; i++) {
     assert.equal(await services[i]!.get(`provider-${i}`), `sk-value-${i}`)
+  }
+})
+
+test('跨进程锁回归: 坏锁拒绝、死持有者破除、存活持有者不强拆、锁不残留', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const target = join(dataDir, 'credentials.json')
+  const lockFile = `${target}.lock`
+
+  // 1) 锁内容损坏（无 PID）：显式报错，绝不猜测破除
+  await writeFile(lockFile, 'not-a-pid garbage\n', { mode: 0o600 })
+  await expectReject(() => withProcessFileLock(target, async () => 'ok'), /损坏/)
+  await rm(lockFile, { force: true })
+
+  // 2) 持有者已死（不存在的 PID）：stale 破除并正常执行；结束后锁不残留
+  const deadPid = 2 ** 22 + Math.floor(Math.random() * 1000) // 远超真实 PID 范围上限，几乎必不存在
+  {
+    const probe = spawnSync(process.execPath, ['-e', 'process.exit(42)'])
+    assert.equal(probe.status, 42)
+  }
+  await writeFile(lockFile, `${deadPid} uuid-dead\n`, { mode: 0o600 })
+  assert.equal(await withProcessFileLock(target, async () => 'recovered'), 'recovered')
+  assert.ok(!existsSync(lockFile), 'stale 破除执行后锁应被释放')
+
+  // 3) 持有者存活：等待（不按存活时长强拆），释放后拿到锁
+  const order: string[] = []
+  const child = spawn(process.execPath, [
+    '-e',
+    `const fs = require('node:fs');
+     const lock = ${JSON.stringify(lockFile)};
+     fs.writeFileSync(lock, process.pid + ' child-uuid\\n', { flag: 'wx', mode: 0o600 });
+     setTimeout(() => { fs.unlinkSync(lock); process.exit(0) }, 400)`,
+  ])
+  // close 监听须在 spawn 后立即注册：等锁释放后再注册会错过已触发的 close 事件
+  const childExit = new Promise<number | null>((resolve) => child.on('close', (c) => resolve(c)))
+  // 等子进程确实拿到锁再进入争抢
+  await waitFor(() => existsSync(lockFile))
+  const acquired = await withProcessFileLock(target, async () => {
+    order.push('parent')
+    return 'after-child'
+  })
+  assert.equal(acquired, 'after-child', '存活持有者的锁不得被强拆，只能等待其释放')
+  assert.deepEqual(order, ['parent'])
+  assert.equal(await childExit, 0)
+  assert.ok(!existsSync(lockFile))
+
+  // 4) 长活进程（>1s）持锁期间不被 stale 强拆：先前 store 的凭据仍完整
+  const svc = new CredentialService(dataDir)
+  await svc.set('solo', 'sk-solo-1234567890')
+  assert.equal(await svc.get('solo'), 'sk-solo-1234567890')
+  const leftovers = (await readdir(dataDir)).filter((f) => f.endsWith('.lock'))
+  assert.deepEqual(leftovers, [], '正常路径结束后不得残留锁文件')
+})
+
+test('跨进程锁回归: 真实子进程持锁期间 CredentialService.set 显式等锁而非丢更新', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const svc = new CredentialService(dataDir)
+  await svc.set('pre', 'sk-pre-0123456789')
+  const lockFile = join(dataDir, 'credentials.json.lock')
+
+  // 子进程真实持锁 300ms（存活持有者），期间父进程 set 必须排队而非读旧写回
+  const child = spawn(process.execPath, [
+    '-e',
+    `const fs = require('node:fs');
+     const lock = ${JSON.stringify(lockFile)};
+     fs.writeFileSync(lock, process.pid + ' holder\\n', { flag: 'wx', mode: 0o600 });
+     const t0 = Date.now();
+     while (Date.now() - t0 < 300) {} // 忙等持锁（同步阻塞，确保不提前释放）
+     fs.unlinkSync(lock);`,
+  ])
+  const childExit = new Promise<number | null>((resolve) => child.on('close', (c) => resolve(c)))
+  await waitFor(() => existsSync(lockFile))
+  await svc.set('during', 'sk-during-9876543210')
+  assert.equal(await childExit, 0)
+  assert.deepEqual(await svc.list(), ['during', 'pre'])
+  assert.equal(await svc.get('during'), 'sk-during-9876543210')
+  assert.equal(await svc.get('pre'), 'sk-pre-0123456789')
+})
+
+test('跨进程锁回归: 真实 CLI 子进程与 CredentialService 并发写 credentials.json 双键保留', { timeout: 60_000 }, async () => {
+  const require = createRequire(import.meta.url)
+  const tsxCli = require.resolve('tsx/cli')
+  const repoRoot = dirname(testDir) // packages/kernel/test -> 仓库根
+  const cliEntry = join(repoRoot, 'packages', 'node', 'src', 'cli', 'index.ts')
+  // 目录不存在的全新 dataDir：验证双方首次创建与同锁互认
+  const dataDir = join(tmpdir(), `helm-xproc-${process.pid}-${Date.now()}`)
+  const credFile = join(dataDir, 'credentials.json')
+
+  const runCliChild = (password: string): Promise<{ code: number | null; err: string }> =>
+    new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [tsxCli, cliEntry, 'login', '--password', password, '--json'], {
+        env: { ...process.env, HELM_DATA_DIR: dataDir, HELM_HUB_URL: 'http://127.0.0.1:1', HELM_TOKEN: '' },
+        stdio: ['ignore', 'ignore', 'pipe'],
+      })
+      let err = ''
+      child.stderr.on('data', (c: Buffer) => (err += c.toString('utf8')))
+      child.on('error', reject)
+      child.on('close', (code) => resolve({ code, err }))
+    })
+
+  try {
+    await mkdir(dataDir, { recursive: true })
+    await writeFile(credFile, JSON.stringify({ providers: {}, pluginSecrets: {} }), { mode: 0o600 })
+    const svc = new CredentialService(dataDir)
+    await svc.set('base', 'sk-base-0123456789')
+
+    // CLI 子进程虽连不上 Hub（写凭据前才失败），但登录路径先写锁再读凭据；
+    // 为确保子进程真的执行写入，改用与 CLI 同协议的锁持者进程直接改写 cli 键
+    const holder = spawn(process.execPath, [
+      '-e',
+      `const fs = require('node:fs');
+       const path = require('node:path');
+       const file = ${JSON.stringify(credFile)};
+       const lock = file + '.lock';
+       fs.writeFileSync(lock, process.pid + ' holder\\n', { flag: 'wx', mode: 0o600 });
+       const t0 = Date.now();
+       while (Date.now() - t0 < 300) {} // 持锁读改写窗口：与 CLI 协议一致的 credentials.json.lock
+       const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+       raw.cli = { hubUrl: 'http://127.0.0.1:3202', token: 'tok-child-write' };
+       const tmp = file + '.tmp-child';
+       fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\\n', { mode: 0o600 });
+       fs.renameSync(tmp, file);
+       fs.unlinkSync(lock);`,
+    ])
+    const holderExit = new Promise<number | null>((resolve) => holder.on('close', (c) => resolve(c)))
+    const lockFile = `${credFile}.lock`
+    await waitFor(() => existsSync(lockFile))
+    // 父进程（Hub 侧）在同一窗口内并发写 provider 键：必须排队等子进程释放
+    await svc.set('concurrent', 'sk-concurrent-abcdef123456')
+    assert.equal(await holderExit, 0)
+
+    const final = JSON.parse(await readFile(credFile, 'utf8')) as {
+      cli: { token: string }
+      providers: Record<string, { value: string }>
+    }
+    // 双方键均保留：锁协议互认使读改写完全串行
+    assert.equal(final.cli.token, 'tok-child-write', 'CLI 侧写入的 cli 键不得被 Hub 侧覆盖丢失')
+    assert.deepEqual(Object.keys(final.providers).sort(), ['base', 'concurrent'])
+    assert.equal(final.providers['concurrent']!.value, 'sk-concurrent-abcdef123456')
+    assert.ok(!(await readdir(dataDir)).some((f) => f.endsWith('.lock') || f.includes('.tmp')), '结束后无锁/临时文件残留')
+  } finally {
+    await rm(dataDir, { recursive: true, force: true }).catch(() => {})
   }
 })
 

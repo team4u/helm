@@ -17,11 +17,19 @@ export interface HubEndpoint {
   token?: string
 }
 
-/** 解析 Hub 地址与 Token（env 永远优先于凭据文件）。 */
+/**
+ * 解析 Hub 地址与 Token。
+ * Token 信任边界：HELM_TOKEN 显式给出则优先（用户自己保证它属于目标 Hub）；
+ * 否则仅当目标 baseUrl 与凭据文件记录的 hubUrl 完全一致时才附带存储的
+ * token——HELM_HUB_URL 指向另一个 Hub 时绝不把旧 Hub 的 token 发过去。
+ */
 export function resolveEndpoint(env: NodeJS.ProcessEnv, credential: { hubUrl?: string; token?: string }): HubEndpoint {
-  const baseUrl = normalizeUrl(env['HELM_HUB_URL'] || credential.hubUrl || DEFAULT_HUB_URL)
-  const token = env['HELM_TOKEN'] || credential.token || undefined
-  return { baseUrl, token }
+  const envUrl = env['HELM_HUB_URL']?.trim()
+  const baseUrl = normalizeUrl(envUrl || credential.hubUrl || DEFAULT_HUB_URL)
+  if (env['HELM_TOKEN']) return { baseUrl, token: env['HELM_TOKEN'] }
+  // 无 env URL 时 baseUrl 必然来自 credential.hubUrl（或默认值），token 同源可用
+  const sameHub = !envUrl || !credential.hubUrl || normalizeUrl(credential.hubUrl) === baseUrl
+  return { baseUrl, token: sameHub ? credential.token : undefined }
 }
 
 export class HubClient {
@@ -35,9 +43,13 @@ export class HubClient {
     return this.endpoint.baseUrl
   }
 
-  /** 需要鉴权的请求构造 headers；无 token 时如实报错（提示来源），不静默裸奔。 */
-  private authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  /**
+   * 需要鉴权的请求构造 headers；无 token 时如实报错（提示来源），不静默裸奔。
+   * auth:'optional' 例外：有 token 附带，无 token 也放行（如 /api/auth/status）。
+   */
+  private authHeaders(extra: Record<string, string> = {}, optional = false): Record<string, string> {
     if (!this.endpoint.token) {
+      if (optional) return extra
       throw new CliError(
         `未配置 Token（${this.endpoint.baseUrl}）。运行 helm login，或设置 HELM_TOKEN。`,
         'unauthorized',
@@ -84,11 +96,15 @@ export class HubClient {
     }
   }
 
-  /** JSON 请求；body 为 undefined 时不发送请求体。 */
-  async request<T>(method: string, path: string, opts: { body?: unknown; auth?: boolean; signal?: AbortSignal } = {}): Promise<T> {
-    const auth = opts.auth !== false
+  /**
+   * JSON 请求；body 为 undefined 时不发送请求体。
+   * auth：true（默认）必须带 token；false 明确匿名；'optional' 有 token 附带、
+   * 无 token 也放行（用于 status 等公开端点的鉴权状态探测）。
+   */
+  async request<T>(method: string, path: string, opts: { body?: unknown; auth?: boolean | 'optional'; signal?: AbortSignal } = {}): Promise<T> {
     const headers: Record<string, string> = {}
-    if (auth) Object.assign(headers, this.authHeaders())
+    if (opts.auth === 'optional') Object.assign(headers, this.authHeaders({}, true))
+    else if (opts.auth !== false) Object.assign(headers, this.authHeaders())
     if (opts.body !== undefined) headers['content-type'] = 'application/json'
     let response: Response
     try {

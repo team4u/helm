@@ -23,7 +23,7 @@ export {
 
 export { ConfigService } from './config.js'
 
-export { withFileLock } from './file-lock.js'
+export { withFileLock, withProcessFileLock } from './file-lock.js'
 
 export {
   SecretStash,

@@ -2,7 +2,8 @@
  * 动态插件命令：GET /api/actions 的 ActionManifest -> 顶层 `helm <path...>` 命令。
  * - 默认路径 [stripBuiltin(pluginId), actionId]；cli.command 可整体改写。
  * - inputSchema.properties -> --kebab-case flag，按 JSON Schema 类型转换。
- * - 冲突/空路径/抢占核心命令路径均显式报错，绝不静默丢弃。
+ * - 与保留名/同 kebab 冲突的属性跳过独立 flag（仍可经整体 --input 表达），不禁用动作。
+ * - 命令路径冲突/空路径/抢占核心命令路径均显式报错，绝不静默丢弃。
  */
 import type { ActionManifest, JsonSchema } from '@helm/protocol'
 import { CliError } from './errors.js'
@@ -33,11 +34,11 @@ function kebabCase(name: string): string {
   return name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()
 }
 
-/** schema properties + required -> flag 声明表。 */
-export function flagsFromSchema(schema: JsonSchema): FlagSpec[] {
-  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return []
+/** schema properties + required -> flag 声明表；skipped 为无法/不宜生成独立 flag 的属性名。 */
+export function flagsFromSchema(schema: JsonSchema): { flags: FlagSpec[]; skipped: string[] } {
+  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return { flags: [], skipped: [] }
   const properties = (schema as { properties?: unknown }).properties
-  if (properties === undefined) return []
+  if (properties === undefined) return { flags: [], skipped: [] }
   if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) {
     throw new CliError(`动作 inputSchema.properties 形状非法：必须是对象`, 'invalid_action_manifest')
   }
@@ -45,30 +46,47 @@ export function flagsFromSchema(schema: JsonSchema): FlagSpec[] {
   const requiredNames = new Set(
     Array.isArray(required) && required.every((r) => typeof r === 'string') ? (required as string[]) : [],
   )
-  const specs: FlagSpec[] = []
-  for (const [rawName, propSchema] of Object.entries(properties as Record<string, unknown>)) {
-    const name = kebabCase(rawName)
-    if (RESERVED_FLAG_NAMES.has(name)) {
-      throw new CliError(
-        `动作属性 "${rawName}" 生成的 flag --${name} 与保留名冲突`,
-        'action_flag_conflict',
-      )
-    }
-    const type = flagTypeOf(propSchema)
-    if (type === undefined) continue // 无法映射的属性静默留给 --input 整体提交（服务端校验兜底）
-    specs.push({ name, type, required: requiredNames.has(rawName) })
+  // 两遍：先统计全部属性名映射到同一 kebab flag 的次数——
+  // 多个属性（fooBar 与 foo-bar）撞同一 flag 名时全部跳过独立 flag（绝不静默 last-wins），
+  // 只允许经整体 --input JSON 表达（服务端 schema 校验兜底）。
+  const rawNames = Object.keys(properties as Record<string, unknown>)
+  const kebabCounts = new Map<string, number>()
+  for (const rawName of rawNames) {
+    const key = kebabCase(rawName)
+    kebabCounts.set(key, (kebabCounts.get(key) ?? 0) + 1)
   }
-  return specs
+  const flags: FlagSpec[] = []
+  const skipped: string[] = []
+  for (const rawName of rawNames) {
+    const name = kebabCase(rawName)
+    // 保留名（--json/--help/--input/--current/-h）同样不可作为独立 flag
+    if (RESERVED_FLAG_NAMES.has(name) || (kebabCounts.get(name) ?? 0) > 1) {
+      skipped.push(rawName)
+      continue
+    }
+    const type = flagTypeOf((properties as Record<string, unknown>)[rawName])
+    if (type === undefined) {
+      skipped.push(rawName)
+      continue // 无法映射的属性留给整体 --input 提交（服务端校验兜底）
+    }
+    flags.push({ name, type, required: requiredNames.has(rawName) })
+  }
+  return { flags, skipped }
 }
 
-/** camelCase / 原名 -> kebab flag 名反查：flag 名 -> schema 属性名。 */
-function schemaPropertyNames(schema: JsonSchema): Map<string, string> {
-  const map = new Map<string, string>()
+/**
+ * camelCase / 原名 -> kebab flag 名反查：flag 名 -> schema 属性名。
+ * 多个属性映射到同一 flag 名（fooBar 与 foo-bar）时置 undefined（歧义），
+ * 调用方只允许经整体 --input 表达，绝不静默 last-wins。
+ */
+function schemaPropertyNames(schema: JsonSchema): Map<string, string | undefined> {
+  const map = new Map<string, string | undefined>()
   if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return map
   const properties = (schema as { properties?: unknown }).properties
   if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) return map
   for (const rawName of Object.keys(properties as Record<string, unknown>)) {
-    map.set(kebabCase(rawName), rawName)
+    const key = kebabCase(rawName)
+    map.set(key, map.has(key) ? undefined : rawName)
   }
   return map
 }
@@ -91,8 +109,11 @@ export function dynamicCommandOf(manifest: ActionManifest): DynamicCommand {
       )
     }
   }
-  const flags = flagsFromSchema(manifest.inputSchema)
+  const { flags, skipped } = flagsFromSchema(manifest.inputSchema)
   const propertyNames = schemaPropertyNames(manifest.inputSchema)
+  const inputHelp = skipped.length > 0
+    ? `整体 input JSON；属性 ${skipped.map((s) => `"${s}"`).join(', ')} 无独立 flag（名称冲突），只能经 --input 表达`
+    : '整体 input JSON（与属性 flag 互斥）'
   const description = manifest.cli?.description ?? manifest.description
   const pluginId = manifest.pluginId
   const actionId = manifest.id
@@ -101,7 +122,7 @@ export function dynamicCommandOf(manifest: ActionManifest): DynamicCommand {
     description: `${description}（插件动作 ${pluginId}.${actionId}）`,
     flags: [
       ...flags,
-      { name: 'input', type: 'json', help: '整体 input JSON（与属性 flag 互斥）' },
+      { name: 'input', type: 'json', help: inputHelp },
       { name: 'current', type: 'boolean', help: '附带 env HELM_CONVERSATION_ID 会话上下文' },
     ],
     async run(ctx) {
@@ -113,6 +134,13 @@ export function dynamicCommandOf(manifest: ActionManifest): DynamicCommand {
         { name: 'current', type: 'boolean' as const },
       ]
       const parsed = parseFlags(parseSpecs, ctx.args)
+      // 动作无位置参数：额外位置参数（含 -- 之后）显式拒绝，绝不无声丢弃
+      if (parsed.positionals.length > 0) {
+        throw new CliError(
+          `多余位置参数：${parsed.positionals.join(' ')}（动作参数请用 --flag 或整体 --input）`,
+          'unexpected_positional',
+        )
+      }
       if (parsed.flags.has('input')) {
         for (const flag of flags) {
           if (parsed.flags.has(flag.name)) {

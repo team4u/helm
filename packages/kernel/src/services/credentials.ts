@@ -1,7 +1,8 @@
 /**
  * CredentialService：管理 credentials.json（恒 0600）中的模型 API Key
  * 与插件 secret。get() 仅限进程内可信调用方使用，绝不经 HTTP 暴露。
- * 读改写按 credentials.json 真实路径的进程内共享锁串行化，跨实例互斥。
+ * 读改写按 credentials.json 真实路径双层串行化：进程内共享队列（withFileLock）
+ * + 跨进程锁（credentials.json.lock，与 CLI 互认同一协议），跨实例互斥。
  */
 import { chmod } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -13,7 +14,7 @@ import {
   readJsonFileOptional,
   readTextFile,
 } from './atomic-file.js'
-import { withFileLock } from './file-lock.js'
+import { withFileLock, withProcessFileLock } from './file-lock.js'
 
 export interface StoredCredential {
   /** 经 SecretStash 脱敏后的值或原始值（模型 API Key 不占位，直接存值）。 */
@@ -222,9 +223,9 @@ export class CredentialService {
     await atomicWriteJson(this.path, store, { mode: 0o600 })
   }
 
-  /** 按真实路径共享的串行化读改写，防并发 set/delete 跨实例互相覆盖。 */
+  /** 按真实路径双层串行化读改写：进程内队列 + 跨进程锁（与 CLI 互认）。 */
   private enqueue<T>(fn: () => Promise<T>): Promise<T> {
-    return withFileLock(this.path, fn)
+    return withFileLock(this.path, () => withProcessFileLock(this.path, fn))
   }
 }
 

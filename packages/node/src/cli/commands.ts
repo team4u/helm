@@ -82,8 +82,8 @@ async function readPasswordFromStdin(): Promise<string> {
   const { createInterface } = await import('node:readline/promises')
   const rl = createInterface({ input: process.stdin, output: process.stderr })
   try {
-    const answer = await rl.question('')
-    return answer.trim()
+    // readline 已去除行尾；不再 trim——密码中的首尾空格是用户输入的一部分
+    return await rl.question('')
   } finally {
     rl.close()
   }
@@ -160,7 +160,8 @@ export function coreCommands(): CommandSpec[] {
     description: '查看鉴权状态（GET /api/auth/status）',
     async run(ctx) {
       const hub = await ctx.hub()
-      const res = await hub.request<AuthStatus>('GET', '/api/auth/status', { auth: false })
+      // auth:'optional'：已存 token 附带（Hub 据此回真实 authenticated），无 token 也可探测 configured
+      const res = await hub.request<AuthStatus>('GET', '/api/auth/status', { auth: 'optional' })
       printValue(ctx.io, res, ctx.json)
     },
   })
