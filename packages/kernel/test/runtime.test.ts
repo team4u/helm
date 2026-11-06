@@ -28,18 +28,14 @@ import type { HelmEventFrame, HelmSnapshot } from '@helm/protocol'
  * Models（明确为测试用途）；注入时 reloadModels 不替换（保护外部集合）。
  */
 
-interface FauxHandle {
-  setResponses(messages: unknown[]): void
-  appendResponses(messages: unknown[]): void
-  provider: { id: string }
-}
+type FauxHandle = ReturnType<typeof fauxProvider>
 
 /** 捕获最近一次模型请求的工厂钩子（before_turn sections/tools/messages 验证）。 */
 
 function makeFauxModels(): { models: ReturnType<typeof createModels>; faux: FauxHandle } {
   const models = createModels()
-  const faux = fauxProvider() as unknown as FauxHandle
-  models.setProvider(faux.provider as never)
+  const faux = fauxProvider()
+  models.setProvider(faux.provider)
   return { models, faux }
 }
 
@@ -49,9 +45,9 @@ async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxH
     dataDir: dir,
     cwd: dir,
     model: 'faux/faux-1',
-    models: models as never,
+    models,
   })
-  return Object.assign(runtime, { __faux: faux } as never)
+  return Object.assign(runtime, { __faux: faux })
 }
 
 let root: string
@@ -143,7 +139,7 @@ describe('KernelRuntime 基础生命周期', { timeout: 60_000 }, () => {
       await kernel.plugins.register({
         id: 'test:abort',
         definePlugin(ctx) {
-          ctx.hook.onTurnSettled((p) => settled.push(p))
+          ctx.hook.onTurnSettled((p) => { settled.push(p) })
         },
       })
       void kernel.submitInput(1, '会被中止的问题').catch(() => {})

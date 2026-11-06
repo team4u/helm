@@ -28,6 +28,7 @@ import {
   type Extension,
   type Registry,
   type ToolRegistration,
+  type ToolExecutionResult,
 } from '@earendil-works/pi-durable'
 import { GenerationTask, ToolTask } from '@earendil-works/pi-durable'
 import type {
@@ -41,6 +42,7 @@ import type {
   ExternalTriggerEnvelope,
   InputOrigin,
   WhenBusy,
+  ToolResultHookPayload,
 } from '@helm/protocol'
 import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
@@ -56,6 +58,7 @@ import {
   SkillService,
   ensureDataDir,
   resolveDataDir,
+  type ArtifactRepository,
 } from '../services/index.js'
 import { PluginHost, type DerivedToolSpec } from '../plugins/index.js'
 import { AskService } from './asks.js'
@@ -69,6 +72,8 @@ import type { HelmToolDeps } from './tool-deps.js'
 import { createBashTool, createReadArtifactTool, createReadTool, runGate } from './tools.js'
 import { runNativeSpawn } from './spawn.js'
 import { HelmPluginConfigStore } from './plugin-config-store.js'
+import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
+import { redactJsonValue } from '../redact.js'
 
 export interface KernelRuntimeOptions {
   dataDir?: string
@@ -305,17 +310,17 @@ export class KernelRuntime {
       credentials: this.credentialsSvc,
     })
     // 同步镜像仓库（满足 ArtifactRepository 同步契约；持久化经 store 排队）。
-    const artifactRepo = {
-      get: (id: string) => this.store.getArtifact(id),
-      list: (conversationId: number) => this.store.listArtifacts(conversationId),
-      put: (meta: never) => {
-        this.store.putArtifact(meta as never)
+    const artifactRepo: ArtifactRepository = {
+      get: (id) => this.store.getArtifact(id),
+      list: (conversationId) => this.store.listArtifacts(conversationId),
+      put: (meta) => {
+        this.store.putArtifact(meta)
       },
       deleteByConversation: (conversationId: number) => {
         this.store.deleteArtifactsByConversation(conversationId)
       },
     }
-    this.artifactsSvc = new SvcArtifactService(init.dataDir, artifactRepo as never)
+    this.artifactsSvc = new SvcArtifactService(init.dataDir, artifactRepo, this.stashService)
     this.authSvc = new SvcAuthService(init.dataDir)
     Object.assign(this.apiKeyCache, init.seedKeyCache)
 
@@ -515,7 +520,7 @@ export class KernelRuntime {
             signal: context.abortSignal,
           })
           return {
-            output: [{ type: 'text', text: safeResultText(result) }],
+            output: [{ type: 'text', text: safeResultText(result, (text) => runtime.stash.redact(text)) }],
             structuredOutput: { ok: true, result: result as JsonValue } as JsonValue,
           }
         } catch (error) {
@@ -560,7 +565,7 @@ export class KernelRuntime {
         try {
           const summary = await runtime.runWorkflow(input, api.conversationId, context.abortSignal)
           return {
-            output: [{ type: 'text', text: safeResultText(summary) }],
+            output: [{ type: 'text', text: safeResultText(summary, (text) => runtime.stash.redact(text)) }],
             structuredOutput: { ok: true, summary: summary as JsonValue } as JsonValue,
           }
         } catch (error) {
@@ -613,7 +618,7 @@ export class KernelRuntime {
             signal: context.abortSignal,
           })
           return {
-            output: [{ type: 'text', text: safeResultText(result) }],
+            output: [{ type: 'text', text: safeResultText(result, (text) => runtime.stash.redact(text)) }],
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
@@ -805,7 +810,7 @@ export class KernelRuntime {
                 input: call.arguments as Record<string, unknown>,
               })
               if (outcome?.action === 'block') {
-                return { block: outcome.reason ?? 'blocked' }
+                return { block: self.stash.redact(outcome.reason ?? 'blocked') }
               }
               if (outcome?.action === 'handled') {
                 // 接管：结果登记到 execute 层缓存（wrapToolCalls 包装器消费）。
@@ -818,21 +823,35 @@ export class KernelRuntime {
               }
               return undefined
             },
-            /** tool_result：transform 改写结果（须仍是合法 ToolExecutionResult）。 */
+            /** 所有工具最终输出都在持久化前经过同一脱敏与 Spill 边界。 */
             afterTool: async (call, result, api) => {
               self.handledToolCalls.delete(call.id)
-              const outcome = await self.runHookChain('tool_result', {
-                conversationId: api.conversationId as number,
-                callId: call.id,
-                toolName: call.name,
-                input: call.arguments as Record<string, unknown>,
-                result,
-              })
-              if (outcome?.action === 'transform') {
-                // 修正：transform 的 value 是新 result 本体（旧实现误取整份 payload）。
-                return normalizeToolResult(outcome.value) as typeof result | undefined
+              try {
+                const outcome = await self.runHookChain('tool_result', {
+                  conversationId: api.conversationId as number,
+                  callId: call.id,
+                  toolName: call.name,
+                  input: call.arguments as Record<string, unknown>,
+                  result,
+                })
+                let effective = result
+                if (outcome?.action === 'transform') {
+                  const payload = outcome.value as ToolResultHookPayload
+                  const transformed = normalizeToolResult(payload.result)
+                  if (!transformed) throw new HelmError('invalid_hook_result', 'tool_result 必须返回合法工具结果', 500)
+                  effective = transformed as ToolExecutionResult
+                } else if (outcome?.action === 'handled') {
+                  const handled = normalizeToolResult(outcome.result)
+                  if (!handled) throw new HelmError('invalid_hook_result', 'tool_result 接管产物不是合法工具结果', 500)
+                  effective = handled as ToolExecutionResult
+                }
+                return await self.prepareToolResult(api.conversationId as number, effective)
+              } catch (error) {
+                return {
+                  isError: true,
+                  output: [{ type: 'text', text: self.stash.redact(`tool_result_failed: ${error instanceof Error ? error.message : String(error)}`) }],
+                }
               }
-              return undefined
             },
           }),
           hook(GenerationTask, {
@@ -847,14 +866,14 @@ export class KernelRuntime {
               const conversationId = api.conversationId as number
               const summary = self.safeSummary(conversationId)
               if (!summary) return undefined
-              const runtimeTools = self.pluginHost ? self.pluginHost.listTools() : []
+              const runtimeTools = getCurrentTools(request.messages)
               const payload = {
                 conversation: summary,
                 inputs: self.tracker.currentRunInputs(conversationId),
                 tools: runtimeTools.map((spec) => ({
                   name: spec.name,
                   description: spec.description,
-                  inputSchema: spec.inputSchema as Record<string, unknown>,
+                  inputSchema: spec.parameters as Record<string, unknown>,
                 })),
                 sections: systemSectionsOf(request.messages as unknown as Array<Record<string, unknown>>),
                 messages: request.messages as unknown as Array<Record<string, unknown>>,
@@ -869,17 +888,13 @@ export class KernelRuntime {
               let messages = original
               const sectionsChanged = !sectionsEqual(value.sections, payload.sections)
               const messagesChanged = value.messages !== payload.messages
-              if (messagesChanged) {
-                messages = value.messages
-              } else if (sectionsChanged) {
-                messages = withSections(original, value.sections)
-              }
+              if (messagesChanged) messages = value.messages
+              if (sectionsChanged) messages = withSections(messages, value.sections)
 
-              // tools 变更 -> 通过 toolsRemoved/toolsAdded 改写前导 system 消息，
-              // 模型下一轮即按新工具集调用（插件注册工具默认全量提供）。
-              const declared = new Set(value.tools.map((t) => t.name))
-              if (self.pluginToolNamesChanged(declared)) {
-                messages = withToolDeclarations(self, messages, declared)
+              const initialNames = new Set(runtimeTools.map((tool) => tool.name))
+              const declared = new Set(value.tools.map((tool) => tool.name))
+              if (declared.size !== initialNames.size || [...declared].some((name) => !initialNames.has(name))) {
+                messages = withToolDeclarations(messages, declared, runtimeTools)
               }
               if (messages === original) return undefined
               return { messages: messages as unknown as typeof request.messages }
@@ -890,14 +905,14 @@ export class KernelRuntime {
     )
   }
 
-  /** 插件声明工具名集与当前热装集是否不一致（决定是否改写工具声明）。 */
-  private pluginToolNamesChanged(declared: Set<string>): boolean {
-    const current = this.pluginHost ? this.pluginHost.listTools().map((s) => s.name) : []
-    if (current.length !== declared.size) return true
-    for (const name of current) {
-      if (!declared.has(name)) return true
-    }
-    return false
+  private async prepareToolResult(conversationId: number, result: ToolExecutionResult): Promise<ToolExecutionResult> {
+    // SDK 结果的可选属性可为 undefined；先按 JSON 语义省略，再逐字符串脱敏。
+    const safe = redactJsonValue(JSON.parse(JSON.stringify(result)), (text) => this.stash.redact(text)) as ToolExecutionResult
+    const output = safe.output ?? []
+    const text = output.filter((block) => block.type === 'text').map((block) => block.text).join('\n')
+    const spill = await this.artifacts.spill(conversationId, `tool-${randomUUID()}`, text)
+    if (!spill.artifact) return safe
+    return { ...safe, output: [{ type: 'text', text: spill.text }, ...output.filter((block) => block.type !== 'text')] }
   }
 
   /** 统一 hook 管道执行；返回最终决定（continue 归一为 undefined 由调用方走默认）。 */
@@ -927,6 +942,7 @@ export class KernelRuntime {
   }
 
   private installPluginTools(specs: DerivedToolSpec[]): void {
+    const runtime = this
     const host = this.pluginHost
     if (!host) return
     // 同名扩展 install 语义为原地替换（registry.install 已核实）；
@@ -943,7 +959,7 @@ export class KernelRuntime {
             signal: context.abortSignal,
           })
           // 插件工具返回任意值：包成 SDK ToolExecutionResult 契约（content/text）。
-          return pluginToolResult(result)
+          return pluginToolResult(result, (text) => runtime.stash.redact(text))
         },
       } as never) as unknown as {
         execute: (args: never, api: never, context: { abortSignal?: AbortSignal }) => Promise<unknown>
@@ -1576,10 +1592,14 @@ export class KernelRuntime {
       )
     }
     await Promise.allSettled(this.closeAborts)
+    await this.settledInflight
+    await this.pluginHost?.dispose()
     // 5) SDK 先关（此后无任何 SDK 写），再 flush store，最后关数据库。
     await this.harness.close(BACKGROUND_CONTEXT)
     const storeError = await this.store.close()
     await this.database.close()
+    this.events.close()
+    this.stashService.clear()
     if (storeError !== undefined) {
       throw new HelmError('store_flush_failed', `退出时持久化失败：${String(storeError)}`, 500, {
         error: String(storeError),
@@ -1593,18 +1613,14 @@ export class KernelRuntime {
 // ---------------------------------------------------------------------------
 
 /** 任意值 -> 模型可见文本（对象 JSON 序列化）。 */
-function safeResultText(value: unknown): string {
-  if (typeof value === 'string') return value
+function safeResultText(value: unknown, redact: (text: string) => string = (text) => text): string {
+  if (typeof value === 'string') return redact(value)
   if (value === undefined) return ''
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
-  }
+  return JSON.stringify(redactJsonValue(value, redact))
 }
 
 /** 插件工具原始返回 -> SDK ToolExecutionResult（裸文本/对象统一包 content；无 schema 不传 structuredOutput）。 */
-function pluginToolResult(raw: unknown): {
+function pluginToolResult(raw: unknown, redact: (text: string) => string): {
   output: Array<{ type: 'text'; text: string }>
   isError?: boolean
 } {
@@ -1618,7 +1634,7 @@ function pluginToolResult(raw: unknown): {
   }
   // 未声明 structuredOutputSchema 的工具不得返回 structuredOutput（SDK 契约）：
   // 结果统一走 output 文本通道。
-  return { output: [{ type: 'text', text: safeResultText(raw) }] }
+  return { output: [{ type: 'text', text: safeResultText(raw, redact) }] }
 }
 
 /** tool_call handled 的接管产物 -> 合法 ToolExecutionResult（非法形状显式错误结果）。 */
@@ -1715,37 +1731,16 @@ function withSections(
  * 模型侧由 pi-ai 回放机制解析（getCurrentTools），下一轮即生效。
  */
 function withToolDeclarations(
-  runtime: KernelRuntime,
   messages: ReadonlyArray<Record<string, unknown>>,
   declared: Set<string>,
+  tools: ReturnType<typeof getCurrentTools>,
 ): Array<Record<string, unknown>> {
-  // 汇总当前 registry 全部模型可用工具，取声明子集。
-  const host = (runtime as unknown as { pluginHost?: PluginHost }).pluginHost
-  const pluginTools = host ? host.listTools() : []
-  const available = new Map<string, { name: string; description: string; parameters?: unknown }>()
-  for (const spec of pluginTools) {
-    available.set(spec.name, {
-      name: spec.name,
-      description: spec.description,
-      parameters: spec.inputSchema,
-    })
-  }
-  // 内核工具（bash/read/read_artifact/subagent/SubagentWorkflow/run_action）默认保留。
-  for (const name of ['bash', 'read', 'read_artifact', 'subagent', 'SubagentWorkflow', 'run_action']) {
-    if (!available.has(name)) {
-      available.set(name, { name, description: `内核工具 ${name}`, parameters: { type: 'object', properties: {} } })
-    }
-  }
+  const available = new Map(tools.map((tool) => [tool.name, tool]))
   const added: Array<Record<string, unknown>> = []
   for (const name of declared) {
     const tool = available.get(name)
-    if (tool) {
-      added.push({
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters ?? { type: 'object', properties: {} },
-      })
-    }
+    if (!tool) throw new HelmError('unknown_tool', `before_turn 选择了未注册工具：${name}`, 500)
+    added.push({ ...tool })
   }
   if (messages.length === 0 || messages[0]!['role'] !== 'system') return [...messages]
   const lead = messages[0]!

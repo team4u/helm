@@ -396,8 +396,8 @@ export class ConversationTracker {
     let status: ConversationStatus
     if (pendingAskOverride === 'aborted') {
       status = 'idle'
-    } else if (pendingAsks > 0 && (!live?.run || live.run.inputs.length === 0)) {
-      // pendingAsk 优先 blocked：run 已吃完输入只剩 afterRun 任务时也算 blocked。
+    } else if (pendingAsks > 0) {
+      // 待答审批覆盖运行态，直接暴露当前的人类决策点。
       status = 'blocked'
     } else if (live?.run) {
       status = 'working'

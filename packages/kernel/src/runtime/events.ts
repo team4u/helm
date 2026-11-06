@@ -77,6 +77,7 @@ export class EventHub {
   private readonly subscribers = new Set<(frame: HelmEventFrame) => void>()
   private readonly snapshot: SnapshotProvider
   private readonly persistSeq: (seq: number) => void
+  private readonly streamClosers = new Set<() => void>()
   private readonly maxPendingBytes: number
   /** redact(text) -> 脱敏文本（secret 明文 -> marker；复用 redactJsonValue 递归）。 */
   redact: (text: string) => string = (t) => t
@@ -109,6 +110,7 @@ export class EventHub {
 
   /** 清空全部订阅（kernel.close 时调用，杜绝订阅泄漏）。 */
   close(): void {
+    for (const stop of [...this.streamClosers]) stop()
     this.subscribers.clear()
   }
 
@@ -206,6 +208,7 @@ export class EventHub {
     const shutdown = (): void => {
       if (closed) return
       closed = true
+      request.signal.removeEventListener('abort', shutdown)
       unsubscribe?.()
       unsubscribe = undefined
       const controller = controllerRef
@@ -233,7 +236,13 @@ export class EventHub {
       shutdown,
     )
     unsubscribe = handle.unsubscribe
-    const snap = this.currentSnapshot()
+    let snap: HelmSnapshot
+    try {
+      snap = this.currentSnapshot()
+    } catch (error) {
+      shutdown()
+      throw error
+    }
     const snapshotChunk = encodeFrame('snapshot', snap)
 
     const stream = new ReadableStream<Uint8Array>(
@@ -301,6 +310,7 @@ export class EventHub {
       if (done) return
       done = true
       this.subscribers.delete(push)
+      this.streamClosers.delete(stop)
       onStop?.()
     }
     const deliver = (frame: HelmEventFrame): void => {
@@ -326,6 +336,7 @@ export class EventHub {
       deliver(frame)
     }
     this.subscribers.add(push)
+    this.streamClosers.add(stop)
     return {
       unsubscribe: stop,
       goLive(snapshotSeq: number): boolean {
