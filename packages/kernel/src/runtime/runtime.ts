@@ -1460,10 +1460,10 @@ export class KernelRuntime {
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
 
     const origin: InputOrigin = opts?.origin ?? 'human'
-    let effectiveText = text
     const inputId = randomUUID()
     const createdAt = Date.now()
     // 边界脱敏：meta 值经 stash redact 后入库（受管 Token 等绝不经 meta 透传）。
+    // text 原样交给 input 钩子（hook 可感知/改写原始输入），最终消费前统一脱敏。
     const safeMeta =
       opts?.meta !== undefined
         ? (redactJsonValue(opts.meta, (t) => this.stash.redact(t)) as Record<string, unknown>)
@@ -1491,16 +1491,19 @@ export class KernelRuntime {
         )
       }
       finalInput = value.input
-      effectiveText = finalInput.text
       finalWhenBusy = finalInput.whenBusy ?? finalWhenBusy
-      // transform 产物同样过边界脱敏（插件可能回填新 meta）。
-      if (finalInput.meta !== undefined) {
-        finalInput = {
-          ...finalInput,
-          meta: redactJsonValue(finalInput.meta, (t) => this.stash.redact(t)) as Record<string, unknown>,
-        }
+    }
+    // 最终输入统一脱敏（直接输入与 transform 产物同权）：text/effectiveText 与
+    // meta 均不得携带已登记秘密明文（受管 Token、SecretStash 秘密）。此后的
+    // 自动标题、tracker、helm.input entry、SDK content 与持久化全部使用脱敏值。
+    if (finalInput.meta !== undefined) {
+      finalInput = {
+        ...finalInput,
+        meta: redactJsonValue(finalInput.meta, (t) => this.stash.redact(t)) as Record<string, unknown>,
       }
     }
+    const effectiveText = this.stash.redact(finalInput.text)
+    finalInput = { ...finalInput, text: effectiveText }
 
     // 首输入自动标题。
     if (convMeta.title === '') {
