@@ -18,7 +18,7 @@
  */
 
 import { HelmError } from '@helm/protocol'
-import type { AskSpec, ConversationSummary, HelmEvent, HelmEventFrame, HelmSnapshot } from '@helm/protocol'
+import type { AskSpec, ConversationSummary, CustomHelmEvent, HelmEvent, HelmEventFrame, HelmSnapshot } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 
 export type SnapshotProvider = () => HelmSnapshot
@@ -407,9 +407,11 @@ export class EventHub {
             : {}),
         }
       }
-      default:
+      default: {
         // CustomHelmEvent：未知 type 原样透传，不伪报成 notification。
-        return { type, payload: redacted }
+        const custom: CustomHelmEvent = { type: String(type), payload: redacted }
+        return custom
+      }
     }
   }
 }

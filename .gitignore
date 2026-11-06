@@ -3,3 +3,4 @@ dist/
 *.log
 .helm/
 .DS_Store
+node_modules

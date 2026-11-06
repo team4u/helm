@@ -4,16 +4,20 @@
  * 职责（机制，不含业务策略）：
  * - 打开单一 state.sqlite（pi-durable + helm 表 + FTS 共享 adapter 队列）；
  * - Harness（models getter 热更新 / registry 插件热装 / followUpMode: 'all'）；
+ * - PluginHost 组合（config/credentials 分离持久、工具热装、plugin.changed 事件）；
  * - root #1 创建（先 ensureDefault profiles；root 不注入业务 system prompt，
- *   SYSTEM/MEMORY 由 assistant 插件经 before_turn 注入）；
+ *   SYSTEM/MEMORY 由 assistant 插件经 before_turn sections 注入真实 system 段）；
  * - 7 类 hook 管道真实串联（trigger/input/before_turn/tool_call/tool_result/
- *   agent_spawn/turn_settled/watchdog_tick）；
+ *   agent_spawn/turn_settled/watchdog_tick），全部作用于真实 SDK 行为；
  * - 会话 CRUD / 输入 / abort / 等待 / 五态派生 / SSE 事件；
- * - AskService（CAS + secret stash）/ subagent / gate / workflow runner 挂接点。
+ * - AskService（CAS + secret stash）/ subagent / gate / workflow runner 挂接点；
+ * - 内核编排工具：subagent / SubagentWorkflow / run_action；
+ * - AssetWatcher 静态资产热重载（providers/credentials 变更串行 reloadModels）。
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord'
 import {
   Harness,
   ROOT_CONVERSATION_ID,
@@ -36,15 +40,15 @@ import type {
   ConversationSummary,
   ExternalTriggerEnvelope,
   InputOrigin,
-  ProviderConfig,
   WhenBusy,
 } from '@helm/protocol'
 import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
-import { isAbsolute, join } from 'node:path'
 import {
   ArtifactService as SvcArtifactService,
+  AssetWatcher,
   AuthService as SvcAuthService,
+  ConfigService,
   CredentialService,
   ProfileService,
   ProviderService,
@@ -60,10 +64,11 @@ import { EventHub } from './events.js'
 import { buildModels, listModelCatalog, requireModelRef } from './models.js'
 import type { Models } from '@earendil-works/pi-ai/models'
 import { openHelmDatabase, type HelmDatabase } from './sqlite.js'
-import { HelmStore, summaryOf } from './store.js'
+import { HelmStore } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { createBashTool, createReadArtifactTool, createReadTool, runGate } from './tools.js'
 import { runNativeSpawn } from './spawn.js'
+import { HelmPluginConfigStore } from './plugin-config-store.js'
 
 export interface KernelRuntimeOptions {
   dataDir?: string
@@ -73,8 +78,8 @@ export interface KernelRuntimeOptions {
   /** hub URL（测试 port:0 时注入；缺省按 HELM_PORT 生成）。 */
   hubUrl?: string
   /**
-   * 外部注入 Models（测试用 faux provider 时传入；产品路径不传，
-   * 由 buildModels 按 providers.json + credentials 构建）。
+   * 外部注入 Models（测试用 faux provider 时传入）。注入时模型集合完全由
+   * 调用方拥有：reloadModels 不重建、热重载不替换（防止把 faux 换成官方集）。
    */
   models?: Models
   /**
@@ -89,6 +94,61 @@ export interface WorkflowRunnerFn {
   (request: Record<string, unknown>, conversationId: number, signal?: AbortSignal): Promise<unknown>
 }
 
+/** plugin.changed 宿主事件（PluginHost emitEvent 入参的既有约定形状）。 */
+interface PluginChangedEmit {
+  type: 'plugin.changed'
+  plugin: unknown
+}
+
+type HookDecision =
+  | { action: 'continue' }
+  | { action: 'transform'; value: unknown }
+  | { action: 'handled'; result?: unknown }
+  | { action: 'block'; reason: string }
+
+/** XML 属性/文本转义（defang 防逃逸与 ownership 标记共用）。 */
+function escapeXml(text: string): string {
+  return text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+}
+
+/** 内核/插件工具 execute 包装：tool_call handled 接管结果优先返回（不执行真实工具）。 */
+function wrapToolExecute(
+  handledToolCalls: Map<string, { output: Array<{ type: 'text'; text: string }>; isError: boolean }>,
+  execute: (args: never, api: never, context: { abortSignal?: AbortSignal }) => Promise<unknown>,
+): (args: never, api: never, context: { abortSignal?: AbortSignal }) => Promise<unknown> {
+  return async (args, api, context) => {
+    const callId = (api as unknown as { callId?: string }).callId
+    const handled = callId !== undefined ? handledToolCalls.get(callId) : undefined
+    if (handled !== undefined) {
+      handledToolCalls.delete(callId!)
+      return handled
+    }
+    return execute(args, api, context)
+  }
+}
+
+/** 文本块提取（消息 content 数组 -> 纯文本）。 */
+function textBlocksOf(content: unknown): string[] {
+  if (typeof content === 'string') return [content]
+  if (!Array.isArray(content)) return []
+  const out: string[] = []
+  for (const block of content) {
+    if (
+      block !== null &&
+      typeof block === 'object' &&
+      (block as { type?: string }).type === 'text' &&
+      typeof (block as { text?: unknown }).text === 'string'
+    ) {
+      out.push((block as { text: string }).text)
+    }
+  }
+  return out
+}
+
 export class KernelRuntime {
   readonly dataDir: string
   private readonly database: HelmDatabase
@@ -98,29 +158,39 @@ export class KernelRuntime {
   readonly events: EventHub
   private readonly tracker: ConversationTracker
   private readonly asks: AskService
-  private readonly stash = new SecretStash()
+  private readonly stashService = new SecretStash()
   /** 未配置模型时的 hooks 载荷占位（提交时 requireModelRef 显式报错）。 */
   private modelPlaceholder = 'unconfigured'
   private readonly toolDeps: HelmToolDeps
-  private readonly profiles: ProfileService
-  private readonly skills: SkillService
-  private readonly artifacts: SvcArtifactService
-  private readonly auth: SvcAuthService
-  private readonly credentials: CredentialService
+  private readonly profilesSvc: ProfileService
+  private readonly skillsSvc: SkillService
+  private readonly artifactsSvc: SvcArtifactService
+  private readonly authSvc: SvcAuthService
+  private readonly credentialsSvc: CredentialService
   private readonly providersSvc: ProviderService
+  private readonly configSvc: ConfigService
+  private readonly pluginConfig: HelmPluginConfigStore
   private readonly agentSessions = new Map<string, number>()
-  private modelsRef: ReturnType<typeof buildModels>
+  private readonly modelsProvider: (() => Models) | undefined
+  private readonly setModelsSlot: (m: Models) => void = () => {}
+  private modelsCurrent: Models
   private defaultModel: string | undefined
   private pluginHost: PluginHost | undefined
-  /** 插件工具的 SDK 扩展名（重装热更新用）。 */
-  private pluginToolsVersion = 0
   private workflowRunner: WorkflowRunnerFn | undefined
   /** turn_settled 钩子的在途执行（waitForIdle 前等待）。 */
   private settledInflight: Promise<void> = Promise.resolve()
+  /** tool_call handled 接管缓存（callId -> 结果；execute 层包装器消费）。 */
+  private readonly handledToolCalls = new Map<string, { output: Array<{ type: 'text'; text: string }>; isError: boolean }>()
   private closed = false
   /** start() 幂等守护：组合层完成插件/Workflow 挂接后显式启动调度。 */
   private started = false
   private startPromise: Promise<void> | undefined
+  /** close 期间是否曾显式 abort 在途会话（保证 abort 结算至少一次）。 */
+  private closeAborts: Array<Promise<void>> = []
+  private watcher: AssetWatcher | undefined
+  /** reloadModels 串行链 + 抖动合并（providers/credentials 热重载共用）。 */
+  private reloadChain: Promise<void> = Promise.resolve()
+  private reloadTimer: NodeJS.Timeout | undefined
 
   static async open(options: KernelRuntimeOptions = {}): Promise<KernelRuntime> {
     const dataDir = resolveDataDir(options.dataDir)
@@ -139,16 +209,23 @@ export class KernelRuntime {
       const key = await credentials.get(id).catch(() => undefined)
       if (key) apiKeyCache[id] = key
     }
-    const modelsInstance = options.models ?? buildModels({
-      providers: providerConfigs,
-      apiKeys: () => apiKeyCache,
-    })
+    const modelsExternal = options.models
+    const modelsInstance =
+      modelsExternal ??
+      buildModels({
+        providers: providerConfigs,
+        apiKeys: () => apiKeyCache,
+      })
     const registry = createRegistry()
+
+    // Harness models 槽位：open 作用域可变引用，reloadModels 时经 setModels 热替换。
+    const modelsSlot = { current: modelsInstance }
 
     const harness = await Harness.open(
       database.storage,
       {
-        models: () => modelsInstance,
+        // models 用 getter：reloadModels 重建后无需重开 harness 即热生效。
+        models: () => modelsSlot.current,
         registry,
         settings: {
           followUpMode: 'all',
@@ -176,13 +253,15 @@ export class KernelRuntime {
       store,
       providersSvc,
       credentials,
-      getModels: () => modelsInstance,
-      setModels: () => {},
+      setModels: (m) => {
+        modelsSlot.current = m
+      },
       defaultModel: options.model ?? process.env['HELM_MODEL'],
       cwd: options.cwd ?? process.cwd(),
       hubUrl: options.hubUrl,
       seedKeyCache: apiKeyCache,
       autoResume: options.autoResume !== false,
+      externalModels: modelsExternal,
     })
     await runtime.initialize()
     return runtime
@@ -196,13 +275,13 @@ export class KernelRuntime {
     store: HelmStore
     providersSvc: ProviderService
     credentials: CredentialService
-    getModels(): ReturnType<typeof buildModels>
-    setModels(m: ReturnType<typeof buildModels>): void
+    setModels(m: Models): void
     defaultModel?: string
     cwd: string
     hubUrl?: string
     seedKeyCache: Record<string, string>
     autoResume: boolean
+    externalModels?: Models
   }) {
     this.dataDir = init.dataDir
     this.database = init.database
@@ -210,9 +289,21 @@ export class KernelRuntime {
     this.registry = init.registry
     this.store = init.store
     this.defaultModel = init.defaultModel
-    this.modelsRef = init.getModels()
-    this.profiles = new ProfileService(init.dataDir)
-    this.skills = new SkillService(init.dataDir)
+    this.modelsCurrent = init.externalModels ?? buildModels({ providers: [], apiKeys: () => ({}) })
+    void init.setModels // 仅 reloadModels 使用（见下）
+    this.setModelsSlot = init.setModels
+    if (init.externalModels) this.setModelsSlot = () => {
+      /* 外部注入：热重载不得替换调用方模型集合 */
+    }
+    this.profilesSvc = new ProfileService(init.dataDir)
+    this.skillsSvc = new SkillService(init.dataDir)
+    this.configSvc = new ConfigService(init.dataDir)
+    this.credentialsSvc = init.credentials
+    this.providersSvc = init.providersSvc
+    this.pluginConfig = new HelmPluginConfigStore({
+      config: this.configSvc,
+      credentials: this.credentialsSvc,
+    })
     // 同步镜像仓库（满足 ArtifactRepository 同步契约；持久化经 store 排队）。
     const artifactRepo = {
       get: (id: string) => this.store.getArtifact(id),
@@ -224,10 +315,8 @@ export class KernelRuntime {
         this.store.deleteArtifactsByConversation(conversationId)
       },
     }
-    this.artifacts = new SvcArtifactService(init.dataDir, artifactRepo as never)
-    this.auth = new SvcAuthService(init.dataDir)
-    this.credentials = init.credentials
-    this.providersSvc = init.providersSvc
+    this.artifactsSvc = new SvcArtifactService(init.dataDir, artifactRepo as never)
+    this.authSvc = new SvcAuthService(init.dataDir)
     Object.assign(this.apiKeyCache, init.seedKeyCache)
 
     const hubUrl =
@@ -236,11 +325,11 @@ export class KernelRuntime {
       dataDir: init.dataDir,
       defaultCwd: init.cwd,
       hubUrl,
-      stashEnvFor: (id) => this.stash.envFor(id),
-      redact: (t) => this.stash.redact(t),
-      artifacts: this.artifacts,
+      stashEnvFor: (id) => this.stashService.envFor(id),
+      redact: (t) => this.stashService.redact(t),
+      artifacts: this.artifactsSvc,
     }
-    this.store.ftsRedact = (t) => this.stash.redact(t)
+    this.store.ftsRedact = (t) => this.stashService.redact(t)
 
     this.events = new EventHub({
       initialSeq: this.store.eventSeqNow,
@@ -248,15 +337,15 @@ export class KernelRuntime {
         seq: this.store.eventSeqNow,
         conversations: this.listConversations(),
         pendingAsks: this.asks.listAsks('pending'),
-        plugins: [],
+        plugins: this.pluginHost ? this.pluginHost.list() : [],
       }),
       persistSeq: (seq) => this.store.setEventSeq(seq),
     })
-    this.events.redactFn = (t) => this.stash.redact(t)
+    this.events.redactFn = (t) => this.stashService.redact(t)
 
     this.asks = new AskService({
       store: this.store,
-      stash: this.stash,
+      stash: this.stashService,
       onEvent: (type, payload) => this.events.publish(type, payload),
       onConvPendingChanged: (id) => {
         this.tracker.setPendingAskCount(id, this.asks.pendingCount(id))
@@ -286,29 +375,44 @@ export class KernelRuntime {
 
   private async initialize(): Promise<void> {
     // 1) 默认 profiles 先于 root 创建（root 绑定 assistant profile）。
-    const rootProfile = await this.profiles.ensureDefault()
+    const rootProfile = await this.profilesSvc.ensureDefault()
     if (!this.defaultModel && rootProfile.model) {
       this.defaultModel = rootProfile.model
     }
     // hooks 载荷校验要求 model 非空；未配置时用显式占位并上报（提交时才硬报错）。
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
 
-    // 2) 内核工具（bash/read/read_artifact）经扩展注册；插件工具由 attachPluginHost 热装。
-    const kernelTools = [
-      createBashTool(this.toolDeps),
-      createReadTool(this.toolDeps),
-      createReadArtifactTool(this.toolDeps, (convId: number, artifactConvId: number) =>
-        this.isArtifactAuthorized(convId, artifactConvId),
-      ),
-    ] as unknown as ToolRegistration[]
-    this.registry.install(
-      defineExtension({ name: 'helm-core', tools: kernelTools }) as Extension,
-    )
+    // 2) 内核工具（bash/read/read_artifact + subagent/SubagentWorkflow/run_action）
+    //    经扩展注册；插件工具由 attachPluginHost 热装。
+    this.installKernelTools()
 
     // 3) hook 桥：SDK GenerationTask/ToolTask 钩子 -> helm 7 hook 管道。
     this.installHookBridges()
 
-    // 4) root #1（不注入业务 system；SYSTEM/MEMORY 由 assistant 插件 before_turn 注入）。
+    // 4) PluginHost：内核内创建并接入（app 只消费 runtime.plugins，不再自建）。
+    //    config/credentials 分离持久经 HelmPluginConfigStore；损坏显式上抛。
+    await this.pluginConfig.load()
+    const host = new PluginHost({
+      dataDir: this.dataDir,
+      host: {
+        dispatchTrigger: (event) => this.dispatchTrigger(event),
+        submitInput: async (id, text, opts) => {
+          await this.submitInput(id, text, opts)
+        },
+        createConversation: (init) => this.createConversation(init),
+        listConversations: (filter) => this.listConversations(filter),
+        getConversation: (id) => this.getConversation(id),
+        createAsk: (spec) => this.createAsk(spec),
+        cancelAsk: (askId, reason) => this.cancelAsk(askId, reason),
+        emitEvent: (type, payload) => this.emitHostEvent(type, payload),
+      },
+      docs: this.documentStore,
+      config: this.pluginConfig,
+    })
+    this.pluginHost = host
+
+    // 5) root #1（不注入业务 system；SYSTEM/MEMORY 由 assistant 插件 before_turn
+    //    sections 注入，经 SDK PromptSection 真实进入模型请求）。
     const modelRef = this.defaultModel ? requireModelRef(this.defaultModel) : undefined
     const root = await this.harness.root(BACKGROUND_CONTEXT, {
       agent: modelRef
@@ -333,10 +437,204 @@ export class KernelRuntime {
     }
     await this.tracker.observe(root.id as number)
 
-    // 5) 恢复：autoResume 时立即启动调度；否则等组合层 await start()。
+    // 6) 恢复：autoResume 时立即启动调度；否则等组合层 await start()。
     this.asks.reportOrphans()
     await this.recoverConversations()
+    this.startAssetWatcher()
     if (this.init.autoResume) await this.start()
+  }
+
+  /** 内核编排工具 + 本机工具统一注册（与插件工具同一 registry 机制；execute 统一包 handled 接管）。 */
+  private installKernelTools(): void {
+    const kernelTools = [
+      createBashTool(this.toolDeps),
+      createReadTool(this.toolDeps),
+      createReadArtifactTool(this.toolDeps, (convId: number, artifactConvId: number) =>
+        this.isArtifactAuthorized(convId, artifactConvId),
+      ),
+      this.createSubagentTool(),
+      this.createWorkflowTool(),
+      this.createRunActionTool(),
+    ].map((tool) => {
+      const raw = tool as unknown as Record<string, unknown>
+      const execute = raw['execute'] as (
+        args: never,
+        api: never,
+        context: never,
+      ) => Promise<unknown>
+      return {
+        ...raw,
+        execute: wrapToolExecute(
+          this.handledToolCalls,
+          execute.bind(raw) as unknown as (
+            args: never,
+            api: never,
+            context: { abortSignal?: AbortSignal },
+          ) => Promise<unknown>,
+        ),
+      } as unknown as ToolRegistration
+    })
+    this.registry.install(
+      defineExtension({ name: 'helm-core', tools: kernelTools }) as Extension,
+    )
+  }
+
+  /** subagent 工具：模型内派生子代理（走 agent_spawn hook 链）。 */
+  private createSubagentTool(): ToolRegistration {
+    const runtime = this
+    return defineTool({
+      name: 'subagent',
+      description:
+        '派生一个子代理执行任务并等待结果。prompt 为任务指令；可选 schema（JSON Schema，子代理最终输出需满足）、gate（shell 验收命令，退出码非 0 视为失败）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: '子代理任务指令' },
+          schema: { type: 'object', description: '结构化输出 JSON Schema（可选）' },
+          gate: { type: 'string', description: '验收 shell 命令（可选，exit≠0 失败）' },
+        },
+        required: ['prompt'],
+        additionalProperties: false,
+      } as Record<string, unknown>,
+      structuredOutputSchema: {
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean' },
+          result: {},
+          conversationId: { type: 'number' },
+        },
+        required: ['ok'],
+      } as Record<string, unknown>,
+      async execute(args: Record<string, unknown>, api: { conversationId: number }, context: { abortSignal?: AbortSignal }) {
+        try {
+          const result = await runtime.spawnAgent({
+            parentConversationId: api.conversationId,
+            prompt: String(args['prompt']),
+            ...(args['schema'] !== undefined ? { schema: args['schema'] as Record<string, unknown> } : {}),
+            ...(args['gate'] !== undefined ? { gate: String(args['gate']) } : {}),
+            signal: context.abortSignal,
+          })
+          return {
+            output: [{ type: 'text', text: safeResultText(result) }],
+            structuredOutput: { ok: true, result: result as JsonValue } as JsonValue,
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return {
+            output: [{ type: 'text', text: `subagent_failed: ${message}` }],
+            isError: true,
+            structuredOutput: { ok: false, result: message } as JsonValue,
+          }
+        }
+      },
+    } as never)
+  }
+
+  /** SubagentWorkflow 工具：确定性编排（真实 WorkflowService，不假完成）。 */
+  private createWorkflowTool(): ToolRegistration {
+    const runtime = this
+    return defineTool({
+      name: 'SubagentWorkflow',
+      description:
+        '执行一个 SubagentWorkflow 确定性编排脚本。script 为编排 DSL 源码；返回真实执行 summary（runId/status/nodes）。编排引擎未挂接时显式报错。',
+      parameters: {
+        type: 'object',
+        properties: {
+          script: { type: 'string', description: '编排脚本源码' },
+          name: { type: 'string', description: '已保存工作流名（与 script 二选一）' },
+        },
+        additionalProperties: false,
+      } as Record<string, unknown>,
+      structuredOutputSchema: {
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean' },
+          summary: {},
+        },
+        required: ['ok'],
+      } as Record<string, unknown>,
+      async execute(args: Record<string, unknown>, api: { conversationId: number }, context: { abortSignal?: AbortSignal }) {
+        const input: Record<string, unknown> = {}
+        if (args['script'] !== undefined) input['script'] = String(args['script'])
+        if (args['name'] !== undefined) input['name'] = String(args['name'])
+        try {
+          const summary = await runtime.runWorkflow(input, api.conversationId, context.abortSignal)
+          return {
+            output: [{ type: 'text', text: safeResultText(summary) }],
+            structuredOutput: { ok: true, summary: summary as JsonValue } as JsonValue,
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return {
+            output: [{ type: 'text', text: `workflow_failed: ${message}` }],
+            isError: true,
+            structuredOutput: { ok: false, summary: message } as JsonValue,
+          }
+        }
+      },
+    } as never)
+  }
+
+  /** run_action 元工具：按需调用插件动作（qualifiedId，输入输出 schema 边界校验）。 */
+  private createRunActionTool(): ToolRegistration {
+    const runtime = this
+    return defineTool({
+      name: 'run_action',
+      description:
+        '调用插件声明的动作（pluginId.actionId 全限定 ID）。动作清单由系统提示注入；输入校验失败显式报错。',
+      parameters: {
+        type: 'object',
+        properties: {
+          actionId: { type: 'string', description: 'pluginId.actionId 全限定动作 ID' },
+          input: { type: 'object', description: '动作输入（按动作 inputSchema）' },
+        },
+        required: ['actionId'],
+        additionalProperties: false,
+      } as Record<string, unknown>,
+      async execute(args: Record<string, unknown>, api: { conversationId: number }, context: { abortSignal?: AbortSignal }) {
+        const host = runtime.pluginHost
+        if (!host) {
+          return {
+            output: [{ type: 'text', text: 'run_action_failed: 插件宿主未初始化' }],
+            isError: true,
+          }
+        }
+        const qualified = String(args['actionId'])
+        const dot = qualified.indexOf('.')
+        if (dot <= 0) {
+          return {
+            output: [{ type: 'text', text: `run_action_failed: 非法动作 ID（期望 pluginId.actionId）：${qualified}` }],
+            isError: true,
+          }
+        }
+        try {
+          const result = await host.invokeAction(qualified.slice(0, dot), qualified.slice(dot + 1), args['input'] ?? {}, {
+            conversationId: api.conversationId,
+            signal: context.abortSignal,
+          })
+          return {
+            output: [{ type: 'text', text: safeResultText(result) }],
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return {
+            output: [{ type: 'text', text: `run_action_failed: ${message}` }],
+            isError: true,
+          }
+        }
+      },
+    } as never)
+  }
+
+  /** 插件宿主事件：plugin.changed 携带完整事件对象（{type, plugin}）。 */
+  private emitHostEvent(type: string, payload: unknown): void {
+    if (type === 'plugin.changed') {
+      const plugin = (payload as PluginChangedEmit | undefined)?.plugin
+      // 快照 plugins 由 host.list() 实时提供；事件只透传 plugin 摘要。
+      this.events.publish('plugin.changed', plugin ?? {})
+      return
+    }
+    this.events.publish(type, payload)
   }
 
   /**
@@ -355,7 +653,6 @@ export class KernelRuntime {
     return this.startPromise
   }
 
-  /** 重启后为既有 SDK 会话补建镜像（tombstone 除外；root 恒在）。 */
   /** 产物授权：当前会话或其父链（子会话可读父会话产物）。 */
   private isArtifactAuthorized(conversationId: number, artifactConversationId: number): boolean {
     let current: number | undefined = conversationId
@@ -369,30 +666,120 @@ export class KernelRuntime {
   }
 
   private async recoverConversations(): Promise<void> {
-    const page = await this.database.storage.scanConversations({}, 500, undefined, BACKGROUND_CONTEXT)
-    for (const record of page.items) {
-      const id = record.id as number
-      if (this.store.getConv(id) || this.store.isDeleted(id)) continue
-      const now = Date.now()
-      const conversation = await this.harness.conversation(record.id, BACKGROUND_CONTEXT)
-      const agent = conversation ? await conversation.agent(BACKGROUND_CONTEXT).catch(() => undefined) : undefined
-      this.store.upsertConv({
-        id,
-        title: `会话 ${id}`,
-        profileId: 'default',
-        tags: [],
-        parentConversationId: record.parent?.conversationId as number | undefined,
-        cwd: agent?.cwd ?? this.toolDeps.defaultCwd,
-        model: this.defaultModel ?? (agent?.model ? `${agent.model.provider}/${agent.model.modelId}` : ''),
-        unread: false,
-        pinned: false,
-        stateChangeSeq: 1,
-        completionSeq: 0,
-        createdAt: now,
-        updatedAt: now,
-      })
-      await this.tracker.observe(id)
+    // 真实分页扫描（page.next 翻页），observe 所有未删除会话——重启后不丢观察者。
+    let cursor: unknown = undefined
+    for (;;) {
+      const page = await this.database.storage.scanConversations(
+        {},
+        500,
+        cursor as never,
+        BACKGROUND_CONTEXT,
+      )
+      for (const record of page.items) {
+        const id = record.id as number
+        if (this.store.getConv(id) || this.store.isDeleted(id)) continue
+        const now = Date.now()
+        const conversation = await this.harness.conversation(record.id, BACKGROUND_CONTEXT)
+        const agent = conversation ? await conversation.agent(BACKGROUND_CONTEXT).catch(() => undefined) : undefined
+        this.store.upsertConv({
+          id,
+          title: `会话 ${id}`,
+          profileId: 'default',
+          tags: [],
+          parentConversationId: record.parent?.conversationId as number | undefined,
+          cwd: agent?.cwd ?? this.toolDeps.defaultCwd,
+          model:
+            agent?.model !== undefined
+              ? `${agent.model.provider}/${agent.model.modelId}`
+              : (this.defaultModel ?? ''),
+          unread: false,
+          pinned: false,
+          stateChangeSeq: 1,
+          completionSeq: 0,
+          createdAt: now,
+          updatedAt: now,
+        })
+        await this.tracker.observe(id)
+      }
+      if (!page.next) break
+      cursor = page.next
     }
+  }
+
+  // ------------------------------------------------------------------
+  // 静态资产热重载（AssetWatcher）
+  // ------------------------------------------------------------------
+
+  /**
+   * 仅监听静态资产路径（providers.json / credentials.json / config.json /
+   * profiles/** / skills/**）。排除 state.sqlite、artifacts、workflows、
+   * plugins 数据目录与一切临时文件——它们非「配置输入」，监听只增噪音。
+   * models 注入时（外部/测试 Models）模型集合归调用方，绝不重建替换。
+   */
+  private startAssetWatcher(): void {
+    if (this.watcher) return
+    this.watcher = new AssetWatcher(
+      this.dataDir,
+      (changed) => this.onAssetsChanged(changed),
+      {
+        onError: (err) => {
+          // watcher 故障显式通知，不静默吞（热重载降级但主流程不受影响）。
+          this.events.publish('notification', {
+            level: 'error',
+            title: '资产热重载监听失败',
+            body: String(err instanceof Error ? err.message : err),
+          })
+        },
+      },
+    )
+    this.watcher.start()
+  }
+
+  private onAssetsChanged(changedPaths: string[]): void {
+    let providersTouched = false
+    let credentialsTouched = false
+    let configTouched = false
+    let profilesOrSkills = false
+    for (const rel of changedPaths) {
+      const [head, second] = rel.split('/')
+      if (head === 'providers.json') providersTouched = true
+      else if (head === 'credentials.json') credentialsTouched = true
+      else if (head === 'config.json') configTouched = true
+      else if (head === 'profiles' || head === 'skills') profilesOrSkills = true
+      else continue
+      void second
+    }
+    // profiles/skills 每回合 before_turn 都 fresh 读取，无需缓存失效。
+    void profilesOrSkills
+    if (configTouched) {
+      // 插件配置镜像刷新（读取失败显式通知，不吞）。
+      void this.pluginConfig
+        .load()
+        .catch((error) => this.notifyWatcherError('插件配置热重载失败', error))
+    }
+    if (providersTouched || credentialsTouched) {
+      this.scheduleReloadModels()
+    }
+  }
+
+  private notifyWatcherError(title: string, error: unknown): void {
+    this.events.publish('notification', {
+      level: 'error',
+      title,
+      body: error instanceof Error ? error.message : String(error),
+    })
+  }
+
+  /** 抖动合并 + 串行 reloadModels（外部注入 Models 时空操作）。 */
+  private scheduleReloadModels(): void {
+    if (this.modelsProvider) return
+    if (this.reloadTimer !== undefined) clearTimeout(this.reloadTimer)
+    this.reloadTimer = setTimeout(() => {
+      this.reloadTimer = undefined
+      this.reloadChain = this.reloadChain
+        .then(() => this.reloadModels())
+        .catch((error) => this.notifyWatcherError('模型配置热重载失败', error))
+    }, 200)
   }
 
   // ------------------------------------------------------------------
@@ -406,7 +793,7 @@ export class KernelRuntime {
         name: 'helm-hook-bridge',
         hooks: [
           hook(ToolTask, {
-            /** tool_call：continue/transform(block)/handled。 */
+            /** tool_call：transform 改写参数 / block 拦截。 */
             beforeTool: async (call, api) => {
               const outcome = await self.runHookChain('tool_call', {
                 conversationId: api.conversationId as number,
@@ -414,15 +801,23 @@ export class KernelRuntime {
                 toolName: call.name,
                 input: call.arguments as Record<string, unknown>,
               })
-              if (outcome?.action === 'block') return { block: outcome.reason ?? 'blocked' }
+              if (outcome?.action === 'block') {
+                return { block: outcome.reason ?? 'blocked' }
+              }
+              if (outcome?.action === 'handled') {
+                // 接管：结果登记到 execute 层缓存（wrapToolCalls 包装器消费）。
+                self.handledToolCalls.set(call.id, toolResultOf(outcome.result))
+                return undefined
+              }
               if (outcome?.action === 'transform') {
                 const value = outcome.value as { input?: Record<string, unknown> }
                 return { arguments: (value.input ?? call.arguments) as never }
               }
               return undefined
             },
-            /** tool_result：transform 改写结果（含 spill 之后的文本）。 */
+            /** tool_result：transform 改写结果（须仍是合法 ToolExecutionResult）。 */
             afterTool: async (call, result, api) => {
+              self.handledToolCalls.delete(call.id)
               const outcome = await self.runHookChain('tool_result', {
                 conversationId: api.conversationId as number,
                 callId: call.id,
@@ -430,43 +825,61 @@ export class KernelRuntime {
                 input: call.arguments as Record<string, unknown>,
                 result,
               })
-              if (outcome?.action === 'transform') return outcome.value as typeof result
+              if (outcome?.action === 'transform') {
+                // 修正：transform 的 value 是新 result 本体（旧实现误取整份 payload）。
+                return normalizeToolResult(outcome.value) as typeof result | undefined
+              }
               return undefined
             },
           }),
           hook(GenerationTask, {
-            /** before_turn：sections/messages 实际进入模型请求。 */
-            beforeRequest: async (request, api, context) => {
+            /**
+             * before_turn 桥：SDK 原生 sections（PromptSection）与 tools 已在
+             * prepare 阶段解析（request.messages 内含 pi.system 段消息），
+             * beforeRequest 收到的 messages 是最终模型消息（含 system 前导）。
+             * 这里把 sections/tools/messages 真实载荷交给插件，transform 结果
+             * 通过 system 消息 sections / toolsAdded 真正改写模型请求。
+             */
+            beforeRequest: async (request, api) => {
               const conversationId = api.conversationId as number
               const summary = self.safeSummary(conversationId)
               if (!summary) return undefined
+              const runtimeTools = self.pluginHost ? self.pluginHost.listTools() : []
               const payload = {
                 conversation: summary,
-                inputs: [],
-                tools: [],
-                sections: [] as Array<{ id: string; text: string }>,
+                inputs: self.tracker.currentRunInputs(conversationId),
+                tools: runtimeTools.map((spec) => ({
+                  name: spec.name,
+                  description: spec.description,
+                  inputSchema: spec.inputSchema as Record<string, unknown>,
+                })),
+                sections: systemSectionsOf(request.messages as unknown as Array<Record<string, unknown>>),
                 messages: request.messages as unknown as Array<Record<string, unknown>>,
               }
               const outcome = await self.runHookChain('before_turn', payload)
-              if (outcome?.action === 'transform') {
-                const value = outcome.value as typeof payload
-                let messages = request.messages
-                if (value.sections.length > 0) {
-                  const sectionText = value.sections.map((s) => `<${s.id}>\n${s.text}\n</${s.id}>`).join('\n\n')
-                  messages = [
-                    {
-                      role: 'user',
-                      content: [{ type: 'text', text: `以下为系统注入上下文：\n${sectionText}` }],
-                    } as unknown as (typeof request.messages)[number],
-                    ...request.messages,
-                  ]
-                }
-                if (value.messages && value.messages !== payload.messages) {
-                  messages = value.messages as unknown as typeof request.messages
-                }
-                return { messages }
+              if (outcome?.action !== 'transform') return undefined
+              const value = outcome.value as typeof payload
+
+              // sections 变更 -> 改写前导 system 消息的 sections（SDK 原生机制）。
+              // messages 变更 -> 整体替换（插件显式要求时）。
+              const original = request.messages as unknown as Array<Record<string, unknown>>
+              let messages = original
+              const sectionsChanged = !sectionsEqual(value.sections, payload.sections)
+              const messagesChanged = value.messages !== payload.messages
+              if (messagesChanged) {
+                messages = value.messages
+              } else if (sectionsChanged) {
+                messages = withSections(original, value.sections)
               }
-              return undefined
+
+              // tools 变更 -> 通过 toolsRemoved/toolsAdded 改写前导 system 消息，
+              // 模型下一轮即按新工具集调用（插件注册工具默认全量提供）。
+              const declared = new Set(value.tools.map((t) => t.name))
+              if (self.pluginToolNamesChanged(declared)) {
+                messages = withToolDeclarations(self, messages, declared)
+              }
+              if (messages === original) return undefined
+              return { messages: messages as unknown as typeof request.messages }
             },
           }),
         ],
@@ -474,29 +887,37 @@ export class KernelRuntime {
     )
   }
 
-  /** 统一 hook 管道执行（priority 降序）；返回最后非 continue 的决定。 */
-  private async runHookChain(name: string, payload: unknown): Promise<{ action: string; value?: unknown; result?: unknown; reason?: string } | undefined> {
+  /** 插件声明工具名集与当前热装集是否不一致（决定是否改写工具声明）。 */
+  private pluginToolNamesChanged(declared: Set<string>): boolean {
+    const current = this.pluginHost ? this.pluginHost.listTools().map((s) => s.name) : []
+    if (current.length !== declared.size) return true
+    for (const name of current) {
+      if (!declared.has(name)) return true
+    }
+    return false
+  }
+
+  /** 统一 hook 管道执行；返回最终决定（continue 归一为 undefined 由调用方走默认）。 */
+  private async runHookChain(name: string, payload: unknown): Promise<HookDecision | undefined> {
     const host = this.pluginHost
     if (!host) return undefined
-    let current = payload
-    const result = await host.runHook(name as never, current as never)
-    if (result.action === 'transform') current = result.value
+    const result = await host.runHook(name as never, payload as never)
     if (result.action === 'continue') return undefined
-    return { ...result, value: current }
+    return result as HookDecision
   }
 
   /**
-   * 插件宿主接入（app 组合层调用：new PluginHost({ dataDir, host, docs, config? })）。
+   * 插件宿主接入（外部已自建 PluginHost 的测试场景；正常路径由 initialize 自建）。
    * listTools() 的 DerivedToolSpec 只有清单字段，缺 execute；这里 map 到
-   * host.executeTool 闭包生成真实 SDK 工具并经 registry 热装（重装同扩展名原地替换，
-   * 新回合生效，不影响在途回合）。
+   * host.executeTool 闭包生成真实 SDK 工具并经 registry 热装（同名扩展原地
+   * 替换，新回合生效，不影响在途回合）。
    */
   attachPluginHost(host: PluginHost): void {
     this.pluginHost = host
     this.installPluginTools(host.listTools())
   }
 
-  /** 插件启停后由 app 重新调用，热更新工具集。 */
+  /** 插件启停后热更新工具集（app 组合层与 enable/disable 路径调用）。 */
   refreshPluginTools(): void {
     if (!this.pluginHost) return
     this.installPluginTools(this.pluginHost.listTools())
@@ -505,32 +926,51 @@ export class KernelRuntime {
   private installPluginTools(specs: DerivedToolSpec[]): void {
     const host = this.pluginHost
     if (!host) return
-    this.pluginToolsVersion += 1
-    // 同名扩展原地替换（registry.install 语义）；每次重建闭包绑定最新 executeTool。
-    const tools = specs.map((spec) =>
-      defineTool({
+    // 同名扩展 install 语义为原地替换（registry.install 已核实）；
+    // 每次重建闭包绑定最新 executeTool，空集也安装（清空旧插件工具）。
+    const tools = specs.map((spec) => {
+      const raw = defineTool({
         name: spec.name,
         description: spec.description,
         parameters: (spec.inputSchema ?? { type: 'object', properties: {} }) as Record<string, object>,
-        async execute(args: unknown, api: never) {
+        async execute(args: unknown, api: never, context: { abortSignal?: AbortSignal }) {
           const toolApi = api as unknown as { conversationId: number }
-          return host.executeTool(spec.name, args, {
+          const result = await host.executeTool(spec.name, args, {
             conversationId: toolApi.conversationId,
+            signal: context.abortSignal,
           })
+          // 插件工具返回任意值：包成 SDK ToolExecutionResult 契约（content/text）。
+          return pluginToolResult(result)
         },
-      } as never)
-    )
+      } as never) as unknown as {
+        execute: (args: never, api: never, context: { abortSignal?: AbortSignal }) => Promise<unknown>
+      }
+      return {
+        ...raw,
+        execute: wrapToolExecute(
+          this.handledToolCalls,
+          raw.execute.bind(raw) as unknown as (
+            args: never,
+            api: never,
+            context: { abortSignal?: AbortSignal },
+          ) => Promise<unknown>,
+        ),
+      } as never
+    })
     this.registry.install(defineExtension({ name: 'helm-plugins', tools }) as Extension)
   }
 
-  get plugins(): PluginHost | undefined {
+  get plugins(): PluginHost {
+    if (!this.pluginHost) {
+      throw new HelmError('runtime_not_initialized', 'PluginHost 尚未初始化', 503)
+    }
     return this.pluginHost
   }
 
   private dispatchTurnSettled(payload: unknown, consumed: ConversationInput[]): Promise<void> {
-    void consumed
     const host = this.pluginHost
     if (!host) return Promise.resolve()
+    void consumed
     return host
       .runHook('turn_settled', payload as never)
       .then(() => undefined)
@@ -561,22 +1001,52 @@ export class KernelRuntime {
     return this.tracker.summaryOf(id)
   }
 
+  /** 校验 'provider/model' 引用（create/update 共用）。 */
+  private parseModelRefOrThrow(ref: string): { provider: string; modelId: string } {
+    const slash = ref.indexOf('/')
+    if (slash <= 0 || slash >= ref.length - 1) {
+      throw new HelmError('validation_error', `模型引用格式应为 'provider/model'：${ref}`)
+    }
+    return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
+  }
+
+  /** 校验 profileId 真实存在（不存在时确保 default 兜底目录，不伪造）。 */
+  private async resolveProfileForCreate(init: ConversationInit): Promise<string> {
+    const requested = init.profileId
+    if (requested === undefined || requested === 'default') {
+      // default profile 缺目录时确保存在（SYSTEM/MEMORY 空文件），
+      // 否则 assistant 插件 before_turn 读 profile 会 not found。
+      const existing = await this.profilesSvc.get('default').catch(() => undefined)
+      if (!existing) {
+        await this.profilesSvc.save({ id: 'default', name: '默认', tags: ['default'] })
+      }
+      return 'default'
+    }
+    const found = await this.profilesSvc.get(requested).catch(() => undefined)
+    if (!found) {
+      throw new HelmError('validation_error', `profile 不存在：${requested}（先创建 profiles/${requested}）`, 400)
+    }
+    return requested
+  }
+
   async createConversation(init: ConversationInit = {}): Promise<ConversationSummary> {
-    const modelRef = init.model
-      ? (() => {
-          const slash = init.model!.indexOf('/')
-          if (slash <= 0) throw new HelmError('validation_error', `模型引用格式应为 'provider/model'：${init.model}`)
-          return { provider: init.model!.slice(0, slash), modelId: init.model!.slice(slash + 1) }
-        })()
-      : this.defaultModel
-        ? (() => requireModelRef(this.defaultModel))()
-        : undefined
+    const profileId = await this.resolveProfileForCreate(init)
+    const requestedModel = init.model ?? this.defaultModel
+    const modelRef = requestedModel ? this.parseModelRefOrThrow(requestedModel) : undefined
+    const profile = init.profileId ? await this.profilesSvc.get(init.profileId).catch(() => undefined) : undefined
+    const effectiveModel = init.model ?? profile?.model ?? this.defaultModel
+    const effectiveRef = effectiveModel ? this.parseModelRefOrThrow(effectiveModel) : modelRef
     const conv = await this.harness.createConversation(
       {
         ownership: { kind: 'ownerless' },
-        agent: modelRef
-          ? { model: { provider: modelRef.provider, modelId: modelRef.modelId } }
-          : undefined,
+        agent: effectiveRef
+          ? {
+              model: { provider: effectiveRef.provider, modelId: effectiveRef.modelId },
+              ...(init.cwd ? { cwd: init.cwd } : {}),
+            }
+          : init.cwd
+            ? { cwd: init.cwd }
+            : undefined,
       },
       BACKGROUND_CONTEXT,
     )
@@ -585,11 +1055,11 @@ export class KernelRuntime {
     this.store.upsertConv({
       id,
       title: init.title ?? '',
-      profileId: init.profileId ?? 'default',
+      profileId,
       tags: init.tags ?? [],
       parentConversationId: init.parentConversationId,
       cwd: init.cwd ?? this.toolDeps.defaultCwd,
-      model: init.model ?? this.defaultModel ?? '',
+      model: effectiveModel ?? '',
       unread: false,
       pinned: false,
       stateChangeSeq: 1,
@@ -606,6 +1076,32 @@ export class KernelRuntime {
   async updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary> {
     const meta = this.store.getConv(id)
     if (!meta) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    if (patch.profileId !== undefined) {
+      const found = await this.profilesSvc.get(patch.profileId).catch(() => undefined)
+      if (!found) {
+        throw new HelmError('validation_error', `profile 不存在：${patch.profileId}`, 400)
+      }
+    }
+    const nextModel = patch.model !== undefined ? patch.model : meta.model
+    if (patch.model !== undefined && patch.model !== '') {
+      this.parseModelRefOrThrow(patch.model)
+    }
+    // 先改 SDK（失败即抛，元数据不落），成功后写 helm 镜像——不允许镜像声称
+    // 成功而 SDK configure 失败。
+    let configureChange: Record<string, unknown> | undefined
+    if (patch.cwd !== undefined || patch.model !== undefined) {
+      if (patch.cwd !== undefined) configureChange = { ...configureChange, cwd: patch.cwd }
+      if (patch.model !== undefined && patch.model !== '') {
+        const ref = this.parseModelRefOrThrow(patch.model)
+        configureChange = {
+          ...configureChange,
+          model: { provider: ref.provider, modelId: ref.modelId },
+        }
+      }
+      const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
+      if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+      await conversation.configure(configureChange as never, BACKGROUND_CONTEXT)
+    }
     const updated = {
       ...meta,
       ...(patch.title !== undefined ? { title: patch.title } : {}),
@@ -619,29 +1115,8 @@ export class KernelRuntime {
       stateChangeSeq: meta.stateChangeSeq + 1,
       updatedAt: Date.now(),
     }
+    void nextModel
     this.store.upsertConv(updated)
-    if (patch.cwd || patch.model) {
-      await this.harness
-        .conversation(id as never, BACKGROUND_CONTEXT)
-        .then((c) =>
-          c?.configure(
-            {
-              ...(patch.cwd ? { cwd: patch.cwd } : {}),
-              ...(patch.model
-                ? {
-                    model: (() => {
-                      const slash = patch.model!.indexOf('/')
-                      return slash > 0
-                        ? { provider: patch.model!.slice(0, slash), modelId: patch.model!.slice(slash + 1) }
-                        : undefined
-                    })(),
-                  }
-                : {}),
-            },
-            BACKGROUND_CONTEXT,
-          ),
-        )
-    }
     const summary = this.tracker.summaryOf(id)
     this.events.publish('conversation.upsert', summary)
     return summary
@@ -649,7 +1124,7 @@ export class KernelRuntime {
 
   /**
    * 删除会话：root 保护；abort 在途 -> 取消 asks -> 清 artifacts（物理文件）->
-   * FTS 行 -> 插件上下文（钩子）-> Helm 索引移除 + tombstone。
+   * FTS 行 -> Helm 索引移除 + tombstone。
    * 注：SDK 无 deleteConversation 写 API，pi_* 内部历史由 SDK 保留，
    * helm 侧重启后凭 tombstone 不再重新导入（逻辑删除）。
    */
@@ -662,8 +1137,7 @@ export class KernelRuntime {
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (conversation) await conversation.abort(BACKGROUND_CONTEXT)
     this.asks.cancelByConversation(id)
-    await this.artifacts.deleteConversation(id)
-    // 插件上下文释放经 turn_settled/notification 通知（无独立 conversation_deleted hook 点）。
+    await this.artifactsSvc.deleteConversation(id)
     this.events.publish('notification', {
       level: 'info',
       title: '会话已删除',
@@ -676,8 +1150,8 @@ export class KernelRuntime {
   }
 
   /**
-   * 提交输入：input hook（transform 生效 + origin 写入 helm.input entry data）->
-   * SDK submit（requestId 幂等）。
+   * 提交输入：input hook（transform 生效——text/origin/whenBusy/id 全部取最终
+   * payload；conversationId 被 transform 视为身份违规拒绝）-> SDK submit。
    */
   async submitInput(
     id: number,
@@ -686,29 +1160,43 @@ export class KernelRuntime {
   ): Promise<{ submissionId: string }> {
     const meta = this.store.getConv(id)
     if (!meta) throw new HelmError('not_found', `会话不存在：${id}`, 404)
-    // 未配置模型时显式拒绝（绝不 faux fallback 假装回答）。
-    if (!this.defaultModel) requireModelRef(this.defaultModel)
+    // 模型校验：会话自身 model 优先，退回全局 default（都缺才显式拒绝）。
+    const effectiveModelRef = meta.model !== '' && meta.model !== 'unconfigured'
+      ? meta.model
+      : this.defaultModel
+    if (!effectiveModelRef) requireModelRef(this.defaultModel)
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
 
     const origin: InputOrigin = opts?.origin ?? 'human'
     let effectiveText = text
     const inputId = randomUUID()
-    const hookOutcome = await this.runHookChain('input', {
+    const createdAt = Date.now()
+    const payload: { conversationId: number; input: ConversationInput } = {
       conversationId: id,
-      input: { id: inputId, text, origin, whenBusy: opts?.whenBusy, createdAt: Date.now() },
-    })
-    let inputMeta: ConversationInput = { id: inputId, text, origin, createdAt: Date.now() }
-    if (hookOutcome?.action === 'transform') {
-      const value = hookOutcome.value as { input?: Partial<ConversationInput> }
-      if (value.input?.text !== undefined) effectiveText = value.input.text
-      inputMeta = { ...inputMeta, ...value.input }
+      input: { id: inputId, text, origin, whenBusy: opts?.whenBusy, createdAt },
     }
+    const hookOutcome = await this.runHookChain('input', payload)
     if (hookOutcome?.action === 'block') {
       throw new HelmError('input_blocked', hookOutcome.reason ?? '输入被 input 钩子拦截')
     }
     if (hookOutcome?.action === 'handled') {
       return { submissionId: `handled:${randomUUID()}` }
+    }
+    let finalInput: ConversationInput = payload.input
+    let finalWhenBusy: WhenBusy | undefined = opts?.whenBusy
+    if (hookOutcome?.action === 'transform') {
+      const value = hookOutcome.value as typeof payload
+      if (value.conversationId !== id) {
+        throw new HelmError(
+          'input_identity_changed',
+          `input 钩子不得改写 conversationId（${id} -> ${String(value.conversationId)}）`,
+          400,
+        )
+      }
+      finalInput = value.input
+      effectiveText = finalInput.text
+      finalWhenBusy = finalInput.whenBusy ?? finalWhenBusy
     }
 
     // 首输入自动标题。
@@ -717,18 +1205,24 @@ export class KernelRuntime {
       this.store.upsertConv({ ...meta, title, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
     }
 
-    const key = this.tracker.registerInput(id, inputMeta)
+    const key = this.tracker.registerInput(id, finalInput)
     try {
       const submission = await conversation.submit(
         {
           type: 'input',
           content: effectiveText,
-          whenBusy: opts?.whenBusy ?? 'followUp',
+          whenBusy: finalWhenBusy ?? 'followUp',
+          // 最终 payload 的 origin/id 落入 helm.input entry（模型可见来源标记）。
           entry: {
             kind: 'helm.input',
-            data: { id: inputId, text: effectiveText, origin, createdAt: inputMeta.createdAt },
+            data: {
+              id: finalInput.id,
+              text: effectiveText,
+              origin: finalInput.origin,
+              createdAt: finalInput.createdAt,
+            },
           },
-          requestId: inputId,
+          requestId: finalInput.id,
         },
         BACKGROUND_CONTEXT,
       )
@@ -747,12 +1241,12 @@ export class KernelRuntime {
     this.tracker.settleAborted(id)
   }
 
-  /** 等待会话空闲（含 turn_settled 钩子异步执行完成）。 */
+  /** 等待会话空闲（含本会话 turn_settled 钩子异步执行完成）。 */
   async waitForIdle(id: number): Promise<void> {
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
     await conversation.waitForIdle(BACKGROUND_CONTEXT)
-    await this.settledInflight
+    await this.tracker.waitTurnSettled(id)
   }
 
   async getLastAssistantText(id: number): Promise<string> {
@@ -763,27 +1257,35 @@ export class KernelRuntime {
   // trigger / spawn / workflow / watchdog
   // ------------------------------------------------------------------
 
-  /** defang 防逃逸信封。 */
+  /** defang 防逃逸信封：所有动态字段 XML 转义（防 </external_event> 注入）。 */
   private defang(envelope: ExternalTriggerEnvelope): string {
-    return `<external_event id="${envelope.id}" source="${envelope.source}" untrusted="true">\n${envelope.text}\n</external_event>`
+    const id = escapeXml(envelope.id)
+    const source = escapeXml(envelope.source)
+    const body = escapeXml(envelope.text)
+    return `<external_event id="${id}" source="${source}" untrusted="true">\n${body}\n</external_event>`
   }
 
-  /** 外部触发：trigger hook -> 默认投递 #1。 */
+  /** 外部触发：trigger hook -> 默认投递 #1（transform 后 target 与 text 都生效）。 */
   async dispatchTrigger(envelope: ExternalTriggerEnvelope): Promise<void> {
-    const payload: ExternalTriggerEnvelope = { ...envelope, text: this.defang(envelope) }
-    const outcome = await this.runHookChain('trigger', payload)
+    const initial: ExternalTriggerEnvelope = { ...envelope, text: this.defang(envelope) }
+    const outcome = await this.runHookChain('trigger', initial)
     if (outcome?.action === 'handled') return
-    const target =
-      outcome?.action === 'transform'
-        ? ((outcome.value as ExternalTriggerEnvelope).targetConversationId ?? PROTO_ROOT)
-        : (payload.targetConversationId ?? PROTO_ROOT)
-    await this.submitInput(target, payload.text, { origin: 'trigger', whenBusy: 'followUp' })
+    let final = initial
+    if (outcome?.action === 'transform') {
+      final = outcome.value as ExternalTriggerEnvelope
+      // transform 后的 text 再防一次（插件可能替换了原文）。
+      final = { ...final, text: this.defang({ ...final, text: stripEnvelope(final.text) }) }
+    }
+    const target = final.targetConversationId ?? PROTO_ROOT
+    await this.submitInput(target, final.text, { origin: 'trigger', whenBusy: 'followUp' })
   }
 
-  /** 子代理派生：agent_spawn hook -> 默认原生 subagent。 */
+  /** 子代理派生：agent_spawn hook -> 默认原生 subagent（transform 传最终 payload）。 */
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
     const outcome = await this.runHookChain('agent_spawn', request)
     if (outcome?.action === 'handled') return outcome.result
+    const finalRequest =
+      outcome?.action === 'transform' ? (outcome.value as AgentSpawnRequest) : request
     return runNativeSpawn(
       {
         ...this.toolDeps,
@@ -802,8 +1304,8 @@ export class KernelRuntime {
             profileId: profileId ?? 'default',
             tags: ['worker'],
             parentConversationId: parentId,
-            cwd: request.cwd ?? this.toolDeps.defaultCwd,
-            model: request.model ?? this.defaultModel ?? '',
+            cwd: finalRequest.cwd ?? this.toolDeps.defaultCwd,
+            model: finalRequest.model ?? this.defaultModel ?? '',
             unread: false,
             pinned: false,
             stateChangeSeq: 1,
@@ -814,7 +1316,7 @@ export class KernelRuntime {
           await this.tracker.observe(childId)
         },
       },
-      request,
+      finalRequest,
     )
   }
 
@@ -823,7 +1325,7 @@ export class KernelRuntime {
     return runGate(this.toolDeps, command, options)
   }
 
-  /** workflow 执行行注入（主代理组合 WorkflowService 后调用）。 */
+  /** workflow 执行注入（主代理组合 WorkflowService 后调用）。 */
   setWorkflowRunner(fn: WorkflowRunnerFn): void {
     this.workflowRunner = fn
   }
@@ -842,9 +1344,9 @@ export class KernelRuntime {
     const probes = summaries.map((summary) => ({
       targetId: String(summary.id),
       /**
-       * 归属权保守判定：root #1 与用户直连会话一律 'human'（只读红线）；
-       * 仅 spawnAgent 创建、父会话在仓且带 worker 标签的后台子会话标 'helm'。
-       * 判不准时宁 human 只读，绝不越权允许未来规则表中止人类会话。
+       * 归属权判定依据 spawn 显式登记的 ownership 标记（helm_spawn_ownership
+       * plugin doc），绝不依赖用户可改的 tags/parent 推断；判不准一律 human
+       * 只读（红线：宁可漏管不可越权）。
        */
       ownedBy: this.watchdogOwnershipOf(summary) as 'human' | 'helm',
       status: summary.status,
@@ -857,10 +1359,8 @@ export class KernelRuntime {
 
   private watchdogOwnershipOf(summary: ConversationSummary): 'human' | 'helm' {
     if (summary.id === PROTO_ROOT) return 'human'
-    if (!summary.tags.includes('worker')) return 'human'
-    const parent = summary.parentConversationId
-    if (parent === undefined) return 'human'
-    return this.store.getConv(parent) !== undefined ? 'helm' : 'human'
+    const owners = this.documentStore.get<Record<string, string>>('spawn-ownership', {})
+    return owners[String(summary.id)] === 'helm' ? 'helm' : 'human'
   }
 
   // ------------------------------------------------------------------
@@ -906,7 +1406,7 @@ export class KernelRuntime {
           )
           for (const entry of page.items) {
             const text = entryModelText(entry as never)
-            if (text) index(conv.id, `entry:${entry.id}`, conv.title, this.stash.redact(text))
+            if (text) index(conv.id, `entry:${entry.id}`, conv.title, this.stashService.redact(text))
           }
           if (!page.next) break
           cursor = page.next
@@ -916,31 +1416,33 @@ export class KernelRuntime {
   }
 
   async listModels(): Promise<Array<{ provider: string; modelId: string; available: boolean }>> {
-    return listModelCatalog(this.modelsRef)
+    return listModelCatalog(this.modelsCurrent)
   }
 
-  /** providers.json / credentials 变化后重建模型集（getter 热生效）。 */
+  /** providers.json / credentials.json 变化后重建模型集（getter 热生效）。 */
   async reloadModels(): Promise<void> {
+    // 外部注入 Models（测试/嵌入场景）：模型集合归调用方，绝不替换。
+    if (this.modelsProvider) return
     const providerConfigs = await this.providersSvc.list()
     for (const p of providerConfigs) {
-      const key = await this.credentials.get(p.id).catch(() => undefined)
+      const key = await this.credentialsSvc.get(p.id).catch(() => undefined)
       if (key) this.apiKeyCache[p.id] = key
     }
-    this.modelsRef = buildModels({
+    this.modelsCurrent = buildModels({
       providers: providerConfigs,
       apiKeys: () => this.apiKeyCache,
     })
-    this.init.setModels(this.modelsRef)
+    this.setModelsSlot(this.modelsCurrent)
   }
 
   /** 同步读 key 缓存（启动预热 + reload 刷新）。 */
-  private apiKeyCache: Record<string, string> = {}
+  private readonly apiKeyCache: Record<string, string> = {}
 
   /**
    * 全局文档存储端口（WorkflowService / PluginHost docs 共用同一 SQLite 镜像与队列）：
    * - get(key, initial)：同步读，缺省返回 initial（不落盘）；
    * - set(key, value)：同步镜像 + 排队持久化（helm_plugin_docs 全局命名空间）；
-   * - flush()：等待队列冲刷完成。
+   * - flush()：等待队列冲刷完成（失败显式抛 store_flush_failed）。
    * 命名空间约定：'<owner>/<name>'（如 'workflow/runs-index'、'<pluginId>/<doc>'）。
    */
   readonly documentStore: {
@@ -959,6 +1461,44 @@ export class KernelRuntime {
     flush: () => this.store.flushPublic(),
   }
 
+  /** spawn 归属权登记：子会话 -> 宿主标记（watchdog 判定唯一可信来源）。 */
+  markSpawnOwnership(childConversationId: number, owner: 'helm' | 'human'): void {
+    const key = 'spawn-ownership'
+    const current = this.documentStore.get<Record<string, string>>(key, {})
+    current[String(childConversationId)] = owner
+    this.documentStore.set(key, current)
+  }
+
+  /** HTTP 固定消费面：public services（与 contracts.KernelRuntimeLike 一致）。 */
+  get profiles(): ProfileService {
+    return this.profilesSvc
+  }
+
+  get skills(): SkillService {
+    return this.skillsSvc
+  }
+
+  get artifacts(): SvcArtifactService {
+    return this.artifactsSvc
+  }
+
+  get auth(): SvcAuthService {
+    return this.authSvc
+  }
+
+  get credentials(): CredentialService {
+    return this.credentialsSvc
+  }
+
+  get providers(): ProviderService {
+    return this.providersSvc
+  }
+
+  get stash(): SecretStash {
+    return this.stashService
+  }
+
+  /** 兼容旧消费方的聚合入口（新代码请用具名 getter）。 */
   get services(): {
     profiles: ProfileService
     skills: SkillService
@@ -969,13 +1509,13 @@ export class KernelRuntime {
     stash: SecretStash
   } {
     return {
-      profiles: this.profiles,
-      skills: this.skills,
-      artifacts: this.artifacts,
-      auth: this.auth,
-      credentials: this.credentials,
+      profiles: this.profilesSvc,
+      skills: this.skillsSvc,
+      artifacts: this.artifactsSvc,
+      auth: this.authSvc,
+      credentials: this.credentialsSvc,
       providers: this.providersSvc,
-      stash: this.stash,
+      stash: this.stashService,
     }
   }
 
@@ -989,22 +1529,279 @@ export class KernelRuntime {
     try {
       return this.tracker.summaryOf(id)
     } catch {
-      return summaryOf(meta, 'idle', 0)
+      return summaryOfFallback(meta, 'idle', 0)
     }
   }
 
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    // 1) 停资产监听（不再产生 reload 副作用）。
+    this.watcher?.close()
+    if (this.reloadTimer !== undefined) clearTimeout(this.reloadTimer)
+    // 2) 等待在途 reloadModels（可能还在写 models 引用）。
+    await this.reloadChain
+    // 3) 等待 turn_settled 钩子在途执行。
     await this.settledInflight
-    const storeError = await this.store.close()
+    // 4) 显式 abort 全部在途会话（SDK 任务收敛 + aborted 结算；空闲会话不结算）。
+    for (const meta of this.store.listConvs()) {
+      const conversation = await this.harness
+        .conversation(meta.id as never, BACKGROUND_CONTEXT)
+        .catch(() => undefined)
+      if (!conversation) continue
+      const wasBusy = this.tracker.hasLiveWork(meta.id)
+      this.closeAborts.push(
+        conversation
+          .abort(BACKGROUND_CONTEXT)
+          .then(() => {
+            if (wasBusy) this.tracker.settleAborted(meta.id)
+          })
+          .catch(() => {
+            /* abort 失败继续关停其余（close 本身会显式抛 store 错误） */
+          }),
+      )
+    }
+    await Promise.allSettled(this.closeAborts)
+    // 5) SDK 先关（此后无任何 SDK 写），再 flush store，最后关数据库。
     await this.harness.close(BACKGROUND_CONTEXT)
+    const storeError = await this.store.close()
     await this.database.close()
     if (storeError !== undefined) {
       throw new HelmError('store_flush_failed', `退出时持久化失败：${String(storeError)}`, 500, {
         error: String(storeError),
       })
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 工具结果契约 helpers（插件/钩子产物 -> SDK ToolExecutionResult）
+// ---------------------------------------------------------------------------
+
+/** 任意值 -> 模型可见文本（对象 JSON 序列化）。 */
+function safeResultText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === undefined) return ''
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+/** 插件工具原始返回 -> SDK ToolExecutionResult（裸文本/对象统一包 content）。 */
+function pluginToolResult(raw: unknown): {
+  output: Array<{ type: 'text'; text: string }>
+  isError?: boolean
+  structuredOutput?: JsonValue
+} {
+  if (
+    raw !== null &&
+    typeof raw === 'object' &&
+    Array.isArray((raw as { output?: unknown }).output)
+  ) {
+    // 已是契约形状（或另一工具结果）——原样透传。
+    return raw as { output: Array<{ type: 'text'; text: string }>; isError?: boolean }
+  }
+  const text = safeResultText(raw)
+  const structured =
+    raw !== null && typeof raw === 'object' ? (raw as JsonValue) : ({ value: raw } as JsonValue)
+  return {
+    output: [{ type: 'text', text }],
+    structuredOutput: structured,
+  }
+}
+
+/** tool_call handled 的接管产物 -> 合法 ToolExecutionResult（非法形状显式错误结果）。 */
+function toolResultOf(handled: unknown): {
+  output: Array<{ type: 'text'; text: string }>
+  isError: boolean
+} {
+  const normalized = normalizeToolResult(handled)
+  if (normalized !== undefined) {
+    return normalized as { output: Array<{ type: 'text'; text: string }>; isError: boolean }
+  }
+  return {
+    output: [{ type: 'text', text: 'tool_call handled 钩子返回了非法结果形状（已按错误落盘）' }],
+    isError: true,
+  }
+}
+
+/** tool_result transform 产物规整：必须形如 ToolExecutionResult，否则 undefined（保持原结果）。 */
+function normalizeToolResult(value: unknown): ToolExecutionResultShape | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const candidate = value as ToolExecutionResultShape
+  if (candidate.output === undefined && candidate.structuredOutput === undefined && candidate.isError === undefined) {
+    return undefined
+  }
+  // output 必须是 content 数组（字符串包成单文本块；SDK 契约只接受数组）。
+  if (typeof candidate.output === 'string') {
+    return { ...candidate, output: [{ type: 'text', text: candidate.output }] }
+  }
+  if (candidate.output !== undefined && !Array.isArray(candidate.output)) return undefined
+  return candidate
+}
+
+interface ToolExecutionResultShape {
+  output?: Array<{ type: string; text?: string }> | string
+  structuredOutput?: JsonValue
+  isError?: boolean
+  details?: JsonValue
+}
+
+/** 从模型消息提取当前生效 system sections（含前导声明与后续 patch 回放）。 */
+function systemSectionsOf(messages: ReadonlyArray<{ role?: string; sections?: unknown }>): Array<{ id: string; text: string }> {
+  const sections = new Map<string, string>()
+  for (const message of messages) {
+    if (message.role !== 'system' || message.sections === undefined) continue
+    if (message.sections === null || typeof message.sections !== 'object') continue
+    for (const [key, value] of Object.entries(message.sections as Record<string, unknown>)) {
+      if (value === null) sections.delete(key)
+      else if (typeof value === 'string') sections.set(key, value)
+    }
+  }
+  return [...sections.entries()].map(([id, text]) => ({ id, text }))
+}
+
+function sectionsEqual(a: Array<{ id: string; text: string }>, b: Array<{ id: string; text: string }>): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i]!.id !== b[i]!.id || a[i]!.text !== b[i]!.text) return false
+  }
+  return true
+}
+
+/**
+ * 把前导 system 消息的 sections 整体替换为 desired（保留 base content）。
+ * 后续 system 段消息的旧 sections patch 通过 null 清除，避免回放残留。
+ */
+function withSections(
+  messages: ReadonlyArray<Record<string, unknown>>,
+  desired: Array<{ id: string; text: string }>,
+): Array<Record<string, unknown>> {
+  if (messages.length === 0) return [...messages]
+  const out: Array<Record<string, unknown>> = [...messages]
+  const lead = out[0]!
+  if (lead['role'] !== 'system') return out
+  const previous = lead['sections']
+  const previousKeys =
+    previous !== null && typeof previous === 'object'
+      ? Object.keys(previous as Record<string, unknown>)
+      : []
+  // 新声明集；旧键不在新集中的以 null 移除（回放语义）。
+  const next: Record<string, string | null> = {}
+  for (const [i, section] of desired.entries()) {
+    void i
+    next[section.id] = section.text
+  }
+  for (const key of previousKeys) {
+    if (!(key in next)) next[key] = null
+  }
+  out[0] = { ...lead, sections: next }
+  return out
+}
+
+/**
+ * 工具集变更：在前导 system 消息追加 toolsRemoved/toolsAdded 声明。
+ * 模型侧由 pi-ai 回放机制解析（getCurrentTools），下一轮即生效。
+ */
+function withToolDeclarations(
+  runtime: KernelRuntime,
+  messages: ReadonlyArray<Record<string, unknown>>,
+  declared: Set<string>,
+): Array<Record<string, unknown>> {
+  // 汇总当前 registry 全部模型可用工具，取声明子集。
+  const host = (runtime as unknown as { pluginHost?: PluginHost }).pluginHost
+  const pluginTools = host ? host.listTools() : []
+  const available = new Map<string, { name: string; description: string; parameters?: unknown }>()
+  for (const spec of pluginTools) {
+    available.set(spec.name, {
+      name: spec.name,
+      description: spec.description,
+      parameters: spec.inputSchema,
+    })
+  }
+  // 内核工具（bash/read/read_artifact/subagent/SubagentWorkflow/run_action）默认保留。
+  for (const name of ['bash', 'read', 'read_artifact', 'subagent', 'SubagentWorkflow', 'run_action']) {
+    if (!available.has(name)) {
+      available.set(name, { name, description: `内核工具 ${name}`, parameters: { type: 'object', properties: {} } })
+    }
+  }
+  const added: Array<Record<string, unknown>> = []
+  for (const name of declared) {
+    const tool = available.get(name)
+    if (tool) {
+      added.push({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters ?? { type: 'object', properties: {} },
+      })
+    }
+  }
+  if (messages.length === 0 || messages[0]!['role'] !== 'system') return [...messages]
+  const lead = messages[0]!
+  // 完整重声明：移除全部旧声明再加新集（等价重放，防顺序漂移）。
+  const next: Record<string, unknown> = { ...lead }
+  const sections = lead['sections']
+  next['sections'] =
+    sections !== null && typeof sections === 'object'
+      ? { ...(sections as Record<string, unknown>) }
+      : {}
+  next['toolsRemoved'] = currentToolNames(messages).filter((name) => declared.has(name) === false).map((name) => ({ name }))
+  next['toolsAdded'] = added
+  return [{ ...next }, ...messages.slice(1)]
+}
+
+/** 回放消息中的当前工具名清单。 */
+function currentToolNames(messages: ReadonlyArray<Record<string, unknown>>): string[] {
+  const names = new Set<string>()
+  for (const message of messages) {
+    if (message['role'] !== 'system') continue
+    for (const tool of message['toolsAdded'] as Array<{ name?: string }> | undefined ?? []) {
+      if (typeof tool?.name === 'string') names.add(tool.name)
+    }
+    for (const ref of message['toolsRemoved'] as Array<{ name?: string }> | undefined ?? []) {
+      if (typeof ref?.name === 'string') names.delete(ref.name)
+    }
+  }
+  return [...names]
+}
+
+/** 剥离已有 external_event 包裹（trigger transform 后再 defang 防双重包裹）。 */
+function stripEnvelope(text: string): string {
+  const match = /<external_event[^>]*>\n([\s\S]*?)\n<\/external_event>/.exec(text)
+  if (match === null) return text
+  const body = match[1] ?? ''
+  return body
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&amp;', '&')
+}
+
+function summaryOfFallback(
+  meta: { id: number; title: string; profileId: string; tags: string[]; cwd: string; model: string; unread: boolean; pinned: boolean; stateChangeSeq: number; completionSeq: number; createdAt: number; updatedAt: number },
+  status: ConversationSummary['status'],
+  pendingAskCount: number,
+): ConversationSummary {
+  return {
+    id: meta.id,
+    title: meta.title,
+    profileId: meta.profileId,
+    tags: meta.tags,
+    ...(meta as { parentConversationId?: number }).parentConversationId !== undefined
+      ? { parentConversationId: (meta as { parentConversationId?: number }).parentConversationId }
+      : {},
+    cwd: meta.cwd,
+    model: meta.model,
+    status,
+    stateChangeSeq: meta.stateChangeSeq,
+    completionSeq: meta.completionSeq,
+    unread: meta.unread,
+    pinned: meta.pinned,
+    pendingAskCount,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
   }
 }
 
