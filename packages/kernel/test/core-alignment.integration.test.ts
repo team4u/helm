@@ -1,15 +1,27 @@
 /**
- * 核心对齐第一版整链验收测试（本任务新增文件；只测不改）。
+ * 核心对齐第一版整链验收测试（只测不改生产）。
  *
  * 与 core.integration.test.ts / app-workflow.integration.test.ts 的分工：
- * 本文件专注 /tmp/helm-core-contract-spec.md 新版契约的跨模块闭环——受管
- * Token 与 CLI 磁盘无关登录、输入 meta 全链、插件 doc/scope/托管保护、
- * 外部 agent_spawn 执行元数据与 Gate 回传、Profile 模型继承。
+ * 本文件专注 /tmp/helm-core-contract-spec.md 新版契约的跨模块闭环验收，共 6 组：
+ *  1. 受管进程 token：受管 bash 内 CLI 磁盘无关登录，token 全链只以脱敏形态
+ *     流转（CLI 输出、模型请求、SSE、SQLite 全表扫描）。
+ *  2. 受管 bash 工具内真实执行 CLI：env 注入受管 token、exit 0 标记与 CLI 详情
+ *     特征真实回传模型上下文，原始 token 不回显。
+ *  3. 输入 meta 全链（CLI --meta → helm.input entry → turn_settled）+ 详情分页
+ *     首尾无丢 + conversation.entry/live 真实增量事件 + snapshot 扩展
+ *     （ui/workflowRuns）+ plugin.changed 携带 ui + 纯脚本 workflow run --wait
+ *     与 workflow.updated 完成增量。
+ *  4. 插件 doc 公私边界（私有 404 / 公共脱敏 marker / plugin.doc.updated 事件
+ *     脱敏）、manageConversation 托管保护、scope 双过滤与 run_action 强制会话。
+ *  5. 外部 agent_spawn handled 后端：onResolved/onGateResult 真回传、gate 恰一次、
+ *     onWorkflowSettled 阻塞期间 wait() 不返回、resume 重放不重跑 gate、缺 gate
+ *     回报显式 failed（gate_result_missing）且不在宿主目录补跑。
+ *  6. 双 Profile 独立 SYSTEM/MEMORY 注入、PATCH 切换/清覆盖、重启保留。
  *
  * 诚实性纪律：
  * - 所有模型输出均来自 faux provider 脚本，不代表真实外网模型能力；
- * - 未到达的实现依赖在文件头 DEPENDENCIES 显式列出；依赖未到时整文件
- *   会在组合（createHelm）阶段如实崩溃，绝不 skip、不 mock 生产端口；
+ * - SSE 订阅一律先等 snapshot 首帧（onReady）再触发被测行为，断言读到的
+ *   必须是真实增量事件，绝不用空数组兜底糊过；
  * - CLI 一律真实子进程（异步 spawn + tsx loader），不用 spawnSync。
  *
  * runner: tsx --test；每项显式 timeout: 60_000。
@@ -31,27 +43,6 @@ import { createHelm } from '../src/app.js'
 import { startHub } from '../src/http/index.js'
 
 import assert from 'node:assert/strict'
-
-/**
- * 未到达的实现依赖（主代理将陆续发实现 commit；到齐后本文件应全绿）：
- * 1. KernelRuntime.setHubUrl(url)（startHub port:0 后更新工具端点）
- * 2. KernelRuntime 进程 token（ctor createProcessToken + stash.addRedaction
- *    注册 + toolDeps.processToken + shutdown dispose）
- * 3. ConversationInput.meta 全链（CLI --meta、HTTP body meta、helm.input
- *    entry、turn_settled inputs）
- * 4. getConversationDetail + GET /api/conversations/:id detail + 分页 cursor
- *    + CLI get --limit/--cursor；conversation.entry / conversation.live 事件
- * 5. PluginHost.getPublicDoc / ctx.doc(name, initial, {public}) /
- *    plugin.doc.updated 事件；snapshot.ui / snapshot.workflowRuns
- * 6. Runtime manageConversation owner map + ctx.host.manageConversation 闭包
- *    （409 conversation_managed_by_plugin、disable 释放、不 abort 在途回合）
- * 7. 工具/动作 scope 双过滤 + run_action / workflow 强制 conversationId
- * 8. agent_spawn onResolved / onGateResult / gate_result_missing
- * 9. WorkflowService.listRuns / onRunSettled 清理等待（notifyWorkflowSettled
- *    / setWorkflowRunProvider 已在 app.ts 引用，runtime 侧未实现）
- * 10. 会话显式模型覆盖 / PATCH model:'' 清覆盖 / 重启保留（summary.model
- *     语义按新设计：显式覆盖与生效模型分列）
- */
 
 const testDir = fileURLToPath(new URL('.', import.meta.url))
 const repoRoot = join(testDir, '..', '..', '..')
@@ -171,15 +162,21 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 
   }
 }
 
-/** SSE 帧收集器（读 N 帧或超时返回已有帧）。 */
+/**
+ * SSE 帧收集器：读到 N 帧或超时返回已有帧。
+ * 可选 onReady 在实际读到首帧 snapshot（订阅确已建立并开始接收）后恰好触发
+ * 一次——调用方用 Promise 等待它，替代「猜测连接已建立」的竞态写法。
+ */
 async function collectSse(
   base: string,
   token: string,
   until: (frames: string[]) => boolean,
   timeoutMs = 15_000,
+  onReady?: () => void,
 ): Promise<string[]> {
   const controller = new AbortController()
   const frames: string[] = []
+  let readyFired = false
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const response = await fetch(`${base}/api/events`, {
@@ -197,8 +194,13 @@ async function collectSse(
       buffer += decoder.decode(value, { stream: true })
       let index: number
       while ((index = buffer.indexOf('\n\n')) >= 0) {
-        frames.push(buffer.slice(0, index))
+        const frame = buffer.slice(0, index)
         buffer = buffer.slice(index + 2)
+        frames.push(frame)
+        if (!readyFired && frame.startsWith('event: snapshot')) {
+          readyFired = true
+          onReady?.()
+        }
       }
     }
     return frames
@@ -206,6 +208,19 @@ async function collectSse(
     clearTimeout(timer)
     controller.abort()
   }
+}
+
+/** 开一条 SSE 订阅并等 snapshot 首帧就绪；返回 { frames, ready }。 */
+function openSseSubscription(
+  base: string,
+  token: string,
+  until: (frames: string[]) => boolean,
+  timeoutMs = 25_000,
+): { frames: Promise<string[]>; ready: Promise<void> } {
+  let signalReady!: () => void
+  const ready = new Promise<void>((resolve) => (signalReady = resolve))
+  const frames = collectSse(base, token, until, timeoutMs, signalReady)
+  return { frames, ready }
 }
 
 /** Profile 落盘（profiles/<id>/profile.json + SYSTEM.md + MEMORY.md）。 */
@@ -227,26 +242,23 @@ function writeProfile(
 // 闭环 1：受管 Token —— 受管 bash 中 CLI 完全不依赖磁盘登录
 // ---------------------------------------------------------------------------
 
-test('对齐1: 受管 bash 内 CLI conversations get --current 不依赖磁盘登录，HELM_TOKEN 只以 marker 流转', { timeout: 60_000 }, async () => {
+test('对齐1: 受管 bash 内 CLI conversations get --current 不依赖磁盘登录，HELM_TOKEN 只以脱敏形态流转', { timeout: 60_000 }, async () => {
   const env = await makeCoreEnv()
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
-    // 先鉴权 setup（真 scrypt）；内核受管 token 由 runtime ctor 创建（依赖 2）。
     hub = await startHub({ kernel: env.app.kernel as never, workflows: env.app.workflows as never, port: 0 })
     const base = hub.url
     const setupRes = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: '对齐测试密码至少八位' } })
     const userToken = (JSON.parse(setupRes.body) as { token: string }).token
 
-    // runtime.setHubUrl（依赖 1）：startHub(port:0) 后工具端点必须指向真实 Hub。
     const runtime = env.app.kernel as unknown as { setHubUrl?: (url: string) => void }
-    assert.equal(typeof runtime.setHubUrl, 'function', '依赖未到：KernelRuntime.setHubUrl')
+    assert.equal(typeof runtime.setHubUrl, 'function', 'KernelRuntime.setHubUrl 应存在')
     runtime.setHubUrl!(base)
 
-    // 受管 token 取用（依赖 2：toolDeps.processToken）
     const tokenGetter = (env.app.kernel as unknown as {
       toolDeps?: { processToken?: () => string }
     }).toolDeps?.processToken
-    assert.equal(typeof tokenGetter, 'function', '依赖未到：toolDeps.processToken')
+    assert.equal(typeof tokenGetter, 'function', 'toolDeps.processToken 应存在')
     const managedToken = tokenGetter!()
 
     // CLI 在新临时 dataDir（无 cli-token 磁盘文件）下以 HELM_TOKEN env 直连。
@@ -268,18 +280,25 @@ test('对齐1: 受管 bash 内 CLI conversations get --current 不依赖磁盘�
       assert.equal(got.code, 0, `受管 token CLI 应成功：${got.err}`)
       const summary = JSON.parse(got.out) as { id: number; model?: unknown; entries?: unknown[] }
       assert.equal(summary.id, ROOT_CONVERSATION_ID)
-      // detail（依赖 4）：GET /api/conversations/:id 返回 ConversationDetail
       assert.ok(Array.isArray(summary.entries), 'CLI get 应返回详情（entries 时间线）')
-
-      // 原始 token 不出现在 CLI stdout/stderr
       assert.ok(!got.out.includes(managedToken) && !got.err.includes(managedToken), 'CLI 输出不得回显原始 Token')
 
-      // marker 形态：全局脱敏登记后，任何出口出现的是占位符（依赖 2 的
-      // stash.addRedaction(managedToken) 注册）。
+      // marker 形态：全局脱敏登记后，任何出口出现的是 [REDACTED] 占位符。
       const marker = env.app.kernel.services.stash.redact(managedToken)
       assert.notEqual(marker, managedToken, '受管 token 必须已被全局脱敏登记')
 
-      // 跨面扫描：模型请求 / SSE / SQLite 均不得出现原始 token。
+      // 先订阅并等 snapshot 首帧（证明订阅就绪），再提交含 token 的输入；
+      // 收集条件同时要求 entry 与 upsert（upsert 在回合结算时才发布，只在
+      // 首个 entry 就退出会漏掉结算帧）。
+      const sub = openSseSubscription(
+        base,
+        userToken,
+        (fs) =>
+          fs.some((f) => f.includes('event: conversation.entry')) &&
+          fs.some((f) => f.includes('event: conversation.upsert')),
+      )
+      await sub.ready
+
       const requests: string[] = []
       env.faux.setResponses([
         (ctx) => {
@@ -289,10 +308,15 @@ test('对齐1: 受管 bash 内 CLI conversations get --current 不依赖磁盘�
       ])
       await env.app.kernel.submitInput(ROOT_CONVERSATION_ID, `凭据是 ${managedToken} 请保密`)
       await env.app.kernel.waitForIdle(ROOT_CONVERSATION_ID)
+      assert.ok(requests.length > 0, '应捕获模型请求')
       assert.ok(!requests[0]!.includes(managedToken), '模型请求不得含原始受管 Token')
 
-      const frames = await collectSse(base, userToken, (fs) => fs.length > 0 && fs.some((f) => f.includes('conversation.entry') || f.includes('conversation.upsert')))
-      assert.ok(!frames.join('\n').includes(managedToken), 'SSE 帧不得含原始受管 Token')
+      // SSE 增量（conversation.entry / upsert）不含原始 token。
+      const frames = await sub.frames
+      const joined = frames.join('\n')
+      assert.ok(joined.includes('event: conversation.entry'), '应收到 conversation.entry 增量事件')
+      assert.ok(joined.includes('event: conversation.upsert'), '应收到 conversation.upsert 增量事件')
+      assert.ok(!joined.includes(managedToken), 'SSE 帧不得含原始受管 Token')
 
       assert.deepEqual(
         sqliteTablesContaining(env.dbPath, managedToken),
@@ -312,35 +336,32 @@ test('对齐1: 受管 bash 内 CLI conversations get --current 不依赖磁盘�
 // 闭环 2：受管 bash 中真实执行 CLI（bash 工具子进程 env 携带受管 token）
 // ---------------------------------------------------------------------------
 
-test('对齐2: 受管 bash 工具内执行 helm conversations get —— env 注入、磁盘无关、Token 不回显', { timeout: 60_000 }, async () => {
+test('对齐2: 受管 bash 工具内执行 helm conversations get —— env 注入、exit 0 标记、详情特征回传且 Token 不回显', { timeout: 60_000 }, async () => {
   const env = await makeCoreEnv()
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
     hub = await startHub({ kernel: env.app.kernel as never, workflows: env.app.workflows as never, port: 0 })
     const base = hub.url
     const setupRes = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: '对齐测试密码至少八位' } })
-    const userToken = (JSON.parse(setupRes.body) as { token: string }).token
+    void setupRes
 
     const runtime = env.app.kernel as unknown as { setHubUrl?: (url: string) => void }
     runtime.setHubUrl!(base)
 
-    // 内核 bash 工具（真实 runShell）：模型回合内经工具执行 CLI。
-    // bash 工具输出回给模型前经统一脱敏（含全局 addRedaction 值）。
-
     const cliDataDir = join(env.dataDir, 'cli-isolated')
+    // 尾部 && echo CLI_OK：CLI exit 0 才会输出该标记（&& 链短路）。
     const cmd = [
       `export HELM_DATA_DIR="${cliDataDir}"`,
       `export HELM_CONVERSATION_ID=${ROOT_CONVERSATION_ID}`,
       `"${process.execPath}" "${tsxCli}" "${cliEntry}" conversations get --current --json`,
+      'echo CLI_OK',
     ].join(' && ')
 
+    // faux 第 1 响应发起 bash 工具调用；capture 放在工具后的第 2 响应——
+    // 固定终答不会携带工具结果上下文，永远无法捕获。
     const toolResults: string[] = []
     env.faux.setResponses([
       fauxAssistantMessage([fauxToolCall('bash', { command: cmd })], { stopReason: 'toolUse' }),
-      fauxAssistantMessage('CLI 已执行'),
-    ])
-    // 捕获第二回合的模型消息（含工具结果文本）
-    env.faux.appendResponses([
       (ctx) => {
         toolResults.push(JSON.stringify(ctx.messages))
         return fauxAssistantMessage('done')
@@ -350,14 +371,19 @@ test('对齐2: 受管 bash 工具内执行 helm conversations get —— env 注
     await env.app.kernel.submitInput(ROOT_CONVERSATION_ID, '请在受管 shell 中执行 helm conversations get --current --json')
     await env.app.kernel.waitForIdle(ROOT_CONVERSATION_ID)
 
-    // bash 工具 env（依赖 2/3：HELM_TOKEN 注入受管 token + HELM_DATA_DIR）：
-    // 子 CLI 无磁盘登录仍鉴权成功；原始 token 不进模型上下文。
     assert.ok(toolResults.length > 0, '应捕获工具后模型请求')
     const toolCtx = toolResults[0]!
     const managedToken = (env.app.kernel as unknown as { toolDeps?: { processToken?: () => string } }).toolDeps?.processToken?.()
     assert.ok(managedToken, 'toolDeps.processToken 应存在')
-    assert.ok(!toolCtx.includes(managedToken), '工具结果回传模型不得含原始受管 Token')
-    assert.ok(toolCtx.includes('"id":1') || toolCtx.includes(String(ROOT_CONVERSATION_ID)), 'CLI 详情应真实回传')
+    assert.ok(!toolCtx.includes(managedToken!), '工具结果回传模型不得含原始受管 Token')
+    // CLI 真实成功的证据链：exit 0 标记 + detail 的 entries 时间线 + helm.input
+    // entry + 根会话标题——不能只见数字 1 就算通过。
+    assert.ok(toolCtx.includes('CLI_OK'), '工具输出应含 CLI exit 0 标记 CLI_OK')
+    assert.ok(toolCtx.includes('helm.input'), 'CLI 详情应含 helm.input entry（本回合输入已落时间线）')
+    assert.ok(toolCtx.includes('个人助理'), 'CLI 详情应含根会话标题')
+    assert.ok(toolCtx.includes('entries'), 'CLI 详情应含 entries 时间线字段')
+    // toolCtx 是消息数组的 JSON.stringify，CLI 输出内嵌时引号被转义（\"id\": 1）
+    assert.ok(/id\\?"?\s*:\s*1\b/.test(toolCtx), 'CLI 详情应含会话 id')
   } finally {
     await hub?.close()
     await env.close()
@@ -365,17 +391,16 @@ test('对齐2: 受管 bash 工具内执行 helm conversations get —— env 注
 })
 
 // ---------------------------------------------------------------------------
-// 闭环 3：输入 meta 全链 + 详情分页 + 事件（依赖 3/4）
+// 闭环 3：输入 meta 全链 + 详情分页 + 事件 + snapshot 扩展 + workflow 增量
 // ---------------------------------------------------------------------------
 
-test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；详情分页首尾无丢；entry/live 事件与快照扩展', { timeout: 60_000 }, async () => {
+test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；分页首尾无丢；entry/live/plugin.changed/workflow.updated 真实增量', { timeout: 60_000 }, async () => {
   const env = await makeCoreEnv()
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
     hub = await startHub({ kernel: env.app.kernel as never, workflows: env.app.workflows as never, port: 0 })
     const base = hub.url
-    const password = '对齐测试密码至少八位'
-    const setupRes = await httpCall(base, 'POST', '/api/auth/setup', { body: { password } })
+    const setupRes = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: '对齐测试密码至少八位' } })
     const userToken = (JSON.parse(setupRes.body) as { token: string }).token
 
     // 插件：收集 turn_settled inputs（meta 应原样到达）
@@ -393,17 +418,31 @@ test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；�
       },
     } satisfies PluginDefinition)
 
-    // SSE 订阅先建立（收集 conversation.entry / conversation.live / workflow.updated）
-    const ssePromise = collectSse(
+    // 三条订阅全部等 snapshot 首帧就绪后再触发被测行为：
+    // A: CLI send 回合的 conversation.entry / conversation.live 增量；
+    // B: plugin.changed 启/停两帧；
+    // C: 纯脚本 workflow run 的 workflow.updated 完成增量。
+    const subA = openSseSubscription(
       base,
       userToken,
-      (frames) =>
-        frames.some((f) => f.includes('conversation.entry')) &&
-        frames.some((f) => f.includes('conversation.live')),
-      20_000,
+      (fs) =>
+        fs.some((f) => f.includes('event: conversation.entry')) &&
+        fs.some((f) => f.includes('event: conversation.live')),
     )
+    const subB = openSseSubscription(
+      base,
+      userToken,
+      (fs) => fs.filter((f) => f.includes('event: plugin.changed')).length >= 2,
+    )
+    const subC = openSseSubscription(
+      base,
+      userToken,
+      (fs) =>
+        fs.some((f) => f.includes('event: workflow.updated') && f.includes('"status":"completed"')),
+    )
+    await Promise.all([subA.ready, subB.ready, subC.ready])
 
-    // CLI send --meta + --wait（依赖 3 + send --wait）
+    // CLI send --meta + --wait
     const meta = { renderer: 'test.render', ticket: 7, nested: { ok: true } }
     const cliDataDir = mkdtempSync(join(tmpdir(), 'helm-align-cli-'))
     try {
@@ -414,22 +453,22 @@ test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；�
       )
       assert.equal(sent.timedOut, false)
       if (sent.code !== 0) {
-        assert.fail(`send --meta --wait 失败（依赖 3 / send --wait）：${sent.err}`)
+        assert.fail(`send --meta --wait 失败：${sent.err}`)
       }
-      // send --wait 返回 ConversationInputResult（依赖 3 的等待结果协议）
+      // send --wait 返回 ConversationInputResult：text 即本次回答，entry 为回答条目
       const waitResult = JSON.parse(sent.out) as { text: string; entry?: { id: string } }
-      assert.equal(waitResult.text, '带元数据的输入')
+      assert.equal(waitResult.text, 'meta 回合完成', 'send --wait 应返回本次回答文本')
       assert.ok(waitResult.entry?.id, 'send --wait 应返回本次回答 entry id')
     } finally {
       rmSync(cliDataDir, { recursive: true, force: true })
     }
 
-    // turn_settled：meta 全链到达（依赖 3）
+    // turn_settled：meta 全链到达
     await waitFor(() => settledInputs.length > 0)
     assert.equal(settledInputs[0]!.metas.length, 1)
     assert.deepEqual(settledInputs[0]!.metas[0], meta, 'meta 应从 CLI 原样到达 turn_settled')
 
-    // 详情：GET /api/conversations/1 含 helm.input entry 的 data.meta（依赖 3/4）
+    // 详情：GET /api/conversations/1 含 helm.input entry 的 data.meta
     const detailRes = await httpCall(base, 'GET', '/api/conversations/1', { token: userToken })
     assert.equal(detailRes.status, 200)
     const detail = JSON.parse(detailRes.body) as {
@@ -439,7 +478,7 @@ test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；�
     assert.ok(inputEntry, 'detail 应含 helm.input entry')
     assert.deepEqual(inputEntry!.data?.meta, meta, 'helm.input entry 应携带 meta')
 
-    // assistant 文本在 model 字段（不在 data）——detail 不丢模型消息
+    // assistant 文本在 entry.model（不在 data）——detail 不丢模型消息
     const assistantEntry = detail.entries.find((e) => e.kind === 'pi.assistant')
     if (assistantEntry) {
       assert.ok(
@@ -448,13 +487,21 @@ test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；�
       )
     }
 
-    // SSE：conversation.entry 与 conversation.live 真实到达（依赖 4）
-    const frames = await ssePromise
+    // SSE：conversation.entry 与 conversation.live 真实增量到达（订阅先于回合建立）
+    const frames = await subA.frames
     const joined = frames.join('\n')
     assert.ok(joined.includes('event: conversation.entry'), '应收到 conversation.entry 事件')
     assert.ok(joined.includes('event: conversation.live'), '应收到 conversation.live 事件')
+    const inputFrame = frames.find((f) => f.includes('event: conversation.entry') && f.includes('test.render'))
+    assert.ok(inputFrame, 'conversation.entry 增量应携带 helm.input 的 meta')
 
-    // 分页（依赖 4）：limit=1 首页 + cursor 翻页到尾，聚合无丢失无重复
+    // 首帧 snapshot 扩展：ui 与 workflowRuns 必填
+    const snapFrame = frames.find((f) => f.startsWith('event: snapshot'))
+    assert.ok(snapFrame, '订阅应收到首帧 snapshot')
+    assert.ok(snapFrame!.includes('"ui"'), 'snapshot 应含 ui（插件 UI 贡献）')
+    assert.ok(snapFrame!.includes('"workflowRuns"'), 'snapshot 应含 workflowRuns')
+
+    // 分页：limit=1 首页 + cursor 翻页到尾，聚合无丢失无重复
     const firstPageRes = await httpCall(base, 'GET', '/api/conversations/1?limit=1', { token: userToken })
     assert.equal(firstPageRes.status, 200)
     const firstPage = JSON.parse(firstPageRes.body) as { entries: Array<{ id: string }>; nextCursor?: string }
@@ -479,21 +526,8 @@ test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；�
       '分页聚合必须与全量一致（首尾无丢）',
     )
 
-    // 快照扩展（依赖 5/9）：snapshot.ui 与 snapshot.workflowRuns 必填
-    const snapFrames = await collectSse(base, userToken, (fs) => fs.some((f) => f.includes('event: snapshot')))
-    const snap = snapFrames.find((f) => f.includes('event: snapshot'))!
-    assert.ok(snap.includes('"ui"'), 'snapshot 应含 ui（插件 UI 贡献）')
-    assert.ok(snap.includes('"workflowRuns"'), 'snapshot 应含 workflowRuns')
-    // --- plugin.changed 携带 ui（依赖 5）：同一条 SSE 连接上观察到启/停携带
-    //     UI 贡献，不靠重连重新拉 snapshot。
-    const changeFramesPromise = collectSse(
-      base,
-      userToken,
-      (fs) =>
-        fs.filter((f) => f.includes('event: plugin.changed')).length >= 2,
-      20_000,
-    ).catch(() => [] as string[])
-    // 启用带 ui 贡献的探针插件 → 停用：同连接应依次收到 ui 非空与 ui 空数组
+    // plugin.changed 携带 ui：订阅 ready 后启/停带 UI 贡献的探针插件，
+    // 同连接依次收到 ui 非空与 ui 空数组两帧，不靠重连重新拉 snapshot。
     await env.app.kernel.plugins.register({
       id: 'test:ui-probe',
       name: 'UI 探针',
@@ -502,17 +536,16 @@ test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；�
       },
     } satisfies PluginDefinition)
     await env.app.kernel.plugins.disable('test:ui-probe')
-    const changeFrames = await changeFramesPromise
+    const changeFrames = await subB.frames
     const changed = changeFrames.filter((f) => f.includes('event: plugin.changed'))
-    assert.ok(changed.length >= 2, '同连接应收到启/停两次 plugin.changed')
+    assert.ok(changed.length >= 2, `同连接应收到启/停两次 plugin.changed（实际 ${changed.length}）`)
     const withUi = changed.find((f) => f.includes('"ui"') && f.includes('sidebar.item'))
     assert.ok(withUi, '启用事件应携带 ui 贡献（含 surface）')
     const disabledEmptyUi = changed.find((f) => f.includes('"enabled":false') && /"ui":\s*\[\]/.test(f))
     assert.ok(disabledEmptyUi, '停用事件 ui 应为空数组（客户端据此替换贡献）')
 
-    // 纯脚本 workflow：run --wait 终态 + workflow.updated { run }（依赖 9 + CLI --wait）
-    const wfStarted = frames.filter((f) => f.includes('event: workflow.updated'))
-    void wfStarted
+    // 纯脚本 workflow：订阅 ready 后经 CLI run --wait 真实执行，
+    // 校验 CLI 终态输出与 workflow.updated 完成增量两路证据。
     const cliDataDir2 = mkdtempSync(join(tmpdir(), 'helm-align-cli-'))
     const wfScriptPath = join(cliDataDir2, 'align-wait.workflow.js')
     writeFileSync(
@@ -529,12 +562,18 @@ test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；�
         ],
         { ...process.env, HELM_HUB_URL: base, HELM_DATA_DIR: cliDataDir2, HELM_TOKEN: userToken },
       )
+      assert.equal(wf.timedOut, false)
       if (wf.code !== 0) {
-        assert.fail(`workflows run --wait 失败（依赖 9 / CLI --wait）：${wf.err}`)
+        assert.fail(`workflows run --wait 失败：${wf.err}`)
       }
-      const runSummary = JSON.parse(wf.out) as { status: string; result?: unknown }
+      const runSummary = JSON.parse(wf.out) as { id: string; status: string; result?: unknown }
       assert.equal(runSummary.status, 'completed')
       assert.equal(runSummary.result, 42)
+      const wfFrames = await subC.frames
+      const completedFrame = wfFrames.find(
+        (f) => f.includes('event: workflow.updated') && f.includes(runSummary.id) && f.includes('"status":"completed"'),
+      )
+      assert.ok(completedFrame, '同连接应收到该 run 的 workflow.updated 完成增量')
     } finally {
       rmSync(cliDataDir2, { recursive: true, force: true })
     }
@@ -545,12 +584,14 @@ test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；�
 })
 
 // ---------------------------------------------------------------------------
-// 闭环 4：插件 doc 公私 / manageConversation / scope（依赖 5/6/7）
+// 闭环 4：插件 doc 公私 / manageConversation / scope
 // ---------------------------------------------------------------------------
 
-test('对齐4: ctx.doc 公私边界、manageConversation 托管保护、scope 工具可见与 run_action 强制会话', { timeout: 60_000 }, async () => {
+test('对齐4: ctx.doc 公私边界、plugin.doc.updated 脱敏增量、manageConversation 托管保护、scope 工具可见与 run_action 强制会话', { timeout: 60_000 }, async () => {
   const env = await makeCoreEnv()
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
+  // busy gate 释放函数：try 外声明（finally 兕底可调），resolve 幂等，重复调用无害
+  let releaseBusy: () => void = () => {}
   try {
     const kernel = env.app.kernel
     const host = kernel.plugins
@@ -559,9 +600,13 @@ test('对齐4: ctx.doc 公私边界、manageConversation 托管保护、scope �
     const SECRET = 'align-doc-secret-蓝色'
     const placeholder = kernel.services.stash.put(ROOT_CONVERSATION_ID, 'DOC_SECRET', SECRET)
 
-    let releaseBusy!: () => void
     const busyGate = new Promise<void>((r) => (releaseBusy = r))
     const eventsSeen: string[] = []
+
+    // 公共 doc 更新闭包：订阅 ready 后由测试显式触发，事件才是真实增量
+    // （注册期更新发生在订阅之前，永远等不到帧——不猜、不糊）。
+    type PubDoc = { note: string; secret: string }
+    let updatePubDoc!: (fn: (v: PubDoc) => PubDoc) => void
 
     const conv = await kernel.createConversation({ title: '托管会话', profileId: 'assistant' })
 
@@ -571,6 +616,7 @@ test('对齐4: ctx.doc 公私边界、manageConversation 托管保护、scope �
       definePlugin(ctx) {
         const pub = ctx.doc('status', { note: 'init', secret: SECRET }, { public: true })
         const priv = ctx.doc('inner', { count: 0 })
+        updatePubDoc = (fn) => pub.update(fn)
         ctx.action<Record<string, never>, { ok: boolean }>({
           id: 'blocked_out',
           description: 'scope 外不可经会话路径调用',
@@ -616,48 +662,60 @@ test('对齐4: ctx.doc 公私边界、manageConversation 托管保护、scope �
         })
         // 托管：本插件管理 conv
         ctx.host.manageConversation(conv.id)
-        // 触发公共 doc 更新（事件出口）
-        pub.update((v) => ({ ...v, note: 'updated' }))
+        // 私有 doc 更新不发事件（仅公共 doc 是事件出口）
         priv.update((v) => ({ count: v.count + 1 }))
       },
     } satisfies PluginDefinition)
 
-    // --- 私有 doc：HTTP 404（依赖 5：getPublicDoc 私有/不存在均 404）
     hub = await startHub({ kernel: kernel as never, workflows: env.app.workflows as never, port: 0 })
     const base = hub.url
     const setupRes = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: '对齐测试密码至少八位' } })
     const userToken = (JSON.parse(setupRes.body) as { token: string }).token
 
+    // --- 私有 doc：HTTP 404；公共 doc 可读且秘密以 stash marker 呈现
     const privateDoc = await httpCall(base, 'GET', `/api/plugins/test:guard/docs/inner`, { token: userToken })
     assert.equal(privateDoc.status, 404, `私有 doc 必须 404：${privateDoc.status}`)
     const publicDoc = await httpCall(base, 'GET', `/api/plugins/test:guard/docs/status`, { token: userToken })
     if (publicDoc.status !== 200) {
-      assert.fail(`公共 doc 应可读（依赖 5 插件 doc HTTP）：${publicDoc.status}`)
+      assert.fail(`公共 doc 应可读（插件 doc HTTP）：${publicDoc.status}`)
     }
-    const docBody = publicDoc.body
-    assert.ok(!docBody.includes(SECRET), '公共 doc 出站不得含秘密明文')
-    assert.ok(docBody.includes(placeholder), '公共 doc 秘密字段应以 stash marker 呈现')
+    assert.ok(!publicDoc.body.includes(SECRET), '公共 doc 出站不得含秘密明文')
+    assert.ok(publicDoc.body.includes(placeholder), '公共 doc 秘密字段应以 stash marker 呈现')
 
-    // plugin.doc.updated 事件脱敏（依赖 5）
-    const docFrames = await collectSse(base, userToken, (fs) => fs.some((f) => f.includes('plugin.doc.updated')), 8_000).catch(() => [] as string[])
-    const docJoined = docFrames.join('\n')
-    if (docFrames.length > 0) {
-      assert.ok(!docJoined.includes(SECRET), 'plugin.doc.updated 不得含秘密明文')
-    }
+    // --- plugin.doc.updated 真实增量：订阅 ready 后实际更新并校验事件脱敏
+    // （原写法订阅发生在更新之后、超时后 catch([])，根本没验证事件）。
+    const docSub = openSseSubscription(
+      base,
+      userToken,
+      (fs) => fs.some((f) => f.includes('event: plugin.doc.updated') && f.includes('after-subscribe')),
+    )
+    await docSub.ready
+    updatePubDoc((v) => ({ ...v, note: 'after-subscribe' }))
+    const docFrames = await docSub.frames
+    const docFrame = docFrames.find((f) => f.includes('event: plugin.doc.updated'))
+    assert.ok(docFrame, '应收到 plugin.doc.updated 增量事件')
+    assert.ok(!docFrame!.includes(SECRET), 'plugin.doc.updated 不得含秘密明文')
+    assert.ok(docFrame!.includes(placeholder), 'plugin.doc.updated 秘密应以 stash marker 呈现')
+    assert.ok(docFrame!.includes('after-subscribe'), '事件应携带更新后的 marker 值')
+    // 公共 doc 读值同步为更新后内容（marker 仍脱敏）
+    const publicDoc2 = await httpCall(base, 'GET', `/api/plugins/test:guard/docs/status`, { token: userToken })
+    assert.equal(publicDoc2.status, 200)
+    assert.ok(publicDoc2.body.includes('after-subscribe'), '公共 doc 应反映更新后的值')
+    assert.ok(!publicDoc2.body.includes(SECRET), '更新后公共 doc 仍不得含秘密明文')
 
-    // --- 托管保护（依赖 6）：DELETE 受管会话 409 conversation_managed_by_plugin
+    // --- 托管保护：DELETE 受管会话 409 conversation_managed_by_plugin
     const delManaged = await httpCall(base, 'DELETE', `/api/conversations/${conv.id}`, { token: userToken })
     assert.equal(delManaged.status, 409)
     assert.equal(JSON.parse(delManaged.body).error.code, 'conversation_managed_by_plugin')
     // 保护生效期间不产生 abort 副作用：会话仍存在
     assert.equal(kernel.getConversation(conv.id).id, conv.id)
 
-    // --- scope（依赖 7）：listTools(conversation) 按会话筛选
+    // --- scope：listTools(conversation) 按会话筛选
     const listToolsFn = host as unknown as {
       listTools?: (conversation?: { id: number; profileId: string; tags: string[] }) => Array<{ name: string }>
     }
     if (typeof listToolsFn.listTools !== 'function') {
-      assert.fail('依赖未到：PluginHost.listTools(conversation) scope 筛选')
+      assert.fail('PluginHost.listTools(conversation) scope 筛选应存在')
     }
     const assistantTools = listToolsFn.listTools!({
       id: ROOT_CONVERSATION_ID,
@@ -680,7 +738,7 @@ test('对齐4: ctx.doc 公私边界、manageConversation 托管保护、scope �
     const httpNoCtx = await httpCall(base, 'POST', '/api/actions/test:guard/blocked_out', { token: userToken, body: { input: {} } })
     assert.equal(httpNoCtx.status, 200)
 
-    // run_action 元工具强制携带 conversationId（依赖 7）：绕过 scope 的调用被拒。
+    // run_action 元工具强制携带 conversationId：绕过 scope 的调用被拒。
     const runActionOutputs: string[] = []
     env.faux.setResponses([
       fauxAssistantMessage(
@@ -710,10 +768,13 @@ test('对齐4: ctx.doc 公私边界、manageConversation 托管保护、scope �
     assert.deepEqual(await busy, { done: true })
     await host.disable('test:guard')
 
-    // disable 后托管释放：DELETE 现在应成功（依赖 6：停用自动释放）
+    // disable 后托管释放：DELETE 现在应成功（停用自动释放）
     const delAfter = await httpCall(base, 'DELETE', `/api/conversations/${conv.id}`, { token: userToken })
     assert.equal(delAfter.status, 200, `disable 后托管应释放：${delAfter.body}`)
+    void eventsSeen
   } finally {
+    // 失败路径兕底：释放 busy gate，避免 cleanup 挂住（resolve 幂等）
+    releaseBusy?.()
     await hub?.close()
     await env.close()
   }
@@ -723,8 +784,10 @@ test('对齐4: ctx.doc 公私边界、manageConversation 托管保护、scope �
 // 闭环 5：外部后端 onAgentSpawn handled —— onResolved/onGateResult 真回传
 // ---------------------------------------------------------------------------
 
-test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真实元数据、onGateResult 真实 kernel.runGate、Gate 恰一次、结算清理恰一次', { timeout: 60_000 }, async () => {
+test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真实元数据、onGateResult 真实 kernel.runGate、Gate 恰一次、结算顺序与缺 gate 显式失败', { timeout: 60_000 }, async () => {
   const env = await makeCoreEnv()
+  // settle gate 释放函数：try 外声明（finally 兕底可调），resolve 幂等，重复调用无害
+  let releaseSettle: () => void = () => {}
   try {
     const kernel = env.app.kernel
     const { workflows } = env.app
@@ -735,10 +798,10 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
     const gateDir = join(env.dataDir, 'gate-files')
     const execId = `ext-${Date.now()}`
 
-    const spawns: Array<{ prompt: string; gate?: string; schema?: unknown; onResolvedSet: boolean }> = []
+    const spawns: Array<{ prompt: string; gate?: string; schema?: unknown }> = []
     const gates: Array<{ command: string; cwd?: string }> = []
     let settleCount = 0
-    let releaseSettle!: () => void
+    let settleEntered = false
     const settleGate = new Promise<void>((r) => (releaseSettle = r))
 
     await kernel.plugins.register({
@@ -750,9 +813,7 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
             prompt: request.prompt,
             gate: request.gate,
             schema: request.schema,
-            onResolvedSet: false,
           })
-          const current = spawns[spawns.length - 1]!
           if (request.onResolved === undefined || request.onGateResult === undefined) {
             throw new HelmError('test_backend_contract', '外部后端必须收到 onResolved/onGateResult 回调', 500)
           }
@@ -762,17 +823,17 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
             effectiveCwd: execDir,
             worktree: { path: execDir, branch: 'align-wt' },
           })
-          current.onResolvedSet = true
-          // gate 在外部执行环境内真实执行（用 kernel.runGate 真实 shell 于 execDir）
+          // gate 在外部执行环境内真实执行（kernel.runGate 真实 shell 于 execDir）
           if (request.gate !== undefined) {
             const result = await kernel.runGate(request.gate, { cwd: execDir, conversationId: request.parentConversationId })
             gates.push({ command: request.gate, cwd: execDir })
             request.onGateResult(result)
           }
-          // Schema 业务数据（handled result）
+          // Schema 业务数据（handled result；source 如实声明进 schema）
           return { action: 'handled', result: { answer: 42, source: 'external' } }
         })
         ctx.host.onWorkflowSettled(async () => {
+          settleEntered = true
           settleCount += 1
           await settleGate
         })
@@ -782,12 +843,17 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
     // gate 计数文件（真实 shell 副作用，恰一次）
     const gateCmd = `mkdir -p "${gateDir}" && printf x >> "${join(gateDir, 'count')}" && test -f "${join(execDir, 'marker')}" || (touch "${join(execDir, 'marker')}"; true)`
 
+    // schema 如实声明 source：additionalProperties:false 下 handled 返回的
+    // {answer, source} 必须全部入 schema，绝不靠削弱校验换通过。
     const script =
       'export const meta = { name: "align-ext", description: "external backend" }\n' +
       'const v = await agent("外部提取", { schema: ' +
       JSON.stringify({
         type: 'object',
-        properties: { answer: { type: 'number' } },
+        properties: {
+          answer: { type: 'number' },
+          source: { type: 'string' },
+        },
         required: ['answer'],
         additionalProperties: false,
       }) +
@@ -795,10 +861,21 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
       'return v'
 
     const started = await workflows.run({ script, conversationId: ROOT_CONVERSATION_ID })
-    const result = (await workflows.wait(started.id)) as { answer: number; source?: string }
+
+    // 结算顺序死锁验证：先拿 wait promise，等 onWorkflowSettled 确已进入，
+    // 断言 wait 尚未返回（settleGate 未释放），再 release 并取真实结果。
+    let waitDone = false
+    const waitPromise = workflows.wait(started.id).then((r) => {
+      waitDone = true
+      return r
+    })
+    await waitFor(() => settleEntered === true)
+    assert.equal(waitDone, false, 'onWorkflowSettled 未完成前 workflows.wait 不得返回')
+    releaseSettle()
+    const result = (await waitPromise) as { answer: number; source?: string }
     assert.deepEqual(result, { answer: 42, source: 'external' }, '外部后端 handled 结果应回传脚本')
 
-    // 节点元数据保留（依赖 8）：executionId / effectiveCwd / worktree / gate
+    // 节点元数据保留：executionId / effectiveCwd / worktree / gate
     const summary = workflows.getRun(started.id)
     const node = summary.nodes?.find((n) => n.kind === 'agent')
     assert.ok(node, '应含 agent 节点')
@@ -807,24 +884,23 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
     assert.deepEqual(node!.worktree, { path: execDir, branch: 'align-wt' })
     assert.ok(node!.gate?.ok === true, '节点应含 gate 执行结果')
 
-    // Gate 文件恰一次（依赖 8：WorkflowSpawnResult.gate 使引擎跳过第二次执行）
+    // Gate 文件恰一次（onGateResult 回报使引擎跳过第二次执行）
     await waitFor(() => existsSync(join(gateDir, 'count')))
     assert.equal(readFileSync(join(gateDir, 'count'), 'utf8'), 'x', 'gate 恰好执行一次')
-
-    // onWorkflowSettled 清理恰一次且 wait 等待（依赖 9）
-    releaseSettle()
-    await waitFor(() => settleCount === 1)
     assert.equal(settleCount, 1, 'onWorkflowSettled 应恰好触发一次')
 
     // resume 重放不再 gate、不再执行外部后端
     const gatesBefore = gates.length
     const resumed = await workflows.run({ resumeFromRunId: started.id, conversationId: ROOT_CONVERSATION_ID })
-    const resumedResult = (await workflows.wait(resumed.id)) as { answer: number }
+    const resumedResult = (await workflows.wait(resumed.id)) as { answer: number; source?: string }
     assert.equal(resumedResult.answer, 42)
     assert.equal(gates.length, gatesBefore, 'resume 重放不得再执行 gate')
     assert.equal(readFileSync(join(gateDir, 'count'), 'utf8'), 'x', 'gate 副作用不重复')
 
-    // --- 缺 Gate 回报：显式 failed，不在宿主猜目录执行（依赖 8）
+    // 停用第一个 handled 后端，避免它截获后续缺 gate 场景的 spawn
+    await kernel.plugins.disable('test:ext-backend')
+
+    // --- 缺 Gate 回报：显式 failed，不在宿主猜目录执行
     await kernel.plugins.register({
       id: 'test:ext-nogate',
       name: '缺 gate 回报后端',
@@ -837,9 +913,12 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
       },
     } satisfies PluginDefinition)
 
+    // agent() 失败按引擎契约返回 null（不 throw）；脚本必须在 null 时显式
+    // throw 才能让整个 run 断言为 failed。
     const badScript =
       'export const meta = { name: "align-nogate", description: "gate result missing" }\n' +
       'const v = await agent("缺 gate 回报", { gate: ' + JSON.stringify(gateCmd) + ' })\n' +
+      'if (v === null || v === undefined) throw new Error("agent 未返回结果")\n' +
       'return v'
     const bad = await workflows.run({ script: badScript, conversationId: ROOT_CONVERSATION_ID })
     await workflows.wait(bad.id)
@@ -847,14 +926,20 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
     assert.equal(badSummary.status, 'failed', '缺 gate 回报应显式 failed')
     const badNode = badSummary.nodes?.find((n) => n.kind === 'agent')
     assert.ok(badNode, '应含 agent 节点')
-    assert.equal(badNode!.status, 'failed')
+    assert.ok(badNode!.status === 'failed')
+    // 只认节点真实诊断（gate_result_missing 由引擎写入 node.error）；
+    // ?? summary.error 回退会命中脚本自行 throw 的字样，是假通过路径，禁用。
     assert.ok(
-      /gate_result_missing|gate/.test(badNode!.error ?? badSummary.error ?? ''),
-      `缺 gate 回报错误应显式 gate_result_missing：${badNode!.error ?? badSummary.error}`,
+      typeof badNode!.error === 'string' && badNode!.error.includes('gate_result_missing'),
+      `agent 节点 error 应含真实诊断 gate_result_missing：${String(badNode!.error)}`,
     )
-    // 不在宿主猜目录执行：gate 计数不因该 run 增加
+    // 不在宿主猜目录执行：gate 计数不因该 run 增加（真实副作用而非编造消息）
     assert.equal(readFileSync(join(gateDir, 'count'), 'utf8'), 'x', '缺回报 run 不得在宿主目录执行 gate')
+    assert.equal(gates.length, gatesBefore, '缺回报 run 不得经后端执行 gate')
   } finally {
+    // 失败路径兕底：释放 settle gate，避免 workflows.close() 经未完成的
+    // onWorkflowSettled 监听永久挂住（resolve 幂等）。
+    releaseSettle()
     await env.close()
   }
 })
@@ -865,7 +950,6 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
 
 test('对齐6: 双 Profile 独立 SYSTEM/MEMORY/模型，PATCH 切换与清覆盖后请求一致，重启保留', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-align-profile-'))
-  const dbPath = join(dataDir, 'state.sqlite')
 
   writeProfile(dataDir, 'researcher', {
     system: '# Researcher System\n你是研究员。唯一标记 ALIGN-SYS-RESEARCHER。',
@@ -967,7 +1051,7 @@ test('对齐6: 双 Profile 独立 SYSTEM/MEMORY/模型，PATCH 切换与清覆�
       assert.ok(requests3[0]!.includes('ALIGN-SYS-CODER'), 'PATCH 换 Profile 后注入应切换')
       assert.ok(!requests3[0]!.includes('ALIGN-SYS-RESEARCHER'), '不得残留旧 Profile SYSTEM')
 
-      // 显式模型覆盖 + 清覆盖（依赖 10）：summary 与真实请求一致
+      // 显式模型覆盖 + 清覆盖：summary 与真实请求一致
       const override = await httpCall(base, 'PATCH', `/api/conversations/${r1!.id}`, {
         token,
         body: { model: 'faux/faux-1' },
@@ -986,6 +1070,5 @@ test('对齐6: 双 Profile 独立 SYSTEM/MEMORY/模型，PATCH 切换与清覆�
   } finally {
     await second.app.close()
     rmSync(dataDir, { recursive: true, force: true })
-    void dbPath
   }
 })
