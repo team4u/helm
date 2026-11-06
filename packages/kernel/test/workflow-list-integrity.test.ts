@@ -43,6 +43,12 @@ const timeout = { timeout: 60_000 } as const
 
 const META = (name: string) => `export const meta = { name: "${name}", description: "test" }\n`
 
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
 // ---------------------------------------------------------------------------
 // 辅助：state store / service host（对齐 workflow-metadata.test.ts 基座）
 // ---------------------------------------------------------------------------
@@ -131,22 +137,29 @@ async function runTwoSettledRuns(dataDir: string, state: WorkflowStateStore): Pr
 describe('WorkflowService listRuns integrity', () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'wf-list-int-'))
 
-  it('normal path: active + settled runs, restart, dedupe, createdAt desc, getRun 404 preserved', timeout, async () => {
+  after(() => rmSync(dataDir, { recursive: true, force: true }))
+
+  it('normal path: active + settled runs, restart, dedupe, createdAt desc, getRun 404 preserved', timeout, async (t) => {
     const state = makeStateStore()
     const service = await runTwoSettledRuns(dataDir, state)
     // 再来一个活跃 run（挂起 spawn 以验证实时列出 + 去重）。
-    let release: (() => void) | undefined
+    const ready = deferred()
+    const resume = deferred()
     const host = makeServiceHost()
     const realSpawn = host.spawnAgent.bind(host)
     host.spawnAgent = async (request) => {
-      await new Promise<void>((r) => {
-        release = r
-      })
+      ready.resolve()
+      await resume.promise
       return realSpawn(request)
     }
     const activeService = new WorkflowService({ dataDir, host, state })
+    t.after(async () => {
+      resume.resolve()
+      await activeService.close()
+      await service.close()
+    })
     const active = await activeService.run({ script: META('hist-int-active') + 'return await agent("hang")' })
-    await new Promise((r) => setTimeout(r, 120))
+    await ready.promise
     let runs = activeService.listRuns()
     assert.equal(runs.length, 3, 'active + two settled runs all listed')
     const ids = runs.map((r) => r.id)
@@ -155,7 +168,7 @@ describe('WorkflowService listRuns integrity', () => {
     for (let i = 1; i < runs.length; i++) {
       assert.ok(runs[i - 1]!.createdAt >= runs[i]!.createdAt, `desc order broken at ${i}`)
     }
-    release?.()
+    resume.resolve()
     await activeService.wait(active.id)
     // 活跃 run 落终态后去重：不出现两条同 id。
     runs = activeService.listRuns()
@@ -222,29 +235,31 @@ describe('WorkflowService listRuns integrity', () => {
     }
   })
 
-  it('global createdAt desc order: two actives straddle a newer settled run; dedupe holds', timeout, async () => {
+  it('global createdAt desc order: two actives straddle a newer settled run; dedupe holds', timeout, async (t) => {
     const state = makeStateStore()
     const host = makeServiceHost()
-    let releaseA: (() => void) | undefined
-    let releaseB: (() => void) | undefined
+    const ready = [deferred(), deferred()]
+    const resume = [deferred(), deferred()]
     const realSpawn = host.spawnAgent.bind(host)
     let hangSlot = 0
     host.spawnAgent = async (request) => {
-      const slot = ++hangSlot
-      await new Promise<void>((r) => {
-        if (slot === 1) releaseA = r
-        else releaseB = r
-      })
+      const slot = hangSlot++
+      ready[slot]!.resolve()
+      await resume[slot]!.promise
       return realSpawn(request)
     }
     const service = new WorkflowService({ dataDir, host, state })
+    t.after(async () => {
+      for (const gate of resume) gate.resolve()
+      await service.close()
+    })
     // 旧活跃 run 先启（active.values() 插入序在前），随后夹一个较新的终态历史。
     const olderActive = await service.run({ script: META('ord-a') + 'return await agent("hang-a")' })
-    await new Promise((r) => setTimeout(r, 100))
+    await ready[0]!.promise
     const settled = await service.run({ script: META('ord-mid') + 'return 1' })
     await service.wait(settled.id)
     const newerActive = await service.run({ script: META('ord-b') + 'return await agent("hang-b")' })
-    await new Promise((r) => setTimeout(r, 150))
+    await ready[1]!.promise
 
     const runs = service.listRuns()
     assert.equal(runs.length, 3, 'two actives + one settled')
@@ -262,8 +277,7 @@ describe('WorkflowService listRuns integrity', () => {
     for (const id of [olderActive.id, newerActive.id, settled.id]) {
       assert.equal(runs.filter((r) => r.id === id).length, 1)
     }
-    releaseA?.()
-    releaseB?.()
+    for (const gate of resume) gate.resolve()
     await service.wait(olderActive.id)
     await service.wait(newerActive.id)
     // 终态后再列：仍 3 条、仍倒序、无重复。

@@ -52,8 +52,11 @@ async function makeEnv(prefix: string): Promise<Env> {
     kernel,
     managedToken,
     async close() {
-      await kernel.close().catch(() => {})
-      rmSync(dataDir, { recursive: true, force: true })
+      try {
+        await kernel.close()
+      } finally {
+        rmSync(dataDir, { recursive: true, force: true })
+      }
     },
   }
 }
