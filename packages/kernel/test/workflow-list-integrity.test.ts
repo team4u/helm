@@ -52,7 +52,9 @@ function makeStateStore(): WorkflowStateStore & { map: Map<string, unknown> } {
   return {
     map,
     get<T>(key: string, initial: T): T {
-      return (map.get(key) as T | undefined) ?? initial
+      // 键存在即返回存储值（含 null）：与真实 documentStore 的 JSON 语义
+      // 一致（存了 null 读回 null），不得用 ?? 把 null 吞成 initial。
+      return map.has(key) ? (map.get(key) as T) : initial
     },
     set<T>(key: string, value: T): void {
       map.set(key, value)
@@ -177,6 +179,137 @@ describe('WorkflowService listRuns integrity', () => {
     await revived.close()
     await service.close()
     await activeService.close()
+  })
+
+  it('index shape violations (non-array / null / null-item / bad fields) fail as workflow_index_corrupt with key + identifiable runId', timeout, async () => {
+    const cases: Array<{ name: string; value: unknown; wantRunId: string; wantProblem: string }> = [
+      { name: 'null 索引', value: null, wantRunId: '#root', wantProblem: '索引非数组' },
+      { name: '对象伪装索引', value: { 0: {} }, wantRunId: '#root', wantProblem: '索引非数组' },
+      { name: 'null 项', value: [{ id: 'wf_aaaaaaaaaaaa', conversationId: 1, createdAt: 1 }, null], wantRunId: '#1', wantProblem: '第 1 项非对象' },
+      { name: 'id 非字符串', value: [{ id: 42, conversationId: 1, createdAt: 1 }], wantRunId: '#0', wantProblem: 'id 非字符串' },
+      {
+        name: 'conversationId 非法',
+        value: [{ id: 'wf_bbbbbbbbbbbb', conversationId: 0, createdAt: 1 }],
+        wantRunId: 'wf_bbbbbbbbbbbb',
+        wantProblem: 'conversationId 非正整数',
+      },
+      {
+        name: 'createdAt 非法',
+        value: [{ id: 'wf_cccccccccccc', conversationId: 1, createdAt: 'soon' }],
+        wantRunId: 'wf_cccccccccccc',
+        wantProblem: 'createdAt 非有限数值',
+      },
+    ]
+    for (const c of cases) {
+      const state = makeStateStore()
+      state.set('workflow/runs', c.value)
+      const service = new WorkflowService({ dataDir, host: makeServiceHost(), state })
+      assert.throws(
+        () => service.listRuns(),
+        (error: unknown) => {
+          assert.ok(error instanceof HelmError, `[${c.name}] expect HelmError, got: ${String(error)}`)
+          assert.equal(error.code, 'workflow_index_corrupt', c.name)
+          assert.equal(error.status, 500, c.name)
+          const details = error.details as { key?: string; runId?: string }
+          assert.equal(details.key, 'workflow/runs', c.name)
+          assert.equal(details.runId, c.wantRunId, `${c.name}: identifiable runId`)
+          assert.ok(error.message.includes(c.wantProblem), `[${c.name}] message should name the problem: ${error.message}`)
+          return true
+        },
+        `[${c.name}] old code would TypeError on entry.id or fake a list`,
+      )
+      await service.close()
+    }
+  })
+
+  it('global createdAt desc order: two actives straddle a newer settled run; dedupe holds', timeout, async () => {
+    const state = makeStateStore()
+    const host = makeServiceHost()
+    let releaseA: (() => void) | undefined
+    let releaseB: (() => void) | undefined
+    const realSpawn = host.spawnAgent.bind(host)
+    let hangSlot = 0
+    host.spawnAgent = async (request) => {
+      const slot = ++hangSlot
+      await new Promise<void>((r) => {
+        if (slot === 1) releaseA = r
+        else releaseB = r
+      })
+      return realSpawn(request)
+    }
+    const service = new WorkflowService({ dataDir, host, state })
+    // 旧活跃 run 先启（active.values() 插入序在前），随后夹一个较新的终态历史。
+    const olderActive = await service.run({ script: META('ord-a') + 'return await agent("hang-a")' })
+    await new Promise((r) => setTimeout(r, 100))
+    const settled = await service.run({ script: META('ord-mid') + 'return 1' })
+    await service.wait(settled.id)
+    const newerActive = await service.run({ script: META('ord-b') + 'return await agent("hang-b")' })
+    await new Promise((r) => setTimeout(r, 150))
+
+    const runs = service.listRuns()
+    assert.equal(runs.length, 3, 'two actives + one settled')
+    // 全局新建在前：newerActive > settled > olderActive（旧实现按 active 插入
+    // 序会把较早的活跃 run 排在较新的终态历史之前）。
+    assert.deepEqual(
+      runs.map((r) => r.id),
+      [newerActive.id, settled.id, olderActive.id],
+      `global createdAt desc broken: ${JSON.stringify(runs.map((r) => [r.id, r.createdAt]))}`,
+    )
+    for (let i = 1; i < runs.length; i++) {
+      assert.ok(runs[i - 1]!.createdAt >= runs[i]!.createdAt)
+    }
+    // 活跃项去重：每个 id 仅一条。
+    for (const id of [olderActive.id, newerActive.id, settled.id]) {
+      assert.equal(runs.filter((r) => r.id === id).length, 1)
+    }
+    releaseA?.()
+    releaseB?.()
+    await service.wait(olderActive.id)
+    await service.wait(newerActive.id)
+    // 终态后再列：仍 3 条、仍倒序、无重复。
+    const final = service.listRuns()
+    assert.equal(final.length, 3)
+    assert.deepEqual(final.map((r) => r.id), [newerActive.id, settled.id, olderActive.id])
+    await service.close()
+  })
+
+  it('loadRecord tolerates non-object stored values: string corrupt, never TypeError; 404 preserved', timeout, async () => {
+    const state = makeStateStore()
+    const service = await runTwoSettledRuns(dataDir, state)
+    const index = state.get<Array<{ id: string }>>('workflow/runs', [])
+    const victim = index[0]!.id
+    // 键下是字符串（store 返回非对象非 null）：损坏，不是 TypeError。
+    state.set(`workflow/run/${victim}`, 'garbage')
+    assert.throws(
+      () => service.getRun(victim),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'workflow_record_corrupt')
+        assert.ok(error.message.includes('非对象结构'), error.message)
+        return true
+      },
+    )
+    // 键下是 null（真实 documentStore 存 JSON null 读回 null）：不存在，404。
+    state.set(`workflow/run/${victim}`, null)
+    assert.throws(
+      () => service.getRun(victim),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'not_found')
+        assert.equal(error.status, 404)
+        return true
+      },
+    )
+    // 普通 getRun 不存在保持 404。
+    assert.throws(
+      () => service.getRun('wf_nosuchrun0000'),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'not_found')
+        return true
+      },
+    )
+    await service.close()
   })
 
   it('index entry pointing at a missing record fails explicitly (no silent short list)', timeout, async () => {

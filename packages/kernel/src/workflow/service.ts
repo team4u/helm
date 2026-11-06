@@ -166,6 +166,35 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/**
+ * run 索引最低限度形状校验：非数组、null 项、id/conversationId/createdAt
+ * 非法都是持久层损坏（旧实现对每项直接 entry.id 访问，null 项会 TypeError）。
+ * 只校验现行 RunIndexEntry 契约，无旧格式适配。合法返回 undefined；损坏
+ * 返回问题描述 + 可辨识 runId（id 非法时用 `#位置` 定位）。
+ */
+function runIndexProblem(raw: unknown): { problem: string; runId: string } | undefined {
+  if (!Array.isArray(raw)) return { problem: `索引非数组（${raw === null ? 'null' : typeof raw}）`, runId: '#root' }
+  for (let i = 0; i < raw.length; i++) {
+    const entry: unknown = raw[i]
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      return { problem: `第 ${i} 项非对象（${entry === null ? 'null' : typeof entry}）`, runId: `#${i}` }
+    }
+    const e = entry as Record<string, unknown>
+    const at = `#${i}`
+    if (typeof e['id'] !== 'string' || e['id'] === '') {
+      return { problem: `第 ${i} 项 id 非字符串`, runId: at }
+    }
+    const runId = e['id'] as string
+    if (!Number.isInteger(e['conversationId']) || (e['conversationId'] as number) < 1) {
+      return { problem: `第 ${i} 项 conversationId 非正整数`, runId }
+    }
+    if (typeof e['createdAt'] !== 'number' || !Number.isFinite(e['createdAt'])) {
+      return { problem: `第 ${i} 项 createdAt 非有限数值`, runId }
+    }
+  }
+  return undefined
+}
+
 const RUN_STATUSES: readonly WorkflowRunStatus[] = ['running', 'completed', 'failed', 'aborted']
 
 /**
@@ -709,9 +738,9 @@ export class WorkflowService {
    * 故障不会被 snapshot 再吞掉（throw 直接打断 SSE snapshot 组装）。
    */
   listRuns(): WorkflowRunSummary[] {
-    let index: RunIndexEntry[]
+    let raw: unknown
     try {
-      index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+      raw = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
     } catch (error) {
       // 索引本体读不出来：与单条记录故障同级的持久层服务故障。
       throw new HelmError(
@@ -721,6 +750,18 @@ export class WorkflowService {
         { key: INDEX_KEY },
       )
     }
+    // 索引是持久层外部输入：非数组/null 项/字段非法显式报损坏（带 key 与可
+    // 辨识 runId），绝不强转后拿 entry.id TypeError 或当有效列表。
+    const broken = runIndexProblem(raw)
+    if (broken !== undefined) {
+      throw new HelmError(
+        'workflow_index_corrupt',
+        `工作流 run 索引损坏（${broken.problem}）`,
+        500,
+        { key: INDEX_KEY, runId: broken.runId },
+      )
+    }
+    const index = raw as RunIndexEntry[]
     const out: WorkflowRunSummary[] = []
     const seen = new Set<string>()
     for (const active of this.active.values()) {
@@ -742,6 +783,9 @@ export class WorkflowService {
         throw this.indexCorruptError(entry.id, `记录损坏：${errorMessage(error)}`)
       }
     }
+    // 新建在前契约是全局的：active.values() 是旧先新后的插入序，较早创建的
+    // 活跃 run 不能排在较新的终态历史之前——合并去重后统一 createdAt 倒序。
+    out.sort((a, b) => b.createdAt - a.createdAt)
     return out
   }
 
@@ -1089,7 +1133,7 @@ export class WorkflowService {
   }
 
   private loadRecord(runId: string): RunRecord {
-    let record: RunRecord | null
+    let record: unknown
     try {
       record = this.state.get<RunRecord | null>(runKey(runId), null)
     } catch (error) {
@@ -1101,7 +1145,20 @@ export class WorkflowService {
         { runId, key: runKey(runId) },
       )
     }
-    if (record === null || record.id !== runId) {
+    // 先验证是对象再访问 id：null/原始值/数组绝不 record.id TypeError。
+    if (record === null || typeof record !== 'object' || Array.isArray(record)) {
+      if (record === null) {
+        throw new HelmError('not_found', `工作流运行 ${runId} 不存在`, 404, { runId })
+      }
+      throw new HelmError(
+        'workflow_record_corrupt',
+        `工作流运行 ${runId} 持久记录损坏（非对象结构：${Array.isArray(record) ? 'array' : typeof record}）`,
+        500,
+        { runId },
+      )
+    }
+    const asRecord = record as Record<string, unknown>
+    if (asRecord['id'] !== runId) {
       throw new HelmError('not_found', `工作流运行 ${runId} 不存在`, 404, { runId })
     }
     // 边界形状校验：持久层是外部输入（state.sqlite 命名空间 doc），TS 强转
@@ -1117,7 +1174,7 @@ export class WorkflowService {
         { runId, problem },
       )
     }
-    return record
+    return record as RunRecord
   }
 
   /** listRuns 索引损坏诊断（不自动删索引或记录：修复由人类确认）。 */
