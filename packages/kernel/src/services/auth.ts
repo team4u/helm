@@ -223,7 +223,9 @@ export class AuthService {
       dispose: () => {
         if (disposed) return
         disposed = true
-        processTokenDigests(this.dataDir).delete(digest)
+        const digests = processTokenRegistry.get(this.dataDir)
+        digests?.delete(digest)
+        if (digests?.size === 0) processTokenRegistry.delete(this.dataDir)
       },
     }
   }
@@ -235,7 +237,7 @@ export class AuthService {
   async verifyToken(token: string): Promise<boolean> {
     if (typeof token !== 'string' || token === '') return false
     const digest = sha256Hex(token)
-    for (const stored of processTokenDigests(this.dataDir)) {
+    for (const stored of processTokenRegistry.get(this.dataDir) ?? []) {
       if (safeEqualHex(digest, stored)) return true
     }
     const state = await this.readState()

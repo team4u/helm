@@ -402,6 +402,24 @@ test('stash: addRedaction 全局逐值脱敏——非 env、不计 stats、clear
   assert.throws(() => stash.addRedaction(''), /非空/)
 })
 
+test('stash: 全局脱敏优先、标记幂等与旧解除句柄隔离', { timeout: 60_000 }, () => {
+  const stash = new SecretStash()
+  const value = 'internal-example-for-redaction'
+  const releaseOld = stash.addRedaction(value)
+  stash.put(1, 'EXAMPLE', value)
+  assert.equal(stash.redact(value), '[REDACTED]')
+
+  stash.clear()
+  const releaseCurrent = stash.addRedaction(value)
+  releaseOld()
+  assert.equal(stash.redact(value), '[REDACTED]', '清空前的句柄不得解除新登记')
+  releaseCurrent()
+  assert.equal(stash.redact(value), value)
+
+  stash.addRedaction('REDACTED')
+  assert.equal(stash.redact('[REDACTED]'), '[REDACTED]', '已脱敏标记保持原样')
+})
+
 // ---------------------------------------------------------------------------
 // AuthService
 // ---------------------------------------------------------------------------

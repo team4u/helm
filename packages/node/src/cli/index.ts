@@ -16,7 +16,7 @@ import { loadDynamicCommands } from './actions.js'
 import { HubClient, resolveEndpoint } from './hub-client.js'
 import { buildIo, type Io, type RunCliOptions } from './options.js'
 import { CliError, describeError, errorEnvelope } from './errors.js'
-import { credentialsPath, dataDirFor, loadCliCredential } from './credentials.js'
+import { dataDirFor, loadCliCredential } from './credentials.js'
 
 export interface CompletedRun {
   exitCode: number

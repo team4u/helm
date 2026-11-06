@@ -45,6 +45,7 @@ export class SecretStash {
   private readonly byUuid = new Map<string, StashedSecret>()
   /** 全局逐值脱敏登记：value → 引用计数（多登记叠放，全解除才停止）。 */
   private readonly globalRedactions = new Map<string, number>()
+  private redactionEpoch = 0
 
   /**
    * 存入秘密，返回 `[REDACTED:stash:<uuid>]` 占位符。
@@ -84,14 +85,15 @@ export class SecretStash {
   /**
    * 登记全局逐值脱敏：redact() 将该值替换为 `[REDACTED]`（任意会话上下文均
    * 生效）。非环境变量、不进 envFor/stats；同一值可重复登记，返回的解除
-   * 函数引用计数归零后才停止脱敏。返回 `[REDACTED]` 占位供调用方留存。
+   * 函数引用计数归零后才停止脱敏。
    */
   addRedaction(value: string): () => void {
     if (typeof value !== 'string' || value === '') throw new Error('addRedaction 需要非空字符串')
     this.globalRedactions.set(value, (this.globalRedactions.get(value) ?? 0) + 1)
+    const epoch = this.redactionEpoch
     let removed = false
     return () => {
-      if (removed) return
+      if (removed || epoch !== this.redactionEpoch) return
       removed = true
       const count = this.globalRedactions.get(value) ?? 0
       if (count <= 1) this.globalRedactions.delete(value)
@@ -112,7 +114,7 @@ export class SecretStash {
       values.set(value, REDACTED_MARKER)
     }
     for (const secret of this.byUuid.values()) {
-      if (secret.value && (conversationId === undefined || secret.conversationId === conversationId)) {
+      if (secret.value && !values.has(secret.value) && (conversationId === undefined || secret.conversationId === conversationId)) {
         values.set(secret.value, secret.placeholder)
       }
     }
@@ -120,7 +122,7 @@ export class SecretStash {
     const escaped = [...values.keys()]
       .sort((a, b) => b.length - a.length)
       .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    const pattern = new RegExp(`\\[REDACTED:stash:[0-9a-f-]{36}\\]|${escaped.join('|')}`, 'g')
+    const pattern = new RegExp(`\\[REDACTED(?::stash:[0-9a-f-]{36})?\\]|${escaped.join('|')}`, 'g')
     return text.replace(pattern, (value) => values.get(value) ?? value)
   }
 
@@ -130,6 +132,7 @@ export class SecretStash {
       this.byConversation.clear()
       this.byUuid.clear()
       this.globalRedactions.clear()
+      this.redactionEpoch += 1
       return
     }
     for (const [uuid, secret] of this.byUuid) {
