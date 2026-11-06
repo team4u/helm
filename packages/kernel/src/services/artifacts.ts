@@ -6,8 +6,8 @@
  * - spill 对 > 32KiB（UTF-8 字节）的文本写全量文件，返回 4KiB 头部预览；
  * - 所有写盘文本与模型预览先经 SecretStash 脱敏，已存在的占位符保持原样。
  */
-import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
-import { join, normalize, sep } from 'node:path'
+import { mkdir, readFile, readdir, realpath, rm, stat } from 'node:fs/promises'
+import { join, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { ArtifactMetadata } from '@helm/protocol'
 import {
@@ -220,26 +220,34 @@ export class ArtifactService {
    * 仓库（sqlite/内存 Map）不是可信边界：手改 DB 的 path 字段不得让本服务
    * 读任意文件，故强制规范化后必须仍在 artifacts 根内。
    */
-  private resolveStoredPath(metadata: ArtifactMetadata): string {
-    const artifactsRoot = join(this.dataDir, 'artifacts')
-    const abs = join(this.dataDir, metadata.path)
-    const normalized = normalize(abs)
-    if (normalized !== artifactsRoot && !normalized.startsWith(artifactsRoot + sep)) {
-      throw new Error(`产物路径越出 artifacts 目录，拒绝读取: ${metadata.path}`)
+  private async resolveStoredPath(metadata: ArtifactMetadata): Promise<string> {
+    this.assertConversationId(metadata.conversationId)
+    const parts = metadata.path.split('/')
+    if (parts[0] !== 'artifacts' || parts[1] !== String(metadata.conversationId) || parts.length < 3 ||
+        parts.some((part) => part === '' || part === '.' || part === '..' || part.includes('\\') || part.includes('\0'))) {
+      throw new Error(`产物路径越出 artifacts 会话目录，拒绝读取: ${metadata.path}`)
     }
-    return abs
+    const dataRoot = await realpath(this.dataDir)
+    const artifactsRoot = await realpath(join(dataRoot, 'artifacts'))
+    const conversationRoot = await realpath(join(artifactsRoot, String(metadata.conversationId)))
+    const filePath = await realpath(join(this.dataDir, metadata.path))
+    if (!artifactsRoot.startsWith(dataRoot + sep) || !conversationRoot.startsWith(artifactsRoot + sep) ||
+        !filePath.startsWith(conversationRoot + sep)) {
+      throw new Error(`产物路径越出 artifacts 会话目录，拒绝读取: ${metadata.path}`)
+    }
+    return filePath
   }
 
   /** 读产物内容（任意产物，文本形态返回）。 */
   async readContent(id: string): Promise<string> {
     const metadata = await this.get(id)
-    return readTextFile(this.resolveStoredPath(metadata))
+    return readTextFile(await this.resolveStoredPath(metadata))
   }
 
   /** 读产物原始字节（HTTP 侧向客户端传输用；文本产物同样可走此路径）。 */
   async readBuffer(id: string): Promise<Uint8Array> {
     const metadata = await this.get(id)
-    return readFile(this.resolveStoredPath(metadata))
+    return readFile(await this.resolveStoredPath(metadata))
   }
 
   /**
@@ -249,6 +257,7 @@ export class ArtifactService {
    *   返回「头部 4KiB 预览 + 截断标记 + 尾部摘要 + artifact 指引」。
    */
   async spill(conversationId: number, callId: string, text: string): Promise<SpillResult> {
+    this.assertConversationId(conversationId)
     if (typeof text !== 'string') throw new Error('spill 文本必须是字符串')
     if (typeof callId !== 'string' || callId === '') throw new Error('callId 不能为空')
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(callId)) {
