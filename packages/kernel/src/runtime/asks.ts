@@ -2,21 +2,29 @@
  * AskService：AskDoc 生命周期 + CAS 乐观锁 + secret 入 stash + 外部 seq resolver 注册。
  *
  * 关键语义（诚实性优先）：
- * - createAsk 先完整校验（字段类型/name 唯一/secret env 名合法/会话存在经
- *   validateConversation 端口），非法输入在写库前拒绝；
+ * - createAsk 先完整校验（字段类型/name 唯一/secret env 名合法/预分配 id 形状与
+ *   唯一性/会话存在经 validateConversation 端口），非法输入在写库前拒绝；
+ * - createAsk 返回 AskResult：answered/cancelled/superseded 三态均 resolve
+ *   （cancel/superseded 的 answers 为 {}，取消绝不冒充用户批准）；只有
+ *   验证/IO/宿主失败才 reject；
+ * - waiter 先于一切可见副作用（putAsk/publish）注册：ask.upsert 订阅者在
+ *   事件回调内同步 cancel/answer 时 promise 也能结算（曾因先 publish 后注册
+ *   导致库已 settled 而 promise 永久悬挂）；发布/写入失败同步回收 waiter，
+ *   不留悬挂等待者、不假成功；
+ * - 真实持久化边界在 store 尾链：创建与终态结算在 resolve/发布终态事件前
+ *   await store.flushPublic()，SQL 失败（镜像已写但落盘失败）以显式
+ *   store_flush_failed reject 结算 createAsk——绝不返回假 answered；
  * - envName 保留声明原样（不 toUpperCase 合并折叠），同会话内映射后碰撞明确拒绝；
  * - answer 校验未知字段/非 string/select 越界/confirm 非法值；secret 空值不 stash
  *   （空值 stash 会产生无效脱敏条目）；
  * - CAS 以持久 spec.expectedStateSeq 为准：客户端提供的不同 seq 返回 409
  *   （不静默覆盖水位），目标当前 seq 任何不一致（含回退）都 superseded；
  *   有 CAS 水位但无 resolver 注册 -> ask_state_unavailable（不装作校验通过）；
- * - cancel/superseded 让 createAsk promise reject（HelmError ask_cancelled /
- *   ask_superseded），绝不返回空 answers 冒充用户批准（防 herdr 发空回车）；
  * - 重启后 pending asks 保留并发出诊断通知；secret stash 引用跨重启失效，
  *   通知中如实说明（不伪装仍可取回明文）。
  */
 
-import type { AskCreateSpec, AskFieldSpec, AskSpec } from '@helm/protocol'
+import type { AskCreateSpec, AskFieldSpec, AskResult, AskSpec } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
 import { isValidEnvName } from '../services/secret-stash.js'
@@ -32,11 +40,14 @@ export interface AskSettled {
   answers?: Record<string, string>
 }
 
+/** waiter 结算通道：正常终态或宿主侧失败（IO/持久化），失败时 createAsk reject。 */
+type WaiterOutcome = AskSettled | { failure: unknown }
+
 export class AskService {
   private readonly store: HelmStore
   private readonly stash: SecretStash
   private readonly seqResolvers = new Set<AskSeqResolver>()
-  private readonly waiters = new Map<string, Array<(settled: AskSettled) => void>>()
+  private readonly waiters = new Map<string, Array<(outcome: WaiterOutcome) => void>>()
   private readonly onEvent: (type: string, payload: unknown) => void
   private readonly onConvPendingChanged: (conversationId: number) => void
   /** 会话存在性校验端口（宿主注入；缺省跳过——纯 AskService 单测用）。 */
@@ -80,11 +91,13 @@ export class AskService {
   }
 
   /**
-   * 创建 AskDoc 并等待答案。resolve 的 answers 中 secret 字段为 stash marker
-   * （宿主可用 stash 按会话环境取回明文）。
-   * cancel/superseded 时 promise reject（ask_cancelled / ask_superseded）。
+   * 创建 AskDoc 并等待终态。三态均 resolve 为 AskResult（answered 的 answers 中
+   * secret 字段为 stash marker；cancel/superseded 的 answers 为 {}，调用方以
+   * status 区分，取消绝不冒充批准）。只有验证/IO/宿主失败 reject。
+   *
+   * spec.id 可预分配（幂等重试/外部引用），不覆盖任何已有 ID（含已结算审批）。
    */
-  async createAsk(spec: AskCreateSpec): Promise<Record<string, string>> {
+  async createAsk(spec: AskCreateSpec): Promise<AskResult> {
     validateAskSpec(spec)
     if (this.validateConversation) {
       const ok = await this.validateConversation(spec.conversationId)
@@ -92,7 +105,17 @@ export class AskService {
         throw new HelmError('not_found', `会话不存在：${spec.conversationId}`, 404)
       }
     }
-    const id = randomUUID()
+    const id = spec.id ?? randomUUID()
+    // 预分配 ID 不得覆盖任何已有 AskDoc（含 pending 与已结算审批）。
+    if (this.store.getAsk(id) !== undefined) {
+      const existing = this.store.getAsk(id)!
+      throw new HelmError(
+        'ask_id_conflict',
+        `AskDoc ID '${id}' 已存在（状态 ${existing.status}），不能覆盖旧审批`,
+        409,
+        { askId: id, existingStatus: existing.status },
+      )
+    }
     const createdAt = Date.now()
     const full: AskSpec = {
       ...spec,
@@ -101,36 +124,56 @@ export class AskService {
       createdAt,
       expectedStateSeq: spec.expectedStateSeq,
     }
-    this.store.putAsk({
-      id,
-      conversationId: spec.conversationId,
-      ownerPluginId: spec.ownerPluginId,
-      specJson: JSON.stringify(full),
-      status: 'pending',
-      expectedStateSeq: spec.expectedStateSeq,
-      createdAt,
-    })
-    this.onConvPendingChanged(spec.conversationId)
-    this.onEvent('ask.upsert', full)
-    return await new Promise<Record<string, string>>((resolve, reject) => {
-      const push = (settled: AskSettled) => {
-        if (settled.status === 'answered' && settled.answers) {
-          resolve(settled.answers)
+
+    // waiter 必须先于一切可见副作用注册：ask.upsert 订阅者可能在事件回调内
+    // 同步 cancel/answer（settle 即刻排队通知），晚注册会让 promise 永久悬挂。
+    let release!: () => void
+    const settled = new Promise<AskResult>((resolve, reject) => {
+      const push = (outcome: WaiterOutcome) => {
+        if ('failure' in outcome) {
+          // 宿主/持久化失败：显式 reject，绝不以假终态 resolve。
+          reject(outcome.failure)
           return
         }
-        // cancel/superseded 是明确销单，不是用户批准：reject 防 herdr 空回车。
-        const code = settled.status === 'cancelled' ? 'ask_cancelled' : 'ask_superseded'
-        reject(
-          new HelmError(code, `AskDoc ${id} 已${settled.status === 'cancelled' ? '取消' : '被 superseded 销单'}`, 409, {
-            askId: id,
-            status: settled.status,
-          }),
-        )
+        resolve({
+          id,
+          status: outcome.status,
+          answers: outcome.status === 'answered' ? (outcome.answers ?? {}) : {},
+        })
       }
       const list = this.waiters.get(id) ?? []
       list.push(push)
       this.waiters.set(id, list)
+      release = () => {
+        const current = this.waiters.get(id)
+        if (!current) return
+        const index = current.indexOf(push)
+        if (index >= 0) current.splice(index, 1)
+        if (current.length === 0) this.waiters.delete(id)
+      }
     })
+
+    try {
+      this.store.putAsk({
+        id,
+        conversationId: spec.conversationId,
+        ownerPluginId: spec.ownerPluginId,
+        specJson: JSON.stringify(full),
+        status: 'pending',
+        expectedStateSeq: spec.expectedStateSeq,
+        createdAt,
+      })
+      // 真实落盘边界：putAsk 只写镜像 + 入队 SQL；flushPublic 失败时镜像已写
+      // 但数据不保证完整，必须显式 reject（不发布 ask.upsert、不假成功）。
+      await this.store.flushPublic()
+      this.onConvPendingChanged(spec.conversationId)
+      this.onEvent('ask.upsert', full)
+    } catch (error) {
+      // 写入/发布失败：回收 waiter，绝不留悬挂等待者，也绝不装作创建成功。
+      release()
+      throw error
+    }
+    return await settled
   }
 
   /** 提交答案：CAS 检查 -> 值校验 -> secret 入 stash -> 结算。 */
@@ -194,7 +237,7 @@ export class AskService {
     if (row.status !== 'pending') {
       throw new HelmError('ask_already_settled', `AskDoc 已处于 ${row.status} 状态`, 409)
     }
-    return Promise.resolve(this.settle(id, reason))
+    return this.settle(id, reason)
   }
 
   /** 重启诊断：遗留 pending asks 发 notification（不静默吞）；secret 引用失效如实说明。 */
@@ -213,11 +256,17 @@ export class AskService {
     }
   }
 
-  /** 按会话取消全部 pending（删除会话级联用）。 */
-  cancelByConversation(conversationId: number, reason: 'cancelled' | 'superseded' = 'cancelled'): void {
-    for (const ask of this.listPendingByConversation(conversationId)) {
-      void this.settle(ask.id, reason)
-    }
+  /** 按会话取消全部 pending（删除会话级联用）；等待全部结算落盘完成。 */
+  async cancelByConversation(conversationId: number, reason: 'cancelled' | 'superseded' = 'cancelled'): Promise<void> {
+    const pending = this.listPendingByConversation(conversationId)
+    await Promise.all(
+      pending.map((ask) => this.settle(ask.id, reason).then(
+        () => undefined,
+        // 级联取消在 deleteConversation 内执行：单条失败不阻断其余清理，
+        // 错误已经 store fail 语义上报；这里吞掉避免 unhandled rejection。
+        () => undefined,
+      )),
+    )
   }
 
   private resolveTargetSeq(askId: string): number | undefined {
@@ -228,11 +277,11 @@ export class AskService {
     return undefined
   }
 
-  private settle(
+  private async settle(
     id: string,
     status: 'answered' | 'cancelled' | 'superseded',
     options: { answers?: Record<string, string> } = {},
-  ): AskSpec {
+  ): Promise<AskSpec> {
     const row = this.store.getAsk(id)
     if (!row) throw new HelmError('not_found', `AskDoc 不存在：${id}`, 404)
     const spec = JSON.parse(row.specJson) as AskSpec
@@ -246,6 +295,17 @@ export class AskService {
       resultJson: answers !== undefined ? JSON.stringify(answers) : undefined,
       settledAt: Date.now(),
     })
+    try {
+      // 终态必须真实落盘后才发布事件/通知 waiter：SQL 失败时绝不返回假 answered。
+      await this.store.flushPublic()
+    } catch (error) {
+      // 持久化失败：不发布 ask.resolved，waiter 以失败结算（createAsk reject，
+      // 不悬挂也不假成功）；镜像已写但 store 进入 fail 语义（拒绝后续写）。
+      const waiters = this.waiters.get(id) ?? []
+      this.waiters.delete(id)
+      for (const waiter of waiters) waiter({ failure: error })
+      throw error
+    }
     this.onConvPendingChanged(spec.conversationId)
     this.onEvent('ask.resolved', { askId: id, status })
     const waiters = this.waiters.get(id) ?? []
@@ -271,6 +331,12 @@ function envNameOf(field: AskFieldSpec): string {
 function validateAskSpec(spec: AskCreateSpec): void {
   if (spec === null || typeof spec !== 'object') {
     throw new HelmError('validation_error', 'AskDoc spec 需为对象')
+  }
+  // 预分配 id：非空字符串，禁 UUID 以外的控制/空白形状（不静默 trim/规范化）。
+  if (spec.id !== undefined) {
+    if (typeof spec.id !== 'string' || spec.id === '' || spec.id.trim() === '') {
+      throw new HelmError('validation_error', 'AskDoc id 需为非空字符串')
+    }
   }
   if (!Number.isInteger(spec.conversationId) || (spec.conversationId ?? 0) <= 0) {
     throw new HelmError('validation_error', 'AskDoc 需要 conversationId（正整数）')

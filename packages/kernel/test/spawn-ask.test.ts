@@ -693,7 +693,7 @@ describe('Ask CAS 与结算诚实性', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('cancel/superseded：createAsk promise reject（不返回空 answers 冒充批准）', { timeout: 60_000 }, async () => {
+  it('cancel/superseded：createAsk promise resolve（status 区分，answers 为空不冒充批准）', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,
@@ -703,10 +703,9 @@ describe('Ask CAS 与结算诚实性', { timeout: 60_000 }, () => {
     await new Promise((r) => setTimeout(r, 20))
     const ask = service.listAsks('pending')[0]!
     await service.cancelAsk(ask.id)
-    await assert.rejects(
-      () => askPromise,
-      (err: unknown) => err instanceof HelmError && err.code === 'ask_cancelled',
-    )
+    const cancelled = await askPromise
+    assert.equal(cancelled.status, 'cancelled')
+    assert.deepEqual(cancelled.answers, {})
     // superseded 同理。
     const ask2Promise = service.createAsk({
       conversationId: 1,
@@ -716,10 +715,9 @@ describe('Ask CAS 与结算诚实性', { timeout: 60_000 }, () => {
     await new Promise((r) => setTimeout(r, 20))
     const ask2 = service.listAsks('pending')[0]!
     await service.cancelAsk(ask2.id, 'superseded')
-    await assert.rejects(
-      () => ask2Promise,
-      (err: unknown) => err instanceof HelmError && err.code === 'ask_superseded',
-    )
+    const superseded = await ask2Promise
+    assert.equal(superseded.status, 'superseded')
+    assert.deepEqual(superseded.answers, {})
     await store.close()
   })
 

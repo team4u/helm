@@ -1152,7 +1152,9 @@ export class KernelRuntime {
     if (!meta) throw new HelmError('not_found', `会话不存在：${id}`, 404)
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (conversation) await conversation.abort(BACKGROUND_CONTEXT)
-    this.asks.cancelByConversation(id)
+    // 级联取消等待落盘完成；单条失败不阻断其余清理（错误已经 store fail
+    // 语义上报，waiter 以失败结算），也不产生 unhandled rejection。
+    await this.asks.cancelByConversation(id).catch(() => {})
     await this.artifactsSvc.deleteConversation(id)
     this.events.publish('notification', {
       level: 'info',

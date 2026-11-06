@@ -272,13 +272,13 @@ describe('Ask CAS 与 secret 持久边界', { timeout: 60_000 }, () => {
       assert.equal(pending.length, 1)
       const ask = pending[0]
       assert.ok(ask)
-      void askPromise.then(async (answers) => {
-        // 答案是 marker 形式；明文仅经 envFor 进入子进程环境（进程内可信方）
-        assert.ok(answers['API_KEY']!.startsWith('[REDACTED:stash:'))
-        const env = kernel.services.stash.envFor(1)
-        assert.ok(String(env['API_KEY']).length > 0)
-      })
       await kernel.answerAsk(ask.id, { API_KEY: 'super-secret-123' })
+      const result = await askPromise
+      // 答案是 marker 形式；明文仅经 envFor 进入子进程环境（进程内可信方）
+      assert.equal(result.status, 'answered')
+      assert.ok(result.answers['API_KEY']!.startsWith('[REDACTED:stash:'))
+      const env = kernel.services.stash.envFor(1)
+      assert.ok(String(env['API_KEY']).length > 0)
       // 持久层只有 marker：重新读取 ask 列表验证
       const answered = kernel.listAsks('answered')
       assert.equal(answered.length, 1)
@@ -296,7 +296,6 @@ describe('Ask CAS 与 secret 持久边界', { timeout: 60_000 }, () => {
         expectedStateSeq: 10,
         fields: [{ name: 'confirm', label: '确认', type: 'confirm' }],
       })
-      void askPromise.catch(() => {})
       await new Promise((r) => setTimeout(r, 20))
       const ask = kernel.listAsks('pending')[0]
       assert.ok(ask)
@@ -305,6 +304,10 @@ describe('Ask CAS 与 secret 持久边界', { timeout: 60_000 }, () => {
       const result = await kernel.answerAsk(ask.id, { confirm: 'yes' })
       assert.equal(result.status, 'superseded')
       assert.equal(kernel.listAsks('pending').length, 0)
+      // createAsk 同步 resolve 出 superseded（answers 为空，不悬挂不冒充批准）。
+      const settled = await askPromise
+      assert.equal(settled.status, 'superseded')
+      assert.deepEqual(settled.answers, {})
     } finally {
       await kernel.close()
     }
@@ -508,11 +511,13 @@ describe('trigger 与删除级联', { timeout: 60_000 }, () => {
       title: '待取消',
       fields: [{ name: 'x', label: 'X', type: 'text' }],
     })
-    // deleteConversation 级联取消时 waiter reject（AskService 契约）：显式吞掉。
-    void askPromise.catch(() => {})
     await new Promise((r) => setTimeout(r, 20))
     kernel.services.artifacts // 确保服务存在
     await kernel.deleteConversation(conv.id)
+    // 级联取消：createAsk resolve 出 cancelled（AskService 三态契约）。
+    const settled = await askPromise
+    assert.equal(settled.status, 'cancelled')
+    assert.deepEqual(settled.answers, {})
     assert.equal(kernel.listConversations().find((c) => c.id === conv.id), undefined)
     assert.equal(kernel.listAsks('pending').length, 0)
     await kernel.close()
