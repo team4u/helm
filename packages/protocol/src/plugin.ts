@@ -370,7 +370,7 @@ export interface HelmHostApi {
     opts?: { origin?: InputOrigin; whenBusy?: WhenBusy; meta?: Record<string, unknown> },
   ): Promise<void>
   createConversation(init: ConversationInit): Promise<ConversationSummary>
-  listConversations(filter?: { tag?: string; status?: ConversationStatus }): ConversationSummary[]
+  listConversations(filter?: { profileId?: string; tag?: string; status?: ConversationStatus }): ConversationSummary[]
   /** 读取单个会话摘要；不存在时抛 HelmError。 */
   getConversation(id: number): ConversationSummary
   /** 部分更新会话；返回更新后的摘要。 */

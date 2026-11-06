@@ -39,7 +39,7 @@ pnpm build && pnpm typecheck && pnpm test
 3. **四大内置插件正交职责**：
    - `builtin:assistant`（**常驻不可卸载**）：为所有会话按其绑定的 `profileId` 注入独立的 `SYSTEM.md` 与 `MEMORY.md`（提供按 `profileId` 原子写回的 `update_memory` 与支持按需加载 `references/*.md` 子文件的 `load_skill`），并守护常驻根会话 `Conversation #1` 作为单兵个人助理主入口。
    - `builtin:herdr`：拦截 `agent_spawn` 驱动本机 Herdr 的 23 种 CLI 工具（`herdr:agy`、`herdr:claude`、`herdr:codex`、`herdr:pi` 等），执行「后台标签页 + `.helm/wf-out-*` 文件交接与原地追问自愈」；监听 `herdr.sock` 实现带 `expectedStateSeq` CAS 乐观锁的 `blocked ↔ AskDoc` 远程审批桥；向终端侧栏投射 `$helm` 状态 Token。
-   - `builtin:superagent`（实验性双层中枢）：首次启用时动态创建并持久化两个专属常驻会话——`routerConversationId`（`SuperAgent 中枢`，`tags: ['router']`）与 `watchdogConversationId`（`巡检看门狗`，`tags: ['watchdog']`）；通过挂载 `trigger / before_turn / turn_settled / watchdog_tick` 钩子与自有 `ctx.doc`，实现 0 阻塞总控路由、点名调用任意 `Profile` 专家 Bot 派生后台驻留 Worker、一键归档（`archive_worker`）、按 `origin` 自动向中枢汇报、`ThreadKey` 0ms 直通、`RecallGraph` 召回图谱与基于 `Skill(references/)` 的两层 Watchdog 巡检。
+   - `builtin:superagent`（实验性双层中枢）：首次启用时动态创建并持久化两个专属常驻会话——`routerConversationId`（`SuperAgent 中枢`，`profileId: 'superagent'`）与 `watchdogConversationId`（`巡检看门狗`，`profileId: 'watchdog'`）；角色由 `profileId` 表达，不重复打角色 Tag；通过挂载 `trigger / before_turn / turn_settled / watchdog_tick` 钩子与自有 `ctx.doc`，实现 0 阻塞总控路由、点名调用任意 `Profile` 专家 Bot 派生后台驻留 Worker、一键归档（`archive_worker`）、按 `origin` 自动向中枢汇报、`ThreadKey` 0ms 直通、`RecallGraph` 召回图谱与基于 `Skill(references/)` 的两层 Watchdog 巡检。
    - `builtin:triggers`：`cron` 与 `webhook` 入站连接器，经 `defang` 防逃逸信封投入 `trigger` 管道。
 4. **明确不做的事**：
    - 不做 `PiExtensionAdapter` 服务端 TUI 兼容层（真正的 `pi` 直接在 Herdr 终端窗格中运行）；

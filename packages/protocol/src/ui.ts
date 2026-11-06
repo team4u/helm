@@ -31,7 +31,7 @@ export interface UiSpecBase {
 export interface SidebarItemSpec extends UiSpecBase {
   label: string
   icon?: string
-  /** 点击目标，如 'conversation:1'、'screen:superagent/recall-graph'。 */
+  /** 点击目标，如 'conversation:1'、'conversation:profile:superagent'、'screen:builtin:superagent/recall-graph'。 */
   target?: string
   order?: number
 }

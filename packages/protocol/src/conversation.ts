@@ -25,7 +25,7 @@ export interface ConversationSummary {
   id: number
   title: string
   profileId: string
-  /** 如 ['assistant']、['worker']、['watchdog']，由插件自由打标。 */
+  /** Profile 表达角色；tags 由插件或用户声明运行态和生命周期标记。 */
   tags: string[]
   /** 派生来源会话 ID；根会话无此字段。 */
   parentConversationId?: number
@@ -152,6 +152,15 @@ export interface ConversationDetail extends ConversationSummary {
   entries: ConversationEntry[]
   /** 还有更早条目时的分页游标（客户端原样回传 `?cursor=`）。 */
   nextCursor?: string
+}
+
+/** `send --wait` / `POST /api/conversations/:id/input?wait=1` 的本次输入结果。 */
+export interface ConversationInputResult {
+  conversationId: number
+  submissionId: string
+  text: string
+  /** 精确对应本次提交的回答条目。 */
+  entry: ConversationEntry
 }
 
 /** 会话实时增量视图（SSE `conversation.live` 事件载荷）。 */
