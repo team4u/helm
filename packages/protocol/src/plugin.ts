@@ -94,8 +94,15 @@ export interface ToolResultHookPayload {
 export interface AgentSpawnRequest {
   parentConversationId: number
   prompt: string
+  /** 编排宿主分配的稳定调用标识，用于续接与取消。 */
+  agentId?: string
   /** Profile ID 或 'herdr:<kind>' 外部运行时标识。 */
   agentType?: string
+  model?: string
+  effort?: string
+  isolation?: 'worktree'
+  /** 原生子会话创建后通知编排宿主。 */
+  onCreated?: (conversationId: number) => void
   cwd?: string
   /** 结构化输出 JSON Schema（文件交接时强制落盘校验）。 */
   schema?: JsonSchema

@@ -61,6 +61,7 @@ export interface ConversationInit {
 
 /** 部分更新会话（`PATCH /api/conversations/:id`）；undefined 字段不变。 */
 export interface ConversationPatch {
+  profileId?: string
   title?: string
   tags?: string[]
   cwd?: string

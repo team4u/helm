@@ -5,12 +5,13 @@
 
 /** `POST /api/workflows/run` 请求体。 */
 export interface WorkflowRunRequest {
-  /** workflow 名称（~/.helm/workflows/<name>.js）或脚本文件路径。 */
-  nameOrFile: string
-  inputs?: Record<string, unknown>
-  /** 断点恢复：跳过账本中已完成的 agent() 节点。 */
+  /** 已保存工作流的名称。name、script、scriptPath 必须恰好提供一个。 */
+  name?: string
+  script?: string
+  scriptPath?: string
+  /** 原样传给脚本 args，不限于对象。 */
+  args?: unknown
   resumeFromRunId?: string
-  /** 发起会话（默认 #1）。 */
   conversationId?: number
 }
 
@@ -34,18 +35,19 @@ export interface WorkflowNodeState {
 }
 
 /** `GET /api/workflows/runs/:runId` 响应。 */
-export interface WorkflowRunState {
-  runId: string
-  workflowName: string
+export interface WorkflowRunSummary {
+  id: string
+  name: string
   conversationId: number
   status: WorkflowRunStatus
-  /** 当前阶段描述（如 'phase 2/3: review'）。 */
-  phase: string
-  nodes: WorkflowNodeState[]
-  startedAt: number
-  settledAt?: number
+  createdAt: number
+  updatedAt: number
+  result?: unknown
   error?: string
+  nodes?: WorkflowNodeState[]
 }
+
+export type WorkflowRunState = WorkflowRunSummary
 
 /** `<runId>.workflow.jsonl` 断点重放账本行（每行一个 JSON 对象，seq 单调递增）。 */
 export type WorkflowJournalEntry =
