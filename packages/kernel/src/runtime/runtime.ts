@@ -238,7 +238,7 @@ export class KernelRuntime {
       hubUrl,
       stashEnvFor: (id) => this.stash.envFor(id),
       redact: (t) => this.stash.redact(t),
-      artifacts: this.artifacts as unknown as HelmToolDeps["artifacts"],
+      artifacts: this.artifacts,
     }
     this.store.ftsRedact = (t) => this.stash.redact(t)
 
