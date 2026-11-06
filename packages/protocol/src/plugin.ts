@@ -213,6 +213,8 @@ export interface PluginActionCliSpec {
   description?: string
   /** true 时不出现在顶层 `helm <plugin> <action>` 命令中。 */
   hidden?: boolean
+  /** 顶层命令路径；缺省为 [去掉 builtin: 的 pluginId, actionId]。 */
+  command?: string[]
 }
 
 export interface PluginActionSpec<TIn, TOut> {
