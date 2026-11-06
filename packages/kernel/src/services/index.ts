@@ -23,6 +23,8 @@ export {
 
 export { ConfigService } from './config.js'
 
+export { withFileLock } from './file-lock.js'
+
 export {
   SecretStash,
   REDACTED_PREFIX,
@@ -86,3 +88,5 @@ export {
   type RegisterOptions,
   type SpillResult,
 } from './artifacts.js'
+// 二进制产物读取走 ArtifactService.readBuffer（HTTP 层传输原始字节用），
+// 与 readContent 同源同校验（resolveStoredPath 防伪 metadata 任意读）。

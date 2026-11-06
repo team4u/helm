@@ -4,6 +4,11 @@
  * - token 仅持久化 SHA-256 摘要，明文只在返回值中出现一次；
  * - 全部摘要比对使用 timingSafeEqual，密码长度 >= 8。
  * config.json 的并发更新经 ConfigService 串行化，保留其他模块写入的键。
+ *
+ * 并发互斥采用两级锁：setup/login 先持有按 dataDir 共享的 auth 操作锁
+ * （跨 AuthService 实例互斥，并发 setup 仅一个成功），锁内再经
+ * ConfigService.update 获取 config.json 文件锁。锁序恒为 auth → config，
+ * 反向不存在，因此不会死锁；若直接复用 config.json 锁则会因同锁重入死锁。
  */
 import {
   randomBytes,
@@ -12,7 +17,9 @@ import {
   createHash,
 } from 'node:crypto'
 import { promisify } from 'node:util'
+import { join } from 'node:path'
 import { ConfigService } from './config.js'
+import { withFileLock } from './file-lock.js'
 
 const scrypt = promisify(scryptCallback) as (
   password: string | Buffer,
@@ -81,10 +88,12 @@ function safeEqualHex(a: string, b: string): boolean {
 
 export class AuthService {
   private readonly config: ConfigService
-  private queue: Promise<unknown> = Promise.resolve()
+  /** auth 操作锁 key：按 dataDir 共享（同一 dataDir 的全部实例互斥）。 */
+  private readonly lockPath: string
 
   constructor(dataDir: string) {
     this.config = new ConfigService(dataDir)
+    this.lockPath = join(dataDir, 'auth')
   }
 
   private async readState(): Promise<AuthPersistedState | undefined> {
@@ -137,8 +146,8 @@ export class AuthService {
   /** 首次设置管理员密码并签发 token；已配置时显式拒绝（不静默改写）。 */
   async setup(password: string): Promise<{ token: string }> {
     assertPassword(password)
-    // 串行化读改写：并发 setup 仅第一个成功，其余显式拒绝。
-    return this.enqueue(async () => {
+    // 跨实例串行化读改写：并发 setup 仅第一个成功，其余显式拒绝。
+    return withFileLock(this.lockPath, async () => {
       const existing = await this.readState()
       if (existing !== undefined) throw new AuthAlreadyConfiguredError()
       const salt = randomBytes(16)
@@ -156,7 +165,7 @@ export class AuthService {
   /** 密码登录：校验通过签发新 token（旧 token 保留，支持多端在线）。 */
   async login(password: string): Promise<{ token: string }> {
     assertPassword(password)
-    return this.enqueue(async () => {
+    return withFileLock(this.lockPath, async () => {
       const state = await this.readState()
       if (state === undefined) {
         throw new Error('尚未完成 setup，请先执行初始化')
@@ -190,12 +199,6 @@ export class AuthService {
     return false
   }
 
-  /** 串行化鉴权写操作（setup/login），防并发竞态。 */
-  private enqueue<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(fn, fn)
-    this.queue = run.catch(() => undefined)
-    return run
-  }
 }
 
 function issueToken(): { token: string; record: TokenRecord } {

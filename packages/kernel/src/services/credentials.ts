@@ -1,14 +1,19 @@
 /**
  * CredentialService：管理 credentials.json（恒 0600）中的模型 API Key
  * 与插件 secret。get() 仅限进程内可信调用方使用，绝不经 HTTP 暴露。
+ * 读改写按 credentials.json 真实路径的进程内共享锁串行化，跨实例互斥。
  */
+import { chmod } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   FileNotFoundError,
+  FileParseError,
   atomicWriteJson,
+  isPrivateMode,
   readJsonFileOptional,
   readTextFile,
 } from './atomic-file.js'
+import { withFileLock } from './file-lock.js'
 
 export interface StoredCredential {
   /** 经 SecretStash 脱敏后的值或原始值（模型 API Key 不占位，直接存值）。 */
@@ -17,15 +22,17 @@ export interface StoredCredential {
   updatedAt: string
 }
 
-/** credentials.json 持久化形态。 */
+/**
+ * credentials.json 持久化形态。已知键以外的顶层键（如 CLI 写入的
+ * `cli: { hubUrl, token }`）原样保留：本服务只拥有 providers/pluginSecrets
+ * 两个命名空间，不得在写回时丢弃他人的键。
+ */
 export interface CredentialStore {
-  /** 模型网关 API Key：providerId → 值。 */
   providers: Record<string, StoredCredential>
-  /** 插件 secret：pluginId → 键名 → 值。 */
   pluginSecrets: Record<string, Record<string, string>>
+  /** 未知顶层键 → 原始 JSON 值（写回保持不动）。 */
+  [key: string]: unknown
 }
-
-const EMPTY_STORE: CredentialStore = { providers: {}, pluginSecrets: {} }
 
 /** providerId / pluginId 边界校验：防路径与 JSON 键注入。 */
 function assertId(kind: string, id: string): void {
@@ -41,24 +48,37 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function normalizeStore(raw: unknown): CredentialStore {
+/**
+ * 校验已知字段的既有结构：providers 下每项必须是含 string value 的对象、
+ * pluginSecrets 下每项必须是 string→string 映射。结构非法显式抛
+ * FileParseError（含路径与键名），绝不静默丢弃后覆盖——那会吞掉用户凭据。
+ * 未知顶层键不做形状假设，原样保留。
+ */
+function normalizeStore(raw: unknown, path: string): CredentialStore {
   if (raw === undefined) return { providers: {}, pluginSecrets: {} }
   if (!isPlainObject(raw)) {
-    throw new Error('credentials.json 结构非法（应为对象）')
+    throw new FileParseError(path, 'credentials.json 结构非法（应为对象）')
   }
   const providers: Record<string, StoredCredential> = {}
   const rawProviders = raw['providers']
   if (rawProviders !== undefined) {
     if (!isPlainObject(rawProviders)) {
-      throw new Error('credentials.json providers 字段结构非法')
+      throw new FileParseError(path, 'credentials.json providers 字段结构非法（应为对象）')
     }
     for (const [id, value] of Object.entries(rawProviders)) {
-      if (isPlainObject(value) && typeof value['value'] === 'string') {
-        providers[id] = {
-          value: value['value'],
-          createdAt: typeof value['createdAt'] === 'string' ? value['createdAt'] : '',
-          updatedAt: typeof value['updatedAt'] === 'string' ? value['updatedAt'] : '',
-        }
+      if (!isPlainObject(value)) {
+        throw new FileParseError(
+          path,
+          `credentials.json providers.${id} 结构非法（应为 { value, createdAt, updatedAt } 对象）`,
+        )
+      }
+      if (typeof value['value'] !== 'string') {
+        throw new FileParseError(path, `credentials.json providers.${id}.value 缺失或非字符串`)
+      }
+      providers[id] = {
+        value: value['value'],
+        createdAt: typeof value['createdAt'] === 'string' ? value['createdAt'] : '',
+        updatedAt: typeof value['updatedAt'] === 'string' ? value['updatedAt'] : '',
       }
     }
   }
@@ -66,23 +86,40 @@ function normalizeStore(raw: unknown): CredentialStore {
   const rawPlugins = raw['pluginSecrets']
   if (rawPlugins !== undefined) {
     if (!isPlainObject(rawPlugins)) {
-      throw new Error('credentials.json pluginSecrets 字段结构非法')
+      throw new FileParseError(
+        path,
+        'credentials.json pluginSecrets 字段结构非法（应为 pluginId → 键名 → 值 对象）',
+      )
     }
     for (const [pluginId, secrets] of Object.entries(rawPlugins)) {
-      if (!isPlainObject(secrets)) continue
+      if (!isPlainObject(secrets)) {
+        throw new FileParseError(
+          path,
+          `credentials.json pluginSecrets.${pluginId} 结构非法（应为 键名 → 字符串 对象）`,
+        )
+      }
       const map: Record<string, string> = {}
       for (const [key, value] of Object.entries(secrets)) {
-        if (typeof value === 'string') map[key] = value
+        if (typeof value !== 'string') {
+          throw new FileParseError(
+            path,
+            `credentials.json pluginSecrets.${pluginId}.${key} 必须是字符串`,
+          )
+        }
+        map[key] = value
       }
       pluginSecrets[pluginId] = map
     }
   }
-  return { providers, pluginSecrets }
+  const store: CredentialStore = { providers, pluginSecrets }
+  for (const [key, value] of Object.entries(raw)) {
+    if (key !== 'providers' && key !== 'pluginSecrets') store[key] = value
+  }
+  return store
 }
 
 export class CredentialService {
   private readonly path: string
-  private queue: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly dataDir: string) {
     this.path = join(dataDir, 'credentials.json')
@@ -168,7 +205,16 @@ export class CredentialService {
   /** 全量读取（进程内诊断/导出用；含明文，绝不外发）。 */
   async readStore(): Promise<CredentialStore> {
     const raw = await readJsonFileOptional(this.path)
-    return normalizeStore(raw)
+    const store = normalizeStore(raw, this.path)
+    // 读路径同样收敛 0600：已有文件被放宽权限时立即修复，而不是等到下次写。
+    // 修复失败显式抛错，绝不静默带病返回。
+    if (raw !== undefined && !(await isPrivateMode(this.path))) {
+      await chmod(this.path, 0o600)
+      if (!(await isPrivateMode(this.path))) {
+        throw new Error(`credentials.json 权限修复失败（应 0600）: ${this.path}`)
+      }
+    }
+    return store
   }
 
   private async persist(store: CredentialStore): Promise<void> {
@@ -176,11 +222,9 @@ export class CredentialService {
     await atomicWriteJson(this.path, store, { mode: 0o600 })
   }
 
-  /** 串行化读改写，防止并发 set/delete 互相覆盖。 */
+  /** 按真实路径共享的串行化读改写，防并发 set/delete 跨实例互相覆盖。 */
   private enqueue<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(fn, fn)
-    this.queue = run.catch(() => undefined)
-    return run
+    return withFileLock(this.path, fn)
   }
 }
 

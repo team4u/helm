@@ -15,6 +15,7 @@ import {
   readJsonFileOptional,
   readTextFile,
 } from './atomic-file.js'
+import { withFileLock } from './file-lock.js'
 
 export const DEFAULT_PROFILE_ID = 'assistant'
 export const DEFAULT_PROFILE_NAME = '个人助理'
@@ -175,6 +176,8 @@ export class ProfileService {
 
   /**
    * 原子更新 MEMORY.md：replace 整体替换；append 追加（保尾部换行）。
+   * append 的读改写按该文件真实路径加进程内共享锁串行化——多个
+   * ProfileService 实例并发 append 也不会读到同一旧内容后互相覆盖。
    * 通过 temp+rename 落盘，AssetWatcher 可实时感知且绝不见半截内容。
    */
   async updateMemory(
@@ -185,21 +188,23 @@ export class ProfileService {
     assertProfileId(id)
     if (typeof text !== 'string') throw new Error('memory 文本必须是字符串')
     const path = join(profileDir(this.dataDir, id), 'MEMORY.md')
-    let next: string
-    if (mode === 'replace') {
-      next = text
-    } else {
-      let current = ''
-      try {
-        current = await readTextFile(path)
-      } catch (err) {
-        if (!(err instanceof FileNotFoundError)) throw err
-        // MEMORY.md 缺失时 append 视为从空开始（ensureDefault 已保证存在，兜底诚实创建）。
+    return withFileLock(path, async () => {
+      let next: string
+      if (mode === 'replace') {
+        next = text
+      } else {
+        let current = ''
+        try {
+          current = await readTextFile(path)
+        } catch (err) {
+          if (!(err instanceof FileNotFoundError)) throw err
+          // MEMORY.md 缺失时 append 视为从空开始（ensureDefault 已保证存在，兜底诚实创建）。
+        }
+        next = current.endsWith('\n') || current === '' ? current + text : current + '\n' + text
       }
-      next = current.endsWith('\n') || current === '' ? current + text : current + '\n' + text
-    }
-    await atomicWriteFile(path, next)
-    return next
+      await atomicWriteFile(path, next)
+      return next
+    })
   }
 }
 

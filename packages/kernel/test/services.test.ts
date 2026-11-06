@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { chmod, mkdir, mkdtemp, readdir, readFile, symlink, writeFile, rm } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readdir, readFile, symlink, writeFile, rm, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -53,6 +53,17 @@ async function tempSourceFile(content: string | Uint8Array): Promise<string> {
   const path = join(dir, `src-${Date.now()}-${Math.random().toString(36).slice(2)}`)
   await writeFile(path, content)
   return path
+}
+
+/** 断言 promise 被拒绝且错误信息匹配（避免 unhandled rejection 噪声）。 */
+async function expectReject(fn: () => Promise<unknown>, re: RegExp): Promise<unknown> {
+  try {
+    await fn()
+  } catch (err) {
+    assert.match(String(err), re)
+    return err
+  }
+  assert.fail(`应抛出错误: ${re}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -588,6 +599,208 @@ test('artifacts: spill 32KiB 阈值、4KiB UTF-8 安全预览、秘密不落盘�
 
   // 非法 callId
   await assert.rejects(() => artifacts.spill(1, '../evil', 'x'), /callId/)
+})
+
+test('artifacts: register 文本产物含 stash 明文先脱敏再落盘、二进制字节不损坏、伪 metadata 路径拒绝', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  await ensureDataDir(dataDir)
+  const repository = new InMemoryArtifactRepository()
+  const stash = new SecretStash()
+  const artifacts = new ArtifactService(dataDir, repository, stash)
+
+  // 含真实 stash 明文的文本文件：register 后落盘文件与 readContent 都不含明文
+  const secretValue = 'live-secret-token-for-register-test'
+  stash.put(1, 'MY_SECRET', secretValue)
+  const srcText = await tempSourceFile(`报告头部。\nsecret=${secretValue}\n报告尾部。\n`)
+  const meta = await artifacts.register(1, srcText, { name: 'report.md' })
+  const stored = await readFile(join(dataDir, meta.path), 'utf8')
+  assert.ok(!stored.includes(secretValue), 'register 文本产物不得落盘秘密明文')
+  assert.ok(stored.includes('[REDACTED:stash:'), '脱敏后应含占位符')
+  assert.ok(stored.includes('报告头部。'), '非秘密部分保持原样')
+  const readBack = await artifacts.readContent(meta.id)
+  assert.ok(!readBack.includes(secretValue))
+  assert.equal(meta.mimeType, 'text/markdown')
+
+  // 二进制产物：字节原样复制（含非法 UTF-8 序列不损坏）
+  const binary = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0x80])
+  const srcBin = await tempSourceFile(binary)
+  const metaBin = await artifacts.register(1, srcBin, { name: 'photo.png' })
+  assert.equal(metaBin.mimeType, 'image/png')
+  const storedBin = await readFile(join(dataDir, metaBin.path))
+  assert.deepEqual(new Uint8Array(storedBin), binary, '二进制字节必须原样保留')
+  const buf = await artifacts.readBuffer(metaBin.id)
+  assert.deepEqual(new Uint8Array(buf), binary)
+
+  // 伪 metadata 路径（手改 DB）拒绝：绝对路径、../ 穿越、artifacts 之外
+  const evil1 = { ...meta, id: 'evil-1', path: '/etc/passwd' }
+  repository.put(evil1 as never)
+  await assert.rejects(() => artifacts.readContent('evil-1'), /越出|拒绝/)
+  await assert.rejects(() => artifacts.readBuffer('evil-1'), /越出|拒绝/)
+  const evil2 = { ...meta, id: 'evil-2', path: 'artifacts/../../credentials.json' }
+  repository.put(evil2 as never)
+  await assert.rejects(() => artifacts.readContent('evil-2'), /越出|拒绝/)
+  // 正常 metadata 仍可读（校验不影响合法路径）
+  assert.ok((await artifacts.readContent(meta.id)).includes('报告头部。'))
+
+  // list 非法 convId 拒绝（避免 -1 等越界目录段）
+  await assert.rejects(() => artifacts.list(-1), /conversationId/)
+  await assert.rejects(() => artifacts.list(1.5), /conversationId/)
+  await assert.rejects(() => artifacts.deleteConversation(-1), /conversationId/)
+})
+
+// ---------------------------------------------------------------------------
+// 跨实例并发正确性（进程内共享串行器）
+// ---------------------------------------------------------------------------
+test('并发回归: 不同 ConfigService 实例同 dataDir 并发 update 不丢键', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  // 5 个独立实例并发写 5 个不同键：实例级队列会丢键，共享锁必须全保留
+  const services = Array.from({ length: 5 }, () => new ConfigService(dataDir))
+  await Promise.all(
+    services.map((svc, i) => svc.update({ [`key${i}`]: `value-${i}` })),
+  )
+  const final = await services[0]!.get()
+  for (let i = 0; i < 5; i++) {
+    assert.equal(final[`key${i}`], `value-${i}`, `并发 update 不得丢失 key${i}`)
+  }
+
+  // 再叠一轮大量并发：最终仍是全键并集
+  const services2 = Array.from({ length: 8 }, () => new ConfigService(dataDir))
+  await Promise.all(
+    services2.map((svc, i) => svc.update({ [`wave2-${i}`]: i })),
+  )
+  const final2 = await services2[0]!.get()
+  for (let i = 0; i < 8; i++) assert.equal(final2[`wave2-${i}`], i)
+  for (let i = 0; i < 5; i++) assert.equal(final2[`key${i}`], `value-${i}`)
+
+  // dataDir 为软链时不同写法仍共享同一把锁
+  const linked = join(scratchRoot, `link-dir-${Date.now()}`)
+  await symlink(await realpath(dataDir), linked)
+  await Promise.all([
+    new ConfigService(dataDir).update({ viaReal: 1 }),
+    new ConfigService(linked).update({ viaLink: 1 }),
+  ])
+  const final3 = await new ConfigService(dataDir).get()
+  assert.equal(final3['viaReal'], 1)
+  assert.equal(final3['viaLink'], 1)
+})
+
+test('并发回归: 不同 AuthService 实例并发 setup 仅一个成功', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const results = await Promise.allSettled(
+    Array.from({ length: 6 }, (_, i) => new AuthService(dataDir).setup(`instance-pw-${i}-12345678`)),
+  )
+  const fulfilled = results.filter((r) => r.status === 'fulfilled')
+  assert.equal(fulfilled.length, 1, '跨实例并发 setup 仅一个成功')
+  for (const r of results) {
+    if (r.status === 'rejected') assert.match(String(r.reason), /已配置|重复/)
+  }
+  // 成功实例的 token 可验证
+  const ok = fulfilled[0] as PromiseFulfilledResult<{ token: string }>
+  assert.equal(await new AuthService(dataDir).verifyToken(ok.value.token), true)
+
+  // 并发 setup 与 config.update 交错：auth 键与其他键互不覆盖
+  const dataDir2 = await freshDataDir()
+  await Promise.all([
+    new AuthService(dataDir2).setup('interleave-pw-12345678'),
+    new ConfigService(dataDir2).update({ theme: 'dark' }),
+    new ConfigService(dataDir2).update({ locale: 'zh-CN' }),
+  ])
+  const cfg = await new ConfigService(dataDir2).get()
+  assert.ok(cfg['auth'], '交错 update 不得丢失 auth')
+  assert.equal(cfg['theme'], 'dark')
+  assert.equal(cfg['locale'], 'zh-CN')
+})
+
+test('并发回归: 不同 CredentialService 实例并发 set 不丢凭据', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const services = Array.from({ length: 5 }, () => new CredentialService(dataDir))
+  await Promise.all(
+    services.map((svc, i) => svc.set(`provider-${i}`, `sk-value-${i}`)),
+  )
+  const ids = await services[0]!.list()
+  assert.deepEqual(ids, ['provider-0', 'provider-1', 'provider-2', 'provider-3', 'provider-4'])
+  for (let i = 0; i < 5; i++) {
+    assert.equal(await services[i]!.get(`provider-${i}`), `sk-value-${i}`)
+  }
+})
+
+test('并发回归: 不同 ProfileService 实例并发 append 不丢行', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const base = new ProfileService(dataDir)
+  await base.ensureDefault()
+  const services = Array.from({ length: 5 }, () => new ProfileService(dataDir))
+  await Promise.all(
+    services.map((svc, i) => svc.updateMemory('assistant', `行-${i}`, 'append')),
+  )
+  const text = await base.getMemory('assistant')
+  for (let i = 0; i < 5; i++) {
+    assert.ok(text.includes(`行-${i}`), `并发 append 不得丢失 行-${i}`)
+  }
+  // 总行数 = 默认头部（1 行非空）+ 5 次追加
+  const lines = text.split('\n').filter((l) => l.length > 0)
+  assert.equal(lines.length, 1 + 5)
+})
+
+test('credentials 回归: 保留 CLI 等未知顶层键、非法结构显式拒绝不覆写', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const credentials = new CredentialService(dataDir)
+
+  // CLI 写入的未知键：set/get/delete 后原样保留
+  const raw = {
+    cli: { hubUrl: 'http://127.0.0.1:3202', token: 'cli-tok-abc' },
+    providers: { openai: { value: 'sk-first', createdAt: 't1', updatedAt: 't1' } },
+    pluginSecrets: {},
+    extraFlag: true,
+  }
+  await mkdir(dataDir, { recursive: true })
+  await writeFile(join(dataDir, 'credentials.json'), JSON.stringify(raw, null, 2), { mode: 0o600 })
+  assert.equal(await credentials.get('openai'), 'sk-first')
+  await credentials.set('anthropic', 'sk-second')
+  const after = JSON.parse(await readFile(join(dataDir, 'credentials.json'), 'utf8')) as Record<string, unknown>
+  assert.deepEqual(after['cli'], raw['cli'], 'CLI 键必须原样保留')
+  assert.equal(after['extraFlag'], true, '其他未知键同样保留')
+  assert.equal(
+    (after['providers'] as Record<string, { value: string }>)['openai']!.value,
+    'sk-first',
+    '已有 provider 凭据不得被覆盖',
+  )
+  // delete provider 后 CLI 键仍在
+  await credentials.delete('openai')
+  const after2 = JSON.parse(await readFile(join(dataDir, 'credentials.json'), 'utf8')) as Record<string, unknown>
+  assert.deepEqual(after2['cli'], raw['cli'])
+
+  // providers 项结构非法（缺 value）：拒绝并保留原文件
+  const badPath = join(dataDir, 'credentials.json')
+  await writeFile(badPath, JSON.stringify({ providers: { broken: { note: 'no value' } } }), { mode: 0o600 })
+  await expectReject(() => credentials.list(), /broken/)
+  await expectReject(() => credentials.set('x', 'v'), /broken/)
+  assert.equal(JSON.parse(await readFile(badPath, 'utf8')).providers.broken.note, 'no value', '拒绝时不得覆写原文件')
+
+  // providers.raw 非对象：拒绝
+  await writeFile(badPath, JSON.stringify({ providers: 'oops' }), { mode: 0o600 })
+  await expectReject(() => credentials.list(), /providers/)
+
+  // pluginSecrets 项非字符串：拒绝且不覆写
+  await writeFile(
+    badPath,
+    JSON.stringify({ pluginSecrets: { 'p:x': { k: 123 } } }),
+    { mode: 0o600 },
+  )
+  await expectReject(() => credentials.getPluginSecret('p:x', 'k'), /k/)
+  assert.equal(JSON.parse(await readFile(badPath, 'utf8')).pluginSecrets['p:x'].k, 123)
+
+  // pluginSecrets 项非对象：拒绝
+  await writeFile(badPath, JSON.stringify({ pluginSecrets: { p: 'flat' } }), { mode: 0o600 })
+  await expectReject(() => credentials.list(), /pluginSecrets|p/)
+
+  // 顶层非对象：拒绝
+  await writeFile(badPath, JSON.stringify([1, 2]), { mode: 0o600 })
+  await expectReject(() => credentials.list(), /结构非法/)
+
+  // 宽松权限读取时自动修复 0600
+  await writeFile(badPath, JSON.stringify({ providers: {} }), { mode: 0o644 })
+  await credentials.list()
+  assert.ok(await isPrivateMode(badPath), '读路径发现宽松权限应立即收敛 0600')
 })
 
 // ---------------------------------------------------------------------------
