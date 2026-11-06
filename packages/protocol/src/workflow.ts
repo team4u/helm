@@ -1,5 +1,5 @@
 /**
- * SubagentWorkflow 数据契约：仅请求 / 状态 / 节点 / Journal 的可串行化形状，
+ * SubagentWorkflow 数据契约：仅请求 / 状态 / 节点 / 进度 / Journal 的可串行化形状，
  * 编排引擎运行时（executor / sandbox / journal 恢复）在 kernel，不进协议。
  */
 
@@ -34,6 +34,15 @@ export interface WorkflowNodeState {
   error?: string
 }
 
+/**
+ * 观察用进度行（inspect / Web 检查器渲染）。
+ * agent 与 action 节点的权威状态在 `WorkflowRunSummary.nodes`；
+ * 这里只保留 phase 声明与脚本 log 两类时间线事件。
+ */
+export type WorkflowProgressEntry =
+  | { at: number; kind: 'phase'; index: number; title: string }
+  | { at: number; kind: 'log'; message: string }
+
 /** `GET /api/workflows/runs/:runId` 响应。 */
 export interface WorkflowRunSummary {
   id: string
@@ -45,20 +54,52 @@ export interface WorkflowRunSummary {
   result?: unknown
   error?: string
   nodes?: WorkflowNodeState[]
+  /** 观察用时间线（phase / log）；跨重启从 summary 旁文件恢复。 */
+  progress?: WorkflowProgressEntry[]
 }
 
 export type WorkflowRunState = WorkflowRunSummary
 
-/** `<runId>.workflow.jsonl` 断点重放账本行（每行一个 JSON 对象，seq 单调递增）。 */
+/**
+ * 引擎私有前缀重放账本行（`dataDir/artifacts/<convId>/workflow-<runId>.jsonl`，每行一个 JSON 对象）。
+ *
+ * 这是 @helm/kernel 工作流引擎的恢复账本，**不是公开 API 数据形状**：
+ * - `seq` 是落盘顺序号（引擎内单调递增）；`index` 是调用发起位次（agent 与 action 共享同一全序）。
+ * - `key` 是调用载荷哈希；重放按 index 前缀匹配，首次失配起全部转 live 执行。
+ * - agent 失败行断链后 live 重试（沿用上游语义）；action 已确认的成败行重放时直接复用，
+ *   绝不重执行副作用；`action_started` 无对应终态行 = 进程在动作执行中崩溃，恢复必须
+ *   显式报 `workflow_action_uncertain`，由人类确认后再决定，禁止自动重放。
+ *
+ * HTTP / CLI 客户端不得依赖本类型的字段细节做任何重放决策；如需展示只应只读透传。
+ */
 export type WorkflowJournalEntry =
-  | { seq: number; type: 'run_started'; runId: string; workflowName: string; at: number }
-  | { seq: number; type: 'node_started'; nodeId: string; at: number }
-  | { seq: number; type: 'node_completed'; nodeId: string; output?: unknown; at: number }
-  | { seq: number; type: 'node_failed'; nodeId: string; error: string; at: number }
   | {
+      v: 1
       seq: number
-      type: 'run_settled'
-      status: WorkflowRunStatus
+      type: 'agent'
+      index: number
+      key: string
+      ok: boolean
+      text?: string
+      /** 该调用续接了既有子会话（agent({ resume })）；携带此标记的账本整体不再重放。 */
+      resumed?: true
+    }
+  | {
+      v: 1
+      seq: number
+      /** 动作意图先于执行落盘（fsync 成功后才允许执行 handler）。 */
+      type: 'action_started'
+      index: number
+      key: string
+    }
+  | {
+      v: 1
+      seq: number
+      /** 动作终态行；ok 为 true 时 result 为动作输出，false 时 error 为失败原因。 */
+      type: 'action'
+      index: number
+      key: string
+      ok: boolean
+      result?: unknown
       error?: string
-      at: number
     }
