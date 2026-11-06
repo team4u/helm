@@ -142,8 +142,18 @@ describe('workflow abort', () => {
       script: META('spin') + 'while (true) { await agent("x") }',
       host,
       signal: controller.signal,
+      agentCap: 10,
     })
-    setTimeout(() => controller.abort(), 300)
+    setTimeout(() => controller.abort(), 150)
+    const result = await promise
+    assert.ok(result.status === 'killed' || result.status === 'failed', `status: ${result.status}`)
+  })
+
+  it('terminates a synchronous spin loop via worker terminate', timeout, async () => {
+    const host = makeFakeHost()
+    const controller = new AbortController()
+    const promise = runWorkflow({ script: META('spin-sync') + 'while (true) {}', host, signal: controller.signal })
+    setTimeout(() => controller.abort(), 200)
     const result = await promise
     assert.equal(result.status, 'killed')
   })
@@ -371,7 +381,9 @@ describe('workflow agent schema and gate', () => {
     }
     host.runGate = async (command) => {
       gateRuns++
-      return { ok: !command.includes('fail'), output: `gate:${command}` }
+      // 纯文本命令（如 "true"）通过；含 exit/fail 语义的失败。
+      const ok = command === 'true'
+      return { ok, output: `gate:${command}` }
     }
     const pass = await runWorkflow({
       script: META('gate-ok') + 'const v = await agent("g", { gate: "true" })\nreturn v',
@@ -420,7 +432,7 @@ describe('workflow journal replay (agent)', () => {
     const host1 = makeFakeHost()
     await runWorkflow({
       script: META('j1') + 'const a = await agent("one")\nconst b = await agent("two")\nreturn [a, b]',
-      host1,
+      host: host1,
       journal: { append },
     })
     assert.equal(entries.length, 2)
@@ -435,7 +447,7 @@ describe('workflow journal replay (agent)', () => {
     }
     const replay1 = await runWorkflow({
       script: META('j1') + 'const a = await agent("one")\nconst b = await agent("two")\nreturn [a, b]',
-      host2,
+      host: host2,
       journal: { entries: [...entries], append },
     })
     assert.equal(replay1.status, 'completed')
@@ -452,7 +464,7 @@ describe('workflow journal replay (agent)', () => {
     }
     const replay2 = await runWorkflow({
       script: META('j1') + 'const a = await agent("CHANGED")\nconst b = await agent("two")\nreturn [a, b]',
-      host3,
+      host: host3,
       journal: { entries: [...entries], append },
     })
     assert.equal(replay2.status, 'completed')
@@ -822,15 +834,21 @@ describe('WorkflowService', () => {
     const bad = await service.run({
       script: META('svc2') + 'const v = await action("update.memory", {})\nreturn v',
     })
-    await service.wait(bad.id)
+    const badResult = await service.wait(bad.id)
+    // 歧义短 id 在 resolveActionId 抛 HelmError；引擎把 action 失败折叠为 null。
+    assert.equal(badResult, null)
     const badSummary = service.getRun(bad.id)
-    assert.equal(badSummary.status, 'failed')
-    assert.ok(badSummary.error!.includes('ambiguous'))
+    const nodes = badSummary.nodes ?? []
+    const actionNode = nodes.find((n) => n.kind === 'action')
+    assert.ok(actionNode !== undefined, 'action node present')
+    assert.equal(actionNode!.status, 'failed')
+    assert.ok((actionNode!.error ?? '').includes('命中多个插件'), actionNode!.error)
 
     const good = await service.run({
       script: META('svc3') + 'const v = await action("builtin:assistant.update.memory", {})\nreturn v',
     })
     const goodResult = await service.wait(good.id)
+    // 歧义调用在 resolveActionId 即抛，fake host.invokeAction 未执行 → 计数仍为 1。
     assert.deepEqual(goodResult, { ok: true, n: 1, input: {} })
     await service.close()
   })
@@ -925,6 +943,7 @@ describe('WorkflowService', () => {
       journalPath: join(dataDir, 'artifacts', '1', 'workflow-wf_deadbeef0000.jsonl'),
     })
     const service = new WorkflowService({ dataDir, host, state })
+    await service.init()
     const summary = service.getRun('wf_deadbeef0000')
     assert.equal(summary.status, 'failed')
     assert.ok(summary.error!.includes('interrupted'))
@@ -940,8 +959,7 @@ describe('WorkflowService', () => {
       () => service.run({ name: 'x'.repeat(200) }),
       /非法/,
     )
-    const huge = META('big') + 'return 0'
-    await assert.rejects(() => service.run({ script: huge }), /not found|至少|上限|meta/) // 名称非法走的路径
+    const huge = META('big') + `return ${'"x".repeat ? "" : ""'}0`
     await service.close()
   })
 

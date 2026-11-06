@@ -1017,6 +1017,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
     worker.on('message', (message: WorkerMessage) => {
       if (settled) return
+      try {
       switch (message.type) {
         case 'progress':
           emit(message.entries)
@@ -1048,6 +1049,15 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           finish({ status: 'failed', error: message.message })
           break
       }
+      } catch (outerError) {
+        process.stderr.write(
+          `WORKER-MSG-THROW: ${outerError instanceof Error ? outerError.stack : String(outerError)}\n`,
+        )
+        finish({
+          status: 'failed',
+          error: outerError instanceof Error ? outerError.message : String(outerError),
+        })
+      }
     })
 
     worker.on('error', (error) => {
@@ -1056,7 +1066,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
     worker.on('exit', () => {
       finish({ status: 'failed', error: 'Workflow worker exited before completing.' })
-    }
-    )
+    })
   })
 }
