@@ -61,9 +61,11 @@ import {
   ProviderService,
   SecretStash,
   SkillService,
+  assertProfileId,
   ensureDataDir,
   resolveDataDir,
   type ArtifactRepository,
+  type Profile,
 } from '../services/index.js'
 import { PluginHost, type DerivedToolSpec } from '../plugins/index.js'
 import { AskService } from './asks.js'
@@ -84,7 +86,7 @@ import { redactJsonValue } from '../redact.js'
 export interface KernelRuntimeOptions {
   dataDir?: string
   cwd?: string
-  /** 默认模型 'provider/model'（app 从 HELM_MODEL 传入）。 */
+  /** 全局模型：启动参数 > HELM_MODEL > config.json.model。 */
   model?: string
   /** hub URL（测试 port:0 时注入；缺省按 HELM_PORT 生成）。 */
   hubUrl?: string
@@ -311,7 +313,7 @@ export class KernelRuntime {
       setModels: (m) => {
         modelsSlot.current = m
       },
-      defaultModel: options.model ?? process.env['HELM_MODEL'],
+      defaultModel: options.model || process.env['HELM_MODEL'] || undefined,
       cwd: options.cwd ?? process.cwd(),
       hubUrl: options.hubUrl,
       seedKeyCache: apiKeyCache,
@@ -475,9 +477,17 @@ export class KernelRuntime {
 
   private async initialize(): Promise<void> {
     // 1) 默认 profiles 先于 root 创建（root 绑定 assistant profile）。
-    // 全局默认模型只来自 options.model / HELM_MODEL（config 链在 app 层）；
-    // 绝不把 assistant profile 的 model 提升为全局（那是单 profile 策略）。
+    // 全局来源在内核统一解析；assistant Profile 的模型只属于该 Profile。
     await this.profilesSvc.ensureDefault()
+    if (this.defaultModel === undefined) {
+      const configured = (await this.configSvc.get()).model
+      if (configured !== undefined && configured !== '') {
+        if (typeof configured !== 'string' || !/^[^/\s]+\/[^\s]+$/.test(configured)) {
+          throw new HelmError('config_corrupt', 'config.json.model 必须为 provider/model 形式的字符串', 500)
+        }
+        this.defaultModel = configured
+      }
+    }
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
 
     // 2) 内核工具（bash/read/read_artifact + subagent/SubagentWorkflow/run_action）
@@ -518,8 +528,7 @@ export class KernelRuntime {
     // 5) root #1（不注入业务 system；SYSTEM/MEMORY 由 assistant 插件 before_turn
     //    sections 注入，经 SDK PromptSection 真实进入模型请求）。
     // root 模型与普通会话同链：显式 override（无）> assistant profile.model > 全局。
-    const rootProfileModel = (await this.profilesSvc.get('assistant'))?.model
-    const rootEffective = this.defaultModel ?? rootProfileModel
+    const rootEffective = await this.resolveEffectiveModel(undefined, 'assistant')
     const modelRef = rootEffective ? requireModelRef(rootEffective) : undefined
     const root = await this.harness.root(BACKGROUND_CONTEXT, {
       agent: modelRef
@@ -1248,19 +1257,35 @@ export class KernelRuntime {
     return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
   }
 
-  /**
-   * 会话生效模型解析链（统一入口）：
-   * 显式 override > 实际 profile.model > 全局 default（options.model/HELM_MODEL）。
-   * profile 每次实时读取（文件改动下一轮生效）；全部缺失返回 undefined
-   * （submit 时才显式 model_not_configured，不伪造默认）。
-   */
+  /** Profile 读取失败与不存在分开报告，避免损坏文件被当成缺少模型配置。 */
+  private async readProfile(profileId: string): Promise<Profile | undefined> {
+    try {
+      assertProfileId(profileId)
+    } catch (error) {
+      throw new HelmError('validation_error', error instanceof Error ? error.message : String(error), 400)
+    }
+    try {
+      return await this.profilesSvc.get(profileId)
+    } catch (error) {
+      throw new HelmError(
+        'profile_read_failed',
+        `读取 Profile ${profileId} 失败：${error instanceof Error ? error.message : String(error)}`,
+        500,
+        { profileId },
+      )
+    }
+  }
+
+  /** 会话覆盖 > Profile.model > 全局；Profile 文件每次实时读取。 */
   private async resolveEffectiveModel(
     override: string | undefined,
     profileId: string,
   ): Promise<string | undefined> {
-    if (override !== undefined && override !== '') return override
-    const profile = await this.profilesSvc.get(profileId).catch(() => undefined)
-    return profile?.model ?? this.defaultModel
+    const profile = await this.readProfile(profileId)
+    if (profile === undefined) {
+      throw new HelmError('profile_not_found', `会话引用的 Profile 不存在：${profileId}`, 404, { profileId })
+    }
+    return override || profile.model || this.defaultModel
   }
 
   /** 启动/恢复时对齐：无 override 的会话按当前链重算镜像（并同步 SDK 配置）。 */
@@ -1284,15 +1309,10 @@ export class KernelRuntime {
     this.store.upsertConv({ ...meta, model: effective, updatedAt: Date.now() })
   }
 
-  /** 校验 profileId 真实存在（不存在时确保 default 兜底目录，不伪造）。 */
+  /** 仅省略 profileId 时选择 assistant；显式 ID 必须对应真实 Profile。 */
   private async resolveProfileForCreate(init: ConversationInit): Promise<string> {
-    const requested = init.profileId
-    if (requested === undefined || requested === 'default') {
-      // 缺省 profile 统一为真实存在的 assistant（ensureDefault 已建）；
-      // 不新造角色枚举，也不留缺目录的 default 导致 before_turn not found。
-      return 'assistant'
-    }
-    const found = await this.profilesSvc.get(requested).catch(() => undefined)
+    const requested = init.profileId ?? 'assistant'
+    const found = await this.readProfile(requested)
     if (!found) {
       throw new HelmError('validation_error', `profile 不存在：${requested}（先创建 profiles/${requested}）`, 400)
     }
@@ -1347,7 +1367,7 @@ export class KernelRuntime {
     const meta = this.store.getConv(id)
     if (!meta) throw new HelmError('not_found', `会话不存在：${id}`, 404)
     if (patch.profileId !== undefined) {
-      const found = await this.profilesSvc.get(patch.profileId).catch(() => undefined)
+      const found = await this.readProfile(patch.profileId)
       if (!found) {
         throw new HelmError('validation_error', `profile 不存在：${patch.profileId}`, 400)
       }
@@ -1451,7 +1471,7 @@ export class KernelRuntime {
     if (!effectiveModelRef) {
       throw new HelmError(
         'model_not_configured',
-        `会话 ${id}（profile ${convMeta.profileId}）与全局均未配置模型：请在 profile 中配置 model、设置 HELM_MODEL 或为会话指定 model`,
+        `会话 ${id}（profile ${convMeta.profileId}）与全局均未配置模型：请在 Profile、HELM_MODEL、config.json.model 或会话中配置 model`,
         503,
         { conversationId: id, profileId: convMeta.profileId },
       )
@@ -1727,10 +1747,10 @@ export class KernelRuntime {
           await this.tracker.observe(childId)
         },
         resolveProfile: async (profileId) => {
-          const profile = await this.profilesSvc.get(profileId).catch(() => undefined)
+          const profile = await this.readProfile(profileId)
           if (!profile) return undefined
           return {
-            ...(profile.model !== undefined ? { model: profile.model } : {}),
+            ...(profile.model ? { model: profile.model } : {}),
             ...(profile.runtime !== undefined ? { runtime: profile.runtime } : {}),
           }
         },
