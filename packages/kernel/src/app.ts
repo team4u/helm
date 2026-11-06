@@ -25,10 +25,12 @@ export async function createHelm(options: HelmOptions = {}) {
         getConversation: (id) => kernel.getConversation(id),
         abortConversation: (id) => kernel.abortConversation(id),
         emitEvent: (type, payload) => kernel.events.publish(type, payload),
+        onRunSettled: (summary) => kernel.notifyWorkflowSettled(summary),
       },
     });
     closeWorkflows = () => workflows.close();
     await workflows.init();
+    kernel.setWorkflowRunProvider(() => workflows.listRuns());
     kernel.setWorkflowRunner(async (request, conversationId) => workflows.run({ ...request, conversationId }));
     await kernel.start();
     return {

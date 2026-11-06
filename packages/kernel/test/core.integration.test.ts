@@ -599,7 +599,7 @@ async function makeHttpEnv() {
       })
       ctx.route({
         method: 'GET',
-        path: '/api/plugins/test%3Aprobe/routes/ping',
+        path: '/ping',
         public: true,
         handler: () => new Response('{"ok":true,"via":"plugin-route"}', { headers: { 'content-type': 'application/json' } }),
       })
@@ -784,15 +784,15 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
     assert.notEqual(anon.code, 0)
     assert.equal((JSON.parse(anon.err) as { error: { code: string } }).error.code, 'unauthorized')
 
-    // --- setup：真 scrypt 凭据 + token 写入 credentials.json cli 键
+    // --- setup：真 scrypt 凭据 + 独立 cli-token 文件。
     const setup = await run(['setup', '--password', env.rootPassword, '--json'])
     assert.equal(setup.code, 0, setup.err)
     assert.ok(typeof (JSON.parse(setup.out) as { token: string }).token === 'string')
-    const credRaw = JSON.parse(readFileSync(join(env.dataDir, 'credentials.json'), 'utf8')) as {
-      cli?: { hubUrl?: string; token?: string }
+    const credRaw = JSON.parse(readFileSync(join(env.dataDir, 'cli-token'), 'utf8')) as {
+      hubUrl?: string; token?: string
     }
-    assert.ok(credRaw.cli?.token, 'token 应持久化在 credentials.json cli 键')
-    assert.ok(credRaw.cli?.hubUrl?.startsWith('http://127.0.0.1:'), 'hubUrl 应持久化')
+    assert.ok(credRaw.token, '登录 Token 应保存在 cli-token')
+    assert.ok(credRaw.hubUrl?.startsWith('http://127.0.0.1:'), 'hubUrl 应持久化')
 
     // --- status：公开端点
     const status = await run(['status', '--json'])
@@ -836,7 +836,7 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
     )
 
     // --- 子进程真 CLI 入口（异步 spawn；父进程事件循环保持响应，Hub 可答）：
-    //     setup 已完成，子进程经 credentials.json 凭据访问同一真 Hub
+    //     setup 已完成，子进程经 cli-token 凭据访问同一真 Hub。
     const childStatus = await runCliChild(['status', '--json'])
     assert.equal(childStatus.timedOut, false, '子进程 CLI 不得挂起')
     assert.equal(childStatus.code, 0, `子进程 status 失败：${childStatus.err}`)
@@ -849,7 +849,7 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
 
     const childAuth = await runCliChild(['conversations', 'list', '--json'])
     assert.equal(childAuth.timedOut, false)
-    assert.equal(childAuth.code, 0, `子进程鉴权应经 credentials.json 生效：${childAuth.err}`)
+    assert.equal(childAuth.code, 0, `子进程鉴权应经 cli-token 生效：${childAuth.err}`)
     assert.ok((JSON.parse(childAuth.out) as Array<{ id: number }>).some((c) => c.id === ROOT_CONVERSATION_ID))
   } finally {
     await env.close()

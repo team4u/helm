@@ -144,10 +144,10 @@ test('工作流1: agent schema/gate 真链路——原生 spawn + StructuredOutp
     // gate 真实 shell 只执行一次（sentinel 文件追加计数）
     assert.equal(readFileSync(join(env.dataDir, 'gate-runs'), 'utf8'), 'x', 'gate 恰好执行一次')
 
-    // 子会话真实创建（原生 spawn：真 pi-durable 子会话，带 worker 标签）
-    const workers = env.app.kernel.listConversations().filter((c) => c.tags.includes('worker'))
-    assert.equal(workers.length, 1, '应派生恰好 1 个 worker 子会话')
-    assert.equal(workers[0]!.parentConversationId, ROOT_CONVERSATION_ID)
+    // 子会话按派生关系识别；业务 Worker 标签由插件决定。
+    const workers = env.app.kernel.listConversations().filter((c) => c.parentConversationId === ROOT_CONVERSATION_ID)
+    assert.equal(workers.length, 1, '应派生恰好 1 个原生子会话')
+    assert.equal(workers[0]!.tags.includes('worker'), false)
 
     // --- resume：相同 script、缺省 args 命中账本前缀 —— agent 槽位重放，
     //     不再发起模型调用、不重跑 gate（副作用绝不重复）。
@@ -158,12 +158,10 @@ test('工作流1: agent schema/gate 真链路——原生 spawn + StructuredOutp
     assert.deepEqual(resumedResult, STRUCTURED, '重放结果与原 run 一致（账本前缀命中）')
     assert.equal(env.faux.state.callCount, modelCallsBefore, 'resume 不得再发起模型调用')
     assert.equal(readFileSync(join(env.dataDir, 'gate-runs'), 'utf8'), gateRunsBefore, 'resume 不得重跑 gate')
-    // 重放溯源：run record 持久化 replayedFrom（真 SQLite doc，与 WorkflowService 同一 state）
-    const record = env.app.kernel.documentStore.get<{ replayedFrom?: string }>(`workflow/run/${resumed.id}`, null as never)
-    assert.equal(record?.replayedFrom, started.id, 'run record 应标记 replayedFrom')
+    assert.equal(workflows.getRun(resumed.id).replayedFrom, started.id, '公开摘要应保留重放来源')
 
-    // 不新增子会话（重放不 live spawn）
-    assert.equal(env.app.kernel.listConversations().filter((c) => c.tags.includes('worker')).length, 1)
+    // 不新增子会话（重放不 live spawn）。
+    assert.equal(env.app.kernel.listConversations().filter((c) => c.parentConversationId === ROOT_CONVERSATION_ID).length, 1)
   } finally {
     await env.close()
   }
