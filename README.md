@@ -2,7 +2,7 @@
 
 Helm 是以 `pi-durable` 为底座的持久会话微内核。共享契约位于 `@helm/protocol`，运行时与插件宿主位于 `@helm/kernel`，`@helm/node` 通过 HTTP 提供 CLI。
 
-本阶段实现核心与常驻 `builtin:assistant`；Web 外壳、Herdr、Super-agent 和外部触发器后续接入。架构约束见 [AGENTS.md](./AGENTS.md)，目标设计见 [设计文档](./docs/20261106%20helm极简微内核与双7扩展点设计文档.md)。
+本阶段实现核心与常驻 `builtin:assistant`；Web 外壳、Herdr、Super-agent 和外部触发器后续接入。架构约束见 [AGENTS.md](./AGENTS.md)，目标设计见 [设计文档](./docs/20261106%20helm极简微内核与双7扩展点设计文档.md)。本轮接手入口和实际验收记录见 [核心开发交接](./docs/20261106-核心开发交接.md)。
 
 需要 Node.js 24.12 或更新版本及 pnpm。
 
@@ -34,9 +34,9 @@ pnpm helm conversations list --json
 
 CLI 使用 `HELM_HUB_URL` 指定 Hub，默认 `http://127.0.0.1:3202`。支持指定会话的命令可通过 `--current` 读取 `HELM_CONVERSATION_ID`。内核受管 Shell 自动获得仅本进程有效的 `HELM_TOKEN` 和当前会话环境，可直接调用 CLI；该 Token 随进程关闭失效，其回显通过统一出站脱敏处理。
 
-读取会话不会自动清除未读状态。`conversations get` 返回会话摘要和最近一页时间线，可用 `--limit`、`--cursor` 继续读取。删除会话会清理产物和搜索索引，并阻止后续访问；受 SDK 接口限制，SQLite 内部历史记录仍保留。根会话和启用插件登记托管的常驻会话受删除保护。
+读取会话不会自动清除未读状态。`conversations list --profile <id> --status <state>` 可按角色和状态筛选；`conversations get` 返回会话摘要和最近一页时间线，可用 `--limit`、`--cursor` 继续读取。`send --meta '<JSON 对象>' --wait` 将元数据附着在本次输入上，等待本次提交的回答并输出结果。删除会话会清理产物和搜索索引，并阻止后续访问；受 SDK 接口限制，SQLite 内部历史记录仍保留。根会话和启用插件登记托管的常驻会话受删除保护。
 
-工作流在独立 Worker 中执行，使用 `vm` 约束确定性。所有外部操作通过宿主原语发起；`vm` 不作为恶意脚本的安全隔离边界。工作流恢复会复用成功的调用前缀；如果动作留下开始记录但没有完成记录，恢复会显式报告不确定状态。
+工作流在独立 Worker 中执行，使用 `vm` 约束确定性。所有外部操作通过宿主原语发起；`vm` 不作为恶意脚本的安全隔离边界。`workflows run <nameOrFile> --wait` 等待终态并返回结果。工作流恢复会复用成功的调用前缀；如果动作留下开始记录但没有完成记录，恢复会显式报告不确定状态。
 
 `SecretStash` 将审批中的机密答案保存在内存中，持久状态和模型上下文使用脱敏引用。审批创建返回 `{ id, status, answers }`，明确区分回答、取消和已在其他界面处理；调用方可预分配 ID 来绑定外部状态监听。Shell 和进程内插件拥有宿主权限，可以访问其执行环境；此边界不承诺对可信执行代码隐藏机密。
 
