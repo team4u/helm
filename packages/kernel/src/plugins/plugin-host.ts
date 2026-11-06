@@ -8,7 +8,19 @@
  * - docs 持久化经 PluginDocStore（runtime 用 SDK 持久 doc 实现），命名空间 pluginId:name；
  * - config 持久化经 PluginConfigStore；未提供 store 且发生配置修改时显式报
  *   不支持（501），绝不假装持久化（诚实性纪律）。
+ *
+ * 并发模型：
+ * - 同插件的 register/enable/disable/unregister 经 per-plugin 队列串行执行；
+ * - 停用先把 phase 置为 deactivating 再进入 await，期间新 invokeAction /
+ *   executeTool / runHook 一律拒绝，绝不让任务进入正在拆毁的注册表；
+ * - 每个启用周期递增 epoch：旧 definePlugin 上下文（含 doc 句柄）在新周期
+ *   或停用后立即失效，防止异步残留注册污染新周期。
+ * - runHook 只执行快照时刻「已启用且空闲」的处理器；未启用/正停用插件的
+ *   handler 绝不执行。
  */
+import { createHash } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   HelmError,
   type ActionManifest,
@@ -43,7 +55,8 @@ import {
 } from '@helm/protocol';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
 import { PluginTaskTracker } from './tracking.js';
-import { validatePluginInput, validatePluginOutput } from './schema.js';
+import { assertSchemaCompilable, validatePluginInput, validatePluginOutput } from './schema.js';
+import { redactJsonValue } from '../redact.js';
 
 // 主代理集成接口 ---------------------------------------------------------------
 
@@ -75,17 +88,43 @@ export interface PluginUiEntry {
   spec: unknown;
 }
 
-/** 派生工具清单条目（listTools 产物；run_action 元工具接入由 runtime 承担）。 */
+/**
+ * 派生工具清单条目（listTools 产物）。
+ * - ctx.tool 直投工具：name 即注册名（provider-safe）；
+ * - exposeAsTool 动作：name 为 provider-safe 别名（OpenAI 函数名不允许
+ *   ':'/'.'），qualifiedId 保留全限定 ID 供 run_action / 展示，executeTool
+ *   两者皆可解析。run_action 元工具接入由 runtime 承担。
+ */
 export interface DerivedToolSpec {
   name: string;
   description: string;
   inputSchema: JsonSchema;
   sourcePluginId: string;
   sourceKind: 'action' | 'tool';
+  /** 仅 sourceKind === 'action'：pluginId.actionId 全限定 ID。 */
+  qualifiedId?: string;
 }
 
 export interface PluginRouteEntry extends PluginRouteSpec {
   pluginId: string;
+}
+
+/** 模型工具名的 provider 安全约束（OpenAI 函数名子集，全 provider 通用）。 */
+export const PROVIDER_SAFE_TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * 为 exposeAsTool 动作生成稳定 provider-safe 别名：语义前缀 + 全限定 ID 短哈希。
+ * 纯函数、跨重启确定：pi-ai convertTools 原样发送 tool.name，含 ':'/'.' 的
+ * 全限定 ID 不被任何 provider 接受，且朴素清洗（替换非法字符）会碰撞，故附哈希。
+ */
+export function actionToolAlias(pluginId: string, actionId: string): string {
+  const semantic = `${pluginId.replace(/^builtin:/, '')}.${actionId}`
+    .replace(/[^A-Za-z0-9_-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 40);
+  const hash = createHash('sha1').update(`${pluginId}.${actionId}`).digest('hex').slice(0, 8);
+  return `${semantic}_${hash}`;
 }
 
 // 内部注册态 -------------------------------------------------------------------
@@ -98,6 +137,7 @@ interface ActionEntry {
   outputSchema: JsonSchema;
   cli?: PluginActionSpec<unknown, unknown>['cli'];
   exposeAsTool: boolean;
+  toolAlias: string;
   handler: (input: never, context: PluginActionContext) => unknown;
 }
 
@@ -111,9 +151,21 @@ interface ServiceEntry extends PluginServiceSpec {
   started: boolean;
 }
 
+/**
+ * 插件生命周期相位：
+ * - defining：definePlugin 执行中（注册方法仅此相位可用）；
+ * - deactivating：停用中（先于任何 await 设置，隔离新任务与旧 doc 写入）；
+ * - idle：稳定态（enabled 决定是否对外可用）。
+ */
+type PluginPhase = 'idle' | 'defining' | 'deactivating';
+
 interface PluginState {
   definition: PluginDefinition;
   enabled: boolean;
+  phase: PluginPhase;
+  /** 启用周期号：每次 enable 开始与 disable 完成时递增，使旧上下文/句柄失效。 */
+  epoch: number;
+  dataDir: string;
   hooks: Set<HookName>;
   actions: Map<string, ActionEntry>;
   tools: Map<string, ToolEntry>;
@@ -124,8 +176,12 @@ interface PluginState {
   configSchema: Record<string, PluginConfigFieldSchema> | null;
 }
 
-function pluginRoutePrefix(pluginId: string): string {
-  return `/api/plugins/${pluginId}`;
+/**
+ * JSON-safe 深拷贝：复用 redact.ts 的结构检查（拒循环/undefined/非纯对象/
+ * NaN/稀疏数组），identity 直通。边界显式拒绝，绝不留给 JSON.stringify 悄悄丢数据。
+ */
+function jsonClone<T>(value: T): T {
+  return redactJsonValue(value, (s) => s) as T;
 }
 
 export class PluginHost {
@@ -135,6 +191,8 @@ export class PluginHost {
   private configStore?: PluginConfigStore;
   private disposed = false;
   private registerSeq = 0;
+  /** per-plugin 生命周期操作串行链（register/enable/disable/unregister）。 */
+  private lifecycle = new Map<string, Promise<unknown>>();
 
   constructor(private readonly options: PluginHostOptions) {
     this.configStore = options.config;
@@ -152,111 +210,194 @@ export class PluginHost {
     if (this.plugins.has(definition.id)) {
       throw new HelmError('plugin_already_registered', `插件 ${definition.id} 已注册`, 409);
     }
+    await this.enqueue(definition.id, async () => {
+      // 队列等待期间可能被并发注册占位
+      if (this.plugins.has(definition.id)) {
+        throw new HelmError('plugin_already_registered', `插件 ${definition.id} 已注册`, 409);
+      }
+      this.assertNotDisposed();
+      const seq = ++this.registerSeq;
+      const dataDir = join(this.options.dataDir, 'plugins', definition.id);
+      const state: PluginState = {
+        definition,
+        enabled: false,
+        phase: 'defining',
+        epoch: 1,
+        dataDir,
+        hooks: new Set(),
+        actions: new Map(),
+        tools: new Map(),
+        routes: [],
+        services: [],
+        ui: [],
+        docs: new Map(),
+        configSchema: null,
+      };
+      this.plugins.set(definition.id, state);
 
-    const seq = ++this.registerSeq;
-    const state: PluginState = {
-      definition,
-      enabled: false,
-      hooks: new Set(),
-      actions: new Map(),
-      tools: new Map(),
-      routes: [],
-      services: [],
-      ui: [],
-      docs: new Map(),
-      configSchema: null,
-    };
-    this.plugins.set(definition.id, state);
-
-    try {
-      await definition.definePlugin(this.createContext(state));
-      state.enabled = true;
-      await this.startServices(state);
-    } catch (err) {
-      // rollback：清除本插件一切注册痕迹；rollback 失败不掩盖原始错误，聚合进 details
-      let rollbackError: unknown;
       try {
-        await this.teardownPlugin(state, { stopServices: state.enabled });
-      } catch (rollbackErr) {
-        rollbackError = rollbackErr;
-      }
-      this.plugins.delete(definition.id);
-      this.tracker.removePlugin(definition.id);
-      if (err instanceof HelmError) {
-        if (rollbackError) {
-          throw new HelmError(err.code, err.message, err.status, { ...(err.details as object), rollbackError });
+        // 插件专属数据目录（~/.helm/plugins/<id>/），按 protocol 注释创建
+        mkdirSync(dataDir, { recursive: true });
+        await definition.definePlugin(this.createContext(state, state.epoch));
+        state.enabled = true;
+        await this.startServices(state);
+        state.phase = 'idle';
+      } catch (err) {
+        // rollback：清除本插件一切注册痕迹；rollback 失败不掩盖原始错误，聚合进 details
+        let rollbackError: unknown;
+        try {
+          await this.teardownPlugin(state, { stopServices: state.enabled });
+        } catch (rollbackErr) {
+          rollbackError = rollbackErr;
         }
-        throw err;
+        this.plugins.delete(definition.id);
+        this.tracker.removePlugin(definition.id);
+        if (err instanceof HelmError) {
+          if (rollbackError) {
+            throw new HelmError(err.code, err.message, err.status, { ...(err.details as object), rollbackError });
+          }
+          throw err;
+        }
+        throw new HelmError(
+          'plugin_registration_failed',
+          `插件 ${definition.id} 注册失败：${err instanceof Error ? err.message : String(err)}`,
+          500,
+          { pluginId: definition.id, registerSeq: seq, rollbackError },
+        );
       }
-      throw new HelmError(
-        'plugin_registration_failed',
-        `插件 ${definition.id} 注册失败：${err instanceof Error ? err.message : String(err)}`,
-        500,
-        { pluginId: definition.id, registerSeq: seq, rollbackError },
-      );
-    }
+      this.emitPluginChanged(state);
+    });
   }
 
-  /** 取消注册（locked 拒绝；有在途任务拒绝）。 */
+  /** 取消注册（locked 拒绝；有在途任务拒绝 409，绝不等待任务结束）。 */
   async unregister(pluginId: string): Promise<void> {
     this.assertNotDisposed();
-    const state = this.requirePlugin(pluginId);
-    this.assertNotLocked(state);
-    this.assertNoLiveTasks(pluginId);
-    await this.teardownPlugin(state, { stopServices: true });
-    this.plugins.delete(pluginId);
-    this.tracker.removePlugin(pluginId);
+    await this.enqueue(pluginId, async () => {
+      this.assertNotDisposed();
+      const state = this.requirePlugin(pluginId);
+      this.assertNotLocked(state);
+      if (!state.enabled) {
+        await this.teardownPlugin(state, { stopServices: false });
+        this.plugins.delete(pluginId);
+        this.tracker.removePlugin(pluginId);
+        return;
+      }
+      this.assertNoLiveTasks(pluginId);
+      state.phase = 'deactivating';
+      let settleError: unknown;
+      try {
+        await this.teardownPlugin(state, { stopServices: true });
+      } catch (err) {
+        settleError = err;
+      }
+      state.enabled = false;
+      this.plugins.delete(pluginId);
+      this.tracker.removePlugin(pluginId);
+      if (settleError) {
+        // 状态已一致（插件移除），但 stop 失败必须如实上抛
+        throw settleError;
+      }
+      this.emitPluginChanged(state);
+    });
   }
 
   async enable(pluginId: string): Promise<void> {
     this.assertNotDisposed();
-    const state = this.requirePlugin(pluginId);
-    if (state.enabled) return;
-    // 启用语义 = 重新执行 definePlugin 重建全部能力注册
-    this.clearRegistrations(state);
-    try {
-      await state.definition.definePlugin(this.createContext(state));
-      state.enabled = true;
-      await this.startServices(state);
-    } catch (err) {
-      let rollbackError: unknown;
+    await this.enqueue(pluginId, async () => {
+      this.assertNotDisposed();
+      const state = this.requirePlugin(pluginId);
+      if (state.enabled) return;
+      // 新启用周期：epoch 先行递增使一切旧上下文/doc 句柄即刻失效，
+      // 再清空注册（含 docs 与 configSchema），保证重建周期从零开始；
+      // 持久 store 数据不受影响（clearRegistrations 只动注册句柄）。
+      state.epoch += 1;
+      this.clearRegistrations(state);
+      state.phase = 'defining';
       try {
-        await this.teardownPlugin(state, { stopServices: true });
-      } catch (rollbackErr) {
-        rollbackError = rollbackErr;
-      }
-      state.enabled = false;
-      if (err instanceof HelmError) {
-        if (rollbackError) {
-          throw new HelmError(err.code, err.message, err.status, { ...(err.details as object), rollbackError });
+        await state.definition.definePlugin(this.createContext(state, state.epoch));
+        state.enabled = true;
+        await this.startServices(state);
+        state.phase = 'idle';
+      } catch (err) {
+        let rollbackError: unknown;
+        try {
+          await this.teardownPlugin(state, { stopServices: true });
+        } catch (rollbackErr) {
+          rollbackError = rollbackErr;
         }
-        throw err;
+        state.enabled = false;
+        state.phase = 'idle';
+        if (err instanceof HelmError) {
+          if (rollbackError) {
+            throw new HelmError(err.code, err.message, err.status, { ...(err.details as object), rollbackError });
+          }
+          throw err;
+        }
+        throw new HelmError(
+          'plugin_enable_failed',
+          `插件 ${pluginId} 启用失败：${err instanceof Error ? err.message : String(err)}`,
+          500,
+          { pluginId, rollbackError },
+        );
       }
-      throw new HelmError(
-        'plugin_enable_failed',
-        `插件 ${pluginId} 启用失败：${err instanceof Error ? err.message : String(err)}`,
-        500,
-        { pluginId, rollbackError },
-      );
-    }
+      this.emitPluginChanged(state);
+    });
   }
 
   async disable(pluginId: string): Promise<void> {
     this.assertNotDisposed();
-    const state = this.requirePlugin(pluginId);
-    this.assertNotLocked(state);
-    if (!state.enabled) return;
-    this.assertNoLiveTasks(pluginId);
-    await this.teardownPlugin(state, { stopServices: true });
-    state.enabled = false;
+    await this.enqueue(pluginId, async () => {
+      this.assertNotDisposed();
+      const state = this.requirePlugin(pluginId);
+      this.assertNotLocked(state);
+      if (!state.enabled) return;
+      this.assertNoLiveTasks(pluginId);
+      // 先置 deactivating 再进入 await：新 invokeAction/executeTool/runHook
+      // 与旧 doc 写入在 stop 期间即被隔离
+      state.phase = 'deactivating';
+      let settleError: unknown;
+      try {
+        await this.teardownPlugin(state, { stopServices: true });
+      } catch (err) {
+        settleError = err;
+      }
+      // stop 失败也不允许维持「enabled=true 但注册已清空」的虚假状态：
+      // 统一落位为已停用（epoch 递增废黜旧句柄），错误如实上抛
+      state.enabled = false;
+      state.epoch += 1;
+      state.phase = 'idle';
+      if (settleError) throw settleError;
+      this.emitPluginChanged(state);
+    });
   }
 
+  /** 同插件生命周期操作串行化：后到者等待前者完成（无论成败）后再执行。 */
+  private async enqueue<T>(pluginId: string, op: () => Promise<T>): Promise<T> {
+    const prev = this.lifecycle.get(pluginId) ?? Promise.resolve();
+    const run = prev.then(op, op);
+    const tail = run.then(
+      () => {},
+      () => {},
+    );
+    this.lifecycle.set(pluginId, tail);
+    void tail.then(() => {
+      if (this.lifecycle.get(pluginId) === tail) this.lifecycle.delete(pluginId);
+    });
+    return run;
+  }
+
+  /**
+   * 清空本启用周期的全部注册句柄（含 docs 与 configSchema）。
+   * 只清「注册」，不动持久 store 数据——doc 值与 config 值跨周期保留。
+   */
   private clearRegistrations(state: PluginState): void {
     state.actions.clear();
     state.tools.clear();
     state.routes.length = 0;
     state.services.length = 0;
     state.ui.length = 0;
+    state.docs.clear();
+    state.configSchema = null;
     for (const pipeline of this.pipelines.values()) pipeline.removeByPlugin(state.definition.id);
     state.hooks.clear();
   }
@@ -327,7 +468,11 @@ export class PluginHost {
 
   list(): PluginSummary[] {
     this.assertNotDisposed();
-    return [...this.plugins.values()].map((s) => ({
+    return [...this.plugins.values()].map((s) => this.summaryOf(s));
+  }
+
+  private summaryOf(s: PluginState): PluginSummary {
+    return {
       id: s.definition.id,
       name: s.definition.name ?? s.definition.id,
       version: s.definition.version,
@@ -336,7 +481,7 @@ export class PluginHost {
       hooks: s.enabled ? [...s.hooks] : [],
       actions: s.enabled ? [...s.actions.keys()] : [],
       tools: s.enabled ? [...s.tools.keys()] : [],
-    }));
+    };
   }
 
   listActions(): ActionManifest[] {
@@ -349,10 +494,15 @@ export class PluginHost {
     return out;
   }
 
-  /** 模型工具清单：显式 ctx.tool + exposeAsTool 动作派生（run_action 接入由 runtime 承担）。 */
+  /**
+   * 模型工具清单：显式 ctx.tool + exposeAsTool 动作派生（run_action 接入由 runtime 承担）。
+   * 动作派生名使用 provider-safe 别名；出现重名（别名遮蔽或与 ctx.tool 冲突）时
+   * 显式抛错，绝不静默让某个工具不可达。
+   */
   listTools(): DerivedToolSpec[] {
     this.assertNotDisposed();
     const out: DerivedToolSpec[] = [];
+    const seen = new Set<string>();
     for (const state of this.plugins.values()) {
       if (!state.enabled) continue;
       for (const tool of state.tools.values()) {
@@ -363,17 +513,29 @@ export class PluginHost {
           sourcePluginId: state.definition.id,
           sourceKind: 'tool',
         });
+        seen.add(tool.spec.name);
       }
       for (const action of state.actions.values()) {
         if (!action.exposeAsTool) continue;
         out.push({
-          name: `${state.definition.id}.${action.id}`,
+          name: action.toolAlias,
           description: action.description,
           inputSchema: action.inputSchema,
           sourcePluginId: state.definition.id,
           sourceKind: 'action',
+          qualifiedId: `${state.definition.id}.${action.id}`,
         });
+        seen.add(action.toolAlias);
       }
+    }
+    const dups = out.filter((t, i) => out.findIndex((x) => x.name === t.name) !== i);
+    if (dups.length > 0) {
+      throw new HelmError(
+        'duplicate_tool_name',
+        `插件工具名冲突（provider-safe 名必须唯一）：${[...new Set(dups.map((d) => d.name))].join(', ')}`,
+        500,
+        { duplicates: [...new Set(dups.map((d) => d.name))] },
+      );
     }
     return out;
   }
@@ -406,6 +568,9 @@ export class PluginHost {
    * - continue：无插件改写，走内核默认直通行为；
    * - transform：finalPayload 交默认行为消费；
    * - handled / block：短路默认行为。
+   *
+   * 只执行进入时快照中「已启用且空闲」的处理器；未启用（注册中）或正停用
+   * 插件的 handler 绝不执行，任务跟踪也只计实际参与者。
    */
   async runHook<K extends HookName>(name: K, payload: HookPayloadMap[K]): Promise<HookResult<HookPayloadMap[K]>> {
     this.assertNotDisposed();
@@ -413,27 +578,33 @@ export class PluginHost {
     if (!pipeline) {
       throw new HelmError('unknown_hook', `未知的钩子挂载点：${name}`, 400, { hook: name });
     }
-    const participants = pipeline.entries().filter((h) => this.plugins.get(h.pluginId)?.enabled);
+    const participants = pipeline.entries().filter((h) => this.isHookActive(h.pluginId));
     if (participants.length === 0) return { action: 'continue' };
 
+    const snapshot = new Set(participants);
     const label = `hook:${name}`;
     for (const h of participants) this.tracker.begin(h.pluginId, label);
     let outcome: HookResult<HookPayloadMap[K]>;
     try {
-      const r = await pipeline.run(payload);
+      const r = await pipeline.run(payload, (h) => snapshot.has(h));
       if (r.shortCircuit) {
         outcome =
           r.shortCircuit.action === 'handled'
             ? { action: 'handled', result: r.shortCircuit.result }
             : { action: 'block', reason: r.shortCircuit.reason };
       } else {
-        // 无短路：载荷可能轻 transform 链改写，统一以 transform 交回调用方执行默认直通行为
+        // 无短路：载荷可能经 transform 链改写，统一以 transform 交回调用方执行默认直通行为
         outcome = { action: 'transform', value: r.finalPayload } as HookResult<HookPayloadMap[K]>;
       }
     } finally {
       for (const h of participants) this.tracker.end(h.pluginId, label);
     }
     return outcome;
+  }
+
+  private isHookActive(pluginId: string): boolean {
+    const s = this.plugins.get(pluginId);
+    return !!s && s.enabled && s.phase === 'idle';
   }
 
   // --- 动作总线 ------------------------------------------------------------
@@ -460,7 +631,7 @@ export class PluginHost {
   ): Promise<unknown> {
     this.assertNotDisposed();
     const state = this.requirePlugin(pluginId);
-    this.assertEnabled(state);
+    this.assertActive(state);
     const entry = state.actions.get(actionId);
     if (!entry) {
       throw new HelmError('unknown_action', `插件 ${pluginId} 未声明动作 ${actionId}`, 404, { pluginId, actionId });
@@ -470,52 +641,74 @@ export class PluginHost {
       Promise.resolve(entry.handler(input as never, context)),
     );
     validatePluginOutput(pluginId, actionId, entry.outputSchema, raw);
-    return raw;
+    // 动作输出直接进 HTTP/CLI/SSE 的 JSON 序列化：边界显式拒绝非 JSON 值，
+    // 绝不留给 JSON.stringify 悄悄丢数据（undefined 字段消失、Map 变 {}）
+    return jsonClone(raw);
   }
 
   // --- 工具执行 ------------------------------------------------------------
 
-  /** name 可为 ctx.tool 短名或 pluginId.actionId 动作派生名。 */
+  /** name 可为 ctx.tool 短名、pluginId.actionId 全限定名或 provider-safe 别名。 */
   async executeTool(name: string, input: unknown, context: PluginToolContext): Promise<unknown> {
     this.assertNotDisposed();
     const found = this.findToolByName(name);
     if (!found) throw new HelmError('unknown_tool', `未注册的工具：${name}`, 404, { name });
 
     const { state, spec } = found;
-    this.assertEnabled(state);
+    this.assertActive(state);
     validatePluginInput(state.definition.id, spec.name, spec.inputSchema, input);
+    // ctx.tool 输出经 runtime 格式化为模型文本，此处不强制 JSON-safe
     return this.tracker.withTask(state.definition.id, `tool:${name}`, () =>
       Promise.resolve(spec.execute(input as never, context)),
     );
   }
 
   private findToolByName(name: string): { state: PluginState; spec: PluginToolSpec } | undefined {
+    // 1. ctx.tool 直投名（provider-safe，无 '.'）
     for (const state of this.plugins.values()) {
       const direct = state.tools.get(name);
       if (direct) return { state, spec: direct.spec };
     }
-    // 动作派生工具（pluginId 可含 ':'，取首个 '.' 分割）
+    // 2. 全限定动作名 pluginId.actionId（pluginId 可含 ':'，取首个 '.' 分割）
     const dot = name.indexOf('.');
     if (dot > 0) {
       const pluginId = name.slice(0, dot);
       const actionId = name.slice(dot + 1);
-      const state = this.plugins.get(pluginId);
-      const action = state?.actions.get(actionId);
-      if (state && action) {
-        return {
-          state,
-          spec: {
-            name,
-            description: action.description,
-            inputSchema: action.inputSchema,
-            execute: (input: unknown, ctx: PluginToolContext) =>
-              this.invokeAction(pluginId, actionId, input, {
-                conversationId: ctx.conversationId,
-                signal: ctx.signal,
-              }),
-          },
-        };
-      }
+      const spec = this.derivedToolSpec(this.plugins.get(pluginId), actionId, name);
+      if (spec) return spec;
+    }
+    // 3. provider-safe 别名（不含 '.'，需扫描 exposeAsTool 动作）
+    for (const state of this.plugins.values()) {
+      const spec = this.derivedToolSpec(state, name, name);
+      if (spec) return spec;
+    }
+    return undefined;
+  }
+
+  private derivedToolSpec(
+    state: PluginState | undefined,
+    key: string,
+    displayName: string,
+  ): { state: PluginState; spec: PluginToolSpec } | undefined {
+    if (!state) return undefined;
+    for (const action of state.actions.values()) {
+      const match = action.exposeAsTool && (action.id === key || action.toolAlias === key);
+      if (!match) continue;
+      const pluginId = state.definition.id;
+      const actionId = action.id;
+      return {
+        state,
+        spec: {
+          name: displayName,
+          description: action.description,
+          inputSchema: action.inputSchema,
+          execute: (input: unknown, ctx: PluginToolContext) =>
+            this.invokeAction(pluginId, actionId, input, {
+              conversationId: ctx.conversationId,
+              signal: ctx.signal,
+            }),
+        },
+      };
     }
     return undefined;
   }
@@ -532,7 +725,7 @@ export class PluginHost {
   getConfigSchema(pluginId: string): Record<string, PluginConfigFieldSchema> {
     this.assertNotDisposed();
     const state = this.requirePlugin(pluginId);
-    return state.configSchema ?? {};
+    return state.configSchema ? { ...state.configSchema } : {};
   }
 
   async setConfig(pluginId: string, value: Record<string, unknown>): Promise<void> {
@@ -556,14 +749,21 @@ export class PluginHost {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    // 先让在途生命周期操作（enable/disable 等）自然结束，避免与拆毁并发
+    await Promise.allSettled([...this.lifecycle.values()]);
+    this.lifecycle.clear();
     // 逆向停用全部插件（最近注册先停）；单个清理失败不阻止其余，聚合显式抛出
     const errors: Array<{ pluginId: string; error: unknown }> = [];
     for (const state of [...this.plugins.values()].reverse()) {
+      state.phase = 'deactivating';
       try {
         await this.teardownPlugin(state, { stopServices: true });
         state.enabled = false;
       } catch (err) {
         errors.push({ pluginId: state.definition.id, error: err });
+      } finally {
+        state.phase = 'idle';
+        this.tracker.removePlugin(state.definition.id);
       }
     }
     this.plugins.clear();
@@ -600,24 +800,48 @@ export class PluginHost {
 
   // --- 内部：definePlugin 上下文构造 -----------------------------------------
 
-  private createContext(state: PluginState): HelmPluginContext {
+  private createContext(state: PluginState, epoch: number): HelmPluginContext {
     const pluginId = state.definition.id;
     const self = this;
 
-    const addHook = <N extends HookName>(name: N, fn: HookHandler<N>, opts?: HookOptions) => {
+    /** 注册方法仅在本启用周期的 definePlugin 执行期间可用。 */
+    const assertOpen = (what: string) => {
       self.assertNotDisposed();
-      if (state.enabled) {
+      if (epoch !== state.epoch || state.phase !== 'defining') {
         throw new HelmError(
           'plugin_context_closed',
-          `插件 ${pluginId} 已启用，不允许在 definePlugin 之外追加 ${name} 钩子`,
+          `插件 ${pluginId} 的 definePlugin 上下文已关闭（停用或进入新启用周期），不允许 ${what}`,
           409,
         );
       }
+    };
+
+    /** doc 句柄在本周期内（含运行期）可写；停用中或周期更替后失效。 */
+    const assertDocUsable = (name: string) => {
+      self.assertNotDisposed();
+      const cur = self.plugins.get(pluginId);
+      if (
+        cur !== state ||
+        epoch !== state.epoch ||
+        state.phase === 'deactivating' ||
+        !(state.phase === 'defining' || state.enabled)
+      ) {
+        throw new HelmError(
+          'plugin_context_expired',
+          `插件 ${pluginId} 的 doc ${name} 句柄已失效（插件已停用或进入新启用周期）`,
+          409,
+        );
+      }
+    };
+
+    const addHook = <N extends HookName>(name: N, fn: HookHandler<N>, opts?: HookOptions) => {
+      assertOpen(`追加 ${name} 钩子`);
       (self.pipelines.get(name) as unknown as HookPipeline<N>).add(pluginId, fn, opts?.priority ?? 0);
       state.hooks.add(name);
     };
 
     const addUi = (surface: string, spec: unknown, fnName: string) => {
+      assertOpen(`声明 ui.${fnName}`);
       const id = (spec as { id?: unknown }).id;
       if (typeof id !== 'string' || id.length === 0) {
         throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.${fnName} 声明缺少 id`, 400);
@@ -625,24 +849,29 @@ export class PluginHost {
       if (state.ui.some((u) => u.surface === surface && (u.spec as { id?: string }).id === id)) {
         throw new HelmError('duplicate_ui', `插件 ${pluginId} 在 ${surface} 重复声明 id ${id}`, 409);
       }
-      // 声明式轨道只接受可序列化 spec；client.tsx 轨道由 web 编译器负责（本模块不编译）
+      // 声明式轨道只接受可 JSON 序列化 spec（HTTP/SSE 直接 JSON 输出）；
+      // structuredClone 接受 Map/Set/Date 但 JSON.stringify 会改形丢数据，必须显式拒绝。
+      // client.tsx 轨道由 web 编译器负责（本模块不编译）。
+      let normalized: unknown;
       try {
-        structuredClone(spec);
-      } catch {
+        normalized = jsonClone(spec);
+      } catch (err) {
         throw new HelmError(
           'invalid_ui_spec',
-          `插件 ${pluginId} ui.${fnName} 声明的 spec 必须可 JSON 序列化（client.tsx 引用请用 client 字段）`,
+          `插件 ${pluginId} ui.${fnName} 声明的 spec 必须可 JSON 序列化（client.tsx 引用请用 client 字段）` +
+            `：${err instanceof Error ? err.message : String(err)}`,
           400,
         );
       }
-      state.ui.push({ pluginId, surface, spec: structuredClone(spec) });
+      state.ui.push({ pluginId, surface, spec: normalized });
     };
 
     const ctx: HelmPluginContext = {
       pluginId,
-      dataDir: this.options.dataDir,
+      dataDir: state.dataDir,
       getConfig: () => (self.configStore ? self.configStore.get(pluginId) : {}) as never,
       configSchema: (schema) => {
+        assertOpen('声明 configSchema');
         if (state.configSchema) {
           throw new HelmError('duplicate_config_schema', `插件 ${pluginId} 重复声明 configSchema`, 409);
         }
@@ -661,6 +890,7 @@ export class PluginHost {
       },
 
       action: <TIn, TOut>(spec: PluginActionSpec<TIn, TOut>) => {
+        assertOpen(`声明动作 ${spec.id}`);
         self.assertValidId('动作', spec.id);
         if (typeof spec.description !== 'string' || spec.description.length === 0) {
           throw new HelmError('invalid_action_spec', `插件 ${pluginId} 动作 ${spec.id} 缺少 description`, 400);
@@ -690,6 +920,10 @@ export class PluginHost {
         if (state.actions.has(spec.id)) {
           throw new HelmError('duplicate_action', `插件 ${pluginId} 重复声明动作 ${spec.id}`, 409);
         }
+        // Schema 预编译：注册期即暴露 $async/非法 Schema（invalid_plugin_schema），
+        // 绝不留到首次调用才发现（异步校验函数返回 Promise 会被当 truthy 放行）
+        assertSchemaCompilable(spec.inputSchema);
+        assertSchemaCompilable(spec.outputSchema);
         state.actions.set(spec.id, {
           pluginId,
           id: spec.id,
@@ -698,12 +932,22 @@ export class PluginHost {
           outputSchema: spec.outputSchema,
           cli: spec.cli,
           exposeAsTool: spec.exposeAsTool === true,
+          toolAlias: actionToolAlias(pluginId, spec.id),
           handler: spec.handler as (input: never, context: PluginActionContext) => unknown,
         });
       },
 
       tool: <TIn>(spec: PluginToolSpec<TIn>) => {
+        assertOpen(`声明工具 ${spec.name}`);
         self.assertValidId('工具', spec.name);
+        // 工具名直发模型 provider（pi-ai 原样透传），必须 provider-safe
+        if (!PROVIDER_SAFE_TOOL_NAME.test(spec.name)) {
+          throw new HelmError(
+            'invalid_tool_spec',
+            `插件 ${pluginId} 工具名 ${spec.name} 必须匹配 ${PROVIDER_SAFE_TOOL_NAME.source}（provider 函数名约束）`,
+            400,
+          );
+        }
         if (typeof spec.description !== 'string' || spec.description.length === 0) {
           throw new HelmError('invalid_tool_spec', `插件 ${pluginId} 工具 ${spec.name} 缺少 description`, 400);
         }
@@ -716,10 +960,12 @@ export class PluginHost {
         if (state.tools.has(spec.name)) {
           throw new HelmError('duplicate_tool', `插件 ${pluginId} 重复声明工具 ${spec.name}`, 409);
         }
+        assertSchemaCompilable(spec.inputSchema);
         state.tools.set(spec.name, { pluginId, spec: spec as PluginToolSpec });
       },
 
       route: (spec: PluginRouteSpec) => {
+        assertOpen(`声明路由 ${spec.path}`);
         if (typeof spec.path !== 'string' || !spec.path.startsWith('/')) {
           throw new HelmError(
             'invalid_route_path',
@@ -727,7 +973,15 @@ export class PluginHost {
             400,
           );
         }
-        // 限定插件专属前缀之下，禁止挂到内核或其他插件命名空间
+        if (spec.path.includes('?') || spec.path.includes('#')) {
+          throw new HelmError(
+            'invalid_route_path',
+            `插件 ${pluginId} 路由 ${spec.method} ${spec.path} 不允许携带查询串或片段`,
+            400,
+          );
+        }
+        // 限定插件专属前缀 /api/plugins/<encodeURIComponent(pluginId)>/routes/...
+        // 之下（与 HTTP 代理命名空间一致），禁止挂到内核或其他插件命名空间
         const prefix = pluginRoutePrefix(pluginId);
         if (spec.path !== prefix && !spec.path.startsWith(prefix + '/')) {
           throw new HelmError(
@@ -736,6 +990,28 @@ export class PluginHost {
             403,
           );
         }
+        // 拒绝点段（含百分号编码形态）与空段，防止路径穿越越出命名空间
+        const rest = spec.path.slice(prefix.length);
+        if (rest.length > 0) {
+          const segments = rest.slice(1).split('/');
+          for (const seg of segments) {
+            if (seg.length === 0) {
+              throw new HelmError(
+                'invalid_route_path',
+                `插件 ${pluginId} 路由 ${spec.path} 不允许空路径段（// 或尾斜杠）`,
+                400,
+              );
+            }
+            const decoded = seg.includes('%') ? safeDecodeSegment(seg) : seg;
+            if (decoded === '.' || decoded === '..' || decoded.includes('/')) {
+              throw new HelmError(
+                'invalid_route_path',
+                `插件 ${pluginId} 路由 ${spec.path} 不允许点段（. / ..）或编码斜杠`,
+                400,
+              );
+            }
+          }
+        }
         if (typeof spec.handler !== 'function') {
           throw new HelmError('invalid_route_handler', `插件 ${pluginId} 路由 ${spec.path} 缺少 handler`, 400);
         }
@@ -743,19 +1019,28 @@ export class PluginHost {
       },
 
       doc: <TState>(name: string, initial: TState): PluginDocHandle<TState> => {
+        assertOpen(`声明 doc ${name}`);
         self.assertValidId('doc', name);
         if (state.docs.has(name)) {
           throw new HelmError('duplicate_doc', `插件 ${pluginId} 重复声明 doc ${name}`, 409);
         }
         const key = `${pluginId}:${name}`;
         const store = self.options.docs;
+        // 持久层为 JSON 语义（state.sqlite / 文件）：初始值边界即校验 JSON-safe
+        const normalizedInitial = jsonClone(initial);
         const handle: PluginDocHandle<TState> = {
-          // get 返回 clone：防止未 set 的原地突变污染持久层
-          get: () => structuredClone(store.get<TState>(key, initial)),
-          set: (next) => store.set(key, structuredClone(next)),
+          // get 返回 JSON-safe 校验后的深拷贝：防止未 set 的原地突变污染持久层
+          get: () => {
+            assertDocUsable(name);
+            return jsonClone(store.get<TState>(key, normalizedInitial));
+          },
+          set: (next) => {
+            assertDocUsable(name);
+            store.set(key, jsonClone(next));
+          },
           update: (fn) => {
-            const current = store.get<TState>(key, initial);
-            store.set(key, structuredClone(fn(structuredClone(current))));
+            assertDocUsable(name);
+            store.set(key, jsonClone(fn(jsonClone(store.get<TState>(key, normalizedInitial)))));
           },
         };
         state.docs.set(name, handle as PluginDocHandle<unknown>);
@@ -763,6 +1048,7 @@ export class PluginHost {
       },
 
       service: (spec: PluginServiceSpec) => {
+        assertOpen(`声明服务 ${spec.id}`);
         self.assertValidId('服务', spec.id);
         if (state.services.some((s) => s.id === spec.id)) {
           throw new HelmError('duplicate_service', `插件 ${pluginId} 重复声明服务 ${spec.id}`, 409);
@@ -789,6 +1075,14 @@ export class PluginHost {
     return ctx;
   }
 
+  /** 生命周期操作最终成功后向宿主发 plugin.changed 事件（失败不伪报成功）。 */
+  private emitPluginChanged(state: PluginState): void {
+    this.options.host.emitEvent('plugin.changed', {
+      type: 'plugin.changed',
+      plugin: this.summaryOf(state),
+    });
+  }
+
   private toManifest(entry: ActionEntry): ActionManifest {
     const manifest: ActionManifest = {
       pluginId: entry.pluginId,
@@ -808,10 +1102,12 @@ export class PluginHost {
     return state;
   }
 
-  private assertEnabled(state: PluginState): void {
-    if (!state.enabled) {
-      throw new HelmError('plugin_disabled', `插件 ${state.definition.id} 未启用`, 409, {
+  /** 对外可用 = 已启用且不在 definePlugin / 停用过渡态。 */
+  private assertActive(state: PluginState): void {
+    if (!state.enabled || state.phase !== 'idle') {
+      throw new HelmError('plugin_disabled', `插件 ${state.definition.id} 未启用或正在切换启用状态`, 409, {
         pluginId: state.definition.id,
+        phase: state.phase,
       });
     }
   }
@@ -859,6 +1155,19 @@ export class PluginHost {
     if (this.disposed) {
       throw new HelmError('plugin_host_disposed', 'PluginHost 已 dispose', 409);
     }
+  }
+}
+
+function pluginRoutePrefix(pluginId: string): string {
+  return `/api/plugins/${encodeURIComponent(pluginId)}/routes`;
+}
+
+/** 解码单个路径段；解码失败（非法百分号序列）按原样处理，由点段检查兜底。 */
+function safeDecodeSegment(seg: string): string {
+  try {
+    return decodeURIComponent(seg);
+  } catch {
+    return seg;
   }
 }
 

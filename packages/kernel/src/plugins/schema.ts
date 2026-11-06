@@ -16,6 +16,17 @@ const compiledCache = new WeakMap<JsonSchema, ValidateFunction>();
 function compile(schema: JsonSchema): ValidateFunction {
   const cached = compiledCache.get(schema);
   if (cached) return cached;
+  // 核心接口全为同步校验：$async Schema 的校验函数返回 Promise，
+  // 同步 boolean 判断会把 Promise 当 truthy 放行非法输入并产生 unhandled
+  // rejection——在编译边界显式拒绝，绝不引入异步路径。
+  if ((schema as { $async?: unknown }).$async !== undefined) {
+    throw new HelmError(
+      'invalid_plugin_schema',
+      `插件声明的 JSON Schema 含 $async：核心同步校验边界不支持异步 Schema`,
+      500,
+      { schema },
+    );
+  }
   let fn: ValidateFunction;
   try {
     fn = ajv.compile(schema);
@@ -29,6 +40,11 @@ function compile(schema: JsonSchema): ValidateFunction {
   }
   compiledCache.set(schema, fn);
   return fn;
+}
+
+/** 注册期预编译检查：$async / 非法 Schema 在声明边界即报 invalid_plugin_schema（触发整体回滚），别等首次调用。 */
+export function assertSchemaCompilable(schema: JsonSchema): void {
+  compile(schema);
 }
 
 function formatErrors(errors: Array<{ instancePath?: string; message?: string }> | null | undefined): string {

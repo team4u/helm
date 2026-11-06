@@ -5,4 +5,4 @@
 export * from './plugin-host.js';
 export { HookPipeline, HOOK_ALLOWED_ACTIONS, assertHookPayload, type RegisteredHook } from './hooks.js';
 export { PluginTaskTracker } from './tracking.js';
-export { validatePluginInput, validatePluginOutput, validateOrThrow } from './schema.js';
+export { validatePluginInput, validatePluginOutput, validateOrThrow, assertSchemaCompilable } from './schema.js';

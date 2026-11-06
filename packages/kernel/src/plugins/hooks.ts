@@ -66,8 +66,23 @@ function reqString(o: Record<string, unknown>, k: string): string | null {
   return typeof o[k] === 'string' && (o[k] as string).length > 0 ? null : `字段 ${k} 必须是非空字符串`;
 }
 
-function reqNumber(o: Record<string, unknown>, k: string): string | null {
-  return typeof o[k] === 'number' && Number.isFinite(o[k] as number) ? null : `字段 ${k} 必须是有限数字`;
+/** 字符串类型检查但允许空串：model 未配置时是合法的空串，由 submitInput 负责 model_not_configured。 */
+function strAllowEmpty(o: Record<string, unknown>, k: string): string | null {
+  return typeof o[k] === 'string' ? null : `字段 ${k} 必须是字符串（允许空串）`;
+}
+
+function reqPositiveInt(o: Record<string, unknown>, k: string): string | null {
+  const v = o[k];
+  return typeof v === 'number' && Number.isInteger(v) && (v as number) > 0
+    ? null
+    : `字段 ${k} 必须是正整数`;
+}
+
+function reqNonNegativeInt(o: Record<string, unknown>, k: string): string | null {
+  const v = o[k];
+  return typeof v === 'number' && Number.isInteger(v) && (v as number) >= 0
+    ? null
+    : `字段 ${k} 必须是非负整数`;
 }
 
 function reqArray(o: Record<string, unknown>, k: string): string | null {
@@ -83,22 +98,22 @@ type PayloadCheck = (v: unknown) => string | null;
 function checkConversationSummary(v: unknown): string | null {
   if (!isObj(v)) return 'conversation 必须是对象';
   return (
-    reqNumber(v, 'id') ??
+    reqPositiveInt(v, 'id') ??
     reqString(v, 'title') ??
     reqString(v, 'profileId') ??
     reqArray(v, 'tags') ??
     reqString(v, 'cwd') ??
-    reqString(v, 'model') ??
+    strAllowEmpty(v, 'model') ??
     (['working', 'blocked', 'done', 'idle', 'error'].includes(String(v.status))
       ? null
       : '字段 status 必须是五态之一') ??
-    reqNumber(v, 'stateChangeSeq') ??
-    reqNumber(v, 'completionSeq') ??
+    reqNonNegativeInt(v, 'stateChangeSeq') ??
+    reqNonNegativeInt(v, 'completionSeq') ??
     (typeof v.unread === 'boolean' ? null : '字段 unread 必须是布尔值') ??
     (typeof v.pinned === 'boolean' ? null : '字段 pinned 必须是布尔值') ??
-    reqNumber(v, 'pendingAskCount') ??
-    reqNumber(v, 'createdAt') ??
-    reqNumber(v, 'updatedAt')
+    reqNonNegativeInt(v, 'pendingAskCount') ??
+    reqNonNegativeInt(v, 'createdAt') ??
+    reqNonNegativeInt(v, 'updatedAt')
   );
 }
 
@@ -106,23 +121,29 @@ function checkConversationInput(v: unknown): string | null {
   if (!isObj(v)) return 'inputs 的每项必须是 ConversationInput';
   return (
     reqString(v, 'id') ??
-    reqString(v, 'text') ??
+    strAllowEmpty(v, 'text') ??
     (['human', 'agent', 'trigger'].includes(String(v.origin)) ? null : '字段 origin 必须是 human|agent|trigger') ??
     (v.whenBusy === undefined || ['steer', 'followUp', 'reject'].includes(String(v.whenBusy))
       ? null
       : '字段 whenBusy 若存在必须是 steer|followUp|reject') ??
-    reqNumber(v, 'createdAt')
+    reqNonNegativeInt(v, 'createdAt')
   );
 }
 
 const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
   trigger: (v) => {
     if (!isObj(v)) return '必须是 ExternalTriggerEnvelope 对象';
-    return reqString(v, 'source') ?? reqString(v, 'text') ?? reqNumber(v, 'createdAt') ?? optString(v, 'threadKey');
+    return (
+      reqString(v, 'id') ??
+      reqString(v, 'source') ??
+      reqString(v, 'text') ??
+      reqNonNegativeInt(v, 'createdAt') ??
+      optString(v, 'threadKey')
+    );
   },
   input: (v) => {
     if (!isObj(v)) return '必须是对象';
-    return reqNumber(v, 'conversationId') ?? checkConversationInput(v.input);
+    return reqPositiveInt(v, 'conversationId') ?? checkConversationInput(v.input);
   },
   before_turn: (v) => {
     if (!isObj(v)) return '必须是对象';
@@ -152,7 +173,7 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
   tool_call: (v) => {
     if (!isObj(v)) return '必须是对象';
     return (
-      reqNumber(v, 'conversationId') ??
+      reqPositiveInt(v, 'conversationId') ??
       reqString(v, 'callId') ??
       reqString(v, 'toolName') ??
       (isObj(v.input) ? null : '字段 input 必须是对象')
@@ -161,7 +182,7 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
   tool_result: (v) => {
     if (!isObj(v)) return '必须是对象';
     return (
-      reqNumber(v, 'conversationId') ??
+      reqPositiveInt(v, 'conversationId') ??
       reqString(v, 'callId') ??
       reqString(v, 'toolName') ??
       (isObj(v.input) ? null : '字段 input 必须是对象') ??
@@ -171,7 +192,7 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
   agent_spawn: (v) => {
     if (!isObj(v)) return '必须是 AgentSpawnRequest 对象';
     return (
-      reqNumber(v, 'parentConversationId') ??
+      reqPositiveInt(v, 'parentConversationId') ??
       reqString(v, 'prompt') ??
       optString(v, 'agentId') ??
       optString(v, 'agentType') ??
@@ -188,7 +209,8 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
   },
   turn_settled: (v) => {
     if (!isObj(v)) return '必须是 TurnSettledPayload 对象';
-    let err = checkConversationSummary(v.conversation) ?? reqArray(v, 'inputs') ?? optString(v, 'error') ?? reqNumber(v, 'settledAt');
+    let err =
+      checkConversationSummary(v.conversation) ?? reqArray(v, 'inputs') ?? optString(v, 'error') ?? reqNonNegativeInt(v, 'settledAt');
     if (err) return err;
     if (!['completed', 'failed', 'aborted'].includes(String(v.outcome))) {
       return '字段 outcome 必须是 completed|failed|aborted';
@@ -198,7 +220,7 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
   },
   watchdog_tick: (v) => {
     if (!isObj(v)) return '必须是 WatchdogTickHookPayload 对象';
-    let err = reqNumber(v, 'timestamp') ?? reqArray(v, 'conversations') ?? reqArray(v, 'probes');
+    let err = reqNonNegativeInt(v, 'timestamp') ?? reqArray(v, 'conversations') ?? reqArray(v, 'probes');
     if (err) return err;
     for (const c of v.conversations as unknown[]) if ((err = checkConversationSummary(c))) return err;
     for (const p of v.probes as unknown[]) {
@@ -264,15 +286,19 @@ export class HookPipeline<K extends HookName> {
 
   /**
    * 执行整条管道，返回短路结果（若有）与最终载荷。
+   * isParticipant 为空时执行全部；否则只执行返回 true 的处理器（宿主用它
+   * 隔离未启用/正停用插件，绝不让其 handler 被调用）。
    * 任一处理器异常或产物违约都显式抛出，绝不静默。
    */
   async run(
     payload: HookPayloadMap[K],
+    isParticipant?: (hook: RegisteredHook<K>) => boolean,
   ): Promise<{ finalPayload: HookPayloadMap[K]; shortCircuit?: Extract<HookResult<unknown>, { action: 'handled' | 'block' }> }> {
     assertHookPayload(this.name, payload);
     const allowed = HOOK_ALLOWED_ACTIONS[this.name];
     let current = payload;
     for (const hook of this.entries()) {
+      if (isParticipant && !isParticipant(hook)) continue;
       let result: HookResult<HookPayloadMap[K]> | void;
       try {
         result = await hook.handler(current);
