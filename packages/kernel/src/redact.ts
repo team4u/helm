@@ -24,7 +24,11 @@ export function redactJsonValue(value: unknown, redact: (text: string) => string
       if (prototype !== Object.prototype && prototype !== null) {
         throw new HelmError('invalid_json_value', '输出不得包含非 JSON 对象', 500);
       }
-      return Object.fromEntries(Object.entries(current).map(([key, item]) => [key, visit(item)]));
+      const entries = Object.entries(current).map(([key, item]) => [redact(key), visit(item)] as const);
+      if (new Set(entries.map(([key]) => key)).size !== entries.length) {
+        throw new HelmError('redacted_key_conflict', '脱敏后的输出字段发生冲突', 500);
+      }
+      return Object.fromEntries(entries);
     } finally {
       visiting.delete(current);
     }
