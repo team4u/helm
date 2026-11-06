@@ -78,7 +78,8 @@ test('直接输入含受管 token 与 stash 秘密：text/meta/标题/entry/FTS/
   const env = await makeEnv('helm-input-redact-direct-')
   try {
     // 会话级 stash 秘密（marker 形态：redact 后为 [REDACTED:stash:<uuid>]）。
-    const placeholder = env.kernel.stash.put(ROOT_CONVERSATION_ID, 'API_KEY', 'sk-secret-plain-value-9f3k')
+    const conversation = await env.kernel.createConversation()
+    const placeholder = env.kernel.stash.put(conversation.id, 'API_KEY', 'sk-secret-plain-value-9f3k')
     assert.ok(placeholder.startsWith('[REDACTED:stash:'))
 
     const requests: string[] = []
@@ -90,11 +91,11 @@ test('直接输入含受管 token 与 stash 秘密：text/meta/标题/entry/FTS/
     ])
 
     await env.kernel.submitInput(
-      ROOT_CONVERSATION_ID,
+      conversation.id,
       `凭据是 ${env.managedToken} 与 sk-secret-plain-value-9f3k，另外 meta 也带`,
       { meta: { token: env.managedToken, key: 'sk-secret-plain-value-9f3k' } },
     )
-    await env.kernel.waitForIdle(ROOT_CONVERSATION_ID)
+    await env.kernel.waitForIdle(conversation.id)
 
     // 1) 模型请求（SDK content）不得含任何明文。
     assert.equal(requests.length, 1, '应捕获一次模型请求')
@@ -110,9 +111,15 @@ test('直接输入含受管 token 与 stash 秘密：text/meta/标题/entry/FTS/
     assert.deepEqual(sqliteTablesContaining(dbPath, 'sk-secret-plain-value-9f3k'), [], 'state.sqlite 不得含 stash 秘密明文')
 
     // 3) 标题脱敏（首输入自动标题取 effectiveText）。
-    const conv = env.kernel.listConversations().find((c) => c.id === ROOT_CONVERSATION_ID)
-    assert.ok(conv, '根会话应存在')
+    const conv = env.kernel.getConversation(conversation.id)
+    assert.ok(conv.title.includes('[REDACTED]'), '首输入应生成包含脱敏文本的标题')
     assert.ok(!conv.title.includes(env.managedToken), '自动标题不得含受管 Token 明文')
+    const detail = await env.kernel.getConversationDetail(conversation.id)
+    const input = detail.entries.find((entry) => entry.kind === 'helm.input')?.data as
+      { text: string; meta: Record<string, unknown> } | undefined
+    assert.ok(input, '详情应保留真实输入条目')
+    assert.equal(input.text, `凭据是 [REDACTED] 与 ${placeholder}，另外 meta 也带`)
+    assert.deepEqual(input.meta, { token: '[REDACTED]', key: placeholder })
 
     // 4) FTS 检索得到脱敏文本而非明文。
     const hits = await env.kernel.search('[REDACTED]')
