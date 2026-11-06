@@ -12,7 +12,7 @@ export interface Profile {
   name?: string
   /** Profile 绑定的系统提示词与记忆由文件承载，此处仅留扩展位。 */
   model?: string
-  /** 绑定外部运行时；缺省在 pi-durable 原生会话中执行。 */
+  /** 作为 subagent / 工作流节点调用时的外部执行配置；持久会话仍由 pi-durable 承载。 */
   runtime?: ProfileRuntime
   tags?: string[]
 }
