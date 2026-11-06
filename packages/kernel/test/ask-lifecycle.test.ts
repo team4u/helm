@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AskService } from '../src/runtime/asks.js'
 import { HelmStore } from '../src/runtime/store.js'
-import { openHelmDatabase } from '../src/runtime/sqlite.js'
+import { openHelmDatabase, type HelmDatabase } from '../src/runtime/sqlite.js'
 import { SecretStash } from '../src/services/index.js'
 
 interface TestContext {
@@ -33,6 +33,8 @@ interface TestContext {
   stash: SecretStash
   events: Array<{ type: string; payload: unknown }>
   pendingChanged: number[]
+  /** 依次关闭 store 与底层 db（finally 必须调用，否则连接泄漏）。 */
+  close(): Promise<void>
 }
 
 let rootDir: string
@@ -67,7 +69,17 @@ async function openService(
     onConvPendingChanged: (id) => pendingChanged.push(id),
     validateConversation: options.validateConversation,
   })
-  return { service, store, stash, events, pendingChanged }
+  return {
+    service,
+    store,
+    stash,
+    events,
+    pendingChanged,
+    async close() {
+      await store.close()
+      await db.close()
+    },
+  }
 }
 
 /** 断言 promise 在 ms 内已结算（防悬挂回归：悬挂时超时失败并给出诊断）。 */
@@ -124,7 +136,7 @@ describe('Ask 生命周期：同步销单/作答不悬挂', { timeout: 60_000 },
       assert.deepEqual(result.answers, {})
       assert.equal(ctx.store.getAsk(result.id)!.status, 'superseded')
     } finally {
-      await ctx.store.close()
+      await ctx.close()
     }
   })
 
@@ -146,7 +158,7 @@ describe('Ask 生命周期：同步销单/作答不悬挂', { timeout: 60_000 },
       assert.equal(result.status, 'answered')
       assert.deepEqual(result.answers, { x: '同步答案' })
     } finally {
-      await ctx.store.close()
+      await ctx.close()
     }
   })
 
@@ -167,7 +179,7 @@ describe('Ask 生命周期：同步销单/作答不悬挂', { timeout: 60_000 },
       assert.equal(r2.status, 'answered')
       assert.deepEqual(r2.answers, { x: 'v' })
     } finally {
-      await ctx.store.close()
+      await ctx.close()
     }
   })
 })
@@ -200,7 +212,7 @@ describe('Ask 三态终值与异常边界', { timeout: 60_000 }, () => {
       assert.equal(superseded.status, 'superseded')
       assert.deepEqual(superseded.answers, {})
     } finally {
-      await ctx.store.close()
+      await ctx.close()
     }
   })
 
@@ -228,7 +240,7 @@ describe('Ask 三态终值与异常边界', { timeout: 60_000 }, () => {
       await ctx.service.cancelAsk(ask.id)
       await pa
     } finally {
-      await ctx.store.close()
+      await ctx.close()
     }
   })
 
@@ -253,7 +265,7 @@ describe('Ask 三态终值与异常边界', { timeout: 60_000 }, () => {
       const result = await assertSettlesWithin(ok, 2_000, '失败回收后重建')
       assert.equal(result.status, 'answered')
     } finally {
-      await ctx.store.close()
+      await ctx.close()
     }
   })
 })
@@ -303,7 +315,7 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
       setStoreErrorReporter((error) => {
         console.error('[helm] store persistence error:', error)
       })
-      await ctx.store.close()
+      await ctx.close()
     }
   })
 
@@ -334,7 +346,111 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
       setStoreErrorReporter((error) => {
         console.error('[helm] store persistence error:', error)
       })
-      await ctx.store.close()
+      await ctx.close()
+    }
+  })
+
+  it('终态同步 putAsk 抛错：answer/cancel reject，createAsk waiter 同错误 reject 不悬挂', { timeout: 60_000 }, async () => {
+    const ctx = await openService()
+    try {
+      const askPromise = ctx.service.createAsk(baseSpec)
+      await new Promise((r) => setTimeout(r, 20))
+      const ask = ctx.service.listAsks('pending')[0]!
+      // 同步镜像写拒绝（store closed/前置检查抛出），发生在 flush 之前。
+      const raw = ctx.store as unknown as { putAsk: (row: unknown) => void }
+      const original = raw.putAsk.bind(ctx.store)
+      raw.putAsk = () => {
+        throw new HelmError('store_closed', '模拟终态同步写入失败', 409)
+      }
+      await assert.rejects(
+        () => ctx.service.answerAsk(ask.id, { x: 'v' }),
+        (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
+      )
+      // createAsk waiter 不得悬挂、不得假终态：同一错误 reject。
+      await assert.rejects(
+        () => assertSettlesWithin(askPromise, 2_000, '终态同步 put 失败'),
+        (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
+      )
+      raw.putAsk = original
+      // cancel 路径同样 reject 不悬挂（预分配 id 精确定位，避免选中旧 pending）。
+      const p2 = ctx.service.createAsk({ ...baseSpec, id: 'cancel-put-fail', title: '将取消' })
+      await new Promise((r) => setTimeout(r, 20))
+      assert.equal(ctx.service.listAsks('pending').find((a) => a.id === 'cancel-put-fail') !== undefined, true)
+      raw.putAsk = () => {
+        throw new HelmError('store_closed', '模拟终态同步写入失败', 409)
+      }
+      await assert.rejects(
+        () => ctx.service.cancelAsk('cancel-put-fail'),
+        (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
+      )
+      await assert.rejects(
+        () => assertSettlesWithin(p2, 2_000, 'cancel 同步 put 失败'),
+        (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
+      )
+      raw.putAsk = original
+    } finally {
+      await ctx.close()
+    }
+  })
+
+  it('ask.resolved 发布器抛错：answer reject，createAsk waiter 同错误 reject 不悬挂', { timeout: 60_000 }, async () => {
+    // 落盘成功但事件回调抛错：也必须如实失败，不能装作已结算。
+    let resolver: ((type: string, payload: unknown) => void) | undefined
+    const db = await openHelmDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
+    const store = new HelmStore(db)
+    await store.load()
+    const stash = new SecretStash()
+    const events: Array<{ type: string; payload: unknown }> = []
+    const failing = new AskService({
+      store,
+      stash,
+      onEvent: (type, payload) => {
+        events.push({ type, payload })
+        if (type === 'ask.resolved') throw new Error('事件发布器故障')
+        resolver?.(type, payload)
+      },
+      onConvPendingChanged: () => {},
+    })
+    try {
+      const askPromise = failing.createAsk(baseSpec)
+      await new Promise((r) => setTimeout(r, 20))
+      const ask = failing.listAsks('pending')[0]!
+      await assert.rejects(
+        () => failing.answerAsk(ask.id, { x: 'v' }),
+        (err: unknown) => err instanceof Error && String(err.message).includes('事件发布器故障'),
+      )
+      // 落盘已成功但事件失败：waiter 以同一错误 reject（不悬挂、不假 answered）。
+      await assert.rejects(
+        () => assertSettlesWithin(askPromise, 2_000, '事件发布失败'),
+        (err: unknown) => err instanceof Error && String(err.message).includes('事件发布器故障'),
+      )
+    } finally {
+      await store.close()
+      await db.close()
+    }
+  })
+
+  it('cancelByConversation 任一失败：如实 reject，不得静默成功', { timeout: 60_000 }, async () => {
+    const ctx = await openService()
+    try {
+      const p1 = ctx.service.createAsk(baseSpec)
+      await new Promise((r) => setTimeout(r, 20))
+      const p2 = ctx.service.createAsk({ ...baseSpec, title: '第二个' })
+      await new Promise((r) => setTimeout(r, 20))
+      // 注入结算 UPDATE 落盘失败（首条创建的 INSERT settled_at=null 不拦）。
+      patchRun(ctx.store, (sql, params) => sql.includes('helm_asks') && typeof params[8] === 'number')
+      await assert.rejects(
+        () => ctx.service.cancelByConversation(1),
+        (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
+      )
+      // 失败条的 waiter 已被 settle 以 failure 结算（不悬挂、不假终态）。
+      const outcomes = await Promise.allSettled([p1, p2])
+      const rejected = outcomes.filter((o) => o.status === 'rejected').length
+      assert.ok(rejected >= 1, '至少一条受影响 ask 的 waiter 必须显式失败')
+      // 不能出现任何一例「级联取消成功 resolve 成 cancelled」的同时整体却报成功。
+      patchRun(ctx.store, () => false)
+    } finally {
+      await ctx.close()
     }
   })
 })
@@ -353,7 +469,7 @@ describe('Ask 预分配 ID', { timeout: 60_000 }, () => {
       assert.equal(result.id, 'pre-allocated-1')
       assert.equal(result.status, 'answered')
     } finally {
-      await ctx.store.close()
+      await ctx.close()
     }
   })
 
@@ -388,7 +504,7 @@ describe('Ask 预分配 ID', { timeout: 60_000 }, () => {
         (err: unknown) => err instanceof HelmError && err.code === 'ask_id_conflict',
       )
     } finally {
-      await ctx.store.close()
+      await ctx.close()
     }
   })
 
@@ -407,7 +523,7 @@ describe('Ask 预分配 ID', { timeout: 60_000 }, () => {
       )
       assert.equal(ctx.service.listAsks().length, 0)
     } finally {
-      await ctx.store.close()
+      await ctx.close()
     }
   })
 })
@@ -448,7 +564,7 @@ describe('Ask CAS 语义保持', { timeout: 60_000 }, () => {
       const r2 = await assertSettlesWithin(pb, 2_000, 'seq 一致 answer')
       assert.equal(r2.status, 'answered')
     } finally {
-      await ctx.store.close()
+      await ctx.close()
     }
   })
 })
@@ -481,7 +597,7 @@ describe('Ask secret marker 边界', { timeout: 60_000 }, () => {
       // 会话环境可取回明文（进程内可信方）。
       assert.equal(ctx.stash.envFor(1)['API_KEY'], 'plain-secret-value')
     } finally {
-      await ctx.store.close()
+      await ctx.close()
     }
   })
 
@@ -530,7 +646,7 @@ describe('Ask secret marker 边界', { timeout: 60_000 }, () => {
         (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
       )
     } finally {
-      await ctx.store.close()
+      await ctx.close()
     }
   })
 })

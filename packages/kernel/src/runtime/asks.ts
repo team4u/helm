@@ -14,6 +14,9 @@
  * - 真实持久化边界在 store 尾链：创建与终态结算在 resolve/发布终态事件前
  *   await store.flushPublic()，SQL 失败（镜像已写但落盘失败）以显式
  *   store_flush_failed reject 结算 createAsk——绝不返回假 answered；
+ *   终态 putAsk（含同步镜像拒绝）/落盘/回调/事件发布任一失败，均取出并
+ *   清空 waiters 逐一 {failure} 结算（不悬挂、不假终态）后如实上抛；
+ *   cancelByConversation 尝试取消全部，任一失败如实 reject（不静默吞 IO）；
  * - envName 保留声明原样（不 toUpperCase 合并折叠），同会话内映射后碰撞明确拒绝；
  * - answer 校验未知字段/非 string/select 越界/confirm 非法值；secret 空值不 stash
  *   （空值 stash 会产生无效脱敏条目）；
@@ -127,11 +130,21 @@ export class AskService {
 
     // waiter 必须先于一切可见副作用注册：ask.upsert 订阅者可能在事件回调内
     // 同步 cancel/answer（settle 即刻排队通知），晚注册会让 promise 永久悬挂。
-    let release!: () => void
+    // push 一次性自移除：正常终态 resolve、failure（put/落盘/发布失败）reject
+    // 同一错误——不吞调用方错误，也不产生未观察 rejection。
+    let push!: (outcome: WaiterOutcome) => void
     const settled = new Promise<AskResult>((resolve, reject) => {
-      const push = (outcome: WaiterOutcome) => {
+      let done = false
+      push = (outcome: WaiterOutcome) => {
+        if (done) return
+        done = true
+        const current = this.waiters.get(id)
+        if (current) {
+          const index = current.indexOf(push)
+          if (index >= 0) current.splice(index, 1)
+          if (current.length === 0) this.waiters.delete(id)
+        }
         if ('failure' in outcome) {
-          // 宿主/持久化失败：显式 reject，绝不以假终态 resolve。
           reject(outcome.failure)
           return
         }
@@ -144,36 +157,31 @@ export class AskService {
       const list = this.waiters.get(id) ?? []
       list.push(push)
       this.waiters.set(id, list)
-      release = () => {
-        const current = this.waiters.get(id)
-        if (!current) return
-        const index = current.indexOf(push)
-        if (index >= 0) current.splice(index, 1)
-        if (current.length === 0) this.waiters.delete(id)
-      }
     })
 
-    try {
-      this.store.putAsk({
-        id,
-        conversationId: spec.conversationId,
-        ownerPluginId: spec.ownerPluginId,
-        specJson: JSON.stringify(full),
-        status: 'pending',
-        expectedStateSeq: spec.expectedStateSeq,
-        createdAt,
-      })
-      // 真实落盘边界：putAsk 只写镜像 + 入队 SQL；flushPublic 失败时镜像已写
-      // 但数据不保证完整，必须显式 reject（不发布 ask.upsert、不假成功）。
-      await this.store.flushPublic()
-      this.onConvPendingChanged(spec.conversationId)
-      this.onEvent('ask.upsert', full)
-    } catch (error) {
-      // 写入/发布失败：回收 waiter，绝不留悬挂等待者，也绝不装作创建成功。
-      release()
-      throw error
-    }
-    return await settled
+    // 异步初始化失败以同一错误 reject settled（调用方从 createAsk 返回的
+    // promise 收到失败，不悬挂、不假成功）；settled 被 return 观察不泄漏。
+    void (async () => {
+      try {
+        this.store.putAsk({
+          id,
+          conversationId: spec.conversationId,
+          ownerPluginId: spec.ownerPluginId,
+          specJson: JSON.stringify(full),
+          status: 'pending',
+          expectedStateSeq: spec.expectedStateSeq,
+          createdAt,
+        })
+        // 真实落盘边界：putAsk 只写镜像 + 入队 SQL；flushPublic 失败时镜像已写
+        // 但数据不保证完整，必须显式失败（不发布 ask.upsert、不假成功）。
+        await this.store.flushPublic()
+        this.onConvPendingChanged(spec.conversationId)
+        this.onEvent('ask.upsert', full)
+      } catch (error) {
+        push({ failure: error })
+      }
+    })()
+    return settled
   }
 
   /** 提交答案：CAS 检查 -> 值校验 -> secret 入 stash -> 结算。 */
@@ -256,17 +264,13 @@ export class AskService {
     }
   }
 
-  /** 按会话取消全部 pending（删除会话级联用）；等待全部结算落盘完成。 */
+  /**
+   * 按会话取消全部 pending（删除会话级联用）：尝试取消全部，任一失败如实
+   * reject（不静默吞 IO 失败）；失败 ask 的 waiter 已被 settle 以 failure 结算。
+   */
   async cancelByConversation(conversationId: number, reason: 'cancelled' | 'superseded' = 'cancelled'): Promise<void> {
     const pending = this.listPendingByConversation(conversationId)
-    await Promise.all(
-      pending.map((ask) => this.settle(ask.id, reason).then(
-        () => undefined,
-        // 级联取消在 deleteConversation 内执行：单条失败不阻断其余清理，
-        // 错误已经 store fail 语义上报；这里吞掉避免 unhandled rejection。
-        () => undefined,
-      )),
-    )
+    await Promise.all(pending.map((ask) => this.settle(ask.id, reason)))
   }
 
   private resolveTargetSeq(askId: string): number | undefined {
@@ -284,34 +288,34 @@ export class AskService {
   ): Promise<AskSpec> {
     const row = this.store.getAsk(id)
     if (!row) throw new HelmError('not_found', `AskDoc 不存在：${id}`, 404)
-    const spec = JSON.parse(row.specJson) as AskSpec
-    const settledSpec: AskSpec = { ...spec, status }
-    // cancel/superseded 不写假 answers（result 仅 answered 有值）。
-    const answers = status === 'answered' ? (options.answers ?? {}) : undefined
-    this.store.putAsk({
-      ...row,
-      status,
-      specJson: JSON.stringify(settledSpec),
-      resultJson: answers !== undefined ? JSON.stringify(answers) : undefined,
-      settledAt: Date.now(),
-    })
     try {
-      // 终态必须真实落盘后才发布事件/通知 waiter：SQL 失败时绝不返回假 answered。
+      const spec = JSON.parse(row.specJson) as AskSpec
+      const settledSpec: AskSpec = { ...spec, status }
+      // cancel/superseded 不写假 answers（result 仅 answered 有值）。
+      const answers = status === 'answered' ? (options.answers ?? {}) : undefined
+      this.store.putAsk({
+        ...row,
+        status,
+        specJson: JSON.stringify(settledSpec),
+        resultJson: answers !== undefined ? JSON.stringify(answers) : undefined,
+        settledAt: Date.now(),
+      })
+      // 终态必须真实落盘后才发布事件/通知 waiter：SQL 失败时绝不返回假终态。
       await this.store.flushPublic()
+      this.onConvPendingChanged(spec.conversationId)
+      this.onEvent('ask.resolved', { askId: id, status })
+      const waiters = this.waiters.get(id) ?? []
+      this.waiters.delete(id)
+      for (const waiter of waiters) waiter({ askId: id, status, answers })
+      return settledSpec
     } catch (error) {
-      // 持久化失败：不发布 ask.resolved，waiter 以失败结算（createAsk reject，
-      // 不悬挂也不假成功）；镜像已写但 store 进入 fail 语义（拒绝后续写）。
+      // putAsk（含同步镜像拒绝）/落盘/回调/事件发布任一失败：取出并清空
+      // waiters 逐一 failure 结算（不悬挂、不假终态），错误如实上抛。
       const waiters = this.waiters.get(id) ?? []
       this.waiters.delete(id)
       for (const waiter of waiters) waiter({ failure: error })
       throw error
     }
-    this.onConvPendingChanged(spec.conversationId)
-    this.onEvent('ask.resolved', { askId: id, status })
-    const waiters = this.waiters.get(id) ?? []
-    this.waiters.delete(id)
-    for (const waiter of waiters) waiter({ askId: id, status, answers })
-    return settledSpec
   }
 }
 
