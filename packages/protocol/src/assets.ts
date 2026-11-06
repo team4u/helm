@@ -23,6 +23,12 @@ export interface ProfileRuntime {
   /** Herdr 管理的 CLI Agent 标识，如 'agy' | 'claude' | 'codex' | 'pi'。 */
   agent: string
   args?: string[]
+  /** SSH 目标机标识；缺省本机。 */
+  machine?: string
+  /** 会话工作目录（绝对路径）；缺省由运行时决定。 */
+  workspace?: string
+  /** 注入子进程的环境变量覆盖。 */
+  env?: Record<string, string>
 }
 
 /** `~/.helm/skills/<id>/`（SKILL.md + references/*.md）的目录摘要。 */

@@ -5,17 +5,20 @@
  * 由 host 在运行时校验。
  */
 
-import type { AskCreateSpec } from './ask.js'
+import type { AskCreateSpec, AskResult } from './ask.js'
 import type {
   ConversationInit,
   ConversationInput,
+  ConversationPatch,
+  ConversationScope,
   ConversationStatus,
   ConversationSummary,
   InputOrigin,
   TurnSettledPayload,
   WhenBusy,
 } from './conversation.js'
-import type { PluginUiRegistry } from './ui.js'
+import type { WorkflowRunSummary } from './workflow.js'
+import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
 
 /** JSON Schema 对象；由宿主在边界处统一校验。 */
 export type JsonSchema = Record<string, unknown>
@@ -103,15 +106,44 @@ export interface AgentSpawnRequest {
   isolation?: 'worktree'
   /** 原生子会话创建后通知编排宿主。 */
   onCreated?: (conversationId: number) => void
+  /**
+   * 执行环境确定后回传（原生子会话或外部运行时均适用）；
+   * 编排宿主据此把 conversationId / worktree 等元数据写回节点状态。
+   */
+  onResolved?: (info: AgentExecutionInfo) => void
+  /** gate 命令由实际执行环境内恰好一次执行后回传结果；宿主引擎可免二次执行。 */
+  onGateResult?: (result: AgentGateResult) => void
+  /** 发起本次派生的 workflow run；非工作流派生缺省。 */
+  workflowRunId?: string
   cwd?: string
   /** 结构化输出 JSON Schema（文件交接时强制落盘校验）。 */
   schema?: JsonSchema
-  /** Shell 验收门禁命令。 */
+  /** Shell 验收门禁命令；唯一命令来源，宿主不得另行叠加。 */
   gate?: string
   /** 续接既有子代理的标识。 */
   resume?: string
   /** 取消信号，由宿主注入。 */
   signal?: AbortSignal
+}
+
+/**
+ * 子代理实际执行环境元数据（onResolved 回传）。
+ * 原生路径至少回传 conversationId；外部运行时（如 herdr）至少回传 executionId。
+ */
+export interface AgentExecutionInfo {
+  conversationId?: number
+  /** 外部运行时内的执行标识（如 Herdr 窗格/标签 ID）。 */
+  executionId?: string
+  /** 实际生效的工作目录绝对路径。 */
+  effectiveCwd?: string
+  /** isolation: 'worktree' 时分配的隔离工作树。 */
+  worktree?: { path: string; branch: string }
+}
+
+/** gate 命令执行结果；output 为失败时展示给用户的命令输出。 */
+export interface AgentGateResult {
+  ok: boolean
+  output: string
 }
 
 /**
@@ -201,6 +233,11 @@ export interface PluginHookRegistry {
 // ctx.action：单点 Schema，HTTP / CLI / Agent Tool / Workflow / Web 五端复用
 // ---------------------------------------------------------------------------
 
+/**
+ * 动作调用上下文：人工 HTTP/CLI 可无 conversationId；
+ * 模型路径（run_action 元工具）与 Workflow 路径必须携带 conversationId，
+ * 供宿主校验 scope（防绕过会话作用域）。
+ */
 export interface PluginActionContext {
   conversationId?: number
   signal?: AbortSignal
@@ -225,6 +262,8 @@ export interface PluginActionSpec<TIn, TOut> {
   cli?: PluginActionCliSpec
   /** true 直接注入模型工具列表；否则经元工具 run_action 按需调用。 */
   exposeAsTool?: boolean
+  /** 会话作用域：提供 conversationId 的调用（含 run_action/workflow）必须命中才可执行；人工 HTTP/CLI 不受限制。 */
+  scope?: ConversationScope
   handler(input: TIn, context: PluginActionContext): MaybePromise<TOut>
 }
 
@@ -238,6 +277,8 @@ export interface PluginToolSpec<TIn = Record<string, unknown>> {
   name: string
   description: string
   inputSchema: JsonSchema
+  /** 会话作用域：工具可见性与 executeTool 的双重过滤条件。 */
+  scope?: ConversationScope
   execute(input: TIn, context: PluginToolContext): MaybePromise<unknown>
 }
 
@@ -250,6 +291,18 @@ export interface PluginDocHandle<T> {
   get(): T
   set(value: T): void
   update(fn: (current: T) => T): void
+}
+
+/** 插件公共文档快照（跨端可读；逐值 JSON 校验/脱敏后发布，默认不公开）。 */
+export interface PublicPluginDoc {
+  pluginId: string
+  name: string
+  value: unknown
+}
+
+export interface PluginDocOptions {
+  /** true 时文档进入公共快照与 plugin.doc.updated 事件；默认私有。 */
+  public?: boolean
 }
 
 export interface PluginServiceSpec {
@@ -303,27 +356,45 @@ export interface ActionManifest {
   outputSchema: JsonSchema
   exposeAsTool?: boolean
   cli?: PluginActionCliSpec
+  scope?: ConversationScope
 }
 
 // ---------------------------------------------------------------------------
 // 宿主运行时能力
 // ---------------------------------------------------------------------------
 
-/** ctx.host：插件可调用的宿主内核能力。 */
+/** ctx.host：插件可调用的宿主内核能力（插件拿到的实现已绑定其 pluginId，不可伪造他人身份）。 */
 export interface HelmHostApi {
   dispatchTrigger(event: ExternalTriggerEnvelope): Promise<void>
   submitInput(
     conversationId: number,
     text: string,
-    opts?: { origin?: InputOrigin; whenBusy?: WhenBusy },
+    opts?: { origin?: InputOrigin; whenBusy?: WhenBusy; meta?: Record<string, unknown> },
   ): Promise<void>
   createConversation(init: ConversationInit): Promise<ConversationSummary>
   listConversations(filter?: { tag?: string; status?: ConversationStatus }): ConversationSummary[]
   /** 读取单个会话摘要；不存在时抛 HelmError。 */
   getConversation(id: number): ConversationSummary
-  /** 创建 AskDoc 并等待答案；返回 fieldName -> 答案（secret 字段为 stash 引用）。 */
-  createAsk(spec: AskCreateSpec): Promise<Record<string, string>>
+  /** 部分更新会话；返回更新后的摘要。 */
+  updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
+  /**
+   * 声明插件对本会话的管理权（如 superagent 的 router/watchdog 会话）：
+   * 受管期间会话删除保护（409 conversation_managed_by_plugin），
+   * 返回释放函数；插件停用/回滚时宿主自动释放。
+   */
+  manageConversation(id: number): () => void
+  /** 标记会话归属权；'human' 会话严禁自动按键/中止（Watchdog 红线）。 */
+  markConversationOwnership(id: number, owner: 'helm' | 'bot' | 'human'): void
+  /**
+   * 创建 AskDoc 并等待终态：正常三态（answered/cancelled/superseded）均 resolve，
+   * 只有验证/I/O/宿主失败才 reject。secret 字段答案为 stash 引用。
+   */
+  createAsk(spec: AskCreateSpec): Promise<AskResult>
   cancelAsk(askId: string, reason?: 'cancelled' | 'superseded'): Promise<void>
+  /** 注册 askId -> 当前 stateChangeSeq 解析器（AskDoc CAS 乐观锁用）；返回注销函数。 */
+  registerAskSeqResolver(resolver: (askId: string) => number | undefined): () => void
+  /** 监听工作流 run 终态（completed/failed/aborted，每 run 恰好一次）；插件停用时自动解除。 */
+  onWorkflowSettled(listener: (run: WorkflowRunSummary) => MaybePromise<void>): () => void
   emitEvent(type: string, payload: unknown): void
 }
 
@@ -352,8 +423,8 @@ export interface HelmPluginContext<TConfig = Record<string, unknown>> {
   /** Web Standard 原始路由。 */
   route(spec: PluginRouteSpec): void
 
-  /** 持久状态文档。 */
-  doc<TState>(name: string, initial: TState): PluginDocHandle<TState>
+  /** 持久状态文档；opts.public = true 时进入公共快照与 plugin.doc.updated 事件。 */
+  doc<TState>(name: string, initial: TState, opts?: PluginDocOptions): PluginDocHandle<TState>
 
   /** 后台服务（随插件启停生命周期管理）。 */
   service(spec: PluginServiceSpec): void

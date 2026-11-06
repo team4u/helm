@@ -58,7 +58,6 @@ export interface ConversationInit {
   /** 当前生效模型 'provider/model'；缺省用 Profile 默认。 */
   model?: string
 }
-
 /** 部分更新会话（`PATCH /api/conversations/:id`）；undefined 字段不变。 */
 export interface ConversationPatch {
   profileId?: string
@@ -77,6 +76,97 @@ export interface ConversationInput {
   origin: InputOrigin
   whenBusy?: WhenBusy
   createdAt: number
+  /** 边界已校验/脱敏的自由元数据；从 CLI --meta / HTTP 一路传到 turn_settled。 */
+  meta?: Record<string, unknown>
+}
+
+// ---------------------------------------------------------------------------
+// 会话作用域（插件工具/动作的会话级可见性策略）
+// ---------------------------------------------------------------------------
+
+/**
+ * 会话作用域过滤器：不同字段之间 AND，同字段内多值 OR。
+ * 字段缺省（undefined）表示该维度不限；显式空数组匹配不到任何会话。
+ * 这是会话策略而非用户鉴权——无 conversationId 的人工 HTTP/CLI 调用不受限。
+ */
+export interface ConversationScope {
+  conversationIds?: number[]
+  tags?: string[]
+  profileIds?: string[]
+}
+
+/** Scope 判定所需的最小会话形状（ConversationSummary 的结构子集即可）。 */
+export interface ConversationScopeTarget {
+  id: number
+  profileId: string
+  tags: string[]
+}
+
+/**
+ * 纯函数：判断会话是否落入 scope。
+ * - scope 为 undefined 时一律匹配（不限）。
+ * - 提供的字段之间 AND；字段内多值 OR。
+ * - 显式空数组 = 该维度显式排除一切（匹配不到）。
+ */
+export function matchesConversationScope(
+  scope: ConversationScope | undefined,
+  conversation: ConversationScopeTarget,
+): boolean {
+  if (!scope) return true
+  const { conversationIds, tags, profileIds } = scope
+  if (conversationIds !== undefined && !conversationIds.includes(conversation.id)) return false
+  if (profileIds !== undefined && !profileIds.includes(conversation.profileId)) return false
+  if (tags !== undefined) {
+    let hit = false
+    for (const t of tags) {
+      if (conversation.tags.includes(t)) {
+        hit = true
+        break
+      }
+    }
+    if (!hit) return false
+  }
+  return true
+}
+
+// ---------------------------------------------------------------------------
+// 会话详情与实时视图
+// ---------------------------------------------------------------------------
+
+/**
+ * 会话时间线条目（pi-durable EntryRecord 的跨端子集）。
+ * `model` 是面向模型上下文的消息数组（assistant 文本在 model 中，非 data）；
+ * `data` 是应用侧 JSON 载荷，display/bookkeeping entry 可能缺省。
+ */
+export interface ConversationEntry {
+  id: string
+  kind: string
+  data?: unknown
+  /** 模型上下文消息（如 assistant 文本）；纯展示/簿记 entry 无此字段。 */
+  model?: unknown[]
+  createdAt?: number
+}
+
+/** `GET /api/conversations/:id` 响应：摘要 + 分页时间线。 */
+export interface ConversationDetail extends ConversationSummary {
+  entries: ConversationEntry[]
+  /** 还有更早条目时的分页游标（客户端原样回传 `?cursor=`）。 */
+  nextCursor?: string
+}
+
+/** 会话实时增量视图（SSE `conversation.live` 事件载荷）。 */
+export interface ConversationLive {
+  conversationId: number
+  /** 最新助手可见文本增量（零 Token 摘要级）。 */
+  text: string
+  tools: Array<{
+    callId: string
+    toolName: string
+    input?: unknown
+    status: 'running' | 'done' | 'error'
+    result?: unknown
+  }>
+  updatedAt: number
 }
 
 /** 回合终态；turn_settled 钩子统一覆盖三态。 */

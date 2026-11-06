@@ -3,6 +3,8 @@
  * 编排引擎运行时（executor / sandbox / journal 恢复）在 kernel，不进协议。
  */
 
+import type { AgentGateResult } from './plugin.js'
+
 /** `POST /api/workflows/run` 请求体。 */
 export interface WorkflowRunRequest {
   /** 已保存工作流的名称。name、script、scriptPath 必须恰好提供一个。 */
@@ -27,6 +29,26 @@ export interface WorkflowNodeState {
   status: WorkflowNodeStatus
   /** agent 节点的执行后端标识（Profile ID 或 'herdr:<kind>'）。 */
   agentType?: string
+  /** 展示名（脚本 label / 派生描述）。 */
+  label?: string
+  /** agent 节点实际执行的会话 ID。 */
+  conversationId?: number
+  /** 外部运行时执行标识（如 Herdr 窗格/标签 ID）。 */
+  executionId?: string
+  /** 实际生效工作目录。 */
+  effectiveCwd?: string
+  /** isolation: 'worktree' 分配的隔离工作树。 */
+  worktree?: { path: string; branch: string }
+  phaseIndex?: number
+  phaseTitle?: string
+  /** agent 节点的原始提示词（审计/重放展示用）。 */
+  prompt?: string
+  /** 结构化输出 JSON Schema。 */
+  schema?: Record<string, unknown>
+  /** gate 执行结果（已在执行环境内恰好一次执行）。 */
+  gate?: AgentGateResult
+  tokens?: number
+  durationMs?: number
   startedAt?: number
   settledAt?: number
   /** 结构化输出（Schema 校验通过后）。 */
@@ -56,6 +78,8 @@ export interface WorkflowRunSummary {
   nodes?: WorkflowNodeState[]
   /** 观察用时间线（phase / log）；跨重启从 summary 旁文件恢复。 */
   progress?: WorkflowProgressEntry[]
+  /** 从 journal 前缀重放恢复的 run 携带的源 run ID。 */
+  replayedFrom?: string
 }
 
 export type WorkflowRunState = WorkflowRunSummary

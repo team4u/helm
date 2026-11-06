@@ -35,8 +35,22 @@ export interface AskSpec {
   createdAt: number
 }
 
-/** 创建 AskDoc 入参（`ctx.host.createAsk`；id/status/createdAt 由宿主分配）。 */
-export type AskCreateSpec = Omit<AskSpec, 'id' | 'status' | 'createdAt'>
+/** 创建 AskDoc 入参（`ctx.host.createAsk`）；未提供 id 时由宿主分配，status/createdAt 由宿主管理。 */
+export interface AskCreateSpec extends Omit<AskSpec, 'id' | 'status' | 'createdAt'> {
+  /** 可选预定义 ID（调用方幂等重试/外部引用）；缺省由宿主生成。 */
+  id?: string
+}
+
+/**
+ * createAsk 的终态结果：正常三态（answered/cancelled/superseded）均 resolve，
+ * 只有验证/I/O/宿主失败才 reject。superseded 即 CAS 销单，调用方应视为未获答案。
+ */
+export interface AskResult {
+  id: string
+  status: 'answered' | 'cancelled' | 'superseded'
+  /** fieldName -> 答案值（secret 字段为 stash 引用）；非 answered 状态为空对象。 */
+  answers: Record<string, string>
+}
 
 /** 人类提交的答案（`POST /api/asks/:id/answer`）；secret 字段仅存 stash 引用。 */
 export interface AskAnswer {
