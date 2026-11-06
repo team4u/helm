@@ -26,6 +26,9 @@ import { runGate } from './tools.js'
 
 const bg = BACKGROUND_CONTEXT
 
+/** 默认 spawn profile：assistant（真实存在的常驻 profile；不新造角色枚举）。 */
+const DEFAULT_SPAWN_PROFILE = 'assistant'
+
 /** thinkingLevel 合法枚举（pi-ai ModelThinkingLevel；effort 映射到此，拒绝任意字符串）。 */
 const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
@@ -109,7 +112,7 @@ export async function runNativeSpawn(
     )
   }
 
-  const profileId = agentType || 'default'
+  const profileId = agentType || DEFAULT_SPAWN_PROFILE
   const profile = await deps.resolveProfile(profileId)
   if (profile === undefined) {
     throw new HelmError(

@@ -59,7 +59,7 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
   const stash = new SecretStash()
   const parents = new Map<number, number>()
   const profiles = new Map<string, { model?: string; cwd?: string; runtime?: { kind: string; agent: string } }>(
-    Object.entries(options.profiles ?? { default: {} }),
+    Object.entries(options.profiles ?? { assistant: {} }),
   )
 
   const deps: NativeSpawnDeps = {
@@ -497,7 +497,7 @@ describe('spawn profile 与运行时声明', { timeout: 60_000 }, () => {
   it('profile 声明 herdr runtime：无插件接管显式 unsupported_runtime', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness({
       profiles: {
-        default: {},
+        assistant: {},
         'cli-agent': { runtime: { kind: 'herdr', agent: 'claude' } },
       },
     })

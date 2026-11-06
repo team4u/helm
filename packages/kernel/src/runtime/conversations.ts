@@ -71,6 +71,8 @@ export class ConversationTracker {
   private readonly runTaskIds = new Map<number, number>()
   /** 已结算的 run（防 done+failure+abort 双报）。 */
   private readonly settledRuns = new Set<string>()
+  /** 会话 -> 最近一个已结算 run 的 taskId（显式 abort 防重入）。 */
+  private readonly lastSettledRun = new Map<number, number>()
   /** 会话 -> 在途 turn_settled 回调链（waitForIdle 等待本会话而非全局）。 */
   private readonly settledWaiters = new Map<number, Array<() => void>>()
 
@@ -186,14 +188,13 @@ export class ConversationTracker {
   /** abort 结算（runtime.abortConversation 调用；与观察路径防双报）。 */
   settleAborted(conversationId: number): void {
     const taskId = this.runTaskIds.get(conversationId)
+    if (taskId !== undefined && this.lastSettledRun.get(conversationId) === taskId) {
+      // 观察路径已结算该 run（aborted/failed/completed）：不重复。
+      this.resetRunState(conversationId)
+      return
+    }
     if (taskId !== undefined) {
-      const runKey = `${conversationId}:${taskId}`
-      if (this.settledRuns.has(runKey)) {
-        // 观察路径已结算（aborted/failed）：不重复，但清残留状态。
-        this.resetRunState(conversationId)
-        return
-      }
-      this.settledRuns.add(runKey)
+      this.settledRuns.add(`${conversationId}:${taskId}`)
     }
     const all = this.takeAllInputs(conversationId)
     this.resetRunState(conversationId)
@@ -212,7 +213,8 @@ export class ConversationTracker {
 
   private resetRunState(conversationId: number): void {
     this.consumedInputs.delete(conversationId)
-    this.runTaskIds.delete(conversationId)
+    // runTaskIds 保留：显式 abort 路径需它对照 lastSettledRun 防重入；
+    // 新 run 启动时（live.run.taskId 变化）自然覆盖。
   }
 
   private adopt(id: number, view: ConversationView): void {
@@ -237,26 +239,13 @@ export class ConversationTracker {
     // helm.input entry 观察：从 entry 数据重建 trackedInputs（不依赖临时内存）。
     this.rebuildFromEntries(id, view.entries as never)
 
-    if (live?.run) {
-      const runKey = `${id}:${live.run.taskId}`
-      if (this.runTaskIds.get(id) !== live.run.taskId) {
-        // 新 run 开始：重置本回合消费集（同 run 多 tool round 不重置）。
-        this.runTaskIds.set(id, live.run.taskId)
-        this.consumedInputs.set(id, new Set())
-        this.settledRuns.delete(runKey)
-      }
-      for (const submissionId of live.run.inputs) {
-        this.markConsumed(id, submissionId)
-      }
-      // 完成期（answered，inputs 清空）不动 consumedInputs——保留已消费记录。
-    }
-
-    if (!live?.run && prev?.run) {
-      // run 结束：成功 or 失败（各结算一次；aborted 由显式路径负责）。
+    // 先结算已结束的 prev run（含同快照折叠：run1 结束 + run2 开始同 commit）。
+    if (prev?.run && (!live?.run || live.run.taskId !== prev.run.taskId)) {
       const prevRun = prev.run
       const runKey = `${id}:${prevRun.taskId}`
       if (!this.settledRuns.has(runKey)) {
         this.settledRuns.add(runKey)
+        this.lastSettledRun.set(id, prevRun.taskId)
         const failure = live?.runFailure
         if (failure && failure.taskId === prevRun.taskId) {
           for (const submissionId of failure.inputs) this.markConsumed(id, submissionId)
@@ -276,8 +265,22 @@ export class ConversationTracker {
           const consumed = this.takeConsumed(id)
           this.emitSettled(id, 'completed', consumed, undefined)
         }
-        this.resetRunState(id)
       }
+      this.resetRunState(id)
+    }
+
+    if (live?.run) {
+      const runKey = `${id}:${live.run.taskId}`
+      if (this.runTaskIds.get(id) !== live.run.taskId) {
+        // 新 run 开始：重置本回合消费集（同 run 多 tool round 不重置）。
+        this.runTaskIds.set(id, live.run.taskId)
+        this.consumedInputs.set(id, new Set())
+        this.settledRuns.delete(runKey)
+      }
+      for (const submissionId of live.run.inputs) {
+        this.markConsumed(id, submissionId)
+      }
+      // 完成期（answered，inputs 清空）不动 consumedInputs——保留已消费记录。
     }
   }
 
@@ -398,7 +401,7 @@ export class ConversationTracker {
       status = 'blocked'
     } else if (live?.run) {
       status = 'working'
-    } else if (live?.runFailure) {
+    } else if (live?.runFailure && live.runFailure.reason !== 'aborted') {
       status = 'error'
     } else {
       status = meta.unread ? 'done' : 'idle'

@@ -34,10 +34,7 @@ interface FauxHandle {
   provider: { id: string }
 }
 
-/** 捕获最近一次模型请求（before_turn sections/tools/messages 是否真正生效）。 */
-interface RequestCapture {
-  messages: Array<Record<string, unknown>>[]
-}
+/** 捕获最近一次模型请求的工厂钩子（before_turn sections/tools/messages 验证）。 */
 
 function makeFauxModels(): { models: ReturnType<typeof createModels>; faux: FauxHandle } {
   const models = createModels()
@@ -46,17 +43,13 @@ function makeFauxModels(): { models: ReturnType<typeof createModels>; faux: Faux
   return { models, faux }
 }
 
-async function openRuntime(
-  dir: string,
-  capture?: RequestCapture,
-): Promise<KernelRuntime & { __faux: FauxHandle }> {
+async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxHandle }> {
   const { models, faux } = makeFauxModels()
   const runtime = await KernelRuntime.open({
     dataDir: dir,
     cwd: dir,
     model: 'faux/faux-1',
     models: models as never,
-    ...(capture ? { hubUrl: `http://127.0.0.1:0` } : {}),
   })
   return Object.assign(runtime, { __faux: faux } as never)
 }
@@ -100,9 +93,6 @@ describe('KernelRuntime 基础生命周期', { timeout: 60_000 }, () => {
         fauxAssistantMessage('你好，我是回答。'),
         fauxAssistantMessage('新会话回答'),
       ])
-      // 真实 turn_settled 载荷断言（无插件时 dispatch 直通，不消费）。
-      const settled: TurnSettledPayload[] = []
-      kernel.events.publish // seq 推进可见
       const { submissionId } = await kernel.submitInput(1, '请打个招呼')
       assert.ok(submissionId)
       const fresh = await kernel.createConversation({})
@@ -118,7 +108,6 @@ describe('KernelRuntime 基础生命周期', { timeout: 60_000 }, () => {
       assert.equal(freshConv.completionSeq, 1)
       const text = await kernel.getLastAssistantText(1)
       assert.equal(text, '你好，我是回答。')
-      void settled
     } finally {
       await kernel.close()
     }
@@ -139,22 +128,40 @@ describe('KernelRuntime 基础生命周期', { timeout: 60_000 }, () => {
     }
   })
 
-  it('abort 路径：中途中止后 idle；aborted 结算恰一次', { timeout: 60_000 }, async () => {
+  it('abort 路径：工具在途时中止 -> aborted 结算恰一次；空闲 abort 不伪造终态', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't4'))
     try {
-      kernel.__faux.setResponses([fauxAssistantMessage('慢慢回答')])
-      const p = kernel.submitInput(1, '会被中止的问题')
-      void p
-      await new Promise((r) => setTimeout(r, 50))
+      // 工具在途（真实 bash sleep 5s）：可确定性观察到 working 后中止。
+      kernel.__faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall('bash', { command: 'sleep 5 && echo done' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('不该需要第二答'),
+      ])
+      const settled: TurnSettledPayload[] = []
+      await kernel.plugins.register({
+        id: 'test:abort',
+        definePlugin(ctx) {
+          ctx.hook.onTurnSettled((p) => settled.push(p))
+        },
+      })
+      void kernel.submitInput(1, '会被中止的问题').catch(() => {})
+      await new Promise((r) => setTimeout(r, 150))
+      assert.equal(kernel.getConversation(1).status, 'working')
       await kernel.abortConversation(1)
       await kernel.waitForIdle(1).catch(() => {})
       const conv = kernel.getConversation(1)
-      // aborted 的终态语义：idle（不是 error），completionSeq 恰好推进一次。
+      // aborted 终态：idle，completionSeq 恰推进一次，钩子载荷 aborted。
       assert.equal(conv.status, 'idle')
       assert.equal(conv.completionSeq, 1)
+      assert.equal(settled.length, 1)
+      assert.ok(settled[0])
+      assert.equal(settled[0].outcome, 'aborted')
       // 空闲后再 abort 不产生第二次结算。
-      await kernel.abortConversation(1).catch(() => {})
+      await kernel.abortConversation(1)
       assert.equal(kernel.getConversation(1).completionSeq, 1)
+      assert.equal(settled.length, 1)
     } finally {
       await kernel.close()
     }
@@ -505,7 +512,8 @@ describe('trigger 与删除级联', { timeout: 60_000 }, () => {
       title: '待取消',
       fields: [{ name: 'x', label: 'X', type: 'text' }],
     })
-    void askPromise
+    // deleteConversation 级联取消时 waiter reject（AskService 契约）：显式吞掉。
+    void askPromise.catch(() => {})
     await new Promise((r) => setTimeout(r, 20))
     kernel.services.artifacts // 确保服务存在
     await kernel.deleteConversation(conv.id)
@@ -847,7 +855,9 @@ describe('真实 PluginHost 集成', { timeout: 60_000 }, () => {
       assert.equal(rootProbe.ownedBy, 'human')
       // 用户直连会话（无标记）即使带 worker tags 也判 human。
       const manual = await kernel.createConversation({ tags: ['worker'] })
-      await kernel.submitInput(manual.id, '人类直接输入').catch(() => {})
+      kernel.__faux.setResponses([fauxAssistantMessage('人类回答')])
+      await kernel.submitInput(manual.id, '人类直接输入')
+      await kernel.waitForIdle(manual.id)
       const tick2 = (await kernel.watchdogTick()) as {
         probes: Array<{ targetId: string; ownedBy: string }>
       }
@@ -857,13 +867,13 @@ describe('真实 PluginHost 集成', { timeout: 60_000 }, () => {
     }
   })
 
-  it('createConversation default profile 真实存在（目录+SYSTEM.md/MEMORY.md）', { timeout: 60_000 }, async () => {
+  it('createConversation 缺省 profile 统一 assistant（真实目录，无缺文件）', { timeout: 60_000 }, async () => {
     const dir = join(root, 'p10')
     const kernel = await openRuntime(dir)
     try {
       const conv = await kernel.createConversation({})
-      assert.equal(conv.profileId, 'default')
-      // before_turn（assistant 类插件）读 default profile 不报 not found。
+      assert.equal(conv.profileId, 'assistant')
+      // before_turn（assistant 类插件）读 assistant profile 不报 not found。
       await kernel.plugins.register({
         id: 'test:prof',
         definePlugin(ctx) {

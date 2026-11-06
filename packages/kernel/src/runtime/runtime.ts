@@ -666,7 +666,8 @@ export class KernelRuntime {
   }
 
   private async recoverConversations(): Promise<void> {
-    // 真实分页扫描（page.next 翻页），observe 所有未删除会话——重启后不丢观察者。
+    // 真实分页扫描（page.next 翻页）：未删除会话全部 observe——重启后凭 store
+    // 元件即可定位，但观察者必须重建（否则永久 idle/丢 assistant 文本）。
     let cursor: unknown = undefined
     for (;;) {
       const page = await this.database.storage.scanConversations(
@@ -677,28 +678,30 @@ export class KernelRuntime {
       )
       for (const record of page.items) {
         const id = record.id as number
-        if (this.store.getConv(id) || this.store.isDeleted(id)) continue
-        const now = Date.now()
-        const conversation = await this.harness.conversation(record.id, BACKGROUND_CONTEXT)
-        const agent = conversation ? await conversation.agent(BACKGROUND_CONTEXT).catch(() => undefined) : undefined
-        this.store.upsertConv({
-          id,
-          title: `会话 ${id}`,
-          profileId: 'default',
-          tags: [],
-          parentConversationId: record.parent?.conversationId as number | undefined,
-          cwd: agent?.cwd ?? this.toolDeps.defaultCwd,
-          model:
-            agent?.model !== undefined
-              ? `${agent.model.provider}/${agent.model.modelId}`
-              : (this.defaultModel ?? ''),
-          unread: false,
-          pinned: false,
-          stateChangeSeq: 1,
-          completionSeq: 0,
-          createdAt: now,
-          updatedAt: now,
-        })
+        if (this.store.isDeleted(id)) continue
+        if (!this.store.getConv(id)) {
+          const now = Date.now()
+          const conversation = await this.harness.conversation(record.id, BACKGROUND_CONTEXT)
+          const agent = conversation ? await conversation.agent(BACKGROUND_CONTEXT).catch(() => undefined) : undefined
+          this.store.upsertConv({
+            id,
+            title: `会话 ${id}`,
+            profileId: 'assistant',
+            tags: [],
+            parentConversationId: record.parent?.conversationId as number | undefined,
+            cwd: agent?.cwd ?? this.toolDeps.defaultCwd,
+            model:
+              agent?.model !== undefined
+                ? `${agent.model.provider}/${agent.model.modelId}`
+                : (this.defaultModel ?? ''),
+            unread: false,
+            pinned: false,
+            stateChangeSeq: 1,
+            completionSeq: 0,
+            createdAt: now,
+            updatedAt: now,
+          })
+        }
         await this.tracker.observe(id)
       }
       if (!page.next) break
@@ -1014,13 +1017,9 @@ export class KernelRuntime {
   private async resolveProfileForCreate(init: ConversationInit): Promise<string> {
     const requested = init.profileId
     if (requested === undefined || requested === 'default') {
-      // default profile 缺目录时确保存在（SYSTEM/MEMORY 空文件），
-      // 否则 assistant 插件 before_turn 读 profile 会 not found。
-      const existing = await this.profilesSvc.get('default').catch(() => undefined)
-      if (!existing) {
-        await this.profilesSvc.save({ id: 'default', name: '默认', tags: ['default'] })
-      }
-      return 'default'
+      // 缺省 profile 统一为真实存在的 assistant（ensureDefault 已建）；
+      // 不新造角色枚举，也不留缺目录的 default 导致 before_turn not found。
+      return 'assistant'
     }
     const found = await this.profilesSvc.get(requested).catch(() => undefined)
     if (!found) {
@@ -1237,8 +1236,10 @@ export class KernelRuntime {
   async abortConversation(id: number): Promise<void> {
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    const wasBusy = this.tracker.hasLiveWork(id)
     await conversation.abort(BACKGROUND_CONTEXT)
-    this.tracker.settleAborted(id)
+    // 仅在途会话结算 aborted；空闲 abort 不伪造终态（已完成/已失败回合不覆盖）。
+    if (wasBusy) this.tracker.settleAborted(id)
   }
 
   /** 等待会话空闲（含本会话 turn_settled 钩子异步执行完成）。 */
@@ -1296,15 +1297,15 @@ export class KernelRuntime {
           return ref
         },
         agentSessions: this.agentSessions,
-        registerChildConversation: async (childId, parentId, profileId) => {
+        registerChildConversation: async (childId, parentId, profileId, childCwd) => {
           const now = Date.now()
           this.store.upsertConv({
             id: childId,
             title: `子代理 ${childId}`,
-            profileId: profileId ?? 'default',
+            profileId,
             tags: ['worker'],
             parentConversationId: parentId,
-            cwd: finalRequest.cwd ?? this.toolDeps.defaultCwd,
+            cwd: childCwd,
             model: finalRequest.model ?? this.defaultModel ?? '',
             unread: false,
             pinned: false,
@@ -1314,6 +1315,19 @@ export class KernelRuntime {
             updatedAt: now,
           })
           await this.tracker.observe(childId)
+        },
+        resolveProfile: async (profileId) => {
+          const profile = await this.profilesSvc.get(profileId).catch(() => undefined)
+          if (!profile) return undefined
+          return {
+            ...(profile.model !== undefined ? { model: profile.model } : {}),
+            ...(profile.runtime !== undefined ? { runtime: profile.runtime } : {}),
+          }
+        },
+        getParentOfConversation: (childId) =>
+          this.store.getConv(childId)?.parentConversationId,
+        installChildExtension: (extension) => {
+          this.registry.install(extension)
         },
       },
       finalRequest,
@@ -1589,11 +1603,10 @@ function safeResultText(value: unknown): string {
   }
 }
 
-/** 插件工具原始返回 -> SDK ToolExecutionResult（裸文本/对象统一包 content）。 */
+/** 插件工具原始返回 -> SDK ToolExecutionResult（裸文本/对象统一包 content；无 schema 不传 structuredOutput）。 */
 function pluginToolResult(raw: unknown): {
   output: Array<{ type: 'text'; text: string }>
   isError?: boolean
-  structuredOutput?: JsonValue
 } {
   if (
     raw !== null &&
@@ -1603,13 +1616,9 @@ function pluginToolResult(raw: unknown): {
     // 已是契约形状（或另一工具结果）——原样透传。
     return raw as { output: Array<{ type: 'text'; text: string }>; isError?: boolean }
   }
-  const text = safeResultText(raw)
-  const structured =
-    raw !== null && typeof raw === 'object' ? (raw as JsonValue) : ({ value: raw } as JsonValue)
-  return {
-    output: [{ type: 'text', text }],
-    structuredOutput: structured,
-  }
+  // 未声明 structuredOutputSchema 的工具不得返回 structuredOutput（SDK 契约）：
+  // 结果统一走 output 文本通道。
+  return { output: [{ type: 'text', text: safeResultText(raw) }] }
 }
 
 /** tool_call handled 的接管产物 -> 合法 ToolExecutionResult（非法形状显式错误结果）。 */
@@ -1767,16 +1776,18 @@ function currentToolNames(messages: ReadonlyArray<Record<string, unknown>>): str
   return [...names]
 }
 
-/** 剥离已有 external_event 包裹（trigger transform 后再 defang 防双重包裹）。 */
+/** 剥离已有 external_event 包裹（trigger transform 后再 defang 防双重包裹；保留包裹外追加文本）。 */
 function stripEnvelope(text: string): string {
-  const match = /<external_event[^>]*>\n([\s\S]*?)\n<\/external_event>/.exec(text)
+  const match = /[\s\S]*?<external_event[^>]*>\n([\s\S]*?)\n<\/external_event>([\s\S]*)/.exec(text)
   if (match === null) return text
   const body = match[1] ?? ''
-  return body
+  const tail = match[2] ?? ''
+  const unescaped = body
     .replaceAll('&lt;', '<')
     .replaceAll('&gt;', '>')
     .replaceAll('&quot;', '"')
     .replaceAll('&amp;', '&')
+  return tail.trim() === '' ? unescaped : `${unescaped}${tail}`
 }
 
 function summaryOfFallback(
