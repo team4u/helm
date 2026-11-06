@@ -16,8 +16,11 @@ try {
     if (stopping) return;
     stopping = true;
     try {
-      await hub.close();
-      await app.close();
+      try {
+        await hub.close();
+      } finally {
+        await app.close();
+      }
     } catch (error) {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;
