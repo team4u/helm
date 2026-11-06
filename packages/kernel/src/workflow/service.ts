@@ -24,6 +24,8 @@ import { join, resolve } from 'node:path'
 import {
   HelmError,
   type ActionManifest,
+  type AgentExecutionInfo,
+  type AgentGateResult,
   type AgentSpawnRequest,
   type ConversationSummary,
   type WorkflowJournalEntry,
@@ -35,6 +37,13 @@ import {
 import { JournalWriter, readJournal } from './journal.js'
 import { extractMeta, hasMetaDeclaration } from './meta.js'
 import { collapse, type WorkflowEntry } from './progress.js'
+import {
+  gateResultMissingError,
+  redactExecutionMetadata,
+  redactGateResult,
+  sanitizeExecutionInfo,
+  sanitizeGateResult,
+} from './spawn-exec.js'
 import {
   MAX_SCRIPT_LENGTH,
   redactJsonValue,
@@ -75,9 +84,17 @@ export interface WorkflowServiceHost {
   abortConversation(id: number): Promise<void>
   emitEvent(type: string, payload: unknown): void
   /**
+   * run 终态结算通知（每 run 恰一次；wait/close 必须等待它结束）。宿主用它
+   * 驱动 app->kernel 的工作流结算广播（onWorkflowSettled 监听器）。清理异常
+   * 在 service 内如实上报为 failed/诊断，不破坏 journal 副作用保护。
+   */
+  onRunSettled?(summary: WorkflowRunSummary): Promise<void> | void
+  /**
    * gate 门禁执行（KernelRuntime.runGate：shell + SecretStash env 合并 + 超时）。
-   * 可选：缺省宿主让带 gate 的 agent 调用显式失败——静默跳过的 gate 等于把
-   * 未验证的工作标记为已验证。cwd 传子会话工作目录（如有），否则父会话 cwd。
+   * 这是宿主自跑 fallback：执行环境（native/herdr）已在实际 cwd 内执行过
+   * gate 并经 onGateResult 回报时不会走到这里。缺省宿主让带 gate 的 agent
+   * 调用显式失败——静默跳过的 gate 等于把未验证的工作标记为已验证。
+   * cwd 传子会话工作目录（如有），否则父会话 cwd。
    */
   runGate?(
     command: string,
@@ -161,10 +178,15 @@ interface ActiveRun {
   pendingAborts: Set<Promise<void>>
   /** progress 持久化节流（timeline 非空后定期落盘）。 */
   lastPersistAt: number
+  /** 节点开始/结束必须推送的 workflow.updated 事件（有界频率内的强制点）。 */
+  lastNodeEventAt: number
 }
 
 /** progress 持久化最小间隔：高频进度不逐条落库。 */
 const PROGRESS_PERSIST_INTERVAL_MS = 1_000
+
+/** workflow.updated 节点事件最小间隔：有界频率，但节点开始/结束强制推送。 */
+const NODE_EVENT_INTERVAL_MS = 250
 
 export class WorkflowService {
   private readonly dataDir: string
@@ -461,16 +483,18 @@ export class WorkflowService {
       timeline: [],
       pendingAborts: new Set(),
       lastPersistAt: createdAt,
+      lastNodeEventAt: createdAt,
     }
     this.active.set(runId, run)
 
     /**
      * run 收尾（唯一出口）：失败终态统一写入 record（内存 summary 只是镜像），
-     * writer 必关、active 必删、在途子会话中止必等待——任何一步失败都不留
-     * 假 running。后台 promise 的 rejection 被 done 吸收并由 record.error 如实
-     * 上报，绝不 unhandled。
+     * writer 必关、active 必删、在途子会话中止必等待、宿主 onRunSettled 必
+     * 等待结束——任何一步失败都不留假 running。后台 promise 的 rejection
+     * 被 done 吸收并由 record.error 如实上报，绝不 unhandled。
      */
     const settleRun = async (result: WorkflowRunResult | undefined, failure?: unknown): Promise<void> => {
+      let settleFailure: unknown
       try {
         if (result !== undefined) {
           record.status = result.status === 'killed' ? 'aborted' : result.status
@@ -483,7 +507,7 @@ export class WorkflowService {
           record.error = this.redact(message)
         }
         record.updatedAt = Date.now()
-        record.nodes = this.nodesFromProgress(run.progress)
+        record.nodes = this.redactNodes(this.nodesFromProgress(run.progress))
         record.progress = run.timeline
         run.summary = this.toSummary(record)
         try {
@@ -500,6 +524,8 @@ export class WorkflowService {
           }
           run.settleError = persistError
         }
+      } catch (settleError) {
+        settleFailure = settleError
       } finally {
         try {
           await run.writer.close()
@@ -513,7 +539,33 @@ export class WorkflowService {
         if (run.pendingAborts.size > 0) {
           await Promise.allSettled([...run.pendingAborts])
         }
-        this.host.emitEvent('workflow.updated', { ...run.summary })
+        // 宿主结算通知：每 run 恰一次；wait/close 经 done 等待它结束。
+        if (this.host.onRunSettled !== undefined) {
+          try {
+            await this.host.onRunSettled({ ...run.summary })
+          } catch (settledError) {
+            // 结算清理失败显式进入诊断与 settleError，不破坏已落盘终态。
+            const message = settledError instanceof Error ? settledError.message : String(settledError)
+            process.stderr.write(`workflow ${runId}: onRunSettled failed: ${message}\n`)
+            run.summary = {
+              ...run.summary,
+              error: `${run.summary.error ?? ''}\n[onRunSettled failed: ${message}]`.trim(),
+            }
+            record.error = `${record.error ?? ''}\n[onRunSettled failed: ${message}]`.trim()
+            try {
+              this.writeRecord(record)
+              const flushed = this.state.flush?.()
+              if (flushed !== undefined) void flushed.catch(() => {})
+            } catch {
+              // 诊断补写尽力而为；settleError 已携带原始异常。
+            }
+            run.settleError = run.settleError ?? settledError
+          }
+        }
+        this.host.emitEvent('workflow.updated', { run: { ...run.summary } })
+        if (settleFailure !== undefined && run.settleError === undefined) {
+          run.settleError = settleFailure
+        }
       }
     }
 
@@ -527,7 +579,7 @@ export class WorkflowService {
       this.active.delete(runId)
       throw error
     }
-    this.host.emitEvent('workflow.updated', { ...run.summary })
+    this.host.emitEvent('workflow.updated', { run: this.redactSummaryNodes({ ...run.summary }) })
 
     const engineHost = this.makeEngineHost(run, parent)
 
@@ -553,8 +605,15 @@ export class WorkflowService {
               }
             }
             run.summary.updatedAt = stamp
+            // 节点开始/结束必须推送（有界频率：间隔窗口外强制，窗口内随周期落盘走）。
+            const nodeBoundary = entries.some(
+              (entry) =>
+                (entry.type === 'workflow_agent' || entry.type === 'workflow_action') &&
+                (entry.state === 'start' || entry.state === 'done' || entry.state === 'error'),
+            )
+            const due = stamp - run.lastNodeEventAt >= NODE_EVENT_INTERVAL_MS
             // 周期性把时间线落库：长时间 run 的 phase/log 不必等终态才可见。
-            if (run.timeline.length > 0 && stamp - run.lastPersistAt >= PROGRESS_PERSIST_INTERVAL_MS) {
+            if (run.timeline.length > 0 && (due || (nodeBoundary && due)) && stamp - run.lastPersistAt >= PROGRESS_PERSIST_INTERVAL_MS) {
               run.lastPersistAt = stamp
               record.updatedAt = stamp
               record.progress = run.timeline
@@ -562,10 +621,16 @@ export class WorkflowService {
                 this.writeRecord(record)
                 const flushed = this.state.flush?.()
                 if (flushed !== undefined) void flushed.catch(() => {})
-                this.host.emitEvent('workflow.updated', { ...run.summary, progress: run.timeline })
               } catch {
                 // 尽力而为的观察面：失败不阻断 run，终态写入会再次尝试。
               }
+            }
+            if (nodeBoundary && due) {
+              run.lastNodeEventAt = stamp
+              this.host.emitEvent(
+                'workflow.updated',
+                this.redactSummaryNodes({ ...run.summary, updatedAt: stamp, nodes: this.nodesFromProgress(run.progress) }),
+              )
             }
           },
           journal: {
@@ -593,9 +658,36 @@ export class WorkflowService {
   getRun(runId: string): WorkflowRunSummary {
     const activeRun = this.active.get(runId)
     if (activeRun !== undefined) {
-      return { ...activeRun.summary, nodes: this.nodesFromProgress(activeRun.progress) }
+      return this.redactSummaryNodes({
+        ...activeRun.summary,
+        nodes: this.nodesFromProgress(activeRun.progress),
+      })
     }
     return this.toSummary(this.loadRecord(runId))
+  }
+
+  /**
+   * 全部已持久 run 的 summary（新建在前）：活跃 run 实时折叠 nodes，
+  // 终态 run 读 store；非保存脚本运行的 run 也列出（历史可 inspect）。
+   */
+  listRuns(): WorkflowRunSummary[] {
+    const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+    const out: WorkflowRunSummary[] = []
+    const seen = new Set<string>()
+    for (const active of this.active.values()) {
+      seen.add(active.runId)
+      out.push(this.redactSummaryNodes({ ...active.summary, nodes: this.nodesFromProgress(active.progress) }))
+    }
+    for (const entry of [...index].sort((a, b) => b.createdAt - a.createdAt)) {
+      if (seen.has(entry.id)) continue
+      seen.add(entry.id)
+      try {
+        out.push(this.toSummary(this.loadRecord(entry.id)))
+      } catch {
+        // 索引指向已丢失 record：跳过但不删除（诊断面由 getRun 显式报 not_found）。
+      }
+    }
+    return out
   }
 
   /** 等待 run 完成并返回其结果（历史 run 直接返回 result）。 */
@@ -637,7 +729,7 @@ export class WorkflowService {
 
   private makeEngineHost(run: ActiveRun, parent: ConversationSummary): WorkflowHost {
     const service = this
-    /** agentId → 子会话 id（onCreated 建立；abort/gate 使用）。 */
+    /** agentId → 子会话 id（onResolved 建立；abort 使用）。 */
     const conversationByAgent = new Map<string, number>()
 
     return {
@@ -683,8 +775,9 @@ export class WorkflowService {
         ? {
             runGate: async (command: string, options: { agentId: string; cwd?: string }) => {
               const convId = conversationByAgent.get(options.agentId)
+              // cwd 只用引擎确认过的值（result.cwd / 回传元数据）；缺省父会话
+              // cwd，绝不猜测远端工作目录。
               return service.host.runGate!(command, {
-                // gate 在子会话 cwd 内执行（如有），否则父会话 cwd。
                 ...(options.cwd !== undefined ? { cwd: options.cwd } : { cwd: parent.cwd }),
                 ...(convId !== undefined ? { conversationId: convId } : { conversationId: parent.id }),
                 signal: run.abort.signal,
@@ -725,12 +818,18 @@ export class WorkflowService {
     const knownConvId = conversationByAgent.get(request.agentId)
     const resumeRef = isResume ? String(knownConvId ?? nativeAgentId) : undefined
 
-    let gateCwd: string | undefined
+    /** 已 sanitized 的执行元数据（onResolved 可能与 spawn 返回前多次回调——幂等只记最新）。 */
+    let executionInfo: AgentExecutionInfo | undefined
+    /** 已 sanitized 的 gate 回报（执行环境内恰好一次执行后的结果）。 */
+    let gateResult: AgentGateResult | undefined
+
     const proto: AgentSpawnRequest = {
       parentConversationId: run.conversationId,
       prompt: request.prompt,
       agentId: nativeAgentId,
-      // gate 不下传：执行权在本服务 runGate（对齐决策：恰好执行一次）。
+      // gate 原样下传：执行权在实际执行环境（native 子会话 cwd / herdr 窗格），
+      // 经 onGateResult 回报后引擎免二次执行。
+      ...(request.gate !== undefined ? { gate: request.gate } : {}),
       ...(request.agentType !== '' ? { agentType: request.agentType } : {}),
       ...(request.model !== undefined ? { model: request.model } : {}),
       ...(request.effort !== undefined ? { effort: request.effort } : {}),
@@ -738,17 +837,23 @@ export class WorkflowService {
       ...(request.schema !== undefined ? { schema: request.schema.schema } : {}),
       ...(resumeRef !== undefined ? { resume: resumeRef } : {}),
       cwd: parent.cwd,
-      onCreated: (conversationId: number) => {
-        conversationByAgent.set(request.agentId, conversationId)
-        // 子会话真实 cwd 供 gate 使用（若与父不同）。
-        try {
-          const child = this.host.getConversation(conversationId)
-          if (child.cwd !== parent.cwd) gateCwd = child.cwd
-        } catch {
-          // 会话查询失败不阻断 spawn；gate 回退父 cwd。
+      workflowRunId: run.runId,
+      onResolved: (raw: unknown) => {
+        const info = sanitizeExecutionInfo(raw, { agentId: nativeAgentId })
+        executionInfo = info
+        if (info.conversationId !== undefined) {
+          conversationByAgent.set(request.agentId, info.conversationId)
         }
-        request.onResolved?.({ conversationId })
+        request.onResolved?.(info)
       },
+      ...(request.gate !== undefined
+        ? {
+            onGateResult: (raw: unknown) => {
+              gateResult = sanitizeGateResult(raw, { agentId: nativeAgentId })
+              request.onGateResult?.(gateResult)
+            },
+          }
+        : {}),
       signal: run.abort.signal,
     }
 
@@ -756,12 +861,30 @@ export class WorkflowService {
       const raw = await this.host.spawnAgent(proto)
       // native 返回：有 schema → 已校验对象（转 JSON 交引擎复核）；无 schema → 文本。
       const text = typeof raw === 'string' ? raw : JSON.stringify(raw)
+      // 外部执行环境（executionId 存在）必须回报 gate；缺失即显式失败，
+      // 绝不在本机猜远端工作目录补跑。
+      if (request.gate !== undefined && gateResult === undefined && executionInfo?.executionId !== undefined) {
+        throw gateResultMissingError({
+          agentId: nativeAgentId,
+          executionId: executionInfo.executionId,
+          command: request.gate,
+        })
+      }
       return {
         ok: true,
         text,
-        ...(gateCwd !== undefined ? { cwd: gateCwd } : {}),
+        ...(executionInfo !== undefined ? { executionInfo } : {}),
+        ...(gateResult !== undefined ? { gate: gateResult } : {}),
       }
     } catch (error) {
+      if (error instanceof HelmError) {
+        // 错误码随消息透传（节点 error 面向用户，码即诊断锚点）。
+        return {
+          ok: false,
+          error: `[${error.code}] ${error.message}`,
+          ...(gateResult !== undefined ? { gate: gateResult } : {}),
+        }
+      }
       const message = error instanceof Error ? error.message : String(error)
       return { ok: false, error: message }
     }
@@ -930,14 +1053,45 @@ export class WorkflowService {
       ...(record.error !== undefined ? { error: record.error } : {}),
       ...(record.nodes !== undefined ? { nodes: record.nodes } : {}),
       ...(record.progress !== undefined ? { progress: record.progress } : {}),
+      ...(record.replayedFrom !== undefined ? { replayedFrom: record.replayedFrom } : {}),
     }
+  }
+
+  /** summary 出口统一逐值脱敏（nodes 里的元数据不能漏 Token）。 */
+  private redactSummaryNodes(summary: WorkflowRunSummary): WorkflowRunSummary {
+    if (summary.nodes === undefined) return summary
+    return { ...summary, nodes: summary.nodes.map((node) => this.redactNode(node)) }
+  }
+
+  /** progress 折叠后的节点元数据逐值脱敏（落库/事件前）。 */
+  private redactNodes(nodes: NonNullable<WorkflowRunSummary['nodes']>): NonNullable<WorkflowRunSummary['nodes']> {
+    return nodes.map((node) => this.redactNode(node))
+  }
+
+  private redactNode(node: NonNullable<WorkflowRunSummary['nodes']>[number]): NonNullable<WorkflowRunSummary['nodes']>[number] {
+    const redacted = { ...node }
+    if (redacted.label !== undefined) redacted.label = this.redact(redacted.label)
+    if (redacted.prompt !== undefined) redacted.prompt = this.redact(redacted.prompt)
+    if (redacted.effectiveCwd !== undefined) redacted.effectiveCwd = this.redact(redacted.effectiveCwd)
+    if (redacted.worktree !== undefined) {
+      redacted.worktree = {
+        path: this.redact(redacted.worktree.path),
+        branch: this.redact(redacted.worktree.branch),
+      }
+    }
+    if (redacted.gate !== undefined) {
+      redacted.gate = { ok: redacted.gate.ok, output: this.redact(redacted.gate.output) }
+    }
+    if (redacted.error !== undefined) redacted.error = this.redact(redacted.error)
+    if (redacted.output !== undefined) redacted.output = redactJsonValue(redacted.output, this.redact)
+    return redacted
   }
 
   // ------------------------------------------------------------------
   // progress → nodes 折叠（inspect 视图）
   // ------------------------------------------------------------------
 
-  private nodesFromProgress(progress: readonly WorkflowEntry[]): WorkflowRunSummary['nodes'] {
+  private nodesFromProgress(progress: readonly WorkflowEntry[]): NonNullable<WorkflowRunSummary['nodes']> {
     const collapsed = collapse(progress)
     const nodes: NonNullable<WorkflowRunSummary['nodes']> = []
     for (const agent of collapsed.agents) {
@@ -953,6 +1107,18 @@ export class WorkflowService {
                 : 'failed'
               : 'running',
         ...(agent.agentType !== undefined ? { agentType: agent.agentType } : {}),
+        ...(agent.label !== undefined ? { label: agent.label } : {}),
+        ...(agent.conversationId !== undefined ? { conversationId: agent.conversationId } : {}),
+        ...(agent.executionId !== undefined ? { executionId: agent.executionId } : {}),
+        ...(agent.effectiveCwd !== undefined ? { effectiveCwd: agent.effectiveCwd } : {}),
+        ...(agent.worktree !== undefined ? { worktree: agent.worktree } : {}),
+        ...(agent.phaseIndex !== undefined ? { phaseIndex: agent.phaseIndex } : {}),
+        ...(agent.phaseTitle !== undefined ? { phaseTitle: agent.phaseTitle } : {}),
+        ...(agent.prompt !== undefined ? { prompt: agent.prompt } : {}),
+        ...(agent.schema !== undefined ? { schema: agent.schema } : {}),
+        ...(agent.gate !== undefined ? { gate: agent.gate } : {}),
+        ...(agent.tokens !== undefined ? { tokens: agent.tokens } : {}),
+        ...(agent.durationMs !== undefined ? { durationMs: agent.durationMs } : {}),
         ...(agent.startedAt !== undefined ? { startedAt: agent.startedAt } : {}),
         ...(agent.lastProgressAt !== undefined ? { settledAt: agent.lastProgressAt } : {}),
         ...(agent.state === 'done' && agent.resultPreview !== undefined ? { output: agent.resultPreview } : {}),
@@ -966,6 +1132,7 @@ export class WorkflowService {
         status: action.state === 'done' ? 'done' : action.state === 'error' ? 'failed' : 'running',
         ...(action.startedAt !== undefined ? { startedAt: action.startedAt } : {}),
         ...(action.lastProgressAt !== undefined ? { settledAt: action.lastProgressAt } : {}),
+        ...(action.durationMs !== undefined ? { durationMs: action.durationMs } : {}),
         ...(action.state === 'done' && action.resultPreview !== undefined ? { output: action.resultPreview } : {}),
         ...(action.error !== undefined ? { error: action.error } : {}),
       })

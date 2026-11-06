@@ -25,6 +25,7 @@ import {
 } from './journal.js'
 import { type CompiledSchema, compileJsonSchema } from './json-schema.js'
 import { extractMeta, type WorkflowMeta } from './meta.js'
+import type { AgentExecutionInfo, AgentGateResult } from '@helm/protocol'
 import type { WorkflowActionEntry, WorkflowAgentEntry, WorkflowEntry } from './progress.js'
 import { WORKER_SOURCE } from './worker-source.js'
 
@@ -64,15 +65,20 @@ export interface WorkflowSpawnRequest {
   model?: string
   effort?: string
   isolation?: 'worktree'
-  /** 宿主在子会话创建后回报（会话 id / 实际模型等），进度行就地更新。 */
-  onResolved?(info: {
-    conversationId?: number
+  /**
+   * 执行环境确定后回传（原生子会话或外部运行时均适用）：conversationId /
+   * executionId / effectiveCwd / worktree 等元数据 + 实际模型信息。引擎把
+   * 元数据写入进度行（不混入业务输出）。
+   */
+  onResolved?(info: AgentExecutionInfo & {
     modelName?: string
     modelId?: string
     thinking?: string
     requestedThinking?: string
     requestedModel?: string
   }): void
+  /** gate 已在执行环境内恰好一次执行后的结果回报（免二次执行）。 */
+  onGateResult?(result: AgentGateResult): void
   /** 由脚本 agent({ schema }) 编译出的结构化输出契约。 */
   schema?: CompiledSchema
   phaseIndex?: number
@@ -96,6 +102,11 @@ export interface WorkflowSpawnResult {
   cwd?: string
   /** 宿主已在子进程工作目录内执行过 gate 时回传，applyGate 不再重复执行。 */
   gate?: WorkflowGateResult
+  /**
+   * 执行环境元数据快照（spawn 完成时已确定的部分；onResolved 可能更早）。
+   * 引擎仅用于进度行，绝不混入用户返回值。
+   */
+  executionInfo?: AgentExecutionInfo
 }
 
 /** gate 命令结果；output 是失败时展示给用户的输出。 */
@@ -126,8 +137,9 @@ export interface WorkflowHost {
   ): Promise<WorkflowSpawnResult>
   /**
    * 执行 gate 命令并报告是否通过。cwd 为子会话工作目录（如有）。
-   * 缺省宿主让 runtime 显式失败该调用——静默不跑的 gate 等于把未验证工作
-   * 标记为已验证。
+   * 宿主自跑 fallback：执行环境未回报 gate（无 onGateResult/result.gate）时
+   * 由本引擎兑现。缺省宿主让 runtime 显式失败该调用——静默不跑的 gate
+   * 等于把未验证工作标记为已验证。
    */
   runGate?(command: string, options: { agentId: string; cwd?: string }): Promise<WorkflowGateResult>
   /**
@@ -382,11 +394,13 @@ async function applyGate(
   result: WorkflowSpawnResult,
   command: string,
   agentId: string,
-  runGate: NonNullable<WorkflowHost['runGate']>,
+  runGate: NonNullable<WorkflowHost['runGate']> | undefined,
+  reported?: WorkflowGateResult,
 ): Promise<WorkflowSpawnResult> {
   const outcome =
+    reported ??
     result.gate ??
-    (await runGate(command, {
+    (await runGate!(command, {
       agentId,
       ...(result.cwd !== undefined ? { cwd: result.cwd } : {}),
     }))
@@ -679,10 +693,13 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         agentId,
         agentType,
         promptPreview: preview(payload.prompt),
+        prompt: payload.prompt,
+        ...(compiledSchema !== undefined ? { schema: compiledSchema.schema } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(isolation !== undefined ? { isolation } : {}),
         ...(payload.phaseIndex !== undefined ? { phaseIndex: payload.phaseIndex } : {}),
         ...(payload.phaseTitle !== undefined ? { phaseTitle: payload.phaseTitle } : {}),
+        ...(payload.gate !== undefined ? { gateCommand: payload.gate } : {}),
       }
 
       const queuedAt = Date.now()
@@ -768,10 +785,18 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
           const onResolved: NonNullable<WorkflowSpawnRequest['onResolved']> = (info) => {
             if (info.conversationId !== undefined) base.conversationId = info.conversationId
+            if (info.executionId !== undefined) base.executionId = info.executionId
+            if (info.effectiveCwd !== undefined) base.effectiveCwd = info.effectiveCwd
+            if (info.worktree !== undefined) base.worktree = info.worktree
             if (info.modelName !== undefined) base.model = info.modelName
             if (info.thinking !== undefined) base.thinking = info.thinking
             if (info.requestedThinking !== undefined) base.requestedThinking = info.requestedThinking
             if (info.requestedModel !== undefined) base.requestedModel = info.requestedModel
+            if (!inflight.has(agentId)) return
+            emit([{ ...base, queuedAt, startedAt, ...attemptMark, lastProgressAt: Date.now() }])
+          }
+          const onGateResult: NonNullable<WorkflowSpawnRequest['onGateResult']> = (gateResult) => {
+            base.gate = gateResult
             if (!inflight.has(agentId)) return
             emit([{ ...base, queuedAt, startedAt, ...attemptMark, lastProgressAt: Date.now() }])
           }
@@ -797,6 +822,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                     ...(payload.phaseTitle !== undefined ? { phaseTitle: payload.phaseTitle } : {}),
                     ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
                     onResolved,
+                    ...(payload.gate !== undefined ? { onGateResult } : {}),
                   })
             if (result.ok) {
               completedByLabel.set(label, {
@@ -806,12 +832,25 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                 ...(model !== undefined ? { model } : {}),
                 ...(isolation !== undefined ? { isolation } : {}),
               })
+              if (result.executionInfo !== undefined) {
+                const info = result.executionInfo
+                if (info.conversationId !== undefined) base.conversationId = info.conversationId
+                if (info.executionId !== undefined) base.executionId = info.executionId
+                if (info.effectiveCwd !== undefined) base.effectiveCwd = info.effectiveCwd
+                if (info.worktree !== undefined) base.worktree = info.worktree
+              }
+              if (result.gate !== undefined && base.gate === undefined) base.gate = result.gate
               if (compiledSchema !== undefined && result.ok) {
                 result = applySchema(result, compiledSchema)
               }
-              if (result.ok && payload.gate !== undefined && runGate !== undefined) {
-                result = await applyGate(result, payload.gate, agentId, runGate)
+              if (result.ok && payload.gate !== undefined) {
+                // gate 恰好一次：优先 onGateResult/result.gate 已回报结果；
+                // 否则宿主自跑 fallback（仍缺 runGate 则上方前置检查已 fatal）。
+                result = await applyGate(result, payload.gate, agentId, runGate, base.gate)
+                if (result.ok && base.gate === undefined) base.gate = { ok: true, output: '' }
               }
+            } else if (payload.gate !== undefined && result.gate !== undefined && base.gate === undefined) {
+              base.gate = result.gate
             }
           } catch (error) {
             result = { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -843,7 +882,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
             ...(result.toolCalls !== undefined ? { toolCalls: result.toolCalls } : {}),
           }
-
           if (result.ok) {
             const text = result.text ?? ''
             emit([{ ...common, state: 'done', resultPreview: preview(text) }])
@@ -861,8 +899,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             },
           ])
           respond(callId, true, null)
-          return
-        }
+          return        }
       } finally {
         liveAgents.delete(index)
       }

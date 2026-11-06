@@ -1034,7 +1034,7 @@ describe('WorkflowService', () => {
     host.spawnAgent = async (request) => {
       spawned++
       childConvId = 100 + spawned
-      request.onCreated?.(childConvId)
+      request.onResolved?.({ conversationId: childConvId })
       await new Promise<void>((resolve) => {
         resolveSpawn = resolve
       })
@@ -1212,7 +1212,7 @@ describe('WorkflowService', () => {
         return `resumed:${request.resume}`
       }
       const convId = ++nextConv
-      request.onCreated?.(convId)
+      request.onResolved?.({ conversationId: convId })
       return realSpawn(request)
     }
     const service = new WorkflowService({ dataDir, host, state: makeStateStore(), concurrency: 4 })

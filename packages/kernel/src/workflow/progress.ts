@@ -44,8 +44,22 @@ export interface WorkflowAgentEntry {
   phaseTitle?: string
   state: WorkflowEntryState
   agentId?: string
-  /** 宿主侧子会话 id（onCreated 回传），检查器凭它打开会话。 */
+  /** 宿主侧子会话 id（onResolved 回传），检查器凭它打开会话。 */
   conversationId?: number
+  /** 外部运行时执行标识（如 Herdr 窗格/标签 ID）。 */
+  executionId?: string
+  /** 实际生效工作目录（绝对路径；外部执行环境回传或宿主确认）。 */
+  effectiveCwd?: string
+  /** isolation: 'worktree' 分配的隔离工作树。 */
+  worktree?: { path: string; branch: string }
+  /** 完整 prompt（审计用；持久面已脱敏）。 */
+  prompt?: string
+  /** 结构化输出 JSON Schema（脚本声明原样）。 */
+  schema?: Record<string, unknown>
+  /** gate 执行结果（执行环境内恰好一次执行后的回报）。 */
+  gate?: { ok: boolean; output: string }
+  /** 脚本声明的 gate 命令原文（审计用；持久面已脱敏）。 */
+  gateCommand?: string
   agentType?: string
   model?: string
   thinking?: string
