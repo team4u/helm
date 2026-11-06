@@ -98,7 +98,7 @@ export class AskService {
    * secret 字段为 stash marker；cancel/superseded 的 answers 为 {}，调用方以
    * status 区分，取消绝不冒充批准）。只有验证/IO/宿主失败 reject。
    *
-   * spec.id 可预分配（幂等重试/外部引用），不覆盖任何已有 ID（含已结算审批）。
+   * spec.id 可预分配（外部关联与去重），不覆盖任何已有 ID（含已结算审批）。
    */
   async createAsk(spec: AskCreateSpec): Promise<AskResult> {
     validateAskSpec(spec)
@@ -336,7 +336,7 @@ function validateAskSpec(spec: AskCreateSpec): void {
   if (spec === null || typeof spec !== 'object') {
     throw new HelmError('validation_error', 'AskDoc spec 需为对象')
   }
-  // 预分配 id：非空字符串，禁 UUID 以外的控制/空白形状（不静默 trim/规范化）。
+  // 调用方 ID 必须是非空字符串，不静默规范化。
   if (spec.id !== undefined) {
     if (typeof spec.id !== 'string' || spec.id === '' || spec.id.trim() === '') {
       throw new HelmError('validation_error', 'AskDoc id 需为非空字符串')

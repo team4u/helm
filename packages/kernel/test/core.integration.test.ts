@@ -74,7 +74,6 @@ async function makeEnv(): Promise<TestEnv> {
     model: 'faux/faux-1',
     models,
   })
-  // 待 runtime 修复（plugin.changed -> refreshPluginTools 自动热装）后可移除。
 
   const requests: TestEnv['requests'] = []
   faux.setResponses([])
