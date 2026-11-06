@@ -2,7 +2,7 @@
  * service.ts — WorkflowService：工作流引擎对内核/HTTP 层的唯一出口。
  *
  * 职责：
- * - 请求校验（name/script/scriptPath 恰一、512KB 上限、安全 name）；
+ * - 请求校验（name/script/scriptPath 恰一、512KB 上限、安全 name、caps 正数）；
  * - run 生命周期（后台启动立即返回 summary、wait/abort/getRun）；
  * - 持久化（单库设计）：run 索引与每 run summary 存入注入的 state store
  *   （@helm/kernel 唯一 state.sqlite 的命名空间 doc），启动恢复时把遗留
@@ -12,14 +12,14 @@
  * - host 适配：runtime.ts 的 WorkflowHost（引擎接缝）↔ WorkflowServiceHost
  *   （KernelRuntime 注入：spawnAgent=agent_spawn 管道、invokeAction=PluginHost
  *   动作总线、getConversation/abortConversation、emitEvent、可选 runGate）；
- * - 恢复语义：resumeFromRunId 重放 journal；started 无终态的 action 调用显式报
- *   workflow_action_uncertain（409），由人类确认，绝不自动重跑副作用。
+ * - 恢复语义：resumeFromRunId 重放 journal；账本缺失/不可读/存在失败或悬挡
+ *   action（副作用不可判定）一律显式拒绝，由人类确认，绝不自动重跑副作用。
  *
  * 引擎本体（runtime.ts）零内核依赖；本文件是唯一 import kernel 侧类型的适配层。
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
   HelmError,
@@ -37,6 +37,7 @@ import { extractMeta, hasMetaDeclaration } from './meta.js'
 import { collapse, type WorkflowEntry } from './progress.js'
 import {
   MAX_SCRIPT_LENGTH,
+  redactJsonValue,
   runWorkflow,
   type WorkflowHost,
   type WorkflowRunResult,
@@ -93,6 +94,14 @@ export interface WorkflowServiceOptions {
   agentCap?: number
   itemCap?: number
   nestedCap?: number
+  /**
+   * 持久面值级脱敏钩子（主 app 注入 kernel.stash.redact）：所有即将写入
+   * state/journal 的字符串值（args/result/error/进度预览）先经此替换。值级
+   * 递归，不做 stringify 后整体替换。运行时执行始终用原始脚本与值，持久版本
+   * 脱敏后不可逆——重放取回的是脱敏值，秘密必须经 env / action 输入 marker
+   * 传递，不得依赖 resume 还原 secret 原文。
+   */
+  redact?: (text: string) => string
 }
 
 /** 已保存工作流的安全名称：字母数字开头，限 [A-Za-z0-9._-]，防路径穿越。 */
@@ -129,6 +138,8 @@ interface RunRecord {
   scriptPath?: string
   /** 保存目录里的具名工作流。 */
   savedName?: string
+  /** 本次运行的实际 args（安全 JSON；resume 缺省沿用）。 */
+  args?: unknown
   journalPath: string
   replayedFrom?: string
 }
@@ -137,34 +148,63 @@ interface ActiveRun {
   runId: string
   conversationId: number
   abort: AbortController
-  /** run 结束（含 abort）后 resolve。 */
+  /** run 结束（含 abort、子会话中止收尾、终态落盘）后 resolve；绝不 reject。 */
   done: Promise<void>
+  /** 终态落盘/flush 失败时由 wait() 原样抛出（done 不 reject，避免无人 await 时 unhandled）。 */
+  settleError?: unknown
   summary: WorkflowRunSummary
   journalPath: string
   writer: JournalWriter
   progress: WorkflowEntry[]
   timeline: WorkflowProgressEntry[]
+  /** 在途子会话的中止 promise（close/abort 需 await 后才算真正结束）。 */
+  pendingAborts: Set<Promise<void>>
+  /** progress 持久化节流（timeline 非空后定期落盘）。 */
+  lastPersistAt: number
 }
+
+/** progress 持久化最小间隔：高频进度不逐条落库。 */
+const PROGRESS_PERSIST_INTERVAL_MS = 1_000
 
 export class WorkflowService {
   private readonly dataDir: string
   private readonly host: WorkflowServiceHost
   private readonly state: WorkflowStateStore
   private readonly caps: Pick<WorkflowServiceOptions, 'concurrency' | 'agentCap' | 'itemCap' | 'nestedCap'>
+  private readonly redact: (text: string) => string
   private readonly active = new Map<string, ActiveRun>()
   private closed = false
+  /** init 幂等标记：仅恢复完整成功后置位；失败可重试。 */
   private recovered = false
+  private initPromise?: Promise<void>
 
   constructor(options: WorkflowServiceOptions) {
     this.dataDir = options.dataDir
     this.host = options.host
     this.state = options.state
-    this.caps = {
-      ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
-      ...(options.agentCap !== undefined ? { agentCap: options.agentCap } : {}),
-      ...(options.itemCap !== undefined ? { itemCap: options.itemCap } : {}),
-      ...(options.nestedCap !== undefined ? { nestedCap: options.nestedCap } : {}),
+    const capError = (field: string, value: number): HelmError =>
+      new HelmError(
+        'validation_error',
+        `工作流 ${field} 必须是正整数（收到 ${value}；零或负值会让 run 在首个调度点死锁）`,
+        400,
+        { field, value },
+      )
+    const positiveOrThrow = (field: string, value: number | undefined): number | undefined => {
+      if (value === undefined) return undefined
+      if (!Number.isInteger(value) || value < 1) throw capError(field, value)
+      return value
     }
+    const concurrency = positiveOrThrow('concurrency', options.concurrency)
+    const agentCap = positiveOrThrow('agentCap', options.agentCap)
+    const itemCap = positiveOrThrow('itemCap', options.itemCap)
+    const nestedCap = positiveOrThrow('nestedCap', options.nestedCap)
+    this.caps = {
+      ...(concurrency !== undefined ? { concurrency } : {}),
+      ...(agentCap !== undefined ? { agentCap } : {}),
+      ...(itemCap !== undefined ? { itemCap } : {}),
+      ...(nestedCap !== undefined ? { nestedCap } : {}),
+    }
+    this.redact = options.redact ?? ((text: string) => text)
   }
 
   // ------------------------------------------------------------------
@@ -184,26 +224,36 @@ export class WorkflowService {
   }
 
   /**
-   * 启动恢复：把跨重启遗留的 running run 显式标 failed。
-   * 幂等；run() 首次调用前自动执行，也可由宿主显式调用。
+   * 启动恢复：把跨重启遗留的 running run 显式标 failed。幂等；run() 首次调用
+   * 前自动执行，也可由宿主显式调用。失败可重试：initPromise 仅在恢复完整
+   * 成功（含 flush）后保留，异常时清缓存，下一次 init()/run() 重新执行。
    */
   async init(): Promise<void> {
     if (this.recovered) return
-    this.recovered = true
-    const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
-    let changed = false
-    for (const entry of index) {
-      const record = this.state.get<RunRecord | null>(runKey(entry.id), null)
-      if (record === null || record.status !== 'running') continue
-      record.status = 'failed'
-      record.updatedAt = Date.now()
-      record.error =
-        `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）：${record.error ?? ''}`.trim()
-      this.state.set(runKey(entry.id), record)
-      changed = true
-      this.host.emitEvent('workflow.updated', this.toSummary(record))
-    }
-    if (changed) await this.state.flush?.()
+    if (this.initPromise !== undefined) return this.initPromise
+    this.initPromise = (async () => {
+      try {
+        const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+        let changed = false
+        for (const entry of index) {
+          const record = this.state.get<RunRecord | null>(runKey(entry.id), null)
+          if (record === null || record.status !== 'running') continue
+          record.status = 'failed'
+          record.updatedAt = Date.now()
+          record.error =
+            `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）：${record.error ?? ''}`.trim()
+          this.state.set(runKey(entry.id), record)
+          changed = true
+          this.host.emitEvent('workflow.updated', this.toSummary(record))
+        }
+        if (changed) await this.state.flush?.()
+        this.recovered = true
+      } finally {
+        // 失败（flush 抛错等）时清缓存：下一次 init()/run() 重试，不永久贴 failed。
+        if (!this.recovered) this.initPromise = undefined
+      }
+    })()
+    return this.initPromise
   }
 
   // ------------------------------------------------------------------
@@ -216,8 +266,14 @@ export class WorkflowService {
     let entries: string[]
     try {
       entries = readdirSync(dir)
-    } catch {
-      return []
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException
+      // 目录尚不存在：空列表是事实，不是降级。
+      if (err.code === 'ENOENT') return []
+      throw new HelmError('io_error', `无法读取工作流目录 ${dir}：${err.message}`, 500, {
+        path: dir,
+        code: err.code,
+      })
     }
     const out: Array<{ name: string; path: string }> = []
     for (const entry of entries.sort()) {
@@ -228,8 +284,14 @@ export class WorkflowService {
       let source: string
       try {
         source = readFileSync(path, 'utf-8')
-      } catch {
-        continue
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException
+        // 列表是尽力而为的目录视图：单个文件不可读跳过但不隐瞒。
+        if (err.code === 'ENOENT') continue
+        throw new HelmError('io_error', `无法读取工作流脚本 ${path}：${err.message}`, 500, {
+          path,
+          code: err.code,
+        })
       }
       // 非 workflow 的普通 .js（构建产物、草稿）不应出现在列表里。
       if (!hasMetaDeclaration(source)) continue
@@ -244,7 +306,7 @@ export class WorkflowService {
 
   /**
    * 启动一个工作流 run：后台执行，立即返回 summary（不等完成）。
-   * @throws HelmError validation_error / not_found / workflow_action_uncertain。
+   * @throws HelmError validation_error / not_found / workflow_action_uncertain / journal_read_failed。
    */
   async run(request: WorkflowRunRequest): Promise<WorkflowRunSummary> {
     this.assertNotClosed()
@@ -328,6 +390,14 @@ export class WorkflowService {
       )
     }
 
+    // --- args（resume 沿用原 args；显式提供才覆盖） --------------------
+    let args: unknown
+    if (request.args !== undefined) {
+      args = request.args
+    } else if (replayFrom?.args !== undefined) {
+      args = replayFrom.args
+    }
+
     // --- journal（resume 重放 + 本 run 记账） -------------------------
     const runId = newRunId()
     mkdirSync(this.artifactsDir(conversationId), { recursive: true })
@@ -336,14 +406,25 @@ export class WorkflowService {
     let replayEntries: readonly WorkflowJournalEntry[] = []
     if (replayFrom !== undefined) {
       const journal = readJournal(replayFrom.journalPath)
+      if (journal.readFailed !== undefined) {
+        // 权限/I-O 错误：账本状态未知，假扮空账本等于自动重跑全部副作用。
+        throw new HelmError(
+          'journal_read_failed',
+          `工作流 ${replayFrom.id} 的账本不可读（${journal.readFailed.code}），无法安全恢复；请修复文件权限后重试`,
+          409,
+          { priorRunId: replayFrom.id, journalPath: replayFrom.journalPath, ...journal.readFailed },
+        )
+      }
       if (journal.actionUncertain) {
-        // 上一 run 死于动作执行中：副作用是否发生不可判定，显式交人类决策。
+        // 悬挂 started / 失败 action / 不可判定损坏行：副作用是否发生不可判定，
+        // 显式交人类决策，绝不自动重跑。
+        const why = journal.failedActions > 0 ? '存在失败（ok:false）的动作终态行' : '账本存在已开始但未确认完成或无法判定的动作调用'
         throw new HelmError(
           'workflow_action_uncertain',
-          `工作流 ${replayFrom.id} 的账本存在已开始但未确认完成的动作调用，无法安全恢复；` +
-            '请人工确认该动作副作用后，从其 journal 中移除对应 action_started 行或放弃 resume',
+          `工作流 ${replayFrom.id} 的${why}（failedActions=${journal.failedActions}），无法安全恢复；` +
+            '请人工确认该动作副作用后，从其 journal 中移除对应 action 行或放弃 resume',
           409,
-          { priorRunId: replayFrom.id, journalPath: replayFrom.journalPath },
+          { priorRunId: replayFrom.id, journalPath: replayFrom.journalPath, failedActions: journal.failedActions },
         )
       }
       replayEntries = journal.entries
@@ -363,6 +444,7 @@ export class WorkflowService {
       ...(scriptPath === undefined ? { script } : {}),
       ...(scriptPath !== undefined ? { scriptPath } : {}),
       ...(savedName !== undefined ? { savedName } : {}),
+      ...(args !== undefined ? { args: redactJsonValue(args, this.redact) } : {}),
       journalPath,
       ...(replayFrom !== undefined ? { replayedFrom: replayFrom.id } : {}),
     }
@@ -377,25 +459,89 @@ export class WorkflowService {
       writer: new JournalWriter(journalPath),
       progress: [],
       timeline: [],
+      pendingAborts: new Set(),
+      lastPersistAt: createdAt,
     }
     this.active.set(runId, run)
 
+    /**
+     * run 收尾（唯一出口）：失败终态统一写入 record（内存 summary 只是镜像），
+     * writer 必关、active 必删、在途子会话中止必等待——任何一步失败都不留
+     * 假 running。后台 promise 的 rejection 被 done 吸收并由 record.error 如实
+     * 上报，绝不 unhandled。
+     */
+    const settleRun = async (result: WorkflowRunResult | undefined, failure?: unknown): Promise<void> => {
+      try {
+        if (result !== undefined) {
+          record.status = result.status === 'killed' ? 'aborted' : result.status
+          if (result.error !== undefined) record.error = this.redact(result.error)
+          if (result.value !== undefined) record.result = redactJsonValue(result.value, this.redact)
+        } else {
+          // runWorkflow 本身失败（坏 meta/语法/worker 启动异常/state 写失败续）。
+          record.status = 'failed'
+          const message = failure instanceof Error ? failure.message : failure !== undefined ? String(failure) : 'unknown workflow failure'
+          record.error = this.redact(message)
+        }
+        record.updatedAt = Date.now()
+        record.nodes = this.nodesFromProgress(run.progress)
+        record.progress = run.timeline
+        run.summary = this.toSummary(record)
+        try {
+          this.writeRecord(record)
+          await this.state.flush?.()
+        } catch (persistError) {
+          // 持久化失败必须如实浮出（吞掉 = 下次读回假 running），但仍先完成清理。
+          const persistMessage = persistError instanceof Error ? persistError.message : String(persistError)
+          process.stderr.write(`workflow ${runId}: terminal state persist failed: ${persistMessage}\n`)
+          run.summary = {
+            ...run.summary,
+            status: record.status,
+            error: `${record.error ?? ''}\n[persist failed: ${persistMessage}]`.trim(),
+          }
+          run.settleError = persistError
+        }
+      } finally {
+        try {
+          await run.writer.close()
+        } catch (closeError) {
+          process.stderr.write(
+            `workflow ${runId}: journal close failed: ${closeError instanceof Error ? closeError.message : String(closeError)}\n`,
+          )
+        }
+        // close 失败/持久化失败同样必须摘除 active 并等待子会话中止结束。
+        this.active.delete(runId)
+        if (run.pendingAborts.size > 0) {
+          await Promise.allSettled([...run.pendingAborts])
+        }
+        this.host.emitEvent('workflow.updated', { ...run.summary })
+      }
+    }
+
     // 先落 running 快照（state store）：进程若死于此 run，重启后 init() 显式发现并标 failed。
-    this.writeRecord(record, { index: true })
-    await this.state.flush?.()
+    try {
+      this.writeRecord(record, { index: true })
+      await this.state.flush?.()
+    } catch (error) {
+      // running 快照都没能落库：不启动执行，不留任何 active/writer。
+      await run.writer.close().catch(() => {})
+      this.active.delete(runId)
+      throw error
+    }
     this.host.emitEvent('workflow.updated', { ...run.summary })
 
     const engineHost = this.makeEngineHost(run, parent)
 
     run.done = (async () => {
       let result: WorkflowRunResult | undefined
+      let failure: unknown
       try {
         result = await runWorkflow({
           script,
-          ...(request.args !== undefined ? { args: request.args } : {}),
+          ...(args !== undefined ? { args } : {}),
           host: engineHost,
           signal: abort.signal,
           ...this.caps,
+          ...(this.redact !== undefined ? { redact: this.redact } : {}),
           onProgress: (entries) => {
             run.progress.push(...entries)
             const stamp = Date.now()
@@ -406,7 +552,21 @@ export class WorkflowService {
                 run.timeline.push({ at: stamp, kind: 'log', message: entry.message })
               }
             }
-            run.summary.updatedAt = Date.now()
+            run.summary.updatedAt = stamp
+            // 周期性把时间线落库：长时间 run 的 phase/log 不必等终态才可见。
+            if (run.timeline.length > 0 && stamp - run.lastPersistAt >= PROGRESS_PERSIST_INTERVAL_MS) {
+              run.lastPersistAt = stamp
+              record.updatedAt = stamp
+              record.progress = run.timeline
+              try {
+                this.writeRecord(record)
+                const flushed = this.state.flush?.()
+                if (flushed !== undefined) void flushed.catch(() => {})
+                this.host.emitEvent('workflow.updated', { ...run.summary, progress: run.timeline })
+              } catch {
+                // 尽力而为的观察面：失败不阻断 run，终态写入会再次尝试。
+              }
+            }
           },
           journal: {
             ...(replayEntries.length > 0 ? { entries: replayEntries } : {}),
@@ -417,27 +577,9 @@ export class WorkflowService {
         })
       } catch (error) {
         // 引擎在 worker 启动前拒绝（坏 meta、超限等）：无进度可折叠，直接失败。
-        run.summary.status = 'failed'
-        run.summary.error = error instanceof Error ? error.message : String(error)
-        run.summary.updatedAt = Date.now()
-      } finally {
-        await run.writer.close()
+        failure = error
       }
-
-      if (result !== undefined) {
-        record.status = result.status === 'killed' ? 'aborted' : result.status
-        if (result.error !== undefined) record.error = result.error
-        if (result.value !== undefined) record.result = result.value
-      }
-      record.updatedAt = Date.now()
-      record.nodes = this.nodesFromProgress(run.progress)
-      record.progress = run.timeline
-
-      run.summary = this.toSummary(record)
-      this.writeRecord(record)
-      await this.state.flush?.()
-      this.active.delete(runId)
-      this.host.emitEvent('workflow.updated', { ...run.summary })
+      await settleRun(result, failure)
     })()
 
     return { ...run.summary }
@@ -460,7 +602,9 @@ export class WorkflowService {
   async wait(runId: string): Promise<unknown> {
     const activeRun = this.active.get(runId)
     if (activeRun !== undefined) {
+      // done 绝不 reject；终态落盘/flush 失败经 settleError 原样抛出，不假成功。
       await activeRun.done
+      if (activeRun.settleError !== undefined) throw activeRun.settleError
     }
     return this.getRun(runId).result
   }
@@ -474,7 +618,9 @@ export class WorkflowService {
       return
     }
     activeRun.abort.abort()
+    // done 已 await 在途子会话的中止收尾（pendingAborts），返回时子会话确已停。
     await activeRun.done
+    if (activeRun.settleError !== undefined) throw activeRun.settleError
   }
 
   async close(): Promise<void> {
@@ -517,8 +663,21 @@ export class WorkflowService {
       abortAgent(agentId: string): void {
         const convId = conversationByAgent.get(agentId)
         if (convId === undefined) return
-        // 只中止本 run 派生的子会话；不存在（已结束）时静默幂等。
-        void service.host.abortConversation(convId).catch(() => {})
+        // 只中止本 run 派生的子会话。fire-and-forget 会让 abort/close 返回时子会话
+        // 仍在跑——记入 pendingAborts 由 done 收尾统一 await；不存在（已结束）时
+        // abortConversation 幂等静默，但 rejection 仍须诊断，绝不吞。
+        const pending = service.host
+          .abortConversation(convId)
+          .catch((error: unknown) => {
+            process.stderr.write(
+              `workflow ${run.runId}: abort conversation ${convId} failed: ${error instanceof Error ? error.message : String(error)}\n`,
+            )
+          })
+          .then(() => {
+            run.pendingAborts.delete(pending)
+          })
+        // 先注册再执行：catch 链已保证 pending 不 reject，then 删除自引用安全。
+        run.pendingAborts.add(pending)
       },
       ...(service.host.runGate !== undefined
         ? {
@@ -557,18 +716,27 @@ export class WorkflowService {
       return { ok: false, error: 'Workflow aborted.' }
     }
 
+    // 引擎内 agentId（wf-agent-N）跨 run 重复；全局 agentSessions 是进程级
+    // Map，两个同 parent 的并行 run 会互相覆盖对方的映射，resume 可能续接错
+    // child。投给 native 的稳定 ID加 runId 命名空间；引擎内部 ID/label 不变。
+    const nativeAgentId = `${run.runId}:${request.agentId}`
+    // resume 严格续接：优先用本 run 内 spawn 时记录的 convId；仅当本 run 未见
+    // 过（如 resume 自重放账本的 agent）才退回 native 全局映射。
+    const knownConvId = conversationByAgent.get(request.agentId)
+    const resumeRef = isResume ? String(knownConvId ?? nativeAgentId) : undefined
+
     let gateCwd: string | undefined
     const proto: AgentSpawnRequest = {
       parentConversationId: run.conversationId,
       prompt: request.prompt,
-      agentId: request.agentId,
+      agentId: nativeAgentId,
       // gate 不下传：执行权在本服务 runGate（对齐决策：恰好执行一次）。
       ...(request.agentType !== '' ? { agentType: request.agentType } : {}),
       ...(request.model !== undefined ? { model: request.model } : {}),
       ...(request.effort !== undefined ? { effort: request.effort } : {}),
       ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
       ...(request.schema !== undefined ? { schema: request.schema.schema } : {}),
-      ...(isResume ? { resume: request.agentId } : {}),
+      ...(resumeRef !== undefined ? { resume: resumeRef } : {}),
       cwd: parent.cwd,
       onCreated: (conversationId: number) => {
         conversationByAgent.set(request.agentId, conversationId)
@@ -660,19 +828,53 @@ export class WorkflowService {
         { name },
       )
     }
-    return join(this.workflowsDir(), `${name}.js`)
+    // SAFE_NAME 已排除 '/'，但 symlink 可能把名字重新指到目录外：realpath 校验
+    // 解析后的真实路径仍在 workflows 目录内。
+    const dir = this.workflowsDir()
+    const target = join(dir, `${name}.js`)
+    try {
+      const real = realpathSync(target)
+      const realDir = realpathSync(dir)
+      if (real !== join(realDir, `${name}.js`)) {
+        throw new HelmError(
+          'validation_error',
+          `工作流 "${name}" 是指向目录外的符号链接（${real}），已拒绝`,
+          400,
+          { name, real },
+        )
+      }
+      return target
+    } catch (error) {
+      if (error instanceof HelmError) throw error
+      const err = error as NodeJS.ErrnoException
+      if (err.code === 'ENOENT') return target // 不存在：readScriptFile 报 not_found
+      throw new HelmError('io_error', `无法解析工作流路径 ${target}：${err.message}`, 500, {
+        path: target,
+        code: err.code,
+      })
+    }
   }
 
   private resolveExplicitPath(scriptPath: string): string {
+    // 显式用户文件路径：可读即用，不承诺沙箱（与文档一致）。
     return resolve(scriptPath)
   }
 
   private readScriptFile(path: string): string {
     let source: string
     try {
+      const st = statSync(path)
+      if (!st.isFile()) {
+        throw new HelmError('not_found', `工作流脚本不是常规文件：${path}`, 404, { path })
+      }
       source = readFileSync(path, 'utf-8')
-    } catch {
-      throw new HelmError('not_found', `工作流脚本文件不可读：${path}`, 404, { path })
+    } catch (error) {
+      if (error instanceof HelmError) throw error
+      const err = error as NodeJS.ErrnoException
+      throw new HelmError('not_found', `工作流脚本文件不可读（${err.code ?? 'unknown'}）：${path}`, 404, {
+        path,
+        code: err.code,
+      })
     }
     if (source.length > MAX_SCRIPT_LENGTH) {
       throw new HelmError(

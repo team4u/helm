@@ -15,10 +15,18 @@
  *   handler；`action` 终态行落盘后才 resolve 调用 promise。二者任一写失败都是
  *   fatal——继续跑等于在无法记账的状态下执行副作用，账本将失去意义。
  *
- * ## 恢复时的不确定性
- * `action_started` 无对应终态行 = 进程在动作执行中崩溃，无法确认副作用是否完成。
- * readJournal 对 action 相关的损坏/截断/失配不静默降级为"无缓存重跑"，而是返回
- * `actionUncertain` 让调用方显式报 `workflow_action_uncertain` 错误，由人类决策。
+ * ## 恢复时的不确定性（保守优先）
+ * 以下任一情况都无法证明"副作用未发生或已完整发生"，readJournal 一律置
+ * `actionUncertain`，由调用方显式拒绝自动恢复、交人类决策：
+ * - `action_started` 无对应终态行（不论其 seq 位置——终态行因任何原因丢失，
+ *   该动作的执行结果即不可判定，不能按"写在最后"启发放行）；
+ * - 损坏行无法判定类型：本引擎写出的行 type 恒为首键，只有能从残余文本中
+ *   读出**完整** `"type":"agent"` 前缀才敢归为 agent 行（ioError）；其余
+ *   （含可解析但形状未知的行）一律保守 uncertain，绝不靠字符串包含 "action"
+ *   之类的猜测放行；
+ * - 存在 ok:false 的 action 终态行（handler 抛错≠零副作用，自动重试可能重复
+ *   扣款/发送，计数经 `failedActions` 上报）；
+ * - 文件本身不可读（权限/I-O 错误，`readFailed` 上报；ENOENT 视为空账本）。
  *
  * ## 排序
  * 行内 seq 为引擎内单调递增的落盘顺序号（并发下按调用发起顺序分配 index，
@@ -29,6 +37,24 @@ import { createHash } from 'node:crypto'
 import { appendFile, open, type FileHandle } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import type { WorkflowJournalEntry } from '@helm/protocol'
+
+/**
+ * 追加写入的输入（seq/v 由写入器分配）。
+ * 显式按 variant 声明而非 `Omit<Union, 'v'|'seq'>`——Omit 不分布，会把
+ * agent/action 各自的合法字段（ok/text/result…）从联合上剥掉。
+ */
+export type JournalWriteInput =
+  | { type: 'agent'; index: number; key: string; ok: boolean; text?: string; resumed?: true; seq?: number }
+  | { type: 'action_started'; index: number; key: string; seq?: number }
+  | {
+      type: 'action'
+      index: number
+      key: string
+      ok: boolean
+      result?: unknown
+      error?: string
+      seq?: number
+    }
 
 /** agent 调用的 key 输入（决定该 agent 做什么的所有字段）。 */
 export interface AgentJournalKeyInput {
@@ -67,12 +93,17 @@ export function actionJournalKey(actionId: string, serializedInput: string): str
 export interface JournalReadResult {
   entries: WorkflowJournalEntry[]
   /**
-   * true = 账本中存在 action_started 无终态（或 action 相关行损坏到无法判定），
-   * 调用方必须显式失败（workflow_action_uncertain），禁止自动重跑副作用。
+   * true = 账本无法证明安全重放（悬挂 started / 不可判定损坏行 / 失败 action /
+   * 文件不可读），调用方必须显式失败（workflow_action_uncertain /
+   * journal_read_failed），禁止自动重跑副作用。
    */
   actionUncertain: boolean
   /** 非 action 行的解析/读取问题计数（截断尾行、手改文件等）；不影响重放但如实上报。 */
   ioErrors: number
+  /** ok:false 的 action 终态行数（副作用可能已发生，恢复必须拒绝自动重试）。 */
+  failedActions: number
+  /** 文件存在但不可读（权限/I-O）。ENOENT 不在此列（正常空账本）。 */
+  readFailed?: { code: string; message: string }
 }
 
 function isAgentEntry(value: unknown): value is Extract<WorkflowJournalEntry, { type: 'agent' }> {
@@ -107,59 +138,75 @@ function isActionEntry(value: unknown): value is Extract<WorkflowJournalEntry, {
   )
 }
 
-/** 解析单行。返回 null 表示该行无法判定（损坏/截断/未知行型）。 */
-function parseLine(line: string): WorkflowJournalEntry | null {
-  if (line.trim() === '') return null
+type LineVerdict =
+  | { kind: 'entry'; entry: WorkflowJournalEntry }
+  /** 损坏但可判定为 agent 行：计 ioError，不阻断重放。 */
+  | { kind: 'agentCorrupt' }
+  /** 无法判定类型：保守视为可能涉及 action。 */
+  | { kind: 'uncertain' }
+
+/** 本引擎写出的行 type 恒为首键；只有完整的 "type":"agent" 前缀才判为 agent 损坏行。 */
+const AGENT_LINE_PREFIX = /^\s*\{\s*"type"\s*:\s*"agent"/
+
+function classifyLine(line: string): LineVerdict {
   let parsed: unknown
   try {
     parsed = JSON.parse(line)
   } catch {
-    return null
+    return AGENT_LINE_PREFIX.test(line) ? { kind: 'agentCorrupt' } : { kind: 'uncertain' }
   }
-  if (isAgentEntry(parsed) || isActionEntry(parsed) || isActionStartedEntry(parsed)) return parsed
-  return null
+  if (isAgentEntry(parsed)) return { kind: 'entry', entry: parsed }
+  if (isActionStartedEntry(parsed) || isActionEntry(parsed)) return { kind: 'entry', entry: parsed }
+  // 可解析但形状未知：能读出 type 字段且为 agent 时按 agent 损坏行处理，
+  // 其余（未知 type / 缺 type / 字段残缺）一律保守 uncertain。
+  if (typeof parsed === 'object' && parsed !== null && (parsed as { type?: unknown }).type === 'agent') {
+    return { kind: 'agentCorrupt' }
+  }
+  return { kind: 'uncertain' }
 }
 
 /**
  * 读入账本文件。
  *
- * - 文件不存在：空账本（全新 run 的正常路径）。
- * - 行损坏：能判定 type 的行照常入列；无法判定的行若位于 action started/终态
- *   配对窗口内（见下方配对逻辑），置 actionUncertain；其余计入 ioErrors 不中断。
- * - action_started 无终态：actionUncertain（进程崩溃于动作执行中）。
+ * - 文件不存在（ENOENT）：空账本（全新 run 的正常路径）。
+ * - 文件不可读（权限/I-O）：readFailed + actionUncertain，绝不假扮空账本。
+ * - 行损坏：见文件头"恢复时的不确定性"；空行（尾部换行）跳过。
  */
 export function readJournal(path: string): JournalReadResult {
   let raw: string
   try {
     raw = readFileSync(path, 'utf-8')
-  } catch {
-    return { entries: [], actionUncertain: false, ioErrors: 0 }
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException
+    if (err.code === 'ENOENT') {
+      return { entries: [], actionUncertain: false, ioErrors: 0, failedActions: 0 }
+    }
+    return {
+      entries: [],
+      actionUncertain: true,
+      ioErrors: 0,
+      failedActions: 0,
+      readFailed: { code: err.code ?? 'EIO', message: err.message },
+    }
   }
 
   const entries: WorkflowJournalEntry[] = []
   let ioErrors = 0
-  let corruptInActionWindow = false
-  const lines = raw.split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!
-    // 最后一行为空是正常的（文件以 \n 结尾）；半写截断的尾行必然解析失败。
-    const isLast = i === lines.length - 1
-    const parsed = parseLine(line)
-    if (parsed === null) {
-      if (line.trim() === '' && isLast) continue
-      ioErrors++
-      // 半写/损坏行无法判定是否属于某 action 调用；若其后仍有可解析行，
-      // 说明它不是"进程死于动作中"的尾行，保守计为 ioError。若它是最后的
-      // 非空行，无法排除其是 action 终态——交给下方配对逻辑综合判定。
-      if (!isLast) continue
-      corruptInActionWindow = true
+  let corruptUncertain = false
+  for (const line of raw.split('\n')) {
+    if (line.trim() === '') continue
+    const verdict = classifyLine(line)
+    if (verdict.kind === 'entry') {
+      entries.push(verdict.entry)
       continue
     }
-    entries.push(parsed)
+    ioErrors++
+    if (verdict.kind === 'uncertain') corruptUncertain = true
   }
 
-  // 按 index 配对 action_started 与终态。seq 单调但 index 并发交错，配对按
-  // index+key 双匹配，不假设相邻。
+  // 按 index+key 配对 action_started 与终态。seq 单调但 index 并发交错，配对按
+  // index+key 双匹配，不假设相邻。任何悬挂 started（不论 seq 位置）都不确定：
+  // 终态行可能因损坏丢失，"started 落盘后 handler 被允许执行"是唯一事实。
   const startedByKey = new Map<string, Extract<WorkflowJournalEntry, { type: 'action_started' }>>()
   for (const entry of entries) {
     if (entry.type === 'action_started') startedByKey.set(`${entry.index}:${entry.key}`, entry)
@@ -167,13 +214,9 @@ export function readJournal(path: string): JournalReadResult {
   for (const entry of entries) {
     if (entry.type === 'action') startedByKey.delete(`${entry.index}:${entry.key}`)
   }
+  const dangling = startedByKey.size > 0
 
-  // 悬挂 started：若其 seq 大于任一 action 终态行的 seq，说明它写在最后一批——
-  // 进程死于该动作执行中；更早的悬挂 started（终态行因损坏丢失）同样不确定。
-  const maxActionSeq = entries.reduce((m, e) => (e.type === 'action' ? Math.max(m, e.seq) : m), -1)
-  const dangling =
-    startedByKey.size > 0 &&
-    ([...startedByKey.values()].some((started) => started.seq > maxActionSeq) || corruptInActionWindow)
+  const failedActions = entries.filter((e) => e.type === 'action' && !e.ok).length
 
   // 落盘顺序稳定化：seq 严格升序（去重：同 seq 以首行为准），index 顺序由前缀
   // 匹配逻辑按需检查。
@@ -186,7 +229,12 @@ export function readJournal(path: string): JournalReadResult {
     deduped.push(entry)
   }
 
-  return { entries: deduped, actionUncertain: dangling, ioErrors }
+  return {
+    entries: deduped,
+    actionUncertain: dangling || corruptUncertain || failedActions > 0,
+    ioErrors,
+    failedActions,
+  }
 }
 
 /**
@@ -233,7 +281,7 @@ export class JournalWriter {
    * agent 行尽力而为，失败计入 agentIoErrors。
    * @throws JournalWriteError action 行写失败或 writer 已 poisoned。
    */
-  async append(entry: Omit<WorkflowJournalEntry, 'seq' | 'v'> & { seq?: number }): Promise<number> {
+  async append(entry: JournalWriteInput): Promise<number> {
     const full = { ...entry, v: 1, seq: entry.seq ?? this.seq++ } as WorkflowJournalEntry
     const isActionLine = full.type === 'action_started' || full.type === 'action'
     if (!isActionLine && this.poisoned) {

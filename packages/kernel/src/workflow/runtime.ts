@@ -21,6 +21,7 @@ import {
   agentJournalKey,
   type AgentJournalKeyInput,
   JournalWriteError,
+  type JournalWriteInput,
 } from './journal.js'
 import { type CompiledSchema, compileJsonSchema } from './json-schema.js'
 import { extractMeta, type WorkflowMeta } from './meta.js'
@@ -151,11 +152,10 @@ export interface WorkflowControl {
   retry(index: number): boolean
 }
 
-/** 账本追加输入（seq/v 由写入器分配）。 */
-export type JournalWriteInput =
-  | { type: 'agent'; index: number; key: string; ok: boolean; text?: string; resumed?: true }
-  | { type: 'action_started'; index: number; key: string }
-  | { type: 'action'; index: number; key: string; ok: boolean; result?: unknown; error?: string }
+/** 账本追加输入见 journal.ts 的权威定义（此处旧别名仅为兼容本文件内引用）。 */
+export type { JournalWriteInput } from './journal.js'
+
+type JournalAppendInput = import('./journal.js').JournalWriteInput
 
 export interface RunWorkflowOptions {
   script: string
@@ -178,6 +178,12 @@ export interface RunWorkflowOptions {
     entries?: readonly import('@helm/protocol').WorkflowJournalEntry[]
     append?(entry: JournalWriteInput): Promise<void> | void
   }
+  /**
+   * 持久面（journal 值 / 进度预览）脱敏钩子：字符串值先经此替换再落盘。
+   * 缺省原样。注意：worker 回传与脚本运行时仍用原始值，重放只能取回脱敏值
+   * （秘密须经 env / action 输入 marker 传递，不得依赖重放还原）。
+   */
+  redact?(text: string): string
 }
 
 export interface WorkflowRunResult {
@@ -249,6 +255,22 @@ function walk(value: unknown, path: string, seen: Set<object>): void {
 /** 拒绝无法在 worker 往返与重放账本中存活 的值。 */
 export function assertBoundarySafe(value: unknown, path: string): void {
   walk(value, path, new Set())
+}
+
+/**
+ * 持久面值级脱敏：递归克隆并把每个字符串值经 redactText 替换（如 stash
+ * secret → marker）。绝不做 stringify 后整体替换——嵌套深处的秘密必须同样
+ * 被处理。边界安全值（纯对象/数组/标量）之外的原样返回。
+ */
+export function redactJsonValue(value: unknown, redactText: (text: string) => string): unknown {
+  if (typeof value === 'string') return redactText(value)
+  if (Array.isArray(value)) return value.map((item) => redactJsonValue(item, redactText))
+  if (value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const out: Record<string, unknown> = {}
+    for (const [key, entry] of Object.entries(value)) out[key] = redactJsonValue(entry, redactText)
+    return out
+  }
+  return value
 }
 
 /* ------------------------------------------------------------------------- *
@@ -418,6 +440,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
   const journalEntries = options.journal?.entries ?? []
   const appendJournal = options.journal?.append
+  const redactText = options.redact ?? ((text: string) => text)
   const journalResumes = journalEntries.some((entry) => entry.type === 'agent' && entry.resumed)
   let prefixIntact = journalEntries.length > 0 && !journalResumes
   let replayedCount = 0
@@ -452,10 +475,14 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
   }
 
   /** agent 行记账尽力而为：写失败只计数，不中断 run（resume 优化损失）。 */
-  async function recordAgent(entry: Omit<Extract<JournalWriteInput, { type: 'agent' }>, 'type'>): Promise<void> {
+  async function recordAgent(entry: Omit<Extract<JournalWriteInput, { type: 'agent' }>, 'type' | 'seq'>): Promise<void> {
     if (appendJournal === undefined) return
     try {
-      await appendJournal({ ...entry, type: 'agent' })
+      await appendJournal({
+        ...entry,
+        ...(entry.text !== undefined ? { text: redactText(entry.text) } : {}),
+        type: 'agent',
+      })
     } catch (error) {
       journalIoErrors.push(error instanceof Error ? error.message : String(error))
     }
@@ -636,7 +663,10 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       agentCount++
       const agentId = resumed?.agentId ?? `wf-agent-${index}`
       const label = payload.label ?? resumed?.label ?? derivedLabel(payload.prompt)
-      const agentType = resumed?.agentType ?? payload.agentType ?? 'general-purpose'
+      // agentType 缺省 'assistant'：helm 的 agentType 是 Profile ID，宿主
+      // ProfileService.ensureDefault 保证 assistant 存在（root 同源）。绝不沿用
+      // 上游 'general-purpose'——helm 没有该 profile，NativeSpawn 严格校验会硬失败。
+      const agentType = resumed?.agentType ?? payload.agentType ?? 'assistant'
       const model = resumed !== undefined ? resumed.model : payload.model
       const isolation = resumed !== undefined ? resumed.isolation : payload.isolation
       openLaunches.set(callId, label)
@@ -895,11 +925,24 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           },
         ])
         openLaunches.delete(callId)
-        // 只补记终态行（无副作用发生，无需 started 守护行）。
+        // 只补记终态行（无副作用发生，无需 started 守护行）。补记失败即 fatal：
+        // 默默容忍会让新 run 账本缺失该 action 终态——下次 resume 无法复用，
+        // 可能重执行副作用。账本不可写 = 不可安全记账 = 不可继续。
         try {
-          await appendJournal?.({ type: 'action', index, key, ok: true, result: replayed.result })
-        } catch {
-          // 重放补记失败无副作用风险；按 agent 行语义容忍。
+          await appendJournal?.({ type: 'action', index, key, ok: true, result: redactJsonValue(replayed.result, redactText) })
+        } catch (error) {
+          const message =
+            error instanceof JournalWriteError
+              ? error.message
+              : `workflow journal append failed: ${error instanceof Error ? error.message : String(error)}`
+          respond(
+            callId,
+            false,
+            undefined,
+            `workflow journal replay bookkeeping failed; aborting to keep the run resumable: ${message}`,
+            true,
+          )
+          return
         }
         respond(callId, true, replayed.result ?? null)
         return
@@ -937,8 +980,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       try {
         await appendJournal?.(
           outcome.ok
-            ? { type: 'action', index, key, ok: true, result: outcome.result }
-            : { type: 'action', index, key, ok: false, error: outcome.error },
+            ? { type: 'action', index, key, ok: true, result: redactJsonValue(outcome.result, redactText) }
+            : { type: 'action', index, key, ok: false, error: redactText(outcome.error) },
         )
       } catch (error) {
         const message =
