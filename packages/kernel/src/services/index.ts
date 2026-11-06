@@ -1,0 +1,88 @@
+/**
+ * @helm/kernel 服务层统一出口：文件资产、鉴权、机密、凭据与产物。
+ * 消费方（PluginHost / HTTP / CLI）一律从这里导入，不深入子模块路径。
+ */
+export {
+  HELM_DATA_DIR_ENV,
+  DATA_SUBDIRS,
+  resolveDataDir,
+  ensureDataDir,
+} from './paths.js'
+
+export {
+  FileNotFoundError,
+  FileParseError,
+  atomicWriteFile,
+  atomicWriteJson,
+  readTextFile,
+  readJsonFile,
+  readJsonFileOptional,
+  copyFilePrivate,
+  isPrivateMode,
+} from './atomic-file.js'
+
+export { ConfigService } from './config.js'
+
+export {
+  SecretStash,
+  REDACTED_PREFIX,
+  isValidEnvName,
+  makePlaceholder,
+  parsePlaceholder,
+  type StashedSecret,
+} from './secret-stash.js'
+
+export {
+  ProfileService,
+  SkillService,
+  DEFAULT_PROFILE_ID,
+  assertProfileId,
+  validateProfileInput,
+  parseSkillFrontmatter,
+  assertSkillId,
+  assertSafeRelativePath,
+  type Profile,
+  type SkillSummary,
+} from './profiles-skills.js'
+
+export {
+  AssetWatcher,
+  isTmpName,
+  ASSET_WATCHER_DEBOUNCE_MS,
+  type AssetWatcherOptions,
+} from './watcher.js'
+
+export {
+  AuthService,
+  AuthAlreadyConfiguredError,
+  InvalidCredentialsError,
+  WeakPasswordError,
+  MIN_PASSWORD_LENGTH,
+} from './auth.js'
+
+export {
+  CredentialService,
+  credentialsPath,
+  readRawText,
+  type CredentialStore,
+  type StoredCredential,
+} from './credentials.js'
+
+export {
+  ProviderService,
+  assertProviderId,
+  validateProviderConfig,
+  type ProviderConfig,
+} from './providers.js'
+
+export {
+  ArtifactService,
+  InMemoryArtifactRepository,
+  SPILL_THRESHOLD_BYTES,
+  PREVIEW_HEAD_BYTES,
+  truncateUtf8Safe,
+  type ArtifactMetadata,
+  type ArtifactRepository,
+  type RegisterOptions,
+  type SpillResult,
+} from './artifacts.js'
