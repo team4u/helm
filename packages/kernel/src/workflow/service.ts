@@ -161,6 +161,38 @@ interface RunRecord {
   replayedFrom?: string
 }
 
+/** 持久层读出的错误可打印形态（store 异常诊断用）。 */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+const RUN_STATUSES: readonly WorkflowRunStatus[] = ['running', 'completed', 'failed', 'aborted']
+
+/**
+ * 持久记录最低限度形状校验：只检查现行 RunRecord 契约的必需字段（summary
+ * 面所需），不做旧格式适配、不深校验可选段（nodes/progress 由消费方各自
+ * 容错）。返回首个问题描述，合法则 undefined。
+ */
+function runRecordProblem(record: unknown): string | undefined {
+  if (record === null || typeof record !== 'object' || Array.isArray(record)) {
+    return `非对象结构（${typeof record}）`
+  }
+  const r = record as Record<string, unknown>
+  if (typeof r['id'] !== 'string' || r['id'] === '') return 'id 非字符串'
+  if (typeof r['name'] !== 'string') return 'name 非字符串'
+  if (!Number.isInteger(r['conversationId']) || (r['conversationId'] as number) < 1) {
+    return 'conversationId 非正整数'
+  }
+  if (!RUN_STATUSES.includes(r['status'] as WorkflowRunStatus)) {
+    return `status 非法（${JSON.stringify(r['status'])}）`
+  }
+  if (!Number.isFinite(r['createdAt']) || typeof r['createdAt'] !== 'number') return 'createdAt 非数值'
+  if (!Number.isFinite(r['updatedAt']) || typeof r['updatedAt'] !== 'number') return 'updatedAt 非数值'
+  if (typeof r['journalPath'] !== 'string') return 'journalPath 非字符串'
+  if (r['error'] !== undefined && typeof r['error'] !== 'string') return 'error 非字符串'
+  return undefined
+}
+
 interface ActiveRun {
   runId: string
   conversationId: number
@@ -669,9 +701,26 @@ export class WorkflowService {
   /**
    * 全部已持久 run 的 summary（新建在前）：活跃 run 实时折叠 nodes，
   // 终态 run 读 store；非保存脚本运行的 run 也列出（历史可 inspect）。
+   *
+   * 索引损坏（缺记录、ID 不符、形状非法）或 store 抛错是持久层服务故障，
+   * 不是「少几项的正常列表」——静默吞掉会让 HTTP/CLI/snapshot 返回看似成功
+   * 的残缺数据。此处显式抛 workflow_index_corrupt（500）并附 runId 诊断；
+   * 单个 run 不存在的 404 语义仍由 getRun 保留。快照 provider 同走此路径，
+   * 故障不会被 snapshot 再吞掉（throw 直接打断 SSE snapshot 组装）。
    */
   listRuns(): WorkflowRunSummary[] {
-    const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+    let index: RunIndexEntry[]
+    try {
+      index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+    } catch (error) {
+      // 索引本体读不出来：与单条记录故障同级的持久层服务故障。
+      throw new HelmError(
+        'workflow_index_corrupt',
+        `读取工作流 run 索引失败：${errorMessage(error)}`,
+        500,
+        { key: INDEX_KEY },
+      )
+    }
     const out: WorkflowRunSummary[] = []
     const seen = new Set<string>()
     for (const active of this.active.values()) {
@@ -681,10 +730,16 @@ export class WorkflowService {
     for (const entry of [...index].sort((a, b) => b.createdAt - a.createdAt)) {
       if (seen.has(entry.id)) continue
       seen.add(entry.id)
+      // loadRecord 对 not_found（普通不存在）抛 404：在 list 语境里这是索引
+      // 指向缺失记录的服务故障，改报 workflow_index_corrupt；ID 不符同理。
       try {
         out.push(this.toSummary(this.loadRecord(entry.id)))
-      } catch {
-        // 索引指向已丢失 record：跳过但不删除（诊断面由 getRun 显式报 not_found）。
+      } catch (error) {
+        if (error instanceof HelmError && error.code === 'not_found') {
+          throw this.indexCorruptError(entry.id, `记录缺失或 ID 不符：${error.message}`)
+        }
+        if (error instanceof HelmError && error.code === 'workflow_record_corrupt') throw error
+        throw this.indexCorruptError(entry.id, `记录损坏：${errorMessage(error)}`)
       }
     }
     return out
@@ -1034,11 +1089,45 @@ export class WorkflowService {
   }
 
   private loadRecord(runId: string): RunRecord {
-    const record = this.state.get<RunRecord | null>(runKey(runId), null)
+    let record: RunRecord | null
+    try {
+      record = this.state.get<RunRecord | null>(runKey(runId), null)
+    } catch (error) {
+      // store 抛错（IO/解析）是持久层故障，绝不 TS 强转后当 not_found 混过。
+      throw new HelmError(
+        'workflow_record_corrupt',
+        `读取工作流运行 ${runId} 持久记录失败：${errorMessage(error)}`,
+        500,
+        { runId, key: runKey(runId) },
+      )
+    }
     if (record === null || record.id !== runId) {
       throw new HelmError('not_found', `工作流运行 ${runId} 不存在`, 404, { runId })
     }
+    // 边界形状校验：持久层是外部输入（state.sqlite 命名空间 doc），TS 强转
+    // 会把错误结构当有效摘要。缺关键字段/状态非法即 workflow_record_corrupt
+    // （500），与「run 不存在」的 404 区分；只校验现行 RunRecord 契约，无旧
+    // 格式适配。
+    const problem = runRecordProblem(record)
+    if (problem !== undefined) {
+      throw new HelmError(
+        'workflow_record_corrupt',
+        `工作流运行 ${runId} 持久记录损坏（${problem}）`,
+        500,
+        { runId, problem },
+      )
+    }
     return record
+  }
+
+  /** listRuns 索引损坏诊断（不自动删索引或记录：修复由人类确认）。 */
+  private indexCorruptError(runId: string, reason: string): HelmError {
+    return new HelmError(
+      'workflow_index_corrupt',
+      `工作流 run 索引损坏（${reason}）；列表无法完整呈现，请检查 state store`,
+      500,
+      { runId },
+    )
   }
 
   private toSummary(record: RunRecord): WorkflowRunSummary {

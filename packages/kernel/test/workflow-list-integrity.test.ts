@@ -1,0 +1,510 @@
+/**
+ * 工作流历史列表完整性回归（tsx --test；真实 WorkflowService + 注入故障的 state store）。
+ *
+ * 静态遗留 C：listRuns 旧实现对每条历史 loadRecord 包 catch{} 静默跳过，
+ * loadRecord 只查 null/id 一致就 TS 强转 RunRecord——索引指向缺失记录、错
+ * ID、损坏记录或 store 抛错时，列表/snapshot 返回看似成功的少项数组或伪
+ * 摘要。本文件按诚实性纪律回归：
+ *
+ * 1. 索引指向缺失记录（record 从未写入/被外部删改）→ listRuns 显式
+ *    workflow_index_corrupt（500，details.runId 指认），不返回少项成功；
+ * 2. 索引指向错 ID 记录（store 键下躺着别的 run 的 record）→ 同上显式失败；
+ * 3. 持久记录形状非法（status 越界 / 必需字段缺失）→ getRun/listRuns 均
+ *    workflow_record_corrupt（500），不再是 TS 强转出的伪摘要；
+ * 4. 底层 store get 抛错（IO 故障）→ 显式失败带 runId/key 诊断，不吞；
+ * 5. 正常路径不受影响：活跃 run 实时列出、终态 run 跨重启列出、活跃与
+ *    历史去重、createdAt 倒序、普通 getRun 不存在保持 404 not_found；
+ * 6. HTTP 层可见故障（createHubHandler + 真 AuthService 进程 token）：
+ *    GET /api/workflows/runs 返回 500 workflow_index_corrupt 错误信封，
+ *    绝非 200 少项数组；
+ * 7. CLI 层非零退出（真 createHelm + port 0 Hub + tsx 子进程真 CLI）：
+ *    helm workflows runs 在索引损坏时 exitCode !== 0 且 stderr 带错误码，
+ *    不打印伪列表。
+ *
+ * runner: tsx --test；每项显式 timeout: 60_000。
+ */
+import { strict as assert } from 'node:assert'
+import { after, before, describe, it, test } from 'node:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+
+import { HelmError } from '@helm/protocol'
+import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/service.js'
+import { createHubHandler, startHub } from '../src/http/index.js'
+import { AuthService } from '../src/services/index.js'
+import type { EventHub, KernelRuntimeLike, WorkflowServiceLike } from '../src/http/index.js'
+import { createHelm } from '../src/app.js'
+
+const timeout = { timeout: 60_000 } as const
+
+const META = (name: string) => `export const meta = { name: "${name}", description: "test" }\n`
+
+// ---------------------------------------------------------------------------
+// 辅助：state store / service host（对齐 workflow-metadata.test.ts 基座）
+// ---------------------------------------------------------------------------
+
+function makeStateStore(): WorkflowStateStore & { map: Map<string, unknown> } {
+  const map = new Map<string, unknown>()
+  return {
+    map,
+    get<T>(key: string, initial: T): T {
+      return (map.get(key) as T | undefined) ?? initial
+    },
+    set<T>(key: string, value: T): void {
+      map.set(key, value)
+    },
+  }
+}
+
+/** 读取即抛错（IO 故障注入；failKeys 为空则恢复只读）。 */
+function makeFailingGetStore(failKeys: string[]): WorkflowStateStore & { map: Map<string, unknown>; failKeys: string[] } {
+  const inner = makeStateStore()
+  return {
+    map: inner.map,
+    failKeys,
+    get<T>(key: string, initial: T): T {
+      if (failKeys.includes(key)) throw new Error(`simulated store read failure: ${key}`)
+      return inner.get<T>(key, initial)
+    },
+    set<T>(key: string, value: T): void {
+      inner.set(key, value)
+    },
+  }
+}
+
+function conversationSummary(id: number) {
+  return {
+    id,
+    title: `conv-${id}`,
+    profileId: 'assistant',
+    tags: [] as string[],
+    cwd: '/tmp',
+    model: 'x/y',
+    status: 'idle' as const,
+    stateChangeSeq: 1,
+    completionSeq: 0,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    createdAt: 0,
+    updatedAt: 0,
+  }
+}
+
+function makeServiceHost(): WorkflowServiceHost {
+  return {
+    async spawnAgent() {
+      return 'text'
+    },
+    async invokeAction() {
+      throw new Error('no actions in this host')
+    },
+    listActions() {
+      return []
+    },
+    getConversation: (id: number) => conversationSummary(id),
+    async abortConversation() {},
+    emitEvent() {},
+  }
+}
+
+/** 跑两个真实 run（不同完成时间），返回 service 与 state。 */
+async function runTwoSettledRuns(dataDir: string, state: WorkflowStateStore): Promise<WorkflowService> {
+  const service = new WorkflowService({ dataDir, host: makeServiceHost(), state })
+  const first = await service.run({ script: META('hist-int-1') + 'return 1' })
+  await service.wait(first.id)
+  const second = await service.run({ script: META('hist-int-2') + 'return 2' })
+  await service.wait(second.id)
+  return service
+}
+
+// ---------------------------------------------------------------------------
+// service 层：索引/记录边界故障显式失败
+// ---------------------------------------------------------------------------
+
+describe('WorkflowService listRuns integrity', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'wf-list-int-'))
+
+  it('normal path: active + settled runs, restart, dedupe, createdAt desc, getRun 404 preserved', timeout, async () => {
+    const state = makeStateStore()
+    const service = await runTwoSettledRuns(dataDir, state)
+    // 再来一个活跃 run（挂起 spawn 以验证实时列出 + 去重）。
+    let release: (() => void) | undefined
+    const host = makeServiceHost()
+    const realSpawn = host.spawnAgent.bind(host)
+    host.spawnAgent = async (request) => {
+      await new Promise<void>((r) => {
+        release = r
+      })
+      return realSpawn(request)
+    }
+    const activeService = new WorkflowService({ dataDir, host, state })
+    const active = await activeService.run({ script: META('hist-int-active') + 'return await agent("hang")' })
+    await new Promise((r) => setTimeout(r, 120))
+    let runs = activeService.listRuns()
+    assert.equal(runs.length, 3, 'active + two settled runs all listed')
+    const ids = runs.map((r) => r.id)
+    assert.ok(ids.includes(active.id) && ids.includes(ids.find((x) => x !== active.id)!))
+    // createdAt 倒序（新→旧）。
+    for (let i = 1; i < runs.length; i++) {
+      assert.ok(runs[i - 1]!.createdAt >= runs[i]!.createdAt, `desc order broken at ${i}`)
+    }
+    release?.()
+    await activeService.wait(active.id)
+    // 活跃 run 落终态后去重：不出现两条同 id。
+    runs = activeService.listRuns()
+    assert.equal(runs.filter((r) => r.id === active.id).length, 1, 'no duplicate after settle')
+
+    // 跨重启（新实例同 state store）仍完整。
+    const revived = new WorkflowService({ dataDir, host: makeServiceHost(), state })
+    const revivedRuns = revived.listRuns()
+    assert.equal(revivedRuns.length, 3, 'runs survive restart via state store')
+
+    // 普通 getRun 不存在保持 404 not_found（不是服务故障）。
+    assert.throws(
+      () => revived.getRun('wf_nosuchrun0000'),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'not_found')
+        assert.equal(error.status, 404)
+        return true
+      },
+    )
+    await revived.close()
+    await service.close()
+    await activeService.close()
+  })
+
+  it('index entry pointing at a missing record fails explicitly (no silent short list)', timeout, async () => {
+    const state = makeStateStore()
+    const service = await runTwoSettledRuns(dataDir, state)
+    // 模拟索引指向缺失记录：删掉 store 中的 record doc（外部删改）。
+    const index = state.get<Array<{ id: string }>>('workflow/runs', [])
+    assert.equal(index.length, 2)
+    const victim = index[0]!.id
+    state.map.delete(`workflow/run/${victim}`)
+    assert.throws(
+      () => service.listRuns(),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError, `expect HelmError, got: ${String(error)}`)
+        assert.equal(error.code, 'workflow_index_corrupt')
+        assert.equal(error.status, 500)
+        assert.equal((error as HelmError).details && (error.details as { runId?: string }).runId, victim)
+        assert.ok(error.message.includes(victim), 'diagnostic names the runId')
+        return true
+      },
+    )
+    await service.close()
+  })
+
+  it('index entry whose stored record carries a different id fails explicitly', timeout, async () => {
+    const state = makeStateStore()
+    const service = await runTwoSettledRuns(dataDir, state)
+    const index = state.get<Array<{ id: string }>>('workflow/runs', [])
+    const victim = index[1]!.id
+    const record = state.get<Record<string, unknown> | null>(`workflow/run/${victim}`, null)
+    assert.ok(record !== null)
+    // 键下躺着别的 run 的 record（id 不符）。
+    state.set(`workflow/run/${victim}`, { ...record, id: 'wf_someother9999' })
+    assert.throws(
+      () => service.listRuns(),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'workflow_index_corrupt')
+        assert.equal((error.details as { runId?: string }).runId, victim)
+        return true
+      },
+    )
+    // 单 run 语境：loadRecord 的 id 不符仍按 not_found（404）报——列表语境
+    // 才升级为索引损坏。
+    assert.throws(
+      () => service.getRun(victim),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'not_found')
+        return true
+      },
+    )
+    await service.close()
+  })
+
+  it('record with invalid shape (status out of enum / missing name) fails as workflow_record_corrupt', timeout, async () => {
+    const state = makeStateStore()
+    const service = await runTwoSettledRuns(dataDir, state)
+    const index = state.get<Array<{ id: string }>>('workflow/runs', [])
+    const victim = index[0]!.id
+    const record = state.get<Record<string, unknown> | null>(`workflow/run/${victim}`, null)
+    assert.ok(record !== null)
+
+    // status 越界：TS 强转旧实现会造出 status:"weird" 的伪摘要。
+    state.set(`workflow/run/${victim}`, { ...record, status: 'weird' })
+    assert.throws(
+      () => service.getRun(victim),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'workflow_record_corrupt')
+        assert.equal(error.status, 500)
+        assert.ok(error.message.includes('status'), `message should name the problem: ${error.message}`)
+        return true
+      },
+    )
+    assert.throws(
+      () => service.listRuns(),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'workflow_record_corrupt')
+        assert.equal((error.details as { runId?: string }).runId, victim)
+        return true
+      },
+    )
+
+    // 必需字段缺失（name 没了）。
+    state.set(`workflow/run/${victim}`, { ...record, status: 'completed', name: undefined })
+    assert.throws(
+      () => service.listRuns(),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'workflow_record_corrupt')
+        return true
+      },
+    )
+    await service.close()
+  })
+
+  it('store get() throwing surfaces as explicit corrupt error with runId diagnostics', timeout, async () => {
+    const state = makeStateStore()
+    const service = await runTwoSettledRuns(dataDir, state)
+    const index = state.get<Array<{ id: string }>>('workflow/runs', [])
+    const victim = index[0]!.id
+    // IO 故障注入：新 service 用「读取该 run doc 即抛错」的 store（真实
+    // documentStore 损坏同路径），其余数据从原 store 复制。
+    const failing = makeFailingGetStore([`workflow/run/${victim}`])
+    for (const [k, v] of state.map) failing.map.set(k, v)
+    const failingService = new WorkflowService({ dataDir, host: makeServiceHost(), state: failing })
+    assert.throws(
+      () => failingService.listRuns(),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'workflow_record_corrupt', 'store 抛错直接以记录级 corrupt 信封透传')
+        assert.ok(error.message.includes('simulated store read failure'), `cause surfaced: ${error.message}`)
+        assert.equal((error.details as { runId?: string }).runId, victim)
+        return true
+      },
+    )
+    // 单 run 语境同样显式（不吞成 not_found）。
+    assert.throws(
+      () => failingService.getRun(victim),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'workflow_record_corrupt')
+        assert.equal((error.details as { runId?: string }).runId, victim)
+        return true
+      },
+    )
+    await service.close()
+  })
+
+  it('restart (init) over an index entry with missing record does not mask later listRuns failure', timeout, async () => {
+    // init 恢复只关心 running 记录；索引损坏仍由 listRuns 显式报错——两条
+    // 路径互不掩盖。这里保证 init 不抛、不删除索引（诊断面留给 listRuns）。
+    const state = makeStateStore()
+    const service = await runTwoSettledRuns(dataDir, state)
+    const index = state.get<Array<{ id: string; conversationId: number; createdAt: number }>>('workflow/runs', [])
+    const victim = index[0]!.id
+    state.map.delete(`workflow/run/${victim}`)
+    const revived = new WorkflowService({ dataDir, host: makeServiceHost(), state })
+    await revived.init() // 记录缺失不炸 init（恢复只处理存在的 running 记录）
+    assert.throws(() => revived.listRuns(), /workflow_index_corrupt|工作流 run 索引损坏/)
+    const after = state.get<Array<{ id: string }>>('workflow/runs', [])
+    assert.equal(after.length, 2, 'index is not silently pruned')
+    await revived.close()
+    await service.close()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// HTTP 层：真实 handler + 真 AuthService 进程 token，故障以 500 错误信封可见
+// ---------------------------------------------------------------------------
+
+class NoopEventHub implements EventHub {
+  response(): Response {
+    return new Response(null, { status: 204 })
+  }
+}
+
+describe('workflow listRuns failure visibility over HTTP', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'wf-http-int-'))
+  let auth: AuthService
+  let token: string
+
+  before(async () => {
+    auth = new AuthService(dataDir)
+    const handler = createHubHandler(
+      { dataDir, auth, events: new NoopEventHub() } as unknown as KernelRuntimeLike,
+      { listRuns: () => [] } as unknown as WorkflowServiceLike,
+    )
+    // 直接调 handler（不经网络）：setup 拿用户 token 备用。
+    const res = await handler(
+      new Request('http://127.0.0.1/api/auth/setup', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: 'integration-test-password' }),
+      }),
+    )
+    assert.equal(res.status, 200)
+    token = ((await res.json()) as { token: string }).token
+  })
+
+  after(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  it('GET /api/workflows/runs returns 500 workflow_index_corrupt envelope, never a short 200 list', timeout, async () => {
+    const state = makeStateStore()
+    const wfService = await runTwoSettledRuns(dataDir, state)
+    const index = state.get<Array<{ id: string }>>('workflow/runs', [])
+    state.map.delete(`workflow/run/${index[0]!.id}`)
+
+    const handler = createHubHandler(
+      { dataDir, auth, events: new NoopEventHub() } as unknown as KernelRuntimeLike,
+      wfService as unknown as WorkflowServiceLike,
+    )
+    const res = await handler(
+      new Request('http://127.0.0.1/api/workflows/runs', {
+        headers: { authorization: `Bearer ${token}` },
+      }),
+    )
+    assert.equal(res.status, 500, 'index corruption must be a server error, not a short 200 list')
+    const body = (await res.json()) as { error: { code: string; details?: { runId?: string } } }
+    assert.equal(body.error.code, 'workflow_index_corrupt')
+    assert.equal(body.error.details?.runId, index[0]!.id, 'runId rides the error envelope for diagnosis')
+    await wfService.close()
+  })
+
+  it('GET /api/workflows/runs/:id for a corrupt record returns 500 workflow_record_corrupt (404 kept for missing)', timeout, async () => {
+    const state = makeStateStore()
+    const wfService = await runTwoSettledRuns(dataDir, state)
+    const index = state.get<Array<{ id: string }>>('workflow/runs', [])
+    const victim = index[0]!.id
+    const record = state.get<Record<string, unknown> | null>(`workflow/run/${victim}`, null)
+    state.set(`workflow/run/${victim}`, { ...record, status: 42 })
+
+    const handler = createHubHandler(
+      { dataDir, auth, events: new NoopEventHub() } as unknown as KernelRuntimeLike,
+      wfService as unknown as WorkflowServiceLike,
+    )
+    const corrupt = await handler(
+      new Request(`http://127.0.0.1/api/workflows/runs/${victim}`, {
+        headers: { authorization: `Bearer ${token}` },
+      }),
+    )
+    assert.equal(corrupt.status, 500)
+    const corruptBody = (await corrupt.json()) as { error: { code: string } }
+    assert.equal(corruptBody.error.code, 'workflow_record_corrupt')
+
+    const missing = await handler(
+      new Request('http://127.0.0.1/api/workflows/runs/wf_nosuchrun0000', {
+        headers: { authorization: `Bearer ${token}` },
+      }),
+    )
+    assert.equal(missing.status, 404, 'plain getRun not-found keeps its 404 semantics')
+    await wfService.close()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// CLI 层：真 createHelm + port 0 Hub + tsx 子进程真 CLI，非零退出可见
+// ---------------------------------------------------------------------------
+
+const testDir = fileURLToPath(new URL('.', import.meta.url))
+const repoRoot = join(testDir, '..', '..', '..')
+const cliEntry = join(repoRoot, 'packages', 'node', 'src', 'cli', 'index.ts')
+const require = createRequire(import.meta.url)
+const tsxCli = require.resolve('tsx/cli')
+
+function runCliChild(args: string[], env: NodeJS.ProcessEnv, timeoutMs = 30_000): Promise<{ code: number | null; out: string; err: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [tsxCli, cliEntry, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    let err = ''
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs)
+    child.stdout.on('data', (c: Buffer) => (out += c.toString('utf8')))
+    child.stderr.on('data', (c: Buffer) => (err += c.toString('utf8')))
+    child.on('error', () => {
+      clearTimeout(timer)
+      resolve({ code: null, out, err })
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      resolve({ code, out, err })
+    })
+  })
+}
+
+test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码（真 Hub + 真 CLI 子进程）', timeout, async () => {
+  const { createModels } = await import('@earendil-works/pi-ai/models')
+  const { fauxProvider } = await import('@earendil-works/pi-ai/providers/faux')
+
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-cli-int-'))
+  const faux = fauxProvider()
+  const models = createModels()
+  models.setProvider(faux.provider)
+  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  let hub: Awaited<ReturnType<typeof startHub>> | undefined
+  try {
+    // 正常跑两个 run（终态），制造真实索引与记录。
+    const first = await app.workflows.run({ script: META('cli-int-1') + 'return 1' })
+    await app.workflows.wait(first.id)
+    const second = await app.workflows.run({ script: META('cli-int-2') + 'return 2' })
+    await app.workflows.wait(second.id)
+
+    hub = await startHub({ kernel: app.kernel as never, workflows: app.workflows as never, port: 0 })
+    const setupRes = await fetch(`${hub.url}/api/auth/setup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'cli-integration-password' }),
+    })
+    const userToken = ((await setupRes.json()) as { token: string }).token
+
+    // 先验证健康路径：CLI 列出全部 run。
+    const healthy = await runCliChild(['workflows', 'runs', '--json'], {
+      ...process.env,
+      HELM_HUB_URL: hub.url,
+      HELM_DATA_DIR: join(dataDir, 'cli-home'),
+      HELM_TOKEN: userToken,
+    })
+    assert.equal(healthy.code, 0, `healthy list should exit 0: ${healthy.err}`)
+    assert.equal((JSON.parse(healthy.out) as unknown[]).length, 2)
+
+    // 注入索引损坏：删除一条 record doc（外部删改 state store 命名空间）。
+    const index = (app.kernel as unknown as {
+      documentStore: { get<T>(key: string, initial: T): T }
+    }).documentStore.get<Array<{ id: string }>>('workflow/runs', [])
+    assert.equal(index.length, 2)
+    const victim = index[0]!.id
+    // documentStore 无删除 API：经 store 层 SQL 直删模拟外部损坏（测试注入，
+    // 非生产路径）；这里用同一键写 null 的替代注入——loadRecord 视 null 为缺失。
+    ;(app.kernel as unknown as {
+      documentStore: { set<T>(key: string, value: T): void }
+    }).documentStore.set(`workflow/run/${victim}`, null)
+
+    const broken = await runCliChild(['workflows', 'runs', '--json'], {
+      ...process.env,
+      HELM_HUB_URL: hub.url,
+      HELM_DATA_DIR: join(dataDir, 'cli-home'),
+      HELM_TOKEN: userToken,
+    })
+    assert.notEqual(broken.code, 0, 'corrupt index must make CLI exit non-zero')
+    assert.ok(broken.err.includes('workflow_index_corrupt'), `stderr should carry the error code: ${broken.err}`)
+    assert.ok(broken.err.includes(victim), `stderr should name the runId: ${broken.err}`)
+    assert.ok(!broken.out.includes('[{'), 'CLI must not print a fake successful list')
+  } finally {
+    await hub?.close()
+    await app.close().catch(() => {})
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
