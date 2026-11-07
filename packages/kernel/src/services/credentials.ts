@@ -203,6 +203,23 @@ export class CredentialService {
     })
   }
 
+  /**
+   * 精确删除单个插件 secret（不存在时静默成功：幂等语义，调用方回滚路径
+   * 允许重复清理）。其余键与同插件其他 secret 不受影响。
+   */
+  async deletePluginSecret(pluginId: string, key: string): Promise<void> {
+    assertId('pluginId', pluginId)
+    if (typeof key !== 'string' || key === '') throw new Error('secret 键名不能为空')
+    await this.enqueue(async () => {
+      const store = await this.readStore()
+      const bucket = store.pluginSecrets[pluginId]
+      if (bucket === undefined || bucket[key] === undefined) return
+      delete bucket[key]
+      if (Object.keys(bucket).length === 0) delete store.pluginSecrets[pluginId]
+      await this.persist(store)
+    })
+  }
+
   /** 全量读取（进程内诊断/导出用；含明文，绝不外发）。 */
   async readStore(): Promise<CredentialStore> {
     const raw = await readJsonFileOptional(this.path)

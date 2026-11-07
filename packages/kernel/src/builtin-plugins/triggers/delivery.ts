@@ -1,0 +1,102 @@
+/**
+ * triggers/delivery.ts：cron 与 webhook 共用的投递 helper。
+ *
+ * 目标解析（§4.4，与 superagent trigger hook 的路由互补）：
+ * - envelope.targetConversationId 优先（与第二参 targetProfileId 互斥）；
+ * - 仅 targetProfileId：取该 Profile 现有会话中最低 ID；无会话则校验 Profile
+ *   存在后创建新会话（绝不发给错误角色）；
+ * - 均无：保持缺省（不带 targetConversationId，由内核默认投 #1、
+ *   superagent trigger hook 决定是否路由中枢）；
+ * - text 传原始文本（runtime.dispatchTrigger 统一 defang 防逃逸包裹，
+ *   连接器绝不双层包裹）；source 约定 cron:<id> / webhook:<id>；
+ * - runtime 关闭中（isClosing）显式拒绝，防 close 期触发新回合。
+ */
+import { HelmError } from '@helm/protocol'
+import type { ExternalTriggerEnvelope } from '@helm/protocol'
+import type { ConversationLookup, ProfileLookup } from './contracts.js'
+
+export type DispatchTriggerHelper = (
+  event: ExternalTriggerEnvelope,
+  targetProfileId?: string,
+) => Promise<void>
+
+export function createDeliveryDispatch(options: {
+  host: {
+    dispatchTrigger(event: ExternalTriggerEnvelope): Promise<void>
+  } & ConversationLookup
+  profiles: ProfileLookup
+  isClosing(): boolean
+}): DispatchTriggerHelper {
+  const { host, profiles, isClosing } = options
+  return async (event, targetProfileId) => {
+    if (isClosing()) {
+      throw new HelmError('runtime_closing', 'runtime 正在关闭，拒绝新的触发投递', 409, {
+        source: event.source,
+      })
+    }
+    let target = event.targetConversationId
+    if (target !== undefined && targetProfileId !== undefined) {
+      throw new HelmError(
+        'validation_error',
+        'targetConversationId 与 targetProfileId 不允许同时提供',
+        400,
+        {},
+      )
+    }
+    if (target === undefined && targetProfileId !== undefined) {
+      target = await resolveProfileConversation(host, profiles, targetProfileId)
+    }
+    if (target !== undefined) {
+      assertConversationExists(host, target)
+    }
+    const final: ExternalTriggerEnvelope =
+      target === undefined ? event : { ...event, targetConversationId: target }
+    await host.dispatchTrigger(final)
+  }
+}
+
+function assertConversationExists(host: ConversationLookup, id: number): void {
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new HelmError('validation_error', `targetConversationId 非正整数（${String(id)}）`, 400, {})
+  }
+  try {
+    host.getConversation(id)
+  } catch (err) {
+    if (err instanceof HelmError && err.code === 'not_found') {
+      throw new HelmError(
+        'not_found',
+        `触发目标会话 #${id} 不存在（可能已被删除；请更新触发器目标）`,
+        404,
+        { targetConversationId: id },
+      )
+    }
+    throw err
+  }
+}
+
+/** targetProfileId → 会话 ID：最低 ID 复用；无会话则校验存在后创建。 */
+async function resolveProfileConversation(
+  host: ConversationLookup,
+  profiles: ProfileLookup,
+  profileId: string,
+): Promise<number> {
+  if (typeof profileId !== 'string' || /\s|[/\\]/.test(profileId) || profileId.length === 0 || profileId.length > 64) {
+    throw new HelmError('validation_error', `targetProfileId 非法（收到：${String(profileId)}）`, 400, {})
+  }
+  const profile = await profiles.get(profileId)
+  if (profile === undefined) {
+    throw new HelmError(
+      'validation_error',
+      `targetProfileId 不存在：${profileId}（拒绝发给错误角色）`,
+      400,
+      { targetProfileId: profileId },
+    )
+  }
+  const existing = host.listConversations({ profileId }).sort((a, b) => a.id - b.id)
+  if (existing.length > 0) return existing[0]!.id
+  const created = await host.createConversation({
+    title: `触发器目标（${profileId}）`,
+    profileId,
+  })
+  return created.id
+}

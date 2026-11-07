@@ -10,6 +10,7 @@ export {
   SUPERAGENT_PROFILE_ID,
   WATCHDOG_PROFILE_ID,
 } from './builtin-plugins/superagent.js';
+export { createTriggersPlugin, TRIGGERS_PLUGIN_ID } from './builtin-plugins/triggers.js';
 export type { HerdrPluginDependencies, HerdrTransport, HerdrTarget, HerdrEvent } from './builtin-plugins/herdr/contracts.js';
 export * from './plugins/index.js';
 export * from './services/index.js';

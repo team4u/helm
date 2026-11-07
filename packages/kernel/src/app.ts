@@ -3,6 +3,8 @@ import { WorkflowService } from './workflow/index.js';
 import { createAssistantPlugin } from './builtin-plugins/assistant.js';
 import { createHerdrPlugin } from './builtin-plugins/herdr.js';
 import { createSuperAgentPlugin, SUPERAGENT_PLUGIN_ID } from './builtin-plugins/superagent.js';
+import { createTriggersPlugin } from './builtin-plugins/triggers.js';
+import { registerCron } from './builtin-plugins/triggers/cron.js';
 import type { HerdrTransport } from './builtin-plugins/herdr/contracts.js';
 import type { SuperAgentDependencies } from './builtin-plugins/superagent/contracts.js';
 import { redactJsonValue } from './redact.js';
@@ -70,6 +72,16 @@ export async function createHelm(options: HelmOptions = {}) {
       },
     };
     await kernel.plugins.register(createSuperAgentPlugin(superagentDeps), { enabled: false });
+    // builtin:triggers：cron + webhook 入站连接器，默认停用注册；启用后经
+    // trigger 管道投递（dispatchTrigger 统一 defang）。组合层依赖显式注入。
+    await kernel.plugins.register(createTriggersPlugin({
+      credentials: kernel.credentials,
+      stash: kernel.stash,
+      profiles: kernel.profiles,
+      isClosing: () => kernel.isClosing,
+      flushDocs: () => kernel.documentStore.flush(),
+      registerCron,
+    }), { enabled: false });
     await kernel.start();
     return {
       kernel,
