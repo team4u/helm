@@ -73,6 +73,7 @@ const USAGE = `helm-node — helm 跨平台受控节点守护进程
   stop                               停止后台守护进程（经控制通道验证身份后优雅停止）
   restart                            重启后台守护进程（先确认停止成功再拉新进程）
   status                             输出身份绑定状态、后台进程与运行态摘要
+  doctor                              零副作用只读自检（身份 0600 / 权限 / Hub 连通 / Herdr IPC）
   service install|uninstall|status   开机自启服务管理（launchd / systemd --user / schtasks）
 
 通用选项:
@@ -103,6 +104,7 @@ const COMMAND_FLAGS: Record<string, ReadonlySet<string>> = {
   stop: new Set(['data-dir', 'json']),
   restart: new Set(['hub', 'data-dir', 'json']),
   status: new Set(['data-dir', 'json']),
+  doctor: new Set(['hub', 'data-dir', 'json']),
   service: new Set(['hub', 'data-dir', 'json']),
 };
 /** 各命令位置参数个数（connect 可带 hubUrl；service 恰一个子命令；其余 0）。 */
@@ -112,6 +114,7 @@ const COMMAND_POSITIONALS: Record<string, { min: number; max: number }> = {
   stop: { min: 0, max: 0 },
   restart: { min: 0, max: 0 },
   status: { min: 0, max: 0 },
+  doctor: { min: 0, max: 0 },
   service: { min: 1, max: 1 },
 };
 
@@ -1136,6 +1139,25 @@ export async function runNodeCli(argv: readonly string[] = [], ioInput: Partial<
           ...(daemon.detail !== undefined ? { detail: daemon.detail } : {}),
         });
         return 0;
+      }
+      case 'doctor': {
+        const { runNodeDoctor } = await import('./daemon/doctor.js');
+        const report = await runNodeDoctor({
+          dataDir,
+          ...(flagString(parsed, 'hub') !== undefined ? { hubUrl: flagString(parsed, 'hub') } : {}),
+          env: io.env,
+        });
+        if (parsed.json) {
+          emit(report);
+        } else {
+          const label: Record<string, string> = { ok: 'OK  ', warn: 'WARN', error: 'FAIL', info: 'INFO' };
+          io.out(`helm-node doctor（dataDir=${report.dataDir}${report.nodeId !== undefined ? `，nodeId=${report.nodeId}` : ''}${report.hubUrl !== undefined ? `，hub=${report.hubUrl}` : ''}）\n`);
+          for (const check of report.checks) {
+            io.out(`  [${label[check.status] ?? check.status}] ${check.id}: ${check.message}\n`);
+          }
+          io.out(report.ok ? '自检结果：通过（无 error 项）\n' : '自检结果：存在 error 项，请按提示修复后重试\n');
+        }
+        return report.ok ? 0 : 1;
       }
       case 'service': {
         const action = parsed.positional[0];

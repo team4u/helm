@@ -52,10 +52,6 @@ class EventEmitterShim {
   emit(event: string): void {
     for (const listener of [...(this.#listeners.get(event) ?? [])]) listener()
   }
-  close(): void {
-    this.readyState = 3
-    this.emit('close')
-  }
 }
 
 /** 可控时序的注册表层 socket 替身（同 env-registry-races.test.ts 模式）。 */
@@ -63,6 +59,10 @@ class RegistrySocket extends EventEmitterShim {
   OPEN = 1
   CLOSED = 3
   readyState = 1
+  close(): void {
+    this.readyState = 3
+    this.emit('close')
+  }
 }
 
 const validHealth = (): NodeHealthSnapshot => ({

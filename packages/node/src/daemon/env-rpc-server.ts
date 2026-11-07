@@ -67,6 +67,13 @@ export interface NodeEnvRpcServerOptions {
    * Herdr 长任务等待不能被守护进程偷偷施加一个额外的固定死线。
    */
   ipcCallIdleTimeoutMs?: number;
+  /**
+   * 取消/超时后等待底层 stdio 管道排空的硬超时（毫秒，默认 500）：
+   * 当命令派生的 detached 孙进程继承了 stdout/stderr fd 并持续写入时，
+   * SDK exec 可能因等待流关闭而永久挂起；超过该宽限期即强制结算，
+   * 保证 envExec / dispose 绝不被孤儿孙进程拽住。
+   */
+  abortDrainGraceMs?: number;
 }
 
 const toRpcError = (error: unknown): RpcEnvError => {
@@ -302,6 +309,10 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     Number.isFinite(options.ipcCallIdleTimeoutMs) && options.ipcCallIdleTimeoutMs > 0
     ? options.ipcCallIdleTimeoutMs
     : undefined;
+  const abortDrainGraceMs = typeof options.abortDrainGraceMs === 'number' &&
+    Number.isFinite(options.abortDrainGraceMs) && options.abortDrainGraceMs >= 0
+    ? options.abortDrainGraceMs
+    : 500;
 
   const envs = new Map<string, LocalExecutionEnv>();
   let disposed = false;
@@ -633,18 +644,60 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         offset = end;
       }
     };
+    /**
+     * 取消/超时后的 stdio 排空硬超时：SDK exec 在子进程退出后仍可能被
+     * detached 孙进程拽住的 stdout/stderr 管道挂住（idle grace 会因持续
+     * 写入不断重置）。宽限期内底层未 settle 即强制结算，绝不永久挂死。
+     */
+    let forced: { ok: false; error: { code: 'aborted' | 'timeout'; message: string } } | undefined;
+    let execSettled = false;
+    let settleForce: (() => void) | undefined;
+    const drainTimers = new Set<NodeJS.Timeout>();
+    const forceSettleNow = (code: 'aborted' | 'timeout', message: string): void => {
+      if (execSettled) return;
+      execSettled = true;
+      forced = { ok: false, error: { code, message } };
+      settleForce?.();
+    };
+    // 取消（envAbortExec / dispose）：先给底层一个排空窗口，逾期强制 aborted。
+    controller.signal.addEventListener('abort', () => {
+      if (execSettled) return;
+      const timer = setTimeout(
+        () => forceSettleNow('aborted', 'Command aborted (stdio drain grace exceeded)'),
+        abortDrainGraceMs,
+      );
+      drainTimers.add(timer);
+    }, { once: true });
+    // 底层自身 timeout 杀树后同样可能被孙进程管道挂住：timeout+宽限期到点
+    // 先 cancel 再强制 timeout 结算（不再额外叠加宽限）。
+    if (timeout !== undefined && Number.isFinite(timeout) && timeout > 0) {
+      const timer = setTimeout(() => {
+        if (execSettled) return;
+        controller.abort(new Error('Command timed out'));
+        forceSettleNow('timeout', `Command timed out after ${timeout} seconds`);
+      }, timeout * 1000 + abortDrainGraceMs);
+      drainTimers.add(timer);
+    }
     try {
-      const result = await executionEnv.exec(command, {
-        ...(cwd === undefined ? {} : { cwd }),
-        ...buildExecEnv(input),
-        ...(timeout === undefined ? {} : { timeout }),
-        ...(spill === undefined ? {} : { spill }),
-        ...(window === undefined ? {} : { window }),
-        onOutput: (text, info) => emit(text, info.stream, info.skipped),
-      }, controller.signal);
-      return result.ok ? { ok: true, value: result.value } : rpcFail(result.error);
+      const result = await new Promise<RpcResult<EnvExecOk>>((resolve) => {
+        settleForce = () => resolve(forced!);
+        void executionEnv.exec(command, {
+          ...(cwd === undefined ? {} : { cwd }),
+          ...buildExecEnv(input),
+          ...(timeout === undefined ? {} : { timeout }),
+          ...(spill === undefined ? {} : { spill }),
+          ...(window === undefined ? {} : { window }),
+          onOutput: (text, info) => emit(text, info.stream, info.skipped),
+        }, controller.signal).then(
+          (value) => { if (!execSettled) { execSettled = true; resolve(value.ok ? { ok: true, value: value.value } : rpcFail(value.error)); } },
+          (error: unknown) => { if (!execSettled) { execSettled = true; resolve(rpcFail(error)); } },
+        );
+      });
+      return result;
     } finally {
       running.delete(execId);
+      for (const timer of drainTimers) clearTimeout(timer);
+      drainTimers.clear();
     }
   };
 

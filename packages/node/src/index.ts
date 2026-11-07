@@ -10,8 +10,9 @@ export {
   type NodeEnvRpcServerOptions,
 } from './daemon/env-rpc-server.js';
 export {
-  bindIdentityFromJoinToken,
+  collectNodeHealth,
   createNodeDaemon,
+  bindIdentityFromJoinToken,
   parseJoinToken,
   readNodeIdentity,
   resolveNodeDataDir,
@@ -23,6 +24,13 @@ export {
   type NodeDaemonOptions,
   type NodeIdentity,
 } from './daemon/index.js';
+export {
+  runNodeDoctor,
+  type NodeDoctorCheck,
+  type NodeDoctorCheckStatus,
+  type NodeDoctorOptions,
+  type NodeDoctorReport,
+} from './daemon/doctor.js';
 export {
   defaultServiceExec,
   getNodeServiceStatus,

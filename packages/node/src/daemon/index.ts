@@ -35,6 +35,8 @@ import type {
   EnvExecOutputEvent,
   NodeConnectInput,
   NodeEnvRpcFunctions,
+  NodeHealthSnapshot,
+  NodeHeartbeatInput,
   NodeIpcClosedEvent,
   NodeIpcEvent,
   NodeRegisterInput,
@@ -46,7 +48,7 @@ import { createNodeEnvRpcServer, type NodeEnvRpcServer, type NodeEnvRpcServerOpt
 /** 节点侧调用 Hub 的函数集（register/heartbeat/onEnvExecOutput/onIpc*）。 */
 export interface HubSideFunctions {
   register(input: NodeRegisterInput): Promise<NodeRegisterResult>;
-  heartbeat(nodeId: string): Promise<boolean>;
+  heartbeat(nodeId: string, input?: NodeHeartbeatInput): Promise<boolean>;
   onEnvExecOutput(event: EnvExecOutputEvent): Promise<void> | void;
   onIpcEvent?(event: NodeIpcEvent): Promise<void> | void;
   onIpcClosed?(event: NodeIpcClosedEvent): Promise<void> | void;
@@ -108,6 +110,38 @@ export function resolveNodeDataDir(explicit?: string): string {
   const fromEnv = process.env['HELM_DATA_DIR'];
   if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
   return path.join(os.homedir(), '.helm');
+}
+
+/**
+ * 采集本机节点健康快照（纯只读）：
+ * - 基础指标来自 os 模块（uptime/loadavg/freemem/totalmem）；
+ * - 磁盘空间用 fs.statfs 采集目标目录所在挂载点（目录不存在回退 homedir，
+ *   仍失败则省略 disk 字段）；任何采集失败都不得中断注册/心跳主流程。
+ */
+export async function collectNodeHealth(targetDir?: string): Promise<NodeHealthSnapshot> {
+  const load = os.loadavg();
+  const snapshot: NodeHealthSnapshot = {
+    collectedAt: Date.now(),
+    uptimeSec: os.uptime(),
+    loadAvg: [load[0] ?? 0, load[1] ?? 0, load[2] ?? 0],
+    memFreeBytes: os.freemem(),
+    memTotalBytes: os.totalmem(),
+  };
+  try {
+    const dir = targetDir ?? os.homedir();
+    let stats: { bavail: number | bigint; bsize: number | bigint; blocks: number | bigint };
+    try {
+      stats = await fs.statfs(dir);
+    } catch {
+      // 目标目录不存在（挂载点尚未就绪等）：回退 homedir 再试一次。
+      stats = await fs.statfs(os.homedir());
+    }
+    snapshot.diskFreeBytes = Number(stats.bavail) * Number(stats.bsize);
+    snapshot.diskTotalBytes = Number(stats.blocks) * Number(stats.bsize);
+  } catch {
+    // statfs 不可用（平台/权限）：省略磁盘字段，绝不抛出中断心跳。
+  }
+  return snapshot;
 }
 
 /** JOIN 令牌格式：`nodeId:secret`（nodeId 不含冒号、非保留 local ID）。
@@ -602,10 +636,12 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
       clearTimeout(connectTimeout);
       void (async () => {
         // register 短预算：超时按失败终结本代（不占用 30 分钟 RPC 预算）。
+        const health = await collectNodeHealth(dataDir).catch(() => undefined);
         const ack = await withinBudget<RegisterOutcome>(
           hubRpc.register({
             nodeId: identity.nodeId, token: identity.token,
             hostname: os.hostname(), platform: process.platform, hubUrl,
+            ...(health !== undefined ? { health } : {}),
           }).then((result) => ({ kind: 'ack', result })),
           REGISTER_TIMEOUT_MS,
           { kind: 'timeout' },
@@ -637,7 +673,12 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
           if (inFlight) return; // 上一跳仍在预算窗口内：跳过本拍，不堆积
           inFlight = true;
           const outcome = withinBudget<HeartbeatOutcome>(
-            hubRpc.heartbeat(identity.nodeId).then((alive) => ({ kind: 'ack', alive: alive === true })),
+            (async () => {
+              // 每跳捎带最新健康快照；采集失败仍发送心跳（不中断存活信号）。
+              const beat = await collectNodeHealth(dataDir).catch(() => undefined);
+              const alive = await hubRpc.heartbeat(identity.nodeId, beat !== undefined ? { health: beat } : undefined);
+              return { kind: 'ack', alive: alive === true };
+            })(),
             budget,
             { kind: 'timeout' },
           )
