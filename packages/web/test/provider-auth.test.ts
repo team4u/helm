@@ -9,6 +9,8 @@ const catalog: ModelProviderSummary[] = [
   { id: 'deepseek', name: 'DeepSeek', modelCount: 2, authMethods: [{ type: 'api_key', label: 'API Key' }] },
   { id: 'openai-codex', name: 'OpenAI Codex', modelCount: 8, authMethods: [{ type: 'oauth', label: 'ChatGPT' }] },
   { id: 'typesafe', name: 'Typesafe', modelCount: 0, authMethods: [{ type: 'api_key', label: 'API Key' }] },
+  { id: 'dynamic-gw', name: 'Dynamic Gateway', modelCount: 5, dynamic: true, baseUrl: 'http://127.0.0.1:9000', authMethods: [{ type: 'api_key', label: 'API Key' }] },
+  { id: 'plugin-gw', name: 'Plugin Gateway', modelCount: 3, dynamic: true, pluginId: 'builtin:some-plugin', authMethods: [{ type: 'api_key', label: 'API Key' }] },
 ]
 const models: ModelDescriptor[] = [
   { id: 'openai/gpt-5', provider: 'openai', modelId: 'gpt-5', available: true },
@@ -18,7 +20,7 @@ const gateway: ProviderConfig = { id: 'disabled-gateway', protocol: 'openai', ba
 
 test('供应商列表保留零模型供应商、停用网关与未登记凭据；已配置优先且不伪造认证方式', { timeout: 60_000 }, () => {
   const entries = buildProviderEntries(catalog, [gateway], [{ id: 'deepseek', configured: true }, { id: 'saved-only', configured: true }], models)
-  assert.equal(entries.length, 6)
+  assert.equal(entries.length, 8)
   assert.equal(entries[0]?.id, 'deepseek')
   assert.equal(entries[1]?.id, 'openai')
   assert.equal(entries.find((entry) => entry.id === 'typesafe')?.modelCount, 0)
@@ -40,5 +42,37 @@ test('环境凭据与已存密钥均计入已配置；待配置筛选与搜索�
   const entries = buildProviderEntries(catalog, [], [{ id: 'deepseek', configured: true }], models)
   assert.deepEqual(filterProviderEntries(entries, '', 'configured', models).map((entry) => entry.id), ['deepseek', 'openai'])
   assert.deepEqual(filterProviderEntries(entries, 'openai', 'unconfigured', models).map((entry) => entry.id), ['openai-codex'])
-  assert.equal(filterProviderEntries(entries, '', 'all', models).length, 4)
+  assert.deepEqual(filterProviderEntries(entries, 'gateway', 'unconfigured', models).map((entry) => entry.id).sort(), ['dynamic-gw', 'plugin-gw'])
+  assert.equal(filterProviderEntries(entries, '', 'all', models).length, 6)
+})
+
+test('动态目录供应商的 dynamic 与 baseUrl 元数据完整透传', { timeout: 60_000 }, () => {
+  const entries = buildProviderEntries(catalog, [gateway], [], [])
+  const dynamicEntry = entries.find((entry) => entry.id === 'dynamic-gw')
+  assert.equal(dynamicEntry?.dynamic, true)
+  assert.equal(dynamicEntry?.baseUrl, 'http://127.0.0.1:9000')
+  assert.equal(dynamicEntry?.modelCount, 5)
+  const plainEntry = entries.find((entry) => entry.id === 'openai')
+  assert.equal(plainEntry?.dynamic, undefined)
+  assert.equal(plainEntry?.baseUrl, undefined)
+  const gatewayEntry = entries.find((entry) => entry.id === 'disabled-gateway')
+  assert.equal(gatewayEntry?.dynamic, undefined)
+})
+
+test('插件注册供应商的 pluginId 通用元数据完整透传，非插件供应商不携带', { timeout: 60_000 }, () => {
+  const entries = buildProviderEntries(catalog, [], [], [])
+  assert.equal(entries.find((entry) => entry.id === 'plugin-gw')?.pluginId, 'builtin:some-plugin')
+  assert.equal(entries.find((entry) => entry.id === 'openai')?.pluginId, undefined)
+  assert.equal(entries.find((entry) => entry.id === 'disabled-gateway')?.pluginId, undefined)
+})
+
+test('零模型的动态目录供应商仍保留在列表中，不被过滤', { timeout: 60_000 }, () => {
+  const emptyDynamic: ModelProviderSummary[] = [
+    { id: 'empty-dynamic', name: 'Empty Dynamic', modelCount: 0, dynamic: true, baseUrl: 'http://127.0.0.1:9001', authMethods: [{ type: 'api_key', label: 'API Key' }] },
+  ]
+  const entries = buildProviderEntries(emptyDynamic, [], [], [])
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0]?.id, 'empty-dynamic')
+  assert.equal(entries[0]?.dynamic, true)
+  assert.equal(entries[0]?.available, false)
 })

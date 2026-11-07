@@ -3,20 +3,40 @@ import type { ModelProviderSummary } from '@helm/protocol'
 import { assetsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { HelmSpecView } from '../ui/HelmSpecView.js'
 import { buildProviderEntries, filterProviderEntries, type ProviderEntry, type ProviderFilter } from './provider-auth-model.js'
 
-function ProviderDetail({ provider, onEditGateway }: { provider: ProviderEntry | null; onEditGateway(): void }) {
+function ProviderDetail({ provider, onEditGateway, onRefreshCatalog }: { provider: ProviderEntry | null; onEditGateway(): void; onRefreshCatalog(): void }) {
   const store = useHelmStore()
   const [customId, setCustomId] = useState('')
   const [value, setValue] = useState('')
   const [visible, setVisible] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [modelQuery, setModelQuery] = useState('')
   const activeId = provider?.id ?? customId.trim()
   const supportsKey = !provider || provider.authMethods.some((method) => method.type === 'api_key')
   const supportsOAuth = provider?.authMethods.some((method) => method.type === 'oauth')
   const modelList = store.models.filter((model) => model.provider === activeId && model.modelId.toLowerCase().includes(modelQuery.trim().toLowerCase()))
+  // 通用插件联动：任何插件注册的供应商都自动内联其 settingsPanels，零插件名硬编码。
+  const pluginPanels = provider?.pluginId ? store.groupedUi.settingsPanels.filter((panel) => panel.pluginId === provider.pluginId) : []
+
+  const refreshCatalog = async () => {
+    if (!provider) return
+    setRefreshing(true)
+    setError(null)
+    try {
+      const res = await assetsApi.refreshModels([provider.id])
+      await store.refreshAssets()
+      onRefreshCatalog()
+      const refreshError = res.errors?.[provider.id]
+      if (refreshError) setError(refreshError)
+      else store.pushNotice({ type: 'notification', level: 'info', title: '模型目录已刷新', body: `${provider.name} 已重新拉取最新模型目录` })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally { setRefreshing(false) }
+  }
 
   const save = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -66,6 +86,8 @@ function ProviderDetail({ provider, onEditGateway }: { provider: ProviderEntry |
       {provider && (
         <div className="provider-meta">
           <span className="badge badge-neutral">{provider.custom ? '自定义网关' : '供应商目录'}</span>
+          {provider.dynamic && <span className="badge badge-neutral">动态目录</span>}
+          {provider.baseUrl && <span className="badge badge-neutral mono" title="供应商网关地址">{provider.baseUrl}</span>}
           <span className="badge badge-neutral">{provider.modelCount} 个模型</span>
           {provider.authMethods.map((method) => <span key={method.type} className="badge badge-neutral" title={method.label}>{method.type === 'oauth' ? 'OAuth' : 'API Key / 环境配置'}</span>)}
         </div>
@@ -97,11 +119,34 @@ function ProviderDetail({ provider, onEditGateway }: { provider: ProviderEntry |
 
       {supportsOAuth && <div className="provider-help provider-oauth-note"><HelmIcon name="alert-circle" size={14} /><span>PI 提供 OAuth 模块；Helm 尚未接入交互式登录，当前不能在此完成 OAuth 授权。</span></div>}
       {provider?.custom && <button className="btn" onClick={onEditGateway}><HelmIcon name="network" size={13} />编辑网关地址与模型</button>}
+      {provider?.dynamic && (
+        <div className="provider-dynamic-actions">
+          <button className="btn" type="button" disabled={refreshing || busy} onClick={() => void refreshCatalog()}><HelmIcon name={refreshing ? 'loader' : 'refresh-cw'} size={13} />{refreshing ? '刷新中…' : '刷新模型目录'}</button>
+          <p className="provider-help">动态目录供应商支持从其网关实时拉取最新模型列表与路由信息。</p>
+        </div>
+      )}
       {error && <div className="jr-callout jr-callout-err" role="alert"><HelmIcon name="alert-circle" size={13} /><span className="selectable">{error}</span></div>}
 
-      {provider && provider.modelCount > 0 && (
+      {provider?.pluginId && (
+        <div className="provider-plugin-zone">
+          <div className="provider-plugin-heading">
+            <HelmIcon name="sliders" size={14} />
+            <span>此供应商由插件 {provider.pluginId} 注册；其连接参数由插件配置提供。</span>
+            <button className="btn btn-sm" type="button" onClick={() => store.setActiveModal({ kind: 'plugin-settings', pluginId: provider.pluginId })}><HelmIcon name="settings" size={12} />插件连接设置</button>
+          </div>
+          {pluginPanels.map((panel) => (
+            <div key={`${panel.pluginId}/${panel.spec.id}`} className="provider-plugin-panel">
+              <h4><HelmIcon name="sliders" size={13} />{panel.spec.label || panel.spec.title || panel.spec.id}</h4>
+              <HelmSpecView pluginId={panel.pluginId} spec={panel.spec.json} docs={panel.spec.docs} />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {provider && (provider.modelCount > 0 || provider.dynamic) && (
         <details className="provider-models">
           <summary>模型目录 <span className="provider-muted">{provider.modelCount}</span></summary>
+          {provider.dynamic && provider.modelCount === 0 && <p className="provider-help">当前目录为空；请确认该供应商网关已启动，然后点击刷新模型目录。</p>}
           <input className="input" aria-label="筛选当前供应商模型" placeholder="筛选模型 ID" value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} />
           <div className="provider-model-list">
             {modelList.length ? modelList.map((model) => <div className="mono" key={model.id}>{model.modelId}</div>) : <p className="provider-help">{store.models.some((model) => model.provider === activeId) ? '没有匹配的模型' : '当前无已加载模型；请检查网关是否启用或模型目录是否加载成功。'}</p>}
@@ -161,7 +206,7 @@ export function ProviderCatalog({ onEditGateway }: { onEditGateway(): void }) {
         <div className="provider-sidebar-footer"><span>{query.trim() ? `${filtered.length} / ${entries.length} 家` : `${entries.length} 家供应商`}</span><button className="btn btn-ghost btn-sm" aria-pressed={manual} onClick={() => { setManual(true); setSelectedId(null) }}><HelmIcon name="plus" size={12} />按 ID 配置</button></div>
       </aside>
       <div className="provider-detail-scroll">
-        {manual || selected ? <ProviderDetail key={manual ? '__manual__' : selected!.id} provider={manual ? null : selected} onEditGateway={onEditGateway} /> : <div className="provider-empty"><HelmIcon name="cpu" size={32} /><h3>选择供应商，配置模型连接</h3><p>搜索名称、供应商 ID 或模型 ID。<br />已配置的供应商优先展示，目录与协议直接来自 PI。</p><span className="provider-help">自定义代理地址请使用「自定义网关」。</span></div>}
+        {manual || selected ? <ProviderDetail key={manual ? '__manual__' : selected!.id} provider={manual ? null : selected} onEditGateway={onEditGateway} onRefreshCatalog={() => setReload((previous) => previous + 1)} /> : <div className="provider-empty"><HelmIcon name="cpu" size={32} /><h3>选择供应商，配置模型连接</h3><p>搜索名称、供应商 ID 或模型 ID。<br />已配置的供应商优先展示，目录与协议直接来自 PI。</p><span className="provider-help">自定义代理地址请使用「自定义网关」。</span></div>}
       </div>
     </div>
   )

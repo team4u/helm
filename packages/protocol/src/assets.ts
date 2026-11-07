@@ -65,6 +65,8 @@ export interface ModelProviderSummary {
   dynamic?: boolean
   /** 供应商公开网关根地址或 baseUrl（非机密展示）。 */
   baseUrl?: string
+  /** 注册本供应商的插件 ID（内核自动填充；非插件供应商缺省）。 */
+  pluginId?: string
 }
 
 /** `POST /api/models/refresh` 动态模型目录刷新结果。 */
