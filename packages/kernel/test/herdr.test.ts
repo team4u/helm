@@ -210,9 +210,18 @@ class FakeTransport implements HerdrTransport {
             protocol: 22,
             workspaces: [],
             tabs: [],
-            panes: [],
             layouts: [],
-            agents: [...this.panes.values()].filter((p) => p.name !== undefined).map(agentInfoOf),
+            // 官方形状：panes 覆盖全部窗格（含无 Agent 的 shell），agents 仅
+            // Agent 终端；两者都真实输出供总览 join。
+            panes: [...this.panes.values()].filter((p) => !this.tabs.get(p.tabId)?.closed).map((p) => ({
+              pane_id: p.paneId,
+              workspace_id: p.workspaceId,
+              tab_id: p.tabId,
+              focused: false,
+              agent_status: p.name !== undefined ? p.agentStatus : 'unknown',
+              cwd: p.cwd,
+            })),
+            agents: [...this.panes.values()].filter((p) => p.name !== undefined && !this.tabs.get(p.tabId)?.closed).map(agentInfoOf),
           },
         }
       default:

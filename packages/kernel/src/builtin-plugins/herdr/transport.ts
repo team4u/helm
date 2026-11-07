@@ -2,7 +2,7 @@ import { isIP as nodeIsIP } from 'node:net'
 
 import { HelmError } from '@helm/protocol'
 import type { AgentGateResult } from '@helm/protocol'
-import type { HerdrCallOptions, HerdrEvent, HerdrTarget, HerdrTransport } from './contracts.js'
+import type { HerdrCallOptions, HerdrEvent, HerdrSubscribeOptions, HerdrTarget, HerdrTransport } from './contracts.js'
 
 /**
  * Herdr 官方 socket RPC 的最小 NDJSON 传输。
@@ -38,7 +38,29 @@ export const MAX_GATE_OUTPUT_BYTES = 1024 * 1024
 export const MAX_OUTPUT_BYTES = 32 * 1024 * 1024
 const OUTPUT_FILE_PATTERN = /^wf-out-[A-Za-z0-9_.-]{1,64}\.(json|md)$/
 const SUBSCRIPTION_METHOD = 'events.subscribe'
-const SUBSCRIPTION_TYPES = ['pane.created', 'pane.updated', 'pane.closed', 'pane.exited'] as const
+/** 状态事件类型：官方契约要求订阅时按 pane_id 逐窗格过滤，无全量订阅。 */
+const PANE_STATUS_EVENT_TYPE = 'pane.agent_status_changed'
+/**
+ * 全局订阅集（官方 type 基订阅，payload 走 EventData）：覆盖窗格生命周期与
+ * 位置/焦点变化。pane.moved 会换 pane ID（官方 panes.rs:1326 只发 moved，
+ * 无配套 created/closed）必须重取快照；agent_status_changed 需指定 pane_id
+ * （每个关注窗格一条过滤订阅，由调用方随快照 paneIds 变化重建）。
+ */
+const SUBSCRIPTION_TYPES = [
+  'pane.created',
+  'pane.updated',
+  'pane.closed',
+  'pane.exited',
+  'pane.focused',
+  'pane.moved',
+  'tab.closed',
+  'workspace.closed',
+] as const
+// 全局 EventEnvelope 的名称使用 snake_case；专用状态事件使用点号。
+// 订阅请求仍统一使用点号，只在接收边界规范成内部 HerdrEvent 名称。
+const WIRE_EVENT_TYPES = new Map<string, HerdrEvent['type']>(
+  SUBSCRIPTION_TYPES.map((type) => [type.replace('.', '_'), type] as const),
+)
 const SUBSCRIBE_ACK_TIMEOUT_MS = 15_000
 /** 子进程组终止宽限：先 TERM 再 KILL，给远端 Python 清理窗口。 */
 const TERMINATE_GRACE_MS = 2_000
@@ -333,6 +355,9 @@ async function callLocal(
 /**
  * 订阅流：ack 后每行一个裸事件帧。
  * 单一终结器保证资源只清一次、错误只报一次；ack 与事件同 chunk 到达时逐行处理完。
+ * options.paneIds 为每个去重窗格追加 {type:'pane.agent_status_changed',pane_id} 过滤订阅；
+ * options.signal 任一时刻 abort 都关闭本次 socket：待 ack Promise 立即以 herdr_aborted 结算，
+ * 正常流阶段仅静默关闭，不当作新错误通知 onError。
  */
 async function subscribeLocal(
   socketPath: string,
@@ -340,7 +365,16 @@ async function subscribeLocal(
   onEvent: (event: HerdrEvent) => void,
   onError: (error: unknown) => void,
   redact: (s: string) => string,
+  options?: HerdrSubscribeOptions,
 ): Promise<() => void> {
+  const signal = options?.signal
+  checkAborted(signal, target)
+  // 订阅集：全局拓扑事件 + 每个去重 paneId 一条状态过滤订阅。
+  const paneIds = [...new Set(options?.paneIds ?? [])]
+  const invalidPaneId = paneIds.find((paneId) => typeof paneId !== 'string' || paneId === '')
+  if (invalidPaneId !== undefined) {
+    throw new HerdrTransportError('herdr_invalid_subscription', `invalid pane id in subscription options: ${String(invalidPaneId)}`, target)
+  }
   const net = await import('node:net')
   const socket = net.connect(socketPath)
   socket.setNoDelay(true)
@@ -348,6 +382,7 @@ async function subscribeLocal(
 
   let stopped = false
   let terminated = false
+  let acked = false
   let terminate: (error: unknown) => void = () => {}
 
   /** 唯一终结路径：温和关闭 socket（发 FIN，避免服务端连接悬挂）；错误只报一次。 */
@@ -370,6 +405,7 @@ async function subscribeLocal(
     const succeed = () => {
       if (settled) return
       settled = true
+      acked = true
       resolve()
     }
 
@@ -428,40 +464,89 @@ async function subscribeLocal(
       failOnce(new HerdrTransportError('herdr_socket', `socket error: ${redact(err.message)}`, target, { cause: err }))
     })
     socket.once('close', () => {
-      if (stopped) return // stop() 主动关闭不是错误
+      if (stopped) return // stop()/abort 主动关闭不是错误
       failOnce(new HerdrTransportError('herdr_disconnected', terminated ? 'subscription socket closed' : 'subscription socket closed before ack', target))
     })
   })
 
-  const request = { id: 'sub', method: SUBSCRIPTION_METHOD, params: { subscriptions: SUBSCRIPTION_TYPES.map((type) => ({ type })) } }
+  const subscriptions: Array<Record<string, unknown>> = SUBSCRIPTION_TYPES.map((type) => ({ type }))
+  for (const paneId of paneIds) subscriptions.push({ type: PANE_STATUS_EVENT_TYPE, pane_id: paneId })
+
+  const request = { id: 'sub', method: SUBSCRIPTION_METHOD, params: { subscriptions } }
   socket.write(`${JSON.stringify(request)}\n`)
+
+  // abort 主动结算：待 ack 阶段 reject 本次 Promise，正常流阶段仅静默关闭；
+  // 二者都不把 abort 当作新错误上报 onError。
+  const onAbort = () => {
+    if (terminated) return
+    stopped = true
+    terminated = true
+    socket.destroy()
+    if (!acked) terminate(new HerdrTransportError('herdr_aborted', 'subscription aborted', target))
+  }
+  signal?.addEventListener('abort', onAbort, { once: true })
+  // checkAborted 与 addEventListener 之间已 abort 的窗口补偿（abort 事件不追溯触发）。
+  if (signal?.aborted) onAbort()
 
   // ack 期限：无论哪条路径失败（超时/坏帧/断线）都必须经 failOnce 关闭 socket，
   // 否则服务端连接悬挂且 close 监听器残留。
   const ackTimer = timeoutPromise(SUBSCRIBE_ACK_TIMEOUT_MS, target)
   try {
-    await Promise.race([ack, ackTimer.promise.then((never) => never as never, (err) => {
-      failOnce(err)
-      throw err
-    })])
+    await Promise.race([
+      ack,
+      ackTimer.promise.then(
+        (never) => never as never,
+        (err) => {
+          failOnce(err)
+          throw err
+        },
+      ),
+    ])
+  } catch (err) {
+    // 拒绝路径调用方拿不到 stop()：在此白行清理 abort listener，不泄漏。
+    signal?.removeEventListener('abort', onAbort)
+    throw err
   } finally {
     ackTimer.clear()
   }
 
-  /** 事件帧 → {type, paneId}；坏帧经终结器上报并停止订阅。 */
+  /**
+   * 事件帧 → {type, paneId}；pane.created/updated 携带完整 PaneInfo（官方
+   * EventData），closed/exited/focused/agent_status_changed 为 pane_id 字段，
+   * moved 取 data.pane.pane_id（新 ID；旧 ID 由快照重取对齐）。
+   * 坏帧经终结器上报并停止订阅。
+   */
   function dispatchEventFrame(frame: Record<string, unknown>): boolean {
     try {
-      const type = frame['event']
-      if (typeof type !== 'string' || !(SUBSCRIPTION_TYPES as readonly string[]).includes(type)) return true
+      const wireType = frame['event']
+      if (typeof wireType !== 'string') return true
+      const type = wireType === PANE_STATUS_EVENT_TYPE ? wireType : WIRE_EVENT_TYPES.get(wireType)
+      if (type === undefined) return true
       const data = isObject(frame['data']) ? frame['data'] : {}
+      if (type === 'tab.closed' || type === 'workspace.closed') {
+        const workspaceId = data['workspace_id']
+        const tabId = data['tab_id']
+        if (typeof workspaceId !== 'string' || workspaceId === '' ||
+            (type === 'tab.closed' && (typeof tabId !== 'string' || tabId === ''))) {
+          failOnce(new HerdrTransportError('herdr_protocol', `event ${type} missing topology identity`, target))
+          return false
+        }
+        if (type === 'tab.closed') onEvent({ type, workspaceId, tabId: tabId as string })
+        else onEvent({ type, workspaceId })
+        return true
+      }
       const pane = isObject(data['pane']) ? data['pane'] : undefined
       const paneId =
-        typeof data['pane_id'] === 'string' ? data['pane_id'] : typeof pane?.['pane_id'] === 'string' ? (pane['pane_id'] as string) : undefined
+        typeof data['pane_id'] === 'string' && data['pane_id'] !== ''
+          ? data['pane_id']
+          : typeof pane?.['pane_id'] === 'string' && pane['pane_id'] !== ''
+            ? (pane['pane_id'] as string)
+            : undefined
       if (!paneId) {
         failOnce(new HerdrTransportError('herdr_protocol', `event ${String(type)} missing pane identity`, target))
         return false
       }
-      onEvent({ type: type as HerdrEvent['type'], paneId })
+      onEvent({ type, paneId })
       return true
     } catch (err) {
       failOnce(err)
@@ -471,6 +556,7 @@ async function subscribeLocal(
 
   return () => {
     stopped = true
+    signal?.removeEventListener('abort', onAbort)
     socket.destroy()
   }
 }
@@ -1236,7 +1322,7 @@ export function createHerdrTransport(options?: HerdrTransportOptions): HerdrTran
       }
       return runLocalGate(command, cwd, signal, env, describeTarget(target), redact)
     },
-    subscribe(target, onEvent, onError) {
+    subscribe(target, onEvent, onError, options) {
       assertTarget(target)
       if (target.machine) {
         // 远端没有事件流转发通道；订阅契约只承诺本机 socket。显式失败，不静默降级。
@@ -1244,7 +1330,7 @@ export function createHerdrTransport(options?: HerdrTransportOptions): HerdrTran
           new HerdrTransportError('herdr_subscribe_unsupported', 'event subscription is only supported on the local herdr socket', describeTarget(target)),
         )
       }
-      return subscribeLocal(resolveSocketPath(target), describeTarget(target), onEvent, onError, redact)
+      return subscribeLocal(resolveSocketPath(target), describeTarget(target), onEvent, onError, redact, options)
     },
   }
 }

@@ -12,9 +12,25 @@ export interface HerdrCallOptions {
   timeoutMs?: number
 }
 
-export interface HerdrEvent {
-  type: 'pane.created' | 'pane.updated' | 'pane.closed' | 'pane.exited'
-  paneId: string
+export type HerdrEvent =
+  | {
+      type:
+        | 'pane.created'
+        | 'pane.updated'
+        | 'pane.closed'
+        | 'pane.exited'
+        | 'pane.focused'
+        | 'pane.moved'
+        | 'pane.agent_status_changed'
+      paneId: string
+    }
+  | { type: 'tab.closed'; tabId: string; workspaceId: string; paneId?: never }
+  | { type: 'workspace.closed'; workspaceId: string; paneId?: never }
+
+/** 订阅选项：paneIds 为每个窗格追加 pane.agent_status_changed 过滤订阅；signal 取消整个订阅。 */
+export interface HerdrSubscribeOptions {
+  paneIds?: string[]
+  signal?: AbortSignal
 }
 
 /** Responses are unwrapped RPC results; each consumer validates its boundary shape. */
@@ -24,7 +40,12 @@ export interface HerdrTransport {
   removeOutput(target: HerdrTarget, cwd: string, fileName: string, signal?: AbortSignal): Promise<void>
   runGate(target: HerdrTarget, command: string, cwd: string, signal?: AbortSignal, env?: Record<string, string>): Promise<AgentGateResult>
   /** Local event subscription. Errors terminate the stream and are reported to the owner. */
-  subscribe(target: HerdrTarget, onEvent: (event: HerdrEvent) => void, onError: (error: unknown) => void): Promise<() => void>
+  subscribe(
+    target: HerdrTarget,
+    onEvent: (event: HerdrEvent) => void,
+    onError: (error: unknown) => void,
+    options?: HerdrSubscribeOptions,
+  ): Promise<() => void>
 }
 
 export interface HerdrPluginDependencies {

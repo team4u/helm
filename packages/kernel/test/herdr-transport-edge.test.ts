@@ -17,9 +17,9 @@ import {
 describe('LineAssembler 字节级确定性', () => {
   it('逐字节喂入不破坏跨 chunk UTF-8 与多帧累计', { timeout: 60_000 }, () => {
     const frames = [
-      JSON.stringify({ event: 'pane.updated', data: { pane: { pane_id: 'w1:p1', title: '中文标题-β与emoji占位' } } }),
+      JSON.stringify({ event: 'pane_updated', data: { pane: { pane_id: 'w1:p1', title: '中文标题-β与emoji占位' } } }),
       JSON.stringify({ id: '2', result: { type: 'agent_info', agent: { name: '名称二' } } }),
-      JSON.stringify({ event: 'pane.closed', data: { pane_id: 'w2:p3' } }),
+      JSON.stringify({ event: 'pane_closed', data: { pane_id: 'w2:p3' } }),
     ]
     const stream = Buffer.from(`${frames.join('\n')}\n`, 'utf8')
     const assembler = new LineAssembler()
@@ -135,14 +135,14 @@ describe('订阅流终结语义', () => {
       const request = req as { id: string; method: string }
       assert.equal(request.method, 'events.subscribe')
       const ack = JSON.stringify({ id: request.id, result: { type: 'subscription_started' } })
-      const e1 = JSON.stringify({ event: 'pane.updated', data: { pane_id: 'w1:p2' } })
-      const e2 = JSON.stringify({ event: 'pane.closed', data: { pane_id: 'w1:p3' } })
+      const e1 = JSON.stringify({ event: 'pane_updated', data: { pane_id: 'w1:p2' } })
+      const e2 = JSON.stringify({ event: 'pane_closed', data: { pane_id: 'w1:p3' } })
       // 三帧合并成一个 chunk 写出
       write(`${ack}\n${e1}\n${e2}`)
     })
     const path = await listen(server)
     const transport = createHerdrTransport()
-    const events: { type: string; paneId: string }[] = []
+    const events: { type: string; paneId?: string }[] = []
     const stop = await transport.subscribe({ socketPath: path }, (event) => events.push(event), () => assert.fail('不应有错误'))
     await new Promise((resolve) => setTimeout(resolve, 150))
     assert.deepEqual(events.map((e) => [e.type, e.paneId]), [
@@ -157,7 +157,7 @@ describe('订阅流终结语义', () => {
     const server = frameServer((req, write) => {
       const request = req as { id: string }
       write(JSON.stringify({ id: request.id, result: { type: 'subscription_started' } }))
-      write('{"event": "pane.updated", "data": ') // 坏 JSON
+      write('{"event": "pane_updated", "data": ') // 坏 JSON
       write('同样一行坏 JSON')
     })
     const path = await listen(server)
@@ -175,7 +175,7 @@ describe('订阅流终结语义', () => {
     const server = frameServer((req, write) => {
       const request = req as { id: string }
       write(JSON.stringify({ id: request.id, result: { type: 'subscription_started' } }))
-      write(JSON.stringify({ event: 'pane.updated', data: { pane: {} } }))
+      write(JSON.stringify({ event: 'pane_updated', data: { pane: {} } }))
     })
     const path = await listen(server)
     const transport = createHerdrTransport()

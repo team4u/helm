@@ -24,7 +24,7 @@
 
 import { HelmError, type PluginDefinition, type WorkflowRunSummary } from '@helm/protocol'
 import { createHerdrTransport } from './herdr/transport.js'
-import type { HerdrConfig, HerdrPluginDependencies, HerdrTarget, HerdrTransport } from './herdr/contracts.js'
+import type { HerdrConfig, HerdrEvent, HerdrPluginDependencies, HerdrTarget, HerdrTransport } from './herdr/contracts.js'
 import { AskCoordinator, type AskEntry } from './herdr/asks.js'
 import { MetadataProjector } from './herdr/metadata.js'
 import { PaneRegistry, EMPTY_MANAGED_DOC, machineOf, scopeKey, type ManagedDoc, type ManagedPane } from './herdr/panes.js'
@@ -38,6 +38,7 @@ import {
 } from './herdr/rpc.js'
 import { isValidSessionName, isValidMachineName, resolveSocketPath } from './herdr/transport.js'
 import { normalizeStartupTimeoutMs } from './herdr/spawn-rules.js'
+import { OverviewProjector, type OverviewDoc } from './herdr/overview.js'
 
 export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefinition {
   return {
@@ -52,6 +53,12 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
       const projectorRef: { current?: MetadataProjector } = {}
       const executorRef: { current?: HerdrExecutor } = {}
       const unsubscribeRef: { current?: () => void } = {}
+      const overviewRef: { current?: OverviewProjector } = {}
+      /** 事件回调在途任务：stop 必须等待，防停用后 doc 写入与回调污染新周期。 */
+      const eventTasks = new Set<Promise<void>>()
+      let connectionAbort = new AbortController()
+      let subscriptionTail: Promise<void> = Promise.resolve()
+      let subscribedPaneKey: string | undefined
       /** 本启用周期冻结的本机连接目标（所有本机调用/事件/清理共用）。 */
       let frozenLocalTarget: HerdrTarget = {}
       let overviewDoc: ReturnType<typeof ctx.doc<OverviewDoc>>
@@ -113,66 +120,126 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
       }
 
       function refreshOverview(): void {
-        if (stopping || !overviewDoc) return
+        if (stopping) return
+        const overview = overviewRef.current
         const registry = registryRef.current
-        overviewDoc.set({
-          version: 1,
-          updatedAt: Date.now(),
-          panes: registry
-            ? registry.all().map((p) => ({
-                machine: machineOf(p) ?? 'local',
-                paneId: p.paneId,
-                agentName: p.agentName,
-                outcome: p.outcome,
-                effectiveCwd: p.effectiveCwd,
-                ...(p.worktree !== undefined ? { worktree: p.worktree } : {}),
-                pendingAsk: asks.entries().some((e) => e.paneId === p.paneId && e.machine === machineOf(p) && (e.phase === 'pending' || e.phase === 'creating')),
-              }))
-            : [],
-          asks: asks.describe(),
-        })
+        if (overview && registry) overview.republish(registry, asks)
       }
 
-      // ---- socket 事件路径：只为本插件自有 pane 创建/处理 Ask ----
-      async function onPaneEvent(event: { type: string; paneId: string }): Promise<void> {
-        if (event.type === 'pane.created') return
+      function trackPaneEvent(event: HerdrEvent): void {
+        if (stopping) return
+        const task = onPaneEvent(event).catch((error) => {
+          if (stopping) return
+          host.notify(
+            'Herdr 事件处理失败',
+            `${event.type} ${'workspaceId' in event ? event.workspaceId : event.paneId}：${error instanceof Error ? deps.redact(error.message) : String(error)}`,
+            'error',
+          )
+        })
+        eventTasks.add(task)
+        void task.then(() => eventTasks.delete(task), () => eventTasks.delete(task))
+      }
+
+      function synchronizeSubscription(paneIds: string[], signal: AbortSignal): Promise<boolean> {
+        const ids = [...new Set(paneIds)].sort()
+        const key = JSON.stringify(ids)
+        const task = subscriptionTail.then(async () => {
+          if (stopping || signal.aborted || connectionAbort.signal.aborted) return false
+          if (subscribedPaneKey === key && unsubscribeRef.current) return false
+          let retired = false
+          let failure: { error: unknown } | undefined
+          let rawRelease: (() => void) | undefined
+          const release = () => {
+            retired = true
+            rawRelease?.()
+            rawRelease = undefined
+          }
+          rawRelease = await transport.subscribe(
+            frozenLocalTarget,
+            trackPaneEvent,
+            (error) => {
+              if (stopping || retired) return
+              failure = { error }
+              if (unsubscribeRef.current === release) subscribedPaneKey = undefined
+              overviewRef.current?.markSubscriptionFailed(error)
+              host.notify('Herdr 事件订阅断开', error instanceof Error ? error.message : String(error), 'error')
+            },
+            { paneIds: ids, signal: connectionAbort.signal },
+          )
+          if (stopping || signal.aborted || connectionAbort.signal.aborted) {
+            release()
+            return false
+          }
+          if (failure) {
+            release()
+            throw failure.error
+          }
+          // 先确认新流 ACK，再释放旧流，避免切换逐窗格过滤时漏掉状态事件。
+          const previous = unsubscribeRef.current
+          unsubscribeRef.current = release
+          subscribedPaneKey = key
+          previous?.()
+          overviewRef.current?.markSubscriptionReady()
+          return true
+        })
+        // 保持队列可继续；原 task 的错误由启动路径或总览刷新路径诊断。
+        subscriptionTail = task.then(() => {}, () => {})
+        return task
+      }
+
+      // ---- socket 事件路径：总览全量重取；Ask 协调仅限本插件自有 pane ----
+      async function onPaneEvent(event: HerdrEvent): Promise<void> {
+        if (stopping) return
+        const overview = overviewRef.current
         const registry = registryRef.current
-        if (!registry) return
-        // 事件不带 machine：先精确匹配本机记录，无匹配不误挂远端同 ID pane。
-        const pane = registry.get(undefined, event.paneId)
-        if (pane === undefined || JSON.stringify(pane.target) !== JSON.stringify(frozenLocalTarget)) return
-        if (event.type === 'pane.closed' || event.type === 'pane.exited') {
-          for (const removed of asks.paneClosed(pane.paneId, machineOf(pane))) {
-            await cancelQuietly(removed, 'superseded')
-          }
-          projector().forget(pane.paneId, machineOf(pane))
-          if (pane.outcome !== 'failed' && pane.outcome !== 'settled') {
-            registry.update(machineOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
-          }
-          refreshOverview()
-          return
+        let refresh: Promise<void> | undefined
+        if (overview && registry) {
+          if (event.type === 'pane.closed' || event.type === 'pane.exited') overview.evictPane(event.paneId)
+          refresh = overview.refresh(registry, asks, frozenLocalTarget)
         }
-        // pane.updated：读权威状态（事件无 seq），仅 blocked 进入协调器。
-        const info = parseAgentResult(
-          await transport.call(frozenLocalTarget, 'agent.get', { target: pane.paneId }),
-          'agent.get',
-          'agent_info',
-        )
-        for (const superseded of asks.observeAuthority({
-          paneId: pane.paneId,
-          machine: machineOf(pane),
-          seq: info.stateChangeSeq,
-          status: info.agentStatus,
-        })) {
-          await cancelQuietly(superseded, 'superseded')
+        try {
+          if (event.type === 'pane.created' || event.type === 'pane.focused' || event.type === 'pane.moved' ||
+              event.type === 'tab.closed' || event.type === 'workspace.closed') return
+          if (!registry) return
+          const pane = registry.get(undefined, event.paneId)
+          if (pane === undefined || JSON.stringify(pane.target) !== JSON.stringify(frozenLocalTarget)) return
+          if (event.type === 'pane.closed' || event.type === 'pane.exited') {
+            for (const removed of asks.paneClosed(pane.paneId, machineOf(pane))) {
+              await cancelQuietly(removed, 'superseded')
+            }
+            if (stopping) return
+            projector().forget(pane.paneId, machineOf(pane))
+            if (pane.outcome !== 'failed' && pane.outcome !== 'settled') {
+              registry.update(machineOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+            }
+            refreshOverview()
+            return
+          }
+          const info = parseAgentResult(
+            await transport.call(frozenLocalTarget, 'agent.get', { target: pane.paneId }, {
+              signal: connectionAbort.signal,
+              timeoutMs: 5_000,
+            }),
+            'agent.get',
+            'agent_info',
+          )
+          if (stopping || info.name !== pane.agentName || info.tabId !== pane.tabId) return
+          for (const superseded of asks.observeAuthority({
+            paneId: pane.paneId,
+            machine: machineOf(pane),
+            seq: info.stateChangeSeq,
+            status: info.agentStatus,
+          })) {
+            await cancelQuietly(superseded, 'superseded')
+          }
+          if (stopping) return
+          const cacheKey = `local:${pane.paneId}`
+          if ((eventSeqCache.get(cacheKey) ?? 0) >= info.stateChangeSeq) return
+          eventSeqCache.set(cacheKey, info.stateChangeSeq)
+          if (info.agentStatus === 'blocked') asks.beginBlocked(machineOf(pane), pane.paneId, info.stateChangeSeq)
+        } finally {
+          await refresh
         }
-        const cacheKey = `local:${pane.paneId}`
-        if ((eventSeqCache.get(cacheKey) ?? 0) >= info.stateChangeSeq) return
-        eventSeqCache.set(cacheKey, info.stateChangeSeq)
-        if (info.agentStatus !== 'blocked') return
-        // 仅登记占位（单飞标记）：Ask 创建与 send_keys 消费统一由 spawn 路径的
-        // owner 流程执行（双路径先到后到均只有一个消费者）。
-        asks.beginBlocked(machineOf(pane), pane.paneId, info.stateChangeSeq)
       }
 
       async function cancelQuietly(entry: AskEntry, reason: 'cancelled' | 'superseded'): Promise<void> {
@@ -258,7 +325,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
       managedDoc = ctx.doc<ManagedDoc>('managed', EMPTY_MANAGED_DOC)
       overviewDoc = ctx.doc<OverviewDoc>(
         'overview',
-        { version: 1, updatedAt: 0, panes: [], asks: [] },
+        { version: 2, updatedAt: 0, stale: true, panes: [], asks: [] },
         { public: true },
       )
 
@@ -269,15 +336,21 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         target: 'screen:builtin:herdr/overview',
         order: 40,
       })
-      ctx.ui.screen({ id: 'overview', label: 'Herdr 终端总览', icon: 'terminal' })
+      ctx.ui.screen({ id: 'overview', label: 'Herdr 终端总览', icon: 'terminal', docs: ['overview'] })
 
       // ---- hooks ----
       ctx.hook.onAgentSpawn(async (request) => {
         const executor = executorRef.current
         if (executor === undefined) return { action: 'continue' }
-        const outcome = await executor.handle(request)
-        if (outcome.action === 'continue') return { action: 'continue' }
-        return { action: 'handled', result: outcome.result }
+        try {
+          const outcome = await executor.handle(request)
+          if (outcome.action === 'continue') return { action: 'continue' }
+          const registry = registryRef.current
+          if (!stopping && registry) await overviewRef.current?.refresh(registry, asks, frozenLocalTarget)
+          return { action: 'handled', result: outcome.result }
+        } finally {
+          refreshOverview()
+        }
       }, { priority: 100 })
 
       ctx.hook.onTurnSettled(async (payload) => {
@@ -285,11 +358,17 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
       })
 
       // watchdog_tick（priority 100）：追加本插件自有窗格的真实 probes（含远端轮询）。
-      // human 归属红线：非自有 pane 一律不产生 probe。
+      // human 归属红线：非自有 pane 一律不产生 probe；总览重取为只读采集。
       ctx.hook.onWatchdogTick(
         async (payload) => {
           const registry = registryRef.current
           if (!registry) return
+          const overview = overviewRef.current
+          if (overview !== undefined) {
+            // cwd/seen 等无事件变化（官方 actions.rs:1780 只改 cwd 不发事件）
+            // 依赖本 tick 重取快照对齐；单飞合并，不新增独立定时器。
+            await overview.refresh(registry, asks, frozenLocalTarget)
+          }
           const now = Date.now()
           for (const pane of registry.all()) {
             if (pane.outcome === 'settled') continue
@@ -531,6 +610,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         },
         async start() {
           stopping = false
+          connectionAbort = new AbortController()
           const config = ctx.getConfig() as Partial<HerdrConfig>
           // 冻结本启用周期的本机连接目标（此后所有调用共用；热配置不再生效）。
           frozenLocalTarget = resolveLocalTarget(config)
@@ -560,6 +640,23 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
             frozenLocalTarget,
           )
           executorRef.current = executor
+          overviewRef.current = new OverviewProjector(
+            { redact: deps.redact, notify: host.notify },
+            (doc) => { if (!stopping) overviewDoc.set(doc) },
+            async (target, signal) => {
+              const snapshot = () => transport.call(target, 'session.snapshot', {}, {
+                signal,
+                timeoutMs: 5_000,
+              }).then(parseSessionSnapshot)
+              let current = await snapshot()
+              // 新过滤流 ACK 后重读，覆盖首次快照与逐窗格订阅建立之间的状态变化。
+              while (await synchronizeSubscription(current.panes.map((pane) => pane.paneId), signal)) {
+                current = await snapshot()
+              }
+              return current
+            },
+            () => !stopping && overviewRef.current !== undefined,
+          )
           // Ask CAS seq 解析器：异步权威 agent.get 现查目标 pane 当前真实 seq
           //（先于任何 createAsk；归属经 askId 三段校验）。
           asksRelease = ctx.host.registerAskSeqResolver((askId) =>
@@ -585,29 +682,11 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
 
           try {
             // subscribe ack 先行；任一步失败都释放解析器、监听与已获取资源。
-            const unsubscribe = await transport.subscribe(
-              frozenLocalTarget,
-              (event) => {
-                onPaneEvent(event).catch((error) => {
-                  host.notify(
-                    'Herdr 事件处理失败',
-                    `${event.type} pane ${event.paneId}：${error instanceof Error ? deps.redact(error.message) : String(error)}`,
-                    'error',
-                  )
-                })
-              },
-              (error) => {
-                host.notify(
-                  'Herdr 事件订阅断开',
-                  error instanceof Error ? deps.redact(error.message) : String(error),
-                  'error',
-                )
-              },
-            )
-            unsubscribeRef.current = unsubscribe
+            await synchronizeSubscription([], connectionAbort.signal)
             await reconcile()
             projector().start()
-            refreshOverview()
+            const registry0 = registryRef.current
+            if (registry0 !== undefined) await overviewRef.current?.refresh(registry0, asks, frozenLocalTarget)
           } catch (error) {
             await stopResources()
             throw error
@@ -635,6 +714,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
       async function stopResources(): Promise<void> {
         const errors: unknown[] = []
         stopping = true
+        connectionAbort.abort()
         projector().stop()
         try {
           unsubscribeRef.current?.()
@@ -642,6 +722,18 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           errors.push(err)
         }
         unsubscribeRef.current = undefined
+        subscribedPaneKey = undefined
+        try {
+          await overviewRef.current?.close()
+        } catch (err) {
+          errors.push(err)
+        }
+        await subscriptionTail
+        if (eventTasks.size > 0) {
+          const outcomes = await Promise.allSettled([...eventTasks])
+          for (const outcome of outcomes) if (outcome.status === 'rejected') errors.push(outcome.reason)
+          eventTasks.clear()
+        }
         try {
           asksRelease?.()
         } catch (err) {
@@ -685,6 +777,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         registryRef.current = undefined
         executorRef.current = undefined
         projectorRef.current = undefined
+        overviewRef.current = undefined
         eventSeqCache.clear()
         // 探针观察水位/失败计数随启用周期作废（新周期从首次观测重新起算）。
         probeObservations.clear()
@@ -699,17 +792,4 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
   }
 }
 
-interface OverviewDoc {
-  version: 1
-  updatedAt: number
-  panes: Array<{
-    machine: string
-    paneId: string
-    agentName: string
-    outcome: string
-    effectiveCwd: string
-    worktree?: { path: string; branch?: string }
-    pendingAsk: boolean
-  }>
-  asks: Array<{ paneId: string; machine?: string; seq: number; phase: string }>
-}
+export type { OverviewDoc } from './herdr/overview.js'

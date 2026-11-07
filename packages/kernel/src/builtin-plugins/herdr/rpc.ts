@@ -228,12 +228,32 @@ export function isOkResult(result: unknown): boolean {
   return isObj(result) && result['type'] === 'ok'
 }
 
-/** session.snapshot -> {type:'session_snapshot', snapshot:{agents, panes, tabs, workspaces}} */
-export interface SessionSnapshotAgents {
-  agents: HerdrAgentInfo[]
+/**
+ * session.snapshot 的 panes[] 行（官方 PaneInfo 子集；服务端 src/api/schema/
+ * panes.rs:527-560）。pane 无 state_change_seq（seq 只在 AgentInfo），普通
+ * shell 的 agent_status 官方为 unknown——两者都如实保留，绝不伪造。
+ */
+export interface HerdrPaneSnapshotInfo {
+  paneId: string
+  workspaceId: string
+  tabId: string
+  focused: boolean
+  agentStatus: HerdrAgentStatus
+  cwd?: string
+  foregroundCwd?: string
+  label?: string
+  agent?: string
+  title?: string
 }
 
-export function parseSessionSnapshot(result: unknown): SessionSnapshotAgents {
+/** session.snapshot -> {type:'session_snapshot', snapshot:{agents, panes, tabs, workspaces}} */
+export interface SessionSnapshotData {
+  agents: HerdrAgentInfo[]
+  /** 全部本机窗格（含人类 shell）；agents 仅 Agent 终端，按 paneId join。 */
+  panes: HerdrPaneSnapshotInfo[]
+}
+
+export function parseSessionSnapshot(result: unknown): SessionSnapshotData {
   const obj = expectType(result, 'session.snapshot', 'session_snapshot')
   const snapshot = obj['snapshot']
   if (!isObj(snapshot)) {
@@ -243,7 +263,53 @@ export function parseSessionSnapshot(result: unknown): SessionSnapshotAgents {
   if (!Array.isArray(agents)) {
     throw new HelmError('herdr_protocol_violation', 'session.snapshot.agents 必须是数组', 502, {})
   }
-  return { agents: agents.map((a) => parseAgentInfo(a, 'session.snapshot')) }
+  const panes = snapshot['panes']
+  if (!Array.isArray(panes)) {
+    throw new HelmError('herdr_protocol_violation', 'session.snapshot.panes 必须是数组', 502, {})
+  }
+  const parsedAgents = agents.map((a) => parseAgentInfo(a, 'session.snapshot'))
+  const parsedPanes = panes.map((p) => parsePaneSnapshotInfo(p, 'session.snapshot'))
+  for (const [name, rows] of [['agents', parsedAgents], ['panes', parsedPanes]] as const) {
+    const ids = new Set<string>()
+    for (const row of rows) {
+      if (ids.has(row.paneId)) {
+        throw new HelmError('herdr_protocol_violation', `session.snapshot.${name} 含重复 pane_id`, 502)
+      }
+      ids.add(row.paneId)
+    }
+  }
+  return { agents: parsedAgents, panes: parsedPanes }
+}
+
+function snapshotString(pane: Record<string, unknown>, key: string): string | undefined {
+  const value = pane[key]
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') {
+    throw new HelmError('herdr_protocol_violation', `session.snapshot.panes.${key} 必须是字符串`, 502)
+  }
+  return value
+}
+
+function parsePaneSnapshotInfo(pane: unknown, method: string): HerdrPaneSnapshotInfo {
+  if (!isObj(pane)) {
+    throw new HelmError('herdr_protocol_violation', `${method}.panes 项必须是对象`, 502, {})
+  }
+  const focused = pane['focused']
+  if (typeof focused !== 'boolean') {
+    throw new HelmError('herdr_protocol_violation', `${method}.panes 项 ${String(pane['pane_id'])} 缺少 focused 布尔字段`, 502, {})
+  }
+  return {
+    paneId: reqString(pane, method, 'pane_id'),
+    workspaceId: reqString(pane, method, 'workspace_id'),
+    tabId: reqString(pane, method, 'tab_id'),
+    focused,
+    agentStatus: parseStatus(pane['agent_status'], method),
+    cwd: snapshotString(pane, 'cwd'),
+    foregroundCwd: snapshotString(pane, 'foreground_cwd'),
+    label: snapshotString(pane, 'label'),
+    agent: snapshotString(pane, 'agent'),
+    title: snapshotString(pane, 'title'),
+  }
 }
 
 /**

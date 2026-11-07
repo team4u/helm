@@ -247,14 +247,23 @@ describe('herdr transport subscribe', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 
-  it('先 ack 后事件帧，规范化四个 pane 事件与 paneId', { timeout: 60_000 }, async () => {
+  it('先 ack 后事件帧，规范化窗格与关闭拓扑事件', { timeout: 60_000 }, async () => {
     let client: Socket | undefined
-    const received: { type: string; paneId: string }[] = []
+    const received: { type: string; paneId?: string; tabId?: string; workspaceId?: string }[] = []
     const server = makeServer((line, socket) => {
       const req = JSON.parse(line)
       assert.equal(req.method, 'events.subscribe')
       const types = (req.params.subscriptions as { type: string }[]).map((s) => s.type)
-      assert.deepEqual(types, ['pane.created', 'pane.updated', 'pane.closed', 'pane.exited'])
+      assert.deepEqual(types, [
+        'pane.created',
+        'pane.updated',
+        'pane.closed',
+        'pane.exited',
+        'pane.focused',
+        'pane.moved',
+        'tab.closed',
+        'workspace.closed',
+      ])
       client = socket
       socket.write(`${JSON.stringify({ id: req.id, result: { type: 'subscription_started' } })}\n`)
     })
@@ -269,18 +278,29 @@ describe('herdr transport subscribe', () => {
       ),
     )
     assert.equal(received.length, 0)
-    client!.write(`${JSON.stringify({ event: 'pane.updated', data: { pane: { pane_id: 'w1:p3' } } })}\n`)
-    client!.write(`${JSON.stringify({ event: 'pane.closed', data: { pane_id: 'w2:p1' } })}\n`)
+    client!.write(`${JSON.stringify({ event: 'pane_updated', data: { pane: { pane_id: 'w1:p3' } } })}\n`)
+    client!.write(`${JSON.stringify({ event: 'pane_closed', data: { pane_id: 'w2:p1' } })}\n`)
     client!.write(`${JSON.stringify({ event: 'tab.focused', data: { tab_id: 'w1:t1' } })}\n`)
-    client!.write(`${JSON.stringify({ event: 'pane.created', data: { pane: { pane_id: 'w1:p4' } } })}\n`)
-    client!.write(`${JSON.stringify({ event: 'pane.exited', data: { pane_id: 'w1:p4' } })}\n`)
+    client!.write(`${JSON.stringify({ event: 'pane_created', data: { pane: { pane_id: 'w1:p4' } } })}\n`)
+    client!.write(`${JSON.stringify({ event: 'pane_exited', data: { pane_id: 'w1:p4' } })}\n`)
+    client!.write(`${JSON.stringify({ event: 'pane_focused', data: { pane_id: 'w1:p3', workspace_id: 'w1' } })}\n`)
+    client!.write(`${JSON.stringify({ event: 'pane_moved', data: { previous_pane_id: 'w1:p3', previous_workspace_id: 'w1', previous_tab_id: 'w1:t1', pane: { pane_id: 'w2:p9', workspace_id: 'w2', tab_id: 'w2:t2' } } })}\n`)
+    client!.write(`${JSON.stringify({ event: 'tab_closed', data: { tab_id: 'w2:t2', workspace_id: 'w2' } })}\n`)
+    client!.write(`${JSON.stringify({ event: 'workspace_closed', data: { workspace_id: 'w2' } })}\n`)
     await new Promise((resolve) => setTimeout(resolve, 150))
     assert.deepEqual(received.map((e) => [e.type, e.paneId]), [
       ['pane.updated', 'w1:p3'],
       ['pane.closed', 'w2:p1'],
       ['pane.created', 'w1:p4'],
       ['pane.exited', 'w1:p4'],
+      ['pane.focused', 'w1:p3'],
+      // moved 取新 pane ID；旧 ID 由总览快照重取对齐。
+      ['pane.moved', 'w2:p9'],
+      ['tab.closed', undefined],
+      ['workspace.closed', undefined],
     ])
+    assert.equal(received.at(-2)?.tabId, 'w2:t2')
+    assert.equal(received.at(-1)?.workspaceId, 'w2')
     assert.equal(errors.length, 0)
     stop()
     await close(server)
@@ -331,6 +351,139 @@ describe('herdr transport subscribe', () => {
       transport.subscribe({ machine: 'build-box' }, () => {}, () => {}),
       (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_subscribe_unsupported',
     )
+  })
+
+  it('paneIds 追加逐窗格状态过滤订阅且去重，status_changed 从 data.pane_id 规范化', { timeout: 60_000 }, async () => {
+    let client: Socket | undefined
+    const received: { type: string; paneId?: string }[] = []
+    const server = makeServer((line, socket) => {
+      const req = JSON.parse(line)
+      assert.equal(req.method, 'events.subscribe')
+      // 精确断言：八类全局 + 两个独立窗格的状态过滤（重复 w1:p1 已去重）。
+      assert.deepEqual(req.params.subscriptions, [
+        { type: 'pane.created' },
+        { type: 'pane.updated' },
+        { type: 'pane.closed' },
+        { type: 'pane.exited' },
+        { type: 'pane.focused' },
+        { type: 'pane.moved' },
+        { type: 'tab.closed' },
+        { type: 'workspace.closed' },
+        { type: 'pane.agent_status_changed', pane_id: 'w1:p1' },
+        { type: 'pane.agent_status_changed', pane_id: 'w2:p2' },
+      ])
+      client = socket
+      socket.write(`${JSON.stringify({ id: req.id, result: { type: 'subscription_started' } })}\n`)
+    })
+    socketPath = await listen(server)
+    const transport = createHerdrTransport()
+    const errors: unknown[] = []
+    const stop = await withTimeout(
+      transport.subscribe(
+        { socketPath },
+        (event) => received.push(event),
+        (err) => errors.push(err),
+        { paneIds: ['w1:p1', 'w2:p2', 'w1:p1'] },
+      ),
+    )
+    // 官方 PaneAgentStatusChangedEvent 形状：pane_id/agent_status 在 data 顶层。
+    client!.write(`${JSON.stringify({ event: 'pane.agent_status_changed', data: { pane_id: 'w1:p1', workspace_id: 'w1', agent_status: 'blocked' } })}\n`)
+    client!.write(`${JSON.stringify({ event: 'pane.agent_status_changed', data: { pane_id: 'w2:p2', workspace_id: 'w2', agent_status: 'done', agent: 'pi' } })}\n`)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    assert.deepEqual(received.map((e) => [e.type, e.paneId]), [
+      ['pane.agent_status_changed', 'w1:p1'],
+      ['pane.agent_status_changed', 'w2:p2'],
+    ])
+    assert.equal(errors.length, 0)
+    stop()
+    await close(server)
+  })
+
+  it('不传 paneIds 时仅订阅八类全局事件', { timeout: 60_000 }, async () => {
+    const server = makeServer((line, _socket, write) => {
+      const req = JSON.parse(line)
+      const types = (req.params.subscriptions as { type: string }[]).map((s) => s.type)
+      assert.ok(!types.includes('pane.agent_status_changed'))
+      assert.equal(types.length, 8)
+      write(JSON.stringify({ id: req.id, result: { type: 'subscription_started' } }))
+    })
+    socketPath = await listen(server)
+    const transport = createHerdrTransport()
+    const stop = await withTimeout(transport.subscribe({ socketPath }, () => {}, () => {}))
+    stop()
+    await close(server)
+  })
+
+  it('已 abort 的 signal 直接拒绝且不连 socket', { timeout: 60_000 }, async () => {
+    const server = makeServer(() => {
+      assert.fail('server must not receive any connection for pre-aborted signal')
+    })
+    socketPath = await listen(server)
+    const transport = createHerdrTransport()
+    const controller = new AbortController()
+    controller.abort()
+    await assert.rejects(
+      transport.subscribe({ socketPath }, () => {}, () => {}, { signal: controller.signal }),
+      (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_aborted',
+    )
+    await close(server)
+  })
+
+  it('ack 前 abort：Promise 立即结束且 socket 关闭', { timeout: 60_000 }, async () => {
+    let serverClosed = false
+    const server = makeServer((line, socket) => {
+      // 收到订阅请求但永不 ack；等客户端 abort 后应观察到连接关闭。
+      const _req = JSON.parse(line)
+      socket.on('close', () => {
+        serverClosed = true
+      })
+    })
+    socketPath = await listen(server)
+    const transport = createHerdrTransport()
+    const controller = new AbortController()
+    const errors: unknown[] = []
+    setTimeout(() => controller.abort(), 80)
+    await assert.rejects(
+      withTimeout(transport.subscribe({ socketPath }, () => {}, (err) => errors.push(err), { signal: controller.signal })),
+      (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_aborted',
+    )
+    // abort 主动销毁本方 socket：服务端必观察到关闭，且不产生额外 onError。
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(serverClosed, true)
+    assert.equal(errors.length, 0)
+    await close(server)
+  })
+
+  it('ack 后 abort 与正常退订：释放连接且不误报 onError', { timeout: 60_000 }, async () => {
+    let serverClosed = false
+    const server = makeServer((line, socket) => {
+      const req = JSON.parse(line)
+      socket.on('close', () => {
+        serverClosed = true
+      })
+      socket.write(`${JSON.stringify({ id: req.id, result: { type: 'subscription_started' } })}\n`)
+    })
+    socketPath = await listen(server)
+    const transport = createHerdrTransport()
+    // 第一段：ack 后 abort —— 静默关闭，不报错。
+    const controller = new AbortController()
+    const errors: unknown[] = []
+    const stop1 = await withTimeout(
+      transport.subscribe({ socketPath }, () => {}, (err) => errors.push(err), {
+        paneIds: ['w1:p1'],
+        signal: controller.signal,
+      }),
+    )
+    controller.abort()
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    assert.equal(errors.length, 0, 'abort after ack must not raise onError')
+    stop1() // 幂等
+    // 第二段：无 signal 正常退订同样不报错。
+    const stop2 = await withTimeout(transport.subscribe({ socketPath }, () => {}, (err) => errors.push(err), { paneIds: ['w1:p1'] }))
+    stop2()
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    assert.equal(errors.length, 0)
+    await close(server)
   })
 })
 

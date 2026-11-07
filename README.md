@@ -83,6 +83,10 @@ pnpm helm profiles create --input '{"id":"terminal-coder","runtime":{"kind":"her
 
 终端 Agent 必须将最终结果写入 `.helm/wf-out-*` 文件。插件读取、校验并删除交接文件；首次缺失或格式错误会在原窗格追问一次，仍失败则保留现场并报告脱敏诊断。Gate 在实际工作目录执行一次。成功窗格保活供同一工作流或父回合续接，结算后关闭；Worktree 的磁盘目录和分支保留。插件不自动按键或中止人类窗格。
 
+`pnpm helm plugins doc builtin:herdr overview --json` 可读取本机全部窗格的状态、目录与归属。`agentStatus` 保留 Herdr 的 `idle / working / blocked / done / unknown`，普通 Shell 显示真实的 `unknown`，仅 Agent 记录提供 `stateChangeSeq`。窗格状态、焦点和位置通过事件更新，目录等没有事件的变化由现有服务端巡检周期校准。采集或订阅失败时，文档通过 `stale` 与 `error` 标明异常，并保留最后成功采集的数据和时间。总览中的人类窗格仅用于只读诊断；`herdr list/read/focus` 继续使用受管记录及原有权限。
+
+总览可单独运行真实协议验收：在 Herdr 环境中执行 `pnpm build`，再运行 `timeout 50s node scripts/herdr-overview-smoke.mjs`。脚本自建临时命名会话，只操作自己的普通 Shell 窗格，验证 HTTP/CLI、创建／移动／关闭事件和启停清理，不调用模型。输出包含验收项、清理结果和临时日志目录。
+
 `herdr:<kind>@<machine>` 和 Profile 的 `runtime.machine` 使用 SSH。远端需要已运行的 Herdr、Python 3 和非交互 SSH 认证。请求和环境通过 stdin 脚本传递，环境值进入 RPC 请求体；文件交接和 Gate 在远端执行，失败时显式报错。远端默认不接收本机 Hub 地址与 Token，只有 Profile 显式声明远端可达的 `runtime.env.HELM_HUB_URL` 时才注入访问环境。机密通过 SecretStash 注入，不要写入 Profile JSON。Helm 在自己的交接、事件和诊断出口脱敏，外部 CLI 的工具输出和模型上下文遵循其自身策略。
 
 手工真实冒烟需先执行 `pnpm build`，再运行 `node scripts/herdr-smoke.mjs`。脚本使用独立命名 Herdr 会话、临时 Git 仓库和真实 GLM 模型，验证委派、结构化交接、Worktree、Gate、同窗格续接与重放；它不纳入默认单测。Herdr 阶段在 `50be88c` 上完成全仓 677/677 与真实本机模型冒烟 28/28；本阶段的当前验收记录见 [SuperAgent 开发交接](./docs/20261107-SuperAgent开发交接.md)。远端生产 Python 通道已有受控回归，SSH 实机端到端尚未验证。
