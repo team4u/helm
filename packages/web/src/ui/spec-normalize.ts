@@ -157,12 +157,23 @@ export interface ResolvedKeyValueItem {
   value: string
 }
 
+/** 判断字符串是否为待求值的绑定表达式（原始未求值的 key/value 写法）。 */
+export function isBindingExpression(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  return trimmed.startsWith('/$') || trimmed.startsWith('{$')
+}
+
 /**
- * KeyValueList 条目解析（纯逻辑）：
- * - `{ label, value }` 写法：value 为已求值结果（evaluateSpecValue 产物），格式化为展示文本；
- * - `{ key: '/$docs/...', label }` 写法：value 未提供且 key 以 '/$' 或 '{' 开头时，
- *   由调用方求值 key 后作为展示值（本函数只接收已求值的 resolvedValue）；
+ * KeyValueList 条目解析（纯逻辑，渲染阶段调用）：
+ * - `{ label, value }` 写法：value 若是绑定表达式在此刻求值（保持类型），否则原样展示；
+ * - `{ key: '/$docs/...', label }` 写法：key 是待求值的绑定表达式（原始模板），
+ *   在此刻求值后作为展示值（不再要求上层先 evalIn 预求值 items）；
  * - key 为普通字符串且无 value：key 既当键名又当展示值。
+ *
+ * 上层不再预先 evalIn(items)：预求值会把 pointer key 提前转成具体值
+ * （如 number），令本函数无法识别 key 写法而显示破折号；现在统一在
+ * 本阶段对原始模板求值，普通 key / label+value / pointer key 三种写法均兼容。
  */
 export function resolveKeyValueItems(
   items: unknown,
@@ -182,18 +193,20 @@ export function resolveKeyValueItems(
 
     if (hasValue) {
       const label = typeof labelRaw === 'string' && labelRaw !== '' ? labelRaw : (keyStr ?? '')
-      out.push({ label, value: formatSpecText(valueRaw) })
+      const resolvedValue = isBindingExpression(valueRaw) ? evaluate(valueRaw) : valueRaw
+      out.push({ label, value: formatSpecText(resolvedValue) })
       continue
     }
 
-    if (keyStr !== undefined && (keyStr.startsWith('/$') || keyStr.startsWith('{'))) {
-      const label = typeof labelRaw === 'string' && labelRaw !== '' ? labelRaw : keyStr
-      out.push({ label, value: formatSpecText(evaluate(keyStr)) })
+    if (isBindingExpression(keyRaw)) {
+      const label = typeof labelRaw === 'string' && labelRaw !== '' ? labelRaw : keyRaw.trim()
+      out.push({ label, value: formatSpecText(evaluate(keyRaw.trim())) })
       continue
     }
 
     const label = typeof labelRaw === 'string' && labelRaw !== '' ? labelRaw : (keyStr ?? '')
-    out.push({ label, value: keyStr ?? formatSpecText(valueRaw) })
+    // key 已是具体值（普通字符串或上层预求值产物如 number）：直接作展示值，不二次求值
+    out.push({ label, value: keyRaw === undefined ? formatSpecText(valueRaw) : formatSpecText(keyRaw) })
   }
   return out
 }

@@ -90,6 +90,12 @@ export function parseExpressionSegments(rawExpr: string): string[] {
   return segments
 }
 
+// 只读 own property：非自有键一律 undefined，天然阻断 __proto__ / constructor /
+// prototype 等原型链路径（它们都不是普通对象的 own property），也无法触发 getter 逃逸。
+function readOwnSegment(target: Record<string, unknown>, seg: string): unknown {
+  return Object.prototype.hasOwnProperty.call(target, seg) ? target[seg] : undefined
+}
+
 export function resolvePathInScope(rawExpr: string, scope: EvalScope): unknown {
   const segments = parseExpressionSegments(rawExpr)
   if (segments.length === 0) return undefined
@@ -106,7 +112,7 @@ export function resolvePathInScope(rawExpr: string, scope: EvalScope): unknown {
         return undefined
       }
     } else if (typeof current === 'object') {
-      current = (current as Record<string, unknown>)[seg]
+      current = readOwnSegment(current as Record<string, unknown>, seg)
     } else {
       return undefined
     }
@@ -117,10 +123,28 @@ export function resolvePathInScope(rawExpr: string, scope: EvalScope): unknown {
 const SINGLE_BRACE_EXPR_RE = /^\{([^{}]+)\}$/
 const MULTI_BRACE_EXPR_RE = /\{([^{}]+)\}/g
 
+/** 判断花括号内是否为合法绑定表达式：必须以 $ 开头的路径（$docs/$data/$row/$value 等，含裸 $value）。 */
+function isBindableExpression(expr: string): boolean {
+  return /^\$[\w$]*(\.|\[|$)/.test(expr)
+}
+
+function interpolate(template: string, scope: EvalScope): string {
+  return template.replace(MULTI_BRACE_EXPR_RE, (full, expr: string) => {
+    if (!isBindableExpression(expr)) return full
+    const val = resolvePathInScope(expr, scope)
+    if (val === undefined || val === null) return ''
+    if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+      return String(val)
+    }
+    return JSON.stringify(val)
+  })
+}
+
 /**
  * 求值单个字符串或任意嵌套 JSON 值：
  * - 若整串是 `"{$docs.index.workers}"` 或 `"/$docs/index/routerConversationId"`，返回原始 JS 值；
  * - 若字符串内含多个或内嵌 `{...}`，返回插值后的字符串；
+ * - 花括号内非 `$` 路径开头（如 JSON 示例 `{"enabled":true}`）视为普通文本原样保留；
  * - 若输入为数组或纯对象，递归求值其每个元素/属性。
  */
 export function evaluateSpecValue<T = unknown>(template: unknown, scope: EvalScope): T {
@@ -130,19 +154,11 @@ export function evaluateSpecValue<T = unknown>(template: unknown, scope: EvalSco
       return resolvePathInScope(trimmed, scope) as T
     }
     const singleMatch = SINGLE_BRACE_EXPR_RE.exec(trimmed)
-    if (singleMatch && singleMatch[1] !== undefined) {
+    if (singleMatch && singleMatch[1] !== undefined && isBindableExpression(singleMatch[1])) {
       return resolvePathInScope(singleMatch[1], scope) as T
     }
     if (template.includes('{') && template.includes('}')) {
-      const interpolated = template.replace(MULTI_BRACE_EXPR_RE, (_full, expr: string) => {
-        const val = resolvePathInScope(expr, scope)
-        if (val === undefined || val === null) return ''
-        if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
-          return String(val)
-        }
-        return JSON.stringify(val)
-      })
-      return interpolated as unknown as T
+      return interpolate(template, scope) as unknown as T
     }
     return template as unknown as T
   }

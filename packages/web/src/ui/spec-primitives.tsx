@@ -5,7 +5,7 @@
  * 子节点渲染 + 动作执行），无任何插件业务特判；样式全部复用 styles.css
  * 的 .jr-* / .btn / .badge / .card / .list / .tabs 既有类，零新增全局样式。
  */
-import { useState, type ReactNode } from 'react'
+import { useEffect, useId, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { HelmIcon } from '../lib/icons.js'
@@ -36,6 +36,37 @@ function bool(value: unknown): boolean {
 /** 原语内部再求值（Table 行动作的 $row 注入等场景：局部 scope 覆盖）。 */
 function evalIn<T>(template: unknown, scope: EvalScope): T {
   return evaluateSpecValue<T>(template, scope)
+}
+
+/**
+ * 远端值驱动 + 本地未提交输入保护的同步 state：
+ * - 远端（SSE 推送）新值到达时同步本地；
+ * - 用户本地编辑中（dirty）不覆盖，避免打断输入；
+ * - 组件卸载后远端不再拉回（与 React 受控语义一致）。
+ */
+function useRemoteSyncedState<T>(remote: T, areEqual: (a: T, b: T) => boolean): [T, (next: T) => void] {
+  const [local, setLocal] = useState<T>(remote)
+  const [dirty, setDirty] = useState(false)
+  useEffect(() => {
+    if (!dirty && !areEqual(local, remote)) setLocal(remote)
+    // 仅依赖远端值变化；local/dirty 读取用意即「未提交不覆盖」
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remote])
+  const update = (next: T) => {
+    setDirty(true)
+    setLocal(next)
+  }
+  return [local, update]
+}
+
+const strictEquals = (a: unknown, b: unknown) => a === b
+
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false
+  for (const v of a) {
+    if (!b.has(v)) return false
+  }
+  return true
 }
 
 // ---------------------------------------------------------------------------
@@ -154,9 +185,9 @@ function MetricCardImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRend
 }
 
 function KeyValueListImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
-  const itemsRaw = evalIn<unknown>(node.props['items'], ctx.scope)
-  // key 以 '/$' 或 '{' 开头时按表达式求值（superagent/triggers settingsPanel 真实写法）
-  const items = resolveKeyValueItems(itemsRaw, (expr) => evaluateSpecValue(expr, ctx.scope))
+  // 不预先 evalIn(items)：pointer key（'/$docs/...'）必须保持原始模板到本阶段再求值，
+  // 否则 key 被提前转为具体值（如 number），resolveKeyValueItems 识别不出而显示破折号
+  const items = resolveKeyValueItems(node.props['items'], (expr) => evaluateSpecValue(expr, ctx.scope))
   // .jr-kv-list 是两列 grid：key 与 value 交替排列即自动成对
   return (
     <div className="jr-kv-list">
@@ -289,6 +320,7 @@ function BarListImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderC
 }
 
 function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
+  const tableId = useId()
   const rawColumns = evalIn<unknown>(node.props['columns'], ctx.scope)
   const columns = Array.isArray(rawColumns)
     ? (rawColumns as Array<Record<string, unknown>>).map((c) => ({
@@ -298,7 +330,9 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
     : []
   const rawRows = evalIn<unknown>(node.props['rows'], ctx.scope)
   const rows: Array<Record<string, unknown>> = Array.isArray(rawRows) ? (rawRows as Array<Record<string, unknown>>) : []
-  const rawRowActions = evalIn<unknown>(node.props['rowActions'], ctx.scope)
+  // rowActions 保留原始模板：其中 {$row.xxx} 依赖行级 scope，在外层求值会被
+  // 提前插值成空串（点击时无法恢复）；行渲染时才注入 $row 求值
+  const rawRowActions = node.props['rowActions']
   const rowActions = Array.isArray(rawRowActions) ? (rawRowActions as Array<Record<string, unknown>>) : []
   const empty = str(evalIn(node.props['empty'], ctx.scope))
 
@@ -330,7 +364,7 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
           {rows.map((row, i) => {
             // 行级 scope：当前行对象注入 $row，rowActions 求值时保持 row 字段原始类型
             const rowScope: EvalScope = { ...ctx.scope, $row: row }
-            const pendingKey = `table-row-${i}`
+            const pendingKey = `${tableId}-row-${i}`
             return (
               <tr key={i}>
                 {columnKeys.map((key, j) => (
@@ -425,8 +459,11 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
   const placeholder = str(evalIn(node.props['placeholder'], ctx.scope))
   const secret = bool(evalIn(node.props['secret'], ctx.scope))
   const evaluatedValue = evalIn<unknown>(node.props['value'], ctx.scope)
-  const [text, setText] = useState(typeof evaluatedValue === 'string' ? evaluatedValue : '')
-  const pending = ctx.isPending('textinput')
+  const remote = typeof evaluatedValue === 'string' ? evaluatedValue : ''
+  // SSE 后续推送的 value 同步到本地；用户未提交的本地输入不被覆盖
+  const [text, setText] = useRemoteSyncedState(remote, strictEquals)
+  const pendingKey = useId()
+  const pending = ctx.isPending(pendingKey)
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
       {label !== '' && (
@@ -449,7 +486,7 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
             type="button"
             className="btn"
             disabled={pending}
-            onClick={() => ctx.runAction(node.props['action'], { ...ctx.scope, $value: text }, 'textinput')}
+            onClick={() => ctx.runAction(node.props['action'], { ...ctx.scope, $value: text }, pendingKey)}
           >
             {pending && <HelmIcon name="loader" size={12} />}
             提交
@@ -463,8 +500,9 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
 function SelectImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
   const label = str(evalIn(node.props['label'], ctx.scope))
   const evaluatedValue = evalIn<unknown>(node.props['value'], ctx.scope)
-  const initial = typeof evaluatedValue === 'string' ? evaluatedValue : formatSpecText(evaluatedValue)
-  const [selected, setSelected] = useState(initial)
+  const remote = typeof evaluatedValue === 'string' ? evaluatedValue : formatSpecText(evaluatedValue)
+  const [selected, setSelected] = useRemoteSyncedState(remote, strictEquals)
+  const pendingKey = useId()
   const rawOptions = evalIn<unknown>(node.props['options'], ctx.scope)
   const options = Array.isArray(rawOptions)
     ? (rawOptions as Array<Record<string, unknown>>).map((o) => ({
@@ -481,7 +519,7 @@ function SelectImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
         onChange={(e) => {
           setSelected(e.target.value)
           if (node.props['action'] !== undefined) {
-            ctx.runAction(node.props['action'], { ...ctx.scope, $value: e.target.value }, `select-${label}`)
+            ctx.runAction(node.props['action'], { ...ctx.scope, $value: e.target.value }, pendingKey)
           }
         }}
       >
@@ -498,11 +536,13 @@ function SelectImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
 function SwitchImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
   const label = str(evalIn(node.props['label'], ctx.scope))
   const evaluated = evalIn<unknown>(node.props['value'], ctx.scope)
+  // checked 每次渲染都从远端 scope 重新求值：SSE 推送的新布尔值自然同步，无需本地 state
   const checked = typeof evaluated === 'boolean' ? evaluated : bool(evaluated)
-  const pending = ctx.isPending('switch')
+  const pendingKey = useId()
+  const pending = ctx.isPending(pendingKey)
   const toggle = () => {
     // 新布尔值注入 $value 后触发 action（superagent set_router_mode 真实写法）
-    ctx.runAction(node.props['action'], { ...ctx.scope, $value: !checked }, 'switch')
+    ctx.runAction(node.props['action'], { ...ctx.scope, $value: !checked }, pendingKey)
   }
   return (
     <button
@@ -564,10 +604,12 @@ function CheckboxGroupImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecR
       }))
     : []
   const evaluatedValue = evalIn<unknown>(node.props['value'], ctx.scope)
-  const [selected, setSelected] = useState<Set<string>>(
-    new Set(Array.isArray(evaluatedValue) ? (evaluatedValue as unknown[]).map((v) => String(v)) : []),
-  )
-  const pending = ctx.isPending('checkbox-group')
+  const remote = Array.isArray(evaluatedValue)
+    ? new Set((evaluatedValue as unknown[]).map((v) => String(v)))
+    : new Set<string>()
+  const [selected, setSelected] = useRemoteSyncedState(remote, (a, b) => setsEqual(a, b))
+  const pendingKey = useId()
+  const pending = ctx.isPending(pendingKey)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       {label !== '' && <span style={{ fontSize: 11.5, color: 'var(--fg-secondary)' }}>{label}</span>}
@@ -586,7 +628,7 @@ function CheckboxGroupImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecR
                 else next.delete(o.value)
                 setSelected(next)
                 if (node.props['action'] !== undefined) {
-                  ctx.runAction(node.props['action'], { ...ctx.scope, $value: Array.from(next) }, 'checkbox-group')
+                  ctx.runAction(node.props['action'], { ...ctx.scope, $value: Array.from(next) }, pendingKey)
                 }
               }}
             />
@@ -614,14 +656,16 @@ function ButtonImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
   const label = str(evalIn(node.props['label'] ?? node.props['text'], ctx.scope), '按钮')
   const icon = str(evalIn(node.props['icon'], ctx.scope))
   const variant = str(evalIn(node.props['variant'], ctx.scope))
-  const pending = ctx.isPending('button')
+  // 节点级唯一 pendingKey：多个 Button 并存时互不禁用
+  const pendingKey = useId()
+  const pending = ctx.isPending(pendingKey)
   const cls = BUTTON_VARIANT_CLASS[variant] ?? 'btn'
   return (
     <button
       type="button"
       className={cls}
       disabled={pending || node.props['action'] === undefined}
-      onClick={() => ctx.runAction(node.props['action'], ctx.scope, 'button')}
+      onClick={() => ctx.runAction(node.props['action'], ctx.scope, pendingKey)}
     >
       {(icon !== '' || pending) && <HelmIcon name={pending ? 'loader' : icon} size={12} />}
       {label}
@@ -631,6 +675,7 @@ function ButtonImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
 
 function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
   const rawActions = evalIn<unknown>(node.props['actions'], ctx.scope)
+  const actionBarId = useId()
   const actions = Array.isArray(rawActions) ? (rawActions as Array<Record<string, unknown>>) : []
   if (actions.length > 0) {
     return (
@@ -639,7 +684,8 @@ function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
           const label = str(evalIn(a['label'], ctx.scope), '操作')
           const icon = str(evalIn(a['icon'], ctx.scope))
           const variant = str(evalIn(a['variant'], ctx.scope))
-          const pendingKey = `actionbar-${i}`
+          // 节点级唯一前缀 + 按钮序号：多个 ActionBar 并存时互不禁用
+          const pendingKey = `${actionBarId}-${i}`
           const pending = ctx.isPending(pendingKey)
           const cls = BUTTON_VARIANT_CLASS[variant] ?? 'btn'
           return (
