@@ -620,7 +620,7 @@ export class KernelRuntime {
     return defineTool({
       name: 'subagent',
       description:
-        '派生一个子代理执行任务并等待结果。prompt 为任务指令；agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；可选 schema（JSON Schema，子代理最终输出需满足）、gate（shell 验收命令）、cwd、isolation（worktree）、model（provider/model）、effort。续接既有子代理传 resume（上次返回的 conversationId）。返回结果与执行元数据（conversationId 等续接标识）。',
+        '派生一个子代理执行任务并等待结果。prompt 为任务指令；agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；可选 schema（JSON Schema，子代理最终输出需满足）、gate（shell 验收命令）、cwd、isolation（worktree）、model（provider/model）、effort。续接时将上次 execution.conversationId 或 execution.executionId 作为 resume。业务 result 与执行元数据独立返回。',
       parameters: {
         type: 'object',
         properties: {
@@ -634,7 +634,7 @@ export class KernelRuntime {
           },
           schema: { type: 'object', description: '结构化输出 JSON Schema（可选）' },
           gate: { type: 'string', description: '验收 shell 命令（可选，exit≠0 失败）' },
-          resume: { type: 'string', description: '续接标识（上次返回的 conversationId）' },
+          resume: { type: 'string', description: '上次 execution.conversationId 或 execution.executionId，续接同一执行上下文' },
           model: { type: 'string', description: "模型覆盖 'provider/model'（可选）" },
           effort: {
             type: 'string',
@@ -732,13 +732,13 @@ export class KernelRuntime {
     return defineTool({
       name: 'SubagentWorkflow',
       description:
-        '执行一个 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，或 scriptPath 指向脚本文件，或 name 引用已保存工作流（三者恰好其一）；args 为任意 JSON 原样传给脚本；resumeFromRunId 从既有 run 的账本断点恢复。返回真实执行 summary（runId/status/nodes/result）。编排引擎未挂接时显式报错。',
+        '执行一个 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本。返回真实执行 summary（runId/status/nodes/result）。编排引擎未挂接时显式报错。',
       parameters: {
         type: 'object',
         properties: {
           script: { type: 'string', description: '编排脚本源码（内联）' },
-          scriptPath: { type: 'string', description: '编排脚本文件路径（与 script 二选一）' },
-          name: { type: 'string', description: '已保存工作流名（与 script 二选一）' },
+          scriptPath: { type: 'string', description: '编排脚本文件路径（与 script、name 择一）' },
+          name: { type: 'string', description: '已保存工作流名（与 script、scriptPath 择一）' },
           args: { description: '传给脚本的任意 JSON args（对象/数组/标量均可，原样透传）' },
           resumeFromRunId: { type: 'string', description: '断点恢复的既有 runId（可选）' },
         },
