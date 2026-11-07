@@ -295,11 +295,7 @@ export class AskService {
         settledStatus: now.status,
       })
     }
-    if (
-      stale.expectedStateSeq !== undefined &&
-      now.expectedStateSeq !== undefined &&
-      stale.expectedStateSeq !== now.expectedStateSeq
-    ) {
+    if (stale.expectedStateSeq !== now.expectedStateSeq) {
       throw new HelmError(
         'ask_state_conflict',
         `等待 seq resolver 期间 AskDoc 持久水位已从 ${stale.expectedStateSeq} 变为 ${now.expectedStateSeq}，以新权威条件为准`,
@@ -319,9 +315,9 @@ export class AskService {
       if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || !Number.isSafeInteger(value)) {
         throw new HelmError(
           'ask_seq_resolver_invalid',
-          `seq resolver 对 AskDoc ${askId} 返回非法水位 ${String(value)}（需非负 safe integer），拒绝猜测`,
+          `seq resolver 对 AskDoc ${askId} 返回非法水位（需非负 safe integer）`,
           500,
-          { askId, resolved: value },
+          { askId, resolvedType: value === null ? 'null' : typeof value },
         )
       }
       return value

@@ -34,6 +34,7 @@ import { AskService } from '../src/runtime/asks.js'
 import { HelmStore } from '../src/runtime/store.js'
 import { openHelmDatabase } from '../src/runtime/sqlite.js'
 import { SecretStash } from '../src/services/index.js'
+import { errorToResponse } from '../src/http/http-utils.js'
 
 interface TestContext {
   service: AskService
@@ -241,28 +242,29 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
   it('等待期间持久 CAS spec 改变（expectedStateSeq 推进）：按新权威条件拒绝旧数据', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
-      const id = await createPending(ctx.service, { ...secretSpec, id: 'spec-race' })
-      const gate = deferred<void>()
-      ctx.service.registerSeqResolver(() => gate.promise.then(() => 10))
-      const answering = ctx.service.answerAsk(id, { TOKEN: 'plain-secret' })
-      // 模拟等待期间同 ask 行被重建为更高水位（预分配 ID 冲突路径之外的直接行改写）。
-      const row = ctx.store.getAsk(id)!
-      const spec = JSON.parse(row.specJson) as { expectedStateSeq?: number }
-      ctx.store.putAsk({ ...row, expectedStateSeq: 20, specJson: JSON.stringify({ ...spec, expectedStateSeq: 20 }) })
-      gate.resolve()
-      await assert.rejects(
-        () => answering,
-        (err: unknown) =>
-          err instanceof HelmError &&
-          err.code === 'ask_state_conflict' &&
-          (err.details as { storedSeq?: number } | undefined)?.storedSeq === 20,
-      )
-      // 行未被覆写为旧水位答案：保持 pending 且 stash 无写入。
-      const after = ctx.store.getAsk(id)!
-      assert.equal(after.status, 'pending')
-      assert.equal(after.expectedStateSeq, 20)
-      assert.equal(ctx.stash.envFor(1).TOKEN, undefined)
-      assert.equal(ctx.events.filter((e) => e.type === 'ask.resolved').length, 0)
+      for (const nextSeq of [20, undefined]) {
+        const id = await createPending(ctx.service, { ...secretSpec, id: `spec-race-${String(nextSeq)}` })
+        const gate = deferred<void>()
+        const release = ctx.service.registerSeqResolver(() => gate.promise.then(() => 10))
+        const answering = ctx.service.answerAsk(id, { TOKEN: 'plain-secret' })
+        const row = ctx.store.getAsk(id)!
+        const spec = JSON.parse(row.specJson) as { expectedStateSeq?: number }
+        ctx.store.putAsk({ ...row, expectedStateSeq: nextSeq, specJson: JSON.stringify({ ...spec, expectedStateSeq: nextSeq }) })
+        gate.resolve()
+        await assert.rejects(
+          () => answering,
+          (err: unknown) =>
+            err instanceof HelmError &&
+            err.code === 'ask_state_conflict' &&
+            (err.details as { storedSeq?: number } | undefined)?.storedSeq === nextSeq,
+        )
+        const after = ctx.store.getAsk(id)!
+        assert.equal(after.status, 'pending')
+        assert.equal(after.expectedStateSeq, nextSeq)
+        assert.equal(ctx.stash.envFor(1).TOKEN, undefined)
+        assert.equal(ctx.events.filter((e) => e.type === 'ask.resolved').length, 0)
+        release()
+      }
     } finally {
       await ctx.close()
     }
@@ -305,6 +307,9 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
     try {
       const bads: Array<{ label: string; value: unknown }> = [
         { label: 'NaN', value: Number.NaN },
+        { label: 'Infinity', value: Number.POSITIVE_INFINITY },
+        { label: 'BigInt', value: 10n },
+        { label: 'Symbol', value: Symbol('invalid-seq') },
         { label: '负数', value: -1 },
         { label: '小数', value: 10.5 },
         { label: '超出 safe integer', value: Number.MAX_SAFE_INTEGER + 1 },
@@ -314,15 +319,19 @@ describe('异步 seq resolver：水位判定与诚实失败', { timeout: 60_000 
       for (const bad of bads) {
         const id = `bad-seq-${bad.label}`
         await createPending(ctx.service, { ...secretSpec, id })
-        ctx.service.registerSeqResolver(() => bad.value as never)
-        await assert.rejects(
-          () => ctx.service.answerAsk(id, { TOKEN: 'v' }),
-          (err: unknown) =>
-            err instanceof HelmError && err.code === 'ask_seq_resolver_invalid',
-          `非法 seq ${bad.label} 必须显式失败`,
+        const release = ctx.service.registerSeqResolver(() => bad.value as never)
+        const error = await ctx.service.answerAsk(id, { TOKEN: 'v' }).then(
+          () => assert.fail(`非法 seq ${bad.label} 必须显式失败`),
+          (error: unknown) => error,
         )
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'ask_seq_resolver_invalid')
+        const response = errorToResponse(undefined, (text) => text, error)
+        assert.equal(response.status, 500)
+        assert.equal((await response.json()).error.code, 'ask_seq_resolver_invalid', '非法值不能破坏 HTTP 错误信封')
         assert.equal(ctx.store.getAsk(id)!.status, 'pending', `${bad.label} 后保持 pending`)
         assert.equal(ctx.stash.envFor(1).TOKEN, undefined)
+        release()
       }
       // 全部保持 pending、无终态事件。
       assert.equal(ctx.service.listAsks('pending').length, bads.length)
