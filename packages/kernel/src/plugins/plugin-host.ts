@@ -279,8 +279,8 @@ function assertConversationScope(pluginId: string, what: string, scope: unknown)
     });
   }
   for (const key of Object.keys(scope)) {
-    if (key !== 'conversationIds' && key !== 'tags' && key !== 'profileIds') {
-      throw new HelmError('invalid_plugin_scope', `${what} 的 scope 仅允许 conversationIds/tags/profileIds，收到未知字段 ${key}`, 400, {
+    if (key !== 'conversationIds' && key !== 'tags' && key !== 'profileIds' && key !== 'modelProviders') {
+      throw new HelmError('invalid_plugin_scope', `${what} 的 scope 仅允许 conversationIds/tags/profileIds/modelProviders，收到未知字段 ${key}`, 400, {
         pluginId,
         field: key,
       });
@@ -316,6 +316,7 @@ function assertConversationScope(pluginId: string, what: string, scope: unknown)
   checkList('conversationIds', 'id');
   checkList('tags', 'text');
   checkList('profileIds', 'text');
+  checkList('modelProviders', 'text');
 }
 
 /** 幂等化一个释放句柄：重复调用只生效一次（插件提前释放 + 停用清理双保险）。 */
@@ -914,6 +915,15 @@ export class PluginHost {
   }
 
   // --- 查询清单 -----------------------------------------------------------
+
+  /** 模型请求与刷新在启动时复核生命周期，封住 teardown 预检后的新请求。 */
+  assertProviderAvailable(pluginId: string): void {
+    this.assertNotDisposed();
+    const state = this.plugins.get(pluginId);
+    if (state && (state.phase === 'deactivating' || (!state.enabled && state.phase === 'idle'))) {
+      throw new HelmError('plugin_disabled', `插件 ${pluginId} 正在停用或已停用`, 409);
+    }
+  }
 
   list(): PluginSummary[] {
     this.assertNotDisposed();

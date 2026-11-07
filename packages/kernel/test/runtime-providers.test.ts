@@ -136,31 +136,65 @@ test('运行时供应商在途流计数与 teardown 预检（busy 409 / settled 
   try {
     kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
     const faux = fauxProvider({ provider: 'plugin-busy', models: [{ id: 'busy-model' }] })
-    await kernel.registerRuntimeProvider(faux.provider, 'builtin:busy')
-
-    // 未使用：预检放行。
+    const unregister = await kernel.registerRuntimeProvider(faux.provider, 'builtin:busy')
     kernel.assertRuntimeProvidersIdle('builtin:busy')
 
-    // 在途流：faux 未编排放应答，流不结算 -> busy 409（details 带供应商清单）。
-    const models = createModels()
-    models.setProvider(faux.provider)
-    faux.setResponses([fauxAssistantMessage('done')])
-    const busyModel = faux.getModel('busy-model')
-    assert.ok(busyModel)
-    const stream = models.streamSimple(
-      busyModel,
-      { prompt: 'hi' } as never,
-    )
-    const settled = stream.result()
-    // 事件流尚在推送中（未结算）：同一 provider 经内核包装计数 busy。
-    // 直接验证内核包装路径：从内核目录取模型开流。
-    const kernelModel = kernel.listModelProviders()
-    assert.ok(kernelModel.some((provider) => provider.id === 'plugin-busy'))
-    await settled
-    // 结算后放行（result() 已 resolve，计数归零）。
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    let answer!: (message: ReturnType<typeof fauxAssistantMessage>) => void
+    const response = new Promise<ReturnType<typeof fauxAssistantMessage>>((resolve) => { answer = resolve })
+    faux.setResponses([async () => { entered(); return response }])
+    await kernel.updateConversation(1, { model: 'plugin-busy/busy-model' })
+    await kernel.submitInput(1, '测试在途模型请求')
+    await started
+    try {
+      assert.throws(() => kernel!.assertRuntimeProvidersIdle('builtin:busy'), { code: 'plugin_has_live_tasks' })
+      await assert.rejects(unregister(), { code: 'plugin_has_live_tasks' })
+      assert.ok(kernel.listModelProviders().some((provider) => provider.id === 'plugin-busy'))
+    } finally {
+      answer(fauxAssistantMessage('done'))
+      await kernel.waitForIdle(1)
+    }
     kernel.assertRuntimeProvidersIdle('builtin:busy')
+    // 上一次因忙而失败的释放句柄仍可重试；旧句柄不能删除同名的新注册。
+    await unregister()
+    const replacement = fauxProvider({ provider: 'plugin-busy', models: [{ id: 'replacement' }] })
+    const unregisterReplacement = await kernel.registerRuntimeProvider(replacement.provider, 'builtin:busy')
+    await unregister()
+    assert.deepEqual((await kernel.listModels()).filter((entry) => entry.provider === 'plugin-busy').map((entry) => entry.modelId), ['replacement'])
+    await unregisterReplacement()
   } finally {
     await kernel?.close()
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('插件停用进入服务 stop 后拒绝新模型刷新，避免预检后的卸载竞态', { timeout: 60_000 }, async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-provider-stop-'))
+  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
+  let stopEntered!: () => void
+  let finishStop!: () => void
+  const stopping = new Promise<void>((resolve) => { stopEntered = resolve })
+  const stopGate = new Promise<void>((resolve) => { finishStop = resolve })
+  let disabling: Promise<void> | undefined
+  try {
+    await kernel.plugins.register({
+      id: 'test:provider-stop',
+      definePlugin(ctx) {
+        ctx.provider(fauxProvider({ provider: 'stopping-provider', models: [{ id: 'fixture' }] }).provider)
+        ctx.service({ id: 'fixture', start() {}, async stop() { stopEntered(); await stopGate } })
+      },
+    })
+    disabling = kernel.plugins.disable('test:provider-stop')
+    await stopping
+    await assert.rejects(kernel.refreshModels({ providers: ['stopping-provider'] }), { code: 'plugin_disabled' })
+    finishStop()
+    await disabling
+    assert.ok(!kernel.listModelProviders().some((provider) => provider.id === 'stopping-provider'))
+  } finally {
+    finishStop()
+    await disabling?.catch(() => {})
+    await kernel.close()
     await rm(dataDir, { recursive: true, force: true })
   }
 })
@@ -184,10 +218,12 @@ test('refreshModels：目标过滤透传、errors 脱敏、models.changed 事件
     assert.ok(full.providerCatalog.some((provider) => provider.id === 'radius'))
     assert.deepEqual(events.at(-1), { providers: [] })
 
-    // 指定 providers：透传 + 事件携带目标清单；未知供应商忽略（SDK 语义）。
+    // 指定 providers：透传 + 事件携带目标清单；未知或静态供应商显式拒绝。
     const scoped = await kernel.refreshModels({ providers: ['radius'] })
     assert.deepEqual(scoped.providers, ['radius'])
     assert.deepEqual(events.at(-1), { providers: ['radius'] })
+    await assert.rejects(kernel.refreshModels({ providers: ['fixture-missing-provider'] }), { code: 'model_provider_not_found' })
+    await assert.rejects(kernel.refreshModels({ providers: ['openai'] }), { code: 'model_provider_static' })
 
     // 运行时供应商 refreshModels 错误显式进入 errors（message 原样保留诊断）。
     const failing: Provider = {
@@ -226,6 +262,24 @@ test('models-store.json 损坏时 reloadModels 显式失败，不静默降级空
     )
   } finally {
     await kernel?.close()
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('供应商注销重建失败时保留注册和归属，修复缓存后可重试', { timeout: 60_000 }, async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-unregister-retry-'))
+  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
+  try {
+    const faux = fauxProvider({ provider: 'plugin-retry', models: [{ id: 'retry-model' }] })
+    const unregister = await kernel.registerRuntimeProvider(faux.provider, 'test:retry')
+    await writeFile(join(dataDir, 'models-store.json'), '{invalid')
+    await assert.rejects(unregister(), { code: 'models_store_corrupted' })
+    assert.equal(kernel.listModelProviders().find((provider) => provider.id === 'plugin-retry')?.pluginId, 'test:retry')
+    await writeFile(join(dataDir, 'models-store.json'), '{}')
+    await unregister()
+    assert.ok(!kernel.listModelProviders().some((provider) => provider.id === 'plugin-retry'))
+  } finally {
+    await kernel.close()
     await rm(dataDir, { recursive: true, force: true })
   }
 })

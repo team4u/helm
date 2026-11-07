@@ -104,6 +104,8 @@ export interface ConversationScope {
   conversationIds?: number[]
   tags?: string[]
   profileIds?: string[]
+  /** 按会话当前模型供应商筛选；与其它维度取 AND。 */
+  modelProviders?: string[]
 }
 
 /** Scope 判定所需的最小会话形状（ConversationSummary 的结构子集即可）。 */
@@ -111,6 +113,7 @@ export interface ConversationScopeTarget {
   id: number
   profileId: string
   tags: string[]
+  model?: string
 }
 
 /**
@@ -124,7 +127,8 @@ export function matchesConversationScope(
   conversation: ConversationScopeTarget,
 ): boolean {
   if (!scope) return true
-  const { conversationIds, tags, profileIds } = scope
+  const { conversationIds, tags, profileIds, modelProviders } = scope
+  if (modelProviders !== undefined && !modelProviders.includes(conversation.model?.split('/')[0] ?? '')) return false
   if (conversationIds !== undefined && !conversationIds.includes(conversation.id)) return false
   if (profileIds !== undefined && !profileIds.includes(conversation.profileId)) return false
   if (tags !== undefined) {

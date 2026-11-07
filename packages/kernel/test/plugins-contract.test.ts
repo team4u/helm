@@ -205,6 +205,9 @@ test('scope 注册边界：非纯对象/未知字段/非法元素一律 invalid_
     { conversationIds: '2,3' },
     { tags: [1, 'ok'] },
     { profileIds: [''] },
+    { modelProviders: 'example' },
+    { modelProviders: [''] },
+    { modelProviders: [42] },
     { conversationIds: [0] },
     { conversationIds: [1.5] },
     { conversationIds: [-1] },
@@ -230,6 +233,20 @@ test('scope 注册边界：非纯对象/未知字段/非法元素一律 invalid_
   const ok = makeHost();
   await ok.register(scopedPlugin('p:ok', { tool: { conversationIds: [1, 2], tags: ['worker'] } }));
   assert.equal(ok.list().length, 1);
+});
+
+test('模型供应商 scope 随会话切换生效，执行边界复核工具与动作', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  const scope = { modelProviders: ['example'] };
+  await host.register(scopedPlugin('p:model-provider', { tool: scope, action: scope }));
+  const conversation = backend.getConversation(1);
+  conversation.model = 'example/group/nested-model';
+  assert.ok(host.listTools(conversation).some((tool) => tool.name === scopedToolName('p:model-provider')));
+  await host.executeTool(scopedToolName('p:model-provider'), {}, { conversationId: 1 });
+  conversation.model = 'another/model';
+  assert.ok(!host.listTools(conversation).some((tool) => tool.name === scopedToolName('p:model-provider')));
+  await rejectsCode(host.executeTool(scopedToolName('p:model-provider'), {}, { conversationId: 1 }), 'conversation_scope_violation', 403);
+  await rejectsCode(host.invokeAction('p:model-provider', 'scoped_action', {}, { conversationId: 1 }), 'conversation_scope_violation', 403);
 });
 
 test('ui scope 也在注册边界校验：非法 ui spec scope 拒绝', { timeout: 60_000 }, async () => {

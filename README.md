@@ -2,7 +2,7 @@
 
 Helm 是以 `pi-durable` 为底座的持久会话微内核。五个包分别负责共享契约（`@helm/protocol`）、Hub 与插件宿主（`@helm/kernel`，命令 `helm-hub`）、HTTP/SSE 客户端（`@helm/cli`，命令 `helm`）、受控节点守护进程（`@helm/node`，命令 `helm-node`）和 Web 界面（`@helm/web`）。
 
-核心、常驻 `builtin:assistant` 和 CLI 已实现；`builtin:herdr` 按需启用，负责终端 Agent 委派；实验性 `builtin:superagent` 按需启用，提供独立中枢、后台 Worker 与两层巡检；`builtin:triggers` 按需启用，提供 `cron` 与 `webhook` 入站触发器。Web 外壳提供会话画布、审批和插件视图。架构约束见 [AGENTS.md](./AGENTS.md)，目标设计见 [设计文档](./docs/20261106%20helm极简微内核与双7扩展点设计文档.md)。当前验收记录见 [Triggers 开发交接](./docs/20261107-Triggers开发交接.md)，此前记录见 [SuperAgent 开发交接](./docs/20261107-SuperAgent开发交接.md)、[Herdr 开发交接](./docs/20261107-Herdr开发交接.md) 与 [核心开发交接](./docs/20261106-核心开发交接.md)。
+核心、常驻 `builtin:assistant` 和 CLI 已实现；`builtin:herdr` 按需启用，负责终端 Agent 委派；实验性 `builtin:superagent` 按需启用，提供独立中枢、后台 Worker 与两层巡检；`builtin:triggers` 按需启用，提供 `cron` 与 `webhook` 入站触发器；`builtin:magpie` 按需启用，提供动态模型目录、原生协议分发及网关配额与路由视图。Web 外壳提供会话画布、审批和插件视图。架构约束见 [AGENTS.md](./AGENTS.md)，目标设计见 [设计文档](./docs/20261106%20helm极简微内核与双7扩展点设计文档.md)。当前验收记录见 [Triggers 开发交接](./docs/20261107-Triggers开发交接.md)，此前记录见 [SuperAgent 开发交接](./docs/20261107-SuperAgent开发交接.md)、[Herdr 开发交接](./docs/20261107-Herdr开发交接.md) 与 [核心开发交接](./docs/20261106-核心开发交接.md)。
 
 需要 Node.js 24.12 或更新版本及 pnpm。
 
@@ -21,7 +21,7 @@ HELM_PORT=3202 pnpm dev:kernel
 
 默认监听 `127.0.0.1:3202`，数据目录为 `~/.helm`。通过 `HELM_DATA_DIR` 可指定独立数据目录。部署时可通过反向代理转发 HTTP 与 `/ws/node`，或设置 `HELM_HOST=0.0.0.0` 接受远端连接；节点的 Hub URL 应指向其实际可达地址。会话模型按“会话显式覆盖 > 所属 Profile 的 `model` > 全局默认”解析；全局默认按启动参数、`HELM_MODEL`、`config.json.model` 顺序读取。`PATCH { "model": "" }` 清除会话覆盖并恢复继承，切换 Profile 时同步更新继承模型。模型凭据使用凭据服务配置，未配置模型时提交输入会返回显式错误。
 
-自定义兼容网关目前按模型 ID 配置。SDK 所需的上下文窗口、输出上限和计价字段使用配置缺省值，未探测网关的实际能力，不能据此估算费用。官方模型目录由 SDK 提供。
+自定义兼容网关按模型 ID 配置。SDK 所需的上下文窗口、输出上限和计价字段使用配置缺省值，未探测网关的实际能力，不能据此估算费用。官方模型目录由 SDK 提供。动态供应商使用 SDK 的 `refreshModels` 协议，目录缓存在独立的 `~/.helm/models-store.json` 中，可通过 `helm models refresh --provider <id> --json` 或供应商界面的刷新按钮更新；错误会明确返回，上次目录可保留供排查。
 
 ```bash
 pnpm helm --help
@@ -70,6 +70,19 @@ timeout 50s node scripts/env-node-smoke.mjs
 SSE 首帧包含会话、审批、启用插件 UI、计算节点和工作流运行摘要；随后推送时间线条目、流式状态、节点在线状态、公开插件文档和工作流更新。插件文档必须显式声明 `public: true` 才能通过 `helm plugins doc <id> <name>` 读取，仍需 Hub 鉴权。`helm workflows runs --json` 可查看运行摘要。
 
 项目处于开发阶段，不考虑向后兼容，不做数据迁移。代码、接口、配置和数据库结构可直接按最新设计调整；结构变化时可以清理开发数据并重新初始化。同一结构下的会话、记忆和工作流重启恢复仍需保证。外部插件的 `client.tsx` 编译交付后续实现；内置插件的轻量 UI 使用 JSON Spec，复杂 Screen 由 Web 内置组件表映射。
+
+`builtin:magpie` 默认停用。通过「插件与设置」配置网关地址与 API Key，再启用插件；缺省地址为 Hub 所在机器的 `http://127.0.0.1:3425`。插件按网关目录中的 `native_endpoints` 为每个模型选择 Responses、Anthropic Messages 或 Chat Completions，保留思考档位与 Claude 自适应思考元数据。网关未提供模型价格，目录中的零价格不代表实际调用免费。远端网关可提供模型与路由请求，本机专属的配额和路由诊断能力会明确报告是否可用。
+
+```bash
+pnpm helm plugins enable builtin:magpie --json
+pnpm helm magpie refresh --json
+pnpm helm magpie status --json
+pnpm helm magpie quota --json
+pnpm helm magpie groups --json
+pnpm helm magpie group --id '<路由组ID>' --json
+```
+
+供应商由插件的 `ctx.provider()` 声明，配置表单、设置面板、输入区状态及命令面板动作均由同一个插件提供。Web 只根据通用的供应商归属字段挂载插件面板；插件停用后撤下供应商、模型与 UI，在途执行受生命周期保护。这里提供的是 Helm 原生插件，不会加载 Pi TUI 的扩展入口，也不共享 `~/.pi/agent` 的凭据或模型缓存。
 
 `builtin:superagent` 默认停用。启用时自举 `superagent`、`watchdog` Profile 和 `watchdog-playbooks` 技能包，保留已有用户资产，并动态创建「SuperAgent 中枢」与「巡检看门狗」两个常驻会话。它们的 ID 保存在公开插件文档 `index` 中，启用期间受删除保护；`#1` 继续作为个人助理入口。
 
