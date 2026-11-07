@@ -10,7 +10,6 @@ import { artifactsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { HelmSpecView } from '../ui/HelmSpecView.js'
-import { ConversationStyles } from './ConversationStyles.js'
 import { CopyButton } from './CopyButton.js'
 import { MarkdownView } from './MarkdownView.js'
 import {
@@ -613,7 +612,6 @@ export function ConversationTimeline({
 
   return (
     <div ref={scrollRef} className="timeline-scroll">
-      <ConversationStyles />
       {loading ? (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '48px 0', color: 'var(--fg-muted)', fontSize: 12 }}>
           <HelmIcon name="loader" size={14} className="spin-slow" />

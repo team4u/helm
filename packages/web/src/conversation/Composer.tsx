@@ -61,7 +61,8 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
     }
   }
 
-  const shortName = conversation.model.split('/').pop() ?? conversation.model
+  const rawShortName = conversation.model.split('/').pop() ?? conversation.model
+  const shortName = rawShortName.trim() !== '' ? rawShortName : '默认模型'
 
   return (
     <span className="composer-picker-root" ref={rootRef} style={{ position: 'relative', display: 'inline-flex' }}>

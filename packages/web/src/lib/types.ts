@@ -137,7 +137,12 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
         break
     }
   }
-  grouped.sidebarItems.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
+  const sidebarOrder = (spec: SidebarItemSpec): number => {
+    if (spec.order !== undefined) return spec.order
+    if (spec.id === 'assistant' || spec.target === 'conversation:1') return 0
+    return 100
+  }
+  grouped.sidebarItems.sort((a, b) => sidebarOrder(a.spec) - sidebarOrder(b.spec))
   grouped.sidebarSections.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
   grouped.workbenchPanels.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
   grouped.settingsPanels.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
