@@ -272,7 +272,7 @@ test('跨节点取消：HTTP 中止传播到节点并停止孙进程写入', { t
   try {
     const controller = new AbortController()
     const childProgram = 'setInterval(() => require("node:fs").appendFileSync("child-heartbeat", "x"), 20)'
-    const program = `const cp = require('node:child_process'); cp.spawn(process.execPath, ['-e', ${JSON.stringify(childProgram)}], { stdio: 'ignore' }); setInterval(() => {}, 1000)`
+    const program = `const cp = require('node:child_process'); cp.spawn(process.execPath, ['-e', ${JSON.stringify(childProgram)}], { stdio: ['ignore', 'inherit', 'inherit'] }); setInterval(() => {}, 1000)`
     const pending = env.request('/api/env/exec', {
       nodeId: 'integration-node', cwd: env.remoteCwd,
       command: [process.execPath, '-e', program],
