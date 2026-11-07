@@ -30,6 +30,18 @@ export interface ScopedExecutionEnv extends ExecutionEnv {
   readonly target: { conversationId?: number; nodeId: string; cwd: string }
 }
 
+/** 受管变量名集（大小写不敏感剥除；Windows env 名语义下 helm_token / Helm_Token
+ * 等同名变体一并剥除，受管值最后固定覆写——与 runtime/tools.ts 同规）。 */
+const MANAGED_ENV_NAMES = new Set([
+  'HELM_ENV',
+  'HELM_HUB_URL',
+  'HELM_CONVERSATION_ID',
+  'HELM_CWD',
+  'HELM_DATA_DIR',
+  'HELM_NODE_ID',
+  'HELM_TOKEN',
+])
+
 export function createScopedExecutionEnv(
   base: ExecutionEnv,
   target: EnvTarget,
@@ -58,13 +70,22 @@ export function createScopedExecutionEnv(
       merged = supplemented
     }
     if (target.nodeId === 'local') {
+      // local 继承宿主 process.env，但受管变量（HELM_TOKEN / HELM_CONVERSATION_ID /
+      // HELM_CWD / HELM_ENV 等）按大小写不敏感剥除：无会话作用域时不借用宿主
+      // 值（fail-closed），有作用域时受管值由 composer 最后固定覆写。
       const host: Record<string, string> = {}
       if (options?.inheritEnv !== false) {
-        for (const [key, value] of Object.entries(process.env)) if (value !== undefined && key.toUpperCase() !== 'HELM_TOKEN') host[key] = value
+        for (const [key, value] of Object.entries(process.env)) {
+          if (value === undefined) continue
+          if (MANAGED_ENV_NAMES.has(key.toUpperCase())) continue
+          host[key] = value
+        }
       }
       merged = { ...host, ...merged }
       if (composer !== undefined && !composedToken) {
-        for (const key of Object.keys(merged)) if (key.toUpperCase() === 'HELM_TOKEN') delete merged[key]
+        for (const key of Object.keys(merged)) {
+          if (key.toUpperCase() === 'HELM_TOKEN') delete merged[key]
+        }
       }
     }
     return base.exec(

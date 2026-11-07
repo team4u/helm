@@ -66,7 +66,13 @@ export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOp
           void dispatch(data)
         })
       },
-      onGeneralError: () => { log('节点 RPC 传输失败，关闭连接'); ws.terminate(); return true },
+      // 仅在连接已非 OPEN（发送失败导致断开）时终止连接：单次消息发送错误
+      //（如临时背压）不直接掐断健康连接，交由后续发送或 close 事件处理。
+      onGeneralError: (error, type) => {
+        log(`节点 RPC 传输失败（${type}）：${error instanceof Error ? error.message : String(error)}`)
+        if (ws.readyState !== ws.OPEN) ws.terminate()
+        return true
+      },
       serialize: (data) => data,
       deserialize: (data) => data as never,
       timeout: 30 * 60 * 1000,

@@ -7,7 +7,7 @@
  * 进程内互斥见 withFileLock；跨进程互斥见 withProcessFileLock。
  * 不可重入：fn 内部不得再对同一 path 加锁（会死锁）。
  */
-import { realpath, readFile, rm, writeFile } from 'node:fs/promises'
+import { realpath, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -50,6 +50,8 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T>): Promi
 
 const PROCESS_LOCK_WAIT_MS = 10_000
 const PROCESS_LOCK_POLL_MS = 25
+/** 锁文件刚创建但内容尚未写完的宽限期：期内空/半截内容视为正在写入。 */
+const FRESH_LOCK_GRACE_MS = 1_500
 
 interface LockOwner {
   pid: number | undefined
@@ -92,9 +94,14 @@ export async function withProcessFileLock<T>(path: string, fn: () => Promise<T>)
       const raw = await readFile(lockFile, 'utf8')
       const holder = parseLockOwner(raw)
       if (holder === undefined) {
-        throw new Error(`锁文件内容损坏（${lockFile}）：${JSON.stringify(raw.slice(0, 120))}`)
-      }
-      if (holder.pid !== undefined && !(await isProcessAlive(holder.pid))) {
+        // 并发进程刚以 open('wx') 创建锁文件但尚未写完 JSON：mtime 距今
+        // < 1500ms 视为正在写入，等待重试而非误判锁损坏（误判会破除健康锁）；
+        // 过了宽限期仍无法解析才是真的损坏，显式报错（诚实性纪律）。
+        const stats = await stat(lockFile)
+        if (Date.now() - stats.mtimeMs >= FRESH_LOCK_GRACE_MS) {
+          throw new Error(`锁文件内容损坏（${lockFile}）：${JSON.stringify(raw.slice(0, 120))}`)
+        }
+      } else if (holder.pid !== undefined && !(await isProcessAlive(holder.pid))) {
         // 持有者已退出：原子抢占（unlink 与后续 wx 创建之间仍有竞态，失败即重试）
         await rm(lockFile, { force: true })
         continue

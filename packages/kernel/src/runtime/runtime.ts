@@ -173,7 +173,10 @@ function assistantTextOfModel(model: unknown[] | undefined): string {
 
 /** 内核/插件工具 execute 包装：tool_call handled 接管结果优先返回（不执行真实工具）。 */
 function wrapToolExecute(
-  handledToolCalls: Map<string, { output: Array<{ type: 'text'; text: string }>; isError: boolean }>,
+  handledToolCalls: Map<
+    string,
+    { conversationId: number | undefined; result: { output: Array<{ type: 'text'; text: string }>; isError: boolean } }
+  >,
   execute: (args: never, api: never, context: { abortSignal?: AbortSignal }) => Promise<unknown>,
 ): (args: never, api: never, context: { abortSignal?: AbortSignal }) => Promise<unknown> {
   return async (args, api, context) => {
@@ -181,7 +184,7 @@ function wrapToolExecute(
     const handled = callId !== undefined ? handledToolCalls.get(callId) : undefined
     if (handled !== undefined) {
       handledToolCalls.delete(callId!)
-      return handled
+      return handled.result
     }
     return execute(args, api, context)
   }
@@ -252,8 +255,11 @@ export class KernelRuntime {
   private watchdogPending: Promise<void> | undefined
   /** turn_settled 钩子的在途执行（waitForIdle 前等待）。 */
   private settledInflight: Promise<void> = Promise.resolve()
-  /** tool_call handled 接管缓存（callId -> 结果；execute 层包装器消费）。 */
-  private readonly handledToolCalls = new Map<string, { output: Array<{ type: 'text'; text: string }>; isError: boolean }>()
+  /** tool_call handled 接管缓存（callId -> 结果与归属会话；execute 层包装器消费）。 */
+  private readonly handledToolCalls = new Map<
+    string,
+    { conversationId: number | undefined; result: { output: Array<{ type: 'text'; text: string }>; isError: boolean } }
+  >()
   private closed = false
   /** 实际 hub URL（setHubUrl 可更新；工具 env 每次读取最新值）。 */
   private hubUrlValue: string
@@ -1509,8 +1515,12 @@ export class KernelRuntime {
                 return { block: self.stash.redact(outcome.reason ?? 'blocked') }
               }
               if (outcome?.action === 'handled') {
-                // 接管：结果登记到 execute 层缓存（wrapToolCalls 包装器消费）。
-                self.handledToolCalls.set(call.id, toolResultOf(outcome.result))
+                // 接管：结果登记到 execute 层缓存（wrapToolCalls 包装器消费）；
+                // 同时记录归属会话，回合终态/abort/删除时兑底清理未消费残留。
+                self.handledToolCalls.set(call.id, {
+                  conversationId: api.conversationId as number,
+                  result: toolResultOf(outcome.result),
+                })
                 return undefined
               }
               if (outcome?.action === 'transform') {
@@ -1683,6 +1693,10 @@ export class KernelRuntime {
   }
 
   private dispatchTurnSettled(payload: unknown, consumed: ConversationInput[]): Promise<void> {
+    // 回合终态兑底：清理该会话未被 afterTool 消费的 handled 接管残留
+    //（block/abort/异常路径不会走 execute，残留会永久占据内存）。
+    const conversationId = (payload as { conversation?: { id?: number } }).conversation?.id
+    if (typeof conversationId === 'number') this.evictHandledToolCalls(conversationId)
     const host = this.pluginHost
     if (!host) return Promise.resolve()
     void consumed
@@ -1696,6 +1710,13 @@ export class KernelRuntime {
           body: String(error),
         })
       })
+  }
+
+  /** 清理指定会话在 handledToolCalls 中的未消费残留（回合终态/abort/删除兑底）。 */
+  private evictHandledToolCalls(conversationId: number): void {
+    for (const [callId, entry] of this.handledToolCalls) {
+      if (entry.conversationId === conversationId) this.handledToolCalls.delete(callId)
+    }
   }
 
   // ------------------------------------------------------------------
@@ -2020,6 +2041,10 @@ export class KernelRuntime {
     })
     this.tracker.stopObserving(id)
     this.store.deleteConv(id)
+    // 删除兑底：清理该会话的 handled 接管残留与 EnvFabric 会话靶点缓存
+    //（bases 中该 conversationId 的 env 与其输出 sink 注册）。
+    this.evictHandledToolCalls(id)
+    this.envFabric.evictConversation(id)
     // 清除归属登记，防止重建同号会话时继承已删除会话的自动化权限。
     this.markConversationOwnership(id, 'human')
     this.events.publish('conversation.deleted', { conversationId: id })
@@ -2332,6 +2357,8 @@ export class KernelRuntime {
     await conversation.abort(BACKGROUND_CONTEXT)
     // 仅在途会话结算 aborted；空闲 abort 不伪造终态（已完成/已失败回合不覆盖）。
     if (wasBusy) this.tracker.settleAborted(id)
+    // abort 兑底：未被 execute 消费的 handled 接管残留一并清理。
+    this.evictHandledToolCalls(id)
   }
 
   /** 内核关闭守卫（上下文操作共用）。 */
@@ -2674,7 +2701,12 @@ export class KernelRuntime {
         }
       })
       const payload = { timestamp: Date.now(), conversations: summaries, probes }
-      await this.runHookChain('watchdog_tick', payload)
+      const outcome = await this.runHookChain('watchdog_tick', payload)
+      // 插件（如 builtin:herdr）可经 transform 扩充 payload（如附加探针字段）：
+      // 巡检调用方拿到的是钩子链最终形态，而非初始快照。
+      if (outcome?.action === 'transform' && outcome.value !== undefined) {
+        return outcome.value
+      }
       return payload
     } finally {
       this.watchdogInflight = false

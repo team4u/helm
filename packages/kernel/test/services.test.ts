@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import { spawn, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { existsSync } from 'node:fs'
-import { chmod, mkdir, mkdtemp, readdir, readFile, symlink, writeFile, rm, realpath } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readdir, readFile, symlink, writeFile, rm, realpath, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -1057,6 +1057,45 @@ test('集成: update_memory 原子更新被 watcher 实时捕获（无 temp 事�
   } finally {
     watcher.close()
   }
+})
+
+// ---------------------------------------------------------------------------
+// 跨进程锁：写入中宽限（新锁 mtime < 1500ms 的空/半截内容等待重试）
+// ---------------------------------------------------------------------------
+
+test('跨进程锁回归: 新建锁空内容在宽限期内等待而非误判损坏；过期后显式报错', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const target = join(dataDir, 'credentials.json')
+  const lockFile = `${target}.lock`
+
+  // 1) 模拟并发进程刚 open('wx') 创建锁、尚未写完 JSON：空内容 + mtime=now。
+  //    另一进程应在宽限期内等待；随后持有者写入完成并释放，等待者正常拿到锁。
+  const child = spawn(process.execPath, [
+    '-e',
+    `const fs = require('node:fs');
+     const lock = ${JSON.stringify(lockFile)};
+     const fd = fs.openSync(lock, 'wx', 0o600); // 只创建，内容稍后写
+     setTimeout(() => { fs.writeSync(fd, process.pid + ' writer'); fs.closeSync(fd); fs.unlinkSync(lock); }, 200);`,
+  ])
+  const childExit = new Promise<number | null>((resolve) => child.on('close', (c) => resolve(c)))
+  await waitFor(() => existsSync(lockFile))
+  const acquired = await withProcessFileLock(target, async () => 'waited-fresh-lock')
+  assert.equal(acquired, 'waited-fresh-lock', '宽限期内空/半截内容应等待写入完成，不误判损坏')
+  assert.equal(await childExit, 0)
+  assert.ok(!existsSync(lockFile))
+
+  // 2) 宽限期外（mtime 已老）的空内容：仍是显式损坏报错（诚实性纪律）。
+  await writeFile(lockFile, '', { mode: 0o600 })
+  const old = new Date(Date.now() - 60_000)
+  await utimes(lockFile, old, old)
+  await expectReject(() => withProcessFileLock(target, async () => 'nope'), /损坏/)
+
+  // 3) 宽限期内但持有者 PID 已死的半截内容：仍可按 stale 破除（死亡优先于宽限）。
+  await rm(lockFile, { force: true })
+  const deadPid = 2 ** 22 + Math.floor(Math.random() * 1000)
+  await writeFile(lockFile, `${deadPid}`, { mode: 0o600 })
+  assert.equal(await withProcessFileLock(target, async () => 'stale-fresh'), 'stale-fresh')
+  assert.ok(!existsSync(lockFile))
 })
 
 // 清理

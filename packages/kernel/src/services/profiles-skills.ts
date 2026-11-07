@@ -98,7 +98,12 @@ export function validateProfileInput(input: unknown): Profile {
     }
     const kind = runtime['kind']
     const agent = runtime['agent']
-    if (kind !== 'herdr') throw new Error(`profile '${id}' runtime.kind 仅支持 'herdr'`)
+    // 内核零插件枚举硬编码：kind 只校验外部运行时标识格式（命名空间小写
+    // 标识符，如 'herdr' / 'docker'），具体运行时是否被插件接管由
+    // agent_spawn 钩子管道决定，内核不点名任何插件。
+    if (typeof kind !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(kind)) {
+      throw new Error(`profile '${id}' runtime.kind 需为外部运行时标识符（小写字母开头，可含 a-z 0-9 _ -，长度 1..32）`)
+    }
     if (typeof agent !== 'string' || agent === '') {
       throw new Error(`profile '${id}' runtime.agent 不能为空`)
     }
@@ -111,8 +116,19 @@ export function validateProfileInput(input: unknown): Profile {
       throw new Error(`profile '${id}' runtime.nodeId 若存在必须是非空字符串（目标计算节点标识）`)
     }
     const workspace = runtime['workspace']
-    if (workspace !== undefined && (typeof workspace !== 'string' || workspace === '')) {
-      throw new Error(`profile '${id}' runtime.workspace 若存在必须是非空字符串（绝对路径）`)
+    if (workspace !== undefined) {
+      if (typeof workspace !== 'string' || workspace === '') {
+        throw new Error(`profile '${id}' runtime.workspace 若存在必须是非空字符串（绝对路径）`)
+      }
+      // 跨平台绝对路径（与 runtime/tools.ts isAbsoluteTargetPath 同语义）：
+      // POSIX `/`、Windows 盘符 `C:\\` / `C:/`、UNC `\\\\server\\share`。
+      if (!(
+        workspace.startsWith('/') ||
+        /^[a-zA-Z]:[\\/]/.test(workspace) ||
+        /^\\\\[^\\]+\\[^\\]+/.test(workspace)
+      )) {
+        throw new Error(`profile '${id}' runtime.workspace 必须是跨平台绝对路径（POSIX /、Windows 盘符或 UNC），当前为 '${workspace}'`)
+      }
     }
     const env = runtime['env']
     if (env !== undefined) {

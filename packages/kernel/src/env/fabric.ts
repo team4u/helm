@@ -95,6 +95,14 @@ export interface EnvFabric {
   ): Promise<() => void>
   /** 节点注册时上报的 hubUrl（远端受管子进程回连地址守恒）。 */
   getNodeHubUrl(nodeId: string): string | undefined
+  /**
+   * 驱逐某会话的全部靶点缓存：清理 bases 中该 conversationId 的 env
+   * （含远端命令清理）并从注册表移除其输出 sink。会话删除时调用，
+   * 防反复建删会话的进程无界累积靶点实例与 sink 注册。
+   */
+  evictConversation(conversationId: number): Promise<void>
+  /** 当前靶点缓存条目数（诊断/测试内省；不参与业务逻辑）。 */
+  debugBaseCount(): number
   /** dispose：远端 env 清理（杀命令）+ 注册表关闭；幂等。 */
   dispose(): Promise<void>
 }
@@ -118,6 +126,12 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
 
   const baseKey = (nodeId: string, cwd: string, conversationId?: number): string =>
     `${nodeId}\u0000${cwd}\u0000${conversationId ?? '-'}`
+
+  /** baseKey 的会话段（'-' 表示无会话维度的公共靶点）。 */
+  const conversationIdOfKey = (key: string): number | undefined => {
+    const part = key.split('\u0000')[2]
+    return part !== undefined && part !== '-' && /^\d+$/.test(part) ? Number(part) : undefined
+  }
 
   /** 取（或建）靶点专属底座：local 直建；远端 RemoteExecutionEnv 且把
    *  输出 sink 登记到注册表（按节点路由，同节点多靶点互不串扰）。 */
@@ -275,9 +289,28 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       return registry.get(nodeId)?.hubUrl
     },
 
+    async evictConversation(conversationId: number): Promise<void> {
+      const cleanups: Promise<void>[] = []
+      for (const [key, entry] of [...bases]) {
+        if (conversationIdOfKey(key) !== conversationId) continue
+        bases.delete(key)
+        if (entry instanceof RemoteExecutionEnv) {
+          registry.removeOutputSink(key.split('\u0000')[0]!, entry.onEnvExecOutput)
+        }
+        cleanups.push(entry.cleanup(BACKGROUND_CONTEXT).catch(() => undefined))
+      }
+      await Promise.allSettled(cleanups)
+    },
+
+    debugBaseCount(): number {
+      return bases.size
+    },
+
     async dispose(): Promise<void> {
       // 先关闭节点连接，让在途请求按未知终态结束；离线清理不等待重连。
       await registry.close()
+      // 再逐靶点清理：sink 注销与远端命令清理（close 后注册表已空，
+      // removeOutputSink 仅是内存列表移除，顺序上先清 sink 再 cleanup 命令）。
       const cleanups: Promise<void>[] = []
       for (const [key, entry] of bases) {
         if (entry instanceof RemoteExecutionEnv) {
@@ -288,7 +321,8 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       }
       bases.clear()
       await Promise.allSettled(cleanups)
-      await registry.close()
+      // registry.close 已在开头执行且幂等内部收敛；不重复调用第二次
+      // （旧实现重复 close，依赖实现幂等性而非显式顺序保证）。
     },
   }
 }

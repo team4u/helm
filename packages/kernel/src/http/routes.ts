@@ -708,7 +708,8 @@ async function postEnvExec(
     }
     const streamAbort = new AbortController()
     const executionSignal = AbortSignal.any([ctx.request.signal, streamAbort.signal])
-    const stream = new ReadableStream<Uint8Array>({
+    // 命名 readableStream：避免遮蔽外层布尔变量 stream（请求体里的 stream 标志）。
+    const readableStream = new ReadableStream<Uint8Array>({
       start(controller) {
         void (async () => {
         const write = (payload: EnvExecStreamFrame): void => {
@@ -760,7 +761,7 @@ async function postEnvExec(
       },
       cancel() { streamAbort.abort() },
     })
-    return new Response(stream, {
+    return new Response(readableStream, {
       headers: {
         'content-type': 'application/x-ndjson; charset=utf-8',
         'cache-control': 'no-cache',

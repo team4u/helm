@@ -102,6 +102,8 @@ const readerNotFound = <T>(readerId: string): RpcResult<T> => ({
 
 /** 单帧（单行）字节上限：与内核 Herdr 传输层一致，超限显式报错不静默截断。 */
 const MAX_IPC_FRAME_BYTES = 32 * 1024 * 1024;
+/** 二进制传输上限（64 MiB）：read/write/base64 往返的单次载荷上限，超限显式报错。 */
+const MAX_BINARY_TRANSFER_BYTES = 64 * 1024 * 1024;
 /** 订阅握手 ACK 超时。 */
 const IPC_SUBSCRIBE_ACK_TIMEOUT_MS = 15_000;
 /** Windows Named Pipe 命名空间前缀（NPFS 本地主机）。 */
@@ -172,11 +174,20 @@ const assertSingleLine = (line: unknown, what: string): string => {
   return line;
 };
 
-/** base64 边界校验：标准字母表 + 填充，禁止 Node 宽松解析静默吞非法字符。 */
+/** base64 边界校验：标准字母表 + 填充，禁止 Node 宽松解析静默吞非法字符；
+ * 解码前校验编码后长度上限（解码后 ≤ 64 MiB），超限显式报错。 */
 const decodeBase64 = (content: string, what: string): Uint8Array => {
   if (typeof content !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(content)) {
     throw Object.assign(
       new Error(`${what} is not valid base64 (standard alphabet)`),
+      { code: 'invalid' },
+    );
+  }
+  // base64 每 4 字符解码为 3 字节：编码长度超限即解码后必然超限。
+  const decodedBytes = Math.floor(content.length / 4) * 3;
+  if (decodedBytes > MAX_BINARY_TRANSFER_BYTES) {
+    throw Object.assign(
+      new Error(`${what} exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit (decoded size ~${decodedBytes})`),
       { code: 'invalid' },
     );
   }
@@ -718,11 +729,35 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     async envReadBinaryFile({ path: target, cwd }) {
       const result = await envFor(cwd).readBinaryFile(target);
       if (!result.ok) return rpcFail(result.error);
+      // 传输上限：读回的 base64 载荷超 64 MiB 显式拒绝（不静默截断也不撞内存）。
+      if (result.value.byteLength > MAX_BINARY_TRANSFER_BYTES) {
+        return invalidInput(
+          `readBinaryFile result is ${result.value.byteLength} bytes, exceeding the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`,
+        );
+      }
       return { ok: true, value: { base64: Buffer.from(result.value).toString('base64') } };
     },
 
     async envWriteFile({ path: target, content, encoding, cwd }) {
-      const bytes = encoding === 'base64' ? decodeBase64(content, 'content') : content;
+      // 解码前：base64 编码长度超限时直接拒绝（防先物化巨型字符串再解码）。
+      if (encoding === 'base64' && typeof content === 'string' && content.length > MAX_BINARY_TRANSFER_BYTES) {
+        return invalidInput(
+          `content encoded length ${content.length} exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`,
+        );
+      }
+      let bytes: Uint8Array | string;
+      try {
+        bytes = encoding === 'base64' ? decodeBase64(content, 'content') : content;
+      } catch (error) {
+        return rpcFail(error);
+      }
+      // 解码后：真实字节数复验（含 utf8 路径与 base64 解码结果）。
+      const size = typeof bytes === 'string' ? bytes.length : bytes.byteLength;
+      if (size > MAX_BINARY_TRANSFER_BYTES) {
+        return invalidInput(
+          `content is ${size} bytes, exceeding the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`,
+        );
+      }
       return unwrap(envFor(cwd).writeFile(target, bytes));
     },
     async envAppendFile({ path: target, content, encoding, cwd }) {
@@ -800,8 +835,19 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     async envBinaryReaderRead({ readerId, offset, length }) {
       const reader = getReader<BinaryReader>(readerId, 'binary');
       if (reader === undefined) return readerNotFound(readerId);
+      // 传输上限：请求的读取长度超 64 MiB 显式拒绝（分页读取由调用方分批进行）。
+      if (!Number.isSafeInteger(length) || length > MAX_BINARY_TRANSFER_BYTES) {
+        return invalidInput(
+          `length must be a safe integer no greater than ${MAX_BINARY_TRANSFER_BYTES}`,
+        );
+      }
       const result = await reader.read(offset, length);
       if (!result.ok) return rpcFail(result.error);
+      if (result.value.byteLength > MAX_BINARY_TRANSFER_BYTES) {
+        return invalidInput(
+          `binary reader chunk is ${result.value.byteLength} bytes, exceeding the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`,
+        );
+      }
       return {
         ok: true,
         value: { base64: Buffer.from(result.value).toString('base64'), byteLength: result.value.byteLength },

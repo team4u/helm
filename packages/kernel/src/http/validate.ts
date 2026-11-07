@@ -76,6 +76,13 @@ export function optionalStringArray(body: Record<string, unknown>, field: string
   return value as string[]
 }
 
+/** 跨平台绝对路径：POSIX `/`、Windows 盘符 `^[a-zA-Z]:[\\/]` 与 UNC `^\\\\[^\\]+\\[^\\]+`。
+ * 与 runtime/tools.ts 的 isAbsoluteTargetPath 同一语义（内核不依赖宿主平台
+ * 规则判定远端/Windows 靶点路径形状）。 */
+function isCrossPlatformAbsolutePath(p: string): boolean {
+  return p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p) || /^\\\\[^\\]+\\[^\\]+/.test(p)
+}
+
 /** 路径参数里的数字 ID：非纯数字直接 400，不给服务层。 */
 export function parseIdParam(raw: string, field = 'id'): number {
   if (!/^\d+$/.test(raw)) {
@@ -127,7 +134,9 @@ export function parseConversationInit(body: Record<string, unknown>): Conversati
   if (nodeId !== undefined) init.nodeId = nodeId
   const cwd = optionalString(body, 'cwd')
   if (cwd !== undefined) {
-    if (!cwd.startsWith('/')) throw new ValidationError('cwd 需为绝对路径')
+    if (!isCrossPlatformAbsolutePath(cwd)) {
+      throw new ValidationError('cwd 需为绝对路径（POSIX / 开头、Windows 盘符 C:\\ 或 UNC \\\\server\\share）')
+    }
     init.cwd = cwd
   }
   const model = optionalString(body, 'model')
@@ -159,7 +168,9 @@ export function parseConversationPatch(body: Record<string, unknown>): Conversat
   if (nodeId !== undefined) patch.nodeId = nodeId
   const cwd = optionalString(body, 'cwd')
   if (cwd !== undefined) {
-    if (!cwd.startsWith('/')) throw new ValidationError('cwd 需为绝对路径')
+    if (!isCrossPlatformAbsolutePath(cwd)) {
+      throw new ValidationError('cwd 需为绝对路径（POSIX / 开头、Windows 盘符 C:\\ 或 UNC \\\\server\\share）')
+    }
     patch.cwd = cwd
   }
   const model = optionalString(body, 'model')
@@ -334,7 +345,14 @@ function parseProfileRuntime(raw: unknown): ProfileRuntime | undefined {
   }
   const runtime = raw as Record<string, unknown>
   rejectUnknownKeys(runtime, new Set(['kind', 'agent', 'args', 'nodeId', 'workspace', 'env']))
-  if (runtime.kind !== 'herdr') throw new ValidationError("runtime.kind 当前仅支持 'herdr'")
+  // 内核零插件枚举硬编码：kind 只校验外部运行时标识格式，具体运行时是否
+  // 被插件接管由 agent_spawn 钩子管道决定（与 services/profiles-skills.ts 同规）。
+  if (
+    typeof runtime.kind !== 'string' ||
+    !/^[a-z][a-z0-9_-]{0,31}$/.test(runtime.kind)
+  ) {
+    throw new ValidationError('runtime.kind 需为外部运行时标识符（小写字母开头，可含 a-z 0-9 _ -，长度 1..32）')
+  }
   if (typeof runtime.agent !== 'string' || runtime.agent.length === 0) {
     throw new ValidationError('runtime.agent 需为非空字符串')
   }
@@ -348,8 +366,13 @@ function parseProfileRuntime(raw: unknown): ProfileRuntime | undefined {
     throw new ValidationError('runtime.nodeId 需为非空字符串')
   }
   const workspace = runtime.workspace
-  if (workspace !== undefined && (typeof workspace !== 'string' || workspace.length === 0)) {
-    throw new ValidationError('runtime.workspace 需为非空字符串')
+  if (workspace !== undefined) {
+    if (typeof workspace !== 'string' || workspace.length === 0) {
+      throw new ValidationError('runtime.workspace 需为非空字符串')
+    }
+    if (!isCrossPlatformAbsolutePath(workspace)) {
+      throw new ValidationError('runtime.workspace 需为跨平台绝对路径（POSIX /、Windows 盘符或 UNC）')
+    }
   }
   // env：string -> string 映射；键非空，值一律字符串
   const env = runtime.env
@@ -363,7 +386,7 @@ function parseProfileRuntime(raw: unknown): ProfileRuntime | undefined {
     }
   }
   return {
-    kind: 'herdr',
+    kind: runtime.kind as string,
     agent: runtime.agent,
     ...(args !== undefined ? { args } : {}),
     ...(nodeId !== undefined ? { nodeId } : {}),
