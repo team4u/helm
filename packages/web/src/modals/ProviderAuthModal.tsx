@@ -93,7 +93,7 @@ function CredentialsSection() {
               ) : (
                 <span className="badge badge-warn">未配置</span>
               )}
-              <button className="btn btn-sm btn-danger" onClick={() => void deleteCredential(cred.id)}>
+              <button className="btn btn-sm btn-danger" aria-label={`删除凭据 ${cred.id}`} onClick={() => void deleteCredential(cred.id)}>
                 <HelmIcon name="trash-2" size={12} />
                 删除
               </button>
@@ -135,6 +135,7 @@ function CredentialsSection() {
           <input
             className="input mono"
             placeholder="自定义 credentialId（如 my-gateway-key）"
+            aria-label="自定义 credentialId"
             value={customId}
             onChange={(e) => setCustomId(e.target.value)}
           />
@@ -144,6 +145,7 @@ function CredentialsSection() {
             className="input mono"
             type="password"
             style={{ flex: 1 }}
+            aria-label="新 API Key"
             placeholder={`输入 ${customMode ? customId || '自定义' : selectedId} 的新 API Key`}
             value={value}
             onChange={(e) => setValue(e.target.value)}
@@ -275,7 +277,7 @@ function ProvidersSection() {
             onChange={(e) => patch(idx, { models: textToModels(e.target.value) })}
           />
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button className="btn btn-sm btn-danger" onClick={() => removeProvider(idx)}>
+            <button className="btn btn-sm btn-danger" aria-label={`删除网关 ${p.id}`} onClick={() => removeProvider(idx)}>
               <HelmIcon name="trash-2" size={12} />
               删除网关
             </button>
@@ -314,13 +316,20 @@ function ProvidersSection() {
 export function ProviderAuthModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 760 }} onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal"
+        style={{ maxWidth: 760 }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="模型网关与 API Key 凭据"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-header">
           <span className="modal-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             <HelmIcon name="key" size={15} />
             模型网关与 API Key 凭据
           </span>
-          <button className="btn btn-ghost btn-sm" onClick={onClose}>
+          <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭" onClick={onClose}>
             <HelmIcon name="x" size={14} />
           </button>
         </div>

@@ -246,6 +246,9 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       <div
         className="modal"
         style={{ maxWidth: 620 }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="命令面板与全局搜索"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
       >
@@ -257,6 +260,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
               ref={inputRef}
               className="input"
               style={{ border: 'none', background: 'transparent', padding: '4px 0' }}
+              aria-label="搜索消息全文、跳转会话或执行命令"
               placeholder="搜索消息全文、跳转会话或执行命令..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}

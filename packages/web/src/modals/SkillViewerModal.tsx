@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { assetsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
@@ -19,21 +19,26 @@ export function SkillViewerModal({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  // 请求代数守卫：快速切换技能/文件时慢返回的旧内容不得写入新选中项。
+  const loadGeneration = useRef(0)
 
   const skill = store.skills.find((s) => s.id === selectedId)
   const files = skill ? [SKILL_MAIN_FILE, ...skill.references] : []
 
   const loadFile = useCallback(async (skillId: string, path: string) => {
+    const generation = ++loadGeneration.current
     setLoading(true)
     setError(null)
     try {
       const res = await assetsApi.readSkill(skillId, path === SKILL_MAIN_FILE ? undefined : path)
+      if (loadGeneration.current !== generation) return
       setText(res.text)
     } catch (err) {
+      if (loadGeneration.current !== generation) return
       setText('')
       setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setLoading(false)
+      if (loadGeneration.current === generation) setLoading(false)
     }
   }, [])
 
@@ -43,8 +48,12 @@ export function SkillViewerModal({
   }, [selectedId, activeFile, loadFile])
 
   const selectSkill = (id: string) => {
+    // 同步进入加载态：切换到内容返回之间不闪现旧技能文本。
     setSelectedId(id)
     setActiveFile(SKILL_MAIN_FILE)
+    setLoading(true)
+    setText('')
+    setError(null)
   }
 
   const copyReference = async () => {
@@ -66,19 +75,26 @@ export function SkillViewerModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 900 }} onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal"
+        style={{ maxWidth: 900 }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="技能库"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-header">
           <span className="modal-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             <HelmIcon name="sparkles" size={15} />
             技能库 Skills
             <span className="badge badge-neutral">只读</span>
           </span>
-          <button className="btn btn-ghost btn-sm" onClick={onClose}>
+          <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭" onClick={onClose}>
             <HelmIcon name="x" size={14} />
           </button>
         </div>
-        <div className="modal-body" style={{ flexDirection: 'row', gap: 14, alignItems: 'stretch' }}>
-          <div style={{ width: 240, minWidth: 240, overflowY: 'auto' }} className="list">
+        <div className="modal-body asset-modal-body" style={{ flexDirection: 'row', gap: 14, alignItems: 'stretch' }}>
+          <div className="list asset-modal-list" style={{ width: 240, minWidth: 240, overflowY: 'auto' }}>
             {store.skills.length === 0 && (
               <div className="row" style={{ color: 'var(--fg-subtle)' }}>暂无可用技能</div>
             )}
@@ -86,6 +102,7 @@ export function SkillViewerModal({
               <button
                 key={s.id}
                 className="row"
+                aria-pressed={selectedId === s.id}
                 style={{
                   width: '100%',
                   background: selectedId === s.id ? 'var(--bg-active)' : 'transparent',

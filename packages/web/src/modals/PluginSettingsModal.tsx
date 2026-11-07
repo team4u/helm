@@ -1,22 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { PluginSummary } from '@helm/protocol'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { HelmSpecView } from '../ui/HelmSpecView.js'
+import {
+  buildPluginConfigPayload,
+  configFieldInitialValue,
+  secretConfigured,
+  type ConfigValue,
+} from './plugin-config-form-model.js'
 
-type ConfigValue = string | number | boolean
-
-function configFieldInitialValue(schemaField: { default?: string | number | boolean; type: string }, raw: unknown): ConfigValue {
-  if (raw !== undefined && raw !== null) {
-    if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') return raw
-    return String(raw)
+function initialFormValues(config: PluginConfigResponse): Record<string, ConfigValue> {
+  const init: Record<string, ConfigValue> = {}
+  for (const [key, schema] of Object.entries(config.schema ?? {})) {
+    init[key] = configFieldInitialValue(schema, config.values?.[key])
   }
-  if (schemaField.default !== undefined) return schemaField.default
-  return schemaField.type === 'boolean' ? false : schemaField.type === 'number' ? 0 : ''
+  return init
 }
 
-/** 按 schema 自动生成的插件配置表单。 */
+/** 按 schema 自动生成的插件配置表单。secret 空串=保持已存密钥（见 form-model 契约）。 */
 function PluginConfigForm({
   pluginId,
   config,
@@ -28,23 +31,13 @@ function PluginConfigForm({
 }) {
   const store = useHelmStore()
   const entries = Object.entries(config.schema ?? {})
-  const [values, setValues] = useState<Record<string, ConfigValue>>(() => {
-    const init: Record<string, ConfigValue> = {}
-    for (const [key, schema] of entries) {
-      init[key] = configFieldInitialValue(schema, config.values?.[key])
-    }
-    return init
-  })
+  const [values, setValues] = useState<Record<string, ConfigValue>>(() => initialFormValues(config))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
-    const init: Record<string, ConfigValue> = {}
-    for (const [key, schema] of Object.entries(config.schema ?? {})) {
-      init[key] = configFieldInitialValue(schema, config.values?.[key])
-    }
-    setValues(init)
+    setValues(initialFormValues(config))
   }, [config])
 
   if (entries.length === 0) {
@@ -55,7 +48,8 @@ function PluginConfigForm({
     setSaving(true)
     setError(null)
     try {
-      await pluginsApi.setConfig(pluginId, values)
+      // 仅提交有改动的 secret；未改动的密钥字段省略，服务端保持原值。
+      await pluginsApi.setConfig(pluginId, buildPluginConfigPayload(config.schema ?? {}, values))
       setSaved(true)
       setTimeout(() => setSaved(false), 1600)
       onSaved()
@@ -68,41 +62,53 @@ function PluginConfigForm({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {entries.map(([key, schema]) => (
-          <div key={key} style={{ display: 'grid', gridTemplateColumns: '170px 1fr', gap: '6px 12px', alignItems: 'center' }}>
-            <label style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'inline-flex', gap: 5, alignItems: 'center' }}>
-              {schema.secret === true && <HelmIcon name="lock" size={11} />}
-              {schema.label ?? key}
-              {schema.required && <span style={{ color: 'var(--err)' }}>*</span>}
-            </label>
-            {schema.type === 'boolean' ? (
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
-                <input
-                  type="checkbox"
-                  checked={values[key] === true}
-                  onChange={(e) => setValues((prev) => ({ ...prev, [key]: e.target.checked }))}
-                />
-                {values[key] === true ? '开启' : '关闭'}
+      <div className="config-fields" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {entries.map(([key, schema]) => {
+          const fieldId = `helm-plugin-config-${pluginId}-${key}`
+          return (
+            <div key={key} style={{ display: 'grid', gridTemplateColumns: '170px 1fr', gap: '6px 12px', alignItems: 'center' }}>
+              <label htmlFor={fieldId} style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'inline-flex', gap: 5, alignItems: 'center' }}>
+                {schema.secret === true && <HelmIcon name="lock" size={11} />}
+                {schema.label ?? key}
+                {schema.required && <span style={{ color: 'var(--err)' }}>*</span>}
               </label>
-            ) : schema.type === 'number' ? (
-              <input
-                className="input"
-                type="number"
-                value={String(values[key] ?? '')}
-                onChange={(e) => setValues((prev) => ({ ...prev, [key]: Number(e.target.value) }))}
-              />
-            ) : (
-              <input
-                className="input mono"
-                type={schema.secret ? 'password' : 'text'}
-                placeholder={schema.description}
-                value={String(values[key] ?? '')}
-                onChange={(e) => setValues((prev) => ({ ...prev, [key]: e.target.value }))}
-              />
-            )}
-          </div>
-        ))}
+              {schema.type === 'boolean' ? (
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+                  <input
+                    id={fieldId}
+                    type="checkbox"
+                    checked={values[key] === true}
+                    onChange={(e) => setValues((prev) => ({ ...prev, [key]: e.target.checked }))}
+                  />
+                  {values[key] === true ? '开启' : '关闭'}
+                </label>
+              ) : schema.type === 'number' ? (
+                <input
+                  id={fieldId}
+                  className="input"
+                  type="number"
+                  value={String(values[key] ?? '')}
+                  onChange={(e) => setValues((prev) => ({ ...prev, [key]: Number(e.target.value) }))}
+                />
+              ) : (
+                <input
+                  id={fieldId}
+                  className={schema.secret ? 'input mono' : 'input'}
+                  type={schema.secret ? 'password' : 'text'}
+                  placeholder={
+                    schema.secret
+                      ? secretConfigured(config.values?.[key])
+                        ? '已配置（留空保持不变）'
+                        : (schema.description ?? '未配置')
+                      : schema.description
+                  }
+                  value={String(values[key] ?? '')}
+                  onChange={(e) => setValues((prev) => ({ ...prev, [key]: e.target.value }))}
+                />
+              )}
+            </div>
+          )
+        })}
       </div>
       {error && (
         <div className="jr-callout jr-callout-err">
@@ -129,24 +135,30 @@ export function PluginSettingsModal({
 }) {
   const store = useHelmStore()
   const [selectedId, setSelectedId] = useState<string | null>(initialPluginId ?? store.plugins[0]?.id ?? null)
-  const [config, setConfig] = useState<PluginConfigResponse | null>(null)
+  const [config, setConfig] = useState<(PluginConfigResponse & { pluginId: string }) | null>(null)
   const [loadingConfig, setLoadingConfig] = useState(false)
   const [toggling, setToggling] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 请求代数守卫：快速切换插件时旧响应（慢返回）不得写入新插件的配置视图。
+  const configGeneration = useRef(0)
 
   const plugin = store.plugins.find((p) => p.id === selectedId)
   const settingsPanel = store.groupedUi.settingsPanels.find((p) => p.pluginId === selectedId)
 
   const reloadConfig = async (id: string) => {
+    const generation = ++configGeneration.current
     setLoadingConfig(true)
     setError(null)
     try {
-      setConfig(await pluginsApi.getConfig(id))
-    } catch (err) {
+      const result = await pluginsApi.getConfig(id)
+      if (configGeneration.current !== generation) return
+      setConfig({ ...result, pluginId: id })
+  } catch (err) {
+      if (configGeneration.current !== generation) return
       setConfig(null)
       setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setLoadingConfig(false)
+      if (configGeneration.current === generation) setLoadingConfig(false)
     }
   }
 
@@ -154,6 +166,14 @@ export function PluginSettingsModal({
     if (selectedId) void reloadConfig(selectedId)
     else setConfig(null)
   }, [selectedId])
+
+  const selectPlugin = (id: string) => {
+    // 同步进入加载态：点击到 effect 生效之间不闪现旧插件的可保存表单。
+    setSelectedId(id)
+    setLoadingConfig(true)
+    setConfig(null)
+    setError(null)
+  }
 
   const toggleEnabled = async () => {
     if (!plugin || toggling) return
@@ -178,18 +198,25 @@ export function PluginSettingsModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 860 }} onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal"
+        style={{ maxWidth: 860 }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="插件与设置"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-header">
           <span className="modal-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             <HelmIcon name="settings" size={15} />
             插件与设置
           </span>
-          <button className="btn btn-ghost btn-sm" onClick={onClose}>
+          <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭" onClick={onClose}>
             <HelmIcon name="x" size={14} />
           </button>
         </div>
-        <div className="modal-body" style={{ flexDirection: 'row', gap: 14, alignItems: 'stretch' }}>
-          <div style={{ width: 230, minWidth: 230, overflowY: 'auto' }} className="list">
+        <div className="modal-body asset-modal-body" style={{ flexDirection: 'row', gap: 14, alignItems: 'stretch' }}>
+          <div className="list asset-modal-list" style={{ width: 230, minWidth: 230, overflowY: 'auto' }}>
             {store.plugins.length === 0 && (
               <div className="row" style={{ color: 'var(--fg-subtle)' }}>暂无已加载插件</div>
             )}
@@ -197,6 +224,7 @@ export function PluginSettingsModal({
               <button
                 key={p.id}
                 className="row"
+                aria-pressed={selectedId === p.id}
                 style={{
                   width: '100%',
                   background: selectedId === p.id ? 'var(--bg-active)' : 'transparent',
@@ -207,7 +235,7 @@ export function PluginSettingsModal({
                   alignItems: 'flex-start',
                   gap: 3,
                 }}
-                onClick={() => setSelectedId(p.id)}
+                onClick={() => selectPlugin(p.id)}
               >
                 <span style={{ fontWeight: 500, fontSize: 12.5, display: 'inline-flex', gap: 5, alignItems: 'center' }}>
                   {p.name || p.id}
@@ -288,12 +316,13 @@ export function PluginSettingsModal({
 
                 <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <h4 style={{ margin: 0, fontSize: 12.5 }}>配置项</h4>
+                  {/* 加载完成前不渲染表单：避免旧插件配置残留在新插件下可被保存。 */}
                   {loadingConfig ? (
                     <div style={{ color: 'var(--fg-muted)', fontSize: 12.5, display: 'flex', gap: 6, alignItems: 'center' }}>
                       <HelmIcon name="loader" size={13} />
                       正在读取配置...
                     </div>
-                  ) : config ? (
+                  ) : config && config.pluginId === plugin.id ? (
                     <PluginConfigForm
                       pluginId={plugin.id}
                       config={config}
