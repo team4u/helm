@@ -1,11 +1,73 @@
-import type { AgentGateResult, Profile } from '@helm/protocol'
+import type { Context } from '@earendil-works/chord/context'
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
+import type { AgentGateResult, Profile, RpcResult } from '@helm/protocol'
 
 /** One server, selected consistently for commands, files and event subscriptions. */
 export interface HerdrTarget {
-  machine?: string
+  /** 目标计算节点 ID（缺省本机；'local' 显式表示本机）。 */
+  nodeId?: string
   session?: string
   socketPath?: string
 }
+
+/**
+ * 目标节点 ID（'local' 折叠为 undefined = 本机；其余原样返回）。
+ * 空串不折叠：入口校验（isValidNodeId）必须显式拒绝，绝不默默当本机。
+ */
+export function targetNodeId(target: HerdrTarget | undefined): string | undefined {
+  const id = target?.nodeId
+  return id === undefined || id === 'local' ? undefined : id
+}
+
+/**
+ * 跨节点通道：由内核 EnvFabric 或测试 fixture 提供，transport 借它在目标节点
+ * 连接当地 Herdr IPC、读写交接文件并执行 Gate（彻底取代 ssh + python3 脚本）。
+ *
+ * 端点语义（远端节点自解析，绝不携带 Hub 本机的平台/目录）：
+ * - `endpoint` 仅在 target 显式给出 socketPath 时传递（可缺省）；
+ * - `session` 传递显式会话名（可缺省）；
+ * - 目标节点自己解析 HERDR_SOCKET_PATH / 平台配置目录与端点形态（UDS 或
+ *   Named Pipe），Hub 侧绝不把本机 resolveSocketPath 或 endpointKind 强加给远端。
+ *
+ * Context 契约（与 SDK ExecutionEnv 同源）：所有方法要求显式 Context；
+ * 取消路径由调用方经 withAbortSignal(signal, BACKGROUND_CONTEXT) 派生，
+ * 不接受 unknown 掩盖类型。
+ */
+export interface HerdrNodeChannel {
+  /** 节点是否在线（'local' 恒为 true）。 */
+  isOnline(nodeId: string): boolean
+  /** 获取节点注册的可达 Hub URL（若有，供远端窗格自动注入 HELM_HUB_URL）。 */
+  getNodeHubUrl?(nodeId: string): string | undefined
+  /** 在目标节点执行本机 Herdr 单次行协议 IPC 请求（支持 signal 取消，取消时立即中断底层连接）。 */
+  ipcCall(
+    nodeId: string,
+    input: { endpoint?: string; session?: string; line: string; timeoutMs?: number },
+    context: Context,
+  ): Promise<RpcResult<string>>
+  /** 在目标节点获取文件与命令执行环境。 */
+  envFor(nodeId: string, cwd: string): HerdrNodeEnv
+  /**
+   * 可选：远端节点 IPC 事件流订阅。
+   * Promise 成功 resolve 即代表订阅请求已被目标节点确认（ACK 在通道层消费
+   * 并验证）；此后 onLine 只推送裸事件帧，绝不二次伪造 ACK。
+   */
+  ipcSubscribe?(
+    nodeId: string,
+    input: { endpoint?: string; session?: string; line: string },
+    onLine: (line: string) => void,
+    onClosed: (error?: string) => void,
+    context: Context,
+  ): Promise<() => void>
+}
+
+/**
+ * `HerdrNodeChannel.envFor` 的环境契约：SDK `ExecutionEnv` 核心子集的 Pick。
+ * NodeExecutionEnv 结构可赋值（无 as 掩盖）；Context 为必需参数。
+ */
+export type HerdrNodeEnv = Pick<
+  ExecutionEnv,
+  'canonicalPath' | 'fileInfo' | 'readTextFile' | 'remove' | 'exec'
+>
 
 export interface HerdrCallOptions {
   signal?: AbortSignal
@@ -51,8 +113,13 @@ export interface HerdrTransport {
 export interface HerdrPluginDependencies {
   defaultCwd: string
   profiles: { get(id: string): Promise<Profile | undefined> }
-  /** Only explicit session/stash variables, never the whole inherited process environment. */
-  buildSpawnEnv(conversationId: number, cwd: string): Record<string, string>
+  /**
+   * 外部 spawn 环境变量：目标节点受管回连集合（stash + 受管 HELM_*）。
+   * nodeId 为实际选定的目标节点（'local' 显式表示本机；绝不传 undefined 让
+   * 内核按父会话继承——父会话绑定远端时会把本机窗格误配到远端）。
+   * 仅显式 session/stash 变量，绝不携带整个继承的 process 环境。
+   */
+  buildSpawnEnv(conversationId: number, cwd: string, nodeId: string): Record<string, string>
   redact(text: string): string
   runLocalGate(command: string, options: { cwd?: string; conversationId?: number; signal?: AbortSignal; env?: Record<string, string> }): Promise<AgentGateResult>
   /** 附件产物元数据解析（含授权校验；不存在/越权抛 HelmError）。可选注入。 */
@@ -60,6 +127,8 @@ export interface HerdrPluginDependencies {
     id: string,
     conversationId: number,
   ) => Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }>
+  /** 跨节点通道（EnvFabric 注入；缺省时远端目标显式报错，绝不静默回退本机）。 */
+  nodeChannel?: HerdrNodeChannel
   transport?: HerdrTransport
 }
 

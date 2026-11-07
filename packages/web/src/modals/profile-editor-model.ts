@@ -1,10 +1,14 @@
 /**
  * Profile 编辑器纯数据模型（ProfileEditorModal 消费）。
  *
- * 保存语义与 HTTP 层约定一致：POST/PUT body 中省略 system / memory 字段
- * 表示「不动对应文件」。编辑器打开期间 Agent 可能仍在追加 MEMORY.md
- * （update_memory），因此编辑器以「加载基线 + 逐字段 dirty」方式构造
- * 载荷：未修改的大文本字段省略，绝不把弹窗打开瞬间的旧快照整篇写回。
+ * 保存语义与真实 HTTP 层一致：PUT /profiles/:id 经 routes.ts 调
+ * profiles.save({...profile, id})，validateProfileInput 后整体重写
+ * profile.json——省略的基础字段即被删除，而不是保留旧值。因此：
+ * - 基础配置（name/model/nodeId/cwd/tags/runtime）无论是否修改，一律
+ *   提交规范化后的完整形态：用户只改展示名也绝不丢执行节点与运行时；
+ * - system / memory 是按需的文件更新而非整体替换：仅在用户显式编辑
+ *   （或新建）时提交全文——编辑器打开期间 Agent 可能仍在追加 MEMORY.md
+ *   （update_memory），绝不把弹窗打开瞬间的旧快照整篇写回。
  */
 
 import type { Profile, ProfileRuntime } from '@helm/protocol'
@@ -16,17 +20,10 @@ export interface EnvPair {
 
 export interface ProfileDraft {
   profile: Profile
-  /** 加载时的基线快照，用于 dirty 判断。 */
+  /** 加载时的基线快照：dirty 判断与规范化对比的基准。 */
   baseline: Profile
   /** 用户显式编辑过的大文本字段（system / memory）。 */
   editedFields: Set<'system' | 'memory'>
-}
-
-/** 值相等（用于基础字段 dirty 判断；undefined 与空串视为等价缺省）。 */
-function sameValue(a: unknown, b: unknown): boolean {
-  if (a === undefined && (b === undefined || b === '')) return true
-  if (b === undefined && (a === undefined || a === '')) return true
-  return a === b
 }
 
 export function profileIdValid(id: string): boolean {
@@ -71,7 +68,7 @@ export function argsToText(args: string[] | undefined): string {
 }
 
 /**
- * runtime 规范化：machine / workspace 空白归一后为空则省略；env 空省略；
+ * runtime 规范化：nodeId / workspace 空白归一后为空则省略；env 空省略；
  * args 仅去除每项首尾空白（保留内部空格），空数组省略。
  */
 export function normalizeRuntime(runtime: ProfileRuntime | undefined): ProfileRuntime | undefined {
@@ -79,8 +76,8 @@ export function normalizeRuntime(runtime: ProfileRuntime | undefined): ProfileRu
   const normalized: ProfileRuntime = { kind: runtime.kind, agent: runtime.agent }
   const args = (runtime.args ?? []).map((a) => a.trim()).filter((a) => a.length > 0)
   if (args.length > 0) normalized.args = args
-  const machine = runtime.machine?.trim()
-  if (machine) normalized.machine = machine
+  const nodeId = runtime.nodeId?.trim()
+  if (nodeId) normalized.nodeId = nodeId
   const workspace = runtime.workspace?.trim()
   if (workspace) normalized.workspace = workspace
   const env = pairsToEnv(envToPairs(runtime.env))
@@ -92,7 +89,7 @@ export function createDraft(profile: Profile): ProfileDraft {
   return { profile, baseline: profile, editedFields: new Set() }
 }
 
-/** 编辑基础字段（id / name / model / tags / runtime 整体替换）。 */
+/** 编辑基础字段（id / name / model / nodeId / cwd / tags / runtime 整体替换）。 */
 export function editProfileField(draft: ProfileDraft, patch: Partial<Profile>): ProfileDraft {
   return { ...draft, profile: { ...draft.profile, ...patch } }
 }
@@ -110,28 +107,43 @@ export function editBigText(draft: ProfileDraft, field: 'system' | 'memory', val
 }
 
 export function isDraftDirty(draft: ProfileDraft): boolean {
-  const { profile, baseline, editedFields } = draft
-  if (editedFields.size > 0) return true
-  if (!sameValue(profile.name, baseline.name)) return true
-  if (!sameValue(profile.model, baseline.model)) return true
-  if ((profile.tags ?? []).join('\u0000') !== (baseline.tags ?? []).join('\u0000')) return true
-  return JSON.stringify(normalizeRuntime(profile.runtime)) !== JSON.stringify(normalizeRuntime(baseline.runtime))
+  if (draft.editedFields.size > 0) return true
+  return JSON.stringify(normalizeProfileConfig(draft.profile)) !== JSON.stringify(normalizeProfileConfig(draft.baseline))
 }
 
 /**
- * PUT 整体替换 profile.json，因此基础字段必须完整发送。
- * SYSTEM.md/MEMORY.md 则是可选文件更新，只有用户编辑过才发送，
- * 避免修改显示名时覆盖 Agent 在后台追加的新记忆。
+ * 规范化基础配置（PUT 整体替换的载荷骨架）：
+ * - name / model / nodeId / cwd trim 后非空才保留——空值归一为省略，
+ *   在整体替换语义下即「删除覆盖」（nodeId/cwd 回退默认 local）；
+ * - tags 恒为数组：空数组原样提交（整体替换语义下可清空）；
+ * - runtime 规范化，undefined 保持省略（关闭外部运行时）。
+ *
+ * 逐字段显式构造（不 spread Profile）：system / memory 永不混入载荷，
+ * 杜绝旧大文本快照随基础字段泄漏写回。
+ */
+function normalizeProfileConfig(profile: Profile): Profile {
+  const config: Profile = { id: profile.id, tags: [...(profile.tags ?? [])] }
+  const name = profile.name?.trim()
+  if (name) config.name = name
+  const model = profile.model?.trim()
+  if (model) config.model = model
+  const nodeId = profile.nodeId?.trim()
+  if (nodeId) config.nodeId = nodeId
+  const cwd = profile.cwd?.trim()
+  if (cwd) config.cwd = cwd
+  const runtime = normalizeRuntime(profile.runtime)
+  if (runtime) config.runtime = runtime
+  return config
+}
+
+/**
+ * 保存载荷：完整基础配置（isNew 与更新同构，均为整体替换）+ 按需大文本。
+ * system / memory 仅在新建或用户显式编辑过时提交全文；否则省略，让
+ * HTTP 层跳过对应文件，保护弹窗打开期间 Agent 新写入的记忆。
  */
 export function buildProfileSavePayload(draft: ProfileDraft, opts: { isNew: boolean }): Profile {
-  const { profile, editedFields } = draft
-  const payload: Profile = { id: profile.id }
-  if (profile.name?.trim()) payload.name = profile.name.trim()
-  if (profile.model?.trim()) payload.model = profile.model.trim()
-  if (profile.tags !== undefined) payload.tags = [...profile.tags]
-  const runtime = normalizeRuntime(profile.runtime)
-  if (runtime) payload.runtime = runtime
-  if (opts.isNew || editedFields.has('system')) payload.system = profile.system ?? ''
-  if (opts.isNew || editedFields.has('memory')) payload.memory = profile.memory ?? ''
+  const payload = normalizeProfileConfig(draft.profile)
+  if (opts.isNew || draft.editedFields.has('system')) payload.system = draft.profile.system ?? ''
+  if (opts.isNew || draft.editedFields.has('memory')) payload.memory = draft.profile.memory ?? ''
   return payload
 }

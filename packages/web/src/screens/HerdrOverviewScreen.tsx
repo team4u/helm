@@ -2,7 +2,7 @@
  * Herdr 终端总览全屏视图（builtin:herdr/overview）。
  *
  * 数据：usePluginDoc('builtin:herdr', 'overview') 实时订阅 OverviewDoc
- * （version 2：panes 全量基表 + asks；stale/error 诚实告警）。
+ * （version 2：panes 全量基表 + asks，行以 nodeId 标识目标节点；stale/error 诚实告警）。
  * 交互：focus / read 为用户显式操作（read 弹窗展示脱敏终端尾部 40 行）；
  * 归属红线：human 行不携带任何管理字段，界面上也不提供管理动作。
  */
@@ -18,7 +18,7 @@ export interface HerdrOverviewScreenProps {
 }
 
 interface OverviewPaneRow {
-  machine: string
+  nodeId: string
   paneId: string
   tabId: string
   workspaceId: string
@@ -41,7 +41,7 @@ interface OverviewDoc {
   stale: boolean
   error?: string
   panes: OverviewPaneRow[]
-  asks: Array<{ paneId: string; machine: string; seq: number; phase: string }>
+  asks: Array<{ paneId: string; nodeId: string; seq: number; phase: string }>
 }
 
 const AGENT_STATUS_TONE: Record<string, string> = {
@@ -70,24 +70,24 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
   const store = useHelmStore()
   const doc = usePluginDoc<OverviewDoc>('builtin:herdr', 'overview')
 
-  const [machineFilter, setMachineFilter] = useState('all')
+  const [nodeFilter, setNodeFilter] = useState('all')
   const [ownerFilter, setOwnerFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
   const [busyPane, setBusyPane] = useState<string | null>(null)
   const [snapshot, setSnapshot] = useState<{ title: string; text: string } | null>(null)
 
   const panes = doc?.panes ?? []
-  const machines = useMemo(() => Array.from(new Set(panes.map((p) => p.machine))).sort(), [panes])
+  const nodes = useMemo(() => Array.from(new Set(panes.map((p) => p.nodeId))).sort(), [panes])
 
   const filtered = useMemo(
     () =>
       panes.filter((p) => {
-        if (machineFilter !== 'all' && p.machine !== machineFilter) return false
+        if (nodeFilter !== 'all' && p.nodeId !== nodeFilter) return false
         if (ownerFilter !== 'all' && p.ownedBy !== ownerFilter) return false
         if (statusFilter !== 'all' && p.agentStatus !== statusFilter) return false
         return true
       }),
-    [panes, machineFilter, ownerFilter, statusFilter],
+    [panes, nodeFilter, ownerFilter, statusFilter],
   )
 
   const stats = useMemo(
@@ -95,9 +95,9 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
       total: panes.length,
       working: panes.filter((p) => p.agentStatus === 'working').length,
       blocked: panes.filter((p) => p.agentStatus === 'blocked').length,
-      machines: machines.length,
+      nodes: nodes.length,
     }),
-    [panes, machines],
+    [panes, nodes],
   )
 
   const invokeWithGuard = async (paneKey: string, fn: () => Promise<void>) => {
@@ -118,22 +118,22 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
   }
 
   const focusPane = (row: OverviewPaneRow) =>
-    invokeWithGuard(`focus:${row.machine}:${row.paneId}`, async () => {
+    invokeWithGuard(`focus:${row.nodeId}:${row.paneId}`, async () => {
       await store.invokePluginAction('builtin:herdr', 'focus', {
         paneId: row.paneId,
-        ...(row.machine !== 'local' ? { machine: row.machine } : {}),
+        ...(row.nodeId !== 'local' ? { nodeId: row.nodeId } : {}),
       })
     })
 
   const readPane = (row: OverviewPaneRow) =>
-    invokeWithGuard(`read:${row.machine}:${row.paneId}`, async () => {
+    invokeWithGuard(`read:${row.nodeId}:${row.paneId}`, async () => {
       const result = (await store.invokePluginAction('builtin:herdr', 'read', {
         paneId: row.paneId,
         lines: 40,
-        ...(row.machine !== 'local' ? { machine: row.machine } : {}),
+        ...(row.nodeId !== 'local' ? { nodeId: row.nodeId } : {}),
       })) as { text?: unknown } | undefined
       const text = result !== null && typeof result === 'object' && 'text' in result ? String(result.text) : formatSpecText(result)
-      setSnapshot({ title: `${row.paneId}@${row.machine}${row.agentName !== undefined ? ` (${row.agentName})` : ''}`, text })
+      setSnapshot({ title: `${row.paneId}@${row.nodeId}${row.agentName !== undefined ? ` (${row.agentName})` : ''}`, text })
     })
 
   // 受管行的关联会话：由 herdr 插件的 list 动作补充（overview doc 行不含
@@ -151,9 +151,9 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
       if (result !== null && typeof result === 'object' && Array.isArray(result.panes)) {
         for (const p of result.panes) {
           const paneId = typeof p['paneId'] === 'string' ? p['paneId'] : undefined
-          const machine = typeof p['machine'] === 'string' ? p['machine'] : 'local'
+          const nodeId = typeof p['nodeId'] === 'string' ? p['nodeId'] : 'local'
           const parent = p['parentConversationId']
-          if (paneId !== undefined && typeof parent === 'number') map[`${machine}:${paneId}`] = parent
+          if (paneId !== undefined && typeof parent === 'number') map[`${nodeId}:${paneId}`] = parent
         }
       }
       setManagedMap(map)
@@ -170,7 +170,7 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
           <span className="badge badge-neutral">窗格 {stats.total}</span>
           <span className="badge badge-accent">工作中 {stats.working}</span>
           <span className="badge badge-warn">待确认 {stats.blocked}</span>
-          <span className="badge badge-neutral">机器 {stats.machines}</span>
+          <span className="badge badge-neutral">节点 {stats.nodes}</span>
           <button type="button" className="btn btn-sm" onClick={() => void loadManagedMap()}>
             <HelmIcon name="refresh-cw" size={12} />
             刷新关联
@@ -203,9 +203,9 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
       )}
 
       <div className="pane-actions" style={{ padding: '10px 16px 0', justifyContent: 'flex-start' }}>
-        <select className="select" style={{ width: 140 }} value={machineFilter} onChange={(e) => setMachineFilter(e.target.value)}>
-          <option value="all">全部机器</option>
-          {machines.map((m) => (
+        <select className="select" style={{ width: 140 }} value={nodeFilter} onChange={(e) => setNodeFilter(e.target.value)}>
+          <option value="all">全部节点</option>
+          {nodes.map((m) => (
             <option key={m} value={m}>
               {m === 'local' ? '本机 (local)' : m}
             </option>
@@ -235,7 +235,7 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
             <table className="jr-table">
               <thead>
                 <tr>
-                  <th>机器</th>
+                  <th>节点</th>
                   <th>窗格</th>
                   <th>位置</th>
                   <th>归属</th>
@@ -262,13 +262,13 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
                   </tr>
                 )}
                 {filtered.map((row) => {
-                  const key = `${row.machine}:${row.paneId}`
+                  const key = `${row.nodeId}:${row.paneId}`
                   const statusTone = AGENT_STATUS_TONE[row.agentStatus] ?? 'neutral'
                   const outcomeMeta = row.outcome !== undefined ? OUTCOME_LABEL[row.outcome] : undefined
                   const parentConversationId = managedMap[key]
                   return (
                     <tr key={key}>
-                      <td className="mono">{row.machine}</td>
+                      <td className="mono">{row.nodeId}</td>
                       <td className="mono">
                         {row.paneId}
                         {row.focused === true && <span className="badge badge-accent" style={{ marginLeft: 6 }}>聚焦</span>}
@@ -350,7 +350,7 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
                 {doc.asks.map((ask, i) => (
                   <div key={i} className="jr-stack-row" style={{ justifyContent: 'space-between' }}>
                     <span className="mono" style={{ fontSize: 12 }}>
-                      {ask.paneId}@{ask.machine}
+                      {ask.paneId}@{ask.nodeId}
                     </span>
                     <span className="badge badge-warn">
                       seq {ask.seq} / {ask.phase}

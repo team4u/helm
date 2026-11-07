@@ -14,6 +14,10 @@ import type {
   ConversationPatch,
   ConversationStatus,
   ConversationSummary,
+  EnvExecRequest,
+  EnvExecResponse,
+  NodeInfo,
+  NodeIssuedToken,
   PluginConfigFieldSchema,
   PluginSummary,
   ProviderConfig,
@@ -31,6 +35,7 @@ import type {
   ProviderService as RealProviderService,
   SkillService as RealSkillService,
 } from '../services/index.js'
+import type { EnvFabric } from '../env/index.js'
 
 export type { RealAuthService }
 export type {
@@ -113,7 +118,10 @@ export interface KernelRuntimeLike {
    * 机密脱敏钩子（真实 kernel 的 SecretStash）。出站 JSON 的字符串值与
    * 服务端错误日志都先经它擦除已登记秘密，绝不外发明文或还原 marker。
    */
-  readonly stash?: { redact(text: string): string }
+  readonly stash?: {
+    redact(text: string): string
+    createStreamingRedactor?(): { push(text: string): string; flush(): string }
+  }
   /**
    * 模型热重载端口：providers/credentials 变更后 await，使后续
    * listModels 反映新配置（仅持久化 JSON 而不重载等于热配置无效）。
@@ -175,6 +183,29 @@ export interface KernelRuntimeLike {
 
   search(query: string): Promise<SearchHit[]> | SearchHit[]
   listModels(): Promise<unknown[]> | unknown[]
+
+  // ---------------------------------------------------------------------------
+  // 跨平台节点管理（EnvFabric / nodes / env exec）
+  // ---------------------------------------------------------------------------
+
+  /** 节点底座（node-server 接 WS 网关用）；未提供时 /ws/node 不挂接。 */
+  readonly envFabric?: EnvFabric
+  /** 列出 local + 已登记 BYOM 节点与实时在线状态（GET /api/nodes）。 */
+  listNodes(): Promise<NodeInfo[]> | NodeInfo[]
+  /** 签发节点接入令牌（明文 token 仅本次响应返回；服务端只存 sha256）。 */
+  issueNodeToken(nodeId: string): Promise<NodeIssuedToken> | NodeIssuedToken
+  /** 移除节点：从签发表删除并立即掐断在途连接（DELETE /api/nodes/:id）。 */
+  removeNode(nodeId: string): Promise<void> | void
+  /**
+   * 跨节点命令执行（POST /api/env/exec）：靶点解析为显式 nodeId/cwd >
+   * 会话绑定 > local；远端离线 409 node_offline；onChunk 逐块回放
+   * （NDJSON 流式模式）；signal 传播取消。
+   */
+  execEnv(
+    req: EnvExecRequest,
+    onChunk?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void,
+    signal?: AbortSignal,
+  ): Promise<EnvExecResponse> | EnvExecResponse
 }
 
 // ---------------------------------------------------------------------------
@@ -212,4 +243,4 @@ export interface HubHandle {
 }
 
 // 导出供测试构造完整 Profile
-export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, WorkflowRunSummary, WorkflowRunRequest, PublicPluginDoc }
+export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, WorkflowRunSummary, WorkflowRunRequest, PublicPluginDoc, NodeInfo, NodeIssuedToken, EnvExecRequest, EnvExecResponse }

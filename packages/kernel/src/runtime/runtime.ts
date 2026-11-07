@@ -52,9 +52,12 @@ import type {
   ToolResultHookPayload,
   WorkflowRunSummary,
 } from '@helm/protocol'
-import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT, type MaybePromise } from '@helm/protocol'
-import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
+import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT, type MaybePromise, type EnvExecRequest, type EnvExecResponse, type NodeInfo, type NodeIssuedToken } from '@helm/protocol'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { hostname } from 'node:os'
+import { chmod, mkdir, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   ArtifactService as SvcArtifactService,
   AssetWatcher,
@@ -73,6 +76,7 @@ import {
   type Profile,
 } from '../services/index.js'
 import { PluginHost, type DerivedToolSpec } from '../plugins/index.js'
+import { createEnvFabric, sha256hex, tokenAuthenticator, type EnvFabric } from '../env/index.js'
 import { AskService } from './asks.js'
 import { ConversationTracker, deriveTitle } from './conversations.js'
 import { EventHub } from './events.js'
@@ -82,7 +86,7 @@ import { openHelmDatabase, type HelmDatabase } from './sqlite.js'
 import { HelmStore } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { toConversationEntry } from './entries.js'
-import { buildManagedEnv, createBashTool, createReadArtifactTool, createReadTool, runGate } from './tools.js'
+import { buildManagedEnv, createBashTool, createEditTool, createReadArtifactTool, createReadTool, createWriteTool, isAbsoluteTargetPath, runGate, runShell } from './tools.js'
 import { runNativeSpawn } from './spawn.js'
 import { HelmPluginConfigStore } from './plugin-config-store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
@@ -235,6 +239,12 @@ export class KernelRuntime {
   private readonly workflowSettledListeners = new Set<(run: WorkflowRunSummary) => void | Promise<void>>()
   /** 会话插件管理权：conversationId -> 持有 pluginId 集合（删除保护）。 */
   private readonly managedConversations = new Map<number, Set<string>>()
+  /** 跨平台节点执行底座（local + 远端 BYOM 节点池；node-server 网关接线消费）。 */
+  readonly envFabric: EnvFabric
+  /** config.json 中登记的节点签发记录（nodeId -> sha256(token)）。 */
+  private readonly nodeTokenIndex = new Map<string, string>()
+  /** helm CLI 包装脚本目录（ensureCliBinDir 生成后非空）。 */
+  private cliBinDirValue: string | undefined = undefined
   /** 受管进程 token（createProcessToken 产物；close dispose）。 */
   private processTokenHandle: { tokenOf(): string | undefined; dispose(): void } | undefined
   /** watchdog 定时器（singleflight；unref 不阻退出）。 */
@@ -408,6 +418,32 @@ export class KernelRuntime {
       init.hubUrl ?? `http://127.0.0.1:${process.env['HELM_PORT'] ?? '3202'}`
     this.hubUrlValue = hubUrl
     this.watchdogIntervalMs = init.watchdogIntervalMs
+
+    // ---- 跨平台节点底座（EnvFabric）------------------------------------
+    // fail-closed 鉴权：仅 config.json nodes 登记的 sha256(token) 可注册。
+    // 加载失败（config 损坏）在 initialize 阶段显式上抛，不静默无鉴权运行。
+    this.envFabric = createEnvFabric({
+      authenticate: tokenAuthenticator((nodeId) => this.nodeTokenIndex.get(nodeId)),
+      envOptions: ({ conversationId, cwd, nodeId }) =>
+        buildManagedEnv(this.toolDeps, cwd, conversationId, nodeId),
+    })
+    // 节点上下线 -> node.changed SSE 事件（Web/CLI 实时感知）。
+    this.envFabric.registry.onNodeChanged((nodeId, online) => {
+      const conn = online ? this.envFabric.registry.get(nodeId) : undefined
+      this.events.publish('node.changed', {
+        type: 'node.changed',
+        node: {
+          id: nodeId,
+          kind: 'byom',
+          online,
+          ...(conn?.hostname !== undefined ? { hostname: conn.hostname } : {}),
+          ...(conn?.platform !== undefined ? { platform: conn.platform } : {}),
+          ...(conn?.hubUrl !== undefined ? { hubUrl: conn.hubUrl } : {}),
+          ...(conn?.connectedAt !== undefined ? { connectedAt: conn.connectedAt } : {}),
+          ...(conn?.lastSeenAt !== undefined ? { lastSeenAt: conn.lastSeenAt } : {}),
+        } satisfies NodeInfo,
+      })
+    })
     const runtimeSelf: KernelRuntime = this
     this.toolDeps = {
       dataDir: init.dataDir,
@@ -420,6 +456,11 @@ export class KernelRuntime {
       redact: (t) => this.stashService.redact(t),
       processToken: () => this.processTokenHandle?.tokenOf(),
       artifacts: this.artifactsSvc,
+      envFabric: this.envFabric,
+      nodeIdOf: (id) => this.store.getConv(id)?.nodeId ?? 'local',
+      get cliBinDir(): string | undefined {
+        return runtimeSelf.cliBinDirValue
+      },
     }
     this.store.ftsRedact = (t) => this.stashService.redact(t)
 
@@ -446,6 +487,9 @@ export class KernelRuntime {
         plugins: this.pluginHost ? this.pluginHost.list() : [],
         ui: this.pluginHost ? this.pluginHost.listUi() : [],
         workflowRuns: this.workflowRunProvider(),
+        // snapshot.nodes 与 node.changed 同源（listNodes 读取同一注册表），
+        // 首帧即携带全部已知节点与在线状态，重连凭水位对齐。
+        nodes: this.listNodesSync(),
       }),
       persistSeq: (seq) => this.store.setEventSeq(seq),
     })
@@ -493,6 +537,10 @@ export class KernelRuntime {
   }
 
   private async initialize(): Promise<void> {
+    // 0) 跨平台节点底座先行：加载 config.json 节点签发表（损坏显式上抛），
+    //    生成 helm CLI 包装脚本（受管子进程可直接运行 helm）。
+    await this.loadNodeTokens()
+    await this.ensureCliBinDir()
     // 1) 默认 profiles 先于 root 创建（root 绑定 assistant profile）。
     // 全局来源在内核统一解析；assistant Profile 的模型只属于该 Profile。
     await this.profilesSvc.ensureDefault()
@@ -558,6 +606,7 @@ export class KernelRuntime {
         title: '个人助理',
         profileId: 'assistant',
         tags: ['assistant'],
+        nodeId: 'local',
         cwd: this.init.cwd,
         model: rootEffective ?? '',
         unread: false,
@@ -583,11 +632,14 @@ export class KernelRuntime {
     if (this.init.autoResume) await this.start()
   }
 
-  /** 内核编排工具 + 本机工具统一注册（与插件工具同一 registry 机制；execute 统一包 handled 接管）。 */
+  /** 内核工具（bash/read/write/edit/read_artifact + subagent/SubagentWorkflow/run_action）
+   *  统一注册（与插件工具同一 registry 机制；execute 统一包 handled 接管）。 */
   private installKernelTools(): void {
     const kernelTools = [
       createBashTool(this.toolDeps),
       createReadTool(this.toolDeps),
+      createWriteTool(this.toolDeps),
+      createEditTool(this.toolDeps),
       createReadArtifactTool(this.toolDeps, (convId: number, artifactConvId: number) =>
         this.isArtifactAuthorized(convId, artifactConvId),
       ),
@@ -929,7 +981,7 @@ export class KernelRuntime {
    * 绝不携带宿主 process.env（远端环境由目标机器自理，PATH/HOME 等不得外泄）。
    * 仅供 app 组合层工厂注入，不进 protocol ctx.host。
    */
-  buildSpawnEnv(conversationId: number, cwd: string): Record<string, string> {
+  buildSpawnEnv(conversationId: number, cwd: string, nodeId?: string): Record<string, string> {
     if (!Number.isInteger(conversationId) || conversationId <= 0) {
       throw new HelmError(
         'validation_error',
@@ -943,7 +995,247 @@ export class KernelRuntime {
         cwd,
       })
     }
-    return buildManagedEnv(this.toolDeps, cwd, conversationId)
+    // 缺省解析会话绑定节点（显式 nodeId 优先；app 组合层注入 Herdr 用）。
+    const resolvedNodeId = nodeId ?? this.store.getConv(conversationId)?.nodeId ?? 'local'
+    return buildManagedEnv(this.toolDeps, cwd, conversationId, resolvedNodeId)
+  }
+
+  // ------------------------------------------------------------------
+  // 跨平台节点管理（EnvFabric / nodes）
+  // ------------------------------------------------------------------
+
+  /** 加载 config.json 的 nodes 签发表（nodeId -> sha256(token)）；损坏显式上抛。 */
+  private async loadNodeTokens(): Promise<void> {
+    const config = await this.configSvc.get()
+    const nodes = config['nodes']
+    this.nodeTokenIndex.clear()
+    if (nodes === undefined) return
+    if (typeof nodes !== 'object' || nodes === null || Array.isArray(nodes)) {
+      throw new HelmError('config_corrupt', 'config.json.nodes 需为对象（nodeId -> sha256(token)）', 500)
+    }
+    for (const [nodeId, digest] of Object.entries(nodes as Record<string, unknown>)) {
+      if (typeof digest !== 'string' || digest === '') {
+        throw new HelmError('config_corrupt', `config.json.nodes['${nodeId}'] 需为非空字符串摘要`, 500)
+      }
+      this.nodeTokenIndex.set(nodeId, digest)
+    }
+  }
+
+  /** 把当前签发表写回 config.json.nodes。 */
+  private async persistNodeTokens(): Promise<void> {
+    const nodes: Record<string, string> = {}
+    for (const [nodeId, digest] of this.nodeTokenIndex) nodes[nodeId] = digest
+    await this.configSvc.update({ nodes })
+  }
+
+  /**
+   * 在 dataDir 下生成 <dataDir>/bin/helm 可执行包装脚本：
+   * `#!/bin/sh\nexec <node> <tsx cli.mjs> <repo cli index> "$@"`（0o755）。
+   * 使受管子进程在 PATH 中直接运行 helm 命令（--current 语义开箱即通）。
+   * 幂等：内容变化时重写，权限恒 0o755。
+   */
+  private async ensureCliBinDir(): Promise<void> {
+    const binDir = join(this.dataDir, 'bin')
+    const helmPath = join(binDir, 'helm')
+    // tsx CLI 与仓库 CLI 入口：以当前模块位置推导（源码运行与 dist 运行同构）。
+    const kernelDir = dirname(fileURLToPath(import.meta.url))
+    const repoRoot = this.resolveRepoRoot(kernelDir)
+    const compiledCli = join(repoRoot, 'packages', 'cli', 'dist', 'index.js')
+    const sourceCli = join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
+    const fs = await import('node:fs/promises')
+    const compiled = await fs.access(compiledCli).then(() => true, () => false)
+    const args = compiled
+      ? [process.execPath, compiledCli]
+      : [process.execPath, join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), sourceCli]
+    const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\"'\"'")}'`
+    const script = `#!/bin/sh\nexec ${args.map(shellQuote).join(' ')} "$@"\n`
+    try {
+      await mkdir(binDir, { recursive: true })
+      const existing = await import('node:fs/promises').then((fs) =>
+        fs.readFile(helmPath, 'utf8').catch(() => undefined),
+      )
+      if (existing !== script) {
+        await writeFile(helmPath, script, 'utf8')
+      }
+      await chmod(helmPath, 0o755)
+      if (process.platform === 'win32') {
+        const cmdArgs = args.map((value) => `"${value.replaceAll('%', '%%')}"`).join(' ')
+        await writeFile(join(binDir, 'helm.cmd'), `@echo off\r\n${cmdArgs} %*\r\n`, 'utf8')
+      }
+      this.cliBinDirValue = binDir
+    } catch (error) {
+      // 包装脚本生成失败不阻断内核启动（受管子进程仍可用绝对路径），
+      // 但显式通知（不静默吞）。
+      this.events.publish('notification', {
+        level: 'warning',
+        title: 'helm CLI 包装脚本生成失败',
+        body: String(error instanceof Error ? error.message : error),
+      })
+    }
+  }
+
+  /** 从 kernel 模块位置推导仓库根（src/runtime -> 上溯两级；dist 同构）。 */
+  private resolveRepoRoot(kernelDir: string): string {
+    // src/runtime 或 dist/runtime → packages/kernel/<x> → 仓库根。
+    return dirname(dirname(dirname(dirname(kernelDir))))
+  }
+
+  /** 流式模式下聚合上限（远大于常规 1MiB：流式客户端自行消费原始块）。 */
+  private static readonly MAX_STREAM_AGGREGATE_BYTES = 64 * 1024 * 1024
+
+  /** 节点列表：首项恒为 local；随后为 config.json 登记节点与实时在线状态。 */
+  async listNodes(): Promise<NodeInfo[]> {
+    return this.listNodesSync()
+  }
+
+  /** 同步版（SSE snapshot provider 用；与 listNodes 同一数据源）。 */
+  private listNodesSync(): NodeInfo[] {
+    const out: NodeInfo[] = [
+      {
+        id: 'local',
+        kind: 'local',
+        online: true,
+        hostname: hostname(),
+        platform: process.platform,
+      },
+    ]
+    for (const nodeId of this.nodeTokenIndex.keys()) {
+      const conn = this.envFabric.registry.get(nodeId)
+      out.push({
+        id: nodeId,
+        kind: 'byom',
+        online: conn !== undefined,
+        ...(conn?.hostname !== undefined ? { hostname: conn.hostname } : {}),
+        ...(conn?.platform !== undefined ? { platform: conn.platform } : {}),
+        ...(conn?.hubUrl !== undefined ? { hubUrl: conn.hubUrl } : {}),
+        ...(conn?.connectedAt !== undefined ? { connectedAt: conn.connectedAt } : {}),
+        ...(conn?.lastSeenAt !== undefined ? { lastSeenAt: conn.lastSeenAt } : {}),
+      })
+    }
+    return out
+  }
+
+  /** 签发节点接入令牌：明文 token 仅本次返回，服务端只存 sha256。 */
+  async issueNodeToken(nodeId: string): Promise<NodeIssuedToken> {
+    if (nodeId === 'local') {
+      throw new HelmError('cannot_issue_local', "local 是内建节点，无需接入令牌", 400, { nodeId })
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeId)) {
+      throw new HelmError(
+        'validation_error',
+        'nodeId 需匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/' +
+          '（字母数字开头，可含 . _ -，最长 128 字符）',
+        400,
+        { nodeId },
+      )
+    }
+    const secret = randomBytes(24).toString('base64url')
+    const token = `${nodeId}:${secret}`
+    this.nodeTokenIndex.set(nodeId, sha256hex(token))
+    await this.persistNodeTokens()
+    // 明文 token 入出站脱敏（绝不落库/进模型上下文/出现在日志）。
+    this.stashService.addRedaction(token)
+    this.stashService.addRedaction(secret)
+    this.events.publish('node.changed', {
+      type: 'node.changed',
+      node: { id: nodeId, kind: 'byom', online: this.envFabric.isOnline(nodeId) },
+    })
+    return { nodeId, token, createdAt: Date.now() }
+  }
+
+  /** 移除节点：从签发表删除并立即掐断在途 WS 连接。 */
+  async removeNode(nodeId: string): Promise<void> {
+    if (nodeId === 'local') {
+      throw new HelmError('cannot_remove_local_node', 'local 是内建节点，不可移除', 400, { nodeId })
+    }
+    if (!this.nodeTokenIndex.has(nodeId)) {
+      throw new HelmError('not_found', `节点不存在：${nodeId}`, 404, { nodeId })
+    }
+    this.nodeTokenIndex.delete(nodeId)
+    await this.persistNodeTokens()
+    this.envFabric.registry.disconnect(nodeId)
+    this.events.publish('node.changed', {
+      type: 'node.changed',
+      node: { id: nodeId, kind: 'byom', online: false },
+    })
+  }
+
+  /**
+   * 跨节点命令执行（POST /api/env/exec）：在目标 (nodeId, cwd) 执行命令。
+   * 远端节点离线时 409 node_offline（绝不回退 local）；onChunk 逐块回放
+   * stdout/stderr（NDJSON 流式模式用）；signal 传播取消（杀远端进程树）。
+   */
+  async execEnv(
+    req: EnvExecRequest,
+    onChunk?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void,
+    signal?: AbortSignal,
+  ): Promise<EnvExecResponse> {
+    if (typeof req.command !== 'string' && !Array.isArray(req.command)) {
+      throw new HelmError('validation_error', 'command 需为字符串或字符串数组', 400)
+    }
+    // 靶点解析：显式 nodeId/cwd > 会话绑定 (nodeId, cwd) > 'local'/Hub cwd。
+    // 缺省参数绝不误跑 Hub：带 conversationId 时继承该会话的远端绑定。
+    let nodeId = req.nodeId
+    let cwd = req.cwd
+    if (req.conversationId !== undefined) {
+      const meta = this.store.getConv(req.conversationId)
+      if (meta === undefined) {
+        throw new HelmError('not_found', `会话不存在：${req.conversationId}`, 404, {
+          conversationId: req.conversationId,
+        })
+      }
+      if (nodeId === undefined) nodeId = meta.nodeId ?? 'local'
+      if (cwd === undefined) cwd = meta.cwd
+    }
+    nodeId = nodeId ?? 'local'
+    if (cwd === undefined) cwd = nodeId === 'local' ? this.toolDeps.defaultCwd : undefined
+    // cwd 绝对性按目标形状判定（POSIX / 与 Windows 盘符/UNC 均合法），
+    // 盘符相对（C:relative）拒绝；绝不用 Hub 宿主 isAbsolute 拒 Windows 路径。
+    if (cwd !== undefined && (typeof cwd !== 'string' || !isAbsoluteTargetPath(cwd))) {
+      throw new HelmError(
+        'validation_error',
+        `cwd 需为绝对路径（POSIX / 开头或 Windows 盘符/UNC；拒绝盘符相对与相对路径。收到 ${String(cwd)}）`,
+        400,
+        { cwd },
+      )
+    }
+    // 远端且未给定 cwd：拒绝盲跑（节点守护进程 dataDir 不是用户的意图靶点；
+    // 安全目标：缺省参数绝不把远端会话命令误跑 Hub 或随机目录）。
+    if (nodeId !== 'local' && cwd === undefined) {
+      throw new HelmError(
+        'validation_error',
+        `远端节点 ${nodeId} 执行需显式 cwd 或绑定会话（拒绝盲跑节点默认目录）`,
+        400,
+        { nodeId },
+      )
+    }
+    if (nodeId !== 'local' && !this.envFabric.isOnline(nodeId)) {
+      throw new HelmError('node_offline', `节点 ${nodeId} 离线或未接入，拒绝执行（绝不回退本机）`, 409, {
+        nodeId,
+      })
+    }
+    const result = await runShell(this.toolDeps, req.command as string, {
+      ...(cwd !== undefined ? { cwd } : {}),
+      nodeId,
+      conversationId: req.conversationId,
+      ...(req.env === undefined ? {} : { env: req.env }),
+      ...(req.timeoutMs === undefined ? {} : { timeoutMs: req.timeoutMs }),
+      signal,
+      // 流式模式：逐块回调透传（客户端自行限流）；聚合上限放宽
+      // 以防短命令即截断（聚合结果仍脱敏返回）。
+      ...(onChunk !== undefined
+        ? {
+            onOutputChunk: onChunk,
+            maxOutputBytes: KernelRuntime.MAX_STREAM_AGGREGATE_BYTES,
+          }
+        : {}),
+    })
+    return {
+      ok: result.ok,
+      exitCode: result.exitCode,
+      output: result.output,
+      timedOut: result.timedOut,
+    }
   }
 
   /** 产物授权：当前会话或其父链（子会话可读父会话产物）；最多 32 层防环。 */
@@ -1038,6 +1330,7 @@ export class KernelRuntime {
               agent?.model !== undefined
                 ? `${agent.model.provider}/${agent.model.modelId}`
                 : '',
+            nodeId: 'local',
             unread: false,
             pinned: false,
             stateChangeSeq: 1,
@@ -1510,21 +1803,44 @@ export class KernelRuntime {
 
   async createConversation(init: ConversationInit = {}): Promise<ConversationSummary> {
     const profileId = await this.resolveProfileForCreate(init)
+    const profile = await this.readProfile(profileId)
     // init.model 是显式覆盖（非全局继承）：仅在提供时校验并落 override。
     if (init.model !== undefined && init.model !== '') this.parseModelRefOrThrow(init.model)
     const effectiveModel = await this.resolveEffectiveModel(init.model, profileId)
     const effectiveRef = effectiveModel ? this.parseModelRefOrThrow(effectiveModel) : undefined
+    // nodeId 解析链：init.nodeId > profile.nodeId > parent.nodeId > 'local'。
+    const parentMeta =
+      init.parentConversationId !== undefined ? this.store.getConv(init.parentConversationId) : undefined
+    const nodeId =
+      init.nodeId ?? profile?.nodeId ?? parentMeta?.nodeId ?? 'local'
+    // cwd 解析链（只算一次，SDK agent.cwd 与 store 镜像同一个值）：
+    // init.cwd > profile.cwd > parent.cwd > local 用 Hub 缺省 cwd；
+    // 远端节点两者皆无时显式拒绝（节点守护进程目录非用户意图靶点，拒绝盲跑）。
+    // 注：不对继承 cwd 做 Hub realpath/resolve 污染——目标节点可能与 Hub
+    // 异平台（如 Windows C:\workspace），保持原样交给目标节点语义。
+    const inheritedCwd = init.cwd ?? profile?.cwd ?? parentMeta?.cwd
+    let effectiveCwd: string
+    if (inheritedCwd !== undefined) {
+      effectiveCwd = inheritedCwd
+    } else if (nodeId === 'local') {
+      effectiveCwd = this.toolDeps.defaultCwd
+    } else {
+      throw new HelmError(
+        'validation_error',
+        `会话绑定远端节点 ${nodeId} 但未提供 cwd（Profile.cwd / 父会话 cwd / init.cwd 均缺失；拒绝盲跑节点默认目录）`,
+        400,
+        { nodeId },
+      )
+    }
     const conv = await this.harness.createConversation(
       {
         ownership: { kind: 'ownerless' },
         agent: effectiveRef
           ? {
               model: { provider: effectiveRef.provider, modelId: effectiveRef.modelId },
-              ...(init.cwd ? { cwd: init.cwd } : {}),
+              cwd: effectiveCwd,
             }
-          : init.cwd
-            ? { cwd: init.cwd }
-            : undefined,
+          : { cwd: effectiveCwd },
       },
       BACKGROUND_CONTEXT,
     )
@@ -1536,7 +1852,8 @@ export class KernelRuntime {
       profileId,
       tags: init.tags ?? [],
       parentConversationId: init.parentConversationId,
-      cwd: init.cwd ?? this.toolDeps.defaultCwd,
+      nodeId,
+      cwd: effectiveCwd,
       model: effectiveModel ?? '',
       ...(init.model !== undefined && init.model !== '' ? { modelOverride: init.model } : {}),
       unread: false,
@@ -1590,6 +1907,7 @@ export class KernelRuntime {
       ...(patch.title !== undefined ? { title: patch.title } : {}),
       ...(patch.profileId !== undefined ? { profileId: patch.profileId } : {}),
       ...(patch.tags !== undefined ? { tags: patch.tags } : {}),
+      ...(patch.nodeId !== undefined ? { nodeId: patch.nodeId } : {}),
       ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
       model: effectiveModel ?? '',
       ...(nextOverride !== undefined ? { modelOverride: nextOverride } : { modelOverride: undefined }),
@@ -2045,6 +2363,7 @@ export class KernelRuntime {
       profileId: sourceMeta.profileId,
       tags: [...sourceMeta.tags],
       parentConversationId: id,
+      nodeId: sourceMeta.nodeId ?? 'local',
       cwd: sourceMeta.cwd,
       model: sourceMeta.model,
       ...(sourceMeta.modelOverride !== undefined ? { modelOverride: sourceMeta.modelOverride } : {}),
@@ -2138,6 +2457,7 @@ export class KernelRuntime {
             ? async () => this.buildAttachmentBlock(resolvedAttachments)
             : undefined,
         registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags) => {
+          const profile = await this.readProfile(profileId)
           const now = Date.now()
           this.store.upsertConv({
             id: childId,
@@ -2146,6 +2466,8 @@ export class KernelRuntime {
             // 内核零角色硬编码：tags 由调用方策略决定（原生 spawn 传 []）。
             tags,
             parentConversationId: parentId,
+            // 与普通创建一致：Profile 节点优先于父会话缺省节点。
+            nodeId: profile?.nodeId ?? this.store.getConv(parentId)?.nodeId ?? 'local',
             cwd: childCwd,
             model: modelMirror,
             ...(finalRequest.model !== undefined && finalRequest.model !== '' ? { modelOverride: finalRequest.model } : {}),
@@ -2165,6 +2487,8 @@ export class KernelRuntime {
           if (!profile) return undefined
           return {
             ...(profile.model ? { model: profile.model } : {}),
+            ...(profile.cwd !== undefined ? { cwd: profile.cwd } : {}),
+            ...(profile.nodeId !== undefined ? { nodeId: profile.nodeId } : {}),
             ...(profile.runtime !== undefined ? { runtime: profile.runtime } : {}),
           }
         },
@@ -2194,9 +2518,21 @@ export class KernelRuntime {
    */
   runGate(
     command: string,
-    options: { cwd?: string; conversationId?: number; signal?: AbortSignal; env?: Record<string, string> } = {},
+    options: {
+      cwd?: string
+      conversationId?: number
+      nodeId?: string
+      signal?: AbortSignal
+      env?: Record<string, string>
+    } = {},
   ): Promise<{ ok: boolean; output: string }> {
-    return runGate(this.toolDeps, command, options)
+    // 靶点解析与 execEnv 同铨：显式 nodeId > 会话绑定 > 'local'。
+    // 远端会话的 gate 必须在远端节点执行（绝不误跑 Hub 本机）。
+    let nodeId = options.nodeId
+    if (nodeId === undefined && options.conversationId !== undefined) {
+      nodeId = this.store.getConv(options.conversationId)?.nodeId
+    }
+    return runGate(this.toolDeps, command, { ...options, ...(nodeId !== undefined ? { nodeId } : {}) })
   }
 
   /** workflow 执行注入（主代理组合 WorkflowService 后调用）。 */
@@ -2563,6 +2899,10 @@ export class KernelRuntime {
     await Promise.allSettled(this.closeAborts)
     await this.settledInflight
     await this.pluginHost?.dispose()
+    // 4.5) 节点底座：断开全部远端连接（关 socket/rpc、杀远端命令）。
+    await this.envFabric.dispose().catch(() => {
+      /* dispose 尽力而为；后续 store 错误仍如实上报 */
+    })
     // 5) 受管进程 token 销毁（此后工具子进程鉴权不再认它）。
     this.processTokenHandle?.dispose()
     this.processTokenHandle = undefined

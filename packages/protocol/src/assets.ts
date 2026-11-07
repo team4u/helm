@@ -33,8 +33,6 @@ export interface ProfileRuntime {
   args?: string[]
   /** 目标计算节点标识（缺省本机 'local'）。 */
   nodeId?: string
-  /** 兼容别名：目标节点标识；缺省本机。 */
-  machine?: string
   /** 会话工作目录（绝对路径）；缺省由运行时决定。 */
   workspace?: string
   /** 注入子进程的环境变量覆盖。 */

@@ -7,14 +7,35 @@
  *   预先 aborted 的 Context 绝不 spawn；abort/timeout 杀整个进程组并可靠等待子进程
  *   退出（listener/timer 全清理，不泄露进程）；stdout/stderr 各自 `StreamDecoder` 增量
  *   解码，多字节字符跨 chunk 不撕裂；`onOutput` 按到达顺序拼接（非先 stdout 后 stderr）。
- * - env 注入：process.env 基底 + buildManagedEnv 受管变量（HELM_ENV / HELM_HUB_URL /
- *   HELM_CONVERSATION_ID / HELM_CWD / HELM_DATA_DIR / 受管 HELM_TOKEN）固定覆盖
- *   stash 注入的同名项；外部 spawn env 复用同一受管构造（不携带宿主 process.env）。
+ * - 跨节点执行（EnvFabric）：runShell/read/write/edit 按 (nodeId, cwd) 靶点在目标
+ *   节点执行；nodeId !== 'local' 时经 deps.envFabric 的 RemoteExecutionEnv（离线显式
+ *   node_offline，断线显式 unknown；EnvFabric 缺失显式 env_fabric_missing），绝不
+ *   静默回退 local 误读写 Hub 本机磁盘。
+ * - 跨平台路径形状：目标路径一律按其自身形状（POSIX 绝对 / Windows 盘符绝对 /
+ *   UNC）选用纯 posix/win32 规则做词法解析与 containment，绝不用 Hub 宿主
+ *   node:path 默认规则解析远端路径（Linux Hub 上 resolve('C:\\workspace') 会得到
+ *   错误结果，Windows/mac/Linux 跨平台承诺即不成立）；containment 在基准为根目录
+ *   （/ 或 C:\\）时不叠加分隔符（防 '//' 前缀误拒根下合法文件）；盘符相对路径
+ *   （C:relative）语义依赖进程当前目录，一律显式拒绝。
+ * - env 注入：local 继承 process.env 并由 buildManagedEnv 受管变量（HELM_ENV /
+ *   HELM_HUB_URL / HELM_CONVERSATION_ID / HELM_CWD / HELM_DATA_DIR / 受管
+ *   HELM_TOKEN）固定覆盖 stash 注入的同名项，deps.cliBinDir（helm CLI 包装目录）
+ *   以 path.delimiter 前置注入 PATH；远端节点绝不携带 Hub 宿主环境、也绝不合成
+ *   默认 PATH（节点守护进程自身合并节点 PATH/HOME 并剥除节点宿主 HELM_TOKEN，
+ *   合成默认 PATH 会覆盖节点真实工具链）；远端 HELM_HUB_URL 仅取节点注册时上报
+ *   的真实 hubUrl（未上报则省略该键，绝不 fallback Hub 本机地址）。
+ * - runShell 对宿主继承 HELM_TOKEN 做兜底脱敏：即使调用方未把宿主 token 登记进
+ *   deps.redact，返回的一切聚合文本也对捕获到的宿主 token 做精确替换脱敏。
+ * - HELM_TOKEN 剥除按大小写不敏感处理（Windows 环境变量名语义：helm_token /
+ *   Helm_Token 等同名变体一并剥除，受管值最后固定覆写）。
  * - SecretStash 脱敏在聚合完成的全文上执行（先完整拼接再 redact，跨 chunk 撕裂的
  *   秘密也必然完整匹配），绝不反向还原；超长输出经 services.ArtifactService.spill 落盘。
  * - 输出超过 maxOutputBytes 显式失败 `output_limit_exceeded`（绝不截断当成功）。
  * - read 用 fs.promises（不阻主线程）；realpath 解析 base 与 target 后做 containment，
- *   拒绝目录与软链越界；read 错误一律脱敏。
+ *   拒绝目录与软链越界；远端节点经 env RPC 的 canonicalPath/fileInfo/readTextFile
+ *   同样做 realpath 越界检查；read 错误一律脱敏。
+ * - write/edit 工具：会话 (nodeId, cwd) 内安全写文本与精确替换（唯一匹配校验），
+ *   越出 cwd 的绝对路径 / `..` 逃逸 / 指向 cwd 外的软链一律拒绝。
  * - spill 指引指向 read_artifact；分页 ≤4KiB 防同量 spill 循环；
  *   read_artifact 仅允许当前会话（含父会话授权链）产物，不接受任意路径。
  * - timeoutMs 必须为正有限整数且 ≤ 上限，非法值显式 invalid_timeout。
@@ -25,10 +46,68 @@ import type { Context, JsonValue } from '@earendil-works/chord'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { int, obj, opt, str } from '@earendil-works/pi-schema'
-import { lstat, readFile, realpath, stat } from 'node:fs/promises'
-import { isAbsolute, resolve, sep } from 'node:path'
+import { lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
+import { delimiter as pathDelimiter, posix, win32 } from 'node:path'
 import { redactJsonValue } from '../redact.js'
 import type { HelmToolDeps } from './tool-deps.js'
+
+/**
+ * Windows 盘符（不区分大小写）：C: / c: 等。
+ */
+const WINDOWS_DRIVE = /^[A-Za-z]:/
+/** Windows 盘符绝对（C:\\x / C:/x：盘符后紧跟分隔符）。 */
+const WINDOWS_DRIVE_ABSOLUTE = /^[A-Za-z]:[\\/]/
+/** Windows 盘符相对（C:relative / 裸 C:）：语义依赖进程当前目录，靶点执行拒绝。 */
+const WINDOWS_DRIVE_RELATIVE = /^[A-Za-z]:($|[^\\/])/
+
+/**
+ * 目标路径形状（按路径自身形式判定，与 Hub 宿主平台无关）：
+ * - 'posix'：以 / 开头的 POSIX 绝对路径；
+ * - 'win32'：Windows 盘符绝对（C:\\x / C:/x）或 UNC / 根反斜杠（\\\\server\\\\share）；
+ * - undefined：相对路径（跟随会话 cwd 靶点的形状）。
+ */
+export function targetPathShape(p: string): 'posix' | 'win32' | undefined {
+  if (p.startsWith('/')) return 'posix'
+  if (p.startsWith('\\') || WINDOWS_DRIVE_ABSOLUTE.test(p)) return 'win32'
+  return undefined
+}
+
+/** 按形状选纯路径规则（供 routes/runtime 复用；不依赖 Hub 宿主平台）。 */
+export function pathRulesForShape(shape: 'posix' | 'win32' | undefined): typeof posix | typeof win32 {
+  return shape === 'win32' ? win32 : posix
+}
+
+/** 目标路径是否绝对（POSIX / 开头、Windows 盘符绝对或 UNC / 根反斜杠）。 */
+export function isAbsoluteTargetPath(p: string): boolean {
+  return p.startsWith('/') || p.startsWith('\\') || WINDOWS_DRIVE_ABSOLUTE.test(p)
+}
+
+/**
+ * 按目标形状解析绝对路径：base 必须与 raw 同形状（或 raw 为相对路径）；
+ * 盘符相对路径（C:relative / 裸 C:）一律拒绝（依赖进程 cwd，语义不可预测）。
+ */
+export function resolveTargetPath(raw: string, base: string): { ok: true; abs: string } | { ok: false; reason: string } {
+  if (WINDOWS_DRIVE.test(raw) && WINDOWS_DRIVE_RELATIVE.test(raw)) {
+    return { ok: false, reason: `盘符相对路径依赖进程当前目录，拒绝：${raw}` }
+  }
+  const shape = targetPathShape(raw) ?? targetPathShape(base)
+  const rules = pathRulesForShape(shape)
+  return { ok: true, abs: rules.resolve(base, raw) }
+}
+
+/**
+ * containment（词法）：target 是否等于 base 或在 base 之下。
+ * 用 target 自身形状的纯规则；base 为根目录（/ 或 C:\\）时不叠加分隔符
+ * （base + sep 会形成 '//' 错误前缀，误拒根目录下合法文件）。
+ */
+export function isWithinBase(target: string, base: string): boolean {
+  const shape = targetPathShape(target)
+  const baseShape = targetPathShape(base)
+  if (shape && baseShape && shape !== baseShape) return false
+  const rules = pathRulesForShape(shape ?? baseShape)
+  const relative = rules.relative(base, target)
+  return relative === '' || (relative !== '..' && !relative.startsWith('..' + rules.sep) && !rules.isAbsolute(relative))
+}
 
 const DEFAULT_TIMEOUT_MS = 120_000
 /** timeoutMs 上限：与默认值同量级，防超大值变相无限等待。 */
@@ -72,9 +151,16 @@ export async function runShell(
   options: {
     cwd?: string
     conversationId?: number
+    /** 目标计算节点（缺省经会话绑定解析，再缺省 'local'）。 */
+    nodeId?: string
     timeoutMs?: number
     signal?: AbortSignal
     maxOutputBytes?: number
+    /**
+     * 逐块流式回调（stdout/stderr 按到达序；聚合上限仍生效）：
+     * POST /api/env/exec 的 NDJSON 流式模式用，不影响聚合脱敏语义。
+     */
+    onOutputChunk?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void
     /**
      * 调用方注入环境（如 herdr 插件的 Profile.runtime.env + 管理环境）：
      * 覆盖 process.env 同名项，但受管变量（HELM_* 与受管 token）仍固定覆盖。
@@ -86,9 +172,47 @@ export async function runShell(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   assertTimeoutMs(timeoutMs)
   const maxOutputBytes = options.maxOutputBytes ?? MAX_OUTPUT_BYTES
-  const env = buildToolEnv(deps, cwd, options.conversationId, options.env)
-  // 每次 exec 独立 env 实例：activeChildPids 等可变状态不跨调用共享。
-  const shell = new NodeExecutionEnv({ cwd, shellPath: '/bin/bash' })
+  // 节点解析：显式 nodeId > 会话绑定（nodeIdOf） > 'local'。
+  const explicitNodeId = options.nodeId ?? (options.conversationId !== undefined ? deps.nodeIdOf?.(options.conversationId) : undefined)
+  const nodeId = explicitNodeId ?? 'local'
+  // 宿主继承 HELM_TOKEN 兜底脱敏：runShell 是公共 API，调用方（如测试）
+  // 可能未把它登记进 deps.redact——自行捕获并对一切返回文本精确替换
+  // （与生产 Runtime 的 addRedaction 同效；不打印 secret 本身）。
+  const hostToken = process.env['HELM_TOKEN']
+  const redactAll = (text: string): string => {
+    const base = deps.redact(text)
+    return hostToken !== undefined && hostToken !== '' ? base.split(hostToken).join('[REDACTED]') : base
+  }
+  // 远端节点：经 EnvFabric 的 RemoteExecutionEnv 执行（绝不回退 local）；
+  // 配置缺失（envFabric 未注入）与节点离线分别显式失败，绝不 fallthrough local。
+  if (nodeId !== 'local') {
+    if (deps.envFabric === undefined) {
+      return {
+        ok: false,
+        exitCode: null,
+        output: `env_fabric_missing: 节点 ${nodeId} 为远端但 EnvFabric 未注入（无法建立远端执行，绝不回退本机）`,
+        timedOut: false,
+        signal: null,
+      }
+    }
+    if (!deps.envFabric.isOnline(nodeId)) {
+      return {
+        ok: false,
+        exitCode: null,
+        output: `node_offline: 节点 ${nodeId} 离线或未接入，无法在远端执行命令（绝不回退本机执行）`,
+        timedOut: false,
+        signal: null,
+      }
+    }
+  }
+  const env = buildToolEnv(deps, cwd, options.conversationId, options.env, nodeId)
+  // 每次 exec 独立 env 实例：activeChildPids 等可变状态不跨调用共享；
+  // 远端使用 fabric 的靶点底座（同一连接、逐命令选项隔离）；本机不硬编码
+  // shell 路径（SDK 按平台自动解析可用 shell；Windows 不假设 /bin/bash）。
+  const shell =
+    nodeId !== 'local' && deps.envFabric !== undefined
+      ? deps.envFabric.envFor(nodeId, cwd)
+      : new NodeExecutionEnv({ cwd })
   // 到达顺序聚合（stdout/stderr 混排按真实到达序，非先 stdout 后 stderr）。
   // 秘密脱敏在聚合全文上做：跨 chunk 撕裂的秘密在完整拼接后必然完整匹配。
   let combined = ''
@@ -99,8 +223,22 @@ export async function runShell(
     {
       cwd,
       env,
+      // local：env 已是完整合成结果（buildToolEnv 复制 process.env 基底并
+      // 完成 剥除/覆盖）：SDK 二次 inheritEnv=true 会把已删除的宿主
+      // HELM_TOKEN 重新带回（真实回归，见 tools.test.ts），故显式 false。
+      // 远端：inheritEnv=true 让节点守护进程合并节点宿主基底（节点真实
+      // PATH/HOME 工具链）并剥除节点宿主 HELM_TOKEN（daemon 侧过滤），
+      // input.env（受管合成）最后覆盖；绝不合成默认 PATH 覆盖节点工具链。
+      inheritEnv: nodeId === 'local' ? false : true,
       timeout: timeoutMs / 1000,
-      onOutput: (text) => {
+      onOutput: (text, _ctx, info) => {
+        if (options.onOutputChunk !== undefined && !exceeded) {
+          try {
+            options.onOutputChunk({ stream: info.stream, text })
+          } catch {
+            // 流式回调故障不影响聚合。
+          }
+        }
         if (exceeded) return
         outputBytes += Buffer.byteLength(text, 'utf8')
         if (outputBytes > maxOutputBytes) {
@@ -113,11 +251,23 @@ export async function runShell(
     },
     contextWithSignal(options.signal),
   )
+  if (!result.ok) {
+    // 远端断线：命令已启动、结果未知——error.code 为 unknown，绝不重试。
+    if (result.error.code === 'unknown') {
+      return {
+        ok: false,
+        exitCode: null,
+        output: redactAll(combined + (combined === '' ? '' : '\n') + `[shell unknown: ${result.error.message}]`),
+        timedOut: false,
+        signal: null,
+      }
+    }
+  }
   if (exceeded) {
     return {
       ok: false,
       exitCode: null,
-      output: deps.redact(
+      output: redactAll(
         `output_limit_exceeded: 输出超过 ${maxOutputBytes} 字节上限，已放弃聚合。` +
           '请重定向到文件后用 read 分页读取，或收窄命令输出。',
       ),
@@ -133,7 +283,7 @@ export async function runShell(
     return {
       ok: false,
       exitCode: null,
-      output: deps.redact(
+      output: redactAll(
         combined + (combined === '' ? '' : '\n') + `[shell ${label}: ${error.message}]`,
       ),
       timedOut,
@@ -143,7 +293,7 @@ export async function runShell(
   return {
     ok: result.value.exitCode === 0,
     exitCode: result.value.exitCode,
-    output: deps.redact(combined),
+    output: redactAll(combined),
     timedOut: false,
     signal: null,
   }
@@ -161,6 +311,7 @@ export async function runGate(
   options: {
     cwd?: string
     conversationId?: number
+    nodeId?: string
     signal?: AbortSignal
     env?: Record<string, string>
   } = {},
@@ -175,44 +326,85 @@ export function buildToolEnv(
   cwd: string,
   conversationId?: number,
   extraEnv?: Record<string, string>,
+  nodeId: string = 'local',
 ): Record<string, string> {
-  // bash 等本机工具继承 process.env（PATH/HOME 等宿主环境）；调用方注入的
-  // extraEnv（如 herdr 插件组装的 Profile.runtime.env + 管理环境）覆盖基底，
-  // 受管变量最后固定覆盖（HELM_CWD/HELM_TOKEN 等不可被外部注入劫持）。
-  // process.env 值类型含 undefined：逐项拷贝真实字符串，跳过空值项。
-  const managed = buildManagedEnv(deps, cwd, conversationId)
-  const env: Record<string, string> = {}
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) env[key] = value
+  const managed = buildManagedEnv(deps, cwd, conversationId, nodeId)
+  if (nodeId === 'local') {
+    // local：bash 等本机工具继承 process.env（PATH/HOME 等宿主环境）；调用方
+    // 注入的 extraEnv（如 herdr 插件组装的 Profile.runtime.env + 管理环境）
+    // 覆盖基底，受管变量最后固定覆盖（HELM_CWD/HELM_TOKEN 等不可被外部注入
+    // 劫持）。process.env 值类型含 undefined：逐项拷贝真实字符串，跳过空值项。
+    const env: Record<string, string> = {}
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined) env[key] = value
+    }
+    // helm CLI 包装目录前置注入 PATH（受管子进程可直接运行 helm）；
+    // 分隔符用 path.delimiter（Windows 宿主为 ';'，不硬编码 ':'）。
+    if (deps.cliBinDir !== undefined) {
+      env['PATH'] = `${deps.cliBinDir}${env['PATH'] !== undefined ? pathDelimiter + env['PATH'] : ''}`
+    }
+    if (extraEnv !== undefined) Object.assign(env, extraEnv)
+    Object.assign(env, managed)
+    // 无受管 token 时剥除一切来源的 HELM_TOKEN（宿主继承与 extraEnv 注入均不透传）。
+    // Windows 环境变量名大小写不敏感：helm_token / Helm_Token 同名变体一并剥除
+    //（统一按大写比较；受管 token 随后固定覆写权威值）。
+    if (!('HELM_TOKEN' in managed)) {
+      for (const key of Object.keys(env)) {
+        if (key.toUpperCase() === 'HELM_TOKEN') delete env[key]
+      }
+    }
+    return env
   }
-  if (extraEnv !== undefined) Object.assign(env, extraEnv)
+  // 远端节点：绝不携带 Hub 宿主 process.env，也绝不合成默认 PATH——节点
+  // 守护进程自身合并节点宿主基底（真实 PATH/HOME 工具链，含 daemon 已前置
+  // 的本机 helm bin）并剥除节点宿主 HELM_TOKEN，再叠加逐调用 extraEnv 与受管
+  // 绑定键；Hub 侧合成默认 PATH 会覆盖节点真实工具链（helm command not found
+  // 的真实根因）。无受管 token 时不注入 HELM_TOKEN（宿主凭据绝不跨节点泄漏）。
+  const env: Record<string, string> = { ...(extraEnv ?? {}) }
   Object.assign(env, managed)
-  // 无受管 token 时剥除一切来源的 HELM_TOKEN（宿主继承与 extraEnv 注入均不透传）。
-  if (!('HELM_TOKEN' in managed)) delete env['HELM_TOKEN']
+  // 大小写变体一并剥除（Windows env 名大小写不敏感；无受管 token 时绝不透传）。
+  if (!('HELM_TOKEN' in managed)) {
+    for (const key of Object.keys(env)) {
+      if (key.toUpperCase() === 'HELM_TOKEN') delete env[key]
+    }
+  }
   return env
 }
 
 /**
  * 宿主受管环境变量（不含 process.env）：会话 SecretStash 注入 + 固定覆盖的
- * HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID / HELM_CWD / HELM_DATA_DIR，
- * 以及受管 HELM_TOKEN（无受管 token 时绝不透传同名继承值）。
- * bash 工具（继承 process.env）与外部 spawn env（远端/新窗格，不携带宿主
- * 进程环境）共用此构造，保证两边管理变量语义一致。
+ * HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID / HELM_CWD /（仅 local）
+ * HELM_DATA_DIR，以及受管 HELM_TOKEN（无受管 token 时绝不透传同名继承值）。
+ * local（继承 process.env）与远端（不携带宿主进程环境）共用此构造。
+ * 远端专用语义：
+ * - HELM_HUB_URL 仅取节点 register 时上报的真实回连地址（守恒）；节点未上报
+ *   时省略该键（daemon 侧保持其 shellEnv 的真实 hubUrl），绝不 fallback
+ *   deps.hubUrl（那可能是 Hub 本机 127.0.0.1，远端不可达）；
+ * - HELM_DATA_DIR 是 Hub 本机路径，不注入远端（防节点误用 Hub 磁盘路径）；
+ * - HELM_TOKEN 为 Hub 进程受管 token：远端子进程凭它经 HTTP 回连 Hub 鉴权
+ *  （verifyToken 认进程内摘要；诚实边界：token 会出现在远端机器内存/环境，
+ *   与本机子进程同权，不承诺对远端机器零泄漏）。
  */
 export function buildManagedEnv(
   deps: HelmToolDeps,
   cwd: string,
   conversationId?: number,
+  nodeId: string = 'local',
 ): Record<string, string> {
   const stashEnv = conversationId === undefined ? {} : deps.stashEnvFor(conversationId)
   const managedToken = deps.processToken?.()
+  // 远端回连地址守恒：仅用节点注册时上报的真实 hubUrl；未上报则省略该键，
+  // 绝不 fallback deps.hubUrl（Hub 本机地址对远端不可达）。
+  const nodeHubUrl = nodeId !== 'local' ? deps.envFabric?.getNodeHubUrl(nodeId) : undefined
+  const hubUrl = nodeId === 'local' ? deps.hubUrl : nodeHubUrl
   const env: Record<string, string> = {
     ...stashEnv,
     HELM_ENV: '1',
-    HELM_HUB_URL: deps.hubUrl,
+    ...(hubUrl !== undefined ? { HELM_HUB_URL: hubUrl } : {}),
     HELM_CONVERSATION_ID: String(conversationId ?? 0),
     HELM_CWD: cwd,
-    HELM_DATA_DIR: deps.dataDir,
+    ...(nodeId === 'local' ? { HELM_DATA_DIR: deps.dataDir } : {}),
+    HELM_NODE_ID: nodeId,
   }
   if (managedToken === undefined) delete env['HELM_TOKEN']
   else env['HELM_TOKEN'] = managedToken
@@ -235,7 +427,7 @@ export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bash
   return defineTool({
     name: 'bash',
     description:
-      '在本机 bash 中执行命令。工作目录为会话 cwd；超时默认 120 秒；输出超 32KiB 自动 spill 为产物并返回预览（用 read_artifact 读取全文）；输出超 1MiB 显式失败。',
+      '在会话绑定节点的 shell 中执行命令（local 为 Hub 本机；远端节点在目标节点执行）。工作目录为会话 cwd；超时默认 120 秒；输出超 32KiB 自动 spill 为产物并返回预览（用 read_artifact 读取全文）；输出超 1MiB 显式失败。',
     parameters: bashParameters,
     structuredOutputSchema: {
       type: 'object',
@@ -292,12 +484,12 @@ const readParameters = obj({
   path: str({ description: '文件路径（相对会话 cwd）' }),
 })
 
-/** read 工具：按会话 cwd 相对路径安全读取文本文件（realpath 拦截软链越界）。 */
+/** read 工具：按会话 (nodeId, cwd) 安全读取文本文件（realpath 拦截软链越界；远端经 env RPC）。 */
 export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof readParameters, never> {
   return defineTool({
     name: 'read',
     description:
-      '读取文本文件内容；路径相对会话 cwd，拒绝越界绝对路径、../ 逃逸与软链指向目录外的目标；单文件上限 128KiB（超限请用 bash + read_artifact 分页）。',
+      '读取文本文件内容；路径相对会话 cwd，拒绝越界绝对路径、../ 逃逸与软链指向目录外的目标；单文件上限 128KiB（超限请用 bash + read_artifact 分页）；会话绑定远端节点时在目标节点读取。',
     parameters: readParameters,
     structuredOutputSchema: {
       type: 'object',
@@ -307,17 +499,124 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
       },
       required: ['path', 'content'],
     } as never,
-    async execute(args, api, _context) {
+    async execute(args, api, context) {
       const raw = args.path
       const agent = await api.agent(BACKGROUND_CONTEXT)
-      const base = resolve(agent.cwd ?? deps.defaultCwd)
+      // 路径语义按会话 cwd 靶点形状（POSIX/Windows）解析，绝不用 Hub 宿主
+      // node:path 默认规则解析远端路径（Linux Hub 上 resolve('C:\\x') 会得到
+      // 错误结果）；api.agent 与工具共享同一 SDK Context（cancel 传播到远端）。
+      const sessionId = agent.cwd ?? deps.defaultCwd
+      const nodeId = deps.nodeIdOf?.(api.conversationId as number) ?? 'local'
+      if (!isAbsoluteTargetPath(sessionId)) {
+        return {
+          output: [
+            { type: 'text', text: `read_failed: 会话 cwd 非绝对路径（${sessionId}），拒绝读取` },
+          ],
+          isError: true,
+        }
+      }
+      const resolvedR = resolveTargetPath(raw, sessionId)
+      if (!resolvedR.ok) {
+        return { output: [{ type: 'text', text: `path_escape_denied: ${resolvedR.reason}` }], isError: true }
+      }
+      const lexicalAbs = resolvedR.abs
+      if (!isWithinBase(lexicalAbs, sessionId)) {
+        return {
+          output: [
+            {
+              type: 'text',
+              text: `path_escape_denied: ${raw}（解析为 ${lexicalAbs}，越出会话 cwd ${sessionId}）`,
+            },
+          ],
+          isError: true,
+        }
+      }
       try {
-        // realpath 解析两侧再 containment：lexical 前缀检查绕不过软链。
+        if (nodeId !== 'local') {
+          if (deps.envFabric === undefined) {
+            return {
+              output: [
+                {
+                  type: 'text',
+                  text: `env_fabric_missing: 节点 ${nodeId} 为远端但 EnvFabric 未注入（无法读取远端文件，绝不回退本机）`,
+                },
+              ],
+              isError: true,
+            }
+          }
+          // 远端节点：经 env RPC 的 canonicalPath + fileInfo + readTextFile。
+          if (!deps.envFabric.isOnline(nodeId)) {
+            return {
+              output: [{ type: 'text', text: `node_offline: 节点 ${nodeId} 离线，无法读取远端文件（绝不回退本机）` }],
+              isError: true,
+            }
+          }
+          const env = deps.envFabric.envFor(nodeId, sessionId)
+          const baseRealR = await env.canonicalPath(sessionId, context)
+          if (!baseRealR.ok) throw new Error(baseRealR.error.message)
+          const baseReal = baseRealR.value
+          const targetRealR = await env.canonicalPath(lexicalAbs, context)
+          if (!targetRealR.ok) throw new Error(targetRealR.error.message)
+          const targetReal = targetRealR.value
+          if (!isWithinBase(targetReal, baseReal)) {
+            return {
+              output: [
+                {
+                  type: 'text',
+                  text: `path_escape_denied: ${raw}（基准目录 ${baseReal}，canonicalPath 后越界）`,
+                },
+              ],
+              isError: true,
+            }
+          }
+          const infoR = await env.fileInfo(targetReal, context)
+          if (!infoR.ok) throw new Error(infoR.error.message)
+          if (infoR.value.kind === 'directory') {
+            return {
+              output: [{ type: 'text', text: `read_failed: ${raw} 是目录，read 仅支持普通文件` }],
+              isError: true,
+            }
+          }
+          if (infoR.value.kind !== 'file') {
+            return {
+              output: [
+                { type: 'text', text: `read_failed: ${raw} 不是普通文件（kind=${infoR.value.kind}）` },
+              ],
+              isError: true,
+            }
+          }
+          if (infoR.value.size > READ_FILE_MAX_BYTES) {
+            return {
+              output: [
+                {
+                  type: 'text',
+                  text:
+                    `file_too_large: ${raw} 为 ${infoR.value.size} 字节，超过 read 工具 ${READ_FILE_MAX_BYTES} 字节上限。` +
+                    '请用 bash 命令输出到文件后经 read_artifact 分页读取，或用 head/tail/sed 取所需片段。',
+                },
+              ],
+              isError: true,
+            }
+          }
+          const contentR = await env.readTextFile(targetReal, context)
+          if (!contentR.ok) throw new Error(contentR.error.message)
+          const content = deps.redact(contentR.value)
+          const spill = await deps.artifacts.spill(
+            api.conversationId as number,
+            `read-${api.callId}`,
+            content,
+          )
+          return {
+            output: [{ type: 'text', text: spill.text }],
+            structuredOutput: { path: raw, content: spill.text } as JsonValue,
+          }
+        }
+        // local 节点：进程内 fs（realpath 解析两侧再 containment：lexical 前缀检查绕不过软链）。
         const [baseReal, targetReal] = await Promise.all([
-          realpath(base),
-          realpath(isAbsolute(raw) ? resolve(raw) : resolve(base, raw)),
+          realpath(sessionId),
+          realpath(lexicalAbs),
         ])
-        if (targetReal !== baseReal && !targetReal.startsWith(baseReal + sep)) {
+        if (!isWithinBase(targetReal, baseReal)) {
           return {
             output: [
               {
@@ -378,6 +677,364 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
       }
     },
   })
+}
+
+/**
+ * write/edit 共享：解析会话靶点 (nodeId, cwd)。
+ * 会话 cwd 按其自身形状（POSIX/Windows）保留原样，绝不用 Hub 宿主 resolve
+ * 污染（远端节点可能是 Windows 靶点，Hub 在 Linux 上 resolve 会得到错误结果）。
+ */
+function resolveToolTarget(
+  deps: HelmToolDeps,
+  api: { agent(cwd: unknown): Promise<{ cwd?: string }>; conversationId: number | string },
+): { nodeId: string; base: string } | { error: string } {
+  // 同步取 agent cwd：read/write/edit 的 makeApi 测试替身与 SDK 契约均为
+  // Promise<agent>；resolveToolTarget 改为 async 后由调用方 await。
+  return (async () => {
+    const agent = await api.agent(BACKGROUND_CONTEXT)
+    const base = agent.cwd ?? deps.defaultCwd
+    if (!isAbsoluteTargetPath(base)) {
+      return { error: `会话 cwd 非绝对路径（${base}），拒绝文件操作` }
+    }
+    const nodeId = deps.nodeIdOf?.(api.conversationId as number) ?? 'local'
+    return { nodeId, base }
+  })() as never
+}
+
+/**
+ * 靶点内路径安全解析：拒绝越出 base 的绝对路径与 `..` 逃逸。
+ * 词法解析与 containment 一律按目标路径形状的纯 posix/win32 规则
+ * （绝不用 Hub 宿主 path 默认规则解析远端路径）；基准为根目录时不叠加
+ * 分隔符（防 '//' 前缀误拒）。已存在目标经 canonicalPath/realpath 后再做
+ * containment（软链越界拒绝）；新文件（不存在）逐级向上找最近已存在祖先
+ * 并校验其真实路径仍在 base 内——但权限错误（permission_denied）绝不当
+ * 「不存在」处理（显式上抛，不静默误判）。
+ */
+async function resolveWritableTarget(
+  env: {
+    canonicalPath(
+      path: string,
+      ctx: Context,
+    ): Promise<{ ok: true; value: string } | { ok: false; error: { code: string; message: string } }>
+  },
+  raw: string,
+  base: string,
+  context: Context,
+): Promise<{ ok: true; abs: string; baseReal: string } | { ok: false; message: string }> {
+  // 词法预检：拒绝任何形式的越界输入（绝对路径仅允许 base 内部）；
+  // 盘符相对路径（C:relative）在此显式拒绝。
+  const resolvedR = resolveTargetPath(raw, base)
+  if (!resolvedR.ok) return { ok: false, message: `path_escape_denied: ${resolvedR.reason}` }
+  const absolute = resolvedR.abs
+  if (!isWithinBase(absolute, base)) {
+    return {
+      ok: false,
+      message: `path_escape_denied: ${raw}（解析为 ${absolute}，越出会话 cwd ${base}）`,
+    }
+  }
+  const baseRealR = await env.canonicalPath(base, context)
+  if (!baseRealR.ok) return { ok: false, message: `read_failed: 无法解析会话 cwd（${baseRealR.error.message}）` }
+  const baseReal = baseRealR.value
+  const targetRealR = await env.canonicalPath(absolute, context)
+  if (targetRealR.ok) {
+    const targetReal = targetRealR.value
+    if (!isWithinBase(targetReal, baseReal)) {
+      return {
+        ok: false,
+        message: `path_escape_denied: ${raw}（基准目录 ${baseReal}，canonicalPath 后越界；拒绝软链指向 cwd 外的目标）`,
+      }
+    }
+    return { ok: true, abs: targetReal, baseReal }
+  }
+  // 目标不存在：允许在 cwd 内创建新文件（词法 containment 已过）；
+  // 逐级向上找最近的已存在祖先并校验其真实路径仍在 base 内（防软链中转逃逸）。
+  // 权限错误（permission_denied）不是「不存在」：显式上抛，绝不误当缺失父目录。
+  // dirname 按目标形状规则（win32 靶点下反斜杠才是分隔符；posix.dirname 会把
+  // 'C:\workspace\src' 当无分隔符字符串，探测链会立即走错）。
+  const rules = pathRulesForShape(targetPathShape(absolute) ?? targetPathShape(base))
+  let probe = rules.dirname(absolute)
+  for (let depth = 0; depth < 64; depth += 1) {
+    const probeR = await env.canonicalPath(probe, context)
+    if (probeR.ok) {
+      if (!isWithinBase(probeR.value, baseReal)) {
+        return {
+          ok: false,
+          message: `path_escape_denied: ${raw}（祖先目录 ${probe} 经软链越出会话 cwd，拒绝写入）`,
+        }
+      }
+      return { ok: true, abs: absolute, baseReal }
+    }
+    if (probeR.error.code === 'permission_denied') {
+      return {
+        ok: false,
+        message: `write_failed: 无权探测祖先目录 ${probe}（${probeR.error.message}）`,
+      }
+    }
+    const parent = rules.dirname(probe)
+    if (parent === probe) break
+    probe = parent
+  }
+  return { ok: true, abs: absolute, baseReal }
+}
+
+const writeParameters = obj({
+  path: str({ description: '目标文件路径（相对会话 cwd；允许在 cwd 内创建新文件或子目录）' }),
+  content: str({ description: '要写入的 UTF-8 文本内容（整体覆盖）' }),
+})
+
+/** write 工具：在会话 (nodeId, cwd) 内安全写入文本文件（拒绝越界与软链逃逸）。 */
+export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof writeParameters, never> {
+  return defineTool({
+    name: 'write',
+    description:
+      '写入 UTF-8 文本文件（整体覆盖）。路径相对会话 cwd；允许在 cwd 内创建新文件或子目录；拒绝越出 cwd 的绝对路径、../ 逃逸与指向 cwd 外的软链；会话绑定远端节点时在目标节点写入。',
+    parameters: writeParameters,
+    structuredOutputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        bytesWritten: { type: 'number' },
+      },
+      required: ['path', 'bytesWritten'],
+    } as never,
+    async execute(args, api, context) {
+      const target0 = await resolveToolTarget(deps, api as never)
+      if ('error' in target0) {
+        return { output: [{ type: 'text', text: `write_failed: ${target0.error}` }], isError: true }
+      }
+      const { nodeId, base } = target0
+      try {
+        if (nodeId !== 'local') {
+          if (deps.envFabric === undefined) {
+            return {
+              output: [
+                {
+                  type: 'text',
+                  text: `env_fabric_missing: 节点 ${nodeId} 为远端但 EnvFabric 未注入（无法写入远端文件，绝不回退本机）`,
+                },
+              ],
+              isError: true,
+            }
+          }
+          if (!deps.envFabric.isOnline(nodeId)) {
+            return {
+              output: [{ type: 'text', text: `node_offline: 节点 ${nodeId} 离线，无法写入远端文件（绝不回退本机）` }],
+              isError: true,
+            }
+          }
+          const env = deps.envFabric.envFor(nodeId, base)
+          const target = await resolveWritableTarget(env, args.path, base, context)
+          if (!target.ok) {
+            return { output: [{ type: 'text', text: target.message }], isError: true }
+          }
+          const bytes = Buffer.byteLength(args.content, 'utf8')
+          // 新文件的父目录可能不存在：先确保目录（recursive，仍在 containment 内）；
+          // dirname 按目标形状规则（win32 反斜杠分隔符）。
+          const parent = pathRulesForShape(targetPathShape(target.abs)).dirname(target.abs)
+          const mkdirResult = await env.createDir(parent, { recursive: true }, context)
+          if (!mkdirResult.ok) throw new Error(mkdirResult.error.message)
+          const writeResult = await env.writeFile(target.abs, args.content, context)
+          if (!writeResult.ok) throw new Error(writeResult.error.message)
+          return {
+            output: [{ type: 'text', text: `write_ok: ${args.path}（${bytes} 字节）` }],
+            structuredOutput: { path: args.path, bytesWritten: bytes } as JsonValue,
+          }
+        }
+        // local 节点：进程内 fs。
+        const target = await resolveWritableTarget(
+          {
+            canonicalPath: async (p, _ctx) => {
+              try {
+                return { ok: true, value: await realpath(p) }
+              } catch (error) {
+                const code = (error as { code?: string }).code
+                return {
+                  ok: false,
+                  error: {
+                    // EACCES/EPERM 归一为 permission_denied（探测链区分「无权」与「不存在」）。
+                    code: code === 'EACCES' || code === 'EPERM' ? 'permission_denied' : 'not_found',
+                    message: String(error),
+                  },
+                }
+              }
+            },
+          },
+          args.path,
+          base,
+          context,
+        )
+        if (!target.ok) {
+          return { output: [{ type: 'text', text: target.message }], isError: true }
+        }
+        const bytes = Buffer.byteLength(args.content, 'utf8')
+        await mkdir(pathRulesForShape(targetPathShape(target.abs)).dirname(target.abs), { recursive: true })
+        await writeFile(target.abs, args.content, 'utf8')
+        return {
+          output: [{ type: 'text', text: `write_ok: ${args.path}（${bytes} 字节）` }],
+          structuredOutput: { path: args.path, bytesWritten: bytes } as JsonValue,
+        }
+      } catch (error) {
+        return {
+          output: [{ type: 'text', text: `write_failed: ${deps.redact(String(error))}` }],
+          isError: true,
+        }
+      }
+    },
+  })
+}
+
+const editParameters = obj({
+  path: str({ description: '目标文件路径（相对会话 cwd）' }),
+  oldText: str({ description: '要被替换的精确文本（必须在文件中恰好出现一次）' }),
+  newText: str({ description: '替换后的文本' }),
+})
+
+/**
+ * edit 工具：精确文本替换。oldText 必须在目标文件中唯一精确匹配（不存在
+ * 或出现多次均显式报错，绝不模糊替换或静默跳过）；替换后写回原文件。
+ */
+export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof editParameters, never> {
+  return defineTool({
+    name: 'edit',
+    description:
+      '精确替换文件文本片段。oldText 必须在文件中恰好出现一次（不存在或多次出现均报错）；路径相对会话 cwd，拒绝越界；会话绑定远端节点时在目标节点读取与写回。',
+    parameters: editParameters,
+    structuredOutputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        replaced: { type: 'boolean' },
+      },
+      required: ['path', 'replaced'],
+    } as never,
+    async execute(args, api, context) {
+      const target0 = await resolveToolTarget(deps, api as never)
+      if ('error' in target0) {
+        return { output: [{ type: 'text', text: `edit_failed: ${target0.error}` }], isError: true }
+      }
+      const { nodeId, base } = target0
+      try {
+        if (nodeId !== 'local') {
+          if (deps.envFabric === undefined) {
+            return {
+              output: [
+                {
+                  type: 'text',
+                  text: `env_fabric_missing: 节点 ${nodeId} 为远端但 EnvFabric 未注入（无法编辑远端文件，绝不回退本机）`,
+                },
+              ],
+              isError: true,
+            }
+          }
+          if (!deps.envFabric.isOnline(nodeId)) {
+            return {
+              output: [{ type: 'text', text: `node_offline: 节点 ${nodeId} 离线，无法编辑远端文件（绝不回退本机）` }],
+              isError: true,
+            }
+          }
+          const env = deps.envFabric.envFor(nodeId, base)
+          const target = await resolveWritableTarget(env, args.path, base, context)
+          if (!target.ok) {
+            return { output: [{ type: 'text', text: target.message }], isError: true }
+          }
+          const readResult = await env.readTextFile(target.abs, context)
+          if (!readResult.ok) throw new Error(readResult.error.message)
+          const count = countOccurrences(readResult.value, args.oldText)
+          if (count === 0) {
+            return {
+              output: [{ type: 'text', text: `edit_failed: oldText 在 ${args.path} 中不存在（拒绝无操作编辑）` }],
+              isError: true,
+            }
+          }
+          if (count > 1) {
+            return {
+              output: [
+                {
+                  type: 'text',
+                  text: `edit_failed: oldText 在 ${args.path} 中出现 ${count} 次（需唯一匹配；请扩大上下文使 oldText 唯一）`,
+                },
+              ],
+              isError: true,
+            }
+          }
+          const updated = readResult.value.replace(args.oldText, args.newText)
+          const writeResult = await env.writeFile(target.abs, updated, context)
+          if (!writeResult.ok) throw new Error(writeResult.error.message)
+          return {
+            output: [{ type: 'text', text: `edit_ok: ${args.path}（已替换 1 处）` }],
+            structuredOutput: { path: args.path, replaced: true } as JsonValue,
+          }
+        }
+        // local 节点：进程内 fs。
+        const target = await resolveWritableTarget(
+          {
+            canonicalPath: async (p, _ctx) => {
+              try {
+                return { ok: true, value: await realpath(p) }
+              } catch (error) {
+                const code = (error as { code?: string }).code
+                return {
+                  ok: false,
+                  error: {
+                    code: code === 'EACCES' || code === 'EPERM' ? 'permission_denied' : 'not_found',
+                    message: String(error),
+                  },
+                }
+              }
+            },
+          },
+          args.path,
+          base,
+          context,
+        )
+        if (!target.ok) {
+          return { output: [{ type: 'text', text: target.message }], isError: true }
+        }
+        const content = await readFile(target.abs, 'utf8')
+        const count = countOccurrences(content, args.oldText)
+        if (count === 0) {
+          return {
+            output: [{ type: 'text', text: `edit_failed: oldText 在 ${args.path} 中不存在（拒绝无操作编辑）` }],
+            isError: true,
+          }
+        }
+        if (count > 1) {
+          return {
+            output: [
+              {
+                type: 'text',
+                text: `edit_failed: oldText 在 ${args.path} 中出现 ${count} 次（需唯一匹配；请扩大上下文使 oldText 唯一）`,
+              },
+            ],
+            isError: true,
+          }
+        }
+        const updated = content.replace(args.oldText, args.newText)
+        await writeFile(target.abs, updated, 'utf8')
+        return {
+          output: [{ type: 'text', text: `edit_ok: ${args.path}（已替换 1 处）` }],
+          structuredOutput: { path: args.path, replaced: true } as JsonValue,
+        }
+      } catch (error) {
+        return {
+          output: [{ type: 'text', text: `edit_failed: ${deps.redact(String(error))}` }],
+          isError: true,
+        }
+      }
+    },
+  })
+}
+
+/** 非重叠出现次数统计（edit 唯一匹配校验用）。 */
+function countOccurrences(haystack: string, needle: string): number {
+  if (needle === '') return 0
+  let count = 0
+  let index = haystack.indexOf(needle)
+  while (index !== -1) {
+    count += 1
+    index = haystack.indexOf(needle, index + needle.length)
+  }
+  return count
 }
 
 const readArtifactParameters = obj({

@@ -4,7 +4,7 @@
  * 与 herdr.test.ts（既有 26 项协议集成）互补，本文件聚焦真实生产调用形状：
  * - 默认 transport 工厂注入执行器（真实 UDS wire fixture 协议验证）；
  * - 冻结连接配置：session/socketPath 同时配置时 session 生效且全部调用一致；
- * - local 事件不误匹配远端同 ID pane；read/focus machine 消歧（歧义 409）；
+ * - local 事件不误匹配远端同 ID pane；read/focus nodeId 消歧（歧义 409）；
  * - 精确 agent.name === 归属（startsWith 不再认领 helm-wf-abcde）；
  * - 真实 resume：standalone 无 agentId 续接 paneId、workflow 无 agentType 续接、
  *   跨 workflow 轨道/父会话/busy/settled/未知/歧义拒绝、cwd/kind 冲突显式拒绝、
@@ -64,7 +64,7 @@ interface PaneState {
  * 真实形状受控 transport：
  * - agent.start 遵循真实启动序列（unknown + launch_pending，除非 startReady）；
  * - agent.focus 返回 agent_info + focused（服务端 agents.rs:35-41）；
- * - machine target 分桶（跨机器同 ID pane 可构造）。
+ * - nodeId target 分桶（跨节点同 ID pane 可构造）。
  */
 class FakeTransport implements HerdrTransport {
   panes = new Map<string, PaneState>()
@@ -627,7 +627,7 @@ test('冻结连接：显式 socket 优先且全部调用（命令/事件/对账/
   }
 })
 
-test('local 事件不误匹配远端同 ID pane；read/focus machine 消歧；歧义 409', { timeout: 60_000 }, async () => {
+test('local 事件不误匹配远端同 ID pane；read/focus nodeId 消歧；歧义 409', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     // 构造：本机与远端同 paneId，远端 blocked。
@@ -643,40 +643,40 @@ test('local 事件不误匹配远端同 ID pane；read/focus machine 消歧；�
     // read：未歧义时正常。
     const read = (await env.host.invokeAction('builtin:herdr', 'read', { paneId: pane.paneId })) as { text: string }
     assert.ok(read.text.includes('[REDACTED]'))
-    // 远端同 ID pane 登记后：read 不带 machine 显式 409。
-    // （通过 doc 直改太深；改用两个 spawn 不同 machine 构造同 paneId 不可行——
+    // 远端同 ID pane 登记后：read 不带 nodeId 显式 409。
+    // （通过 doc 直改太深；改用两个 spawn 不同节点构造同 paneId 不可行——
     //  直接以 registry 语义测试：构造第二个启用周期 pane。此处用受控方式：
     //  直接向 docs 写远端 pane 记录并重启插件。）
     const docs = new MemoryDocStore()
     void docs
-    // 简化：同 ID 多机歧义经 list + machine 参数路径验证（resolver 单元已覆盖 409）。
+    // 简化：同 ID 多节点歧义经 list + nodeId 参数路径验证（resolver 单元已覆盖 409）。
   } finally {
     await env.close()
   }
 })
 
-test('歧义 read/focus：跨 machine 同 paneId 显式 409，带 machine 精确路由', { timeout: 60_000 }, async () => {
+test('歧义 read/focus：跨节点同 paneId 显式 409，带 nodeId 精确路由', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     // 本机 spawn 一个 pane。
     scriptSuccess(env, 'local-ok')
     await spawnDirect(env, { agentType: 'herdr:agy' })
     // 远端 spawn 同 paneId 不可直接构造（paneId 自增）——通过手动改远端 pane 命名：
-    // FakeTransport 的 paneId 按 workspace 前缀递增。改为直接验证 machine 路由：
-    // 远端 spawn 一个远端 pane，然后 read 传其 machine。
+    // FakeTransport 的 paneId 按 workspace 前缀递增。改为直接验证 nodeId 路由：
+    // 远端 spawn 一个远端 pane，然后 read 传其 nodeId。
     env.transport.promptStatus = 'done'
     env.transport.onPrompt = (pane, text) => {
       env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileNameOf(text)}`, 'remote-ok')
     }
-    await spawnDirect(env, { agentType: 'herdr:agy@remote-host' })
-    const list = (await env.host.invokeAction('builtin:herdr', 'list', {})) as { panes: Array<{ paneId: string; machine: string }> }
-    const remote = list.panes.find((p) => p.machine === 'remote-host')!
+    await spawnDirect(env, { agentType: 'herdr:agy@remote-node' })
+    const list = (await env.host.invokeAction('builtin:herdr', 'list', {})) as { panes: Array<{ paneId: string; nodeId: string }> }
+    const remote = list.panes.find((p) => p.nodeId === 'remote-node')!
     assert.ok(remote, '远端 pane 已登记')
-    const read = (await env.host.invokeAction('builtin:herdr', 'read', { paneId: remote.paneId, machine: 'remote-host' })) as { machine: string }
-    assert.equal(read.machine, 'remote-host', '带 machine 精确路由远端')
-    // 未知 machine 404。
+    const read = (await env.host.invokeAction('builtin:herdr', 'read', { paneId: remote.paneId, nodeId: 'remote-node' })) as { nodeId: string }
+    assert.equal(read.nodeId, 'remote-node', '带 nodeId 精确路由远端')
+    // 未知节点 404。
     await assert.rejects(
-      env.host.invokeAction('builtin:herdr', 'read', { paneId: remote.paneId, machine: 'no-such-host' }),
+      env.host.invokeAction('builtin:herdr', 'read', { paneId: remote.paneId, nodeId: 'no-such-node' }),
       (e: unknown) => (e as HelmError).status === 404,
     )
   } finally {
@@ -998,7 +998,7 @@ test('远端 Profile 非法 HELM_HUB_URL 显式拒绝；可达 URL 覆盖回连'
   try {
     env.profiles.set('badurl', {
       id: 'badurl',
-      runtime: { kind: 'herdr', agent: 'agy', machine: 'remote-host', env: { HELM_HUB_URL: 'ftp://x' } },
+      runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node', env: { HELM_HUB_URL: 'ftp://x' } },
     })
     await assert.rejects(
       spawnDirect(env, { agentType: 'badurl' }),
@@ -1006,7 +1006,7 @@ test('远端 Profile 非法 HELM_HUB_URL 显式拒绝；可达 URL 覆盖回连'
     )
     env.profiles.set('goodurl', {
       id: 'goodurl',
-      runtime: { kind: 'herdr', agent: 'agy', machine: 'remote-host', env: { HELM_HUB_URL: 'http://10.0.0.5:3202' } },
+      runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node', env: { HELM_HUB_URL: 'http://10.0.0.5:3202' } },
     })
     scriptSuccess(env, 'far-ok')
     await spawnDirect(env, { agentType: 'goodurl' })
@@ -1130,14 +1130,14 @@ test('stop 清理远端可回收 pane（不再整段跳过 remote）', { timeout
     env.transport.onPrompt = (pane, text) => {
       env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileNameOf(text)}`, 'remote-ok')
     }
-    await spawnDirect(env, { agentType: 'herdr:agy@remote-host' })
+    await spawnDirect(env, { agentType: 'herdr:agy@remote-node' })
     // disable 受 liveTasks 409 保护（keepalive 保活语义正确）；服务 stop 路径
     // 经 dispose 触发（与宿主关闭一致）。
     await assert.rejects(env.host.disable('builtin:herdr'), (e: unknown) => (e as HelmError).code === 'plugin_has_live_tasks')
     await env.host.dispose()
     // 远端 pane 也被清理（此前 stop 整段跳过 remote）。
     const closeCalls = env.transport.calls.filter((c) => c.method === 'tab.close')
-    assert.ok(closeCalls.some((c) => c.target.machine === 'remote-host'), '远端 tab.close 真实执行')
+    assert.ok(closeCalls.some((c) => c.target.nodeId === 'remote-node'), '远端 tab.close 真实执行')
     const remotePaneNames = [...env.transport.panes.values()].filter((p) => (p.name ?? '').startsWith('helm-wf-'))
     for (const pane of remotePaneNames) {
       assert.equal(env.transport.tabs.get(pane.tabId)!.closed, true, `远端 pane ${pane.paneId} 已清理`)
@@ -1307,10 +1307,10 @@ test('结算前发现 agent 身份变化时放弃关闭；worktree 只关自建 
   }
 })
 
-test('跨机器相同 paneId 确实产生歧义，machine=local 可明确选本机', { timeout: 60_000 }, async () => {
+test('跨节点相同 paneId 确实产生歧义，nodeId=local 可明确选本机', { timeout: 60_000 }, async () => {
   const docs = new MemoryDocStore()
-  docs.set('builtin:herdr:managed', { version: 1, panes: [undefined, 'remote-host'].map((machine) => ({
-    target: machine === undefined ? {} : { machine }, routing: { kind: 'pi' },
+  docs.set('builtin:herdr:managed', { version: 1, panes: [undefined, 'remote-node'].map((nodeId) => ({
+    target: nodeId === undefined ? {} : { nodeId }, routing: { kind: 'pi' },
     paneId: 'w1:p1', tabId: 'w1:t1', effectiveCwd: '/tmp', agentName: 'helm-wf-owned',
     parentConversationId: 1, outcome: 'failed', createdAt: 1,
   })) })
@@ -1319,10 +1319,10 @@ test('跨机器相同 paneId 确实产生歧义，machine=local 可明确选本�
   const env = await makeEnv({ docs, transport })
   try {
     await assert.rejects(env.host.invokeAction('builtin:herdr', 'read', { paneId: 'w1:p1' }), { code: 'pane_ambiguous' })
-    for (const machine of ['local', 'remote-host']) {
-      const result = await env.host.invokeAction('builtin:herdr', 'read', { paneId: 'w1:p1', machine }) as { machine: string }
-      assert.equal(result.machine, machine)
-      assert.equal(transport.calls.findLast((call) => call.method === 'agent.read')?.target.machine, machine === 'local' ? undefined : machine)
+    for (const nodeId of ['local', 'remote-node']) {
+      const result = await env.host.invokeAction('builtin:herdr', 'read', { paneId: 'w1:p1', nodeId }) as { nodeId: string }
+      assert.equal(result.nodeId, nodeId)
+      assert.equal(transport.calls.findLast((call) => call.method === 'agent.read')?.target.nodeId, nodeId === 'local' ? undefined : nodeId)
     }
   } finally { await env.close() }
 })

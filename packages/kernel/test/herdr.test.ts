@@ -4,7 +4,7 @@
  * 覆盖（协议集成测试——不声称真实模型/SSH 验证）：
  * - 文件交接 A（成功）/B（缺文件自愈一次）/C（两次失败 herdr_output_contract_violation
  *   + 40 行脱敏快照 + pane 保留）；非缺失 IO 错误不自愈；
- * - 双入口（herdr:<kind>[@machine] 前缀与 Profile.runtime）寻址与参数校验、
+ * - 双入口（herdr:<kind>[@nodeId] 前缀与 Profile.runtime）寻址与参数校验、
  *   显式 model/effort 拒绝；
  * - blocked 审批桥：socket 事件与 wait 双路径只建一次 Ask、只发一次键、
  *   Web 回答 CAS 复核、终端先处理 superseded、取消不批准、
@@ -411,7 +411,7 @@ interface Env {
   transport: FakeTransport
   dataDir: string
   profiles: Map<string, Profile>
-  spawnEnvLog: Array<{ conversationId: number; cwd: string }>
+  spawnEnvLog: Array<{ conversationId: number; cwd: string; nodeId?: string }>
   gateLog: Array<{ command: string; cwd?: string; env?: Record<string, string> }>
   resolvedInfos: Array<Record<string, unknown>>
   gateResults: Array<{ ok: boolean; output: string }>
@@ -424,7 +424,7 @@ async function makeEnv(options: { enabled?: boolean; docs?: MemoryDocStore; data
   const docs = options.docs ?? new MemoryDocStore()
   const transport = options.transport ?? new FakeTransport()
   const profiles = new Map<string, Profile>()
-  const spawnEnvLog: Array<{ conversationId: number; cwd: string }> = []
+  const spawnEnvLog: Array<{ conversationId: number; cwd: string; nodeId?: string }> = []
   const gateLog: Array<{ command: string; cwd?: string; env?: Record<string, string> }> = []
   const resolvedInfos: Array<Record<string, unknown>> = []
   const gateResults: Array<{ ok: boolean; output: string }> = []
@@ -434,8 +434,8 @@ async function makeEnv(options: { enabled?: boolean; docs?: MemoryDocStore; data
     createHerdrPlugin({
       defaultCwd: '/tmp/helm-herdr-default',
       profiles: { get: async (id) => profiles.get(id) },
-      buildSpawnEnv: (conversationId, cwd) => {
-        spawnEnvLog.push({ conversationId, cwd })
+      buildSpawnEnv: (conversationId, cwd, nodeId) => {
+        spawnEnvLog.push({ conversationId, cwd, ...(nodeId !== undefined ? { nodeId } : {}) })
         return { HELM_ENV: '1', HELM_HUB_URL: 'http://127.0.0.1:3202', HELM_TOKEN: 'SECRET-TOKEN', HELM_CWD: cwd }
       },
       redact: (text) => text.replaceAll('SECRET-TOKEN', '[REDACTED]').replaceAll('SECRET-VALUE', '[REDACTED]'),
@@ -683,7 +683,7 @@ test('cwd 解析链: request.cwd > profile.workspace > 父会话 cwd > defaultCw
   }
 })
 
-test('非法输入拒绝: 相对 cwd / 非法 kind / machine 注入 / 显式 model / effort', { timeout: 60_000 }, async () => {
+test('非法输入拒绝: 相对 cwd / 非法 kind / nodeId 注入 / 显式 model / effort', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     await assert.rejects(spawnDirect(env, { agentType: 'herdr:agy', cwd: 'relative/path' }), (e: unknown) => (e as HelmError).code === 'validation_error')
@@ -814,15 +814,15 @@ test('Gate 恰好一次 + env 注入（本机 runLocalGate 携带 spawn env）',
   }
 })
 
-test('远端 machine: 全部调用走 SSH target、剥除 loopback HUB_URL/TOKEN、远端 gate', { timeout: 60_000 }, async () => {
+test('远端节点: 全部调用走 nodeId target、剥除 loopback HUB_URL/TOKEN、远端 gate', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     scriptSuccess(env, 'remote-ok')
-    await spawnDirect(env, { agentType: 'herdr:agy@remote-host', gate: 'exit 0' })
+    await spawnDirect(env, { agentType: 'herdr:agy@remote-node', gate: 'exit 0' })
     for (const call of env.transport.calls) {
       // 订阅与对账契约只承诺本机 socket。
       if (call.method === 'events.subscribe' || call.method === 'session.snapshot') continue
-      assert.deepEqual(call.target, { machine: 'remote-host' }, `调用 ${call.method} 走 machine target`)
+      assert.deepEqual(call.target, { nodeId: 'remote-node' }, `调用 ${call.method} 走 nodeId target`)
     }
     const envSent = env.transport.calls.find((c) => c.method === 'tab.create')!.params['env'] as Record<string, string>
     assert.equal('HELM_HUB_URL' in envSent, false)
@@ -830,6 +830,8 @@ test('远端 machine: 全部调用走 SSH target、剥除 loopback HUB_URL/TOKEN
     // 远端 gate 走 transport.runGate（非本机 runLocalGate）。
     assert.equal(env.gateLog.length, 0)
     assert.equal(env.transport.gateRuns, 1)
+    // buildSpawnEnv 收到目标 nodeId（窗格 env 按节点构造）。
+    assert.ok(env.spawnEnvLog.some((e) => e.nodeId === 'remote-node'), '远端窗格 env 按目标 nodeId 构造')
   } finally {
     await env.close()
   }
@@ -840,7 +842,7 @@ test('远端 Profile 显式配置可达 HELM_HUB_URL 时保留回连变量', { t
   try {
     env.profiles.set('far', {
       id: 'far',
-      runtime: { kind: 'herdr', agent: 'agy', machine: 'remote-host', env: { HELM_HUB_URL: 'http://10.0.0.5:3202' } },
+      runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node', env: { HELM_HUB_URL: 'http://10.0.0.5:3202' } },
     })
     scriptSuccess(env, 'far-ok')
     await spawnDirect(env, { agentType: 'far' })
@@ -1139,9 +1141,9 @@ test('actions: list/read/focus（read 40 行脱敏；未知 pane 404）', { time
   try {
     scriptSuccess(env, 'act-ok')
     await spawnDirect(env, { agentType: 'herdr:agy' })
-    const list = (await env.host.invokeAction('builtin:herdr', 'list', {})) as { panes: Array<{ paneId: string; machine: string; outcome: string }> }
+    const list = (await env.host.invokeAction('builtin:herdr', 'list', {})) as { panes: Array<{ paneId: string; nodeId: string; outcome: string }> }
     assert.ok(list.panes.length >= 1)
-    assert.equal(list.panes[0]!.machine, 'local')
+    assert.equal(list.panes[0]!.nodeId, 'local')
     const read = (await env.host.invokeAction('builtin:herdr', 'read', { paneId: list.panes[0]!.paneId })) as { text: string }
     assert.ok(read.text.includes('[REDACTED]'), 'read 脱敏')
     const focus = (await env.host.invokeAction('builtin:herdr', 'focus', { paneId: list.panes[0]!.paneId })) as { focused: boolean }

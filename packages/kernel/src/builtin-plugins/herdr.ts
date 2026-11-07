@@ -11,7 +11,7 @@
  *   真正仍 working/blocked 的保留并报告，绝不伪装结束；keepalive 孤儿可回收；
  *   精确 agent.name === 记录归属验证，身份不符放弃所有权）；
  * - ctx.action list/read/focus（HTTP/CLI 同权 --json；read 40 行脱敏；
- *   focus 为用户显式操作；read/focus 支持 machine 消歧，歧义显式 409）。
+ *   focus 为用户显式操作；read/focus 支持 nodeId 消歧，歧义显式 409）。
  *
  * 连接纪律（一次启用一个冻结连接配置）：
  * - 启用时解析 config.session/socketPath 为冻结 HerdrTarget，所有命令、事件、
@@ -24,10 +24,10 @@
 
 import { HelmError, type PluginDefinition, type WorkflowRunSummary } from '@helm/protocol'
 import { createHerdrTransport } from './herdr/transport.js'
-import type { HerdrConfig, HerdrEvent, HerdrPluginDependencies, HerdrTarget, HerdrTransport } from './herdr/contracts.js'
+import { targetNodeId, type HerdrConfig, type HerdrEvent, type HerdrPluginDependencies, type HerdrTarget, type HerdrTransport } from './herdr/contracts.js'
 import { AskCoordinator, type AskEntry } from './herdr/asks.js'
 import { MetadataProjector } from './herdr/metadata.js'
-import { PaneRegistry, EMPTY_MANAGED_DOC, machineOf, scopeKey, type ManagedDoc, type ManagedPane } from './herdr/panes.js'
+import { PaneRegistry, EMPTY_MANAGED_DOC, nodeIdOf, scopeKey, type ManagedDoc, type ManagedPane } from './herdr/panes.js'
 import { HerdrExecutor } from './herdr/executor.js'
 import {
   assertOkResult,
@@ -36,7 +36,7 @@ import {
   parsePaneRead,
   parseSessionSnapshot,
 } from './herdr/rpc.js'
-import { isValidSessionName, isValidMachineName, resolveSocketPath } from './herdr/transport.js'
+import { isValidSessionName, isValidNodeId, resolveSocketPath } from './herdr/transport.js'
 import { normalizeStartupTimeoutMs } from './herdr/spawn-rules.js'
 import { OverviewProjector, type OverviewDoc } from './herdr/overview.js'
 
@@ -47,7 +47,8 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
     version: '0.1.0',
     definePlugin(ctx) {
       // ---- 状态（每次启用周期重建） ----
-      const transport: HerdrTransport = deps.transport ?? createHerdrTransport({ redact: deps.redact })
+      const transport: HerdrTransport =
+        deps.transport ?? createHerdrTransport({ redact: deps.redact, ...(deps.nodeChannel ? { nodeChannel: deps.nodeChannel } : {}) })
       const asks = new AskCoordinator(() => refreshOverview())
       const registryRef: { current?: PaneRegistry } = {}
       const projectorRef: { current?: MetadataProjector } = {}
@@ -69,7 +70,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
       /** 最近一次 socket 事件处理的 pane seq 缓存（事件去重，agent.get 为权威）。 */
       const eventSeqCache = new Map<string, number>()
       /**
-       * 探针观察水位（本启用周期；scopeKey(machine, paneId) 键）：
+       * 探针观察水位（本启用周期；scopeKey(nodeId, paneId) 键）：
        * stalledMs 口径 = 「最近一次观察到 (status, seq) 变化的时点」至今的时长——
        * 首次观测从 0 起，水位或状态变化重置；探测失败（unreachable）不变更
        * 水位（读失败不是进展证据，停滞继续累计）。注意该口径只反映状态变迁，
@@ -85,6 +86,10 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         parentCwdOf(id: number): string | undefined {
           // getConversation 错误如实传播（不存在即显式失败，绝不吞）。
           return ctx.host.getConversation(id).cwd
+        },
+        parentNodeIdOf(id: number): string | undefined {
+          // 父会话绑定节点（Conversation.nodeId；undefined = 本机）。错误同上如实传播。
+          return ctx.host.getConversation(id).nodeId
         },
         askConversationId(id: number): number {
           return id
@@ -104,7 +109,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         if (projectorRef.current === undefined) {
           projectorRef.current = new MetadataProjector(
             (target, method, params) => {
-              const pane = registryRef.current?.get(target.machine, String(params['pane_id']))
+              const pane = registryRef.current?.get(targetNodeId(target), String(params['pane_id']))
               return transport.call(pane?.target ?? frozenLocalTarget, method, params, { timeoutMs: 5_000 })
             },
             (paneId, error) => {
@@ -204,13 +209,13 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           const pane = registry.get(undefined, event.paneId)
           if (pane === undefined || JSON.stringify(pane.target) !== JSON.stringify(frozenLocalTarget)) return
           if (event.type === 'pane.closed' || event.type === 'pane.exited') {
-            for (const removed of asks.paneClosed(pane.paneId, machineOf(pane))) {
+            for (const removed of asks.paneClosed(pane.paneId, nodeIdOf(pane))) {
               await cancelQuietly(removed, 'superseded')
             }
             if (stopping) return
-            projector().forget(pane.paneId, machineOf(pane))
+            projector().forget(pane.paneId, nodeIdOf(pane))
             if (pane.outcome !== 'failed' && pane.outcome !== 'settled') {
-              registry.update(machineOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+              registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
             }
             refreshOverview()
             return
@@ -226,7 +231,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           if (stopping || info.name !== pane.agentName || info.tabId !== pane.tabId) return
           for (const superseded of asks.observeAuthority({
             paneId: pane.paneId,
-            machine: machineOf(pane),
+            nodeId: nodeIdOf(pane),
             seq: info.stateChangeSeq,
             status: info.agentStatus,
           })) {
@@ -236,7 +241,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           const cacheKey = `local:${pane.paneId}`
           if ((eventSeqCache.get(cacheKey) ?? 0) >= info.stateChangeSeq) return
           eventSeqCache.set(cacheKey, info.stateChangeSeq)
-          if (info.agentStatus === 'blocked') asks.beginBlocked(machineOf(pane), pane.paneId, info.stateChangeSeq)
+          if (info.agentStatus === 'blocked') asks.beginBlocked(nodeIdOf(pane), pane.paneId, info.stateChangeSeq)
         } finally {
           await refresh
         }
@@ -269,13 +274,13 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           if (pane.outcome === 'failed') continue // 持久 failed：保留诊断现场
           if (agent === undefined) {
             // 窗格已消失：登记 settled（无资源可回收）。
-            registry.update(machineOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+            registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
             continue
           }
           // 精确归属验证：agent.name 必须等于记录的 agentName（不 startsWith——
           // helm-wf-abc 不能认领 helm-wf-abcde）。身份不符放弃所有权，不误关。
           if (agent.name !== pane.agentName) {
-            registry.update(machineOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+            registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
             continue
           }
           // 真正仍在 working/blocked：保留并报告（绝不伪装结束自动回收）。
@@ -372,7 +377,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           const now = Date.now()
           for (const pane of registry.all()) {
             if (pane.outcome === 'settled') continue
-            const scope = scopeKey(machineOf(pane), pane.paneId)
+            const scope = scopeKey(nodeIdOf(pane), pane.paneId)
             let status = 'unknown'
             let authoritySeq: number | undefined
             try {
@@ -386,12 +391,12 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
                 'agent_info',
               )
               if (info.name !== pane.agentName || info.tabId !== pane.tabId) {
-                registry.update(machineOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+                registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
                 continue
               }
               for (const superseded of asks.observeAuthority({
                 paneId: pane.paneId,
-                machine: machineOf(pane),
+                nodeId: nodeIdOf(pane),
                 seq: info.stateChangeSeq,
                 status: info.agentStatus,
               })) {
@@ -428,13 +433,13 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
               .filter(
                 (e) =>
                   e.paneId === pane.paneId &&
-                  e.machine === machineOf(pane) &&
+                  e.nodeId === nodeIdOf(pane) &&
                   (e.phase === 'pending' || e.phase === 'creating'),
               ).length
             payload.probes.push({
               targetId: pane.paneId,
               targetKind: 'external',
-              machine: machineOf(pane) ?? 'local',
+              nodeId: nodeIdOf(pane) ?? 'local',
               ownedBy: 'helm',
               status,
               ...(authoritySeq !== undefined ? { stateChangeSeq: authoritySeq } : {}),
@@ -459,7 +464,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
       // ---- actions（HTTP/CLI 同权；read 40 行脱敏；focus 显式操作） ----
       ctx.action<Record<string, never>, { panes: Array<Record<string, unknown>> }>({
         id: 'list',
-        description: '列出本插件管理的 Herdr 窗格（machine/pane/状态/归属）',
+        description: '列出本插件管理的 Herdr 窗格（nodeId/pane/状态/归属）',
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: {
           type: 'object',
@@ -472,7 +477,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           return {
             panes: registry
               ? registry.all().map((p) => ({
-                  machine: machineOf(p) ?? 'local',
+                  nodeId: nodeIdOf(p) ?? 'local',
                   paneId: p.paneId,
                   agentName: p.agentName,
                   outcome: p.outcome,
@@ -485,21 +490,21 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         },
       })
 
-      /** pane 消歧解析：registry 命中多个 machine 同 ID pane 时显式 409。 */
-      function resolvePane(input: { paneId: string; machine?: string }): ManagedPane {
+      /** pane 消歧解析：registry 命中多个节点同 ID pane 时显式 409。 */
+      function resolvePane(input: { paneId: string; nodeId?: string }): ManagedPane {
         const registry = registryRef.current
         if (registry === undefined) {
           throw new HelmError('not_found', `pane ${input.paneId} 不由 builtin:herdr 管理`, 404, { paneId: input.paneId })
         }
-        if (input.machine !== undefined && input.machine !== '') {
-          if (!isValidMachineName(input.machine)) {
-            throw new HelmError('validation_error', `machine '${input.machine}' 非法`, 400, { machine: input.machine })
+        if (input.nodeId !== undefined && input.nodeId !== '') {
+          if (!isValidNodeId(input.nodeId)) {
+            throw new HelmError('validation_error', `nodeId '${input.nodeId}' 非法`, 400, { nodeId: input.nodeId })
           }
-          const pane = registry.get(input.machine === 'local' ? undefined : input.machine, input.paneId)
+          const pane = registry.get(input.nodeId === 'local' ? undefined : input.nodeId, input.paneId)
           if (pane === undefined) {
-            throw new HelmError('not_found', `pane ${input.paneId}@${input.machine} 不由 builtin:herdr 管理`, 404, {
+            throw new HelmError('not_found', `pane ${input.paneId}@${input.nodeId} 不由 builtin:herdr 管理`, 404, {
               paneId: input.paneId,
-              machine: input.machine,
+              nodeId: input.nodeId,
             })
           }
           return pane
@@ -511,30 +516,30 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         if (candidates.length > 1) {
           throw new HelmError(
             'pane_ambiguous',
-            `pane ${input.paneId} 在多台机器存在（${candidates.map((p) => machineOf(p) ?? 'local').join(', ')}），请用 machine 字段消歧`,
+            `pane ${input.paneId} 在多个节点存在（${candidates.map((p) => nodeIdOf(p) ?? 'local').join(', ')}），请用 nodeId 字段消歧`,
             409,
-            { paneId: input.paneId, machines: candidates.map((p) => machineOf(p) ?? 'local') },
+            { paneId: input.paneId, nodeIds: candidates.map((p) => nodeIdOf(p) ?? 'local') },
           )
         }
         return candidates[0]!
       }
 
-      ctx.action<{ paneId: string; machine?: string }, { paneId: string; machine: string; text: string }>({
+      ctx.action<{ paneId: string; nodeId?: string }, { paneId: string; nodeId: string; text: string }>({
         id: 'read',
-        description: '读取本插件管理窗格的终端尾部快照（40 行，脱敏；跨机器同 ID 用 machine 消歧）',
+        description: '读取本插件管理窗格的终端尾部快照（40 行，脱敏；跨节点同 ID 用 nodeId 消歧）',
         inputSchema: {
           type: 'object',
           properties: {
             paneId: { type: 'string', minLength: 1 },
-            machine: { type: 'string', description: '目标机（缺省本机；同 ID 多机时必填消歧）' },
+            nodeId: { type: 'string', description: '目标节点（缺省本机；同 ID 多节点时必填消歧）' },
           },
           required: ['paneId'],
           additionalProperties: false,
         },
         outputSchema: {
           type: 'object',
-          properties: { paneId: { type: 'string' }, machine: { type: 'string' }, text: { type: 'string' } },
-          required: ['paneId', 'machine', 'text'],
+          properties: { paneId: { type: 'string' }, nodeId: { type: 'string' }, text: { type: 'string' } },
+          required: ['paneId', 'nodeId', 'text'],
           additionalProperties: false,
         },
         async handler(input) {
@@ -547,26 +552,26 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
               format: 'text',
             }),
           )
-          return { paneId: pane.paneId, machine: machineOf(pane) ?? 'local', text: deps.redact(read.text) }
+          return { paneId: pane.paneId, nodeId: nodeIdOf(pane) ?? 'local', text: deps.redact(read.text) }
         },
       })
 
-      ctx.action<{ paneId: string; machine?: string }, { paneId: string; machine: string; focused: boolean }>({
+      ctx.action<{ paneId: string; nodeId?: string }, { paneId: string; nodeId: string; focused: boolean }>({
         id: 'focus',
-        description: '在 Herdr 终端聚焦指定窗格（用户显式操作；跨机器同 ID 用 machine 消歧）',
+        description: '在 Herdr 终端聚焦指定窗格（用户显式操作；跨节点同 ID 用 nodeId 消歧）',
         inputSchema: {
           type: 'object',
           properties: {
             paneId: { type: 'string', minLength: 1 },
-            machine: { type: 'string', description: '目标机（缺省本机；同 ID 多机时必填消歧）' },
+            nodeId: { type: 'string', description: '目标节点（缺省本机；同 ID 多节点时必填消歧）' },
           },
           required: ['paneId'],
           additionalProperties: false,
         },
         outputSchema: {
           type: 'object',
-          properties: { paneId: { type: 'string' }, machine: { type: 'string' }, focused: { type: 'boolean' } },
-          required: ['paneId', 'machine', 'focused'],
+          properties: { paneId: { type: 'string' }, nodeId: { type: 'string' }, focused: { type: 'boolean' } },
+          required: ['paneId', 'nodeId', 'focused'],
           additionalProperties: false,
         },
         async handler(input) {
@@ -581,12 +586,12 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           if (info.focused !== true) {
             throw new HelmError(
               'herdr_focus_failed',
-              `agent.focus 返回 focused=false（pane ${pane.paneId}@${machineOf(pane) ?? 'local'}）`,
+              `agent.focus 返回 focused=false（pane ${pane.paneId}@${nodeIdOf(pane) ?? 'local'}）`,
               502,
-              { paneId: pane.paneId, machine: machineOf(pane) ?? 'local' },
+              { paneId: pane.paneId, nodeId: nodeIdOf(pane) ?? 'local' },
             )
           }
-          return { paneId: pane.paneId, machine: machineOf(pane) ?? 'local', focused: true }
+          return { paneId: pane.paneId, nodeId: nodeIdOf(pane) ?? 'local', focused: true }
         },
       })
 
@@ -630,6 +635,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
             projector(),
             {
               parentCwdOf: host.parentCwdOf,
+              parentNodeIdOf: host.parentNodeIdOf,
               askConversationId: host.askConversationId,
               notify: host.notify,
               startupTimeoutMs: () => startupTimeout,
@@ -660,8 +666,8 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           // Ask CAS seq 解析器：异步权威 agent.get 现查目标 pane 当前真实 seq
           //（先于任何 createAsk；归属经 askId 三段校验）。
           asksRelease = ctx.host.registerAskSeqResolver((askId) =>
-            asks.seqResolver(askId, async (machine, paneId) => {
-              const pane = registry.get(machine, paneId)
+            asks.seqResolver(askId, async (nodeId, paneId) => {
+              const pane = registry.get(nodeId, paneId)
               if (pane === undefined) return undefined
               try {
                 const info = parseAgentResult(

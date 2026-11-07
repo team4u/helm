@@ -281,7 +281,7 @@ async function readOverview(base: string, token: string): Promise<{ status: numb
 }
 
 interface OverviewRowShape {
-  machine?: string
+  nodeId?: string
   paneId: string
   tabId?: string
   workspaceId?: string
@@ -300,7 +300,7 @@ interface OverviewShape {
   stale: boolean
   error?: string
   panes: OverviewRowShape[]
-  asks?: Array<{ paneId: string; machine: string; seq: number; phase: string }>
+  asks?: Array<{ paneId: string; nodeId: string; seq: number; phase: string }>
 }
 
 /** 原子等待 doc 满足条件（轮询真实落库状态；超时失败，不静默兜底）。 */

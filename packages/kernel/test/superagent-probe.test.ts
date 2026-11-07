@@ -7,12 +7,12 @@
  *    getConversationOwnership 公开读取（root human / 未登记 human / 现读持久 doc /
  *    不存在与已删除显式 not_found / 删除后登记清零）。
  * 2. hooks.ts 边界校验：非法探针（负数 stalledMs、非整数 conversationId、
- *    非法枚举 targetKind、空 machine、伪造负 seq、非有限数）显式拒绝，
+ *    非法枚举 targetKind、空 nodeId、伪造负 seq、非有限数）显式拒绝，
  *    绝不进入下游钩子。
- * 3. Herdr watchdog tick（priority 100）：targetKind:'external' + machine 归一 local、
+ * 3. Herdr watchdog tick（priority 100）：targetKind:'external' + nodeId 归一 local、
  *    成功 agent.get 输出真实权威 seq、unreachable 不伪造 seq 且 consecutiveErrors 递增、
- *    同 machine+pane 同水位停滞递增 / 变水位重置 / 首次观测从 0 起、
- *    两台 machine 同 paneId 仍可区分、facts 含 kind/parentConversationId/pendingAskCount。
+ *    同 nodeId+pane 同水位停滞递增 / 变水位重置 / 首次观测从 0 起、
+ *    两个节点同 paneId 仍可区分、facts 含 kind/parentConversationId/pendingAskCount。
  * 4. UI docs 边界：合法 docs 透传进 listUi 快照；非数组 / 空数组 / 非字符串 /
  *    非法文档名 / 重复名 显式 invalid_ui_spec 拒绝。
  */
@@ -216,7 +216,7 @@ test('非法探针在管道入口即拒绝（invalid_hook_result），不进入�
     { ...validProbe, targetKind: 'session' as never }, // 非法枚举
     { ...validProbe, conversationId: 0 }, // 非正整数
     { ...validProbe, conversationId: 2.5 }, // 非整数
-    { ...validProbe, machine: '' }, // 空字符串
+    { ...validProbe, nodeId: '' }, // 空字符串
     { ...validProbe, stateChangeSeq: -1 }, // 负 seq
     { ...validProbe, stateChangeSeq: 1.5 }, // 非整数 seq
     { ...validProbe, stalledMs: -100 }, // 负停滞
@@ -247,7 +247,7 @@ test('合法探针（含可选字段缺省与全部新字段）通过边界并�
   const external: WatchdogProbe = {
     targetId: 'w:p1',
     targetKind: 'external',
-    machine: 'build-01',
+    nodeId: 'build-01',
     ownedBy: 'helm',
     status: 'blocked',
     stateChangeSeq: 9,
@@ -262,7 +262,7 @@ test('合法探针（含可选字段缺省与全部新字段）通过边界并�
   const { finalPayload } = await pipeline.run(makeTickPayload([legacy, external]))
   assert.ok(received)
   assert.equal(finalPayload.probes.length, 2)
-  assert.equal(finalPayload.probes[1]!.machine, 'build-01')
+  assert.equal(finalPayload.probes[1]!.nodeId, 'build-01')
   assert.equal(finalPayload.probes[1]!.stateChangeSeq, 9)
 })
 
@@ -295,9 +295,9 @@ interface FakePane {
 
 /** 受控 transport：仅实现 watchdog tick 用到的 agent.get / events.subscribe / session.snapshot。 */
 class ProbeFakeTransport implements HerdrTransport {
-  /** 本机分桶（machine === undefined）。 */
+  /** 本机分桶（nodeId === undefined）。 */
   panes = new Map<string, FakePane>()
-  /** 远端分桶（machine 名 -> paneId -> 权威）。 */
+  /** 远端分桶（nodeId 名 -> paneId -> 权威）。 */
   remotePanes = new Map<string, Map<string, FakePane>>()
   failAgentGet = false
   calls: Array<{ target: HerdrTarget; method: string }> = []
@@ -308,11 +308,11 @@ class ProbeFakeTransport implements HerdrTransport {
   }
 
   private bucketOf(target: HerdrTarget): Map<string, FakePane> {
-    if (target.machine === undefined) return this.panes
-    let bucket = this.remotePanes.get(target.machine)
+    if (target.nodeId === undefined) return this.panes
+    let bucket = this.remotePanes.get(target.nodeId)
     if (bucket === undefined) {
       bucket = new Map()
-      this.remotePanes.set(target.machine, bucket)
+      this.remotePanes.set(target.nodeId, bucket)
     }
     return bucket
   }
@@ -446,7 +446,7 @@ interface ProbeEnv {
 
 async function makeProbeEnv(
   managedPanes: Array<{
-    machine?: string
+    nodeId?: string
     paneId: string
     agentName: string
     cwd: string
@@ -460,7 +460,7 @@ async function makeProbeEnv(
   docs.set('builtin:herdr:managed', {
     version: 1,
     panes: managedPanes.map((p) => ({
-      target: p.machine !== undefined ? { machine: p.machine } : {},
+      target: p.nodeId !== undefined ? { nodeId: p.nodeId } : {},
       paneId: p.paneId,
       tabId: `t-${p.paneId}`,
       effectiveCwd: p.cwd,
@@ -473,7 +473,7 @@ async function makeProbeEnv(
   })
   const transport = new ProbeFakeTransport(backend.notifications)
   // 权威分桶必须在 register（对账）前就绪：对账时会现查 session.snapshot；
-  // 远端记录进对应 machine 分桶（本机 machine -> undefined 分桶）。
+  // 远端记录进对应 nodeId 分桶（本机 nodeId -> undefined 分桶）。
   for (const p of managedPanes) {
     const entry: FakePane = {
       paneId: p.paneId,
@@ -482,12 +482,12 @@ async function makeProbeEnv(
       name: p.agentName,
       cwd: p.cwd,
     }
-    if (p.machine === undefined) {
+    if (p.nodeId === undefined) {
       transport.panes.set(p.paneId, entry)
     } else {
-      const bucket = transport.remotePanes.get(p.machine) ?? new Map()
+      const bucket = transport.remotePanes.get(p.nodeId) ?? new Map()
       bucket.set(p.paneId, entry)
-      transport.remotePanes.set(p.machine, bucket)
+      transport.remotePanes.set(p.nodeId, bucket)
     }
   }
   const host = new PluginHost({
@@ -533,7 +533,7 @@ async function runHerdrTick(env: ProbeEnv): Promise<WatchdogProbe[]> {
   return payload.probes
 }
 
-test('Herdr tick：targetKind external + machine 归一 local + 权威 seq + facts 齐全', { timeout: 60_000 }, async () => {
+test('Herdr tick：targetKind external + nodeId 归一 local + 权威 seq + facts 齐全', { timeout: 60_000 }, async () => {
   const env = await makeProbeEnv([
     { paneId: 'w:p1', agentName: 'helm-wf-a', cwd: '/tmp/a', status: 'working', seq: 5 },
   ])
@@ -542,7 +542,7 @@ test('Herdr tick：targetKind external + machine 归一 local + 权威 seq + fac
     assert.equal(probes.length, 1)
     const probe = probes[0]!
     assert.equal(probe.targetKind, 'external')
-    assert.equal(probe.machine, 'local', '本机 pane machine 归一为 local')
+    assert.equal(probe.nodeId, 'local', '本机 pane nodeId 归一为 local')
     assert.equal(probe.targetId, 'w:p1')
     assert.equal(probe.ownedBy, 'helm')
     assert.equal(probe.status, 'working')
@@ -573,26 +573,26 @@ test('Herdr tick：同名 Agent 换至其他 tab 后不再投射自动化归属'
   }
 })
 
-test('Herdr tick：两台 machine 同 paneId 仍可区分（machine + targetId 复合寻址）', { timeout: 60_000 }, async () => {
-  // 同 paneId 两台 machine：受控 transport 按 target.machine 分桶提供权威
-  //（本机分桶不可达、远端分桶正常），验证探针凭 machine + targetId 复合区分。
+test('Herdr tick：两个节点同 paneId 仍可区分（nodeId + targetId 复合寻址）', { timeout: 60_000 }, async () => {
+  // 同 paneId 两个节点：受控 transport 按 target.nodeId 分桶提供权威
+  //（本机分桶不可达、远端分桶正常），验证探针凭 nodeId + targetId 复合区分。
   const env = await makeProbeEnv([
     { paneId: 'w:p9', agentName: 'helm-wf-local', cwd: '/tmp/l', status: 'working', seq: 1 },
-    { machine: 'build-01', paneId: 'w:p9', agentName: 'helm-wf-remote', cwd: '/tmp/r', status: 'working', seq: 2 },
+    { nodeId: 'build-01', paneId: 'w:p9', agentName: 'helm-wf-remote', cwd: '/tmp/r', status: 'working', seq: 2 },
   ])
   try {
     const origCall = env.transport.call.bind(env.transport)
     env.transport.call = async (target, method, params) => {
       // 本机分桶模拟 socket 分区（不可达）；远端分桶正常返回。
-      if (method === 'agent.get' && target.machine === undefined) {
+      if (method === 'agent.get' && target.nodeId === undefined) {
         throw new HelmError('herdr_unavailable', 'local down', 503)
       }
       return origCall(target, method, params)
     }
     const probes = await runHerdrTick(env)
-    assert.equal(probes.length, 2, '两台 machine 同 paneId 各产生一个 probe')
-    const local = probes.find((p) => p.machine === 'local' && p.targetId === 'w:p9')!
-    const remote = probes.find((p) => p.machine === 'build-01' && p.targetId === 'w:p9')!
+    assert.equal(probes.length, 2, '两个节点同 paneId 各产生一个 probe')
+    const local = probes.find((p) => p.nodeId === 'local' && p.targetId === 'w:p9')!
+    const remote = probes.find((p) => p.nodeId === 'build-01' && p.targetId === 'w:p9')!
     assert.ok(local && remote, '两个 probe 均存在且可区分')
     assert.equal(local.status, 'unreachable')
     assert.equal(local.stateChangeSeq, undefined, 'unreachable 绝不伪造权威 seq')

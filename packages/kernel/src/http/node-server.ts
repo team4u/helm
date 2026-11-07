@@ -14,6 +14,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { Readable } from 'node:stream'
 import { createHubHandler } from './hub.js'
+import { attachNodeWsGateway, type EnvFabric, type NodeWsGateway } from '../env/index.js'
 import type { HubHandle, KernelRuntimeLike, StartHubOptions, WorkflowServiceLike } from './contracts.js'
 
 const DEFAULT_PORT = 3202
@@ -113,6 +114,12 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
     })()
   })
 
+  // 跨平台节点底座存在时挂接 /ws/node 网关（节点 WS+birpc 注册/心跳/事件）。
+  const envFabric = (kernel as { envFabric?: EnvFabric }).envFabric
+  const nodeGateway: NodeWsGateway | undefined = envFabric
+    ? attachNodeWsGateway(server, { registry: envFabric.registry })
+    : undefined
+
   // 长连接保活：SSE 显式不超时
   server.requestTimeout = 0
   server.headersTimeout = 60_000
@@ -141,6 +148,8 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
     },
     server,
     async close() {
+      // 0) 先关 /ws/node 网关（不再接受节点连接；断开挂在适配层之前）。
+      await nodeGateway?.close().catch(() => undefined)
       // 1) 主动 abort 全部在途请求（SSE 流的 signal abort → 取消订阅）
       for (const controller of inflight) controller.abort()
       inflight.clear()

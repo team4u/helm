@@ -172,7 +172,7 @@ try {
   assert.equal(response.status, 200);
   const httpDoc = await response.json();
   check('authenticated HTTP exposes the real shell overview', httpDoc.value.panes.some(pane => pane.paneId === firstPane.pane_id && pane.agentStatus === 'unknown'));
-  const cliDoc = JSON.parse(await command(process.execPath, [join(repository, 'packages/node/dist/cli/index.js'), 'plugins', 'doc', 'builtin:herdr', 'overview', '--json'], {
+  const cliDoc = JSON.parse(await command(process.execPath, [join(repository, 'packages/cli/dist/index.js'), 'plugins', 'doc', 'builtin:herdr', 'overview', '--json'], {
     ...isolatedEnv, HELM_DATA_DIR: join(root, 'cli'), HELM_HUB_URL: hub.url, HELM_TOKEN: token.token,
   }));
   check('compiled CLI exposes the same public overview', cliDoc.value.panes.some(pane => pane.paneId === firstPane.pane_id && pane.agentStatus === 'unknown' && pane.ownedBy === 'human'));

@@ -165,8 +165,6 @@ export interface WatchdogProbe {
   conversationId?: number
   /** targetKind 为 external 时的目标节点 ID（'local' 或 BYOM 节点 ID）。 */
   nodeId?: string
-  /** 兼容别名：目标节点 ID。 */
-  machine?: string
   ownedBy: WatchdogOwnership
   /** 目标当前状态（通用字符串，容纳会话五态与 Herdr 窗格状态）。 */
   status: string

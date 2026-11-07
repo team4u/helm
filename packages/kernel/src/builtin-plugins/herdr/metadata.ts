@@ -21,7 +21,7 @@ const REFRESH_AFTER_MS = Math.floor(TOKEN_TTL_MS / 2)
 const HEARTBEAT_MS = REFRESH_AFTER_MS
 
 interface ProjectionState {
-  machine: string | undefined
+  nodeId: string | undefined
   paneId: string
   lastToken: string
   lastSeq: number
@@ -48,8 +48,8 @@ export class MetadataProjector {
    * 投射失败显式上报（不吞），但不中断主流程——token 是态势感知增强，
    * 失败不影响执行正确性；同一 token 的失败也不重试到死（下个窗口再试）。
    */
-  async project(machine: string | undefined, paneId: string, token: string): Promise<void> {
-    const key = `${machine ?? 'local'}:${paneId}`
+  async project(nodeId: string | undefined, paneId: string, token: string): Promise<void> {
+    const key = `${nodeId ?? 'local'}:${paneId}`
     const state = this.states.get(key)
     const now = Date.now()
     if (
@@ -61,7 +61,7 @@ export class MetadataProjector {
       return
     }
     if (!state) {
-      this.states.set(key, { machine, paneId, lastToken: '', lastSeq: 0, lastProjectedAt: 0, inFlight: false })
+      this.states.set(key, { nodeId, paneId, lastToken: '', lastSeq: 0, lastProjectedAt: 0, inFlight: false })
     }
     const cur = this.states.get(key)!
     if (cur.inFlight) return
@@ -70,7 +70,7 @@ export class MetadataProjector {
     cur.lastProjectedAt = now
     cur.lastSeq = this.nextSeq(key)
     try {
-      const target: HerdrTarget = machine === undefined ? {} : { machine }
+      const target: HerdrTarget = nodeId === undefined ? {} : { nodeId }
       const result = await this.call(target, 'pane.report_metadata', {
         pane_id: paneId,
         source: SOURCE,
@@ -97,15 +97,15 @@ export class MetadataProjector {
       this.timer?.unref?.()
       for (const state of this.states.values()) {
         if (state.lastToken === '') continue
-        void this.project(state.machine, state.paneId, state.lastToken)
+        void this.project(state.nodeId, state.paneId, state.lastToken)
       }
     }, HEARTBEAT_MS)
     this.timer.unref?.()
   }
 
   /** pane 关闭/结算后清理本地状态（不再心跳）。 */
-  forget(paneId: string, machine?: string): void {
-    this.states.delete(`${machine ?? 'local'}:${paneId}`)
+  forget(paneId: string, nodeId?: string): void {
+    this.states.delete(`${nodeId ?? 'local'}:${paneId}`)
   }
 
   /** 服务停止：清理心跳定时器。 */

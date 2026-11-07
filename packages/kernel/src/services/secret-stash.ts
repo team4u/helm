@@ -126,6 +126,61 @@ export class SecretStash {
     return text.replace(pattern, (value) => values.get(value) ?? value)
   }
 
+  /** 增量脱敏：只保留仍可能组成秘密的后缀，不按固定长度切开完整匹配。 */
+  createStreamingRedactor(): { push(text: string): string; flush(): string } {
+    let pending = ''
+    const prefixes = new Map<string, number[]>()
+    const overlap = (value: string, text: string): number => {
+      let prefix = prefixes.get(value)
+      if (!prefix) {
+        prefix = new Array<number>(value.length).fill(0)
+        for (let i = 1, j = 0; i < value.length; i++) {
+          while (j > 0 && value[i] !== value[j]) j = prefix[j - 1]!
+          if (value[i] === value[j]) j++
+          prefix[i] = j
+        }
+        prefixes.set(value, prefix)
+      }
+      let matched = 0
+      const tail = text.slice(-Math.max(value.length - 1, 0))
+      for (let index = 0; index < tail.length; index++) {
+        const char = tail[index]!
+        while (matched > 0 && char !== value[matched]) matched = prefix[matched - 1]!
+        if (char === value[matched]) matched++
+        if (matched === value.length) matched = prefix[matched - 1]!
+      }
+      return matched
+    }
+    return {
+      push: (text) => {
+        pending += text
+        let keep = 0
+        const values = new Set([...this.globalRedactions.keys(), ...[...this.byUuid.values()].map((secret) => secret.value)])
+        for (const value of values) if (value) keep = Math.max(keep, overlap(value, pending))
+        const last = pending.charCodeAt(pending.length - 1)
+        if (last >= 0xd800 && last <= 0xdbff) keep = Math.max(keep, 1)
+        let cut = pending.length - keep
+        const escaped = [...values].filter(Boolean).sort((a, b) => b.length - a.length)
+          .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        if (escaped.length) {
+          const pattern = new RegExp(`\\[REDACTED(?::stash:[0-9a-f-]{36})?\\]|${escaped.join('|')}`, 'g')
+          for (const match of pending.matchAll(pattern)) {
+            if (match.index < cut && match.index + match[0].length > cut) { cut = match.index; break }
+            if (match.index >= cut) break
+          }
+        }
+        const safe = this.redact(pending.slice(0, cut))
+        pending = pending.slice(cut)
+        return safe
+      },
+      flush: () => {
+        const safe = this.redact(pending)
+        pending = ''
+        return safe
+      },
+    }
+  }
+
   /** 清空指定会话的全部秘密；省略 conversationId 则清空整个 stash（含全局脱敏登记）。 */
   clear(conversationId?: number): void {
     if (conversationId === undefined) {

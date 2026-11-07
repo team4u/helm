@@ -48,6 +48,7 @@ function convMeta(id: number): ConvMeta {
     id,
     title: `会话 ${id}`,
     profileId: 'assistant',
+    nodeId: 'local',
     tags: [],
     cwd: '/tmp',
     model: 'faux/faux-1',

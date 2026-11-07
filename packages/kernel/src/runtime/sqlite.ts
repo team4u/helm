@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS helm_conversations (
   profile_id TEXT NOT NULL DEFAULT 'default',
   tags TEXT NOT NULL DEFAULT '[]',
   parent_conversation_id INTEGER,
+  node_id TEXT NOT NULL DEFAULT 'local',
   cwd TEXT NOT NULL,
   model TEXT NOT NULL DEFAULT '',
   model_override TEXT,
@@ -109,7 +110,8 @@ export async function openHelmDatabase(dataDir: string): Promise<HelmDatabase> {
   const statePath = join(dataDir, 'state.sqlite')
   const db = await openNodeSqliteDatabase(statePath)
   const storage = await SqliteStorage.open(db, { prefix: 'pi_' })
-  // helm 表 DDL 也走 adapter（排队，避免与 pi 迁移竞争）。
+  // helm 表 DDL 也走 adapter（排队，避免与 pi 迁移竞争）。开发阶段不兼容、
+  // 不迁移：node_id 只在新 schema 创建，既有开发库直接重建。
   await db.exec(HELM_SCHEMA)
   await db.exec(FTS_SCHEMA)
   let closed = false

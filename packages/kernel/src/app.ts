@@ -4,14 +4,26 @@ import { createAssistantPlugin } from './builtin-plugins/assistant.js';
 import { createHerdrPlugin } from './builtin-plugins/herdr.js';
 import { createSuperAgentPlugin, SUPERAGENT_PLUGIN_ID } from './builtin-plugins/superagent.js';
 import { createTriggersPlugin } from './builtin-plugins/triggers.js';
-import type { HerdrTransport } from './builtin-plugins/herdr/contracts.js';
+import type { HerdrNodeChannel, HerdrTransport } from './builtin-plugins/herdr/contracts.js';
+import type { EnvFabric } from './env/index.js';
 import type { SuperAgentDependencies } from './builtin-plugins/superagent/contracts.js';
 import { redactJsonValue } from './redact.js';
 
 export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'> & {
-  /** 可注入同契约传输层；缺省连接真实本机 Herdr 与 SSH 远端。 */
+  /** 可注入同契约传输层；缺省复用内核 EnvFabric 连接目标节点的 Herdr IPC。 */
   herdrTransport?: HerdrTransport;
 };
+
+/** 插件使用 SDK Context；EnvFabric 的 IPC 端口仅消费其中的取消信号。 */
+export function createHerdrNodeChannel(fabric: EnvFabric): HerdrNodeChannel {
+  return {
+    isOnline: (id) => fabric.isOnline(id),
+    getNodeHubUrl: (id) => fabric.getNodeHubUrl(id),
+    envFor: (id, cwd) => fabric.envFor(id, cwd),
+    ipcCall: (id, input, context) => fabric.ipcCall(id, input, context.abortSignal),
+    ipcSubscribe: (id, input, onLine, onClosed, context) => fabric.ipcSubscribe(id, input, onLine, onClosed, context.abortSignal),
+  };
+}
 
 export async function createHelm(options: HelmOptions = {}) {
   const { herdrTransport, ...runtimeOptions } = options;
@@ -44,9 +56,10 @@ export async function createHelm(options: HelmOptions = {}) {
     await kernel.plugins.register(createHerdrPlugin({
       defaultCwd: runtimeOptions.cwd ?? process.cwd(),
       profiles: kernel.profiles,
-      buildSpawnEnv: (id, cwd) => kernel.buildSpawnEnv(id, cwd),
+      buildSpawnEnv: (id, cwd, nodeId) => kernel.buildSpawnEnv(id, cwd, nodeId),
+      nodeChannel: createHerdrNodeChannel(kernel.envFabric),
       redact: (text) => kernel.stash.redact(text),
-      runLocalGate: (command, context) => kernel.runGate(command, context),
+      runLocalGate: (command, context) => kernel.runGate(command, { ...context, nodeId: 'local' }),
       getArtifact: (id, conversationId) => kernel.resolveAuthorizedAttachment(conversationId, id),
       ...(herdrTransport ? { transport: herdrTransport } : {}),
     }), { enabled: false });

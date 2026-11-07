@@ -263,7 +263,7 @@ test('归属：远端同 ID 记录不认领；human takeover 不带管理信息'
     panes: [pane('p1', { agentStatus: 'working' }), pane('p2', { tabId: 'tab2', agentStatus: 'unknown' })],
   }))
   // 远端同 paneId 记录：不得认领本机 p1。
-  h.registry.add(managedPane('p1', { target: { machine: 'remote-host', session: 'main' } }))
+  h.registry.add(managedPane('p1', { target: { nodeId: 'remote-node', session: 'main' } }))
   // 本机记录但 agentName 已不一致（人类接管重启终端）：human。
   h.registry.add(managedPane('p2', { tabId: 'tab2', agentName: 'helm-wf-other' }))
   const done = h.projector.refresh(h.registry, h.asks, TARGET)
@@ -299,7 +299,7 @@ test('归属全一致才算 helm：本机冻结 target + tabId + agentName + Age
   assert.equal(row.pendingAsk, true)
   assert.equal(row.agentName, 'helm-wf-abc123')
   assert.equal(row.stateChangeSeq, 7)
-  assert.deepEqual(h.docs.at(-1)?.asks, [{ paneId: 'p1', machine: 'local', seq: 7, phase: 'pending' }])
+  assert.deepEqual(h.docs.at(-1)?.asks, [{ paneId: 'p1', nodeId: 'local', seq: 7, phase: 'pending' }])
 })
 
 test('同 seq 下真实 cwd/status 变化仍发布', { timeout: 60_000 }, async () => {

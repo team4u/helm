@@ -73,6 +73,12 @@ export interface EnvExecResponse {
   timedOut: boolean
 }
 
+/** `POST /api/env/exec` 流式响应；每行一帧，必须以 exit 或 error 结束。 */
+export type EnvExecStreamFrame =
+  | { type: 'output'; stream: 'stdout' | 'stderr'; text: string }
+  | { type: 'exit'; ok: boolean; exitCode: number | null; timedOut: boolean }
+  | { type: 'error'; error: { code: string; message: string; details?: unknown } }
+
 export type RpcFileKind = 'file' | 'directory' | 'symlink'
 
 export type RpcFileErrorCode =
@@ -205,6 +211,7 @@ export interface NodeEnvRpcFunctions {
 
   envWriteFile(input: { path: string; content: string; encoding?: 'utf8' | 'base64'; cwd?: string }): Promise<RpcResult<null>>
   envAppendFile(input: { path: string; content: string; encoding?: 'utf8' | 'base64'; cwd?: string }): Promise<RpcResult<null>>
+  envFlushFile(input: { path: string; cwd?: string }): Promise<RpcResult<null>>
   envTruncateFile(input: { path: string; size: number; cwd?: string }): Promise<RpcResult<null>>
   envRenameFile(input: { sourcePath: string; destinationPath: string; cwd?: string }): Promise<RpcResult<null>>
 

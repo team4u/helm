@@ -29,7 +29,7 @@ import type { HerdrAgentInfo, HerdrAgentStatus, HerdrPaneSnapshotInfo, SessionSn
 
 /** 总览单行：全本机窗格为基表；管理字段仅 helm 受管行携带。 */
 export interface OverviewPaneRow {
-  machine: string
+  nodeId: string
   paneId: string
   tabId: string
   workspaceId: string
@@ -62,7 +62,7 @@ export interface OverviewDoc {
   /** 故障诊断（redact 后）；健康时省略。 */
   error?: string
   panes: OverviewPaneRow[]
-  asks: Array<{ paneId: string; machine: string; seq: number; phase: string }>
+  asks: Array<{ paneId: string; nodeId: string; seq: number; phase: string }>
 }
 
 export interface OverviewDependencies {
@@ -213,7 +213,7 @@ export class OverviewProjector {
     const pendingAsks = new Set(
       (this.asks?.entries() ?? [])
         .filter((e) => PENDING_ASK_PHASES.has(e.phase))
-        .map((e) => `${e.machine ?? 'local'}:${e.paneId}`),
+        .map((e) => `${e.nodeId ?? 'local'}:${e.paneId}`),
     )
     const cache = this.cache
     const panes: OverviewPaneRow[] = []
@@ -244,7 +244,7 @@ export class OverviewProjector {
     const record = this.owns(pane, agent)
     const foregroundCwd = agent?.foregroundCwd ?? pane.foregroundCwd
     const row: OverviewPaneRow = {
-      machine: 'local',
+      nodeId: 'local',
       paneId: pane.paneId,
       tabId: pane.tabId,
       workspaceId: pane.workspaceId,

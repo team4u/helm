@@ -224,6 +224,9 @@ importers:
         specifier: ^8.18.0
         version: 8.22.1
     devDependencies:
+      '@helm/node':
+        specifier: workspace:*
+        version: link:../node
       '@types/ws':
         specifier: ^8.18.0
         version: 8.18.2

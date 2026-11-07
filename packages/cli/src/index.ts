@@ -7,11 +7,12 @@
  *   永不因坏插件 manifest 而不可用——故障隔离。
  * - --json 全局生效：成功 stdout JSON，失败 stderr JSON + 非零退出码。
  */
+import { realpathSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import type { CommandContext, CommandSpec } from './commands.js'
-import { coreCommands } from './commands.js'
+import type { CommandContext, CommandSpec } from './commands/index.js'
+import { coreCommands } from './commands/index.js'
 import { loadDynamicCommands } from './actions.js'
 import { HubClient, resolveEndpoint } from './hub-client.js'
 import { buildIo, type Io, type RunCliOptions } from './options.js'
@@ -27,7 +28,7 @@ function isDirectRun(): boolean {
   try {
     const self = fileURLToPath(import.meta.url)
     const entry = path.resolve(process.argv[1]!)
-    return self === entry
+    return realpathSync(self) === realpathSync(entry)
   } catch {
     return false
   }
@@ -44,7 +45,7 @@ function printHelp(
   io.out('全局选项:\n')
   io.out('  --json            机器可读 JSON 输出（stdout；错误为 stderr + 非零退出码）\n')
   io.out('  --help, -h        显示帮助\n\n')
-  io.out('核心命令:\n')
+  io.out('核心命令（含跨节点执行与原始 HTTP 逃生舱）:\n')
   for (const cmd of core) {
     const positional = cmd.positional ? ` ${cmd.positional}` : ''
     io.out(`  ${cmd.path.join(' ')}${positional}\n    ${cmd.description}\n`)
@@ -62,6 +63,7 @@ function printHelp(
     io.out('\n（当前未获取到插件动作命令；未启动 Hub、未登录或无可用动作时如此）\n')
   }
   io.out('\n环境变量: HELM_HUB_URL（默认 http://127.0.0.1:3202）· HELM_TOKEN · HELM_DATA_DIR（默认 ~/.helm）· HELM_CONVERSATION_ID（--current）\n')
+  io.out('跨节点: helm nodes list|issue|remove 管理计算节点；helm env exec --node <id> -- <cmd...> 跨节点直执；helm api <method> <path> 原始 HTTP\n')
   for (const d of diagnostics) io.err(`helm: ${d}\n`)
 }
 
@@ -157,6 +159,15 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
         if (!clientHolder.client) clientHolder.client = await hubFromEnv(env, dataDir, io)
         return clientHolder.client
       },
+    }
+  }
+
+  // 静态命令的帮助也只依赖静态声明，Hub 或插件故障不应拖住管理面。
+  if (help && rest.length > 0) {
+    const matched = matchCommand(core, rest)
+    if (matched && matched.consumed > 0) {
+      printCommandDetail(io, matched.command)
+      return 0
     }
   }
 

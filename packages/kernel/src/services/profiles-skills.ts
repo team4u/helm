@@ -68,6 +68,20 @@ export function validateProfileInput(input: unknown): Profile {
     if (typeof model !== 'string') throw new Error(`profile '${id}' model 必须是字符串`)
     profile.model = model
   }
+  const nodeId = input['nodeId']
+  if (nodeId !== undefined) {
+    if (typeof nodeId !== 'string' || nodeId === '') {
+      throw new Error(`profile '${id}' nodeId 若存在必须是非空字符串（计算节点 ID）`)
+    }
+    profile.nodeId = nodeId
+  }
+  const cwd = input['cwd']
+  if (cwd !== undefined) {
+    if (typeof cwd !== 'string' || cwd === '') {
+      throw new Error(`profile '${id}' cwd 若存在必须是非空字符串（目标平台绝对路径）`)
+    }
+    profile.cwd = cwd
+  }
   const tags = input['tags']
   if (tags !== undefined) {
     if (!Array.isArray(tags) || tags.some((t) => typeof t !== 'string')) {
@@ -78,6 +92,10 @@ export function validateProfileInput(input: unknown): Profile {
   const runtime = input['runtime']
   if (runtime !== undefined) {
     if (!isPlainObject(runtime)) throw new Error(`profile '${id}' runtime 必须是对象`)
+    const runtimeKeys = new Set(['kind', 'agent', 'args', 'nodeId', 'workspace', 'env'])
+    for (const key of Object.keys(runtime)) {
+      if (!runtimeKeys.has(key)) throw new Error(`profile '${id}' runtime 含未知字段 '${key}'，拒绝忽略执行靶点`)
+    }
     const kind = runtime['kind']
     const agent = runtime['agent']
     if (kind !== 'herdr') throw new Error(`profile '${id}' runtime.kind 仅支持 'herdr'`)
@@ -88,9 +106,9 @@ export function validateProfileInput(input: unknown): Profile {
     if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== 'string'))) {
       throw new Error(`profile '${id}' runtime.args 必须是字符串数组`)
     }
-    const machine = runtime['machine']
-    if (machine !== undefined && (typeof machine !== 'string' || machine === '')) {
-      throw new Error(`profile '${id}' runtime.machine 若存在必须是非空字符串（SSH 目标机标识）`)
+    const nodeId = runtime['nodeId']
+    if (nodeId !== undefined && (typeof nodeId !== 'string' || nodeId === '')) {
+      throw new Error(`profile '${id}' runtime.nodeId 若存在必须是非空字符串（目标计算节点标识）`)
     }
     const workspace = runtime['workspace']
     if (workspace !== undefined && (typeof workspace !== 'string' || workspace === '')) {
@@ -114,7 +132,7 @@ export function validateProfileInput(input: unknown): Profile {
       kind,
       agent,
       ...(args !== undefined ? { args } : {}),
-      ...(machine !== undefined ? { machine } : {}),
+      ...(nodeId !== undefined ? { nodeId } : {}),
       ...(workspace !== undefined ? { workspace } : {}),
       ...(env !== undefined ? { env: { ...(env as Record<string, string>) } } : {}),
     }
@@ -122,7 +140,7 @@ export function validateProfileInput(input: unknown): Profile {
   return profile
 }
 
-/** 读取时容错规范化（旧/手工文件缺字段时补默认，不伪造 model）。 */
+/** 文件资产按当前契约校验，不推测旧格式或忽略未知执行字段。 */
 function normalizeProfile(value: unknown, id: string): Profile {
   if (!isPlainObject(value)) throw new Error(`profile.json 结构非法: ${id}`)
   return validateProfileInput({ ...value, id })

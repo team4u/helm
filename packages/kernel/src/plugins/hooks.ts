@@ -231,7 +231,7 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
         (p.targetKind !== undefined && !['conversation', 'external'].includes(String(p.targetKind))) ||
         (p.conversationId !== undefined &&
           !(typeof p.conversationId === 'number' && Number.isInteger(p.conversationId) && p.conversationId > 0)) ||
-        (p.machine !== undefined && (typeof p.machine !== 'string' || p.machine.length === 0)) ||
+        (p.nodeId !== undefined && (typeof p.nodeId !== 'string' || p.nodeId.length === 0)) ||
         !['helm', 'bot', 'human'].includes(String(p.ownedBy)) ||
         typeof p.status !== 'string' ||
         (p.stateChangeSeq !== undefined &&
@@ -242,7 +242,7 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
           !(typeof p.consecutiveErrors === 'number' && Number.isFinite(p.consecutiveErrors) && p.consecutiveErrors >= 0)) ||
         (p.facts !== undefined && !isObj(p.facts))
       ) {
-        return '字段 probes 的每项必须是 WatchdogProbe（targetKind/conversationId/machine/stateChangeSeq/stalledMs/consecutiveErrors 若存在必须类型合法且非负）';
+        return '字段 probes 的每项必须是 WatchdogProbe（targetKind/conversationId/nodeId/stateChangeSeq/stalledMs/consecutiveErrors 若存在必须类型合法且非负）';
       }
     }
     return null;

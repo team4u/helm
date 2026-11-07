@@ -23,10 +23,11 @@
 import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helm/protocol'
 import type { CreateAskResultLike, CreateAskSpecLike, HerdrPluginDependencies, HerdrTarget } from './contracts.js'
+import { targetNodeId } from './contracts.js'
 import { validateOrThrow } from '../../plugins/schema.js'
 import { AskCoordinator, backoffForDuplicateBlocked, type AskEntry } from './asks.js'
 import { MetadataProjector } from './metadata.js'
-import { PaneRegistry, machineOf, targetOf, type ManagedPane, type PaneRouting } from './panes.js'
+import { PaneRegistry, nodeIdOf, targetOf, type ManagedPane, type PaneRouting } from './panes.js'
 import {
   assertOkResult,
   parseAgentResult,
@@ -51,13 +52,19 @@ import {
 export interface ExecutorHost {
   /** 父会话 cwd 解析（宿主 getConversation 桥；错误如实上抛）。 */
   parentCwdOf(parentConversationId: number): string | undefined
+  /**
+   * 父会话绑定节点（宿主 getConversation(id).nodeId；undefined = 本机）。
+   * 子 spawn 未显式/Profile 指定节点时继承它（否则总落本机，远端父会话
+   * 的任务会被误发到 Hub 本机执行）。
+   */
+  parentNodeIdOf(parentConversationId: number): string | undefined
   /** AskDoc 目标会话（缺省父会话）。 */
   askConversationId(parentConversationId: number): number
   /** 非机密通知。 */
   notify(title: string, body: string, level: 'info' | 'error'): void
   /** agent.start 启动超时（config.startupTimeoutMs；3001..300000）。 */
   startupTimeoutMs(): number
-  /** 宿主 createAsk（预分配 id；ask.id 形如 herdr:<machine>:<pane>:<seq>）。 */
+  /** 宿主 createAsk（预分配 id；ask.id 形如 herdr:<nodeId>:<pane>:<seq>）。 */
   createAsk(spec: CreateAskSpecLike): Promise<CreateAskResultLike>
   /** 宿主 cancelAsk（404 = 已结算，调用方据此清条目；其余错误如实上抛）。 */
   cancelAsk(askId: string, reason: 'cancelled' | 'superseded'): Promise<void>
@@ -103,6 +110,9 @@ export class HerdrExecutor {
    * - resume：先按自有记录识别（agentId/paneId 双键），不依赖 request.agentType
    *   （真实 standalone resume 无 agentId、workflow resume 无 agentType）；
    * - 新建：resolveSpawnRouting 双入口解析，非 Herdr 目标放行；
+   * - 节点选定：显式 herdr:kind@node（含 @local） > Profile.runtime.nodeId >
+   *   Profile.nodeId > 父会话绑定节点 > 本机。'local' 显式覆盖远端父节点，
+   *   不折叠丢失；显式/Profile 指定与父节点不同时以更高优先级为准（合法切换）。
    * - 附件：远端机器无可达 HELM_HUB_URL 时在建窗之前显式拒绝
    *   （remote_hub_unreachable_for_artifacts，零远端副作用）。
    */
@@ -130,15 +140,29 @@ export class HerdrExecutor {
     if (request.signal?.aborted) {
       throw new HelmError('aborted', 'herdr spawn 请求在创建前已取消', 409)
     }
-    this.assertAttachmentsReachable(request, paneTargetOf(routing, this.localTargetOf()), routing)
-    const result = await this.spawnNew(request, routing)
+    const target = this.resolveSpawnTarget(request, routing)
+    this.assertAttachmentsReachable(request, target, routing)
+    const result = await this.spawnNew(request, routing, target)
     return { action: 'handled', result }
   }
 
   /**
+   * 节点选定：显式/Profile 指定（routing.nodeId，含 'local'）优先；否则继承
+   * 父会话绑定节点（parentNodeIdOf；undefined = 本机）。
+   * 目标 HerdrTarget 的 socketPath/session 继承冻结的本机连接配置仅当目标为
+   * 本机（远端目标只携带 nodeId，端点由目标节点自解析）。
+   */
+  private resolveSpawnTarget(request: AgentSpawnRequest, routing: SpawnRouting): HerdrTarget {
+    const parentNodeId = this.parentNodeIdOrThrow(request.parentConversationId)
+    const nodeId = routing.nodeId !== undefined ? targetNodeId({ nodeId: routing.nodeId }) : targetNodeId({ nodeId: parentNodeId })
+    if (nodeId === undefined) return this.localTargetOf()
+    return { nodeId }
+  }
+
+  /**
    * 附件诚实性门禁（任何建窗副作用之前）：
-   * 远端机器且 Profile 未配置远端可达 HELM_HUB_URL 时，远端窗格无法拉取
-   * 产物（本机 artifacts 目录不在远端文件系统上），显式拒绝而非静默截断。
+   * 远端节点且既无 Profile 配置也无节点通道提供的可达 HELM_HUB_URL 时，远端窗格
+   * 无法拉取产物（本机 artifacts 目录不在远端文件系统上），显式拒绝而非静默截断。
    */
   private assertAttachmentsReachable(
     request: AgentSpawnRequest,
@@ -146,15 +170,19 @@ export class HerdrExecutor {
     routing: SpawnRouting,
   ): void {
     if (request.attachments === undefined || request.attachments.length === 0) return
-    if (target.machine === undefined) return // 本机窗格：直接读本机 artifacts。
-    const base = this.deps.buildSpawnEnv(request.parentConversationId, '/tmp/helm-attachment-gate')
-    const { hubUrlOverridden } = buildSpawnPaneEnv(base, routing.profileEnv, { remote: true })
-    if (hubUrlOverridden) return // 远端已配置可达 HELM_HUB_URL：可经 CLI 拉取。
+    const nodeId = targetNodeId(target)
+    if (nodeId === undefined) return // 本机窗格：直接读本机 artifacts。
+    const base = this.deps.buildSpawnEnv(request.parentConversationId, '/tmp/helm-attachment-gate', nodeId)
+    const { hubUrlOverridden } = buildSpawnPaneEnv(base, routing.profileEnv, {
+      remote: true,
+      nodeHubUrl: this.deps.nodeChannel?.getNodeHubUrl?.(nodeId),
+    })
+    if (hubUrlOverridden) return // 远端已有可达 HELM_HUB_URL（Profile 或节点通道）：可经 CLI 拉取。
     throw new HelmError(
       'remote_hub_unreachable_for_artifacts',
-      `远端机器 '${target.machine}' 未配置可达的 HELM_HUB_URL，无法传递附件（${request.attachments.join(', ')}）；请在 Profile runtime.env.HELM_HUB_URL 配置远端可达的 http(s) 地址`,
+      `远端节点 '${nodeId}' 未配置可达的 HELM_HUB_URL，无法传递附件（${request.attachments.join(', ')}）；请在 Profile runtime.env.HELM_HUB_URL 配置远端可达的 http(s) 地址，或让节点经 helm-node 接入上报 hubUrl`,
       400,
-      { machine: target.machine, attachments: request.attachments },
+      { nodeId, attachments: request.attachments },
     )
   }
 
@@ -162,15 +190,15 @@ export class HerdrExecutor {
   // 建窗与启动
   // ------------------------------------------------------------------
 
-  private async spawnNew(request: AgentSpawnRequest, routing: SpawnRouting, existing?: ManagedPane): Promise<unknown> {
+  private async spawnNew(request: AgentSpawnRequest, routing: SpawnRouting, target: HerdrTarget, existing?: ManagedPane): Promise<unknown> {
     if (existing === undefined) {
       // 新窗格：cwd 解析链 request.cwd > profile.workspace > 父 cwd > default。
       const parentCwd = this.parentCwdOrThrow(request.parentConversationId)
       const cwd = resolveCwd(request.cwd, routing, parentCwd) || this.deps.defaultCwd
-      existing = await this.createManagedPane(request, routing, this.localTargetOf(), cwd)
+      existing = await this.createManagedPane(request, routing, target, cwd)
     }
     const pane = existing
-    this.registry.update(machineOf(pane), pane.paneId, {
+    this.registry.update(nodeIdOf(pane), pane.paneId, {
       routing: { kind: routing.kind, ...(routing.profileId !== undefined ? { profileId: routing.profileId } : {}) },
     })
     await this.preloadAttachmentMeta(request)
@@ -191,11 +219,19 @@ export class HerdrExecutor {
     return cwd
   }
 
+  /**
+   * 父会话绑定节点：getConversation 错误如实上抛（与 parentCwdOf 同源）。
+   */
+  private parentNodeIdOrThrow(parentConversationId: number): string | undefined {
+    // 宿主可能复用同一 getConversation 调用；错误语义由实现保证如实。
+    return this.host.parentNodeIdOf(parentConversationId)
+  }
+
   /** 建窗并登记（含 worktree 两步 + 中途失败回收已创建资源）。 */
   private async createManagedPane(
     request: AgentSpawnRequest,
     routing: SpawnRouting,
-    localTarget: HerdrTarget,
+    target: HerdrTarget,
     cwd: string,
   ): Promise<ManagedPane> {
     const unique = `${Date.now()}-${HashShort.of(request.prompt.slice(0, 160))}-${request.parentConversationId}-${Math.random().toString(36).slice(2, 6)}`
@@ -203,8 +239,8 @@ export class HerdrExecutor {
     const safeId = `${HashShort.of(unique)}${HashShort.of(request.prompt).slice(0, 4)}`
     const ext = request.schema !== undefined ? 'json' : 'md'
     const outputFileName = buildOutputFileName(safeId, ext)
-    const env = this.buildPaneEnv(request.parentConversationId, cwd, routing, paneTargetOf(routing, localTarget))
-    const window = await this.createWindow(paneTargetOf(routing, localTarget), routing, request, cwd, env, agentName)
+    const env = this.buildPaneEnv(request.parentConversationId, cwd, routing, target)
+    const window = await this.createWindow(target, routing, request, cwd, env, agentName)
     const managed: ManagedPane = {
       target: window.target,
       paneId: window.paneId,
@@ -326,7 +362,7 @@ export class HerdrExecutor {
     signal?: AbortSignal,
   ): Promise<HerdrAgentInfo> {
     const params: Record<string, unknown> = {
-      name: this.registry.get(machineOf({ target }), paneId)?.agentName ?? buildAgentName(HashShort.of(paneId)),
+      name: this.registry.get(nodeIdOf({ target }), paneId)?.agentName ?? buildAgentName(HashShort.of(paneId)),
       kind: routing.kind,
       pane_id: paneId,
       timeout_ms: this.host.startupTimeoutMs(),
@@ -384,19 +420,23 @@ export class HerdrExecutor {
   }
 
   /**
-   * 窗格 env：buildSpawnEnv(managed/stash) + buildSpawnPaneEnv 合并。
+   * 窗格 env：buildSpawnEnv(managed/stash，确切目标节点) + buildSpawnPaneEnv 合并。
    * 受管 HELM_* 由内核构造权威（Profile 不可覆盖）；远端剥本机回连变量
-   * （Profile 显式有效可达 HELM_HUB_URL 除外）。
+   * （Profile 显式有效可达 HELM_HUB_URL 或节点通道 hubUrl 除外）。
+   * buildSpawnEnv 第三参始终传确切 nodeId（'local' 或远端 ID）——绝不让内核
+   * 按父会话继承（父会话绑定远端时会把本机窗格误配到远端）。
    */
   private buildPaneEnv(parentConversationId: number, cwd: string, routing: SpawnRouting, target: HerdrTarget): Record<string, string> {
-    const base = this.deps.buildSpawnEnv(this.host.askConversationId(parentConversationId), cwd)
+    const nodeId = targetNodeId(target) ?? 'local'
+    const base = this.deps.buildSpawnEnv(this.host.askConversationId(parentConversationId), cwd, nodeId)
     const { env, stripped, hubUrlOverridden } = buildSpawnPaneEnv(base, routing.profileEnv, {
-      remote: target.machine !== undefined,
+      remote: nodeId !== 'local',
+      ...(nodeId !== 'local' ? { nodeHubUrl: this.deps.nodeChannel?.getNodeHubUrl?.(nodeId) } : {}),
     })
     if (stripped.length > 0) {
       this.host.notify(
         '远端窗格已剥除本机回连变量',
-        `machine ${target.machine} 未配置远端可达 HELM_HUB_URL，已剥除：${stripped.join(', ')}`,
+        `node ${nodeId} 无可达 HELM_HUB_URL，已剥除：${stripped.join(', ')}`,
         'info',
       )
     }
@@ -454,7 +494,7 @@ export class HerdrExecutor {
    */
   private buildAttachmentBlock(request: AgentSpawnRequest, pane: ManagedPane): string {
     if (request.attachments === undefined || request.attachments.length === 0) return ''
-    const isRemote = machineOf(pane) !== undefined
+    const isRemote = nodeIdOf(pane) !== undefined
     const lines: string[] = []
     for (const id of request.attachments) {
       const meta = this.attachmentMetaCache.get(id)
@@ -545,7 +585,7 @@ export class HerdrExecutor {
     const output = await this.readAndValidateOutput(request, pane)
     if (request.gate !== undefined) await this.runGateFor(request, pane)
     request.signal?.throwIfAborted()
-    this.registry.update(machineOf(pane), pane.paneId, { outcome: 'keepalive', outputFileName: undefined })
+    this.registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'keepalive', outputFileName: undefined })
     return output
   }
 
@@ -556,7 +596,7 @@ export class HerdrExecutor {
     while (info.agentStatus !== 'idle' && info.agentStatus !== 'done') {
       request.signal?.throwIfAborted()
       if (info.agentStatus === 'blocked') {
-        const entry = this.asks.get(machineOf(pane), pane.paneId, info.stateChangeSeq)
+        const entry = this.asks.get(nodeIdOf(pane), pane.paneId, info.stateChangeSeq)
         if (entry?.phase === 'settled') {
           await backoffForDuplicateBlocked(signalOf(request), ++attempts)
         } else {
@@ -605,7 +645,7 @@ export class HerdrExecutor {
     const authority = await this.agentGet(target, pane.paneId, request.signal)
     for (const superseded of this.asks.observeAuthority({
       paneId: pane.paneId,
-      machine: machineOf(pane),
+      nodeId: nodeIdOf(pane),
       seq: authority.stateChangeSeq,
       status: authority.agentStatus,
     })) {
@@ -613,11 +653,11 @@ export class HerdrExecutor {
     }
     if (authority.agentStatus !== 'blocked') return true // 终端已自行处理（旧快照）。
 
-    const begin = this.asks.beginBlocked(machineOf(pane), pane.paneId, authority.stateChangeSeq)
+    const begin = this.asks.beginBlocked(nodeIdOf(pane), pane.paneId, authority.stateChangeSeq)
     const entry: AskEntry =
       'owner' in begin
         ? begin.owner
-        : this.asks.get(machineOf(pane), pane.paneId, authority.stateChangeSeq)!
+        : this.asks.get(nodeIdOf(pane), pane.paneId, authority.stateChangeSeq)!
     if (entry === undefined) return true
     if (entry.phase === 'settled') return true
     const existing = this.blockedTasks.get(entry.askId)
@@ -649,7 +689,7 @@ export class HerdrExecutor {
     const authority = await this.agentGet(targetOf(pane), pane.paneId, request.signal)
     for (const superseded of this.asks.observeAuthority({
       paneId: pane.paneId,
-      machine: machineOf(pane),
+      nodeId: nodeIdOf(pane),
       seq: authority.stateChangeSeq,
       status: authority.agentStatus,
     })) {
@@ -702,7 +742,7 @@ export class HerdrExecutor {
         }
         const current = await this.agentGet(targetOf(pane), pane.paneId, monitor.signal)
         if (current.stateChangeSeq !== entry.seq || current.agentStatus !== 'blocked') {
-          this.asks.observeAuthority({ machine: machineOf(pane), paneId: pane.paneId, seq: current.stateChangeSeq, status: current.agentStatus })
+          this.asks.observeAuthority({ nodeId: nodeIdOf(pane), paneId: pane.paneId, seq: current.stateChangeSeq, status: current.agentStatus })
           await this.cancelAskQuietly(entry.askId, 'superseded')
         }
       }
@@ -747,7 +787,7 @@ export class HerdrExecutor {
     const authority = await this.agentGet(targetOf(pane), pane.paneId, request.signal)
     for (const superseded of this.asks.observeAuthority({
       paneId: pane.paneId,
-      machine: machineOf(pane),
+      nodeId: nodeIdOf(pane),
       seq: authority.stateChangeSeq,
       status: authority.agentStatus,
     })) {
@@ -871,7 +911,7 @@ export class HerdrExecutor {
     const env = this.paneEnvs.get(this.paneKey(pane))
     if (env === undefined) throw new HelmError('herdr_context_unavailable', '任务环境已丢失，无法在同一环境执行 Gate', 409)
     const gate: { ok: boolean; output: string } =
-      machineOf(pane) === undefined
+      nodeIdOf(pane) === undefined
         ? await this.deps.runLocalGate(request.gate!, {
             cwd: pane.effectiveCwd,
             conversationId: this.host.askConversationId(request.parentConversationId),
@@ -901,7 +941,7 @@ export class HerdrExecutor {
    *   request.agentId；
    * - workflow resumeAgent：resume = 本 run 记录的 agentId，无 agentType。
    * 校验：只准同 workflow（含 undefined 轨道一致）及同父会话；拒绝 busy/
-   * settled/未知/歧义；显式 kind/machine/cwd 不一致显式拒绝（不静默忽略）。
+   * settled/未知/歧义；显式 kind/nodeId/cwd 不一致显式拒绝（不静默忽略）。
    * 返回 undefined 表示该 ref 非本插件记录（交还内核原生 resume）。
    */
   private async resumeInto(request: AgentSpawnRequest, candidates: ManagedPane[]): Promise<unknown> {
@@ -911,7 +951,7 @@ export class HerdrExecutor {
         'resume_ambiguous',
         `resume ref '${resumeRef}' 命中 ${candidates.length} 个窗格（跨机器 paneId 撞号），请用稳定 agentId 消歧`,
         409,
-        { resumeRef, panes: candidates.map((p) => `${machineOf(p) ?? 'local'}:${p.paneId}`) },
+        { resumeRef, panes: candidates.map((p) => `${nodeIdOf(p) ?? 'local'}:${p.paneId}`) },
       )
     }
     const pane = candidates[0]!
@@ -954,7 +994,7 @@ export class HerdrExecutor {
     assertNoUnsupportedOverrides(request.model, request.effort)
     const resumeRouting = await this.resolveResumeRouting(request, pane)
     // resume 附件门禁：与新建同语义（远端窗格无可达 HELM_HUB_URL 拒绝）。
-    this.assertAttachmentsReachable(request, paneTargetOf(resumeRouting, targetOf(pane)), resumeRouting)
+    this.assertAttachmentsReachable(request, targetOf(pane), resumeRouting)
     if (request.cwd !== undefined && request.cwd !== pane.effectiveCwd) {
       throw new HelmError(
         'resume_cwd_conflict',
@@ -967,10 +1007,10 @@ export class HerdrExecutor {
     const unique = `${Date.now()}-resume-${HashShort.of(request.prompt.slice(0, 160))}-${request.parentConversationId}-${Math.random().toString(36).slice(2, 6)}`
     const safeId = `r${HashShort.of(unique)}`
     const ext = request.schema !== undefined ? 'json' : 'md'
-    if (this.registry.get(machineOf(pane), pane.paneId)?.outcome === 'running') {
+    if (this.registry.get(nodeIdOf(pane), pane.paneId)?.outcome === 'running') {
       throw new HelmError('pane_busy', `pane ${pane.paneId} 已由另一续接占用`, 409)
     }
-    const updated = this.registry.update(machineOf(pane), pane.paneId, {
+    const updated = this.registry.update(nodeIdOf(pane), pane.paneId, {
       outcome: 'running',
       outputFileName: buildOutputFileName(safeId, ext),
       agentId: request.agentId ?? pane.agentId,
@@ -983,7 +1023,12 @@ export class HerdrExecutor {
     return this.runManagedTask(request, updated)
   }
 
-  /** resume 路由解析：显式 agentType 校验 kind 一致；缺省沿用 pane.routing。 */
+  /**
+   * resume 路由解析：显式 agentType 校验 kind 一致；缺省沿用 pane.routing。
+   * 节点语义：resume 沿用旧窗格登记的节点（缺省与显式一致仅校验不重算——
+   * 显式 nodeId 与旧节点不同即 resume_node_conflict 拒绝，绝不静默把续接
+   * 投到另一台机器；也不按当前父会话节点重新解析）。
+   */
   private async resolveResumeRouting(request: AgentSpawnRequest, pane: ManagedPane): Promise<SpawnRouting> {
     if (request.agentType === undefined || request.agentType === '') {
       const routing = pane.routing
@@ -992,7 +1037,7 @@ export class HerdrExecutor {
         ...(pane.routing.profileId !== undefined ? { profileId: pane.routing.profileId } : {}),
         args: [],
         profileEnv: {},
-        ...(machineOf(pane) !== undefined ? { machine: machineOf(pane) } : {}),
+        nodeId: nodeIdOf(pane) ?? 'local',
       }
     }
     const routing = await resolveSpawnRouting(request.agentType, this.deps.profiles)
@@ -1012,16 +1057,18 @@ export class HerdrExecutor {
         { resume: request.resume, requestKind: routing.kind, paneKind: pane.routing.kind },
       )
     }
-    if (routing.machine !== machineOf(pane)) {
+    const requestNodeId = routing.nodeId !== undefined ? targetNodeId({ nodeId: routing.nodeId }) ?? 'local' : undefined
+    const paneNodeId = nodeIdOf(pane) ?? 'local'
+    if (requestNodeId !== undefined && requestNodeId !== paneNodeId) {
       throw new HelmError(
-        'resume_machine_conflict',
-        `resume 显式 machine '${routing.machine}' 与窗格目标机 '${machineOf(pane)}' 不一致，拒绝跨机续接`,
+        'resume_node_conflict',
+        `resume 显式节点 '${requestNodeId}' 与窗格目标节点 '${paneNodeId}' 不一致，拒绝跨节点续接`,
         409,
-        { resume: request.resume, requestMachine: routing.machine, paneMachine: machineOf(pane) },
+        { resume: request.resume, requestNodeId, paneNodeId },
       )
     }
-    // 沿用窗格冻结目标（routing.machine 仅作一致性校验，不热换连接）。
-    return routing
+    // 沿用窗格冻结目标（显式节点仅作一致性校验，不热换连接）。
+    return { ...routing, nodeId: paneNodeId }
   }
 
   // ------------------------------------------------------------------
@@ -1040,10 +1087,10 @@ export class HerdrExecutor {
     options: { volatileMark?: boolean } = {},
   ): Promise<void> {
     if (pane.outcome === 'failed') return
-    const key = `${machineOf(pane) ?? 'local'}:${pane.paneId}`
+    const key = `${nodeIdOf(pane) ?? 'local'}:${pane.paneId}`
     const existing = this.activeCloses.get(key)
     if (existing !== undefined) return existing
-    const current = this.registry.get(machineOf(pane), pane.paneId)
+    const current = this.registry.get(nodeIdOf(pane), pane.paneId)
     if (current !== undefined && current.outcome === 'settled') return
     const closing = (async () => {
       const target = targetOf(pane)
@@ -1057,7 +1104,7 @@ export class HerdrExecutor {
           if ((error as { code?: string }).code !== 'agent_not_found') throw error
           owned = this.unstartedPanes.has(this.paneKey(pane))
         }
-        for (const entry of this.asks.paneClosed(pane.paneId, machineOf(pane))) {
+        for (const entry of this.asks.paneClosed(pane.paneId, nodeIdOf(pane))) {
           await this.cancelAskQuietly(entry.askId, 'superseded')
         }
         if (owned) {
@@ -1077,14 +1124,14 @@ export class HerdrExecutor {
       }
       if (options.volatileMark === true) {
         // 服务 stop 路径：持久 doc 句柄已随停用失效，仅内存标记（对账下周期重建）。
-        this.registry.markSettledVolatile(machineOf(pane), pane.paneId)
+        this.registry.markSettledVolatile(nodeIdOf(pane), pane.paneId)
       } else {
-        this.registry.update(machineOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+        this.registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
       }
-      this.projector.forget(pane.paneId, machineOf(pane))
+      this.projector.forget(pane.paneId, nodeIdOf(pane))
       this.paneEnvs.delete(this.paneKey(pane))
       this.unstartedPanes.delete(this.paneKey(pane))
-      for (const removed of this.asks.paneClosed(pane.paneId, machineOf(pane))) {
+      for (const removed of this.asks.paneClosed(pane.paneId, nodeIdOf(pane))) {
         if (removed.phase === 'pending' || removed.phase === 'creating') {
           await this.cancelAskQuietly(removed.askId, 'superseded')
         }
@@ -1108,13 +1155,13 @@ export class HerdrExecutor {
   }
 
   private async markFailed(pane: ManagedPane, note: string): Promise<void> {
-    this.registry.update(machineOf(pane), pane.paneId, {
+    this.registry.update(nodeIdOf(pane), pane.paneId, {
       outcome: 'failed',
       failureNote: this.deps.redact(note).slice(0, 500),
       settledAt: Date.now(),
     })
-    this.projector.forget(pane.paneId, machineOf(pane))
-    for (const removed of this.asks.paneClosed(pane.paneId, machineOf(pane)) ?? []) {
+    this.projector.forget(pane.paneId, nodeIdOf(pane))
+    for (const removed of this.asks.paneClosed(pane.paneId, nodeIdOf(pane)) ?? []) {
       if (removed.phase === 'pending' || removed.phase === 'creating') {
         await this.cancelAskQuietly(removed.askId, 'superseded')
       }
@@ -1122,16 +1169,12 @@ export class HerdrExecutor {
   }
 
   private async project(pane: ManagedPane, token: string): Promise<void> {
-    await this.projector.project(machineOf(pane), pane.paneId, token)
+    await this.projector.project(nodeIdOf(pane), pane.paneId, token)
   }
 }
 
 function signalOf(request: AgentSpawnRequest): AbortSignal {
   return request.signal ?? new AbortController().signal
-}
-
-function paneTargetOf(routing: SpawnRouting, localTarget: HerdrTarget): HerdrTarget {
-  return routing.machine === undefined ? localTarget : { machine: routing.machine }
 }
 
 export type { PaneRouting }

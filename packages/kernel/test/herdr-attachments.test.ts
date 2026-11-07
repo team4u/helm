@@ -17,7 +17,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, type Profile } from '@helm/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
-import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
+import type { HerdrEvent, HerdrNodeChannel, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
 
 // ---------------------------------------------------------------------------
 // 受控 HerdrTransport（与 herdr.test.ts 同款裁剪版）
@@ -252,7 +252,7 @@ interface Env {
   close(): Promise<void>
 }
 
-async function makeEnv(opts: { withGetArtifact?: boolean } = {}): Promise<Env> {
+async function makeEnv(opts: { withGetArtifact?: boolean; nodeChannel?: HerdrNodeChannel } = {}): Promise<Env> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-attach-'))
   const backend = new FakeBackend()
   const transport = new FakeTransport()
@@ -286,6 +286,7 @@ async function makeEnv(opts: { withGetArtifact?: boolean } = {}): Promise<Env> {
             },
           }
         : {}),
+      ...(opts.nodeChannel ? { nodeChannel: opts.nodeChannel } : {}),
       transport,
     }),
     { enabled: true },
@@ -332,17 +333,17 @@ test('远端未配置可达 HELM_HUB_URL：附件显式报 remote_hub_unreachabl
   try {
     await assert.rejects(
       spawnDirect(env, {
-        agentType: 'herdr:agy@remote-host',
+        agentType: 'herdr:agy@remote-node',
         attachments: ['art-id-1', 'art-id-2'],
       }),
       (err: unknown) => {
         assert.ok(err instanceof HelmError)
         assert.equal(err.code, 'remote_hub_unreachable_for_artifacts')
         assert.equal(err.status, 400)
-        assert.ok(err.message.includes("remote-host"))
+        assert.ok(err.message.includes("remote-node"), `错误信息应含节点名：${err.message}`)
         assert.ok(err.message.includes('HELM_HUB_URL'))
-        const details = err.details as { machine: string; attachments: string[] }
-        assert.equal(details.machine, 'remote-host')
+        const details = err.details as { nodeId: string; attachments: string[] }
+        assert.equal(details.nodeId, 'remote-node')
         assert.deepEqual(details.attachments, ['art-id-1', 'art-id-2'])
         return true
       },
@@ -365,7 +366,7 @@ test('远端 Profile 路径同样受门禁保护（machine 来自 Profile.runtim
   try {
     env.profiles.set('far-broken', {
       id: 'far-broken',
-      runtime: { kind: 'herdr', agent: 'agy', machine: 'far-host' },
+      runtime: { kind: 'herdr', agent: 'agy', nodeId: 'far-node' },
     })
     await assert.rejects(
       spawnDirect(env, { agentType: 'far-broken', attachments: ['a1'] }),
@@ -389,7 +390,7 @@ test('远端配置可达 HELM_HUB_URL：门禁通过，注入附件拉取指引�
       runtime: {
         kind: 'herdr',
         agent: 'agy',
-        machine: 'remote-host',
+        nodeId: 'remote-node',
         env: { HELM_HUB_URL: 'http://10.0.0.5:3202' },
       },
     })
@@ -471,7 +472,7 @@ test('resume 远端窗格携带附件且无可达 HELM_HUB_URL：同样拒绝', 
       runtime: {
         kind: 'herdr',
         agent: 'agy',
-        machine: 'remote-host',
+        nodeId: 'remote-node',
         env: { HELM_HUB_URL: 'http://10.0.0.5:3202' },
       },
     })
@@ -482,7 +483,7 @@ test('resume 远端窗格携带附件且无可达 HELM_HUB_URL：同样拒绝', 
     // 同一 Profile 撤销可达 HELM_HUB_URL（路由 kind/profileId 不变，仅 env 变化）。
     env.profiles.set('far', {
       id: 'far',
-      runtime: { kind: 'herdr', agent: 'agy', machine: 'remote-host' },
+      runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node' },
     })
     await assert.rejects(
       spawnDirect(env, {
@@ -492,6 +493,82 @@ test('resume 远端窗格携带附件且无可达 HELM_HUB_URL：同样拒绝', 
       }),
       (err: unknown) => err instanceof HelmError && err.code === 'remote_hub_unreachable_for_artifacts',
     )
+  } finally {
+    await env.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 节点通道 hubUrl 自动注入（getNodeHubUrl 提供可达地址时放行附件并注入回连）
+// ---------------------------------------------------------------------------
+
+/** 只提供 getNodeHubUrl 的最小通道（协议细节由 transport 层测试覆盖）。 */
+function hubUrlChannel(hubUrls: Record<string, string>): HerdrNodeChannel {
+  return {
+    isOnline: (nodeId) => nodeId in hubUrls,
+    getNodeHubUrl: (nodeId) => hubUrls[nodeId],
+    ipcCall: async () => ({ ok: false, error: { code: 'unknown', message: 'fixture 不承载 IPC' } }),
+    envFor: () => {
+      throw new Error('fixture 不承载文件环境')
+    },
+  }
+}
+
+test('节点通道 hubUrl 可达：附件门禁通过并自动注入 HELM_HUB_URL 回连', { timeout: 60_000 }, async () => {
+  const env = await makeEnv({ withGetArtifact: true, nodeChannel: hubUrlChannel({ 'build-01': 'http://10.0.0.7:3202' }) })
+  try {
+    scriptSuccess(env, 'hub-ok')
+    const result = await spawnDirect(env, {
+      agentType: 'herdr:agy@build-01',
+      attachments: ['art-x'],
+    })
+    assert.equal(result, 'hub-ok')
+    const envSent = env.transport.calls.find((c) => c.method === 'tab.create')!.params['env'] as Record<string, string>
+    assert.equal(envSent['HELM_HUB_URL'], 'http://10.0.0.7:3202', '节点通道 hubUrl 注入为回连地址')
+    assert.equal(envSent['HELM_TOKEN'], 'SECRET-TOKEN', 'token 随可达回连保留')
+  } finally {
+    await env.close()
+  }
+})
+
+test('节点自身注册的 loopback hubUrl 原样保留，支持同机 BYOM 或节点端隧道', { timeout: 60_000 }, async () => {
+  const env = await makeEnv({ withGetArtifact: true, nodeChannel: hubUrlChannel({ 'build-02': 'http://127.0.0.1:3202' }) })
+  try {
+    scriptSuccess(env, 'node-loopback-ok')
+    assert.equal(await spawnDirect(env, { agentType: 'herdr:agy@build-02', attachments: ['art-x'] }), 'node-loopback-ok')
+    const envSent = env.transport.calls.find((call) => call.method === 'tab.create')!.params['env'] as Record<string, string>
+    assert.equal(envSent.HELM_HUB_URL, 'http://127.0.0.1:3202')
+    assert.equal(envSent.HELM_TOKEN, 'SECRET-TOKEN')
+  } finally { await env.close() }
+})
+
+test('节点通道提供非法 URL 时不放行附件', { timeout: 60_000 }, async () => {
+  const env = await makeEnv({ nodeChannel: hubUrlChannel({ 'build-02': 'file:///not-a-hub' }) })
+  try {
+    await assert.rejects(
+      spawnDirect(env, { agentType: 'herdr:agy@build-02', attachments: ['a1'] }),
+      (err: unknown) => (err as HelmError).code === 'remote_hub_unreachable_for_artifacts',
+    )
+    assert.equal(env.transport.calls.filter((c) => c.method === 'tab.create').length, 0, '零建窗副作用')
+  } finally { await env.close() }
+})
+
+test('Profile 显式 hubUrl 优先于节点通道 hubUrl', { timeout: 60_000 }, async () => {
+  const env = await makeEnv({ nodeChannel: hubUrlChannel({ 'build-03': 'http://10.0.0.7:3202' }) })
+  try {
+    env.profiles.set('explicit-url', {
+      id: 'explicit-url',
+      runtime: {
+        kind: 'herdr',
+        agent: 'agy',
+        nodeId: 'build-03',
+        env: { HELM_HUB_URL: 'http://10.9.9.9:3202' },
+      },
+    })
+    scriptSuccess(env, 'explicit-ok')
+    await spawnDirect(env, { agentType: 'explicit-url' })
+    const envSent = env.transport.calls.find((c) => c.method === 'tab.create')!.params['env'] as Record<string, string>
+    assert.equal(envSent['HELM_HUB_URL'], 'http://10.9.9.9:3202', 'Profile 显式 URL 覆盖通道 hubUrl')
   } finally {
     await env.close()
   }

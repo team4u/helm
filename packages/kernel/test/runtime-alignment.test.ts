@@ -6,7 +6,7 @@
  *    PATCH model:'' 清除 override 换 profile 重算、跨 profile 隔离、
  *    子 spawn register 回传真实 resolvedModel（非 request/global 谎报）、
  *    重启后继承语义保持（fresh 无 override 即继承）；
- * 2. ProfileRuntime machine/workspace/env 边界验证与保留；
+ * 2. ProfileRuntime nodeId/workspace/env 边界验证与保留；
  * 3. 会话插件管理权：managed 删除保护 409 owners、release 后可删、
  *    root 403 不变；markConversationOwnership 通用且 root 禁改自动归属；
  *    原生 spawn 子会话零业务标签且自动 helm 归属；
@@ -206,10 +206,10 @@ describe('模型解析链：显式 override > profile.model > 全局默认', { t
 })
 
 // ---------------------------------------------------------------------------
-// 2. ProfileRuntime machine/workspace/env
+// 2. ProfileRuntime nodeId/workspace/env
 // ---------------------------------------------------------------------------
 
-describe('ProfileRuntime machine/workspace/env 边界验证', { timeout: 60_000 }, () => {
+describe('ProfileRuntime nodeId/workspace/env 边界验证', { timeout: 60_000 }, () => {
   it('合法字段保留；非法形状显式拒绝（保存边界）', { timeout: 60_000 }, async () => {
     const dir = join(root, 'pr1')
     const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
@@ -221,20 +221,20 @@ describe('ProfileRuntime machine/workspace/env 边界验证', { timeout: 60_000 
         runtime: {
           kind: 'herdr',
           agent: 'claude',
-          machine: 'gpu-box',
+          nodeId: 'gpu-box',
           workspace: '/workspace/proj',
           env: { WORKER_MODE: 'fast', MAX_TASKS: '4' },
         },
       })
-      assert.equal(saved.runtime?.machine, 'gpu-box')
+      assert.equal(saved.runtime?.nodeId, 'gpu-box')
       assert.equal(saved.runtime?.workspace, '/workspace/proj')
       assert.deepEqual(saved.runtime?.env, { WORKER_MODE: 'fast', MAX_TASKS: '4' })
       // 读取路径同样保留。
       const reread = await svc.get('remote-agent')
-      assert.equal(reread?.runtime?.machine, 'gpu-box')
+      assert.equal(reread?.runtime?.nodeId, 'gpu-box')
       // 非法形状拒绝。
       await assert.rejects(() =>
-        svc.save({ id: 'bad', runtime: { kind: 'herdr', agent: 'x', machine: '' } as never }),
+        svc.save({ id: 'bad', runtime: { kind: 'herdr', agent: 'x', nodeId: '' } as never }),
       )
       await assert.rejects(() =>
         svc.save({ id: 'bad', runtime: { kind: 'herdr', agent: 'x', env: { '1BAD': 'v' } } as never }),

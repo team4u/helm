@@ -8,7 +8,7 @@ import { createHelm } from '../packages/kernel/dist/app.js';
 import { startHub } from '../packages/kernel/dist/http/index.js';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
-const cliEntry = fileURLToPath(new URL('../packages/node/dist/cli/index.js', import.meta.url));
+const cliEntry = fileURLToPath(new URL('../packages/cli/dist/index.js', import.meta.url));
 
 const dataDir = await mkdtemp(join(tmpdir(), 'helm-superagent-built-'));
 const pluginId = 'builtin:superagent';

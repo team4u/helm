@@ -40,6 +40,8 @@ const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhi
 export interface ResolvedProfile {
   model?: string
   cwd?: string
+  /** Profile 默认绑定的计算节点（缺省 'local'）。 */
+  nodeId?: string
   /** 外部运行时声明（如 herdr）：原生执行行不支持，显式报错。 */
   runtime?: { kind: string; agent: string; args?: string[] }
 }
@@ -347,14 +349,14 @@ Schema: ${JSON.stringify(structured.schema)}
 
   if (structured) {
     if (structured.accepted !== undefined) {
-      await settleGate(deps, request, gateCwd)
+      await settleGate(deps, request, gateCwd, childId)
       return structured.accepted
     }
     // 未走工具：一次文本自愈追问（模型可能直接输出 JSON 文本）。
     const text = deps.getLastAssistantText(childId) ?? ''
     const parsed = parseSchemaCandidate(text, structured.schema)
     if (parsed.ok) {
-      await settleGate(deps, request, gateCwd)
+      await settleGate(deps, request, gateCwd, childId)
       return parsed.value
     }
     const heal = await conversation.submit(
@@ -372,13 +374,13 @@ Schema: ${JSON.stringify(structured.schema)}`,
     const healSettled = await heal.wait(bg)
     assertNotUnanswered(healSettled, childId)
     if (structured.accepted !== undefined) {
-      await settleGate(deps, request, gateCwd)
+      await settleGate(deps, request, gateCwd, childId)
       return structured.accepted
     }
     const lastText = deps.getLastAssistantText(childId) ?? ''
     const retry = parseSchemaCandidate(lastText, structured.schema)
     if (retry.ok) {
-      await settleGate(deps, request, gateCwd)
+      await settleGate(deps, request, gateCwd, childId)
       return retry.value
     }
     throw new HelmError(
@@ -389,7 +391,7 @@ Schema: ${JSON.stringify(structured.schema)}`,
     )
   }
 
-  await settleGate(deps, request, gateCwd)
+  await settleGate(deps, request, gateCwd, childId)
   const text = deps.getLastAssistantText(childId)
   if (text === undefined || text === '') {
     throw new HelmError('subagent_failed', `子代理（会话 ${childId}）完成但无文本输出`, 502, {
@@ -468,11 +470,13 @@ async function settleGate(
   deps: NativeSpawnDeps,
   request: AgentSpawnRequest,
   cwd: string,
+  childId: number,
 ): Promise<void> {
   if (!request.gate) return
   // cwd 用子会话实际工作目录，不依赖请求缺省 main cwd；gate 是验收命令，
   // 输出直接进错误诊断（不挂会话，避免误注入会话级 stash 环境）。
-  const gate = await runGate(deps, request.gate, { cwd, signal: request.signal })
+  // conversationId 使 runGate 解析子会话绑定节点（远端 gate 在远端执行）。
+  const gate = await runGate(deps, request.gate, { cwd, conversationId: childId, signal: request.signal })
   // 执行环境内恰好一次执行后回传结果（宿主引擎据此免二次执行）。
   request.onGateResult?.({ ok: gate.ok, output: gate.output })
   if (!gate.ok) {

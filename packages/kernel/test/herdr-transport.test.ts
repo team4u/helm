@@ -10,14 +10,15 @@ import {
   HERDR_CALL_TIMEOUT_MS,
   HerdrTransportError,
   createHerdrTransport,
-  isValidMachineName,
+  isValidNodeId,
   isValidSessionName,
 } from '../src/builtin-plugins/herdr/transport.js'
+import { MutableNodeChannel, nodeFixture } from './herdr-node-fixture.js'
 
 /**
  * 传输层边界测试：用真实临时 Unix socket 验证 NDJSON wire、订阅流、错误信封、
- * abort 与文件安全边界；用受控 ssh fixture（process.env.PATH 前置假 ssh 脚本）
- * 验证远端 stdin 脚本分派与「机密不出现在 argv」。这不伪称真实远端 E2E。
+ * abort 与文件安全边界；用节点通道 fixture（真实 LocalNodeChannel + 受控 UDS）
+ * 验证远端分派与「机密只在 JSON 结构内部」。这不伪称真实远端 E2E。
  */
 
 function secret(): string {
@@ -345,11 +346,11 @@ describe('herdr transport subscribe', () => {
     await close(server)
   })
 
-  it('远端 subscribe 显式拒绝，不静默降级', { timeout: 60_000 }, async () => {
-    const transport = createHerdrTransport()
+  it('远端 subscribe 在通道不支持事件流时显式拒绝，不静默降级', { timeout: 60_000 }, async () => {
+    const transport = createHerdrTransport({ nodeChannel: new MutableNodeChannel() })
     await assert.rejects(
-      transport.subscribe({ machine: 'build-box' }, () => {}, () => {}),
-      (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_subscribe_unsupported',
+      transport.subscribe({ nodeId: 'build-box' }, () => {}, () => {}),
+      (err: unknown) => err instanceof HerdrTransportError && (err.code === 'herdr_subscribe_unsupported' || err.code === 'herdr_node_offline'),
     )
   })
 
@@ -578,73 +579,50 @@ describe('herdr transport local gate', () => {
   })
 })
 
-describe('herdr transport remote (controlled ssh fixture)', () => {
-  let fixtureDir: string
-  let logFile: string
-  const priorPath: string | undefined = process.env.PATH
-
-  before(async () => {
-    fixtureDir = await mkdtemp(join(tmpdir(), 'herdr-ssh-'))
-    logFile = join(fixtureDir, 'argv.log')
-  })
-
-  after(async () => {
-    process.env.PATH = priorPath
-    await rm(fixtureDir, { recursive: true, force: true })
-  })
-
-  it('machine 与 session 校验拒绝注入', { timeout: 60_000 }, () => {
-    assert.equal(isValidMachineName('build-box'), true)
-    assert.equal(isValidMachineName('root@10.0.0.3'), true)
-    assert.equal(isValidMachineName('-oProxyCommand=evil'), false)
-    assert.equal(isValidMachineName('a b'), false)
+describe('herdr transport remote (node channel)', () => {
+  it('nodeId 与 session 校验拒绝注入', { timeout: 60_000 }, () => {
+    // 新契约：单一安全 token /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/（含 'local'）。
+    // 旧 SSH 机器名形态（user@host、IPv6）不再是合法节点 ID。
+    assert.equal(isValidNodeId('build-box'), true)
+    assert.equal(isValidNodeId('local'), true)
+    assert.equal(isValidNodeId('macbook_pro.2'), true)
+    assert.equal(isValidNodeId('root@10.0.0.3'), false, 'SSH user@host 遗留形态拒绝')
+    assert.equal(isValidNodeId('2001:db8::1'), false, 'IPv6 冒号拒绝')
+    assert.equal(isValidNodeId(''), false, '空串显式拒绝（不默默当本机）')
+    assert.equal(isValidNodeId('-oProxyCommand=evil'), false)
+    assert.equal(isValidNodeId('a b'), false)
+    assert.equal('x'.repeat(129).replace(/x/g, 'a'), 'a'.repeat(129), 'sanity')
+    assert.equal(isValidNodeId('a'.repeat(128)), true, '128 字符向合法')
+    assert.equal(isValidNodeId('a'.repeat(129)), false, '超长拒绝')
     assert.equal(isValidSessionName('helm-wf-1'), true)
     assert.equal(isValidSessionName('../escape'), false)
   })
 
-  it('call 走远端 stdin 脚本且机密不出现在 argv', { timeout: 60_000 }, async () => {
-    // 受控 ssh fixture：记录 argv；远端命令固定 python3 -u -，由 fixture 以本地 python3 执行 stdin 脚本。
-    // 真实 transport 会把 base64 payload 写到 ssh stdin；fixture 经环境变量旁路承接该 payload，
-    // 断言重点在：op/method/env 的分派约定与机密绝不出现在 ssh argv。
-    const handler = [
-      'import base64, json, os, sys',
-      'payload = json.loads(base64.b64decode(os.environ["HERDR_FIXTURE_PAYLOAD"]))',
-      'spec = payload["target"] or {}',
-      'assert payload["op"] == "rpc"',
-      'assert payload["method"] == "tab.create"',
-      'assert payload["params"]["env"]["HELM_TOKEN"] == "sk-secret-DO-NOT-LEAK-9f1b2c"',
-      'print(json.dumps({"result": {"type": "tab_created", "tab": {"tab_id": "w1:t2"}}}))',
-    ].join('\n')
-    const script = join(fixtureDir, 'ssh')
-    const glue = [
-      '#!/bin/sh',
-      'printf "%s\\n" "$@" >> "$HERDR_SSH_ARGV_LOG"',
-      'exec python3 -u - <<"PYSPLIT"',
-      handler,
-      'PYSPLIT',
-      '',
-    ].join('\n')
-    const { writeFileSync } = await import('node:fs')
-    writeFileSync(script, glue, { mode: 0o755 })
-    process.env.PATH = `${fixtureDir}:${priorPath ?? ''}`
-    process.env.HERDR_SSH_ARGV_LOG = logFile
-    const encoded = Buffer.from(
-      JSON.stringify({ op: 'rpc', target: {}, method: 'tab.create', params: { env: { HELM_TOKEN: secret() } } }),
-    ).toString('base64')
-    process.env.HERDR_FIXTURE_PAYLOAD = encoded
+  it('远端节点未注入通道时显式报 herdr_node_offline，绝不静默回退本机', { timeout: 60_000 }, async () => {
+    const offlineChannel = new MutableNodeChannel() // 无任何注册节点
+    const transport = createHerdrTransport({ nodeChannel: offlineChannel })
+    await assert.rejects(
+      transport.call({ nodeId: 'build-box' }, 'ping', {}),
+      (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_node_offline',
+    )
+  })
 
-    const transport = createHerdrTransport()
-    const result = (await withTimeout(transport.call({ machine: 'build-box' }, 'tab.create', { env: { HELM_TOKEN: secret() } }))) as Record<
-      string,
-      unknown
-    >
+  it('call 经节点通道完成 NDJSON 往返且机密只在 JSON 结构内', { timeout: 60_000 }, async (t) => {
+    const fixture = await nodeFixture(t, (request, socket) => {
+      const req = request as { id: string; method: string; params: { env?: Record<string, string> } }
+      assert.equal(req.id, 'helm-remote-1')
+      assert.equal(req.method, 'tab.create')
+      assert.equal(req.params.env?.['HELM_TOKEN'], secret())
+      socket.end(`${JSON.stringify({ id: req.id, result: { type: 'tab_created', tab: { tab_id: 'w1:t2' } } })}\n`)
+    })
+    const channel = new MutableNodeChannel()
+    channel.nodes.set('build-box', { online: true, channel: fixture.channel })
+    const transport = createHerdrTransport({ nodeChannel: channel })
+    const result = (await withTimeout(
+      transport.call({ nodeId: 'build-box', socketPath: fixture.socketPath }, 'tab.create', { env: { HELM_TOKEN: secret() } }),
+    )) as Record<string, unknown>
     assert.equal(result['type'], 'tab_created')
-
-    const { readFile } = await import('node:fs/promises')
-    const argvLog = await readFile(logFile, 'utf8')
-    assert.ok(argvLog.includes('python3 -u -'))
-    assert.ok(!argvLog.includes(secret()), 'secret must never appear in ssh argv')
-    delete process.env.HERDR_FIXTURE_PAYLOAD
-    delete process.env.HERDR_SSH_ARGV_LOG
+    // 机密只在 JSON 结构内部传输；socketPath 等经通道入参传递，绝不进入任何 argv。
+    assert.equal((fixture.requests[0]?.params.env as Record<string, string> | undefined)?.['HELM_TOKEN'], secret())
   })
 })

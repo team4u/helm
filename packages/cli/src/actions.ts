@@ -8,8 +8,8 @@
 import type { ActionManifest, JsonSchema } from '@helm/protocol'
 import { CliError } from './errors.js'
 import type { HubClient } from './hub-client.js'
-import type { CommandContext, CommandSpec } from './commands.js'
-import { resolveConversationTarget } from './commands.js'
+import type { CommandContext, CommandSpec } from './commands/index.js'
+import { resolveConversationTarget } from './commands/index.js'
 import type { FlagSpec } from './args.js'
 
 const RESERVED_FLAG_NAMES = new Set(['json', 'help', 'input', 'current', 'h'])

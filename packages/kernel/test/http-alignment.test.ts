@@ -91,6 +91,10 @@ const state = {
 
 function makeKernel(): KernelRuntimeLike {
   return {
+    listNodes() { throw new Error('本 HTTP 对齐 fixture 不提供节点管理') },
+    async issueNodeToken() { throw new Error('本 HTTP 对齐 fixture 不签发节点身份') },
+    async removeNode() { throw new Error('本 HTTP 对齐 fixture 不移除节点') },
+    async execEnv() { throw new Error('本 HTTP 对齐 fixture 不执行节点命令') },
     dataDir,
     auth,
     events: new NoopEventHub(),
@@ -534,10 +538,10 @@ test('GET /api/plugins/:id/docs/:name 返回 {pluginId,name,value}；私有/未�
 })
 
 // ---------------------------------------------------------------------------
-// Profile runtime 扩展字段（machine/workspace/env 严校验）
+// Profile runtime 扩展字段（nodeId/workspace/env 严校验）
 // ---------------------------------------------------------------------------
 
-test('profiles runtime machine/workspace/env：合法保存回读；非法形状 400', { timeout: 60_000 }, async () => {
+test('profiles runtime nodeId/workspace/env：合法保存回读；非法形状 400', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const ok = await call(handler, 'POST', '/api/profiles', {
     body: {
@@ -546,7 +550,7 @@ test('profiles runtime machine/workspace/env：合法保存回读；非法形状
       runtime: {
         kind: 'herdr',
         agent: 'pi',
-        machine: 'ops-box',
+        nodeId: 'ops-box',
         workspace: '/srv/ops',
         env: { HELM_ENV_ROLE: 'worker', LANG: 'C' },
       },
@@ -557,19 +561,19 @@ test('profiles runtime machine/workspace/env：合法保存回读；非法形状
   assert.deepEqual(got.body.runtime, {
     kind: 'herdr',
     agent: 'pi',
-    machine: 'ops-box',
+    nodeId: 'ops-box',
     workspace: '/srv/ops',
     env: { HELM_ENV_ROLE: 'worker', LANG: 'C' },
   })
 
   const cases: Array<{ runtime: unknown; why: string }> = [
-    { runtime: { kind: 'herdr', agent: 'pi', machine: '' }, why: 'machine 空串' },
+    { runtime: { kind: 'herdr', agent: 'pi', nodeId: '' }, why: 'nodeId 空串' },
     { runtime: { kind: 'herdr', agent: 'pi', workspace: '' }, why: 'workspace 空串' },
     { runtime: { kind: 'herdr', agent: 'pi', env: { K: 1 } }, why: 'env 值非字符串' },
     { runtime: { kind: 'herdr', agent: 'pi', env: { '': 'v' } }, why: 'env 键空串' },
     { runtime: { kind: 'herdr', agent: 'pi', env: ['a'] }, why: 'env 数组' },
     { runtime: { kind: 'herdr', agent: 'pi', bogus: 1 }, why: 'runtime 未知键' },
-    { runtime: { kind: 'herdr', agent: 'pi', machine: 42 }, why: 'machine 非字符串' },
+    { runtime: { kind: 'herdr', agent: 'pi', nodeId: 42 }, why: 'nodeId 非字符串' },
   ]
   for (const c of cases) {
     const res = await call(handler, 'POST', '/api/profiles', { body: { id: 'bad-profile', runtime: c.runtime } })

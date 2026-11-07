@@ -227,6 +227,91 @@ export class HubClient {
   }
 
   /**
+   * NDJSON 流式 POST：逐块消费 response.body（绝不先缓冲全响应再伪流），
+   * 每完整一行解析为一个 JSON 对象回调 onLine；尾行允许省略换行符。
+   * 解析错误与消费方错误分别上抛，取消时关闭 reader 让 Hub 停止命令。
+   * 建连/HTTP 错误复用统一错误信封；signal 支持逐块取消（立即断开）。
+   */
+  async streamNdjson(
+    method: string,
+    path: string,
+    opts: { body?: unknown; onLine: (value: unknown) => void; signal?: AbortSignal } = { onLine: () => {} },
+  ): Promise<void> {
+    const headers = this.authHeaders({ accept: 'application/x-ndjson' })
+    if (opts.body !== undefined) headers['content-type'] = 'application/json'
+    let response: Response
+    try {
+      response = await this.io.fetchImpl(`${this.endpoint.baseUrl}${path}`, {
+        method,
+        headers,
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+        signal: opts.signal,
+        redirect: 'error',
+      })
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new CliError(`请求已取消：${method} ${path}`, 'aborted')
+      }
+      throw new CliError(
+        `无法连接 Hub（${this.endpoint.baseUrl}）：${err instanceof Error ? err.message : String(err)}`,
+        'hub_unreachable',
+      )
+    }
+    if (!response.ok) throw await this.toCliError(response, `${method} ${path}`)
+    if (!response.body) {
+      throw new CliError(`Hub 未返回流式响应体（${method} ${path}）`, 'invalid_response')
+    }
+    const contentType = response.headers.get('content-type')?.split(';')[0]?.trim()
+    if (contentType !== 'application/x-ndjson') {
+      await response.body.cancel()
+      throw new CliError(`Hub 响应类型不是 application/x-ndjson（${method} ${path}）`, 'invalid_response')
+    }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder('utf-8', { fatal: true })
+    const maxFrameBytes = 2 * 1024 * 1024
+    let buffer = ''
+    const consume = (line: string): void => {
+      if (line.trim() === '') return
+      if (Buffer.byteLength(line, 'utf8') > maxFrameBytes) {
+        throw new CliError('Hub NDJSON 帧超过大小上限', 'invalid_response')
+      }
+      let value: unknown
+      try { value = JSON.parse(line) } catch {
+        throw new CliError(`Hub NDJSON 流中出现非 JSON 行（${method} ${path}）`, 'invalid_response')
+      }
+      opts.onLine(value)
+    }
+    try {
+      for (;;) {
+        opts.signal?.throwIfAborted()
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let newline = buffer.indexOf('\n')
+        while (newline !== -1) {
+          consume(buffer.slice(0, newline))
+          buffer = buffer.slice(newline + 1)
+          newline = buffer.indexOf('\n')
+        }
+        if (Buffer.byteLength(buffer, 'utf8') > maxFrameBytes) {
+          throw new CliError('Hub NDJSON 帧超过大小上限', 'invalid_response')
+        }
+      }
+      opts.signal?.throwIfAborted()
+      buffer += decoder.decode()
+      consume(buffer)
+    } catch (err) {
+      if (opts.signal?.aborted || (err instanceof Error && err.name === 'AbortError')) {
+        throw new CliError(`流已取消：${method} ${path}`, 'aborted')
+      }
+      throw err
+    } finally {
+      await reader.cancel().catch(() => {})
+      reader.releaseLock()
+    }
+  }
+
+  /**
    * SSE 订阅 `GET /api/events`。超时仅约束建连阶段；流建立后由调用方 signal 控制。
    * 帧解析兼容 \n\n 与 \r\n\r\n；event: 名与 data: JSON 均上抛给 onFrame。
    */

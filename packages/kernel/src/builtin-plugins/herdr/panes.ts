@@ -1,9 +1,9 @@
 /**
- * 受管窗格登记表：scopeKey(machine, paneId) -> 归属/父子/workflow/实际 cwd/目标/清理通道。
+ * 受管窗格登记表：scopeKey(nodeId, paneId) -> 归属/父子/workflow/实际 cwd/目标/清理通道。
  *
  * 职责：
  * - 记录本插件创建的每个 Herdr 窗格（tab/worktree 两种形态）及其**冻结连接目标**
- *   （启用时确定，非机密：machine/session/socketPath）——同一窗格的所有命令、事件、
+ *   （启用时确定，非机密：nodeId/session/socketPath）——同一窗格的所有命令、事件、
  *   文件与清理永远走同一 HerdrTarget，绝不热换连接去误伤另一台服务器上的同 ID 窗格；
  * - 记录 spawn 路由（agent kind / Profile id）供无 agentType 的真实 resume 续接；
  * - 支持同 workflow 或同父回合 resume 定位（稳定 agentId 或 paneId 双键）；
@@ -11,7 +11,7 @@
  */
 
 import { HelmError } from '@helm/protocol'
-import type { HerdrTarget } from './contracts.js'
+import { targetNodeId, type HerdrTarget } from './contracts.js'
 
 export type PaneOutcome = 'running' | 'keepalive' | 'failed' | 'settled'
 
@@ -23,7 +23,7 @@ export interface PaneRouting {
 }
 
 export interface ManagedPane {
-  /** 冻结连接目标（启用周期内不变；远端含 machine，本机为 session/socketPath/{}）。 */
+  /** 冻结连接目标（启用周期内不变；远端含 nodeId，本机为 session/socketPath/{}）。 */
   target: HerdrTarget
   paneId: string
   tabId: string
@@ -55,7 +55,7 @@ export interface ManagedPane {
 export interface ManagedDoc {
   version: 1
   panes: Array<{
-    target: { machine?: string; session?: string; socketPath?: string }
+    target: { nodeId?: string; session?: string; socketPath?: string }
     paneId: string
     tabId: string
     workspaceId?: string
@@ -79,9 +79,9 @@ export function targetOf(pane: { target: HerdrTarget }): HerdrTarget {
   return pane.target
 }
 
-/** 目标机标识（undefined = 本机）；所有归属匹配/查询统一经此取值。 */
-export function machineOf(pane: { target?: HerdrTarget }): string | undefined {
-  return pane.target?.machine
+/** 目标节点标识（undefined = 本机）；所有归属匹配/查询统一经此取值。 */
+export function nodeIdOf(pane: { target?: HerdrTarget }): string | undefined {
+  return targetNodeId(pane.target)
 }
 
 /**
@@ -98,7 +98,7 @@ export class PaneRegistry {
         if (!pane.target || !pane.routing || typeof pane.routing.kind !== 'string' || pane.routing.kind === '') {
           throw new HelmError('herdr_managed_invalid', 'Herdr 受管记录缺少 target/routing', 500)
         }
-        this.panes.set(scopeKey(pane.target.machine, pane.paneId), {
+        this.panes.set(scopeKey(targetNodeId(pane.target), pane.paneId), {
           target: pane.target,
           paneId: pane.paneId,
           tabId: pane.tabId,
@@ -121,15 +121,15 @@ export class PaneRegistry {
   }
 
   add(pane: ManagedPane): void {
-    this.panes.set(scopeKey(machineOf(pane), pane.paneId), pane)
+    this.panes.set(scopeKey(nodeIdOf(pane), pane.paneId), pane)
     this.flush()
   }
 
-  get(machine: string | undefined, paneId: string): ManagedPane | undefined {
-    return this.panes.get(scopeKey(machine, paneId))
+  get(nodeId: string | undefined, paneId: string): ManagedPane | undefined {
+    return this.panes.get(scopeKey(nodeId, paneId))
   }
 
-  /** 按稳定 agentId 或 paneId 定位 resume 候选（跨 machine 可能撞 paneId，由调用方裁决歧义）。 */
+  /** 按稳定 agentId 或 paneId 定位 resume 候选（跨节点可能撞 paneId，由调用方裁决歧义）。 */
   findByResumeRef(ref: string): ManagedPane[] {
     return [...this.panes.values()].filter((p) => p.agentId === ref || p.paneId === ref)
   }
@@ -148,8 +148,8 @@ export class PaneRegistry {
     return [...this.panes.values()]
   }
 
-  update(machine: string | undefined, paneId: string, patch: Partial<ManagedPane>): ManagedPane | undefined {
-    const key = scopeKey(machine, paneId)
+  update(nodeId: string | undefined, paneId: string, patch: Partial<ManagedPane>): ManagedPane | undefined {
+    const key = scopeKey(nodeId, paneId)
     const pane = this.panes.get(key)
     if (!pane) return undefined
     this.panes.set(key, { ...pane, ...patch })
@@ -157,18 +157,18 @@ export class PaneRegistry {
     return this.panes.get(key)
   }
 
-  remove(machine: string | undefined, paneId: string): void {
-    if (this.panes.delete(scopeKey(machine, paneId))) this.flush()
+  remove(nodeId: string | undefined, paneId: string): void {
+    if (this.panes.delete(scopeKey(nodeId, paneId))) this.flush()
   }
 
   /**
    * 仅内存标记 settled（不刷持久镜像）：服务 stop 路径专用——停用中 doc 句柄
    * 已失效（plugin_context_expired），持久状态由下个启用周期对账重建。
    */
-  markSettledVolatile(machine: string | undefined, paneId: string): void {
-    const pane = this.panes.get(scopeKey(machine, paneId))
+  markSettledVolatile(nodeId: string | undefined, paneId: string): void {
+    const pane = this.panes.get(scopeKey(nodeId, paneId))
     if (pane === undefined) return
-    this.panes.set(scopeKey(machine, paneId), { ...pane, outcome: 'settled', settledAt: Date.now() })
+    this.panes.set(scopeKey(nodeId, paneId), { ...pane, outcome: 'settled', settledAt: Date.now() })
   }
 
   /** liveTasks 标签：仍运行 + 成功保活待结算（失败/已结算不计）。 */
@@ -210,6 +210,6 @@ export class PaneRegistry {
   }
 }
 
-export function scopeKey(machine: string | undefined, paneId: string): string {
-  return `${machine ?? 'local'}:${paneId}`
+export function scopeKey(nodeId: string | undefined, paneId: string): string {
+  return `${nodeId ?? 'local'}:${paneId}`
 }

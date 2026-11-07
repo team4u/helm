@@ -70,6 +70,10 @@ function summary(id: number, title: string): ConversationSummary {
 
 function makeKernel(): KernelRuntimeLike {
   return {
+    listNodes() { throw new Error('本产物 fixture 不提供节点管理') },
+    async issueNodeToken() { throw new Error('本产物 fixture 不签发节点身份') },
+    async removeNode() { throw new Error('本产物 fixture 不移除节点') },
+    async execEnv() { throw new Error('本产物 fixture 不执行节点命令') },
     dataDir,
     auth: new AuthService(dataDir),
     events: new NoopEventHub(),

@@ -10,7 +10,7 @@
  * 3. createAsk 404 竞态（ask 未入库已被事件路径销单）：事件路径销单只清
  *    协调器条目；owner 若随后 createAsk 成功，markPending 重建条目后由
  *    宿主结算通道收尾，绝不留下无人认领的 pending Ask。
- * 4. 去重键 = herdr:<machine|local>:<paneId>:<stateChangeSeq>（Ask 预分配 ID
+ * 4. 去重键 = herdr:<nodeId|local>:<paneId>:<stateChangeSeq>（Ask 预分配 ID
  *    同形）；条目内含结算通道，双路径（socket 事件与 spawn wait）中先到者
  *    成为 owner 负责 createAsk，后到者等待同一结算 promise。
  * 5. 取消/事件处理错误经显式通道上抛（通知或传回 spawn），不 catch 空吞。
@@ -29,7 +29,7 @@ export interface AskOutcome {
 export interface AskEntry {
   readonly key: string
   readonly askId: string
-  readonly machine: string | undefined
+  readonly nodeId: string | undefined
   readonly paneId: string
   readonly seq: number
   phase: AskPhase
@@ -42,7 +42,7 @@ export interface AskEntry {
 /** 终端权威状态变化（agent.get 或事件驱动探测）。 */
 export interface AuthorityUpdate {
   paneId: string
-  machine?: string
+  nodeId?: string
   seq: number
   status: 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
 }
@@ -92,7 +92,7 @@ export class AskCoordinator {
   observeAuthority(update: AuthorityUpdate): AskEntry[] {
     const superseded: AskEntry[] = []
     for (const entry of [...this.entries_map.values()]) {
-      if (entry.paneId !== update.paneId || entry.machine !== update.machine) continue
+      if (entry.paneId !== update.paneId || entry.nodeId !== update.nodeId) continue
       if (update.seq === entry.seq) continue
       this.removeEntry(entry)
       if (entry.phase === 'pending' || entry.phase === 'creating') superseded.push(entry)
@@ -102,10 +102,10 @@ export class AskCoordinator {
   }
 
   /** pane 关闭：清除全部条目（含保留项），兜底结算通道为 superseded。 */
-  paneClosed(paneId: string, machine?: string): AskEntry[] {
+  paneClosed(paneId: string, nodeId?: string): AskEntry[] {
     const removed: AskEntry[] = []
     for (const entry of [...this.entries_map.values()]) {
-      if (entry.paneId === paneId && entry.machine === machine) {
+      if (entry.paneId === paneId && entry.nodeId === nodeId) {
         this.removeEntry(entry)
         removed.push(entry)
       }
@@ -120,13 +120,13 @@ export class AskCoordinator {
    * - 已有条目（creating/pending/sent/settled 任一 phase）-> duplicate，
    *   绝不重建同 ID Ask、绝不重发键。
    */
-  beginBlocked(machine: string | undefined, paneId: string, seq: number): BeginBlockedResult {
-    const key = askKey(machine, paneId, seq)
+  beginBlocked(nodeId: string | undefined, paneId: string, seq: number): BeginBlockedResult {
+    const key = askKey(nodeId, paneId, seq)
     if (this.entries_map.has(key)) return { duplicate: true }
     const entry: AskEntry = {
       key,
       askId: key,
-      machine,
+      nodeId,
       paneId,
       seq,
       phase: 'creating',
@@ -188,30 +188,30 @@ export class AskCoordinator {
     return this.settlements.get(entry.askId)
   }
 
-  get(machine: string | undefined, paneId: string, seq: number): AskEntry | undefined {
-    return this.entries_map.get(askKey(machine, paneId, seq))
+  get(nodeId: string | undefined, paneId: string, seq: number): AskEntry | undefined {
+    return this.entries_map.get(askKey(nodeId, paneId, seq))
   }
 
   /**
    * CAS seq 解析器（异步权威版）：askId -> 该 Ask 目标 pane 的**当前真实**
    * state_change_seq（agent.get 现查，绝不返回创建时的 entry.seq——CAS 的
    * 意义正是发现「创建后终端已按键推进」）。归属校验：askId 三段必须与
-   * 条目 (machine, paneId, seq) 完全一致，防止伪造 id 越权探测他人窗格。
+   * 条目 (nodeId, paneId, seq) 完全一致，防止伪造 id 越权探测他人窗格。
    */
   seqResolver(
     askId: string,
-    authority: (machine: string | undefined, paneId: string) => Promise<number | undefined>,
+    authority: (nodeId: string | undefined, paneId: string) => Promise<number | undefined>,
   ): Promise<number | undefined> {
     const parsed = parseAskId(askId)
     if (parsed === undefined) return Promise.resolve(undefined)
-    const entry = this.entries_map.get(askKey(parsed.machine, parsed.paneId, parsed.seq))
+    const entry = this.entries_map.get(askKey(parsed.nodeId, parsed.paneId, parsed.seq))
     if (entry === undefined || entry.askId !== askId) return Promise.resolve(undefined)
-    return authority(parsed.machine, parsed.paneId)
+    return authority(parsed.nodeId, parsed.paneId)
   }
 
   /** 该 (pane,seq) 是否已发过键（防重发判断）。 */
-  keysSent(machine: string | undefined, paneId: string, seq: number): boolean {
-    return this.entries_map.get(askKey(machine, paneId, seq))?.keysSent === true
+  keysSent(nodeId: string | undefined, paneId: string, seq: number): boolean {
+    return this.entries_map.get(askKey(nodeId, paneId, seq))?.keysSent === true
   }
 
   pendingCount(): number {
@@ -226,11 +226,11 @@ export class AskCoordinator {
     return [...this.entries_map.values()]
   }
 
-  /** 概览（overview doc；machine undefined 折叠为 'local' 保证 JSON-safe）。 */
-  describe(): Array<{ paneId: string; machine: string; seq: number; phase: AskPhase }> {
+  /** 概览（overview doc；nodeId undefined 折叠为 'local' 保证 JSON-safe）。 */
+  describe(): Array<{ paneId: string; nodeId: string; seq: number; phase: AskPhase }> {
     return [...this.entries_map.values()].map((e) => ({
       paneId: e.paneId,
-      machine: e.machine ?? 'local',
+      nodeId: e.nodeId ?? 'local',
       seq: e.seq,
       phase: e.phase,
     }))
@@ -256,12 +256,12 @@ export class AskCoordinator {
   }
 }
 
-export function askKey(machine: string | undefined, paneId: string, seq: number): string {
-  return `herdr:${machine ?? 'local'}:${paneId}:${seq}`
+export function askKey(nodeId: string | undefined, paneId: string, seq: number): string {
+  return `herdr:${nodeId ?? 'local'}:${paneId}:${seq}`
 }
 
-/** askId 即 askKey 字面量；machine 段原样保留（不折叠 local，防解析歧义）。 */
-function parseAskId(askId: string): { machine: string | undefined; paneId: string; seq: number } | undefined {
+/** askId 即 askKey 字面量；nodeId 段原样保留（不折叠 local，防解析歧义）。 */
+function parseAskId(askId: string): { nodeId: string | undefined; paneId: string; seq: number } | undefined {
   if (!askId.startsWith('herdr:')) return undefined
   const rest = askId.slice('herdr:'.length)
   const lastColon = rest.lastIndexOf(':')
@@ -272,10 +272,10 @@ function parseAskId(askId: string): { machine: string | undefined; paneId: strin
   if (!Number.isSafeInteger(seq) || seq < 0 || seqPart !== String(seq)) return undefined
   const paneColon = panePart.indexOf(':')
   if (paneColon <= 0) return undefined
-  const machine = panePart.slice(0, paneColon)
+  const nodeId = panePart.slice(0, paneColon)
   const paneId = panePart.slice(paneColon + 1)
   if (paneId === '') return undefined
-  return { machine: machine === 'local' ? undefined : machine, paneId, seq }
+  return { nodeId: nodeId === 'local' ? undefined : nodeId, paneId, seq }
 }
 
 /**

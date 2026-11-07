@@ -4,7 +4,8 @@ import { createServer, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
-import { createHerdrTransport, isValidMachineName } from '../src/builtin-plugins/herdr/transport.js'
+import { createHerdrTransport, isValidNodeId } from '../src/builtin-plugins/herdr/transport.js'
+import { MutableNodeChannel, nodeFixture } from './herdr-node-fixture.js'
 
 async function tempRoot(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'helm-transport-final-'))
@@ -12,20 +13,86 @@ async function tempRoot(t: TestContext) {
   return root
 }
 
-// SSH 仅替换网络入口；完整生产 stdin 源码交给真实 Python，业务操作未被替换。
-async function pythonChannel(t: TestContext, root: string) {
-  const bin = join(root, 'bin')
-  await mkdir(bin)
-  await writeFile(join(bin, 'ssh'), '#!/bin/sh\nexec /usr/bin/python3 -u -\n', { mode: 0o700 })
-  const previousPath = process.env.PATH
-  process.env.PATH = `${bin}:${previousPath ?? ''}`
-  t.after(() => {
-    if (previousPath === undefined) delete process.env.PATH
-    else process.env.PATH = previousPath
+/** 节点通道 fixture：远端目标经真实 LocalNodeChannel 走受控 UDS 服务器。 */
+async function channelFixture(t: TestContext, respond: (request: Record<string, unknown>, socket: Socket) => void) {
+  const fixture = await nodeFixture(t, respond)
+  const channel = new MutableNodeChannel()
+  channel.nodes.set('fixture-node', { online: true, channel: fixture.channel })
+  return {
+    fixture,
+    channel,
+    transport: createHerdrTransport({ nodeChannel: channel }),
+    target: { nodeId: 'fixture-node', socketPath: fixture.socketPath } as const,
+  }
+}
+
+test('本机 transport Gate 在传入的 cwd 实际执行', { timeout: 60_000 }, async (t) => {
+  const root = await tempRoot(t)
+  const result = await createHerdrTransport().runGate({}, 'pwd', root)
+  assert.deepEqual(result, { ok: true, output: `${root}\n` })
+})
+
+test('无限期 agent.wait 在对端保持半开且不响应时也能被 abort 立即终止', { timeout: 60_000 }, async (t) => {
+  const root = await tempRoot(t)
+  let received!: () => void
+  const ready = new Promise<void>((resolve) => { received = resolve })
+  const { transport, target } = await channelFixture(t, () => { received() })
+  const controller = new AbortController()
+  const pending = transport.call(target, 'agent.wait', { target: 'p1' }, { signal: controller.signal })
+  const observed = pending.then(() => undefined, (error: unknown) => error)
+  await ready
+  controller.abort()
+  let timer: NodeJS.Timeout | undefined
+  const deadline = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 1_500) })
+  const error = await Promise.race([observed, deadline])
+  clearTimeout(timer)
+  assert.ok(error, 'abort 必须主动结算，不能等待对端关闭读取方向')
+  assert.equal((error as { code?: string }).code, 'herdr_aborted')
+})
+
+test('nodeId 校验拒绝注入与非法形态（新契约：单一安全 token，SSH 机器名遗留形态拒绝）', { timeout: 60_000 }, () => {
+  for (const nodeId of ['work_host', 'node-1.sub', 'macbook_pro.2', 'local', 'a'.repeat(128)]) {
+    assert.equal(isValidNodeId(nodeId), true, `合法节点：${nodeId}`)
+  }
+  // SSH 机器名遗留形态不再是合法节点 ID；空串显式拒绝（不默默当本机）。
+  for (const nodeId of ['', 'user@work_host', '2001:db8::1', '[2001:db8::1]', 'a'.repeat(129), '-oProxyCommand=bad', 'user@host;bad', 'a b', 'x\ny']) {
+    assert.equal(isValidNodeId(nodeId), false, `非法节点：${JSON.stringify(nodeId)}`)
+  }
+})
+
+for (const remote of [false, true]) {
+  test(`${remote ? '远端节点' : '本机'}缺少 .helm 目录时读取为缺文件，删除保持幂等`, { timeout: 60_000 }, async (t) => {
+    const root = await tempRoot(t)
+    const { transport, target } = remote
+      ? await channelFixture(t, () => {})
+      : { transport: createHerdrTransport(), target: {} as { nodeId?: string; socketPath?: string } }
+    const finalTarget = remote ? target : {}
+    await assert.rejects(transport.readOutput(finalTarget, root, 'wf-out-missing.md'), { code: 'herdr_output_missing' })
+    await transport.removeOutput(finalTarget, root, 'wf-out-missing.md')
+  })
+
+  test(`${remote ? '远端节点' : '本机'}RPC 拒绝没有关联 id 的响应`, { timeout: 60_000 }, async (t) => {
+    const root = await tempRoot(t)
+    const respond = (_request: Record<string, unknown>, socket: Socket) => {
+      socket.end(`${JSON.stringify({ result: { type: 'ok' } })}\n`)
+    }
+    let transport: ReturnType<typeof createHerdrTransport>
+    let target: { nodeId?: string; socketPath?: string }
+    if (remote) {
+      const built = await channelFixture(t, respond)
+      transport = built.transport
+      target = built.target
+    } else {
+      const socketPath = await localSocketServer(t, root, respond)
+      transport = createHerdrTransport()
+      target = { socketPath }
+    }
+    await assert.rejects(transport.call(target, 'tab.close', { tab_id: 't1' }, { timeoutMs: 3_000 }), { code: 'herdr_protocol' })
   })
 }
 
-async function socketServer(t: TestContext, root: string, respond: (request: Record<string, unknown>, socket: Socket) => void) {
+/** 本机受控 UDS 服务器（本机分支测试用）。 */
+async function localSocketServer(t: TestContext, root: string, respond: (request: Record<string, unknown>, socket: Socket) => void) {
   const sockets = new Set<Socket>()
   const socketPath = join(root, 'herdr.sock')
   const server = createServer({ allowHalfOpen: true }, (socket) => {
@@ -41,86 +108,20 @@ async function socketServer(t: TestContext, root: string, respond: (request: Rec
   await new Promise<void>((resolve) => server.listen(socketPath, resolve))
   t.after(async () => {
     for (const socket of sockets) socket.destroy()
-    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
   })
   return socketPath
 }
 
-test('本机 transport Gate 在传入的 cwd 实际执行', { timeout: 60_000 }, async (t) => {
-  const root = await tempRoot(t)
-  const result = await createHerdrTransport().runGate({}, 'pwd', root)
-  assert.deepEqual(result, { ok: true, output: `${root}\n` })
-})
-
-test('无限期 agent.wait 在对端保持半开且不响应时也能被 abort 立即终止', { timeout: 60_000 }, async (t) => {
-  const root = await tempRoot(t)
-  let received!: () => void
-  const ready = new Promise<void>((resolve) => { received = resolve })
-  const socketPath = await socketServer(t, root, () => { received() })
-  const controller = new AbortController()
-  const pending = createHerdrTransport().call({ socketPath }, 'agent.wait', { target: 'p1' }, { signal: controller.signal })
-  const observed = pending.then(() => undefined, (error: unknown) => error)
-  await ready
-  controller.abort()
-  let timer: NodeJS.Timeout | undefined
-  const deadline = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 500) })
-  const error = await Promise.race([observed, deadline])
-  clearTimeout(timer)
-  assert.ok(error, 'abort 必须主动结算，不能等待对端关闭读取方向')
-  assert.equal((error as { code?: string }).code, 'herdr_aborted')
-})
-
-test('SSH machine 保留常见别名并校验真实 IPv6 形态', { timeout: 60_000 }, () => {
-  for (const machine of ['work_host', 'user@work_host', '::1', '[2001:db8::1]', 'user@[2001:db8::1]']) {
-    assert.equal(isValidMachineName(machine), true, `合法目标：${machine}`)
-  }
-  for (const machine of ['::::', 'user@::::', '-oProxyCommand=bad', 'user@host;bad']) {
-    assert.equal(isValidMachineName(machine), false, `非法目标：${machine}`)
-  }
-})
-
-for (const remote of [false, true]) {
-  test(`${remote ? 'SSH' : '本机'}缺少 .helm 目录时读取为缺文件，删除保持幂等`, { timeout: 60_000 }, async (t) => {
-    const root = await tempRoot(t)
-    if (remote) await pythonChannel(t, root)
-    const transport = createHerdrTransport()
-    const target = remote ? { machine: 'fixture-host' } : {}
-    await assert.rejects(transport.readOutput(target, root, 'wf-out-missing.md'), { code: 'herdr_output_missing' })
-    await transport.removeOutput(target, root, 'wf-out-missing.md')
-  })
-
-  test(`${remote ? 'SSH' : '本机'}RPC 拒绝没有关联 id 的响应`, { timeout: 60_000 }, async (t) => {
-    const root = await tempRoot(t)
-    if (remote) await pythonChannel(t, root)
-    const socketPath = await socketServer(t, root, (_request, socket) => {
-      socket.end(`${JSON.stringify({ result: { type: 'ok' } })}\n`)
-    })
-    const target = remote ? { machine: 'fixture-host', socketPath } : { socketPath }
-    await assert.rejects(createHerdrTransport().call(target, 'tab.close', { tab_id: 't1' }, { timeoutMs: 3_000 }), { code: 'herdr_protocol' })
-  })
-}
-
 test('订阅 ack 必须携带本次请求 id', { timeout: 60_000 }, async (t) => {
   const root = await tempRoot(t)
-  const socketPath = await socketServer(t, root, (_request, socket) => {
+  const socketPath = await localSocketServer(t, root, (_request, socket) => {
     socket.write(`${JSON.stringify({ id: 'wrong-subscription', result: { type: 'subscription_started' } })}\n`)
   })
   await assert.rejects(async () => {
     const stop = await createHerdrTransport().subscribe({ socketPath }, () => {}, () => {})
     stop()
   }, { code: 'herdr_protocol' })
-})
-
-test('远端 Gate 关闭输出后仍须等待命令正常退出', { timeout: 60_000 }, async (t) => {
-  const root = await tempRoot(t)
-  await pythonChannel(t, root)
-  const result = await createHerdrTransport().runGate(
-    { machine: 'fixture-host' },
-    'exec >/dev/null 2>&1; sleep 0.05; printf done > finished',
-    root,
-  )
-  assert.deepEqual(result, { ok: true, output: '' })
-  assert.equal(await readFile(join(root, 'finished'), 'utf8'), 'done')
 })
 
 test('Gate 主进程已退出时 abort 仍清理持有管道的自有子进程', { timeout: 60_000 }, async (t) => {

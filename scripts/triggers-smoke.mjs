@@ -71,7 +71,7 @@ let cliToken;
 const received = [];
 
 async function cli(args) {
-  const cliEntry = fileURLToPath(new URL('../packages/node/dist/cli/index.js', import.meta.url));
+  const cliEntry = fileURLToPath(new URL('../packages/cli/dist/index.js', import.meta.url));
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliEntry, ...args], {
       cwd: fileURLToPath(new URL('..', import.meta.url)),

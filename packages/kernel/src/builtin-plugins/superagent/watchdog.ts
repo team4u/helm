@@ -5,7 +5,7 @@
  * - watchdog_tick（priority 0，位于 Herdr priority 100 追加外部探针之后）汇总
  *   native + external 探针，按确定性规则表执行 notify / bridge_to_ask /
  *   auto_abort_and_notify / wake_watchdog；
- * - 去重状态持久化于私有 ctx.doc（同 (targetKind,machine,targetId,stateChangeSeq)
+ * - 去重状态持久化于私有 ctx.doc（同 (targetKind,nodeId,targetId,stateChangeSeq)
  *   同类动作恰好一次；未达阈值绝不预先占坑，跨重启不重复危险动作）；
  * - L2：向专属 watchdog 会话合并投递异常事实（origin agent / followUp），
  *   并以 ctx.tool 注册 watchdog_inspect / watchdog_recover / watchdog_abort
@@ -92,7 +92,7 @@ interface WatchdogDedupDoc {
 interface Finding {
   key: string
   targetKind: 'conversation' | 'external'
-  machine?: string
+  nodeId?: string
   targetId: string
   conversationId?: number
   ownedBy: WatchdogOwnership
@@ -131,8 +131,8 @@ function asNonNegativeFinite(v: unknown): number | undefined {
 }
 
 /** 去重键：JSON 数组三元组，杜绝冒号拼接碰撞（如 targetId 含 ':'）。 */
-function targetKey(kind: string, machine: string | undefined, targetId: string): string {
-  return JSON.stringify([kind, machine ?? 'local', targetId])
+function targetKey(kind: string, nodeId: string | undefined, targetId: string): string {
+  return JSON.stringify([kind, nodeId ?? 'local', targetId])
 }
 
 /** XML 转义：异常事实进入 L2 提示词前防逃逸（不用反引号围栏，杜绝 prompt 注入面）。 */
@@ -349,7 +349,7 @@ export function registerSuperAgentWatchdog(
         // 未声明 targetKind 的探针不作为自动干预授权：不猜数字 targetId 的类别。
         if (probe.targetKind !== 'conversation' && probe.targetKind !== 'external') {
           const finding: Finding = {
-            key: targetKey('unknown', probe.machine, probe.targetId),
+            key: targetKey('unknown', probe.nodeId, probe.targetId),
             targetKind: 'conversation',
             targetId: probe.targetId,
             ownedBy: probe.ownedBy,
@@ -480,9 +480,9 @@ export function registerSuperAgentWatchdog(
     findings: Finding[],
     ops: PlannedOp[],
   ): void {
-    const machine = probe.machine ?? 'local'
-    const key = targetKey('external', machine, probe.targetId)
-    lastExternalProbes.set(targetKey('external', machine, probe.targetId), probe)
+    const nodeId = probe.nodeId ?? 'local'
+    const key = targetKey('external', nodeId, probe.targetId)
+    lastExternalProbes.set(targetKey('external', nodeId, probe.targetId), probe)
 
     // 由 watchdog 会话派生的窗格同样排除，防自激。
     const parent = asNonNegativeInt(probe.facts?.['parentConversationId'])
@@ -496,7 +496,7 @@ export function registerSuperAgentWatchdog(
     const finding: Finding = {
       key,
       targetKind: 'external',
-      machine,
+      nodeId,
       targetId: probe.targetId,
       ownedBy: probe.ownedBy,
       status: probe.status,
@@ -505,7 +505,7 @@ export function registerSuperAgentWatchdog(
       ...(errors > 0 ? { consecutiveErrors: errors } : {}),
       pendingAskCount,
       ...(parent !== undefined ? { parentConversationId: parent } : {}),
-      evidence: `外部窗格 ${probe.targetId}@${machine} 状态 ${probe.status}${
+      evidence: `外部窗格 ${probe.targetId}@${nodeId} 状态 ${probe.status}${
         errors > 0 ? `，连续不可达 ${errors} 次` : ''
       }${pendingAskCount > 0 ? `，待答审批 ${pendingAskCount}` : ''}`,
       disposition: '',
@@ -664,7 +664,7 @@ export function registerSuperAgentWatchdog(
   function buildWakePrompt(findings: Finding[]): string {
     const factsJson = JSON.stringify(
       findings.map((f) => ({
-        target: f.targetKind === 'external' ? `external:${f.machine}/${f.targetId}` : `conversation:${f.conversationId}`,
+        target: f.targetKind === 'external' ? `external:${f.nodeId}/${f.targetId}` : `conversation:${f.conversationId}`,
         ownedBy: f.ownedBy,
         status: f.status,
         ...(f.stateChangeSeq !== undefined ? { stateChangeSeq: f.stateChangeSeq } : {}),
@@ -1056,25 +1056,25 @@ export function registerSuperAgentWatchdog(
     }
   }
 
-  function inspectExternalProbe(probe: { targetKind: string; machine?: string; targetId: string }): Record<string, unknown> {
+  function inspectExternalProbe(probe: { targetKind: string; nodeId?: string; targetId: string }): Record<string, unknown> {
     if (probe.targetKind !== 'external') {
       throw new HelmError('validation_error', 'watchdog_inspect 的 probe 仅支持 targetKind=external（外部目标只读诊断）', 400)
     }
-    const machine = probe.machine ?? 'local'
-    const cached = lastExternalProbes.get(targetKey('external', machine, probe.targetId))
+    const nodeId = probe.nodeId ?? 'local'
+    const cached = lastExternalProbes.get(targetKey('external', nodeId, probe.targetId))
     if (cached === undefined) {
       throw new HelmError(
         'not_found',
-        `最近一轮巡检未观测到外部目标 ${probe.targetId}@${machine}（不猜测、不伪造事实）`,
+        `最近一轮巡检未观测到外部目标 ${probe.targetId}@${nodeId}（不猜测、不伪造事实）`,
         404,
-        { machine, targetId: probe.targetId },
+        { nodeId, targetId: probe.targetId },
       )
     }
     return {
       kind: 'external' as const,
       probe: {
         targetId: cached.targetId,
-        machine,
+        nodeId,
         ownedBy: cached.ownedBy,
         status: cached.status,
         ...(cached.stateChangeSeq !== undefined ? { stateChangeSeq: cached.stateChangeSeq } : {}),
@@ -1117,7 +1117,7 @@ export function registerSuperAgentWatchdog(
         type: 'object',
         properties: {
           targetKind: { type: 'string', enum: ['external'] },
-          machine: { type: 'string', minLength: 1, description: "外部目标机（'local' 或 SSH 机器名）" },
+          nodeId: { type: 'string', minLength: 1, description: "外部目标节点 ID（缺省 'local'）" },
           targetId: { type: 'string', minLength: 1 },
         },
         required: ['targetKind', 'targetId'],
@@ -1169,7 +1169,7 @@ export function registerSuperAgentWatchdog(
     additionalProperties: false,
   } as const
 
-  ctx.tool<{ conversationId?: number; probe?: { targetKind: 'external'; machine?: string; targetId: string } }>({
+  ctx.tool<{ conversationId?: number; probe?: { targetKind: 'external'; nodeId?: string; targetId: string } }>({
     name: WATCHDOG_TOOL_INSPECT,
     description:
       '读取巡检目标真实详情：conversationId 返回原生会话摘要与最近时间线（归属现查）；probe 返回最近一轮外部目标探针事实（只读，不假装控制外部窗格）。',
@@ -1205,7 +1205,7 @@ export function registerSuperAgentWatchdog(
 
   // 同名 ctx.action 复用同一核心：HTTP/CLI 自动映射 `helm superagent watchdog_*`，
   // 人工调用无会话上下文放行（目标所有权守卫照样生效），不 exposeAsTool 防重复工具。
-  ctx.action<{ conversationId?: number; probe?: { targetKind: 'external'; machine?: string; targetId: string } }, Record<string, unknown>>({
+  ctx.action<{ conversationId?: number; probe?: { targetKind: 'external'; nodeId?: string; targetId: string } }, Record<string, unknown>>({
     id: WATCHDOG_TOOL_INSPECT,
     description: '读取巡检目标真实详情（原生会话或最近外部探针事实，只读）',
     inputSchema: inspectSchema,
@@ -1288,7 +1288,7 @@ export function registerSuperAgentWatchdog(
 
 export interface WatchdogInspectInput {
   conversationId?: number
-  probe?: { targetKind: 'external'; machine?: string; targetId: string }
+  probe?: { targetKind: 'external'; nodeId?: string; targetId: string }
 }
 
 export interface WatchdogRecoverInput {

@@ -163,6 +163,22 @@ function ProfileBasicTab({
           placeholder="逗号分隔，如 worker, coder"
           onChange={(e) => patch({ ...profile, tags: textToTags(e.target.value) })}
         />
+        <label htmlFor="helm-profile-node" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>节点</label>
+        <input
+          id="helm-profile-node"
+          className="input mono"
+          value={profile.nodeId ?? ''}
+          placeholder="普通会话默认执行节点，留空为本机 local"
+          onChange={(e) => patch({ ...profile, nodeId: e.target.value })}
+        />
+        <label htmlFor="helm-profile-cwd" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>工作目录</label>
+        <input
+          id="helm-profile-cwd"
+          className="input mono"
+          value={profile.cwd ?? ''}
+          placeholder="普通会话默认工作目录绝对路径，留空由内核决定"
+          onChange={(e) => patch({ ...profile, cwd: e.target.value })}
+        />
       </div>
 
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -202,13 +218,13 @@ function ProfileBasicTab({
                 <option key={a} value={a} />
               ))}
             </datalist>
-            <label htmlFor="helm-runtime-machine" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Machine</label>
+            <label htmlFor="helm-runtime-node" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>节点</label>
             <input
-              id="helm-runtime-machine"
+              id="helm-runtime-node"
               className="input mono"
-              value={runtime.machine ?? ''}
-              placeholder="SSH 远端机器名，留空为本机"
-              onChange={(e) => patchRuntimeField({ machine: e.target.value })}
+              value={runtime.nodeId ?? ''}
+              placeholder="Herdr 目标节点，留空继承 Profile 或父会话节点"
+              onChange={(e) => patchRuntimeField({ nodeId: e.target.value })}
             />
             <label htmlFor="helm-runtime-workspace" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Workspace</label>
             <input

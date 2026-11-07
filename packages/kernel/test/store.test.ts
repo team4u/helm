@@ -85,6 +85,7 @@ function conv(id: number, overrides: Partial<ConvMeta> = {}): ConvMeta {
     profileId: 'default',
     tags: ['a'],
     parentConversationId: undefined,
+    nodeId: 'local',
     cwd: '/tmp',
     model: 'm',
     unread: false,

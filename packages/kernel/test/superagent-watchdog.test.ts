@@ -4,8 +4,8 @@
  * 覆盖：
  * 1. 自激排除：watchdog 自身 id 与 profileId=watchdog 直聊会话不进探针处置；
  *    watchdog 自身 failed/aborted 仅通知。
- * 2. 去重：(targetKind,machine,targetId,stateChangeSeq) 同类动作恰好一次；
- *    阈值前不占坑；阈值后一次；新 seq 可再触发；两 machine 同 paneId 独立；
+ * 2. 去重：(targetKind,nodeId,targetId,stateChangeSeq) 同类动作恰好一次；
+ *    阈值前不占坑；阈值后一次；新 seq 可再触发；两个节点同 paneId 独立；
  *    去重文档跨重启（新注册周期）仍生效；脏文档回退。
  * 3. human 红线：human native / human 外部窗格零写操作（无 abort/无 submitInput）。
  * 4. mutation 所有权即时核对：探针报 owned、现查已改 human → 403 watchdog_target_human。
@@ -285,11 +285,11 @@ function nativeProbe(conversationId: number, over: Partial<WatchdogProbe> = {}):
   }
 }
 
-function externalProbe(machine: string, paneId: string, over: Partial<WatchdogProbe> = {}): WatchdogProbe {
+function externalProbe(nodeId: string, paneId: string, over: Partial<WatchdogProbe> = {}): WatchdogProbe {
   return {
     targetId: paneId,
     targetKind: 'external',
-    machine,
+    nodeId,
     ownedBy: 'helm',
     stateChangeSeq: 10,
     status: 'working',
@@ -363,7 +363,7 @@ test('native 停滞：阈值前不消费；阈值后 abort+wake 恰好一次；�
   assert.equal(h.recorded.submits.filter((s) => s.conversationId === h.watchdogId).length, 2)
 })
 
-test('两 machine 同 paneId 独立去重，跨注册周期持久恢复，损坏文档显式拒绝', { timeout: 60_000 }, async () => {
+test('两个节点同 paneId 独立去重，跨注册周期持久恢复，损坏文档显式拒绝', { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-wd-dedup-'))
   const sharedDocs = new MemoryDocStore()
   const recorded = makeRecorded()
@@ -378,20 +378,20 @@ test('两 machine 同 paneId 独立去重，跨注册周期持久恢复，损坏
   // 用共享 docs 的 harness（makeHarness 不暴露 docs 注入，这里手动组装一次）。
   const h = await makeHarnessWithDocs(sharedDocs, recorded, opts)
 
-  // local 与 machine-b 同 paneId 'p1'，各自触发一次 wake。
+  // local 与 nodeId-b 同 paneId 'p1'，各自触发一次 wake。
   await h.tick([
     externalProbe('local', 'p1', { status: 'error', consecutiveErrors: 5 }),
-    externalProbe('machine-b', 'p1', { status: 'error', consecutiveErrors: 5 }),
+    externalProbe('nodeId-b', 'p1', { status: 'error', consecutiveErrors: 5 }),
   ])
   const wake1 = h.recorded.submits.filter((s) => s.conversationId === h.watchdogId)
   assert.equal(wake1.length, 1, '同 tick 合并一次投递')
   assert.ok(wake1[0]!.text.includes('local/p1'))
-  assert.ok(wake1[0]!.text.includes('machine-b/p1'))
+  assert.ok(wake1[0]!.text.includes('nodeId-b/p1'))
 
   // 再 tick：两目标的同一权威水位已经投递，不再唤醒。
   await h.tick([
     externalProbe('local', 'p1', { status: 'unreachable', consecutiveErrors: 6 }),
-    externalProbe('machine-b', 'p1', { status: 'unreachable', consecutiveErrors: 6 }),
+    externalProbe('nodeId-b', 'p1', { status: 'unreachable', consecutiveErrors: 6 }),
   ])
   assert.equal(h.recorded.submits.filter((s) => s.conversationId === h.watchdogId).length, 1)
 
@@ -675,7 +675,7 @@ test('watchdog_inspect：原生会话现查归属与时间线；外部 probe 只
   await h.tick([externalProbe('local', 'p1', { status: 'working', stateChangeSeq: 3 })])
   const ext = (await h.host.executeTool(
     'watchdog_inspect',
-    { probe: { targetKind: 'external', machine: 'local', targetId: 'p1' } },
+    { probe: { targetKind: 'external', nodeId: 'local', targetId: 'p1' } },
     { conversationId: h.watchdogId },
   )) as { kind: string; probe: { status: string } }
   assert.equal(ext.kind, 'external')
@@ -684,7 +684,7 @@ test('watchdog_inspect：原生会话现查归属与时间线；外部 probe 只
   await assert.rejects(
     h.host.executeTool(
       'watchdog_inspect',
-      { probe: { targetKind: 'external', machine: 'local', targetId: 'ghost' } },
+      { probe: { targetKind: 'external', nodeId: 'local', targetId: 'ghost' } },
       { conversationId: h.watchdogId },
     ),
     (err: unknown) => err instanceof HelmError && err.status === 404,

@@ -8,12 +8,14 @@ export interface FlagSpec {
   name: string
   type: FlagType
   required?: boolean
+  /** 可重复 flag：每次出现收集一个 string 值，最终类型为 string[]（如 --set/--field）。 */
+  repeated?: boolean
   help?: string
 }
 
 export interface ParsedArgs {
   positionals: string[]
-  /** flag 名（不含 --）-> 已按声明类型转换的值；boolean 裸 flag 为 true。 */
+  /** flag 名（不含 --）-> 已按声明类型转换的值；boolean 裸 flag 为 true；repeated flag 为 string[]。 */
   flags: Map<string, unknown>
 }
 
@@ -68,6 +70,19 @@ export function parseFlags(specs: readonly FlagSpec[], argv: readonly string[]):
         if (inline === undefined || inline === 'true') flags.set(name, true)
         else if (inline === 'false') flags.set(name, false)
         else throw new CliError(`--${name} 需要 true/false，实得 "${inline}"`, 'invalid_flag_value')
+      } else if (spec.repeated) {
+        let raw = inline
+        if (raw === undefined) {
+          const next = argv[i + 1]
+          if (next === undefined || (next.startsWith('--') && next.length > 2)) {
+            throw new CliError(`--${name} 缺少取值`, 'missing_value')
+          }
+          raw = next
+          i += 1
+        }
+        const list = (flags.get(name) as string[] | undefined) ?? []
+        list.push(raw)
+        flags.set(name, list)
       } else {
         let raw = inline
         if (raw === undefined) {

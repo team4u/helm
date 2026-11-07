@@ -6,6 +6,7 @@
  * fixture 掩盖真实服务形态。
  */
 import type { ArtifactService } from '../services/artifacts.js'
+import type { EnvFabric } from '../env/index.js'
 
 export interface HelmToolDeps {
   dataDir: string
@@ -20,4 +21,10 @@ export interface HelmToolDeps {
   processToken?: () => string | undefined
   /** 产物服务（与 services.ArtifactService 同签名：get/readContent/readBuffer 均异步）。 */
   artifacts: Pick<ArtifactService, 'spill' | 'get' | 'readContent' | 'readBuffer'>
+  /** 跨平台节点执行底座（远端 (nodeId, cwd) 靶点执行；缺省仅 local）。 */
+  envFabric?: EnvFabric
+  /** 会话 -> 绑定计算节点 ID（缺省 'local'；store 镜像的真实映射）。 */
+  nodeIdOf?: (conversationId: number) => string
+  /** helm CLI 包装脚本目录（前置注入 PATH，使受管子进程可直接运行 helm）。 */
+  cliBinDir?: string
 }

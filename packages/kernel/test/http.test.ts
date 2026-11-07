@@ -137,6 +137,10 @@ const aborted: number[] = []
 
 function makeKernel(): KernelRuntimeLike {
   return {
+    listNodes() { throw new Error('本 HTTP fixture 不提供节点管理') },
+    async issueNodeToken() { throw new Error('本 HTTP fixture 不签发节点身份') },
+    async removeNode() { throw new Error('本 HTTP fixture 不移除节点') },
+    async execEnv() { throw new Error('本 HTTP fixture 不执行节点命令') },
     dataDir,
     auth,
     events: hub0,

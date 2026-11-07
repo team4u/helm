@@ -12,6 +12,7 @@
     "dev:kernel": "tsx packages/kernel/src/main.ts",
     "dev:web": "pnpm --filter @helm/web dev",
     "helm": "tsx packages/cli/src/index.ts",
+    "helm-hub": "tsx packages/kernel/src/main.ts",
     "helm-node": "tsx packages/node/src/cli.ts"
   },
   "devDependencies": {

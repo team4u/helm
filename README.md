@@ -1,8 +1,8 @@
 # Helm
 
-Helm 是以 `pi-durable` 为底座的持久会话微内核。共享契约位于 `@helm/protocol`，运行时与插件宿主位于 `@helm/kernel`，`@helm/node` 通过 HTTP 提供 CLI。
+Helm 是以 `pi-durable` 为底座的持久会话微内核。五个包分别负责共享契约（`@helm/protocol`）、Hub 与插件宿主（`@helm/kernel`，命令 `helm-hub`）、HTTP/SSE 客户端（`@helm/cli`，命令 `helm`）、受控节点守护进程（`@helm/node`，命令 `helm-node`）和 Web 界面（`@helm/web`）。
 
-核心、常驻 `builtin:assistant` 和 CLI 已实现；`builtin:herdr` 按需启用，负责终端 Agent 委派；实验性 `builtin:superagent` 按需启用，提供独立中枢、后台 Worker 与两层巡检；`builtin:triggers` 按需启用，提供 `cron` 与 `webhook` 入站触发器。Web 外壳后续接入。架构约束见 [AGENTS.md](./AGENTS.md)，目标设计见 [设计文档](./docs/20261106%20helm极简微内核与双7扩展点设计文档.md)。当前验收记录见 [Triggers 开发交接](./docs/20261107-Triggers开发交接.md)，此前记录见 [SuperAgent 开发交接](./docs/20261107-SuperAgent开发交接.md)、[Herdr 开发交接](./docs/20261107-Herdr开发交接.md) 与 [核心开发交接](./docs/20261106-核心开发交接.md)。
+核心、常驻 `builtin:assistant` 和 CLI 已实现；`builtin:herdr` 按需启用，负责终端 Agent 委派；实验性 `builtin:superagent` 按需启用，提供独立中枢、后台 Worker 与两层巡检；`builtin:triggers` 按需启用，提供 `cron` 与 `webhook` 入站触发器。Web 外壳提供会话画布、审批和插件视图。架构约束见 [AGENTS.md](./AGENTS.md)，目标设计见 [设计文档](./docs/20261106%20helm极简微内核与双7扩展点设计文档.md)。当前验收记录见 [Triggers 开发交接](./docs/20261107-Triggers开发交接.md)，此前记录见 [SuperAgent 开发交接](./docs/20261107-SuperAgent开发交接.md)、[Herdr 开发交接](./docs/20261107-Herdr开发交接.md) 与 [核心开发交接](./docs/20261106-核心开发交接.md)。
 
 需要 Node.js 24.12 或更新版本及 pnpm。
 
@@ -19,7 +19,7 @@ pnpm test
 HELM_PORT=3202 pnpm dev:kernel
 ```
 
-默认监听 `127.0.0.1:3202`，数据目录为 `~/.helm`。通过 `HELM_DATA_DIR` 可指定独立数据目录。会话模型按“会话显式覆盖 > 所属 Profile 的 `model` > 全局默认”解析；全局默认按启动参数、`HELM_MODEL`、`config.json.model` 顺序读取。`PATCH { "model": "" }` 清除会话覆盖并恢复继承，切换 Profile 时同步更新继承模型。模型凭据使用凭据服务配置，未配置模型时提交输入会返回显式错误。
+默认监听 `127.0.0.1:3202`，数据目录为 `~/.helm`。通过 `HELM_DATA_DIR` 可指定独立数据目录。部署时可通过反向代理转发 HTTP 与 `/ws/node`，或设置 `HELM_HOST=0.0.0.0` 接受远端连接；节点的 Hub URL 应指向其实际可达地址。会话模型按“会话显式覆盖 > 所属 Profile 的 `model` > 全局默认”解析；全局默认按启动参数、`HELM_MODEL`、`config.json.model` 顺序读取。`PATCH { "model": "" }` 清除会话覆盖并恢复继承，切换 Profile 时同步更新继承模型。模型凭据使用凭据服务配置，未配置模型时提交输入会返回显式错误。
 
 自定义兼容网关目前按模型 ID 配置。SDK 所需的上下文窗口、输出上限和计价字段使用配置缺省值，未探测网关的实际能力，不能据此估算费用。官方模型目录由 SDK 提供。
 
@@ -32,7 +32,34 @@ pnpm helm conversations list --json
 
 `setup` 只允许首次初始化；后续终端使用 `pnpm helm login` 登录。CLI 将登录凭据 JSON（Hub 地址与 Token）写入数据目录中的 `cli-token`，权限为 `0600`；模型和插件密钥保存在 `credentials.json`。`HELM_TOKEN` 优先于磁盘凭据，显式提供时不读取凭据文件。
 
-CLI 使用 `HELM_HUB_URL` 指定 Hub，默认 `http://127.0.0.1:3202`。支持指定会话的命令可通过 `--current` 读取 `HELM_CONVERSATION_ID`。内核受管 Shell 自动获得仅本进程有效的 `HELM_TOKEN` 和当前会话环境，可直接调用 CLI；该 Token 随进程关闭失效，其回显通过统一出站脱敏处理。
+CLI 使用 `HELM_HUB_URL` 指定 Hub，默认 `http://127.0.0.1:3202`。支持指定会话的命令可通过 `--current` 读取 `HELM_CONVERSATION_ID`。内核受管 Shell 自动获得进程内有效的 `HELM_TOKEN` 和当前会话环境，可通过 `PATH` 直接调用 `helm`；该 Token 随进程关闭失效，其回显通过统一出站脱敏处理。
+
+会话和 Profile 通过 `(nodeId, cwd)` 指定执行位置。`local` 是 Hub 进程内的执行环境；其他节点由 `helm-node` 主动连接 Hub 的 `/ws/node`，不要求开放入站 SSH，也不依赖 Herdr。先在 Hub 侧签发令牌，再在受控机器上绑定身份：
+
+```bash
+# Hub 客户端：签发令牌，明文仅本次返回。
+pnpm helm nodes issue build-box --json
+
+# 受控机器：将令牌保存到本机 node.json 并连接 Hub。
+pnpm helm-node connect https://hub.example.com --token '<nodeId:secret>'
+# 后续从本机身份文件启动，无需再次提供令牌。
+pnpm helm-node start -d
+pnpm helm-node status --json
+pnpm helm-node stop --json
+
+# Hub 客户端：指定节点运行命令，或绑定持久会话。
+pnpm helm env exec --node build-box --cwd /workspace --stream -- git status
+pnpm helm conversations create --node build-box --cwd /workspace --json
+```
+
+受控机器需部署 `helm-node` 和独立的 `helm` 客户端，受管 Shell 才能调用 Hub API。节点身份保存在 `node.json`（`0600`），与人类 CLI 的 `cli-token`、Hub 的 `credentials.json` 分开。节点断线后，在途命令返回结果未知错误；重连仅恢复后续调度，不重放命令，也不改在 Hub 本机执行。`helm nodes remove <nodeId>` 撤销身份并关闭现有连接。macOS、Linux、Windows 的开机服务由 `helm-node service install|uninstall|status` 管理；Windows 的字符串 Shell 命令需要 Git Bash 或 PATH 中可用的 Bash，缺失时返回 `shell_unavailable`。
+
+节点链路的编译后黑盒验收使用临时数据目录和独立 CLI/守护进程，不调用模型，也不安装系统服务：
+
+```bash
+pnpm build
+timeout 50s node scripts/env-node-smoke.mjs
+```
 
 读取会话不会自动清除未读状态。`conversations list --profile <id> --status <state>` 可按角色和状态筛选；`conversations get` 返回会话摘要和最近一页时间线，可用 `--limit`、`--cursor` 继续读取。`send --meta '<JSON 对象>' --wait` 将元数据附着在本次输入上，等待本次提交的回答并输出结果。删除会话会清理产物和搜索索引，并阻止后续访问；受 SDK 接口限制，SQLite 内部历史记录仍保留。根会话和启用插件登记托管的常驻会话受删除保护。
 
@@ -40,9 +67,9 @@ CLI 使用 `HELM_HUB_URL` 指定 Hub，默认 `http://127.0.0.1:3202`。支持�
 
 `SecretStash` 将审批中的机密答案保存在内存中，持久状态和模型上下文使用脱敏引用。审批创建返回 `{ id, status, answers }`，明确区分回答、取消和已在其他界面处理；调用方可预分配 ID 来绑定外部状态监听。Shell 和进程内插件拥有宿主权限，可以访问其执行环境；此边界不承诺对可信执行代码隐藏机密。
 
-SSE 首帧包含会话、审批、启用插件 UI 和工作流运行摘要；随后推送时间线条目、流式状态、公开插件文档和工作流更新。插件文档必须显式声明 `public: true` 才能通过 `helm plugins doc <id> <name>` 读取，仍需 Hub 鉴权。`helm workflows runs --json` 可查看运行摘要。
+SSE 首帧包含会话、审批、启用插件 UI、计算节点和工作流运行摘要；随后推送时间线条目、流式状态、节点在线状态、公开插件文档和工作流更新。插件文档必须显式声明 `public: true` 才能通过 `helm plugins doc <id> <name>` 读取，仍需 Hub 鉴权。`helm workflows runs --json` 可查看运行摘要。
 
-项目处于开发阶段，不考虑向后兼容，不做数据迁移。代码、接口、配置和数据库结构可直接按最新设计调整；结构变化时可以清理开发数据并重新初始化。同一结构下的会话、记忆和工作流重启恢复仍需保证。Web 外壳和外部插件的 `client.tsx` 编译交付后续实现；内置插件的轻量 UI 使用 JSON Spec，复杂 Screen 留给 Web 内置组件表映射。
+项目处于开发阶段，不考虑向后兼容，不做数据迁移。代码、接口、配置和数据库结构可直接按最新设计调整；结构变化时可以清理开发数据并重新初始化。同一结构下的会话、记忆和工作流重启恢复仍需保证。外部插件的 `client.tsx` 编译交付后续实现；内置插件的轻量 UI 使用 JSON Spec，复杂 Screen 由 Web 内置组件表映射。
 
 `builtin:superagent` 默认停用。启用时自举 `superagent`、`watchdog` Profile 和 `watchdog-playbooks` 技能包，保留已有用户资产，并动态创建「SuperAgent 中枢」与「巡检看门狗」两个常驻会话。它们的 ID 保存在公开插件文档 `index` 中，启用期间受删除保护；`#1` 继续作为个人助理入口。
 
@@ -56,7 +83,7 @@ pnpm helm superagent archive_worker --worker-conversation-id <会话ID> --json
 
 中枢的 `dispatch_worker` 创建持久 Worker 并提交任务后立即返回，不等待 Worker 回合完成。Worker 可绑定用户的专家 Profile，并在回合内使用 `subagent` 或 `SubagentWorkflow` 调用 Herdr。路由模式开启时，中枢移除重度执行工具；普通助理和专家单聊保持原有工具集。Worker 回合包含 `agent` 或 `trigger` 来源时，结算后向中枢汇报；纯 `human` 回合仅更新 `recall-graph`。归档保留历史与产物，并解除 `threadKey` 订阅。公开文档 `subscriptions` 与 `recall-graph` 可通过同一 `plugins doc` 命令读取。
 
-Watchdog 根据权威状态序号去重，对异常先执行确定性规则，再按需唤醒独立排障会话。自动恢复和中止在执行前复核持久归属；人类会话与窗格只允许诊断和通知。缺少权威水位的目标只通知；Herdr 状态持续很久不能单独作为自动中止依据。Watchdog 的模型工具受声明与执行双重约束，不能通过 Shell 或 `run_action` 绕过归属检查。插件管理动作自动提供 HTTP、CLI 和工作流入口；UI 贡献先经 SSE 发布，实际界面渲染仍待 Web 外壳交付。
+Watchdog 根据权威状态序号去重，对异常先执行确定性规则，再按需唤醒独立排障会话。自动恢复和中止在执行前复核持久归属；人类会话与窗格只允许诊断和通知。缺少权威水位的目标只通知；Herdr 状态持续很久不能单独作为自动中止依据。Watchdog 的模型工具受声明与执行双重约束，不能通过 Shell 或 `run_action` 绕过归属检查。插件管理动作自动提供 HTTP、CLI 和工作流入口；UI 贡献经 SSE 发布，由 Web 外壳渲染。
 
 SuperAgent 的编译后冒烟使用临时数据目录、真实 HTTP 与 CLI 子进程，验证启停、常驻保护、路由开关和重启恢复，不调用模型：
 
@@ -85,7 +112,7 @@ pnpm helm plugins enable builtin:herdr --json
 pnpm helm herdr list --json
 ```
 
-本机通过 Herdr 官方 Unix socket API 创建终端并订阅状态。Socket 路径按插件 `socketPath`、`HERDR_SOCKET_PATH`、插件 `session` 对应目录、XDG/默认配置目录依次解析。一次启用周期固定连接目标；更改连接配置后重新启用才生效。`startupTimeoutMs` 必须为 3001 到 300000 的整数，默认 30000；投递前按权威 `interactive_ready` 确认终端可输入。
+本机通过 Herdr 官方 IPC API（Unix Socket / Windows Named Pipe）创建终端并订阅状态。Socket 路径按插件 `socketPath`、`HERDR_SOCKET_PATH`、插件 `session` 对应目录、XDG/默认配置目录依次解析。一次启用周期固定连接目标；更改连接配置后重新启用才生效。`startupTimeoutMs` 必须为 3001 到 300000 的整数，默认 30000；投递前按权威 `interactive_ready` 确认终端可输入。
 
 `subagent` 和工作流可以指定 `herdr:<kind>`，或使用绑定 Herdr 的 Profile。CLI 专属参数通过 `runtime.args` 明确配置，`model`、`effort` 不自动翻译为各 CLI 的私有选项。例如：
 
@@ -99,6 +126,6 @@ pnpm helm profiles create --input '{"id":"terminal-coder","runtime":{"kind":"her
 
 总览可单独运行真实协议验收：在 Herdr 环境中执行 `pnpm build`，再运行 `timeout 50s node scripts/herdr-overview-smoke.mjs`。脚本自建临时命名会话，只操作自己的普通 Shell 窗格，验证 HTTP/CLI、创建／移动／关闭事件和启停清理，不调用模型。输出包含验收项、清理结果和临时日志目录。
 
-`herdr:<kind>@<machine>` 和 Profile 的 `runtime.machine` 使用 SSH。远端需要已运行的 Herdr、Python 3 和非交互 SSH 认证。请求和环境通过 stdin 脚本传递，环境值进入 RPC 请求体；文件交接和 Gate 在远端执行，失败时显式报错。远端默认不接收本机 Hub 地址与 Token，只有 Profile 显式声明远端可达的 `runtime.env.HELM_HUB_URL` 时才注入访问环境。机密通过 SecretStash 注入，不要写入 Profile JSON。Helm 在自己的交接、事件和诊断出口脱敏，外部 CLI 的工具输出和模型上下文遵循其自身策略。
+`herdr:<kind>@<nodeId>` 和 Profile 的 `runtime.nodeId` 使用内核 `EnvFabric` 节点通道。目标机器需运行 `helm-node` 和 Herdr；守护进程代为连接目标机器的 IPC、访问交接文件和执行 Gate。远端窗格使用该节点连接 Hub 的真实地址，环境变量通过 Herdr RPC JSON 传递。机密通过 SecretStash 注入，不要写入 Profile JSON。Helm 在自己的交接、事件和诊断出口脱敏，外部 CLI 的工具输出和模型上下文遵循其自身策略。
 
-手工真实冒烟需先执行 `pnpm build`，再运行 `node scripts/herdr-smoke.mjs`。脚本使用独立命名 Herdr 会话、临时 Git 仓库和真实 GLM 模型，验证委派、结构化交接、Worktree、Gate、同窗格续接与重放；它不纳入默认单测。Herdr 阶段在 `50be88c` 上完成全仓 677/677 与真实本机模型冒烟 28/28；本阶段的当前验收记录见 [SuperAgent 开发交接](./docs/20261107-SuperAgent开发交接.md)。远端生产 Python 通道已有受控回归，SSH 实机端到端尚未验证。
+手工真实冒烟需先执行 `pnpm build`，再运行 `node scripts/herdr-smoke.mjs`。脚本使用独立命名 Herdr 会话、临时 Git 仓库和真实 GLM 模型，验证委派、结构化交接、Worktree、Gate、同窗格续接与重放；它不纳入默认单测。当前改动的验证以实际测试日志为准；跨平台模板与协议测试不能替代 macOS、Windows 实机验收。

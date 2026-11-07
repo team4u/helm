@@ -123,6 +123,8 @@ export function parseConversationInit(body: Record<string, unknown>): Conversati
     }
     init.parentConversationId = parent
   }
+  const nodeId = optionalNodeId(body)
+  if (nodeId !== undefined) init.nodeId = nodeId
   const cwd = optionalString(body, 'cwd')
   if (cwd !== undefined) {
     if (!cwd.startsWith('/')) throw new ValidationError('cwd 需为绝对路径')
@@ -133,7 +135,7 @@ export function parseConversationInit(body: Record<string, unknown>): Conversati
     if (!/^[^/\s]+\/[^/\s]+$/.test(model)) throw new ValidationError('model 需为 provider/model 形式')
     init.model = model
   }
-  rejectUnknownKeys(body, new Set(Object.keys(init)))
+  rejectUnknownKeys(body, new Set([...Object.keys(init), 'nodeId']))
   return init
 }
 
@@ -153,6 +155,8 @@ export function parseConversationPatch(body: Record<string, unknown>): Conversat
     }
     patch.tags = tags
   }
+  const nodeId = optionalNodeId(body)
+  if (nodeId !== undefined) patch.nodeId = nodeId
   const cwd = optionalString(body, 'cwd')
   if (cwd !== undefined) {
     if (!cwd.startsWith('/')) throw new ValidationError('cwd 需为绝对路径')
@@ -174,8 +178,18 @@ export function parseConversationPatch(body: Record<string, unknown>): Conversat
   if (Object.keys(patch).length === 0) {
     throw new ValidationError('PATCH body 至少包含一个可更新字段')
   }
-  rejectUnknownKeys(body, new Set(['title', 'profileId', 'tags', 'cwd', 'model', 'unread', 'pinned']))
+  rejectUnknownKeys(body, new Set(['title', 'profileId', 'tags', 'nodeId', 'cwd', 'model', 'unread', 'pinned']))
   return patch
+}
+
+/** 可选 nodeId 字段：非空字符串 + 节点 ID 格式（字母数字开头，可含 . _ -）。 */
+function optionalNodeId(body: Record<string, unknown>): string | undefined {
+  const value = body['nodeId']
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) {
+    throw new ValidationError('nodeId 需匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/（字母数字开头，可含 . _ -）')
+  }
+  return value
 }
 
 export function parseInputBody(body: Record<string, unknown>): {
@@ -279,7 +293,10 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   const runtime = parseProfileRuntime(body.runtime)
   const system = optionalString(body, 'system', { maxLength: 512 * 1024 })
   const memory = optionalString(body, 'memory', { maxLength: 512 * 1024 })
-  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'tags', 'runtime', 'system', 'memory']))
+  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'nodeId', 'cwd', 'tags', 'runtime', 'system', 'memory']))
+  const nodeId = optionalProfileNodeId(body)
+  const cwd = optionalString(body, 'cwd')
+  if (cwd !== undefined && cwd.length === 0) throw new ValidationError('cwd 需为非空字符串')
   const profile: Profile = { ...(id !== undefined ? { id } : {}) } as Profile
   if (name !== undefined) profile.name = name
   if (model !== undefined) {
@@ -288,6 +305,8 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
     }
     if (model !== '') profile.model = model
   }
+  if (nodeId !== undefined) profile.nodeId = nodeId
+  if (cwd !== undefined) profile.cwd = cwd
   if (tags !== undefined) {
     if (tags.some((t) => t.length === 0 || t.length > 64)) throw new ValidationError('tags 每项需为 1-64 字符')
     profile.tags = tags
@@ -298,13 +317,23 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   return profile
 }
 
+/** Profile 可选 nodeId：非空 + 节点 ID 格式。 */
+function optionalProfileNodeId(body: Record<string, unknown>): string | undefined {
+  const value = body['nodeId']
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) {
+    throw new ValidationError('nodeId 需匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/（字母数字开头，可含 . _ -）')
+  }
+  return value
+}
+
 function parseProfileRuntime(raw: unknown): ProfileRuntime | undefined {
   if (raw === undefined) return undefined
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     throw new ValidationError('runtime 需为对象')
   }
   const runtime = raw as Record<string, unknown>
-  rejectUnknownKeys(runtime, new Set(['kind', 'agent', 'args', 'machine', 'workspace', 'env']))
+  rejectUnknownKeys(runtime, new Set(['kind', 'agent', 'args', 'nodeId', 'workspace', 'env']))
   if (runtime.kind !== 'herdr') throw new ValidationError("runtime.kind 当前仅支持 'herdr'")
   if (typeof runtime.agent !== 'string' || runtime.agent.length === 0) {
     throw new ValidationError('runtime.agent 需为非空字符串')
@@ -313,10 +342,10 @@ function parseProfileRuntime(raw: unknown): ProfileRuntime | undefined {
   if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== 'string'))) {
     throw new ValidationError('runtime.args 需为字符串数组')
   }
-  // machine / workspace：非空 string（缺省不限；空串拒绝）
-  const machine = runtime.machine
-  if (machine !== undefined && (typeof machine !== 'string' || machine.length === 0)) {
-    throw new ValidationError('runtime.machine 需为非空字符串')
+  // nodeId / workspace：非空 string（缺省不限；空串拒绝）
+  const nodeId = runtime.nodeId
+  if (nodeId !== undefined && (typeof nodeId !== 'string' || nodeId.length === 0)) {
+    throw new ValidationError('runtime.nodeId 需为非空字符串')
   }
   const workspace = runtime.workspace
   if (workspace !== undefined && (typeof workspace !== 'string' || workspace.length === 0)) {
@@ -337,7 +366,7 @@ function parseProfileRuntime(raw: unknown): ProfileRuntime | undefined {
     kind: 'herdr',
     agent: runtime.agent,
     ...(args !== undefined ? { args } : {}),
-    ...(machine !== undefined ? { machine } : {}),
+    ...(nodeId !== undefined ? { nodeId } : {}),
     ...(workspace !== undefined ? { workspace } : {}),
     ...(env !== undefined ? { env: { ...(env as Record<string, string>) } } : {}),
   }
@@ -484,6 +513,9 @@ function rejectUnknownKeys(body: Record<string, unknown>, allowed: Set<string>):
     throw new ValidationError(`不支持的字段: ${unknown.join(', ')}`)
   }
 }
+
+// routes.ts 的 env exec body 边界校验复用同一实现（不另写一套规则）。
+export { rejectUnknownKeys }
 
 // ---------------------------------------------------------------------------
 // 会话上下文操作 body（reset / compact / fork）

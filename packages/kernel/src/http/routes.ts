@@ -12,7 +12,9 @@
  * 原样返回（null 就是 null，undefined 是 output 边界违约，显式 500）。
  */
 import { ROOT_CONVERSATION_ID, HelmError } from '@helm/protocol'
+import { redactJsonValue } from '../redact.js'
 import type {
+  EnvExecStreamFrame,
   ArtifactMetadata,
   ConversationStatus,
   PluginConfigFieldSchema,
@@ -41,6 +43,7 @@ import {
   type JsonRedactor,
 } from './http-utils.js'
 import { decodeSegment, findPluginRoute } from './route-match.js'
+import { isAbsoluteTargetPath } from '../runtime/tools.js'
 import {
   parseActionInvokeBody,
   parseAskAnswerBody,
@@ -60,6 +63,7 @@ import {
   parseWorkflowRunBody,
   requireIdParam,
   ValidationError,
+  rejectUnknownKeys,
 } from './validate.js'
 
 export interface RouterDeps {
@@ -171,6 +175,40 @@ async function route(
   // ---- events：全局 SSE ------------------------------------------------------
   if (head === 'events' && method === 'GET' && second === undefined) {
     return kernel.events.response(ctx.request)
+  }
+
+  // ---- nodes（跨平台节点管理）----------------------------------------------
+  if (head === 'nodes') {
+    if (second === undefined && method === 'GET') {
+      return jsonOk(redactor, await kernel.listNodes())
+    }
+    if (second === 'issue' && method === 'POST' && third === undefined) {
+      const body = await readJsonBody(ctx.request)
+      const nodeId = requiredStringField(body, 'nodeId')
+      rejectUnknownKeys(body, new Set(['nodeId']))
+      const issued = await kernel.issueNodeToken(nodeId)
+      // 明文 token 仅本次响应一次性返回（此后任何 JSON 输出都不可再见明文：
+      // token 已入出站脱敏登记）。此处不能经统一 redactor（会把 token 换成
+      // [REDACTED]）：手写响应体，只透出契约字段。
+      return new Response(
+        JSON.stringify({ nodeId: issued.nodeId, token: issued.token, createdAt: issued.createdAt }),
+        {
+          status: 201,
+          headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+        },
+      )
+    }
+    if (second !== undefined && third === undefined && method === 'DELETE') {
+      const nodeId = requireNodeSegment(second)
+      await kernel.removeNode(nodeId)
+      return jsonOk(redactor, { ok: true })
+    }
+    return errorResponse(redactor, 404, 'not_found', '路由不存在')
+  }
+
+  // ---- env exec（跨节点命令执行）--------------------------------------------
+  if (head === 'env' && second === 'exec' && method === 'POST' && third === undefined) {
+    return postEnvExec(ctx, kernel, redactor)
   }
 
   // ---- conversations --------------------------------------------------------
@@ -567,6 +605,166 @@ async function dispatchPluginRoute(
 /** providers/credentials 变更后热重载模型清单；未提供端口的 runtime 跳过。 */
 async function reloadModels(kernel: KernelRuntimeLike): Promise<void> {
   await kernel.reloadModels?.()
+}
+
+/** 节点 ID 路径段：字母数字开头，可含 . _ -（与 issue 校验同一规则）。 */
+function requireNodeSegment(raw: string): string {
+  const decoded = decodeSegment(raw)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(decoded)) {
+    throw new ValidationError('nodeId 需匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/（字母数字开头，可含 . _ -）')
+  }
+  return decoded
+}
+
+/**
+ * POST /api/env/exec：
+ * - stream=true：application/x-ndjson 流式；每行 {"type":"output","stream":...,"text":...}
+ *   （text 经 StreamingRedactor 跨 chunk 脱敏），结束行 {"type":"exit",...}；
+ * - 否则 JSON 一次性返回 EnvExecResponse（全文聚合后统一脱敏）。
+ */
+async function postEnvExec(
+  ctx: RouteContext,
+  kernel: KernelRuntimeLike,
+  redactor: JsonRedactor | undefined,
+): Promise<Response> {
+  const body = await readJsonBody(ctx.request)
+  const command = body['command']
+  if (typeof command !== 'string' && !Array.isArray(command)) {
+    throw new ValidationError('command 需为字符串或字符串数组')
+  }
+  if ((typeof command === 'string' && command.trim() === '') || (Array.isArray(command) && command.length === 0)) {
+    throw new ValidationError('command 不得为空')
+  }
+  if (Array.isArray(command) && command.some((c) => typeof c !== 'string')) {
+    throw new ValidationError('command 数组项需为字符串')
+  }
+  const nodeIdRaw = body['nodeId']
+  if (nodeIdRaw !== undefined && (typeof nodeIdRaw !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeIdRaw))) {
+    throw new ValidationError('nodeId 需为非空字符串')
+  }
+  const cwdRaw = body['cwd']
+  // cwd 绝对性按目标形状判定：POSIX / 与 Windows 盘符绝对/UNC 均合法；
+  // 盘符相对（C:relative）与相对路径拒绝（与 CLI 字符串 cwd 同一规则）。
+  if (cwdRaw !== undefined && (typeof cwdRaw !== 'string' || !isAbsoluteTargetPath(cwdRaw))) {
+    throw new ValidationError(
+      'cwd 需为绝对路径（POSIX / 开头或 Windows 盘符/UNC；拒绝盘符相对与相对路径）',
+    )
+  }
+  const conversationIdRaw = body['conversationId']
+  if (
+    conversationIdRaw !== undefined &&
+    (!Number.isInteger(conversationIdRaw) || (conversationIdRaw as number) <= 0)
+  ) {
+    throw new ValidationError('conversationId 需为正整数')
+  }
+  const envRaw = body['env']
+  if (envRaw !== undefined) {
+    if (typeof envRaw !== 'object' || envRaw === null || Array.isArray(envRaw)) {
+      throw new ValidationError('env 需为字符串映射对象')
+    }
+    for (const [key, value] of Object.entries(envRaw as Record<string, unknown>)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new ValidationError('env 键需为合法环境变量名')
+      if (typeof value !== 'string' || value.includes('\u0000')) throw new ValidationError(`env.${key} 需为不含 NUL 的字符串`)
+    }
+  }
+  const timeoutRaw = body['timeoutMs']
+  if (timeoutRaw !== undefined && (!Number.isInteger(timeoutRaw) || (timeoutRaw as number) <= 0 || (timeoutRaw as number) > 600_000)) {
+    throw new ValidationError('timeoutMs 需为 1..600000 的整数')
+  }
+  const stream = body['stream']
+  if (stream !== undefined && typeof stream !== 'boolean') {
+    throw new ValidationError('stream 需为 boolean')
+  }
+  rejectUnknownKeys(
+    body,
+    new Set(['command', 'nodeId', 'cwd', 'conversationId', 'env', 'timeoutMs', 'stream']),
+  )
+  const request = {
+    command: command as string | string[],
+    ...(nodeIdRaw !== undefined ? { nodeId: nodeIdRaw as string } : {}),
+    ...(cwdRaw !== undefined ? { cwd: cwdRaw as string } : {}),
+    ...(conversationIdRaw !== undefined ? { conversationId: conversationIdRaw as number } : {}),
+    ...(envRaw !== undefined ? { env: envRaw as Record<string, string> } : {}),
+    ...(timeoutRaw !== undefined ? { timeoutMs: timeoutRaw as number } : {}),
+    ...(stream !== undefined ? { stream: stream as boolean } : {}),
+  }
+  const redactText = (text: string): string =>
+    kernel.stash !== undefined ? kernel.stash.redact(text) : text
+
+  if (stream === true) {
+    // 流式：StreamingRedactor 保尾部防跨 chunk 拆分泄漏；结束 flush。
+    // 帧协议与 @helm/protocol EnvExecStreamFrame 对齐（最终集成统一类型引用）：
+    // - 逐块 {type:'output',stream,text}（text 经跨 chunk 脱敏）；
+    // - 成功终帧 {type:'exit',ok,exitCode,timedOut}（必在尾部 redaction flush 之后）；
+    // - 中途异常 {type:'error',error:{code,message,details?}}（绝不伪造 exit）。
+    const encoder = new TextEncoder()
+    let buffered = ''
+    const streamRedactor = kernel.stash?.createStreamingRedactor?.() ?? {
+      push(text: string) { buffered += text; return '' },
+      flush() { const safe = redactText(buffered); buffered = ''; return safe },
+    }
+    const streamAbort = new AbortController()
+    const executionSignal = AbortSignal.any([ctx.request.signal, streamAbort.signal])
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        void (async () => {
+        const write = (payload: EnvExecStreamFrame): void => {
+          try {
+            controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`))
+          } catch {
+            streamAbort.abort()
+          }
+        }
+        try {
+          const result = await kernel.execEnv(request, (chunk) => {
+            const safe = streamRedactor.push(chunk.text)
+            if (safe !== '') write({ type: 'output', stream: chunk.stream, text: safe })
+          }, executionSignal)
+          // 终帧必在尾部 flush 之后：拼接后的 NDJSON text 仍无 stash/token。
+          const tail = streamRedactor.flush()
+          if (tail !== '') {
+            write({ type: 'output', stream: 'stdout' as const, text: tail })
+          }
+          write({
+            type: 'exit',
+            ok: result.ok,
+            exitCode: result.exitCode,
+            timedOut: result.timedOut,
+          })
+        } catch (error) {
+          // 中途异常：error 帧如实携带错误码与消息（经脱敏），不伪造 exit。
+          if (error instanceof HelmError) {
+            write({
+              type: 'error',
+              error: {
+                code: error.code,
+                message: redactText(error.message),
+                ...(error.details !== undefined ? { details: redactJsonValue(error.details, redactText) } : {}),
+              },
+            })
+          } else {
+            const message = error instanceof Error ? error.message : String(error)
+            write({ type: 'error', error: { code: 'internal_error', message: redactText(message) } })
+          }
+        } finally {
+          try {
+            controller.close()
+          } catch {
+            /* 已关 */
+          }
+        }
+        })()
+      },
+      cancel() { streamAbort.abort() },
+    })
+    return new Response(stream, {
+      headers: {
+        'content-type': 'application/x-ndjson; charset=utf-8',
+        'cache-control': 'no-cache',
+      },
+    })
+  }
+  return jsonOk(redactor, await kernel.execEnv(request, undefined, ctx.request.signal))
 }
 
 function bearerToken(request: Request): string | undefined {

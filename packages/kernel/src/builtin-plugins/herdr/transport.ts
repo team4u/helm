@@ -1,11 +1,22 @@
-import { isIP as nodeIsIP } from 'node:net'
-
+import { homedir } from 'node:os'
+import { posix, win32 } from 'node:path'
+import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
+import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { HelmError } from '@helm/protocol'
 import type { AgentGateResult } from '@helm/protocol'
-import type { HerdrCallOptions, HerdrEvent, HerdrSubscribeOptions, HerdrTarget, HerdrTransport } from './contracts.js'
+import type {
+  HerdrCallOptions,
+  HerdrEvent,
+  HerdrNodeChannel,
+  HerdrNodeEnv,
+  HerdrSubscribeOptions,
+  HerdrTarget,
+  HerdrTransport,
+} from './contracts.js'
+import { targetNodeId } from './contracts.js'
 
 /**
- * Herdr 官方 socket RPC 的最小 NDJSON 传输。
+ * Herdr 官方行协议 IPC 的最小 NDJSON 传输。
  *
  * Wire 契约（herdr 0.9.5 / protocol 22，经 `herdr api schema --json` 与服务端源码核实）：
  * - 一条连接一个请求：写一行 `{"id","method","params"}`，读一行 `{"id","result"}` 或
@@ -13,14 +24,28 @@ import type { HerdrCallOptions, HerdrEvent, HerdrSubscribeOptions, HerdrTarget, 
  * - `events.subscribe`：先回 `{"id","result":{"type":"subscription_started"}}` ack，
  *   之后每行是裸事件帧 `{"event","data"}`，无 id。
  *
- * 机密纪律：环境变量只经 JSON params（tab.create 的 env 对象）传递，永不落入 herdr
- * 子进程 argv；远端经 `ssh <machine> python3 -u -` 用 stdin 携带「固定脚本 + base64
- * payload 字面量」作为远端 Python 源码，任务与机密内容不出现在任何进程命令行。
+ * 机密纪律：环境变量只经 JSON params（tab.create 的 env 对象）传递，永不落入
+ * 任何进程命令行。远端节点一律经 `HerdrNodeChannel`（内核 EnvFabric 节点通道）
+ * 转发单行 JSON 请求；任务与机密内容不出现在任何 argv。
+ *
+ * 本机端点解析（与 herdr 源码 `config/io.rs` + `session.rs` + `ipc.rs` 对齐；
+ * XDG_CONFIG_HOME 优先于平台目录）：
+ * - Unix：`${XDG_CONFIG_HOME ?? ~/.config}/herdr[/sessions/<name>]/herdr.sock`（UDS 文件）；
+ * - Windows：`${XDG_CONFIG_HOME ?? %APPDATA% ?? USERPROFILE/AppData/Roaming}/herdr/.../herdr.sock`
+ *   只是标记文件，真实端点是 Named Pipe（连接时按 interprocess pathcvt 规则
+ *   拼接 `\\.\pipe\` 前缀，绝不把标记文件路径当可连接端点）。
+ *
+ * 远端端点纪律（跨平台/跨机器）：远端只传**显式** target.socketPath（可缺省）与
+ * session；HERDR_SOCKET_PATH / 配置目录 / 端点形态（UDS vs pipe）全部由目标
+ * 节点自行解析。绝不把 Hub 本机的 resolveSocketPath() 结果或 endpointKind
+ * 强加给远端（那会把 Linux Hub 的 ~/.config 路径发给 Windows 目标）。
  */
 
 export interface HerdrTransportOptions {
   /** 诊断与错误信息脱敏；缺省原样返回。 */
   redact?: (text: string) => string
+  /** 跨节点通道（EnvFabric 或测试 fixture 注入）。缺省时远端目标显式报错，绝不回退本机。 */
+  nodeChannel?: HerdrNodeChannel
 }
 
 export const HERDR_CALL_TIMEOUT_MS = 120_000
@@ -31,8 +56,6 @@ export const HERDR_START_TIMEOUT_MARGIN_MS = 15_000
 export const HERDR_WAIT_METHODS = new Set(['agent.prompt', 'agent.wait', 'pane.wait_for_output', 'events.wait'])
 /** 单帧（单行 JSON）大小上限；订阅流按帧限额，不按连接生命周期累计。 */
 export const MAX_FRAME_BYTES = 32 * 1024 * 1024
-/** 子进程（ssh/gate）stdout/stderr 聚合上限，防止远端异常输出耗尽内存。 */
-export const MAX_CHILD_OUTPUT_BYTES = 16 * 1024 * 1024
 /** Gate 输出保留上限；超限显式失败，绝不静默截断充当成功。 */
 export const MAX_GATE_OUTPUT_BYTES = 1024 * 1024
 export const MAX_OUTPUT_BYTES = 32 * 1024 * 1024
@@ -62,8 +85,12 @@ const WIRE_EVENT_TYPES = new Map<string, HerdrEvent['type']>(
   SUBSCRIPTION_TYPES.map((type) => [type.replace('.', '_'), type] as const),
 )
 const SUBSCRIBE_ACK_TIMEOUT_MS = 15_000
-/** 子进程组终止宽限：先 TERM 再 KILL，给远端 Python 清理窗口。 */
-const TERMINATE_GRACE_MS = 2_000
+/** 远端 RPC 单行请求 ID：wire 校验必须精确匹配。 */
+const REMOTE_RPC_ID = 'helm-remote-1'
+/** Gate 超时（秒；NodeExecutionEnv timeout 单位）：600s 预算 + 收尾余量。 */
+const GATE_TIMEOUT_SECONDS = 620
+/** 节点 ID 单一安全 token（含 'local'；空串与超长显式拒绝）。 */
+const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 export class HerdrTransportError extends Error {
   readonly code: string
@@ -82,7 +109,8 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function describeTarget(target: HerdrTarget): string {
-  if (target.machine) return `herdr@${target.machine}`
+  const nodeId = targetNodeId(target)
+  if (nodeId !== undefined) return `herdr@node:${nodeId}`
   if (target.session) return `herdr session ${target.session}`
   if (target.socketPath) return `herdr socket ${target.socketPath}`
   return 'herdr local default session'
@@ -94,52 +122,16 @@ export function isValidSessionName(name: string): boolean {
 }
 
 /**
- * machine 作为 ssh 的单一 argv：拒绝选项前缀、控制字符与空白注入。
- * 允许 user@host、SSH 别名、IPv4 与裸/带方括号 IPv6（方括号在去壳后校验）。
+ * 节点 ID 单一安全 token：字母数字开头，可含 `.` `_` `-`，长度 1..128。
+ * 空串与非法字符显式拒绝（绝不把空串默默当本机——那是静默降级）。
  */
-export function isValidMachineName(name: string): boolean {
-  return normalizeMachineHost(name) !== undefined
-}
-
-/** 校验并规范 machine 为 ssh 实际可用的目标（bracket IPv6 去壳）；非法返回 undefined。 */
-export function normalizeMachineHost(name: string): string | undefined {
-  if (name.length === 0 || name.length > 255) return undefined
-  if (/[^\x21-\x7e]/.test(name)) return undefined // 拒绝空白与一切控制字符
-  // 冒号不在黑名单：IPv6 需要它；非法冒号形态由 isIP(host)===6 严格拒绝。
-  // 方括号允许出现在此阶段（IPv6 包裹），剥壳后残留由后续检查拒绝。
-  if (/[\s'"\\;|&$<>`(){},!*=~%^#]/.test(name)) return undefined // 拒绝 shell 元字符
-  if (name.startsWith('-')) return undefined // 拒绝被当作 ssh 选项
-  let userinfo: string | undefined
-  let host = name
-  const at = name.lastIndexOf('@')
-  if (at >= 0) {
-    userinfo = name.slice(0, at)
-    host = name.slice(at + 1)
-    if (userinfo.length === 0 || host.length === 0) return undefined
-    if (!/^[A-Za-z0-9._-]+$/.test(userinfo)) return undefined // 用户名白名单
-  }
-  // 方括号仅用于整段包裹：半截（'[::1]x'）或残留（'a[b]'）一律拒绝。
-  const bracketed = host.startsWith('[') || host.endsWith(']')
-  if (bracketed) {
-    if (!(host.startsWith('[') && host.endsWith(']') && host.length > 2)) return undefined
-    host = host.slice(1, -1)
-  } else if (host.includes('[') || host.includes(']')) {
-    return undefined
-  }
-  if (host.includes(':') || bracketed) {
-    // 含冒号或方括号形式：必须是严格 IPv6（'::::' 等被 net.isIP 拒绝）。
-    if (nodeIsIP(host) !== 6) return undefined
-  } else {
-    if (host.includes('..')) return undefined
-    // 域名/别名/IPv4：字母数字点连下划线（下划线别名是既有用法）。
-    if (!/^[A-Za-z0-9._-]+$/.test(host)) return undefined
-  }
-  return userinfo === undefined ? host : `${userinfo}@${host}`
+export function isValidNodeId(name: string): boolean {
+  return NODE_ID_PATTERN.test(name)
 }
 
 function assertTarget(target: HerdrTarget): void {
-  if (target.machine !== undefined && !isValidMachineName(target.machine)) {
-    throw new HerdrTransportError('herdr_invalid_target', `invalid machine name: ${target.machine}`, describeTarget(target))
+  if (target.nodeId !== undefined && !isValidNodeId(target.nodeId)) {
+    throw new HerdrTransportError('herdr_invalid_target', `invalid nodeId: ${target.nodeId}`, describeTarget(target))
   }
   if (target.session !== undefined && !isValidSessionName(target.session)) {
     throw new HerdrTransportError('herdr_invalid_target', `invalid session name: ${target.session}`, describeTarget(target))
@@ -147,15 +139,22 @@ function assertTarget(target: HerdrTarget): void {
 }
 
 /**
- * socket 解析遵循设计文档优先级，本地与远端一致：
+ * 本机 Herdr IPC 端点路径解析（仅本机节点使用；远端节点自行解析）：
  * target.socketPath > HERDR_SOCKET_PATH > 会话目录（session 或默认）。
+ * Unix 上即 UDS 文件本身；Windows 上是 named pipe 的 marker 文件（连接时
+ * 必须换算为 pipe 名，绝不能直接 connect 文件路径）。
  */
 export function resolveSocketPath(target: HerdrTarget): string {
   if (target.socketPath) return target.socketPath
   if (process.env.HERDR_SOCKET_PATH) return process.env.HERDR_SOCKET_PATH
-  const configHome = process.env.XDG_CONFIG_HOME ?? `${process.env.HOME ?? ''}/.config`
-  if (target.session) return `${configHome}/herdr/sessions/${target.session}/herdr.sock`
-  return `${configHome}/herdr/herdr.sock`
+  if (process.platform === 'win32') {
+    const configHome = process.env.XDG_CONFIG_HOME ?? process.env.APPDATA ?? win32.join(homedir(), 'AppData', 'Roaming')
+    if (target.session) return win32.join(configHome, 'herdr', 'sessions', target.session, 'herdr.sock')
+    return win32.join(configHome, 'herdr', 'herdr.sock')
+  }
+  const configHome = process.env.XDG_CONFIG_HOME ?? posix.join(process.env.HOME ?? homedir(), '.config')
+  if (target.session) return posix.join(configHome, 'herdr', 'sessions', target.session, 'herdr.sock')
+  return posix.join(configHome, 'herdr', 'herdr.sock')
 }
 
 /** 会话/等待类长请求：无显式 timeoutMs 时不套客户端死线，由 signal 或服务端 wait 超时终止。 */
@@ -171,6 +170,11 @@ function resolveCallTimeoutMs(method: string, params: Record<string, unknown>, o
 
 function checkAborted(signal: AbortSignal | undefined, target: string): void {
   if (signal?.aborted) throw new HerdrTransportError('herdr_aborted', 'operation aborted', target)
+}
+
+function contextOf(signal: AbortSignal | undefined, target: string): Context {
+  checkAborted(signal, target)
+  return signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT)
 }
 
 function timeoutPromise(ms: number, target: string): { promise: Promise<never>; clear: () => void } {
@@ -250,17 +254,17 @@ function parseJsonLine(line: string, target: string): Record<string, unknown> | 
   return parsed
 }
 
-function raiseWireError(error: { code?: unknown; message?: unknown }, target: string, redact: (s: string) => string): never {
-  const code = typeof error.code === 'string' && error.code ? error.code : 'herdr_error'
-  const message = typeof error.message === 'string' && error.message ? redact(error.message) : 'herdr returned an error without a message'
-  throw new HerdrTransportError(code, `${code}: ${message}`, target)
-}
-
 function checkWireError(envelope: Record<string, unknown>, target: string, redact: (s: string) => string): void {
   if (envelope['error'] !== undefined && envelope['error'] !== null) {
     const body = isObject(envelope['error']) ? envelope['error'] : {}
     raiseWireError(body, target, redact)
   }
+}
+
+function raiseWireError(error: { code?: unknown; message?: unknown }, target: string, redact: (s: string) => string): never {
+  const code = typeof error.code === 'string' && error.code ? error.code : 'herdr_error'
+  const message = typeof error.message === 'string' && error.message ? redact(error.message) : 'herdr returned an error without a message'
+  throw new HerdrTransportError(code, `${code}: ${message}`, target)
 }
 
 // --------------------------------------------------------- 本机 socket RPC --
@@ -561,553 +565,76 @@ async function subscribeLocal(
   }
 }
 
-// ------------------------------------------------------------ 远端通道 --
+// ------------------------------------------------------------ 远端节点通道 --
 
 /**
- * 远端固定解释器脚本（函数体定义）：
- * 从「脚本尾部 base64 字面量」解码 payload，按 op 分派，输出一行 JSON 信封后退出。
- * rpc 成功输出 {"result": ..., "error": null} 单一信封（error:null 不是失败）。
- * 文件与 Gate 操作复用与本地相同的安全边界；只依赖 python3 标准库。
- *
- * deadlineMs 语义与 Node 端一致：None 表示不设远端死线（wait 类），
- * agent.start 含服务端启动时间 + 传输余量。
+ * 解析远端调用所需的通道：EnvFabric 未注入（缺 nodeChannel）时显式
+ * herdr_node_unavailable；节点离线显式 herdr_node_offline。绝不回退本机。
  */
-const REMOTE_SCRIPT_BODY = String.raw`
-import base64, json, os, re, signal, socket, subprocess, sys, threading
-
-MAX_OUTPUT_BYTES = 33554432
-MAX_GATE_OUTPUT_BYTES = 1048576
-MAX_FRAME_BYTES = 33554432
-OUTPUT_FILE_PATTERN = re.compile(r"^wf-out-[A-Za-z0-9_.-]{1,64}\.(json|md)$")
-
-def out(obj):
-    sys.stdout.write(json.dumps(obj) + "\n")
-    sys.stdout.flush()
-
-def fail(code, message):
-    out({"error": {"code": code, "message": message}})
-
-def socket_path(spec):
-    if spec.get("socketPath"):
-        return spec["socketPath"]
-    if os.environ.get("HERDR_SOCKET_PATH"):
-        return os.environ["HERDR_SOCKET_PATH"]
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    if spec.get("session"):
-        return os.path.join(base, "herdr", "sessions", spec["session"], "herdr.sock")
-    return os.path.join(base, "herdr", "herdr.sock")
-
-def read_frame(conn, deadline):
-    buf = b""
-    while not buf.endswith(b"\n"):
-        remaining = None if deadline is None else max(0.0, deadline - time_time())
-        if remaining is not None and remaining <= 0:
-            raise TimeoutError("rpc deadline exceeded")
-        # 无 deadline 的 wait 也必须在 SSH 通道死亡后尽快退出，不留无限辅助进程。
-        if CHANNEL_DEAD.is_set():
-            raise OSError("ssh channel closed while waiting for rpc response")
-        conn.settimeout(0.5)
-        try:
-            chunk = conn.recv(65536)
-        except socket.timeout:
-            continue
-        if not chunk:
-            break
-        buf += chunk
-        if len(buf) > MAX_FRAME_BYTES:
-            raise OverflowError("rpc frame exceeds limit")
-    return buf
-
-def time_time():
-    import time
-    return time.monotonic()
-
-RPC_ID = "helm-remote-1"
-
-def rpc(spec, method, params, deadline_ms):
-    path = socket_path(spec)
-    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        deadline = None if deadline_ms is None else time_time() + deadline_ms / 1000.0
-        conn.settimeout(5.0)
-        conn.connect(path)
-        conn.settimeout(None)
-        conn.sendall(json.dumps({"id": RPC_ID, "method": method, "params": params}).encode() + b"\n")
-        buf = read_frame(conn, deadline)
-    except TimeoutError as err:
-        fail("herdr_timeout", "%s %s: %s" % (method, path, err))
-        return
-    except OSError as err:
-        fail("herdr_socket", "%s %s: %s" % (method, path, err))
-        return
-    finally:
-        conn.close()
-    try:
-        envelope = json.loads(buf.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as err:
-        fail("herdr_protocol", "bad rpc response for %s: %s" % (method, err))
-        return
-    # 与本机一致的 wire 校验：id 必须存在且匹配；缺 result 与 error 是协议违规。
-    if not isinstance(envelope, dict) or envelope.get("id") != RPC_ID:
-        fail("herdr_protocol", "rpc response id missing or mismatched for %s" % method)
-        return
-    if "result" not in envelope and "error" not in envelope:
-        fail("herdr_protocol", "rpc response has neither result nor error for %s" % method)
-        return
-    # 单一信封：成功时 error 为 null；只有真实非空 error 才是失败。
-    out({"result": envelope.get("result"), "error": envelope.get("error")})
-
-class MissingOutput(Exception):
-    pass
-
-def safe_output_path(cwd, file_name):
-    if not OUTPUT_FILE_PATTERN.match(file_name):
-        raise ValueError("unsafe output file name: %s" % file_name)
-    base = os.path.realpath(cwd)
-    parent = os.path.join(base, ".helm")
-    if os.path.sep + ".helm" not in parent or not parent.startswith(base + os.path.sep):
-        raise ValueError("unsafe .helm path")
-    try:
-        st = os.lstat(parent)
-    except OSError as err:
-        if err.errno in (errno_enoent(), errno_enotdir()):
-            raise MissingOutput(parent)
-        raise IOErrorStamp(err)
-    if os.path.stat.S_ISLNK(st.st_mode) or not os.path.stat.S_ISDIR(st.st_mode):
-        raise NotADirectoryError(".helm is not a real directory inside cwd")
-    return os.path.join(parent, file_name)
-
-class IOErrorStamp(Exception):
-    def __init__(self, err):
-        super().__init__(str(err))
-        self.errno = err.errno
-
-def errno_enotdir():
-    import errno
-    return errno.ENOTDIR
-
-def read_file(cwd, file_name):
-    try:
-        path = safe_output_path(cwd, file_name)
-    except ValueError as err:
-        return {"error": {"code": "herdr_invalid_output_name", "message": str(err)}}
-    except MissingOutput as err:
-        return {"error": {"code": "herdr_output_missing", "message": "missing: %s" % err}}
-    except IOErrorStamp as err:
-        return {"error": {"code": "herdr_io", "message": str(err)}}
-    except (NotADirectoryError, OSError) as err:
-        return {"error": {"code": "herdr_output_escaping", "message": str(err)}}
-    try:
-        st = os.lstat(path)
-        if os.path.stat.S_ISLNK(st.st_mode) or not os.path.isfile(path):
-            return {"error": {"code": "herdr_output_not_file", "message": "not a regular file: %s" % path}}
-        if st.st_size > MAX_OUTPUT_BYTES:
-            return {"error": {"code": "herdr_output_too_large", "message": "output exceeds limit"}}
-        with open(path, "r", encoding="utf-8") as handle:
-            content = handle.read(MAX_OUTPUT_BYTES + 1)
-        if len(content.encode("utf-8")) > MAX_OUTPUT_BYTES:
-            return {"error": {"code": "herdr_output_too_large", "message": "output grew past limit while reading"}}
-        return {"ok": True, "content": content}
-    except OSError as err:
-        if err.errno == errno_enoent():
-            return {"error": {"code": "herdr_output_missing", "message": "missing: %s" % path}}
-        return {"error": {"code": "herdr_io", "message": "read %s: %s" % (path, err)}}
-
-def remove_file(cwd, file_name):
-    try:
-        path = safe_output_path(cwd, file_name)
-    except ValueError as err:
-        return {"error": {"code": "herdr_invalid_output_name", "message": str(err)}}
-    except MissingOutput as err:
-        return {"ok": True}
-    except IOErrorStamp as err:
-        return {"error": {"code": "herdr_io", "message": str(err)}}
-    except (NotADirectoryError, OSError) as err:
-        return {"error": {"code": "herdr_output_escaping", "message": str(err)}}
-    try:
-        st = os.lstat(path)
-        if os.path.stat.S_ISLNK(st.st_mode) or not os.path.stat.S_ISREG(st.st_mode):
-            return {"error": {"code": "herdr_output_not_file", "message": "not a regular file: %s" % path}}
-        os.unlink(path)
-        return {"ok": True}
-    except OSError as err:
-        if err.errno == errno_enoent():
-            return {"ok": True}
-        return {"error": {"code": "herdr_io", "message": "remove %s: %s" % (path, err)}}
-
-def errno_enoent():
-    import errno
-    return errno.ENOENT
-
-def run_gate(command, cwd, env, timeout_ms):
-    import select as _select
-    base = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"), "HOME": os.path.expanduser("~")}
-    if env:
-        base.update({k: v for k, v in env.items() if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", k)})
-    try:
-        proc = subprocess.Popen(
-            ["/bin/sh", "-c", command],
-            cwd=cwd,
-            env=base,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    except OSError as err:
-        return {"ok": False, "output": "spawn failed: %s" % err}
-    gate_pgid = None
-    try:
-        gate_pgid = os.getpgid(proc.pid)
-    except OSError:
-        pass
-
-    def kill_gate_group():
-        if gate_pgid is not None:
-            try:
-                os.killpg(gate_pgid, signal.SIGKILL)
-            except OSError:
-                pass
-
-    # 本进程被 TERM/HUP（Node 侧宽限终止 ssh）或通道心跳检测到 SSH 断开时：
-    # 立即杀掉自建 Gate 进程组再退出，绝不遗留远端进程。
-    def _terminate(signum, frame):
-        kill_gate_group()
-        os._exit(3)
-    signal.signal(signal.SIGTERM, _terminate)
-    signal.signal(signal.SIGHUP, _terminate)
-    signal.signal(signal.SIGINT, _terminate)
-    stop_heartbeat_kill = watch_channel_death(kill_gate_group)
-
-    def finish(result):
-        kill_gate_group()
-        try:
-            proc.wait(timeout=5)
-        except Exception:
-            pass
-        return result
-
-    # 流式有界读取：达到上限立即杀组并显式失败，绝不先聚合无限输出。
-    chunks = []
-    total = 0
-    deadline = time_time() + (timeout_ms or 600000) / 1000.0
-    overflow = False
-    timed_out = False
-    stdout_fd = proc.stdout.fileno()
-    while True:
-        remaining = deadline - time_time()
-        if remaining <= 0:
-            timed_out = True
-            break
-        try:
-            ready, _, _ = _select.select([stdout_fd], [], [], min(0.25, remaining))
-        except (OSError, ValueError):
-            break
-        if not ready:
-            if proc.poll() is not None and not overflow:
-                # 进程退出：排空残余后结束
-                pass
-            continue
-        try:
-            chunk = os.read(stdout_fd, 65536)
-        except OSError:
-            break
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > MAX_GATE_OUTPUT_BYTES:
-            overflow = True
-            break
-        chunks.append(chunk)
-    if overflow:
-        stop_heartbeat_kill()
-        return finish({"ok": False, "output": "gate output exceeded %d bytes" % MAX_GATE_OUTPUT_BYTES})
-    output = b"".join(chunks)
-    try:
-        rc = proc.poll()
-        if rc is None:
-            try:
-                rc = proc.wait(timeout=max(0.0, deadline - time_time()))
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                kill_gate_group()
-                rc = proc.wait(timeout=5)
-        else:
-            rc = proc.wait()
-    except Exception:
-        rc = -1
-    text = output.decode("utf-8", "replace")
-    stop_heartbeat_kill()
-    if timed_out:
-        return {"ok": False, "output": "gate timed out\n" + text}
-    return {"ok": rc == 0, "output": text}
-
-CHANNEL_DEAD = threading.Event()
-
-_CHANNEL_WATCHERS = []
-
-def watch_channel_death(callback):
-    """通道死亡时执行回调（如杀 Gate 组）；返回取消函数。"""
-    entry = [callback]
-    _CHANNEL_WATCHERS.append(entry)
-    def cancel():
-        try:
-            _CHANNEL_WATCHERS.remove(entry)
-        except ValueError:
-            pass
-    return cancel
-
-def _channel_heartbeat():
-    # stderr 心跳空行：SSH 通道断开后 write 抛 BrokenPipeError/EBADF，
-    # 据此标记通道死亡并触发 watchers（杀 Gate 组等）。不携带任何敏感值。
-    while not CHANNEL_DEAD.is_set():
-        time_sleep(1.0)
-        try:
-            sys.stderr.write("\n")
-            sys.stderr.flush()
-        except (BrokenPipeError, OSError, ValueError):
-            CHANNEL_DEAD.set()
-            for entry in list(_CHANNEL_WATCHERS):
-                try:
-                    entry[0]()
-                except Exception:
-                    pass
-            return
-
-def time_sleep(seconds):
-    import time
-    time.sleep(seconds)
-
-def main(payload):
-    watcher = threading.Thread(target=_channel_heartbeat, daemon=True)
-    watcher.start()
-    op = payload.get("op")
-    if op == "rpc":
-        rpc(payload.get("target") or {}, payload.get("method") or "", payload.get("params") or {}, payload.get("deadlineMs"))
-    elif op == "readFile":
-        out(read_file(payload.get("cwd") or "", payload.get("fileName") or ""))
-    elif op == "removeFile":
-        out(remove_file(payload.get("cwd") or "", payload.get("fileName") or ""))
-    elif op == "runGate":
-        out(run_gate(payload.get("command") or "", payload.get("cwd") or "", payload.get("env"), payload.get("timeoutMs")))
-    else:
-        fail("herdr_protocol", "unknown op: %r" % op)
-    CHANNEL_DEAD.set()
-`
-
-interface RemotePayload {
-  op: 'rpc' | 'readFile' | 'removeFile' | 'runGate'
-  target?: { session?: string; socketPath?: string }
-  method?: string
-  params?: Record<string, unknown>
-  cwd?: string
-  fileName?: string
-  command?: string
-  env?: Record<string, string>
-  timeoutMs?: number
-  deadlineMs?: number | null
-}
-
-interface RemoteEnvelope {
-  result?: unknown
-  ok?: boolean
-  content?: string
-  output?: string
-  error?: { code?: unknown; message?: unknown } | null
-}
-
-interface ChildRunResult {
-  code: number | null
-  signal: NodeJS.Signals | null
-  stdout: Buffer
-  stderr: Buffer
-  spawnError?: Error
-}
-
-/**
- * 子进程统一控制：有限输出聚合上限、预 abort 检查、timeout/abort 杀自建进程组后
- * 等待真正退出、listener/timer 全清理。非 interactive（无 tty）仅用于 ssh。
- */
-async function runChild(
-  command: string,
-  args: string[],
-  options: {
-    stdinData?: Buffer
-    timeoutMs?: number
-    signal?: AbortSignal
-    target: string
-    redact: (s: string) => string
-    /** 子进程工作目录（Gate 必须；ssh 通道用当前目录）。 */
-    cwd?: string
-    /** 白名单环境（Gate 用）；ssh 通道不继承宿主环境。 */
-    envOverride?: Record<string, string>
-  },
-): Promise<ChildRunResult> {
-  const childProcess = await import('node:child_process')
-  const { stdinData, timeoutMs, signal, target, redact, cwd, envOverride } = options
-  checkAborted(signal, target)
-
-  const child = childProcess.spawn(command, args, {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    detached: true,
-    cwd,
-    env: envOverride,
-  })
-  const stdoutChunks: Buffer[] = []
-  const stderrChunks: Buffer[] = []
-  let totalBytes = 0 // stdout+stderr 合计上限
-  let spawnError: Error | undefined
-  let outputOverflow = false
-  let closed = false
-  let terminating = false
-
-  const onStdout = (chunk: Buffer) => {
-    totalBytes += chunk.length
-    if (totalBytes > MAX_CHILD_OUTPUT_BYTES) {
-      outputOverflow = true
-      killGroup()
-      return
-    }
-    stdoutChunks.push(chunk)
-  }
-  const onStderr = (chunk: Buffer) => {
-    totalBytes += chunk.length
-    if (totalBytes > MAX_CHILD_OUTPUT_BYTES) {
-      outputOverflow = true
-      killGroup()
-      return
-    }
-    stderrChunks.push(chunk)
-  }
-  child.stdout?.on('data', onStdout)
-  child.stderr?.on('data', onStderr)
-  child.once('error', (err) => {
-    spawnError = err
-    killGroup()
-  })
-
-  const rawKillGroup = () => {
-    if (closed) return
-    try {
-      if (child.pid) process.kill(-child.pid, 'SIGKILL')
-    } catch {
-      child.kill('SIGKILL')
-    }
-  }
-  /** 先 TERM（宽限内允许清理），超时或宽限期满再 KILL；幂等。 */
-  const terminateGroup = () => {
-    if (closed || terminating) return
-    terminating = true
-    // close 才说明管道已释放；主进程 exit 后其子进程仍可能持有输出管道。
-    try {
-      if (child.pid) process.kill(-child.pid, 'SIGTERM')
-    } catch {
-      rawKillGroup()
-      return
-    }
-    const grace = setTimeout(rawKillGroup, TERMINATE_GRACE_MS)
-    grace.unref?.()
-    exited.then(() => clearTimeout(grace), () => clearTimeout(grace))
-  }
-  const killGroup = terminateGroup
-
-  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    child.once('close', (code, signal) => {
-      closed = true
-      resolve({ code, signal })
-    })
-  })
-
-  const timer = timeoutMs === undefined ? undefined : timeoutPromise(timeoutMs, target)
-  const onAbort = () => killGroup()
-  signal?.addEventListener('abort', onAbort, { once: true })
-
-  if (stdinData !== undefined) {
-    child.stdin?.on('error', () => {
-      /* 早退 EPIPE 由 exit/spawn error 承载 */
-    })
-    child.stdin?.end(stdinData)
-  } else {
-    child.stdin?.end()
-  }
-
-  let exit: { code: number | null; signal: NodeJS.Signals | null }
-  try {
-    const racers: Promise<{ code: number | null; signal: NodeJS.Signals | null }>[] = [exited]
-    if (timer) racers.push(timer.promise.then(() => ({ code: null, signal: null })))
-    exit = await Promise.race(racers)
-  } finally {
-    timer?.clear()
-    signal?.removeEventListener('abort', onAbort)
-    killGroup() // TERM->KILL 宽限终止；之后等待真实退出，不留悬挂子进程
-    await exited
-  }
-
-  checkAborted(signal, target)
-  if (outputOverflow) {
-    throw new HerdrTransportError('herdr_remote_output_too_large', `child output exceeded ${MAX_CHILD_OUTPUT_BYTES} bytes`, target)
-  }
-  if (spawnError) {
-    const notFound = (spawnError as NodeJS.ErrnoException).code === 'ENOENT'
+function requireChannel(nodeChannel: HerdrNodeChannel | undefined, nodeId: string, target: string): HerdrNodeChannel {
+  if (nodeChannel === undefined) {
     throw new HerdrTransportError(
-      notFound ? 'herdr_spawn_not_found' : 'herdr_spawn_failed',
-      `failed to spawn ${command}: ${redact(spawnError.message)}`,
+      'herdr_node_unavailable',
+      `node '${nodeId}' has no HerdrNodeChannel（EnvFabric 未注入）；远端 Herdr 调用不可用，且绝不回退本机`,
       target,
-      { cause: spawnError },
     )
   }
-  return { ...exit, stdout: Buffer.concat(stdoutChunks), stderr: Buffer.concat(stderrChunks) }
+  if (!nodeChannel.isOnline(nodeId)) {
+    throw new HerdrTransportError('herdr_node_offline', `node '${nodeId}' is offline`, target)
+  }
+  return nodeChannel
+}
+
+/** 通道层错误码 → 传输错误码（超时/取消/IO 如实分型，不吞错）。 */
+function raiseChannelError(code: string, message: string, target: string): never {
+  const mapped =
+    code === 'timeout' ? 'herdr_timeout'
+    : code === 'aborted' ? 'herdr_aborted'
+    : code === 'not_found' ? 'herdr_output_missing'
+    : code === 'permission_denied' ? 'herdr_io'
+    : 'herdr_node_error'
+  throw new HerdrTransportError(mapped, `${code}: ${message}`, target)
 }
 
 /**
- * 远端执行：ssh -T BatchMode（无 tty、无交互），远端命令固定 `python3 -u -`。
- * stdin 是「完整固定脚本 + base64 payload 字面量」的 Python 源码；
- * 任务内容与机密值绝不进入 ssh/herdr 进程 argv。
+ * 远端 RPC：单行 JSON 经节点通道直达目标节点的本机 Herdr IPC。
+ * 只传显式 target.socketPath（可缺省）与 session——端点路径/形态由目标节点
+ * 自行解析（本机 resolveSocketPath/endpointKind 绝不下发）。
+ * 机密只存在于 JSON 结构内部，绝不进入任何命令行 argv。
  */
-async function runRemote(
-  machine: string,
-  payload: RemotePayload,
-  signal: AbortSignal | undefined,
-  timeoutMs: number | undefined,
+async function callRemote(
+  nodeChannel: HerdrNodeChannel,
+  nodeId: string,
+  target: HerdrTarget,
+  targetLabel: string,
+  method: string,
+  params: Record<string, unknown>,
+  options: HerdrCallOptions | undefined,
   redact: (s: string) => string,
-): Promise<RemoteEnvelope> {
-  const target = describeTarget({ machine })
-  const payloadJson = JSON.stringify(payload)
-  const encoded = Buffer.from(payloadJson, 'utf8').toString('base64')
-  // 脚本尾部以字面量调用 main：base64 字符串经 JSON 引号包装，安全嵌入源码。
-  const source = `${REMOTE_SCRIPT_BODY}\nmain(json.loads(base64.b64decode(${JSON.stringify(encoded)})))\n`
-  const stdinData = Buffer.from(source, 'utf8')
-
-  // bracket IPv6 规范为裸 host 后再交给 ssh（ssh 不接受带方括号目标）。
-  const sshTarget = normalizeMachineHost(machine)
-  if (sshTarget === undefined) {
-    throw new HerdrTransportError('herdr_invalid_target', `invalid machine name: ${machine}`, target)
-  }
-  const exit = await runChild(
-    'ssh',
-    ['-T', '-o', 'BatchMode=yes', '--', sshTarget, 'python3 -u -'],
-    { stdinData, timeoutMs, signal, target, redact },
+): Promise<unknown> {
+  const line = JSON.stringify({ id: REMOTE_RPC_ID, method, params })
+  const timeoutMs = resolveCallTimeoutMs(method, params, options)
+  const result = await nodeChannel.ipcCall(
+    nodeId,
+    {
+      ...(target.socketPath !== undefined ? { endpoint: target.socketPath } : {}),
+      ...(target.session !== undefined ? { session: target.session } : {}),
+      line,
+      timeoutMs,
+    },
+    contextOf(options?.signal, targetLabel),
   )
-
-  const text = exit.stdout.toString('utf8').trim()
-  const errText = exit.stderr.toString('utf8').trim()
-  if (exit.code !== 0) {
-    if (signal?.aborted) {
-      throw new HerdrTransportError('herdr_aborted', `remote operation on ${machine} aborted`, target)
-    }
-    const cause = exit.code === 127 ? 'python3 or ssh not found on remote' : `exit ${exit.code ?? `signal ${exit.signal}`}`
-    const detail = errText ? `: ${redact(errText).slice(-800)}` : ''
-    const code = exit.code === 127 ? 'herdr_remote_python_missing' : 'herdr_remote_failed'
-    throw new HerdrTransportError(code, `ssh ${machine} ${cause}${detail}`, target)
+  if (!result.ok) raiseChannelError(result.error.code, result.error.message, targetLabel)
+  const envelope = parseJsonLine(result.value, targetLabel)
+  if (!envelope) throw new HerdrTransportError('herdr_protocol', 'empty response line', targetLabel)
+  if (envelope['id'] !== REMOTE_RPC_ID) {
+    throw new HerdrTransportError('herdr_protocol', 'response id missing or mismatched', targetLabel)
   }
-  if (!text) {
-    throw new HerdrTransportError('herdr_remote_failed', `ssh ${machine} produced no output`, target)
+  if (envelope['result'] === undefined && envelope['error'] === undefined) {
+    throw new HerdrTransportError('herdr_protocol', 'response has neither result nor error', targetLabel)
   }
-  const envelope = parseJsonLine(text, target)
-  if (!envelope || !('result' in envelope || 'ok' in envelope || 'error' in envelope)) {
-    // 不回显原始内容，只报协议错误（原文可能含机密）。
-    throw new HerdrTransportError('herdr_protocol', 'unexpected remote envelope', target)
-  }
-  return envelope as RemoteEnvelope
+  checkWireError(envelope, targetLabel, redact)
+  return envelope['result']
 }
 
 // ------------------------------------------------------- 文件与门禁 --
@@ -1201,11 +728,225 @@ async function removeLocalOutput(cwd: string, fileName: string, signal: AbortSig
   }
 }
 
+/**
+ * 目标路径形状对应的纯路径规则（不依赖 Hub 进程平台）：
+ * Windows 形状（盘符或 UNC `\\server\share`）用 win32 规则，其余 POSIX。
+ */
+function pathRulesFor(path: string): typeof posix | typeof win32 {
+  return isWindowsShapedPath(path) ? win32 : posix
+}
+
+/** Windows 路径形状：盘符（C:\ 或 C:/）或 UNC（\\server\share）。纯规则判断。 */
+export function isWindowsShapedPath(path: string): boolean {
+  return /^([A-Za-z]:[\\/]|\\\\[^\\])/.test(path)
+}
+
+/** 路径是否为绝对路径（POSIX `/` 或 Windows 盘符/UNC；拒绝 `C:relative`）。纯规则。 */
+export function isAbsoluteAnyPath(path: string): boolean {
+  return isWindowsShapedPath(path) ? win32.isAbsolute(path) : posix.isAbsolute(path)
+}
+
+/**
+ * 跨平台安全 containment：child 必须等于 root 或位于 root 之下（规范化比较，
+ * 不多加目录分隔——root 为 `/` 时 `/foo` 合法包含，`//foo` 不额外产生）。
+ * root 与 child 均为已 canonical 解析的路径（调用方保证）。
+ */
+export function pathContains(root: string, child: string): boolean {
+  if (root === child) return true
+  const rules = pathRulesFor(root)
+  const rootPrefix = root.endsWith(rules.sep) ? root.slice(0, -1) : root
+  return child.startsWith(rootPrefix + rules.sep)
+}
+
+/**
+ * 远端节点输出目录解析（与本地 resolveLocalOutputPath 同一安全边界）：
+ * - cwd 依据自身路径形状选用 win32/posix 纯规则拼 `<cwd>/.helm`（Hub 的
+ *   node:path.join 会按 Hub 平台拆 Windows 路径——Linux Hub 会把 `\` 当
+ *   普通字符产生错误目录名，Windows Hub 会把 POSIX cwd 拆碎）；
+ * - cwd 经 env.canonicalPath 校验真实可解析（不可达 = invalid_cwd）；
+ * - `<realCwd>/.helm` 必须是真实目录（缺失 = 404 可自愈边界；symlink/非目录 = 逃逸拒绝）；
+ * - canonical 后必须仍落在 realCwd 之内（pathContains，中间软链拦截）。
+ */
+async function resolveNodeOutputDir(
+  env: HerdrNodeEnv,
+  cwd: string,
+  target: string,
+  context: Context,
+): Promise<{ realCwd: string; realHelm: string }> {
+  const rules = pathRulesFor(cwd)
+  const canonicalCwd = await env.canonicalPath(cwd, context)
+  if (!canonicalCwd.ok) {
+    throw new HerdrTransportError(
+      'herdr_invalid_cwd',
+      `cwd not accessible on node: ${canonicalCwd.error.code}: ${canonicalCwd.error.message}`,
+      target,
+      { cause: new Error(canonicalCwd.error.message) },
+    )
+  }
+  const realCwd = canonicalCwd.value
+  const helmDir = rules.join(realCwd, '.helm')
+  const helmInfo = await env.fileInfo(helmDir, context)
+  if (!helmInfo.ok) {
+    const code = helmInfo.error.code
+    if (code === 'not_found' || code === 'not_directory') {
+      // 目录缺失 = 交接文件缺失：read 报 404、remove 幂等（一次自愈边界）。
+      throw new HelmError('herdr_output_missing', `交接目录不存在: ${helmDir}`, 404)
+    }
+    throw new HerdrTransportError(
+      'herdr_io',
+      `failed to inspect ${helmDir}: ${code}: ${helmInfo.error.message}`,
+      target,
+    )
+  }
+  if (helmInfo.value.kind === 'symlink' || helmInfo.value.kind !== 'directory') {
+    throw new HerdrTransportError('herdr_output_escaping', `.helm must be a real directory inside cwd`, target)
+  }
+  const canonicalHelm = await env.canonicalPath(helmDir, context)
+  if (!canonicalHelm.ok) {
+    throw new HerdrTransportError('herdr_io', `failed to resolve ${helmDir}: ${canonicalHelm.error.message}`, target)
+  }
+  const realHelm = canonicalHelm.value
+  if (!pathContains(realCwd, realHelm)) {
+    throw new HerdrTransportError('herdr_output_escaping', `.helm resolves outside cwd`, target)
+  }
+  return { realCwd, realHelm }
+}
+
+async function readNodeOutput(
+  nodeChannel: HerdrNodeChannel,
+  nodeId: string,
+  target: HerdrTarget,
+  targetLabel: string,
+  cwd: string,
+  fileName: string,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  const context = contextOf(signal, targetLabel)
+  const env = nodeChannel.envFor(nodeId, cwd)
+  const { realHelm } = await resolveNodeOutputDir(env, cwd, targetLabel, context)
+  const filePath = pathRulesFor(realHelm).join(realHelm, fileName)
+  const info = await env.fileInfo(filePath, context)
+  if (!info.ok) {
+    if (info.error.code === 'not_found') {
+      throw new HelmError('herdr_output_missing', `交接文件不存在: ${filePath}`, 404)
+    }
+    throw new HerdrTransportError('herdr_io', `failed to inspect output file: ${info.error.code}: ${info.error.message}`, targetLabel)
+  }
+  if (info.value.kind !== 'file') {
+    throw new HerdrTransportError('herdr_output_not_file', `output path is not a regular file: ${filePath}`, targetLabel)
+  }
+  if (info.value.size > MAX_OUTPUT_BYTES) {
+    throw new HerdrTransportError('herdr_output_too_large', `output exceeds ${MAX_OUTPUT_BYTES} bytes`, targetLabel)
+  }
+  const content = await env.readTextFile(filePath, context)
+  if (!content.ok) {
+    throw new HerdrTransportError('herdr_io', `failed to read output file: ${content.error.code}: ${content.error.message}`, targetLabel)
+  }
+  if (Buffer.byteLength(content.value, 'utf8') > MAX_OUTPUT_BYTES) {
+    throw new HerdrTransportError('herdr_output_too_large', `output grew past limit while reading`, targetLabel)
+  }
+  return content.value
+}
+
+async function removeNodeOutput(
+  nodeChannel: HerdrNodeChannel,
+  nodeId: string,
+  targetLabel: string,
+  cwd: string,
+  fileName: string,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const context = contextOf(signal, targetLabel)
+  const env = nodeChannel.envFor(nodeId, cwd)
+  let realHelm: string
+  try {
+    realHelm = (await resolveNodeOutputDir(env, cwd, targetLabel, context)).realHelm
+  } catch (err) {
+    // 目录缺失：remove 幂等无操作（与本地语义一致）。
+    if (err instanceof HelmError && err.code === 'herdr_output_missing') return
+    throw err
+  }
+  const filePath = pathRulesFor(realHelm).join(realHelm, fileName)
+  const info = await env.fileInfo(filePath, context)
+  if (!info.ok) {
+    if (info.error.code === 'not_found') return // 文件缺失：幂等
+    throw new HerdrTransportError('herdr_io', `failed to inspect output file: ${info.error.code}: ${info.error.message}`, targetLabel)
+  }
+  if (info.value.kind !== 'file') {
+    throw new HerdrTransportError('herdr_output_not_file', `output path is not a regular file: ${filePath}`, targetLabel)
+  }
+  const removed = await env.remove(filePath, { force: true }, context)
+  if (!removed.ok) {
+    throw new HerdrTransportError('herdr_io', `failed to remove output file: ${removed.error.code}: ${removed.error.message}`, targetLabel)
+  }
+}
+
 function validEnvEntries(env: Record<string, string> | undefined): [string, string][] {
   return Object.entries(env ?? {}).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
 }
 
-/** 本机 Gate：受限 env、完整输出（限额内）、abort/超时杀自建进程组并等待退出。 */
+/**
+ * Gate 执行核心（本机与远端同构）：SDK `NodeExecutionEnv.exec`——跨平台 shell
+ * 选择（Unix /bin/bash→sh；Windows Git Bash/WSL 探测）与进程树终止
+ * （Unix 进程组 SIGKILL；Windows taskkill /F /T）由 SDK 承担。
+ * `inheritEnv: false`：只注入显式受管 env（宿主 HELM_TOKEN 等绝不泄漏进
+ * gate 子进程；token 只能经显式 env 提供）。流式累计超限即取消并显式失败。
+ */
+async function execGate(
+  env: HerdrNodeEnv,
+  command: string,
+  cwd: string,
+  signal: AbortSignal | undefined,
+  target: string,
+  envVars: Record<string, string>,
+  redact: (s: string) => string,
+): Promise<AgentGateResult> {
+  const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  signal?.addEventListener('abort', onAbort, { once: true })
+  const chunks: string[] = []
+  let total = 0
+  let overflow = false
+  try {
+    const result = await env.exec(
+      command,
+      {
+        cwd,
+        env: envVars,
+        inheritEnv: false,
+        timeout: GATE_TIMEOUT_SECONDS,
+        onOutput: (text) => {
+          total += Buffer.byteLength(text, 'utf8')
+          if (total > MAX_GATE_OUTPUT_BYTES) {
+            overflow = true
+            controller.abort() // 立即取消远端命令，不先聚合无限输出
+            return
+          }
+          chunks.push(text)
+        },
+      },
+      withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
+    )
+    if (!result.ok) {
+      if (overflow) return { ok: false, output: `gate output exceeded ${MAX_GATE_OUTPUT_BYTES} bytes` }
+      if (result.error.code === 'aborted' && signal?.aborted) {
+        throw new HerdrTransportError('herdr_aborted', 'gate aborted', target)
+      }
+      if (result.error.code === 'timeout') {
+        throw new HerdrTransportError('herdr_timeout', `gate timed out: ${result.error.message}`, target)
+      }
+      throw new HerdrTransportError('herdr_node_error', `gate failed: ${result.error.code}: ${result.error.message}`, target)
+    }
+    if (total > MAX_GATE_OUTPUT_BYTES) {
+      return { ok: false, output: `gate output exceeded ${MAX_GATE_OUTPUT_BYTES} bytes` }
+    }
+    return { ok: result.value.exitCode === 0, output: redact(chunks.join('')) }
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
+  }
+}
+
+/** 本机 Gate：NodeExecutionEnv（真实本机环境）+ 显式受管 env。 */
 async function runLocalGate(
   command: string,
   cwd: string,
@@ -1214,51 +955,42 @@ async function runLocalGate(
   target: string,
   redact: (s: string) => string,
 ): Promise<AgentGateResult> {
-  const childEnv: Record<string, string> = {}
-  for (const [key, value] of validEnvEntries(env)) childEnv[key] = value
-  const exit = await runChild('/bin/sh', ['-c', command], {
-    stdinData: undefined,
-    timeoutMs: 600_000,
-    signal,
-    target,
-    redact,
-    cwd,
-    envOverride: childEnv,
-  })
-  const output = redact(exit.stdout.toString('utf8') + exit.stderr.toString('utf8'))
-  if (Buffer.byteLength(output, 'utf8') > MAX_GATE_OUTPUT_BYTES) {
-    return { ok: false, output: `gate output exceeded ${MAX_GATE_OUTPUT_BYTES} bytes` }
-  }
-  return { ok: exit.code === 0, output }
+  checkAborted(signal, target)
+  const sanitized: Record<string, string> = {}
+  for (const [key, value] of validEnvEntries(env)) sanitized[key] = value
+  const localEnv = new NodeExecutionEnv({ cwd })
+  return execGate(localEnv, command, cwd, signal, target, sanitized, redact)
+}
+
+/** 远端 Gate：经节点 env.exec 在目标节点执行（同一安全边界）。 */
+async function runNodeGate(
+  nodeChannel: HerdrNodeChannel,
+  nodeId: string,
+  targetLabel: string,
+  command: string,
+  cwd: string,
+  signal: AbortSignal | undefined,
+  env: Record<string, string> | undefined,
+  redact: (s: string) => string,
+): Promise<AgentGateResult> {
+  checkAborted(signal, targetLabel)
+  const sanitized: Record<string, string> = {}
+  for (const [key, value] of validEnvEntries(env)) sanitized[key] = value
+  return execGate(nodeChannel.envFor(nodeId, cwd), command, cwd, signal, targetLabel, sanitized, redact)
 }
 
 // ------------------------------------------------------------- 工厂 --
 
 export function createHerdrTransport(options?: HerdrTransportOptions): HerdrTransport {
   const redact = options?.redact ?? ((text: string) => text)
+  const nodeChannel = options?.nodeChannel
 
   async function call(target: HerdrTarget, method: string, params: Record<string, unknown>, callOptions?: HerdrCallOptions): Promise<unknown> {
     assertTarget(target)
-    if (target.machine) {
-      const resolved = resolveCallTimeoutMs(method, params, callOptions)
-      // 远端多一层 ssh 进程：有限死线外加传输余量；无限死线（wait 类）保持无限。
-      const remoteDeadline = resolved === undefined ? null : resolved + HERDR_START_TIMEOUT_MARGIN_MS
-      const payload: RemotePayload = {
-        op: 'rpc',
-        target: { session: target.session, socketPath: target.socketPath },
-        method,
-        params,
-        deadlineMs: remoteDeadline,
-      }
-      const envelope = await runRemote(
-        target.machine,
-        payload,
-        callOptions?.signal,
-        remoteDeadline === null ? undefined : remoteDeadline ?? undefined,
-        redact,
-      )
-      checkWireError(envelope as Record<string, unknown>, describeTarget(target), redact)
-      return envelope.result
+    const nodeId = targetNodeId(target)
+    if (nodeId !== undefined) {
+      const channel = requireChannel(nodeChannel, nodeId, describeTarget(target))
+      return callRemote(channel, nodeId, target, describeTarget(target), method, params, callOptions, redact)
     }
     return callLocal(resolveSocketPath(target), describeTarget(target), method, params, callOptions, redact)
   }
@@ -1268,69 +1000,213 @@ export function createHerdrTransport(options?: HerdrTransportOptions): HerdrTran
     async readOutput(target, cwd, fileName, signal) {
       assertTarget(target)
       assertSafeOutputName(fileName, describeTarget(target))
-      if (target.machine) {
-        const envelope = await runRemote(target.machine, { op: 'readFile', cwd, fileName, deadlineMs: 30_000 }, signal, 60_000, redact)
-        if (envelope.error && typeof envelope.error === 'object') {
-          const code = typeof envelope.error.code === 'string' ? envelope.error.code : 'herdr_io'
-          if (code === 'herdr_output_missing') {
-            throw new HelmError('herdr_output_missing', `交接文件不存在: ${cwd}/.helm/${fileName}`, 404)
-          }
-          raiseWireError(envelope.error, describeTarget(target), redact)
-        }
-        if (typeof envelope.content !== 'string') {
-          throw new HerdrTransportError('herdr_protocol', 'remote readFile returned no content', describeTarget(target))
-        }
-        return envelope.content
+      const nodeId = targetNodeId(target)
+      if (nodeId !== undefined) {
+        const channel = requireChannel(nodeChannel, nodeId, describeTarget(target))
+        return readNodeOutput(channel, nodeId, target, describeTarget(target), cwd, fileName, signal)
       }
       return readLocalOutput(cwd, fileName, signal, describeTarget(target), redact)
     },
     async removeOutput(target, cwd, fileName, signal) {
       assertTarget(target)
       assertSafeOutputName(fileName, describeTarget(target))
-      if (target.machine) {
-        const envelope = await runRemote(target.machine, { op: 'removeFile', cwd, fileName, deadlineMs: 30_000 }, signal, 60_000, redact)
-        if (envelope.error && typeof envelope.error === 'object') {
-          raiseWireError(envelope.error, describeTarget(target), redact)
-        }
+      const nodeId = targetNodeId(target)
+      if (nodeId !== undefined) {
+        const channel = requireChannel(nodeChannel, nodeId, describeTarget(target))
+        await removeNodeOutput(channel, nodeId, describeTarget(target), cwd, fileName, signal)
         return
       }
       await removeLocalOutput(cwd, fileName, signal, describeTarget(target), redact)
     },
     async runGate(target, command, cwd, signal, env) {
       assertTarget(target)
-      if (target.machine) {
-        const envelope = await runRemote(
-          target.machine,
-          {
-            op: 'runGate',
-            cwd,
-            command,
-            env: env && Object.fromEntries(validEnvEntries(env)),
-            timeoutMs: 600_000,
-          },
-          signal,
-          620_000,
-          redact,
-        )
-        if (envelope.error && typeof envelope.error === 'object') {
-          raiseWireError(envelope.error, describeTarget(target), redact)
-        }
-        if (typeof envelope.ok !== 'boolean' || typeof envelope.output !== 'string') {
-          throw new HerdrTransportError('herdr_protocol', 'remote runGate returned malformed result', describeTarget(target))
-        }
-        return { ok: envelope.ok, output: redact(envelope.output) }
+      const nodeId = targetNodeId(target)
+      if (nodeId !== undefined) {
+        const channel = requireChannel(nodeChannel, nodeId, describeTarget(target))
+        return runNodeGate(channel, nodeId, describeTarget(target), command, cwd, signal, env, redact)
       }
       return runLocalGate(command, cwd, signal, env, describeTarget(target), redact)
     },
-    subscribe(target, onEvent, onError, options) {
+    async subscribe(target, onEvent, onError, options) {
       assertTarget(target)
-      if (target.machine) {
-        // 远端没有事件流转发通道；订阅契约只承诺本机 socket。显式失败，不静默降级。
+      const nodeId = targetNodeId(target)
+      if (nodeId !== undefined) {
+        const channel = requireChannel(nodeChannel, nodeId, describeTarget(target))
+        if (channel.ipcSubscribe !== undefined) {
+          return subscribeNode(channel, nodeId, target, onEvent, onError, options)
+        }
+        // 通道不支持事件转发：显式失败，不静默降级为无事件。
         return Promise.reject(
-          new HerdrTransportError('herdr_subscribe_unsupported', 'event subscription is only supported on the local herdr socket', describeTarget(target)),
+          new HerdrTransportError('herdr_subscribe_unsupported', `node channel for '${nodeId}' does not stream events`, describeTarget(target)),
         )
       }
       return subscribeLocal(resolveSocketPath(target), describeTarget(target), onEvent, onError, redact, options)
     },
   }
+}
+
+/**
+ * 远端事件订阅（经通道 ipcSubscribe）。
+ *
+ * 契约：通道在 Promise resolve 前自行消费并验证订阅 ACK；resolve 即代表订阅
+ * 就绪，此后 onLine 只推送裸事件帧——本函数不再等待第二个 ACK，也不再设
+ * ack timer。事件可能在 Promise resolve 之前到达（缓冲后按序分发，不丢弃）。
+ * stop/abort/流关闭均只终结一次并释放订阅（release），回调至多一次。
+ */
+function subscribeNode(
+  channel: HerdrNodeChannel,
+  nodeId: string,
+  target: HerdrTarget,
+  onEvent: (event: HerdrEvent) => void,
+  onError: (error: unknown) => void,
+  options?: HerdrSubscribeOptions,
+): Promise<() => void> {
+  const targetLabel = describeTarget(target)
+  const signal = options?.signal
+  checkAborted(signal, targetLabel)
+  const paneIds = [...new Set(options?.paneIds ?? [])]
+  const subscriptions: Array<Record<string, unknown>> = SUBSCRIPTION_TYPES.map((type) => ({ type }))
+  for (const paneId of paneIds) subscriptions.push({ type: PANE_STATUS_EVENT_TYPE, pane_id: paneId })
+  const request = { id: 'sub', method: SUBSCRIPTION_METHOD, params: { subscriptions } }
+
+  return new Promise<() => void>((resolve, reject) => {
+    let stopped = false
+    let settled = false
+    let release: (() => void) | undefined
+    /** 唯一终结路径：释放订阅、移除 abort 监听；错误只报一次。 */
+    const finish = (error: unknown): void => {
+      if (settled) return
+      settled = true
+      stopped = true
+      signal?.removeEventListener('abort', onAbort)
+      try {
+        release?.()
+      } catch (releaseError) {
+        // 释放失败如实并入终结错误，不静默吞。
+        onError(releaseError)
+      }
+      if (error !== undefined) onError(error)
+    }
+    const onAbort = () => finish(undefined)
+
+    // 事件可能在 ipcSubscribe Promise resolve 之前到达：缓冲待 resolve 后按序分发。
+    const earlyLines: string[] = []
+    let ready = false
+
+    /** 事件帧解析与本地订阅同规则；坏帧经 finish 终结整个流。 */
+    const handleEventFrame = (frame: Record<string, unknown>): void => {
+      try {
+        const wireType = frame['event']
+        if (typeof wireType !== 'string') return
+        const type = wireType === PANE_STATUS_EVENT_TYPE ? wireType : WIRE_EVENT_TYPES.get(wireType)
+        if (type === undefined) return
+        const data = isObject(frame['data']) ? frame['data'] : {}
+        if (type === 'tab.closed' || type === 'workspace.closed') {
+          const workspaceId = data['workspace_id']
+          const tabId = data['tab_id']
+          if (typeof workspaceId !== 'string' || workspaceId === '' ||
+              (type === 'tab.closed' && (typeof tabId !== 'string' || tabId === ''))) {
+            finish(new HerdrTransportError('herdr_protocol', `event ${type} missing topology identity`, targetLabel))
+            return
+          }
+          if (type === 'tab.closed') onEvent({ type, workspaceId, tabId: tabId as string })
+          else onEvent({ type, workspaceId })
+          return
+        }
+        const pane = isObject(data['pane']) ? data['pane'] : undefined
+        const paneId =
+          typeof data['pane_id'] === 'string' && data['pane_id'] !== ''
+            ? data['pane_id']
+            : typeof pane?.['pane_id'] === 'string' && pane['pane_id'] !== ''
+              ? (pane['pane_id'] as string)
+              : undefined
+        if (!paneId) {
+          finish(new HerdrTransportError('herdr_protocol', `event ${String(type)} missing pane identity`, targetLabel))
+          return
+        }
+        onEvent({ type, paneId })
+      } catch (err) {
+        finish(err)
+      }
+    }
+
+    const handleLine = (line: string): void => {
+      if (stopped) return
+      let envelope: Record<string, unknown> | undefined
+      try {
+        envelope = parseJsonLine(line, targetLabel)
+      } catch (err) {
+        finish(err)
+        return
+      }
+      if (envelope === undefined) return
+      if (envelope['event'] !== undefined) {
+        handleEventFrame(envelope)
+        return
+      }
+      // ACK 已在通道层消费验证；resolve 后再到达的 id 帧是通道实现违约，
+      // 如实终结（不静默丢弃，也不当成功）。
+      finish(new HerdrTransportError('herdr_protocol', 'unexpected post-ack response frame on subscription stream', targetLabel))
+    }
+
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) {
+      onAbort()
+      reject(new HerdrTransportError('herdr_aborted', 'subscription aborted', targetLabel))
+      return
+    }
+
+    channel
+      .ipcSubscribe!(
+        nodeId,
+        {
+          ...(target.socketPath !== undefined ? { endpoint: target.socketPath } : {}),
+          ...(target.session !== undefined ? { session: target.session } : {}),
+          line: JSON.stringify(request),
+        },
+        (line) => {
+          if (stopped) return
+          if (!ready) {
+            earlyLines.push(line)
+            return
+          }
+          handleLine(line)
+        },
+        (error) => {
+          finish(
+            error === undefined
+              ? new HerdrTransportError('herdr_disconnected', 'subscription stream closed', targetLabel)
+              : new HerdrTransportError('herdr_disconnected', `subscription stream closed: ${error}`, targetLabel),
+          )
+        },
+        withAbortSignal(signal ?? new AbortController().signal, BACKGROUND_CONTEXT),
+      )
+      .then(
+        (stop) => {
+          if (stopped) {
+            // abort 与 resolve 竞态：已终结，这里只兜底释放。
+            try {
+              stop()
+            } catch {
+              /* finish 已上报过错误；释放失败不再二次上报 */
+            }
+            return
+          }
+          release = stop
+          ready = true
+          resolve(() => finish(undefined))
+          for (const line of earlyLines) {
+            if (stopped) break
+            handleLine(line)
+          }
+          earlyLines.length = 0
+        },
+        (error: unknown) => {
+          signal?.removeEventListener('abort', onAbort)
+          settled = true
+          stopped = true
+          reject(error)
+        },
+      )
+  })
 }
