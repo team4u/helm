@@ -4,8 +4,28 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
+import { createModels } from '@earendil-works/pi-ai'
+import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { CredentialService } from '../src/services/credentials.js'
+
+test('外部注入模型集在目录与热重载中保持调用方所有权', { timeout: 60_000 }, async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'helm-external-providers-'))
+  const models = createModels()
+  models.setProvider(fauxProvider({ models: [{ id: 'fixture-external' }] }).provider)
+  let kernel: KernelRuntime | undefined
+  try {
+    kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, models, autoResume: false })
+    const initial = await kernel.listModels()
+    await kernel.credentials.set('deepseek', 'fixture-unused')
+    await kernel.reloadModels()
+    assert.deepEqual(await kernel.listModels(), initial)
+    assert.deepEqual(kernel.listModelProviders().map((provider) => provider.id), ['faux'])
+  } finally {
+    await kernel?.close()
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})
 
 test('全量供应商启动加载、增删密钥热更新与读取失败不静默降级', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-provider-registry-'))

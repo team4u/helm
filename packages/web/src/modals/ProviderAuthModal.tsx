@@ -6,16 +6,22 @@ import { useHelmStore } from '../lib/store-context.js'
 import { ProviderCatalog } from './ProviderCatalog.js'
 import './provider-auth.css'
 
+type ProviderDraft = ProviderConfig & { modelText: string }
+
+function providerDraft(provider: ProviderConfig): ProviderDraft {
+  return { ...provider, modelText: provider.models.join('\n') }
+}
+
 function ProvidersSection() {
   const store = useHelmStore()
-  const [list, setList] = useState<ProviderConfig[]>(store.providers)
+  const [list, setList] = useState<ProviderDraft[]>(() => store.providers.map(providerDraft))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
 
-  useEffect(() => { if (!dirty) setList(store.providers) }, [store.providers, dirty])
+  useEffect(() => { if (!dirty) setList(store.providers.map(providerDraft)) }, [store.providers, dirty])
 
-  const patch = (index: number, next: Partial<ProviderConfig>) => {
+  const patch = (index: number, next: Partial<ProviderDraft>) => {
     setDirty(true)
     setList((previous) => previous.map((provider, i) => i === index ? { ...provider, ...next } : provider))
   }
@@ -24,7 +30,7 @@ function ProvidersSection() {
     let id = 'custom-gateway'
     let n = list.length + 1
     while (list.some((provider) => provider.id === id)) id = `custom-gateway-${n++}`
-    setList((previous) => [...previous, { id, protocol: 'openai', baseUrl: '', models: [], enabled: true }])
+    setList((previous) => [...previous, { id, protocol: 'openai', baseUrl: '', models: [], modelText: '', enabled: true }])
   }
   const removeProvider = (index: number) => {
     setDirty(true)
@@ -38,7 +44,10 @@ function ProvidersSection() {
     setSaving(true)
     setError(null)
     try {
-      await assetsApi.saveProviders(list)
+      await assetsApi.saveProviders(list.map(({ modelText, ...provider }) => ({
+        ...provider,
+        models: modelText.split(/[\n,]/).map((id) => id.trim()).filter(Boolean),
+      })))
       await store.refreshAssets()
       setDirty(false)
       store.pushNotice({ type: 'notification', level: 'info', title: '网关配置已保存', body: `共 ${list.length} 个自定义模型网关` })
@@ -59,7 +68,7 @@ function ProvidersSection() {
             <label className="provider-field">状态<span className="provider-gateway-toggle"><input type="checkbox" checked={provider.enabled} onChange={(event) => patch(index, { enabled: event.target.checked })} disabled={saving} />{provider.enabled ? '已启用' : '已停用'}</span></label>
             <label className="provider-field provider-gateway-url">Base URL<input className="input mono" placeholder="https://api.example.com/v1" value={provider.baseUrl} onChange={(event) => patch(index, { baseUrl: event.target.value })} disabled={saving} /></label>
           </div>
-          <label className="provider-field">模型 ID<textarea className="textarea mono" rows={3} placeholder="每行一个模型 ID，或使用逗号分隔" value={provider.models.join('\n')} onChange={(event) => patch(index, { models: event.target.value.split(/[\n,]/).map((id) => id.trim()).filter(Boolean) })} disabled={saving} /></label>
+          <label className="provider-field">模型 ID<textarea className="textarea mono" rows={3} placeholder="每行一个模型 ID，或使用逗号分隔" value={provider.modelText} onChange={(event) => patch(index, { modelText: event.target.value })} disabled={saving} /></label>
           <button className="btn btn-sm btn-danger" aria-label={`删除网关 ${provider.id}`} onClick={() => removeProvider(index)} disabled={saving}><HelmIcon name="trash-2" size={12} />删除网关</button>
         </div>
       ))}

@@ -145,7 +145,7 @@ export function ProviderCatalog({ onEditGateway }: { onEditGateway(): void }) {
       <aside className="provider-sidebar" aria-label="供应商列表">
         <div className="provider-sidebar-controls">
           <label className="provider-search"><HelmIcon name="search" size={14} /><input className="input" aria-label="搜索供应商或模型" placeholder="搜索供应商或模型…" value={query} onChange={(event) => setQuery(event.target.value)} autoFocus /></label>
-          <div className="provider-filters" aria-label="供应商状态筛选">
+          <div className="provider-filters" role="group" aria-label="供应商状态筛选">
             {([['all', '全部', entries.length], ['configured', '已配置', configuredCount], ['unconfigured', '待配置', entries.length - configuredCount]] as const).map(([id, label, count]) => <button key={id} className={`provider-filter${filter === id ? ' is-active' : ''}`} aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}<span>{count}</span></button>)}
           </div>
         </div>
