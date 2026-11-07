@@ -54,7 +54,9 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
-const KERNEL_APP_PATH = resolve(SCRIPT_DIR, '..', 'packages', 'kernel', 'dist', 'app.js')
+const KERNEL_APP_PATH = process.env.HERDR_SMOKE_KERNEL_APP
+  ? resolve(process.env.HERDR_SMOKE_KERNEL_APP)
+  : resolve(SCRIPT_DIR, '..', 'packages', 'kernel', 'dist', 'app.js')
 const PROFILE_ID = 'herdr-smoke-pi'
 const ROOT_CONVERSATION_ID = 1
 const ARTIFACT_NAME = 'artifact.txt'
@@ -118,14 +120,19 @@ function readFileOrEmpty(path) {
   }
 }
 
-/** spawnSync 包装：失败显式抛错并附输出尾部（不打印环境变量，杜绝机密泄漏）。 */
+/** spawnSync 包装：失败显式抛错并附输出尾部（不打印环境变量，杜绝机密泄漏）。
+ *  同步子进程一律 30s 硬超时，杜绝无限挂起破坏总超时纪律。 */
 function runCmd(cmd, argv, options = {}) {
   const r = spawnSync(cmd, argv, {
     encoding: 'utf8',
+    timeout: options.timeoutMs ?? 30_000,
     ...(options.cwd ? { cwd: options.cwd } : {}),
     ...(options.env ? { env: options.env } : {}),
   })
-  if (r.error) throw new SmokeError(`无法执行 ${cmd}: ${r.error.message}`)
+  if (r.error) {
+    const why = r.error.code === 'ETIMEDOUT' ? `（超时 ${options.timeoutMs ?? 30_000}ms 被终止）` : ''
+    throw new SmokeError(`无法执行 ${cmd}${why}: ${r.error.message}`)
+  }
   if (r.status !== 0) {
     throw new SmokeError(
       `${cmd} ${argv.join(' ')} 退出码 ${r.status}\n--stdout 尾部--\n${tail(r.stdout)}\n--stderr 尾部--\n${tail(r.stderr)}`,
@@ -381,8 +388,11 @@ async function main() {
       await sleep(250)
     }
     check('隔离 session 初始 panes 为空', initialSnap.panes.length === 0, `panes=${initialSnap.panes.length}`)
-    check('隔离 session 初始 workspaces 为空', initialSnap.workspaces.length === 0, `workspaces=${initialSnap.workspaces.length}`)
     check('隔离 session 初始 agents 为空', initialSnap.agents.length === 0, `agents=${initialSnap.agents.length}`)
+    const initialWorkspaceIds = new Set(initialSnap.workspaces.map((w) => w.workspace_id))
+    if (initialWorkspaceIds.size > 0) {
+      note(`隔离 session 初始即存在 ${initialWorkspaceIds.size} 个 workspace（headless 启动事实，后续断言改为不残留新增）`)
+    }
 
     // ---- 4) 净化本进程环境后再加载内核：transport 的 socket 解析优先级为
     //     session > socketPath > $HERDR_SOCKET_PATH，且 session 按 XDG_CONFIG_HOME
@@ -495,10 +505,11 @@ async function main() {
       snap1.panes.some((p) => p.pane_id === nodeA1.executionId) ||
       snap1.agents.some((a) => a.pane_id === nodeA1.executionId)
     check('原始 run 结算后 Herdr snapshot 无残留 pane', !paneStillThere, `panes=${snap1.panes.length} agents=${snap1.agents.length} workspaces=${snap1.workspaces.length}`)
+    const residueWorkspace1 = snap1.workspaces.filter((w) => !initialWorkspaceIds.has(w.workspace_id))
     check(
-      '原始 run 结算后隔离 session 回到空窗格状态',
-      snap1.panes.length === 0 && snap1.agents.length === 0 && snap1.workspaces.length === 0,
-      `panes=${snap1.panes.length} agents=${snap1.agents.length} workspaces=${snap1.workspaces.length}`,
+      '原始 run 结算后隔离 session 无残留 pane/workspace',
+      snap1.panes.length === 0 && snap1.agents.length === 0 && residueWorkspace1.length === 0,
+      `panes=${snap1.panes.length} agents=${snap1.agents.length} 新增workspace=${residueWorkspace1.length}`,
     )
 
     // ---- 6) resumeFromRunId 重放 ----
@@ -547,10 +558,11 @@ async function main() {
       check('重放 run 第一节点带 worktree 元数据', false, JSON.stringify(wt2))
     }
     const snap2 = await withDeadline(snapshotSession(socketPath), '重放 run 后 snapshot')
+    const residueWorkspace2 = snap2.workspaces.filter((w) => !initialWorkspaceIds.has(w.workspace_id))
     check(
       '重放 run 结算后隔离 session 无残留 pane/workspace',
-      snap2.panes.length === 0 && snap2.agents.length === 0 && snap2.workspaces.length === 0,
-      `panes=${snap2.panes.length} agents=${snap2.agents.length} workspaces=${snap2.workspaces.length}`,
+      snap2.panes.length === 0 && snap2.agents.length === 0 && residueWorkspace2.length === 0,
+      `panes=${snap2.panes.length} agents=${snap2.agents.length} 新增workspace=${residueWorkspace2.length}`,
     )
 
     state.success = true

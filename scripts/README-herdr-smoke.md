@@ -12,6 +12,10 @@ node scripts/herdr-smoke.mjs --timeout-ms 600000   # 放宽总超时（60000..18
 
 退出码 0 = 全部验收项 PASS；非 0 = 存在 FAIL（stdout 逐项输出 `PASS/FAIL`，失败现场与日志保留在临时根，绝不删除）。
 
+默认加载脚本同仓的 `packages/kernel/dist/app.js`；可用 `HERDR_SMOKE_KERNEL_APP=/path/to/app.js` 指向其他编译产物（如另一 worktree 的 build）。
+
+注：当前主干 dist 尚未包含 `builtin:herdr` 注册（app.ts 集成待合并），脚本会如实报「未注册的插件：builtin:herdr」——这正是等待合并后验收的预期行为，绝不静默跳过。
+
 ## 验证内容（全部真实组件，零 mock / 零 skip）
 
 1. **真实编译产物**：`packages/kernel/dist/app.js` 的 `createHelm`（未 build 即显式失败）。
