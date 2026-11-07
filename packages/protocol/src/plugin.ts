@@ -307,6 +307,8 @@ export interface PluginServiceSpec {
   id: string
   start(): MaybePromise<void>
   stop(): MaybePromise<void>
+  /** 返回仍需本服务保活的任务标签；宿主在停用/卸载前同步检查。 */
+  liveTasks?(): string[]
 }
 
 /** Web Standard 原始路由（Request/Response 为 DOM lib 类型）。 */
