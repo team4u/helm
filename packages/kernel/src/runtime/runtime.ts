@@ -2991,6 +2991,11 @@ export class KernelRuntime {
     this.modelsRefreshAbort = controller
     let result: { aborted: boolean; errors: ReadonlyMap<string, Error> }
     try {
+      for (const id of options?.providers ?? []) {
+        const provider = instanceAtStart.getProvider(id)
+        if (!provider) throw new HelmError('model_provider_not_found', `供应商 ${id} 未注册`, 404)
+        if (!provider.refreshModels) throw new HelmError('model_provider_static', `供应商 ${id} 使用静态模型目录，不支持动态刷新`, 400)
+      }
       result = await instanceAtStart.refresh({
         signal: controller.signal,
         allowNetwork: options?.allowNetwork ?? true,

@@ -218,10 +218,12 @@ test('refreshModels：目标过滤透传、errors 脱敏、models.changed 事件
     assert.ok(full.providerCatalog.some((provider) => provider.id === 'radius'))
     assert.deepEqual(events.at(-1), { providers: [] })
 
-    // 指定 providers：透传 + 事件携带目标清单；未知供应商忽略（SDK 语义）。
+    // 指定 providers：透传 + 事件携带目标清单；未知或静态供应商显式拒绝。
     const scoped = await kernel.refreshModels({ providers: ['radius'] })
     assert.deepEqual(scoped.providers, ['radius'])
     assert.deepEqual(events.at(-1), { providers: ['radius'] })
+    await assert.rejects(kernel.refreshModels({ providers: ['fixture-missing-provider'] }), { code: 'model_provider_not_found' })
+    await assert.rejects(kernel.refreshModels({ providers: ['openai'] }), { code: 'model_provider_static' })
 
     // 运行时供应商 refreshModels 错误显式进入 errors（message 原样保留诊断）。
     const failing: Provider = {
