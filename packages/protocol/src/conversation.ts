@@ -33,7 +33,9 @@ export interface ConversationSummary {
   tags: string[]
   /** 派生来源会话 ID；根会话无此字段。 */
   parentConversationId?: number
-  /** 本机工作目录绝对路径。 */
+  /** 绑定的计算节点 ID（缺省为 'local'）。 */
+  nodeId?: string
+  /** 目标节点视角下的工作目录绝对路径。 */
   cwd: string
   /** 当前生效模型 'provider/model'。 */
   model: string
@@ -58,6 +60,8 @@ export interface ConversationInit {
   profileId?: string
   tags?: string[]
   parentConversationId?: number
+  /** 绑定的计算节点 ID（缺省继承 Profile.nodeId 或 'local'）。 */
+  nodeId?: string
   cwd?: string
   /** 当前生效模型 'provider/model'；缺省用 Profile 默认。 */
   model?: string
@@ -67,6 +71,7 @@ export interface ConversationPatch {
   profileId?: string
   title?: string
   tags?: string[]
+  nodeId?: string
   cwd?: string
   model?: string
   unread?: boolean

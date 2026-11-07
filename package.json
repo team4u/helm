@@ -11,9 +11,11 @@
     "dev": "pnpm dev:kernel",
     "dev:kernel": "tsx packages/kernel/src/main.ts",
     "dev:web": "pnpm --filter @helm/web dev",
-    "helm": "tsx packages/node/src/cli/index.ts"
+    "helm": "tsx packages/cli/src/index.ts",
+    "helm-node": "tsx packages/node/src/cli.ts"
   },
   "devDependencies": {
+    "@helm/cli": "workspace:*",
     "@helm/node": "workspace:*",
     "@types/node": "^24.0.0",
     "tsx": "^4.20.0",

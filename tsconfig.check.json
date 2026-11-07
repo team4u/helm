@@ -7,6 +7,8 @@
     "packages/kernel/test/**/*.ts",
     "packages/node/src/**/*.ts",
     "packages/node/test/**/*.ts",
+    "packages/cli/src/**/*.ts",
+    "packages/cli/test/**/*.ts",
     "packages/web/test/**/*.ts"
   ]
 }

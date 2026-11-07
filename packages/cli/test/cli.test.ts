@@ -12,7 +12,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { runCli } from '../src/cli/index.js'
+import { runCli } from '../src/index.js'
 
 /** 命中记录：方法 + 路径（含 query）+ 解析后的 JSON body。 */
 interface Hit {
@@ -927,7 +927,7 @@ test('跨进程并发：真实子进程 CLI 写 cli-token 与 Hub CredentialServ
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
   const tsxCli = resolveTscCli()
   const dataDir = freshDataDirPath() // 目录不存在：验证双方首次创建
-  const cliEntry = path.join(repoRoot, 'packages', 'node', 'src', 'cli', 'index.ts')
+  const cliEntry = path.join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
 
   // CLI 子进程：真实独立 Node 进程登录写 cli-token（Hub 换发 token）
   const hub = await startHub({

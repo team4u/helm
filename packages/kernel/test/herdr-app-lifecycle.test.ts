@@ -7,7 +7,7 @@ import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { createHelm } from '../src/app.js'
 import { startHub } from '../src/http/index.js'
-import { runCli } from '../../node/src/cli/index.js'
+import { runCli } from '../../cli/src/index.js'
 import type { HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
 
 // 实际 app/PluginHost/配置落盘；传输 fixture 仅确认连接生命周期，不执行模型任务。

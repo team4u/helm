@@ -5,6 +5,7 @@
 
 import type { AskSpec } from './ask.js'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from './conversation.js'
+import type { NodeInfo } from './env-rpc.js'
 import type { PluginSummary, PublicPluginDoc } from './plugin.js'
 import type { PluginUiContribution } from './ui.js'
 import type { WorkflowRunSummary } from './workflow.js'
@@ -23,6 +24,8 @@ export interface HelmSnapshot {
   ui: PluginUiContribution[]
   /** 已知工作流 run 摘要（含运行中与终态）。 */
   workflowRuns: WorkflowRunSummary[]
+  /** 已知计算节点列表（含 local 与 BYOM 节点）。 */
+  nodes?: NodeInfo[]
 }
 
 /** 增量事件类型（`event:` 名）；未知类型客户端应原样保留。 */
@@ -36,6 +39,7 @@ export type HelmEventType =
   | 'plugin.changed'
   | 'plugin.doc.updated'
   | 'workflow.updated'
+  | 'node.changed'
   | 'notification'
 
 export interface ConversationUpsertEvent {
@@ -92,6 +96,12 @@ export interface WorkflowUpdatedEvent {
   run: WorkflowRunSummary
 }
 
+/** 计算节点状态变更（上线/离线/注册/移除）。 */
+export interface NodeChangedEvent {
+  type: 'node.changed'
+  node: NodeInfo
+}
+
 /** 人类通知（如 Watchdog 只读诊断告警）。 */
 export interface NotificationEvent {
   type: 'notification'
@@ -122,6 +132,7 @@ export type HelmEvent =
   | PluginChangedEvent
   | PluginDocUpdatedEvent
   | WorkflowUpdatedEvent
+  | NodeChangedEvent
   | NotificationEvent
   | CustomHelmEvent
 

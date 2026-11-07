@@ -737,7 +737,7 @@ test('集成6: HTTP 真实往返——鉴权/根会话保护/动作校验同权/
 
 test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversations/send 触发真模型回合/动态动作命令/非法入参非零退出/子进程 CLI', { timeout: 60_000 }, async () => {
   const env = await makeHttpEnv()
-  const { runCli } = await import('../../node/src/cli/index.js')
+  const { runCli } = await import('../../cli/src/index.js')
   const hubUrl = new URL(env.hub.url)
 
   const run = async (argv: string[]): Promise<{ code: number; out: string; err: string }> => {

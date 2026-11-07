@@ -30,20 +30,21 @@ pnpm build && pnpm typecheck && pnpm test
 
 ## 架构铁律（微内核 + 双 7 扩展点 + 四大内置插件）
 
-1. **内核极度精简（零业务角色硬编码）**：
-   - `@helm/kernel` 仅包含四大通用机制：① `pi-durable` 持久会话增强（通用 `Conversation` 五态状态机、`state.sqlite` + FTS5、`AskDoc`、`SecretStash`、`Artifacts`、纯文件资产热重载）；② `subagent` 与 `SubagentWorkflow` 确定性编排引擎；③ 唯一强类型插件宿主 `PluginHost`（`definePlugin(ctx)`）；④ 同构 Web 外壳与 CLI。
+1. **内核极度精简（零业务角色硬编码 + 跨平台节点底座 `EnvFabric`）**：
+   - `@helm/kernel`（`helm-hub`）包含核心通用机制：① `pi-durable` 持久会话增强（通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5、`AskDoc`、`SecretStash`、`Artifacts`、纯文件资产热重载）；② 跨平台执行编排底座 `EnvFabric` + `NodeRegistry`（`/ws/node`，内建 `local` 节点 + 远端 `@helm/node` 守护进程，驱动 `bash / read / write / edit / gate / env exec`，与任何插件是否启用正交）；③ `subagent` 与 `SubagentWorkflow` 确定性编排引擎；④ 唯一强类型插件宿主 `PluginHost`（`definePlugin(ctx)`）。
    - **严禁在内核硬编码 `'router' | 'worker' | 'watchdog'` 枚举**；会话职责一律通过 `profileId` 与 `tags` 表达。
 2. **前后端对称「双 7 扩展点」，零 `if/else` 业务特判**：
    - **后端 7 大可组合生命周期 Hook**（支持 `continue | transform | handled | block`）：`trigger`、`input`、`before_turn`、`tool_call / tool_result`、`agent_spawn`、`turn_settled`（统一覆盖 `completed | failed | aborted`）、`watchdog_tick`。
    - **前端 7 大全界面扩展点**（同时支持 `@json-render` JSON Spec 与 `client.tsx` React 组件）：`sidebar.item/section`、`screen`（全屏自定义视图，支持左右 Split View 并排展示）、`timeline.renderer`、`tool.view`、`composer.pill/widget`、`workbench.panel`、`commandPalette (⌘K) / settings.panel`。
 3. **四大内置插件正交职责**：
    - `builtin:assistant`（**常驻不可卸载**）：为所有会话按其绑定的 `profileId` 注入独立的 `SYSTEM.md` 与 `MEMORY.md`（提供按 `profileId` 原子写回的 `update_memory` 与支持按需加载 `references/*.md` 子文件的 `load_skill`），并守护常驻根会话 `Conversation #1` 作为单兵个人助理主入口。
-   - `builtin:herdr`：拦截 `agent_spawn` 驱动本机 Herdr 的 23 种 CLI 工具（`herdr:agy`、`herdr:claude`、`herdr:codex`、`herdr:pi` 等），执行「后台标签页 + `.helm/wf-out-*` 文件交接与原地追问自愈」；监听 `herdr.sock` 实现带 `expectedStateSeq` CAS 乐观锁的 `blocked ↔ AskDoc` 远程审批桥；向终端侧栏投射 `$helm` 状态 Token。
+   - `builtin:herdr`（**可选编程插件**）：拦截 `agent_spawn`，复用内核 `EnvFabric` 目标节点通道驱动当地 Herdr 的 23 种 CLI 工具（`herdr:agy`、`herdr:claude`、`herdr:codex`、`herdr:pi` 等），执行「后台标签页 + `.helm/wf-out-*` 文件交接与原地追问自愈」；监听节点 Herdr IPC（Unix Socket / Windows Named Pipe）实现带 `expectedStateSeq` CAS 乐观锁的 `blocked ↔ AskDoc` 远程审批桥；向终端侧栏投射 `$helm` 状态 Token。
    - `builtin:superagent`（实验性双层中枢）：首次启用时动态创建并持久化两个专属常驻会话——`routerConversationId`（`SuperAgent 中枢`，`profileId: 'superagent'`）与 `watchdogConversationId`（`巡检看门狗`，`profileId: 'watchdog'`）；角色由 `profileId` 表达，不重复打角色 Tag；通过挂载 `trigger / before_turn / turn_settled / watchdog_tick` 钩子与自有 `ctx.doc`，实现 0 阻塞总控路由、点名调用任意 `Profile` 专家 Bot 派生后台驻留 Worker、一键归档（`archive_worker`）、按 `origin` 自动向中枢汇报、`ThreadKey` 0ms 直通、`RecallGraph` 召回图谱与基于 `Skill(references/)` 的两层 Watchdog 巡检。
    - `builtin:triggers`：`cron` 与 `webhook` 入站连接器，经 `defang` 防逃逸信封投入 `trigger` 管道。
 4. **明确不做的事**：
    - 不做 `PiExtensionAdapter` 服务端 TUI 兼容层（真正的 `pi` 直接在 Herdr 终端窗格中运行）；
-   - 不自建 BYOM 远端节点守护进程与 `Space` 管理（跨机器通过 `ssh <machine>` 驱动远端 Herdr）；
+   - 不做冗余的独立 `Space` CRUD 中间表（会话与 Profile 直接使用 `(nodeId, cwd)` 物理坐标），不在 `builtin:herdr` 中自建内嵌 Python 的 `ssh <machine>` 脚本（跨节点统一走 `EnvFabric` + `@helm/node` 守护进程）；
+   - 不把控制 Hub 的客户端 CLI（`@helm/cli`，`helm`）与被控节点守护进程（`@helm/node`，`helm-node`）混装在同一个包或同一个命令中；
    - 不在 Web 端重复造 `Worktree Diff` 三键合入状态机（Git Worktree 交由 Herdr 与终端工具管理）；
    - 不在 `Conversation` / `ModelProvider` 底层伪装终端 CLI Agent。
 
@@ -53,9 +54,9 @@ pnpm build && pnpm typecheck && pnpm test
 - **KISS / YAGNI / 最小惊讶**：用最少的代码解决问题；不实现用不到的能力；接口行为符合使用者预期。
 - **可读性优先**：代码是写给人看的。命名表达意图，结构自解释；注释只解释 Why（为什么这么做），不复述 What。
 - **UNIX 原则**：一个模块只做好一件事；组合优于聚合；**机制与策略分离**（内核提供机制，策略由配置/插件/用户层给）。
-- **边界清晰**：依赖方向单向——`@helm/web` / `@helm/node` → `@helm/protocol` ← `@helm/kernel`；`protocol` 是唯一共享契约包，零运行时重依赖。跨包公共接口先改 `protocol` 并同步所有消费方。
+- **边界清晰**：五包依赖方向单向——`@helm/web` / `@helm/cli` → `@helm/protocol` ← `@helm/kernel` / `@helm/node`；`protocol` 是唯一共享契约包，零运行时重依赖。跨包公共接口先改 `protocol` 并同步所有消费方。
 - **边界处校验**：所有外部输入（HTTP body、插件产物、DSL、事件载荷、Herdr `.helm/wf-out-*` 交接文件）在边界做类型/Schema 校验。
-- **公共接口消费方普查**：改动任何导出符号前，先全仓搜索引用（`kernel/node/web/CLI/测试`），漏改即事故。
+- **公共接口消费方普查**：改动任何导出符号前，先全仓搜索引用（`kernel/node/cli/web/测试`），漏改即事故。
 
 ## 诚实性纪律（禁止造假）
 
@@ -74,7 +75,7 @@ pnpm build && pnpm typecheck && pnpm test
 
 ## API 与 CLI 同权（重要）
 
-- Hub 新增/变更任何面向用户的 HTTP 接口时，**同一次改动**必须补齐 `helm` CLI 映射（`packages/node/src/cli/`，含 `--json` 输出与 `--current` 当前会话自动感知）。
+- Hub 新增/变更任何面向用户的 HTTP 接口时，**同一次改动**必须补齐 `helm` CLI 映射（`packages/cli/src/commands/`，含 `--json` 输出与 `--current` 当前会话自动感知）。
 - 插件通过 `ctx.action({ id, inputSchema, outputSchema })` 声明的动作，自动映射为 HTTP 端点、顶层语义化 CLI 命令 `helm <plugin> <action>`（剥离 `builtin:` 前缀）、Agent Tool、`SubagentWorkflow` `action()` 与 Web UI 动作。
 
 ## 测试与前端规范

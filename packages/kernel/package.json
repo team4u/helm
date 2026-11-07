@@ -5,6 +5,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "helm-hub": "./dist/main.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -22,8 +25,13 @@
     "@earendil-works/pi-schema": "1.5.0",
     "@helm/protocol": "workspace:*",
     "ajv": "^8.17.1",
+    "birpc": "^2.9.0",
     "cron-parser": "^5.10.4",
     "esbuild": "0.28.2",
-    "typebox": "^1.0.0"
+    "typebox": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.0"
   }
 }

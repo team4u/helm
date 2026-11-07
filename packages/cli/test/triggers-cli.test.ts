@@ -15,7 +15,7 @@ import http from 'node:http'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { runCli } from '../src/cli/index.js'
+import { runCli } from '../src/index.js'
 import type { ActionManifest } from '@helm/protocol'
 
 interface Hit {

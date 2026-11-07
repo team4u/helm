@@ -12,6 +12,10 @@ export interface Profile {
   name?: string
   /** Profile 绑定的系统提示词与记忆由文件承载，详情接口（GET/POST/PUT）附带全文，profile.json 落盘时剥离。 */
   model?: string
+  /** Profile 默认绑定的计算节点 ID（缺省 'local'）。 */
+  nodeId?: string
+  /** Profile 默认工作目录。 */
+  cwd?: string
   /** 作为 subagent / 工作流节点调用时的外部执行配置；持久会话仍由 pi-durable 承载。 */
   runtime?: ProfileRuntime
   tags?: string[]
@@ -27,7 +31,9 @@ export interface ProfileRuntime {
   /** Herdr 管理的 CLI Agent 标识，如 'agy' | 'claude' | 'codex' | 'pi'。 */
   agent: string
   args?: string[]
-  /** SSH 目标机标识；缺省本机。 */
+  /** 目标计算节点标识（缺省本机 'local'）。 */
+  nodeId?: string
+  /** 兼容别名：目标节点标识；缺省本机。 */
   machine?: string
   /** 会话工作目录（绝对路径）；缺省由运行时决定。 */
   workspace?: string
