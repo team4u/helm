@@ -13,15 +13,18 @@
  *   run_action 参数已进入模型工具历史（handler 拒绝无法清理已入上下文的
  *   秘密）——secret 只允许人工 HTTP/CLI 配置，文档如实声明；
  * - create/delete 串行（mutationChain），secret 文件与 doc 无跨存储事务：
- *   create 先写 secret（成功）再写 doc，doc 写失败即回滚删除 secret；
- *   delete 先删 doc（幂等容错）再删 secret，secret 删除失败显式报错；
- *   两路径成功前均 await flushDocs，绝不返回假持久；
+ *   create 先写 doc（含 hasSecret:true）并冲刷，再写 secret；secret 写失败即
+ *   回滚移除 doc 条目；delete 先删 doc（幂等容错）再删 secret，secret 删除
+ *   失败显式报错；两路径成功前均 await flushDocs，绝不返回假持久；
  * - 成功投递走共享 dispatchTrigger helper（isClosing 检查在 helper 内），
- *   text 为原始 utf8 body、source 为 webhook:<id>；body 上限 256 KiB。
+ *   text 为原始 utf8 body、source 为 webhook:<id>；body 上限 256 KiB
+ *   （复用 http readBody 流式限制，超限 cancel 并 413；验签基于原始字节，
+ *   解码 fatal:true，坏 UTF8 显式 400）。
  */
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { HelmError } from '@helm/protocol'
 import type { HelmPluginContext, PluginActionContext } from '@helm/protocol'
+import { BodyError, readBody } from '../../http/http-utils.js'
 import {
   MAX_DESCRIPTION,
   TRIGGERS_PLUGIN_ID,
@@ -57,8 +60,8 @@ const acceptedResponse = (): Response =>
     headers: { 'content-type': 'application/json; charset=utf-8' },
   })
 
-/** hex 解码 + 常时比较：两侧统一为 hex 字符串的 ASCII 字节（长度恒 64，
- * 先各自补齐到定长再比较，不因长度分支泄漏时序）。 */
+/** hex 解码 + 常时比较：两侧均为 64 字符 hex 的 ASCII 字节（长度恒 64），
+ * 正则格式检查保证等长后才 timingSafeEqual，不因长度分支泄漏时序。 */
 export function verifySignature(secret: string, body: Uint8Array, header: string): boolean {
   if (!header.startsWith(SIGNATURE_PREFIX)) return false
   const hex = header.slice(SIGNATURE_PREFIX.length)
@@ -113,6 +116,41 @@ export function registerWebhook(
   /** 本启用周期的 secret 脱敏登记释放句柄（stop 统一解除）。 */
   let secretRedactions: Array<() => void> = []
 
+  // ---- 服务活跃门禁：公开路由无宿主 tracker 包装，自行维护在途请求集合 ----
+  // active=false 后：已进入 handler 的请求继续收敛（stop 等待），但 dispatch
+  // 前再查 active 的请求不再投递；旧 handler（停用后残留调用）直接拒绝。
+  let active = false
+  const activeRequests = new Set<Promise<unknown>>()
+  const idleWaiters: Array<() => void> = []
+
+  const trackRequest = <T>(run: () => Promise<T>): Promise<T> => {
+    let tracked!: Promise<T>
+    tracked = (async () => {
+      try {
+        return await run()
+      } finally {
+        activeRequests.delete(tracked)
+        if (!active && activeRequests.size === 0) {
+          for (const notify of idleWaiters.splice(0)) notify()
+        }
+      }
+    })()
+    activeRequests.add(tracked)
+    return tracked
+  }
+
+  /** 拒绝停用后残留调用（旧 handler 句柄仍可能被外部持住）。 */
+  const assertActive = (): void => {
+    if (!active) {
+      throw new HelmError(
+        'plugin_disabled',
+        'builtin:triggers webhook 服务已停用，拒绝处理请求',
+        409,
+        { pluginId: TRIGGERS_PLUGIN_ID },
+      )
+    }
+  }
+
   /** 现读 doc 单条（不存在抛 not_found）。 */
   const requireWebhook = (id: string): WebhookMeta => {
     const found = readDoc().webhooks.find((w) => w.id === id)
@@ -122,8 +160,9 @@ export function registerWebhook(
     return found
   }
 
-  /** 启动：读入 doc（损坏显式报错）并登记既有 secret 脱敏。 */
+  /** 启动：读入 doc（损坏显式报错）、登记既有 secret 脱敏并开活跃门。 */
   async function start(): Promise<void> {
+    active = true
     readDoc()
     const metas = readDoc().webhooks
     for (const meta of metas) {
@@ -132,9 +171,24 @@ export function registerWebhook(
     }
   }
 
-  function stop(): void {
+  /** 停用：先关门（新请求拒收/dispatch 前再拒），再等已进请求自然收敛。 */
+  async function stop(): Promise<void> {
+    active = false
+    if (activeRequests.size > 0) {
+      await new Promise<void>((resolve) => {
+        idleWaiters.push(resolve)
+      })
+    }
     for (const release of secretRedactions) release()
     secretRedactions = []
+  }
+
+  /** 停用闸门标签：正常 disable/unregister 凭此得 409 plugin_has_live_tasks；
+   * dispose 强制 stop 时已 active=false，此处返回空放行拆毁。 */
+  function liveTasks(): string[] {
+    if (!active) return []
+    const count = activeRequests.size
+    return count > 0 ? [`webhook:inflight:${count}`] : []
   }
 
   /** create/delete 串行链：防 secret 文件与 doc 的并发读改写竞争。 */
@@ -191,6 +245,7 @@ export function registerWebhook(
     }
     const meta: WebhookMeta = {
       id,
+      hasSecret: true,
       ...(description !== undefined ? { description } : {}),
       ...(input.targetConversationId !== undefined ? { targetConversationId: input.targetConversationId } : {}),
       ...(input.targetProfileId !== undefined ? { targetProfileId: input.targetProfileId } : {}),
@@ -265,20 +320,25 @@ export function registerWebhook(
     method: 'POST',
     path: '/webhook/:id',
     public: true,
-    async handler(request) {
-      try {
-        return await handleWebhookRequest(request)
-      } catch (err) {
-        if (err instanceof HelmError && err.code === 'triggers_doc_corrupt') {
-          return webhookError(500, err.code, err.message)
+    handler(request) {
+      return trackRequest(async () => handleWebhookRequest(request)).catch((err: unknown) => {
+        if (err instanceof HelmError) {
+          // doc 损坏与停用后残留调用均如实回传原码（不笼统 500 内部化）。
+          if (err.code === 'triggers_doc_corrupt') {
+            return webhookError(500, err.code, err.message)
+          }
+          if (err.code === 'plugin_disabled') {
+            return webhookError(409, err.code, err.message)
+          }
         }
-        // 具名分支已自行返回 Response；其余异常如实 500（不吞、不伪装成功）。
+        // 其余异常如实 500（不吞、不伪装成功）。
         return webhookError(500, 'webhook_internal_error', `webhook 处理失败：${err instanceof Error ? err.message : String(err)}`)
-      }
+      })
     },
   })
 
   async function handleWebhookRequest(request: Request): Promise<Response> {
+      assertActive()
       // 仅接受 POST（宿主路由层按 method 匹配，此处直接调用时同样校验）。
       if (request.method !== 'POST') {
         return webhookError(404, 'not_found', `webhook 路由仅支持 POST（收到 ${request.method}）`)
@@ -309,34 +369,49 @@ export function registerWebhook(
       if (signature === null) {
         return webhookError(401, 'unauthorized', `缺少 ${SIGNATURE_HEADER} 请求头`)
       }
-      const declaredLength = Number(request.headers.get('content-length') ?? '0')
-      if (Number.isFinite(declaredLength) && declaredLength > MAX_WEBHOOK_BODY_BYTES) {
-        return webhookError(413, 'payload_too_large', `webhook body 超过上限（${MAX_WEBHOOK_BODY_BYTES} 字节）`)
-      }
       let body: Uint8Array
       try {
-        body = new Uint8Array(await request.arrayBuffer())
-      } catch {
-        return webhookError(400, 'invalid_body', 'webhook body 读取失败')
-      }
-      if (body.byteLength > MAX_WEBHOOK_BODY_BYTES) {
-        return webhookError(413, 'payload_too_large', `webhook body 超过上限（${MAX_WEBHOOK_BODY_BYTES} 字节）`)
+        // 复用 http 边界 readBody：content-length 预检 + 流式累计，超限立即
+        // cancel reader（不吞完整 body 到内存）并抛 body_too_large 413。
+        body = await readBody(request, MAX_WEBHOOK_BODY_BYTES)
+      } catch (err) {
+        if (err instanceof BodyError && err.code === 'body_too_large') {
+          return webhookError(413, 'payload_too_large', `webhook body 超过上限（${MAX_WEBHOOK_BODY_BYTES} 字节）`)
+        }
+        return webhookError(400, 'invalid_body', `webhook body 读取失败：${err instanceof Error ? err.message : String(err)}`)
       }
       if (!verifySignature(secret, body, signature)) {
         return webhookError(401, 'unauthorized', '签名校验失败（期望 x-helm-signature: sha256=<hex>，签名覆盖原始 body 字节）')
       }
-      const text = new TextDecoder('utf-8', { fatal: false }).decode(body)
+      // 先验签（基于原始字节）后解码：fatal:true 使坏 UTF8 抛出并显式 400，
+      // 绝不静默替换字符（替换产物与原始字节语义不一致）。
+      let text: string
+      try {
+        text = new TextDecoder('utf-8', { fatal: true }).decode(body)
+      } catch {
+        return webhookError(400, 'invalid_body', 'webhook body 不是合法 UTF-8')
+      }
+      // 已读 body 之后、dispatch 之前重查 doc：期间 webhook 已被 delete 的，
+      // 入口下线即拒绝（404），不再向已删端点投递事件。
+      const metaAtDispatch = readDoc().webhooks.find((w) => w.id === id)
+      if (metaAtDispatch === undefined) {
+        return webhookError(404, 'not_found', `webhook 不存在: ${id}`)
+      }
+      // dispose 强制 stop 场景：active 已置 false，凭此拒投（不再发事件）。
+      if (!active) {
+        return webhookError(409, 'plugin_disabled', 'builtin:triggers webhook 服务已停用，拒绝投递')
+      }
       try {
         await deps.dispatch(
           {
             id: `webhook:${id}:${Date.now().toString(36)}`,
             source: `webhook:${id}`,
             text,
-            ...(meta.threadKey !== undefined ? { threadKey: meta.threadKey } : {}),
-            ...(meta.targetConversationId !== undefined ? { targetConversationId: meta.targetConversationId } : {}),
+            ...(metaAtDispatch.threadKey !== undefined ? { threadKey: metaAtDispatch.threadKey } : {}),
+            ...(metaAtDispatch.targetConversationId !== undefined ? { targetConversationId: metaAtDispatch.targetConversationId } : {}),
             createdAt: Date.now(),
           },
-          meta.targetProfileId,
+          metaAtDispatch.targetProfileId,
         )
       } catch (err) {
         if (err instanceof HelmError && (err.code === 'runtime_closing' || err.code === 'not_found')) {
@@ -373,9 +448,10 @@ export function registerWebhook(
           type: 'object',
           properties: {
             id: { type: 'string' },
+            hasSecret: { type: 'boolean' },
             createdAt: { type: 'number' },
           },
-          required: ['id', 'createdAt'],
+          required: ['id', 'hasSecret', 'createdAt'],
         },
       },
       required: ['webhook'],
@@ -417,8 +493,8 @@ export function registerWebhook(
     handler: (input) => deleteWebhook(input as { id: string }),
   })
 
-  // ---- 服务生命周期：doc 读入验证 + secret 脱敏登记随启停 ----
-  ctx.service({ id: 'triggers-webhooks', start, stop })
+  // ---- 服务生命周期：doc 读入验证 + secret 脱敏登记随启停 + 在途请求门禁 ----
+  ctx.service({ id: 'triggers-webhooks', start, stop, liveTasks })
 
   return { createWebhook, listWebhooks, deleteWebhook }
 }

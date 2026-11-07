@@ -102,6 +102,8 @@ export interface CronDeps {
 
 export interface WebhookMeta {
   id: string
+  /** 协作契约：以布尔表达 secret 已配置（true），绝不含 secret 原文。 */
+  hasSecret: boolean
   description?: string
   targetConversationId?: number
   targetProfileId?: string
@@ -135,17 +137,26 @@ function assertWebhookMeta(raw: unknown): void {
   if (typeof raw.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(raw.id)) {
     throw docCorrupt(`条目 id 非法：${JSON.stringify(raw.id)}`)
   }
-  if (raw.description !== undefined && typeof raw.description !== 'string') {
-    throw docCorrupt(`条目 ${raw.id} description 非字符串`)
+  // hasSecret 契约：create 只写 true；缺省/false 均属旧开发 doc 或污染——
+  // 开发阶段不兼容旧 doc、无迁移，显式报错（绝不静默补字段修复）。
+  if (raw.hasSecret !== true) {
+    throw docCorrupt(`条目 ${raw.id} 缺少 hasSecret: true（doc 以布尔表达 secret 已配置；不兼容旧开发 doc，无迁移）`)
+  }
+  if (raw.description !== undefined && (typeof raw.description !== 'string' || raw.description.length > MAX_DESCRIPTION)) {
+    throw docCorrupt(`条目 ${raw.id} description 非字符串或超过 ${MAX_DESCRIPTION} 字符`)
   }
   if (raw.targetConversationId !== undefined && !isPosInt(raw.targetConversationId)) {
     throw docCorrupt(`条目 ${raw.id} targetConversationId 非正整数`)
   }
-  if (raw.targetProfileId !== undefined && typeof raw.targetProfileId !== 'string') {
-    throw docCorrupt(`条目 ${raw.id} targetProfileId 非字符串`)
+  if (raw.targetProfileId !== undefined && (typeof raw.targetProfileId !== 'string' || raw.targetProfileId.length === 0 || raw.targetProfileId.length > 64)) {
+    throw docCorrupt(`条目 ${raw.id} targetProfileId 非法（1..64 字符）`)
   }
-  if (raw.threadKey !== undefined && (typeof raw.threadKey !== 'string' || raw.threadKey.length === 0)) {
-    throw docCorrupt(`条目 ${raw.id} threadKey 非法`)
+  // 目标互斥与创建输入同契约（delivery 层同样拒绝双目标）。
+  if (raw.targetConversationId !== undefined && raw.targetProfileId !== undefined) {
+    throw docCorrupt(`条目 ${raw.id} targetConversationId 与 targetProfileId 不允许同时存在`)
+  }
+  if (raw.threadKey !== undefined && (typeof raw.threadKey !== 'string' || raw.threadKey.length === 0 || raw.threadKey.length > 200)) {
+    throw docCorrupt(`条目 ${raw.id} threadKey 非法（1..200 字符）`)
   }
   if (!isFiniteTime(raw.createdAt)) throw docCorrupt(`条目 ${raw.id} createdAt 非法`)
   // 秘密红线：doc 绝不含 secret 字段（读入即验证，历史污染显式报错）
@@ -171,9 +182,10 @@ export function assertWebhooksDoc(value: unknown): WebhooksDoc {
 
 /** 元数据脱视图：action/doc 输出统一经此剥离（当前形状即全量，收口备将来扩字段）。 */
 export function webhookPublicMeta(meta: WebhookMeta): WebhookMeta {
-  const { id, description, targetConversationId, targetProfileId, threadKey, createdAt } = meta
+  const { id, hasSecret, description, targetConversationId, targetProfileId, threadKey, createdAt } = meta
   return {
     id,
+    hasSecret,
     ...(description !== undefined ? { description } : {}),
     ...(targetConversationId !== undefined ? { targetConversationId } : {}),
     ...(targetProfileId !== undefined ? { targetProfileId } : {}),
