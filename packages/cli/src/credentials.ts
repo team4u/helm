@@ -1,9 +1,9 @@
 /**
  * CLI 登录态：<dataDir>/cli-token 的 0600 JSON { hubUrl, token }，本 CLI 专属。
  * credentials.json 仅承载模型/插件密钥（归 @helm/kernel CredentialService），
- * CLI 绝不读写它。写入持独立锁（cli-token.lock，O_EXCL 创建、首字段 PID、
- * 仅 PID 死亡破除 stale）+ tmp 原子写。HELM_TOKEN 环境变量优先时上层短路，
- * 不触碰磁盘。
+ * CLI 绝不读写它。写入持独立锁（cli-token.lock，tmp 写满后 fs.link 原子发布、首字段
+ * PID、仅 PID 死亡破除 stale；不支持硬链接的文件系统退回 O_EXCL + 读取侧宽限兜底）
+ * + tmp 原子写。HELM_TOKEN 环境变量优先时上层短路，不触碰磁盘。
  * origin 绑定：token 仅当目标 baseUrl 与记录 hubUrl 一致时附带（见 hub-client）。
  */
 import fsp from 'node:fs/promises'
@@ -20,6 +20,8 @@ export interface CliCredential {
 
 const LOCK_WAIT_MS = 10_000
 const LOCK_POLL_MS = 25
+/** 锁内容空/半截的宽限窗口：持有者可能正处「已创建待写入」的瞬态，超过才判定损坏。 */
+const LOCK_SETTLE_GRACE_MS = 2_000
 
 export function dataDirFor(env: NodeJS.ProcessEnv): string {
   const v = env['HELM_DATA_DIR']
@@ -66,16 +68,56 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * 排他锁：O_EXCL 创建 cli-token.lock（首字段 PID）。
- * 仅持有者 PID 确认死亡时破除 stale；不按存活时长强拆（合法持锁者可能只是慢）。
- * 返回释放函数（只移除自己持有的锁）。
+ * 排他锁：临时文件写满内容后 fs.link 原子发布为 cli-token.lock（首字段 PID）。
+ * link 与 open('wx') 同具原子排他性，但目标一经可见即含完整内容——并发读取方
+ * 绝无窗口读到空文件或半截 JSON。仅持有者 PID 确认死亡时破除 stale；
+ * 不按存活时长强拆（合法持锁者可能只是慢）。返回释放函数（只移除自己持有的锁）。
  */
 async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void>> {
   const owner = `${process.pid} ${randomUUID()}`
   const deadline = Date.now() + LOCK_WAIT_MS
-  for (;;) {
+  const publish = async (): Promise<boolean> => {
+    // tmp 写满 + flush，再 link 原子发布；link 失败（EEXIST=他人持有；EXDEV/ENOSYS 等由外层兜底）
+    const tmp = `${lockFile}.${process.pid}.${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`
     try {
-      await fsp.writeFile(lockFile, `${owner}\n`, { flag: 'wx', mode: 0o600 })
+      const handle = await fsp.open(tmp, 'w', 0o600)
+      try {
+        await handle.writeFile(`${owner}\n`)
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      await fsp.link(tmp, lockFile)
+      return true
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'EEXIST') return false
+      if (code === 'EXDEV' || code === 'ENOSYS' || code === 'EPERM' || code === 'EINVAL') {
+        // 特殊文件系统不支持硬链接：退回 open('wx')（空窗由读取侧宽限兜底，绝不静默误判）
+        try {
+          await fsp.writeFile(lockFile, `${owner}\n`, { flag: 'wx', mode: 0o600 })
+          return true
+        } catch (fallbackErr) {
+          if ((fallbackErr as NodeJS.ErrnoException).code === 'EEXIST') return false
+          throw fallbackErr
+        }
+      }
+      throw err
+    } finally {
+      await fsp.rm(tmp, { force: true }).catch(() => {})
+    }
+  }
+  for (;;) {
+    let held = false
+    try {
+      held = await publish()
+    } catch (err) {
+      throw new CliError(
+        `无法创建 CLI 凭据锁文件（${lockFile}）：${err instanceof Error ? err.message : String(err)}`,
+        'credentials_lock_failed',
+      )
+    }
+    if (held) {
       return async () => {
         try {
           const raw = await fsp.readFile(lockFile, 'utf8')
@@ -84,30 +126,31 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
           /* 释放失败留给持有者死亡后的 stale 破除 */
         }
       }
-    } catch (err) {
-      if (!(err instanceof Error && (err as NodeJS.ErrnoException).code === 'EEXIST')) {
-        throw new CliError(
-          `无法创建 CLI 凭据锁文件（${lockFile}）：${err instanceof Error ? err.message : String(err)}`,
-          'credentials_lock_failed',
-        )
-      }
     }
     let stale = false
-    let broken = false
+    let pending = false
     try {
       const raw = await fsp.readFile(lockFile, 'utf8')
       const head = raw.trim().split(/\s+/)[0] ?? ''
       if (!/^\d+$/.test(head)) {
-        broken = true
+        // 空内容/半截：旧平台 fallback 或异常崩溃残留。刚创建不久视为持有者正在写入，
+        // 等待退避后重读；超过宽限窗才如实判损坏（不静默、也不误杀并发者）。
+        const stat = await fsp.stat(lockFile)
+        if (Date.now() - stat.mtimeMs < LOCK_SETTLE_GRACE_MS) {
+          pending = true
+        } else {
+          throw new CliError(
+            `CLI 凭据锁文件内容损坏（${lockFile}）：无法判定持有者`,
+            'credentials_lock_broken',
+          )
+        }
       } else {
         const pid = Number(head)
         if (!isProcessAlive(pid)) stale = true
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof CliError) throw err
       stale = true // 读失败 = 锁刚被释放：直接重试
-    }
-    if (broken) {
-      throw new CliError(`CLI 凭据锁文件内容损坏（${lockFile}）：无法判定持有者`, 'credentials_lock_broken')
     }
     if (stale) {
       await fsp.rm(lockFile, { force: true }).catch(() => {})
@@ -116,7 +159,7 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
     if (Date.now() > deadline) {
       throw new CliError(`CLI 凭据被并发写入，等待锁超时（${lockFile}）`, 'credentials_lock_timeout')
     }
-    await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS))
+    await new Promise((resolve) => setTimeout(resolve, pending ? LOCK_POLL_MS * 4 : LOCK_POLL_MS))
   }
 }
 

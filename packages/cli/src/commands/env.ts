@@ -8,10 +8,13 @@ import { parsePositiveInt, printResult, resolveConversationTarget } from './shar
 const ENV_EXEC_FLAGS = [
   { name: 'node', type: 'string', help: '目标节点 ID（缺省继承当前会话，否则 local）' },
   { name: 'cwd', type: 'string', help: '目标节点工作目录（绝对路径）' },
-  { name: 'timeout', type: 'number', help: '命令超时毫秒数（正整数）' },
+  { name: 'timeout', type: 'number', help: '命令超时毫秒数（正整数，上限 600000）' },
   { name: 'stream', type: 'boolean', help: '逐帧回传 stdout/stderr 与终态' },
   { name: 'current', type: 'boolean', help: '读取 HELM_CONVERSATION_ID 作为会话上下文' },
 ] as const
+
+/** 与后端 POST /api/env/exec 的校验对齐（timeoutMs <= 600_000），越界在 CLI 侧先行拒绝。 */
+const ENV_EXEC_TIMEOUT_MAX_MS = 600_000
 
 function commandFromPositionals(positionals: readonly string[]): string | string[] {
   if (positionals.length === 0) {
@@ -53,7 +56,13 @@ export function envCommands(): CommandSpec[] {
         body.nodeId = nodeId
       }
       if (cwd !== undefined) body.cwd = cwd
-      if (timeout !== undefined) body.timeoutMs = parsePositiveInt(String(timeout), '--timeout', 'invalid_flag_value')
+      if (timeout !== undefined) {
+        const timeoutMs = parsePositiveInt(String(timeout), '--timeout', 'invalid_flag_value')
+        if (timeoutMs > ENV_EXEC_TIMEOUT_MAX_MS) {
+          throw new CliError(`--timeout 不能超过 ${ENV_EXEC_TIMEOUT_MAX_MS} 毫秒`, 'validation_error', 2)
+        }
+        body.timeoutMs = timeoutMs
+      }
       if (parsed.flags.get('current') === true) {
         body.conversationId = resolveConversationTarget(parsed.flags, undefined, ctx.env)
       }

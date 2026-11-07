@@ -11,6 +11,9 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { runCli } from '../src/index.js'
+import { coreCommands } from '../src/commands/index.js'
+import { updateCliCredentials } from '../src/credentials.js'
+import { CliError } from '../src/errors.js'
 
 interface Hit {
   method: string
@@ -310,6 +313,19 @@ test('env exec：单命令字符串（含空格）原样透传；缺命令/非�
     const badTimeout = await run(['env', 'exec', '--json', '--timeout', '-5', '--', 'true'], makeEnv(hub.url, dir))
     assert.equal(badTimeout.code, 1)
     assert.equal((JSON.parse(badTimeout.err) as { error: { code: string } }).error.code, 'invalid_flag_value')
+
+    // 超过上限 600000（与后端 POST /api/env/exec 校验对齐）在 CLI 侧直接拒绝：validation_error + 退出码 2
+    const overTimeout = await run(['env', 'exec', '--json', '--timeout', '600001', '--', 'true'], makeEnv(hub.url, dir))
+    assert.equal(overTimeout.code, 2)
+    assert.equal((JSON.parse(overTimeout.err) as { error: { code: string } }).error.code, 'validation_error')
+    assert.match(overTimeout.err, /600000/)
+    // 请求未发向 Hub（CLI 侧先行拦截）
+    assert.ok(!hub.hits.some((h) => h.path === '/api/env/exec' && (h.body as { timeoutMs?: number } | undefined)?.timeoutMs === 600001))
+
+    // 恰好 600000 合法（边界含端）
+    const boundary = await run(['env', 'exec', '--json', '--timeout', '600000', '--', 'true'], makeEnv(hub.url, dir))
+    assert.equal(boundary.code, 0, boundary.err)
+    assert.equal((hub.hits.filter((h) => h.path === '/api/env/exec').at(-1)?.body as { timeoutMs?: number }).timeoutMs, 600000)
   } finally {
     await hub.close()
   }
@@ -917,4 +933,76 @@ test('帮助文本包含 nodes/env/api 命令说明；nodes 命令族不与动�
   } finally {
     await hub.close()
   }
+})
+
+// ---------------------------------------------------------------------------
+// 8. 静态命令表唯一性断言（防未来新增命令撞路径被 matchCommand exact[0] 静默吞掉）
+// ---------------------------------------------------------------------------
+
+test('静态命令表：coreCommands 路径全等唯一且互不为前缀冲突', { timeout: 60_000 }, () => {
+  const commands = coreCommands() // 内部已校验，重复/前缀冲突会抛 command_table_conflict
+  const paths = commands.map((c) => c.path.join(' '))
+  assert.equal(new Set(paths).size, paths.length, `静态命令路径重复：${JSON.stringify(paths)}`)
+  // 互不为前缀：较短路径不得是任何较长路径的头部序列
+  for (const cmd of commands) {
+    for (const other of commands) {
+      if (cmd === other || other.path.length >= cmd.path.length) continue
+      const isPrefix = other.path.every((seg, i) => seg === cmd.path[i])
+    assert.equal(isPrefix, false, `命令前缀冲突："${cmd.path.join(' ')}" 会遮蔽 "${other.path.join(' ')}"`)
+    }
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 9. cli-token 锁竞态：空/半截锁文件宽限重读，陈旧残留如实判损坏
+// ---------------------------------------------------------------------------
+
+test('cli-token 锁：空锁文件刚创建不久视为持有者正在写入，等待后成功；陈旧空锁如实报 credentials_lock_broken', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const lockFile = path.join(dir, 'cli-token.lock')
+  // 场景 1：模拟旧平台 fallback 的「先建空文件后写内容」慢持有者：占位空锁（新鲜 mtime），
+  // 300ms 后持有者写满 owner 行、900ms 后释放。竞争方在宽限窗内等待重读，绝不误杀并发者。
+  await fsp.writeFile(lockFile, '', { mode: 0o600 })
+  const holderOwner = `${process.pid} holder-uuid`
+  const fillTimer = setTimeout(() => { void fsp.writeFile(lockFile, `${holderOwner}\n`).catch(() => {}) }, 300)
+  const releaseTimer = setTimeout(() => { void fsp.rm(lockFile, { force: true }).catch(() => {}) }, 900)
+  try {
+    await updateCliCredentials(dir, { hubUrl: 'http://127.0.0.1:1', token: 'tok' })
+  } finally {
+    clearTimeout(fillTimer)
+    clearTimeout(releaseTimer)
+  }
+  const saved = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as { token: string }
+  assert.equal(saved.token, 'tok')
+  // 锁与临时文件不残留
+  const leftovers = (await fsp.readdir(dir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
+  assert.deepEqual(leftovers, [])
+
+  // 场景 2：陈旧空锁（mtime 超过宽限窗且无人补写）→ 如实抛 credentials_lock_broken，绝不静默当无锁
+  await fsp.writeFile(lockFile, '', { mode: 0o600 })
+  const old = new Date(Date.now() - 60_000)
+  await fsp.utimes(lockFile, old, old)
+  await assert.rejects(
+    updateCliCredentials(dir, { token: 'tok2' }),
+    (err: unknown) => err instanceof CliError && err.code === 'credentials_lock_broken',
+  )
+})
+
+test('cli-token 锁：半截锁内容同样受宽限窗保护，等待持有者完成后成功', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const lockFile = path.join(dir, 'cli-token.lock')
+  // 半截内容（首 token 非 PID）+ 慢持有者在宽限窗内补写完整 owner 行随后释放
+  await fsp.writeFile(lockFile, 'garbage ', { mode: 0o600 })
+  const fillTimer = setTimeout(() => { void fsp.writeFile(lockFile, `${process.pid} filler\n`).catch(() => {}) }, 200)
+  const releaseTimer = setTimeout(() => { void fsp.rm(lockFile, { force: true }).catch(() => {}) }, 700)
+  try {
+    await updateCliCredentials(dir, { hubUrl: 'http://127.0.0.1:2', token: 'tok-half' })
+  } finally {
+    clearTimeout(fillTimer)
+    clearTimeout(releaseTimer)
+  }
+  const saved = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as { token: string }
+  assert.equal(saved.token, 'tok-half')
+  const leftovers = (await fsp.readdir(dir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
+  assert.deepEqual(leftovers, [])
 })
