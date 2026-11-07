@@ -20,6 +20,7 @@ function ProviderDetail({ provider, onEditGateway, onRefreshCatalog }: { provide
   const supportsOAuth = provider?.authMethods.some((method) => method.type === 'oauth')
   const modelList = store.models.filter((model) => model.provider === activeId && model.modelId.toLowerCase().includes(modelQuery.trim().toLowerCase()))
   // 通用插件联动：任何插件注册的供应商都自动内联其 settingsPanels，零插件名硬编码。
+  const owningPlugin = store.plugins.find((plugin) => plugin.id === provider?.pluginId)
   const pluginPanels = provider?.pluginId ? store.groupedUi.settingsPanels.filter((panel) => panel.pluginId === provider.pluginId) : []
 
   const refreshCatalog = async () => {
@@ -73,7 +74,7 @@ function ProviderDetail({ provider, onEditGateway, onRefreshCatalog }: { provide
   }
 
   return (
-    <section className="provider-detail" aria-label="供应商配置" aria-busy={busy}>
+    <section className="provider-detail" aria-label="供应商配置" aria-busy={busy || refreshing}>
       <div className="provider-detail-heading">
         <div className="provider-avatar"><HelmIcon name={provider?.custom ? 'network' : 'cpu'} size={21} /></div>
         <div className="provider-heading-copy">
@@ -96,10 +97,10 @@ function ProviderDetail({ provider, onEditGateway, onRefreshCatalog }: { provide
       {provider?.hasStoredKey ? (
         <div className="provider-status"><HelmIcon name="lock" size={14} /><span>本地密钥已保存，不回显明文。{!provider.available && '当前尚不可用，请检查该供应商需要的环境配置。'}</span></div>
       ) : provider?.available ? (
-        <div className="provider-status"><HelmIcon name="check-circle" size={14} /><span>当前环境凭据可用，无需重复保存密钥。</span></div>
+        <div className="provider-status"><HelmIcon name="check-circle" size={14} /><span>此供应商已具备请求所需的认证配置，无需重复保存密钥。</span></div>
       ) : null}
 
-      {supportsKey ? (
+      {supportsKey && !provider?.pluginId ? (
         <form className="provider-credential-form" onSubmit={(event) => void save(event)}>
           {!provider && <label className="provider-field">供应商 ID<input className="input mono" aria-label="供应商 ID" placeholder="与网关 ID 保持一致" value={customId} onChange={(event) => setCustomId(event.target.value)} disabled={busy} /></label>}
           <label className="provider-field">
@@ -115,7 +116,7 @@ function ProviderDetail({ provider, onEditGateway, onRefreshCatalog }: { provide
             {provider?.hasStoredKey && <button className="btn btn-sm btn-danger" type="button" disabled={busy} onClick={() => void remove()}><HelmIcon name="trash-2" size={12} />删除密钥</button>}
           </div>
         </form>
-      ) : <div className="provider-status"><HelmIcon name="shield" size={16} /><span>此供应商仅支持 OAuth，不接受 API Key。</span></div>}
+      ) : !supportsKey && !provider?.pluginId ? <div className="provider-status"><HelmIcon name="shield" size={16} /><span>此供应商仅支持 OAuth，不接受 API Key。</span></div> : null}
 
       {supportsOAuth && <div className="provider-help provider-oauth-note"><HelmIcon name="alert-circle" size={14} /><span>PI 提供 OAuth 模块；Helm 尚未接入交互式登录，当前不能在此完成 OAuth 授权。</span></div>}
       {provider?.custom && <button className="btn" onClick={onEditGateway}><HelmIcon name="network" size={13} />编辑网关地址与模型</button>}
@@ -131,7 +132,7 @@ function ProviderDetail({ provider, onEditGateway, onRefreshCatalog }: { provide
         <div className="provider-plugin-zone">
           <div className="provider-plugin-heading">
             <HelmIcon name="sliders" size={14} />
-            <span>此供应商由插件 {provider.pluginId} 注册；其连接参数由插件配置提供。</span>
+            <span>{owningPlugin?.name ?? provider.name} 提供连接配置与专属面板。</span>
             <button className="btn btn-sm" type="button" onClick={() => store.setActiveModal({ kind: 'plugin-settings', pluginId: provider.pluginId })}><HelmIcon name="settings" size={12} />插件连接设置</button>
           </div>
           {pluginPanels.map((panel) => (

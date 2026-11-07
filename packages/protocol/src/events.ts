@@ -38,6 +38,7 @@ export type HelmEventType =
   | 'ask.resolved'
   | 'plugin.changed'
   | 'plugin.doc.updated'
+  | 'models.changed'
   | 'workflow.updated'
   | 'node.changed'
   | 'notification'
@@ -90,6 +91,13 @@ export interface PluginDocUpdatedEvent {
   doc: PublicPluginDoc
 }
 
+/** 模型配置或动态目录已更新；客户端重新读取模型与供应商目录。 */
+export interface ModelsChangedEvent {
+  type: 'models.changed'
+  /** 空列表表示整个目录；采用 EventHub 通用 payload 信封。 */
+  payload: { providers: string[] }
+}
+
 /** 工作流 run 状态/节点更新（含终态）。 */
 export interface WorkflowUpdatedEvent {
   type: 'workflow.updated'
@@ -131,6 +139,7 @@ export type HelmEvent =
   | AskResolvedEvent
   | PluginChangedEvent
   | PluginDocUpdatedEvent
+  | ModelsChangedEvent
   | WorkflowUpdatedEvent
   | NodeChangedEvent
   | NotificationEvent

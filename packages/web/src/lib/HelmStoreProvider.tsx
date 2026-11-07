@@ -365,6 +365,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
               failedDocs.current.clear()
               void refreshAssets()
             }
+            if (event.type === 'models.changed') void refreshAssets()
             if (event.type === 'conversation.upsert' && 'conversation' in event) {
               const conv = event.conversation
               const visible = [targets.current.primaryTarget, targets.current.splitTarget].some((target) => target?.kind === 'conversation' && target.conversationId === conv.id)
