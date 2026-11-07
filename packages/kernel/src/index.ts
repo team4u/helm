@@ -25,6 +25,7 @@ export type {
   RemoteExecutionEnvOptions,
   NodeWsGateway,
   NodeWsGatewayOptions,
+  sanitizeNodeHealth,
 } from './env/index.js';
 export { createAssistantPlugin } from './builtin-plugins/assistant.js';
 export { createHerdrPlugin } from './builtin-plugins/herdr.js';

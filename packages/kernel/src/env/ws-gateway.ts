@@ -3,7 +3,7 @@ import type { Server as HttpServer, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { createBirpc } from 'birpc'
-import type { NodeRegisterInput, NodeRegisterResult } from '@helm/protocol'
+import type { NodeHeartbeatInput, NodeRegisterInput, NodeRegisterResult } from '@helm/protocol'
 import type { HubConnectionLocal, NodeRegistry, NodeSideFunctions } from './registry.js'
 
 export interface NodeWsGatewayOptions {
@@ -48,7 +48,7 @@ export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOp
         clearTimeout(registerTimer)
         return { ok: true, heartbeatMs: outcome.heartbeatMs ?? registry.heartbeatIntervalMs }
       },
-      heartbeat: (nodeId: string) => registry.noteHeartbeat(nodeId, ws),
+      heartbeat: (nodeId: string, input?: NodeHeartbeatInput) => registry.noteHeartbeat(nodeId, ws, input),
       onEnvExecOutput: (event: Parameters<HubConnectionLocal['onEnvExecOutput']>[0]) => callbacks?.onEnvExecOutput(event),
       onIpcEvent: (event: Parameters<HubConnectionLocal['onIpcEvent']>[0]) => callbacks?.onIpcEvent(event),
       onIpcClosed: (event: Parameters<HubConnectionLocal['onIpcClosed']>[0]) => callbacks?.onIpcClosed(event),

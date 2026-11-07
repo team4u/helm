@@ -52,10 +52,10 @@ import type {
   ToolResultHookPayload,
   WorkflowRunSummary,
 } from '@helm/protocol'
-import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT, type MaybePromise, type EnvExecRequest, type EnvExecResponse, type NodeInfo, type NodeIssuedToken } from '@helm/protocol'
+import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT, type MaybePromise, type EnvExecRequest, type EnvExecResponse, type NodeHealthSnapshot, type NodeInfo, type NodeIssuedToken } from '@helm/protocol'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { hostname } from 'node:os'
-import { chmod, mkdir, writeFile } from 'node:fs/promises'
+import { hostname, loadavg, freemem, totalmem, uptime } from 'node:os'
+import { chmod, mkdir, statfs, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -268,6 +268,12 @@ export class KernelRuntime {
   /** reloadModels 串行链 + 抖动合并（providers/credentials 热重载共用）。 */
   private reloadChain: Promise<void> = Promise.resolve()
   private reloadTimer: NodeJS.Timeout | undefined
+  /** local 节点磁盘统计缓存（fs.statfs 异步采集；同步快照直接复用）。 */
+  private localDiskStats: { diskFreeBytes: number; diskTotalBytes: number } | undefined
+  /** local 磁盘统计后台刷新定时器（unref；close 时清理）。 */
+  private localDiskRefreshTimer: NodeJS.Timeout | undefined
+  /** local 磁盘统计在途刷新（singleflight，防重入叠加）。 */
+  private localDiskRefreshing: Promise<void> = Promise.resolve()
 
   static async open(options: KernelRuntimeOptions = {}): Promise<KernelRuntime> {
     const dataDir = resolveDataDir(options.dataDir)
@@ -441,6 +447,7 @@ export class KernelRuntime {
           ...(conn?.hubUrl !== undefined ? { hubUrl: conn.hubUrl } : {}),
           ...(conn?.connectedAt !== undefined ? { connectedAt: conn.connectedAt } : {}),
           ...(conn?.lastSeenAt !== undefined ? { lastSeenAt: conn.lastSeenAt } : {}),
+          ...(conn?.health !== undefined ? { health: conn.health } : {}),
         } satisfies NodeInfo,
       })
     })
@@ -541,6 +548,8 @@ export class KernelRuntime {
     //    生成 helm CLI 包装脚本（受管子进程可直接运行 helm）。
     await this.loadNodeTokens()
     await this.ensureCliBinDir()
+    // 预热 local 磁盘统计：首个 SSE 快照（listNodesSync）即含磁盘字段。
+    await this.ensureLocalDiskStats()
     // 1) 默认 profiles 先于 root 创建（root 绑定 assistant profile）。
     // 全局来源在内核统一解析；assistant Profile 的模型只属于该 Profile。
     await this.profilesSvc.ensureDefault()
@@ -1083,8 +1092,57 @@ export class KernelRuntime {
   /** 流式模式下聚合上限（远大于常规 1MiB：流式客户端自行消费原始块）。 */
   private static readonly MAX_STREAM_AGGREGATE_BYTES = 64 * 1024 * 1024
 
+  /** local 磁盘统计后台刷新间隔（unref 定时器，不阻退出）。 */
+  private static readonly LOCAL_DISK_REFRESH_MS = 30_000
+
+  /** 单次 fs.statfs(dataDir) 采集 local 磁盘空间（失败时保留上次缓存，不阻断列表）。 */
+  private async refreshLocalDiskStats(): Promise<void> {
+    try {
+      const st = await statfs(this.dataDir)
+      this.localDiskStats = {
+        diskFreeBytes: Number(st.bavail) * Number(st.bsize),
+        diskTotalBytes: Number(st.blocks) * Number(st.bsize),
+      }
+    } catch {
+      // 磁盘统计失败不影响节点列表主体（health 磁盘字段缺省），
+      // 保留最近一次有效缓存。
+    }
+  }
+
+  /** 异步刷新 local 磁盘缓存（singleflight）；首次调用同时启动后台定时刷新。 */
+  private ensureLocalDiskStats(): Promise<void> {
+    this.localDiskRefreshing = this.localDiskRefreshing.then(() => this.refreshLocalDiskStats())
+    if (this.localDiskRefreshTimer === undefined) {
+      this.localDiskRefreshTimer = setInterval(
+        () => void this.ensureLocalDiskStats(),
+        KernelRuntime.LOCAL_DISK_REFRESH_MS,
+      )
+      this.localDiskRefreshTimer.unref()
+    }
+    return this.localDiskRefreshing
+  }
+
+  /** local 节点实时健康快照（内存/负载实时采集；磁盘用最近一次缓存）。 */
+  private localHealthSnapshot(): NodeHealthSnapshot {
+    const [la1, la5, la15] = loadavg()
+    const health: NodeHealthSnapshot = {
+      collectedAt: Date.now(),
+      uptimeSec: uptime(),
+      loadAvg: [la1 ?? 0, la5 ?? 0, la15 ?? 0],
+      memFreeBytes: freemem(),
+      memTotalBytes: totalmem(),
+    }
+    const disk = this.localDiskStats
+    if (disk !== undefined) {
+      health.diskFreeBytes = disk.diskFreeBytes
+      health.diskTotalBytes = disk.diskTotalBytes
+    }
+    return health
+  }
+
   /** 节点列表：首项恒为 local；随后为 config.json 登记节点与实时在线状态。 */
   async listNodes(): Promise<NodeInfo[]> {
+    await this.ensureLocalDiskStats()
     return this.listNodesSync()
   }
 
@@ -1097,6 +1155,7 @@ export class KernelRuntime {
         online: true,
         hostname: hostname(),
         platform: process.platform,
+        health: this.localHealthSnapshot(),
       },
     ]
     for (const nodeId of this.nodeTokenIndex.keys()) {
@@ -1110,6 +1169,7 @@ export class KernelRuntime {
         ...(conn?.hubUrl !== undefined ? { hubUrl: conn.hubUrl } : {}),
         ...(conn?.connectedAt !== undefined ? { connectedAt: conn.connectedAt } : {}),
         ...(conn?.lastSeenAt !== undefined ? { lastSeenAt: conn.lastSeenAt } : {}),
+        ...(conn?.health !== undefined ? { health: conn.health } : {}),
       })
     }
     return out
@@ -2872,6 +2932,11 @@ export class KernelRuntime {
     }
     this.watcher?.close()
     if (this.reloadTimer !== undefined) clearTimeout(this.reloadTimer)
+    if (this.localDiskRefreshTimer !== undefined) {
+      clearInterval(this.localDiskRefreshTimer)
+      this.localDiskRefreshTimer = undefined
+    }
+    await this.localDiskRefreshing
     // 先等已进入 Hook 管道的巡检收敛，避免插件释放后仍有回调写旧 Doc。
     await this.watchdogPending
     // 2) 等待在途 reloadModels（可能还在写 models 引用）。

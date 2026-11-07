@@ -26,6 +26,8 @@ import type { BirpcReturn } from 'birpc'
 import type {
   EnvExecOutputEvent,
   NodeEnvRpcFunctions,
+  NodeHealthSnapshot,
+  NodeHeartbeatInput,
   NodeIpcClosedEvent,
   NodeIpcEvent,
   NodeRegisterInput,
@@ -35,7 +37,48 @@ import type { Context } from '@earendil-works/chord/context'
 /** 节点侧供 Hub 调用的函数集（env RPC 全集 + 连接控制）。 */
 export type NodeSideFunctions = NodeEnvRpcFunctions & {
   register(input: NodeRegisterInput): Promise<{ ok: boolean; heartbeatMs: number; reason?: string }>
-  heartbeat(nodeId: string): Promise<boolean>
+  heartbeat(nodeId: string, input?: NodeHeartbeatInput): Promise<boolean>
+}
+
+/** 非负有限数值校验（NaN/Infinity/负数/非数值一律非法）。 */
+const isNonNegativeFinite = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0
+
+/** 有限数值校验（允许负值，loadAvg 理论非负但按「有限数」契约校验）。 */
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value)
+
+/**
+ * 边界校验：外部节点上报的健康快照在进入注册表前过滤。
+ * 必填字段（collectedAt / uptimeSec / loadAvg / memFreeBytes / memTotalBytes）
+ * 任一非法即整体丢弃（返回 undefined，不抛异常、不信任未校验的脏字段）；
+ * 可选磁盘字段非法时仅忽略该字段。
+ */
+export function sanitizeNodeHealth(raw: unknown): NodeHealthSnapshot | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const o = raw as Record<string, unknown>
+  if (!isNonNegativeFinite(o['collectedAt'])) return undefined
+  if (!isNonNegativeFinite(o['uptimeSec'])) return undefined
+  const load = o['loadAvg']
+  if (
+    !Array.isArray(load) ||
+    load.length !== 3 ||
+    !load.every((v) => isFiniteNumber(v))
+  ) {
+    return undefined
+  }
+  if (!isNonNegativeFinite(o['memFreeBytes'])) return undefined
+  if (!isNonNegativeFinite(o['memTotalBytes'])) return undefined
+  const health: NodeHealthSnapshot = {
+    collectedAt: o['collectedAt'],
+    uptimeSec: o['uptimeSec'],
+    loadAvg: [load[0]!, load[1]!, load[2]!],
+    memFreeBytes: o['memFreeBytes'],
+    memTotalBytes: o['memTotalBytes'],
+  }
+  if (isNonNegativeFinite(o['diskFreeBytes'])) health.diskFreeBytes = o['diskFreeBytes']
+  if (isNonNegativeFinite(o['diskTotalBytes'])) health.diskTotalBytes = o['diskTotalBytes']
+  return health
 }
 
 export interface NodeConnection {
@@ -49,6 +92,8 @@ export interface NodeConnection {
   platform: string
   /** 节点端配置的 Hub 地址（远端受管子进程回连用）。 */
   hubUrl?: string
+  /** 最近一次注册或心跳捎带的健康快照（边界校验后的可信数据）。 */
+  health?: NodeHealthSnapshot
 }
 
 /** Hub 侧本地函数（每连接一份，绑定该连接的注册身份）。 */
@@ -257,6 +302,7 @@ export class NodeRegistry {
     if (prev !== undefined) this.#evict(nodeId, prev, 'replaced')
     publishEpoch = this.#epochOf(nodeId)
 
+    const health = sanitizeNodeHealth(input?.health)
     const conn: NodeConnection = {
       nodeId,
       rpc,
@@ -266,6 +312,7 @@ export class NodeRegistry {
       hostname: typeof hostname === 'string' ? hostname : '',
       platform: typeof platform === 'string' ? platform : '',
       ...(typeof hubUrl === 'string' && hubUrl !== '' ? { hubUrl } : {}),
+      ...(health !== undefined ? { health } : {}),
     }
     this.#connections.set(nodeId, conn)
     published = true
@@ -280,11 +327,17 @@ export class NodeRegistry {
     return { accepted: true, heartbeatMs: this.#heartbeatIntervalMs }
   }
 
-  /** 心跳：仅当 nodeId 与发送连接的注册身份一致才刷新。 */
-  noteHeartbeat(nodeId: string, fromSocket: WsSocket): boolean {
+  /** 心跳：仅当 nodeId 与发送连接的注册身份一致才刷新；携带合法健康
+   * 快照时同步覆盖 conn.health（非法快照忽略、不影响 lastSeenAt 刷新；
+   * birpc 缺省尾参会序列化为 null，同样按无载荷处理）。 */
+  noteHeartbeat(nodeId: string, fromSocket: WsSocket, input?: NodeHeartbeatInput): boolean {
     const conn = this.#connections.get(nodeId)
     if (conn === undefined || conn.socket !== fromSocket) return false
     conn.lastSeenAt = Date.now()
+    if (input !== undefined && input !== null) {
+      const health = sanitizeNodeHealth(input.health)
+      if (health !== undefined) conn.health = health
+    }
     return true
   }
 
@@ -447,3 +500,4 @@ export class NodeRegistry {
 }
 
 export type { NodeRegisterInput }
+export type { NodeHealthSnapshot, NodeHeartbeatInput } from '@helm/protocol'

@@ -82,9 +82,36 @@ async function tempDir(): Promise<string> {
   return fsp.mkdtemp(path.join(os.tmpdir(), 'helm-cli-nodes-'))
 }
 
+const LOCAL_HEALTH = {
+  collectedAt: 1730000000000,
+  uptimeSec: 86400,
+  loadAvg: [0.5, 0.25, 0.125],
+  memFreeBytes: 8 * 1024 ** 3,
+  memTotalBytes: 32 * 1024 ** 3,
+  diskFreeBytes: 100 * 1024 ** 3,
+  diskTotalBytes: 512 * 1024 ** 3,
+}
+
+const BYOM_HEALTH = {
+  collectedAt: 1730000001000,
+  uptimeSec: 43200,
+  loadAvg: [1.5, 1.25, 1.125],
+  memFreeBytes: 16 * 1024 ** 3,
+  memTotalBytes: 64 * 1024 ** 3,
+}
+
 const NODE_LIST = [
-  { id: 'local', kind: 'local', online: true, hostname: 'box-a', platform: 'linux' },
-  { id: 'gpu-box', kind: 'byom', online: true, hostname: 'gpu', platform: 'linux', connectedAt: 1, lastSeenAt: 2 },
+  { id: 'local', kind: 'local', online: true, hostname: 'box-a', platform: 'linux', health: LOCAL_HEALTH },
+  {
+    id: 'gpu-box',
+    kind: 'byom',
+    online: true,
+    hostname: 'gpu',
+    platform: 'linux',
+    connectedAt: 1,
+    lastSeenAt: 2,
+    health: BYOM_HEALTH,
+  },
   { id: 'laptop', kind: 'byom', online: false, hostname: 'mbp', platform: 'darwin' },
 ]
 
@@ -112,6 +139,32 @@ test('nodes list：GET /api/nodes；--json 原始数组、人类模式关键列�
     assert.match(human.out, /false/)
     assert.match(human.out, /hostname/)
     assert.match(human.out, /platform/)
+  } finally {
+    await hub.close()
+  }
+})
+
+test('nodes list --json：透传节点 health 健康快照（local 与在线 BYOM；离线节点无 health 键）', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startHub({
+    'GET /api/actions': () => ({ body: [] }),
+    'GET /api/nodes': () => ({ body: NODE_LIST }),
+  })
+  try {
+    const r = await run(['nodes', 'list', '--json'], makeEnv(hub.url, dir))
+    assert.equal(r.code, 0, r.err)
+    const nodes = JSON.parse(r.out) as Array<{ id: string; health?: Record<string, unknown> }>
+    // local 节点：完整健康快照原样透传。
+    const local = nodes.find((n) => n.id === 'local')!
+    assert.deepEqual(local.health, LOCAL_HEALTH, 'local health 快照必须原样透传（含磁盘字段）')
+    // 在线 BYOM 节点：心跳/注册捎带的快照原样透传（缺磁盘字段时不得伪造）。
+    const byom = nodes.find((n) => n.id === 'gpu-box')!
+    assert.deepEqual(byom.health, BYOM_HEALTH, '在线 BYOM health 快照必须原样透传')
+    assert.equal('diskFreeBytes' in (byom.health ?? {}), false, '未上报磁盘字段不得伪造')
+    // 离线节点：不残留过期 health。
+    const offline = nodes.find((n) => n.id === 'laptop')!
+    assert.equal(offline.health, undefined, '离线节点不得残留过期 health')
+    assert.equal('health' in offline, false)
   } finally {
     await hub.close()
   }
