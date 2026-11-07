@@ -462,6 +462,15 @@ test('search、models、plugins、actions list、status', { timeout: 60_000 }, a
     'GET /api/search?q=hello%20world': () => ({ body: [{ id: 1 }] }),
     'GET /api/models': () => ({ body: ['openai/gpt', 'anthropic/sonnet'] }),
     'GET /api/models/providers': () => ({ body: [{ id: 'deepseek', name: 'DeepSeek', modelCount: 2, authMethods: [{ type: 'api_key', label: 'API Key' }] }] }),
+    'POST /api/models/refresh': (body) => ({
+      body: {
+        providers: (body as { provider?: string }).provider !== undefined ? [(body as { provider: string }).provider] : [],
+        aborted: false,
+        errors: {},
+        models: [{ provider: 'magpie', modelId: 'magpie-1', available: true }],
+        providerCatalog: [],
+      },
+    }),
     'GET /api/plugins': () => ({ body: [{ id: 'builtin:assistant', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] }] }),
     'POST /api/plugins/builtin%3Aherdr/disable': () => ({ body: { ok: 1 } }),
     'GET /api/plugins/builtin%3Aherdr/config': () => ({ body: { values: { a: 1 }, schema: {} } }),
@@ -487,6 +496,18 @@ test('search、models、plugins、actions list、status', { timeout: 60_000 }, a
     assert.equal(providers.code, 0, providers.err)
     assert.equal(hub.recorded.hits.at(-1)?.path, '/api/models/providers')
     assert.equal(JSON.parse(providers.out)[0]?.id, 'deepseek')
+
+    const refreshAll = await run(['models', 'refresh', '--json'], env)
+    assert.equal(refreshAll.code, 0, refreshAll.err)
+    assert.equal(hub.recorded.hits.at(-1)?.path, '/api/models/refresh')
+    assert.deepEqual(JSON.parse(refreshAll.out).providers, [])
+
+    const refreshOne = await run(['models', 'refresh', '--provider', 'magpie', '--json'], env)
+    assert.equal(refreshOne.code, 0, refreshOne.err)
+    assert.equal(hub.recorded.hits.at(-1)?.path, '/api/models/refresh')
+    assert.deepEqual((hub.recorded.hits.at(-1)?.body as { provider?: string }).provider, 'magpie')
+    assert.deepEqual(JSON.parse(refreshOne.out).providers, ['magpie'])
+    assert.deepEqual(JSON.parse(refreshOne.out).models, [{ provider: 'magpie', modelId: 'magpie-1', available: true }])
 
     const p = await run(['plugins', 'list', '--json'], env)
     assert.equal(p.code, 0, p.err)

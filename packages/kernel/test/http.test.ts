@@ -226,7 +226,16 @@ function makeKernel(): KernelRuntimeLike {
     },
     listModels: () => [{ id: 'faux/model' }],
     listModelProviders: () => [{ id: 'faux', name: 'Faux', modelCount: 1, authMethods: [{ type: 'api_key', label: 'API Key' }] }],
+    refreshModels: undefined,
   }
+  return kernel
+}
+
+/** 可注入 refreshModels 的 mock kernel（验证 501 分支时置 undefined）。 */
+function makeKernelWithRefresh(refreshImpl?: (options?: { providers?: string[]; allowNetwork?: boolean; force?: boolean }) => Promise<unknown>) {
+  const kernel = makeKernel() as Record<string, unknown>
+  if (refreshImpl !== undefined) kernel['refreshModels'] = refreshImpl
+  return kernel as ReturnType<typeof makeKernel>
 }
 
 const workflows: WorkflowServiceLike = {
@@ -791,6 +800,59 @@ test('models 返回数组', { timeout: 60_000 }, async () => {
   const res = await call(handler, 'GET', '/api/models')
   assert.equal(res.status, 200)
   assert.ok(Array.isArray(res.body))
+})
+
+test('POST /api/models/refresh：空/{} 全量、provider/providers/force 透传；非法字段 400；未实现 501', { timeout: 60_000 }, async () => {
+  // 1) mock 提供实现：空 body / {} / 单选 / 多选 + force 透传。
+  const calls: Array<{ providers?: string[]; force?: boolean } | undefined> = []
+  const refreshResult = {
+    providers: [],
+    aborted: false,
+    errors: {},
+    models: [{ provider: 'faux', modelId: 'm', available: true }],
+    providerCatalog: [],
+  }
+  const kernel = makeKernelWithRefresh(async (options) => {
+    calls.push(options)
+    return refreshResult
+  })
+  const { handler } = makeHandlers(kernel)
+
+  const empty = await call(handler, 'POST', '/api/models/refresh', { raw: '' })
+  assert.equal(empty.status, 200)
+  assert.deepEqual(empty.body, refreshResult)
+  assert.deepEqual(calls.at(-1), {})
+
+  const emptyObj = await call(handler, 'POST', '/api/models/refresh', { body: {} })
+  assert.equal(emptyObj.status, 200)
+  assert.deepEqual(calls.at(-1), {})
+
+  const single = await call(handler, 'POST', '/api/models/refresh', { body: { provider: 'magpie' } })
+  assert.equal(single.status, 200)
+  assert.deepEqual(calls.at(-1), { providers: ['magpie'] })
+
+  const multi = await call(handler, 'POST', '/api/models/refresh', { body: { providers: ['magpie', 'radius'], force: false } })
+  assert.equal(multi.status, 200)
+  assert.deepEqual(calls.at(-1), { providers: ['magpie', 'radius'], force: false })
+
+  const badProvider = await call(handler, 'POST', '/api/models/refresh', { body: { provider: 42 } })
+  assert.equal(badProvider.status, 400)
+  assert.equal(badProvider.body.error.code, 'validation_error')
+
+  const badForce = await call(handler, 'POST', '/api/models/refresh', { body: { force: 'yes' } })
+  assert.equal(badForce.status, 400)
+
+  const unknownKey = await call(handler, 'POST', '/api/models/refresh', { body: { unknown: 1 } })
+  assert.equal(unknownKey.status, 400)
+
+  const badJson = await call(handler, 'POST', '/api/models/refresh', { raw: '{oops' })
+  assert.equal(badJson.status, 400)
+
+  // 2) mock 不提供实现：501 not_implemented。
+  const bare = makeHandlers(makeKernelWithRefresh())
+  const notImpl = await call(bare.handler, 'POST', '/api/models/refresh', { body: {} })
+  assert.equal(notImpl.status, 501)
+  assert.equal(notImpl.body.error.code, 'not_implemented')
 })
 
 // ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ import type {
   NodeInfo,
   NodeIssuedToken,
   ModelProviderSummary,
+  ModelProvidersRefreshResult,
   PluginConfigFieldSchema,
   PluginSummary,
   ProviderConfig,
@@ -185,6 +186,15 @@ export interface KernelRuntimeLike {
   search(query: string): Promise<SearchHit[]> | SearchHit[]
   listModels(): Promise<unknown[]> | unknown[]
   listModelProviders(): Promise<ModelProviderSummary[]> | ModelProviderSummary[]
+  /**
+   * 动态模型目录刷新（POST /api/models/refresh）：目标动态供应商 allowNetwork
+   * 拉取最新目录并持久化 models-store.json。可选端口：runtime 未提供时 501。
+   */
+  refreshModels?(options?: {
+    providers?: string[]
+    allowNetwork?: boolean
+    force?: boolean
+  }): Promise<ModelProvidersRefreshResult>
 
   // ---------------------------------------------------------------------------
   // 跨平台节点管理（EnvFabric / nodes / env exec）

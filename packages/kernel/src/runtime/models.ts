@@ -25,17 +25,21 @@ import {
   type Model,
   type ModelInputModality,
   type Models,
+  type ModelsStore,
   type Provider,
 } from '@earendil-works/pi-ai'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
-import type { ModelProviderSummary, ProviderConfig } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import { HelmError, type ModelProviderSummary, type ProviderConfig } from '@helm/protocol'
 
 export interface ModelGatewayOptions {
   /** providers.json 条目。 */
   providers: ProviderConfig[]
   /** providerId -> API Key（宿主 credentials 解析结果）。 */
   apiKeys: () => Record<string, string>
+  /** 动态模型目录持久缓存（models-store.json）；缺省纯内存（不落盘）。 */
+  modelsStore?: ModelsStore
+  /** 运行时动态注册的额外供应商（插件注册；凭据注入同内置供应商）。 */
+  extraProviders?: Provider[]
 }
 
 export interface ModelCatalogEntry {
@@ -106,12 +110,18 @@ function buildCompatProvider(config: ProviderConfig, apiKey: string | undefined)
 /**
  * 构建当前 Models 集合。providers.json / credentials 变化后由宿主重建，
  * 通过 HarnessOptions.models 的 getter 形式热生效（无需重开 harness）。
+ * 注册顺序：内置 provider -> 运行时动态注册（extraProviders）-> 自定义兼容网关；
+ * 后注册者覆盖同 id 先注册者（与 reloadModels 的冲突前置校验配套，这里不重复拦截）。
  */
 export function buildModels(options: ModelGatewayOptions): Models {
-  const models = createModels()
+  const models = createModels(options.modelsStore ? { modelsStore: options.modelsStore } : undefined)
   const keys = options.apiKeys()
 
   for (const provider of builtinProviders()) {
+    models.setProvider(withInjectedKey(provider, keys[provider.id]))
+  }
+
+  for (const provider of options.extraProviders ?? []) {
     models.setProvider(withInjectedKey(provider, keys[provider.id]))
   }
 
@@ -138,8 +148,15 @@ function withInjectedKey(provider: Provider, injectedKey: string | undefined): P
   return { ...provider, auth: { ...provider.auth, apiKey } }
 }
 
-/** 显式投影公开元数据，绝不序列化 SDK provider 内的 headers 或认证回调。 */
-export function listModelProviders(models: Models): ModelProviderSummary[] {
+/**
+ * 显式投影公开元数据，绝不序列化 SDK provider 内的 headers 或认证回调。
+ * dynamic：实现了 refreshModels 的供应商支持远端目录刷新；
+ * baseUrl / pluginId：非机密展示与通用插件归属挂载（运行时注册表传入）。
+ */
+export function listModelProviders(
+  models: Models,
+  providerOwners?: ReadonlyMap<string, string>,
+): ModelProviderSummary[] {
   return models.getProviders().map((provider) => ({
     id: provider.id,
     name: provider.name,
@@ -148,6 +165,9 @@ export function listModelProviders(models: Models): ModelProviderSummary[] {
       ...(provider.auth.apiKey ? [{ type: 'api_key' as const, label: provider.auth.apiKey.name }] : []),
       ...(provider.auth.oauth ? [{ type: 'oauth' as const, label: provider.auth.oauth.loginLabel ?? provider.auth.oauth.name }] : []),
     ],
+    ...(typeof provider.refreshModels === 'function' ? { dynamic: true } : {}),
+    ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
+    ...(providerOwners?.get(provider.id) ? { pluginId: providerOwners.get(provider.id) } : {}),
   })).sort((a, b) => a.name.localeCompare(b.name))
 }
 

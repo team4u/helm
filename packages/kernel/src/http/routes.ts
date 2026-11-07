@@ -38,8 +38,10 @@ import {
   jsonOk,
   MAX_WORKFLOW_BODY_BYTES,
   readBinaryBodyWithLimit,
+  readBody,
   readJsonBody,
   readJsonValue,
+  DEFAULT_MAX_BODY_BYTES,
   type JsonRedactor,
 } from './http-utils.js'
 import { decodeSegment, findPluginRoute } from './route-match.js'
@@ -386,6 +388,16 @@ async function route(
   }
 
   // ---- models / skills -------------------------------------------------------
+  if (head === 'models' && second === 'refresh' && third === undefined && method === 'POST') {
+    // 空 body / {} 均合法（刷新全部）；provider 单选、providers 多选、force 可选。
+    const raw = await readOptionalJsonBody(ctx.request)
+    const options = parseModelsRefreshBody(raw)
+    if (kernel.refreshModels === undefined) {
+      throw new HelmError('not_implemented', '当前 runtime 未提供动态模型目录刷新', 501)
+    }
+    const result = await kernel.refreshModels(options)
+    return jsonOk(redactor, result)
+  }
   if (head === 'models' && second === 'providers' && third === undefined && method === 'GET') {
     return jsonOk(redactor, await kernel.listModelProviders())
   }
@@ -606,8 +618,50 @@ async function dispatchPluginRoute(
 // ---------------------------------------------------------------------------
 
 /** providers/credentials 变更后热重载模型清单；未提供端口的 runtime 跳过。 */
-async function reloadModels(kernel: KernelRuntimeLike): Promise<void> {
-  await kernel.reloadModels?.()
+/** POST /api/models/refresh body：空/{} 合法；provider 单选、providers 多选、force 可选。 */
+function parseModelsRefreshBody(raw: unknown): { providers?: string[]; force?: boolean } {
+  if (raw === null || raw === undefined) return {}
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ValidationError('models refresh 请求体需为 JSON 对象（可为空）')
+  }
+  const body = raw as Record<string, unknown>
+  rejectUnknownKeys(body, new Set(['provider', 'providers', 'force']))
+  let providers: string[] | undefined
+  const single = body['provider']
+  if (single !== undefined) {
+    if (typeof single !== 'string' || single === '') {
+      throw new ValidationError('provider 需为非空字符串')
+    }
+    providers = [single]
+  }
+  const multi = body['providers']
+  if (multi !== undefined) {
+    if (!Array.isArray(multi) || multi.some((p) => typeof p !== 'string' || p === '')) {
+      throw new ValidationError('providers 需为非空字符串数组')
+    }
+    providers = providers !== undefined ? [...providers, ...(multi as string[])] : [...(multi as string[])]
+  }
+  let force: boolean | undefined
+  const rawForce = body['force']
+  if (rawForce !== undefined) {
+    if (typeof rawForce !== 'boolean') throw new ValidationError('force 需为 boolean')
+    force = rawForce
+  }
+  return { ...(providers !== undefined ? { providers } : {}), ...(force !== undefined ? { force } : {}) }
+}
+
+/** 读取可选 JSON body：空 body 返回 undefined（合法未指定），非法 JSON 仍 400。 */
+async function readOptionalJsonBody(request: Request): Promise<unknown> {
+  const raw = await readBody(request, DEFAULT_MAX_BODY_BYTES)
+  if (raw.length === 0) return undefined
+  try {
+    return JSON.parse(new TextDecoder('utf8', { fatal: true }).decode(raw))
+  } catch {
+    throw new HelmError('invalid_input', '请求体不是合法 JSON', 400)
+  }
+}
+
+async function reloadModels(kernel: KernelRuntimeLike): Promise<void> {  await kernel.reloadModels?.()
 }
 
 /** 节点 ID 路径段：字母数字开头，可含 . _ -（与 issue 校验同一规则）。 */
