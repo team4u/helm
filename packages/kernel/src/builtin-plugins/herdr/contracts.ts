@@ -37,20 +37,6 @@ export interface HerdrPluginDependencies {
   transport?: HerdrTransport
 }
 
-/**
- * 主插件 → 宿主桥（插件文件内组合，非 protocol 公共契约）：
- * - lookupProfile / listProfileIds：spawn 路由与 resume 校验（真实 Profile 服务）；
- * - getConversation：父会话 cwd 读取（错误如实上抛，不吞）；
- * - createAskResult / cancelAsk：AskDoc 宿主桥（cancel 区分真实销单成功与 404）。
- */
-export interface HerdrHostBridge {
-  lookupProfile(id: string): Promise<Profile | undefined>
-  listProfileIds(): string[]
-  getConversationCwd(id: number): string | undefined
-  createAskResult(spec: CreateAskSpecLike): Promise<CreateAskResultLike>
-  cancelAsk(askId: string, reason: 'cancelled' | 'superseded'): Promise<void>
-}
-
 /** ctx.host.createAsk 的最小形状（与 AskCreateSpec/AskResult 对齐）。 */
 export interface CreateAskSpecLike {
   id?: string

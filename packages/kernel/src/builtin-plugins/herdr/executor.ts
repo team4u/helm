@@ -20,6 +20,7 @@
  * - 所有长 RPC 携带 request.signal。
  */
 
+import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helm/protocol'
 import type { CreateAskResultLike, CreateAskSpecLike, HerdrPluginDependencies, HerdrTarget } from './contracts.js'
 import { validateOrThrow } from '../../plugins/schema.js'
@@ -78,8 +79,10 @@ export class HerdrExecutor {
   /** pane scopeKey -> 进行中的 closePane promise（abort 双路径单飞）。 */
   private readonly activeCloses = new Map<string, Promise<void>>()
 
-  /** paneId -> abort 监听器释放函数（成功/失败/中止后移除）。 */
-  private readonly abortListeners = new Map<string, () => void>()
+  /** env 只留在内存；Gate 与续接复用建窗时的实际环境，绝不持久化机密。 */
+  private readonly paneEnvs = new Map<string, Record<string, string>>()
+  private readonly blockedTasks = new Map<string, Promise<boolean>>()
+  private readonly unstartedPanes = new Set<string>()
   /** 本机冻结连接目标（启用时注入）。 */
   private readonly localTarget: HerdrTarget
 
@@ -141,12 +144,10 @@ export class HerdrExecutor {
       existing = await this.createManagedPane(request, routing, this.localTargetOf(), cwd)
     }
     const pane = existing
-    const routingKey = routing.profileId ?? routing.kind
     this.registry.update(machineOf(pane), pane.paneId, {
       routing: { kind: routing.kind, ...(routing.profileId !== undefined ? { profileId: routing.profileId } : {}) },
     })
-    await this.startAgentAndWaitReady(pane.target, pane.paneId, routing, request.signal)
-    return this.driveTask(request, pane, routingKey)
+    return this.runManagedTask(request, pane, routing)
   }
 
   /** 父会话 cwd：宿主 getConversation 错误如实上抛（不存在即 spawn 缺陷输入）。 */
@@ -194,7 +195,9 @@ export class HerdrExecutor {
       createdAt: Date.now(),
     }
     this.registry.add(managed)
-    request.onResolved?.(this.executionInfoOf(managed))
+    const key = this.paneKey(managed)
+    this.paneEnvs.set(key, this.buildPaneEnv(request.parentConversationId, window.effectiveCwd, routing, window.target))
+    this.unstartedPanes.add(key)
     return managed
   }
 
@@ -268,7 +271,7 @@ export class HerdrExecutor {
       // 两步中途失败：尽力关闭刚创建的 workspace（回收自有资源）；回收失败
       // 显式报告（附加诊断），不掩盖原始错误也不留无主窗格不报。
       try {
-        await this.transport.call(target, 'workspace.close', { workspace_id: created.workspaceId })
+        await this.transport.call(target, 'workspace.close', { workspace_id: created.workspaceId }, { timeoutMs: 5_000 })
       } catch (cleanupError) {
         this.host.notify(
           'Herdr 建窗失败回收未竟',
@@ -337,7 +340,7 @@ export class HerdrExecutor {
   /** 权威 agent.get（seq 唯一可信来源）。 */
   private async agentGet(target: HerdrTarget, paneId: string, signal?: AbortSignal): Promise<HerdrAgentInfo> {
     return parseAgentResult(
-      await this.transport.call(target, 'agent.get', { target: paneId }, { signal }),
+      await this.transport.call(target, 'agent.get', { target: paneId }, { signal, timeoutMs: 5_000 }),
       'agent.get',
       'agent_info',
     )
@@ -405,119 +408,88 @@ export class HerdrExecutor {
     return `${prompt}\n${handoff}`
   }
 
-  private async driveTask(
-    request: AgentSpawnRequest,
-    pane: ManagedPane,
-    routingKey: string,
-  ): Promise<unknown> {
-    const target = targetOf(pane)
-    const signal = signalOf(request)
-    const paneId = pane.paneId
-    const registry = this.registry
-
-    /** abort 即触发：销单关联 Ask 并尽力关闭自有 PTY（与 settle 路径单飞复用）。 */
-    let abortCleanup: Promise<never> | undefined
-    const waitAbort = <T>(p: Promise<T>): Promise<T> => {
-      if (abortCleanup === undefined) {
-        abortCleanup = new Promise<never>((_, reject) => {
-          const onAbort = () => {
-            reject(new HelmError('aborted', `pane ${paneId} 执行被取消（request.signal abort）`, 499, { paneId }))
-            void this.abortCleanup(pane)
-          }
-          if (signal.aborted) onAbort()
-          else signal.addEventListener('abort', onAbort, { once: true })
-          // 成功/失败路径必须移除监听（不留悬挂 listener）。
-          this.abortListeners.set(paneId, () => signal.removeEventListener('abort', onAbort))
-        })
-      }
-      return Promise.race([p, abortCleanup])
+  /** 任务启动、首轮、自愈均在同一取消与错误收尾边界内。 */
+  private async runManagedTask(request: AgentSpawnRequest, pane: ManagedPane, start?: SpawnRouting): Promise<unknown> {
+    let cleanup: Promise<void> | undefined
+    let rejectAbort!: (error: Error) => void
+    const aborted = new Promise<never>((_, reject) => { rejectAbort = reject })
+    const onAbort = () => {
+      cleanup ??= this.closePane(pane, 'cancelled')
+      void cleanup.catch(() => {})
+      rejectAbort(new HelmError('aborted', `pane ${pane.paneId} 执行已取消`, 499))
     }
-
+    request.signal?.addEventListener('abort', onAbort, { once: true })
+    if (request.signal?.aborted) onAbort()
+    const task = async () => {
+      request.signal?.throwIfAborted()
+      request.onResolved?.(this.executionInfoOf(pane))
+      if (start !== undefined) {
+        const info = await this.startAgentAndWaitReady(pane.target, pane.paneId, start, request.signal)
+        this.unstartedPanes.delete(this.paneKey(pane))
+        await this.waitUntilSettled(request, pane, info)
+      }
+      return this.driveTask(request, pane)
+    }
     try {
-      await this.project(pane, `run:${pane.agentName}`)
-
-      // 首轮 prompt --wait until done/idle/blocked。
-      let info = await waitAbort(this.promptAndWait(target, pane, this.taskPrompt(request, pane)))
-      let duplicateBlockedAttempts = 0
-
-      // blocked 审批桥循环。
-      while (info.agentStatus === 'blocked') {
-        const handled = await waitAbort(this.bridgeBlocked(request, pane, info))
-        if (!handled) {
-          // 人类取消：关闭本插件自有 pane 并中止（不批准）。
-          await this.closePane(pane, 'cancelled')
-          throw new HelmError('aborted', `人类取消了 pane ${paneId} 的审批（AskDoc cancelled）`, 409, { paneId })
-        }
-        // 答复后终端状态可能延迟推进：agent.wait 同 seq blocked 时退避等待真实进展。
-        for (;;) {
-          info = parseAgentResult(
-            await waitAbort(
-              this.transport.call(
-                target,
-                'agent.wait',
-                { target: paneId, until: ['done', 'idle', 'blocked'] },
-                { signal },
-              ),
-            ),
-            'agent.wait',
-            'agent_info',
-          )
-          if (info.agentStatus !== 'blocked') break
-          const latestSeq = (await waitAbort(this.authoritySeq(target, paneId))) ?? 0
-          if (info.stateChangeSeq > latestSeq) break
-          duplicateBlockedAttempts += 1
-          await waitAbort(backoffForDuplicateBlocked(signal, duplicateBlockedAttempts))
-        }
-        if (info.agentStatus === 'blocked') continue
-        break
+      return await Promise.race([aborted, task()])
+    } catch (error) {
+      if (request.signal?.aborted || (error as { code?: string }).code === 'aborted') {
+        cleanup ??= this.closePane(pane, 'cancelled')
+        await cleanup
+        throw new HelmError('aborted', `pane ${pane.paneId} 执行已取消`, 499)
       }
-
-      if (info.agentStatus !== 'done' && info.agentStatus !== 'idle') {
-        // working 卡死/unknown：显式失败，保留现场。
-        await this.markFailed(pane, `agent 终态异常：${info.agentStatus}`)
-        throw new HelmError(
-          'herdr_agent_unsettled',
-          `pane ${paneId} 未到达 done/idle（当前 ${info.agentStatus}），窗格保留供排查`,
-          502,
-          { paneId, agentStatus: info.agentStatus },
-        )
-      }
-
-      // ---- 文件交接（含一次自愈）----
-      const output = await waitAbort(this.readAndValidateOutput(request, pane))
-
-      // ---- gate（文件成功后恰好一次）----
-      if (request.gate !== undefined) await waitAbort(this.runGateFor(request, pane))
-
-      // ---- 成功：保活登记（workflowRunId 由 onWorkflowSettled 关；否则父回合关）----
-      registry.update(machineOf(pane), paneId, { outcome: 'keepalive', outputFileName: undefined })
-      return output
+      await this.markFailed(pane, error instanceof Error ? error.message : String(error))
+      const snapshot = await this.readDiagnostic(pane)
+      const failure = error as { code?: unknown; status?: unknown }
+      throw new HelmError(
+        typeof failure?.code === 'string' ? failure.code : 'herdr_execution_failed',
+        `${this.deps.redact(error instanceof Error ? error.message : String(error))}\n终端最后 40 行（脱敏）：\n${snapshot}`,
+        error instanceof HelmError ? error.status : 502,
+        { paneId: pane.paneId, snapshot },
+      )
     } finally {
-      // 释放 abort 监听器（成功/失败/abort 后均不留）。
-      this.abortListeners.get(paneId)?.()
-      this.abortListeners.delete(paneId)
-      void routingKey
+      request.signal?.removeEventListener('abort', onAbort)
     }
   }
 
+  private async driveTask(request: AgentSpawnRequest, pane: ManagedPane): Promise<unknown> {
+    await this.project(pane, `run:${pane.agentName}`)
+    const info = await this.promptAndWait(pane.target, pane, this.taskPrompt(request, pane), request.signal)
+    await this.waitUntilSettled(request, pane, info)
+    const output = await this.readAndValidateOutput(request, pane)
+    if (request.gate !== undefined) await this.runGateFor(request, pane)
+    request.signal?.throwIfAborted()
+    this.registry.update(machineOf(pane), pane.paneId, { outcome: 'keepalive', outputFileName: undefined })
+    return output
+  }
 
-  /** abort 清理：销单本 pane 全部在途 Ask + 尽力关闭自有 PTY；失败仅通知。 */
-  private async abortCleanup(pane: ManagedPane): Promise<void> {
-    const removed = this.asks.paneClosed(pane.paneId, machineOf(pane))
-    for (const entry of removed) {
-      if (entry.phase === 'pending' || entry.phase === 'creating') {
-        await this.cancelAskQuietly(entry.askId, 'cancelled')
+  /** 已结算的 blocked 水位只退避；新水位交给同一审批桥。 */
+  private async waitUntilSettled(request: AgentSpawnRequest, pane: ManagedPane, initial: HerdrAgentInfo): Promise<void> {
+    let info = initial
+    let attempts = 0
+    while (info.agentStatus !== 'idle' && info.agentStatus !== 'done') {
+      request.signal?.throwIfAborted()
+      if (info.agentStatus === 'blocked') {
+        const entry = this.asks.get(machineOf(pane), pane.paneId, info.stateChangeSeq)
+        if (entry?.phase === 'settled') {
+          await backoffForDuplicateBlocked(signalOf(request), ++attempts)
+        } else {
+          if (!await this.bridgeBlocked(request, pane, info)) {
+            throw new HelmError('aborted', `人类取消了 pane ${pane.paneId} 的审批`, 409)
+          }
+          attempts = 0
+        }
+      } else if (info.agentStatus === 'unknown') {
+        throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} 状态 unknown，无法确认完成`, 502)
       }
+      info = parseAgentResult(await this.transport.call(
+        pane.target, 'agent.wait', { target: pane.paneId, until: ['idle', 'done', 'blocked'] }, { signal: request.signal },
+      ), 'agent.wait', 'agent_info')
     }
-    try {
-      await this.closePane(pane, 'cancelled')
-    } catch (error) {
-      this.host.notify(
-        'Herdr 窗格中止清理失败',
-        `pane ${pane.paneId} abort 后关闭失败：${error instanceof Error ? this.deps.redact(error.message) : String(error)}`,
-        'error',
-      )
-    }
+  }
+
+  private paneKey(pane: ManagedPane): string {
+    return JSON.stringify([pane.target, pane.paneId])
   }
 
   /** prompt --wait（含自愈追问共用）：blocked 也可能立即返回（审批桥接管）。 */
@@ -561,21 +533,19 @@ export class HerdrExecutor {
         ? begin.owner
         : this.asks.get(machineOf(pane), pane.paneId, authority.stateChangeSeq)!
     if (entry === undefined) return true
-    const settlement = this.asks.bindSettlement(entry)
-
-    await this.project(pane, `ask:${entry.askId}`)
-    const conversationId = this.host.askConversationId(request.parentConversationId)
-    let askResult: CreateAskResultLike
-    try {
-      askResult = await this.createAsk(request, pane, entry, conversationId)
-    } catch (error) {
+    if (entry.phase === 'settled') return true
+    const existing = this.blockedTasks.get(entry.askId)
+    if (existing !== undefined) return existing
+    const task = Promise.resolve().then(async () => {
+      await this.project(pane, `ask:${entry.askId}`)
+      const result = await this.createAsk(request, pane, entry, this.host.askConversationId(request.parentConversationId))
+      return this.consumeAskOutcome(request, pane, entry, result)
+    }).catch((error: unknown) => {
       this.asks.failCreate(entry)
-      settlement.settle({ status: 'superseded', answers: {} })
       throw error
-    }
-    const handled = await this.consumeAskOutcome(request, pane, entry, askResult)
-    settlement.settle({ status: askResult.status, answers: askResult.answers })
-    return handled
+    }).finally(() => this.blockedTasks.delete(entry.askId))
+    this.blockedTasks.set(entry.askId, task)
+    return task
   }
 
   /**
@@ -599,12 +569,12 @@ export class HerdrExecutor {
     })) {
       await this.cancelAskQuietly(superseded.askId, 'superseded')
     }
-    if (authority.stateChangeSeq > entry.seq || authority.agentStatus !== 'blocked') {
+    if (authority.stateChangeSeq !== entry.seq || authority.agentStatus !== 'blocked') {
       this.asks.settle(entry, { keysSent: false })
       return { id: entry.askId, status: 'superseded', answers: {} }
     }
     const snapshot = await this.readDiagnostic(pane)
-    const result = await this.host.createAsk({
+    const pending = this.host.createAsk({
       id: entry.askId,
       conversationId,
       ownerPluginId: 'builtin:herdr',
@@ -632,7 +602,33 @@ export class HerdrExecutor {
       expectedStateSeq: entry.seq,
     })
     this.asks.markPending(entry)
-    return result
+    // createAsk 返回的是终态 promise；其入库可晚于事件销单的 404。
+    // 在该 promise 结束前持续复核并销单，远端同样无需依赖本机 socket 事件。
+    const monitor = new AbortController()
+    const result = pending.finally(() => monitor.abort())
+    const polling = (async () => {
+      while (!monitor.signal.aborted) {
+        try { await delay(100, undefined, { signal: monitor.signal }) }
+        catch (error) { if (monitor.signal.aborted) return; throw error }
+        if (request.signal?.aborted) {
+          await this.cancelAskQuietly(entry.askId, 'cancelled')
+          continue
+        }
+        const current = await this.agentGet(targetOf(pane), pane.paneId, monitor.signal)
+        if (current.stateChangeSeq !== entry.seq || current.agentStatus !== 'blocked') {
+          this.asks.observeAuthority({ machine: machineOf(pane), paneId: pane.paneId, seq: current.stateChangeSeq, status: current.agentStatus })
+          await this.cancelAskQuietly(entry.askId, 'superseded')
+        }
+      }
+    })()
+    try {
+      return await Promise.race([result, polling.then(() => result)])
+    } finally {
+      monitor.abort()
+      await polling.catch((error: unknown) => {
+        if ((error as { code?: string }).code !== 'herdr_aborted') throw error
+      })
+    }
   }
 
   /** 消费终态：answered 且权威 seq 未推进 -> 复核 -> 一次性 send_keys；cancelled -> false。 */
@@ -689,20 +685,6 @@ export class HerdrExecutor {
     return true
   }
 
-  /** 权威 seq（agent.get 现查）+ observeAuthority 收尾（供 wait 重复 blocked 判断）。 */
-  private async authoritySeq(target: HerdrTarget, paneId: string, machine?: string): Promise<number | undefined> {
-    const info = await this.agentGet(target, paneId)
-    for (const superseded of this.asks.observeAuthority({
-      paneId,
-      machine,
-      seq: info.stateChangeSeq,
-      status: info.agentStatus,
-    })) {
-      await this.cancelAskQuietly(superseded.askId, 'superseded')
-    }
-    return info.stateChangeSeq
-  }
-
   // ------------------------------------------------------------------
   // 文件交接与 gate
   // ------------------------------------------------------------------
@@ -738,7 +720,7 @@ export class HerdrExecutor {
       }
       try {
         validateOrThrow(request.schema, parsed, '交接文件内容未通过 JSON Schema 校验', 'schema_validation_failed', 502)
-        return { ok: true, value: parsed }
+        return { ok: true, value: JSON.parse(this.deps.redact(JSON.stringify(parsed))) as unknown }
       } catch (err) {
         if (err instanceof HelmError && err.code === 'schema_validation_failed') {
           return { ok: false, reason: err.message, recoverable: true }
@@ -776,26 +758,8 @@ export class HerdrExecutor {
     const text =
       `你上一轮未按要求交付。${reason}。请立即将最终结果写入 ${pane.effectiveCwd}/.helm/${pane.outputFileName}` +
       (request.schema !== undefined ? `（满足 Schema 的单个 JSON 值）。\nJSON Schema: ${redactSchemaText(request.schema, this.deps.redact)}` : '（Markdown 全文）。')
-    let info = await this.promptAndWait(target, pane, text, request.signal)
-    let attempts = 0
-    while (info.agentStatus === 'blocked') {
-      const handled = await this.bridgeBlocked(request, pane, info)
-      if (!handled) {
-        throw new HelmError('aborted', `人类取消了 pane ${pane.paneId} 的自愈审批（AskDoc cancelled）`, 409, {
-          paneId: pane.paneId,
-        })
-      }
-      info = await this.transport.call(
-        target,
-        'agent.wait',
-        { target: pane.paneId, until: ['done', 'idle', 'blocked'] },
-        { signal: request.signal },
-      ).then((r) => parseAgentResult(r, 'agent.wait', 'agent_info'))
-      if (info.agentStatus !== 'blocked') break
-      attempts += 1
-      if (attempts > 5) break
-      await backoffForDuplicateBlocked(signalOf(request), attempts)
-    }
+    const info = await this.promptAndWait(target, pane, this.deps.redact(text), request.signal)
+    await this.waitUntilSettled(request, pane, info)
   }
 
   /** agent.read recent_unwrapped 40 行脱敏快照（诊断专用）。 */
@@ -807,7 +771,7 @@ export class HerdrExecutor {
           source: 'recent_unwrapped',
           lines: 40,
           format: 'text',
-        }),
+        }, { timeoutMs: 5_000 }),
       )
       return this.deps.redact(read.text).slice(-4_000)
     } catch (error) {
@@ -817,8 +781,8 @@ export class HerdrExecutor {
 
   /** gate：文件成功后恰好一次；本机 runLocalGate，远端 transport.runGate（同一实际 cwd 与路由 env）。 */
   private async runGateFor(request: AgentSpawnRequest, pane: ManagedPane): Promise<void> {
-    const routing = this.routingForGate(pane)
-    const env = this.buildPaneEnv(request.parentConversationId, pane.effectiveCwd, routing, targetOf(pane))
+    const env = this.paneEnvs.get(this.paneKey(pane))
+    if (env === undefined) throw new HelmError('herdr_context_unavailable', '任务环境已丢失，无法在同一环境执行 Gate', 409)
     const gate: { ok: boolean; output: string } =
       machineOf(pane) === undefined
         ? await this.deps.runLocalGate(request.gate!, {
@@ -828,7 +792,7 @@ export class HerdrExecutor {
             env,
           })
         : await this.transport.runGate(targetOf(pane), request.gate!, pane.effectiveCwd, request.signal, env)
-    request.onGateResult?.(gate)
+    request.onGateResult?.({ ...gate, output: this.deps.redact(gate.output) })
     if (!gate.ok) {
       await this.markFailed(pane, `gate 失败：${request.gate}`)
       throw new HelmError(
@@ -838,11 +802,6 @@ export class HerdrExecutor {
         { output: this.deps.redact(gate.output).slice(-4000) },
       )
     }
-  }
-
-  /** gate 路由：优先登记的 pane.routing（真实 Profile env），缺省空路由。 */
-  private routingForGate(pane: ManagedPane): SpawnRouting {
-    return { kind: '', args: [], profileEnv: {}, ...(machineOf(pane) !== undefined ? { machine: machineOf(pane) } : {}) }
   }
 
   // ------------------------------------------------------------------
@@ -905,7 +864,8 @@ export class HerdrExecutor {
       )
     }
     // 路由：缺 agentType 沿用登记路由；显式给出且 kind 不一致显式拒绝。
-    const routing = await this.resolveResumeRouting(request, pane)
+    assertNoUnsupportedOverrides(request.model, request.effort)
+    await this.resolveResumeRouting(request, pane)
     if (request.cwd !== undefined && request.cwd !== pane.effectiveCwd) {
       throw new HelmError(
         'resume_cwd_conflict',
@@ -927,7 +887,7 @@ export class HerdrExecutor {
     request.onResolved?.(this.executionInfoOf(updated))
     // request.cwd 缺省代表沿用窗格实际 cwd（不重开窗、不重建 env tab）。
     // 续接不重跑 agent.start（窗格已有 agent）；直接进入投递-审批-交接循环。
-    return this.driveTask(request, updated, routing.profileId ?? routing.kind)
+    return this.runManagedTask(request, updated)
   }
 
   /** resume 路由解析：显式 agentType 校验 kind 一致；缺省沿用 pane.routing。 */
@@ -951,7 +911,7 @@ export class HerdrExecutor {
         { resume: request.resume, agentType: request.agentType },
       )
     }
-    if (pane.routing.kind !== '' && routing.kind !== pane.routing.kind) {
+    if (routing.kind !== pane.routing.kind || routing.profileId !== pane.routing.profileId) {
       throw new HelmError(
         'resume_kind_conflict',
         `resume 显式 agentType kind '${routing.kind}' 与窗格 agent kind '${pane.routing.kind}' 不一致，拒绝静默改型`,
@@ -959,7 +919,7 @@ export class HerdrExecutor {
         { resume: request.resume, requestKind: routing.kind, paneKind: pane.routing.kind },
       )
     }
-    if (routing.machine !== undefined && machineOf(pane) !== undefined && routing.machine !== machineOf(pane)) {
+    if (routing.machine !== machineOf(pane)) {
       throw new HelmError(
         'resume_machine_conflict',
         `resume 显式 machine '${routing.machine}' 与窗格目标机 '${machineOf(pane)}' 不一致，拒绝跨机续接`,
@@ -995,19 +955,24 @@ export class HerdrExecutor {
     const closing = (async () => {
       const target = targetOf(pane)
       try {
-        if (pane.workspaceId !== undefined) {
-          await assertOkResult(
-            await this.transport.call(target, 'workspace.close', {
-              workspace_id: pane.workspaceId,
-              close_group: true,
-            }),
-            'workspace.close',
-          )
+        let owned = false
+        try {
+          const authority = await this.agentGet(target, pane.paneId)
+          owned = authority.name === pane.agentName
+          if (authority.name === undefined && this.unstartedPanes.has(this.paneKey(pane))) owned = true
+        } catch (error) {
+          if ((error as { code?: string }).code !== 'agent_not_found') throw error
+          owned = this.unstartedPanes.has(this.paneKey(pane))
+        }
+        for (const entry of this.asks.paneClosed(pane.paneId, machineOf(pane))) {
+          await this.cancelAskQuietly(entry.askId, 'superseded')
+        }
+        if (owned) {
+          // Herdr 关闭最后一个 tab 时自行回收空 workspace。只关闭本插件创建的
+          // tab，避免关闭后来被人类加入的 pane 或关联工作区。
+          await assertOkResult(await this.transport.call(target, 'tab.close', { tab_id: pane.tabId }, { timeoutMs: 5_000 }), 'tab.close')
         } else {
-          await assertOkResult(
-            await this.transport.call(target, 'tab.close', { tab_id: pane.tabId }),
-            'tab.close',
-          )
+          this.host.notify('Herdr 窗格归属已变化', `pane ${pane.paneId} 已不属于 ${pane.agentName}，放弃清理`, 'info')
         }
       } catch (error) {
         this.host.notify(
@@ -1016,8 +981,6 @@ export class HerdrExecutor {
           'error',
         )
         throw error
-      } finally {
-        this.activeCloses.delete(key)
       }
       if (options.volatileMark === true) {
         // 服务 stop 路径：持久 doc 句柄已随停用失效，仅内存标记（对账下周期重建）。
@@ -1026,12 +989,14 @@ export class HerdrExecutor {
         this.registry.update(machineOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
       }
       this.projector.forget(pane.paneId, machineOf(pane))
+      this.paneEnvs.delete(this.paneKey(pane))
+      this.unstartedPanes.delete(this.paneKey(pane))
       for (const removed of this.asks.paneClosed(pane.paneId, machineOf(pane))) {
         if (removed.phase === 'pending' || removed.phase === 'creating') {
           await this.cancelAskQuietly(removed.askId, 'superseded')
         }
       }
-    })()
+    })().finally(() => this.activeCloses.delete(key))
     this.activeCloses.set(key, closing)
     return closing
   }

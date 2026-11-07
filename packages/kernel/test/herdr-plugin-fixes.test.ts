@@ -600,15 +600,13 @@ test('默认 transport：生产工厂真实注入执行器，经真实 UDS wire 
 // 2. 冻结连接配置 + 事件/命令一致
 // ---------------------------------------------------------------------------
 
-test('冻结连接：session 优先且全部调用（命令/事件/对账/清理）走同一 target', { timeout: 60_000 }, async () => {
-  const env = await makeEnv({ config: { session: 'alpha', socketPath: '/ignored.sock' } })
+test('冻结连接：显式 socket 优先且全部调用（命令/事件/对账/清理）走同一 target', { timeout: 60_000 }, async () => {
+  const env = await makeEnv({ config: { session: 'alpha', socketPath: '/explicit.sock' } })
   try {
     scriptSuccess(env, 'frozen-ok')
     await spawnDirect(env, { agentType: 'herdr:agy' })
     for (const call of env.transport.calls) {
-      if (call.method === 'events.subscribe' || call.method === 'session.snapshot') {
-        assert.deepEqual(call.target, { session: 'alpha' }, `${call.method} 冻结 session`)
-      }
+      assert.deepEqual(call.target, { socketPath: '/explicit.sock' }, `${call.method} 复用冻结路径`)
     }
   } finally {
     await env.close()
@@ -682,7 +680,7 @@ test('启动对账归属精确：helm-wf-abc 不认领 helm-wf-abcde（放弃所
   docs.set('builtin:herdr:managed', {
     version: 1,
     panes: [
-      { paneId: 'w:p1', tabId: 'w:t1', effectiveCwd: '/tmp/a', agentName: 'helm-wf-abc', parentConversationId: 1, outcome: 'running', createdAt: 1 },
+      { target: {}, routing: { kind: 'agy' }, paneId: 'w:p1', tabId: 'w:t1', effectiveCwd: '/tmp/a', agentName: 'helm-wf-abc', parentConversationId: 1, outcome: 'running', createdAt: 1 },
     ],
   })
   const backend = new FakeBackend()
@@ -717,8 +715,8 @@ test('启动对账：真正 working/blocked 保留并报告；已结束 keepaliv
   docs.set('builtin:herdr:managed', {
     version: 1,
     panes: [
-      { paneId: 'w:p1', tabId: 'w:t1', effectiveCwd: '/tmp/a', agentName: 'helm-wf-busy', parentConversationId: 1, outcome: 'running', createdAt: 1 },
-      { paneId: 'w:p2', tabId: 'w:t2', effectiveCwd: '/tmp/b', agentName: 'helm-wf-old', parentConversationId: 1, outcome: 'keepalive', createdAt: 1 },
+      { target: {}, routing: { kind: 'agy' }, paneId: 'w:p1', tabId: 'w:t1', effectiveCwd: '/tmp/a', agentName: 'helm-wf-busy', parentConversationId: 1, outcome: 'running', createdAt: 1 },
+      { target: {}, routing: { kind: 'agy' }, paneId: 'w:p2', tabId: 'w:t2', effectiveCwd: '/tmp/b', agentName: 'helm-wf-old', parentConversationId: 1, outcome: 'keepalive', createdAt: 1 },
     ],
   })
   const backend = new FakeBackend()
@@ -1133,4 +1131,194 @@ test('stop 清理远端可回收 pane（不再整段跳过 remote）', { timeout
   } finally {
     await env.close()
   }
+})
+
+// 主审按生产调用链补验，fixture 捕获真实参数并模拟权威状态变化。
+test('首轮 prompt 带 signal；启动失败和输出 I/O 失败释放 liveTasks 并保留 failed 现场', { timeout: 60_000 }, async () => {
+  for (const failure of ['agent.start', 'readOutput', 'none']) {
+    const env = await makeEnv()
+    try {
+      scriptSuccess(env, 'ok')
+      const controller = new AbortController()
+      const original = env.transport.call.bind(env.transport)
+      let promptSignal: AbortSignal | undefined
+      const transport: HerdrTransport = env.transport
+      transport.call = async (target, method, params, options) => {
+        if (method === failure) throw new HelmError('herdr_io', 'I/O broken', 502)
+        if (method === 'agent.prompt') promptSignal = options?.signal
+        return original(target, method, params)
+      }
+      if (failure === 'readOutput') transport.readOutput = async () => { throw new HelmError('herdr_io', 'read broken', 502) }
+      const pending = spawnDirect(env, { agentType: 'herdr:pi', signal: controller.signal })
+      if (failure === 'none') {
+        await pending
+        assert.ok(promptSignal, '首轮 prompt 必须可取消')
+      } else {
+        await assert.rejects(pending, { code: 'herdr_io' })
+        const list = await env.host.invokeAction('builtin:herdr', 'list', {}) as { panes: Array<{ outcome: string }> }
+        assert.equal(list.panes[0]?.outcome, 'failed')
+        await env.host.disable('builtin:herdr')
+        assert.equal([...env.transport.tabs.values()].some((tab) => tab.closed), false, '失败现场保留')
+      }
+    } finally { await env.close() }
+  }
+})
+
+test('Gate 沿用任务实际 env，managed/stash 高于 Profile，resume 不丢 Profile env', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    env.profiles.set('env-pi', {
+      id: 'env-pi', name: 'env pi', description: '', model: '',
+      runtime: { kind: 'herdr', agent: 'pi', env: { CUSTOM_VALUE: 'profile-value', HELM_CWD: '/wrong' } },
+    } as Profile)
+    scriptSuccess(env, 'ok')
+    await spawnDirect(env, { agentType: 'env-pi', gate: 'check' })
+    const taskEnv = env.transport.calls.find((call) => call.method === 'tab.create')!.params['env']
+    assert.deepEqual(env.gateLog[0]?.env, taskEnv)
+    const paneId = [...env.transport.panes.keys()][0]!
+    await spawnDirect(env, { resume: paneId, gate: 'check again' })
+    assert.deepEqual(env.gateLog[1]?.env, taskEnv)
+  } finally { await env.close() }
+})
+
+test('启动 blocked 先审批后 prompt，不向审批界面直接投递任务', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    scriptSuccess(env, 'after-startup')
+    const original = env.transport.call.bind(env.transport)
+    const transport: HerdrTransport = env.transport
+    transport.call = async (target, method, params, options) => {
+      const pane = env.transport.panes.get(String(params['target']))
+      if (method === 'agent.prompt' && pane?.agentStatus === 'blocked') throw new HelmError('agent_blocked', 'must approve first', 409)
+      const result = await original(target, method, params)
+      if (method === 'agent.start') {
+        const started = env.transport.panes.get(String(params['pane_id']))!
+        started.agentStatus = 'blocked'
+        started.seq += 1
+        return { type: 'agent_started', agent: agentInfoOf(started) }
+      }
+      return result
+    }
+    const controller = new AbortController()
+    const pending = spawnDirect(env, { agentType: 'herdr:pi', signal: controller.signal })
+    const observed = pending.then((value) => ({ value }), (error: unknown) => ({ error }))
+    try {
+      await waitFor(() => env.backend.createdAsks.length === 1 || env.transport.calls.some((call) => call.method === 'agent.prompt'), 1000)
+      assert.equal(env.backend.createdAsks.length, 1, '启动审批应先于 prompt')
+      const pane = [...env.transport.panes.values()][0]!
+      env.backend.answerAsk(String(env.backend.createdAsks[0]!['id']), { id: 'answer', status: 'answered', answers: { decision: 'allow-y' } })
+      await waitFor(() => env.transport.sendKeysLog.length === 1)
+      env.transport.advancePane(pane.paneId, 'idle')
+      assert.deepEqual(await observed, { value: 'after-startup' })
+    } finally { controller.abort(); await observed }
+  } finally { await env.close() }
+})
+
+test('远端无 socket 事件时权威轮询销单；下一次 blocked seq 创建新 Ask', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  const controller = new AbortController()
+  let observed: Promise<unknown> | undefined
+  try {
+    env.transport.promptStatus = 'blocked'
+    env.transport.emit = () => {}
+    const pending = spawnDirect(env, { agentType: 'herdr:pi@remote-host', signal: controller.signal })
+    observed = pending.catch((error: unknown) => error)
+    await waitFor(() => env.backend.createdAsks.length === 1)
+    const pane = [...env.transport.panes.values()][0]!
+    const firstId = String(env.backend.createdAsks[0]!['id'])
+    pane.seq += 1
+    pane.agentStatus = 'working'
+    await waitFor(() => env.backend.cancelledAsks.some((ask) => ask.id === firstId), 1500)
+    pane.seq += 1
+    pane.agentStatus = 'blocked'
+    await waitFor(() => env.backend.createdAsks.length === 2, 1500)
+    assert.notEqual(env.backend.createdAsks[1]!['id'], firstId)
+  } finally { controller.abort(); await observed; await env.close() }
+})
+
+test('结构化交接结果脱敏；有效空终端快照通过协议边界', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    scriptSuccess(env, JSON.stringify({ answer: 'SECRET-VALUE' }))
+    const result = await spawnDirect(env, { agentType: 'herdr:pi', schema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] } })
+    assert.deepEqual(result, { answer: '[REDACTED]' })
+    const { buildSpawnPaneEnv } = await import('../src/builtin-plugins/herdr/spawn-rules.js')
+    assert.equal(buildSpawnPaneEnv({ SESSION_SECRET: 'from-stash' }, { SESSION_SECRET: 'from-profile' }, { remote: false }).env['SESSION_SECRET'], 'from-stash')
+    const { parsePaneRead } = await import('../src/builtin-plugins/herdr/rpc.js')
+    assert.equal(parsePaneRead({ type: 'pane_read', read: { pane_id: 'w1:p1', text: '' } }).text, '')
+  } finally { await env.close() }
+})
+
+test('创建 Ask 的入库晚于首次销单时，后续轮询仍销掉真实 pending Ask', { timeout: 60_000 }, async () => {
+  const backend = new FakeBackend()
+  const create = backend.createAsk.bind(backend)
+  let release!: () => void
+  let creating = false
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  backend.createAsk = async (spec) => { creating = true; await gate; return create(spec) }
+  const env = await makeEnv({ backend })
+  const controller = new AbortController()
+  let observed: Promise<unknown> | undefined
+  try {
+    scriptSuccess(env, 'terminal-completed')
+    env.transport.promptStatus = 'blocked'
+    const pending = spawnDirect(env, { agentType: 'herdr:pi@remote-host', signal: controller.signal })
+    observed = pending.catch((error: unknown) => error)
+    await waitFor(() => creating)
+    const pane = [...env.transport.panes.values()][0]!
+    pane.seq += 1
+    pane.agentStatus = 'done'
+    await waitFor(() => backend.cancelledAsks.length > 0)
+    assert.equal(backend.createdAsks.length, 0, '首次销单确实早于入库')
+    release()
+    assert.equal(await observed, 'terminal-completed')
+    assert.equal(backend.pendingAskResolvers.size, 0, '晚入库的 Ask 不能残留 pending')
+  } finally { release(); controller.abort(); await observed; await env.close() }
+})
+
+test('结算前发现 agent 身份变化时放弃关闭；worktree 只关自建 tab', { timeout: 60_000 }, async () => {
+  for (const replaced of [false, true]) {
+    const env = await makeEnv()
+    try {
+      scriptSuccess(env, 'ok')
+      await spawnDirect(env, { agentType: 'herdr:pi', isolation: 'worktree' })
+      const pane = [...env.transport.panes.values()].find((p) => p.name !== undefined)!
+      env.transport.tabs.set(`${pane.workspaceId}:human-tab`, { closed: false })
+      if (replaced) pane.name = 'human-agent'
+      await env.host.runHook('turn_settled', turnSettledOf(1))
+      assert.equal(env.transport.tabs.get(pane.tabId)?.closed, !replaced)
+      assert.equal(env.transport.tabs.get(`${pane.workspaceId}:human-tab`)?.closed, false)
+      assert.equal(env.transport.calls.some((call) => call.method === 'workspace.close'), false)
+    } finally { await env.close() }
+  }
+})
+
+test('跨机器相同 paneId 确实产生歧义，machine=local 可明确选本机', { timeout: 60_000 }, async () => {
+  const docs = new MemoryDocStore()
+  docs.set('builtin:herdr:managed', { version: 1, panes: [undefined, 'remote-host'].map((machine) => ({
+    target: machine === undefined ? {} : { machine }, routing: { kind: 'pi' },
+    paneId: 'w1:p1', tabId: 'w1:t1', effectiveCwd: '/tmp', agentName: 'helm-wf-owned',
+    parentConversationId: 1, outcome: 'failed', createdAt: 1,
+  })) })
+  const transport = new FakeTransport()
+  transport.panes.set('w1:p1', { paneId: 'w1:p1', tabId: 'w1:t1', workspaceId: 'w1', agentStatus: 'idle', seq: 1, cwd: '/tmp' })
+  const env = await makeEnv({ docs, transport })
+  try {
+    await assert.rejects(env.host.invokeAction('builtin:herdr', 'read', { paneId: 'w1:p1' }), { code: 'pane_ambiguous' })
+    for (const machine of ['local', 'remote-host']) {
+      const result = await env.host.invokeAction('builtin:herdr', 'read', { paneId: 'w1:p1', machine }) as { machine: string }
+      assert.equal(result.machine, machine)
+      assert.equal(transport.calls.findLast((call) => call.method === 'agent.read')?.target.machine, machine === 'local' ? undefined : machine)
+    }
+  } finally { await env.close() }
+})
+
+test('审批墓碑在权威 seq 回退时同样失效', { timeout: 60_000 }, async () => {
+  const { AskCoordinator } = await import('../src/builtin-plugins/herdr/asks.js')
+  const asks = new AskCoordinator(() => {})
+  const begun = asks.beginBlocked(undefined, 'w1:p1', 5)
+  assert.ok('owner' in begun)
+  asks.settle(begun.owner, { keysSent: true })
+  asks.observeAuthority({ paneId: 'w1:p1', seq: 4, status: 'blocked' })
+  assert.equal(asks.get(undefined, 'w1:p1', 5), undefined)
 })

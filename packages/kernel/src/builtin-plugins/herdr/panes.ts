@@ -10,6 +10,7 @@
  * - 区分「成功保活待结算」与「失败保留现场」（失败 pane 不参与自动清理）。
  */
 
+import { HelmError } from '@helm/protocol'
 import type { HerdrTarget } from './contracts.js'
 
 export type PaneOutcome = 'running' | 'keepalive' | 'failed' | 'settled'
@@ -54,14 +55,14 @@ export interface ManagedPane {
 export interface ManagedDoc {
   version: 1
   panes: Array<{
-    target?: { machine?: string; session?: string; socketPath?: string }
+    target: { machine?: string; session?: string; socketPath?: string }
     paneId: string
     tabId: string
     workspaceId?: string
     worktree?: { path: string; branch?: string }
     effectiveCwd: string
     agentName: string
-    routing?: PaneRouting
+    routing: PaneRouting
     parentConversationId: number
     agentId?: string
     workflowRunId?: string
@@ -74,8 +75,8 @@ export interface ManagedDoc {
 
 export const EMPTY_MANAGED_DOC: ManagedDoc = { version: 1, panes: [] }
 
-export function targetOf(pane: { target?: HerdrTarget }): HerdrTarget {
-  return pane.target === undefined ? {} : pane.target
+export function targetOf(pane: { target: HerdrTarget }): HerdrTarget {
+  return pane.target
 }
 
 /** 目标机标识（undefined = 本机）；所有归属匹配/查询统一经此取值。 */
@@ -94,16 +95,18 @@ export class PaneRegistry {
     this.mirror = mirror
     if (restored) {
       for (const pane of restored.panes) {
-        // 旧开发数据无 target/routing：本机缺省 {}（开发阶段无迁移契约）。
-        this.panes.set(scopeKey(pane.target?.machine, pane.paneId), {
-          target: pane.target ?? {},
+        if (!pane.target || !pane.routing || typeof pane.routing.kind !== 'string' || pane.routing.kind === '') {
+          throw new HelmError('herdr_managed_invalid', 'Herdr 受管记录缺少 target/routing', 500)
+        }
+        this.panes.set(scopeKey(pane.target.machine, pane.paneId), {
+          target: pane.target,
           paneId: pane.paneId,
           tabId: pane.tabId,
           workspaceId: pane.workspaceId,
           worktree: pane.worktree,
           effectiveCwd: pane.effectiveCwd,
           agentName: pane.agentName,
-          routing: pane.routing ?? { kind: '' },
+          routing: pane.routing,
           parentConversationId: pane.parentConversationId,
           agentId: pane.agentId,
           workflowRunId: pane.workflowRunId,

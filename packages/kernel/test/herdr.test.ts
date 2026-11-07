@@ -136,6 +136,11 @@ class FakeTransport implements HerdrTransport {
         const tab = this.tabs.get(tabId)
         if (!tab) throw new HelmError('tab_not_found', `no tab ${tabId}`, 404)
         tab.closed = true
+        const pane = [...this.panes.values()].find((p) => p.tabId === tabId)
+        if (pane && ![...this.panes.values()].some((p) => p.workspaceId === pane.workspaceId && !this.tabs.get(p.tabId)?.closed)) {
+          const workspace = this.workspaces.get(pane.workspaceId)
+          if (workspace) workspace.closed = true
+        }
         return { type: 'ok' }
       }
       case 'workspace.close': {
@@ -148,7 +153,7 @@ class FakeTransport implements HerdrTransport {
       case 'agent.start': {
         const pane = this.paneOf(params['pane_id'])
         pane.name = params['name'] as string
-        pane.agentStatus = 'working'
+        pane.agentStatus = 'idle'
         pane.seq += 1
         return { type: 'agent_started', agent: agentInfoOf(pane), argv: [] }
       }
@@ -184,8 +189,8 @@ class FakeTransport implements HerdrTransport {
         return { type: 'pane_read', read: { pane_id: pane.paneId, text: `tail of ${pane.paneId}: SECRET-VALUE line` } }
       }
       case 'agent.send_keys': {
+        // 写键不代表检测到状态变化；consumeKeys 才推进权威水位。
         const pane = this.paneOf(params['target'])
-        pane.seq += 1
         this.sendKeysLog.push({ paneId: pane.paneId, keys: params['keys'] as string[] })
         return { type: 'ok' }
       }
@@ -866,7 +871,7 @@ test('Worktree 隔离: 两步建窗注入 env、关初始 tab、workspace.close 
     assert.equal(resolved!['effectiveCwd'], wt.path)
     // 父回合 settle -> workspace.close。
     await env.host.runHook('turn_settled', turnSettledOf(1))
-    assert.ok([...env.transport.workspaces.values()].some((w) => w.closed), 'worktree 模式经 workspace.close 清理')
+    assert.ok([...env.transport.workspaces.values()].some((w) => w.closed), '关闭自有最后一个 tab 后 Herdr 回收空 worktree workspace')
   } finally {
     await env.close()
   }
@@ -1043,10 +1048,10 @@ test('启动对账: 孤儿回收；failed 保留；同 ID 换 human agent 不误
   docs.set('builtin:herdr:managed', {
     version: 1,
     panes: [
-      { paneId: orphanPaneId, tabId: 'ws-default:t1', effectiveCwd: '/tmp/a', agentName: 'helm-wf-abc', parentConversationId: 1, outcome: 'running', createdAt: 1 },
-      { paneId: failedPaneId, tabId: 'ws-default:t2', effectiveCwd: '/tmp/b', agentName: 'helm-wf-def', parentConversationId: 1, outcome: 'failed', createdAt: 1, failureNote: 'x' },
-      { paneId: humanPaneId, tabId: 'ws-default:t3', effectiveCwd: '/tmp/c', agentName: 'human-agent', parentConversationId: 1, outcome: 'running', createdAt: 1 },
-      { paneId: keepalivePaneId, tabId: 'ws-default:t4', effectiveCwd: '/tmp/d', agentName: 'helm-wf-ghi', parentConversationId: 1, outcome: 'keepalive', createdAt: 1 },
+      { target: {}, routing: { kind: 'agy' }, paneId: orphanPaneId, tabId: 'ws-default:t1', effectiveCwd: '/tmp/a', agentName: 'helm-wf-abc', parentConversationId: 1, outcome: 'running', createdAt: 1 },
+      { target: {}, routing: { kind: 'agy' }, paneId: failedPaneId, tabId: 'ws-default:t2', effectiveCwd: '/tmp/b', agentName: 'helm-wf-def', parentConversationId: 1, outcome: 'failed', createdAt: 1, failureNote: 'x' },
+      { target: {}, routing: { kind: 'agy' }, paneId: humanPaneId, tabId: 'ws-default:t3', effectiveCwd: '/tmp/c', agentName: 'human-agent', parentConversationId: 1, outcome: 'running', createdAt: 1 },
+      { target: {}, routing: { kind: 'agy' }, paneId: keepalivePaneId, tabId: 'ws-default:t4', effectiveCwd: '/tmp/d', agentName: 'helm-wf-ghi', parentConversationId: 1, outcome: 'keepalive', createdAt: 1 },
     ],
   })
   const backend = new FakeBackend()

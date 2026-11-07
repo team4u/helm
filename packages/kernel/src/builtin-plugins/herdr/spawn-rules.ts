@@ -6,10 +6,10 @@
  */
 
 import { HelmError, type Profile } from '@helm/protocol'
+import { isValidMachineName } from './transport.js'
 
 /** Herdr CLI Agent kind 标识（如 agy/claude/codex/pi；不做枚举硬编码，交由 Herdr 校验）。 */
 const KIND_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/
-const MACHINE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,255}$/
 
 export interface SpawnRouting {
   kind: string
@@ -56,7 +56,7 @@ export async function resolveSpawnRouting(
       { profileId: agentType, agent: kind },
     )
   }
-  if (runtime.machine !== undefined && !MACHINE_PATTERN.test(runtime.machine)) {
+  if (runtime.machine !== undefined && !isValidMachineName(runtime.machine)) {
     throw new HelmError(
       'validation_error',
       `Profile '${agentType}' runtime.machine '${runtime.machine}' 非法（ssh 目标机单一 argv，拒绝注入）`,
@@ -112,7 +112,7 @@ function parseHerdrPrefix(agentType: string): SpawnRouting {
       { agentType, kind },
     )
   }
-  if (machine !== undefined && !MACHINE_PATTERN.test(machine)) {
+  if (machine !== undefined && !isValidMachineName(machine)) {
     throw new HelmError(
       'validation_error',
       `agentType '${agentType}' 的 machine '${machine}' 非法（ssh 单一 argv 目标，拒绝空白与选项注入）`,
@@ -197,7 +197,7 @@ export const HashShort = {
 /** 交接文件名：wf-out-<safeId>.json|.md（与 transport 的 OUTPUT_FILE_PATTERN 对齐）。 */
 export function buildOutputFileName(safeId: string, ext: 'json' | 'md'): string {
   const name = `wf-out-${safeId}.${ext}`
-  if (!/^[wf-out-]?[A-Za-z0-9_.-]{1,64}$/.test(name)) {
+  if (!/^wf-out-[A-Za-z0-9_.-]{1,64}\.(json|md)$/.test(name)) {
     throw new HelmError('validation_error', `交接文件名非法：${name}`, 400, { name })
   }
   return name
@@ -205,7 +205,7 @@ export function buildOutputFileName(safeId: string, ext: 'json' | 'md'): string 
 
 /** startupTimeoutMs 严格 3001..300000（Herdr 服务端约束），默认 30000。 */
 export function normalizeStartupTimeoutMs(value: unknown): number {
-  const n = value === undefined || value === null || value === '' ? 30_000 : value
+  const n = value === undefined ? 30_000 : value
   if (typeof n !== 'number' || !Number.isInteger(n) || n < 3001 || n > 300_000) {
     throw new HelmError(
       'validation_error',
@@ -249,7 +249,7 @@ export const MANAGED_ENV_KEYS = Object.freeze([
 /**
  * 窗格 env 构造（本机与远端共用入口）：
  * - 受管 HELM_* 固定覆盖 Profile 注入（防劫持回连/身份变量）；
- * - stash 变量（非 HELM_*）允许 Profile 显式覆盖（用户配置意图优先于会话机密）；
+ * - managed/stash 的值最后覆盖 Profile，保持任务与本机工具相同优先级；
  * - 远端剥除指向本机的 HELM_HUB_URL/HELM_TOKEN，除非 Profile 显式配置了
  *   有效可达的 http(s) 地址（此时显式 URL 也覆盖受管值）。
  */
@@ -285,13 +285,13 @@ export function buildSpawnPaneEnv(
   }
 
   // 其余受管 HELM_* 最后固定覆盖（内核约定：managed/stash 权威）。
-  Object.assign(env, managed)
   for (const [key, value] of Object.entries(profileEnv)) {
     if (key === 'HELM_HUB_URL' && explicitReachable) continue
     if (key === 'HELM_TOKEN' && explicitReachable) continue
     if (MANAGED_ENV_KEYS.includes(key) || key === 'HELM_HUB_URL') continue
     env[key] = value
   }
+  Object.assign(env, managed)
   const hubUrlOverridden = explicitReachable && options.remote
   return { env, stripped, hubUrlOverridden }
 }

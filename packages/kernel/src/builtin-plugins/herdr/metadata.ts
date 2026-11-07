@@ -21,6 +21,8 @@ const REFRESH_AFTER_MS = Math.floor(TOKEN_TTL_MS / 2)
 const HEARTBEAT_MS = REFRESH_AFTER_MS
 
 interface ProjectionState {
+  machine: string | undefined
+  paneId: string
   lastToken: string
   lastSeq: number
   lastProjectedAt: number
@@ -59,7 +61,7 @@ export class MetadataProjector {
       return
     }
     if (!state) {
-      this.states.set(key, { lastToken: '', lastSeq: 0, lastProjectedAt: 0, inFlight: false })
+      this.states.set(key, { machine, paneId, lastToken: '', lastSeq: 0, lastProjectedAt: 0, inFlight: false })
     }
     const cur = this.states.get(key)!
     if (cur.inFlight) return
@@ -93,12 +95,9 @@ export class MetadataProjector {
     if (this.timer !== undefined) return
     this.timer = setInterval(() => {
       this.timer?.unref?.()
-      for (const [key, state] of [...this.states.entries()]) {
+      for (const state of this.states.values()) {
         if (state.lastToken === '') continue
-        const colon = key.indexOf(':')
-        const machine = key.slice(0, colon) === 'local' ? undefined : key.slice(0, colon)
-        const paneId = key.slice(colon + 1)
-        void this.project(machine, paneId, state.lastToken)
+        void this.project(state.machine, state.paneId, state.lastToken)
       }
     }, HEARTBEAT_MS)
     this.timer.unref?.()

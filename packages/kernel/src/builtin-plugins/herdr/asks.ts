@@ -93,7 +93,7 @@ export class AskCoordinator {
     const superseded: AskEntry[] = []
     for (const entry of [...this.entries_map.values()]) {
       if (entry.paneId !== update.paneId || entry.machine !== update.machine) continue
-      if (update.seq <= entry.seq) continue
+      if (update.seq === entry.seq) continue
       this.removeEntry(entry)
       if (entry.phase === 'pending' || entry.phase === 'creating') superseded.push(entry)
     }

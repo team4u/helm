@@ -133,7 +133,7 @@ function parseSeq(v: unknown, method: string): number {
       'herdr_protocol_violation',
       `${method} state_change_seq 缺失或非非负安全整数：${String(v)}`,
       502,
-      { method, stateChangeSeq: typeof v === 'number' ? v : String(v) },
+      { method, resolvedType: typeof v },
     )
   }
   return v
@@ -216,7 +216,9 @@ export function parsePaneRead(result: unknown): PaneRead {
   if (!isObj(read)) {
     throw new HelmError('herdr_protocol_violation', 'agent.read 结果缺少 read 对象', 502, {})
   }
-  return { paneId: reqString(read, 'agent.read', 'pane_id'), text: reqString(read, 'agent.read', 'text') }
+  const text = read['text']
+  if (typeof text !== 'string') throw new HelmError('herdr_protocol_violation', 'agent.read text 必须是字符串', 502)
+  return { paneId: reqString(read, 'agent.read', 'pane_id'), text }
 }
 
 export function isOkResult(result: unknown): boolean {
