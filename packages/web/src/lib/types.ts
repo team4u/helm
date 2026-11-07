@@ -9,6 +9,7 @@ import type {
   ConversationLive,
   ConversationScope,
   ConversationSummary,
+  CredentialSummary,
   NotificationEvent,
   PluginSummary,
   PluginUiContribution,
@@ -24,7 +25,8 @@ import type {
   WorkbenchPanelSpec,
   WorkflowRunSummary,
 } from '@helm/protocol'
-import type { CredentialStatus, ModelDescriptor, SavedWorkflowSummary } from './api.js'
+import { ROOT_CONVERSATION_ID } from '@helm/protocol'
+import type { ModelDescriptor, SavedWorkflowSummary } from './api.js'
 
 export type ThemeMode = 'light' | 'dark'
 export type ThemePreference = 'system' | 'light' | 'dark'
@@ -140,7 +142,8 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
   }
   const sidebarOrder = (spec: SidebarItemSpec): number => {
     if (spec.order !== undefined) return spec.order
-    if (spec.id === 'assistant' || spec.target === 'conversation:1') return 0
+    // 根会话入口未显式指定 order 时置顶；其余默认 100，不做插件 ID 字符串特判。
+    if (spec.target === `conversation:${ROOT_CONVERSATION_ID}`) return 0
     return 100
   }
   grouped.sidebarItems.sort((a, b) => sidebarOrder(a.spec) - sidebarOrder(b.spec))
@@ -164,8 +167,10 @@ export function resolveTargetString(
   const target = rawTarget.trim()
   if (target.startsWith('conversation:profile:')) {
     const profileId = target.slice('conversation:profile:'.length).trim()
-    const matched = conversations.find((c) => c.profileId === profileId && !c.tags.includes('worker'))
-      ?? conversations.find((c) => c.profileId === profileId)
+    // 常驻会话优先：无 parentConversationId 的即插件/用户直接创建的长期会话，
+    // 派生 Worker（有父链）不在此列，不做任何标签名硬编码。
+    const resident = conversations.filter((c) => c.profileId === profileId && c.parentConversationId === undefined)
+    const matched = resident[0] ?? conversations.find((c) => c.profileId === profileId)
     return matched ? { kind: 'conversation', conversationId: matched.id } : null
   }
   if (target.startsWith('conversation:tag:')) {
@@ -235,7 +240,7 @@ export interface HelmStoreValue {
   profiles: Profile[]
   models: ModelDescriptor[]
   providers: ProviderConfig[]
-  credentials: CredentialStatus[]
+  credentials: CredentialSummary[]
   skills: SkillSummary[]
   actions: ActionManifest[]
 

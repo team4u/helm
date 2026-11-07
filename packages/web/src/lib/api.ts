@@ -2,13 +2,19 @@ import type {
   ActionManifest,
   ArtifactMetadata,
   AskSpec,
+  AuthStatus,
+  AuthToken,
+  ConversationCompactResponse,
   ConversationDetail,
+  ConversationForkRequest,
   ConversationInit,
   ConversationInputResult,
   ConversationPatch,
   ConversationStatus,
   ConversationSummary,
+  CredentialSummary,
   InputOrigin,
+  ModelCatalogEntry,
   ModelProviderSummary,
   ModelProvidersRefreshResult,
   PluginConfigFieldSchema,
@@ -16,11 +22,28 @@ import type {
   Profile,
   ProviderConfig,
   PublicPluginDoc,
+  SavedWorkflowSummary,
+  SearchHit,
   SkillSummary,
   WhenBusy,
   WorkflowRunRequest,
   WorkflowRunSummary,
 } from '@helm/protocol'
+
+// HTTP 请求/响应形状以 @helm/protocol 为唯一事实源；下列别名仅兼容既有导入。
+export type {
+  AuthStatus,
+  AuthToken,
+  CredentialSummary,
+  ModelCatalogEntry,
+  SavedWorkflowSummary,
+  SearchHit,
+  ConversationForkRequest,
+  ConversationCompactResponse,
+}
+export type AuthStatusResponse = AuthStatus
+export type AuthTokenResponse = AuthToken
+export type CredentialStatus = CredentialSummary
 
 export interface SubmitInputPayload {
   text: string
@@ -28,13 +51,6 @@ export interface SubmitInputPayload {
   whenBusy?: WhenBusy
   meta?: Record<string, unknown>
   attachments?: string[]
-}
-
-export interface SavedWorkflowSummary {
-  name: string
-  description: string
-  whenToUse?: string
-  phases?: Array<{ title: string; detail?: string; model?: string }>
 }
 
 const TOKEN_STORAGE_KEY = 'helm:token'
@@ -118,19 +134,10 @@ export async function apiRequest<T>(
 // Auth
 // ---------------------------------------------------------------------------
 
-export interface AuthStatusResponse {
-  configured: boolean
-  authenticated: boolean
-}
-
-export interface AuthTokenResponse {
-  token: string
-}
-
 export const authApi = {
-  status: () => apiRequest<AuthStatusResponse>('GET', '/api/auth/status'),
-  setup: (password: string) => apiRequest<AuthTokenResponse>('POST', '/api/auth/setup', { password }),
-  login: (password: string) => apiRequest<AuthTokenResponse>('POST', '/api/auth/login', { password }),
+  status: () => apiRequest<AuthStatus>('GET', '/api/auth/status'),
+  setup: (password: string) => apiRequest<AuthToken>('POST', '/api/auth/setup', { password }),
+  login: (password: string) => apiRequest<AuthToken>('POST', '/api/auth/login', { password }),
 }
 
 // ---------------------------------------------------------------------------
@@ -190,18 +197,29 @@ export const conversationsApi = {
       handoff !== undefined && handoff.trim() !== '' ? { handoff } : {},
     )
   },
-  compact(id: number, instructions?: string): Promise<{ conversation: ConversationSummary; taskId: string }> {
-    return apiRequest<{ conversation: ConversationSummary; taskId: string }>(
+  compact(id: number, instructions?: string): Promise<ConversationCompactResponse> {
+    return apiRequest<ConversationCompactResponse>(
       'POST',
       `/api/conversations/${id}/compact`,
       instructions !== undefined && instructions.trim() !== '' ? { instructions } : {},
     )
   },
-  fork(id: number, entryId: string, title?: string): Promise<ConversationSummary> {
-    return apiRequest<ConversationSummary>('POST', `/api/conversations/${id}/fork`, {
-      entryId,
+  fork(id: number, entryId: string | number, title?: string): Promise<ConversationSummary> {
+    // 契约 ConversationForkRequest 要求 entryId 为正整数；ConversationEntry.id 是数字字符串，须先转换。
+    const numericEntryId = typeof entryId === 'number' ? entryId : Number.parseInt(String(entryId), 10)
+    if (!Number.isInteger(numericEntryId) || numericEntryId <= 0) {
+      throw new ApiClientError(
+        'validation_error',
+        `entryId 需为正整数（收到 ${String(entryId)}）`,
+        400,
+        { entryId },
+      )
+    }
+    const body: ConversationForkRequest = {
+      entryId: numericEntryId,
       ...(title !== undefined && title.trim() !== '' ? { title } : {}),
-    })
+    }
+    return apiRequest<ConversationSummary>('POST', `/api/conversations/${id}/fork`, body)
   },
   listArtifacts(id: number): Promise<ArtifactMetadata[]> {
     return apiRequest<ArtifactMetadata[]>('GET', `/api/conversations/${id}/artifacts`)
@@ -289,15 +307,23 @@ export interface ModelDescriptor {
 
 export function normalizeModelCatalog(raw: unknown): ModelDescriptor[] {
   if (!Array.isArray(raw)) throw new Error('模型目录格式无效')
-  return raw.map((item: unknown) => {
-    if (item === null || typeof item !== 'object' || !('provider' in item) || typeof item.provider !== 'string' || !('modelId' in item) || typeof item.modelId !== 'string' || !('available' in item) || typeof item.available !== 'boolean') throw new Error('模型目录条目格式无效')
-    return { id: `${item.provider}/${item.modelId}`, provider: item.provider, modelId: item.modelId, available: item.available }
+  return raw.map((item: unknown): ModelDescriptor => {
+    if (item === null || typeof item !== 'object') throw new Error('模型目录条目格式无效')
+    const entry = item as Partial<ModelCatalogEntry>
+    if (
+      typeof entry.provider !== 'string' ||
+      typeof entry.modelId !== 'string' ||
+      typeof entry.available !== 'boolean'
+    ) {
+      throw new Error('模型目录条目格式无效')
+    }
+    return {
+      id: `${entry.provider}/${entry.modelId}`,
+      provider: entry.provider,
+      modelId: entry.modelId,
+      available: entry.available,
+    }
   })
-}
-
-export interface CredentialStatus {
-  id: string
-  configured: boolean
 }
 
 export const assetsApi = {
@@ -313,7 +339,7 @@ export const assetsApi = {
   saveProviders: (providers: ProviderConfig[]) =>
     apiRequest<ProviderConfig[]>('PUT', '/api/providers', { providers }),
 
-  listCredentials: () => apiRequest<CredentialStatus[]>('GET', '/api/credentials'),
+  listCredentials: () => apiRequest<CredentialSummary[]>('GET', '/api/credentials'),
   setCredential: (id: string, value: string) =>
     apiRequest<{ ok: boolean }>('PUT', `/api/credentials/${encodeURIComponent(id)}`, { value }),
   deleteCredential: (id: string) =>
@@ -376,17 +402,25 @@ export const pluginsApi = {
 // Workflows & Search
 // ---------------------------------------------------------------------------
 
-export interface SearchHitItem {
-  conversationId: number
-  conversationTitle?: string
-  entryId: string
-  snippet: string
-  createdAt?: string
-  [key: string]: unknown
+/** 兼容后端 `{ name, path, description?, whenToUse?, phases? }` 形状（SavedWorkflowSummary 契约）。 */
+export function normalizeSavedWorkflows(raw: unknown): SavedWorkflowSummary[] {
+  if (!Array.isArray(raw)) throw new Error('工作流目录格式无效')
+  return raw.map((item: unknown): SavedWorkflowSummary => {
+    if (item === null || typeof item !== 'object') throw new Error('工作流目录条目格式无效')
+    const entry = item as Record<string, unknown>
+    if (typeof entry.name !== 'string') throw new Error('工作流目录条目格式无效')
+    return {
+      name: entry.name,
+      ...(typeof entry.path === 'string' ? { path: entry.path } : {}),
+      ...(typeof entry.description === 'string' ? { description: entry.description } : {}),
+      ...(typeof entry.whenToUse === 'string' ? { whenToUse: entry.whenToUse } : {}),
+      ...(Array.isArray(entry.phases) ? { phases: entry.phases as SavedWorkflowSummary['phases'] } : {}),
+    }
+  })
 }
 
 export const workflowsApi = {
-  listSaved: () => apiRequest<SavedWorkflowSummary[]>('GET', '/api/workflows'),
+  listSaved: async () => normalizeSavedWorkflows(await apiRequest<unknown>('GET', '/api/workflows')),
   listRuns: (conversationId?: number) => {
     const qs = conversationId !== undefined ? `?conversationId=${conversationId}` : ''
     return apiRequest<WorkflowRunSummary[]>('GET', `/api/workflows/runs${qs}`)
@@ -401,5 +435,5 @@ export const workflowsApi = {
 
 export const searchApi = {
   query: (q: string) =>
-    apiRequest<SearchHitItem[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
+    apiRequest<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
 }

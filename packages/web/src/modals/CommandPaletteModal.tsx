@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { conversationsApi, searchApi, type SearchHitItem } from '../lib/api.js'
+import type { SearchHit } from '@helm/protocol'
+import { ROOT_CONVERSATION_ID } from '@helm/protocol'
+import { conversationsApi, searchApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 
 type PaletteRow =
   | { kind: 'command'; id: string; title: string; hint?: string; icon?: string; keywords?: string[]; run: () => void }
-  | { kind: 'search-hit'; id: string; hit: SearchHitItem }
+  | { kind: 'search-hit'; id: string; hit: SearchHit }
 
 export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
   const store = useHelmStore()
   const [query, setQuery] = useState('')
-  const [hits, setHits] = useState<SearchHitItem[]>([])
+  const [hits, setHits] = useState<SearchHit[]>([])
   const [searching, setSearching] = useState(false)
   const [selectedIdx, setSelectedIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -84,7 +86,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
         title: '跳转 #1 个人助理',
         hint: '#1',
         icon: 'sparkles',
-        run: () => store.openTarget({ kind: 'conversation', conversationId: 1 }),
+        run: () => store.openTarget({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID }),
       },
       {
         kind: 'command',
@@ -185,7 +187,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
         id: `conv:${conv.id}`,
         hit: {
           conversationId: conv.id,
-          conversationTitle: conv.title,
+          title: conv.title,
           entryId: '',
           snippet: `会话 #${conv.id} / ${conv.profileId}`,
         },
@@ -318,7 +320,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                   <HelmIcon name="message-square" size={14} />
                   <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                     <span className="nav-item-label">
-                      {row.hit.conversationTitle || `会话 #${row.hit.conversationId}`}
+                      {row.hit.title || `会话 #${row.hit.conversationId}`}
                     </span>
                     <span
                       className="mono selectable"
