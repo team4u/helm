@@ -55,12 +55,30 @@ export interface ModelCatalogEntry {
   available: boolean
 }
 
-/** PI 内置供应商与已启用自定义网关的公开目录，不含凭据或请求配置。 */
+/** PI 内置供应商、插件动态供应商与已启用自定义网关的公开目录，不含凭据或私有请求头。 */
 export interface ModelProviderSummary {
   id: string
   name: string
   modelCount: number
   authMethods: Array<{ type: 'api_key' | 'oauth'; label: string }>
+  /** 是否支持远端动态目录刷新（实现了 refreshModels 的供应商，如 magpie、radius）。 */
+  dynamic?: boolean
+  /** 供应商公开网关根地址或 baseUrl（非机密展示）。 */
+  baseUrl?: string
+}
+
+/** `POST /api/models/refresh` 动态模型目录刷新结果。 */
+export interface ModelProvidersRefreshResult {
+  /** 本次请求刷新的目标供应商 ID（空数组表示全部已配置动态供应商）。 */
+  providers: string[]
+  /** 刷新是否在中途被取消。 */
+  aborted: boolean
+  /** 各动态供应商刷新错误（providerId -> 错误消息）。 */
+  errors: Record<string, string>
+  /** 刷新后的最新模型目录。 */
+  models: ModelCatalogEntry[]
+  /** 刷新后的最新供应商目录摘要。 */
+  providerCatalog: ModelProviderSummary[]
 }
 
 /**
