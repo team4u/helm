@@ -1,12 +1,18 @@
 import { KernelRuntime } from './runtime/index.js';
 import { WorkflowService } from './workflow/index.js';
 import { createAssistantPlugin } from './builtin-plugins/assistant.js';
+import { createHerdrPlugin } from './builtin-plugins/herdr.js';
+import type { HerdrTransport } from './builtin-plugins/herdr/contracts.js';
 import { redactJsonValue } from './redact.js';
 
-export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'>;
+export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'> & {
+  /** 可注入同契约传输层；缺省连接真实本机 Herdr 与 SSH 远端。 */
+  herdrTransport?: HerdrTransport;
+};
 
 export async function createHelm(options: HelmOptions = {}) {
-  const kernel = await KernelRuntime.open({ ...options, autoResume: false });
+  const { herdrTransport, ...runtimeOptions } = options;
+  const kernel = await KernelRuntime.open({ ...runtimeOptions, autoResume: false });
   let closeWorkflows: (() => Promise<void>) | undefined;
   try {
     await kernel.plugins.register(createAssistantPlugin(kernel));
@@ -32,6 +38,14 @@ export async function createHelm(options: HelmOptions = {}) {
     await workflows.init();
     kernel.setWorkflowRunProvider(() => workflows.listRuns());
     kernel.setWorkflowRunner(async (request, conversationId) => workflows.run({ ...request, conversationId }));
+    await kernel.plugins.register(createHerdrPlugin({
+      defaultCwd: runtimeOptions.cwd ?? process.cwd(),
+      profiles: kernel.profiles,
+      buildSpawnEnv: (id, cwd) => kernel.buildSpawnEnv(id, cwd),
+      redact: (text) => kernel.stash.redact(text),
+      runLocalGate: (command, context) => kernel.runGate(command, context),
+      ...(herdrTransport ? { transport: herdrTransport } : {}),
+    }), { enabled: false });
     await kernel.start();
     return {
       kernel,
