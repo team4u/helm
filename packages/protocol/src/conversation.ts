@@ -3,6 +3,10 @@
  * 零业务角色硬编码——会话职责一律通过 profileId 与 tags 表达。
  */
 
+import type { ConversationAttachmentRef } from './artifact.js'
+
+export type { ConversationAttachmentRef }
+
 /** 常驻个人助理根会话 ID，固定不可删除（`DELETE /api/conversations/1` 返回 403）。 */
 export const ROOT_CONVERSATION_ID = 1
 
@@ -78,6 +82,8 @@ export interface ConversationInput {
   createdAt: number
   /** 边界已校验/脱敏的自由元数据；从 CLI --meta / HTTP 一路传到 turn_settled。 */
   meta?: Record<string, unknown>
+  /** 随输入挂载的产物指针（经授权校验后写入 helm.input entry；仅轻量元数据，不含字节）。 */
+  attachments?: ConversationAttachmentRef[]
 }
 
 // ---------------------------------------------------------------------------

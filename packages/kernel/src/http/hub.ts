@@ -135,13 +135,17 @@ function originAllowed(request: Request, origin: string | null, url: URL): boole
   return isSameOrigin(origin, url) || ALLOWED_CORS_ORIGINS.includes(origin)
 }
 
-/** 是否 JSON 端点：除插件 public 原始路由外全部核心端点都是 JSON。 */
+/** 是否 JSON 端点：除插件 public 原始路由与产物二进制上传外全部核心端点都是 JSON。 */
 function isJsonEndpoint(method: string, pathname: string): boolean {
   if (method === 'GET' || method === 'HEAD' || method === 'DELETE') return false
   if (!pathname.startsWith('/api/')) return false
   // 插件动态路由命名空间：public webhook 载荷形态由插件自定义。
   const segs = pathname.split('/').filter((s) => s.length > 0)
-  return !(segs[0] === 'api' && segs[1] === 'plugins' && segs[3] === 'routes')
+  if (segs[0] === 'api' && segs[1] === 'plugins' && segs[3] === 'routes') return false
+  // 产物上传：POST /api/conversations/:id/artifacts 接受二进制流
+  //（application/octet-stream；application/json 分支在路由内自行处理）。
+  if (segs[0] === 'api' && segs[1] === 'conversations' && segs[3] === 'artifacts' && segs.length === 4) return false
+  return true
 }
 
 /** 请求是否携带 body（chunked 或 content-length > 0）。 */

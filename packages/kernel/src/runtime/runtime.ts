@@ -37,6 +37,8 @@ import type {
   AskCreateSpec,
   AskResult,
   AskSpec,
+  ArtifactMetadata,
+  ConversationAttachmentRef,
   ConversationDetail,
   ConversationEntry,
   ConversationInit,
@@ -52,12 +54,14 @@ import type {
 } from '@helm/protocol'
 import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT, type MaybePromise } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 import {
   ArtifactService as SvcArtifactService,
   AssetWatcher,
   AuthService as SvcAuthService,
   ConfigService,
   CredentialService,
+  FileNotFoundError,
   ProfileService,
   ProviderService,
   SecretStash,
@@ -143,6 +147,9 @@ const DEFAULT_WATCHDOG_INTERVAL_MS = 15_000
  * pi-ai ModelThinkingLevel）。声明处直接校验，拒绝任意字符串且不静默丢弃。
  */
 const SPAWN_EFFORT_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/** 图片类 mime：附件拼装多模态 ImageContent 的判定集。 */
+const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 
 /** entry.model 消息数组 -> assistant 文本块拼接（waitForInput 提取回答用）。 */
 function assistantTextOfModel(model: unknown[] | undefined): string {
@@ -644,6 +651,7 @@ export class KernelRuntime {
             enum: [...SPAWN_EFFORT_LEVELS],
             description: '思考力度（可选）',
           },
+          attachments: { type: 'array', items: { type: 'string' }, description: '随任务传递给子代理的产物 ID 列表（可选）' },
         },
         required: ['prompt'],
         additionalProperties: false,
@@ -684,6 +692,25 @@ export class KernelRuntime {
             structuredOutput: { ok: false, result: `invalid isolation: ${JSON.stringify(args['isolation'])}` } as JsonValue,
           }
         }
+        // 附件参数防御性校验：非空字符串数组之外一律显式拒绝（不静默丢弃）。
+        if (args['attachments'] !== undefined) {
+          const list = args['attachments']
+          if (
+            !Array.isArray(list) ||
+            list.some((item) => typeof item !== 'string' || item.length === 0)
+          ) {
+            return {
+              output: [
+                {
+                  type: 'text',
+                  text: 'subagent_failed: attachments 需为非空字符串数组（产物 ID 列表）',
+                },
+              ],
+              isError: true,
+              structuredOutput: { ok: false, result: 'invalid attachments: 需为非空字符串数组' } as JsonValue,
+            }
+          }
+        }
         let resolved: AgentExecutionInfo | undefined
         try {
           const result = await runtime.spawnAgent({
@@ -697,6 +724,9 @@ export class KernelRuntime {
             ...(args['resume'] !== undefined ? { resume: String(args['resume']) } : {}),
             ...(args['model'] !== undefined ? { model: String(args['model']) } : {}),
             ...(args['effort'] !== undefined ? { effort: String(args['effort']) } : {}),
+            ...(Array.isArray(args['attachments'])
+              ? { attachments: args['attachments'] as string[] }
+              : {}),
             onResolved: (info) => {
               resolved = info
             },
@@ -916,16 +946,67 @@ export class KernelRuntime {
     return buildManagedEnv(this.toolDeps, cwd, conversationId)
   }
 
-  /** 产物授权：当前会话或其父链（子会话可读父会话产物）。 */
-  private isArtifactAuthorized(conversationId: number, artifactConversationId: number): boolean {
+  /** 产物授权：当前会话或其父链（子会话可读父会话产物）；最多 32 层防环。 */
+  isArtifactAuthorized(conversationId: number, artifactConversationId: number): boolean {
+    if (conversationId === artifactConversationId) return true
     let current: number | undefined = conversationId
     const seen = new Set<number>()
-    while (current !== undefined && !seen.has(current)) {
+    for (let depth = 0; depth < 32 && current !== undefined && !seen.has(current); depth += 1) {
       seen.add(current)
       if (current === artifactConversationId) return true
       current = this.store.getConv(current)?.parentConversationId
     }
     return false
+  }
+
+  /**
+   * 解析并授权校验附件产物 ID 列表：
+   * - 产物必须存在（FileNotFoundError -> 404 not_found，附 artifactId）；
+   * - 产物会话必须是当前会话或其父链（越权挂载 403 artifact_forbidden）；
+   * - 返回轻量指针（ref）+ 完整元数据 + 绝对路径（供提示词与多模态拼装）。
+   */
+  async resolveAuthorizedAttachments(
+    conversationId: number,
+    attachmentIds: readonly string[],
+  ): Promise<
+    Array<{ ref: ConversationAttachmentRef; metadata: ArtifactMetadata; absPath: string }>
+  > {
+    const unique = [...new Set(attachmentIds)]
+    const out: Array<{ ref: ConversationAttachmentRef; metadata: ArtifactMetadata; absPath: string }> = []
+    for (const artifactId of unique) {
+      const metadata = await this.artifactsSvc.get(artifactId).catch((error: unknown) => {
+        if (error instanceof FileNotFoundError) {
+          throw new HelmError('not_found', `附件产物不存在：${artifactId}`, 404, { artifactId })
+        }
+        throw error
+      })
+      if (!this.isArtifactAuthorized(conversationId, metadata.conversationId)) {
+        throw new HelmError(
+          'artifact_forbidden',
+          `产物 ${artifactId} 不属于会话 ${conversationId} 或其父会话链，拒绝越权挂载`,
+          403,
+          { conversationId, artifactId, artifactConversationId: metadata.conversationId },
+        )
+      }
+      out.push({
+        ref: { id: metadata.id, name: metadata.name, mimeType: metadata.mimeType, size: metadata.size },
+        metadata,
+        absPath: join(this.dataDir, metadata.path),
+      })
+    }
+    return out
+  }
+
+  /** 单附件授权解析（app 组合层/herdr 插件依赖注入用；错误语义同上）。 */
+  async resolveAuthorizedAttachment(
+    conversationId: number,
+    artifactId: string,
+  ): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }> {
+    const [resolved] = await this.resolveAuthorizedAttachments(conversationId, [artifactId])
+    if (resolved === undefined) {
+      throw new HelmError('not_found', `附件产物不存在：${artifactId}`, 404, { artifactId })
+    }
+    return { ...resolved.ref, absPath: resolved.absPath }
   }
 
   private async recoverConversations(): Promise<void> {
@@ -1572,7 +1653,12 @@ export class KernelRuntime {
   async submitInput(
     id: number,
     text: string,
-    opts?: { origin?: InputOrigin; whenBusy?: WhenBusy; meta?: Record<string, unknown> },
+    opts?: {
+      origin?: InputOrigin
+      whenBusy?: WhenBusy
+      meta?: Record<string, unknown>
+      attachments?: string[]
+    },
   ): Promise<{ submissionId: string }> {
     if (this.closed) throw new HelmError('runtime_closed', '内核正在关闭，拒绝提交新输入', 503)
     const convMeta = this.store.getConv(id)
@@ -1590,6 +1676,12 @@ export class KernelRuntime {
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
 
+    // 初始附件：提交时先解析存在性与父链授权（越权 403 / 不存在 404）。
+    const initialAttachments =
+      opts?.attachments !== undefined && opts.attachments.length > 0
+        ? await this.resolveAuthorizedAttachments(id, opts.attachments)
+        : undefined
+
     const origin: InputOrigin = opts?.origin ?? 'human'
     const inputId = randomUUID()
     const createdAt = Date.now()
@@ -1601,7 +1693,17 @@ export class KernelRuntime {
         : undefined
     const payload: { conversationId: number; input: ConversationInput } = {
       conversationId: id,
-      input: { id: inputId, text, origin, whenBusy: opts?.whenBusy, createdAt, ...(safeMeta !== undefined ? { meta: safeMeta } : {}) },
+      input: {
+        id: inputId,
+        text,
+        origin,
+        whenBusy: opts?.whenBusy,
+        createdAt,
+        ...(safeMeta !== undefined ? { meta: safeMeta } : {}),
+        ...(initialAttachments !== undefined
+          ? { attachments: initialAttachments.map((r) => r.ref) }
+          : {}),
+      },
     }
     const hookOutcome = await this.runHookChain('input', payload)
     if (hookOutcome?.action === 'block') {
@@ -1624,6 +1726,14 @@ export class KernelRuntime {
       finalInput = value.input
       finalWhenBusy = finalInput.whenBusy ?? finalWhenBusy
     }
+    // transform 可能改写 attachments：对最终 ID 列表再次校验并取权威元数据
+    //（钩子产物与直接输入同权，绝不让 transform 绕过授权门禁）。
+    let resolvedAttachments = initialAttachments
+    const finalIds = finalInput.attachments?.map((a) => a.id) ?? []
+    if (finalIds.length > 0 || initialAttachments !== undefined) {
+      resolvedAttachments =
+        finalIds.length > 0 ? await this.resolveAuthorizedAttachments(id, finalIds) : undefined
+    }
     // 最终输入统一脱敏（直接输入与 transform 产物同权）：text/effectiveText 与
     // meta 均不得携带已登记秘密明文（受管 Token、SecretStash 秘密）。此后的
     // 自动标题、tracker、helm.input entry、SDK content 与持久化全部使用脱敏值。
@@ -1634,7 +1744,15 @@ export class KernelRuntime {
       }
     }
     const effectiveText = this.stash.redact(finalInput.text)
-    finalInput = { ...finalInput, text: effectiveText }
+    // SQLite 零膨胀：helm.input entry 的 attachments 仅存轻量指针
+    //（{id,name,mimeType,size}），绝不含 base64 字节。
+    finalInput = {
+      ...finalInput,
+      text: effectiveText,
+      ...(resolvedAttachments !== undefined
+        ? { attachments: resolvedAttachments.map((r) => r.ref) }
+        : { attachments: undefined }),
+    }
 
     // input Hook 可能执行异步 IO；期间开始关停时不得继续写入或创建 SDK 回合。
     if (this.closed) throw new HelmError('runtime_closed', '内核正在关闭，拒绝提交新输入', 503)
@@ -1644,12 +1762,19 @@ export class KernelRuntime {
       this.store.upsertConv({ ...convMeta, title, stateChangeSeq: convMeta.stateChangeSeq + 1, updatedAt: Date.now() })
     }
 
+    // 模型可见内容：无附件保持纯文本；有附件拼接 [Attached Files] 清单，
+    // 图片附件额外构造多模态 ImageContent 块（字节 base64 进模型上下文）。
+    const content: string | Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> =
+      resolvedAttachments !== undefined
+        ? await this.buildAttachmentContent(effectiveText, resolvedAttachments)
+        : effectiveText
+
     const key = this.tracker.registerInput(id, finalInput)
     try {
       const submission = await conversation.submit(
         {
           type: 'input',
-          content: effectiveText,
+          content: content as never,
           whenBusy: finalWhenBusy ?? 'followUp',
           // 最终 payload 的 origin/id/meta 落入 helm.input entry（模型可见来源标记）。
           entry: {
@@ -1660,6 +1785,9 @@ export class KernelRuntime {
               origin: finalInput.origin,
               createdAt: finalInput.createdAt,
               ...(finalInput.meta !== undefined ? { meta: finalInput.meta } : {}),
+              ...(resolvedAttachments !== undefined
+                ? { attachments: resolvedAttachments.map((r) => r.ref) }
+                : {}),
             } as unknown as JsonValue,
           },
           requestId: finalInput.id,
@@ -1672,6 +1800,52 @@ export class KernelRuntime {
       this.tracker.dropInput(id, key)
       throw normalizeBusyError(error)
     }
+  }
+
+  /** [Attached Files] 纯文本清单块（spawn 任务提示词用；无正文前缀）。 */
+  private buildAttachmentBlock(
+    resolved: Array<{ ref: ConversationAttachmentRef; absPath: string }>,
+  ): string {
+    const lines = resolved.map(
+      ({ ref, absPath }) =>
+        `- ${ref.name} (id=${ref.id}, mime=${ref.mimeType}, size=${ref.size} bytes, path=${absPath}, pull=\`helm artifacts get ${ref.id} --output ./${ref.name}\`)`,
+    )
+    return `[Attached Files]\n${lines.join('\n')}`
+  }
+
+  /**
+   * 构造带附件的模型可见内容：
+   * - [Attached Files] 清单（含拉取指引）拼在正文后；
+   * - 存在图片附件时返回多模态块数组（文本块 + 图片 ImageContent base64）；
+   * - 无图片附件时返回拼接后的纯文本。
+   */
+  private async buildAttachmentContent(
+    effectiveText: string,
+    resolved: Array<{ ref: ConversationAttachmentRef; absPath: string }>,
+  ): Promise<
+    string | Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>
+  > {
+    const lines = resolved.map(
+      ({ ref, absPath }) =>
+        `- ${ref.name} (id=${ref.id}, mime=${ref.mimeType}, size=${ref.size} bytes, path=${absPath}, pull=\`helm artifacts get ${ref.id} --output ./${ref.name}\`)`,
+    )
+    const attachedBlock = `[Attached Files]\n${lines.join('\n')}`
+    const modelText = effectiveText.length > 0 ? `${effectiveText}\n\n${attachedBlock}` : attachedBlock
+    const hasImage = resolved.some(({ ref }) => IMAGE_MIMES.has(ref.mimeType))
+    if (!hasImage) return modelText
+    const contentParts: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [
+      { type: 'text', text: modelText },
+    ]
+    for (const item of resolved) {
+      if (!IMAGE_MIMES.has(item.ref.mimeType)) continue
+      const bytes = await this.artifactsSvc.readBuffer(item.ref.id)
+      contentParts.push({
+        type: 'image',
+        data: Buffer.from(bytes).toString('base64'),
+        mimeType: item.ref.mimeType,
+      })
+    }
+    return contentParts
   }
 
   /**
@@ -1781,6 +1955,113 @@ export class KernelRuntime {
     if (wasBusy) this.tracker.settleAborted(id)
   }
 
+  /** 内核关闭守卫（上下文操作共用）。 */
+  private assertNotClosedForContextOp(): void {
+    if (this.closed) throw new HelmError('runtime_closed', '内核正在关闭', 503)
+  }
+
+  /** 取已存在的会话元数据与 SDK 句柄（不存在统一 404）。 */
+  private async conversationForContextOp(
+    id: number,
+  ): Promise<{ meta: NonNullable<ReturnType<HelmStore['getConv']>>; conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>> }> {
+    const meta = this.store.getConv(id)
+    if (!meta) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
+    if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    return { meta, conversation }
+  }
+
+  /** 重置会话上下文：SDK reset(handoff) 后推进 stateChangeSeq 并广播摘要。 */
+  async resetConversation(id: number, opts?: { handoff?: string }): Promise<ConversationSummary> {
+    this.assertNotClosedForContextOp()
+    const { meta, conversation } = await this.conversationForContextOp(id)
+    const safeHandoff =
+      opts?.handoff !== undefined && opts.handoff !== '' ? this.stash.redact(opts.handoff) : undefined
+    await conversation.reset(safeHandoff, BACKGROUND_CONTEXT)
+    this.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
+    const summary = this.tracker.summaryOf(id)
+    this.events.publish('conversation.upsert', summary)
+    return summary
+  }
+
+  /** 手动压缩：SDK compact(instructions) 返回后台任务 ID；返回 { taskId, conversation }。 */
+  async compactConversation(
+    id: number,
+    opts?: { instructions?: string },
+  ): Promise<{ taskId: number; conversation: ConversationSummary }> {
+    this.assertNotClosedForContextOp()
+    const { meta, conversation } = await this.conversationForContextOp(id)
+    const safeInstructions =
+      opts?.instructions !== undefined && opts.instructions !== ''
+        ? this.stash.redact(opts.instructions)
+        : undefined
+    const taskId = await conversation.compact(safeInstructions, BACKGROUND_CONTEXT)
+    this.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
+    const summary = this.tracker.summaryOf(id)
+    this.events.publish('conversation.upsert', summary)
+    return { taskId: Number(taskId), conversation: summary }
+  }
+
+  /**
+   * 从指定条目分叉新会话：SDK fork(entryId) 后登记 helm 镜像
+   *（继承 profile/tags/cwd/model/override；父链指向源会话）并对齐模型。
+   */
+  async forkConversation(id: number, opts: { entryId: number; title?: string }): Promise<ConversationSummary> {
+    this.assertNotClosedForContextOp()
+    if (!Number.isInteger(opts.entryId) || opts.entryId <= 0) {
+      throw new HelmError('validation_error', `entryId 需为正整数（收到 ${String(opts.entryId)}）`, 400, {
+        entryId: opts.entryId,
+      })
+    }
+    const { meta: sourceMeta, conversation: sourceConv } = await this.conversationForContextOp(id)
+    // 条目存在性精确校验（min=max=entryId 取 1 条；不存在 404）。
+    const page = await sourceConv.entries(
+      { minEntryId: opts.entryId as never, maxEntryId: opts.entryId as never, order: 'ascending' },
+      1,
+      undefined,
+      BACKGROUND_CONTEXT,
+    )
+    if (page.items.length === 0 || (page.items[0] as { id: number }).id !== opts.entryId) {
+      throw new HelmError('not_found', `条目 ${opts.entryId} 在会话 ${id} 中不存在`, 404, {
+        conversationId: id,
+        entryId: opts.entryId,
+      })
+    }
+    const forked = await sourceConv.fork(
+      opts.entryId as never,
+      { ownership: { kind: 'ownerless' } },
+      BACKGROUND_CONTEXT,
+    )
+    const newId = forked.id as number
+    const now = Date.now()
+    const baseTitle = sourceMeta.title !== '' ? sourceMeta.title : `会话 ${id}`
+    const title =
+      opts.title !== undefined && opts.title.trim() !== ''
+        ? this.stash.redact(opts.title.trim())
+        : `${baseTitle} (分叉)`
+    this.store.upsertConv({
+      id: newId,
+      title,
+      profileId: sourceMeta.profileId,
+      tags: [...sourceMeta.tags],
+      parentConversationId: id,
+      cwd: sourceMeta.cwd,
+      model: sourceMeta.model,
+      ...(sourceMeta.modelOverride !== undefined ? { modelOverride: sourceMeta.modelOverride } : {}),
+      unread: false,
+      pinned: false,
+      stateChangeSeq: 1,
+      completionSeq: 0,
+      createdAt: now,
+      updatedAt: now,
+    })
+    await this.alignConversationModel(newId)
+    await this.tracker.observe(newId)
+    const summary = this.tracker.summaryOf(newId)
+    this.events.publish('conversation.upsert', summary)
+    return summary
+  }
+
   /** 等待会话空闲（含本会话 turn_settled 钩子异步执行完成）。 */
   async waitForIdle(id: number): Promise<void> {
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
@@ -1822,10 +2103,26 @@ export class KernelRuntime {
 
   /** 子代理派生：agent_spawn hook -> 默认原生 subagent（transform 传最终 payload）。 */
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
+    // 附件门禁在进入 hook 链之前：agent_spawn 钩子与原生执行行均受统一授权
+    // 保护（产物存在 + 父会话链归属）；transform 改写后再校验一次。
+    if (request.attachments !== undefined && request.attachments.length > 0) {
+      await this.resolveAuthorizedAttachments(request.parentConversationId, request.attachments)
+    }
     const outcome = await this.runHookChain('agent_spawn', request)
     if (outcome?.action === 'handled') return outcome.result
     const finalRequest =
       outcome?.action === 'transform' ? (outcome.value as AgentSpawnRequest) : request
+    if (
+      finalRequest.attachments !== undefined &&
+      finalRequest.attachments.length > 0 &&
+      finalRequest !== request
+    ) {
+      await this.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
+    }
+    const resolvedAttachments =
+      finalRequest.attachments !== undefined && finalRequest.attachments.length > 0
+        ? await this.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
+        : undefined
     return runNativeSpawn(
       {
         ...this.toolDeps,
@@ -1836,6 +2133,10 @@ export class KernelRuntime {
           return ref
         },
         agentSessions: this.agentSessions,
+        resolveAttachmentsForPrompt:
+          resolvedAttachments !== undefined
+            ? async () => this.buildAttachmentBlock(resolvedAttachments)
+            : undefined,
         registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags) => {
           const now = Date.now()
           this.store.upsertConv({

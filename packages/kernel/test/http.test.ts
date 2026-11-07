@@ -187,6 +187,20 @@ function makeKernel(): KernelRuntimeLike {
     async abortConversation(id) {
       aborted.push(id)
     },
+    async resetConversation(id) {
+      const found = conversations.get(id)
+      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      return found
+    },
+    async compactConversation(id) {
+      const found = conversations.get(id)
+      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      return { taskId: 1, conversation: found }
+    },
+    async forkConversation(id) {
+      if (!conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      return summary(id + 100, `会话 ${id} (分叉)`)
+    },
     async listAsks() {
       return [...asks.values()]
     },

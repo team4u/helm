@@ -15,3 +15,11 @@ export interface ArtifactMetadata {
   /** Unix 毫秒时间戳。 */
   createdAt: number
 }
+
+/** 附着在会话输入上的轻量产物指针（SQLite 零 Base64 膨胀）。 */
+export interface ConversationAttachmentRef {
+  id: string
+  name: string
+  mimeType: string
+  size: number
+}

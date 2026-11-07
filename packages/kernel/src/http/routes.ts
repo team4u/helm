@@ -26,16 +26,28 @@ import {
   WeakPasswordError,
   FileNotFoundError,
 } from '../services/index.js'
+import { MAX_ARTIFACT_BYTES } from '../services/artifacts.js'
 
 class AuthNotSetupError extends Error {}
 import type { KernelRuntimeLike, PluginRouteInfo, WorkflowServiceLike } from './contracts.js'
-import { errorResponse, jsonOk, MAX_WORKFLOW_BODY_BYTES, readJsonBody, readJsonValue, type JsonRedactor } from './http-utils.js'
+import {
+  errorResponse,
+  jsonOk,
+  MAX_WORKFLOW_BODY_BYTES,
+  readBinaryBodyWithLimit,
+  readJsonBody,
+  readJsonValue,
+  type JsonRedactor,
+} from './http-utils.js'
 import { decodeSegment, findPluginRoute } from './route-match.js'
 import {
   parseActionInvokeBody,
   parseAskAnswerBody,
+  parseConversationCompactBody,
+  parseConversationForkBody,
   parseConversationInit,
   parseConversationPatch,
+  parseConversationResetBody,
   parseCredentialBody,
   parseDetailPagination,
   parseDocNameParam,
@@ -194,12 +206,13 @@ async function route(
     }
     if (third === 'input' && method === 'POST' && fourth === undefined) {
       const body = await readJsonBody(ctx.request)
-      const { text, whenBusy, origin, meta } = parseInputBody(body)
+      const { text, whenBusy, origin, meta, attachments } = parseInputBody(body)
       const wait = parseWaitFlag(ctx.url)
       const { submissionId } = await kernel.submitInput(id, text, {
         ...(origin !== undefined ? { origin } : {}),
         ...(whenBusy !== undefined ? { whenBusy } : {}),
         ...(meta !== undefined ? { meta } : {}),
+        ...(attachments !== undefined ? { attachments } : {}),
       })
       if (!wait) return jsonOk(redactor, { submissionId }, { status: 202 })
       return jsonOk(redactor, await kernel.waitForInput(id, submissionId))
@@ -208,8 +221,23 @@ async function route(
       await kernel.abortConversation(id)
       return jsonOk(redactor, { ok: true })
     }
+    if (third === 'reset' && method === 'POST' && fourth === undefined) {
+      const opts = await parseOptionalJsonObjectBody(ctx.request, parseConversationResetBody)
+      return jsonOk(redactor, await kernel.resetConversation(id, opts))
+    }
+    if (third === 'compact' && method === 'POST' && fourth === undefined) {
+      const opts = await parseOptionalJsonObjectBody(ctx.request, parseConversationCompactBody)
+      return jsonOk(redactor, await kernel.compactConversation(id, opts), { status: 202 })
+    }
+    if (third === 'fork' && method === 'POST' && fourth === undefined) {
+      const body = await readJsonBody(ctx.request)
+      return jsonOk(redactor, await kernel.forkConversation(id, parseConversationForkBody(body)), { status: 201 })
+    }
     if (third === 'artifacts' && method === 'GET' && fourth === undefined) {
       return jsonOk(redactor, await kernel.artifacts.list(id))
+    }
+    if (third === 'artifacts' && method === 'POST' && fourth === undefined) {
+      return postConversationArtifact(ctx, kernel, id, redactor)
     }
     return errorResponse(redactor, 404, 'not_found', '路由不存在')
   }
@@ -577,6 +605,121 @@ function isSafeRelativePath(path: string): boolean {
 
 function methodNotAllowed(redactor: JsonRedactor | undefined, method: string): Response {
   return errorResponse(redactor, 405, 'method_not_allowed', `方法不允许: ${method}`)
+}
+
+/** 可选 JSON 对象 body：空 body 返回 {}；非空则须为 JSON 对象并走 parse。 */
+async function parseOptionalJsonObjectBody<T>(
+  request: Request,
+  parse: (body: Record<string, unknown>) => T,
+): Promise<T> {
+  const raw = await readBinaryBodyWithLimit(request, 1024 * 1024)
+  if (raw.length === 0) return {} as T
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw))
+  } catch {
+    throw new ValidationError('请求体不是合法 JSON')
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new ValidationError('请求体需为 JSON 对象')
+  }
+  return parse(parsed as Record<string, unknown>)
+}
+
+/** 严格 base64（标准/URL-safe 均拒绝填充镕shape；空串允许 = 0 字节）。 */
+function decodeBase64Strict(value: string): Uint8Array {
+  if (value === '') return new Uint8Array(0)
+  const normalized = value.replaceAll('-', '+').replaceAll('_', '/')
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) {
+    throw new ValidationError('contentBase64 不是合法 base64')
+  }
+  const buffer = Buffer.from(normalized, 'base64')
+  // 回读长度一致才可信（Buffer 宽容忽略尾部残缺字符，不能用）。
+  const recheck = buffer.toString('base64').replaceAll('=', '')
+  if (recheck !== normalized.replaceAll('=', '')) {
+    throw new ValidationError('contentBase64 不是合法 base64')
+  }
+  return new Uint8Array(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
+}
+
+/**
+ * POST /api/conversations/:id/artifacts：跨平台产物上传。
+ * - application/json：{ name, contentBase64, mimeType? }（Web 前端/base64 场景）；
+ * - 其他（application/octet-stream 等二进制流）：文件名经
+ *   x-artifact-filename 头（含 % 时严格解码）或 ?name= 查询参数；
+ * 体积上限统一 MAX_ARTIFACT_BYTES（15 MiB）；成功 201 返回产物元数据。
+ */
+async function postConversationArtifact(
+  ctx: RouteContext,
+  kernel: KernelRuntimeLike,
+  id: number,
+  redactor: JsonRedactor | undefined,
+): Promise<Response> {
+  // 会话存在性校验（不存在自动 404，不留孤儿产物）。
+  await kernel.getConversationDetail(id, { limit: 1 })
+  const contentType = (ctx.request.headers.get('content-type') ?? '').toLowerCase()
+  let name: string
+  let bytes: Uint8Array
+  let mimeType: string | undefined
+  if (contentType.includes('application/json')) {
+    // base64 膨胀系数 ~1.37 + 16KiB 余量；超限映射为 413 artifact_too_large。
+    const jsonMaxBytes = Math.ceil(MAX_ARTIFACT_BYTES * 1.37) + 16 * 1024
+    let body: Record<string, unknown>
+    try {
+      body = await readJsonBody(ctx.request, jsonMaxBytes)
+    } catch (error) {
+      if (error instanceof HelmError && error.code === 'body_too_large') {
+        throw new HelmError('artifact_too_large', `请求体超过 ${jsonMaxBytes} 字节上限`, 413, {
+          maxBytes: jsonMaxBytes,
+        })
+      }
+      throw error
+    }
+    const rawName = body.name
+    if (typeof rawName !== 'string' || rawName.length === 0) {
+      throw new ValidationError('name 需为非空字符串')
+    }
+    name = rawName
+    const rawContent = body.contentBase64
+    if (typeof rawContent !== 'string') {
+      throw new ValidationError('contentBase64 需为字符串')
+    }
+    bytes = decodeBase64Strict(rawContent)
+    const rawMime = body.mimeType
+    if (rawMime !== undefined && typeof rawMime !== 'string') {
+      throw new ValidationError('mimeType 需为字符串')
+    }
+    mimeType = rawMime
+    const unknown = Object.keys(body).filter((k) => !['name', 'contentBase64', 'mimeType'].includes(k))
+    if (unknown.length > 0) throw new ValidationError(`不支持的字段: ${unknown.join(', ')}`)
+  } else {
+    const headerName = ctx.request.headers.get('x-artifact-filename')
+    const rawName =
+      headerName !== null
+        ? headerName.includes('%')
+          ? decodeSegment(headerName)
+          : headerName
+        : ctx.url.searchParams.get('name')
+    if (rawName === null || rawName.trim() === '') {
+      throw new ValidationError('缺少文件名（请提供 x-artifact-filename 请求头或 ?name= 查询参数）')
+    }
+    name = rawName
+    const headerMime = ctx.request.headers.get('x-artifact-mime-type')
+    mimeType =
+      headerMime !== null && headerMime.trim() !== ''
+        ? headerMime
+        : (() => {
+            const q = ctx.url.searchParams.get('mimeType')
+            return q !== null && q.trim() !== '' ? q : undefined
+          })()
+    bytes = await readBinaryBodyWithLimit(ctx.request, MAX_ARTIFACT_BYTES)
+  }
+  const metadata = await kernel.artifacts.writeUploaded(id, {
+    name,
+    bytes,
+    ...(mimeType !== undefined ? { mimeType } : {}),
+  })
+  return jsonOk(redactor, metadata, { status: 201 })
 }
 
 /**

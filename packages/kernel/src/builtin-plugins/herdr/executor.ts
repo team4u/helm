@@ -102,7 +102,9 @@ export class HerdrExecutor {
    * agent_spawn 拦截主流程。
    * - resume：先按自有记录识别（agentId/paneId 双键），不依赖 request.agentType
    *   （真实 standalone resume 无 agentId、workflow resume 无 agentType）；
-   * - 新建：resolveSpawnRouting 双入口解析，非 Herdr 目标放行。
+   * - 新建：resolveSpawnRouting 双入口解析，非 Herdr 目标放行；
+   * - 附件：远端机器无可达 HELM_HUB_URL 时在建窗之前显式拒绝
+   *   （remote_hub_unreachable_for_artifacts，零远端副作用）。
    */
   async handle(request: AgentSpawnRequest): Promise<HandleOutcome> {
     if (request.resume !== undefined) {
@@ -128,8 +130,32 @@ export class HerdrExecutor {
     if (request.signal?.aborted) {
       throw new HelmError('aborted', 'herdr spawn 请求在创建前已取消', 409)
     }
+    this.assertAttachmentsReachable(request, paneTargetOf(routing, this.localTargetOf()), routing)
     const result = await this.spawnNew(request, routing)
     return { action: 'handled', result }
+  }
+
+  /**
+   * 附件诚实性门禁（任何建窗副作用之前）：
+   * 远端机器且 Profile 未配置远端可达 HELM_HUB_URL 时，远端窗格无法拉取
+   * 产物（本机 artifacts 目录不在远端文件系统上），显式拒绝而非静默截断。
+   */
+  private assertAttachmentsReachable(
+    request: AgentSpawnRequest,
+    target: HerdrTarget,
+    routing: SpawnRouting,
+  ): void {
+    if (request.attachments === undefined || request.attachments.length === 0) return
+    if (target.machine === undefined) return // 本机窗格：直接读本机 artifacts。
+    const base = this.deps.buildSpawnEnv(request.parentConversationId, '/tmp/helm-attachment-gate')
+    const { hubUrlOverridden } = buildSpawnPaneEnv(base, routing.profileEnv, { remote: true })
+    if (hubUrlOverridden) return // 远端已配置可达 HELM_HUB_URL：可经 CLI 拉取。
+    throw new HelmError(
+      'remote_hub_unreachable_for_artifacts',
+      `远端机器 '${target.machine}' 未配置可达的 HELM_HUB_URL，无法传递附件（${request.attachments.join(', ')}）；请在 Profile runtime.env.HELM_HUB_URL 配置远端可达的 http(s) 地址`,
+      400,
+      { machine: target.machine, attachments: request.attachments },
+    )
   }
 
   // ------------------------------------------------------------------
@@ -147,6 +173,7 @@ export class HerdrExecutor {
     this.registry.update(machineOf(pane), pane.paneId, {
       routing: { kind: routing.kind, ...(routing.profileId !== undefined ? { profileId: routing.profileId } : {}) },
     })
+    await this.preloadAttachmentMeta(request)
     return this.runManagedTask(request, pane, routing)
   }
 
@@ -399,6 +426,7 @@ export class HerdrExecutor {
   private taskPrompt(request: AgentSpawnRequest, pane: ManagedPane): string {
     const fileName = pane.outputFileName!
     const prompt = redactPromptText(request.prompt, this.deps.redact)
+    const attachmentBlock = this.buildAttachmentBlock(request, pane)
     const handoff =
       request.schema !== undefined
         ? [
@@ -415,7 +443,46 @@ export class HerdrExecutor {
             `任务完成后，把最终结果（Markdown 全文）写入文件 ${pane.effectiveCwd}/.helm/${fileName}。`,
             '写文件是你交付结果的唯一方式；未写文件视为任务失败。',
           ].join('\n')
-    return `${prompt}\n${handoff}`
+    return `${prompt}${attachmentBlock}\n${handoff}`
+  }
+
+  /**
+   * 附件指引块（任务正文与交接契约之间）：
+   * - 本机窗格：本机绝对路径 + helm artifacts get 拉取命令；
+   * - 远端窗格：仅 id/name 与拉取命令（经远端可达 HELM_HUB_URL 的 CLI 拉取）。
+   * deps.getArtifact 未注入时退化用裸 ID（单测环境；不伪造元数据）。
+   */
+  private buildAttachmentBlock(request: AgentSpawnRequest, pane: ManagedPane): string {
+    if (request.attachments === undefined || request.attachments.length === 0) return ''
+    const isRemote = machineOf(pane) !== undefined
+    const lines: string[] = []
+    for (const id of request.attachments) {
+      const meta = this.attachmentMetaCache.get(id)
+      if (isRemote || meta === undefined) {
+        const nameSuffix = meta !== undefined ? ` name=${meta.name} mime=${meta.mimeType} size=${meta.size} bytes` : ''
+        lines.push(`- id=${id}${nameSuffix}，拉取：helm artifacts get ${id} --output ./<name>`)
+      } else {
+        lines.push(
+          `- ${meta.name} (id=${id}, mime=${meta.mimeType}, size=${meta.size} bytes, path=${meta.absPath})，拉取：helm artifacts get ${id} --output ./${meta.name}`,
+        )
+      }
+    }
+    return `\n\n[Attached Files]\n${lines.join('\n')}`
+  }
+
+  /** 附件元数据缓存（spawn 时经 deps.getArtifact 解析一次）。 */
+  private readonly attachmentMetaCache = new Map<
+    string,
+    { id: string; name: string; mimeType: string; size: number; absPath: string }
+  >()
+
+  /** spawn 前解析附件元数据（存在性与授权已由内核 spawnAgent 校验；此处仅取展示字段）。 */
+  private async preloadAttachmentMeta(request: AgentSpawnRequest): Promise<void> {
+    if (request.attachments === undefined || this.deps.getArtifact === undefined) return
+    for (const id of request.attachments) {
+      const meta = await this.deps.getArtifact(id, request.parentConversationId)
+      this.attachmentMetaCache.set(id, meta)
+    }
   }
 
   /** 任务启动、首轮、自愈均在同一取消与错误收尾边界内。 */
@@ -885,7 +952,9 @@ export class HerdrExecutor {
     }
     // 路由：缺 agentType 沿用登记路由；显式给出且 kind 不一致显式拒绝。
     assertNoUnsupportedOverrides(request.model, request.effort)
-    await this.resolveResumeRouting(request, pane)
+    const resumeRouting = await this.resolveResumeRouting(request, pane)
+    // resume 附件门禁：与新建同语义（远端窗格无可达 HELM_HUB_URL 拒绝）。
+    this.assertAttachmentsReachable(request, paneTargetOf(resumeRouting, targetOf(pane)), resumeRouting)
     if (request.cwd !== undefined && request.cwd !== pane.effectiveCwd) {
       throw new HelmError(
         'resume_cwd_conflict',
@@ -910,6 +979,7 @@ export class HerdrExecutor {
     request.onResolved?.(this.executionInfoOf(updated))
     // request.cwd 缺省代表沿用窗格实际 cwd（不重开窗、不重建 env tab）。
     // 续接不重跑 agent.start（窗格已有 agent）；直接进入投递-审批-交接循环。
+    await this.preloadAttachmentMeta(request)
     return this.runManagedTask(request, updated)
   }
 

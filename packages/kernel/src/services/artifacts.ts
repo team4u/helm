@@ -9,7 +9,7 @@
 import { mkdir, readFile, readdir, realpath, rm, stat } from 'node:fs/promises'
 import { join, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { ArtifactMetadata } from '@helm/protocol'
+import { HelmError, type ArtifactMetadata } from '@helm/protocol'
 import {
   FileNotFoundError,
   atomicWriteFile,
@@ -54,6 +54,28 @@ export class InMemoryArtifactRepository implements ArtifactRepository {
 export const SPILL_THRESHOLD_BYTES = 32 * 1024
 /** 预览头部长度：4 KiB（UTF-8 安全截断）。 */
 export const PREVIEW_HEAD_BYTES = 4 * 1024
+/** 上传产物大小上限：15 MiB。 */
+export const MAX_ARTIFACT_BYTES = 15 * 1024 * 1024
+/** 上传文件名长度上限。 */
+const MAX_UPLOAD_NAME_LENGTH = 200
+
+/** 上传文件名净化：拒绝穿越/控制字符/超长名（边界直接 400，不静默改名）。 */
+export function sanitizeUploadFilename(raw: string): string {
+  const name = raw.trim()
+  if (
+    name === '' ||
+    name.length > MAX_UPLOAD_NAME_LENGTH ||
+    name === '.' ||
+    name === '..' ||
+    name.includes('/') ||
+    name.includes('\\') ||
+    name.includes('\0') ||
+    /[\x00-\x1f\x7f]/.test(name)
+  ) {
+    throw new HelmError('validation_error', `非法产物文件名: ${raw}`, 400)
+  }
+  return name
+}
 
 export interface RegisterOptions {
   /** 展示名；缺省用源文件名。 */
@@ -195,6 +217,57 @@ export class ArtifactService {
       id,
       conversationId,
       name,
+      path: join('artifacts', String(conversationId), storedName),
+      mimeType,
+      size,
+      createdAt: Date.now(),
+    }
+    this.repository.put(metadata)
+    return metadata
+  }
+
+  /**
+   * 上传写入：跨平台 HTTP 产物入口（Web/CLI 二进制流或 JSON base64 统一在此落盘）。
+   * - 上限 15 MiB（超限 413 artifact_too_large）；
+   * - 文本类 mime 经 stash.redact 脱敏后原子写（守住「秘密不落盘」承诺）；
+   * - 二进制字节原样原子写（不 UTF-8 重编码，保真）；
+   * - 无 stash 时如实照原样写（调用方未配置脱敏钩子，不为静默降级而伪造安全）。
+   */
+  async writeUploaded(
+    conversationId: number,
+    input: { name: string; bytes: Uint8Array; mimeType?: string },
+  ): Promise<ArtifactMetadata> {
+    this.assertConversationId(conversationId)
+    const safeName = sanitizeUploadFilename(input.name)
+    if (input.bytes.byteLength > MAX_ARTIFACT_BYTES) {
+      throw new HelmError(
+        'artifact_too_large',
+        `产物大小超过 15 MiB 上限（${input.bytes.byteLength} > ${MAX_ARTIFACT_BYTES}）`,
+        413,
+        { maxBytes: MAX_ARTIFACT_BYTES, actualBytes: input.bytes.byteLength },
+      )
+    }
+    const mimeType =
+      input.mimeType !== undefined && input.mimeType.trim() !== ''
+        ? input.mimeType.trim().toLowerCase()
+        : detectMime(safeName)
+    const id = randomUUID()
+    const storedName = `${id}-${safeName}`
+    const dest = join(this.convDir(conversationId), storedName)
+    let size: number
+    if (isTextMime(mimeType)) {
+      const raw = Buffer.from(input.bytes).toString('utf8')
+      const safeText = this.stash !== undefined ? this.stash.redact(raw) : raw
+      await atomicWriteFile(dest, safeText)
+      size = Buffer.byteLength(safeText, 'utf8')
+    } else {
+      await atomicWriteFile(dest, input.bytes)
+      size = input.bytes.byteLength
+    }
+    const metadata: ArtifactMetadata = {
+      id,
+      conversationId,
+      name: safeName,
       path: join('artifacts', String(conversationId), storedName),
       mimeType,
       size,

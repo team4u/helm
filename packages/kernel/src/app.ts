@@ -46,6 +46,7 @@ export async function createHelm(options: HelmOptions = {}) {
       buildSpawnEnv: (id, cwd) => kernel.buildSpawnEnv(id, cwd),
       redact: (text) => kernel.stash.redact(text),
       runLocalGate: (command, context) => kernel.runGate(command, context),
+      getArtifact: (id, conversationId) => kernel.resolveAuthorizedAttachment(conversationId, id),
       ...(herdrTransport ? { transport: herdrTransport } : {}),
     }), { enabled: false });
     // builtin:superagent：默认停用注册；启用时 service.start 幂等自举

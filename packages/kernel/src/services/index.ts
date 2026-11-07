@@ -80,6 +80,8 @@ export {
 export {
   ArtifactService,
   InMemoryArtifactRepository,
+  MAX_ARTIFACT_BYTES,
+  sanitizeUploadFilename,
   SPILL_THRESHOLD_BYTES,
   PREVIEW_HEAD_BYTES,
   truncateUtf8Safe,

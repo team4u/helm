@@ -183,18 +183,37 @@ export function parseInputBody(body: Record<string, unknown>): {
   whenBusy?: WhenBusy
   origin?: InputOrigin
   meta?: Record<string, unknown>
+  attachments?: string[]
 } {
   const text = requireString(body, 'text', { maxLength: 512 * 1024 })
   const whenBusy = optionalEnum(body, 'whenBusy', ['steer', 'followUp', 'reject'] as const)
   const origin = optionalEnum(body, 'origin', ['human', 'agent', 'trigger'] as const)
   const meta = parseMetaObject(body.meta)
-  rejectUnknownKeys(body, new Set(['text', 'whenBusy', 'origin', 'meta']))
+  const attachments = parseAttachmentIds(body.attachments)
+  rejectUnknownKeys(body, new Set(['text', 'whenBusy', 'origin', 'meta', 'attachments']))
   return {
     text,
     ...(whenBusy !== undefined ? { whenBusy } : {}),
     ...(origin !== undefined ? { origin } : {}),
     ...(meta !== undefined ? { meta } : {}),
+    ...(attachments !== undefined ? { attachments } : {}),
   }
+}
+
+/** 附件 ID 列表：字符串数组，逐项须满足 ID_PATTERN，去重；空数组视为未提供。 */
+function parseAttachmentIds(raw: unknown): string[] | undefined {
+  if (raw === undefined) return undefined
+  if (!Array.isArray(raw) || raw.some((item) => typeof item !== 'string')) {
+    throw new ValidationError('attachments 需为字符串数组')
+  }
+  const ids = raw as string[]
+  for (const id of ids) {
+    if (!ID_PATTERN.test(id)) {
+      throw new ValidationError(`attachments 含非法产物 ID：${id}`)
+    }
+  }
+  const unique = [...new Set(ids)]
+  return unique.length > 0 ? unique : undefined
 }
 
 /** 纯 JSON 对象校验（非对象 JSON——数组/标量拒绝）；逐值递归验证 JSON-safe。 */
@@ -460,6 +479,35 @@ function rejectUnknownKeys(body: Record<string, unknown>, allowed: Set<string>):
   if (unknown.length > 0) {
     throw new ValidationError(`不支持的字段: ${unknown.join(', ')}`)
   }
+}
+
+// ---------------------------------------------------------------------------
+// 会话上下文操作 body（reset / compact / fork）
+// ---------------------------------------------------------------------------
+
+/** POST /api/conversations/:id/reset：可选 handoff 文本。 */
+export function parseConversationResetBody(body: Record<string, unknown>): { handoff?: string } {
+  const handoff = optionalString(body, 'handoff', { maxLength: 512 * 1024 })
+  rejectUnknownKeys(body, new Set(['handoff']))
+  return handoff !== undefined ? { handoff } : {}
+}
+
+/** POST /api/conversations/:id/compact：可选 instructions 文本。 */
+export function parseConversationCompactBody(body: Record<string, unknown>): { instructions?: string } {
+  const instructions = optionalString(body, 'instructions', { maxLength: 512 * 1024 })
+  rejectUnknownKeys(body, new Set(['instructions']))
+  return instructions !== undefined ? { instructions } : {}
+}
+
+/** POST /api/conversations/:id/fork：entryId 必填正整数；title 可选 1..200。 */
+export function parseConversationForkBody(body: Record<string, unknown>): { entryId: number; title?: string } {
+  const raw = body.entryId
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw <= 0) {
+    throw new ValidationError('entryId 需为正整数')
+  }
+  const title = optionalString(body, 'title', { minLength: 1, maxLength: 200 })
+  rejectUnknownKeys(body, new Set(['entryId', 'title']))
+  return { entryId: raw, ...(title !== undefined ? { title } : {}) }
 }
 
 // ---------------------------------------------------------------------------

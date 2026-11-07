@@ -147,6 +147,7 @@ export interface KernelRuntimeLike {
       origin?: 'human' | 'agent' | 'trigger'
       whenBusy?: 'steer' | 'followUp' | 'reject'
       meta?: Record<string, unknown>
+      attachments?: string[]
     },
   ): Promise<{ submissionId: string }> | { submissionId: string }
   /** ?wait=1：等待单次提交终态并返回本次输入结果；失败/中止抛明确 HelmError。 */
@@ -155,6 +156,18 @@ export interface KernelRuntimeLike {
     submissionId: string,
   ): Promise<ConversationInputResult> | ConversationInputResult
   abortConversation(id: number): Promise<void> | void
+  /** 重置会话上下文（新上下文以 handoff 文本开始）；返回更新后的摘要。 */
+  resetConversation(id: number, opts?: { handoff?: string }): Promise<ConversationSummary> | ConversationSummary
+  /** 手动压缩会话上下文；返回压缩任务 ID 与更新后的摘要。 */
+  compactConversation(
+    id: number,
+    opts?: { instructions?: string },
+  ): Promise<{ taskId: number; conversation: ConversationSummary }> | { taskId: number; conversation: ConversationSummary }
+  /** 从指定条目分叉新会话（继承 profile/cwd/model，父链指向源会话）。 */
+  forkConversation(
+    id: number,
+    opts: { entryId: number; title?: string },
+  ): Promise<ConversationSummary> | ConversationSummary
 
   listAsks(): Promise<AskSpec[]> | AskSpec[]
   answerAsk(id: string, answers: Record<string, string>, expectedStateSeq?: number): Promise<unknown> | unknown

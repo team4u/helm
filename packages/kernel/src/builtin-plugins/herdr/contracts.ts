@@ -55,6 +55,11 @@ export interface HerdrPluginDependencies {
   buildSpawnEnv(conversationId: number, cwd: string): Record<string, string>
   redact(text: string): string
   runLocalGate(command: string, options: { cwd?: string; conversationId?: number; signal?: AbortSignal; env?: Record<string, string> }): Promise<AgentGateResult>
+  /** 附件产物元数据解析（含授权校验；不存在/越权抛 HelmError）。可选注入。 */
+  getArtifact?: (
+    id: string,
+    conversationId: number,
+  ) => Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }>
   transport?: HerdrTransport
 }
 

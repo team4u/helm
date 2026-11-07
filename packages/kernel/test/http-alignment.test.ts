@@ -149,6 +149,9 @@ function makeKernel(): KernelRuntimeLike {
       return state.waitForInputResult
     },
     async abortConversation() {},
+    async resetConversation(id) { return state.conversations.get(id) ?? summary(id, `会话 ${id}`) },
+    async compactConversation(id) { return { taskId: 1, conversation: state.conversations.get(id) ?? summary(id, `会话 ${id}`) } },
+    async forkConversation(id) { return summary(id + 100, `会话 ${id} (分叉)`) },
     async listAsks() {
       return []
     },

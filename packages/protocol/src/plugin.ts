@@ -120,6 +120,8 @@ export interface AgentSpawnRequest {
   gate?: string
   /** 续接既有子代理的标识。 */
   resume?: string
+  /** 随本次子代理派生传递的产物 ID 列表。 */
+  attachments?: string[]
   /** 取消信号，由宿主注入。 */
   signal?: AbortSignal
 }

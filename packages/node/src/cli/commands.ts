@@ -398,6 +398,84 @@ export function coreCommands(): CommandSpec[] {
   })
 
   cmds.push({
+    path: ['conversations', 'reset'],
+    description: '重置会话上下文（POST /api/conversations/:id/reset；新上下文以 handoff 开始）',
+    flags: [...convFlags, { name: 'handoff', type: 'string', help: '重置后作为首条用户消息的交接文本' }],
+    positional: '[id]',
+    async run(ctx) {
+      const parsed = parseFlags(
+        [
+          { name: 'current', type: 'boolean' },
+          { name: 'handoff', type: 'string' },
+        ],
+        ctx.args,
+      )
+      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
+      if (parsed.positionals.length > 1) throw new CliError(`多余位置参数：${parsed.positionals.slice(1).join(' ')}`, 'unexpected_positional')
+      const body: Record<string, unknown> = {}
+      const handoff = flagValue<string>(parsed.flags, 'handoff')
+      if (handoff !== undefined) body.handoff = handoff
+      const hub = await ctx.hub()
+      printValue(ctx.io, await hub.post<ConversationSummary>(`/api/conversations/${id}/reset`, body), ctx.json)
+    },
+  })
+
+  cmds.push({
+    path: ['conversations', 'compact'],
+    description: '手动压缩会话上下文（POST /api/conversations/:id/compact；后台摘要任务）',
+    flags: [...convFlags, { name: 'instructions', type: 'string', help: '压缩摘要自定义指令' }],
+    positional: '[id]',
+    async run(ctx) {
+      const parsed = parseFlags(
+        [
+          { name: 'current', type: 'boolean' },
+          { name: 'instructions', type: 'string' },
+        ],
+        ctx.args,
+      )
+      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
+      if (parsed.positionals.length > 1) throw new CliError(`多余位置参数：${parsed.positionals.slice(1).join(' ')}`, 'unexpected_positional')
+      const body: Record<string, unknown> = {}
+      const instructions = flagValue<string>(parsed.flags, 'instructions')
+      if (instructions !== undefined) body.instructions = instructions
+      const hub = await ctx.hub()
+      printValue(ctx.io, await hub.post<unknown>(`/api/conversations/${id}/compact`, body), ctx.json)
+    },
+  })
+
+  cmds.push({
+    path: ['conversations', 'fork'],
+    description: '从指定条目分叉会话（POST /api/conversations/:id/fork）',
+    flags: [
+      ...convFlags,
+      { name: 'entry-id', type: 'number', required: true, help: '分叉起点条目 ID' },
+      { name: 'title', type: 'string', help: '新会话标题（缺省「<源标题> (分叉)」）' },
+    ],
+    positional: '[id]',
+    async run(ctx) {
+      const parsed = parseFlags(
+        [
+          { name: 'current', type: 'boolean' },
+          { name: 'entry-id', type: 'number', required: true },
+          { name: 'title', type: 'string' },
+        ],
+        ctx.args,
+      )
+      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
+      if (parsed.positionals.length > 1) throw new CliError(`多余位置参数：${parsed.positionals.slice(1).join(' ')}`, 'unexpected_positional')
+      const entryId = flagValue<number>(parsed.flags, 'entry-id')
+      if (entryId === undefined || !Number.isInteger(entryId) || entryId <= 0) {
+        throw new CliError('--entry-id 需为正整数', 'invalid_flag_value')
+      }
+      const body: Record<string, unknown> = { entryId }
+      const title = flagValue<string>(parsed.flags, 'title')
+      if (title !== undefined) body.title = title
+      const hub = await ctx.hub()
+      printValue(ctx.io, await hub.post<ConversationSummary>(`/api/conversations/${id}/fork`, body), ctx.json)
+    },
+  })
+
+  cmds.push({
     path: ['send'],
     description: '向会话提交输入（POST /api/conversations/:id/input；--wait 等待本次回答）',
     flags: [
@@ -405,6 +483,7 @@ export function coreCommands(): CommandSpec[] {
       enumFlag('when-busy', WHEN_BUSY, '会话正忙时策略'),
       enumFlag('origin', ORIGINS, '输入来源，默认 human'),
       { name: 'meta', type: 'json', help: '自由元数据 JSON 对象（随输入传递到 turn_settled）' },
+      { name: 'attach', type: 'string', help: '挂载产物 ID（多个用逗号分隔）' },
       { name: 'wait', type: 'boolean', help: '等待本次输入的回答（?wait=1；成功返回 ConversationInputResult）' },
     ],
     positional: '[id] <text>',
@@ -415,6 +494,7 @@ export function coreCommands(): CommandSpec[] {
           { name: 'when-busy', type: 'string' },
           { name: 'origin', type: 'string' },
           { name: 'meta', type: 'json' },
+          { name: 'attach', type: 'string' },
           { name: 'wait', type: 'boolean' },
         ],
         ctx.args,
@@ -433,6 +513,11 @@ export function coreCommands(): CommandSpec[] {
       if (whenBusy !== undefined) body.whenBusy = validateEnum(whenBusy, WHEN_BUSY, 'when-busy')
       if (origin !== undefined) body.origin = validateEnum(origin, ORIGINS, 'origin')
       if (parsed.flags.has('meta')) body.meta = coerceMetaFlag(parsed.flags.get('meta'), 'meta')
+      const attachRaw = flagValue<string>(parsed.flags, 'attach')
+      if (attachRaw !== undefined) {
+        const attachIds = attachRaw.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
+        if (attachIds.length > 0) body.attachments = attachIds
+      }
       const hub = await ctx.hub()
       const wait = parsed.flags.get('wait') === true
       const result = await hub.request<unknown>(
@@ -697,6 +782,55 @@ export function coreCommands(): CommandSpec[] {
       const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
       const hub = await ctx.hub()
       printValue(ctx.io, await hub.get<ArtifactMetadata[]>(`/api/conversations/${id}/artifacts`), ctx.json)
+    },
+  })
+
+  cmds.push({
+    path: ['artifacts', 'put'],
+    description: '上传本地文件为会话产物（POST /api/conversations/:id/artifacts）',
+    flags: [
+      ...convFlags,
+      { name: 'name', type: 'string', help: '自定义产物名（缺省用本地文件名）' },
+      { name: 'mime-type', type: 'string', help: '显式 MIME 类型' },
+    ],
+    positional: '<filePath> [id]',
+    async run(ctx) {
+      const parsed = parseFlags(
+        [
+          { name: 'current', type: 'boolean' },
+          { name: 'name', type: 'string' },
+          { name: 'mime-type', type: 'string' },
+        ],
+        ctx.args,
+      )
+      const filePath = parsed.positionals[0]
+      if (filePath === undefined) throw new CliError('缺少 <filePath> 位置参数', 'missing_file_path')
+      const id = resolveConversationTarget(parsed.flags, parsed.positionals[1], ctx.env)
+      if (parsed.positionals.length > 2) {
+        throw new CliError(`多余位置参数：${parsed.positionals.slice(2).join(' ')}`, 'unexpected_positional')
+      }
+      const pathMod = await import('node:path')
+      const fsp = await import('node:fs/promises')
+      let bytes: Uint8Array
+      try {
+        const st = await fsp.stat(filePath)
+        if (!st.isFile()) {
+          throw new CliError(`上传源不是常规文件（目录/设备）：${filePath}`, 'read_failed')
+        }
+        const buffer = await fsp.readFile(filePath)
+        bytes = new Uint8Array(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
+      } catch (err) {
+        if (err instanceof CliError) throw err
+        throw new CliError(
+          `读取上传文件失败（${filePath}）：${err instanceof Error ? err.message : String(err)}`,
+          'read_failed',
+        )
+      }
+      const fileName = flagValue<string>(parsed.flags, 'name') ?? pathMod.basename(filePath)
+      const mimeType = flagValue<string>(parsed.flags, 'mime-type')
+      const hub = await ctx.hub()
+      const metadata = await hub.uploadArtifact(id, fileName, bytes, mimeType)
+      printValue(ctx.io, metadata, ctx.json)
     },
   })
 

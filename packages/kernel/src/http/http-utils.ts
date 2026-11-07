@@ -120,7 +120,7 @@ export function corsHeaders(origin: string | null): Record<string, string> {
     'access-control-allow-origin': origin,
     'access-control-allow-credentials': 'true',
     'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-    'access-control-allow-headers': 'authorization,content-type',
+    'access-control-allow-headers': 'authorization,content-type,x-artifact-filename,x-artifact-mime-type',
     'access-control-max-age': '600',
     vary: 'Origin',
   }
@@ -197,6 +197,43 @@ export async function readBody(request: Request, maxBytes: number): Promise<Uint
     }
   }
   const out = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    out.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return out
+}
+
+/**
+ * 二进制上传体读取（产物上传等跨平台场景）：content-length 预检 + 流式累加，
+ * 超限立即取消 reader 并抛 413 artifact_too_large（错误码与产物语义对齐）。
+ */
+export async function readBinaryBodyWithLimit(request: Request, maxBytes: number): Promise<Uint8Array> {
+  const declaredHeader = request.headers.get('content-length')
+  if (declaredHeader !== null) {
+    const declared = Number(declaredHeader)
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new HelmError('artifact_too_large', `请求体超过 ${maxBytes} 字节上限`, 413, { maxBytes })
+    }
+  }
+  const reader = request.body?.getReader()
+  if (reader === undefined) return new Uint8Array(0)
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (value !== undefined) {
+      totalBytes += value.byteLength
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => {})
+        throw new HelmError('artifact_too_large', `请求体超过 ${maxBytes} 字节上限`, 413, { maxBytes })
+      }
+      chunks.push(value)
+    }
+  }
+  const out = new Uint8Array(totalBytes)
   let offset = 0
   for (const chunk of chunks) {
     out.set(chunk, offset)

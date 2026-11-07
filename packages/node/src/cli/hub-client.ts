@@ -3,7 +3,7 @@
  * 成功：直接实体/数组；失败：{error:{code,message,details?}}（ApiErrorBody）。
  * 凭据优先级：HELM_TOKEN / HELM_HUB_URL env > cli-token 文件 > 默认 3202。
  */
-import type { ApiErrorBody } from '@helm/protocol'
+import type { ApiErrorBody, ArtifactMetadata } from '@helm/protocol'
 import { CliError } from './errors.js'
 import type { Io } from './options.js'
 
@@ -184,6 +184,46 @@ export class HubClient {
     }
     if (!response.ok) throw await this.toCliError(response, `GET ${path}`)
     return response
+  }
+
+  /**
+   * 二进制产物上传（POST /api/conversations/:id/artifacts）：
+   * application/octet-stream 流 + x-artifact-filename（URL 编码）+ 可选 mime。
+   */
+  async uploadArtifact(
+    conversationId: number,
+    fileName: string,
+    bytes: Uint8Array,
+    mimeType?: string,
+  ): Promise<ArtifactMetadata> {
+    const path = `/api/conversations/${conversationId}/artifacts`
+    const headers = this.authHeaders({
+      'content-type': 'application/octet-stream',
+      'x-artifact-filename': encodeURIComponent(fileName),
+      ...(mimeType !== undefined ? { 'x-artifact-mime-type': mimeType } : {}),
+    })
+    let response: Response
+    try {
+      response = await this.io.fetchImpl(`${this.endpoint.baseUrl}${path}`, {
+        method: 'POST',
+        headers,
+        body: bytes as unknown as BodyInit,
+        signal: this.signal(undefined),
+        redirect: 'error',
+      })
+    } catch (err) {
+      if (err instanceof Error && err.name === 'TimeoutError') {
+        throw new CliError(`请求超时（${this.timeoutMs}ms）：POST ${path}`, 'timeout')
+      }
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new CliError(`请求已取消：POST ${path}`, 'aborted')
+      }
+      throw new CliError(
+        `无法连接 Hub（${this.endpoint.baseUrl}）：${err instanceof Error ? err.message : String(err)}`,
+        'hub_unreachable',
+      )
+    }
+    return this.parseEntity<ArtifactMetadata>(response, `POST ${path}`)
   }
 
   /**

@@ -96,6 +96,11 @@ export interface NativeSpawnDeps extends HelmToolDeps {
    * 需真实注册后才能被会话按名选中；同名重装为原地替换）。
    */
   installChildExtension(extension: Extension): void
+  /**
+   * 附件清单块构造端口（宿主已在 spawnAgent 完成存在性与授权校验）。
+   * 返回 [Attached Files] 文本块；无附件 spawn 时不注入。
+   */
+  resolveAttachmentsForPrompt?(): Promise<string>
 }
 
 export interface SpawnOutcome {
@@ -319,14 +324,19 @@ async function driveTurn(
   structured: StructuredOutputSession | undefined,
   gateCwd: string,
 ): Promise<unknown> {
+  // 附件：宿主已校验授权；拼在任务正文之后、交接契约之前。
+  const attachmentBlock =
+    request.attachments !== undefined && request.attachments.length > 0 && deps.resolveAttachmentsForPrompt
+      ? `\n\n${await deps.resolveAttachmentsForPrompt()}\n`
+      : ''
   const promptText = structured
-    ? `${request.prompt}
+    ? `${request.prompt}${attachmentBlock}
 
 <structured_output_contract>
 完成回答后，调用 register_structured_output 工具提交最终结构化结果（output 参数必须满足给定 JSON Schema）。
 Schema: ${JSON.stringify(structured.schema)}
 </structured_output_contract>`
-    : request.prompt
+    : `${request.prompt}${attachmentBlock}`
 
   const submission = await conversation.submit(
     { type: 'input', content: promptText, whenBusy: 'followUp' },
