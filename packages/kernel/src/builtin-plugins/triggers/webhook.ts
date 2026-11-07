@@ -21,7 +21,7 @@
  *   （复用 http readBody 流式限制，超限 cancel 并 413；验签基于原始字节，
  *   解码 fatal:true，坏 UTF8 显式 400）。
  */
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { HelmError } from '@helm/protocol'
 import type { HelmPluginContext, PluginActionContext } from '@helm/protocol'
 import { BodyError, readBody } from '../../http/http-utils.js'
@@ -162,13 +162,13 @@ export function registerWebhook(
 
   /** 启动：读入 doc（损坏显式报错）、登记既有 secret 脱敏并开活跃门。 */
   async function start(): Promise<void> {
-    active = true
     readDoc()
     const metas = readDoc().webhooks
     for (const meta of metas) {
       const secret = await deps.credentials.getPluginSecret(TRIGGERS_PLUGIN_ID, webhookSecretKey(meta.id))
       if (secret !== undefined) secretRedactions.push(deps.stash.addRedaction(secret))
     }
+    active = true
   }
 
   /** 停用：先关门（新请求拒收/dispatch 前再拒），再等已进请求自然收敛。 */
@@ -391,20 +391,22 @@ export function registerWebhook(
       } catch {
         return webhookError(400, 'invalid_body', 'webhook body 不是合法 UTF-8')
       }
-      // 已读 body 之后、dispatch 之前重查 doc：期间 webhook 已被 delete 的，
-      // 入口下线即拒绝（404），不再向已删端点投递事件。
+      // 请求体读取期间端点可能被删除或重建，拒绝用旧密钥投递到新配置。
+      const secretAtDispatch = await deps.credentials.getPluginSecret(TRIGGERS_PLUGIN_ID, webhookSecretKey(id))
+      if (!active) {
+        return webhookError(409, 'plugin_disabled', 'builtin:triggers webhook 服务已停用，拒绝投递')
+      }
       const metaAtDispatch = readDoc().webhooks.find((w) => w.id === id)
       if (metaAtDispatch === undefined) {
         return webhookError(404, 'not_found', `webhook 不存在: ${id}`)
       }
-      // dispose 强制 stop 场景：active 已置 false，凭此拒投（不再发事件）。
-      if (!active) {
-        return webhookError(409, 'plugin_disabled', 'builtin:triggers webhook 服务已停用，拒绝投递')
+      if (secretAtDispatch !== secret || metaAtDispatch.createdAt !== meta.createdAt) {
+        return webhookError(409, 'webhook_changed', 'webhook 配置已变更，请按当前密钥重新发送请求')
       }
       try {
         await deps.dispatch(
           {
-            id: `webhook:${id}:${Date.now().toString(36)}`,
+            id: `webhook:${id}:${randomUUID()}`,
             source: `webhook:${id}`,
             text,
             ...(metaAtDispatch.threadKey !== undefined ? { threadKey: metaAtDispatch.threadKey } : {}),

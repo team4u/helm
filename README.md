@@ -65,7 +65,7 @@ pnpm build
 timeout 50s node scripts/superagent-smoke.mjs
 ```
 
-`builtin:triggers` 同样默认停用，显式启用后提供 `cron` 与 `webhook` 两个入站连接器：事件经 `defang` 防逃逸信封进入 `trigger` 管道，缺省投递根会话，启用 SuperAgent 后由中枢路由；显式目标会话始终直达。webhook 接收端点免 Hub token，用 `x-helm-signature: sha256=<HMAC-SHA256>` 对原始字节验签，secret 仅保存在 `credentials.json`（0600），不经任何模型或公开文档输出。cron 为每计划点至多一次尝试、`catchUp` 合并补跑，不承诺 exactly-once；手动触发是独立新事件。
+`builtin:triggers` 同样默认停用，显式启用后提供 `cron` 与 `webhook` 两个入站连接器：事件经 `defang` 防逃逸信封进入 `trigger` 管道，缺省投递根会话，启用 SuperAgent 后由中枢路由；显式目标在没有订阅命中时直达。webhook 接收端点免 Hub token，用 `x-helm-signature: sha256=<HMAC-SHA256>` 对原始字节验签，secret 保存在 `credentials.json`（0600），动作输出与公开文档只返回 `hasSecret` 等元数据。cron 为每计划点至多一次尝试、`catchUp` 合并补跑，不承诺 exactly-once；手动触发是独立新事件。
 
 ```bash
 pnpm helm plugins enable builtin:triggers --json

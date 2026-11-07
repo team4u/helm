@@ -6,8 +6,7 @@
  *   经 host.dispatchTrigger 统一 defang 防逃逸投递）；
  * - webhook 连接器（webhook.ts：HMAC 验签公开路由 + 生命周期动作 + secret
  *   持久化于 credentials.json pluginSecrets，stash 全局脱敏）；
- * - cron 连接器经 deps.registerCron 注入（cron.ts 由并行模块实现；本文件
- *   不静态依赖，保持可独立编译验证）；
+ * - cron 连接器（cron.ts：持久调度与生命周期动作）；
  * - 声明式管理 UI（screen 'manager' 订阅 crons/webhooks 公共 doc；动作经
  *   helm:action 挂载；无 Emoji，icon 用 lucide 线性名）。
  *
@@ -21,6 +20,7 @@ import type { PluginDefinition } from '@helm/protocol'
 import { TRIGGERS_PLUGIN_ID, type TriggersDependencies } from './triggers/contracts.js'
 import { createDeliveryDispatch } from './triggers/delivery.js'
 import { registerWebhook } from './triggers/webhook.js'
+import { registerCron } from './triggers/cron.js'
 
 export const TRIGGERS_SCREEN_ID = 'manager'
 export { TRIGGERS_PLUGIN_ID }
@@ -47,7 +47,7 @@ export function createTriggersPlugin(deps: TriggersDependencies): PluginDefiniti
         flushDocs: deps.flushDocs,
       })
 
-      deps.registerCron(ctx, {
+      registerCron(ctx, {
         dispatchTrigger: dispatch,
         flush: deps.flushDocs,
       })

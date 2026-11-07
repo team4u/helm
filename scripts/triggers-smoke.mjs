@@ -273,6 +273,7 @@ try {
   ]);
   const hook = hookResult.webhook;
   ok(hook?.id === webhookId, 'webhook create 应返回 metadata.id');
+  ok(hook?.hasSecret === true, 'webhook 元数据应以 hasSecret:true 表达密钥已配置');
   ok(!(hook && 'secret' in hook), 'webhook create 输出不得包含 secret 字段');
   ok(!JSON.stringify(hookResult).includes(webhookSecret), 'webhook create 输出不得泄露 secret 明文');
 
@@ -290,7 +291,7 @@ try {
   ok(cronDoc.jobs.some((j) => j.id === cronPersistId), 'plugins doc crons 应包含持久化任务');
   const hookDoc = (await cliOk(['plugins', 'doc', pluginId, 'webhooks'])).value;
   ok(Array.isArray(hookDoc?.webhooks), 'plugins doc webhooks 应为 {webhooks:[]} 形态');
-  ok(hookDoc.webhooks.some((w) => w.id === webhookId), 'plugins doc webhooks 应包含钩子');
+  ok(hookDoc.webhooks.some((w) => w.id === webhookId && w.hasSecret === true), 'plugins doc webhooks 应包含已配置密钥的钩子');
   ok(
     !JSON.stringify(cronDoc).includes(webhookSecret) && !JSON.stringify(hookDoc).includes(webhookSecret),
     'docs 不得包含 secret 明文',

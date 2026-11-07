@@ -4,7 +4,6 @@ import { createAssistantPlugin } from './builtin-plugins/assistant.js';
 import { createHerdrPlugin } from './builtin-plugins/herdr.js';
 import { createSuperAgentPlugin, SUPERAGENT_PLUGIN_ID } from './builtin-plugins/superagent.js';
 import { createTriggersPlugin } from './builtin-plugins/triggers.js';
-import { registerCron } from './builtin-plugins/triggers/cron.js';
 import type { HerdrTransport } from './builtin-plugins/herdr/contracts.js';
 import type { SuperAgentDependencies } from './builtin-plugins/superagent/contracts.js';
 import { redactJsonValue } from './redact.js';
@@ -80,7 +79,6 @@ export async function createHelm(options: HelmOptions = {}) {
       profiles: kernel.profiles,
       isClosing: () => kernel.isClosing,
       flushDocs: () => kernel.documentStore.flush(),
-      registerCron,
     }), { enabled: false });
     await kernel.start();
     return {

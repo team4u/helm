@@ -12,12 +12,9 @@
 import { HelmError } from '@helm/protocol'
 import type {
   ConversationSummary,
-  ExternalTriggerEnvelope,
-  HelmPluginContext,
   PluginDefinition,
 } from '@helm/protocol'
 import type { CredentialService } from '../../services/credentials.js'
-import type { SecretStash } from '../../services/secret-stash.js'
 
 export const TRIGGERS_PLUGIN_ID = 'builtin:triggers'
 
@@ -86,14 +83,6 @@ export interface TriggersDependencies {
   isClosing(): boolean
   /** doc 镜像排队持久化的真实冲刷（kernel.documentStore.flush）。 */
   flushDocs(): Promise<void>
-  /** cron 模块注册入口（并行契约：registerCron(ctx, { dispatchTrigger, flush })）。 */
-  registerCron: (ctx: HelmPluginContext, deps: CronDeps) => void
-}
-
-/** registerCron 依赖端口（cron.ts 实现，triggers.ts 组装）。 */
-export interface CronDeps {
-  dispatchTrigger(event: ExternalTriggerEnvelope, targetProfileId?: string): Promise<void>
-  flush(): Promise<void>
 }
 
 // ---------------------------------------------------------------------------

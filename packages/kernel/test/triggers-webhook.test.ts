@@ -5,7 +5,7 @@
  * 覆盖：PluginHost 真实注册 + actions 调用 + 公开路由 HTTP 语义 +
  * secret 持久化与脱敏 + 目标解析（conversationId 优先 / profileId 最低 ID /
  * profileId 不存在拒绝）+ 会话上下文拒绝 + isClosing 拒绝 + doc 损坏报错。
- * cron 由并行模块实现（deps.registerCron 注入空实现，验证组装契约即可）。
+ * cron 调度使用工厂真实注册路径；本文件聚焦 webhook 与投递契约。
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -135,7 +135,6 @@ interface Harness {
   credentials: CredentialService
   stash: SecretStash
   dataDir: string
-  cronRegistered: boolean
 }
 
 async function makeHarness(over: Partial<{ closing: boolean }> = {}): Promise<Harness> {
@@ -146,7 +145,6 @@ async function makeHarness(over: Partial<{ closing: boolean }> = {}): Promise<Ha
   const host = new PluginHost({ dataDir, host: backend, docs })
   const credentials = new CredentialService(dataDir)
   const stash = new SecretStash()
-  let cronRegistered = false
   const plugin = createTriggersPlugin({
     credentials,
     stash,
@@ -158,12 +156,9 @@ async function makeHarness(over: Partial<{ closing: boolean }> = {}): Promise<Ha
     flushDocs: async () => {
       docs.flushCount += 1
     },
-    registerCron: () => {
-      cronRegistered = true
-    },
   })
   await host.register(plugin)
-  return { host, backend, docs, credentials, stash, dataDir, cronRegistered }
+  return { host, backend, docs, credentials, stash, dataDir }
 }
 
 async function rejectsCode(promise: Promise<unknown>, code: string, status?: number): Promise<void> {
@@ -209,16 +204,16 @@ async function callWebhookRoute(
 // 组装契约
 // ---------------------------------------------------------------------------
 
-test('工厂注册：registerCron 收到共享 dispatch/flush 端口；路由/actions/UI 完整注册', { timeout: 60_000 }, async () => {
+test('工厂注册：cron/webhook 动作、路由与声明式贡献完整注册', { timeout: 60_000 }, async () => {
   const h = await makeHarness()
-  assert.equal(h.cronRegistered, true)
+  assert.ok(h.host.listActions().some((action) => action.id === 'cron_list'))
   const routes = h.host.listRoutes()
   assert.equal(routes.length, 1)
   assert.equal(routes[0]!.method, 'POST')
   assert.equal(routes[0]!.public, true)
   assert.equal(routes[0]!.path, `/api/plugins/builtin%3Atriggers/routes/webhook/:id`)
   const actions = h.host.listActions().filter((a) => a.pluginId === TRIGGERS_PLUGIN_ID).map((a) => a.id).sort()
-  // 仅断言 webhook 侧动作（cron 动作由并行模块经 registerCron 注册）
+  // cron 与 webhook 共用工厂，确认 webhook 侧动作完整注册。
   for (const id of ['webhook_create', 'webhook_delete', 'webhook_list']) {
     assert.ok(actions.includes(id), `缺少动作 ${id}`)
   }
@@ -633,7 +628,7 @@ test('无效 UTF8：签名正确（覆盖原始字节）但 body 非法 UTF8 →
   rmSync(h.dataDir, { recursive: true, force: true })
 })
 
-test('读取与投递之间被删除：重查 doc 后 404，不向已删入口投递', { timeout: 60_000 }, async () => {
+test('投递开始后删除：已在途事件完成，新请求 404', { timeout: 60_000 }, async () => {
   const h = await makeHarness()
   await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', { id: 'hook', secret: 'topsecret' })
   // 用 dispatch 门禁阻塞在 handler 内部：body 已读、dispatch 未完时删除入口
@@ -660,6 +655,52 @@ test('读取与投递之间被删除：重查 doc 后 404，不向已删入口�
   assert.equal(h.backend.dispatched.length, 1, '已删入口不得再投递新事件')
   await h.host.dispose()
   rmSync(h.dataDir, { recursive: true, force: true })
+})
+
+test('读取请求体期间删除或重建端点，旧请求不再投递', { timeout: 60_000 }, async () => {
+  for (const recreate of [false, true]) {
+    const h = await makeHarness()
+    await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', { id: 'hook', secret: 'old-secret' })
+    const bytes = new TextEncoder().encode('旧端点的请求')
+    let entered!: () => void
+    let release!: () => void
+    const reading = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let sent = false
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (!sent) {
+          sent = true
+          controller.enqueue(bytes.slice(0, 2))
+          entered()
+        } else {
+          await gate
+          controller.enqueue(bytes.slice(2))
+          controller.close()
+        }
+      },
+    }, { highWaterMark: 0 })
+    const handler = h.host.listRoutes().find((route) => route.path.endsWith('/webhook/:id'))!.handler
+    const pending = Promise.resolve(handler(new Request(`http://hub${WEBHOOK_URL('hook')}`, {
+      method: 'POST',
+      headers: { 'x-helm-signature': `sha256=${createHmac('sha256', 'old-secret').update(bytes).digest('hex')}` },
+      body,
+      duplex: 'half',
+    } as RequestInit)))
+    try {
+      await reading
+      await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_delete', { id: 'hook' })
+      if (recreate) await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', { id: 'hook', secret: 'new-secret' })
+      release()
+      assert.equal((await pending).status, recreate ? 409 : 404)
+      assert.equal(h.backend.dispatched.length, 0)
+    } finally {
+      release()
+      await pending
+      await h.host.dispose()
+      rmSync(h.dataDir, { recursive: true, force: true })
+    }
+  }
 })
 
 test('停用门禁：dispatch 挂起时 disable 得 409 plugin_has_live_tasks；release 后 disable 成功；旧 handler 拒绝', { timeout: 60_000 }, async () => {
