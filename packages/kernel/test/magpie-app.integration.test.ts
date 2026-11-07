@@ -127,7 +127,7 @@ test('Magpie 经真实组合层注册、刷新、HTTP/CLI、缓存重启与停�
       ['group/fixture-smart', 'fixture chat reply', '/v1/chat/completions'],
       ['fixture/responses', 'fixture responses reply', '/v1/responses'],
       ['anthropic/claude-sonnet-4-6', 'fixture anthropic reply', '/v1/messages'],
-    ]) {
+    ] as const) {
       await app.kernel.updateConversation(1, { model: `magpie/${model}` })
       await app.kernel.submitInput(1, '受控协议验收')
       await app.kernel.waitForIdle(1)

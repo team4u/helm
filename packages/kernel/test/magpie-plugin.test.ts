@@ -250,6 +250,13 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend } = {}): Promis
       refreshResult.errors = error === undefined ? {} : { magpie: error }
     },
     host: undefined!,
+    async close() {
+      try {
+        await env.host.dispose()
+      } finally {
+        rmSync(dataDir, { recursive: true, force: true })
+      }
+    },
   }
   // 组合层 refreshProviderModels 端口：真实 models.refresh({ providers:['magpie'] })
   // 的等价包装（记录调用 + 返回 errors 映射；注入式失败可覆盖）。
@@ -293,13 +300,6 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend } = {}): Promis
   host.dispose = async () => {
     await originalDispose()
     registry.unregisterPlugin(MAGPIE)
-  }
-  env.close = async () => {
-    try {
-      await host.dispose()
-    } finally {
-      rmSync(dataDir, { recursive: true, force: true })
-    }
   }
   return env
 }
@@ -724,25 +724,30 @@ test('magpie14: 无模型时 turn_settled 不触网；UI spec 无 Emoji 且动�
   }
 })
 
-test('magpie15: 宿主无 ctx.provider 能力时注册显式失败（不静默降级）', { timeout: 60_000 }, async () => {
+test('magpie15: 缺少 provider 挂载端口时允许登记停用插件，启用显式失败', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    // 直接注册未包装 provider 能力的原始插件定义：definePlugin 在 register
-    // 阶段即执行，asMagpieContext 守卫显式拒绝，绝不静默降级为未挂载状态。
+    // ctx.provider 先登记声明；只有启用时才要求运行时提供真实挂载端口。
     const raw = createMagpiePlugin({
       refreshProviderModels: async () => ({ errors: {} }),
       fetchImpl: async () => new Response('{}'),
     })
     const host2 = new PluginHost({ dataDir: env.dataDir, host: makeHostApi(), docs: new MemoryDocStore(), config: new MemoryConfigStore() })
-    await assert.rejects(
-      () => host2.register(raw, { enabled: false }),
-      (err: unknown) => {
-        assert.ok(err instanceof HelmError)
-        assert.equal(err.code, 'magpie_provider_registry_unavailable')
-        return true
-      },
-    )
-    await host2.dispose()
+    try {
+      await host2.register(raw, { enabled: false })
+      assert.equal(host2.list().find((plugin) => plugin.id === MAGPIE)?.enabled, false)
+      await assert.rejects(
+        () => host2.enable(MAGPIE),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError)
+          assert.equal(err.code, 'provider_port_unavailable')
+          return true
+        },
+      )
+      assert.equal(host2.list().find((plugin) => plugin.id === MAGPIE)?.enabled, false)
+    } finally {
+      await host2.dispose()
+    }
   } finally {
     await env.close()
   }
