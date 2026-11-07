@@ -7,23 +7,26 @@
  *   预先 aborted 的 Context 绝不 spawn；abort/timeout 杀整个进程组并可靠等待子进程
  *   退出（listener/timer 全清理，不泄露进程）；stdout/stderr 各自 `StreamDecoder` 增量
  *   解码，多字节字符跨 chunk 不撕裂；`onOutput` 按到达顺序拼接（非先 stdout 后 stderr）。
- * - 跨节点执行（EnvFabric）：runShell/read/write/edit 按 (nodeId, cwd) 靶点在目标
- *   节点执行；nodeId !== 'local' 时经 deps.envFabric 的 RemoteExecutionEnv（离线显式
- *   node_offline，断线显式 unknown；EnvFabric 缺失显式 env_fabric_missing），绝不
- *   静默回退 local 误读写 Hub 本机磁盘。
+ * - 跨节点执行（EnvFabric）：runShell/read/write/edit 按 (nodeId, cwd,
+ *   conversationId) 靶点在目标节点执行；nodeId !== 'local' 时经
+ *   deps.envFabric（离线显式 node_offline，断线显式 unknown；EnvFabric
+ *   缺失时仅允许 local 短生命周期直建，远端显式 env_fabric_missing），
+ *   绝不静默回退 local 误读写 Hub 本机磁盘。
  * - 跨平台路径形状：目标路径一律按其自身形状（POSIX 绝对 / Windows 盘符绝对 /
  *   UNC）选用纯 posix/win32 规则做词法解析与 containment，绝不用 Hub 宿主
  *   node:path 默认规则解析远端路径（Linux Hub 上 resolve('C:\\workspace') 会得到
  *   错误结果，Windows/mac/Linux 跨平台承诺即不成立）；containment 在基准为根目录
  *   （/ 或 C:\\）时不叠加分隔符（防 '//' 前缀误拒根下合法文件）；盘符相对路径
  *   （C:relative）语义依赖进程当前目录，一律显式拒绝。
- * - env 注入：local 继承 process.env 并由 buildManagedEnv 受管变量（HELM_ENV /
- *   HELM_HUB_URL / HELM_CONVERSATION_ID / HELM_CWD / HELM_DATA_DIR / 受管
- *   HELM_TOKEN）固定覆盖 stash 注入的同名项，deps.cliBinDir（helm CLI 包装目录）
- *   以 path.delimiter 前置注入 PATH；远端节点绝不携带 Hub 宿主环境、也绝不合成
- *   默认 PATH（节点守护进程自身合并节点 PATH/HOME 并剥除节点宿主 HELM_TOKEN，
- *   合成默认 PATH 会覆盖节点真实工具链）；远端 HELM_HUB_URL 仅取节点注册时上报
- *   的真实 hubUrl（未上报则省略该键，绝不 fallback Hub 本机地址）。
+ * - env 注入（唯一权威在 env/scoped-env.ts 的 ScopedExecutionEnv）：local
+ *   继承 process.env（真实 PATH/HOME）并剥除受管 HELM_* 变量（大小写
+ *   不敏感），受管变量（HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID /
+ *   HELM_CWD / HELM_DATA_DIR / HELM_NODE_ID / 受管 HELM_TOKEN）由 composer
+ *   （buildManagedEnv）现场合成固定覆盖，deps.cliBinDir 前置注入 PATH；
+ *   远端节点绝不携带 Hub 宿主环境、也绝不合成默认 PATH（节点守护进程
+ *   自身合并节点 PATH/HOME 并剥除节点宿主 HELM_TOKEN）；远端
+ *   HELM_HUB_URL 仅取节点注册时上报的真实 hubUrl（未上报则省略该键，
+ *   绝不 fallback Hub 本机地址）。本文件不再有第二套合成规则。
  * - runShell 对宿主继承 HELM_TOKEN 做兜底脱敏：即使调用方未把宿主 token 登记进
  *   deps.redact，返回的一切聚合文本也对捕获到的宿主 token 做精确替换脱敏。
  * - HELM_TOKEN 剥除按大小写不敏感处理（Windows 环境变量名语义：helm_token /
@@ -45,6 +48,7 @@ import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/conte
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { int, obj, opt, str } from '@earendil-works/pi-schema'
 import { lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { delimiter as pathDelimiter, posix, win32 } from 'node:path'
@@ -115,6 +119,10 @@ export const MAX_TIMEOUT_MS = 600_000
 const ARTIFACT_PAGE_BYTES = 4 * 1024
 /** bash 输出聚合上限（UTF-8 字节）：超过显式失败，绝不静默截断当成功。 */
 export const MAX_OUTPUT_BYTES = 1024 * 1024
+/** 流式模式（onOutputChunk）聚合预算：逐块推送不受影响（逐块输出是流式
+ *  客户端的交付物），Hub 侧仅留终态诊断聚合；超限同样显式
+ *  output_limit_exceeded（旧 64MiB 全文复制是内存泄漏，见审计）。 */
+export const STREAM_AGGREGATE_LIMIT_BYTES = 256 * 1024
 /** read 工具单文件上限：与 spill 预览链路一致的明确限额。 */
 export const READ_FILE_MAX_BYTES = 128 * 1024
 
@@ -205,16 +213,47 @@ export async function runShell(
       }
     }
   }
-  const env = buildToolEnv(deps, cwd, options.conversationId, options.env, nodeId)
-  // 每次 exec 独立 env 实例：activeChildPids 等可变状态不跨调用共享；
-  // 远端使用 fabric 的靶点底座（同一连接、逐命令选项隔离）；本机不硬编码
-  // shell 路径（SDK 按平台自动解析可用 shell；Windows 不假设 /bin/bash）。
-  const shell =
-    nodeId !== 'local' && deps.envFabric !== undefined
-      ? deps.envFabric.envFor(nodeId, cwd)
-      : new NodeExecutionEnv({ cwd })
+  // 远端节点：必须经 EnvFabric（无 fabric 时显式失败，绝不回退 local）；
+  // local 生产同样优先经 fabric 的 ScopedExecutionEnv（统一 env 合成权威；
+  // 测试未注入 fabric 时 local 允许短生命周期直建——仅此兜底，不涉远端）。
+  let shell: ExecutionEnv
+  let shellEnv: Record<string, string> | undefined = options.env
+  let shellInheritEnv: boolean | undefined
+  if (deps.envFabric !== undefined) {
+    shell = deps.envFabric.envForTarget({
+      nodeId,
+      cwd,
+      ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
+    })
+    // 逐调用注入 env（如 herdr 插件的 Profile.runtime.env）：受管绑定键
+    // 仍由 ScopedExecutionEnv 的 composer 固定覆盖（见 scoped-env.ts）；
+    // inheritEnv 保持缺省：local 由 Scoped 合成完整 env（拷贝宿主 PATH/HOME
+    // 基底、剥除受管 HELM_*、受管覆盖）后对 base 显式 inheritEnv:false
+    //（SDK 不得把已剥除的宿主 HELM_* 重新带回）；远端缺省 inheritEnv 让
+    // 节点守护进程合并节点宿主基底（节点真实 PATH/HOME 工具链）并剥除节点
+    // 宿主 HELM_TOKEN，受管合成最后覆盖；绝不合成默认 PATH 覆盖节点工具链。
+  } else if (nodeId === 'local') {
+    shell = new NodeExecutionEnv({ cwd })
+    // 无 fabric 兜底（测试用）：仍走既有受管合成策略（宿主基底 + 受管
+    // 固定覆盖 + cliBinDir PATH 前置），自带完整 env 并显式 inheritEnv:false
+    // （SDK 二次继承会把已剥除的宿主 HELM_TOKEN 重新带回）。
+    shellEnv = buildToolEnv(deps, cwd, options.conversationId, options.env, nodeId)
+    shellInheritEnv = false
+  } else {
+    return {
+      ok: false,
+      exitCode: null,
+      output: `env_fabric_missing: 节点 ${nodeId} 为远端但 EnvFabric 未注入（无法建立远端执行，绝不回退本机）`,
+      timedOut: false,
+      signal: null,
+    }
+  }
   // 到达顺序聚合（stdout/stderr 混排按真实到达序，非先 stdout 后 stderr）。
   // 秘密脱敏在聚合全文上做：跨 chunk 撕裂的秘密在完整拼接后必然完整匹配。
+  // 流式模式（onOutputChunk 活跃）聚合预算更小：超限显式失败
+  // output_limit_exceeded（绝不截断当成功）——流式客户端已收到全部逐块
+  // 输出，终态 output 仅作诊断，超限即放弃聚合并如实报错。
+  const aggregateLimit = options.onOutputChunk !== undefined ? STREAM_AGGREGATE_LIMIT_BYTES : maxOutputBytes
   let combined = ''
   let outputBytes = 0
   let exceeded = false
@@ -222,17 +261,13 @@ export async function runShell(
     command,
     {
       cwd,
-      env,
-      // local：env 已是完整合成结果（buildToolEnv 复制 process.env 基底并
-      // 完成 剥除/覆盖）：SDK 二次 inheritEnv=true 会把已删除的宿主
-      // HELM_TOKEN 重新带回（真实回归，见 tools.test.ts），故显式 false。
-      // 远端：inheritEnv=true 让节点守护进程合并节点宿主基底（节点真实
-      // PATH/HOME 工具链）并剥除节点宿主 HELM_TOKEN（daemon 侧过滤），
-      // input.env（受管合成）最后覆盖；绝不合成默认 PATH 覆盖节点工具链。
-      inheritEnv: nodeId === 'local' ? false : true,
+      ...(shellEnv === undefined ? {} : { env: shellEnv }),
+      ...(shellInheritEnv === undefined ? {} : { inheritEnv: shellInheritEnv }),
       timeout: timeoutMs / 1000,
       onOutput: (text, _ctx, info) => {
-        if (options.onOutputChunk !== undefined && !exceeded) {
+        // 流式逐块回调不受聚合超限影响（逐块输出是流式客户端的交付物；
+        // 超限只放弃 Hub 侧终态诊断聚合，绝不中断推送）。
+        if (options.onOutputChunk !== undefined) {
           try {
             options.onOutputChunk({ stream: info.stream, text })
           } catch {
@@ -241,7 +276,7 @@ export async function runShell(
         }
         if (exceeded) return
         outputBytes += Buffer.byteLength(text, 'utf8')
-        if (outputBytes > maxOutputBytes) {
+        if (outputBytes > aggregateLimit) {
           exceeded = true
           combined = ''
           return
@@ -264,11 +299,16 @@ export async function runShell(
     }
   }
   if (exceeded) {
+    const limit = options.onOutputChunk !== undefined ? aggregateLimit : maxOutputBytes
+    const streamNote =
+      options.onOutputChunk !== undefined
+        ? '（流式模式：逐块输出已全部推送，此处仅终态诊断聚合超限）'
+        : ''
     return {
       ok: false,
       exitCode: null,
       output: redactAll(
-        `output_limit_exceeded: 输出超过 ${maxOutputBytes} 字节上限，已放弃聚合。` +
+        `output_limit_exceeded: 输出超过 ${limit} 字节聚合上限，已放弃聚合。${streamNote}` +
           '请重定向到文件后用 read 分页读取，或收窄命令输出。',
       ),
       timedOut: false,

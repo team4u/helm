@@ -15,7 +15,14 @@ export interface NodeWsGatewayOptions {
 export interface NodeWsGateway { readonly onlineCount: number; close(): Promise<void> }
 
 export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOptions): NodeWsGateway {
-  const { registry, path = '/ws/node', registerTimeoutMs = 10_000, log = () => undefined } = options
+  const {
+    registry,
+    path = '/ws/node',
+    registerTimeoutMs = 10_000,
+    // 单次发送/分发错误不静默（诚实性纪律）：默认 console.error 落服务端
+    // 日志；仅当连接已非 OPEN（发送失败导致断开）时才终止连接。
+    log = (message: string) => console.error(`[helm] node gateway: ${message}`),
+  } = options
   const wss = new WebSocketServer({ noServer: true })
   let closing: Promise<void> | undefined
   const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {

@@ -7,15 +7,23 @@
  * - composer 返回的键是**绑定身份**（HELM_CONVERSATION_ID / HELM_HUB_URL /
  *   HELM_TOKEN / HELM_SECRET_* 等）：逐调用 options.env 同名键不可覆盖
  *   （防伪造作用域），其余键由逐调用 env 正常补充；
- * - 无 conversationId（两参 envFor）：不注入任何机密——没有可信
+ * - 无 conversationId（envFor 两参路径）：不注入任何机密——没有可信
  *   作用域就不注入（fail-closed），而非借用别的会话；
  * - 远端传输共享（同 nodeId 一个连接池 + execId 路由的输出扇出），
  *   每条命令的 env 在 exec 时隔离合成。
+ *
+ * local 合成（本文件是唯一权威，tools.ts 不再有第二套规则）：
+ * - 继承宿主 process.env（真实 PATH/HOME 工具链），但受管 HELM_* 变量
+ *   （含大小写变体）按 fail-closed 剥除；
+ * - cliBinDir（helm CLI 包装目录）以 path.delimiter 前置注入 PATH；
+ * - 逐调用 env 与 composer 绑定键最后合成；composer 未提供 HELM_TOKEN
+ *   时一切来源（宿主继承/逐调用注入）的同名变体一并剥除。
  */
 
 import type { ExecutionEnv, Result, ShellExecOptions, ShellExecResult } from '@earendil-works/pi-durable/env'
 import type { ExecutionError } from '@earendil-works/pi-durable/env'
 import type { Context } from '@earendil-works/chord/context'
+import { delimiter as pathDelimiter } from 'node:path'
 import type { EnvOptionsComposer } from './fabric.js'
 
 /** 执行靶点：会话 + 节点 + 工作目录（Profile×节点组合后的物理落点）。 */
@@ -30,8 +38,13 @@ export interface ScopedExecutionEnv extends ExecutionEnv {
   readonly target: { conversationId?: number; nodeId: string; cwd: string }
 }
 
+export interface ScopedExecutionEnvOptions {
+  /** helm CLI 包装目录（local exec 前置注入 PATH）。 */
+  cliBinDir?: () => string | undefined
+}
+
 /** 受管变量名集（大小写不敏感剥除；Windows env 名语义下 helm_token / Helm_Token
- * 等同名变体一并剥除，受管值最后固定覆写——与 runtime/tools.ts 同规）。 */
+ *  等同名变体一并剥除，受管值最后固定覆写——策略由 composer 提供权威值）。 */
 const MANAGED_ENV_NAMES = new Set([
   'HELM_ENV',
   'HELM_HUB_URL',
@@ -42,11 +55,20 @@ const MANAGED_ENV_NAMES = new Set([
   'HELM_TOKEN',
 ])
 
+/** 大小写不敏感的 HELM_TOKEN 变体剥除（无受管 token 时绝不透传任何来源）。 */
+function deleteTokenVariants(env: Record<string, string>): void {
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === 'HELM_TOKEN') delete env[key]
+  }
+}
+
 export function createScopedExecutionEnv(
   base: ExecutionEnv,
   target: EnvTarget,
   composer: EnvOptionsComposer | undefined,
+  options: ScopedExecutionEnvOptions = {},
 ): ScopedExecutionEnv {
+  const { cliBinDir } = options
   const exec = async (
     command: string | readonly string[],
     options: ShellExecOptions | undefined,
@@ -70,9 +92,10 @@ export function createScopedExecutionEnv(
       merged = supplemented
     }
     if (target.nodeId === 'local') {
-      // local 继承宿主 process.env，但受管变量（HELM_TOKEN / HELM_CONVERSATION_ID /
-      // HELM_CWD / HELM_ENV 等）按大小写不敏感剥除：无会话作用域时不借用宿主
-      // 值（fail-closed），有作用域时受管值由 composer 最后固定覆写。
+      // local 继承宿主 process.env（真实 PATH/HOME 工具链），但受管变量
+      // （HELM_TOKEN / HELM_CONVERSATION_ID / HELM_CWD / HELM_ENV 等）按
+      // 大小写不敏感剥除：无会话作用域时不借用宿主值（fail-closed），
+      // 有作用域时受管值由 composer 最后固定覆写。
       const host: Record<string, string> = {}
       if (options?.inheritEnv !== false) {
         for (const [key, value] of Object.entries(process.env)) {
@@ -82,11 +105,19 @@ export function createScopedExecutionEnv(
         }
       }
       merged = { ...host, ...merged }
-      if (composer !== undefined && !composedToken) {
-        for (const key of Object.keys(merged)) {
-          if (key.toUpperCase() === 'HELM_TOKEN') delete merged[key]
-        }
+      // helm CLI 包装目录前置注入 PATH（分隔符按宿主平台，不硬编码 ':'）。
+      const binDir = cliBinDir?.()
+      if (binDir !== undefined && binDir !== '') {
+        merged['PATH'] = `${binDir}${merged['PATH'] !== undefined ? pathDelimiter + merged['PATH'] : ''}`
       }
+      // composer 未提供受管 token：剥除一切来源（宿主继承与逐调用注入）
+      // 的大小写变体——绝不透传宿主凭据。
+      if (!composedToken) deleteTokenVariants(merged)
+    } else if (!composedToken) {
+      // 远端同样不透传任何 HELM_TOKEN 变体（宿主凭据绝不跨节点泄漏）。
+      const perCall = { ...(merged ?? {}) }
+      deleteTokenVariants(perCall)
+      merged = perCall
     }
     return base.exec(
       command,

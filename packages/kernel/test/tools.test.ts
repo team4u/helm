@@ -197,6 +197,33 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     assert.ok(!result.output.includes('AAAA'), '超限后不得回显截断内容冒充结果')
   })
 
+  it('流式模式（onOutputChunk）：聚合预算收敛为 STREAM_AGGREGATE_LIMIT_BYTES，逐块仍全部推送，超限显式 output_limit_exceeded', { timeout: 60_000 }, async () => {
+    const deps = await makeRealDeps(join(rootDir, 'rs-stream'))
+    const chunks: Array<{ stream: 'stdout' | 'stderr'; text: string }> = []
+    // 显式给出远大于流式预算的 maxOutputBytes：流式模式下也必须被
+    // STREAM_AGGREGATE_LIMIT_BYTES 覆盖（旧 64MiB 全文复制是内存泄漏）。
+    const result = await runShell(deps, `head -c 600000 /dev/zero | tr '\\0' 'B'`, {
+      maxOutputBytes: 64 * 1024 * 1024,
+      onOutputChunk: (chunk) => chunks.push(chunk),
+    })
+    assert.equal(result.ok, false, '超过流式聚合预算必须显式失败')
+    assert.ok(result.output.includes('output_limit_exceeded'), '必须显式 output_limit_exceeded')
+    assert.ok(result.output.includes('262144'), `错误信息需携带真实预算（${result.output.slice(0, 120)}）`)
+    assert.ok(!result.output.includes('BBBB'), '终态诊断不得回显超限内容')
+    // 流式客户端已收到全部逐块输出（600000 字节 B），Hub 侧仅放弃终态聚合。
+    const streamedBytes = chunks
+      .filter((c) => c.stream === 'stdout')
+      .reduce((sum, c) => sum + Buffer.byteLength(c.text, 'utf8'), 0)
+    assert.equal(streamedBytes, 600000, '逐块推送不因聚合超限而中断')
+    // 未超流式预算的命令：聚合结果正常返回（流式预算不误伤小输出）。
+    const okResult = await runShell(deps, `printf 'small-stream'`, {
+      maxOutputBytes: 64 * 1024 * 1024,
+      onOutputChunk: () => undefined,
+    })
+    assert.equal(okResult.ok, true)
+    assert.equal(okResult.output, 'small-stream')
+  })
+
   it('buildToolEnv：宿主六变量固定覆盖 stash 同名注入；HELM_DATA_DIR 来自 deps', { timeout: 60_000 }, () => {
     const stash = new SecretStash()
     stash.put(7, 'HELM_CWD', '/evil')

@@ -101,14 +101,16 @@ function makeStubFabric(env: ReturnType<typeof makeRecordingEnv>['env']): EnvFab
     },
     isOnline: () => true,
     waitForOnline: () => Promise.resolve(true),
-    composeEnvOptions: () => Promise.resolve({}),
+    getNodeHubUrl: () => 'http://10.0.0.5:3202',
+    evictConversation: () => undefined,
+    debugBaseCount: () => 0,
+    debugBases: () => [],
     ipcCall: () => {
       throw new Error('测试不使用 ipcCall')
     },
     ipcSubscribe: () => {
       throw new Error('测试不使用 ipcSubscribe')
     },
-    getNodeHubUrl: () => 'http://10.0.0.5:3202',
     dispose: () => Promise.resolve(),
   } as never
 }
