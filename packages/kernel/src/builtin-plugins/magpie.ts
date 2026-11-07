@@ -317,7 +317,12 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
         if (!model.startsWith(`${MAGPIE_PROVIDER_ID}/`)) return
         const snapshot = gateway()
         // 不 await：绝不阻塞 turn_settled；失败只进 diagnostics，下一次 settled 重试
-        void refreshSidecar(snapshot, true)
+        void refreshSidecar(snapshot, true).catch((error) => {
+          if (stopping) return
+          ctx.host.emitEvent('notification', {
+            level: 'warning', title: 'Magpie 状态读取失败', body: sanitizeErrorText(error),
+          })
+        })
       })
 
       // ---- 动作总线（HTTP / helm magpie <action> / run_action / Workflow） ----
@@ -463,14 +468,13 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
                 })),
             ]
             writeStatus(snapshot, { routes: traceRows, groupCount: groups.length })
+            const notes: string[] = []
+            if (cliGroups === undefined) notes.push('仅展示所选网关已有请求的路由轨迹；完整组定义当前不可用。')
+            if ('unavailable' in trace) notes.push(`路由轨迹不可用：${sanitizeErrorText(trace.unavailable)}`)
             return {
               groups,
               local: snapshot.local,
-              ...(snapshot.local && !cliTrusted
-                ? { note: '本机网关但非默认端口：magpie CLI 可能指向另一实例，仅展示所选网关 trace' }
-                : snapshot.local
-                  ? {}
-                  : { note: '非本机网关：仅展示该网关 trace，不含本机另一个 Magpie 实例的数据' }),
+              ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
               ...(cliError !== undefined ? { cliError: sanitizeErrorText(cliError) } : {}),
             }
           } finally {

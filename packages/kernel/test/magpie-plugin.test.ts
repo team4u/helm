@@ -697,7 +697,8 @@ test('magpie13: fetch 期间切 root——旧网关挂起结果不发布到新�
     await env.host.setConfig(MAGPIE, { gatewayUrl: 'http://10.255.255.1:3425' })
     releaseGate!()
     const result = await pending
-    assert.equal(result.errors.size, 0, '旧网关请求本身成功（不误报）')
+    assert.equal(result.errors.size, 1, '结果未采用必须显式返回诊断，不能提示刷新成功')
+    assert.match(result.errors.get('magpie')?.message ?? '', /网关配置已变化/)
     // 但结果不得发布：内存目录与持久缓存都不被旧 root 目录污染
     assert.equal(env.models.getModels('magpie').length, 0, '挂起结果未 install（切 root 后被 sameGateway 守卫拦下）')
     const status = (await env.host.invokeAction(MAGPIE, 'status', {})) as StatusView

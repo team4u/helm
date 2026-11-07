@@ -29,6 +29,7 @@ import {
   type ProviderStreamOptions,
   type RefreshModelsContext,
 } from '@earendil-works/pi-ai/compat'
+import { HelmError } from '@helm/protocol'
 import { baseUrlFor, servedByRoot, toPiModels, type MagpieModelEntry, type PiMagpieModel } from './catalog.js'
 import { fetchCatalog } from './gateway.js'
 import { MAGPIE_PROVIDER_ID, MAGPIE_ROOT_ENV, sameGateway, type MagpieGatewayRef } from './contracts.js'
@@ -182,7 +183,9 @@ export function createMagpieProvider(options: MagpieProviderOptions): MagpieProv
       const next = toPiModels(entries, gw.root)
       // 发布前守卫：fetch 期间配置已切换（root/token 任一变化）的挂起结果
       // 绝不发布到新网关名下（publish 会返回 false，由调用方世代判定）。
-      if (!sameGateway(gw, gateway())) return
+      if (!sameGateway(gw, gateway())) {
+        throw new HelmError('magpie_gateway_changed', '网关配置已变化，刷新结果未采用，请重新刷新目录', 409)
+      }
       const published = await context.publish({
         persist: { models: next, checkedAt: Date.now() },
         update: () => {
@@ -205,7 +208,7 @@ export function createMagpieProvider(options: MagpieProviderOptions): MagpieProv
 
   return {
     provider,
-    models: () => models,
+    models: () => models.filter((model) => servedByRoot(model, gateway().root)),
     synced: () => syncedOnce,
   }
 }
