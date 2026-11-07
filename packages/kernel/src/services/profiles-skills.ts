@@ -5,7 +5,7 @@
  */
 import { lstat, readdir, realpath, rm } from 'node:fs/promises'
 import { join, sep } from 'node:path'
-import type { Profile, SkillSummary } from '@helm/protocol'
+import { HelmError, type Profile, type SkillSummary } from '@helm/protocol'
 import { isValidEnvName } from './secret-stash.js'
 
 export type { Profile, SkillSummary }
@@ -21,6 +21,14 @@ import { withFileLock } from './file-lock.js'
 export const DEFAULT_PROFILE_ID = 'assistant'
 export const DEFAULT_PROFILE_NAME = '个人助理'
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
+
+/**
+ * MEMORY.md 长期记忆字符上限（防线单一事实来源）：
+ * 长期记忆逐回合全量注入系统提示，无上限会让每次调用成本无界增长。
+ * 所有服务层写入路径（updateMemory / save(memory)）在文件锁内合并后统一
+ * 强制；assistant 插件注入侧另有截断 + 显式说明兜底（存量外部手改文件）。
+ */
+export const MAX_MEMORY_CHARS = 64_000
 const SYSTEM_DEFAULT = [
   '# System Prompt',
   '',
@@ -38,6 +46,21 @@ export function assertProfileId(id: string): void {
 
 function nowIso(): string {
   return new Date().toISOString()
+}
+
+/** 上限拒绝统一错误（code/status 与 assistant update_memory 契约一致）。 */
+function memoryLimitError(
+  profileId: string,
+  wouldBe: number,
+  mode: 'append' | 'replace' | 'save',
+  extra: { maxChars: number; inputLength?: number } = { maxChars: MAX_MEMORY_CHARS },
+): HelmError {
+  return new HelmError(
+    'memory_limit_exceeded',
+    `MEMORY.md 写入后达 ${wouldBe} 字符，超过上限 ${extra.maxChars}；请精简后再写入（长期记忆请整体 replace 整理）`,
+    400,
+    { profileId, wouldBe, limit: extra.maxChars, ...(mode !== 'save' ? { mode } : {}), ...(extra.inputLength !== undefined ? { inputLength: extra.inputLength } : {}) },
+  )
 }
 
 function profileDir(dataDir: string, id: string): string {
@@ -218,6 +241,11 @@ export class ProfileService {
       throw new Error('profile memory 必须是字符串')
     }
     const profile = validateProfileInput(input)
+    // 管理员显式导入也受同一上限约束（写入前先拒，避免 profile.json 已写而
+    // MEMORY.md 被拒的半截 save）；锁内 updateMemory 仍会复核（防并发窗口）。
+    if (rawMemory !== undefined && rawMemory.length > MAX_MEMORY_CHARS) {
+      throw memoryLimitError(profile.id, rawMemory.length, 'save')
+    }
     const dir = profileDir(this.dataDir, profile.id)
     const existing = await this.get(profile.id)
     await atomicWriteJson(join(dir, 'profile.json'), profile)
@@ -227,7 +255,7 @@ export class ProfileService {
       await atomicWriteFile(join(dir, 'SYSTEM.md'), SYSTEM_DEFAULT)
     }
     if (rawMemory !== undefined) {
-      await this.updateMemory(profile.id, rawMemory, 'replace')
+      await this.updateMemory(profile.id, rawMemory, 'replace', { maxChars: MAX_MEMORY_CHARS })
     } else if (existing === undefined) {
       await atomicWriteFile(join(dir, 'MEMORY.md'), MEMORY_DEFAULT)
     }
@@ -267,15 +295,21 @@ export class ProfileService {
    * 原子更新 MEMORY.md：replace 整体替换；append 追加（保尾部换行）。
    * append 的读改写按该文件真实路径加进程内共享锁串行化——多个
    * ProfileService 实例并发 append 也不会读到同一旧内容后互相覆盖。
+   * options.maxChars 上限在锁内对**合并后**的最终内容统一强制：并发调用
+   * 不可能各自「预读旧值 + 检查通过」后叠加突破上限（大小防线唯一权威点）。
    * 通过 temp+rename 落盘，AssetWatcher 可实时感知且绝不见半截内容。
    */
   async updateMemory(
     id: string,
     text: string,
     mode: 'append' | 'replace' = 'append',
+    options?: { maxChars?: number },
   ): Promise<string> {
     assertProfileId(id)
     if (typeof text !== 'string') throw new Error('memory 文本必须是字符串')
+    if (options?.maxChars !== undefined && (!Number.isInteger(options.maxChars) || options.maxChars <= 0)) {
+      throw new Error(`maxChars 必须是正整数（收到 ${String(options.maxChars)}）`)
+    }
     const path = join(profileDir(this.dataDir, id), 'MEMORY.md')
     return withFileLock(path, async () => {
       let next: string
@@ -290,6 +324,11 @@ export class ProfileService {
           // MEMORY.md 缺失时 append 视为从空开始（ensureDefault 已保证存在，兜底诚实创建）。
         }
         next = current.endsWith('\n') || current === '' ? current + text : current + '\n' + text
+      }
+      // 锁内合并后检查：并发 append 的最终内容在此处串行判定，突破即整体拒绝
+      //（不写半截文件），绝不出现「各自预读检查通过、落盘叠加超限」的竞态。
+      if (options?.maxChars !== undefined && next.length > options.maxChars) {
+        throw memoryLimitError(id, next.length, mode, { maxChars: options.maxChars, inputLength: text.length })
       }
       await atomicWriteFile(path, next)
       return next
