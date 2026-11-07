@@ -68,7 +68,7 @@ describe('herdr transport wire', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 
-  it('call 发送单行请求并解包 result', async () => {
+  it('call 发送单行请求并解包 result', { timeout: 60_000 }, async () => {
     const server = makeServer((line, _socket, write) => {
       const req = JSON.parse(line)
       assert.equal(req.method, 'tab.create')
@@ -85,7 +85,7 @@ describe('herdr transport wire', () => {
     await close(server)
   })
 
-  it('call 对 error 信封抛出 code+message 并经 redact 脱敏', async () => {
+  it('call 对 error 信封抛出 code+message 并经 redact 脱敏', { timeout: 60_000 }, async () => {
     const server = makeServer((line, _socket, write) => {
       const req = JSON.parse(line)
       write(JSON.stringify({ id: req.id, error: { code: 'agent_blocked', message: `blocked with ${secret()}` } }))
@@ -105,7 +105,7 @@ describe('herdr transport wire', () => {
     await close(server)
   })
 
-  it('连接不存在时显式报 socket 错误', async () => {
+  it('连接不存在时显式报 socket 错误', { timeout: 60_000 }, async () => {
     const transport = createHerdrTransport()
     await assert.rejects(
       transport.call({ socketPath: join(socketDir, 'missing.sock') }, 'ping', {}),
@@ -113,7 +113,7 @@ describe('herdr transport wire', () => {
     )
   })
 
-  it('服务端提前关闭时显式报错，不静默', async () => {
+  it('服务端提前关闭时显式报错，不静默', { timeout: 60_000 }, async () => {
     const server = createServer((socket) => socket.destroy())
     socketPath = await listen(server)
     const transport = createHerdrTransport()
@@ -124,7 +124,7 @@ describe('herdr transport wire', () => {
     await close(server)
   })
 
-  it('abort 触发后 call 显式失败', async () => {
+  it('abort 触发后 call 显式失败', { timeout: 60_000 }, async () => {
     const server = makeServer(() => {
       /* 故意不响应 */
     })
@@ -138,7 +138,7 @@ describe('herdr transport wire', () => {
     await close(server)
   })
 
-  it('跨 chunk 的 UTF-8 与分帧能正确重组', async () => {
+  it('跨 chunk 的 UTF-8 与分帧能正确重组', { timeout: 60_000 }, async () => {
     const payload = { id: '1', result: { type: 'agent_info', agent: { name: '中文代理-β' } } }
     const encoded = JSON.stringify(payload)
     const server = createServer((socket) => {
@@ -163,7 +163,7 @@ describe('herdr transport wire', () => {
     await close(server)
   })
 
-  it('agent.prompt 无显式超时不套客户端死线', async () => {
+  it('agent.prompt 无显式超时不套客户端死线', { timeout: 60_000 }, async () => {
     // 服务端延迟 700ms 才回；若误套 120s 内的短死线或立即判超时会失败。
     // 同时验证 wait 类方法在无 timeoutMs 时不会被 herdr_timeout 抢先 reject。
     const server = makeServer((line, _socket, write) => {
@@ -182,7 +182,7 @@ describe('herdr transport wire', () => {
     await close(server)
   })
 
-  it('普通 RPC 缺省 120s 死线，agent.start 覆盖 timeout_ms+余量', async () => {
+  it('普通 RPC 缺省 120s 死线，agent.start 覆盖 timeout_ms+余量', { timeout: 60_000 }, async () => {
     // ping 类方法应接受缺省死线：服务端慢 300ms 仍成功。
     const server = makeServer((line, _socket, write) => {
       const req = JSON.parse(line)
@@ -199,7 +199,7 @@ describe('herdr transport wire', () => {
     await close(server)
   })
 
-  it('call 完成后销毁连接（一连接一请求）', async () => {
+  it('call 完成后销毁连接（一连接一请求）', { timeout: 60_000 }, async () => {
     let connections = 0
     let closed = 0
     const server = createServer((socket) => {
@@ -247,7 +247,7 @@ describe('herdr transport subscribe', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 
-  it('先 ack 后事件帧，规范化四个 pane 事件与 paneId', async () => {
+  it('先 ack 后事件帧，规范化四个 pane 事件与 paneId', { timeout: 60_000 }, async () => {
     let client: Socket | undefined
     const received: { type: string; paneId: string }[] = []
     const server = makeServer((line, socket) => {
@@ -286,7 +286,7 @@ describe('herdr transport subscribe', () => {
     await close(server)
   })
 
-  it('ack 前服务端报错则 subscribe 显式失败', async () => {
+  it('ack 前服务端报错则 subscribe 显式失败', { timeout: 60_000 }, async () => {
     const server = makeServer((line, _socket, write) => {
       const req = JSON.parse(line)
       write(JSON.stringify({ id: req.id, error: { code: 'invalid_request', message: 'bad subscription' } }))
@@ -303,7 +303,7 @@ describe('herdr transport subscribe', () => {
     await close(server)
   })
 
-  it('ack 后断线必须上报 onError，不静默', async () => {
+  it('ack 后断线必须上报 onError，不静默', { timeout: 60_000 }, async () => {
     let client: Socket | undefined
     const server = makeServer((line, socket) => {
       client = socket
@@ -325,7 +325,7 @@ describe('herdr transport subscribe', () => {
     await close(server)
   })
 
-  it('远端 subscribe 显式拒绝，不静默降级', async () => {
+  it('远端 subscribe 显式拒绝，不静默降级', { timeout: 60_000 }, async () => {
     const transport = createHerdrTransport()
     await assert.rejects(
       transport.subscribe({ machine: 'build-box' }, () => {}, () => {}),
@@ -346,7 +346,7 @@ describe('herdr transport output files', () => {
     await rm(workDir, { recursive: true, force: true })
   })
 
-  it('readOutput 只允许 .helm/wf-out-*.json|md', async () => {
+  it('readOutput 只允许 .helm/wf-out-*.json|md', { timeout: 60_000 }, async () => {
     await writeFile(join(workDir, '.helm', 'wf-out-agent1.json'), '{"ok":true}', 'utf8')
     const transport = createHerdrTransport()
     const content = await withTimeout(transport.readOutput({}, workDir, 'wf-out-agent1.json'))
@@ -361,7 +361,7 @@ describe('herdr transport output files', () => {
     )
   })
 
-  it('readOutput 拒绝软链与缺失文件', async () => {
+  it('readOutput 拒绝软链与缺失文件', { timeout: 60_000 }, async () => {
     const outside = join(workDir, 'outside.json')
     await writeFile(outside, '{}', 'utf8')
     await symlink(outside, join(workDir, '.helm', 'wf-out-link.json'))
@@ -376,7 +376,7 @@ describe('herdr transport output files', () => {
     )
   })
 
-  it('removeOutput 对 ENOENT 幂等，对软链拒绝', async () => {
+  it('removeOutput 对 ENOENT 幂等，对软链拒绝', { timeout: 60_000 }, async () => {
     const transport = createHerdrTransport()
     await transport.removeOutput({}, workDir, 'wf-out-never-existed.md')
     await writeFile(join(workDir, '.helm', 'wf-out-gone.md'), 'x', 'utf8')
@@ -396,14 +396,14 @@ describe('herdr transport output files', () => {
 })
 
 describe('herdr transport local gate', () => {
-  it('exit 非零 ok=false 且保留输出', async () => {
+  it('exit 非零 ok=false 且保留输出', { timeout: 60_000 }, async () => {
     const transport = createHerdrTransport()
     const result = await withTimeout(transport.runGate({}, 'echo boom >&2; exit 3', process.cwd()))
     assert.equal(result.ok, false)
     assert.ok(result.output.includes('boom'))
   })
 
-  it('env 经第 5 参数注入且不继承宿主环境', async () => {
+  it('env 经第 5 参数注入且不继承宿主环境', { timeout: 60_000 }, async () => {
     const transport = createHerdrTransport()
     const result = await withTimeout(
       transport.runGate({}, 'test "$GATE_SECRET" = "g-123" && test -z "$HOME" && echo clean', process.cwd(), undefined, { GATE_SECRET: 'g-123' }),
@@ -412,13 +412,16 @@ describe('herdr transport local gate', () => {
     assert.ok(result.output.includes('clean'))
   })
 
-  it('abort 终止 gate', async () => {
+  it('abort 终止 gate', { timeout: 60_000 }, async () => {
     const transport = createHerdrTransport()
     const controller = new AbortController()
     const pending = transport.runGate({}, 'sleep 30', process.cwd(), controller.signal)
-    setTimeout(() => controller.abort(), 80)
-    const result = await withTimeout(pending)
-    assert.equal(result.ok, false)
+    const timer = setTimeout(() => controller.abort(), 80)
+    try {
+      await assert.rejects(withTimeout(pending), { code: 'herdr_aborted' })
+    } finally {
+      clearTimeout(timer)
+    }
   })
 })
 
@@ -437,7 +440,7 @@ describe('herdr transport remote (controlled ssh fixture)', () => {
     await rm(fixtureDir, { recursive: true, force: true })
   })
 
-  it('machine 与 session 校验拒绝注入', () => {
+  it('machine 与 session 校验拒绝注入', { timeout: 60_000 }, () => {
     assert.equal(isValidMachineName('build-box'), true)
     assert.equal(isValidMachineName('root@10.0.0.3'), true)
     assert.equal(isValidMachineName('-oProxyCommand=evil'), false)
@@ -446,7 +449,7 @@ describe('herdr transport remote (controlled ssh fixture)', () => {
     assert.equal(isValidSessionName('../escape'), false)
   })
 
-  it('call 走远端 stdin 脚本且机密不出现在 argv', async () => {
+  it('call 走远端 stdin 脚本且机密不出现在 argv', { timeout: 60_000 }, async () => {
     // 受控 ssh fixture：记录 argv；远端命令固定 python3 -u -，由 fixture 以本地 python3 执行 stdin 脚本。
     // 真实 transport 会把 base64 payload 写到 ssh stdin；fixture 经环境变量旁路承接该 payload，
     // 断言重点在：op/method/env 的分派约定与机密绝不出现在 ssh argv。

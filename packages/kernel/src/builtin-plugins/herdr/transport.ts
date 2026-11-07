@@ -354,7 +354,7 @@ async function subscribeLocal(
   function failOnce(error: unknown): void {
     if (terminated) return
     terminated = true
-    socket.end()
+    socket.destroy()
     terminate(error)
   }
 
@@ -387,6 +387,10 @@ async function subscribeLocal(
           // ack 之前到达的事件帧：仍按序分发，不丢弃。
           if (!dispatchEventFrame(envelope)) return
           continue
+        }
+        if (envelope['id'] !== 'sub') {
+          failOnce(new HerdrTransportError('herdr_protocol', 'subscription response id missing or mismatched', target))
+          return
         }
         if (envelope['error'] !== undefined && envelope['error'] !== null) {
           const body = isObject(envelope['error']) ? envelope['error'] : {}
@@ -467,7 +471,7 @@ async function subscribeLocal(
 
   return () => {
     stopped = true
-    socket.end()
+    socket.destroy()
   }
 }
 
@@ -735,11 +739,12 @@ def run_gate(command, cwd, env, timeout_ms):
     try:
         rc = proc.poll()
         if rc is None:
-            kill_gate_group()
             try:
+                rc = proc.wait(timeout=max(0.0, deadline - time_time()))
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                kill_gate_group()
                 rc = proc.wait(timeout=5)
-            except Exception:
-                rc = -1
         else:
             rc = proc.wait()
     except Exception:
@@ -866,6 +871,8 @@ async function runChild(
   let totalBytes = 0 // stdout+stderr 合计上限
   let spawnError: Error | undefined
   let outputOverflow = false
+  let closed = false
+  let terminating = false
 
   const onStdout = (chunk: Buffer) => {
     totalBytes += chunk.length
@@ -893,6 +900,7 @@ async function runChild(
   })
 
   const rawKillGroup = () => {
+    if (closed) return
     try {
       if (child.pid) process.kill(-child.pid, 'SIGKILL')
     } catch {
@@ -901,7 +909,9 @@ async function runChild(
   }
   /** 先 TERM（宽限内允许清理），超时或宽限期满再 KILL；幂等。 */
   const terminateGroup = () => {
-    if (child.exitCode !== null || child.signalCode !== null) return
+    if (closed || terminating) return
+    terminating = true
+    // close 才说明管道已释放；主进程 exit 后其子进程仍可能持有输出管道。
     try {
       if (child.pid) process.kill(-child.pid, 'SIGTERM')
     } catch {
@@ -915,7 +925,10 @@ async function runChild(
   const killGroup = terminateGroup
 
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    child.once('close', (code, signal) => resolve({ code, signal }))
+    child.once('close', (code, signal) => {
+      closed = true
+      resolve({ code, signal })
+    })
   })
 
   const timer = timeoutMs === undefined ? undefined : timeoutPromise(timeoutMs, target)
@@ -943,6 +956,7 @@ async function runChild(
     await exited
   }
 
+  checkAborted(signal, target)
   if (outputOverflow) {
     throw new HerdrTransportError('herdr_remote_output_too_large', `child output exceeded ${MAX_CHILD_OUTPUT_BYTES} bytes`, target)
   }

@@ -376,7 +376,7 @@ describe('真 KernelRuntime：cwd 继承与 resume 目录保真', () => {
             },
           })
         },
-      } as never)
+      })
 
       const service = new WorkflowService({
         dataDir: dir,

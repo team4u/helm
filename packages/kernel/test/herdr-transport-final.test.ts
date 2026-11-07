@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -99,3 +99,72 @@ for (const remote of [false, true]) {
     await assert.rejects(createHerdrTransport().call(target, 'tab.close', { tab_id: 't1' }, { timeoutMs: 3_000 }), { code: 'herdr_protocol' })
   })
 }
+
+test('订阅 ack 必须携带本次请求 id', { timeout: 60_000 }, async (t) => {
+  const root = await tempRoot(t)
+  const socketPath = await socketServer(t, root, (_request, socket) => {
+    socket.write(`${JSON.stringify({ id: 'wrong-subscription', result: { type: 'subscription_started' } })}\n`)
+  })
+  await assert.rejects(async () => {
+    const stop = await createHerdrTransport().subscribe({ socketPath }, () => {}, () => {})
+    stop()
+  }, { code: 'herdr_protocol' })
+})
+
+test('远端 Gate 关闭输出后仍须等待命令正常退出', { timeout: 60_000 }, async (t) => {
+  const root = await tempRoot(t)
+  await pythonChannel(t, root)
+  const result = await createHerdrTransport().runGate(
+    { machine: 'fixture-host' },
+    'exec >/dev/null 2>&1; sleep 0.05; printf done > finished',
+    root,
+  )
+  assert.deepEqual(result, { ok: true, output: '' })
+  assert.equal(await readFile(join(root, 'finished'), 'utf8'), 'done')
+})
+
+test('Gate 主进程已退出时 abort 仍清理持有管道的自有子进程', { timeout: 60_000 }, async (t) => {
+  const root = await tempRoot(t)
+  const controller = new AbortController()
+  const pending = createHerdrTransport().runGate({}, 'sleep 300 & printf "%s %s" "$$" "$!" > processes; exit 0', root, controller.signal)
+  const observed = pending.then((result) => ({ result }), (error: unknown) => ({ error }))
+  let group = 0
+  let child = 0
+  let timer: NodeJS.Timeout | undefined
+  try {
+    const deadline = Date.now() + 5_000
+    for (;;) {
+      try {
+        ;[group, child] = (await readFile(join(root, 'processes'), 'utf8')).trim().split(' ').map(Number) as [number, number]
+        if (group > 1 && child > 1) {
+          try { process.kill(group, 0) } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ESRCH') break
+            throw error
+          }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+      assert.ok(Date.now() < deadline, '应先证实 Gate 主进程已退出')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    process.kill(child, 0)
+    controller.abort()
+    const outcome = await Promise.race([
+      observed,
+      new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 1_000) }),
+    ])
+    assert.ok(outcome, '主进程退出后仍须杀掉自有子进程并结算')
+    assert.ok('error' in outcome)
+    assert.equal((outcome.error as { code?: string }).code, 'herdr_aborted')
+  } finally {
+    clearTimeout(timer)
+    controller.abort()
+    if (group > 1 && child > 1) {
+      try { process.kill(-group, 'SIGKILL') } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+      }
+    }
+    await observed
+  }
+})
