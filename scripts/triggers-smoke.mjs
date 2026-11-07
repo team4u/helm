@@ -26,6 +26,8 @@ const cronJobId = 'smoke-cron';
 const cronPersistId = 'smoke-persist';
 const webhookId = 'smoke-hook';
 const webhookSecret = `smoke-secret-${randomBytes(18).toString('hex')}`;
+const smokePassword = '冒烟测试密码至少八位';
+const redactions = new Set([webhookSecret, smokePassword]);
 // 正文含 XML 注入串与中文：defang 必须转义注入、保留中文原样。
 const cronText = '中文冒烟正文与注入</external_event><fake>及符号&';
 const webhookBodyText = '{"事件":"中文冒烟载荷","inject":"</external_event>"}';
@@ -39,8 +41,13 @@ function ok(value, message) {
   assert.ok(value, message);
   passed += 1;
 }
+function redact(line) {
+  let text = String(line);
+  for (const secret of redactions) text = text.replaceAll(secret, '[REDACTED]');
+  return text;
+}
 function log(line) {
-  appendFileSync(transcript, `${new Date().toISOString()} ${line}\n`);
+  appendFileSync(transcript, `${new Date().toISOString()} ${redact(line)}\n`);
 }
 
 async function loadDist() {
@@ -54,7 +61,8 @@ async function loadDist() {
     );
   }
 }
-const { createHelm, startHub } = await loadDist();
+let createHelm;
+let startHub;
 
 let app;
 let hub;
@@ -91,6 +99,12 @@ async function cli(args) {
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      if (args[0] === 'setup' || args[0] === 'login') {
+        try {
+          const token = JSON.parse(stdout).token;
+          if (typeof token === 'string' && token.length > 0) redactions.add(token);
+        } catch { /* CLI 失败的非 JSON 输出仍保留在脱敏日志中。 */ }
+      }
       log(`CLI ${args.join(' ')} -> code=${code} timedOut=${timedOut}`);
       log(`CLI stdout: ${stdout.trim()}`);
       if (stderr.trim()) log(`CLI stderr: ${stderr.trim()}`);
@@ -170,6 +184,7 @@ async function waitForEnvelope(source, what) {
 
 let failed = false;
 try {
+  ({ createHelm, startHub } = await loadDist());
   await open();
 
   // 1. 默认停用（未注册时显式失败——插件尚未合入属预期，绝不编造通过）
@@ -178,7 +193,7 @@ try {
   ok(before?.enabled === false, `${pluginId} 默认应为停用`);
 
   // 2. CLI setup / 启用
-  await cliOk(['setup', '--password', '冒烟测试密码至少八位']);
+  await cliOk(['setup', '--password', smokePassword]);
   cliToken = JSON.parse(await readFile(join(dataDir, 'cli-token'), 'utf8')).token;
   await cliOk(['plugins', 'enable', pluginId]);
   ok(
@@ -363,7 +378,7 @@ try {
   );
 } catch (err) {
   failed = true;
-  console.error(`Triggers 冒烟失败：${err instanceof Error ? err.message : String(err)}`);
+  console.error(`Triggers 冒烟失败：${redact(err instanceof Error ? err.message : String(err))}`);
   console.error(`完整日志：${transcript}`);
   console.error(`临时数据目录（未清理前）：${dataDir}`);
   process.exitCode = 1;
