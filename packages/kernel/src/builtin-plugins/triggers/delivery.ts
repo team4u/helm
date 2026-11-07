@@ -49,6 +49,9 @@ export function createDeliveryDispatch(options: {
     if (target !== undefined) {
       assertConversationExists(host, target)
     }
+    if (isClosing()) {
+      throw new HelmError('runtime_closing', 'runtime 正在关闭，拒绝新的触发投递', 409, { source: event.source })
+    }
     const final: ExternalTriggerEnvelope =
       target === undefined ? event : { ...event, targetConversationId: target }
     await host.dispatchTrigger(final)
