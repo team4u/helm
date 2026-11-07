@@ -19,6 +19,7 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { Context } from '@earendil-works/chord/context'
 import type { RpcResult } from '@helm/protocol'
 import type { HerdrNodeChannel, HerdrNodeEnv } from './contracts.js'
+import { isWindowsShapedPath } from './transport.js'
 
 /** interprocess `\\<host>\pipe\<name>` 的本地主机段（pathcvt LOCAL_HOSTNAME）。 */
 const PIPE_PREFIX = '\\\\.\\pipe\\'
@@ -40,6 +41,15 @@ function isPipePath(path: string): boolean {
   const hostEnd = path.indexOf('\\', 2)
   if (hostEnd <= 2) return false
   return path.startsWith('\\pipe\\', hostEnd)
+}
+
+/**
+ * 端点形态判定：已是完整 pipe 路径或 Windows 路径形状（盘符/UNC）即 named pipe，
+ * 其余（POSIX 路径，含显式相对/绝对 UDS 路径）为 Unix socket。纯路径形状判定，
+ * 不依赖 Hub 进程平台（Linux Hub 显式配置 Windows 端点同样按 pipe 连接）。
+ */
+export function endpointKindOf(endpoint: string): 'unix-socket' | 'named-pipe' {
+  return isWindowsShapedPath(endpoint) || isPipePath(endpoint.replaceAll('/', '\\')) ? 'named-pipe' : 'unix-socket'
 }
 
 /** 建立到本机 Herdr IPC 端点的 socket 连接（Unix UDS / Windows Named Pipe）。 */
@@ -81,7 +91,8 @@ export class LocalNodeChannel implements HerdrNodeChannel {
       return { ok: false, error: { code: 'aborted', message: 'ipcCall aborted' } }
     }
     return await new Promise<RpcResult<string>>((resolve) => {
-      const socket = connectHerdrEndpoint(input.endpoint!, 'unix-socket')
+      // 端点形态按路径形状判定（Windows 端点必须换算 pipe 名，绝不 connect marker 文件）。
+      const socket = connectHerdrEndpoint(input.endpoint!, endpointKindOf(input.endpoint!))
       socket.setNoDelay(true)
       const chunks: Buffer[] = []
       let done = false

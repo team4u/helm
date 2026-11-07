@@ -510,7 +510,9 @@ export class HerdrExecutor {
     return `\n\n[Attached Files]\n${lines.join('\n')}`
   }
 
-  /** 附件元数据缓存（spawn 时经 deps.getArtifact 解析一次）。 */
+  /** 附件元数据缓存（spawn 时经 deps.getArtifact 解析一次）。容量上限防长驻
+   *  泄漏：超限淘汰最旧条目（下个请求命中时会重新解析，不伪造数据）。 */
+  private static readonly MAX_ATTACHMENT_META_ENTRIES = 128
   private readonly attachmentMetaCache = new Map<
     string,
     { id: string; name: string; mimeType: string; size: number; absPath: string }
@@ -523,6 +525,18 @@ export class HerdrExecutor {
       const meta = await this.deps.getArtifact(id, request.parentConversationId)
       this.attachmentMetaCache.set(id, meta)
     }
+    // 超限淘汰最旧（Map 迭代序即插入序）：缓存仅为展示字段优化，可随时重建。
+    while (this.attachmentMetaCache.size > HerdrExecutor.MAX_ATTACHMENT_META_ENTRIES) {
+      const oldest = this.attachmentMetaCache.keys().next().value
+      if (oldest === undefined) break
+      this.attachmentMetaCache.delete(oldest)
+    }
+  }
+
+  /** 请求结算后清理本次附件缓存条目（长驻进程不累积历史 spawn 元数据）。 */
+  private releaseAttachmentMeta(request: AgentSpawnRequest): void {
+    if (request.attachments === undefined) return
+    for (const id of request.attachments) this.attachmentMetaCache.delete(id)
   }
 
   /** 任务启动、首轮、自愈均在同一取消与错误收尾边界内。 */
@@ -575,6 +589,8 @@ export class HerdrExecutor {
       )
     } finally {
       request.signal?.removeEventListener('abort', onAbort)
+      // 本次请求结算（成功/失败/取消）：回收附件元数据缓存，防长驻进程累积。
+      this.releaseAttachmentMeta(request)
     }
   }
 
@@ -1019,6 +1035,14 @@ export class HerdrExecutor {
     request.onResolved?.(this.executionInfoOf(updated))
     // request.cwd 缺省代表沿用窗格实际 cwd（不重开窗、不重建 env tab）。
     // 续接不重跑 agent.start（窗格已有 agent）；直接进入投递-审批-交接循环。
+    // env 缺失（失败窗格清理后）：按当前路由与窗格实际 cwd 重建（同构于建窗，
+    // 不留机密长驻内存也能支撑 resume Gate）。
+    if (!this.paneEnvs.has(this.paneKey(updated))) {
+      this.paneEnvs.set(
+        this.paneKey(updated),
+        this.buildPaneEnv(request.parentConversationId, updated.effectiveCwd, resumeRouting, targetOf(updated)),
+      )
+    }
     await this.preloadAttachmentMeta(request)
     return this.runManagedTask(request, updated)
   }
@@ -1155,6 +1179,8 @@ export class HerdrExecutor {
   }
 
   private async markFailed(pane: ManagedPane, note: string): Promise<void> {
+    // 失败窗格保留终端现场供人工排查，但回连机密 env 不再需要（无后续 gate）。
+    this.paneEnvs.delete(this.paneKey(pane))
     this.registry.update(nodeIdOf(pane), pane.paneId, {
       outcome: 'failed',
       failureNote: this.deps.redact(note).slice(0, 500),

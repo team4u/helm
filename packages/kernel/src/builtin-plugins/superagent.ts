@@ -753,11 +753,16 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
             }))
           }
           // 非阻塞：仅等会话创建 + 输入被 SDK 接受（不等模型回合结束）。
-          // 提交失败（建会话之后）显式通知中枢 + notification，不返回假成功。
+          // 提交失败（建会话之后）完整回滚登记与订阅绑定，并把空会话标记归档，
+          // 绝不残留无回合僵尸 Worker、不锁死 threadKey。
           try {
             await ctx.host.submitInput(worker.id, input.prompt, { origin: 'agent', whenBusy: 'followUp' })
           } catch (err) {
-            reportError(`Worker #${worker.id} 初始任务提交失败`, err)
+            // 先上报原始错误（回滚失败不掩盖提交失败未身上报），再尽力回滚；
+            // 回滚自身失败如实叠加（superagent_dispatch_rollback_failed），
+            // 由调用方一并暴露，不静默丢任何一侧。
+            reportError(`Worker #${worker.id} 初始任务提交失败（回滚中）`, err)
+            await rollbackFailedDispatch(worker.id, workerEntry, threadKey, err)
             throw err
           }
           return { workerConversationId: worker.id }
@@ -765,6 +770,50 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         const task = dispatchChain.then(run, run)
         dispatchChain = task.catch(() => undefined)
         return task
+      }
+
+      /**
+       * 派工提交失败回滚：移除 index worker 条目与 threadKey 绑定，空会话打上
+       * 归档标签（不删除——会话本身无害且保留审计痕迹，与 archive_worker 同标签）。
+       * 回滚自身失败如实上抛（诚实性纪律），由调用方与 reportError 一并暴露。
+       */
+      const rollbackFailedDispatch = async (
+        workerId: number,
+        workerEntry: SuperAgentWorker,
+        threadKey: string | undefined,
+        cause: unknown,
+      ): Promise<void> => {
+        const failures: unknown[] = []
+        try {
+          updateIndex((doc) => ({ ...doc, workers: doc.workers.filter((w) => w.conversationId !== workerEntry.conversationId) }))
+        } catch (err) {
+          failures.push(err)
+        }
+        if (threadKey !== undefined) {
+          try {
+            updateSubscriptions((doc) => ({
+              ...doc,
+              subscriptions: doc.subscriptions.filter((s) => s.threadKey !== threadKey),
+            }))
+          } catch (err) {
+            failures.push(err)
+          }
+        }
+        try {
+          const fresh = readConversationOrUndefined(workerId)
+          const nextTags = [...(fresh?.tags.filter((t) => t !== WORKER_TAG) ?? []), WORKER_ARCHIVED_TAG]
+          await ctx.host.updateConversation(workerId, { tags: nextTags })
+        } catch (err) {
+          failures.push(err)
+        }
+        if (failures.length > 0) {
+          throw new HelmError(
+            'superagent_dispatch_rollback_failed',
+            `Worker #${workerId} 提交失败后回滚不完整（${failures.length} 项）：原始错误 ${cause instanceof Error ? cause.message : String(cause)}；回滚错误 ${failures.map((e) => (e instanceof Error ? e.message : String(e))).join('; ')}，请人工核对 index/subscriptions doc`,
+            500,
+            { workerId, threadKey, rollbackFailures: failures.map((e) => (e instanceof Error ? e.message : String(e))) },
+          )
+        }
       }
 
       const inspectWorker = async (
@@ -803,7 +852,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
           throw new HelmError('validation_error', `limit 必须是 1..100 整数（收到：${String(input.limit)}）`, 400, {})
         }
         const query = input.query === undefined ? '' : String(input.query)
-        syncRoutingDoc()
+        // 只读检索工具：无 doc 写副作用（routing 镜像仅在启动与配置更新路径回写）。
         return { nodes: searchRecallNodes(docs!.recall.get(), query, limit) }
       }
 
@@ -1243,6 +1292,15 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         icon: 'boxes',
         filterTag: WORKER_TAG,
         order: 20,
+      })
+      ctx.ui.sidebarSection({
+        id: 'archived-workers',
+        label: '已归档 Worker',
+        icon: 'archive',
+        filterTag: WORKER_ARCHIVED_TAG,
+        collapsible: true,
+        defaultCollapsed: true,
+        order: 90,
       })
       ctx.ui.composerWidget({
         id: 'superagent-router-status',
