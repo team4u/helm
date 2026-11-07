@@ -27,6 +27,7 @@ import type {
 import type { CredentialStatus, ModelDescriptor, SavedWorkflowSummary } from './api.js'
 
 export type ThemeMode = 'light' | 'dark'
+export type ThemePreference = 'system' | 'light' | 'dark'
 
 export type ResolvedTarget =
   | { kind: 'conversation'; conversationId: number }
@@ -214,6 +215,7 @@ export interface HelmStoreValue {
   loadErrors: Record<string, string>
   sseConnected: boolean
   theme: ThemeMode
+  themePreference: ThemePreference
 
   // 核心实时数据
   conversations: ConversationSummary[]
@@ -248,6 +250,7 @@ export interface HelmStoreValue {
 
   // 操作方法
   setTheme(theme: ThemeMode): void
+  setThemePreference(pref: ThemePreference): void
   toggleTheme(): void
   checkAuth(): Promise<void>
   onAuthenticated(token: string): Promise<void>

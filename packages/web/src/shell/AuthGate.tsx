@@ -70,9 +70,24 @@ export function AuthGate() {
             type="button"
             className="btn btn-ghost btn-sm"
             onClick={store.toggleTheme}
-            title="切换明暗主题"
+            title={
+              store.themePreference === 'system'
+                ? `跟随系统（当前${store.theme === 'dark' ? '暗色' : '浅色'}，点击切换为浅色模式）`
+                : store.themePreference === 'light'
+                  ? '浅色模式（点击切换为暗色模式）'
+                  : '暗色模式（点击切换为跟随系统）'
+            }
           >
-            <HelmIcon name={store.theme === 'light' ? 'moon' : 'sun'} size={14} />
+            <HelmIcon
+              name={
+                store.themePreference === 'system'
+                  ? 'monitor'
+                  : store.themePreference === 'light'
+                    ? 'sun'
+                    : 'moon'
+              }
+              size={14}
+            />
           </button>
         </div>
 

@@ -136,6 +136,7 @@ function makeKernel(): KernelRuntimeLike {
       return []
     },
     listModels: () => [],
+    listModelProviders: () => [],
   }
 }
 

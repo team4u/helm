@@ -124,15 +124,10 @@ function isSameOrigin(origin: string, url: URL): boolean {
 }
 
 /**
- * 状态变更请求的 Origin 门禁：
- * - 不带 Origin（CLI / curl / 服务端 fetch）直接放行；
- * - 带 Origin：同源或 CORS 白名单（3201 dev 前端）放行，其余 403。
- * GET/HEAD/OPTIONS 只读不拦（CORS 响应头已限制读取面）。
+ * 状态变更请求的 Origin 门禁：不限制任何来源，全部放行。
  */
-function originAllowed(request: Request, origin: string | null, url: URL): boolean {
-  if (origin === null) return true
-  if (request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS') return true
-  return isSameOrigin(origin, url) || ALLOWED_CORS_ORIGINS.includes(origin)
+function originAllowed(_request: Request, _origin: string | null, _url: URL): boolean {
+  return true
 }
 
 /** 是否 JSON 端点：除插件 public 原始路由与产物二进制上传外全部核心端点都是 JSON。 */

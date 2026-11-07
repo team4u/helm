@@ -117,8 +117,18 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       {
         kind: 'command',
         id: 'builtin:toggle-theme',
-        title: '切换明暗主题',
-        icon: store.theme === 'light' ? 'moon' : 'sun',
+        title:
+          store.themePreference === 'system'
+            ? '切换为浅色模式'
+            : store.themePreference === 'light'
+              ? '切换为暗色模式'
+              : '切换为跟随系统',
+        icon:
+          store.themePreference === 'system'
+            ? 'monitor'
+            : store.themePreference === 'light'
+              ? 'sun'
+              : 'moon',
         run: () => store.toggleTheme(),
       },
     ]

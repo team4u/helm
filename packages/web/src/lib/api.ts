@@ -9,6 +9,7 @@ import type {
   ConversationStatus,
   ConversationSummary,
   InputOrigin,
+  ModelProviderSummary,
   PluginConfigFieldSchema,
   PluginSummary,
   Profile,
@@ -318,6 +319,7 @@ export const assetsApi = {
     apiRequest<{ ok: boolean }>('DELETE', `/api/credentials/${encodeURIComponent(id)}`),
 
   listModels: async () => normalizeModelCatalog(await apiRequest<unknown>('GET', '/api/models')),
+  listModelProviders: () => apiRequest<ModelProviderSummary[]>('GET', '/api/models/providers'),
 
   listSkills: () => apiRequest<SkillSummary[]>('GET', '/api/skills'),
   readSkill: (id: string, path?: string) => {

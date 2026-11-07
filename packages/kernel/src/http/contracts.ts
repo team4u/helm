@@ -18,6 +18,7 @@ import type {
   EnvExecResponse,
   NodeInfo,
   NodeIssuedToken,
+  ModelProviderSummary,
   PluginConfigFieldSchema,
   PluginSummary,
   ProviderConfig,
@@ -183,6 +184,7 @@ export interface KernelRuntimeLike {
 
   search(query: string): Promise<SearchHit[]> | SearchHit[]
   listModels(): Promise<unknown[]> | unknown[]
+  listModelProviders(): Promise<ModelProviderSummary[]> | ModelProviderSummary[]
 
   // ---------------------------------------------------------------------------
   // 跨平台节点管理（EnvFabric / nodes / env exec）

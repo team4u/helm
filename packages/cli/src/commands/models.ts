@@ -1,4 +1,5 @@
-/** 模型域：models list。 */
+/** 模型域：models list / providers。 */
+import type { ModelProviderSummary } from '@helm/protocol'
 import { parseNoFlags, printResult } from './shared.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 
@@ -11,6 +12,15 @@ export function modelsCommands(): CommandSpec[] {
         parseNoFlags(ctx)
         const hub = await ctx.hub()
         printResult(ctx, await hub.get<unknown[]>('/api/models'))
+      },
+    },
+    {
+      path: ['models', 'providers'],
+      description: '列出 PI 供应商与认证方式（GET /api/models/providers）',
+      async run(ctx: CommandContext) {
+        parseNoFlags(ctx)
+        const hub = await ctx.hub()
+        printResult(ctx, await hub.get<ModelProviderSummary[]>('/api/models/providers'))
       },
     },
   ]

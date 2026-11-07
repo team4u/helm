@@ -4,10 +4,23 @@ import type { ActionManifest, ArtifactMetadata, ConversationDetail, HelmEventFra
 import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, pluginsApi, setStoredToken, workflowsApi, type CredentialStatus, type ModelDescriptor, type SavedWorkflowSummary } from './api.js'
 import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, SseParser, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
-import { groupUiContributions, resolveTargetString, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ToastNotice } from './types.js'
+import { groupUiContributions, resolveTargetString, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
 
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
-const themeInitially = (): ThemeMode => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
+const getStoredPreference = (): ThemePreference => {
+  try {
+    const saved = localStorage.getItem('helm:theme')
+    if (saved === 'light' || saved === 'dark') return saved
+    return 'system'
+  } catch {
+    return 'system'
+  }
+}
+const getSystemTheme = (): ThemeMode =>
+  typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+
+const resolveTheme = (pref: ThemePreference): ThemeMode =>
+  pref === 'system' ? getSystemTheme() : pref
 
 export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [authReady, setAuthReady] = useState(false)
@@ -16,7 +29,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [authError, setAuthError] = useState<string | null>(null)
   const [sseConnected, setSseConnected] = useState(false)
   const [connectionError, setConnectionError] = useState<string | null>(null)
-  const [theme, setThemeState] = useState<ThemeMode>(themeInitially)
+  const [themePreference, setThemePreferenceState] = useState<ThemePreference>(getStoredPreference)
+  const [theme, setThemeState] = useState<ThemeMode>(() => resolveTheme(getStoredPreference()))
   const [live, setLive] = useState<LiveState>(emptyLiveState)
   const liveRef = useRef(live)
   const [conversationArtifacts, setConversationArtifacts] = useState<Record<number, ArtifactMetadata[]>>({})
@@ -70,12 +84,50 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     })
   }, [])
 
-  const setTheme = useCallback((next: ThemeMode) => {
-    setThemeState(next)
-    document.documentElement.dataset.theme = next
-    try { localStorage.setItem('helm:theme', next) } catch { /* 内存主题仍可使用。 */ }
+  const setThemePreference = useCallback((pref: ThemePreference) => {
+    setThemePreferenceState(pref)
+    const effective = resolveTheme(pref)
+    setThemeState(effective)
+    document.documentElement.dataset.theme = effective
+    try {
+      if (pref === 'system') {
+        localStorage.removeItem('helm:theme')
+      } else {
+        localStorage.setItem('helm:theme', pref)
+      }
+    } catch { /* 内存主题仍可使用。 */ }
   }, [])
-  const toggleTheme = useCallback(() => setTheme(theme === 'light' ? 'dark' : 'light'), [theme, setTheme])
+  const setTheme = useCallback((next: ThemeMode) => setThemePreference(next), [setThemePreference])
+  const toggleTheme = useCallback(() => {
+    setThemePreferenceState((prev) => {
+      const next: ThemePreference = prev === 'system' ? 'light' : prev === 'light' ? 'dark' : 'system'
+      const effective = resolveTheme(next)
+      setThemeState(effective)
+      document.documentElement.dataset.theme = effective
+      try {
+        if (next === 'system') {
+          localStorage.removeItem('helm:theme')
+        } else {
+          localStorage.setItem('helm:theme', next)
+        }
+      } catch { /* 内存主题仍可使用。 */ }
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const handler = (e: MediaQueryListEvent) => {
+      if (themePreference === 'system') {
+        const next: ThemeMode = e.matches ? 'dark' : 'light'
+        setThemeState(next)
+        document.documentElement.dataset.theme = next
+      }
+    }
+    media.addEventListener('change', handler)
+    return () => media.removeEventListener('change', handler)
+  }, [themePreference])
 
   const checkAuth = useCallback(async () => {
     setAuthError(null)
@@ -352,9 +404,9 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
 
   const groupedUi = useMemo(() => groupUiContributions(live.uiContributions), [live.uiContributions])
   const store: HelmStoreValue = {
-    ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, conversationArtifacts,
+    ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
     groupedUi, savedWorkflows, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-    setTheme, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+    setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
   }
   useEffect(() => {
     const shared = { React, useHelmStore, usePluginDoc }

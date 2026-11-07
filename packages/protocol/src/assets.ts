@@ -48,6 +48,14 @@ export interface SkillSummary {
   references: string[]
 }
 
+/** PI 内置供应商与已启用自定义网关的公开目录，不含凭据或请求配置。 */
+export interface ModelProviderSummary {
+  id: string
+  name: string
+  modelCount: number
+  authMethods: Array<{ type: 'api_key' | 'oauth'; label: string }>
+}
+
 /**
  * `~/.helm/providers.json` 自定义模型网关条目。
  * 严禁包含密钥字段——API Key 一律存 credentials.json（恒 0600）。

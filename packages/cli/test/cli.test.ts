@@ -461,6 +461,7 @@ test('search、models、plugins、actions list、status', { timeout: 60_000 }, a
   const hub = await startHub({
     'GET /api/search?q=hello%20world': () => ({ body: [{ id: 1 }] }),
     'GET /api/models': () => ({ body: ['openai/gpt', 'anthropic/sonnet'] }),
+    'GET /api/models/providers': () => ({ body: [{ id: 'deepseek', name: 'DeepSeek', modelCount: 2, authMethods: [{ type: 'api_key', label: 'API Key' }] }] }),
     'GET /api/plugins': () => ({ body: [{ id: 'builtin:assistant', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] }] }),
     'POST /api/plugins/builtin%3Aherdr/disable': () => ({ body: { ok: 1 } }),
     'GET /api/plugins/builtin%3Aherdr/config': () => ({ body: { values: { a: 1 }, schema: {} } }),
@@ -481,6 +482,11 @@ test('search、models、plugins、actions list、status', { timeout: 60_000 }, a
     const m = await run(['models', 'list', '--json'], env)
     assert.equal(m.code, 0, m.err)
     assert.deepEqual(JSON.parse(m.out), ['openai/gpt', 'anthropic/sonnet'])
+
+    const providers = await run(['models', 'providers', '--json'], env)
+    assert.equal(providers.code, 0, providers.err)
+    assert.equal(hub.recorded.hits.at(-1)?.path, '/api/models/providers')
+    assert.equal(JSON.parse(providers.out)[0]?.id, 'deepseek')
 
     const p = await run(['plugins', 'list', '--json'], env)
     assert.equal(p.code, 0, p.err)

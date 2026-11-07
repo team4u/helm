@@ -225,6 +225,7 @@ function makeKernel(): KernelRuntimeLike {
       return [{ conversationId: 1, snippet: `hit:${q}` }]
     },
     listModels: () => [{ id: 'faux/model' }],
+    listModelProviders: () => [{ id: 'faux', name: 'Faux', modelCount: 1, authMethods: [{ type: 'api_key', label: 'API Key' }] }],
   }
 }
 
@@ -428,33 +429,33 @@ test('恶意网页抢先 setup 防护：恶意 Origin 403 且不写配置；text
     const evilKernel = makeKernel()
     ;(evilKernel as { auth: AuthService }).auth = evilAuth
     const handler = createHubHandler(evilKernel, workflows)
-    // 恶意 Origin 的简单 POST（跨站表单可发）→ 403，不进入 setup
+    // 非 JSON 的简单 POST（跨站表单可发）→ 415，不进入 setup
     const malicious = await call(handler, 'POST', '/api/auth/setup', {
       auth: false,
       origin: 'https://evil.example',
       contentType: 'text/plain',
       raw: JSON.stringify({ password: 'evil-password-123' }),
     })
-    assert.equal(malicious.status, 403)
-    assert.equal(malicious.body.error.code, 'origin_not_allowed')
+    assert.equal(malicious.status, 415)
+    assert.equal(malicious.body.error.code, 'unsupported_media_type')
     // 配置未被写入：仍是未配置状态
     assert.deepEqual(await evilAuth.status(), { configured: false })
-    // 白名单源 + JSON 正常 setup
+    // 任意源 + JSON 正常 setup
     const ok = await call(handler, 'POST', '/api/auth/setup', {
       auth: false,
-      origin: 'http://localhost:3201',
+      origin: 'http://192.168.31.26:3201',
       body: { password: 'legit-password-123' },
     })
     assert.equal(ok.status, 200)
     assert.equal(typeof ok.body.token, 'string')
-    // 已配置后再来恶意 Origin 也被拒（403 先于 409）
+    // 已配置后再来非 JSON 也被拒
     const again = await call(handler, 'POST', '/api/auth/setup', {
       auth: false,
       origin: 'https://evil.example',
       contentType: 'text/plain',
       raw: JSON.stringify({ password: 'evil-password-456' }),
     })
-    assert.equal(again.status, 403)
+    assert.equal(again.status, 415)
     // 无 Origin 的 CLI 调用：text/plain 仍拒（JSON 端点），JSON 通过
     const cliBad = await call(handler, 'POST', '/api/auth/setup', {
       auth: false,
@@ -775,6 +776,14 @@ test('skills list + read {text}；path traversal 拒绝', { timeout: 60_000 }, a
   const traversal = await call(handler, 'GET', '/api/skills/demo-skill?path=../../../etc/passwd')
   assert.equal(traversal.status, 400)
   assert.equal(traversal.body.error.code, 'path_traversal')
+})
+
+test('models/providers 返回公开供应商元数据；路径不匹配不误入目录', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const res = await call(handler, 'GET', '/api/models/providers')
+  assert.equal(res.status, 200)
+  assert.deepEqual(res.body, [{ id: 'faux', name: 'Faux', modelCount: 1, authMethods: [{ type: 'api_key', label: 'API Key' }] }])
+  assert.equal((await call(handler, 'GET', '/api/models/providers/extra')).status, 404)
 })
 
 test('models 返回数组', { timeout: 60_000 }, async () => {
@@ -1238,7 +1247,7 @@ test('startHub 真实往返：编码 pluginId 经 node 服务器命中 action', 
   }
 })
 
-test('CORS：允许源带凭据头；未知源无 CORS 头', { timeout: 60_000 }, async () => {
+test('CORS：任意来源均反射并带凭据头', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const allowed = await handler(
     new Request('http://127.0.0.1:3202/api/conversations', {
@@ -1249,10 +1258,11 @@ test('CORS：允许源带凭据头；未知源无 CORS 头', { timeout: 60_000 }
   assert.equal(allowed.headers.get('access-control-allow-credentials'), 'true')
   const foreign = await handler(
     new Request('http://127.0.0.1:3202/api/conversations', {
-      headers: { authorization: `Bearer ${token}`, origin: 'http://evil.example' },
+      headers: { authorization: `Bearer ${token}`, origin: 'http://192.168.31.26:3201' },
     }),
   )
-  assert.equal(foreign.headers.get('access-control-allow-origin'), null)
+  assert.equal(foreign.headers.get('access-control-allow-origin'), 'http://192.168.31.26:3201')
+  assert.equal(foreign.headers.get('access-control-allow-credentials'), 'true')
   const preflight = await handler(
     new Request('http://127.0.0.1:3202/api/conversations', {
       method: 'OPTIONS',
@@ -1260,4 +1270,5 @@ test('CORS：允许源带凭据头；未知源无 CORS 头', { timeout: 60_000 }
     }),
   )
   assert.equal(preflight.status, 204)
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'http://localhost:3201')
 })

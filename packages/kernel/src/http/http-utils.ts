@@ -14,11 +14,8 @@ export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024 // 1 MiB
 /** 超大 workflow 脚本上限（另行验证）。 */
 export const MAX_WORKFLOW_BODY_BYTES = 512 * 1024 // 512 KiB
 
-/** 允许携带凭据的前端开发源（Vite dev 3201；不通配凭据）。 */
-export const ALLOWED_CORS_ORIGINS = [
-  'http://localhost:3201',
-  'http://127.0.0.1:3201',
-]
+/** 允许携带凭据的前端开发源（不限制任何来源）。 */
+export const ALLOWED_CORS_ORIGINS = ['*']
 
 /** 无 stash（未接机密服务）时的恒等脱敏：值本身已是安全产物。 */
 const identityRedact = (text: string): string => text
@@ -111,11 +108,11 @@ function describeError(error: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// CORS：默认同源；仅显式允许 3201 前端 dev 源，凭据不通配
+// CORS：不限制任何来源，带 Origin 请求均反射并允许凭据
 // ---------------------------------------------------------------------------
 
 export function corsHeaders(origin: string | null): Record<string, string> {
-  if (origin === null || !ALLOWED_CORS_ORIGINS.includes(origin)) return {}
+  if (origin === null) return {}
   return {
     'access-control-allow-origin': origin,
     'access-control-allow-credentials': 'true',

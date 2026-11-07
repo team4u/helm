@@ -1,5 +1,5 @@
 /**
- * 模型接入：pi-ai 官方 provider（openai / anthropic）+ providers.json 兼容网关。
+ * 模型接入：pi-ai 全量内置 provider + providers.json 兼容网关。
  *
  * 事实依据（@earendil-works/pi-ai 1.5.0 实测源码）：
  * - `createProvider({ auth })` 的 auth 即 `ProviderAuth`（`apiKey?: ApiKeyAuth` +
@@ -7,9 +7,8 @@
  *   返回 `AuthResult | undefined`（undefined = 该渠道未配置，是合法状态）。
  * - `Model` 必填 `provider`（须等于注册的 provider id，请求分发按它查 provider）
  *   与 `baseUrl`（openai-completions 直接对它做字符串探测）；`cost` 四费率必填。
- * - 官方 openai/anthropic provider 的 `auth.apiKey` 原生支持 credential key 优先、
- *   环境变量回退（envApiKeyAuth / anthropicApiKeyAuth），helm 注入 key 时仅按
- *   「注入 key ?? 官方 resolve」合并，不覆盖 oauth 等其它 auth 策略。
+ * - 内置 provider 自行处理凭据、环境变量与供应商特有配置；helm 只将已存 key
+ *   注入原生 ApiKeyAuth 的 credential，不替换原生认证判断或 oauth 策略。
  *
  * providers.json 的 `models: string[]` 只有静态模型 ID，不含能力元数据；
  * 未探测到的能力（contextWindow 等）以显式标记的保守缺省给出，绝不冒充真实探测值。
@@ -28,9 +27,8 @@ import {
   type Models,
   type Provider,
 } from '@earendil-works/pi-ai'
-import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic'
-import { openaiProvider } from '@earendil-works/pi-ai/providers/openai'
-import type { ProviderConfig } from '@helm/protocol'
+import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
+import type { ModelProviderSummary, ProviderConfig } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 
 export interface ModelGatewayOptions {
@@ -113,8 +111,9 @@ export function buildModels(options: ModelGatewayOptions): Models {
   const models = createModels()
   const keys = options.apiKeys()
 
-  models.setProvider(withInjectedKey(openaiProvider(), keys['openai']))
-  models.setProvider(withInjectedKey(anthropicProvider(), keys['anthropic']))
+  for (const provider of builtinProviders()) {
+    models.setProvider(withInjectedKey(provider, keys[provider.id]))
+  }
 
   for (const config of options.providers) {
     if (!config.enabled) continue
@@ -123,40 +122,33 @@ export function buildModels(options: ModelGatewayOptions): Models {
   return models
 }
 
-/**
- * 官方 provider 叠加 helm 注入的 key：仅替换 `auth.apiKey` 的解析来源
- * （credential key ?? 注入 key，都无则委托官方 resolve），`auth.oauth` 等
- * 其它策略原样保留。官方 ApiKeyAuth 自带环境变量回退
- * （OPENAI_API_KEY / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN 等）。
- */
+/** 保留供应商原生认证逻辑；OAuth-only 供应商不得被注入伪造的 API Key 方式。 */
 function withInjectedKey(provider: Provider, injectedKey: string | undefined): Provider {
-  if (!injectedKey) return provider
   const base = provider.auth.apiKey
+  if (!injectedKey || !base) return provider
+  const injectCredential = (input: Parameters<ApiKeyAuth['resolve']>[0]) => ({
+    ...input,
+    credential: { ...input.credential, type: 'api_key' as const, key: input.credential?.key ?? injectedKey },
+  })
   const apiKey: ApiKeyAuth = {
-    name: base?.name ?? `${provider.name} API key`,
-    ...(base?.login ? { login: base.login } : {}),
-    ...(base?.check
-      ? {
-          check: async (input) => {
-            const effective = input.credential?.key ?? injectedKey
-            if (effective) return { source: 'helm credentials', type: 'api_key' as const }
-            return base.check!(input)
-          },
-        }
-      : {}),
-    resolve: async (input) => {
-      const effective = input.credential?.key ?? injectedKey
-      if (effective) {
-        const result: AuthResult = {
-          auth: { apiKey: effective },
-          source: input.credential?.key ? 'stored credential' : 'helm credentials',
-        }
-        return result
-      }
-      return base?.resolve(input)
-    },
+    ...base,
+    ...(base.check ? { check: (input) => base.check!(injectCredential(input)) } : {}),
+    resolve: (input) => base.resolve(injectCredential(input)),
   }
   return { ...provider, auth: { ...provider.auth, apiKey } }
+}
+
+/** 显式投影公开元数据，绝不序列化 SDK provider 内的 headers 或认证回调。 */
+export function listModelProviders(models: Models): ModelProviderSummary[] {
+  return models.getProviders().map((provider) => ({
+    id: provider.id,
+    name: provider.name,
+    modelCount: models.getModels(provider.id).length,
+    authMethods: [
+      ...(provider.auth.apiKey ? [{ type: 'api_key' as const, label: provider.auth.apiKey.name }] : []),
+      ...(provider.auth.oauth ? [{ type: 'oauth' as const, label: provider.auth.oauth.loginLabel ?? provider.auth.oauth.name }] : []),
+    ],
+  })).sort((a, b) => a.name.localeCompare(b.name))
 }
 
 export interface ModelRefParts {

@@ -18,9 +18,11 @@ import { createServer } from 'node:http'
 import { AddressInfo } from 'node:net'
 import type { ProviderConfig } from '@helm/protocol'
 import type { ApiKeyAuth, MutableModels } from '@earendil-works/pi-ai'
+import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import {
   buildModels,
   listModelCatalog,
+  listModelProviders,
   parseModelRef,
   requireModelRef,
   type ModelCatalogEntry,
@@ -269,6 +271,51 @@ describe('兼容网关（anthropic 协议）', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 // 官方 provider：SDK checkAuth 语义 + credential 优先于 env
 // ---------------------------------------------------------------------------
+
+describe('PI 全量供应商', { timeout: 60_000 }, () => {
+  test('直接注册全部内置供应商，保留原生模型元数据与零模型供应商', { timeout: 60_000 }, () => {
+    const models = buildModels({ providers: [], apiKeys: () => ({}) })
+    const native = builtinProviders()
+    assert.deepEqual(models.getProviders().map((provider) => provider.id), native.map((provider) => provider.id))
+    for (const provider of native) {
+      assert.deepEqual(models.getModels(provider.id), provider.getModels())
+    }
+    const summaries = listModelProviders(models)
+    assert.equal(summaries.length, native.length)
+    assert.ok(summaries.some((provider) => provider.id === 'typesafe' && provider.modelCount === 0))
+    assert.deepEqual(summaries.find((provider) => provider.id === 'openai-codex')?.authMethods.map((method) => method.type), ['oauth'])
+    assert.ok(summaries.every((provider) => Object.keys(provider).sort().join(',') === 'authMethods,id,modelCount,name'))
+  })
+
+  test('非 OpenAI/Anthropic 供应商原生 key 注入且不伪造 OAuth-only 的 API Key', { timeout: 60_000 }, async () => {
+    const models = buildModels({ providers: [], apiKeys: () => ({ deepseek: 'fixture-deepseek', 'openai-codex': 'fixture-not-oauth' }) })
+    assert.equal((await models.getAuth('deepseek'))?.auth.apiKey, 'fixture-deepseek')
+    assert.equal(models.getProvider('openai-codex')?.auth.apiKey, undefined)
+    assert.ok(models.getProvider('openai-codex')?.auth.oauth)
+  })
+
+  test('Cloudflare 原生配置校验与认证头转换不可被通用 Bearer 覆盖', { timeout: 60_000 }, async () => {
+    const models = buildModels({ providers: [], apiKeys: () => ({ 'cloudflare-ai-gateway': 'fixture-cloudflare' }) })
+    const apiKey = models.getProvider('cloudflare-ai-gateway')?.auth.apiKey
+    assert.ok(apiKey)
+    const signal = new AbortController().signal
+    const emptyContext = { env: async () => undefined, fileExists: async () => false }
+    assert.equal(await apiKey.resolve({ ctx: emptyContext, signal }), undefined)
+    const env: Record<string, string> = { CLOUDFLARE_ACCOUNT_ID: 'fixture-account', CLOUDFLARE_GATEWAY_ID: 'fixture-gateway' }
+    const auth = await apiKey.resolve({ ctx: { ...emptyContext, env: async (name) => env[name] }, signal })
+    assert.equal(auth?.auth.headers?.['cf-aig-authorization'], 'Bearer fixture-cloudflare')
+    assert.equal(auth?.auth.apiKey, undefined)
+    assert.equal(auth?.env?.['CLOUDFLARE_ACCOUNT_ID'], 'fixture-account')
+  })
+
+  test('自定义网关保持显式覆盖与停用语义', { timeout: 60_000 }, () => {
+    const override = { ...openaiCompatConfig('http://127.0.0.1/v1'), id: 'deepseek' }
+    const enabled = buildModels({ providers: [override], apiKeys: () => ({}) })
+    assert.deepEqual(enabled.getModels('deepseek').map((model) => model.id), ['gw-openai-model'])
+    const disabled = buildModels({ providers: [{ ...override, enabled: false }], apiKeys: () => ({}) })
+    assert.deepEqual(disabled.getModels('deepseek'), builtinProviders().find((provider) => provider.id === 'deepseek')!.getModels())
+  })
+})
 
 describe('官方 provider auth', { timeout: 60_000 }, () => {
   test('无凭据无环境变量：checkAuth undefined（合法不可用，无 fallback）', { timeout: 60_000 }, async () => {

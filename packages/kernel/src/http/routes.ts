@@ -386,6 +386,9 @@ async function route(
   }
 
   // ---- models / skills -------------------------------------------------------
+  if (head === 'models' && second === 'providers' && third === undefined && method === 'GET') {
+    return jsonOk(redactor, await kernel.listModelProviders())
+  }
   if (head === 'models' && second === undefined && method === 'GET') {
     return jsonOk(redactor, await kernel.listModels())
   }

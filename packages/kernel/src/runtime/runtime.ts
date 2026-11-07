@@ -80,7 +80,7 @@ import { createEnvFabric, sha256hex, tokenAuthenticator, type EnvFabric } from '
 import { AskService } from './asks.js'
 import { ConversationTracker, deriveTitle } from './conversations.js'
 import { EventHub } from './events.js'
-import { buildModels, listModelCatalog, requireModelRef } from './models.js'
+import { buildModels, listModelCatalog, listModelProviders, requireModelRef } from './models.js'
 import type { Models } from '@earendil-works/pi-ai/models'
 import { openHelmDatabase, type HelmDatabase } from './sqlite.js'
 import { HelmStore } from './store.js'
@@ -227,7 +227,6 @@ export class KernelRuntime {
   private readonly configSvc: ConfigService
   private readonly pluginConfig: HelmPluginConfigStore
   private readonly agentSessions = new Map<string, number>()
-  private readonly modelsProvider: (() => Models) | undefined
   private readonly setModelsSlot: (m: Models) => void = () => {}
   private modelsCurrent: Models
   private defaultModel: string | undefined
@@ -287,9 +286,9 @@ export class KernelRuntime {
 
     const providerConfigs = await providersSvc.list()
     const apiKeyCache: Record<string, string> = {}
-    // 预热 key 缓存（后续 set 后 reloadModels 刷新）。
-    for (const id of ['openai', 'anthropic', ...providerConfigs.map((p) => p.id)]) {
-      const key = await credentials.get(id).catch(() => undefined)
+    // 凭据按实际已存 ID 读取，不再维护内置供应商白名单；存储错误必须显式失败。
+    for (const id of await credentials.list()) {
+      const key = await credentials.get(id)
       if (key) apiKeyCache[id] = key
     }
     const modelsExternal = options.models
@@ -341,6 +340,7 @@ export class KernelRuntime {
       store,
       providersSvc,
       credentials,
+      models: modelsInstance,
       setModels: (m) => {
         modelsSlot.current = m
       },
@@ -373,6 +373,7 @@ export class KernelRuntime {
     store: HelmStore
     providersSvc: ProviderService
     credentials: CredentialService
+    models: Models
     setModels(m: Models): void
     defaultModel?: string
     cwd: string
@@ -390,8 +391,8 @@ export class KernelRuntime {
     this.registry = init.registry
     this.store = init.store
     this.defaultModel = init.defaultModel
-    this.modelsCurrent = init.externalModels ?? buildModels({ providers: [], apiKeys: () => ({}) })
-    void init.setModels // 仅 reloadModels 使用（见下）
+    // 目录与 Harness 必须使用同一集合，不能在构造器另建一个缺少凭据的空配置集合。
+    this.modelsCurrent = init.models
     this.setModelsSlot = init.setModels
     if (init.externalModels) this.setModelsSlot = () => {
       /* 外部注入：热重载不得替换调用方模型集合 */
@@ -1475,7 +1476,7 @@ export class KernelRuntime {
 
   /** 抖动合并 + 串行 reloadModels（外部注入 Models 时空操作）。 */
   private scheduleReloadModels(): void {
-    if (this.modelsProvider) return
+    if (this.init.externalModels) return
     if (this.reloadTimer !== undefined) clearTimeout(this.reloadTimer)
     this.reloadTimer = setTimeout(() => {
       this.reloadTimer = undefined
@@ -2756,19 +2757,25 @@ export class KernelRuntime {
     return listModelCatalog(this.modelsCurrent)
   }
 
+  listModelProviders() {
+    return listModelProviders(this.modelsCurrent)
+  }
+
   /** providers.json / credentials.json 变化后重建模型集（getter 热生效）。 */
   async reloadModels(): Promise<void> {
     // 外部注入 Models（测试/嵌入场景）：模型集合归调用方，绝不替换。
-    if (this.modelsProvider) return
+    if (this.init.externalModels) return
     const providerConfigs = await this.providersSvc.list()
-    for (const p of providerConfigs) {
-      const key = await this.credentialsSvc.get(p.id).catch(() => undefined)
-      if (key) this.apiKeyCache[p.id] = key
+    const nextKeys: Record<string, string> = {}
+    for (const id of await this.credentialsSvc.list()) {
+      const key = await this.credentialsSvc.get(id)
+      if (key) nextKeys[id] = key
     }
-    this.modelsCurrent = buildModels({
-      providers: providerConfigs,
-      apiKeys: () => this.apiKeyCache,
-    })
+    const models = buildModels({ providers: providerConfigs, apiKeys: () => nextKeys })
+    // 完整读取成功后才发布；整体替换，确保删除密钥后旧缓存也失效。
+    for (const id of Object.keys(this.apiKeyCache)) delete this.apiKeyCache[id]
+    Object.assign(this.apiKeyCache, nextKeys)
+    this.modelsCurrent = models
     this.setModelsSlot(this.modelsCurrent)
   }
 
