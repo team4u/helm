@@ -2,7 +2,7 @@
 
 Helm 是以 `pi-durable` 为底座的持久会话微内核。共享契约位于 `@helm/protocol`，运行时与插件宿主位于 `@helm/kernel`，`@helm/node` 通过 HTTP 提供 CLI。
 
-本阶段实现核心与常驻 `builtin:assistant`；Web 外壳、Herdr、Super-agent 和外部触发器后续接入。架构约束见 [AGENTS.md](./AGENTS.md)，目标设计见 [设计文档](./docs/20261106%20helm极简微内核与双7扩展点设计文档.md)。本轮接手入口和实际验收记录见 [核心开发交接](./docs/20261106-核心开发交接.md)。
+核心、常驻 `builtin:assistant` 和 CLI 已实现；`builtin:herdr` 按需启用，负责终端 Agent 委派。Web 外壳、Super-agent 和外部触发器后续接入。架构约束见 [AGENTS.md](./AGENTS.md)，目标设计见 [设计文档](./docs/20261106%20helm极简微内核与双7扩展点设计文档.md)。当前验收记录见 [Herdr 开发交接](./docs/20261107-Herdr开发交接.md)，此前核心记录见 [核心开发交接](./docs/20261106-核心开发交接.md)。
 
 需要 Node.js 24.12 或更新版本及 pnpm。
 
@@ -42,4 +42,26 @@ CLI 使用 `HELM_HUB_URL` 指定 Hub，默认 `http://127.0.0.1:3202`。支持�
 
 SSE 首帧包含会话、审批、启用插件 UI 和工作流运行摘要；随后推送时间线条目、流式状态、公开插件文档和工作流更新。插件文档必须显式声明 `public: true` 才能通过 `helm plugins doc <id> <name>` 读取，仍需 Hub 鉴权。`helm workflows runs --json` 可查看运行摘要。
 
-项目处于开发阶段，不考虑向后兼容，不做数据迁移。代码、接口、配置和数据库结构可直接按最新设计调整；结构变化时可以清理开发数据并重新初始化。同一结构下的会话、记忆和工作流重启恢复仍需保证。Web 组件渲染与 `client.tsx` 编译交付随 Web 阶段实现。
+项目处于开发阶段，不考虑向后兼容，不做数据迁移。代码、接口、配置和数据库结构可直接按最新设计调整；结构变化时可以清理开发数据并重新初始化。同一结构下的会话、记忆和工作流重启恢复仍需保证。Web 外壳和外部插件的 `client.tsx` 编译交付后续实现；内置插件的轻量 UI 使用 JSON Spec，复杂 Screen 留给 Web 内置组件表映射。
+
+Herdr 插件默认停用，显式启用后才连接终端服务。插件开关写入 `config.json.pluginEnabled`，重启后沿用。先配置连接，再启用；修改连接配置后需停用并重新启用。在途执行和等待续接的窗格会阻止停用。
+
+```bash
+pnpm helm plugins config builtin:herdr --input '{"socketPath":"/绝对路径/herdr.sock","startupTimeoutMs":30000}' --json
+pnpm helm plugins enable builtin:herdr --json
+pnpm helm herdr list --json
+```
+
+本机通过 Herdr 官方 Unix socket API 创建终端并订阅状态。Socket 路径按插件 `socketPath`、`HERDR_SOCKET_PATH`、插件 `session` 对应目录、XDG/默认配置目录依次解析。一次启用周期固定连接目标；更改连接配置后重新启用才生效。`startupTimeoutMs` 必须为 3001 到 300000 的整数，默认 30000；投递前按权威 `interactive_ready` 确认终端可输入。
+
+`subagent` 和工作流可以指定 `herdr:<kind>`，或使用绑定 Herdr 的 Profile。CLI 专属参数通过 `runtime.args` 明确配置，`model`、`effort` 不自动翻译为各 CLI 的私有选项。例如：
+
+```bash
+pnpm helm profiles create --input '{"id":"terminal-coder","runtime":{"kind":"herdr","agent":"pi","args":["--provider","magpie","--model","zhipu/glm-5.3"]}}' --json
+```
+
+终端 Agent 必须将最终结果写入 `.helm/wf-out-*` 文件。插件读取、校验并删除交接文件；首次缺失或格式错误会在原窗格追问一次，仍失败则保留现场并报告脱敏诊断。Gate 在实际工作目录执行一次。成功窗格保活供同一工作流或父回合续接，结算后关闭；Worktree 的磁盘目录和分支保留。插件不自动按键或中止人类窗格。
+
+`herdr:<kind>@<machine>` 和 Profile 的 `runtime.machine` 使用 SSH。远端需要已运行的 Herdr、Python 3 和非交互 SSH 认证。请求和环境通过 stdin 脚本传递，环境值进入 RPC 请求体；文件交接和 Gate 在远端执行，失败时显式报错。远端默认不接收本机 Hub 地址与 Token，只有 Profile 显式声明远端可达的 `runtime.env.HELM_HUB_URL` 时才注入访问环境。机密通过 SecretStash 注入，不要写入 Profile JSON。Helm 在自己的交接、事件和诊断出口脱敏，外部 CLI 的工具输出和模型上下文遵循其自身策略。
+
+手工真实冒烟需先执行 `pnpm build`，再运行 `node scripts/herdr-smoke.mjs`。脚本使用独立命名 Herdr 会话、临时 Git 仓库和真实 GLM 模型，验证委派、结构化交接、Worktree、Gate、同窗格续接与重放；它不纳入默认单测。当前主树全仓 677/677、真实本机模型冒烟 28/28 通过。远端生产 Python 通道已有受控回归，SSH 实机端到端尚未验证。
