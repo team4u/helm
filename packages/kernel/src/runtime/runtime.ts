@@ -233,6 +233,7 @@ export class KernelRuntime {
   /** watchdog 定时器（singleflight；unref 不阻退出）。 */
   private watchdogTimer: NodeJS.Timeout | undefined
   private watchdogInflight = false
+  private watchdogPending: Promise<void> | undefined
   /** turn_settled 钩子的在途执行（waitForIdle 前等待）。 */
   private settledInflight: Promise<void> = Promise.resolve()
   /** tool_call handled 接管缓存（callId -> 结果；execute 层包装器消费）。 */
@@ -475,8 +476,10 @@ export class KernelRuntime {
         },
         onTurnSettled: (payload, consumed) => {
           const run = this.dispatchTurnSettled(payload, consumed)
-          this.settledInflight = run
-          void run.catch(() => {})
+          this.settledInflight = Promise.all([this.settledInflight, run]).then(() => undefined)
+          // 关闭路径仍 await 并传播错误；此处仅避免后台 Promise 提前触发 unhandled。
+          void this.settledInflight.catch(() => {})
+          return run
         },
       },
     })
@@ -1557,6 +1560,8 @@ export class KernelRuntime {
     })
     this.tracker.stopObserving(id)
     this.store.deleteConv(id)
+    // 清除归属登记，防止重建同号会话时继承已删除会话的自动化权限。
+    this.markConversationOwnership(id, 'human')
     this.events.publish('conversation.deleted', { conversationId: id })
   }
 
@@ -1569,6 +1574,7 @@ export class KernelRuntime {
     text: string,
     opts?: { origin?: InputOrigin; whenBusy?: WhenBusy; meta?: Record<string, unknown> },
   ): Promise<{ submissionId: string }> {
+    if (this.closed) throw new HelmError('runtime_closed', '内核正在关闭，拒绝提交新输入', 503)
     const convMeta = this.store.getConv(id)
     if (!convMeta) throw new HelmError('not_found', `会话不存在：${id}`, 404)
     // 模型解析链统一入口：全部缺失时只在提交时显式拒绝（其他读路径不报错）。
@@ -1630,6 +1636,8 @@ export class KernelRuntime {
     const effectiveText = this.stash.redact(finalInput.text)
     finalInput = { ...finalInput, text: effectiveText }
 
+    // input Hook 可能执行异步 IO；期间开始关停时不得继续写入或创建 SDK 回合。
+    if (this.closed) throw new HelmError('runtime_closed', '内核正在关闭，拒绝提交新输入', 503)
     // 首输入自动标题。
     if (convMeta.title === '') {
       const title = deriveTitle(effectiveText)
@@ -1937,11 +1945,15 @@ export class KernelRuntime {
    * human 归属仅只读诊断（红线由插件与 host 共同遵守）。
    */
   async watchdogTick(): Promise<unknown> {
+    if (this.closed) throw new HelmError('runtime_closed', '内核正在关闭，拒绝启动巡检', 503)
     if (this.watchdogInflight) {
       // singleflight：上一轮未结束时不叠加执行（事实采集不重入）。
       return { skipped: true, reason: 'watchdog tick already running' }
     }
     this.watchdogInflight = true
+    let finishTick!: () => void
+    const pending = new Promise<void>((resolve) => { finishTick = resolve })
+    this.watchdogPending = pending
     try {
       const summaries = this.listConversations()
       const probes = summaries.map((summary) => {
@@ -1953,8 +1965,11 @@ export class KernelRuntime {
            * 绝不依赖用户可改的 tags/parent 推断；判不准一律 human 只读
            * （红线：宁可漏管不可越权）。
            */
-          ownedBy: this.watchdogOwnershipOf(summary.id),
+          ownedBy: this.getConversationOwnership(summary.id),
           status: summary.status,
+          targetKind: 'conversation' as const,
+          conversationId: summary.id,
+          stateChangeSeq: summary.stateChangeSeq,
           ...(facts.stalledMs !== undefined ? { stalledMs: facts.stalledMs } : {}),
           ...(facts.consecutiveErrors > 0 ? { consecutiveErrors: facts.consecutiveErrors } : {}),
           facts: { doing: summary.doing, pendingAskCount: summary.pendingAskCount },
@@ -1965,11 +1980,24 @@ export class KernelRuntime {
       return payload
     } finally {
       this.watchdogInflight = false
+      if (this.watchdogPending === pending) this.watchdogPending = undefined
+      finishTick()
     }
   }
 
-  private watchdogOwnershipOf(conversationId: number): 'helm' | 'bot' | 'human' {
+  /**
+   * 会话归属权现读（Watchdog 红线判定唯一可信来源；superagent 工厂注入用）：
+   * - root #1 恒 human；
+   * - 会话不存在（含已删除 tombstone）时抛 not_found，绝不把已删会话的
+   *   残留登记当作可执行授权返回；
+   * - 未标记/标记非法值一律 human（宁漏管不越权）。
+   */
+  getConversationOwnership(conversationId: number): 'helm' | 'bot' | 'human' {
     if (conversationId === PROTO_ROOT) return 'human'
+    const meta = this.store.getConv(conversationId)
+    if (meta === undefined || this.store.isDeleted(conversationId)) {
+      throw new HelmError('not_found', `会话不存在：${conversationId}`, 404, { conversationId })
+    }
     const owners = this.documentStore.get<Record<string, string>>('conversation-ownership', {})
     const marked = owners[String(conversationId)]
     return marked === 'helm' || marked === 'bot' ? marked : 'human'
@@ -2193,6 +2221,10 @@ export class KernelRuntime {
     }
   }
 
+  get isClosing(): boolean {
+    return this.closed
+  }
+
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
@@ -2203,6 +2235,8 @@ export class KernelRuntime {
     }
     this.watcher?.close()
     if (this.reloadTimer !== undefined) clearTimeout(this.reloadTimer)
+    // 先等已进入 Hook 管道的巡检收敛，避免插件释放后仍有回调写旧 Doc。
+    await this.watchdogPending
     // 2) 等待在途 reloadModels（可能还在写 models 引用）。
     await this.reloadChain
     // 3) 等待 turn_settled 钩子在途执行。

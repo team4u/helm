@@ -23,6 +23,8 @@ export interface UiSpecBase {
   json?: Record<string, unknown>
   /** client.tsx 组件引用。 */
   client?: ClientComponentRef
+  /** 声明式轨道订阅的本插件公开文档名（挂载至 $docs/<docName>）；必须是同插件 public doc。 */
+  docs?: string[]
   /** 会话作用域：仅命中会话（或无会话上下文时）渲染本扩展点。 */
   scope?: ConversationScope
 }

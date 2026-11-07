@@ -150,13 +150,24 @@ export interface AgentGateResult {
  */
 export type WatchdogOwnership = 'helm' | 'bot' | 'human'
 
+/** 探针目标类别：conversation = 原生会话；external = 外部运行时目标（如 Herdr 窗格）。 */
+export type WatchdogTargetKind = 'conversation' | 'external'
+
 /** 单个巡检探针采集到的事实。 */
 export interface WatchdogProbe {
   /** 探针目标：会话 ID 或 Herdr 窗格 ID 等外部标识。 */
   targetId: string
+  /** 目标类别；未声明类别的探针不作为自动干预授权。 */
+  targetKind?: WatchdogTargetKind
+  /** targetKind 为 conversation 时的原生目标会话 ID（仅目标本身；外部 pane 的父会话不得冒充此字段）。 */
+  conversationId?: number
+  /** targetKind 为 external 时的目标机（'local' 或 SSH 机器名）。 */
+  machine?: string
   ownedBy: WatchdogOwnership
   /** 目标当前状态（通用字符串，容纳会话五态与 Herdr 窗格状态）。 */
   status: string
+  /** 权威状态变化序号（会话 stateChangeSeq / 外部 state_change_seq）；无法读取权威值时必须省略，绝不猜造。 */
+  stateChangeSeq?: number
   /** 停滞毫秒数。 */
   stalledMs?: number
   /** 连续报错次数。 */

@@ -43,7 +43,7 @@ export interface LiveStateShape {
 }
 
 export interface TurnSettledListener {
-  (payload: TurnSettledPayload, consumedInputs: ConversationInput[]): void
+  (payload: TurnSettledPayload, consumedInputs: ConversationInput[]): Promise<void> | void
 }
 
 export interface TrackerEvents {
@@ -211,22 +211,25 @@ export class ConversationTracker {
 
   /** 等待本会话全部在途 turn_settled 回调完成（waitForIdle 用，非全局 promise）。 */
   async waitTurnSettled(conversationId: number): Promise<void> {
-    const inFlight = this.settledInflightCount(conversationId)
-    if (inFlight === 0) return
-    await new Promise<void>((resolve) => {
-      const list = this.settledWaiters.get(conversationId) ?? []
-      list.push(resolve)
-      this.settledWaiters.set(conversationId, list)
-    })
+    if (this.settledInflightCount(conversationId) > 0) {
+      await new Promise<void>((resolve) => {
+        const list = this.settledWaiters.get(conversationId) ?? []
+        list.push(resolve)
+        this.settledWaiters.set(conversationId, list)
+      })
+    }
+    if (this.settledErrors.has(conversationId)) throw this.settledErrors.get(conversationId)
   }
 
   private settledInflight = new Map<number, number>()
+  private settledErrors = new Map<number, unknown>()
 
   private settledInflightCount(conversationId: number): number {
     return this.settledInflight.get(conversationId) ?? 0
   }
 
   private beginSettled(conversationId: number): void {
+    if (this.settledInflightCount(conversationId) === 0) this.settledErrors.delete(conversationId)
     this.settledInflight.set(conversationId, this.settledInflightCount(conversationId) + 1)
   }
 
@@ -515,6 +518,7 @@ export class ConversationTracker {
     error: string | undefined,
   ): void {
     this.beginSettled(conversationId)
+    let completion: Promise<void> | void
     try {
       // 实时视图终态冲刷：先于 turn_settled 发出（空 tools/文本表示流结束）。
       this.flushLiveFinal(conversationId)
@@ -524,14 +528,7 @@ export class ConversationTracker {
       } else if (outcome === 'completed') {
         this.consecutiveErrors.set(conversationId, 0)
       }
-      const summary = this.summaryOf(conversationId, outcome)
-      const payload: TurnSettledPayload = {
-        conversation: summary,
-        inputs,
-        outcome,
-        error,
-        settledAt: Date.now(),
-      }
+      // 先推进持久水位，再构造结算快照；插件与读取接口观察同一终态。
       // completionSeq 推进 + unread 置位（human 显式 patch 才清零）。
       const meta = this.store.getConv(conversationId)
       if (meta) {
@@ -548,9 +545,28 @@ export class ConversationTracker {
           summaryOf(updated, unread ? 'done' : statusNow(updated, outcome), 0),
         )
       }
-      this.events.onTurnSettled(payload, inputs)
-    } finally {
+      const payload: TurnSettledPayload = {
+        conversation: this.summaryOf(conversationId, outcome),
+        inputs,
+        outcome,
+        error,
+        settledAt: Date.now(),
+      }
+      completion = this.events.onTurnSettled(payload, inputs)
+    } catch (error) {
       this.endSettled(conversationId)
+      throw error
+    }
+    if (completion === undefined) {
+      this.endSettled(conversationId)
+    } else {
+      void completion.then(
+        () => this.endSettled(conversationId),
+        (error: unknown) => {
+          this.settledErrors.set(conversationId, error)
+          this.endSettled(conversationId)
+        },
+      )
     }
   }
 

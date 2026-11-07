@@ -227,13 +227,22 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
       if (
         !isObj(p) ||
         typeof p.targetId !== 'string' ||
+        p.targetId.length === 0 ||
+        (p.targetKind !== undefined && !['conversation', 'external'].includes(String(p.targetKind))) ||
+        (p.conversationId !== undefined &&
+          !(typeof p.conversationId === 'number' && Number.isInteger(p.conversationId) && p.conversationId > 0)) ||
+        (p.machine !== undefined && (typeof p.machine !== 'string' || p.machine.length === 0)) ||
         !['helm', 'bot', 'human'].includes(String(p.ownedBy)) ||
         typeof p.status !== 'string' ||
-        (p.stalledMs !== undefined && typeof p.stalledMs !== 'number') ||
-        (p.consecutiveErrors !== undefined && typeof p.consecutiveErrors !== 'number') ||
+        (p.stateChangeSeq !== undefined &&
+          !(typeof p.stateChangeSeq === 'number' && Number.isInteger(p.stateChangeSeq) && p.stateChangeSeq >= 0)) ||
+        (p.stalledMs !== undefined &&
+          !(typeof p.stalledMs === 'number' && Number.isFinite(p.stalledMs) && p.stalledMs >= 0)) ||
+        (p.consecutiveErrors !== undefined &&
+          !(typeof p.consecutiveErrors === 'number' && Number.isFinite(p.consecutiveErrors) && p.consecutiveErrors >= 0)) ||
         (p.facts !== undefined && !isObj(p.facts))
       ) {
-        return '字段 probes 的每项必须是 WatchdogProbe';
+        return '字段 probes 的每项必须是 WatchdogProbe（targetKind/conversationId/machine/stateChangeSeq/stalledMs/consecutiveErrors 若存在必须类型合法且非负）';
       }
     }
     return null;

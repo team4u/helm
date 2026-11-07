@@ -27,7 +27,7 @@ import { createHerdrTransport } from './herdr/transport.js'
 import type { HerdrConfig, HerdrPluginDependencies, HerdrTarget, HerdrTransport } from './herdr/contracts.js'
 import { AskCoordinator, type AskEntry } from './herdr/asks.js'
 import { MetadataProjector } from './herdr/metadata.js'
-import { PaneRegistry, EMPTY_MANAGED_DOC, machineOf, type ManagedDoc, type ManagedPane } from './herdr/panes.js'
+import { PaneRegistry, EMPTY_MANAGED_DOC, machineOf, scopeKey, type ManagedDoc, type ManagedPane } from './herdr/panes.js'
 import { HerdrExecutor } from './herdr/executor.js'
 import {
   assertOkResult,
@@ -61,6 +61,16 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
 
       /** 最近一次 socket 事件处理的 pane seq 缓存（事件去重，agent.get 为权威）。 */
       const eventSeqCache = new Map<string, number>()
+      /**
+       * 探针观察水位（本启用周期；scopeKey(machine, paneId) 键）：
+       * stalledMs 口径 = 「最近一次观察到 (status, seq) 变化的时点」至今的时长——
+       * 首次观测从 0 起，水位或状态变化重置；探测失败（unreachable）不变更
+       * 水位（读失败不是进展证据，停滞继续累计）。注意该口径只反映状态变迁，
+       * 不含工作活动（长时间无状态翻转的活跃任务会如实表现为停滞递增）。
+       */
+      const probeObservations = new Map<string, { status: string; seq: number | undefined; since: number }>()
+      /** 连续探测失败计数（agent.get 成功即清零；仅诊断事实，不触发自动动作）。 */
+      const probeFailures = new Map<string, number>()
       /** 停用中：doc 句柄已失效，overview 刷新静默跳过（KISS：无写入即无异常）。 */
       let stopping = false
 
@@ -283,7 +293,9 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           const now = Date.now()
           for (const pane of registry.all()) {
             if (pane.outcome === 'settled') continue
+            const scope = scopeKey(machineOf(pane), pane.paneId)
             let status = 'unknown'
+            let authoritySeq: number | undefined
             try {
               const info = parseAgentResult(
                 await transport.call(
@@ -294,7 +306,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
                 'agent.get',
                 'agent_info',
               )
-              if (info.name !== pane.agentName) {
+              if (info.name !== pane.agentName || info.tabId !== pane.tabId) {
                 registry.update(machineOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
                 continue
               }
@@ -307,19 +319,57 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
                 await cancelQuietly(superseded, 'superseded')
               }
               status = info.agentStatus
+              authoritySeq = info.stateChangeSeq
+              probeFailures.delete(scope)
             } catch {
               status = 'unreachable'
+              // 权威不可达：绝不猜造 seq；水位不变更（停滞继续累计），
+              // 连续失败计数如实递增。
+              probeFailures.set(scope, (probeFailures.get(scope) ?? 0) + 1)
             }
+            // 停滞水位：首次观测从 0 起；(status, seq) 任一变化重置；
+            // unreachable 保持旧水位累计（读失败不是进展证据，不用总运行时长
+            // 冒充停滞，也不因探测失败归零重跑）。
+            const prev = probeObservations.get(scope)
+            let stalledMs = 0
+            if (status === 'unreachable') {
+              // 读失败：沿用旧观测点继续累计（无旧观测时从当下起算，不伪造进展）。
+              if (prev !== undefined) {
+                stalledMs = now - prev.since
+              } else {
+                probeObservations.set(scope, { status, seq: undefined, since: now })
+              }
+            } else if (prev === undefined || prev.status !== status || prev.seq !== authoritySeq) {
+              probeObservations.set(scope, { status, seq: authoritySeq, since: now })
+            } else {
+              stalledMs = now - prev.since
+            }
+            const pendingAskCount = asks
+              .entries()
+              .filter(
+                (e) =>
+                  e.paneId === pane.paneId &&
+                  e.machine === machineOf(pane) &&
+                  (e.phase === 'pending' || e.phase === 'creating'),
+              ).length
             payload.probes.push({
               targetId: pane.paneId,
+              targetKind: 'external',
+              machine: machineOf(pane) ?? 'local',
               ownedBy: 'helm',
               status,
-              stalledMs: now - pane.createdAt,
+              ...(authoritySeq !== undefined ? { stateChangeSeq: authoritySeq } : {}),
+              stalledMs,
+              ...(status === 'unreachable' ? { consecutiveErrors: probeFailures.get(scope) ?? 1 } : {}),
               facts: {
+                kind: 'herdr',
                 agentName: pane.agentName,
                 outcome: pane.outcome,
                 effectiveCwd: pane.effectiveCwd,
-                ...(machineOf(pane) !== undefined ? { machine: machineOf(pane) } : {}),
+                parentConversationId: pane.parentConversationId,
+                pendingAskCount,
+                // 口径如实：stalledMs 基于状态/水位变化观察时点，不含工作活动。
+                stalledBasis: 'since-last-state-change',
               },
             })
           }
@@ -636,6 +686,9 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         executorRef.current = undefined
         projectorRef.current = undefined
         eventSeqCache.clear()
+        // 探针观察水位/失败计数随启用周期作废（新周期从首次观测重新起算）。
+        probeObservations.clear()
+        probeFailures.clear()
         if (errors.length > 0) {
           const detail = errors.map((e) => (e instanceof Error ? deps.redact(e.message) : String(e))).join('; ')
           throw new HelmError('plugin_service_stop_failed', `herdr 服务清理失败：${detail}`, 500, { errors: detail })

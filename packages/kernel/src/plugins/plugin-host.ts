@@ -1195,6 +1195,31 @@ export class PluginHost {
       if (state.ui.some((u) => u.surface === surface && (u.spec as { id?: string }).id === id)) {
         throw new HelmError('duplicate_ui', `插件 ${pluginId} 在 ${surface} 重复声明 id ${id}`, 409);
       }
+      // docs：声明式轨道订阅的本插件公开文档名列表；边界即校验
+      //（非法 doc 名/非数组会让 $docs 挂载静默失效，必须显式拒绝）。
+      const docs = (spec as { docs?: unknown }).docs;
+      if (docs !== undefined) {
+        if (!Array.isArray(docs) || docs.length === 0 || docs.some((d) => typeof d !== 'string' || d.length === 0)) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.${fnName} 的 docs 必须是非空字符串数组的文档名列表`,
+            400,
+          );
+        }
+        const unique = new Set(docs as string[]);
+        if (unique.size !== docs.length) {
+          throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.${fnName} 的 docs 含重复文档名`, 400);
+        }
+        for (const name of unique) {
+          if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+            throw new HelmError(
+              'invalid_ui_spec',
+              `插件 ${pluginId} ui.${fnName} 的 docs 含非法文档名 ${JSON.stringify(name)}（允许字符 A-Za-z0-9._-）`,
+              400,
+            );
+          }
+        }
+      }
       // scope 在注册边界即校验（非法 scope 会让渲染可见性静默失控）
       assertConversationScope(pluginId, `插件 ${pluginId} ui.${fnName} 声明`, (spec as { scope?: unknown }).scope);
       // timeline.renderer 的 matchMeta 仅允许 { renderer: 非空字符串 }
