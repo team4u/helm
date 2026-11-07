@@ -153,7 +153,7 @@ export function ProviderCatalog({ onEditGateway }: { onEditGateway(): void }) {
           {loading && <div className="provider-list-message" role="status">加载 PI 供应商目录…</div>}
           {error && <div className="provider-list-message" role="alert"><p>供应商目录加载失败</p><p className="provider-help selectable">{error}</p><button className="btn btn-sm" onClick={() => setReload((previous) => previous + 1)}>重试</button></div>}
           {!loading && !error && filtered.length === 0 && <div className="provider-list-message">没有匹配的供应商<button className="btn btn-ghost btn-sm" onClick={() => { setQuery(''); setFilter('all') }}>清除筛选</button></div>}
-          {filtered.map((provider) => <button key={provider.id} className={`provider-list-item${!manual && selected?.id === provider.id ? ' is-selected' : ''}`} aria-pressed={!manual && selected?.id === provider.id} onClick={() => { setSelectedId(provider.id); setManual(false) }}>
+          {filtered.map((provider) => <button key={provider.id} className={`provider-list-item${!manual && selected?.id === provider.id ? ' is-selected' : ''}`} aria-pressed={!manual && selected?.id === provider.id} title={`${provider.name} (${provider.id})`} onClick={() => { setSelectedId(provider.id); setManual(false) }}>
             <span className="provider-list-item-copy"><strong>{provider.name}</strong><span className="mono">{provider.id}</span></span>
             <span className={`provider-list-status${provider.available ? ' is-available' : ''}`}>{provider.available ? '可用' : provider.hasStoredKey ? '已存密钥' : `${provider.modelCount} 模型`}</span>
           </button>)}

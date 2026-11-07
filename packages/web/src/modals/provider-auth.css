@@ -1,4 +1,4 @@
-.provider-modal { max-width: 980px; height: min(720px, 86dvh); }
+.modal.provider-modal { max-width: 980px; height: min(720px, 86dvh); }
 .provider-modal .modal-title { display: inline-flex; align-items: center; gap: 8px; }
 .provider-tabs { padding: 3px 16px 0; flex-shrink: 0; }
 .provider-tabs-note { margin-left: auto; font-size: 11px; color: var(--fg-subtle); }

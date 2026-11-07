@@ -73,10 +73,12 @@ function ProvidersSection() {
 export function ProviderAuthModal({ onClose }: { onClose(): void }) {
   const [view, setView] = useState<'providers' | 'gateways'>('providers')
   const modalRef = useRef<HTMLDivElement>(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); onClose(); return }
+      if (event.key === 'Escape') { event.preventDefault(); closeRef.current(); return }
       if (event.key !== 'Tab') return
       const focusable = [...(modalRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary') ?? [])].filter((element) => element.getClientRects().length > 0)
       const first = focusable[0]
@@ -86,7 +88,7 @@ export function ProviderAuthModal({ onClose }: { onClose(): void }) {
     }
     document.addEventListener('keydown', handleKey)
     return () => { document.removeEventListener('keydown', handleKey); previous?.focus() }
-  }, [onClose])
+  }, [])
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
