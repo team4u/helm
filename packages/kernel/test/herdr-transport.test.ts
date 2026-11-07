@@ -133,7 +133,8 @@ describe('herdr transport wire', () => {
     const controller = new AbortController()
     const pending = transport.call({ socketPath }, 'agent.wait', { target: 'w1:p1' }, { signal: controller.signal })
     setTimeout(() => controller.abort(), 50)
-    await assert.rejects(pending, (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_disconnected')
+    // abort 主动结算并销毁本方 socket，不依赖对端关闭；语义即 herdr_aborted。
+    await assert.rejects(pending, (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_aborted')
     await close(server)
   })
 
