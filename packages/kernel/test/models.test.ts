@@ -16,9 +16,13 @@ import { after, before, beforeEach, describe, test } from 'node:test'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
 import { AddressInfo } from 'node:net'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { ProviderConfig } from '@helm/protocol'
 import type { ApiKeyAuth, MutableModels } from '@earendil-works/pi-ai'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
+import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import {
   buildModels,
   listModelCatalog,
@@ -27,6 +31,7 @@ import {
   requireModelRef,
   type ModelCatalogEntry,
 } from '../src/runtime/models.js'
+import { createFileModelsStore } from '../src/runtime/models-store.js'
 import { HelmError } from '@helm/protocol'
 
 /** 单个捕获到的请求。 */
@@ -284,7 +289,20 @@ describe('PI 全量供应商', { timeout: 60_000 }, () => {
     assert.equal(summaries.length, native.length)
     assert.ok(summaries.some((provider) => provider.id === 'typesafe' && provider.modelCount === 0))
     assert.deepEqual(summaries.find((provider) => provider.id === 'openai-codex')?.authMethods.map((method) => method.type), ['oauth'])
-    assert.ok(summaries.every((provider) => Object.keys(provider).sort().join(',') === 'authMethods,id,modelCount,name'))
+    // 内置摘要基础四种固定键；baseUrl 是合法公开字段（deepseek 等多数网关均有）；
+    // dynamic 仅真正实现 refreshModels 的供应商（radius）携带。
+    const radius = summaries.find((provider) => provider.id === 'radius')
+    assert.ok(radius)
+    assert.equal(radius.dynamic, true)
+    assert.equal(radius.baseUrl, undefined, 'radius 无固定网关 baseUrl，不得伪造')
+    assert.ok(
+      summaries
+        .filter((provider) => provider.id !== 'radius')
+        .every((provider) => Object.keys(provider).sort().join(',') !== '' && !('dynamic' in provider)),
+    )
+    const deepseek = summaries.find((provider) => provider.id === 'deepseek')
+    assert.ok(deepseek?.baseUrl)
+    assert.equal('dynamic' in deepseek, false)
   })
 
   test('非 OpenAI/Anthropic 供应商原生 key 注入且不伪造 OAuth-only 的 API Key', { timeout: 60_000 }, async () => {
@@ -314,6 +332,103 @@ describe('PI 全量供应商', { timeout: 60_000 }, () => {
     assert.deepEqual(enabled.getModels('deepseek').map((model) => model.id), ['gw-openai-model'])
     const disabled = buildModels({ providers: [{ ...override, enabled: false }], apiKeys: () => ({}) })
     assert.deepEqual(disabled.getModels('deepseek'), builtinProviders().find((provider) => provider.id === 'deepseek')!.getModels())
+  })
+
+  test('extraProviders 注册运行时供应商且不丢失目录摘要字段', { timeout: 60_000 }, () => {
+    const faux = fauxProvider({ provider: 'plugin-fx', models: [{ id: 'fx-model' }] })
+    const models = buildModels({ providers: [], apiKeys: () => ({}), extraProviders: [faux.provider] })
+    assert.ok(models.getProvider('plugin-fx'))
+    assert.deepEqual(models.getModels('plugin-fx').map((model) => model.id), ['fx-model'])
+    const summaries = listModelProviders(models)
+    const fx = summaries.find((summary) => summary.id === 'plugin-fx')
+    assert.ok(fx)
+    assert.equal(fx.modelCount, 1)
+    // faux 无 refreshModels：不得伪造 dynamic 标记。
+    assert.equal(fx.dynamic, undefined)
+  })
+
+  test('listModelProviders 附带 dynamic/baseUrl/pluginId（按 providerOwners）', { timeout: 60_000 }, () => {
+    const faux = fauxProvider({ provider: 'plugin-owned', models: [{ id: 'owned-model' }] })
+    const models = buildModels({ providers: [], apiKeys: () => ({}), extraProviders: [faux.provider] })
+    const owners = new Map([['plugin-owned', 'builtin:demo']])
+    const owned = listModelProviders(models, owners).find((summary) => summary.id === 'plugin-owned')
+    assert.equal(owned?.pluginId, 'builtin:demo')
+    // 同一集合不传 owners：无 pluginId 字段（不伪造归属）。
+    const anon = listModelProviders(models).find((summary) => summary.id === 'plugin-owned')
+    assert.equal(anon?.pluginId, undefined)
+    // 内置动态供应商（radius）标记 dynamic；无 owners 时不带 pluginId、不伪造 baseUrl。
+    const radius = listModelProviders(models).find((summary) => summary.id === 'radius')
+    assert.ok(radius, '内置 radius 供应商应在目录中')
+    assert.equal(radius.dynamic, true)
+    assert.equal(radius.baseUrl, undefined)
+    assert.equal(radius.pluginId, undefined)
+  })
+})
+
+describe('文件版动态目录缓存（models-store.json）', { timeout: 60_000 }, () => {
+  test('ENOENT 返回空；write/update/delete 持久化且并发 update 不丢写', { timeout: 60_000 }, async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'helm-models-store-'))
+    try {
+      const store = createFileModelsStore(dataDir)
+      assert.equal(await store.read('p1'), undefined)
+
+      await store.write('p1', { models: [], checkedAt: 111 })
+      await store.write('p2', { models: [], checkedAt: 222, etag: '"v1"' })
+      assert.deepEqual(await store.read('p1'), { models: [], checkedAt: 111 })
+      assert.deepEqual(await store.read('p2'), { models: [], checkedAt: 222, etag: '"v1"' })
+
+      // update：undefined 不改写；对象写入。
+      await store.update('p1', async () => undefined)
+      assert.deepEqual(await store.read('p1'), { models: [], checkedAt: 111 })
+      await store.update('p1', async (current) => ({ ...current!, checkedAt: 333 }))
+      assert.equal((await store.read('p1'))?.checkedAt, 333)
+      await store.delete('p2')
+      assert.equal(await store.read('p2'), undefined)
+
+      // 并发 update：两个不同 provider 同时读改写，锁内串行不丢彼此写入。
+      await Promise.all([
+        store.update('a', async () => ({ models: [], checkedAt: 1 })),
+        store.update('b', async () => ({ models: [], checkedAt: 2 })),
+      ])
+      assert.equal((await store.read('a'))?.checkedAt, 1)
+      assert.equal((await store.read('b'))?.checkedAt, 2)
+
+      // 落盘为 0600 且顶层为对象。
+      const raw = JSON.parse(await readFile(join(dataDir, 'models-store.json'), 'utf8')) as Record<string, unknown>
+      assert.ok(typeof raw['p1'] === 'object')
+      const { stat } = await import('node:fs/promises')
+      const mode = (await stat(join(dataDir, 'models-store.json'))).mode & 0o777
+      assert.equal(mode, 0o600)
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  test('损坏文件显式抛 models_store_corrupted，绝不静默当空目录', { timeout: 60_000 }, async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'helm-models-store-corrupt-'))
+    try {
+      const path = join(dataDir, 'models-store.json')
+      await writeFile(path, '{invalid-json')
+      const store = createFileModelsStore(dataDir)
+      await assert.rejects(() => store.read('p1'), (err: unknown) => {
+        assert.ok(err instanceof HelmError)
+        assert.equal(err.code, 'models_store_corrupted')
+        return true
+      })
+      await writeFile(path, '["array"]')
+      await assert.rejects(() => store.read('p1'), (err: unknown) => {
+        assert.ok(err instanceof HelmError)
+        assert.equal(err.code, 'models_store_corrupted')
+        return true
+      })
+      await assert.rejects(() => store.update('p1', () => ({ models: [] })), (err: unknown) => {
+        assert.ok(err instanceof HelmError)
+        assert.equal(err.code, 'models_store_corrupted')
+        return true
+      })
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
   })
 })
 

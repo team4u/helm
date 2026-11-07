@@ -52,7 +52,8 @@ import type {
   ToolResultHookPayload,
   WorkflowRunSummary,
 } from '@helm/protocol'
-import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT, type MaybePromise, type EnvExecRequest, type EnvExecResponse, type NodeHealthSnapshot, type NodeInfo, type NodeIssuedToken } from '@helm/protocol'
+import type { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
+import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT, type MaybePromise, type EnvExecRequest, type EnvExecResponse, type ModelProvidersRefreshResult, type NodeHealthSnapshot, type NodeInfo, type NodeIssuedToken } from '@helm/protocol'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { hostname, loadavg, freemem, totalmem, uptime } from 'node:os'
 import { chmod, mkdir, statfs, writeFile } from 'node:fs/promises'
@@ -80,8 +81,11 @@ import { createEnvFabric, sha256hex, tokenAuthenticator, type EnvFabric } from '
 import { AskService } from './asks.js'
 import { ConversationTracker, deriveTitle } from './conversations.js'
 import { EventHub } from './events.js'
+import { createFileModelsStore } from './models-store.js'
 import { buildModels, listModelCatalog, listModelProviders, requireModelRef } from './models.js'
-import type { Models } from '@earendil-works/pi-ai/models'
+import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
+import type { Models, Provider } from '@earendil-works/pi-ai/models'
+import type { ModelsStore, Model, TranscriptContext } from '@earendil-works/pi-ai'
 import { openHelmDatabase, type HelmDatabase } from './sqlite.js'
 import { HelmStore } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
@@ -145,6 +149,26 @@ function escapeXml(text: string): string {
 
 /** watchdog 默认巡检间隔（singleflight 定时器；0 关闭）。 */
 const DEFAULT_WATCHDOG_INTERVAL_MS = 15_000
+
+/** PI 内置供应商 id 集（惰性一次构建；注册冲突预检用，不硬编码清单）。 */
+const builtinProviderIds = new Set(builtinProviders().map((p) => p.id))
+
+/**
+ * models-store.json 文件级损坏检测：SDK refresh 把 store 读写错误包进
+ * result.errors（不 reject，避免单供应商失败阻断其余），但文件损坏是全局
+ * 事故——静默降级空目录等于丢失全部已缓存动态目录。此处显式上抛。
+ */
+function assertModelsStoreHealthy(result: { errors: ReadonlyMap<string, Error> }): void {
+  for (const [providerId, err] of result.errors) {
+    if (err instanceof HelmError && err.code === 'models_store_corrupted') {
+      throw new HelmError(
+        'models_store_corrupted',
+        `models-store.json 损坏（读取 ${providerId} 时发现）：${err.message}`,
+        500,
+      )
+    }
+  }
+}
 
 /**
  * subagent 工具 effort 合法枚举（与 spawn.ts 原生执行行 THINKING_LEVELS 同源：
@@ -273,6 +297,18 @@ export class KernelRuntime {
   private localDiskRefreshTimer: NodeJS.Timeout | undefined
   /** local 磁盘统计在途刷新（singleflight，防重入叠加）。 */
   private localDiskRefreshing: Promise<void> = Promise.resolve()
+  /** 动态模型目录持久缓存（models-store.json，0600 原子落盘）。 */
+  private readonly modelsStore: ModelsStore
+  /** 运行时动态注册的供应商（插件经 HostOptions.providers.register 注入）。 */
+  private readonly runtimeProviders = new Map<string, Provider>()
+  /** 运行时供应商归属（providerId -> 注册它的 pluginId；注销一并清除）。 */
+  private readonly runtimeProviderOwners = new Map<string, string>()
+  /** models 变更串行链：reload / register / unregister 共用，避免 stale 替换。 */
+  private modelsChain: Promise<unknown> = Promise.resolve()
+  /** models 集合代数（每次成功发布新集合 +1；在途 refresh 防旧集合重新发布）。 */
+  private modelsGeneration = 0
+  /** 运行时供应商在途使用计数（providerId -> streaming/refresh 未结算数；teardown 预检用）。 */
+  private readonly runtimeProviderUsage = new Map<string, number>()
 
   static async open(options: KernelRuntimeOptions = {}): Promise<KernelRuntime> {
     const dataDir = resolveDataDir(options.dataDir)
@@ -292,12 +328,21 @@ export class KernelRuntime {
       if (key) apiKeyCache[id] = key
     }
     const modelsExternal = options.models
+    const modelsStore = createFileModelsStore(dataDir)
     const modelsInstance =
       modelsExternal ??
       buildModels({
         providers: providerConfigs,
         apiKeys: () => apiKeyCache,
+        modelsStore,
       })
+    // 离线恢复：从 models-store.json 恢复已缓存的动态目录（不发网络请求；
+    // 文件损坏时 refresh 内部 read 抛 models_store_corrupted，显式失败不静默）。
+    if (!modelsExternal) {
+      // 离线恢复：从 models-store.json 恢复已缓存动态目录（不发网络请求；
+      // 文件损坏时显式抛 models_store_corrupted，不静默降级空目录）。
+      await assertModelsStoreHealthy(await modelsInstance.refresh({ allowNetwork: false }))
+    }
     const registry = createRegistry()
 
     // Harness models 槽位：open 作用域可变引用，reloadModels 时经 setModels 热替换。
@@ -351,6 +396,7 @@ export class KernelRuntime {
       autoResume: options.autoResume !== false,
       externalModels: modelsExternal,
       watchdogIntervalMs: options.watchdogIntervalMs ?? DEFAULT_WATCHDOG_INTERVAL_MS,
+      modelsStore,
       redactReport: (fn: (text: string) => string) => {
         redactSlot.current = fn
       },
@@ -382,6 +428,8 @@ export class KernelRuntime {
     autoResume: boolean
     externalModels?: Models
     watchdogIntervalMs: number
+    /** 动态模型目录持久缓存（open 创建，实例全存续期共用）。 */
+    modelsStore: ModelsStore
     /** 接管 Harness onReport 诊断脱敏（stash 就绪后由构造器调用）。 */
     redactReport(fn: (text: string) => string): void
   }) {
@@ -393,6 +441,7 @@ export class KernelRuntime {
     this.defaultModel = init.defaultModel
     // 目录与 Harness 必须使用同一集合，不能在构造器另建一个缺少凭据的空配置集合。
     this.modelsCurrent = init.models
+    this.modelsStore = init.modelsStore
     this.setModelsSlot = init.setModels
     if (init.externalModels) this.setModelsSlot = () => {
       /* 外部注入：热重载不得替换调用方模型集合 */
@@ -2758,12 +2807,29 @@ export class KernelRuntime {
   }
 
   listModelProviders() {
-    return listModelProviders(this.modelsCurrent)
+    return listModelProviders(this.modelsCurrent, this.runtimeProviderOwners)
   }
 
-  /** providers.json / credentials.json 变化后重建模型集（getter 热生效）。 */
+  /**
+   * 重建并发布模型集（providers.json / credentials / 运行时供应商变化共用）。
+   * 串行：经 modelsChain 排队，避免并发重建至后旧集合覆盖新集合；
+   * 外部注入 Models（测试/嵌入场景）空操作（模型集合归调用方）。
+   */
   async reloadModels(): Promise<void> {
-    // 外部注入 Models（测试/嵌入场景）：模型集合归调用方，绝不替换。
+    await this.enqueueModelsChange(async () => {
+      await this.rebuildModelsLocked()
+    })
+  }
+
+  /** modelsChain 尾排队执行（异常向后传播，不阻断后续排队）。 */
+  private enqueueModelsChange<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.modelsChain.then(fn, fn)
+    this.modelsChain = run.then(() => undefined, () => undefined)
+    return run
+  }
+
+  /** 已在 modelsChain 内执行的重建（外部注入集合空操作）。 */
+  private async rebuildModelsLocked(): Promise<void> {
     if (this.init.externalModels) return
     const providerConfigs = await this.providersSvc.list()
     const nextKeys: Record<string, string> = {}
@@ -2771,12 +2837,232 @@ export class KernelRuntime {
       const key = await this.credentialsSvc.get(id)
       if (key) nextKeys[id] = key
     }
-    const models = buildModels({ providers: providerConfigs, apiKeys: () => nextKeys })
+    const models = buildModels({
+      providers: providerConfigs,
+      apiKeys: () => nextKeys,
+      modelsStore: this.modelsStore,
+      extraProviders: [...this.runtimeProviders.values()],
+    })
+    // 离线恢复缓存目录（allowNetwork:false 不发网络请求）。models-store.json 损坏
+    // 是文件级事故（非单供应商失败）：SDK 会把它包进 result.errors 而不 reject，
+    // 这里必须显式上抛，绝不静默降级空目录。
+    await assertModelsStoreHealthy(await models.refresh({ allowNetwork: false }))
     // 完整读取成功后才发布；整体替换，确保删除密钥后旧缓存也失效。
     for (const id of Object.keys(this.apiKeyCache)) delete this.apiKeyCache[id]
     Object.assign(this.apiKeyCache, nextKeys)
+    this.modelsGeneration += 1
     this.modelsCurrent = models
     this.setModelsSlot(this.modelsCurrent)
+    this.events.publish('models.changed', { providers: [] })
+  }
+
+  /**
+   * 运行时注册动态供应商（插件经 HostOptions.providers.register 注入）。
+   * 冲突拒绝（不覆盖任何已有供应商）：内置 provider / providers.json 自定义网关 /
+   * 其他 owner 已注册的同 id；providers.json 当前未启用的同 id 网关同样占用命名空间。
+   * 外部注入 Models 场景显式 unsupported（集合归调用方，注册成功却目录不变即欺骗）。
+   * 返回幂等注销函数：仅当 map 仍指向同一 provider 实例时删除并重建。
+   */
+  async registerRuntimeProvider(provider: Provider, pluginId?: string): Promise<() => Promise<void>> {
+    if (this.init.externalModels) {
+      throw new HelmError(
+        'runtime_provider_unsupported',
+        '外部注入 Models 时不支持运行时供应商注册（模型集合归调用方所有）',
+        400,
+      )
+    }
+    if (typeof provider?.id !== 'string' || provider.id === '') {
+      throw new HelmError('validation_error', `运行时供应商 id 需为非空字符串：${String(provider?.id)}`, 400)
+    }
+    // 串行链内校验 + 写入 + 重建，一步完成；校验失败回滚 map（本实现先校验后写入，
+    // 无中间态泄漏；重建失败异常向上传播，map 保持已写入状态由调用方重试或注销）。
+    await this.enqueueModelsChange(async () => {
+      const conflict = await this.findRuntimeProviderConflict(provider.id)
+      if (conflict !== undefined) {
+        throw new HelmError('runtime_provider_conflict', conflict, 409)
+      }
+      const registered = this.wrapRuntimeProvider(provider)
+      this.runtimeProviders.set(provider.id, registered)
+      if (pluginId !== undefined) this.runtimeProviderOwners.set(provider.id, pluginId)
+      try {
+        await this.rebuildModelsLocked()
+      } catch (error) {
+        // 回滚：注册失败不留孤儿 map 项（下次 reload 也不会再包含它）。
+        this.runtimeProviders.delete(provider.id)
+        this.runtimeProviderOwners.delete(provider.id)
+        throw error
+      }
+    })
+    let disposed = false
+    return async () => {
+      if (disposed) return
+      disposed = true
+      // 注销按包装后实例比对（map 存的是包装实例；原始 provider 不再暴露）。
+      await this.unregisterRuntimeProvider(this.runtimeProviders.get(provider.id) ?? provider)
+    }
+  }
+
+  /** 冲突检测：返回错误消息（undefined = 无冲突）。内置/自定义网关/其他 owner 互斥。 */
+  private async findRuntimeProviderConflict(providerId: string): Promise<string | undefined> {
+    const existing = this.runtimeProviders.get(providerId)
+    if (existing !== undefined) {
+      const owner = this.runtimeProviderOwners.get(providerId)
+      return `供应商 id '${providerId}' 已被运行时注册${owner !== undefined ? `（插件 ${owner}）` : ''}，不得覆盖`
+    }
+    const config = await this.providersSvc.get(providerId)
+    if (config !== undefined) {
+      return `供应商 id '${providerId}' 与 providers.json 自定义网关冲突（enabled: ${String(config.enabled)}）`
+    }
+    const builtin = builtinProviderIds.has(providerId)
+    if (builtin) {
+      return `供应商 id '${providerId}' 与 PI 内置供应商冲突，不得覆盖`
+    }
+    return undefined
+  }
+
+  /** 注销：仅当 map 仍指向同一实例时删除（幂等；被覆盖/已删时不重复重建）。 */
+  private async unregisterRuntimeProvider(provider: Provider): Promise<void> {
+    if (this.init.externalModels) return
+    await this.enqueueModelsChange(async () => {
+      if (this.runtimeProviders.get(provider.id) !== provider) return
+      this.runtimeProviders.delete(provider.id)
+      this.runtimeProviderOwners.delete(provider.id)
+      await this.rebuildModelsLocked()
+    })
+  }
+
+  /**
+   * 刷新动态模型目录（POST /api/models/refresh）。
+   * 目标运行时供应商在途计数覆盖整个 refresh 周期（teardown 预检拒绝中途回收）；
+   * 捕获调用时集合与代数：等待期间集合被替换时不再发布旧集合快照事件；
+   * 错误消息经 stash 脱敏后返回。
+   */
+  async refreshModels(options?: {
+    providers?: string[]
+    allowNetwork?: boolean
+    force?: boolean
+  }): Promise<ModelProvidersRefreshResult> {
+    if (this.init.externalModels) {
+      throw new HelmError(
+        'runtime_provider_unsupported',
+        '外部注入 Models 时不支持动态目录刷新（模型集合归调用方所有）',
+        400,
+      )
+    }
+    const instanceAtStart = this.modelsCurrent
+    const generationAtStart = this.modelsGeneration
+    const targets =
+      options?.providers && options.providers.length > 0
+        ? options.providers.filter((id) => this.runtimeProviders.has(id))
+        : [...this.runtimeProviders.keys()]
+    const release = this.acquireRuntimeProviders(targets)
+    let result: { aborted: boolean; errors: ReadonlyMap<string, Error> }
+    try {
+      result = await instanceAtStart.refresh({
+        allowNetwork: options?.allowNetwork ?? true,
+        force: options?.force ?? true,
+        ...(options?.providers && options.providers.length > 0 ? { providers: options.providers } : {}),
+      })
+    } finally {
+      release()
+    }
+    // 文件级损坏（models_store_corrupted）不是单供应商失败，显式上抛。
+    await assertModelsStoreHealthy(result)
+    const errors: Record<string, string> = {}
+    for (const [providerId, err] of result.errors) {
+      errors[providerId] = this.stashService.redact(err instanceof Error ? err.message : String(err))
+    }
+    const snapshotStale =
+      instanceAtStart !== this.modelsCurrent || generationAtStart !== this.modelsGeneration
+    if (!snapshotStale) {
+      this.events.publish('models.changed', { providers: options?.providers ? [...options.providers] : [] })
+    }
+    return {
+      providers: options?.providers ? [...options.providers] : [],
+      aborted: result.aborted,
+      errors,
+      models: await this.listModels(),
+      providerCatalog: this.listModelProviders(),
+    }
+  }
+
+  /**
+   * teardown 预检：插件 owner 的运行时供应商若有在途 streaming/refresh 则抛
+   * 409 plugin_has_live_tasks（防止插件标为 disabled 但 provider 仍在目录）。
+   * 只要 busy 就保留现状（模型引用保留且下一回合可用）。
+   */
+  assertRuntimeProvidersIdle(pluginId: string): void {
+    const busy: string[] = []
+    for (const [id, owner] of this.runtimeProviderOwners) {
+      if (owner === pluginId && (this.runtimeProviderUsage.get(id) ?? 0) > 0) busy.push(id)
+    }
+    if (busy.length > 0) {
+      throw new HelmError(
+        'plugin_has_live_tasks',
+        `插件 ${pluginId} 的运行时供应商仍有在途模型请求：${busy.join(', ')}`,
+        409,
+        { providers: busy },
+      )
+    }
+  }
+
+  /** 在途使用计数：目标 provider 各 +1；返回幂等释放函数（各 -1，归零清除）。 */
+  private acquireRuntimeProviders(ids: readonly string[]): () => void {
+    for (const id of ids) {
+      this.runtimeProviderUsage.set(id, (this.runtimeProviderUsage.get(id) ?? 0) + 1)
+    }
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      for (const id of ids) {
+        const remaining = (this.runtimeProviderUsage.get(id) ?? 0) - 1
+        if (remaining <= 0) this.runtimeProviderUsage.delete(id)
+        else this.runtimeProviderUsage.set(id, remaining)
+      }
+    }
+  }
+
+  /**
+   * 运行时供应商使用计数包装：stream/streamSimple 真正调用时 +1，事件流终态
+   * （result() 在 done/error/end 时 resolve）后 -1；不消费 asyncIterator。
+   * refreshModels 同样计数（目录刷新在途时 teardown 预检拒绝）。
+   */
+  private wrapRuntimeProvider(provider: Provider): Provider {
+    const acquire = () => this.acquireRuntimeProviders([provider.id])
+    // 通用包装：先取流后 result().finally 释放（同步抛同样释放，不留永久 busy）；
+    // 不消费 asyncIterator、不改写 options（泛型参数仅随具体化签名传递）。
+    const counted = (open: () => AssistantMessageEventStream): AssistantMessageEventStream => {
+      const release = acquire()
+      let stream: AssistantMessageEventStream
+      try {
+        stream = open()
+      } catch (err) {
+        release()
+        throw err
+      }
+      void stream.result().finally(release)
+      return stream
+    }
+    const wrapped: Provider = {
+      ...provider,
+      stream: (model, context, options) =>
+        counted(() => provider.stream(model, context, options)),
+      streamSimple: (model, context, options) =>
+        counted(() => provider.streamSimple(model, context, options)),
+    }
+    if (typeof provider.refreshModels === 'function') {
+      const base = provider.refreshModels.bind(provider)
+      wrapped.refreshModels = async (context) => {
+        const release = acquire()
+        try {
+          return await base(context)
+        } finally {
+          release()
+        }
+      }
+    }
+    return wrapped
   }
 
   /** 同步读 key 缓存（启动预热 + reload 刷新）。 */
