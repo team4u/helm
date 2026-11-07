@@ -1258,6 +1258,7 @@ export class WorkflowService {
                 ? 'skipped'
                 : 'failed'
               : 'running',
+        ...(agent.cached !== undefined ? { cached: agent.cached } : {}),
         ...(agent.agentType !== undefined ? { agentType: agent.agentType } : {}),
         ...(agent.label !== undefined ? { label: agent.label } : {}),
         ...(agent.conversationId !== undefined ? { conversationId: agent.conversationId } : {}),
@@ -1282,6 +1283,7 @@ export class WorkflowService {
         id: `action-${action.index}`,
         kind: 'action',
         status: action.state === 'done' ? 'done' : action.state === 'error' ? 'failed' : 'running',
+        ...(action.cached !== undefined ? { cached: action.cached } : {}),
         ...(action.startedAt !== undefined ? { startedAt: action.startedAt } : {}),
         ...(action.lastProgressAt !== undefined ? { settledAt: action.lastProgressAt } : {}),
         ...(action.durationMs !== undefined ? { durationMs: action.durationMs } : {}),

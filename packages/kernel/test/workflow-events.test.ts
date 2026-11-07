@@ -53,6 +53,29 @@ function makeEnv(t: TestContext, spawnAgent: WorkflowServiceHost['spawnAgent']) 
   return { dataDir, state, service, updates }
 }
 
+test('重放缓存标记透传到 getRun、listRuns、事件与重启后的公开摘要', { timeout: 60_000 }, async (t) => {
+  let spawns = 0
+  const env = makeEnv(t, async () => { spawns += 1; return '同一结果' })
+  const script = 'export const meta = { name: "cache-summary", description: "public cache metadata" }\nconst a = await agent("first", { label: "a" }); const b = await agent("second", { resume: "a" }); return { a, b }'
+  const original = await env.service.run({ script })
+  assert.deepEqual(await env.service.wait(original.id), { a: '同一结果', b: '同一结果' })
+  assert.equal(spawns, 2)
+  const replay = await env.service.run({ script, resumeFromRunId: original.id })
+  assert.deepEqual(await env.service.wait(replay.id), { a: '同一结果', b: '同一结果' })
+  assert.equal(spawns, 2, '重放不得重新调用执行后端')
+  const summaries = [env.service.getRun(replay.id), env.service.listRuns().find((run) => run.id === replay.id)!, env.updates.findLast((run) => run.id === replay.id)!]
+  for (const summary of summaries) {
+    assert.equal(summary.nodes?.length, 2)
+    assert.ok(summary.nodes!.every((node) => node.status === 'done' && node.cached === true))
+  }
+  const revived = new WorkflowService({ dataDir: env.dataDir, state: env.state, host: {
+    spawnAgent: async () => { throw new Error('重启后只读摘要') }, invokeAction: async () => { throw new Error('unused') }, listActions: () => [],
+    getConversation: () => { throw new Error('unused') }, abortConversation: async () => {}, emitEvent: () => {},
+  } })
+  try { assert.ok(revived.getRun(replay.id).nodes!.every((node) => node.cached === true)) }
+  finally { await revived.close() }
+})
+
 test('节点更新跨过 250ms 窗口时仍发布合法 run 信封，不把成功 agent 变成 null', { timeout: 60_000 }, async (t) => {
   let now = 1_000
   t.mock.method(Date, 'now', () => now)

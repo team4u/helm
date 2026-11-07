@@ -27,6 +27,8 @@ export interface WorkflowNodeState {
   /** 节点类型：'agent' | 'action' | 'gate' | 'script' 等。 */
   kind: string
   status: WorkflowNodeStatus
+  /** 直接复用成功账本结果，未新建执行上下文。HTTP、CLI 与事件使用同一字段。 */
+  cached?: boolean
   /** agent 节点的执行后端标识（Profile ID 或 'herdr:<kind>'）。 */
   agentType?: string
   /** 展示名（脚本 label / 派生描述）。 */

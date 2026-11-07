@@ -1355,3 +1355,50 @@ test('idle 但 interactive_ready 缺省 false 时继续等待，不重复投递 
     assert.equal(env.transport.calls.filter((call) => call.method === 'agent.prompt').length, 1)
   } finally { await env.close() }
 })
+
+test('并发 resume 只允许一个请求占用原窗格', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    scriptSuccess(env, 'once')
+    await spawnDirect(env, { agentType: 'herdr:pi' })
+    const resume = [...env.transport.panes.keys()][0]!
+    const results = await Promise.allSettled([spawnDirect(env, { resume }), spawnDirect(env, { resume })])
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1)
+    const rejected = results.find((result) => result.status === 'rejected') as PromiseRejectedResult
+    assert.equal(rejected.reason.code, 'pane_busy')
+    assert.equal(env.transport.calls.filter((call) => call.method === 'agent.prompt').length, 2, '首轮一次，续接一次')
+  } finally { await env.close() }
+})
+
+test('审批等待期间 Agent 身份变化，答案不会发送到人类进程', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  let observed: Promise<unknown> | undefined
+  try {
+    env.transport.promptStatus = 'blocked'
+    observed = spawnDirect(env, { agentType: 'herdr:pi' }).catch((error: unknown) => error)
+    await waitFor(() => env.backend.createdAsks.length === 1)
+    const pane = [...env.transport.panes.values()][0]!
+    pane.name = 'human-agent'
+    const askId = String(env.backend.createdAsks[0]!['id'])
+    env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
+    assert.equal((await observed as HelmError).code, 'herdr_ownership_lost')
+    assert.equal(env.transport.sendKeysLog.length, 0)
+    assert.equal(env.transport.tabs.get(pane.tabId)?.closed, false)
+  } finally { await observed; await env.close() }
+})
+
+test('订阅 ack 失败释放已注册的 CAS resolver 与 workflow listener', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-sub-fail-'))
+  const backend = new FakeBackend()
+  const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+  const transport = new FakeTransport()
+  transport.subscribe = async () => { throw new HelmError('herdr_disconnected', 'ack failed', 502) }
+  try {
+    await assert.rejects(host.register(createHerdrPlugin({
+      defaultCwd: '/tmp', profiles: { get: async () => undefined }, buildSpawnEnv: () => ({}),
+      redact: (text) => text, runLocalGate: async () => ({ ok: true, output: '' }), transport,
+    })))
+    assert.equal(backend.askSeqResolvers.size, 0)
+    assert.equal(backend.workflowListeners.size, 0)
+  } finally { await host.dispose(); rmSync(dataDir, { recursive: true, force: true }) }
+})

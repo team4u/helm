@@ -522,6 +522,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
                   'agent.get',
                   'agent_info',
                 )
+                if (info.name !== pane.agentName) return undefined
                 return info.stateChangeSeq
               } catch {
                 // 权威不可达：undefined（AskService 以 ask_state_unavailable 拒答，
@@ -532,37 +533,35 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           )
           workflowRelease = ctx.host.onWorkflowSettled(settleWorkflow)
 
-          // subscribe ack 先行；失败时已获取资源自行清理后重抛。
-          const unsubscribe = await transport.subscribe(
-            frozenLocalTarget,
-            (event) => {
-              onPaneEvent(event).catch((error) => {
+          try {
+            // subscribe ack 先行；任一步失败都释放解析器、监听与已获取资源。
+            const unsubscribe = await transport.subscribe(
+              frozenLocalTarget,
+              (event) => {
+                onPaneEvent(event).catch((error) => {
+                  host.notify(
+                    'Herdr 事件处理失败',
+                    `${event.type} pane ${event.paneId}：${error instanceof Error ? deps.redact(error.message) : String(error)}`,
+                    'error',
+                  )
+                })
+              },
+              (error) => {
                 host.notify(
-                  'Herdr 事件处理失败',
-                  `${event.type} pane ${event.paneId}：${error instanceof Error ? deps.redact(error.message) : String(error)}`,
+                  'Herdr 事件订阅断开',
+                  error instanceof Error ? deps.redact(error.message) : String(error),
                   'error',
                 )
-              })
-            },
-            (error) => {
-              host.notify(
-                'Herdr 事件订阅断开',
-                error instanceof Error ? deps.redact(error.message) : String(error),
-                'error',
-              )
-            },
-          )
-          unsubscribeRef.current = unsubscribe
-          try {
+              },
+            )
+            unsubscribeRef.current = unsubscribe
             await reconcile()
+            projector().start()
+            refreshOverview()
           } catch (error) {
-            // 对账失败：自行清理已获取资源（Host 只 stop 已完成 start 的服务）。
             await stopResources()
             throw error
           }
-          // 有界心跳：随服务启停，只重投射已登记 token（不自激）。
-          projector().start()
-          refreshOverview()
         },
         async stop() {
           await stopResources()

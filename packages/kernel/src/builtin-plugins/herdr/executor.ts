@@ -449,7 +449,12 @@ export class HerdrExecutor {
     } catch (error) {
       if (request.signal?.aborted || (error as { code?: string }).code === 'aborted') {
         cleanup ??= this.closePane(pane, 'cancelled')
-        await cleanup
+        try { await cleanup }
+        catch (cleanupError) {
+          const note = this.deps.redact(cleanupError instanceof Error ? cleanupError.message : String(cleanupError))
+          await this.markFailed(pane, note)
+          throw new HelmError('herdr_abort_cleanup_failed', `任务已取消，但自有窗格清理失败：${note}`, 502)
+        }
         throw new HelmError('aborted', `pane ${pane.paneId} 执行已取消`, 499)
       }
       await this.markFailed(pane, error instanceof Error ? error.message : String(error))
@@ -681,6 +686,7 @@ export class HerdrExecutor {
     })) {
       await this.cancelAskQuietly(superseded.askId, 'superseded')
     }
+    if (authority.name !== pane.agentName) throw new HelmError('herdr_ownership_lost', `pane ${pane.paneId} 的 Agent 身份已变化，不能发送按键`, 409)
     if (authority.stateChangeSeq !== entry.seq || authority.agentStatus !== 'blocked') {
       this.asks.settle(entry, { keysSent: false })
       return true
@@ -892,6 +898,9 @@ export class HerdrExecutor {
     const unique = `${Date.now()}-resume-${HashShort.of(request.prompt.slice(0, 160))}-${request.parentConversationId}-${Math.random().toString(36).slice(2, 6)}`
     const safeId = `r${HashShort.of(unique)}`
     const ext = request.schema !== undefined ? 'json' : 'md'
+    if (this.registry.get(machineOf(pane), pane.paneId)?.outcome === 'running') {
+      throw new HelmError('pane_busy', `pane ${pane.paneId} 已由另一续接占用`, 409)
+    }
     const updated = this.registry.update(machineOf(pane), pane.paneId, {
       outcome: 'running',
       outputFileName: buildOutputFileName(safeId, ext),
@@ -972,7 +981,7 @@ export class HerdrExecutor {
         let owned = false
         try {
           const authority = await this.agentGet(target, pane.paneId)
-          owned = authority.name === pane.agentName
+          owned = authority.name === pane.agentName && authority.tabId === pane.tabId
           if (authority.name === undefined && this.unstartedPanes.has(this.paneKey(pane))) owned = true
         } catch (error) {
           if ((error as { code?: string }).code !== 'agent_not_found') throw error
