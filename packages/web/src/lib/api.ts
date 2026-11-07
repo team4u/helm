@@ -10,6 +10,7 @@ import type {
   ConversationSummary,
   InputOrigin,
   ModelProviderSummary,
+  ModelProvidersRefreshResult,
   PluginConfigFieldSchema,
   PluginSummary,
   Profile,
@@ -320,6 +321,8 @@ export const assetsApi = {
 
   listModels: async () => normalizeModelCatalog(await apiRequest<unknown>('GET', '/api/models')),
   listModelProviders: () => apiRequest<ModelProviderSummary[]>('GET', '/api/models/providers'),
+  refreshModels: (providers?: string[]) =>
+    apiRequest<ModelProvidersRefreshResult>('POST', '/api/models/refresh', providers && providers.length > 0 ? { providers } : {}),
 
   listSkills: () => apiRequest<SkillSummary[]>('GET', '/api/skills'),
   readSkill: (id: string, path?: string) => {

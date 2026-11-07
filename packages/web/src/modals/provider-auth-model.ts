@@ -1,6 +1,7 @@
 import type { ModelProviderSummary, ProviderConfig } from '@helm/protocol'
 import type { CredentialStatus, ModelDescriptor } from '../lib/api.js'
 
+/** 供应商列表条目：透传目录中的 dynamic/baseUrl 等通用元数据，不转属任何插件。 */
 export interface ProviderEntry extends ModelProviderSummary {
   hasStoredKey: boolean
   available: boolean

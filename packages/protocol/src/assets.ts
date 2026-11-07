@@ -65,7 +65,7 @@ export interface ModelProviderSummary {
   dynamic?: boolean
   /** 供应商公开网关根地址或 baseUrl（非机密展示）。 */
   baseUrl?: string
-  /** 若该供应商由插件动态注册，记录所属插件 ID（供前端通用挂载插件配置与扩展面板）。 */
+  /** 注册本供应商的插件 ID（内核自动填充；非插件供应商缺省）。 */
   pluginId?: string
 }
 
