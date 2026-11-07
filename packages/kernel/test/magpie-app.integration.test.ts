@@ -14,13 +14,14 @@ async function gatewayFixture() {
   const token = 'fixture-magpie-integration-key'
   const requests: string[] = []
   const server = createServer((req, res) => {
-    requests.push(req.url ?? '')
-    if (req.headers.authorization !== `Bearer ${token}`) {
+    const path = new URL(req.url ?? '/', 'http://fixture').pathname
+    requests.push(path)
+    if (req.headers.authorization !== `Bearer ${token}` && req.headers['x-api-key'] !== token) {
       res.writeHead(401).end(JSON.stringify({ error: 'fixture authentication required' }))
       return
     }
     res.setHeader('content-type', 'application/json')
-    if (req.url === '/v1/models') {
+    if (path === '/v1/models') {
       if (failCatalog) {
         res.writeHead(503).end(JSON.stringify({ error: 'fixture gateway unavailable' }))
         return
@@ -32,8 +33,39 @@ async function gatewayFixture() {
       ] }))
       return
     }
-    if (req.url?.startsWith('/v1/magpie/quotas')) { res.end(JSON.stringify({ data: [] })); return }
-    if (req.url === '/v1/magpie/trace') { res.end(JSON.stringify({ routes: [] })); return }
+    if (req.method === 'POST') {
+      res.setHeader('content-type', 'text/event-stream')
+      const send = (type: string, data: Record<string, unknown>) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`)
+      if (path === '/v1/chat/completions') {
+        res.write(`data: ${JSON.stringify({ id: 'fixture-chat', choices: [{ index: 0, delta: { role: 'assistant', content: 'fixture chat reply' }, finish_reason: null }] })}\n\n`)
+        res.write(`data: ${JSON.stringify({ id: 'fixture-chat', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 } })}\n\n`)
+        res.end('data: [DONE]\n\n')
+        return
+      }
+      if (path === '/v1/responses') {
+        const item = { id: 'fixture-message', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'fixture responses reply', annotations: [] }] }
+        send('response.created', { response: { id: 'fixture-response', status: 'in_progress', output: [] } })
+        send('response.output_item.added', { output_index: 0, item: { ...item, status: 'in_progress', content: [] } })
+        send('response.content_part.added', { output_index: 0, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } })
+        send('response.output_text.delta', { output_index: 0, content_index: 0, delta: 'fixture responses reply' })
+        send('response.output_item.done', { output_index: 0, item })
+        send('response.completed', { response: { id: 'fixture-response', status: 'completed', output: [item], usage: { input_tokens: 2, output_tokens: 3, total_tokens: 5, input_tokens_details: { cached_tokens: 0 } } } })
+        res.end()
+        return
+      }
+      if (path === '/v1/messages') {
+        send('message_start', { message: { id: 'fixture-anthropic', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [], stop_reason: null, usage: { input_tokens: 2, output_tokens: 0 } } })
+        send('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
+        send('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'fixture anthropic reply' } })
+        send('content_block_stop', { index: 0 })
+        send('message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 3 } })
+        send('message_stop', {})
+        res.end()
+        return
+      }
+    }
+    if (path === '/v1/magpie/quotas') { res.end(JSON.stringify({ data: [] })); return }
+    if (path === '/v1/magpie/trace') { res.end(JSON.stringify({ routes: [] })); return }
     res.writeHead(404).end(JSON.stringify({ error: 'fixture route absent' }))
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -89,6 +121,21 @@ test('Magpie 经真实组合层注册、刷新、HTTP/CLI、缓存重启与停�
     assert.ok((await app.kernel.listModels()).filter((model) => model.provider === 'magpie').every((model) => model.available))
     assert.ok(app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie' && item.surface === 'settings.panel'))
     assert.ok(app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie' && item.surface === 'composer.pill'))
+
+    // 使用真实 Harness 与 SDK 发起三种原生协议请求，响应只来自受控本地网关。
+    for (const [model, text, path] of [
+      ['group/fixture-smart', 'fixture chat reply', '/v1/chat/completions'],
+      ['fixture/responses', 'fixture responses reply', '/v1/responses'],
+      ['anthropic/claude-sonnet-4-6', 'fixture anthropic reply', '/v1/messages'],
+    ]) {
+      await app.kernel.updateConversation(1, { model: `magpie/${model}` })
+      await app.kernel.submitInput(1, '受控协议验收')
+      await app.kernel.waitForIdle(1)
+      const detail = await app.kernel.getConversationDetail(1, { limit: 100 })
+      const answer = [...detail.entries].reverse().find((entry) => entry.kind === 'pi.assistant')
+      assert.ok(JSON.stringify(answer).includes(text), `原生请求 ${path} 应完成回答：${JSON.stringify(answer)}`)
+      assert.ok(gateway.requests.includes(path), `应请求精确协议路径 ${path}`)
+    }
 
     hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 0 })
     const credential = app.kernel.auth.createProcessToken()
