@@ -187,13 +187,13 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
     })
     try {
       const a = fabric.envForTarget({ conversationId: 42, nodeId: 'local', cwd: root })
-      await fabric.evictConversation(42)
+      fabric.evictConversation(42)
       const b = fabric.envForTarget({ conversationId: 42, nodeId: 'local', cwd: root })
       // 驱逐后重建：两实例底层 base 不同（a 的 base 已被清理出缓存）。
       assert.notEqual((a as unknown as { id: string }).id === (b as unknown as { id: string }).id, false)
       // 不影响其他会话靶点（43 未被驱逐）。
       const c1 = fabric.envForTarget({ conversationId: 43, nodeId: 'local', cwd: root })
-      await fabric.evictConversation(42)
+      fabric.evictConversation(42)
       const c2 = fabric.envForTarget({ conversationId: 43, nodeId: 'local', cwd: root })
       assert.equal(
         (c1 as unknown as { id: string }).id,
@@ -205,22 +205,49 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
     }
   })
 
-  it('靶点缓存按会话精确驱逐：bases 计数收缩、其他会话与公共靶点保留', timeout, async () => {
+  it('靶点缓存按会话精确驱逐：bases 计数收缩、其他会话保留；无会话靶点不进缓存', timeout, async () => {
     const fabric = createEnvFabric({})
     try {
       assert.equal(fabric.debugBaseCount(), 0)
       fabric.envForTarget({ conversationId: 7, nodeId: 'offline-node', cwd: '/srv' })
       fabric.envForTarget({ conversationId: 7, nodeId: 'offline-node', cwd: '/other' })
       fabric.envForTarget({ conversationId: 8, nodeId: 'offline-node', cwd: '/srv' })
+      assert.equal(fabric.debugBaseCount(), 3)
+      // 无会话靶点是短生命周期对象（envFor / envForTarget 无 conversationId）：
+      // 每次全新实例、绝不进缓存——反复调用不堆积 bases。
       fabric.envFor('offline-node', '/srv')
-      assert.equal(fabric.debugBaseCount(), 4)
-      // 驱逐会话 7：仅清其两个靶点，会话 8 与公共靶点（无会话维度）保留。
-      await fabric.evictConversation(7)
-      assert.equal(fabric.debugBaseCount(), 2, '会话 7 的两个靶点被清理')
-      await fabric.evictConversation(7)
-      assert.equal(fabric.debugBaseCount(), 2, '幂等：重复驱逐无额外影响')
-      await fabric.evictConversation(8)
-      assert.equal(fabric.debugBaseCount(), 1, '公共靶点不被会话驱逐清理')
+      fabric.envFor('offline-node', '/srv')
+      fabric.envForTarget({ nodeId: 'offline-node', cwd: '/srv' })
+      fabric.envForTarget({ nodeId: 'local', cwd: root })
+      assert.equal(fabric.debugBaseCount(), 3, '无会话靶点绝不进入缓存')
+      // 驱逐会话 7：仅清其两个靶点，会话 8 保留。
+      fabric.evictConversation(7)
+      assert.equal(fabric.debugBaseCount(), 1, '会话 7 的两个靶点被清理')
+      fabric.evictConversation(7)
+      assert.equal(fabric.debugBaseCount(), 1, '幂等：重复驱逐无额外影响')
+      fabric.evictConversation(8)
+      assert.equal(fabric.debugBaseCount(), 0)
+      // debugBases 与计数同源。
+      fabric.envForTarget({ conversationId: 9, nodeId: 'n', cwd: '/x' })
+      const bases = fabric.debugBases()
+      assert.equal(bases.length, 1)
+      assert.equal(bases[0]!.conversationId, 9)
+      assert.equal(bases[0]!.nodeId, 'n')
+      assert.equal(bases[0]!.cwd, '/x')
+    } finally {
+      await fabric.dispose()
+    }
+  })
+
+  it('驱逐不杀在途命令：evict 后旧实例上的 exec 自然完成', timeout, async () => {
+    const fabric = createEnvFabric({})
+    try {
+      const scoped = fabric.envForTarget({ conversationId: 50, nodeId: 'local', cwd: root })
+      fabric.evictConversation(50)
+      // 旧实例引用仍存活：真实 exec 必须自然完成（evict 只移缓存不杀进程）。
+      const result = await scoped.exec('echo alive', undefined, { abortSignal: undefined } as never)
+      assert.equal(result.ok, true)
+      assert.equal(result.value.exitCode, 0)
     } finally {
       await fabric.dispose()
     }
@@ -243,6 +270,36 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
           (err: { code?: string }) => err.code,
         )
       assert.equal(again, 'not_found')
+    } finally {
+      await kernel.close()
+    }
+  })
+  it('updateConversation 变更 cwd/nodeId 时释放旧靶点缓存（不影响其他会话）', timeout, async () => {
+    const kernel = await openRuntime(join(root, 'evict-2'))
+    try {
+      const conv = await kernel.createConversation({})
+      const other = await kernel.createConversation({})
+      const fabric = kernel.envFabric as EnvFabric
+      const before = fabric.debugBaseCount()
+      // 两次真实 exec 建立两个会话靶点。
+      await kernel.execEnv({ command: 'echo one', conversationId: conv.id })
+      await kernel.execEnv({ command: 'echo two', conversationId: other.id })
+      assert.equal(fabric.debugBaseCount(), before + 2)
+      // 变更 conv 的 cwd：旧靶点释放，other 不受影响。
+      const newDir = join(root, 'evict-2-new-cwd')
+      await kernel.updateConversation(conv.id, { cwd: newDir })
+      assert.equal(fabric.debugBaseCount(), before + 1, '变更会话旧靶点被释放')
+      const bases = fabric.debugBases()
+      assert.ok(
+        bases.every((b) => b.conversationId !== conv.id),
+        `会话 ${conv.id} 的旧靶点应全部释放：${JSON.stringify(bases)}`,
+      )
+      // 其他会话靶点仍在缓存（同实例复用）。
+      assert.ok(bases.some((b) => b.conversationId === other.id))
+      // 仅改 title 不触发释放。
+      const count = fabric.debugBaseCount()
+      await kernel.updateConversation(other.id, { title: '仅标题' })
+      assert.equal(fabric.debugBaseCount(), count, '非靶点变更不释放缓存')
     } finally {
       await kernel.close()
     }

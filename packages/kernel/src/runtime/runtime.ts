@@ -762,7 +762,7 @@ export class KernelRuntime {
           isolation: {
             type: 'string',
             enum: ['worktree'],
-            description: '隔离模式（可选；worktree 需要 builtin:herdr 插件接管）',
+            description: '隔离模式（可选；worktree 需要支持隔离执行的外部运行时插件接管，例如 herdr）',
           },
           schema: { type: 'object', description: '结构化输出 JSON Schema（可选）' },
           gate: { type: 'string', description: '验收 shell 命令（可选，exit≠0 失败）' },
@@ -1150,9 +1150,6 @@ export class KernelRuntime {
     return dirname(dirname(dirname(dirname(kernelDir))))
   }
 
-  /** 流式模式下聚合上限（远大于常规 1MiB：流式客户端自行消费原始块）。 */
-  private static readonly MAX_STREAM_AGGREGATE_BYTES = 64 * 1024 * 1024
-
   /** local 磁盘统计后台刷新间隔（unref 定时器，不阻退出）。 */
   private static readonly LOCAL_DISK_REFRESH_MS = 30_000
 
@@ -1342,14 +1339,11 @@ export class KernelRuntime {
       ...(req.env === undefined ? {} : { env: req.env }),
       ...(req.timeoutMs === undefined ? {} : { timeoutMs: req.timeoutMs }),
       signal,
-      // 流式模式：逐块回调透传（客户端自行限流）；聚合上限放宽
-      // 以防短命令即截断（聚合结果仍脱敏返回）。
-      ...(onChunk !== undefined
-        ? {
-            onOutputChunk: onChunk,
-            maxOutputBytes: KernelRuntime.MAX_STREAM_AGGREGATE_BYTES,
-          }
-        : {}),
+      // 流式模式：逐块回调透传（客户端自行限流）；Hub 侧聚合预算由
+      // runShell 的 STREAM_AGGREGATE_LIMIT_BYTES 统一收敛（旧 64MiB 全文
+      // 复制是内存泄漏）——流式客户端已收到全部逐块输出，终态 output
+      // 仅作诊断聚合，超限显式 output_limit_exceeded（不改变帧协议）。
+      ...(onChunk !== undefined ? { onOutputChunk: onChunk } : {}),
     })
     return {
       ok: result.ok,
@@ -2054,6 +2048,11 @@ export class KernelRuntime {
       updatedAt: Date.now(),
     }
     this.store.upsertConv(updated)
+    // 靶点（nodeId/cwd）变更即释放旧靶点底座缓存：旧实例上的在途 exec/reader
+    // 不受影响（evict 只移缓存不杀进程），后续 exec 落在新靶点新实例。
+    if (patch.nodeId !== undefined || patch.cwd !== undefined) {
+      this.envFabric.evictConversation(id)
+    }
     const summary = this.tracker.summaryOf(id)
     this.events.publish('conversation.upsert', summary)
     return summary
@@ -2468,8 +2467,8 @@ export class KernelRuntime {
    */
   async forkConversation(id: number, opts: { entryId: number; title?: string }): Promise<ConversationSummary> {
     this.assertNotClosedForContextOp()
-    if (!Number.isInteger(opts.entryId) || opts.entryId <= 0) {
-      throw new HelmError('validation_error', `entryId 需为正整数（收到 ${String(opts.entryId)}）`, 400, {
+    if (!Number.isSafeInteger(opts.entryId) || opts.entryId <= 0) {
+      throw new HelmError('validation_error', `entryId 需为安全正整数（收到 ${String(opts.entryId)}）`, 400, {
         entryId: opts.entryId,
       })
     }

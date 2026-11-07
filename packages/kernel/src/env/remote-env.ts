@@ -4,7 +4,10 @@
  *
  * 关键语义（诚实性纪律）：
  * - reader 以 readerId 句柄桥接；close 幂等且不因连接失效挂起；
- * - `exec` 把 onOutput 分块经 ExecOutputHub 回放（节点流式推送，按 execId 路由）；
+ * - `exec` 把 onOutput 分块经 ExecOutputHub 回放（节点流式推送，按 execId 路由），
+ *   实例级输出 sink 按需注册/注销：首个带 onOutput 的 exec 前注册到
+ *   resolver，最后一个在途 exec 结束（或 cleanup）后注销——短生命周期
+ *   实例（envFor 路径）用后即弃也无注册表残留；
  * - 取消传播：context abort 时立即 rpc.envAbortExec(execId) 让节点杀死该
  *   命令的整棵子进程树，不等命令自然结束；
  * - 远端节点离线且 resolver 支持等待时，阻塞等待重连（可取消）；
@@ -42,6 +45,10 @@ export interface NodeRpcResolver {
    * （未提供）时调用方立即失败。取消时返回 undefined。
    */
   waitForNodeOnline?(nodeId: string, context: Context): Promise<NodeEnvRpcFunctions | undefined>
+  /** 实例级输出 sink 注册（按 exec 生命周期自管理；无则该实例输出
+   *  不路由——仅当无流式需求的内部构造使用）。 */
+  addOutputSink?(nodeId: string, sink: (event: EnvExecOutputEvent) => void): void
+  removeOutputSink?(nodeId: string, sink: (event: EnvExecOutputEvent) => void): void
 }
 
 export interface RemoteExecutionEnvOptions {
@@ -74,6 +81,8 @@ export class RemoteExecutionEnv implements ExecutionEnv {
   readonly #resolver: NodeRpcResolver
   readonly #outputHub: ExecOutputHub
   readonly #nodeIdValue: string
+  #sinkRegistered = false
+  #liveExecsWithOutput = 0
 
   constructor(resolver: NodeRpcResolver, options: RemoteExecutionEnvOptions, outputHub = new ExecOutputHub()) {
     this.#resolver = resolver
@@ -81,6 +90,24 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     this.id = `remote:${options.nodeId}`
     this.#nodeIdValue = options.nodeId
     this.#outputHub = outputHub
+  }
+
+  /** sink 注册/注销按在途 exec 计数：首个带 onOutput 的 exec 注册，最后一个
+   *  结束后注销——实例（含 envFor 短生命周期对象）不残留注册表强引用。 */
+  #acquireSink(): void {
+    this.#liveExecsWithOutput += 1
+    if (!this.#sinkRegistered && this.#resolver.addOutputSink !== undefined) {
+      this.#resolver.addOutputSink(this.#nodeIdValue, this.onEnvExecOutput)
+      this.#sinkRegistered = true
+    }
+  }
+
+  #releaseSink(): void {
+    this.#liveExecsWithOutput = Math.max(0, this.#liveExecsWithOutput - 1)
+    if (this.#liveExecsWithOutput === 0 && this.#sinkRegistered) {
+      this.#resolver.removeOutputSink?.(this.#nodeIdValue, this.onEnvExecOutput)
+      this.#sinkRegistered = false
+    }
   }
 
   /** 节点侧流式回调入口（fabric 登记到注册表按节点路由）。 */
@@ -408,11 +435,16 @@ export class RemoteExecutionEnv implements ExecutionEnv {
   }
 
   async cleanup(_context: Context): Promise<void> {
-    // 清理不等待重连：仅当节点当前在线时发送；离线时由节点侧连接级
-    // dispose 兜底（关 reader、杀该连接发起的命令）。
-    const rpc = this.#resolver.getNodeEnvRpc(this.#nodeIdValue)
-    if (rpc === undefined) return
-    await rpc.envCleanup(this.cwd).catch(() => undefined)
+    // 实例清理只注销自身 sink（自管理生命周期）；绝不发送按 cwd 的
+    // envCleanup——节点侧 envCleanup 会杀同 cwd 下**其他会话**的在途
+    // 命令（cwd 不是会话隔离键）。在途命令的终止由调用方 context abort
+    // （envAbortExec 按 execId 精确杀）或连接断开的节点侧连接级 dispose
+    // 兜底。
+    this.#liveExecsWithOutput = 0
+    if (this.#sinkRegistered) {
+      this.#resolver.removeOutputSink?.(this.#nodeIdValue, this.onEnvExecOutput)
+      this.#sinkRegistered = false
+    }
   }
 
   // ---- Shell -----------------------------------------------------------------
@@ -440,6 +472,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     const execId = `exec-${++execSeq}-${Math.random().toString(36).slice(2, 8)}`
     const onOutput = options?.onOutput
     if (onOutput !== undefined) {
+      this.#acquireSink()
       this.#outputHub.subscribe(execId, (event) => {
         onOutput(event.text, context, {
           stream: event.stream,
@@ -488,6 +521,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     } finally {
       signal?.removeEventListener('abort', onAbort)
       this.#outputHub.unsubscribe(execId)
+      if (onOutput !== undefined) this.#releaseSink()
     }
   }
 
