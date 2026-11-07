@@ -1,5 +1,5 @@
 // 仅供浏览器验收：真实内核/SQLite/HTTP，模型输出由 SDK faux provider 提供。
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -52,6 +52,41 @@ await app.kernel.plugins.register({
     ] } })
   },
 })
+// client.tsx 第二轨道验收夹具：真实 clientRoot + 动态编译加载（浏览器验收用）
+const clientSrcDir = join(dataDir, 'client-src')
+await mkdir(join(clientSrcDir, 'parts'), { recursive: true })
+await writeFile(
+  join(clientSrcDir, 'client.tsx'),
+  [
+    "import { useState } from 'react'",
+    "import { Activity } from 'lucide-react'",
+    "import { statusLine } from './parts/line'",
+    '',
+    'export function Panel(props) {',
+    "  const [count, setCount] = useState(0)",
+    '  return (',
+    '    <div className="card" style={{ display: \'flex\', flexDirection: \'column\', gap: 8 }}>',
+    '      <div style={{ display: \'flex\', alignItems: \'center\', gap: 6 }}>',
+    '        <Activity size={13} />',
+    '        <strong>client.tsx 动态组件验收</strong>',
+    '      </div>',
+    '      <p style={{ margin: 0, fontSize: 12.5 }}>screenId: {props.screenId}；点击计数：{count}</p>',
+    '      <p style={{ margin: 0, fontSize: 12.5 }}>{statusLine()}</p>',
+    '      <button className="btn btn-sm" onClick={() => setCount(count + 1)}>client 组件内计数</button>',
+    '    </div>',
+    '  )',
+    '}',
+    '',
+  ].join('\n'),
+)
+await writeFile(join(clientSrcDir, 'parts', 'line.ts'), "export const statusLine = () => '本地依赖（parts/line.ts）已随插件闭包编译进产物'\n")
+await app.kernel.plugins.register({
+  id: 'test:client-acceptance', name: 'Web 验收 client.tsx 样例', version: '1.0.0', clientRoot: clientSrcDir, definePlugin(ctx) {
+    ctx.ui.sidebarItem({ id: 'client-demo', label: 'client.tsx 验收', icon: 'code', target: 'screen:test:client-acceptance/demo' })
+    ctx.ui.screen({ id: 'demo', label: 'client.tsx 动态组件', client: { module: 'client.tsx', export: 'Panel' } })
+  },
+})
+
 void app.kernel.createAsk({ conversationId: chat.id, title: '浏览器验收：请确认', description: '这是验收服务的审批卡，不控制真实终端。', fields: [{ name: 'allow', label: '继续测试', type: 'confirm', required: true }] }).catch(console.error)
 const hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 3202 })
 const infoPath = process.env.HELM_WEB_ACCEPTANCE_INFO ?? join(dataDir, 'browser.json')
