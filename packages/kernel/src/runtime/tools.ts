@@ -7,8 +7,9 @@
  *   预先 aborted 的 Context 绝不 spawn；abort/timeout 杀整个进程组并可靠等待子进程
  *   退出（listener/timer 全清理，不泄露进程）；stdout/stderr 各自 `StreamDecoder` 增量
  *   解码，多字节字符跨 chunk 不撕裂；`onOutput` 按到达顺序拼接（非先 stdout 后 stderr）。
- * - env 注入：HELM_ENV=1 / HELM_HUB_URL（按 HELM_PORT 生成）/ HELM_CONVERSATION_ID /
- *   HELM_CWD 四个宿主变量固定覆盖，防 stash/envFor 同名误覆盖。
+ * - env 注入：process.env 基底 + buildManagedEnv 受管变量（HELM_ENV / HELM_HUB_URL /
+ *   HELM_CONVERSATION_ID / HELM_CWD / HELM_DATA_DIR / 受管 HELM_TOKEN）固定覆盖
+ *   stash 注入的同名项；外部 spawn env 复用同一受管构造（不携带宿主 process.env）。
  * - SecretStash 脱敏在聚合完成的全文上执行（先完整拼接再 redact，跨 chunk 撕裂的
  *   秘密也必然完整匹配），绝不反向还原；超长输出经 services.ArtifactService.spill 落盘。
  * - 输出超过 maxOutputBytes 显式失败 `output_limit_exceeded`（绝不截断当成功）。
@@ -74,13 +75,18 @@ export async function runShell(
     timeoutMs?: number
     signal?: AbortSignal
     maxOutputBytes?: number
+    /**
+     * 调用方注入环境（如 herdr 插件的 Profile.runtime.env + 管理环境）：
+     * 覆盖 process.env 同名项，但受管变量（HELM_* 与受管 token）仍固定覆盖。
+     */
+    env?: Record<string, string>
   } = {},
 ): Promise<ShellRunResult> {
   const cwd = options.cwd ?? deps.defaultCwd
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   assertTimeoutMs(timeoutMs)
   const maxOutputBytes = options.maxOutputBytes ?? MAX_OUTPUT_BYTES
-  const env = buildToolEnv(deps, cwd, options.conversationId)
+  const env = buildToolEnv(deps, cwd, options.conversationId, options.env)
   // 每次 exec 独立 env 实例：activeChildPids 等可变状态不跨调用共享。
   const shell = new NodeExecutionEnv({ cwd, shellPath: '/bin/bash' })
   // 到达顺序聚合（stdout/stderr 混排按真实到达序，非先 stdout 后 stderr）。
@@ -145,19 +151,55 @@ export async function runShell(
 
 /**
  * gate 门禁命令执行（独立 subagent 与 Workflow adapter 共用，保证只执行一次）。
+ * env 使本机 Gate 与实际 Herdr 任务环境一致（插件传 Profile.runtime.env 与
+ * 管理环境组成的 spawnEnv，同一 CI/工具 PATH）；受管变量仍固定覆盖。
  * 失败永不返回成功；输出脱敏。
  */
 export async function runGate(
   deps: HelmToolDeps,
   command: string,
-  options: { cwd?: string; conversationId?: number; signal?: AbortSignal } = {},
+  options: {
+    cwd?: string
+    conversationId?: number
+    signal?: AbortSignal
+    env?: Record<string, string>
+  } = {},
 ): Promise<{ ok: boolean; output: string }> {
   const result = await runShell(deps, command, { ...options, timeoutMs: DEFAULT_TIMEOUT_MS })
   return { ok: result.ok, output: result.output }
 }
 
-/** 组装工具环境：宿主六变量固定覆盖 stash 注入的同名项（HELM_TOKEN 见下）。 */
+/** 组装工具环境：process.env < options.env < 受管变量（固定覆盖，见 buildManagedEnv）。 */
 export function buildToolEnv(
+  deps: HelmToolDeps,
+  cwd: string,
+  conversationId?: number,
+  extraEnv?: Record<string, string>,
+): Record<string, string> {
+  // bash 等本机工具继承 process.env（PATH/HOME 等宿主环境）；调用方注入的
+  // extraEnv（如 herdr 插件组装的 Profile.runtime.env + 管理环境）覆盖基底，
+  // 受管变量最后固定覆盖（HELM_CWD/HELM_TOKEN 等不可被外部注入劫持）。
+  // process.env 值类型含 undefined：逐项拷贝真实字符串，跳过空值项。
+  const managed = buildManagedEnv(deps, cwd, conversationId)
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value
+  }
+  if (extraEnv !== undefined) Object.assign(env, extraEnv)
+  Object.assign(env, managed)
+  // 无受管 token 时剥除一切来源的 HELM_TOKEN（宿主继承与 extraEnv 注入均不透传）。
+  if (!('HELM_TOKEN' in managed)) delete env['HELM_TOKEN']
+  return env
+}
+
+/**
+ * 宿主受管环境变量（不含 process.env）：会话 SecretStash 注入 + 固定覆盖的
+ * HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID / HELM_CWD / HELM_DATA_DIR，
+ * 以及受管 HELM_TOKEN（无受管 token 时绝不透传同名继承值）。
+ * bash 工具（继承 process.env）与外部 spawn env（远端/新窗格，不携带宿主
+ * 进程环境）共用此构造，保证两边管理变量语义一致。
+ */
+export function buildManagedEnv(
   deps: HelmToolDeps,
   cwd: string,
   conversationId?: number,
@@ -165,7 +207,6 @@ export function buildToolEnv(
   const stashEnv = conversationId === undefined ? {} : deps.stashEnvFor(conversationId)
   const managedToken = deps.processToken?.()
   const env: Record<string, string> = {
-    ...process.env,
     ...stashEnv,
     HELM_ENV: '1',
     HELM_HUB_URL: deps.hubUrl,

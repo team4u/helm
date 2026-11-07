@@ -32,6 +32,7 @@ import {
 } from '@earendil-works/pi-durable'
 import { GenerationTask, ToolTask } from '@earendil-works/pi-durable'
 import type {
+  AgentExecutionInfo,
   AgentSpawnRequest,
   AskCreateSpec,
   AskResult,
@@ -77,7 +78,7 @@ import { openHelmDatabase, type HelmDatabase } from './sqlite.js'
 import { HelmStore } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { toConversationEntry } from './entries.js'
-import { createBashTool, createReadArtifactTool, createReadTool, runGate } from './tools.js'
+import { buildManagedEnv, createBashTool, createReadArtifactTool, createReadTool, runGate } from './tools.js'
 import { runNativeSpawn } from './spawn.js'
 import { HelmPluginConfigStore } from './plugin-config-store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
@@ -136,6 +137,12 @@ function escapeXml(text: string): string {
 
 /** watchdog 默认巡检间隔（singleflight 定时器；0 关闭）。 */
 const DEFAULT_WATCHDOG_INTERVAL_MS = 15_000
+
+/**
+ * subagent 工具 effort 合法枚举（与 spawn.ts 原生执行行 THINKING_LEVELS 同源：
+ * pi-ai ModelThinkingLevel）。声明处直接校验，拒绝任意字符串且不静默丢弃。
+ */
+const SPAWN_EFFORT_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
 /** entry.model 消息数组 -> assistant 文本块拼接（waitForInput 提取回答用）。 */
 function assistantTextOfModel(model: unknown[] | undefined): string {
@@ -601,19 +608,39 @@ export class KernelRuntime {
     )
   }
 
-  /** subagent 工具：模型内派生子代理（走 agent_spawn hook 链）。 */
+  /**
+   * subagent 工具：模型内派生子代理（走 agent_spawn hook 链）。
+   * 入参完整覆盖 §2：prompt / agentType / cwd / isolation / schema / gate /
+   * resume / model / effort，原样转发 spawnAgent；onResolved 捕获执行环境
+   * 元数据（conversationId / executionId / effectiveCwd / worktree），独立于
+   * 业务 result 回报（模型据 conversationId 续接 resume，不混入 result）。
+   */
   private createSubagentTool(): ToolRegistration {
     const runtime = this
     return defineTool({
       name: 'subagent',
       description:
-        '派生一个子代理执行任务并等待结果。prompt 为任务指令；可选 schema（JSON Schema，子代理最终输出需满足）、gate（shell 验收命令，退出码非 0 视为失败）。',
+        '派生一个子代理执行任务并等待结果。prompt 为任务指令；agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；可选 schema（JSON Schema，子代理最终输出需满足）、gate（shell 验收命令）、cwd、isolation（worktree）、model（provider/model）、effort。续接既有子代理传 resume（上次返回的 conversationId）。返回结果与执行元数据（conversationId 等续接标识）。',
       parameters: {
         type: 'object',
         properties: {
           prompt: { type: 'string', description: '子代理任务指令' },
+          agentType: { type: 'string', description: 'Profile ID 或外部运行时标识（缺省 assistant）' },
+          cwd: { type: 'string', description: '子代理工作目录（绝对路径；缺省用 Profile/会话缺省）' },
+          isolation: {
+            type: 'string',
+            enum: ['worktree'],
+            description: '隔离模式（可选；worktree 需要 builtin:herdr 插件接管）',
+          },
           schema: { type: 'object', description: '结构化输出 JSON Schema（可选）' },
           gate: { type: 'string', description: '验收 shell 命令（可选，exit≠0 失败）' },
+          resume: { type: 'string', description: '续接标识（上次返回的 conversationId）' },
+          model: { type: 'string', description: "模型覆盖 'provider/model'（可选）" },
+          effort: {
+            type: 'string',
+            enum: [...SPAWN_EFFORT_LEVELS],
+            description: '思考力度（可选）',
+          },
         },
         required: ['prompt'],
         additionalProperties: false,
@@ -623,22 +650,65 @@ export class KernelRuntime {
         properties: {
           ok: { type: 'boolean' },
           result: {},
-          conversationId: { type: 'number' },
+          execution: {
+            type: 'object',
+            properties: {
+              conversationId: { type: 'number' },
+              executionId: { type: 'string' },
+              effectiveCwd: { type: 'string' },
+              worktree: {
+                type: 'object',
+                properties: { path: { type: 'string' }, branch: { type: 'string' } },
+                required: ['path', 'branch'],
+              },
+            },
+          },
         },
         required: ['ok'],
       } as Record<string, unknown>,
       async execute(args: Record<string, unknown>, api: { conversationId: number }, context: { abortSignal?: AbortSignal }) {
+        // 防御性二次校验（SDK 已按 parameters 校验；直调路径同样拒绝非法值，
+        // 绝不静默丢弃字段后降级执行）。
+        if (args['isolation'] !== undefined && args['isolation'] !== 'worktree') {
+          return {
+            output: [
+              {
+                type: 'text',
+                text: `subagent_failed: isolation 仅允许 'worktree'（收到 ${JSON.stringify(args['isolation'])}），不合法值绝不静默丢弃`,
+              },
+            ],
+            isError: true,
+            structuredOutput: { ok: false, result: `invalid isolation: ${JSON.stringify(args['isolation'])}` } as JsonValue,
+          }
+        }
+        let resolved: AgentExecutionInfo | undefined
         try {
           const result = await runtime.spawnAgent({
             parentConversationId: api.conversationId,
             prompt: String(args['prompt']),
+            ...(args['agentType'] !== undefined ? { agentType: String(args['agentType']) } : {}),
+            ...(args['cwd'] !== undefined ? { cwd: String(args['cwd']) } : {}),
+            ...(args['isolation'] !== undefined ? { isolation: 'worktree' } : {}),
             ...(args['schema'] !== undefined ? { schema: args['schema'] as Record<string, unknown> } : {}),
             ...(args['gate'] !== undefined ? { gate: String(args['gate']) } : {}),
+            ...(args['resume'] !== undefined ? { resume: String(args['resume']) } : {}),
+            ...(args['model'] !== undefined ? { model: String(args['model']) } : {}),
+            ...(args['effort'] !== undefined ? { effort: String(args['effort']) } : {}),
+            onResolved: (info) => {
+              resolved = info
+            },
             signal: context.abortSignal,
           })
+          // 元数据独立于业务 result 回报：文本尾行带续接标识（模型可复制为 resume）。
+          const body = safeResultText(result, (text) => runtime.stash.redact(text))
+          const footer = subagentFooter(args['resume'] !== undefined ? String(args['resume']) : undefined, resolved)
           return {
-            output: [{ type: 'text', text: safeResultText(result, (text) => runtime.stash.redact(text)) }],
-            structuredOutput: { ok: true, result: result as JsonValue } as JsonValue,
+            output: [{ type: 'text', text: footer === '' ? body : `${body}\n${footer}` }],
+            structuredOutput: {
+              ok: true,
+              result: result as JsonValue,
+              ...(resolved !== undefined ? { execution: executionOf(resolved) } : {}),
+            } as JsonValue,
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
@@ -652,18 +722,25 @@ export class KernelRuntime {
     } as never)
   }
 
-  /** SubagentWorkflow 工具：确定性编排（真实 WorkflowService，不假完成）。 */
+  /**
+   * SubagentWorkflow 工具：确定性编排（真实 WorkflowService，不假完成）。
+   * 入参完整支持 script / scriptPath / name / args（任意 JSON，原样透传不
+   * String 化）/ resumeFromRunId，全部转发 runWorkflow。
+   */
   private createWorkflowTool(): ToolRegistration {
     const runtime = this
     return defineTool({
       name: 'SubagentWorkflow',
       description:
-        '执行一个 SubagentWorkflow 确定性编排脚本。script 为编排 DSL 源码；返回真实执行 summary（runId/status/nodes）。编排引擎未挂接时显式报错。',
+        '执行一个 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，或 scriptPath 指向脚本文件，或 name 引用已保存工作流（三者恰好其一）；args 为任意 JSON 原样传给脚本；resumeFromRunId 从既有 run 的账本断点恢复。返回真实执行 summary（runId/status/nodes/result）。编排引擎未挂接时显式报错。',
       parameters: {
         type: 'object',
         properties: {
-          script: { type: 'string', description: '编排脚本源码' },
+          script: { type: 'string', description: '编排脚本源码（内联）' },
+          scriptPath: { type: 'string', description: '编排脚本文件路径（与 script 二选一）' },
           name: { type: 'string', description: '已保存工作流名（与 script 二选一）' },
+          args: { description: '传给脚本的任意 JSON args（对象/数组/标量均可，原样透传）' },
+          resumeFromRunId: { type: 'string', description: '断点恢复的既有 runId（可选）' },
         },
         additionalProperties: false,
       } as Record<string, unknown>,
@@ -678,7 +755,11 @@ export class KernelRuntime {
       async execute(args: Record<string, unknown>, api: { conversationId: number }, context: { abortSignal?: AbortSignal }) {
         const input: Record<string, unknown> = {}
         if (args['script'] !== undefined) input['script'] = String(args['script'])
+        if (args['scriptPath'] !== undefined) input['scriptPath'] = String(args['scriptPath'])
         if (args['name'] !== undefined) input['name'] = String(args['name'])
+        // args 任意 JSON：原样透传（绝不 String 化——脚本内 args.items.map 等用法依赖真实结构）。
+        if (args['args'] !== undefined) input['args'] = args['args']
+        if (args['resumeFromRunId'] !== undefined) input['resumeFromRunId'] = String(args['resumeFromRunId'])
         try {
           const summary = await runtime.runWorkflow(input, api.conversationId, context.abortSignal)
           return {
@@ -806,6 +887,30 @@ export class KernelRuntime {
       throw new HelmError('validation_error', `hub URL 必须是非空字符串：${String(url)}`, 400)
     }
     this.hubUrlValue = url
+  }
+
+  /**
+   * 外部 spawn 环境变量（如 createHerdrPlugin 驱动远端/新窗格 CLI Agent）：
+   * 仅当前会话 SecretStash env + 受管 HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID /
+   * HELM_CWD / HELM_DATA_DIR / HELM_TOKEN（固定覆盖 stash 同名注入）；
+   * 绝不携带宿主 process.env（远端环境由目标机器自理，PATH/HOME 等不得外泄）。
+   * 仅供 app 组合层工厂注入，不进 protocol ctx.host。
+   */
+  buildSpawnEnv(conversationId: number, cwd: string): Record<string, string> {
+    if (!Number.isInteger(conversationId) || conversationId <= 0) {
+      throw new HelmError(
+        'validation_error',
+        `buildSpawnEnv 需要正整数 conversationId（收到 ${String(conversationId)}）`,
+        400,
+        { conversationId },
+      )
+    }
+    if (typeof cwd !== 'string' || cwd === '') {
+      throw new HelmError('validation_error', `buildSpawnEnv 需要非空 cwd（收到 ${String(cwd)}）`, 400, {
+        cwd,
+      })
+    }
+    return buildManagedEnv(this.toolDeps, cwd, conversationId)
   }
 
   /** 产物授权：当前会话或其父链（子会话可读父会话产物）。 */
@@ -1765,8 +1870,16 @@ export class KernelRuntime {
     )
   }
 
-  /** gate 门禁（独立 spawn 与 Workflow adapter 共用，只执行一次）。 */
-  runGate(command: string, options: { cwd?: string; conversationId?: number; signal?: AbortSignal } = {}): Promise<{ ok: boolean; output: string }> {
+  /**
+   * gate 门禁（独立 spawn 与 Workflow adapter 共用，只执行一次）。
+   * env：调用方（herdr 插件）注入 Profile.runtime.env 与管理环境组成的
+   * spawnEnv，使本机 Gate 读到与实际 Herdr 任务一致的 CI/工具路径；
+   * 受管变量（HELM_* 与受管 token）仍固定覆盖注入值（见 buildToolEnv）。
+   */
+  runGate(
+    command: string,
+    options: { cwd?: string; conversationId?: number; signal?: AbortSignal; env?: Record<string, string> } = {},
+  ): Promise<{ ok: boolean; output: string }> {
     return runGate(this.toolDeps, command, options)
   }
 
@@ -2134,6 +2247,34 @@ function safeResultText(value: unknown, redact: (text: string) => string = (text
   if (typeof value === 'string') return redact(value)
   if (value === undefined) return ''
   return JSON.stringify(redactJsonValue(value, redact))
+}
+
+/** AgentExecutionInfo -> structuredOutput.execution（仅保留已回传字段，JSON-safe）。 */
+function executionOf(info: AgentExecutionInfo): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (info.conversationId !== undefined) out['conversationId'] = info.conversationId
+  if (info.executionId !== undefined) out['executionId'] = info.executionId
+  if (info.effectiveCwd !== undefined) out['effectiveCwd'] = info.effectiveCwd
+  if (info.worktree !== undefined) {
+    out['worktree'] = { path: info.worktree.path, branch: info.worktree.branch }
+  }
+  return out
+}
+
+/**
+ * subagent 工具输出尾行：续接标识（resume 标识与实际执行环境元数据）。
+ * 模型可把 conversationId / executionId 原样作为下次 resume 入参。
+ */
+function subagentFooter(resumeRef: string | undefined, resolved: AgentExecutionInfo | undefined): string {
+  const parts: string[] = []
+  if (resumeRef !== undefined) parts.push(`resume=${resumeRef}`)
+  if (resolved?.conversationId !== undefined) parts.push(`conversationId=${resolved.conversationId}`)
+  if (resolved?.executionId !== undefined) parts.push(`executionId=${resolved.executionId}`)
+  if (resolved?.effectiveCwd !== undefined) parts.push(`cwd=${resolved.effectiveCwd}`)
+  if (resolved?.worktree !== undefined) {
+    parts.push(`worktree=${resolved.worktree.path}@${resolved.worktree.branch}`)
+  }
+  return parts.length === 0 ? '' : `[subagent ${parts.join(' ')}]`
 }
 
 /** 插件工具原始返回 -> SDK ToolExecutionResult（裸文本/对象统一包 content；无 schema 不传 structuredOutput）。 */
