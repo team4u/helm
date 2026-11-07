@@ -2,7 +2,7 @@
 
 Helm 是以 `pi-durable` 为底座的持久会话微内核。共享契约位于 `@helm/protocol`，运行时与插件宿主位于 `@helm/kernel`，`@helm/node` 通过 HTTP 提供 CLI。
 
-核心、常驻 `builtin:assistant` 和 CLI 已实现；`builtin:herdr` 按需启用，负责终端 Agent 委派；实验性 `builtin:superagent` 按需启用，提供独立中枢、后台 Worker 与两层巡检。Web 外壳和外部触发器后续接入。架构约束见 [AGENTS.md](./AGENTS.md)，目标设计见 [设计文档](./docs/20261106%20helm极简微内核与双7扩展点设计文档.md)。当前验收记录见 [SuperAgent 开发交接](./docs/20261107-SuperAgent开发交接.md)，此前记录见 [Herdr 开发交接](./docs/20261107-Herdr开发交接.md) 与 [核心开发交接](./docs/20261106-核心开发交接.md)。
+核心、常驻 `builtin:assistant` 和 CLI 已实现；`builtin:herdr` 按需启用，负责终端 Agent 委派；实验性 `builtin:superagent` 按需启用，提供独立中枢、后台 Worker 与两层巡检；`builtin:triggers` 按需启用，提供 `cron` 与 `webhook` 入站触发器。Web 外壳后续接入。架构约束见 [AGENTS.md](./AGENTS.md)，目标设计见 [设计文档](./docs/20261106%20helm极简微内核与双7扩展点设计文档.md)。当前验收记录见 [Triggers 开发交接](./docs/20261107-Triggers开发交接.md)，此前记录见 [SuperAgent 开发交接](./docs/20261107-SuperAgent开发交接.md)、[Herdr 开发交接](./docs/20261107-Herdr开发交接.md) 与 [核心开发交接](./docs/20261106-核心开发交接.md)。
 
 需要 Node.js 24.12 或更新版本及 pnpm。
 
@@ -64,6 +64,18 @@ SuperAgent 的编译后冒烟使用临时数据目录、真实 HTTP 与 CLI 子�
 pnpm build
 timeout 50s node scripts/superagent-smoke.mjs
 ```
+
+`builtin:triggers` 同样默认停用，显式启用后提供 `cron` 与 `webhook` 两个入站连接器：事件经 `defang` 防逃逸信封进入 `trigger` 管道，缺省投递根会话，启用 SuperAgent 后由中枢路由；显式目标会话始终直达。webhook 接收端点免 Hub token，用 `x-helm-signature: sha256=<HMAC-SHA256>` 对原始字节验签，secret 仅保存在 `credentials.json`（0600），不经任何模型或公开文档输出。cron 为每计划点至多一次尝试、`catchUp` 合并补跑，不承诺 exactly-once；手动触发是独立新事件。
+
+```bash
+pnpm helm plugins enable builtin:triggers --json
+pnpm helm cron create --id nightly --schedule '0 3 * * *' --text '请汇总今日工作并汇报' --timezone Asia/Shanghai --json
+pnpm helm cron list --json
+pnpm helm webhook create --id ci --secret '请随机生成并仅经人工通道配置' --json
+pnpm helm plugins doc builtin:triggers crons --json
+```
+
+字段、签名生成、curl 示例与交付语义见 [Triggers 开发交接](./docs/20261107-Triggers开发交接.md)。
 
 Herdr 插件默认停用，显式启用后才连接终端服务。插件开关写入 `config.json.pluginEnabled`，重启后沿用。先配置连接，再启用；修改连接配置后需停用并重新启用。在途执行和等待续接的窗格会阻止停用。
 
