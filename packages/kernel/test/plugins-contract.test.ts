@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import {
   HelmError,
   type ConversationSummary,
+  type MaybePromise,
   type PluginDefinition,
   type WorkflowRunSummary,
 } from '@helm/protocol';
@@ -45,7 +46,7 @@ class FakeBackend implements PluginHostBackend {
   events: Array<{ type: string; payload: unknown }> = [];
   /** 会话管理保护记录：(conversationId, pluginId) → 仍生效即存在。 */
   managed = new Map<string, { conversationId: number; pluginId: string }>();
-  askSeqResolvers = new Set<(askId: string) => number | undefined>();
+  askSeqResolvers = new Set<(askId: string) => MaybePromise<number | undefined>>();
   workflowListeners = new Set<(run: WorkflowRunSummary) => void | Promise<void>>();
 
   constructor() {
@@ -93,7 +94,7 @@ class FakeBackend implements PluginHostBackend {
   cancelAsk(): Promise<void> {
     return Promise.resolve();
   }
-  registerAskSeqResolver(resolver: (askId: string) => number | undefined): () => void {
+  registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void {
     this.askSeqResolvers.add(resolver);
     return () => {
       this.askSeqResolvers.delete(resolver);

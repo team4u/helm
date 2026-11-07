@@ -33,6 +33,7 @@ import {
   type AgentGateResult,
   type AskResult,
   type ConversationSummary,
+  type MaybePromise,
   type Profile,
   type WorkflowRunSummary,
 } from '@helm/protocol'
@@ -315,7 +316,7 @@ class FakeBackend implements PluginHostBackend {
   conversations = new Map<number, ConversationSummary>()
   events: Array<{ type: string; payload: unknown }> = []
   notifications: Array<{ title: string; body: string; level: string }> = []
-  askSeqResolvers = new Set<(askId: string) => number | undefined>()
+  askSeqResolvers = new Set<(askId: string) => MaybePromise<number | undefined>>()
   workflowListeners = new Set<(run: WorkflowRunSummary) => void | Promise<void>>()
   createdAsks: Array<Record<string, unknown>> = []
   cancelledAsks: Array<{ id: string; reason?: string }> = []
@@ -359,7 +360,7 @@ class FakeBackend implements PluginHostBackend {
     this.pendingAskResolvers.get(id)?.({ id, status: reason === 'cancelled' ? 'cancelled' : 'superseded', answers: {} })
     this.pendingAskResolvers.delete(id)
   }
-  registerAskSeqResolver(resolver: (askId: string) => number | undefined): () => void {
+  registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void {
     this.askSeqResolvers.add(resolver)
     return () => { this.askSeqResolvers.delete(resolver) }
   }

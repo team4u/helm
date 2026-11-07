@@ -50,7 +50,7 @@ import type {
   ToolResultHookPayload,
   WorkflowRunSummary,
 } from '@helm/protocol'
-import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT } from '@helm/protocol'
+import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT, type MaybePromise } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
 import {
   ArtifactService as SvcArtifactService,
@@ -1995,7 +1995,7 @@ export class KernelRuntime {
     await this.asks.cancelAsk(id, reason ?? 'cancelled')
   }
 
-  registerAskSeqResolver(resolver: (askId: string) => number | undefined): () => void {
+  registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void {
     return this.asks.registerSeqResolver(resolver)
   }
 

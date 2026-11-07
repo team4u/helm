@@ -391,8 +391,8 @@ export interface HelmHostApi {
    */
   createAsk(spec: AskCreateSpec): Promise<AskResult>
   cancelAsk(askId: string, reason?: 'cancelled' | 'superseded'): Promise<void>
-  /** 注册 askId -> 当前 stateChangeSeq 解析器（AskDoc CAS 乐观锁用）；返回注销函数。 */
-  registerAskSeqResolver(resolver: (askId: string) => number | undefined): () => void
+  /** 注册 askId -> 当前 stateChangeSeq 解析器（AskDoc CAS 乐观锁用，可为异步——真实水位需远端 IO）；返回注销函数。 */
+  registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void
   /** 监听工作流 run 终态（completed/failed/aborted，每 run 恰好一次）；插件停用时自动解除。 */
   onWorkflowSettled(listener: (run: WorkflowRunSummary) => MaybePromise<void>): () => void
   emitEvent(type: string, payload: unknown): void

@@ -28,14 +28,14 @@
  */
 
 import type { AskCreateSpec, AskFieldSpec, AskResult, AskSpec } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import { HelmError, type MaybePromise } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
 import { isValidEnvName } from '../services/secret-stash.js'
 import type { HelmStore } from './store.js'
 import type { SecretStash } from '../services/secret-stash.js'
 
-/** 外部目标 seq 解析器（herdr 插件注册：askId -> 目标当前 seq）。 */
-export type AskSeqResolver = (askId: string) => number | undefined
+/** 外部目标 seq 解析器（如 herdr 插件注册）：askId -> 目标当前 seq。可为异步（真实水位需远端 IO）。 */
+export type AskSeqResolver = (askId: string) => MaybePromise<number | undefined>
 
 export interface AskSettled {
   askId: string
@@ -184,7 +184,11 @@ export class AskService {
     return settled
   }
 
-  /** 提交答案：CAS 检查 -> 值校验 -> secret 入 stash -> 结算。 */
+  /**
+   * 提交答案：CAS 检查 -> 值校验 -> secret 入 stash -> 结算。
+   * resolver 可为异步（真实水位需远端 IO）：等待返回后、写入任何终态副作用前
+   * 重读行，等待期间被并发结算/改写则按当前权威状态拒绝或重估。
+   */
   async answerAsk(
     id: string,
     answers: Record<string, string>,
@@ -195,7 +199,6 @@ export class AskService {
     if (row.status !== 'pending') {
       throw new HelmError('ask_already_settled', `AskDoc 已处于 ${row.status} 状态`, 409)
     }
-    const spec = JSON.parse(row.specJson) as AskSpec
 
     // 客户端携带的 seq 与持久水位不同 -> 409 过期视图，不静默覆盖绕过 CAS。
     if (expectedStateSeq !== undefined && row.expectedStateSeq !== undefined && expectedStateSeq !== row.expectedStateSeq) {
@@ -207,22 +210,31 @@ export class AskService {
       )
     }
 
-    // CAS：以持久 spec.expectedStateSeq 为准查目标当前 seq。
+    // CAS：以持久 spec.expectedStateSeq 为准查目标当前 seq。resolver 可能异步，
+    // 等待期间存在真实并发窗口：返回后必须重读行，一切以当前权威状态为准。
+    let spec: AskSpec
     if (row.expectedStateSeq !== undefined) {
-      const current = this.resolveTargetSeq(id)
-      if (current === undefined) {
-        // 有 CAS 水位但无 resolver：目标状态不可知，不能装作校验通过。
-        throw new HelmError(
-          'ask_state_unavailable',
-          `AskDoc ${id} 声明 expectedStateSeq=${row.expectedStateSeq} 但无已注册的 seq resolver，无法校验目标状态`,
-          409,
-          { askId: id, expectedStateSeq: row.expectedStateSeq },
-        )
+      const current = await this.resolveTargetSeq(id)
+      const fresh = this.recheckPendingRow(id, row)
+      if (fresh.expectedStateSeq !== undefined) {
+        if (current === undefined) {
+          // 有 CAS 水位但无 resolver 命中：目标状态不可知，不能装作校验通过。
+          throw new HelmError(
+            'ask_state_unavailable',
+            `AskDoc ${id} 声明 expectedStateSeq=${fresh.expectedStateSeq} 但无已注册的 seq resolver 命中，无法校验目标状态`,
+            409,
+            { askId: id, expectedStateSeq: fresh.expectedStateSeq },
+          )
+        }
+        // 目标 seq 任何不一致（含回退）都 superseded：目标状态已偏离创建时假设。
+        if (current !== fresh.expectedStateSeq) {
+          return this.settle(id, 'superseded')
+        }
       }
-      // 目标 seq 任何不一致（含回退）都 superseded：目标状态已偏离创建时假设。
-      if (current !== row.expectedStateSeq) {
-        return this.settle(id, 'superseded')
-      }
+      spec = JSON.parse(fresh.specJson) as AskSpec
+    } else {
+      // 无 CAS ask 且全同步 resolver 时无任何 await 间隙：保持原同步行为。
+      spec = JSON.parse(row.specJson) as AskSpec
     }
 
     validateAnswersAgainstFields(spec, answers)
@@ -273,10 +285,46 @@ export class AskService {
     await Promise.all(pending.map((ask) => this.settle(ask.id, reason)))
   }
 
-  private resolveTargetSeq(askId: string): number | undefined {
+  /** 等待异步 resolver 之后的行重读：行被删 -> 404；已非 pending -> 409。 */
+  private recheckPendingRow(id: string, stale: { expectedStateSeq?: number }): { expectedStateSeq?: number; specJson: string } {
+    const now = this.store.getAsk(id)
+    if (!now) throw new HelmError('not_found', `AskDoc 不存在：${id}`, 404)
+    if (now.status !== 'pending') {
+      throw new HelmError('ask_already_settled', `等待 seq resolver 期间 AskDoc 已被结算为 ${now.status}`, 409, {
+        askId: id,
+        settledStatus: now.status,
+      })
+    }
+    if (
+      stale.expectedStateSeq !== undefined &&
+      now.expectedStateSeq !== undefined &&
+      stale.expectedStateSeq !== now.expectedStateSeq
+    ) {
+      throw new HelmError(
+        'ask_state_conflict',
+        `等待 seq resolver 期间 AskDoc 持久水位已从 ${stale.expectedStateSeq} 变为 ${now.expectedStateSeq}，以新权威条件为准`,
+        409,
+        { askId: id, previousSeq: stale.expectedStateSeq, storedSeq: now.expectedStateSeq },
+      )
+    }
+    return now
+  }
+
+  private async resolveTargetSeq(askId: string): Promise<number | undefined> {
     for (const resolver of this.seqResolvers) {
-      const value = resolver(askId)
-      if (value !== undefined) return value
+      // resolver 返回非法值（NaN/负/小数/unsafe/坏类型）显式失败：seq 是 CAS 的
+      // 权威事实，绝不截断、不默认 0、不静默跳过装作无解析。
+      const value = await resolver(askId)
+      if (value === undefined) continue
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || !Number.isSafeInteger(value)) {
+        throw new HelmError(
+          'ask_seq_resolver_invalid',
+          `seq resolver 对 AskDoc ${askId} 返回非法水位 ${String(value)}（需非负 safe integer），拒绝猜测`,
+          500,
+          { askId, resolved: value },
+        )
+      }
+      return value
     }
     return undefined
   }
