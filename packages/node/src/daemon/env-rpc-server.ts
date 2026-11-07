@@ -177,21 +177,26 @@ const assertSingleLine = (line: unknown, what: string): string => {
 /** base64 边界校验：标准字母表 + 填充，禁止 Node 宽松解析静默吞非法字符；
  * 解码前校验编码后长度上限（解码后 ≤ 64 MiB），超限显式报错。 */
 const decodeBase64 = (content: string, what: string): Uint8Array => {
-  if (typeof content !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(content)) {
-    throw Object.assign(
-      new Error(`${what} is not valid base64 (standard alphabet)`),
-      { code: 'invalid' },
-    );
+  if (typeof content !== 'string') {
+    throw Object.assign(new Error(`${what} must be a base64 string`), { code: 'invalid' });
   }
-  // base64 每 4 字符解码为 3 字节：编码长度超限即解码后必然超限。
-  const decodedBytes = Math.floor(content.length / 4) * 3;
+  const encodedLimit = Math.ceil(MAX_BINARY_TRANSFER_BYTES / 3) * 4;
+  if (content.length > encodedLimit) {
+    throw Object.assign(new Error(`${what} exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`), { code: 'invalid' });
+  }
+  // 无嵌套重复组，避免大载荷触发正则回溯栈溢出。
+  if (content.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(content)) {
+    throw Object.assign(new Error(`${what} is not valid base64 (standard alphabet)`), { code: 'invalid' });
+  }
+  const padding = content.endsWith('==') ? 2 : content.endsWith('=') ? 1 : 0;
+  const decodedBytes = (content.length / 4) * 3 - padding;
   if (decodedBytes > MAX_BINARY_TRANSFER_BYTES) {
     throw Object.assign(
       new Error(`${what} exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit (decoded size ~${decodedBytes})`),
       { code: 'invalid' },
     );
   }
-  return new Uint8Array(Buffer.from(content, 'base64'));
+  return Buffer.from(content, 'base64');
 };
 
 /**
@@ -727,24 +732,28 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       return unwrap(envFor(cwd).readTextLines(target, { maxLines }));
     },
     async envReadBinaryFile({ path: target, cwd }) {
-      const result = await envFor(cwd).readBinaryFile(target);
-      if (!result.ok) return rpcFail(result.error);
-      // 传输上限：读回的 base64 载荷超 64 MiB 显式拒绝（不静默截断也不撞内存）。
-      if (result.value.byteLength > MAX_BINARY_TRANSFER_BYTES) {
-        return invalidInput(
-          `readBinaryFile result is ${result.value.byteLength} bytes, exceeding the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`,
-        );
+      const opened = await envFor(cwd).openBinaryReader(target, {});
+      if (!opened.ok) return rpcFail(opened.error);
+      const reader = opened.value;
+      try {
+        const info = await reader.info();
+        if (!info.ok) return rpcFail(info.error);
+        if (info.value.size > MAX_BINARY_TRANSFER_BYTES) {
+          return invalidInput(`readBinaryFile result exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`);
+        }
+        // 用同一文件句柄有界读取；检查后文件增长也不会触发无界分配。
+        const result = await reader.read(0, MAX_BINARY_TRANSFER_BYTES + 1);
+        if (!result.ok) return rpcFail(result.error);
+        if (result.value.byteLength > MAX_BINARY_TRANSFER_BYTES) {
+          return invalidInput(`readBinaryFile result exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`);
+        }
+        return { ok: true, value: { base64: Buffer.from(result.value).toString('base64') } };
+      } finally {
+        await reader.close();
       }
-      return { ok: true, value: { base64: Buffer.from(result.value).toString('base64') } };
     },
 
     async envWriteFile({ path: target, content, encoding, cwd }) {
-      // 解码前：base64 编码长度超限时直接拒绝（防先物化巨型字符串再解码）。
-      if (encoding === 'base64' && typeof content === 'string' && content.length > MAX_BINARY_TRANSFER_BYTES) {
-        return invalidInput(
-          `content encoded length ${content.length} exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`,
-        );
-      }
       let bytes: Uint8Array | string;
       try {
         bytes = encoding === 'base64' ? decodeBase64(content, 'content') : content;
@@ -752,7 +761,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         return rpcFail(error);
       }
       // 解码后：真实字节数复验（含 utf8 路径与 base64 解码结果）。
-      const size = typeof bytes === 'string' ? bytes.length : bytes.byteLength;
+      const size = typeof bytes === 'string' ? Buffer.byteLength(bytes, 'utf8') : bytes.byteLength;
       if (size > MAX_BINARY_TRANSFER_BYTES) {
         return invalidInput(
           `content is ${size} bytes, exceeding the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`,
@@ -761,7 +770,14 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       return unwrap(envFor(cwd).writeFile(target, bytes));
     },
     async envAppendFile({ path: target, content, encoding, cwd }) {
-      const bytes = encoding === 'base64' ? decodeBase64(content, 'content') : content;
+      let bytes: Uint8Array | string;
+      try {
+        bytes = encoding === 'base64' ? decodeBase64(content, 'content') : content;
+      } catch (error) {
+        return rpcFail(error);
+      }
+      const size = typeof bytes === 'string' ? Buffer.byteLength(bytes, 'utf8') : bytes.byteLength;
+      if (size > MAX_BINARY_TRANSFER_BYTES) return invalidInput(`content exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`);
       return unwrap(envFor(cwd).appendFile(target, bytes));
     },
     async envFlushFile({ path: target, cwd }) {
@@ -836,7 +852,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       const reader = getReader<BinaryReader>(readerId, 'binary');
       if (reader === undefined) return readerNotFound(readerId);
       // 传输上限：请求的读取长度超 64 MiB 显式拒绝（分页读取由调用方分批进行）。
-      if (!Number.isSafeInteger(length) || length > MAX_BINARY_TRANSFER_BYTES) {
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || length > MAX_BINARY_TRANSFER_BYTES) {
         return invalidInput(
           `length must be a safe integer no greater than ${MAX_BINARY_TRANSFER_BYTES}`,
         );

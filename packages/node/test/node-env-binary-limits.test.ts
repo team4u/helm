@@ -55,8 +55,8 @@ test('envWriteFile：base64 编码长度超限在解码前拒绝', { timeout: 60
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  // 编码长度超 64 MiB：解码前拒绝（防先物化巨型 Buffer）。
-  const huge = 'A'.repeat(LIMIT + 8);
+  // 编码上限按 base64 的 4/3 膨胀计算；超限时在解码前拒绝。
+  const huge = 'A'.repeat(Math.ceil(LIMIT / 3) * 4 + 4);
   const rejected = await server.envWriteFile({ path: 'big.bin', content: huge, encoding: 'base64' });
   assert.equal(rejected.ok, false);
   assert.equal(!rejected.ok && rejected.error.code, 'invalid');
@@ -76,14 +76,15 @@ test('envWriteFile：解码后字节超限复验拒绝', { timeout: 60_000 }, as
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  // 构造解码后超限的合法 base64（含 padding，编码长度低于解码前阈值的
-  // 简单倍数关系不足以绕过：这里编码长度也超限，会被解码前检查拦下；
-  // 换用手绕开编码长度检查的等价路径——utf8 路径的长字符串由解码后
-  // 字节数复验兜底）。
-  const bigUtf8 = 'x'.repeat(LIMIT + 100);
+  // 字符数低于上限但 UTF-8 字节数超限，写入与追加都必须拒绝。
+  const bigUtf8 = '中'.repeat(Math.floor(LIMIT / 3) + 1);
   const rejected = await server.envWriteFile({ path: 'big.txt', content: bigUtf8 });
   assert.equal(rejected.ok, false);
   assert.equal(!rejected.ok && rejected.error.code, 'invalid');
+  const appendRejected = await server.envAppendFile({ path: 'big.txt', content: bigUtf8 });
+  assert.equal(appendRejected.ok, false);
+  assert.equal(!appendRejected.ok && appendRejected.error.code, 'invalid');
+  assert.equal(await fs.stat(path.join(dir, 'big.txt')).then(() => true, () => false), false);
 });
 
 test('envReadBinaryFile：结果超限显式 invalid（不截断充当成功）', { timeout: 60_000 }, async (t) => {
