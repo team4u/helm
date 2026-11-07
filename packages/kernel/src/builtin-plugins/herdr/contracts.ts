@@ -22,7 +22,7 @@ export interface HerdrTransport {
   call(target: HerdrTarget, method: string, params: Record<string, unknown>, options?: HerdrCallOptions): Promise<unknown>
   readOutput(target: HerdrTarget, cwd: string, fileName: string, signal?: AbortSignal): Promise<string>
   removeOutput(target: HerdrTarget, cwd: string, fileName: string, signal?: AbortSignal): Promise<void>
-  runGate(target: HerdrTarget, command: string, cwd: string, signal?: AbortSignal): Promise<AgentGateResult>
+  runGate(target: HerdrTarget, command: string, cwd: string, signal?: AbortSignal, env?: Record<string, string>): Promise<AgentGateResult>
   /** Local event subscription. Errors terminate the stream and are reported to the owner. */
   subscribe(target: HerdrTarget, onEvent: (event: HerdrEvent) => void, onError: (error: unknown) => void): Promise<() => void>
 }
