@@ -650,18 +650,34 @@ test('SSE 未认证 401', { timeout: 60_000 }, async () => {
 // Profiles / Providers / Credentials / Skills / Models
 // ---------------------------------------------------------------------------
 
-test('profiles CRUD（真实 ProfileService）', { timeout: 60_000 }, async () => {
+test('profiles CRUD（真实 ProfileService + system/memory 在线读写）', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const created = await call(handler, 'POST', '/api/profiles', {
-    body: { id: 'researcher', name: '研究员', runtime: { kind: 'herdr', agent: 'agy' } },
+    body: {
+      id: 'researcher',
+      name: '研究员',
+      runtime: { kind: 'herdr', agent: 'agy' },
+      system: '# 研究员系统提示词\n保持严谨。',
+      memory: '# 研究员记忆\n偏好第一性原理。',
+    },
   })
   assert.equal(created.status, 201)
   assert.equal(created.body.id, 'researcher')
+  assert.equal(created.body.system, '# 研究员系统提示词\n保持严谨。')
+  assert.equal(created.body.memory, '# 研究员记忆\n偏好第一性原理。')
   const list = await call(handler, 'GET', '/api/profiles')
   assert.ok(list.body.some((p: any) => p.id === 'researcher'))
-  const put = await call(handler, 'PUT', '/api/profiles/researcher', { body: { name: '资深研究员' } })
+  const put = await call(handler, 'PUT', '/api/profiles/researcher', {
+    body: { name: '资深研究员', system: '# 资深研究员提示词\n升级版。' },
+  })
   assert.equal(put.status, 200)
   assert.equal(put.body.name, '资深研究员')
+  assert.equal(put.body.system, '# 资深研究员提示词\n升级版。')
+  assert.equal(put.body.memory, '# 研究员记忆\n偏好第一性原理。')
+  const got = await call(handler, 'GET', '/api/profiles/researcher')
+  assert.equal(got.status, 200)
+  assert.equal(got.body.system, '# 资深研究员提示词\n升级版。')
+  assert.equal(got.body.memory, '# 研究员记忆\n偏好第一性原理。')
   const del = await call(handler, 'DELETE', '/api/profiles/researcher')
   assert.equal(del.status, 200)
   const gone = await call(handler, 'GET', '/api/profiles/researcher')

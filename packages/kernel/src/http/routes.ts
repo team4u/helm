@@ -16,6 +16,7 @@ import type {
   ArtifactMetadata,
   ConversationStatus,
   PluginConfigFieldSchema,
+  Profile,
   WorkflowRunSummary,
 } from '@helm/protocol'
 import { realpath as nodeFsRealpath, readFile as nodeFsReadFile } from 'node:fs/promises'
@@ -263,12 +264,20 @@ async function route(
 
   // ---- profiles -------------------------------------------------------------
   if (head === 'profiles') {
+    const enrichProfile = async (profile: Profile): Promise<Profile> => {
+      const [system, memory] = await Promise.all([
+        kernel.profiles.getSystem(profile.id).catch(() => ''),
+        kernel.profiles.getMemory(profile.id).catch(() => ''),
+      ])
+      return { ...profile, system, memory }
+    }
     if (second === undefined) {
       if (method === 'GET') return jsonOk(redactor, await kernel.profiles.list())
       if (method === 'POST') {
         const body = await readJsonBody(ctx.request)
         const profile = parseProfileBody(body, { requireId: true })
-        return jsonOk(redactor, await kernel.profiles.save(profile), { status: 201 })
+        const saved = await kernel.profiles.save(profile)
+        return jsonOk(redactor, await enrichProfile(saved), { status: 201 })
       }
       return methodNotAllowed(redactor, method)
     }
@@ -277,7 +286,7 @@ async function route(
       if (method === 'GET') {
         const found = await kernel.profiles.get(profileId)
         if (found === undefined) throw new HelmError('not_found', `profile 不存在: ${profileId}`, 404)
-        return jsonOk(redactor, found)
+        return jsonOk(redactor, await enrichProfile(found))
       }
       if (method === 'PUT') {
         const body = await readJsonBody(ctx.request)
@@ -285,7 +294,8 @@ async function route(
         if (profile.id !== undefined && profile.id !== profileId) {
           throw new ValidationError('body.id（若提供）需与路径参数一致')
         }
-        return jsonOk(redactor, await kernel.profiles.save({ ...profile, id: profileId }))
+        const saved = await kernel.profiles.save({ ...profile, id: profileId })
+        return jsonOk(redactor, await enrichProfile(saved))
       }
       if (method === 'DELETE') {
         // 仍被任何会话绑定的 profile 拒绝删除：否则下一轮 before_turn 找

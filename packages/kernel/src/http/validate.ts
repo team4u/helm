@@ -277,7 +277,9 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   const model = optionalString(body, 'model')
   const tags = optionalStringArray(body, 'tags')
   const runtime = parseProfileRuntime(body.runtime)
-  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'tags', 'runtime']))
+  const system = optionalString(body, 'system', { maxLength: 512 * 1024 })
+  const memory = optionalString(body, 'memory', { maxLength: 512 * 1024 })
+  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'tags', 'runtime', 'system', 'memory']))
   const profile: Profile = { ...(id !== undefined ? { id } : {}) } as Profile
   if (name !== undefined) profile.name = name
   if (model !== undefined) {
@@ -291,6 +293,8 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
     profile.tags = tags
   }
   if (runtime !== undefined) profile.runtime = runtime
+  if (system !== undefined) profile.system = system
+  if (memory !== undefined) profile.memory = memory
   return profile
 }
 

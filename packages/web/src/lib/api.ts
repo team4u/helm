@@ -1,0 +1,399 @@
+import type {
+  ActionManifest,
+  ArtifactMetadata,
+  AskSpec,
+  ConversationDetail,
+  ConversationInit,
+  ConversationInputResult,
+  ConversationPatch,
+  ConversationStatus,
+  ConversationSummary,
+  InputOrigin,
+  PluginConfigFieldSchema,
+  PluginSummary,
+  Profile,
+  ProviderConfig,
+  PublicPluginDoc,
+  SkillSummary,
+  WhenBusy,
+  WorkflowRunRequest,
+  WorkflowRunSummary,
+} from '@helm/protocol'
+
+export interface SubmitInputPayload {
+  text: string
+  origin?: InputOrigin
+  whenBusy?: WhenBusy
+  meta?: Record<string, unknown>
+  attachments?: string[]
+}
+
+export interface SavedWorkflowSummary {
+  name: string
+  description: string
+  whenToUse?: string
+  phases?: Array<{ title: string; detail?: string; model?: string }>
+}
+
+const TOKEN_STORAGE_KEY = 'helm:token'
+
+export function getStoredToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function setStoredToken(token: string | null): void {
+  try {
+    if (token === null || token === '') {
+      localStorage.removeItem(TOKEN_STORAGE_KEY)
+    } else {
+      localStorage.setItem(TOKEN_STORAGE_KEY, token)
+    }
+  } catch {
+    // 忽略无痕模式 localStorage 异常
+  }
+}
+
+export class ApiClientError extends Error {
+  readonly code: string
+  readonly status: number
+  readonly details?: Record<string, unknown>
+
+  constructor(code: string, message: string, status: number, details?: Record<string, unknown>) {
+    super(message)
+    this.name = 'ApiClientError'
+    this.code = code
+    this.status = status
+    this.details = details
+  }
+}
+
+function buildAuthHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { ...(extra ?? {}) }
+  const token = getStoredToken()
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return headers
+}
+
+async function parseErrorResponse(res: Response): Promise<ApiClientError> {
+  try {
+    const data = (await res.json()) as {
+      error?: { code?: string; message?: string; details?: Record<string, unknown> }
+    }
+    if (data && typeof data === 'object' && data.error) {
+      return new ApiClientError(
+        data.error.code ?? `http_${res.status}`,
+        data.error.message ?? `请求失败 (${res.status})`,
+        res.status,
+        data.error.details,
+      )
+    }
+  } catch {
+    // 非 JSON 错误响应
+  }
+  return new ApiClientError(`http_${res.status}`, `请求失败 (${res.status} ${res.statusText})`, res.status)
+}
+
+export async function apiRequest<T>(
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  const hasBody = body !== undefined
+  const headers = buildAuthHeaders(hasBody ? { 'Content-Type': 'application/json' } : undefined)
+  const res = await fetch(path, {
+    method,
+    headers,
+    body: hasBody ? JSON.stringify(body) : undefined,
+    signal,
+  })
+  if (!res.ok) {
+    throw await parseErrorResponse(res)
+  }
+  return (await res.json()) as T
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+export interface AuthStatusResponse {
+  configured: boolean
+  authenticated: boolean
+}
+
+export interface AuthTokenResponse {
+  token: string
+  expiresAt: string
+}
+
+export const authApi = {
+  status: () => apiRequest<AuthStatusResponse>('GET', '/api/auth/status'),
+  setup: (password: string) => apiRequest<AuthTokenResponse>('POST', '/api/auth/setup', { password }),
+  login: (password: string) => apiRequest<AuthTokenResponse>('POST', '/api/auth/login', { password }),
+}
+
+// ---------------------------------------------------------------------------
+// Conversations & Context Ops & Artifacts
+// ---------------------------------------------------------------------------
+
+export interface ConversationListFilter {
+  profileId?: string
+  tag?: string
+  status?: ConversationStatus
+}
+
+export const conversationsApi = {
+  list(filter?: ConversationListFilter): Promise<ConversationSummary[]> {
+    const params = new URLSearchParams()
+    if (filter?.profileId) params.set('profileId', filter.profileId)
+    if (filter?.tag) params.set('tag', filter.tag)
+    if (filter?.status) params.set('status', filter.status)
+    const qs = params.toString()
+    return apiRequest<ConversationSummary[]>('GET', `/api/conversations${qs ? `?${qs}` : ''}`)
+  },
+  getDetail(id: number, opts?: { limit?: number; cursor?: string }): Promise<ConversationDetail> {
+    const params = new URLSearchParams()
+    if (opts?.limit !== undefined) params.set('limit', String(opts.limit))
+    if (opts?.cursor) params.set('cursor', opts.cursor)
+    const qs = params.toString()
+    return apiRequest<ConversationDetail>('GET', `/api/conversations/${id}${qs ? `?${qs}` : ''}`)
+  },
+  create(init?: ConversationInit): Promise<ConversationSummary> {
+    return apiRequest<ConversationSummary>('POST', '/api/conversations', init ?? {})
+  },
+  patch(id: number, patch: ConversationPatch): Promise<ConversationSummary> {
+    return apiRequest<ConversationSummary>('PATCH', `/api/conversations/${id}`, patch)
+  },
+  remove(id: number): Promise<{ ok: boolean }> {
+    return apiRequest<{ ok: boolean }>('DELETE', `/api/conversations/${id}`)
+  },
+  submitInput(
+    id: number,
+    input: SubmitInputPayload,
+    opts?: { wait?: boolean },
+  ): Promise<{ submissionId: string } | ConversationInputResult> {
+    const qs = opts?.wait ? '?wait=1' : ''
+    return apiRequest<{ submissionId: string } | ConversationInputResult>(
+      'POST',
+      `/api/conversations/${id}/input${qs}`,
+      input,
+    )
+  },
+  abort(id: number): Promise<{ ok: boolean }> {
+    return apiRequest<{ ok: boolean }>('POST', `/api/conversations/${id}/abort`)
+  },
+  reset(id: number, handoff?: string): Promise<ConversationSummary> {
+    return apiRequest<ConversationSummary>(
+      'POST',
+      `/api/conversations/${id}/reset`,
+      handoff !== undefined && handoff.trim() !== '' ? { handoff } : {},
+    )
+  },
+  compact(id: number, instructions?: string): Promise<{ ok: boolean; taskId: string }> {
+    return apiRequest<{ ok: boolean; taskId: string }>(
+      'POST',
+      `/api/conversations/${id}/compact`,
+      instructions !== undefined && instructions.trim() !== '' ? { instructions } : {},
+    )
+  },
+  fork(id: number, entryId: string, title?: string): Promise<ConversationSummary> {
+    return apiRequest<ConversationSummary>('POST', `/api/conversations/${id}/fork`, {
+      entryId,
+      ...(title !== undefined && title.trim() !== '' ? { title } : {}),
+    })
+  },
+  listArtifacts(id: number): Promise<ArtifactMetadata[]> {
+    return apiRequest<ArtifactMetadata[]>('GET', `/api/conversations/${id}/artifacts`)
+  },
+  async uploadArtifact(id: number, file: File): Promise<ArtifactMetadata> {
+    const bytes = await file.arrayBuffer()
+    const headers = buildAuthHeaders({
+      'Content-Type': 'application/octet-stream',
+      'X-Artifact-Filename': encodeURIComponent(file.name || 'attachment.bin'),
+      ...(file.type ? { 'X-Artifact-Mime-Type': file.type } : {}),
+    })
+    const res = await fetch(`/api/conversations/${id}/artifacts`, {
+      method: 'POST',
+      headers,
+      body: bytes,
+    })
+    if (!res.ok) {
+      throw await parseErrorResponse(res)
+    }
+    return (await res.json()) as ArtifactMetadata
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Artifacts Content (带 Bearer 鉴权的二进制/文本拉取)
+// ---------------------------------------------------------------------------
+
+export const artifactsApi = {
+  async fetchBlob(artifactId: string, inline = true): Promise<Blob> {
+    const res = await fetch(
+      `/api/artifacts/${encodeURIComponent(artifactId)}/content${inline ? '?inline=1' : ''}`,
+      { headers: buildAuthHeaders() },
+    )
+    if (!res.ok) {
+      throw await parseErrorResponse(res)
+    }
+    return await res.blob()
+  },
+  async fetchText(artifactId: string): Promise<string> {
+    const blob = await this.fetchBlob(artifactId, true)
+    return await blob.text()
+  },
+  async downloadToBrowser(artifactId: string, filename: string): Promise<void> {
+    const blob = await this.fetchBlob(artifactId, false)
+    const url = URL.createObjectURL(blob)
+    try {
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 5_000)
+    }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Asks
+// ---------------------------------------------------------------------------
+
+export const asksApi = {
+  list: () => apiRequest<AskSpec[]>('GET', '/api/asks'),
+  answer: (askId: string, answers: Record<string, string>, expectedStateSeq?: number) =>
+    apiRequest<{ ok: boolean }>('POST', `/api/asks/${encodeURIComponent(askId)}/answer`, {
+      answers,
+      ...(expectedStateSeq !== undefined ? { expectedStateSeq } : {}),
+    }),
+  cancel: (askId: string) =>
+    apiRequest<{ ok: boolean }>('POST', `/api/asks/${encodeURIComponent(askId)}/cancel`),
+}
+
+// ---------------------------------------------------------------------------
+// Profiles / Providers / Credentials / Models / Skills
+// ---------------------------------------------------------------------------
+
+export interface ModelDescriptor {
+  id: string
+  provider: string
+  modelId: string
+  label?: string
+}
+
+export interface CredentialStatus {
+  id: string
+  configured: boolean
+}
+
+export const assetsApi = {
+  listProfiles: () => apiRequest<Profile[]>('GET', '/api/profiles'),
+  getProfile: (id: string) => apiRequest<Profile>('GET', `/api/profiles/${encodeURIComponent(id)}`),
+  createProfile: (profile: Profile) => apiRequest<Profile>('POST', '/api/profiles', profile),
+  updateProfile: (id: string, profile: Omit<Profile, 'id'> & { id?: string }) =>
+    apiRequest<Profile>('PUT', `/api/profiles/${encodeURIComponent(id)}`, profile),
+  deleteProfile: (id: string) =>
+    apiRequest<{ ok: boolean }>('DELETE', `/api/profiles/${encodeURIComponent(id)}`),
+
+  listProviders: () => apiRequest<ProviderConfig[]>('GET', '/api/providers'),
+  saveProviders: (providers: ProviderConfig[]) =>
+    apiRequest<ProviderConfig[]>('PUT', '/api/providers', { providers }),
+
+  listCredentials: () => apiRequest<CredentialStatus[]>('GET', '/api/credentials'),
+  setCredential: (id: string, value: string) =>
+    apiRequest<{ ok: boolean }>('PUT', `/api/credentials/${encodeURIComponent(id)}`, { value }),
+  deleteCredential: (id: string) =>
+    apiRequest<{ ok: boolean }>('DELETE', `/api/credentials/${encodeURIComponent(id)}`),
+
+  listModels: () => apiRequest<ModelDescriptor[]>('GET', '/api/models'),
+
+  listSkills: () => apiRequest<SkillSummary[]>('GET', '/api/skills'),
+  readSkill: (id: string, path?: string) => {
+    const qs = path ? `?path=${encodeURIComponent(path)}` : ''
+    return apiRequest<{ text: string }>('GET', `/api/skills/${encodeURIComponent(id)}${qs}`)
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Plugins / Actions / Public Docs
+// ---------------------------------------------------------------------------
+
+export interface PluginConfigResponse {
+  values: Record<string, unknown>
+  schema: Record<string, PluginConfigFieldSchema>
+}
+
+export const pluginsApi = {
+  list: () => apiRequest<PluginSummary[]>('GET', '/api/plugins'),
+  enable: (id: string) =>
+    apiRequest<PluginSummary[]>('POST', `/api/plugins/${encodeURIComponent(id)}/enable`),
+  disable: (id: string) =>
+    apiRequest<PluginSummary[]>('POST', `/api/plugins/${encodeURIComponent(id)}/disable`),
+  getConfig: (id: string) =>
+    apiRequest<PluginConfigResponse>('GET', `/api/plugins/${encodeURIComponent(id)}/config`),
+  setConfig: (id: string, values: Record<string, unknown>) =>
+    apiRequest<{ ok: boolean }>('PUT', `/api/plugins/${encodeURIComponent(id)}/config`, { values }),
+  getPublicDoc: (pluginId: string, name: string) =>
+    apiRequest<PublicPluginDoc>(
+      'GET',
+      `/api/plugins/${encodeURIComponent(pluginId)}/docs/${encodeURIComponent(name)}`,
+    ),
+  listActions: () => apiRequest<ActionManifest[]>('GET', '/api/actions'),
+  invokeAction: <T = unknown>(
+    pluginId: string,
+    actionId: string,
+    input: unknown,
+    conversationId?: number,
+  ) =>
+    apiRequest<T>(
+      'POST',
+      `/api/actions/${encodeURIComponent(pluginId)}/${encodeURIComponent(actionId)}`,
+      {
+        input: input ?? {},
+        ...(conversationId !== undefined ? { conversationId } : {}),
+      },
+    ),
+}
+
+// ---------------------------------------------------------------------------
+// Workflows & Search
+// ---------------------------------------------------------------------------
+
+export interface SearchHitItem {
+  conversationId: number
+  conversationTitle?: string
+  entryId: string
+  snippet: string
+  createdAt?: string
+  [key: string]: unknown
+}
+
+export const workflowsApi = {
+  listSaved: () => apiRequest<SavedWorkflowSummary[]>('GET', '/api/workflows'),
+  listRuns: (conversationId?: number) => {
+    const qs = conversationId !== undefined ? `?conversationId=${conversationId}` : ''
+    return apiRequest<WorkflowRunSummary[]>('GET', `/api/workflows/runs${qs}`)
+  },
+  getRun: (runId: string) =>
+    apiRequest<WorkflowRunSummary>('GET', `/api/workflows/runs/${encodeURIComponent(runId)}`),
+  run: (req: WorkflowRunRequest, wait?: boolean) =>
+    apiRequest<WorkflowRunSummary>('POST', `/api/workflows/run${wait ? '?wait=1' : ''}`, req),
+  abort: (runId: string) =>
+    apiRequest<{ ok: boolean }>('POST', `/api/workflows/runs/${encodeURIComponent(runId)}/abort`),
+}
+
+export const searchApi = {
+  query: (q: string) =>
+    apiRequest<SearchHitItem[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
+}

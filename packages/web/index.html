@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Helm — 极简微内核个人助理与多智能体主控台</title>
+    <script>
+      ;(function () {
+        try {
+          var saved = localStorage.getItem('helm:theme')
+          var theme = saved === 'dark' || saved === 'light' ? saved : 'light'
+          document.documentElement.setAttribute('data-theme', theme)
+        } catch (_) {
+          document.documentElement.setAttribute('data-theme', 'light')
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

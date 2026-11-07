@@ -10,6 +10,7 @@
     "test": "timeout 180s tsx --test packages/*/test/*.test.ts",
     "dev": "pnpm dev:kernel",
     "dev:kernel": "tsx packages/kernel/src/main.ts",
+    "dev:web": "pnpm --filter @helm/web dev",
     "helm": "tsx packages/node/src/cli/index.ts"
   },
   "devDependencies": {

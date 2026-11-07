@@ -10,11 +10,15 @@
 export interface Profile {
   id: string
   name?: string
-  /** Profile 绑定的系统提示词与记忆由文件承载，此处仅留扩展位。 */
+  /** Profile 绑定的系统提示词与记忆由文件承载，详情接口（GET/POST/PUT）附带全文，profile.json 落盘时剥离。 */
   model?: string
   /** 作为 subagent / 工作流节点调用时的外部执行配置；持久会话仍由 pi-durable 承载。 */
   runtime?: ProfileRuntime
   tags?: string[]
+  /** SYSTEM.md 全文（详情接口读写，不写入 profile.json）。 */
+  system?: string
+  /** MEMORY.md 全文（详情接口读写，不写入 profile.json）。 */
+  memory?: string
 }
 
 /** Profile 绑定的外部 Agent 运行时配置（当前仅 herdr 一种 kind）。 */

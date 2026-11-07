@@ -172,14 +172,29 @@ export class ProfileService {
     return normalizeProfile(value, id)
   }
 
-  /** 新建或整体保存 profile。输入先经边界校验。 */
+  /** 新建或整体保存 profile（若携带 system / memory 则原子同步至 SYSTEM.md / MEMORY.md，不写入 profile.json）。 */
   async save(input: unknown): Promise<Profile> {
+    if (!isPlainObject(input)) throw new Error('profile 必须是对象')
+    const rawSystem = input['system']
+    if (rawSystem !== undefined && typeof rawSystem !== 'string') {
+      throw new Error('profile system 必须是字符串')
+    }
+    const rawMemory = input['memory']
+    if (rawMemory !== undefined && typeof rawMemory !== 'string') {
+      throw new Error('profile memory 必须是字符串')
+    }
     const profile = validateProfileInput(input)
     const dir = profileDir(this.dataDir, profile.id)
     const existing = await this.get(profile.id)
     await atomicWriteJson(join(dir, 'profile.json'), profile)
-    if (existing === undefined) {
+    if (rawSystem !== undefined) {
+      await this.updateSystem(profile.id, rawSystem)
+    } else if (existing === undefined) {
       await atomicWriteFile(join(dir, 'SYSTEM.md'), SYSTEM_DEFAULT)
+    }
+    if (rawMemory !== undefined) {
+      await this.updateMemory(profile.id, rawMemory, 'replace')
+    } else if (existing === undefined) {
       await atomicWriteFile(join(dir, 'MEMORY.md'), MEMORY_DEFAULT)
     }
     return profile
@@ -197,6 +212,16 @@ export class ProfileService {
   async getSystem(id: string): Promise<string> {
     assertProfileId(id)
     return readTextFile(join(profileDir(this.dataDir, id), 'SYSTEM.md'))
+  }
+
+  async updateSystem(id: string, text: string): Promise<string> {
+    assertProfileId(id)
+    if (typeof text !== 'string') throw new Error('system 文本必须是字符串')
+    const path = join(profileDir(this.dataDir, id), 'SYSTEM.md')
+    return withFileLock(path, async () => {
+      await atomicWriteFile(path, text)
+      return text
+    })
   }
 
   async getMemory(id: string): Promise<string> {
