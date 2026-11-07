@@ -9,15 +9,8 @@
  *   （models.refresh / POST /api/models/refresh）必须把 magpie 失败显式呈现在
  *   errors 中，绝不因 provider 静默吞错而弹「刷新成功」；
  * - 公开 status doc 与动作输出绝不携带 apiKey / token（密钥只经 Bearer 头）。
- *
- * ctx.provider 跨 worktree 接口时序说明：通用插件 Provider 注册表
- * （ctx.provider(provider)）由并行分支实现并由主代理接线到
- * PluginHostOptions.providers；本插件按该契约直接调用。当前宿主尚未实现时
- * asMagpieContext 显式报错（注册失败回滚），绝不静默降级为「已启用但
- * provider 未挂载」的虚假状态。
  */
-import { HelmError, type HelmPluginContext, type PluginDefinition } from '@helm/protocol'
-import type { Provider } from '@earendil-works/pi-ai'
+import type { PluginDefinition } from '@helm/protocol'
 
 export const MAGPIE_PLUGIN_ID = 'builtin:magpie'
 
@@ -118,39 +111,18 @@ export interface MagpieStatusDoc {
   summaryText: string
   quotas: MagpieStatusQuota[]
   routes: MagpieStatusRoute[]
+  /** 业务侧诊断（脱敏）：配额 / 路由轨迹不可用的原因等；空数组表示无诊断。 */
+  diagnostics: string[]
 }
 
 /** 公开状态文档名。 */
 export const MAGPIE_STATUS_DOC = 'status'
 
 // ---------------------------------------------------------------------------
-// ctx.provider 契约（并行分支实现，主代理接线）
+// ctx.provider 契约
 // ---------------------------------------------------------------------------
 
-/**
- * 通用插件 Provider 注册上下文：definePlugin 期间声明，宿主在 service.start
- * 前完成注册、service.stop 后注销并跟踪归属回滚。
- */
-export interface MagpiePluginContext extends HelmPluginContext {
-  provider(provider: Provider): void
-}
-
-/**
- * 将宿主传入的 ctx 适配为带 provider 注册能力的形态。
- * 宿主尚未实现 ctx.provider 时显式报错（注册失败整体回滚），
- * 绝不静默降级为「插件已启用但 provider 未挂载」。
- */
-export function asMagpieContext(ctx: HelmPluginContext): MagpiePluginContext {
-  const candidate = ctx as Partial<MagpiePluginContext>
-  if (typeof candidate.provider !== 'function') {
-    throw new HelmError(
-      'magpie_provider_registry_unavailable',
-      `插件 ${MAGPIE_PLUGIN_ID} 需要宿主 ctx.provider 注册表（PluginHostOptions.providers）；当前宿主未实现，拒绝注册`,
-      500,
-      { pluginId: MAGPIE_PLUGIN_ID },
-    )
-  }
-  return ctx as MagpiePluginContext
-}
+// 真实宿主（@helm/protocol HelmPluginContext）已内置 ctx.provider 注册能力；
+// 跨 worktree 过渡期的 MagpiePluginContext / asMagpieContext 适配层已删除。
 
 export type MagpiePluginFactory = (deps: MagpiePluginDependencies) => PluginDefinition

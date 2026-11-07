@@ -66,13 +66,34 @@ export function isLoopback(root: string): boolean {
  * - apiKey 显式配置（远端网关密钥）→ true；
  * - 仅环境变量配置 → true（用户自己指明了网关）；
  * - 无任何配置回落默认 loopback → false。
+ *
+ * 诚实性纪律：显式配置的 gatewayUrl / 非空 MAGPIE_GW_URL / MAGPIE_ADDR
+ * 无法解析为合法 http(s) 根地址时直接抛 magpie_invalid_gateway_url——
+ * 静默回退本机默认等于把请求发给用户没选的网关（且可能带错 token）。
  */
 export function resolveGateway(
   config: MagpiePluginConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): MagpieGatewayRef {
-  const configuredUrl = normalizeRoot(config.gatewayUrl)
-  const envUrl = normalizeRoot(env[MAGPIE_ROOT_ENV]) ?? normalizeRoot(env[MAGPIE_ADDR_ENV])
+  const invalid = (source: 'gatewayUrl' | 'env', raw: string): HelmError =>
+    new HelmError(
+      'magpie_invalid_gateway_url',
+      `Magpie 网关地址配置无法解析为 http(s) 根地址：${source === 'gatewayUrl' ? '插件配置 gatewayUrl' : '环境变量 MAGPIE_GW_URL / MAGPIE_ADDR'} = ${JSON.stringify(raw)}`,
+      400,
+      { source, value: raw },
+    )
+  const configuredRaw = config.gatewayUrl?.trim()
+  if (configuredRaw) {
+    const normalized = normalizeRoot(configuredRaw)
+    if (normalized === undefined) throw invalid('gatewayUrl', configuredRaw)
+  }
+  const envRaw = env[MAGPIE_ROOT_ENV]?.trim() || env[MAGPIE_ADDR_ENV]?.trim()
+  if (envRaw) {
+    const normalized = normalizeRoot(envRaw)
+    if (normalized === undefined) throw invalid('env', envRaw)
+  }
+  const configuredUrl = configuredRaw ? normalizeRoot(configuredRaw)! : undefined
+  const envUrl = envRaw ? normalizeRoot(envRaw)! : undefined
   const root = configuredUrl ?? envUrl ?? normalizeRoot(DEFAULT_MAGPIE_ROOT)!
   const token = config.apiKey?.trim() || DEFAULT_MAGPIE_TOKEN
   const hasApiKey = Boolean(config.apiKey?.trim())
@@ -94,7 +115,14 @@ export function gatewayError(code: string, message: string, status: number, deta
   return new HelmError(code, message, status, details)
 }
 
-/** GET 网关端点为 JSON；失败 throw（bounded wait，可取消）。 */
+/** 从错误文本中剥离已知 token（网关错误页可能回显 Authorization 头或 token 本体）。 */
+function stripTokens(text: string, token: string): string {
+  let out = text.replace(/Bearer\s+\S+/g, 'Bearer ***')
+  if (token.length > 0) out = out.split(token).join('***')
+  return out
+}
+
+/** GET 网关端点为 JSON；失败 throw（bounded wait，可取消；错误文本脱敏）。 */
 export async function fetchJson(
   url: string,
   token: string,
@@ -102,6 +130,8 @@ export async function fetchJson(
   fetchImpl: typeof fetch,
   timeoutMs = 8_000,
 ): Promise<unknown> {
+  // signal 在 fetch 前已 abort：立即终止，绝不发起请求
+  signal.throwIfAborted()
   const controller = new AbortController()
   const abort = () => controller.abort(signal.reason)
   signal.addEventListener('abort', abort, { once: true })
@@ -113,7 +143,7 @@ export async function fetchJson(
     })
     if (!response.ok) {
       const body = await response.text().catch(() => '')
-      const detail = body.trim().slice(0, 200)
+      const detail = stripTokens(body.trim(), token).slice(0, 200)
       throw new Error(`${url} answered ${response.status}${detail ? `: ${detail}` : ''}`)
     }
     return (await response.json()) as unknown
