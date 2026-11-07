@@ -407,7 +407,7 @@ describe('herdr transport local gate', () => {
     const result = await withTimeout(
       transport.runGate({}, 'test "$GATE_SECRET" = "g-123" && test -z "$HOME" && echo clean', process.cwd(), undefined, { GATE_SECRET: 'g-123' }),
     )
-    assert.equal(result.ok, true)
+    assert.ok(result.ok, result.output)
     assert.ok(result.output.includes('clean'))
   })
 
