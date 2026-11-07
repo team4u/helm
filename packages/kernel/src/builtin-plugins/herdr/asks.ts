@@ -7,8 +7,9 @@
  *    重复发键；wait 短暂返回同 blocked seq 同理直接吞掉（等真实进展）。
  * 2. 先登记条目再启动 createAsk：ask.upsert 可能同步回调（终端先处理 →
  *    cancelAsk），登记必须先于任何可见副作用。
- * 3. createAsk 首个 await 落库前终端 seq 已推进：cancelAsk 可能 404（ask
- *    尚未入库），此时条目标记 settled 由事件路径收尾，绝不留永不结算的旧审批。
+ * 3. createAsk 404 竞态（ask 未入库已被事件路径销单）：事件路径销单只清
+ *    协调器条目；owner 若随后 createAsk 成功，markPending 重建条目后由
+ *    宿主结算通道收尾，绝不留下无人认领的 pending Ask。
  * 4. 去重键 = herdr:<machine|local>:<paneId>:<stateChangeSeq>（Ask 预分配 ID
  *    同形）；条目内含结算通道，双路径（socket 事件与 spawn wait）中先到者
  *    成为 owner 负责 createAsk，后到者等待同一结算 promise。
@@ -75,7 +76,7 @@ export class AskSettlement {
 
 export class AskCoordinator {
   private readonly entries_map = new Map<string, AskEntry>()
-  /** key -> 结算通道（owner 建立；条目清除时若未结算则 superseded 兜底）。 */
+  /** askId（同 key 形）-> 结算通道；与 entries_map 键空间不同（防 NaN 误查）。 */
   private readonly settlements = new Map<string, AskSettlement>()
   private readonly onChange: () => void
 
@@ -114,7 +115,7 @@ export class AskCoordinator {
   }
 
   /**
-   * 登记 blocked 状态（任何 await 之前完成——要求 2）：
+   * 登记 blocked 状态（任何 await 之前完成）：
    * - 该 (pane,seq) 无条目 -> owner（负责 createAsk + settle）；
    * - 已有条目（creating/pending/sent/settled 任一 phase）-> duplicate，
    *   绝不重建同 ID Ask、绝不重发键。
@@ -136,9 +137,16 @@ export class AskCoordinator {
     return { owner: entry }
   }
 
-  /** createAsk 已实际发出（首个 await 返回后；此前 cancelAsk 404 属预期）。 */
+  /**
+   * createAsk 调用已真实发出（首个 await 返回后）。
+   * 创建路径可能已被事件路径销单清除条目（404 竞态）：若宿主 createAsk 实际
+   * 成功（未抛 404），重建条目为 pending——后续宿主终态回调有处认领；
+   * 若调用方随后确认 ask 已被销（cancelAsk 404），用 failCreate 清除。
+   */
   markPending(entry: AskEntry): void {
-    if (this.entries_map.get(entry.key) !== entry) return
+    const existing = this.entries_map.get(entry.key)
+    if (existing !== undefined && existing !== entry) return
+    this.entries_map.set(entry.key, entry)
     if (entry.phase === 'creating') {
       entry.phase = 'pending'
       this.onChange()
@@ -154,36 +162,51 @@ export class AskCoordinator {
     this.onChange()
   }
 
-  /** 创建失败（IO/宿主错误）：条目移除（允许后续重试），错误由调用方上抛。 */
+  /** 创建失败（IO/宿主错误/销单确认）：条目移除（允许后续重试），错误由调用方上抛。 */
   failCreate(entry: AskEntry): void {
-    if (this.entries_map.get(entry.key) !== entry) return
+    if (this.entries_map.get(entry.key) !== entry) {
+      // 已被事件路径销单清除：仍兜底结算其通道，等待方不得悬挂。
+      this.settleChannelOf(entry)
+      return
+    }
     this.removeEntry(entry)
     this.onChange()
   }
 
   /** owner 绑定结算通道（此后等待方可等）。 */
   bindSettlement(entry: AskEntry): AskSettlement {
-    let channel = this.settlements.get(entry.key)
+    let channel = this.settlements.get(entry.askId)
     if (!channel) {
       channel = new AskSettlement()
-      this.settlements.set(entry.key, channel)
+      this.settlements.set(entry.askId, channel)
     }
     return channel
   }
 
   /** 等待方获取结算通道（未绑定时返回 undefined——owner 尚未就绪，调用方重试）。 */
   settlementOf(entry: AskEntry): AskSettlement | undefined {
-    return this.settlements.get(entry.key)
+    return this.settlements.get(entry.askId)
   }
 
   get(machine: string | undefined, paneId: string, seq: number): AskEntry | undefined {
     return this.entries_map.get(askKey(machine, paneId, seq))
   }
 
-  /** CAS seq 解析器：askId -> 创建时的目标 seq（answerAsk CAS 乐观锁用）。 */
-  seqResolver(askId: string): number | undefined {
-    for (const entry of this.entries_map.values()) if (entry.askId === askId) return entry.seq
-    return undefined
+  /**
+   * CAS seq 解析器（异步权威版）：askId -> 该 Ask 目标 pane 的**当前真实**
+   * state_change_seq（agent.get 现查，绝不返回创建时的 entry.seq——CAS 的
+   * 意义正是发现「创建后终端已按键推进」）。归属校验：askId 三段必须与
+   * 条目 (machine, paneId, seq) 完全一致，防止伪造 id 越权探测他人窗格。
+   */
+  seqResolver(
+    askId: string,
+    authority: (machine: string | undefined, paneId: string) => Promise<number | undefined>,
+  ): Promise<number | undefined> {
+    const parsed = parseAskId(askId)
+    if (parsed === undefined) return Promise.resolve(undefined)
+    const entry = this.entries_map.get(askKey(parsed.machine, parsed.paneId, parsed.seq))
+    if (entry === undefined || entry.askId !== askId) return Promise.resolve(undefined)
+    return authority(parsed.machine, parsed.paneId)
   }
 
   /** 该 (pane,seq) 是否已发过键（防重发判断）。 */
@@ -219,19 +242,40 @@ export class AskCoordinator {
     this.settlements.clear()
   }
 
+  private settleChannelOf(entry: AskEntry): void {
+    const channel = this.settlements.get(entry.askId)
+    if (channel) {
+      channel.settle({ status: 'superseded', answers: {} })
+      this.settlements.delete(entry.askId)
+    }
+  }
+
   private removeEntry(entry: AskEntry): void {
     this.entries_map.delete(entry.key)
-    const channel = this.settlements.get(entry.key)
-    if (channel) {
-      // 条目移除但通道未结算（owner 中途失败/pane 关闭）：兜底 superseded。
-      channel.settle({ status: 'superseded', answers: {} })
-      this.settlements.delete(entry.key)
-    }
+    this.settleChannelOf(entry)
   }
 }
 
 export function askKey(machine: string | undefined, paneId: string, seq: number): string {
   return `herdr:${machine ?? 'local'}:${paneId}:${seq}`
+}
+
+/** askId 即 askKey 字面量；machine 段原样保留（不折叠 local，防解析歧义）。 */
+function parseAskId(askId: string): { machine: string | undefined; paneId: string; seq: number } | undefined {
+  if (!askId.startsWith('herdr:')) return undefined
+  const rest = askId.slice('herdr:'.length)
+  const lastColon = rest.lastIndexOf(':')
+  if (lastColon <= 0) return undefined
+  const panePart = rest.slice(0, lastColon)
+  const seqPart = rest.slice(lastColon + 1)
+  const seq = Number(seqPart)
+  if (!Number.isSafeInteger(seq) || seq < 0 || seqPart !== String(seq)) return undefined
+  const paneColon = panePart.indexOf(':')
+  if (paneColon <= 0) return undefined
+  const machine = panePart.slice(0, paneColon)
+  const paneId = panePart.slice(paneColon + 1)
+  if (paneId === '') return undefined
+  return { machine: machine === 'local' ? undefined : machine, paneId, seq }
 }
 
 /**

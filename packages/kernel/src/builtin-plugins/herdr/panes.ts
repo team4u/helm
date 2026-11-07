@@ -1,32 +1,42 @@
 /**
- * 受管窗格登记表：paneId -> 归属/父子/workflow/实际 cwd/目标机/清理通道。
+ * 受管窗格登记表：scopeKey(machine, paneId) -> 归属/父子/workflow/实际 cwd/目标/清理通道。
  *
  * 职责：
- * - 记录本插件创建的每个 Herdr 窗格（tab/worktree 两种形态）；
- * - 支持同 workflow 或同父回合 resume 定位；
- * - 区分「成功保活待结算」与「失败保留现场」（失败 pane 不参与自动清理与
- *   liveTasks 保活，重启对账也不当普通 ended orphan 回收）；
- * - 持久化镜像（ctx.doc，非机密字段）供重启对账。
+ * - 记录本插件创建的每个 Herdr 窗格（tab/worktree 两种形态）及其**冻结连接目标**
+ *   （启用时确定，非机密：machine/session/socketPath）——同一窗格的所有命令、事件、
+ *   文件与清理永远走同一 HerdrTarget，绝不热换连接去误伤另一台服务器上的同 ID 窗格；
+ * - 记录 spawn 路由（agent kind / Profile id）供无 agentType 的真实 resume 续接；
+ * - 支持同 workflow 或同父回合 resume 定位（稳定 agentId 或 paneId 双键）；
+ * - 区分「成功保活待结算」与「失败保留现场」（失败 pane 不参与自动清理）。
  */
 
 import type { HerdrTarget } from './contracts.js'
 
 export type PaneOutcome = 'running' | 'keepalive' | 'failed' | 'settled'
 
+/** spawn 路由快照（resume 缺 agentType 时沿用；kind 与 Profile 定位均非机密）。 */
+export interface PaneRouting {
+  kind: string
+  /** 命中的 Profile ID（Profile 入口时存在；前缀直调为 undefined）。 */
+  profileId?: string
+}
+
 export interface ManagedPane {
-  /** 目标机标识（undefined = 本机）。 */
-  machine?: string
+  /** 冻结连接目标（启用周期内不变；远端含 machine，本机为 session/socketPath/{}）。 */
+  target: HerdrTarget
   paneId: string
   tabId: string
   /** worktree 模式下的 workspace 与工作树（普通 tab 模式为 undefined）。 */
   workspaceId?: string
   worktree?: { path: string; branch?: string }
-  /** 实际生效工作目录（worktree 模式为 worktree.path）。 */
+  /** 实际生效工作目录（worktree 模式为 worktree.path；resume 缺省沿用）。 */
   effectiveCwd: string
   agentName: string
+  /** spawn 路由快照（resume 沿用 kind / Profile）。 */
+  routing: PaneRouting
   /** 归属：派生它的父会话。 */
   parentConversationId: number
-  /** agent_spawn 的 agentId（resume 定位键）。 */
+  /** agent_spawn 的稳定 agentId（workflow resume 键）。 */
   agentId?: string
   /** 派生它的 workflow run；单回合 subagent 为 undefined。 */
   workflowRunId?: string
@@ -44,13 +54,14 @@ export interface ManagedPane {
 export interface ManagedDoc {
   version: 1
   panes: Array<{
-    machine?: string
+    target?: { machine?: string; session?: string; socketPath?: string }
     paneId: string
     tabId: string
     workspaceId?: string
     worktree?: { path: string; branch?: string }
     effectiveCwd: string
     agentName: string
+    routing?: PaneRouting
     parentConversationId: number
     agentId?: string
     workflowRunId?: string
@@ -63,35 +74,41 @@ export interface ManagedDoc {
 
 export const EMPTY_MANAGED_DOC: ManagedDoc = { version: 1, panes: [] }
 
-export function targetOf(pane: { machine?: string }): HerdrTarget {
-  return pane.machine === undefined ? {} : { machine: pane.machine }
+export function targetOf(pane: { target?: HerdrTarget }): HerdrTarget {
+  return pane.target === undefined ? {} : pane.target
+}
+
+/** 目标机标识（undefined = 本机）；所有归属匹配/查询统一经此取值。 */
+export function machineOf(pane: { target?: HerdrTarget }): string | undefined {
+  return pane.target?.machine
 }
 
 /**
  * 窗格登记表（进程内权威状态 + 持久镜像写入端口）。
- * 所有查询/变更都在内存表上完成；变更后同步刷镜像（失败如实上抛）。
  */
 export class PaneRegistry {
   private readonly panes = new Map<string, ManagedPane>()
-  /** paneId -> 简洁归属键（machine|local : paneId），与 Ask id 命名一致。 */
   private readonly mirror: { get(): ManagedDoc; set(doc: ManagedDoc): void }
 
   constructor(mirror: { get(): ManagedDoc; set(doc: ManagedDoc): void }, restored?: ManagedDoc) {
     this.mirror = mirror
     if (restored) {
       for (const pane of restored.panes) {
-        this.panes.set(scopeKey(pane.machine, pane.paneId), {
-          machine: pane.machine,
+        // 旧开发数据无 target/routing：本机缺省 {}（开发阶段无迁移契约）。
+        this.panes.set(scopeKey(pane.target?.machine, pane.paneId), {
+          target: pane.target ?? {},
           paneId: pane.paneId,
           tabId: pane.tabId,
           workspaceId: pane.workspaceId,
           worktree: pane.worktree,
           effectiveCwd: pane.effectiveCwd,
           agentName: pane.agentName,
+          routing: pane.routing ?? { kind: '' },
           parentConversationId: pane.parentConversationId,
           agentId: pane.agentId,
           workflowRunId: pane.workflowRunId,
           outcome: pane.outcome,
+          outputFileName: undefined,
           createdAt: pane.createdAt,
           settledAt: pane.settledAt,
           failureNote: pane.failureNote,
@@ -101,7 +118,7 @@ export class PaneRegistry {
   }
 
   add(pane: ManagedPane): void {
-    this.panes.set(scopeKey(pane.machine, pane.paneId), pane)
+    this.panes.set(scopeKey(machineOf(pane), pane.paneId), pane)
     this.flush()
   }
 
@@ -109,10 +126,9 @@ export class PaneRegistry {
     return this.panes.get(scopeKey(machine, paneId))
   }
 
-  /** 按 agentId 定位（resume 用；同父会话约束由调用方校验）。 */
-  findByAgentId(agentId: string): ManagedPane | undefined {
-    for (const pane of this.panes.values()) if (pane.agentId === agentId) return pane
-    return undefined
+  /** 按稳定 agentId 或 paneId 定位 resume 候选（跨 machine 可能撞 paneId，由调用方裁决歧义）。 */
+  findByResumeRef(ref: string): ManagedPane[] {
+    return [...this.panes.values()].filter((p) => p.agentId === ref || p.paneId === ref)
   }
 
   /** 按 workflow run 定位全部 pane。 */
@@ -142,6 +158,16 @@ export class PaneRegistry {
     if (this.panes.delete(scopeKey(machine, paneId))) this.flush()
   }
 
+  /**
+   * 仅内存标记 settled（不刷持久镜像）：服务 stop 路径专用——停用中 doc 句柄
+   * 已失效（plugin_context_expired），持久状态由下个启用周期对账重建。
+   */
+  markSettledVolatile(machine: string | undefined, paneId: string): void {
+    const pane = this.panes.get(scopeKey(machine, paneId))
+    if (pane === undefined) return
+    this.panes.set(scopeKey(machine, paneId), { ...pane, outcome: 'settled', settledAt: Date.now() })
+  }
+
   /** liveTasks 标签：仍运行 + 成功保活待结算（失败/已结算不计）。 */
   liveTaskLabels(): string[] {
     const labels: string[] = []
@@ -157,13 +183,14 @@ export class PaneRegistry {
     return {
       version: 1,
       panes: this.all().map((p) => ({
-        ...(p.machine !== undefined ? { machine: p.machine } : {}),
+        target: { ...p.target },
         paneId: p.paneId,
         tabId: p.tabId,
         ...(p.workspaceId !== undefined ? { workspaceId: p.workspaceId } : {}),
         ...(p.worktree !== undefined ? { worktree: p.worktree } : {}),
         effectiveCwd: p.effectiveCwd,
         agentName: p.agentName,
+        routing: { ...p.routing },
         parentConversationId: p.parentConversationId,
         ...(p.agentId !== undefined ? { agentId: p.agentId } : {}),
         ...(p.workflowRunId !== undefined ? { workflowRunId: p.workflowRunId } : {}),

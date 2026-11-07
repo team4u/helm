@@ -84,7 +84,8 @@ test('createHelm 先配置后启用，重启沿用开关与连接配置，停用
 
     app = await openApp(dir, fixture.transport)
     assert.equal(app.kernel.plugins.list().find((plugin) => plugin.id === 'builtin:herdr')?.enabled, true)
-    assert.equal(app.kernel.plugins.getConfig('builtin:herdr').socketPath, socketPath)
+    const persisted = app.kernel.plugins.getConfig('builtin:herdr') as { socketPath?: string }
+    assert.equal(persisted.socketPath, socketPath)
     assert.equal(fixture.subscribed.length, 2, '持久启用应在重启时连接一次')
     assert.equal(fixture.subscribed[1]?.socketPath, socketPath)
     await app.kernel.plugins.disable('builtin:herdr')

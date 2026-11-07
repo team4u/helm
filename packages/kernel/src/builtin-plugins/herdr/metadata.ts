@@ -6,7 +6,8 @@
  * - 去重签名 = 业务状态 token 字符串（如 'ask:herdr:local:p1:3' 或 'run:wf_x'），
  *   绝不使用被 metadata 自身推进的 pane revision；
  * - 仅在 token 变化或 TTL 心跳到期（默认 30s 的一半刷新）时投射；
- * - metadata seq 在同一 (paneId, source='helm') 上单调递增。
+ * - 有界心跳定时器随服务启停：projector.start() 起播 / stop() 清理。心跳只
+ *   重投射已登记 token（不新增状态、不接触新窗格），长任务侧栏 token 不失踪。
  */
 
 import type { HerdrTarget } from './contracts.js'
@@ -16,6 +17,8 @@ const SOURCE = 'helm'
 const TOKEN_TTL_MS = 30_000
 /** TTL 过半即刷新（侧栏 token 过期前的续命心跳）。 */
 const REFRESH_AFTER_MS = Math.floor(TOKEN_TTL_MS / 2)
+/** 心跳周期 = 刷新窗口（到期即续命；不与业务事件耦合）。 */
+const HEARTBEAT_MS = REFRESH_AFTER_MS
 
 interface ProjectionState {
   lastToken: string
@@ -27,6 +30,7 @@ interface ProjectionState {
 export class MetadataProjector {
   private readonly states = new Map<string, ProjectionState>()
   private seqCounters = new Map<string, number>()
+  private timer: NodeJS.Timeout | undefined
 
   constructor(
     private readonly call: (
@@ -81,9 +85,36 @@ export class MetadataProjector {
     }
   }
 
+  /**
+   * 服务级心跳（随 service start/stop 启停）：对已登记窗格重投射当前 token。
+   * 只续命（幂等投射同一 token），不产生新状态——绝不由 metadata 事件自激。
+   */
+  start(): void {
+    if (this.timer !== undefined) return
+    this.timer = setInterval(() => {
+      this.timer?.unref?.()
+      for (const [key, state] of [...this.states.entries()]) {
+        if (state.lastToken === '') continue
+        const colon = key.indexOf(':')
+        const machine = key.slice(0, colon) === 'local' ? undefined : key.slice(0, colon)
+        const paneId = key.slice(colon + 1)
+        void this.project(machine, paneId, state.lastToken)
+      }
+    }, HEARTBEAT_MS)
+    this.timer.unref?.()
+  }
+
   /** pane 关闭/结算后清理本地状态（不再心跳）。 */
   forget(paneId: string, machine?: string): void {
     this.states.delete(`${machine ?? 'local'}:${paneId}`)
+  }
+
+  /** 服务停止：清理心跳定时器。 */
+  stop(): void {
+    if (this.timer !== undefined) {
+      clearInterval(this.timer)
+      this.timer = undefined
+    }
   }
 
   /** 同一 (paneId, source) 单调递增 seq：跨重启从 1 重新开始亦可（TTL 短）。 */

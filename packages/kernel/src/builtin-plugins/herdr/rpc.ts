@@ -2,7 +2,8 @@
  * Herdr RPC 结果边界校验：把 transport.call 解包的 unknown result 收敛为
  * 强类型形状。官方协议为 tag = "type" 的 snake_case 枚举（herdr 0.9.5 /
  * protocol 22，服务端源码核实）；任何字段缺失/类型不符都在本边界显式抛
- * HelmError('herdr_protocol_violation')，绝不静默降级或猜测。
+ * HelmError('herdr_protocol_violation')，绝不静默降级（不伪造 0 / unknown /
+ * 空串），坏数据不得成为 CAS 或终态判断的权威。
  */
 
 import { HelmError } from '@helm/protocol'
@@ -34,6 +35,9 @@ export interface HerdrAgentInfo {
   name?: string
   agentStatus: HerdrAgentStatus
   stateChangeSeq: number
+  /** 真实启动序列：agent.start 后短暂 unknown + launch_pending（服务端实测）。 */
+  launchPending?: boolean
+  focused?: boolean
   cwd?: string
   foregroundCwd?: string
 }
@@ -54,6 +58,8 @@ export interface PaneRead {
   paneId: string
   text: string
 }
+
+const AGENT_STATUSES = ['idle', 'working', 'blocked', 'done', 'unknown'] as const
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -102,12 +108,35 @@ function optString(obj: Record<string, unknown>, key: string): string | undefine
   return typeof v === 'string' && v.length > 0 ? v : undefined
 }
 
-function parseStatus(v: unknown): HerdrAgentStatus {
-  return v === 'idle' || v === 'working' || v === 'blocked' || v === 'done' || v === 'unknown' ? v : 'unknown'
+function optBool(obj: Record<string, unknown>, key: string): boolean | undefined {
+  return typeof obj[key] === 'boolean' ? (obj[key] as boolean) : undefined
 }
 
-function parseSeq(v: unknown): number {
-  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.trunc(v) : 0
+/** 状态严格枚举：未知值是协议违约（服务端 AgentStatus 仅五值）。 */
+function parseStatus(v: unknown, method: string): HerdrAgentStatus {
+  const status = AGENT_STATUSES.find((s) => s === v)
+  if (status === undefined) {
+    throw new HelmError(
+      'herdr_protocol_violation',
+      `${method} agent_status 非法：${JSON.stringify(v)}`,
+      502,
+      { method, agentStatus: v },
+    )
+  }
+  return status
+}
+
+/** seq 严格非负整数（服务端 u64）：缺失/小数/负数/字符串都是违约，绝不伪造 0。 */
+function parseSeq(v: unknown, method: string): number {
+  if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) {
+    throw new HelmError(
+      'herdr_protocol_violation',
+      `${method} state_change_seq 缺失或非非负安全整数：${String(v)}`,
+      502,
+      { method, stateChangeSeq: typeof v === 'number' ? v : String(v) },
+    )
+  }
+  return v
 }
 
 function parseTab(obj: Record<string, unknown>, method: string): HerdrTabInfo {
@@ -165,8 +194,10 @@ function parseAgentInfo(agent: unknown, method: string): HerdrAgentInfo {
     workspaceId: reqString(agent, method, 'workspace_id'),
     agent: optString(agent, 'agent'),
     name: optString(agent, 'name'),
-    agentStatus: parseStatus(agent['agent_status']),
-    stateChangeSeq: parseSeq(agent['state_change_seq']),
+    agentStatus: parseStatus(agent['agent_status'], method),
+    stateChangeSeq: parseSeq(agent['state_change_seq'], method),
+    launchPending: optBool(agent, 'launch_pending'),
+    focused: optBool(agent, 'focused'),
     cwd: optString(agent, 'cwd'),
     foregroundCwd: optString(agent, 'foreground_cwd'),
   }
@@ -185,7 +216,7 @@ export function parsePaneRead(result: unknown): PaneRead {
   if (!isObj(read)) {
     throw new HelmError('herdr_protocol_violation', 'agent.read 结果缺少 read 对象', 502, {})
   }
-  return { paneId: reqString(read, 'agent.read', 'pane_id'), text: typeof read['text'] === 'string' ? read['text'] : '' }
+  return { paneId: reqString(read, 'agent.read', 'pane_id'), text: reqString(read, 'agent.read', 'text') }
 }
 
 export function isOkResult(result: unknown): boolean {
@@ -211,8 +242,8 @@ export function parseSessionSnapshot(result: unknown): SessionSnapshotAgents {
 }
 
 /**
- * 预期 'ok' 的结果（tab.close / workspace.close / send_keys / report_metadata）。
- * 非 ok 显式抛协议违约——绝不把失败静默当成功（诚实性纪律）。
+ * 预期 'ok' 的结果（tab.close / workspace.close / send_keys / report_metadata——
+ * 服务端源码逐条核实）。非 ok 显式抛协议违约——绝不把失败静默当成功。
  */
 export function assertOkResult(result: unknown, method: string): void {
   if (!isOkResult(result)) {

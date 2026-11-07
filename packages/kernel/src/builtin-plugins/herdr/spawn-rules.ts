@@ -205,7 +205,7 @@ export function buildOutputFileName(safeId: string, ext: 'json' | 'md'): string 
 
 /** startupTimeoutMs 严格 3001..300000（Herdr 服务端约束），默认 30000。 */
 export function normalizeStartupTimeoutMs(value: unknown): number {
-  const n = value === undefined ? 30_000 : value
+  const n = value === undefined || value === null || value === '' ? 30_000 : value
   if (typeof n !== 'number' || !Number.isInteger(n) || n < 3001 || n > 300_000) {
     throw new HelmError(
       'validation_error',
@@ -218,31 +218,97 @@ export function normalizeStartupTimeoutMs(value: unknown): number {
 }
 
 /**
- * 远端可达性过滤：远端窗格默认剥除指向本机 loopback 的 HELM_HUB_URL/HELM_TOKEN，
- * 除非 Profile.runtime.env.HELM_HUB_URL 显式配置了非 localhost 地址。
- * loopback 判定覆盖 127.x、localhost 与 ::1（防 127.0.0.1 绕过）。
+ * 任务提示词脱敏：先全文 redact 再进入任何截断（先截断可能把秘密拆成两半，
+ * 前缀泄漏进模型上下文）；交接文件名与路径段非机密，原样保留。
+ * 同样适用于交接契约里的 JSON Schema 文本（Schema 由调用方给定，但中央
+ * 工具的持久脱敏不能代替外部 CLI prompt 本身的脱敏）。
  */
-export function buildRemoteSpawnEnv(
-  baseEnv: Record<string, string>,
+export function redactPromptText(text: string, redact: (t: string) => string, maxChars = 20_000): string {
+  const redacted = redact(text)
+  return redacted.length > maxChars ? `${redacted.slice(0, maxChars)}\n[任务描述起长，已截断]` : redacted
+}
+
+/** JSON Schema 序列化后脱敏（同 redactPromptText 语义，供交接契约）。 */
+export function redactSchemaText(schema: Record<string, unknown>, redact: (t: string) => string): string {
+  return redact(JSON.stringify(schema))
+}
+
+/**
+ * 受管环境变量（HELM_*）：由内核 managed/stash 构造保持权威，Profile 不得覆盖
+ * （与 buildToolEnv「受管变量最后固定覆盖」同一内核约定）。HELM_HUB_URL 例外
+ * 语义见 buildRemoteSpawnEnv：远端窗格只允许 Profile 显式配置的有效可达地址。
+ */
+export const MANAGED_ENV_KEYS = Object.freeze([
+  'HELM_ENV',
+  'HELM_CONVERSATION_ID',
+  'HELM_CWD',
+  'HELM_DATA_DIR',
+  'HELM_TOKEN',
+])
+
+/**
+ * 窗格 env 构造（本机与远端共用入口）：
+ * - 受管 HELM_* 固定覆盖 Profile 注入（防劫持回连/身份变量）；
+ * - stash 变量（非 HELM_*）允许 Profile 显式覆盖（用户配置意图优先于会话机密）；
+ * - 远端剥除指向本机的 HELM_HUB_URL/HELM_TOKEN，除非 Profile 显式配置了
+ *   有效可达的 http(s) 地址（此时显式 URL 也覆盖受管值）。
+ */
+export function buildSpawnPaneEnv(
+  managedEnv: Record<string, string>,
   profileEnv: Record<string, string>,
-): { env: Record<string, string>; stripped: string[] } {
+  options: { remote: boolean },
+): { env: Record<string, string>; stripped: string[]; hubUrlOverridden: boolean } {
   const stripped: string[] = []
-  const env: Record<string, string> = { ...baseEnv, ...profileEnv }
+  const managed = { ...managedEnv }
+  const env: Record<string, string> = {}
+
+  // 显式远端可达 HELM_HUB_URL：远端回连唯一合法覆盖（本机窗格不接受 Profile 覆盖）。
   const explicitUrl = profileEnv['HELM_HUB_URL']
-  const urlIsRemoteReachable = explicitUrl !== undefined && !isLoopbackUrl(explicitUrl)
-  if (!urlIsRemoteReachable) {
-    if ('HELM_HUB_URL' in env) {
-      stripped.push('HELM_HUB_URL')
-      delete env['HELM_HUB_URL']
+  const explicitReachable = explicitUrl !== undefined && isValidRemoteHubUrl(explicitUrl)
+  if (options.remote) {
+    if (explicitReachable) {
+      env['HELM_HUB_URL'] = explicitUrl
+      delete managed['HELM_HUB_URL']
+    } else {
+      if (explicitUrl !== undefined && !isHttpUrl(explicitUrl)) {
+        throw new HelmError(
+          'validation_error',
+          `Profile runtime.env.HELM_HUB_URL 必须是 http(s) URL（收到 '${explicitUrl}'），远端窗格拒绝注入无效回连地址`,
+          400,
+          { hubUrl: explicitUrl },
+        )
+      }
+      delete managed['HELM_HUB_URL']
+      delete managed['HELM_TOKEN']
+      stripped.push('HELM_HUB_URL', 'HELM_TOKEN')
     }
-    if ('HELM_TOKEN' in env) {
-      stripped.push('HELM_TOKEN')
-      delete env['HELM_TOKEN']
-    }
-  } else if ('HELM_TOKEN' in env && explicitUrl !== undefined) {
-    // 显式远端可达 URL 时保留 token（远端经该 URL 回连 hub）。
   }
-  return { env, stripped }
+
+  // 其余受管 HELM_* 最后固定覆盖（内核约定：managed/stash 权威）。
+  Object.assign(env, managed)
+  for (const [key, value] of Object.entries(profileEnv)) {
+    if (key === 'HELM_HUB_URL' && explicitReachable) continue
+    if (key === 'HELM_TOKEN' && explicitReachable) continue
+    if (MANAGED_ENV_KEYS.includes(key) || key === 'HELM_HUB_URL') continue
+    env[key] = value
+  }
+  const hubUrlOverridden = explicitReachable && options.remote
+  return { env, stripped, hubUrlOverridden }
+}
+
+/** http(s) URL 才可能是回连地址（file:/unix: 等一律无效）。 */
+export function isHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/** 远端可达：显式 http(s) 且主机非 loopback。 */
+export function isValidRemoteHubUrl(url: string): boolean {
+  return isHttpUrl(url) && !isLoopbackUrl(url)
 }
 
 export function isLoopbackUrl(url: string): boolean {

@@ -189,8 +189,11 @@ class FakeTransport implements HerdrTransport {
         this.sendKeysLog.push({ paneId: pane.paneId, keys: params['keys'] as string[] })
         return { type: 'ok' }
       }
-      case 'agent.focus':
-        return { type: 'ok' }
+      case 'agent.focus': {
+        // 真实协议（服务端 agents.rs:35-41）：focus 返回 agent_info + focused=true。
+        const focused = this.paneOf(params['target'])
+        return { type: 'agent_info', agent: { ...agentInfoOf(focused), focused: true } }
+      }
       case 'pane.report_metadata':
         this.metadataReports.push(params)
         return { type: 'ok' }
@@ -1071,7 +1074,7 @@ test('启动对账: 孤儿回收；failed 保留；同 ID 换 human agent 不误
     assert.equal(transport.tabs.get('ws-default:t1')!.closed, true, '孤儿（running+done）回收')
     assert.equal(transport.tabs.get('ws-default:t2')!.closed, false, 'failed 保留现场（即使实际 idle）')
     assert.equal(transport.tabs.get('ws-default:t3')!.closed, false, '同 ID 换 human agent 不误关')
-    assert.equal(transport.tabs.get('ws-default:t4')!.closed, false, 'keepalive 不当孤儿回收')
+    assert.equal(transport.tabs.get('ws-default:t4')!.closed, true, '已结束 keepalive 孤儿同样回收')
   } finally {
     await host.dispose().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })
