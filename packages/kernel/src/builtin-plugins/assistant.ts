@@ -1,6 +1,6 @@
-import { HelmError, ROOT_CONVERSATION_ID, type PluginDefinition } from '@helm/protocol';
+import { ROOT_CONVERSATION_ID, type PluginDefinition } from '@helm/protocol';
 import { FileNotFoundError } from '../services/atomic-file.js';
-import type { ProfileService, SkillService } from '../services/index.js';
+import { MAX_MEMORY_CHARS, type ProfileService, type SkillService } from '../services/index.js';
 
 interface AssistantServices {
   profiles: ProfileService;
@@ -8,11 +8,13 @@ interface AssistantServices {
 }
 
 /**
- * MEMORY.md 长期记忆上限（字符数）：超过即拒绝写入（update_memory 显式
- * memory_limit_exceeded 400），注入时截断并附显式说明。防线目的：长期记忆
- * 逐回合全量注入系统提示，无上限会让每次调用成本无界增长。
+ * MEMORY.md 长期记忆上限（字符数）：单一事实来源在 services/profiles-skills.ts
+ * （所有写入路径在文件锁内统一强制）；此处 re-export 供插件层与测试引用。
+ * 超过即拒绝写入（update_memory 显式 memory_limit_exceeded 400），注入时截断
+ * 并附显式说明。防线目的：长期记忆逐回合全量注入系统提示，无上限会让每次
+ * 调用成本无界增长。
  */
-export const MAX_MEMORY_CHARS = 64_000;
+export { MAX_MEMORY_CHARS };
 
 /** 截断说明（注入时附在截断内容之后，绝不静默截断）。 */
 const MEMORY_TRUNCATION_NOTE = `\n[ helm 提示：MEMORY.md 超过 ${MAX_MEMORY_CHARS} 字符上限，以上为前 ${MAX_MEMORY_CHARS} 字符；请用 update_memory(mode='replace') 整理精简记忆 ]`;
@@ -29,25 +31,31 @@ export function createAssistantPlugin({ profiles, skills }: AssistantServices): 
     locked: true,
     definePlugin(ctx) {
       /**
-       * 读取 SYSTEM.md / MEMORY.md，文件被外部误删（FileNotFoundError）时
-       * 视为内容为空并发出一次性告警（每回合告警一次，文件恢复即停），
-       * 绝不让整个回合 500 崩溃。其余错误（权限/IO 故障）如实上抛。
+       * 读取 SYSTEM.md / MEMORY.md：文件被外部误删（FileNotFoundError）时按空
+       * 处理，但绝不沉默改变人格——① 向人类发一次性告警（每文件独立去重，
+       * 文件恢复即停、再次缺失可重新告警）；② 向模型注入显式的
+       * <profile_assets_missing> 说明节，告知本轮人格/记忆资产缺失及其后果。
+       * 其余错误（权限/IO 故障）如实上抛，绝不吞。
        */
-      let missingFileNotified = false
-      const readAssetOrEmpty = async (read: () => Promise<string>, label: string): Promise<string> => {
+      const missingNotified: Record<'system' | 'memory', boolean> = { system: false, memory: false }
+      const readAssetOrEmpty = async (
+        read: () => Promise<string>,
+        which: 'system' | 'memory',
+        label: string,
+      ): Promise<string> => {
         try {
           const text = await read()
-          missingFileNotified = false
+          missingNotified[which] = false // 恢复即停；下次再缺失可重新告警
           return text
         } catch (err) {
           if (err instanceof FileNotFoundError) {
-            if (!missingFileNotified) {
-              missingFileNotified = true
+            if (!missingNotified[which]) {
+              missingNotified[which] = true
               try {
                 ctx.host.emitEvent('notification', {
                   type: 'notification',
                   level: 'warning',
-                  title: '助理记忆/系统文件缺失',
+                  title: `助理资产文件缺失：${label}`,
                   body: `Profile 资产 ${label} 文件不存在（可能被外部误删），本回合按空内容处理；下次 update_memory / update_system 写入可自愈重建`,
                 })
               } catch {
@@ -63,18 +71,34 @@ export function createAssistantPlugin({ profiles, skills }: AssistantServices): 
       ctx.hook.onBeforeTurn(async (turn) => {
         const profileId = turn.conversation.profileId;
         const [rawSystem, rawMemory, available] = await Promise.all([
-          readAssetOrEmpty(() => profiles.getSystem(profileId), `${profileId}/SYSTEM.md`),
-          readAssetOrEmpty(() => profiles.getMemory(profileId), `${profileId}/MEMORY.md`),
+          readAssetOrEmpty(() => profiles.getSystem(profileId), 'system', `${profileId}/SYSTEM.md`),
+          readAssetOrEmpty(() => profiles.getMemory(profileId), 'memory', `${profileId}/MEMORY.md`),
           skills.list(),
         ]);
         const sections = [...turn.sections];
         if (rawSystem.trim()) sections.push({ id: 'assistant.system', text: rawSystem });
-        // 存量超限（外部手改绕过 update_memory）：注入时截断并显式说明，不静默截断。
+        // 存量超限（外部手改绕过写入防线）：注入时截断并显式说明，不静默截断、
+        // 不修改源文件（只对注入副本切片）。
         const memory =
           rawMemory.length > MAX_MEMORY_CHARS
             ? `${rawMemory.slice(0, MAX_MEMORY_CHARS)}${MEMORY_TRUNCATION_NOTE}`
             : rawMemory
         if (memory.trim()) sections.push({ id: 'assistant.memory', text: `<memory>\n${memory}\n</memory>` });
+        // 资产缺失必须向模型显式告知（不能沉默换人格）：列出缺失文件与后果。
+        const missing: string[] = []
+        if (!rawSystem.trim()) missing.push(`SYSTEM.md（人格/职责定义）`)
+        if (!rawMemory.trim()) missing.push(`MEMORY.md（长期记忆）`)
+        if (missing.length > 0) {
+          sections.push({
+            id: 'assistant.assets-missing',
+            text: [
+              '<profile_assets_missing>',
+              `本回合缺少 Profile '${profileId}' 的${missing.join('与')}（文件不存在或为空）。`,
+              '你当前没有该 Profile 的人格设定与长期记忆：请告知用户资产缺失，谨慎回答，不要假装拥有既往记忆或特定人格；资产写入后自动恢复。',
+              '</profile_assets_missing>',
+            ].join('\n'),
+          })
+        }
         if (available.length) {
           const catalog = available.map((skill) =>
             `<skill id="${escapeXml(skill.id)}"><name>${escapeXml(skill.name)}</name><description>${escapeXml(skill.description ?? '')}</description><references>${skill.references.map(escapeXml).join(', ')}</references></skill>`,
@@ -99,30 +123,10 @@ export function createAssistantPlugin({ profiles, skills }: AssistantServices): 
         async execute(input, context) {
           const conversation = ctx.host.getConversation(context.conversationId);
           const profileId = conversation.profileId;
-          // 写入前计算合并结果：replace 取 text，append 读现有内容合并；超限显式
-          // 拒绝（不写半截文件），提示调用方用 replace 整理精简。
-          const nextText =
-            input.mode === 'replace'
-              ? input.text
-              : await (async () => {
-                  let current = ''
-                  try {
-                    current = await profiles.getMemory(profileId)
-                  } catch (err) {
-                    if (!(err instanceof FileNotFoundError)) throw err
-                    // 文件缺失：append 从空开始（与 ProfileService 语义一致）。
-                  }
-                  return current.endsWith('\n') || current === '' ? current + input.text : current + '\n' + input.text
-                })()
-          if (nextText.length > MAX_MEMORY_CHARS) {
-            throw new HelmError(
-              'memory_limit_exceeded',
-              `MEMORY.md 写入后达 ${nextText.length} 字符，超过上限 ${MAX_MEMORY_CHARS}；请用 mode='replace' 整理精简记忆后再写入（当前待写内容 ${input.text.length} 字符）`,
-              400,
-              { profileId, wouldBe: nextText.length, limit: MAX_MEMORY_CHARS, inputLength: input.text.length },
-            )
-          }
-          await profiles.updateMemory(profileId, input.text, input.mode);
+          // 大小防线唯一权威点在 ProfileService.updateMemory 文件锁内（合并后
+          // 检查）：跨会话同 Profile 并发 append 不可能叠加突破上限；超限抛
+          // memory_limit_exceeded 400（提示 replace 精简），不写半截文件。
+          await profiles.updateMemory(profileId, input.text, input.mode, { maxChars: MAX_MEMORY_CHARS });
           return { updated: true, profileId };
         },
       });

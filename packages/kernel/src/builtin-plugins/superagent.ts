@@ -738,30 +738,39 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
             parentConversationId: routerConversationId,
             ...(cwd !== undefined ? { cwd } : {}),
           })
-          ctx.host.markConversationOwnership(worker.id, 'helm')
           const workerEntry: SuperAgentWorker = {
             conversationId: worker.id,
             parentConversationId: routerConversationId,
             profileId: targetProfile,
             createdAt: Date.now(),
           }
-          updateIndex((doc) => ({ ...doc, workers: [...doc.workers, workerEntry] }))
-          if (threadKey !== undefined) {
-            updateSubscriptions((doc) => ({
-              ...doc,
-              subscriptions: [...doc.subscriptions, { threadKey, workerConversationId: worker.id, createdAt: Date.now() }],
-            }))
-          }
           // 非阻塞：仅等会话创建 + 输入被 SDK 接受（不等模型回合结束）。
-          // 提交失败（建会话之后）完整回滚登记与订阅绑定，并把空会话标记归档，
-          // 绝不残留无回合僵尸 Worker、不锁死 threadKey。
+          // 建会话之后的全部副作用（归属标记 / index 登记 / threadKey 绑定 /
+          // 初始输入提交）任一步失败都统一收敛：上报原始错误 + 完整回滚登记与
+          // 订阅绑定，并把空会话标记归档，绝不残留无回合僵尸 Worker、不锁死
+          // threadKey。
+          //
+          // submitInput 失败语义（runtime 真实实现核实）：拒绝仅发生在输入未被
+          // SDK 接受时（closed/not_found/model_not_configured/input_blocked/
+          // SDK submit 拒绝——tracker 注册的输入在错误路径全部回滚，无
+          // helm.input entry 落库），故回滚打归档标签不会误伤已接收输入的
+          // 活跃任务；回滚不删除会话本身（保留审计痕迹，与 archive_worker
+          // 同标签），不影响 human 会话（仅处置本插件刚建的 worker 会话）。
           try {
+            ctx.host.markConversationOwnership(worker.id, 'helm')
+            updateIndex((doc) => ({ ...doc, workers: [...doc.workers, workerEntry] }))
+            if (threadKey !== undefined) {
+              updateSubscriptions((doc) => ({
+                ...doc,
+                subscriptions: [...doc.subscriptions, { threadKey, workerConversationId: worker.id, createdAt: Date.now() }],
+              }))
+            }
             await ctx.host.submitInput(worker.id, input.prompt, { origin: 'agent', whenBusy: 'followUp' })
           } catch (err) {
-            // 先上报原始错误（回滚失败不掩盖提交失败未身上报），再尽力回滚；
+            // 先上报原始错误（回滚失败不掩盖提交/登记失败的上报），再尽力回滚；
             // 回滚自身失败如实叠加（superagent_dispatch_rollback_failed），
             // 由调用方一并暴露，不静默丢任何一侧。
-            reportError(`Worker #${worker.id} 初始任务提交失败（回滚中）`, err)
+            reportError(`Worker #${worker.id} 派工提交失败（登记/提交阶段，回滚中）`, err)
             await rollbackFailedDispatch(worker.id, workerEntry, threadKey, err)
             throw err
           }
@@ -773,9 +782,11 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
       }
 
       /**
-       * 派工提交失败回滚：移除 index worker 条目与 threadKey 绑定，空会话打上
-       * 归档标签（不删除——会话本身无害且保留审计痕迹，与 archive_worker 同标签）。
-       * 回滚自身失败如实上抛（诚实性纪律），由调用方与 reportError 一并暴露。
+       * 派工失败回滚（覆盖建会话后的全部副作用步骤）：移除 index worker 条目
+       * 与 threadKey 绑定，空会话打上归档标签（不删除——会话本身无害且保留
+       * 审计痕迹，与 archive_worker 同标签；各步均为幂等 best-effort，条目
+       * 尚未写入时过滤为空操作）。回滚自身失败如实上抛（诚实性纪律），
+       * 由调用方与 reportError 一并暴露。
        */
       const rollbackFailedDispatch = async (
         workerId: number,

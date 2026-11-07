@@ -282,11 +282,29 @@ export function registerSuperAgentWatchdog(
 
   /**
    * 已消亡目标的安全淘汰：会话已删（not_found）的历史键直接删除（目标不存在
-   * 了无从重放）；外部探针目标仅当不再出现在当前活跃集且总量超上限时淘汰
-   * 最旧条目（LRU 式，防 7×24 运行无限膨胀）。活跃目标绝不淘汰。
+   * 了无从重放）；外部探针目标需同时满足三条件才淘汰（防瞬时探针缺失把危险
+   * 动作去重标记清掉造成重放）：① 不在当前活跃探针集；② 总键数超上限；
+   * ③ 该键最后一次动作距今超过 EXTERNAL_EVICT_AFTER_MS（刚触发过 notify/wake
+   * 等动作的键即便瞬时缺失也绝不淘汰——网络抖动/单 tick 未采到不是消亡证据）。
+   * 活跃目标绝不淘汰。
    */
   const MAX_DEDUP_KEYS = 256
   const MAX_EXTERNAL_PROBE_CACHE = 256
+  /** 外部键淘汰陈旧度门槛（最后一次动作后仍持续缺失 24h 才算消亡）。 */
+  const EXTERNAL_EVICT_AFTER_MS = 24 * 60 * 60 * 1000
+
+  /** 陈旧预算告警一次性标记（避免每 tick 刷屏；重启后可重新告警）。 */
+  let staleBudgetWarned = false
+
+  /** 当前 doc 中外部目标键计数。 */
+  function countExternalKeys(): number {
+    let n = 0
+    for (const key of Object.keys(readDedup().fired)) {
+      const parsed = parseTargetKey(key)
+      if (parsed?.kind === 'external') n += 1
+    }
+    return n
+  }
 
   function evictStaleTargets(activeProbeKeys: ReadonlySet<string>): void {
     const doc = readDedup()
@@ -320,14 +338,35 @@ export function registerSuperAgentWatchdog(
         }
         continue
       }
-      // 外部目标：仍在活跃探针集则保留；否则仅在超限后淘汰（迭代序即插入序，最旧优先）。
+      // 外部目标：仍在活跃探针集则保留；否则需超限 + 距最后一次动作超过
+      // 陈旧门槛才淘汰（迭代序即插入序，最旧优先）。
       if (activeProbeKeys.has(key)) continue
-      if (Object.keys(doc.fired).length > MAX_DEDUP_KEYS) {
+      if (Object.keys(doc.fired).length > MAX_DEDUP_KEYS && isExternalKeyStale(doc.fired[key]!)) {
         delete doc.fired[key]
         mutated = true
       }
     }
     if (mutated) writeDedup(doc)
+  }
+
+  /** 外部键陈旧判定：全部动作标记都早于 EXTERNAL_EVICT_AFTER_MS 才算消亡。 */
+  function isExternalKeyStale(actions: Record<string, DedupMark>): boolean {
+    const marks = Object.values(actions)
+    if (marks.length === 0) return true // 无动作标记：无重放风险，可直接淘汰
+    const latest = Math.max(...marks.map((m) => m.at))
+    if (Date.now() - latest >= EXTERNAL_EVICT_AFTER_MS) return true
+    // 近期仍有动作但持续缺失：保留（不淘汰）。若外部键总量已远超预算（3x）
+    // 则一次性告警（内存保护兜底诊断，仍不自动清除——淘汰导致危险动作重放
+    // 的代价大于内存占用）。
+    if (!staleBudgetWarned && countExternalKeys() > MAX_DEDUP_KEYS * 3) {
+      staleBudgetWarned = true
+      notify(
+        'warning',
+        'Watchdog 去重文档外部键超预算',
+        `去重文档外部目标键 ${countExternalKeys()} 个远超预算 ${MAX_DEDUP_KEYS}，但均未达 ${EXTERNAL_EVICT_AFTER_MS / 3_600_000}h 消亡门槛；为防危险动作重放暂不淘汰，请人工核查外部探针目标集`,
+      )
+    }
+    return false
   }
 
   /** 当前 tick 活跃外部探针键集（与去重键同构）。 */
