@@ -305,6 +305,7 @@ export class KernelRuntime {
   private readonly runtimeProviderOwners = new Map<string, string>()
   /** models 变更串行链：reload / register / unregister 共用，避免 stale 替换。 */
   private modelsChain: Promise<unknown> = Promise.resolve()
+  private modelsRefreshAbort: AbortController | undefined
   /** models 集合代数（每次成功发布新集合 +1；在途 refresh 防旧集合重新发布）。 */
   private modelsGeneration = 0
   /** 运行时供应商在途使用计数（providerId -> streaming/refresh 未结算数；teardown 预检用）。 */
@@ -626,6 +627,10 @@ export class KernelRuntime {
     await this.pluginConfig.load()
     const host = new PluginHost({
       dataDir: this.dataDir,
+      providers: {
+        register: (provider, pluginId) => this.registerRuntimeProvider(provider, pluginId),
+        assertIdle: (pluginId) => this.assertRuntimeProvidersIdle(pluginId),
+      },
       host: {
         dispatchTrigger: (event) => this.dispatchTrigger(event),
         submitInput: async (id, text, opts) => {
@@ -2837,6 +2842,10 @@ export class KernelRuntime {
       const key = await this.credentialsSvc.get(id)
       if (key) nextKeys[id] = key
     }
+    const collision = providerConfigs.find((config) => this.runtimeProviders.has(config.id))
+    if (collision) {
+      throw new HelmError('runtime_provider_conflict', `网关 ${collision.id} 与插件注册的供应商冲突`, 409)
+    }
     const models = buildModels({
       providers: providerConfigs,
       apiKeys: () => nextKeys,
@@ -2874,9 +2883,8 @@ export class KernelRuntime {
     if (typeof provider?.id !== 'string' || provider.id === '') {
       throw new HelmError('validation_error', `运行时供应商 id 需为非空字符串：${String(provider?.id)}`, 400)
     }
-    // 串行链内校验 + 写入 + 重建，一步完成；校验失败回滚 map（本实现先校验后写入，
-    // 无中间态泄漏；重建失败异常向上传播，map 保持已写入状态由调用方重试或注销）。
-    await this.enqueueModelsChange(async () => {
+    // 捕获本次注册的包装实例；旧释放句柄不得寻址后续同名注册。
+    const registered = await this.enqueueModelsChange(async () => {
       const conflict = await this.findRuntimeProviderConflict(provider.id)
       if (conflict !== undefined) {
         throw new HelmError('runtime_provider_conflict', conflict, 409)
@@ -2892,13 +2900,17 @@ export class KernelRuntime {
         this.runtimeProviderOwners.delete(provider.id)
         throw error
       }
+      return registered
     })
     let disposed = false
-    return async () => {
-      if (disposed) return
-      disposed = true
-      // 注销按包装后实例比对（map 存的是包装实例；原始 provider 不再暴露）。
-      await this.unregisterRuntimeProvider(this.runtimeProviders.get(provider.id) ?? provider)
+    let disposing: Promise<void> | undefined
+    return () => {
+      if (disposed) return Promise.resolve()
+      if (disposing) return disposing
+      disposing = this.unregisterRuntimeProvider(registered)
+        .then(() => { disposed = true })
+        .finally(() => { disposing = undefined })
+      return disposing
     }
   }
 
@@ -2925,9 +2937,19 @@ export class KernelRuntime {
     if (this.init.externalModels) return
     await this.enqueueModelsChange(async () => {
       if (this.runtimeProviders.get(provider.id) !== provider) return
+      const owner = this.runtimeProviderOwners.get(provider.id)
+      if ((this.runtimeProviderUsage.get(provider.id) ?? 0) > 0) {
+        throw new HelmError('plugin_has_live_tasks', `供应商 ${provider.id} 仍有在途请求`, 409, { providers: [provider.id] })
+      }
       this.runtimeProviders.delete(provider.id)
       this.runtimeProviderOwners.delete(provider.id)
-      await this.rebuildModelsLocked()
+      try {
+        await this.rebuildModelsLocked()
+      } catch (error) {
+        this.runtimeProviders.set(provider.id, provider)
+        if (owner !== undefined) this.runtimeProviderOwners.set(provider.id, owner)
+        throw error
+      }
     })
   }
 
@@ -2942,6 +2964,15 @@ export class KernelRuntime {
     allowNetwork?: boolean
     force?: boolean
   }): Promise<ModelProvidersRefreshResult> {
+    return this.enqueueModelsChange(() => this.refreshModelsLocked(options))
+  }
+
+  private async refreshModelsLocked(options?: {
+    providers?: string[]
+    allowNetwork?: boolean
+    force?: boolean
+  }): Promise<ModelProvidersRefreshResult> {
+    if (this.closed) throw new HelmError('runtime_closing', '内核正在关闭，不能刷新模型目录', 409)
     if (this.init.externalModels) {
       throw new HelmError(
         'runtime_provider_unsupported',
@@ -2956,14 +2987,18 @@ export class KernelRuntime {
         ? options.providers.filter((id) => this.runtimeProviders.has(id))
         : [...this.runtimeProviders.keys()]
     const release = this.acquireRuntimeProviders(targets)
+    const controller = new AbortController()
+    this.modelsRefreshAbort = controller
     let result: { aborted: boolean; errors: ReadonlyMap<string, Error> }
     try {
       result = await instanceAtStart.refresh({
+        signal: controller.signal,
         allowNetwork: options?.allowNetwork ?? true,
         force: options?.force ?? true,
         ...(options?.providers && options.providers.length > 0 ? { providers: options.providers } : {}),
       })
     } finally {
+      if (this.modelsRefreshAbort === controller) this.modelsRefreshAbort = undefined
       release()
     }
     // 文件级损坏（models_store_corrupted）不是单供应商失败，显式上抛。
@@ -2979,7 +3014,7 @@ export class KernelRuntime {
     }
     return {
       providers: options?.providers ? [...options.providers] : [],
-      aborted: result.aborted,
+      aborted: result.aborted || snapshotStale,
       errors,
       models: await this.listModels(),
       providerCatalog: this.listModelProviders(),
@@ -3008,6 +3043,10 @@ export class KernelRuntime {
 
   /** 在途使用计数：目标 provider 各 +1；返回幂等释放函数（各 -1，归零清除）。 */
   private acquireRuntimeProviders(ids: readonly string[]): () => void {
+    for (const id of ids) {
+      const owner = this.runtimeProviderOwners.get(id)
+      if (owner !== undefined) this.pluginHost?.assertProviderAvailable(owner)
+    }
     for (const id of ids) {
       this.runtimeProviderUsage.set(id, (this.runtimeProviderUsage.get(id) ?? 0) + 1)
     }
@@ -3041,11 +3080,12 @@ export class KernelRuntime {
         release()
         throw err
       }
-      void stream.result().finally(release)
+      void stream.result().then(release, release)
       return stream
     }
     const wrapped: Provider = {
       ...provider,
+      get baseUrl() { return provider.baseUrl },
       stream: (model, context, options) =>
         counted(() => provider.stream(model, context, options)),
       streamSimple: (model, context, options) =>
@@ -3218,6 +3258,7 @@ export class KernelRuntime {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    this.modelsRefreshAbort?.abort(new Error('kernel closing'))
     // 1) 停定时器与资产监听（不再产生新副作用）。
     if (this.watchdogTimer !== undefined) {
       clearInterval(this.watchdogTimer)
@@ -3234,6 +3275,7 @@ export class KernelRuntime {
     await this.watchdogPending
     // 2) 等待在途 reloadModels（可能还在写 models 引用）。
     await this.reloadChain
+    await this.modelsChain
     // 3) 等待 turn_settled 钩子在途执行。
     await this.settledInflight
     // 4) 显式 abort 全部在途会话（SDK 任务收敛 + aborted 结算；空闲会话不结算）。

@@ -33,6 +33,7 @@ function ProviderDetail({ provider, onEditGateway, onRefreshCatalog }: { provide
       onRefreshCatalog()
       const refreshError = res.errors?.[provider.id]
       if (refreshError) setError(refreshError)
+      else if (res.aborted) setError('模型目录刷新已取消，请重试。')
       else store.pushNotice({ type: 'notification', level: 'info', title: '模型目录已刷新', body: `${provider.name} 已重新拉取最新模型目录` })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))

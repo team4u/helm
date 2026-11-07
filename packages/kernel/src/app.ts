@@ -4,6 +4,8 @@ import { createAssistantPlugin } from './builtin-plugins/assistant.js';
 import { createHerdrPlugin } from './builtin-plugins/herdr.js';
 import { createSuperAgentPlugin, SUPERAGENT_PLUGIN_ID } from './builtin-plugins/superagent.js';
 import { createTriggersPlugin } from './builtin-plugins/triggers.js';
+import { createMagpiePlugin } from './builtin-plugins/magpie.js';
+import { MAGPIE_PROVIDER_ID } from './builtin-plugins/magpie/contracts.js';
 import type { HerdrNodeChannel, HerdrTransport } from './builtin-plugins/herdr/contracts.js';
 import type { EnvFabric } from './env/index.js';
 import type { SuperAgentDependencies } from './builtin-plugins/superagent/contracts.js';
@@ -92,6 +94,15 @@ export async function createHelm(options: HelmOptions = {}) {
       profiles: kernel.profiles,
       isClosing: () => kernel.isClosing,
       flushDocs: () => kernel.documentStore.flush(),
+    }), { enabled: false });
+    await kernel.plugins.register(createMagpiePlugin({
+      refreshProviderModels: async (options) => {
+        const result = await kernel.refreshModels({ ...options, providers: [MAGPIE_PROVIDER_ID] });
+        return {
+          errors: result.errors,
+          modelCount: result.providerCatalog.find((provider) => provider.id === MAGPIE_PROVIDER_ID)?.modelCount ?? 0,
+        };
+      },
     }), { enabled: false });
     await kernel.start();
     return {
