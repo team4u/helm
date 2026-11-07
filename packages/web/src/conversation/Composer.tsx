@@ -4,7 +4,7 @@ import { conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { matchesUiScope, type HelmStoreValue } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
-import { HelmSpecView } from '../ui/HelmSpecView.js'
+import { PluginUiView } from '../ui/PluginUiView.js'
 import { AskDock } from './AskDock.js'
 import { formatBytes } from './timeline-model.js'
 
@@ -448,11 +448,12 @@ export function Composer({ conversation, prefill }: ComposerProps) {
           <div className="composer-widgets">
             {widgets.map((w) => (
               <div key={`${w.pluginId}/${w.spec.id}`} className="composer-widget-item">
-                <HelmSpecView
+                <PluginUiView
                   pluginId={w.pluginId}
-                  spec={w.spec.json}
-                  docs={w.spec.docs}
+                  spec={w.spec}
                   conversationId={conversation.id}
+                  label={`挂件 ${w.spec.id}`}
+                  slotProps={{ conversation }}
                 />
               </div>
             ))}
@@ -538,11 +539,12 @@ export function Composer({ conversation, prefill }: ComposerProps) {
               />
               {pills.map((p) => (
                 <span key={`${p.pluginId}/${p.spec.id}`} className="composer-pill-item">
-                  <HelmSpecView
+                  <PluginUiView
                     pluginId={p.pluginId}
-                    spec={p.spec.json}
-                    docs={p.spec.docs}
+                    spec={p.spec}
                     conversationId={conversation.id}
+                    label={`胶囊 ${p.spec.id}`}
+                    slotProps={{ conversation }}
                   />
                 </span>
               ))}

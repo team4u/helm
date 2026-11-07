@@ -1,10 +1,15 @@
 import * as React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import * as ReactDom from 'react-dom'
+import * as ReactDomClient from 'react-dom/client'
+import * as ReactJsxRuntime from 'react/jsx-runtime'
+import * as LucideReact from 'lucide-react'
 import type { ActionManifest, ArtifactMetadata, ConversationDetail, HelmEventFrame, HelmSnapshot, Profile, ProviderConfig, SkillSummary } from '@helm/protocol'
 import { ROOT_CONVERSATION_ID } from '@helm/protocol'
-import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, pluginsApi, setStoredToken, workflowsApi, type CredentialSummary, type ModelDescriptor, type SavedWorkflowSummary } from './api.js'
+import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, pluginsApi, setStoredToken, workflowsApi, type CredentialSummary, type ModelDescriptor } from './api.js'
 import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, SseParser, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
+import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.js'
 import { groupUiContributions, resolveTargetString, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
 
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
@@ -42,7 +47,6 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [credentials, setCredentials] = useState<CredentialSummary[]>([])
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [actions, setActions] = useState<ActionManifest[]>([])
-  const [savedWorkflows, setSavedWorkflows] = useState<SavedWorkflowSummary[]>([])
   const [primaryTarget, setPrimaryTarget] = useState<ResolvedTarget>({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
   const [splitTarget, setSplitTarget] = useState<ResolvedTarget | null>(null)
   const [workbenchOpen, setWorkbenchOpen] = useState(false)
@@ -146,6 +150,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     requests.current.clear()
     failedDocs.current.clear()
     assetGeneration.current++
+    resetPluginClientCache()
     setStoredToken(null)
     setAuthenticated(false)
     setSseConnected(false)
@@ -155,7 +160,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     updateLive(emptyLiveState)
     setConversationArtifacts({})
     setLoadErrors({})
-    setProfiles([]); setModels([]); setProviders([]); setCredentials([]); setSkills([]); setActions([]); setSavedWorkflows([])
+    setProfiles([]); setModels([]); setProviders([]); setCredentials([]); setSkills([]); setActions([])
   }, [updateLive])
   useEffect(() => {
     window.addEventListener('helm:unauthorized', logout)
@@ -170,7 +175,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
 
   const refreshAssets = useCallback(async () => {
     const generation = ++assetGeneration.current
-    const results = await Promise.allSettled([assetsApi.listProfiles(), assetsApi.listModels(), assetsApi.listProviders(), assetsApi.listCredentials(), assetsApi.listSkills(), pluginsApi.listActions(), workflowsApi.listSaved()])
+    // savedWorkflows 无任何组件消费（N1）：不再启动即拉取全仓工作流目录，避免无用网络与全树重渲染；workflowsApi.listSaved 保留供显式调用。
+    const results = await Promise.allSettled([assetsApi.listProfiles(), assetsApi.listModels(), assetsApi.listProviders(), assetsApi.listCredentials(), assetsApi.listSkills(), pluginsApi.listActions()])
     if (generation !== assetGeneration.current) return
     if (results[0].status === 'fulfilled') setProfiles(results[0].value)
     if (results[1].status === 'fulfilled') setModels(results[1].value)
@@ -178,8 +184,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     if (results[3].status === 'fulfilled') setCredentials(results[3].value)
     if (results[4].status === 'fulfilled') setSkills(results[4].value)
     if (results[5].status === 'fulfilled') setActions(results[5].value)
-    if (results[6].status === 'fulfilled') setSavedWorkflows(results[6].value)
-    const labels = ['角色', '模型', '网关', '凭据', '技能', '插件动作', '工作流']
+    const labels = ['角色', '模型', '网关', '凭据', '技能', '插件动作']
     results.forEach((result, index) => {
       if (result.status === 'rejected') pushNotice({ type: 'notification', level: 'error', title: `${labels[index]}加载失败`, body: errorText(result.reason) })
     })
@@ -364,6 +369,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
               pluginEpoch.current.set(event.plugin.id, (pluginEpoch.current.get(event.plugin.id) ?? 0) + 1)
               for (const key of requests.current.keys()) if (key.startsWith(`doc:${event.plugin.id}/`)) requests.current.delete(key)
               failedDocs.current.clear()
+              // 插件停用/卸载（ui 贡献移除）时同步释放其 client 模块缓存
+              if (!event.plugin.enabled) evictPluginClientCache(event.plugin.id)
               void refreshAssets()
             }
             if (event.type === 'models.changed') void refreshAssets()
@@ -409,19 +416,35 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const store: HelmStoreValue = useMemo(
     () => ({
       ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
-      groupedUi, savedWorkflows, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
+      groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
       setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
       live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
-      groupedUi, savedWorkflows, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
+      groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
       setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],
   )
   useEffect(() => {
-    const shared = { React, useHelmStore, usePluginDoc }
-    ;(window as unknown as Record<string, unknown>).__HELM_SHARED__ = shared
-    return () => { delete (window as unknown as Record<string, unknown>).__HELM_SHARED__ }
+    // 宿主共享运行时：
+    // - __HELM_SHARED__：具名句柄（调试/未来消费者）；
+    // - __helm_shared_* 命名空间：插件 client.tsx 编译产物（external 依赖重写后）
+    //   经这些全局命名空间导入同一份 React/lucide 实例，绝不打包第二份。
+    const w = window as unknown as Record<string, unknown>
+    w.__HELM_SHARED__ = { React, useHelmStore, usePluginDoc }
+    w.__helm_shared_react = React
+    w.__helm_shared_react_dom = ReactDom
+    w.__helm_shared_react_dom_client = ReactDomClient
+    w.__helm_shared_react_jsx_runtime = ReactJsxRuntime
+    w.__helm_shared_lucide_react = LucideReact
+    return () => {
+      delete w.__HELM_SHARED__
+      delete w.__helm_shared_react
+      delete w.__helm_shared_react_dom
+      delete w.__helm_shared_react_dom_client
+      delete w.__helm_shared_react_jsx_runtime
+      delete w.__helm_shared_lucide_react
+    }
   }, [])
   return <HelmStoreContext.Provider value={store}>{children}</HelmStoreContext.Provider>
 }

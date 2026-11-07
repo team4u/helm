@@ -3,7 +3,7 @@ import type { PluginSummary } from '@helm/protocol'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
-import { HelmSpecView } from '../ui/HelmSpecView.js'
+import { PluginUiView } from '../ui/PluginUiView.js'
 import {
   buildPluginConfigPayload,
   configFieldInitialValue,
@@ -339,10 +339,10 @@ export function PluginSettingsModal({
                       <HelmIcon name="sliders" size={13} />
                       {settingsPanel.spec.label || '插件面板'}
                     </h4>
-                    <HelmSpecView
+                    <PluginUiView
                       pluginId={plugin.id}
-                      spec={settingsPanel.spec.json}
-                      docs={settingsPanel.spec.docs}
+                      spec={settingsPanel.spec}
+                      label={`设置面板 ${settingsPanel.spec.id}`}
                     />
                   </section>
                 )}

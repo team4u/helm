@@ -118,6 +118,47 @@ export function pluginsCommands(): CommandSpec[] {
   })
 
   cmds.push({
+    path: ['plugins', 'client'],
+    description: '获取插件 client.tsx 编译产物（GET /api/plugins/:id/client.mjs?module=...；--module 缺省 client.tsx）',
+    flags: [
+      { name: 'module', type: 'string', help: '相对插件 clientRoot 的模块路径（缺省 client.tsx）' },
+      { name: 'output', type: 'string', help: '写入目标文件路径（缺省 stdout；--json 时仍写文件并打印元信息）' },
+    ],
+    positional: '<id>',
+    async run(ctx: CommandContext) {
+      const parsed = parseFlags(
+        [
+          { name: 'module', type: 'string' },
+          { name: 'output', type: 'string' },
+        ],
+        ctx.args,
+      )
+      const id = requirePositional(parsed.positionals, 0, 'id')
+      assertNoExtraPositionals(parsed.positionals, 1)
+      const moduleRef = (parsed.flags.get('module') as string | undefined) ?? 'client.tsx'
+      if (parsed.flags.has('output') && typeof parsed.flags.get('output') !== 'string') {
+        throw new CliError('--output 需要文件路径', 'invalid_flag_value')
+      }
+      const outPath = parsed.flags.get('output') as string | undefined
+      const hub = await ctx.hub()
+      const path = `/api/plugins/${encodeURIComponent(id)}/client.mjs?module=${encodeURIComponent(moduleRef)}`
+      const response = await hub.raw(path)
+      const code = await response.text()
+      const contentHash = response.headers.get('x-helm-client-hash') ?? ''
+      if (ctx.json) {
+        printResult(ctx, { pluginId: id, module: moduleRef, contentHash, bytes: code.length })
+      }
+      if (outPath !== undefined) {
+        const { writeFile } = await import('node:fs/promises')
+        await writeFile(outPath, code, 'utf8')
+        if (!ctx.json) ctx.io.out(`已写入 ${outPath}（${code.length} 字节，hash ${contentHash}）\n`)
+        return
+      }
+      if (!ctx.json) ctx.io.out(code)
+    },
+  })
+
+  cmds.push({
     path: ['actions', 'list'],
     description: '列出插件动作清单（GET /api/actions）',
     async run(ctx: CommandContext) {

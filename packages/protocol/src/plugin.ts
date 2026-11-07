@@ -469,5 +469,13 @@ export interface PluginDefinition {
   version?: string
   /** true 表示常驻不可卸载（builtin:assistant）。 */
   locked?: boolean
+  /**
+   * 客户端源根目录（绝对路径，可选）：声明了 client.tsx 组件引用（UiSpecBase.client）
+   * 的插件必须提供。宿主只允许 ClientComponentRef.module 解析到该目录内的相对
+   * .ts/.tsx 源文件，编译产物按源内容（含本地依赖）hash 缓存；未声明时一切
+   * client 引用在注册边界拒绝（不允许无法编译的悬空引用）。由可信插件定义传入，
+   * 不属于用户可配置面。
+   */
+  clientRoot?: string
   definePlugin(ctx: HelmPluginContext): MaybePromise<void>
 }

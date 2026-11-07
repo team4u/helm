@@ -400,7 +400,7 @@ test('fork 将字符串 entryId 转换为正整数请求体，不再发送数字
 
 test('fork 对非法 entryId 显式抛错，不发出请求', { timeout: 60_000 }, async (t) => {
   const captured = stubFetchOnce(t, () => ({ ok: true }))
-  for (const bad of ['abc', '0', '-3', '', Number.NaN]) {
+  for (const bad of ['abc', '0', '-3', '', Number.NaN, '3oops', '1.5', '1e2', ' 3', '3 ', String(Number.MAX_SAFE_INTEGER + 1), Number.MAX_SAFE_INTEGER + 1]) {
     await assert.rejects(async () => conversationsApi.fork(7, bad as string), (err: unknown) => {
       assert.ok(err instanceof ApiClientError)
       assert.equal(err.code, 'validation_error')

@@ -5,7 +5,7 @@
 import type { ReactNode } from 'react'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
-import { HelmSpecView } from '../ui/HelmSpecView.js'
+import { PluginUiView } from '../ui/PluginUiView.js'
 import { HerdrOverviewScreen } from './HerdrOverviewScreen.js'
 
 export interface ScreenHostProps {
@@ -26,7 +26,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
   return <GenericSpecScreen pluginId={pluginId} screenId={screenId} isSplit={isSplit} onCloseSplit={onCloseSplit} />
 }
 
-/** 通用声明式兜底：groupedUi.screens 命中即用 HelmSpecView 渲染。 */
+/** 通用兜底：groupedUi.screens 命中即用 PluginUiView 渲染（json/client 双轨）。 */
 function GenericSpecScreen({
   pluginId,
   screenId,
@@ -79,6 +79,7 @@ function GenericSpecScreen({
     icon?: string
     json?: Record<string, unknown>
     docs?: string[]
+    client?: { module: string; export: string }
   }
 
   return (
@@ -99,14 +100,12 @@ function GenericSpecScreen({
       </div>
       <div className="timeline-scroll">
         <div className="timeline-inner" style={{ maxWidth: 1100 }}>
-          {spec.json !== undefined ? (
-            <HelmSpecView pluginId={pluginId} spec={spec.json} docs={spec.docs} />
-          ) : (
-            <div className="jr-callout jr-callout-warn">
-              <HelmIcon name="alert-triangle" size={13} />
-              <span>该视图需要 client.tsx 组件。当前宿主尚未接入该加载通道，请提供 JSON Spec。</span>
-            </div>
-          )}
+          <PluginUiView
+            pluginId={pluginId}
+            spec={spec}
+            slotProps={{ pluginId, screenId }}
+            label={`视图 ${screenId}`}
+          />
         </div>
       </div>
     </div>

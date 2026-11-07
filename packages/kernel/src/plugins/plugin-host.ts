@@ -71,6 +71,7 @@ import type { Provider } from '@earendil-works/pi-ai';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
 import { PluginTaskTracker } from './tracking.js';
 import { assertSchemaCompilable, validatePluginInput, validatePluginOutput } from './schema.js';
+import { assertModuleRefShape, compilePluginClientModule, type ClientCompileResult } from './client-compiler.js';
 import { redactJsonValue } from '../redact.js';
 
 // 主代理集成接口 ---------------------------------------------------------------
@@ -1010,6 +1011,30 @@ export class PluginHost {
     return out;
   }
 
+  // --- client.tsx 编译产物 --------------------------------------------------
+
+  /**
+   * 获取已启用插件的 client 模块编译产物（缓存命中时零编译）。
+   * 停用/未注册/未声明 clientRoot/模块越根/编译失败一律显式抛 HelmError；
+   * 供 HTTP GET /api/plugins/:id/client.mjs 消费（鉴权在 HTTP 层）。
+   */
+  async getClientModule(pluginId: string, moduleRef: string): Promise<ClientCompileResult> {
+    this.assertNotDisposed();
+    assertModuleRefShape(pluginId, moduleRef);
+    const state = this.plugins.get(pluginId);
+    if (!state || !state.enabled || state.phase !== 'idle') {
+      throw new HelmError('plugin_client_unavailable', `插件 ${pluginId} 未启用，不提供 client 模块`, 409, {
+        pluginId,
+        module: moduleRef,
+      });
+    }
+    const clientRoot = state.definition.clientRoot;
+    if (clientRoot === undefined) {
+      throw new HelmError('plugin_client_unavailable', `插件 ${pluginId} 未声明 clientRoot`, 404, { pluginId });
+    }
+    return compilePluginClientModule(pluginId, clientRoot, moduleRef, this.options.dataDir);
+  }
+
   // --- 公共文档 -----------------------------------------------------------
 
   /**
@@ -1384,6 +1409,31 @@ export class PluginHost {
       }
       // scope 在注册边界即校验（非法 scope 会让渲染可见性静默失控）
       assertConversationScope(pluginId, `插件 ${pluginId} ui.${fnName} 声明`, (spec as { scope?: unknown }).scope);
+      // client 引用：需插件定义提供 clientRoot，且 module 形状合法（相对 .ts/.tsx）；
+      // 悬空引用（无法编译）在注册边界拒绝，绝不留给渲染期于静默空白。
+      const client = (spec as { client?: unknown }).client;
+      if (client !== undefined) {
+        const def = state.definition;
+        if (def.clientRoot === undefined) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.${fnName} 声明 client 引用但插件定义未提供 clientRoot`,
+            400,
+            { pluginId },
+          );
+        }
+        if (!isPlainObject(client) || Object.keys(client).some((k) => k !== 'module' && k !== 'export')) {
+          throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.${fnName} 的 client 仅允许 { module, export }`, 400);
+        }
+        assertModuleRefShape(pluginId, String(client.module ?? ''));
+        if (typeof client.export !== 'string' || client.export.length === 0 || !/^[A-Za-z0-9_$]+$/.test(client.export)) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.${fnName} 的 client.export 必须是非空合法导出名`,
+            400,
+          );
+        }
+      }
       // timeline.renderer 的 matchMeta 仅允许 { renderer: 非空字符串 }
       if (surface === 'timeline.renderer') {
         const matchMeta = (spec as { matchMeta?: unknown }).matchMeta;
@@ -1941,6 +1991,15 @@ export class PluginHost {
     }
     if (typeof definition.definePlugin !== 'function') {
       throw new HelmError('invalid_plugin_definition', `插件 ${definition.id} 缺少 definePlugin 函数`, 400);
+    }
+    // clientRoot：可选但一旦存在必须是绝对路径字符串（目录存在性与 containment 在首次编译时二次校验）
+    if (definition.clientRoot !== undefined && (typeof definition.clientRoot !== 'string' || !definition.clientRoot.startsWith('/') || definition.clientRoot.includes('..'))) {
+      throw new HelmError(
+        'invalid_plugin_definition',
+        `插件 ${definition.id} 的 clientRoot 必须是不含 .. 的绝对目录路径`,
+        400,
+        { pluginId: definition.id },
+      );
     }
   }
 

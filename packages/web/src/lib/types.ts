@@ -26,7 +26,7 @@ import type {
   WorkflowRunSummary,
 } from '@helm/protocol'
 import { ROOT_CONVERSATION_ID } from '@helm/protocol'
-import type { ModelDescriptor, SavedWorkflowSummary } from './api.js'
+import type { ModelDescriptor } from './api.js'
 
 export type ThemeMode = 'light' | 'dark'
 export type ThemePreference = 'system' | 'light' | 'dark'
@@ -234,7 +234,6 @@ export interface HelmStoreValue {
   groupedUi: GroupedUiSpecs
   pluginDocs: Record<string, unknown> // key: `${pluginId}/${docName}`
   workflowRuns: WorkflowRunSummary[]
-  savedWorkflows: SavedWorkflowSummary[]
 
   // 静态配置资产
   profiles: Profile[]

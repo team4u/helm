@@ -105,7 +105,7 @@ ctx.ui.screen({
 
 个人助理对话、附件、审批、模型选择、搜索与分叉、角色与凭据编辑、插件设置、Herdr 总览、SuperAgent 图谱及 JSON Spec 扩展点已接入。Herdr/SuperAgent 的界面读取已有插件契约；触发器业务继续由其负责的 Agent 开发，Web 通用 screen 可渲染其 JSON Spec。
 
-外部插件的 `client.tsx` 编译和动态加载尚未接通，当前会明确提示需要 JSON Spec；`window.__HELM_SHARED__` 不能视为已完成外部组件宿主。浏览器验收中的模型回复由 SDK faux provider 提供，不代表真实服务商模型联通验收。
+`client.tsx` 第二轨道已接入：插件定义声明 `clientRoot` 后，`ui.*({ client: { module, export } })` 的扩展点由 `<PluginUiView />` 动态加载编译产物（`GET /api/plugins/:id/client.mjs`，Bearer fetch + Blob URL import，按 contentHash 缓存，停用即失效）。React/react-dom/lucide-react 经 `globalThis.__helm_shared_*` 命名空间共享同一实例，绝不打包第二份。组件内可用 `usePluginContext()`（callAction/openScreen/openSplitScreen/getPluginDoc/conversationId/theme，全部真实宿主能力）。双轨优先级：同时声明 `client` 与 `json` 时 client 优先，json 为宿主不支持时的回落。加载/导出/渲染错误显式展示，不静默空白。当前范围不含外部插件安装与 npm 包加载系统（clientRoot 由可信注册方传入）。浏览器验收中的模型回复由 SDK faux provider 提供，不代表真实服务商模型联通验收。
 
 ## 可重复的浏览器验收服务
 
@@ -115,4 +115,4 @@ node scripts/web-acceptance.mjs
 # 另一终端运行 pnpm dev:web，再访问 http://127.0.0.1:3201
 ```
 
-该脚本新建独立临时数据目录、生成临时密码并打印，使用真实内核/SQLite/HTTP、真实本地 bash 工具、85 轮分页历史，以及一个临时注册的 JSON Spec 样例插件。样例包含表格行导航、布尔动作与 public doc 更新。它不读取用户运行数据，也不注册到生产实例。按 Ctrl+C 关闭服务；临时目录保留便于排查。
+该脚本新建独立临时数据目录、生成临时密码并打印，使用真实内核/SQLite/HTTP、真实本地 bash 工具、85 轮分页历史，以及一个临时注册的 JSON Spec 样例插件。样例包含表格行导航、布尔动作与 public doc 更新。它不读取用户运行数据，也不注册到生产实例。验收服务额外注册 `test:client-acceptance`（真实 clientRoot 夹具），左栏「client.tsx 验收」进入动态组件屏（含本地依赖闭包编译与计数交互），用于验证浏览器内真实动态加载。按 Ctrl+C 关闭服务；临时目录保留便于排查。
