@@ -1032,7 +1032,26 @@ export class PluginHost {
     if (clientRoot === undefined) {
       throw new HelmError('plugin_client_unavailable', `插件 ${pluginId} 未声明 clientRoot`, 404, { pluginId });
     }
-    return compilePluginClientModule(pluginId, clientRoot, moduleRef, this.options.dataDir);
+    // 捕获启用周期：编译 await 期间插件可能被停用/重启（epoch 递增）。迟到的产物
+    // 绝不返回成功——旧周期源可能已失效，返回它会伪造「插件仍可用」。
+    const epoch = state.epoch;
+    const result = await compilePluginClientModule(pluginId, clientRoot, moduleRef, this.options.dataDir);
+    const current = this.plugins.get(pluginId);
+    if (
+      this.disposed ||
+      current !== state ||
+      state.epoch !== epoch ||
+      !state.enabled ||
+      state.phase !== 'idle'
+    ) {
+      throw new HelmError(
+        'plugin_client_unavailable',
+        `插件 ${pluginId} 在 client 模块编译完成前已停用或进入新启用周期，产物作废`,
+        409,
+        { pluginId, module: moduleRef },
+      );
+    }
+    return result;
   }
 
   // --- 公共文档 -----------------------------------------------------------
@@ -1992,11 +2011,20 @@ export class PluginHost {
     if (typeof definition.definePlugin !== 'function') {
       throw new HelmError('invalid_plugin_definition', `插件 ${definition.id} 缺少 definePlugin 函数`, 400);
     }
-    // clientRoot：可选但一旦存在必须是绝对路径字符串（目录存在性与 containment 在首次编译时二次校验）
-    if (definition.clientRoot !== undefined && (typeof definition.clientRoot !== 'string' || !definition.clientRoot.startsWith('/') || definition.clientRoot.includes('..'))) {
+    // clientRoot：可选但一旦存在必须是跨平台绝对路径（POSIX /、Windows 盘符 C:\ 或
+    // UNC \\server\share——与 http/validate.ts 的 isCrossPlatformAbsolutePath 同一语义，
+    // 修复旧实现只认 startsWith('/') 误拒 Windows 绝对路径）；段级 .. 检查（目录名
+    // 含字面 ".." 如 foo..bar 是合法目录，只有整段 ".." 才是越根）。目录存在性与
+    // containment（realpath 双检）在首次编译时二次校验。
+    if (
+      definition.clientRoot !== undefined &&
+      (typeof definition.clientRoot !== 'string' ||
+        !isCrossPlatformAbsolutePath(definition.clientRoot) ||
+        definition.clientRoot.split(/[\\/]/).includes('..'))
+    ) {
       throw new HelmError(
         'invalid_plugin_definition',
-        `插件 ${definition.id} 的 clientRoot 必须是不含 .. 的绝对目录路径`,
+        `插件 ${definition.id} 的 clientRoot 必须是不含 .. 段的跨平台绝对目录路径（POSIX /、Windows 盘符或 UNC）`,
         400,
         { pluginId: definition.id },
       );
@@ -2045,6 +2073,13 @@ export class PluginHost {
 
 function pluginRoutePrefix(pluginId: string): string {
   return `/api/plugins/${encodeURIComponent(pluginId)}/routes`;
+}
+
+/** 跨平台绝对路径：POSIX `/`、Windows 盘符 `^[a-zA-Z]:[\\/]` 与 UNC `^\\\\[^\\]+\\[^\\]+`。
+ * 与 http/validate.ts 的 isCrossPlatformAbsolutePath 同一语义（复判 plugin 定义层的
+ * clientRoot，避免旧实现 startsWith('/') 误拒 Windows 绝对路径）。 */
+function isCrossPlatformAbsolutePath(p: string): boolean {
+  return p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p) || /^\\\\[^\\]+\\[^\\]+/.test(p);
 }
 
 /**

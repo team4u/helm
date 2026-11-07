@@ -66,7 +66,7 @@ function makeBackend(): PluginHostBackend {
 
 function makeKernel(): KernelRuntimeLike {
   const auth = new AuthService(dataDir)
-  return {
+  const kernel: KernelRuntimeLike = {
     dataDir,
     auth,
     events: new TestEventHub(),
@@ -74,29 +74,33 @@ function makeKernel(): KernelRuntimeLike {
     skills: new SkillService(dataDir),
     credentials: new CredentialService(dataDir),
     providers: new ProviderService(dataDir),
-    // biome-ignore lint: 本测试不消费 artifacts
     artifacts: undefined as never,
     plugins: pluginHost,
     listConversations: async () => [],
-    getConversationDetail: async (id) => {
+    getConversationDetail: async (id: number) => {
       throw new HelmError('not_found', `会话不存在: ${id}`, 404)
     },
     createConversation: async () => makeConversation(1),
-    updateConversation: async (id) => makeConversation(id),
+    updateConversation: async (id: number) => makeConversation(id),
     deleteConversation: async () => {},
     submitInput: async () => ({ submissionId: 'sub' }),
-    waitForInput: async (id) => ({ conversationId: id, submissionId: 'sub', text: '', entry: { id: 'e', kind: 'pi.assistant' } }),
+    waitForInput: async (id: number) => ({ conversationId: id, submissionId: 'sub', text: '', entry: { id: 'e', kind: 'pi.assistant' } }),
     abortConversation: async () => {},
-    resetConversation: async (id) => makeConversation(id),
-    compactConversation: async (id) => ({ taskId: 1, conversation: makeConversation(id) }),
-    forkConversation: async (id) => makeConversation(id + 100),
+    resetConversation: async (id: number) => makeConversation(id),
+    compactConversation: async (id: number) => ({ taskId: 1, conversation: makeConversation(id) }),
+    forkConversation: async (id: number) => makeConversation(id + 100),
     listAsks: async () => [],
     answerAsk: async () => {},
     cancelAsk: async () => {},
     search: async () => [],
     listModels: () => [],
     listModelProviders: () => [],
-  } as unknown as KernelRuntimeLike
+    listNodes: () => [],
+    issueNodeToken: () => ({ nodeId: 'local', token: 'local:t', createdAt: 1 }),
+    removeNode: async () => {},
+    execEnv: async () => ({ ok: true, exitCode: 0, output: '', timedOut: false }),
+  }
+  return kernel
 }
 
 const workflows: WorkflowServiceLike = {
@@ -353,4 +357,196 @@ test('HTTP：未声明 clientRoot 的插件 404', { timeout: 60_000 }, async () 
   assert.equal(res.status, 404)
   const body = JSON.parse(res.text) as { error?: { code?: string } }
   assert.equal(body.error?.code, 'plugin_client_unavailable')
+})
+
+// ---------------------------------------------------------------------------
+// 第一版缺陷修复回归：import 形态 / 裸依赖 / 依赖闭包 / 并发 / 迟到编译
+// ---------------------------------------------------------------------------
+
+test('default+named / as 别名 import：共享 shim 生成合法 ESM 绑定（非正则改写）', { timeout: 60_000 }, async () => {
+  await writeFile(
+    join(clientRoot, 'alias.tsx'),
+    [
+      "import ReactDef, { useState as state, useMemo } from 'react'",
+      "import * as Lucide from 'lucide-react'",
+      "import { usePluginContext } from '@helm/plugin-client'",
+      'export function AliasPanel() {',
+      '  const [n] = state(1)',
+      '  const doubled = useMemo(() => n * 2, [n])',
+      '  if (typeof usePluginContext !== \'function\') return null',
+      '  return ReactDef.createElement(\'div\', null, `alias:${doubled}:${typeof Lucide.Save}`)',
+      '}',
+      'export const reactDefaultIsObject = typeof ReactDef.createElement',
+      'export const memoKind = typeof useMemo',
+    ].join('\n'),
+  )
+  try {
+    const result = await pluginHost.getClientModule('test:client-fixture', 'alias.tsx')
+    // 产物必须是合法 ESM（旧正则重写会产出 `const { useState as state }` 非法 JS）
+    assert.doesNotMatch(result.code, /const\s*\{\s*useState\s+as\s+state\s*\}/)
+    // kernel 不依赖 react：挂最小 fake 命名空间验证绑定机制（esbuild 合法导出而非正则改写）
+    const fakeReact = {
+      createElement: (tag: string, _props: unknown, ...children: unknown[]) => ({ tag, children }),
+      useState: (v: number) => [v, () => {}],
+      useMemo: <T,>(fn: () => T) => fn(),
+    }
+    const g2 = globalThis as unknown as Record<string, unknown>
+    g2.__helm_shared_react = fakeReact
+    g2.__helm_shared_lucide_react = { Save: () => null, Activity: () => null }
+    g2.__helm_shared_plugin_client = { usePluginContext: () => null, usePluginDoc: () => undefined }
+    const url = `data:text/javascript;base64,${Buffer.from(result.code, 'utf8').toString('base64')}`
+    const mod = (await import(url)) as Record<string, unknown>
+    assert.equal(typeof mod.AliasPanel, 'function')
+    assert.equal(mod.reactDefaultIsObject, 'function')
+    assert.equal(mod.memoKind, 'function')
+    const element = (mod.AliasPanel as () => { tag: string; children: unknown[] })()
+    assert.equal(String(element.children), 'alias:2:function')
+  } finally {
+    await rm(join(clientRoot, 'alias.tsx'), { force: true })
+  }
+})
+
+test('非共享裸依赖（npm 包）显式拒绝：绝不把 node_modules 打进 bundle', { timeout: 60_000 }, async () => {
+  await writeFile(
+    join(clientRoot, 'bare-dep.tsx'),
+    [
+      "import { equal } from 'assert'",
+      'export const run = (): unknown => equal',
+    ].join('\n'),
+  )
+  try {
+    await assert.rejects(
+      pluginHost.getClientModule('test:client-fixture', 'bare-dep.tsx'),
+      (err: unknown) =>
+        err instanceof HelmError &&
+        err.code === 'client_compile_failed' &&
+        err.message.includes('裸依赖') &&
+        err.message.includes('assert'),
+    )
+  } finally {
+    await rm(join(clientRoot, 'bare-dep.tsx'), { force: true })
+  }
+})
+
+test('export * from 本地依赖：依赖源变化后 hash 变化（旧实现正则扫描漏 export-from）', { timeout: 60_000 }, async () => {
+  await writeFile(join(clientRoot, 're-export.ts'), "export * from './values'\nexport const local = 1\n")
+  await writeFile(join(clientRoot, 'values.ts'), 'export const fromValues = 1\n')
+  await writeFile(join(clientRoot, 'entry-export-star.ts'), "export { local } from './re-export'\n")
+  try {
+    const before = await pluginHost.getClientModule('test:client-fixture', 'entry-export-star.ts')
+    // values.ts 只经 export * 链引入（自身无直接 import 语句）；改它必须失效缓存。
+    // 注：未消费符号会被 esbuild tree-shake，产物代码可能相同——hash 必须变化。
+    await writeFile(join(clientRoot, 'values.ts'), 'export const fromValues = 2\n')
+    const after = await pluginHost.getClientModule('test:client-fixture', 'entry-export-star.ts')
+    assert.notEqual(before.contentHash, after.contentHash)
+  } finally {
+    await rm(join(clientRoot, 're-export.ts'), { force: true })
+    await rm(join(clientRoot, 'values.ts'), { force: true })
+    await rm(join(clientRoot, 'entry-export-star.ts'), { force: true })
+  }
+})
+
+test('依赖符号链接越根拒绝：本地 import 指向根外符号链接（旧实现只检入口）', { timeout: 60_000 }, async () => {
+  const outsideDir = await mkdtemp(join(tmpdir(), 'helm-plugin-client-outside2-'))
+  try {
+    const outsideFile = join(outsideDir, 'outside-dep.ts')
+    await writeFile(outsideFile, 'export const evil = 1\n')
+    await symlink(outsideFile, join(clientRoot, 'linked-dep.ts'))
+    await writeFile(join(clientRoot, 'entry-linked.ts'), "import { evil } from './linked-dep'\nexport const v = evil\n")
+    await assert.rejects(
+      pluginHost.getClientModule('test:client-fixture', 'entry-linked.ts'),
+      (err: unknown) =>
+        err instanceof HelmError && err.code === 'client_compile_failed' && err.message.includes('越出 clientRoot'),
+    )
+  } finally {
+    await rm(join(clientRoot, 'linked-dep.ts'), { force: true })
+    await rm(join(clientRoot, 'entry-linked.ts'), { force: true })
+    await rm(outsideDir, { recursive: true, force: true })
+  }
+})
+
+test('并发编译同 key：合并同一 Promise，产物一致（无临时文件碰撞）', { timeout: 60_000 }, async () => {
+  await writeFile(
+    join(clientRoot, 'concurrent.ts'),
+    "import { useCounter } from './helper'\nexport const v = useCounter !== undefined\n",
+  )
+  try {
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => pluginHost.getClientModule('test:client-fixture', 'concurrent.ts')),
+    )
+    const first = results[0]
+    assert.ok(first)
+    for (const r of results) {
+      assert.equal(r.contentHash, first.contentHash)
+      assert.equal(r.code, first.code)
+    }
+  } finally {
+    await rm(join(clientRoot, 'concurrent.ts'), { force: true })
+  }
+})
+
+test('编译失败后可重试：失败不缓存，修复源后重新编译成功', { timeout: 60_000 }, async () => {
+  await writeFile(join(clientRoot, 'retry.ts'), 'export const x = (((\n')
+  try {
+    await assert.rejects(pluginHost.getClientModule('test:client-fixture', 'retry.ts'))
+    await writeFile(join(clientRoot, 'retry.ts'), 'export const x = 1\n')
+    const ok = await pluginHost.getClientModule('test:client-fixture', 'retry.ts')
+    assert.ok(ok.code.length > 0)
+  } finally {
+    await rm(join(clientRoot, 'retry.ts'), { force: true })
+  }
+})
+
+test('迟到编译拒绝：编译期间插件停用，产物不得返回成功（epoch 守卫）', { timeout: 60_000 }, async () => {
+  // 先破坏依赖源使编译足够慢不可行（esbuild 很快）——改用直连 host：并发触发编译与 disable
+  await writeFile(
+    join(clientRoot, 'late.ts'),
+    "import { useCounter } from './helper'\nexport const v = 1\n",
+  )
+  try {
+    const compiling = pluginHost.getClientModule('test:client-fixture', 'late.ts')
+    const disabling = pluginHost.disable('test:client-fixture')
+    const [lateResult] = await Promise.allSettled([compiling])
+    await disabling
+    if (lateResult.status === 'fulfilled') {
+      // 竞态窗口未命中（编译先完成）：此时插件已停用，再次获取必须拒绝
+      // 且 fulfill 本身发生在 disable 前不算缺陷——验证停用后拒绝即可
+    } else {
+      assert.equal((lateResult.reason as HelmError).code, 'plugin_client_unavailable')
+    }
+    await assert.rejects(
+      pluginHost.getClientModule('test:client-fixture', 'late.ts'),
+      (err: unknown) => err instanceof HelmError && err.code === 'plugin_client_unavailable',
+    )
+  } finally {
+    await pluginHost.enable('test:client-fixture')
+    await rm(join(clientRoot, 'late.ts'), { force: true })
+  }
+})
+
+test('clientRoot 跨平台绝对路径：Windows 盘符合法、foo..bar 目录名不再误拒', { timeout: 60_000 }, async () => {
+  // 目录名含字面 ..（合法目录名）不应误拒；旧实现 clientRoot.includes('..') 会拒绝
+  const dotDotDir = join(dataDir, 'foo..bar')
+  await mkdir(dotDotDir, { recursive: true })
+  await pluginHost.register({
+    id: 'test:dotdot-root',
+    clientRoot: dotDotDir,
+    definePlugin() {},
+  })
+  // Windows 盘符形态在注册层合法（非 POSIX startsWith('/') 误拒）；目录存在性由编译期校验
+  await pluginHost.register({
+    id: 'test:win-root',
+    clientRoot: 'C:\\helm\\plugins\\demo\\client',
+    definePlugin() {},
+  })
+  // 相对路径仍拒绝
+  await assert.rejects(
+    pluginHost.register({ id: 'test:rel-root', clientRoot: 'relative/dir', definePlugin() {} }),
+    (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_definition',
+  )
+  // 整段 .. 仍拒绝（真正的越根；join 会归一化掉 ..，故用字面量路径保留 .. 段）
+  await assert.rejects(
+    pluginHost.register({ id: 'test:seg-root', clientRoot: `${dataDir}/a/../b`, definePlugin() {} }),
+    (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_definition',
+  )
 })

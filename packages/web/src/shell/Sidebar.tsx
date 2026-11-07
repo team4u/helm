@@ -378,12 +378,21 @@ function WorkbenchNavItems({ store }: { store: HelmStoreValue }) {
   )
 }
 
-/** 插件动态会话分组区（sidebar.section）：通用渲染，支持 collapsible / defaultCollapsed。 */
+/** 插件动态会话分组区（sidebar.section）：filterTag 分组通用渲染，支持 collapsible / defaultCollapsed。 */
 function SidebarSectionGroups({ store }: { store: HelmStoreValue }) {
   const sections = store.groupedUi.sidebarSections.filter((s) => s.spec.filterTag)
-  if (sections.length === 0) return null
+  // 纯内容型 section（无 filterTag，但声明了 client/json 内容）：渲染内容本身，
+  // 不因缺少 filterTag 静默丢弃（与 sidebar.item 的 client 内容渲染同一策略）。
+  const contentSections = store.groupedUi.sidebarSections.filter(
+    (s) => !s.spec.filterTag && (s.spec.client !== undefined || s.spec.json !== undefined),
+  )
   return (
     <>
+      {contentSections.map((section) => (
+        <div key={`content:${section.pluginId}/${section.spec.id}`} style={{ padding: '0 10px 6px' }}>
+          <PluginUiView pluginId={section.pluginId} spec={section.spec} label={`侧栏分组 ${section.spec.id}`} />
+        </div>
+      ))}
       {sections.map((section) => (
         <SidebarSectionGroup key={`${section.pluginId}/${section.spec.id}`} store={store} section={section} />
       ))}

@@ -10,6 +10,7 @@ import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, p
 import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, SseParser, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
 import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.js'
+import * as HelmPluginClient from './plugin-client-context.js'
 import { groupUiContributions, resolveTargetString, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
 
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
@@ -428,8 +429,9 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     // 宿主共享运行时：
     // - __HELM_SHARED__：具名句柄（调试/未来消费者）；
-    // - __helm_shared_* 命名空间：插件 client.tsx 编译产物（external 依赖重写后）
-    //   经这些全局命名空间导入同一份 React/lucide 实例，绝不打包第二份。
+    // - __helm_shared_* 命名空间：插件 client.tsx 编译产物把共享依赖（react 等）
+    //   与 '@helm/plugin-client' 虚拟化为这些全局命名空间，运行时取得同一份
+    //   React/lucide/宿主 hooks 实例，绝不打包第二份 React。
     const w = window as unknown as Record<string, unknown>
     w.__HELM_SHARED__ = { React, useHelmStore, usePluginDoc }
     w.__helm_shared_react = React
@@ -437,6 +439,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     w.__helm_shared_react_dom_client = ReactDomClient
     w.__helm_shared_react_jsx_runtime = ReactJsxRuntime
     w.__helm_shared_lucide_react = LucideReact
+    w.__helm_shared_plugin_client = HelmPluginClient
     return () => {
       delete w.__HELM_SHARED__
       delete w.__helm_shared_react
@@ -444,6 +447,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       delete w.__helm_shared_react_dom_client
       delete w.__helm_shared_react_jsx_runtime
       delete w.__helm_shared_lucide_react
+      delete w.__helm_shared_plugin_client
     }
   }, [])
   return <HelmStoreContext.Provider value={store}>{children}</HelmStoreContext.Provider>

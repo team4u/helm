@@ -4,6 +4,8 @@ import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { conversationsApi, searchApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { PluginUiView } from '../ui/PluginUiView.js'
+import type { CommandSpec } from '@helm/protocol'
 
 type PaletteRow =
   | { kind: 'command'; id: string; title: string; hint?: string; icon?: string; keywords?: string[]; run: () => void }
@@ -15,6 +17,9 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
   const [hits, setHits] = useState<SearchHit[]>([])
   const [searching, setSearching] = useState(false)
   const [selectedIdx, setSelectedIdx] = useState(0)
+  // 声明了 client/json 内容的插件命令：选中时在本面板内联渲染内容
+  //（纯元数据命令仍走 actionId 执行，不改变默认导航行为）。
+  const [previewCmd, setPreviewCmd] = useState<{ pluginId: string; spec: CommandSpec } | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
 
@@ -146,6 +151,15 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     return rows
   }, [store])
 
+  // 声明了 client/json 内容的插件命令：作为可选中命令行列出（选中即内联渲染）
+  const pluginContentCommands = useMemo(
+    () =>
+      store.groupedUi.commands
+        .filter((cmd) => cmd.spec.client !== undefined || cmd.spec.json !== undefined)
+        .map((cmd) => ({ pluginId: cmd.pluginId, spec: cmd.spec })),
+    [store.groupedUi.commands],
+  )
+
   const pluginCommands = useMemo<Array<PaletteRow>>(
     () =>
       store.groupedUi.commands.map((cmd) => ({
@@ -220,6 +234,12 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
 
   const runRow = (row: PaletteRow) => {
     if (row.kind === 'command') {
+      // 内容型命令（声明 client/json）：内联渲染内容，不关闭面板
+      const cmd = pluginContentCommands.find((c) => `plugin:${c.pluginId}/${c.spec.id}` === row.id)
+      if (cmd) {
+        setPreviewCmd(cmd)
+        return
+      }
       close()
       row.run()
     } else if (row.hit.entryId) {
@@ -286,6 +306,47 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
           </span>
         </div>
         <div className="modal-body" style={{ padding: 6, gap: 2 }} ref={listRef}>
+          {previewCmd && (
+            <div
+              style={{
+                padding: 8,
+                marginBottom: 6,
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 8,
+                maxHeight: 300,
+                overflowY: 'auto',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 6,
+                  marginBottom: 6,
+                  fontSize: 12,
+                  color: 'var(--fg-muted)',
+                }}
+              >
+                <span>
+                  {previewCmd.spec.title} · {previewCmd.pluginId}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setPreviewCmd(null)}
+                  aria-label="关闭命令内容预览"
+                >
+                  收起
+                </button>
+              </div>
+              <PluginUiView
+                pluginId={previewCmd.pluginId}
+                spec={previewCmd.spec}
+                label={`命令 ${previewCmd.spec.id} 内容`}
+              />
+            </div>
+          )}
           {rows.length === 0 && (
             <div style={{ padding: '18px 12px', color: 'var(--fg-subtle)', fontSize: 12.5, textAlign: 'center' }}>
               {query.trim() ? '没有匹配的结果' : '输入关键词搜索，或直接选择下方命令'}

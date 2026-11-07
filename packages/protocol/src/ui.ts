@@ -168,7 +168,8 @@ export interface PluginUiContribution {
 /**
  * client.tsx 组件内部的宿主上下文（usePluginContext() 返回值）：
  * 全部能力来自真实宿主（callAction 走 POST /api/actions，openScreen/openSplitScreen
- * 走宿主导航，usePluginDoc 语义的文档读取），无 mock。
+ * 走宿主导航，getPluginDoc 一次性读取），无 mock。
+ * 响应式文档订阅请用共享模块里的 usePluginDoc（import '@helm/plugin-client'）。
  */
 export interface PluginClientContext {
   pluginId: string
@@ -178,13 +179,25 @@ export interface PluginClientContext {
   openScreen(target: string): void
   /** 在右侧分屏打开目标。 */
   openSplitScreen(target: string): void
-  /** 读取本插件公共文档当前值（不订阅；订阅清用 usePluginDoc 共享 hook）。 */
+  /** 读取本插件公共文档当前值（一次性 Promise；订阅式更新用 usePluginDoc 共享 hook）。 */
   getPluginDoc(docName: string): Promise<unknown>
   /** 当前会话 ID（无会话上下文的槽位为 undefined，如部分 settings.panel）。 */
   conversationId?: number
   /** 宿主当前主题。 */
   theme: 'light' | 'dark'
 }
+
+/**
+ * 插件 client.tsx 可导入的宿主共享模块（编译器虚拟化为 __helm_shared_plugin_client
+ * 全局命名空间，与 React 同机制共享，绝不打包第二份 React）：
+ *
+ *   import { usePluginContext, usePluginDoc } from '@helm/plugin-client'
+ *
+ * - usePluginContext：等价宿主 React Context usePluginContext（必须在 <PluginUiView> 内）；
+ * - usePluginDoc<T>(docName)：响应式订阅本插件 public doc（SSE plugin.doc.updated
+ *   实时重渲染，与宿主 usePluginDoc 同一 store，不足 Promise 轮询）。
+ */
+export const HELM_PLUGIN_CLIENT_SHARED_MODULE = '@helm/plugin-client'
 
 /** GET /api/plugins/:id/client.mjs 响应元信息（错误时 HTTP 错误信封，不出 JS）。 */
 export interface PluginClientModuleInfo {

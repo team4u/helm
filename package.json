@@ -7,7 +7,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm build && tsc --noEmit -p tsconfig.check.json",
-    "test": "timeout 180s tsx --test packages/*/test/*.test.ts",
+    "test": "timeout 180s tsx --test \"packages/*/test/*.test.ts\" \"packages/*/test/*.test.tsx\"",
     "dev": "pnpm --parallel --filter @helm/kernel --filter @helm/web run dev",
     "dev:kernel": "tsx packages/kernel/src/main.ts",
     "dev:web": "pnpm --filter @helm/web dev",
