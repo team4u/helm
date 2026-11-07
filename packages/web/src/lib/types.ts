@@ -24,6 +24,7 @@ import type {
   WorkbenchPanelSpec,
   WorkflowRunSummary,
 } from '@helm/protocol'
+import { matchesConversationScope } from '@helm/protocol'
 import type { CredentialStatus, ModelDescriptor, SavedWorkflowSummary } from './api.js'
 
 export type ThemeMode = 'light' | 'dark'
@@ -72,19 +73,7 @@ export function matchesUiScope(
 ): boolean {
   if (!scope) return true
   if (!conversation) return false
-  if (scope.conversationIds !== undefined) {
-    if (scope.conversationIds.length === 0) return false
-    if (!scope.conversationIds.includes(conversation.id)) return false
-  }
-  if (scope.profileIds !== undefined) {
-    if (scope.profileIds.length === 0) return false
-    if (!scope.profileIds.includes(conversation.profileId)) return false
-  }
-  if (scope.tags !== undefined) {
-    if (scope.tags.length === 0) return false
-    if (!scope.tags.some((t) => conversation.tags.includes(t))) return false
-  }
-  return true
+  return matchesConversationScope(scope, conversation)
 }
 
 /** 将 UI 贡献列表按 10 个扩展点分组并排序。 */
