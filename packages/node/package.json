@@ -19,8 +19,6 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.5.0",
-    "@earendil-works/pi-durable": "1.5.0",
     "@helm/protocol": "workspace:*",
     "birpc": "^2.9.0",
     "ws": "^8.18.0"

@@ -34,6 +34,22 @@ import {
 import { renderServiceSpec, defaultServiceExec } from '../src/daemon/service.js';
 import { runNodeCli } from '../src/cli.js';
 
+import { fileURLToPath } from 'node:url';
+
+// ---------------------------------------------------------------------------
+// 0. 依赖极简回归：@helm/node 运行时依赖仅限 @helm/protocol / birpc / ws
+// ---------------------------------------------------------------------------
+
+test('@helm/node 运行时依赖仅 @helm/protocol / birpc / ws（防重依赖回归）', { timeout: 60_000 }, async () => {
+  const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url));
+  const pkg = JSON.parse(await fs.readFile(packageJsonPath, 'utf8')) as { dependencies?: Record<string, string> };
+  assert.deepEqual(
+    Object.keys(pkg.dependencies ?? {}).sort(),
+    ['@helm/protocol', 'birpc', 'ws'],
+    '@helm/node 的 dependencies 必须且仅能是 @helm/protocol / birpc / ws（不得引入 @earendil-works/* 等重依赖）',
+  );
+});
+
 
 async function tempDir(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));

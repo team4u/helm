@@ -1,11 +1,11 @@
 /**
  * 节点侧远端执行环境 RPC 服务端：完整实现 `NodeEnvRpcFunctions`。
  *
- * 文件/shell 能力直接由真实 SDK `NodeExecutionEnv`
- * （@earendil-works/pi-durable/env/node）承载：
+ * 文件/shell 能力由内置零外部依赖的 `LocalExecutionEnv`
+ * （Node.js 原生 fs/promises + child_process，见 ./local-env.ts）承载：
  * - 每个 cwd 一个 env 实例（进程内缓存，无跨 cwd 污染）；
  * - reader 以 readerId 句柄桥接；dispose 关闭全部 reader；
- * - envExec 以 withCancel 派生可取消 Context；envAbortExec(execId)
+ * - envExec 以独立 AbortController 取消；envAbortExec(execId)
  *   立即终止该命令的进程树；流式输出经 onExecOutput 分帧回传 Hub；
  * - 连接断开时 dispose：关 reader、杀本连接发起的命令并等待其在途
  *   promise settle，无孤儿 promise；每个连接（generation）独立的 server
@@ -24,9 +24,12 @@
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { BACKGROUND_CONTEXT, withCancel, type Context } from '@earendil-works/chord/context';
-import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
-import type { BinaryReader, DirReader, TextLineReader } from '@earendil-works/pi-durable/env';
+import {
+  LocalExecutionEnv,
+  type BinaryReader,
+  type DirReader,
+  type TextLineReader,
+} from './local-env.js';
 import type {
   EnvExecInput,
   EnvExecOk,
@@ -300,16 +303,16 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     ? options.ipcCallIdleTimeoutMs
     : undefined;
 
-  const envs = new Map<string, NodeExecutionEnv>();
+  const envs = new Map<string, LocalExecutionEnv>();
   let disposed = false;
-  const envFor = (cwd?: string): NodeExecutionEnv => {
+  const envFor = (cwd?: string): LocalExecutionEnv => {
     if (disposed) {
       throw Object.assign(new Error('server disposed'), { code: 'aborted' });
     }
     const base = cwd ?? defaultCwd;
     let env = envs.get(base);
     if (env === undefined) {
-      env = new NodeExecutionEnv({ cwd: base, ...(shellEnv ? { shellEnv: shellEnv as NodeJS.ProcessEnv } : {}) });
+      env = new LocalExecutionEnv({ cwd: base, ...(shellEnv ? { shellEnv: shellEnv as NodeJS.ProcessEnv } : {}) });
       envs.set(base, env);
     }
     return env;
@@ -324,7 +327,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
   let readerSeq = 0;
   const putReader = async (handle: ReaderHandle): Promise<string> => {
     if (disposed) {
-      await handle.reader.close(BACKGROUND_CONTEXT);
+      await handle.reader.close();
       throw Object.assign(new Error('server disposed'), { code: 'aborted' });
     }
     const id = `r${++readerSeq}`;
@@ -342,10 +345,10 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     const handle = readers.get(readerId);
     if (handle === undefined) return;
     readers.delete(readerId);
-    await handle.reader.close(BACKGROUND_CONTEXT).catch(() => undefined);
+    await handle.reader.close().catch(() => undefined);
   };
 
-  type RunningExec = { cancel: (reason?: unknown) => void };
+  type RunningExec = { controller: AbortController };
   const running = new Map<string, RunningExec>();
 
   // —— IPC 桥状态 ————————————————————————————————————————————————
@@ -619,9 +622,9 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       return invalidInput(`Duplicate execId in flight: ${JSON.stringify(execId)}`);
     }
     const executionEnv = envFor(cwd);
-    const { context, cancel } = withCancel(BACKGROUND_CONTEXT);
-    running.set(execId, { cancel });
-    // SDK 将输出回调异常转为 callback_error，并负责杀进程树及等待退出。
+    const controller = new AbortController();
+    running.set(execId, { controller });
+    // env 将输出回调异常转为 callback_error，并负责杀进程树及等待退出。
     const emit = (text: string, stream: 'stdout' | 'stderr', skipped?: EnvExecOutputEvent['skipped']): void => {
       if (!onExecOutput) return;
       for (let offset = 0; offset < text.length;) {
@@ -637,8 +640,8 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         ...(timeout === undefined ? {} : { timeout }),
         ...(spill === undefined ? {} : { spill }),
         ...(window === undefined ? {} : { window }),
-        onOutput: (text, _context, info) => emit(text, info.stream, info.skipped),
-      }, context);
+        onOutput: (text, info) => emit(text, info.stream, info.skipped),
+      }, controller.signal);
       return result.ok ? { ok: true, value: result.value } : rpcFail(result.error);
     } finally {
       running.delete(execId);
@@ -647,82 +650,82 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
 
   const rpc: NodeEnvRpcFunctions = {
     async envAbsolutePath({ path: target, cwd }) {
-      return unwrap(envFor(cwd).absolutePath(target, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).absolutePath(target));
     },
     async envJoinPath({ parts, cwd }) {
-      return unwrap(envFor(cwd).joinPath(parts, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).joinPath(parts));
     },
 
     async envReadTextFile({ path: target, cwd }) {
-      return unwrap(envFor(cwd).readTextFile(target, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).readTextFile(target));
     },
     async envReadTextLines({ path: target, maxLines, cwd }) {
-      return unwrap(envFor(cwd).readTextLines(target, { maxLines }, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).readTextLines(target, { maxLines }));
     },
     async envReadBinaryFile({ path: target, cwd }) {
-      const result = await envFor(cwd).readBinaryFile(target, BACKGROUND_CONTEXT);
+      const result = await envFor(cwd).readBinaryFile(target);
       if (!result.ok) return rpcFail(result.error);
       return { ok: true, value: { base64: Buffer.from(result.value).toString('base64') } };
     },
 
     async envWriteFile({ path: target, content, encoding, cwd }) {
       const bytes = encoding === 'base64' ? decodeBase64(content, 'content') : content;
-      return unwrap(envFor(cwd).writeFile(target, bytes, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).writeFile(target, bytes));
     },
     async envAppendFile({ path: target, content, encoding, cwd }) {
       const bytes = encoding === 'base64' ? decodeBase64(content, 'content') : content;
-      return unwrap(envFor(cwd).appendFile(target, bytes, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).appendFile(target, bytes));
     },
     async envFlushFile({ path: target, cwd }) {
-      return unwrap(envFor(cwd).flushFile(target, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).flushFile(target));
     },
     async envTruncateFile({ path: target, size, cwd }) {
-      return unwrap(envFor(cwd).truncateFile(target, size, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).truncateFile(target, size));
     },
     async envRenameFile({ sourcePath, destinationPath, cwd }) {
-      return unwrap(envFor(cwd).renameFile(sourcePath, destinationPath, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).renameFile(sourcePath, destinationPath));
     },
 
     async envFileInfo({ path: target, cwd }) {
-      return unwrap(envFor(cwd).fileInfo(target, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).fileInfo(target));
     },
     async envListDir({ path: target, cwd }) {
-      return unwrap(envFor(cwd).listDir(target, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).listDir(target));
     },
     async envListFiles() {
-      // SDK NodeExecutionEnv 未实现可选 listFiles：如实返回 not_supported，
+      // LocalExecutionEnv 未实现可选 listFiles：如实返回 not_supported，
       // 调用方（pi-durable 宿主）自行回退遍历。
       return { ok: false, error: { code: 'not_supported', message: 'listFiles is not available on this environment' } };
     },
     async envCanonicalPath({ path: target, cwd }) {
-      return unwrap(envFor(cwd).canonicalPath(target, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).canonicalPath(target));
     },
     async envExists({ path: target, cwd }) {
-      return unwrap(envFor(cwd).exists(target, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).exists(target));
     },
 
     async envCreateDir({ path: target, recursive, cwd }) {
-      return unwrap(envFor(cwd).createDir(target, { recursive }, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).createDir(target, { recursive }));
     },
     async envRemove({ path: target, recursive, force, cwd }) {
-      return unwrap(envFor(cwd).remove(target, { recursive, force }, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).remove(target, { recursive, force }));
     },
     async envCreateTempDir({ prefix, cwd }) {
-      return unwrap(envFor(cwd).createTempDir(prefix, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).createTempDir(prefix));
     },
     async envCreateTempFile({ prefix, suffix, cwd }) {
-      return unwrap(envFor(cwd).createTempFile({ prefix, suffix }, BACKGROUND_CONTEXT));
+      return unwrap(envFor(cwd).createTempFile({ prefix, suffix }));
     },
 
     async envOpenTextLineReader({ path: target, cwd }) {
-      const result = await envFor(cwd).openTextLineReader(target, BACKGROUND_CONTEXT);
+      const result = await envFor(cwd).openTextLineReader(target);
       if (!result.ok) return rpcFail(result.error);
       return { ok: true, value: { readerId: await putReader({ kind: 'text', reader: result.value }) } };
     },
     async envTextReaderRead({ readerId }) {
       const reader = getReader<TextLineReader>(readerId, 'text');
       if (reader === undefined) return readerNotFound(readerId);
-      const result = await reader.readLine(BACKGROUND_CONTEXT);
+      const result = await reader.readLine();
       if (!result.ok) return rpcFail(result.error);
       return { ok: true, value: result.value ?? null };
     },
@@ -732,19 +735,19 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     },
 
     async envOpenBinaryReader({ path: target, noFollow, cwd }) {
-      const result = await envFor(cwd).openBinaryReader(target, { noFollow }, BACKGROUND_CONTEXT);
+      const result = await envFor(cwd).openBinaryReader(target, { noFollow });
       if (!result.ok) return rpcFail(result.error);
       return { ok: true, value: { readerId: await putReader({ kind: 'binary', reader: result.value }) } };
     },
     async envBinaryReaderInfo({ readerId }) {
       const reader = getReader<BinaryReader>(readerId, 'binary');
       if (reader === undefined) return readerNotFound(readerId);
-      return unwrap(reader.info(BACKGROUND_CONTEXT));
+      return unwrap(reader.info());
     },
     async envBinaryReaderRead({ readerId, offset, length }) {
       const reader = getReader<BinaryReader>(readerId, 'binary');
       if (reader === undefined) return readerNotFound(readerId);
-      const result = await reader.read(offset, length, BACKGROUND_CONTEXT);
+      const result = await reader.read(offset, length);
       if (!result.ok) return rpcFail(result.error);
       return {
         ok: true,
@@ -754,7 +757,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     async envBinaryReaderScanLines({ readerId, startLine, endLine }) {
       const reader = getReader<BinaryReader>(readerId, 'binary');
       if (reader === undefined) return readerNotFound(readerId);
-      return unwrap(reader.scanLines({ startLine, ...(endLine === undefined ? {} : { endLine }) }, BACKGROUND_CONTEXT));
+      return unwrap(reader.scanLines({ startLine, ...(endLine === undefined ? {} : { endLine }) }));
     },
     async envBinaryReaderClose({ readerId }) {
       await closeReader(readerId);
@@ -762,14 +765,14 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     },
 
     async envOpenDirReader({ path: target, cwd }) {
-      const result = await envFor(cwd).openDirReader(target, BACKGROUND_CONTEXT);
+      const result = await envFor(cwd).openDirReader(target);
       if (!result.ok) return rpcFail(result.error);
       return { ok: true, value: { readerId: await putReader({ kind: 'dir', reader: result.value }) } };
     },
     async envDirReaderNext({ readerId, maxEntries }) {
       const reader = getReader<DirReader>(readerId, 'dir');
       if (reader === undefined) return readerNotFound(readerId);
-      return unwrap(reader.next(maxEntries, BACKGROUND_CONTEXT));
+      return unwrap(reader.next(maxEntries));
     },
     async envDirReaderClose({ readerId }) {
       await closeReader(readerId);
@@ -782,14 +785,14 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     },
 
     async envAbortExec(execId: string): Promise<void> {
-      running.get(execId)?.cancel(new Error('aborted by hub'));
+      running.get(execId)?.controller.abort(new Error('aborted by hub'));
     },
 
     async envCleanup(cwd?: string): Promise<void> {
       await Promise.all(
         [...envs.values()].map(async (env) => {
           if (cwd !== undefined && env.cwd !== cwd) return;
-          await env.cleanup(BACKGROUND_CONTEXT).catch(() => undefined);
+          await env.cleanup().catch(() => undefined);
         }),
       );
     },
@@ -833,7 +836,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     if (disposal) return disposal;
     disposed = true;
     disposal = (async () => {
-      for (const exec of running.values()) exec.cancel(new Error('connection closed'));
+      for (const exec of running.values()) exec.controller.abort(new Error('connection closed'));
       for (const socket of allIpcSockets) socket.destroy();
       allIpcSockets.clear();
       activeIpcCalls.clear();
@@ -841,9 +844,9 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       await Promise.allSettled([...pendingOperations, ...execWaiters]);
       const handles = [...readers.values()];
       readers.clear();
-      await Promise.all(handles.map((handle) => handle.reader.close(BACKGROUND_CONTEXT)));
+      await Promise.all(handles.map((handle) => handle.reader.close()));
       running.clear();
-      await Promise.all([...envs.values()].map((env) => env.cleanup(BACKGROUND_CONTEXT)));
+      await Promise.all([...envs.values()].map((env) => env.cleanup()));
       envs.clear();
     })();
     return disposal;
