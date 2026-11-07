@@ -43,7 +43,7 @@ pnpm build && pnpm typecheck && pnpm test
    - `builtin:triggers`：`cron` 与 `webhook` 入站连接器，经 `defang` 防逃逸信封投入 `trigger` 管道。
 4. **明确不做的事**：
    - 不做 `PiExtensionAdapter` 服务端 TUI 兼容层（真正的 `pi` 直接在 Herdr 终端窗格中运行）；
-   - 不自建 BYOM 远端节点守护进程与 `Space` 管理（跨机器复用 Herdr SSH `--machine`）；
+   - 不自建 BYOM 远端节点守护进程与 `Space` 管理（跨机器通过 `ssh <machine>` 驱动远端 Herdr）；
    - 不在 Web 端重复造 `Worktree Diff` 三键合入状态机（Git Worktree 交由 Herdr 与终端工具管理）；
    - 不在 `Conversation` / `ModelProvider` 底层伪装终端 CLI Agent。
 
