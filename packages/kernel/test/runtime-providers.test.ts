@@ -145,8 +145,10 @@ test('运行时供应商在途流计数与 teardown 预检（busy 409 / settled 
     const models = createModels()
     models.setProvider(faux.provider)
     faux.setResponses([fauxAssistantMessage('done')])
+    const busyModel = faux.getModel('busy-model')
+    assert.ok(busyModel)
     const stream = models.streamSimple(
-      faux.getModel('busy-model'),
+      busyModel,
       { prompt: 'hi' } as never,
     )
     const settled = stream.result()

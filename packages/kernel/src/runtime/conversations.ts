@@ -84,8 +84,7 @@ export class ConversationTracker {
    * - number（正）：SDK 真实 submissionId（bindSubmission 回填）；
    * - number（负）：submit 前的临时登记键（bindSubmission/dropInput 迁移或删除）；
    * - string `req:<requestId>`：helm.input entry 观察重建（观察路径拿不到
-   *   submissionId，直接以 requestId 字符串落位，不做哈希——32-bit 哈希既
-   *   会碰撞，又会在 hash === -2147483648 时 Math.abs 仍为负、与负数临时键撞车）。 */
+   *   submissionId，直接以 requestId 字符串落位，避免 32-bit 哈希碰撞）。 */
   private readonly trackedInputs = new Map<number, Map<number | string, TrackedInput>>()
   /** 本回合已消费 submissionId 集（run 存续期间累计，新 taskId 重置）。 */
   private readonly consumedInputs = new Map<number, Set<number | string>>()
@@ -719,9 +718,8 @@ function nextInputKey(): number {
 /**
  * helm.input entry data.id 即 submit 的 requestId；观察路径无法直接拿到
  * submissionId，直接以 `req:${requestId}` 字符串落位：同一输入在 map 中的
- * key 稳定且全局无碰撞。旧实现把 requestId 哈希为 32-bit int——既存在
- * 哈希碰撞风险，又在 hash === -2147483648 时 Math.abs 仍为负数，与
- * nextInputKey() 的负数临时键撞车，故彻底移除哈希。
+ * key 稳定且不压缩 requestId；字符串键域与 nextInputKey() 的负数临时键
+ * 独立，避免旧实现的 32-bit 哈希碰撞。
  */
 function submissionKeyOfEntry(requestId: string): string {
   return `req:${requestId}`

@@ -228,14 +228,13 @@ function makeKernel(): KernelRuntimeLike {
     listModelProviders: () => [{ id: 'faux', name: 'Faux', modelCount: 1, authMethods: [{ type: 'api_key', label: 'API Key' }] }],
     refreshModels: undefined,
   }
-  return kernel
 }
 
 /** 可注入 refreshModels 的 mock kernel（验证 501 分支时置 undefined）。 */
-function makeKernelWithRefresh(refreshImpl?: (options?: { providers?: string[]; allowNetwork?: boolean; force?: boolean }) => Promise<unknown>) {
-  const kernel = makeKernel() as Record<string, unknown>
-  if (refreshImpl !== undefined) kernel['refreshModels'] = refreshImpl
-  return kernel as ReturnType<typeof makeKernel>
+function makeKernelWithRefresh(refreshImpl?: KernelRuntimeLike['refreshModels']): KernelRuntimeLike {
+  const kernel = makeKernel()
+  if (refreshImpl !== undefined) kernel.refreshModels = refreshImpl
+  return kernel
 }
 
 const workflows: WorkflowServiceLike = {
