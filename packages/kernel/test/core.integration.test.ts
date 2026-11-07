@@ -761,7 +761,7 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
    * stdio pipes 收集输出；硬超时 kill 防挂起。
    */
   const repoRoot = join(testDir, '..', '..', '..')
-  const cliEntry = join(repoRoot, 'packages', 'node', 'src', 'cli', 'index.ts')
+  const cliEntry = join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
   const require = createRequire(import.meta.url)
   const tsxCli = require.resolve('tsx/cli')
   const runCliChild = (args: string[], timeoutMs = 20_000): Promise<{ code: number | null; out: string; err: string; timedOut: boolean }> =>

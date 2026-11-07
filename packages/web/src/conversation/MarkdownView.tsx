@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { clip } from './clipboard.js'
+import { SyntaxCode } from './SyntaxCode.js'
 import { CopyButton } from './CopyButton.js'
 import { HelmIcon } from '../lib/icons.js'
 import { HelmSpecView } from '../ui/HelmSpecView.js'
@@ -25,9 +25,7 @@ function StandardCodeBlock({ language, code }: CodeBlockProps) {
         <span>{language === '' ? 'text' : language}</span>
         <CopyButton text={code} />
       </div>
-      <pre className="code-block-pre selectable">
-        <code>{clip(code)}</code>
-      </pre>
+      <SyntaxCode code={code} language={language} />
     </div>
   )
 }
@@ -47,6 +45,7 @@ function MermaidBlock({ code }: { code: string }) {
       void (async () => {
         try {
           const mermaid = (await import('mermaid')).default
+          mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral', suppressErrorRendering: true })
           const id = `helm-mermaid-${seq}-${Math.random().toString(36).slice(2, 8)}`
           const { svg: rendered } = await mermaid.render(id, code)
           if (seqRef.current === seq) setSvg(rendered)
@@ -81,7 +80,7 @@ function MermaidBlock({ code }: { code: string }) {
         {svg !== null ? (
           <div
             className="mermaid-svg-host"
-            // mermaid.render 产出的 SVG 字符串直接注入（本地渲染产物，非用户可控 HTML 属性）
+            // strict 模式禁用用户脚本和 HTML 标签；只注入 Mermaid 转换后的 SVG。
             dangerouslySetInnerHTML={{ __html: svg }}
           />
         ) : error !== null ? (
@@ -150,7 +149,7 @@ function extractCodeBlock(node: unknown): { language: string; code: string } | n
   return { language: langClass.replace('language-', '').trim(), code }
 }
 
-export function MarkdownView({ text, conversationId }: MarkdownViewProps) {
+export const MarkdownView = memo(function MarkdownView({ text, conversationId }: MarkdownViewProps) {
   return (
     <div className="msg-ai-body">
       <Markdown
@@ -175,4 +174,4 @@ export function MarkdownView({ text, conversationId }: MarkdownViewProps) {
       </Markdown>
     </div>
   )
-}
+})

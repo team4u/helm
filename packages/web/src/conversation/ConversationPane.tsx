@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ConversationStatus } from '@helm/protocol'
 import { conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
+import { matchesUiScope } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { Composer } from './Composer.js'
 import { ConversationTimeline } from './ConversationTimeline.js'
@@ -46,6 +47,16 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
     }
   }, [conversationId, detail, loadDetail])
 
+  const detailError = store.loadErrors[`conversation:${conversationId}`]
+  if (detailError) {
+    return (
+      <div className="helm-pane pane-error" role="alert">
+        <p>会话 #{conversationId} 加载失败：{detailError}</p>
+        <button className="btn" onClick={() => void store.loadConversationDetail(conversationId, true)}>重试</button>
+      </div>
+    )
+  }
+
   if (conversation === undefined) {
     return (
       <div className={isSplit ? 'helm-split-pane' : 'helm-pane'} style={{ alignItems: 'center', justifyContent: 'center', color: 'var(--fg-muted)', fontSize: 12 }}>
@@ -57,7 +68,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
   const statusMeta = STATUS_META[conversation.status] ?? STATUS_META.idle!
   const artifacts = store.conversationArtifacts[conversationId] ?? []
   const runs = store.workflowRuns.filter((r) => r.conversationId === conversationId)
-  const workbenchCount = runs.length + artifacts.length
+  const children = store.conversations.filter((item) => item.parentConversationId === conversationId)
+  const workbenchCount = runs.length + artifacts.length + children.length
+  const hasWorkbenchPanel = store.groupedUi.workbenchPanels.some((panel) => matchesUiScope(conversation, panel.spec.scope))
 
   const runAction = async (name: string, fn: () => Promise<unknown>, successTitle: string): Promise<void> => {
     setActionPending(name)
@@ -113,8 +126,8 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
   }
 
   return (
-    <div className={isSplit ? 'helm-split-pane' : 'helm-pane'}>
-      <header className="pane-topbar">
+    <div className="helm-pane">
+      <header className="pane-topbar conversation-topbar">
         <div className="pane-title-group">
           {renaming ? (
             <input
@@ -180,7 +193,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
           )}
         </div>
         <div className="pane-actions">
-          {workbenchCount > 0 ? (
+          {workbenchCount > 0 || hasWorkbenchPanel ? (
             <button
               type="button"
               className={`btn btn-sm${store.workbenchOpen ? ' btn-primary' : ''}`}
@@ -192,7 +205,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
             >
               <HelmIcon name="panel-right" size={12} />
               工作台
-              <span className="badge badge-neutral tabular-nums">{workbenchCount}</span>
+              {workbenchCount > 0 && <span className="badge badge-neutral tabular-nums">{workbenchCount}</span>}
             </button>
           ) : null}
           <button
@@ -209,7 +222,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
             }
           >
             <HelmIcon name={actionPending === 'compact' ? 'loader' : 'archive'} size={12} />
-            精简上下文
+            <span className="pane-action-label">精简上下文</span>
           </button>
           <button
             type="button"
@@ -225,7 +238,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
             }
           >
             <HelmIcon name={actionPending === 'reset' ? 'loader' : 'rotate-ccw'} size={12} />
-            重置上下文
+            <span className="pane-action-label">重置上下文</span>
           </button>
           <button
             type="button"

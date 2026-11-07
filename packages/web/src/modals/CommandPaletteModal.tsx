@@ -253,7 +253,6 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
         onKeyDown={onKeyDown}
       >
         <div className="modal-header" style={{ padding: '8px 12px' }}>
-          <style>{'@keyframes helmSpin { to { transform: rotate(360deg) } }'}</style>
           <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
             <HelmIcon name="search" size={15} />
             <input
@@ -267,7 +266,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
             />
             {searching && (
               <span className="badge badge-neutral" style={{ height: 22, padding: '0 6px' }}>
-                <HelmIcon name="loader" size={12} style={{ animation: 'helmSpin 0.9s linear infinite' }} />
+                <HelmIcon name="loader" size={12} className="spin-slow" />
                 搜索中
               </span>
             )}

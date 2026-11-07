@@ -8,7 +8,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm build && tsc --noEmit -p tsconfig.check.json",
     "test": "timeout 180s tsx --test packages/*/test/*.test.ts",
-    "dev": "pnpm dev:kernel",
+    "dev": "pnpm --parallel --filter @helm/kernel --filter @helm/web run dev",
     "dev:kernel": "tsx packages/kernel/src/main.ts",
     "dev:web": "pnpm --filter @helm/web dev",
     "helm": "tsx packages/cli/src/index.ts",

@@ -17,6 +17,9 @@ export interface ScreenHostProps {
 }
 
 export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: ScreenHostProps): React.JSX.Element {
+  const store = useHelmStore()
+  const available = store.groupedUi.screens.some((item) => item.pluginId === pluginId && item.spec.id === screenId)
+  if (!available) return <GenericSpecScreen pluginId={pluginId} screenId={screenId} isSplit={isSplit} onCloseSplit={onCloseSplit} />
   // 专用 Screen：内核内置的两个富交互视图
   if (pluginId === 'builtin:herdr' && screenId === 'overview') {
     return <HerdrOverviewScreen isSplit={isSplit} onCloseSplit={onCloseSplit} />
@@ -105,7 +108,7 @@ function GenericSpecScreen({
           ) : (
             <div className="jr-callout jr-callout-warn">
               <HelmIcon name="alert-triangle" size={13} />
-              <span>该视图未提供 JSON Spec（client.tsx 自定义组件渲染由插件运行时提供）。</span>
+              <span>该视图需要 client.tsx 组件。当前宿主尚未接入该加载通道，请提供 JSON Spec。</span>
             </div>
           )}
         </div>

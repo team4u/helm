@@ -8,6 +8,7 @@
  */
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { ViewBoundary } from './ViewBoundary.js'
 import { conversationsApi } from '../lib/api.js'
 import { useHelmStore, usePluginDocsMap } from '../lib/store-context.js'
 import type { EvalScope } from './evaluator.js'
@@ -109,5 +110,5 @@ export function HelmSpecView({ pluginId, spec, docs, data, conversationId }: Hel
     isPending,
   }
 
-  return <SpecNodeList nodes={[normalized.root]} ctx={ctx} />
+  return <ViewBoundary label="插件界面"><SpecNodeList nodes={[normalized.root]} ctx={ctx} /></ViewBoundary>
 }

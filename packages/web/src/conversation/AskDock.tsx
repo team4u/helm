@@ -39,7 +39,9 @@ function AskFieldInput({
   value,
   onChange,
   disabled,
+  inputId,
 }: {
+  inputId: string
   field: AskFieldSpec
   value: string
   onChange: (v: string) => void
@@ -49,6 +51,7 @@ function AskFieldInput({
     const options = field.options ?? []
     return (
       <select
+        id={inputId}
         className="select"
         value={value}
         disabled={disabled}
@@ -68,18 +71,18 @@ function AskFieldInput({
       <span style={{ display: 'inline-flex', gap: 6 }}>
         <button
           type="button"
-          className={`btn btn-sm ${value === 'yes' ? 'btn-primary' : ''}`}
+          className={`btn btn-sm ${value === 'true' ? 'btn-primary' : ''}`}
           disabled={disabled}
-          onClick={() => onChange('yes')}
+          onClick={() => onChange('true')}
         >
           <HelmIcon name="check" size={12} />
           确认
         </button>
         <button
           type="button"
-          className={`btn btn-sm ${value === 'no' ? 'btn-danger' : ''}`}
+          className={`btn btn-sm ${value === 'false' ? 'btn-danger' : ''}`}
           disabled={disabled}
-          onClick={() => onChange('no')}
+          onClick={() => onChange('false')}
         >
           <HelmIcon name="x" size={12} />
           拒绝
@@ -91,6 +94,7 @@ function AskFieldInput({
   return (
     <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
       <input
+        id={inputId}
         className="input"
         type={secret ? 'password' : 'text'}
         value={value}
@@ -193,18 +197,19 @@ function AskCard({ ask }: { ask: AskSpec }) {
       {ask.fields.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {ask.fields.map((field) => (
-            <label key={field.name} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span style={{ fontSize: 12, color: 'var(--fg-secondary)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <div key={field.name} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label htmlFor={field.type === 'confirm' ? undefined : `${ask.id}-${field.name}`} style={{ fontSize: 12, color: 'var(--fg-secondary)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 {field.label}
                 {field.required === true ? <span style={{ color: 'var(--err)' }}>*</span> : null}
-              </span>
+              </label>
               <AskFieldInput
+                inputId={`${ask.id}-${field.name}`}
                 field={field}
                 value={answers[field.name] ?? ''}
                 disabled={submitting !== null}
                 onChange={(v) => setAnswers((prev) => ({ ...prev, [field.name]: v }))}
               />
-            </label>
+            </div>
           ))}
         </div>
       ) : null}

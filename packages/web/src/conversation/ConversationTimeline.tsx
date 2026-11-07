@@ -11,6 +11,7 @@ import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { HelmSpecView } from '../ui/HelmSpecView.js'
 import { CopyButton } from './CopyButton.js'
+import { WorkflowRunCard } from './WorkflowRunCard.js'
 import { MarkdownView } from './MarkdownView.js'
 import {
   buildTimelineItems,
@@ -43,15 +44,18 @@ function AttachmentImage({ att, conversationId }: { att: ConversationAttachmentR
   const store = useHelmStore()
 
   useEffect(() => {
+    let active = true
     let objectUrl: string | null = null
     void artifactsApi
       .fetchBlob(att.id)
       .then((blob) => {
+        if (!active) return
         objectUrl = URL.createObjectURL(blob)
         setUrl(objectUrl)
       })
       .catch((err: unknown) => setFailed(err instanceof Error ? err.message : String(err)))
     return () => {
+      active = false
       if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
     }
   }, [att.id])
@@ -244,8 +248,13 @@ function TraceRow({
     }
   }, [tool.input])
 
+  const workflow = tool.toolName === 'SubagentWorkflow' ? store.workflowRuns.find((run) => run.conversationId === conversationId && tool.resultText?.includes(run.id)) : undefined
+  const subagentId = tool.toolName === 'subagent' ? /\bconversationId=(\d+)/.exec(tool.resultText ?? '')?.[1] : undefined
+
   return (
     <div className={`trace-entry${tool.isError ? ' trace-entry-error' : ''}`}>
+      {workflow && <WorkflowRunCard run={workflow} />}
+      {subagentId && <div className="jr-stack-row"><span className="badge badge-neutral">子会话 #{subagentId}</span><button className="btn btn-sm" onClick={() => store.openTarget(`conversation:${subagentId}`, { split: true })}>并排查看</button></div>}
       <div
         className={`trace-row${tool.isError ? ' trace-row-error' : ''}`}
         role="button"
@@ -269,18 +278,15 @@ function TraceRow({
         </span>
         <span className="trace-row-right">{right}</span>
       </div>
+      {tool.toolView !== undefined && <div className="trace-toolview"><HelmSpecView
+        pluginId={tool.toolView.pluginId}
+        spec={tool.toolView.spec.json}
+        docs={tool.toolView.spec.docs}
+        conversationId={conversationId}
+        data={{ callId: tool.callId, toolName: tool.toolName, input: tool.input, status: tool.status, result: tool.resultText }}
+      /></div>}
       {open ? (
         <div className="trace-expanded-body selectable">
-          {tool.toolView !== undefined ? (
-            <div className="trace-toolview">
-              <HelmSpecView
-                pluginId={tool.toolView.pluginId}
-                spec={tool.toolView.spec.json}
-                docs={tool.toolView.spec.docs}
-                conversationId={conversationId}
-              />
-            </div>
-          ) : null}
           {inputJson !== undefined ? (
             <div>
               <div className="trace-section-label">入参</div>
@@ -471,6 +477,7 @@ function useHighlightScroll(conversationId: number): (node: HTMLDivElement | nul
   const store = useHelmStore()
   const h = store.highlightedEntry
   const lastHandledRef = useRef<string | null>(null)
+  useEffect(() => { if (h === null) lastHandledRef.current = null }, [h])
   return (node: HTMLDivElement | null): void => {
     if (node === null || h === null) return
     if (h.conversationId !== conversationId) return
@@ -572,6 +579,7 @@ export function ConversationTimeline({
   onRequestEdit,
 }: ConversationTimelineProps) {
   const store = useHelmStore()
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = useRef(true)
@@ -601,6 +609,10 @@ export function ConversationTimeline({
     return () => el.removeEventListener('scroll', onScroll)
   }, [])
 
+  useEffect(() => {
+    if (store.highlightedEntry?.conversationId === conversation.id) stickToBottomRef.current = false
+  }, [store.highlightedEntry, conversation.id])
+
   const contentFingerprint = `${items.length}:${detailEntries.length}:${live?.updatedAt ?? 0}:${resolvedAsks.length}`
   useEffect(() => {
     if (stickToBottomRef.current) {
@@ -612,6 +624,19 @@ export function ConversationTimeline({
 
   return (
     <div ref={scrollRef} className="timeline-scroll">
+      {store.conversationDetails[conversation.id]?.nextCursor && (
+        <button className="btn btn-ghost btn-sm" disabled={loadingOlder} onClick={() => {
+          stickToBottomRef.current = false
+          const height = scrollRef.current?.scrollHeight ?? 0
+          const top = scrollRef.current?.scrollTop ?? 0
+          setLoadingOlder(true)
+          void store.loadEarlierEntries(conversation.id).finally(() => {
+            setLoadingOlder(false)
+            requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.scrollTop = top + scrollRef.current.scrollHeight - height })
+          })
+        }}>{loadingOlder ? '正在加载历史…' : '加载更早的消息'}</button>
+      )}
+      {store.loadErrors[`history:${conversation.id}`] && <p className="jr-callout jr-callout-err" role="alert">{store.loadErrors[`history:${conversation.id}`]}</p>}
       {loading ? (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '48px 0', color: 'var(--fg-muted)', fontSize: 12 }}>
           <HelmIcon name="loader" size={14} className="spin-slow" />

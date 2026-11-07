@@ -890,7 +890,7 @@ test('跨进程锁回归: 真实 CLI 子进程与 CredentialService 并发写 cr
   const require = createRequire(import.meta.url)
   const tsxCli = require.resolve('tsx/cli')
   const repoRoot = dirname(testDir) // packages/kernel/test -> 仓库根
-  const cliEntry = join(repoRoot, 'packages', 'node', 'src', 'cli', 'index.ts')
+  const cliEntry = join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
   // 目录不存在的全新 dataDir：验证双方首次创建与同锁互认
   const dataDir = join(tmpdir(), `helm-xproc-${process.pid}-${Date.now()}`)
   const credFile = join(dataDir, 'credentials.json')

@@ -209,6 +209,9 @@ export interface HelmStoreValue {
   authReady: boolean
   authConfigured: boolean
   authenticated: boolean
+  authError: string | null
+  connectionError: string | null
+  loadErrors: Record<string, string>
   sseConnected: boolean
   theme: ThemeMode
 
@@ -246,11 +249,13 @@ export interface HelmStoreValue {
   // 操作方法
   setTheme(theme: ThemeMode): void
   toggleTheme(): void
+  checkAuth(): Promise<void>
   onAuthenticated(token: string): Promise<void>
   logout(): void
   refreshAssets(): Promise<void>
   loadConversationDetail(conversationId: number, force?: boolean): Promise<ConversationDetail | undefined>
-  loadConversationArtifacts(conversationId: number): Promise<ArtifactMetadata[]>
+  loadEarlierEntries(conversationId: number): Promise<void>
+  loadConversationArtifacts(conversationId: number): Promise<ArtifactMetadata[] | undefined>
   ensurePluginDoc(pluginId: string, docName: string): Promise<unknown>
   openTarget(target: string | ResolvedTarget, opts?: { split?: boolean; highlightEntryId?: string }): void
   closeSplit(): void

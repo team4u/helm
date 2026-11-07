@@ -75,7 +75,6 @@ interface RouteContext {
   url: URL
 }
 
-const CONTENT_DISPOSITION_SAFE = /^[^"\\\r\n]{1,200}$/
 
 export async function handleApi(
   request: Request,
@@ -266,8 +265,8 @@ async function route(
   if (head === 'profiles') {
     const enrichProfile = async (profile: Profile): Promise<Profile> => {
       const [system, memory] = await Promise.all([
-        kernel.profiles.getSystem(profile.id).catch(() => ''),
-        kernel.profiles.getMemory(profile.id).catch(() => ''),
+        kernel.profiles.getSystem(profile.id),
+        kernel.profiles.getMemory(profile.id),
       ])
       return { ...profile, system, memory }
     }
@@ -380,9 +379,10 @@ async function route(
         'content-type': metadata.mimeType,
         'content-length': String(buffer.byteLength),
       }
-      if (CONTENT_DISPOSITION_SAFE.test(metadata.name)) {
-        headers['content-disposition'] = `${inline ? 'inline' : 'attachment'}; filename="${metadata.name}"`
-      }
+      const disposition = inline ? 'inline' : 'attachment'
+      const fallbackName = metadata.name.replace(/[^\x20-\x7e]|["\\]/g, '_')
+      const encodedName = encodeURIComponent(metadata.name).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+      headers['content-disposition'] = `${disposition}; filename="${fallbackName}"; filename*=UTF-8''${encodedName}`
       // 原始字节直传（二进制不转字符串，不做 JSON 脱敏缓冲）。
       return new Response(buffer as unknown as BodyInit, { headers })
     }

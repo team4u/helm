@@ -355,7 +355,7 @@ function makeToolTrace(
 export function isFoldableStep(step: FoldableStep): boolean {
   if (step.kind === 'thinking') return true
   const tool = step.tool
-  if (tool.isError) return false
+  if (tool.status !== 'done' || tool.isError) return false
   if (tool.toolView !== undefined) return false
   if (BUSINESS_TOOL_NAMES.has(tool.toolName)) return false
   return true
@@ -401,6 +401,7 @@ export function foldTurnSegments(raw: ReadonlyArray<RawSegment>): AssistantSegme
   for (const seg of raw) {
     if (seg.kind === 'text') {
       if ((seg.text ?? '') === '') continue
+      flushBuffer()
       const last = out.length > 0 ? out[out.length - 1] : undefined
       if (last !== undefined && last.kind === 'text') {
         last.text += seg.text ?? ''
@@ -564,6 +565,8 @@ function mergeLiveIntoTurn(acc: TurnAcc, live: ConversationLive, opts: BuildTime
     })
   }
   if (typeof live.text === 'string' && live.text.trim() !== '') {
+    const persistedText = acc.segments.findLast((segment) => segment.kind === 'text')?.text
+    if (persistedText?.startsWith(live.text)) return
     acc.segments.push({ kind: 'text', key: `text:live:${live.updatedAt}`, text: live.text })
   }
 }

@@ -46,7 +46,7 @@ import assert from 'node:assert/strict'
 
 const testDir = fileURLToPath(new URL('.', import.meta.url))
 const repoRoot = join(testDir, '..', '..', '..')
-const cliEntry = join(repoRoot, 'packages', 'node', 'src', 'cli', 'index.ts')
+const cliEntry = join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
 const require = createRequire(import.meta.url)
 const tsxCli = require.resolve('tsx/cli')
 

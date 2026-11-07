@@ -26,7 +26,7 @@ function isMarkdown(name: string | undefined, mime: string): boolean {
 }
 
 function looksLikeText(mime: string): boolean {
-  return TEXT_MIME_RE.test(mime) || mime === '' || mime.startsWith('application/octet-stream') === false
+  return TEXT_MIME_RE.test(mime)
 }
 
 /** 产物智能预览：Markdown 富文本/源码切换、代码/JSON 等宽、图片/PDF/音视频 ObjectURL。 */
@@ -56,10 +56,15 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
     setText(null)
     void artifactsApi
       .fetchBlob(artifactId)
-      .then((blob) => {
+      .then(async (blob) => {
         if (cancelled) return
         objectUrl = URL.createObjectURL(blob)
-        setState({ phase: 'loaded', blobUrl: objectUrl, mime: blob.type || meta?.mimeType || '', meta })
+        const mime = blob.type || meta?.mimeType || ''
+        setState({ phase: 'loaded', blobUrl: objectUrl, mime, meta })
+        if (looksLikeText(mime) || isMarkdown(meta?.name, mime)) {
+          const value = await blob.text()
+          if (!cancelled) setText(value)
+        }
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -70,7 +75,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
       cancelled = true
       if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
     }
-  }, [artifactId, meta])
+  }, [artifactId, meta?.mimeType, meta?.name])
 
   const name = meta?.name ?? artifactId
   const mime = state.phase === 'loaded' ? state.mime : meta?.mimeType ?? ''
@@ -79,34 +84,20 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
   const isAudio = mime.startsWith('audio/')
   const isVideo = mime.startsWith('video/')
   const isPdf = mime === 'application/pdf'
-  const isTextLike = !isImage && !isAudio && !isVideo && !isPdf && looksLikeText(mime)
+  const isTextLike = !isImage && !isAudio && !isVideo && !isPdf && (looksLikeText(mime) || isMarkdown(meta?.name, mime))
   const markdown = isMarkdown(meta?.name, mime)
 
-  // 文本类产物懒加载全文（markdown 富渲染 / 代码等宽共用）
-  useEffect(() => {
-    if (state.phase !== 'loaded' || !isTextLike) return
-    let cancelled = false
-    void artifactsApi
-      .fetchText(artifactId)
-      .then((t) => {
-        if (!cancelled) setText(t)
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setText(`读取文本失败：${err instanceof Error ? err.message : String(err)}`)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [state, isTextLike, artifactId])
-
   const download = (): void => {
-    void artifactsApi.downloadToBrowser(artifactId, name)
+    void artifactsApi.downloadToBrowser(artifactId, name).catch((error: unknown) => store.pushNotice({ type: 'notification', level: 'error', title: '下载失败', body: error instanceof Error ? error.message : String(error) }))
   }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
         className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`产物预览：${name}`}
         style={{ maxWidth: 'min(960px, 92vw)', maxHeight: '88vh' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -175,6 +166,8 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
               <video controls src={state.blobUrl} style={{ width: '100%', maxHeight: '64vh' }} />
             ) : isPdf ? (
               <iframe src={state.blobUrl} title={name} style={{ width: '100%', height: '64vh', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} />
+            ) : !isTextLike ? (
+              <div className="jr-callout">此文件类型暂不支持在线预览，请下载后查看。</div>
             ) : markdown && view === 'rich' && text !== null ? (
               <MarkdownView text={text} conversationId={conversationId} />
             ) : (

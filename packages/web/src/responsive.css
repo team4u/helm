@@ -1,0 +1,63 @@
+/* 共用的适配与交互边界，插件视图也继承相同规则。 */
+.helm-main-stage { flex-direction: column; position: relative; }
+.helm-panes { flex: 1; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
+.helm-pane { container-type: inline-size; }
+.helm-split-pane { width: 0; }
+.pane-title-group { overflow: hidden; }
+.pane-title { min-width: 70px; }
+.conversation-topbar .pane-actions .btn { flex-shrink: 0; }
+.pane-error, .connection-screen { display: flex; gap: 12px; flex-direction: column; align-items: center; justify-content: center; padding: 24px; }
+.connection-screen { height: 100dvh; }
+.connection-banner { padding: 7px 16px; background: var(--warn-bg); border-bottom: 1px solid var(--warn-border); color: var(--warn); font-size: 12px; }
+.connection-banner span { margin-left: 12px; }
+.mobile-nav-toggle, .sidebar-backdrop { display: none; }
+.nav-open { border: 0; background: transparent; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; min-height: 22px; }
+button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+button, a, input, select, textarea { touch-action: manipulation; }
+.msg-human-row:focus-within .msg-hover-bar, .msg-ai-block:focus-within .msg-hover-bar { opacity: 1; }
+.msg-ai-body table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; margin: 12px 0; }
+.msg-ai-body td, .msg-ai-body th { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+.msg-ai-body th { background: var(--bg-subtle); }
+.msg-ai-body blockquote { border-left: 2px solid var(--border-strong); margin-left: 0; padding-left: 14px; color: var(--fg-secondary); }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.code-block-pre { white-space: pre; overflow-wrap: normal; }
+.hljs-comment, .hljs-quote { color: var(--fg-muted); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type { color: var(--accent); }
+.hljs-string, .hljs-regexp, .hljs-template-tag, .hljs-addition { color: var(--ok); }
+.hljs-title, .hljs-section, .hljs-built_in { color: var(--fg); font-weight: 600; }
+.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-attr { color: var(--warn); }
+.code-highlight-error { display: block; padding: 4px 12px; color: var(--err); font-size: 11px; }
+@container (max-width: 680px) {
+  .conversation-topbar { gap: 8px; padding: 0 12px; }
+  .conversation-topbar .pane-action-label { display: none; }
+  .conversation-topbar .pane-cwd-subtitle { display: none; }
+  .timeline-scroll { padding: 16px 14px 22px; }
+  .msg-human-pill { max-width: 92%; }
+}
+@container (max-width: 450px) {
+  .conversation-topbar .pane-title-group > .badge { display: none; }
+  .composer-toolbar { height: auto; min-height: 34px; flex-wrap: wrap; }
+  .composer-widgets .card { padding: 8px 10px; }
+}
+@media (max-width: 1200px) {
+  .helm-workbench { position: fixed; right: 0; top: 0; z-index: 60; width: min(92vw, 360px); min-width: 0; box-shadow: var(--shadow-lg); }
+}
+@media (max-width: 860px) {
+  .helm-sidebar { position: fixed; left: 0; top: 0; z-index: 72; transform: translateX(-100%); transition: transform 150ms ease; }
+  .sidebar-open .helm-sidebar { transform: translateX(0); }
+  .sidebar-open .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 71; background: var(--bg-backdrop); border: 0; }
+  .mobile-nav-toggle { display: inline-flex; position: fixed; left: 8px; top: 9px; z-index: 70; width: 28px; height: 28px; padding: 4px; background: var(--bg); }
+  .sidebar-open .mobile-nav-toggle { display: none; }
+  .helm-panes > .helm-pane > .pane-topbar { padding-left: 44px; }
+  .helm-panes { flex-direction: column; }
+  .helm-split-pane { width: 100%; height: 0; min-height: 0; border-left: 0; border-top: 1px solid var(--border-strong); }
+  .modal-backdrop { padding: 10px; }
+  .modal { max-height: 94dvh; }
+  .modal-body { min-width: 0; }
+  .asset-modal-body { flex-direction: column !important; }
+  .asset-modal-list { width: 100% !important; min-width: 0 !important; max-height: 120px; flex-shrink: 0; }
+  .config-fields { grid-template-columns: 110px minmax(0, 1fr) !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}

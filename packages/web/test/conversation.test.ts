@@ -316,6 +316,26 @@ test('多回合连续文本合并与空 thinking 跳过', { timeout: 60_000 }, (
   assert.equal(texts[0]!.text, '第一第二')
 })
 
+test('工具轨迹保持执行时序，不能被折叠缓冲移到最终回复之后', { timeout: 60_000 }, () => {
+  const items = buildTimelineItems([
+    assistantEntry('1', [toolCallBlock('call-1', 'bash', { command: 'pwd' })]),
+    toolResultEntry('2', 'call-1', 'bash', { text: '/tmp' }),
+    assistantEntry('3', [{ type: 'text', text: '完成' }]),
+  ])
+  const turn = items[0]
+  assert.ok(turn?.kind === 'assistant')
+  assert.deepEqual(turn.segments.map((segment) => segment.kind), ['tool', 'text'])
+})
+
+test('流式文本已落库而 live 尚未清理时，不重复显示同一段回复', { timeout: 60_000 }, () => {
+  const items = buildTimelineItems([assistantEntry('1', [{ type: 'text', text: '这是一条完整回复' }])], {
+    live: { conversationId: 1, text: '这是一条完整回复', tools: [], updatedAt: 5 },
+  })
+  const turn = items[0]
+  assert.ok(turn?.kind === 'assistant')
+  assert.deepEqual(turn.segments.filter((segment) => segment.kind === 'text').map((segment) => segment.text), ['这是一条完整回复'])
+})
+
 test('lastHumanTextOf 与格式化工具', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
     entry('1', 'helm.input', { data: { text: '第一条', origin: 'human' } }),

@@ -684,6 +684,16 @@ test('profiles CRUD（真实 ProfileService + system/memory 在线读写）', { 
   assert.equal(gone.status, 404)
 })
 
+test('profiles 详情读取失败显式报错，不返回可覆盖原文件的空白正文', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  await profiles.save({ id: 'missing-system', name: '缺失正文' })
+  await rm(join(dataDir, 'profiles', 'missing-system', 'SYSTEM.md'))
+  const result = await call(handler, 'GET', '/api/profiles/missing-system')
+  assert.equal(result.status, 404)
+  assert.ok(result.body.error)
+  assert.equal(result.body.system, undefined)
+})
+
 test('profiles DELETE 仍被会话绑定返回 409 profile_in_use', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   await call(handler, 'POST', '/api/profiles', {
@@ -785,10 +795,21 @@ test('artifacts 列表 + content 真实 content-type/disposition/字节；未知
   const content = await call(handler, 'GET', `/api/artifacts/${meta.id}/content?inline=1`)
   assert.equal(content.status, 200)
   assert.equal(content.headers.get('content-type'), 'text/markdown')
-  assert.equal(content.headers.get('content-disposition'), 'inline; filename="note.md"')
+  assert.equal(content.headers.get('content-disposition'), 'inline; filename="note.md"; filename*=UTF-8\'\'note.md')
   assert.ok(content.text.includes('# 产物'))
   const missing = await call(handler, 'GET', '/api/artifacts/no-such-id/content')
   assert.equal(missing.status, 404)
+})
+
+test('中文产物文件名使用 UTF-8 disposition，预览与下载不因响应头编码报 500', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const metadata = await artifacts.writeUploaded(1, { name: '验收说明.md', mimeType: 'text/markdown', bytes: new TextEncoder().encode('# 中文文件') })
+  for (const suffix of ['', '?inline=1']) {
+    const response = await call(handler, 'GET', `/api/artifacts/${metadata.id}/content${suffix}`)
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get('content-disposition') ?? '', /filename\*=UTF-8''%E9/)
+    assert.equal(response.text, '# 中文文件')
+  }
 })
 
 test('artifacts 二进制按字节原样返回（不转字符串）', { timeout: 60_000 }, async () => {

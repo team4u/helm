@@ -76,17 +76,11 @@ function ConversationRow({
     <div
       className={`nav-item${active ? ' nav-item-active' : ''}`}
       style={{ minHeight: 30, opacity: 1 }}
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') onOpen()
-      }}
     >
-      <span className="nav-item-main">
-        {children}
+      {children}
+      <button type="button" className="nav-item-main nav-open" onClick={onOpen} aria-current={active ? 'page' : undefined}>
         <span className="nav-item-label">{conv.title || `会话 #${conv.id}`}</span>
-      </span>
+      </button>
       <span className="nav-item-meta">
         <span className="tabular-nums">#{conv.id}</span>
         <StatusBadge conv={conv} />
@@ -352,18 +346,12 @@ function WorkbenchNavItems({ store }: { store: HelmStoreValue }) {
           <div
             key={row.key}
             className={`nav-item${active ? ' nav-item-active' : ''}`}
-            role="button"
-            tabIndex={0}
             style={{ cursor: 'pointer' }}
-            onClick={() => row.target && store.openTarget(row.target)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && row.target) store.openTarget(row.target)
-            }}
           >
-            <span className="nav-item-main">
+            <button type="button" className="nav-item-main nav-open" onClick={() => row.target && store.openTarget(row.target)} aria-current={active ? 'page' : undefined}>
               <HelmIcon name={row.icon} size={14} />
               <span className="nav-item-label">{row.label}</span>
-            </span>
+            </button>
             <span className="nav-item-meta" onClick={(e) => e.stopPropagation()}>
               <HoverIconButton
                 title="在右屏分屏打开"

@@ -31,6 +31,7 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
   const store = useHelmStore()
   const [open, setOpen] = useState(false)
   const [pending, setPending] = useState(false)
+  const [query, setQuery] = useState('')
   const rootRef = useRef<HTMLSpanElement | null>(null)
 
   useEffect(() => {
@@ -87,15 +88,18 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
           >
             跟随 Profile 默认（清除覆盖）
           </button>
-          {store.models.map((m) => (
+          <input className="input" aria-label="搜索模型" placeholder="搜索模型…" value={query} onChange={(event) => setQuery(event.target.value)} />
+          {store.models.filter((model) => model.id.toLowerCase().includes(query.toLowerCase())).map((m) => (
             <button
               key={m.id}
+              disabled={!m.available}
+              title={!m.available ? '请先在模型与凭据中配置密钥' : m.id}
               type="button"
               className={`popover-item${m.id === conversation.model ? ' popover-item-active' : ''}`}
               onClick={() => void pick(m.id)}
             >
               <span className="mono">{m.modelId}</span>
-              <span className="popover-item-meta">{m.provider}</span>
+              <span className="popover-item-meta">{m.provider}{m.available ? '' : ' · 未配置凭据'}</span>
             </button>
           ))}
         </div>
@@ -233,13 +237,16 @@ export function Composer({ conversation, prefill }: ComposerProps) {
   const [popover, setPopover] = useState<PopoverKind>(null)
   const [popoverQuery, setPopoverQuery] = useState('')
   const [sending, setSending] = useState(false)
+  const [uploading, setUploading] = useState(0)
+  const sendingRef = useRef(false)
+  const uploadingRef = useRef(0)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const dragDepthRef = useRef(0)
   const [dragging, setDragging] = useState(false)
 
   const artifacts = store.conversationArtifacts[conversation.id] ?? []
-  const working = conversation.status === 'working'
+  const working = conversation.status === 'working' || conversation.status === 'blocked'
 
   // 回填（编辑并重发）：prefill 引用变化即触发，同文本重复回填也生效
   useEffect(() => {
@@ -263,8 +270,11 @@ export function Composer({ conversation, prefill }: ComposerProps) {
 
   const uploadFiles = useCallback(
     async (files: ReadonlyArray<File>): Promise<void> => {
+      uploadingRef.current += files.length
+      setUploading(uploadingRef.current)
       for (const file of files) {
         try {
+          if (file.size > 15 * 1024 * 1024) throw new Error('文件超过 15 MiB 上限')
           const meta = await conversationsApi.uploadArtifact(conversation.id, file)
           setAttachments((prev) => [
             ...prev,
@@ -272,6 +282,9 @@ export function Composer({ conversation, prefill }: ComposerProps) {
           ])
         } catch (err) {
           notifyError(`附件上传失败：${file.name}`, err)
+        } finally {
+          uploadingRef.current--
+          setUploading(uploadingRef.current)
         }
       }
     },
@@ -342,12 +355,15 @@ export function Composer({ conversation, prefill }: ComposerProps) {
 
   const send = async (): Promise<void> => {
     const payload = text.trim()
-    if (payload === '' || sending) return
+    if (payload === '' || sendingRef.current || uploadingRef.current > 0) return
     if (runSlashCommand(payload)) {
       setText('')
       return
     }
+    sendingRef.current = true
     setSending(true)
+    const sentAttachments = new Set(attachments.map((attachment) => attachment.artifactId))
+    const draft = text
     try {
       await conversationsApi.submitInput(conversation.id, {
         text: payload,
@@ -355,12 +371,13 @@ export function Composer({ conversation, prefill }: ComposerProps) {
         ...(working ? { whenBusy } : {}),
         ...(attachments.length > 0 ? { attachments: attachments.map((a) => a.artifactId) } : {}),
       })
-      setText('')
-      setAttachments([])
+      setText((current) => current === draft ? '' : current)
+      setAttachments((current) => current.filter((attachment) => !sentAttachments.has(attachment.artifactId)))
       setPopover(null)
     } catch (err) {
       notifyError('发送失败', err)
     } finally {
+      sendingRef.current = false
       setSending(false)
     }
   }
@@ -471,6 +488,7 @@ export function Composer({ conversation, prefill }: ComposerProps) {
             </div>
           ) : null}
           <textarea
+            aria-label="输入消息"
             ref={textareaRef}
             className="composer-textarea selectable"
             value={text}
@@ -559,12 +577,12 @@ export function Composer({ conversation, prefill }: ComposerProps) {
               <button
                 type="button"
                 className="btn btn-sm btn-primary btn-pill"
-                disabled={sending || text.trim() === ''}
+                disabled={sending || uploading > 0 || text.trim() === ''}
                 onClick={() => void send()}
                 title="发送 (Enter)；Shift+Enter 换行"
               >
                 <HelmIcon name={sending ? 'loader' : 'send'} size={12} />
-                发送
+                {uploading > 0 ? `上传中 (${uploading})` : '发送'}
               </button>
             </span>
           </div>

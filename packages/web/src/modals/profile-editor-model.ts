@@ -16,7 +16,7 @@ export interface EnvPair {
 
 export interface ProfileDraft {
   profile: Profile
-  /** 加载时的基线快照；save 仅提交相对基线变过的字段。 */
+  /** 加载时的基线快照，用于 dirty 判断。 */
   baseline: Profile
   /** 用户显式编辑过的大文本字段（system / memory）。 */
   editedFields: Set<'system' | 'memory'>
@@ -30,7 +30,7 @@ function sameValue(a: unknown, b: unknown): boolean {
 }
 
 export function profileIdValid(id: string): boolean {
-  return /^[a-z0-9-]+$/.test(id)
+  return /^[a-z0-9][a-z0-9-]{0,63}$/.test(id)
 }
 
 export function tagsToText(tags: string[] | undefined): string {
@@ -118,50 +118,20 @@ export function isDraftDirty(draft: ProfileDraft): boolean {
   return JSON.stringify(normalizeRuntime(profile.runtime)) !== JSON.stringify(normalizeRuntime(baseline.runtime))
 }
 
-/** 基础字段（不含 system / memory）：仅当与基线不同才写入载荷。 */
-function putBaseField(payload: Profile, baseline: Profile, profile: Profile, key: 'name' | 'model' | 'tags'): void {
-  if (key === 'model') {
-    const value = typeof profile.model === 'string' ? profile.model.trim() : profile.model
-    if (!sameValue(value, baseline.model) && value !== '') {
-      payload.model = value
-    }
-    return
-  }
-  if (key === 'name') {
-    const value = typeof profile.name === 'string' ? profile.name.trim() : profile.name
-    if (!sameValue(value === '' ? undefined : value, baseline.name) && value !== '') {
-      payload.name = value
-    }
-    return
-  }
-  const nextTags = profile.tags ?? []
-  if (nextTags.length > 0 && nextTags.join('\u0000') !== (baseline.tags ?? []).join('\u0000')) {
-    payload.tags = nextTags
-  }
-}
-
 /**
- * 保存载荷：
- * - 新建：全量提交（含当前 system / memory 文本）；
- * - 更新：基础字段按基线 diff 提交；system / memory 仅在用户显式编辑过
- *   时提交——否则省略，让 HTTP 层跳过对应文件，保护弹窗打开期间
- *   Agent 新写入的记忆不被旧快照覆盖。
+ * PUT 整体替换 profile.json，因此基础字段必须完整发送。
+ * SYSTEM.md/MEMORY.md 则是可选文件更新，只有用户编辑过才发送，
+ * 避免修改显示名时覆盖 Agent 在后台追加的新记忆。
  */
 export function buildProfileSavePayload(draft: ProfileDraft, opts: { isNew: boolean }): Profile {
-  const { profile, baseline, editedFields } = draft
+  const { profile, editedFields } = draft
   const payload: Profile = { id: profile.id }
-  putBaseField(payload, baseline, profile, 'name')
-  putBaseField(payload, baseline, profile, 'model')
-  putBaseField(payload, baseline, profile, 'tags')
-  if (JSON.stringify(normalizeRuntime(profile.runtime)) !== JSON.stringify(normalizeRuntime(baseline.runtime))) {
-    payload.runtime = normalizeRuntime(profile.runtime)
-  }
-  if (opts.isNew) {
-    payload.system = profile.system ?? ''
-    payload.memory = profile.memory ?? ''
-    return payload
-  }
-  if (editedFields.has('system')) payload.system = profile.system ?? ''
-  if (editedFields.has('memory')) payload.memory = profile.memory ?? ''
+  if (profile.name?.trim()) payload.name = profile.name.trim()
+  if (profile.model?.trim()) payload.model = profile.model.trim()
+  if (profile.tags !== undefined) payload.tags = [...profile.tags]
+  const runtime = normalizeRuntime(profile.runtime)
+  if (runtime) payload.runtime = runtime
+  if (opts.isNew || editedFields.has('system')) payload.system = profile.system ?? ''
+  if (opts.isNew || editedFields.has('memory')) payload.memory = profile.memory ?? ''
   return payload
 }

@@ -1,158 +1,124 @@
 import * as React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  ROOT_CONVERSATION_ID,
-  type ActionManifest,
-  type ArtifactMetadata,
-  type AskResolvedEvent,
-  type AskSpec,
-  type AskUpsertEvent,
-  type ConversationDeletedEvent,
-  type ConversationDetail,
-  type ConversationEntryEvent,
-  type ConversationLive,
-  type ConversationLiveEvent,
-  type ConversationSummary,
-  type ConversationUpsertEvent,
-  type HelmEvent,
-  type HelmEventFrame,
-  type HelmSnapshot,
-  type NotificationEvent,
-  type PluginChangedEvent,
-  type PluginDocUpdatedEvent,
-  type PluginSummary,
-  type PluginUiContribution,
-  type Profile,
-  type ProviderConfig,
-  type SkillSummary,
-  type WorkflowRunSummary,
-  type WorkflowUpdatedEvent,
-} from '@helm/protocol'
-import {
-  assetsApi,
-  authApi,
-  conversationsApi,
-  getStoredToken,
-  pluginsApi,
-  setStoredToken,
-  workflowsApi,
-  type CredentialStatus,
-  type ModelDescriptor,
-  type SavedWorkflowSummary,
-} from './api.js'
+import type { ActionManifest, ArtifactMetadata, ConversationDetail, HelmEventFrame, HelmSnapshot, Profile, ProviderConfig, SkillSummary } from '@helm/protocol'
+import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, pluginsApi, setStoredToken, workflowsApi, type CredentialStatus, type ModelDescriptor, type SavedWorkflowSummary } from './api.js'
+import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, SseParser, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
-import {
-  groupUiContributions,
-  resolveTargetString,
-  type ActiveModal,
-  type HelmStoreValue,
-  type ResolvedTarget,
-  type ThemeMode,
-  type ToastNotice,
-} from './types.js'
+import { groupUiContributions, resolveTargetString, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ToastNotice } from './types.js'
 
-function getInitialTheme(): ThemeMode {
-  try {
-    const saved = localStorage.getItem('helm:theme')
-    return saved === 'dark' ? 'dark' : 'light'
-  } catch {
-    return 'light'
-  }
-}
-
-function sortConversations(list: ConversationSummary[]): ConversationSummary[] {
-  return [...list].sort((a, b) => {
-    if (a.id === ROOT_CONVERSATION_ID) return -1
-    if (b.id === ROOT_CONVERSATION_ID) return 1
-    return b.updatedAt - a.updatedAt
-  })
-}
+const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
+const themeInitially = (): ThemeMode => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
 
 export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [authReady, setAuthReady] = useState(false)
   const [authConfigured, setAuthConfigured] = useState(false)
   const [authenticated, setAuthenticated] = useState(false)
+  const [authError, setAuthError] = useState<string | null>(null)
   const [sseConnected, setSseConnected] = useState(false)
-  const [theme, setThemeState] = useState<ThemeMode>(getInitialTheme)
-
-  const [conversations, setConversations] = useState<ConversationSummary[]>([])
-  const [conversationDetails, setConversationDetails] = useState<Record<number, ConversationDetail>>({})
-  const [conversationLives, setConversationLives] = useState<Record<number, ConversationLive>>({})
+  const [connectionError, setConnectionError] = useState<string | null>(null)
+  const [theme, setThemeState] = useState<ThemeMode>(themeInitially)
+  const [live, setLive] = useState<LiveState>(emptyLiveState)
+  const liveRef = useRef(live)
   const [conversationArtifacts, setConversationArtifacts] = useState<Record<number, ArtifactMetadata[]>>({})
-  const [pendingAsks, setPendingAsks] = useState<AskSpec[]>([])
-  const [resolvedAsksByConv, setResolvedAsksByConv] = useState<
-    Record<number, Array<{ ask: AskSpec; status: 'answered' | 'cancelled' | 'superseded' }>>
-  >({})
-  const [plugins, setPlugins] = useState<PluginSummary[]>([])
-  const [uiContributions, setUiContributions] = useState<PluginUiContribution[]>([])
-  const [pluginDocs, setPluginDocs] = useState<Record<string, unknown>>({})
-  const [workflowRuns, setWorkflowRuns] = useState<WorkflowRunSummary[]>([])
-  const [savedWorkflows, setSavedWorkflows] = useState<SavedWorkflowSummary[]>([])
-
+  const [loadErrors, setLoadErrors] = useState<Record<string, string>>({})
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [models, setModels] = useState<ModelDescriptor[]>([])
   const [providers, setProviders] = useState<ProviderConfig[]>([])
   const [credentials, setCredentials] = useState<CredentialStatus[]>([])
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [actions, setActions] = useState<ActionManifest[]>([])
-
-  const [primaryTarget, setPrimaryTarget] = useState<ResolvedTarget>({
-    kind: 'conversation',
-    conversationId: ROOT_CONVERSATION_ID,
-  })
+  const [savedWorkflows, setSavedWorkflows] = useState<SavedWorkflowSummary[]>([])
+  const [primaryTarget, setPrimaryTarget] = useState<ResolvedTarget>({ kind: 'conversation', conversationId: 1 })
   const [splitTarget, setSplitTarget] = useState<ResolvedTarget | null>(null)
   const [workbenchOpen, setWorkbenchOpen] = useState(false)
   const [workbenchTab, setWorkbenchTab] = useState('tasks')
   const [activeModal, setActiveModal] = useState<ActiveModal>(null)
   const [highlightedEntry, setHighlightedEntry] = useState<{ conversationId: number; entryId: string } | null>(null)
   const [notices, setNotices] = useState<ToastNotice[]>([])
+  const session = useRef(0)
+  const requests = useRef(new Map<string, Promise<unknown>>())
+  const failedDocs = useRef(new Set<string>())
+  const pluginEpoch = useRef(new Map<string, number>())
+  const timers = useRef(new Set<ReturnType<typeof setTimeout>>())
+  const targets = useRef({ primaryTarget, splitTarget })
+  targets.current = { primaryTarget, splitTarget }
+  const assetGeneration = useRef(0)
 
-  const pendingAsksRef = useRef<AskSpec[]>([])
-  pendingAsksRef.current = pendingAsks
+  const updateLive = useCallback((update: (state: LiveState) => LiveState) => {
+    const next = update(liveRef.current)
+    liveRef.current = next
+    setLive(next)
+  }, [])
+  const delay = useCallback((fn: () => void, ms: number) => {
+    const timer = setTimeout(() => { timers.current.delete(timer); fn() }, ms)
+    timers.current.add(timer)
+  }, [])
+  useEffect(() => () => { session.current++; for (const timer of timers.current) clearTimeout(timer) }, [])
 
-  const conversationsRef = useRef<ConversationSummary[]>([])
-  conversationsRef.current = conversations
-
-  const inFlightDocFetches = useRef<Set<string>>(new Set())
+  const dismissNotice = useCallback((id: string) => setNotices((prev) => prev.filter((notice) => notice.id !== id)), [])
+  const pushNotice = useCallback((notice: Omit<ToastNotice, 'id' | 'createdAt'>) => {
+    const id = crypto.randomUUID()
+    setNotices((prev) => [...prev.filter((item) => item.title !== notice.title || item.body !== notice.body), { ...notice, id, createdAt: Date.now() }])
+    if (notice.level === 'info') delay(() => dismissNotice(id), 6000)
+  }, [delay, dismissNotice])
+  const reportLoad = useCallback((key: string, error?: unknown) => {
+    setLoadErrors((prev) => {
+      const next = { ...prev }
+      if (error === undefined) delete next[key]
+      else next[key] = errorText(error)
+      return next
+    })
+  }, [])
 
   const setTheme = useCallback((next: ThemeMode) => {
     setThemeState(next)
+    document.documentElement.dataset.theme = next
+    try { localStorage.setItem('helm:theme', next) } catch { /* 内存主题仍可使用。 */ }
+  }, [])
+  const toggleTheme = useCallback(() => setTheme(theme === 'light' ? 'dark' : 'light'), [theme, setTheme])
+
+  const checkAuth = useCallback(async () => {
+    setAuthError(null)
     try {
-      localStorage.setItem('helm:theme', next)
-    } catch {
-      // ignore
-    }
-    document.documentElement.setAttribute('data-theme', next)
+      const status = await authApi.status()
+      setAuthConfigured(status.configured)
+      setAuthenticated(status.authenticated)
+    } catch (error) {
+      setAuthError(`无法连接 Helm 内核：${errorText(error)}`)
+    } finally { setAuthReady(true) }
   }, [])
-
-  const toggleTheme = useCallback(() => {
-    setTheme(theme === 'light' ? 'dark' : 'light')
-  }, [theme, setTheme])
-
-  const dismissNotice = useCallback((id: string) => {
-    setNotices((prev) => prev.filter((n) => n.id !== id))
+  useEffect(() => { void checkAuth() }, [checkAuth])
+  const logout = useCallback(() => {
+    session.current++
+    requests.current.clear()
+    failedDocs.current.clear()
+    assetGeneration.current++
+    setStoredToken(null)
+    setAuthenticated(false)
+    setSseConnected(false)
+    setActiveModal(null)
+    setSplitTarget(null)
+    setPrimaryTarget({ kind: 'conversation', conversationId: 1 })
+    updateLive(emptyLiveState)
+    setConversationArtifacts({})
+    setLoadErrors({})
+    setProfiles([]); setModels([]); setProviders([]); setCredentials([]); setSkills([]); setActions([]); setSavedWorkflows([])
+  }, [updateLive])
+  useEffect(() => {
+    window.addEventListener('helm:unauthorized', logout)
+    return () => window.removeEventListener('helm:unauthorized', logout)
+  }, [logout])
+  const onAuthenticated = useCallback(async (token: string) => {
+    setStoredToken(token)
+    setAuthConfigured(true)
+    setAuthError(null)
+    setAuthenticated(true)
   }, [])
-
-  const pushNotice = useCallback(
-    (notice: Omit<ToastNotice, 'id' | 'createdAt'>) => {
-      const id = `notice_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
-      const item: ToastNotice = { ...notice, id, createdAt: Date.now() }
-      setNotices((prev) => [item, ...prev].slice(0, 6))
-      setTimeout(() => dismissNotice(id), 6_000)
-    },
-    [dismissNotice],
-  )
 
   const refreshAssets = useCallback(async () => {
-    const results = await Promise.allSettled([
-      assetsApi.listProfiles(),
-      assetsApi.listModels(),
-      assetsApi.listProviders(),
-      assetsApi.listCredentials(),
-      assetsApi.listSkills(),
-      pluginsApi.listActions(),
-      workflowsApi.listSaved(),
-    ])
+    const generation = ++assetGeneration.current
+    const results = await Promise.allSettled([assetsApi.listProfiles(), assetsApi.listModels(), assetsApi.listProviders(), assetsApi.listCredentials(), assetsApi.listSkills(), pluginsApi.listActions(), workflowsApi.listSaved()])
+    if (generation !== assetGeneration.current) return
     if (results[0].status === 'fulfilled') setProfiles(results[0].value)
     if (results[1].status === 'fulfilled') setModels(results[1].value)
     if (results[2].status === 'fulfilled') setProviders(results[2].value)
@@ -160,497 +126,240 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     if (results[4].status === 'fulfilled') setSkills(results[4].value)
     if (results[5].status === 'fulfilled') setActions(results[5].value)
     if (results[6].status === 'fulfilled') setSavedWorkflows(results[6].value)
-  }, [])
+    const labels = ['角色', '模型', '网关', '凭据', '技能', '插件动作', '工作流']
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') pushNotice({ type: 'notification', level: 'error', title: `${labels[index]}加载失败`, body: errorText(result.reason) })
+    })
+  }, [pushNotice])
+  useEffect(() => { if (authenticated) void refreshAssets() }, [authenticated, refreshAssets])
 
-  const loadConversationDetail = useCallback(
-    async (conversationId: number, force = false): Promise<ConversationDetail | undefined> => {
-      try {
-        const detail = await conversationsApi.getDetail(conversationId, { limit: 150 })
-        setConversationDetails((prev) => {
-          if (!force && prev[conversationId] && detail.entries.length === 0 && prev[conversationId].entries.length > 0) {
-            return prev
-          }
-          return { ...prev, [conversationId]: detail }
-        })
-        return detail
-      } catch {
-        return undefined
-      }
-    },
-    [],
-  )
-
-  const loadConversationArtifacts = useCallback(async (conversationId: number): Promise<ArtifactMetadata[]> => {
-    try {
-      const list = await conversationsApi.listArtifacts(conversationId)
-      setConversationArtifacts((prev) => ({ ...prev, [conversationId]: list }))
-      return list
-    } catch {
-      return []
-    }
-  }, [])
-
-  const ensurePluginDoc = useCallback(async (pluginId: string, docName: string): Promise<unknown> => {
-    const key = `${pluginId}/${docName}`
-    if (inFlightDocFetches.current.has(key)) return undefined
-    inFlightDocFetches.current.add(key)
-    try {
-      const res = await pluginsApi.getPublicDoc(pluginId, docName)
-      setPluginDocs((prev) => ({ ...prev, [key]: res.value }))
-      return res.value
-    } catch {
+  const loadConversationDetail = useCallback(async (id: number, force = false): Promise<ConversationDetail | undefined> => {
+    const key = `conversation:${id}`
+    const existing = requests.current.get(key)
+    if (existing) return existing as Promise<ConversationDetail | undefined>
+    if (!force && liveRef.current.conversationDetails[id]) return liveRef.current.conversationDetails[id]
+    reportLoad(key)
+    const epoch = session.current
+    const task = conversationsApi.getDetail(id, { limit: 150 }).then((detail) => {
+      if (session.current !== epoch) return undefined
+      updateLive((state) => mergeConversationDetail(state, detail))
+      return detail
+    }).catch((error: unknown) => {
+      if (session.current === epoch) reportLoad(key, error)
       return undefined
-    } finally {
-      inFlightDocFetches.current.delete(key)
-    }
-  }, [])
+    }).finally(() => { if (requests.current.get(key) === task) requests.current.delete(key) })
+    requests.current.set(key, task)
+    return task
+  }, [reportLoad, updateLive])
 
-  const openTarget = useCallback(
-    (target: string | ResolvedTarget, opts?: { split?: boolean; highlightEntryId?: string }) => {
-      const resolved = typeof target === 'string' ? resolveTargetString(target, conversationsRef.current) : target
-      if (!resolved) {
-        pushNotice({
-          type: 'notification',
-          level: 'warning',
-          title: '目标未就绪',
-          body: typeof target === 'string' ? `未找到匹配目标: ${target}` : '目标无效',
-        })
+  const loadEarlierEntries = useCallback(async (id: number): Promise<void> => {
+    const detail = liveRef.current.conversationDetails[id]
+    if (!detail?.nextCursor) return
+    const key = `history:${id}`
+    if (requests.current.has(key)) return
+    const epoch = session.current
+    reportLoad(key)
+    const task = conversationsApi.getDetail(id, { limit: 150, cursor: detail.nextCursor }).then((page) => {
+      if (epoch === session.current) updateLive((state) => mergeConversationDetail(state, page, true))
+    }).catch((error: unknown) => { if (epoch === session.current) reportLoad(key, error) })
+      .finally(() => { if (requests.current.get(key) === task) requests.current.delete(key) })
+    requests.current.set(key, task)
+    await task
+  }, [reportLoad, updateLive])
+
+  const loadConversationArtifacts = useCallback(async (id: number): Promise<ArtifactMetadata[] | undefined> => {
+    const key = `artifacts:${id}`
+    const existing = requests.current.get(key)
+    if (existing) return existing as Promise<ArtifactMetadata[] | undefined>
+    const epoch = session.current
+    reportLoad(key)
+    const task = conversationsApi.listArtifacts(id).then((list) => {
+      if (epoch === session.current) setConversationArtifacts((prev) => ({ ...prev, [id]: list }))
+      return list
+    }).catch((error: unknown) => {
+      if (epoch === session.current) {
+        reportLoad(key, error)
+        pushNotice({ type: 'notification', level: 'error', title: '会话产物加载失败', body: errorText(error), conversationId: id })
+      }
+      return undefined
+    }).finally(() => { if (requests.current.get(key) === task) requests.current.delete(key) })
+    requests.current.set(key, task)
+    return task
+  }, [reportLoad, pushNotice])
+
+  const ensurePluginDoc = useCallback(async (pluginId: string, name: string): Promise<unknown> => {
+    const docKey = `${pluginId}/${name}`, key = `doc:${docKey}`
+    if (Object.hasOwn(liveRef.current.pluginDocs, docKey)) return liveRef.current.pluginDocs[docKey]
+    if (failedDocs.current.has(key)) return undefined
+    if (requests.current.has(key)) return requests.current.get(key)
+    const epoch = session.current
+    const pluginVersion = pluginEpoch.current.get(pluginId)
+    const task = pluginsApi.getPublicDoc(pluginId, name).then((doc) => {
+      if (epoch !== session.current || pluginVersion !== pluginEpoch.current.get(pluginId)) return undefined
+      updateLive((state) => {
+        if (Object.hasOwn(state.pluginDocs, docKey) || !state.plugins.some((p) => p.id === pluginId && p.enabled)) return state
+        return { ...state, pluginDocs: { ...state.pluginDocs, [docKey]: doc.value } }
+      })
+      return doc.value
+    }).catch((error: unknown) => {
+      if (epoch === session.current && pluginVersion === pluginEpoch.current.get(pluginId)) {
+        failedDocs.current.add(key)
+        reportLoad(key, error)
+        pushNotice({ type: 'notification', level: 'error', title: '插件状态读取失败', body: `${pluginId}/${name}：${errorText(error)}` })
+      }
+      return undefined
+    }).finally(() => { if (requests.current.get(key) === task) requests.current.delete(key) })
+    requests.current.set(key, task)
+    return task
+  }, [pushNotice, reportLoad, updateLive])
+
+  const openTarget = useCallback((target: string | ResolvedTarget, opts?: { split?: boolean; highlightEntryId?: string }) => {
+    const resolved = typeof target === 'string' ? resolveTargetString(target, liveRef.current.conversations) : target
+    if (!resolved) {
+      pushNotice({ type: 'notification', level: 'warning', title: '目标未就绪', body: typeof target === 'string' ? target : '导航目标无效' })
+      return
+    }
+    if (opts?.split) setSplitTarget(resolved)
+    else setPrimaryTarget(resolved)
+    if (resolved.kind === 'conversation' && opts?.highlightEntryId) setHighlightedEntry({ conversationId: resolved.conversationId, entryId: opts.highlightEntryId })
+  }, [pushNotice])
+  const closeSplit = useCallback(() => setSplitTarget(null), [])
+  const invokePluginAction = useCallback(async (pluginId: string, actionId: string, input: unknown, conversationId?: number) => pluginsApi.invokeAction(pluginId, actionId, input, conversationId), [])
+
+  useEffect(() => {
+    if (!authenticated) return
+    const visible = [primaryTarget, splitTarget].filter((target): target is { kind: 'conversation'; conversationId: number } => target?.kind === 'conversation')
+    for (const id of new Set(visible.map((target) => target.conversationId))) {
+      void loadConversationDetail(id)
+      void loadConversationArtifacts(id)
+      const summary = liveRef.current.conversations.find((conv) => conv.id === id)
+      if (summary?.unread) void conversationsApi.patch(id, { unread: false }).catch((error: unknown) => pushNotice({ type: 'notification', level: 'error', title: '标记已读失败', body: errorText(error) }))
+    }
+  }, [authenticated, primaryTarget, splitTarget, loadConversationDetail, loadConversationArtifacts, pushNotice])
+
+  // 命中老消息时逐页取历史，直至 entry 可见或游标耗尽。
+  useEffect(() => {
+    if (!highlightedEntry) return
+    const detail = live.conversationDetails[highlightedEntry.conversationId]
+    if (!detail) return
+    const matched = detail.entries.find((entry) => entryMatchesReference(entry, highlightedEntry.entryId))
+    if (matched) {
+      if (matched.id !== highlightedEntry.entryId) {
+        setHighlightedEntry({ ...highlightedEntry, entryId: matched.id })
         return
       }
-      if (opts?.split) {
-        setSplitTarget(resolved)
-      } else {
-        setPrimaryTarget(resolved)
-      }
-      if (resolved.kind === 'conversation') {
-        void loadConversationDetail(resolved.conversationId)
-        void loadConversationArtifacts(resolved.conversationId)
-        if (opts?.highlightEntryId) {
-          setHighlightedEntry({ conversationId: resolved.conversationId, entryId: opts.highlightEntryId })
-          setTimeout(() => {
-            setHighlightedEntry((curr) =>
-              curr?.entryId === opts.highlightEntryId ? null : curr,
-            )
-          }, 2600)
-        }
-      }
-    },
-    [loadConversationDetail, loadConversationArtifacts, pushNotice],
-  )
-
-  const closeSplit = useCallback(() => {
-    setSplitTarget(null)
-  }, [])
-
-  const invokePluginAction = useCallback(
-    async (pluginId: string, actionId: string, input: unknown, conversationId?: number): Promise<unknown> => {
-      const result = await pluginsApi.invokeAction(pluginId, actionId, input, conversationId)
-      void refreshAssets()
-      return result
-    },
-    [refreshAssets],
-  )
-
-  const onAuthenticated = useCallback(
-    async (token: string) => {
-      setStoredToken(token)
-      setAuthConfigured(true)
-      setAuthenticated(true)
-      await refreshAssets()
-    },
-    [refreshAssets],
-  )
-
-  const logout = useCallback(() => {
-    setStoredToken(null)
-    setAuthenticated(false)
-    setSseConnected(false)
-  }, [])
-
-  // 初始检查 Auth 状态
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const st = await authApi.status()
-        if (cancelled) return
-        setAuthConfigured(st.configured)
-        setAuthenticated(st.authenticated)
-        setAuthReady(true)
-        if (st.authenticated) {
-          void refreshAssets()
-        }
-      } catch {
-        if (!cancelled) setAuthReady(true)
-      }
-    })()
-    return () => {
-      cancelled = true
+      delay(() => setHighlightedEntry((current) => current === highlightedEntry ? null : current), 5000)
+    } else if (detail.nextCursor && !loadErrors[`history:${detail.id}`]) {
+      void loadEarlierEntries(detail.id)
+    } else if (!detail.nextCursor) {
+      pushNotice({ type: 'notification', level: 'warning', title: '搜索条目已不在会话历史中', conversationId: detail.id })
+      setHighlightedEntry(null)
     }
-  }, [refreshAssets])
+  }, [highlightedEntry, live.conversationDetails, loadEarlierEntries, loadErrors, delay, pushNotice])
 
-  // 当主屏或副屏切换到某个会话时，自动确保加载该会话的详情与产物
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setActiveModal((current) => current?.kind === 'command-palette' ? null : { kind: 'command-palette' })
+      }
+    }
+    window.addEventListener('keydown', keydown)
+    return () => window.removeEventListener('keydown', keydown)
+  }, [])
+
   useEffect(() => {
     if (!authenticated) return
-    if (primaryTarget.kind === 'conversation') {
-      void loadConversationDetail(primaryTarget.conversationId)
-      void loadConversationArtifacts(primaryTarget.conversationId)
-    }
-  }, [authenticated, primaryTarget, loadConversationDetail, loadConversationArtifacts])
-
-  useEffect(() => {
-    if (!authenticated || !splitTarget) return
-    if (splitTarget.kind === 'conversation') {
-      void loadConversationDetail(splitTarget.conversationId)
-      void loadConversationArtifacts(splitTarget.conversationId)
-    }
-  }, [authenticated, splitTarget, loadConversationDetail, loadConversationArtifacts])
-
-  // 全局快捷键：⌘K / Ctrl+K 打开命令面板，Esc 关闭顶层弹窗
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        setActiveModal((curr) => (curr?.kind === 'command-palette' ? null : { kind: 'command-palette' }))
-      } else if (e.key === 'Escape') {
-        setActiveModal((curr) => (curr !== null ? null : curr))
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
-
-  // SSE 实时流连接与重连
-  useEffect(() => {
-    if (!authenticated) return
-    let active = true
-    let abortCtrl: AbortController | null = null
-    let retryTimer: ReturnType<typeof setTimeout> | null = null
-
-    const handleSnapshot = (snap: HelmSnapshot) => {
-      setConversations(sortConversations(snap.conversations ?? []))
-      setPendingAsks(snap.pendingAsks ?? [])
-      setPlugins(snap.plugins ?? [])
-      setUiContributions(snap.ui ?? [])
-      setWorkflowRuns(snap.workflowRuns ?? [])
-    }
-
-    const handleEvent = (ev: HelmEvent) => {
-      switch (ev.type) {
-        case 'conversation.upsert': {
-          const conv = (ev as ConversationUpsertEvent).conversation
-          setConversations((prev) => {
-            const idx = prev.findIndex((c) => c.id === conv.id)
-            if (idx === -1) return sortConversations([conv, ...prev])
-            const next = [...prev]
-            next[idx] = conv
-            return sortConversations(next)
-          })
-          setConversationDetails((prev) => {
-            const existing = prev[conv.id]
-            if (!existing) return prev
-            return { ...prev, [conv.id]: { ...existing, ...conv } }
-          })
-          if (conv.status !== 'working') {
-            setConversationLives((prev) => {
-              if (!(conv.id in prev)) return prev
-              const next = { ...prev }
-              delete next[conv.id]
-              return next
-            })
-            void loadConversationArtifacts(conv.id)
-          }
-          break
-        }
-        case 'conversation.deleted': {
-          const deletedId = (ev as ConversationDeletedEvent).conversationId
-          setConversations((prev) => prev.filter((c) => c.id !== deletedId))
-          setConversationDetails((prev) => {
-            const next = { ...prev }
-            delete next[deletedId]
-            return next
-          })
-          setPrimaryTarget((curr) =>
-            curr.kind === 'conversation' && curr.conversationId === deletedId
-              ? { kind: 'conversation', conversationId: ROOT_CONVERSATION_ID }
-              : curr,
-          )
-          setSplitTarget((curr) =>
-            curr && curr.kind === 'conversation' && curr.conversationId === deletedId ? null : curr,
-          )
-          break
-        }
-        case 'conversation.entry': {
-          const { conversationId, entry } = ev as ConversationEntryEvent
-          setConversationDetails((prev) => {
-            const detail = prev[conversationId]
-            if (!detail) return prev
-            const exists = detail.entries.some((e) => e.id === entry.id)
-            const entries = exists
-              ? detail.entries.map((e) => (e.id === entry.id ? entry : e))
-              : [...detail.entries, entry]
-            return { ...prev, [conversationId]: { ...detail, entries } }
-          })
-          break
-        }
-        case 'conversation.live': {
-          const { live } = ev as ConversationLiveEvent
-          setConversationLives((prev) => ({ ...prev, [live.conversationId]: live }))
-          break
-        }
-        case 'ask.upsert': {
-          const { ask } = ev as AskUpsertEvent
-          setPendingAsks((prev) => {
-            const rest = prev.filter((a) => a.id !== ask.id)
-            return ask.status === 'pending' ? [...rest, ask] : rest
-          })
-          break
-        }
-        case 'ask.resolved': {
-          const resolvedEv = ev as AskResolvedEvent
-          const matched = pendingAsksRef.current.find((a) => a.id === resolvedEv.askId)
-          setPendingAsks((prev) => prev.filter((a) => a.id !== resolvedEv.askId))
-          if (matched) {
-            setResolvedAsksByConv((prev) => {
-              const list = prev[matched.conversationId] ?? []
-              if (list.some((item) => item.ask.id === matched.id)) return prev
-              return {
-                ...prev,
-                [matched.conversationId]: [...list, { ask: matched, status: resolvedEv.status }],
-              }
-            })
-          }
-          break
-        }
-        case 'plugin.changed': {
-          const { plugin, ui } = ev as PluginChangedEvent
-          setPlugins((prev) => {
-            const idx = prev.findIndex((p) => p.id === plugin.id)
-            if (idx === -1) return [...prev, plugin]
-            const next = [...prev]
-            next[idx] = plugin
-            return next
-          })
-          setUiContributions((prev) => [
-            ...prev.filter((u) => u.pluginId !== plugin.id),
-            ...(ui ?? []),
-          ])
-          void refreshAssets()
-          break
-        }
-        case 'plugin.doc.updated': {
-          const { doc } = ev as PluginDocUpdatedEvent
-          setPluginDocs((prev) => ({
-            ...prev,
-            [`${doc.pluginId}/${doc.name}`]: doc.value,
-          }))
-          break
-        }
-        case 'workflow.updated': {
-          const { run } = ev as WorkflowUpdatedEvent
-          setWorkflowRuns((prev) => {
-            const idx = prev.findIndex((r) => r.id === run.id)
-            if (idx === -1) return [run, ...prev]
-            const next = [...prev]
-            next[idx] = run
-            return next
-          })
-          break
-        }
-        case 'notification': {
-          pushNotice(ev as NotificationEvent)
-          break
-        }
-      }
-    }
-
-    const connectSse = async () => {
-      if (!active) return
-      const token = getStoredToken()
-      abortCtrl = new AbortController()
+    let active = true, retry = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let controller: AbortController | undefined
+    const connect = async (): Promise<void> => {
+      controller = new AbortController()
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
       try {
-        const res = await fetch('/api/events', {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          signal: abortCtrl.signal,
+        const token = getStoredToken()
+        const response = await fetch('/api/events', { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: controller.signal })
+        if (response.status === 401) { logout(); return }
+        if (!response.ok || !response.body) throw new Error(`实时连接失败（HTTP ${response.status}）`)
+        let gotSnapshot = false
+        const parser = new SseParser((message) => {
+          const payload: unknown = JSON.parse(message.data)
+          if (message.event === 'snapshot') {
+            session.current++
+            requests.current.clear()
+            failedDocs.current.clear()
+            setLoadErrors({})
+            updateLive((state) => applySnapshot(state, payload as HelmSnapshot))
+            setConversationArtifacts({})
+            gotSnapshot = true
+            retry = 0
+            setSseConnected(true)
+            setConnectionError(null)
+            for (const target of [targets.current.primaryTarget, targets.current.splitTarget]) {
+              if (target?.kind === 'conversation') { void loadConversationDetail(target.conversationId, true); void loadConversationArtifacts(target.conversationId) }
+            }
+          } else {
+            if (!gotSnapshot) throw new Error('实时连接缺少初始快照')
+            const frame = payload as HelmEventFrame
+            const oldSeq = liveRef.current.seq
+            updateLive((state) => applyEventFrame(state, frame))
+            if (frame.seq <= oldSeq) return
+            const event = frame.event
+            if (event.type === 'notification' && 'title' in event) pushNotice(event)
+            if (event.type === 'plugin.changed' && 'plugin' in event) {
+              pluginEpoch.current.set(event.plugin.id, (pluginEpoch.current.get(event.plugin.id) ?? 0) + 1)
+              for (const key of requests.current.keys()) if (key.startsWith(`doc:${event.plugin.id}/`)) requests.current.delete(key)
+              failedDocs.current.clear()
+              void refreshAssets()
+            }
+            if (event.type === 'conversation.upsert' && 'conversation' in event) {
+              const conv = event.conversation
+              const visible = [targets.current.primaryTarget, targets.current.splitTarget].some((target) => target?.kind === 'conversation' && target.conversationId === conv.id)
+              if (visible && conv.status !== 'working') void loadConversationArtifacts(conv.id)
+              if (visible && conv.unread) void conversationsApi.patch(conv.id, { unread: false }).catch((error: unknown) => reportLoad(`conversation:${conv.id}`, error))
+            }
+            if (event.type === 'conversation.deleted' && 'conversationId' in event) {
+              const id = event.conversationId
+              setPrimaryTarget((current) => current.kind === 'conversation' && current.conversationId === id ? { kind: 'conversation', conversationId: 1 } : current)
+              setSplitTarget((current) => current?.kind === 'conversation' && current.conversationId === id ? null : current)
+              setConversationArtifacts((prev) => { const next = { ...prev }; delete next[id]; return next })
+            }
+          }
         })
-        if (res.status === 401) {
-          setSseConnected(false)
-          setAuthenticated(false)
-          return
-        }
-        if (!res.ok || !res.body) {
-          throw new Error(`SSE HTTP ${res.status}`)
-        }
-        setSseConnected(true)
-        const reader = res.body.getReader()
+        reader = response.body.getReader()
         const decoder = new TextDecoder()
-        let buffer = ''
-
         while (active) {
-          const { value, done } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          let sepIdx = buffer.indexOf('\n\n')
-          while (sepIdx !== -1) {
-            const rawBlock = buffer.slice(0, sepIdx)
-            buffer = buffer.slice(sepIdx + 2)
-            sepIdx = buffer.indexOf('\n\n')
-
-            let eventName = 'message'
-            const dataLines: string[] = []
-            for (const line of rawBlock.split('\n')) {
-              if (line.startsWith('event:')) {
-                eventName = line.slice(6).trim()
-              } else if (line.startsWith('data:')) {
-                dataLines.push(line.slice(5).trim())
-              }
-            }
-            if (dataLines.length === 0) continue
-            try {
-              const payload = JSON.parse(dataLines.join('\n')) as unknown
-              if (eventName === 'snapshot') {
-                handleSnapshot(payload as HelmSnapshot)
-              } else {
-                const frame = payload as HelmEventFrame
-                if (frame && typeof frame === 'object' && 'event' in frame) {
-                  handleEvent(frame.event)
-                }
-              }
-            } catch {
-              // 忽略格式异常帧
-            }
-          }
+          const chunk = await reader.read()
+          if (chunk.done) break
+          if (!active) return
+          parser.push(decoder.decode(chunk.value, { stream: true }))
         }
-      } catch {
-        // 断开或异常
+        if (active) throw new Error('实时连接已断开，正在重新同步')
+      } catch (error) {
+        if (active && !controller.signal.aborted) setConnectionError(errorText(error))
       } finally {
+        if (reader) { await reader.cancel().catch(() => {}); reader.releaseLock() }
         if (active) {
           setSseConnected(false)
-          retryTimer = setTimeout(() => {
-            void connectSse()
-          }, 1500)
+          timer = setTimeout(() => { void connect() }, Math.min(1000 * 2 ** retry++, 10000))
         }
       }
     }
+    void connect()
+    return () => { active = false; if (timer) clearTimeout(timer); controller?.abort() }
+  }, [authenticated, logout, loadConversationDetail, loadConversationArtifacts, reportLoad, pushNotice, refreshAssets, updateLive])
 
-    void connectSse()
-
-    return () => {
-      active = false
-      if (retryTimer) clearTimeout(retryTimer)
-      abortCtrl?.abort()
-    }
-  }, [authenticated, loadConversationArtifacts, pushNotice, refreshAssets])
-
-  const groupedUi = useMemo(() => groupUiContributions(uiContributions), [uiContributions])
-
-  const storeValue = useMemo<HelmStoreValue>(
-    () => ({
-      authReady,
-      authConfigured,
-      authenticated,
-      sseConnected,
-      theme,
-      conversations,
-      conversationDetails,
-      conversationLives,
-      conversationArtifacts,
-      pendingAsks,
-      resolvedAsksByConv,
-      plugins,
-      uiContributions,
-      groupedUi,
-      pluginDocs,
-      workflowRuns,
-      savedWorkflows,
-      profiles,
-      models,
-      providers,
-      credentials,
-      skills,
-      actions,
-      primaryTarget,
-      splitTarget,
-      workbenchOpen,
-      workbenchTab,
-      activeModal,
-      highlightedEntry,
-      notices,
-      setTheme,
-      toggleTheme,
-      onAuthenticated,
-      logout,
-      refreshAssets,
-      loadConversationDetail,
-      loadConversationArtifacts,
-      ensurePluginDoc,
-      openTarget,
-      closeSplit,
-      setWorkbenchOpen,
-      setWorkbenchTab,
-      setActiveModal,
-      dismissNotice,
-      pushNotice,
-      invokePluginAction,
-    }),
-    [
-      authReady,
-      authConfigured,
-      authenticated,
-      sseConnected,
-      theme,
-      conversations,
-      conversationDetails,
-      conversationLives,
-      conversationArtifacts,
-      pendingAsks,
-      resolvedAsksByConv,
-      plugins,
-      uiContributions,
-      groupedUi,
-      pluginDocs,
-      workflowRuns,
-      savedWorkflows,
-      profiles,
-      models,
-      providers,
-      credentials,
-      skills,
-      actions,
-      primaryTarget,
-      splitTarget,
-      workbenchOpen,
-      workbenchTab,
-      activeModal,
-      highlightedEntry,
-      notices,
-      setTheme,
-      toggleTheme,
-      onAuthenticated,
-      logout,
-      refreshAssets,
-      loadConversationDetail,
-      loadConversationArtifacts,
-      ensurePluginDoc,
-      openTarget,
-      closeSplit,
-      setWorkbenchOpen,
-      setWorkbenchTab,
-      setActiveModal,
-      dismissNotice,
-      pushNotice,
-      invokePluginAction,
-    ],
-  )
-
-  // 向 window.__HELM_SHARED__ 暴露运行时供动态插件 client.mjs 使用
+  const groupedUi = useMemo(() => groupUiContributions(live.uiContributions), [live.uiContributions])
+  const store: HelmStoreValue = {
+    ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, conversationArtifacts,
+    groupedUi, savedWorkflows, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
+    setTheme, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+  }
   useEffect(() => {
-    ;(window as unknown as Record<string, unknown>).__HELM_SHARED__ = {
-      React,
-      useHelmStore,
-      usePluginDoc,
-    }
+    const shared = { React, useHelmStore, usePluginDoc }
+    ;(window as unknown as Record<string, unknown>).__HELM_SHARED__ = shared
+    return () => { delete (window as unknown as Record<string, unknown>).__HELM_SHARED__ }
   }, [])
-
-  return <HelmStoreContext.Provider value={storeValue}>{children}</HelmStoreContext.Provider>
+  return <HelmStoreContext.Provider value={store}>{children}</HelmStoreContext.Provider>
 }

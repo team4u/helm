@@ -20,11 +20,10 @@ export function usePluginDoc<T = unknown>(pluginId: string, docName: string): T 
   const key = `${pluginId}/${docName}`
   const value = store.pluginDocs[key] as T | undefined
 
+  const { ensurePluginDoc, authenticated } = store
   useEffect(() => {
-    if (value === undefined && store.authenticated) {
-      void store.ensurePluginDoc(pluginId, docName)
-    }
-  }, [pluginId, docName, value, store])
+    if (value === undefined && authenticated) void ensurePluginDoc(pluginId, docName)
+  }, [pluginId, docName, value, authenticated, ensurePluginDoc])
 
   return value
 }
@@ -39,15 +38,14 @@ export function usePluginDocsMap(
 ): Record<string, unknown> {
   const store = useHelmStore()
 
+  const { authenticated, ensurePluginDoc, pluginDocs } = store
+  const namesKey = JSON.stringify(docNames ?? [])
   useEffect(() => {
-    if (!pluginId || !docNames || docNames.length === 0 || !store.authenticated) return
-    for (const name of docNames) {
-      const key = `${pluginId}/${name}`
-      if (!(key in store.pluginDocs)) {
-        void store.ensurePluginDoc(pluginId, name)
-      }
+    if (!pluginId || !authenticated) return
+    for (const name of JSON.parse(namesKey) as string[]) {
+      if (!Object.hasOwn(pluginDocs, `${pluginId}/${name}`)) void ensurePluginDoc(pluginId, name)
     }
-  }, [pluginId, docNames, store])
+  }, [pluginId, namesKey, authenticated, ensurePluginDoc, pluginDocs])
 
   if (!pluginId || !docNames || docNames.length === 0) return {}
   const map: Record<string, unknown> = {}

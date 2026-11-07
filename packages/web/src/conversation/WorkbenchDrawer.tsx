@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { ConversationSummary, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
 import { workflowsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
@@ -239,27 +239,14 @@ function WorkflowInspector({ conversationId }: { conversationId: number }) {
     () => store.workflowRuns.filter((r) => r.conversationId === conversationId),
     [store.workflowRuns, conversationId],
   )
-  const fetchedRef = useRef(false)
-
-  // SSE workflow.updated 实时驱动；首次打开时主动拉一次历史 run 兜底。
-  useEffect(() => {
-    if (fetchedRef.current) return
-    fetchedRef.current = true
-    void workflowsApi.listRuns(conversationId).catch(() => {
-      // 拉取失败时 SSE 实时事件仍会到达；下次挂载重试
-      fetchedRef.current = false
-    })
-  }, [conversationId])
-
-  if (runs.length === 0) {
-    return (
-      <div style={{ padding: '20px 14px', color: 'var(--fg-muted)', fontSize: 12, textAlign: 'center' }}>
-        当前会话暂无关联工作流运行
-      </div>
-    )
-  }
+  const children = store.conversations.filter((conversation) => conversation.parentConversationId === conversationId)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
+      {children.length > 0 && <div className="list">{children.map((child) => <div className="row" key={child.id}>
+        <span><strong>#{child.id}</strong> {child.title}</span>
+        <button className="btn btn-sm" onClick={() => store.openTarget(`conversation:${child.id}`, { split: true })}>并排查看</button>
+      </div>)}</div>}
+      {runs.length === 0 && children.length === 0 && <p style={{ color: 'var(--fg-muted)' }}>当前会话暂无工作流或子代理。</p>}
       {runs.map((run) => (
         <WorkflowRunCard key={run.id} run={run} />
       ))}

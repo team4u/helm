@@ -120,16 +120,16 @@ test('仅改基础名称：system / memory 省略，不覆盖弹窗打开期间 
   assert.equal(payload.name, '重构工人')
   assert.equal('system' in payload, false, '未编辑 system 时必须省略')
   assert.equal('memory' in payload, false, '未编辑 memory 时必须省略（保护 Agent 追加的新记忆）')
-  assert.equal('model' in payload, false)
-  assert.equal('tags' in payload, false)
+  assert.equal(payload.model, 'zhipu/glm-4.6')
+  assert.deepEqual(payload.tags, ['worker'])
   assert.equal('runtime' in payload, false)
 })
 
-test('未做任何修改：载荷只含 id，dirty 为 false', { timeout: 60_000 }, () => {
+test('未修改时保留完整 profile.json 基础字段，dirty 为 false', { timeout: 60_000 }, () => {
   const draft = createDraft(baseProfile())
   assert.equal(isDraftDirty(draft), false)
   const payload = buildProfileSavePayload(draft, { isNew: false })
-  assert.deepEqual(payload, { id: 'coder' })
+  assert.deepEqual(payload, { id: 'coder', name: '代码工人', model: 'zhipu/glm-4.6', tags: ['worker'] })
 })
 
 test('显式编辑过 memory 才提交 memory 全文', { timeout: 60_000 }, () => {
@@ -148,6 +148,8 @@ test('新建 Profile：全量提交 system / memory', { timeout: 60_000 }, () =>
   const draft = createDraft({ ...baseProfile(), id: 'reviewer', system: '', memory: '' })
   const payload = buildProfileSavePayload(draft, { isNew: true })
   assert.equal(payload.id, 'reviewer')
+  assert.equal(payload.name, '代码工人')
+  assert.equal(payload.model, 'zhipu/glm-4.6')
   assert.equal(payload.system, '')
   assert.equal(payload.memory, '')
 })
@@ -186,10 +188,10 @@ test('normalizeRuntime：runtime 整体可被清空（关闭 Herdr 运行时）'
   assert.equal(normalizeRuntime(undefined), undefined)
 })
 
-test('runtime 改动进入载荷且规范化；未改动 runtime 省略', { timeout: 60_000 }, () => {
+test('runtime 保存时完整保留并规范化，关闭时才省略', { timeout: 60_000 }, () => {
   const draft = createDraft(baseProfile({ runtime: { kind: 'herdr', agent: 'agy', machine: '  ' } }))
   const unchanged = buildProfileSavePayload(draft, { isNew: false })
-  assert.equal('runtime' in unchanged, false)
+  assert.deepEqual(unchanged.runtime, { kind: 'herdr', agent: 'agy' })
 
   const edited = editRuntime(draft, { kind: 'herdr', agent: 'agy', machine: '  ', args: ['--title', '周报 草稿'] })
   assert.equal(isDraftDirty(edited), true)
@@ -207,7 +209,7 @@ test('textToTags 逗号分隔解析（coder 等角色提示就是普通 tag）',
   assert.deepEqual(textToTags(''), [])
 })
 
-test('tags 修改进入载荷；清空后省略', { timeout: 60_000 }, () => {
+test('tags 修改进入载荷；清空时发送空数组', { timeout: 60_000 }, () => {
   const draft = createDraft(baseProfile())
   const edited = editProfileField(draft, { tags: ['worker', 'coder'] })
   const payload = buildProfileSavePayload(edited, { isNew: false })
@@ -215,7 +217,7 @@ test('tags 修改进入载荷；清空后省略', { timeout: 60_000 }, () => {
 
   const cleared = editProfileField(draft, { tags: [] })
   const clearedPayload = buildProfileSavePayload(cleared, { isNew: false })
-  assert.equal('tags' in clearedPayload, false)
+  assert.deepEqual(clearedPayload.tags, [])
 })
 
 test('model 清空与修改：trim 后空串归一为省略', { timeout: 60_000 }, () => {

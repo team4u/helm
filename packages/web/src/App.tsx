@@ -1,3 +1,6 @@
+import { useCallback, useState } from 'react'
+import { HelmIcon } from './lib/icons.js'
+import { ModalFocusScope } from './shell/ModalFocusScope.js'
 import { ArtifactPreviewModal } from './conversation/ArtifactPreviewModal.js'
 import { ConversationPane } from './conversation/ConversationPane.js'
 import { WorkbenchDrawer } from './conversation/WorkbenchDrawer.js'
@@ -15,6 +18,9 @@ import { ToastOverlay } from './shell/ToastOverlay.js'
 
 function HelmShellInner() {
   const store = useHelmStore()
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const setActiveModal = store.setActiveModal
+  const closeModal = useCallback(() => setActiveModal(null), [setActiveModal])
 
   if (!store.authReady) {
     return (
@@ -34,9 +40,17 @@ function HelmShellInner() {
     )
   }
 
-  if (!store.authenticated) {
-    return <AuthGate />
+  if (store.authError) {
+    return (
+      <div className="connection-screen" role="alert">
+        <strong>暂时无法连接 Helm</strong>
+        <p>{store.authError}</p>
+        <button className="btn btn-primary" onClick={() => void store.checkAuth()}>重新连接</button>
+      </div>
+    )
   }
+
+  if (!store.authenticated) return <AuthGate />
 
   const activeConversationId =
     store.primaryTarget.kind === 'conversation'
@@ -45,13 +59,22 @@ function HelmShellInner() {
         ? store.splitTarget.conversationId
         : undefined
 
-  const closeModal = () => store.setActiveModal(null)
-
   return (
-    <div className="helm-shell">
+    <div className={`helm-shell${sidebarOpen ? ' sidebar-open' : ''}`} onClick={(event) => {
+      if ((event.target as HTMLElement).closest('.nav-item')) setSidebarOpen(false)
+    }}>
+      <button className="btn btn-ghost mobile-nav-toggle" aria-label="切换导航栏" onClick={() => setSidebarOpen((open) => !open)}><HelmIcon name="menu" /></button>
+      {sidebarOpen && <button className="sidebar-backdrop" aria-label="关闭导航栏" onClick={() => setSidebarOpen(false)} />}
       <Sidebar />
 
       <main className="helm-main-stage">
+        {!store.sseConnected && (
+          <div className="connection-banner" role="status">
+            {store.connectionError ?? '正在同步会话…'}
+            <span>连接恢复后会自动刷新。</span>
+          </div>
+        )}
+        <div className="helm-panes">
         {store.primaryTarget.kind === 'conversation' ? (
           <ConversationPane
             key={`primary-conv-${store.primaryTarget.conversationId}`}
@@ -85,6 +108,7 @@ function HelmShellInner() {
             )}
           </div>
         )}
+        </div>
       </main>
 
       {store.workbenchOpen && <WorkbenchDrawer conversationId={activeConversationId} />}
@@ -108,6 +132,7 @@ function HelmShellInner() {
         />
       )}
 
+      <ModalFocusScope active={store.activeModal !== null} onClose={closeModal} />
       <ToastOverlay />
     </div>
   )

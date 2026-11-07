@@ -36,25 +36,19 @@ export interface SavedWorkflowSummary {
 }
 
 const TOKEN_STORAGE_KEY = 'helm:token'
+let memoryToken: string | null | undefined
 
 export function getStoredToken(): string | null {
-  try {
-    return localStorage.getItem(TOKEN_STORAGE_KEY)
-  } catch {
-    return null
-  }
+  if (memoryToken !== undefined) return memoryToken
+  try { return localStorage.getItem(TOKEN_STORAGE_KEY) } catch { return null }
 }
 
 export function setStoredToken(token: string | null): void {
+  memoryToken = token || null
   try {
-    if (token === null || token === '') {
-      localStorage.removeItem(TOKEN_STORAGE_KEY)
-    } else {
-      localStorage.setItem(TOKEN_STORAGE_KEY, token)
-    }
-  } catch {
-    // 忽略无痕模式 localStorage 异常
-  }
+    if (memoryToken === null) localStorage.removeItem(TOKEN_STORAGE_KEY)
+    else localStorage.setItem(TOKEN_STORAGE_KEY, memoryToken)
+  } catch { /* 禁用存储时，本次标签页仍保留内存凭据。 */ }
 }
 
 export class ApiClientError extends Error {
@@ -113,9 +107,8 @@ export async function apiRequest<T>(
     body: hasBody ? JSON.stringify(body) : undefined,
     signal,
   })
-  if (!res.ok) {
-    throw await parseErrorResponse(res)
-  }
+  if (res.status === 401 && typeof window !== 'undefined' && !path.startsWith('/api/auth/')) window.dispatchEvent(new Event('helm:unauthorized'))
+  if (!res.ok) throw await parseErrorResponse(res)
   return (await res.json()) as T
 }
 
@@ -130,7 +123,6 @@ export interface AuthStatusResponse {
 
 export interface AuthTokenResponse {
   token: string
-  expiresAt: string
 }
 
 export const authApi = {
@@ -196,8 +188,8 @@ export const conversationsApi = {
       handoff !== undefined && handoff.trim() !== '' ? { handoff } : {},
     )
   },
-  compact(id: number, instructions?: string): Promise<{ ok: boolean; taskId: string }> {
-    return apiRequest<{ ok: boolean; taskId: string }>(
+  compact(id: number, instructions?: string): Promise<{ conversation: ConversationSummary; taskId: string }> {
+    return apiRequest<{ conversation: ConversationSummary; taskId: string }>(
       'POST',
       `/api/conversations/${id}/compact`,
       instructions !== undefined && instructions.trim() !== '' ? { instructions } : {},
@@ -289,7 +281,16 @@ export interface ModelDescriptor {
   id: string
   provider: string
   modelId: string
+  available: boolean
   label?: string
+}
+
+export function normalizeModelCatalog(raw: unknown): ModelDescriptor[] {
+  if (!Array.isArray(raw)) throw new Error('模型目录格式无效')
+  return raw.map((item: unknown) => {
+    if (item === null || typeof item !== 'object' || !('provider' in item) || typeof item.provider !== 'string' || !('modelId' in item) || typeof item.modelId !== 'string' || !('available' in item) || typeof item.available !== 'boolean') throw new Error('模型目录条目格式无效')
+    return { id: `${item.provider}/${item.modelId}`, provider: item.provider, modelId: item.modelId, available: item.available }
+  })
 }
 
 export interface CredentialStatus {
@@ -316,7 +317,7 @@ export const assetsApi = {
   deleteCredential: (id: string) =>
     apiRequest<{ ok: boolean }>('DELETE', `/api/credentials/${encodeURIComponent(id)}`),
 
-  listModels: () => apiRequest<ModelDescriptor[]>('GET', '/api/models'),
+  listModels: async () => normalizeModelCatalog(await apiRequest<unknown>('GET', '/api/models')),
 
   listSkills: () => apiRequest<SkillSummary[]>('GET', '/api/skills'),
   readSkill: (id: string, path?: string) => {
