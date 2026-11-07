@@ -6,7 +6,7 @@
  * - 持久 claim：调度点触发时先推进 nextRunAt 并 await deps.flush() 真实落盘，
  *   再投递。同一计划点最多一次投递尝试；claim 落盘后、投递完成前崩溃则该次
  *   丢失（诚实语义：持久 claim 与异步输入提交不构成原子事务，不承诺 exactly-once）；
- * - catchUp:true 重启后对每个错过时段补跑一次（按计划点去重）；
+ * - catchUp:true 重启后将错过的时段合并补跑一次；
  *   false 跳至未来时点（跳过同样 claim+flush，防重启后回跳重算）；
  * - single-flight：同一 job 并发 tick 只允许一个在途；
  * - dispatch 失败如实写 lastError 并发 notification 事件，绝不假成功；
@@ -489,7 +489,8 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
     if (decision.action === 'noop') {
       scheduleJob(id)
       return
-    }    if (decision.action === 'skip-to-future') {
+    }
+    if (decision.action === 'skip-to-future') {
       // catchUp=false：错过时段直接跳至未来；同样 claim+flush 防重启回跳。
       // lastRunAt 不动（没有真实投递发生，不伪造运行记录）。
       const written = await tryUpdateJob(id, job.rev, (j) => ({ ...j, nextRunAt: decision.to }))
@@ -516,7 +517,9 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
       scheduleJob(id)
       return
     }
-    if (!claimed) return // job 已被删除或重建换代：旧 tick 就地终止，不投递不写回
+    if (!claimed || stopping) return
+    // flush 让出执行权期间任务可能被删除或重建，投递前复核创建代次。
+    if (!readDoc().jobs.some((current) => current.id === id && current.rev === job.rev && current.enabled)) return
     try {
       await deps.dispatchTrigger(buildCronEnvelope(job, fireAt), job.targetProfileId)
     } catch (err) {
@@ -693,7 +696,8 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
       // 天然无 delete+create 同 id 污染面；删除竞态由读时存在性兜底。
       const job = readDoc().jobs.find((j) => j.id === input.id)
       if (!job) throw new HelmError('not_found', `cron job 不存在：${input.id}`, 404, { id: input.id })
-      await deps.dispatchTrigger(buildCronEnvelope(job, clock.now()), job.targetProfileId)
+      const envelope = { ...buildCronEnvelope(job, clock.now()), id: `cron:${job.id}:manual:${randomUUID()}` }
+      await deps.dispatchTrigger(envelope, job.targetProfileId)
       return { triggered: true }
     },
   })
@@ -705,17 +709,33 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
     liveTasks() {
       return [...inflight.keys()].map((id) => `cron-dispatch:${id}`)
     },
-    start() {
+    async start() {
       stopping = false
-      let current: CronDoc
       try {
-        current = readDoc()
+        const current = readDoc()
+        // 启动边界校验全部计划，失败时不发布任何 timer，也不伪装启用成功。
+        for (const job of current.jobs) {
+          assertValidSchedule(job.schedule, job.timezone)
+          if (job.enabled && job.nextRunAt === undefined) {
+            throw new HelmError('cron_doc_corrupt', `启用的 cron job ${job.id} 缺少 nextRunAt`, 500, { id: job.id })
+          }
+        }
+        const now = clock.now()
+        for (const job of current.jobs) {
+          // 重启与普通 timer 抖动分开处理：catchUp=false 不补跑任何已错过的计划点。
+          if (job.enabled && !job.catchUp && job.nextRunAt !== undefined && job.nextRunAt < now) {
+            const nextRunAt = nextFireTime(job.schedule, job.timezone, now)
+            if (nextRunAt === undefined) {
+              throw new HelmError('cron_no_next_time', `cron job ${job.id} 无未来匹配时点`, 500, { id: job.id })
+            }
+            await tryUpdateJob(job.id, job.rev, (value) => ({ ...value, nextRunAt }))
+          }
+        }
+        for (const job of current.jobs) scheduleJob(job.id)
       } catch (err) {
-        // 坏文档拒绝启动调度（显式诊断），timer 全不排——绝不静默重置
-        emitError('crons 文档损坏，cron 调度未启动', err)
-        return
+        emitError('cron 调度启动失败', err)
+        throw err
       }
-      for (const job of current.jobs) scheduleJob(job.id)
     },
     async stop() {
       stopping = true

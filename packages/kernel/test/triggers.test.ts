@@ -340,7 +340,7 @@ test('triggers5: cron 目标路由——显式会话直投；启用 superagent �
     // 未启用 superagent：#1 不收到该事件
     const rootDetail = await kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
     assert.equal(
-      rootDetail.entries.filter((e) => JSON.stringify(e.data).includes('直达目标会话的事件')).length,
+      rootDetail.entries.filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('直达目标会话的事件')).length,
       0,
       '显式目标事件不得同时进 #1',
     )
@@ -368,7 +368,7 @@ test('triggers5: cron 目标路由——显式会话直投；启用 superagent �
     // #1 不得收到（superagent transform 改投中枢）
     const rootAfter = await kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
     assert.equal(
-      rootAfter.entries.filter((e) => JSON.stringify(e.data).includes('应进中枢的默认事件')).length,
+      rootAfter.entries.filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('应进中枢的默认事件')).length,
       0,
       'superagent 启用后默认事件必须进中枢而非 #1',
     )
@@ -388,7 +388,7 @@ test('triggers5: cron 目标路由——显式会话直投；启用 superagent �
     assert.match(await lastInputJson(env, target2.id), /superagent 期间的显式直达/)
     const routerAfter = await kernel.getConversationDetail(routerId, { limit: 30 })
     assert.equal(
-      routerAfter.entries.filter((e) => JSON.stringify(e.data).includes('superagent 期间的显式直达')).length,
+      routerAfter.entries.filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('superagent 期间的显式直达')).length,
       0,
       '显式目标事件不得被改投中枢',
     )

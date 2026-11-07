@@ -99,6 +99,7 @@ interface Harness {
   flushImpl: () => Promise<void>
   events: Array<{ type: string; payload: unknown }>
   runtime: ReturnType<typeof createCronScheduler>
+  registration: Promise<void>
   dataDir: string
 }
 
@@ -121,6 +122,7 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
     flushImpl: async () => {},
     events,
     runtime: undefined as never,
+    registration: undefined as never,
     dataDir,
   }
   const host = new PluginHost({
@@ -145,8 +147,7 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
     },
   })
   h.host = host
-  host
-    .register({
+  h.registration = host.register({
       id: 'builtin:triggers',
       definePlugin: (ctx) => {
         h.runtime = createCronScheduler(
@@ -162,18 +163,12 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
         )
       },
     } as PluginDefinition)
-    .catch(() => {})
   return h
 }
 
-/** register 为异步：等待 runtime 注入完成。 */
+/** 等待真实注册与 service.start 完成，注册失败直接交给测试。 */
 async function ready(h: Harness): Promise<void> {
-  for (let i = 0; i < 500 && h.runtime === undefined; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 5))
-  }
-  if (h.runtime === undefined) throw new Error('插件注册超时')
-  // register 的 startServices 在微任务链尾：再让出一轮确保 service.start 已跑
-  await new Promise((resolve) => setTimeout(resolve, 10))
+  await h.registration
 }
 
 const MIN = 60_000
@@ -660,7 +655,7 @@ test('stop（disable）取消 timer 禁止后续投递；重新启用恢复调�
   assert.equal(jobs.length, 1)
   const [job] = jobs
   assert.ok(job !== undefined)
-  assert.equal(job.nextRunAt, T0_5, '重新启用按持久 nextRunAt 恢复')
+  assert.equal(job.nextRunAt, T0 + 35 * MIN, '重新启用时跳过已错过计划，持久化下一未来时点')
   // now=T0+30min，nextRunAt=T0_5 已是过去：catchUp=false 跳到未来
   // （FakeClock now=T0+30min；新周期用真实时钟——故此处只验证文档未被破坏与动作可用）
 })
@@ -689,19 +684,40 @@ test('停用时有在途 tick：liveTasks 报在途，禁用被宿主 409 拒绝
   assert.equal(h.clock.activeTimers(), 0)
 })
 
-test('crons 文档损坏：service start 拒绝启动调度（显式诊断），不静默重置', { timeout: 60_000 }, async () => {
+test('catchUp=false：重启只错过一个计划点时也跳过，不冒充正常 timer 延迟', { timeout: 60_000 }, async () => {
+  const h = track(makeHarness(T0 + 6 * MIN, { version: 1, jobs: [seedJob({ catchUp: false, nextRunAt: T0_5 })] }))
+  await ready(h)
+  await h.clock.advance(0)
+  await h.runtime.settle()
+  assert.equal(h.dispatched.length, 0)
+  assert.equal((await soleJob(h)).nextRunAt, T10)
+  assert.ok(h.flushCalls > 0)
+})
+
+test('claim 冲刷期间删除任务，旧计划点不再投递', { timeout: 60_000 }, async () => {
+  const h = track(makeHarness(T0))
+  await ready(h)
+  await h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'claim-delete', schedule: '*/5 * * * *', text: '旧任务' })
+  let entered!: () => void
+  let release!: () => void
+  const started = new Promise<void>((resolve) => { entered = resolve })
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  h.flushImpl = () => { entered(); return gate }
+  await h.clock.advance(5 * MIN)
+  await started
+  h.flushImpl = async () => {}
+  await h.host.invokeAction('builtin:triggers', 'cron_delete', { id: 'claim-delete' })
+  release()
+  await h.runtime.settle()
+  assert.equal(h.dispatched.length, 0)
+  assert.deepEqual(await listJobs(h), [])
+})
+
+test('crons 文档损坏：注册失败并回滚，不伪装启用成功', { timeout: 60_000 }, async () => {
   const h = track(makeHarness(T0, { version: 9, jobs: [] } as unknown as CronDoc))
-  // 坏文档不排 timer：ready 的 timer 等待条件永不满足，只等 runtime
-  for (let i = 0; i < 500 && h.runtime === undefined; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 5))
-  }
-  await new Promise((resolve) => setTimeout(resolve, 30))
+  await assert.rejects(h.registration, { code: 'cron_doc_corrupt' })
   assert.ok(h.events.some((e) => e.type === 'notification'), '坏文档必须显式通知')
-  // 动作读取同样显式拒绝
-  await assert.rejects(
-    h.host.invokeAction('builtin:triggers', 'cron_list', {}),
-    (err: unknown) => err instanceof HelmError && err.code === 'cron_doc_corrupt',
-  )
+  assert.equal(h.host.list().some((plugin) => plugin.enabled), false)
   assert.equal(h.clock.activeTimers(), 0, '坏文档不排任何 timer')
 })
 
