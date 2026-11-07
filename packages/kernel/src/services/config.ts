@@ -30,14 +30,28 @@ export class ConfigService {
   }
 
   /**
-   * 串行化原子更新：在最新内容基础上套用 patch，保留其他键。
+   * 串行化原子更新：对象 patch 在最新内容基础上浅合并，保留其他键；
+   * 传入函数则等价 updateBy（锁内读改写回调）。
    * 锁以 config.json 真实路径为 key，跨实例共享；update 全过程（读→改→写）
    * 都在锁内，杜绝并发读到同一旧配置后互相覆盖。
+   * 对象与函数分流是必须的：函数被当对象展开无可枚举属性，会静默丢弃
+   * 全部回调改动（诚实性纪律——显式拒绝而不是静默丢写）。
    */
-  update(patch: Json): Promise<Json> {
+  update(patch: Json | ((current: Json) => Json)): Promise<Json> {
+    return typeof patch === 'function'
+      ? this.updateBy(patch)
+      : this.updateBy((current) => ({ ...current, ...patch }))
+  }
+
+  /**
+   * 回调形态读改写：mutate 在锁内基于最新磁盘状态同步执行，读写同锁无间隙。
+   * 跨实例并发写不再可能被调用方锁外的旧快照覆盖——调用方永远看不到
+   * 陈旧 current。mutate 必须同步：返回值直接落盘，异步副作用不在保证范围。
+   */
+  updateBy(mutate: (current: Json) => Json): Promise<Json> {
     return withFileLock(this.path, async () => {
       const current = await this.get()
-      const next = { ...current, ...patch }
+      const next = mutate(current)
       await atomicWriteJson(this.path, next)
       return next
     })

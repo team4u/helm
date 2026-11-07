@@ -37,6 +37,11 @@ function invalid(pluginId: string, message: string): HelmError {
   })
 }
 
+/** 写时嵌套字段损坏：原样拒绝，绝不静默用 {} 重建（会吞掉既有数据）。 */
+function corrupt(field: string, detail: string): HelmError {
+  return new HelmError('config_corrupt', `config.json ${field} 字段结构非法（${detail}），拒绝写入`, 500)
+}
+
 interface Mirror {
   /** config.json plugins.<id> 的非 secret 有效配置。 */
   plain: Map<string, Record<string, unknown>>
@@ -148,12 +153,19 @@ export class HelmPluginConfigStore implements PluginConfigStore {
     }
 
     // 先持久化再更新镜像（失败不污染内存视角，错误显式上抛）。
+    // 读改写全程在 ConfigService 同一把文件锁内以回调完成：只动本插件
+    // 嵌套键，锁外无旧快照，间隙的其它模块写入不会被覆盖。
     if (Object.keys(nextPlain).length > 0) {
-      const current = await this.configService.get()
-      const plugins = isPlainObject(current['plugins']) ? current['plugins'] : {}
-      await this.configService.update({
-        ...current,
-        plugins: { ...plugins, [pluginId]: { ...(plugins[pluginId] ?? {}), ...nextPlain } },
+      await this.configService.updateBy((current) => {
+        const plugins = current['plugins']
+        if (plugins !== undefined && !isPlainObject(plugins)) {
+          throw corrupt('plugins', `应为对象，实际：${typeof plugins}`)
+        }
+        const merged = isPlainObject(plugins) ? plugins : {}
+        return {
+          ...current,
+          plugins: { ...merged, [pluginId]: { ...(merged[pluginId] ?? {}), ...nextPlain } },
+        }
       })
     }
     for (const [key, secret] of Object.entries(nextSecrets)) {
@@ -192,11 +204,25 @@ export class HelmPluginConfigStore implements PluginConfigStore {
   }
 
   private async applyEnabled(pluginId: string, enabled: boolean): Promise<void> {
-    const current = await this.configService.get()
-    const existing = isPlainObject(current['pluginEnabled']) ? current['pluginEnabled'] : {}
-    await this.configService.update({
-      ...current,
-      pluginEnabled: { ...existing, [pluginId]: enabled },
+    // 锁内读改写：基于最新磁盘状态只更新 pluginEnabled.<pluginId>，间隙的
+    // 其它模块写入（auth/model/其他插件）不会被锁外旧快照覆盖；损坏显式
+    // config_corrupt，绝不用 {} 重建。
+    await this.configService.updateBy((current) => {
+      const existing = current['pluginEnabled']
+      if (existing !== undefined && !isPlainObject(existing)) {
+        throw corrupt('pluginEnabled', `应为 pluginId → 布尔 对象，实际：${typeof existing}`)
+      }
+      if (isPlainObject(existing)) {
+        for (const [id, value] of Object.entries(existing)) {
+          if (typeof value !== 'boolean') {
+            throw corrupt('pluginEnabled', `${id} 必须是布尔值（实际：${typeof value}）`)
+          }
+        }
+      }
+      return {
+        ...current,
+        pluginEnabled: { ...(isPlainObject(existing) ? existing : {}), [pluginId]: enabled },
+      }
     })
     this.mirror.enabled.set(pluginId, enabled)
   }

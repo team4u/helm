@@ -367,6 +367,9 @@ export class PluginHost {
       }
       this.assertNotDisposed();
       const seq = ++this.registerSeq;
+      // 启停解析先于一切资源获取（数据目录/definePlugin/宿主资源）：持久层
+      // 读取失败或返回非法值时零残留拒绝，绝不让半注册状态泄漏给后续回滚。
+      const wantsEnabled = this.resolveInitialEnabled(definition, options);
       const dataDir = join(this.options.dataDir, 'plugins', definition.id);
       const state: PluginState = {
         definition,
@@ -415,7 +418,6 @@ export class PluginHost {
         );
       }
 
-      const wantsEnabled = this.resolveInitialEnabled(definition, options);
       if (wantsEnabled) {
         state.enabled = true;
         try {
@@ -479,13 +481,35 @@ export class PluginHost {
   /**
    * 初始启停状态解析：locked 恒启用 > 持久启停（getEnabled）> 调用方声明。
    * register 不写默认值：从未持久化过的插件不产生 config.json 副作用。
+   * 持久层抛错原样上抛（注册零残留）；返回非布尔值属持久层违约，显式
+   * 拒绝（'false' 字符串是 truthy，绝不能被当成停用/启用语义揣测）。
    */
   private resolveInitialEnabled(
     definition: PluginDefinition,
     options: { enabled?: boolean },
   ): boolean {
     if (definition.locked === true) return true;
-    const persisted = this.configStore?.getEnabled?.(definition.id);
+    let persisted: boolean | undefined;
+    try {
+      persisted = this.configStore?.getEnabled?.(definition.id);
+    } catch (err) {
+      // 原错误保留：HelmError 原样，非 HelmError 包装为注册失败但保留 message
+      if (err instanceof HelmError) throw err;
+      throw new HelmError(
+        'plugin_registration_failed',
+        `插件 ${definition.id} 注册失败：读取持久启停状态时出错：${err instanceof Error ? err.message : String(err)}`,
+        500,
+        { pluginId: definition.id },
+      );
+    }
+    if (persisted !== undefined && typeof persisted !== 'boolean') {
+      throw new HelmError(
+        'plugin_enabled_state_invalid',
+        `插件 ${definition.id} 的持久启停状态非法（期望布尔值，实际：${typeof persisted}），拒绝注册`,
+        500,
+        { pluginId: definition.id, persisted: String(persisted) },
+      );
+    }
     if (persisted !== undefined) return persisted;
     return options.enabled !== false;
   }
@@ -539,12 +563,14 @@ export class PluginHost {
       state.phase = 'defining';
       try {
         await state.definition.definePlugin(this.createContext(state, state.epoch));
-        state.enabled = true;
         await this.startServices(state);
-        state.phase = 'idle';
-        // 先落盘启停状态再发布事件：持久化失败时状态回滚为停用并如实报错，
-        // 绝不发布「已启用」事件后静默丢掉持久化（重启即失忆）。
+        // 对外提交点在启停持久化成功之后：服务已启动但落盘挂起期间保持
+        // defining 且 enabled=false——action 拒绝 / hook 不执行 / UI 不露出，
+        // 绝不给在途任务进入「即将被回滚拆掉」的注册表的机会；持久化失败时
+        // 零在途任务。enabled 只在提交点置 true。
         await this.persistEnabled(state, true);
+        state.enabled = true;
+        state.phase = 'idle';
       } catch (err) {
         let rollbackError: JsonSafeErrorInfo | undefined;
         try {
