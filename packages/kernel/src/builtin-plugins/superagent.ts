@@ -546,6 +546,8 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
             }))
           }
         }
+        // 连接器声明的定向目标在订阅匹配之后生效，避免被缺省中枢路由覆盖。
+        if (envelope.targetConversationId !== undefined) return
         const target = getRouterConversationId()
         if (target === undefined || deps.isClosing()) return // 自举未完成：交默认路径（#1）
         return { action: 'transform', value: { ...envelope, targetConversationId: target } }

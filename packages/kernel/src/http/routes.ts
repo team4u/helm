@@ -724,7 +724,7 @@ async function postConversationArtifact(
 
 /**
  * 插件配置脱敏：schema 中 secret: true 的字段值替换为 '******'（已配置）或
- * 隐藏（未配置）；其余字段原样。绝不让 secret 明文出站。
+ * 隐藏（未配置）；只公开 Schema 声明的配置，动态插件凭据不属于配置接口。
  */
 function redactConfigValues(
   raw: Record<string, unknown>,
@@ -732,6 +732,7 @@ function redactConfigValues(
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(raw)) {
+    if (!Object.hasOwn(schema, key)) continue
     if (schema[key]?.secret === true) {
       out[key] = typeof value === 'string' && value.length > 0 ? '******' : ''
     } else {

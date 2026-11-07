@@ -468,6 +468,15 @@ test('superagent7: trigger——静默丢弃/threadKey 直投/其余进中枢/�
     await kernel.dispatchTrigger({ id: 'evt-1', source: 'cron', text: '噪音', createdAt: Date.now() })
     assert.equal(kernel.getConversation(ids.router!).unread, false, '静默事件不得投递中枢')
 
+    const directed = await kernel.plugins.runHook('trigger', {
+      id: 'evt-directed', source: 'webhook:direct', text: '定向事件',
+      targetConversationId: ROOT_CONVERSATION_ID, createdAt: Date.now(),
+    })
+    assert.equal(directed.action, 'transform')
+    if (directed.action === 'transform') {
+      assert.equal(directed.value.targetConversationId, ROOT_CONVERSATION_ID, '显式目标不得被缺省中枢路由覆盖')
+    }
+
     // 其余事件进中枢（origin trigger + defang 包裹）
     env.faux.setResponses([
       route({ '构建失败': fauxAssistantMessage('中枢收到'), '请盯住 CI': fauxAssistantMessage('中枢收到') }),
