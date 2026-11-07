@@ -12,7 +12,7 @@ node scripts/herdr-smoke.mjs --timeout-ms 600000   # 放宽总超时（60000..18
 
 默认加载脚本同仓的 `packages/kernel/dist/app.js`；可用 `HERDR_SMOKE_KERNEL_APP=/path/to/app.js` 指向其他编译产物（如另一 worktree 的 build）。
 
-退出码 0 = 全部验收项 PASS 且清理无失败；非 0 = 存在 FAIL（验收项失败或清理失败）。进度与 `PASS/FAIL` 逐项写 stderr；失败现场与日志保留在临时根，绝不删除。注：当前主干 dist 尚未包含 `builtin:herdr` 注册（app.ts 集成待合并），脚本会如实报「未注册的插件：builtin:herdr」——这正是等待合并后验收的预期行为，绝不静默跳过。
+退出码 0 = 全部验收项 PASS 且清理无失败；非 0 = 存在 FAIL（验收项失败或清理失败）。进度与 `PASS/FAIL` 逐项写 stderr；失败现场与日志保留在临时根。主干 `createHelm` 已注册默认停用的 `builtin:herdr`，脚本负责配置并启用；编译产物须与当前源码同步。
 
 ## 验证内容（全部真实组件，零 mock / 零 skip）
 
@@ -23,19 +23,19 @@ node scripts/herdr-smoke.mjs --timeout-ms 600000   # 放宽总超时（60000..18
 5. **真实工作流**：`workflows.run(script)` → `wait`：
    - 节点一：`agent(prompt, { label:'task', agentType:'herdr-smoke-pi', isolation:'worktree', schema:{answer:number}, gate })`——插件经 `herdr worktree create --trust-repository` 建隔离工作树，pi 在其中创建 `artifact.txt`（三行），gate 真实验证；
    - 节点二：`agent(prompt, { resume:'task' })` 在**同一 Herdr pane** 续聊。
-6. **原始 run 断言**：结果字段（`first.answer === 3`、`second` 非空）、两节点 `executionId` 相同、Gate 仅第一节点 `ok=true` 且 shell 侧 `gate-count` 铁证恰好一行、worktree 目录/分支在 run 结算后保留、`artifact.txt` 内容逐字节核对、真实 `session.snapshot`（protocol 22）确认 pane 已全部关闭。
+6. **原始 run 断言**：结果字段（`first.answer === 3`、`second` 非空）、两节点 `executionId` 相同、Gate 仅第一节点 `ok=true` 且 shell 侧 `gate-count` 恰好一行、worktree 目录/分支在 run 结算后保留、`artifact.txt` 内容逐字节核对。创建委派前，脚本显式打开原仓库工作区作为已有窗格基线；结算后，真实 `session.snapshot` 中 pane/tab/workspace/agent ID 集合必须精确恢复基线，既不残留新增委派资源，也不关闭已有窗格。
 7. **`resumeFromRunId` 严格重放（引擎修复目标契约）**：
    - `result2` 与 `result1` **深相等**（`assert.deepStrictEqual`）；
    - 重放 run 的两个 agent 节点均 `done` 且 `cached=true`（缓存命中而非 live 重跑）；
    - 经透明包装**生产 transport**（`createHerdrTransport`，同 dist 目录导入，只计数不改行为）计数的 `agent.start` / `agent.prompt` RPC 调用**零增长**（原始 run 的计数不硬编码，允许一次合法自愈，只比较重放前后）；
    - Gate 不重跑（`gate-count` 仍恰好一行）；
-   - snapshot 无新 pane/workspace（零新资源）。
+   - snapshot 精确恢复已有窗格基线（零新增资源）。
 
 缓存节点不要求携带原 run 的 `executionId`/`worktree` 元数据（原 run 已验证过这些），重放只验证**无新调用、无新资源、结果一致**。
 
 ### 引擎修复目标（背景）
 
-旧引擎实现中 `journalResumes`（账本含 `agent({resume})` 行）会全局关闭前缀重放（`prefixIntact=false`），导致 `resumeFromRunId` 对含 resume 的脚本 **live 重跑全部副作用**——包括已确认成功的 action 与 agent，这是引擎缺陷而非可接受的验收替代。正在修复的契约：**相同脚本的全部成功 agent/resume/action 前缀可直接缓存重放，只有试图 live 续接缓存上下文时才显式失败**。本脚本按修复后的契约断言；在缺陷未修复的引擎上运行会在「深相等 / cached=true / 零新增调用」处如实 FAIL。
+旧引擎实现中 `journalResumes`（账本含 `agent({resume})` 行）会全局关闭前缀重放（`prefixIntact=false`），导致 `resumeFromRunId` 对含 resume 的脚本重复执行成功节点。主干已修复为逐项匹配：**相同脚本的全部成功 agent/resume/action 前缀直接复用结果；前缀失配后，试图续接只存在于缓存中的子上下文时显式失败**。该修复有独立的副作用计数回归。本脚本进一步验证真实模型原始运行后的缓存重放。
 
 ## 传输层与计数
 

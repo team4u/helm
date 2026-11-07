@@ -23,7 +23,7 @@
  * 4. resumeFromRunId 严格重放断言（引擎修复目标契约）：result 与原始 run 深相等、
  *    两个 agent 节点均 done 且 cached=true、经透明包装生产 transport 计数的
  *    agent.start / agent.prompt RPC 调用零增长、gate-count 仍恰好一行、
- *    snapshot 无新 pane/workspace。缓存节点不携带原 executionId/worktree 元数据
+ *    snapshot 精确恢复既有 pane/tab/workspace 基线（保留已有窗格）。缓存节点不携带原 executionId/worktree 元数据
  *    （原 run 已验证过），重放只验证无新调用/无新资源。
  *
  * 传输层：导入与 app.js 同目录的 builtin-plugins/herdr/transport.js 的
@@ -395,9 +395,24 @@ async function main() {
     }
     check('隔离 session 初始 panes 为空', initialSnap.panes.length === 0, `panes=${initialSnap.panes.length}`)
     check('隔离 session 初始 agents 为空', initialSnap.agents.length === 0, `agents=${initialSnap.agents.length}`)
-    const initialWorkspaceIds = new Set(initialSnap.workspaces.map((w) => w.workspace_id))
-    if (initialWorkspaceIds.size > 0) {
-      log(`NOTE 隔离 session 初始即存在 ${initialWorkspaceIds.size} 个 workspace（headless 启动事实，后续断言不残留新增）`)
+    // Herdr 首次 worktree.create 会自动打开原 repo 的普通 workspace。
+    // 显式预建基线，精确验证已有窗格保留且所有新增委派资源均已清理。
+    await withDeadline(baseTransport.call({ socketPath }, 'workspace.create', {
+      cwd: state.repoDir,
+      label: 'smoke-existing-workspace',
+      focus: false,
+    }, { timeoutMs: 5_000 }), '建立既有工作区基线')
+    const baselineSnap = await withDeadline(snapshotSession(baseTransport, socketPath), '读取既有工作区基线')
+    const baselineIds = (snapshot) => ({
+      workspaces: snapshot.workspaces.map((w) => w.workspace_id).sort(),
+      tabs: snapshot.tabs.map((t) => t.tab_id).sort(),
+      panes: snapshot.panes.map((p) => p.pane_id).sort(),
+      agents: snapshot.agents.map((a) => a.pane_id).sort(),
+    })
+    const baseline = baselineIds(baselineSnap)
+    check('既有工作区基线含普通窗格且无 Agent', baseline.panes.length > 0 && baseline.agents.length === 0, JSON.stringify(baseline))
+    const matchesBaseline = (snapshot) => {
+      try { deepStrictEqual(baselineIds(snapshot), baseline); return true } catch { return false }
     }
 
     // ---- 5) createHelm（真实编译产物 + 注入计数 transport）+ 插件启用 + Profile ----
@@ -456,6 +471,10 @@ async function main() {
     const result1 = await withDeadline(state.workflows.wait(run1.id), '原始 run 执行（真实 GLM 模型调用）')
     state.activeRunIds.delete(run1.id)
     const summary1 = state.workflows.getRun(run1.id)
+    if (summary1.status !== 'completed') {
+      log(`原始 run 节点诊断: ${JSON.stringify(summary1.nodes ?? [])}`)
+      writeFileSync(join(logsDir, 'workflow-failure.json'), JSON.stringify(summary1, null, 2))
+    }
 
     check('原始 run 状态 completed', summary1.status === 'completed', summary1.error ?? summary1.status)
     check('原始 run 挂在根会话 #1', summary1.conversationId === ROOT_CONVERSATION_ID, String(summary1.conversationId))
@@ -501,16 +520,16 @@ async function main() {
     check(`worktree 内 ${ARTIFACT_NAME} 内容真实（三行）`, artifact1 === ARTIFACT_TEXT, JSON.stringify(artifact1))
     state.worktreePaths.push(wt1.path)
 
-    // 真实 Herdr snapshot：本 workflow 的 pane 已全部关闭（wait 返回时 onRunSettled 已完成）
+    // 真实 Herdr snapshot：本 workflow 的 pane 已关闭，先建的基线窗格保留。
+    // wait 返回时 onRunSettled 已完成。
     const snap1 = await withDeadline(snapshotSession(baseTransport, socketPath), '原始 run 后 snapshot')
     const paneStillThere =
       snap1.panes.some((p) => p.pane_id === nodeA1.executionId) ||
       snap1.agents.some((a) => a.pane_id === nodeA1.executionId)
-    const residue1 = snap1.workspaces.filter((w) => !initialWorkspaceIds.has(w.workspace_id))
     check(
-      '原始 run 结算后 Herdr snapshot 无残留 pane/workspace',
-      !paneStillThere && snap1.panes.length === 0 && snap1.agents.length === 0 && residue1.length === 0,
-      `panes=${snap1.panes.length} agents=${snap1.agents.length} 新增workspace=${residue1.length}`,
+      '原始 run 结算后精确恢复既有窗格基线，无新增 pane/tab/workspace',
+      !paneStillThere && matchesBaseline(snap1),
+      JSON.stringify({ baseline, actual: baselineIds(snap1) }),
     )
 
     // ---- 7) resumeFromRunId 严格重放（引擎修复目标契约：缓存前缀，零新副作用） ----
@@ -553,11 +572,10 @@ async function main() {
     check('重放不重跑 Gate（gate-count 仍恰好一行）', gateCountLines() === 1, `gateCount=${gateCountLines()}`)
 
     const snap2 = await withDeadline(snapshotSession(baseTransport, socketPath), '重放 run 后 snapshot')
-    const residue2 = snap2.workspaces.filter((w) => !initialWorkspaceIds.has(w.workspace_id))
     check(
-      '重放 run 结算后隔离 session 无新 pane/workspace（零新资源）',
-      snap2.panes.length === 0 && snap2.agents.length === 0 && residue2.length === 0,
-      `panes=${snap2.panes.length} agents=${snap2.agents.length} 新增workspace=${residue2.length}`,
+      '重放 run 结算后既有窗格保留，零新增 pane/tab/workspace',
+      matchesBaseline(snap2),
+      JSON.stringify({ baseline, actual: baselineIds(snap2) }),
     )
 
     state.success = true
@@ -647,7 +665,10 @@ async function cleanup(state, args) {
         problems.push(`worktree 清理 ${wtPath}: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
-    if (!args.keepTmp) {
+    if (problems.length > 0) {
+      log(`清理失败，现场已保留: ${state.tmpRoot}`)
+      if (state.herdr) log(`herdr server 日志: ${state.herdr.logPath}`)
+    } else if (!args.keepTmp) {
       try {
         rmSync(state.tmpRoot, { recursive: true, force: true })
         log(`已清理临时根: ${state.tmpRoot}`)
