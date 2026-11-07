@@ -1,17 +1,20 @@
 /**
  * builtin:magpie 独立验收测试。
  *
- * 组合纪律：真实 PluginHost + 真实 pi-ai Models（createModels）；
- * 受控 fetchImpl（不触真实网络）与受控 runMagpieCli 注入。
- * ctx.provider 由宿主注册表提供（待合并的 PluginHostOptions.providers 在本
- * 测试以最小等价实现：definePlugin 声明即注册、disable/dispose 后注销）。
+ * 组合纪律：真实 PluginHost + 真实 providers 挂载端口（service.start 前
+ * 注册 / stop 后注销，与 runtime 相同生命周期）+ 真实 pi-ai Models
+ * （createModels）；受控 fetchImpl（不触真实网络）与受控 runMagpieCli 注入。
  *
  * 诚实性重点用例：
  * - provider.refreshModels 网络失败一律 throw → models.refresh errors['magpie']
  *   显式可见（绝不静默 errors:{} 弹「刷新成功」）；
- * - 切换网关后旧 root 缓存绝不冒充新网关目录（servedByRoot 过滤）；
+ * - 切换网关后旧 root 缓存绝不冒充新网关目录（servedByRoot 过滤 +
+ *   sameGateway 发布守卫：fetch 期间切 root 的挂起结果不发布）；
+ * - auth.resolve 冻结 root+token 同一快照（env 携带 MAGPIE_GW_URL）；
  * - reachable:false 时 modelCount 保留缓存计数但 summary 不称已连接；
- * - 非 loopback 网关绝不调用本机 magpie CLI（数据源隔离）。
+ * - 非 loopback 网关绝不调用本机 magpie CLI（数据源隔离）；
+ * - 配额 / 轨迹读取失败不吞：diagnostics 明确记录不可用原因；
+ * - turn_settled 只对 magpie/ 模型会话触发侧读，不阻塞结算。
  *
  * runner: tsx --test；每项显式 timeout: 60_000 防死锁；命令加总超时。
  */
@@ -22,10 +25,22 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { createModels } from '@earendil-works/pi-ai/models'
-import { HelmError, type ConversationSummary, type PluginDefinition } from '@helm/protocol'
-import { PluginHost, type PluginDocStore, type PluginConfigStore, type PluginHostBackend } from '../src/plugins/index.js'
+import type { Provider } from '@earendil-works/pi-ai'
+import { HelmError, type ConversationSummary } from '@helm/protocol'
+import {
+  PluginHost,
+  type PluginDocStore,
+  type PluginConfigStore,
+  type PluginHostBackend,
+  type PluginProviderPort,
+} from '../src/plugins/index.js'
 import { createMagpiePlugin } from '../src/builtin-plugins/magpie.js'
-import { MAGPIE_PLUGIN_ID, MAGPIE_PROVIDER_ID, DEFAULT_MAGPIE_ROOT, DEFAULT_MAGPIE_TOKEN } from '../src/builtin-plugins/magpie/contracts.js'
+import {
+  MAGPIE_PLUGIN_ID,
+  MAGPIE_PROVIDER_ID,
+  DEFAULT_MAGPIE_ROOT,
+  DEFAULT_MAGPIE_TOKEN,
+} from '../src/builtin-plugins/magpie/contracts.js'
 import { magpieApi, toPiModels, adaptiveThinking, thinkingLevelMap } from '../src/builtin-plugins/magpie/catalog.js'
 import { normalizeRoot, isLoopback, resolveGateway } from '../src/builtin-plugins/magpie/gateway.js'
 
@@ -86,6 +101,9 @@ interface FakeBackend {
   quotas?: unknown
   trace?: unknown
   failModels?: string
+  failQuotas?: string
+  /** 挂起 models 请求（等待 gate 释放）：验证切 root 后旧结果不发布。 */
+  gateModels?: Promise<void>
 }
 
 function makeFetch(backends: Map<string, FakeBackend>) {
@@ -98,10 +116,12 @@ function makeFetch(backends: Map<string, FakeBackend>) {
     const path = parsed.pathname
     if (backend === undefined) throw new TypeError(`fetch failed: ${parsed.origin} unreachable`)
     if (path === '/v1/models') {
+      if (backend.gateModels) await backend.gateModels
       if (backend.failModels) throw new Error(backend.failModels)
       return new Response(JSON.stringify(backend.models ?? { data: [] }), { status: 200 })
     }
     if (path === '/v1/magpie/quotas') {
+      if (backend.failQuotas) throw new Error(backend.failQuotas)
       return new Response(JSON.stringify(backend.quotas ?? { data: [] }), { status: 200 })
     }
     if (path === '/v1/magpie/trace') {
@@ -114,49 +134,17 @@ function makeFetch(backends: Map<string, FakeBackend>) {
 }
 
 // ---------------------------------------------------------------------------
-// 测试基建
+// 测试基建：真实 providers 端口（挂载即 setProvider，卸载即 deleteProvider）
 // ---------------------------------------------------------------------------
 
-/** 宿主 provider 注册表最小实现（等价待合并 PluginHostOptions.providers）。 */
-class ProviderRegistry {
-  registered = new Map<string, { pluginId: string; provider: unknown }>()
-  onUnregister?: (providerId: string) => void
-  register(pluginId: string, provider: unknown): void {
-    this.registered.set((provider as { id: string }).id, { pluginId, provider })
-  }
-  unregisterPlugin(pluginId: string): void {
-    for (const [id, entry] of [...this.registered]) {
-      if (entry.pluginId === pluginId) {
-        this.registered.delete(id)
-        this.onUnregister?.(id)
-      }
+/** 真实端口实现：与 runtime 相同语义（register→unregister，禁止伪造）。 */
+class ModelsProviderPort implements PluginProviderPort {
+  constructor(private readonly models: ReturnType<typeof createModels>) {}
+  async register(provider: Provider, _pluginId: string): Promise<() => Promise<void>> {
+    this.models.setProvider(provider)
+    return async () => {
+      this.models.deleteProvider(provider.id)
     }
-  }
-}
-
-/**
- * ctx.provider 尚未在宿主实现：包一层 definition，definePlugin 前注入该能力。
- * 注入的 provider 同时桥接到真实 Models（service.stop 后由 disable/dispose
- * 路径触发 unregisterPlugin——宿主 registry 的 stop 语义）。
- */
-function withProviderCtx(
-  def: PluginDefinition,
-  registry: ProviderRegistry,
-  models: ReturnType<typeof createModels>,
-): PluginDefinition {
-  return {
-    ...def,
-    definePlugin(ctx) {
-      const augmented = Object.create(ctx, {
-        provider: {
-          value: (provider: unknown) => {
-            registry.register(def.id, provider)
-            models.setProvider(provider as never)
-          },
-        },
-      })
-      return def.definePlugin(augmented as never)
-    },
   }
 }
 
@@ -180,15 +168,15 @@ class MemoryConfigStore implements PluginConfigStore {
   }
 }
 
-function makeConversation(id: number): ConversationSummary {
+function makeConversation(id: number, model = 'test/model'): ConversationSummary {
   return {
-    id, title: `conv-${id}`, profileId: 'default', tags: [], cwd: '/tmp', model: 'test/model',
+    id, title: `conv-${id}`, profileId: 'default', tags: [], cwd: '/tmp', model,
     status: 'idle', stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: false,
     pendingAskCount: 0, createdAt: 1, updatedAt: 1,
   }
 }
 
-function makeHostApi(): PluginHostBackend {
+function makeHostApi(overrides: Partial<PluginHostBackend> = {}): PluginHostBackend {
   return {
     dispatchTrigger: async () => {},
     submitInput: async () => {},
@@ -203,14 +191,15 @@ function makeHostApi(): PluginHostBackend {
     registerAskSeqResolver: () => () => {},
     onWorkflowSettled: () => () => {},
     emitEvent: () => {},
+    ...overrides,
   }
 }
 
 interface TestEnv {
   dataDir: string
   models: ReturnType<typeof createModels>
-  registry: ProviderRegistry
   fetchState: { calls: string[] }
+  backends: Map<string, FakeBackend>
   refreshCalls: Array<{ allowNetwork?: boolean; force?: boolean }>
   cliRuns: Array<readonly string[]>
   cliResponse: (args: readonly string[]) => { ok: boolean; stdout?: string; error?: string }
@@ -220,10 +209,14 @@ interface TestEnv {
   close(): Promise<void>
 }
 
-async function makeEnv(options: { backendAtDefault?: FakeBackend } = {}): Promise<TestEnv> {
+/** makeEnv 内部形态：close 在 host 构建后补挂（返回前已就位）。 */
+interface TestEnvInit extends Omit<TestEnv, 'close'> {
+  close?(): Promise<void>
+}
+
+async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Partial<PluginHostBackend> } = {}): Promise<TestEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-magpie-test-'))
   const models = createModels()
-  const registry = new ProviderRegistry()
   const backends = new Map<string, FakeBackend>([
     [new URL(DEFAULT_MAGPIE_ROOT).origin, options.backendAtDefault ?? { models: CATALOG, quotas: QUOTAS, trace: TRACE }],
   ])
@@ -232,10 +225,10 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend } = {}): Promis
   const config = new MemoryConfigStore()
   const docs = new MemoryDocStore()
   const refreshResult: { errors: Record<string, string> } = { errors: {} }
-  const env: TestEnv = {
+  const env: TestEnvInit = {
     dataDir,
     models,
-    registry,
+    backends,
     fetchState: { calls: fetchCalls },
     refreshCalls: [],
     cliRuns: [],
@@ -249,14 +242,7 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend } = {}): Promis
     setRefreshError(error) {
       refreshResult.errors = error === undefined ? {} : { magpie: error }
     },
-    host: undefined!,
-    async close() {
-      try {
-        await env.host.dispose()
-      } finally {
-        rmSync(dataDir, { recursive: true, force: true })
-      }
-    },
+    host: undefined as unknown as PluginHost,
   }
   // 组合层 refreshProviderModels 端口：真实 models.refresh({ providers:['magpie'] })
   // 的等价包装（记录调用 + 返回 errors 映射；注入式失败可覆盖）。
@@ -274,8 +260,14 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend } = {}): Promis
     for (const [id, err] of result.errors) errors[id] = err instanceof Error ? err.message : String(err)
     return { errors, modelCount: models.getModels(MAGPIE_PROVIDER_ID).length }
   }
-  const host = new PluginHost({ dataDir, host: makeHostApi(), docs, config })
-  const pluginDef = withProviderCtx(
+  const host = new PluginHost({
+    dataDir,
+    host: makeHostApi(options.hostApi),
+    docs,
+    config,
+    providers: new ModelsProviderPort(models),
+  })
+  await host.register(
     createMagpiePlugin({
       refreshProviderModels,
       fetchImpl: impl,
@@ -284,24 +276,17 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend } = {}): Promis
         return Promise.resolve(env.cliResponse(args))
       },
     }),
-    registry,
-    models,
+    { enabled: false },
   )
-  await host.register(pluginDef, { enabled: false })
   env.host = host
-  // 停用/dispose 时注销 provider（宿主 providers registry 的 stop 语义）。
-  registry.onUnregister = (providerId) => models.deleteProvider(providerId)
-  const originalDisable = host.disable.bind(host)
-  host.disable = async (pluginId: string) => {
-    await originalDisable(pluginId)
-    if (pluginId === MAGPIE) registry.unregisterPlugin(MAGPIE)
+  env.close = async () => {
+    try {
+      await host.dispose()
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true })
+    }
   }
-  const originalDispose = host.dispose.bind(host)
-  host.dispose = async () => {
-    await originalDispose()
-    registry.unregisterPlugin(MAGPIE)
-  }
-  return env
+  return env as TestEnv
 }
 
 /** 等待谓词成立（轮询，默认 5s）。 */
@@ -317,7 +302,7 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 
 interface StatusView {
   gatewayUrl: string; configuredRoot: boolean; local: boolean; reachable: boolean
   modelCount: number; groupCount: number; summaryText: string; lastError?: string; lastRefreshedAt?: number
-  quotas: Array<Record<string, unknown>>; routes: Array<Record<string, unknown>>
+  quotas: Array<Record<string, unknown>>; routes: Array<Record<string, unknown>>; diagnostics: string[]
 }
 
 const statusDoc = (env: TestEnv): StatusView =>
@@ -404,7 +389,7 @@ test('magpie4: adaptiveThinking 版本判定', () => {
 // 2. gateway 配置解析
 // ---------------------------------------------------------------------------
 
-test('magpie5: resolveGateway 优先级与 configuredRoot 语义', () => {
+test('magpie5: resolveGateway 优先级 / configuredRoot 语义 / 非法显式 URL 显式报错', () => {
   const none = resolveGateway({}, {})
   assert.equal(none.root, DEFAULT_MAGPIE_ROOT)
   assert.equal(none.token, DEFAULT_MAGPIE_TOKEN)
@@ -437,24 +422,49 @@ test('magpie5: resolveGateway 优先级与 configuredRoot 语义', () => {
   assert.equal(isLoopback('http://localhost:3425'), true)
   assert.equal(isLoopback('http://127.0.0.1:3425'), true)
   assert.equal(isLoopback('http://10.0.0.5:3425'), false)
+
+  // 诚实性：非法显式 gatewayUrl / 非法环境变量显式报错，绝不静默回退默认
+  assert.throws(
+    () => resolveGateway({ gatewayUrl: 'not a url' }, {}),
+    (err: unknown) => err instanceof HelmError && err.code === 'magpie_invalid_gateway_url' && err.status === 400,
+  )
+  assert.throws(
+    () => resolveGateway({}, { MAGPIE_GW_URL: '::bad::' }),
+    (err: unknown) => err instanceof HelmError && err.code === 'magpie_invalid_gateway_url',
+  )
+  assert.throws(
+    () => resolveGateway({}, { MAGPIE_ADDR: 'ftp://only' }),
+    (err: unknown) => err instanceof HelmError && err.code === 'magpie_invalid_gateway_url',
+    '非 http(s) scheme 同样显式拒绝',
+  )
+  // 无配置（全空）永不抛：默认回环是合法回落
+  assert.equal(resolveGateway({}, {}).root, DEFAULT_MAGPIE_ROOT)
 })
 
 // ---------------------------------------------------------------------------
-// 3. 启停生命周期与 provider 注册/注销
+// 3. 真实宿主生命周期：providers 端口挂载 / 缺端口 501 / 默认停用不挂载
 // ---------------------------------------------------------------------------
 
-test('magpie6: 启用注册 provider 并拉取目录；auth.check 使模型 available；停用注销', { timeout: 60_000 }, async () => {
+test('magpie6: 启用经 providers 端口挂载并拉取目录；停用后注销；baseUrl getter 跟随配置', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     assert.equal(env.host.list().find((p) => p.id === MAGPIE)!.enabled, false, '默认停用注册')
-    await env.host.enable(MAGPIE)
+    assert.equal(env.models.getProvider('magpie'), undefined, '停用态 provider 不挂载（零副作用）')
 
-    assert.ok(env.registry.registered.has('magpie'), 'definePlugin 声明的 provider 已注册')
+    await env.host.enable(MAGPIE)
+    const provider = env.models.getProvider('magpie')!
+    assert.ok(provider, 'enable 经 providers 端口真实挂载（service.start 前）')
     await waitFor(() => env.models.getModels('magpie').length > 0)
     assert.equal(env.models.getModels('magpie').length, 5, '目录全量转换')
 
     const available = await env.models.getAvailable('magpie')
     assert.equal(available.length, 5, 'auth.check 恒有效 → available')
+
+    // baseUrl getter 投影当前 root；切配置后即时跟随（无需重新挂载）
+    assert.equal(provider.baseUrl, `${DEFAULT_MAGPIE_ROOT}/v1`)
+    await env.host.setConfig(MAGPIE, { gatewayUrl: 'http://127.0.0.1:9999' })
+    assert.equal(provider.baseUrl, 'http://127.0.0.1:9999/v1', 'baseUrl getter 动态投影新 root')
+    await env.host.setConfig(MAGPIE, {})
 
     const actions = env.host.listActions().filter((a) => a.pluginId === MAGPIE).map((a) => a.id).sort()
     assert.deepEqual(actions, ['group', 'groups', 'quota', 'refresh', 'status'])
@@ -470,8 +480,7 @@ test('magpie6: 启用注册 provider 并拉取目录；auth.check 使模型 avai
     assert.equal(JSON.stringify(doc).includes(DEFAULT_MAGPIE_TOKEN), false, 'token 不进 doc')
 
     await env.host.disable(MAGPIE)
-    assert.equal(env.registry.registered.has('magpie'), false, '停用后 provider 已注销')
-    assert.equal(env.models.getProvider('magpie'), undefined)
+    assert.equal(env.models.getProvider('magpie'), undefined, '停用后 provider 真实注销')
     assert.deepEqual(env.host.listActions().filter((a) => a.pluginId === MAGPIE), [])
     assert.throws(() => env.host.getPublicDoc(MAGPIE, 'status'), (e: unknown) => e instanceof HelmError && e.code === 'plugin_doc_not_found')
   } finally {
@@ -479,7 +488,38 @@ test('magpie6: 启用注册 provider 并拉取目录；auth.check 使模型 avai
   }
 })
 
-test('magpie7: 动作契约——status / refresh / quota / groups / group', { timeout: 60_000 }, async () => {
+test('magpie7: 宿主缺 providers 端口时启用显式 501（不静默降级）', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-magpie-test-'))
+  const host = new PluginHost({ dataDir, host: makeHostApi(), docs: new MemoryDocStore(), config: new MemoryConfigStore() })
+  try {
+    await host.register(
+      createMagpiePlugin({ refreshProviderModels: async () => ({ errors: {} }), fetchImpl: async () => new Response('{}') }),
+      { enabled: false },
+    )
+    // 注册（停用探测）成功：只收集声明零挂载；启用阶段才显式拒绝
+    assert.equal(host.list().find((p) => p.id === MAGPIE)!.enabled, false)
+    await assert.rejects(
+      () => host.enable(MAGPIE),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmError)
+        assert.equal(err.code, 'provider_port_unavailable')
+        assert.equal(err.status, 501)
+        return true
+      },
+    )
+    // 回滚后插件回到停用形态，可再次注册探测
+    assert.equal(host.list().find((p) => p.id === MAGPIE)!.enabled, false)
+  } finally {
+    await host.dispose()
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 4. 动作契约
+// ---------------------------------------------------------------------------
+
+test('magpie8: 动作契约——status / refresh / quota / groups / group', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     await env.host.enable(MAGPIE)
@@ -488,6 +528,7 @@ test('magpie7: 动作契约——status / refresh / quota / groups / group', { t
     const status = (await env.host.invokeAction(MAGPIE, 'status', {})) as StatusView
     assert.equal(status.reachable, true)
     assert.ok(Array.isArray(status.quotas), '配额随目录刷新加载')
+    assert.deepEqual(status.diagnostics, [], '配额与轨迹均可用时无诊断')
 
     const refreshed = (await env.host.invokeAction(MAGPIE, 'refresh', {})) as { refreshed: boolean; modelCount: number; reachable: boolean }
     assert.deepEqual(refreshed, { refreshed: true, modelCount: 5, reachable: true })
@@ -524,10 +565,10 @@ test('magpie7: 动作契约——status / refresh / quota / groups / group', { t
 })
 
 // ---------------------------------------------------------------------------
-// 4. 诚实性纪律：失败显式 / 缓存隔离 / 数据源隔离
+// 5. 诚实性纪律：失败显式 / 缓存与网关隔离 / 数据源隔离
 // ---------------------------------------------------------------------------
 
-test('magpie8: 显式配置网关失败——refresh 动作显式抛错（不静默）', { timeout: 60_000 }, async () => {
+test('magpie9: 显式配置网关失败——refresh 动作显式抛错（不静默）', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     await env.config.set(MAGPIE, { gatewayUrl: 'http://10.255.255.1:3425' })
@@ -551,33 +592,64 @@ test('magpie8: 显式配置网关失败——refresh 动作显式抛错（不静
   }
 })
 
-test('magpie9: provider.refreshModels 网络失败一律 throw——通用目录刷新 errors[magpie] 可见（含默认 loopback 未运行）', { timeout: 60_000 }, async () => {
+test('magpie10: provider.refreshModels 网络失败一律 throw；cache-only 永不失败', { timeout: 60_000 }, async () => {
   const env = await makeEnv({ backendAtDefault: { failModels: 'connect ECONNREFUSED 127.0.0.1:3425' } })
   try {
     await env.host.enable(MAGPIE)
-    // 等待 service.start 的后台刷新完成失败发布（否则下面手动刷新竞态）
     await waitFor(() => statusDoc(env).reachable === false && statusDoc(env).lastError !== undefined)
 
-    // 通用刷新（模拟 helm models refresh --provider magpie）：errors 必须含 magpie
     const result = await env.models.refresh({ providers: ['magpie'], allowNetwork: true, force: true })
     assert.equal(result.errors.size, 1, '默认 loopback 未运行也必须显式报错，绝不静默 errors:{}')
     const err = result.errors.get('magpie')!
     assert.match(err.message, /ECONNREFUSED|models/)
 
-    const doc = statusDoc(env)
-    assert.equal(doc.summaryText, 'Magpie · 未连接')
-    assert.ok(doc.lastError !== undefined)
+    // 网络失败经 onCatalogChange 通知插件：doc lastError 同步刷新
+    await waitFor(() => (statusDoc(env).lastError ?? '').includes('ECONNREFUSED'))
 
-    // cache-only 刷新（allowNetwork:false）永不失败：无缓存时空目录
+    // cache-only 刷新（allowNetwork:false）永不失败：无缓存时空目录，且不触发网络成功伪装
     const cacheOnly = await env.models.refresh({ providers: ['magpie'], allowNetwork: false })
     assert.equal(cacheOnly.errors.size, 0)
     assert.equal(env.models.getModels('magpie').length, 0)
+    assert.equal(statusDoc(env).reachable, false, 'cache-only 不推进 reachable')
   } finally {
     await env.close()
   }
 })
 
-test('magpie10: 缓存与网关隔离——切换 root 后旧缓存不冒充新网关目录', { timeout: 60_000 }, async () => {
+test('magpie11: 通用 models.refresh 触发 status 更新（onCatalogChange 端口）', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    await env.host.enable(MAGPIE)
+    await waitFor(() => statusDoc(env).reachable === true && statusDoc(env).modelCount === 5)
+
+    // 直接走通用 models.refresh（不经插件 refresh 动作）：插件 status 必须同步
+    const result = await env.models.refresh({ providers: ['magpie'], allowNetwork: true, force: true })
+    assert.equal(result.errors.size, 0)
+    const doc = statusDoc(env)
+    assert.equal(doc.reachable, true)
+    assert.equal(doc.modelCount, 5)
+    assert.ok(doc.lastRefreshedAt !== undefined)
+
+    // 网关随后故障：通用刷新的失败同样反映到 status（lastError 更新，成功时先清除旧错误）
+    env.backends.get(new URL(DEFAULT_MAGPIE_ROOT).origin)!.failModels = 'gateway exploded'
+    const failed = await env.models.refresh({ providers: ['magpie'], allowNetwork: true, force: true })
+    assert.equal(failed.errors.size, 1)
+    await waitFor(() => statusDoc(env).reachable === false)
+    const failedDoc = statusDoc(env)
+    assert.match(failedDoc.lastError!, /exploded/)
+    assert.equal(failedDoc.modelCount, 5, '缓存计数保留')
+
+    // 恢复后再成功：lastError 清除（成功清除旧失败结论）
+    env.backends.get(new URL(DEFAULT_MAGPIE_ROOT).origin)!.failModels = undefined
+    await env.models.refresh({ providers: ['magpie'], allowNetwork: true, force: true })
+    await waitFor(() => statusDoc(env).reachable === true)
+    assert.equal(statusDoc(env).lastError, undefined, '成功刷新清除旧 lastError')
+  } finally {
+    await env.close()
+  }
+})
+
+test('magpie12: 缓存与网关隔离——切 root 后旧缓存不冒充；挂起请求结果不发布', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     await env.host.enable(MAGPIE)
@@ -589,7 +661,6 @@ test('magpie10: 缓存与网关隔离——切换 root 后旧缓存不冒充新�
     assert.equal(result.errors.size, 1, '新网关不可达显式报错')
     assert.equal(env.models.getModels('magpie').length, 0, '旧网关缓存被清空，绝不冒充新网关目录')
 
-    // doc 同样不保留旧网关数据冒充（refresh 动作显式失败 + 状态发布守卫）
     await assert.rejects(
       () => env.host.invokeAction(MAGPIE, 'refresh', {}),
       (err: unknown) => err instanceof HelmError && err.code === 'magpie_gateway_unreachable',
@@ -598,12 +669,48 @@ test('magpie10: 缓存与网关隔离——切换 root 后旧缓存不冒充新�
     assert.equal(doc.gatewayUrl, 'http://10.255.255.1:3425', 'doc 指向新网关')
     assert.equal(doc.reachable, false)
     assert.equal(doc.summaryText, 'Magpie · 未连接')
+    await env.host.setConfig(MAGPIE, {})
+    // 回切默认网关：正确 root 的缓存经 cache-only 也可恢复
+    await env.models.refresh({ providers: ['magpie'], allowNetwork: false })
+    assert.equal(env.models.getModels('magpie').length, 5, 'cache-only 恢复当前 root 的持久缓存')
   } finally {
     await env.close()
   }
 })
 
-test('magpie11: 可达后失败——reachable:false 时 modelCount 不得冒充实时刷新成功', { timeout: 60_000 }, async () => {
+test('magpie13: fetch 期间切 root——旧网关挂起结果不发布到新网关名下', { timeout: 60_000 }, async () => {
+  // 第二次目录刷新挂起（gate）；发起刷新后切 root，释放 gate：
+  // 挂起的旧 root 目录绝不 install / persist / 更新 status。
+  let releaseGate: (() => void) | undefined
+  const backend: FakeBackend = { models: CATALOG, quotas: QUOTAS, trace: TRACE }
+  const env = await makeEnv({ backendAtDefault: backend })
+  try {
+    await env.host.enable(MAGPIE)
+    // 启动刷新完成（无 gate）后才挂上下一次刷新的 gate
+    await waitFor(() => statusDoc(env).reachable === true && statusDoc(env).modelCount === 5)
+    backend.gateModels = new Promise<void>((r) => { releaseGate = r })
+    env.fetchState.calls.length = 0
+
+    const pending = env.models.refresh({ providers: ['magpie'], allowNetwork: true, force: true })
+    await waitFor(() => env.fetchState.calls.some((c) => c.includes('/v1/models') && c.includes(DEFAULT_MAGPIE_ROOT)))
+    // fetch 挂起期间切换网关
+    await env.host.setConfig(MAGPIE, { gatewayUrl: 'http://10.255.255.1:3425' })
+    releaseGate!()
+    const result = await pending
+    assert.equal(result.errors.size, 1, '结果未采用必须显式返回诊断，不能提示刷新成功')
+    assert.match(result.errors.get('magpie')?.message ?? '', /网关配置已变化/)
+    // 但结果不得发布：内存目录与持久缓存都不被旧 root 目录污染
+    assert.equal(env.models.getModels('magpie').length, 0, '挂起结果未 install（切 root 后被 sameGateway 守卫拦下）')
+    const status = (await env.host.invokeAction(MAGPIE, 'status', {})) as StatusView
+    assert.equal(status.gatewayUrl, 'http://10.255.255.1:3425', 'status 读取时投影当前生效网关')
+    assert.equal(status.modelCount, 0, '旧网关 5 模型不写成新网关目录')
+    assert.equal(status.reachable, false, '挂起结果不推进 reachable')
+  } finally {
+    await env.close()
+  }
+})
+
+test('magpie14: 可达后失败——reachable:false 时 modelCount 不冒充实时成功', { timeout: 60_000 }, async () => {
   const backend: FakeBackend = { models: CATALOG, quotas: QUOTAS, trace: TRACE }
   const env = await makeEnv({ backendAtDefault: backend })
   try {
@@ -626,7 +733,7 @@ test('magpie11: 可达后失败——reachable:false 时 modelCount 不得冒充
   }
 })
 
-test('magpie12: 远端网关数据源隔离——CLI 不被调用、groups 只用 trace 且标 source', { timeout: 60_000 }, async () => {
+test('magpie15: 远端网关数据源隔离——CLI 不被调用、groups 只用 trace 且标 source', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     await env.config.set(MAGPIE, { gatewayUrl: 'http://10.1.2.3:3425' })
@@ -644,7 +751,6 @@ test('magpie12: 远端网关数据源隔离——CLI 不被调用、groups 只�
     assert.ok(groups.note !== undefined)
     assert.equal(env.cliRuns.length, 0, '非 loopback 网关绝不调用本机 magpie CLI')
 
-    // group 动作：无定义来源且无 trace → 显式 404（不编造定义）
     await assert.rejects(
       () => env.host.invokeAction(MAGPIE, 'group', { id: 'group/relay' }),
       (err: unknown) => err instanceof HelmError && err.code === 'magpie_group_not_found' && err.status === 404,
@@ -655,19 +761,61 @@ test('magpie12: 远端网关数据源隔离——CLI 不被调用、groups 只�
   }
 })
 
-test('magpie13: turn_settled 后台刷新配额与路由（有模型时；kept 读法）', { timeout: 60_000 }, async () => {
+test('magpie16: 显式其它 loopback 端口——无法证明 CLI 指向同一实例时只用所选 root trace', { timeout: 60_000 }, async () => {
+  // 另一个 loopback 端口有真实后端：groups 可用 trace，但本机默认 CLI 绝不被混入
+  const altRoot = 'http://127.0.0.1:3525'
+  const env = await makeEnv()
+  try {
+    env.backends.set(new URL(altRoot).origin, { models: CATALOG, quotas: QUOTAS, trace: TRACE })
+    await env.config.set(MAGPIE, { gatewayUrl: altRoot })
+    await env.host.enable(MAGPIE)
+    await waitFor(() => statusDoc(env).reachable === true)
+
+    const groups = (await env.host.invokeAction(MAGPIE, 'groups', {})) as {
+      groups: Array<{ id: string; source: string }>
+      local: boolean
+      note?: string
+    }
+    assert.equal(groups.local, true, 'loopback 但非默认端口')
+    assert.ok(groups.groups.length > 0, '所选 root 的 trace 提供组列表')
+    assert.equal(groups.groups.every((g) => g.source === 'gateway-trace'), true, '只标 gateway-trace，不冒充 cli+trace')
+    assert.equal(env.cliRuns.length, 0, '无法证明 CLI 目标一致 → 不读本机默认实例 CLI')
+    assert.ok(groups.note !== undefined, '输出明确说明 CLI 数据源不可混入的原因')
+  } finally {
+    await env.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 6. turn_settled：会话过滤 + 诊断
+// ---------------------------------------------------------------------------
+
+test('magpie17: turn_settled 只刷新 magpie/ 模型会话（kept 读法；不阻塞结算）', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     await env.host.enable(MAGPIE)
     await waitFor(() => statusDoc(env).reachable === true)
     const quotaCallsBefore = env.fetchState.calls.filter((c) => c.includes('quotas')).length
 
+    // 非 magpie 会话 settled：不触发任何网关读
     await env.host.runHook('turn_settled', {
-      conversation: makeConversation(1),
-      inputs: [],
-      outcome: 'completed',
-      settledAt: Date.now(),
+      conversation: makeConversation(1, 'anthropic/claude-sonnet-4.6'),
+      inputs: [], outcome: 'completed', settledAt: Date.now(),
     })
+    await new Promise((r) => setTimeout(r, 150))
+    assert.equal(
+      env.fetchState.calls.filter((c) => c.includes('quotas')).length,
+      quotaCallsBefore,
+      '其它 Provider 会话 settled 不触发配额读',
+    )
+
+    // magpie 会话 settled：kept=1 侧读（不问供应商），runHook 立即返回（不阻塞）
+    const start = Date.now()
+    await env.host.runHook('turn_settled', {
+      conversation: makeConversation(2, 'magpie/anthropic/claude-sonnet-4.6'),
+      inputs: [], outcome: 'completed', settledAt: Date.now(),
+    })
+    assert.ok(Date.now() - start < 500, 'turn_settled 不被侧读 await 阻塞')
     await waitFor(() => env.fetchState.calls.filter((c) => c.includes('quotas')).length > quotaCallsBefore)
     const lastQuota = env.fetchState.calls.filter((c) => c.includes('quotas')).at(-1)!
     assert.match(lastQuota, /kept=1/, 'settled 刷新用 kept=1（不问供应商）')
@@ -681,37 +829,105 @@ test('magpie13: turn_settled 后台刷新配额与路由（有模型时；kept �
   }
 })
 
-test('magpie14: 无模型时 turn_settled 不触网；UI spec 无 Emoji 且动作绑定正确', { timeout: 60_000 }, async () => {
+test('magpie18: 配额失败不清空成「没有配额」——diagnostics 明确记录原因', { timeout: 60_000 }, async () => {
+  const backend: FakeBackend = { models: CATALOG, quotas: QUOTAS, trace: TRACE }
+  const env = await makeEnv({ backendAtDefault: backend })
+  try {
+    await env.host.enable(MAGPIE)
+    await waitFor(() => statusDoc(env).reachable === true && statusDoc(env).quotas.length > 0)
+    assert.deepEqual(statusDoc(env).diagnostics, [])
+
+    // 配额接口故障：settled 侧读后 quotas 区清空但 diagnostics 记录原因
+    backend.failQuotas = 'quota endpoint exploded'
+    await env.host.runHook('turn_settled', {
+      conversation: makeConversation(1, 'magpie/group/relay'),
+      inputs: [], outcome: 'completed', settledAt: Date.now(),
+    })
+    await waitFor(() => statusDoc(env).diagnostics.length > 0)
+    const doc = statusDoc(env)
+    assert.deepEqual(doc.quotas, [], '配额区清空（旧数据不冒充当前读数）')
+    assert.ok(doc.diagnostics.some((d) => d.includes('配额不可用') && d.includes('exploded')), `诊断含原因：${JSON.stringify(doc.diagnostics)}`)
+
+    // trace 同步不可用：诊断同样记录（不是静默空列表）
+    backend.trace = undefined
+    await env.host.runHook('turn_settled', {
+      conversation: makeConversation(1, 'magpie/group/relay'),
+      inputs: [], outcome: 'completed', settledAt: Date.now(),
+    })
+    await waitFor(() => statusDoc(env).diagnostics.some((d) => d.includes('路由轨迹不可用')))
+  } finally {
+    await env.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 7. UI spec：无 Emoji / 求值表达式真实可取值 / scope 绑定
+// ---------------------------------------------------------------------------
+
+test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、KeyValueList 表达式真实求值', { timeout: 60_000 }, async () => {
   const env = await makeEnv({ backendAtDefault: { models: { data: [] }, quotas: { data: [] } } })
   try {
     await env.host.enable(MAGPIE)
     await waitFor(() => statusDoc(env).reachable === true)
-    const callsBefore = env.fetchState.calls.length
-    await env.host.runHook('turn_settled', {
-      conversation: makeConversation(1),
-      inputs: [],
-      outcome: 'completed',
-      settledAt: Date.now(),
-    })
-    await new Promise((r) => setTimeout(r, 150))
-    assert.equal(env.fetchState.calls.length, callsBefore, '无模型不触发后台配额刷新')
-
     const ui = env.host.listUi().filter((u) => u.pluginId === MAGPIE)
     const emoji = /\p{Extended_Pictographic}/u
     for (const item of ui) {
       assert.equal(emoji.test(JSON.stringify(item.spec)), false, `UI ${item.surface} 不得含 Emoji`)
     }
     const pill = ui.find((u) => u.surface === 'composer.pill')!.spec as {
-      icon: string; docs: string[]; json: { action: { type: string; actionId: string } }
+      icon: string; docs: string[]; scope?: { modelProviders?: string[] }
+      json: { action: { type: string; actionId: string } }
     }
     assert.equal(pill.icon, 'network')
     assert.deepEqual(pill.docs, ['status'])
+    assert.deepEqual(pill.scope, { modelProviders: ['magpie'] }, '胶囊按 modelProviders 作用域过滤会话')
     assert.deepEqual(pill.json.action, { type: 'helm:action', actionId: 'refresh', input: {} })
 
+    // settingsPanel：KeyValueList 的 JSON Pointer 表达式用真实求值器验证取值
+    //（key 写法 '/$docs/status/<field>'，与 web evaluator 语法一致——不是 '/$docs.status.x'）
     const panel = ui.find((u) => u.surface === 'settings.panel')!.spec as {
       label: string; docs: string[]; json: { children: Array<Record<string, unknown>> }
     }
     assert.equal(panel.label, 'Magpie 网关')
+    const kv = panel.json.children.find((c) => c['component'] === 'KeyValueList') as {
+      items: Array<{ key: string; label: string }>
+    }
+    assert.ok(kv, '面板含 KeyValueList')
+    const keys = kv.items.map((item) => item.key)
+    for (const key of keys) {
+      assert.match(key, /^\/\$docs\/status\//, `key 必须是 JSON Pointer 写法：${key}`)
+    }
+    assert.ok(keys.includes('/$docs/status/gatewayUrl'))
+    assert.ok(keys.includes('/$docs/status/modelCount'))
+
+    // 真实求值：用当前 status doc 快照作为 $docs scope，逐 key 取值。
+    // web 求值器无法跨包导入（kernel 测试不依赖 web 构建产物）；本地实现
+    // 同一 JSON Pointer 语义做等价验证（语法契约与 packages/web evaluator 一致）。
+    const scope = { $docs: { status: statusDoc(env) } }
+    const resolve = (expr: string): unknown => {
+      assert.ok(expr.startsWith('/$'), `表达式必须是 JSON Pointer：${expr}`)
+      return expr.slice(1).split('/').reduce<unknown>((cur, seg) => {
+        if (cur === null || cur === undefined) return undefined
+        if (Array.isArray(cur)) {
+          if (seg === 'length') return cur.length
+          const idx = Number(seg)
+          return Number.isInteger(idx) && idx >= 0 && idx < cur.length ? cur[idx] : undefined
+        }
+        if (typeof cur === 'object') return (cur as Record<string, unknown>)[seg]
+        return undefined
+      }, scope)
+    }
+    const gatewayValue = resolve('/$docs/status/gatewayUrl')
+    const countValue = resolve('/$docs/status/modelCount')
+    assert.equal(gatewayValue, DEFAULT_MAGPIE_ROOT, '网关地址可从 doc 求值（不再是空指针破折号）')
+    assert.equal(countValue, 0, 'modelCount 可从 doc 求值')
+    // lastError 可选字段：present-but-undefined 时求值为 undefined（面板显示占位）
+    assert.equal(resolve('/$docs/status/lastError'), undefined)
+
+    // 诊断表 rows 绑定与刷新按钮存在
+    const diagTable = panel.json.children.find((c) => c['component'] === 'Table' && (c['columns'] as Array<{ key: string }> | undefined)?.[0]?.key === 'message')
+    assert.ok(diagTable, '面板含诊断 Table')
+    assert.equal(diagTable!['rows'], '{$docs.status.diagnostics}')
     const panelJson = JSON.stringify(panel.json)
     assert.ok(panelJson.includes('KeyValueList') && panelJson.includes('Table'), '面板含 KeyValueList 与 Table')
     assert.ok(panelJson.includes('刷新模型目录'), '面板提供刷新按钮')
@@ -719,45 +935,46 @@ test('magpie14: 无模型时 turn_settled 不触网；UI spec 无 Emoji 且动�
     const command = ui.find((u) => u.surface === 'commandPalette')!.spec as { title: string; actionId: string }
     assert.equal(command.title, '刷新 Magpie 模型目录')
     assert.equal(command.actionId, 'refresh')
+
+    // 无模型目录时非 magpie 会话 settled 不触网（保持原行为回归）
+    const callsBefore = env.fetchState.calls.length
+    await env.host.runHook('turn_settled', {
+      conversation: makeConversation(1, 'other/model'),
+      inputs: [], outcome: 'completed', settledAt: Date.now(),
+    })
+    await new Promise((r) => setTimeout(r, 150))
+    assert.equal(env.fetchState.calls.length, callsBefore, '无关会话 settled 不读网关')
   } finally {
     await env.close()
   }
 })
 
-test('magpie15: 缺少 provider 挂载端口时允许登记停用插件，启用显式失败', { timeout: 60_000 }, async () => {
+// ---------------------------------------------------------------------------
+// 8. provider 请求路径：auth 快照冻结 / stream 委托 baseUrl 修正
+// ---------------------------------------------------------------------------
+
+test('magpie20: auth.resolve 携带冻结 root 的 env；apiKey 与 root 同次快照', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    // ctx.provider 先登记声明；只有启用时才要求运行时提供真实挂载端口。
-    const raw = createMagpiePlugin({
-      refreshProviderModels: async () => ({ errors: {} }),
-      fetchImpl: async () => new Response('{}'),
-    })
-    const host2 = new PluginHost({ dataDir: env.dataDir, host: makeHostApi(), docs: new MemoryDocStore(), config: new MemoryConfigStore() })
-    try {
-      await host2.register(raw, { enabled: false })
-      assert.equal(host2.list().find((plugin) => plugin.id === MAGPIE)?.enabled, false)
-      await assert.rejects(
-        () => host2.enable(MAGPIE),
-        (err: unknown) => {
-          assert.ok(err instanceof HelmError)
-          assert.equal(err.code, 'provider_port_unavailable')
-          return true
-        },
-      )
-      assert.equal(host2.list().find((plugin) => plugin.id === MAGPIE)?.enabled, false)
-    } finally {
-      await host2.dispose()
-    }
+    await env.host.enable(MAGPIE)
+    await waitFor(() => env.models.getModels('magpie').length > 0)
+    const provider = env.models.getProvider('magpie')!
+
+    const resolved = await provider.auth.apiKey!.resolve({ signal: new AbortController().signal } as never)
+    assert.ok(resolved, 'auth.resolve 返回有效结果')
+    assert.equal(resolved!.auth.apiKey, DEFAULT_MAGPIE_TOKEN)
+    assert.equal(resolved!.env?.MAGPIE_GW_URL, DEFAULT_MAGPIE_ROOT, 'auth 快照冻结 root 进 env')
+
+    // Models.getAuth 走 credential store：resolve 结果同样携带 env
+    const viaModels = await env.models.getAuth('magpie')
+    assert.ok(viaModels)
+    assert.equal(viaModels.env?.MAGPIE_GW_URL, DEFAULT_MAGPIE_ROOT)
   } finally {
     await env.close()
   }
 })
 
-// ---------------------------------------------------------------------------
-// 5. provider stream 委托（baseUrl 动态修正）
-// ---------------------------------------------------------------------------
-
-test('magpie16: provider stream 按请求时刻 root 修正 baseUrl', { timeout: 60_000 }, async () => {
+test('magpie21: provider stream 按请求时刻 root 修正 baseUrl（委托产生事件流）', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     await env.host.enable(MAGPIE)
