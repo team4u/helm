@@ -291,6 +291,9 @@ test('HTTP reset/compact/fork：状态码与 body 校验；错误信封（404/40
     const forkBad = await authCall(env, 'POST', `/api/conversations/${conv.id}/fork`, { entryId: 0 })
     assert.equal(forkBad.status, 400)
     assert.equal(forkBad.body.error.code, 'validation_error')
+    const forkUnsafe = await authCall(env, 'POST', `/api/conversations/${conv.id}/fork`, { entryId: Number.MAX_SAFE_INTEGER + 1 })
+    assert.equal(forkUnsafe.status, 400)
+    assert.equal(forkUnsafe.body.error.code, 'validation_error')
     const missing = await authCall(env, 'POST', '/api/conversations/88888/reset')
     assert.equal(missing.status, 404)
   } finally {

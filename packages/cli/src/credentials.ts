@@ -150,7 +150,12 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
       }
     } catch (err) {
       if (err instanceof CliError) throw err
-      stale = true // 读失败 = 锁刚被释放：直接重试
+      // 仅 ENOENT 代表锁已释放；权限和 IO 错误不能当作无锁，更不能删掉他人的锁。
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw new CliError(
+        `无法读取 CLI 凭据锁文件（${lockFile}）：${err instanceof Error ? err.message : String(err)}`,
+        'credentials_lock_failed',
+      )
     }
     if (stale) {
       await fsp.rm(lockFile, { force: true }).catch(() => {})

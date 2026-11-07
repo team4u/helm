@@ -27,7 +27,7 @@ export interface Profile {
 
 /** Profile 绑定的外部 Agent 运行时配置（如 'herdr'，由对应插件接管驱动）。 */
 export interface ProfileRuntime {
-  kind: 'herdr' | (string & {})
+  kind: string
   /** 外部 CLI Agent 标识，如 'agy' | 'claude' | 'codex' | 'pi'。 */
   agent: string
   args?: string[]

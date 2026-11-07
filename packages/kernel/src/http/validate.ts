@@ -561,8 +561,8 @@ export function parseConversationCompactBody(body: Record<string, unknown>): { i
 /** POST /api/conversations/:id/fork：entryId 必填正整数；title 可选 1..200。 */
 export function parseConversationForkBody(body: Record<string, unknown>): { entryId: number; title?: string } {
   const raw = body.entryId
-  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw <= 0) {
-    throw new ValidationError('entryId 需为正整数')
+  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw <= 0) {
+    throw new ValidationError('entryId 需为安全范围内的正整数')
   }
   const title = optionalString(body, 'title', { minLength: 1, maxLength: 200 })
   rejectUnknownKeys(body, new Set(['entryId', 'title']))

@@ -38,9 +38,9 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T>): Promi
 }
 
 // ---------------------------------------------------------------------------
-// 跨进程文件锁：credentials.json 由 Hub 与 CLI 两个独立进程读改写，
+// 跨进程文件锁：同一文件可能由多个 Hub/管理进程读改写，
 // 仅进程内串行挡不住跨进程「并发读同一旧文件后互相覆盖」。
-// 协议（与 @helm/node CLI 完全一致，双方互认）：
+// 锁协议：
 //   锁文件为 <目标文件>.lock，O_EXCL 创建，内容首字段为持有者 PID（十进制）。
 //   只在 PID 确认死亡（ESRCH）时视为 stale 破除并重试；不按存活时长强拆
 //   （合法持锁者可能只是慢）。坏锁内容/无法判定时显式报错，绝不猜测。
@@ -94,7 +94,7 @@ export async function withProcessFileLock<T>(path: string, fn: () => Promise<T>)
       const raw = await readFile(lockFile, 'utf8')
       const holder = parseLockOwner(raw)
       if (holder === undefined) {
-        // 并发进程刚以 open('wx') 创建锁文件但尚未写完 JSON：mtime 距今
+        // 并发进程刚以 open('wx') 创建锁文件但尚未写完持有者记录：mtime 距今
         // < 1500ms 视为正在写入，等待重试而非误判锁损坏（误判会破除健康锁）；
         // 过了宽限期仍无法解析才是真的损坏，显式报错（诚实性纪律）。
         const stats = await stat(lockFile)
@@ -107,8 +107,8 @@ export async function withProcessFileLock<T>(path: string, fn: () => Promise<T>)
         continue
       }
     } catch (err) {
-      if (err instanceof Error && err.message.startsWith('锁文件内容损坏')) throw err
-      // 读失败 = 锁刚被释放：直接进入下一轮争抢
+      // 锁刚被释放时重新争抢；权限、IO 与内容损坏均须显式失败。
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
     }
     if (Date.now() > deadline) {
       throw new Error(`文件被并发写入，等待锁超时（${lockFile}）`)

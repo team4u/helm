@@ -2,9 +2,8 @@
  * WorkflowService.list() 摘要元数据回归。
  *
  * list() 读取每个已保存工作流脚本内容并经 extractMeta 填充可选的
- * description / whenToUse / phases；读取或 meta 解析失败仅返回 { name, path }
- * （列表是目录视图，单个脚本的 meta 瑕疵不阻断整个列表；运行时提取仍
- * 会如实报错）。
+ * description / whenToUse / phases；非法 meta 通过 metadataError 显式诊断，
+ * 保留同目录健康脚本。
  */
 
 import { strict as assert } from 'node:assert'
@@ -125,11 +124,11 @@ describe('WorkflowService.list() 填充 meta 摘要', { timeout: 60_000 }, () =>
     }
   })
 
-  it('meta 非纯字面量（模板插值）：仅返回 { name, path }，不阻断列表', timeout, async () => {
+  it('meta 非纯字面量（模板插值）：返回 metadataError，不阻断健康脚本', timeout, async () => {
     const dataDir = join(root, 'impure')
     const dir = join(dataDir, 'workflows')
     mkdirSync(dir, { recursive: true })
-    // 有 meta 声明但用了插值：extractMeta 拒绝 -> list() 降为 name/path。
+    // 有 meta 声明但用了插值：extractMeta 拒绝，列表保留显式诊断。
     writeFileSync(
       join(dir, 'impure.js'),
       'const v = "x"\nexport const meta = { name: "impure", description: `d-${v}` }\nreturn 1',
@@ -151,6 +150,8 @@ describe('WorkflowService.list() 填充 meta 摘要', { timeout: 60_000 }, () =>
       assert.equal(impure.name, 'impure')
       assert.equal(impure.path, join(dir, 'impure.js'))
       assert.equal(impure.description, undefined)
+      assert.match(impure.metadataError ?? '', /PURE LITERAL|interpolation/)
+      assert.equal(healthy?.metadataError, undefined)
       assert.equal(healthy?.description, 'ok')
     } finally {
       await service.close()

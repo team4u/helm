@@ -250,9 +250,7 @@ const PROGRESS_PERSIST_INTERVAL_MS = 1_000
 /** workflow.updated 节点事件最小间隔：有界频率，但节点开始/结束强制推送。 */
 const NODE_EVENT_INTERVAL_MS = 250
 
-/** list() 摘要构造：尽力填充 meta 的 description/whenToUse/phases；
- * meta 解析失败（非纯字面量、插值等）仅返回 { name, path }——列表是目录
- * 视图，单个脚本的 meta 瑕疵不阻断整个列表，运行时提取仍会如实报错。 */
+/** 单个脚本的元数据损坏不阻断整个目录；保留该条目并返回诊断。 */
 function summaryFromSource(name: string, path: string, source: string): SavedWorkflowSummary {
   try {
     const { meta } = extractMeta(source)
@@ -263,8 +261,8 @@ function summaryFromSource(name: string, path: string, source: string): SavedWor
       ...(meta.whenToUse !== undefined ? { whenToUse: meta.whenToUse } : {}),
       ...(meta.phases !== undefined ? { phases: meta.phases } : {}),
     }
-  } catch {
-    return { name, path }
+  } catch (error) {
+    return { name, path, metadataError: error instanceof Error ? error.message : String(error) }
   }
 }
 
@@ -362,11 +360,7 @@ export class WorkflowService {
   // list：已保存工作流目录
   // ------------------------------------------------------------------
 
-  /** 列出 dataDir/workflows 下可复用的工作流脚本（仅 meta 声明合法的 .js 文件）。
-   *
-   * 每项尽力填充 description / whenToUse / phases（读文件并解析 meta 声明）；
-   * 读取或 meta 解析失败时仅返回 { name, path }（列表是目录视图，单个
-   * 脚本的 meta 瑕疵不应让整个列表 500）。 */
+  /** 列出带 meta 声明的工作流脚本；非法 meta 附 metadataError，文件读取错误显式失败。 */
   list(): SavedWorkflowSummary[] {
     const dir = this.workflowsDir()
     let entries: string[]

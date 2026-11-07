@@ -9,6 +9,8 @@ import type { AgentGateResult } from './plugin.js'
 export interface SavedWorkflowSummary {
   name: string
   path?: string
+  /** 元数据校验失败时保留目录条目，并显式返回诊断。 */
+  metadataError?: string
   description?: string
   whenToUse?: string
   phases?: Array<{ title: string; detail?: string; model?: string }>
