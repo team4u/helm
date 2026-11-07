@@ -1862,6 +1862,13 @@ export class KernelRuntime {
         getModelOverride: (childId) => this.store.getConv(childId)?.modelOverride,
         getParentOfConversation: (childId) =>
           this.store.getConv(childId)?.parentConversationId,
+        // resume 配置基线端口：镜像读取与真实更新（SDK configure + 持久化 +
+        // 模型继承链，复用宿主 updateConversation，不重建身份字段）。
+        getConversation: (childId) => {
+          const meta = this.store.getConv(childId)
+          return meta ? this.tracker.summaryOf(childId) : undefined
+        },
+        updateConversation: (childId, patch) => this.updateConversation(childId, patch),
         installChildExtension: (extension) => {
           this.registry.install(extension)
         },

@@ -3,6 +3,11 @@
  *
  * - 在 pi-durable 创建原生子会话，onCreated 回调上报 convId；
  * - resume：严格校验 ref（纯数字 convId 或既有 agentId 映射），绝不静默新建假续接；
+ *   缺省严格沿用原子会话镜像的 profileId/cwd/model（不重算、不偷偷回默认
+ *   Profile）；显式 agentType/cwd/model 变更经同一 updateConversation 路径应用
+ *   （真实 SDK configure + 镜像持久化 + 模型继承链，不重建身份字段），
+ *   effort 显式时本次 configure({thinkingLevel}) 生效；onResolved/Gate 用
+ *   配置落定后的实际 cwd（与 SDK 一致）；
  * - signal：创建前已 abort 直接拒绝；运行中 abort -> conversation.abort 并等待 settle；
  * - schema：AJV 全量校验（复用 plugins/schema，$async 显式拒绝），回合内
  *   register_structured_output 工具自愈（per-child 扩展注入），工具拒绝错误
@@ -17,7 +22,7 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { defineExtension, defineTool, type AgentChange, type Extension, type ToolRegistration } from '@earendil-works/pi-durable'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
-import type { AgentSpawnRequest } from '@helm/protocol'
+import type { AgentSpawnRequest, ConversationPatch, ConversationSummary } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import type { Harness } from '@earendil-works/pi-durable'
 import { validateOrThrow } from '../plugins/schema.js'
@@ -75,6 +80,17 @@ export interface NativeSpawnDeps extends HelmToolDeps {
    */
   getParentOfConversation(childId: number): number | undefined
   /**
+   * 读取 Helm 子会话镜像（profileId / cwd / model 等真实配置）。
+   * resume 沿用原子会话配置的唯一事实来源；不存在返回 undefined。
+   */
+  getConversation(childId: number): ConversationSummary | undefined
+  /**
+   * 更新子会话配置（真实 SDK configure + 镜像持久化 + 模型继承链重算，
+   * 复用宿主 updateConversation：不重建镜像、不覆盖 createdAt/title/tags）。
+   * resume 显式 agentType/cwd/model 变更经此路径应用。
+   */
+  updateConversation(childId: number, patch: ConversationPatch): Promise<ConversationSummary>
+  /**
    * 将 per-child 扩展安装进 SDK registry（spawn 构造的 StructuredOutput 工具
    * 需真实注册后才能被会话按名选中；同名重装为原地替换）。
    */
@@ -118,7 +134,44 @@ export async function runNativeSpawn(
     )
   }
 
-  const profileId = agentType || DEFAULT_SPAWN_PROFILE
+  // ---- resume 解析：纯数字 convId 或 agentId 映射；绝不猜测续接（'12abc' 拒绝）。----
+  let childId: number | undefined
+  let isResume = false
+  const resumeRef = request.resume
+  if (resumeRef !== undefined) {
+    childId = resolveResumeRef(deps, resumeRef, request.parentConversationId)
+    if (childId === undefined) {
+      throw new HelmError(
+        'not_found',
+        `resume ref '${resumeRef}' 不存在或不属于父会话 ${request.parentConversationId}：` +
+          `既非既有 agentId 会话映射，也非有效子会话 ID；绝不静默新建续接会话`,
+        404,
+      )
+    }
+    isResume = true
+  }
+
+  // ---- resume 配置基线：原子会话镜像（profileId/cwd/model）是唯一事实来源。
+  // 缺省沿用；显式 agentType/cwd/model 变更经同一 updateConversation 路径应用
+  // （真实 SDK configure + 镜像持久化，不重建身份字段）。----
+  let existing: ConversationSummary | undefined
+  if (isResume) {
+    existing = deps.getConversation(childId!)
+    if (existing === undefined) {
+      throw new HelmError(
+        'not_found',
+        `resume 会话 ${childId} 无镜像记录（宿主状态不一致）；拒绝盲目续接`,
+        404,
+        { conversationId: childId },
+      )
+    }
+  }
+
+  // profile 解析：resume 缺省用原子会话 Profile（不偷偷回默认 assistant）；
+  // 新建路径沿用 agentType || 默认。resume 显式 agentType 为本次 Profile 变更。
+  const profileId = isResume
+    ? (request.agentType ?? existing!.profileId)
+    : (agentType || DEFAULT_SPAWN_PROFILE)
   const profile = await deps.resolveProfile(profileId)
   if (profile === undefined) {
     throw new HelmError(
@@ -137,42 +190,30 @@ export async function runNativeSpawn(
     )
   }
 
-  // ---- resume 解析：纯数字 convId 或 agentId 映射；绝不猜测续接（'12abc' 拒绝）。----
-  let childId: number | undefined
-  let isResume = false
-  const resumeRef = request.resume
-  if (resumeRef !== undefined) {
-    childId = resolveResumeRef(deps, resumeRef, request.parentConversationId)
-    if (childId === undefined) {
-      throw new HelmError(
-        'not_found',
-        `resume ref '${resumeRef}' 不存在或不属于父会话 ${request.parentConversationId}：` +
-          `既非既有 agentId 会话映射，也非有效子会话 ID；绝不静默新建续接会话`,
-        404,
-      )
-    }
-    isResume = true
-  }
-
-  const childCwd = request.cwd ?? profile.cwd ?? deps.defaultCwd
-
-  // 模型解析链（与会话策略同构）：请求显式 model > resume 子会话的既有 override
-  // > profile.model > 全局默认。resume + 显式 model 视为本次改写（不因链路回退）。
-  const modelRef = request.model ? parseSpawnModel(request.model) : undefined
-  const inheritedOverride =
-    isResume && modelRef === undefined ? deps.getModelOverride(childId ?? -1) : undefined
-  const overrideRef = inheritedOverride !== undefined && inheritedOverride !== ''
-    ? parseSpawnModel(inheritedOverride)
-    : undefined
-  const profileModelRef = profile.model ? parseSpawnModel(profile.model) : undefined
-  const resolvedModel = modelRef ?? overrideRef ?? profileModelRef ?? deps.resolveModel()
-  const resolvedModelRef = `${resolvedModel.provider}/${resolvedModel.modelId}`
-  // gate 与子会话同 cwd（请求缺省时用 profile/宿主缺省，不依赖 main cwd）。
-  const gateCwd = childCwd
-
+  let summary: ConversationSummary | undefined = existing
   if (isResume) {
-    request.onResolved?.({ conversationId: childId!, effectiveCwd: childCwd })
+    const patch: ConversationPatch = {}
+    // 显式 agentType 与原子会话 Profile 不同才是变更（相同则不产生无意义写）。
+    if (request.agentType !== undefined && request.agentType !== existing!.profileId) {
+      patch.profileId = profileId
+    }
+    // 显式 cwd 才改写；缺省严格沿用原子会话 cwd（绝不重算到 Profile/Hub 目录）。
+    if (request.cwd !== undefined && request.cwd !== existing!.cwd) patch.cwd = request.cwd
+    // 显式 model 才改写（'provider/model' 覆盖；清覆盖由 '' 显式表达，走同一
+    // updateConversation 语义：重算继承链 + 真实 SDK configure + 镜像持久化）。
+    if (request.model !== undefined && request.model !== deps.getModelOverride(childId!)) {
+      patch.model = request.model
+    }
+    if (Object.keys(patch).length > 0) {
+      summary = await deps.updateConversation(childId!, patch)
+    }
   }
+
+  // 新建路径：请求 cwd > profile.cwd > 宿主缺省（原行为保持，不扩继承策略）。
+  const childCwd = isResume ? summary!.cwd : (request.cwd ?? profile.cwd ?? deps.defaultCwd)
+
+  // gate 与子会话同 cwd（resume 用更新后的实际 cwd，不依赖 main cwd）。
+  const gateCwd = childCwd
 
   let structured: StructuredOutputSession | undefined
   if (request.schema) {
@@ -189,6 +230,11 @@ export async function runNativeSpawn(
   }
 
   if (!isResume) {
+    // 模型解析链（与会话策略同构）：请求显式 model > profile.model > 全局默认。
+    const modelRef = request.model ? parseSpawnModel(request.model) : undefined
+    const profileModelRef = profile.model ? parseSpawnModel(profile.model) : undefined
+    const resolvedModel = modelRef ?? profileModelRef ?? deps.resolveModel()
+    const createModelRef = `${resolvedModel.provider}/${resolvedModel.modelId}`
     const extension = structured ? buildStructuredOutputExtension(structured) : undefined
     if (extension) deps.installChildExtension(extension)
     const agentChange: AgentChange = {
@@ -210,15 +256,26 @@ export async function runNativeSpawn(
       request.parentConversationId,
       profileId,
       childCwd,
-      resolvedModelRef,
+      createModelRef,
       [],
     )
+    // onResolved 在配置全部落定（创建 + 镜像登记）后回传实际元数据。
     request.onResolved?.({ conversationId: childId, effectiveCwd: childCwd })
+  } else {
+    // resume：显式 model/cwd 变更已由 updateConversation 真实 configure；
+    // effort 仅存在于 SDK AgentState（协议无镜像字段），显式时本次 configure 生效。
+    // onResolved 移到配置完成后回传更新后的实际 cwd（修复首调自定义 cwd 再 resume
+    // 时 metadata/Gate 指向 Hub 目录而 SDK 仍在旧目录的不一致）。
+    request.onResolved?.({ conversationId: childId!, effectiveCwd: childCwd })
   }
 
   const conversation = await deps.harness.conversation(childId as never, bg)
   if (!conversation) {
     throw new HelmError('not_found', `子会话不存在：${childId}`, 404)
+  }
+
+  if (isResume && request.effort !== undefined) {
+    await conversation.configure({ thinkingLevel: request.effort as ModelThinkingLevel }, bg)
   }
 
   // resume 续接时补挂结构化输出扩展（原会话创建时可能没有；同样需真实注册）。

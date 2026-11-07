@@ -61,6 +61,11 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
   const profiles = new Map<string, { model?: string; cwd?: string; runtime?: { kind: string; agent: string } }>(
     Object.entries(options.profiles ?? { assistant: {} }),
   )
+  // 子会话镜像（与生产 HelmStore 同语义的最小实现：profileId/cwd/model）。
+  const mirrors = new Map<
+    number,
+    { profileId: string; cwd: string; model: string; modelOverride?: string; title: string; tags: string[]; createdAt: number }
+  >()
 
   const deps: NativeSpawnDeps = {
     dataDir: '/tmp/helm-spawn-test',
@@ -73,8 +78,16 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
     getLastAssistantText: (id) => lastTexts.get(id),
     resolveModel: () => ({ provider: 'faux', modelId: 'faux-1' }),
     agentSessions: new Map(),
-    registerChildConversation: async (childId, parentId, _profileId, _childCwd, _modelMirror, _tags) => {
+    registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, _tags) => {
       parents.set(childId, parentId)
+      mirrors.set(childId, {
+        profileId,
+        cwd: childCwd,
+        model: modelMirror,
+        title: `子代理 ${childId}`,
+        tags: [],
+        createdAt: Date.now(),
+      })
       const conv = await harness.conversation(childId as never, BACKGROUND_CONTEXT)
       if (!conv) return
       // 同步观察者：与生产 tracker 同机制（advance 内只记录，无 await）。
@@ -106,7 +119,52 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
       return { model: p.model, cwd: p.cwd, runtime: p.runtime as never }
     },
     getParentOfConversation: (childId) => parents.get(childId),
-    getModelOverride: () => undefined,
+    getModelOverride: (childId) => mirrors.get(childId)?.modelOverride,
+    getConversation: (childId) => {
+      const m = mirrors.get(childId)
+      if (!m) return undefined
+      return {
+        id: childId,
+        title: m.title,
+        profileId: m.profileId,
+        tags: m.tags,
+        cwd: m.cwd,
+        model: m.model,
+        status: 'idle' as never,
+        stateChangeSeq: 1,
+        completionSeq: 0,
+        unread: false,
+        pinned: false,
+        pendingAskCount: 0,
+        createdAt: m.createdAt,
+        updatedAt: m.createdAt,
+      }
+    },
+    updateConversation: async (childId, patch) => {
+      const m = mirrors.get(childId)
+      if (!m) throw new HelmError('not_found', `会话不存在：${childId}`, 404)
+      if (patch.cwd !== undefined) m.cwd = patch.cwd
+      if (patch.profileId !== undefined) m.profileId = patch.profileId
+      if (patch.model !== undefined) m.modelOverride = patch.model
+      if (m.modelOverride === undefined) {
+        const p = profiles.get(m.profileId)
+        m.model = p?.model ?? 'faux/faux-1'
+      } else {
+        m.model = m.modelOverride
+      }
+      // 与生产同序：真实 SDK configure 先行，镜像后写。
+      const conv = await harness.conversation(childId as never, BACKGROUND_CONTEXT)
+      if (!conv) throw new HelmError('not_found', `子会话不存在：${childId}`, 404)
+      const slash = m.model.indexOf('/')
+      await conv.configure(
+        {
+          ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
+          model: { provider: m.model.slice(0, slash), modelId: m.model.slice(slash + 1) },
+        } as never,
+        BACKGROUND_CONTEXT,
+      )
+      return deps.getConversation(childId)!
+    },
     installChildExtension: (extension) => {
       registry.install(extension)
     },
