@@ -86,6 +86,13 @@ export interface PluginConfigStore {
     value: Record<string, unknown>,
     schema: Record<string, PluginConfigFieldSchema>,
   ): Promise<void> | void;
+  /**
+   * 可选：插件启停状态持久化读取（同步，返回缓存态；undefined 表示未持久化过）。
+   * 未实现时 PluginHost 为纯内存启停机制，重启回到 register 时的初始声明。
+   */
+  getEnabled?(pluginId: string): boolean | undefined;
+  /** 可选：持久化插件启停状态；失败必须显式 reject（由宿主包装 JSON-safe 诊断）。 */
+  setEnabled?(pluginId: string, enabled: boolean): Promise<void> | void;
 }
 
 export interface PluginHostOptions {
@@ -334,8 +341,20 @@ export class PluginHost {
 
   // --- 注册与启停 ---------------------------------------------------------
 
-  /** 注册并启用插件；definePlugin 或服务启动失败时回滚全部注册痕迹。 */
-  async register(definition: PluginDefinition): Promise<void> {
+  /**
+   * 注册插件；options.enabled 缺省 true（保持既有单参调用语义）。
+   * 实际初始状态优先级：locked 插件恒启用 > 持久启停状态（configStore.getEnabled）
+   * > options.enabled。即：一旦持久化过启停，重启后以持久化为准，声明缺省不再
+   * 重新生效；从未持久化时按调用方声明（如 builtin:herdr 声明 enabled:false）。
+   *
+   * 以停用态注册时：仍完整执行 definePlugin（获得 configSchema 供先配置后启用），
+   * 但绝不启动服务，随即释放全部运行期资源并清空 hook/action/UI/doc/service
+   * 注册（configSchema 保留）；manifest enabled:false 且无 UI 贡献。
+   */
+  async register(
+    definition: PluginDefinition,
+    options: { enabled?: boolean } = {},
+  ): Promise<void> {
     this.assertNotDisposed();
     this.assertDefinition(definition);
     if (this.plugins.has(definition.id)) {
@@ -371,15 +390,12 @@ export class PluginHost {
         // 插件专属数据目录（~/.helm/plugins/<id>/），按 protocol 注释创建
         mkdirSync(dataDir, { recursive: true });
         await definition.definePlugin(this.createContext(state, state.epoch));
-        state.enabled = true;
-        await this.startServices(state);
-        state.phase = 'idle';
       } catch (err) {
         // rollback：清除本插件一切注册痕迹（含宿主生命周期资源释放）；rollback
         // 失败不掩盖原始错误，聚合进 details（双方均已 JSON-safe 归一）
         let rollbackError: JsonSafeErrorInfo | undefined;
         try {
-          await this.teardownPlugin(state, { stopServices: state.enabled });
+          await this.teardownPlugin(state, { stopServices: false });
         } catch (rollbackErr) {
           rollbackError = toJsonSafeError(rollbackErr);
         }
@@ -398,8 +414,80 @@ export class PluginHost {
           { pluginId: definition.id, registerSeq: seq, rollbackError },
         );
       }
+
+      const wantsEnabled = this.resolveInitialEnabled(definition, options);
+      if (wantsEnabled) {
+        state.enabled = true;
+        try {
+          await this.startServices(state);
+        } catch (err) {
+          // 启动失败：回滚到停用形态（已启动服务逆向 stop），注册痕迹移除，
+          // 原始错误包 plugin_registration_failed 后如实上抛（stop 失败聚合）
+          let rollbackError: JsonSafeErrorInfo | undefined;
+          try {
+            await this.teardownPlugin(state, { stopServices: true });
+          } catch (rollbackErr) {
+            rollbackError = toJsonSafeError(rollbackErr);
+          }
+          state.enabled = false;
+          this.plugins.delete(definition.id);
+          this.tracker.removePlugin(definition.id);
+          const base = err instanceof HelmError ? err : new HelmError(
+            'plugin_registration_failed',
+            `插件 ${definition.id} 注册失败：${err instanceof Error ? err.message : String(err)}`,
+            500,
+            { pluginId: definition.id, registerSeq: seq },
+          );
+          throw rollbackError
+            ? new HelmError(base.code, base.message, base.status, { ...((base.details as object) ?? {}), rollbackError })
+            : base;
+        }
+        state.phase = 'idle';
+      } else {
+        // 停用态注册：声明已运行完毕（configSchema 已获得），释放全部运行期
+        // 资源与注册（configSchema 保留），绝不启动服务。epoch 递增废黜本次
+        // definePlugin 产生的所有句柄（doc/宿主生命周期资源），与 disable 落位后
+        // 的注册表形态完全一致。释放失败属注册失败（痕迹不完整必须回滚移除）。
+        try {
+          await this.teardownPlugin(state, { stopServices: false });
+        } catch (err) {
+          let rollbackError: JsonSafeErrorInfo | undefined;
+          try {
+            await this.teardownPlugin(state, { stopServices: false });
+          } catch (rollbackErr) {
+            rollbackError = toJsonSafeError(rollbackErr);
+          }
+          this.plugins.delete(definition.id);
+          this.tracker.removePlugin(definition.id);
+          const wrapped = err instanceof HelmError ? err : new HelmError(
+            'plugin_registration_failed',
+            `插件 ${definition.id} 注册失败：${err instanceof Error ? err.message : String(err)}`,
+            500,
+            { pluginId: definition.id, registerSeq: seq },
+          );
+          throw rollbackError
+            ? new HelmError(wrapped.code, wrapped.message, wrapped.status, { ...((wrapped.details as object) ?? {}), rollbackError })
+            : wrapped;
+        }
+        state.epoch += 1;
+        state.phase = 'idle';
+      }
       this.emitPluginChanged(state);
     });
+  }
+
+  /**
+   * 初始启停状态解析：locked 恒启用 > 持久启停（getEnabled）> 调用方声明。
+   * register 不写默认值：从未持久化过的插件不产生 config.json 副作用。
+   */
+  private resolveInitialEnabled(
+    definition: PluginDefinition,
+    options: { enabled?: boolean },
+  ): boolean {
+    if (definition.locked === true) return true;
+    const persisted = this.configStore?.getEnabled?.(definition.id);
+    if (persisted !== undefined) return persisted;
+    return options.enabled !== false;
   }
 
   /** 取消注册（locked 拒绝；有在途任务拒绝 409，绝不等待任务结束）。 */
@@ -441,16 +529,22 @@ export class PluginHost {
       const state = this.requirePlugin(pluginId);
       if (state.enabled) return;
       // 新启用周期：epoch 先行递增使一切旧上下文/doc 句柄/宿主句柄即刻失效，
-      // 再清空注册（含 docs 与 configSchema），保证重建周期从零开始；
+      // 再清空注册，保证重建周期从零开始；configSchema 显式清空（definePlugin
+      // 将重新声明），失败回滚时还原停用前保留的 schema（保住「先配置再启用」）。
       // 持久 store 数据不受影响（clearRegistrations 只动注册句柄）。
+      const prevConfigSchema = state.configSchema;
       state.epoch += 1;
       this.clearRegistrations(state);
+      state.configSchema = null;
       state.phase = 'defining';
       try {
         await state.definition.definePlugin(this.createContext(state, state.epoch));
         state.enabled = true;
         await this.startServices(state);
         state.phase = 'idle';
+        // 先落盘启停状态再发布事件：持久化失败时状态回滚为停用并如实报错，
+        // 绝不发布「已启用」事件后静默丢掉持久化（重启即失忆）。
+        await this.persistEnabled(state, true);
       } catch (err) {
         let rollbackError: JsonSafeErrorInfo | undefined;
         try {
@@ -460,6 +554,7 @@ export class PluginHost {
         }
         state.enabled = false;
         state.phase = 'idle';
+        state.configSchema = prevConfigSchema;
         if (err instanceof HelmError) {
           if (rollbackError) {
             throw new HelmError(err.code, err.message, err.status, { ...(err.details as object), rollbackError });
@@ -500,8 +595,15 @@ export class PluginHost {
       state.epoch += 1;
       state.phase = 'idle';
       // 已实际停用即发布真实状态事件（enabled:false / ui:[]），与 stop 成败无关；
-      // 双重失败语义见 settlePluginChanged
-      this.settlePluginChanged(state, stopError);
+      // 持久化停用状态即使 stop 失败也尝试写入（实际已停用是事实），任何持久化
+      // 失败与 stop 错误一并聚合显式上抛（settleLifecycleChanged）
+      let persistError: { err: unknown } | undefined;
+      try {
+        await this.persistEnabled(state, false);
+      } catch (err) {
+        persistError = { err };
+      }
+      this.settleLifecycleChanged(state, stopError, persistError);
     });
   }
 
@@ -521,8 +623,10 @@ export class PluginHost {
   }
 
   /**
-   * 清空本启用周期的全部注册句柄（含 docs、configSchema 与残留宿主释放句柄）。
-   * 只清「注册」，不动持久 store 数据——doc 值与 config 值跨周期保留。
+   * 清空本启用周期的全部注册句柄（含 docs 与残留宿主释放句柄）。
+   * 不清 configSchema：停用态必须保留 schema 供「先 setConfig 再 enable」；
+   * enable 开始时显式清空（definePlugin 将重新声明，否则 duplicate）。也不动
+   * 持久 store 数据——doc 值与 config 值跨周期保留。
    */
   private clearRegistrations(state: PluginState): void {
     state.actions.clear();
@@ -531,7 +635,6 @@ export class PluginHost {
     state.services.length = 0;
     state.ui.length = 0;
     state.docs.clear();
-    state.configSchema = null;
     state.hostReleases.clear();
     for (const pipeline of this.pipelines.values()) pipeline.removeByPlugin(state.definition.id);
     state.hooks.clear();
@@ -1311,6 +1414,14 @@ export class PluginHost {
       service: (spec: PluginServiceSpec) => {
         assertOpen(`声明服务 ${spec.id}`);
         self.assertValidId('服务', spec.id);
+        if (spec.liveTasks !== undefined && typeof spec.liveTasks !== 'function') {
+          throw new HelmError(
+            'invalid_service_spec',
+            `插件 ${pluginId} 服务 ${spec.id} 的 liveTasks 必须是返回字符串数组的函数`,
+            400,
+            { pluginId, serviceId: spec.id },
+          );
+        }
         if (state.services.some((s) => s.id === spec.id)) {
           throw new HelmError('duplicate_service', `插件 ${pluginId} 重复声明服务 ${spec.id}`, 409);
         }
@@ -1432,7 +1543,20 @@ export class PluginHost {
    * stop 错误 details，绝不让事件异常掩盖 stop 诊断。
    */
   private settlePluginChanged(state: PluginState, stopError: { err: unknown } | undefined): void {
-    if (!stopError) {
+    this.settleLifecycleChanged(state, stopError, undefined);
+  }
+
+  /**
+   * settlePluginChanged 的完整形态：启停持久化失败（persistError）与 stop 错误
+   * 同层聚合。三重失败（stop + 持久化 + 事件发布）时以 stop 诊断为主链，其余
+   * JSON-safe 归一后附入 details，绝不静默变成功，也绝不让后发错误掩盖先发诊断。
+   */
+  private settleLifecycleChanged(
+    state: PluginState,
+    stopError: { err: unknown } | undefined,
+    persistError: { err: unknown } | undefined,
+  ): void {
+    if (!stopError && !persistError) {
       this.emitPluginChanged(state);
       return;
     }
@@ -1442,21 +1566,61 @@ export class PluginHost {
     } catch (err) {
       eventError = toJsonSafeError(err);
     }
-    if (!eventError) throw stopError.err;
-    // 双重失败：stop 诊断为主，事件错误归一后聚合（原 stop 错误已在 details，
-    // 可序列化）；非 HelmError 的 stop 也包成显式 500，绝不静默变成功
-    if (stopError.err instanceof HelmError) {
-      throw new HelmError(stopError.err.code, stopError.err.message, stopError.err.status, {
-        ...((stopError.err.details as Record<string, unknown>) ?? {}),
-        eventError,
+    const primary = stopError ?? persistError;
+    const extras: Record<string, unknown> = {};
+    if (stopError && persistError) extras.persistError = toJsonSafeError(persistError.err);
+    if (eventError) extras.eventError = eventError;
+    if (primary!.err instanceof HelmError) {
+      throw new HelmError(primary!.err.code, primary!.err.message, primary!.err.status, {
+        ...((primary!.err.details as Record<string, unknown>) ?? {}),
+        ...extras,
       });
     }
-    throw new HelmError(
-      'plugin_changed_emit_failed',
-      `插件 ${state.definition.id} 已完成实际停用/移除，但服务 stop 与 plugin.changed 事件发布双双失败`,
-      500,
-      { pluginId: state.definition.id, stopError: toJsonSafeError(stopError.err), eventError },
-    );
+    if (persistError && !stopError) {
+      // stop 成功但持久化失败：进程内已停用，重启后将回到旧持久化值——显式
+      // 诊断（诚实性纪律），不伪造成功。
+      throw new HelmError(
+        'plugin_enabled_persist_failed',
+        `插件 ${state.definition.id} 已停用，但启停状态持久化失败：${persistError.err instanceof Error ? persistError.err.message : String(persistError.err)}`,
+        500,
+        {
+          pluginId: state.definition.id,
+          persistError: toJsonSafeError(persistError.err),
+          ...(extras.eventError ? { eventError: extras.eventError } : {}),
+        },
+      );
+    }
+    // 非 HelmError 的 stop 失败：保持既有语义——事件发布成功时原样上抛原始
+    // stop 错误（不吞不包）；双失败（事件也炸）时包成显式 500。persistError
+    // 尽力保留在 details，绝不静默变成功
+    if (eventError) {
+      throw new HelmError(
+        'plugin_changed_emit_failed',
+        `插件 ${state.definition.id} 已完成实际停用/移除，但服务 stop 与 plugin.changed 事件发布双双失败`,
+        500,
+        { pluginId: state.definition.id, stopError: toJsonSafeError(stopError!.err), ...extras },
+      );
+    }
+    throw primary!.err;
+  }
+
+  /**
+   * 持久化启停状态（store 未实现 setEnabled 时为无副作用的内存机制）。
+   * 失败显式 reject，由调用方决定回滚（enable）或聚合诊断（disable）。
+   */
+  private async persistEnabled(state: PluginState, enabled: boolean): Promise<void> {
+    const store = this.configStore;
+    if (!store?.setEnabled) return;
+    try {
+      await store.setEnabled(state.definition.id, enabled);
+    } catch (err) {
+      throw new HelmError(
+        'plugin_enabled_persist_failed',
+        `插件 ${state.definition.id} 启停状态持久化失败：${err instanceof Error ? err.message : String(err)}`,
+        500,
+        { pluginId: state.definition.id, enabled, persistError: toJsonSafeError(err) },
+      );
+    }
   }
 
   private toManifest(entry: ActionEntry): ActionManifest {
@@ -1497,14 +1661,49 @@ export class PluginHost {
     }
   }
 
+  /**
+   * 停用/卸载前的在途任务闸门：tracker 任务 + 已启动服务声明的 liveTasks 标签
+   * 取并集，有任一即 409 拒绝（不进入 stop、不改持久开关）。liveTasks 异常或
+   * 返回非字符串数组时把异常/非法输出如实显式报错，绝不静默当空——插件声明
+   * 的保活检查坏了就必须修，不能靠猜放行。
+   */
   private assertNoLiveTasks(pluginId: string): void {
-    const n = this.tracker.activeCount(pluginId);
-    if (n > 0) {
+    const labels = this.tracker.activeLabels(pluginId);
+    const state = this.plugins.get(pluginId);
+    if (state) {
+      for (const svc of state.services) {
+        if (!svc.started || svc.liveTasks === undefined) continue;
+        let declared: string[];
+        try {
+          declared = svc.liveTasks();
+        } catch (err) {
+          throw new HelmError(
+            'plugin_live_tasks_check_failed',
+            `插件 ${pluginId} 服务 ${svc.id} 的 liveTasks 检查抛出异常，拒绝停用/卸载`,
+            500,
+            { pluginId, serviceId: svc.id, error: toJsonSafeError(err) },
+          );
+        }
+        if (
+          !Array.isArray(declared) ||
+          declared.some((item) => typeof item !== 'string')
+        ) {
+          throw new HelmError(
+            'plugin_live_tasks_check_failed',
+            `插件 ${pluginId} 服务 ${svc.id} 的 liveTasks 必须返回字符串数组，实际：${Object.prototype.toString.call(declared)}`,
+            500,
+            { pluginId, serviceId: svc.id, returned: String(declared) },
+          );
+        }
+        labels.push(...declared);
+      }
+    }
+    if (labels.length > 0) {
       throw new HelmError(
         'plugin_has_live_tasks',
-        `插件 ${pluginId} 仍有 ${n} 个在途任务（${this.tracker.activeLabels(pluginId).join(', ')}），拒绝停用/卸载`,
+        `插件 ${pluginId} 仍有 ${labels.length} 个在途任务（${labels.join(', ')}），拒绝停用/卸载`,
         409,
-        { pluginId, activeTasks: this.tracker.activeLabels(pluginId) },
+        { pluginId, activeTasks: labels },
       );
     }
   }

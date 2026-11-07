@@ -5,6 +5,8 @@
  *   只更新本插件键，保留其他插件与其他顶层键）；
  * - secret 字段（schema `secret: true`）→ credentials.json `pluginSecrets`
  *   （CredentialService，恒 0600，绝不落入 config.json）；
+ * - 插件启停状态 → config.json `pluginEnabled` 映射（与 `plugins` 配置、
+ *   credentials 完全分离；缺失表示从未持久化过，交由 PluginHost 回落到声明值）；
  * - `get` 同步返回两侧合并的有效配置（load 时预热内存镜像，写路径同步维持）；
  * - `set` 按 schema 完整校验（未知字段 / 类型 / required / default 固化）；
  * - 凭据或配置文件损坏时 `load()` 显式上抛（open 失败），绝不 catch 吞错后
@@ -40,12 +42,14 @@ interface Mirror {
   plain: Map<string, Record<string, unknown>>
   /** credentials.json pluginSecrets.<id>。 */
   secrets: Map<string, Record<string, string>>
+  /** config.json pluginEnabled 映射（布尔；缺项 = 从未持久化）。 */
+  enabled: Map<string, boolean>
 }
 
 export class HelmPluginConfigStore implements PluginConfigStore {
   private readonly configService: ConfigService
   private readonly credentialService: CredentialService
-  private readonly mirror: Mirror = { plain: new Map(), secrets: new Map() }
+  private readonly mirror: Mirror = { plain: new Map(), secrets: new Map(), enabled: new Map() }
   /** 写路径串行化（进程内）；文件层另有 ConfigService/CredentialService 各自锁。 */
   private writeChain: Promise<unknown> = Promise.resolve()
 
@@ -67,6 +71,26 @@ export class HelmPluginConfigStore implements PluginConfigStore {
       }
       for (const [id, value] of Object.entries(plugins)) {
         if (isPlainObject(value)) this.mirror.plain.set(id, { ...value })
+      }
+    }
+    const pluginEnabled = cfg['pluginEnabled']
+    if (pluginEnabled !== undefined) {
+      if (!isPlainObject(pluginEnabled)) {
+        throw new HelmError(
+          'config_corrupt',
+          'config.json pluginEnabled 字段结构非法（应为 pluginId → 布尔 对象）',
+          500,
+        )
+      }
+      for (const [id, value] of Object.entries(pluginEnabled)) {
+        if (typeof value !== 'boolean') {
+          throw new HelmError(
+            'config_corrupt',
+            `config.json pluginEnabled.${id} 必须是布尔值（实际：${typeof value}）`,
+            500,
+          )
+        }
+        this.mirror.enabled.set(id, value)
       }
     }
     const store = await this.credentialService.readStore()
@@ -141,5 +165,39 @@ export class HelmPluginConfigStore implements PluginConfigStore {
     if (Object.keys(nextSecrets).length > 0) {
       this.mirror.secrets.set(pluginId, { ...(this.mirror.secrets.get(pluginId) ?? {}), ...nextSecrets })
     }
+  }
+
+  /** 插件启停状态读取（同步缓存；undefined = 从未持久化）。 */
+  getEnabled(pluginId: string): boolean | undefined {
+    return this.mirror.enabled.get(pluginId)
+  }
+
+  /**
+   * 持久化插件启停状态：写 config.json pluginEnabled.<pluginId>（只更新本键，
+   * 保留其他插件启停与全部既有键），成功后同步镜像。写失败显式抛出，镜像
+   * 不变（下次 getEnabled 仍返回旧值，与磁盘一致）。
+   */
+  async setEnabled(pluginId: string, enabled: boolean): Promise<void> {
+    if (typeof enabled !== 'boolean') {
+      throw new HelmError(
+        'validation_error',
+        `插件 ${pluginId} 启停状态必须是布尔值（实际：${typeof enabled}）`,
+        400,
+        { pluginId },
+      )
+    }
+    const task = this.writeChain.then(() => this.applyEnabled(pluginId, enabled))
+    this.writeChain = task.catch(() => undefined)
+    return task
+  }
+
+  private async applyEnabled(pluginId: string, enabled: boolean): Promise<void> {
+    const current = await this.configService.get()
+    const existing = isPlainObject(current['pluginEnabled']) ? current['pluginEnabled'] : {}
+    await this.configService.update({
+      ...current,
+      pluginEnabled: { ...existing, [pluginId]: enabled },
+    })
+    this.mirror.enabled.set(pluginId, enabled)
   }
 }
