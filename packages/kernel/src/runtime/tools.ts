@@ -51,7 +51,8 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { int, obj, opt, str } from '@earendil-works/pi-schema'
 import { lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
-import { delimiter as pathDelimiter, posix, win32 } from 'node:path'
+import { posix, win32 } from 'node:path'
+import { composeExecutionEnv } from '../env/scoped-env.js'
 import { redactJsonValue } from '../redact.js'
 import type { HelmToolDeps } from './tool-deps.js'
 
@@ -368,47 +369,9 @@ export function buildToolEnv(
   extraEnv?: Record<string, string>,
   nodeId: string = 'local',
 ): Record<string, string> {
-  const managed = buildManagedEnv(deps, cwd, conversationId, nodeId)
-  if (nodeId === 'local') {
-    // local：bash 等本机工具继承 process.env（PATH/HOME 等宿主环境）；调用方
-    // 注入的 extraEnv（如 herdr 插件组装的 Profile.runtime.env + 管理环境）
-    // 覆盖基底，受管变量最后固定覆盖（HELM_CWD/HELM_TOKEN 等不可被外部注入
-    // 劫持）。process.env 值类型含 undefined：逐项拷贝真实字符串，跳过空值项。
-    const env: Record<string, string> = {}
-    for (const [key, value] of Object.entries(process.env)) {
-      if (value !== undefined) env[key] = value
-    }
-    // helm CLI 包装目录前置注入 PATH（受管子进程可直接运行 helm）；
-    // 分隔符用 path.delimiter（Windows 宿主为 ';'，不硬编码 ':'）。
-    if (deps.cliBinDir !== undefined) {
-      env['PATH'] = `${deps.cliBinDir}${env['PATH'] !== undefined ? pathDelimiter + env['PATH'] : ''}`
-    }
-    if (extraEnv !== undefined) Object.assign(env, extraEnv)
-    Object.assign(env, managed)
-    // 无受管 token 时剥除一切来源的 HELM_TOKEN（宿主继承与 extraEnv 注入均不透传）。
-    // Windows 环境变量名大小写不敏感：helm_token / Helm_Token 同名变体一并剥除
-    //（统一按大写比较；受管 token 随后固定覆写权威值）。
-    if (!('HELM_TOKEN' in managed)) {
-      for (const key of Object.keys(env)) {
-        if (key.toUpperCase() === 'HELM_TOKEN') delete env[key]
-      }
-    }
-    return env
-  }
-  // 远端节点：绝不携带 Hub 宿主 process.env，也绝不合成默认 PATH——节点
-  // 守护进程自身合并节点宿主基底（真实 PATH/HOME 工具链，含 daemon 已前置
-  // 的本机 helm bin）并剥除节点宿主 HELM_TOKEN，再叠加逐调用 extraEnv 与受管
-  // 绑定键；Hub 侧合成默认 PATH 会覆盖节点真实工具链（helm command not found
-  // 的真实根因）。无受管 token 时不注入 HELM_TOKEN（宿主凭据绝不跨节点泄漏）。
-  const env: Record<string, string> = { ...(extraEnv ?? {}) }
-  Object.assign(env, managed)
-  // 大小写变体一并剥除（Windows env 名大小写不敏感；无受管 token 时绝不透传）。
-  if (!('HELM_TOKEN' in managed)) {
-    for (const key of Object.keys(env)) {
-      if (key.toUpperCase() === 'HELM_TOKEN') delete env[key]
-    }
-  }
-  return env
+  return composeExecutionEnv(nodeId, buildManagedEnv(deps, cwd, conversationId, nodeId), extraEnv, {
+    cliBinDir: deps.cliBinDir,
+  })
 }
 
 /**

@@ -55,11 +55,28 @@ const MANAGED_ENV_NAMES = new Set([
   'HELM_TOKEN',
 ])
 
-/** 大小写不敏感的 HELM_TOKEN 变体剥除（无受管 token 时绝不透传任何来源）。 */
-function deleteTokenVariants(env: Record<string, string>): void {
-  for (const key of Object.keys(env)) {
-    if (key.toUpperCase() === 'HELM_TOKEN') delete env[key]
+/** Scoped 环境与本机直接执行共用的合成机制；调用方仅提供受管策略产物。 */
+export function composeExecutionEnv(
+  nodeId: string,
+  composed: Record<string, string>,
+  perCall: Record<string, string> = {},
+  options: { inheritEnv?: boolean; cliBinDir?: string } = {},
+): Record<string, string> {
+  const env: Record<string, string> = {}
+  if (nodeId === 'local' && options.inheritEnv !== false) {
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined && !MANAGED_ENV_NAMES.has(key.toUpperCase())) env[key] = value
+    }
   }
+  const boundNames = new Set([...MANAGED_ENV_NAMES, ...Object.keys(composed).map((key) => key.toUpperCase())])
+  for (const [key, value] of Object.entries(perCall)) {
+    if (!boundNames.has(key.toUpperCase())) env[key] = value
+  }
+  Object.assign(env, composed)
+  if (nodeId === 'local' && options.cliBinDir) {
+    env['PATH'] = `${options.cliBinDir}${env['PATH'] !== undefined ? pathDelimiter + env['PATH'] : ''}`
+  }
+  return env
 }
 
 export function createScopedExecutionEnv(
@@ -74,61 +91,21 @@ export function createScopedExecutionEnv(
     options: ShellExecOptions | undefined,
     context: Context,
   ): Promise<Result<ShellExecResult, ExecutionError>> => {
-    let merged: Record<string, string> | undefined = options?.env
-    let composedToken = false
-    if (composer !== undefined) {
-      // 现场合成（fresh per exec）：不缓存，天然免疫跨会话快照泄漏。
-      const composed = await composer({
-        nodeId: target.nodeId,
-        cwd: target.cwd,
-        ...(target.conversationId === undefined ? {} : { conversationId: target.conversationId }),
-      })
-      composedToken = Object.hasOwn(composed, 'HELM_TOKEN')
-      const perCall = options?.env ?? {}
-      // 绑定键以 composer 为准（逐调用同名键不可覆盖——防伪造作用域），
-      // 其余键由逐调用 env 正常补充。
-      const supplemented: Record<string, string> = { ...perCall }
-      const boundNames = new Set([...MANAGED_ENV_NAMES, ...Object.keys(composed).map((key) => key.toUpperCase())])
-      for (const key of Object.keys(supplemented)) {
-        if (boundNames.has(key.toUpperCase())) delete supplemented[key]
-      }
-      for (const [key, value] of Object.entries(composed)) supplemented[key] = value
-      merged = supplemented
-    }
-    if (target.nodeId === 'local') {
-      // local 继承宿主 process.env（真实 PATH/HOME 工具链），但受管变量
-      // （HELM_TOKEN / HELM_CONVERSATION_ID / HELM_CWD / HELM_ENV 等）按
-      // 大小写不敏感剥除：无会话作用域时不借用宿主值（fail-closed），
-      // 有作用域时受管值由 composer 最后固定覆写。
-      const host: Record<string, string> = {}
-      if (options?.inheritEnv !== false) {
-        for (const [key, value] of Object.entries(process.env)) {
-          if (value === undefined) continue
-          if (MANAGED_ENV_NAMES.has(key.toUpperCase())) continue
-          host[key] = value
-        }
-      }
-      merged = { ...host, ...merged }
-      // helm CLI 包装目录前置注入 PATH（分隔符按宿主平台，不硬编码 ':'）。
-      const binDir = cliBinDir?.()
-      if (binDir !== undefined && binDir !== '') {
-        merged['PATH'] = `${binDir}${merged['PATH'] !== undefined ? pathDelimiter + merged['PATH'] : ''}`
-      }
-      // composer 未提供受管 token：剥除一切来源（宿主继承与逐调用注入）
-      // 的大小写变体——绝不透传宿主凭据。
-      if (!composedToken) deleteTokenVariants(merged)
-    } else if (!composedToken) {
-      // 远端同样不透传任何 HELM_TOKEN 变体（宿主凭据绝不跨节点泄漏）。
-      const perCall = { ...(merged ?? {}) }
-      deleteTokenVariants(perCall)
-      merged = perCall
-    }
+    const composed = composer === undefined ? {} : await composer({
+      nodeId: target.nodeId,
+      cwd: target.cwd,
+      ...(target.conversationId === undefined ? {} : { conversationId: target.conversationId }),
+    })
+    const merged = composeExecutionEnv(target.nodeId, composed, options?.env, {
+      inheritEnv: options?.inheritEnv,
+      cliBinDir: cliBinDir?.(),
+    })
     return base.exec(
       command,
       {
         ...(options === undefined ? {} : options),
         ...(target.nodeId === 'local' ? { inheritEnv: false } : {}),
-        ...(merged === undefined || Object.keys(merged).length === 0 ? {} : { env: merged }),
+        env: merged,
       },
       context,
     )
