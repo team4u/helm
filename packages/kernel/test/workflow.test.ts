@@ -7,7 +7,8 @@
  * - meta 纯字面量边界（插值/变量/超时）；
  * - pipeline 无屏障（早 item 进 stage2 无需等全部 stage1）；并发上限；
  * - agent schema 校验失败与 gate 恰好执行一次；
- * - journal 前缀重放命中与失配断链；action completed 不重跑、started 无终态
+ * - journal 前缀重放命中与失配断链（resumed 行同按 index+key 逐项匹配，副作用零重复；
+ *   伪造 resumed 标记的不一致行拒绝作缓存）；action completed 不重跑、started 无终态
  *   显式 workflow_action_uncertain、action 写失败 fatal、重放补记失败 fatal；
  * - 非法 action JSON 拒绝；service 级 run/wait/abort/getRun/恢复语义；
  * - 失败终态统一写 record（坏 meta / state flush 故障不留假 running、无 unhandled）；
@@ -524,7 +525,11 @@ describe('workflow journal replay (agent)', () => {
     assert.deepEqual(result.value, { a: 1 })
   })
 
-  it('journal carrying resumed entries is declined wholesale', timeout, async () => {
+  it('inconsistent journal line (plain agent key falsely marked resumed:true) is rejected as cache and runs live', timeout, async () => {
+    // 普通调用（keyInput 无 resume）的账本行不可能携带 resumed:true：这是
+    // 伪造/不一致 fixture，不得当合法缓存复用。注意：真正的 resume 调用行
+    // （key 含 resume 槽）已合法参与逐项前缀匹配（见 workflow-resume-replay
+    // 套件的副作用零重复回归），不再整段禁用重放。
     const key = agentJournalKey({ prompt: 'p' })
     const entries: WorkflowJournalEntry[] = [
       { v: 1, seq: 0, type: 'agent', index: 0, key, ok: true, text: 'x', resumed: true },
@@ -542,7 +547,9 @@ describe('workflow journal replay (agent)', () => {
       journal: { entries, append: () => {} },
     })
     assert.equal(result.status, 'completed')
-    assert.equal(spawns, 1, 'resumed journal declines replay entirely')
+    assert.equal(result.value, 'ok:p', 'live result, not the forged cached text')
+    assert.equal(spawns, 1, 'inconsistent resumed mark must not be replayed as cache')
+    assert.equal(result.replayedCount, 0)
   })
 })
 

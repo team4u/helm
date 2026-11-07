@@ -105,7 +105,7 @@ export type WorkflowJournalEntry =
       key: string
       ok: boolean
       text?: string
-      /** 该调用续接了既有子会话（agent({ resume })）；携带此标记的账本整体不再重放。 */
+      /** 该调用续接了既有子会话（agent({ resume })）；重放时同其他行一样按 index+key 逐项匹配。 */
       resumed?: true
     }
   | {

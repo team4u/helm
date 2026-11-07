@@ -64,6 +64,8 @@ export interface AgentJournalKeyInput {
   agentType?: string
   effort?: string
   isolation?: string
+  /** gate 验收命令：命令变化即不同调用，不得命中旧缓存。固定槽不与无标签变长槽互撞。 */
+  gate?: string
   resume?: string
   /** agent({ schema }) 的序列化形式。 */
   schema?: string
@@ -77,8 +79,9 @@ export function agentJournalKey(input: AgentJournalKeyInput): string {
     input.agentType ?? null,
     input.effort ?? null,
     input.isolation ?? null,
+    input.gate ?? null,
     input.resume ?? null,
-    // 仅存在时追加：无条件加第九槽会改变既有账本的 canonical 形式。
+    // 仅存在时追加：无条件加第十槽会改变既有账本的 canonical 形式。
     ...(input.schema !== undefined ? [input.schema] : []),
   ])
   return createHash('sha256').update(canonical).digest('hex').slice(0, 32)

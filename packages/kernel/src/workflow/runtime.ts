@@ -7,6 +7,10 @@
  *   终态行落盘后才 resolve 调用 promise；任一写失败即 fatal（不可在无法记账
  *   的状态下继续执行副作用）。恢复时 started 无终态由上层显式报
  *   `workflow_action_uncertain`，绝不自动重跑。
+ * - 前缀重放逐项匹配（index+key+kind+ok）：resumed 行不再整体禁用前缀，
+ *   已确认成功的 action/agent 一律复用，副作用零重复。缓存子结果可作为同一
+ *   脚本后续 resume 调用的前缀来源，但无活会话：前缀失配后需要真正续接时
+ *   显式失败，绝不伪造 live 续接。
  * - spawn 接缝面向 helm `WorkflowServiceHost`（agent_spawn 钩子管道的注入式
  *   适配在 service.ts），runtime 本体保持零内核依赖、可独立测试。
  * - worker 线程 + vm 双层边界：terminate 可杀死循环脚本；vm 禁动态代码生成与
@@ -368,6 +372,12 @@ interface CompletedChild {
   agentType: string
   model?: string
   isolation?: 'worktree'
+  /**
+   * 该 child 来自账本缓存（replayed）：只有文本结果，无活会话可续接。
+   * 后续 agent({ resume }) 命中账本时可直接返回缓存文本，但前缀失配后
+   * 需要真正续接时必须显式失败，绝不伪造 live 续接。
+   */
+  replayed?: true
 }
 
 function applySchema(result: WorkflowSpawnResult, compiled: CompiledSchema): WorkflowSpawnResult {
@@ -455,8 +465,10 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
   const journalEntries = options.journal?.entries ?? []
   const appendJournal = options.journal?.append
   const redactText = options.redact ?? ((text: string) => text)
-  const journalResumes = journalEntries.some((entry) => entry.type === 'agent' && entry.resumed)
-  let prefixIntact = journalEntries.length > 0 && !journalResumes
+  // 含 resumed 行的账本不再整体禁用前缀：resume 调用与其他调用一样按
+  // index+key+kind+ok 逐项匹配。曾经的全局禁用会让一次 resume 污染整段
+  // 已确认成功的 action/agent，全部 live 重跑——副作用重复执行。
+  let prefixIntact = journalEntries.length > 0
   let replayedCount = 0
 
   /** index → 该位次的终态行（agent 或 action；started 行不参与前缀匹配）。 */
@@ -656,6 +668,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           )
           return
         }
+        // （缓存子上下文的续接守卫在 replayAt 之后：失配只有到本调用匹配时才可判定。）
       }
 
       let compiledSchema: CompiledSchema | undefined
@@ -712,10 +725,22 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         agentType: payload.agentType,
         effort: payload.effort,
         isolation: payload.isolation,
+        gate: payload.gate,
         resume: payload.resume,
         schema: payload.schema !== undefined ? JSON.stringify(payload.schema) : undefined,
       }
       let replayed = replayAt(index, agentJournalKey(keyInput), 'agent')
+      // 伪造/不一致的缓存行拒绝：resumed 标记必须与本次调用是否 resume 严格
+      // 对应（引擎只在真实 resume 调用时落该标记）。任一方向的不一致都不当
+      // 合法缓存，按失配断链转 live。
+      if (
+        replayed !== undefined &&
+        replayed.type === 'agent' &&
+        replayed.resumed === true !== (payload.resume !== undefined)
+      ) {
+        prefixIntact = false
+        replayed = undefined
+      }
       if (replayed !== undefined && compiledSchema !== undefined) {
         const recheck = applySchema({ ok: true, text: replayed.type === 'agent' ? replayed.text ?? '' : '' }, compiledSchema)
         if (!recheck.ok) {
@@ -726,6 +751,17 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       if (replayed !== undefined && replayed.type === 'agent') {
         replayedCount++
         const replayedText = replayed.text ?? ''
+        // 缓存节点也登记为可 resume 的 child（标 replayed）：同一脚本内后续
+        // 匹配账本的 resume 调用可直接返回缓存文本；但它无活会话，前缀失配
+        // 后需要真正续接时由上方 replayed 守卫显式失败。
+        completedByLabel.set(label, {
+          agentId,
+          label,
+          agentType,
+          ...(model !== undefined ? { model } : {}),
+          ...(isolation !== undefined ? { isolation } : {}),
+          replayed: true,
+        })
         const at = Date.now()
         emit([
           {
@@ -740,8 +776,31 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           },
         ])
         openLaunches.delete(callId)
-        await recordAgent({ index, key: replayed.key, ok: true, text: replayedText })
+        // 缓存分支记账保留 resumed 标记：原始调用是 resume 的，新账本必须如实。
+        await recordAgent({
+          index,
+          key: replayed.key,
+          ok: true,
+          text: replayedText,
+          ...(replayed.resumed === true ? { resumed: true } : {}),
+        })
         respond(callId, true, replayedText)
+        return
+      }
+
+      // 前缀失配（含本调用新增导致账本无此位次）而 resume 目标只存在于缓存子
+      // 结果：无活会话可续接。显式失败，绝不伪造续接、也不重跑之前 action
+      // 重建上下文。
+      if (resumed?.replayed === true) {
+        respond(
+          callId,
+          false,
+          undefined,
+          `agent() opts.resume: "${payload.resume}" only exists as a replayed (cached) context with no live ` +
+            'conversation in this run to continue; a replayed context cannot be resumed. ' +
+            'Re-run the workflow without resumeFromRunId.',
+          true,
+        )
         return
       }
 
