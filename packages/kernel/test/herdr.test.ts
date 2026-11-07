@@ -290,6 +290,7 @@ function agentInfoOf(pane: PaneState) {
     tab_id: pane.tabId,
     workspace_id: pane.workspaceId,
     agent_status: pane.agentStatus,
+    interactive_ready: pane.agentStatus !== 'unknown',
     state_change_seq: pane.seq,
     cwd: pane.cwd,
     ...(pane.name !== undefined ? { name: pane.name } : {}),

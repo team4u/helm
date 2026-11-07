@@ -293,6 +293,7 @@ function agentInfoOf(pane: PaneState) {
     tab_id: pane.tabId,
     workspace_id: pane.workspaceId,
     agent_status: pane.agentStatus,
+    interactive_ready: pane.agentStatus !== 'unknown',
     state_change_seq: pane.seq,
     cwd: pane.cwd,
     ...(pane.launchPending !== undefined ? { launch_pending: pane.launchPending } : {}),
@@ -512,6 +513,8 @@ test('默认 transport：生产工厂真实注入执行器，经真实 UDS wire 
   mkdirSync(join(dir, '.helm'), { recursive: true })
   const socketPath = join(dir, 'herdr.sock')
   let seq = 1
+  let agentName = ''
+  const wireAgent = () => ({ pane_id: 'w1:p1', tab_id: 'w1:t1', workspace_id: 'w1', name: agentName, agent_status: 'idle', interactive_ready: true, state_change_seq: seq++ })
   const clients = new Set<Socket>()
   /** 真实 herdr wire fixture：一连接一请求 NDJSON（协议验证，不冒充模型 E2E）。 */
   const server = createServer((socket) => {
@@ -537,7 +540,11 @@ test('默认 transport：生产工厂真实注入执行器，经真实 UDS wire 
             }
             break
           case 'agent.start':
-            result = { type: 'agent_started', argv: [], agent: { pane_id: 'w1:p1', tab_id: 'w1:t1', workspace_id: 'w1', agent_status: 'idle', state_change_seq: seq++ } }
+            agentName = String(request.params['name'])
+            result = { type: 'agent_started', argv: [], agent: wireAgent() }
+            break
+          case 'agent.get':
+            result = { type: 'agent_info', agent: wireAgent() }
             break
           case 'agent.prompt': {
             const fileName = fileNameOf(request.params['text'] as string)
@@ -1321,4 +1328,30 @@ test('审批墓碑在权威 seq 回退时同样失效', { timeout: 60_000 }, asy
   asks.settle(begun.owner, { keysSent: true })
   asks.observeAuthority({ paneId: 'w1:p1', seq: 4, status: 'blocked' })
   assert.equal(asks.get(undefined, 'w1:p1', 5), undefined)
+})
+
+test('idle 但 interactive_ready 缺省 false 时继续等待，不重复投递 prompt', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    scriptSuccess(env, 'ready')
+    const original = env.transport.call.bind(env.transport)
+    const transport: HerdrTransport = env.transport
+    let polls = 0
+    transport.call = async (target, method, params, options) => {
+      if (method === 'agent.prompt') assert.ok(polls >= 3, '实际输入前须确认 interactive_ready')
+      const result = await original(target, method, params)
+      if (['agent.start', 'agent.wait', 'agent.get'].includes(method)) {
+        const response = result as { agent: Record<string, unknown> }
+        if (method === 'agent.get') polls += 1
+        if (polls < 3) {
+          response.agent['agent_status'] = 'idle'
+          response.agent['launch_pending'] = true
+          delete response.agent['interactive_ready']
+        }
+      }
+      return result
+    }
+    assert.equal(await spawnDirect(env, { agentType: 'herdr:pi' }), 'ready')
+    assert.equal(env.transport.calls.filter((call) => call.method === 'agent.prompt').length, 1)
+  } finally { await env.close() }
 })

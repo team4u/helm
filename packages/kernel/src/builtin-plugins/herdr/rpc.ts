@@ -37,6 +37,8 @@ export interface HerdrAgentInfo {
   stateChangeSeq: number
   /** 真实启动序列：agent.start 后短暂 unknown + launch_pending（服务端实测）。 */
   launchPending?: boolean
+  /** 官方字段省略时为 false；idle 本身不足以接受 prompt。 */
+  interactiveReady: boolean
   focused?: boolean
   cwd?: string
   foregroundCwd?: string
@@ -197,6 +199,7 @@ function parseAgentInfo(agent: unknown, method: string): HerdrAgentInfo {
     agentStatus: parseStatus(agent['agent_status'], method),
     stateChangeSeq: parseSeq(agent['state_change_seq'], method),
     launchPending: optBool(agent, 'launch_pending'),
+    interactiveReady: optBool(agent, 'interactive_ready') ?? false,
     focused: optBool(agent, 'focused'),
     cwd: optString(agent, 'cwd'),
     foregroundCwd: optString(agent, 'foreground_cwd'),

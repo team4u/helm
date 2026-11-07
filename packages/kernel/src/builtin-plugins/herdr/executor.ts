@@ -324,9 +324,8 @@ export class HerdrExecutor {
       )
       return probe
     }
-    if (started.agentStatus === 'idle' || started.agentStatus === 'blocked' || started.agentStatus === 'working') {
-      return started
-    }
+    if (started.agentStatus === 'blocked') return started
+    if (started.interactiveReady && (started.agentStatus === 'idle' || started.agentStatus === 'done')) return started
     // unknown（launch_pending 真实阶段）或 done（极快完成）：等权威就绪。
     const ready = await this.transport.call(
       target,
@@ -334,7 +333,18 @@ export class HerdrExecutor {
       { target: paneId, until: ['idle', 'blocked', 'done', 'working'], timeout_ms: this.host.startupTimeoutMs() },
       { signal },
     )
-    return parseAgentResult(ready, 'agent.wait', 'agent_info')
+    return this.waitInteractiveReady(target, paneId, parseAgentResult(ready, 'agent.wait', 'agent_info'), signal)
+  }
+
+  private async waitInteractiveReady(target: HerdrTarget, paneId: string, initial: HerdrAgentInfo, signal?: AbortSignal): Promise<HerdrAgentInfo> {
+    const deadline = Date.now() + this.host.startupTimeoutMs()
+    let info = initial
+    while (info.agentStatus !== 'blocked' && !(info.interactiveReady && (info.agentStatus === 'idle' || info.agentStatus === 'done'))) {
+      if (Date.now() >= deadline) throw new HelmError('herdr_startup_timeout', `pane ${paneId} 未在启动期限内具备 interactive_ready`, 504)
+      await delay(100, undefined, { signal })
+      info = await this.agentGet(target, paneId, signal)
+    }
+    return info
   }
 
   /** 权威 agent.get（seq 唯一可信来源）。 */
@@ -424,9 +434,13 @@ export class HerdrExecutor {
       request.signal?.throwIfAborted()
       request.onResolved?.(this.executionInfoOf(pane))
       if (start !== undefined) {
-        const info = await this.startAgentAndWaitReady(pane.target, pane.paneId, start, request.signal)
+        let info = await this.startAgentAndWaitReady(pane.target, pane.paneId, start, request.signal)
         this.unstartedPanes.delete(this.paneKey(pane))
-        await this.waitUntilSettled(request, pane, info)
+        for (;;) {
+          await this.waitUntilSettled(request, pane, info)
+          info = await this.waitInteractiveReady(pane.target, pane.paneId, await this.agentGet(pane.target, pane.paneId, request.signal), request.signal)
+          if (info.agentStatus !== 'blocked') break
+        }
       }
       return this.driveTask(request, pane)
     }
