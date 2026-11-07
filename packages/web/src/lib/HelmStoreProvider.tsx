@@ -1,7 +1,8 @@
 import * as React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ActionManifest, ArtifactMetadata, ConversationDetail, HelmEventFrame, HelmSnapshot, Profile, ProviderConfig, SkillSummary } from '@helm/protocol'
-import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, pluginsApi, setStoredToken, workflowsApi, type CredentialStatus, type ModelDescriptor, type SavedWorkflowSummary } from './api.js'
+import { ROOT_CONVERSATION_ID } from '@helm/protocol'
+import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, pluginsApi, setStoredToken, workflowsApi, type CredentialSummary, type ModelDescriptor, type SavedWorkflowSummary } from './api.js'
 import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, SseParser, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
 import { groupUiContributions, resolveTargetString, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
@@ -38,11 +39,11 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [models, setModels] = useState<ModelDescriptor[]>([])
   const [providers, setProviders] = useState<ProviderConfig[]>([])
-  const [credentials, setCredentials] = useState<CredentialStatus[]>([])
+  const [credentials, setCredentials] = useState<CredentialSummary[]>([])
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [actions, setActions] = useState<ActionManifest[]>([])
   const [savedWorkflows, setSavedWorkflows] = useState<SavedWorkflowSummary[]>([])
-  const [primaryTarget, setPrimaryTarget] = useState<ResolvedTarget>({ kind: 'conversation', conversationId: 1 })
+  const [primaryTarget, setPrimaryTarget] = useState<ResolvedTarget>({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
   const [splitTarget, setSplitTarget] = useState<ResolvedTarget | null>(null)
   const [workbenchOpen, setWorkbenchOpen] = useState(false)
   const [workbenchTab, setWorkbenchTab] = useState('tasks')
@@ -150,7 +151,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     setSseConnected(false)
     setActiveModal(null)
     setSplitTarget(null)
-    setPrimaryTarget({ kind: 'conversation', conversationId: 1 })
+    setPrimaryTarget({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
     updateLive(emptyLiveState)
     setConversationArtifacts({})
     setLoadErrors({})
@@ -373,7 +374,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
             }
             if (event.type === 'conversation.deleted' && 'conversationId' in event) {
               const id = event.conversationId
-              setPrimaryTarget((current) => current.kind === 'conversation' && current.conversationId === id ? { kind: 'conversation', conversationId: 1 } : current)
+              setPrimaryTarget((current) => current.kind === 'conversation' && current.conversationId === id ? { kind: 'conversation', conversationId: ROOT_CONVERSATION_ID } : current)
               setSplitTarget((current) => current?.kind === 'conversation' && current.conversationId === id ? null : current)
               setConversationArtifacts((prev) => { const next = { ...prev }; delete next[id]; return next })
             }
@@ -403,11 +404,19 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   }, [authenticated, logout, loadConversationDetail, loadConversationArtifacts, reportLoad, pushNotice, refreshAssets, updateLive])
 
   const groupedUi = useMemo(() => groupUiContributions(live.uiContributions), [live.uiContributions])
-  const store: HelmStoreValue = {
-    ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
-    groupedUi, savedWorkflows, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-    setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
-  }
+  // Context value 需引用稳定：任何一处局部状态变化都不应触发全量消费组件重渲染。
+  const store: HelmStoreValue = useMemo(
+    () => ({
+      ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
+      groupedUi, savedWorkflows, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
+      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+    }),
+    [
+      live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
+      groupedUi, savedWorkflows, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
+      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+    ],
+  )
   useEffect(() => {
     const shared = { React, useHelmStore, usePluginDoc }
     ;(window as unknown as Record<string, unknown>).__HELM_SHARED__ = shared

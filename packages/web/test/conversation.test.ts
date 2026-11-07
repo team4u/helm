@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationEntry, ConversationLive } from '@helm/protocol'
+import { conversationsApi, ApiClientError } from '../src/lib/api.js'
 import {
   buildTimelineItems,
   detectArtifactRef,
@@ -351,4 +352,61 @@ test('lastHumanTextOf 与格式化工具', { timeout: 60_000 }, () => {
   assert.equal(formatDurationMs(1500), '1.5s')
   assert.equal(formatDurationMs(125_000), '2m5s')
   assert.equal(formatDurationMs(undefined), '')
+})
+
+// ---------------------------------------------------------------------------
+// fork 请求体：entryId 必须转换为正整数（契约 ConversationForkRequest）
+// ---------------------------------------------------------------------------
+
+interface CapturedRequest {
+  path: string
+  body: unknown
+}
+
+/** 拦截全局 fetch，捕获 conversationsApi.fork 发出的请求体（测试结束后自动还原）。 */
+function stubFetchOnce(t: { after: (fn: () => void) => void }, reply: () => object): CapturedRequest[] {
+  const captured: CapturedRequest[] = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    captured.push({
+      path: String(input),
+      body: init?.body !== undefined ? (JSON.parse(String(init.body)) as unknown) : undefined,
+    })
+    return new Response(JSON.stringify(reply()), { status: 201, headers: { 'Content-Type': 'application/json' } })
+  }) as typeof fetch
+  t.after(() => {
+    globalThis.fetch = originalFetch
+  })
+  return captured
+}
+
+test('fork 将字符串 entryId 转换为正整数请求体，不再发送数字字符串', { timeout: 60_000 }, async (t) => {
+  const forked = { id: 42, title: '分叉', profileId: 'assistant', tags: [], cwd: '/tmp', model: 'zhipu/glm-4.6', status: 'idle', stateChangeSeq: 1, completionSeq: 1, unread: false, pinned: false, pendingAskCount: 0, createdAt: 1, updatedAt: 1 }
+  const captured = stubFetchOnce(t, () => forked)
+
+  // ConversationEntry.id 是数字字符串（如 '3'），旧实现直接透传导致后端 400
+  await conversationsApi.fork(7, '3')
+  assert.equal(captured.length, 1)
+  assert.equal(captured[0]!.path, '/api/conversations/7/fork')
+  assert.deepEqual(captured[0]!.body, { entryId: 3 })
+  assert.equal(typeof (captured[0]!.body as { entryId: number }).entryId, 'number')
+
+  // number 入参同样合法；title 仅在非空时携带
+  await conversationsApi.fork(7, 5, '自定义标题')
+  assert.deepEqual(captured[1]!.body, { entryId: 5, title: '自定义标题' })
+  await conversationsApi.fork(7, 5, '  ')
+  assert.deepEqual(captured[2]!.body, { entryId: 5 })
+})
+
+test('fork 对非法 entryId 显式抛错，不发出请求', { timeout: 60_000 }, async (t) => {
+  const captured = stubFetchOnce(t, () => ({ ok: true }))
+  for (const bad of ['abc', '0', '-3', '', Number.NaN]) {
+    await assert.rejects(async () => conversationsApi.fork(7, bad as string), (err: unknown) => {
+      assert.ok(err instanceof ApiClientError)
+      assert.equal(err.code, 'validation_error')
+      assert.equal(err.status, 400)
+      return true
+    })
+  }
+  assert.equal(captured.length, 0, '非法 entryId 不得发出任何请求')
 })

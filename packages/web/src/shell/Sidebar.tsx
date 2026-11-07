@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AskSpec, ConversationSummary } from '@helm/protocol'
+import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { asksApi, conversationsApi, ApiClientError } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { isSameResolvedTarget, resolveTargetString, type HelmStoreValue } from '../lib/types.js'
 import {
-  ARCHIVED_WORKER_TAG,
-  ROOT_CONVERSATION,
   buildSidebarGroups,
   conversationStatusBadgeClass,
   conversationStatusLabel,
@@ -309,11 +308,11 @@ function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
   )
 }
 
-/** 常驻工作台导航区（sidebar.item），含 #1 兜底。 */
+/** 常驻工作台导航区（sidebar.item），含根会话兜底。 */
 function WorkbenchNavItems({ store }: { store: HelmStoreValue }) {
   const hasRootItem = store.groupedUi.sidebarItems.some((item) => {
     const resolved = resolveTargetString(item.spec.target ?? '', store.conversations)
-    return resolved?.kind === 'conversation' && resolved.conversationId === ROOT_CONVERSATION
+    return resolved?.kind === 'conversation' && resolved.conversationId === ROOT_CONVERSATION_ID
   })
 
   const rows: Array<{
@@ -328,13 +327,13 @@ function WorkbenchNavItems({ store }: { store: HelmStoreValue }) {
       key: 'fallback-root',
       label: '个人助理',
       icon: 'sparkles',
-      target: { kind: 'conversation', conversationId: ROOT_CONVERSATION },
+      target: { kind: 'conversation', conversationId: ROOT_CONVERSATION_ID },
     })
   }
   for (const item of store.groupedUi.sidebarItems) {
     const resolved = resolveTargetString(item.spec.target ?? '', store.conversations)
     if (!resolved) continue
-    if (!hasRootItem && resolved.kind === 'conversation' && resolved.conversationId === ROOT_CONVERSATION) continue
+    if (!hasRootItem && resolved.kind === 'conversation' && resolved.conversationId === ROOT_CONVERSATION_ID) continue
     rows.push({ key: `${item.pluginId}/${item.spec.id}`, label: item.spec.label, icon: item.spec.icon, target: resolved })
   }
 
@@ -369,44 +368,81 @@ function WorkbenchNavItems({ store }: { store: HelmStoreValue }) {
   )
 }
 
-/** 插件动态会话分组区（sidebar.section）。 */
+/** 插件动态会话分组区（sidebar.section）：通用渲染，支持 collapsible / defaultCollapsed。 */
 function SidebarSectionGroups({ store }: { store: HelmStoreValue }) {
   const sections = store.groupedUi.sidebarSections.filter((s) => s.spec.filterTag)
   if (sections.length === 0) return null
   return (
     <>
-      {sections.map((section) => {
-        const tag = section.spec.filterTag as string
-        const convs = filterConversationsByTag(store.conversations, tag).sort(
-          (a, b) => b.updatedAt - a.updatedAt,
-        )
-        return (
-          <div key={`${section.pluginId}/${section.spec.id}`} className="sidebar-group">
-            <div className="sidebar-group-header">
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <HelmIcon name={section.spec.icon} size={12} />
-                {section.spec.label}
-              </span>
-              <span className="tabular-nums">{convs.length}</span>
-            </div>
-            {convs.map((conv) => (
-              <ConversationRow
-                key={conv.id}
-                conv={conv}
-                active={
-                  store.primaryTarget.kind === 'conversation' &&
-                  store.primaryTarget.conversationId === conv.id
-                }
-                onOpen={() => store.openTarget({ kind: 'conversation', conversationId: conv.id })}
-                onOpenSplit={() =>
-                  store.openTarget({ kind: 'conversation', conversationId: conv.id }, { split: true })
-                }
-              />
-            ))}
-          </div>
-        )
-      })}
+      {sections.map((section) => (
+        <SidebarSectionGroup key={`${section.pluginId}/${section.spec.id}`} store={store} section={section} />
+      ))}
     </>
+  )
+}
+
+/** 单个 sidebar.section 分组：声明 collapsible 时渲染可折叠头部与计数徽标。 */
+function SidebarSectionGroup({
+  store,
+  section,
+}: {
+  store: HelmStoreValue
+  section: HelmStoreValue['groupedUi']['sidebarSections'][number]
+}) {
+  const spec = section.spec
+  const tag = spec.filterTag as string
+  const convs = useMemo(
+    () => filterConversationsByTag(store.conversations, tag).sort((a, b) => b.updatedAt - a.updatedAt),
+    [store.conversations, tag],
+  )
+  const collapsible = spec.collapsible === true
+  const [open, setOpen] = useState(!collapsible || spec.defaultCollapsed !== true)
+
+  return (
+    <div className="sidebar-group">
+      {collapsible ? (
+        <button
+          type="button"
+          className="sidebar-group-header"
+          style={{ width: '100%', background: 'transparent', border: 'none', cursor: 'pointer' }}
+          title={open ? '收起分组' : '展开分组'}
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+            {spec.icon !== undefined && <HelmIcon name={spec.icon} size={12} />}
+            <span className="nav-item-label">{spec.label}</span>
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span className="badge badge-neutral tabular-nums">{convs.length}</span>
+            <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
+          </span>
+        </button>
+      ) : (
+        <div className="sidebar-group-header">
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <HelmIcon name={spec.icon} size={12} />
+            {spec.label}
+          </span>
+          <span className="tabular-nums">{convs.length}</span>
+        </div>
+      )}
+      {open &&
+        convs.map((conv) => (
+          <ConversationRow
+            key={conv.id}
+            conv={conv}
+            active={
+              store.primaryTarget.kind === 'conversation' &&
+              store.primaryTarget.conversationId === conv.id
+            }
+            onOpen={() => store.openTarget({ kind: 'conversation', conversationId: conv.id })}
+            onOpenSplit={() =>
+              store.openTarget({ kind: 'conversation', conversationId: conv.id }, { split: true })
+            }
+          />
+        ))}
+    </div>
   )
 }
 
@@ -583,49 +619,6 @@ function MyConversationsGroup({ store }: { store: HelmStoreValue }) {
   )
 }
 
-/** 可折叠「已归档 Worker」分组。 */
-function ArchivedWorkersGroup({ store }: { store: HelmStoreValue }) {
-  const [open, setOpen] = useState(false)
-  const archived = useMemo(
-    () => filterConversationsByTag(store.conversations, ARCHIVED_WORKER_TAG),
-    [store.conversations],
-  )
-  if (archived.length === 0) return null
-  return (
-    <div className="sidebar-group">
-      <button
-        className="sidebar-group-header"
-        style={{ width: '100%', background: 'transparent', border: 'none', cursor: 'pointer' }}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-          <HelmIcon name="archive" size={12} />
-          已归档 Worker ({archived.length})
-        </span>
-        <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-      </button>
-      {open &&
-        archived
-          .slice()
-          .sort((a, b) => b.updatedAt - a.updatedAt)
-          .map((conv) => (
-            <ConversationRow
-              key={conv.id}
-              conv={conv}
-              active={
-                store.primaryTarget.kind === 'conversation' &&
-                store.primaryTarget.conversationId === conv.id
-              }
-              onOpen={() => store.openTarget({ kind: 'conversation', conversationId: conv.id })}
-              onOpenSplit={() =>
-                store.openTarget({ kind: 'conversation', conversationId: conv.id }, { split: true })
-              }
-            />
-          ))}
-    </div>
-  )
-}
-
 export function Sidebar() {
   const store = useHelmStore()
 
@@ -660,8 +653,6 @@ export function Sidebar() {
         <SidebarSectionGroups store={store} />
 
         <MyConversationsGroup store={store} />
-
-        <ArchivedWorkersGroup store={store} />
       </div>
 
       <div className="sidebar-footer">

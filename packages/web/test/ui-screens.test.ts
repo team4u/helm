@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import { evaluateSpecValue, type EvalScope } from '../src/ui/evaluator.js'
 import {
@@ -391,4 +392,81 @@ test('evaluator 回归: 原型链逃逸被阻断（只读 own property）', { ti
   // own property 上同名键仍可读（只读 own 语义不误伤合法数据）
   const withOwn = evaluateSpecValue('{$docs.constructor}', { $docs: { constructor: 'safe' } })
   assert.equal(withOwn, 'safe')
+})
+
+// ---------------------------------------------------------------------------
+// ScreenHost 路由契约：零业务特判，仅 herdr/overview 同构映射
+// ---------------------------------------------------------------------------
+
+test('ScreenHost 仅保留 builtin:herdr/overview 专用映射，superagent/recall-graph 走声明式 JSON Spec', { timeout: 60_000 }, async () => {
+  const source = await readFile(new URL('../src/screens/ScreenHost.tsx', import.meta.url), 'utf-8')
+  // 唯一同构映射：Herdr 总览
+  assert.ok(source.includes("builtin:herdr"), 'herdr/overview 同构映射应保留')
+  // 严禁任何 superagent 专用分支（旧硬编码已移除，RecallGraphScreen 已删）
+  assert.ok(!source.includes('superagent'), 'ScreenHost 不得出现 superagent 字符串特判')
+  assert.ok(!source.includes('RecallGraphScreen'), 'RecallGraphScreen 专用组件应已删除')
+  try {
+    await readFile(new URL('../src/screens/RecallGraphScreen.tsx', import.meta.url), 'utf-8')
+    assert.fail('RecallGraphScreen.tsx 应已删除')
+  } catch (err) {
+    assert.ok((err as NodeJS.ErrnoException).code === 'ENOENT')
+  }
+})
+
+test('superagent recall-graph 插件声明的 JSON Spec 可经通用归一化渲染（GenericSpecScreen 路径）', { timeout: 60_000 }, () => {
+  // builtin:superagent 插件 ctx.ui.screen({ id: 'recall-graph', json: {...} }) 声明的真实形状
+  const recallGraphSpec = {
+    component: 'Stack',
+    children: [
+      { component: 'Text', variant: 'title', text: 'RecallGraph 记忆图谱' },
+      {
+        component: 'Table',
+        columns: [
+          { key: 'conversationId', label: '会话' },
+          { key: 'profileId', label: 'Profile' },
+          { key: 'outcome', label: '终态' },
+          { key: 'summary', label: '摘要' },
+        ],
+        rows: '{$docs["recall-graph"].nodes}',
+        rowActions: [
+          { label: '打开会话', action: { type: 'helm:open', target: 'conversation:{$row.conversationId}' } },
+        ],
+      },
+      { component: 'Text', variant: 'title', text: '事件订阅' },
+      {
+        component: 'Table',
+        columns: [
+          { key: 'threadKey', label: 'ThreadKey' },
+          { key: 'workerConversationId', label: 'Worker' },
+        ],
+        rows: '{$docs.subscriptions.subscriptions}',
+        rowActions: [
+          { label: '打开 Worker', action: { type: 'helm:open', target: 'conversation:{$row.workerConversationId}' } },
+        ],
+      },
+    ],
+  }
+  // GenericSpecScreen 使用 HelmSpecView -> normalizeSpec 渲染：验证归一化不降级
+  const normalized = normalizeSpec(recallGraphSpec)
+  assert.equal(normalized.degraded, false)
+  assert.equal(normalized.root!.component, 'Stack')
+  assert.equal(normalized.root!.children.length, 4)
+  assert.equal(normalized.root!.children[0]!.props['text'], 'RecallGraph 记忆图谱')
+
+  // 绑定表达式在 $docs 注入后可求值（真实数据源为 recall-graph / subscriptions 公开文档）
+  const scope: EvalScope = {
+    $docs: {
+      'recall-graph': { nodes: [{ conversationId: 9, profileId: 'coder', outcome: 'completed', summary: '重构完成' }] },
+      subscriptions: { subscriptions: [{ threadKey: 'k1', workerConversationId: 9 }] },
+    },
+  }
+  const rows = evaluateSpecValue<Array<Record<string, unknown>>>('{$docs["recall-graph"].nodes}', scope)
+  assert.equal(rows.length, 1)
+  const recallTable = recallGraphSpec.children[1] as { rowActions: Array<{ action: unknown }> }
+  const rowAction = resolveSpecAction(recallTable.rowActions[0]!.action, {
+    ...scope,
+    $row: rows[0]!,
+  })
+  assert.equal(rowAction.kind, 'open')
+  if (rowAction.kind === 'open') assert.equal(rowAction.target, 'conversation:9')
 })

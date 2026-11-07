@@ -1,13 +1,12 @@
 /**
- * 全屏视图宿主：按 pluginId/screenId 路由到专用 Screen（Herdr 总览、
- * SuperAgent 记忆图谱）或通用声明式 @json-render 兜底。
+ * 全屏视图宿主：仅 builtin:herdr/overview 同构映射为专用 Screen，
+ * 其余一律走通用声明式 @json-render Spec 渲染（零插件 ID 特判）。
  */
 import type { ReactNode } from 'react'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { HelmSpecView } from '../ui/HelmSpecView.js'
 import { HerdrOverviewScreen } from './HerdrOverviewScreen.js'
-import { RecallGraphScreen } from './RecallGraphScreen.js'
 
 export interface ScreenHostProps {
   pluginId: string
@@ -20,12 +19,9 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
   const store = useHelmStore()
   const available = store.groupedUi.screens.some((item) => item.pluginId === pluginId && item.spec.id === screenId)
   if (!available) return <GenericSpecScreen pluginId={pluginId} screenId={screenId} isSplit={isSplit} onCloseSplit={onCloseSplit} />
-  // 专用 Screen：内核内置的两个富交互视图
+  // 专用 Screen：仅内核内置的 Herdr 富交互总览视图。
   if (pluginId === 'builtin:herdr' && screenId === 'overview') {
     return <HerdrOverviewScreen isSplit={isSplit} onCloseSplit={onCloseSplit} />
-  }
-  if (pluginId === 'builtin:superagent' && screenId === 'recall-graph') {
-    return <RecallGraphScreen isSplit={isSplit} onCloseSplit={onCloseSplit} />
   }
   return <GenericSpecScreen pluginId={pluginId} screenId={screenId} isSplit={isSplit} onCloseSplit={onCloseSplit} />
 }

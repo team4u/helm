@@ -1,7 +1,7 @@
 /**
  * 侧栏会话分组纯函数：从全量会话中推导「我的对话」列表，
- * 自动排除 #1 根会话、sidebar.item 常驻指向的 profile 会话、
- * 以及已命中 sidebar.section（worker / worker-archived）的后台会话。
+ * 自动排除根会话、sidebar.item 常驻指向的 profile 会话、
+ * 以及已命中 sidebar.section filterTag 的后台会话。
  * 纯函数无 React 依赖，供 Sidebar 渲染与单测共同消费。
  */
 
@@ -10,13 +10,8 @@ import type {
   SidebarItemSpec,
   SidebarSectionSpec,
 } from '@helm/protocol'
+import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import type { QualifiedUiSpec } from '../lib/types.js'
-
-/** 根会话 ID 固定为 1（与 ROOT_CONVERSATION_ID 一致，此处避免引入运行时常量依赖）。 */
-export const ROOT_CONVERSATION = 1
-
-/** 内置「已归档 Worker」分组标签（即使插件未声明 sidebar.section 也收纳该分组）。 */
-export const ARCHIVED_WORKER_TAG = 'worker-archived'
 
 export interface SidebarPartition {
   /** sidebar.item 的 'conversation:profile:<id>' 已指向的 profileId 集合。 */
@@ -69,35 +64,26 @@ export interface SidebarGroups {
   partition: SidebarPartition
   /** 人类自由对话列表（已去重，updatedAt 倒序）。 */
   humanConversations: ConversationSummary[]
-  /** 已归档 Worker 会话（worker-archived 标签，updatedAt 倒序）。 */
-  archivedWorkers: ConversationSummary[]
 }
 
-/** 一次性推导侧栏全部分组（含内置已归档 Worker 收纳）。 */
+/** 一次性推导侧栏全部分组（分组本体由插件 sidebar.section 声明，此处仅产出「我的对话」）。 */
 export function buildSidebarGroups(
   conversations: ConversationSummary[],
   sidebarItems: Array<QualifiedUiSpec<SidebarItemSpec>>,
   sidebarSections: Array<QualifiedUiSpec<SidebarSectionSpec>>,
 ): SidebarGroups {
-  const partition = partitionSidebarUi(sidebarItems, sidebarSections)
-  // 内置「已归档 Worker」分组即使没有插件声明 section 也要收纳并从人类列表排除。
-  const effectiveTags = new Set([...partition.sectionTags, ARCHIVED_WORKER_TAG])
-  const effectivePartition: SidebarPartition = { ...partition, sectionTags: effectiveTags }
   return {
-    partition,
-    humanConversations: selectHumanConversations(conversations, effectivePartition),
-    archivedWorkers: filterConversationsByTag(conversations, ARCHIVED_WORKER_TAG).sort(
-      (a, b) => b.updatedAt - a.updatedAt,
-    ),
+    partition: partitionSidebarUi(sidebarItems, sidebarSections),
+    humanConversations: selectHumanConversations(conversations, partitionSidebarUi(sidebarItems, sidebarSections)),
   }
 }
 
 /**
  * 「我的对话」去重规则：
- * - 排除 #1 根会话；
+ * - 排除根会话；
  * - 排除被 sidebar.item 以 'conversation:profile:<id>' 指向的常驻中枢/看门狗会话；
  * - 排除被 sidebar.item 以 'conversation:<id>' 直接指向的会话；
- * - 排除命中任一 sidebar.section filterTag（worker / worker-archived 等）的后台会话；
+ * - 排除命中任一 sidebar.section filterTag 的后台会话；
  * 仅返回属于人类自己的自由对话，按 updatedAt 倒序。
  */
 export function selectHumanConversations(
@@ -105,7 +91,7 @@ export function selectHumanConversations(
   partition: SidebarPartition,
 ): ConversationSummary[] {
   return conversations
-    .filter((c) => c.id !== ROOT_CONVERSATION)
+    .filter((c) => c.id !== ROOT_CONVERSATION_ID)
     .filter((c) => !partition.pinnedProfileIds.has(c.profileId))
     .filter((c) => !partition.pinnedConversationIds.has(c.id))
     .filter((c) => !c.tags.some((t) => partition.sectionTags.has(t)))
