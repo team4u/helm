@@ -140,8 +140,8 @@ export class ConversationTracker {
     this.events = options.events
   }
 
-  /** 会话 -> 停观代数（stopObserving 后自增；在途异步 adoptInitial 不得回写）。 */
-  private readonly observeGenerations = new Map<number, number>()
+  /** 每次观察独立令牌；停观即删除，迟到异步结果不得复活状态。 */
+  private readonly observeGenerations = new Map<number, symbol>()
 
   /** 挂接指定会话的同步观察者；活跃 run 恢复时先补权威输入元数据再返回。 */
   async observe(id: number): Promise<void> {
@@ -164,7 +164,7 @@ export class ConversationTracker {
     this.detach.set(id, () => observation.detach())
     // 初始快照：窗口内已有条目不重发（首次 attach 只对齐水位线）。
     // 代数守护：await 后若已 stopObserving（或重观察换代），不向 maps 回写。
-    const generation = (this.observeGenerations.get(id) ?? 0) + 1
+    const generation = Symbol('conversation observation')
     this.observeGenerations.set(id, generation)
     await this.adoptInitial(id, observation.value, generation)
   }
@@ -180,7 +180,7 @@ export class ConversationTracker {
   private async adoptInitial(
     id: number,
     view: ConversationView,
-    generation: number,
+    generation: symbol,
   ): Promise<void> {
     const live = view.docs['pi.live'] as LiveStateShape | undefined
     this.liveViews.set(id, live ?? {})
@@ -287,8 +287,8 @@ export class ConversationTracker {
     this.lastSettledRun.delete(id)
     this.runTaskIds.delete(id)
     this.runFirstEntries.delete(id)
-    // 停观换代：在途异步 adoptInitial 的回读结果全部作废。
-    this.observeGenerations.set(id, (this.observeGenerations.get(id) ?? 0) + 1)
+    // 删除令牌同时废止异步结果，避免保留已删会话的代数墓碑。
+    this.observeGenerations.delete(id)
     this.trackedInputs.delete(id)
     this.consumedInputs.delete(id)
     this.lastEmittedEntry.delete(id)
@@ -394,8 +394,10 @@ export class ConversationTracker {
   }
 
   private endSettled(conversationId: number): void {
+    if (!this.settledInflight.has(conversationId)) return
     const next = this.settledInflightCount(conversationId) - 1
-    this.settledInflight.set(conversationId, Math.max(0, next))
+    if (next > 0) this.settledInflight.set(conversationId, next)
+    else this.settledInflight.delete(conversationId)
     if (next <= 0) {
       const waiters = this.settledWaiters.get(conversationId) ?? []
       this.settledWaiters.delete(conversationId)
@@ -746,6 +748,7 @@ export class ConversationTracker {
     inputs: ConversationInput[],
     error: string | undefined,
   ): void {
+    const generation = this.observeGenerations.get(conversationId)
     this.beginSettled(conversationId)
     let completion: Promise<void> | void
     try {
@@ -790,8 +793,11 @@ export class ConversationTracker {
       this.endSettled(conversationId)
     } else {
       void completion.then(
-        () => this.endSettled(conversationId),
+        () => {
+          if (this.observeGenerations.get(conversationId) === generation) this.endSettled(conversationId)
+        },
         (error: unknown) => {
+          if (this.observeGenerations.get(conversationId) !== generation) return
           this.settledErrors.set(conversationId, error)
           this.endSettled(conversationId)
         },

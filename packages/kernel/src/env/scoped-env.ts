@@ -88,6 +88,10 @@ export function createScopedExecutionEnv(
       // 绑定键以 composer 为准（逐调用同名键不可覆盖——防伪造作用域），
       // 其余键由逐调用 env 正常补充。
       const supplemented: Record<string, string> = { ...perCall }
+      const boundNames = new Set([...MANAGED_ENV_NAMES, ...Object.keys(composed).map((key) => key.toUpperCase())])
+      for (const key of Object.keys(supplemented)) {
+        if (boundNames.has(key.toUpperCase())) delete supplemented[key]
+      }
       for (const [key, value] of Object.entries(composed)) supplemented[key] = value
       merged = supplemented
     }

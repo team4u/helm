@@ -55,7 +55,7 @@ interface TrackerInternals {
   trackedInputs: Map<number, Map<number | string, { input: ConversationInput; submissionId: number | string }>>
   consumedInputs: Map<number, Set<number | string>>
   liveViews: Map<number, unknown>
-  observeGenerations: Map<number, number>
+  observeGenerations: Map<number, symbol>
 }
 
 function trackerOf(kernel: KernelRuntime): TrackerInternals {
@@ -364,20 +364,18 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
       void kernel.submitInput(1, '停观前的在途问题').catch(() => {})
       await new Promise((r) => setTimeout(r, 300))
       assert.equal(kernel.getConversation(1).status, 'working')
-      // 删除会话（内部 stopObserving）：观察代数推进，在途回读作废。
+      // 删除会话（内部 stopObserving）：令牌删除，在途回读作废。
       const conv = await kernel.createConversation({})
       await kernel.deleteConversation(conv.id)
       const tracker = trackerOf(kernel)
       assert.equal(tracker.trackedInputs.has(conv.id), false)
       assert.equal(tracker.runFirstEntries.has(conv.id), false)
-      // root 会话在途 run 停观后再等一段时间：异步回读不得复活。
-      const genBefore = tracker.observeGenerations.get(1) ?? 0
+      assert.equal(tracker.observeGenerations.has(conv.id), false)
+      // 中止不应替换仍在观察的 root 会话令牌。
+      const genBefore = tracker.observeGenerations.get(1)
       await kernel.abortConversation(1)
       await kernel.waitForIdle(1).catch(() => {})
-      assert.ok(
-        (tracker.observeGenerations.get(1) ?? 0) >= genBefore,
-        '停观路径推进观察代数（在途 adoptInitial 作废机制在位）',
-      )
+      assert.equal(tracker.observeGenerations.get(1), genBefore)
     } finally {
       await kernel.close()
     }
@@ -385,6 +383,40 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
 })
 
 describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }, () => {
+  it('停观后迟到的结算失败不复活计数、错误或观察令牌', timeout, async () => {
+    const kernel = await openRuntime(join(root, 'late-settlement'))
+    try {
+      const conv = await kernel.createConversation({})
+      const tracker = trackerOf(kernel) as TrackerInternals & {
+        events: { onTurnSettled: (...args: unknown[]) => Promise<void> | void }
+        emitSettled(id: number, outcome: string, inputs: ConversationInput[], error: undefined): void
+        stopObserving(id: number): void
+        settledInflight: Map<number, number>
+        settledErrors: Map<number, unknown>
+      }
+      let fail!: (error: Error) => void
+      const pending = new Promise<void>((_resolve, reject) => { fail = reject })
+      const original = tracker.events.onTurnSettled
+      tracker.events.onTurnSettled = () => pending
+      try {
+        tracker.emitSettled(conv.id, 'completed', [], undefined)
+        assert.equal(tracker.settledInflight.has(conv.id), true)
+        tracker.stopObserving(conv.id)
+        fail(new Error('late callback failure'))
+        await pending.catch(() => {})
+        await Promise.resolve()
+        assert.equal(tracker.settledInflight.has(conv.id), false)
+        assert.equal(tracker.settledErrors.has(conv.id), false)
+        assert.equal(tracker.observeGenerations.has(conv.id), false)
+      } finally {
+        tracker.events.onTurnSettled = original
+      }
+      await kernel.deleteConversation(conv.id)
+    } finally {
+      await kernel.close()
+    }
+  })
+
   it('单会话 settledRunOrder 超过 64 个 runKey 时淘汰最旧键（settledRuns 同步收缩）', timeout, async () => {
     const kernel = await openRuntime(join(root, 'cap-1'))
     try {
@@ -434,6 +466,7 @@ describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }
       assert.equal(tracker.trackedInputs.has(conv.id), false)
       assert.equal(tracker.consumedInputs.has(conv.id), false)
       assert.equal(tracker.liveViews.has(conv.id), false)
+      assert.equal(tracker.observeGenerations.has(conv.id), false)
     } finally {
       await kernel.close()
     }
@@ -458,6 +491,7 @@ describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }
       assert.equal(tracker.runFirstEntries.size, 0)
       assert.equal(tracker.trackedInputs.size, 0)
       assert.equal(tracker.consumedInputs.size, 0)
+      assert.deepEqual([...tracker.observeGenerations.keys()], [1])
     } finally {
       await kernel.close()
     }
