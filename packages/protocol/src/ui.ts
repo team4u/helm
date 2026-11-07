@@ -8,7 +8,7 @@ import type { ConversationEntry, ConversationScope, ConversationSummary } from '
 
 /** 插件 client.tsx 编译产物中的具名导出引用。 */
 export interface ClientComponentRef {
-  /** 源模块文件名，约定 'client.tsx'。 */
+  /** 相对插件 clientRoot 的源模块路径（如 'client.tsx'、'panels/Status.tsx'；禁止绝对路径/越根 ../）。 */
   module: string
   /** 具名导出名。 */
   export: string
@@ -19,9 +19,13 @@ export interface UiSpecBase {
   /** 扩展点内唯一 ID（最终寻址为 <extension>:<pluginId>/<id>）。 */
   id: string
   title?: string
-  /** 声明式 JSON Spec，由 @json-render 渲染。 */
+  /**
+   * 声明式 JSON Spec，由 @json-render 渲染。
+   * 双轨优先级：同时声明 json 与 client 时 client 优先（富交互完整能力），
+   * json 作为宿主不支持动态加载时的显式降级提示而非静默丢弃。
+   */
   json?: Record<string, unknown>
-  /** client.tsx 组件引用。 */
+  /** client.tsx 组件引用（需插件定义提供 clientRoot；双轨并存时优先于 json）。 */
   client?: ClientComponentRef
   /** 声明式轨道订阅的本插件公开文档名（挂载至 $docs/<docName>）；必须是同插件 public doc。 */
   docs?: string[]
@@ -155,4 +159,38 @@ export interface PluginUiContribution {
   pluginId: string
   surface: string
   spec: unknown
+}
+
+// ---------------------------------------------------------------------------
+// client.tsx 轨道：宿主与插件组件的运行时契约（纯类型，不引 React）
+// ---------------------------------------------------------------------------
+
+/**
+ * client.tsx 组件内部的宿主上下文（usePluginContext() 返回值）：
+ * 全部能力来自真实宿主（callAction 走 POST /api/actions，openScreen/openSplitScreen
+ * 走宿主导航，usePluginDoc 语义的文档读取），无 mock。
+ */
+export interface PluginClientContext {
+  pluginId: string
+  /** 调用本插件动作（POST /api/actions/:pluginId/:actionId）。 */
+  callAction(actionId: string, input?: unknown): Promise<unknown>
+  /** 在主屏打开目标（conversation:<id> / screen:<pluginId>/<screenId> 等）。 */
+  openScreen(target: string): void
+  /** 在右侧分屏打开目标。 */
+  openSplitScreen(target: string): void
+  /** 读取本插件公共文档当前值（不订阅；订阅清用 usePluginDoc 共享 hook）。 */
+  getPluginDoc(docName: string): Promise<unknown>
+  /** 当前会话 ID（无会话上下文的槽位为 undefined，如部分 settings.panel）。 */
+  conversationId?: number
+  /** 宿主当前主题。 */
+  theme: 'light' | 'dark'
+}
+
+/** GET /api/plugins/:id/client.mjs 响应元信息（错误时 HTTP 错误信封，不出 JS）。 */
+export interface PluginClientModuleInfo {
+  pluginId: string
+  /** 请求的 module 相对路径。 */
+  module: string
+  /** 编译产物内容 hash（含全部本地依赖；源变更副重新编译）。 */
+  contentHash: string
 }

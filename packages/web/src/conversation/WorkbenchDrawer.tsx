@@ -4,7 +4,7 @@ import { workflowsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { matchesUiScope } from '../lib/types.js'
-import { HelmSpecView } from '../ui/HelmSpecView.js'
+import { PluginUiView } from '../ui/PluginUiView.js'
 import { ArtifactPreviewModal } from './ArtifactPreviewModal.js'
 import { formatBytes, formatDurationMs } from './timeline-model.js'
 
@@ -373,11 +373,12 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
                 )
               }
               return (
-                <HelmSpecView
+                <PluginUiView
                   pluginId={matched.pluginId}
-                  spec={matched.spec.json}
-                  docs={matched.spec.docs}
+                  spec={matched.spec}
                   conversationId={conversationId}
+                  label={`面板 ${matched.spec.id}`}
+                  slotProps={{ conversation: store.conversationDetails[conversationId] ?? store.conversations.find((c) => c.id === conversationId) }}
                 />
               )
             })()}

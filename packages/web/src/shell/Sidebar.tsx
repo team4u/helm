@@ -4,6 +4,7 @@ import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { asksApi, conversationsApi, ApiClientError } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { PluginUiView } from '../ui/PluginUiView.js'
 import { isSameResolvedTarget, resolveTargetString, type HelmStoreValue } from '../lib/types.js'
 import {
   buildSidebarGroups,
@@ -336,9 +337,18 @@ function WorkbenchNavItems({ store }: { store: HelmStoreValue }) {
     if (!hasRootItem && resolved.kind === 'conversation' && resolved.conversationId === ROOT_CONVERSATION_ID) continue
     rows.push({ key: `${item.pluginId}/${item.spec.id}`, label: item.spec.label, icon: item.spec.icon, target: resolved })
   }
+  // 声明了 client 组件（无导航 target）的侧栏项：真正渲染组件内容，不因缺少 target 静默丢弃
+  const clientItems = store.groupedUi.sidebarItems.filter(
+    (item) => item.spec.client !== undefined && resolveTargetString(item.spec.target ?? '', store.conversations) === null,
+  )
 
   return (
     <>
+      {clientItems.map((item) => (
+        <div key={`client:${item.pluginId}/${item.spec.id}`} style={{ padding: '0 10px 6px' }}>
+          <PluginUiView pluginId={item.pluginId} spec={item.spec} label={`侧栏项 ${item.spec.id}`} />
+        </div>
+      ))}
       {rows.map((row) => {
         const active = isSameResolvedTarget(row.target, store.primaryTarget)
         return (

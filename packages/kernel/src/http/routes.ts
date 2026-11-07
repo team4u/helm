@@ -487,6 +487,26 @@ async function route(
       const name = parseDocNameParam(decodeSegment(fourth))
       return jsonOk(redactor, await kernel.plugins.getPublicDoc(pluginId, name))
     }
+    // 插件客户端模块：GET /api/plugins/:pluginId/client.mjs?module=<相对路径>
+    // （鉴权由 hub 统一前置；停用/未声明/编译失败返回结构化错误 JSON，绝不返回半产物）
+    if (third === 'client.mjs' && method === 'GET' && fourth === undefined) {
+      const moduleRef = ctx.url.searchParams.get('module')
+      if (moduleRef === null || moduleRef.length === 0) {
+        throw new ValidationError('缺少 module 查询参数（相对 clientRoot 的 .ts/.tsx 路径）')
+      }
+      if (moduleRef.length > 256 || moduleRef.includes('..') || moduleRef.startsWith('/') || moduleRef.includes('\\')) {
+        throw new ValidationError('module 需为 clientRoot 内相对 .ts/.tsx 路径（禁止绝对路径/..越根）')
+      }
+      const compiled = await kernel.plugins.getClientModule(pluginId, moduleRef)
+      return new Response(compiled.code, {
+        status: 200,
+        headers: {
+          'content-type': 'text/javascript; charset=utf-8',
+          'x-helm-client-hash': compiled.contentHash,
+          'cache-control': 'private, max-age=60',
+        },
+      })
+    }
     // 插件自定义动态路由：强制命名空间 /api/plugins/:pluginId/routes/...，
     // 不允许覆盖核心路由（enable/disable/config 已在上面先匹配）。
     if (third === 'routes') {

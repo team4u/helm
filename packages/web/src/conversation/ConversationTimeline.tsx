@@ -9,7 +9,7 @@ import type {
 import { artifactsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
-import { HelmSpecView } from '../ui/HelmSpecView.js'
+import { PluginUiView } from '../ui/PluginUiView.js'
 import { CopyButton } from './CopyButton.js'
 import { WorkflowRunCard } from './WorkflowRunCard.js'
 import { MarkdownView } from './MarkdownView.js'
@@ -278,12 +278,12 @@ function TraceRow({
         </span>
         <span className="trace-row-right">{right}</span>
       </div>
-      {tool.toolView !== undefined && <div className="trace-toolview"><HelmSpecView
+      {tool.toolView !== undefined && <div className="trace-toolview"><PluginUiView
         pluginId={tool.toolView.pluginId}
-        spec={tool.toolView.spec.json}
-        docs={tool.toolView.spec.docs}
+        spec={tool.toolView.spec}
         conversationId={conversationId}
-        data={{ callId: tool.callId, toolName: tool.toolName, input: tool.input, status: tool.status, result: tool.resultText }}
+        label={`工具卡 ${tool.toolName}`}
+        slotProps={{ callId: tool.callId, toolName: tool.toolName, input: tool.input, status: tool.status, result: tool.resultText, conversationId }}
       /></div>}
       {open ? (
         <div className="trace-expanded-body selectable">
@@ -422,11 +422,12 @@ function ResetHandoffBody({ item }: { item: DividerItem }) {
 function PluginCard({ item, conversationId }: { item: PluginCardItem; conversationId: number }) {
   return (
     <div className="plugin-card">
-      <HelmSpecView
+      <PluginUiView
         pluginId={item.renderer.pluginId}
-        spec={item.renderer.spec.json}
-        docs={item.renderer.spec.docs}
+        spec={item.renderer.spec}
         conversationId={conversationId}
+        label="时间线卡片"
+        slotProps={{ entry: item.entry, conversationId }}
       />
     </div>
   )
