@@ -2,7 +2,7 @@ import * as React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ActionManifest, ArtifactMetadata, ConversationDetail, HelmEventFrame, HelmSnapshot, Profile, ProviderConfig, SkillSummary } from '@helm/protocol'
 import { ROOT_CONVERSATION_ID } from '@helm/protocol'
-import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, pluginsApi, setStoredToken, workflowsApi, type CredentialSummary, type ModelDescriptor, type SavedWorkflowSummary } from './api.js'
+import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, pluginsApi, setStoredToken, workflowsApi, type CredentialSummary, type ModelDescriptor } from './api.js'
 import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, SseParser, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
 import { groupUiContributions, resolveTargetString, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
@@ -42,7 +42,6 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [credentials, setCredentials] = useState<CredentialSummary[]>([])
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [actions, setActions] = useState<ActionManifest[]>([])
-  const [savedWorkflows, setSavedWorkflows] = useState<SavedWorkflowSummary[]>([])
   const [primaryTarget, setPrimaryTarget] = useState<ResolvedTarget>({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
   const [splitTarget, setSplitTarget] = useState<ResolvedTarget | null>(null)
   const [workbenchOpen, setWorkbenchOpen] = useState(false)
@@ -155,7 +154,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     updateLive(emptyLiveState)
     setConversationArtifacts({})
     setLoadErrors({})
-    setProfiles([]); setModels([]); setProviders([]); setCredentials([]); setSkills([]); setActions([]); setSavedWorkflows([])
+    setProfiles([]); setModels([]); setProviders([]); setCredentials([]); setSkills([]); setActions([])
   }, [updateLive])
   useEffect(() => {
     window.addEventListener('helm:unauthorized', logout)
@@ -170,7 +169,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
 
   const refreshAssets = useCallback(async () => {
     const generation = ++assetGeneration.current
-    const results = await Promise.allSettled([assetsApi.listProfiles(), assetsApi.listModels(), assetsApi.listProviders(), assetsApi.listCredentials(), assetsApi.listSkills(), pluginsApi.listActions(), workflowsApi.listSaved()])
+    // savedWorkflows 无任何组件消费（N1）：不再启动即拉取全仓工作流目录，避免无用网络与全树重渲染；workflowsApi.listSaved 保留供显式调用。
+    const results = await Promise.allSettled([assetsApi.listProfiles(), assetsApi.listModels(), assetsApi.listProviders(), assetsApi.listCredentials(), assetsApi.listSkills(), pluginsApi.listActions()])
     if (generation !== assetGeneration.current) return
     if (results[0].status === 'fulfilled') setProfiles(results[0].value)
     if (results[1].status === 'fulfilled') setModels(results[1].value)
@@ -178,8 +178,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     if (results[3].status === 'fulfilled') setCredentials(results[3].value)
     if (results[4].status === 'fulfilled') setSkills(results[4].value)
     if (results[5].status === 'fulfilled') setActions(results[5].value)
-    if (results[6].status === 'fulfilled') setSavedWorkflows(results[6].value)
-    const labels = ['角色', '模型', '网关', '凭据', '技能', '插件动作', '工作流']
+    const labels = ['角色', '模型', '网关', '凭据', '技能', '插件动作']
     results.forEach((result, index) => {
       if (result.status === 'rejected') pushNotice({ type: 'notification', level: 'error', title: `${labels[index]}加载失败`, body: errorText(result.reason) })
     })
@@ -409,12 +408,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const store: HelmStoreValue = useMemo(
     () => ({
       ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
-      groupedUi, savedWorkflows, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
+      groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
       setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
       live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
-      groupedUi, savedWorkflows, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
+      groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
       setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],
   )
