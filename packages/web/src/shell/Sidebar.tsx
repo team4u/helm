@@ -181,7 +181,7 @@ function NewConversationControl({ store }: { store: HelmStoreValue }) {
               onClick={() => void createWith(p.id)}
             >
               <span className="nav-item-main">
-                {p.runtime?.kind === 'herdr' && <HelmIcon name="terminal" size={12} />}
+                {p.runtime !== undefined && <HelmIcon name="terminal" size={12} />}}
                 <span className="nav-item-label">{p.name || p.id}</span>
               </span>
               <span className="nav-item-meta mono">{p.id}</span>

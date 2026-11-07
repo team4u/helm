@@ -205,12 +205,14 @@ export const conversationsApi = {
     )
   },
   fork(id: number, entryId: string | number, title?: string): Promise<ConversationSummary> {
-    // 契约 ConversationForkRequest 要求 entryId 为正整数；ConversationEntry.id 是数字字符串，须先转换。
-    const numericEntryId = typeof entryId === 'number' ? entryId : Number.parseInt(String(entryId), 10)
-    if (!Number.isInteger(numericEntryId) || numericEntryId <= 0) {
+    // 契约 ConversationForkRequest 要求 entryId 为安全正整数；ConversationEntry.id 是数字字符串。
+    // 严格整数字符串正则：拒绝空白/小数/指数/尾杂字符（Number.parseInt('3oops')===3 属错锚点，绝不容忍）。
+    const raw = String(entryId)
+    const numericEntryId = typeof entryId === 'number' ? entryId : /^[0-9]+$/.test(raw) ? Number(raw) : NaN
+    if (!Number.isInteger(numericEntryId) || !Number.isSafeInteger(numericEntryId) || numericEntryId <= 0) {
       throw new ApiClientError(
         'validation_error',
-        `entryId 需为正整数（收到 ${String(entryId)}）`,
+        `entryId 需为安全正整数（收到 ${String(entryId)}）`,
         400,
         { entryId },
       )
@@ -402,7 +404,7 @@ export const pluginsApi = {
 // Workflows & Search
 // ---------------------------------------------------------------------------
 
-/** 兼容后端 `{ name, path, description?, whenToUse?, phases? }` 形状（SavedWorkflowSummary 契约）。 */
+/** 兼容后端 `{ name, path, description?, whenToUse?, phases?, metadataError? }` 形状（SavedWorkflowSummary 契约）。 */
 export function normalizeSavedWorkflows(raw: unknown): SavedWorkflowSummary[] {
   if (!Array.isArray(raw)) throw new Error('工作流目录格式无效')
   return raw.map((item: unknown): SavedWorkflowSummary => {
@@ -415,6 +417,9 @@ export function normalizeSavedWorkflows(raw: unknown): SavedWorkflowSummary[] {
       ...(typeof entry.description === 'string' ? { description: entry.description } : {}),
       ...(typeof entry.whenToUse === 'string' ? { whenToUse: entry.whenToUse } : {}),
       ...(Array.isArray(entry.phases) ? { phases: entry.phases as SavedWorkflowSummary['phases'] } : {}),
+      ...(typeof entry.metadataError === 'string' && entry.metadataError.length > 0
+        ? { metadataError: entry.metadataError }
+        : {}),
     }
   })
 }
