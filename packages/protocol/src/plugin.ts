@@ -5,6 +5,7 @@
  * 由 host 在运行时校验。
  */
 
+import type { Provider } from '@earendil-works/pi-ai'
 import type { AskCreateSpec, AskResult } from './ask.js'
 import type {
   ConversationInit,
@@ -441,6 +442,18 @@ export interface HelmPluginContext<TConfig = Record<string, unknown>> {
 
   /** 后台服务（随插件启停生命周期管理）。 */
   service(spec: PluginServiceSpec): void
+
+  /**
+   * 声明插件自带的模型 Provider（如 Magpie），随插件启停自动挂载/卸载：
+   * - 仅在 definePlugin 执行期间声明；边界校验 id/name/auth/getModels/stream/
+   *   streamSimple 最小形状，重复 id 拒绝；
+   * - 默认停用探测（register enabled:false）只收集声明不挂载，configSchema 照常可用；
+   * - 启用时在服务 start 前依次挂载，停用/卸载时在服务 stop 后逆序卸载；
+   * - 宿主未提供 providers 挂载端口时，声明了 provider 的插件在启用阶段显式
+   *   失败（501），绝不静默丢弃或假装挂载。
+   * Provider 类型来自 @earendil-works/pi-ai（type-only，protocol 零运行时新增依赖）。
+   */
+  provider(provider: Provider): void
 
   /** 前端 7 大全界面扩展点。 */
   ui: PluginUiRegistry
