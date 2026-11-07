@@ -274,10 +274,83 @@ export function registerSuperAgentWatchdog(
     const doc = readDedup()
     const actions = doc.fired[key] ?? {}
     // 每目标每动作仅保最新标记（写入即覆盖），不淘汰历史键——淘汰会让旧危险
-    // 动作重新获得触发权。
+    // 动作重新获得触发权；已确认消亡的目标经 evictStaleTargets 统一回收。
     actions[action] = { seq, at: Date.now() }
     doc.fired[key] = actions
     writeDedup(doc)
+  }
+
+  /**
+   * 已消亡目标的安全淘汰：会话已删（not_found）的历史键直接删除（目标不存在
+   * 了无从重放）；外部探针目标仅当不再出现在当前活跃集且总量超上限时淘汰
+   * 最旧条目（LRU 式，防 7×24 运行无限膨胀）。活跃目标绝不淘汰。
+   */
+  const MAX_DEDUP_KEYS = 256
+  const MAX_EXTERNAL_PROBE_CACHE = 256
+
+  function evictStaleTargets(activeProbeKeys: ReadonlySet<string>): void {
+    const doc = readDedup()
+    let mutated = false
+    // 外部探针缓存同样收敛：不在当前活跃集且超限时淘汰。
+    if (lastExternalProbes.size > MAX_EXTERNAL_PROBE_CACHE) {
+      for (const key of [...lastExternalProbes.keys()]) {
+        if (lastExternalProbes.size <= MAX_EXTERNAL_PROBE_CACHE) break
+        if (!activeProbeKeys.has(key)) lastExternalProbes.delete(key)
+      }
+    }
+    for (const key of [...Object.keys(doc.fired)]) {
+      const parsed = parseTargetKey(key)
+      if (parsed === undefined) continue
+      if (parsed.kind === 'conversation') {
+        // 已删除会话：目标已消亡，无从重放，安全删除。
+        const id = Number(parsed.targetId)
+        if (!Number.isInteger(id) || id <= 0) {
+          delete doc.fired[key]
+          mutated = true
+          continue
+        }
+        try {
+          ctx.host.getConversation(id)
+        } catch (err) {
+          if (err instanceof HelmError && err.code === 'not_found') {
+            delete doc.fired[key]
+            mutated = true
+          }
+          // 其它错误（宿主故障）不淘汰：诚实保留，下轮重试。
+        }
+        continue
+      }
+      // 外部目标：仍在活跃探针集则保留；否则仅在超限后淘汰（迭代序即插入序，最旧优先）。
+      if (activeProbeKeys.has(key)) continue
+      if (Object.keys(doc.fired).length > MAX_DEDUP_KEYS) {
+        delete doc.fired[key]
+        mutated = true
+      }
+    }
+    if (mutated) writeDedup(doc)
+  }
+
+  /** 当前 tick 活跃外部探针键集（与去重键同构）。 */
+  function collectActiveExternalKeys(probes: WatchdogProbe[]): Set<string> {
+    const keys = new Set<string>()
+    for (const probe of probes) {
+      if (probe.targetKind !== 'external') continue
+      keys.add(targetKey('external', probe.nodeId, probe.targetId))
+    }
+    return keys
+  }
+
+  /** 去重键（JSON 数组三元组）还原为 {kind, nodeId, targetId}；非目标形状返回 undefined。 */
+  function parseTargetKey(key: string): { kind: string; nodeId?: string; targetId: string } | undefined {
+    try {
+      const parsed = JSON.parse(key) as unknown
+      if (!Array.isArray(parsed) || parsed.length !== 3) return undefined
+      const [kind, nodeId, targetId] = parsed as [string, string, string]
+      if (typeof kind !== 'string' || typeof targetId !== 'string') return undefined
+      return { kind, ...(nodeId !== 'local' ? { nodeId } : {}), targetId }
+    } catch {
+      return undefined
+    }
   }
 
   /** seq 缺失（外部/读不到权威水位）时的哨兵；与任何真实 seq（>=0）必然不等。 */
@@ -332,6 +405,8 @@ export function registerSuperAgentWatchdog(
       const cfg = runtime.getConfig()
       if (!cfg.watchdogEnabled || closing || deps.isClosing()) return
       readDedup()
+      // 历史键安全淘汰（已删会话 / 超限外部目标）：防 7×24 无限膨胀。
+      evictStaleTargets(collectActiveExternalKeys(payload.probes))
       const shuttingDown = false
 
       // 防自激：排除 watchdog 自身 id 与一切 profileId=watchdog 的会话（含直聊）。
@@ -627,7 +702,10 @@ export function registerSuperAgentWatchdog(
       return
     }
     if (closing || shuttingDown) return
-    const wakeKeys = dueWakes.map((op) => `${op.finding.key}:${op.finding.stateChangeSeq}`)
+    const wakeKeys = dueWakes.map((op) => {
+      const seq = op.finding.stateChangeSeq ?? SENTINEL_SEQ
+      return `${op.finding.key}:${seq}`
+    })
     for (const key of wakeKeys) inFlightWakes.add(key)
     fireAndForget('watchdog:wake-l2', async () => {
       try {
@@ -740,7 +818,20 @@ export function registerSuperAgentWatchdog(
       return
     }
     markFired(finding.key, 'abort', seq)
-    await deps.abortConversation(conversationId)
+    try {
+      await deps.abortConversation(conversationId)
+    } catch (err) {
+      // 中止失败：撤销消费标记（与 bridge 失败语义一致），下一 tick 可重试；
+      // 如实通知失败原因，绝不记成功。
+      unmarkFired(finding.key, 'abort')
+      notify(
+        'error',
+        'Watchdog 自动中止失败',
+        `${finding.evidence}；abort 调用失败：${describeError(err)}；已撤销去重标记，下一轮巡检可重试`,
+        conversationId,
+      )
+      return
+    }
     notify('error', 'Watchdog 已自动中止超时会话', `${finding.evidence}；已调用 abort，请人工复核`, conversationId)
   }
 

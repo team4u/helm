@@ -145,6 +145,50 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         void task.then(() => eventTasks.delete(task), () => eventTasks.delete(task))
       }
 
+      /**
+       * 订阅断线自愈重连：单例定时器 + 指数退避（封顶 60s），成功重建后复位；
+       * stopResources 清理。去重靠 synchronizeSubscription 自身的队列串行
+       * （重复 schedule 仅保留最新到期时间），不叠加并发重连风暴。
+       */
+      let subscriptionRetryTimer: NodeJS.Timeout | undefined
+      let subscriptionRetryAttempt = 0
+
+      function scheduleSubscriptionRetry(): void {
+        if (stopping || connectionAbort.signal.aborted) return
+        if (subscriptionRetryTimer !== undefined) return
+        const attempt = subscriptionRetryAttempt++
+        const delayMs = Math.min(1_000 * 2 ** Math.min(attempt, 6), 60_000)
+        subscriptionRetryTimer = setTimeout(() => {
+          subscriptionRetryTimer = undefined
+          if (stopping || connectionAbort.signal.aborted) return
+          void synchronizeSubscription(lastSubscribedPaneIds(), connectionAbort.signal)
+            .then((rebuilt) => { if (rebuilt) subscriptionRetryAttempt = 0 })
+            .catch(() => {
+              // 重建失败：退避后继续重试（下次 onError 或本轮兜底）。
+              scheduleSubscriptionRetry()
+            })
+        }, delayMs)
+        subscriptionRetryTimer.unref?.()
+      }
+
+      function clearSubscriptionRetry(): void {
+        if (subscriptionRetryTimer !== undefined) {
+          clearTimeout(subscriptionRetryTimer)
+          subscriptionRetryTimer = undefined
+        }
+        subscriptionRetryAttempt = 0
+      }
+
+      /** 当前订阅应覆盖的 pane 集合：以 registry 在管未结算窗格为准（重建用）。 */
+      function lastSubscribedPaneIds(): string[] {
+        const registry = registryRef.current
+        if (!registry) return []
+        return registry
+          .all()
+          .filter((pane) => pane.outcome !== 'settled' && nodeIdOf(pane) === undefined)
+          .map((pane) => pane.paneId)
+      }
+
       function synchronizeSubscription(paneIds: string[], signal: AbortSignal): Promise<boolean> {
         const ids = [...new Set(paneIds)].sort()
         const key = JSON.stringify(ids)
@@ -168,6 +212,8 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
               if (unsubscribeRef.current === release) subscribedPaneKey = undefined
               overviewRef.current?.markSubscriptionFailed(error)
               host.notify('Herdr 事件订阅断开', error instanceof Error ? error.message : String(error), 'error')
+              // 断线自愈：即使 watchdogEnabled=false 也安排退避重连（去重单例）。
+              scheduleSubscriptionRetry()
             },
             { paneIds: ids, signal: connectionAbort.signal },
           )
@@ -185,10 +231,13 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           subscribedPaneKey = key
           previous?.()
           overviewRef.current?.markSubscriptionReady()
+          subscriptionRetryAttempt = 0
           return true
         })
         // 保持队列可继续；原 task 的错误由启动路径或总览刷新路径诊断。
         subscriptionTail = task.then(() => {}, () => {})
+        // 启动/重建失败（subscribe 招错，非 onError 路径）同样安排退避重连。
+        task.catch(() => scheduleSubscriptionRetry())
         return task
       }
 
@@ -217,6 +266,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
             if (pane.outcome !== 'failed' && pane.outcome !== 'settled') {
               registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
             }
+            forgetPaneCaches(nodeIdOf(pane), pane.paneId)
             refreshOverview()
             return
           }
@@ -261,26 +311,36 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
       }
 
       // ---- 启动对账：subscribe ack -> snapshot 扫描 ----
+      /** 窗格从 registry 结算移除时同步回收探针/事件缓存（防长驻泄漏）。 */
+      function forgetPaneCaches(nodeId: string | undefined, paneId: string): void {
+        const scope = scopeKey(nodeId, paneId)
+        eventSeqCache.delete(`${nodeId ?? 'local'}:${paneId}`)
+        probeObservations.delete(scope)
+        probeFailures.delete(scope)
+      }
+
       async function reconcile(): Promise<void> {
         const registry = registryRef.current!
         const snapshots = new Map<string, ReturnType<typeof parseSessionSnapshot>>([
-          [JSON.stringify(frozenLocalTarget), parseSessionSnapshot(await transport.call(frozenLocalTarget, 'session.snapshot', {}))],
+          [JSON.stringify(frozenLocalTarget), parseSessionSnapshot(await transport.call(frozenLocalTarget, 'session.snapshot', {}, { timeoutMs: 5_000 }))],
         ])
         for (const pane of registry.all()) {
           if (pane.outcome === 'settled') continue
           const key = JSON.stringify(pane.target)
-          if (!snapshots.has(key)) snapshots.set(key, parseSessionSnapshot(await transport.call(pane.target, 'session.snapshot', {})))
+          if (!snapshots.has(key)) snapshots.set(key, parseSessionSnapshot(await transport.call(pane.target, 'session.snapshot', {}, { timeoutMs: 5_000 })))
           const agent = snapshots.get(key)!.agents.find((a) => a.paneId === pane.paneId)
           if (pane.outcome === 'failed') continue // 持久 failed：保留诊断现场
           if (agent === undefined) {
             // 窗格已消失：登记 settled（无资源可回收）。
             registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+            forgetPaneCaches(nodeIdOf(pane), pane.paneId)
             continue
           }
           // 精确归属验证：agent.name 必须等于记录的 agentName（不 startsWith——
           // helm-wf-abc 不能认领 helm-wf-abcde）。身份不符放弃所有权，不误关。
           if (agent.name !== pane.agentName) {
             registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+            forgetPaneCaches(nodeIdOf(pane), pane.paneId)
             continue
           }
           // 真正仍在 working/blocked：保留并报告（绝不伪装结束自动回收）。
@@ -375,91 +435,111 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
             await overview.refresh(registry, asks, frozenLocalTarget)
           }
           const now = Date.now()
-          for (const pane of registry.all()) {
-            if (pane.outcome === 'settled') continue
-            const scope = scopeKey(nodeIdOf(pane), pane.paneId)
-            let status = 'unknown'
-            let authoritySeq: number | undefined
-            try {
-              const info = parseAgentResult(
-                await transport.call(
-                  pane.target,
+          const activePanes = registry.all().filter((pane) => pane.outcome !== 'settled')
+          // 并发探针：单窗格 agent.get 带 5s 短超时且 Promise.all 并发采集，
+          // 防止单个慢/挂节点串行卡死全局 watchdogTick 预算。
+          const probes = await Promise.all(
+            activePanes.map(async (pane): Promise<ReturnType<typeof buildProbe> | undefined> => {
+              const scope = scopeKey(nodeIdOf(pane), pane.paneId)
+              let status = 'unknown'
+              let authoritySeq: number | undefined
+              try {
+                const info = parseAgentResult(
+                  await transport.call(
+                    pane.target,
+                    'agent.get',
+                    { target: pane.paneId },
+                    { signal: connectionAbort.signal, timeoutMs: 5_000 },
+                  ),
                   'agent.get',
-                  { target: pane.paneId },
-                ),
-                'agent.get',
-                'agent_info',
-              )
-              if (info.name !== pane.agentName || info.tabId !== pane.tabId) {
-                registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
-                continue
+                  'agent_info',
+                )
+                if (info.name !== pane.agentName || info.tabId !== pane.tabId) {
+                  registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+                  forgetPaneCaches(nodeIdOf(pane), pane.paneId)
+                  return undefined
+                }
+                for (const superseded of asks.observeAuthority({
+                  paneId: pane.paneId,
+                  nodeId: nodeIdOf(pane),
+                  seq: info.stateChangeSeq,
+                  status: info.agentStatus,
+                })) {
+                  await cancelQuietly(superseded, 'superseded')
+                }
+                status = info.agentStatus
+                authoritySeq = info.stateChangeSeq
+                probeFailures.delete(scope)
+              } catch {
+                status = 'unreachable'
+                // 权威不可达：绝不猜造 seq；水位不变更（停滞继续累计），
+                // 连续失败计数如实递增。
+                probeFailures.set(scope, (probeFailures.get(scope) ?? 0) + 1)
               }
-              for (const superseded of asks.observeAuthority({
-                paneId: pane.paneId,
-                nodeId: nodeIdOf(pane),
-                seq: info.stateChangeSeq,
-                status: info.agentStatus,
-              })) {
-                await cancelQuietly(superseded, 'superseded')
-              }
-              status = info.agentStatus
-              authoritySeq = info.stateChangeSeq
-              probeFailures.delete(scope)
-            } catch {
-              status = 'unreachable'
-              // 权威不可达：绝不猜造 seq；水位不变更（停滞继续累计），
-              // 连续失败计数如实递增。
-              probeFailures.set(scope, (probeFailures.get(scope) ?? 0) + 1)
-            }
-            // 停滞水位：首次观测从 0 起；(status, seq) 任一变化重置；
-            // unreachable 保持旧水位累计（读失败不是进展证据，不用总运行时长
-            // 冒充停滞，也不因探测失败归零重跑）。
-            const prev = probeObservations.get(scope)
-            let stalledMs = 0
-            if (status === 'unreachable') {
-              // 读失败：沿用旧观测点继续累计（无旧观测时从当下起算，不伪造进展）。
-              if (prev !== undefined) {
-                stalledMs = now - prev.since
-              } else {
-                probeObservations.set(scope, { status, seq: undefined, since: now })
-              }
-            } else if (prev === undefined || prev.status !== status || prev.seq !== authoritySeq) {
-              probeObservations.set(scope, { status, seq: authoritySeq, since: now })
-            } else {
-              stalledMs = now - prev.since
-            }
-            const pendingAskCount = asks
-              .entries()
-              .filter(
-                (e) =>
-                  e.paneId === pane.paneId &&
-                  e.nodeId === nodeIdOf(pane) &&
-                  (e.phase === 'pending' || e.phase === 'creating'),
-              ).length
-            payload.probes.push({
-              targetId: pane.paneId,
-              targetKind: 'external',
-              nodeId: nodeIdOf(pane) ?? 'local',
-              ownedBy: 'helm',
-              status,
-              ...(authoritySeq !== undefined ? { stateChangeSeq: authoritySeq } : {}),
-              stalledMs,
-              ...(status === 'unreachable' ? { consecutiveErrors: probeFailures.get(scope) ?? 1 } : {}),
-              facts: {
-                kind: 'herdr',
-                agentName: pane.agentName,
-                outcome: pane.outcome,
-                effectiveCwd: pane.effectiveCwd,
-                parentConversationId: pane.parentConversationId,
-                pendingAskCount,
-                // 口径如实：stalledMs 基于状态/水位变化观察时点，不含工作活动。
-                stalledBasis: 'since-last-state-change',
-              },
-            })
+              return buildProbe(pane, status, authoritySeq, now)
+            }),
+          )
+          for (const probe of probes) {
+            if (probe !== undefined) payload.probes.push(probe)
           }
         },
         { priority: 100 },
       )
+
+      /** 单窗格探针构造（停滞水位维护与 facts 口径间 watchdogTick 主体）。 */
+      function buildProbe(
+        pane: ManagedPane,
+        status: string,
+        authoritySeq: number | undefined,
+        now: number,
+      ) {
+        const scope = scopeKey(nodeIdOf(pane), pane.paneId)
+        // 停滞水位：首次观测从 0 起；(status, seq) 任一变化重置；
+        // unreachable 保持旧水位累计（读失败不是进展证据，不用总运行时长
+        // 冒充停滞，也不因探测失败归零重跑）。
+        const prev = probeObservations.get(scope)
+        let stalledMs = 0
+        if (status === 'unreachable') {
+          // 读失败：沿用旧观测点继续累计（无旧观测时从当下起算，不伪造进展）。
+          if (prev !== undefined) {
+            stalledMs = now - prev.since
+          } else {
+            probeObservations.set(scope, { status, seq: undefined, since: now })
+          }
+        } else if (prev === undefined || prev.status !== status || prev.seq !== authoritySeq) {
+          probeObservations.set(scope, { status, seq: authoritySeq, since: now })
+        } else {
+          stalledMs = now - prev.since
+        }
+        const pendingAskCount = asks
+          .entries()
+          .filter(
+            (e) =>
+              e.paneId === pane.paneId &&
+              e.nodeId === nodeIdOf(pane) &&
+              (e.phase === 'pending' || e.phase === 'creating'),
+          ).length
+        return {
+          targetId: pane.paneId,
+          targetKind: 'external' as const,
+          nodeId: nodeIdOf(pane) ?? 'local',
+          ownedBy: 'helm' as const,
+          status,
+          ...(authoritySeq !== undefined ? { stateChangeSeq: authoritySeq } : {}),
+          stalledMs,
+          ...(status === 'unreachable' ? { consecutiveErrors: probeFailures.get(scope) ?? 1 } : {}),
+          facts: {
+            kind: 'herdr',
+            agentName: pane.agentName,
+            outcome: pane.outcome,
+            effectiveCwd: pane.effectiveCwd,
+            parentConversationId: pane.parentConversationId,
+            pendingAskCount,
+            // 口径如实：stalledMs 基于状态/水位变化观察时点，不含工作活动。
+            stalledBasis: 'since-last-state-change',
+          },
+        }
+      }
 
       // ---- actions（HTTP/CLI 同权；read 40 行脱敏；focus 显式操作） ----
       ctx.action<Record<string, never>, { panes: Array<Record<string, unknown>> }>({
@@ -620,8 +700,6 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           // 冻结本启用周期的本机连接目标（此后所有调用共用；热配置不再生效）。
           frozenLocalTarget = resolveLocalTarget(config)
           const startupTimeout = normalizeStartupTimeoutMs(config.startupTimeoutMs)
-          void startupTimeout
-
           const restored = managedDoc.get()
           const registry = new PaneRegistry(
             { get: () => managedDoc.get(), set: (doc) => managedDoc.set(doc) },
@@ -671,7 +749,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
               if (pane === undefined) return undefined
               try {
                 const info = parseAgentResult(
-                  await transport.call(pane.target, 'agent.get', { target: paneId }),
+                  await transport.call(pane.target, 'agent.get', { target: paneId }, { timeoutMs: 5_000 }),
                   'agent.get',
                   'agent_info',
                 )
@@ -721,6 +799,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         const errors: unknown[] = []
         stopping = true
         connectionAbort.abort()
+        clearSubscriptionRetry()
         projector().stop()
         try {
           unsubscribeRef.current?.()

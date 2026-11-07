@@ -1,9 +1,11 @@
 import { homedir } from 'node:os'
 import { posix, win32 } from 'node:path'
+import type { Socket } from 'node:net'
 import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { HelmError } from '@helm/protocol'
 import type { AgentGateResult } from '@helm/protocol'
+import { connectHerdrEndpoint } from './local-node-channel.js'
 import type {
   HerdrCallOptions,
   HerdrEvent,
@@ -269,6 +271,44 @@ function raiseWireError(error: { code?: unknown; message?: unknown }, target: st
 
 // --------------------------------------------------------- 本机 socket RPC --
 
+/**
+ * 建立到本机 Herdr IPC 端点的连接：
+ * - Unix 路径：直连 UDS 文件；
+ * - Windows 形状路径（盘符/UNC，含完整 pipe 路径）：磁盘上的 herdr.sock 只是
+ *   marker 文件，真实端点是 `\\.\pipe\` 命名管道——先确认 marker 文件存在
+ *   （不存在即 herdr_unreachable，与 UDS ENOENT 同语义），再换算 pipe 名连接，
+ *   绝不把 marker 文件路径当可连接端点。
+ */
+async function openLocalHerdrSocket(socketPath: string, target: string): Promise<Socket> {
+  const net = await import('node:net')
+  if (!isWindowsShapedPath(socketPath)) {
+    const socket = net.connect(socketPath)
+    socket.setNoDelay(true)
+    return socket
+  }
+  // 已是完整 pipe 路径：无 marker 可查，直接换算连接（pipe 名即端点）。
+  if (!/^\\\\(\.|[^\\]+)\\pipe\\/.test(socketPath.replaceAll('/', '\\'))) {
+    const fs = await import('node:fs/promises')
+    try {
+      await fs.stat(socketPath)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES' || code === 'EPERM') {
+        throw new HerdrTransportError(
+          'herdr_unreachable',
+          `herdr marker 文件不存在（${code ?? 'stat failed'}）：${socketPath}，请确认 Windows 本机 herdr 正在运行`,
+          target,
+          { cause: err },
+        )
+      }
+      throw new HerdrTransportError('herdr_io', `无法访问 herdr marker 文件：${socketPath}（${code ?? String(err)}）`, target, { cause: err })
+    }
+  }
+  const socket = connectHerdrEndpoint(socketPath, 'named-pipe')
+  socket.setNoDelay(true)
+  return socket
+}
+
 /** 一连接一请求：拿到首个完整响应行即销毁连接。 */
 async function callLocal(
   socketPath: string,
@@ -278,12 +318,10 @@ async function callLocal(
   options: HerdrCallOptions | undefined,
   redact: (s: string) => string,
 ): Promise<unknown> {
-  const net = await import('node:net')
   const signal = options?.signal
   checkAborted(signal, target)
 
-  const socket = net.connect(socketPath)
-  socket.setNoDelay(true)
+  const socket = await openLocalHerdrSocket(socketPath, target)
   const assembler = new LineAssembler()
   const timeoutMs = resolveCallTimeoutMs(method, params, options)
   const timer = timeoutMs === undefined ? undefined : timeoutPromise(timeoutMs, target)
@@ -379,9 +417,7 @@ async function subscribeLocal(
   if (invalidPaneId !== undefined) {
     throw new HerdrTransportError('herdr_invalid_subscription', `invalid pane id in subscription options: ${String(invalidPaneId)}`, target)
   }
-  const net = await import('node:net')
-  const socket = net.connect(socketPath)
-  socket.setNoDelay(true)
+  const socket = await openLocalHerdrSocket(socketPath, target)
   const assembler = new LineAssembler()
 
   let stopped = false
