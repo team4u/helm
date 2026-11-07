@@ -33,7 +33,7 @@ export interface HerdrPluginDependencies {
   /** Only explicit session/stash variables, never the whole inherited process environment. */
   buildSpawnEnv(conversationId: number, cwd: string): Record<string, string>
   redact(text: string): string
-  runLocalGate(command: string, options: { cwd?: string; conversationId?: number; signal?: AbortSignal }): Promise<AgentGateResult>
+  runLocalGate(command: string, options: { cwd?: string; conversationId?: number; signal?: AbortSignal; env?: Record<string, string> }): Promise<AgentGateResult>
   transport?: HerdrTransport
 }
 
