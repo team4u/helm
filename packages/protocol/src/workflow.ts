@@ -5,6 +5,15 @@
 
 import type { AgentGateResult } from './plugin.js'
 
+/** `GET /api/workflows` 已保存工作流摘要。 */
+export interface SavedWorkflowSummary {
+  name: string
+  path?: string
+  description?: string
+  whenToUse?: string
+  phases?: Array<{ title: string; detail?: string; model?: string }>
+}
+
 /** `POST /api/workflows/run` 请求体。 */
 export interface WorkflowRunRequest {
   /** 已保存工作流的名称。name、script、scriptPath 必须恰好提供一个。 */

@@ -5,6 +5,7 @@
  * Request/Response 使用 base lib 的 DOM 类型，不依赖 node 内置模块。
  */
 
+import type { ConversationSummary } from './conversation.js'
 import type { HelmErrorDetail } from './error.js'
 
 export interface ApiErrorBody {
@@ -26,4 +27,25 @@ export interface AuthToken {
 export interface CredentialSummary {
   id: string
   configured: boolean
+}
+
+/** `POST /api/conversations/:id/fork` 请求体。 */
+export interface ConversationForkRequest {
+  /** 分叉锚点 entry ID（与 ConversationEntry.id 对应的正整数序号）。 */
+  entryId: number
+  title?: string
+}
+
+/** `POST /api/conversations/:id/compact` 响应。 */
+export interface ConversationCompactResponse {
+  taskId: number
+  conversation: ConversationSummary
+}
+
+/** `GET /api/search?q=...` 命中条目。 */
+export interface SearchHit {
+  conversationId: number
+  entryId?: string
+  snippet: string
+  title?: string
 }

@@ -25,10 +25,10 @@ export interface Profile {
   memory?: string
 }
 
-/** Profile 绑定的外部 Agent 运行时配置（当前仅 herdr 一种 kind）。 */
+/** Profile 绑定的外部 Agent 运行时配置（如 'herdr'，由对应插件接管驱动）。 */
 export interface ProfileRuntime {
-  kind: 'herdr'
-  /** Herdr 管理的 CLI Agent 标识，如 'agy' | 'claude' | 'codex' | 'pi'。 */
+  kind: 'herdr' | (string & {})
+  /** 外部 CLI Agent 标识，如 'agy' | 'claude' | 'codex' | 'pi'。 */
   agent: string
   args?: string[]
   /** 目标计算节点标识（缺省本机 'local'）。 */
@@ -46,6 +46,13 @@ export interface SkillSummary {
   description?: string
   /** 支持按需读取的子文件相对路径（如 'references/xxx.md'）。 */
   references: string[]
+}
+
+/** `GET /api/models` 公开模型目录条目。 */
+export interface ModelCatalogEntry {
+  provider: string
+  modelId: string
+  available: boolean
 }
 
 /** PI 内置供应商与已启用自定义网关的公开目录，不含凭据或请求配置。 */

@@ -43,6 +43,9 @@ export interface SidebarSectionSpec extends UiSpecBase {
   icon?: string
   /** 分组内会话过滤标签（如 'worker'）。 */
   filterTag?: string
+  /** 是否支持折叠及默认折叠态（如已归档分组）。 */
+  collapsible?: boolean
+  defaultCollapsed?: boolean
   order?: number
 }
 
