@@ -6,6 +6,8 @@ import { test } from 'node:test'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { createHelm } from '../src/app.js'
+import { startHub } from '../src/http/index.js'
+import { runCli } from '../../node/src/cli/index.js'
 import type { HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
 
 // 实际 app/PluginHost/配置落盘；传输 fixture 仅确认连接生命周期，不执行模型任务。
@@ -62,10 +64,10 @@ test('createHelm 先配置后启用，重启沿用开关与连接配置，停用
   let app: Awaited<ReturnType<typeof createHelm>> | undefined
   try {
     app = await openApp(dir, fixture.transport)
-    assert.deepEqual(fixture.subscribed, [], '默认停用时不得连接')
+    assert.equal(fixture.subscribed.length, 0, '默认停用时不得连接')
     const socketPath = join(dir, 'controlled-herdr.sock')
     await app.kernel.plugins.setConfig('builtin:herdr', { socketPath, startupTimeoutMs: 30_000 })
-    assert.deepEqual(fixture.subscribed, [], '配置停用插件也不得连接')
+    assert.equal(fixture.subscribed.length, 0, '配置停用插件也不得连接')
     await app.kernel.plugins.enable('builtin:herdr')
     assert.equal(fixture.subscribed.length, 1)
     assert.equal(fixture.subscribed[0]?.socketPath, socketPath)
@@ -96,6 +98,61 @@ test('createHelm 先配置后启用，重启沿用开关与连接配置，停用
     assert.equal(fixture.subscribed.length, 2, '持久停用后重启不得重新连接')
   } finally {
     await app?.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('Herdr 动作经真实 HTTP 自动映射 CLI，支持 --json 和 --current', { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-herdr-cli-'))
+  const fixture = connectionFixture()
+  const app = await openApp(dir, fixture.transport)
+  let hub: Awaited<ReturnType<typeof startHub>> | undefined
+  const credential = app.kernel.auth.createProcessToken()
+  try {
+    hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 0 })
+    const env = {
+      HELM_HUB_URL: hub.url,
+      HELM_DATA_DIR: join(dir, 'cli'),
+      HELM_TOKEN: credential.token,
+      HELM_CONVERSATION_ID: '1',
+    }
+    async function cli(args: string[]) {
+      let out = ''
+      let err = ''
+      const code = await runCli([...args, '--json'], {
+        env,
+        stdout: (text) => { out += text },
+        stderr: (text) => { err += text },
+      })
+      assert.ok(!(out + err).includes(credential.token))
+      return { code, out, err }
+    }
+    const socketPath = join(dir, 'controlled.sock')
+    const configured = await cli(['plugins', 'config', 'builtin:herdr', '--input', JSON.stringify({ socketPath })])
+    assert.equal(configured.code, 0, configured.err)
+    assert.deepEqual(JSON.parse(configured.out), { ok: true })
+    const configRead = await cli(['plugins', 'config', 'builtin:herdr'])
+    assert.equal(configRead.code, 0, configRead.err)
+    assert.equal(JSON.parse(configRead.out).values.socketPath, socketPath)
+    assert.equal(fixture.subscribed.length, 0, 'CLI 配置也不能提前连接')
+
+    const enabled = await cli(['plugins', 'enable', 'builtin:herdr'])
+    assert.equal(enabled.code, 0, enabled.err)
+    assert.equal(JSON.parse(enabled.out).find((plugin: { id: string }) => plugin.id === 'builtin:herdr').enabled, true)
+    const listed = await cli(['herdr', 'list', '--current'])
+    assert.equal(listed.code, 0, listed.err)
+    assert.equal(listed.err, '')
+    assert.deepEqual(JSON.parse(listed.out), { panes: [] })
+
+    const missing = await cli(['herdr', 'read', '--pane-id', 'human-pane', '--current'])
+    assert.notEqual(missing.code, 0)
+    assert.equal(missing.out, '')
+    assert.equal(JSON.parse(missing.err).error.code, 'not_found')
+    assert.equal(fixture.subscribed.length, 1)
+  } finally {
+    credential.dispose()
+    await hub?.close()
+    await app.close()
     rmSync(dir, { recursive: true, force: true })
   }
 })
