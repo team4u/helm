@@ -28,6 +28,7 @@ import {
   type AgentGateResult,
   type AgentSpawnRequest,
   type ConversationSummary,
+  type SavedWorkflowSummary,
   type WorkflowJournalEntry,
   type WorkflowProgressEntry,
   type WorkflowRunRequest,
@@ -249,6 +250,24 @@ const PROGRESS_PERSIST_INTERVAL_MS = 1_000
 /** workflow.updated 节点事件最小间隔：有界频率，但节点开始/结束强制推送。 */
 const NODE_EVENT_INTERVAL_MS = 250
 
+/** list() 摘要构造：尽力填充 meta 的 description/whenToUse/phases；
+ * meta 解析失败（非纯字面量、插值等）仅返回 { name, path }——列表是目录
+ * 视图，单个脚本的 meta 瑕疵不阻断整个列表，运行时提取仍会如实报错。 */
+function summaryFromSource(name: string, path: string, source: string): SavedWorkflowSummary {
+  try {
+    const { meta } = extractMeta(source)
+    return {
+      name,
+      path,
+      description: meta.description,
+      ...(meta.whenToUse !== undefined ? { whenToUse: meta.whenToUse } : {}),
+      ...(meta.phases !== undefined ? { phases: meta.phases } : {}),
+    }
+  } catch {
+    return { name, path }
+  }
+}
+
 export class WorkflowService {
   private readonly dataDir: string
   private readonly host: WorkflowServiceHost
@@ -343,8 +362,12 @@ export class WorkflowService {
   // list：已保存工作流目录
   // ------------------------------------------------------------------
 
-  /** 列出 dataDir/workflows 下可复用的工作流脚本（仅 meta 声明合法的 .js 文件）。 */
-  list(): Array<{ name: string; path: string }> {
+  /** 列出 dataDir/workflows 下可复用的工作流脚本（仅 meta 声明合法的 .js 文件）。
+   *
+   * 每项尽力填充 description / whenToUse / phases（读文件并解析 meta 声明）；
+   * 读取或 meta 解析失败时仅返回 { name, path }（列表是目录视图，单个
+   * 脚本的 meta 瑕疵不应让整个列表 500）。 */
+  list(): SavedWorkflowSummary[] {
     const dir = this.workflowsDir()
     let entries: string[]
     try {
@@ -358,7 +381,7 @@ export class WorkflowService {
         code: err.code,
       })
     }
-    const out: Array<{ name: string; path: string }> = []
+    const out: SavedWorkflowSummary[] = []
     for (const entry of entries.sort()) {
       if (!entry.endsWith('.js')) continue
       const name = entry.slice(0, -3)
@@ -378,7 +401,7 @@ export class WorkflowService {
       }
       // 非 workflow 的普通 .js（构建产物、草稿）不应出现在列表里。
       if (!hasMetaDeclaration(source)) continue
-      out.push({ name, path })
+      out.push(summaryFromSource(name, path, source))
     }
     return out
   }

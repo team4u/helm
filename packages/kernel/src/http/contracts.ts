@@ -8,6 +8,7 @@ import type {
   ActionManifest,
   ArtifactMetadata,
   AskSpec,
+  ConversationCompactResponse,
   ConversationDetail,
   ConversationInit,
   ConversationInputResult,
@@ -16,6 +17,7 @@ import type {
   ConversationSummary,
   EnvExecRequest,
   EnvExecResponse,
+  ModelCatalogEntry,
   NodeInfo,
   NodeIssuedToken,
   ModelProviderSummary,
@@ -24,6 +26,8 @@ import type {
   PluginSummary,
   ProviderConfig,
   PublicPluginDoc,
+  SavedWorkflowSummary,
+  SearchHit,
   SkillSummary,
   WorkflowRunRequest,
   WorkflowRunSummary,
@@ -101,9 +105,7 @@ export interface PluginHost {
   getPublicDoc(pluginId: string, name: string): Promise<PublicPluginDoc> | PublicPluginDoc
 }
 
-export interface SearchHit {
-  [key: string]: unknown
-}
+export type { SearchHit }
 
 /** HTTP 消费的 KernelRuntime 形状（真实 KernelRuntime 结构化兼容于它）。 */
 export interface KernelRuntimeLike {
@@ -172,7 +174,7 @@ export interface KernelRuntimeLike {
   compactConversation(
     id: number,
     opts?: { instructions?: string },
-  ): Promise<{ taskId: number; conversation: ConversationSummary }> | { taskId: number; conversation: ConversationSummary }
+  ): Promise<ConversationCompactResponse> | ConversationCompactResponse
   /** 从指定条目分叉新会话（继承 profile/cwd/model，父链指向源会话）。 */
   forkConversation(
     id: number,
@@ -184,7 +186,7 @@ export interface KernelRuntimeLike {
   cancelAsk(id: string): Promise<void> | void
 
   search(query: string): Promise<SearchHit[]> | SearchHit[]
-  listModels(): Promise<unknown[]> | unknown[]
+  listModels(): Promise<ModelCatalogEntry[]> | ModelCatalogEntry[]
   listModelProviders(): Promise<ModelProviderSummary[]> | ModelProviderSummary[]
   /**
    * 动态模型目录刷新（POST /api/models/refresh）：目标动态供应商 allowNetwork
@@ -229,7 +231,7 @@ export interface WorkflowRunHandle {
 }
 
 export interface WorkflowServiceLike {
-  list(): Promise<unknown[]> | unknown[]
+  list(): Promise<SavedWorkflowSummary[]> | SavedWorkflowSummary[]
   /** 已知全部 run 摘要（含运行中与终态）。 */
   listRuns(): Promise<WorkflowRunSummary[]> | WorkflowRunSummary[]
   run(request: WorkflowRunRequest): Promise<WorkflowRunSummary | WorkflowRunHandle> | WorkflowRunSummary | WorkflowRunHandle
@@ -255,4 +257,4 @@ export interface HubHandle {
 }
 
 // 导出供测试构造完整 Profile
-export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, WorkflowRunSummary, WorkflowRunRequest, PublicPluginDoc, NodeInfo, NodeIssuedToken, EnvExecRequest, EnvExecResponse }
+export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, WorkflowRunSummary, WorkflowRunRequest, PublicPluginDoc, NodeInfo, NodeIssuedToken, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, SavedWorkflowSummary, ConversationCompactResponse }

@@ -33,6 +33,67 @@ test('本机 Scoped env 不会再次继承宿主或逐调用伪造的 HELM_TOKEN
   }
 })
 
+test('无 composer 的本机 Scoped env 剥除宿主全部受管 HELM_* 变量（fail-closed）', { timeout: 60_000 }, async () => {
+  const saved: Record<string, string | undefined> = {}
+  const injected: Array<[string, string]> = [
+    ['HELM_TOKEN', 'host-token'],
+    ['helm_token', 'host-token-variant'],
+    ['HELM_CONVERSATION_ID', '999'],
+    ['HELM_CWD', '/wrong'],
+    ['HELM_ENV', '1'],
+    ['HELM_DATA_DIR', '/host/data'],
+    ['HELM_HUB_URL', 'http://wrong:1'],
+    ['HELM_NODE_ID', 'wrong-node'],
+  ]
+  for (const [key, value] of injected) {
+    saved[key] = process.env[key]
+    process.env[key] = value
+  }
+  const fabric = createEnvFabric({})
+  try {
+    // 无 envOptions（无会话作用域）：宿主继承不得携带任何受管 HELM_* 值。
+    const env = fabric.envForTarget({ nodeId: 'local', cwd: process.cwd() })
+    let text = ''
+    const result = await env.exec(
+      [process.execPath, '-e', 'process.stdout.write(JSON.stringify(Object.keys(process.env).filter((k) => /^helm_/i.test(k))))'],
+      { onOutput: (chunk) => { text += chunk } },
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(result.ok, true)
+    assert.deepEqual(JSON.parse(text), [], '宿主受管 HELM_* 变量（含大小写变体）必须全部剥除')
+  } finally {
+    for (const [key] of injected) {
+      const prev = saved[key]
+      if (prev === undefined) delete process.env[key]
+      else process.env[key] = prev
+    }
+    await fabric.dispose()
+  }
+})
+
+test('composer 提供的受管变量仍生效（绑定键不被宿主剥除误伤）', { timeout: 60_000 }, async () => {
+  const fabric = createEnvFabric({
+    envOptions: ({ conversationId, cwd }) => ({
+      HELM_CONVERSATION_ID: String(conversationId ?? 0),
+      HELM_CWD: cwd,
+      HELM_ENV: '1',
+    }),
+  })
+  try {
+    const env = fabric.envForTarget({ conversationId: 5, nodeId: 'local', cwd: process.cwd() })
+    let text = ''
+    const result = await env.exec(
+      [process.execPath, '-e', 'process.stdout.write(process.env.HELM_CONVERSATION_ID + "|" + process.env.HELM_ENV)'],
+      { onOutput: (chunk) => { text += chunk } },
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(result.ok, true)
+    assert.equal(text, '5|1')
+  } finally {
+    await fabric.dispose()
+  }
+})
+
 test('新连接顶替旧连接后事件路由绑定新发布代', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   const sockets = [new RegistrySocket(), new RegistrySocket()]

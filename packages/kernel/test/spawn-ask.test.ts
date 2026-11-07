@@ -625,6 +625,46 @@ describe('spawn profile 与运行时声明', { timeout: 60_000 }, () => {
     }
   })
 
+  it('任意 namespace:kind 外部运行时（非 herdr）无插件接管同样 unsupported_runtime（内核零插件枚举硬编码）', { timeout: 60_000 }, async () => {
+    const th = await openSpawnHarness()
+    try {
+      // 内核不点名任何插件：docker:devbox、ssh:remote 等一切命名空间形式
+      // 一律经 agent_spawn 钩子接管；无接管时统一显式报错。
+      for (const agentType of ['docker:devbox', 'ssh:remote', 'claude:code']) {
+        await assert.rejects(
+          () =>
+            runNativeSpawn(th.deps, {
+              parentConversationId: 1,
+              prompt: 'x',
+              agentType,
+            } as never),
+          (err: unknown) =>
+            err instanceof HelmError && err.code === 'unsupported_runtime' && err.message.includes(agentType),
+        )
+      }
+    } finally {
+      await th.close()
+    }
+  })
+
+  it('普通 profileId（无冒号）不受命名空间判定影响（继续走 profile 解析）', { timeout: 60_000 }, async () => {
+    const th = await openSpawnHarness()
+    try {
+      // 无冒号但未注册的 profile：not_found（不是 unsupported_runtime）。
+      await assert.rejects(
+        () =>
+          runNativeSpawn(th.deps, {
+            parentConversationId: 1,
+            prompt: 'x',
+            agentType: 'no-such-profile',
+          } as never),
+        (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+      )
+    } finally {
+      await th.close()
+    }
+  })
+
   it('gate 用子会话实际 cwd（request.cwd），失败保留诊断', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {

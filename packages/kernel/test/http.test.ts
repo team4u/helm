@@ -224,7 +224,7 @@ function makeKernel(): KernelRuntimeLike {
     async search(q) {
       return [{ conversationId: 1, snippet: `hit:${q}` }]
     },
-    listModels: () => [{ id: 'faux/model' }],
+    listModels: () => [{ provider: 'faux', modelId: 'model', available: true }],
     listModelProviders: () => [{ id: 'faux', name: 'Faux', modelCount: 1, authMethods: [{ type: 'api_key', label: 'API Key' }] }],
     refreshModels: undefined,
   }

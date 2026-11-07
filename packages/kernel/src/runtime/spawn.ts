@@ -118,7 +118,7 @@ export async function runNativeSpawn(
   if (request.isolation !== undefined && request.isolation !== null) {
     throw new HelmError(
       'unsupported_runtime',
-      `isolation='${request.isolation}' 暂不支持：请经 builtin:herdr 委派终端 CLI Agent`,
+      `isolation='${request.isolation}' 暂不支持：原生 subagent 执行行不提供隔离，请经外部运行时插件（agent_spawn 钩子接管方）委派终端 CLI Agent`,
       400,
     )
   }
@@ -126,11 +126,13 @@ export async function runNativeSpawn(
     throw new HelmError('aborted', 'spawn 请求在创建前已取消（signal 已 abort）', 409)
   }
   const agentType = request.agentType ?? ''
-  if (agentType.startsWith('herdr:')) {
-    // 无 herdr 插件接管时的显式失败（不误当 profile 处理）。
+  // 通用命名空间前缀判定：任何 '<namespace>:<kind>' 形式的外部运行时
+  //（如 herdr:agy、docker:devbox）都须经 agent_spawn 钩子接管；无插件接管时
+  // 内核零插件枚举硬编码，不点名任何插件，一律显式 unsupported_runtime。
+  if (agentType.includes(':')) {
     throw new HelmError(
       'unsupported_runtime',
-      `agentType '${agentType}' 需要 builtin:herdr 插件启用（当前未注册该运行时）`,
+      `agentType '${agentType}' 是外部运行时标识（namespace:kind 形式），需要对应插件经 agent_spawn 钩子接管（当前未注册该运行时）`,
       400,
     )
   }

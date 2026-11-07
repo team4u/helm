@@ -29,7 +29,10 @@ import {
   type Provider,
 } from '@earendil-works/pi-ai'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
-import { HelmError, type ModelProviderSummary, type ProviderConfig } from '@helm/protocol'
+import { HelmError, type ModelCatalogEntry, type ModelProviderSummary, type ProviderConfig } from '@helm/protocol'
+
+// 共享目录条目类型统一来自 @helm/protocol（此处重新导出，消费方无需改导入路径）。
+export type { ModelCatalogEntry }
 
 export interface ModelGatewayOptions {
   /** providers.json 条目。 */
@@ -40,12 +43,6 @@ export interface ModelGatewayOptions {
   modelsStore?: ModelsStore
   /** 运行时动态注册的额外供应商（插件注册；凭据注入同内置供应商）。 */
   extraProviders?: Provider[]
-}
-
-export interface ModelCatalogEntry {
-  provider: string
-  modelId: string
-  available: boolean
 }
 
 /**

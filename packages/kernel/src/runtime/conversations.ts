@@ -59,13 +59,16 @@ export interface TrackerEvents {
 
 interface TrackedInput {
   input: ConversationInput
-  submissionId: number
+  submissionId: number | string
   /** 已进入某 run 的消费清单（FTS/上报用）。 */
   consumed: boolean
 }
 
 /** live 节流窗口（毫秒）：50-100ms 区间取 75ms，兼顾 SSE 帧率与提交压力。 */
 const LIVE_THROTTLE_MS = 75
+
+/** 单会话 settledRuns 保留上限（防 7×24 长跑无界增长；runId 单调，淘汰永不复现）。 */
+const SETTLED_RUNS_PER_CONVERSATION = 64
 
 export class ConversationTracker {
   private readonly harness: Harness
@@ -75,14 +78,23 @@ export class ConversationTracker {
   private readonly detach = new Map<number, () => void>()
   /** 会话 -> 当前 live 镜像（最近一次 advance 值）。 */
   private readonly liveViews = new Map<number, LiveStateShape>()
-  /** submissionId -> TrackedInput（submit 登记 + entry 观察重建双通道）。 */
-  private readonly trackedInputs = new Map<number, Map<number, TrackedInput>>()
+  /** submissionId -> TrackedInput（submit 登记 + entry 观察重建双通道）。
+   *
+   * 键域（无碰撞区分）：
+   * - number（正）：SDK 真实 submissionId（bindSubmission 回填）；
+   * - number（负）：submit 前的临时登记键（bindSubmission/dropInput 迁移或删除）；
+   * - string `req:<requestId>`：helm.input entry 观察重建（观察路径拿不到
+   *   submissionId，直接以 requestId 字符串落位，不做哈希——32-bit 哈希既
+   *   会碰撞，又会在 hash === -2147483648 时 Math.abs 仍为负、与负数临时键撞车）。 */
+  private readonly trackedInputs = new Map<number, Map<number | string, TrackedInput>>()
   /** 本回合已消费 submissionId 集（run 存续期间累计，新 taskId 重置）。 */
-  private readonly consumedInputs = new Map<number, Set<number>>()
+  private readonly consumedInputs = new Map<number, Set<number | string>>()
   /** 当前 run 的 taskId（多 tool round 不变；变化才重置消费集）。 */
   private readonly runTaskIds = new Map<number, number>()
   /** 已结算的 run（防 done+failure+abort 双报）。 */
   private readonly settledRuns = new Set<string>()
+  /** 会话 -> 已结算 runKey 插入序（容量淘汰用，与 settledRuns 同步维护）。 */
+  private readonly settledRunOrder = new Map<number, string[]>()
   /** 会话 -> 最近一个已结算 run 的 taskId（显式 abort 防重入）。 */
   private readonly lastSettledRun = new Map<number, number>()
   /** 会话 -> 在途 turn_settled 回调链（waitForIdle 等待本会话而非全局）。 */
@@ -144,7 +156,7 @@ export class ConversationTracker {
     this.rebuildFromEntries(id, view.entries as never)
     if (live?.run) {
       this.runTaskIds.set(id, live.run.taskId)
-      this.consumedInputs.set(id, new Set())
+      this.consumedInputs.set(id, new Set<number | string>())
       for (const submissionId of live.run.inputs) this.markConsumed(id, submissionId)
       this.noteActivity(id, live)
     }
@@ -158,6 +170,28 @@ export class ConversationTracker {
     this.clearLiveTimer(id)
     this.pendingLive.delete(id)
     this.lastLiveKey.delete(id)
+    // 彻底清理该会话的全部内存镜像：settledRuns 前缀键、run 状态、
+    // 输入登记/消费集、水位线与活动指纹、结算等待者（先 resolve 防永久挂起）。
+    // 否则反复建删会话的进程（CLI/Web 管理面）会随时间无限累积残留条目。
+    for (const runKey of this.settledRuns) {
+      if (runKey.startsWith(`${id}:`)) this.settledRuns.delete(runKey)
+    }
+    this.settledRunOrder.delete(id)
+    this.lastSettledRun.delete(id)
+    this.runTaskIds.delete(id)
+    this.trackedInputs.delete(id)
+    this.consumedInputs.delete(id)
+    this.lastEmittedEntry.delete(id)
+    this.lastActivityAt.delete(id)
+    this.lastActivityKey.delete(id)
+    this.consecutiveErrors.delete(id)
+    this.lastAssistant.delete(id)
+    this.settledInflight.delete(id)
+    this.settledErrors.delete(id)
+    const waiters = this.settledWaiters.get(id) ?? []
+    this.settledWaiters.delete(id)
+    for (const resolve of waiters) resolve()
+    this.pendingAskCounts.delete(id)
   }
 
   /** 清理 live 节流 timer（幂等）。 */
@@ -171,7 +205,7 @@ export class ConversationTracker {
 
   /** 提交前登记 input 元数据（submit 返回后 bindSubmission 回填真实 submissionId）。 */
   registerInput(conversationId: number, input: ConversationInput): number {
-    const map = this.trackedInputs.get(conversationId) ?? new Map()
+    const map = this.trackedInputs.get(conversationId) ?? new Map<number | string, TrackedInput>()
     const key = nextInputKey()
     map.set(key, { input, submissionId: key, consumed: false })
     this.trackedInputs.set(conversationId, map)
@@ -195,7 +229,7 @@ export class ConversationTracker {
   currentRunInputs(conversationId: number): ConversationInput[] {
     const run = this.liveViews.get(conversationId)?.run
     if (!run) return []
-    const consumed = this.consumedInputs.get(conversationId) ?? new Set<number>()
+    const consumed = this.consumedInputs.get(conversationId) ?? new Set<number | string>()
     const out: ConversationInput[] = []
     const map = this.trackedInputs.get(conversationId)
     for (const submissionId of run.inputs) {
@@ -257,7 +291,7 @@ export class ConversationTracker {
       return
     }
     if (taskId !== undefined) {
-      this.settledRuns.add(`${conversationId}:${taskId}`)
+      this.noteSettledRun(conversationId, `${conversationId}:${taskId}`)
     }
     const all = this.takeAllInputs(conversationId)
     this.resetRunState(conversationId)
@@ -278,6 +312,30 @@ export class ConversationTracker {
     this.consumedInputs.delete(conversationId)
     // runTaskIds 保留：显式 abort 路径需它对照 lastSettledRun 防重入；
     // 新 run 启动时（live.run.taskId 变化）自然覆盖。
+  }
+
+  /** 登记已结算 runKey，并按会话限制保留容量（最旧淘汰，防无界增长）。
+   *
+   * runId（taskId）全库单调递增：被淘汰的最旧键不可能再出现，新 run 开始时
+   * 的 settledRuns.delete(runKey) 只作用于最近键（必在容量内），语义不变。 */
+  private noteSettledRun(conversationId: number, runKey: string): void {
+    this.settledRuns.add(runKey)
+    const order = this.settledRunOrder.get(conversationId) ?? []
+    order.push(runKey)
+    while (order.length > SETTLED_RUNS_PER_CONVERSATION) {
+      const evicted = order.shift()
+      if (evicted !== undefined) this.settledRuns.delete(evicted)
+    }
+    this.settledRunOrder.set(conversationId, order)
+  }
+
+  /** 从容量序中移除指定 runKey（新 run 开始时同步清 settledRuns 用）。 */
+  private dropSettledRunFromOrder(conversationId: number, runKey: string): void {
+    const order = this.settledRunOrder.get(conversationId)
+    if (order === undefined) return
+    const index = order.indexOf(runKey)
+    if (index >= 0) order.splice(index, 1)
+    if (order.length === 0) this.settledRunOrder.delete(conversationId)
   }
 
   private adopt(id: number, view: ConversationView): void {
@@ -311,7 +369,7 @@ export class ConversationTracker {
       const prevRun = prev.run
       const runKey = `${id}:${prevRun.taskId}`
       if (!this.settledRuns.has(runKey)) {
-        this.settledRuns.add(runKey)
+        this.noteSettledRun(id, runKey)
         this.lastSettledRun.set(id, prevRun.taskId)
         const failure = live?.runFailure
         if (failure && failure.taskId === prevRun.taskId) {
@@ -341,8 +399,9 @@ export class ConversationTracker {
       if (this.runTaskIds.get(id) !== live.run.taskId) {
         // 新 run 开始：重置本回合消费集（同 run 多 tool round 不重置）。
         this.runTaskIds.set(id, live.run.taskId)
-        this.consumedInputs.set(id, new Set())
+        this.consumedInputs.set(id, new Set<number | string>())
         this.settledRuns.delete(runKey)
+        this.dropSettledRunFromOrder(id, runKey)
       }
       for (const submissionId of live.run.inputs) {
         this.markConsumed(id, submissionId)
@@ -438,7 +497,7 @@ export class ConversationTracker {
 
   /** 从 view.entries 的 helm.input 数据重建输入映射（含负 key 临时项合并）。 */
   private rebuildFromEntries(id: number, entries: ReadonlyArray<unknown>): void {
-    const map = this.trackedInputs.get(id) ?? new Map()
+    const map = this.trackedInputs.get(id) ?? new Map<number | string, TrackedInput>()
     let changed = false
     for (const raw of entries) {
       const entry = raw as {
@@ -460,7 +519,6 @@ export class ConversationTracker {
         | undefined
       if (!meta || typeof meta.id !== 'string' || typeof meta.text !== 'string') continue
       const submissionKey = submissionKeyOfEntry(meta.id)
-      if (submissionKey === undefined) continue
       if (!map.has(submissionKey)) {
         map.set(submissionKey, {
           input: {
@@ -482,11 +540,11 @@ export class ConversationTracker {
     if (changed) this.trackedInputs.set(id, map)
   }
 
-  private markConsumed(conversationId: number, submissionId: number): void {
+  private markConsumed(conversationId: number, submissionId: number | string): void {
     const map = this.trackedInputs.get(conversationId)
     const tracked = map?.get(submissionId)
     if (!map || !tracked) return
-    const consumedSet = this.consumedInputs.get(conversationId) ?? new Set<number>()
+    const consumedSet = this.consumedInputs.get(conversationId) ?? new Set<number | string>()
     if (consumedSet.has(submissionId)) return
     consumedSet.add(submissionId)
     this.consumedInputs.set(conversationId, consumedSet)
@@ -660,17 +718,13 @@ function nextInputKey(): number {
 
 /**
  * helm.input entry data.id 即 submit 的 requestId；观察路径无法直接拿到
- * submissionId，这里以 requestId 哈希落位：同一输入在 map 中的 key 稳定，
- * bindSubmission 用真实 submissionId 再迁移。重启后凭 entry 重建同理。
+ * submissionId，直接以 `req:${requestId}` 字符串落位：同一输入在 map 中的
+ * key 稳定且全局无碰撞。旧实现把 requestId 哈希为 32-bit int——既存在
+ * 哈希碰撞风险，又在 hash === -2147483648 时 Math.abs 仍为负数，与
+ * nextInputKey() 的负数临时键撞车，故彻底移除哈希。
  */
-function submissionKeyOfEntry(requestId: string): number | undefined {
-  let hash = 0
-  for (let i = 0; i < requestId.length; i += 1) {
-    hash = (hash * 31 + requestId.charCodeAt(i)) | 0
-  }
-  // 避免与负数临时 key 冲突：非负整数域。
-  const key = Math.abs(hash)
-  return key === 0 ? 1 : key
+function submissionKeyOfEntry(requestId: string): string {
+  return `req:${requestId}`
 }
 
 /** 提取 assistant entry 的文本块内容。 */
