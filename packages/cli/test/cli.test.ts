@@ -950,17 +950,16 @@ test('首次数据目录不存在时 setup 仍能落盘凭据（目录先建、�
   }
 })
 
-test('跨进程并发：真实子进程 CLI 写 cli-token 与 Hub CredentialService.set 写 credentials.json 互不干扰', { timeout: 60_000 }, async () => {
+test('跨进程并发：真实子进程 CLI 写 cli-token 与 Hub CredentialService.set 写 credentials.json 互不干扰（连续 3 轮验证稳定）', { timeout: 60_000 }, async () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
   const tsxCli = resolveTscCli()
-  const dataDir = freshDataDirPath() // 目录不存在：验证双方首次创建
   const cliEntry = path.join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
 
   // CLI 子进程：真实独立 Node 进程登录写 cli-token（Hub 换发 token）
   const hub = await startHub({
     'POST /api/auth/login': (body) => ({ body: { token: `tok-cli-${(body as { password: string }).password}` } }),
   })
-  const runCliChild = (password: string): Promise<{ code: number | null; err: string }> =>
+  const runCliChild = (dataDir: string, password: string): Promise<{ code: number | null; err: string }> =>
     new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [tsxCli, cliEntry, 'login', '--password', password, '--json'], {
         env: { ...process.env, HELM_HUB_URL: hub.url, HELM_DATA_DIR: dataDir, HELM_TOKEN: '' },
@@ -971,45 +970,53 @@ test('跨进程并发：真实子进程 CLI 写 cli-token 与 Hub CredentialServ
       child.on('error', reject)
       child.on('close', (code) => resolve({ code, err }))
     })
+  // 连续多轮（每轮全新 dataDir，目录不存在验证首次创建）：叠加锁竞争窗口，确保修复后 100% 稳定
+  const ROUNDS = 3
   try {
-    // 预置服务端键，随后 4 个真实 CLI 子进程（写 cli-token）与 4 次进程内 CredentialService.set（写 credentials.json）并发
     const { CredentialService } = await import('../../kernel/src/services/index.js')
-    await fsp.mkdir(dataDir, { recursive: true })
-    await fsp.writeFile(path.join(dataDir, 'credentials.json'), JSON.stringify({ providers: {}, pluginSecrets: {} }), { mode: 0o600 })
-    const svc = new CredentialService(dataDir)
-    await svc.set('base', 'sk-base-0123456789')
+    for (let round = 0; round < ROUNDS; round++) {
+      const dataDir = freshDataDirPath()
+      try {
+        // 预置服务端键，随后 4 个真实 CLI 子进程（写 cli-token）与 4 次进程内 CredentialService.set（写 credentials.json）并发
+        await fsp.mkdir(dataDir, { recursive: true })
+        await fsp.writeFile(path.join(dataDir, 'credentials.json'), JSON.stringify({ providers: {}, pluginSecrets: {} }), { mode: 0o600 })
+        const svc = new CredentialService(dataDir)
+        await svc.set('base', 'sk-base-0123456789')
 
-    const children: Promise<{ code: number | null; err: string }>[] = Array.from({ length: 4 }, (_, i) => runCliChild(`pw-${i}`))
-    const serverSets: Promise<void>[] = Array.from({ length: 4 }, (_, i) => svc.set(`provider-${i}`, `sk-value-${i}`))
-    const childResults = await Promise.all(children)
-    await Promise.all(serverSets)
-    for (const r of childResults) {
-      assert.equal(r.code, 0, `CLI 子进程失败: ${r.err}`)
-    }
+        const children: Promise<{ code: number | null; err: string }>[] = Array.from({ length: 4 }, (_, i) => runCliChild(dataDir, `pw-${i}`))
+        const serverSets: Promise<void>[] = Array.from({ length: 4 }, (_, i) => svc.set(`provider-${i}`, `sk-value-${i}`))
+        const childResults = await Promise.all(children)
+        await Promise.all(serverSets)
+        for (const r of childResults) {
+          assert.equal(r.code, 0, `第 ${round + 1}/${ROUNDS} 轮 CLI 子进程失败: ${r.err}`)
+        }
 
-    // 模型密钥全部保留（credentials.json 不再承载 CLI 登录态）；cli-token 独立（最后一次子进程写入者）
-    const final = JSON.parse(await fsp.readFile(path.join(dataDir, 'credentials.json'), 'utf8')) as Record<string, unknown> & {
-      providers: Record<string, { value: string }>
+        // 模型密钥全部保留（credentials.json 不再承载 CLI 登录态）；cli-token 独立（最后一次子进程写入者）
+        const final = JSON.parse(await fsp.readFile(path.join(dataDir, 'credentials.json'), 'utf8')) as Record<string, unknown> & {
+          providers: Record<string, { value: string }>
+        }
+        assert.equal(final['cli'], undefined, '登录态不得再写入 credentials.json')
+        const finalToken = JSON.parse(await fsp.readFile(path.join(dataDir, 'cli-token'), 'utf8')) as { hubUrl: string; token: string }
+        assert.equal(finalToken.hubUrl, hub.url)
+        assert.match(finalToken.token, /^tok-cli-pw-[0-3]$/)
+        const ids = await svc.list()
+        assert.deepEqual(ids, ['base', 'provider-0', 'provider-1', 'provider-2', 'provider-3'])
+        for (let i = 0; i < 4; i++) {
+          assert.equal(final.providers[`provider-${i}`]?.value, `sk-value-${i}`)
+        }
+        // 0600 与无锁/临时文件残留（两个文件均验）
+        const st = await fsp.stat(path.join(dataDir, 'credentials.json'))
+        assert.equal(st.mode & 0o777, 0o600)
+        const stToken = await fsp.stat(path.join(dataDir, 'cli-token'))
+        assert.equal(stToken.mode & 0o777, 0o600)
+        const leftovers = (await fsp.readdir(dataDir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
+        assert.deepEqual(leftovers, [])
+      } finally {
+        await fsp.rm(dataDir, { recursive: true, force: true }).catch(() => {})
+      }
     }
-    assert.equal(final['cli'], undefined, '登录态不得再写入 credentials.json')
-    const finalToken = JSON.parse(await fsp.readFile(path.join(dataDir, 'cli-token'), 'utf8')) as { hubUrl: string; token: string }
-    assert.equal(finalToken.hubUrl, hub.url)
-    assert.match(finalToken.token, /^tok-cli-pw-[0-3]$/)
-    const ids = await svc.list()
-    assert.deepEqual(ids, ['base', 'provider-0', 'provider-1', 'provider-2', 'provider-3'])
-    for (let i = 0; i < 4; i++) {
-      assert.equal(final.providers[`provider-${i}`]?.value, `sk-value-${i}`)
-    }
-    // 0600 与无锁/临时文件残留（两个文件均验）
-    const st = await fsp.stat(path.join(dataDir, 'credentials.json'))
-    assert.equal(st.mode & 0o777, 0o600)
-    const stToken = await fsp.stat(path.join(dataDir, 'cli-token'))
-    assert.equal(stToken.mode & 0o777, 0o600)
-    const leftovers = (await fsp.readdir(dataDir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
-    assert.deepEqual(leftovers, [])
   } finally {
     await hub.close()
-    await fsp.rm(dataDir, { recursive: true, force: true }).catch(() => {})
   }
 })
 
