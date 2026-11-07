@@ -40,6 +40,9 @@ interface HostAudit {
   resumes: number
   gateRuns: number
   actionCalls: number
+  /** resume 调用是否携带 schema/gate options（能力下传面）。 */
+  resumedWithOptions: number
+  resumedWithGate: number
   /** spawn/resume 收到的 prompt 列表（区分调用来源）。 */
   prompts: string[]
   /** resume 调用是否发生（伪造 live child 检测）。 */
@@ -52,6 +55,8 @@ function makeAuditedHost(): WorkflowHost & { audit(): HostAudit } {
     resumes: 0,
     gateRuns: 0,
     actionCalls: 0,
+    resumedWithOptions: 0,
+    resumedWithGate: 0,
     prompts: [],
     resumedLabels: [],
   }
@@ -62,10 +67,15 @@ function makeAuditedHost(): WorkflowHost & { audit(): HostAudit } {
       return { ok: true, text: `ok:${request.prompt}` }
     },
     abortAgent() {},
-    async resumeAgent(agentId, prompt) {
+    async resumeAgent(agentId, prompt, options) {
       state.resumes++
       state.prompts.push(prompt)
       state.resumedLabels.push(agentId)
+      // 能力下传面如实记录：schema/gate 经 options 抵达续接端口。
+      if (options?.schema !== undefined) state.resumedWithOptions += 1
+      if (options?.gate !== undefined) state.resumedWithGate += 1
+      options?.onResolved?.({ conversationId: 1 })
+      if (options?.gate !== undefined) options.onGateResult?.({ ok: true, output: 'gate:remote' })
       return { ok: true, text: `resumed:${prompt}` }
     },
     async runGate(command) {

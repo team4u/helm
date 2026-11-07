@@ -25,6 +25,7 @@ export {
   type RunWorkflowOptions,
   type WorkflowRunResult,
   type WorkflowHost,
+  type ResumeAgentOptions,
   type WorkflowSpawnRequest,
   type WorkflowSpawnResult,
   type WorkflowGateResult,

@@ -362,15 +362,9 @@ async function agentIn(scope, prompt, opts) {
         "agent() opts.resume and opts.effort are mutually exclusive: a resumed agent keeps the reasoning effort it was started with."
       );
     }
-    if (schema !== undefined) {
-      throw new Error(
-        "agent() opts.resume and opts.schema are mutually exclusive: a resumed child re-prompts the session it " +
-          "already had, whose output contract was fixed when it started."
-      );
-    }
-    if (gate !== undefined) {
-      throw new Error("agent() opts.gate cannot be combined with opts.resume.");
-    }
+    // schema 与 gate 允许与 resume 组合：续接回合可带新的输出契约与验收门禁，
+    // 两者经 resumeAgent options 下传实际执行环境（原生补挂 StructuredOutput
+    // 扩展；gate 在实际执行环境内恰好一次执行并经 onGateResult 回报）。
   }
 
   const phaseIndex = phaseName !== undefined ? definePhaseIn(scope, phaseName) : scope.ambientPhaseIndex;

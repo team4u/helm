@@ -834,7 +834,7 @@ export class WorkflowService {
       async spawnAgent(request: WorkflowSpawnRequest): Promise<WorkflowSpawnResult> {
         return service.invokeSpawn(run, parent, conversationByAgent, request, false)
       },
-      async resumeAgent(agentId, prompt, onResolved): Promise<WorkflowSpawnResult> {
+      async resumeAgent(agentId, prompt, options): Promise<WorkflowSpawnResult> {
         return service.invokeSpawn(
           run,
           parent,
@@ -844,8 +844,13 @@ export class WorkflowService {
             index: -1,
             prompt,
             label: agentId,
+            // resume 缺省不携带 agentType（不重配原子会话 Profile）；
+            // schema/gate/回调由引擎续接调用原样下传。
             agentType: '',
-            ...(onResolved !== undefined ? { onResolved } : {}),
+            ...(options?.schema !== undefined ? { schema: options.schema } : {}),
+            ...(options?.gate !== undefined ? { gate: options.gate } : {}),
+            ...(options?.onResolved !== undefined ? { onResolved: options.onResolved } : {}),
+            ...(options?.onGateResult !== undefined ? { onGateResult: options.onGateResult } : {}),
           },
           true,
         )
@@ -934,7 +939,9 @@ export class WorkflowService {
       ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
       ...(request.schema !== undefined ? { schema: request.schema.schema } : {}),
       ...(resumeRef !== undefined ? { resume: resumeRef } : {}),
-      cwd: parent.cwd,
+      // cwd 不注入：执行行按自身链解析（原生 request>Profile>parent镜像>Hub；
+      // herdr request>Profile.workspace>parent>Hub）。引擎层注入会压过 Profile
+      // 路由，resume 时更会把已建子会话/Worktree 的实际 cwd 重置回父目录。
       workflowRunId: run.runId,
       onResolved: (raw: unknown) => {
         const info = sanitizeExecutionInfo(raw, { agentId: nativeAgentId })

@@ -137,7 +137,7 @@ export interface WorkflowHost {
   resumeAgent?(
     agentId: string,
     prompt: string,
-    onResolved?: WorkflowSpawnRequest['onResolved'],
+    options?: ResumeAgentOptions,
   ): Promise<WorkflowSpawnResult>
   /**
    * 执行 gate 命令并报告是否通过。cwd 为子会话工作目录（如有）。
@@ -157,6 +157,16 @@ export interface WorkflowHost {
   ): Promise<{ pluginId: string; actionId: string; result: unknown }>
   /** 解析嵌套 workflow() 引用到源码。缺省宿主直接拒绝 workflow()。 */
   loadWorkflow?(ref: WorkflowScriptRef): Promise<WorkflowScriptSource> | WorkflowScriptSource
+}
+
+/** resumeAgent 的可选能力下传面（引擎在续接调用时原样转交实际执行环境）。 */
+export interface ResumeAgentOptions {
+  /** 续接回合的结构化输出契约（脚本 agent({ resume, schema }) 编译产物）。 */
+  schema?: CompiledSchema
+  /** 续接回合的 gate 命令（在实际执行环境内恰好一次执行后经 onGateResult 回报）。 */
+  gate?: string
+  onResolved?: WorkflowSpawnRequest['onResolved']
+  onGateResult?: WorkflowSpawnRequest['onGateResult']
 }
 
 /** run 进行中可施加的控制（暂停/跳过/重试），全部幂等 best-effort。 */
@@ -866,7 +876,12 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           try {
             result =
               resumed !== undefined && resumeAgent !== undefined
-                ? await resumeAgent(resumed.agentId, payload.prompt!, onResolved)
+                ? await resumeAgent(resumed.agentId, payload.prompt!, {
+                    ...(compiledSchema !== undefined ? { schema: compiledSchema } : {}),
+                    ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
+                    onResolved,
+                    ...(payload.gate !== undefined ? { onGateResult } : {}),
+                  })
                 : await host.spawnAgent({
                     agentId,
                     index,

@@ -80,8 +80,9 @@ export interface NativeSpawnDeps extends HelmToolDeps {
    */
   getParentOfConversation(childId: number): number | undefined
   /**
-   * 读取 Helm 子会话镜像（profileId / cwd / model 等真实配置）。
-   * resume 沿用原子会话配置的唯一事实来源；不存在返回 undefined。
+   * 读取 Helm 会话镜像（profileId / cwd / model 等真实配置）。
+   * resume 沿用原子会话配置的唯一事实来源；新建路径用它取父会话 cwd
+   * 回退（request>Profile>parent>Hub 链）。不存在返回 undefined。
    */
   getConversation(childId: number): ConversationSummary | undefined
   /**
@@ -209,8 +210,13 @@ export async function runNativeSpawn(
     }
   }
 
-  // 新建路径：请求 cwd > profile.cwd > 宿主缺省（原行为保持，不扩继承策略）。
-  const childCwd = isResume ? summary!.cwd : (request.cwd ?? profile.cwd ?? deps.defaultCwd)
+  // 新建路径 cwd 链：request > profile > 父会话镜像 cwd > 宿主缺省。
+  // 引擎层（WorkflowService）不再注入 cwd，父目录回退在此完成；herdr 工厂
+  // 自身也读 parent.cwd，语义一致。
+  const parentSummary = deps.getConversation(request.parentConversationId)
+  const childCwd = isResume
+    ? summary!.cwd
+    : (request.cwd ?? profile.cwd ?? parentSummary?.cwd ?? deps.defaultCwd)
 
   // gate 与子会话同 cwd（resume 用更新后的实际 cwd，不依赖 main cwd）。
   const gateCwd = childCwd
