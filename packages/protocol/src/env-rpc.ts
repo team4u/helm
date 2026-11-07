@@ -10,6 +10,22 @@
 /** 默认本机计算节点 ID（与 Hub 同进程，零网络开销）。 */
 export const DEFAULT_NODE_ID = 'local'
 
+/** 节点轻量健康快照（由节点通过 Node.js 原生 os + fs.statfs 采集并随注册/心跳捎带）。 */
+export interface NodeHealthSnapshot {
+  /** 采集时间戳（毫秒）。 */
+  collectedAt: number
+  /** 系统运行时长（秒，os.uptime()）。 */
+  uptimeSec: number
+  /** 1 / 5 / 15 分钟平均负载（os.loadavg()，Windows 下为 [0, 0, 0]）。 */
+  loadAvg: [number, number, number]
+  /** 物理内存剩余与总量（字节，os.freemem() / os.totalmem()）。 */
+  memFreeBytes: number
+  memTotalBytes: number
+  /** 节点默认目录所在挂载点的可用与总磁盘空间（字节，fs.promises.statfs）。 */
+  diskFreeBytes?: number
+  diskTotalBytes?: number
+}
+
 /** 节点摘要信息（`GET /api/nodes` 与 SSE `snapshot.nodes` / `node.changed`）。 */
 export interface NodeInfo {
   id: string
@@ -21,6 +37,8 @@ export interface NodeInfo {
   lastSeenAt?: number
   /** 节点连接 Hub 时使用的真实可达地址（供远端受管进程回连）。 */
   hubUrl?: string
+  /** 最近一次注册或心跳捎带的节点健康快照。 */
+  health?: NodeHealthSnapshot
 }
 
 /** `POST /api/nodes/issue` 签发响应（明文 token 仅返回一次，服务端只存 sha256）。 */
@@ -45,6 +63,13 @@ export interface NodeRegisterInput {
   platform: string
   /** 节点端配置的 Hub 地址（用于远端受管子进程回连）。 */
   hubUrl?: string
+  /** 初始节点健康快照。 */
+  health?: NodeHealthSnapshot
+}
+
+/** 节点周期性心跳入参（刷新 lastSeenAt 与 health 快照）。 */
+export interface NodeHeartbeatInput {
+  health?: NodeHealthSnapshot
 }
 
 export interface NodeRegisterResult {
