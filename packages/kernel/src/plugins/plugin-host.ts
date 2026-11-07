@@ -67,6 +67,7 @@ import {
   type SettingsPanelSpec,
   type WorkflowRunSummary,
 } from '@helm/protocol';
+import type { Provider } from '@earendil-works/pi-ai';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
 import { PluginTaskTracker } from './tracking.js';
 import { assertSchemaCompilable, validatePluginInput, validatePluginOutput } from './schema.js';
@@ -100,6 +101,25 @@ export interface PluginHostOptions {
   host: PluginHostBackend;
   docs: PluginDocStore;
   config?: PluginConfigStore;
+  /**
+   * 可选的插件 Provider 挂载端口（runtime 提供）：插件经 ctx.provider 声明的
+   * 自带模型 Provider（如 Magpie）在启用时挂载、停用/卸载时卸载。
+   * - register：挂载并返回卸载函数（owner=pluginId 由宿主注入，插件不可伪造）；
+   *   卸载函数可能因活跃流/refresh 在途而拒绝（reject），宿主尊重拒绝并不拆半残留。
+   * - assertIdle：停用/卸载前预检（与 assertNoLiveTasks 同层调用），在服务 stop
+   *   之前拒绝，防止「先 stop 服务再卸载失败」的半残留状态。
+   * 未提供本端口且插件声明了 provider 时，启用阶段显式 501（禁静默）；
+   * 默认停用探测（enabled:false）只收集声明不受影响。
+   */
+  providers?: PluginProviderPort;
+}
+
+/** 插件 Provider 挂载端口：机制由 runtime 实现，宿主只负责声明收集与生命周期时序。 */
+export interface PluginProviderPort {
+  /** 挂载 provider；返回卸载函数（幂等性由端口实现保证，拒绝时 reject 不残留）。 */
+  register(provider: Provider, pluginId: string): Promise<() => Promise<void>>;
+  /** 可选：停用/卸载前预检在途流/刷新，忙时抛错（如 plugin_has_live_tasks）。 */
+  assertIdle?(pluginId: string): void;
 }
 
 /**
@@ -178,6 +198,13 @@ interface ServiceEntry extends PluginServiceSpec {
   started: boolean;
 }
 
+/** provider 声明项：definePlugin 阶段收集，启用时挂载（记录挂载顺序供逆序卸载）。 */
+interface ProviderEntry {
+  provider: Provider;
+  /** 挂载成功后的卸载函数；null = 尚未挂载（声明态/已卸载）。 */
+  unregister: (() => Promise<void>) | null;
+}
+
 /** doc 注册项：句柄 + 可见性 + 归一化初值（公共快照未写过时也能读）。 */
 interface DocRegistration {
   handle: PluginDocHandle<unknown>;
@@ -205,6 +232,8 @@ interface PluginState {
   tools: Map<string, ToolEntry>;
   routes: PluginRouteEntry[];
   services: ServiceEntry[];
+  /** 本周期 ctx.provider 声明的模型 Provider（启用时挂载、停用/卸载时逆序卸载）。 */
+  providers: ProviderEntry[];
   ui: PluginUiContribution[];
   docs: Map<string, DocRegistration>;
   configSchema: Record<string, PluginConfigFieldSchema> | null;
@@ -382,6 +411,7 @@ export class PluginHost {
         tools: new Map(),
         routes: [],
         services: [],
+        providers: [],
         ui: [],
         docs: new Map(),
         configSchema: null,
@@ -421,10 +451,14 @@ export class PluginHost {
       if (wantsEnabled) {
         state.enabled = true;
         try {
+          // provider 先于服务挂载：服务 start 可依赖本插件 provider 已可用；
+          // 半途失败时已挂载 provider 在 catch 回滚中统一卸载（禁 enabled:false 泄漏）
+          await this.registerProviders(state);
           await this.startServices(state);
         } catch (err) {
-          // 启动失败：回滚到停用形态（已启动服务逆向 stop），注册痕迹移除，
-          // 原始错误包 plugin_registration_failed 后如实上抛（stop 失败聚合）
+          // 启动失败：回滚到停用形态（已挂载 provider 与已启动服务均由
+          // teardownPlugin 逆向清理），注册痕迹移除，原始错误包
+          // plugin_registration_failed 后如实上抛（provider 卸载 / stop 失败均聚合）
           let rollbackError: JsonSafeErrorInfo | undefined;
           try {
             await this.teardownPlugin(state, { stopServices: true });
@@ -531,6 +565,9 @@ export class PluginHost {
         return;
       }
       this.assertNoLiveTasks(pluginId);
+      // provider 在途流/刷新预检：在服务 stop 与 provider 卸载之前拒绝，防止
+      // 「先 stop 服务再卸载失败」的半残留（与 assertNoLiveTasks 同层门控）
+      this.assertProvidersIdle(pluginId);
       state.phase = 'deactivating';
       let stopError: { err: unknown } | undefined;
       try {
@@ -563,6 +600,9 @@ export class PluginHost {
       state.phase = 'defining';
       try {
         await state.definition.definePlugin(this.createContext(state, state.epoch));
+        // provider 先于服务挂载（服务 start 可依赖自身 provider）；失败时回滚
+        // 卸载已挂载 provider 并 stop 已启动服务，绝不留下 enabled:false 但 provider 泄漏
+        await this.registerProviders(state);
         await this.startServices(state);
         // 对外提交点在启停持久化成功之后：服务已启动但落盘挂起期间保持
         // defining 且 enabled=false——action 拒绝 / hook 不执行 / UI 不露出，
@@ -606,6 +646,9 @@ export class PluginHost {
       this.assertNotLocked(state);
       if (!state.enabled) return;
       this.assertNoLiveTasks(pluginId);
+      // provider 在途流/刷新预检：在服务 stop 与 provider 卸载之前拒绝，防止
+      // 「先 stop 服务再卸载失败」的半残留（与 assertNoLiveTasks 同层门控）
+      this.assertProvidersIdle(pluginId);
       // 先置 deactivating 再进入 await：新 invokeAction/executeTool/runHook
       // 与旧 doc 写入在 stop 期间即被隔离
       state.phase = 'deactivating';
@@ -652,13 +695,15 @@ export class PluginHost {
    * 清空本启用周期的全部注册句柄（含 docs 与残留宿主释放句柄）。
    * 不清 configSchema：停用态必须保留 schema 供「先 setConfig 再 enable」；
    * enable 开始时显式清空（definePlugin 将重新声明，否则 duplicate）。也不动
-   * 持久 store 数据——doc 值与 config 值跨周期保留。
+   * 持久 store 数据——doc 值与 config 值跨周期保留。provider 声明同样清空
+   * （含未挂载的残留 unregister 句柄，见 unregisterProviders）。
    */
   private clearRegistrations(state: PluginState): void {
     state.actions.clear();
     state.tools.clear();
     state.routes.length = 0;
     state.services.length = 0;
+    state.providers.length = 0;
     state.ui.length = 0;
     state.docs.clear();
     state.hostReleases.clear();
@@ -667,8 +712,9 @@ export class PluginHost {
   }
 
   /**
-   * 清理插件注册：逆向 stop 已启动服务、释放宿主生命周期资源（幂等）、清空全部
-   * 能力注册表。stop / 释放失败聚合显式抛出，绝不静默吞掉。
+   * 清理插件注册：逆向 stop 已启动服务、逆序卸载已挂载 provider、释放宿主生命
+   * 周期资源（幂等）、清空全部能力注册表。stop / 卸载 / 释放失败聚合显式抛出，
+   * 绝不静默吞掉；未挂载的 provider 声明跳过（enabled:false 探测路径零副作用）。
    */
   private async teardownPlugin(state: PluginState, opts: { stopServices: boolean }): Promise<void> {
     const stopErrors: Array<{ serviceId: string; error: JsonSafeErrorInfo }> = [];
@@ -684,6 +730,17 @@ export class PluginHost {
           svc.started = false;
         }
       }
+    }
+    // 服务 stop 之后再卸载 provider（插件服务可在生命周期内依赖自身 provider）；
+    // 已挂载句柄逆序卸载，未挂载（声明态/已卸载）跳过，绝不重复卸载。
+    let providerErrors: Array<{ providerId: string; error: JsonSafeErrorInfo }> = [];
+    try {
+      await this.unregisterProviders(state);
+    } catch (err) {
+      providerErrors =
+        err instanceof HelmError && Array.isArray((err.details as { unregisterErrors?: unknown } | undefined)?.unregisterErrors)
+          ? ((err.details as { unregisterErrors: Array<{ providerId: string; error: JsonSafeErrorInfo }> }).unregisterErrors)
+          : [{ providerId: '<unknown>', error: toJsonSafeError(err) }];
     }
     // 释放本周期获取的宿主生命周期资源（会话管理保护/工作流监听/ask 解析器）。
     // 句柄已幂等化：插件提前释放过的再调一次是空操作。
@@ -702,7 +759,15 @@ export class PluginHost {
         'plugin_service_stop_failed',
         `插件 ${state.definition.id} 清理时服务 stop 失败：${stopErrors.map((e) => e.serviceId).join(', ')}`,
         500,
-        { pluginId: state.definition.id, stopErrors, ...(releaseErrors.length > 0 ? { releaseErrors } : {}) },
+        { pluginId: state.definition.id, stopErrors, ...(releaseErrors.length > 0 ? { releaseErrors } : {}), ...(providerErrors.length > 0 ? { providerErrors } : {}) },
+      );
+    }
+    if (providerErrors.length > 0) {
+      throw new HelmError(
+        'plugin_provider_unregister_failed',
+        `插件 ${state.definition.id} 清理时 provider 卸载失败：${providerErrors.map((e) => e.providerId).join(', ')}`,
+        500,
+        { pluginId: state.definition.id, providerErrors },
       );
     }
     if (releaseErrors.length > 0) {
@@ -711,6 +776,103 @@ export class PluginHost {
         `插件 ${state.definition.id} 清理时宿主资源释放失败（管理保护/监听可能残留，需人工核查）`,
         500,
         { pluginId: state.definition.id, releaseErrors },
+      );
+    }
+  }
+
+  /**
+   * 挂载本周期声明的全部 provider（在服务 start 之前）：
+   * - 端口未提供且存在声明 → 显式 501（禁静默；默认停用探测不会到达这里）；
+   * - 逐个挂载并登记卸载函数；任一失败对已挂载者逆序卸载（卸载失败聚合）；
+   * - 卸载函数置 null 防止 teardown 重复卸载（幂等层：clearRegistrations 直接清表）。
+   */
+  private async registerProviders(state: PluginState): Promise<void> {
+    if (state.providers.length === 0) return;
+    const port = this.options.providers;
+    if (!port) {
+      throw new HelmError(
+        'provider_port_unavailable',
+        `插件 ${state.definition.id} 声明了 provider，但 PluginHost 未提供 providers 挂载端口（runtime 缺失），拒绝静默丢弃`,
+        501,
+        { pluginId: state.definition.id, providers: state.providers.map((p) => p.provider.id) },
+      );
+    }
+    const pluginId = state.definition.id;
+    const mounted: ProviderEntry[] = [];
+    try {
+      for (const entry of state.providers) {
+        entry.unregister = await port.register(entry.provider, pluginId);
+        mounted.push(entry);
+      }
+    } catch (err) {
+      const rollbackErrors: Array<{ providerId: string; error: JsonSafeErrorInfo }> = [];
+      for (const entry of mounted.reverse()) {
+        const providerId = entry.provider.id;
+        const unregister = entry.unregister;
+        entry.unregister = null;
+        if (!unregister) continue;
+        try {
+          await unregister();
+        } catch (unregisterErr) {
+          rollbackErrors.push({ providerId, error: toJsonSafeError(unregisterErr) });
+        }
+      }
+      if (err instanceof HelmError) {
+        throw rollbackErrors.length > 0
+          ? new HelmError(err.code, err.message, err.status, { ...((err.details as object) ?? {}), unregisterErrors: rollbackErrors })
+          : err;
+      }
+      throw new HelmError(
+        'plugin_provider_register_failed',
+        `插件 ${pluginId} provider 挂载失败：${err instanceof Error ? err.message : String(err)}`,
+        500,
+        { pluginId, unregisterErrors: rollbackErrors },
+      );
+    }
+  }
+
+  /**
+   * 逆序卸载已挂载的 provider（在服务 stop 之后调用）。卸载失败聚合显式抛出，
+   * 绝不静默吞掉；无论成败都置 null 并由调用方 clearRegistrations 收尾，
+   * 不允许同一 provider 被卸载两次。
+   */
+  private async unregisterProviders(state: PluginState): Promise<void> {
+    const errors: Array<{ providerId: string; error: JsonSafeErrorInfo }> = [];
+    for (const entry of [...state.providers].reverse()) {
+      const providerId = entry.provider.id;
+      const unregister = entry.unregister;
+      entry.unregister = null;
+      if (!unregister) continue;
+      try {
+        await unregister();
+      } catch (err) {
+        errors.push({ providerId, error: toJsonSafeError(err) });
+      }
+    }
+    if (errors.length > 0) {
+      throw new HelmError(
+        'plugin_provider_unregister_failed',
+        `插件 ${state.definition.id} provider 卸载失败：${errors.map((e) => e.providerId).join(', ')}`,
+        500,
+        { pluginId: state.definition.id, unregisterErrors: errors },
+      );
+    }
+  }
+
+  /** 停用/卸载前预检：providers 端口在途流/刷新忙时拒绝（与 assertNoLiveTasks 同层）。 */
+  private assertProvidersIdle(pluginId: string): void {
+    const state = this.plugins.get(pluginId);
+    if (!state || state.providers.length === 0) return;
+    try {
+      this.options.providers?.assertIdle?.(pluginId);
+    } catch (err) {
+      // 预检拒绝属生命周期门控：保留端口原始诊断（如活跃流/refresh 列表）
+      if (err instanceof HelmError) throw err;
+      throw new HelmError(
+        'plugin_has_live_tasks',
+        `插件 ${pluginId} 的 provider 端口报在途任务：${err instanceof Error ? err.message : String(err)}`,
+        409,
+        { pluginId, providerIdleCheckError: toJsonSafeError(err) },
       );
     }
   }
@@ -1479,6 +1641,17 @@ export class PluginHost {
         state.services.push({ ...spec, pluginId, started: false });
       },
 
+      provider: (provider: Provider) => {
+        assertOpen(`声明 provider ${(provider as { id?: unknown })?.id ?? '<unknown>'}`);
+        self.assertValidProviderShape(pluginId, provider);
+        if (state.providers.some((p) => p.provider.id === provider.id)) {
+          throw new HelmError('duplicate_provider', `插件 ${pluginId} 重复声明 provider ${provider.id}`, 409);
+        }
+        // 仅收集声明：默认停用探测（enabled:false）零挂载零副作用；宿主未提供
+        // providers 端口时的 501 由启用阶段 registerProviders 显式抛出（禁静默）
+        state.providers.push({ provider, unregister: null });
+      },
+
       ui: {
         sidebarItem: (spec: SidebarItemSpec) => addUi('sidebar.item', spec, 'sidebarItem'),
         sidebarSection: (spec: SidebarSectionSpec) => addUi('sidebar.section', spec, 'sidebarSection'),
@@ -1776,6 +1949,31 @@ export class PluginHost {
     // （doc id / 服务 id 等仍允许 '.'，插件 id 走 assertDefinition）
     if (typeof id !== 'string' || id.length === 0 || !/^[A-Za-z0-9._-]+$/.test(id)) {
       throw new HelmError('invalid_identifier', `插件声明 ${kind} id 非法：${String(id)}`, 400);
+    }
+  }
+
+  /**
+   * provider 声明边界形状校验（pi-ai Provider 最小契约）：
+   * id/name 非空字符串、auth 纯对象且至少声明 apiKey/oauth 之一、
+   * getModels/stream/streamSimple 为函数（refreshModels 等可选能力不校验）。
+   * 非法形状在此显式拒绝——留到运行期才炸会让「启用成功但模型不可用」
+   * 成为静默降级（诚实性纪律）。
+   */
+  private assertValidProviderShape(pluginId: string, provider: Provider): void {
+    const fail = (detail: string): HelmError =>
+      new HelmError('invalid_provider_spec', `插件 ${pluginId} 声明的 provider ${detail}`, 400, { pluginId });
+    if (!isPlainObject(provider)) throw fail('必须是纯对象');
+    const { id, name, auth } = provider as { id?: unknown; name?: unknown; auth?: unknown };
+    if (typeof id !== 'string' || id.length === 0) throw fail('缺少非空字符串 id');
+    if (typeof name !== 'string' || name.length === 0) throw fail(`(${id}) 缺少非空字符串 name`);
+    if (!isPlainObject(auth)) throw fail(`(${id}) auth 必须是纯对象`);
+    if (auth['apiKey'] === undefined && auth['oauth'] === undefined) {
+      throw fail(`(${id}) auth 必须至少声明 apiKey / oauth 之一（pi-ai ProviderAuth 契约）`);
+    }
+    for (const fn of ['getModels', 'stream', 'streamSimple'] as const) {
+      if (typeof (provider as Record<string, unknown>)[fn] !== 'function') {
+        throw fail(`(${id}) 缺少 ${fn} 函数`);
+      }
     }
   }
 
