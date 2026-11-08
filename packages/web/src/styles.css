@@ -2152,3 +2152,231 @@ textarea {
   white-space: nowrap;
   min-width: 0;
 }
+
+/* ==========================================================================
+ * 10. 工作流运行卡（聊天流与工作台共用）：阶段分组、节点展开态、日志行、结果预览
+ * ========================================================================== */
+
+.workflow-run-card {
+  gap: 8px;
+}
+
+.workflow-run-description {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.workflow-run-stats {
+  display: inline-flex;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+/* 阶段胶囊完成 / 失败态（active 态沿用既有样式） */
+.phase-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.phase-segment-done {
+  color: var(--ok);
+  border-color: var(--ok-border);
+  background: var(--ok-bg);
+}
+.phase-segment-failed {
+  color: var(--err);
+  border-color: var(--err-border);
+  background: var(--err-bg);
+}
+
+/* 脚本 log() 路标：紧凑日志流 */
+.workflow-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-subtle);
+  font-size: 11px;
+  max-height: 140px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.workflow-log-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--fg-secondary);
+}
+
+.workflow-log-line > svg {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
+}
+
+.workflow-log-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* 阶段分组小标题栏 */
+.workflow-phase-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workflow-phase-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  padding: 2px 0;
+  min-width: 0;
+}
+
+.workflow-phase-header > svg {
+  flex-shrink: 0;
+}
+
+.workflow-phase-title {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.workflow-phase-count {
+  color: var(--fg-muted);
+}
+
+.workflow-phase-detail {
+  color: var(--fg-subtle);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.workflow-phase-empty {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  padding: 2px 0 2px 17px;
+}
+
+/* 节点行改为可点击展开的整行按钮 */
+.workflow-node-list .workflow-node-line {
+  width: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  padding: 2px 0;
+  font: inherit;
+  color: inherit;
+}
+
+.workflow-node-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workflow-node-item-open > .workflow-node-line {
+  color: var(--fg);
+}
+
+.workflow-node-progress-err {
+  color: var(--err);
+}
+
+.workflow-node-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.workflow-node-duration {
+  font-size: 10.5px;
+}
+
+.workflow-node-expanded {
+  margin: 0 0 4px 17px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 无原生子会话节点（action / cached / 外部窗格）的结构化明细 */
+.workflow-node-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-elevated);
+  font-size: 11.5px;
+}
+
+.workflow-node-pre {
+  margin: 2px 0 0;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.workflow-node-pre-err {
+  color: var(--err);
+}
+
+.workflow-node-gate-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.workflow-node-gate-cmd {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* 工作流最终产出预览 */
+.workflow-result-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--ok-border);
+  border-radius: var(--radius-xs);
+  background: var(--ok-bg);
+}
+
+.workflow-result-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-result-header .trace-section-label {
+  color: var(--ok);
+}
+
+.workflow-result-preview {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

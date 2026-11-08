@@ -37,7 +37,7 @@ import {
   type WorkflowRunSummary,
 } from '@helm/protocol'
 import { JournalWriter, readJournal } from './journal.js'
-import { extractMeta, hasMetaDeclaration } from './meta.js'
+import { extractMeta, hasMetaDeclaration, type WorkflowMeta } from './meta.js'
 import { collapse, type WorkflowEntry } from './progress.js'
 import {
   gateResultMissingError,
@@ -174,6 +174,10 @@ interface RunRecord {
   scriptPath?: string
   /** 保存目录里的具名工作流。 */
   savedName?: string
+  /** 脚本 meta.description（脱敏后持久）。 */
+  description?: string
+  /** 脚本 meta.phases 阶段蓝图（脱敏后持久）。 */
+  phases?: Array<{ title: string; detail?: string; model?: string }>
   /** 本次运行的实际 args（安全 JSON；resume 缺省沿用）。 */
   args?: unknown
   journalPath: string
@@ -273,6 +277,8 @@ interface ActiveRun {
   lastPersistAt: number
   /** 节点开始/结束必须推送的 workflow.updated 事件（有界频率内的强制点）。 */
   lastNodeEventAt: number
+  /** 250ms 窗口内节点边界事件的 trailing timer：窗口内启动绝不丢失。 */
+  pendingEventTimer?: ReturnType<typeof setTimeout>
 }
 
 /** progress 持久化最小间隔：高频进度不逐条落库。 */
@@ -672,16 +678,21 @@ export class WorkflowService {
 
     const abort = new AbortController()
     const createdAt = Date.now()
-    const metaName = this.peekMetaName(script)
+    const meta = this.peekMeta(script)
 
     const record: RunRecord = {
       id: runId,
-      name: metaName ?? scriptPath ?? runId,
+      name: meta?.name ?? scriptPath ?? runId,
       conversationId,
       ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
       status: 'running',
       createdAt,
       updatedAt: createdAt,
+      kind: 'workflow',
+      ...(meta?.description !== undefined ? { description: this.redact(meta.description) } : {}),
+      ...(meta?.phases !== undefined
+        ? { phases: redactJsonValue(meta.phases, this.redact) as RunRecord['phases'] }
+        : {}),
       ...(scriptPath === undefined ? { script } : {}),
       ...(scriptPath !== undefined ? { scriptPath } : {}),
       ...(savedName !== undefined ? { savedName } : {}),
@@ -715,6 +726,11 @@ export class WorkflowService {
     const settleRun = async (result: WorkflowRunResult | undefined, failure?: unknown): Promise<void> => {
       let settleFailure: unknown
       try {
+        // 收尾前必须摘除 trailing timer：终态事件即将发布，窗口内补发会造成乱序。
+        if (run.pendingEventTimer !== undefined) {
+          clearTimeout(run.pendingEventTimer)
+          run.pendingEventTimer = undefined
+        }
         if (result !== undefined) {
           record.status = result.status === 'killed' ? 'aborted' : result.status
           if (result.error !== undefined) record.error = this.redact(result.error)
@@ -824,15 +840,34 @@ export class WorkflowService {
               }
             }
             run.summary.updatedAt = stamp
-            // 节点开始/结束必须推送（有界频率：间隔窗口外强制，窗口内随周期落盘走）。
+            if (run.timeline.length > 0) run.summary.progress = [...run.timeline]
+
+            // 立即推送判定：phase/log 必须零延迟；onResolved 回传元数据（会话/
+            // 执行标识/worktree/gate）必须零延迟；节点边界在 250ms 窗口外强制。
+            const hasPhaseOrLog = entries.some(
+              (entry) => entry.type === 'workflow_phase' || entry.type === 'workflow_log',
+            )
+            const hasResolvedOrGate = entries.some(
+              (entry) =>
+                entry.type === 'workflow_agent' &&
+                (entry.conversationId !== undefined ||
+                  entry.executionId !== undefined ||
+                  entry.worktree !== undefined ||
+                  entry.gate !== undefined),
+            )
             const nodeBoundary = entries.some(
               (entry) =>
                 (entry.type === 'workflow_agent' || entry.type === 'workflow_action') &&
                 (entry.state === 'start' || entry.state === 'done' || entry.state === 'error'),
             )
             const due = stamp - run.lastNodeEventAt >= NODE_EVENT_INTERVAL_MS
+
             // 周期性把时间线落库：长时间 run 的 phase/log 不必等终态才可见。
-            if (run.timeline.length > 0 && (due || (nodeBoundary && due)) && stamp - run.lastPersistAt >= PROGRESS_PERSIST_INTERVAL_MS) {
+            if (
+              run.timeline.length > 0 &&
+              (due || (nodeBoundary && due) || hasPhaseOrLog) &&
+              stamp - run.lastPersistAt >= PROGRESS_PERSIST_INTERVAL_MS
+            ) {
               run.lastPersistAt = stamp
               record.updatedAt = stamp
               record.progress = run.timeline
@@ -844,11 +879,38 @@ export class WorkflowService {
                 // 尽力而为的观察面：失败不阻断 run，终态写入会再次尝试。
               }
             }
-            if (nodeBoundary && due) {
-              run.lastNodeEventAt = stamp
+
+            const emitUpdated = (at: number): void => {
               this.host.emitEvent('workflow.updated', {
-                run: this.redactSummaryNodes({ ...run.summary, updatedAt: stamp, nodes: this.nodesFromProgress(run.progress) }),
+                run: this.redactSummaryNodes({
+                  ...run.summary,
+                  updatedAt: at,
+                  nodes: this.nodesFromProgress(run.progress),
+                  ...(run.timeline.length > 0 ? { progress: [...run.timeline] } : {}),
+                }),
               })
+            }
+
+            if ((nodeBoundary && due) || hasPhaseOrLog || hasResolvedOrGate) {
+              // 窗口内补发 timer 不再需要：本次已携最新状态发布。
+              if (run.pendingEventTimer !== undefined) {
+                clearTimeout(run.pendingEventTimer)
+                run.pendingEventTimer = undefined
+              }
+              run.lastNodeEventAt = stamp
+              emitUpdated(stamp)
+            } else if (nodeBoundary && !due && run.pendingEventTimer === undefined) {
+              // 250ms 窗口内的节点启动/完成：trailing timer 兜底补发，绝不丢失。
+              const delay = Math.max(10, NODE_EVENT_INTERVAL_MS - (stamp - run.lastNodeEventAt))
+              const timer = setTimeout(() => {
+                run.pendingEventTimer = undefined
+                if (!this.active.has(runId)) return
+                const at = Date.now()
+                run.lastNodeEventAt = at
+                emitUpdated(at)
+              }, delay)
+              timer.unref?.()
+              run.pendingEventTimer = timer
             }
           },
           journal: {
@@ -940,6 +1002,10 @@ export class WorkflowService {
       label: name,
       status: 'running',
       startedAt: createdAt,
+      ...(request.agentType !== undefined && request.agentType !== ''
+        ? { agentType: request.agentType }
+        : {}),
+      ...(request.gate !== undefined ? { gateCommand: this.redact(request.gate) } : {}),
     }
 
     const record: RunRecord = {
@@ -1301,6 +1367,7 @@ export class WorkflowService {
       return this.redactSummaryNodes({
         ...activeRun.summary,
         ...(collapsed !== undefined ? { nodes: collapsed } : {}),
+        ...(activeRun.timeline.length > 0 ? { progress: [...activeRun.timeline] } : {}),
       })
     }
     return this.toSummary(this.loadRecord(runId))
@@ -1351,6 +1418,7 @@ export class WorkflowService {
         this.redactSummaryNodes({
           ...active.summary,
           ...(collapsed !== undefined ? { nodes: collapsed } : {}),
+          ...(active.timeline.length > 0 ? { progress: [...active.timeline] } : {}),
         }),
       )
     }
@@ -1704,10 +1772,10 @@ export class WorkflowService {
     return source
   }
 
-  /** 快速提取 meta.name（失败回退 undefined，完整校验在引擎 validateScript）。 */
-  private peekMetaName(script: string): string | undefined {
+  /** 提取完整 meta（失败回退 undefined，完整校验在引擎 validateScript）。 */
+  private peekMeta(script: string): WorkflowMeta | undefined {
     try {
-      return extractMeta(script).meta.name
+      return extractMeta(script).meta
     } catch {
       return undefined
     }
@@ -1787,6 +1855,9 @@ export class WorkflowService {
       id: record.id,
       name: record.name,
       conversationId: record.conversationId,
+      ...(record.kind !== undefined ? { kind: record.kind } : {}),
+      ...(record.description !== undefined ? { description: record.description } : {}),
+      ...(record.phases !== undefined ? { phases: record.phases } : {}),
       ...(record.parentToolCallId !== undefined && record.parentToolCallId !== ''
         ? { parentToolCallId: record.parentToolCallId }
         : {}),
@@ -1823,6 +1894,8 @@ export class WorkflowService {
     if (redacted.gate !== undefined) {
       redacted.gate = { ok: redacted.gate.ok, output: this.redact(redacted.gate.output) }
     }
+    if (redacted.gateCommand !== undefined) redacted.gateCommand = this.redact(redacted.gateCommand)
+    if (redacted.model !== undefined) redacted.model = this.redact(redacted.model)
     if (redacted.error !== undefined) redacted.error = this.redact(redacted.error)
     if (redacted.output !== undefined) redacted.output = redactJsonValue(redacted.output, this.redact)
     return redacted
@@ -1834,54 +1907,78 @@ export class WorkflowService {
 
   private nodesFromProgress(progress: readonly WorkflowEntry[]): NonNullable<WorkflowRunSummary['nodes']> {
     const collapsed = collapse(progress)
-    const nodes: NonNullable<WorkflowRunSummary['nodes']> = []
+    // agent 与 action 共享同一全序位次：混合调用时必须按 index 升序输出，
+    // 先遍历 agents 再遍历 actions 会把两类节点拆散重排。
+    const merged: Array<{ index: number; node: NonNullable<WorkflowRunSummary['nodes']>[number] }> = []
     for (const agent of collapsed.agents) {
-      nodes.push({
-        id: `agent-${agent.index}`,
-        kind: 'agent',
-        status:
-          agent.state === 'done'
-            ? 'done'
-            : agent.state === 'error'
-              ? agent.skipped
-                ? 'skipped'
-                : 'failed'
-              : 'running',
-        ...(agent.cached !== undefined ? { cached: agent.cached } : {}),
-        ...(agent.agentType !== undefined ? { agentType: agent.agentType } : {}),
-        ...(agent.label !== undefined ? { label: agent.label } : {}),
-        ...(agent.nodeId !== undefined ? { nodeId: agent.nodeId } : {}),
-        ...(agent.conversationId !== undefined ? { conversationId: agent.conversationId } : {}),
-        ...(agent.executionId !== undefined ? { executionId: agent.executionId } : {}),
-        ...(agent.effectiveCwd !== undefined ? { effectiveCwd: agent.effectiveCwd } : {}),
-        ...(agent.worktree !== undefined ? { worktree: agent.worktree } : {}),
-        ...(agent.phaseIndex !== undefined ? { phaseIndex: agent.phaseIndex } : {}),
-        ...(agent.phaseTitle !== undefined ? { phaseTitle: agent.phaseTitle } : {}),
-        ...(agent.prompt !== undefined ? { prompt: agent.prompt } : {}),
-        ...(agent.schema !== undefined ? { schema: agent.schema } : {}),
-        ...(agent.gate !== undefined ? { gate: agent.gate } : {}),
-        ...(agent.tokens !== undefined ? { tokens: agent.tokens } : {}),
-        ...(agent.durationMs !== undefined ? { durationMs: agent.durationMs } : {}),
-        ...(agent.startedAt !== undefined ? { startedAt: agent.startedAt } : {}),
-        ...(agent.lastProgressAt !== undefined ? { settledAt: agent.lastProgressAt } : {}),
-        ...(agent.state === 'done' && agent.resultPreview !== undefined ? { output: agent.resultPreview } : {}),
-        ...(agent.error !== undefined ? { error: agent.error } : {}),
+      merged.push({
+        index: agent.index,
+        node: {
+          id: `agent-${agent.index}`,
+          kind: 'agent',
+          status:
+            agent.state === 'done'
+              ? 'done'
+              : agent.state === 'error'
+                ? agent.skipped
+                  ? 'skipped'
+                  : 'failed'
+                : agent.queuedAt !== undefined && agent.startedAt === undefined
+                  ? 'pending'
+                  : 'running',
+          ...(agent.cached !== undefined ? { cached: agent.cached } : {}),
+          ...(agent.agentType !== undefined ? { agentType: agent.agentType } : {}),
+          ...(agent.label !== undefined ? { label: agent.label } : {}),
+          ...(agent.nodeId !== undefined ? { nodeId: agent.nodeId } : {}),
+          ...(agent.conversationId !== undefined ? { conversationId: agent.conversationId } : {}),
+          ...(agent.executionId !== undefined ? { executionId: agent.executionId } : {}),
+          ...(agent.effectiveCwd !== undefined ? { effectiveCwd: agent.effectiveCwd } : {}),
+          ...(agent.worktree !== undefined ? { worktree: agent.worktree } : {}),
+          ...(agent.phaseIndex !== undefined ? { phaseIndex: agent.phaseIndex } : {}),
+          ...(agent.phaseTitle !== undefined ? { phaseTitle: agent.phaseTitle } : {}),
+          ...(agent.gateCommand !== undefined ? { gateCommand: agent.gateCommand } : {}),
+          ...(agent.model !== undefined ? { model: agent.model } : {}),
+          ...(agent.attempt !== undefined ? { attempt: agent.attempt } : {}),
+          ...(agent.prompt !== undefined ? { prompt: agent.prompt } : {}),
+          ...(agent.schema !== undefined ? { schema: agent.schema } : {}),
+          ...(agent.gate !== undefined ? { gate: agent.gate } : {}),
+          ...(agent.tokens !== undefined ? { tokens: agent.tokens } : {}),
+          ...(agent.durationMs !== undefined ? { durationMs: agent.durationMs } : {}),
+          ...(agent.startedAt !== undefined ? { startedAt: agent.startedAt } : {}),
+          ...(agent.lastProgressAt !== undefined ? { settledAt: agent.lastProgressAt } : {}),
+          ...(agent.state === 'done' && agent.resultPreview !== undefined ? { output: agent.resultPreview } : {}),
+          ...(agent.error !== undefined ? { error: agent.error } : {}),
+        },
       })
     }
     for (const action of collapsed.actions) {
-      nodes.push({
-        id: `action-${action.index}`,
-        kind: 'action',
-        status: action.state === 'done' ? 'done' : action.state === 'error' ? 'failed' : 'running',
-        ...(action.cached !== undefined ? { cached: action.cached } : {}),
-        ...(action.startedAt !== undefined ? { startedAt: action.startedAt } : {}),
-        ...(action.lastProgressAt !== undefined ? { settledAt: action.lastProgressAt } : {}),
-        ...(action.durationMs !== undefined ? { durationMs: action.durationMs } : {}),
-        ...(action.state === 'done' && action.resultPreview !== undefined ? { output: action.resultPreview } : {}),
-        ...(action.error !== undefined ? { error: action.error } : {}),
+      merged.push({
+        index: action.index,
+        node: {
+          id: `action-${action.index}`,
+          kind: 'action',
+          label: action.actionId,
+          status:
+            action.state === 'done'
+              ? 'done'
+              : action.state === 'error'
+                ? 'failed'
+                : action.queuedAt !== undefined && action.startedAt === undefined
+                  ? 'pending'
+                  : 'running',
+          ...(action.cached !== undefined ? { cached: action.cached } : {}),
+          ...(action.phaseIndex !== undefined ? { phaseIndex: action.phaseIndex } : {}),
+          ...(action.phaseTitle !== undefined ? { phaseTitle: action.phaseTitle } : {}),
+          ...(action.startedAt !== undefined ? { startedAt: action.startedAt } : {}),
+          ...(action.lastProgressAt !== undefined ? { settledAt: action.lastProgressAt } : {}),
+          ...(action.durationMs !== undefined ? { durationMs: action.durationMs } : {}),
+          ...(action.state === 'done' && action.resultPreview !== undefined ? { output: action.resultPreview } : {}),
+          ...(action.error !== undefined ? { error: action.error } : {}),
+        },
       })
     }
-    return nodes
+    merged.sort((a, b) => a.index - b.index)
+    return merged.map((entry) => entry.node)
   }
 
   private assertNotClosed(): void {

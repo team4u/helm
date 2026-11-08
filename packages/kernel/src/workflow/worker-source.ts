@@ -407,7 +407,12 @@ async function actionIn(scope, actionId, input) {
     throw new Error("action(actionId, input) expects input to be a JSON object.");
   }
   checkBoundary(input, "action('" + id + "') input");
-  return await callHost("action", { actionId: id, input: input });
+  return await callHost("action", {
+    actionId: id,
+    input: input,
+    phaseIndex: scope.ambientPhaseIndex,
+    phaseTitle: scope.ambientPhaseTitle,
+  });
 }
 
 async function parallel(thunks) {

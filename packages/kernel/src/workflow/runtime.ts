@@ -354,6 +354,8 @@ interface AgentCallPayload {
 interface ActionCallPayload {
   actionId: string
   input: unknown
+  phaseIndex?: number
+  phaseTitle?: string
 }
 
 type WorkerMessage =
@@ -1000,6 +1002,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         actionId: payload.actionId,
         state: 'start',
         queuedAt,
+        ...(payload.phaseIndex !== undefined ? { phaseIndex: payload.phaseIndex } : {}),
+        ...(payload.phaseTitle !== undefined ? { phaseTitle: payload.phaseTitle } : {}),
       }
       emit([{ ...base }])
 

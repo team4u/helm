@@ -87,6 +87,9 @@ export interface WorkflowActionEntry {
   index: number
   actionId: string
   state: WorkflowEntryState
+  /** 所属阶段（helm：与 agent 行同源的 ambient phase 透传）。 */
+  phaseIndex?: number
+  phaseTitle?: string
   cached?: boolean
   queuedAt?: number
   startedAt?: number

@@ -60,8 +60,14 @@ export interface WorkflowNodeState {
   prompt?: string
   /** 结构化输出 JSON Schema。 */
   schema?: Record<string, unknown>
+  /** 脚本声明的 gate 验收命令原文。 */
+  gateCommand?: string
   /** gate 执行结果（已在执行环境内恰好一次执行）。 */
   gate?: AgentGateResult
+  /** 节点实际或请求的模型标识。 */
+  model?: string
+  /** 节点执行尝试次数（重试时 > 1）。 */
+  attempt?: number
   tokens?: number
   durationMs?: number
   startedAt?: number
@@ -85,6 +91,12 @@ export interface WorkflowRunSummary {
   id: string
   name: string
   conversationId: number
+  /** run 种类：DSL 编排工作流（缺省/'workflow'）或后台单子代理（'subagent'）。 */
+  kind?: 'workflow' | 'subagent'
+  /** 脚本 meta.description 描述。 */
+  description?: string
+  /** 脚本 meta.phases 声明的阶段蓝图。 */
+  phases?: Array<{ title: string; detail?: string; model?: string }>
   /**
    * 触发本次 run 的父会话 SubagentWorkflow 工具调用 ID（内核受信注入，
    * 非用户可写字段；HTTP/CLI 仅输出透传）。前端据此精确关联运行卡。
