@@ -304,12 +304,10 @@ describe('失败路径资源保留（防 spawn 外层 catch 误删回归）', { 
     const repo = makeGitRepo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
-      // 预置未提交产物（模拟子代理此前轮次的工作；隔离树内脏文件）。
-      // 注：spawn 带 schema 时子会话 bash 工具当前不可用（toolsAdded 仅含
-      // register_structured_output，已单独报告主代理），产物由测试直接预置，
-      // 不影响「失败路径资源保留」的验证目标。
       let resolved: AgentExecutionInfo | undefined
       env.faux.setResponses([
+        // Schema 输出工具不能替换掉原有内核工具，必须能先执行真实任务再提交结果。
+        fauxAssistantMessage([fauxToolCall('bash', { command: 'printf "child prior work\\n" > partial.txt' })], { stopReason: 'toolUse' }),
         // 两轮纯文本均不满足 schema：触发 schema_validation_failed。
         fauxAssistantMessage('这不是 JSON'),
         fauxAssistantMessage('仍然不是 JSON'),
@@ -332,9 +330,8 @@ describe('失败路径资源保留（防 spawn 外层 catch 误删回归）', { 
         },
       )
       assert.ok(resolved?.worktree)
-      // 失败前预置未提交产物（隔离树内脏工作；子代理此前轮次的部分产出）。
+      // 产物由上面的真实 bash 工具在失败之前写入，失败后必须仍然存在。
       const preExisting = join(resolved!.worktree!.path, 'partial.txt')
-      writeFileSync(preExisting, 'child prior work\n')
       // 关键断言：spawn 外层 catch 不得回收已绑定子会话的隔离树（防误删回归）。
       assert.ok(existsSync(resolved!.worktree!.path), '模型失败后 worktree 必须保留')
       assert.ok(existsSync(preExisting), '未提交产物必须保留')
@@ -401,7 +398,7 @@ describe('失败路径资源保留（防 spawn 外层 catch 误删回归）', { 
 // ---------------------------------------------------------------------------
 
 describe('占用中的 worktree 清理保护', { timeout: 60_000 }, () => {
-  it('子会话进入 gate（SDK 已 idle）但 spawn 未 settle：force:true 仍 worktree_in_use；settle 后可清理', { timeout: 60_000 }, async () => {
+  it('模型回合仍在执行：force:true 仍 worktree_in_use；settle 后可清理', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't3')
     const repo = makeGitRepo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)

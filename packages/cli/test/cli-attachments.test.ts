@@ -222,6 +222,82 @@ test('send --attach：逗号分隔产物 ID 进入 body.attachments；空值忽�
 })
 
 // ---------------------------------------------------------------------------
+// send --replace-from / conversations withdraw
+// ---------------------------------------------------------------------------
+
+test('send --replace-from：正整数进 body.replaceFromEntryId；非法值报错；缺省不携带', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startHub({
+    'POST /api/conversations/5/input': () => ({ status: 202, body: { submissionId: 's-1' } }),
+  })
+  try {
+    const r = await run(
+      ['send', '5', '覆盖重发', '--replace-from', '12', '--json'],
+      makeEnv(hub.url, dir),
+    )
+    assert.equal(r.code, 0, r.err)
+    const hit = hub.recorded.hits.at(-1)!
+    assert.deepEqual(hit.body, { text: '覆盖重发', replaceFromEntryId: 12 })
+
+    // 缺省：不携带 replaceFromEntryId。
+    const r2 = await run(['send', '5', '普通提交', '--json'], makeEnv(hub.url, dir))
+    assert.equal(r2.code, 0, r2.err)
+    assert.deepEqual(hub.recorded.hits.at(-1)!.body, { text: '普通提交' })
+
+    // 非法：0 / 负数 / 小数。
+    for (const bad of ['0', '-4', '2.5']) {
+      const r3 = await run(['send', '5', 'x', '--replace-from', bad], makeEnv(hub.url, dir))
+      assert.equal(r3.code, 1, `--replace-from ${bad} 应非零退出`)
+      assert.ok(r3.err.includes('--replace-from 需为正整数'), `stderr 应含诊断：${r3.err}`)
+    }
+  } finally {
+    await hub.close()
+  }
+})
+
+test('conversations withdraw：--submission-id 必填进 body；--current；非法值报错', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startHub({
+    'POST /api/conversations/6/withdraw': () => ({ body: { status: 'withdrawn' } }),
+  })
+  try {
+    const r = await run(
+      ['conversations', 'withdraw', '6', '--submission-id', '33', '--json'],
+      makeEnv(hub.url, dir),
+    )
+    assert.equal(r.code, 0, r.err)
+    assert.equal(JSON.parse(r.out).status, 'withdrawn')
+    const hit = hub.recorded.hits.at(-1)!
+    assert.equal(hit.method, 'POST')
+    assert.equal(hit.path, '/api/conversations/6/withdraw')
+    assert.deepEqual(hit.body, { submissionId: 33 })
+
+    // --current 目标会话。
+    const r2 = await run(
+      ['conversations', 'withdraw', '--current', '--submission-id', '8', '--json'],
+      makeEnv(hub.url, dir, { HELM_CONVERSATION_ID: '6' }),
+    )
+    assert.equal(r2.code, 0, r2.err)
+    assert.equal(hub.recorded.hits.at(-1)!.path, '/api/conversations/6/withdraw')
+    assert.deepEqual(hub.recorded.hits.at(-1)!.body, { submissionId: 8 })
+
+    // 缺 --submission-id：必填校验。
+    const r3 = await run(['conversations', 'withdraw', '6'], makeEnv(hub.url, dir))
+    assert.equal(r3.code, 1)
+    assert.ok(r3.err.includes('缺少必填选项 --submission-id'))
+
+    // 非法值：0 / 小数。
+    for (const bad of ['0', '1.5', '-2']) {
+      const r4 = await run(['conversations', 'withdraw', '6', '--submission-id', bad], makeEnv(hub.url, dir))
+      assert.equal(r4.code, 1, `--submission-id ${bad} 应非零退出`)
+      assert.ok(r4.err.includes('--submission-id 需为正整数'), `stderr 应含诊断：${r4.err}`)
+    }
+  } finally {
+    await hub.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
 // conversations reset / compact / fork
 // ---------------------------------------------------------------------------
 

@@ -134,13 +134,23 @@ export interface AgentSpawnRequest {
  * 原生路径至少回传 conversationId；外部运行时（如 herdr）至少回传 executionId。
  */
 export interface AgentExecutionInfo {
+  /** 实际执行节点，由执行方回传；不能从父会话猜测外部插件的目标。 */
+  nodeId?: string
   conversationId?: number
   /** 外部运行时内的执行标识（如 Herdr 窗格/标签 ID）。 */
   executionId?: string
   /** 实际生效的工作目录绝对路径。 */
   effectiveCwd?: string
   /** isolation: 'worktree' 时分配的隔离工作树。 */
-  worktree?: { path: string; branch: string }
+  worktree?: {
+    path: string
+    branch: string
+    /** Helm 受管登记 ID；供 cleanup_worktree 精确定位。 */
+    id?: string
+    repoRoot?: string
+    baseCommit?: string
+    dirtySource?: boolean
+  }
 }
 
 /** gate 命令执行结果；output 为失败时展示给用户的命令输出。 */
@@ -386,7 +396,13 @@ export interface HelmHostApi {
     conversationId: number,
     text: string,
     /** whenBusy 省略时内核默认 steer（插话引导）；批处理投递请显式 followUp。 */
-    opts?: { origin?: InputOrigin; whenBusy?: WhenBusy; meta?: Record<string, unknown> },
+    opts?: {
+      origin?: InputOrigin
+      whenBusy?: WhenBusy
+      meta?: Record<string, unknown>
+      /** 从指定历史条目起原地覆盖重发（截断该条及后续上下文后写入新输入）。 */
+      replaceFromEntryId?: number
+    },
   ): Promise<void>
   createConversation(init: ConversationInit): Promise<ConversationSummary>
   listConversations(filter?: { profileId?: string; tag?: string; status?: ConversationStatus }): ConversationSummary[]

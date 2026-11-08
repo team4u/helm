@@ -33,6 +33,7 @@ import {
   type WorkflowProgressEntry,
   type WorkflowRunRequest,
   type WorkflowRunStatus,
+  type WorkflowNodeState,
   type WorkflowRunSummary,
 } from '@helm/protocol'
 import { JournalWriter, readJournal } from './journal.js'
@@ -70,6 +71,8 @@ export interface WorkflowStateStore {
 export interface WorkflowServiceHost {
   /** agent_spawn 管道入口（KernelRuntime.spawnAgent：hook 链 + 原生子会话默认行）。 */
   spawnAgent(request: AgentSpawnRequest): Promise<unknown>
+  /** 恢复前只落 SDK abort 标记，不唤醒调度；必须早于插件服务启动。 */
+  prepareInterruptedConversations?(conversationIds: number[]): Promise<void>
   /**
    * 插件动作调用（PluginHost.invokeAction：manifest 精确匹配 + 输入输出 schema
    * 边界校验）。返回值必须已是安全 JSON（上游 app 层做 stash redact）。
@@ -90,6 +93,19 @@ export interface WorkflowServiceHost {
    * 在 service 内如实上报为 failed/诊断，不破坏 journal 副作用保护。
    */
   onRunSettled?(summary: WorkflowRunSummary): Promise<void> | void
+  /**
+   * 后台单子代理（startBackgroundAgent）终态汇报回调：仅对 notifyParentOnSettle=true
+   * 的后台子代理触发（不影响常规 SubagentWorkflow）。调用方（app/kernel）向父
+   * 会话投递完成/失败/中止通知；恰一次（notifiedAt 防重复，init() 补发遗留）。
+   */
+  onBackgroundAgentSettled?(
+    summary: WorkflowRunSummary,
+    info: {
+      parentConversationId: number
+      agentType?: string
+      execution?: AgentExecutionInfo
+    },
+  ): Promise<void> | void
   /**
    * gate 门禁执行（KernelRuntime.runGate：shell + SecretStash env 合并 + 超时）。
    * 这是宿主自跑 fallback：执行环境（native/herdr）已在实际 cwd 内执行过
@@ -162,6 +178,13 @@ interface RunRecord {
   args?: unknown
   journalPath: string
   replayedFrom?: string
+  /** run 种类：DSL 工作流（缺省）或受信后台单子代理（startBackgroundAgent）。 */
+  kind?: 'workflow' | 'subagent'
+  /** 后台子代理终态是否须向父会话投递通知（notifiedAt 防重复投递）。 */
+  notifyParentOnSettle?: boolean
+  notifiedAt?: number
+  /** 后台子代理的 Profile 与执行环境元数据（onResolved 回传后补全）。 */
+  subagentMeta?: { agentType?: string; execution?: AgentExecutionInfo }
 }
 
 /** 持久层读出的错误可打印形态（store 异常诊断用）。 */
@@ -240,6 +263,12 @@ interface ActiveRun {
   timeline: WorkflowProgressEntry[]
   /** 在途子会话的中止 promise（close/abort 需 await 后才算真正结束）。 */
   pendingAborts: Set<Promise<void>>
+  /**
+   * 中止时需经 host.abortConversation 显式中止的子会话（startBackgroundAgent
+   * 的原生子会话：signal 桥只调 conversation.abort，不经 tracker 全量结算；
+   * 这里补充与 runtime.abortConversation 同级的确定性中止）。
+   */
+  abortChildConversations?: Set<number>
   /** progress 持久化节流（timeline 非空后定期落盘）。 */
   lastPersistAt: number
   /** 节点开始/结束必须推送的 workflow.updated 事件（有界频率内的强制点）。 */
@@ -278,6 +307,7 @@ export class WorkflowService {
   private closed = false
   /** init 幂等标记：仅恢复完整成功后置位；失败可重试。 */
   private recovered = false
+  private recoveryPrepared = false
   private initPromise?: Promise<void>
 
   constructor(options: WorkflowServiceOptions) {
@@ -330,26 +360,119 @@ export class WorkflowService {
    * 前自动执行，也可由宿主显式调用。失败可重试：initPromise 仅在恢复完整
    * 成功（含 flush）后保留，异常时清缓存，下一次 init()/run() 重新执行。
    */
+  async prepareRecovery(): Promise<void> {
+    if (this.recoveryPrepared) return
+    if (this.host.prepareInterruptedConversations === undefined) return
+    const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+    const childIds = new Set<number>()
+    for (const entry of index) {
+      const record = this.loadRecord(entry.id)
+      if (record.kind !== 'subagent' || record.status !== 'running') continue
+      const known = record.subagentMeta?.execution?.conversationId
+      if (known !== undefined) childIds.add(known)
+      for (const node of record.nodes ?? []) if (node.conversationId !== undefined) childIds.add(node.conversationId)
+    }
+    if (childIds.size > 0) await this.host.prepareInterruptedConversations([...childIds])
+    this.recoveryPrepared = true
+  }
+
   async init(): Promise<void> {
     if (this.recovered) return
     if (this.initPromise !== undefined) return this.initPromise
     this.initPromise = (async () => {
       try {
+        await this.prepareRecovery()
         const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
         let changed = false
+        // 通知 outbox 补发：崩溃前已达终态但 onBackgroundAgentSettled 未成功（或
+        // 未及调用）的记录。回调失败不阻断 init（stderr 诊断，notifiedAt 不置位，
+        // 下次 init 重试）。
+        const pendingNotifies: Array<() => Promise<void>> = []
         for (const entry of index) {
           const record = this.state.get<RunRecord | null>(runKey(entry.id), null)
-          if (record === null || record.status !== 'running') continue
+          if (record === null) continue
+          if (
+            record.kind === 'subagent' &&
+            record.notifyParentOnSettle === true &&
+            record.status !== 'running' &&
+            record.notifiedAt === undefined
+          ) {
+            const target = record
+            pendingNotifies.push(async () => {
+              if (this.host.onBackgroundAgentSettled === undefined) return
+              await this.host.onBackgroundAgentSettled(this.toSummary(target), {
+                parentConversationId: target.conversationId,
+                ...(target.subagentMeta ?? {}),
+              })
+              target.notifiedAt = Date.now()
+              this.writeRecord(target)
+            })
+          }
+          if (record.status !== 'running') continue
+          if (record.kind === 'subagent') {
+            const children = new Set<number>()
+            const known = record.subagentMeta?.execution?.conversationId
+            if (known !== undefined) children.add(known)
+            for (const node of record.nodes ?? []) if (node.conversationId !== undefined) children.add(node.conversationId)
+            // 全部执行已在 prepareRecovery 持久标记取消；此处仅等待真实终态，
+            // 不能先回报 interrupted 却让旧模型回合继续运行。
+            await Promise.all([...children].map((id) => this.host.abortConversation(id)))
+          }
           record.status = 'failed'
           record.updatedAt = Date.now()
           record.error =
-            `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）：${record.error ?? ''}`.trim()
+            record.kind === 'subagent'
+              ? 'subagent run interrupted by process restart（可凭 conversationId/executionId 通过 resume 续接）'
+              : `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）：${record.error ?? ''}`.trim()
+          if (record.kind === 'subagent' && record.nodes !== undefined) {
+            record.nodes = record.nodes.map((node) => node.status === 'running' || node.status === 'pending'
+              ? { ...node, status: 'failed', settledAt: record.updatedAt, error: record.error }
+              : node)
+          }
           this.state.set(runKey(entry.id), record)
           changed = true
+          // interrupted 的 subagent 同样须补发通知（通知内容即 failed 终态本身）。
+          if (record.kind === 'subagent' && record.notifyParentOnSettle === true && record.notifiedAt === undefined) {
+            const target = record
+            pendingNotifies.push(async () => {
+              if (this.host.onBackgroundAgentSettled === undefined) return
+              await this.host.onBackgroundAgentSettled(this.toSummary(target), {
+                parentConversationId: target.conversationId,
+                ...(target.subagentMeta ?? {}),
+              })
+              target.notifiedAt = Date.now()
+              this.writeRecord(target)
+            })
+          }
           this.host.emitEvent('workflow.updated', { run: this.toSummary(record) })
         }
         if (changed) await this.state.flush?.()
         this.recovered = true
+        // 先置 recovered 再补发：失败重试时上面循环不会重复处理（记录已非 running）。
+        for (const notify of pendingNotifies) {
+          try {
+            await notify()
+          } catch (error) {
+            process.stderr.write(
+              `workflow init: onBackgroundAgentSettled retry failed: ${
+                error instanceof Error ? error.message : String(error)
+              }\n`,
+            )
+          }
+        }
+        // notifiedAt 落盘失败仅意味着下次 init 可能重发（at-least-once），
+        // 不阻断 init：恢复主体已在此前成功提交。
+        if (pendingNotifies.length > 0) {
+          try {
+            await this.state.flush?.()
+          } catch (error) {
+            process.stderr.write(
+              `workflow init: notifiedAt persist failed: ${
+                error instanceof Error ? error.message : String(error)
+              }\n`,
+            )
+          }
+        }
       } finally {
         // 失败（flush 抛错等）时清缓存：下一次 init()/run() 重试，不永久贴 failed。
         if (!this.recovered) this.initPromise = undefined
@@ -450,6 +573,9 @@ export class WorkflowService {
     let replayFrom: RunRecord | undefined
     if (request.resumeFromRunId !== undefined) {
       replayFrom = this.loadRecord(request.resumeFromRunId)
+      if (replayFrom.kind === 'subagent') {
+        throw new HelmError('validation_error', '后台子代理运行没有工作流重放脚本；请用 execution.conversationId/executionId 通过 subagent resume 续接', 400, { runId: replayFrom.id })
+      }
       if (replayFrom.status === 'running' && !this.active.has(replayFrom.id)) {
         // init() 已把跨重启 running 标 failed；此处 running 只可能是同进程旧状态。
         replayFrom.status = 'failed'
@@ -743,6 +869,424 @@ export class WorkflowService {
   }
 
   // ------------------------------------------------------------------
+  // startBackgroundAgent：受信后台单子代理（不拼 DSL 脚本）
+  // ------------------------------------------------------------------
+
+  /**
+   * 启动后台单子代理：复用 run 记录 / 持久化 / abort / wait / getRun /
+   * onRunSettled / 重启恢复，但不经 DSL 引擎（不伪造空 script），直接投
+   * host.spawnAgent 受信通道。
+   *
+   * 时序纪律：
+   * 1. durable running 快照与 active 登记**先于** spawnAgent 副作用——onResolved
+   *    前进程崩溃也能由 init() 恢复发现并补发通知；
+   * 2. 等 onResolved 地平线后立即返回 running（拿到真实 execution 元数据）；
+   * 3. 前置错误（onResolved 前 spawn reject）当场同步 rethrow 原始错误——但
+   *    durable 记录已存在，由后台兜底链将其结算为 failed（诚实终态，不删记录
+   *    留僵尸 running，也不伪造成功）；
+   * 4. 父 signal 仅在启动阶段（onResolved 前）传播取消，就绪即解绑——父回合
+   *    结束后的 signal abort 不误杀后台子代理；此后只受 abort(runId)/close() 控制；
+   * 5. 插件从不 onResolved 但 settle：execution 留空（绝不伪造），abort 无子会话
+   *    可停，仅取消本 run；
+   * 6. onBackgroundAgentSettled 失败不推翻终态：notifiedAt 不置位，init() 按
+   *    outbox 语义补发（至少一次；父侧 reportBackgroundAgent 幂等去重）。
+   */
+  async startBackgroundAgent(
+    request: AgentSpawnRequest,
+    options?: {
+      parentToolCallId?: string
+      label?: string
+      notifyParentOnSettle?: boolean
+    },
+  ): Promise<{
+    run: WorkflowRunSummary
+    execution?: AgentExecutionInfo
+  }> {
+    if (this.closed) {
+      throw new HelmError('service_closed', 'WorkflowService 已关闭，拒绝启动新后台子代理', 503)
+    }
+    await this.init()
+    if (this.closed) throw new HelmError('service_closed', 'WorkflowService 已关闭，拒绝启动新后台子代理', 503)
+
+    // 父会话不存在时 getConversation 抛 not_found，原样透传给调用方。
+    this.host.getConversation(request.parentConversationId)
+
+    if (request.signal?.aborted) {
+      throw new HelmError('aborted', 'spawn 请求在创建前已取消', 409)
+    }
+
+    const runId = newRunId()
+    const createdAt = Date.now()
+    const abort = new AbortController()
+    const parentToolCallId =
+      options?.parentToolCallId !== undefined && options.parentToolCallId !== ''
+        ? options.parentToolCallId
+        : request.parentToolCallId !== undefined && request.parentToolCallId !== ''
+          ? request.parentToolCallId
+          : undefined
+    const name =
+      options?.label !== undefined && options.label.trim() !== ''
+        ? options.label.trim()
+        : request.agentType !== undefined && request.agentType !== ''
+          ? `subagent:${request.agentType}`
+          : 'subagent'
+
+    mkdirSync(this.artifactsDir(request.parentConversationId), { recursive: true })
+    const journalPath = this.journalPathFor(request.parentConversationId, runId)
+
+    const node: WorkflowNodeState = {
+      id: 'subagent-0',
+      kind: 'agent',
+      label: name,
+      status: 'running',
+      startedAt: createdAt,
+    }
+
+    const record: RunRecord = {
+      id: runId,
+      name,
+      conversationId: request.parentConversationId,
+      ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
+      status: 'running',
+      createdAt,
+      updatedAt: createdAt,
+      kind: 'subagent',
+      notifyParentOnSettle: options?.notifyParentOnSettle ?? true,
+      journalPath,
+      nodes: [node],
+    }
+
+    let resolveDone: () => void = () => {}
+    const doneGate = new Promise<void>((resolve) => {
+      resolveDone = resolve
+    })
+
+    const run: ActiveRun = {
+      runId,
+      conversationId: request.parentConversationId,
+      abort,
+      // done 立即挂后台兜底链：从创建第一刻起 wait/abort/close 都有可等的终点。
+      done: doneGate.then(() => undefined),
+      summary: this.toSummary(record),
+      journalPath,
+      writer: new JournalWriter(journalPath),
+      progress: [],
+      timeline: [],
+      pendingAborts: new Set(),
+      abortChildConversations: new Set(),
+      lastPersistAt: createdAt,
+      lastNodeEventAt: createdAt,
+    }
+    this.active.set(runId, run)
+
+    // abort(runId)/close() → 取消本 run 信号（spawn 信号桥停子会话回合）+
+    // 经 host.abortConversation 确定性中止已 onResolved 的子会话（tracker 全量
+    // 结算；幂等，已结束的子会话静默）。注册进 pendingAborts：settle 前必等完。
+    const onRunAbort = (): void => {
+      for (const childId of [...(run.abortChildConversations ?? [])]) {
+        const pending = this.host
+          .abortConversation(childId)
+          .catch((error: unknown) => {
+            process.stderr.write(
+              `workflow ${runId}: abort conversation ${childId} failed: ${
+                error instanceof Error ? error.message : String(error)
+              }\n`,
+            )
+          })
+          .then(() => {
+            run.pendingAborts.delete(pending)
+          })
+        run.pendingAborts.add(pending)
+      }
+    }
+    abort.signal.addEventListener('abort', onRunAbort, { once: true })
+
+    // --- 后台兜底结算链（唯一终态出口；绝不 reject，避免 unhandled） -------
+    let settled = false
+    let reportedSettleError = false
+    let settleError: unknown
+    const reportSettleError = (error: unknown): void => {
+      if (!reportedSettleError) {
+        reportedSettleError = true
+        settleError = error
+      }
+    }
+
+    /** 已 sanitized 执行元数据（onResolved 可能多次回调，幂等取最新）。 */
+    let executionInfo: AgentExecutionInfo | undefined
+    let gateResult: AgentGateResult | undefined
+    /** onResolved 是否真实触发（与地平线 race 分开判定，防 spawnEarly 混淆）。 */
+    let onResolvedFired = false
+    let resolveHorizon: () => void = () => {}
+    const horizonGate = new Promise<void>((resolve) => {
+      resolveHorizon = resolve
+    })
+
+    const settle = async (
+      outcome: { ok: true; raw: unknown } | { ok: false; error: unknown },
+    ): Promise<void> => {
+      try {
+        const settledAt = Date.now()
+        const aborted =
+          !outcome.ok &&
+          (abort.signal.aborted ||
+            (outcome.error instanceof HelmError && outcome.error.code === 'aborted'))
+        if (outcome.ok) {
+          node.status = 'done'
+          node.settledAt = settledAt
+          node.durationMs = settledAt - createdAt
+          node.output = redactJsonValue(outcome.raw, this.redact)
+          record.status = 'completed'
+          record.result = redactJsonValue(outcome.raw, this.redact)
+        } else {
+          node.status = aborted ? 'skipped' : 'failed'
+          node.settledAt = settledAt
+          node.durationMs = settledAt - createdAt
+          const message =
+            outcome.error instanceof HelmError
+              ? `[${outcome.error.code}] ${outcome.error.message}`
+              : outcome.error instanceof Error
+                ? outcome.error.message
+                : String(outcome.error)
+          node.error = this.redact(message)
+          record.status = aborted ? 'aborted' : 'failed'
+          record.error = this.redact(message)
+        }
+        record.updatedAt = settledAt
+        record.nodes = this.redactNodes([node])
+        run.summary = this.toSummary(record)
+        try {
+          this.writeRecord(record)
+          await this.state.flush?.()
+        } catch (persistError) {
+          const message = persistError instanceof Error ? persistError.message : String(persistError)
+          process.stderr.write(`workflow ${runId}: terminal state persist failed: ${message}\n`)
+          run.summary = {
+            ...run.summary,
+            error: `${run.summary.error ?? ''}\n[persist failed: ${message}]`.trim(),
+          }
+          reportSettleError(persistError)
+        }
+      } finally {
+        try {
+          await run.writer.close()
+        } catch (closeError) {
+          process.stderr.write(
+            `workflow ${runId}: journal close failed: ${
+              closeError instanceof Error ? closeError.message : String(closeError)
+            }\n`,
+          )
+        }
+        if (run.pendingAborts.size > 0) {
+          await Promise.allSettled([...run.pendingAborts])
+        }
+        if (this.host.onRunSettled !== undefined) {
+          try {
+            await this.host.onRunSettled({ ...run.summary })
+          } catch (hookError) {
+            const message = hookError instanceof Error ? hookError.message : String(hookError)
+            process.stderr.write(`workflow ${runId}: onRunSettled failed: ${message}\n`)
+            reportSettleError(hookError)
+          }
+        }
+        if (
+          record.notifyParentOnSettle === true &&
+          record.notifiedAt === undefined &&
+          this.host.onBackgroundAgentSettled !== undefined
+        ) {
+          try {
+            await this.host.onBackgroundAgentSettled({ ...run.summary }, {
+              parentConversationId: request.parentConversationId,
+              ...(request.agentType !== undefined && request.agentType !== ''
+                ? { agentType: request.agentType }
+                : {}),
+              // 通知面向父会话输入（可进模型上下文）：与持久面同标准脱敏。
+              ...(executionInfo !== undefined
+                ? { execution: redactExecutionMetadata(executionInfo, this.redact) }
+                : {}),
+            })
+            record.notifiedAt = Date.now()
+            this.writeRecord(record)
+            await this.state.flush?.()
+          } catch (notifyError) {
+            // 通知失败不推翻已落盘终态：notifiedAt 不置位，init() 按 outbox 补发。
+            const message = notifyError instanceof Error ? notifyError.message : String(notifyError)
+            process.stderr.write(`workflow ${runId}: onBackgroundAgentSettled failed: ${message}\n`)
+          }
+        }
+        this.host.emitEvent('workflow.updated', { run: { ...run.summary } })
+        this.active.delete(runId)
+        settled = true
+        if (settleError !== undefined) run.settleError = settleError
+        resolveDone()
+      }
+    }
+
+    const agentIdForProto = request.agentId ?? `${runId}:subagent-0`
+    // spawn 终局透传：guarded 在下方组装后立刻接入（wireBackground），后台链
+    // 从创建第一刻起即可等待（含 durable 快照写入前的窗口）。
+    let wireBackground: (outcome: { ok: true; raw: unknown } | { ok: false; error: unknown }) => void = () => {}
+    const backgroundWait = new Promise<{ ok: true; raw: unknown } | { ok: false; error: unknown }>((resolve) => {
+      wireBackground = resolve
+    })
+    const background = (async () => {
+      const outcome = await backgroundWait
+      let effective = outcome
+      if (effective.ok && abort.signal.aborted) {
+        effective = { ok: false, error: new HelmError('aborted', '后台子代理执行已取消', 409) }
+      }
+      if (effective.ok && gateResult !== undefined && !gateResult.ok) {
+        effective = { ok: false, error: new HelmError('gate_failed', gateResult.output, 502) }
+      }
+      if (
+        effective.ok &&
+        request.gate !== undefined &&
+        gateResult === undefined &&
+        executionInfo?.executionId !== undefined
+      ) {
+        // 外部执行环境（executionId 存在）必须回报 gate；缺失即显式失败，
+        // 与 invokeSpawn 同款规则，绝不在本机猜远端工作目录补跑。
+        effective = {
+          ok: false,
+          error: gateResultMissingError({
+            agentId: agentIdForProto,
+            executionId: executionInfo.executionId,
+            command: request.gate,
+          }),
+        }
+      }
+      await settle(effective)
+    })()
+    void background.catch((error: unknown) => {
+      process.stderr.write(
+        `workflow ${runId}: background settle crashed: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+      reportSettleError(error)
+      if (!settled) void settle({ ok: false, error }).catch(() => {})
+    })
+
+    // --- durable running 快照（副作用 spawnAgent 之前！）------------------
+    try {
+      this.writeRecord(record, { index: true })
+      await this.state.flush?.()
+    } catch (persistError) {
+      this.active.delete(runId)
+      await run.writer.close().catch(() => {})
+      resolveDone()
+      throw persistError
+    }
+    this.host.emitEvent('workflow.updated', { run: this.redactSummaryNodes({ ...run.summary }) })
+
+    // --- 组装 proto 并发起 spawn -----------------------------------------
+    const proto: AgentSpawnRequest = {
+      ...request,
+      ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
+      agentId: agentIdForProto,
+      workflowRunId: runId,
+      onResolved: (raw: unknown) => {
+        const info = sanitizeExecutionInfo(raw, { agentId: agentIdForProto })
+        executionInfo = info
+        if (info.nodeId !== undefined) node.nodeId = info.nodeId
+        if (info.conversationId !== undefined) {
+          node.conversationId = info.conversationId
+          run.abortChildConversations?.add(info.conversationId)
+        }
+        if (info.executionId !== undefined) node.executionId = info.executionId
+        if (info.effectiveCwd !== undefined) node.effectiveCwd = info.effectiveCwd
+        if (info.worktree !== undefined) node.worktree = info.worktree
+        record.subagentMeta = {
+          ...(request.agentType !== undefined && request.agentType !== ''
+            ? { agentType: request.agentType }
+            : {}),
+          // 持久面统一脱敏（effectiveCwd/worktree 路径可能含秘密 token）。
+          execution: redactExecutionMetadata(info, this.redact),
+        }
+        record.nodes = this.redactNodes([node])
+        run.summary = this.toSummary(record)
+        this.writeRecord(record)
+        onResolvedFired = true
+        resolveHorizon()
+        request.onResolved?.(info)
+      },
+      ...(request.gate !== undefined
+        ? {
+            onGateResult: (raw: unknown) => {
+              const gate = sanitizeGateResult(raw, { agentId: agentIdForProto })
+              gateResult = gate
+              node.gate = { ok: gate.ok, output: this.redact(gate.output) }
+              request.onGateResult?.(gate)
+            },
+          }
+        : {}),
+      signal: abort.signal,
+    }
+
+    // 父 signal 仅启动阶段传播（ready 前）；onResolved 即解绑。
+    const parentSignal = request.signal
+    const onParentAbort = (): void => {
+      if (!onResolvedFired && !settled) abort.abort()
+    }
+    parentSignal?.addEventListener('abort', onParentAbort, { once: true })
+    const detachParentSignal = (): void => {
+      parentSignal?.removeEventListener('abort', onParentAbort)
+    }
+
+    if (parentSignal?.aborted || this.closed) abort.abort()
+    const spawnPromise = (async () => {
+      if (abort.signal.aborted) throw new HelmError('aborted', '后台子代理启动期间已取消', 409)
+      return this.host.spawnAgent(proto)
+    })()
+    // spawn 终局（guard 后绝不 reject）；onResolved 前失败在地平线 race 中
+    // 同步透出给调用方，同时喂给后台链结算为 failed。
+    let spawnOutcome: { ok: true; raw: unknown } | { ok: false; error: unknown } | undefined
+    const guarded: Promise<{ ok: true; raw: unknown } | { ok: false; error: unknown }> = spawnPromise.then(
+      (raw) => ({ ok: true as const, raw }),
+      (error: unknown) => ({ ok: false as const, error }),
+    )
+    const spawnEarly = guarded.then((outcome) => {
+      spawnOutcome = outcome
+      wireBackground(outcome)
+      resolveHorizon()
+      return outcome
+    })
+    // 防御：spawnEarly 链自身异常不产生 unhandled rejection。
+    void spawnEarly.catch(() => {})
+
+    await Promise.race([horizonGate, spawnEarly.then((o) => o)])
+
+    const preResolveFailure =
+      spawnOutcome !== undefined && !spawnOutcome.ok && !onResolvedFired ? spawnOutcome.error : undefined
+    if (preResolveFailure !== undefined) {
+      // 情况 A：spawn 在 onResolved 之前就失败（Profile 不存在、参数非法、节点
+      // 离线、非 Git 仓库建 worktree 失败等）。durable 记录已在副作用前登记，
+      // 后台兜底链会把该失败结算为 failed（诚实终态，不留僵尸 running，也不
+      // 伪造成功）；同时把原始错误当场同步 rethrow 给调用方。
+      detachParentSignal()
+      throw preResolveFailure
+    }
+
+    // 情况 B：onResolved 已触发（真实 execution 元数据），或外部插件未回
+    // onResolved 但已同步 settle（execution 留空，绝不伪造）。
+    detachParentSignal()
+
+    try {
+      this.writeRecord(record)
+      await this.state.flush?.()
+    } catch (persistError) {
+      // running 快照已落盘；此处仅补 execution 元数据失败，不撤销 run。
+      const message = persistError instanceof Error ? persistError.message : String(persistError)
+      process.stderr.write(`workflow ${runId}: execution metadata persist failed: ${message}\n`)
+    }
+    this.host.emitEvent('workflow.updated', { run: this.redactSummaryNodes({ ...run.summary }) })
+
+    return {
+      run: this.redactSummaryNodes({ ...run.summary }),
+      ...(executionInfo !== undefined ? { execution: executionInfo } : {}),
+    }
+  }
+  // ------------------------------------------------------------------
   // getRun / wait / abort
   // ------------------------------------------------------------------
 
@@ -750,9 +1294,12 @@ export class WorkflowService {
   getRun(runId: string): WorkflowRunSummary {
     const activeRun = this.active.get(runId)
     if (activeRun !== undefined) {
+      // 后台单子代理不经引擎 progress：直接用 record.nodes（实时维护）。
+      const collapsed =
+        activeRun.progress.length > 0 ? this.nodesFromProgress(activeRun.progress) : activeRun.summary.nodes
       return this.redactSummaryNodes({
         ...activeRun.summary,
-        nodes: this.nodesFromProgress(activeRun.progress),
+        ...(collapsed !== undefined ? { nodes: collapsed } : {}),
       })
     }
     return this.toSummary(this.loadRecord(runId))
@@ -797,7 +1344,14 @@ export class WorkflowService {
     const seen = new Set<string>()
     for (const active of this.active.values()) {
       seen.add(active.runId)
-      out.push(this.redactSummaryNodes({ ...active.summary, nodes: this.nodesFromProgress(active.progress) }))
+      const collapsed =
+        active.progress.length > 0 ? this.nodesFromProgress(active.progress) : active.summary.nodes
+      out.push(
+        this.redactSummaryNodes({
+          ...active.summary,
+          ...(collapsed !== undefined ? { nodes: collapsed } : {}),
+        }),
+      )
     }
     for (const entry of [...index].sort((a, b) => b.createdAt - a.createdAt)) {
       if (seen.has(entry.id)) continue
@@ -840,7 +1394,9 @@ export class WorkflowService {
       return
     }
     activeRun.abort.abort()
-    // done 已 await 在途子会话的中止收尾（pendingAborts），返回时子会话确已停。
+    // 启动期（尚未 onResolved）也必须等待真实退出：与运行期同一 done 通道
+    //（startBackgroundAgent 在 onResolved 前后都把收尾挂到 run.done），
+    // 返回时 run 已终态、active 已移除、无未处理 rejection。
     await activeRun.done
     if (activeRun.settleError !== undefined) throw activeRun.settleError
   }
@@ -1256,15 +1812,12 @@ export class WorkflowService {
   }
 
   private redactNode(node: NonNullable<WorkflowRunSummary['nodes']>[number]): NonNullable<WorkflowRunSummary['nodes']>[number] {
-    const redacted = { ...node }
+    const redacted = redactJsonValue(node, this.redact) as NonNullable<WorkflowRunSummary['nodes']>[number]
     if (redacted.label !== undefined) redacted.label = this.redact(redacted.label)
     if (redacted.prompt !== undefined) redacted.prompt = this.redact(redacted.prompt)
     if (redacted.effectiveCwd !== undefined) redacted.effectiveCwd = this.redact(redacted.effectiveCwd)
     if (redacted.worktree !== undefined) {
-      redacted.worktree = {
-        path: this.redact(redacted.worktree.path),
-        branch: this.redact(redacted.worktree.branch),
-      }
+      redacted.worktree = redactJsonValue(redacted.worktree, this.redact) as NonNullable<AgentExecutionInfo['worktree']>
     }
     if (redacted.gate !== undefined) {
       redacted.gate = { ok: redacted.gate.ok, output: this.redact(redacted.gate.output) }
@@ -1296,6 +1849,7 @@ export class WorkflowService {
         ...(agent.cached !== undefined ? { cached: agent.cached } : {}),
         ...(agent.agentType !== undefined ? { agentType: agent.agentType } : {}),
         ...(agent.label !== undefined ? { label: agent.label } : {}),
+        ...(agent.nodeId !== undefined ? { nodeId: agent.nodeId } : {}),
         ...(agent.conversationId !== undefined ? { conversationId: agent.conversationId } : {}),
         ...(agent.executionId !== undefined ? { executionId: agent.executionId } : {}),
         ...(agent.effectiveCwd !== undefined ? { effectiveCwd: agent.effectiveCwd } : {}),

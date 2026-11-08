@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
+import type { ConversationAttachmentRef } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { isHumanSelectableProfile } from '../shell/sidebar-model.js'
 import { matchesUiScope } from '../lib/types.js'
@@ -7,11 +8,28 @@ import { useHelmStore } from '../lib/store-context.js'
 import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
 import { ConversationTimeline } from './ConversationTimeline.js'
+import type { EditRequestTarget } from './timeline-model.js'
 
 export interface ConversationPaneProps {
   conversationId: number
   isSplit?: boolean
   onCloseSplit?: () => void
+}
+
+/** 分屏窗格右上角关闭入口：加载中/加载失败早退分支同样可见，手机不被困住。 */
+function CloseSplitButton({ onCloseSplit }: { onCloseSplit: () => void }) {
+  return (
+    <button
+      type="button"
+      className="btn btn-sm btn-ghost split-close-btn"
+      aria-label="关闭分屏"
+      title="关闭本分屏"
+      onClick={onCloseSplit}
+    >
+      <HelmIcon name="x" size={12} />
+      <span className="pane-action-label">关闭分屏</span>
+    </button>
+  )
 }
 
 /** 会话顶栏 + 时间线 + AskDock(Composer 内) + Composer 微操舱。 */
@@ -24,7 +42,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
   const [titleDraft, setTitleDraft] = useState('')
   const [actionPending, setActionPending] = useState<string | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
-  const [prefill, setPrefill] = useState<{ text: string; tick: number } | null>(null)
+  const [prefill, setPrefill] = useState<{ text: string; entryId?: number; attachments?: ConversationAttachmentRef[]; tick: number } | null>(null)
   const [sendingInFlight, setSendingInFlight] = useState(false)
   const moreMenuRef = useRef<HTMLSpanElement | null>(null)
   const moreButtonRef = useRef<HTMLButtonElement | null>(null)
@@ -63,9 +81,14 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
   const detailError = store.loadErrors[`conversation:${conversationId}`]
   if (detailError) {
     return (
-      <div className="helm-pane pane-error" role="alert">
-        <p>会话 #{conversationId} 加载失败：{detailError}</p>
-        <button className="btn" onClick={() => void store.loadConversationDetail(conversationId, true)}>重试</button>
+      <div className={`${isSplit ? 'helm-split-pane' : 'helm-pane'} pane-error`} role="alert">
+        <div className="pane-error-row">
+          <p>会话 #{conversationId} 加载失败：{detailError}</p>
+          <span className="pane-error-actions">
+            <button className="btn" onClick={() => void store.loadConversationDetail(conversationId, true)}>重试</button>
+            {isSplit && onCloseSplit !== undefined ? <CloseSplitButton onCloseSplit={onCloseSplit} /> : null}
+          </span>
+        </div>
       </div>
     )
   }
@@ -74,6 +97,11 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
     return (
       <div className={isSplit ? 'helm-split-pane' : 'helm-pane'} style={{ alignItems: 'center', justifyContent: 'center', color: 'var(--fg-muted)', fontSize: 12 }}>
         正在加载会话 #{conversationId}…
+        {isSplit && onCloseSplit !== undefined ? (
+          <span className="pane-loading-split-close">
+            <CloseSplitButton onCloseSplit={onCloseSplit} />
+          </span>
+        ) : null}
       </div>
     )
   }
@@ -134,8 +162,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
     await runAction('rename', () => conversationsApi.patch(conversationId, { title: next }), '已重命名会话')
   }
 
-  const requestEdit = (text: string): void => {
-    setPrefill({ text, tick: Date.now() })
+  const requestEdit = (target: EditRequestTarget): void => {
+    // prefill 绑定会话 id：即使未来 Pane 复用不重挂载，旧会话的编辑目标也不会注入新会话 Composer
+    setPrefill(target.text.trim() === '' && target.entryId === undefined ? null : { ...target, tick: Date.now() })
   }
 
   const toggleSplit = (): void => {
@@ -226,17 +255,8 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
               {workbenchCount > 0 && <span className="badge badge-neutral tabular-nums">{workbenchCount}</span>}
             </button>
           ) : null}
-          {isSplit ? (
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost split-close-btn"
-              aria-label="关闭分屏"
-              title="关闭本分屏"
-              onClick={() => onCloseSplit?.()}
-            >
-              <HelmIcon name="x" size={12} />
-              <span className="pane-action-label">关闭分屏</span>
-            </button>
+          {isSplit && onCloseSplit !== undefined ? (
+            <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
             <button
               type="button"
@@ -323,7 +343,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
         onRequestEdit={requestEdit}
       />
 
-      <Composer conversation={conversation} prefill={prefill} onSendingChange={setSendingInFlight} />
+      <Composer key={`composer-${conversation.id}`} conversation={conversation} prefill={prefill} onSendingChange={setSendingInFlight} />
     </div>
   )
 }

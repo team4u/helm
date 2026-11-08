@@ -54,6 +54,7 @@ import {
   parseConversationInit,
   parseConversationPatch,
   parseConversationResetBody,
+  parseConversationWithdrawBody,
   parseCredentialBody,
   parseDetailPagination,
   parseDocNameParam,
@@ -63,6 +64,7 @@ import {
   parseProfileBody,
   parseProvidersBody,
   parseWorkflowRunBody,
+  parseWorktreeCleanupBody,
   requireIdParam,
   ValidationError,
   rejectUnknownKeys,
@@ -265,16 +267,25 @@ async function route(
     }
     if (third === 'input' && method === 'POST' && fourth === undefined) {
       const body = await readJsonBody(ctx.request)
-      const { text, whenBusy, origin, meta, attachments } = parseInputBody(body)
+      const { text, whenBusy, origin, meta, attachments, replaceFromEntryId } = parseInputBody(body)
       const wait = parseWaitFlag(ctx.url)
       const { submissionId } = await kernel.submitInput(id, text, {
         ...(origin !== undefined ? { origin } : {}),
         ...(whenBusy !== undefined ? { whenBusy } : {}),
         ...(meta !== undefined ? { meta } : {}),
         ...(attachments !== undefined ? { attachments } : {}),
+        ...(replaceFromEntryId !== undefined ? { replaceFromEntryId } : {}),
       })
       if (!wait) return jsonOk(redactor, { submissionId }, { status: 202 })
       return jsonOk(redactor, await kernel.waitForInput(id, submissionId))
+    }
+    if (third === 'withdraw' && method === 'POST' && fourth === undefined) {
+      if (kernel.withdrawQueuedInput === undefined) {
+        throw new HelmError('not_implemented', '当前 runtime 未提供排队输入撤回', 501)
+      }
+      const body = await readJsonBody(ctx.request)
+      const parsed = parseConversationWithdrawBody(body)
+      return jsonOk(redactor, await kernel.withdrawQueuedInput(id, parsed))
     }
     if (third === 'abort' && method === 'POST' && fourth === undefined) {
       await kernel.abortConversation(id)
@@ -577,6 +588,13 @@ async function route(
       return jsonOk(redactor, result)
     }
     return errorResponse(redactor, 404, 'not_found', '路由不存在')
+  }
+
+  // ---- managed worktrees -----------------------------------------------------
+  if (head === 'worktrees' && second === 'cleanup' && third === undefined && method === 'POST') {
+    const input = parseWorktreeCleanupBody(await readJsonBody(ctx.request))
+    if (kernel.cleanupWorktree === undefined) throw new HelmError('unsupported_runtime', '内核未提供受管工作树清理', 501)
+    return jsonOk(redactor, await kernel.cleanupWorktree(input, ctx.request.signal))
   }
 
   // ---- workflows -------------------------------------------------------------

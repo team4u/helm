@@ -15,6 +15,7 @@ import type {
   ConversationPatch,
   ConversationStatus,
   ConversationSummary,
+  ConversationWithdrawResponse,
   EnvExecRequest,
   EnvExecResponse,
   ModelCatalogEntry,
@@ -119,6 +120,8 @@ export type { SearchHit }
 
 /** HTTP 消费的 KernelRuntime 形状（真实 KernelRuntime 结构化兼容于它）。 */
 export interface KernelRuntimeLike {
+  /** 受管工作树清理；可选端口供最小测试内核显式报告未实现。 */
+  cleanupWorktree?(request: import('@helm/protocol').WorktreeCleanupRequest, signal?: AbortSignal): Promise<import('@helm/protocol').WorktreeCleanupResult>
   readonly dataDir: string
   readonly auth: AuthService
   readonly events: EventHub
@@ -171,8 +174,15 @@ export interface KernelRuntimeLike {
       whenBusy?: 'steer' | 'followUp' | 'reject'
       meta?: Record<string, unknown>
       attachments?: string[]
+      /** 从指定历史条目起原地覆盖重发（截断该条及后续上下文后写入新输入）。 */
+      replaceFromEntryId?: number
     },
   ): Promise<{ submissionId: string }> | { submissionId: string }
+  /** 撤回排队中的输入（POST /api/conversations/:id/withdraw）。 */
+  withdrawQueuedInput?(
+    id: number,
+    opts: { submissionId: number },
+  ): Promise<ConversationWithdrawResponse> | ConversationWithdrawResponse
   /** ?wait=1：等待单次提交终态并返回本次输入结果；失败/中止抛明确 HelmError。 */
   waitForInput(
     id: number,
@@ -282,4 +292,4 @@ export interface HubHandle {
 }
 
 // 导出供测试构造完整 Profile
-export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, WorkflowRunSummary, WorkflowRunRequest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, SavedWorkflowSummary, ConversationCompactResponse }
+export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, WorkflowRunSummary, WorkflowRunRequest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, SavedWorkflowSummary, ConversationCompactResponse, ConversationWithdrawResponse }

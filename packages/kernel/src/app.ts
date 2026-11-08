@@ -33,13 +33,13 @@ export async function createHelm(options: HelmOptions = {}) {
   const kernel = await KernelRuntime.open({ ...runtimeOptions, autoResume: false });
   let closeWorkflows: (() => Promise<void>) | undefined;
   try {
-    await kernel.plugins.register(createAssistantPlugin(kernel));
     const workflows = new WorkflowService({
       dataDir: kernel.dataDir,
       state: kernel.documentStore,
       redact: (text) => kernel.stash.redact(text),
       host: {
         spawnAgent: (request) => kernel.spawnAgent(request),
+        prepareInterruptedConversations: (ids) => kernel.prepareInterruptedConversations(ids),
         runGate: (command, context) => kernel.runGate(command, context),
         async invokeAction(pluginId, actionId, input, context) {
           const result = await kernel.plugins.invokeAction(pluginId, actionId, input, context);
@@ -50,14 +50,21 @@ export async function createHelm(options: HelmOptions = {}) {
         abortConversation: (id) => kernel.abortConversation(id),
         emitEvent: (type, payload) => kernel.events.publish(type, payload),
         onRunSettled: (summary) => kernel.notifyWorkflowSettled(summary),
+        onBackgroundAgentSettled: (summary, info) => kernel.reportBackgroundAgent(summary, info),
       },
     });
     closeWorkflows = () => workflows.close();
-    await workflows.init();
     kernel.setWorkflowRunProvider(() => workflows.listRuns());
+    kernel.setBackgroundAgentRunner((request) => workflows.startBackgroundAgent(request, {
+      parentToolCallId: request.parentToolCallId,
+      notifyParentOnSettle: true,
+    }));
     kernel.setWorkflowRunner(async (request, conversationId, signal, context) =>
       workflows.run({ ...request, conversationId }, context),
     );
+    // 任何插件 start 都可能提交输入而唤醒全局调度；先将遗留子任务持久标记取消。
+    await workflows.prepareRecovery();
+    await kernel.plugins.register(createAssistantPlugin(kernel));
     await kernel.plugins.register(createHerdrPlugin({
       defaultCwd: runtimeOptions.cwd ?? process.cwd(),
       profiles: kernel.profiles,
@@ -76,6 +83,14 @@ export async function createHelm(options: HelmOptions = {}) {
       profiles: kernel.profiles,
       skills: kernel.skills,
       getConversationDetail: (id, options) => kernel.getConversationDetail(id, options),
+      // 组合层订阅端口：内核 EventHub conversation.entry 事件过滤后转交插件
+      // （不扩张通用 ctx.host / 7 hooks，内核零插件转判）。
+      subscribeConversationEntries: (listener) =>
+        kernel.events.subscribe((frame) => {
+          const event = frame.event
+          if (event.type !== 'conversation.entry' || !('entry' in event)) return
+          listener(event.conversationId, event.entry)
+        }),
       listArtifacts: (conversationId) => kernel.artifacts.list(conversationId),
       abortConversation: (conversationId) => kernel.abortConversation(conversationId),
       getConversationOwnership: (conversationId) => kernel.getConversationOwnership(conversationId),
@@ -110,6 +125,8 @@ export async function createHelm(options: HelmOptions = {}) {
     // 外部插件目录 <dataDir>/plugins/<dir>/ 自动发现（内置插件数据目录静默跳过）；
     // 默认停用注册，config.json.pluginEnabled 持久化 true 的自动恢复启用
     await loadExternalPlugins(kernel.dataDir, kernel.plugins);
+    // 恢复补发会提交父会话输入并启动 SDK，必须等全部工具与插件已注册。
+    await workflows.init();
     await kernel.start();
     return {
       kernel,

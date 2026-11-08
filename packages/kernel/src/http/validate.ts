@@ -211,19 +211,27 @@ export function parseInputBody(body: Record<string, unknown>): {
   origin?: InputOrigin
   meta?: Record<string, unknown>
   attachments?: string[]
+  replaceFromEntryId?: number
 } {
   const text = requireString(body, 'text', { maxLength: 512 * 1024 })
   const whenBusy = optionalEnum(body, 'whenBusy', ['steer', 'followUp', 'reject'] as const)
   const origin = optionalEnum(body, 'origin', ['human', 'agent', 'trigger'] as const)
   const meta = parseMetaObject(body.meta)
   const attachments = parseAttachmentIds(body.attachments)
-  rejectUnknownKeys(body, new Set(['text', 'whenBusy', 'origin', 'meta', 'attachments']))
+  const replaceFromEntryIdRaw = body.replaceFromEntryId
+  if (replaceFromEntryIdRaw !== undefined) {
+    if (typeof replaceFromEntryIdRaw !== 'number' || !Number.isSafeInteger(replaceFromEntryIdRaw) || replaceFromEntryIdRaw <= 0) {
+      throw new ValidationError('replaceFromEntryId 需为安全范围内的正整数')
+    }
+  }
+  rejectUnknownKeys(body, new Set(['text', 'whenBusy', 'origin', 'meta', 'attachments', 'replaceFromEntryId']))
   return {
     text,
     ...(whenBusy !== undefined ? { whenBusy } : {}),
     ...(origin !== undefined ? { origin } : {}),
     ...(meta !== undefined ? { meta } : {}),
     ...(attachments !== undefined ? { attachments } : {}),
+    ...(replaceFromEntryIdRaw !== undefined ? { replaceFromEntryId: replaceFromEntryIdRaw } : {}),
   }
 }
 
@@ -578,6 +586,44 @@ export function parseConversationForkBody(body: Record<string, unknown>): { entr
   const title = optionalString(body, 'title', { minLength: 1, maxLength: 200 })
   rejectUnknownKeys(body, new Set(['entryId', 'title']))
   return { entryId: raw, ...(title !== undefined ? { title } : {}) }
+}
+
+/** POST /api/conversations/:id/withdraw：submissionId 必填安全正整数。 */
+export function parseConversationWithdrawBody(body: Record<string, unknown>): { submissionId: number } {
+  const raw = body.submissionId
+  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw <= 0) {
+    throw new ValidationError('submissionId 需为安全范围内的正整数')
+  }
+  rejectUnknownKeys(body, new Set(['submissionId']))
+  return { submissionId: raw }
+}
+
+/** POST /api/worktrees/cleanup：只接受精确的受管资源选择器。 */
+export function parseWorktreeCleanupBody(body: Record<string, unknown>): import('@helm/protocol').WorktreeCleanupRequest {
+  rejectUnknownKeys(body, new Set(['worktreeId', 'conversationId', 'path', 'nodeId', 'deleteBranch', 'force']))
+  const result: import('@helm/protocol').WorktreeCleanupRequest = {}
+  for (const key of ['worktreeId', 'path', 'nodeId'] as const) {
+    if (body[key] !== undefined) {
+      const value = requireString(body, key, { minLength: 1 })
+      if (value.trim() === '') throw new ValidationError(`${key} 需为非空字符串`)
+      result[key] = value
+    }
+  }
+  if (body.conversationId !== undefined) {
+    if (typeof body.conversationId !== 'number' || !Number.isSafeInteger(body.conversationId) || body.conversationId < 1) {
+      throw new ValidationError('conversationId 需为安全正整数')
+    }
+    result.conversationId = body.conversationId
+  }
+  const selectors = [result.worktreeId, result.conversationId, result.path].filter((value) => value !== undefined)
+  if (selectors.length !== 1) throw new ValidationError('worktreeId、conversationId、path 必须且只能提供一个')
+  if (result.nodeId !== undefined && result.path === undefined) throw new ValidationError('nodeId 仅可搭配 path 使用')
+  if (result.path !== undefined && !isCrossPlatformAbsolutePath(result.path)) throw new ValidationError('path 需为目标节点的绝对路径')
+  for (const key of ['deleteBranch', 'force'] as const) {
+    const value = optionalBoolean(body, key)
+    if (value !== undefined) result[key] = value
+  }
+  return result
 }
 
 // ---------------------------------------------------------------------------

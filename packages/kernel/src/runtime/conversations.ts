@@ -363,6 +363,14 @@ export class ConversationTracker {
     this.trackedInputs.get(conversationId)?.delete(key)
   }
 
+  /** 撤回排队提交：清理 submissionId 键及 req:<requestId> 重建键（withdraw 用）。 */
+  dropSubmission(conversationId: number, submissionId: number, requestId?: string): void {
+    const map = this.trackedInputs.get(conversationId)
+    if (!map) return
+    map.delete(submissionId)
+    if (requestId !== undefined) map.delete(`req:${requestId}`)
+  }
+
   /** 本回合（当前 run）输入清单（before_turn payload 用）：run.inputs 精确
    * 序列（steer 追加在内）+ 尚未放置的 queued 登记，按 input.id 去重唯一。 */
   currentRunInputs(conversationId: number): ConversationInput[] {
@@ -528,11 +536,16 @@ export class ConversationTracker {
     this.liveViews.set(id, live ?? {})
 
     // assistant 文本：窗口尾部最新 pi.assistant entry。
+    // 遇 helm.rewind / pi.reset 立即停止回扫：原地覆盖重发刚写入截断标记（新
+    // 回答尚未生成）时，标记之前的旧 pi.assistant 已被覆盖，绝不能再触发
+    // onAssistantText 把旧回答重新写入 FTS5（防旧回答复燃）。
     for (let i = view.entries.length - 1; i >= 0; i -= 1) {
       const entry = view.entries[i] as
         | { kind: string; id: number; model?: ReadonlyArray<{ content?: ReadonlyArray<{ type: string; text?: string }> }> }
         | undefined
-      if (entry !== undefined && entry.kind === 'pi.assistant') {
+      if (entry === undefined) continue
+      if (entry.kind === 'helm.rewind' || entry.kind === 'pi.reset') break
+      if (entry.kind === 'pi.assistant') {
         const text = assistantTextOf(entry)
         if (text !== '') {
           this.events.onAssistantText(id, entry.id, text)
@@ -971,6 +984,19 @@ export class ConversationTracker {
 
   getLastAssistantText(conversationId: number): string | undefined {
     return this.lastAssistant.get(conversationId)?.text
+  }
+
+  /** 失效落入 rewind 覆盖区间的 lastAssistant 缓存（原地覆盖重发后）。
+   *
+   * 仅当缓存指向的 entry 落在 [from, through] 内才清除：新回答失败时
+   * getLastAssistantText 不得返回已被覆盖的旧答案，而区间外（更早回合）
+   * 的缓存仍然有效。*/
+  invalidateLastAssistantWithin(conversationId: number, from: number, through: number): void {
+    const cached = this.lastAssistant.get(conversationId)
+    if (cached === undefined) return
+    if (cached.entryId >= from && cached.entryId <= through) {
+      this.lastAssistant.delete(conversationId)
+    }
   }
 
   /**

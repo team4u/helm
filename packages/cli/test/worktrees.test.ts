@@ -183,6 +183,7 @@ test('互斥与校验：缺选择器/多选择器/--node 无 --path/非正整数
     await expectError(['worktrees', 'cleanup', '--id', 'a', '--conversation', '7', '--json'], 'conflicting_flags')
     await expectError(['worktrees', 'cleanup', '--conversation', '7', '--path', '/p', '--json'], 'conflicting_flags')
     await expectError(['worktrees', 'cleanup', '--id', 'a', '--current', '--json'], 'conflicting_flags')
+    await expectError(['worktrees', 'cleanup', '--conversation', '7', '--current', '--json'], 'conflicting_flags')
     await expectError(['worktrees', 'cleanup', '--node', 'n1', '--json'], 'conflicting_flags')
     await expectError(['worktrees', 'cleanup', '--conversation', '0', '--json'], 'invalid_flag_value')
     await expectError(['worktrees', 'cleanup', '--conversation', '-3', '--json'], 'invalid_flag_value') // 负数作为 flag 值被 positive int 拒绝

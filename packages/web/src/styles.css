@@ -994,6 +994,43 @@ textarea {
   padding: 8px 10px 0;
 }
 
+/* 历史消息编辑态提示条：极简行高、柔和底色，与附件区风格协调 */
+.composer-edit-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 10px 0;
+  padding: 4px 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
+.composer-edit-banner-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--fg-muted);
+}
+.composer-edit-banner-text svg {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
+}
+
+.composer-edit-cancel {
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 6px;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
 .attachment-chip {
   display: inline-flex;
   align-items: center;
@@ -1774,6 +1811,37 @@ textarea {
  * 子代理实时卡片（SubagentLiveCard）：主会话时间线内嵌子会话实时流
  * ------------------------------------------------------------------------- */
 
+/* 加载失败/加载中早退分支：错误信息与操作横排，分屏关闭入口始终可见 */
+.pane-error {
+  padding: 16px;
+  gap: 10px;
+}
+
+.pane-error-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pane-error-row p {
+  color: var(--err);
+  overflow-wrap: anywhere;
+}
+
+.pane-error-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pane-loading-split-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
 .subagent-live-card {
   margin: 2px 0 6px;
   border: 1px solid var(--border);
@@ -1820,6 +1888,23 @@ textarea {
   max-width: 40%;
 }
 
+/* 隔离工作树分支徽章：纯文本 + 线性图标，hover 出完整路径 */
+.subagent-worktree-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  max-width: min(220px, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+}
+
+.subagent-worktree-badge > svg {
+  flex-shrink: 0;
+}
+
 .subagent-live-actions {
   margin-left: auto;
   display: inline-flex;
@@ -1861,11 +1946,6 @@ textarea {
 
 .subagent-stream-body {
   min-width: 0;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -1874,12 +1954,24 @@ textarea {
   font-weight: 500;
 }
 
+/* 仅指令（prompt）保持两行紧凑截断；thinking/text 完整换行，由外层
+   .subagent-live-stream max-height 限高与滚动保证尾部可见，
+   不会因行截断永远看不到最新内容。 */
+.subagent-stream-prompt .subagent-stream-body {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: pre-wrap;
+}
+
 .subagent-stream-thinking {
   color: var(--fg-muted);
 }
 
 .subagent-stream-thinking .subagent-stream-body {
   font-style: italic;
+  white-space: pre-wrap;
 }
 
 .subagent-stream-tool {
@@ -1907,6 +1999,34 @@ textarea {
   min-width: 0;
 }
 
+/* 工具结果首行预览：明确标识“预览且可能截断”，不伪装全文。 */
+.subagent-stream-tool-preview {
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-subtle);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.subagent-stream-preview-more {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--fg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0 5px;
+  line-height: 14px;
+  user-select: none;
+}
+
+.subagent-stream-error {
+  color: var(--err);
+}
+
 .subagent-stream-meta {
   flex-shrink: 0;
   margin-left: auto;
@@ -1917,6 +2037,7 @@ textarea {
 
 .subagent-stream-text .subagent-stream-body {
   color: var(--fg);
+  white-space: pre-wrap;
 }
 
 .subagent-stream-empty {
@@ -1929,6 +2050,32 @@ textarea {
   align-self: center;
 }
 
+/* 外部运行时（无子会话）后台任务摘要卡 */
+.subagent-external-body {
+  gap: 6px;
+}
+
+.subagent-external-exec {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* 后台 run 失败：卡片底部简洁错误行 */
+.subagent-bg-error {
+  align-items: center;
+  gap: 6px;
+}
+
+.subagent-bg-error > svg {
+  flex-shrink: 0;
+  align-self: center;
+}
+
 /* 时间线内联工作流卡的紧凑实时节点列表 */
 .workflow-node-list {
   display: flex;
@@ -1938,6 +2085,10 @@ textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
   background: var(--bg-subtle);
+  /* 渐进披露：节点再多也只占限高视口，内部滚动不撑爆主会话时间线 */
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .workflow-node-line {

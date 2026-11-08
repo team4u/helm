@@ -28,7 +28,7 @@
  * - 关停（service.stop）先置 shutdown 再释放资源，此后不再向 router 投递
  *   任何汇报（KernelRuntime.close 的 abort 回调不会在关停后无限唤醒中枢）。
  */
-import { HelmError, ROOT_CONVERSATION_ID, type PluginDefinition, type PluginToolContext } from '@helm/protocol'
+import { HelmError, ROOT_CONVERSATION_ID, type ConversationEntry, type PluginDefinition, type PluginToolContext } from '@helm/protocol'
 import type {
   ConversationSummary,
   MaybePromise,
@@ -37,6 +37,7 @@ import type {
 } from '@helm/protocol'
 import type {
   ArtifactMetadata,
+  ConversationDetail,
   ConversationScope,
 } from '@helm/protocol'
 import { withFileLock } from '../services/index.js'
@@ -95,6 +96,9 @@ const DEFAULT_CONFIG: SuperAgentConfig = {
   abortAfterMs: 1_800_000,
   errorThreshold: 3,
 }
+
+/** 启用补偿分页读取页面大小（详情 API 上限 500，一次拉满减少往返）。 */
+export const REWIND_REPLAY_PAGE_SIZE = 500
 
 /** mutedSources 逗号/换行分隔解析为精确 source 集合（空项剔除）。 */
 export function parseMutedSources(raw: string): Set<string> {
@@ -275,6 +279,10 @@ export function assertRecallDoc(value: unknown): void {
       typeof n.completionSeq !== 'number' ||
       !Number.isInteger(n.completionSeq) ||
       n.completionSeq < 0 ||
+      !Array.isArray(n.inputIds) ||
+      n.inputIds.length === 0 ||
+      n.inputIds.some((v) => typeof v !== 'string' || v === '') ||
+      new Set(n.inputIds).size !== n.inputIds.length ||
       typeof n.outcome !== 'string' ||
       !SETTLED_OUTCOMES.has(n.outcome) ||
       typeof n.summary !== 'string' ||
@@ -365,6 +373,11 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
       let watchdogId: number | undefined
       /** 结算中的 Worker（turn_settled 自给至异步写图/汇报完成；防归档竞态丢末回合摘要）。 */
       const settlingWorkers = new Map<number, number>()
+      /** 会话 -> 当前 rewind 纪元：helm.rewind 到达时递增；在途结算 await 后发现
+       * 纪元已变即放弃写图/汇报（编辑重发不复活旧回合节点）。 */
+      const rewindEpochs = new Map<number, number>()
+      /** conversation.entry 订阅退订句柄（service.start 订阅 / stop 退订）。 */
+      let entriesUnsubscribe: (() => void) | undefined
 
       const countLabel = (label: string, delta: number): void => {
         const next = (liveTasks.get(label) ?? 0) + delta
@@ -1138,6 +1151,83 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
       })
 
       // ------------------------------------------------------------------
+      // helm.rewind 联动：conversation.entry 订阅清理 RecallGraph
+      // ------------------------------------------------------------------
+
+      /**
+       * rewind 截断标记到达：删除该会话中 inputIds 与 omittedInputIds 相交的
+       * 节点（只清受影响回合；其他会话与前轮不受影响），并推进该会话 rewind
+       * 纪元使在途结算不写旧节点。已向中枢发出的历史汇报是外部已消费副作用，
+       * 不回滚篡改。
+       */
+      const handleRewindMarker = (conversationId: number, entry: ConversationEntry): void => {
+        const omitted = rewindOmittedInputIds(entry)
+        if (omitted === undefined) {
+          reportError(
+            'RecallGraph rewind 联动失败',
+            new HelmError(
+              'superagent_rewind_payload_invalid',
+              `会话 #${conversationId} 的 helm.rewind 标记载荷非法（omittedInputIds 缺失或含非字符串项），已跳过 RecallGraph 清理，请人工核对`,
+              500,
+              { pluginId: SUPERAGENT_PLUGIN_ID, conversationId, entryId: entry.id },
+            ),
+          )
+          return
+        }
+        rewindEpochs.set(conversationId, (rewindEpochs.get(conversationId) ?? 0) + 1)
+        try {
+          const removed = removeRecallNodesByInputs(docs!.recall, conversationId, new Set(omitted))
+          if (removed.length > 0) {
+            logDiagnostic(`helm.rewind 联动删除 RecallGraph 节点 ${removed.join(', ')}（会话 #${conversationId}）`)
+          }
+        } catch (err) {
+          reportError(`RecallGraph rewind 联动失败（会话 #${conversationId}）`, err)
+        }
+      }
+
+      /**
+       * 停用期间错过的 rewind 补偿：对已有 recall 节点的会话分页读详情，依据
+       * 保留的 rewind 标记 omittedInputIds 清理已失效节点。页面大小 500，跟
+       * nextCursor 翻到头；API 不可读显式抛出（service.start 显式失败），不伪成功。
+       */
+      const replayMissedRewinds = async (): Promise<void> => {
+        const doc = docs!.recall.get()
+        assertRecallDoc(doc)
+        const conversationIds = [...new Set(doc.nodes.map((n) => n.conversationId))]
+        for (const conversationId of conversationIds) {
+          let cursor: string | undefined = undefined
+          const omitted = new Set<string>()
+          for (;;) {
+            let page: ConversationDetail
+            try {
+              page = await deps.getConversationDetail(conversationId, {
+                limit: REWIND_REPLAY_PAGE_SIZE,
+                ...(cursor !== undefined ? { cursor } : {}),
+              })
+            } catch (err) {
+              // 会话已删：详情事实性不可得（not_found），该会话节点无法验证、
+              // 保留原样（归档/删除 Worker 的历史仍可召回），不算 API 故障。
+              // 其余失败如实上抛（service.start 显式失败，不伪成功）。
+              if (err instanceof HelmError && err.code === 'not_found') break
+              throw err
+            }
+            for (const entry of page.entries) {
+              const ids = rewindOmittedInputIds(entry)
+              if (ids !== undefined) for (const id of ids) omitted.add(id)
+            }
+            if (page.nextCursor === undefined) break
+            cursor = page.nextCursor
+          }
+          if (omitted.size === 0) continue
+          rewindEpochs.set(conversationId, (rewindEpochs.get(conversationId) ?? 0) + 1)
+          const removed = removeRecallNodesByInputs(docs!.recall, conversationId, omitted)
+          if (removed.length > 0) {
+            logDiagnostic(`启用补偿：会话 #${conversationId} 停用期间 rewind 删除节点 ${removed.join(', ')}`)
+          }
+        }
+      }
+
+      // ------------------------------------------------------------------
       // turn_settled：origin 汇报 + RecallGraph（三态统一）
       // ------------------------------------------------------------------
 
@@ -1159,12 +1249,19 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         settlingWorkers.set(conversation.id, (settlingWorkers.get(conversation.id) ?? 0) + 1)
         try {
           const hasAgentOrTrigger = payload.inputs.some((i) => i.origin === 'agent' || i.origin === 'trigger')
+          // 本回合消费的输入 ID（去重）：rewind omittedInputIds 命中即删本节点。
+          const inputIds = [...new Set(payload.inputs.map((i) => i.id))]
+          // 结算前纪元快照：await 期间发生 helm.rewind 即放弃写图/汇报，
+          // 防止被覆盖的旧回合在编辑重发后复活进记忆图谱。
+          const epochAtStart = rewindEpochs.get(conversation.id) ?? 0
           const { summary, artifacts, keywords } = await collectWorkerSettlement(deps, payload)
+          if ((rewindEpochs.get(conversation.id) ?? 0) !== epochAtStart) return
           const node: RecallNode = {
             id: nodeId,
             conversationId: conversation.id,
             profileId: conversation.profileId,
             completionSeq: conversation.completionSeq,
+            inputIds,
             outcome: payload.outcome,
             summary,
             artifacts,
@@ -1179,6 +1276,9 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
             readIndex().workers.some((w) => w.conversationId === conversation.id) &&
             readConversationOrUndefined(conversation.id)?.tags.includes(WORKER_TAG) === true
           if (!workerStillActive) return
+          // 汇报提交前再次校验纪元：await collectWorkerSettlement 期间可能刚发生
+          // rewind（与写图同一保护窗口），旧回合汇报不再投递。
+          if ((rewindEpochs.get(conversation.id) ?? 0) !== epochAtStart) return
           const target = getRouterConversationId()
           if (target === undefined || shutdown || deps.isClosing()) return
           try {
@@ -1269,6 +1369,15 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
           ctx.host.markConversationOwnership(watchdog, 'helm')
           routerId = router
           watchdogId = watchdog
+          // 停用期间错过的 helm.rewind 补偿（分页读详情；API 不可读则本 start
+          // 显式失败，绝不伪成功）。
+          await replayMissedRewinds()
+          // conversation.entry 订阅：实时 helm.rewind 联动（退订句柄随本周期）。
+          entriesUnsubscribe = deps.subscribeConversationEntries((conversationId, entry) => {
+            if (!active || shutdown) return
+            if (entry.kind !== 'helm.rewind') return
+            handleRewindMarker(conversationId, entry)
+          })
           // 启动时以真实配置校准 routing 镜像（停用期间可能被 helm plugins config 修改）。
           syncRoutingDoc()
           active = true
@@ -1278,11 +1387,14 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
           // 再释放托管与归属状态；hostReleases 由宿主兜底释放（幂等）。
           shutdown = true
           active = false
+          entriesUnsubscribe?.()
+          entriesUnsubscribe = undefined
           for (const release of releases) release()
           releases = []
           routerId = undefined
           watchdogId = undefined
           settlingWorkers.clear()
+          rewindEpochs.clear()
         },
       })
 
@@ -1479,6 +1591,44 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
 // RecallGraph 纯函数（导出供测试复用）
 // ---------------------------------------------------------------------------
 
+/** helm.rewind 截断标记携带的被覆盖输入 ID（omittedInputIds）；载荷非法返回 undefined。 */
+export function rewindOmittedInputIds(entry: ConversationEntry): string[] | undefined {
+  if (entry.kind !== 'helm.rewind') return undefined
+  const data = entry.data as { omittedInputIds?: unknown } | undefined
+  const raw = data?.omittedInputIds
+  if (!Array.isArray(raw)) return undefined
+  const ids: string[] = []
+  for (const v of raw) {
+    if (typeof v !== 'string' || v === '') return undefined
+    ids.push(v)
+  }
+  return ids
+}
+
+/**
+ * 从 RecallGraph 删除指定会话中 inputIds 与给定集合相交的节点（原地 doc 写回）。
+ * 返回被删除的节点 ID（供诊断与测试断言）；doc 无相交节点时零写回。
+ */
+export function removeRecallNodesByInputs(
+  handle: { get(): unknown; set(value: unknown): void },
+  conversationId: number,
+  omittedInputIds: ReadonlySet<string>,
+): string[] {
+  if (omittedInputIds.size === 0) return []
+  const doc = handle.get()
+  assertRecallDoc(doc)
+  const nodes = (doc as RecallGraphDoc).nodes
+  const removed: string[] = []
+  const kept = nodes.filter((n) => {
+    if (n.conversationId !== conversationId) return true
+    const hit = n.inputIds.some((id) => omittedInputIds.has(id))
+    if (hit) removed.push(n.id)
+    return !hit
+  })
+  if (removed.length > 0) handle.set({ version: 1, nodes: kept })
+  return removed
+}
+
 /** recall doc 是否已含指定节点 ID（读入即验证）。 */
 export function recallHasNode(docRaw: unknown, nodeId: string): boolean {
   assertRecallDoc(docRaw)
@@ -1491,6 +1641,7 @@ export interface RecallNodeInput {
   conversationId: number
   profileId: string
   completionSeq: number
+  inputIds: string[]
   outcome: TurnOutcome | string
   summary: string
   artifacts: unknown[]

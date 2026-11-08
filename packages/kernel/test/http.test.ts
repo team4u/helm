@@ -135,6 +135,7 @@ const conversations = new Map<number, ConversationSummary>()
 const asks = new Map<string, AskSpec>()
 const submitted: Array<{ id: number; text: string; opts?: Record<string, unknown> }> = []
 const aborted: number[] = []
+const withdrawn: Array<{ id: number; submissionId: number }> = []
 
 function makeKernel(): KernelRuntimeLike {
   return {
@@ -184,6 +185,11 @@ function makeKernel(): KernelRuntimeLike {
       if (!conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
       submitted.push({ id, text, opts })
       return { submissionId: 'sub-mock' }
+    },
+    async withdrawQueuedInput(id, opts) {
+      if (!conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      withdrawn.push({ id, submissionId: opts.submissionId })
+      return { status: 'withdrawn' }
     },
     async waitForInput(id: number, submissionId: string) {
       void id
@@ -572,6 +578,66 @@ test('POST /:id/input 校验 origin/whenBusy 枚举并透传 kernel.submitInput'
     body: { text: 'x', whenBusy: 'wait' },
   })
   assert.equal(badWhenBusy.status, 400)
+})
+
+test('POST /:id/input replaceFromEntryId 校验与透传；缺省时 opts 形状不变', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const ok = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
+    body: { text: '覆盖重发', replaceFromEntryId: 5 },
+  })
+  assert.equal(ok.status, 202)
+  assert.deepEqual(submitted.at(-1)?.opts, { replaceFromEntryId: 5 })
+  // 缺省：不携带 replaceFromEntryId 键（opts 形状与既有契约一致）。
+  const plain = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
+    body: { text: '普通提交' },
+  })
+  assert.equal(plain.status, 202)
+  assert.equal(
+    submitted.at(-1)?.opts && 'replaceFromEntryId' in (submitted.at(-1)!.opts as object),
+    false,
+    '缺省时 opts 不应携带 replaceFromEntryId 键',
+  )
+  // 非法值：0、负数、小数、非安全整数均 400。
+  for (const bad of [0, -3, 1.5, Number.MAX_SAFE_INTEGER + 1, '5']) {
+    const res = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
+      body: { text: 'x', replaceFromEntryId: bad },
+    })
+    assert.equal(res.status, 400, `replaceFromEntryId=${String(bad)} 应 400`)
+    assert.equal(res.body.error.code, 'validation_error')
+  }
+})
+
+test('POST /:id/withdraw 校验 submissionId 并调用 withdrawQueuedInput', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const ok = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/withdraw`, {
+    body: { submissionId: 42 },
+  })
+  assert.equal(ok.status, 200)
+  assert.deepEqual(ok.body, { status: 'withdrawn' })
+  assert.deepEqual(withdrawn.at(-1), { id: ROOT_CONVERSATION_ID, submissionId: 42 })
+  // 非法 body：缺字段 / 0 / 小数 / 未知字段。
+  const missing = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/withdraw`, { body: {} })
+  assert.equal(missing.status, 400)
+  const zero = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/withdraw`, {
+    body: { submissionId: 0 },
+  })
+  assert.equal(zero.status, 400)
+  const float = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/withdraw`, {
+    body: { submissionId: 1.5 },
+  })
+  assert.equal(float.status, 400)
+  const unknown = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/withdraw`, {
+    body: { submissionId: 1, extra: true },
+  })
+  assert.equal(unknown.status, 400)
+  // 不存在会话 404（mock 抛 not_found）。
+  const nf = await call(handler, 'POST', '/api/conversations/88888/withdraw', { body: { submissionId: 1 } })
+  assert.equal(nf.status, 404)
+  // 多余段 404。
+  const extra = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/withdraw/x`, {
+    body: { submissionId: 1 },
+  })
+  assert.equal(extra.status, 404)
 })
 
 test('POST /:id/abort 调用 abortConversation', { timeout: 60_000 }, async () => {

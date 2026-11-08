@@ -451,7 +451,7 @@ describe('原生 subagent', { timeout: 60_000 }, () => {
     }
   })
 
-  it('resume 用原 child convId；isolation 显式报错', { timeout: 60_000 }, async () => {
+  it('resume 用原 child convId；非 Git 目录的 worktree 请求显式报错', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't16'))
     try {
       kernel.__faux.setResponses([fauxAssistantMessage('第一次结果'), fauxAssistantMessage('续接结果')])
@@ -474,7 +474,7 @@ describe('原生 subagent', { timeout: 60_000 }, () => {
             prompt: 'x',
             isolation: 'worktree',
           }),
-        (err: unknown) => err instanceof HelmError && err.code === 'unsupported_runtime',
+        (err: unknown) => err instanceof HelmError && err.code === 'not_a_git_repo',
       )
     } finally {
       await kernel.close()

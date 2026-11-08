@@ -181,11 +181,12 @@ test('superagent1: 配置解析——默认值/精确 mutedSources/非法显式�
 })
 
 /** 与生产写入同形状的完整 RecallNode（弱化 fixture 会被强校验如实拒绝）。 */
-const recallNode = (id: string): RecallNodeInput => ({
+const recallNode = (id: string, inputIds: string[] = [`in-${id}`]): RecallNodeInput => ({
   id,
   conversationId: Number(id.split(':')[0]),
   profileId: 'assistant',
   completionSeq: Number(id.split(':')[1]),
+  inputIds,
   outcome: 'completed',
   summary: `任务 ${id}`,
   artifacts: [],

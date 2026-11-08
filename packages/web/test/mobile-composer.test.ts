@@ -115,7 +115,9 @@ test('正忙且有输入时按钮策略：主发送为插话引导，ghost 按�
   // 主发送按钮：steer + 步骤边界注入提示（不谎称立即打断工具）。
   assert.match(composerSource, /onClick=\{\(\) => void send\('steer'\)\}/)
   assert.match(composerSource, /下一个步骤边界注入（Enter）/)
-  assert.match(composerSource, /aria-label=\{uploading > 0 \? `上传中 \(\$\{uploading\}\)` : '插话引导'\}/)
+  assert.match(composerSource, /aria-label=\{uploading > 0 \? `上传中 \(\$\{uploading\}\)` : editingEntryId !== null \? '更新并重新生成' : '插话引导'\}/)
+  // 编辑历史消息时主发送切换为「更新并重新生成」语义
+  assert.match(composerSource, /aria-label=\{editingEntryId !== null \? '更新并重新生成'/)
   // ghost 按钮改为显式排队发送（clock 图标 + 当前回合结束后处理）。
   assert.match(composerSource, /composer-queue-button/)
   assert.match(composerSource, /onClick=\{\(\) => void send\('followUp'\)\}/)

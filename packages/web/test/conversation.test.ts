@@ -4,20 +4,23 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationEntry, ConversationLive } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, WorkflowRunSummary } from '@helm/protocol'
 import { conversationsApi, ApiClientError } from '../src/lib/api.js'
 import {
   buildSubagentStreamLines,
   buildTimelineItems,
   detectArtifactRef,
+  filterRewoundEntries,
   findToolView,
   formatBytes,
   formatDurationMs,
   isFoldableStep,
+  lastEditableHumanInput,
   lastHumanTextOf,
   matchTimelineRenderer,
   parseHelmInputData,
   resolveSubagentConversationId,
+  resolveSubagentExecutionMeta,
   resolveWorkflowRunForTool,
   toolSummaryText,
   type ToolTrace,
@@ -575,6 +578,148 @@ test('fork 对非法 entryId 显式抛错，不发出请求', { timeout: 60_000 
 })
 
 // ---------------------------------------------------------------------------
+// rewind 覆盖过滤与历史编辑
+// ---------------------------------------------------------------------------
+
+test('filterRewoundEntries：闭区间 [from, through] 内条目被移除，同批先落的新 input（through < id < marker）保留', { timeout: 60_000 }, () => {
+  // 后端原子提交：先落新 input(5)，再追加 rewind marker(6)，同一批保存。
+  // marker 声明 [fromEntryId=2, throughEntryId=4]（提交新 input 前的旧 tail）；
+  // 新 input id=5 大于 through 但小于 marker id，绝不能被误隐藏。
+  const entries: ConversationEntry[] = [
+    entry('1', 'helm.input', { data: { text: '最早的问题', origin: 'human' } }),
+    entry('2', 'helm.input', { data: { text: '被覆盖的问题', origin: 'human' } }),
+    entry('3', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'text', text: '被覆盖的回答' }] }] }),
+    toolResultEntry('4', 'c1', 'bash', { text: '被覆盖的工具结果' }),
+    entry('5', 'helm.input', { data: { text: '改写后的新问题', origin: 'human' } }),
+    entry('6', 'helm.rewind', { data: { fromEntryId: 2, throughEntryId: 4, omittedEntryIds: [2, 3, 4], omittedInputIds: ['in-2'], createdAt: 123 } }),
+    entry('7', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'text', text: '新回答' }] }] }),
+  ]
+  const active = filterRewoundEntries(entries)
+  assert.deepEqual(active.map((e) => e.id), ['1', '5', '7'])
+})
+
+test('filterRewoundEntries：无效区间不误伤，多次连续 rewind 叠加生效', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    entry('1', 'helm.input', { data: { text: 'A', origin: 'human' } }),
+    entry('2', 'helm.input', { data: { text: 'B', origin: 'human' } }),
+    entry('3', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'text', text: '答B' }] }] }),
+    entry('4', 'helm.rewind', { data: { fromEntryId: 2, throughEntryId: 3, omittedEntryIds: [2, 3], omittedInputIds: [], createdAt: 1 } }),
+    entry('5', 'helm.input', { data: { text: 'C', origin: 'human' } }),
+    entry('6', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'text', text: '答C' }] }] }),
+    // 非法形状：from/through 缺失 / 超前 through → rewind 自身移除但不覆盖任何条目
+    entry('7', 'helm.rewind', {}),
+    entry('8', 'helm.rewind', { data: { fromEntryId: 2, throughEntryId: 99 } }),
+    // 第二次 rewind：闭区间 [5, 8]，第二次改写后的问题与第一次 rewind 全部消失
+    entry('9', 'helm.rewind', { data: { fromEntryId: 5, throughEntryId: 8, omittedEntryIds: [5, 6, 7, 8], omittedInputIds: [], createdAt: 2 } }),
+    entry('10', 'helm.input', { data: { text: '最终问题', origin: 'human' } }),
+  ]
+  const active = filterRewoundEntries(entries)
+  assert.deepEqual(active.map((e) => e.id), ['1', '10'])
+})
+
+test('buildTimelineItems：rewind 后被覆盖的提问/工具/回答不再渲染，同批新 input 保留', { timeout: 60_000 }, () => {
+  const items = buildTimelineItems([
+    entry('1', 'helm.input', { data: { text: '最早的问题', origin: 'human' } }),
+    entry('2', 'helm.input', { data: { text: '被覆盖的问题', origin: 'human' } }),
+    assistantEntry('3', [{ type: 'text', text: '被覆盖的回答' }]),
+    toolResultEntry('4', 'c1', 'bash', { text: '被覆盖的工具结果' }),
+    entry('5', 'helm.input', { data: { text: '改写后的新问题', origin: 'human' } }),
+    entry('6', 'helm.rewind', { data: { fromEntryId: 2, throughEntryId: 4, omittedEntryIds: [2, 3, 4], omittedInputIds: [], createdAt: 1 } }),
+    assistantEntry('7', [{ type: 'text', text: '新回答' }]),
+  ])
+  const humans = items.filter((i) => i.kind === 'human')
+  assert.deepEqual(humans.map((h) => (h as { text: string }).text), ['最早的问题', '改写后的新问题'])
+  const turns = items.filter((i) => i.kind === 'assistant')
+  assert.equal(turns.length, 1, '被覆盖的回答不渲染')
+  assert.equal(collectToolTraces(items).length, 0, '被覆盖的工具结果不渲染')
+})
+
+test('lastEditableHumanInput：仅返回 origin=human 的可编辑输入，跳过 agent/trigger；含附件与 reset 边界', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    entry('1', 'helm.input', { data: { text: '第一条', origin: 'human' } }),
+    entry('2', 'helm.input', {
+      data: { text: '第二条', origin: 'human', attachments: [{ id: 'a1', name: '图.png', mimeType: 'image/png', size: 10 }] },
+    }),
+    entry('3', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'text', text: '回答' }] }] }),
+    entry('4', 'helm.rewind', { data: { fromEntryId: 2, throughEntryId: 3, omittedEntryIds: [2, 3], omittedInputIds: [], createdAt: 1 } }),
+    entry('5', 'helm.input', { data: { text: '第三条', origin: 'human' } }),
+  ]
+  const target = lastEditableHumanInput(entries)
+  assert.ok(target !== undefined)
+  assert.equal(target!.text, '第三条')
+  assert.equal(target!.entryId, 5)
+  assert.equal(target!.attachments, undefined)
+
+  // 无 rewind 时返回最后一条（含附件）
+  const noRewind = lastEditableHumanInput(entries.filter((e) => e.kind !== 'helm.rewind'))
+  assert.ok(noRewind !== undefined)
+  assert.equal(noRewind!.text, '第三条')
+  const withAtt = lastEditableHumanInput(entries.slice(0, 3))
+  assert.ok(withAtt !== undefined)
+  assert.equal(withAtt!.entryId, 2)
+  assert.deepEqual(withAtt!.attachments?.map((a) => a.name), ['图.png'])
+
+  // 最新输入来自 agent / trigger：不是人类编辑对象，继续向前找到上一条人类输入
+  const agentLast = lastEditableHumanInput([
+    entry('1', 'helm.input', { data: { text: '人类提问', origin: 'human' } }),
+    entry('2', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'text', text: '回答' }] }] }),
+    entry('3', 'helm.input', { data: { text: 'Worker 已完成', origin: 'agent' } }),
+    entry('4', 'helm.input', { data: { text: 'cron 触发', origin: 'trigger' } }),
+  ])
+  assert.ok(agentLast !== undefined)
+  assert.equal(agentLast!.text, '人类提问')
+  assert.equal(agentLast!.entryId, 1)
+
+  // 全部为非人类输入：无可编辑对象
+  assert.equal(lastEditableHumanInput([entry('3', 'helm.input', { data: { text: '汇报', origin: 'agent' } })]), undefined)
+
+  // pi.reset 边界后无人类输入：不跨边界原地编辑
+  const afterReset: ConversationEntry[] = [
+    entry('1', 'helm.input', { data: { text: '旧输入', origin: 'human' } }),
+    entry('2', 'pi.reset', {}),
+  ]
+  assert.equal(lastEditableHumanInput(afterReset), undefined)
+
+  // 裸 pi.user 兑底：返回文本与 entryId
+  const bare = lastEditableHumanInput([entry('3', 'pi.user', { model: [{ role: 'user', content: '裸消息' }] })])
+  assert.ok(bare !== undefined)
+  assert.equal(bare!.text, '裸消息')
+  assert.equal(bare!.entryId, 3)
+
+  assert.equal(lastEditableHumanInput([]), undefined)
+})
+
+test('withdraw 与 submitInput(replaceFromEntryId)：请求体构造与非法 submissionId 校验', { timeout: 60_000 }, async (t) => {
+  const captured = stubFetchOnce(t, () => ({ status: 'withdrawn' }))
+
+  await conversationsApi.withdraw(7, '3')
+  assert.equal(captured[0]!.path, '/api/conversations/7/withdraw')
+  assert.deepEqual(captured[0]!.body, { submissionId: 3 })
+  assert.equal(typeof (captured[0]!.body as { submissionId: number }).submissionId, 'number')
+
+  await conversationsApi.withdraw(7, 12)
+  assert.deepEqual(captured[1]!.body, { submissionId: 12 })
+
+  // 非法 ID：显式 400，不发请求
+  for (const bad of ['abc', '0', '-3', '', '1.5', '1e2', ' 3', Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(async () => conversationsApi.withdraw(7, bad as string), (err: unknown) => {
+      assert.ok(err instanceof ApiClientError)
+      assert.equal(err.code, 'validation_error')
+      assert.equal(err.status, 400)
+      return true
+    })
+  }
+  assert.equal(captured.length, 2, '非法 submissionId 不得发出任何请求')
+
+  // submitInput 携带 replaceFromEntryId：原样透传；不带时省略
+  await conversationsApi.submitInput(7, { text: '改写后', origin: 'human', replaceFromEntryId: 2 })
+  assert.equal(captured[2]!.path, '/api/conversations/7/input')
+  assert.deepEqual(captured[2]!.body, { text: '改写后', origin: 'human', replaceFromEntryId: 2 })
+  await conversationsApi.submitInput(7, { text: '普通', origin: 'human' })
+  assert.deepEqual(captured[3]!.body, { text: '普通', origin: 'human' })
+})
+
+// ---------------------------------------------------------------------------
 // subagent / SubagentWorkflow 运行期实时关联
 // ---------------------------------------------------------------------------
 
@@ -595,7 +740,7 @@ function workflowRun(
   status: 'running' | 'completed' | 'failed' | 'aborted',
   updatedAt = 1,
   parentToolCallId?: string,
-) {
+): WorkflowRunSummary {
   return {
     id,
     name: `run ${id}`,
@@ -831,4 +976,163 @@ test('buildSubagentStreamLines：合并 ConversationLive 流式 thinking / tools
   assert.ok(lines[2]!.kind === 'tool' && lines[2]!.toolName === 'read' && lines[2]!.status === 'running')
   assert.ok(lines[2]!.kind === 'tool' && lines[2]!.summary === '/a.ts')
   assert.ok(lines[3]!.kind === 'text' && lines[3]!.text === '正在分析输出…')
+})
+
+// ---------------------------------------------------------------------------
+// subagent 顶层 JSON 信封 execution 解析与后台执行元数据关联
+// ---------------------------------------------------------------------------
+
+test('resolveSubagentConversationId：顶层 JSON 信封 execution.conversationId 优先，业务 result 文本中的 ID 不抢占', { timeout: 60_000 }, () => {
+  const conversations = [convSummary(668, 1, 'call-json')]
+  const base: ToolTrace = {
+    key: 'tool:call-json',
+    toolName: 'subagent',
+    callId: 'call-json',
+    status: 'done',
+    isError: false,
+  }
+  // 同步 JSON 信封：顶层 execution.conversationId 结构化读取
+  const syncJson: ToolTrace = {
+    ...base,
+    resultText:
+      '{"ok":true,"result":"报告正文提到 conversationId=999 的历史会话","execution":{"nodeId":"local","conversationId":668,"worktree":{"path":"/path/with space/wt","branch":"helm/spawn-123"}}}\n[subagent conversationId=668 cwd=/x worktree=/path/with space/wt@helm/spawn-123]',
+  }
+  assert.equal(resolveSubagentConversationId(syncJson, 1, conversations), 668)
+  // 后台 JSON 信封：顶层 runId + execution（无 conversationId）：不虚构子会话；
+  // 但 callId 运行期关联仍命中（受信链路，同父会话）——无 callId 时才 undefined
+  const bgJson: ToolTrace = {
+    ...base,
+    resultText: '{"ok":true,"runId":"wf_abc123","execution":{"executionId":"pane-9","worktree":{"path":"/wt","branch":"helm/bg-1"}}}',
+  }
+  assert.equal(resolveSubagentConversationId(bgJson, 1, conversations), 668)
+  assert.equal(
+    resolveSubagentConversationId({ ...bgJson, callId: 'call-none' }, 1, conversations),
+    undefined,
+    '信封无 conversationId 且无 callId 关联：不虚构子会话',
+  )
+  // 业务 result 内嵌套任意 conversationId 字段（非顶层 execution）：不读取；
+  // 但 callId 运行期关联（parentToolCallId）仍命中同父会话子会话（受信链路）
+  const nestedFake: ToolTrace = {
+    ...base,
+    resultText: '{"ok":true,"result":{"note":"conversationId=888 已处理","inner":{"conversationId":888}}}',
+  }
+  assert.equal(resolveSubagentConversationId(nestedFake, 1, conversations), 668, '不读业务嵌套 ID，但 callId 关联仍命中 668')
+  assert.equal(
+    resolveSubagentConversationId({ ...nestedFake, callId: 'call-other' }, 1, conversations),
+    undefined,
+    '无 callId 关联且无信封 execution/footer/resume：不虚构子会话',
+  )
+  // JSON 解析优先于 footer：footer 为旧格式也能提取
+  const jsonOnly: ToolTrace = {
+    ...base,
+    resultText: '{"ok":true,"result":"","execution":{"conversationId":668}}',
+  }
+  assert.equal(resolveSubagentConversationId(jsonOnly, 1, conversations), 668)
+})
+
+test('resolveSubagentConversationId：旧 footer 兑底仍有效（含内核 PATH@BRANCH 实际形态）', { timeout: 60_000 }, () => {
+  const conversations = [convSummary(42, 1, 'call-ft')]
+  const tool: ToolTrace = {
+    key: 'tool:call-ft',
+    toolName: 'subagent',
+    callId: 'call-ft',
+    status: 'done',
+    isError: false,
+    resultText:
+      '任务完成报告\n[subagent resume=42 conversationId=42 cwd=/root/code/helm worktree=/root/code/helm/.worktrees/wt-42@helm/spawn-id]',
+  }
+  assert.equal(resolveSubagentConversationId(tool, 1, conversations), 42)
+  // 正文伪造行不能抢占：非末尾 footer 形态不命中
+  const fake: ToolTrace = {
+    ...tool,
+    resultText: '正文提到 [subagent conversationId=99] 但并非内核尾行',
+  }
+  // 取最后一次 footer 行：伪造行也是 footer 形态，仍取最后出现的（内核契约 footer 总在末尾）
+  assert.equal(resolveSubagentConversationId(fake, 1, conversations), 99)
+})
+
+test('resolveSubagentExecutionMeta：parentToolCallId + 同父会话精确关联优先，节点 worktree 随 run 返回；跨父会话不串卡', { timeout: 60_000 }, () => {
+  const run = workflowRun('wf_link', 1, 'running', 3, 'call-bg')
+  run.nodes = [{ id: 'n1', kind: 'agent', status: 'running', worktree: { path: '/wt/link', branch: 'helm/bg-link' } }]
+  const tool: ToolTrace = {
+    key: 'tool:call-bg',
+    toolName: 'subagent',
+    callId: 'call-bg',
+    status: 'running',
+    isError: false,
+  }
+  const meta = resolveSubagentExecutionMeta(tool, 1, [run])
+  assert.equal(meta.run?.id, 'wf_link')
+  assert.deepEqual(meta.worktree, { path: '/wt/link', branch: 'helm/bg-link' })
+  // 跨父会话拒绝：同 callId 的 run 属其他会话不命中（不串卡片）
+  assert.deepEqual(resolveSubagentExecutionMeta(tool, 2, [run]), {})
+  // 非 subagent 工具不命中
+  assert.deepEqual(resolveSubagentExecutionMeta({ ...tool, toolName: 'bash' }, 1, [run]), {})
+})
+
+test('resolveSubagentExecutionMeta：后台 JSON 信封 runId 同会话全等匹配，execution 元数据与含空格路径还原', { timeout: 60_000 }, () => {
+  const runs = [workflowRun('wf_abc123', 1, 'running'), workflowRun('wf_other', 1, 'completed')]
+  const tool: ToolTrace = {
+    key: 'tool:call-x',
+    toolName: 'subagent',
+    callId: 'call-x',
+    status: 'done',
+    isError: false,
+    resultText:
+      '{"ok":true,"runId":"wf_abc123","execution":{"nodeId":"node-a","executionId":"pane-9","effectiveCwd":"/wt dir/sub","worktree":{"path":"/wt dir/sub","branch":"helm/bg-main"}}}',
+  }
+  const meta = resolveSubagentExecutionMeta(tool, 1, runs)
+  assert.equal(meta.run?.id, 'wf_abc123', '顶层 runId 全等命中同会话 run')
+  assert.deepEqual(meta.worktree, { path: '/wt dir/sub', branch: 'helm/bg-main' }, 'JSON 解析可靠还原含空格路径')
+  assert.equal(meta.executionId, 'pane-9')
+  assert.equal(meta.nodeId, 'node-a')
+  assert.equal(meta.effectiveCwd, '/wt dir/sub')
+  // runId 属其他会话：不串卡（父会话 2 的 run 不被父会话 1 命中）
+  const otherConvRun = workflowRun('wf_abc123', 2, 'running')
+  const crossMeta = resolveSubagentExecutionMeta(tool, 1, [otherConvRun])
+  assert.equal(crossMeta.run, undefined)
+  assert.deepEqual(crossMeta.worktree, { path: '/wt dir/sub', branch: 'helm/bg-main' }, '无 run 关联时 worktree 仍如实提取')
+})
+
+test('resolveSubagentExecutionMeta：旧 footer 兑底（runId= / worktree=PATH@BRANCH 实际内核形态）', { timeout: 60_000 }, () => {
+  const runs = [workflowRun('wf_old9', 1, 'running')]
+  const tool: ToolTrace = {
+    key: 'tool:call-f',
+    toolName: 'subagent',
+    callId: 'call-f',
+    status: 'done',
+    isError: false,
+    resultText:
+      '已转入后台\n[subagent background runId=wf_old9 conversationId=668 cwd=/x worktree=/srv/wt/helm-42@helm/wf-run-1]',
+  }
+  const meta = resolveSubagentExecutionMeta(tool, 1, runs)
+  assert.equal(meta.run?.id, 'wf_old9')
+  assert.deepEqual(meta.worktree, { path: '/srv/wt/helm-42', branch: 'helm/wf-run-1' }, 'PATH@BRANCH 形态解析')
+})
+
+test('resolveSubagentExecutionMeta：run 节点 worktree 优先于 JSON/footer 文本；无关联不伪造', { timeout: 60_000 }, () => {
+  const run = workflowRun('wf_pref', 1, 'running', 3, 'call-p')
+  run.nodes = [{ id: 'n1', kind: 'agent', status: 'running', worktree: { path: '/wt/from-run', branch: 'helm/from-run' } }]
+  const tool: ToolTrace = {
+    key: 'tool:call-p',
+    toolName: 'subagent',
+    callId: 'call-p',
+    status: 'running',
+    isError: false,
+    resultText:
+      '{"ok":true,"runId":"wf_pref","execution":{"worktree":{"path":"/wt/from-json","branch":"helm/from-json"}}}\n[subagent worktree=/wt/from-footer@helm/from-footer]',
+  }
+  const meta = resolveSubagentExecutionMeta(tool, 1, [run])
+  assert.equal(meta.run?.id, 'wf_pref')
+  assert.deepEqual(meta.worktree, { path: '/wt/from-run', branch: 'helm/from-run' }, 'run 节点坐标优先')
+  // 无任何线索：字段均 undefined
+  const plain: ToolTrace = { ...tool, callId: 'call-none', resultText: '普通输出' }
+  assert.deepEqual(resolveSubagentExecutionMeta(plain, 1, [run]), {})
+  // 业务 result 文本中裸提及 conversationId/runId：不解读
+  const bodyMention: ToolTrace = {
+    ...tool,
+    callId: 'call-none',
+    resultText: '报告：上次 runId=wf_missing 的任务已完成，详见 conversationId=123',
+  }
+  assert.deepEqual(resolveSubagentExecutionMeta(bodyMention, 1, [run]), {})
 })

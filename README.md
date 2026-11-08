@@ -51,6 +51,9 @@ pnpm helm-node stop --json
 
 # Hub 客户端：指定节点运行命令，或绑定持久会话。
 pnpm helm env exec --node build-box --cwd /workspace --stream -- git status
+# 检视或合入后清理受管工作树；默认拒绝在用、脏工作区和未合入提交
+pnpm helm worktrees cleanup --conversation <id> --json
+pnpm helm worktrees cleanup --path /srv/.helm-worktrees/<repo>-<id> --node build-box --delete-branch --json
 pnpm helm conversations create --node build-box --cwd /workspace --json
 ```
 
@@ -84,6 +87,10 @@ timeout 50s node scripts/env-node-smoke.mjs
 读取会话不会自动清除未读状态。`conversations list --profile <id> --status <state>` 可按角色和状态筛选；`conversations get` 返回会话摘要和最近一页时间线，可用 `--limit`、`--cursor` 继续读取。`send --meta '<JSON 对象>' --wait` 将元数据附着在本次输入上，等待本次提交的回答并输出结果。删除会话会清理产物和搜索索引，并阻止后续访问；受 SDK 接口限制，SQLite 内部历史记录仍保留。根会话和启用插件登记托管的常驻会话受删除保护。
 
 工作流在独立 Worker 中执行，使用 `vm` 约束确定性。所有外部操作通过宿主原语发起；`vm` 不作为恶意脚本的安全隔离边界。`workflows run <nameOrFile> --wait` 等待终态并返回结果。工作流恢复会复用成功的调用前缀；如果动作留下开始记录但没有完成记录，恢复会显式报告不确定状态。
+
+模型工具 `subagent` 与工作流脚本的 `agent()` 共用 `agent_spawn` 执行接口，普通 Profile 使用原生子会话，声明外部运行时的 Profile 交给插件接管。`subagent({ prompt, background: true })` 在执行环境就绪后返回 `runId`，父会话可继续执行；任务完成 Schema 校验和 gate 后向父会话汇报。用 `helm workflows inspect <runId> --json` 查询、`helm workflows abort <runId>` 取消。后台单代理没有 DSL 账本，续接应使用返回的 `execution.conversationId/executionId` 作为 `subagent` 的 `resume`，不能使用 `resumeFromRunId`。工作流脚本中的 `agent()` 始终等待真实结果，并发由 `pipeline()` / `parallel()` 表达。
+
+`isolation: 'worktree'` 在实际目标节点创建独立 Git 工作树，基于源目录当前提交，不包含未提交修改；普通原生 Profile 和实现该能力的插件使用同一上层契约。不支持的后端明确拒绝，不回落到共享目录。任务结束、失败或取消默认保留工作树和分支，返回的 `execution.worktree.id` 可用于 `cleanup_worktree` 工具或 `helm worktrees cleanup --id <id>`。删除子会话时仅尝试安全回收；无法确认归属、仍在用、存在未提交文件或未合入提交时保留并通知。Hub 重启后的中断执行需要先确认现场再续接；未确认停止的持久执行租约会阻止清理，`force` 不绕过此检查。
 
 `SecretStash` 将审批中的机密答案保存在内存中，持久状态和模型上下文使用脱敏引用。审批创建返回 `{ id, status, answers }`，明确区分回答、取消和已在其他界面处理；调用方可预分配 ID 来绑定外部状态监听。Shell 和进程内插件拥有宿主权限，可以访问其执行环境；此边界不承诺对可信执行代码隐藏机密。
 

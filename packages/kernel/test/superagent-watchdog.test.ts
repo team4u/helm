@@ -204,6 +204,7 @@ async function makeHarness(opts: HarnessOptions = {}) {
     dataDir: '/tmp/helm-test-superagent',
     profiles: {} as ProfileService,
     skills: {} as SkillService,
+    subscribeConversationEntries: () => () => {},
     getConversationDetail: async (id) => ({
       ...makeConversationSummary(id),
       entries: [{ id: 'e1', kind: 'message', createdAt: 1, model: [{ role: 'assistant', content: 'hello' }] }],
@@ -463,6 +464,7 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     dataDir: '/tmp/x',
     profiles: {} as ProfileService,
     skills: {} as SkillService,
+    subscribeConversationEntries: () => () => {},
     getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
     listArtifacts: async () => [],
     abortConversation: async (id) => {
@@ -938,6 +940,7 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
     dataDir: '/tmp/x',
     profiles: {} as ProfileService,
     skills: {} as SkillService,
+    subscribeConversationEntries: () => () => {},
     getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
     listArtifacts: async () => [],
     abortConversation: async (id) => {
@@ -1161,6 +1164,7 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     dataDir: '/tmp/x',
     profiles: {} as ProfileService,
     skills: {} as SkillService,
+    subscribeConversationEntries: () => () => {},
     getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
     listArtifacts: async () => [],
     abortConversation: async () => {},

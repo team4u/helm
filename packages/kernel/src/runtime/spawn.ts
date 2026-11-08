@@ -80,6 +80,7 @@ export interface NativeSpawnDeps extends HelmToolDeps {
     modelMirror: string,
     tags: string[],
     thinkingLevel?: string,
+    nodeId?: string,
   ): Promise<void>
   /**
    * resume 续接时把子会话的 parentToolCallId 更新为本次父会话工具调用 ID
@@ -127,6 +128,7 @@ export interface NativeSpawnDeps extends HelmToolDeps {
    * 缺省回退 profile.nodeId ?? 父会话镜像 nodeId ?? 'local'。
    */
   resolveNodeId?: (profileNodeId: string | undefined, parentConversationId: number) => string
+  assertNodeAvailable?: (nodeId: string) => void
 }
 
 export interface SpawnOutcome {
@@ -135,7 +137,31 @@ export interface SpawnOutcome {
   kind2?: never
 }
 
-export async function runNativeSpawn(
+const resumeClaims = new WeakMap<Harness, Set<number>>()
+const structuredSessions = new WeakMap<Harness, Map<number, StructuredOutputSession>>()
+
+export async function runNativeSpawn(deps: NativeSpawnDeps, request: AgentSpawnRequest): Promise<unknown> {
+  const childId = request.resume === undefined ? undefined : resolveResumeRef(deps, request.resume, request.parentConversationId)
+  let claims = resumeClaims.get(deps.harness)
+  if (claims === undefined) {
+    claims = new Set<number>()
+    resumeClaims.set(deps.harness, claims)
+  }
+  if (childId !== undefined) {
+    const status = deps.getConversation(childId)?.status
+    if (claims.has(childId) || status === 'working' || status === 'blocked') {
+      throw new HelmError('subagent_in_use', `子会话 ${childId} 仍在执行，不能并发续接`, 409, { conversationId: childId })
+    }
+    claims.add(childId)
+  }
+  try {
+    return await runNativeSpawnTurn(deps, request)
+  } finally {
+    if (childId !== undefined) claims.delete(childId)
+  }
+}
+
+async function runNativeSpawnTurn(
   deps: NativeSpawnDeps,
   request: AgentSpawnRequest,
 ): Promise<unknown> {
@@ -247,6 +273,10 @@ export async function runNativeSpawn(
     )
   }
   if (existingWorktree !== undefined) {
+    deps.assertNodeAvailable?.(existingWorktree.nodeId)
+    if ((existing!.nodeId ?? 'local') !== existingWorktree.nodeId || (profile.nodeId !== undefined && profile.nodeId !== existingWorktree.nodeId)) {
+      throw new HelmError('resume_cwd_conflict', '隔离子会话必须在原节点和工作树上续接，不能切换节点', 409, { conversationId: childId, nodeId: existingWorktree.nodeId })
+    }
     // verifyForResume 拦截冲突 request.cwd（resume_cwd_conflict）与目录缺失
     //（worktree_missing）；patch.cwd 已由上方与 existing.cwd 比较逻辑约束，
     // 与 worktree path 不一致时在此拦截。
@@ -275,15 +305,16 @@ export async function runNativeSpawn(
   // 引擎层（WorkflowService）不再注入 cwd，父目录回退在此完成；herdr 工厂
   // 自身也读 parent.cwd，语义一致。
   const parentSummary = deps.getConversation(request.parentConversationId)
+  const targetNodeId = isResume
+    ? (summary!.nodeId ?? 'local')
+    : (deps.resolveNodeId?.(profile.nodeId, request.parentConversationId) ?? profile.nodeId ?? parentSummary?.nodeId ?? 'local')
+  deps.assertNodeAvailable?.(targetNodeId)
   // ---- 新建 + isolation: 'worktree'：先分配隔离工作树，子会话 cwd/gate cwd
   // 均为 worktree 目录；创建中途失败尽力回收已分配资源（诚实性：不留孤儿
   // worktree 也不掩盖原始错误）。----
   let allocatedWorktree: ManagedWorktreeRecord | undefined
   if (!isResume && request.isolation === 'worktree') {
     const sourceCwd = request.cwd ?? profile.cwd ?? parentSummary?.cwd ?? deps.defaultCwd
-    const targetNodeId = deps.resolveNodeId
-      ? deps.resolveNodeId(profile.nodeId, request.parentConversationId)
-      : (profile.nodeId ?? parentSummary?.nodeId ?? 'local')
     allocatedWorktree = await deps.worktrees!.allocate({
       nodeId: targetNodeId,
       sourceCwd,
@@ -319,7 +350,7 @@ export async function runNativeSpawn(
       const profileModelRef = profile.model ? parseSpawnModel(profile.model) : undefined
       const resolvedModel = modelRef ?? profileModelRef ?? deps.resolveModel()
       const createModelRef = `${resolvedModel.provider}/${resolvedModel.modelId}`
-      const extension = structured ? buildStructuredOutputExtension(structured) : undefined
+      const extension = structured ? buildStructuredOutputExtension(deps.harness) : undefined
       if (extension) deps.installChildExtension(extension)
       const thinkingLevel = request.effort ?? profile.thinkingLevel ?? deps.resolveThinkingLevel?.()
       const agentChange: AgentChange = {
@@ -327,7 +358,7 @@ export async function runNativeSpawn(
         cwd: childCwd,
         ...(thinkingLevel ? { thinkingLevel: thinkingLevel as ModelThinkingLevel } : {}),
         // extensions 需传扩展对象：SDK 存名（names()）但快照解析发生在 install 之后。
-        ...(extension ? { extensions: [extension] } : {}),
+        ...(extension ? { extensions: { add: [extension] } } : {}),
       }
       const conv = await deps.harness.createConversation(
         { ownership: { kind: 'ownerless' }, agent: agentChange },
@@ -344,6 +375,7 @@ export async function runNativeSpawn(
         createModelRef,
         [],
         thinkingLevel,
+        targetNodeId,
       )
       // worktree 绑定：子会话创建并登记后写回受管记录（后续 resume/cleanup 定位）。
       if (allocatedWorktree !== undefined) {
@@ -351,6 +383,7 @@ export async function runNativeSpawn(
       }
       // onResolved 在配置全部落定（创建 + 镜像登记 + worktree 绑定）后回传实际元数据。
       request.onResolved?.({
+        nodeId: targetNodeId,
         conversationId: childId,
         effectiveCwd: childCwd,
         ...(allocatedWorktree !== undefined
@@ -366,6 +399,7 @@ export async function runNativeSpawn(
         deps.bindChildToolCall?.(childId!, request.parentToolCallId)
       }
       request.onResolved?.({
+        nodeId: targetNodeId,
         conversationId: childId!,
         effectiveCwd: childCwd,
         ...(existingWorktree !== undefined
@@ -381,10 +415,18 @@ export async function runNativeSpawn(
 
     // resume 续接时补挂结构化输出扩展（原会话创建时可能没有；同样需真实注册）。
     if (isResume && structured) {
-      const extension = buildStructuredOutputExtension(structured)
+      const extension = buildStructuredOutputExtension(deps.harness)
       deps.installChildExtension(extension)
       await conversation.configure({ extensions: { add: [extension] } }, bg)
     }
+
+    // 同名扩展由 Registry 按名字解析；结果槽必须按会话隔离，不能被并发派生的闭包覆盖。
+    let outputSessions = structuredSessions.get(deps.harness)
+    if (outputSessions === undefined) {
+      outputSessions = new Map<number, StructuredOutputSession>()
+      structuredSessions.set(deps.harness, outputSessions)
+    }
+    if (structured !== undefined) outputSessions.set(childId!, structured)
 
     // ---- signal 桥：运行中 abort -> conversation.abort；listener 在 finally 摘除。----
     let abortError: HelmError | undefined
@@ -396,19 +438,24 @@ export async function runNativeSpawn(
     }
     if (request.signal) request.signal.addEventListener('abort', onAbort, { once: true })
     try {
+      if (request.signal?.aborted) {
+        await conversation.abort(bg)
+        throw new HelmError('aborted', '子代理启动期间已取消', 499, { conversationId: childId })
+      }
       return await driveTurn(deps, request, conversation, childId as number, structured, gateCwd, allocatedWorktree)
     } catch (error) {
       if (abortError !== undefined && error !== abortError) throw abortError
       throw error
     } finally {
       if (request.signal) request.signal.removeEventListener('abort', onAbort)
+      if (outputSessions.get(childId!) === structured) outputSessions.delete(childId!)
     }
   } catch (error) {
     // 子会话创建/登记中途失败：尽力回收刚分配的 worktree（诚实性：不留孤儿
     // 资源也不掩盖原始错误；回收失败附诊断但不拦原始错误上抛）。
-    if (allocatedWorktree !== undefined && allocatedWorktree.status === 'active') {
+    if (childId === undefined && allocatedWorktree !== undefined && allocatedWorktree.status === 'active') {
       try {
-        await deps.worktrees!.cleanup({ path: allocatedWorktree.path, deleteBranch: true, force: true, signal: request.signal })
+        await deps.worktrees!.cleanup({ path: allocatedWorktree.path, deleteBranch: true, signal: request.signal })
       } catch (cleanupError) {
         // 回收失败不掩盖原始错误：诊断进 details 之外，仅 stderr 级日志。
         const note = cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
@@ -527,8 +574,8 @@ interface StructuredOutputSession {
   accepted: unknown | undefined
 }
 
-/** register_structured_output 工具扩展（per-child 注入，accepted 经闭包回传）。 */
-function buildStructuredOutputExtension(session: StructuredOutputSession): Extension {
+/** 工具定义可复用；输出校验与结果槽按当前 Harness 的真实会话 ID 定位。 */
+function buildStructuredOutputExtension(harness: Harness): Extension {
   const tool: ToolRegistration = defineTool({
     name: 'register_structured_output',
     description:
@@ -549,7 +596,11 @@ function buildStructuredOutputExtension(session: StructuredOutputSession): Exten
       properties: { accepted: { type: 'boolean' } },
       required: ['accepted'],
     },
-    async execute(args) {
+    async execute(args, api) {
+      const session = structuredSessions.get(harness)?.get(api.conversationId as number)
+      if (session === undefined) {
+        return { output: [{ type: 'text', text: '当前会话没有在途的结构化输出任务。' }], isError: true }
+      }
       let payload = (args as { output?: unknown }).output
       let result = validateAgainstSchema(payload, session.schema)
       // 防御性反序列化：若初始校验未通过且入参为字符串，尝试 JSON.parse 后再次校验

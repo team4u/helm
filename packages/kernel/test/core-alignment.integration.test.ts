@@ -819,6 +819,7 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
           }
           // 回传真实执行元数据（真实临时目录 + executionId + worktree）
           request.onResolved({
+            nodeId: 'local',
             executionId: execId,
             effectiveCwd: execDir,
             worktree: { path: execDir, branch: 'align-wt' },
@@ -881,7 +882,10 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
     assert.ok(node, '应含 agent 节点')
     assert.equal(node!.executionId, execId, '节点应保留外部 executionId')
     assert.equal(node!.effectiveCwd, execDir, '节点应保留外部 effectiveCwd')
-    assert.deepEqual(node!.worktree, { path: execDir, branch: 'align-wt' })
+    assert.equal(node!.nodeId, 'local')
+    assert.equal(node!.worktree?.path, execDir)
+    assert.equal(node!.worktree?.branch, 'align-wt')
+    assert.equal(node!.worktree?.id, `local:${execDir}`)
     assert.ok(node!.gate?.ok === true, '节点应含 gate 执行结果')
 
     // Gate 文件恰一次（onGateResult 回报使引擎跳过第二次执行）

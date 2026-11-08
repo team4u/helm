@@ -254,7 +254,7 @@ test('窄面板单行工具栏：取消思考下拉独占行，配置与发送�
 
 test('发送 / 停止按钮图标化：无文字仍可辨识（title + aria-label）', { timeout: 60_000 }, () => {
   assert.match(source, /btn-send/)
-  assert.match(source, /aria-label=\{uploading > 0 \? `上传中 \(\$\{uploading\}\)` : '发送'\}/)
+  assert.match(source, /aria-label=\{editingEntryId !== null \? '更新并重新生成' : uploading > 0 \? `上传中 \(\$\{uploading\}\)` : '发送'\}/)
   assert.match(source, /aria-label="停止当前执行"/)
   assert.match(styles, /\.btn-send\s*\{[^}]*width: 32px;[^}]*height: 32px;[^}]*border-radius: 50%/)
 })

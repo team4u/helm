@@ -447,6 +447,7 @@ export class HerdrExecutor {
 
   private executionInfoOf(pane: ManagedPane): AgentExecutionInfo {
     return {
+      nodeId: nodeIdOf(pane) ?? 'local',
       executionId: pane.paneId,
       effectiveCwd: pane.effectiveCwd,
       ...(pane.worktree !== undefined

@@ -1,8 +1,66 @@
 import { useEffect, useState } from 'react'
 import type { ConversationStatus } from '@helm/protocol'
+import type { EditRequestTarget } from '../conversation/timeline-model.js'
 
-/**
- * 发送反馈可见性：仅当发送请求在途且服务端尚未以真实 working/blocked 接管。
+// ---------------------------------------------------------------------------
+// 历史消息编辑态（纯逻辑，单测直测）
+// ---------------------------------------------------------------------------
+
+/** 待发送附件草稿（上传后尚未随消息提交）。 */
+export interface PendingAttachment {
+  artifactId: string
+  name: string
+  size: number
+  mimeType: string
+}
+
+/** 编辑目标携带的附件引用 -> 待发送草稿（每次选择编辑目标都整体替换，不保留旧草稿残留）。 */
+export function attachmentsOfEditTarget(target: EditRequestTarget): PendingAttachment[] {
+  return (target.attachments ?? []).map((a) => ({
+    artifactId: a.id,
+    name: a.name,
+    size: a.size,
+    mimeType: a.mimeType,
+  }))
+}
+
+/** 选中的编辑目标是否构成原地编辑（历史锚点存在）；否则仅是草稿回填。 */
+export function isHistoricalEdit(target: EditRequestTarget): boolean {
+  return target.entryId !== undefined
+}
+
+/** 发送时冻结的草稿版本：任一维度变化即视为用户已修改，旧编辑目标不得回灌。 */
+export interface ComposerDraftVersion {
+  text: string
+  targetEntryId: number | null
+  attachments: string[]
+}
+
+export function draftVersionOf(text: string, targetEntryId: number | null, attachments: ReadonlyArray<PendingAttachment>): ComposerDraftVersion {
+  return { text, targetEntryId, attachments: attachments.map((a) => a.artifactId) }
+}
+
+export function sameDraftVersion(a: ComposerDraftVersion, b: ComposerDraftVersion): boolean {
+  return a.text === b.text && a.targetEntryId === b.targetEntryId
+    && a.attachments.length === b.attachments.length
+    && a.attachments.every((id, i) => id === b.attachments[i])
+}
+
+/** 会话内管理命令：非编辑输入时立即执行；编辑态正文中只是被编辑消息的文本。 */
+export function isSessionManageCommand(payload: string): boolean {
+  return payload === '/new' || payload === '/clear' || payload === '/compact'
+}
+
+/** 发送失败后是否恢复编辑态：仅当 Composer 仍处于乐观清空后的期望状态
+ * （用户未输入新文本、未选择其他编辑目标、未改动附件）时，旧编辑目标才可回灌。 */
+export function shouldRestoreEditOnFailure(
+  live: ComposerDraftVersion,
+  expectedAfterClear: ComposerDraftVersion,
+): boolean {
+  return sameDraftVersion(live, expectedAfterClear)
+}
+
+/** 发送反馈可见性：仅当发送请求在途且服务端尚未以真实 working/blocked 接管。
  *
  * SSE 状态到达后由真实状态接管，不叠第二条发送等待；不修改持久
  * conversation.status，不引入额外业务枚举。

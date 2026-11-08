@@ -309,6 +309,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
           ctx.hook.onAgentSpawn((payload) => {
             const req = payload as AgentSpawnRequest
             req.onResolved?.({
+              nodeId: 'local',
               executionId: 'pane-9',
               effectiveCwd: '/srv/wt/helm-42',
               worktree: { path: '/srv/wt/helm-42', branch: 'helm/wf-run-1' },

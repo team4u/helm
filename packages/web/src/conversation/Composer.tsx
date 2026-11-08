@@ -1,37 +1,36 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ArtifactMetadata, ConversationSummary } from '@helm/protocol'
+import type { ArtifactMetadata, ConversationAttachmentRef, ConversationSummary } from '@helm/protocol'
 import { assetsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
-import { matchesUiScope, type HelmStoreValue } from '../lib/types.js'
+import { matchesUiScope } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { collectEnabledPluginIds, isSkillVisible } from '../shell/sidebar-model.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { AskDock } from './AskDock.js'
 import {
+  attachmentsOfEditTarget,
   busyEnterMode,
   canConfigureSessionEnv,
+  draftVersionOf,
   envDraftError,
   envDraftOnNodeChange,
   getComposerPlaceholder,
+  isHistoricalEdit,
+  shouldRestoreEditOnFailure,
   useIsMobile,
+  type ComposerDraftVersion,
   type EnvDraft,
+  type PendingAttachment,
 } from './composer-model.js'
-import { formatBytes } from './timeline-model.js'
+import { formatBytes, lastEditableHumanInput } from './timeline-model.js'
 
 export interface ComposerProps {
   conversation: ConversationSummary
   /** 请求回填文本（时间线「编辑并重发」）；每次递增 tick 保证同文本也能再次触发。 */
-  prefill: { text: string; tick: number } | null
+  prefill: { text: string; entryId?: number; attachments?: ConversationAttachmentRef[]; tick: number } | null
   /** 真实发送请求开始/结束时通知父层（在途反馈；斜杠命令不触发）。 */
   onSendingChange?: (sending: boolean) => void
-}
-
-interface PendingAttachment {
-  artifactId: string
-  name: string
-  size: number
-  mimeType: string
 }
 
 type PopoverKind = 'slash' | 'artifact' | null
@@ -556,6 +555,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
   const store = useHelmStore()
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const [editingEntryId, setEditingEntryId] = useState<number | null>(null)
   const [popover, setPopover] = useState<PopoverKind>(null)
   const [popoverQuery, setPopoverQuery] = useState('')
   const [sending, setSending] = useState(false)
@@ -570,6 +570,11 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
   const dragDepthRef = useRef(0)
   const [dragging, setDragging] = useState(false)
   const [widgetsExpanded, setWidgetsExpanded] = useState(false)
+  // 活草稿版本：text / 编辑目标 / 附件任一变化推进，用于发送失败后判断草稿是否已被用户修改
+  const liveDraftRef = useRef<ComposerDraftVersion>(draftVersionOf('', null, []))
+  const syncLiveDraft = useCallback((text: string, target: number | null, attachments: ReadonlyArray<PendingAttachment>): void => {
+    liveDraftRef.current = draftVersionOf(text, target, attachments)
+  }, [])
 
   const artifacts = store.conversationArtifacts[conversation.id] ?? []
   const working = conversation.status === 'working' || conversation.status === 'blocked'
@@ -636,12 +641,31 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     }
   }, [isMobile, pills.length, widgets.length])
 
-  // 回填（编辑并重发）：prefill 引用变化即触发，同文本重复回填也生效
+  // 回填（编辑并重发）：prefill 引用变化即触发，同文本重复回填也生效。
+  // 每次选择编辑目标都整体替换附件（目标无附件则清空），绝不保留上一个目标的草稿残留。
   useEffect(() => {
     if (prefill === null) return
+    const target = { text: prefill.text, ...(prefill.entryId !== undefined ? { entryId: prefill.entryId } : {}), ...(prefill.attachments !== undefined ? { attachments: prefill.attachments } : {}) }
+    const nextEditing = isHistoricalEdit(target) ? prefill.entryId! : null
+    const nextAttachments = attachmentsOfEditTarget(target)
     setText(prefill.text)
+    setEditingEntryId(nextEditing)
+    setAttachments(nextAttachments)
+    syncLiveDraft(prefill.text, nextEditing, nextAttachments)
     textareaRef.current?.focus()
-  }, [prefill])
+  }, [prefill, syncLiveDraft])
+
+  // 切换会话时退出历史编辑态
+  useEffect(() => {
+    setEditingEntryId(null)
+  }, [conversation.id])
+
+  const cancelEdit = useCallback((): void => {
+    setEditingEntryId(null)
+    setText('')
+    setAttachments([])
+    syncLiveDraft('', null, [])
+  }, [syncLiveDraft])
 
   const notifyError = useCallback(
     (title: string, err: unknown) => {
@@ -664,10 +688,11 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
         try {
           if (file.size > 15 * 1024 * 1024) throw new Error('文件超过 15 MiB 上限')
           const meta = await conversationsApi.uploadArtifact(conversation.id, file)
-          setAttachments((prev) => [
-            ...prev,
-            { artifactId: meta.id, name: meta.name, size: meta.size, mimeType: meta.mimeType },
-          ])
+          setAttachments((prev) => {
+            const next = [...prev, { artifactId: meta.id, name: meta.name, size: meta.size, mimeType: meta.mimeType }]
+            syncLiveDraft(text, editingEntryId, next)
+            return next
+          })
         } catch (err) {
           notifyError(`附件上传失败：${file.name}`, err)
         } finally {
@@ -755,28 +780,48 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
       })
       return
     }
-    if (runSlashCommand(payload)) {
+    // 编辑态正文中出现 /new 等管理命令只是被编辑消息的文本，不立即执行；
+    // 仅非编辑输入才作为会话管理命令立即执行。
+    const editing = editingEntryId !== null
+    const slash = editing ? false : runSlashCommand(payload)
+    if (slash) {
       setText('')
+      syncLiveDraft('', editingEntryId, attachments)
       return
     }
+    const targetEntryId = editingEntryId
+    const sentAttachments = new Set(attachments.map((attachment) => attachment.artifactId))
+    // 冻结发送瞬间草稿：失败时只有 Composer 仍处于乐观清空后的期望状态
+    // （用户未新输入、未选其他目标、未改附件）才回滚，旧 target 不得误绑新输入。
+    const frozenDraft = draftVersionOf(text, targetEntryId, attachments)
+    const expectedAfterClear = draftVersionOf('', null, attachments)
     sendingRef.current = true
     setSending(true)
     onSendingChange?.(true)
-    const sentAttachments = new Set(attachments.map((attachment) => attachment.artifactId))
     const draft = text
     setText('')
     setPopover(null)
+    // 乐观退出编辑态；失败时在 catch 中按冻结版本回滚
+    setEditingEntryId(null)
+    syncLiveDraft('', null, attachments)
     try {
       await conversationsApi.submitInput(conversation.id, {
         text: payload,
         origin: 'human',
-        ...(working ? { whenBusy: busyMode } : {}),
+        ...(targetEntryId !== null ? { replaceFromEntryId: targetEntryId } : working ? { whenBusy: busyMode } : {}),
         ...(attachments.length > 0 ? { attachments: attachments.map((a) => a.artifactId) } : {}),
       })
       setAttachments((current) => current.filter((attachment) => !sentAttachments.has(attachment.artifactId)))
     } catch (err) {
-      setText((current) => (current === '' ? draft : current))
-      notifyError('发送失败', err)
+      // 仅当 Composer 仍处于乐观清空后的期望状态才恢复文本与编辑目标；
+      // 用户已开始新输入 / 已选择其他编辑目标则保持现状，旧 target 不回灌。
+      const restore = shouldRestoreEditOnFailure(liveDraftRef.current, expectedAfterClear)
+      if (restore) {
+        setText(draft)
+        if (frozenDraft.targetEntryId !== null) setEditingEntryId(frozenDraft.targetEntryId)
+        syncLiveDraft(draft, frozenDraft.targetEntryId, attachments)
+      }
+      notifyError(targetEntryId !== null ? '更新消息失败' : '发送失败', err)
     } finally {
       sendingRef.current = false
       setSending(false)
@@ -824,16 +869,29 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     if (popover !== null && (e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Escape')) {
       return // 由浮层全局捕获处理
     }
+    if (e.key === 'Escape' && popover === null && editingEntryId !== null) {
+      e.preventDefault()
+      cancelEdit()
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
+      if (editingEntryId !== null) {
+        void send('followUp')
+        return
+      }
       void send(working ? busyEnterMode(e.metaKey || e.ctrlKey) : 'followUp')
       return
     }
-    if (e.key === 'ArrowUp' && text === '') {
-      const lastHuman = lastHumanInputText(store, conversation.id)
-      if (lastHuman !== undefined) {
+    if (e.key === 'ArrowUp' && text === '' && editingEntryId === null) {
+      const target = lastEditableHumanInput(detail?.entries ?? [])
+      if (target !== undefined) {
         e.preventDefault()
-        setText(lastHuman)
+        setText(target.text)
+        setEditingEntryId(target.entryId ?? null)
+        // ↑ 进入历史编辑同样整体替换附件（含空附件清空旧草稿）
+        setAttachments(attachmentsOfEditTarget(target))
+        syncLiveDraft(target.text, target.entryId ?? null, attachmentsOfEditTarget(target))
         requestAnimationFrame(() => textareaRef.current?.focus())
       }
     }
@@ -874,6 +932,25 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
           onDragLeave={onDragLeave}
           onDrop={onDrop}
         >
+          {editingEntryId !== null ? (
+            <div className="composer-edit-banner" role="status">
+              <span className="composer-edit-banner-text">
+                <HelmIcon name="edit" size={12} />
+                <span>{working
+                  ? '正在编辑历史消息 · 重新发送将覆盖此条及后续对话，并停止当前执行'
+                  : '正在编辑历史消息 · 重新发送将覆盖此条及后续对话（含之后的人类消息）'}</span>
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm composer-edit-cancel"
+                onClick={cancelEdit}
+                title="取消编辑 (Esc)"
+              >
+                <HelmIcon name="x" size={12} />
+                <span>取消</span>
+              </button>
+            </div>
+          ) : null}
           {attachments.length > 0 ? (
             <div className="composer-attachments">
               {attachments.map((att) => (
@@ -886,7 +963,11 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                     className="btn btn-ghost btn-sm"
                     style={{ height: 16, padding: '0 3px' }}
                     title="移除附件"
-                    onClick={() => setAttachments((prev) => prev.filter((a) => a.artifactId !== att.artifactId))}
+                    onClick={() => setAttachments((prev) => {
+                      const next = prev.filter((a) => a.artifactId !== att.artifactId)
+                      syncLiveDraft(text, editingEntryId, next)
+                      return next
+                    })}
                   >
                     <HelmIcon name="x" size={10} />
                   </button>
@@ -903,6 +984,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
             placeholder={getComposerPlaceholder(working, isMobile)}
             onChange={(e) => {
               setText(e.target.value)
+              syncLiveDraft(e.target.value, editingEntryId, attachments)
               detectPopover(e.target.value, e.target.selectionStart ?? e.target.value.length)
             }}
             onKeyDown={onKeyDown}
@@ -991,14 +1073,20 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
               ) : null}
             </div>
             <span className="composer-toolbar-right">
-              {!working ? (
+              {!working || editingEntryId !== null ? (
                 <button
                   type="button"
                   className="btn btn-sm btn-primary btn-pill btn-send"
                   disabled={sending || uploading > 0 || envBlocker.blocked || text.trim() === ''}
                   onClick={() => void send()}
-                  title={envBlocker.blocked ? envBlocker.reason ?? '请先保存或取消起始环境修改' : '发送 (Enter)；Shift+Enter 换行'}
-                  aria-label={uploading > 0 ? `上传中 (${uploading})` : '发送'}
+                  title={editingEntryId !== null
+                    ? working
+                      ? '更新并重新生成（将覆盖此条及后续对话并停止当前执行） (Enter)'
+                      : '更新并重新生成（将覆盖此条及后续对话） (Enter)'
+                    : envBlocker.blocked
+                      ? envBlocker.reason ?? '请先保存或取消起始环境修改'
+                      : '发送 (Enter)；Shift+Enter 换行'}
+                  aria-label={editingEntryId !== null ? '更新并重新生成' : uploading > 0 ? `上传中 (${uploading})` : '发送'}
                 >
                   <HelmIcon name={sending || uploading > 0 ? 'loader' : 'arrow-up'} size={18} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
                 </button>
@@ -1040,7 +1128,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                     disabled={sending || uploading > 0 || envBlocker.blocked}
                     onClick={() => void send('steer')}
                     title="下一个步骤边界注入（Enter）"
-                    aria-label={uploading > 0 ? `上传中 (${uploading})` : '插话引导'}
+                    aria-label={uploading > 0 ? `上传中 (${uploading})` : editingEntryId !== null ? '更新并重新生成' : '插话引导'}
                   >
                     <HelmIcon name={sending || uploading > 0 ? 'loader' : 'corner-down-right'} size={17} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
                   </button>
@@ -1052,17 +1140,4 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
       </div>
     </div>
   )
-}
-
-/** 空输入框按 ↑ 回填：直接从 store 详情中取最后一条人类输入。 */
-function lastHumanInputText(store: HelmStoreValue, conversationId: number): string | undefined {
-  const detail = store.conversationDetails[conversationId]
-  if (detail === undefined) return undefined
-  for (let i = detail.entries.length - 1; i >= 0; i--) {
-    const entry = detail.entries[i]!
-    if (entry.kind !== 'helm.input' && entry.kind !== 'pi.user') continue
-    const data = entry.data as { text?: unknown } | undefined
-    if (typeof data?.text === 'string' && data.text.trim() !== '') return data.text
-  }
-  return undefined
 }

@@ -587,6 +587,27 @@ export class HelmStore {
   }
 
   /**
+   * 删除指定会话中若干 FTS 键（原地覆盖重发时清理被截断条目的派生索引）。
+   * 只动 helm_conversation_fts 派生表，不触碰 pi_ 表语义；空列表直接返回。
+   */
+  removeFtsEntries(conversationId: number, entryIds: ReadonlyArray<string>): void {
+    if (entryIds.length === 0) return
+    this.assertWritable()
+    const ids = [...entryIds]
+    this.enqueue(() =>
+      this.db.transaction(async (tx) => {
+        for (const entryId of ids) {
+          await tx.run(
+            'DELETE FROM helm_conversation_fts WHERE conversation_id = ? AND entry_id = ?',
+            conversationId,
+            entryId,
+          )
+        }
+      }),
+    )
+  }
+
+  /**
    * FTS 是可重建的派生索引：清空 + 重放全部会话文本在**同一事务**内完成，
    * 失败整体回滚（旧索引保留，绝不因重建失败丢掉派生索引后假成功）。
    */

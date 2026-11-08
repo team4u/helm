@@ -83,6 +83,7 @@ const state = {
   detail: undefined as ConversationDetail | undefined,
   detailCalls: [] as Array<{ id: number; opts?: { limit?: number; cursor?: string } }>,
   submitted: [] as Array<{ id: number; text: string; opts?: Record<string, unknown> }>,
+  withdrawn: [] as Array<{ id: number; submissionId: number }>,
   updateCalls: [] as Array<{ id: number; patch: ConversationPatch }>,
   waitForInputCalls: [] as Array<{ id: number; submissionId: string }>,
   waitForInputResult: undefined as ConversationInputResult | undefined,
@@ -144,6 +145,10 @@ function makeKernel(): KernelRuntimeLike {
     async submitInput(id, text, opts) {
       state.submitted.push({ id, text, opts: opts as Record<string, unknown> | undefined })
       return { submissionId: 'sub-1' }
+    },
+    async withdrawQueuedInput(id, opts) {
+      state.withdrawn.push({ id, submissionId: opts.submissionId })
+      return { status: 'withdrawn' }
     },
     async waitForInput(id, submissionId) {
       state.waitForInputCalls.push({ id, submissionId })

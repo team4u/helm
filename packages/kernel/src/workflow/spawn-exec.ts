@@ -8,7 +8,7 @@
  * 非法显式失败（gate_result_missing / execution_info_invalid），绝不依赖 TS。
  */
 
-import { isAbsolute } from 'node:path'
+import { isAbsoluteTargetPath } from '../runtime/tools.js'
 import type { AgentExecutionInfo, AgentGateResult } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
@@ -22,54 +22,68 @@ export function sanitizeExecutionInfo(
   if (source === null || typeof source !== 'object' || Array.isArray(source)) {
     throw executionInfoError(context.agentId, '回调载荷必须是对象')
   }
-  const known = ['conversationId', 'executionId', 'effectiveCwd', 'worktree'] as const
+  const known = ['nodeId', 'conversationId', 'executionId', 'effectiveCwd', 'worktree'] as const
   for (const key of Object.keys(source)) {
     if (!(known as readonly string[]).includes(key)) {
       throw executionInfoError(context.agentId, `未知字段 "${key}"`)
     }
   }
   const out: AgentExecutionInfo = {}
-  let present = 0
+  if (source.nodeId !== undefined) {
+    if (typeof source.nodeId !== 'string' || source.nodeId.trim() === '') {
+      throw executionInfoError(context.agentId, 'nodeId 必须是非空字符串')
+    }
+    out.nodeId = source.nodeId
+  }
   if (source.conversationId !== undefined) {
     const id = source.conversationId
     if (typeof id !== 'number' || !Number.isInteger(id) || id < 1) {
       throw executionInfoError(context.agentId, 'conversationId 必须是正整数')
     }
     out.conversationId = id
-    present++
   }
   if (source.executionId !== undefined) {
     if (typeof source.executionId !== 'string' || source.executionId.length === 0) {
       throw executionInfoError(context.agentId, 'executionId 必须是非空字符串')
     }
     out.executionId = source.executionId
-    present++
   }
   if (source.effectiveCwd !== undefined) {
-    if (typeof source.effectiveCwd !== 'string' || !isAbsolute(source.effectiveCwd)) {
+    if (typeof source.effectiveCwd !== 'string' || !isAbsoluteTargetPath(source.effectiveCwd)) {
       throw executionInfoError(context.agentId, 'effectiveCwd 必须是绝对路径')
     }
     out.effectiveCwd = source.effectiveCwd
-    present++
   }
   if (source.worktree !== undefined) {
-    const worktree = source.worktree as { path?: unknown; branch?: unknown } | null
+    const worktree = source.worktree as Partial<NonNullable<AgentExecutionInfo['worktree']>> | null
     if (
       worktree === null ||
       typeof worktree !== 'object' ||
       Array.isArray(worktree) ||
       typeof worktree.path !== 'string' ||
       worktree.path.length === 0 ||
-      !isAbsolute(worktree.path) ||
+      !isAbsoluteTargetPath(worktree.path) ||
       typeof worktree.branch !== 'string' ||
       worktree.branch.length === 0
     ) {
       throw executionInfoError(context.agentId, 'worktree 必须是 { path: 绝对路径, branch: 非空 }')
     }
     out.worktree = { path: worktree.path, branch: worktree.branch }
-    present++
+    for (const key of ['id', 'repoRoot', 'baseCommit'] as const) {
+      const field = worktree[key]
+      if (field !== undefined) {
+        if (typeof field !== 'string' || field === '' || (key === 'repoRoot' && !isAbsoluteTargetPath(field))) {
+          throw executionInfoError(context.agentId, `worktree.${key} 非法`)
+        }
+        out.worktree[key] = field
+      }
+    }
+    if (worktree.dirtySource !== undefined) {
+      if (typeof worktree.dirtySource !== 'boolean') throw executionInfoError(context.agentId, 'worktree.dirtySource 必须是布尔值')
+      out.worktree.dirtySource = worktree.dirtySource
+    }
   }
-  if (present === 0) {
+  if (out.conversationId === undefined && out.executionId === undefined) {
     throw executionInfoError(context.agentId, '至少回传 conversationId 或 executionId 之一')
   }
   return out

@@ -126,6 +126,104 @@ export interface PluginCardItem {
 
 export type TimelineItem = HumanInputItem | DividerItem | PluginCardItem | AssistantTurn
 
+/** 「编辑并重发」目标：回填 Composer 的文本 + 可选历史 entry 锚点与附件。 */
+export interface EditRequestTarget {
+  text: string
+  /** 历史已落库条目的正整数 ID；排队消息撤回后仅回填草稿时不传。 */
+  entryId?: number
+  /** 原消息携带的附件引用（回填至待发送区）。 */
+  attachments?: ConversationAttachmentRef[]
+}
+
+// ---------------------------------------------------------------------------
+// rewind 覆盖过滤
+// ---------------------------------------------------------------------------
+
+/**
+ * 过滤被 helm.rewind 覆盖的条目。
+ *
+ * 后端原子提交：先落新 input，再追加 rewind marker，同一批保存。
+ * rewind.data = { fromEntryId, throughEntryId(提交新 input 前的旧 tail), ... }，
+ * 覆盖区间是闭区间 [fromEntryId, throughEntryId]——绝不能按 marker 自身 id 截断，
+ * 否则会把同批落库、id 小于 marker 的新 input 一并隐藏。
+ *
+ * 区间合法性：from/through 均为 safe positive integer 且 through >= from、
+ * through < marker 自身 id；非法 marker 只隐藏自身（保持隐藏控制记录），不覆盖任何条目。
+ * 多条 rewind 的区间取并集；SDK 重建的 pi.system 基线不受影响（本就不渲染）。
+ */
+export function filterRewoundEntries(entries: ReadonlyArray<ConversationEntry>): ConversationEntry[] {
+  const rewindEntryIds = new Set<string>()
+  const ranges: Array<[number, number]> = []
+  for (const entry of entries) {
+    if (entry.kind !== 'helm.rewind') continue
+    rewindEntryIds.add(entry.id)
+    const data = isStringRecord(entry.data) ? entry.data : undefined
+    const markerId = Number(entry.id)
+    const fromEntryId = Number(data?.fromEntryId)
+    const throughEntryId = Number(data?.throughEntryId)
+    if (
+      isSafePositiveInt(fromEntryId) &&
+      isSafePositiveInt(throughEntryId) &&
+      throughEntryId >= fromEntryId &&
+      isSafePositiveInt(markerId) &&
+      markerId > throughEntryId
+    ) {
+      ranges.push([fromEntryId, throughEntryId])
+    }
+  }
+  if (rewindEntryIds.size === 0) return [...entries]
+  return entries.filter((entry) => {
+    if (rewindEntryIds.has(entry.id)) return false
+    if (ranges.length === 0) return true
+    const id = Number(entry.id)
+    if (!Number.isFinite(id)) return true
+    return !ranges.some(([from, through]) => id >= from && id <= through)
+  })
+}
+
+function isSafePositiveInt(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0
+}
+
+/**
+ * 最近一条可编辑的人类输入（Composer 空框 ↑ 回填）：
+ * - 只认 origin === 'human'：agent 汇报 / trigger 注入不是人类编辑对象，跳过继续向前找；
+ * - 不跨 pi.reset / pi.compaction 边界原地编辑（后端最终权威上下文从最新边界起算）；
+ * - 优先 helm.input（含附件），兜底裸 pi.user。
+ */
+export function lastEditableHumanInput(entries: ReadonlyArray<ConversationEntry>): EditRequestTarget | undefined {
+  const active = filterRewoundEntries(entries)
+  for (let i = active.length - 1; i >= 0; i--) {
+    const entry = active[i]!
+    if (entry.kind === 'pi.reset' || entry.kind === 'pi.compaction') return undefined
+    if (entry.kind === 'helm.input') {
+      const data = parseHelmInputData(entry.data)
+      const entryId = Number(entry.id)
+      if (
+        data !== undefined &&
+        data.origin === 'human' &&
+        data.text.trim() !== '' &&
+        isSafePositiveInt(entryId)
+      ) {
+        return {
+          text: data.text,
+          entryId,
+          ...(data.attachments !== undefined && data.attachments.length > 0 ? { attachments: data.attachments } : {}),
+        }
+      }
+      continue
+    }
+    if (entry.kind === 'pi.user') {
+      const text = extractUserMessageText(entry)
+      const entryId = Number(entry.id)
+      if (text.trim() !== '' && isSafePositiveInt(entryId)) {
+        return { text, entryId }
+      }
+    }
+  }
+  return undefined
+}
+
 export interface BuildTimelineOptions {
   /** 进行中回合的实时视图（会话 working 时传入；空闲不传）。 */
   live?: ConversationLive
@@ -604,6 +702,8 @@ export function buildTimelineItems(
   entries: ReadonlyArray<ConversationEntry>,
   options: BuildTimelineOptions = {},
 ): TimelineItem[] {
+  // 先剔除被 helm.rewind 覆盖的条目：初次加载与 SSE 增量收到 rewind 同样生效。
+  const activeEntries = filterRewoundEntries(entries)
   const items: TimelineItem[] = []
   const seenInputIds = new Set<string>()
   let turn: TurnAcc | null = null
@@ -625,7 +725,7 @@ export function buildTimelineItems(
     })
   }
 
-  for (const entry of entries) {
+  for (const entry of activeEntries) {
     // 插件 timeline.renderer 命中：任何 entry 都可能被接管（豁免折叠，直接渲染卡片）。
     const renderer = matchTimelineRenderer(entry, options.timelineRenderers)
     if (renderer !== undefined) {
@@ -752,25 +852,105 @@ export function lastHumanTextOf(items: ReadonlyArray<TimelineItem>): string | un
 // subagent / SubagentWorkflow 运行期关联
 // ---------------------------------------------------------------------------
 
-/** 内核 subagentFooter 标准元数据行 `[subagent ... conversationId=N ...]`（多行中取最后一次：footer 总在末尾，正文伪造行不能抢占）。 */
-const SUBAGENT_FOOTER_LINE_RE = /\[subagent (?:[^\]]*\s)?conversationId=(\d{1,15})(?:\s[^\]]*)?\]/g
+/** 内核 subagentFooter 标准元数据行 `[subagent ...]`（多行中取最后一次：footer 总在末尾，正文伪造行不能抢占）。 */
+const SUBAGENT_FOOTER_LINE_RE = /\[subagent ([^\]]*)\]/g
 
-function subagentFooterConversationId(text: string): number | undefined {
-  let last: number | undefined
+/** footer 内的 `key=value` token（value 允许含除空白/]/ 外的字符，覆盖 `worktree=PATH@BRANCH`）。 */
+const FOOTER_TOKEN_RE = /(\w+)=([^\s\]]+)/g
+
+/** 提取最后一个 footer 行里的指定键值（footer 总在末尾，正文伪造行不能抢占）。 */
+function subagentFooterToken(text: string, key: string): string | undefined {
+  let footer: string | undefined
   for (const match of text.matchAll(SUBAGENT_FOOTER_LINE_RE)) {
-    const parsed = Number(match[1])
-    if (Number.isSafeInteger(parsed) && parsed > 0) last = parsed
+    if (match[0].includes('=')) footer = match[1]
+  }
+  if (footer === undefined) return undefined
+  let last: string | undefined
+  for (const match of footer.matchAll(FOOTER_TOKEN_RE)) {
+    if (match[1] === key && match[2] !== '') last = match[2]
   }
   return last
 }
 
+function subagentFooterConversationId(text: string): number | undefined {
+  const raw = subagentFooterToken(text, 'conversationId')
+  if (raw === undefined) return undefined
+  const parsed = Number(raw)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined
+}
+
+/**
+ * 从工具输出解析顶层 JSON 信封的 execution 元数据。
+ *
+ * 契约：正文（去掉末尾 `[subagent ...]` footer 后）为内核 JSON 信封
+ * `{ok, result, execution: {nodeId, conversationId|executionId, effectiveCwd,
+ * worktree: {path, branch, ...}}, runId?}`。只读取顶层字段（JSON.parse 结构化
+ * 读取），绝不用 regex 去业务 result 文本里猜 conversationId/runId——路径含
+ * 空格/Windows 反斜杠也可靠还原。非 JSON 正文返回 undefined（走 footer 兜底）。
+ */
+export interface SubagentExecutionInfo {
+  nodeId?: string
+  conversationId?: number
+  executionId?: string
+  effectiveCwd?: string
+  worktree?: { path: string; branch: string }
+  runId?: string
+}
+
+function parseSubagentExecutionInfo(text: string | undefined): SubagentExecutionInfo | undefined {
+  if (typeof text !== 'string' || text === '') return undefined
+  // 分离末尾 footer：正文才是 JSON 信封（footer 非合法 JSON 成员）。
+  const body = text.replace(SUBAGENT_FOOTER_LINE_RE, '').trim()
+  if (!body.startsWith('{')) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return undefined
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+  const envelope = parsed as Record<string, unknown>
+  if (envelope['execution'] === undefined && envelope['runId'] === undefined) return undefined
+  const info: SubagentExecutionInfo = {}
+  const execution = envelope['execution']
+  if (execution !== null && typeof execution === 'object' && !Array.isArray(execution)) {
+    const exec = execution as Record<string, unknown>
+    if (typeof exec['nodeId'] === 'string' && exec['nodeId'] !== '') info.nodeId = exec['nodeId']
+    if (typeof exec['conversationId'] === 'number' && Number.isSafeInteger(exec['conversationId']) && exec['conversationId'] > 0) {
+      info.conversationId = exec['conversationId']
+    }
+    if (typeof exec['executionId'] === 'string' && exec['executionId'] !== '') info.executionId = exec['executionId']
+    if (typeof exec['effectiveCwd'] === 'string' && exec['effectiveCwd'] !== '') info.effectiveCwd = exec['effectiveCwd']
+    const wt = exec['worktree']
+    if (
+      wt !== null && typeof wt === 'object' && !Array.isArray(wt) &&
+      typeof (wt as Record<string, unknown>)['path'] === 'string' && (wt as Record<string, unknown>)['path'] !== '' &&
+      typeof (wt as Record<string, unknown>)['branch'] === 'string'
+    ) {
+      info.worktree = { path: (wt as Record<string, unknown>)['path'] as string, branch: (wt as Record<string, unknown>)['branch'] as string }
+    }
+  }
+  if (typeof envelope['runId'] === 'string' && envelope['runId'] !== '') info.runId = envelope['runId']
+  return info.conversationId !== undefined ||
+    info.executionId !== undefined ||
+    info.worktree !== undefined ||
+    info.runId !== undefined
+    ? info
+    : undefined
+}
+
+/** JSON 顶层信封解析出的子会话 ID（结构化读取，非 regex 猜业务文本）。 */
+function subagentJsonConversationId(text: string | undefined): number | undefined {
+  return parseSubagentExecutionInfo(text)?.conversationId
+}
+
 /**
  * 解析 subagent 工具调用关联的子会话 ID：
- * 1) 已完成：只信任内核 subagentFooter 标准末尾元数据行
- *    `[subagent ... conversationId=N ...]`——业务正文裸提及
- *    `conversationId=<n>` 绝不抢占关联；数字需为合法正 safe integer；
+ * 1) 已完成：优先顶层 JSON 信封 execution.conversationId（结构化读取，
+ *    绝不用 regex 猜业务 result 文本），其次内核 subagentFooter 标准末尾
+ *    元数据行 `[subagent ... conversationId=N ...]`；数字需为正 safe integer；
  * 2) 运行期：内核已把父会话工具调用 ID 写入子会话摘要（parentToolCallId），
- *    按 callId 精确关联（0ms，不等工具返回）；
+ *    按 callId 精确关联同父会话（0ms，不等工具返回，不跨父会话串卡）；
  * 3) resume：入参携带数字续接 ref 时匹配同父会话的该子会话。
  */
 export function resolveSubagentConversationId(
@@ -781,6 +961,8 @@ export function resolveSubagentConversationId(
   if (tool.toolName !== 'subagent') return undefined
   const resultText = tool.resultText
   if (resultText !== undefined) {
+    const fromJson = subagentJsonConversationId(resultText)
+    if (fromJson !== undefined) return fromJson
     const fromFooter = subagentFooterConversationId(resultText)
     if (fromFooter !== undefined) return fromFooter
   }
@@ -840,6 +1022,69 @@ export function resolveWorkflowRunForTool(
     }
   }
   return undefined
+}
+
+export interface SubagentExecutionMeta {
+  /** background: true 派生的后台工作流 run（仅确切关联时返回）。 */
+  run?: WorkflowRunSummary
+  /** 隔离工作树坐标（run 节点 / 顶层 JSON execution / footer 三级提取）。 */
+  worktree?: { path: string; branch: string }
+  /** 外部运行时（如 Herdr 窗格）执行标识：无子会话时展示后台任务摘要用。 */
+  executionId?: string
+  /** 实际执行节点。 */
+  nodeId?: string
+  /** 实际生效工作目录。 */
+  effectiveCwd?: string
+}
+
+/** footer `worktree=PATH@BRANCH`：内核 PATH@BRANCH 形态；PATH 含空格时不可靠（JSON 优先）。 */
+function worktreeFromFooterToken(token: string): { path: string; branch: string } | undefined {
+  const at = token.lastIndexOf('@')
+  if (at <= 0 || at === token.length - 1) return undefined
+  const path = token.slice(0, at)
+  const branch = token.slice(at + 1)
+  return path !== '' && branch !== '' ? { path, branch } : undefined
+}
+
+/**
+ * 解析 subagent 工具调用的执行元数据（后台 run / 工作树 / 外部执行标识）：
+ * - run 优先 parentToolCallId + 同父会话精确关联（内核受信注入，0ms），
+ *   其次顶层 JSON 信封 runId / footer runId= 在同会话 workflowRuns 全等匹配；
+ * - worktree 优先关联 run 节点坐标，其次顶层 JSON execution.worktree（路径含
+ *   空格/Windows 可靠），最后 footer `worktree=PATH@BRANCH` 兑底；
+ * - executionId/nodeId/effectiveCwd 仅从顶层 JSON execution 读取；
+ * - 无确切关联时字段均为 undefined（不猜最新，不伪造）。
+ */
+export function resolveSubagentExecutionMeta(
+  tool: ToolTrace,
+  parentConversationId: number,
+  workflowRuns: ReadonlyArray<WorkflowRunSummary>,
+): SubagentExecutionMeta {
+  if (tool.toolName !== 'subagent') return {}
+  let run: WorkflowRunSummary | undefined
+  if (tool.callId !== undefined && tool.callId !== '') {
+    run = workflowRuns.find(
+      (r) => r.conversationId === parentConversationId && r.parentToolCallId === tool.callId,
+    )
+  }
+  const info = parseSubagentExecutionInfo(tool.resultText)
+  if (run === undefined) {
+    const runId = info?.runId ?? subagentFooterToken(tool.resultText ?? '', 'runId')
+    if (runId !== undefined && runId.startsWith('wf_')) {
+      run = workflowRuns.find((r) => r.conversationId === parentConversationId && r.id === runId)
+    }
+  }
+  const fromRun = run?.nodes?.find((n) => n.worktree !== undefined)?.worktree
+  const fromJson = info?.worktree
+  const fromFooter = worktreeFromFooterToken(subagentFooterToken(tool.resultText ?? '', 'worktree') ?? '')
+  const worktree = fromRun ?? fromJson ?? fromFooter
+  return {
+    ...(run !== undefined ? { run } : {}),
+    ...(worktree !== undefined ? { worktree } : {}),
+    ...(info?.executionId !== undefined ? { executionId: info.executionId } : {}),
+    ...(info?.nodeId !== undefined ? { nodeId: info.nodeId } : {}),
+    ...(info?.effectiveCwd !== undefined ? { effectiveCwd: info.effectiveCwd } : {}),
+  }
 }
 
 // ---------------------------------------------------------------------------

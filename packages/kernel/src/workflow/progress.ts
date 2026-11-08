@@ -10,6 +10,7 @@
  */
 
 import type { WorkflowMeta, WorkflowPhaseMeta } from './meta.js'
+import type { AgentExecutionInfo } from '@helm/protocol'
 
 /** Raw entry lifecycle, as written by the runtime. */
 export type WorkflowEntryState = 'start' | 'progress' | 'done' | 'error'
@@ -44,6 +45,7 @@ export interface WorkflowAgentEntry {
   phaseTitle?: string
   state: WorkflowEntryState
   agentId?: string
+  nodeId?: string
   /** 宿主侧子会话 id（onResolved 回传），检查器凭它打开会话。 */
   conversationId?: number
   /** 外部运行时执行标识（如 Herdr 窗格/标签 ID）。 */
@@ -51,7 +53,7 @@ export interface WorkflowAgentEntry {
   /** 实际生效工作目录（绝对路径；外部执行环境回传或宿主确认）。 */
   effectiveCwd?: string
   /** isolation: 'worktree' 分配的隔离工作树。 */
-  worktree?: { path: string; branch: string }
+  worktree?: AgentExecutionInfo['worktree']
   /** 完整 prompt（审计用；持久面已脱敏）。 */
   prompt?: string
   /** 结构化输出 JSON Schema（脚本声明原样）。 */

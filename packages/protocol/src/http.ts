@@ -42,6 +42,19 @@ export interface ConversationCompactResponse {
   conversation: ConversationSummary
 }
 
+/** `POST /api/conversations/:id/withdraw` 请求体。 */
+export interface ConversationWithdrawRequest {
+  /** 待撤回的排队 submission ID（正整数）。 */
+  submissionId: number
+}
+
+/** `POST /api/conversations/:id/withdraw` 响应。 */
+export interface ConversationWithdrawResponse {
+  status: 'withdrawn' | 'already_placed' | 'settled'
+  /** 若该提交刚进入执行或已结算并分配了条目 ID，则返回对应的 entryId。 */
+  entryId?: number
+}
+
 /** `GET /api/search?q=...` 命中条目。 */
 export interface SearchHit {
   conversationId: number

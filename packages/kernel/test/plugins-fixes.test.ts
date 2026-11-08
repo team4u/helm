@@ -408,6 +408,7 @@ async function makeSuperAgentEnv(): Promise<SuperAgentEnv> {
     dataDir,
     profiles,
     skills,
+    subscribeConversationEntries: () => () => {},
     getConversationDetail: async (id) => ({ ...makeConversation(id), entries: [] }) as never,
     listArtifacts: async () => [],
     abortConversation: async () => {},

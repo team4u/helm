@@ -20,6 +20,8 @@ import type { Context } from '@earendil-works/chord'
 import type { JsonValue } from '@earendil-works/chord'
 import {
   Harness,
+  InboxDoc,
+  LiveDoc,
   ROOT_CONVERSATION_ID,
   createRegistry,
   defineExtension,
@@ -30,10 +32,12 @@ import {
   type Registry,
   type ToolRegistration,
   type ToolExecutionResult,
+  type Tx,
 } from '@earendil-works/pi-durable'
 import { GenerationTask, ToolTask } from '@earendil-works/pi-durable'
 import type {
   AgentExecutionInfo,
+  AgentGateResult,
   AgentSpawnRequest,
   AskCreateSpec,
   AskResult,
@@ -47,11 +51,14 @@ import type {
   ConversationInputResult,
   ConversationPatch,
   ConversationSummary,
+  ConversationWithdrawResponse,
   ExternalTriggerEnvelope,
   InputOrigin,
   WhenBusy,
   ToolResultHookPayload,
   WorkflowRunSummary,
+  WorktreeCleanupRequest,
+  WorktreeCleanupResult,
 } from '@helm/protocol'
 import type { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
 import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT, type MaybePromise, type EnvExecRequest, type EnvExecResponse, type ModelProvidersRefreshResult, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helm/protocol'
@@ -94,7 +101,10 @@ import { HelmStore, type ConvMeta } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { toConversationEntry } from './entries.js'
 import { buildManagedEnv, createBashTool, createEditTool, createReadArtifactTool, createReadTool, createWriteTool, isAbsoluteTargetPath, runGate, runShell } from './tools.js'
-import { runNativeSpawn, THINKING_LEVELS } from './spawn.js'
+import { runNativeSpawn, THINKING_LEVELS, validateJsonSchema } from './spawn.js'
+import { assertSchemaCompilable } from '../plugins/schema.js'
+import { WorktreeAllocator, createCleanupWorktreeTool } from './worktree.js'
+import { gateResultMissingError, sanitizeExecutionInfo, sanitizeGateResult } from '../workflow/spawn-exec.js'
 import { HelmPluginConfigStore } from './plugin-config-store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import { redactJsonValue } from '../redact.js'
@@ -516,6 +526,11 @@ export class KernelRuntime {
   private readonly conversationChanges = new Map<number, Promise<unknown>>()
   private pluginHost: PluginHost | undefined
   private workflowRunner: WorkflowRunnerFn | undefined
+  private backgroundAgentRunner: ((request: AgentSpawnRequest) => Promise<{ run: WorkflowRunSummary; execution?: AgentExecutionInfo }>) | undefined
+  readonly worktrees: WorktreeAllocator
+  /** 包含模型回合、结构化输出修复与 gate；用于阻止清理仍在使用的执行目录。 */
+  private readonly activeSpawnExecutions = new Map<string, AgentExecutionInfo>()
+  private readonly backgroundReportInflight = new Map<string, Promise<void>>()
   /** workflow run 摘要 provider（SSE snapshot 用；缺省 []）。 */
   private workflowRunProvider: () => WorkflowRunSummary[] = () => []
   /** onWorkflowSettled 监听器（app 接线；每 run 终态通知一次）。 */
@@ -542,6 +557,7 @@ export class KernelRuntime {
     { conversationId: number | undefined; result: { output: Array<{ type: 'text'; text: string }>; isError: boolean } }
   >()
   private closed = false
+  private readonly historyEditsInFlight = new Set<number>()
   /** 实际 hub URL（setHubUrl 可更新；工具 env 每次读取最新值）。 */
   private hubUrlValue: string
   private readonly watchdogIntervalMs: number
@@ -794,6 +810,43 @@ export class KernelRuntime {
         return runtimeSelf.cliBinDirValue
       },
     }
+    this.worktrees = new WorktreeAllocator({
+      envFabric: this.envFabric,
+      docStore: this.documentStore,
+      redact: (text) => this.stashService.redact(text),
+      isConversationWorking: (id) => {
+        if (this.store.getConv(id) === undefined) return false
+        const status = this.tracker.summaryOf(id).status
+        return status === 'working' || status === 'blocked'
+      },
+      isPathInUse: (nodeId, path) => {
+        const contains = (cwd: string) => {
+          const windows = /^[A-Za-z]:[\\/]|^\\\\/.test(path)
+          const normalize = (value: string) => {
+            const normalized = value.replaceAll('\\', '/').replace(/\/$/, '')
+            return windows ? normalized.toLowerCase() : normalized
+          }
+          const normalized = normalize(path)
+          const candidate = normalize(cwd)
+          return candidate === normalized || candidate.startsWith(`${normalized}/`)
+        }
+        const leases = this.documentStore.get<Record<string, AgentExecutionInfo>>('runtime/worktree-execution-leases', {})
+        for (const [leaseId, info] of Object.entries(leases)) {
+          if (info.nodeId !== nodeId || info.worktree === undefined || !contains(info.worktree.path)) continue
+          if (!this.activeSpawnExecutions.has(leaseId)) {
+            throw new HelmError('worktree_execution_unknown', '工作树存在重启中断或未确认停止的执行，不能清理；请先检视并续接收尾，或确认停止后在目标节点手动清理 Git 工作树', 409, { nodeId, path, executionId: info.executionId, conversationId: info.conversationId })
+          }
+          return true
+        }
+        return [...this.activeSpawnExecutions.values()].some((info) => info.nodeId === nodeId && info.effectiveCwd !== undefined && contains(info.effectiveCwd)) ||
+          this.listConversations().some((conv) => (conv.nodeId ?? 'local') === nodeId && contains(conv.cwd) && (conv.status === 'working' || conv.status === 'blocked')) ||
+          this.workflowRunProvider().some((run) => run.status === 'running' && run.nodes?.some((node) => {
+            const targetNode = node.nodeId ?? (node.conversationId !== undefined ? this.store.getConv(node.conversationId)?.nodeId : undefined)
+            const cwd = node.effectiveCwd ?? node.worktree?.path
+            return node.status === 'running' && targetNode === nodeId && cwd !== undefined && contains(cwd)
+          }))
+      },
+    })
     this.store.ftsRedact = (t) => this.stashService.redact(t)
 
     // 受管进程 token：仅内存、入全局脱敏（任何落库/模型上下文/日志不可见明文）。
@@ -997,6 +1050,7 @@ export class KernelRuntime {
         this.isArtifactAuthorized(convId, artifactConvId),
       ),
       this.createSubagentTool(),
+      createCleanupWorktreeTool(this.worktrees),
       this.createWorkflowTool(),
       this.createRunActionTool(),
     ].map((tool) => {
@@ -1035,17 +1089,18 @@ export class KernelRuntime {
     return defineTool({
       name: 'subagent',
       description:
-        '派生一个子代理执行任务并等待结果。prompt 为任务指令；agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；可选 schema（JSON Schema，子代理最终输出需满足）、gate（shell 验收命令）、cwd、isolation（worktree）、model（provider/model）、effort。续接时将上次 execution.conversationId 或 execution.executionId 作为 resume。业务 result 与执行元数据独立返回。',
+        '派生一个子代理；默认等待最终结果，background:true 在实际环境就绪后返回 runId，后台完成后向父会话汇报。agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；schema 校验输出，gate 在实际节点和工作目录中验收。支持 cwd、isolation:worktree、model、effort；凭 execution.conversationId/executionId 作为 resume 续接。result 与执行元数据独立；检视或合入后可用 cleanup_worktree 清理受管工作树。',
       parameters: {
         type: 'object',
         properties: {
           prompt: { type: 'string', description: '子代理任务指令' },
           agentType: { type: 'string', description: 'Profile ID 或外部运行时标识（缺省 assistant）' },
           cwd: { type: 'string', description: '子代理工作目录（绝对路径；缺省用 Profile/会话缺省）' },
+          background: { type: 'boolean', description: '执行环境就绪后返回运行句柄，后台完成后向父会话汇报（默认 false）' },
           isolation: {
             type: 'string',
             enum: ['worktree'],
-            description: '隔离模式（可选；worktree 需要支持隔离执行的外部运行时插件接管，例如 herdr）',
+            description: '在目标节点分配独立 Git Worktree；原生执行与支持此能力的运行时插件均可用',
           },
           schema: { type: 'object', description: '结构化输出 JSON Schema（可选）' },
           gate: { type: 'string', description: '验收 shell 命令（可选，exit≠0 失败）' },
@@ -1065,6 +1120,9 @@ export class KernelRuntime {
         type: 'object',
         properties: {
           ok: { type: 'boolean' },
+          background: { type: 'boolean' },
+          runId: { type: 'string' },
+          status: { type: 'string' },
           result: {},
           execution: {
             type: 'object',
@@ -1121,7 +1179,10 @@ export class KernelRuntime {
         // 前端在 subagent 运行期即可实时关联子会话（无需等工具返回）。
         const parentCallId = (api as { conversationId: number; callId?: string }).callId
         try {
-          const result = await runtime.spawnAgent({
+          if (args['background'] !== undefined && typeof args['background'] !== 'boolean') {
+            throw new HelmError('validation_error', 'background 必须为 boolean', 400)
+          }
+          const request: AgentSpawnRequest = {
             parentConversationId: api.conversationId,
             ...(typeof parentCallId === 'string' && parentCallId !== ''
               ? { parentToolCallId: parentCallId }
@@ -1142,32 +1203,48 @@ export class KernelRuntime {
               resolved = info
             },
             signal: context.abortSignal,
-          })
+          }
+          if (args['background'] === true) {
+            if (runtime.backgroundAgentRunner === undefined) {
+              throw new HelmError('unsupported_runtime', '后台子代理运行服务尚未挂接', 503)
+            }
+            const started = await runtime.backgroundAgentRunner(request)
+            const payload = {
+              ok: true, background: true, runId: started.run.id, status: started.run.status,
+              ...(started.execution !== undefined ? { execution: executionOf(started.execution) } : {}),
+            }
+            const footer = runtime.stash.redact(subagentFooter(undefined, started.execution))
+            return {
+              output: [{ type: 'text', text: `${safeResultText(payload, (text) => runtime.stash.redact(text))}${footer === '' ? '' : `\n${footer}`}` }],
+              structuredOutput: redactJsonValue(payload, (text) => runtime.stash.redact(text)) as JsonValue,
+            }
+          }
+          const result = await runtime.spawnAgent(request)
           // 元数据独立于业务 result 回报：文本尾行带续接标识（模型可复制为 resume）。
-          const body = safeResultText(result, (text) => runtime.stash.redact(text))
-          const footer = subagentFooter(args['resume'] !== undefined ? String(args['resume']) : undefined, resolved)
+          const payload = {
+            ok: true, result,
+            ...(resolved !== undefined ? { execution: executionOf(resolved) } : {}),
+          }
+          const body = safeResultText(payload, (text) => runtime.stash.redact(text))
+          const footer = runtime.stash.redact(subagentFooter(args['resume'] !== undefined ? String(args['resume']) : undefined, resolved))
           return {
             output: [{ type: 'text', text: footer === '' ? body : `${body}\n${footer}` }],
-            structuredOutput: {
-              ok: true,
-              result: result as JsonValue,
-              ...(resolved !== undefined ? { execution: executionOf(resolved) } : {}),
-            } as JsonValue,
+            structuredOutput: redactJsonValue(payload, (text) => runtime.stash.redact(text)) as JsonValue,
           }
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
+          const message = runtime.stash.redact(error instanceof Error ? error.message : String(error))
           // 失败也可能发生在子会话已创建/已回传元数据之后（resume 已更新
           // parentToolCallId）：附同一 footer + execution，失败卡仍可持续查看
           // 子会话，不与真实关联失联。isError / ok:false 语义不变。
-          const footer = subagentFooter(args['resume'] !== undefined ? String(args['resume']) : undefined, resolved)
+          const footer = runtime.stash.redact(subagentFooter(args['resume'] !== undefined ? String(args['resume']) : undefined, resolved))
           return {
             output: [{ type: 'text', text: footer === '' ? `subagent_failed: ${message}` : `subagent_failed: ${message}\n${footer}` }],
             isError: true,
-            structuredOutput: {
+            structuredOutput: redactJsonValue({
               ok: false,
               result: message,
               ...(resolved !== undefined ? { execution: executionOf(resolved) } : {}),
-            } as JsonValue,
+            }, (text) => runtime.stash.redact(text)) as JsonValue,
           }
         }
       },
@@ -1341,6 +1418,21 @@ export class KernelRuntime {
       })
     }, this.watchdogIntervalMs)
     this.watchdogTimer.unref()
+  }
+
+  /** 恢复运行服务用：先持久标记旧任务取消，不唤醒 SDK 全局调度器。 */
+  async prepareInterruptedConversations(ids: number[]): Promise<void> {
+    const targets = new Set(ids)
+    const inspection = await this.harness.inspect(BACKGROUND_CONTEXT)
+    if (inspection.scheduling !== 'paused') {
+      throw new HelmError('recovery_already_started', '必须在调度器恢复之前标记中断子代理，拒绝不安全的恢复顺序', 409)
+    }
+    for (const task of inspection.tasks) {
+      if (targets.has(task.record.conversationId as number)) {
+        // SDK abortTask 仅提交取消标记，不像 Conversation.abort()/submit() 那样 resume。
+        await this.harness.abortTask(task.record.id, BACKGROUND_CONTEXT)
+      }
+    }
   }
 
   /** 更新实际 hub URL（startHub(port:0) 拿到真实端口后调用；工具 env 即时生效）。 */
@@ -2376,7 +2468,13 @@ export class KernelRuntime {
 
   /**
    * 会话详情（摘要 + 分页时间线）：
-   * - 默认最新 100 条，SDK descending 取页后 reverse 为显示（升序）顺序；
+   * - 服务端统一过滤被 helm.rewind 覆盖的旧条目（闭区间 [fromEntryId,
+   *   throughEntryId]），但保留
+   *   helm.rewind 元数据条目本身（前端 SSE 与分页过滤共用同一区间公式）；
+   * - 每次详情读时扫描汇总全部 rewind 区间（简单实现，不加新持久表/缓存），
+   *   再从 SDK raw cursor 分页读取，过滤覆盖条目直到满足 limit 或无更多；
+   *   SDK page 按 remaining 取不会跳过有效记录，nextCursor 继续真实 SDK
+   *   cursor；分叉会话按本 fork 可见范围（SDK entries 天然 fork-aware）读取；
    * - cursor 是 base64url(JSON{conversationId,cursor:SDK next})：绑定会话、
    *   长度/JSON 合法性校验、limit 钳制 1..500；不静默截断；
    * - entry 保留 model 消息与 data，出界前经事件同源脱敏（发布路径统一）。
@@ -2399,16 +2497,73 @@ export class KernelRuntime {
     if (options?.cursor !== undefined) {
       sdkCursor = this.decodeDetailCursor(id, options.cursor)
     }
-    // SDK descending（最新在前）取页，再 reverse 为时间正序（展示顺序）。
-    const page = await conversation.entries({ order: 'descending' }, limit, sdkCursor as never, BACKGROUND_CONTEXT)
-    const entries = [...page.items]
+
+    // 汇总本会话全部 rewind 区间（全量扫描，接受 O(n) 简单实现）。
+    const rewindCuts = await this.collectRewindIntervals(conversation)
+
+    // SDK descending（最新在前）分页读取，过滤被覆盖条目直到满足 limit 或无更多。
+    // 每次精确取 remaining 条：SDK cursor 位于整页之后，多取会把未消费条目
+    // 留在 cursor 后面丢失；过滤导致的不足额页继续翻页补齐。
+    const collected: Array<{ id: number; kind: string; model?: readonly unknown[]; data?: unknown }> = []
+    let nextCursor: unknown = undefined
+    for (;;) {
+      const remaining = limit - collected.length
+      const page = await conversation.entries(
+        { order: 'descending' },
+        remaining,
+        sdkCursor as never,
+        BACKGROUND_CONTEXT,
+      )
+      for (const raw of page.items as never as Array<{
+        id: number
+        kind: string
+        model?: readonly unknown[]
+        data?: unknown
+      }>) {
+        // rewind 标记自身保留（SSE 一致性与前端区间去重需要），其余落入
+        // 覆盖区间的旧条目全部隐藏。
+        const numericId = Number(raw.id)
+        if (raw.kind !== 'helm.rewind' && coveredByRewind(numericId, rewindCuts)) continue
+        collected.push(raw)
+      }
+      if (page.next === undefined) {
+        nextCursor = undefined
+        break
+      }
+      if (collected.length >= limit) {
+        nextCursor = page.next
+        break
+      }
+      sdkCursor = page.next
+    }
+
+    const entries = collected
       .reverse()
       .map((raw) => toConversationEntry(raw as { id: number; kind: string }))
     return {
       ...summary,
       entries,
-      ...(page.next !== undefined ? { nextCursor: this.encodeDetailCursor(id, page.next) } : {}),
+      ...(nextCursor !== undefined ? { nextCursor: this.encodeDetailCursor(id, nextCursor as Readonly<Record<string, unknown>>) } : {}),
     }
+  }
+
+  /** 扫描会话全量 raw entries，汇总全部 rewind 覆盖区间（详情投影用）。 */
+  private async collectRewindIntervals(
+    conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
+  ): Promise<RewindInterval[]> {
+    const intervals: RewindInterval[] = []
+    let cursor: unknown = undefined
+    for (;;) {
+      const page = await conversation.entries({ order: 'ascending' }, 100, cursor as never, BACKGROUND_CONTEXT)
+      for (const raw of page.items as never as Array<{ id: number | string; kind: string; data?: unknown }>) {
+        if (raw.kind !== 'helm.rewind') continue
+        const interval = rewindIntervalOf(raw)
+        if (interval !== undefined) intervals.push(interval)
+      }
+      if (page.next === undefined) break
+      cursor = page.next
+    }
+    return intervals
   }
 
   /** 编码分页 cursor：base64url(JSON{conversationId,cursor})。 */
@@ -2726,6 +2881,17 @@ export class KernelRuntime {
     }
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (conversation) await conversation.abort(BACKGROUND_CONTEXT)
+    const worktree = this.worktrees.getForConversation(id)
+    if (worktree?.status === 'active') {
+      try {
+        await this.cleanupWorktree({ worktreeId: worktree.id })
+      } catch (error) {
+        this.events.publish('notification', {
+          level: 'warning', title: '工作树已保留',
+          body: this.stashService.redact(`会话 ${id} 删除时未回收工作树 ${worktree.path}：${error instanceof Error ? error.message : String(error)}。检视后可调用 cleanup_worktree({ worktreeId: ${JSON.stringify(worktree.id)} })。`),
+        })
+      }
+    }
     // 级联取消等待真实落盘；IO 失败必须向上 reject（阻止后续删除副作用），
     // 绝不吞错很成功。
     await this.asks.cancelByConversation(id)
@@ -2751,6 +2917,12 @@ export class KernelRuntime {
    * 提交输入：input hook（transform 生效——text/origin/whenBusy/id 全部取最终
    * payload；conversationId 被 transform 视为身份违规拒绝）-> SDK submit。
    * whenBusy 省略时在钩子链之后应用有效默认 steer（插话引导）。
+   *
+   * replaceFromEntryId：从指定历史条目起原地覆盖重发——先做边界校验（存在/
+   * 活跃上下文内/未被覆盖），abort 在途回合后写入 helm.rewind 截断标记
+   *（EntryDraft.edits omit 被覆盖条目，保留 baseline pi.system），清理 FTS
+   * 派生索引，再提交新输入（此时会话已 idle，followUp 安全）。绝不直接
+   * DELETE pi_entries：截断全部经 pi-durable 原生 edits 语义。
    */
   async submitInput(
     id: number,
@@ -2760,6 +2932,9 @@ export class KernelRuntime {
       whenBusy?: WhenBusy
       meta?: Record<string, unknown>
       attachments?: string[]
+      replaceFromEntryId?: number
+      /** 内部完成回报的持久幂等键；HTTP 输入不开放此字段。 */
+      requestId?: string
     },
   ): Promise<{ submissionId: string }> {
     if (this.closed) throw new HelmError('runtime_closed', '内核正在关闭，拒绝提交新输入', 503)
@@ -2778,6 +2953,55 @@ export class KernelRuntime {
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
 
+    // 原地覆盖前置边界校验（先于 abort 与 input hook：非法参数不得误杀在途回合）。
+    let replaceFromEntryId: number | undefined
+    if (opts?.replaceFromEntryId !== undefined) {
+      const raw = opts.replaceFromEntryId
+      if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw <= 0) {
+        throw new HelmError(
+          'validation_error',
+          `replaceFromEntryId 需为安全正整数（收到 ${String(raw)}）`,
+          400,
+          { conversationId: id, replaceFromEntryId: raw },
+        )
+      }
+      replaceFromEntryId = raw
+      // 条目存在性精确校验（min=max=entryId 取 1 条；不存在 404）。
+      const page = await conversation.entries(
+        { minEntryId: raw as never, maxEntryId: raw as never, order: 'ascending' },
+        1,
+        undefined,
+        BACKGROUND_CONTEXT,
+      )
+      if (page.items.length === 0 || Number((page.items[0] as { id: number }).id) !== raw) {
+        throw new HelmError('not_found', `条目 ${raw} 在会话 ${id} 中不存在`, 404, {
+          conversationId: id,
+          entryId: raw,
+        })
+      }
+      // 编辑目标限定人类输入：agent/trigger 注入、assistant/控制条目不可编辑。
+      assertEditableHumanInput(page.items[0] as { kind: string; data?: unknown }, id, raw)
+      const preCtx = await conversation.context(BACKGROUND_CONTEXT)
+      if (!preCtx.entries.some((e) => Number(e.id) === raw)) {
+        throw new HelmError(
+          'entry_before_context_head',
+          `条目 ${raw} 位于最近一次重置或压缩之前，无法原地覆盖，请使用分叉（fork）`,
+          409,
+          { conversationId: id, entryId: raw },
+        )
+      }
+      const rewound = preCtx.entries.some((e) => {
+        const interval = rewindIntervalOf(e as unknown as { id: number | string; kind: string; data?: unknown })
+        return interval !== undefined && raw >= interval.from && raw <= interval.through
+      })
+      if (rewound) {
+        throw new HelmError('entry_already_rewound', `条目 ${raw} 已被此前的重发覆盖`, 409, {
+          conversationId: id,
+          entryId: raw,
+        })
+      }
+    }
+
     // 初始附件：提交时先解析存在性与父链授权（越权 403 / 不存在 404）。
     const initialAttachments =
       opts?.attachments !== undefined && opts.attachments.length > 0
@@ -2785,7 +3009,10 @@ export class KernelRuntime {
         : undefined
 
     const origin: InputOrigin = opts?.origin ?? 'human'
-    const inputId = randomUUID()
+    if (opts?.requestId !== undefined && (typeof opts.requestId !== 'string' || opts.requestId.trim() === '')) {
+      throw new HelmError('validation_error', '内部 requestId 必须为非空字符串', 400)
+    }
+    const inputId = opts?.requestId ?? randomUUID()
     const createdAt = Date.now()
     // 边界脱敏：meta 值经 stash redact 后入库（受管 Token 等绝不经 meta 透传）。
     // text 原样交给 input 钩子（hook 可感知/改写原始输入），最终消费前统一脱敏。
@@ -2876,6 +3103,34 @@ export class KernelRuntime {
         ? await this.buildAttachmentContent(effectiveText, resolvedAttachments)
         : effectiveText
 
+    // 原地覆盖重发：异步准备（abort 在途回合 + 挂起 Ask 销单）后，rewind 截断
+    // 与新输入在同一个 SDK commit 内原子落库（成则俱成、败则俱败，绝无半完成
+    // 的 rewind 或排队变体）。事务内核实空闲后以 whenBusy:'reject' 提交，
+    // 任何并发进入显式 409 拒绝，绝不悄悄排队。
+    if (replaceFromEntryId !== undefined) {
+      finalInput = { ...finalInput, whenBusy: 'reject' }
+      const targetId = replaceFromEntryId
+      return this.withHistoryEdit(id, async () => {
+        // input 钩子可能挂起很久；陈旧编辑不得先中止另一编辑刚启动的新回合。
+        const current = await conversation.context(BACKGROUND_CONTEXT)
+        if (!current.entries.some((entry) => Number(entry.id) === targetId)) {
+          throw new HelmError('entry_before_context_head', '编辑目标已离开当前上下文，请重新选择消息', 409)
+        }
+        if (current.entries.some((entry) => {
+          const cut = rewindIntervalOf(entry)
+          return cut !== undefined && targetId >= cut.from && targetId <= cut.through
+        })) {
+          throw new HelmError('entry_already_rewound', `条目 ${targetId} 已被此前的重发覆盖`, 409)
+        }
+        return this.rewriteConversationFrom(id, conversation, targetId, {
+          finalInput,
+          effectiveText,
+          resolvedAttachments,
+          content,
+        })
+      })
+    }
+
     const key = this.tracker.registerInput(id, finalInput)
     try {
       const submission = await conversation.submit(
@@ -2899,7 +3154,7 @@ export class KernelRuntime {
                 : {}),
             } as unknown as JsonValue,
           },
-          requestId: finalInput.id,
+          requestId: opts?.requestId ?? finalInput.id,
         },
         BACKGROUND_CONTEXT,
       )
@@ -3066,6 +3321,319 @@ export class KernelRuntime {
     this.evictHandledToolCalls(id)
   }
 
+  private async withHistoryEdit<T>(id: number, operation: () => Promise<T>): Promise<T> {
+    if (this.historyEditsInFlight.has(id)) {
+      throw new HelmError('conversation_busy', `会话 ${id} 正在更新历史消息，请稍后重试`, 409)
+    }
+    this.historyEditsInFlight.add(id)
+    try {
+      return await operation()
+    } finally {
+      this.historyEditsInFlight.delete(id)
+    }
+  }
+
+  /**
+   * 原地覆盖重发的原子提交（submitInput replaceFromEntryId 路径）：
+   * 1. 异步准备：abort 在途回合（SDK abort 同时撤回其他 queued inputs，
+   *    为本次明确语义）并等待 idle，挂起 Ask 逐个销单 superseded（错误如实
+   *    上抛，绝不吞错伪成功）；
+   * 2. 单个 SDK commit 内完成全部核验与写入：经 tx reads（LiveDoc / InboxDoc /
+   *    latestHeadMarker / scanEntries）重新核实 run / compactions / queue 空
+   *    （任一不空显式 409，绝不把 rewind 变成排队）、目标仍为活跃上下文内
+   *    未被覆盖的人类输入；随后 conversation.submit(tx, input) 与
+   *    tx.appendEntry(helm.rewind) 同批落库——成则俱成、败则俱败；
+   *    （commit 回调内禁止 conversation.context()/harness 读等会死锁的接口）
+   * 3. 事务后清理：精确删除被覆盖条目的 FTS 键并等待落盘（错误传播）、
+   *    失效落入覆盖区间的 lastAssistant 缓存、推进 stateChangeSeq。
+   *
+   * 区间契约：helm.rewind.data 声明闭区间 [fromEntryId, throughEntryId]，
+   * throughEntryId 为本事务前尾部（PRE_TRANSACTION_TAIL_ID）；新输入条目
+   * ID 必然更大，绝不会被自家区间误删。既有 rewind 标记与 baseline
+   * pi.system 保留（不 omit）；model messages 被省略由 SDK 原生 edits 负责。
+   */
+  private async rewriteConversationFrom(
+    id: number,
+    conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
+    replaceFromEntryId: number,
+    newInput: {
+      finalInput: ConversationInput
+      effectiveText: string
+      resolvedAttachments?: Array<{ ref: ConversationAttachmentRef; absPath: string }>
+      content: string | Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>
+    },
+  ): Promise<{ submissionId: string }> {
+    // 异步准备阶段（事务外）：用户已授权历史编辑中止当前回合。
+    if (this.tracker.hasLiveWork(id)) {
+      await this.abortConversation(id)
+      await conversation.waitForIdle(BACKGROUND_CONTEXT)
+      await this.tracker.waitTurnSettled(id)
+    }
+    // 挂起 Ask 销单为 superseded：被覆盖回合的审批卡不再有效；
+    // 取消失败如实上抛（诚实纪律：绝不 .catch 吞错）。
+    const pendingAsks = this.asks.listPendingByConversation(id)
+    await Promise.all(pendingAsks.map((ask) => this.asks.cancelAsk(ask.id, 'superseded')))
+
+    const createdAt = Date.now()
+    // coveredRange 从事务内返回：事务外精确清理 FTS 旧键并失效落入区间的
+    // lastAssistant 缓存（绝不触碰新输入/新回答的键）。
+    const { submissionId, covered, ftsKeys } = await conversation.commit(async (tx) => {
+      // —— 事务内重新核实（全部 tx reads，先于任何 table write）——
+      const live = await tx.doc(LiveDoc, id as never)
+      if (live.run !== undefined) {
+        throw new HelmError(
+          'conversation_busy',
+          `会话 ${id} 存在活跃回合，拒绝原地覆盖重发（不排队）`,
+          409,
+          { conversationId: id, replaceFromEntryId },
+        )
+      }
+      if ((live.compactions?.length ?? 0) > 0) {
+        throw new HelmError(
+          'conversation_busy',
+          `会话 ${id} 存在进行中的压缩任务，拒绝原地覆盖重发`,
+          409,
+          { conversationId: id, replaceFromEntryId },
+        )
+      }
+      const inbox = await tx.doc(InboxDoc, id as never)
+      if (inbox.items.length > 0) {
+        throw new HelmError(
+          'conversation_busy',
+          `会话 ${id} 存在 ${inbox.items.length} 项排队提交，拒绝原地覆盖重发（不排队）`,
+          409,
+          { conversationId: id, replaceFromEntryId },
+        )
+      }
+
+      const headMarker = await tx.latestHeadMarker(id as never)
+      const latestIdRaw = await tx.latestEntryId(id as never)
+      if (latestIdRaw === undefined) {
+        throw new HelmError('not_found', `条目 ${replaceFromEntryId} 在会话 ${id} 中不存在`, 404, {
+          conversationId: id,
+          entryId: replaceFromEntryId,
+        })
+      }
+      const tailId = Number(latestIdRaw)
+      if (replaceFromEntryId > tailId) {
+        throw new HelmError('not_found', `条目 ${replaceFromEntryId} 在会话 ${id} 中不存在`, 404, {
+          conversationId: id,
+          entryId: replaceFromEntryId,
+        })
+      }
+      const headLowerBound = headMarker !== undefined ? Number(headMarker.head) : 0
+      if (replaceFromEntryId < headLowerBound) {
+        throw new HelmError(
+          'entry_before_context_head',
+          `条目 ${replaceFromEntryId} 位于最近一次重置或压缩之前，无法原地覆盖，请使用分叉（fork）`,
+          409,
+          { conversationId: id, entryId: replaceFromEntryId },
+        )
+      }
+
+      // 采集目标及之后的 raw entries（fork 可见范围）：重发边界、既有 rewind
+      // 区间、baseline pi.system 与 omit 清单全部以 raw entries 为准（不依赖
+      // context.entries，避免旧 omitted metadata 干扰）。
+      const tailEntries: Array<{ id: number | string; kind: string; data?: unknown }> = []
+      let scanCursor: unknown = undefined
+      for (;;) {
+        const page = await tx.scanEntries(
+          {
+            conversationId: id as never,
+            minEntryId: replaceFromEntryId as never,
+            order: 'ascending',
+          },
+          200,
+          scanCursor as never,
+        )
+        for (const raw of page.items as never as Array<{ id: number | string; kind: string; data?: unknown }>) {
+          tailEntries.push(raw)
+        }
+        if (page.next === undefined) break
+        scanCursor = page.next
+      }
+
+      const target = tailEntries.find((e) => Number(e.id) === replaceFromEntryId)
+      if (target === undefined) {
+        throw new HelmError('not_found', `条目 ${replaceFromEntryId} 在会话 ${id} 中不存在`, 404, {
+          conversationId: id,
+          entryId: replaceFromEntryId,
+        })
+      }
+      assertEditableHumanInput(target, id, replaceFromEntryId)
+      // 既有 rewind 区间重核（异步准备期间可能有并发写入）。
+      const rewound = tailEntries.some((e) => {
+        const interval = rewindIntervalOf(e)
+        return interval !== undefined && replaceFromEntryId >= interval.from && replaceFromEntryId <= interval.through
+      })
+      if (rewound) {
+        throw new HelmError('entry_already_rewound', `条目 ${replaceFromEntryId} 已被此前的重发覆盖`, 409, {
+          conversationId: id,
+          entryId: replaceFromEntryId,
+        })
+      }
+
+      // baseline pi.system：head 标记之后首条（findBaseline 同一语义）；
+      // 目标区间内命中时保留，确保系统提示词始终在 messages[0]。
+      const headMarkerId = headMarker !== undefined ? Number(headMarker.id) : 0
+      let baselineSystemNumericId: number | undefined
+      let baselineCursor: unknown = undefined
+      for (;;) {
+        const page = await tx.scanEntries(
+          { conversationId: id as never, minEntryId: (headMarkerId + 1) as never, order: 'ascending' },
+          200,
+          baselineCursor as never,
+        )
+        const baseline = page.items.find((entry) => entry.kind === 'pi.system')
+        if (baseline !== undefined) {
+          baselineSystemNumericId = Number(baseline.id)
+          break
+        }
+        if (page.next === undefined) break
+        baselineCursor = page.next
+      }
+
+      const omittedEntryIds: number[] = []
+      const omittedInputIds: string[] = []
+      const ftsKeys: string[] = []
+      for (const e of tailEntries) {
+        const numericId = Number(e.id)
+        // 覆盖区间内全部旧条目的精确 FTS 键（含被保留的 baseline system 与
+        // rewind 标记本身——它们本就无索引文本，删不删都不影响，但统一采集
+        // 避免 tailEntries 与清理清单两套逻辑）。
+        ftsKeys.push(`entry:${String(e.id)}`)
+        if (e.kind === 'helm.input') {
+          const inputId = (e.data as { id?: unknown } | undefined)?.id
+          if (typeof inputId === 'string' && inputId !== '') {
+            ftsKeys.push(`input:${inputId}`)
+            omittedInputIds.push(inputId)
+          }
+        }
+        // 编辑目标本身必须 omit（闭区间含 from 边界）；既有 rewind 标记与
+        // baseline pi.system 保留。
+        if (e.kind === 'helm.rewind') continue
+        if (numericId === baselineSystemNumericId) continue
+        omittedEntryIds.push(numericId)
+      }
+
+      // 提交新输入（whenBusy 'reject'：任何并发进入在此显式失败，绝不排队）。
+      // submit(tx, draft) 必须先于本事务首个 table write。
+      const inputDraft = {
+        type: 'input' as const,
+        content: newInput.content,
+        whenBusy: 'reject' as const,
+        entry: {
+          kind: 'helm.input',
+          data: {
+            id: newInput.finalInput.id,
+            text: newInput.effectiveText,
+            origin: newInput.finalInput.origin,
+            createdAt: newInput.finalInput.createdAt,
+            whenBusy: 'reject',
+            ...(newInput.finalInput.meta !== undefined ? { meta: newInput.finalInput.meta } : {}),
+            ...(newInput.resolvedAttachments !== undefined
+              ? { attachments: newInput.resolvedAttachments.map((r) => r.ref) }
+              : {}),
+          } as unknown as JsonValue,
+        },
+        requestId: newInput.finalInput.id,
+      }
+      const submissionId = await conversation.submit(tx, inputDraft)
+
+      // rewind 截断标记：闭区间 [replaceFromEntryId, tailId]，新输入条目 ID
+      // 已由上方 submit 分配（必然 > tailId），不会被自家 edits 误删。
+      const edits = omittedEntryIds.map((target2) => ({ target: target2 as never, action: 'omit' as const }))
+      await tx.appendEntry(id as never, {
+        kind: 'helm.rewind',
+        data: {
+          fromEntryId: replaceFromEntryId,
+          throughEntryId: tailId,
+          omittedEntryIds,
+          omittedInputIds,
+          createdAt,
+        } as unknown as JsonValue,
+        ...(edits.length > 0 ? { edits } : {}),
+      })
+      return {
+        submissionId,
+        covered: { from: replaceFromEntryId, through: tailId },
+        ftsKeys,
+      }
+    }, BACKGROUND_CONTEXT)
+
+    // 事务已落库：登记 tracker（commit 观察路径可能已按 req: 键先行登记，
+    // bindSubmission 会合并为唯一记录，失败则 drop 撤销，绝不留下孤儿登记）。
+    const key = this.tracker.registerInput(id, newInput.finalInput)
+    try {
+      this.tracker.bindSubmission(id, key, Number(submissionId))
+    } catch (error) {
+      this.tracker.dropInput(id, key)
+      throw error
+    }
+
+    // 事务外清理：只删事务内核实的精确旧 FTS 键（entry:<id> / input:<requestId>），
+    // 观察者新输入/新回答入索引不受影响（遇 helm.rewind 停止回扫，旧回答不复燃）；
+    // 落盘错误由尾链统一冲刷传播（flushPublic / search 读路径如实抛出）。
+    // 失效落入覆盖区间的 lastAssistant 缓存：新回答失败时
+    // getLastAssistantText 不得返回已被覆盖的旧答案。
+    this.store.removeFtsEntries(id, ftsKeys)
+    this.tracker.invalidateLastAssistantWithin(id, covered.from, covered.through)
+    const meta = this.store.getConv(id)
+    if (meta) {
+      this.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
+    }
+    return { submissionId: String(submissionId) }
+  }
+
+  /**
+   * 撤回排队中的输入（POST /api/conversations/:id/withdraw）：先经
+   * harness.submission status 核实身份（属于本会话且 type=input——write
+   * 提交的撤回副作用不属于本接口语义），再复用 SDK abortSubmission 原生
+   * 语义（queued -> unanswered(aborted) 并移出 pi.inbox）；placed/settled
+   * 如实返回，不伪装撤回成功。
+   */
+  async withdrawQueuedInput(id: number, opts: { submissionId: number }): Promise<ConversationWithdrawResponse> {
+    if (this.closed) throw new HelmError('runtime_closed', '内核正在关闭，拒绝撤回', 503)
+    if (!this.store.getConv(id)) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    const raw = opts.submissionId
+    if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw <= 0) {
+      throw new HelmError('validation_error', `submissionId 需为安全正整数（收到 ${String(raw)}）`, 400, {
+        conversationId: id,
+        submissionId: raw,
+      })
+    }
+    // 身份先于 abort：核实提交存在、属于本会话且为 input 提交。
+    const sub = await this.harness.submission(raw as never, BACKGROUND_CONTEXT)
+    const rec = sub ? ((await sub.status(BACKGROUND_CONTEXT)) as { conversationId?: unknown; type?: string; entry?: number; requestId?: string }) : undefined
+    if (
+      rec === undefined ||
+      String(rec.conversationId) !== String(id) ||
+      rec.type !== 'input'
+    ) {
+      throw new HelmError('not_found', `提交 ${raw} 在会话 ${id} 中不存在`, 404, {
+        conversationId: id,
+        submissionId: raw,
+      })
+    }
+    const outcome = await this.harness.abortSubmission(raw as never, BACKGROUND_CONTEXT, id as never)
+    if (outcome === 'not_found') {
+      throw new HelmError('not_found', `提交 ${raw} 在会话 ${id} 中不存在`, 404, {
+        conversationId: id,
+        submissionId: raw,
+      })
+    }
+    if (outcome === 'aborted') {
+      this.tracker.dropSubmission(id, raw, rec.requestId)
+      return { status: 'withdrawn' }
+    }
+    // 提交可能在首次读取后刚进入执行，以撤回判定后的权威状态返回 entryId。
+    const latest = await sub!.status(BACKGROUND_CONTEXT)
+    return {
+      status: outcome,
+      ...('entry' in latest && typeof latest.entry === 'number' ? { entryId: latest.entry } : {}),
+    }
+  }
+
   /** 内核关闭守卫（上下文操作共用）。 */
   private assertNotClosedForContextOp(): void {
     if (this.closed) throw new HelmError('runtime_closed', '内核正在关闭', 503)
@@ -3217,6 +3785,84 @@ export class KernelRuntime {
 
   /** 子代理派生：agent_spawn hook -> 默认原生 subagent（transform 传最终 payload）。 */
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
+    if (request.schema !== undefined) assertSchemaCompilable(request.schema)
+    const token = randomUUID()
+    let succeeded = false
+    if (request.resume !== undefined) {
+      const resumeId = /^\d+$/.test(request.resume) ? Number(request.resume) : this.agentSessions.get(request.resume)
+      const child = resumeId !== undefined ? this.store.getConv(resumeId) : undefined
+      if (child !== undefined && child.parentConversationId === request.parentConversationId) {
+        if ([...this.activeSpawnExecutions.values()].some((info) => info.conversationId === resumeId)) {
+          throw new HelmError('subagent_in_use', `子会话 ${resumeId} 仍有在途执行，不能并发续接`, 409)
+        }
+        this.activeSpawnExecutions.set(token, { conversationId: resumeId, nodeId: child.nodeId ?? 'local', effectiveCwd: child.cwd })
+      }
+    }
+    const originalResolved = request.onResolved
+    let execution: AgentExecutionInfo | undefined
+    let gate: AgentGateResult | undefined
+    const observed: AgentSpawnRequest = {
+      ...request,
+      onResolved: (raw) => {
+        const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
+        info.nodeId ??= info.conversationId !== undefined ? this.store.getConv(info.conversationId)?.nodeId : undefined
+        if (request.isolation === 'worktree' && info.worktree === undefined) {
+          throw new HelmError('unsupported_runtime', '执行方未兑现请求的 worktree 隔离，拒绝按非隔离任务继续', 502)
+        }
+        if (info.worktree !== undefined) {
+          if (info.nodeId === undefined) throw new HelmError('execution_info_invalid', '隔离工作树必须回传实际 nodeId，不能推测外部运行时的节点', 502)
+          const managed = this.worktrees.findActive({ path: info.worktree.path, nodeId: info.nodeId }) ?? this.worktrees.registerExternal({
+            nodeId: info.nodeId, path: info.worktree.path, branch: info.worktree.branch,
+            parentConversationId: request.parentConversationId,
+            ...(info.conversationId !== undefined ? { conversationId: info.conversationId } : {}),
+            ...(info.executionId !== undefined ? { executionId: info.executionId } : {}),
+          })
+          info.worktree = { ...info.worktree, id: managed.id, ...(managed.repoRoot !== '' ? { repoRoot: managed.repoRoot } : {}), ...(managed.baseCommit !== '' ? { baseCommit: managed.baseCommit, dirtySource: managed.dirtySource } : {}) }
+        }
+        execution = info
+        this.activeSpawnExecutions.set(token, info)
+        if (info.worktree !== undefined) {
+          const leases = this.documentStore.get<Record<string, AgentExecutionInfo>>('runtime/worktree-execution-leases', {})
+          this.documentStore.set('runtime/worktree-execution-leases', { ...leases, [token]: info })
+        }
+        originalResolved?.(info)
+      },
+      onGateResult: (raw) => {
+        gate = sanitizeGateResult(raw, { agentId: request.agentId ?? 'subagent' })
+        request.onGateResult?.(gate)
+      },
+    }
+    try {
+      const result = await this.spawnAgentObserved(observed)
+      if (request.schema !== undefined) {
+        const validation = validateJsonSchema(result, request.schema)
+        if (!validation.ok) throw new HelmError('schema_validation_failed', `子代理最终结果未满足 Schema：${validation.errors.join('; ')}`, 502)
+      }
+      if (request.isolation === 'worktree' && execution?.worktree === undefined) {
+        throw new HelmError('unsupported_runtime', '执行方未回传请求的隔离工作树，不能报告成功', 502)
+      }
+      if (request.gate !== undefined && execution?.executionId !== undefined && gate === undefined) {
+        throw gateResultMissingError({ agentId: request.agentId ?? 'subagent', executionId: execution.executionId, command: request.gate })
+      }
+      if (gate !== undefined && !gate.ok) throw new HelmError('gate_failed', `子代理验收命令失败：${gate.output}`, 502)
+      succeeded = true
+      return result
+    } finally {
+      if (execution?.worktree !== undefined && (succeeded || execution.executionId === undefined)) {
+        const leases = this.documentStore.get<Record<string, AgentExecutionInfo>>('runtime/worktree-execution-leases', {})
+        const updated = Object.fromEntries(Object.entries(leases).filter(([key, info]) => {
+          if (key === token) return false
+          if (info.nodeId !== execution!.nodeId) return true
+          if (execution!.conversationId !== undefined) return info.conversationId !== execution!.conversationId
+          return info.executionId !== execution!.executionId
+        }))
+        this.documentStore.set('runtime/worktree-execution-leases', updated)
+      }
+      this.activeSpawnExecutions.delete(token)
+    }
+  }
+
+  private async spawnAgentObserved(request: AgentSpawnRequest): Promise<unknown> {
     // 附件门禁在进入 hook 链之前：agent_spawn 钩子与原生执行行均受统一授权
     // 保护（产物存在 + 父会话链归属）；transform 改写后再校验一次。
     if (request.attachments !== undefined && request.attachments.length > 0) {
@@ -3248,11 +3894,15 @@ export class KernelRuntime {
         },
         resolveThinkingLevel: () => this.defaultThinkingLevel,
         agentSessions: this.agentSessions,
+        worktrees: this.worktrees,
+        assertNodeAvailable: (nodeId) => {
+          if (!this.envFabric.isOnline(nodeId)) throw new HelmError('node_offline', `目标节点 ${nodeId} 离线，不能启动子代理`, 409, { nodeId })
+        },
         resolveAttachmentsForPrompt:
           resolvedAttachments !== undefined
             ? async () => this.buildAttachmentBlock(resolvedAttachments)
             : undefined,
-        registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel) => {
+        registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId) => {
           const profile = await this.readProfile(profileId)
           const now = Date.now()
           this.store.upsertConv({
@@ -3266,7 +3916,7 @@ export class KernelRuntime {
               ? { parentToolCallId: finalRequest.parentToolCallId }
               : {}),
             // 与普通创建一致：Profile 节点优先于父会话缺省节点。
-            nodeId: profile?.nodeId ?? this.store.getConv(parentId)?.nodeId ?? 'local',
+            nodeId: nodeId ?? profile?.nodeId ?? this.store.getConv(parentId)?.nodeId ?? 'local',
             cwd: childCwd,
             model: modelMirror,
             thinkingLevel: thinkingLevel ?? '',
@@ -3348,6 +3998,41 @@ export class KernelRuntime {
       nodeId = this.store.getConv(options.conversationId)?.nodeId
     }
     return runGate(this.toolDeps, command, { ...options, ...(nodeId !== undefined ? { nodeId } : {}) })
+  }
+
+  async cleanupWorktree(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult> {
+    return this.worktrees.cleanup({ ...request, signal })
+  }
+
+  setBackgroundAgentRunner(runner: (request: AgentSpawnRequest) => Promise<{ run: WorkflowRunSummary; execution?: AgentExecutionInfo }>): void {
+    this.backgroundAgentRunner = runner
+  }
+
+  async reportBackgroundAgent(run: WorkflowRunSummary, info: { parentConversationId: number; agentType?: string; execution?: AgentExecutionInfo }): Promise<void> {
+    const pending = this.backgroundReportInflight.get(run.id)
+    if (pending !== undefined) return pending
+    const delivery = this.deliverBackgroundAgentReport(run, info).finally(() => this.backgroundReportInflight.delete(run.id))
+    this.backgroundReportInflight.set(run.id, delivery)
+    return delivery
+  }
+
+  private async deliverBackgroundAgentReport(run: WorkflowRunSummary, info: { parentConversationId: number; agentType?: string; execution?: AgentExecutionInfo }): Promise<void> {
+    if (this.store.getConv(info.parentConversationId) === undefined || this.store.isDeleted(info.parentConversationId)) {
+      this.events.publish('notification', { type: 'notification', level: 'warning', title: '后台任务已结束', body: `运行 ${run.id} 已${run.status}，父会话已删除；可在任务列表检查结果。` })
+      return
+    }
+    const requestId = `helm:subagent-report:${run.id}`
+    const previous = await this.harness.commit((tx) => tx.submissionByRequest(info.parentConversationId as never, requestId), BACKGROUND_CONTEXT)
+    if (previous !== undefined) return
+    const report = {
+      runId: run.id, status: run.status,
+      ...(run.result !== undefined ? { result: run.result } : {}),
+      ...(run.error !== undefined ? { error: run.error } : {}),
+      ...(info.execution !== undefined ? { execution: executionOf(info.execution) } : {}),
+    }
+    await this.submitInput(info.parentConversationId, `后台子代理任务已结算。以下为运行 ${run.id} 的结果数据：\n${safeResultText(report, (text) => this.stashService.redact(text))}`, {
+      origin: 'agent', whenBusy: 'followUp', requestId, meta: { backgroundRunId: run.id, kind: 'subagent_report' },
+    })
   }
 
   /** workflow 执行注入（主代理组合 WorkflowService 后调用）。 */
@@ -3498,6 +4183,11 @@ export class KernelRuntime {
       for (const conv of this.listConversations()) {
         const conversation = await this.harness.conversation(conv.id as never, BACKGROUND_CONTEXT)
         if (!conversation) continue
+        // 全量扫描后按 helm.rewind 闭区间 [from, through] 过滤被覆盖条目：
+        // 它们已不再活跃，重建 FTS 时绝不重新索引；同一区间公式与
+        // collectRewindIntervals / 详情投影共用闭区间。
+        const rewindCuts: RewindInterval[] = []
+        const indexed: Array<{ id: number; text: string }> = []
         let cursor: unknown = undefined
         for (;;) {
           const page = await conversation.entries(
@@ -3507,11 +4197,21 @@ export class KernelRuntime {
             BACKGROUND_CONTEXT,
           )
           for (const entry of page.items) {
+            const record = entry as { id: number; kind: string; data?: unknown }
+            if (record.kind === 'helm.rewind') {
+              const interval = rewindIntervalOf(record)
+              if (interval !== undefined) rewindCuts.push(interval)
+              continue
+            }
             const text = entryModelText(entry as never)
-            if (text) index(conv.id, `entry:${entry.id}`, conv.title, this.stashService.redact(text))
+            if (text) indexed.push({ id: Number(record.id), text })
           }
           if (!page.next) break
           cursor = page.next
+        }
+        for (const item of indexed) {
+          if (coveredByRewind(item.id, rewindCuts)) continue
+          index(conv.id, `entry:${item.id}`, conv.title, this.stashService.redact(item.text))
         }
       }
     })
@@ -4096,11 +4796,12 @@ function safeResultText(value: unknown, redact: (text: string) => string = (text
 /** AgentExecutionInfo -> structuredOutput.execution（仅保留已回传字段，JSON-safe）。 */
 function executionOf(info: AgentExecutionInfo): Record<string, unknown> {
   const out: Record<string, unknown> = {}
+  if (info.nodeId !== undefined) out['nodeId'] = info.nodeId
   if (info.conversationId !== undefined) out['conversationId'] = info.conversationId
   if (info.executionId !== undefined) out['executionId'] = info.executionId
   if (info.effectiveCwd !== undefined) out['effectiveCwd'] = info.effectiveCwd
   if (info.worktree !== undefined) {
-    out['worktree'] = { path: info.worktree.path, branch: info.worktree.branch }
+    out['worktree'] = { ...info.worktree }
   }
   return out
 }
@@ -4117,6 +4818,8 @@ function subagentFooter(resumeRef: string | undefined, resolved: AgentExecutionI
   if (resolved?.effectiveCwd !== undefined) parts.push(`cwd=${resolved.effectiveCwd}`)
   if (resolved?.worktree !== undefined) {
     parts.push(`worktree=${resolved.worktree.path}@${resolved.worktree.branch}`)
+    if (resolved.worktree.id !== undefined) parts.push(`worktreeId=${JSON.stringify(resolved.worktree.id)}`)
+    parts.push('cleanup=cleanup_worktree')
   }
   return parts.length === 0 ? '' : `[subagent ${parts.join(' ')}]`
 }
@@ -4326,13 +5029,69 @@ function normalizeBusyError(error: unknown): unknown {
   return error
 }
 
-function entryModelText(entry: { model?: ReadonlyArray<{ content?: ReadonlyArray<{ type: string; text?: string }> }> }): string {
-  const blocks = entry.model?.[0]?.content
-  if (!blocks) return ''
-  return blocks
-    .filter((b) => b.type === 'text' && typeof b.text === 'string')
+function entryModelText(entry: { model?: ReadonlyArray<{ content?: unknown }> }): string {
+  const content = entry.model?.[0]?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return (content as Array<{ type?: string; text?: string }>)
+    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
     .map((b) => b.text as string)
     .join('\n')
+}
+
+/** helm.rewind 截断标记声明的覆盖区间（闭区间 [from, through]）。
+ *
+ * throughEntryId 是新契约：覆盖区间内最大的旧条目 ID，新输入条目 ID 必然
+ * 更大、绝不会被自家区间误删。 */
+interface RewindInterval {
+  from: number
+  through: number
+  marker: number
+}
+
+/** 解析一条条目的 rewind 区间；非 rewind 标记或载荷非法返回 undefined。 */
+function rewindIntervalOf(entry: { id: number | string; kind: string; data?: unknown }): RewindInterval | undefined {
+  if (entry.kind !== 'helm.rewind') return undefined
+  const data = entry.data as { fromEntryId?: unknown; throughEntryId?: unknown } | undefined
+  const from = Number(data?.fromEntryId)
+  if (!Number.isSafeInteger(from) || from <= 0) return undefined
+  const marker = Number(entry.id)
+  const through = Number(data?.throughEntryId)
+  if (!Number.isSafeInteger(marker) || !Number.isSafeInteger(through) || through < from || through >= marker) {
+    throw new HelmError('invalid_rewind_entry', `历史覆盖标记 ${entry.id} 的区间无效`, 500)
+  }
+  return { from, through, marker }
+}
+
+/** 条目是否被任一 rewind 区间覆盖（详情投影 / FTS 重建 / lastAssistant 清理共用）。 */
+function coveredByRewind(entryId: number, intervals: ReadonlyArray<RewindInterval>): boolean {
+  return intervals.some((cut) => entryId >= cut.from && entryId <= cut.through)
+}
+
+/** 编辑目标限定：仅允许覆盖人类输入条目（agent/trigger 注入与控制条目拒绝）。 */
+function assertEditableHumanInput(
+  entry: { kind: string; data?: unknown },
+  conversationId: number,
+  entryId: number,
+): void {
+  if (entry.kind === 'pi.user') return
+  if (entry.kind !== 'helm.input') {
+    throw new HelmError(
+      'entry_not_editable',
+      `仅支持编辑人类输入条目（条目 ${entryId} kind=${entry.kind}）`,
+      400,
+      { conversationId, entryId, kind: entry.kind },
+    )
+  }
+  const origin = (entry.data as { origin?: unknown } | undefined)?.origin
+  if (origin !== 'human') {
+    throw new HelmError(
+      'entry_not_editable',
+      `条目 ${entryId} 来源为 ${String(origin)}，仅人类输入可原地覆盖重发`,
+      409,
+      { conversationId, entryId, origin: String(origin) },
+    )
+  }
 }
 
 export { PROTO_ROOT }

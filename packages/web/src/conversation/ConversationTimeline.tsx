@@ -5,6 +5,7 @@ import type {
   ConversationEntry,
   ConversationLive,
   ConversationSummary,
+  WorkflowRunSummary,
 } from '@helm/protocol'
 import { artifactsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
@@ -18,16 +19,19 @@ import {
   formatBytes,
   formatDurationMs,
   resolveSubagentConversationId,
+  resolveSubagentExecutionMeta,
   resolveWorkflowRunForTool,
   toolSummaryText,
   type AssistantTurn,
   type DividerItem,
+  type EditRequestTarget,
   type FoldableStep,
   type HumanInputItem,
   type PluginCardItem,
   type ToolTrace,
 } from './timeline-model.js'
 import { SubagentLiveCard } from './SubagentLiveCard.js'
+import { subagentBadge } from './subagent-live-model.js'
 
 export interface ConversationTimelineProps {
   conversation: ConversationSummary
@@ -35,8 +39,8 @@ export interface ConversationTimelineProps {
   live?: ConversationLive
   /** 发送请求在途且服务端尚未 working/blocked（轻量等待行，与 working 行互斥）。 */
   sendingPending?: boolean
-  /** 请求将文本回填 Composer 并聚焦（编辑并重发）。 */
-  onRequestEdit: (text: string) => void
+  /** 请求将文本回填 Composer 并聚焦（编辑并重发；可携带历史 entryId 与附件）。 */
+  onRequestEdit: (target: EditRequestTarget) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -149,10 +153,64 @@ function HumanMessage({
 }: {
   item: HumanInputItem
   conversation: ConversationSummary
-  onRequestEdit: (text: string) => void
+  onRequestEdit: (target: EditRequestTarget) => void
 }) {
   const store = useHelmStore()
   const [forking, setForking] = useState(false)
+  const [withdrawing, setWithdrawing] = useState(false)
+
+  const editRequest = async (): Promise<void> => {
+    // 仅人类输入可原地编辑：agent 汇报 / trigger 注入不是人类编辑对象（铅笔已收起，双重防御）
+    if (item.origin !== 'human') return
+    const attachments =
+      item.attachments !== undefined && item.attachments.length > 0 ? { attachments: item.attachments } : {}
+    if (item.queuedMode === undefined) {
+      // 已落库历史消息：进入原地编辑；entryId 必须是合法正整数，
+      // 非法锚点绝不静默降级为新消息（否则会把「编辑」错发成普通追加）。
+      const numericId = Number(item.entryId)
+      if (!Number.isSafeInteger(numericId) || numericId <= 0) {
+        store.pushNotice({
+          type: 'notification',
+          level: 'error',
+          title: '无法编辑该消息',
+          body: `消息锚点无效（entryId=${item.entryId}），已取消编辑。`,
+          conversationId: conversation.id,
+        })
+        return
+      }
+      onRequestEdit({ text: item.text, entryId: numericId, ...attachments })
+      return
+    }
+    // 排队中消息：先撤回（若刚被置入执行则无缝衔接历史编辑）
+    const subId = item.entryId.startsWith('queued:') ? item.entryId.slice('queued:'.length) : item.entryId
+    setWithdrawing(true)
+    try {
+      const res = await conversationsApi.withdraw(conversation.id, subId)
+      if (res.status === 'withdrawn') {
+        onRequestEdit({ text: item.text, ...attachments })
+      } else if ((res.status === 'already_placed' || res.status === 'settled') && res.entryId !== undefined) {
+        onRequestEdit({ text: item.text, entryId: res.entryId, ...attachments })
+      } else {
+        store.pushNotice({
+          type: 'notification',
+          level: 'warning',
+          title: '无法撤回排队消息',
+          body: `提交已进入执行（status=${res.status}）`,
+          conversationId: conversation.id,
+        })
+      }
+    } catch (err) {
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: '撤回排队消息失败',
+        body: err instanceof Error ? err.message : String(err),
+        conversationId: conversation.id,
+      })
+    } finally {
+      setWithdrawing(false)
+    }
+  }
 
   const forkFromHere = async (): Promise<void> => {
     setForking(true)
@@ -200,14 +258,18 @@ function HumanMessage({
       ) : null}
       <span className="msg-hover-bar">
         <CopyButton text={item.text} />
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          title={item.queuedMode !== undefined ? '回填输入框（原消息仍在排队）' : '编辑并重发'}
-          onClick={() => onRequestEdit(item.text)}
-        >
-          <HelmIcon name="edit" size={12} />
-        </button>
+        {item.origin === 'human' ? (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            title={item.queuedMode !== undefined ? '撤回排队并编辑' : '编辑并重发'}
+            aria-label={item.queuedMode !== undefined ? '撤回排队并编辑' : '编辑并重发'}
+            disabled={withdrawing}
+            onClick={() => void editRequest()}
+          >
+            <HelmIcon name={withdrawing ? 'loader' : 'edit'} size={12} className={withdrawing ? 'spin-slow' : undefined} />
+          </button>
+        ) : null}
         {item.queuedMode === undefined ? (
           <button
             type="button"
@@ -247,8 +309,18 @@ function TraceRow({
   const [open, setOpen] = useState(defaultOpen)
   const store = useHelmStore()
 
-  const right =
-    tool.status === 'running'
+  // background: true 的 subagent 工具行拿到句柄即 done，但后台 run 仍在执行：
+  // 状态文案与图标必须跟随后台真实状态，绝不提前显示“完成”。
+  const isSubagent = tool.toolName === 'subagent'
+  const { run: bgRun, worktree: bgWorktree } = isSubagent
+    ? resolveSubagentExecutionMeta(tool, conversationId, store.workflowRuns)
+    : {}
+  const bgRunning = isSubagent && bgRun?.status === 'running'
+  const bgFailed = isSubagent && (bgRun?.status === 'failed' || bgRun?.status === 'aborted')
+
+  const right = bgRunning
+    ? '后台运行中'
+    : tool.status === 'running'
       ? '运行中'
       : tool.durationMs !== undefined
         ? formatDurationMs(tool.durationMs)
@@ -257,6 +329,7 @@ function TraceRow({
           : tool.status === 'done'
             ? '完成'
             : ''
+  const rowIcon = bgRunning ? 'loader' : bgFailed ? 'alert-circle' : toolStatusIcon(tool)
 
   const inputJson = useMemo(() => {
     if (tool.input === undefined) return undefined
@@ -274,9 +347,21 @@ function TraceRow({
   return (
     <div className={`trace-entry${tool.isError ? ' trace-entry-error' : ''}`}>
       {workflow && <WorkflowRunCard run={workflow} />}
-      {subagentIdNum !== undefined && (
-        <SubagentLiveCard childConversationId={subagentIdNum} toolStatus={tool.status} />
-      )}
+      {subagentIdNum !== undefined ? (
+        <SubagentLiveCard
+          childConversationId={subagentIdNum}
+          toolStatus={tool.status}
+          backgroundRun={bgRun}
+          worktree={bgWorktree}
+        />
+      ) : null}
+      {subagentIdNum === undefined && (bgRun !== undefined || bgWorktree !== undefined) ? (
+        <ExternalSubagentCard
+          run={bgRun}
+          worktree={bgWorktree}
+          tool={tool}
+        />
+      ) : null}
       <div
         className={`trace-row${tool.isError ? ' trace-row-error' : ''}`}
         role="button"
@@ -291,9 +376,9 @@ function TraceRow({
       >
         <span className="trace-row-left">
           <HelmIcon
-            name={toolStatusIcon(tool)}
+            name={rowIcon}
             size={12}
-            className={tool.status === 'running' ? 'spin-slow' : undefined}
+            className={bgRunning || tool.status === 'running' ? 'spin-slow' : undefined}
           />
           <span className="trace-tool-name">{tool.toolName}</span>
           <span className="trace-tool-summary">{toolSummaryText(tool.toolName, tool.input)}</span>
@@ -343,6 +428,81 @@ function TraceRow({
           ) : null}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * 外部运行时（如 Herdr 窗格）的后台任务摘要卡：无子会话时仍如实展示
+ * 后台 run 节点/工作树/错误，不只更新工具图标而无卡片；绝不假造子会话。
+ */
+function ExternalSubagentCard({
+  run,
+  worktree,
+  tool,
+}: {
+  run?: WorkflowRunSummary
+  worktree?: { path: string; branch: string }
+  tool: ToolTrace
+}) {
+  const nodes = run?.nodes ?? []
+  const running = nodes.filter((n) => n.status === 'running').length
+  const failed = nodes.find((n) => n.status === 'failed')
+  const runError = run?.status === 'failed' || run?.status === 'aborted' ? (run.error ?? '后台执行失败') : undefined
+  const badge = subagentBadge(undefined, run?.status === 'completed' ? 'done' : tool.status, run?.status)
+  const active = badge.status === 'working'
+  const failedState = badge.status === 'error'
+  return (
+    <div className="subagent-live-card subagent-external-card">
+      <div className="subagent-live-header">
+        <HelmIcon
+          name={failedState ? 'alert-circle' : active ? 'loader' : 'bot'}
+          size={13}
+          className={active ? 'spin-slow' : undefined}
+        />
+        <span className="subagent-live-title">外部执行</span>
+        {worktree !== undefined ? (
+          <span className="badge badge-neutral subagent-worktree-badge" title={`隔离工作树：${worktree.path}`}>
+            <HelmIcon name="git-branch" size={11} />
+            {worktree.branch}
+          </span>
+        ) : null}
+        <span className={`badge ${badge.badge}`}>{badge.label}</span>
+      </div>
+      <div className="subagent-live-stream subagent-external-body">
+        {nodes.length > 0 ? (
+          <div className="workflow-node-list">
+            {nodes.map((n) => (
+              <div key={n.id} className="workflow-node-line">
+                <HelmIcon
+                  name={n.status === 'running' ? 'loader' : n.status === 'failed' ? 'x' : n.status === 'done' ? 'check' : 'circle'}
+                  size={11}
+                  className={n.status === 'running' ? 'spin-slow' : undefined}
+                />
+                <span className="workflow-node-label">{n.label ?? n.id}</span>
+                {n.executionId !== undefined ? <span className="subagent-external-exec">{n.executionId}</span> : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="subagent-stream-line subagent-stream-empty">
+            {run === undefined ? `外部执行${active ? '进行中' : failedState ? '异常' : '已结束'}（无子会话）` : `后台任务 ${run.id}`}
+          </div>
+        )}
+        {runError !== undefined ? (
+          <div className="subagent-stream-line subagent-stream-error subagent-bg-error" title={runError}>
+            <HelmIcon name="alert-circle" size={11} />
+            <span className="subagent-stream-body">后台执行失败：{runError}</span>
+          </div>
+        ) : null}
+        {failed !== undefined && failed.error !== undefined ? (
+          <div className="subagent-stream-line subagent-stream-error subagent-bg-error" title={failed.error}>
+            <HelmIcon name="alert-circle" size={11} />
+            <span className="subagent-stream-body">节点失败：{failed.error}</span>
+          </div>
+        ) : null}
+        {running > 0 ? <div className="subagent-stream-line subagent-stream-empty">{running} 个节点执行中</div> : null}
+      </div>
     </div>
   )
 }

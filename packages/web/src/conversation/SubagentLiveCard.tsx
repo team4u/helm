@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ToolTraceStatus } from './timeline-model.js'
 import { buildSubagentStreamLines, formatDurationMs } from './timeline-model.js'
+import { subagentBadge, toolResultPreviewTruncated, isScrolledToBottom, type SubagentLiveCardProps } from './subagent-live-model.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
-
-export interface SubagentLiveCardProps {
-  childConversationId: number
-  toolStatus: ToolTraceStatus
-}
 
 /** 工具行状态图标名。 */
 function streamToolIcon(status: ToolTraceStatus, isError: boolean): string {
@@ -17,19 +13,18 @@ function streamToolIcon(status: ToolTraceStatus, isError: boolean): string {
   return 'circle'
 }
 
-function statusBadge(toolStatus: ToolTraceStatus, summaryStatus?: string): { label: string; badge: string } {
-  if (summaryStatus === 'blocked') return { label: '等待审批', badge: 'badge-warn' }
-  if (toolStatus === 'running') return { label: '执行中', badge: 'badge-accent' }
-  if (toolStatus === 'error') return { label: '异常', badge: 'badge-err' }
-  if (toolStatus === 'done') return { label: '已完成', badge: 'badge-ok' }
-  return { label: '进行中', badge: 'badge-neutral' }
-}
+/** 是否应贴底：手动上滑超过阈值后暂停跟随，回到底部自动恢复（共享语义见 subagent-live-model）。 */
 
 /**
  * 主会话时间线内嵌的子代理实时卡片：自动加载子会话详情、实时同步
  * conversation.live 流式内容并自动贴底滚动。
+ *
+ * 状态优先跟随子会话真实 summary.status（卡片实时反映该子会话最新
+ * 进展，父工具 toolStatus 只是缺 summary 时的 fallback）；background: true
+ * 派生的后台 run 状态参与判定——run 仍在 running 时绝不假完成。
+ * 详情加载失败显式报错并可重试，绝不静默停在“加载中”。
  */
-export function SubagentLiveCard({ childConversationId, toolStatus }: SubagentLiveCardProps) {
+export function SubagentLiveCard({ childConversationId, toolStatus, backgroundRun, worktree }: SubagentLiveCardProps) {
   const store = useHelmStore()
   const [expanded, setExpanded] = useState(true)
   const streamRef = useRef<HTMLDivElement | null>(null)
@@ -41,11 +36,12 @@ export function SubagentLiveCard({ childConversationId, toolStatus }: SubagentLi
   const detail = store.conversationDetails[childConversationId]
   const live = store.conversationLives[childConversationId]
   const loadDetail = store.loadConversationDetail
+  const detailError = detail === undefined ? store.loadErrors[`conversation:${childConversationId}`] : undefined
 
   // 自动加载详情：一旦加载完成，live-state 会把后续 conversation.entry 实时并入。
   useEffect(() => {
-    if (detail === undefined) void loadDetail(childConversationId)
-  }, [childConversationId, detail === undefined, loadDetail, summary?.completionSeq])
+    if (detail === undefined && detailError === undefined) void loadDetail(childConversationId)
+  }, [childConversationId, detail === undefined, detailError, loadDetail])
 
   const isWorking = summary?.status === 'working'
   const lines = useMemo(
@@ -56,18 +52,25 @@ export function SubagentLiveCard({ childConversationId, toolStatus }: SubagentLi
   const lastLine = lines.length > 0 ? lines[lines.length - 1] : undefined
   const lastLineFingerprint =
     lastLine === undefined ? '' : `${lastLine.kind}:${lastLine.key}:${'text' in lastLine ? lastLine.text.length : 0}`
+  // 重新展开时若此前贴底则恢复贴底；收起期间内容增长不改变跟随意愿。
   useEffect(() => {
+    if (!expanded) return
     const el = streamRef.current
-    if (el === null || !stickToBottomRef.current) return
-    el.scrollTop = el.scrollHeight
-  }, [lines.length, lastLineFingerprint, live?.updatedAt, live?.text.length, live?.thinking?.length])
+    if (el === null) return
+    if (stickToBottomRef.current) el.scrollTop = el.scrollHeight
+  }, [expanded, lines.length, lastLineFingerprint, live?.updatedAt, live?.text.length, live?.thinking?.length])
 
-  const badge = statusBadge(toolStatus, summary?.status)
-  const emptyHint = isWorking
-    ? (summary?.doing ?? '正在启动子代理…')
-    : detail === undefined
-      ? '正在加载子会话…'
-      : '暂无输出'
+  const badge = subagentBadge(summary?.status, toolStatus, backgroundRun?.status)
+  const emptyHint = detailError !== undefined
+    ? `子会话详情加载失败：${detailError}`
+    : isWorking
+      ? (summary?.doing ?? '正在启动子代理…')
+      : detail === undefined
+        ? '正在加载子会话…'
+        : '暂无输出'
+
+  // 隔离工作树：显式入参优先，其次回退后台 run 首个节点的 worktree。
+  const wt = worktree ?? backgroundRun?.nodes?.find((n) => n.worktree !== undefined)?.worktree
 
   return (
     <div className="subagent-live-card">
@@ -82,9 +85,17 @@ export function SubagentLiveCard({ childConversationId, toolStatus }: SubagentLi
           <HelmIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} />
         </button>
         <HelmIcon
-          name={isWorking ? 'loader' : toolStatus === 'error' ? 'alert-circle' : 'bot'}
+          name={
+            detailError !== undefined
+              ? 'alert-circle'
+              : badge.status === 'working'
+                ? 'loader'
+                : badge.status === 'error'
+                  ? 'alert-circle'
+                  : 'bot'
+          }
           size={13}
-          className={isWorking ? 'spin-slow' : undefined}
+          className={badge.status === 'working' && detailError === undefined ? 'spin-slow' : undefined}
         />
         <span className="subagent-live-title">
           子会话 #{childConversationId}
@@ -92,6 +103,12 @@ export function SubagentLiveCard({ childConversationId, toolStatus }: SubagentLi
             <span className="badge badge-neutral">{summary.profileId}</span>
           ) : null}
         </span>
+        {wt !== undefined ? (
+          <span className="badge badge-neutral subagent-worktree-badge" title={`隔离工作树：${wt.path}`}>
+            <HelmIcon name="git-branch" size={11} />
+            {wt.branch}
+          </span>
+        ) : null}
         <span className={`badge ${badge.badge}`}>{badge.label}</span>
         {isWorking && summary?.doing !== undefined && summary.doing !== '' ? (
           <span className="subagent-live-doing" title={summary.doing}>
@@ -99,6 +116,17 @@ export function SubagentLiveCard({ childConversationId, toolStatus }: SubagentLi
           </span>
         ) : null}
         <span className="subagent-live-actions">
+          {detailError !== undefined ? (
+            <button
+              type="button"
+              className="btn btn-sm"
+              title="重新加载子会话详情"
+              onClick={() => void loadDetail(childConversationId, true)}
+            >
+              <HelmIcon name="refresh-cw" size={11} />
+              重试
+            </button>
+          ) : null}
           <button
             type="button"
             className="btn btn-sm"
@@ -127,12 +155,16 @@ export function SubagentLiveCard({ childConversationId, toolStatus }: SubagentLi
           className="subagent-live-stream"
           onScroll={(e) => {
             const el = e.currentTarget
-            stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 36
+            stickToBottomRef.current = isScrolledToBottom(el)
           }}
         >
           {lines.length === 0 ? (
-            <div className="subagent-stream-line subagent-stream-empty">
-              <HelmIcon name={isWorking ? 'loader' : 'circle'} size={11} className={isWorking ? 'spin-slow' : undefined} />
+            <div className={`subagent-stream-line subagent-stream-empty${detailError !== undefined ? ' subagent-stream-error' : ''}`}>
+              <HelmIcon
+                name={detailError !== undefined ? 'alert-circle' : isWorking ? 'loader' : 'circle'}
+                size={11}
+                className={detailError === undefined && isWorking ? 'spin-slow' : undefined}
+              />
               {emptyHint}
             </div>
           ) : (
@@ -163,6 +195,18 @@ export function SubagentLiveCard({ childConversationId, toolStatus }: SubagentLi
                     />
                     <span className="subagent-stream-tool-name">{line.toolName}</span>
                     <span className="subagent-stream-tool-summary">{line.summary}</span>
+                    <span className="subagent-stream-tool-preview">
+                      {line.resultPreview !== undefined ? (
+                        <>
+                          <span className="subagent-stream-preview-text">{line.resultPreview}</span>
+                          {toolResultPreviewTruncated(line.resultPreview) ? (
+                            <span className="subagent-stream-preview-more" title="仅为首行预览，完整结果请进入会话查看">
+                              …已截断
+                            </span>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </span>
                     <span className="subagent-stream-meta">
                       {line.status === 'running'
                         ? '运行中'
@@ -182,6 +226,12 @@ export function SubagentLiveCard({ childConversationId, toolStatus }: SubagentLi
               )
             })
           )}
+          {backgroundRun?.status === 'failed' && backgroundRun.error ? (
+            <div className="subagent-stream-line subagent-stream-error subagent-bg-error" title={backgroundRun.error}>
+              <HelmIcon name="alert-circle" size={11} />
+              <span className="subagent-stream-body">后台执行失败：{backgroundRun.error}</span>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

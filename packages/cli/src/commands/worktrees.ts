@@ -38,6 +38,9 @@ export function worktreesCommands(): CommandSpec[] {
       const conversation = flagValue<string>(parsed.flags, 'conversation')
       const path = flagValue<string>(parsed.flags, 'path')
       const current = parsed.flags.get('current') === true
+      if (current && conversation !== undefined) {
+        throw new CliError('--conversation 与 --current 只能提供一个', 'conflicting_flags')
+      }
 
       // 选择器互斥：worktreeId / conversationId / path 必须且只能提供一个。
       const provided = [

@@ -368,15 +368,14 @@ export class WorktreeAllocator {
     )
   }
 
-  /** 节点侧真实路径（realpath）；解析失败回退原值（锁键降级仍唯一，归属校验另有权威登记兜底）。 */
+  /** 节点侧真实路径用于锁与归属校验；探测失败必须拒绝，不能退回词法路径。 */
   private async canonicalPathOnNode(nodeId: string, path: string): Promise<string> {
-    try {
-      const env = this.deps.envFabric.envFor(nodeId, path)
-      const result = await env.canonicalPath(path, BACKGROUND_CONTEXT)
-      return result.ok ? result.value : path
-    } catch {
-      return path
+    const env = this.deps.envFabric.envFor(nodeId, path)
+    const result = await env.canonicalPath(path, BACKGROUND_CONTEXT)
+    if (!result.ok) {
+      throw new HelmError('worktree_check_failed', `节点 ${nodeId} 无法确认真实路径 ${this.redact(path)}：${this.redact(result.error.message)}`, 502)
     }
+    return result.value
   }
 
   /**
@@ -912,6 +911,7 @@ export class WorktreeAllocator {
       authority = await this.resolveRepoAuthority(record.nodeId, record.repoRoot, input.signal)
     } else {
       authority = await this.resolveRepoAuthority(record.nodeId, record.path, input.signal)
+      this.assertMetadataSecretFree({ repoRoot: authority.mainPath }, { nodeId: record.nodeId, executionId: record.executionId })
       this.updateRecord(record.id, (r) => ({ ...r, repoRoot: authority.mainPath }))
     }
 

@@ -358,6 +358,7 @@ export function conversationsCommands(): CommandSpec[] {
       enumFlag('origin', ORIGINS, '输入来源，默认 human'),
       { name: 'meta', type: 'json', help: '自由元数据 JSON 对象（随输入传递到 turn_settled）' },
       { name: 'attach', type: 'string', help: '挂载产物 ID（多个用逗号分隔）' },
+      { name: 'replace-from', type: 'number', help: '从指定历史条目 ID 起覆盖重发（截断该条及后续上下文）' },
       { name: 'wait', type: 'boolean', help: '等待本次输入的回答（?wait=1；成功返回 ConversationInputResult）' },
     ],
     positional: '[id] <text>',
@@ -369,6 +370,7 @@ export function conversationsCommands(): CommandSpec[] {
           { name: 'origin', type: 'string' },
           { name: 'meta', type: 'json' },
           { name: 'attach', type: 'string' },
+          { name: 'replace-from', type: 'number' },
           { name: 'wait', type: 'boolean' },
         ],
         ctx.args,
@@ -393,6 +395,13 @@ export function conversationsCommands(): CommandSpec[] {
         const attachIds = attachRaw.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
         if (attachIds.length > 0) body.attachments = attachIds
       }
+      const replaceFrom = flagValue<number>(parsed.flags, 'replace-from')
+      if (replaceFrom !== undefined) {
+        if (!Number.isInteger(replaceFrom) || replaceFrom <= 0) {
+          throw new CliError(`--replace-from 需为正整数，实得 "${replaceFrom}"`, 'invalid_flag_value')
+        }
+        body.replaceFromEntryId = replaceFrom
+      }
       const hub = await ctx.hub()
       const wait = parsed.flags.get('wait') === true
       const result = await hub.request<unknown>(
@@ -407,6 +416,31 @@ export function conversationsCommands(): CommandSpec[] {
         return
       }
       printResult(ctx, result)
+    },
+  })
+
+  // ---- conversations withdraw ----
+  cmds.push({
+    path: ['conversations', 'withdraw'],
+    description: '撤回排队中的输入（POST /api/conversations/:id/withdraw）',
+    flags: [...convFlags, { name: 'submission-id', type: 'number', required: true, help: '待撤回的排队提交 ID' }],
+    positional: '[id]',
+    async run(ctx: CommandContext) {
+      const parsed = parseFlags(
+        [
+          { name: 'current', type: 'boolean' },
+          { name: 'submission-id', type: 'number', required: true },
+        ],
+        ctx.args,
+      )
+      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
+      assertNoExtraPositionals(parsed.positionals, 1)
+      const submissionId = flagValue<number>(parsed.flags, 'submission-id')
+      if (submissionId === undefined || !Number.isInteger(submissionId) || submissionId <= 0) {
+        throw new CliError('--submission-id 需为正整数', 'invalid_flag_value')
+      }
+      const hub = await ctx.hub()
+      printResult(ctx, await hub.post<unknown>(`/api/conversations/${id}/withdraw`, { submissionId }))
     },
   })
 

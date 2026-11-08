@@ -45,7 +45,7 @@ function render(live: ConversationLive): string {
 test('实时回复后跟排队胶囊时只显示一次响应等待，不给队列制造第二个模型回合', { timeout: 60_000 }, () => {
   const html = render({ conversationId: 1, text: '当前回复', tools: [], queuedInputs: [queued], updatedAt: 1 })
   assert.equal((html.match(/正在等待响应…/g) ?? []).length, 1)
-  assert.match(html, /回填输入框（原消息仍在排队）/)
+  assert.match(html, /撤回排队并编辑/)
 })
 
 test('只有排队项尚无正文时仍显示一次执行等待', { timeout: 60_000 }, () => {

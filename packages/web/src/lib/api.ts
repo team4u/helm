@@ -33,6 +33,8 @@ import type {
   SavedWorkflowSummary,
   SearchHit,
   SkillSummary,
+  ConversationWithdrawRequest,
+  ConversationWithdrawResponse,
   WhenBusy,
   WorkflowRunRequest,
   WorkflowRunSummary,
@@ -48,6 +50,8 @@ export type {
   SearchHit,
   ConversationForkRequest,
   ConversationCompactResponse,
+  ConversationWithdrawRequest,
+  ConversationWithdrawResponse,
 }
 export type AuthStatusResponse = AuthStatus
 export type AuthTokenResponse = AuthToken
@@ -60,6 +64,8 @@ export interface SubmitInputPayload {
   whenBusy?: WhenBusy
   meta?: Record<string, unknown>
   attachments?: string[]
+  /** 历史编辑重发：覆盖该 entry 及其后全部条目（服务端执行 rewind 重放）。 */
+  replaceFromEntryId?: number
 }
 
 const TOKEN_STORAGE_KEY = 'helm:token'
@@ -231,6 +237,21 @@ export const conversationsApi = {
       ...(title !== undefined && title.trim() !== '' ? { title } : {}),
     }
     return apiRequest<ConversationSummary>('POST', `/api/conversations/${id}/fork`, body)
+  },
+  withdraw(id: number, submissionId: string | number): Promise<ConversationWithdrawResponse> {
+    // 契约 ConversationWithdrawRequest 要求 submissionId 为安全正整数；严格整数字符串正则与 fork 一致。
+    const raw = String(submissionId)
+    const numericId = typeof submissionId === 'number' ? submissionId : /^[0-9]+$/.test(raw) ? Number(raw) : NaN
+    if (!Number.isInteger(numericId) || !Number.isSafeInteger(numericId) || numericId <= 0) {
+      throw new ApiClientError(
+        'validation_error',
+        `submissionId 需为安全正整数（收到 ${String(submissionId)}）`,
+        400,
+        { submissionId },
+      )
+    }
+    const body: ConversationWithdrawRequest = { submissionId: numericId }
+    return apiRequest<ConversationWithdrawResponse>('POST', `/api/conversations/${id}/withdraw`, body)
   },
   listArtifacts(id: number): Promise<ArtifactMetadata[]> {
     return apiRequest<ArtifactMetadata[]>('GET', `/api/conversations/${id}/artifacts`)

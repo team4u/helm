@@ -853,6 +853,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           emit([{ ...base, queuedAt, startedAt, ...attemptMark }])
 
           const onResolved: NonNullable<WorkflowSpawnRequest['onResolved']> = (info) => {
+            if (info.nodeId !== undefined) base.nodeId = info.nodeId
             if (info.conversationId !== undefined) base.conversationId = info.conversationId
             if (info.executionId !== undefined) base.executionId = info.executionId
             if (info.effectiveCwd !== undefined) base.effectiveCwd = info.effectiveCwd
@@ -908,6 +909,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
               })
               if (result.executionInfo !== undefined) {
                 const info = result.executionInfo
+                if (info.nodeId !== undefined) base.nodeId = info.nodeId
                 if (info.conversationId !== undefined) base.conversationId = info.conversationId
                 if (info.executionId !== undefined) base.executionId = info.executionId
                 if (info.effectiveCwd !== undefined) base.effectiveCwd = info.effectiveCwd

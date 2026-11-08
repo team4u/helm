@@ -3,7 +3,7 @@
  * 编排引擎运行时（executor / sandbox / journal 恢复）在 kernel，不进协议。
  */
 
-import type { AgentGateResult } from './plugin.js'
+import type { AgentExecutionInfo, AgentGateResult } from './plugin.js'
 
 /** `GET /api/workflows` 已保存工作流摘要。 */
 export interface SavedWorkflowSummary {
@@ -44,6 +44,8 @@ export interface WorkflowNodeState {
   agentType?: string
   /** 展示名（脚本 label / 派生描述）。 */
   label?: string
+  /** 实际执行节点。 */
+  nodeId?: string
   /** agent 节点实际执行的会话 ID。 */
   conversationId?: number
   /** 外部运行时执行标识（如 Herdr 窗格/标签 ID）。 */
@@ -51,7 +53,7 @@ export interface WorkflowNodeState {
   /** 实际生效工作目录。 */
   effectiveCwd?: string
   /** isolation: 'worktree' 分配的隔离工作树。 */
-  worktree?: { path: string; branch: string }
+  worktree?: AgentExecutionInfo['worktree']
   phaseIndex?: number
   phaseTitle?: string
   /** agent 节点的原始提示词（审计/重放展示用）。 */

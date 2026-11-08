@@ -186,11 +186,11 @@ test('responsive.css 适配移动端视口安全区、触控热区与遮罩层�
 const conversationPaneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
 
 test('ConversationPane.tsx 分屏顶栏：isSplit 时渲染显式关闭按钮，激活态分屏按钮可关闭', { timeout: 60_000 }, () => {
-  // isSplit 分屏顶栏必须有显式关闭按钮（split-close-btn），移动端不隐藏
+  // 共用关闭组件也用于加载中、加载失败分支；实际渲染行为见 subagent-live-card.test.ts。
   assert.match(
     conversationPaneSource,
-    /isSplit\s*\?\s*\(\s*<button[\s\S]*?className=["'][^"']*split-close-btn[^"']*["'][\s\S]*?onClick=\{\(\)\s*=>\s*onCloseSplit\?\.\(\)\}/,
-    'ConversationPane 必须在 isSplit 顶栏渲染 split-close-btn 显式关闭按钮',
+    /isSplit && onCloseSplit !== undefined \? \(\s*<CloseSplitButton onCloseSplit=\{onCloseSplit\} \/>/,
+    'ConversationPane 必须在 isSplit 顶栏渲染共用关闭按钮',
   )
   // 主屏顶栏：分屏开启时按钮带 split-active 激活态类（窄屏保留可见可点）
   assert.match(

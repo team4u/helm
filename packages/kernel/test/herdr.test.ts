@@ -1264,7 +1264,7 @@ test('单测A: 快照游标菜单提取与按键映射——allow-enter/menu-1/c
 })
 
 test('单测A-续: menu-1 与 custom 多键序列经完整审批桥发送', { timeout: 60_000 }, async () => {
-  for (const answer of [{ decision: 'menu-1' }, { decision: 'custom', key: 'down, enter' }]) {
+  for (const answer of [{ decision: 'menu-1' }, { decision: 'custom', key: 'down, enter' }] as Record<string, string>[]) {
     const env = await makeEnv()
     try {
       env.transport.promptStatus = 'blocked'
