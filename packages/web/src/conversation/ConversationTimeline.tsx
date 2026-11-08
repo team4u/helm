@@ -170,7 +170,7 @@ function HumanMessage({
   }
 
   return (
-    <div className="msg-human-row">
+    <div className="msg-human-row" tabIndex={0}>
       {item.origin !== 'human' ? (
         <span className="msg-origin-tag">
           <HelmIcon name={item.origin === 'trigger' ? 'webhook' : 'bot'} size={11} />
@@ -555,7 +555,7 @@ function AssistantTurnView({
   }
 
   return (
-    <div className="msg-ai-block">
+    <div className="msg-ai-block" tabIndex={0}>
       {turn.segments.map((seg) => {
         if (seg.kind === 'text') {
           return <MarkdownView key={seg.key} text={seg.text} conversationId={conversation.id} />

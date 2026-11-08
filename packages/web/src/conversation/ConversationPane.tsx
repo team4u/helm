@@ -242,7 +242,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
           </button>
           <button
             type="button"
-            className={`btn btn-sm${isSplit || store.splitTarget !== null ? ' btn-primary' : ''}`}
+            className={`btn btn-sm split-toggle-btn${isSplit || store.splitTarget !== null ? ' btn-primary' : ''}`}
             title={isSplit ? '关闭本分屏' : '在右屏并排打开 / 关闭分屏'}
             onClick={toggleSplit}
           >
