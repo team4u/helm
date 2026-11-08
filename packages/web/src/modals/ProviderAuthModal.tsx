@@ -105,7 +105,7 @@ function DefaultsSection() {
     setSaving(true)
     setError(null)
     try {
-      // 思考档位超出所选模型支持时显式拒绝（本地校验与服务端校验同规则）。
+      // 在保存前提示当前模型的目录限制。
       if (thinkingLevel !== '' && model !== '' && !levelOptions.includes(thinkingLevel)) {
         throw new Error(`模型 ${model} 不支持思考档位 ${thinkingLevel}（支持：${levelOptions.join(' / ')}）`)
       }
@@ -129,7 +129,12 @@ function DefaultsSection() {
       </div>
       <div className="provider-defaults-fields">
         <label className="provider-field">默认模型
-          <select className="select mono" aria-label="全局默认模型" disabled={!loaded || saving} value={model} onChange={(event) => { setModel(event.target.value); if (!levelOptions.includes(thinkingLevel)) setThinkingLevel('') }}>
+          <select className="select mono" aria-label="全局默认模型" disabled={!loaded || saving} value={model} onChange={(event) => {
+            const nextModel = event.target.value
+            const nextLevels = store.models.find((entry) => entry.id === nextModel)?.thinkingLevels ?? ['off']
+            setModel(nextModel)
+            if (thinkingLevel !== '' && !nextLevels.includes(thinkingLevel)) setThinkingLevel('')
+          }}>
             <option value="">未设置（未配置模型的会话无法回复）</option>
             {store.models.filter((entry) => entry.available).map((entry) => (
               <option key={entry.id} value={entry.id}>{entry.id}</option>

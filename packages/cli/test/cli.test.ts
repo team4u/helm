@@ -144,6 +144,31 @@ test('setup/login 换 token 写 0600 cli-token，不碰 providers/pluginSecrets 
   }
 })
 
+test('思考档位 CLI 透传：全局部分更新、当前会话覆盖与 Profile 合并', { timeout: 60_000 }, async () => {
+  const hub = await startHub({
+    'PUT /api/models/default': (body) => ({ body }),
+    'PATCH /api/conversations/7': (body) => ({ body }),
+    'GET /api/profiles/worker': () => ({ body: { id: 'worker', model: 'faux/model', name: 'Worker' } }),
+    'PUT /api/profiles/worker': (body) => ({ body }),
+  })
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'helm-thinking-cli-'))
+  const env = makeEnv(hub.url, dir, { HELM_CONVERSATION_ID: '7' })
+  try {
+    const defaults = await run(['models', 'default', '--thinking', 'high', '--json'], env)
+    assert.equal(defaults.code, 0, defaults.err)
+    assert.deepEqual(JSON.parse(defaults.out), { thinkingLevel: 'high' })
+    const conversation = await run(['conversations', 'update', '--current', '--thinking=', '--json'], env)
+    assert.equal(conversation.code, 0, conversation.err)
+    assert.deepEqual(JSON.parse(conversation.out), { thinkingLevel: '' })
+    const profile = await run(['profiles', 'update', 'worker', '--thinking', 'high', '--json'], env)
+    assert.equal(profile.code, 0, profile.err)
+    assert.deepEqual(JSON.parse(profile.out), { id: 'worker', model: 'faux/model', name: 'Worker', thinkingLevel: 'high' })
+  } finally {
+    await hub.close()
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('conversations create/send/abort/update/delete 的路径、body 与 --current', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
   const hub = await startHub({
@@ -460,7 +485,7 @@ test('search、models、plugins、actions list、status', { timeout: 60_000 }, a
   const dir = await tempDir()
   const hub = await startHub({
     'GET /api/search?q=hello%20world': () => ({ body: [{ id: 1 }] }),
-    'GET /api/models': () => ({ body: ['openai/gpt', 'anthropic/sonnet'] }),
+    'GET /api/models': () => ({ body: { models: [{ provider: 'openai', modelId: 'gpt', available: true }, { provider: 'anthropic', modelId: 'sonnet', available: true }], thinkingLevels: {} } }),
     'GET /api/models/providers': () => ({ body: [{ id: 'deepseek', name: 'DeepSeek', modelCount: 2, authMethods: [{ type: 'api_key', label: 'API Key' }] }] }),
     'POST /api/models/refresh': (body) => ({
       body: {
@@ -490,7 +515,7 @@ test('search、models、plugins、actions list、status', { timeout: 60_000 }, a
 
     const m = await run(['models', 'list', '--json'], env)
     assert.equal(m.code, 0, m.err)
-    assert.deepEqual(JSON.parse(m.out), ['openai/gpt', 'anthropic/sonnet'])
+    assert.deepEqual(JSON.parse(m.out), { models: [{ provider: 'openai', modelId: 'gpt', available: true }, { provider: 'anthropic', modelId: 'sonnet', available: true }], thinkingLevels: {} })
 
     const providers = await run(['models', 'providers', '--json'], env)
     assert.equal(providers.code, 0, providers.err)
@@ -537,7 +562,8 @@ test('search、models、plugins、actions list、status', { timeout: 60_000 }, a
     // 人类可读模式输出表格（非 JSON）
     const human = await run(['models', 'list'], env)
     assert.equal(human.code, 0, human.err)
-    assert.match(human.out, /openai\/gpt/)
+    assert.match(human.out, /provider\s+modelId\s+available/)
+    assert.match(human.out, /openai\s+gpt\s+true/)
   } finally {
     await hub.close()
   }

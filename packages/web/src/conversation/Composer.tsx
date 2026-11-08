@@ -84,7 +84,7 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
   const shortName = rawShortName.trim() !== '' ? rawShortName : '默认模型'
   const currentModel = store.models.find((model) => model.id === conversation.model)
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
-  const thinkingShort = conversation.thinkingLevel ? conversation.thinkingLevel : (currentLevels.length > 1 ? currentLevels[currentLevels.length - 1] : 'off')
+  const supportsThinking = currentLevels.some((level) => level !== 'off')
 
   return (
     <span className="composer-picker-root" ref={rootRef} style={{ position: 'relative', display: 'inline-flex' }}>
@@ -99,22 +99,23 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
         {shortName}
         <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
       </button>
-      {currentLevels.length > 1 && (
-        <select
+      <select
           className="input"
           aria-label="思考等级"
           style={{ width: 'auto', padding: '2px 6px', fontSize: 11.5, height: 24 }}
-          disabled={pending}
-          value={conversation.thinkingLevel}
+          disabled={pending || !supportsThinking}
+          value={conversation.thinkingLevelOverride ?? ''}
           onChange={(event) => void pickThinking(event.target.value)}
-          title={`思考等级：${currentLevels.join(' / ')}`}
+          title={supportsThinking ? `思考等级：${currentLevels.join(' / ')}` : currentModel ? '所选模型不支持思考档位' : '模型目录尚未包含当前模型'}
         >
-          <option value="">默认（{thinkingShort}）</option>
+          <option value="">{supportsThinking ? `思考：继承（${conversation.thinkingLevel || 'SDK 默认'}）` : currentModel ? '不支持思考' : '思考：模型未知'}</option>
+          {conversation.thinkingLevelOverride && !currentLevels.includes(conversation.thinkingLevelOverride) && (
+            <option value={conversation.thinkingLevelOverride}>思考：{conversation.thinkingLevelOverride}（当前模型不支持）</option>
+          )}
           {currentLevels.map((level) => (
             <option key={level} value={level}>{level}</option>
           ))}
         </select>
-      )}
       {open ? (
         <div className="composer-popover" style={{ bottom: 'calc(100% + 6px)', left: 0, minWidth: 260 }}>
           <button

@@ -99,12 +99,14 @@ function ProfileBasicTab({
   patch,
   isNew,
   models,
+  defaultModel,
   herdrEnabled,
 }: {
   draft: ProfileDraft
   patch: (next: Profile) => void
   isNew: boolean
   models: Array<{ id: string; available?: boolean; thinkingLevels?: string[] }>
+  defaultModel: string
   herdrEnabled: boolean
 }) {
   const profile = draft.profile
@@ -125,6 +127,7 @@ function ProfileBasicTab({
 
   const modelOptions = models.map((m) => m.id)
   const modelKnown = !profile.model || modelOptions.includes(profile.model)
+  const selectedModel = models.find((m) => m.id === (profile.model || defaultModel))
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -153,7 +156,11 @@ function ProfileBasicTab({
             className="input mono"
             style={{ flex: 1 }}
             value={profile.model ?? ''}
-            onChange={(e) => patch({ ...profile, model: e.target.value })}
+            onChange={(e) => {
+              const nextModel = e.target.value
+              const nextLevels = models.find((m) => m.id === (nextModel || defaultModel))?.thinkingLevels ?? ['off']
+              patch({ ...profile, model: nextModel, thinkingLevel: profile.thinkingLevel && nextLevels.includes(profile.thinkingLevel) ? profile.thinkingLevel : undefined })
+            }}
           >
             <option value="">跟随全局默认模型</option>
             {models.filter((m) => m.available).map((m) => (
@@ -175,11 +182,11 @@ function ProfileBasicTab({
             onChange={(e) => patch({ ...profile, thinkingLevel: e.target.value === '' ? undefined : e.target.value })}
           >
             <option value="">跟随全局缺省</option>
-            {(models.find((m) => m.id === profile.model)?.thinkingLevels ?? ['off']).map((level) => (
+            {(selectedModel?.thinkingLevels ?? ['off']).map((level) => (
               <option key={level} value={level}>{level}</option>
             ))}
           </select>
-          {profile.model && models.find((m) => m.id === profile.model) && (models.find((m) => m.id === profile.model)!.thinkingLevels?.length ?? 0) <= 1 && (
+          {selectedModel && (selectedModel.thinkingLevels?.length ?? 0) <= 1 && (
             <span className="provider-help" style={{ fontSize: 11 }}>该模型不支持思考档位</span>
           )}
         </span>
@@ -384,6 +391,7 @@ export function ProfileEditorModal({
   onClose: () => void
 }) {
   const store = useHelmStore()
+  const [defaultModel, setDefaultModel] = useState('')
   const enabledPluginIds = useMemo(() => collectEnabledPluginIds(store.plugins), [store.plugins])
   // 列表与默认选中仅消费可见 Profile：插件未启用时其自举 Profile 不残留痕迹。
   const profiles = useMemo(
@@ -407,6 +415,16 @@ export function ProfileEditorModal({
   const [loadSeq, setLoadSeq] = useState(0)
   // 请求代数守卫：快速切换 Profile 时慢返回的旧详情不得写入新 Profile 草稿。
   const detailGeneration = useRef(0)
+
+  useEffect(() => {
+    let cancelled = false
+    void assetsApi.getDefaultModel().then((result) => {
+      if (!cancelled) setDefaultModel(result.defaultModel)
+    }).catch((err: unknown) => {
+      if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+    })
+    return () => { cancelled = true }
+  }, [])
 
   const profilesRef = useRef(profiles)
   profilesRef.current = profiles
@@ -652,6 +670,7 @@ export function ProfileEditorModal({
                   patch={patchProfile}
                   isNew={isNew}
                   models={store.models}
+                  defaultModel={defaultModel}
                   herdrEnabled={herdrEnabled}
                 />
               )}

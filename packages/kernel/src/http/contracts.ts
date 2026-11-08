@@ -194,7 +194,9 @@ export interface KernelRuntimeLike {
   search(query: string): Promise<SearchHit[]> | SearchHit[]
   listModels(): Promise<ModelCatalog> | ModelCatalog
   /** 设置全局默认模型与思考档位（config.json）；空串清除。未实现时 HTTP 501。 */
-  setDefaultModel?(model: string, thinkingLevel?: string): Promise<void>
+  setDefaultModel?(model?: string, thinkingLevel?: string): Promise<void>
+  /** Profile 保存后同步绑定会话的模型与思考档位。 */
+  alignProfileConversations?(profileId: string): Promise<void>
   listModelProviders(): Promise<ModelProviderSummary[]> | ModelProviderSummary[]
   /**
    * 动态模型目录刷新（POST /api/models/refresh）：目标动态供应商 allowNetwork

@@ -26,6 +26,7 @@ import {
 const PROFILE_FIELD_FLAGS: ReadonlyArray<{ flag: string; key: string }> = [
   { flag: 'name', key: 'name' },
   { flag: 'model', key: 'model' },
+  { flag: 'thinking', key: 'thinkingLevel' },
   { flag: 'node', key: 'nodeId' },
   { flag: 'cwd', key: 'cwd' },
 ]

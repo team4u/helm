@@ -1,5 +1,5 @@
-/** 模型域：models list / providers / refresh。 */
-import type { ModelProviderSummary, ModelProvidersRefreshResult } from '@helm/protocol'
+/** 模型域：models list / default / providers / refresh。 */
+import type { ModelCatalog, ModelProviderSummary, ModelProvidersRefreshResult } from '@helm/protocol'
 import { parseFlags, type FlagSpec } from '../args.js'
 import { CliError } from '../errors.js'
 import { assertNoExtraPositionals, printResult } from './shared.js'
@@ -24,7 +24,8 @@ export function modelsCommands(): CommandSpec[] {
       async run(ctx: CommandContext) {
         parseFlags([], ctx.args)
         const hub = await ctx.hub()
-        printResult(ctx, await hub.get<unknown[]>('/api/models'))
+        const catalog = await hub.get<ModelCatalog>('/api/models')
+        printResult(ctx, ctx.json ? catalog : catalog.models)
       },
     },
     {

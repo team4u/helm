@@ -6,7 +6,7 @@
  *   缺省严格沿用原子会话镜像的 profileId/cwd/model（不重算、不偷偷回默认
  *   Profile）；显式 agentType/cwd/model 变更经同一 updateConversation 路径应用
  *   （真实 SDK configure + 镜像持久化 + 模型继承链，不重建身份字段），
- *   effort 显式时本次 configure({thinkingLevel}) 生效；onResolved/Gate 用
+ *   effort 显式时经 updateConversation 同步覆盖与 SDK 配置；onResolved/Gate 用
  *   配置落定后的实际 cwd（与 SDK 一致）；
  * - signal：创建前已 abort 直接拒绝；运行中 abort -> conversation.abort 并等待 settle；
  * - schema：AJV 全量校验（复用 plugins/schema，$async 显式拒绝），回合内
@@ -39,6 +39,7 @@ export const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high
 
 export interface ResolvedProfile {
   model?: string
+  thinkingLevel?: string
   cwd?: string
   /** Profile 默认绑定的计算节点（缺省 'local'）。 */
   nodeId?: string
@@ -56,6 +57,8 @@ export interface NativeSpawnDeps extends HelmToolDeps {
   getLastAssistantText(conversationId: number): string | undefined
   /** 全局默认模型 'provider/model'（未配置时抛 HelmError）。 */
   resolveModel(): { provider: string; modelId: string }
+  /** 全局默认思考档位；未配置则使用 SDK off。 */
+  resolveThinkingLevel?(): string | undefined
   /** agentId -> child convId（resume 映射，进程内稳定）。 */
   agentSessions: Map<string, number>
   /**
@@ -63,6 +66,7 @@ export interface NativeSpawnDeps extends HelmToolDeps {
    * HelmError('not_found')。childCwd 为子会话将使用的实际 cwd（gate 也用它）。
    * modelMirror 为本子会话最终生效的模型（'provider/model'，写入镜像；空串 = 未配置）。
    * tags 为子会话标签（宿主决定；原生 spawn 不打业务角色标签）。
+   * thinkingLevel 为实际 SDK 使用的档位，防止登记时重新读取继承源产生分歧。
    */
   registerChildConversation(
     childId: number,
@@ -71,8 +75,9 @@ export interface NativeSpawnDeps extends HelmToolDeps {
     childCwd: string,
     modelMirror: string,
     tags: string[],
+    thinkingLevel?: string,
   ): Promise<void>
-  /** 按 profileId 读取真实 Profile（model/cwd/runtime）；不存在返回 undefined。 */
+  /** 按 profileId 读取真实 Profile（model/thinkingLevel/cwd/runtime）；不存在返回 undefined。 */
   resolveProfile(profileId: string): Promise<ResolvedProfile | undefined>
   /** 会话显式模型覆盖（modelOverride）；无覆盖返回 undefined。 */
   getModelOverride(childId: number): string | undefined
@@ -90,7 +95,7 @@ export interface NativeSpawnDeps extends HelmToolDeps {
   /**
    * 更新子会话配置（真实 SDK configure + 镜像持久化 + 模型继承链重算，
    * 复用宿主 updateConversation：不重建镜像、不覆盖 createdAt/title/tags）。
-   * resume 显式 agentType/cwd/model 变更经此路径应用。
+   * resume 显式 agentType/cwd/model/effort 变更经此路径应用。
    */
   updateConversation(childId: number, patch: ConversationPatch): Promise<ConversationSummary>
   /**
@@ -214,6 +219,7 @@ export async function runNativeSpawn(
     if (request.model !== undefined && request.model !== deps.getModelOverride(childId!)) {
       patch.model = request.model
     }
+    if (request.effort !== undefined) patch.thinkingLevel = request.effort
     if (Object.keys(patch).length > 0) {
       summary = await deps.updateConversation(childId!, patch)
     }
@@ -252,10 +258,11 @@ export async function runNativeSpawn(
     const createModelRef = `${resolvedModel.provider}/${resolvedModel.modelId}`
     const extension = structured ? buildStructuredOutputExtension(structured) : undefined
     if (extension) deps.installChildExtension(extension)
+    const thinkingLevel = request.effort ?? profile.thinkingLevel ?? deps.resolveThinkingLevel?.()
     const agentChange: AgentChange = {
       model: { provider: resolvedModel.provider, modelId: resolvedModel.modelId },
       cwd: childCwd,
-      ...(request.effort ? { thinkingLevel: request.effort as ModelThinkingLevel } : {}),
+      ...(thinkingLevel ? { thinkingLevel: thinkingLevel as ModelThinkingLevel } : {}),
       // extensions 需传扩展对象：SDK 存名（names()）但快照解析发生在 install 之后。
       ...(extension ? { extensions: [extension] } : {}),
     }
@@ -273,12 +280,12 @@ export async function runNativeSpawn(
       childCwd,
       createModelRef,
       [],
+      thinkingLevel,
     )
     // onResolved 在配置全部落定（创建 + 镜像登记）后回传实际元数据。
     request.onResolved?.({ conversationId: childId, effectiveCwd: childCwd })
   } else {
-    // resume：显式 model/cwd 变更已由 updateConversation 真实 configure；
-    // effort 仅存在于 SDK AgentState（协议无镜像字段），显式时本次 configure 生效。
+    // resume：显式 model/cwd/effort 变更已由 updateConversation 同步 SDK 与镜像。
     // onResolved 移到配置完成后回传更新后的实际 cwd（修复首调自定义 cwd 再 resume
     // 时 metadata/Gate 指向 Hub 目录而 SDK 仍在旧目录的不一致）。
     request.onResolved?.({ conversationId: childId!, effectiveCwd: childCwd })
@@ -287,10 +294,6 @@ export async function runNativeSpawn(
   const conversation = await deps.harness.conversation(childId as never, bg)
   if (!conversation) {
     throw new HelmError('not_found', `子会话不存在：${childId}`, 404)
-  }
-
-  if (isResume && request.effort !== undefined) {
-    await conversation.configure({ thinkingLevel: request.effort as ModelThinkingLevel }, bg)
   }
 
   // resume 续接时补挂结构化输出扩展（原会话创建时可能没有；同样需真实注册）。

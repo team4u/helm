@@ -43,6 +43,8 @@ export interface ConversationSummary {
   model: string
   /** 当前思考档位（off/minimal/low/medium/high/xhigh/max）；空串未设置。 */
   thinkingLevel: string
+  /** 显式思考档位覆盖；省略时继承 Profile / 全局默认。 */
+  thinkingLevelOverride?: string
   status: ConversationStatus
   /** 零 Token 实时动作摘要，如 'bash: pnpm test' 或 'thinking…'。 */
   doing?: string

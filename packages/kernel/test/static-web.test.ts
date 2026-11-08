@@ -10,6 +10,7 @@
  */
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -71,7 +72,7 @@ function makeKernel(dataDir: string): KernelRuntimeLike {
     answerAsk: async () => {},
     cancelAsk: async () => {},
     search: async () => [],
-    listModels: () => [],
+    listModels: () => ({ models: [], thinkingLevels: {} }),
     listModelProviders: () => [],
     listNodes: () => [],
     issueNodeToken: () => ({ nodeId: 'local', token: 'local:t', createdAt: 1 }),
@@ -252,10 +253,11 @@ test('指向不存在目录的 webDistDir：探测失败回落 JSON 404（不抛
 
 test('旧双参调用形态（kernel, workflows）保持兼容：缺省 webDistDir 探测', { timeout: 60_000 }, async () => {
   const legacy = createHandlerLegacy(makeKernel(dataDir), workflows)
-  // 缺省探测仓库 packages/web/dist：本测试环境未构建，目录不存在 → JSON 404
+  // 缺省探测依赖实际构建产物；构建后应走 SPA 回退，未构建时才返回 JSON 404。
+  const hasDefaultDist = existsSync(new URL('../../web/dist/index.html', import.meta.url))
   const res = await call(legacy, 'GET', '/not-a-real-dist-check')
-  assert.equal(res.status, 404)
-  assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8')
+  assert.equal(res.status, hasDefaultDist ? 200 : 404)
+  assert.equal(res.headers.get('content-type'), hasDefaultDist ? 'text/html; charset=utf-8' : 'application/json; charset=utf-8')
 })
 
 test('非 GET/HEAD 方法（POST /）不进静态托管，回落 JSON 404', { timeout: 60_000 }, async () => {

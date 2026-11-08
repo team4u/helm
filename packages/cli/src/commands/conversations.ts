@@ -203,6 +203,7 @@ export function conversationsCommands(): CommandSpec[] {
       ...convFlags,
       { name: 'title', type: 'string' },
       { name: 'model', type: 'string', help: '显式覆盖模型 provider/model；空串（--model= 或 --model ""）清除覆盖并重算继承链' },
+      { name: 'thinking', type: 'string', help: '思考档位 off/minimal/low/medium/high/xhigh/max；空串清除覆盖并继承 Profile / 全局' },
       { name: 'profile-id', type: 'string' },
       { name: 'node', type: 'string', help: '切换绑定的计算节点 ID' },
       { name: 'cwd', type: 'string', help: '切换目标节点视角工作目录' },
@@ -216,6 +217,7 @@ export function conversationsCommands(): CommandSpec[] {
           { name: 'current', type: 'boolean' },
           { name: 'title', type: 'string' },
           { name: 'model', type: 'string' },
+          { name: 'thinking', type: 'string' },
           { name: 'profile-id', type: 'string' },
           { name: 'node', type: 'string' },
           { name: 'cwd', type: 'string' },
@@ -233,6 +235,7 @@ export function conversationsCommands(): CommandSpec[] {
         ['profile-id', 'profileId'],
         ['node', 'nodeId'],
         ['cwd', 'cwd'],
+        ['thinking', 'thinkingLevel'],
       ] as const) {
         const v = flagValue<string>(parsed.flags, flag)
         if (v !== undefined) body[key] = v
@@ -242,7 +245,7 @@ export function conversationsCommands(): CommandSpec[] {
         if (v !== undefined) body[key] = v
       }
       if (Object.keys(body).length === 0) {
-        throw new CliError('未提供任何更新字段（--title/--model/--profile-id/--node/--cwd/--pinned/--unread）', 'missing_update_fields')
+        throw new CliError('未提供任何更新字段（--title/--model/--thinking/--profile-id/--node/--cwd/--pinned/--unread）', 'missing_update_fields')
       }
       const hub = await ctx.hub()
       printResult(ctx, await hub.patch<ConversationSummary>(`/api/conversations/${id}`, body))

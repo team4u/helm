@@ -65,7 +65,7 @@ function makeStore(plugins: PluginSummary[], profiles: Profile[]): HelmStoreValu
     pluginDocs: {},
     workflowRuns: [],
     profiles,
-    models: [{ id: 'zhipu/glm-4.6' }],
+    models: [{ id: 'zhipu/glm-4.6', provider: 'zhipu', modelId: 'glm-4.6', available: true, thinkingLevels: ['off'] }],
     providers: [],
     credentials: [],
     skills: [],

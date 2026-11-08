@@ -363,8 +363,13 @@ test('PATCH /:id model 覆盖与空串清覆盖边界；其他字段不受空串
   assert.equal(clear.status, 200)
   assert.deepEqual(state.updateCalls.at(-1)?.patch, { model: '' })
 
-  // 错误形状仍 400：缺 provider、含空白、多斜杠、纯空格
-  for (const bad of ['gpt-4o', 'openai /gpt', 'openai/gpt/4o', 'openai/ gpt', ' ']) {
+  // 模型 ID 可以含斜杠（例如动态路由组）；首段仍是 provider。
+  const nested = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, { body: { model: 'gateway/group/smart' } })
+  assert.equal(nested.status, 200)
+  assert.deepEqual(state.updateCalls.at(-1)?.patch, { model: 'gateway/group/smart' })
+
+  // 错误形状仍 400：缺 provider、含空白、纯空格
+  for (const bad of ['gpt-4o', 'openai /gpt', 'openai/ gpt', ' ']) {
     const res = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, { body: { model: bad } })
     assert.equal(res.status, 400, `model=${JSON.stringify(bad)} 应 400`)
     assert.equal(res.body.error.code, 'validation_error')

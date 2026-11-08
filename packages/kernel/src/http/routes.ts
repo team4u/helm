@@ -316,6 +316,7 @@ async function route(
         const body = await readJsonBody(ctx.request)
         const profile = parseProfileBody(body, { requireId: true })
         const saved = await kernel.profiles.save(profile)
+        await kernel.alignProfileConversations?.(saved.id)
         return jsonOk(redactor, await enrichProfile(saved), { status: 201 })
       }
       return methodNotAllowed(redactor, method)
@@ -334,6 +335,7 @@ async function route(
           throw new ValidationError('body.id（若提供）需与路径参数一致')
         }
         const saved = await kernel.profiles.save({ ...profile, id: profileId })
+        await kernel.alignProfileConversations?.(saved.id)
         return jsonOk(redactor, await enrichProfile(saved))
       }
       if (method === 'DELETE') {
@@ -402,12 +404,14 @@ async function route(
     }
     const body = (raw ?? {}) as Record<string, unknown>
     rejectUnknownKeys(body, new Set(['model', 'thinkingLevel']))
-    const model = body['model'] ?? ''
-    if (typeof model !== 'string') throw new HelmError('validation_error', 'model 必须为字符串（provider/model 或空串清除）', 400)
+    const hasModel = 'model' in body
     const hasLevel = 'thinkingLevel' in body
+    if (!hasModel && !hasLevel) throw new HelmError('validation_error', '至少提供 model 或 thinkingLevel 字段', 400)
+    const model = body['model']
+    if (hasModel && typeof model !== 'string') throw new HelmError('validation_error', 'model 必须为字符串（provider/model 或空串清除）', 400)
     const level = body['thinkingLevel']
-    if (level !== undefined && typeof level !== 'string') throw new HelmError('validation_error', 'thinkingLevel 必须为字符串', 400)
-    await kernel.setDefaultModel(model, hasLevel ? (level as string) : undefined)
+    if (hasLevel && typeof level !== 'string') throw new HelmError('validation_error', 'thinkingLevel 必须为字符串', 400)
+    await kernel.setDefaultModel(hasModel ? model as string : undefined, hasLevel ? level as string : undefined)
     const catalog = await kernel.listModels()
     return jsonOk(redactor, { ok: true, defaultModel: catalog.defaultModel ?? '', defaultThinkingLevel: catalog.defaultThinkingLevel ?? '' })
   }

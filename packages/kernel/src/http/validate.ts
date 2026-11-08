@@ -141,7 +141,7 @@ export function parseConversationInit(body: Record<string, unknown>): Conversati
   }
   const model = optionalString(body, 'model')
   if (model !== undefined) {
-    if (!/^[^/\s]+\/[^/\s]+$/.test(model)) throw new ValidationError('model 需为 provider/model 形式')
+    if (!/^[^/\s]+\/[^\s]+$/.test(model)) throw new ValidationError('model 需为 provider/model 形式')
     init.model = model
   }
   rejectUnknownKeys(body, new Set([...Object.keys(init), 'nodeId']))
@@ -177,11 +177,13 @@ export function parseConversationPatch(body: Record<string, unknown>): Conversat
   if (model !== undefined) {
     // PATCH 专属语义：'' = 清除显式覆盖（重算 Profile/全局继承链）；
     // create（parseConversationInit）仍要求 provider/model，不接受空串。
-    if (model !== '' && !/^[^/\s]+\/[^/\s]+$/.test(model)) {
+    if (model !== '' && !/^[^/\s]+\/[^\s]+$/.test(model)) {
       throw new ValidationError("model 需为 provider/model 形式或空串（空串 = 清除覆盖）")
     }
     patch.model = model
   }
+  const thinkingLevel = optionalEnum(body, 'thinkingLevel', ['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const)
+  if (thinkingLevel !== undefined) patch.thinkingLevel = thinkingLevel
   const unread = optionalBoolean(body, 'unread')
   if (unread !== undefined) patch.unread = unread
   const pinned = optionalBoolean(body, 'pinned')
@@ -189,7 +191,7 @@ export function parseConversationPatch(body: Record<string, unknown>): Conversat
   if (Object.keys(patch).length === 0) {
     throw new ValidationError('PATCH body 至少包含一个可更新字段')
   }
-  rejectUnknownKeys(body, new Set(['title', 'profileId', 'tags', 'nodeId', 'cwd', 'model', 'unread', 'pinned']))
+  rejectUnknownKeys(body, new Set(['title', 'profileId', 'tags', 'nodeId', 'cwd', 'model', 'thinkingLevel', 'unread', 'pinned']))
   return patch
 }
 
@@ -300,22 +302,24 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   const id = opts.requireId ? requireValidId(body, 'id') : optionalValidId(body, 'id')
   const name = optionalString(body, 'name')
   const model = optionalString(body, 'model')
+  const thinkingLevel = optionalEnum(body, 'thinkingLevel', ['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const)
   const tags = optionalStringArray(body, 'tags')
   const runtime = parseProfileRuntime(body.runtime)
   const system = optionalString(body, 'system', { maxLength: 512 * 1024 })
   const memory = optionalString(body, 'memory', { maxLength: 512 * 1024 })
-  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'nodeId', 'cwd', 'tags', 'runtime', 'system', 'memory']))
+  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'thinkingLevel', 'nodeId', 'cwd', 'tags', 'runtime', 'system', 'memory']))
   const nodeId = optionalProfileNodeId(body)
   const cwd = optionalString(body, 'cwd')
   if (cwd !== undefined && cwd.length === 0) throw new ValidationError('cwd 需为非空字符串')
   const profile: Profile = { ...(id !== undefined ? { id } : {}) } as Profile
   if (name !== undefined) profile.name = name
   if (model !== undefined) {
-    if (model !== '' && !/^[^/\s]+\/[^/\s]+$/.test(model)) {
+    if (model !== '' && !/^[^/\s]+\/[^\s]+$/.test(model)) {
       throw new ValidationError('model 需为 provider/model 形式或空串')
     }
     if (model !== '') profile.model = model
   }
+  if (thinkingLevel !== undefined && thinkingLevel !== '') profile.thinkingLevel = thinkingLevel
   if (nodeId !== undefined) profile.nodeId = nodeId
   if (cwd !== undefined) profile.cwd = cwd
   if (tags !== undefined) {

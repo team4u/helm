@@ -795,6 +795,22 @@ test('models/providers 返回公开供应商元数据；路径不匹配不误入
   assert.equal((await call(handler, 'GET', '/api/models/providers/extra')).status, 404)
 })
 
+test('默认配置部分更新保留未提供的模型字段并拒绝空/非法 body', { timeout: 60_000 }, async () => {
+  const calls: Array<[string | undefined, string | undefined]> = []
+  const kernel = makeKernel()
+  kernel.setDefaultModel = async (model, level) => { calls.push([model, level]) }
+  const { handler } = makeHandlers(kernel)
+  const levelOnly = await call(handler, 'PUT', '/api/models/default', { body: { thinkingLevel: 'high' } })
+  assert.equal(levelOnly.status, 200)
+  assert.deepEqual(calls.at(-1), [undefined, 'high'])
+  assert.equal((await call(handler, 'PUT', '/api/models/default', { body: { model: '' } })).status, 200)
+  assert.deepEqual(calls.at(-1), ['', undefined])
+  for (const body of [{}, { model: null }, { thinkingLevel: 3 }, { other: 'high' }]) {
+    assert.equal((await call(handler, 'PUT', '/api/models/default', { body })).status, 400)
+  }
+  assert.equal(calls.length, 2)
+})
+
 test('models 返回目录对象（models 数组 + thinkingLevels）', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const res = await call(handler, 'GET', '/api/models')
