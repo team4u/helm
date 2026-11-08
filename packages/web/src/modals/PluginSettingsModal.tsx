@@ -10,6 +10,7 @@ import {
   secretConfigured,
   type ConfigValue,
 } from './plugin-config-form-model.js'
+import { deepLinkSelection, fallbackSelection, shouldSyncSelectionToStore } from './list-modal-selection.js'
 
 function initialFormValues(config: PluginConfigResponse): Record<string, ConfigValue> {
   const init: Record<string, ConfigValue> = {}
@@ -145,6 +146,35 @@ export function PluginSettingsModal({
   const plugin = store.plugins.find((p) => p.id === selectedId)
   const settingsPanel = store.groupedUi.settingsPanels.find((p) => p.pluginId === selectedId)
 
+  // store 引用快照：effect 只依赖插件列表与选中，不因无关 SSE 帧重跑。
+  const storeRef = useRef(store)
+  storeRef.current = store
+  // 外部深链（URL 前进/后退）切换插件：本地跟随、作废在途配置加载，但不写回 store（防回环）。
+  const initialPluginIdRef = useRef(initialPluginId)
+  useEffect(() => {
+    if (initialPluginId === initialPluginIdRef.current) return
+    initialPluginIdRef.current = initialPluginId
+    const next = deepLinkSelection(selectedId, initialPluginId)
+    if (next === null) return
+    setSelectedId(next)
+    configGeneration.current += 1
+    setConfig(null)
+    setLoadingConfig(true)
+    setError(null)
+  }, [initialPluginId, selectedId])
+
+  // 列表兑底：plugins 为空（快照未到）时保留深链 initialPluginId；列表到达后若选中项
+  // 不在其中（插件已卸载），回退首项不留悬空选中。兑底属本地决策，经守卫写回。
+  useEffect(() => {
+    if (storeRef.current.plugins.length === 0) return
+    const next = fallbackSelection(selectedId, storeRef.current.plugins.map((p) => p.id))
+    if (next === null) return
+    setSelectedId(next)
+    if (shouldSyncSelectionToStore(storeRef.current.activeModal, 'plugin-settings', next)) {
+      storeRef.current.setActiveModal({ kind: 'plugin-settings', pluginId: next })
+    }
+  }, [store.plugins, selectedId])
+
   const reloadConfig = async (id: string) => {
     const generation = ++configGeneration.current
     setLoadingConfig(true)
@@ -170,6 +200,9 @@ export function PluginSettingsModal({
   const selectPlugin = (id: string) => {
     // 同步进入加载态：点击到 effect 生效之间不闪现旧插件的可保存表单。
     setSelectedId(id)
+    if (shouldSyncSelectionToStore(store.activeModal, 'plugin-settings', id)) {
+      store.setActiveModal({ kind: 'plugin-settings', pluginId: id })
+    }
     setLoadingConfig(true)
     setConfig(null)
     setError(null)

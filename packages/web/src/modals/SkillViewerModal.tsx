@@ -3,6 +3,7 @@ import { assetsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { collectEnabledPluginIds, isSkillVisible } from '../shell/sidebar-model.js'
+import { deepLinkSelection, fallbackSelection, shouldSyncSelectionToStore } from './list-modal-selection.js'
 
 const SKILL_MAIN_FILE = 'SKILL.md'
 
@@ -48,15 +49,43 @@ export function SkillViewerModal({
     }
   }, [])
 
+  // 外部深链（URL 前进/后退）切换技能：本地跟随但不写回 store（源头即 store/URL，防回环）。
+  const initialSkillIdRef = useRef(initialSkillId)
   useEffect(() => {
+    if (initialSkillId === initialSkillIdRef.current) return
+    initialSkillIdRef.current = initialSkillId
+    const next = deepLinkSelection(selectedId, initialSkillId)
+    if (next === null) return
+    setSelectedId(next)
+    setActiveFile(SKILL_MAIN_FILE)
+    setText('')
+    setError(null)
+    setLoading(true)
+  }, [initialSkillId, selectedId])
+
+  // store 引用快照：effect 只依赖列表与选中，不因无关 SSE 帧重跑；
+  // setActiveModal 是原始 setState，引用恒定。
+  const storeRef = useRef(store)
+  storeRef.current = store
+  // 列表兑底：清单为空且从未到达过（资产未返回）时保留深链选中不覆盖；
+  // 清单非空且当前选中无效时切首项；清单确实清空（技能全部停用）时清空选中。
+  // 两条失效路径都必须作废在途读取世代（loadGeneration 不能漏，防旧内容写回）。
+  // 兑底属本地决策，经守卫写回（仅弹窗仍是 skill-viewer 时）。
+  const hadSkillsRef = useRef(skills.length > 0)
+  useEffect(() => {
+    if (skills.length > 0) hadSkillsRef.current = true
     if (selectedId !== null && skills.some((entry) => entry.id === selectedId)) return
-    // 插件停用会移除当前技能；同时作废在途读取，防止旧内容写回。
+    if (skills.length === 0 && !hadSkillsRef.current) return
     loadGeneration.current += 1
-    setSelectedId(skills[0]?.id ?? null)
+    const next = fallbackSelection(selectedId, skills.map((s) => s.id))
+    setSelectedId(next)
     setActiveFile(SKILL_MAIN_FILE)
     setText('')
     setError(null)
     setLoading(false)
+    if (next !== null && shouldSyncSelectionToStore(storeRef.current.activeModal, 'skill-viewer', next)) {
+      storeRef.current.setActiveModal({ kind: 'skill-viewer', skillId: next })
+    }
   }, [selectedId, skills])
 
   useEffect(() => {
@@ -67,12 +96,14 @@ export function SkillViewerModal({
   const selectSkill = (id: string) => {
     // 同步进入加载态：切换到内容返回之间不闪现旧技能文本。
     setSelectedId(id)
+    if (shouldSyncSelectionToStore(store.activeModal, 'skill-viewer', id)) {
+      store.setActiveModal({ kind: 'skill-viewer', skillId: id })
+    }
     setActiveFile(SKILL_MAIN_FILE)
     setLoading(true)
     setText('')
     setError(null)
   }
-
   const copyReference = async () => {
     if (!selectedId) return
     const ref = `/skill:${selectedId}`

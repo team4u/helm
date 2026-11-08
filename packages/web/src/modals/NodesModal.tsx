@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { NodeInfo } from '@helm/protocol'
 import { conversationsApi, nodesApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { CopyButton } from '../conversation/CopyButton.js'
+import { deepLinkSelection, shouldSyncSelectionToStore } from './list-modal-selection.js'
 import {
   buildNodeConnectGuide,
   formatBytes,
@@ -464,6 +465,7 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
   const [issuingMode, setIssuingMode] = useState(false)
   /** 当次会话内签发/轮换的一次性明文令牌（nodeId -> token）。 */
   const [issuedTokens, setIssuedTokens] = useState<Record<string, string>>({})
+  const [pendingNodeId, setPendingNodeId] = useState<string | null>(null)
 
   const refreshNodes = store.refreshNodes
   useEffect(() => {
@@ -477,18 +479,53 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
   // 先行选中并呈现令牌；仅声明 id/kind/离线，不伪造在线/健康/连接信息，
   // 真实字段由节点注册后经 node.changed / refreshNodes 覆盖。
   const issuedButUnlisted =
-    selectedId !== null && issuedTokens[selectedId] !== undefined && !nodes.some((n) => n.id === selectedId)
+    selectedId !== null && selectedId === pendingNodeId && !nodes.some((n) => n.id === selectedId)
   const selected: NodeInfo | undefined = issuedButUnlisted
     ? { id: selectedId!, kind: 'byom', online: false }
     : nodes.find((n) => n.id === selectedId)
+  // store 引用快照：effect 只依赖节点列表与选中，不因无关 SSE 帧重跑。
+  const storeRef = useRef(store)
+  storeRef.current = store
   useEffect(() => {
-    if (selected === undefined && !issuingMode && nodes.length > 0) setSelectedId(nodes[0]!.id)
-  }, [selected, issuingMode, nodes])
+    if (pendingNodeId !== null && nodes.some((n) => n.id === pendingNodeId)) setPendingNodeId(null)
+    // 列表为空（刷新后快照未到）时不覆盖深链 initialNodeId；仅当选中节点确实不存在时
+    // 回退首项。回退属本地决策，经守卫写回（仅弹窗仍是 nodes 时）。
+    if (selected === undefined && !issuingMode && nodes.length > 0) {
+      const next = nodes[0]!.id
+      setSelectedId(next)
+      if (shouldSyncSelectionToStore(storeRef.current.activeModal, 'nodes', next)) {
+        storeRef.current.setActiveModal({ kind: 'nodes', nodeId: next })
+      }
+    }
+  }, [selected, issuingMode, nodes, pendingNodeId])
+
+  // 外部深链（URL 前进/后退）切换节点：本地跟随但不写回 store（源头即 store/URL，防回环）。
+  const initialNodeIdRef = useRef(initialNodeId)
+  useEffect(() => {
+    if (initialNodeId === initialNodeIdRef.current) return
+    initialNodeIdRef.current = initialNodeId
+    const next = deepLinkSelection(selectedId, initialNodeId)
+    if (next === null) return
+    setSelectedId(next)
+    setIssuingMode(false)
+    setPendingNodeId(null)
+  }, [initialNodeId, selectedId])
+
+  const selectNode = (id: string) => {
+    setSelectedId(id)
+    if (shouldSyncSelectionToStore(store.activeModal, 'nodes', id)) {
+      store.setActiveModal({ kind: 'nodes', nodeId: id })
+    }
+  }
 
   const onIssued = (nodeId: string, token: string) => {
     setIssuedTokens((prev) => ({ ...prev, [nodeId]: token }))
     setSelectedId(nodeId)
+    setPendingNodeId(nodeId)
     setIssuingMode(false)
+    if (shouldSyncSelectionToStore(store.activeModal, 'nodes', nodeId)) {
+      store.setActiveModal({ kind: 'nodes', nodeId })
+    }
     void refreshNodes()
   }
 
@@ -551,7 +588,7 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
                 }}
                 onClick={() => {
                   setIssuingMode(false)
-                  setSelectedId(node.id)
+                  selectNode(node.id)
                 }}
               >
                 <span style={{ fontWeight: 500, fontSize: 12.5, display: 'inline-flex', gap: 5, alignItems: 'center' }}>
@@ -581,7 +618,7 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
                 node={selected}
                 issuedToken={issuedTokens[selected.id]}
                 onTokenIssued={(token) => setIssuedTokens((prev) => ({ ...prev, [selected.id]: token }))}
-                onClose={() => setSelectedId('local')}
+                onClose={() => selectNode('local')}
               />
             ) : (
               <div style={{ color: 'var(--fg-subtle)', fontSize: 12.5, padding: '24px 0', textAlign: 'center' }}>

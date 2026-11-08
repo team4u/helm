@@ -5,7 +5,6 @@ import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { matchesUiScope } from '../lib/types.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { ArtifactPreviewModal } from './ArtifactPreviewModal.js'
 import { formatBytes, formatDurationMs } from './timeline-model.js'
 
 const NODE_STATUS_META: Record<string, { label: string; badge: string; icon: string }> = {
@@ -257,7 +256,6 @@ function WorkflowInspector({ conversationId }: { conversationId: number }) {
 function ArtifactsTab({ conversationId }: { conversationId: number }) {
   const store = useHelmStore()
   const artifacts = store.conversationArtifacts[conversationId] ?? []
-  const [previewId, setPreviewId] = useState<string | null>(null)
 
   if (artifacts.length === 0) {
     return (
@@ -276,7 +274,7 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
               className="row-main"
               style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0 }}
               title={`预览 ${a.name}`}
-              onClick={() => setPreviewId(a.id)}
+              onClick={() => store.setActiveModal({ kind: 'artifact-preview', artifactId: a.id, conversationId })}
             >
               <HelmIcon name={a.mimeType.startsWith('image/') ? 'eye' : 'file-text'} size={13} />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
@@ -288,9 +286,6 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
           </div>
         ))}
       </div>
-      {previewId !== null ? (
-        <ArtifactPreviewModal artifactId={previewId} conversationId={conversationId} onClose={() => setPreviewId(null)} />
-      ) : null}
     </div>
   )
 }
@@ -335,7 +330,7 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
     return list
   }, [artifacts.length, panels])
 
-  const activeTab = tabs.some((t) => t.id === store.workbenchTab) ? store.workbenchTab : 'tasks'
+  const activeTab = store.workbenchTab
 
   return (
     <aside className="helm-workbench">
@@ -379,7 +374,7 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
               if (matched === undefined) {
                 return (
                   <div style={{ color: 'var(--fg-muted)', fontSize: 12, textAlign: 'center', padding: 16 }}>
-                    插件面板不存在或已卸载
+                    工作台页签不存在或对当前会话不可用
                   </div>
                 )
               }

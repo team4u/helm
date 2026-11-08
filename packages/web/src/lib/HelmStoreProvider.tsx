@@ -11,6 +11,7 @@ import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, 
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
 import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.js'
 import * as HelmPluginClient from './plugin-client-context.js'
+import { formatLocationHash, isSameLocationState, parseLocationHash, shouldPushLocationHistory, type WorkspaceLocationState } from './url-hash-model.js'
 import { groupUiContributions, resolveTargetString, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
 
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
@@ -48,11 +49,15 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [credentials, setCredentials] = useState<CredentialSummary[]>([])
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [actions, setActions] = useState<ActionManifest[]>([])
-  const [primaryTarget, setPrimaryTarget] = useState<ResolvedTarget>({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
-  const [splitTarget, setSplitTarget] = useState<ResolvedTarget | null>(null)
-  const [workbenchOpen, setWorkbenchOpen] = useState(false)
-  const [workbenchTab, setWorkbenchTab] = useState('tasks')
-  const [activeModal, setActiveModal] = useState<ActiveModal>(null)
+  // 初始工作台位置取自地址栏 Hash：刷新、复制链接直达与前进/后退都以它为唯一事实来源。
+  const [initialLocation] = useState<WorkspaceLocationState>(() => parseLocationHash(typeof window !== 'undefined' ? window.location.hash : ''))
+  const [primaryTarget, setPrimaryTarget] = useState<ResolvedTarget>(initialLocation.primaryTarget)
+  const [splitTarget, setSplitTarget] = useState<ResolvedTarget | null>(initialLocation.splitTarget)
+  const [workbenchOpen, setWorkbenchOpen] = useState(initialLocation.workbenchOpen)
+  const [workbenchTab, setWorkbenchTab] = useState(initialLocation.workbenchTab)
+  const [activeModal, setActiveModal] = useState<ActiveModal>(initialLocation.activeModal)
+  // 最近一次与地址栏达成一致的位置：既是外部 Hash 变更的判重基准，也是 push/replace 决策的 prev。
+  const lastSyncedLocation = useRef<WorkspaceLocationState>(initialLocation)
   const [highlightedEntry, setHighlightedEntry] = useState<{ conversationId: number; entryId: string } | null>(null)
   const [notices, setNotices] = useState<ToastNotice[]>([])
   const noticeSequence = useRef(0)
@@ -159,6 +164,11 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     setActiveModal(null)
     setSplitTarget(null)
     setPrimaryTarget({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
+    setWorkbenchOpen(false)
+    setWorkbenchTab('tasks')
+    // 地址栏同步复位为默认深链（replaceState 不污染历史栈）；未认证期间禁用写回，避免覆盖用户粘贴的深链。
+    lastSyncedLocation.current = parseLocationHash('#/c/1')
+    window.history.replaceState(null, '', '#/c/1')
     updateLive(emptyLiveState)
     setConversationArtifacts({})
     setLoadErrors({})
@@ -304,6 +314,49 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   }, [pushNotice])
   const closeSplit = useCallback(() => setSplitTarget(null), [])
   const invokePluginAction = useCallback(async (pluginId: string, actionId: string, input: unknown, conversationId?: number) => pluginsApi.invokeAction(pluginId, actionId, input, conversationId), [])
+
+  // ---- 地址栏 Hash 双向同步 --------------------------------------------------
+  // 外部变更（前进/后退/手动改 Hash）：解析后覆盖本地状态。pushState/replaceState
+  // 不会触发这两个事件，因此自身写回不会形成回环；与最近同步位置相同的事件是回声，忽略。
+  useEffect(() => {
+    const applyUrlLocation = () => {
+      const parsed = parseLocationHash(window.location.hash)
+      if (isSameLocationState(parsed, lastSyncedLocation.current)) return
+      lastSyncedLocation.current = parsed
+      setPrimaryTarget(parsed.primaryTarget)
+      setSplitTarget(parsed.splitTarget)
+      setWorkbenchOpen(parsed.workbenchOpen)
+      setWorkbenchTab(parsed.workbenchTab)
+      setActiveModal(parsed.activeModal)
+    }
+    window.addEventListener('hashchange', applyUrlLocation)
+    window.addEventListener('popstate', applyUrlLocation)
+    return () => {
+      window.removeEventListener('hashchange', applyUrlLocation)
+      window.removeEventListener('popstate', applyUrlLocation)
+    }
+  }, [])
+
+  // 状态写回地址栏：仅在已认证后进行（AuthGate 阶段保留用户粘贴的深链 Hash）。
+  // 视图级变化（主屏/分屏/弹窗开关）push 入栈，列表内选子项/切 Tab 用 replace 折叠历史。
+  const locationState = useMemo<WorkspaceLocationState>(
+    () => ({ primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal }),
+    [primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal],
+  )
+  useEffect(() => {
+    if (!authenticated) return
+    const nextHash = formatLocationHash(locationState)
+    if (nextHash === window.location.hash) {
+      lastSyncedLocation.current = locationState
+      return
+    }
+    if (shouldPushLocationHistory(lastSyncedLocation.current, locationState)) {
+      window.history.pushState(null, '', nextHash)
+    } else {
+      window.history.replaceState(null, '', nextHash)
+    }
+    lastSyncedLocation.current = locationState
+  }, [authenticated, locationState])
 
   useEffect(() => {
     if (!authenticated) return

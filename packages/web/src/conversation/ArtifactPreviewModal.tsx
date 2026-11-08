@@ -37,6 +37,13 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
   const [view, setView] = useState<'rich' | 'source'>('rich')
   const [text, setText] = useState<string | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const loadArtifacts = store.loadConversationArtifacts
+  const artifactsLoaded = conversationId !== undefined && store.conversationArtifacts[conversationId] !== undefined
+
+  // 深链预览所属会话不一定在主屏或分屏中，不能依赖会话面板预先加载元数据。
+  useEffect(() => {
+    if (conversationId !== undefined && !artifactsLoaded) void loadArtifacts(conversationId)
+  }, [conversationId, artifactsLoaded, loadArtifacts])
 
   const meta = useMemo(() => {
     if (conversationId === undefined) return undefined

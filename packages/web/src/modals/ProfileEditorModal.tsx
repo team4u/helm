@@ -19,6 +19,7 @@ import {
   type EnvPair,
   type ProfileDraft,
 } from './profile-editor-model.js'
+import { deepLinkSelection, fallbackSelection, shouldClearSelectionInStore, shouldSyncSelectionToStore } from './list-modal-selection.js'
 
 type EditorTab = 'basic' | 'system' | 'memory'
 
@@ -437,15 +438,38 @@ export function ProfileEditorModal({
     return () => { cancelled = true }
   }, [])
 
-  const profilesRef = useRef(profiles)
-  profilesRef.current = profiles
-  // 插件启停导致当前选中 Profile 被隐藏时，自动切换到首个可见 Profile，不留悬空选中。
+  // store 引用快照：effect 只依赖列表与选中，不因无关 SSE 帧重跑。
+  const storeRef = useRef(store)
+  storeRef.current = store
+  // 外部深链（URL 前进/后退）切换 Profile：本地跟随但绝不写回 store——
+  // 变更源头就是 store/URL，写回即回环（还会用旧 selectedId 覆盖用户刚导航到的条目）。
+  // 外部导航丢弃未保存草稿是显式权衡：浏览器回退是用户主动离开，不弹 confirm 阻断。
+  const initialProfileIdRef = useRef(initialProfileId)
   useEffect(() => {
-    setSelectedId((current) => {
-      if (current === null || isNew) return current
-      return profilesRef.current.some((p) => p.id === current) ? current : (profilesRef.current[0]?.id ?? null)
-    })
-  }, [profiles, isNew])
+    if (initialProfileId === initialProfileIdRef.current) return
+    initialProfileIdRef.current = initialProfileId
+    const next = deepLinkSelection(selectedId, initialProfileId)
+    if (next === null) return
+    setIsNew(false)
+    setSelectedId(next)
+    detailGeneration.current += 1
+    setDraft(null)
+    setLoading(true)
+    setTab('basic')
+    setError(null)
+  }, [initialProfileId, selectedId])
+  // 列表兑底（合并）：profiles 为空（刷新后资产未返回）时保留深链选中不覆盖；
+  // 列表到达后若选中项不在其中（深链 id 不存在 / 插件停用隐藏），回退首项不留悬空选中。
+  // 兑底属本地决策，经守卫写回（仅弹窗仍是 profile-editor 时）。
+  useEffect(() => {
+    if (isNew) return
+    const next = fallbackSelection(selectedId, profiles.map((p) => p.id))
+    if (next === null) return
+    setSelectedId(next)
+    if (shouldSyncSelectionToStore(storeRef.current.activeModal, 'profile-editor', next)) {
+      storeRef.current.setActiveModal({ kind: 'profile-editor', profileId: next })
+    }
+  }, [profiles, selectedId, isNew])
 
   const dirty = draft !== null && isDraftDirty(draft)
 
@@ -498,6 +522,9 @@ export function ProfileEditorModal({
     if (!guardUnsaved(selectedId)) return
     setIsNew(true)
     setSelectedId(null)
+    if (shouldClearSelectionInStore(store.activeModal, 'profile-editor')) {
+      store.setActiveModal({ kind: 'profile-editor' })
+    }
     setTab('basic')
     setError(null)
     setDraft(createDraft({ id: '', name: '', model: '', tags: [], system: '', memory: '' }))
@@ -515,6 +542,9 @@ export function ProfileEditorModal({
     }
     // 同步进入加载态：切换到详情返回之间不闪现旧 Profile 的可编辑表单。
     setSelectedId(id)
+    if (shouldSyncSelectionToStore(store.activeModal, 'profile-editor', id)) {
+      store.setActiveModal({ kind: 'profile-editor', profileId: id })
+    }
     setDraft(null)
     setLoading(true)
     setTab('basic')
@@ -556,6 +586,10 @@ export function ProfileEditorModal({
         const created = await assetsApi.createProfile(payload)
         setIsNew(false)
         setSelectedId(created.id)
+        // 新建成功后让地址栏深链指向新 Profile。
+        if (shouldSyncSelectionToStore(store.activeModal, 'profile-editor', created.id)) {
+          store.setActiveModal({ kind: 'profile-editor', profileId: created.id })
+        }
       } else if (selectedId) {
         await assetsApi.updateProfile(selectedId, { ...payload, id: selectedId })
       }
