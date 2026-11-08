@@ -109,3 +109,14 @@ test('侧边栏页脚底栏按钮尺寸统一与内边距防挤压', { timeout: 
   assert.match(stylesCss, /\.sidebar-footer\s+\.btn\s*\{[^}]*padding:\s*0\s*!important/)
   assert.match(stylesCss, /\.sidebar-theme-toggle\s*\{[^}]*padding:\s*0\s*!important/)
 })
+
+test('Mermaid 预览弹窗：移动端触控 touch-action 禁用浏览器原生劫持与 GPU 硬件加速平移', { timeout: 60_000 }, () => {
+  // CSS 样式中针对 stage、transform-plane 和 svg-layer 强制禁止默认手势劫持
+  assert.match(stylesCss, /\.mermaid-modal-stage,\s*\n\.mermaid-transform-plane,\s*\n\.mermaid-svg-layer,\s*\n\.mermaid-svg-layer\s*\*\s*\{[^}]*touch-action:\s*none\s*!important;/)
+  assert.match(stylesCss, /\.mermaid-transform-plane\s*\{[^}]*will-change:\s*transform;/)
+  // 组件层配置直接 GPU 驱动 transform 与 multi-touch 支持
+  assert.match(mermaidSource, /touchAction:\s*['"]none['"]/)
+  assert.match(mermaidSource, /translate3d\(/)
+  assert.match(mermaidSource, /activePointersRef/)
+  assert.match(mermaidSource, /requestAnimationFrame/)
+})

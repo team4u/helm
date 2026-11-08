@@ -32,6 +32,46 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
   const [copied, setCopied] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const stageRef = useRef<HTMLDivElement | null>(null)
+  const planeRef = useRef<HTMLDivElement | null>(null)
+  const offsetRef = useRef(offset)
+  const scaleRef = useRef(scale)
+  const rafIdRef = useRef<number | null>(null)
+
+  const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map())
+  const gestureStateRef = useRef<{
+    mode: 'pan' | 'pinch'
+    startX: number
+    startY: number
+    baseOffsetX: number
+    baseOffsetY: number
+    baseScale: number
+    startDistance: number
+    startCenterX: number
+    startCenterY: number
+  } | null>(null)
+
+  useEffect(() => {
+    offsetRef.current = offset
+  }, [offset])
+
+  useEffect(() => {
+    scaleRef.current = scale
+  }, [scale])
+
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current)
+        rafIdRef.current = null
+      }
+    }
+  }, [])
+
+  const applyTransformDirect = useCallback(() => {
+    if (planeRef.current) {
+      planeRef.current.style.transform = `translate3d(${offsetRef.current.x}px, ${offsetRef.current.y}px, 0) scale(${scaleRef.current})`
+    }
+  }, [])
 
   useEffect(() => {
     if (svg !== undefined && svg !== null) return
@@ -90,28 +130,41 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     if (!stage || !intrinsicSize) {
       setScale(1)
       setOffset({ x: 0, y: 0 })
+      scaleRef.current = 1
+      offsetRef.current = { x: 0, y: 0 }
+      applyTransformDirect()
       return
     }
     const fit = calcFitScreen()
-    setScale(fit)
     const scaledH = intrinsicSize.height * fit
     const stageH = stage.clientHeight
     const extraY = stageH > scaledH + 48 ? (stageH - scaledH) / 2 - 32 : 0
-    setOffset({ x: 0, y: Math.round(extraY) })
-  }, [calcFitScreen, intrinsicSize])
+    const newOffset = { x: 0, y: Math.round(extraY) }
+    setScale(fit)
+    setOffset(newOffset)
+    scaleRef.current = fit
+    offsetRef.current = newOffset
+    applyTransformDirect()
+  }, [calcFitScreen, intrinsicSize, applyTransformDirect])
 
   // 适宽重置（宽度贴合视口，从上往下自然展现）
   const resetFitWidth = useCallback(() => {
     const fitW = calcFitWidth()
     setScale(fitW)
     setOffset({ x: 0, y: 0 })
-  }, [calcFitWidth])
+    scaleRef.current = fitW
+    offsetRef.current = { x: 0, y: 0 }
+    applyTransformDirect()
+  }, [calcFitWidth, applyTransformDirect])
 
   // 1:1 实际比例重置（从上往下自然阅读）
   const resetActual = useCallback(() => {
     setScale(1)
     setOffset({ x: 0, y: 0 })
-  }, [])
+    scaleRef.current = 1
+    offsetRef.current = { x: 0, y: 0 }
+    applyTransformDirect()
+  }, [applyTransformDirect])
 
   // 快捷键支持
   useEffect(() => {
@@ -125,53 +178,170 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
       } else if (e.key === '1') {
         resetActual()
       } else if (e.key === '+' || e.key === '=') {
-        setScale((c) => Math.min(MAX_SCALE, Number((c + SCALE_STEP).toFixed(2))))
+        setScale((c) => {
+          const next = Math.min(MAX_SCALE, Number((c + SCALE_STEP).toFixed(2)))
+          scaleRef.current = next
+          applyTransformDirect()
+          return next
+        })
       } else if (e.key === '-' || e.key === '_') {
-        setScale((c) => Math.max(MIN_SCALE, Number((c - SCALE_STEP).toFixed(2))))
+        setScale((c) => {
+          const next = Math.max(MIN_SCALE, Number((c - SCALE_STEP).toFixed(2)))
+          scaleRef.current = next
+          applyTransformDirect()
+          return next
+        })
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, resetFitScreen, resetFitWidth, resetActual])
+  }, [onClose, resetFitScreen, resetFitWidth, resetActual, applyTransformDirect])
 
   // 滚轮操作：Ctrl/Cmd 缩放，普通滚轮顺畅平移长图
   const onWheel = (e: React.WheelEvent): void => {
     e.preventDefault()
     if (e.ctrlKey || e.metaKey) {
       const delta = e.deltaY < 0 ? SCALE_STEP : -SCALE_STEP
-      setScale((curr) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, Number((curr + delta).toFixed(2)))))
+      const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, Number((scale + delta).toFixed(2))))
+      setScale(nextScale)
+      scaleRef.current = nextScale
+      applyTransformDirect()
     } else {
-      setOffset((prev) => ({
-        x: prev.x - e.deltaX,
-        y: prev.y - e.deltaY,
-      }))
+      const nextOffset = {
+        x: offsetRef.current.x - e.deltaX,
+        y: offsetRef.current.y - e.deltaY,
+      }
+      setOffset(nextOffset)
+      offsetRef.current = nextOffset
+      applyTransformDirect()
     }
   }
 
-  // 指针拖拽平移：全局 window 监听，彻底避免脱出容器丢失捕获
+  // 指针拖拽与多点触控：全局 window 监听，rAF 驱动 GPU 合成变换（零 React 重渲染，移动端 60/120fps 丝滑）
   const onPointerDown = (e: React.PointerEvent): void => {
     if ((e.target as HTMLElement).closest('button')) return
-    const startX = e.clientX
-    const startY = e.clientY
-    const baseX = offset.x
-    const baseY = offset.y
+    // 阻止浏览器默认页面拖拽、文字选取或拉动刷新手势
+    if (e.cancelable) e.preventDefault()
+
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
     setIsDragging(true)
 
-    const onMove = (moveEv: PointerEvent): void => {
-      setOffset({
-        x: baseX + (moveEv.clientX - startX),
-        y: baseY + (moveEv.clientY - startY),
-      })
+    const pts = Array.from(activePointersRef.current.values())
+    if (pts.length === 1) {
+      gestureStateRef.current = {
+        mode: 'pan',
+        startX: pts[0]!.x,
+        startY: pts[0]!.y,
+        baseOffsetX: offsetRef.current.x,
+        baseOffsetY: offsetRef.current.y,
+        baseScale: scaleRef.current,
+        startDistance: 0,
+        startCenterX: 0,
+        startCenterY: 0,
+      }
+    } else if (pts.length >= 2) {
+      const p1 = pts[0]!
+      const p2 = pts[1]!
+      const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y)
+      const cx = (p1.x + p2.x) / 2
+      const cy = (p1.y + p2.y) / 2
+      gestureStateRef.current = {
+        mode: 'pinch',
+        startX: cx,
+        startY: cy,
+        baseOffsetX: offsetRef.current.x,
+        baseOffsetY: offsetRef.current.y,
+        baseScale: scaleRef.current,
+        startDistance: Math.max(10, dist),
+        startCenterX: cx,
+        startCenterY: cy,
+      }
     }
 
-    const onUp = (): void => {
-      setIsDragging(false)
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
+    const onMove = (ev: PointerEvent): void => {
+      if (!activePointersRef.current.has(ev.pointerId)) return
+      activePointersRef.current.set(ev.pointerId, { x: ev.clientX, y: ev.clientY })
+      const state = gestureStateRef.current
+      if (!state) return
+
+      const currentPts = Array.from(activePointersRef.current.values())
+      if (state.mode === 'pan' && currentPts.length === 1) {
+        const cur = currentPts[0]!
+        const dx = cur.x - state.startX
+        const dy = cur.y - state.startY
+        offsetRef.current = {
+          x: Math.round(state.baseOffsetX + dx),
+          y: Math.round(state.baseOffsetY + dy),
+        }
+        if (rafIdRef.current === null) {
+          rafIdRef.current = requestAnimationFrame(() => {
+            rafIdRef.current = null
+            applyTransformDirect()
+          })
+        }
+      } else if (currentPts.length >= 2) {
+        const p1 = currentPts[0]!
+        const p2 = currentPts[1]!
+        const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y)
+        const cx = (p1.x + p2.x) / 2
+        const cy = (p1.y + p2.y) / 2
+
+        if (state.mode === 'pinch' && state.startDistance > 0) {
+          const ratio = dist / state.startDistance
+          const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, Number((state.baseScale * ratio).toFixed(2))))
+          const dx = cx - state.startCenterX
+          const dy = cy - state.startCenterY
+
+          scaleRef.current = nextScale
+          offsetRef.current = {
+            x: Math.round(state.baseOffsetX + dx),
+            y: Math.round(state.baseOffsetY + dy),
+          }
+
+          if (rafIdRef.current === null) {
+            rafIdRef.current = requestAnimationFrame(() => {
+              rafIdRef.current = null
+              applyTransformDirect()
+            })
+          }
+        }
+      }
     }
 
-    window.addEventListener('pointermove', onMove)
+    const onUp = (upEv: PointerEvent): void => {
+      activePointersRef.current.delete(upEv.pointerId)
+      const remaining = Array.from(activePointersRef.current.values())
+
+      if (remaining.length === 1) {
+        const cur = remaining[0]!
+        gestureStateRef.current = {
+          mode: 'pan',
+          startX: cur.x,
+          startY: cur.y,
+          baseOffsetX: offsetRef.current.x,
+          baseOffsetY: offsetRef.current.y,
+          baseScale: scaleRef.current,
+          startDistance: 0,
+          startCenterX: 0,
+          startCenterY: 0,
+        }
+      } else if (remaining.length === 0) {
+        setIsDragging(false)
+        gestureStateRef.current = null
+        if (rafIdRef.current !== null) {
+          cancelAnimationFrame(rafIdRef.current)
+          rafIdRef.current = null
+        }
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        window.removeEventListener('pointercancel', onUp)
+
+        setOffset({ ...offsetRef.current })
+        setScale(scaleRef.current)
+      }
+    }
+
+    window.addEventListener('pointermove', onMove, { passive: true })
     window.addEventListener('pointerup', onUp)
     window.addEventListener('pointercancel', onUp)
   }
@@ -215,7 +385,12 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
             <button
               type="button"
               className="btn btn-sm"
-              onClick={() => setScale((c) => Math.min(MAX_SCALE, Number((c + SCALE_STEP).toFixed(2))))}
+              onClick={() => {
+                const next = Math.min(MAX_SCALE, Number((scale + SCALE_STEP).toFixed(2)))
+                setScale(next)
+                scaleRef.current = next
+                applyTransformDirect()
+              }}
               title="放大 (+)"
             >
               <HelmIcon name="zoom-in" size={12} />
@@ -223,7 +398,12 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
             <button
               type="button"
               className="btn btn-sm"
-              onClick={() => setScale((c) => Math.max(MIN_SCALE, Number((c - SCALE_STEP).toFixed(2))))}
+              onClick={() => {
+                const next = Math.max(MIN_SCALE, Number((scale - SCALE_STEP).toFixed(2)))
+                setScale(next)
+                scaleRef.current = next
+                applyTransformDirect()
+              }}
               title="缩小 (-)"
             >
               <HelmIcon name="zoom-out" size={12} />
@@ -285,7 +465,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
           ) : (
             <div
               ref={stageRef}
-              className="mermaid-modal-stage selectable"
+              className="mermaid-modal-stage"
               style={{
                 flex: 1,
                 width: '100%',
@@ -295,15 +475,20 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
                 position: 'relative',
                 cursor: isDragging ? 'grabbing' : 'grab',
                 background: 'var(--bg-subtle)',
+                touchAction: 'none',
+                userSelect: 'none',
+                WebkitUserSelect: 'none',
+                overscrollBehavior: 'none',
               }}
               onDoubleClick={onDoubleClick}
               onWheel={onWheel}
               onPointerDown={onPointerDown}
             >
               <div
+                ref={planeRef}
                 className="mermaid-transform-plane"
                 style={{
-                  transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+                  transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${scale})`,
                   transformOrigin: 'top center',
                   position: 'absolute',
                   left: 0,
@@ -315,6 +500,8 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
                   paddingTop: 32,
                   paddingBottom: 64,
                   pointerEvents: 'none',
+                  touchAction: 'none',
+                  willChange: isDragging ? 'transform' : 'auto',
                 }}
               >
                 {renderedSvg !== null ? (
@@ -325,6 +512,9 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
                       height: intrinsicSize ? `${intrinsicSize.height}px` : 'auto',
                       maxWidth: 'none',
                       pointerEvents: 'auto',
+                      touchAction: 'none',
+                      userSelect: 'none',
+                      WebkitUserSelect: 'none',
                     }}
                     dangerouslySetInnerHTML={{ __html: renderedSvg }}
                   />

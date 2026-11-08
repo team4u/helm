@@ -1448,6 +1448,24 @@ textarea {
   box-shadow: none !important;
 }
 
+.mermaid-modal-stage,
+.mermaid-transform-plane,
+.mermaid-svg-layer,
+.mermaid-svg-layer * {
+  touch-action: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+.mermaid-modal-stage {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  overscroll-behavior: none !important;
+}
+
+.mermaid-transform-plane {
+  will-change: transform;
+}
+
 .mermaid-svg-layer {
   display: block;
 }
