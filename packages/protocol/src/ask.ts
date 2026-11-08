@@ -4,13 +4,19 @@
 
 export type AskFieldType = 'text' | 'select' | 'confirm'
 
+/** select 字段的单个候选选项。 */
+export interface AskFieldOption {
+  label: string
+  value: string
+}
+
 /** 单个提问字段定义。 */
 export interface AskFieldSpec {
   name: string
   label: string
   type: AskFieldType
   /** type 为 select 时的候选列表。 */
-  options?: Array<{ label: string; value: string }>
+  options?: Array<AskFieldOption>
   /** true 时答案写入内存 SecretStash，持久层与上下文仅存 [REDACTED:stash:<uuid>]。 */
   secret?: boolean
   required?: boolean

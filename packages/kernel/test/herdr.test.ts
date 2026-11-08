@@ -77,6 +77,8 @@ class FakeTransport implements HerdrTransport {
   afterSendKeys: PaneStatus = 'working'
   /** agent.wait 轮询中止信号（测试用）。 */
   waitAbort: AbortSignal | undefined
+  /** 自定义终端快照（agent.read 返回；缺省 tail of <pane> 行）。 */
+  snapshotText: string | undefined
 
   private record(target: HerdrTarget, method: string, params: Record<string, unknown>): void {
     this.calls.push({ target, method, params })
@@ -186,7 +188,8 @@ class FakeTransport implements HerdrTransport {
       }
       case 'agent.read': {
         const pane = this.paneOf(params['target'])
-        return { type: 'pane_read', read: { pane_id: pane.paneId, text: `tail of ${pane.paneId}: SECRET-VALUE line` } }
+        const text = this.snapshotText !== undefined ? this.snapshotText : `tail of ${pane.paneId}: SECRET-VALUE line`
+        return { type: 'pane_read', read: { pane_id: pane.paneId, text } }
       }
       case 'agent.send_keys': {
         // 写键不代表检测到状态变化；consumeKeys 才推进权威水位。
@@ -1184,6 +1187,137 @@ test('agent_not_ready 桥接: 权威 blocked 时复用既有 agent，不启动�
     // 收尾：取消 Ask。
     env.backend.answerAsk(env.backend.createdAsks[0]!['id'] as string, { id: 'x', status: 'cancelled', answers: {} })
     await assert.rejects(p, () => true)
+  } finally {
+    await env.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 快照菜单提取与审批闭环复核
+// ---------------------------------------------------------------------------
+
+/** Agy 信任目录弹窗快照（游标列表选择式对话框）。 */
+const AGY_TRUST_SNAPSHOT = [
+  '/root/.herdr/worktrees/helm/helm-wf-cocmre',
+  '',
+  'Do you trust the contents of this project?',
+  '',
+  'Antigravity CLI requires permission to read, edit, and',
+  'execute files here.',
+  '',
+  '> Yes, I trust this folder',
+  '  No, exit',
+  '',
+  '  ↑/↓ Navigate · enter Confirm',
+  '',
+].join('\n')
+
+test('单测A: 快照游标菜单提取与按键映射——allow-enter/menu-1/custom 均正确发键', { timeout: 60_000 }, async () => {
+  // 阶段 1：纯函数验证（不启动插件）。
+  const { extractMenuItemsFromSnapshot, buildHerdrAskPromptPlan, parseCustomKeys } = await import('../src/builtin-plugins/herdr/prompt-options.js')
+  const items = extractMenuItemsFromSnapshot(AGY_TRUST_SNAPSHOT)
+  assert.equal(items.length, 2)
+  assert.deepEqual(
+    items.map((i) => ({ label: i.label, keys: i.keys, selected: i.selected })),
+    [
+      { label: 'Yes, I trust this folder', keys: ['enter'], selected: true },
+      { label: 'No, exit', keys: ['down', 'enter'], selected: false },
+    ],
+  )
+  const plan = buildHerdrAskPromptPlan(AGY_TRUST_SNAPSHOT)
+  assert.deepEqual(plan.decisionKeys.get('allow-enter'), ['enter'])
+  assert.deepEqual(plan.decisionKeys.get('menu-1'), ['down', 'enter'])
+  assert.deepEqual(parseCustomKeys('down, enter'), ['down', 'enter'])
+  assert.deepEqual(parseCustomKeys(''), [])
+
+  // 阶段 2：AskDoc options 与 description 代码块围栏。
+  const env = await makeEnv()
+  try {
+    env.transport.promptStatus = 'blocked'
+    env.transport.snapshotText = AGY_TRUST_SNAPSHOT
+    const resultPromise = spawnDirect(env, { agentType: 'herdr:agy' })
+    await waitFor(() => env.backend.createdAsks.length === 1)
+    const ask = env.backend.createdAsks[0]!
+    const options = ((ask['fields'] as Array<{ name: string; options?: Array<{ label: string; value: string }> }>)[0]!.options)!
+    assert.equal(options[0]!.value, 'allow-enter')
+    assert.ok(options[0]!.label.includes('Yes, I trust this folder'))
+    assert.equal(options[1]!.value, 'menu-1')
+    assert.ok(options[1]!.label.includes('No, exit'))
+    assert.ok(options[1]!.label.includes('down + enter'))
+    assert.ok((ask['description'] as string).includes('```'), 'description 含代码块围栏')
+
+    // 回答 allow-enter -> 发送 ['enter']。
+    const askId = ask['id'] as string
+    env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-enter' } })
+    await waitFor(() => env.transport.sendKeysLog.length === 1)
+    assert.deepEqual(env.transport.sendKeysLog[0]!.keys, ['enter'])
+
+    // 终端消化后收尾。
+    const pane = [...env.transport.panes.values()][0]!
+    const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
+    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'trusted')
+    env.transport.consumeKeys(pane.paneId, 'done')
+    assert.equal(await resultPromise, 'trusted')
+  } finally {
+    await env.close()
+  }
+})
+
+test('单测A-续: menu-1 与 custom 多键序列经完整审批桥发送', { timeout: 60_000 }, async () => {
+  for (const answer of [{ decision: 'menu-1' }, { decision: 'custom', key: 'down, enter' }]) {
+    const env = await makeEnv()
+    try {
+      env.transport.promptStatus = 'blocked'
+      env.transport.snapshotText = AGY_TRUST_SNAPSHOT
+      const resultPromise = spawnDirect(env, { agentType: 'herdr:agy' })
+      await waitFor(() => env.backend.createdAsks.length === 1)
+      const askId = env.backend.createdAsks[0]!['id'] as string
+      env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: answer })
+      await waitFor(() => env.transport.sendKeysLog.length === 1)
+      assert.deepEqual(env.transport.sendKeysLog[0]!.keys, ['down', 'enter'])
+      const pane = [...env.transport.panes.values()][0]!
+      const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
+      env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'picked')
+      env.transport.consumeKeys(pane.paneId, 'done')
+      assert.equal(await resultPromise, 'picked')
+    } finally {
+      await env.close()
+    }
+  }
+})
+
+test('单测B: 按键未生效时闭环复核——自动重开 AskDoc 且带未生效提示，二次选择后成功', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    env.transport.promptStatus = 'blocked'
+    const resultPromise = spawnDirect(env, { agentType: 'herdr:agy' })
+
+    // 第 1 次 AskDoc：人类回答 allow-y，发出 ['y']。
+    await waitFor(() => env.backend.createdAsks.length === 1)
+    const pane = [...env.transport.panes.values()][0]!
+    const firstId = env.backend.createdAsks[0]!['id'] as string
+    assert.ok(/:10$|:\d+$/.test(firstId), '首个 id 形如 herdr:local:<pane>:<seq>')
+    env.backend.answerAsk(firstId, { id: firstId, status: 'answered', answers: { decision: 'allow-y' } })
+    await waitFor(() => env.transport.sendKeysLog.length === 1)
+    assert.deepEqual(env.transport.sendKeysLog[0]!.keys, ['y'])
+
+    // 终端不响应 y：保持 blocked 且 seq 不变（consumeKeys 不调用）。
+    // 经退避后协调器自动重开第 2 次 AskDoc（id 带 :r1 后缀）。
+    await waitFor(() => env.backend.createdAsks.length === 2, 15_000, 50)
+    const second = env.backend.createdAsks[1]!
+    const secondId = second['id'] as string
+    assert.equal(secondId, `${firstId}:r1`, '重开 AskDoc id 为 <key>:r1')
+    assert.ok((second['description'] as string).includes('上次发送的按键 [y] 未解除阻塞'), '重开描述含未生效提示')
+
+    // 第 2 次回答 allow-enter -> 发送 ['enter'] -> 终端推进 done -> spawn 成功。
+    env.backend.answerAsk(secondId, { id: secondId, status: 'answered', answers: { decision: 'allow-enter' } })
+    await waitFor(() => env.transport.sendKeysLog.length === 2)
+    assert.deepEqual(env.transport.sendKeysLog[1]!.keys, ['enter'])
+    const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
+    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'recovered')
+    env.transport.consumeKeys(pane.paneId, 'done')
+    assert.equal(await resultPromise, 'recovered')
+    assert.equal(env.backend.createdAsks.length, 2, '整个闭环恰好两次 AskDoc')
   } finally {
     await env.close()
   }

@@ -1,6 +1,6 @@
 import type { Context } from '@earendil-works/chord/context'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
-import type { AgentGateResult, Profile, RpcResult } from '@helm/protocol'
+import type { AgentGateResult, AskFieldOption, Profile, RpcResult } from '@helm/protocol'
 
 /** One server, selected consistently for commands, files and event subscriptions. */
 export interface HerdrTarget {
@@ -143,7 +143,7 @@ export interface CreateAskSpecLike {
     name: string
     label: string
     type: 'text' | 'select' | 'confirm'
-    options?: Array<{ label: string; value: string }>
+    options?: Array<AskFieldOption>
     required?: boolean
   }>
   expectedStateSeq?: number

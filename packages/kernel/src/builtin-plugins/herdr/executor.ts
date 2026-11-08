@@ -26,6 +26,7 @@ import type { CreateAskResultLike, CreateAskSpecLike, HerdrPluginDependencies, H
 import { targetNodeId } from './contracts.js'
 import { validateOrThrow } from '../../plugins/schema.js'
 import { AskCoordinator, backoffForDuplicateBlocked, type AskEntry } from './asks.js'
+import { buildHerdrAskPromptPlan, parseCustomKeys, type HerdrAskPromptPlan } from './prompt-options.js'
 import { MetadataProjector } from './metadata.js'
 import { PaneRegistry, nodeIdOf, targetOf, type ManagedPane, type PaneRouting } from './panes.js'
 import {
@@ -605,6 +606,9 @@ export class HerdrExecutor {
     return output
   }
 
+  /** 已结算的 blocked 水位先做短暂退避防抖；若发键后连续退避仍停留在同一 blocked seq，重开审批让人类重选。 */
+  private static readonly MAX_SETTLED_BLOCKED_BACKOFFS = 2
+
   /** 已结算的 blocked 水位只退避；新水位交给同一审批桥。 */
   private async waitUntilSettled(request: AgentSpawnRequest, pane: ManagedPane, initial: HerdrAgentInfo): Promise<void> {
     let info = initial
@@ -614,7 +618,17 @@ export class HerdrExecutor {
       if (info.agentStatus === 'blocked') {
         const entry = this.asks.get(nodeIdOf(pane), pane.paneId, info.stateChangeSeq)
         if (entry?.phase === 'settled') {
-          await backoffForDuplicateBlocked(signalOf(request), ++attempts)
+          if (entry.keysSent && attempts >= HerdrExecutor.MAX_SETTLED_BLOCKED_BACKOFFS) {
+            // 闭环复核：send_keys 已发但终端仍停留在同一 seq 的 blocked（按键
+            // 未被接受）——重开审批让人类对照快照重新选择，绝不无限死锁。
+            this.asks.reopenUnresolved(nodeIdOf(pane), pane.paneId, info.stateChangeSeq)
+            attempts = 0
+            if (!await this.bridgeBlocked(request, pane, info)) {
+              throw new HelmError('aborted', `人类取消了 pane ${pane.paneId} 的审批`, 409)
+            }
+          } else {
+            await backoffForDuplicateBlocked(signalOf(request), ++attempts)
+          }
         } else {
           if (!await this.bridgeBlocked(request, pane, info)) {
             throw new HelmError('aborted', `人类取消了 pane ${pane.paneId} 的审批`, 409)
@@ -680,8 +694,8 @@ export class HerdrExecutor {
     if (existing !== undefined) return existing
     const task = Promise.resolve().then(async () => {
       await this.project(pane, `ask:${entry.askId}`)
-      const result = await this.createAsk(request, pane, entry, this.host.askConversationId(request.parentConversationId))
-      return this.consumeAskOutcome(request, pane, entry, result)
+      const { outcome, plan } = await this.createAsk(request, pane, entry, this.host.askConversationId(request.parentConversationId))
+      return this.consumeAskOutcome(request, pane, entry, outcome, plan)
     }).catch((error: unknown) => {
       this.asks.failCreate(entry)
       throw error
@@ -691,17 +705,20 @@ export class HerdrExecutor {
   }
 
   /**
-   * createAsk（预分配 id，条目已先登记）：
+   * createAsk（预分配 id，条目已先登记）：返回终态结果与本次快照生成的
+   * 按键规划（plan 供 consumeAskOutcome 将 decision 映射为按键序列）。
    * - 创建前权威复核：seq 已推进/已非 blocked -> 无需再问（synthetic superseded）；
    * - 宿主返回 cancelled 且条目已被销（404 竞态确认）-> 同样 synthetic superseded
-   *   回主循环，绝不留 pending。
+   *   回主循环，绝不留 pending；
+   * - 重试 attempt（重开审批）时描述开头附「上次按键未解除阻塞」提示，
+   *   终端快照用代码块围栏包裹（前端 AskDock 据此提取折叠快照）。
    */
   private async createAsk(
     request: AgentSpawnRequest,
     pane: ManagedPane,
     entry: AskEntry,
     conversationId: number,
-  ): Promise<CreateAskResultLike> {
+  ): Promise<{ outcome: CreateAskResultLike; plan: HerdrAskPromptPlan }> {
     const authority = await this.agentGet(targetOf(pane), pane.paneId, request.signal)
     for (const superseded of this.asks.observeAuthority({
       paneId: pane.paneId,
@@ -713,30 +730,32 @@ export class HerdrExecutor {
     }
     if (authority.stateChangeSeq !== entry.seq || authority.agentStatus !== 'blocked') {
       this.asks.settle(entry, { keysSent: false })
-      return { id: entry.askId, status: 'superseded', answers: {} }
+      return { outcome: { id: entry.askId, status: 'superseded', answers: {} }, plan: buildHerdrAskPromptPlan('') }
     }
     const snapshot = await this.readDiagnostic(pane)
+    const plan = buildHerdrAskPromptPlan(snapshot)
+    const retryHint =
+      entry.attempt > 0 && entry.lastSentKeys && entry.lastSentKeys.length > 0
+        ? `上次发送的按键 [${entry.lastSentKeys.join(', ')}] 未解除阻塞（终端仍停留在 seq ${entry.seq}），请对照快照重新选择。\n\n`
+        : ''
+    const description = `${retryHint}终端 agent (${pane.agentName}) 在 ${pane.effectiveCwd} 等待选择。终端快照（脱敏）：\n\`\`\`\n${snapshot.slice(0, 1500)}\n\`\`\``
     const pending = this.host.createAsk({
       id: entry.askId,
       conversationId,
       ownerPluginId: 'builtin:herdr',
       title: `Herdr 审批：pane ${pane.paneId}`,
-      description: `终端 agent (${pane.agentName}) 在 ${pane.effectiveCwd} 等待选择。终端快照（脱敏）：\n${snapshot.slice(0, 1500)}`,
+      description,
       fields: [
         {
           name: 'decision',
           label: '如何处理该阻塞？',
           type: 'select',
           required: true,
-          options: [
-            { label: '允许一次（发送 y）', value: 'allow-y' },
-            { label: '拒绝（发送 n）', value: 'deny-n' },
-            { label: '自定义按键（在 key 字段填写）', value: 'custom' },
-          ],
+          options: plan.options,
         },
         {
           name: 'key',
-          label: '自定义 logical key（仅 decision=custom 时使用，如 enter / esc / 1）',
+          label: '自定义按键序列（仅 decision=custom 时使用，多键用空格或逗号分隔，如 enter / esc / down, enter）',
           type: 'text',
           required: false,
         },
@@ -764,7 +783,7 @@ export class HerdrExecutor {
       }
     })()
     try {
-      return await Promise.race([result, polling.then(() => result)])
+      return { outcome: await Promise.race([result, polling.then(() => result)]), plan }
     } finally {
       monitor.abort()
       await polling.catch((error: unknown) => {
@@ -779,6 +798,7 @@ export class HerdrExecutor {
     pane: ManagedPane,
     entry: AskEntry,
     outcome: CreateAskResultLike,
+    plan: HerdrAskPromptPlan,
   ): Promise<boolean> {
     if (outcome.status !== 'answered') {
       this.asks.settle(entry, { keysSent: false })
@@ -786,17 +806,18 @@ export class HerdrExecutor {
       return false
     }
     const decision = outcome.answers['decision'] ?? ''
-    let keys: string[]
-    if (decision === 'allow-y') keys = ['y']
-    else if (decision === 'deny-n') keys = ['n']
-    else if (decision === 'custom') {
-      const custom = (outcome.answers['key'] ?? '').trim()
-      if (custom === '') {
+    let keys: string[] | undefined
+    if (decision === 'custom') {
+      const custom = parseCustomKeys(outcome.answers['key'] ?? '')
+      if (custom.length === 0) {
         this.asks.settle(entry, { keysSent: false })
         return false
       }
-      keys = [custom]
+      keys = custom
     } else {
+      keys = plan.decisionKeys.get(decision)
+    }
+    if (keys === undefined || keys.length === 0) {
       this.asks.settle(entry, { keysSent: false })
       return false
     }
@@ -823,7 +844,7 @@ export class HerdrExecutor {
       ),
       'agent.send_keys',
     )
-    this.asks.settle(entry, { keysSent: true })
+    this.asks.settle(entry, { keysSent: true, sentKeys: keys })
     this.host.notify('Herdr 审批已发送', `pane ${pane.paneId} 已按人类选择发送按键：${keys.join(' ')}`, 'info')
     return true
   }

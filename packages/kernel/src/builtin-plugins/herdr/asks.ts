@@ -28,14 +28,18 @@ export interface AskOutcome {
 
 export interface AskEntry {
   readonly key: string
-  readonly askId: string
+  askId: string
   readonly nodeId: string | undefined
   readonly paneId: string
   readonly seq: number
   phase: AskPhase
-  /** 已执行过一次 send_keys（同 seq 绝不重发）。 */
+  /** 当前 seq 下的第几次审批尝试（从 0 开始；0 时 askId === key，重试 N 时 askId === `${key}:r${N}`）。 */
+  attempt: number
+  /** 已在当前 attempt 执行过一次 send_keys。 */
   keysSent: boolean
-  /** 结算完成时间戳（settled 保留至 seq 推进，防重建/防重发）。 */
+  /** 最近一次发送的按键序列（供未解除阻塞重试时在描述中提示人类）。 */
+  lastSentKeys?: string[]
+  /** 当前 attempt 结算完成时间戳。 */
   settledAt?: number
 }
 
@@ -130,6 +134,7 @@ export class AskCoordinator {
       paneId,
       seq,
       phase: 'creating',
+      attempt: 0,
       keysSent: false,
     }
     this.entries_map.set(key, entry)
@@ -154,12 +159,33 @@ export class AskCoordinator {
   }
 
   /** 终态落位（answered/superseded/cancelled）：条目保留至 seq 推进。 */
-  settle(entry: AskEntry, outcome: { keysSent: boolean }): void {
+  settle(entry: AskEntry, outcome: { keysSent: boolean; sentKeys?: string[] }): void {
     if (this.entries_map.get(entry.key) !== entry) return
     entry.phase = 'settled'
     entry.keysSent = outcome.keysSent
+    entry.lastSentKeys = outcome.sentKeys
     entry.settledAt = Date.now()
     this.onChange()
+  }
+
+  /**
+   * 同 seq 未解除阻塞时重开审批：send_keys 已发出但终端仍停留在同一
+   * (nodeId, paneId, seq) 的 blocked 状态（按键未被接受）。清理旧 askId 结算
+   * 通道，attempt 递增生成新 askId（`<key>:r<N>`，避开宿主 ask_id_conflict），
+   * 条目重回 creating；不满足重开条件（无条目/未结算/未发过键）返回 undefined。
+   */
+  reopenUnresolved(nodeId: string | undefined, paneId: string, seq: number): AskEntry | undefined {
+    const key = askKey(nodeId, paneId, seq)
+    const entry = this.entries_map.get(key)
+    if (entry === undefined || entry.phase !== 'settled' || !entry.keysSent) return undefined
+    this.settleChannelOf(entry)
+    entry.attempt += 1
+    entry.askId = `${entry.key}:r${entry.attempt}`
+    entry.phase = 'creating'
+    entry.keysSent = false
+    entry.settledAt = undefined
+    this.onChange()
+    return entry
   }
 
   /** 创建失败（IO/宿主错误/销单确认）：条目移除（允许后续重试），错误由调用方上抛。 */
@@ -260,7 +286,11 @@ export function askKey(nodeId: string | undefined, paneId: string, seq: number):
   return `herdr:${nodeId ?? 'local'}:${paneId}:${seq}`
 }
 
-/** askId 即 askKey 字面量；nodeId 段原样保留（不折叠 local，防解析歧义）。 */
+/**
+ * askId 即 askKey 字面量（可选 `:r<正整数>` 重试后缀）；nodeId 段原样保留
+ * （不折叠 local，防解析歧义）。例：herdr:local:wR:p2:3916 与
+ * herdr:local:wR:p2:3916:r1 均解析出 { nodeId: undefined, paneId: 'wR:p2', seq: 3916 }。
+ */
 function parseAskId(askId: string): { nodeId: string | undefined; paneId: string; seq: number } | undefined {
   if (!askId.startsWith('herdr:')) return undefined
   const rest = askId.slice('herdr:'.length)
@@ -268,8 +298,13 @@ function parseAskId(askId: string): { nodeId: string | undefined; paneId: string
   if (lastColon <= 0) return undefined
   const panePart = rest.slice(0, lastColon)
   const seqPart = rest.slice(lastColon + 1)
-  const seq = Number(seqPart)
-  if (!Number.isSafeInteger(seq) || seq < 0 || seqPart !== String(seq)) return undefined
+  // 序列段允许一个可选重试后缀（:r<正整数>，重开审批的新 AskDoc ID）。
+  const retryMatch = /^(\d+)(?::r(\d+))?$/.exec(seqPart)
+  if (retryMatch === null) return undefined
+  const seq = Number(retryMatch[1]!)
+  const retry = retryMatch[2] !== undefined ? Number(retryMatch[2]) : undefined
+  if (!Number.isSafeInteger(seq) || seq < 0 || retryMatch[1]! !== String(seq)) return undefined
+  if (retry !== undefined && (!Number.isSafeInteger(retry) || retry < 1)) return undefined
   const paneColon = panePart.indexOf(':')
   if (paneColon <= 0) return undefined
   const nodeId = panePart.slice(0, paneColon)
