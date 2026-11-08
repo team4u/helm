@@ -130,6 +130,7 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
         tags: m.tags,
         cwd: m.cwd,
         model: m.model,
+        thinkingLevel: '',
         status: 'idle' as never,
         stateChangeSeq: 1,
         completionSeq: 0,

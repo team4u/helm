@@ -201,6 +201,7 @@ class FakeBackend implements PluginHostBackend {
       tags: [],
       cwd: found.cwd,
       model: 'faux/faux-1',
+      thinkingLevel: '',
       status: 'idle' as const,
       stateChangeSeq: 1,
       completionSeq: 0,

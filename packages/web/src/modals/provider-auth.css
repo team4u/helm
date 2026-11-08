@@ -1,4 +1,8 @@
 .modal.provider-modal { max-width: 980px; height: min(720px, 86dvh); }
+.provider-defaults { display: flex; flex-direction: column; gap: 16px; padding: 24px; max-width: 560px; }
+.provider-defaults-intro h3 { margin: 0 0 6px; font-size: 14px; }
+.provider-defaults-fields { display: flex; flex-direction: column; gap: 14px; }
+.provider-defaults-actions { display: flex; gap: 10px; }
 .provider-modal .modal-title { display: inline-flex; align-items: center; gap: 8px; }
 .provider-tabs { padding: 3px 16px 0; flex-shrink: 0; }
 .provider-tabs-note { margin-left: auto; font-size: 11px; color: var(--fg-subtle); }
@@ -82,5 +86,6 @@
   .provider-empty { padding: 18px; }
   .provider-tabs-note { display: none; }
   .provider-gateways { padding: 16px; }
+  .provider-defaults { padding: 16px; }
   .provider-gateway-fields { grid-template-columns: minmax(0, 1fr); }
 }

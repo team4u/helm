@@ -305,11 +305,28 @@ export interface ModelDescriptor {
   modelId: string
   available: boolean
   label?: string
+  /** 该模型支持的思考档位（缺省仅 off）。 */
+  thinkingLevels: string[]
 }
 
-export function normalizeModelCatalog(raw: unknown): ModelDescriptor[] {
-  if (!Array.isArray(raw)) throw new Error('模型目录格式无效')
-  return raw.map((item: unknown): ModelDescriptor => {
+export interface ModelCatalogInfo {
+  models: ModelDescriptor[]
+  /** 全局默认模型（未配置省略）。 */
+  defaultModel?: string
+  /** 全局默认思考档位（未配置省略）。 */
+  defaultThinkingLevel?: string
+}
+
+/** 解析 GET /api/models：新版 { models, thinkingLevels, defaultModel } 形状。 */
+export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw) || !('models' in raw) || !Array.isArray((raw as { models?: unknown }).models)) {
+    throw new Error('模型目录格式无效')
+  }
+  const body = raw as { models: unknown[]; thinkingLevels?: unknown; defaultModel?: unknown; defaultThinkingLevel?: unknown }
+  const levelsRaw = body.thinkingLevels && typeof body.thinkingLevels === 'object' && !Array.isArray(body.thinkingLevels)
+    ? body.thinkingLevels as Record<string, unknown>
+    : {}
+  const models = body.models.map((item: unknown): ModelDescriptor => {
     if (item === null || typeof item !== 'object') throw new Error('模型目录条目格式无效')
     const entry = item as Partial<ModelCatalogEntry>
     if (
@@ -319,13 +336,21 @@ export function normalizeModelCatalog(raw: unknown): ModelDescriptor[] {
     ) {
       throw new Error('模型目录条目格式无效')
     }
+    const id = `${entry.provider}/${entry.modelId}`
+    const levels = levelsRaw[id]
     return {
-      id: `${entry.provider}/${entry.modelId}`,
+      id,
       provider: entry.provider,
       modelId: entry.modelId,
       available: entry.available,
+      thinkingLevels: Array.isArray(levels) && levels.every((level) => typeof level === 'string') && levels.length > 0 ? levels as string[] : ['off'],
     }
   })
+  return {
+    models,
+    ...(typeof body.defaultModel === 'string' && body.defaultModel !== '' ? { defaultModel: body.defaultModel } : {}),
+    ...(typeof body.defaultThinkingLevel === 'string' && body.defaultThinkingLevel !== '' ? { defaultThinkingLevel: body.defaultThinkingLevel } : {}),
+  }
 }
 
 export const assetsApi = {
@@ -347,7 +372,13 @@ export const assetsApi = {
   deleteCredential: (id: string) =>
     apiRequest<{ ok: boolean }>('DELETE', `/api/credentials/${encodeURIComponent(id)}`),
 
-  listModels: async () => normalizeModelCatalog(await apiRequest<unknown>('GET', '/api/models')),
+  listModels: async () => normalizeModelCatalogInfo(await apiRequest<unknown>('GET', '/api/models')).models,
+  getDefaultModel: () => apiRequest<{ defaultModel: string; defaultThinkingLevel: string }>('GET', '/api/models/default'),
+  setDefaultModel: (model: string, thinkingLevel?: string) =>
+    apiRequest<{ ok: boolean; defaultModel: string; defaultThinkingLevel: string }>('PUT', '/api/models/default', {
+      model,
+      ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+    }),
   listModelProviders: () => apiRequest<ModelProviderSummary[]>('GET', '/api/models/providers'),
   refreshModels: (providers?: string[]) =>
     apiRequest<ModelProvidersRefreshResult>('POST', '/api/models/refresh', providers && providers.length > 0 ? { providers } : {}),

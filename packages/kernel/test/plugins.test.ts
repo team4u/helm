@@ -37,6 +37,7 @@ function makeConversation(id: number): ConversationSummary {
     tags: [],
     cwd: '/tmp',
     model: 'test/model',
+    thinkingLevel: '',
     status: 'idle',
     stateChangeSeq: 1,
     completionSeq: 0,

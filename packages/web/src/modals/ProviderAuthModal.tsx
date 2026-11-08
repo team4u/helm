@@ -79,8 +79,84 @@ function ProvidersSection() {
   )
 }
 
+/** 全局默认模型与思考档位（config.json.model / thinkingLevel）：会话继承链的最后一层。 */
+function DefaultsSection() {
+  const store = useHelmStore()
+  const [model, setModel] = useState('')
+  const [thinkingLevel, setThinkingLevel] = useState('')
+  const [loaded, setLoaded] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void assetsApi.getDefaultModel().then((result) => {
+      if (!cancelled) { setModel(result.defaultModel); setThinkingLevel(result.defaultThinkingLevel); setLoaded(true) }
+    }).catch((err: unknown) => {
+      if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  const selected = store.models.find((entry) => entry.id === model)
+  const levelOptions = selected?.thinkingLevels ?? ['off']
+
+  const save = async (): Promise<void> => {
+    setSaving(true)
+    setError(null)
+    try {
+      // 思考档位超出所选模型支持时显式拒绝（本地校验与服务端校验同规则）。
+      if (thinkingLevel !== '' && model !== '' && !levelOptions.includes(thinkingLevel)) {
+        throw new Error(`模型 ${model} 不支持思考档位 ${thinkingLevel}（支持：${levelOptions.join(' / ')}）`)
+      }
+      const result = await assetsApi.setDefaultModel(model, thinkingLevel)
+      setModel(result.defaultModel)
+      setThinkingLevel(result.defaultThinkingLevel)
+      await store.refreshAssets()
+      store.pushNotice({ type: 'notification', level: 'info', title: '全局默认已保存', body: result.defaultModel || '已清除全局默认模型' })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="provider-defaults" aria-label="全局默认模型">
+      <div className="provider-defaults-intro">
+        <h3>全局默认模型</h3>
+        <p className="provider-help">新会话的继承链：会话临时覆盖 &gt; Profile 模型 &gt; 此处全局默认。切换后对所有未显式覆盖模型的会话即时生效。</p>
+      </div>
+      <div className="provider-defaults-fields">
+        <label className="provider-field">默认模型
+          <select className="select mono" aria-label="全局默认模型" disabled={!loaded || saving} value={model} onChange={(event) => { setModel(event.target.value); if (!levelOptions.includes(thinkingLevel)) setThinkingLevel('') }}>
+            <option value="">未设置（未配置模型的会话无法回复）</option>
+            {store.models.filter((entry) => entry.available).map((entry) => (
+              <option key={entry.id} value={entry.id}>{entry.id}</option>
+            ))}
+            {model !== '' && !store.models.some((entry) => entry.id === model && entry.available) && (
+              <option value={model}>{model}（目录外）</option>
+            )}
+          </select>
+        </label>
+        <label className="provider-field">默认思考档位
+          <select className="select" aria-label="全局默认思考档位" disabled={!loaded || saving} value={thinkingLevel} onChange={(event) => setThinkingLevel(event.target.value)}>
+            <option value="">跟随 SDK 缺省</option>
+            {levelOptions.map((level) => <option key={level} value={level}>{level}</option>)}
+          </select>
+        </label>
+      </div>
+      {model !== '' && levelOptions.length <= 1 && <p className="provider-help">所选模型不支持思考档位。</p>}
+      {error && <div className="jr-callout jr-callout-err" role="alert"><HelmIcon name="alert-circle" size={13} /><span className="selectable">{error}</span></div>}
+      <div className="provider-defaults-actions">
+        <button className="btn btn-primary" disabled={!loaded || saving} onClick={() => void save()}><HelmIcon name={saving ? 'loader' : 'check'} size={13} />{saving ? '保存中…' : '保存全局默认'}</button>
+      </div>
+    </section>
+  )
+}
+
 export function ProviderAuthModal({ onClose }: { onClose(): void }) {
-  const [view, setView] = useState<'providers' | 'gateways'>('providers')
+  const [view, setView] = useState<'providers' | 'gateways' | 'defaults'>('providers')
   const modalRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
   closeRef.current = onClose
@@ -103,9 +179,10 @@ export function ProviderAuthModal({ onClose }: { onClose(): void }) {
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal provider-modal" ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="provider-modal-title" onClick={(event) => event.stopPropagation()}>
         <div className="modal-header"><span className="modal-title" id="provider-modal-title"><HelmIcon name="cpu" size={16} />模型供应商</span><button className="btn btn-ghost btn-sm" aria-label="关闭" onClick={onClose}><HelmIcon name="x" size={14} /></button></div>
-        <nav className="tabs-bar provider-tabs" aria-label="模型配置分类"><button className={`tab-btn${view === 'providers' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'providers'} onClick={() => setView('providers')}>供应商</button><button className={`tab-btn${view === 'gateways' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'gateways'} onClick={() => setView('gateways')}>自定义网关</button><span className="provider-tabs-note">由 PI 原生模块提供</span></nav>
+        <nav className="tabs-bar provider-tabs" aria-label="模型配置分类"><button className={`tab-btn${view === 'providers' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'providers'} onClick={() => setView('providers')}>供应商</button><button className={`tab-btn${view === 'gateways' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'gateways'} onClick={() => setView('gateways')}>自定义网关</button><button className={`tab-btn${view === 'defaults' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'defaults'} onClick={() => setView('defaults')}>全局模型</button><span className="provider-tabs-note">由 PI 原生模块提供</span></nav>
         {view === 'providers' && <ProviderCatalog onEditGateway={() => setView('gateways')} />}
         <div className="provider-gateway-panel" hidden={view !== 'gateways'}><ProvidersSection /></div>
+        <div className="provider-gateway-panel" hidden={view !== 'defaults'}><DefaultsSection /></div>
       </div>
     </div>
   )

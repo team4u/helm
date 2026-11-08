@@ -35,7 +35,7 @@ const bg = BACKGROUND_CONTEXT
 const DEFAULT_SPAWN_PROFILE = 'assistant'
 
 /** thinkingLevel 合法枚举（pi-ai ModelThinkingLevel；effort 映射到此，拒绝任意字符串）。 */
-const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+export const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
 export interface ResolvedProfile {
   model?: string

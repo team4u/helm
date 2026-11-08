@@ -118,6 +118,7 @@ function summary(id: number, title: string): ConversationSummary {
     tags: [],
     cwd: '/tmp',
     model: 'faux/model',
+    thinkingLevel: '',
     status: 'idle',
     stateChangeSeq: 1,
     completionSeq: 0,
@@ -224,7 +225,7 @@ function makeKernel(): KernelRuntimeLike {
     async search(q) {
       return [{ conversationId: 1, snippet: `hit:${q}` }]
     },
-    listModels: () => [{ provider: 'faux', modelId: 'model', available: true }],
+    listModels: () => ({ models: [{ provider: 'faux', modelId: 'model', available: true }], thinkingLevels: {} }),
     listModelProviders: () => [{ id: 'faux', name: 'Faux', modelCount: 1, authMethods: [{ type: 'api_key', label: 'API Key' }] }],
     refreshModels: undefined,
   }
@@ -794,11 +795,11 @@ test('models/providers 返回公开供应商元数据；路径不匹配不误入
   assert.equal((await call(handler, 'GET', '/api/models/providers/extra')).status, 404)
 })
 
-test('models 返回数组', { timeout: 60_000 }, async () => {
+test('models 返回目录对象（models 数组 + thinkingLevels）', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const res = await call(handler, 'GET', '/api/models')
   assert.equal(res.status, 200)
-  assert.ok(Array.isArray(res.body))
+  assert.ok(Array.isArray(res.body.models))
 })
 
 test('POST /api/models/refresh：空/{} 全量、provider/providers/force 透传；非法字段 400；未实现 501', { timeout: 60_000 }, async () => {

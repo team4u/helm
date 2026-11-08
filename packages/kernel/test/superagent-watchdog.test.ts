@@ -111,6 +111,7 @@ function makeConversationSummary(id: number, over: Partial<ConversationSummary> 
     tags: [],
     cwd: '/tmp',
     model: 'faux/faux-1',
+    thinkingLevel: '',
     status: 'idle',
     stateChangeSeq: 10,
     completionSeq: 0,

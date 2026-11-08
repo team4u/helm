@@ -5,7 +5,7 @@ import { matchesUiScope } from '../src/lib/types.js'
 
 const conversation: ConversationSummary = {
   id: 1, title: 'Scope fixture', profileId: 'assistant', tags: ['work'],
-  cwd: '/tmp', model: 'example/group/nested-model', status: 'idle',
+  cwd: '/tmp', model: 'example/group/nested-model', thinkingLevel: '', status: 'idle',
   stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: false,
   pendingAskCount: 0, createdAt: 1, updatedAt: 1,
 }

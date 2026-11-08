@@ -108,6 +108,7 @@ function makeExternalHost(options: {
         tags: [],
         cwd: '/parent/cwd',
         model: 'faux/faux-1',
+        thinkingLevel: '',
         status: 'idle',
         stateChangeSeq: 1,
         completionSeq: 0,

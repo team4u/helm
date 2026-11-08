@@ -283,6 +283,7 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         tags: [],
         cwd: dir,
         model: 'faux/faux-1',
+        thinkingLevel: '',
         unread: false,
         pinned: false,
         stateChangeSeq: 1,

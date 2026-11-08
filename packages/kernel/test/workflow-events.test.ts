@@ -35,7 +35,7 @@ function makeEnv(t: TestContext, spawnAgent: WorkflowServiceHost['spawnAgent']) 
     listActions: () => [],
     getConversation: (id) => ({
       id, title: '测试父会话', profileId: 'assistant', tags: [], cwd: dataDir,
-      model: 'test/model', status: 'idle', stateChangeSeq: 1, completionSeq: 0,
+      model: 'test/model', thinkingLevel: '', status: 'idle', stateChangeSeq: 1, completionSeq: 0,
       unread: false, pinned: false, pendingAskCount: 0, createdAt: 0, updatedAt: 0,
     }),
     async abortConversation() {},

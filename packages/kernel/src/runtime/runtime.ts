@@ -83,6 +83,7 @@ import { ConversationTracker, deriveTitle } from './conversations.js'
 import { EventHub } from './events.js'
 import { createFileModelsStore } from './models-store.js'
 import { buildModels, listModelCatalog, listModelProviders, requireModelRef } from './models.js'
+import type { ModelCatalog } from '@helm/protocol'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import type { Models, Provider } from '@earendil-works/pi-ai/models'
 import type { ModelsStore, Model, TranscriptContext } from '@earendil-works/pi-ai'
@@ -91,7 +92,7 @@ import { HelmStore } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { toConversationEntry } from './entries.js'
 import { buildManagedEnv, createBashTool, createEditTool, createReadArtifactTool, createReadTool, createWriteTool, isAbsoluteTargetPath, runGate, runShell } from './tools.js'
-import { runNativeSpawn } from './spawn.js'
+import { runNativeSpawn, THINKING_LEVELS } from './spawn.js'
 import { HelmPluginConfigStore } from './plugin-config-store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import { redactJsonValue } from '../redact.js'
@@ -257,6 +258,7 @@ export class KernelRuntime {
   private readonly setModelsSlot: (m: Models) => void = () => {}
   private modelsCurrent: Models
   private defaultModel: string | undefined
+  private defaultThinkingLevel: string | undefined
   private pluginHost: PluginHost | undefined
   private workflowRunner: WorkflowRunnerFn | undefined
   /** workflow run 摘要 provider（SSE snapshot 用；缺省 []）。 */
@@ -619,6 +621,15 @@ export class KernelRuntime {
         this.defaultModel = configured
       }
     }
+    if (this.defaultThinkingLevel === undefined) {
+      const configuredLevel = (await this.configSvc.get()).thinkingLevel
+      if (configuredLevel !== undefined && configuredLevel !== '') {
+        if (typeof configuredLevel !== 'string' || !THINKING_LEVELS.has(configuredLevel)) {
+          throw new HelmError('config_corrupt', `config.json.thinkingLevel 非法（合法值：${[...THINKING_LEVELS].join(' | ')}）`, 500)
+        }
+        this.defaultThinkingLevel = configuredLevel
+      }
+    }
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
 
     // 2) 内核工具（bash/read/read_artifact + subagent/SubagentWorkflow/run_action）
@@ -663,11 +674,17 @@ export class KernelRuntime {
     // 5) root #1（不注入业务 system；SYSTEM/MEMORY 由 assistant 插件 before_turn
     //    sections 注入，经 SDK PromptSection 真实进入模型请求）。
     // root 模型与普通会话同链：显式 override（无）> assistant profile.model > 全局。
+    // 思考档位同链：assistant profile.thinkingLevel > 全局默认；均未设置不注入。
+    const rootProfile = await this.readProfile('assistant')
+    const rootThinking = rootProfile?.thinkingLevel ?? this.defaultThinkingLevel
     const rootEffective = await this.resolveEffectiveModel(undefined, 'assistant')
     const modelRef = rootEffective ? requireModelRef(rootEffective) : undefined
     const root = await this.harness.root(BACKGROUND_CONTEXT, {
       agent: modelRef
-        ? { model: { provider: modelRef.provider, modelId: modelRef.modelId } }
+        ? {
+            model: { provider: modelRef.provider, modelId: modelRef.modelId },
+            ...(rootThinking ? { thinkingLevel: rootThinking as never } : {}),
+          }
         : undefined,
     })
     if (!this.store.getConv(root.id as number)) {
@@ -679,6 +696,7 @@ export class KernelRuntime {
         nodeId: 'local',
         cwd: this.init.cwd,
         model: rootEffective ?? '',
+        thinkingLevel: rootThinking ?? '',
         unread: false,
         pinned: false,
         stateChangeSeq: 1,
@@ -1445,6 +1463,7 @@ export class KernelRuntime {
               agent?.model !== undefined
                 ? `${agent.model.provider}/${agent.model.modelId}`
                 : '',
+            thinkingLevel: (agent as { thinkingLevel?: string } | undefined)?.thinkingLevel ?? '',
             nodeId: 'local',
             unread: false,
             pinned: false,
@@ -1931,6 +1950,12 @@ export class KernelRuntime {
     return requested
   }
 
+  /** 思考档位解析链：profile.thinkingLevel > 全局默认；均未设置返回 undefined。 */
+  private async resolveEffectiveThinkingLevel(profileId: string): Promise<string | undefined> {
+    const profile = await this.readProfile(profileId)
+    return profile?.thinkingLevel ?? this.defaultThinkingLevel
+  }
+
   async createConversation(init: ConversationInit = {}): Promise<ConversationSummary> {
     const profileId = await this.resolveProfileForCreate(init)
     const profile = await this.readProfile(profileId)
@@ -1962,6 +1987,7 @@ export class KernelRuntime {
         { nodeId },
       )
     }
+    const effectiveThinking = await this.resolveEffectiveThinkingLevel(profileId)
     const conv = await this.harness.createConversation(
       {
         ownership: { kind: 'ownerless' },
@@ -1969,6 +1995,7 @@ export class KernelRuntime {
           ? {
               model: { provider: effectiveRef.provider, modelId: effectiveRef.modelId },
               cwd: effectiveCwd,
+              ...(effectiveThinking ? { thinkingLevel: effectiveThinking as never } : {}),
             }
           : { cwd: effectiveCwd },
       },
@@ -1985,6 +2012,7 @@ export class KernelRuntime {
       nodeId,
       cwd: effectiveCwd,
       model: effectiveModel ?? '',
+      thinkingLevel: effectiveThinking ?? '',
       ...(init.model !== undefined && init.model !== '' ? { modelOverride: init.model } : {}),
       unread: false,
       pinned: false,
@@ -2016,17 +2044,35 @@ export class KernelRuntime {
       this.parseModelRefOrThrow(patch.model)
       nextOverride = patch.model
     }
+    // thinkingLevel：'' = 清除（跟随缺省）；非空必须在枚举内（拒绝任意字符串）。
+    let nextThinking: string | undefined
+    if (patch.thinkingLevel === undefined) {
+      nextThinking = meta.thinkingLevel
+    } else {
+      const level = patch.thinkingLevel.trim()
+      if (level !== '' && !THINKING_LEVELS.has(level)) {
+        throw new HelmError(
+          'validation_error',
+          `thinkingLevel '${level}' 非法；合法值：${[...THINKING_LEVELS].join(' | ')}`,
+          400,
+        )
+      }
+      nextThinking = level
+    }
     const nextProfileId = patch.profileId ?? meta.profileId
     // 换 profile 且无 override 时重算生效模型（跨 profile 隔离不残留旧模型）。
     const effectiveModel = await this.resolveEffectiveModel(nextOverride, nextProfileId)
     const effectiveRef = effectiveModel ? this.parseModelRefOrThrow(effectiveModel) : undefined
     // 先改 SDK（失败即抛，元数据不落），成功后写 helm 镜像——不允许镜像声称
     // 成功而 SDK configure 失败。
-    if (patch.cwd !== undefined || effectiveRef !== undefined) {
+    if (patch.cwd !== undefined || effectiveRef !== undefined || nextThinking !== meta.thinkingLevel) {
       const configureChange: Record<string, unknown> = {}
       if (patch.cwd !== undefined) configureChange['cwd'] = patch.cwd
       if (effectiveRef !== undefined) {
         configureChange['model'] = { provider: effectiveRef.provider, modelId: effectiveRef.modelId }
+      }
+      if (nextThinking !== meta.thinkingLevel) {
+        configureChange['thinkingLevel'] = (nextThinking === '' ? undefined : nextThinking) as never
       }
       const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
       if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
@@ -2040,6 +2086,7 @@ export class KernelRuntime {
       ...(patch.nodeId !== undefined ? { nodeId: patch.nodeId } : {}),
       ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
       model: effectiveModel ?? '',
+      ...(nextThinking !== undefined ? { thinkingLevel: nextThinking } : {}),
       ...(nextOverride !== undefined ? { modelOverride: nextOverride } : { modelOverride: undefined }),
       ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
       // unread 仅人类显式 PATCH 清零；API 读取不清零。
@@ -2507,6 +2554,7 @@ export class KernelRuntime {
       nodeId: sourceMeta.nodeId ?? 'local',
       cwd: sourceMeta.cwd,
       model: sourceMeta.model,
+      thinkingLevel: sourceMeta.thinkingLevel,
       ...(sourceMeta.modelOverride !== undefined ? { modelOverride: sourceMeta.modelOverride } : {}),
       unread: false,
       pinned: false,
@@ -2611,6 +2659,7 @@ export class KernelRuntime {
             nodeId: profile?.nodeId ?? this.store.getConv(parentId)?.nodeId ?? 'local',
             cwd: childCwd,
             model: modelMirror,
+            thinkingLevel: profile?.thinkingLevel ?? this.defaultThinkingLevel ?? '',
             ...(finalRequest.model !== undefined && finalRequest.model !== '' ? { modelOverride: finalRequest.model } : {}),
             unread: false,
             pinned: false,
@@ -2838,8 +2887,46 @@ export class KernelRuntime {
     })
   }
 
-  async listModels(): Promise<Array<{ provider: string; modelId: string; available: boolean }>> {
-    return listModelCatalog(this.modelsCurrent)
+  async listModels(): Promise<ModelCatalog> {
+    return listModelCatalog(this.modelsCurrent, { model: this.defaultModel, thinkingLevel: this.defaultThinkingLevel })
+  }
+
+  /** 设置全局默认模型与思考档位（config.json）：格式校验后原子写入并即时生效；空串删除键。 */
+  async setDefaultModel(model: string, thinkingLevel?: string): Promise<void> {
+    const trimmed = model.trim()
+    if (trimmed !== '') this.parseModelRefOrThrow(trimmed)
+    let nextLevel: string | undefined
+    if (thinkingLevel !== undefined) {
+      const level = thinkingLevel.trim()
+      if (level !== '' && !THINKING_LEVELS.has(level)) {
+        throw new HelmError(
+          'validation_error',
+          `thinkingLevel '${level}' 非法；合法值：${[...THINKING_LEVELS].join(' | ')}`,
+          400,
+        )
+      }
+      nextLevel = level === '' ? undefined : level
+    }
+    await this.configSvc.updateBy((current) => {
+      const next = { ...current }
+      if (trimmed === '') delete next.model
+      else next.model = trimmed
+      if (thinkingLevel === undefined) {
+        // 未传入则不动既有思考档位键。
+      } else if (nextLevel === undefined) {
+        delete next.thinkingLevel
+      } else {
+        next.thinkingLevel = nextLevel
+      }
+      return next
+    })
+    this.defaultModel = trimmed === '' ? undefined : trimmed
+    if (thinkingLevel !== undefined) this.defaultThinkingLevel = nextLevel
+    this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
+    // 无 override 的会话按新链重算镜像（与启动对齐同语义）。
+    for (const meta of this.store.listConvs()) {
+      if (meta.modelOverride === undefined) await this.alignConversationModel(meta.id)
+    }
   }
 
   listModelProviders() {
@@ -3052,7 +3139,7 @@ export class KernelRuntime {
       providers: options?.providers ? [...options.providers] : [],
       aborted: result.aborted || snapshotStale,
       errors,
-      models: await this.listModels(),
+      models: (await this.listModels()).models,
       providerCatalog: this.listModelProviders(),
     }
   }
@@ -3576,6 +3663,7 @@ function summaryOfFallback(
       : {},
     cwd: meta.cwd,
     model: meta.model,
+    thinkingLevel: (meta as { thinkingLevel?: string }).thinkingLevel ?? '',
     status,
     stateChangeSeq: meta.stateChangeSeq,
     completionSeq: meta.completionSeq,

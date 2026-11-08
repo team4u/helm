@@ -40,7 +40,7 @@ class TestEventHub implements EventHub {
 
 function makeConversation(id: number): ConversationSummary {
   return {
-    id, title: `conv-${id}`, profileId: 'default', tags: [], cwd: '/tmp', model: 'test/model',
+    id, title: `conv-${id}`, profileId: 'default', tags: [], cwd: '/tmp', model: 'test/model', thinkingLevel: '',
     status: 'idle', stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: false,
     pendingAskCount: 0, createdAt: 1, updatedAt: 1,
   }
@@ -93,7 +93,7 @@ function makeKernel(): KernelRuntimeLike {
     answerAsk: async () => {},
     cancelAsk: async () => {},
     search: async () => [],
-    listModels: () => [],
+    listModels: () => ({ models: [], thinkingLevels: {} }),
     listModelProviders: () => [],
     listNodes: () => [],
     issueNodeToken: () => ({ nodeId: 'local', token: 'local:t', createdAt: 1 }),

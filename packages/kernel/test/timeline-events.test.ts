@@ -52,6 +52,7 @@ function convMeta(id: number): ConvMeta {
     tags: [],
     cwd: '/tmp',
     model: 'faux/faux-1',
+    thinkingLevel: '',
     unread: false,
     pinned: false,
     stateChangeSeq: 1,

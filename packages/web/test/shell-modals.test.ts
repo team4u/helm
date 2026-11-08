@@ -20,6 +20,7 @@ function conv(partial: Partial<ConversationSummary> & { id: number }): Conversat
     tags: [],
     cwd: '/tmp',
     model: 'zhipu/glm-4.6',
+    thinkingLevel: '',
     status: 'idle',
     stateChangeSeq: 1,
     completionSeq: 1,

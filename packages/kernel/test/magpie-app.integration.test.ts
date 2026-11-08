@@ -115,10 +115,10 @@ test('Magpie 经真实组合层注册、刷新、HTTP/CLI、缓存重启与停�
     assert.equal(summary.pluginId, 'builtin:magpie')
     assert.equal(summary.dynamic, true)
     assert.equal(summary.modelCount, 3)
-    assert.deepEqual((await app.kernel.listModels()).filter((model) => model.provider === 'magpie').map((model) => model.modelId).sort(), [
+    assert.deepEqual((await app.kernel.listModels()).models.filter((model) => model.provider === 'magpie').map((model) => model.modelId).sort(), [
       'anthropic/claude-sonnet-4-6', 'fixture/responses', 'group/fixture-smart',
     ])
-    assert.ok((await app.kernel.listModels()).filter((model) => model.provider === 'magpie').every((model) => model.available))
+    assert.ok((await app.kernel.listModels()).models.filter((model) => model.provider === 'magpie').every((model) => model.available))
     assert.ok(app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie' && item.surface === 'settings.panel'))
     assert.ok(app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie' && item.surface === 'composer.pill'))
 
@@ -182,7 +182,7 @@ test('Magpie 经真实组合层注册、刷新、HTTP/CLI、缓存重启与停�
     await app.kernel.refreshModels({ providers: ['magpie'] })
     await app.kernel.plugins.disable('builtin:magpie')
     assert.ok(!app.kernel.listModelProviders().some((provider) => provider.id === 'magpie'))
-    assert.ok(!(await app.kernel.listModels()).some((model) => model.provider === 'magpie'))
+    assert.ok(!(await app.kernel.listModels()).models.some((model) => model.provider === 'magpie'))
     assert.ok(!app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie'))
   } finally {
     await hub?.close()

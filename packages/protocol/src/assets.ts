@@ -68,6 +68,8 @@ export interface ModelCatalog {
   thinkingLevels: Record<string, string[]>
   /** 全局默认模型（config.json.model / 启动参数；未配置省略）。 */
   defaultModel?: string
+  /** 全局默认思考档位（config.json.thinkingLevel；未配置省略）。 */
+  defaultThinkingLevel?: string
 }
 
 /** PI 内置供应商、插件动态供应商与已启用自定义网关的公开目录，不含凭据或私有请求头。 */

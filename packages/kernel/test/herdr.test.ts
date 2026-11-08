@@ -318,6 +318,7 @@ function makeConversation(id: number, over: Partial<ConversationSummary> = {}): 
     tags: [],
     cwd: '/tmp/helm-herdr-parent',
     model: '',
+    thinkingLevel: '',
     status: 'idle',
     stateChangeSeq: 1,
     completionSeq: 0,

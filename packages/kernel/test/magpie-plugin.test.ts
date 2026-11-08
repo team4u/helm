@@ -170,7 +170,7 @@ class MemoryConfigStore implements PluginConfigStore {
 
 function makeConversation(id: number, model = 'test/model'): ConversationSummary {
   return {
-    id, title: `conv-${id}`, profileId: 'default', tags: [], cwd: '/tmp', model,
+    id, title: `conv-${id}`, profileId: 'default', tags: [], cwd: '/tmp', model, thinkingLevel: '',
     status: 'idle', stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: false,
     pendingAskCount: 0, createdAt: 1, updatedAt: 1,
   }

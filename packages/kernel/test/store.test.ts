@@ -88,6 +88,7 @@ function conv(id: number, overrides: Partial<ConvMeta> = {}): ConvMeta {
     nodeId: 'local',
     cwd: '/tmp',
     model: 'm',
+    thinkingLevel: '',
     unread: false,
     pinned: false,
     stateChangeSeq: 1,

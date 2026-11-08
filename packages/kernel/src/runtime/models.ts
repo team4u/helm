@@ -20,6 +20,7 @@ import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completio
 import {
   createModels,
   createProvider,
+  getSupportedThinkingLevels,
   type ApiKeyAuth,
   type AuthResult,
   type Model,
@@ -29,10 +30,10 @@ import {
   type Provider,
 } from '@earendil-works/pi-ai'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
-import { HelmError, type ModelCatalogEntry, type ModelProviderSummary, type ProviderConfig } from '@helm/protocol'
+import { HelmError, type ModelCatalog, type ModelCatalogEntry, type ModelProviderSummary, type ProviderConfig } from '@helm/protocol'
 
 // 共享目录条目类型统一来自 @helm/protocol（此处重新导出，消费方无需改导入路径）。
-export type { ModelCatalogEntry }
+export type { ModelCatalog, ModelCatalogEntry }
 
 export interface ModelGatewayOptions {
   /** providers.json 条目。 */
@@ -182,19 +183,26 @@ export function parseModelRef(ref: string): ModelRefParts {
 }
 
 /**
- * 列出全部模型目录（含未配置 key 的，标注 available）。
+ * 列出全部模型目录（含未配置 key 的，标注 available）与各模型思考档位。
  * checkAuth 语义：undefined = 合法的「未配置凭据」；仅此情况记 available=false。
  * 读取错误 / 协议错误（ModelsError code auth 等）向上抛出诊断，绝不静默吞掉。
  */
-export async function listModelCatalog(models: Models): Promise<ModelCatalogEntry[]> {
-  const out: ModelCatalogEntry[] = []
+export async function listModelCatalog(models: Models, defaults?: { model?: string; thinkingLevel?: string }): Promise<ModelCatalog> {
+  const entries: ModelCatalogEntry[] = []
+  const thinkingLevels: Record<string, string[]> = {}
   for (const provider of models.getProviders()) {
     const auth = await models.checkAuth(provider.id)
     for (const model of models.getModels(provider.id)) {
-      out.push({ provider: provider.id, modelId: model.id, available: auth !== undefined })
+      entries.push({ provider: provider.id, modelId: model.id, available: auth !== undefined })
+      thinkingLevels[`${provider.id}/${model.id}`] = [...getSupportedThinkingLevels(model)]
     }
   }
-  return out
+  return {
+    models: entries,
+    thinkingLevels,
+    ...(defaults?.model ? { defaultModel: defaults.model } : {}),
+    ...(defaults?.thinkingLevel ? { defaultThinkingLevel: defaults.thinkingLevel } : {}),
+  }
 }
 
 /** 解析默认模型引用；任何缺失都显式报错（不假造模型）。 */

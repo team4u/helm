@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationDetail, ConversationSummary, HelmSnapshot } from '@helm/protocol'
 import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, SseParser } from '../src/lib/live-state.js'
-import { normalizeModelCatalog } from '../src/lib/api.js'
+import { normalizeModelCatalogInfo } from '../src/lib/api.js'
 
-const conv: ConversationSummary = { id: 1, title: '助理', profileId: 'assistant', cwd: '/tmp', model: '', status: 'idle', tags: [], stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: true, pendingAskCount: 0, createdAt: 0, updatedAt: 0 }
+const conv: ConversationSummary = { id: 1, title: '助理', profileId: 'assistant', cwd: '/tmp', model: '', thinkingLevel: '', status: 'idle', tags: [], stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: true, pendingAskCount: 0, createdAt: 0, updatedAt: 0 }
 const snapshot: HelmSnapshot = { seq: 10, conversations: [conv], pendingAsks: [], plugins: [], ui: [], workflowRuns: [] }
 
 test('SSE 分段 CRLF、多 data 行与注释不能丢帧', { timeout: 60_000 }, () => {
@@ -68,10 +68,22 @@ test('FTS input:/entry: 引用映射到真实时间线 entryId', { timeout: 60_0
   assert.equal(entryMatchesReference({ id: '4', kind: 'helm.input', data: { id: 'other' } }, 'input:submission-1'), false)
 })
 
-test('模型菜单按真实 /api/models 契约组成 provider/model，并保留未配置凭据状态', { timeout: 60_000 }, () => {
-  assert.deepEqual(normalizeModelCatalog([{ provider: 'gateway', modelId: 'family/model', available: true }, { provider: 'anthropic', modelId: 'claude', available: false }]), [
-    { id: 'gateway/family/model', provider: 'gateway', modelId: 'family/model', available: true },
-    { id: 'anthropic/claude', provider: 'anthropic', modelId: 'claude', available: false },
+test('模型菜单按真实 /api/models 契约组成 provider/model，思考档位缺省为 off', { timeout: 60_000 }, () => {
+  const catalog = normalizeModelCatalogInfo({ models: [
+    { provider: 'gateway', modelId: 'family/model', available: true },
+    { provider: 'anthropic', modelId: 'claude', available: false },
+  ], thinkingLevels: { 'gateway/family/model': ['off', 'low', 'high'] } })
+  assert.deepEqual(catalog.models, [
+    { id: 'gateway/family/model', provider: 'gateway', modelId: 'family/model', available: true, thinkingLevels: ['off', 'low', 'high'] },
+    { id: 'anthropic/claude', provider: 'anthropic', modelId: 'claude', available: false, thinkingLevels: ['off'] },
   ])
-  assert.throws(() => normalizeModelCatalog([{ id: 'fake' }]), /无效/)
+  assert.equal(catalog.defaultModel, undefined)
+  assert.throws(() => normalizeModelCatalogInfo({ models: [{ id: 'fake' }] }), /无效/)
+  assert.throws(() => normalizeModelCatalogInfo([1, 2]), /无效/)
+  assert.equal(normalizeModelCatalogInfo({ models: [] }).models.length, 0)
+})
+
+test('模型目录携带全局默认模型', { timeout: 60_000 }, () => {
+  const catalog = normalizeModelCatalogInfo({ models: [], thinkingLevels: {}, defaultModel: 'magpie/group/smart' })
+  assert.equal(catalog.defaultModel, 'magpie/group/smart')
 })

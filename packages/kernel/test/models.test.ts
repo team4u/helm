@@ -438,7 +438,7 @@ describe('官方 provider auth', { timeout: 60_000 }, () => {
     assert.equal(await models.checkAuth('openai'), undefined)
     assert.equal(await models.checkAuth('anthropic'), undefined)
     const catalog = await listModelCatalog(models)
-    const official = catalog.filter((e: ModelCatalogEntry) => e.provider === 'openai' || e.provider === 'anthropic')
+    const official = catalog.models.filter((e: ModelCatalogEntry) => e.provider === 'openai' || e.provider === 'anthropic')
     assert.ok(official.length > 0, '官方目录模型仍列出（含不可用项）')
     assert.ok(official.every((e: ModelCatalogEntry) => !e.available))
   })
@@ -498,7 +498,7 @@ describe('listModelCatalog 错误语义', { timeout: 60_000 }, () => {
       apiKeys: () => ({}),
     })
     const catalog = await listModelCatalog(models)
-    const entry = catalog.find((e: ModelCatalogEntry) => e.provider === 'gw-openai')
+    const entry = catalog.models.find((e: ModelCatalogEntry) => e.provider === 'gw-openai')
     assert.ok(entry)
     assert.equal(entry.modelId, 'gw-openai-model')
     assert.equal(entry.available, false)

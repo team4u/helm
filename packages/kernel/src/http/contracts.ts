@@ -18,6 +18,7 @@ import type {
   EnvExecRequest,
   EnvExecResponse,
   ModelCatalogEntry,
+  ModelCatalog,
   NodeInfo,
   NodeIssuedToken,
   ModelProviderSummary,
@@ -191,7 +192,9 @@ export interface KernelRuntimeLike {
   cancelAsk(id: string): Promise<void> | void
 
   search(query: string): Promise<SearchHit[]> | SearchHit[]
-  listModels(): Promise<ModelCatalogEntry[]> | ModelCatalogEntry[]
+  listModels(): Promise<ModelCatalog> | ModelCatalog
+  /** 设置全局默认模型与思考档位（config.json）；空串清除。未实现时 HTTP 501。 */
+  setDefaultModel?(model: string, thinkingLevel?: string): Promise<void>
   listModelProviders(): Promise<ModelProviderSummary[]> | ModelProviderSummary[]
   /**
    * 动态模型目录刷新（POST /api/models/refresh）：目标动态供应商 allowNetwork
@@ -262,4 +265,4 @@ export interface HubHandle {
 }
 
 // 导出供测试构造完整 Profile
-export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, WorkflowRunSummary, WorkflowRunRequest, PublicPluginDoc, NodeInfo, NodeIssuedToken, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, SavedWorkflowSummary, ConversationCompactResponse }
+export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, WorkflowRunSummary, WorkflowRunRequest, PublicPluginDoc, NodeInfo, NodeIssuedToken, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, SavedWorkflowSummary, ConversationCompactResponse }

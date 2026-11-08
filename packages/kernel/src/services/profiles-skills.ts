@@ -21,6 +21,8 @@ import { withFileLock } from './file-lock.js'
 export const DEFAULT_PROFILE_ID = 'assistant'
 export const DEFAULT_PROFILE_NAME = '个人助理'
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
+/** 思考档位合法枚举（与 pi-ai ModelThinkingLevel 同源；schema 无运行时依赖，此处独立声明）。 */
+const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
 /**
  * MEMORY.md 长期记忆字符上限（防线单一事实来源）：
@@ -90,6 +92,13 @@ export function validateProfileInput(input: unknown): Profile {
   if (model !== undefined) {
     if (typeof model !== 'string') throw new Error(`profile '${id}' model 必须是字符串`)
     profile.model = model
+  }
+  const thinkingLevel = input['thinkingLevel']
+  if (thinkingLevel !== undefined) {
+    if (typeof thinkingLevel !== 'string' || !THINKING_LEVELS.has(thinkingLevel)) {
+      throw new Error(`profile '${id}' thinkingLevel 非法（合法值：${[...THINKING_LEVELS].join(' | ')}）`)
+    }
+    profile.thinkingLevel = thinkingLevel
   }
   const nodeId = input['nodeId']
   if (nodeId !== undefined) {

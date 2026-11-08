@@ -92,6 +92,7 @@ function conversationSummary(id: number) {
     tags: [] as string[],
     cwd: '/tmp',
     model: 'x/y',
+    thinkingLevel: '',
     status: 'idle' as const,
     stateChangeSeq: 1,
     completionSeq: 0,

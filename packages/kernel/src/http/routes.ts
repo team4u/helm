@@ -388,6 +388,29 @@ async function route(
   }
 
   // ---- models / skills -------------------------------------------------------
+  if (head === 'models' && second === 'default' && third === undefined && method === 'GET') {
+    const catalog = await kernel.listModels()
+    return jsonOk(redactor, { defaultModel: catalog.defaultModel ?? '', defaultThinkingLevel: catalog.defaultThinkingLevel ?? '' })
+  }
+  if (head === 'models' && second === 'default' && third === undefined && method === 'PUT') {
+    if (kernel.setDefaultModel === undefined) {
+      throw new HelmError('not_implemented', '当前 runtime 未提供默认模型设置', 501)
+    }
+    const raw = await readOptionalJsonBody(ctx.request)
+    if (raw !== null && raw !== undefined && (typeof raw !== 'object' || Array.isArray(raw))) {
+      throw new HelmError('validation_error', '请求体需为 JSON 对象 { model?: string; thinkingLevel?: string }', 400)
+    }
+    const body = (raw ?? {}) as Record<string, unknown>
+    rejectUnknownKeys(body, new Set(['model', 'thinkingLevel']))
+    const model = body['model'] ?? ''
+    if (typeof model !== 'string') throw new HelmError('validation_error', 'model 必须为字符串（provider/model 或空串清除）', 400)
+    const hasLevel = 'thinkingLevel' in body
+    const level = body['thinkingLevel']
+    if (level !== undefined && typeof level !== 'string') throw new HelmError('validation_error', 'thinkingLevel 必须为字符串', 400)
+    await kernel.setDefaultModel(model, hasLevel ? (level as string) : undefined)
+    const catalog = await kernel.listModels()
+    return jsonOk(redactor, { ok: true, defaultModel: catalog.defaultModel ?? '', defaultThinkingLevel: catalog.defaultThinkingLevel ?? '' })
+  }
   if (head === 'models' && second === 'refresh' && third === undefined && method === 'POST') {
     // 空 body / {} 均合法（刷新全部）；provider 单选、providers 多选、force 可选。
     const raw = await readOptionalJsonBody(ctx.request)

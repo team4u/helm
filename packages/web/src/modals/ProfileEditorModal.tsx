@@ -96,7 +96,7 @@ function ProfileBasicTab({
   draft: ProfileDraft
   patch: (next: Profile) => void
   isNew: boolean
-  models: Array<{ id: string; label?: string }>
+  models: Array<{ id: string; available?: boolean; thinkingLevels?: string[] }>
 }) {
   const profile = draft.profile
   const [runtimeEnabled, setRuntimeEnabled] = useState(profile.runtime !== undefined)
@@ -138,22 +138,41 @@ function ProfileBasicTab({
           onChange={(e) => patch({ ...profile, name: e.target.value })}
         />
         <label htmlFor="helm-profile-model" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>模型</label>
-        <span style={{ display: 'flex', gap: 6 }}>
-          <input
+        <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <select
             id="helm-profile-model"
             className="input mono"
             style={{ flex: 1 }}
-            list="helm-model-options"
             value={profile.model ?? ''}
-            placeholder="provider/model，留空继承全局默认"
             onChange={(e) => patch({ ...profile, model: e.target.value })}
-          />
-          <datalist id="helm-model-options">
-            {modelOptions.map((id) => (
-              <option key={id} value={id} />
+          >
+            <option value="">跟随全局默认模型</option>
+            {models.filter((m) => m.available).map((m) => (
+              <option key={m.id} value={m.id}>{m.id}{(m.thinkingLevels?.length ?? 0) > 1 ? '（支持思考）' : ''}</option>
             ))}
-          </datalist>
+            {profile.model && !models.some((m) => m.id === profile.model && m.available) && (
+              <option value={profile.model}>{profile.model}（目录外）</option>
+            )}
+          </select>
           {!modelKnown && <span className="badge badge-warn">自定义</span>}
+        </span>
+        <label htmlFor="helm-profile-thinking" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>思考等级</label>
+        <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <select
+            id="helm-profile-thinking"
+            className="input"
+            style={{ flex: 1 }}
+            value={profile.thinkingLevel ?? ''}
+            onChange={(e) => patch({ ...profile, thinkingLevel: e.target.value === '' ? undefined : e.target.value })}
+          >
+            <option value="">跟随全局缺省</option>
+            {(models.find((m) => m.id === profile.model)?.thinkingLevels ?? ['off']).map((level) => (
+              <option key={level} value={level}>{level}</option>
+            ))}
+          </select>
+          {profile.model && models.find((m) => m.id === profile.model) && (models.find((m) => m.id === profile.model)!.thinkingLevels?.length ?? 0) <= 1 && (
+            <span className="provider-help" style={{ fontSize: 11 }}>该模型不支持思考档位</span>
+          )}
         </span>
         <label htmlFor="helm-profile-tags" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Tags</label>
         <input

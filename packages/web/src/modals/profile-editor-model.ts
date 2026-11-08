@@ -127,6 +127,7 @@ function normalizeProfileConfig(profile: Profile): Profile {
   if (name) config.name = name
   const model = profile.model?.trim()
   if (model) config.model = model
+  if (profile.thinkingLevel) config.thinkingLevel = profile.thinkingLevel
   const nodeId = profile.nodeId?.trim()
   if (nodeId) config.nodeId = nodeId
   const cwd = profile.cwd?.trim()

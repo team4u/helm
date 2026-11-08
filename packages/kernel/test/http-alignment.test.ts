@@ -65,6 +65,7 @@ function summary(id: number, title: string, profileId = 'assistant'): Conversati
     tags: profileId === 'worker' ? ['worker'] : [],
     cwd: '/tmp',
     model: 'faux/model',
+    thinkingLevel: '',
     status: 'idle',
     stateChangeSeq: 1,
     completionSeq: 0,
@@ -164,7 +165,7 @@ function makeKernel(): KernelRuntimeLike {
     async search() {
       return []
     },
-    listModels: () => [],
+    listModels: () => ({ models: [], thinkingLevels: {} }),
     listModelProviders: () => [],
   }
 }

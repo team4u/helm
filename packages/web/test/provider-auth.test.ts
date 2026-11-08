@@ -13,8 +13,8 @@ const catalog: ModelProviderSummary[] = [
   { id: 'plugin-gw', name: 'Plugin Gateway', modelCount: 3, dynamic: true, pluginId: 'builtin:some-plugin', authMethods: [{ type: 'api_key', label: 'API Key' }] },
 ]
 const models: ModelDescriptor[] = [
-  { id: 'openai/gpt-5', provider: 'openai', modelId: 'gpt-5', available: true },
-  { id: 'deepseek/deepseek-v4', provider: 'deepseek', modelId: 'deepseek-v4', available: false },
+  { id: 'openai/gpt-5', provider: 'openai', modelId: 'gpt-5', available: true, thinkingLevels: [] },
+  { id: 'deepseek/deepseek-v4', provider: 'deepseek', modelId: 'deepseek-v4', available: false, thinkingLevels: [] },
 ]
 const gateway: ProviderConfig = { id: 'disabled-gateway', protocol: 'openai', baseUrl: 'https://example.com/v1', models: ['model'], enabled: false }
 

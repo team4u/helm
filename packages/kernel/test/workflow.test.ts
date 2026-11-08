@@ -923,6 +923,7 @@ function makeServiceHost(options: { actionFail?: boolean } = {}): WorkflowServic
         tags: [],
         cwd: '/tmp',
         model: 'x/y',
+        thinkingLevel: '',
         status: 'idle',
         stateChangeSeq: 1,
         completionSeq: 0,

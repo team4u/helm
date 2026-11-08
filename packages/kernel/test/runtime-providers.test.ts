@@ -18,10 +18,10 @@ test('外部注入模型集在目录与热重载中保持调用方所有权', { 
   let kernel: KernelRuntime | undefined
   try {
     kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, models, autoResume: false })
-    const initial = await kernel.listModels()
+    const initial = (await kernel.listModels()).models
     await kernel.credentials.set('deepseek', 'fixture-unused')
     await kernel.reloadModels()
-    assert.deepEqual(await kernel.listModels(), initial)
+    assert.deepEqual((await kernel.listModels()).models, initial)
     assert.deepEqual(kernel.listModelProviders().map((provider) => provider.id), ['faux'])
   } finally {
     await kernel?.close()
@@ -39,7 +39,7 @@ test('全量供应商启动加载、增删密钥热更新与读取失败不静�
   try {
     kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
     assert.equal(kernel.listModelProviders().length, builtinProviders().length)
-    const entries = () => kernel!.listModels().then((catalog) => catalog.filter((entry) => entry.provider === 'deepseek'))
+    const entries = () => kernel!.listModels().then((catalog) => catalog.models.filter((entry) => entry.provider === 'deepseek'))
     const initial = await entries()
     assert.ok(initial.length > 0)
     assert.ok(initial.every((entry) => entry.available), '非 OpenAI/Anthropic 的凭据也必须在启动时加载')
@@ -83,7 +83,7 @@ test('运行时供应商注册：目录/归属/冲突拒绝/幂等注销/事件�
 
     // 目录与归属立即可见。
     assert.deepEqual(
-      (await kernel.listModels()).filter((entry) => entry.provider === 'plugin-fx').map((entry) => entry.modelId),
+      (await kernel.listModels()).models.filter((entry) => entry.provider === 'plugin-fx').map((entry) => entry.modelId),
       ['fx-model'],
     )
     const summary = kernel.listModelProviders().find((provider) => provider.id === 'plugin-fx')
@@ -110,7 +110,7 @@ test('运行时供应商注册：目录/归属/冲突拒绝/幂等注销/事件�
     )
     // 冲突拒绝后目录未被覆盖。
     assert.deepEqual(
-      (await kernel.listModels()).filter((entry) => entry.provider === 'plugin-fx').map((entry) => entry.modelId),
+      (await kernel.listModels()).models.filter((entry) => entry.provider === 'plugin-fx').map((entry) => entry.modelId),
       ['fx-model'],
     )
 
@@ -161,7 +161,7 @@ test('运行时供应商在途流计数与 teardown 预检（busy 409 / settled 
     const replacement = fauxProvider({ provider: 'plugin-busy', models: [{ id: 'replacement' }] })
     const unregisterReplacement = await kernel.registerRuntimeProvider(replacement.provider, 'builtin:busy')
     await unregister()
-    assert.deepEqual((await kernel.listModels()).filter((entry) => entry.provider === 'plugin-busy').map((entry) => entry.modelId), ['replacement'])
+    assert.deepEqual((await kernel.listModels()).models.filter((entry) => entry.provider === 'plugin-busy').map((entry) => entry.modelId), ['replacement'])
     await unregisterReplacement()
   } finally {
     await kernel?.close()

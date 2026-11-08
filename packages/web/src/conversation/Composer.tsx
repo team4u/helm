@@ -62,8 +62,28 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
     }
   }
 
+  const pickThinking = async (level: string): Promise<void> => {
+    setPending(true)
+    try {
+      await conversationsApi.patch(conversation.id, { thinkingLevel: level })
+    } catch (err) {
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: '切换思考等级失败',
+        body: err instanceof Error ? err.message : String(err),
+        conversationId: conversation.id,
+      })
+    } finally {
+      setPending(false)
+    }
+  }
+
   const rawShortName = conversation.model.split('/').pop() ?? conversation.model
   const shortName = rawShortName.trim() !== '' ? rawShortName : '默认模型'
+  const currentModel = store.models.find((model) => model.id === conversation.model)
+  const currentLevels = currentModel?.thinkingLevels ?? ['off']
+  const thinkingShort = conversation.thinkingLevel ? conversation.thinkingLevel : (currentLevels.length > 1 ? currentLevels[currentLevels.length - 1] : 'off')
 
   return (
     <span className="composer-picker-root" ref={rootRef} style={{ position: 'relative', display: 'inline-flex' }}>
@@ -78,6 +98,22 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
         {shortName}
         <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
       </button>
+      {currentLevels.length > 1 && (
+        <select
+          className="input"
+          aria-label="思考等级"
+          style={{ width: 'auto', padding: '2px 6px', fontSize: 11.5, height: 24 }}
+          disabled={pending}
+          value={conversation.thinkingLevel}
+          onChange={(event) => void pickThinking(event.target.value)}
+          title={`思考等级：${currentLevels.join(' / ')}`}
+        >
+          <option value="">默认（{thinkingShort}）</option>
+          {currentLevels.map((level) => (
+            <option key={level} value={level}>{level}</option>
+          ))}
+        </select>
+      )}
       {open ? (
         <div className="composer-popover" style={{ bottom: 'calc(100% + 6px)', left: 0, minWidth: 260 }}>
           <button
@@ -89,19 +125,21 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
             跟随 Profile 默认（清除覆盖）
           </button>
           <input className="input" aria-label="搜索模型" placeholder="搜索模型…" value={query} onChange={(event) => setQuery(event.target.value)} />
-          {store.models.filter((model) => model.id.toLowerCase().includes(query.toLowerCase())).map((m) => (
+          {store.models.filter((model) => model.available && model.id.toLowerCase().includes(query.toLowerCase())).map((m) => (
             <button
               key={m.id}
-              disabled={!m.available}
-              title={!m.available ? '请先在模型与凭据中配置密钥' : m.id}
+              title={m.id}
               type="button"
               className={`popover-item${m.id === conversation.model ? ' popover-item-active' : ''}`}
               onClick={() => void pick(m.id)}
             >
               <span className="mono">{m.modelId}</span>
-              <span className="popover-item-meta">{m.provider}{m.available ? '' : ' · 未配置凭据'}</span>
+              <span className="popover-item-meta">{m.provider}{m.thinkingLevels.length > 1 ? ' · 思考 ' + m.thinkingLevels[m.thinkingLevels.length - 1] : ''}</span>
             </button>
           ))}
+          {store.models.every((model) => !model.available) && (
+            <div className="popover-item" style={{ cursor: 'default', color: 'var(--fg-subtle)' }}>暂无可用模型；请先在「模型与凭据」配置供应商密钥</div>
+          )}
         </div>
       ) : null}
     </span>

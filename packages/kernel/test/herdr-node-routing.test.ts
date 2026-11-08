@@ -148,6 +148,7 @@ class FakeBackend implements PluginHostBackend {
       tags: [],
       cwd: '/tmp/helm-node-chain-parent',
       model: '',
+      thinkingLevel: '',
       status: 'idle',
       stateChangeSeq: 1,
       completionSeq: 0,
