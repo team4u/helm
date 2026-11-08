@@ -48,18 +48,26 @@ export function CodeBlockView({ code, language }: { code: string; language: stri
   )
 }
 
-/** mermaid 图：250ms 防抖渲染 SVG 内联展示；右上角「放大预览」与「复制源码」。 */
+/** mermaid 图：代码变化时 250ms 防抖，主题切换时即时重绘无闪烁；右上角「放大预览」与「复制源码」。 */
 function MermaidBlock({ code }: { code: string }) {
   const { theme } = useHelmStore()
   const [svg, setSvg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [zoomOpen, setZoomOpen] = useState(false)
   const seqRef = useRef(0)
+  const lastCodeRef = useRef<string | null>(null)
 
   useEffect(() => {
+    const isCodeChanged = lastCodeRef.current !== code
+    lastCodeRef.current = code
+
     const seq = ++seqRef.current
-    setSvg(null)
-    setError(null)
+    if (isCodeChanged) {
+      setSvg(null)
+      setError(null)
+    }
+
+    const delay = isCodeChanged ? 250 : 0
     const timer = setTimeout(() => {
       void (async () => {
         try {
@@ -67,14 +75,18 @@ function MermaidBlock({ code }: { code: string }) {
           mermaid.initialize(getMermaidConfig(theme))
           const id = `helm-mermaid-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
           const { svg: rendered } = await mermaid.render(id, code)
-          if (seqRef.current === seq) setSvg(rendered)
+          if (seqRef.current === seq) {
+            setSvg(rendered)
+            setError(null)
+          }
         } catch (err) {
           if (seqRef.current === seq) {
             setError(err instanceof Error ? err.message : String(err))
+            setSvg(null)
           }
         }
       })()
-    }, 250)
+    }, delay)
     return () => clearTimeout(timer)
   }, [code, theme])
 

@@ -503,7 +503,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
                 overflow: 'hidden',
                 position: 'relative',
                 cursor: isDragging ? 'grabbing' : 'grab',
-                background: 'var(--bg-subtle)',
+                background: 'var(--bg)',
                 touchAction: 'none',
                 userSelect: 'none',
                 WebkitUserSelect: 'none',
