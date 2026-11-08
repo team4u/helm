@@ -6,8 +6,8 @@ import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
 import type { ActionManifest, ArtifactMetadata, ConversationDetail, HelmEventFrame, HelmSnapshot, Profile, ProviderConfig, SkillSummary } from '@helm/protocol'
 import { ROOT_CONVERSATION_ID } from '@helm/protocol'
-import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, pluginsApi, setStoredToken, workflowsApi, type CredentialSummary, type ModelDescriptor } from './api.js'
-import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, SseParser, type LiveState } from './live-state.js'
+import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, nodesApi, pluginsApi, setStoredToken, workflowsApi, type CredentialSummary, type ModelDescriptor, type NodeInfo } from './api.js'
+import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, SseParser, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
 import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.js'
 import * as HelmPluginClient from './plugin-client-context.js'
@@ -192,6 +192,23 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     })
   }, [pushNotice])
   useEffect(() => { if (authenticated) void refreshAssets() }, [authenticated, refreshAssets])
+
+  // 刷新计算节点列表（健康指标实时变化，弹窗打开与手动刷新时拉取）。
+  const refreshNodes = useCallback(async (): Promise<NodeInfo[] | undefined> => {
+    const epoch = session.current
+    try {
+      const list = await nodesApi.list()
+      if (epoch !== session.current) return undefined
+      const sorted = sortNodes(list)
+      updateLive((state) => ({ ...state, nodes: sorted }))
+      return sorted
+    } catch (error) {
+      if (epoch === session.current) {
+        pushNotice({ type: 'notification', level: 'error', title: '计算节点加载失败', body: errorText(error) })
+      }
+      return undefined
+    }
+  }, [pushNotice, updateLive])
 
   const loadConversationDetail = useCallback(async (id: number, force = false): Promise<ConversationDetail | undefined> => {
     const key = `conversation:${id}`
@@ -419,12 +436,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     () => ({
       ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
       live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],
   )
   useEffect(() => {

@@ -206,6 +206,7 @@ function ProfileBasicTab({
         <input
           id="helm-profile-node"
           className="input mono"
+          list="helm-known-nodes"
           value={profile.nodeId ?? ''}
           placeholder="普通会话默认执行节点，留空为本机 local"
           onChange={(e) => patch({ ...profile, nodeId: e.target.value })}
@@ -284,6 +285,7 @@ function ProfileBasicTab({
               <input
                 id="helm-runtime-node"
                 className="input mono"
+                list="helm-known-nodes"
                 value={runtime.nodeId ?? ''}
                 placeholder="Herdr 目标节点，留空继承 Profile 或父会话节点"
                 onChange={(e) => patchRuntimeField({ nodeId: e.target.value })}
@@ -398,6 +400,8 @@ export function ProfileEditorModal({
   onClose: () => void
 }) {
   const store = useHelmStore()
+  // SSE 快照未到达或测试 mock 未携带时兜底为空（节点 datalist 可选项为空不影响表单）。
+  const knownNodes = store.nodes ?? []
   const [defaultModel, setDefaultModel] = useState('')
   const enabledPluginIds = useMemo(() => collectEnabledPluginIds(store.plugins), [store.plugins])
   // 列表与默认选中仅消费可见 Profile：插件未启用时其自举 Profile 不残留痕迹。
@@ -631,6 +635,11 @@ export function ProfileEditorModal({
           </button>
         </div>
         <div className="modal-body asset-modal-body" style={{ flexDirection: 'row', gap: 14, alignItems: 'stretch' }}>
+          <datalist id="helm-known-nodes">
+            {knownNodes.map((n) => (
+              <option key={n.id} value={n.id} />
+            ))}
+          </datalist>
           <div className="asset-modal-list" style={{ width: 210, minWidth: 210, overflowY: 'auto' }}>
             <ProfileListPanel
               profiles={profiles}

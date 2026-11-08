@@ -212,6 +212,27 @@ function NewConversationControl({
               <span className="nav-item-meta mono">{p.id}</span>
             </button>
           ))}
+          <div style={{ borderTop: '1px solid var(--border-subtle)', margin: '4px -4px 0' }} />
+          <button
+            className="row"
+            style={{
+              width: '100%',
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              textAlign: 'left',
+            }}
+            title="管理计算节点（接入 / 移除 BYOM 节点）"
+            onClick={() => {
+              setOpen(false)
+              store.setActiveModal({ kind: 'nodes' })
+            }}
+          >
+            <span className="nav-item-main">
+              <HelmIcon name="network" size={12} />
+              <span className="nav-item-label">管理计算节点</span>
+            </span>
+          </button>
         </div>
       )}
     </div>
@@ -735,6 +756,15 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
             onClick={() => store.setActiveModal({ kind: 'skill-viewer' })}
           >
             <HelmIcon name="sparkles" size={14} />
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            title="计算节点 Nodes"
+            aria-label="计算节点 Nodes"
+            onClick={() => store.setActiveModal({ kind: 'nodes' })}
+          >
+            <HelmIcon name="network" size={14} />
           </button>
           <button
             type="button"

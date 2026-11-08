@@ -10,6 +10,7 @@ import type {
   ConversationScope,
   ConversationSummary,
   CredentialSummary,
+  NodeInfo,
   NotificationEvent,
   PluginSummary,
   PluginUiContribution,
@@ -41,6 +42,7 @@ export type ActiveModal =
   | { kind: 'provider-auth' }
   | { kind: 'skill-viewer'; skillId?: string }
   | { kind: 'plugin-settings'; pluginId?: string }
+  | { kind: 'nodes'; nodeId?: string }
   | { kind: 'artifact-preview'; artifactId: string; conversationId?: number }
   | null
 
@@ -222,6 +224,7 @@ export interface HelmStoreValue {
   groupedUi: GroupedUiSpecs
   pluginDocs: Record<string, unknown> // key: `${pluginId}/${docName}`
   workflowRuns: WorkflowRunSummary[]
+  nodes: NodeInfo[]
 
   // 静态配置资产
   profiles: Profile[]
@@ -248,6 +251,7 @@ export interface HelmStoreValue {
   onAuthenticated(token: string): Promise<void>
   logout(): void
   refreshAssets(): Promise<void>
+  refreshNodes(): Promise<NodeInfo[] | undefined>
   loadConversationDetail(conversationId: number, force?: boolean): Promise<ConversationDetail | undefined>
   loadEarlierEntries(conversationId: number): Promise<void>
   loadConversationArtifacts(conversationId: number): Promise<ArtifactMetadata[] | undefined>

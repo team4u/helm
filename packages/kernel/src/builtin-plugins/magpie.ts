@@ -4,7 +4,7 @@
  * 职责：
  * - 经 ctx.provider 注册 pi-ai 动态目录 Provider（service.start 前由宿主完成
  *   挂载，service.stop 后注销——不在插件内绕宿主手动挂卸）；
- * - 公开 status doc 驱动 composer.pill / settings.panel / commandPalette 与
+ * - 公开 status doc 驱动 settings.panel / commandPalette 与
  *   `helm magpie status` CLI；动作总线提供 refresh / quota / groups / group；
  * - turn_settled 后台静默刷新配额与路由（?kept=1，不问供应商、不阻塞回合）。
  *
@@ -551,22 +551,6 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
       })
 
       // ---- 声明式 UI（@json-render；无 Emoji，icon 用 lucide 线性名） --------
-      ctx.ui.composerPill({
-        id: 'magpie-status',
-        label: '{$docs.status.summaryText}',
-        icon: 'network',
-        docs: [MAGPIE_STATUS_DOC],
-        // 仅使用 magpie 模型的会话展示胶囊（通用 modelProviders 作用域机制）
-        scope: { modelProviders: [MAGPIE_PROVIDER_ID] },
-        json: {
-          component: 'Button',
-          label: '{$docs.status.summaryText}',
-          icon: 'refresh-cw',
-          variant: 'ghost',
-          action: { type: 'helm:action', actionId: 'refresh', input: {} },
-        },
-      })
-
       ctx.ui.settingsPanel({
         id: 'magpie-panel',
         label: 'Magpie 网关',

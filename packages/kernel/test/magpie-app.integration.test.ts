@@ -120,7 +120,7 @@ test('Magpie 经真实组合层注册、刷新、HTTP/CLI、缓存重启与停�
     ])
     assert.ok((await app.kernel.listModels()).models.filter((model) => model.provider === 'magpie').every((model) => model.available))
     assert.ok(app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie' && item.surface === 'settings.panel'))
-    assert.ok(app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie' && item.surface === 'composer.pill'))
+    assert.ok(!app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie' && item.surface === 'composer.pill'), 'magpie 不再向 composer 注册占位胶囊')
 
     // 使用真实 Harness 与 SDK 发起三种原生协议请求，响应只来自受控本地网关。
     for (const [model, text, path] of [

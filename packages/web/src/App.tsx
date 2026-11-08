@@ -7,6 +7,7 @@ import { WorkbenchDrawer } from './conversation/WorkbenchDrawer.js'
 import { HelmStoreProvider } from './lib/HelmStoreProvider.js'
 import { useHelmStore } from './lib/store-context.js'
 import { CommandPaletteModal } from './modals/CommandPaletteModal.js'
+import { NodesModal } from './modals/NodesModal.js'
 import { PluginSettingsModal } from './modals/PluginSettingsModal.js'
 import { ProfileEditorModal } from './modals/ProfileEditorModal.js'
 import { ProviderAuthModal } from './modals/ProviderAuthModal.js'
@@ -162,6 +163,9 @@ function HelmShellInner() {
       )}
       {store.activeModal?.kind === 'plugin-settings' && (
         <PluginSettingsModal initialPluginId={store.activeModal.pluginId} onClose={closeModal} />
+      )}
+      {store.activeModal?.kind === 'nodes' && (
+        <NodesModal initialNodeId={store.activeModal.nodeId} onClose={closeModal} />
       )}
       {store.activeModal?.kind === 'artifact-preview' && (
         <ArtifactPreviewModal

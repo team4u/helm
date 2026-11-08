@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ConversationStatus } from '@helm/protocol'
 import { conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
+import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { matchesUiScope } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { Composer } from './Composer.js'
@@ -39,6 +40,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
   const [cwdDraft, setCwdDraft] = useState('')
   const [actionPending, setActionPending] = useState<string | null>(null)
   const [prefill, setPrefill] = useState<{ text: string; tick: number } | null>(null)
+  const [nodePatching, setNodePatching] = useState(false)
+  const currentNodeId = conversation?.nodeId || 'local'
+  const nodeKnown = conversation === undefined || store.nodes.some((n) => n.id === currentNodeId)
 
   const loadDetail = store.loadConversationDetail
   useEffect(() => {
@@ -109,6 +113,31 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
     await runAction('cwd', () => conversationsApi.patch(conversationId, { cwd: next }), '已更新工作目录')
   }
 
+  const changeNode = async (nextNodeId: string): Promise<void> => {
+    if (nodePatching || nextNodeId === currentNodeId) return
+    setNodePatching(true)
+    try {
+      await conversationsApi.patch(conversationId, { nodeId: nextNodeId })
+      store.pushNotice({
+        type: 'notification',
+        level: 'info',
+        title: '已切换执行节点',
+        body: `#${conversationId} -> ${nextNodeId}`,
+        conversationId,
+      })
+    } catch (err) {
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: '切换节点失败',
+        body: err instanceof Error ? err.message : String(err),
+        conversationId,
+      })
+    } finally {
+      setNodePatching(false)
+    }
+  }
+
   const requestEdit = (text: string): void => {
     setPrefill({ text, tick: Date.now() })
   }
@@ -164,6 +193,22 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
               className={conversation.status === 'working' ? 'spin-slow' : undefined}
             />
             {statusMeta.label}
+          </span>
+          <span title={`执行节点：${currentNodeId}（点击切换）`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+            <HelmIcon name="network" size={11} />
+            <select
+              className="input"
+              aria-label="会话执行节点"
+              disabled={nodePatching}
+              value={currentNodeId}
+              onChange={(e) => void changeNode(e.target.value)}
+              style={{ height: 22, fontSize: 11, padding: '0 4px', maxWidth: 150, cursor: 'pointer' }}
+            >
+              {store.nodes.map((n) => (
+                <option key={n.id} value={n.id}>{nodeOptionLabel(n)}</option>
+              ))}
+              {!nodeKnown && <option value={currentNodeId}>{currentNodeId}（未知）</option>}
+            </select>
           </span>
           {cwdEditing ? (
             <input

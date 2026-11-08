@@ -469,7 +469,7 @@ test('magpie6: 启用经 providers 端口挂载并拉取目录；停用后注销
     const actions = env.host.listActions().filter((a) => a.pluginId === MAGPIE).map((a) => a.id).sort()
     assert.deepEqual(actions, ['group', 'groups', 'quota', 'refresh', 'status'])
     const surfaces = env.host.listUi().filter((u) => u.pluginId === MAGPIE).map((u) => u.surface).sort()
-    assert.deepEqual(surfaces, ['commandPalette', 'composer.pill', 'settings.panel'])
+    assert.deepEqual(surfaces, ['commandPalette', 'settings.panel'])
 
     await waitFor(() => statusDoc(env).reachable === true)
     const doc = statusDoc(env)
@@ -874,14 +874,7 @@ test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、KeyValueList 表达式
     for (const item of ui) {
       assert.equal(emoji.test(JSON.stringify(item.spec)), false, `UI ${item.surface} 不得含 Emoji`)
     }
-    const pill = ui.find((u) => u.surface === 'composer.pill')!.spec as {
-      icon: string; docs: string[]; scope?: { modelProviders?: string[] }
-      json: { action: { type: string; actionId: string } }
-    }
-    assert.equal(pill.icon, 'network')
-    assert.deepEqual(pill.docs, ['status'])
-    assert.deepEqual(pill.scope, { modelProviders: ['magpie'] }, '胶囊按 modelProviders 作用域过滤会话')
-    assert.deepEqual(pill.json.action, { type: 'helm:action', actionId: 'refresh', input: {} })
+    assert.equal(ui.some((u) => u.surface === 'composer.pill'), false, 'magpie 不再向 composer 注册占位胶囊')
 
     // settingsPanel：KeyValueList 的 JSON Pointer 表达式用真实求值器验证取值
     //（key 写法 '/$docs/status/<field>'，与 web evaluator 语法一致——不是 '/$docs.status.x'）

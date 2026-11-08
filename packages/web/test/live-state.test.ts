@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationDetail, ConversationSummary, HelmSnapshot } from '@helm/protocol'
-import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, SseParser } from '../src/lib/live-state.js'
+import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, SseParser } from '../src/lib/live-state.js'
 import { normalizeModelCatalogInfo } from '../src/lib/api.js'
+import type { NodeInfo } from '@helm/protocol'
 
 const conv: ConversationSummary = { id: 1, title: '助理', profileId: 'assistant', cwd: '/tmp', model: '', thinkingLevel: '', status: 'idle', tags: [], stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: true, pendingAskCount: 0, createdAt: 0, updatedAt: 0 }
 const snapshot: HelmSnapshot = { seq: 10, conversations: [conv], pendingAsks: [], plugins: [], ui: [], workflowRuns: [] }
@@ -86,4 +87,56 @@ test('模型菜单按真实 /api/models 契约组成 provider/model，思考档�
 test('模型目录携带全局默认模型', { timeout: 60_000 }, () => {
   const catalog = normalizeModelCatalogInfo({ models: [], thinkingLevels: {}, defaultModel: 'magpie/group/smart' })
   assert.equal(catalog.defaultModel, 'magpie/group/smart')
+})
+
+const localNode: NodeInfo = { id: 'local', kind: 'local', online: true }
+const gpuNode: NodeInfo = { id: 'gpu-box', kind: 'byom', online: false }
+
+const nodesSnapshot: HelmSnapshot = {
+  ...snapshot,
+  nodes: [gpuNode, localNode],
+}
+
+test('快照 nodes 写入 live.nodes，local 恒在首项且其余按 id 稳定排列', { timeout: 60_000 }, () => {
+  const state = applySnapshot(emptyLiveState(), nodesSnapshot)
+  assert.deepEqual(state.nodes.map((n) => n.id), ['local', 'gpu-box'])
+  // 缺 nodes 字段时不报错，回退为空。
+  const bare = applySnapshot(emptyLiveState(), snapshot)
+  assert.deepEqual(bare.nodes, [])
+  // sortNodes：local 置顶、其余稳定。
+  const bNode: NodeInfo = { id: 'b', kind: 'byom', online: false }
+  const aNode: NodeInfo = { id: 'a', kind: 'byom', online: false }
+  assert.deepEqual(sortNodes([bNode, localNode, aNode]).map((n) => n.id), ['local', 'a', 'b'])
+})
+
+test('node.changed 事件：上线 upsert、离线更新、removed 移除', { timeout: 60_000 }, () => {
+  let state = applySnapshot(emptyLiveState(), nodesSnapshot)
+  // 上线：upsert 并保留 local 首项。
+  state = applyEventFrame(state, {
+    seq: 11,
+    event: { type: 'node.changed', node: { ...gpuNode, online: true, hostname: 'gpu' } },
+  })
+  assert.deepEqual(state.nodes.map((n) => n.id), ['local', 'gpu-box'])
+  assert.equal(state.nodes[1]?.online, true)
+  assert.equal(state.nodes[1]?.hostname, 'gpu')
+  // 离线（无 removed）：仍在列表中。
+  state = applyEventFrame(state, {
+    seq: 12,
+    event: { type: 'node.changed', node: { ...gpuNode, online: false } },
+  })
+  assert.equal(state.nodes.length, 2)
+  assert.equal(state.nodes[1]?.online, false)
+  // removed: true：从列表移除。
+  state = applyEventFrame(state, {
+    seq: 13,
+    event: { type: 'node.changed', node: { id: 'gpu-box', kind: 'byom', online: false }, removed: true },
+  })
+  assert.deepEqual(state.nodes.map((n) => n.id), ['local'])
+  // 新节点注册：追加并保持 local 首项。
+  state = applyEventFrame(state, {
+    seq: 14,
+    event: { type: 'node.changed', node: { id: 'macbook-pro', kind: 'byom', online: true } },
+  })
+  assert.equal(state.nodes[0]?.id, 'local')
+  assert.deepEqual(state.nodes.map((n) => n.id), ['local', 'macbook-pro'])
 })

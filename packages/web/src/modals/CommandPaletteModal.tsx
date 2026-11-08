@@ -116,6 +116,14 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       },
       {
         kind: 'command',
+        id: 'builtin:open-nodes',
+        title: '打开计算节点管理',
+        icon: 'network',
+        keywords: ['node', 'nodes', 'byom', 'helm-node', '节点'],
+        run: () => store.setActiveModal({ kind: 'nodes' }),
+      },
+      {
+        kind: 'command',
         id: 'builtin:open-plugin-settings',
         title: '打开插件设置',
         icon: 'settings',

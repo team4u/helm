@@ -69,6 +69,7 @@ function makeStore(plugins: PluginSummary[], profiles: Profile[]): HelmStoreValu
     },
     pluginDocs: {},
     workflowRuns: [],
+    nodes: [],
     profiles,
     models: [
       {
@@ -97,6 +98,7 @@ function makeStore(plugins: PluginSummary[], profiles: Profile[]): HelmStoreValu
     onAuthenticated: async () => {},
     logout: () => {},
     refreshAssets: async () => {},
+    refreshNodes: async () => undefined,
     loadConversationDetail: async () => undefined,
     loadEarlierEntries: async () => {},
     loadConversationArtifacts: async () => undefined,

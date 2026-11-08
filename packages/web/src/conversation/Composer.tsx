@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ArtifactMetadata, ConversationSummary } from '@helm/protocol'
-import { conversationsApi } from '../lib/api.js'
+import { assetsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { matchesUiScope, type HelmStoreValue } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
@@ -33,6 +33,7 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
   const store = useHelmStore()
   const [open, setOpen] = useState(false)
   const [pending, setPending] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [query, setQuery] = useState('')
   const rootRef = useRef<HTMLSpanElement | null>(null)
 
@@ -54,6 +55,42 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
       document.removeEventListener('keydown', onKeyDown)
     }
   }, [open])
+
+  const refreshCatalog = async (): Promise<void> => {
+    setRefreshing(true)
+    try {
+      const res = await assetsApi.refreshModels()
+      await store.refreshAssets()
+      const errors = Object.entries(res.errors ?? {})
+      if (errors.length > 0) {
+        store.pushNotice({
+          type: 'notification',
+          level: 'warning',
+          title: '部分供应商目录刷新失败',
+          body: errors.map(([p, err]) => `${p}: ${err}`).join('; '),
+          conversationId: conversation.id,
+        })
+      } else {
+        store.pushNotice({
+          type: 'notification',
+          level: 'info',
+          title: '已刷新模型目录',
+          body: `共 ${store.models.length} 个可用模型`,
+          conversationId: conversation.id,
+        })
+      }
+    } catch (err) {
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: '刷新模型目录失败',
+        body: err instanceof Error ? err.message : String(err),
+        conversationId: conversation.id,
+      })
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   const pick = async (model: string): Promise<void> => {
     setOpen(false)
@@ -126,7 +163,30 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
           >
             跟随 Profile 默认（清除覆盖）
           </button>
-          <input className="input" aria-label="搜索模型" placeholder="搜索模型…" value={query} onChange={(event) => setQuery(event.target.value)} />
+          <div className="composer-model-search-bar" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input
+              className="input"
+              style={{ flex: 1, minWidth: 0 }}
+              aria-label="搜索模型"
+              placeholder="搜索模型…"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm composer-model-refresh-btn"
+              style={{ width: 28, height: 28, padding: 0, flexShrink: 0 }}
+              disabled={refreshing}
+              title="刷新动态模型目录"
+              aria-label="刷新动态模型目录"
+              onClick={(e) => {
+                e.stopPropagation()
+                void refreshCatalog()
+              }}
+            >
+              <HelmIcon name="rotate-cw" size={13} className={refreshing ? 'spin-slow' : undefined} />
+            </button>
+          </div>
           {store.models.filter((model) => model.available && model.id.toLowerCase().includes(query.toLowerCase())).map((m) => (
             <button
               key={m.id}

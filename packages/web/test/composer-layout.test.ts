@@ -58,3 +58,11 @@ test('移动端插件入口收进会话工具菜单，挂件默认折叠', { tim
   assert.match(source, /widgets\.length > 0 && \(!isMobile \|\| widgetsExpanded\)/)
   assert.doesNotMatch(source, /composer-widgets-toggle/)
 })
+
+test('ModelPicker 内置原生动态模型刷新按钮，调用 assetsApi.refreshModels', { timeout: 60_000 }, () => {
+  assert.match(source, /assetsApi\.refreshModels\(\)/, '必须调用通用的 assetsApi.refreshModels')
+  assert.match(source, /store\.refreshAssets\(\)/, '刷新完成后需同步更新前端资产')
+  assert.match(source, /composer-model-refresh-btn/, '刷新按钮具有专属类名')
+  assert.match(source, /aria-label="刷新动态模型目录"/, '具备无障碍描述')
+  assert.match(source, /name="rotate-cw"/, '使用 rotate-cw 线性图标')
+})

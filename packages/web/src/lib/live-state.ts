@@ -1,4 +1,4 @@
-import type { AskSpec, ConversationDetail, ConversationEntry, ConversationLive, ConversationSummary, HelmEventFrame, HelmSnapshot, PluginSummary, PluginUiContribution, WorkflowRunSummary } from '@helm/protocol'
+import type { AskSpec, ConversationDetail, ConversationEntry, ConversationLive, ConversationSummary, HelmEventFrame, HelmSnapshot, NodeInfo, PluginSummary, PluginUiContribution, WorkflowRunSummary } from '@helm/protocol'
 
 export interface LiveState {
   seq: number
@@ -12,14 +12,20 @@ export interface LiveState {
   uiContributions: PluginUiContribution[]
   pluginDocs: Record<string, unknown>
   workflowRuns: WorkflowRunSummary[]
+  nodes: NodeInfo[]
 }
 
 export function emptyLiveState(): LiveState {
-  return { seq: -1, conversations: [], conversationDetails: {}, pendingEntries: {}, conversationLives: {}, pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: [], pluginDocs: {}, workflowRuns: [] }
+  return { seq: -1, conversations: [], conversationDetails: {}, pendingEntries: {}, conversationLives: {}, pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: [], pluginDocs: {}, workflowRuns: [], nodes: [] }
 }
 
 function sortConversations(list: ConversationSummary[]): ConversationSummary[] {
   return [...list].sort((a, b) => Number(b.id === 1) - Number(a.id === 1) || b.updatedAt - a.updatedAt)
+}
+
+/** 节点列表排序：local 恒在首项，其余按 id 稳定排列。 */
+export function sortNodes(list: NodeInfo[]): NodeInfo[] {
+  return [...list].sort((a, b) => Number(a.id === 'local') * -1 - Number(b.id === 'local') * -1 || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 }
 
 function upsert<T extends { id: string | number }>(list: T[], item: T): T[] {
@@ -35,7 +41,7 @@ export function applySnapshot(previous: LiveState, snapshot: HelmSnapshot): Live
   if (!Number.isSafeInteger(snapshot.seq) || snapshot.seq < 0 || !Array.isArray(snapshot.conversations) || !Array.isArray(snapshot.pendingAsks) || !Array.isArray(snapshot.plugins) || !Array.isArray(snapshot.ui) || !Array.isArray(snapshot.workflowRuns)) {
     throw new Error('内核实时快照格式无效')
   }
-  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions: snapshot.ui, workflowRuns: snapshot.workflowRuns, resolvedAsksByConv: previous.resolvedAsksByConv }
+  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions: snapshot.ui, workflowRuns: snapshot.workflowRuns, nodes: Array.isArray(snapshot.nodes) ? sortNodes(snapshot.nodes) : [], resolvedAsksByConv: previous.resolvedAsksByConv }
 }
 
 export function entryMatchesReference(entry: ConversationEntry, reference: string): boolean {
@@ -115,6 +121,14 @@ export function applyEventFrame(state: LiveState, frame: HelmEventFrame): LiveSt
       break
     case 'workflow.updated':
       if ('run' in event) next.workflowRuns = upsert(state.workflowRuns, event.run)
+      break
+    case 'node.changed':
+      if ('node' in event) {
+        next.nodes =
+          event.removed === true
+            ? state.nodes.filter((item) => item.id !== event.node.id)
+            : sortNodes(upsert(state.nodes, event.node))
+      }
       break
   }
   return next
