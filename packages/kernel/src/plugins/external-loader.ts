@@ -31,7 +31,7 @@
  *   并不构成安全沙箱承诺）。
  */
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { HelmError, type PluginDefinition, type PluginSummary } from '@helm/protocol';
 
@@ -133,7 +133,7 @@ async function resolvePluginEntry(dirPath: string): Promise<string | undefined> 
   }
   const entry = resolve(dirPath, main);
   const rel = relative(realpathSync(dirPath), entry);
-  if (rel.startsWith('..') || isAbsolute(rel)) {
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new HelmError(
       'plugin_manifest_invalid',
       `外部插件 ${dirPath} 的 plugin.json main 越出插件目录: ${main}`,
@@ -176,7 +176,7 @@ function assertEntryFile(dirPath: string, main: string, entry: string): string {
     });
   }
   const rel = relative(realpathSync(dirPath), real);
-  if (rel.startsWith('..') || isAbsolute(rel)) {
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new HelmError(
       'plugin_manifest_invalid',
       `外部插件 ${dirPath} 的 plugin.json main（含符号链接）越出插件目录: ${main}`,
@@ -190,8 +190,9 @@ function assertEntryFile(dirPath: string, main: string, entry: string): string {
 /** 依次探测约定入口文件；命中即返回绝对路径，全部缺失返回 undefined。 */
 function probeConventionEntry(dirPath: string): string | undefined {
   for (const name of CONVENTION_ENTRIES) {
+    let file: boolean;
     try {
-      if (statSync(join(dirPath, name)).isFile()) return join(dirPath, name);
+      file = statSync(join(dirPath, name)).isFile();
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
@@ -202,7 +203,9 @@ function probeConventionEntry(dirPath: string): string | undefined {
           { dirPath, code },
         );
       }
+      continue;
     }
+    if (file) return assertEntryFile(dirPath, name, join(dirPath, name));
   }
   return undefined;
 }
@@ -321,7 +324,7 @@ function normalizeDefinition(definition: PluginDefinition, dirPath: string): Plu
   if (!isAbsolute(clientRoot)) {
     const resolvedRoot = resolve(dirPath, clientRoot);
     const rel = relative(realpathSync(dirPath), resolvedRoot);
-    if (rel.startsWith('..') || isAbsolute(rel)) {
+    if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
       throw new HelmError(
         'invalid_plugin_definition',
         `外部插件 ${dirPath} 的相对 clientRoot 越出插件目录: ${clientRoot}`,

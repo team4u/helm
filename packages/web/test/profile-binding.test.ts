@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Profile } from '@helm/protocol'
 import { ProfileService } from '../../kernel/src/services/profiles-skills.js'
+import { parseProfileBody } from '../../kernel/src/http/validate.js'
 import { buildProfileSavePayload, createDraft, editProfileField } from '../src/modals/profile-editor-model.js'
 
 /** 模拟 GET /profiles/:id 返回的富化详情（profile.json 基础字段 + 文件全文）。 */
@@ -47,6 +48,8 @@ test('只改 name 的载荷保存后完整保留执行配置；未编辑 memory 
     const initial = await svc.save({
       id: 'coder',
       name: '代码工人',
+      managedByPlugin: 'community:reporter',
+      humanSelectable: false,
       model: 'zhipu/glm-4.6',
       nodeId: 'gpu-node',
       cwd: '/srv/work',
@@ -69,6 +72,8 @@ test('只改 name 的载荷保存后完整保留执行配置；未编辑 memory 
     const payload = buildProfileSavePayload(edited, { isNew: false })
     // 载荷层断言：完整基础配置 + 大文本省略。
     assert.equal(payload.name, '重构工人')
+    assert.equal(payload.managedByPlugin, 'community:reporter')
+    assert.equal(payload.humanSelectable, false)
     assert.equal(payload.model, 'zhipu/glm-4.6')
     assert.equal(payload.nodeId, 'gpu-node')
     assert.equal(payload.cwd, '/srv/work')
@@ -77,11 +82,13 @@ test('只改 name 的载荷保存后完整保留执行配置；未编辑 memory 
     assert.equal('system' in payload, false)
     assert.equal('memory' in payload, false)
 
-    // 真实服务保存（HTTP 层 PUT 即 profiles.save({...payload, id})）。
-    await svc.save({ ...payload, id: 'coder' } as never)
+    // 经过与 PUT 相同的边界校验，再持久化，避免仅服务直调掩盖白名单漏字段。
+    await svc.save(parseProfileBody({ ...payload, id: 'coder' }, { requireId: true }))
 
     const after = await detailOf(svc, 'coder')
     assert.equal(after.name, '重构工人', '展示名已更新')
+    assert.equal(after.managedByPlugin, 'community:reporter', '编辑保存后不丢插件归属')
+    assert.equal(after.humanSelectable, false, '编辑保存后不把常驻专属 Profile 变成可选角色')
     assert.equal(after.model, 'zhipu/glm-4.6', '只改名不丢 model')
     assert.equal(after.nodeId, 'gpu-node', '只改名不丢节点绑定')
     assert.equal(after.cwd, '/srv/work', '只改名不丢工作目录')

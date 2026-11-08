@@ -431,6 +431,23 @@ test('clientRoot 非字符串在边界显式拒绝（不引入虚假沙箱承诺
   }
 })
 
+test('无清单的约定入口同样拒绝 symlink 越界，不导入外部模块', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-convention-'))
+  try {
+    const dirPath = join(dataDir, 'plugins', 'convention-escape')
+    mkdirSync(dirPath, { recursive: true })
+    const outside = join(dataDir, 'outside.mjs')
+    writeFileSync(outside, 'throw new Error("outside_module_was_imported")')
+    symlinkSync(outside, join(dirPath, 'index.mjs'))
+    await assert.rejects(
+      makeEnvIn(dataDir),
+      (err: unknown) => err instanceof HelmError && err.code === 'plugin_manifest_invalid',
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
 test('入口探测遇到真实 IO 故障（ELOOP symlink 环）显式报错，不误判为纯数据目录（root 用户同样生效）', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {

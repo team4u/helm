@@ -305,9 +305,14 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   const thinkingLevel = optionalEnum(body, 'thinkingLevel', ['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const)
   const tags = optionalStringArray(body, 'tags')
   const runtime = parseProfileRuntime(body.runtime)
+  const managedByPlugin = optionalString(body, 'managedByPlugin')
+  if (managedByPlugin !== undefined && managedByPlugin.trim() === '') {
+    throw new ValidationError('managedByPlugin 需为非空插件 ID')
+  }
+  const humanSelectable = optionalBoolean(body, 'humanSelectable')
   const system = optionalString(body, 'system', { maxLength: 512 * 1024 })
   const memory = optionalString(body, 'memory', { maxLength: 512 * 1024 })
-  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'thinkingLevel', 'nodeId', 'cwd', 'tags', 'runtime', 'system', 'memory']))
+  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'thinkingLevel', 'nodeId', 'cwd', 'tags', 'runtime', 'managedByPlugin', 'humanSelectable', 'system', 'memory']))
   const nodeId = optionalProfileNodeId(body)
   const cwd = optionalString(body, 'cwd')
   if (cwd !== undefined && cwd.length === 0) throw new ValidationError('cwd 需为非空字符串')
@@ -327,6 +332,8 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
     profile.tags = tags
   }
   if (runtime !== undefined) profile.runtime = runtime
+  if (managedByPlugin !== undefined) profile.managedByPlugin = managedByPlugin
+  if (humanSelectable !== undefined) profile.humanSelectable = humanSelectable
   if (system !== undefined) profile.system = system
   if (memory !== undefined) profile.memory = memory
   return profile

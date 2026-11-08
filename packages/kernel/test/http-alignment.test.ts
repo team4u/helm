@@ -544,6 +544,28 @@ test('GET /api/plugins/:id/docs/:name 返回 {pluginId,name,value}；私有/未�
   assert.equal(extra.status, 404)
 })
 
+test('Profile 归属与选择策略经 HTTP 保存回读，并拒绝非法类型', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const created = await call(handler, 'POST', '/api/profiles', {
+    body: { id: 'managed-profile', managedByPlugin: 'community:reporter', humanSelectable: false },
+  })
+  assert.equal(created.status, 201)
+  const got = await call(handler, 'GET', '/api/profiles/managed-profile')
+  assert.equal(got.body.managedByPlugin, 'community:reporter')
+  assert.equal(got.body.humanSelectable, false)
+  const updated = await call(handler, 'PUT', '/api/profiles/managed-profile', {
+    body: { ...got.body, name: '改名后仍为托管角色' },
+  })
+  assert.equal(updated.status, 200)
+  assert.equal(updated.body.managedByPlugin, 'community:reporter')
+  assert.equal(updated.body.humanSelectable, false)
+  for (const invalid of [{ managedByPlugin: '' }, { managedByPlugin: '  ' }, { managedByPlugin: 42 }, { humanSelectable: 'false' }]) {
+    const bad = await call(handler, 'POST', '/api/profiles', { body: { id: 'bad-metadata', ...invalid } })
+    assert.equal(bad.status, 400)
+    assert.equal(bad.body.error.code, 'validation_error')
+  }
+})
+
 // ---------------------------------------------------------------------------
 // Profile runtime 扩展字段（nodeId/workspace/env 严校验）
 // ---------------------------------------------------------------------------

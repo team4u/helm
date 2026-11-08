@@ -49,9 +49,20 @@ export function SkillViewerModal({
   }, [])
 
   useEffect(() => {
-    if (!selectedId) return
-    void loadFile(selectedId, activeFile)
-  }, [selectedId, activeFile, loadFile])
+    if (selectedId !== null && skills.some((entry) => entry.id === selectedId)) return
+    // 插件停用会移除当前技能；同时作废在途读取，防止旧内容写回。
+    loadGeneration.current += 1
+    setSelectedId(skills[0]?.id ?? null)
+    setActiveFile(SKILL_MAIN_FILE)
+    setText('')
+    setError(null)
+    setLoading(false)
+  }, [selectedId, skills])
+
+  useEffect(() => {
+    if (skill === undefined) return
+    void loadFile(skill.id, activeFile)
+  }, [skill?.id, activeFile, loadFile])
 
   const selectSkill = (id: string) => {
     // 同步进入加载态：切换到内容返回之间不闪现旧技能文本。
@@ -137,12 +148,12 @@ export function SkillViewerModal({
             ))}
           </div>
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {!selectedId && (
+            {!skill && (
               <div style={{ color: 'var(--fg-subtle)', fontSize: 12.5, padding: '24px 0', textAlign: 'center' }}>
                 选择左侧技能查看内容
               </div>
             )}
-            {selectedId && (
+            {skill && (
               <>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                   {files.map((f) => (

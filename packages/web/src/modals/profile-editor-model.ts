@@ -134,6 +134,8 @@ function normalizeProfileConfig(profile: Profile): Profile {
   if (cwd) config.cwd = cwd
   const runtime = normalizeRuntime(profile.runtime)
   if (runtime) config.runtime = runtime
+  if (profile.managedByPlugin !== undefined) config.managedByPlugin = profile.managedByPlugin
+  if (profile.humanSelectable !== undefined) config.humanSelectable = profile.humanSelectable
   return config
 }
 
