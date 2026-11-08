@@ -1431,6 +1431,46 @@ textarea {
   height: auto;
 }
 
+/* Mermaid 节点文本防截断与外边框保护：
+ * 1. svg 与 foreignObject 设为 overflow: visible，避免顶部标题（如 subgraph）及边缘被 viewBox 削去；
+ * 2. foreignObject 内层 div 覆盖 Mermaid 内部写死的 120px max-width，保证多行文本利用容器全宽；
+ * 3. 标签行高紧凑居中，外层段落 margin 清零，杜绝因行距溢出导致文字被截断。
+ */
+.mermaid-body svg,
+.mermaid-svg-layer svg {
+  overflow: visible !important;
+}
+
+.mermaid-body foreignObject,
+.mermaid-svg-layer foreignObject {
+  overflow: visible !important;
+}
+
+.mermaid-body foreignObject > div,
+.mermaid-svg-layer foreignObject > div {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100% !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+  box-sizing: border-box !important;
+}
+
+.mermaid-body .nodeLabel,
+.mermaid-svg-layer .nodeLabel,
+.mermaid-body .edgeLabel,
+.mermaid-svg-layer .edgeLabel {
+  display: inline-block !important;
+  line-height: 1.4 !important;
+}
+
+.mermaid-body .nodeLabel p,
+.mermaid-svg-layer .nodeLabel p {
+  margin: 0 !important;
+  padding: 0 !important;
+  line-height: 1.4 !important;
+}
+
 /* 模态弹窗全屏覆盖模式与 Mermaid 画布图层 */
 .modal-fullscreen-backdrop {
   position: fixed !important;
