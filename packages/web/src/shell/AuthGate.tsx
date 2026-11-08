@@ -93,7 +93,7 @@ export function AuthGate() {
 
         <div style={{ fontSize: 12.5, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
           {isSetup
-            ? '首次启动：请设置本机 Helm 主控密码（至少 8 位），用于保护会话、模型凭据与 Herdr 终端桥。'
+            ? '首次启动：请设置本机 Helm 主控密码（至少 8 位），用于保护会话、模型凭据与节点连接。'
             : '请输入本机 Helm 主控密码以解锁工作台。'}
         </div>
 

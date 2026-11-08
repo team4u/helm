@@ -8,9 +8,11 @@ import { PluginUiView } from '../ui/PluginUiView.js'
 import { isSameResolvedTarget, resolveTargetString, type HelmStoreValue } from '../lib/types.js'
 import {
   buildSidebarGroups,
+  collectEnabledPluginIds,
   conversationStatusBadgeClass,
   conversationStatusLabel,
   filterConversationsByTag,
+  isHumanSelectableProfile,
 } from './sidebar-model.js'
 
 function StatusDot({ connected }: { connected: boolean }) {
@@ -101,10 +103,14 @@ function ConversationRow({
   )
 }
 
-/** 新建对话按钮 + Profile 下拉（默认或指定角色直聊）。 */
+/** 新建对话按钮 + Profile 下拉（默认或指定角色直聊；未启用插件与常驻单例角色不展示）。 */
 function NewConversationControl({ store }: { store: HelmStoreValue }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
+  const profiles = useMemo(() => {
+    const enabledPluginIds = collectEnabledPluginIds(store.plugins)
+    return store.profiles.filter((p) => isHumanSelectableProfile(p, enabledPluginIds))
+  }, [store.profiles, store.plugins])
 
   useEffect(() => {
     if (!open) return
@@ -167,8 +173,8 @@ function NewConversationControl({ store }: { store: HelmStoreValue }) {
           <div className="row" style={{ padding: '4px 10px', fontSize: 11, color: 'var(--fg-muted)' }}>
             选择角色 Profile 新建对话
           </div>
-          {store.profiles.length === 0 && <div className="row">暂无可用 Profile</div>}
-          {store.profiles.map((p) => (
+          {profiles.length === 0 && <div className="row">暂无可用 Profile</div>}
+          {profiles.map((p) => (
             <button
               key={p.id}
               className="row"
