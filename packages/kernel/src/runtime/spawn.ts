@@ -16,7 +16,10 @@
  * - profile：经 resolveProfile 端口读取真实 Profile（model/runtime），无效
  *   profile 显式报错；herdr runtime 未被插件接管时 unsupported_runtime；
  * - gate：真实 shell 执行（runGate，cwd 用子会话实际 cwd），失败即 spawn 失败；
- * - isolation: 'worktree' 未支持 -> 显式 unsupported_runtime 错误。
+ * - isolation: 'worktree'：经 deps.worktrees（WorktreeAllocator）在源仓库同级
+ *   .helm-worktrees 下建独立 worktree 与 helm/spawn-* 分支，子会话与 gate 均在
+ *   worktree 目录内执行；resume 严格沿用原 worktree（改写 cwd 显式拒绝，目录
+ *   被清理显式 worktree_missing）；deps.worktrees 缺失 -> 显式 unsupported_runtime。
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -26,6 +29,7 @@ import type { AgentSpawnRequest, ConversationPatch, ConversationSummary } from '
 import { HelmError } from '@helm/protocol'
 import type { Harness } from '@earendil-works/pi-durable'
 import { validateOrThrow } from '../plugins/schema.js'
+import type { ManagedWorktreeRecord, WorktreeAllocator } from './worktree.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { runGate } from './tools.js'
 
@@ -113,6 +117,16 @@ export interface NativeSpawnDeps extends HelmToolDeps {
    * 返回 [Attached Files] 文本块；无附件 spawn 时不注入。
    */
   resolveAttachmentsForPrompt?(): Promise<string>
+  /**
+   * 受管隔离 worktree 分配器（isolation: 'worktree' 机制层）。
+   * 缺省时原生执行行不支持隔离，显式 unsupported_runtime。
+   */
+  worktrees?: WorktreeAllocator
+  /**
+   * 子会话目标节点解析（Profile.nodeId + 父会话上下文 -> 实际 nodeId）。
+   * 缺省回退 profile.nodeId ?? 父会话镜像 nodeId ?? 'local'。
+   */
+  resolveNodeId?: (profileNodeId: string | undefined, parentConversationId: number) => string
 }
 
 export interface SpawnOutcome {
@@ -126,11 +140,20 @@ export async function runNativeSpawn(
   request: AgentSpawnRequest,
 ): Promise<unknown> {
   if (request.isolation !== undefined && request.isolation !== null) {
-    throw new HelmError(
-      'unsupported_runtime',
-      `isolation='${request.isolation}' 暂不支持：原生 subagent 执行行不提供隔离，请经外部运行时插件（agent_spawn 钩子接管方）委派终端 CLI Agent`,
-      400,
-    )
+    if (request.isolation !== 'worktree') {
+      throw new HelmError(
+        'validation_error',
+        `isolation='${request.isolation}' 非法：仅允许 'worktree'（不合法值绝不静默丢弃）`,
+        400,
+      )
+    }
+    if (!deps.worktrees) {
+      throw new HelmError(
+        'unsupported_runtime',
+        `isolation='worktree' 暂不支持：原生 subagent 执行行未注入 WorktreeAllocator（请启用内核 worktree 机制或经外部运行时插件委派终端 CLI Agent）`,
+        400,
+      )
+    }
   }
   if (request.signal?.aborted) {
     throw new HelmError('aborted', 'spawn 请求在创建前已取消（signal 已 abort）', 409)
@@ -211,6 +234,24 @@ export async function runNativeSpawn(
   }
 
   let summary: ConversationSummary | undefined = existing
+  // ---- worktree 隔离：resume 严格沿用原 worktree（不中途搬家、不二次创建）。
+  // 原会话创建时未启用 worktree 但 resume 突然传 isolation: 'worktree'：
+  // 显式拒绝（诚实性：不静默忽略也不中途搬家）。----
+  const existingWorktree = isResume ? deps.worktrees?.getForConversation(childId!) : undefined
+  if (isResume && existingWorktree === undefined && request.isolation === 'worktree') {
+    throw new HelmError(
+      'resume_cwd_conflict',
+      '子会话创建时未启用 worktree 隔离，不支持在 resume 时中途切换为 worktree 隔离',
+      409,
+      { conversationId: childId },
+    )
+  }
+  if (existingWorktree !== undefined) {
+    // verifyForResume 拦截冲突 request.cwd（resume_cwd_conflict）与目录缺失
+    //（worktree_missing）；patch.cwd 已由上方与 existing.cwd 比较逻辑约束，
+    // 与 worktree path 不一致时在此拦截。
+    await deps.worktrees!.verifyForResume(existingWorktree, request.cwd, request.signal)
+  }
   if (isResume) {
     const patch: ConversationPatch = {}
     // 显式 agentType 与原子会话 Profile 不同才是变更（相同则不产生无意义写）。
@@ -234,100 +275,148 @@ export async function runNativeSpawn(
   // 引擎层（WorkflowService）不再注入 cwd，父目录回退在此完成；herdr 工厂
   // 自身也读 parent.cwd，语义一致。
   const parentSummary = deps.getConversation(request.parentConversationId)
-  const childCwd = isResume
-    ? summary!.cwd
-    : (request.cwd ?? profile.cwd ?? parentSummary?.cwd ?? deps.defaultCwd)
-
-  // gate 与子会话同 cwd（resume 用更新后的实际 cwd，不依赖 main cwd）。
-  const gateCwd = childCwd
-
-  let structured: StructuredOutputSession | undefined
-  if (request.schema) {
-    // 声明边界即拒绝 $async：AJV 异步校验返回 Promise，同步 boolean 判断会
-    // 把 Promise 当 truthy 放行非法数据（诚实性红线）。
-    if ((request.schema as { $async?: unknown }).$async !== undefined) {
-      throw new HelmError(
-        'invalid_plugin_schema',
-        `schema 含 $async：原生 subagent 同步校验边界不支持异步 Schema`,
-        400,
-      )
-    }
-    structured = { schema: request.schema, accepted: undefined }
-  }
-
-  if (!isResume) {
-    // 模型解析链（与会话策略同构）：请求显式 model > profile.model > 全局默认。
-    const modelRef = request.model ? parseSpawnModel(request.model) : undefined
-    const profileModelRef = profile.model ? parseSpawnModel(profile.model) : undefined
-    const resolvedModel = modelRef ?? profileModelRef ?? deps.resolveModel()
-    const createModelRef = `${resolvedModel.provider}/${resolvedModel.modelId}`
-    const extension = structured ? buildStructuredOutputExtension(structured) : undefined
-    if (extension) deps.installChildExtension(extension)
-    const thinkingLevel = request.effort ?? profile.thinkingLevel ?? deps.resolveThinkingLevel?.()
-    const agentChange: AgentChange = {
-      model: { provider: resolvedModel.provider, modelId: resolvedModel.modelId },
-      cwd: childCwd,
-      ...(thinkingLevel ? { thinkingLevel: thinkingLevel as ModelThinkingLevel } : {}),
-      // extensions 需传扩展对象：SDK 存名（names()）但快照解析发生在 install 之后。
-      ...(extension ? { extensions: [extension] } : {}),
-    }
-    const conv = await deps.harness.createConversation(
-      { ownership: { kind: 'ownerless' }, agent: agentChange },
-      bg,
-    )
-    childId = conv.id as number
-    if (request.agentId) deps.agentSessions.set(request.agentId, childId)
-    // 原生 spawn 不打业务角色标签（tags 由宿主策略决定，内核零角色硬编码）。
-    await deps.registerChildConversation(
-      childId,
-      request.parentConversationId,
-      profileId,
-      childCwd,
-      createModelRef,
-      [],
-      thinkingLevel,
-    )
-    // onResolved 在配置全部落定（创建 + 镜像登记）后回传实际元数据。
-    request.onResolved?.({ conversationId: childId, effectiveCwd: childCwd })
-  } else {
-    // resume：显式 model/cwd/effort 变更已由 updateConversation 同步 SDK 与镜像。
-    // onResolved 移到配置完成后回传更新后的实际 cwd（修复首调自定义 cwd 再 resume
-    // 时 metadata/Gate 指向 Hub 目录而 SDK 仍在旧目录的不一致）。
-    // parentToolCallId 同步更新：本次工具调用的运行期关联立即指向该子会话。
-    if (request.parentToolCallId !== undefined && request.parentToolCallId !== '') {
-      deps.bindChildToolCall?.(childId!, request.parentToolCallId)
-    }
-    request.onResolved?.({ conversationId: childId!, effectiveCwd: childCwd })
-  }
-
-  const conversation = await deps.harness.conversation(childId as never, bg)
-  if (!conversation) {
-    throw new HelmError('not_found', `子会话不存在：${childId}`, 404)
-  }
-
-  // resume 续接时补挂结构化输出扩展（原会话创建时可能没有；同样需真实注册）。
-  if (isResume && structured) {
-    const extension = buildStructuredOutputExtension(structured)
-    deps.installChildExtension(extension)
-    await conversation.configure({ extensions: { add: [extension] } }, bg)
-  }
-
-  // ---- signal 桥：运行中 abort -> conversation.abort；listener 在 finally 摘除。----
-  let abortError: HelmError | undefined
-  const onAbort = () => {
-    abortError = new HelmError('aborted', '子代理执行被取消（request.signal abort）', 499, {
-      conversationId: childId,
+  // ---- 新建 + isolation: 'worktree'：先分配隔离工作树，子会话 cwd/gate cwd
+  // 均为 worktree 目录；创建中途失败尽力回收已分配资源（诚实性：不留孤儿
+  // worktree 也不掩盖原始错误）。----
+  let allocatedWorktree: ManagedWorktreeRecord | undefined
+  if (!isResume && request.isolation === 'worktree') {
+    const sourceCwd = request.cwd ?? profile.cwd ?? parentSummary?.cwd ?? deps.defaultCwd
+    const targetNodeId = deps.resolveNodeId
+      ? deps.resolveNodeId(profile.nodeId, request.parentConversationId)
+      : (profile.nodeId ?? parentSummary?.nodeId ?? 'local')
+    allocatedWorktree = await deps.worktrees!.allocate({
+      nodeId: targetNodeId,
+      sourceCwd,
+      parentConversationId: request.parentConversationId,
+      signal: request.signal,
     })
-    void conversation.abort(bg).catch(() => {})
   }
-  if (request.signal) request.signal.addEventListener('abort', onAbort, { once: true })
+  let childCwd: string
   try {
-    return await driveTurn(deps, request, conversation, childId as number, structured, gateCwd)
+    childCwd = isResume
+      ? summary!.cwd
+      : (allocatedWorktree?.path ?? request.cwd ?? profile.cwd ?? parentSummary?.cwd ?? deps.defaultCwd)
+    // gate 与子会话同 cwd（resume 用更新后的实际 cwd，不依赖 main cwd）。
+    const gateCwd = childCwd
+
+    let structured: StructuredOutputSession | undefined
+    if (request.schema) {
+      // 声明边界即拒绝 $async：AJV 异步校验返回 Promise，同步 boolean 判断会
+      // 把 Promise 当 truthy 放行非法数据（诚实性红线）。
+      if ((request.schema as { $async?: unknown }).$async !== undefined) {
+        throw new HelmError(
+          'invalid_plugin_schema',
+          `schema 含 $async：原生 subagent 同步校验边界不支持异步 Schema`,
+          400,
+        )
+      }
+      structured = { schema: request.schema, accepted: undefined }
+    }
+
+    if (!isResume) {
+      // 模型解析链（与会话策略同构）：请求显式 model > profile.model > 全局默认。
+      const modelRef = request.model ? parseSpawnModel(request.model) : undefined
+      const profileModelRef = profile.model ? parseSpawnModel(profile.model) : undefined
+      const resolvedModel = modelRef ?? profileModelRef ?? deps.resolveModel()
+      const createModelRef = `${resolvedModel.provider}/${resolvedModel.modelId}`
+      const extension = structured ? buildStructuredOutputExtension(structured) : undefined
+      if (extension) deps.installChildExtension(extension)
+      const thinkingLevel = request.effort ?? profile.thinkingLevel ?? deps.resolveThinkingLevel?.()
+      const agentChange: AgentChange = {
+        model: { provider: resolvedModel.provider, modelId: resolvedModel.modelId },
+        cwd: childCwd,
+        ...(thinkingLevel ? { thinkingLevel: thinkingLevel as ModelThinkingLevel } : {}),
+        // extensions 需传扩展对象：SDK 存名（names()）但快照解析发生在 install 之后。
+        ...(extension ? { extensions: [extension] } : {}),
+      }
+      const conv = await deps.harness.createConversation(
+        { ownership: { kind: 'ownerless' }, agent: agentChange },
+        bg,
+      )
+      childId = conv.id as number
+      if (request.agentId) deps.agentSessions.set(request.agentId, childId)
+      // 原生 spawn 不打业务角色标签（tags 由宿主策略决定，内核零角色硬编码）。
+      await deps.registerChildConversation(
+        childId,
+        request.parentConversationId,
+        profileId,
+        childCwd,
+        createModelRef,
+        [],
+        thinkingLevel,
+      )
+      // worktree 绑定：子会话创建并登记后写回受管记录（后续 resume/cleanup 定位）。
+      if (allocatedWorktree !== undefined) {
+        deps.worktrees!.bindConversation(allocatedWorktree.path, allocatedWorktree.nodeId, childId)
+      }
+      // onResolved 在配置全部落定（创建 + 镜像登记 + worktree 绑定）后回传实际元数据。
+      request.onResolved?.({
+        conversationId: childId,
+        effectiveCwd: childCwd,
+        ...(allocatedWorktree !== undefined
+          ? { worktree: { path: allocatedWorktree.path, branch: allocatedWorktree.branch } }
+          : {}),
+      })
+    } else {
+      // resume：显式 model/cwd/effort 变更已由 updateConversation 同步 SDK 与镜像。
+      // onResolved 移到配置完成后回传更新后的实际 cwd（修复首调自定义 cwd 再 resume
+      // 时 metadata/Gate 指向 Hub 目录而 SDK 仍在旧目录的不一致）。
+      // parentToolCallId 同步更新：本次工具调用的运行期关联立即指向该子会话。
+      if (request.parentToolCallId !== undefined && request.parentToolCallId !== '') {
+        deps.bindChildToolCall?.(childId!, request.parentToolCallId)
+      }
+      request.onResolved?.({
+        conversationId: childId!,
+        effectiveCwd: childCwd,
+        ...(existingWorktree !== undefined
+          ? { worktree: { path: existingWorktree.path, branch: existingWorktree.branch } }
+          : {}),
+      })
+    }
+
+    const conversation = await deps.harness.conversation(childId as never, bg)
+    if (!conversation) {
+      throw new HelmError('not_found', `子会话不存在：${childId}`, 404)
+    }
+
+    // resume 续接时补挂结构化输出扩展（原会话创建时可能没有；同样需真实注册）。
+    if (isResume && structured) {
+      const extension = buildStructuredOutputExtension(structured)
+      deps.installChildExtension(extension)
+      await conversation.configure({ extensions: { add: [extension] } }, bg)
+    }
+
+    // ---- signal 桥：运行中 abort -> conversation.abort；listener 在 finally 摘除。----
+    let abortError: HelmError | undefined
+    const onAbort = () => {
+      abortError = new HelmError('aborted', '子代理执行被取消（request.signal abort）', 499, {
+        conversationId: childId,
+      })
+      void conversation.abort(bg).catch(() => {})
+    }
+    if (request.signal) request.signal.addEventListener('abort', onAbort, { once: true })
+    try {
+      return await driveTurn(deps, request, conversation, childId as number, structured, gateCwd, allocatedWorktree)
+    } catch (error) {
+      if (abortError !== undefined && error !== abortError) throw abortError
+      throw error
+    } finally {
+      if (request.signal) request.signal.removeEventListener('abort', onAbort)
+    }
   } catch (error) {
-    if (abortError !== undefined && error !== abortError) throw abortError
+    // 子会话创建/登记中途失败：尽力回收刚分配的 worktree（诚实性：不留孤儿
+    // 资源也不掩盖原始错误；回收失败附诊断但不拦原始错误上抛）。
+    if (allocatedWorktree !== undefined && allocatedWorktree.status === 'active') {
+      try {
+        await deps.worktrees!.cleanup({ path: allocatedWorktree.path, deleteBranch: true, force: true, signal: request.signal })
+      } catch (cleanupError) {
+        // 回收失败不掩盖原始错误：诊断进 details 之外，仅 stderr 级日志。
+        const note = cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+        // eslint-disable-next-line no-console
+        console.error(`[helm] worktree 回收未竟（${allocatedWorktree.path}）：${note}`)
+      }
+    }
     throw error
-  } finally {
-    if (request.signal) request.signal.removeEventListener('abort', onAbort)
   }
 }
 
@@ -339,20 +428,27 @@ async function driveTurn(
   childId: number,
   structured: StructuredOutputSession | undefined,
   gateCwd: string,
+  allocatedWorktree?: ManagedWorktreeRecord,
 ): Promise<unknown> {
   // 附件：宿主已校验授权；拼在任务正文之后、交接契约之前。
   const attachmentBlock =
     request.attachments !== undefined && request.attachments.length > 0 && deps.resolveAttachmentsForPrompt
       ? `\n\n${await deps.resolveAttachmentsForPrompt()}\n`
       : ''
+  // Dirty 源仓库诚实提示：隔离工作树基于 HEAD 创建，不含源工作区未提交改动。
+  const worktreeNotice =
+    allocatedWorktree !== undefined && allocatedWorktree.dirtySource
+      ? `\n\n<worktree_isolation_notice>\n当前工作目录为独立 Git Worktree (${allocatedWorktree.path}，分支 ${allocatedWorktree.branch}，基于提交 ${allocatedWorktree.baseCommit.slice(0, 12)})。注意：源工作区存在未提交修改，本隔离工作树基于 HEAD 创建，不包含源工作区未提交的改动。\n</worktree_isolation_notice>`
+      : ''
+  const basePrompt = `${request.prompt}${attachmentBlock}${worktreeNotice}`
   const promptText = structured
-    ? `${request.prompt}${attachmentBlock}
+    ? `${basePrompt}
 
 <structured_output_contract>
 完成回答后，调用 register_structured_output 工具提交最终结构化结果（output 参数必须满足给定 JSON Schema）。
 Schema: ${JSON.stringify(structured.schema)}
 </structured_output_contract>`
-    : `${request.prompt}${attachmentBlock}`
+    : basePrompt
 
   const submission = await conversation.submit(
     { type: 'input', content: promptText, whenBusy: 'followUp' },
