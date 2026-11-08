@@ -367,10 +367,19 @@ textarea {
   justify-content: space-between;
   gap: 4px;
 }
+.sidebar-footer .btn {
+  width: 28px;
+  height: 28px;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
 .sidebar-theme-toggle {
   width: 28px;
   height: 28px;
-  padding: 0;
+  padding: 0 !important;
   flex-shrink: 0;
 }
 
@@ -1416,6 +1425,39 @@ textarea {
 .mermaid-body svg {
   max-width: 100%;
   height: auto;
+}
+
+/* 模态弹窗全屏覆盖模式与 Mermaid 画布图层 */
+.modal-fullscreen-backdrop {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  padding: 0 !important;
+  background: var(--bg) !important;
+  z-index: 120 !important;
+}
+
+.modal-fullscreen {
+  max-width: 100vw !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  border-radius: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.mermaid-svg-layer {
+  display: block;
+}
+
+.mermaid-svg-layer svg {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  display: block !important;
 }
 
 .composer-model-popover .input { width: 100%; }

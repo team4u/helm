@@ -36,6 +36,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
   const [state, setState] = useState<LoadState>({ phase: 'loading' })
   const [view, setView] = useState<'rich' | 'source'>('rich')
   const [text, setText] = useState<string | null>(null)
+  const [isFullscreen, setIsFullscreen] = useState(false)
 
   const meta = useMemo(() => {
     if (conversationId === undefined) return undefined
@@ -95,13 +96,13 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className={`modal-backdrop${isFullscreen ? ' modal-fullscreen-backdrop' : ''}`} onClick={onClose}>
       <div
-        className="modal"
+        className={`modal${isFullscreen ? ' modal-fullscreen' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-label={`产物预览：${name}`}
-        style={{ maxWidth: 'min(960px, 92vw)', maxHeight: '88vh' }}
+        style={isFullscreen ? undefined : { maxWidth: 'min(1100px, 94vw)', maxHeight: '90vh' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
@@ -133,6 +134,15 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
                 </button>
               </span>
             ) : null}
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setIsFullscreen((v) => !v)}
+              title={isFullscreen ? '切换为窗口模式' : '全屏预览'}
+            >
+              <HelmIcon name={isFullscreen ? 'minimize-2' : 'maximize-2'} size={12} />
+              {isFullscreen ? '窗口' : '全屏'}
+            </button>
             <button type="button" className="btn btn-sm" onClick={download}>
               <HelmIcon name="download" size={12} />
               下载文件

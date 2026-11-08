@@ -8,6 +8,7 @@ const providerCatalogSource = readFileSync(new URL('../src/modals/ProviderCatalo
 const commandPaletteSource = readFileSync(new URL('../src/modals/CommandPaletteModal.tsx', import.meta.url), 'utf8')
 const providerAuthCss = readFileSync(new URL('../src/modals/provider-auth.css', import.meta.url), 'utf8')
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
+const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
 
 test('Mermaid 预览弹窗：头部标题自适应截断、操作组折行且关闭按钮始终可见', { timeout: 60_000 }, () => {
   // 标题必须具备防止折成单字竖排的样式：minWidth: 0, flex: 1, whiteSpace: nowrap, overflow: hidden, textOverflow: ellipsis
@@ -80,4 +81,31 @@ test('命令面板：根据屏幕尺寸/触屏设备自适应切换 Esc 与关�
   assert.match(paletteRule, /@media\s*\(max-width:\s*680px\),\s*\(pointer:\s*coarse\)/)
   assert.match(paletteRule, /\.palette-close-desktop\s*\{\s*display:\s*none\s*!important;\s*\}/)
   assert.match(paletteRule, /\.palette-close-mobile\s*\{\s*display:\s*inline-flex\s*!important;\s*\}/)
+})
+
+test('Mermaid 预览弹窗：纯全屏沉浸式画板、默认 1:1 实际比例、移除窗口切换', { timeout: 60_000 }, () => {
+  // 固定采用全屏 backdrop 与全屏 modal 类名
+  assert.match(mermaidSource, /className="modal-backdrop modal-fullscreen-backdrop"/)
+  assert.match(mermaidSource, /className="modal modal-fullscreen"/)
+  // 默认比例为 1 (1:1)
+  assert.match(mermaidSource, /const \[scale,\s*setScale\]\s*=\s*useState\(1\)/)
+  // 不含“窗口”按钮
+  assert.doesNotMatch(mermaidSource, />窗口</)
+  assert.doesNotMatch(mermaidSource, />全屏</)
+  // 提供适屏全貌与适宽按钮
+  assert.match(mermaidSource, />\s*适屏\s*</)
+  assert.match(mermaidSource, />\s*适宽\s*</)
+  assert.match(mermaidSource, />\s*1:1\s*</)
+  // styles.css 提供全屏覆盖样式与 svg 层
+  assert.match(stylesCss, /\.modal-fullscreen-backdrop\s*\{[^}]*padding:\s*0\s*!important/)
+  assert.match(stylesCss, /\.modal-fullscreen\s*\{[^}]*width:\s*100vw\s*!important/)
+  assert.match(stylesCss, /\.mermaid-svg-layer\s+svg\s*\{[^}]*width:\s*100%\s*!important/)
+})
+
+test('侧边栏页脚底栏按钮尺寸统一与内边距防挤压', { timeout: 60_000 }, () => {
+  // 底部全部按钮尺寸统一为 28x28，内边距强制为 0 防图标挤压
+  assert.match(stylesCss, /\.sidebar-footer\s+\.btn\s*\{[^}]*width:\s*28px/)
+  assert.match(stylesCss, /\.sidebar-footer\s+\.btn\s*\{[^}]*height:\s*28px/)
+  assert.match(stylesCss, /\.sidebar-footer\s+\.btn\s*\{[^}]*padding:\s*0\s*!important/)
+  assert.match(stylesCss, /\.sidebar-theme-toggle\s*\{[^}]*padding:\s*0\s*!important/)
 })

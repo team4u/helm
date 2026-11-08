@@ -65,6 +65,8 @@ import {
   Wrench,
   X,
   Zap,
+  ZoomIn,
+  ZoomOut,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -128,8 +130,12 @@ const ICON_MAP: Record<string, LucideIcon> = {
   download: Download,
   upload: Upload,
   maximize: Maximize2,
+  'maximize-2': Maximize2,
   menu: Menu,
   minimize: Minimize2,
+  'minimize-2': Minimize2,
+  'zoom-in': ZoomIn,
+  'zoom-out': ZoomOut,
   'external-link': ExternalLink,
   'arrow-right': ArrowRight,
   'arrow-up': ArrowUp,
