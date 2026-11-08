@@ -55,6 +55,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [activeModal, setActiveModal] = useState<ActiveModal>(null)
   const [highlightedEntry, setHighlightedEntry] = useState<{ conversationId: number; entryId: string } | null>(null)
   const [notices, setNotices] = useState<ToastNotice[]>([])
+  const noticeSequence = useRef(0)
   const session = useRef(0)
   const requests = useRef(new Map<string, Promise<unknown>>())
   const failedDocs = useRef(new Set<string>())
@@ -77,7 +78,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
 
   const dismissNotice = useCallback((id: string) => setNotices((prev) => prev.filter((notice) => notice.id !== id)), [])
   const pushNotice = useCallback((notice: Omit<ToastNotice, 'id' | 'createdAt'>) => {
-    const id = crypto.randomUUID()
+    const id = `notice-${++noticeSequence.current}`
     setNotices((prev) => [...prev.filter((item) => item.title !== notice.title || item.body !== notice.body), { ...notice, id, createdAt: Date.now() }])
     if (notice.level === 'info') delay(() => dismissNotice(id), 6000)
   }, [delay, dismissNotice])
