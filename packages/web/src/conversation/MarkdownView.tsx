@@ -4,8 +4,10 @@ import remarkGfm from 'remark-gfm'
 import { SyntaxCode } from './SyntaxCode.js'
 import { CopyButton } from './CopyButton.js'
 import { HelmIcon } from '../lib/icons.js'
+import { useHelmStore } from '../lib/store-context.js'
 import { HelmSpecView } from '../ui/HelmSpecView.js'
 import { MermaidPreviewModal } from './MermaidPreviewModal.js'
+import { getMermaidConfig } from './mermaid-theme.js'
 
 export interface MarkdownViewProps {
   text: string
@@ -48,6 +50,7 @@ export function CodeBlockView({ code, language }: { code: string; language: stri
 
 /** mermaid 图：250ms 防抖渲染 SVG 内联展示；右上角「放大预览」与「复制源码」。 */
 function MermaidBlock({ code }: { code: string }) {
+  const { theme } = useHelmStore()
   const [svg, setSvg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [zoomOpen, setZoomOpen] = useState(false)
@@ -61,8 +64,8 @@ function MermaidBlock({ code }: { code: string }) {
       void (async () => {
         try {
           const mermaid = (await import('mermaid')).default
-          mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral', suppressErrorRendering: true })
-          const id = `helm-mermaid-${seq}-${Math.random().toString(36).slice(2, 8)}`
+          mermaid.initialize(getMermaidConfig(theme))
+          const id = `helm-mermaid-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
           const { svg: rendered } = await mermaid.render(id, code)
           if (seqRef.current === seq) setSvg(rendered)
         } catch (err) {
@@ -73,7 +76,7 @@ function MermaidBlock({ code }: { code: string }) {
       })()
     }, 250)
     return () => clearTimeout(timer)
-  }, [code])
+  }, [code, theme])
 
   return (
     <div className="code-block-wrap">
