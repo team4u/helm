@@ -325,24 +325,42 @@ function TraceRow({
   )
 }
 
-function StepGroup({ steps, conversationId }: { steps: FoldableStep[]; conversationId: number }) {
-  const [open, setOpen] = useState(false)
+function StepGroup({
+  steps,
+  active,
+  conversationId,
+}: {
+  steps: FoldableStep[]
+  active: boolean
+  conversationId: number
+}) {
+  const [userOverride, setUserOverride] = useState<boolean | null>(null)
+  const prevActiveRef = useRef(active)
+  if (prevActiveRef.current !== active) {
+    prevActiveRef.current = active
+    if (!active && userOverride !== null) {
+      setUserOverride(null)
+    }
+  }
+  const open = userOverride ?? active
+
   return (
     <div className="trace-group">
       <button
         type="button"
         className="trace-group-summary"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setUserOverride(!open)}
         title="展开 / 收起思考与执行过程"
       >
         <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-        思考与执行过程 ({steps.length} 步)
+        {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
+        {active ? `正在思考与执行 (${steps.length} 步)…` : `思考与执行过程 (${steps.length} 步)`}
       </button>
       {open ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 8 }}>
-          {steps.map((step) =>
+          {steps.map((step, idx) =>
             step.kind === 'thinking' ? (
-              <ThinkingRow key={step.thinking.key} text={step.thinking.text} />
+              <ThinkingRow key={`think:${idx}`} text={step.thinking.text} />
             ) : (
               <TraceRow key={step.tool.key} tool={step.tool} conversationId={conversationId} defaultOpen={false} />
             ),
@@ -354,7 +372,7 @@ function StepGroup({ steps, conversationId }: { steps: FoldableStep[]; conversat
 }
 
 function ThinkingRow({ text }: { text: string }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(true)
   return (
     <div className="trace-group">
       <button
@@ -543,7 +561,14 @@ function AssistantTurnView({
           return <MarkdownView key={seg.key} text={seg.text} conversationId={conversation.id} />
         }
         if (seg.kind === 'step-group') {
-          return <StepGroup key={seg.key} steps={seg.steps} conversationId={conversation.id} />
+          return (
+            <StepGroup
+              key={seg.key}
+              steps={seg.steps}
+              active={seg.active === true}
+              conversationId={conversation.id}
+            />
+          )
         }
         return <TraceRow key={seg.key} tool={seg.tool} conversationId={conversation.id} defaultOpen={false} />
       })}
@@ -582,44 +607,90 @@ export function ConversationTimeline({
   const store = useHelmStore()
   const [loadingOlder, setLoadingOlder] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const innerRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = useRef(true)
+  const lastScrollTopRef = useRef(0)
+  const lastHumanKeyRef = useRef<string | undefined>(undefined)
   const highlightScrollRef = useHighlightScroll(conversation.id)
   const highlightClass = useEntryHighlight(conversation.id)
 
+  const isWorking = conversation.status === 'working'
   const items = useMemo(
     () =>
       buildTimelineItems(detailEntries, {
         ...(live !== undefined ? { live } : {}),
+        working: isWorking,
         timelineRenderers: store.groupedUi.timelineRenderers,
         toolViews: store.groupedUi.toolViews,
       }),
-    [detailEntries, live, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
+    [detailEntries, live, isWorking, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
   )
 
   const resolvedAsks = store.resolvedAsksByConv[conversation.id] ?? []
 
-  // 贴底吸附：用户上滚即脱离，新内容到达时仅在贴底状态自动跟随。
+  // 贴底吸附：仅当用户主动上滚时脱离贴底（内容增长导致 scrollHeight 变大不得误判为脱离）。
   useEffect(() => {
     const el = scrollRef.current
     if (el === null) return
     const onScroll = (): void => {
-      stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+      if (el.scrollTop < lastScrollTopRef.current - 4 && distanceFromBottom > 80) {
+        stickToBottomRef.current = false
+      } else if (distanceFromBottom <= 80) {
+        stickToBottomRef.current = true
+      }
+      lastScrollTopRef.current = el.scrollTop
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
+  }, [])
+
+  // 监听内部容器高度变化（思考流式增长、命令追加、分组自动展开/收起），贴底状态下实时跟随到底部。
+  useEffect(() => {
+    const inner = innerRef.current
+    if (inner === null || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      const el = scrollRef.current
+      if (el === null || !stickToBottomRef.current) return
+      el.scrollTop = el.scrollHeight
+      lastScrollTopRef.current = el.scrollTop
+    })
+    ro.observe(inner)
+    return () => ro.disconnect()
   }, [])
 
   useEffect(() => {
     if (store.highlightedEntry?.conversationId === conversation.id) stickToBottomRef.current = false
   }, [store.highlightedEntry, conversation.id])
 
-  const contentFingerprint = `${items.length}:${detailEntries.length}:${live?.updatedAt ?? 0}:${resolvedAsks.length}`
-  useEffect(() => {
-    if (stickToBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ block: 'end' })
+  const lastHumanKey = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i]!.kind === 'human') return items[i]!.key
     }
-  }, [contentFingerprint])
+    return undefined
+  }, [items])
+
+  const lastTurnSummary = useMemo(() => {
+    const last = items[items.length - 1]
+    if (last?.kind !== 'assistant') return ''
+    return last.segments
+      .map((s) => (s.kind === 'step-group' ? `g:${s.stepCount}:${s.active ? 1 : 0}` : s.kind === 'tool' ? `t:${s.tool.key}:${s.tool.status}` : `x:${s.text.length}`))
+      .join(',')
+  }, [items])
+
+  const contentFingerprint = `${items.length}:${detailEntries.length}:${conversation.status}:${lastTurnSummary}:${live?.updatedAt ?? 0}:${live?.thinking?.length ?? 0}:${live?.text.length ?? 0}:${resolvedAsks.length}`
+  useEffect(() => {
+    if (lastHumanKey !== undefined && lastHumanKey !== lastHumanKeyRef.current) {
+      lastHumanKeyRef.current = lastHumanKey
+      stickToBottomRef.current = true
+    }
+    const el = scrollRef.current
+    if (el !== null && stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight
+      lastScrollTopRef.current = el.scrollTop
+    }
+  }, [contentFingerprint, lastHumanKey])
 
   const loading = store.conversationDetails[conversation.id] === undefined
 
@@ -650,7 +721,7 @@ export function ConversationTimeline({
           <span>向助理描述目标，或从左侧选择会话开始</span>
         </div>
       ) : null}
-      <div className="timeline-inner">
+      <div ref={innerRef} className="timeline-inner">
         {items.map((item) => {
           if (item.kind === 'human') {
             return (
@@ -705,6 +776,14 @@ export function ConversationTimeline({
             </div>
           )
         })}
+        {isWorking && items[items.length - 1]?.kind !== 'assistant' ? (
+          <div className="msg-ai-block" role="status" aria-live="polite">
+            <span className="msg-origin-tag">
+              <HelmIcon name="loader" size={11} className="spin-slow" />
+              正在思考与准备响应…
+            </span>
+          </div>
+        ) : null}
         {resolvedAsks.map(({ ask, status }) => (
           <ResolvedAskRow key={`ask:${ask.id}`} ask={ask} status={status} />
         ))}

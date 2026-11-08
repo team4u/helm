@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import Markdown from 'react-markdown'
+import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { SyntaxCode } from './SyntaxCode.js'
 import { CopyButton } from './CopyButton.js'
@@ -166,26 +166,26 @@ function extractCodeBlock(node: unknown): { language: string; code: string } | n
 }
 
 export const MarkdownView = memo(function MarkdownView({ text, conversationId }: MarkdownViewProps) {
+  // 渲染器函数身份必须稳定，否则每次流式文本更新都会重挂载既有代码块。
+  const components = useMemo<Components>(() => ({
+    pre: ({ children, node }) => {
+      const block = extractCodeBlock(node)
+      if (block !== null) {
+        return <CodeRenderer language={block.language} code={block.code} conversationId={conversationId} />
+      }
+      return <pre className="code-block-pre selectable">{children}</pre>
+    },
+    code: ({ className, children }) => <code className={className}>{children}</code>,
+    a: ({ href, children }) => (
+      <a href={href} target="_blank" rel="noreferrer noopener">
+        {children}
+      </a>
+    ),
+  }), [conversationId])
+
   return (
     <div className="msg-ai-body">
-      <Markdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          pre: ({ children, node }) => {
-            const block = extractCodeBlock(node)
-            if (block !== null) {
-              return <CodeRenderer language={block.language} code={block.code} conversationId={conversationId} />
-            }
-            return <pre className="code-block-pre selectable">{children}</pre>
-          },
-          code: ({ className, children }) => <code className={className}>{children}</code>,
-          a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noreferrer noopener">
-              {children}
-            </a>
-          ),
-        }}
-      >
+      <Markdown remarkPlugins={[remarkGfm]} components={components}>
         {text}
       </Markdown>
     </div>

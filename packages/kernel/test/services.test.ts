@@ -684,8 +684,21 @@ test('artifacts: spill 32KiB 阈值、4KiB UTF-8 安全预览、秘密不落盘�
   assert.ok(spilled.includes(placeholder), '占位符形态应保留')
   assert.ok(!r5.text.includes('super-secret-value'), '预览不得含秘密明文')
 
-  // 非法 callId
+  // Responses API 复合 callId（含 `|`）允许通过，且与 `_` 同形 callId 不发生物理文件碰撞覆盖
+  const responsesStyle = await artifacts.spill(1, 'call_ab12|fc_call_ab12', 'z'.repeat(33 * 1024))
+  const underscoreStyle = await artifacts.spill(1, 'call_ab12_fc_call_ab12', 'w'.repeat(33 * 1024))
+  assert.ok(responsesStyle.artifact !== undefined, '复合 callId 必须能 spill')
+  assert.ok(underscoreStyle.artifact !== undefined)
+  assert.notEqual(responsesStyle.artifact!.path, underscoreStyle.artifact!.path, '转义后不得与下划线 callId 碰撞覆写')
+  assert.equal((await artifacts.readContent(responsesStyle.artifact!.id))[0], 'z')
+  assert.equal((await artifacts.readContent(underscoreStyle.artifact!.id))[0], 'w')
+
+  // 非法 callId（路径穿越、分隔符、空白、控制字符）边界显式拒绝
   await assert.rejects(() => artifacts.spill(1, '../evil', 'x'), /callId/)
+  await assert.rejects(() => artifacts.spill(1, 'a/b', 'x'), /callId/)
+  await assert.rejects(() => artifacts.spill(1, '   ', 'x'), /callId/)
+  await assert.rejects(() => artifacts.spill(1, '.', 'x'), /callId/)
+  await assert.rejects(() => artifacts.spill(1, '..', 'x'), /callId/)
 })
 
 test('artifacts: register 文本产物含 stash 明文先脱敏再落盘、二进制字节不损坏、伪 metadata 路径拒绝', { timeout: 60_000 }, async () => {

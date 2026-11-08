@@ -87,33 +87,32 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
   const supportsThinking = currentLevels.some((level) => level !== 'off')
 
   return (
-    <span className="composer-picker-root" ref={rootRef} style={{ position: 'relative', display: 'inline-flex' }}>
+    <span className="composer-picker-root" ref={rootRef}>
       <button
         type="button"
-        className="btn btn-sm"
+        className="btn btn-sm composer-model-button"
         disabled={pending}
         onClick={() => setOpen((v) => !v)}
         title={`当前模型：${conversation.model}`}
       >
         <HelmIcon name={pending ? 'loader' : 'cpu'} size={12} />
-        {shortName}
+        <span className="composer-model-label">{shortName}</span>
         <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
       </button>
       <select
-          className="input"
+          className="input composer-thinking-select"
           aria-label="思考等级"
-          style={{ width: 'auto', padding: '2px 6px', fontSize: 11.5, height: 24 }}
           disabled={pending || !supportsThinking}
           value={conversation.thinkingLevelOverride ?? ''}
           onChange={(event) => void pickThinking(event.target.value)}
           title={supportsThinking ? `思考等级：${currentLevels.join(' / ')}` : currentModel ? '所选模型不支持思考档位' : '模型目录尚未包含当前模型'}
         >
-          <option value="">{supportsThinking ? `思考：继承（${conversation.thinkingLevel || 'SDK 默认'}）` : currentModel ? '不支持思考' : '思考：模型未知'}</option>
+          <option value="">{supportsThinking ? `默认 · ${conversation.thinkingLevel || 'off'}` : currentModel ? '不支持思考' : '思考：模型未知'}</option>
           {conversation.thinkingLevelOverride && !currentLevels.includes(conversation.thinkingLevelOverride) && (
             <option value={conversation.thinkingLevelOverride}>思考：{conversation.thinkingLevelOverride}（当前模型不支持）</option>
           )}
           {currentLevels.map((level) => (
-            <option key={level} value={level}>{level}</option>
+            <option key={level} value={level}>思考 · {level}</option>
           ))}
         </select>
       {open ? (
@@ -277,7 +276,6 @@ export function Composer({ conversation, prefill }: ComposerProps) {
   const store = useHelmStore()
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
-  const [whenBusy, setWhenBusy] = useState<'followUp' | 'steer'>('followUp')
   const [popover, setPopover] = useState<PopoverKind>(null)
   const [popoverQuery, setPopoverQuery] = useState('')
   const [sending, setSending] = useState(false)
@@ -397,7 +395,7 @@ export function Composer({ conversation, prefill }: ComposerProps) {
     return false
   }
 
-  const send = async (): Promise<void> => {
+  const send = async (busyMode: 'followUp' | 'steer' = 'followUp'): Promise<void> => {
     const payload = text.trim()
     if (payload === '' || sendingRef.current || uploadingRef.current > 0) return
     if (runSlashCommand(payload)) {
@@ -408,17 +406,18 @@ export function Composer({ conversation, prefill }: ComposerProps) {
     setSending(true)
     const sentAttachments = new Set(attachments.map((attachment) => attachment.artifactId))
     const draft = text
+    setText('')
+    setPopover(null)
     try {
       await conversationsApi.submitInput(conversation.id, {
         text: payload,
         origin: 'human',
-        ...(working ? { whenBusy } : {}),
+        ...(working ? { whenBusy: busyMode } : {}),
         ...(attachments.length > 0 ? { attachments: attachments.map((a) => a.artifactId) } : {}),
       })
-      setText((current) => current === draft ? '' : current)
       setAttachments((current) => current.filter((attachment) => !sentAttachments.has(attachment.artifactId)))
-      setPopover(null)
     } catch (err) {
+      setText((current) => (current === '' ? draft : current))
       notifyError('发送失败', err)
     } finally {
       sendingRef.current = false
@@ -468,7 +467,7 @@ export function Composer({ conversation, prefill }: ComposerProps) {
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
-      void send()
+      void send(working && (e.metaKey || e.ctrlKey) ? 'steer' : 'followUp')
       return
     }
     if (e.key === 'ArrowUp' && text === '') {
@@ -539,7 +538,7 @@ export function Composer({ conversation, prefill }: ComposerProps) {
             value={text}
             placeholder={
               working
-                ? `会话执行中… 新输入将${whenBusy === 'steer' ? '以 Steer 插入当前回合' : '按 Follow-up 排队'}`
+                ? '补充说明或输入下一条指令（Enter 排队发送 · ⌘/Ctrl+Enter 插话引导）'
                 : '输入消息；/ 命令与技能，@ 引用产物，⌘V 粘贴附件'
             }
             onChange={(e) => {
@@ -560,8 +559,8 @@ export function Composer({ conversation, prefill }: ComposerProps) {
             />
           ) : null}
           <div className="composer-toolbar">
+            <ModelPicker conversation={conversation} />
             <span className="composer-toolbar-left">
-              <ModelPicker conversation={conversation} />
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
@@ -594,42 +593,65 @@ export function Composer({ conversation, prefill }: ComposerProps) {
               ))}
             </span>
             <span className="composer-toolbar-right">
-              {working ? (
+              {!working ? (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary btn-pill"
+                  disabled={sending || uploading > 0 || text.trim() === ''}
+                  onClick={() => void send()}
+                  title="发送 (Enter)；Shift+Enter 换行"
+                >
+                  <HelmIcon name={sending ? 'loader' : 'send'} size={12} />
+                  {uploading > 0 ? `上传中 (${uploading})` : '发送'}
+                </button>
+              ) : text.trim() === '' ? (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger btn-pill"
+                  onClick={() => void abortTurn()}
+                  title="停止当前执行"
+                >
+                  <HelmIcon name="square" size={11} />
+                  {uploading > 0 ? `上传中 (${uploading})` : '停止'}
+                </button>
+              ) : (
                 <>
-                  <span className="btn-group" role="group" aria-label="会话正忙时新输入处理策略">
-                    <button
-                      type="button"
-                      className={`btn btn-sm${whenBusy === 'followUp' ? ' btn-primary' : ''}`}
-                      onClick={() => setWhenBusy('followUp')}
-                      title="新输入排队到当前回合之后"
-                    >
-                      Follow-up 排队
-                    </button>
-                    <button
-                      type="button"
-                      className={`btn btn-sm${whenBusy === 'steer' ? ' btn-primary' : ''}`}
-                      onClick={() => setWhenBusy('steer')}
-                      title="新输入立即插入当前回合"
-                    >
-                      Steer 插入
-                    </button>
-                  </span>
-                  <button type="button" className="btn btn-sm btn-danger" onClick={() => void abortTurn()}>
-                    <HelmIcon name="square" size={12} />
-                    中止回合
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-danger"
+                    style={{ padding: '0 7px' }}
+                    onClick={() => void abortTurn()}
+                    title="停止当前执行"
+                    aria-label="停止当前执行"
+                  >
+                    <HelmIcon name="square" size={11} />
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-pill"
+                    disabled={sending || uploading > 0}
+                    onClick={() => void send('steer')}
+                    title="立即插入当前回合引导方向 (⌘/Ctrl+Enter)"
+                    aria-label="插话引导"
+                  >
+                    <HelmIcon name={sending ? 'loader' : 'corner-down-right'} size={12} />
+                    <span className="composer-action-label">插话引导</span>
+                    <span className="composer-action-label-mobile" aria-hidden="true">插话</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary btn-pill"
+                    disabled={sending || uploading > 0}
+                    onClick={() => void send('followUp')}
+                    title="排在当前回合结束后自动发送 (Enter)"
+                    aria-label={uploading > 0 ? `上传中 (${uploading})` : '排队发送'}
+                  >
+                    <HelmIcon name={sending ? 'loader' : 'send'} size={12} />
+                    <span className="composer-action-label">{uploading > 0 ? `上传中 (${uploading})` : '排队发送'}</span>
+                    <span className="composer-action-label-mobile" aria-hidden="true">{uploading > 0 ? '上传中' : '排队'}</span>
                   </button>
                 </>
-              ) : null}
-              <button
-                type="button"
-                className="btn btn-sm btn-primary btn-pill"
-                disabled={sending || uploading > 0 || text.trim() === ''}
-                onClick={() => void send()}
-                title="发送 (Enter)；Shift+Enter 换行"
-              >
-                <HelmIcon name={sending ? 'loader' : 'send'} size={12} />
-                {uploading > 0 ? `上传中 (${uploading})` : '发送'}
-              </button>
+              )}
             </span>
           </div>
         </div>

@@ -110,6 +110,25 @@ function streamedTextOf(message: unknown): string {
   return text
 }
 
+/** 流式 assistant 消息 -> 累计思考文本（thinking 块按序拼接；快照语义）。 */
+function streamedThinkingOf(message: unknown): string {
+  if (message === null || typeof message !== 'object') return ''
+  const content = (message as { content?: unknown }).content
+  if (!Array.isArray(content)) return ''
+  let thinking = ''
+  for (const block of content) {
+    if (
+      block !== null &&
+      typeof block === 'object' &&
+      (block as { type?: unknown }).type === 'thinking' &&
+      typeof (block as { thinking?: unknown }).thinking === 'string'
+    ) {
+      thinking += (block as { thinking: string }).thinking
+    }
+  }
+  return thinking
+}
+
 function toolInputOf(slot: { arguments?: unknown } | { input?: unknown }): unknown {
   if ('arguments' in slot) return slot.arguments
   return (slot as { input?: unknown }).input
@@ -159,9 +178,11 @@ export function deriveConversationLive(
   }
   collect(source.tools)
   collect(source.nestedTools)
+  const thinking = streamedThinkingOf(source.generation?.message)
   return {
     conversationId,
     text: streamedTextOf(source.generation?.message),
+    ...(thinking !== '' ? { thinking } : {}),
     tools,
     updatedAt,
   }

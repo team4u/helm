@@ -196,13 +196,15 @@ test('isFoldableStep：tool.view 命中与 subagent/SubagentWorkflow 永不折�
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[1]! }), false)
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[2]! }), false)
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[3]! }), true)
-  // 命中 tool.view 的行独立露出；c4 是唯一可折叠步骤（单项不成组，直接静音行展示）
+  // 命中 tool.view 与业务工具的行独立露出；唯一的普通工具 c4 从第一步起进入分组。
   const turn = items.find((i) => i.kind === 'assistant')!
   assert.ok(turn.kind === 'assistant')
   const exposed = turn.segments.filter((s) => s.kind === 'tool') as Array<{ kind: 'tool'; tool: ToolTrace }>
-  assert.equal(exposed.length, 4)
-  assert.deepEqual(exposed.map((e) => e.tool.callId), ['c1', 'c2', 'c3', 'c4'])
-  assert.equal(turn.segments.filter((s) => s.kind === 'step-group').length, 0)
+  assert.equal(exposed.length, 3)
+  assert.deepEqual(exposed.map((e) => e.tool.callId), ['c1', 'c2', 'c3'])
+  const group = turn.segments.find((s) => s.kind === 'step-group')
+  assert.ok(group?.kind === 'step-group')
+  assert.deepEqual(group.steps.map((step) => step.kind === 'tool' ? step.tool.callId : undefined), ['c4'])
 })
 
 test('findToolView / matchTimelineRenderer 匹配判定', { timeout: 60_000 }, () => {
@@ -325,7 +327,12 @@ test('工具轨迹保持执行时序，不能被折叠缓冲移到最终回复�
   ])
   const turn = items[0]
   assert.ok(turn?.kind === 'assistant')
-  assert.deepEqual(turn.segments.map((segment) => segment.kind), ['tool', 'text'])
+  assert.deepEqual(turn.segments.map((segment) => segment.kind), ['step-group', 'text'])
+  const group = turn.segments[0]
+  assert.ok(group?.kind === 'step-group')
+  const step = group.steps[0]
+  assert.ok(step?.kind === 'tool')
+  assert.equal(step.tool.callId, 'call-1')
 })
 
 test('流式文本已落库而 live 尚未清理时，不重复显示同一段回复', { timeout: 60_000 }, () => {
@@ -335,6 +342,159 @@ test('流式文本已落库而 live 尚未清理时，不重复显示同一段�
   const turn = items[0]
   assert.ok(turn?.kind === 'assistant')
   assert.deepEqual(turn.segments.filter((segment) => segment.kind === 'text').map((segment) => segment.text), ['这是一条完整回复'])
+})
+
+test('step-group 在产出正文前保持 active=true 默认展开，产出正文或回合结束后自动收起', { timeout: 60_000 }, () => {
+  // 1) 流式思考阶段（尚未产出 text）：step-group active 为 true
+  const thinkingItems = buildTimelineItems([], {
+    live: { conversationId: 1, text: '', thinking: '正在推理目录结构…', tools: [], updatedAt: 1 },
+  })
+  const thinkingTurn = thinkingItems[0]
+  assert.ok(thinkingTurn?.kind === 'assistant')
+  assert.equal(thinkingTurn.live, true)
+  const activeGroup = thinkingTurn.segments[0]
+  assert.ok(activeGroup?.kind === 'step-group')
+  assert.equal(activeGroup.active, true)
+  assert.equal(activeGroup.steps.length, 1)
+
+  // 2) 思考 + 工具完成，但下一轮仍在 working 且无 text 输出：active 保持 true
+  const midRoundItems = buildTimelineItems(
+    [
+      assistantEntry('1', [
+        { type: 'thinking', thinking: '先列出目录' },
+        toolCallBlock('c1', 'bash', { command: 'ls -la' }),
+      ]),
+      toolResultEntry('2', 'c1', 'bash', { text: 'total 0' }),
+    ],
+    { working: true },
+  )
+  const midTurn = midRoundItems[0]
+  assert.ok(midTurn?.kind === 'assistant')
+  const midGroup = midTurn.segments[0]
+  assert.ok(midGroup?.kind === 'step-group')
+  assert.equal(midGroup.active, true)
+
+  // 3) 一旦开始流式输出正文 text，前置 step-group 自动变为 active=false（折叠）
+  const streamingTextItems = buildTimelineItems(
+    [
+      assistantEntry('1', [
+        { type: 'thinking', thinking: '先列出目录' },
+        toolCallBlock('c1', 'bash', { command: 'ls -la' }),
+      ]),
+      toolResultEntry('2', 'c1', 'bash', { text: 'total 0' }),
+    ],
+    { live: { conversationId: 1, text: '当前目录如下：', tools: [], updatedAt: 2 }, working: true },
+  )
+  const streamingTurn = streamingTextItems[0]
+  assert.ok(streamingTurn?.kind === 'assistant')
+  const collapsedGroup = streamingTurn.segments[0]
+  assert.ok(collapsedGroup?.kind === 'step-group')
+  assert.equal(collapsedGroup.active, false)
+
+  // 4) 回合结算后（working=false 且无 live），即使无 text 段也自动收起 active=false
+  const settledItems = buildTimelineItems([
+    assistantEntry('1', [{ type: 'thinking', thinking: '仅思考' }]),
+  ])
+  const settledTurn = settledItems[0]
+  assert.ok(settledTurn?.kind === 'assistant')
+  const settledGroup = settledTurn.segments[0]
+  assert.ok(settledGroup?.kind === 'step-group')
+  assert.equal(settledGroup.active, false)
+})
+
+test('多轮工具执行期间 turn.key 恒定不变，且 running 工具保留在同一 step-group 内不跳出', { timeout: 60_000 }, () => {
+  const userMsg = entry('10', 'helm.input', { data: { text: '检查目录与配置', origin: 'human' } })
+
+  // 阶段 1：流式思考 + 第一个工具 running
+  const s1 = buildTimelineItems([userMsg], {
+    live: {
+      conversationId: 1,
+      text: '',
+      thinking: '先看目录',
+      tools: [{ callId: 'c1', toolName: 'bash', input: { command: 'ls' }, status: 'running' }],
+      updatedAt: 1,
+    },
+    working: true,
+  })
+  const t1 = s1.find((i) => i.kind === 'assistant')!
+  assert.ok(t1?.kind === 'assistant')
+  assert.equal(t1.segments.length, 1, 'thinking 与 running bash 应同属一个 step-group，不拆出组外')
+  assert.equal(t1.segments[0]!.kind, 'step-group')
+
+  // 阶段 2：第一轮 assistant + tool-result 落库，第二轮思考 + 第二个工具 running
+  const s2 = buildTimelineItems(
+    [
+      userMsg,
+      assistantEntry('11', [
+        { type: 'thinking', thinking: '先看目录' },
+        toolCallBlock('c1', 'bash', { command: 'ls' }),
+      ]),
+      toolResultEntry('12', 'c1', 'bash', { text: 'package.json' }),
+      assistantEntry('13', [
+        { type: 'thinking', thinking: '再读配置' },
+        toolCallBlock('c2', 'read', { path: 'package.json' }),
+      ]),
+    ],
+    { working: true },
+  )
+  const t2 = s2.find((i) => i.kind === 'assistant')!
+  assert.ok(t2?.kind === 'assistant')
+  assert.equal(t2.key, t1.key, '新 entry 落库不得改变当前回合的 React key（防整棵卸载回跳）')
+  assert.equal(t2.segments.length, 1, '多轮思考与执行中工具应保持在同一个展开的 step-group 内')
+  const g2 = t2.segments[0]!
+  assert.ok(g2.kind === 'step-group')
+  assert.equal(g2.active, true)
+  assert.equal(g2.steps.length, 4)
+})
+
+test('单条工具从执行到完成再追加第二条时，保留同一分组与工具标识', { timeout: 60_000 }, () => {
+  const userMsg = entry('1', 'helm.input', { data: { text: '检查目录', origin: 'human' } })
+  const call = assistantEntry('2', [toolCallBlock('c1', 'bash', { command: 'ls' })])
+  const first = buildTimelineItems([userMsg, call], { working: true })
+  const completed = buildTimelineItems([userMsg, call, toolResultEntry('3', 'c1', 'bash', { text: 'package.json' })], { working: true })
+  const next = buildTimelineItems([userMsg, call, toolResultEntry('3', 'c1', 'bash', { text: 'package.json' }), assistantEntry('4', [toolCallBlock('c2', 'read', { path: 'package.json' })])], { working: true })
+
+  const groups = [first, completed, next].map((items) => {
+    const turn = items.find((item) => item.kind === 'assistant')
+    assert.ok(turn?.kind === 'assistant')
+    const group = turn.segments[0]
+    assert.ok(group?.kind === 'step-group', '第一条工具也应留在分组中，避免第二条加入时重新挂载')
+    assert.equal(group.active, true, '工具完成时仍在等待下一轮，应保持展开')
+    return group
+  })
+  assert.equal(groups[0]!.key, groups[1]!.key)
+  assert.equal(groups[0]!.key, groups[2]!.key)
+  assert.equal(groups[2]!.steps.length, 2)
+  const tools = groups.map((group) => {
+    const step = group.steps[0]
+    assert.ok(step?.kind === 'tool')
+    return step.tool
+  })
+  assert.equal(tools[0]!.key, tools[1]!.key)
+  assert.equal(tools[0]!.key, tools[2]!.key)
+  assert.deepEqual(tools.map((tool) => tool.status), ['running', 'done', 'done'])
+})
+
+test('流式正文更新、落库和结束回合时保留同一正文标识', { timeout: 60_000 }, () => {
+  const userMsg = entry('1', 'helm.input', { data: { text: '给我结果', origin: 'human' } })
+  const streamed = (text: string, updatedAt: number) => buildTimelineItems([userMsg], {
+    working: true,
+    live: { conversationId: 1, text, tools: [], updatedAt },
+  })
+  const committed = [userMsg, assistantEntry('2', [{ type: 'text', text: '检查完成' }])]
+  const frames = [streamed('检查', 1), streamed('检查完成', 2), buildTimelineItems(committed, { working: true }), buildTimelineItems(committed)]
+  const turns = frames.map((items) => {
+    const turn = items.find((item) => item.kind === 'assistant')
+    assert.ok(turn?.kind === 'assistant')
+    return turn
+  })
+  assert.equal(new Set(turns.map((turn) => turn.key)).size, 1)
+  assert.equal(new Set(turns.map((turn) => turn.segments[0]!.key)).size, 1)
+  assert.deepEqual(turns.map((turn) => {
+    const text = turn.segments[0]
+    assert.ok(text?.kind === 'text')
+    return text.text
+  }), ['检查', '检查完成', '检查完成', '检查完成'])
 })
 
 test('lastHumanTextOf 与格式化工具', { timeout: 60_000 }, () => {

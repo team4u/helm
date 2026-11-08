@@ -8,7 +8,7 @@
  */
 import { mkdir, readFile, readdir, realpath, rm, stat } from 'node:fs/promises'
 import { join, sep } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { HelmError, type ArtifactMetadata } from '@helm/protocol'
 import {
   FileNotFoundError,
@@ -56,6 +56,22 @@ export const SPILL_THRESHOLD_BYTES = 32 * 1024
 export const PREVIEW_HEAD_BYTES = 4 * 1024
 /** 上传产物大小上限：15 MiB。 */
 export const MAX_ARTIFACT_BYTES = 15 * 1024 * 1024
+/**
+ * 协议层 callId 合法形态：首字符字母数字，后续允许 `A-Za-z0-9._:|+-`，禁止 `..` 与路径分隔符。
+ * 覆盖 Anthropic (`toolu_*`)、OpenAI Completions (`call_*`) 与 OpenAI Responses (`call_*|fc_*`)。
+ */
+const CALL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:|+-]{0,255}$/
+const DIRECT_FILENAME_CALL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/
+
+function toSpillFileName(callId: string): string {
+  if (DIRECT_FILENAME_CALL_ID_PATTERN.test(callId)) {
+    return `tool-spill-${callId}.txt`
+  }
+  const slug = callId.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64)
+  const digest = createHash('sha256').update(callId).digest('hex').slice(0, 12)
+  return `tool-spill-${slug}-${digest}.txt`
+}
+
 /** 上传文件名长度上限。 */
 const MAX_UPLOAD_NAME_LENGTH = 200
 
@@ -333,7 +349,7 @@ export class ArtifactService {
     this.assertConversationId(conversationId)
     if (typeof text !== 'string') throw new Error('spill 文本必须是字符串')
     if (typeof callId !== 'string' || callId === '') throw new Error('callId 不能为空')
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(callId)) {
+    if (!CALL_ID_PATTERN.test(callId) || callId.includes('..')) {
       throw new Error(`非法 callId: ${callId}`)
     }
     // 落盘内容先脱敏：秘密占位符保持占位（不还原），并交由 stash 钩子擦除。
@@ -342,7 +358,7 @@ export class ArtifactService {
     if (totalBytes <= SPILL_THRESHOLD_BYTES) {
       return { text: safeText }
     }
-    const fileName = `tool-spill-${callId}.txt`
+    const fileName = toSpillFileName(callId)
     const absPath = join(this.convDir(conversationId), fileName)
     await atomicWriteFile(absPath, safeText)
     const metadata: ArtifactMetadata = {

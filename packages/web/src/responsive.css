@@ -33,10 +33,18 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .conversation-topbar .pane-cwd-subtitle { display: none; }
   .timeline-scroll { padding: 16px 14px 22px; }
   .msg-human-pill { max-width: 92%; }
+  .composer-shell { padding-inline: 10px; }
+  .composer-toolbar { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 4px 8px 8px; }
+  .composer-picker-root { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .composer-model-button { max-width: none; justify-content: flex-start; }
+  .composer-model-label { flex: 1; text-align: left; }
+  .composer-thinking-select { width: 100%; max-width: none; }
+  .composer-model-button, .composer-thinking-select, .composer-toolbar-left > .btn, .composer-toolbar-right > .btn { min-height: 34px; }
+  .composer-action-label { display: none; }
+  .composer-action-label-mobile { display: inline; }
 }
 @container (max-width: 450px) {
   .conversation-topbar .pane-title-group > .badge { display: none; }
-  .composer-toolbar { height: auto; min-height: 34px; flex-wrap: wrap; }
   .composer-widgets .card { padding: 8px 10px; }
 }
 @media (max-width: 1200px) {

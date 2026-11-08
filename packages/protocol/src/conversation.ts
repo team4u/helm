@@ -191,6 +191,8 @@ export interface ConversationLive {
   conversationId: number
   /** 当前流式助手文本的累计快照；客户端直接替换此前实时文本。 */
   text: string
+  /** 当前流式思考块（thinking）的累计快照；无思考块时省略。 */
+  thinking?: string
   tools: Array<{
     callId: string
     toolName: string

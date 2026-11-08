@@ -74,7 +74,7 @@ export type FoldableStep =
 
 export type AssistantSegment =
   | { kind: 'text'; key: string; text: string }
-  | { kind: 'step-group'; key: string; stepCount: number; steps: FoldableStep[] }
+  | { kind: 'step-group'; key: string; stepCount: number; steps: FoldableStep[]; active?: boolean }
   | { kind: 'tool'; key: string; tool: ToolTrace }
 
 export interface AssistantTurn {
@@ -123,6 +123,8 @@ export type TimelineItem = HumanInputItem | DividerItem | PluginCardItem | Assis
 export interface BuildTimelineOptions {
   /** 进行中回合的实时视图（会话 working 时传入；空闲不传）。 */
   live?: ConversationLive
+  /** 会话是否处于 working 执行态（首 token 前与工具轮间隙保持当前回合活跃）。 */
+  working?: boolean
   timelineRenderers?: ReadonlyArray<QualifiedRenderer>
   toolViews?: ReadonlyArray<QualifiedToolView>
 }
@@ -351,11 +353,11 @@ function makeToolTrace(
   }
 }
 
-/** 折叠豁免判定：thinking 与「成功且非业务卡」的普通工具行可收拢。 */
+/** 折叠豁免判定：thinking 与「未出错且非业务卡」的普通工具行可收拢（执行中与已完成同组，避免状态切换时跳进跳出）。 */
 export function isFoldableStep(step: FoldableStep): boolean {
   if (step.kind === 'thinking') return true
   const tool = step.tool
-  if (tool.status !== 'done' || tool.isError) return false
+  if (tool.isError) return false
   if (tool.toolView !== undefined) return false
   if (BUSINESS_TOOL_NAMES.has(tool.toolName)) return false
   return true
@@ -367,34 +369,21 @@ function foldableOfRaw(seg: RawSegment): FoldableStep {
 }
 
 /**
- * 原始段 -> 渲染段：连续可折叠步骤（>= 2）收拢为 step-group（摘要「思考与执行过程 (N 步)」），
+ * 原始段 -> 渲染段：连续可折叠步骤从第一步起就放入 step-group，避免后续追加步骤时搬移节点。
  * 豁免项（isError / tool.view / subagent）与文本块保持独立。
+ * 当回合仍在运行（live=true）且该 step-group 之后尚未产出任何 text 正文段时，标记 active=true（前端默认展开）。
  */
-export function foldTurnSegments(raw: ReadonlyArray<RawSegment>): AssistantSegment[] {
+export function foldTurnSegments(raw: ReadonlyArray<RawSegment>, live = false): AssistantSegment[] {
   const out: AssistantSegment[] = []
   let buffer: FoldableStep[] = []
   const flushBuffer = (): void => {
-    if (buffer.length >= 2) {
-      const first = buffer[0]!
-      const firstKey = first.kind === 'thinking' ? first.thinking.key : first.tool.key
+    if (buffer.length > 0) {
       out.push({
         kind: 'step-group',
-        key: `group:${out.length}:${buffer.length}:${firstKey}`,
+        key: `group:${out.length}`,
         stepCount: buffer.length,
         steps: buffer,
       })
-    } else if (buffer.length === 1) {
-      const step = buffer[0]!
-      if (step.kind === 'thinking') {
-        out.push({
-          kind: 'step-group',
-          key: `group:${out.length}:1:${step.thinking.key}`,
-          stepCount: 1,
-          steps: [step],
-        })
-      } else {
-        out.push({ kind: 'tool', key: step.tool.key, tool: step.tool })
-      }
     }
     buffer = []
   }
@@ -407,7 +396,8 @@ export function foldTurnSegments(raw: ReadonlyArray<RawSegment>): AssistantSegme
         last.text += seg.text ?? ''
         continue
       }
-      out.push({ kind: 'text', key: seg.key, text: seg.text ?? '' })
+      // 同一正文从流式快照转为落库条目时仍复用节点，避免卸载代码块与交互状态。
+      out.push({ kind: 'text', key: `text:${out.length}`, text: seg.text ?? '' })
       continue
     }
     const step = foldableOfRaw(seg)
@@ -420,18 +410,36 @@ export function foldTurnSegments(raw: ReadonlyArray<RawSegment>): AssistantSegme
     }
   }
   flushBuffer()
+  let lastTextIndex = -1
+  for (let i = 0; i < out.length; i++) {
+    if (out[i]!.kind === 'text') lastTextIndex = i
+  }
+  for (let i = 0; i < out.length; i++) {
+    const seg = out[i]!
+    if (seg.kind === 'step-group') {
+      const hasRunningTool = seg.steps.some((s) => s.kind === 'tool' && s.tool.status === 'running')
+      seg.active = live && (i > lastTextIndex || hasRunningTool)
+    }
+  }
   return out
 }
 
 function flushTurn(acc: TurnAcc | null, items: TimelineItem[], live: boolean): void {
   if (acc === null) return
-  const segments = foldTurnSegments(acc.segments)
+  if (live) {
+    for (const seg of acc.segments) {
+      if (seg.kind === 'tool' && seg.tool !== undefined && seg.tool.status === 'unknown') {
+        seg.tool.status = 'running'
+      }
+    }
+  }
+  const segments = foldTurnSegments(acc.segments, live)
   if (segments.length === 0 && acc.entryIds.length === 0) return
   if (segments.length === 0) return
-  const lastEntryId = acc.entryIds.length > 0 ? acc.entryIds[acc.entryIds.length - 1]! : ''
+  const prevKey = items.length > 0 ? items[items.length - 1]!.key : 'root'
   items.push({
     kind: 'assistant',
-    key: `turn:${lastEntryId || acc.segments[0]?.key || 'empty'}`,
+    key: `turn:${prevKey}`,
     entryIds: [...acc.entryIds],
     segments,
     live,
@@ -531,8 +539,14 @@ function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: Bui
   }
 }
 
-/** live 合并：同 callId 更新既有工具行（仅补未决字段），新 call 追加 running 行；流式文本追加为文本段。 */
+/** live 合并：流式思考、同 callId 更新既有工具行（仅补未决字段）、新 call 追加 running 行、流式文本追加为文本段。 */
 function mergeLiveIntoTurn(acc: TurnAcc, live: ConversationLive, opts: BuildTimelineOptions): void {
+  if (typeof live.thinking === 'string' && live.thinking.trim() !== '') {
+    const persistedThinking = acc.segments.findLast((segment) => segment.kind === 'thinking')?.text
+    if (!persistedThinking?.startsWith(live.thinking)) {
+      acc.segments.push({ kind: 'thinking', key: 'think:live', text: live.thinking })
+    }
+  }
   for (const lt of live.tools) {
     if (typeof lt?.callId !== 'string' || typeof lt.toolName !== 'string') continue
     let existing: ToolTrace | undefined
@@ -543,8 +557,13 @@ function mergeLiveIntoTurn(acc: TurnAcc, live: ConversationLive, opts: BuildTime
       }
     }
     if (existing !== undefined) {
-      existing.status = lt.status
-      if (lt.status === 'error') existing.isError = true
+      if (existing.status !== 'done' && existing.status !== 'error') {
+        existing.status = lt.status
+      }
+      if (lt.status === 'error') {
+        existing.status = 'error'
+        existing.isError = true
+      }
       if (existing.input === undefined && lt.input !== undefined) existing.input = lt.input
       if (existing.resultText === undefined && lt.result !== undefined) {
         const text = typeof lt.result === 'string' ? lt.result : contentTextOf(lt.result)
@@ -567,7 +586,7 @@ function mergeLiveIntoTurn(acc: TurnAcc, live: ConversationLive, opts: BuildTime
   if (typeof live.text === 'string' && live.text.trim() !== '') {
     const persistedText = acc.segments.findLast((segment) => segment.kind === 'text')?.text
     if (persistedText?.startsWith(live.text)) return
-    acc.segments.push({ kind: 'text', key: `text:live:${live.updatedAt}`, text: live.text })
+    acc.segments.push({ kind: 'text', key: 'text:live', text: live.text })
   }
 }
 
@@ -680,13 +699,12 @@ export function buildTimelineItems(
     }
   }
 
+  const isLive = options.live !== undefined || options.working === true
   if (options.live !== undefined) {
     if (turn === null) turn = newTurn()
     mergeLiveIntoTurn(turn, options.live, options)
-    flushTurn(turn, items, true)
-  } else {
-    flushTurn(turn, items, false)
   }
+  flushTurn(turn, items, isLive)
   return items
 }
 

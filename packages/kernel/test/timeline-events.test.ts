@@ -157,6 +157,7 @@ describe('deriveConversationLive', { timeout: 60_000 }, () => {
     )
     assert.equal(live.conversationId, 5)
     assert.equal(live.text, '第一段第二段')
+    assert.equal(live.thinking, '推理')
     assert.deepEqual(live.tools, [])
     assert.equal(live.updatedAt, 123)
   })

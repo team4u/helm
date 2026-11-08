@@ -628,7 +628,7 @@ export class ConversationTracker {
       return
     }
     const snapshot = deriveConversationLive(id, live, Date.now())
-    const key = JSON.stringify([snapshot.text, snapshot.tools])
+    const key = JSON.stringify([snapshot.text, snapshot.thinking ?? '', snapshot.tools])
     if (key === this.lastLiveKey.get(id)) return
     this.pendingLive.set(id, snapshot)
     if (this.liveTimers.has(id)) return
@@ -645,7 +645,7 @@ export class ConversationTracker {
     const snapshot = this.pendingLive.get(id)
     if (snapshot === undefined) return
     this.pendingLive.delete(id)
-    this.lastLiveKey.set(id, JSON.stringify([snapshot.text, snapshot.tools]))
+    this.lastLiveKey.set(id, JSON.stringify([snapshot.text, snapshot.thinking ?? '', snapshot.tools]))
     this.events.onLiveChanged?.(snapshot)
   }
 
@@ -659,7 +659,7 @@ export class ConversationTracker {
       this.liveViews.get(conversationId),
       Date.now(),
     )
-    const key = JSON.stringify([snapshot.text, snapshot.tools])
+    const key = JSON.stringify([snapshot.text, snapshot.thinking ?? '', snapshot.tools])
     if (key === this.lastLiveKey.get(conversationId)) return
     this.lastLiveKey.set(conversationId, key)
     this.events.onLiveChanged(snapshot)
@@ -936,7 +936,7 @@ function assistantTextOf(entry: {
     .join('\n')
 }
 
-/** 流式 generation.message 的可见文本长度（活动指纹用；非对象形状返回 -1 区分）。 */
+/** 流式 generation.message 的可见文本+思考长度（活动指纹用；非对象形状返回 -1 区分）。 */
 function streamedLengthOf(generation: LiveStateShape['generation']): number {
   if (generation === null || typeof generation !== 'object') return -1
   const message = (generation as { message?: unknown }).message
@@ -945,13 +945,12 @@ function streamedLengthOf(generation: LiveStateShape['generation']): number {
   if (!Array.isArray(content)) return -1
   let length = 0
   for (const block of content) {
-    if (
-      block !== null &&
-      typeof block === 'object' &&
-      (block as { type?: unknown }).type === 'text' &&
-      typeof (block as { text?: unknown }).text === 'string'
-    ) {
-      length += (block as { text: string }).text.length
+    if (block === null || typeof block !== 'object') continue
+    const b = block as { type?: unknown; text?: unknown; thinking?: unknown }
+    if (b.type === 'text' && typeof b.text === 'string') {
+      length += b.text.length
+    } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
+      length += b.thinking.length
     }
   }
   return length
