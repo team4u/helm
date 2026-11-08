@@ -541,6 +541,16 @@ textarea {
   border-radius: var(--radius-sm);
   padding: 2px;
   box-shadow: var(--shadow-sm);
+  width: fit-content;
+  max-width: max-content;
+}
+
+.msg-human-row .msg-hover-bar {
+  align-self: flex-end;
+}
+
+.msg-ai-block .msg-hover-bar {
+  align-self: flex-start;
 }
 
 .msg-human-row:hover .msg-hover-bar,

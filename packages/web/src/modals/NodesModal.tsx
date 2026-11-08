@@ -22,10 +22,18 @@ function TokenGuideCard({
   token: string
 }) {
   const rows: Array<{ label: string; command: string; hint?: string }> = [
-    { label: '一键连接并启动', command: guide.oneLineCommand },
-    { label: '连接 Hub', command: guide.connectCommand },
-    { label: '后台启动守护进程', command: guide.startDaemonCommand },
-    { label: '安装系统服务（可选）', command: guide.serviceInstallCommand },
+    { label: '一键接入（后台守护）', command: guide.oneLineCommand },
+    {
+      label: '前台连接（调试用）',
+      command: guide.connectCommand,
+      hint: '前台常驻，Ctrl/Cmd+C 退出，不安装守护进程',
+    },
+    { label: '启动守护进程（已绑定身份）', command: guide.startDaemonCommand },
+    {
+      label: '安装系统服务（可选）',
+      command: guide.serviceInstallCommand,
+      hint: '需先完成上方接入以绑定节点身份',
+    },
     { label: '诊断', command: guide.doctorCommand, hint: '连接异常时在受控机运行' },
   ]
   return (
@@ -81,7 +89,7 @@ function OfflineHintCard({ guide }: { guide: NodeConnectGuide }) {
         <span style={{ fontWeight: 600, fontSize: 12.5 }}>该节点当前未连接</span>
       </div>
       <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-        若已在受控机执行过 connect，运行 <code className="mono">{guide.startDaemonCommand}</code> 即可恢复连接；若丢失令牌，可点击上方「轮换令牌」重新签发。
+        若已在受控机绑定过身份，运行 <code className="mono">{guide.startDaemonCommand}</code> 即可启动后台守护进程恢复连接；若丢失令牌，可点击上方「轮换令牌」重新签发。
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
         <code
@@ -151,15 +159,29 @@ function HealthCard({ node }: { node: NodeInfo }) {
 }
 
 /** 右栏「接入新节点」模式：输入 ID 签发令牌。 */
-function IssuePanel({ onIssued }: { onIssued: (nodeId: string, token: string) => void }) {
+function IssuePanel({
+  existingNodeIds,
+  onIssued,
+}: {
+  /** 当前已知节点 ID（store.nodes）：已存在节点禁止在此签发，避免误轮换。 */
+  existingNodeIds: ReadonlySet<string>
+  onIssued: (nodeId: string, token: string) => void
+}) {
   const [input, setInput] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [issuing, setIssuing] = useState(false)
 
   const issue = async () => {
+    if (issuing) return
     const validated = validateNodeIdInput(input)
     if (!validated.ok) {
       setError(validated.error)
+      return
+    }
+    if (existingNodeIds.has(validated.nodeId)) {
+      setError(
+        `节点 ${validated.nodeId} 已存在，重新签发会使旧令牌立即失效；请在左侧列表选中该节点后使用「轮换令牌」`,
+      )
       return
     }
     setIssuing(true)
@@ -181,7 +203,7 @@ function IssuePanel({ onIssued }: { onIssued: (nodeId: string, token: string) =>
         <span style={{ fontWeight: 600, fontSize: 12.5 }}>接入新节点</span>
       </div>
       <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-        输入受控机的节点 ID（如 macbook-pro、gpu-box），签发一次性接入令牌后在受控机执行 helm-node connect。
+        输入受控机的节点 ID（如 macbook-pro、gpu-box），签发一次性接入令牌；随后在受控机执行签发结果中的一键接入命令，绑定身份并后台启动守护进程。
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
         <input
@@ -191,12 +213,13 @@ function IssuePanel({ onIssued }: { onIssued: (nodeId: string, token: string) =>
           autoFocus
           placeholder="节点 ID，如 macbook-pro"
           aria-label="新节点 ID"
+          disabled={issuing}
           onChange={(e) => {
             setInput(e.target.value)
             setError(null)
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') void issue()
+            if (e.key === 'Enter' && !issuing) void issue()
           }}
         />
         <button className="btn btn-primary btn-sm" disabled={issuing} onClick={() => void issue()}>
@@ -232,6 +255,12 @@ function NodeDetailPanel({
   const [removing, setRemoving] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState(false)
   const [creating, setCreating] = useState(false)
+  // 远端节点新建会话必须显式指定目标机绝对路径工作目录：内核拒绝盲跑节点默认
+  // 目录（init.cwd > profile.cwd > 父会话 cwd 均缺失时显式报错），也不拿 Hub
+  // cwd 冒充远端路径；本机节点保持缺省 Hub 目录，无需输入。
+  const [newConversationCwd, setNewConversationCwd] = useState('')
+  const needsCwd = node.kind === 'byom'
+  const cwdValid = !needsCwd || newConversationCwd.trim() !== ''
 
   const hubOrigin = useMemo(() => {
     try {
@@ -250,14 +279,15 @@ function NodeDetailPanel({
     setRotating(true)
     try {
       const issued = await nodesApi.issueToken(node.id)
-      await store.refreshNodes()
+      // 先呈现一次性明文令牌再刷新列表：若刷新失败/延迟，令牌也不丢失。
       onTokenIssued(issued.token)
       store.pushNotice({
         type: 'notification',
         level: 'info',
         title: '节点令牌已轮换',
-        body: `${node.id} 旧令牌已失效，请用新令牌在受控机重新 connect`,
+        body: `${node.id} 旧令牌已失效，请用新令牌在受控机重新接入`,
       })
+      await store.refreshNodes()
     } catch (err) {
       store.pushNotice({
         type: 'notification',
@@ -292,10 +322,13 @@ function NodeDetailPanel({
   }
 
   const createConversation = async () => {
-    if (creating) return
+    if (creating || !cwdValid) return
     setCreating(true)
     try {
-      const conv = await conversationsApi.create({ nodeId: node.id })
+      const conv = await conversationsApi.create({
+        nodeId: node.id,
+        ...(needsCwd ? { cwd: newConversationCwd.trim() } : {}),
+      })
       store.openTarget({ kind: 'conversation', conversationId: conv.id })
       store.setActiveModal(null)
     } catch (err) {
@@ -325,10 +358,12 @@ function NodeDetailPanel({
             {node.online ? '在线' : '离线'}
           </span>
           <span style={{ flex: 1 }} />
-          <button className="btn btn-sm" disabled={creating} onClick={() => void createConversation()}>
-            <HelmIcon name="plus" size={12} />
-            在此节点新建对话
-          </button>
+          {node.kind === 'local' && (
+            <button className="btn btn-sm" disabled={creating} onClick={() => void createConversation()}>
+              <HelmIcon name="plus" size={12} />
+              在此节点新建对话
+            </button>
+          )}
           {node.kind === 'byom' && (
             <>
               <button className="btn btn-sm" disabled={rotating} onClick={() => void rotate()}>
@@ -366,6 +401,45 @@ function NodeDetailPanel({
         </>
       )}
 
+      {(issuedToken !== undefined || (node.kind === 'byom' && !node.online)) && (
+        <>
+          {issuedToken !== undefined ? (
+            <TokenGuideCard guide={guide} token={issuedToken} />
+          ) : (
+            <OfflineHintCard guide={guide} />
+          )}
+        </>
+      )}
+
+      {needsCwd && (
+        <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <HelmIcon name="folder" size={13} />
+            <span style={{ fontWeight: 600, fontSize: 12.5 }}>在此节点新建对话</span>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            远端节点会话必须显式指定目标机上的绝对路径工作目录（内核拒绝盲跑节点默认目录，也不会用 Hub 目录冒充）。
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              className="input mono"
+              style={{ flex: 1 }}
+              value={newConversationCwd}
+              placeholder="如 /home/user/project（目标机绝对路径）"
+              aria-label="新对话工作目录，目标节点绝对路径"
+              onChange={(e) => setNewConversationCwd(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && cwdValid && !creating) void createConversation()
+              }}
+            />
+            <button className="btn btn-primary btn-sm" disabled={!cwdValid || creating} onClick={() => void createConversation()}>
+              <HelmIcon name={creating ? 'loader' : 'plus'} size={12} />
+              {creating ? '创建中...' : '创建对话'}
+            </button>
+          </div>
+        </section>
+      )}
+
       <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <HelmIcon name="terminal" size={13} />
@@ -396,9 +470,17 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
     void refreshNodes()
   }, [refreshNodes])
 
-  // 移除事件到达后选中节点可能已不存在：兜底切回 local。
+  // 移除事件到达后选中节点可能已不存在：兜底切回首项（local 恒在首位）。
   const nodes = store.nodes
-  const selected = nodes.find((n) => n.id === selectedId)
+  const existingNodeIds = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes])
+  // 刚签发节点在 store 列表到位前（HTTP 刷新未返回、SSE 未推送）用占位详情
+  // 先行选中并呈现令牌；仅声明 id/kind/离线，不伪造在线/健康/连接信息，
+  // 真实字段由节点注册后经 node.changed / refreshNodes 覆盖。
+  const issuedButUnlisted =
+    selectedId !== null && issuedTokens[selectedId] !== undefined && !nodes.some((n) => n.id === selectedId)
+  const selected: NodeInfo | undefined = issuedButUnlisted
+    ? { id: selectedId!, kind: 'byom', online: false }
+    : nodes.find((n) => n.id === selectedId)
   useEffect(() => {
     if (selected === undefined && !issuingMode && nodes.length > 0) setSelectedId(nodes[0]!.id)
   }, [selected, issuingMode, nodes])
@@ -492,7 +574,7 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
           </div>
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12, overflowY: 'auto' }}>
             {issuingMode ? (
-              <IssuePanel onIssued={onIssued} />
+              <IssuePanel existingNodeIds={existingNodeIds} onIssued={onIssued} />
             ) : selected ? (
               <NodeDetailPanel
                 key={selected.id}

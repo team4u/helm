@@ -90,3 +90,12 @@ test('移动端触屏与聚焦优化：消息操作栏支持轻点唤起并提�
   )
   assert.match(hoverNoneSlice, /\.msg-hover-bar\s*\{[^}]*opacity:\s*0\.85/)
 })
+
+test('消息悬停条紧凑包裹与对齐规则：人类消息靠右对齐、AI 回复靠左自适应宽度防拉伸', { timeout: 60_000 }, () => {
+  // 必须声明 width: fit-content 防 Flex stretch 拉伸全宽
+  assert.match(stylesCss, /\.msg-hover-bar\s*\{[^}]*width:\s*fit-content/)
+  // 人类消息靠右
+  assert.match(stylesCss, /\.msg-human-row\s+\.msg-hover-bar\s*\{[^}]*align-self:\s*flex-end/)
+  // AI 回复靠左紧凑
+  assert.match(stylesCss, /\.msg-ai-block\s+\.msg-hover-bar\s*\{[^}]*align-self:\s*flex-start/)
+})

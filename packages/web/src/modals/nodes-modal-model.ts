@@ -23,8 +23,11 @@ export function validateNodeIdInput(raw: string): NodeIdValidation {
 }
 
 export interface NodeConnectGuide {
+  /** 前台连接（调试用）：绑定 JOIN 令牌并前台常驻运行，Ctrl+C 退出，不安装守护进程。 */
   connectCommand: string
+  /** 后台启动守护进程：复用磁盘上已绑定身份，无需令牌。 */
   startDaemonCommand: string
+  /** 一键接入：以 --token 绑定节点身份并后台 detached 启动（推荐）。 */
   oneLineCommand: string
   serviceInstallCommand: string
   doctorCommand: string
@@ -35,12 +38,13 @@ export function buildNodeConnectGuide(
   hubOrigin: string,
   issued: { nodeId: string; token: string },
 ): NodeConnectGuide {
-  const connectCommand = `helm-node connect ${hubOrigin} --token ${issued.token}`
-  const startDaemonCommand = 'helm-node start -d'
+  // connect 是前台常驻命令（Ctrl/Cmd+C 才退出），用 && 串联后续命令永远不会执行；
+  // 一步接入用 start -d：其 detach 路径支持 --token 绑定身份后拉起后台守护进程，
+  // 且子进程 argv 不含 token（避免长期驻留进程的命令行泄漏令牌）。
   return {
-    connectCommand,
-    startDaemonCommand,
-    oneLineCommand: `${connectCommand} && ${startDaemonCommand}`,
+    connectCommand: `helm-node connect ${hubOrigin} --token ${issued.token}`,
+    startDaemonCommand: 'helm-node start -d',
+    oneLineCommand: `helm-node start -d --hub ${hubOrigin} --token ${issued.token}`,
     serviceInstallCommand: 'helm-node service install',
     doctorCommand: 'helm-node doctor',
   }
