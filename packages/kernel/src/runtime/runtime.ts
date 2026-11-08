@@ -576,7 +576,9 @@ export class KernelRuntime {
       harness: this.harness,
       store: this.store,
       events: {
-        onSummaryChanged: (summary) => this.events.publish('conversation.upsert', summary),
+        // tracker 摘要统一附加实时归属（ownedBy）：SSE 消费方（Web store/CLI）
+        // 与 getConversation/listConversations 读到同一形状。
+        onSummaryChanged: (summary) => this.events.publish('conversation.upsert', this.withOwnership(summary)),
         onInputCommitted: (conversationId, input) => {
           this.store.indexFts(conversationId, `input:${input.id}`, this.store.getConv(conversationId)?.title ?? '', input.text)
         },
@@ -1793,7 +1795,7 @@ export class KernelRuntime {
   listConversations(filter?: { profileId?: string; tag?: string; status?: string }): ConversationSummary[] {
     return this.store
       .listConvs()
-      .map((meta) => this.tracker.summaryOf(meta.id))
+      .map((meta) => this.summaryWithOwnership(meta.id))
       .filter((s) => (filter?.profileId ? s.profileId === filter.profileId : true))
       .filter((s) => (filter?.tag ? s.tags.includes(filter.tag) : true))
       .filter((s) => (filter?.status ? s.status === filter.status : true))
@@ -1802,7 +1804,23 @@ export class KernelRuntime {
   getConversation(id: number): ConversationSummary {
     const meta = this.store.getConv(id)
     if (!meta) throw new HelmError('not_found', `会话不存在：${id}`, 404)
-    return this.tracker.summaryOf(id)
+    return this.summaryWithOwnership(id)
+  }
+
+  /** 摘要 + 实时归属投射：tracker 摘要不读 ownership doc，此处统一附加（缺省 human）。 */
+  private summaryWithOwnership(id: number): ConversationSummary {
+    return { ...this.tracker.summaryOf(id), ownedBy: this.getConversationOwnership(id) }
+  }
+
+  /** 已构造摘要的归属补齐（tracker 回调路径；不存在的会话缺省 human）。 */
+  private withOwnership(summary: ConversationSummary): ConversationSummary {
+    let ownedBy: 'human' | 'helm' | 'bot' = 'human'
+    try {
+      ownedBy = this.getConversationOwnership(summary.id)
+    } catch {
+      // 会话已删（tombstone 后的残余回调）：缺省 human，不阻断事件流。
+    }
+    return { ...summary, ownedBy }
   }
 
   /** cursor 最大编码长度（base64url 后；超长拒绝防滥用）。 */
@@ -2022,7 +2040,7 @@ export class KernelRuntime {
       updatedAt: now,
     })
     await this.tracker.observe(id)
-    const summary = this.tracker.summaryOf(id)
+    const summary = this.summaryWithOwnership(id)
     this.events.publish('conversation.upsert', summary)
     return summary
   }
@@ -2101,7 +2119,7 @@ export class KernelRuntime {
       this.envFabric.evictConversation(id)
     }
     const summary = this.tracker.summaryOf(id)
-    this.events.publish('conversation.upsert', summary)
+    this.events.publish('conversation.upsert', this.withOwnership(summary))
     return summary
   }
 
@@ -2486,7 +2504,7 @@ export class KernelRuntime {
     await conversation.reset(safeHandoff, BACKGROUND_CONTEXT)
     this.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
     const summary = this.tracker.summaryOf(id)
-    this.events.publish('conversation.upsert', summary)
+    this.events.publish('conversation.upsert', this.withOwnership(summary))
     return summary
   }
 
@@ -2504,7 +2522,7 @@ export class KernelRuntime {
     const taskId = await conversation.compact(safeInstructions, BACKGROUND_CONTEXT)
     this.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
     const summary = this.tracker.summaryOf(id)
-    this.events.publish('conversation.upsert', summary)
+    this.events.publish('conversation.upsert', this.withOwnership(summary))
     return { taskId: Number(taskId), conversation: summary }
   }
 
@@ -2566,7 +2584,7 @@ export class KernelRuntime {
     await this.alignConversationModel(newId)
     await this.tracker.observe(newId)
     const summary = this.tracker.summaryOf(newId)
-    this.events.publish('conversation.upsert', summary)
+    this.events.publish('conversation.upsert', this.withOwnership(summary))
     return summary
   }
 
@@ -3271,6 +3289,10 @@ export class KernelRuntime {
     }
     const key = 'conversation-ownership'
     const current = this.documentStore.get<Record<string, string>>(key, {})
+    const previous = current[String(conversationId)]
+    // 有效值对比：未标记与 human 等价（human = 移除自动化归属），无变化不发布事件。
+    const previousEffective = previous === 'helm' || previous === 'bot' ? previous : 'human'
+    if (previousEffective === owner) return
     const next = owner === 'human'
       ? (() => {
           // 标记 human = 移除自动化归属（回退默认判定），不留冗余键。
@@ -3280,6 +3302,11 @@ export class KernelRuntime {
         })()
       : { ...current, [String(conversationId)]: owner }
     this.documentStore.set(key, next)
+    // 归属变化即投射：现存会话发 conversation.upsert（携带最新 ownedBy），
+    // 前端 store 实时感知；已删会话（deleteConversation 兑底清理）无摘要可发，
+    // 静默跳过（conversation.deleted 已另行发布）。
+    if (this.store.getConv(conversationId) === undefined || this.store.isDeleted(conversationId)) return
+    this.events.publish('conversation.upsert', this.summaryWithOwnership(conversationId))
   }
 
   /**

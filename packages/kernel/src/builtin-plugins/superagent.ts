@@ -41,7 +41,7 @@ import type {
 } from '@helm/protocol'
 import { withFileLock } from '../services/index.js'
 import { redactJsonValue } from '../redact.js'
-import { isAbsolute } from 'node:path'
+import { isAbsoluteTargetPath } from '../runtime/tools.js'
 import { registerSuperAgentWatchdog } from './superagent/watchdog.js'
 import type {
   RecallGraphDoc,
@@ -607,6 +607,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         title?: string
         threadKey?: string
         cwd?: string
+        nodeId?: string
       }
 
       /** 执行会话二次校验：scope 之外再核实际 router 会话（防同 Profile 人类直聊滥用）。 */
@@ -646,11 +647,33 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         return trimmed
       }
 
-      /** Worker 工作目录：显式给出则必须是规范化非空绝对路径。 */
+      /** Worker 工作目录：显式给出则必须是跨平台绝对路径（POSIX `/`、
+       * Windows 盘符 `C:\\...` / `C:/...`、UNC `\\\\server\\share`），
+       * 目标节点可能与 Hub 异平台，不得用宿主 node:path 规则判定。 */
       const assertWorkerCwd = (value: string): string => {
         const trimmed = value.trim()
-        if (trimmed === '' || !isAbsolute(trimmed)) {
-          throw new HelmError('validation_error', `cwd 必须是绝对路径（收到：${value}）`, 400, {})
+        if (trimmed === '' || !isAbsoluteTargetPath(trimmed)) {
+          throw new HelmError(
+            'validation_error',
+            `cwd 必须是跨平台绝对路径（POSIX / 开头、Windows 盘符或 UNC；收到：${value}）`,
+            400,
+            {},
+          )
+        }
+        return trimmed
+      }
+
+      /** Worker 绑定节点：非空、无空白、无路径分隔符（防目录注入）；
+       * 存在性由 createConversation 靶点解析链处理，不在此硬编码节点清单。 */
+      const assertWorkerNodeId = (value: string): string => {
+        const trimmed = value.trim()
+        if (trimmed === '' || trimmed.length > 64 || /\s|[/\\]/.test(trimmed)) {
+          throw new HelmError(
+            'validation_error',
+            `nodeId 非法（非空 1..64 字符，不含空白与路径分隔符，收到：${value}）`,
+            400,
+            {},
+          )
         }
         return trimmed
       }
@@ -671,7 +694,8 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
           profileId: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[^\\s/\\\\]+$' },
           title: { type: 'string', minLength: 1, maxLength: 80 },
           threadKey: { type: 'string', minLength: 1, maxLength: 200 },
-          cwd: { type: 'string', minLength: 1, pattern: '^/' },
+          cwd: { type: 'string', minLength: 1 },
+          nodeId: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[^\\s/\\\\]+$' },
         },
         required: ['prompt'],
         additionalProperties: false,
@@ -710,6 +734,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
             ? input.title.trim().slice(0, 80)
             : `Worker: ${input.prompt.slice(0, 24)}`
         const cwd = input.cwd === undefined ? undefined : assertWorkerCwd(input.cwd)
+        const nodeId = input.nodeId === undefined ? undefined : assertWorkerNodeId(input.nodeId)
 
         const run = async (): Promise<{ workerConversationId: number }> => {
           // —— 互斥区内（dispatchChain）：订阅占位检查 + 建会话 + 登记 + 提交 ——
@@ -736,6 +761,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
             profileId: targetProfile,
             tags: [WORKER_TAG],
             parentConversationId: routerConversationId,
+            ...(nodeId !== undefined ? { nodeId } : {}),
             ...(cwd !== undefined ? { cwd } : {}),
           })
           const workerEntry: SuperAgentWorker = {

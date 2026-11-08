@@ -121,6 +121,13 @@ export function validateProfileInput(input: unknown): Profile {
     }
     profile.tags = [...tags] as string[]
   }
+  const managedByPlugin = input['managedByPlugin']
+  if (managedByPlugin !== undefined) {
+    if (typeof managedByPlugin !== 'string' || managedByPlugin.trim() === '') {
+      throw new Error(`profile '${id}' managedByPlugin 若存在必须是非空字符串（托管插件 ID）`)
+    }
+    profile.managedByPlugin = managedByPlugin
+  }
   const runtime = input['runtime']
   if (runtime !== undefined) {
     if (!isPlainObject(runtime)) throw new Error(`profile '${id}' runtime 必须是对象`)
@@ -516,21 +523,23 @@ export class SkillService {
       throw err
     })
     if (skillMd === undefined) return undefined
-    const { name, description } = parseSkillFrontmatter(skillMd)
+    const { name, description, managedByPlugin } = parseSkillFrontmatter(skillMd)
     const references = await collectFiles(root)
     return {
       id,
       name: name || id,
       ...(description !== '' ? { description } : {}),
+      ...(managedByPlugin !== undefined ? { managedByPlugin } : {}),
       references,
     }
   }
 }
 
-/** 解析 SKILL.md 顶部 YAML frontmatter 的 name/description（缺失时回退 id/空）。 */
+/** 解析 SKILL.md 顶部 YAML frontmatter 的 name/description/managedByPlugin（缺失时回退 id/空）。 */
 export function parseSkillFrontmatter(text: string): {
   name: string
   description: string
+  managedByPlugin?: string
 } {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
   if (match === null) return { name: '', description: '' }
@@ -540,8 +549,12 @@ export function parseSkillFrontmatter(text: string): {
     const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(line)
     if (m !== null && m[1] !== undefined) fields.set(m[1], (m[2] ?? '').trim())
   }
+  // snake_case 别名与空值规整：托管插件 ID 必须非空，空值视为未声明。
+  const managedRaw = fields.get('managedByPlugin') ?? fields.get('managed_by_plugin')
+  const managedByPlugin = managedRaw !== undefined && managedRaw !== '' ? managedRaw : undefined
   return {
     name: fields.get('name') ?? '',
     description: fields.get('description') ?? '',
+    ...(managedByPlugin !== undefined ? { managedByPlugin } : {}),
   }
 }
