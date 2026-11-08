@@ -12,6 +12,8 @@ export interface Profile {
   name?: string
   /** Profile 绑定的系统提示词与记忆由文件承载，详情接口（GET/POST/PUT）附带全文，profile.json 落盘时剥离。 */
   model?: string
+  /** Profile 级思考档位（off/minimal/low/medium/high/xhigh/max）；未设置跟随全局缺省。 */
+  thinkingLevel?: string
   /** Profile 默认绑定的计算节点 ID（缺省 'local'）。 */
   nodeId?: string
   /** Profile 默认工作目录。 */
@@ -19,6 +21,8 @@ export interface Profile {
   /** 作为 subagent / 工作流节点调用时的外部执行配置；持久会话仍由 pi-durable 承载。 */
   runtime?: ProfileRuntime
   tags?: string[]
+  /** 自举或托管该 Profile 的插件 ID（对应插件未启用时前端可按此隐藏）。 */
+  managedByPlugin?: string
   /** SYSTEM.md 全文（详情接口读写，不写入 profile.json）。 */
   system?: string
   /** MEMORY.md 全文（详情接口读写，不写入 profile.json）。 */
@@ -46,6 +50,8 @@ export interface SkillSummary {
   description?: string
   /** 支持按需读取的子文件相对路径（如 'references/xxx.md'）。 */
   references: string[]
+  /** 自举或托管该 Skill 的插件 ID（对应插件未启用时前端可按此隐藏）。 */
+  managedByPlugin?: string
 }
 
 /** `GET /api/models` 公开模型目录条目。 */
@@ -53,6 +59,15 @@ export interface ModelCatalogEntry {
   provider: string
   modelId: string
   available: boolean
+}
+
+/** `GET /api/models` 完整目录：模型列表 + 各模型思考档位（off/minimal/low/medium/high/xhigh/max）。 */
+export interface ModelCatalog {
+  models: ModelCatalogEntry[]
+  /** provider/modelId -> 支持的思考档位（缺省仅 off）。 */
+  thinkingLevels: Record<string, string[]>
+  /** 全局默认模型（config.json.model / 启动参数；未配置省略）。 */
+  defaultModel?: string
 }
 
 /** PI 内置供应商、插件动态供应商与已启用自定义网关的公开目录，不含凭据或私有请求头。 */

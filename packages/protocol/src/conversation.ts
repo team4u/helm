@@ -33,12 +33,16 @@ export interface ConversationSummary {
   tags: string[]
   /** 派生来源会话 ID；根会话无此字段。 */
   parentConversationId?: number
+  /** 会话归属权（缺省 'human'；插件或内核创建的常驻/后台会话标为 'helm' | 'bot'）。 */
+  ownedBy?: 'human' | 'helm' | 'bot'
   /** 绑定的计算节点 ID（缺省为 'local'）。 */
   nodeId?: string
   /** 目标节点视角下的工作目录绝对路径。 */
   cwd: string
   /** 当前生效模型 'provider/model'。 */
   model: string
+  /** 当前思考档位（off/minimal/low/medium/high/xhigh/max）；空串未设置。 */
+  thinkingLevel: string
   status: ConversationStatus
   /** 零 Token 实时动作摘要，如 'bash: pnpm test' 或 'thinking…'。 */
   doing?: string
@@ -74,6 +78,8 @@ export interface ConversationPatch {
   nodeId?: string
   cwd?: string
   model?: string
+  /** 思考档位（off/minimal/low/medium/high/xhigh/max）；空串清除跟随默认。 */
+  thinkingLevel?: string
   unread?: boolean
   pinned?: boolean
 }
