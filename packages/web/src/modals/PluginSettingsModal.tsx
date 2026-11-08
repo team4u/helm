@@ -264,20 +264,48 @@ export function PluginSettingsModal({
             {plugin && (
               <>
                 <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                    <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
-                      <span style={{ fontWeight: 600, fontSize: 13 }}>{plugin.name || plugin.id}</span>
-                      <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{plugin.id}</span>
-                      {plugin.version && <span className="badge badge-neutral">v{plugin.version}</span>}
+                  <div
+                    className="plugin-card-header"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <div
+                      className="plugin-card-meta"
+                      style={{
+                        display: 'flex',
+                        gap: 8,
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        minWidth: 0,
+                        flex: 1,
+                      }}
+                    >
+                      <span style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
+                        {plugin.name || plugin.id}
+                      </span>
+                      <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', whiteSpace: 'nowrap' }}>
+                        {plugin.id}
+                      </span>
+                      {plugin.version && (
+                        <span className="badge badge-neutral" style={{ whiteSpace: 'nowrap' }}>
+                          v{plugin.version}
+                        </span>
+                      )}
                       {plugin.locked && (
-                        <span className="badge badge-warn">
+                        <span className="badge badge-warn" style={{ whiteSpace: 'nowrap' }}>
                           <HelmIcon name="lock" size={10} />
                           常驻核心插件，不可停用
                         </span>
                       )}
-                    </span>
+                    </div>
                     <button
                       className={`btn btn-sm ${plugin.enabled ? 'btn-danger' : 'btn-primary'}`}
+                      style={{ flexShrink: 0 }}
                       disabled={plugin.locked || toggling}
                       onClick={() => void toggleEnabled()}
                     >

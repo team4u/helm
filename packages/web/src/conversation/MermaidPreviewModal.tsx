@@ -91,9 +91,20 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
         style={{ maxWidth: 'min(1100px, 94vw)', maxHeight: '90vh' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="modal-header">
-          <span className="modal-title">Mermaid 图放大预览</span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <div className="modal-header mermaid-modal-header">
+          <span
+            className="modal-title mermaid-modal-title"
+            style={{
+              minWidth: 0,
+              flex: 1,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            Mermaid 图放大预览
+          </span>
+          <div className="mermaid-modal-actions">
             <span className="badge badge-neutral mono tabular-nums">{scale.toFixed(1)}x</span>
             <button
               type="button"
@@ -133,10 +144,16 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
               <HelmIcon name={copied ? 'check' : 'copy'} size={12} />
               复制源码
             </button>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} title="关闭 (Esc)">
-              <HelmIcon name="x" size={13} />
-            </button>
-          </span>
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm mermaid-modal-close"
+            onClick={onClose}
+            title="关闭 (Esc)"
+            aria-label="关闭"
+          >
+            <HelmIcon name="x" size={13} />
+          </button>
         </div>
         <div className="modal-body" style={{ padding: 0 }}>
           {view === 'source' ? (
