@@ -9,13 +9,15 @@
  * - 外部插件默认停用注册，enable 后 action / public doc / client.tsx 编译全链路可用；
  * - config.json.pluginEnabled = true 的外部插件跨重启自动恢复启用；
  * - 普通插件留下的纯数据目录（无 plugin.json / index.js）静默跳过；
- * - 损坏 plugin.json / 冒充 builtin: id / 越界 main 显式报错，绝不静默吞错。
+ * - 损坏 plugin.json / 冒充 builtin: id / 越界 main（含 symlink 真实路径越界）/
+ *   setup 兼容别名 / 非 string clientRoot 显式报错，绝不静默吞错；
+ * - EACCES 等真实 IO 故障显式报错（不误判为纯数据目录跳过）；仅 ENOENT/ENOTDIR 视为缺失。
  *
  * runner: tsx --test；每项显式 timeout: 60_000 防死锁；命令加总超时。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -383,12 +385,161 @@ test('plugin.json 声明的入口文件缺失显式报错 plugin_entry_missing',
   }
 })
 
-test('模块导出缺少 definePlugin / setup 显式报错 invalid_plugin_definition', { timeout: 60_000 }, async () => {
+test('入口 symlink 指向插件目录外：词法路径不越界但真实路径越界，显式拒绝', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
+  const outside = mkdtempSync(join(tmpdir(), 'helm-ext-outside-'))
+  try {
+    writeFileSync(join(outside, 'evil.mjs'), 'export default { id: "evil", name: "evil", definePlugin() {} }')
+    const dirPath = join(dataDir, 'plugins', 'symlink-escape')
+    mkdirSync(dirPath, { recursive: true })
+    // 词法在目录内、真实在目录外（symlink 逃逸）
+    symlinkSync(join(outside, 'evil.mjs'), join(dirPath, 'entry.mjs'))
+    writeFileSync(join(dirPath, 'plugin.json'), JSON.stringify({ main: 'entry.mjs' }))
+
+    await assert.rejects(
+      makeEnvIn(dataDir),
+      (err: unknown) =>
+        err instanceof HelmError &&
+        err.code === 'plugin_manifest_invalid' &&
+        err.message.includes('符号链接'),
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test('clientRoot 非字符串在边界显式拒绝（不引入虚假沙箱承诺）', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
+  try {
+    const dirPath = join(dataDir, 'plugins', 'bad-client-root')
+    mkdirSync(dirPath, { recursive: true })
+    writeFileSync(
+      join(dirPath, 'index.mjs'),
+      `export default {\n  id: 'bad-client-root',\n  name: '非法 clientRoot',\n  clientRoot: 123,\n  definePlugin() {},\n}\n`,
+    )
+
+    await assert.rejects(
+      makeEnvIn(dataDir),
+      (err: unknown) =>
+        err instanceof HelmError &&
+        err.code === 'invalid_plugin_definition' &&
+        err.message.includes('clientRoot'),
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('入口探测遇到真实 IO 故障（ELOOP symlink 环）显式报错，不误判为纯数据目录（root 用户同样生效）', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
+  try {
+    const dirPath = join(dataDir, 'plugins', 'symlink-loop')
+    mkdirSync(dirPath, { recursive: true })
+    // 自指 symlink 环：statSync 抛 ELOOP（真实 IO 故障，非缺失），root/win 均可触发
+    symlinkSync(join(dirPath, 'index.mjs'), join(dirPath, 'index.mjs'))
+
+    await assert.rejects(
+      makeEnvIn(dataDir),
+      (err: unknown) => err instanceof HelmError,
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('未声明 clientRoot 的外部插件默认 clientRoot 为插件目录本身', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
+  try {
+    writeConventionPlugin(join(dataDir, 'plugins'))
+    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels(), watchdogIntervalMs: 0 })
+    try {
+      const summary = app.kernel.plugins.list().find((p) => p.id === 'demo-external')
+      assert.ok(summary, '外部插件应被自动注册')
+      await app.kernel.plugins.enable('demo-external')
+      // clientRoot 默认指向插件目录（client.tsx 编译可解析）
+      const client = await app.kernel.plugins.getClientModule('demo-external', 'client.tsx')
+      assert.ok(client.code.length > 0)
+    } finally {
+      await app.close()
+    }
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('仅导出 setup 别名（无 definePlugin）显式拒绝：项目明确不做兼容别名', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
+  try {
+    const dirPath = join(dataDir, 'plugins', 'setup-alias')
+    mkdirSync(dirPath, { recursive: true })
+    writeFileSync(
+      join(dirPath, 'index.mjs'),
+      `export default {\n  id: 'setup-alias',\n  name: '旧形态',\n  setup() {},\n}\n`,
+    )
+
+    await assert.rejects(
+      makeEnvIn(dataDir),
+      (err: unknown) =>
+        err instanceof HelmError &&
+        err.code === 'invalid_plugin_definition' &&
+        err.message.includes('definePlugin'),
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('模块导出无 name：同内置契约注册成功（展示名回落 id），不另加必填约束', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
+  try {
+    const dirPath = join(dataDir, 'plugins', 'no-name')
+    mkdirSync(dirPath, { recursive: true })
+    writeFileSync(
+      join(dirPath, 'index.mjs'),
+      `export default {\n  id: 'no-name-plugin',\n  async definePlugin(ctx) {\n    ctx.action({\n      id: 'ping',\n      description: '回声',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },\n      handler: () => ({ ok: true }),\n    })\n  },\n}\n`,
+    )
+    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels(), watchdogIntervalMs: 0 })
+    try {
+      const summary = app.kernel.plugins.list().find((p) => p.id === 'no-name-plugin')
+      assert.ok(summary, '无 name 的外部插件应可注册（同 protocol 契约）')
+      assert.equal(summary.name, 'no-name-plugin', '展示名回落 id（与内置插件同权）')
+      await app.kernel.plugins.enable('no-name-plugin')
+      const result = (await app.kernel.plugins.invokeAction('no-name-plugin', 'ping', {})) as { ok: boolean }
+      assert.equal(result.ok, true)
+    } finally {
+      await app.close()
+    }
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('name 提供但为空串：边界拒绝 invalid_plugin_definition', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
+  try {
+    const dirPath = join(dataDir, 'plugins', 'empty-name')
+    mkdirSync(dirPath, { recursive: true })
+    writeFileSync(
+      join(dirPath, 'index.mjs'),
+      `export default {\n  id: 'empty-name',\n  name: '',\n  definePlugin() {},\n}\n`,
+    )
+    await assert.rejects(
+      makeEnvIn(dataDir),
+      (err: unknown) =>
+        err instanceof HelmError && err.code === 'invalid_plugin_definition' && err.message.includes('name'),
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('模块导出既无 definePlugin 也无 setup 显式报错 invalid_plugin_definition', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'no-setup')
     mkdirSync(dirPath, { recursive: true })
-    writeFileSync(join(dirPath, 'index.mjs'), 'export default { id: "no-setup", name: "无 setup" }')
+    writeFileSync(join(dirPath, 'index.mjs'), 'export default { id: "no-setup", name: "无入口" }')
 
     await assert.rejects(
       makeEnvIn(dataDir),

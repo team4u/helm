@@ -1255,8 +1255,9 @@ test('未知路由 404；未知方法 405', { timeout: 60_000 }, async () => {
   assert.equal(mna.status, 405)
 })
 
-test('非 /api 前缀 404', { timeout: 60_000 }, async () => {
-  const { handler } = makeHandlers()
+test('非 /api 前缀 404（显式 webDistDir:false 的纯 API 行为；默认静态托管由 static-web.test.ts 覆盖）', { timeout: 60_000 }, async () => {
+  const kernel = makeKernel()
+  const handler = createHubHandler({ kernel, workflows, webDistDir: false })
   const res = await call(handler, 'GET', '/favicon.ico')
   assert.equal(res.status, 404)
 })

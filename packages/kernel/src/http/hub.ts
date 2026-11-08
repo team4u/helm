@@ -31,8 +31,10 @@ import {
 } from './http-utils.js'
 import { handleApi } from './routes.js'
 import { decodeSegments, findPluginRoute, PathDecodeError } from './route-match.js'
-import { createStaticServe, type StaticServe } from './static.js'
+import { createStaticServe, isMissingError, type StaticServe } from './static.js'
+import { HelmError } from '@helm/protocol'
 import type { KernelRuntimeLike, WorkflowServiceLike } from './contracts.js'
+import { fileURLToPath } from 'node:url'
 
 export interface HubHandlerOptions {
   kernel: KernelRuntimeLike
@@ -40,16 +42,18 @@ export interface HubHandlerOptions {
   /**
    * 生产静态托管目录（packages/web/dist）：
    * - false：禁用静态托管（非 /api 一律 JSON 404，与既有行为一致）；
-   * - 缺省：探测编译位置旁的 ../../../web/dist，存在 index.html 即启用；
-   * - 字符串：显式指定目录（测试 / 自定义部署用）。
+   * - 缺省：探测编译位置旁的 ../../../web/dist，仅存在 index.html 时启用，
+   *   目录缺失视为未启用（回落 JSON 404），不可读则如实报错；
+   * - 字符串：显式指定目录（测试 / 自定义部署用）；失效时结构化
+   *   web_dist_invalid 报错，绝不静默禁用。
    */
   webDistDir?: string | false
 }
 
 const PUBLIC_PATHS = new Set(['/api/auth/setup', '/api/auth/login', '/api/auth/status'])
 
-/** 相对 hub.ts（编译后同构）：仓库内 packages/web/dist 默认位置。 */
-const DEFAULT_WEB_DIST_DIR = new URL('../../../web/dist', import.meta.url).pathname
+/** 相对 hub.ts（编译后同构）：仓库内 packages/web/dist 默认位置（跨平台安全转换，含 Windows 盘符与空格路径）。 */
+const DEFAULT_WEB_DIST_DIR = fileURLToPath(new URL('../../../web/dist', import.meta.url))
 
 interface StaticCacheEntry {
   dir: string
@@ -66,7 +70,7 @@ export function createHubHandler(
   const { kernel, workflows } = options
   const redactor: JsonRedactor | undefined = makeRedactor(kernel)
   const webDistDir = options.webDistDir
-  // 目录探测缓存（handler 实例内）：dir → 服务；null 表示探测过但目录无效
+  // 目录解析缓存（handler 实例内，仅缓存成功结果）：dir → 服务
   let staticServeCache: StaticCacheEntry | null = null
   const resolveStaticServe = async (): Promise<StaticServe | undefined> => {
     if (webDistDir === false) return undefined
@@ -74,8 +78,24 @@ export function createHubHandler(
     if (staticServeCache !== null && staticServeCache.dir === dir) {
       return staticServeCache.serve
     }
-    const serve = await createStaticServe(dir)
-    staticServeCache = serve ? { dir, serve } : null
+    let serve: StaticServe
+    try {
+      serve = await createStaticServe(dir)
+    } catch (err) {
+      // 缺省探测：目录不存在（ENOENT/ENOTDIR）→ 未启用，回落 JSON 404；
+      // 缺省探测遇到其他 IO 故障（不可读等）同样如实报错
+      if (webDistDir === undefined && isMissingError(err)) return undefined
+      // 显式指定失效目录：结构化诊断，绝不静默禁用（诚实性纪律）
+      throw new HelmError(
+        'web_dist_invalid',
+        `静态托管目录不可用: ${dir}（${err instanceof Error ? err.message : String(err)}）`,
+        500,
+        { dir },
+      )
+    }
+    // 缺省探测仅在存在 index.html 时启用（未构建的仓库不伪装静态站点）
+    if (webDistDir === undefined && !(await serve.hasSpaEntry())) return undefined
+    staticServeCache = { dir, serve }
     return serve
   }
   return async (request: Request): Promise<Response> => {
@@ -87,11 +107,11 @@ export function createHubHandler(
       const url = new URL(request.url)
 
       if (!url.pathname.startsWith('/api/') && url.pathname !== '/api') {
-        // 生产静态托管：非 /api 的 GET/HEAD 走 webDistDir（禁用时回落 JSON 404）
-        if ((request.method === 'GET' || request.method === 'HEAD') && webDistDir !== false) {
+        // 生产静态托管：非 /api 的 GET/HEAD 走 webDistDir（未启用时回落 JSON 404）
+        if (request.method === 'GET' || request.method === 'HEAD') {
           const serve = await resolveStaticServe()
           if (serve !== undefined) {
-            return withCors(await serve.serve(url.pathname), origin)
+            return withCors(await serve.serve(request.method, url.pathname), origin)
           }
         }
         return withCors(errorResponse(redactor, 404, 'not_found', '路由不存在'), origin)

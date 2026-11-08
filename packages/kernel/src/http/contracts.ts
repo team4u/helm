@@ -259,6 +259,12 @@ export interface StartHubOptions {
   port?: number
   /** 默认 127.0.0.1。 */
   hostname?: string
+  /**
+   * 生产静态托管目录（packages/web/dist）：false 禁用；缺省探测默认位置
+   * （存在 index.html 才启用）；字符串为显式目录（失效时启动显式报错）。
+   * 透传给 createHubHandler 的同名选项。
+   */
+  webDistDir?: string | false
 }
 
 export interface HubHandle {

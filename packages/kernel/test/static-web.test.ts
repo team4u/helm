@@ -4,7 +4,9 @@
  * 覆盖：根路径 / 与 index.html、/assets/* 带 hash 资源（Content-Type 与
  * immutable 缓存）、SPA 前端路由回退（无扩展名路径回 index.html）、
  * 带扩展名缺失文件 404、.. 路径穿越拦截与符号链接逃逸拒绝、
- * webDistDir: false 禁用、/api/* 未知路由仍返回 JSON 404。
+ * HEAD 在 Response 层面去 body（保留 content-length）、webDistDir: false
+ * 禁用、真实 IO 故障（EACCES）不伪装 404、/api/* 未知路由仍 JSON 404、
+ * startHub(port:0) 生产集成（显式目录 / 禁用 / 失效目录启动报错）。
  *
  * runner: tsx --test；每项显式 timeout: 60_000 防死锁；命令加总超时。
  */
@@ -15,10 +17,11 @@ import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { createHubHandler, type HubHandlerOptions } from '../src/http/hub.js'
+import { createHubHandler, startHub, type HubHandlerOptions } from '../src/http/index.js'
 import { createHubHandler as createHandlerLegacy } from '../src/http/index.js'
 import type { KernelRuntimeLike, WorkflowServiceLike, EventHub } from '../src/http/index.js'
 import { AuthService } from '../src/services/index.js'
+import { HelmError } from '@helm/protocol'
 
 // ---------------------------------------------------------------------------
 // 测试基座（最小 kernel 形状 + 真实 AuthService）
@@ -138,10 +141,14 @@ test('根路径 / 返回 index.html（text/html + no-cache）', { timeout: 60_00
   assert.ok(res.text.includes('helm web'))
 })
 
-test('HEAD / 同 GET 状态码与响应头', { timeout: 60_000 }, async () => {
+test('HEAD / 在 Response 层面去 body：同状态码与响应头（含 content-length）', { timeout: 60_000 }, async () => {
   const res = await handler(new Request(`${BASE}/`, { method: 'HEAD' }))
   assert.equal(res.status, 200)
   assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8')
+  const len = res.headers.get('content-length')
+  assert.ok(len !== null && Number(len) > 0, `HEAD 应保留 GET 长度（实际 ${len}）`)
+  // body 在 Web Standard handler 层面已移除（不依赖 node 层丢弃）
+  assert.ok(res.body === null || (await res.text()) === '')
 })
 
 test('带 hash 静态资源：正确 Content-Type 与 immutable 长缓存', { timeout: 60_000 }, async () => {
@@ -205,6 +212,46 @@ test('符号链接逃逸拒绝：webDistDir 内软链指向根外文件 404', { 
   }
 })
 
+test('无扩展名 symlink 越界不能伪装 SPA 成功：仍 404，不回退 index.html', { timeout: 60_000 }, async () => {
+  const secretFile = join(dataDir, 'secret2.json')
+  await writeFile(secretFile, '{"secret":true}')
+  await symlink(secretFile, join(webDist, 'leaked-noext'))
+  try {
+    const res = await call(handler, 'GET', '/leaked-noext')
+    assert.equal(res.status, 404, '越界目标必须 404，绝不以 SPA 回退伪装成功')
+    assert.ok(!res.text.includes('secret'))
+  } finally {
+    await rm(join(webDist, 'leaked-noext'), { force: true })
+  }
+})
+
+test('root 本身是文件（非目录）：webDistDir 显式指定时报 web_dist_invalid', { timeout: 60_000 }, async () => {
+  const filePath = join(dataDir, 'not-a-dir')
+  await writeFile(filePath, 'x')
+  const handler2 = createHubHandler({ kernel: makeKernel(dataDir), workflows, webDistDir: filePath })
+  const res = await call(handler2, 'GET', '/')
+  assert.equal(res.status, 500)
+  const body = JSON.parse(res.text) as { error: { code: string } }
+  assert.equal(body.error.code, 'web_dist_invalid')
+})
+
+test('真实 IO 故障（ELOOP）显式 500，绝不伪装 404（root 用户同样生效）', { timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'helm-static-eloop-'))
+  try {
+    await mkdir(join(root, 'assets'), { recursive: true })
+    await writeFile(join(root, 'index.html'), 'x')
+    const handler2 = createHubHandler({ kernel: makeKernel(dataDir), workflows, webDistDir: root })
+    // 自指 symlink 环：realpath 抛 ELOOP（真实 IO 故障，非缺失），root/win 均可触发
+    await symlink(join(root, 'assets', 'loop.js'), join(root, 'assets', 'loop.js'))
+    const res = await call(handler2, 'GET', '/assets/loop.js')
+    assert.equal(res.status, 500, 'ELOOP 必须显式 500（缺失才 404）')
+    const body = JSON.parse(res.text) as { error: { code: string } }
+    assert.equal(body.error.code, 'internal_error')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('/api 未知路由仍返回 JSON 404 not_found（静态托管不吞 API 命名空间）', { timeout: 60_000 }, async () => {
   assert.ok(token, 'before 阶段应已完成 auth setup')
   const res = await handler(
@@ -240,15 +287,18 @@ test('webDistDir: false 禁用静态托管（非 /api 回落 JSON 404）', { tim
   assert.equal(asset.status, 404)
 })
 
-test('指向不存在目录的 webDistDir：探测失败回落 JSON 404（不抛错）', { timeout: 60_000 }, async () => {
+test('指向不存在目录的 webDistDir：显式诊断 web_dist_invalid（不静默禁用）', { timeout: 60_000 }, async () => {
   const handler2 = createHubHandler({
     kernel: makeKernel(dataDir),
     workflows,
     webDistDir: join(dataDir, 'no-such-dist'),
   })
   const res = await call(handler2, 'GET', '/')
-  assert.equal(res.status, 404)
+  assert.equal(res.status, 500)
   assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8')
+  const body = JSON.parse(res.text) as { error: { code: string; message: string } }
+  assert.equal(body.error.code, 'web_dist_invalid')
+  assert.ok(body.error.message.includes('no-such-dist'), '诊断应包含具体目录路径')
 })
 
 test('旧双参调用形态（kernel, workflows）保持兼容：缺省 webDistDir 探测', { timeout: 60_000 }, async () => {
@@ -264,4 +314,50 @@ test('非 GET/HEAD 方法（POST /）不进静态托管，回落 JSON 404', { ti
   const res = await call(handler, 'POST', '/')
   assert.equal(res.status, 404)
   assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8')
+})
+
+// ---------------------------------------------------------------------------
+// startHub（生产 node 层）集成：webDistDir 透传
+// ---------------------------------------------------------------------------
+
+test('startHub(port:0) 显式 webDistDir：真实 HTTP 静态往返 + HEAD 无 body', { timeout: 60_000 }, async () => {
+  const hub = await startHub({ kernel: makeKernel(dataDir), workflows, port: 0, webDistDir: webDist })
+  try {
+    const res = await fetch(`${hub.url}/assets/app-B1b2C3.js`)
+    assert.equal(res.status, 200)
+    assert.equal(res.headers.get('content-type'), 'text/javascript; charset=utf-8')
+    assert.equal(await res.text(), 'console.log("app")')
+
+    const head = await fetch(`${hub.url}/`, { method: 'HEAD' })
+    assert.equal(head.status, 200)
+    const len = head.headers.get('content-length')
+    assert.ok(len !== null && Number(len) > 0, `生产 HEAD 应保留 content-length（实际 ${len}）`)
+    assert.equal(await head.text(), '', '生产 HEAD 不回 body')
+
+    const spa = await fetch(`${hub.url}/conversations/42`)
+    assert.equal(spa.status, 200)
+    assert.ok((await spa.text()).includes('helm web'))
+  } finally {
+    await hub.close()
+  }
+})
+
+test('startHub(port:0) webDistDir: false：静态托管禁用，非 /api 回 JSON 404', { timeout: 60_000 }, async () => {
+  const hub = await startHub({ kernel: makeKernel(dataDir), workflows, port: 0, webDistDir: false })
+  try {
+    const res = await fetch(`${hub.url}/`)
+    assert.equal(res.status, 404)
+    assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8')
+    const asset = await fetch(`${hub.url}/assets/app-B1b2C3.js`)
+    assert.equal(asset.status, 404)
+  } finally {
+    await hub.close()
+  }
+})
+
+test('startHub(port:0) 显式失效目录：启动显式报错（不静默禁用）', { timeout: 60_000 }, async () => {
+  await assert.rejects(
+    startHub({ kernel: makeKernel(dataDir), workflows, port: 0, webDistDir: join(dataDir, 'no-such-dist') }),
+    (err: unknown) => err instanceof HelmError && err.code === 'web_dist_invalid',
+  )
 })

@@ -14,6 +14,8 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { Readable } from 'node:stream'
 import { createHubHandler } from './hub.js'
+import { createStaticServe } from './static.js'
+import { HelmError } from '@helm/protocol'
 import { attachNodeWsGateway, type EnvFabric, type NodeWsGateway } from '../env/index.js'
 import type { HubHandle, KernelRuntimeLike, StartHubOptions, WorkflowServiceLike } from './contracts.js'
 
@@ -80,8 +82,23 @@ export interface NodeHubHandle extends HubHandle {
 }
 
 export async function startHub(options: StartHubOptions): Promise<NodeHubHandle> {
-  const { kernel, workflows } = options
-  const handler = createHubHandler(kernel, workflows)
+  const { kernel, workflows, webDistDir } = options
+  const handler = createHubHandler({ kernel, workflows, ...(webDistDir !== undefined ? { webDistDir } : {}) })
+  // 显式指定静态目录时启动即验证（fail fast）：失效目录拒启并给出结构化诊断
+  //（与 handler 首请求路径同构的 web_dist_invalid），不等到首个请求才暴露
+  if (typeof webDistDir === 'string') {
+    try {
+      await createStaticServe(webDistDir)
+    } catch (err) {
+      if (err instanceof HelmError) throw err
+      throw new HelmError(
+        'web_dist_invalid',
+        `静态托管目录不可用: ${webDistDir}（${err instanceof Error ? err.message : String(err)}）`,
+        500,
+        { dir: webDistDir },
+      )
+    }
+  }
   const port = options.port ?? DEFAULT_PORT
   const hostname = options.hostname ?? DEFAULT_HOSTNAME
 

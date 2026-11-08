@@ -8,23 +8,29 @@
  *
  * 判定规则（只认「插件入口」标记，绝不靠目录名猜测）：
  * - 存在 `plugin.json` → 必须是可解析的 JSON 对象；按 `main`（缺省回落约定
- *   入口探测）解析入口文件相对路径，严格校验不越出插件目录（防路径穿越）。
- *   清单损坏 / 非对象 / main 非法 / 入口越界 / 入口缺失一律显式 HelmError，
- *   绝不静默吞错（诚实性纪律）；
+ *   入口探测）解析入口文件相对路径，严格校验不越出插件目录（防路径穿越，
+ *   realpath 保证真实入口不越 root）。清单损坏 / 非对象 / main 非法 /
+ *   入口越界 / 入口缺失一律显式 HelmError，绝不静默吞错（诚实性纪律）；
  * - 无 `plugin.json` → 依次探测 `index.mjs` / `index.js` / `plugin.mjs` /
  *   `plugin.js`；一个都不存在 → 只是普通插件数据目录，静默跳过。
+ * - IO 错误区分：仅 ENOENT / ENOTDIR 表示「文件不存在」；EACCES 等其他
+ *   IO 错误显式抛错，绝不误判为纯数据目录跳过。
  *
  * 安全默认：
  * - 动态加载经 `pathToFileURL` 显式 URL 导入；
  * - 外部插件 id 禁止 `builtin:` 前缀（不冒充内置）、禁止与已注册插件重名；
  * - `locked` 声明一律剥离（外部插件不可自封常驻不可卸载）；
+ * - 只接受 `definePlugin`（protocol PluginDefinition 唯一入口；项目明确
+ *   不做兼容别名，`setup` 等旧形态在边界显式拒绝）；
  * - 注册一律 `{ enabled: false }`（最小权限）；曾持久化
  *   `config.json.pluginEnabled[id] = true` 的由 PluginHost.register 内部
  *   查询 persistedEnabled 自动恢复启用；
  * - 未显式设置 clientRoot 的外部插件默认 clientRoot = 插件目录本身；
- *   相对 clientRoot 解析为插件目录内绝对路径（越界显式拒绝）。
+ *   clientRoot 必须是非空字符串，相对 clientRoot 解析为插件目录内绝对路径
+ *   （越界显式拒绝）。该校验只是路径边界约定（插件代码本身拥有宿主权限，
+ *   并不构成安全沙箱承诺）。
  */
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { HelmError, type PluginDefinition, type PluginSummary } from '@helm/protocol';
@@ -86,7 +92,23 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
  */
 async function resolvePluginEntry(dirPath: string): Promise<string | undefined> {
   const manifestPath = join(dirPath, 'plugin.json');
-  if (!existsSync(manifestPath)) {
+  let manifestExists = true;
+  try {
+    statSync(manifestPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+      // EACCES 等真实 IO 故障显式报错，不误判为纯数据目录
+      throw new HelmError(
+        'plugin_scan_failed',
+        `外部插件目录不可读: ${manifestPath}（${err instanceof Error ? err.message : String(err)}）`,
+        500,
+        { manifestPath, code },
+      );
+    }
+    manifestExists = false;
+  }
+  if (!manifestExists) {
     return probeConventionEntry(dirPath);
   }
   const manifest = readManifest(manifestPath);
@@ -110,7 +132,7 @@ async function resolvePluginEntry(dirPath: string): Promise<string | undefined> 
     );
   }
   const entry = resolve(dirPath, main);
-  const rel = relative(dirPath, entry);
+  const rel = relative(realpathSync(dirPath), entry);
   if (rel.startsWith('..') || isAbsolute(rel)) {
     throw new HelmError(
       'plugin_manifest_invalid',
@@ -119,32 +141,70 @@ async function resolvePluginEntry(dirPath: string): Promise<string | undefined> 
       { dirPath, main },
     );
   }
-  if (!isFile(entry)) {
+  return assertEntryFile(dirPath, main, entry);
+}
+
+/**
+ * 确认入口是存在的普通文件并返回 realpath（symlink 链到目录外时 realpath
+ * 越界显式拒绝，保证真实入口不越 root）。
+ */
+function assertEntryFile(dirPath: string, main: string, entry: string): string {
+  let real: string;
+  let isFile: boolean;
+  try {
+    real = realpathSync(entry);
+    isFile = statSync(real).isFile();
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      throw new HelmError('plugin_entry_missing', `外部插件 ${dirPath} 的入口文件不存在: ${main}`, 500, {
+        dirPath,
+        main,
+      });
+    }
     throw new HelmError(
-      'plugin_entry_missing',
-      `外部插件 ${dirPath} 的入口文件不存在: ${main}`,
+      'plugin_scan_failed',
+      `外部插件入口不可读: ${entry}（${err instanceof Error ? err.message : String(err)}）`,
       500,
+      { dirPath, main, code },
+    );
+  }
+  if (!isFile) {
+    throw new HelmError('plugin_entry_missing', `外部插件 ${dirPath} 的入口不是普通文件: ${main}`, 500, {
+      dirPath,
+      main,
+    });
+  }
+  const rel = relative(realpathSync(dirPath), real);
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw new HelmError(
+      'plugin_manifest_invalid',
+      `外部插件 ${dirPath} 的 plugin.json main（含符号链接）越出插件目录: ${main}`,
+      400,
       { dirPath, main },
     );
   }
-  return entry;
+  return real;
 }
 
 /** 依次探测约定入口文件；命中即返回绝对路径，全部缺失返回 undefined。 */
 function probeConventionEntry(dirPath: string): string | undefined {
   for (const name of CONVENTION_ENTRIES) {
-    const candidate = join(dirPath, name);
-    if (isFile(candidate)) return candidate;
+    try {
+      if (statSync(join(dirPath, name)).isFile()) return join(dirPath, name);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        throw new HelmError(
+          'plugin_scan_failed',
+          `外部插件目录探测失败: ${join(dirPath, name)}（${err instanceof Error ? err.message : String(err)}）`,
+          500,
+          { dirPath, code },
+        );
+      }
+    }
   }
   return undefined;
-}
-
-function isFile(path: string): boolean {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
 }
 
 /** 读取并解析 plugin.json；损坏 / 非对象一律显式 plugin_manifest_invalid。 */
@@ -204,23 +264,23 @@ async function importPluginDefinition(dirPath: string, entryPath: string): Promi
 }
 
 /**
- * 边界校验外部模块导出的定义形状：非空字符串 id / name + definePlugin 函数
- * （兼容 setup 别名）；id 禁止 builtin: 前缀。返回规范化的定义对象。
+ * 边界校验外部模块导出的定义形状：非空字符串 id / name + definePlugin 函数；
+ * id 禁止 builtin: 前缀。仅接受 protocol PluginDefinition 的 definePlugin，
+ * setup 等兼容别名一律拒绝（项目明确不做向后兼容）。返回规范化定义。
  */
 function assertExternalDefinition(candidate: unknown, dirPath: string): PluginDefinition {
   const fail = (detail: string): HelmError =>
-    new HelmError(
-      'invalid_plugin_definition',
-      `外部插件 ${dirPath} 的模块导出非法：${detail}`,
-      400,
-      { dirPath },
-    );
+    new HelmError('invalid_plugin_definition', `外部插件 ${dirPath} 的模块导出非法：${detail}`, 400, { dirPath });
   if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) {
     throw fail('未导出 default 或 plugin 定义对象');
   }
   const def = candidate as Record<string, unknown>;
   if (typeof def.id !== 'string' || def.id.length === 0) throw fail('缺少非空字符串 id');
-  if (typeof def.name !== 'string' || def.name.length === 0) throw fail('缺少非空字符串 name');
+  // name 可选（同 protocol PluginDefinition）：未提供时展示名由 PluginHost
+  // 回落 id；提供时必须是非空字符串，不另加必填约束（与内置插件同权）
+  if (def.name !== undefined && (typeof def.name !== 'string' || def.name.length === 0)) {
+    throw fail('name 提供时必须是非空字符串');
+  }
   if (def.id.startsWith('builtin:')) {
     throw new HelmError(
       'invalid_plugin_definition',
@@ -229,19 +289,18 @@ function assertExternalDefinition(candidate: unknown, dirPath: string): PluginDe
       { dirPath, id: def.id },
     );
   }
-  const definePlugin = typeof def.definePlugin === 'function' ? def.definePlugin : undefined;
-  const setup = typeof def.setup === 'function' ? def.setup : undefined;
-  if (definePlugin === undefined && setup === undefined) {
-    throw fail('缺少 definePlugin 函数（或 setup 别名）');
+  if (typeof def.definePlugin !== 'function') {
+    throw fail('缺少 definePlugin 函数（外部插件仅接受 protocol PluginDefinition，无兼容别名）');
   }
-  return { ...def, definePlugin: (definePlugin ?? setup) as PluginDefinition['definePlugin'] } as PluginDefinition;
+  return def as unknown as PluginDefinition;
 }
 
 /**
  * 外部插件定义归一化：
  * - 剥离 locked（外部插件不可自封常驻不可卸载，启停权归用户持久化状态）；
- * - clientRoot 未设置 → 默认插件目录本身；相对路径 → 解析为插件目录内
- *   绝对路径（越出插件目录显式拒绝，防穿越）；绝对路径原样保留。
+ * - clientRoot 未设置 → 默认插件目录本身；必须是字符串（非字符串边界拒绝）；
+ *   相对路径 → 解析为插件目录内绝对路径（越出插件目录显式拒绝，防穿越）；
+ *   绝对路径原样保留。路径边界校验只是约定约束，不是安全沙箱承诺。
  */
 function normalizeDefinition(definition: PluginDefinition, dirPath: string): PluginDefinition {
   const normalized = { ...definition };
@@ -249,9 +308,19 @@ function normalizeDefinition(definition: PluginDefinition, dirPath: string): Plu
   const clientRoot = normalized.clientRoot;
   if (clientRoot === undefined || clientRoot === '') {
     normalized.clientRoot = dirPath;
-  } else if (!isAbsolute(clientRoot)) {
+    return normalized;
+  }
+  if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
+    throw new HelmError(
+      'invalid_plugin_definition',
+      `外部插件 ${dirPath} 的 clientRoot 必须是非空字符串`,
+      400,
+      { dirPath, clientRoot: String(clientRoot) },
+    );
+  }
+  if (!isAbsolute(clientRoot)) {
     const resolvedRoot = resolve(dirPath, clientRoot);
-    const rel = relative(dirPath, resolvedRoot);
+    const rel = relative(realpathSync(dirPath), resolvedRoot);
     if (rel.startsWith('..') || isAbsolute(rel)) {
       throw new HelmError(
         'invalid_plugin_definition',
