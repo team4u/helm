@@ -34,3 +34,15 @@ test('MarkdownView 源码契约：MermaidBlock 依赖 theme 并使用 getMermaid
   assert.match(content, /\[code,\s*theme\]/)
 })
 
+test('MermaidPreviewModal 源码契约：全屏画板支持主题重绘与透明图层', { timeout: 60_000 }, async () => {
+  const fs = await import('node:fs')
+  const content = fs.readFileSync(new URL('../src/conversation/MermaidPreviewModal.tsx', import.meta.url), 'utf8')
+  assert.match(content, /import\s*\{[^}]*getMermaidConfig[^}]*\}\s*from\s*['"]\.\/mermaid-theme(?:\.js)?['"]/)
+  assert.match(content, /getMermaidConfig\(theme\)/)
+
+  const styles = fs.readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+  assert.match(styles, /\.mermaid-body\s*\{[^}]*background:\s*transparent/)
+  assert.match(styles, /\.mermaid-svg-layer\s*\{[^}]*background:\s*transparent/)
+})
+
+

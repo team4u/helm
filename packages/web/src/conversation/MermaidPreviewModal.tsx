@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { copyToClipboard } from './clipboard.js'
 import { HelmIcon } from '../lib/icons.js'
+import { useHelmStore } from '../lib/store-context.js'
+import { getMermaidConfig } from './mermaid-theme.js'
 
 export interface MermaidPreviewModalProps {
   code: string
@@ -24,6 +26,7 @@ const SCALE_STEP = 0.15
  * - 源码 / 图形切换与一键复制源码。
  */
 export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalProps) {
+  const { theme } = useHelmStore()
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [view, setView] = useState<'diagram' | 'source'>('diagram')
@@ -36,6 +39,9 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
   const offsetRef = useRef(offset)
   const scaleRef = useRef(scale)
   const rafIdRef = useRef<number | null>(null)
+  const lastThemeRef = useRef(theme)
+  const lastCodeRef = useRef(code)
+  const seqRef = useRef(0)
 
   const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map())
   const gestureStateRef = useRef<{
@@ -73,23 +79,46 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     }
   }, [])
 
+  // 当外部 svg 属性更新（且非空）时同步至 renderedSvg
   useEffect(() => {
-    if (svg !== undefined && svg !== null) return
+    if (svg) {
+      setRenderedSvg(svg)
+      setError(null)
+    }
+  }, [svg])
+
+  // 当未提供 svg，或 theme 发生变化，或 code 改变时，在弹窗内重新渲染
+  useEffect(() => {
+    const isThemeChanged = lastThemeRef.current !== theme
+    const isCodeChanged = lastCodeRef.current !== code
+    lastThemeRef.current = theme
+    lastCodeRef.current = code
+
+    // 如果初始化时已有传入 svg 且主题与代码均未变，则直接复用
+    if (svg && !isThemeChanged && !isCodeChanged) return
+
     let cancelled = false
+    const seq = ++seqRef.current
     void (async () => {
       try {
         const mermaid = (await import('mermaid')).default
-        const id = `helm-mermaid-modal-${Math.random().toString(36).slice(2, 8)}`
+        mermaid.initialize(getMermaidConfig(theme))
+        const id = `helm-mermaid-modal-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
         const { svg: out } = await mermaid.render(id, code)
-        if (!cancelled) setRenderedSvg(out)
+        if (!cancelled && seqRef.current === seq) {
+          setRenderedSvg(out)
+          setError(null)
+        }
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+        if (!cancelled && seqRef.current === seq) {
+          setError(err instanceof Error ? err.message : String(err))
+        }
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [code, svg])
+  }, [code, svg, theme])
 
   // 从 SVG 字符串中提取 viewBox 固有的真实宽与高
   const intrinsicSize = useMemo<{ width: number; height: number } | null>(() => {

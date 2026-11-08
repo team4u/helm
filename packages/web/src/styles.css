@@ -1422,6 +1422,10 @@ textarea {
   background: var(--accent-bg);
 }
 
+.mermaid-body {
+  background: transparent;
+}
+
 .mermaid-body svg {
   max-width: 100%;
   height: auto;
@@ -1468,6 +1472,7 @@ textarea {
 
 .mermaid-svg-layer {
   display: block;
+  background: transparent;
 }
 
 .mermaid-svg-layer svg {
