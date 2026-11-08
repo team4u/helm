@@ -589,11 +589,25 @@ function convSummary(id: number, parentConversationId?: number, parentToolCallId
   }
 }
 
-function workflowRun(id: string, conversationId: number, status: 'running' | 'completed' | 'failed' | 'aborted', updatedAt = 1) {
-  return { id, name: `run ${id}`, conversationId, status, createdAt: 1, updatedAt }
+function workflowRun(
+  id: string,
+  conversationId: number,
+  status: 'running' | 'completed' | 'failed' | 'aborted',
+  updatedAt = 1,
+  parentToolCallId?: string,
+) {
+  return {
+    id,
+    name: `run ${id}`,
+    conversationId,
+    status,
+    createdAt: 1,
+    updatedAt,
+    ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
+  }
 }
 
-test('resolveSubagentConversationId：运行期经 parentToolCallId 命中，完成后经 resultText 命中', { timeout: 60_000 }, () => {
+test('resolveSubagentConversationId：运行期经 parentToolCallId 命中，完成后只信任标准 footer 尾行', { timeout: 60_000 }, () => {
   const conversations = [
     convSummary(10, 1),
     convSummary(11, 1, 'call-abc'),
@@ -609,15 +623,67 @@ test('resolveSubagentConversationId：运行期经 parentToolCallId 命中，完
     isError: false,
   }
   assert.equal(resolveSubagentConversationId(running, 1, conversations), 11)
-  // 完成后：resultText 尾行 conversationId=11 直接命中
-  const done: ToolTrace = { ...running, status: 'done', resultText: '完成了\n[subagent conversationId=11]' }
+  // 完成后：标准 footer 尾行命中（与内核 subagentFooter 字段序一致）
+  const done: ToolTrace = {
+    ...running,
+    status: 'done',
+    resultText: '完成了\n[subagent resume=old conversationId=11 executionId=herdr:1 cwd=/w]',
+  }
   assert.equal(resolveSubagentConversationId(done, 1, conversations), 11)
+  // 业务正文裸提及 conversationId=：不是 footer，绝不抢占关联
+  const fakeBody: ToolTrace = {
+    ...running,
+    status: 'done',
+    resultText: '修复报告：已把会话 conversationId=99 的事项处理完',
+  }
+  // 正文伪造值不存在（99 不在列表）时回退 callId 精确命中 11，而非误挂 99
+  assert.equal(resolveSubagentConversationId(fakeBody, 1, conversations), 11)
   // 非 subagent 工具不命中
   assert.equal(
     resolveSubagentConversationId({ ...running, toolName: 'bash' }, 1, conversations),
     undefined,
   )
 })
+
+test('resolveSubagentConversationId：假正文与真 footer 并存时取 footer（最后一次标准行）', { timeout: 60_000 }, () => {
+  const conversations = [convSummary(11, 1, 'call-abc')]
+  const tool: ToolTrace = {
+    key: 'tool:call-abc',
+    toolName: 'subagent',
+    callId: 'call-abc',
+    status: 'done',
+    isError: false,
+  }
+  // 正文引用行形似但非内核 footer（前缀不是 [subagent 开头或无闭合 ]）：不命中正文值
+  const decoy = { ...tool, resultText: '建议 resume conversationId=42] 继续处理' }
+  assert.equal(resolveSubagentConversationId(decoy, 1, conversations), 11)
+  // 真 footer 在末尾：即使正文里出现别的 conversationId 值，也只取 footer 的 11
+  const both = {
+    ...tool,
+    resultText: '上游说明 conversationId=77 已完成\n任务完成\n[subagent conversationId=11]',
+  }
+  assert.equal(resolveSubagentConversationId(both, 1, conversations), 11)
+  // 无 footer 且无 parentToolCallId 匹配（callId 不同）：resume 数字 ref 兑底
+  const resumeOnly: ToolTrace = {
+    ...tool,
+    callId: 'call-other',
+    input: { prompt: '继续', resume: '11' },
+  }
+  assert.equal(resolveSubagentConversationId(resumeOnly, 1, conversations), 11)
+  // footer 数字非正（0）：不合法不命中，回退 callId 兑底
+  const zeroFooter: ToolTrace = {
+    ...tool,
+    resultText: '[subagent conversationId=0]',
+  }
+  assert.equal(resolveSubagentFooterOnly(zeroFooter, 1, conversations), undefined)
+})
+
+/** 只验证 footer 路径（无 callId / 无 parent 匹配 / 无 resume）：非法数字不得命中。 */
+function resolveSubagentFooterOnly(tool: ToolTrace, parent: number, conversations: Array<ReturnType<typeof convSummary>>) {
+  return resolveSubagentConversationId({ ...tool, callId: 'call-none' }, parent, [
+    ...conversations,
+  ])
+}
 
 test('resolveSubagentConversationId：resume 数字 ref 匹配同父会话子会话', { timeout: 60_000 }, () => {
   const conversations = [convSummary(21, 1), convSummary(22, 2)]
@@ -642,12 +708,7 @@ test('resolveSubagentConversationId：resume 数字 ref 匹配同父会话子会
   )
 })
 
-test('resolveWorkflowRunForTool：运行期命中 running run，完成后经 resultText 命中', { timeout: 60_000 }, () => {
-  const runs = [
-    workflowRun('run-old', 1, 'completed', 1),
-    workflowRun('run-live', 1, 'running', 5),
-    workflowRun('run-other', 2, 'running', 9),
-  ]
+test('resolveWorkflowRunForTool：运行期按 parentToolCallId 精确命中（不猜最新），完成后结果 id 全等双保险', { timeout: 60_000 }, () => {
   const running: ToolTrace = {
     key: 'tool:call-wf',
     toolName: 'SubagentWorkflow',
@@ -655,17 +716,74 @@ test('resolveWorkflowRunForTool：运行期命中 running run，完成后经 res
     status: 'running',
     isError: false,
   }
-  assert.equal(resolveWorkflowRunForTool(running, 1, runs)?.id, 'run-live')
-  // 完成后：resultText 含 run id 才命中
-  const done: ToolTrace = { ...running, status: 'done', resultText: '工作流 run-old 已完成' }
-  assert.equal(resolveWorkflowRunForTool(done, 1, runs)?.id, 'run-old')
-  // resultText 不含任何 run id：不命中
-  assert.equal(resolveWorkflowRunForTool({ ...running, status: 'done', resultText: '别的输出' }, 1, runs), undefined)
-  // 非 SubagentWorkflow 工具不命中
-  assert.equal(resolveWorkflowRunForTool({ ...running, toolName: 'bash' }, 1, runs), undefined)
-  // 无 running 时取同会话最新 run（工具调用与 run 创建同帧竞态）
-  const settled = [workflowRun('run-a', 1, 'completed', 1), workflowRun('run-b', 1, 'completed', 8)]
-  assert.equal(resolveWorkflowRunForTool(running, 1, settled)?.id, 'run-b')
+
+  // --- 同父会话双 running：各自 callId 精确命中，绝不都挂到第一个 running ---
+  const dualRunning = [
+    workflowRun('run-a', 1, 'running', 5, 'call-wf'),
+    workflowRun('run-b', 1, 'running', 9, 'call-other'),
+  ]
+  assert.equal(resolveWorkflowRunForTool(running, 1, dualRunning)?.id, 'run-a')
+  const otherTool: ToolTrace = { ...running, callId: 'call-other' }
+  assert.equal(resolveWorkflowRunForTool(otherTool, 1, dualRunning)?.id, 'run-b')
+
+  // --- 旧 completed + 新调用未创建 run：不挂旧 run（无关联即 undefined） ---
+  const onlyOld = [workflowRun('run-old', 1, 'completed', 1, 'call-past')]
+  assert.equal(resolveWorkflowRunForTool(running, 1, onlyOld), undefined)
+
+  // --- 跨会话拒绝：同 callId 的 run 属其他会话不命中 ---
+  const crossConv = [workflowRun('run-x', 2, 'running', 9, 'call-wf')]
+  assert.equal(resolveWorkflowRunForTool(running, 1, crossConv), undefined)
+
+  // --- 完成态：结果 JSON 精确提取 run id 命中（全等，非 includes 误前缀） ---
+  const done: ToolTrace = {
+    ...running,
+    status: 'done',
+    resultText: '工作流执行完成 {"id":"run-done","status":"completed"}',
+  }
+  const withDone = [workflowRun('run-done', 1, 'completed', 2, 'call-wf'), workflowRun('run-done-2', 1, 'completed', 3, 'call-wf2')]
+  assert.equal(resolveWorkflowRunForTool(done, 1, withDone)?.id, 'run-done')
+  // 前缀陷阱：结果 id 是 run-old 的前缀子串，绝不能 includes 误命中
+  const prefixTrap: ToolTrace = {
+    ...running,
+    status: 'done',
+    resultText: '引用了历史 run-old-2 的输出 {"id":"run-old-2"}',
+  }
+  const history = [workflowRun('run-old', 1, 'completed', 1)]
+  assert.equal(resolveWorkflowRunForTool(prefixTrap, 1, history), undefined)
+
+  // --- 历史已完成（无 parentToolCallId 的旧 run）：仅结果 id 提取命中，不猜最新 ---
+  const legacyDone: ToolTrace = {
+    ...running,
+    status: 'done',
+    resultText: '{"id":"run-legacy","status":"completed","result":42}',
+  }
+  const legacy = [workflowRun('run-legacy', 1, 'completed', 1), workflowRun('run-newer', 1, 'completed', 8)]
+  assert.equal(resolveWorkflowRunForTool(legacyDone, 1, legacy)?.id, 'run-legacy')
+
+  // --- 错误输出无 id 匹配且无 callId 关联：undefined，显示原工具行 ---
+  const errored: ToolTrace = {
+    ...running,
+    callId: 'call-err',
+    status: 'error',
+    isError: true,
+    resultText: 'workflow_failed: 恰好提供一个',
+  }
+  assert.equal(resolveWorkflowRunForTool(errored, 1, dualRunning.concat(legacy)), undefined)
+  // 错误但 callId 关联存在（run 启动后引擎失败）：仍命中关联 run，展示真实失败卡
+  const erroredLinked: ToolTrace = {
+    ...running,
+    status: 'error',
+    isError: true,
+    resultText: 'workflow_failed: 引擎内部错误',
+  }
+  assert.equal(resolveWorkflowRunForTool(erroredLinked, 1, dualRunning)?.id, 'run-a')
+
+  // --- 无 callId（异常环境）+ 无结果 id：不命中任何 run ---
+  const noCallId: ToolTrace = { ...running, callId: undefined }
+  assert.equal(resolveWorkflowRunForTool(noCallId, 1, dualRunning), undefined)
+
+  // --- 非 SubagentWorkflow 工具不命中 ---
+  assert.equal(resolveWorkflowRunForTool({ ...running, toolName: 'bash' }, 1, dualRunning), undefined)
 })
 
 test('buildSubagentStreamLines：剥离 structured_output_contract 样板并展开 step-group', { timeout: 60_000 }, () => {

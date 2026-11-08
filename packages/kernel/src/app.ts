@@ -55,7 +55,9 @@ export async function createHelm(options: HelmOptions = {}) {
     closeWorkflows = () => workflows.close();
     await workflows.init();
     kernel.setWorkflowRunProvider(() => workflows.listRuns());
-    kernel.setWorkflowRunner(async (request, conversationId) => workflows.run({ ...request, conversationId }));
+    kernel.setWorkflowRunner(async (request, conversationId, signal, context) =>
+      workflows.run({ ...request, conversationId }, context),
+    );
     await kernel.plugins.register(createHerdrPlugin({
       defaultCwd: runtimeOptions.cwd ?? process.cwd(),
       profiles: kernel.profiles,

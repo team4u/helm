@@ -99,6 +99,9 @@ function conv(id: number, overrides: Partial<ConvMeta> = {}): ConvMeta {
   }
 }
 
+/** 链接表测试用固定父工具调用 ID。 */
+const parentToolId = 'call-tool-3001'
+
 describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
   let dir: string
   before(async () => {
@@ -378,6 +381,54 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     const { database } = await openStoreAt(base)
     await database.close()
     await database.close() // 不抛
+    await rm(base, { recursive: true, force: true })
+  })
+
+  it('parentToolCallId 独立链接表：现行原表（无该列）的旧库自动建新表，写入重开可读，空值清理，删除不留孤儿', {
+    timeout: 60_000,
+  }, async () => {
+    const base = await mkdtemp(join(dir, 'link-'))
+    // 先用现行 schema 的库正常打开一次，再把链接表删掉并手工去掉——模拟只有
+    // 旧 helm_conversations 原表（无 parent_tool_call_id 列）的现有数据库。
+    const seed = await openHelmDatabase(base)
+    await seed.db.exec('DROP TABLE helm_conversation_tool_links')
+    await seed.close()
+
+    // openHelmDatabase 在不修改旧表的前提下自动创建全新链接表：现有记录不用变。
+    const { store, database } = await openStoreAt(base)
+    // 有值：镜像与库同时写入
+    store.upsertConv(conv(20, { parentToolCallId: parentToolId }))
+    await store.flushPublic()
+    const linkRow = await database.db.get<{ parent_tool_call_id: string }>(
+      'SELECT parent_tool_call_id FROM helm_conversation_tool_links WHERE conversation_id = 20',
+    )
+    assert.equal(linkRow?.parent_tool_call_id, parentToolId)
+    // 空值清理：置空后链接行删除，不留陈旧关联
+    store.upsertConv(conv(20, { parentToolCallId: undefined }))
+    await store.flushPublic()
+    const gone = await database.db.get(
+      'SELECT 1 AS x FROM helm_conversation_tool_links WHERE conversation_id = 20',
+    )
+    assert.equal(gone, undefined, '空值应清理链接行')
+    // 再写回并重开：合并读取成功
+    store.upsertConv(conv(20, { parentToolCallId: parentToolId }))
+    store.upsertConv(conv(21))
+    await store.flushPublic()
+    await store.close()
+    await database.close()
+
+    const reopened = await openStoreAt(base)
+    assert.equal(reopened.store.getConv(20)?.parentToolCallId, parentToolId)
+    assert.equal(reopened.store.getConv(21)?.parentToolCallId, undefined)
+    // 删除会话同步删 link：不留孤儿
+    reopened.store.deleteConv(20)
+    await reopened.store.flushPublic()
+    const orphan = await reopened.database.db.get(
+      'SELECT 1 AS x FROM helm_conversation_tool_links WHERE conversation_id = 20',
+    )
+    assert.equal(orphan, undefined, '删除会话必须同步删除链接行')
+    await reopened.store.close()
+    await reopened.database.close()
     await rm(base, { recursive: true, force: true })
   })
 })

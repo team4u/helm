@@ -370,7 +370,13 @@ export interface KernelRuntimeOptions {
 }
 
 export interface WorkflowRunnerFn {
-  (request: Record<string, unknown>, conversationId: number, signal?: AbortSignal): Promise<unknown>
+  (
+    request: Record<string, unknown>,
+    conversationId: number,
+    signal?: AbortSignal,
+    /** 内核受信上下文（工具链真实 callId）；非用户输入，禁止 HTTP/DSL 冒充。 */
+    context?: { parentToolCallId?: string },
+  ): Promise<unknown>
 }
 
 /** plugin.changed 宿主事件（PluginHost emitEvent 入参的既有约定形状）。 */
@@ -1150,10 +1156,18 @@ export class KernelRuntime {
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
+          // 失败也可能发生在子会话已创建/已回传元数据之后（resume 已更新
+          // parentToolCallId）：附同一 footer + execution，失败卡仍可持续查看
+          // 子会话，不与真实关联失联。isError / ok:false 语义不变。
+          const footer = subagentFooter(args['resume'] !== undefined ? String(args['resume']) : undefined, resolved)
           return {
-            output: [{ type: 'text', text: `subagent_failed: ${message}` }],
+            output: [{ type: 'text', text: footer === '' ? `subagent_failed: ${message}` : `subagent_failed: ${message}\n${footer}` }],
             isError: true,
-            structuredOutput: { ok: false, result: message } as JsonValue,
+            structuredOutput: {
+              ok: false,
+              result: message,
+              ...(resolved !== undefined ? { execution: executionOf(resolved) } : {}),
+            } as JsonValue,
           }
         }
       },
@@ -1198,8 +1212,18 @@ export class KernelRuntime {
         // args 任意 JSON：原样透传（绝不 String 化——脚本内 args.items.map 等用法依赖真实结构）。
         if (args['args'] !== undefined) input['args'] = args['args']
         if (args['resumeFromRunId'] !== undefined) input['resumeFromRunId'] = String(args['resumeFromRunId'])
+        // 父会话本次工具调用 ID：内核受信注入 run 元数据（前端运行期精确关联，
+        // 不猜同会话最新 run）；无 callId（异常环境）则无关联，绝不伪造。
+        const parentCallId = (api as { conversationId: number; callId?: string }).callId
         try {
-          const summary = await runtime.runWorkflow(input, api.conversationId, context.abortSignal)
+          const summary = await runtime.runWorkflow(
+            input,
+            api.conversationId,
+            context.abortSignal,
+            typeof parentCallId === 'string' && parentCallId !== ''
+              ? { parentToolCallId: parentCallId }
+              : undefined,
+          )
           return {
             output: [{ type: 'text', text: safeResultText(summary, (text) => runtime.stash.redact(text)) }],
             structuredOutput: { ok: true, summary: summary as JsonValue } as JsonValue,
@@ -3360,11 +3384,16 @@ export class KernelRuntime {
   }
 
   /** 内部使用的 workflow 执行（spawnAgent 同源的 hook 链）。 */
-  async runWorkflow(request: Record<string, unknown>, conversationId: number, signal?: AbortSignal): Promise<unknown> {
+  async runWorkflow(
+    request: Record<string, unknown>,
+    conversationId: number,
+    signal?: AbortSignal,
+    context?: { parentToolCallId?: string },
+  ): Promise<unknown> {
     if (!this.workflowRunner) {
       throw new HelmError('unsupported_runtime', 'Workflow 引擎尚未挂接（setWorkflowRunner 未调用）', 503)
     }
-    return this.workflowRunner(request, conversationId, signal)
+    return this.workflowRunner(request, conversationId, signal, context)
   }
 
   /**

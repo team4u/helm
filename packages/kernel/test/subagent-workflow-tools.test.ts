@@ -37,7 +37,7 @@ import { HelmError } from '@helm/protocol'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { after, before, describe, it } from 'node:test'
+import { after, before, describe, it, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHelm } from '../src/app.js'
 import { KernelRuntime } from '../src/runtime/index.js'
@@ -465,6 +465,55 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
 function extractRunId(text: string): string | undefined {
   const match = text.match(/"id":"(wf_[0-9a-zA-Z_-]+)"/)
   return match?.[1]
+}
+
+// ---------------------------------------------------------------------------
+// 2.5 subagent 失败但子会话已创建：错误结果同附 footer + execution
+// ---------------------------------------------------------------------------
+
+test('subagent 失败于子会话创建后：错误输出仍附 footer 与 execution（失败卡可续接子会话）', { timeout: 60_000 }, async () => {
+  const dir = join(rootDir, 'sa-err-footer')
+  const { models, faux } = makeFauxModels()
+  const app = await createHelm({
+    dataDir: dir,
+    cwd: dir,
+    model: 'faux/faux-1',
+    models: models as never,
+    watchdogIntervalMs: 0,
+  })
+  try {
+    // 子代理回合只回思考无文本：driveTurn 在 onResolved 之后抛
+    // subagent_failed（完成但无文本输出）——真实失败时机。
+    faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall('subagent', { prompt: '会失败的任务' }, { id: 'call-err-1' })],
+        { stopReason: 'toolUse' },
+      ),
+      fauxAssistantMessage([fauxThinking('只有思考没有正文')]),
+      fauxAssistantMessage('主回合继续'),
+    ])
+    await app.kernel.submitInput(1, '派生会失败的子代理')
+    await app.kernel.waitForIdle(1)
+
+    const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+    const text = toolResultText(detail, 'subagent')
+    assert.ok(text.includes('subagent_failed'), `应显式失败：${text.slice(0, 200)}`)
+    // 失败仍附标准 footer：前端可从失败卡直接关联/续接子会话。
+    const child = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
+    assert.ok(child, '子会话应已创建')
+    assert.ok(
+      text.includes(`conversationId=${child.id}`),
+      `失败输出应附 footer conversationId=${child.id}，实得：${text.slice(-200)}`,
+    )
+    // 运行期关联也已登记（后续 resume 更新 parentToolCallId 前历史失败卡不失联）。
+    assert.equal(child.parentToolCallId, 'call-err-1')
+  } finally {
+    await app.close()
+  }
+})
+
+function fauxThinking(text: string): { type: 'thinking'; thinking: string } {
+  return { type: 'thinking', thinking: text }
 }
 
 // ---------------------------------------------------------------------------

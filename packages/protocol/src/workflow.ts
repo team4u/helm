@@ -83,6 +83,11 @@ export interface WorkflowRunSummary {
   id: string
   name: string
   conversationId: number
+  /**
+   * 触发本次 run 的父会话 SubagentWorkflow 工具调用 ID（内核受信注入，
+   * 非用户可写字段；HTTP/CLI 仅输出透传）。前端据此精确关联运行卡。
+   */
+  parentToolCallId?: string
   status: WorkflowRunStatus
   createdAt: number
   updatedAt: number

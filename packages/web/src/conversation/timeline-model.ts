@@ -752,13 +752,25 @@ export function lastHumanTextOf(items: ReadonlyArray<TimelineItem>): string | un
 // subagent / SubagentWorkflow 运行期关联
 // ---------------------------------------------------------------------------
 
-const SUBAGENT_CONVERSATION_ID_RE = /\bconversationId=(\d+)/
+/** 内核 subagentFooter 标准元数据行 `[subagent ... conversationId=N ...]`（多行中取最后一次：footer 总在末尾，正文伪造行不能抢占）。 */
+const SUBAGENT_FOOTER_LINE_RE = /\[subagent (?:[^\]]*\s)?conversationId=(\d{1,15})(?:\s[^\]]*)?\]/g
+
+function subagentFooterConversationId(text: string): number | undefined {
+  let last: number | undefined
+  for (const match of text.matchAll(SUBAGENT_FOOTER_LINE_RE)) {
+    const parsed = Number(match[1])
+    if (Number.isSafeInteger(parsed) && parsed > 0) last = parsed
+  }
+  return last
+}
 
 /**
  * 解析 subagent 工具调用关联的子会话 ID：
- * 1) 已完成：从 resultText 的 `conversationId=<n>` 尾行直接命中；
+ * 1) 已完成：只信任内核 subagentFooter 标准末尾元数据行
+ *    `[subagent ... conversationId=N ...]`——业务正文裸提及
+ *    `conversationId=<n>` 绝不抢占关联；数字需为合法正 safe integer；
  * 2) 运行期：内核已把父会话工具调用 ID 写入子会话摘要（parentToolCallId），
- *    按_callId 精确关联（0ms，不等工具返回）；
+ *    按 callId 精确关联（0ms，不等工具返回）；
  * 3) resume：入参携带数字续接 ref 时匹配同父会话的该子会话。
  */
 export function resolveSubagentConversationId(
@@ -767,8 +779,11 @@ export function resolveSubagentConversationId(
   conversations: ReadonlyArray<Pick<ConversationSummary, 'id' | 'parentConversationId' | 'parentToolCallId'>>,
 ): number | undefined {
   if (tool.toolName !== 'subagent') return undefined
-  const fromResult = SUBAGENT_CONVERSATION_ID_RE.exec(tool.resultText ?? '')?.[1]
-  if (fromResult !== undefined) return Number(fromResult)
+  const resultText = tool.resultText
+  if (resultText !== undefined) {
+    const fromFooter = subagentFooterConversationId(resultText)
+    if (fromFooter !== undefined) return fromFooter
+  }
   if (tool.callId !== undefined && tool.callId !== '') {
     for (const c of conversations) {
       if (c.parentConversationId === parentConversationId && c.parentToolCallId === tool.callId) {
@@ -789,11 +804,17 @@ export function resolveSubagentConversationId(
   return undefined
 }
 
+/** 工具输出 JSON 里的 run id 字段（"id":"wf_xxx"）精确提取（不匹配子串/前缀）。 */
+const WORKFLOW_RUN_ID_IN_RESULT_RE = /"id"\s*:\s*"([^"]+)"/
+
 /**
- * 解析 SubagentWorkflow 工具调用关联的工作流 run：
- * - 已完成：resultText 中包含 run.id 的同会话 run；
- * - 运行期（resultText 未产出）：同会话的 running run；无 running 时取最新的
- * * 一个（工具调用与 run 创建同帧，短暂竞态下也能即刻展示）。
+ * 解析 SubagentWorkflow 工具调用关联的工作流 run（精确关联，绝不猜最新）：
+ * - 运行期与完成态优先：run.parentToolCallId === tool.callId 且同会话
+ *   （内核受信注入，0ms，不受同会话并行 run 干扰）；
+ * - 完成态双保险：结果 JSON 里精确提取的 run id 命中同会话 run
+ *   （id 全等比较，不做任意 includes 误前缀）；
+ * - 无关联（旧 run 无 parentToolCallId / 输出无 id / 跨会话）：undefined，
+ *   显示原工具行而非错误挂到其他 run。
  */
 export function resolveWorkflowRunForTool(
   tool: ToolTrace,
@@ -801,20 +822,24 @@ export function resolveWorkflowRunForTool(
   workflowRuns: ReadonlyArray<WorkflowRunSummary>,
 ): WorkflowRunSummary | undefined {
   if (tool.toolName !== 'SubagentWorkflow') return undefined
-  const scoped = workflowRuns.filter((r) => r.conversationId === parentConversationId)
-  if (scoped.length === 0) return undefined
+  if (tool.callId !== undefined && tool.callId !== '') {
+    const byCallId = workflowRuns.find(
+      (r) =>
+        r.conversationId === parentConversationId &&
+        r.parentToolCallId === tool.callId,
+    )
+    if (byCallId !== undefined) return byCallId
+  }
   if (tool.resultText !== undefined) {
-    const matched = scoped.find((r) => tool.resultText!.includes(r.id))
-    if (matched !== undefined) return matched
-    return undefined
+    const runId = WORKFLOW_RUN_ID_IN_RESULT_RE.exec(tool.resultText)?.[1]
+    if (runId !== undefined) {
+      const matched = workflowRuns.find(
+        (r) => r.conversationId === parentConversationId && r.id === runId,
+      )
+      if (matched !== undefined) return matched
+    }
   }
-  const running = scoped.find((r) => r.status === 'running')
-  if (running !== undefined) return running
-  let latest: WorkflowRunSummary | undefined
-  for (const r of scoped) {
-    if (latest === undefined || r.updatedAt > latest.updatedAt) latest = r
-  }
-  return latest
+  return undefined
 }
 
 // ---------------------------------------------------------------------------

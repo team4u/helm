@@ -144,6 +144,8 @@ interface RunRecord {
   id: string
   name: string
   conversationId: number
+  /** 触发本次 run 的父会话工具调用 ID（内核受信注入；非用户输入）。 */
+  parentToolCallId?: string
   status: WorkflowRunStatus
   createdAt: number
   updatedAt: number
@@ -406,11 +408,23 @@ export class WorkflowService {
 
   /**
    * 启动一个工作流 run：后台执行，立即返回 summary（不等完成）。
+   * context 由内核受信注入（工具链真实 callId），不是用户可写输入；
+   * HTTP/CLI 不传（无关联）。
    * @throws HelmError validation_error / not_found / workflow_action_uncertain / journal_read_failed。
    */
-  async run(request: WorkflowRunRequest): Promise<WorkflowRunSummary> {
+  async run(
+    request: WorkflowRunRequest,
+    context?: { parentToolCallId?: string },
+  ): Promise<WorkflowRunSummary> {
     this.assertNotClosed()
     await this.init()
+
+    // 内部元数据只经受信 context 进入：空串与非字符串一律视为无关联，
+    // 绝不允许 HTTP body / DSL 冒充（request 里没有这个字段）。
+    const parentToolCallId =
+      typeof context?.parentToolCallId === 'string' && context.parentToolCallId !== ''
+        ? context.parentToolCallId
+        : undefined
 
     const sources = [request.name, request.script, request.scriptPath].filter((v) => v !== undefined)
     if (sources.length > 1) {
@@ -538,6 +552,7 @@ export class WorkflowService {
       id: runId,
       name: metaName ?? scriptPath ?? runId,
       conversationId,
+      ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
       status: 'running',
       createdAt,
       updatedAt: createdAt,
@@ -1215,6 +1230,9 @@ export class WorkflowService {
       id: record.id,
       name: record.name,
       conversationId: record.conversationId,
+      ...(record.parentToolCallId !== undefined && record.parentToolCallId !== ''
+        ? { parentToolCallId: record.parentToolCallId }
+        : {}),
       status: record.status,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,

@@ -117,7 +117,6 @@ export class HelmStore {
       profile_id: string
       tags: string
       parent_conversation_id: number | null
-      parent_tool_call_id: string | null
       node_id: string | null
       cwd: string
       model: string
@@ -131,7 +130,7 @@ export class HelmStore {
       created_at: number
       updated_at: number
     }>(
-      'SELECT id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, created_at, updated_at FROM helm_conversations',
+      'SELECT id, title, profile_id, tags, parent_conversation_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, created_at, updated_at FROM helm_conversations',
     )) {
       this.convs.set(row.id, {
         id: row.id,
@@ -139,7 +138,6 @@ export class HelmStore {
         profileId: row.profile_id,
         tags: parseStoredJson<string[]>(`helm_conversations#${row.id}.tags`, row.tags),
         parentConversationId: row.parent_conversation_id ?? undefined,
-        parentToolCallId: row.parent_tool_call_id ?? undefined,
         nodeId: row.node_id || 'local',
         cwd: row.cwd,
         model: row.model,
@@ -153,6 +151,14 @@ export class HelmStore {
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       })
+    }
+    // 父工具调用关联独立成表（helm_conversation_tool_links）：二次读合并进
+    // 镜像，现有 helm_conversations 行无需任何变更。
+    for (const row of await this.db.all<{ conversation_id: number; parent_tool_call_id: string }>(
+      'SELECT conversation_id, parent_tool_call_id FROM helm_conversation_tool_links',
+    )) {
+      const meta = this.convs.get(row.conversation_id)
+      if (meta !== undefined) meta.parentToolCallId = row.parent_tool_call_id
     }
     for (const row of await this.db.all<{
       id: string
@@ -290,15 +296,14 @@ export class HelmStore {
     this.convs.set(snap.id, snap)
     this.enqueue(async () => {
       await this.db.run(
-        `INSERT INTO helm_conversations (id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, parent_tool_call_id=excluded.parent_tool_call_id, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, updated_at=excluded.updated_at`,
+        `INSERT INTO helm_conversations (id, title, profile_id, tags, parent_conversation_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, updated_at=excluded.updated_at`,
         snap.id,
         snap.title,
         snap.profileId,
         JSON.stringify(snap.tags),
         snap.parentConversationId ?? null,
-        snap.parentToolCallId ?? null,
         snap.nodeId || 'local',
         snap.cwd,
         snap.model,
@@ -312,6 +317,20 @@ export class HelmStore {
         snap.createdAt,
         snap.updatedAt,
       )
+      // 父工具调用关联独立表：有值 upsert，空值删除（不留孤儿/陈旧链接）。
+      if (snap.parentToolCallId !== undefined && snap.parentToolCallId !== '') {
+        await this.db.run(
+          `INSERT INTO helm_conversation_tool_links (conversation_id, parent_tool_call_id) VALUES (?, ?)
+           ON CONFLICT(conversation_id) DO UPDATE SET parent_tool_call_id=excluded.parent_tool_call_id`,
+          snap.id,
+          snap.parentToolCallId,
+        )
+      } else {
+        await this.db.run(
+          'DELETE FROM helm_conversation_tool_links WHERE conversation_id = ?',
+          snap.id,
+        )
+      }
       // 标题变更需更新该会话全部 FTS 行的 title 列（不只第一行）。
       if (titleChanged) {
         await this.db.run(
@@ -346,6 +365,7 @@ export class HelmStore {
           Date.now(),
         )
         await tx.run('DELETE FROM helm_conversations WHERE id = ?', id)
+        await tx.run('DELETE FROM helm_conversation_tool_links WHERE conversation_id = ?', id)
         await tx.run('DELETE FROM helm_asks WHERE conversation_id = ?', id)
         await tx.run('DELETE FROM helm_artifacts WHERE conversation_id = ?', id)
         await tx.run('DELETE FROM helm_conversation_fts WHERE conversation_id = ?', id)
