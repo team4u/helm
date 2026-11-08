@@ -31,17 +31,53 @@ import {
 } from './http-utils.js'
 import { handleApi } from './routes.js'
 import { decodeSegments, findPluginRoute, PathDecodeError } from './route-match.js'
+import { createStaticServe, type StaticServe } from './static.js'
 import type { KernelRuntimeLike, WorkflowServiceLike } from './contracts.js'
 
 export interface HubHandlerOptions {
   kernel: KernelRuntimeLike
   workflows: WorkflowServiceLike
+  /**
+   * 生产静态托管目录（packages/web/dist）：
+   * - false：禁用静态托管（非 /api 一律 JSON 404，与既有行为一致）；
+   * - 缺省：探测编译位置旁的 ../../../web/dist，存在 index.html 即启用；
+   * - 字符串：显式指定目录（测试 / 自定义部署用）。
+   */
+  webDistDir?: string | false
 }
 
 const PUBLIC_PATHS = new Set(['/api/auth/setup', '/api/auth/login', '/api/auth/status'])
 
-export function createHubHandler(kernel: KernelRuntimeLike, workflows: WorkflowServiceLike): (request: Request) => Promise<Response> {
+/** 相对 hub.ts（编译后同构）：仓库内 packages/web/dist 默认位置。 */
+const DEFAULT_WEB_DIST_DIR = new URL('../../../web/dist', import.meta.url).pathname
+
+interface StaticCacheEntry {
+  dir: string
+  serve: StaticServe
+}
+
+export function createHubHandler(
+  kernelOrOptions: KernelRuntimeLike | HubHandlerOptions,
+  workflowsArg?: WorkflowServiceLike,
+): (request: Request) => Promise<Response> {
+  const options: HubHandlerOptions = workflowsArg === undefined
+    ? (kernelOrOptions as HubHandlerOptions)
+    : { kernel: kernelOrOptions as KernelRuntimeLike, workflows: workflowsArg }
+  const { kernel, workflows } = options
   const redactor: JsonRedactor | undefined = makeRedactor(kernel)
+  const webDistDir = options.webDistDir
+  // 目录探测缓存（handler 实例内）：dir → 服务；null 表示探测过但目录无效
+  let staticServeCache: StaticCacheEntry | null = null
+  const resolveStaticServe = async (): Promise<StaticServe | undefined> => {
+    if (webDistDir === false) return undefined
+    const dir = webDistDir ?? DEFAULT_WEB_DIST_DIR
+    if (staticServeCache !== null && staticServeCache.dir === dir) {
+      return staticServeCache.serve
+    }
+    const serve = await createStaticServe(dir)
+    staticServeCache = serve ? { dir, serve } : null
+    return serve
+  }
   return async (request: Request): Promise<Response> => {
     const origin = request.headers.get('origin')
     try {
@@ -50,7 +86,14 @@ export function createHubHandler(kernel: KernelRuntimeLike, workflows: WorkflowS
       }
       const url = new URL(request.url)
 
-      if (!url.pathname.startsWith('/api/')) {
+      if (!url.pathname.startsWith('/api/') && url.pathname !== '/api') {
+        // 生产静态托管：非 /api 的 GET/HEAD 走 webDistDir（禁用时回落 JSON 404）
+        if ((request.method === 'GET' || request.method === 'HEAD') && webDistDir !== false) {
+          const serve = await resolveStaticServe()
+          if (serve !== undefined) {
+            return withCors(await serve.serve(url.pathname), origin)
+          }
+        }
         return withCors(errorResponse(redactor, 404, 'not_found', '路由不存在'), origin)
       }
 

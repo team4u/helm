@@ -4,8 +4,9 @@
  * - createHubHandler(kernel, workflows)：Web Standard handler（可独立于 node:http 测试）。
  * - startHub(options)：node:http 监听（默认 3202 / 127.0.0.1；测试用 port: 0）。
  */
-export { createHubHandler, isPublicPluginRoute } from './hub.js'
+export { createHubHandler, isPublicPluginRoute, type HubHandlerOptions } from './hub.js'
 export { startHub, toWebRequest, writeWebResponse, type NodeHubHandle } from './node-server.js'
+export { createStaticServe, StaticServe } from './static.js'
 export {
   DEFAULT_MAX_BODY_BYTES,
   MAX_WORKFLOW_BODY_BYTES,

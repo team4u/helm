@@ -6,6 +6,7 @@ import { createSuperAgentPlugin, SUPERAGENT_PLUGIN_ID } from './builtin-plugins/
 import { createTriggersPlugin } from './builtin-plugins/triggers.js';
 import { createMagpiePlugin } from './builtin-plugins/magpie.js';
 import { MAGPIE_PROVIDER_ID } from './builtin-plugins/magpie/contracts.js';
+import { loadExternalPlugins } from './plugins/external-loader.js';
 import type { HerdrNodeChannel, HerdrTransport } from './builtin-plugins/herdr/contracts.js';
 import type { EnvFabric } from './env/index.js';
 import type { SuperAgentDependencies } from './builtin-plugins/superagent/contracts.js';
@@ -104,6 +105,9 @@ export async function createHelm(options: HelmOptions = {}) {
         };
       },
     }), { enabled: false });
+    // 外部插件目录 <dataDir>/plugins/<dir>/ 自动发现（内置插件数据目录静默跳过）；
+    // 默认停用注册，config.json.pluginEnabled 持久化 true 的自动恢复启用
+    await loadExternalPlugins(kernel.dataDir, kernel.plugins);
     await kernel.start();
     return {
       kernel,
