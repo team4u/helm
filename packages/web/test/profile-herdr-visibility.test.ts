@@ -4,7 +4,11 @@
  * 不引 JSX 编译链，与 plugin-client-render.test.ts 同一约定）：
  * - builtin:herdr 未启用时：普通 Profile 编辑器零 Herdr 痕迹（无运行时卡片、无 herdr 徽章）；
  * - builtin:herdr 启用时：herdr 徽章正常渲染；
- * - builtin:superagent 未启用时：其自举 Profile 不出现在编辑器左侧列表。
+ * - builtin:superagent 未启用时：其自举 Profile（显式 managedByPlugin 标记，
+ *   可见性判定只认字段不按 id 猜）不出现在编辑器左侧列表。
+ *
+ * models fixture 需为完整 ModelDescriptor 形状（id/provider/modelId/
+ * available/thinkingLevels），与 HelmStoreValue.models 契约一致。
  *
  * 渲染方式说明：tsx 运行器对仓库内 .tsx 源码走 classic JSX 转换
  * （React.createElement），故在动态导入被测组件前把 React 挂到全局作用域，
@@ -17,6 +21,7 @@ import { renderToString } from 'react-dom/server'
 import type { PluginSummary, Profile } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
+import type { ModelDescriptor } from '../src/lib/api.js'
 
 const e = React.createElement
 // classic JSX 转换的全局 React 供给（须在导入 .tsx 组件模块之前）
@@ -65,7 +70,15 @@ function makeStore(plugins: PluginSummary[], profiles: Profile[]): HelmStoreValu
     pluginDocs: {},
     workflowRuns: [],
     profiles,
-    models: [{ id: 'zhipu/glm-4.6', provider: 'zhipu', modelId: 'glm-4.6', available: true, thinkingLevels: ['off'] }],
+    models: [
+      {
+        id: 'zhipu/glm-4.6',
+        provider: 'zhipu',
+        modelId: 'glm-4.6',
+        available: true,
+        thinkingLevels: ['off', 'low', 'high'],
+      },
+    ],
     providers: [],
     credentials: [],
     skills: [],
@@ -139,7 +152,13 @@ test('herdr 启用且 Profile 带 runtime：列表渲染 herdr 徽章', { timeou
 })
 
 test('herdr 未启用时徽章隐藏；superagent 自举 Profile 不进入编辑器列表', { timeout: 60_000 }, () => {
-  const hub = makeProfile({ id: 'superagent', name: 'SuperAgent 中枢' })
+  // 受管 Profile 需显式携带 managedByPlugin（可见性判定只认字段，不按 id 猜）
+  const hub = makeProfile({
+    id: 'superagent',
+    name: 'SuperAgent 中枢',
+    managedByPlugin: 'builtin:superagent',
+    humanSelectable: false,
+  })
   const html = renderEditor(
     [plugin('builtin:assistant', true), plugin('builtin:herdr', false), plugin('builtin:superagent', false)],
     [plainProfile, hub, { ...herdrRuntimeProfile, runtime: { kind: 'herdr', agent: 'claude' } }],
@@ -150,7 +169,12 @@ test('herdr 未启用时徽章隐藏；superagent 自举 Profile 不进入编辑
 })
 
 test('superagent 启用后其自举 Profile 回到编辑器列表', { timeout: 60_000 }, () => {
-  const hub = makeProfile({ id: 'superagent', name: 'SuperAgent 中枢' })
+  const hub = makeProfile({
+    id: 'superagent',
+    name: 'SuperAgent 中枢',
+    managedByPlugin: 'builtin:superagent',
+    humanSelectable: false,
+  })
   const html = renderEditor(
     [plugin('builtin:assistant', true), plugin('builtin:superagent', true)],
     [plainProfile, hub],

@@ -128,6 +128,13 @@ export function validateProfileInput(input: unknown): Profile {
     }
     profile.managedByPlugin = managedByPlugin
   }
+  const humanSelectable = input['humanSelectable']
+  if (humanSelectable !== undefined) {
+    if (typeof humanSelectable !== 'boolean') {
+      throw new Error(`profile '${id}' humanSelectable 若存在必须是布尔值（常驻单例角色置 false，缺省 true）`)
+    }
+    profile.humanSelectable = humanSelectable
+  }
   const runtime = input['runtime']
   if (runtime !== undefined) {
     if (!isPlainObject(runtime)) throw new Error(`profile '${id}' runtime 必须是对象`)
@@ -535,7 +542,9 @@ export class SkillService {
   }
 }
 
-/** 解析 SKILL.md 顶部 YAML frontmatter 的 name/description/managedByPlugin（缺失时回退 id/空）。 */
+/** 解析 SKILL.md 顶部 YAML frontmatter 的 name/description/managedByPlugin（缺失时回退 id/空）。
+ * 仅接受当前字段名 managedByPlugin（无历史别名兼容）；键存在但值为空属非法形状，
+ * 显式报错而非伪造无主数据（诚实失败，不静默降级）。 */
 export function parseSkillFrontmatter(text: string): {
   name: string
   description: string
@@ -549,12 +558,13 @@ export function parseSkillFrontmatter(text: string): {
     const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(line)
     if (m !== null && m[1] !== undefined) fields.set(m[1], (m[2] ?? '').trim())
   }
-  // snake_case 别名与空值规整：托管插件 ID 必须非空，空值视为未声明。
-  const managedRaw = fields.get('managedByPlugin') ?? fields.get('managed_by_plugin')
-  const managedByPlugin = managedRaw !== undefined && managedRaw !== '' ? managedRaw : undefined
+  const managedRaw = fields.get('managedByPlugin')
+  if (managedRaw !== undefined && managedRaw === '') {
+    throw new Error(`SKILL.md frontmatter managedByPlugin 值为空（键存在则必须是非空插件 ID）`)
+  }
   return {
     name: fields.get('name') ?? '',
     description: fields.get('description') ?? '',
-    ...(managedByPlugin !== undefined ? { managedByPlugin } : {}),
+    ...(managedRaw !== undefined ? { managedByPlugin: managedRaw } : {}),
   }
 }

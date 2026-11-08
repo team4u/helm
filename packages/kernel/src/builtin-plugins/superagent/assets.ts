@@ -2,14 +2,10 @@
  * builtin:superagent 自举资产内容与逐文件幂等补齐。
  *
  * 幂等语义（覆盖 partial-start）：profile.json 已存在而 SYSTEM.md / MEMORY.md
- * 缺失时仍补齐缺文件；既有用户文件一律不覆盖。读取失败仅 ENOENT 视为缺失，
- * 损坏 / 权限错误如实传播（不吞、不用空内容假装修复）。
- *
- * 托管标记回填：旧版自举资产无 managedByPlugin 字段；存在且缺失时自动补写
- * 'builtin:superagent'（Profile 保留用户其余全部字段；SKILL.md 仅在 frontmatter
- * 内插入一行，正文不动）。用户已显式写入其他插件 ID 则原样保留，不覆盖。
+ * 缺失时仍补齐缺文件；既有文件（含用户同名资产）一律不覆盖、不回填标记。
+ * 读取只以 ENOENT 视为缺失，损坏 / 权限错误如实传播（不吞、不伪造）。
  */
-import { access, mkdir, readFile } from 'node:fs/promises'
+import { access, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { atomicWriteFile, atomicWriteJson } from '../../services/index.js'
 
@@ -98,15 +94,13 @@ export interface ProfileAsset {
 
 /** 逐文件幂等补齐 Profile 目录（profile.json / SYSTEM.md / MEMORY.md）。
  *
- * 旧版 profile.json 无 managedByPlugin 时自动补写本插件标记：保留既有全部
- * 字段（含用户手工修改），仅添加一个键；SYSTEM.md / MEMORY.md 不动。 */
+ * 仅补缺失文件（partial-start 场景）；已存在文件（含用户同名资产与全部
+ * 字段）一律原样保留，不做任何回填改写。 */
 export async function ensureProfileDir(dataDir: string, asset: ProfileAsset): Promise<void> {
   const dir = join(dataDir, 'profiles', asset.id)
   await mkdir(dir, { recursive: true })
   if (!(await fileExists(join(dir, 'profile.json')))) {
     await atomicWriteJson(join(dir, 'profile.json'), asset.profileJson)
-  } else {
-    await backfillProfileManagedBy(join(dir, 'profile.json'))
   }
   if (!(await fileExists(join(dir, 'SYSTEM.md')))) {
     await atomicWriteFile(join(dir, 'SYSTEM.md'), asset.systemMd)
@@ -114,23 +108,6 @@ export async function ensureProfileDir(dataDir: string, asset: ProfileAsset): Pr
   if (!(await fileExists(join(dir, 'MEMORY.md')))) {
     await atomicWriteFile(join(dir, 'MEMORY.md'), '# Memory\n\n')
   }
-}
-
-/** 已存在 profile.json 的托管标记回填（仅缺字段时写入；解析失败如实上抛）。 */
-async function backfillProfileManagedBy(path: string): Promise<void> {
-  const raw = await readFile(path, 'utf8')
-  let value: unknown
-  try {
-    value = JSON.parse(raw)
-  } catch (err) {
-    throw new Error(`托管标记回填前解析 profile.json 失败：${path}：${String(err)}`)
-  }
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`托管标记回填前发现 profile.json 结构非法：${path}`)
-  }
-  const record = value as Record<string, unknown>
-  if (record['managedByPlugin'] !== undefined) return
-  await atomicWriteJson(path, { ...record, managedByPlugin: SUPERAGENT_MANAGED_BY })
 }
 
 export interface SkillAsset {
@@ -141,15 +118,12 @@ export interface SkillAsset {
 
 /** 逐文件幂等补齐技能包（SKILL.md + references/*.md）。
  *
- * 旧版 SKILL.md frontmatter 不含 managedByPlugin: 行时，在闭合 '---' 前
- * 插入一行本插件标记；正文与其余 frontmatter 字段原样保留。 */
+ * 仅补缺失文件；已存在文件一律原样保留，不改写 frontmatter。 */
 export async function ensureSkillDir(dataDir: string, asset: SkillAsset): Promise<void> {
   const dir = join(dataDir, 'skills', asset.id)
   await mkdir(join(dir, 'references'), { recursive: true })
   if (!(await fileExists(join(dir, 'SKILL.md')))) {
     await atomicWriteFile(join(dir, 'SKILL.md'), asset.skillMd)
-  } else {
-    await backfillSkillManagedBy(join(dir, 'SKILL.md'))
   }
   for (const [name, content] of Object.entries(asset.references)) {
     if (!(await fileExists(join(dir, 'references', name)))) {
@@ -158,33 +132,25 @@ export async function ensureSkillDir(dataDir: string, asset: SkillAsset): Promis
   }
 }
 
-/** 已存在 SKILL.md 的托管标记回填：frontmatter 含该键（两种拼写）即跳过。
- * 无 frontmatter 的 SKILL.md 不动（非本插件形状，不越权改造）。 */
-async function backfillSkillManagedBy(path: string): Promise<void> {
-  const text = await readFile(path, 'utf8')
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
-  if (match === null) return
-  const frontmatter = match[1] ?? ''
-  for (const line of frontmatter.split(/\r?\n/)) {
-    if (/^(managedByPlugin|managed_by_plugin)\s*:/i.test(line.trim())) return
-  }
-  // 在闭合 '---' 行之前插入标记行：正文与既有 frontmatter 字段原样保留。
-  const closeStart = match[0].length - 3
-  const lineBreak = text.slice(0, closeStart).endsWith('\r\n') ? '\r\n' : '\n'
-  const updated =
-    text.slice(0, closeStart) + `managedByPlugin: ${SUPERAGENT_MANAGED_BY}${lineBreak}` + text.slice(closeStart)
-  await atomicWriteFile(path, updated)
-}
-
 export const SUPERAGENT_PROFILE_ASSET: ProfileAsset = {
   id: 'superagent',
-  profileJson: { id: 'superagent', name: 'SuperAgent 中枢', managedByPlugin: SUPERAGENT_MANAGED_BY },
+  profileJson: {
+    id: 'superagent',
+    name: 'SuperAgent 中枢',
+    managedByPlugin: SUPERAGENT_MANAGED_BY,
+    humanSelectable: false,
+  },
   systemMd: SUPERAGENT_PROFILE_SYSTEM_MD,
 }
 
 export const WATCHDOG_PROFILE_ASSET: ProfileAsset = {
   id: 'watchdog',
-  profileJson: { id: 'watchdog', name: '巡检看门狗', managedByPlugin: SUPERAGENT_MANAGED_BY },
+  profileJson: {
+    id: 'watchdog',
+    name: '巡检看门狗',
+    managedByPlugin: SUPERAGENT_MANAGED_BY,
+    humanSelectable: false,
+  },
   systemMd: WATCHDOG_PROFILE_SYSTEM_MD,
 }
 

@@ -90,9 +90,10 @@ function ProfileListPanel({
 }
 
 /**
- * Tab 1：基础与 Herdr 运行时。
- * herdr 插件未启用时完全不渲染 Herdr 运行时卡片：仅历史遗留 runtime 配置
- * 预留一行克制提示与清除入口，不展开大段表单。
+ * Tab 1：基础信息与 Herdr 运行时。
+ * 仅 herdr 插件已启用且当前 runtime 形状可由本编辑器管理（无 runtime 或
+ * kind === 'herdr'）时才渲染 Herdr 表单；非 Herdr 的既有外部运行时一律
+ * 只提供通用保留/清除提示，不冒充 Herdr 配置修改。
  */
 function ProfileBasicTab({
   draft,
@@ -114,6 +115,9 @@ function ProfileBasicTab({
   const [envPairs, setEnvPairs] = useState<EnvPair[]>(envToPairs(profile.runtime?.env))
   const [argsText, setArgsText] = useState(argsToText(profile.runtime?.args))
   const runtime = profile.runtime
+  // Herdr 表单仅接管无 runtime 或已显式为 herdr 形状的配置；其他 kind 的
+  // 既有外部运行时不受本编辑器管理，只展示通用保留/清除提示。
+  const canEditHerdr = herdrEnabled && (runtime === undefined || runtime.kind === 'herdr')
 
   // 本地编辑态（args 多行文本 / env 键值行）不随每次 patch 重置：组件由父级
   // 以 baseline 引用为 key 控制——仅在重新加载 Profile 时重挂载初始化。
@@ -216,18 +220,21 @@ function ProfileBasicTab({
         />
       </div>
 
-      {!herdrEnabled && runtime !== undefined && (
+      {!canEditHerdr && runtime !== undefined && (
         <div
           className="card"
           style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 12px' }}
         >
           <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-            该 Profile 遗留外部运行时配置（{runtime.kind}），启用对应插件后可编辑
+            已保存外部运行时配置（{runtime.kind}），不由本编辑器管理，保存时原样保留
           </span>
           <button
             className="btn btn-sm"
-            title="清除遗留的外部运行时配置"
-            onClick={() => patch({ ...profile, runtime: undefined })}
+            title="清除已保存的外部运行时配置"
+            onClick={() => {
+              setRuntimeEnabled(false)
+              patch({ ...profile, runtime: undefined })
+            }}
           >
             <HelmIcon name="x" size={12} />
             清除
@@ -235,7 +242,7 @@ function ProfileBasicTab({
         </div>
       )}
 
-      {herdrEnabled && (
+      {canEditHerdr && (
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
             <input
@@ -592,7 +599,8 @@ export function ProfileEditorModal({
   )
 
   const tabItems: Array<{ key: EditorTab; label: string }> = [
-    { key: 'basic', label: '基础与运行时' },
+    // herdr 未启用时本 Tab 只有基础字段，不预告运行时能力。
+    { key: 'basic', label: herdrEnabled ? '基础与运行时' : '基础信息' },
     { key: 'system', label: 'SYSTEM.md' },
     { key: 'memory', label: 'MEMORY.md' },
   ]

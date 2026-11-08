@@ -7,9 +7,9 @@
  *    Worker 在 getConversation / listConversations 中 ownedBy === 'helm'；
  *    markConversationOwnership 变化时发布携带最新 ownedBy 的 conversation.upsert。
  * 2. managedByPlugin 自举：superagent/watchdog Profile 与 watchdog-playbooks
- *    Skill 携带 'builtin:superagent' 标记；旧资产（无该字段）启用时自动补齐
- *    且不覆盖用户已有内容（profile.json 其余字段、SYSTEM.md、MEMORY.md、
- *    SKILL.md 正文均原样保留）。
+ *    Skill 新模板携带 'builtin:superagent' 标记与 humanSelectable=false；
+ *    既有同名用户资产（无该字段）逐字节保留——不回填标记、不覆盖任何
+ *    字段与文件（不做迁移），仅补齐缺失文件（partial-start）。
  * 3. dispatch_worker 支持 nodeId 与跨平台 cwd：POSIX 绝对路径、Windows 盘符
  *    （C:\\repo\\app / C:/repo/app）与 UNC 均可派工；相对路径显式拒绝；
  *    nodeId 透传到 Worker 会话镜像（nodeId === 'local' 显式传递）。
@@ -181,24 +181,29 @@ test('ownership2: markConversationOwnership 变化发布携带最新 ownedBy 的
 // 2. managedByPlugin 自举与旧资产回填
 // ---------------------------------------------------------------------------
 
-test('ownership3: 新自举资产携带 managedByPlugin=builtin:superagent', { timeout: 60_000 }, async () => {
+test('ownership3: 新自举资产携带 managedByPlugin=builtin:superagent 与 humanSelectable=false', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     await env.app.kernel.plugins.enable('builtin:superagent')
     // Profile：磁盘 profile.json 与 ProfileService 读取双通道
     const superagentJson = JSON.parse(
       readFileSync(join(env.dataDir, 'profiles', 'superagent', 'profile.json'), 'utf8'),
-    ) as { managedByPlugin?: string }
+    ) as { managedByPlugin?: string; humanSelectable?: boolean }
     assert.equal(superagentJson.managedByPlugin, 'builtin:superagent')
+    assert.equal(superagentJson.humanSelectable, false)
     const watchdogJson = JSON.parse(
       readFileSync(join(env.dataDir, 'profiles', 'watchdog', 'profile.json'), 'utf8'),
-    ) as { managedByPlugin?: string }
+    ) as { managedByPlugin?: string; humanSelectable?: boolean }
     assert.equal(watchdogJson.managedByPlugin, 'builtin:superagent')
+    assert.equal(watchdogJson.humanSelectable, false)
     const profiles = await env.app.kernel.profiles.list()
     assert.equal(profiles.find((p) => p.id === 'superagent')?.managedByPlugin, 'builtin:superagent')
+    assert.equal(profiles.find((p) => p.id === 'superagent')?.humanSelectable, false)
     assert.equal(profiles.find((p) => p.id === 'watchdog')?.managedByPlugin, 'builtin:superagent')
-    // 默认 assistant Profile 不受影响（非本插件托管）
+    assert.equal(profiles.find((p) => p.id === 'watchdog')?.humanSelectable, false)
+    // 默认 assistant Profile 不受影响（非本插件托管，缺省可选中）
     assert.equal(profiles.find((p) => p.id === 'assistant')?.managedByPlugin, undefined)
+    assert.equal(profiles.find((p) => p.id === 'assistant')?.humanSelectable, undefined)
     // Skill：SKILL.md frontmatter 与 SkillService 读取双通道
     const skillMd = readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8')
     assert.match(skillMd, /^managedByPlugin: builtin:superagent$/m)
@@ -209,55 +214,81 @@ test('ownership3: 新自举资产携带 managedByPlugin=builtin:superagent', { t
   }
 })
 
-test('ownership4: 旧资产（无 managedByPlugin）启用时自动补齐且不覆盖用户内容', { timeout: 60_000 }, async () => {
+test('ownership4: 既有自定义 Profile/Skill 逐字节保留；仅补缺失文件；无迁移', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    // 预置旧版形状：profile.json 无 managedByPlugin（用户改过 name 与 model），
-    // SKILL.md frontmatter 无标记行（用户改过 description），MEMORY.md/SYSTEM.md 有用户内容。
+    // 预置用户自定义内容：superagent profile.json（用户改过 name/model，无
+    // 托管标记）、SYSTEM.md/MEMORY.md 用户全文、SKILL.md 用户自定义 frontmatter
+    // 与正文；references 目录留空（验证缺失补齐）；watchdog Profile 完全缺失。
+    const profileJsonRaw =
+      JSON.stringify({ id: 'superagent', name: '我的中枢', model: 'faux/faux-1' }, null, 2) + '\n'
+    const systemMdRaw = '# 我的中枢提示\n'
+    const memoryMdRaw = '# Memory\n\n用户记忆\n'
+    const skillMdRaw = [
+      '---',
+      'name: watchdog-playbooks',
+      'description: 我的自定义手册',
+      '---',
+      '',
+      '# 我的手册正文',
+      '',
+    ].join('\n')
     mkdirSync(join(env.dataDir, 'profiles', 'superagent'), { recursive: true })
-    writeFileSync(
-      join(env.dataDir, 'profiles', 'superagent', 'profile.json'),
-      JSON.stringify({ id: 'superagent', name: '我的中枢', model: 'faux/faux-1' }, null, 2) + '\n',
-    )
-    writeFileSync(join(env.dataDir, 'profiles', 'superagent', 'SYSTEM.md'), '# 我的中枢提示\n')
-    writeFileSync(join(env.dataDir, 'profiles', 'superagent', 'MEMORY.md'), '# Memory\n\n用户记忆\n')
+    writeFileSync(join(env.dataDir, 'profiles', 'superagent', 'profile.json'), profileJsonRaw)
+    writeFileSync(join(env.dataDir, 'profiles', 'superagent', 'SYSTEM.md'), systemMdRaw)
+    writeFileSync(join(env.dataDir, 'profiles', 'superagent', 'MEMORY.md'), memoryMdRaw)
     mkdirSync(join(env.dataDir, 'skills', 'watchdog-playbooks'), { recursive: true })
-    writeFileSync(
-      join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'),
-      ['---', 'name: watchdog-playbooks', 'description: 我的自定义手册', '---', '', '# 我的手册正文', ''].join('\n'),
-    )
-    // watchdog Profile 保持完全缺失（验证全新写入也带标记）
+    writeFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), skillMdRaw)
     await env.app.kernel.plugins.enable('builtin:superagent')
 
-    // 补齐：managedByPlugin 写入；用户字段与文件原样
-    const profileJson = JSON.parse(
+    // 既有用户资产逐字节保留：不回填 managedByPlugin / humanSelectable，
+    // 不改写 name/model，SYSTEM.md / MEMORY.md / SKILL.md 原样。
+    assert.equal(
       readFileSync(join(env.dataDir, 'profiles', 'superagent', 'profile.json'), 'utf8'),
-    ) as { managedByPlugin?: string; name?: string; model?: string }
-    assert.equal(profileJson.managedByPlugin, 'builtin:superagent')
-    assert.equal(profileJson.name, '我的中枢')
-    assert.equal(profileJson.model, 'faux/faux-1')
-    assert.equal(readFileSync(join(env.dataDir, 'profiles', 'superagent', 'SYSTEM.md'), 'utf8'), '# 我的中枢提示\n')
-    assert.equal(readFileSync(join(env.dataDir, 'profiles', 'superagent', 'MEMORY.md'), 'utf8'), '# Memory\n\n用户记忆\n')
-    // 全新写入的 watchdog Profile 同样带标记
+      profileJsonRaw,
+      '既有 profile.json 必须逐字节保留（不回填托管标记）',
+    )
+    assert.equal(readFileSync(join(env.dataDir, 'profiles', 'superagent', 'SYSTEM.md'), 'utf8'), systemMdRaw)
+    assert.equal(readFileSync(join(env.dataDir, 'profiles', 'superagent', 'MEMORY.md'), 'utf8'), memoryMdRaw)
+    assert.equal(
+      readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8'),
+      skillMdRaw,
+      '既有 SKILL.md 必须逐字节保留（不回插 frontmatter 标记行）',
+    )
+    // ProfileService 读取如实反映用户自定义形状（无托管标记、可选可选中）
+    const userP = (await env.app.kernel.profiles.list()).find((p) => p.id === 'superagent')
+    assert.equal(userP?.managedByPlugin, undefined)
+    assert.equal(userP?.humanSelectable, undefined)
+    assert.equal(userP?.name, '我的中枢')
+    assert.equal(userP?.model, 'faux/faux-1')
+    const userSkill = (await env.app.kernel.skills.list()).find((s) => s.id === 'watchdog-playbooks')
+    assert.equal(userSkill?.managedByPlugin, undefined)
+    assert.equal(userSkill?.description, '我的自定义手册')
+
+    // partial-start：既有 SKILL.md 下缺失的 references 补齐，但不碰既有文件
+    const herdrRef = readFileSync(
+      join(env.dataDir, 'skills', 'watchdog-playbooks', 'references', 'herdr-stalled.md'),
+      'utf8',
+    )
+    assert.match(herdrRef, /Herdr 终端窗格停滞处置/)
+    // 全新写入的 watchdog Profile 携带新模板字段（managedByPlugin + humanSelectable=false）
     const watchdogJson = JSON.parse(
       readFileSync(join(env.dataDir, 'profiles', 'watchdog', 'profile.json'), 'utf8'),
-    ) as { managedByPlugin?: string }
+    ) as { managedByPlugin?: string; humanSelectable?: boolean }
     assert.equal(watchdogJson.managedByPlugin, 'builtin:superagent')
-    // SKILL.md：frontmatter 补入标记行；用户 description 与正文不动
-    const skillMd = readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8')
-    assert.match(skillMd, /^managedByPlugin: builtin:superagent$/m)
-    assert.match(skillMd, /^description: 我的自定义手册$/m)
-    assert.match(skillMd, /# 我的手册正文/)
-    const skills = await env.app.kernel.skills.list()
-    assert.equal(skills.find((s) => s.id === 'watchdog-playbooks')?.managedByPlugin, 'builtin:superagent')
-    assert.equal(skills.find((s) => s.id === 'watchdog-playbooks')?.description, '我的自定义手册')
+    assert.equal(watchdogJson.humanSelectable, false)
 
-    // 幂等：再次停用/启用不重复补行
-    const linesBefore = skillMd.split('\n').filter((l) => l.startsWith('managedByPlugin:')).length
+    // 幂等：再次停用/启用仍逐字节不动既有资产
     await env.app.kernel.plugins.disable('builtin:superagent')
     await env.app.kernel.plugins.enable('builtin:superagent')
-    const skillMd2 = readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8')
-    assert.equal(skillMd2.split('\n').filter((l) => l.startsWith('managedByPlugin:')).length, linesBefore)
+    assert.equal(
+      readFileSync(join(env.dataDir, 'profiles', 'superagent', 'profile.json'), 'utf8'),
+      profileJsonRaw,
+    )
+    assert.equal(
+      readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8'),
+      skillMdRaw,
+    )
   } finally {
     await env.close()
   }

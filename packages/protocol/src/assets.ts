@@ -23,6 +23,8 @@ export interface Profile {
   tags?: string[]
   /** 自举或托管该 Profile 的插件 ID（对应插件未启用时前端可按此隐藏）。 */
   managedByPlugin?: string
+  /** 人类是否可在「新建对话」下拉选择该 Profile；常驻单例角色置 false，缺省 true。 */
+  humanSelectable?: boolean
   /** SYSTEM.md 全文（详情接口读写，不写入 profile.json）。 */
   system?: string
   /** MEMORY.md 全文（详情接口读写，不写入 profile.json）。 */
