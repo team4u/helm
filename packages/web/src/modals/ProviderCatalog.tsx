@@ -6,7 +6,17 @@ import { useHelmStore } from '../lib/store-context.js'
 import { HelmSpecView } from '../ui/HelmSpecView.js'
 import { buildProviderEntries, filterProviderEntries, type ProviderEntry, type ProviderFilter } from './provider-auth-model.js'
 
-function ProviderDetail({ provider, onEditGateway, onRefreshCatalog }: { provider: ProviderEntry | null; onEditGateway(): void; onRefreshCatalog(): void }) {
+function ProviderDetail({
+  provider,
+  onEditGateway,
+  onRefreshCatalog,
+  onBack,
+}: {
+  provider: ProviderEntry | null
+  onEditGateway(): void
+  onRefreshCatalog(): void
+  onBack(): void
+}) {
   const store = useHelmStore()
   const [customId, setCustomId] = useState('')
   const [value, setValue] = useState('')
@@ -76,6 +86,15 @@ function ProviderDetail({ provider, onEditGateway, onRefreshCatalog }: { provide
 
   return (
     <section className="provider-detail" aria-label="供应商配置" aria-busy={busy || refreshing}>
+      <button
+        className="btn btn-ghost btn-sm provider-mobile-back"
+        type="button"
+        onClick={onBack}
+        aria-label="返回供应商列表"
+      >
+        <HelmIcon name="arrow-left" size={14} />
+        返回供应商列表
+      </button>
       <div className="provider-detail-heading">
         <div className="provider-avatar"><HelmIcon name={provider?.custom ? 'network' : 'cpu'} size={21} /></div>
         <div className="provider-heading-copy">
@@ -187,8 +206,10 @@ export function ProviderCatalog({ onEditGateway }: { onEditGateway(): void }) {
   const selected = entries.find((entry) => entry.id === selectedId) ?? null
   const configuredCount = entries.filter((entry) => entry.available || entry.hasStoredKey).length
 
+  const hasSelection = Boolean(manual || selected)
+
   return (
-    <div className="provider-catalog">
+    <div className={`provider-catalog${hasSelection ? ' has-selection' : ''}`}>
       <aside className="provider-sidebar" aria-label="供应商列表">
         <div className="provider-sidebar-controls">
           <label className="provider-search"><HelmIcon name="search" size={14} /><input className="input" aria-label="搜索供应商或模型" placeholder="搜索供应商或模型…" value={query} onChange={(event) => setQuery(event.target.value)} autoFocus /></label>
@@ -208,7 +229,20 @@ export function ProviderCatalog({ onEditGateway }: { onEditGateway(): void }) {
         <div className="provider-sidebar-footer"><span>{query.trim() ? `${filtered.length} / ${entries.length} 家` : `${entries.length} 家供应商`}</span><button className="btn btn-ghost btn-sm" aria-pressed={manual} onClick={() => { setManual(true); setSelectedId(null) }}><HelmIcon name="plus" size={12} />按 ID 配置</button></div>
       </aside>
       <div className="provider-detail-scroll">
-        {manual || selected ? <ProviderDetail key={manual ? '__manual__' : selected!.id} provider={manual ? null : selected} onEditGateway={onEditGateway} onRefreshCatalog={() => setReload((previous) => previous + 1)} /> : <div className="provider-empty"><HelmIcon name="cpu" size={32} /><h3>选择供应商，配置模型连接</h3><p>搜索名称、供应商 ID 或模型 ID。<br />已配置的供应商优先展示，目录与协议直接来自 PI。</p><span className="provider-help">自定义代理地址请使用「自定义网关」。</span></div>}
+        {manual || selected ? (
+          <ProviderDetail
+            key={manual ? '__manual__' : selected!.id}
+            provider={manual ? null : selected}
+            onEditGateway={onEditGateway}
+            onRefreshCatalog={() => setReload((previous) => previous + 1)}
+            onBack={() => {
+              setSelectedId(null)
+              setManual(false)
+            }}
+          />
+        ) : (
+          <div className="provider-empty"><HelmIcon name="cpu" size={32} /><h3>选择供应商，配置模型连接</h3><p>搜索名称、供应商 ID 或模型 ID。<br />已配置的供应商优先展示，目录与协议直接来自 PI。</p><span className="provider-help">自定义代理地址请使用「自定义网关」。</span></div>
+        )}
       </div>
     </div>
   )

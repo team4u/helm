@@ -302,7 +302,20 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                 搜索中
               </span>
             )}
-            <span className="badge badge-neutral">Esc 关闭</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm palette-close-btn"
+              onClick={close}
+              title="关闭"
+              aria-label="关闭"
+              style={{ padding: '2px 6px', height: 22, flexShrink: 0 }}
+            >
+              <span className="palette-close-desktop badge badge-neutral">Esc 关闭</span>
+              <span className="palette-close-mobile" style={{ alignItems: 'center', gap: 4 }}>
+                <HelmIcon name="x" size={13} />
+                <span style={{ fontSize: 11.5 }}>关闭</span>
+              </span>
+            </button>
           </span>
         </div>
         <div className="modal-body" style={{ padding: 6, gap: 2 }} ref={listRef}>

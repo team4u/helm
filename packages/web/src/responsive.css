@@ -106,6 +106,33 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .asset-modal-list { width: 100% !important; min-width: 0 !important; max-height: 120px; flex-shrink: 0; }
   .config-fields > div { grid-template-columns: minmax(0, 1fr) !important; }
 }
+/* Mermaid 预览弹窗响应式 */
+.mermaid-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.mermaid-modal-title { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mermaid-modal-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mermaid-modal-close { flex-shrink: 0; }
+
+@media (max-width: 680px) {
+  .mermaid-modal-header { flex-wrap: wrap; padding: 10px 12px; gap: 8px; }
+  .mermaid-modal-title { order: 1; flex: 1; min-width: 0; }
+  .mermaid-modal-close { order: 2; margin-left: auto; }
+  .mermaid-modal-actions { order: 3; width: 100%; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-start; }
+}
+
+/* 命令面板关闭按钮响应式 */
+.palette-close-btn { display: inline-flex; align-items: center; }
+.palette-close-desktop { display: inline-flex; }
+.palette-close-mobile { display: none; }
+
+@media (max-width: 680px), (pointer: coarse) {
+  .palette-close-desktop { display: none !important; }
+  .palette-close-mobile { display: inline-flex !important; }
+}
+
+/* 插件设置头部小屏折行与防挤压 */
+.plugin-card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.plugin-card-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; flex: 1; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }
