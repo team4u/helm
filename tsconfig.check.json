@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.base.json",
-  "compilerOptions": { "noEmit": true },
+  "compilerOptions": { "noEmit": true, "jsx": "react-jsx" },
   "include": [
     "packages/protocol/src/**/*.ts",
     "packages/kernel/src/**/*.ts",

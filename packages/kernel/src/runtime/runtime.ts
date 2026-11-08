@@ -578,7 +578,10 @@ export class KernelRuntime {
       events: {
         // tracker 摘要统一附加实时归属（ownedBy）：SSE 消费方（Web store/CLI）
         // 与 getConversation/listConversations 读到同一形状。
-        onSummaryChanged: (summary) => this.events.publish('conversation.upsert', this.withOwnership(summary)),
+        onSummaryChanged: (summary) => {
+          if (this.store.getConv(summary.id) === undefined || this.store.isDeleted(summary.id)) return
+          this.events.publish('conversation.upsert', this.withOwnership(summary))
+        },
         onInputCommitted: (conversationId, input) => {
           this.store.indexFts(conversationId, `input:${input.id}`, this.store.getConv(conversationId)?.title ?? '', input.text)
         },
@@ -1812,15 +1815,9 @@ export class KernelRuntime {
     return { ...this.tracker.summaryOf(id), ownedBy: this.getConversationOwnership(id) }
   }
 
-  /** 已构造摘要的归属补齐（tracker 回调路径；不存在的会话缺省 human）。 */
+  /** 已构造摘要沿用权威归属；删除后的 tracker 回调在发布前丢弃。 */
   private withOwnership(summary: ConversationSummary): ConversationSummary {
-    let ownedBy: 'human' | 'helm' | 'bot' = 'human'
-    try {
-      ownedBy = this.getConversationOwnership(summary.id)
-    } catch {
-      // 会话已删（tombstone 后的残余回调）：缺省 human，不阻断事件流。
-    }
-    return { ...summary, ownedBy }
+    return { ...summary, ownedBy: this.getConversationOwnership(summary.id) }
   }
 
   /** cursor 最大编码长度（base64url 后；超长拒绝防滥用）。 */
@@ -3395,9 +3392,9 @@ export class KernelRuntime {
     const meta = this.store.getConv(id)
     if (!meta) return undefined
     try {
-      return this.tracker.summaryOf(id)
+      return this.withOwnership(this.tracker.summaryOf(id))
     } catch {
-      return summaryOfFallback(meta, 'idle', 0)
+      return this.withOwnership(summaryOfFallback(meta, 'idle', 0))
     }
   }
 
