@@ -15,6 +15,7 @@ import { pluginsCommands } from './plugins.js'
 import { workflowsCommands } from './workflows.js'
 import { artifactsCommands } from './artifacts.js'
 import { skillsCommands } from './skills.js'
+import { worktreesCommands } from './worktrees.js'
 import { modelsCommands } from './models.js'
 import { searchCommands } from './search.js'
 import { apiCommands } from './api.js'
@@ -92,6 +93,7 @@ export function coreCommands(): CommandSpec[] {
     ...workflowsCommands(),
     ...artifactsCommands(),
     ...skillsCommands(),
+    ...worktreesCommands(),
     ...modelsCommands(),
     ...searchCommands(),
     ...apiCommands(),
