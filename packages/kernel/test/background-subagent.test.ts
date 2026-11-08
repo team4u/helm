@@ -626,8 +626,12 @@ describe('startBackgroundAgent', () => {
     assert.deepEqual(host.abortedConversations, [42])
     // active 已移除。
     assert.ok(!service.listRuns().some((r) => r.id === run.id && r.status === 'running'))
-    // 通知已补发。
+    // 关停期间不唤醒父模型；待投递回报持久保留，下一次启动补发。
+    assert.equal(host.settledCalls.length, 0)
+    const reopened = new WorkflowService({ dataDir, host, state })
+    await reopened.init()
     assert.equal(host.settledCalls.length, 1)
     assert.equal(host.settledCalls[0]!.summary.status, 'aborted')
+    await reopened.close()
   })
 })

@@ -36,8 +36,8 @@ export function createAssistantPlugin({ profiles, skills }: AssistantServices): 
     version: '0.1.0',
     locked: true,
     definePlugin(ctx) {
-      // 启动时幂等自举系统级内置技能 skills/helm-cli/（Layer 1 + Layer 2）：
-      // 已存在文件（含用户自定义修改）逐字节保留，仅补缺失文件。
+      // 启动时同步系统级内置技能 skills/helm-cli/（Layer 1 + Layer 2）：
+      // 受管系统资产以源码版本为准逐文件覆盖，缺失补齐；常规接口写入被拒。
       ctx.service({
         id: 'assistant-skills',
         async start() {

@@ -3819,6 +3819,12 @@ export class KernelRuntime {
           })
           info.worktree = { ...info.worktree, id: managed.id, ...(managed.repoRoot !== '' ? { repoRoot: managed.repoRoot } : {}), ...(managed.baseCommit !== '' ? { baseCommit: managed.baseCommit, dirtySource: managed.dirtySource } : {}) }
         }
+        if (info.worktree !== undefined) {
+          const safe = redactJsonValue(info, (text) => this.stashService.redact(text)) as AgentExecutionInfo
+          if (JSON.stringify(safe) !== JSON.stringify(info)) {
+            throw new HelmError('worktree_metadata_secret', `隔离执行元数据包含已登记机密，拒绝持久化；执行标识 ${safe.executionId ?? safe.conversationId ?? '未知'}`, 400, { execution: safe })
+          }
+        }
         execution = info
         this.activeSpawnExecutions.set(token, info)
         if (info.worktree !== undefined) {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
+import { access, mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
+import type { AgentExecutionInfo } from '@helm/protocol'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer, type Socket } from 'node:net'
@@ -88,6 +89,40 @@ async function eventually(check: () => Promise<boolean> | boolean, description: 
   }
   assert.fail(description)
 }
+
+test('跨节点后台原生子代理：真实 WS 节点分配 worktree、执行 gate、CLI 清理原节点工作树', { timeout: 60_000 }, async () => {
+  const env = await openEnvironment()
+  try {
+    const setup = await env.cli(['env', 'exec', '--node', 'integration-node', '--cwd', env.remoteCwd, '--json', '--',
+      'git init . && git config user.email test@helm.local && git config user.name HelmTest && printf base > base.txt && git add base.txt && git commit -m base'])
+    assert.equal(setup.code, 0, setup.err)
+    assert.equal(JSON.parse(setup.out).ok, true, setup.out)
+    const parent = await env.app.kernel.createConversation({ nodeId: 'integration-node', cwd: env.remoteCwd })
+    env.faux.setResponses(Array.from({ length: 4 }, () => fauxAssistantMessage('远端任务结果')))
+    const started = await env.app.workflows.startBackgroundAgent({
+      parentConversationId: parent.id, prompt: '执行远端验收', isolation: 'worktree',
+      gate: 'test "$HELM_NODE_TEST_ORIGIN" = remote-executor && printf "$HELM_NODE_TEST_ORIGIN" > remote-proof.txt',
+    })
+    const execution = started.execution as AgentExecutionInfo
+    assert.equal(execution.nodeId, 'integration-node')
+    assert.ok(execution.worktree?.id)
+    const child = env.app.kernel.getConversation(execution.conversationId!)
+    assert.equal(child.nodeId, 'integration-node')
+    assert.equal(child.cwd, execution.worktree!.path)
+    await env.app.workflows.wait(started.run.id)
+    await env.app.kernel.waitForIdle(parent.id)
+    assert.equal(env.app.workflows.getRun(started.run.id).status, 'completed')
+    assert.equal(await readFile(join(execution.worktree!.path, 'remote-proof.txt'), 'utf8'), 'remote-executor', 'gate 必须读取节点专属环境，不能落回 Hub 执行')
+    const preserved = await env.cli(['worktrees', 'cleanup', '--id', execution.worktree!.id!, '--json'])
+    assert.notEqual(preserved.code, 0, '远端未提交产物默认保留')
+    assert.equal(JSON.parse(preserved.err).error.code, 'worktree_dirty')
+    const cleanup = await env.cli(['worktrees', 'cleanup', '--id', execution.worktree!.id!, '--force', '--delete-branch', '--json'])
+    assert.equal(cleanup.code, 0, cleanup.err)
+    assert.equal(JSON.parse(cleanup.out).nodeId, 'integration-node')
+    assert.equal(JSON.parse(cleanup.out).removed, true)
+    await assert.rejects(access(execution.worktree!.path), { code: 'ENOENT' })
+  } finally { await env.close() }
+})
 
 test('跨节点执行的非法输入在 HTTP 边界返回明确的 400', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()

@@ -9,6 +9,7 @@ export interface WorktreeCleanupRequest {
 }
 
 export interface WorktreeCleanupResult {
+  worktreeId: string
   removed: boolean
   path: string
   branch: string

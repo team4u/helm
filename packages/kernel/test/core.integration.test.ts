@@ -32,6 +32,7 @@ import {
 } from '@earendil-works/pi-ai/providers/faux'
 
 import { ROOT_CONVERSATION_ID, HelmError, type PluginDefinition } from '@helm/protocol'
+import { HELM_CLI_SKILL_ASSET } from '../src/builtin-plugins/assistant.js'
 import { createHelm } from '../src/app.js'
 import { startHub } from '../src/http/index.js'
 import { redactJsonValue } from '../src/redact.js'
@@ -296,7 +297,7 @@ test('集成2: load_skill 读取 SKILL.md 与 references/ 子文件，路径穿�
 // 2.5 helm-cli 系统级内置技能自举（builtin:assistant service.start 幂等补齐）
 // ---------------------------------------------------------------------------
 
-test('集成2.5: createHelm 启动即自举 helm-cli 技能，load_skill 可读 SKILL.md 与三个 references，重启幂等保留用户改动', { timeout: 60_000 }, async () => {
+test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），load_skill 可读 SKILL.md 与三个 references，重启覆盖回源码版本', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const kernel = env.app.kernel
@@ -335,12 +336,14 @@ test('集成2.5: createHelm 启动即自举 helm-cli 技能，load_skill 可读 
     const dev = await readSkill('references/skill-and-plugin-dev.md')
     assert.ok(dev.text.includes('definePlugin') && dev.text.includes('ctx.action'), 'skill-and-plugin-dev 应含插件开发指南')
 
-    // 重启（重建 app）后幂等：用户改写 SKILL.md 与单个 reference 后仅缺失文件被补齐，其余逐字节保留
+    // 重启（重建 app）后受管覆盖：磁盘手工篡改的 SKILL.md 与 reference 回到
+    // 源码版本，被删的 reference 补齐；用户自建技能不受影响且仍可写
     const customMain = '---\nname: helm-cli\ndescription: 用户改写\n---\n我的版本\n'
     const customRef = '# 我改过的 UI 手册\n'
     writeFileSync(join(env.dataDir, 'skills', 'helm-cli', 'SKILL.md'), customMain)
     writeFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'generative-ui.md'), customRef)
     rmSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'skill-and-plugin-dev.md'))
+    writeSkill(env.dataDir, 'user-skill', '---\nname: user-skill\ndescription: 用户自建\n---\n正文\n', { 'notes.md': '# 用户笔记\n' })
     await env.app.close()
 
     const faux2 = fauxProvider()
@@ -348,20 +351,40 @@ test('集成2.5: createHelm 启动即自举 helm-cli 技能，load_skill 可读 
     models2.setProvider(faux2.provider)
     const app2 = await createHelm({ dataDir: env.dataDir, cwd: env.dataDir, model: 'faux/faux-1', models: models2 })
     try {
+      // 受管技能：篡改文件被覆盖回源码版本，缺失 reference 被补齐
       assert.equal(
         readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'SKILL.md'), 'utf8'),
-        customMain,
-        '重启后既有 SKILL.md 必须逐字节保留',
+        HELM_CLI_SKILL_ASSET.skillMd,
+        '重启后 SKILL.md 必须回到源码版本',
       )
       assert.equal(
         readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'generative-ui.md'), 'utf8'),
-        customRef,
-        '重启后既有 reference 必须逐字节保留',
+        HELM_CLI_SKILL_ASSET.references['generative-ui.md']!,
+        '重启后受管 reference 必须回到源码版本',
       )
       const restored = readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'skill-and-plugin-dev.md'), 'utf8')
-      assert.ok(restored.includes('definePlugin'), '仅缺失的 reference 被补齐')
+      assert.equal(restored, HELM_CLI_SKILL_ASSET.references['skill-and-plugin-dev.md']!, '缺失的 reference 被补齐为源码版本')
       const again = await app2.kernel.skills.list()
-      assert.equal(again.find((s) => s.id === 'helm-cli')?.description, '用户改写')
+      assert.equal(again.find((s) => s.id === 'helm-cli')?.description, HELM_CLI_SKILL_ASSET.skillMd.match(/description: (.+)/)?.[1])
+
+      // 受管技能写入口：服务边界 403 managed_skill_readonly
+      await assert.rejects(
+        () => app2.kernel.skills.writeFile('helm-cli', 'SKILL.md', '篡改'),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError)
+          assert.equal(err.code, 'managed_skill_readonly')
+          assert.equal(err.status, 403)
+          return true
+        },
+      )
+
+      // 用户自建技能：内容不被覆盖、仍可写
+      assert.ok(readFileSync(join(env.dataDir, 'skills', 'user-skill', 'SKILL.md'), 'utf8').includes('用户自建'), '用户自建技能不被受管覆盖触碰')
+      await app2.kernel.skills.writeFile('user-skill', 'references/extra.md', '# 用户新增\n')
+      assert.ok(
+        readFileSync(join(env.dataDir, 'skills', 'user-skill', 'references', 'extra.md'), 'utf8').includes('用户新增'),
+        '用户自建技能仍可写',
+      )
     } finally {
       await app2.close()
     }

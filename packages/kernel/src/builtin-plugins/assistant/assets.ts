@@ -2,7 +2,7 @@
  * builtin:assistant 自举的系统级内置技能资产（三层渐进式披露的 Layer 1/2）。
  *
  * Layer 1（SKILL.md）：helm CLI 黄金法则、核心命令全景与 references 下钻索引，
- * 由 SkillService.ensureSkill 在插件启动时幂等自举；已存在文件逐字节保留。
+ * 由 SkillService.ensureSkill 在插件启动时同步为源码版本（受管覆盖，常规接口只读）。
  * Layer 2（references/*.md）：生成式 UI、确定性工作流、技能与插件自举开发
  * 三个专题手册，模型经 load_skill({ skillId, path }) 按需读取，正文不常驻。
  */
@@ -347,7 +347,7 @@ export const HELM_CLI_SKILL_AND_PLUGIN_DEV_MD = [
   '',
 ].join('\n')
 
-/** 汇总资产：id + SKILL.md + 3 个 references。SkillService.ensureSkill 幂等补齐。 */
+/** 汇总资产：id + SKILL.md + 3 个 references。SkillService.ensureSkill 受管覆盖同步。 */
 export const HELM_CLI_SKILL_ASSET: BuiltinSkillAsset = {
   id: HELM_CLI_SKILL_ID,
   skillMd: HELM_CLI_SKILL_MD,

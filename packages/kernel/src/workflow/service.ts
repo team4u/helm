@@ -1090,6 +1090,7 @@ export class WorkflowService {
           }
         }
         if (
+          !this.closed &&
           record.notifyParentOnSettle === true &&
           record.notifiedAt === undefined &&
           this.host.onBackgroundAgentSettled !== undefined

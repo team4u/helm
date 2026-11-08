@@ -3,7 +3,7 @@
  * Profile 形状以 @helm/protocol 为准（id 必填，name/model/runtime/tags 可选）；
  * model 为空串或缺省表示「未配置」，由 runtime 显式报错，服务层不伪造默认模型。
  */
-import { lstat, mkdir, readdir, realpath, rm } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, realpath, rm } from 'node:fs/promises'
 import { dirname, join, relative, sep } from 'node:path'
 import { HelmError, type Profile, type SkillSummary } from '@helm/protocol'
 import { isValidEnvName } from './secret-stash.js'
@@ -434,6 +434,9 @@ async function collectFiles(root: string, rel = ''): Promise<string[]> {
 }
 
 export class SkillService {
+  /** ensureSkill 自举登记的受管技能 id（进程内；常规写入口统一 403 拒绝）。 */
+  private readonly managedSkillIds = new Set<string>()
+
   constructor(private readonly dataDir: string) {}
 
   /** 全部技能摘要（含参考子文件路径，供 load_skill 目录注入）。 */
@@ -509,9 +512,11 @@ export class SkillService {
     return readTextFile(target)
   }
 
-  /** 创建/覆写技能文件（程序化写入入口，同样做安全校验）。 */
+  /** 创建/覆写技能文件（程序化写入入口，同样做安全校验）。
+   * 受管技能（ensureSkill 自举登记的内置系统资产）在服务边界统一拒绝。 */
   async writeFile(skillId: string, path: string, content: string): Promise<void> {
     assertSkillId(skillId)
+    this.assertSkillMutable(skillId)
     const rel = assertSafeRelativePath(path)
     const skillsRoot = await this.requireSkillsRoot()
     const root = join(skillsRoot, skillId)
@@ -528,14 +533,17 @@ export class SkillService {
   }
 
   /**
-   * 内置插件技能自举：逐文件幂等补齐 skills/<id>/SKILL.md 与 references/*.md。
+   * 内置插件受管技能自举：skills/<id>/SKILL.md 与 references/* 是受管系统
+   * 资产，每次启动以源码声明的版本为准逐文件覆盖回写（磁盘上的旧文件与
+   * 手工修改一律回到源码版本），缺失文件补齐；不删除技能目录中的其他
+   * 文件。内容一致的文件跳过写入（按字节内容比较、不按 mtime，避免原子
+   * rename 触发 AssetWatcher 热加载抖动）。
    *
-   * 幂等铁律：已存在的常规文件（含用户自定义修改）一律逐字节保留，绝不
-   * 覆盖；仅缺失的文件才写入。全部 reference 路径先校验后落盘（非法资产
-   * 不产生任何部分文件）；写入前逐层确认 skills/<id>、references 与嵌套
-   * reference 目录均非符号链接，skills 根与 readFile 同经 realpath 解析
-   *（根软链可接受）；已有目标必须是常规文件（目录冒充即拒绝）；
-   * ENOENT 之外的错误如实上抛。
+   * 安全边界不变：reference 路径先整体校验（非法资产不产生任何部分文件）；
+   * 写入前逐层确认 skills/<id>、references 与嵌套 reference 目录均非符号
+   * 链接，skills 根与 readFile 同经 realpath 解析（根软链可接受）；已有
+   * 目标必须是常规文件（软链/目录冒充即拒绝）；ENOENT 之外的错误如实
+   * 上抛。登记进 managedSkillIds 后，常规写入口统一 403 拒绝。
    */
   async ensureSkill(asset: BuiltinSkillAsset): Promise<void> {
     assertSkillId(asset.id)
@@ -566,9 +574,24 @@ export class SkillService {
     for (const { rel } of references) {
       await mkdir(dirname(join(dir, rel)), { recursive: true })
     }
-    await writeIfMissing(join(dir, 'SKILL.md'), asset.skillMd)
+    await writeManagedFile(join(dir, 'SKILL.md'), asset.skillMd)
     for (const { rel, content } of references) {
-      await writeIfMissing(join(dir, rel), content)
+      await writeManagedFile(join(dir, rel), content)
+    }
+    this.managedSkillIds.add(asset.id)
+  }
+
+  /** 受管技能统一只读防护（403 managed_skill_readonly）：内容唯一权威是
+   * 插件启动时的源码版本。进程内登记——每次启动 ensureSkill 重建，不落
+   * 库（用户自建技能不经 ensureSkill，不受影响）。 */
+  private assertSkillMutable(skillId: string): void {
+    if (this.managedSkillIds.has(skillId)) {
+      throw new HelmError(
+        'managed_skill_readonly',
+        `技能 '${skillId}' 是内置插件受管系统资产，禁止经常规接口写入或删除（插件启动时自动以源码版本覆盖同步）`,
+        403,
+        { skillId },
+      )
     }
   }
 
@@ -628,9 +651,10 @@ async function assertRealDirs(ancestor: string, dir: string): Promise<void> {
   }
 }
 
-/** 仅当目标缺失（ENOENT）时原子写入；已存在必须是常规文件（软链/目录均拒绝，
- * 已有常规文件逐字节保留——幂等铁律），其他 IO 错误如实上抛。 */
-async function writeIfMissing(path: string, content: string): Promise<void> {
+/** 受管覆盖写：目标缺失即原子写入；已存在必须是常规文件（软链/目录均
+ * 拒绝），内容与声明一致时跳过写入（避免原子 rename 抖动 watcher），
+ * 不一致则原子覆盖为源码版本；其他 IO 错误如实上抛。 */
+async function writeManagedFile(path: string, content: string): Promise<void> {
   const existing = await lstat(path).catch((err: unknown) => {
     if ((err as { code?: string }).code === 'ENOENT') return undefined
     throw err
@@ -642,6 +666,12 @@ async function writeIfMissing(path: string, content: string): Promise<void> {
   if (!existing.isFile()) {
     throw new Error(`目标已存在且不是常规文件，拒绝写入: ${path}`)
   }
+  const current = await readFile(path, 'utf8').catch((err: unknown) => {
+    if ((err as { code?: string }).code === 'ENOENT') return undefined
+    throw err
+  })
+  if (current === content) return
+  await atomicWriteFile(path, content)
 }
 
 /** 解析 SKILL.md 顶部 YAML frontmatter 的 name/description/managedByPlugin（缺失时回退 id/空）。

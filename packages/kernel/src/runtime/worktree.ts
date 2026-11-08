@@ -605,6 +605,10 @@ export class WorktreeAllocator {
   /** 外部运行时（如 builtin:herdr）回传 worktree 时统一登记/更新（同 (nodeId,path) 去重）。 */
   registerExternal(input: RegisterExternalInput): ManagedWorktreeRecord {
     const id = `${input.nodeId}:${input.path}`
+    this.assertMetadataSecretFree(
+      { path: input.path, branch: input.branch, repoRoot: input.sourceCwd ?? '', nodeId: input.nodeId, executionId: input.executionId ?? '' },
+      { nodeId: this.redact(input.nodeId), parentConversationId: input.parentConversationId, conversationId: input.conversationId, executionId: input.executionId !== undefined ? this.redact(input.executionId) : undefined },
+    )
     const doc = this.loadDoc()
     const existing = doc.records.find((r) => r.id === id)
     if (existing !== undefined) {
@@ -619,15 +623,6 @@ export class WorktreeAllocator {
     // 机密检查：docStore 原始 JSON 落库不自动脱敏，含已登记 secret 的
     // 路径/分支/仓路径显式拒绝（诊断仅用脱敏值 + 非机密定位字段，绝不
     // raw 落库；拒绝时尚未登记，不产生任何 onResolved 副作用）。
-    this.assertMetadataSecretFree(
-      { path: input.path, branch: input.branch, repoRoot: input.sourceCwd ?? '' },
-      {
-        nodeId: input.nodeId,
-        parentConversationId: input.parentConversationId,
-        conversationId: input.conversationId,
-        executionId: input.executionId,
-      },
-    )
     const record: ManagedWorktreeRecord = {
       id,
       nodeId: input.nodeId,

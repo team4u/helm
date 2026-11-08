@@ -23,7 +23,7 @@ interface Hit {
   body?: unknown
 }
 
-const CLEANUP_OK = { removed: true, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: false }
+const CLEANUP_OK = { worktreeId: 'local:/wt/a', removed: true, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: false }
 
 /** 模拟 Hub：仅映射 POST /api/worktrees/cleanup（核心命令不走 /api/actions）。 */
 async function startWorktreesHub(
@@ -134,7 +134,7 @@ test('--current 感知 HELM_CONVERSATION_ID；缺失时显式报错', { timeout:
 test('--delete-branch/--force 透传 body；--json 原样输出与人类模式输出', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
   const hub = await startWorktreesHub(() => ({
-    body: { removed: true, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: true },
+    body: { worktreeId: 'local:/wt/a', removed: true, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: true },
   }))
   const env = makeEnv(hub.url, dir)
   try {
@@ -144,7 +144,7 @@ test('--delete-branch/--force 透传 body；--json 原样输出与人类模式�
     )
     assert.equal(r.code, 0, r.err)
     assert.deepEqual(hub.hits.at(-1)?.body, { conversationId: 7, deleteBranch: true, force: true })
-    assert.deepEqual(JSON.parse(r.out), { removed: true, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: true })
+    assert.deepEqual(JSON.parse(r.out), { worktreeId: 'local:/wt/a', removed: true, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: true })
 
     const human = await run(['worktrees', 'cleanup', '--conversation', '7'], env)
     assert.equal(human.code, 0, human.err)
@@ -153,7 +153,7 @@ test('--delete-branch/--force 透传 body；--json 原样输出与人类模式�
 
     // 幂等结果的人类输出（removed:false）
     const idemHub = await startWorktreesHub(() => ({
-      body: { removed: false, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: false },
+      body: { worktreeId: 'local:/wt/a', removed: false, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: false },
     }))
     try {
       const idem = await run(['worktrees', 'cleanup', '--id', 'w1'], makeEnv(idemHub.url, dir))

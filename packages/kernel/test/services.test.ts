@@ -8,10 +8,11 @@ import { test } from 'node:test'
 import { spawn, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { existsSync } from 'node:fs'
-import { chmod, mkdir, mkdtemp, readdir, readFile, symlink, writeFile, rm, realpath, utimes } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, symlink, writeFile, rm, realpath, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { HelmError } from '@helm/protocol'
 import { assert } from './helpers.js'
 import { waitFor } from './helpers.js'
 import {
@@ -286,7 +287,7 @@ test('profiles: SYSTEM_DEFAULT 分层——含 helm-cli 引导与 HELM_CONVERSAT
   }
 })
 
-test('skills: ensureSkill 逐文件幂等——自举、保留用户改动、仅补缺失子文件、拒绝软链覆盖', { timeout: 60_000 }, async () => {
+test('skills: ensureSkill 受管覆盖——自举、重启覆盖源码版本、补缺文件、拒绝软链覆盖、写入只读', { timeout: 60_000 }, async () => {
   const dataDir = await freshDataDir()
   await ensureDataDir(dataDir)
   const skills = new SkillService(dataDir)
@@ -305,23 +306,64 @@ test('skills: ensureSkill 逐文件幂等——自举、保留用户改动、仅
   assert.ok((await skills.readFile('demo-asset', 'references/guide.md')).includes('指南'))
   assert.ok((await skills.readFile('demo-asset', 'references/extra.md')).includes('附加'))
 
-  // 用户修改 SKILL.md 与 guide.md：再次自举逐字节保留
+  // 受管技能写入口：服务边界统一 403 managed_skill_readonly
+  await assert.rejects(
+    () => skills.writeFile('demo-asset', 'SKILL.md', '篡改'),
+    (err: unknown) => {
+      assert.ok(err instanceof HelmError)
+      assert.equal(err.code, 'managed_skill_readonly')
+      assert.equal(err.status, 403)
+      return true
+    },
+  )
+  await assert.rejects(
+    () => skills.writeFile('demo-asset', 'references/other.md', '篡改'),
+    (err: unknown) => {
+      assert.ok(err instanceof HelmError)
+      assert.equal(err.code, 'managed_skill_readonly')
+      return true
+    },
+  )
+
+  // 磁盘手工篡改（绕过服务）后重启同步：SKILL.md 与 guide.md 回到源码版本
   const customMd = '---\nname: demo-asset\ndescription: 用户改写\n---\n\n我的自定义正文\n'
   const customGuide = '# 用户改写的指南\n'
   await writeFile(join(dataDir, 'skills', 'demo-asset', 'SKILL.md'), customMd)
   await writeFile(join(dataDir, 'skills', 'demo-asset', 'references', 'guide.md'), customGuide)
   await skills.ensureSkill(asset)
-  assert.equal(await readTextFile(join(dataDir, 'skills', 'demo-asset', 'SKILL.md')), customMd)
-  assert.equal(await readTextFile(join(dataDir, 'skills', 'demo-asset', 'references', 'guide.md')), customGuide)
+  assert.equal(
+    await readTextFile(join(dataDir, 'skills', 'demo-asset', 'SKILL.md')),
+    asset.skillMd,
+    '重启同步后 SKILL.md 必须回到源码版本',
+  )
+  assert.equal(
+    await readTextFile(join(dataDir, 'skills', 'demo-asset', 'references', 'guide.md')),
+    asset.references['guide.md']!,
+    '重启同步后 reference 必须回到源码版本',
+  )
 
-  // 删除一个子文件后再次自举：仅补缺失的 extra.md，其余不动
+  // 删除一个子文件后再次同步：缺失的 extra.md 被补齐
   await rm(join(dataDir, 'skills', 'demo-asset', 'references', 'extra.md'))
   await skills.ensureSkill(asset)
   assert.equal(
     await readTextFile(join(dataDir, 'skills', 'demo-asset', 'references', 'extra.md')),
     asset.references['extra.md']!,
   )
-  assert.equal(await readTextFile(join(dataDir, 'skills', 'demo-asset', 'references', 'guide.md')), customGuide)
+
+  // 内容一致时不重写（按内容比较、不按 mtime；避免原子 rename 抖动 watcher）
+  const stablePath = join(dataDir, 'skills', 'demo-asset', 'SKILL.md')
+  const stableBefore = await lstat(stablePath)
+  const backdatedMs = stableBefore.mtimeMs - 60_000
+  const backdated = new Date(backdatedMs)
+  await utimes(stablePath, backdated, backdated)
+  await skills.ensureSkill(asset)
+  const stableAfter = await lstat(stablePath)
+  // 文件系统毫秒截断有亚毫秒偏差，容差 2ms 内视为未被重写（重写会更新为当前时间，相差分钟级）
+  assert.ok(
+    Math.abs(stableAfter.mtimeMs - backdatedMs) <= 2,
+    `内容一致时不得重写（mtime 应保持回设值 ~${backdatedMs}，实际 ${stableAfter.mtimeMs}）`,
+  )
+  assert.equal(await readTextFile(stablePath), asset.skillMd)
 
   // 目标已存在且为符号链接：拒绝覆写（防软链越界；目录/软链都不是常规文件）
   const outside = join(scratchRoot, 'outside-target.md')
@@ -341,6 +383,29 @@ test('skills: ensureSkill 逐文件幂等——自举、保留用户改动、仅
     /穿越|非法/,
   )
   assert.ok(!existsSync(join(dataDir, 'skills', 'ok-id')), '非法 reference 不得产生部分资产')
+})
+
+test('skills: 用户自建技能不受受管覆盖影响——ensureSkill 不触碰、writeFile 可写', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  await ensureDataDir(dataDir)
+  const skills = new SkillService(dataDir)
+  await seedSkill(dataDir, 'user-skill', ['references/guide.md'])
+  const before = await readTextFile(join(dataDir, 'skills', 'user-skill', 'SKILL.md'))
+
+  // 自举其他受管技能不影响用户自建技能
+  await skills.ensureSkill({
+    id: 'managed-asset',
+    skillMd: '---\nname: managed-asset\ndescription: 受管\n---\n\n正文\n',
+    references: {},
+  })
+  assert.equal(await readTextFile(join(dataDir, 'skills', 'user-skill', 'SKILL.md')), before)
+  assert.ok(!(await skills.list()).some((s) => s.id === 'user-skill' && s.managedByPlugin), '用户技能无受管标记')
+
+  // 用户自建技能写入不受 403 限制
+  await skills.writeFile('user-skill', 'SKILL.md', '---\nname: user-skill\ndescription: 用户技能\n---\n用户可写\n')
+  assert.ok((await skills.readFile('user-skill')).includes('用户可写'))
+  await skills.writeFile('user-skill', 'references/extra.md', '# 用户新增\n')
+  assert.ok((await skills.readFile('user-skill', 'references/extra.md')).includes('用户新增'))
 })
 
 test('skills: ensureSkill 拒绝目录软链与目录冒充文件，绝不向 skills 根之外写入', { timeout: 60_000 }, async () => {

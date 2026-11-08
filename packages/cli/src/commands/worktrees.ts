@@ -90,6 +90,7 @@ export function worktreesCommands(): CommandSpec[] {
       const v = result as unknown as Record<string, unknown>
       if (
         result === null || typeof result !== 'object' || Array.isArray(result) ||
+        typeof v['worktreeId'] !== 'string' || v['worktreeId'] === '' ||
         typeof v['removed'] !== 'boolean' ||
         typeof v['path'] !== 'string' ||
         typeof v['branch'] !== 'string' ||
