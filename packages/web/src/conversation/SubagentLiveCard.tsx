@@ -138,7 +138,7 @@ export function SubagentLiveCard({ childConversationId, toolStatus, backgroundRu
           </button>
           <button
             type="button"
-            className="btn btn-sm"
+            className="btn btn-sm subagent-split-btn"
             title="在分屏并排打开该子会话"
             onClick={() =>
               store.openTarget({ kind: 'conversation', conversationId: childConversationId }, { split: true })

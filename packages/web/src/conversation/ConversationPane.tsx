@@ -183,6 +183,23 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
     <div className="helm-pane">
       <header className="pane-topbar conversation-topbar">
         <div className="pane-title-group">
+          {conversation.parentConversationId !== undefined ? (
+            <button
+              type="button"
+              className="btn btn-sm pane-parent-nav-btn"
+              title={`返回父会话 #${conversation.parentConversationId}`}
+              aria-label={`返回父会话 #${conversation.parentConversationId}`}
+              onClick={() => {
+                store.openTarget(
+                  { kind: 'conversation', conversationId: conversation.parentConversationId! },
+                  isSplit ? { split: true } : undefined,
+                )
+              }}
+            >
+              <HelmIcon name="arrow-left" size={12} />
+              <span className="pane-parent-nav-label">#{conversation.parentConversationId}</span>
+            </button>
+          ) : null}
           {renaming ? (
             <input
               className="input"

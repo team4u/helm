@@ -255,7 +255,7 @@ function WorkflowInspector({ conversationId }: { conversationId: number }) {
             store.openTarget({ kind: 'conversation', conversationId: child.id })
             maybeCollapseWorkbench(store)
           }}>打开</button>
-          <button className="btn btn-sm" title="在分屏并排打开该子会话" onClick={() => {
+          <button className="btn btn-sm workbench-split-btn" title="在分屏并排打开该子会话" onClick={() => {
             store.openTarget({ kind: 'conversation', conversationId: child.id }, { split: true })
             maybeCollapseWorkbench(store)
           }}>并排查看</button>

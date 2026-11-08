@@ -61,6 +61,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 @container (max-width: 450px) {
   .conversation-topbar .pane-title { min-width: 40px; }
   .conversation-topbar .pane-cwd-subtitle { max-width: 30vw; }
+  .conversation-topbar .pane-parent-nav-btn { height: 22px; padding: 0 6px 0 5px; font-size: 11px; gap: 3px; }
   .composer-widgets .card { padding: 8px 10px; }
 }
 @media (hover: none) {
@@ -119,7 +120,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 窄屏只隐藏「开启分屏」入口；分屏已开启时保留激活态按钮与关闭按钮可点 */
   .split-toggle-btn:not(.split-active),
   .sidebar-split-action,
-  .sidebar-split-btn {
+  .sidebar-split-btn,
+  .workbench-split-btn,
+  .subagent-split-btn {
     display: none !important;
   }
   .helm-sidebar {
