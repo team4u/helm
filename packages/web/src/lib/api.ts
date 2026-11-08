@@ -20,6 +20,11 @@ import type {
   NodeHealthSnapshot,
   NodeInfo,
   NodeIssuedToken,
+  NodeBlockedRelease,
+  NodeUpgradeCheckInput,
+  NodeUpgradeCheckResult,
+  NodeUpgradeInput,
+  NodeUpgradeResult,
   PluginConfigFieldSchema,
   PluginSummary,
   Profile,
@@ -47,7 +52,7 @@ export type {
 export type AuthStatusResponse = AuthStatus
 export type AuthTokenResponse = AuthToken
 export type CredentialStatus = CredentialSummary
-export type { NodeInfo, NodeIssuedToken, NodeHealthSnapshot }
+export type { NodeInfo, NodeIssuedToken, NodeHealthSnapshot, NodeBlockedRelease, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult }
 
 export interface SubmitInputPayload {
   text: string
@@ -294,6 +299,16 @@ export const nodesApi = {
     apiRequest<NodeIssuedToken>('POST', '/api/nodes/issue', { nodeId }),
   remove: (nodeId: string) =>
     apiRequest<{ ok: boolean }>('DELETE', `/api/nodes/${encodeURIComponent(nodeId)}`),
+  checkUpgrade: (nodeId: string, registryUrl?: string) => {
+    const qs = registryUrl ? `?registryUrl=${encodeURIComponent(registryUrl)}` : ''
+    return apiRequest<NodeUpgradeCheckResult>('GET', `/api/nodes/${encodeURIComponent(nodeId)}/upgrade/check${qs}`)
+  },
+  upgrade: (nodeId: string, input: NodeUpgradeInput = {}) =>
+    apiRequest<NodeUpgradeResult>(
+      'POST',
+      `/api/nodes/${encodeURIComponent(nodeId)}/upgrade`,
+      input,
+    ),
 }
 
 // ---------------------------------------------------------------------------

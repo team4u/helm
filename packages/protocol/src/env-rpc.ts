@@ -33,12 +33,56 @@ export interface NodeInfo {
   online: boolean
   hostname?: string
   platform?: string
+  /** 节点当前运行的软件版本（如 `0.1.0`）。 */
+  version?: string
   connectedAt?: number
   lastSeenAt?: number
   /** 节点连接 Hub 时使用的真实可达地址（供远端受管进程回连）。 */
   hubUrl?: string
   /** 最近一次注册或心跳捎带的节点健康快照。 */
   health?: NodeHealthSnapshot
+}
+
+/** 节点金丝雀升级失败隔离记录（`<dataDir>/update-blocked.json`）。 */
+export interface NodeBlockedRelease {
+  version: string
+  reason: string
+  at: string
+}
+
+/** `GET /api/nodes/:id/upgrade/check` 与 `nodeCheckUpgrade` 入参。 */
+export interface NodeUpgradeCheckInput {
+  registryUrl?: string
+}
+
+/** `GET /api/nodes/:id/upgrade/check` 响应体。 */
+export interface NodeUpgradeCheckResult {
+  currentVersion: string
+  latestVersion: string
+  updateAvailable: boolean
+  blocked?: NodeBlockedRelease
+}
+
+/** `POST /api/nodes/:id/upgrade` 与 `nodeUpgrade` 入参。 */
+export interface NodeUpgradeInput {
+  targetVersion?: string
+  registryUrl?: string
+  force?: boolean
+}
+
+/** `nodeUpgrade` RPC 入参：在 HTTP 入参之上追加服务端生成的升级尝试 ID。 */
+export interface NodeUpgradeRpcInput extends NodeUpgradeInput {
+  /** 服务端生成的随机升级尝试标识；候选注册与心跳 commit 按它对账。 */
+  attemptId?: string
+}
+
+/** `POST /api/nodes/:id/upgrade` 响应体。 */
+export interface NodeUpgradeResult {
+  ok: boolean
+  previousVersion: string
+  targetVersion: string
+  upgraded: boolean
+  pid?: number
 }
 
 /** `POST /api/nodes/issue` 签发响应（明文 token 仅返回一次，服务端只存 sha256）。 */
@@ -61,15 +105,29 @@ export interface NodeRegisterInput {
   token: string
   hostname: string
   platform: string
+  /** 节点当前运行的软件版本（如 `0.1.0`）。 */
+  version?: string
+  /** 升级尝试 ID：升级后的新守护进程重连时回传，供 Hub 对账确认。 */
+  upgradeAttemptId?: string
   /** 节点端配置的 Hub 地址（用于远端受管子进程回连）。 */
   hubUrl?: string
   /** 初始节点健康快照。 */
   health?: NodeHealthSnapshot
 }
 
+/** 升级完成心跳提交：候选新守护进程经心跳向 Hub 确认升级结果。 */
+export interface NodeUpgradeCommit {
+  attemptId: string
+  version: string
+  previousVersion: string
+  pid: number
+}
+
 /** 节点周期性心跳入参（刷新 lastSeenAt 与 health 快照）。 */
 export interface NodeHeartbeatInput {
   health?: NodeHealthSnapshot
+  /** 升级完成确认（仅当前连接以对应 attemptId 注册时有效）。 */
+  upgradeCommit?: NodeUpgradeCommit
 }
 
 export interface NodeRegisterResult {
@@ -284,6 +342,11 @@ export interface NodeEnvRpcFunctions {
   ipcSubscribe?(input: NodeIpcSubscribeInput): Promise<RpcResult<null>>
   /** 停止节点本机 IPC 事件订阅流。 */
   ipcUnsubscribe?(subscribeId: string): Promise<void>
+
+  /** 检查节点是否有可用更新（由节点向 npm Registry 查询）。 */
+  nodeCheckUpgrade?(input: NodeUpgradeCheckInput): Promise<RpcResult<NodeUpgradeCheckResult>>
+  /** 触发节点自升级（排空在途命令 → 拉包完整性校验 → 金丝雀启动替换守护进程 → 失败自动回滚）。 */
+  nodeUpgrade?(input: NodeUpgradeRpcInput): Promise<RpcResult<NodeUpgradeResult>>
 }
 
 /** Hub 侧实现、节点回调的流式事件函数集。 */

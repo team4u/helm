@@ -21,6 +21,10 @@ import type {
   ModelCatalog,
   NodeInfo,
   NodeIssuedToken,
+  NodeUpgradeCheckInput,
+  NodeUpgradeCheckResult,
+  NodeUpgradeInput,
+  NodeUpgradeResult,
   ModelProviderSummary,
   ModelProvidersRefreshResult,
   PluginConfigFieldSchema,
@@ -163,6 +167,7 @@ export interface KernelRuntimeLike {
     text: string,
     opts?: {
       origin?: 'human' | 'agent' | 'trigger'
+      /** 会话正忙策略；省略时内核默认 steer。 */
       whenBusy?: 'steer' | 'followUp' | 'reject'
       meta?: Record<string, unknown>
       attachments?: string[]
@@ -220,6 +225,10 @@ export interface KernelRuntimeLike {
   issueNodeToken(nodeId: string): Promise<NodeIssuedToken> | NodeIssuedToken
   /** 移除节点：从签发表删除并立即掐断在途连接（DELETE /api/nodes/:id）。 */
   removeNode(nodeId: string): Promise<void> | void
+  /** 检查节点可用更新（GET /api/nodes/:id/upgrade/check）。 */
+  checkNodeUpgrade?(nodeId: string, input?: NodeUpgradeCheckInput): Promise<NodeUpgradeCheckResult> | NodeUpgradeCheckResult
+  /** 触发节点升级并等待 commit 确认（POST /api/nodes/:id/upgrade）。 */
+  upgradeNode?(nodeId: string, input?: NodeUpgradeInput): Promise<NodeUpgradeResult> | NodeUpgradeResult
   /**
    * 跨节点命令执行（POST /api/env/exec）：靶点解析为显式 nodeId/cwd >
    * 会话绑定 > local；远端离线 409 node_offline；onChunk 逐块回放
@@ -273,4 +282,4 @@ export interface HubHandle {
 }
 
 // 导出供测试构造完整 Profile
-export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, WorkflowRunSummary, WorkflowRunRequest, PublicPluginDoc, NodeInfo, NodeIssuedToken, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, SavedWorkflowSummary, ConversationCompactResponse }
+export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, WorkflowRunSummary, WorkflowRunRequest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, SavedWorkflowSummary, ConversationCompactResponse }

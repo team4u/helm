@@ -24,6 +24,8 @@ export interface HelmSnapshot {
   ui: PluginUiContribution[]
   /** 已知工作流 run 摘要（含运行中与终态）。 */
   workflowRuns: WorkflowRunSummary[]
+  /** 活跃会话实时视图（working/blocked run 或仍有 queued 输入；重连首帧恢复时间线尾部胶囊）。 */
+  conversationLives?: ConversationLive[]
   /** 已知计算节点列表（含 local 与 BYOM 节点）。 */
   nodes?: NodeInfo[]
 }

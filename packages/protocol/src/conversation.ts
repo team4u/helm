@@ -21,7 +21,7 @@ export type ConversationStatus =
 /** 输入来源，附着在每次提交的 `helm.input` entry 上。 */
 export type InputOrigin = 'human' | 'agent' | 'trigger'
 
-/** 会话正忙时新输入的处理策略。 */
+/** 会话正忙时新输入的处理策略；省略时内核默认 steer（插话引导）。 */
 export type WhenBusy = 'steer' | 'followUp' | 'reject'
 
 /** 会话列表 / SSE 快照中的通用会话摘要。 */
@@ -33,6 +33,8 @@ export interface ConversationSummary {
   tags: string[]
   /** 派生来源会话 ID；根会话无此字段。 */
   parentConversationId?: number
+  /** 派生或最近一次续接本子会话的父会话工具调用 ID（供前端在 subagent 运行期即刻关联子会话）。 */
+  parentToolCallId?: string
   /** 会话归属权（缺省 'human'；插件或内核创建的常驻/后台会话标为 'helm' | 'bot'）。 */
   ownedBy?: 'human' | 'helm' | 'bot'
   /** 绑定的计算节点 ID（缺省为 'local'）。 */
@@ -91,6 +93,7 @@ export interface ConversationInput {
   id: string
   text: string
   origin: InputOrigin
+  /** 会话正忙策略；省略时内核在提交前应用有效默认 steer（插话引导）。 */
   whenBusy?: WhenBusy
   createdAt: number
   /** 边界已校验/脱敏的自由元数据；从 CLI --meta / HTTP 一路传到 turn_settled。 */
@@ -186,6 +189,17 @@ export interface ConversationInputResult {
   entry: ConversationEntry
 }
 
+/** 当前在 pi.inbox 中排队待生效的输入（steer 优先于 followUp；时间线尾部胶囊）。 */
+export interface QueuedConversationInput {
+  id: string
+  submissionId: string
+  text: string
+  mode: 'steer' | 'followUp'
+  origin: InputOrigin
+  createdAt: number
+  attachments?: ConversationAttachmentRef[]
+}
+
 /** 会话实时增量视图（SSE `conversation.live` 事件载荷）。 */
 export interface ConversationLive {
   conversationId: number
@@ -200,6 +214,8 @@ export interface ConversationLive {
     status: 'running' | 'done' | 'error'
     result?: unknown
   }>
+  /** 当前在 pi.inbox 中排队待生效的输入（steer 优先于 followUp）；无排队项时省略或为空。 */
+  queuedInputs?: QueuedConversationInput[]
   updatedAt: number
 }
 

@@ -41,7 +41,8 @@ import { createScopedExecutionEnv, type EnvTarget, type ScopedExecutionEnv } fro
 
 export { ExecOutputHub } from './exec-output.js'
 export { NodeRegistry, tokenAuthenticator, sha256hex } from './registry.js'
-export type { NodeRegistryOptions, NodeConnection, RegisterOutcome, HubConnectionLocal, NodeSideFunctions } from './registry.js'
+export type { NodeRegistryOptions, NodeConnection, RegisterOutcome, HubConnectionLocal, NodeSideFunctions, UpgradeWaiterHandle } from './registry.js'
+export { HelmUpgradeBusyError, HelmUpgradeTimeoutError, HelmUpgradeCancelledError } from './registry.js'
 export { RemoteExecutionEnv } from './remote-env.js'
 export type { NodeRpcResolver, RemoteExecutionEnvOptions } from './remote-env.js'
 export { attachNodeWsGateway } from './ws-gateway.js'

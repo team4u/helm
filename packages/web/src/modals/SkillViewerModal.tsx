@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { copyToClipboard } from '../conversation/clipboard.js'
 import { assetsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
@@ -107,11 +108,10 @@ export function SkillViewerModal({
   const copyReference = async () => {
     if (!selectedId) return
     const ref = `/skill:${selectedId}`
-    try {
-      await navigator.clipboard.writeText(ref)
+    if (await copyToClipboard(ref)) {
       setCopied(true)
       setTimeout(() => setCopied(false), 1600)
-    } catch {
+    } else {
       store.pushNotice({
         type: 'notification',
         level: 'warning',

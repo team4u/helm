@@ -77,6 +77,11 @@ export interface NativeSpawnDeps extends HelmToolDeps {
     tags: string[],
     thinkingLevel?: string,
   ): Promise<void>
+  /**
+   * resume 续接时把子会话的 parentToolCallId 更新为本次父会话工具调用 ID
+   * （可选；宿主同步镜像并广播 conversation.upsert）。缺省不追踪。
+   */
+  bindChildToolCall?(childId: number, parentToolCallId: string): void
   /** 按 profileId 读取真实 Profile（model/thinkingLevel/cwd/runtime）；不存在返回 undefined。 */
   resolveProfile(profileId: string): Promise<ResolvedProfile | undefined>
   /** 会话显式模型覆盖（modelOverride）；无覆盖返回 undefined。 */
@@ -288,6 +293,10 @@ export async function runNativeSpawn(
     // resume：显式 model/cwd/effort 变更已由 updateConversation 同步 SDK 与镜像。
     // onResolved 移到配置完成后回传更新后的实际 cwd（修复首调自定义 cwd 再 resume
     // 时 metadata/Gate 指向 Hub 目录而 SDK 仍在旧目录的不一致）。
+    // parentToolCallId 同步更新：本次工具调用的运行期关联立即指向该子会话。
+    if (request.parentToolCallId !== undefined && request.parentToolCallId !== '') {
+      deps.bindChildToolCall?.(childId!, request.parentToolCallId)
+    }
     request.onResolved?.({ conversationId: childId!, effectiveCwd: childCwd })
   }
 
@@ -445,8 +454,22 @@ function buildStructuredOutputExtension(session: StructuredOutputSession): Exten
       required: ['accepted'],
     },
     async execute(args) {
-      const payload = (args as { output?: unknown }).output
-      const result = validateAgainstSchema(payload, session.schema)
+      let payload = (args as { output?: unknown }).output
+      let result = validateAgainstSchema(payload, session.schema)
+      // 防御性反序列化：若初始校验未通过且入参为字符串，尝试 JSON.parse 后再次校验
+      // （兼容模型因无强类型声明或传输层序列化而将结构化 JSON 编码为字符串的场景）。
+      if (!result.ok && typeof payload === 'string') {
+        try {
+          const parsed = JSON.parse(payload)
+          const secondResult = validateAgainstSchema(parsed, session.schema)
+          if (secondResult.ok) {
+            payload = parsed
+            result = secondResult
+          }
+        } catch {
+          // 非合法 JSON 字符串，保持初始校验报错
+        }
+      }
       if (!result.ok) {
         return {
           output: [
@@ -454,8 +477,7 @@ function buildStructuredOutputExtension(session: StructuredOutputSession): Exten
               type: 'text',
               text:
                 `结构化输出校验失败，请修正后重新调用 register_structured_output：\n${result.errors}` +
-                `
-Schema: ${JSON.stringify(session.schema)}`,
+                `\n\nSchema: ${JSON.stringify(session.schema)}`,
             },
           ],
           isError: true,

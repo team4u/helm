@@ -4,7 +4,7 @@
  *
  * - runNodeCli(argv, io) 为唯一测试/嵌入入口；直接运行时（argv[1] 实路径
  *   等于本模块实路径，兼容 pnpm bin symlink）才自动执行。
- * - 命令：connect / start / stop / restart / status / service install|uninstall|status / --help。
+ * - 命令：connect / start / stop / restart / status / upgrade / service install|uninstall|status / --help。
  * - --json 全局生效：成功 stdout JSON，失败 stderr JSON 错误信封 + 非零退出码。
  * - 后台控制（跨平台，不依赖 /proc、不向任意 PID 发信号）：
  *   · 每次后台启动生成随机 instanceId；node.pid = { pid, instanceId, endpoint }
@@ -22,6 +22,17 @@
  *   完成；残留锁显式诊断，不静默删除。
  * - 前台 connect/start 注册前只输出「连接中」；state=registered 只来自真实
  *   daemon 注册 ACK，未完成为 starting；控制 server 仅供后台实例启动。
+ * - 升级交接：受控 daemon 注入 prepareUpgradeReplacement（stdio IPC 拉起候选
+ *   release、activate/activated 本机提交协议）；控制通道 upgrade 请求转发给
+ *   handle.upgrade（本机可信源）；升级成功后旧 daemon 延迟退出让位。候选以
+ *   HELM_NODE_UPGRADE_ATTEMPT + pendingActivation 启动，真实 registered 后保持
+ *   IPC 等 activate，收到后校验 previousVersion/targetVersion 与本次升级上下文
+ *   一致才 confirmUpgrade（不一致不提交并回拒）；激活后 handle.close 失败也
+ *   如实记录失败退出码，不因已激活而吞错。
+ * - 前台 start（无控制 env）成为稳定 launcher：自身保持活着并周期跟踪
+ *   node.pid 指向的当前实例（升级换 pid 后自动跟踪新 daemon），SIGTERM/INT
+ *   经控制通道停止当前实例并等待 stop 结果落定后才退出——systemd 主 PID 不因
+ *   旧 daemon 退出而杀整个 cgroup。stop 与 pid 清理均按 instanceId CAS 校验。
  */
 
 import { spawn } from 'node:child_process';
@@ -71,9 +82,10 @@ const USAGE = `helm-node — helm 跨平台受控节点守护进程
   connect <hubUrl> --token <token>   绑定 JOIN 令牌并前台运行（--once 仅尝试注册一次）
   start [-d|--daemon]                启动守护进程（-d 后台 detached，写 <dataDir>/node.pid）
   stop                               停止后台守护进程（经控制通道验证身份后优雅停止）
-  restart                            重启后台守护进程（先确认停止成功再拉新进程）
-  status                             输出身份绑定状态、后台进程与运行态摘要
-  doctor                              零副作用只读自检（身份 0600 / 权限 / Hub 连通 / Herdr IPC）
+  restart                               重启后台守护进程（先确认停止成功再拉新进程）
+  status                                输出身份绑定状态、后台进程与运行态摘要
+  upgrade [--check] [--version <ver>]   自升级（--check 仅查询；执行需受管 daemon 在运行）
+  doctor                                零副作用只读自检（身份 0600 / 权限 / Hub 连通 / Herdr IPC）
   service install|uninstall|status   开机自启服务管理（launchd / systemd --user / schtasks）
 
 通用选项:
@@ -82,6 +94,10 @@ const USAGE = `helm-node — helm 跨平台受控节点守护进程
   --data-dir <dir>       数据目录（默认 $HELM_DATA_DIR 或 ~/.helm）
   --json                 机器可读 JSON 输出
   --once                 connect 模式下仅尝试注册一次即退出
+  --version <ver>        upgrade 指定目标版本（严格 SemVer）
+  --registry <url>       upgrade npm registry 源（默认官方或 HELM_NPM_REGISTRY）
+  --check                upgrade 仅检查可用更新（不启动 daemon、不升级）
+  --force                upgrade 强制（越过防降级/冷却期/同版本限制）
   --help, -h             显示帮助
 
 环境变量: HELM_DATA_DIR（默认 ~/.helm）· HELM_HUB_URL · HERDR_SOCKET_PATH
@@ -95,8 +111,8 @@ interface ParsedCli {
   help: boolean;
 }
 
-const VALUE_FLAGS = ['token', 'hub', 'data-dir'] as const;
-const BOOL_FLAGS = ['once', 'help', 'daemon', 'd'] as const;
+const VALUE_FLAGS = ['token', 'hub', 'data-dir', 'version', 'registry'] as const;
+const BOOL_FLAGS = ['once', 'help', 'daemon', 'd', 'check', 'force'] as const;
 /** 各命令合法的选项集合；未知选项/多余位置参数一律显式报错。 */
 const COMMAND_FLAGS: Record<string, ReadonlySet<string>> = {
   connect: new Set(['token', 'hub', 'data-dir', 'json', 'once']),
@@ -104,6 +120,7 @@ const COMMAND_FLAGS: Record<string, ReadonlySet<string>> = {
   stop: new Set(['data-dir', 'json']),
   restart: new Set(['hub', 'data-dir', 'json']),
   status: new Set(['data-dir', 'json']),
+  upgrade: new Set(['version', 'registry', 'check', 'force', 'data-dir', 'json']),
   doctor: new Set(['hub', 'data-dir', 'json']),
   service: new Set(['hub', 'data-dir', 'json']),
 };
@@ -114,6 +131,7 @@ const COMMAND_POSITIONALS: Record<string, { min: number; max: number }> = {
   stop: { min: 0, max: 0 },
   restart: { min: 0, max: 0 },
   status: { min: 0, max: 0 },
+  upgrade: { min: 0, max: 0 },
   doctor: { min: 0, max: 0 },
   service: { min: 1, max: 1 },
 };
@@ -208,6 +226,12 @@ function validateCli(parsed: ParsedCli): void {
       throw new UsageError(`service 需要 install|uninstall|status 子命令，实得 ${JSON.stringify(action ?? '(空)')}`);
     }
   }
+  if (parsed.command === 'upgrade') {
+    // --check 是纯查询：与指定/强制执行互斥，防误解为「检查并升级」。
+    if (parsed.flags.get('check') === true && (parsed.flags.get('version') !== undefined || parsed.flags.get('force') === true)) {
+      throw new UsageError('upgrade --check 与 --version/--force 互斥（--check 仅查询不执行升级）');
+    }
+  }
 }
 
 const flagString = (parsed: ParsedCli, name: string): string | undefined => {
@@ -229,10 +253,18 @@ const READY_TIMEOUT_MS = 45_000;
 const CONTROL_TIMEOUT_MS = 5_000;
 /** stop 请求总预算：daemon 需先完成 handle.close 执行环境清理再应答。 */
 const CONTROL_STOP_TIMEOUT_MS = 15_000;
-/** 控制协议单行上限（字节）。 */
-const CONTROL_MAX_LINE_BYTES = 4_096;
+/** 控制协议单行上限（字节）；upgrade 请求携带 input，适当增大。 */
+const CONTROL_MAX_LINE_BYTES = 64_096;
+/** upgrade 请求总预算：必须大于安装最长时限（npm install 10 分钟）。 */
+const CONTROL_UPGRADE_TIMEOUT_MS = 11 * 60_000;
 /** stop 被接受后等待进程真实退出的上限。 */
 const STOP_EXIT_TIMEOUT_MS = 10_000;
+/** 旧 daemon 升级提交后延迟退出的时间：给响应冲刷留余量。 */
+const UPGRADE_EXIT_DELAY_MS = 100;
+/** 候选等待 activate 的总预算（父进程提交点在排空之后，这里取宽裕上限）。 */
+const CANDIDATE_ACTIVATE_WAIT_MS = 10 * 60_000;
+/** launcher 跟踪当前实例的轮询间隔。 */
+const LAUNCHER_POLL_MS = 2_000;
 
 /**
  * 控制端点：sha256(dataDir + instanceId) 短 hash 命名，避免路径超长与碰撞。
@@ -310,6 +342,19 @@ async function removePidFile(dataDir: string): Promise<void> {
   }
 }
 
+/**
+ * CAS 删除 pid 留档：仅当文件内容仍指向 expected（pid+instanceId）时才删。
+ * 升级/并发场景下 node.pid 可能已被新实例接管：绝不误删他人的留档。
+ * expected 为 undefined（无原记录可校验）时不删，交由 stale 流程处理。
+ */
+async function removePidFileIfMatch(dataDir: string, expected: PidRecord | undefined | null): Promise<boolean> {
+  if (expected === null || expected === undefined) return false;
+  const current = await readPidRecord(dataDir).catch(() => null);
+  if (current === null || current.pid !== expected.pid || current.instanceId !== expected.instanceId) return false;
+  await removePidFile(dataDir);
+  return true;
+}
+
 function isAliveOf(io: NodeCliIo): (pid: number) => boolean {
   return (
     io.isAlive ??
@@ -334,23 +379,35 @@ async function waitForExit(pid: number, timeoutMs: number, isAlive: (pid: number
   return !isAlive(pid);
 }
 
-/** 控制通道响应：ok=true 时含真实 pid/instanceId/state；ok=false 时含 error。 */
+/** 控制通道响应：ok=true 时含真实 pid/instanceId/state；ok=false 时含 error；upgrade 附 result。 */
 interface ControlResponse {
   ok: boolean;
   pid?: number;
   instanceId?: string;
   state?: DaemonReadyState | 'stopping';
+  /** status 响应附带的运行版本（daemon 真实上报，经 getNodeVersion 读取）。 */
+  version?: string;
+  result?: unknown;
   error?: string;
+}
+
+/** 控制通道请求载荷（upgrade 携带升级入参）。 */
+interface ControlRequest {
+  type: 'status' | 'stop' | 'upgrade';
+  instanceId: string;
+  input?: unknown;
 }
 
 /**
  * 控制通道客户端：单连接单请求（一行 JSON 请求、一行 JSON 响应）。
- * 连接失败/超时/响应非法一律返回 null（调用方区分「不可达」与「被拒绝」）。
+ * 连接失败/超时/响应非法一律返回 null（调用方区分「不可达」与「被拒绝」）；
+ * ok 响应附带期望 pid/instanceId 时验证一致性（本机凭据不能误停另一实例）。
  */
 async function controlRequest(
   endpoint: string,
-  request: { type: 'status' | 'stop'; instanceId: string },
+  request: ControlRequest,
   timeoutMs: number = CONTROL_TIMEOUT_MS,
+  expect?: { pid?: number; instanceId?: string },
 ): Promise<ControlResponse | null> {
   return await new Promise((resolve) => {
     let settled = false;
@@ -381,6 +438,12 @@ async function controlRequest(
           finish(null);
           return;
         }
+        // 身份验证：ok 响应必须来自留档指向的同一实例（pid/instanceId 不一致
+        // 视为无效响应——本机凭据不能误操作另一实例）。
+        if (parsed.ok === true && expect !== undefined) {
+          if (expect.pid !== undefined && parsed.pid !== expect.pid) { finish(null); return }
+          if (expect.instanceId !== undefined && parsed.instanceId !== expect.instanceId) { finish(null); return }
+        }
         finish(parsed);
       } catch {
         finish(null);
@@ -390,7 +453,45 @@ async function controlRequest(
   });
 }
 
-/** daemon 侧控制 server：只接受 status/stop；instanceId 不匹配一律拒绝且不影响进程。 */
+/**
+ * 控制通道 upgrade 响应结果校验（边界处 Schema 校验）：必须是含 ok===true、
+ * 布尔 upgraded、非空字符串 previousVersion/targetVersion、正整数 pid（新实例）
+ * 的对象；不合法或 ok:false 抛 UsageError，绝不把非法产物当成功输出。
+ */
+function validateUpgradeResult(
+  raw: unknown,
+): { previousVersion: string; targetVersion: string; upgraded: boolean; pid?: number } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new UsageError('升级响应 result 不是合法对象（拒绝伪造成功，请用 helm-node status 核实实际状态）', 'invalid_upgrade_result');
+  }
+  const record = raw as Record<string, unknown>;
+  if (record['ok'] !== true) {
+    throw new UsageError(
+      `升级响应结果 ok 不为 true（${JSON.stringify(record['ok'] ?? '(缺失)')}，拒绝伪造成功）`,
+      'invalid_upgrade_result',
+    );
+  }
+  if (typeof record['upgraded'] !== 'boolean') {
+    throw new UsageError('升级响应结果缺少布尔 upgraded 字段（拒绝伪造成功）', 'invalid_upgrade_result');
+  }
+  for (const key of ['previousVersion', 'targetVersion'] as const) {
+    if (typeof record[key] !== 'string' || (record[key] as string) === '') {
+      throw new UsageError(`升级响应结果缺少非空字符串 ${key}（拒绝伪造成功）`, 'invalid_upgrade_result');
+    }
+  }
+  const pid = record['pid'];
+  if ((record['upgraded'] || pid !== undefined) && (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0)) {
+    throw new UsageError('升级响应结果缺少新实例正整数 pid（拒绝伪造成功）', 'invalid_upgrade_result');
+  }
+  return {
+    previousVersion: record['previousVersion'] as string,
+    targetVersion: record['targetVersion'] as string,
+    upgraded: record['upgraded'] as boolean,
+    ...(typeof pid === 'number' ? { pid } : {}),
+  };
+}
+
+/** daemon 侧控制 server：只接受 status/stop/upgrade；instanceId 不匹配一律拒绝且不影响进程。 */
 interface ControlServer {
   listening: Promise<void>;
   close(): Promise<void>;
@@ -399,10 +500,14 @@ interface ControlServer {
 function createControlServer(options: {
   endpoint: string;
   instanceId: string;
-  onStatus: () => { pid: number; state: DaemonReadyState };
+  onStatus: () => { pid: number; state: DaemonReadyState; version?: string };
   onStop: () => Promise<void>;
+  /** 升级请求（本机可信源）；返回结果随响应透传，升级在途时拒绝 stop/restart。 */
+  onUpgrade?: (input: unknown) => Promise<unknown>;
+  /** 升级在途探测（busy 时拒绝 stop/restart，旧控制端点继续可用）。 */
+  isUpgrading?: () => boolean;
 }): ControlServer {
-  const { endpoint, instanceId, onStatus, onStop } = options;
+  const { endpoint, instanceId, onStatus, onStop, onUpgrade, isUpgrading } = options;
   const sockets = new Set<net.Socket>();
   let stopping = false;
   let closed = false;
@@ -483,12 +588,17 @@ function createControlServer(options: {
       }
       if (request.type === 'status') {
         const snapshot = onStatus();
-        reply({ ok: true, pid: snapshot.pid, instanceId, state: snapshot.state });
+        reply({ ok: true, pid: snapshot.pid, instanceId, state: snapshot.state, ...(snapshot.version !== undefined ? { version: snapshot.version } : {}) });
         return;
       }
       if (request.type === 'stop') {
         if (stopping) {
           reply({ ok: false, error: 'stopping' });
+          return;
+        }
+        // 升级在途：明确拒绝 stop（候选可能已接管职责），旧控制端点继续可用。
+        if (isUpgrading?.() === true) {
+          reply({ ok: false, error: 'upgrade_in_progress' });
           return;
         }
         stopping = true;
@@ -505,6 +615,32 @@ function createControlServer(options: {
             }).catch(() => undefined);
           }
           await closeSelf();
+        })();
+        return;
+      }
+      if (request.type === 'upgrade') {
+        // 升级预算远大于 idle 超时：受理后先清 idle，长驻到应答完成。
+        if (onUpgrade === undefined) {
+          reply({ ok: false, error: 'upgrade_not_supported' });
+          return;
+        }
+        if (stopping) {
+          reply({ ok: false, error: 'stopping' });
+          return;
+        }
+        clearTimeout(idle);
+        void (async () => {
+          try {
+            const result = await onUpgrade((request as { input?: unknown }).input);
+            await replyAndWait({ ok: true, pid: process.pid, instanceId, state: onStatus().state, result });
+          } catch (error) {
+            await replyAndWait({
+              ok: false,
+              pid: process.pid,
+              instanceId,
+              error: error instanceof Error ? error.message : String(error),
+            }).catch(() => undefined);
+          }
         })();
         return;
       }
@@ -733,11 +869,36 @@ async function readNodeIdentityStrict(dataDir: string): Promise<{ nodeId: string
   return identity;
 }
 
+// 升级交接 IPC（stdio activate/activated 协议与候选拉起）在独立模块，供测试复用。
+import { prepareNodeReplacement } from './daemon/upgrade-handoff.js';
+
 /**
  * 后台启动入口：持 start 锁完成「已有实例验证 → spawn + 就绪确认 → pid 留档」。
  * 已有 pid 先走控制通道验证：活的真守护进程拒绝重复启动；pid 存活但通道不可达
  * （无法证实可安全覆盖）同样拒绝；确已死亡才清理 pid 继续启动。
  */
+/**
+ * 解析后台启动目标：current.json 优先（已升级后必须运行新 release 入口，
+ * 坏 current 显式报错）；无 current 回退固定 launcher（自身入口，不绑任何
+ * release）。同时返回 cliBinDir（有 current 时注入 HELM_CLI_BIN_DIR）。
+ */
+async function resolveDaemonLaunchTarget(
+  dataDir: string,
+  selfEntry: string,
+): Promise<{ entryPath: string; cliBinDir?: string }> {
+  const { readCurrentRelease } = await import('./daemon/upgrader.js');
+  const current = await readCurrentRelease(dataDir);
+  if (current === null) return { entryPath: selfEntry };
+  try {
+    await fsp.access(current.entryPath);
+  } catch {
+    throw new Error(
+      `current.json 指向的入口不存在（${current.entryPath}，version ${current.version}）：升级产物可能已损坏；请修复 current.json 或重新升级，拒绝回退旧入口启动`,
+    );
+  }
+  return { entryPath: current.entryPath, ...(current.cliBinDir !== undefined ? { cliBinDir: current.cliBinDir } : {}) };
+}
+
 async function startDaemon(
   io: NodeCliIo,
   dataDir: string,
@@ -767,12 +928,15 @@ async function startDaemon(
     const instanceId = randomBytes(16).toString('hex');
     const endpoint = controlEndpoint(dataDir, instanceId);
     const spawnDaemon = io.spawnDaemon ?? defaultSpawnDaemon;
-    const args = [cliSelfEntry(), 'start', '--data-dir', dataDir];
+    // current release 优先：已升级后 start 必须拉新入口，不能继续跑旧 launcher。
+    const target = await resolveDaemonLaunchTarget(dataDir, cliSelfEntry());
+    const args = [target.entryPath, 'start', '--data-dir', dataDir];
     if (effectiveHub !== '') args.push('--hub', effectiveHub);
     const { pid, readyState, logPath } = await spawnDaemon({
       nodePath: process.execPath,
       args,
-      execArgv: inheritExecArgv(),
+      // 固定 launcher（自身入口）继承同源编译环境；release 入口是编译产物，不带 loader。
+      execArgv: target.entryPath === cliSelfEntry() ? inheritExecArgv() : [],
       dataDir,
       // 控制标识经 env 传递（spawnDaemon 收到的 env 即子进程完整 env）。
       env: {
@@ -780,6 +944,7 @@ async function startDaemon(
         ...(io.env ?? {}),
         HELM_NODE_INSTANCE_ID: instanceId,
         HELM_NODE_CONTROL_ENDPOINT: endpoint,
+        ...(target.cliBinDir !== undefined ? { HELM_CLI_BIN_DIR: target.cliBinDir } : {}),
       },
       instanceId,
       endpoint,
@@ -788,33 +953,41 @@ async function startDaemon(
     try {
       await writePidRecord(dataDir, { pid, instanceId, endpoint });
     } catch (error) {
-      const stopped = await controlRequest(endpoint, { type: 'stop', instanceId }, CONTROL_STOP_TIMEOUT_MS)
+      const stopped = await controlRequest(endpoint, { type: 'stop', instanceId }, CONTROL_STOP_TIMEOUT_MS, { pid, instanceId })
       if (!stopped?.ok || !(await waitForExit(pid, STOP_EXIT_TIMEOUT_MS, isAlive))) {
         throw new AggregateError([error], `PID 留档失败且后台进程 ${pid} 无法确认停止，需人工诊断`)
       }
+      // 仅当留档仍指向本次实例才删（可能已被其他写入者接管，不误删他人留档）。
+      await removePidFileIfMatch(dataDir, { pid, instanceId, endpoint });
       throw error
     }
     return { pid, logPath, nodeId: identity.nodeId, readyState };
   });
 }
 
-/** 查询后台实例状态：控制通道 OK → 真实运行态；通道不可达 → pid 存活则 unknown，否则 stale。 */
+/** 查询后台实例状态：控制通道 OK → 真实运行态（含 daemon 真实上报版本）；通道不可达 → pid 存活则 unknown，否则 stale。 */
 async function statusDaemon(io: NodeCliIo, dataDir: string): Promise<{
   pid: number | null;
   pidAlive: boolean;
   state?: DaemonReadyState | 'unknown';
   pidStale?: boolean;
+  /** daemon 真实上报的运行版本（仅控制通道可达时有）。 */
+  version?: string;
   detail?: string;
 }> {
   const isAlive = isAliveOf(io);
   const record = await readPidRecord(dataDir);
   if (record === null) return { pid: null, pidAlive: false };
-  const response = await controlRequest(record.endpoint, { type: 'status', instanceId: record.instanceId });
+  const response = await controlRequest(record.endpoint, { type: 'status', instanceId: record.instanceId }, CONTROL_TIMEOUT_MS, {
+    pid: record.pid,
+    instanceId: record.instanceId,
+  });
   if (response !== null && response.ok === true) {
     return {
       pid: record.pid,
       pidAlive: true,
       state: response.state === 'registered' ? 'registered' : 'starting',
+      version: typeof response.version === 'string' && response.version !== '' ? response.version : undefined,
     };
   }
   if (isAlive(record.pid)) {
@@ -839,7 +1012,10 @@ async function stopDaemon(io: NodeCliIo, dataDir: string): Promise<{ outcome: 's
   if (record === null) {
     throw new UsageError(`未找到 pid 文件（${pidPath(dataDir)}）：后台守护进程未在运行`, 'not_running');
   }
-  const response = await controlRequest(record.endpoint, { type: 'stop', instanceId: record.instanceId }, CONTROL_STOP_TIMEOUT_MS);
+  const response = await controlRequest(record.endpoint, { type: 'stop', instanceId: record.instanceId }, CONTROL_STOP_TIMEOUT_MS, {
+    pid: record.pid,
+    instanceId: record.instanceId,
+  });
   if (response === null || response.ok !== true) {
     const reason =
       response === null
@@ -850,7 +1026,8 @@ async function stopDaemon(io: NodeCliIo, dataDir: string): Promise<{ outcome: 's
         `${reason}，且 pid ${record.pid} 仍存活：拒绝向未经身份验证的进程发送信号；pid 文件已保留（${pidPath(dataDir)}）供诊断`,
       );
     }
-    await removePidFile(dataDir);
+    // pid 确已死亡且留档未被新实例接管，才按 stale CAS 清理。
+    await removePidFileIfMatch(dataDir, record);
     return { outcome: 'stale', pid: record.pid };
   }
   // stop 已被接受且完成了执行环境清理：等进程真实退出后才删 pid 文件。
@@ -859,7 +1036,8 @@ async function stopDaemon(io: NodeCliIo, dataDir: string): Promise<{ outcome: 's
       `stop 已被接受但 pid ${record.pid} 在 ${STOP_EXIT_TIMEOUT_MS}ms 内未退出：保留 pid 文件（${pidPath(dataDir)}）供诊断`,
     );
   }
-  await removePidFile(dataDir);
+  // CAS：仅当留档仍指向被停实例时才删（期间可能已被升级/新实例接管）。
+  await removePidFileIfMatch(dataDir, record);
   return { outcome: 'stopped', pid: record.pid };
 }
 
@@ -893,6 +1071,36 @@ function forwardSignals(controller: AbortController): () => void {
  *   → abort → handle.close()（等待执行环境清理）→ 应答 → 关 server 与 socket；
  * - 退出路径 finally 清理全部资源（handle、控制 server、信号监听器）。
  */
+/** 升级候选/普通受控实例的 env 注入解析：返回升级上下文（非候选为 undefined）。 */
+function parseUpgradeHandoffEnv(env: NodeJS.ProcessEnv | undefined):
+  | { attemptId: string; previousVersion?: string; targetVersion?: string }
+  | undefined {
+  const attemptId = env?.['HELM_NODE_UPGRADE_ATTEMPT'];
+  if (attemptId === undefined || attemptId === '') return undefined;
+  const previousVersion = env?.['HELM_NODE_UPGRADE_PREVIOUS_VERSION'];
+  const targetVersion = env?.['HELM_NODE_UPGRADE_TARGET_VERSION'];
+  return {
+    attemptId,
+    ...(previousVersion !== undefined && previousVersion !== '' ? { previousVersion } : {}),
+    ...(targetVersion !== undefined && targetVersion !== '' ? { targetVersion } : {}),
+  };
+}
+
+/** 激活消息边界校验：完整 commit 上下文，字段缺失/类型非法一律拒绝。 */
+function parseActivateMessage(
+  message: unknown,
+): { attemptId: string; version: string; previousVersion: string; pid: number } | undefined {
+  if (typeof message !== 'object' || message === null) return undefined;
+  const record = message as Record<string, unknown>;
+  if (record['type'] !== 'helm-node.activate') return undefined;
+  const { attemptId, version, previousVersion, pid } = record;
+  if (typeof attemptId !== 'string' || attemptId === '') return undefined;
+  if (typeof version !== 'string' || version === '') return undefined;
+  if (typeof previousVersion !== 'string' || previousVersion === '') return undefined;
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined;
+  return { attemptId, version, previousVersion, pid };
+}
+
 async function runDaemonProcess(options: {
   io: NodeCliIo;
   parsed: ParsedCli;
@@ -910,20 +1118,169 @@ async function runDaemonProcess(options: {
   let handle: Handle | undefined;
   let stopFailure: string | undefined;
 
+  // 升级候选模式：真实 registered 后保持 stdio IPC 等 activate；父断开/超时退出。
+  const handoff = parseUpgradeHandoffEnv(io.env);
+  const pendingActivation = io.env?.['HELM_NODE_PENDING_ACTIVATION'] === '1' && handoff !== undefined;
+
+  let upgradeReplaced = false;
+
+  /** 就绪上报（受控实例向父进程；候选保持 IPC 等 activate 不 disconnect）。 */
+  const reportReady = (state: DaemonReadyState): void => {
+    if (control === undefined || process.send === undefined) return;
+    try {
+      process.send({
+        type: 'helm-node.ready',
+        pid: process.pid,
+        instanceId: control.instanceId,
+        state,
+      } satisfies { type: 'helm-node.ready'; pid: number; instanceId: string; state: DaemonReadyState });
+    } catch {
+      // 父侧 channel 已关闭：普通受控实例忽略（守护进程继续存活重连）。
+    }
+    if (!pendingActivation) {
+      try {
+        if (process.connected && process.disconnect !== undefined) process.disconnect();
+      } catch {
+        // 已断开。
+      }
+    }
+  };
+
+  /** 候选等 activate：父断开/超时退出；收到后 confirmUpgrade 回 activated 并脱离父 IPC。 */
+  const awaitActivate = (): Promise<void> =>
+    new Promise((resolve, reject) => {
+      const fail = (reason: string): void => {
+        cleanup();
+        reject(new Error(`候选等待激活失败：${reason}（未激活即退出，不向 Hub 伪装已提交）`));
+      };
+      const onMessage = (message: unknown): void => {
+        const activate = parseActivateMessage(message);
+        if (activate === undefined) return;
+        if (activate.pid !== process.pid || (handoff?.attemptId !== undefined && activate.attemptId !== handoff.attemptId)) {
+          void (async () => {
+            try {
+              process.send?.({ type: 'helm-node.activate-rejected', attemptId: activate.attemptId, reason: 'activate 上下文与本进程不一致' });
+            } catch {
+              // 父侧已断开。
+            }
+          })();
+          return;
+        }
+        // 升级上下文核对：activate 携带的 previousVersion/version 必须与候选启动
+        // env 注入的本次升级上下文完全一致，不一致绝不 confirmUpgrade。
+        if (
+          handoff?.previousVersion === undefined ||
+          handoff?.targetVersion === undefined ||
+          activate.previousVersion !== handoff.previousVersion ||
+          activate.version !== handoff.targetVersion
+        ) {
+          cleanup();
+          void (async () => {
+            try {
+              process.send?.({
+                type: 'helm-node.activate-rejected',
+                attemptId: activate.attemptId,
+                reason: `升级上下文不一致：activate previousVersion=${activate.previousVersion} version=${activate.version}，候选 env previousVersion=${handoff?.previousVersion ?? '(缺失)'} targetVersion=${handoff?.targetVersion ?? '(缺失)'}`,
+              });
+            } catch {
+              // 父侧已断开。
+            }
+            controller.abort(); // 上下文不匹配：不提交，候选退出交父侧安全回滚
+          })();
+          resolve();
+          return;
+        }
+        cleanup();
+        void (async () => {
+          try {
+            if (handle !== undefined) {
+              await handle.confirmUpgrade({
+                attemptId: activate.attemptId,
+                version: activate.version,
+                previousVersion: activate.previousVersion,
+                pid: activate.pid,
+              });
+            }
+            try {
+              process.send?.({ type: 'helm-node.activated', attemptId: activate.attemptId });
+            } catch {
+              // 父侧 ACK 丢失：本机已激活，候选继续存活（幂等重试 Hub commit）。
+            }
+            // 脱离父 IPC：激活后父退出不影响候选。
+            try {
+              if (process.connected && process.disconnect !== undefined) process.disconnect();
+            } catch {
+              // 已断开。
+            }
+          } catch (error) {
+            try {
+              process.send?.({
+                type: 'helm-node.activate-rejected',
+                attemptId: activate.attemptId,
+                reason: error instanceof Error ? error.message : String(error),
+              });
+            } catch {
+              // 父侧已断开。
+            }
+            controller.abort(); // confirmUpgrade 失败：候选自行退出，父侧安全回滚
+          }
+        })();
+        resolve();
+      };
+      const onDisconnect = (): void => fail('父 IPC 通道断开');
+      const timer = setTimeout(() => fail(`等待 activate 超时（${CANDIDATE_ACTIVATE_WAIT_MS}ms）`), CANDIDATE_ACTIVATE_WAIT_MS);
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        process.removeListener('message', onMessage);
+        process.removeListener('disconnect', onDisconnect);
+      };
+      process.on('message', onMessage);
+      process.on('disconnect', onDisconnect);
+    });
+
   let controlServer: ControlServer | undefined;
   if (control !== undefined) {
+    // 真实运行版本：daemon 本机 getNodeVersion() 读取（current.json 优先），
+    // 供控制通道 status 响应透出（CLI status 据此优先于本地 current.json）。
+    const getNodeVersionLocal = async (): Promise<string | undefined> => {
+      try {
+        const { getNodeVersion } = await import('./daemon/upgrader.js');
+        return getNodeVersion();
+      } catch {
+        return undefined;
+      }
+    };
+    let reportedVersion: string | undefined;
     controlServer = createControlServer({
       endpoint: control.endpoint,
       instanceId: control.instanceId,
       onStatus: () => ({
         pid: process.pid,
         state: handle !== undefined && handle.isConnected() ? 'registered' : 'starting',
+        ...(reportedVersion !== undefined ? { version: reportedVersion } : {}),
       }),
       onStop: async () => {
         controller.abort();
         if (handle !== undefined) await handle.close();
       },
+      // 升级请求（本机可信源）：转发 handle.upgrade；响应附 pid/instanceId/result。
+      onUpgrade: (input) => {
+        const current = handle;
+        if (current === undefined) return Promise.reject(new Error('daemon 未就绪，拒绝升级请求'));
+        const record = (input ?? {}) as Record<string, unknown>;
+        return current.upgrade(
+          {
+            ...(typeof record['targetVersion'] === 'string' ? { targetVersion: record['targetVersion'] } : {}),
+            ...(typeof record['registryUrl'] === 'string' ? { registryUrl: record['registryUrl'] } : {}),
+            ...(record['force'] === true ? { force: true } : {}),
+          },
+          true,
+        );
+      },
+      isUpgrading: () => handle?.isUpgrading() === true || upgradeReplaced,
     });
+    // 监听前预取版本一次（status 响应同步读取，避免每请求动态 import）。
+    reportedVersion = await getNodeVersionLocal();
     try {
       await controlServer.listening;
     } catch (error) {
@@ -938,33 +1295,51 @@ async function runDaemonProcess(options: {
     io.out(`helm-node 连接中 ${hubUrl}（nodeId=${nodeId}）；注册完成后开始工作，Ctrl+C 退出\n`);
   }
   try {
-    handle = await runNodeDaemonHandle({ hubUrl, token }, { dataDir });
+    handle = await runNodeDaemonHandle(
+      { hubUrl, token },
+      {
+        dataDir,
+        // 受控实例才接入升级交接（前台 connect 无 prepare 时升级 unsupported）。
+        ...(control !== undefined
+          ? {
+              prepareUpgradeReplacement: (release, context) =>
+                prepareNodeReplacement(release, context, {
+                  dataDir,
+                  hubUrl,
+                  logPath: logPathOf(dataDir),
+                  controlEndpoint,
+                  readPidRecord: () => readPidRecord(dataDir),
+                  writePidRecord: (record) => writePidRecord(dataDir, record),
+                  removePidFile: () => removePidFile(dataDir),
+                }),
+              onUpgradeReplaced: (pid) => {
+                upgradeReplaced = true;
+                // 延迟退出：给升级响应冲刷留余量，之后旧 daemon 优雅让位。
+                setTimeout(() => controller.abort(), UPGRADE_EXIT_DELAY_MS).unref?.();
+              },
+            }
+          : {}),
+        ...(handoff !== undefined ? { upgradeAttemptId: handoff.attemptId } : {}),
+        ...(pendingActivation ? { pendingActivation: true } : {}),
+      },
+    );
     const registered = await handle.waitUntilRegistered(10_000);
     if (control !== undefined) {
       // 就绪上报：父进程据此写 pid 留档；父已退出时忽略（守护进程继续存活重连）。
-      if (process.send !== undefined) {
-        try {
-          process.send({
-            type: 'helm-node.ready',
-            pid: process.pid,
-            instanceId: control.instanceId,
-            state: registered ? 'registered' : 'starting',
-          } satisfies { type: 'helm-node.ready'; pid: number; instanceId: string; state: DaemonReadyState });
-        } catch {
-          // 父侧 channel 已关闭。
-        }
-        try {
-          if (process.connected) process.disconnect();
-        } catch {
-          // 已断开。
-        }
-      }
+      reportReady(registered ? 'registered' : 'starting');
     } else if (!parsed.json) {
       io.out(
         registered
           ? `已注册并开始工作（${hubUrl}）\n`
           : '尚未完成注册（Hub 暂不可达时守护进程将持续退避重连），诊断见 stderr 日志\n',
       );
+    }
+    if (pendingActivation) {
+      // 候选：starting 不可提交——如实退出（父侧按启动失败回滚），绝不伪装就绪。
+      if (!registered) {
+        throw new Error('升级候选未完成真实注册（starting），拒绝进入待激活等待');
+      }
+      await awaitActivate();
     }
     await new Promise<void>((resolve) => {
       if (controller.signal.aborted) {
@@ -978,6 +1353,8 @@ async function runDaemonProcess(options: {
       try {
         await handle.close();
       } catch (error) {
+        // 候选已激活后的 close 异常不影响已提交流程（Hub commit 幂等重试），
+        // 但不吞错：如实记录为失败退出码，供诊断。
         stopFailure = error instanceof Error ? error.message : String(error);
       }
     }
@@ -985,6 +1362,108 @@ async function runDaemonProcess(options: {
     detachSignals();
   }
   return stopFailure === undefined ? 0 : 1;
+}
+
+/**
+ * 前台稳定 launcher（无控制 env 的 start，systemd/launchd 主进程）：
+ * - 调用 startDaemon 拉起受控后台子进程，自身保持存活；
+ * - 周期通过 node.pid + 控制通道验证跟踪当前实例：升级换 pid 后自动跟踪
+ *   新 daemon（新进程由旧 daemon 经升级交接拉起并改写 pid 留档）；
+ * - SIGTERM/INT 经控制通道停止当前实例（验证 pid/instanceId 一致）后退出，
+ *   绝不向未经身份验证的进程发信号；
+ * - 内部带控制 env 的 start（受控 daemon 本体）直接 runDaemonProcess，
+ *   避免递归拉孙进程。
+ */
+async function runForegroundLauncher(io: NodeCliIo, parsed: ParsedCli, dataDir: string, effectiveHub: string): Promise<number> {
+  const isAlive = isAliveOf(io);
+  const started = await startDaemon(io, dataDir, effectiveHub);
+  if (!parsed.json) {
+    io.out(
+      `helm-node launcher：守护进程 pid ${started.pid}（nodeId=${started.nodeId}）；launcher 保持存活跟踪，Ctrl+C 停止\n`,
+    );
+  }
+  let shuttingDown = false;
+  let stopError: string | undefined;
+  /** 关闭链 promise：信号触发后启动，返回前必须 await 落定（不让 systemd 早退）。 */
+  let shutdownPromise: Promise<void> | undefined;
+  const shutdown = (reason: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    shutdownPromise = (async () => {
+      try {
+        // 跟踪当前实例：升级后 node.pid 已指向新 daemon（旧 daemon 已退出）。
+        const record = await readPidRecord(dataDir);
+        if (record !== null && isAlive(record.pid)) {
+          const response = await controlRequest(
+            record.endpoint,
+            { type: 'stop', instanceId: record.instanceId },
+            CONTROL_STOP_TIMEOUT_MS,
+            { pid: record.pid, instanceId: record.instanceId },
+          );
+          if (response === null || response.ok !== true) {
+            stopError = `launcher 收到 ${reason}，但停止守护进程失败（pid ${record.pid}，endpoint ${record.endpoint}）：${
+              response === null ? '控制通道不可达' : response.error ?? 'unknown'
+            }；守护进程继续运行，可用 helm-node stop 停止`;
+            return;
+          }
+          // 等 stop 结果落定：daemon 真实退出且 pid 留档被 CAS 清理后才返回。
+          if (!(await waitForExit(record.pid, STOP_EXIT_TIMEOUT_MS, isAlive))) {
+            stopError = `launcher 收到 ${reason}，但 pid ${record.pid} 在 ${STOP_EXIT_TIMEOUT_MS}ms 内未退出；pid 文件保留供诊断`;
+            return;
+          }
+          await removePidFileIfMatch(dataDir, record);
+        }
+      } catch (error) {
+        stopError = `launcher 关闭异常：${error instanceof Error ? error.message : String(error)}`;
+      }
+    })();
+  };
+  const onSigint = (): void => shutdown('SIGINT');
+  const onSigterm = (): void => shutdown('SIGTERM');
+  process.once('SIGINT', onSigint);
+  process.once('SIGTERM', onSigterm);
+
+  // 跟踪循环：留档消失或长期不可验证时如实退出（服务管理器会重启诊断）。
+  for (;;) {
+    if (shuttingDown) break;
+    let record: Awaited<ReturnType<typeof readPidRecord>>;
+    try {
+      record = await readPidRecord(dataDir);
+    } catch (error) {
+      stopError = `launcher 读 pid 留档失败：${error instanceof Error ? error.message : String(error)}`;
+      shuttingDown = true;
+      break;
+    }
+    if (record === null) {
+      // 守护进程已停（stop 后 pid 文件被删）：launcher 任务完成退出。
+      shuttingDown = true;
+      break;
+    }
+    if (!isAlive(record.pid)) {
+      const response = await controlRequest(
+        record.endpoint,
+        { type: 'status', instanceId: record.instanceId },
+        CONTROL_TIMEOUT_MS,
+        { pid: record.pid, instanceId: record.instanceId },
+      ).catch(() => null);
+      if (response !== null && response.ok === true) {
+        // pid 复用罕见窗口：留档一致且控制端点验证通过，继续跟踪。
+      } else {
+        stopError = `守护进程 pid ${record.pid} 已退出且控制通道不可验证；launcher 退出（可用 helm-node start 重启）`;
+        shuttingDown = true;
+        break;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, LAUNCHER_POLL_MS));
+  }
+  // 信号监听器清理（finally 语义）；信号触发的关闭链必须 await 落定后才返回
+  // （stop 结果确认、pid CAS 清理完成，不让 systemd 在 daemon 退出前早退）；
+  // 循环自退路径（留档消失/不可验证）无需停止实例，直接返回。
+  process.removeListener('SIGINT', onSigint);
+  process.removeListener('SIGTERM', onSigterm);
+  if (shutdownPromise !== undefined) await shutdownPromise;
+  if (stopError !== undefined && !parsed.json) io.err(`error: ${stopError}\n`);
+  return stopError === undefined ? 0 : 1;
 }
 
 export async function runNodeCli(argv: readonly string[] = [], ioInput: Partial<NodeCliIo> = {}): Promise<number> {
@@ -1070,30 +1549,39 @@ export async function runNodeCli(argv: readonly string[] = [], ioInput: Partial<
           emit({ ok: true, pid, dataDir, hubUrl: effectiveHub, nodeId, logPath, state: readyState, message });
           return 0;
         }
-        // 前台 start：等价 connect（token 可选：缺省用既有身份；均缺才报错）。
-        // 受控后台：由 start -d 父进程注入 HELM_NODE_INSTANCE_ID / HELM_NODE_CONTROL_ENDPOINT。
+        // 前台 start：受控后台（由 start -d / 升级交接父进程注入
+        // HELM_NODE_INSTANCE_ID / HELM_NODE_CONTROL_ENDPOINT）直接运行 daemon；
+        // 无控制 env 的纯前台（systemd/launchd 主进程）成为稳定 launcher。
         const instanceId = io.env?.['HELM_NODE_INSTANCE_ID'];
         const endpoint = io.env?.['HELM_NODE_CONTROL_ENDPOINT'];
-        const identity = await readNodeIdentity(dataDir);
-        const effectiveToken = token ?? identity?.token;
-        const effectiveHub = hubUrl !== '' ? hubUrl : identity?.hubUrl ?? '';
-        if (effectiveToken === undefined || effectiveHub === '') {
-          throw new UsageError(
-            'start 前台运行需要既绑定的身份或 --token + --hub；或使用 start -d 后台启动',
-            'missing_identity',
-          );
+        if (instanceId !== undefined && instanceId !== '' && endpoint !== undefined && endpoint !== '') {
+          const identity = await readNodeIdentity(dataDir);
+          const effectiveToken = token ?? identity?.token;
+          const effectiveHub = hubUrl !== '' ? hubUrl : identity?.hubUrl ?? '';
+          if (effectiveToken === undefined || effectiveHub === '') {
+            throw new UsageError(
+              'start 受控运行需要既绑定的身份或 --token + --hub；或使用 start -d 后台启动',
+              'missing_identity',
+            );
+          }
+          return await runDaemonProcess({
+            io,
+            parsed,
+            dataDir,
+            hubUrl: effectiveHub,
+            token: effectiveToken,
+            nodeId: identity?.nodeId ?? '?',
+            control: { instanceId, endpoint },
+          });
         }
-        return await runDaemonProcess({
-          io,
-          parsed,
-          dataDir,
-          hubUrl: effectiveHub,
-          token: effectiveToken,
-          nodeId: identity?.nodeId ?? '?',
-          ...(instanceId !== undefined && instanceId !== '' && endpoint !== undefined && endpoint !== ''
-            ? { control: { instanceId, endpoint } }
-            : {}),
-        });
+        // 稳定 launcher：拉起受控 daemon 并跟踪当前实例，升级换 pid 自动跟随。
+        if (token !== undefined && hubUrl !== '') {
+          await bindIdentityFromJoinToken(dataDir, token, hubUrl);
+        }
+        const launcherIdentity = await readNodeIdentityStrict(dataDir);
+        const launcherHub = hubUrl !== '' ? hubUrl : launcherIdentity.hubUrl ?? '';
+        if (launcherHub === '') throw new UsageError('launcher 启动需要 Hub 地址（--hub 或既绑定的 hubUrl）', 'missing_hub_url');
+        return await runForegroundLauncher(io, parsed, dataDir, launcherHub);
       }
       case 'stop': {
         const stopped = await stopDaemon(io, dataDir);
@@ -1128,15 +1616,73 @@ export async function runNodeCli(argv: readonly string[] = [], ioInput: Partial<
       case 'status': {
         const identity = await readNodeIdentity(dataDir);
         const daemon = await statusDaemon(io, dataDir);
+        // 真实运行版本优先级：daemon 控制通道上报（真实进程 getNodeVersion）
+        // → 本地 current.json（已选择版本）→ 自身包版本（无 live 实例时的兑底）。
+        const { resolveEffectiveNodeVersion } = await import('./daemon/upgrader.js');
+        const version = daemon.version ?? (await resolveEffectiveNodeVersion(dataDir));
         emit({
           bound: identity !== null,
           ...(identity !== null ? { nodeId: identity.nodeId, hubUrl: identity.hubUrl ?? null } : {}),
           dataDir,
+          version,
           pid: daemon.pid,
           pidAlive: daemon.pidAlive,
           ...(daemon.state !== undefined ? { state: daemon.state } : {}),
           ...(daemon.pidStale === true ? { pidStale: true } : {}),
           ...(daemon.detail !== undefined ? { detail: daemon.detail } : {}),
+        });
+        return 0;
+      }
+      case 'upgrade': {
+        const registryUrl = flagString(parsed, 'registry');
+        const targetVersion = flagString(parsed, 'version');
+        const check = parsed.flags.get('check') === true;
+        const force = parsed.flags.get('force') === true;
+        // --check 纯查询：直接读引擎，不启动 daemon、不升级。
+        if (check) {
+          const { checkNodeUpgrade } = await import('./daemon/upgrader.js');
+          const result = await checkNodeUpgrade(dataDir, {
+            ...(registryUrl !== undefined ? { registryUrl } : {}),
+          });
+          emit({ ok: true, ...result, dataDir });
+          return 0;
+        }
+        // 执行升级：需要既有受管 daemon（不假称离线已升级）。
+        const record = await readPidRecord(dataDir);
+        if (record === null) {
+          throw new UsageError(
+            '执行升级需要受管守护进程在运行：请先 helm-node start -d（离线状态无法升级，不伪造成功）',
+            'not_running',
+          );
+        }
+        const input = {
+          ...(targetVersion !== undefined ? { targetVersion } : {}),
+          ...(registryUrl !== undefined ? { registryUrl } : {}),
+          ...(force ? { force: true } : {}),
+        };
+        const response = await controlRequest(
+          record.endpoint,
+          { type: 'upgrade', instanceId: record.instanceId, input },
+          CONTROL_UPGRADE_TIMEOUT_MS,
+          { pid: record.pid, instanceId: record.instanceId },
+        );
+        if (response === null) {
+          throw new Error(
+            `升级请求失败：控制通道不可达或响应无效（endpoint ${record.endpoint}，升级中 daemon 可能已让位；请用 helm-node status 确认当前实例后重试）`,
+          );
+        }
+        if (response.ok !== true) {
+          throw new Error(`升级被拒（${response.error ?? 'unknown'}）；若为 upgrade_in_progress 请等待当前升级完成`);
+        }
+        // 边界校验：upgrade 响应必须是合法的升级结果对象（ok===true、upgraded
+        // 布尔、version 字段完整），不合法不输出伪造成功（诚实性纪律）。
+        const result = validateUpgradeResult(response.result);
+        const sourcePid = record.pid; // 旧源 pid（仅展示参考，不覆盖新实例 pid）
+        emit({
+          ok: true,
+          ...result,
+          previousPid: sourcePid,
+          dataDir,
         });
         return 0;
       }

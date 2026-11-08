@@ -354,7 +354,7 @@ export function conversationsCommands(): CommandSpec[] {
     description: '向会话提交输入（POST /api/conversations/:id/input；--wait 等待本次回答）',
     flags: [
       ...convFlags,
-      enumFlag('when-busy', WHEN_BUSY, '会话正忙时策略'),
+      enumFlag('when-busy', WHEN_BUSY, '会话正忙时策略，默认 steer'),
       enumFlag('origin', ORIGINS, '输入来源，默认 human'),
       { name: 'meta', type: 'json', help: '自由元数据 JSON 对象（随输入传递到 turn_settled）' },
       { name: 'attach', type: 'string', help: '挂载产物 ID（多个用逗号分隔）' },

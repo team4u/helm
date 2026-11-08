@@ -194,12 +194,13 @@ function WorkflowRunCard({ run }: { run: WorkflowRunSummary }) {
                       type="button"
                       className="btn btn-ghost btn-sm"
                       title={`在右屏分屏打开子会话 #${node.conversationId}`}
-                      onClick={() =>
+                      onClick={() => {
                         store.openTarget(
                           { kind: 'conversation', conversationId: node.conversationId! },
                           { split: true },
                         )
-                      }
+                        maybeCollapseWorkbench(store)
+                      }}
                     >
                       <HelmIcon name="panel-right" size={11} />
                       #{node.conversationId}
@@ -232,6 +233,12 @@ function WorkflowRunCard({ run }: { run: WorkflowRunSummary }) {
   )
 }
 
+/** 窄屏抽屉覆盖模式（<=1200px）下点击导航类按钮后自动收起抽屉，避免遮挡背后视图。 */
+function maybeCollapseWorkbench(store: { setWorkbenchOpen: (open: boolean) => void }): void {
+  if (typeof window === 'undefined' || !window.matchMedia) return
+  if (window.matchMedia('(max-width: 1200px)').matches) store.setWorkbenchOpen(false)
+}
+
 function WorkflowInspector({ conversationId }: { conversationId: number }) {
   const store = useHelmStore()
   const runs = useMemo(
@@ -243,7 +250,16 @@ function WorkflowInspector({ conversationId }: { conversationId: number }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
       {children.length > 0 && <div className="list">{children.map((child) => <div className="row" key={child.id}>
         <span><strong>#{child.id}</strong> {child.title}</span>
-        <button className="btn btn-sm" onClick={() => store.openTarget(`conversation:${child.id}`, { split: true })}>并排查看</button>
+        <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}>
+          <button className="btn btn-sm" title="在主屏打开该子会话" onClick={() => {
+            store.openTarget({ kind: 'conversation', conversationId: child.id })
+            maybeCollapseWorkbench(store)
+          }}>打开</button>
+          <button className="btn btn-sm" title="在分屏并排打开该子会话" onClick={() => {
+            store.openTarget({ kind: 'conversation', conversationId: child.id }, { split: true })
+            maybeCollapseWorkbench(store)
+          }}>并排查看</button>
+        </span>
       </div>)}</div>}
       {runs.length === 0 && children.length === 0 && <p style={{ color: 'var(--fg-muted)' }}>当前会话暂无工作流或子代理。</p>}
       {runs.map((run) => (

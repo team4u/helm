@@ -3,8 +3,8 @@
  * Profile 形状以 @helm/protocol 为准（id 必填，name/model/runtime/tags 可选）；
  * model 为空串或缺省表示「未配置」，由 runtime 显式报错，服务层不伪造默认模型。
  */
-import { lstat, readdir, realpath, rm } from 'node:fs/promises'
-import { join, sep } from 'node:path'
+import { lstat, mkdir, readdir, realpath, rm } from 'node:fs/promises'
+import { dirname, join, relative, sep } from 'node:path'
 import { HelmError, type Profile, type SkillSummary } from '@helm/protocol'
 import { isValidEnvName } from './secret-stash.js'
 
@@ -31,10 +31,20 @@ const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhi
  * 强制；assistant 插件注入侧另有截断 + 显式说明兜底（存量外部手改文件）。
  */
 export const MAX_MEMORY_CHARS = 64_000
-const SYSTEM_DEFAULT = [
+/**
+ * Layer 0 常驻系统提示（三层渐进式披露的最顶层）：只声明身份与受管 helm
+ * CLI 环境直觉；命令表、生成式 UI 组件字典等工作细节下沉 Layer 1/2
+ *（skills/helm-cli），详细手册不常驻（目录描述仍有少量成本）。
+ */
+export const SYSTEM_DEFAULT = [
   '# System Prompt',
   '',
-  '在此编写该 Profile 的系统提示词（SYSTEM.md）。',
+  '你是运行在 Helm 微内核上的个人助理。',
+  '',
+  '1. 受管 bash 已提供 `helm` CLI 与会话身份 `HELM_CONVERSATION_ID`，可用 `--current` 与 `--json` 调用。',
+  '2. 操作 Helm 或回答宿主能力问题前，先 `load_skill({ skillId: "helm-cli" })` 并按需读取 references，通过命令帮助与实际状态核实能力。',
+  '3. 普通回复用 Markdown；需要交互展示时再读取 UI 手册。',
+  '4. 用 `update_memory` 保存稳定的用户偏好与约定。',
   '',
 ].join('\n')
 const MEMORY_DEFAULT = ['# Memory', '', ''].join('\n')
@@ -377,6 +387,13 @@ export function assertSkillId(id: string): void {
   }
 }
 
+/** 内置插件自举的技能包资产：SKILL.md + references 子文件内容。 */
+export interface BuiltinSkillAsset {
+  id: string
+  skillMd: string
+  references: Record<string, string>
+}
+
 /**
  * 校验技能包内相对路径：禁止绝对路径、`..` 段、反斜杠、控制字符与空段。
  * 允许 `SKILL.md` 与 `references/...` 形式的嵌套相对路径。
@@ -510,6 +527,51 @@ export class SkillService {
     await atomicWriteFile(target, content)
   }
 
+  /**
+   * 内置插件技能自举：逐文件幂等补齐 skills/<id>/SKILL.md 与 references/*.md。
+   *
+   * 幂等铁律：已存在的常规文件（含用户自定义修改）一律逐字节保留，绝不
+   * 覆盖；仅缺失的文件才写入。全部 reference 路径先校验后落盘（非法资产
+   * 不产生任何部分文件）；写入前逐层确认 skills/<id>、references 与嵌套
+   * reference 目录均非符号链接，skills 根与 readFile 同经 realpath 解析
+   *（根软链可接受）；已有目标必须是常规文件（目录冒充即拒绝）；
+   * ENOENT 之外的错误如实上抛。
+   */
+  async ensureSkill(asset: BuiltinSkillAsset): Promise<void> {
+    assertSkillId(asset.id)
+    // 边界先行：任何非法 reference 都在任何目录创建/文件写入之前整体拒绝。
+    const references = Object.entries(asset.references).map(([name, content]) => ({
+      rel: assertSafeRelativePath(`references/${name}`),
+      content,
+    }))
+    const skillsRoot = join(this.dataDir, 'skills')
+    // skills 根不存在时补建（首次自举）；悬空软链 realpath 得 ENOENT 而
+    // mkdir 撞 EEXIST，如实上抛，不静默绕过。
+    let rootReal: string
+    try {
+      rootReal = await realpath(skillsRoot)
+    } catch (err) {
+      if ((err as { code?: string }).code !== 'ENOENT') throw err
+      await mkdir(skillsRoot, { recursive: true })
+      rootReal = await realpath(skillsRoot)
+    }
+    const dir = join(rootReal, asset.id)
+    // 建目录前逐层确认 skills/<id>、references 与嵌套目录不含软链（防向
+    // skills 根之外写入）；段缺失即待创建，其下不可能再有内容。
+    await assertRealDirs(rootReal, join(dir, 'references'))
+    for (const { rel } of references) {
+      await assertRealDirs(rootReal, dirname(join(dir, rel)))
+    }
+    await mkdir(join(dir, 'references'), { recursive: true })
+    for (const { rel } of references) {
+      await mkdir(dirname(join(dir, rel)), { recursive: true })
+    }
+    await writeIfMissing(join(dir, 'SKILL.md'), asset.skillMd)
+    for (const { rel, content } of references) {
+      await writeIfMissing(join(dir, rel), content)
+    }
+  }
+
   /** 解析 skills 根的真实路径（不存在时抛错，绝不宽放）。 */
   private async requireSkillsRoot(): Promise<string> {
     const skillsRoot = join(this.dataDir, 'skills')
@@ -539,6 +601,46 @@ export class SkillService {
       ...(managedByPlugin !== undefined ? { managedByPlugin } : {}),
       references,
     }
+  }
+}
+
+/**
+ * 逐层确认 ancestor 之下至 dir 的每个已存在段均为真实目录（非符号链接）；
+ * 段缺失即其后不可能存在，视为待创建并停止。防止 skills/<id> 或
+ * references（含嵌套子目录）为软链时把自举资产写到 skills 根之外。
+ */
+async function assertRealDirs(ancestor: string, dir: string): Promise<void> {
+  let current = ancestor
+  for (const seg of relative(ancestor, dir).split(sep)) {
+    if (seg === '') continue
+    current = join(current, seg)
+    const st = await lstat(current).catch((err: unknown) => {
+      if ((err as { code?: string }).code === 'ENOENT') return undefined
+      throw err
+    })
+    if (st === undefined) return
+    if (st.isSymbolicLink()) {
+      throw new Error(`拒绝经符号链接目录写入: ${current}`)
+    }
+    if (!st.isDirectory()) {
+      throw new Error(`路径段不是目录，拒绝自举: ${current}`)
+    }
+  }
+}
+
+/** 仅当目标缺失（ENOENT）时原子写入；已存在必须是常规文件（软链/目录均拒绝，
+ * 已有常规文件逐字节保留——幂等铁律），其他 IO 错误如实上抛。 */
+async function writeIfMissing(path: string, content: string): Promise<void> {
+  const existing = await lstat(path).catch((err: unknown) => {
+    if ((err as { code?: string }).code === 'ENOENT') return undefined
+    throw err
+  })
+  if (existing === undefined) {
+    await atomicWriteFile(path, content)
+    return
+  }
+  if (!existing.isFile()) {
+    throw new Error(`目标已存在且不是常规文件，拒绝写入: ${path}`)
   }
 }
 

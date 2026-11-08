@@ -67,26 +67,42 @@ test('App.tsx 在 Modal 激活或底栏工具触发时自动关闭移动端侧�
   )
 })
 
-test('Sidebar.tsx 新建对话下拉菜单支持触摸并安全展开，不误关抽屉', { timeout: 60_000 }, () => {
+test('Sidebar.tsx 智能体站位结构取代旧新建下拉：站位新建入口与移动端安全关闭', { timeout: 60_000 }, () => {
+  // 旧 NewConversationControl（+▾ 选 Profile 下拉）与「我的对话」大杂烩分组已移除。
+  assert.doesNotMatch(
+    sidebarSource,
+    /NewConversationControl|new-conversation-dropdown/,
+    '不得保留旧的新建对话下拉控制',
+  )
+  assert.doesNotMatch(sidebarSource, /MyConversationsGroup|我的对话/)
+  // 新：Agent 站位 + 新建对话按钮（agent-new-conv-btn）。
   assert.match(
     sidebarSource,
-    /<NewConversationControl\s+store=\{store\}\s+onNavigate=\{onClose\}\s*\/>/,
-    'Sidebar 必须将 onClose 传递给 NewConversationControl 作为导航后关闭回调',
+    /<AgentStandingsGroup\s+store=\{store\}\s+onNavigate=\{onClose\}\s*\/>/,
+    'Sidebar 必须将 onClose 传递给 AgentStandingsGroup 作为导航后关闭回调',
   )
   assert.match(
     sidebarSource,
-    /className=["'][^"']*new-conversation-dropdown-toggle[^"']*["']/,
-    'NewConversationControl 下拉展开按钮必须具备专用标识类名',
+    /className=["'][^"']*agent-new-conv-btn[^"']*["']/,
+    'Agent 站位新建对话按钮必须具备专用标识类名',
   )
   assert.match(
     sidebarSource,
-    /className=["'][^"']*new-conversation-dropdown[^"']*["']/,
-    'NewConversationControl 弹出菜单必须具备 new-conversation-dropdown 类名',
+    /agent-conversations-list/,
+    'Agent 名下二级历史会话子列表必须具备 agent-conversations-list 类名',
+  )
+})
+
+test('Sidebar.tsx 点击 Agent 站位主区域在移动端导航后关闭抽屉', { timeout: 60_000 }, () => {
+  assert.match(
+    sidebarSource,
+    /onNavigate\?\.\(\)/,
+    'Agent 站位打开主会话后必须调用 onNavigate 关闭移动端抽屉',
   )
   assert.match(
     sidebarSource,
-    /pointerdown/,
-    'NewConversationControl 必须使用 pointerdown 事件监听以适配移动端触控',
+    /nav-item/,
+    '侧栏导航项保留 nav-item 结构供 App.tsx 点击关闭抽屉',
   )
 })
 
@@ -165,9 +181,52 @@ test('responsive.css 适配移动端视口安全区、触控热区与遮罩层�
     /\.sidebar-open\s+\.sidebar-backdrop\s*\{[^}]*z-index:\s*71;[^}]*background:\s*var\(--bg-backdrop\);/,
     '.sidebar-backdrop 必须在侧栏展开时覆盖且 z-index: 71',
   )
+})
+
+const conversationPaneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
+
+test('ConversationPane.tsx 分屏顶栏：isSplit 时渲染显式关闭按钮，激活态分屏按钮可关闭', { timeout: 60_000 }, () => {
+  // isSplit 分屏顶栏必须有显式关闭按钮（split-close-btn），移动端不隐藏
+  assert.match(
+    conversationPaneSource,
+    /isSplit\s*\?\s*\(\s*<button[\s\S]*?className=["'][^"']*split-close-btn[^"']*["'][\s\S]*?onClick=\{\(\)\s*=>\s*onCloseSplit\?\.\(\)\}/,
+    'ConversationPane 必须在 isSplit 顶栏渲染 split-close-btn 显式关闭按钮',
+  )
+  // 主屏顶栏：分屏开启时按钮带 split-active 激活态类（窄屏保留可见可点）
+  assert.match(
+    conversationPaneSource,
+    /className=\{`btn btn-sm split-toggle-btn\$\{store\.splitTarget !== null \? ' btn-primary split-active' : ''\}`\}/,
+    '主屏 split-toggle-btn 在分屏开启时必须携带 split-active 激活态',
+  )
+})
+
+test('responsive.css 窄屏仅隐藏未激活的开启分屏按钮，保留关闭入口', { timeout: 60_000 }, () => {
   assert.match(
     responsiveCss,
-    /\.new-conversation-dropdown\s*\{[^}]*right:\s*-36px\s*!important;/,
-    '.new-conversation-dropdown 必须声明移动端右对齐修正',
+    /\.split-toggle-btn:not\(\.split-active\)\s*,\s*\n?\s*\.sidebar-split-action/,
+    '860px 断点必须只隐藏 .split-toggle-btn:not(.split-active)（未开启分屏的入口）',
+  )
+  assert.doesNotMatch(
+    responsiveCss,
+    /\.split-close-btn\s*\{[^}]*display:\s*none/,
+    '窄屏不得隐藏 .split-close-btn 关闭按钮',
+  )
+  assert.doesNotMatch(
+    responsiveCss,
+    /\.split-toggle-btn\.split-active\s*\{[^}]*display:\s*none/,
+    '窄屏不得隐藏已激活的 .split-toggle-btn.split-active',
+  )
+})
+
+test('WorkbenchDrawer.tsx 窄屏抽屉模式下导航后自动收起抽屉', { timeout: 60_000 }, () => {
+  assert.match(
+    workbenchSource,
+    /matchMedia\('\(max-width: 1200px\)'\)/,
+    'WorkbenchDrawer 必须检测 <=1200px 抽屉覆盖模式',
+  )
+  assert.match(
+    workbenchSource,
+    /maybeCollapseWorkbench\(store\)/,
+    '子会话与工作流节点导航按钮必须调用 maybeCollapseWorkbench 收起抽屉',
   )
 })

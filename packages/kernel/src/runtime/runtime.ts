@@ -54,10 +54,11 @@ import type {
   WorkflowRunSummary,
 } from '@helm/protocol'
 import type { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
-import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT, type MaybePromise, type EnvExecRequest, type EnvExecResponse, type ModelProvidersRefreshResult, type NodeHealthSnapshot, type NodeInfo, type NodeIssuedToken } from '@helm/protocol'
+import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT, type MaybePromise, type EnvExecRequest, type EnvExecResponse, type ModelProvidersRefreshResult, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helm/protocol'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { hostname, loadavg, freemem, totalmem, uptime } from 'node:os'
 import { chmod, mkdir, statfs, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -78,7 +79,7 @@ import {
   type Profile,
 } from '../services/index.js'
 import { PluginHost, type DerivedToolSpec } from '../plugins/index.js'
-import { createEnvFabric, sha256hex, tokenAuthenticator, type EnvFabric } from '../env/index.js'
+import { createEnvFabric, sha256hex, tokenAuthenticator, HelmUpgradeBusyError, HelmUpgradeCancelledError, HelmUpgradeTimeoutError, type EnvFabric } from '../env/index.js'
 import { AskService } from './asks.js'
 import { ConversationTracker, deriveTitle } from './conversations.js'
 import { EventHub } from './events.js'
@@ -97,6 +98,249 @@ import { runNativeSpawn, THINKING_LEVELS } from './spawn.js'
 import { HelmPluginConfigStore } from './plugin-config-store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import { redactJsonValue } from '../redact.js'
+
+// ---------------------------------------------------------------------------
+// 版本语义（严格 SemVer，无依赖小实现；不依赖 @helm/node 引擎）
+// ---------------------------------------------------------------------------
+
+const STRICT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/
+
+/** 严格 SemVer 判定（不接受 v 前缀/宽松格式）。 */
+export function isStrictSemVer(text: string): boolean {
+  return STRICT_SEMVER.test(text)
+}
+
+/** 规范化显式目标版本：trim 后允许去掉单个 v 前缀（Web 输入容错），再严格校验。 */
+export function normalizeExplicitVersion(raw: string): string {
+  const trimmed = raw.trim()
+  const bare = trimmed.startsWith('v') || trimmed.startsWith('V') ? trimmed.slice(1) : trimmed
+  if (!isStrictSemVer(bare)) {
+    throw new HelmError(
+      'validation_error',
+      `targetVersion 需为严格 SemVer（可带单个 v 前缀，如 1.2.3 / v1.2.3），实得 "${raw}"`,
+      400,
+      { targetVersion: raw },
+    )
+  }
+  return bare
+}
+
+/** 比较两个严格 SemVer：-1 / 0 / 1； prerelease 排序按 SemVer 规范。 */
+export function compareStrictSemVer(a: string, b: string): number {
+  const pa = parseSemVer(a)
+  const pb = parseSemVer(b)
+  for (let i = 0; i < 3; i++) {
+    if (pa.numeric[i] !== pb.numeric[i]) return pa.numeric[i]! < pb.numeric[i]! ? -1 : 1
+  }
+  const ap = pa.prerelease
+  const bp = pb.prerelease
+  if (ap === undefined && bp === undefined) return 0
+  // 无预发布 > 有预发布。
+  if (ap === undefined) return 1
+  if (bp === undefined) return -1
+  for (let i = 0; i < Math.max(ap.length, bp.length); i++) {
+    const x = ap[i]
+    const y = bp[i]
+    if (x === undefined) return -1
+    if (y === undefined) return 1
+    const xn = /^\d+$/.test(x)
+    const yn = /^\d+$/.test(y)
+    if (xn && yn) {
+      const diff = Number(x) - Number(y)
+      if (diff !== 0) return diff < 0 ? -1 : 1
+    } else {
+      if (x === y) continue
+      // 数字标识 < 字母数字标识。
+      if (xn) return -1
+      if (yn) return 1
+      return x < y ? -1 : 1
+    }
+  }
+  return 0
+}
+
+function parseSemVer(v: string): { numeric: [number, number, number]; prerelease?: string[] } {
+  const m = STRICT_SEMVER.exec(v)
+  if (m === null) throw new HelmError('validation_error', `内部错误：非严格 SemVer 进入比较：${v}`, 500)
+  return {
+    numeric: [Number(m[1]), Number(m[2]), Number(m[3])],
+    ...(m[4] !== undefined ? { prerelease: m[4].split('.') } : {}),
+  }
+}
+
+/**
+ * Hub（kernel 包）自身版本：读当前包 package.json；HELM_VERSION_OVERRIDE 优先（测试用）。
+ * 诚实性纪律：读失败或版本非法显式抛 version_unavailable（500，附原错误诊断），
+ * 绝不静默返回 0.0.0 伪装成合法版本参与比较/自动升级决策。
+ */
+let cachedHubVersion: string | undefined
+export function hubVersion(): string {
+  if (cachedHubVersion !== undefined) return cachedHubVersion
+  const override = process.env['HELM_VERSION_OVERRIDE']
+  if (override !== undefined && override.trim() !== '') {
+    const trimmed = override.trim()
+    if (isStrictSemVer(trimmed)) {
+      cachedHubVersion = trimmed
+      return cachedHubVersion
+    }
+    // 非空覆盖值非法时显式报错，不静默忽略回落 package.json
+    //（否则测试注入拼写错误会被无声吞掉，掩盖真实意图）。
+    throw new HelmError(
+      'version_unavailable',
+      `HELM_VERSION_OVERRIDE 显式设置但非法（需严格 SemVer，实得 "${override}"）`,
+      500,
+      { override },
+    )
+  }
+  // dist/runtime/runtime.ts → packages/kernel/<x>；src/runtime/runtime.ts 同构。
+  const kernelDir = dirname(fileURLToPath(import.meta.url))
+  const pkgPath = join(dirname(dirname(kernelDir)), 'package.json')
+  try {
+    // 同步读：版本在启动后不变；仅首次调用读盘一次。
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: string }
+    if (typeof pkg.version !== 'string' || !isStrictSemVer(pkg.version)) {
+      throw new HelmError(
+        'version_unavailable',
+        `kernel package.json version 非法（需严格 SemVer，实得 ${JSON.stringify(pkg.version)}）：${pkgPath}`,
+        500,
+        { pkgPath, version: pkg.version },
+      )
+    }
+    cachedHubVersion = pkg.version
+  } catch (error) {
+    if (error instanceof HelmError) throw error
+    throw new HelmError(
+      'version_unavailable',
+      `读取 kernel package.json 失败：${error instanceof Error ? error.message : String(error)}（${pkgPath}）`,
+      500,
+      { pkgPath, cause: error instanceof Error ? error.message : String(error) },
+    )
+  }
+  return cachedHubVersion
+}
+
+/** 测试注入点：重置 hubVersion 缓存。 */
+export function resetHubVersionCacheForTest(): void {
+  cachedHubVersion = undefined
+}
+
+/** 诊断用：受限 JSON 序列化（循环/不可序列化对象退化为 String，绝不抛）。 */
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value)
+  } catch {
+    return String(value)
+  }
+}
+
+/** RpcResult 边界形状：必须是对象且 ok 为 boolean；ok:false 需带 error 对象。 */
+function isRpcResultShape(value: unknown): value is { ok: boolean; value?: unknown; error?: unknown } {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const v = value as Record<string, unknown>
+  if (typeof v['ok'] !== 'boolean') return false
+  if (v['ok'] === false && (v['error'] === null || typeof v['error'] !== 'object' || Array.isArray(v['error']))) return false
+  return true
+}
+
+/**
+ * 节点 RpcResult 结构化失败 → HelmError（诚实性纪律：非法 error 形状按 502
+ * node_upgrade_invalid_result 显式报错，绝不透传脏数据）。'invalid' 映射 400，
+ * 'not_supported' 映射 501，其余 502。
+ */
+function rpcFailureToHelmError(
+  nodeId: string,
+  action: string,
+  error: { code: string; message: string },
+): HelmError {
+  if (
+    error === null || typeof error !== 'object' || Array.isArray(error) ||
+    typeof error.code !== 'string' || error.code === '' ||
+    typeof error.message !== 'string'
+  ) {
+    return new HelmError(
+      'node_upgrade_invalid_result',
+      `节点 ${nodeId} ${action}返回非法错误信封：${JSON.stringify(error) ?? String(error)}`,
+      502,
+      { nodeId, nodeError: error },
+    )
+  }
+  if (error.code === 'invalid') {
+    return new HelmError('validation_error', `节点 ${nodeId} ${action}失败：${error.message}`, 400, {
+      nodeId,
+      nodeError: error,
+    })
+  }
+  if (error.code === 'not_supported') {
+    return new HelmError('node_upgrade_not_supported', `节点 ${nodeId} 不支持${action}（${error.message}）`, 501, {
+      nodeId,
+      nodeError: error,
+    })
+  }
+  return new HelmError('node_upgrade_failed', `节点 ${nodeId} ${action}失败（${error.code}）：${error.message}`, 502, {
+    nodeId,
+    nodeError: error,
+  })
+}
+
+/** 边界校验：nodeCheckUpgrade 结果字段（诚实性纪律——非法结果不透传）。 */
+function validateUpgradeCheckResult(nodeId: string, value: NodeUpgradeCheckResult): NodeUpgradeCheckResult {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new HelmError('node_upgrade_invalid_result', `节点 ${nodeId} 升级检查结果非法（非对象）`, 502, { nodeId })
+  }
+  const v = value as unknown as Record<string, unknown>
+  if (typeof v['currentVersion'] !== 'string' || typeof v['latestVersion'] !== 'string' || typeof v['updateAvailable'] !== 'boolean') {
+    throw new HelmError('node_upgrade_invalid_result', `节点 ${nodeId} 升级检查结果字段非法`, 502, { nodeId })
+  }
+  // 版本字段必须是严格 SemVer（latestVersion 会成为升级目标，绝不放行脏值）。
+  if (!isStrictSemVer(v['currentVersion']) || !isStrictSemVer(v['latestVersion'])) {
+    throw new HelmError(
+      'node_upgrade_invalid_result',
+      `节点 ${nodeId} 升级检查结果版本非严格 SemVer（currentVersion=${JSON.stringify(v['currentVersion'])}，latestVersion=${JSON.stringify(v['latestVersion'])}）`,
+      502,
+      { nodeId },
+    )
+  }
+  const blocked = v['blocked']
+  if (blocked !== undefined) {
+    if (
+      blocked === null || typeof blocked !== 'object' || Array.isArray(blocked) ||
+      typeof (blocked as Record<string, unknown>)['version'] !== 'string' ||
+      typeof (blocked as Record<string, unknown>)['reason'] !== 'string' ||
+      typeof (blocked as Record<string, unknown>)['at'] !== 'string'
+    ) {
+      throw new HelmError('node_upgrade_invalid_result', `节点 ${nodeId} 升级检查 blocked 字段非法`, 502, { nodeId })
+    }
+  }
+  return value
+}
+
+/** 边界校验：nodeUpgrade 结果字段。 */
+function validateUpgradeResult(nodeId: string, value: NodeUpgradeResult): NodeUpgradeResult {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new HelmError('node_upgrade_invalid_result', `节点 ${nodeId} 升级结果非法（非对象）`, 502, { nodeId })
+  }
+  const v = value as unknown as Record<string, unknown>
+  if (
+    typeof v['ok'] !== 'boolean' ||
+    typeof v['previousVersion'] !== 'string' ||
+    typeof v['targetVersion'] !== 'string' ||
+    typeof v['upgraded'] !== 'boolean'
+  ) {
+    throw new HelmError('node_upgrade_invalid_result', `节点 ${nodeId} 升级结果字段非法`, 502, { nodeId })
+  }
+  if (v['pid'] !== undefined && (typeof v['pid'] !== 'number' || !Number.isInteger(v['pid']) || (v['pid'] as number) <= 0)) {
+    throw new HelmError('node_upgrade_invalid_result', `节点 ${nodeId} 升级结果 pid 非法`, 502, { nodeId })
+  }
+  if (!isStrictSemVer(v['previousVersion']) || !isStrictSemVer(v['targetVersion'])) {
+    throw new HelmError(
+      'node_upgrade_invalid_result',
+      `节点 ${nodeId} 升级结果版本非严格 SemVer（previousVersion=${JSON.stringify(v['previousVersion'])}，targetVersion=${JSON.stringify(v['targetVersion'])}）`,
+      502,
+      { nodeId },
+    )
+  }
+  return value
+}
 
 export interface KernelRuntimeOptions {
   dataDir?: string
@@ -121,6 +365,8 @@ export interface KernelRuntimeOptions {
    * 传 0 关闭定时巡检（测试用；仍可手动 watchdogTick）。
    */
   watchdogIntervalMs?: number
+  /** 节点升级等待 commit 确认的超时毫秒（缺省 120000；测试可缩短）。 */
+  nodeUpgradeTimeoutMs?: number
 }
 
 export interface WorkflowRunnerFn {
@@ -408,6 +654,7 @@ export class KernelRuntime {
       autoResume: options.autoResume !== false,
       externalModels: modelsExternal,
       watchdogIntervalMs: options.watchdogIntervalMs ?? DEFAULT_WATCHDOG_INTERVAL_MS,
+      nodeUpgradeTimeoutMs: options.nodeUpgradeTimeoutMs ?? 120_000,
       modelsStore,
       redactReport: (fn: (text: string) => string) => {
         redactSlot.current = fn
@@ -440,6 +687,8 @@ export class KernelRuntime {
     autoResume: boolean
     externalModels?: Models
     watchdogIntervalMs: number
+    /** 节点升级等待 commit 确认超时（毫秒；缺省 120000）。 */
+    nodeUpgradeTimeoutMs: number
     /** 动态模型目录持久缓存（open 创建，实例全存续期共用）。 */
     modelsStore: ModelsStore
     /** 接管 Harness onReport 诊断脱敏（stash 就绪后由构造器调用）。 */
@@ -486,6 +735,7 @@ export class KernelRuntime {
       init.hubUrl ?? `http://127.0.0.1:${process.env['HELM_PORT'] ?? '3202'}`
     this.hubUrlValue = hubUrl
     this.watchdogIntervalMs = init.watchdogIntervalMs
+    this.NODE_UPGRADE_TIMEOUT_MS = init.nodeUpgradeTimeoutMs
 
     // ---- 跨平台节点底座（EnvFabric）------------------------------------
     // fail-closed 鉴权：仅 config.json nodes 登记的 sha256(token) 可注册。
@@ -509,12 +759,16 @@ export class KernelRuntime {
           online,
           ...(conn?.hostname !== undefined ? { hostname: conn.hostname } : {}),
           ...(conn?.platform !== undefined ? { platform: conn.platform } : {}),
+          ...(conn?.version !== undefined ? { version: conn.version } : {}),
           ...(conn?.hubUrl !== undefined ? { hubUrl: conn.hubUrl } : {}),
           ...(conn?.connectedAt !== undefined ? { connectedAt: conn.connectedAt } : {}),
           ...(conn?.lastSeenAt !== undefined ? { lastSeenAt: conn.lastSeenAt } : {}),
           ...(conn?.health !== undefined ? { health: conn.health } : {}),
         } satisfies NodeInfo,
       })
+      // 自动升级（HELM_AUTO_UPGRADE_NODES=1 显式开启）：节点上线且上报版本
+      // 严格落后 Hub 时异步触发同一 upgradeNode 路径；不阻塞注册回调。
+      if (online && conn !== undefined) void this.autoUpgradeIfEligible(nodeId, conn.version)
     })
     const runtimeSelf: KernelRuntime = this
     this.toolDeps = {
@@ -559,6 +813,9 @@ export class KernelRuntime {
         plugins: this.pluginHost ? this.pluginHost.list() : [],
         ui: this.pluginHost ? this.pluginHost.listUi() : [],
         workflowRuns: this.workflowRunProvider(),
+        // 重连首帧即恢复活跃会话实时视图（含 queuedInputs 排队胶囊）：
+        // 从 tracker 权威镜像同步派生，不依赖上次推送缓存。
+        conversationLives: this.tracker.listLiveViews(),
         // snapshot.nodes 与 node.changed 同源（listNodes 读取同一注册表），
         // 首帧即携带全部已知节点与在线状态，重连凭水位对齐。
         nodes: this.listNodesSync(),
@@ -854,9 +1111,15 @@ export class KernelRuntime {
           }
         }
         let resolved: AgentExecutionInfo | undefined
+        // 父会话本次工具调用 ID：随派生请求透传，子会话登记时写入镜像，
+        // 前端在 subagent 运行期即可实时关联子会话（无需等工具返回）。
+        const parentCallId = (api as { conversationId: number; callId?: string }).callId
         try {
           const result = await runtime.spawnAgent({
             parentConversationId: api.conversationId,
+            ...(typeof parentCallId === 'string' && parentCallId !== ''
+              ? { parentToolCallId: parentCallId }
+              : {}),
             prompt: String(args['prompt']),
             ...(args['agentType'] !== undefined ? { agentType: String(args['agentType']) } : {}),
             ...(args['cwd'] !== undefined ? { cwd: String(args['cwd']) } : {}),
@@ -1233,6 +1496,7 @@ export class KernelRuntime {
         online: true,
         hostname: hostname(),
         platform: process.platform,
+        version: hubVersion(),
         health: this.localHealthSnapshot(),
       },
     ]
@@ -1244,6 +1508,7 @@ export class KernelRuntime {
         online: conn !== undefined,
         ...(conn?.hostname !== undefined ? { hostname: conn.hostname } : {}),
         ...(conn?.platform !== undefined ? { platform: conn.platform } : {}),
+        ...(conn?.version !== undefined ? { version: conn.version } : {}),
         ...(conn?.hubUrl !== undefined ? { hubUrl: conn.hubUrl } : {}),
         ...(conn?.connectedAt !== undefined ? { connectedAt: conn.connectedAt } : {}),
         ...(conn?.lastSeenAt !== undefined ? { lastSeenAt: conn.lastSeenAt } : {}),
@@ -1299,6 +1564,268 @@ export class KernelRuntime {
       node: { id: nodeId, kind: 'byom', online: false },
       removed: true,
     })
+  }
+
+  // -------------------------------------------------------------------------
+  // 节点升级（check / upgrade）
+  // -------------------------------------------------------------------------
+
+  /** 升级等待超时（可等待 commit 的窗口）；构造参数可覆盖（测试用）。 */
+  readonly NODE_UPGRADE_TIMEOUT_MS: number = 120_000
+
+  /** HELM_AUTO_UPGRADE_NODES=1 显式开启才自动升级（缺省关）。 */
+  private get autoUpgradeEnabled(): boolean {
+    return process.env['HELM_AUTO_UPGRADE_NODES'] === '1'
+  }
+
+  /** 自动升级去重：同节点一次进程生命周期只自动尝试一轮。 */
+  readonly #autoUpgradeAttempted = new Set<string>()
+
+  /**
+   * 检查节点可用更新（GET /api/nodes/:id/upgrade/check）：透传节点 RPC
+   * nodeCheckUpgrade 并校验 RpcResult 与结果边界。
+   * - local：400（不支持）；未知节点：404；离线：409；
+   * - 节点不支持升级：501；RpcResult 结构化失败/结果非法：400/502。
+   */
+  async checkNodeUpgrade(nodeId: string, input: NodeUpgradeCheckInput = {}): Promise<NodeUpgradeCheckResult> {
+    const conn = this.requireUpgradableConnection(nodeId)
+    if (conn.rpc.nodeCheckUpgrade === undefined) {
+      throw new HelmError('node_upgrade_not_supported', `节点 ${nodeId} 不支持升级（旧版 @helm/node）`, 501, { nodeId })
+    }
+    let result: RpcResult<NodeUpgradeCheckResult>
+    try {
+      result = await conn.rpc.nodeCheckUpgrade(input)
+    } catch (error) {
+      throw new HelmError(
+        'node_upgrade_unavailable',
+        `节点 ${nodeId} 升级检查传输失败：${error instanceof Error ? error.message : String(error)}`,
+        502,
+        { nodeId },
+      )
+    }
+    if (!isRpcResultShape(result)) {
+      throw new HelmError(
+        'node_upgrade_invalid_result',
+        `节点 ${nodeId} 升级检查返回非法 RpcResult（非对象或 ok/error 形状错误）：${safeJson(result)}`,
+        502,
+        { nodeId },
+      )
+    }
+    if (!result.ok) {
+      throw rpcFailureToHelmError(nodeId, '检查', result.error)
+    }
+    return validateUpgradeCheckResult(nodeId, result.value)
+  }
+
+  /**
+   * 触发节点升级（POST /api/nodes/:id/upgrade）：
+   * 1. 解析精确 targetVersion（显式版本规范化；空目标先 check 取 latest）；
+   *    previousVersion 取自节点上报的当前版本；缺失时先 check 取其真实
+   *    currentVersion（绝不伪造 'unknown'——那永不匹配 commit）；
+   * 2. 生成随机 attemptId，先安装注册表升级等待器，再调 conn.rpc.nodeUpgrade；
+   *    与等待器结果/超时真正 race（RPC 永久不返回时整体仍有界，绝不挂
+   *    30min birpc 预算），迟到 RPC 结果不产生 unhandled rejection；
+   * 3. 节点明确返回「无操作且合法」（ok/upgraded:false）→ 取消等待并如实返回；
+   * 4. 节点结构化失败 / 结果非法 → 取消等待并报错；原 socket 传输断开 →
+   *    继续等 commit，绝不假成功；超时未确认 → 502 显式「结果未确认」；
+   * 5. 任何非 commit 终止路径统一 finally 清理等待器（绝不让后续升级永久 busy）。
+   */
+  async upgradeNode(
+    nodeId: string,
+    input: { targetVersion?: string; registryUrl?: string; force?: boolean } = {},
+  ): Promise<NodeUpgradeResult> {
+    const conn = this.requireUpgradableConnection(nodeId)
+    if (conn.rpc.nodeUpgrade === undefined) {
+      throw new HelmError('node_upgrade_not_supported', `节点 ${nodeId} 不支持升级（旧版 @helm/node）`, 501, { nodeId })
+    }
+    // 显式目标版本：trim + 去单个 v 前缀 + 严格 SemVer；规范化后用于
+    // attempt 创建、RPC 调用与 commit 对账（三方同源）。
+    const explicitTarget =
+      input.targetVersion !== undefined && input.targetVersion !== ''
+        ? normalizeExplicitVersion(input.targetVersion)
+        : undefined
+    let targetVersion = explicitTarget
+    let previousVersion = conn.version !== undefined && isStrictSemVer(conn.version) ? conn.version : undefined
+    if (targetVersion === undefined || previousVersion === undefined) {
+      const check = await this.checkNodeUpgrade(nodeId, {
+        ...(input.registryUrl !== undefined ? { registryUrl: input.registryUrl } : {}),
+      })
+      if (targetVersion === undefined) targetVersion = normalizeExplicitVersion(check.latestVersion)
+      if (previousVersion === undefined) previousVersion = normalizeExplicitVersion(check.currentVersion)
+    }
+    const attemptId = randomBytes(16).toString('hex')
+    const waiter = this.envFabric.registry.beginUpgrade(nodeId, {
+      attemptId,
+      targetVersion,
+      previousVersion,
+      timeoutMs: this.NODE_UPGRADE_TIMEOUT_MS,
+    })
+    // 所有非 commit 终止路径统一清理等待器（否则后续升级永久 busy）。
+    const finallyCancel = (): void => {
+      waiter.cancel(new HelmError('node_upgrade_cancelled', `节点 ${nodeId} 升级等待已终结`, 502))
+    }
+    try {
+      // RPC 与等待器（commit / 超时）真正 race：节点可在 RPC 应答前就断开
+      // 旧 socket 顶替为候选；RPC 也可能永久不返回（旧版节点僵死）。
+      // race 仅进行一次：后续终态一律只 await commitPromise（等待器自带
+      // timer，有界）；绝不重复 race 已 settle 的 rpcPromise。迟到 RPC 结果
+      // 已在 then 内捕获为普通值，无 unhandled rejection。
+      // birpc $close 会先置 $closed 再 reject 在途调用；而 ws-gateway 的
+      // onGeneralError 返回 true 会把该 reject 吞成 resolve(undefined)。
+      // 因此仅当「应答为 undefined 且本次调用所用 rpc 实例已确实关闭」时才
+      // 归为传输中断（候选顶替旧 socket 的必经链），转为 rpcError 继续等
+      // commit；其余非法应答仍按 invalid shape 502，绝不让任意非法值无限等待。
+      const rpcTransport = conn.rpc as NodeEnvRpcFunctions & { readonly $closed?: boolean }
+      const nodeUpgradeCall = rpcTransport.nodeUpgrade!
+      const rpcPromise = Promise.resolve(
+        nodeUpgradeCall({
+          targetVersion,
+          ...(input.registryUrl !== undefined ? { registryUrl: input.registryUrl } : {}),
+          ...(input.force !== undefined ? { force: input.force } : {}),
+          attemptId,
+        }),
+      ).then(
+        (value) => {
+          if ((value as unknown) === undefined && rpcTransport.$closed === true) {
+            return {
+              kind: 'rpcError' as const,
+              error: new Error(
+                'nodeUpgrade 在途调用因旧 socket 被顶替而关闭（birpc $close 的 reject 被 onGeneralError 吞成 resolve(undefined)）',
+              ),
+            }
+          }
+          return { kind: 'rpc' as const, value }
+        },
+        (error: unknown) => ({ kind: 'rpcError' as const, error }),
+      )
+      const commitPromise = waiter.result.then(
+        (value) => ({ kind: 'commit' as const, value }),
+        (error: unknown) => ({ kind: 'waiterError' as const, error }),
+      )
+      // RPC 完成但被 commit 先到掩盖时，迟到分支不会再被读取——已在上方
+      // then 内捕获为普通值，无 unhandled rejection 风险。
+      const first = await Promise.race([commitPromise, rpcPromise])
+      if (first.kind === 'commit') {
+        return first.value
+      }
+      if (first.kind === 'waiterError') {
+        // 等待器已终结（超时/取消）而 RPC 未先回：升级结果未确认。
+        const message = first.error instanceof Error ? first.error.message : String(first.error)
+        throw new HelmError(
+          'node_upgrade_unconfirmed',
+          `节点 ${nodeId} 升级到 ${targetVersion} 结果未确认：${message}`,
+          502,
+          { nodeId, attemptId, targetVersion },
+        )
+      }
+      if (first.kind === 'rpcError') {
+        // 传输层断开（旧 socket 被候选顶替时必然发生）：不是终态——继续
+        // 等 commit（候选注册后以 attemptId 对账）。只 await commitPromise
+        //（timer 有界）；绝不重复 race 已 settle 的 rpcPromise（它瞬间重放
+        // 同一败值，会把「断开等 commit」误判成终态失败）。
+        const failure = first.error instanceof Error ? first.error.message : String(first.error)
+        const settled = await commitPromise
+        if (settled.kind === 'commit') return settled.value
+        const message = settled.error instanceof Error ? settled.error.message : String(settled.error)
+        throw new HelmError(
+          'node_upgrade_unconfirmed',
+          `节点 ${nodeId} 升级触发失败且未确认（传输中断）：${failure}；${message}`,
+          502,
+          { nodeId, attemptId, targetVersion },
+        )
+      }
+      // first.kind === 'rpc'：节点结构化应答。先校验 RpcResult 形状（对象 /
+      // boolean ok / 合法 value 或合法 error.code+message），非法按 502 拒绝。
+      const rpcResult = first.value
+      if (!isRpcResultShape(rpcResult)) {
+        throw new HelmError(
+          'node_upgrade_invalid_result',
+          `节点 ${nodeId} 升级返回非法 RpcResult（非对象或 ok/error 形状错误）：${safeJson(rpcResult)}`,
+          502,
+          { nodeId, attemptId, targetVersion },
+        )
+      }
+      if (!rpcResult.ok) {
+        // 节点结构化拒绝（not_supported / invalid / ...）：显式报错。
+        throw rpcFailureToHelmError(nodeId, '升级', rpcResult.error)
+      }
+      const value = validateUpgradeResult(nodeId, rpcResult.value)
+      if (!value.ok) {
+        throw new HelmError('node_upgrade_failed', `节点 ${nodeId} 返回升级未完成`, 502, { nodeId, attemptId, targetVersion })
+      }
+      if (value.upgraded === false) {
+        // 节点明确无操作（已是目标版本等）：必须 ok:true 且 previous/target
+        // 均等于本次固定目标（否则节点谎报，绝不放行）；force 语义下不存在
+        // 合法无操作（强制重装必有结果），一律按非法结果 502 拒绝。
+        if (input.force === true) {
+          throw new HelmError(
+            'node_upgrade_invalid_result',
+            `节点 ${nodeId} force 升级返回无操作结果（force 不接受无操作）：${safeJson(value)}`,
+            502,
+            { nodeId, attemptId, targetVersion },
+          )
+        }
+        if (value.previousVersion !== targetVersion || value.targetVersion !== targetVersion) {
+          throw new HelmError(
+            'node_upgrade_invalid_result',
+            `节点 ${nodeId} 升级无操作结果与固定目标不一致（期望 previous/target 均为 ${targetVersion}，实得 previous=${value.previousVersion}，target=${value.targetVersion}）`,
+            502,
+            { nodeId, attemptId, targetVersion, result: value },
+          )
+        }
+        return value
+      }
+      // 节点报告已启动升级流程：唯一可信终态是等待器的匹配 commit。
+      // 同样只 await commitPromise（timer 有界，绝不重 race 已 settle 的 rpc）。
+      const settled = await commitPromise
+      if (settled.kind === 'commit') return settled.value
+      const message = settled.error instanceof Error ? settled.error.message : String(settled.error)
+      throw new HelmError(
+        'node_upgrade_unconfirmed',
+        `节点 ${nodeId} 升级到 ${targetVersion} 结果未确认：${message}`,
+        502,
+        { nodeId, attemptId, targetVersion },
+      )
+    } finally {
+      finallyCancel()
+    }
+  }
+
+  /** 升级前置：local 拒绝、未知 404、离线 409；返回当前在线连接。 */
+  private requireUpgradableConnection(nodeId: string): { version?: string; rpc: NodeEnvRpcFunctions } {
+    if (nodeId === 'local') {
+      throw new HelmError('cannot_upgrade_local', 'local 与 Hub 同进程，升级 Hub 即升级 local', 400, { nodeId })
+    }
+    if (!this.nodeTokenIndex.has(nodeId)) {
+      throw new HelmError('not_found', `节点不存在：${nodeId}`, 404, { nodeId })
+    }
+    const conn = this.envFabric.registry.get(nodeId)
+    if (conn === undefined) {
+      throw new HelmError('node_offline', `节点离线：${nodeId}`, 409, { nodeId })
+    }
+    return conn
+  }
+
+  /**
+   * 节点上线自动升级（HELM_AUTO_UPGRADE_NODES=1）：严格 SemVer 落后 Hub
+   * 才触发；去重（同节点一次）；失败只发 warning 通知，绝不阻塞注册。
+   */
+  private async autoUpgradeIfEligible(nodeId: string, version: string | undefined): Promise<void> {
+    if (!this.autoUpgradeEnabled) return
+    if (this.#autoUpgradeAttempted.has(nodeId)) return
+    if (version === undefined || !isStrictSemVer(version)) return
+    const hub = hubVersion()
+    if (compareStrictSemVer(version, hub) >= 0) return
+    this.#autoUpgradeAttempted.add(nodeId)
+    try {
+      await this.upgradeNode(nodeId, { targetVersion: hub })
+    } catch (error) {
+      this.events.publish('notification', {
+        level: 'warning',
+        title: `节点 ${nodeId} 自动升级失败`,
+        body: String(error instanceof Error ? error.message : error),
+      })
+    }
   }
 
   /**
@@ -2199,6 +2726,7 @@ export class KernelRuntime {
   /**
    * 提交输入：input hook（transform 生效——text/origin/whenBusy/id 全部取最终
    * payload；conversationId 被 transform 视为身份违规拒绝）-> SDK submit。
+   * whenBusy 省略时在钩子链之后应用有效默认 steer（插话引导）。
    */
   async submitInput(
     id: number,
@@ -2276,6 +2804,11 @@ export class KernelRuntime {
       finalInput = value.input
       finalWhenBusy = finalInput.whenBusy ?? finalWhenBusy
     }
+    // 有效默认 steer：省略 whenBusy 的提交（HTTP/CLI/生成式 UI）统一按插话
+    // 引导处理。这里一次性固化到最终输入，后续 SDK 提交、helm.input entry
+    // 落库与 turn_settled 重建均看到同一有效值（落库反映真正执行）。
+    finalWhenBusy = finalWhenBusy ?? 'steer'
+    finalInput = { ...finalInput, whenBusy: finalWhenBusy }
     // transform 可能改写 attachments：对最终 ID 列表再次校验并取权威元数据
     //（钩子产物与直接输入同权，绝不让 transform 绕过授权门禁）。
     let resolvedAttachments = initialAttachments
@@ -2325,8 +2858,9 @@ export class KernelRuntime {
         {
           type: 'input',
           content: content as never,
-          whenBusy: finalWhenBusy ?? 'followUp',
-          // 最终 payload 的 origin/id/meta 落入 helm.input entry（模型可见来源标记）。
+          whenBusy: finalWhenBusy,
+          // 最终 payload 的 origin/id/meta 落入 helm.input entry（模型可见来源标记）；
+          // whenBusy 同步落库（快照/重建路径与在内存登记一致）。
           entry: {
             kind: 'helm.input',
             data: {
@@ -2334,6 +2868,7 @@ export class KernelRuntime {
               text: effectiveText,
               origin: finalInput.origin,
               createdAt: finalInput.createdAt,
+              whenBusy: finalWhenBusy,
               ...(finalInput.meta !== undefined ? { meta: finalInput.meta } : {}),
               ...(resolvedAttachments !== undefined
                 ? { attachments: resolvedAttachments.map((r) => r.ref) }
@@ -2703,6 +3238,9 @@ export class KernelRuntime {
             // 内核零角色硬编码：tags 由调用方策略决定（原生 spawn 传 []）。
             tags,
             parentConversationId: parentId,
+            ...(finalRequest.parentToolCallId !== undefined && finalRequest.parentToolCallId !== ''
+              ? { parentToolCallId: finalRequest.parentToolCallId }
+              : {}),
             // 与普通创建一致：Profile 节点优先于父会话缺省节点。
             nodeId: profile?.nodeId ?? this.store.getConv(parentId)?.nodeId ?? 'local',
             cwd: childCwd,
@@ -2720,6 +3258,19 @@ export class KernelRuntime {
           // 原生 spawn 自动 helm 归属（Watchdog 红线判定唯一可信来源）。
           this.markConversationOwnership(childId, 'helm')
           await this.tracker.observe(childId)
+          // 创建瞬间即广播含 parentConversationId / parentToolCallId 的摘要：
+          // 前端在 subagent 运行期 0ms 关联子会话，不等首轮摘要指纹变化。
+          if (this.store.getConv(childId) !== undefined && !this.store.isDeleted(childId)) {
+            this.events.publish('conversation.upsert', this.withOwnership(this.tracker.summaryOf(childId)))
+          }
+        },
+        bindChildToolCall: (childId, parentToolCallId) => {
+          const meta = this.store.getConv(childId)
+          if (meta === undefined || meta.parentToolCallId === parentToolCallId) return
+          this.store.upsertConv({ ...meta, parentToolCallId, updatedAt: Date.now() })
+          if (!this.store.isDeleted(childId)) {
+            this.events.publish('conversation.upsert', this.withOwnership(this.tracker.summaryOf(childId)))
+          }
         },
         resolveProfile: async (profileId) => {
           const profile = await this.readProfile(profileId)

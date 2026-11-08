@@ -205,6 +205,25 @@ async function route(
       await kernel.removeNode(nodeId)
       return jsonOk(redactor, { ok: true })
     }
+    // ---- 节点升级：GET /:id/upgrade/check、POST /:id/upgrade -----------------
+    if (second !== undefined && third === 'upgrade') {
+      const nodeId = requireNodeSegment(second)
+      if (fourth === 'check' && method === 'GET') {
+        if (fifth !== undefined) return errorResponse(redactor, 404, 'not_found', '路由不存在')
+        if (kernel.checkNodeUpgrade === undefined) {
+          throw new HelmError('not_implemented', '当前 runtime 未提供节点升级检查', 501)
+        }
+        return jsonOk(redactor, await kernel.checkNodeUpgrade(nodeId, parseNodeUpgradeCheckQuery(ctx.url)))
+      }
+      if (fourth === undefined && method === 'POST') {
+        if (kernel.upgradeNode === undefined) {
+          throw new HelmError('not_implemented', '当前 runtime 未提供节点升级', 501)
+        }
+        const body = await parseOptionalJsonObjectBody(ctx.request, parseNodeUpgradeBody)
+        return jsonOk(redactor, await kernel.upgradeNode(nodeId, body))
+      }
+      return errorResponse(redactor, 404, 'not_found', '路由不存在')
+    }
     return errorResponse(redactor, 404, 'not_found', '路由不存在')
   }
 
@@ -718,6 +737,72 @@ function requireNodeSegment(raw: string): string {
     throw new ValidationError('nodeId 需匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/（字母数字开头，可含 . _ -）')
   }
   return decoded
+}
+
+/** http(s) URL 校验：协议限定 + 可解析 + 含 hostname。 */
+function requireHttpUrl(raw: unknown, field: string): string {
+  if (typeof raw !== 'string') throw new ValidationError(`${field} 需为 http(s) URL 字符串`)
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    throw new ValidationError(`${field} 需为合法 http(s) URL`)
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new ValidationError(`${field} 需为 http(s) URL`)
+  }
+  if (parsed.hostname === '' || /^\s+$/.test(parsed.hostname)) {
+    throw new ValidationError(`${field} 需含主机名`)
+  }
+  return raw
+}
+
+/** 严格 SemVer（与 runtime 同一规则）。 */
+const STRICT_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/
+
+/** 边界校验目标版本：trim 后允许单个 v/V 前缀，余下必须严格 SemVer。 */
+function requireVersionField(raw: string): string {
+  const trimmed = raw.trim()
+  const bare = trimmed.startsWith('v') || trimmed.startsWith('V') ? trimmed.slice(1) : trimmed
+  if (!STRICT_SEMVER_RE.test(bare)) {
+    throw new ValidationError('targetVersion 需为严格 SemVer（可带单个 v 前缀，如 1.2.3 / v1.2.3）')
+  }
+  return raw
+}
+
+/** GET /api/nodes/:id/upgrade/check 查询参数：仅 registryUrl。 */
+function parseNodeUpgradeCheckQuery(url: URL): { registryUrl?: string } {
+  const raw = url.searchParams.get('registryUrl')
+  return raw === null ? {} : { registryUrl: requireHttpUrl(raw, 'registryUrl') }
+}
+
+/**
+ * POST /api/nodes/:id/upgrade body：可选 targetVersion / registryUrl / force，
+ * 严格拒未知字段（attemptId 属服务端内部，绝不接受用户控制）。
+ */
+function parseNodeUpgradeBody(body: Record<string, unknown>): { targetVersion?: string; registryUrl?: string; force?: boolean } {
+  const out: { targetVersion?: string; registryUrl?: string; force?: boolean } = {}
+  const target = body['targetVersion']
+  // 显式 null 与缺省不同：进入下方字符串校验并 400（不当作缺省静默忽略）。
+  if (target !== undefined) {
+    if (typeof target !== 'string' || target.length > 64) {
+      throw new ValidationError('targetVersion 需为字符串（长度 <= 64）')
+    }
+    if (target.trim() === '') throw new ValidationError('targetVersion 需为非空版本（留空表示升级到 latest）')
+    out.targetVersion = requireVersionField(target)
+  }
+  const registryUrl = body['registryUrl']
+  // 同上：显式 null 进原字符串校验并 400，而非当成缺省。
+  if (registryUrl !== undefined) {
+    out.registryUrl = requireHttpUrl(registryUrl, 'registryUrl')
+  }
+  const force = body['force']
+  if (force !== undefined) {
+    if (typeof force !== 'boolean') throw new ValidationError('force 需为 boolean')
+    out.force = force
+  }
+  rejectUnknownKeys(body, new Set(['targetVersion', 'registryUrl', 'force']))
+  return out
 }
 
 /**

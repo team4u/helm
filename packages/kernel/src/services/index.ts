@@ -39,6 +39,7 @@ export {
   SkillService,
   DEFAULT_PROFILE_ID,
   MAX_MEMORY_CHARS,
+  SYSTEM_DEFAULT,
   assertProfileId,
   validateProfileInput,
   parseSkillFrontmatter,
@@ -46,6 +47,7 @@ export {
   assertSafeRelativePath,
   type Profile,
   type SkillSummary,
+  type BuiltinSkillAsset,
 } from './profiles-skills.js'
 
 export {

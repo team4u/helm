@@ -1,6 +1,7 @@
 import { ROOT_CONVERSATION_ID, type PluginDefinition } from '@helm/protocol';
 import { FileNotFoundError } from '../services/atomic-file.js';
 import { MAX_MEMORY_CHARS, type ProfileService, type SkillService } from '../services/index.js';
+import { HELM_CLI_SKILL_ASSET } from './assistant/assets.js';
 
 interface AssistantServices {
   profiles: ProfileService;
@@ -15,6 +16,11 @@ interface AssistantServices {
  * 调用成本无界增长。
  */
 export { MAX_MEMORY_CHARS };
+export {
+  ASSISTANT_MANAGED_BY,
+  HELM_CLI_SKILL_ID,
+  HELM_CLI_SKILL_ASSET,
+} from './assistant/assets.js';
 
 /** 截断说明（注入时附在截断内容之后，绝不静默截断）。 */
 const MEMORY_TRUNCATION_NOTE = `\n[ helm 提示：MEMORY.md 超过 ${MAX_MEMORY_CHARS} 字符上限，以上为前 ${MAX_MEMORY_CHARS} 字符；请用 update_memory(mode='replace') 整理精简记忆 ]`;
@@ -30,6 +36,16 @@ export function createAssistantPlugin({ profiles, skills }: AssistantServices): 
     version: '0.1.0',
     locked: true,
     definePlugin(ctx) {
+      // 启动时幂等自举系统级内置技能 skills/helm-cli/（Layer 1 + Layer 2）：
+      // 已存在文件（含用户自定义修改）逐字节保留，仅补缺失文件。
+      ctx.service({
+        id: 'assistant-skills',
+        async start() {
+          await skills.ensureSkill(HELM_CLI_SKILL_ASSET);
+        },
+        async stop() {},
+      });
+
       /**
        * 读取 SYSTEM.md / MEMORY.md：文件被外部误删（FileNotFoundError）时按空
        * 处理，但绝不沉默改变人格——① 向人类发一次性告警（每文件独立去重，

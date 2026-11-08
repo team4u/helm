@@ -474,6 +474,96 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     assert.equal(del2.conversationId, 10)
   })
 
+  it('node.changed 接受信封/直传双形状，保留完整 NodeInfo 字段；removed 透传', { timeout: 60_000 }, () => {
+    const { hub } = makeFixture()
+    const frames: HelmEventFrame[] = []
+    const off = hub.subscribe((f) => frames.push(f))
+    const node = {
+      id: 'gpu-box',
+      kind: 'byom',
+      online: true,
+      hostname: 'gpu',
+      platform: 'linux',
+      connectedAt: 1_000,
+      lastSeenAt: 2_000,
+      hubUrl: 'http://127.0.0.1:3202',
+      health: {
+        collectedAt: 1_999,
+        uptimeSec: 42,
+        loadAvg: [0.1, 0.2, 0.3] as [number, number, number],
+        memFreeBytes: 1,
+        memTotalBytes: 2,
+        diskFreeBytes: 3,
+        diskTotalBytes: 4,
+      },
+    }
+    // 完整信封形状（KernelRuntime 现状：{type, node}）。
+    hub.publish('node.changed', { type: 'node.changed', node })
+    // 直接 {node} 形状（无信封 type）。
+    hub.publish('node.changed', { node: { ...node, online: false, lastSeenAt: 3_000 } })
+    // removed: true（removeNode 统一发布）。
+    hub.publish('node.changed', { type: 'node.changed', node: { id: 'gpu-box', kind: 'byom', online: false }, removed: true })
+    off()
+    assert.equal(frames.length, 3)
+    const e1 = frames[0]?.event
+    assert.ok(e1 && 'node' in e1)
+    assert.equal(e1.type, 'node.changed')
+    assert.equal(e1.node.id, 'gpu-box')
+    assert.equal(e1.node.kind, 'byom')
+    assert.equal(e1.node.online, true)
+    assert.equal(e1.node.hostname, 'gpu')
+    assert.equal(e1.node.health?.diskTotalBytes, 4, '完整真实 NodeInfo 字段保留（含 health）')
+    assert.equal('removed' in e1, false, '无 removed 字段时不携带')
+    const e2 = frames[1]?.event
+    assert.ok(e2 && 'node' in e2)
+    assert.equal(e2.node.online, false)
+    assert.equal(e2.node.lastSeenAt, 3_000)
+    const e3 = frames[2]?.event
+    assert.ok(e3 && 'node' in e3)
+    assert.equal(e3.node.id, 'gpu-box')
+    assert.equal(e3.removed, true, 'removed: true 透传（Web 据此从列表移除）')
+    // 事件形状满足 Web applyEventFrame 的 'node' in event 判定（不再坠入 Custom payload 嵌套）。
+    assert.ok(!('payload' in e1), '不得坠入 CustomHelmEvent payload 嵌套')
+  })
+
+  it('node.changed 非法输入显式拒绝且不推进 seq', { timeout: 60_000 }, () => {
+    const { hub, persistedSeqs } = makeFixture()
+    hub.publish('notification', { level: 'info', title: 'baseline' })
+    assert.equal(hub.seq, 1)
+    // 缺 node。
+    assert.throws(() => hub.publish('node.changed', { type: 'node.changed' }), /node\.changed|invalid_event/)
+    // node 缺 id / id 非字符串 / 空串。
+    assert.throws(() => hub.publish('node.changed', { node: { kind: 'byom', online: true } }), /node\.changed/)
+    assert.throws(
+      () => hub.publish('node.changed', { node: { id: 42 as unknown as string, kind: 'byom', online: true } }),
+      /node\.changed/,
+    )
+    assert.throws(() => hub.publish('node.changed', { node: { id: '', kind: 'byom', online: true } }), /node\.changed/)
+    // 非法 kind。
+    assert.throws(
+      () => hub.publish('node.changed', { node: { id: 'x', kind: 'ssh' as never, online: true } }),
+      /node\.changed/,
+    )
+    // online 非 boolean。
+    assert.throws(
+      () => hub.publish('node.changed', { node: { id: 'x', kind: 'byom', online: 'yes' as never } }),
+      /node\.changed/,
+    )
+    // removed 非 boolean（若存在）。
+    assert.throws(
+      () => hub.publish('node.changed', { node: { id: 'x', kind: 'byom', online: false }, removed: 'true' as never }),
+      /removed/,
+    )
+    // node 非对象。
+    assert.throws(() => hub.publish('node.changed', 'gpu-box'), /node\.changed/)
+    // 全部失败不推进 seq、不持久化。
+    assert.equal(hub.seq, 1, '非法输入不推进 seq')
+    assert.deepEqual(persistedSeqs, [1], '非法输入不持久化序号')
+    // 合法发布恢复正常。
+    hub.publish('node.changed', { node: { id: 'x', kind: 'byom', online: true } })
+    assert.equal(hub.seq, 2)
+  })
+
   it('未知 type 透传 CustomHelmEvent {type,payload}，不伪装成 notification', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const frames: HelmEventFrame[] = []

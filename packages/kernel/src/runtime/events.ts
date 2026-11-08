@@ -29,6 +29,7 @@ import type {
   HelmEvent,
   HelmEventFrame,
   HelmSnapshot,
+  NodeInfo,
   PublicPluginDoc,
   WorkflowRunSummary,
 } from '@helm/protocol'
@@ -503,6 +504,33 @@ export class EventHub {
           )
         }
         return { type, run: run as WorkflowRunSummary }
+      }
+      case 'node.changed': {
+        const source = (envelope ?? record) as Record<string, unknown> | undefined
+        const node = source?.['node']
+        const removed = source?.['removed']
+        if (
+          node === null ||
+          typeof node !== 'object' ||
+          typeof (node as { id?: unknown }).id !== 'string' ||
+          (node as { id?: unknown }).id === '' ||
+          ((node as { kind?: unknown }).kind !== 'local' && (node as { kind?: unknown }).kind !== 'byom') ||
+          typeof (node as { online?: unknown }).online !== 'boolean'
+        ) {
+          throw new HelmError(
+            'invalid_event',
+            "node.changed 需要 { node: { id: string; kind: 'local' | 'byom'; online: boolean; ... } } 形状（removed 可选）",
+            500,
+          )
+        }
+        if (removed !== undefined && typeof removed !== 'boolean') {
+          throw new HelmError('invalid_event', 'node.changed 的 removed 若有必须为 boolean', 500)
+        }
+        return {
+          type,
+          node: node as NodeInfo,
+          ...(typeof removed === 'boolean' ? { removed } : {}),
+        }
       }
       case 'notification': {
         const source = (envelope ?? record) as Record<string, unknown> | undefined

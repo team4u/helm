@@ -41,9 +41,25 @@ import type {
   NodeIpcEvent,
   NodeRegisterInput,
   NodeRegisterResult,
+  NodeUpgradeCheckInput,
+  NodeUpgradeCheckResult,
+  NodeUpgradeCommit,
+  NodeUpgradeResult,
+  NodeUpgradeRpcInput,
+  RpcEnvError,
+  RpcResult,
 } from '@helm/protocol';
 import { DEFAULT_NODE_ID } from '@helm/protocol';
 import { createNodeEnvRpcServer, type NodeEnvRpcServer, type NodeEnvRpcServerOptions } from './env-rpc-server.js';
+import {
+  UpgradeCommitUnconfirmedError,
+  UpgradeRejectedError,
+  checkNodeUpgrade,
+  filterRpcRegistryUrl,
+  getNodeVersion,
+  performNodeUpgrade,
+  type PerformNodeUpgradeOptions,
+} from './upgrader.js';
 
 /** 节点侧调用 Hub 的函数集（register/heartbeat/onEnvExecOutput/onIpc*）。 */
 export interface HubSideFunctions {
@@ -73,6 +89,18 @@ export interface NodeDaemonOptions {
   reconnectMaxDelayMs?: number;
   /** 日志（缺省 console.error）。绝不回传消息内容（不得含 token）。 */
   log?: (message: string) => void;
+  /**
+   * 升级替换钩子（受管宿主提供）：接收已 staged 的候选 release，负责启动
+   * 候选守护进程并返回「已注册未激活」的替换句柄；commit()/abort() 由引擎
+   * 在排空完成后调用。未提供时 nodeUpgrade 显式拒绝（not_supported）。
+   */
+  prepareUpgradeReplacement?: PerformNodeUpgradeOptions['prepareReplacement'];
+  /** 升级提交成功（或提交未确认保持让位）后回调旧宿主 pid：旧进程应退出。 */
+  onUpgradeReplaced?: (pid: number) => void;
+  /** 升级尝试 ID：升级后的新守护进程重连时随 register 上报供 Hub 对账。 */
+  upgradeAttemptId?: string;
+  /** 候选待激活模式：env server 从创建即 draining，直到 confirmUpgrade 解除。 */
+  pendingActivation?: boolean;
 }
 
 export interface NodeDaemon {
@@ -87,6 +115,26 @@ export interface NodeDaemon {
   waitUntilRegistered(timeoutMs?: number): Promise<boolean>;
   /** 停止：断开连接、dispose 全部世代 env server、清理定时器。幂等，返回前等待清理完成。 */
   close(): Promise<void>;
+  /**
+   * 检查节点可用更新（真实运行包版本 vs registry 最新）；失败抛带 code 的 Error
+ * （CLI 约定：Promise 直接携带结果，非 RpcResult）。
+   * trustedRegistry=true 仅限本机可信调用（CLI 宿主）显式指定 registry 源；
+   * RPC 路径一律 false，只允许 filterRpcRegistryUrl 允许清单内的源。
+   */
+  checkUpgrade(input?: NodeUpgradeCheckInput, trustedRegistry?: boolean): Promise<NodeUpgradeCheckResult>;
+  /**
+   * 触发自升级（排空 → stage → 替换守护进程 → 提交/回滚）；失败抛带 code 的
+ * Error。无 prepareUpgradeReplacement 时抛 not_supported，绝不伪造结果。
+   */
+  upgrade(input?: NodeUpgradeRpcInput, trustedRegistry?: boolean): Promise<NodeUpgradeResult>;
+  /**
+   * 本机已激活回调（候选调用）：记录 commit 并立即异步随心跳上报 Hub；
+   * 只在参数合法并记下本地激活状态后 resolve——不因 Hub ACK 超时而失败，
+   * 之后每次心跳/重新注册幂等重试。
+   */
+  confirmUpgrade(commit: NodeUpgradeCommit): Promise<void>;
+  /** 升级进行中或已提交待退出。 */
+  isUpgrading(): boolean;
 }
 
 // —— 常量预算 ————————————————————————————————————————————————————————
@@ -533,6 +581,127 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
     return dispose;
   };
 
+  // —— 自升级（nodeUpgrade RPC / confirmUpgrade 激活）——————————————
+  /** 升级在途（performNodeUpgrade 未落定）或已提交/未确认（等待宿主退出）。 */
+  let upgradeInFlight: Promise<RpcResult<NodeUpgradeResult>> | undefined;
+  /** isUpgrading 状态：升级开始置 true；失败回滚清 false；成功/未确认保持 true。 */
+  let upgradeActive = false;
+  /** 本机已激活的升级 commit（幂等随每次心跳重试直至 close）。 */
+  let upgradeCommit: NodeUpgradeCommit | undefined;
+
+  /**
+   * 升级期暂停旧 daemon 重连：由 connect() 检查；失败回滚后恢复。
+   * 注意各代 env server 的 draining 由 performNodeUpgrade 的 setDraining
+   * 回调直接驱动，必须作用于「当前代」，断代重连的新代继承全局暂停/激活状态。
+   */
+  let suspendReconnect = false;
+  /** 全局 draining（升级排空 / 候选待激活）：新世代 server 创建即继承。 */
+  let drainingGlobally = options.pendingActivation === true;
+  const applyDraining = (value: boolean): void => {
+    drainingGlobally = value;
+    generation?.server.setDraining(value);
+  };
+
+  /**
+   * 立即异步推送一次心跳：confirmUpgrade 激活后马上上报 commit（不等下一拍）。
+   * 目标是「当前已注册的连接」：无连接时静默跳过（后续注册/心跳幂等重试）。
+   */
+  const pushHeartbeatSoon = (withCommit: boolean): void => {
+    const gen = generation;
+    if (gen === undefined || !gen.registered || gen.heartbeatTimer === undefined) return;
+    const beat = (async () => {
+      const health = await collectNodeHealth(dataDir).catch(() => undefined);
+      const input: NodeHeartbeatInput = {
+        ...(health !== undefined ? { health } : {}),
+        ...(withCommit && upgradeCommit !== undefined ? { upgradeCommit } : {}),
+      };
+      await gen.hubRpc.heartbeat(identity.nodeId, input).catch(() => false);
+    })();
+    void beat.catch(() => undefined);
+  };
+
+  /**
+   * 当前代心跳携带 commit 后收到 alive=true：Hub 已确认，停止重试。
+   * alive=false（false 心跳路径）：commit 在内存持续保留到 close，
+   * 待重新注册成功后由下一次心跳重试。
+   */
+
+  const parseUpgradeAttemptId = (value: unknown): string | undefined => {
+    if (value === undefined) return undefined;
+    if (typeof value !== 'string' || value === '' || value.length > 128) {
+      throw Object.assign(new Error(`upgradeAttemptId 非法：${JSON.stringify(value)}`), { code: 'invalid' });
+    }
+    return value;
+  };
+
+  /** RPC 入参严格边界校验：null/数组/未知字段类型一律 invalid。 */
+  const assertUpgradeCheckInput = (input: unknown): NodeUpgradeCheckInput | undefined => {
+    if (input === undefined || input === null) return undefined;
+    if (typeof input !== 'object' || Array.isArray(input)) {
+      throw Object.assign(new Error('input 必须是对象'), { code: 'invalid' });
+    }
+    const record = input as Record<string, unknown>;
+    const known = new Set(['registryUrl']);
+    for (const key of Object.keys(record)) {
+      if (!known.has(key)) throw Object.assign(new Error(`未知字段：${key}`), { code: 'invalid' });
+    }
+    if (record['registryUrl'] !== undefined && typeof record['registryUrl'] !== 'string') {
+      throw Object.assign(new Error('registryUrl 必须是字符串'), { code: 'invalid' });
+    }
+    return record as NodeUpgradeCheckInput;
+  };
+
+  const assertUpgradeRpcInput = (input: unknown): NodeUpgradeRpcInput | undefined => {
+    if (input === undefined || input === null) return undefined;
+    if (typeof input !== 'object' || Array.isArray(input)) {
+      throw Object.assign(new Error('input 必须是对象'), { code: 'invalid' });
+    }
+    const record = input as Record<string, unknown>;
+    const known = new Set(['targetVersion', 'registryUrl', 'force', 'attemptId']);
+    for (const key of Object.keys(record)) {
+      if (!known.has(key)) throw Object.assign(new Error(`未知字段：${key}`), { code: 'invalid' });
+    }
+    if (record['targetVersion'] !== undefined && typeof record['targetVersion'] !== 'string') {
+      throw Object.assign(new Error('targetVersion 必须是字符串'), { code: 'invalid' });
+    }
+    if (record['registryUrl'] !== undefined && typeof record['registryUrl'] !== 'string') {
+      throw Object.assign(new Error('registryUrl 必须是字符串'), { code: 'invalid' });
+    }
+    if (record['force'] !== undefined && typeof record['force'] !== 'boolean') {
+      throw Object.assign(new Error('force 必须是布尔'), { code: 'invalid' });
+    }
+    if (record['attemptId'] !== undefined) parseUpgradeAttemptId(record['attemptId']);
+    return record as NodeUpgradeRpcInput;
+  };
+
+  const assertUpgradeCommit = (input: unknown): NodeUpgradeCommit => {
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+      throw Object.assign(new Error('commit 必须是对象'), { code: 'invalid' });
+    }
+    const record = input as Record<string, unknown>;
+    const known = new Set(['attemptId', 'version', 'previousVersion', 'pid']);
+    for (const key of Object.keys(record)) {
+      if (!known.has(key)) throw Object.assign(new Error(`未知字段：${key}`), { code: 'invalid' });
+    }
+    const attemptId = parseUpgradeAttemptId(record['attemptId']);
+    if (attemptId === undefined) throw Object.assign(new Error('attemptId 缺失或非法'), { code: 'invalid' });
+    for (const key of ['version', 'previousVersion'] as const) {
+      const value = record[key];
+      if (typeof value !== 'string' || value === '' || value.length > 128) {
+        throw Object.assign(new Error(`${key} 必须是非空字符串`), { code: 'invalid' });
+      }
+    }
+    if (typeof record['pid'] !== 'number' || !Number.isSafeInteger(record['pid']) || record['pid'] <= 0) {
+      throw Object.assign(new Error('pid 必须是正整数'), { code: 'invalid' });
+    }
+    return {
+      attemptId,
+      version: record['version'] as string,
+      previousVersion: record['previousVersion'] as string,
+      pid: record['pid'],
+    };
+  };
+
   const startConnect = (): void => {
     const wsUrl = `${hub.protocol === 'https:' ? 'wss' : 'ws'}://${hub.host}${hub.pathname.replace(/\/+$/, '')}/ws/node?nodeId=${encodeURIComponent(identity.nodeId)}`;
 
@@ -546,8 +715,20 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
       onIpcEvent: (event) => pushEvent('onIpcEvent', event),
       onIpcClosed: (event) => pushEvent('onIpcClosed', event),
     });
-    const hubRpc = createBirpc<HubSideFunctions, NodeEnvRpcFunctions>(server, {
-      post: (data) => {
+    if (drainingGlobally) server.setDraining(true);
+    const hubRpc = createBirpc<HubSideFunctions, NodeEnvRpcFunctions>(
+      // 升级 RPC 挂在外层（server 之上）：绝不能进 env server 的 pendingOperations
+      // guard——升级会 dispose 旧代 server，若被自身 await 会死锁。
+      Object.assign(Object.create(null), server, {
+        async nodeCheckUpgrade(input: NodeUpgradeCheckInput): Promise<RpcResult<NodeUpgradeCheckResult>> {
+          return await daemonCheckUpgrade(input, false);
+        },
+        async nodeUpgrade(input: NodeUpgradeRpcInput): Promise<RpcResult<NodeUpgradeResult>> {
+          return await daemonUpgrade(input, false);
+        },
+      }),
+      {
+        post: (data) => {
         // 非 OPEN 一律显式抛错（消息不得无声丢失）；事件推送调用侧已 catch。
         if (socket.readyState !== WebSocket.OPEN) {
           throw new Error(`[birpc] WS 非 OPEN 状态拒绝发送（readyState=${socket.readyState}）`);
@@ -641,6 +822,8 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
           hubRpc.register({
             nodeId: identity.nodeId, token: identity.token,
             hostname: os.hostname(), platform: process.platform, hubUrl,
+            version: getNodeVersion(),
+            ...(options.upgradeAttemptId !== undefined ? { upgradeAttemptId: options.upgradeAttemptId } : {}),
             ...(health !== undefined ? { health } : {}),
           }).then((result) => ({ kind: 'ack', result })),
           REGISTER_TIMEOUT_MS,
@@ -664,6 +847,9 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
 
         // 心跳：预算 = interval 的 3/4（1s..30s）；在途不重叠；连续 2 次
         // 预算内无应答或被显式拒绝 → 终结当前代并重连。
+        // 升级 commit 激活后每跳携带 upgradeCommit，Hub ACK 确认后停止捎带。
+        let commitPending = upgradeCommit !== undefined;
+        let commitAcked = false;
         const interval = typeof result.heartbeatMs === 'number' && result.heartbeatMs > 0 ? result.heartbeatMs : 15_000;
         const budget = Math.min(Math.max(Math.floor((interval * 3) / 4), HEARTBEAT_BUDGET_MIN_MS), HEARTBEAT_BUDGET_MAX_MS);
         let inFlight = false;
@@ -672,11 +858,18 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
           if (closed || generation !== gen) return;
           if (inFlight) return; // 上一跳仍在预算窗口内：跳过本拍，不堆积
           inFlight = true;
+          if (upgradeCommit !== undefined && !commitAcked) commitPending = true; // 未确认前持续携带
           const outcome = withinBudget<HeartbeatOutcome>(
             (async () => {
               // 每跳捎带最新健康快照；采集失败仍发送心跳（不中断存活信号）。
               const beat = await collectNodeHealth(dataDir).catch(() => undefined);
-              const alive = await hubRpc.heartbeat(identity.nodeId, beat !== undefined ? { health: beat } : undefined);
+              const alive = await hubRpc.heartbeat(
+                identity.nodeId,
+                {
+                  ...(beat !== undefined ? { health: beat } : {}),
+                  ...(commitPending && upgradeCommit !== undefined ? { upgradeCommit } : {}),
+                },
+              );
               return { kind: 'ack', alive: alive === true };
             })(),
             budget,
@@ -698,6 +891,10 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
             }
             if (r.alive) {
               misses = 0;
+              if (commitPending && upgradeCommit !== undefined) {
+                commitPending = false; // Hub 已确认本次 commit
+                commitAcked = true;
+              }
               return;
             }
             log('心跳被拒（注册已失效），重连');
@@ -729,6 +926,7 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
 
   const connect = (): void => {
     if (closed) return;
+    if (suspendReconnect) return; // 升级已提交/未确认：旧 daemon 暂停重连等待宿主退出
     if (generation !== undefined) return; // 至多一个在途世代（防并行连接）
     startConnect();
   };
@@ -748,6 +946,137 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
   }
 
   let closePromise: Promise<void> | undefined;
+
+  /**
+   * registry 源解析：remote（trustedRegistry !== true）只允许 filterRpcRegistryUrl
+   * 允许清单（官方源或 HELM_NPM_REGISTRY 显式配置）；本机可信调用（CLI 宿主）
+   * 可显式指定任意源。
+   */
+  const resolveUpgradeRegistry = (registryUrl: string | undefined, trustedRegistry: boolean): string | undefined =>
+    trustedRegistry === true ? (registryUrl === undefined || registryUrl === '' ? undefined : registryUrl) : filterRpcRegistryUrl(registryUrl);
+
+  /** 共享边界校验后的检查更新实现（外层 RPC 与 daemon 方法共用）。 */
+  const daemonCheckUpgrade = async (
+    input: NodeUpgradeCheckInput | undefined,
+    trustedRegistry: boolean,
+  ): Promise<RpcResult<NodeUpgradeCheckResult>> => {
+    try {
+      const parsed = assertUpgradeCheckInput(input);
+      const registryUrl = resolveUpgradeRegistry(parsed?.registryUrl, trustedRegistry);
+      const value = await checkNodeUpgrade(dataDir, {
+        ...(registryUrl !== undefined ? { registryUrl } : {}),
+        currentVersion: getNodeVersion(),
+      });
+      return { ok: true, value };
+    } catch (error) {
+      return { ok: false, error: rpcErrorOf(error) };
+    }
+  };
+
+  /** RpcResult → throw 带code Error 的公共方法适配（CLI 约定）。 */
+  const unwrapRpc = async <T>(result: Promise<RpcResult<T>>): Promise<T> => {
+    const settled = await result;
+    if (!settled.ok) {
+      throw Object.assign(new Error(settled.error.message), { code: settled.error.code });
+    }
+    return settled.value;
+  };
+
+  /**
+   * 共享升级实现：外层 RPC（trusted=false）与本机 daemon 方法（可 true）共用。
+   * 无替换宿主 not_supported；并发/已提交 busy invalid；无操作（upgraded:false）
+ * 恢复 flags/gate/重连；成功与提交未确认保持让位；close 后拒绝新升级。
+   */
+  const daemonUpgrade = (
+    input: NodeUpgradeRpcInput | undefined,
+    trustedRegistry: boolean,
+  ): Promise<RpcResult<NodeUpgradeResult>> => {
+    if (closed) {
+      return Promise.resolve({ ok: false, error: { code: 'invalid', message: 'daemon 已关闭，拒绝新的升级请求' } });
+    }
+    if (upgradeActive || upgradeInFlight !== undefined) {
+      return Promise.resolve({
+        ok: false,
+        error: { code: 'invalid', message: '升级已在进行中或已提交待退出（busy），拒绝并发升级请求' },
+      });
+    }
+    if (options.prepareUpgradeReplacement === undefined) {
+      return Promise.resolve({
+        ok: false,
+        error: {
+          code: 'not_supported',
+          message: '本 daemon 未接入升级替换宿主（prepareUpgradeReplacement 缺失），拒绝升级：不伪造结果',
+        },
+      });
+    }
+    let run: Promise<RpcResult<NodeUpgradeResult>>;
+    run = (async (): Promise<RpcResult<NodeUpgradeResult>> => {
+      // 让 upgradeInFlight 赋值先于任何同步段执行：非法输入快速失败也不会把
+      // 已完成的错误 promise 永久缓存在 upgradeInFlight（finally 必然在其后运行）。
+      await Promise.resolve();
+      upgradeActive = true;
+      // 升级全程暂停重连：旧 socket 被候选顶掉不重连争抢；失败/无操作后恢复。
+      suspendReconnect = true;
+      try {
+        const parsed = assertUpgradeRpcInput(input);
+        const registryUrl = resolveUpgradeRegistry(parsed?.registryUrl, trustedRegistry);
+        const value = await performNodeUpgrade(dataDir, {
+          ...(parsed?.targetVersion !== undefined ? { targetVersion: parsed.targetVersion } : {}),
+          ...(registryUrl !== undefined ? { registryUrl } : {}),
+          ...(parsed?.force === true ? { force: true } : {}),
+          ...(parsed?.attemptId !== undefined ? { attemptId: parsed.attemptId } : {}),
+          currentVersion: getNodeVersion(),
+          prepareReplacement: options.prepareUpgradeReplacement,
+          getActiveExecCount: () => generation?.server.getActiveExecCount() ?? 0,
+          setDraining: applyDraining,
+          onScheduleShutdown: options.onUpgradeReplaced,
+        });
+        if (value.upgraded) return { ok: true, value }; // 已提交：保持 flags/gate 等待宿主退出
+        // 同版本无操作：未做任何变更，必须恢复受理与重连，节点不得永久 busy。
+        upgradeActive = false;
+        suspendReconnect = false;
+        applyDraining(false);
+        connect();
+        return { ok: true, value };
+      } catch (error) {
+        if (!isCommitUnconfirmed(error)) {
+          // 失败且未提交：恢复 gate 与重连（原 socket 被顶掉不属于失败语义）。
+          upgradeActive = false;
+          suspendReconnect = false;
+          applyDraining(false);
+          connect();
+        }
+        return { ok: false, error: rpcErrorOf(error) };
+      } finally {
+        upgradeInFlight = undefined;
+      }
+    })();
+    upgradeInFlight = run;
+    return run;
+  };
+
+  /** RPC 错误信封：保留自有 invalid/not_supported/aborted 错误码；策略拒绝
+ * UpgradeRejectedError → invalid；其余 unknown。 */
+  const rpcErrorOf = (error: unknown): RpcEnvError => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (error instanceof UpgradeRejectedError) return { code: 'invalid', message };
+    const code = (error as { code?: unknown } | null | undefined)?.code;
+    if (code === 'invalid' || code === 'not_supported' || code === 'aborted') {
+      return { code, message };
+    }
+    return { code: 'unknown', message };
+  };
+
+  /** 提交未确认识别：引擎将其包裹为普通 Error 抛出（cause 链保留原错误）。 */
+  const isCommitUnconfirmed = (error: unknown): boolean => {
+    let current: unknown = error;
+    for (let depth = 0; depth < 8 && current !== undefined && current !== null; depth += 1) {
+      if (current instanceof UpgradeCommitUnconfirmedError) return true;
+      current = (current as { cause?: unknown }).cause;
+    }
+    return false;
+  };
+
   const daemon: NodeDaemon = {
     identity,
     hubUrl,
@@ -789,6 +1118,34 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
       }
       return closePromise;
     },
+    checkUpgrade: (input?, trustedRegistry?) => unwrapRpc(daemonCheckUpgrade(input, trustedRegistry === true)),
+    upgrade: (input?, trustedRegistry?) => unwrapRpc(daemonUpgrade(input, trustedRegistry === true)),
+    confirmUpgrade: async (commit: NodeUpgradeCommit): Promise<void> => {
+      // 参数非法直接抛出（本机可信调用，非 RPC 边界）。
+      const validated = assertUpgradeCommit(commit);
+      // 候选身份严格对账：仅当 commit 与本进程的升级上下文一致才解除 gate，
+      // 防止错误进程/陈旧 commit 误开闸；同一 commit 重复调用幂等无害。
+      if (options.pendingActivation === true) {
+        const expectedAttempt = options.upgradeAttemptId;
+        if (
+          (expectedAttempt !== undefined && validated.attemptId !== expectedAttempt) ||
+          validated.version !== getNodeVersion() ||
+          validated.pid !== process.pid
+        ) {
+          throw Object.assign(
+            new Error(
+              `confirmUpgrade 与本候选守护进程不一致，拒绝激活（attemptId=${validated.attemptId}, version=${validated.version}, pid=${validated.pid}; 期望 attemptId=${expectedAttempt ?? '(未指定)'}, version=${getNodeVersion()}, pid=${process.pid}）`,
+            ),
+            { code: 'invalid' },
+          );
+        }
+      }
+      // 记录并异步上报：绝不因 Hub ACK 超时判定激活失败（幂等随心跳重试）。
+      upgradeCommit = validated;
+      applyDraining(false); // 解除候选 pendingActivation gate，恢复受理新命令
+      pushHeartbeatSoon(true);
+    },
+    isUpgrading: (): boolean => upgradeActive,
   };
 
   connect();
@@ -821,11 +1178,26 @@ export async function runNodeDaemon(
 /** 面向集成/测试的句柄版：不接管信号，返回 daemon 供直接控制。 */
 export async function runNodeDaemonHandle(
   input: NodeConnectInput,
-  options: { signal?: AbortSignal; dataDir?: string } = {},
+  options: {
+    signal?: AbortSignal;
+    dataDir?: string;
+    prepareUpgradeReplacement?: NodeDaemonOptions['prepareUpgradeReplacement'];
+    onUpgradeReplaced?: NodeDaemonOptions['onUpgradeReplaced'];
+    upgradeAttemptId?: string;
+    pendingActivation?: boolean;
+  } = {},
 ): Promise<NodeDaemon> {
   const dataDir = resolveNodeDataDir(options.dataDir);
   const identity = await resolveRunIdentity(dataDir, input);
-  const daemon = await createNodeDaemon({ hubUrl: input.hubUrl, identity, dataDir });
+  const daemon = await createNodeDaemon({
+    hubUrl: input.hubUrl,
+    identity,
+    dataDir,
+    ...(options.prepareUpgradeReplacement !== undefined ? { prepareUpgradeReplacement: options.prepareUpgradeReplacement } : {}),
+    ...(options.onUpgradeReplaced !== undefined ? { onUpgradeReplaced: options.onUpgradeReplaced } : {}),
+    ...(options.upgradeAttemptId !== undefined ? { upgradeAttemptId: options.upgradeAttemptId } : {}),
+    ...(options.pendingActivation !== undefined ? { pendingActivation: options.pendingActivation } : {}),
+  });
   if (options.signal) {
     const signal = options.signal;
     const originalClose = daemon.close.bind(daemon);

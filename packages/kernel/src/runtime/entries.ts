@@ -12,7 +12,12 @@
  * 否则 pi.assistant 文本在 HTTP 详情与实时事件中丢失。
  */
 
-import { HelmError, type ConversationEntry, type ConversationLive } from '@helm/protocol'
+import {
+  HelmError,
+  type ConversationEntry,
+  type ConversationLive,
+  type QueuedConversationInput,
+} from '@helm/protocol'
 
 /** SDK EntryRecord 的结构子集（避免依赖 SDK 具体类型，测试可构造 faux 形状）。 */
 export interface EntryRecordLike {
@@ -134,12 +139,50 @@ function toolInputOf(slot: { arguments?: unknown } | { input?: unknown }): unkno
   return (slot as { input?: unknown }).input
 }
 
+/** pi.inbox queued 项的结构子集（tracker 传入；形状非法项直接跳过，不伪造）。 */
+export interface InboxItemLike {
+  readonly id: number | string
+  readonly mode?: string
+  readonly entry?: { kind?: string; data?: unknown }
+}
+
+/** inbox queued 项 -> QueuedConversationInput；非 helm.input / 非法载荷返回 undefined。 */
+function queuedInputOf(item: InboxItemLike, fallbackCreatedAt: number): QueuedConversationInput | undefined {
+  if (item.mode !== 'steer' && item.mode !== 'followUp') return undefined
+  if (item.entry?.kind !== 'helm.input') return undefined
+  const data = item.entry.data
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) return undefined
+  const d = data as Record<string, unknown>
+  if (typeof d['id'] !== 'string' || typeof d['text'] !== 'string') return undefined
+  const origin = d['origin'] === 'agent' || d['origin'] === 'trigger' ? d['origin'] : 'human'
+  const createdAt =
+    typeof d['createdAt'] === 'number' && Number.isFinite(d['createdAt']) ? d['createdAt'] : fallbackCreatedAt
+  const attachments = Array.isArray(d['attachments']) && d['attachments'].length > 0 ? d['attachments'] : undefined
+  return {
+    id: d['id'],
+    submissionId: String(item.id),
+    text: d['text'],
+    mode: item.mode,
+    origin,
+    createdAt,
+    ...(attachments !== undefined ? { attachments: attachments as QueuedConversationInput['attachments'] } : {}),
+  }
+}
+
+/** 排队输入排序：steer 全部排在 followUp 之前（同 mode 保持原序）。 */
+function sortQueuedInputs(items: QueuedConversationInput[]): void {
+  const rank = (mode: QueuedConversationInput['mode']): number => (mode === 'steer' ? 0 : 1)
+  items.sort((a, b) => rank(a.mode) - rank(b.mode))
+}
+
 /**
  * SDK LiveState（pi.live 文档值）-> 协议 ConversationLive。
  * - text：generation.message.content 中 text 块的累计快照（客户端替换式渲染）；
  * - tools：模型发起的工具轮（tools）与嵌套调用（nestedTools）统一映射；
  *   输入取 slot 的运行参数（模型发起调用参数在 assistant entry，slot 的
- *   arguments/output 仅嵌套调用携带），结果文本不进入 live（详情走 entry）。
+ *   arguments/output 仅嵌套调用携带），结果文本不进入 live（详情走 entry）；
+ * - queuedInputs：从 pi.inbox 排队项派生的待生效输入清单（steer 优先），
+ *   无排队项时省略。
  */
 export function deriveConversationLive(
   conversationId: number,
@@ -161,6 +204,7 @@ export function deriveConversationLive(
     }>
   } | undefined,
   updatedAt: number,
+  inboxItems?: ReadonlyArray<InboxItemLike>,
 ): ConversationLive {
   const source = live ?? {}
   const tools: LiveToolState[] = []
@@ -179,11 +223,18 @@ export function deriveConversationLive(
   collect(source.tools)
   collect(source.nestedTools)
   const thinking = streamedThinkingOf(source.generation?.message)
+  const queuedInputs: QueuedConversationInput[] = []
+  for (const item of inboxItems ?? []) {
+    const queued = queuedInputOf(item, updatedAt)
+    if (queued !== undefined) queuedInputs.push(queued)
+  }
+  sortQueuedInputs(queuedInputs)
   return {
     conversationId,
     text: streamedTextOf(source.generation?.message),
     ...(thinking !== '' ? { thinking } : {}),
     tools,
+    ...(queuedInputs.length > 0 ? { queuedInputs } : {}),
     updatedAt,
   }
 }

@@ -296,7 +296,12 @@ export function resolveHerdrIpcEndpoint(
 export interface NodeEnvRpcServer extends NodeEnvRpcFunctions {
   /** 关闭全部 reader、杀死在途命令、销毁全部 IPC socket（连接断开或停机时调用）。幂等。 */
   dispose(): Promise<void>;
-  /** 在途 envExec 数量（排空内省）。 */
+  /**
+   * 排空开关：true 期间新 envExec 受理即拒（升级排空/已提交让位/候选待激活），
+   * 不影响已在途命令；false 恢复受理。幂等。
+   */
+  setDraining(value: boolean): void;
+  /** 在途 envExec 数量（排空内省；含已受理未 spawn 的调用）。 */
   getActiveExecCount(): number;
   /** 打开的 reader 数量（内省/测试）。 */
   getOpenReaderCount(): number;
@@ -332,6 +337,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
 
   const envs = new Map<string, LocalExecutionEnv>();
   let disposed = false;
+  let draining = false;
   const envFor = (cwd?: string): LocalExecutionEnv => {
     if (disposed) {
       throw Object.assign(new Error('server disposed'), { code: 'aborted' });
@@ -895,8 +901,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     },
 
     async envExec(input: EnvExecInput): Promise<RpcResult<EnvExecOk>> {
-      const promise = execOnce(input);
-      return trackExec(promise);
+      return execOnce(input);
     },
 
     async envAbortExec(execId: string): Promise<void> {
@@ -929,6 +934,31 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     if (VOID_RPC_METHODS.has(key)) continue;
     const original = guarded[key];
     if (typeof original !== 'function') continue;
+    if (key === 'envExec') {
+      // 受理即登记：draining/disposed/对象校验与 execWaiters 计数全部在 guard
+      // 入口同步完成——升级排空轮询看到的计数包含「已受理未 spawn」的调用，
+      // 且已受理的调用不会因之后的 setDraining 被拒。
+      guarded[key] = async (...args: unknown[]): Promise<RpcResult<unknown>> => {
+        if (disposed) return { ok: false, error: { code: 'aborted', message: 'server disposed' } };
+        const input = args[0];
+        if (!input || typeof input !== 'object' || Array.isArray(input)) return invalidInput('RPC input must be an object');
+        if (draining) {
+          return { ok: false, error: { code: 'aborted', message: 'daemon is draining (upgrade in progress), rejecting new commands' } };
+        }
+        const operation = trackExec(
+          Promise.resolve().then(() => (original as (...a: unknown[]) => Promise<RpcResult<unknown>>)(...args)),
+        );
+        pendingOperations.add(operation);
+        try {
+          return await operation;
+        } catch (error) {
+          return rpcFail(error);
+        } finally {
+          pendingOperations.delete(operation);
+        }
+      };
+      continue;
+    }
     guarded[key] = async (...args: unknown[]): Promise<RpcResult<unknown>> => {
       if (disposed) return { ok: false, error: { code: 'aborted', message: 'server disposed' } };
       if (!args[0] || typeof args[0] !== 'object' || Array.isArray(args[0])) return invalidInput('RPC input must be an object');
@@ -970,7 +1000,11 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
   return Object.assign(rpc, {
     dispose,
     resolveIpcEndpoint,
-    getActiveExecCount: () => running.size,
+    setDraining: (value: boolean): void => {
+      draining = value === true;
+    },
+    // 排空内省按「已受理」计数（execWaiters 在受理同步段登记，含尚未 spawn 的调用）。
+    getActiveExecCount: () => execWaiters.size,
     getOpenReaderCount: () => readers.size,
     getActiveIpcCallCount: () => activeIpcCalls.size,
     getActiveIpcSubscriptionCount: () => activeIpcSubscriptions.size,

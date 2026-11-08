@@ -1,31 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { ConversationStatus } from '@helm/protocol'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
-import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
+import { isHumanSelectableProfile } from '../shell/sidebar-model.js'
 import { matchesUiScope } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { Composer } from './Composer.js'
+import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
 import { ConversationTimeline } from './ConversationTimeline.js'
 
 export interface ConversationPaneProps {
   conversationId: number
   isSplit?: boolean
   onCloseSplit?: () => void
-}
-
-const STATUS_META: Record<ConversationStatus, { label: string; badge: string; icon: string }> = {
-  working: { label: '执行中', badge: 'badge-accent', icon: 'loader' },
-  blocked: { label: '等待审批', badge: 'badge-warn', icon: 'shield-alert' },
-  done: { label: '已完成', badge: 'badge-ok', icon: 'check-circle' },
-  idle: { label: '空闲', badge: 'badge-neutral', icon: 'circle' },
-  error: { label: '出错', badge: 'badge-err', icon: 'alert-circle' },
-}
-
-function tailPath(cwd: string, segments = 2): string {
-  if (cwd === '') return ''
-  const parts = cwd.split('/').filter((p) => p !== '')
-  return parts.slice(-segments).join('/')
 }
 
 /** 会话顶栏 + 时间线 + AskDock(Composer 内) + Composer 微操舱。 */
@@ -36,13 +22,12 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
   const conversation = summary ?? detail
   const [renaming, setRenaming] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
-  const [cwdEditing, setCwdEditing] = useState(false)
-  const [cwdDraft, setCwdDraft] = useState('')
   const [actionPending, setActionPending] = useState<string | null>(null)
+  const [moreOpen, setMoreOpen] = useState(false)
   const [prefill, setPrefill] = useState<{ text: string; tick: number } | null>(null)
-  const [nodePatching, setNodePatching] = useState(false)
-  const currentNodeId = conversation?.nodeId || 'local'
-  const nodeKnown = conversation === undefined || store.nodes.some((n) => n.id === currentNodeId)
+  const [sendingInFlight, setSendingInFlight] = useState(false)
+  const moreMenuRef = useRef<HTMLSpanElement | null>(null)
+  const moreButtonRef = useRef<HTMLButtonElement | null>(null)
 
   const loadDetail = store.loadConversationDetail
   useEffect(() => {
@@ -50,6 +35,30 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
       void loadDetail(conversationId, true)
     }
   }, [conversationId, detail, loadDetail])
+
+  // 更多操作菜单：点击外部或 Escape 关闭；Escape 关闭后焦点回触发按钮
+  useEffect(() => {
+    if (!moreOpen) return
+    const onDocClick = (e: PointerEvent): void => {
+      if (moreMenuRef.current !== null && !moreMenuRef.current.contains(e.target as Node)) setMoreOpen(false)
+    }
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      setMoreOpen(false)
+      moreButtonRef.current?.focus()
+    }
+    document.addEventListener('pointerdown', onDocClick)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onDocClick)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [moreOpen])
+
+  // 切换会话时关闭更多菜单（组件复用时也保持确定语义）
+  useEffect(() => {
+    setMoreOpen(false)
+  }, [conversationId])
 
   const detailError = store.loadErrors[`conversation:${conversationId}`]
   if (detailError) {
@@ -69,12 +78,25 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
     )
   }
 
-  const statusMeta = STATUS_META[conversation.status] ?? STATUS_META.idle!
+  const sendingPending = sendingPendingVisible(sendingInFlight, conversation.status)
   const artifacts = store.conversationArtifacts[conversationId] ?? []
   const runs = store.workflowRuns.filter((r) => r.conversationId === conversationId)
   const children = store.conversations.filter((item) => item.parentConversationId === conversationId)
   const workbenchCount = runs.length + artifacts.length + children.length
   const hasWorkbenchPanel = store.groupedUi.workbenchPanels.some((panel) => matchesUiScope(conversation, panel.spec.scope))
+  const currentNodeId = conversation.nodeId || 'local'
+  const envSubtitle = formatEnvSubtitle({
+    profileId: conversation.profileId,
+    nodeId: currentNodeId,
+    cwd: conversation.cwd,
+  })
+  const envSubtitleCompact = formatEnvSubtitle({
+    profileId: conversation.profileId,
+    nodeId: currentNodeId,
+    cwd: conversation.cwd,
+    compact: true,
+  })
+  const remoteNodeTag = envSubtitleCompact.text !== '' ? envSubtitleCompact.text : null
 
   const runAction = async (name: string, fn: () => Promise<unknown>, successTitle: string): Promise<void> => {
     setActionPending(name)
@@ -99,43 +121,17 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
     }
   }
 
+  const profile = store.profiles.find((p) => p.id === conversation.profileId)
+  const enabledPluginIds = new Set(store.plugins.filter((p) => p.enabled).map((p) => p.id))
+  const canCreateThread = profile !== undefined &&
+    isHumanSelectableProfile(profile, enabledPluginIds) &&
+    (conversation.ownedBy ?? 'human') === 'human'
+
   const saveTitle = async (): Promise<void> => {
     const next = titleDraft.trim()
     setRenaming(false)
     if (next === '' || next === conversation.title) return
     await runAction('rename', () => conversationsApi.patch(conversationId, { title: next }), '已重命名会话')
-  }
-
-  const saveCwd = async (): Promise<void> => {
-    const next = cwdDraft.trim()
-    setCwdEditing(false)
-    if (next === '' || next === conversation.cwd) return
-    await runAction('cwd', () => conversationsApi.patch(conversationId, { cwd: next }), '已更新工作目录')
-  }
-
-  const changeNode = async (nextNodeId: string): Promise<void> => {
-    if (nodePatching || nextNodeId === currentNodeId) return
-    setNodePatching(true)
-    try {
-      await conversationsApi.patch(conversationId, { nodeId: nextNodeId })
-      store.pushNotice({
-        type: 'notification',
-        level: 'info',
-        title: '已切换执行节点',
-        body: `#${conversationId} -> ${nextNodeId}`,
-        conversationId,
-      })
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '切换节点失败',
-        body: err instanceof Error ? err.message : String(err),
-        conversationId,
-      })
-    } finally {
-      setNodePatching(false)
-    }
   }
 
   const requestEdit = (text: string): void => {
@@ -183,61 +179,38 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
               {conversation.title === '' ? `会话 #${conversationId}` : conversation.title}
             </span>
           )}
-          <span className="badge badge-neutral" title={`Profile: ${conversation.profileId}`}>
-            {conversation.profileId}
+          <span className="pane-cwd-subtitle" title={envSubtitle.tooltip}>
+            <span className="env-subtitle-full">{envSubtitle.text}</span>
+            {remoteNodeTag !== null ? <span className="env-subtitle-compact">{remoteNodeTag}</span> : null}
           </span>
-          <span className={`badge ${statusMeta.badge}`}>
-            <HelmIcon
-              name={statusMeta.icon}
-              size={11}
-              className={conversation.status === 'working' ? 'spin-slow' : undefined}
-            />
-            {statusMeta.label}
-          </span>
-          <span title={`执行节点：${currentNodeId}（点击切换）`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-            <HelmIcon name="network" size={11} />
-            <select
-              className="input"
-              aria-label="会话执行节点"
-              disabled={nodePatching}
-              value={currentNodeId}
-              onChange={(e) => void changeNode(e.target.value)}
-              style={{ height: 22, fontSize: 11, padding: '0 4px', maxWidth: 150, cursor: 'pointer' }}
-            >
-              {store.nodes.map((n) => (
-                <option key={n.id} value={n.id}>{nodeOptionLabel(n)}</option>
-              ))}
-              {!nodeKnown && <option value={currentNodeId}>{currentNodeId}（未知）</option>}
-            </select>
-          </span>
-          {cwdEditing ? (
-            <input
-              className="input mono"
-              style={{ maxWidth: 280, height: 24, fontSize: 11 }}
-              value={cwdDraft}
-              autoFocus
-              placeholder="/绝对路径"
-              onChange={(e) => setCwdDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void saveCwd()
-                else if (e.key === 'Escape') setCwdEditing(false)
-              }}
-              onBlur={() => void saveCwd()}
-            />
-          ) : (
-            <span
-              className="pane-cwd-subtitle"
-              title={`工作目录：${conversation.cwd}（点击修改）`}
-              onClick={() => {
-                setCwdDraft(conversation.cwd)
-                setCwdEditing(true)
-              }}
-            >
-              {tailPath(conversation.cwd)}
-            </span>
-          )}
         </div>
         <div className="pane-actions">
+          {canCreateThread ? (
+            <button
+              type="button"
+              className="btn btn-sm"
+              title="在当前智能体下新建对话"
+              disabled={actionPending !== null}
+              onClick={() =>
+                void runAction(
+                  'new-thread',
+                  async () => {
+                    // 继承当前会话环境（profile + 节点 + 目录）：在远端会话内新话题不必重配环境
+                    const created = await conversationsApi.create({
+                      profileId: conversation.profileId,
+                      nodeId: currentNodeId,
+                      cwd: conversation.cwd,
+                    })
+                    store.openTarget({ kind: 'conversation', conversationId: created.id })
+                  },
+                  '已新建对话',
+                )
+              }
+            >
+              <HelmIcon name={actionPending === 'new-thread' ? 'loader' : 'plus'} size={12} />
+              <span className="pane-action-label">新话题</span>
+            </button>
+          ) : null}
           {workbenchCount > 0 || hasWorkbenchPanel ? (
             <button
               type="button"
@@ -253,59 +226,104 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
               {workbenchCount > 0 && <span className="badge badge-neutral tabular-nums">{workbenchCount}</span>}
             </button>
           ) : null}
-          <button
-            type="button"
-            className="btn btn-sm"
-            title="精简上下文 (/compact)"
-            disabled={actionPending !== null}
-            onClick={() =>
-              void runAction(
-                'compact',
-                () => conversationsApi.compact(conversationId),
-                '精简任务已提交',
-              )
-            }
-          >
-            <HelmIcon name={actionPending === 'compact' ? 'loader' : 'archive'} size={12} />
-            <span className="pane-action-label">精简上下文</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm"
-            title="重置上下文 (/reset)"
-            disabled={actionPending !== null}
-            onClick={() =>
-              void runAction(
-                'reset',
-                () => conversationsApi.reset(conversationId),
-                '上下文已重置',
-              )
-            }
-          >
-            <HelmIcon name={actionPending === 'reset' ? 'loader' : 'rotate-ccw'} size={12} />
-            <span className="pane-action-label">重置上下文</span>
-          </button>
-          <button
-            type="button"
-            className={`btn btn-sm split-toggle-btn${isSplit || store.splitTarget !== null ? ' btn-primary' : ''}`}
-            title={isSplit ? '关闭本分屏' : '在右屏并排打开 / 关闭分屏'}
-            onClick={toggleSplit}
-          >
-            <HelmIcon name="columns" size={12} />
-          </button>
+          {isSplit ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost split-close-btn"
+              aria-label="关闭分屏"
+              title="关闭本分屏"
+              onClick={() => onCloseSplit?.()}
+            >
+              <HelmIcon name="x" size={12} />
+              <span className="pane-action-label">关闭分屏</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={`btn btn-sm split-toggle-btn${store.splitTarget !== null ? ' btn-primary split-active' : ''}`}
+              aria-label={store.splitTarget !== null ? '关闭分屏' : '并排分屏'}
+              title="在右屏并排打开 / 关闭分屏"
+              onClick={toggleSplit}
+            >
+              <HelmIcon name="columns" size={12} />
+            </button>
+          )}
+          <span className="pane-more-menu" ref={moreMenuRef}>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              aria-label="更多会话操作"
+              title="更多会话操作"
+              aria-expanded={moreOpen}
+              ref={moreButtonRef}
+              onClick={() => setMoreOpen((v) => !v)}
+            >
+              <HelmIcon name="more" size={14} />
+            </button>
+            {moreOpen ? (
+              <div className="pane-more-popover">
+                <button
+                  type="button"
+                  className="popover-item"
+                  onClick={() => {
+                    setMoreOpen(false)
+                    setTitleDraft(conversation.title)
+                    setRenaming(true)
+                  }}
+                >
+                  <span className="pane-more-item-label">
+                    <HelmIcon name="edit" size={13} />
+                    重命名会话
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="popover-item"
+                  disabled={actionPending !== null}
+                  onClick={() => {
+                    setMoreOpen(false)
+                    void runAction('compact', () => conversationsApi.compact(conversationId), '精简任务已提交')
+                  }}
+                >
+                  <span className="pane-more-item-label">
+                    <HelmIcon name={actionPending === 'compact' ? 'loader' : 'archive'} size={13} />
+                    精简上下文 (/compact)
+                  </span>
+                </button>
+                <div className="popover-separator" role="separator" />
+                <button
+                  type="button"
+                  className="popover-item popover-item-danger"
+                  disabled={actionPending !== null}
+                  onClick={() => {
+                    setMoreOpen(false)
+                    // 危险操作先确认：reset 切换上下文但不删历史，文案如实说明后果
+                    if (!window.confirm(`重置会话 #${conversationId} 的上下文？历史消息保留，模型将从全新上下文开始。`)) return
+                    void runAction('reset', () => conversationsApi.reset(conversationId), '上下文已重置')
+                  }}
+                >
+                  <span className="pane-more-item-label">
+                    <HelmIcon name={actionPending === 'reset' ? 'loader' : 'rotate-ccw'} size={13} />
+                    重置上下文 (/reset)
+                  </span>
+                </button>
+              </div>
+            ) : null}
+          </span>
         </div>
       </header>
 
       <ConversationTimeline
         conversation={conversation}
         detailEntries={detail?.entries ?? []}
+        sendingPending={sendingPending}
         {...(store.conversationLives[conversationId] !== undefined
           ? { live: store.conversationLives[conversationId] }
           : {})}
         onRequestEdit={requestEdit}
       />
 
-      <Composer conversation={conversation} prefill={prefill} />
+      <Composer conversation={conversation} prefill={prefill} onSendingChange={setSendingInFlight} />
     </div>
   )
 }

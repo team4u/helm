@@ -17,6 +17,8 @@ import {
   buildTimelineItems,
   formatBytes,
   formatDurationMs,
+  resolveSubagentConversationId,
+  resolveWorkflowRunForTool,
   toolSummaryText,
   type AssistantTurn,
   type DividerItem,
@@ -25,11 +27,14 @@ import {
   type PluginCardItem,
   type ToolTrace,
 } from './timeline-model.js'
+import { SubagentLiveCard } from './SubagentLiveCard.js'
 
 export interface ConversationTimelineProps {
   conversation: ConversationSummary
   detailEntries: ReadonlyArray<ConversationEntry>
   live?: ConversationLive
+  /** 发送请求在途且服务端尚未 working/blocked（轻量等待行，与 working 行互斥）。 */
+  sendingPending?: boolean
   /** 请求将文本回填 Composer 并聚焦（编辑并重发）。 */
   onRequestEdit: (text: string) => void
 }
@@ -132,6 +137,11 @@ const ORIGIN_LABEL: Record<string, string> = {
   trigger: '来自触发器',
 }
 
+const QUEUED_MODE_LABEL: Record<'steer' | 'followUp', { icon: string; text: string }> = {
+  steer: { icon: 'corner-down-right', text: '插话引导 · 待当前步骤后注入' },
+  followUp: { icon: 'clock', text: '排队中 · 待当前回合结束后发送' },
+}
+
 function HumanMessage({
   item,
   conversation,
@@ -171,13 +181,20 @@ function HumanMessage({
 
   return (
     <div className="msg-human-row" tabIndex={0}>
-      {item.origin !== 'human' ? (
+      {item.queuedMode !== undefined ? (
+        <span className="msg-origin-tag" role="status">
+          <HelmIcon name={QUEUED_MODE_LABEL[item.queuedMode].icon} size={11} />
+          {QUEUED_MODE_LABEL[item.queuedMode].text}
+        </span>
+      ) : item.origin !== 'human' ? (
         <span className="msg-origin-tag">
           <HelmIcon name={item.origin === 'trigger' ? 'webhook' : 'bot'} size={11} />
           {ORIGIN_LABEL[item.origin] ?? item.origin}
         </span>
       ) : null}
-      <div className="msg-human-pill selectable">{item.text}</div>
+      <div className={`msg-human-pill selectable${item.queuedMode !== undefined ? ' msg-human-pill-queued' : ''}`}>
+        {item.text}
+      </div>
       {item.attachments !== undefined && item.attachments.length > 0 ? (
         <AttachmentChips attachments={item.attachments} conversationId={conversation.id} />
       ) : null}
@@ -186,20 +203,22 @@ function HumanMessage({
         <button
           type="button"
           className="btn btn-ghost btn-sm"
-          title="编辑并重发"
+          title={item.queuedMode !== undefined ? '回填输入框（原消息仍在排队）' : '编辑并重发'}
           onClick={() => onRequestEdit(item.text)}
         >
           <HelmIcon name="edit" size={12} />
         </button>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          title="从此消息分叉新会话"
-          disabled={forking}
-          onClick={() => void forkFromHere()}
-        >
-          <HelmIcon name={forking ? 'loader' : 'git-fork'} size={12} />
-        </button>
+        {item.queuedMode === undefined ? (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            title="从此消息分叉新会话"
+            disabled={forking}
+            onClick={() => void forkFromHere()}
+          >
+            <HelmIcon name={forking ? 'loader' : 'git-fork'} size={12} />
+          </button>
+        ) : null}
       </span>
     </div>
   )
@@ -248,13 +267,16 @@ function TraceRow({
     }
   }, [tool.input])
 
-  const workflow = tool.toolName === 'SubagentWorkflow' ? store.workflowRuns.find((run) => run.conversationId === conversationId && tool.resultText?.includes(run.id)) : undefined
-  const subagentId = tool.toolName === 'subagent' ? /\bconversationId=(\d+)/.exec(tool.resultText ?? '')?.[1] : undefined
+  const workflow = resolveWorkflowRunForTool(tool, conversationId, store.workflowRuns)
+  const subagentId = resolveSubagentConversationId(tool, conversationId, store.conversations)
+  const subagentIdNum = subagentId !== undefined ? Number(subagentId) : undefined
 
   return (
     <div className={`trace-entry${tool.isError ? ' trace-entry-error' : ''}`}>
       {workflow && <WorkflowRunCard run={workflow} />}
-      {subagentId && <div className="jr-stack-row"><span className="badge badge-neutral">子会话 #{subagentId}</span><button className="btn btn-sm" onClick={() => store.openTarget(`conversation:${subagentId}`, { split: true })}>并排查看</button></div>}
+      {subagentIdNum !== undefined && (
+        <SubagentLiveCard childConversationId={subagentIdNum} toolStatus={tool.status} />
+      )}
       <div
         className={`trace-row${tool.isError ? ' trace-row-error' : ''}`}
         role="button"
@@ -270,7 +292,7 @@ function TraceRow({
         <span className="trace-row-left">
           <HelmIcon
             name={toolStatusIcon(tool)}
-            size={13}
+            size={12}
             className={tool.status === 'running' ? 'spin-slow' : undefined}
           />
           <span className="trace-tool-name">{tool.toolName}</span>
@@ -463,7 +485,7 @@ function ResolvedAskRow({ ask, status }: { ask: AskSpec; status: 'answered' | 'c
     <div className="trace-entry">
       <div className="trace-row" role="button" tabIndex={0} onClick={() => setOpen((v) => !v)}>
         <span className="trace-row-left">
-          <HelmIcon name="check-circle" size={13} />
+          <HelmIcon name="check-circle" size={12} />
           <span className="trace-tool-name">审批</span>
           <span className="trace-tool-summary">{ask.title}</span>
         </span>
@@ -575,7 +597,7 @@ function AssistantTurnView({
       {turn.live ? (
         <span className="msg-origin-tag">
           <HelmIcon name="loader" size={11} className="spin-slow" />
-          正在进行…
+          正在等待响应…
         </span>
       ) : null}
       <span className="msg-hover-bar">
@@ -602,6 +624,7 @@ export function ConversationTimeline({
   conversation,
   detailEntries,
   live,
+  sendingPending = false,
   onRequestEdit,
 }: ConversationTimelineProps) {
   const store = useHelmStore()
@@ -627,6 +650,7 @@ export function ConversationTimeline({
     [detailEntries, live, isWorking, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
   )
 
+  const hasLiveTurn = items.some((item) => item.kind === 'assistant' && item.live)
   const resolvedAsks = store.resolvedAsksByConv[conversation.id] ?? []
 
   // 贴底吸附：仅当用户主动上滚时脱离贴底（内容增长导致 scrollHeight 变大不得误判为脱离）。
@@ -679,7 +703,7 @@ export function ConversationTimeline({
       .join(',')
   }, [items])
 
-  const contentFingerprint = `${items.length}:${detailEntries.length}:${conversation.status}:${lastTurnSummary}:${live?.updatedAt ?? 0}:${live?.thinking?.length ?? 0}:${live?.text.length ?? 0}:${resolvedAsks.length}`
+  const contentFingerprint = `${items.length}:${detailEntries.length}:${conversation.status}:${lastTurnSummary}:${live?.updatedAt ?? 0}:${live?.thinking?.length ?? 0}:${live?.text.length ?? 0}:${live?.queuedInputs?.map((q) => `${q.id}:${q.mode}`).join(',') ?? ''}:${resolvedAsks.length}`
   useEffect(() => {
     if (lastHumanKey !== undefined && lastHumanKey !== lastHumanKeyRef.current) {
       lastHumanKeyRef.current = lastHumanKey
@@ -715,7 +739,7 @@ export function ConversationTimeline({
           正在加载会话…
         </div>
       ) : null}
-      {!loading && items.length === 0 && resolvedAsks.length === 0 ? (
+      {!loading && !sendingPending && !isWorking && items.length === 0 && resolvedAsks.length === 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '64px 0', color: 'var(--fg-muted)', fontSize: 12 }}>
           <HelmIcon name="message-square" size={22} />
           <span>向助理描述目标，或从左侧选择会话开始</span>
@@ -776,11 +800,11 @@ export function ConversationTimeline({
             </div>
           )
         })}
-        {isWorking && items[items.length - 1]?.kind !== 'assistant' ? (
+        {(isWorking && !hasLiveTurn) || (sendingPending && !isWorking) ? (
           <div className="msg-ai-block" role="status" aria-live="polite">
             <span className="msg-origin-tag">
               <HelmIcon name="loader" size={11} className="spin-slow" />
-              正在思考与准备响应…
+              正在等待响应…
             </span>
           </div>
         ) : null}

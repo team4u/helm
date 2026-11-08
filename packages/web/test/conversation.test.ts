@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import type { ConversationEntry, ConversationLive } from '@helm/protocol'
 import { conversationsApi, ApiClientError } from '../src/lib/api.js'
 import {
+  buildSubagentStreamLines,
   buildTimelineItems,
   detectArtifactRef,
   findToolView,
@@ -16,6 +17,8 @@ import {
   lastHumanTextOf,
   matchTimelineRenderer,
   parseHelmInputData,
+  resolveSubagentConversationId,
+  resolveWorkflowRunForTool,
   toolSummaryText,
   type ToolTrace,
 } from '../src/conversation/timeline-model.js'
@@ -143,7 +146,7 @@ test('未配对的孤儿 toolResult 生成独立工具行', { timeout: 60_000 },
   assert.equal(traces[0]!.resultText, '孤儿结果')
 })
 
-test('连续常规步骤收拢为 step-group；isError / tool.view / subagent 豁免折叠', { timeout: 60_000 }, () => {
+test('连续常规步骤收拢为 step-group；出错工具保留在组内，tool.view / subagent 豁免折叠', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
     assistantEntry('1', [
       { type: 'thinking', thinking: '先想一下' },
@@ -158,16 +161,16 @@ test('连续常规步骤收拢为 step-group；isError / tool.view / subagent �
   ])
   const turn = items.find((i) => i.kind === 'assistant')!
   assert.ok(turn.kind === 'assistant')
-  // thinking + 成功 read/bash 应收拢为一个 step-group
-  const groups = turn.segments.filter((s) => s.kind === 'step-group') as Array<{ kind: 'step-group'; stepCount: number; steps: Array<{ kind: string }> }>
+  // thinking + 成功 read/bash + 失败 boom bash 均收拢为一个 step-group，不把错误步骤打散出组
+  const groups = turn.segments.filter((s) => s.kind === 'step-group') as Array<{ kind: 'step-group'; stepCount: number; steps: Array<{ kind: string; tool?: ToolTrace }> }>
   assert.equal(groups.length, 1, '只有一个可折叠组')
-  assert.equal(groups[0]!.stepCount, 3)
-  assert.deepEqual(groups[0]!.steps.map((s) => s.kind), ['thinking', 'tool', 'tool'])
-  // 失败的 c3 必须独立露出
-  const exposed = turn.segments.filter((s) => s.kind === 'tool') as Array<{ kind: 'tool'; tool: ToolTrace }>
-  assert.equal(exposed.length, 1)
-  assert.equal(exposed[0]!.tool.callId, 'c3')
-  assert.equal(exposed[0]!.tool.isError, true)
+  assert.equal(groups[0]!.stepCount, 4)
+  assert.deepEqual(groups[0]!.steps.map((s) => s.kind), ['thinking', 'tool', 'tool', 'tool'])
+  assert.equal(groups[0]!.steps[3]!.tool?.callId, 'c3')
+  assert.equal(groups[0]!.steps[3]!.tool?.isError, true)
+  // 失败工具不独立露出为顶级段
+  const exposed = turn.segments.filter((s) => s.kind === 'tool')
+  assert.equal(exposed.length, 0)
   // 文本结论保留
   assert.ok(turn.segments.some((s) => s.kind === 'text' && s.text === '结论'))
 })
@@ -569,4 +572,145 @@ test('fork 对非法 entryId 显式抛错，不发出请求', { timeout: 60_000 
     })
   }
   assert.equal(captured.length, 0, '非法 entryId 不得发出任何请求')
+})
+
+// ---------------------------------------------------------------------------
+// subagent / SubagentWorkflow 运行期实时关联
+// ---------------------------------------------------------------------------
+
+function convSummary(id: number, parentConversationId?: number, parentToolCallId?: string) {
+  return {
+    id,
+    title: `会话 ${id}`,
+    profileId: 'assistant',
+    tags: [],
+    ...(parentConversationId !== undefined ? { parentConversationId } : {}),
+    ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
+  }
+}
+
+function workflowRun(id: string, conversationId: number, status: 'running' | 'completed' | 'failed' | 'aborted', updatedAt = 1) {
+  return { id, name: `run ${id}`, conversationId, status, createdAt: 1, updatedAt }
+}
+
+test('resolveSubagentConversationId：运行期经 parentToolCallId 命中，完成后经 resultText 命中', { timeout: 60_000 }, () => {
+  const conversations = [
+    convSummary(10, 1),
+    convSummary(11, 1, 'call-abc'),
+    convSummary(12, 2, 'call-abc'), // 属于其他父会话，不得误命中
+  ]
+  // 运行期：resultText 尚未产出，按 callId -> parentToolCallId 精确关联
+  const running: ToolTrace = {
+    key: 'tool:call-abc',
+    toolName: 'subagent',
+    callId: 'call-abc',
+    input: { prompt: '去修构建' },
+    status: 'running',
+    isError: false,
+  }
+  assert.equal(resolveSubagentConversationId(running, 1, conversations), 11)
+  // 完成后：resultText 尾行 conversationId=11 直接命中
+  const done: ToolTrace = { ...running, status: 'done', resultText: '完成了\n[subagent conversationId=11]' }
+  assert.equal(resolveSubagentConversationId(done, 1, conversations), 11)
+  // 非 subagent 工具不命中
+  assert.equal(
+    resolveSubagentConversationId({ ...running, toolName: 'bash' }, 1, conversations),
+    undefined,
+  )
+})
+
+test('resolveSubagentConversationId：resume 数字 ref 匹配同父会话子会话', { timeout: 60_000 }, () => {
+  const conversations = [convSummary(21, 1), convSummary(22, 2)]
+  const resumeTool: ToolTrace = {
+    key: 'tool:call-xyz',
+    toolName: 'subagent',
+    callId: 'call-xyz',
+    input: { prompt: '继续', resume: '21' },
+    status: 'running',
+    isError: false,
+  }
+  assert.equal(resolveSubagentConversationId(resumeTool, 1, conversations), 21)
+  // resume 指向别的父会话的子会话：拒绝
+  assert.equal(
+    resolveSubagentConversationId({ ...resumeTool, input: { prompt: '继续', resume: '22' } }, 1, conversations),
+    undefined,
+  )
+  // 非数字 ref（agentId 映射）前端无法解析：不命中（不猜测）
+  assert.equal(
+    resolveSubagentConversationId({ ...resumeTool, input: { prompt: '继续', resume: 'worker-1' } }, 1, conversations),
+    undefined,
+  )
+})
+
+test('resolveWorkflowRunForTool：运行期命中 running run，完成后经 resultText 命中', { timeout: 60_000 }, () => {
+  const runs = [
+    workflowRun('run-old', 1, 'completed', 1),
+    workflowRun('run-live', 1, 'running', 5),
+    workflowRun('run-other', 2, 'running', 9),
+  ]
+  const running: ToolTrace = {
+    key: 'tool:call-wf',
+    toolName: 'SubagentWorkflow',
+    callId: 'call-wf',
+    status: 'running',
+    isError: false,
+  }
+  assert.equal(resolveWorkflowRunForTool(running, 1, runs)?.id, 'run-live')
+  // 完成后：resultText 含 run id 才命中
+  const done: ToolTrace = { ...running, status: 'done', resultText: '工作流 run-old 已完成' }
+  assert.equal(resolveWorkflowRunForTool(done, 1, runs)?.id, 'run-old')
+  // resultText 不含任何 run id：不命中
+  assert.equal(resolveWorkflowRunForTool({ ...running, status: 'done', resultText: '别的输出' }, 1, runs), undefined)
+  // 非 SubagentWorkflow 工具不命中
+  assert.equal(resolveWorkflowRunForTool({ ...running, toolName: 'bash' }, 1, runs), undefined)
+  // 无 running 时取同会话最新 run（工具调用与 run 创建同帧竞态）
+  const settled = [workflowRun('run-a', 1, 'completed', 1), workflowRun('run-b', 1, 'completed', 8)]
+  assert.equal(resolveWorkflowRunForTool(running, 1, settled)?.id, 'run-b')
+})
+
+test('buildSubagentStreamLines：剥离 structured_output_contract 样板并展开 step-group', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    entry('1', 'helm.input', { data: { text: '帮我修复构建\n\n<structured_output_contract>\n调用 register_structured_output 工具\nSchema: {}\n</structured_output_contract>', origin: 'agent' } }),
+    assistantEntry('2', [
+      { type: 'thinking', thinking: '先看构建日志' },
+      toolCallBlock('c1', 'bash', { command: 'pnpm build' }),
+      { type: 'text', text: '构建已修复' },
+    ]),
+    toolResultEntry('3', 'c1', 'bash', { text: 'exit 0', durationMs: 1500 }),
+  ]
+  const lines = buildSubagentStreamLines(entries, undefined, false)
+  assert.equal(lines.length, 4)
+  assert.equal(lines[0]!.kind, 'prompt')
+  assert.ok(lines[0]!.kind === 'prompt' && !lines[0]!.text.includes('structured_output_contract'))
+  assert.ok(lines[0]!.kind === 'prompt' && lines[0]!.text.startsWith('帮我修复构建'))
+  assert.equal(lines[1]!.kind, 'thinking')
+  assert.ok(lines[1]!.kind === 'thinking' && lines[1]!.text === '先看构建日志')
+  assert.equal(lines[2]!.kind, 'tool')
+  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.toolName === 'bash')
+  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.summary === 'pnpm build')
+  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.status === 'done')
+  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.durationMs === 1500)
+  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.resultPreview === 'exit 0')
+  assert.equal(lines[3]!.kind, 'text')
+  assert.ok(lines[3]!.kind === 'text' && lines[3]!.text === '构建已修复')
+})
+
+test('buildSubagentStreamLines：合并 ConversationLive 流式 thinking / tools / text', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [entry('1', 'helm.input', { data: { text: '继续任务', origin: 'agent' } })]
+  const live: ConversationLive = {
+    conversationId: 11,
+    text: '正在分析输出…',
+    thinking: '流式思考中',
+    tools: [
+      { callId: 'lc1', toolName: 'read', input: { file_path: '/a.ts' }, status: 'running' },
+    ],
+    updatedAt: 1234,
+  }
+  const lines = buildSubagentStreamLines(entries, live, true)
+  const kinds = lines.map((l) => l.kind)
+  assert.deepEqual(kinds, ['prompt', 'thinking', 'tool', 'text'])
+  assert.ok(lines[1]!.kind === 'thinking' && lines[1]!.text === '流式思考中')
+  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.toolName === 'read' && lines[2]!.status === 'running')
+  assert.ok(lines[2]!.kind === 'tool' && lines[2]!.summary === '/a.ts')
+  assert.ok(lines[3]!.kind === 'text' && lines[3]!.text === '正在分析输出…')
 })

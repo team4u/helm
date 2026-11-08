@@ -1,5 +1,6 @@
 /**
- * 侧栏会话分组与插件资产可见性纯函数：从全量会话中推导「我的对话」列表，
+ * 侧栏「智能体站位」与插件资产可见性纯函数：
+ * 从全量 Profile / 会话 / 插件 UI 贡献推导「每个 Agent 一个固定站位 + 下挂各自历史对话」，
  * 并按插件启用状态判定自举 Profile / Skill 的显隐。
  * 纯函数无 React 依赖，供 Sidebar / 各编辑弹窗渲染与单测共同消费。
  */
@@ -12,7 +13,8 @@ import type {
   SkillSummary,
 } from '@helm/protocol'
 import { ROOT_CONVERSATION_ID } from '@helm/protocol'
-import type { QualifiedUiSpec } from '../lib/types.js'
+import type { QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
+import { resolveTargetString } from '../lib/types.js'
 
 export interface SidebarPartition {
   /** sidebar.item 的 'conversation:profile:<id>' 已指向的 profileId 集合。 */
@@ -60,31 +62,206 @@ export function filterConversationsByTag(
   return conversations.filter((c) => c.tags.includes(tag))
 }
 
-export interface SidebarGroups {
-  /** sidebar.item / sidebar.section 去重规则输入。 */
-  partition: SidebarPartition
-  /** 人类自由对话列表（已去重，updatedAt 倒序）。 */
-  humanConversations: ConversationSummary[]
+// ---------------------------------------------------------------------------
+// 智能体站位（Agent Standings）
+// ---------------------------------------------------------------------------
+
+/** 左栏一级「智能体站位」：每个 Agent 一个固定站位，下挂其名下有效对话。 */
+export interface AgentStanding {
+  /** Agent 对应的 Profile ID（如 'assistant' | 'superagent' | 'watchdog' | 自定义 id）。 */
+  profileId: string
+  /** 左栏展示名（优先 sidebar.item 的 label -> profile.name -> profile.id）。 */
+  label: string
+  /** 图标名（优先 sidebar.item 的 icon -> assistant 用 'sparkles' -> 有 runtime 用 'terminal' -> 默认 'bot'）。 */
+  icon: string
+  /** 排序权重（根会话/assistant 为 0，sidebar.item 指定 order 次之，其余 Profile 默认 100，孤儿兜底 200）。 */
+  order: number
+  /** 是否允许人类在该 Agent 下新建多个对话（由 isHumanSelectableProfile 决定；常驻单例为 false）。 */
+  canCreateConversation: boolean
+  /** 该 Agent 名下的所有有效对话（常驻/根会话置顶，其余按 updatedAt 倒序）。 */
+  conversations: ConversationSummary[]
+  /** 点击该 Agent 站位时的主对话（即 conversations[0] ?? null）。 */
+  primaryConversation: ConversationSummary | null
 }
 
-/** 一次性推导侧栏全部分组（分组本体由插件 sidebar.section 声明，此处仅产出「我的对话」）。 */
-export function buildSidebarGroups(
-  conversations: ConversationSummary[],
-  sidebarItems: Array<QualifiedUiSpec<SidebarItemSpec>>,
-  sidebarSections: Array<QualifiedUiSpec<SidebarSectionSpec>>,
-): SidebarGroups {
-  return {
-    partition: partitionSidebarUi(sidebarItems, sidebarSections),
-    humanConversations: selectHumanConversations(conversations, partitionSidebarUi(sidebarItems, sidebarSections)),
-  }
+/** 左栏独立「视图」分组的导航项（screen: 类型 sidebar.item 分流产物）。 */
+export interface SidebarViewItem {
+  key: string
+  pluginId: string
+  label: string
+  icon: string
+  order: number
+  target: ResolvedTarget
+}
+
+export interface AgentStandingsInput {
+  profiles: Profile[]
+  conversations: ConversationSummary[]
+  plugins: ReadonlyArray<{ id: string; enabled: boolean }>
+  sidebarItems: Array<QualifiedUiSpec<SidebarItemSpec>>
+  sidebarSections: Array<QualifiedUiSpec<SidebarSectionSpec>>
+}
+
+/** Agent 名下二级历史会话子列表默认显示条数（超出可展开）。 */
+export const AGENT_SUB_LIST_PREVIEW = 5
+
+/** sidebar.item 会话指向项附带的展示元信息（按 profileId 归集）。 */
+interface SidebarPinMeta {
+  label?: string
+  icon?: string
+  order?: number
 }
 
 /**
- * 插件自举资产的可见性纯函数：
- * 插件未启用时，其自举/托管的 Profile 与 Skill 在所有消费界面隐藏，
- * 不残留插件痕迹。判定仅依据资产自身携带的 managedByPlugin 字段，
- * 不按 id / 插件名猜测，无新增兑底。
+ * 构建左栏智能体站位列表：
+ * - 可见 Profile 各占一个一级站位（assistant 保底存在）；
+ * - 会话指向型 sidebar.item 的 label/icon/order 覆盖对应站位的默认展示；
+ * - 人类自由会话按 profileId 归集到各自 Agent 下（Profile 已删时生成孤儿兜底站位）；
+ * - 插件停用后其 managedByPlugin 站位与 ownedBy=helm/bot 遗留会话自动隐藏。
  */
+export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[] {
+  const { profiles, conversations, plugins, sidebarItems, sidebarSections } = input
+  const enabledPluginIds = collectEnabledPluginIds(plugins)
+  const partition = partitionSidebarUi(sidebarItems, sidebarSections)
+
+  // 可见 Profile 集合；assistant 尚未加载时兜底（不因接口时序丢主入口）。
+  const visibleProfiles = profiles.filter((p) => isProfileVisible(p, enabledPluginIds))
+  if (!profiles.some((p) => p.id === 'assistant')) {
+    visibleProfiles.push({ id: 'assistant', name: '个人助理' })
+  }
+  const visibleProfileIds = new Set(visibleProfiles.map((p) => p.id))
+
+  // sidebar.item 会话指向项 -> profileId 展示元信息（screen: 视图项在此分流，不进站位）。
+  const pinMeta = new Map<string, SidebarPinMeta>()
+  const convById = new Map(conversations.map((c) => [c.id, c] as const))
+  for (const item of sidebarItems) {
+    const target = item.spec.target
+    if (!target) continue
+    let pid: string | null = null
+    if (target.startsWith('conversation:profile:')) {
+      pid = target.slice('conversation:profile:'.length).trim() || null
+    } else if (target.startsWith('conversation:')) {
+      const rest = target.slice('conversation:'.length).trim()
+      if (/^\d+$/.test(rest)) {
+        const idNum = Number(rest)
+        pid = convById.get(idNum)?.profileId ?? (idNum === ROOT_CONVERSATION_ID ? 'assistant' : null)
+      }
+    }
+    if (pid && !pinMeta.has(pid)) {
+      pinMeta.set(pid, { label: item.spec.label, icon: item.spec.icon, order: item.spec.order })
+    }
+  }
+
+  // 可挂到 Agent 站位下的会话：
+  // 1. 排除子代理派生会话（有父链）；
+  // 2. 排除被 sidebar.section 接管的会话（后台 Worker 等分组展示，不重复挂载）；
+  // 3. 非 human 会话仅保留可见 Profile 的常驻会话（ownedBy=helm 或被启用 sidebar.item 指向）。
+  const attachable = conversations.filter((c) => {
+    if (c.parentConversationId !== undefined) return false
+    if (c.tags.some((t) => partition.sectionTags.has(t))) return false
+    if ((c.ownedBy ?? 'human') === 'human') return true
+    return (
+      visibleProfileIds.has(c.profileId) &&
+      (c.ownedBy === 'helm' ||
+        partition.pinnedConversationIds.has(c.id) ||
+        partition.pinnedProfileIds.has(c.profileId))
+    )
+  })
+
+  const byProfile = new Map<string, ConversationSummary[]>()
+  const orphanProfileIds = new Set<string>()
+  for (const c of attachable) {
+    const list = byProfile.get(c.profileId)
+    if (list) list.push(c)
+    else byProfile.set(c.profileId, [c])
+    // 孤儿 Profile：人类历史对话的 Profile 已被删除（非被停用插件隐藏），兜底生成站位防丢失。
+    if (
+      (c.ownedBy ?? 'human') === 'human' &&
+      !visibleProfileIds.has(c.profileId) &&
+      !profiles.some((p) => p.id === c.profileId)
+    ) {
+      orphanProfileIds.add(c.profileId)
+    }
+  }
+
+  // 站位内排序：常驻/根会话置顶，其余 updatedAt 倒序（同刻按 id 倒序）。
+  const residentTier = (c: ConversationSummary): number => {
+    if (c.id === ROOT_CONVERSATION_ID) return 0
+    if (c.ownedBy === 'helm') return 1
+    if (partition.pinnedConversationIds.has(c.id)) return 2
+    return 3
+  }
+  const sortAgentConversations = (list: ConversationSummary[]): ConversationSummary[] =>
+    [...list].sort((a, b) => {
+      const ta = residentTier(a)
+      const tb = residentTier(b)
+      if (ta !== tb) return ta - tb
+      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt
+      return b.id - a.id
+    })
+
+  const standings: AgentStanding[] = []
+  const emitStanding = (
+    profileId: string,
+    profile: Profile | undefined,
+    meta: SidebarPinMeta | undefined,
+    order: number,
+    canCreateConversation: boolean,
+  ): void => {
+    const sorted = sortAgentConversations(byProfile.get(profileId) ?? [])
+    standings.push({
+      profileId,
+      label: meta?.label || profile?.name || profileId,
+      icon: meta?.icon || (profileId === 'assistant' ? 'sparkles' : profile?.runtime !== undefined ? 'terminal' : 'bot'),
+      order,
+      canCreateConversation,
+      conversations: sorted,
+      primaryConversation: sorted[0] ?? null,
+    })
+  }
+
+  for (const profile of visibleProfiles) {
+    const meta = pinMeta.get(profile.id)
+    const order = profile.id === 'assistant' ? 0 : meta?.order ?? 100
+    emitStanding(profile.id, profile, meta, order, isHumanSelectableProfile(profile, enabledPluginIds))
+  }
+  for (const pid of orphanProfileIds) {
+    emitStanding(pid, undefined, pinMeta.get(pid), 200, false)
+  }
+
+  standings.sort((a, b) => a.order - b.order || a.profileId.localeCompare(b.profileId))
+  return standings
+}
+
+/**
+ * 提取 sidebar.item 中 target 解析为 screen: 的视图导航项，
+ * 供左栏独立「视图」分组渲染（与智能体站位彻底分流）。
+ */
+export function extractSidebarViews(
+  sidebarItems: Array<QualifiedUiSpec<SidebarItemSpec>>,
+  conversations: ConversationSummary[],
+): SidebarViewItem[] {
+  const views: SidebarViewItem[] = []
+  for (const item of sidebarItems) {
+    const target = item.spec.target
+    if (!target) continue
+    const resolved = resolveTargetString(target, conversations)
+    if (resolved?.kind !== 'screen') continue
+    views.push({
+      key: `${item.pluginId}/${item.spec.id}`,
+      pluginId: item.pluginId,
+      label: item.spec.label,
+      icon: item.spec.icon ?? 'panel-right',
+      order: item.spec.order ?? 100,
+      target: resolved,
+    })
+  }
+  return views.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key))
+}
+
+// ---------------------------------------------------------------------------
+// 插件痕迹清理：ownedBy / parentConversationId 归一 + 插件自举资产可见性
+// ---------------------------------------------------------------------------
 
 /** 收集已启用插件 ID 集合（资产可见性判定的统一输入）。 */
 export function collectEnabledPluginIds(
@@ -99,7 +276,7 @@ export function isProfileVisible(profile: Profile, enabledPluginIds: ReadonlySet
 }
 
 /**
- * 人类可在「新建对话」下拉中选择的 Profile：可见性之外仅依据通用
+ * 人类可在该 Agent 下新建对话的 Profile：可见性之外仅依据通用
  * humanSelectable 字段（常驻单例角色由托管插件置 false，缺省 true），
  * 不按插件 id / 固定角色 id 排除。
  */
@@ -114,27 +291,6 @@ export function isHumanSelectableProfile(
 /** 插件自举/托管的 Skill 在对应插件未启用时隐藏（技能库与 / 斜杠菜单消费）。 */
 export function isSkillVisible(skill: SkillSummary, enabledPluginIds: ReadonlySet<string>): boolean {
   return skill.managedByPlugin === undefined || enabledPluginIds.has(skill.managedByPlugin)
-}
-
-/**
- * 「我的对话」去重与归属规则：
- * - 排除根会话；
- * - 排除插件/内核托管会话（ownedBy 非 human）与子代理派生的子会话；
- * - 排除被 sidebar.item 指向或命中 sidebar.section filterTag 的会话（插件启用时的去重）。
- * 仅返回属于人类自己的自由对话，按 updatedAt 倒序。
- */
-export function selectHumanConversations(
-  conversations: ConversationSummary[],
-  partition: SidebarPartition,
-): ConversationSummary[] {
-  return conversations
-    .filter((c) => c.id !== ROOT_CONVERSATION_ID)
-    .filter((c) => (c.ownedBy ?? 'human') === 'human')
-    .filter((c) => c.parentConversationId === undefined)
-    .filter((c) => !partition.pinnedProfileIds.has(c.profileId))
-    .filter((c) => !partition.pinnedConversationIds.has(c.id))
-    .filter((c) => !c.tags.some((t) => partition.sectionTags.has(t)))
-    .sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 /** 按标题或 #id 模糊过滤会话（供命令面板快速跳转）。 */

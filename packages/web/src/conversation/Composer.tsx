@@ -4,16 +4,27 @@ import { assetsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { matchesUiScope, type HelmStoreValue } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { collectEnabledPluginIds, isSkillVisible } from '../shell/sidebar-model.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { AskDock } from './AskDock.js'
-import { getComposerPlaceholder, useIsMobile } from './composer-model.js'
+import {
+  busyEnterMode,
+  canConfigureSessionEnv,
+  envDraftError,
+  envDraftOnNodeChange,
+  getComposerPlaceholder,
+  useIsMobile,
+  type EnvDraft,
+} from './composer-model.js'
 import { formatBytes } from './timeline-model.js'
 
 export interface ComposerProps {
   conversation: ConversationSummary
   /** 请求回填文本（时间线「编辑并重发」）；每次递增 tick 保证同文本也能再次触发。 */
   prefill: { text: string; tick: number } | null
+  /** 真实发送请求开始/结束时通知父层（在途反馈；斜杠命令不触发）。 */
+  onSendingChange?: (sending: boolean) => void
 }
 
 interface PendingAttachment {
@@ -358,12 +369,190 @@ function CommandPopover({
     </div>
   )
 }
+// ---------------------------------------------------------------------------
+// 空会话起始环境配置条（开聊即锁定）
+// ---------------------------------------------------------------------------
+
+export interface SessionEnvBlocker {
+  /** 环境草稿未保存（或正在保存）时为 true：Composer 必须阻止发送。 */
+  blocked: boolean
+  /** 阻塞原因（用于禁用按钮的 title 提示）。 */
+  reason: string | null
+}
+
+const ENV_BLOCKER_CLEAR: SessionEnvBlocker = { blocked: false, reason: null }
+
+/** 空会话（或 /reset 后未再发消息）时展示：草稿式配置起始执行节点与工作目录。
+ * 选节点只进入草稿不立即提交；跨节点切换清空 cwd 草稿（协议无节点默认目录，绝不沿用旧节点路径）；
+ * 保存一次 PATCH { nodeId, cwd }，以返回值确认；未改节点时 cwd 单独可改，Enter 保存 / Escape 取消。 */
+function SessionEnvBar({
+  conversation,
+  sendBlocked,
+  onBlockerChange,
+}: {
+  conversation: ConversationSummary
+  sendBlocked: boolean
+  onBlockerChange: (blocker: SessionEnvBlocker) => void
+}) {
+  const store = useHelmStore()
+  const [draft, setDraft] = useState<EnvDraft>(() => ({
+    nodeId: conversation.nodeId || 'local',
+    cwd: conversation.cwd,
+  }))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const currentNodeId = conversation.nodeId || 'local'
+  const nodeKnown = store.nodes.some((n) => n.id === currentNodeId)
+  const draftNode = store.nodes.find((n) => n.id === draft.nodeId)
+  const draftNodeKnown = draft.nodeId === currentNodeId ? nodeKnown : store.nodes.some((n) => n.id === draft.nodeId)
+  // 已确认坐标锚点：保存成功以 PATCH 返回值为准（SSE 摘要可能滞后，不依赖其时序）
+  const [confirmed, setConfirmed] = useState<EnvDraft>(() => ({ nodeId: currentNodeId, cwd: conversation.cwd }))
+  const lastCoordinatesRef = useRef<EnvDraft>({ nodeId: currentNodeId, cwd: conversation.cwd })
+  const unchanged = draft.nodeId === confirmed.nodeId && draft.cwd === confirmed.cwd
+  const validationError = envDraftError(draft)
+  const dirty = !unchanged
+  const blocked = saving || dirty
+  const blocker: SessionEnvBlocker = blocked
+    ? { blocked: true, reason: saving ? '正在保存会话环境…' : '请先保存或取消起始环境修改' }
+    : ENV_BLOCKER_CLEAR
+
+  // 阻塞状态回传 Composer（发送门控）
+  useEffect(() => {
+    onBlockerChange(blocker)
+  }, [blocker.blocked, blocker.reason, onBlockerChange])
+
+  // 会话坐标被外部（SSE / 其他入口）更新且本地无未保存修改时，同步锚点与草稿
+  useEffect(() => {
+    const previous = lastCoordinatesRef.current
+    if (previous.nodeId === currentNodeId && previous.cwd === conversation.cwd) return
+    const next = { nodeId: currentNodeId, cwd: conversation.cwd }
+    lastCoordinatesRef.current = next
+    setConfirmed(next)
+    if (dirty) return
+    setDraft(next)
+  }, [currentNodeId, conversation.cwd, dirty])
+
+  const save = async (): Promise<void> => {
+    if (saving || sendBlocked) return
+    const err = envDraftError(draft)
+    if (err !== null) {
+      setError(err)
+      return
+    }
+    if (unchanged) return
+    setSaving(true)
+    setError(null)
+    try {
+      // 一次 PATCH 同时提交 nodeId + cwd；以返回值确认保存成功（不依赖 SSE 时序）
+      const saved = await conversationsApi.patch(conversation.id, { nodeId: draft.nodeId, cwd: draft.cwd.trim() })
+      const nextConfirmed: EnvDraft = { nodeId: saved.nodeId || 'local', cwd: saved.cwd }
+      setConfirmed(nextConfirmed)
+      setDraft(nextConfirmed)
+      store.pushNotice({
+        type: 'notification',
+        level: 'info',
+        title: '已保存会话环境',
+        body: `#${conversation.id} -> ${saved.nodeId || 'local'}:${saved.cwd}`,
+        conversationId: conversation.id,
+      })
+    } catch (e) {
+      // 保存失败保留草稿并显式报错，不静默回滚
+      const message = e instanceof Error ? e.message : String(e)
+      setError(message)
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: '保存会话环境失败',
+        body: message,
+        conversationId: conversation.id,
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const cancel = (): void => {
+    if (saving) return
+    // PATCH 确认结果可能早于 SSE 到达，取消时保留最新已确认的坐标。
+    setDraft(confirmed)
+    setError(null)
+  }
+
+  return (
+    <div className="composer-env-bar" data-dirty={dirty ? 'true' : undefined}>
+      <span className="composer-env-item">
+        <HelmIcon name="network" size={12} />
+        <select
+          className="input composer-env-select"
+          aria-label="会话执行节点"
+          disabled={saving || sendBlocked}
+          value={draft.nodeId}
+          onChange={(e) => {
+            setError(null)
+            setDraft((prev) => envDraftOnNodeChange(prev, e.target.value))
+          }}
+        >
+          {store.nodes.map((n) => (
+            <option key={n.id} value={n.id}>{nodeOptionLabel(n)}</option>
+          ))}
+          {!draftNodeKnown && <option value={draft.nodeId}>{draft.nodeId}（未知）</option>}
+        </select>
+      </span>
+      <span className="composer-env-item">
+        <HelmIcon name="folder" size={12} />
+        <input
+          className="input mono composer-env-cwd-input"
+          aria-label="会话工作目录"
+          aria-invalid={error !== null}
+          value={draft.cwd}
+          disabled={saving || sendBlocked}
+          placeholder={draft.nodeId === currentNodeId ? '/绝对路径' : '目标节点上的绝对路径，例如 /home/user/work'}
+          onChange={(e) => {
+            setError(null)
+            setDraft((prev) => ({ ...prev, cwd: e.target.value }))
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              void save()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              cancel()
+            }
+          }}
+        />
+      </span>
+      {blocked ? (
+        <span className="composer-env-actions">
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            disabled={saving || validationError !== null}
+            onClick={() => void save()}
+          >
+            {saving ? <HelmIcon name="loader" size={11} className="spin-slow" /> : <HelmIcon name="check" size={11} />}
+            保存
+          </button>
+          <button type="button" className="btn btn-sm" disabled={saving} onClick={cancel}>
+            取消
+          </button>
+        </span>
+      ) : null}
+      {error !== null ? (
+        <span className="composer-env-error" role="alert" title={error}>{error}</span>
+      ) : draftNode !== undefined && !draftNode.online && draft.nodeId !== 'local' ? (
+        <span className="composer-env-warn">节点离线，保存后仍需节点上线才能执行</span>
+      ) : null}
+      <span className="composer-env-hint">首条消息发送后锁定</span>
+    </div>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Composer 主体
 // ---------------------------------------------------------------------------
 
-export function Composer({ conversation, prefill }: ComposerProps) {
+export function Composer({ conversation, prefill, onSendingChange }: ComposerProps) {
   const store = useHelmStore()
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
@@ -371,8 +560,10 @@ export function Composer({ conversation, prefill }: ComposerProps) {
   const [popoverQuery, setPopoverQuery] = useState('')
   const [sending, setSending] = useState(false)
   const [uploading, setUploading] = useState(0)
+  const [envBlocker, setEnvBlocker] = useState<SessionEnvBlocker>(ENV_BLOCKER_CLEAR)
   const sendingRef = useRef(false)
   const uploadingRef = useRef(0)
+  const envBlockedRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const extrasRef = useRef<HTMLDetailsElement | null>(null)
@@ -383,6 +574,24 @@ export function Composer({ conversation, prefill }: ComposerProps) {
   const artifacts = store.conversationArtifacts[conversation.id] ?? []
   const working = conversation.status === 'working' || conversation.status === 'blocked'
   const isMobile = useIsMobile(680)
+  const detail = store.conversationDetails[conversation.id]
+  // 历史尚未完整加载且当前页没有 reset 时，不能把缺少消息的分页窗口当作空会话。
+  const detailEntries = detail?.nextCursor && !detail.entries.some((entry) => entry.kind === 'pi.reset')
+    ? undefined
+    : detail?.entries
+  const envConfigurable = canConfigureSessionEnv(detailEntries, conversation.status)
+  // 发送中立即禁止改环境：避免输入提交与环境修改竞态
+  const sendInFlight = sending || uploading > 0
+  const handleEnvBlocker = useCallback((blocker: SessionEnvBlocker): void => {
+    envBlockedRef.current = blocker.blocked
+    setEnvBlocker(blocker)
+  }, [])
+  // 环境条卸载（开聊锁定 / 状态变化）时复位阻塞，避免残留阻止后续发送
+  useEffect(() => {
+    if (envConfigurable) return
+    envBlockedRef.current = false
+    setEnvBlocker(ENV_BLOCKER_CLEAR)
+  }, [envConfigurable])
   const widgets = store.groupedUi.composerWidgets.filter((w) => matchesUiScope(conversation, w.spec.scope))
   const pills = store.groupedUi.composerPills.filter((p) => matchesUiScope(conversation, p.spec.scope))
 
@@ -532,15 +741,27 @@ export function Composer({ conversation, prefill }: ComposerProps) {
     return false
   }
 
-  const send = async (busyMode: 'followUp' | 'steer' = 'followUp'): Promise<void> => {
+  const send = async (busyMode: 'followUp' | 'steer' = 'steer'): Promise<void> => {
     const payload = text.trim()
     if (payload === '' || sendingRef.current || uploadingRef.current > 0) return
+    // 未保存环境或环境保存中不允许发送（同时覆盖 Enter 与发送按钮）
+    if (envBlockedRef.current) {
+      store.pushNotice({
+        type: 'notification',
+        level: 'warning',
+        title: '请先保存或取消起始环境修改',
+        body: envBlocker.reason ?? undefined,
+        conversationId: conversation.id,
+      })
+      return
+    }
     if (runSlashCommand(payload)) {
       setText('')
       return
     }
     sendingRef.current = true
     setSending(true)
+    onSendingChange?.(true)
     const sentAttachments = new Set(attachments.map((attachment) => attachment.artifactId))
     const draft = text
     setText('')
@@ -559,6 +780,7 @@ export function Composer({ conversation, prefill }: ComposerProps) {
     } finally {
       sendingRef.current = false
       setSending(false)
+      onSendingChange?.(false)
     }
   }
 
@@ -604,7 +826,7 @@ export function Composer({ conversation, prefill }: ComposerProps) {
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
-      void send(working && (e.metaKey || e.ctrlKey) ? 'steer' : 'followUp')
+      void send(working ? busyEnterMode(e.metaKey || e.ctrlKey) : 'followUp')
       return
     }
     if (e.key === 'ArrowUp' && text === '') {
@@ -636,6 +858,14 @@ export function Composer({ conversation, prefill }: ComposerProps) {
           </div>
         ) : null}
         <AskDock conversationId={conversation.id} />
+        {envConfigurable ? (
+          <SessionEnvBar
+            key={`env-${conversation.id}`}
+            conversation={conversation}
+            sendBlocked={sendInFlight}
+            onBlockerChange={handleEnvBlocker}
+          />
+        ) : null}
         <div
           className="composer-box"
           data-dragging={dragging ? 'true' : undefined}
@@ -765,9 +995,9 @@ export function Composer({ conversation, prefill }: ComposerProps) {
                 <button
                   type="button"
                   className="btn btn-sm btn-primary btn-pill btn-send"
-                  disabled={sending || uploading > 0 || text.trim() === ''}
+                  disabled={sending || uploading > 0 || envBlocker.blocked || text.trim() === ''}
                   onClick={() => void send()}
-                  title="发送 (Enter)；Shift+Enter 换行"
+                  title={envBlocker.blocked ? envBlocker.reason ?? '请先保存或取消起始环境修改' : '发送 (Enter)；Shift+Enter 换行'}
                   aria-label={uploading > 0 ? `上传中 (${uploading})` : '发送'}
                 >
                   <HelmIcon name={sending || uploading > 0 ? 'loader' : 'arrow-up'} size={18} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
@@ -795,24 +1025,24 @@ export function Composer({ conversation, prefill }: ComposerProps) {
                   </button>
                   <button
                     type="button"
-                    className="btn btn-ghost btn-sm composer-steer-button"
-                    disabled={sending || uploading > 0}
-                    onClick={() => void send('steer')}
-                    title="立即插入当前回合引导方向 (⌘/Ctrl+Enter)"
-                    aria-label="插话引导"
+                    className="btn btn-ghost btn-sm composer-queue-button"
+                    disabled={sending || uploading > 0 || envBlocker.blocked}
+                    onClick={() => void send('followUp')}
+                    title="当前回合结束后处理（⌘/Ctrl+Enter）"
+                    aria-label="排队发送"
                   >
-                    <HelmIcon name={sending ? 'loader' : 'corner-down-right'} size={17} />
-                    <span className="composer-action-label">插话引导</span>
+                    <HelmIcon name={sending ? 'loader' : 'clock'} size={16} />
+                    <span className="composer-action-label">排队发送</span>
                   </button>
                   <button
                     type="button"
                     className="btn btn-sm btn-primary btn-pill btn-send"
-                    disabled={sending || uploading > 0}
-                    onClick={() => void send('followUp')}
-                    title="排在当前回合结束后自动发送 (Enter)"
-                    aria-label={uploading > 0 ? `上传中 (${uploading})` : '排队发送'}
+                    disabled={sending || uploading > 0 || envBlocker.blocked}
+                    onClick={() => void send('steer')}
+                    title="下一个步骤边界注入（Enter）"
+                    aria-label={uploading > 0 ? `上传中 (${uploading})` : '插话引导'}
                   >
-                    <HelmIcon name={sending || uploading > 0 ? 'loader' : 'arrow-up'} size={18} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
+                    <HelmIcon name={sending || uploading > 0 ? 'loader' : 'corner-down-right'} size={17} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
                   </button>
                 </>
               )}

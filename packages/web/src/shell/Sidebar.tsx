@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { AskSpec, ConversationSummary } from '@helm/protocol'
 import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { asksApi, conversationsApi, ApiClientError } from '../lib/api.js'
@@ -7,12 +7,13 @@ import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { isSameResolvedTarget, resolveTargetString, type HelmStoreValue } from '../lib/types.js'
 import {
-  buildSidebarGroups,
-  collectEnabledPluginIds,
+  AGENT_SUB_LIST_PREVIEW,
+  buildAgentStandings,
   conversationStatusBadgeClass,
   conversationStatusLabel,
+  extractSidebarViews,
   filterConversationsByTag,
-  isHumanSelectableProfile,
+  type AgentStanding,
 } from './sidebar-model.js'
 
 function StatusDot({ connected }: { connected: boolean }) {
@@ -59,183 +60,6 @@ function StatusBadge({ conv }: { conv: ConversationSummary }) {
     <span className={conversationStatusBadgeClass(conv.status)} title={conv.doing ?? ''}>
       {conv.status === 'working' && conv.doing ? conv.doing : conversationStatusLabel(conv.status)}
     </span>
-  )
-}
-
-/** 单个会话行（点击主屏打开；悬停出现右屏分屏按钮）。 */
-function ConversationRow({
-  conv,
-  active,
-  onOpen,
-  onOpenSplit,
-  children,
-}: {
-  conv: ConversationSummary
-  active: boolean
-  onOpen: () => void
-  onOpenSplit?: () => void
-  children?: React.ReactNode
-}) {
-  return (
-    <div
-      className={`nav-item${active ? ' nav-item-active' : ''}`}
-      style={{ minHeight: 30, opacity: 1 }}
-    >
-      {children}
-      <button type="button" className="nav-item-main nav-open" onClick={onOpen} aria-current={active ? 'page' : undefined}>
-        <span className="nav-item-label">{conv.title || `会话 #${conv.id}`}</span>
-      </button>
-      <span className="nav-item-meta">
-        <span className="tabular-nums">#{conv.id}</span>
-        <StatusBadge conv={conv} />
-        {onOpenSplit && (
-          <span className="sidebar-split-action" style={{ display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
-            <HoverIconButton
-              className="split-toggle-btn sidebar-split-btn"
-              title="在右屏分屏打开"
-              icon="columns"
-              onClick={(e) => {
-                e.stopPropagation()
-                onOpenSplit()
-              }}
-            />
-          </span>
-        )}
-      </span>
-    </div>
-  )
-}
-
-/** 新建对话按钮 + Profile 下拉（默认或指定角色直聊；未启用插件与常驻单例角色不展示）。 */
-function NewConversationControl({
-  store,
-  onNavigate,
-}: {
-  store: HelmStoreValue
-  onNavigate?: () => void
-}) {
-  const [open, setOpen] = useState(false)
-  const wrapRef = useRef<HTMLDivElement | null>(null)
-  const profiles = useMemo(() => {
-    const enabledPluginIds = collectEnabledPluginIds(store.plugins)
-    return store.profiles.filter((p) => isHumanSelectableProfile(p, enabledPluginIds))
-  }, [store.profiles, store.plugins])
-
-  useEffect(() => {
-    if (!open) return
-    const onDocClick = (e: Event) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('pointerdown', onDocClick)
-    return () => document.removeEventListener('pointerdown', onDocClick)
-  }, [open])
-
-  const createWith = async (profileId: string | null) => {
-    setOpen(false)
-    try {
-      const conv = await conversationsApi.create(
-        profileId ? { profileId } : undefined,
-      )
-      store.openTarget({ kind: 'conversation', conversationId: conv.id })
-      onNavigate?.()
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '新建会话失败',
-        body: err instanceof Error ? err.message : String(err),
-      })
-    }
-  }
-
-  return (
-    <div ref={wrapRef} className="new-conversation-control" style={{ position: 'relative' }}>
-      <div style={{ display: 'flex', gap: 0 }}>
-        <button
-          className="btn btn-sm"
-          style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
-          title="新建对话（默认 Profile）"
-          onClick={() => void createWith(null)}
-        >
-          <HelmIcon name="plus" size={13} />
-        </button>
-        <button
-          className="btn btn-sm new-conversation-dropdown-toggle"
-          style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, padding: '0 5px' }}
-          title="按角色 Profile 新建对话"
-          aria-expanded={open}
-          onClick={(e) => {
-            e.stopPropagation()
-            setOpen((v) => !v)
-          }}
-        >
-          <HelmIcon name="chevron-down" size={12} />
-        </button>
-      </div>
-      {open && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 4px)',
-            right: 0,
-            zIndex: 60,
-            minWidth: 210,
-            maxWidth: 224,
-            boxShadow: 'var(--shadow-lg)',
-            maxHeight: 'min(360px, 60vh)',
-            overflowY: 'auto',
-          }}
-          className="list new-conversation-dropdown"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="row" style={{ padding: '6px 10px', fontSize: 11, color: 'var(--fg-muted)' }}>
-            选择角色 Profile 新建对话
-          </div>
-          {profiles.length === 0 && <div className="row" style={{ fontSize: 12 }}>暂无可用 Profile</div>}
-          {profiles.map((p) => (
-            <button
-              key={p.id}
-              className="row"
-              style={{
-                width: '100%',
-                background: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                textAlign: 'left',
-              }}
-              onClick={() => void createWith(p.id)}
-            >
-              <span className="nav-item-main">
-                {p.runtime !== undefined && <HelmIcon name="terminal" size={12} />}
-                <span className="nav-item-label">{p.name || p.id}</span>
-              </span>
-              <span className="nav-item-meta mono">{p.id}</span>
-            </button>
-          ))}
-          <div style={{ borderTop: '1px solid var(--border-subtle)', margin: '4px -4px 0' }} />
-          <button
-            className="row"
-            style={{
-              width: '100%',
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              textAlign: 'left',
-            }}
-            title="管理计算节点（接入 / 移除 BYOM 节点）"
-            onClick={() => {
-              setOpen(false)
-              store.setActiveModal({ kind: 'nodes' })
-            }}
-          >
-            <span className="nav-item-main">
-              <HelmIcon name="network" size={12} />
-              <span className="nav-item-label">管理计算节点</span>
-            </span>
-          </button>
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -354,72 +178,381 @@ function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
   )
 }
 
-/** 常驻工作台导航区（sidebar.item），含根会话兜底。 */
-function WorkbenchNavItems({ store }: { store: HelmStoreValue }) {
-  const hasRootItem = store.groupedUi.sidebarItems.some((item) => {
-    const resolved = resolveTargetString(item.spec.target ?? '', store.conversations)
-    return resolved?.kind === 'conversation' && resolved.conversationId === ROOT_CONVERSATION_ID
-  })
-
-  const rows: Array<{
-    key: string
-    label: string
-    icon?: string
-    target: ReturnType<typeof resolveTargetString>
-  }> = []
-
-  if (!hasRootItem) {
-    rows.push({
-      key: 'fallback-root',
-      label: '个人助理',
-      icon: 'sparkles',
-      target: { kind: 'conversation', conversationId: ROOT_CONVERSATION_ID },
-    })
+/** 在指定 Agent 下新建对话并打开（唯一的新建入口路径）。 */
+function createConversationFor(
+  store: HelmStoreValue,
+  onNavigate?: () => void,
+): (profileId: string) => Promise<void> {
+  return async (profileId: string) => {
+    try {
+      const conv = await conversationsApi.create({ profileId })
+      store.openTarget({ kind: 'conversation', conversationId: conv.id })
+      onNavigate?.()
+    } catch (err) {
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: '新建会话失败',
+        body: err instanceof Error ? err.message : String(err),
+      })
+    }
   }
-  for (const item of store.groupedUi.sidebarItems) {
-    const resolved = resolveTargetString(item.spec.target ?? '', store.conversations)
-    if (!resolved) continue
-    if (!hasRootItem && resolved.kind === 'conversation' && resolved.conversationId === ROOT_CONVERSATION_ID) continue
-    rows.push({ key: `${item.pluginId}/${item.spec.id}`, label: item.spec.label, icon: item.spec.icon, target: resolved })
+}
+
+/** Agent 站位「+」按钮：仅 canCreateConversation 的 Agent 渲染。 */
+function AgentNewConversationButton({
+  agent,
+  onCreate,
+}: {
+  agent: AgentStanding
+  onCreate: (profileId: string) => void
+}) {
+  if (!agent.canCreateConversation) return null
+  return (
+    <button
+      type="button"
+      className="btn btn-ghost btn-sm agent-new-conv-btn"
+      style={{ height: 20, width: 20, padding: 0 }}
+      title={`在 ${agent.label} 下新建对话`}
+      onClick={(e) => {
+        e.stopPropagation()
+        onCreate(agent.profileId)
+      }}
+    >
+      <HelmIcon name="plus" size={13} />
+    </button>
+  )
+}
+
+/** 远端会话紧凑只读标识：一眼区分非本机会话。 */
+function RemoteNodeTag({ nodeId }: { nodeId: string }) {
+  return (
+    <span
+      className="mono"
+      style={{ fontSize: 10.5, color: 'var(--fg-muted)', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+      title={`运行节点：${nodeId}`}
+    >
+      @{nodeId}
+    </span>
+  )
+}
+
+/** 会话行是否属于当前激活目标。 */
+function isConversationActive(store: HelmStoreValue, convId: number): boolean {
+  return store.primaryTarget.kind === 'conversation' && store.primaryTarget.conversationId === convId
+}
+
+/** Agent 站位行（一级）。会话数 <= 1 时整行直接打开主会话；>= 2 时带折叠子列表。 */
+function AgentStandingItem({
+  agent,
+  store,
+  onCreate,
+  onNavigate,
+}: {
+  agent: AgentStanding
+  store: HelmStoreValue
+  onCreate: (profileId: string) => void
+  onNavigate?: () => void
+}) {
+  const hasSubList = agent.conversations.length > 1
+  const [expanded, setExpanded] = useState(true)
+  const [showAll, setShowAll] = useState(false)
+
+  const activeInAgent = agent.conversations.some((c) => isConversationActive(store, c.id))
+  const headerActive = activeInAgent && (!hasSubList || !expanded)
+
+  const openPrimary = () => {
+    const primary = agent.primaryConversation
+    if (primary) {
+      store.openTarget({ kind: 'conversation', conversationId: primary.id })
+      onNavigate?.()
+      return
+    }
+    if (agent.canCreateConversation) onCreate(agent.profileId)
   }
-  // 声明了 client 组件（无导航 target）的侧栏项：真正渲染组件内容，不因缺少 target 静默丢弃
-  const clientItems = store.groupedUi.sidebarItems.filter(
-    (item) => item.spec.client !== undefined && resolveTargetString(item.spec.target ?? '', store.conversations) === null,
+
+  const openSplit = (e: React.MouseEvent, convId: number) => {
+    e.stopPropagation()
+    store.openTarget({ kind: 'conversation', conversationId: convId }, { split: true })
+  }
+
+  return (
+    <div className="agent-standing">
+      <div
+        className={`nav-item agent-standing-row${headerActive ? ' nav-item-active' : ''}`}
+        style={{ minHeight: 30 }}
+      >
+        {hasSubList && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm agent-collapse-btn"
+            style={{ height: 20, width: 20, padding: 0, flexShrink: 0 }}
+            title={expanded ? '收起历史对话' : '展开历史对话'}
+            aria-expanded={expanded}
+            onClick={(e) => {
+              e.stopPropagation()
+              setExpanded((v) => !v)
+            }}
+          >
+            <HelmIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={13} />
+          </button>
+        )}
+        <button
+          type="button"
+          className="nav-item-main nav-open"
+          onClick={openPrimary}
+          disabled={!agent.primaryConversation && !agent.canCreateConversation}
+          aria-current={headerActive ? 'page' : undefined}
+        >
+          <HelmIcon name={agent.icon} size={14} />
+          <span className="nav-item-label">{agent.label}</span>
+        </button>
+        <span className="nav-item-meta" onClick={(e) => e.stopPropagation()}>
+          {!hasSubList && agent.primaryConversation && (
+            <StatusBadge conv={agent.primaryConversation} />
+          )}
+          {!hasSubList && agent.primaryConversation?.nodeId && agent.primaryConversation.nodeId !== 'local' && (
+            <RemoteNodeTag nodeId={agent.primaryConversation.nodeId} />
+          )}
+          {hasSubList && (
+            <span className="badge badge-neutral tabular-nums">{agent.conversations.length}</span>
+          )}
+          <AgentNewConversationButton agent={agent} onCreate={onCreate} />
+          {agent.primaryConversation && !hasSubList && (
+            <span className="sidebar-split-action" style={{ display: 'inline-flex' }}>
+              <HoverIconButton
+                className="split-toggle-btn sidebar-split-btn"
+                title="在右屏分屏打开"
+                icon="columns"
+                onClick={(e) => openSplit(e, agent.primaryConversation!.id)}
+              />
+            </span>
+          )}
+        </span>
+      </div>
+      {hasSubList && expanded && (
+        <AgentConversationsList
+          agent={agent}
+          store={store}
+          showAll={showAll}
+          onToggleShowAll={() => setShowAll((v) => !v)}
+        />
+      )}
+    </div>
+  )
+}
+
+/** Agent 名下二级历史会话子列表：默认显示前 5 条，超出可展开；行内重命名/删除/分屏。 */
+function AgentConversationsList({
+  agent,
+  store,
+  showAll,
+  onToggleShowAll,
+}: {
+  agent: AgentStanding
+  store: HelmStoreValue
+  showAll: boolean
+  onToggleShowAll: () => void
+}) {
+  const convs = agent.conversations
+  const activeIdx = convs.findIndex((c) => isConversationActive(store, c.id))
+  const visibleCount =
+    showAll || (activeIdx >= 0 && activeIdx >= AGENT_SUB_LIST_PREVIEW)
+      ? convs.length
+      : Math.min(AGENT_SUB_LIST_PREVIEW, convs.length)
+  const visible = convs.slice(0, visibleCount)
+  const hidden = convs.length - visibleCount
+
+  return (
+    <div className="agent-conversations-list">
+      {visible.map((conv) => (
+        <AgentConversationRow key={conv.id} conv={conv} store={store} />
+      ))}
+      {hidden > 0 && (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm agent-list-toggle"
+          onClick={onToggleShowAll}
+        >
+          展开更多 (剩余 {hidden} 条)
+        </button>
+      )}
+      {hidden === 0 && showAll && convs.length > AGENT_SUB_LIST_PREVIEW && (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm agent-list-toggle"
+          onClick={onToggleShowAll}
+        >
+          收起
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** Agent 名下单个历史会话行（缩进渲染 + 悬停重命名/删除/分屏）。 */
+function AgentConversationRow({ conv, store }: { conv: ConversationSummary; store: HelmStoreValue }) {
+  const [renaming, setRenaming] = useState(false)
+  const [draft, setDraft] = useState('')
+  const active = isConversationActive(store, conv.id)
+  const humanManageable =
+    conv.id !== ROOT_CONVERSATION_ID && (conv.ownedBy ?? 'human') === 'human'
+
+  const commitRename = async () => {
+    const title = draft.trim()
+    setRenaming(false)
+    if (!title || title === conv.title) return
+    try {
+      await conversationsApi.patch(conv.id, { title })
+    } catch (err) {
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: '重命名失败',
+        body: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  const removeConversation = async () => {
+    try {
+      await conversationsApi.remove(conv.id)
+      store.pushNotice({ type: 'notification', level: 'info', title: '会话已删除', body: `#${conv.id}` })
+    } catch (err) {
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: '删除会话失败',
+        body: err instanceof ApiClientError ? `${err.code}: ${err.message}` : String(err),
+      })
+    }
+  }
+
+  if (renaming) {
+    return (
+      <div className="nav-item nav-item-sub" style={{ display: 'flex', gap: 4 }}>
+        <input
+          className="input"
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void commitRename()
+            if (e.key === 'Escape') setRenaming(false)
+          }}
+          style={{ height: 24, fontSize: 12 }}
+        />
+        <button className="btn btn-sm" style={{ height: 22, width: 22, padding: 0 }} onClick={() => void commitRename()}>
+          <HelmIcon name="check" size={12} />
+        </button>
+        <button className="btn btn-sm" style={{ height: 22, width: 22, padding: 0 }} onClick={() => setRenaming(false)}>
+          <HelmIcon name="x" size={12} />
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`nav-item nav-item-sub${active ? ' nav-item-active' : ''}`}>
+      <button
+        type="button"
+        className="nav-item-main nav-open"
+        onClick={() => store.openTarget({ kind: 'conversation', conversationId: conv.id })}
+        onDoubleClick={() => {
+          if (humanManageable) {
+            setDraft(conv.title)
+            setRenaming(true)
+          }
+        }}
+        aria-current={active ? 'page' : undefined}
+      >
+        <span className="nav-item-label">{conv.title || `会话 #${conv.id}`}</span>
+      </button>
+      <span className="nav-item-meta">
+        <span className="tabular-nums">#{conv.id}</span>
+        {conv.nodeId && conv.nodeId !== 'local' && <RemoteNodeTag nodeId={conv.nodeId} />}
+        <StatusBadge conv={conv} />
+        <span className="nav-item-row-actions">
+          <span className="sidebar-split-action" style={{ display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
+            <HoverIconButton
+              className="split-toggle-btn sidebar-split-btn"
+              title="在右屏分屏打开"
+              icon="columns"
+              onClick={(e) => {
+                e.stopPropagation()
+                store.openTarget({ kind: 'conversation', conversationId: conv.id }, { split: true })
+              }}
+            />
+          </span>
+          {humanManageable && (
+            <>
+              <HoverIconButton
+                title="重命名会话"
+                icon="edit-3"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setDraft(conv.title)
+                  setRenaming(true)
+                }}
+              />
+              <HoverIconButton
+                title="删除会话"
+                icon="trash-2"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void removeConversation()
+                }}
+              />
+            </>
+          )}
+        </span>
+      </span>
+    </div>
+  )
+}
+
+/** 「智能体」分组：每个 Agent 一个固定站位，下挂各自历史对话。 */
+function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onNavigate?: () => void }) {
+  const agentStandings = useMemo(
+    () =>
+      buildAgentStandings({
+        profiles: store.profiles,
+        conversations: store.conversations,
+        plugins: store.plugins,
+        sidebarItems: store.groupedUi.sidebarItems,
+        sidebarSections: store.groupedUi.sidebarSections,
+      }),
+    [store.profiles, store.conversations, store.plugins, store.groupedUi.sidebarItems, store.groupedUi.sidebarSections],
+  )
+  const createConversation = useMemo(
+    () => createConversationFor(store, onNavigate),
+    [store, onNavigate],
   )
 
   return (
-    <>
-      {clientItems.map((item) => (
-        <div key={`client:${item.pluginId}/${item.spec.id}`} style={{ padding: '0 10px 6px' }}>
-          <PluginUiView pluginId={item.pluginId} spec={item.spec} label={`侧栏项 ${item.spec.id}`} />
-        </div>
+    <div className="sidebar-group agent-standing-group">
+      <div className="sidebar-group-header">
+        <span>智能体</span>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          style={{ height: 18, width: 18, padding: 0 }}
+          title="管理智能体角色 (Profile)"
+          onClick={() => store.setActiveModal({ kind: 'profile-editor' })}
+        >
+          <HelmIcon name="plus" size={12} />
+        </button>
+      </div>
+      {agentStandings.map((agent) => (
+        <AgentStandingItem
+          key={agent.profileId}
+          agent={agent}
+          store={store}
+          onCreate={(profileId) => void createConversation(profileId)}
+          onNavigate={onNavigate}
+        />
       ))}
-      {rows.map((row) => {
-        const active = isSameResolvedTarget(row.target, store.primaryTarget)
-        return (
-          <div
-            key={row.key}
-            className={`nav-item${active ? ' nav-item-active' : ''}`}
-            style={{ cursor: 'pointer' }}
-          >
-            <button type="button" className="nav-item-main nav-open" onClick={() => row.target && store.openTarget(row.target)} aria-current={active ? 'page' : undefined}>
-              <HelmIcon name={row.icon} size={14} />
-              <span className="nav-item-label">{row.label}</span>
-            </button>
-            <span className="nav-item-meta" onClick={(e) => e.stopPropagation()}>
-              <HoverIconButton
-                title="在右屏分屏打开"
-                icon="columns"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (row.target) store.openTarget(row.target, { split: true })
-                }}
-              />
-            </span>
-          </div>
-        )
-      })}
-    </>
+    </div>
   )
 }
 
@@ -442,6 +575,45 @@ function SidebarSectionGroups({ store }: { store: HelmStoreValue }) {
         <SidebarSectionGroup key={`${section.pluginId}/${section.spec.id}`} store={store} section={section} />
       ))}
     </>
+  )
+}
+
+/** 单条会话行（插件 sidebar.section 分组内渲染）。 */
+function ConversationRow({
+  conv,
+  active,
+  onOpen,
+  onOpenSplit,
+}: {
+  conv: ConversationSummary
+  active: boolean
+  onOpen: () => void
+  onOpenSplit: () => void
+}) {
+  return (
+    <div
+      className={`nav-item${active ? ' nav-item-active' : ''}`}
+      style={{ minHeight: 30, opacity: 1 }}
+    >
+      <button type="button" className="nav-item-main nav-open" onClick={onOpen} aria-current={active ? 'page' : undefined}>
+        <span className="nav-item-label">{conv.title || `会话 #${conv.id}`}</span>
+      </button>
+      <span className="nav-item-meta">
+        <span className="tabular-nums">#{conv.id}</span>
+        <StatusBadge conv={conv} />
+        <span className="sidebar-split-action" style={{ display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
+          <HoverIconButton
+            className="split-toggle-btn sidebar-split-btn"
+            title="在右屏分屏打开"
+            icon="columns"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenSplit()
+            }}
+          />
+        </span>
+      </span>
+    </div>
   )
 }
 
@@ -496,10 +668,7 @@ function SidebarSectionGroup({
           <ConversationRow
             key={conv.id}
             conv={conv}
-            active={
-              store.primaryTarget.kind === 'conversation' &&
-              store.primaryTarget.conversationId === conv.id
-            }
+            active={isConversationActive(store, conv.id)}
             onOpen={() => store.openTarget({ kind: 'conversation', conversationId: conv.id })}
             onOpenSplit={() =>
               store.openTarget({ kind: 'conversation', conversationId: conv.id }, { split: true })
@@ -510,175 +679,55 @@ function SidebarSectionGroup({
   )
 }
 
-/** 「我的对话」列表：批量多选管理 + 单行重命名/删除。 */
-function MyConversationsGroup({ store }: { store: HelmStoreValue }) {
-  const { humanConversations } = useMemo(
-    () =>
-      buildSidebarGroups(store.conversations, store.groupedUi.sidebarItems, store.groupedUi.sidebarSections),
-    [store.conversations, store.groupedUi.sidebarItems, store.groupedUi.sidebarSections],
+/** 独立「视图」分组：screen: 导航项 + 无导航 target 的自定义客户端侧栏组件。 */
+function ViewNavGroup({ store }: { store: HelmStoreValue }) {
+  const viewItems = useMemo(
+    () => extractSidebarViews(store.groupedUi.sidebarItems, store.conversations),
+    [store.groupedUi.sidebarItems, store.conversations],
   )
-  const [selectMode, setSelectMode] = useState(false)
-  const [selected, setSelected] = useState<Set<number>>(new Set())
-  const [renaming, setRenaming] = useState<number | null>(null)
-  const [renameText, setRenameText] = useState('')
-  const [deleting, setDeleting] = useState(false)
-
-  const toggleSelect = (id: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  const deleteOne = async (id: number) => {
-    setDeleting(true)
-    try {
-      await conversationsApi.remove(id)
-      store.pushNotice({ type: 'notification', level: 'info', title: '会话已删除', body: `#${id}` })
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '删除会话失败',
-        body: err instanceof ApiClientError ? `${err.code}: ${err.message}` : String(err),
-      })
-    } finally {
-      setDeleting(false)
-    }
-  }
-
-  const deleteSelected = async () => {
-    setDeleting(true)
-    let failed = 0
-    for (const id of selected) {
-      try {
-        await conversationsApi.remove(id)
-      } catch {
-        failed += 1
-      }
-    }
-    setDeleting(false)
-    setSelected(new Set())
-    store.pushNotice({
-      type: 'notification',
-      level: failed > 0 ? 'warning' : 'info',
-      title: '批量删除完成',
-      body: failed > 0 ? `${selected.size - failed} 成功，${failed} 失败` : `已删除 ${selected.size} 个会话`,
-    })
-  }
-
-  const commitRename = async (id: number) => {
-    const title = renameText.trim()
-    setRenaming(null)
-    if (!title) return
-    try {
-      await conversationsApi.patch(id, { title })
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '重命名失败',
-        body: err instanceof Error ? err.message : String(err),
-      })
-    }
-  }
+  const clientItems = store.groupedUi.sidebarItems.filter(
+    (item) => item.spec.client !== undefined && resolveTargetString(item.spec.target ?? '', store.conversations) === null,
+  )
+  if (viewItems.length === 0 && clientItems.length === 0) return null
 
   return (
     <div className="sidebar-group">
-      <div className="sidebar-group-header">
-        <span>我的对话</span>
-        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-          {selectMode && humanConversations.length > 0 && (
-            <button
-              className="btn btn-ghost btn-sm"
-              style={{ height: 18, padding: '0 6px', fontSize: 10.5 }}
-              onClick={() =>
-                setSelected((prev) =>
-                  prev.size === humanConversations.length
-                    ? new Set()
-                    : new Set(humanConversations.map((c) => c.id)),
-                )
-              }
-            >
-              {selected.size === humanConversations.length ? '取消全选' : '全选'}
-            </button>
-          )}
-          <button
-            className="btn btn-ghost btn-sm"
-            style={{ height: 18, padding: '0 6px', fontSize: 10.5 }}
-            onClick={() => {
-              setSelectMode((v) => !v)
-              setSelected(new Set())
-            }}
-          >
-            {selectMode ? '退出批量' : '批量选择'}
-          </button>
-        </span>
-      </div>
-      {humanConversations.length === 0 && (
-        <div style={{ padding: '4px 8px', fontSize: 12, color: 'var(--fg-subtle)' }}>暂无自由对话</div>
-      )}
-      {humanConversations.map((conv) => {
-        const active =
-          store.primaryTarget.kind === 'conversation' && store.primaryTarget.conversationId === conv.id
-        if (renaming === conv.id) {
-          return (
-            <div key={conv.id} style={{ display: 'flex', gap: 4, padding: '2px 0' }}>
-              <input
-                className="input"
-                autoFocus
-                value={renameText}
-                onChange={(e) => setRenameText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void commitRename(conv.id)
-                  if (e.key === 'Escape') setRenaming(null)
-                }}
-                style={{ height: 26, fontSize: 12 }}
-              />
-              <button className="btn btn-sm" onClick={() => void commitRename(conv.id)}>
-                <HelmIcon name="check" size={12} />
-              </button>
-              <button className="btn btn-sm" onClick={() => setRenaming(null)}>
-                <HelmIcon name="x" size={12} />
-              </button>
-            </div>
-          )
-        }
+      <div className="sidebar-group-header">视图</div>
+      {clientItems.map((item) => (
+        <div key={`client:${item.pluginId}/${item.spec.id}`} style={{ padding: '0 10px 6px' }}>
+          <PluginUiView pluginId={item.pluginId} spec={item.spec} label={`侧栏项 ${item.spec.id}`} />
+        </div>
+      ))}
+      {viewItems.map((view) => {
+        const active = isSameResolvedTarget(view.target, store.primaryTarget)
         return (
-          <ConversationRow
-            key={conv.id}
-            conv={conv}
-            active={active}
-            onOpen={() => store.openTarget({ kind: 'conversation', conversationId: conv.id })}
-            onOpenSplit={() =>
-              store.openTarget({ kind: 'conversation', conversationId: conv.id }, { split: true })
-            }
+          <div
+            key={view.key}
+            className={`nav-item${active ? ' nav-item-active' : ''}`}
+            style={{ cursor: 'pointer' }}
           >
-            {selectMode ? (
-              <input
-                type="checkbox"
-                checked={selected.has(conv.id)}
-                onClick={(e) => e.stopPropagation()}
-                onChange={() => toggleSelect(conv.id)}
-                style={{ flexShrink: 0 }}
+            <button
+              type="button"
+              className="nav-item-main nav-open"
+              onClick={() => store.openTarget(view.target)}
+              aria-current={active ? 'page' : undefined}
+            >
+              <HelmIcon name={view.icon} size={14} />
+              <span className="nav-item-label">{view.label}</span>
+            </button>
+            <span className="nav-item-meta" onClick={(e) => e.stopPropagation()}>
+              <HoverIconButton
+                title="在右屏分屏打开"
+                icon="columns"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  store.openTarget(view.target, { split: true })
+                }}
               />
-            ) : undefined}
-          </ConversationRow>
+            </span>
+          </div>
         )
       })}
-      {selectMode && selected.size > 0 && (
-        <button
-          className="btn btn-sm btn-danger"
-          style={{ marginTop: 4 }}
-          disabled={deleting}
-          onClick={() => void deleteSelected()}
-        >
-          <HelmIcon name="trash-2" size={12} />
-          删除选中 ({selected.size})
-        </button>
-      )}
     </div>
   )
 }
@@ -703,7 +752,6 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
           >
             <HelmIcon name="search" size={13} />
           </button>
-          <NewConversationControl store={store} onNavigate={onClose} />
           {onClose && (
             <button
               type="button"
@@ -721,14 +769,11 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
       <div className="sidebar-scroll">
         <PendingAsksPanel store={store} />
 
-        <div className="sidebar-group">
-          <div className="sidebar-group-header">工作台</div>
-          <WorkbenchNavItems store={store} />
-        </div>
+        <AgentStandingsGroup store={store} onNavigate={onClose} />
 
         <SidebarSectionGroups store={store} />
 
-        <MyConversationsGroup store={store} />
+        <ViewNavGroup store={store} />
       </div>
 
       <div className="sidebar-footer">

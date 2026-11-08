@@ -56,6 +56,24 @@ pnpm helm conversations create --node build-box --cwd /workspace --json
 
 受控机器需部署 `helm-node` 和独立的 `helm` 客户端，受管 Shell 才能调用 Hub API。节点身份保存在 `node.json`（`0600`），与人类 CLI 的 `cli-token`、Hub 的 `credentials.json` 分开。节点断线后，在途命令返回结果未知错误；重连仅恢复后续调度，不重放命令，也不改在 Hub 本机执行。`helm nodes remove <nodeId>` 撤销身份并关闭现有连接。macOS、Linux、Windows 的开机服务由 `helm-node service install|uninstall|status` 管理；Windows 的字符串 Shell 命令需要 Git Bash 或 PATH 中可用的 Bash，缺失时返回 `shell_unavailable`。
 
+Web 的「计算节点」入口提供节点版本、更新检查和升级确认。`helm` 是控制 Hub 的客户端；`helm-node` 管理受控机器本机的守护进程，两者职责保持分离：
+
+```bash
+# 从 Hub 控制指定的在线节点；检查不会执行升级。
+pnpm helm nodes upgrade build-box --check --json
+pnpm helm nodes upgrade build-box --version 0.2.0 --json
+
+# 在受控机器上检查、升级本机受管守护进程。
+pnpm helm-node upgrade --check --json
+pnpm helm-node upgrade --version 0.2.0 --json
+```
+
+升级将同版本的 `@helm/node` 和 `@helm/cli` 安装到独立候选目录，校验两个安装包的 SHA-512 完整性，停止受理新命令并等待已受理命令结束。新进程完成注册和本机激活后，向 Hub 提交接管确认；仅注册或旧连接断开不会被当作升级成功。确认前的启动失败会保留旧版本；激活指令已发出但确认丢失时，返回「结果未确认」，不盲目杀候选或回滚。可用节点详情和 `helm-node status --json` 排查当前状态。`local` 与 Hub 同进程，不通过节点接口升级。
+
+默认不自动升级。显式设置 Hub 的 `HELM_AUTO_UPGRADE_NODES=1` 后，版本落后的节点上线时会尝试对齐 Hub 版本。节点的 `HELM_NPM_REGISTRY` 可指定可信私有源；远程请求不能将节点切到未在本机信任的源，本机 `helm-node upgrade --registry <url>` 则允许显式指定。失败版本默认冷却 30 分钟，`--force` 可重试或强制重装。前台 `helm-node start` 作为稳定启动器跟踪当前守护进程，开机服务重启时按 `current.json` 选择已激活入口。
+
+**分发前提**：目标版本必须已发布到节点可访问的 npm 源。当前仓库包仍标记为 `private`，这项功能不会自动发布 npm 包；未发布的版本会明确报错。安装包哈希校验依赖所信任源提供的元数据，不等同于独立发布者签名，也不对所有传递依赖提供同一校验保证。
+
 节点链路的编译后黑盒验收使用临时数据目录和独立 CLI/守护进程，不调用模型，也不安装系统服务：
 
 ```bash

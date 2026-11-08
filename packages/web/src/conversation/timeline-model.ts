@@ -6,8 +6,8 @@
  *   自动跳过其紧邻覆盖的重复 `pi.user`；裸 `pi.user`（无前置 helm.input）兜底展示。
  * - 插件 `timeline.renderer`（kinds + matchMeta）与 `tool.view`（toolNames）匹配判定。
  * - assistant 消息 thinking / text / toolCall 提取，`pi.tool-result` 按 callId 配对合并。
- * - 连续常规步骤「按回合收拢」：thinking 与成功且未命中插件 tool.view 的普通工具行
- *   收拢为 step-group；`isError`、tool.view 业务卡、subagent/SubagentWorkflow 永远豁免折叠。
+ * - 连续常规步骤「按回合收拢」：thinking 与常规工具行（含出错）
+ *   收拢为 step-group；tool.view 业务卡、subagent/SubagentWorkflow 永远豁免折叠。
  * - `pi.reset` / `pi.compaction` -> 上下文分割线（reset 可携带 handoff 交接摘要）。
  * - live 合并：实时工具（running）与流式文本并入进行中回合。
  */
@@ -16,10 +16,12 @@ import type {
   ConversationAttachmentRef,
   ConversationEntry,
   ConversationLive,
+  ConversationSummary,
   InputOrigin,
   TimelineRendererSpec,
   ToolViewSpec,
   WhenBusy,
+  WorkflowRunSummary,
 } from '@helm/protocol'
 
 // ---------------------------------------------------------------------------
@@ -95,6 +97,10 @@ export interface HumanInputItem {
   origin: InputOrigin
   meta?: Record<string, unknown>
   attachments?: ConversationAttachmentRef[]
+  /** helm.input 的稳定身份；入队与落库时沿用同一 React key。 */
+  inputId?: string
+  /** 非空表示该输入仍在 pi.inbox 排队待生效（尚未落入正式 entries）。 */
+  queuedMode?: 'steer' | 'followUp'
   /** true = 无前置 helm.input 的裸 pi.user 兜底展示。 */
   fallback: boolean
 }
@@ -187,7 +193,7 @@ export function parseHelmInputData(data: unknown): HelmInputData | undefined {
       )
     : []
   return {
-    ...(typeof d.id === 'string' ? { id: d.id } : {}),
+    ...(typeof d.id === 'string' && d.id !== '' ? { id: d.id } : {}),
     text: d.text,
     origin,
     ...(d.whenBusy === 'steer' || d.whenBusy === 'followUp' || d.whenBusy === 'reject'
@@ -353,11 +359,10 @@ function makeToolTrace(
   }
 }
 
-/** 折叠豁免判定：thinking 与「未出错且非业务卡」的普通工具行可收拢（执行中与已完成同组，避免状态切换时跳进跳出）。 */
+/** 折叠豁免判定：thinking 与常规工具行（含执行中、完成与出错）可收拢；只有业务卡（toolView / subagent / SubagentWorkflow）独立展示。 */
 export function isFoldableStep(step: FoldableStep): boolean {
   if (step.kind === 'thinking') return true
   const tool = step.tool
-  if (tool.isError) return false
   if (tool.toolView !== undefined) return false
   if (BUSINESS_TOOL_NAMES.has(tool.toolName)) return false
   return true
@@ -370,7 +375,7 @@ function foldableOfRaw(seg: RawSegment): FoldableStep {
 
 /**
  * 原始段 -> 渲染段：连续可折叠步骤从第一步起就放入 step-group，避免后续追加步骤时搬移节点。
- * 豁免项（isError / tool.view / subagent）与文本块保持独立。
+ * 豁免项（tool.view / subagent）与文本块保持独立。
  * 当回合仍在运行（live=true）且该 step-group 之后尚未产出任何 text 正文段时，标记 active=true（前端默认展开）。
  */
 export function foldTurnSegments(raw: ReadonlyArray<RawSegment>, live = false): AssistantSegment[] {
@@ -600,6 +605,7 @@ export function buildTimelineItems(
   options: BuildTimelineOptions = {},
 ): TimelineItem[] {
   const items: TimelineItem[] = []
+  const seenInputIds = new Set<string>()
   let turn: TurnAcc | null = null
   let lastHumanInputText: string | undefined
 
@@ -608,8 +614,9 @@ export function buildTimelineItems(
     turn = null
     items.push({
       kind: 'human',
-      key: `human:${entry.id}`,
+      key: data.id !== undefined ? `human:id:${data.id}` : `human:${entry.id}`,
       entryId: entry.id,
+      ...(data.id !== undefined ? { inputId: data.id } : {}),
       text: data.text,
       origin: data.origin,
       ...(data.meta !== undefined ? { meta: data.meta } : {}),
@@ -624,7 +631,10 @@ export function buildTimelineItems(
     if (renderer !== undefined) {
       if (entry.kind === 'helm.input') {
         const data = parseHelmInputData(entry.data)
-        if (data !== undefined) lastHumanInputText = data.text
+        if (data !== undefined) {
+          lastHumanInputText = data.text
+          if (data.id !== undefined) seenInputIds.add(data.id)
+        }
       }
       flushTurn(turn, items, false)
       turn = null
@@ -637,6 +647,7 @@ export function buildTimelineItems(
         const data = parseHelmInputData(entry.data)
         if (data === undefined) break
         lastHumanInputText = data.text
+        if (data.id !== undefined) seenInputIds.add(data.id)
         pushHuman(entry, data, false)
         break
       }
@@ -699,12 +710,32 @@ export function buildTimelineItems(
     }
   }
 
-  const isLive = options.live !== undefined || options.working === true
+  // 终态也可能携带未消费的 queue-only 快照，不能据此复活助手执行态。
+  const isLive = options.working ?? (options.live !== undefined)
   if (options.live !== undefined) {
     if (turn === null) turn = newTurn()
     mergeLiveIntoTurn(turn, options.live, options)
   }
   flushTurn(turn, items, isLive)
+
+  // 正式 entry 优先于队列快照，避免交接期间同一 input 展示两次。
+  for (const q of options.live?.queuedInputs ?? []) {
+    if (typeof q?.id !== 'string' || q.id === '' || typeof q.text !== 'string') continue
+    if (q.mode !== 'steer' && q.mode !== 'followUp') continue
+    if (seenInputIds.has(q.id)) continue
+    seenInputIds.add(q.id)
+    items.push({
+      kind: 'human',
+      key: `human:id:${q.id}`,
+      entryId: `queued:${q.submissionId}`,
+      inputId: q.id,
+      text: q.text,
+      origin: q.origin === 'agent' || q.origin === 'trigger' ? q.origin : 'human',
+      ...(Array.isArray(q.attachments) && q.attachments.length > 0 ? { attachments: q.attachments } : {}),
+      fallback: false,
+      queuedMode: q.mode,
+    })
+  }
   return items
 }
 
@@ -715,4 +746,169 @@ export function lastHumanTextOf(items: ReadonlyArray<TimelineItem>): string | un
     if (item.kind === 'human' && item.text.trim() !== '') return item.text
   }
   return undefined
+}
+
+// ---------------------------------------------------------------------------
+// subagent / SubagentWorkflow 运行期关联
+// ---------------------------------------------------------------------------
+
+const SUBAGENT_CONVERSATION_ID_RE = /\bconversationId=(\d+)/
+
+/**
+ * 解析 subagent 工具调用关联的子会话 ID：
+ * 1) 已完成：从 resultText 的 `conversationId=<n>` 尾行直接命中；
+ * 2) 运行期：内核已把父会话工具调用 ID 写入子会话摘要（parentToolCallId），
+ *    按_callId 精确关联（0ms，不等工具返回）；
+ * 3) resume：入参携带数字续接 ref 时匹配同父会话的该子会话。
+ */
+export function resolveSubagentConversationId(
+  tool: ToolTrace,
+  parentConversationId: number,
+  conversations: ReadonlyArray<Pick<ConversationSummary, 'id' | 'parentConversationId' | 'parentToolCallId'>>,
+): number | undefined {
+  if (tool.toolName !== 'subagent') return undefined
+  const fromResult = SUBAGENT_CONVERSATION_ID_RE.exec(tool.resultText ?? '')?.[1]
+  if (fromResult !== undefined) return Number(fromResult)
+  if (tool.callId !== undefined && tool.callId !== '') {
+    for (const c of conversations) {
+      if (c.parentConversationId === parentConversationId && c.parentToolCallId === tool.callId) {
+        return c.id
+      }
+    }
+  }
+  const resumeRef =
+    tool.input !== null && typeof tool.input === 'object' && !Array.isArray(tool.input)
+      ? (tool.input as Record<string, unknown>)['resume']
+      : undefined
+  if (typeof resumeRef === 'string' && /^\d+$/.test(resumeRef)) {
+    const resumeId = Number(resumeRef)
+    if (conversations.some((c) => c.id === resumeId && c.parentConversationId === parentConversationId)) {
+      return resumeId
+    }
+  }
+  return undefined
+}
+
+/**
+ * 解析 SubagentWorkflow 工具调用关联的工作流 run：
+ * - 已完成：resultText 中包含 run.id 的同会话 run；
+ * - 运行期（resultText 未产出）：同会话的 running run；无 running 时取最新的
+ * * 一个（工具调用与 run 创建同帧，短暂竞态下也能即刻展示）。
+ */
+export function resolveWorkflowRunForTool(
+  tool: ToolTrace,
+  parentConversationId: number,
+  workflowRuns: ReadonlyArray<WorkflowRunSummary>,
+): WorkflowRunSummary | undefined {
+  if (tool.toolName !== 'SubagentWorkflow') return undefined
+  const scoped = workflowRuns.filter((r) => r.conversationId === parentConversationId)
+  if (scoped.length === 0) return undefined
+  if (tool.resultText !== undefined) {
+    const matched = scoped.find((r) => tool.resultText!.includes(r.id))
+    if (matched !== undefined) return matched
+    return undefined
+  }
+  const running = scoped.find((r) => r.status === 'running')
+  if (running !== undefined) return running
+  let latest: WorkflowRunSummary | undefined
+  for (const r of scoped) {
+    if (latest === undefined || r.updatedAt > latest.updatedAt) latest = r
+  }
+  return latest
+}
+
+// ---------------------------------------------------------------------------
+// 子会话实时流（SubagentLiveCard 内容纯函数层）
+// ---------------------------------------------------------------------------
+
+/** 子会话紧凑活动行（任务指令 / 思考 / 工具 / 回复正文）。 */
+export type SubagentStreamLine =
+  | { kind: 'prompt'; key: string; text: string }
+  | { kind: 'thinking'; key: string; text: string }
+  | {
+      kind: 'tool'
+      key: string
+      toolName: string
+      summary: string
+      status: ToolTraceStatus
+      isError: boolean
+      durationMs?: number
+      resultPreview?: string
+    }
+  | { kind: 'text'; key: string; text: string }
+
+/** spawn 注入的结构化输出契约样板（末尾尾行），展示层剥离保留干净指令。 */
+const STRUCTURED_OUTPUT_CONTRACT_RE = /\n*<structured_output_contract>[\s\S]*?<\/structured_output_contract>\s*$/
+
+function firstLineOf(text: string, maxChars: number): string {
+  const line = text.trim().split('\n')[0] ?? ''
+  return line.length > maxChars ? `${line.slice(0, maxChars)}…` : line
+}
+
+/** 展开时间线 item 为紧凑活动行（prompt / thinking / tool / text 按时间序）。 */
+function linesOfTimelineItems(items: ReadonlyArray<TimelineItem>): SubagentStreamLine[] {
+  const lines: SubagentStreamLine[] = []
+  for (const item of items) {
+    if (item.kind === 'human') {
+      if (item.text.trim() === '') continue
+      lines.push({
+        kind: 'prompt',
+        key: item.key,
+        text: item.text.replace(STRUCTURED_OUTPUT_CONTRACT_RE, '').trim(),
+      })
+      continue
+    }
+    if (item.kind !== 'assistant') continue
+    for (const seg of item.segments) {
+      if (seg.kind === 'text') {
+        if (seg.text.trim() !== '') lines.push({ kind: 'text', key: seg.key, text: seg.text })
+        continue
+      }
+      if (seg.kind === 'step-group') {
+        for (const step of seg.steps) {
+          if (step.kind === 'thinking') {
+            if (step.thinking.text.trim() !== '') {
+              lines.push({ kind: 'thinking', key: step.thinking.key, text: step.thinking.text })
+            }
+            continue
+          }
+          lines.push(toolLineOf(step.tool))
+        }
+        continue
+      }
+      lines.push(toolLineOf(seg.tool))
+    }
+  }
+  return lines
+}
+
+function toolLineOf(tool: ToolTrace): SubagentStreamLine {
+  return {
+    kind: 'tool',
+    key: tool.key,
+    toolName: tool.toolName,
+    summary: toolSummaryText(tool.toolName, tool.input),
+    status: tool.status,
+    isError: tool.isError,
+    ...(tool.durationMs !== undefined ? { durationMs: tool.durationMs } : {}),
+    ...(tool.resultText !== undefined && tool.resultText !== ''
+      ? { resultPreview: firstLineOf(tool.resultText, 100) }
+      : {}),
+  }
+}
+
+/**
+ * 子会话实时内容流：detail.entries + ConversationLive 合并展开为紧凑活动行。
+ * live 为流式快照（thinking / text / tools）；working 控制进行中回合活性。
+ */
+export function buildSubagentStreamLines(
+  entries: ReadonlyArray<ConversationEntry>,
+  live?: ConversationLive,
+  working?: boolean,
+): SubagentStreamLine[] {
+  const items = buildTimelineItems(entries, {
+    ...(live !== undefined ? { live } : {}),
+    ...(working !== undefined ? { working } : {}),
+  })
+  return linesOfTimelineItems(items)
 }

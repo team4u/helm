@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationDetail, ConversationSummary, HelmSnapshot } from '@helm/protocol'
+import type { ConversationDetail, ConversationLive, ConversationSummary, HelmSnapshot } from '@helm/protocol'
 import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, SseParser } from '../src/lib/live-state.js'
 import { normalizeModelCatalogInfo } from '../src/lib/api.js'
 import type { NodeInfo } from '@helm/protocol'
@@ -139,4 +139,90 @@ test('node.changed 事件：上线 upsert、离线更新、removed 移除', { ti
   })
   assert.equal(state.nodes[0]?.id, 'local')
   assert.deepEqual(state.nodes.map((n) => n.id), ['local', 'macbook-pro'])
+})
+
+// ---------------------------------------------------------------------------
+// snapshot.conversationLives：重连恢复与终态交接边界
+// ---------------------------------------------------------------------------
+
+const queuedLive: ConversationLive = {
+  conversationId: 1,
+  text: '',
+  tools: [],
+  queuedInputs: [
+    { id: 'req-1', submissionId: '12', text: '插话引导的', mode: 'steer', origin: 'human', createdAt: 3 },
+  ],
+  updatedAt: 50,
+}
+
+test('快照 conversationLives 重建 live/queue，旧项清理不残留，后续增量一致', { timeout: 60_000 }, () => {
+  // 旧状态带残留 live（会话 2），新快照不含它：重建后清旧不残留。
+  const before = { ...emptyLiveState(), conversationLives: { 2: { ...queuedLive, conversationId: 2 } } }
+  const restored = applySnapshot(before, { ...snapshot, conversationLives: [queuedLive] })
+  assert.deepEqual(Object.keys(restored.conversationLives), ['1'])
+  assert.equal(restored.conversationLives[1]?.queuedInputs?.[0]?.id, 'req-1')
+  // 随后 conversation.live 增量正常覆盖（与快照重建衔接一致）。
+  const next = applyEventFrame(restored, {
+    seq: 11,
+    event: { type: 'conversation.live', live: { ...queuedLive, queuedInputs: [], updatedAt: 90 } },
+  })
+  assert.deepEqual(next.conversationLives[1]?.queuedInputs, [])
+  // conversation.deleted 仍移除 live。
+  const removed = applyEventFrame(next, { seq: 12, event: { type: 'conversation.deleted', conversationId: 1 } })
+  assert.deepEqual(removed.conversationLives, {})
+})
+
+test('快照 conversationLives 缺省时回退为空，非法形状显式拒绝', { timeout: 60_000 }, () => {
+  const state = applySnapshot(emptyLiveState(), snapshot)
+  assert.deepEqual(state.conversationLives, {})
+  assert.throws(() => applySnapshot(emptyLiveState(), { ...snapshot, conversationLives: [{ bad: true } as unknown as ConversationLive] }), /无效/)
+  assert.throws(() => applySnapshot(emptyLiveState(), { ...snapshot, conversationLives: 'x' as unknown as ConversationLive[] }), /无效/)
+})
+
+test('终态交接：live 含 queue -> upsert done 保留 queue-only live，等真实出队帧清理', { timeout: 60_000 }, () => {
+  // working 帧：流式正文 + 工具 + queued。
+  const workingLive: ConversationLive = {
+    conversationId: 1,
+    text: '流式中',
+    thinking: '思考中',
+    tools: [{ callId: 'c1', toolName: 'bash', status: 'running' }],
+    queuedInputs: queuedLive.queuedInputs,
+    updatedAt: 60,
+  }
+  let state = applySnapshot(emptyLiveState(), { ...snapshot, conversationLives: [workingLive] })
+  assert.equal(state.conversationLives[1]?.text, '流式中')
+  // 终态 upsert（done）：清流式正文/工具/思考，但保留 queue-only live。
+  state = applyEventFrame(state, { seq: 11, event: { type: 'conversation.upsert', conversation: { ...conv, status: 'done' } } })
+  const afterSettled = state.conversationLives[1]
+  assert.ok(afterSettled, '权威 queue 仍在时保留 live')
+  assert.equal(afterSettled!.text, '')
+  assert.equal(afterSettled!.thinking, undefined)
+  assert.deepEqual(afterSettled!.tools, [])
+  assert.equal(afterSettled!.queuedInputs?.[0]?.id, 'req-1')
+  // 后续 queued 输入被消费（新 run 或 queue 清空帧）：live 被真实帧替换/清理。
+  state = applyEventFrame(state, {
+    seq: 12,
+    event: { type: 'conversation.live', live: { conversationId: 1, text: '下一轮', tools: [], updatedAt: 100 } },
+  })
+  assert.equal(state.conversationLives[1]?.text, '下一轮')
+  assert.equal(state.conversationLives[1]?.queuedInputs, undefined)
+})
+
+test('终态交接：queue 为空时 upsert done 原样删除 live（不让 done 显示旧回复 working）', { timeout: 60_000 }, () => {
+  const doneLive: ConversationLive = { conversationId: 1, text: '已完成的回答', tools: [], updatedAt: 70 }
+  let state = applySnapshot(emptyLiveState(), { ...snapshot, conversationLives: [doneLive] })
+  state = applyEventFrame(state, { seq: 11, event: { type: 'conversation.upsert', conversation: { ...conv, status: 'done' } } })
+  assert.equal(state.conversationLives[1], undefined)
+  // 空 queuedInputs 数组同样视为无队列（与 undefined 同义）。
+  let state2 = applySnapshot(emptyLiveState(), { ...snapshot, conversationLives: [{ ...doneLive, queuedInputs: [] }] })
+  state2 = applyEventFrame(state2, { seq: 11, event: { type: 'conversation.upsert', conversation: { ...conv, status: 'done' } } })
+  assert.equal(state2.conversationLives[1], undefined)
+})
+
+test('working/blocked upsert 不删 live（仅终态清理）', { timeout: 60_000 }, () => {
+  let state = applySnapshot(emptyLiveState(), { ...snapshot, conversationLives: [queuedLive] })
+  state = applyEventFrame(state, { seq: 11, event: { type: 'conversation.upsert', conversation: { ...conv, status: 'working' } } })
+  assert.ok(state.conversationLives[1])
+  state = applyEventFrame(state, { seq: 12, event: { type: 'conversation.upsert', conversation: { ...conv, status: 'blocked' } } })
+  assert.ok(state.conversationLives[1])
 })

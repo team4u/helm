@@ -1,10 +1,11 @@
 /**
  * 计算节点管理弹窗纯函数模块：
- * 节点 ID 校验、受控机接入命令生成、容量与时长格式化。
+ * 节点 ID 校验、受控机接入命令生成、容量与时长格式化、
+ * SemVer 版本比较与节点自升级门控。
  * 全部无副作用，便于单测与 Fast Refresh 隔离。
  */
 
-import type { NodeInfo } from '@helm/protocol'
+import type { NodeInfo, NodeUpgradeCheckResult } from '@helm/protocol'
 
 /** 节点 ID 约束（与内核 issueNodeToken 校验同源：字母数字开头，可含 . _ -，最长 128）。 */
 export const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
@@ -84,6 +85,132 @@ export interface NodeUsageInfo {
 export function nodeOptionLabel(node: NodeInfo): string {
   if (node.kind === 'local') return `${node.id} (本机)`
   return node.online ? node.id : `${node.id} (离线)`
+}
+
+/** 节点版本展示：确保带 v 前缀（'0.1.0' -> 'v0.1.0'）；空或空白返回 null。 */
+export function formatNodeVersion(version?: string): string | null {
+  const trimmed = (version ?? '').trim()
+  if (trimmed === '') return null
+  return trimmed.startsWith('v') ? trimmed : `v${trimmed}`
+}
+
+/** SemVer 解析结果（build metadata 按规范忽略，不参与比较）。 */
+export interface ParsedNodeSemver {
+  major: number
+  minor: number
+  patch: number
+  /** 预发布标识段（如 ['beta', '1']）；正式版为空数组。 */
+  prerelease: string[]
+}
+
+// semver.org 官方文法（数值段禁前导零），另容忍 v 前缀。
+const SEMVER_PATTERN =
+  /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+
+/** 解析 SemVer；空白或非法（如 0.1、01.2.3、garbage）返回 null。 */
+export function parseNodeSemver(version: string): ParsedNodeSemver | null {
+  const match = SEMVER_PATTERN.exec(version.trim())
+  if (match === null) return null
+  const major = match[1] ?? '0'
+  const minor = match[2] ?? '0'
+  const patch = match[3] ?? '0'
+  const prerelease = match[4]
+  return {
+    major: Number(major),
+    minor: Number(minor),
+    patch: Number(patch),
+    prerelease: prerelease !== undefined ? prerelease.split('.') : [],
+  }
+}
+
+/** 预发布段比较：正式 > 预发布；数字段按数值、数字 < 字母数字、段多者大。 */
+function comparePrerelease(a: string[], b: string[]): number {
+  if (a.length === 0 && b.length === 0) return 0
+  if (a.length === 0) return 1
+  if (b.length === 0) return -1
+  const len = Math.max(a.length, b.length)
+  for (let i = 0; i < len; i++) {
+    const da = a[i]
+    const db = b[i]
+    if (da === undefined) return -1
+    if (db === undefined) return 1
+    const na = /^\d+$/.test(da)
+    const nb = /^\d+$/.test(db)
+    if (na && nb) {
+      if (Number(da) > Number(db)) return 1
+      if (Number(da) < Number(db)) return -1
+    } else if (na !== nb) {
+      return na ? -1 : 1
+    } else if (da > db) {
+      return 1
+    } else if (da < db) {
+      return -1
+    }
+  }
+  return 0
+}
+
+/** SemVer 优先级比较：a > b 返回 1、a < b 返回 -1、相等返回 0；任一侧非法无法比较返回 0。 */
+export function compareNodeSemver(a: string, b: string): number {
+  const pa = parseNodeSemver(a)
+  const pb = parseNodeSemver(b)
+  if (pa === null || pb === null) return 0
+  const core: Array<[number, number]> = [
+    [pa.major, pb.major],
+    [pa.minor, pb.minor],
+    [pa.patch, pb.patch],
+  ]
+  for (const [va, vb] of core) {
+    if (va > vb) return 1
+    if (va < vb) return -1
+  }
+  return comparePrerelease(pa.prerelease, pb.prerelease)
+}
+
+/** 节点版本是否落后于 Hub（local 节点）版本：任一为空或非法 SemVer 视为无法判定（false）。 */
+export function isNodeBehindHub(nodeVersion?: string, hubVersion?: string): boolean {
+  if (parseNodeSemver(nodeVersion ?? '') === null || parseNodeSemver(hubVersion ?? '') === null) return false
+  return compareNodeSemver(hubVersion ?? '', nodeVersion ?? '') > 0
+}
+
+/** 确认升级门控结果：ok 为可点击；hint 为禁用原因（ok 时为 null）。 */
+export interface NodeUpgradeConfirmability {
+  ok: boolean
+  hint: string | null
+}
+
+/** 确认升级门控：离线、缺检查且无明确合法目标、已最新且无 force/目标时拒绝。 */
+export function canConfirmNodeUpgrade(input: {
+  online: boolean
+  check: NodeUpgradeCheckResult | null
+  targetVersion: string
+  force: boolean
+}): NodeUpgradeConfirmability {
+  if (!input.online) return { ok: false, hint: '节点已离线，无法升级' }
+  const explicit = input.targetVersion.trim()
+  if (explicit !== '' && parseNodeSemver(explicit) === null) {
+    return { ok: false, hint: '目标版本不是合法 SemVer（示例 0.2.0）' }
+  }
+  if (input.check === null) {
+    return explicit === ''
+      ? { ok: false, hint: '请先检查更新，或填写明确的目标版本' }
+      : { ok: true, hint: null }
+  }
+  if (input.check.updateAvailable) return { ok: true, hint: null }
+  if (explicit === '' && !input.force) {
+    return { ok: false, hint: '当前已是最新版本；可勾选强制重装/重试，或填写目标版本' }
+  }
+  return { ok: true, hint: null }
+}
+
+/** 确认升级将安装的目标：显式输入优先；否则固定为本次检查的 latestVersion（无检查且无输入为 null）。 */
+export function resolveUpgradeTarget(
+  check: NodeUpgradeCheckResult | null,
+  targetVersion: string,
+): string | null {
+  const explicit = targetVersion.trim()
+  if (explicit !== '') return explicit
+  return check !== null && check.latestVersion.trim() !== '' ? check.latestVersion : null
 }
 
 /** 占用量计算（free + total -> used / 百分比 / 文案）；数据缺失返回 null。 */

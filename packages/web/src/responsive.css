@@ -34,7 +34,19 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 @container (max-width: 680px) {
   .conversation-topbar { gap: 8px; padding: 0 12px; }
   .conversation-topbar .pane-action-label { display: none; }
-  .conversation-topbar .pane-cwd-subtitle { display: none; }
+  /* 手机仍保留远端身份：副标题切紧凑模式（仅 @node，本机不渲染），title 保留完整坐标 */
+  .conversation-topbar .pane-cwd-subtitle { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conversation-topbar .pane-cwd-subtitle .env-subtitle-full { display: none; }
+  .conversation-topbar .pane-cwd-subtitle .env-subtitle-compact { display: inline; }
+  .composer-env-bar { gap: 4px 8px; padding: 3px 8px 5px; }
+  .composer-env-hint { display: none; }
+  .composer-env-select { max-width: 128px; }
+  .composer-env-cwd { max-width: 180px; }
+  .composer-env-cwd-input { width: min(180px, 100%); }
+  /* iOS 输入放大防护：输入类控件有效字号 ≥ 16px（高度同步放宽防裁切） */
+  .composer-env-select,
+  .composer-env-cwd-input { font-size: 16px; height: 30px; }
+  .composer-env-cwd { font-size: 11px; }
   .timeline-scroll { padding: 16px 14px 22px; }
   .msg-human-pill { max-width: 92%; }
   .msg-hover-bar { opacity: 0.85; }
@@ -42,12 +54,13 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .composer-textarea { font-size: 16px; max-height: 120px; }
   .composer-picker-root { max-width: 180px; }
   .composer-toolbar .composer-model-button { max-width: 180px; }
-  .composer-toolbar .composer-steer-button { width: 32px; height: 32px; padding: 0; border-radius: 50%; }
+  .composer-toolbar .composer-queue-button { width: 32px; height: 32px; padding: 0; border-radius: 50%; }
   .composer-widgets { max-height: min(260px, 35dvh); overflow-y: auto; }
   .composer-action-label { display: none; }
 }
 @container (max-width: 450px) {
-  .conversation-topbar .pane-title-group > .badge { display: none; }
+  .conversation-topbar .pane-title { min-width: 40px; }
+  .conversation-topbar .pane-cwd-subtitle { max-width: 30vw; }
   .composer-widgets .card { padding: 8px 10px; }
 }
 @media (hover: none) {
@@ -103,7 +116,8 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .workbench-backdrop { display: block; position: fixed; inset: 0; z-index: 59; background: var(--bg-backdrop); border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 }
 @media (max-width: 860px) {
-  .split-toggle-btn,
+  /* 窄屏只隐藏「开启分屏」入口；分屏已开启时保留激活态按钮与关闭按钮可点 */
+  .split-toggle-btn:not(.split-active),
   .sidebar-split-action,
   .sidebar-split-btn {
     display: none !important;
@@ -141,9 +155,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     width: 32px;
     height: 32px;
     padding: 0;
-  }
-  .new-conversation-dropdown {
-    right: -36px !important;
   }
   .sidebar-footer .btn {
     min-width: 32px;

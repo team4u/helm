@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { getComposerPlaceholder } from '../src/conversation/composer-model.js'
+import { busyEnterMode, getComposerPlaceholder } from '../src/conversation/composer-model.js'
 
 const composerSource = readFileSync(new URL('../src/conversation/Composer.tsx', import.meta.url), 'utf8')
 const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
@@ -28,6 +28,8 @@ test('移动端 Placeholder 文案优化：小屏/移动端极短防折行', { t
 
   const desktopWorking = getComposerPlaceholder(true, false)
   assert.match(desktopWorking, /⌘\/Ctrl\+Enter/)
+  // 默认插话模式：Enter 在前插话引导，⌘/Ctrl+Enter 排队发送。
+  assert.match(desktopWorking, /Enter 插话引导 · ⌘\/Ctrl\+Enter 排队发送/)
 
   // Composer.tsx 源码中接入了动态 placeholder
   assert.match(composerSource, /getComposerPlaceholder\(working,\s*isMobile\)/)
@@ -98,4 +100,30 @@ test('消息悬停条紧凑包裹与对齐规则：人类消息靠右对齐、AI
   assert.match(stylesCss, /\.msg-human-row\s+\.msg-hover-bar\s*\{[^}]*align-self:\s*flex-end/)
   // AI 回复靠左紧凑
   assert.match(stylesCss, /\.msg-ai-block\s+\.msg-hover-bar\s*\{[^}]*align-self:\s*flex-start/)
+})
+
+test('正忙时默认插话模式：Enter steer，⌘/Ctrl+Enter 排队发送（纯函数）', { timeout: 60_000 }, () => {
+  // Enter（无修饰键）默认插话引导。
+  assert.equal(busyEnterMode(false), 'steer')
+  // ⌘/Ctrl+Enter 显式排队发送。
+  assert.equal(busyEnterMode(true), 'followUp')
+  // Composer 消费同一纯函数（组件与单测不分裂）。
+  assert.match(composerSource, /busyEnterMode\(e\.metaKey \|\| e\.ctrlKey\)/)
+})
+
+test('正忙且有输入时按钮策略：主发送为插话引导，ghost 按钮为排队发送', { timeout: 60_000 }, () => {
+  // 主发送按钮：steer + 步骤边界注入提示（不谎称立即打断工具）。
+  assert.match(composerSource, /onClick=\{\(\) => void send\('steer'\)\}/)
+  assert.match(composerSource, /下一个步骤边界注入（Enter）/)
+  assert.match(composerSource, /aria-label=\{uploading > 0 \? `上传中 \(\$\{uploading\}\)` : '插话引导'\}/)
+  // ghost 按钮改为显式排队发送（clock 图标 + 当前回合结束后处理）。
+  assert.match(composerSource, /composer-queue-button/)
+  assert.match(composerSource, /onClick=\{\(\) => void send\('followUp'\)\}/)
+  assert.match(composerSource, /当前回合结束后处理（⌘\/Ctrl\+Enter）/)
+  // 旧 steer ghost 类名不再存在；responsive.css 同步 queue 类名。
+  assert.doesNotMatch(composerSource, /composer-steer-button/)
+  assert.match(responsiveCss, /\.composer-queue-button/)
+  assert.doesNotMatch(responsiveCss, /composer-steer-button/)
+  // 停止按钮与空闲普通发送不受影响。
+  assert.match(composerSource, /aria-label="停止当前执行"/)
 })

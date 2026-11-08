@@ -319,6 +319,49 @@ describe('spawn schema：AJV 全量校验', { timeout: 60_000 }, () => {
     }
   })
 
+  it('StructuredOutput 工具：支持将字符串形式的 JSON 防御性解析为对象并成功校验', { timeout: 60_000 }, async () => {
+    const th = await openSpawnHarness()
+    try {
+      th.faux.setResponses([
+        // 模型因未声明类型将结构化结果编码为 JSON 字符串传入
+        fauxAssistantMessage(
+          [
+            fauxToolCall('register_structured_output', {
+              output: JSON.stringify({
+                difficulty: '中等',
+                intent: 'test intent',
+                question: 'test question',
+              }),
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('已完成出题'),
+      ])
+      const result = await runNativeSpawn(th.deps, {
+        parentConversationId: 1,
+        prompt: '出题',
+        schema: {
+          type: 'object',
+          properties: {
+            difficulty: { type: 'string', enum: ['容易', '中等', '困难'] },
+            intent: { type: 'string' },
+            question: { type: 'string' },
+          },
+          required: ['difficulty', 'intent', 'question'],
+          additionalProperties: false,
+        },
+      } as never)
+      assert.deepEqual(result, {
+        difficulty: '中等',
+        intent: 'test intent',
+        question: 'test question',
+      })
+    } finally {
+      await th.close()
+    }
+  })
+
   it('两次均失败显式 schema_validation_failed（含会话诊断）', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness()
     try {
@@ -947,5 +990,90 @@ describe('Ask CAS 与结算诚实性', { timeout: 60_000 }, () => {
     )
     await service.cancelAsk(service.listAsks('pending')[0]!.id)
     await store.close()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// spawn：parentToolCallId 运行期实时关联透传
+// ---------------------------------------------------------------------------
+
+describe('spawn parentToolCallId：父会话工具调用 ID 实时关联子会话', { timeout: 60_000 }, () => {
+  it('新建派生：request.parentToolCallId 原样可达，引擎不吞字段', { timeout: 60_000 }, async () => {
+    const th = await openSpawnHarness()
+    try {
+      th.faux.setResponses([fauxAssistantMessage('完成')])
+      let registeredChildId: number | undefined
+      const originalRegister = th.deps.registerChildConversation
+      th.deps.registerChildConversation = async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel) => {
+        registeredChildId = childId
+        return originalRegister(childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel)
+      }
+      // 宿主 runtime.ts 在 createSubagentTool 里从 api.callId 注入 parentToolCallId；
+      // 引擎侧契约：字段原样随 request 传递，不吞不改（镜像写入由宿主回调完成）。
+      const request = {
+        parentConversationId: 1,
+        prompt: '修构建',
+        parentToolCallId: 'toolu_01ABC',
+      }
+      const result = await runNativeSpawn(th.deps, request as never)
+      assert.equal(result, '完成')
+      assert.ok(registeredChildId !== undefined, '子会话必须已登记')
+      assert.equal(request.parentToolCallId, 'toolu_01ABC')
+    } finally {
+      await th.close()
+    }
+  })
+
+  it('resume 续接：宿主 bindChildToolCall 收到本次工具调用 ID', { timeout: 60_000 }, async () => {
+    const th = await openSpawnHarness()
+    try {
+      th.faux.setResponses([fauxAssistantMessage('第一段'), fauxAssistantMessage('续接完成')])
+      const bound: Array<{ childId: number; parentToolCallId: string }> = []
+      th.deps.bindChildToolCall = (childId, parentToolCallId) => {
+        bound.push({ childId, parentToolCallId })
+      }
+      let createdId: number | undefined
+      await runNativeSpawn(th.deps, {
+        parentConversationId: 1,
+        prompt: '第一段',
+        agentId: 'agent-tc',
+        onResolved: (info: { conversationId?: number }) => {
+          createdId = info.conversationId
+        },
+      } as never)
+      // 新建路径不调用 bindChildToolCall（由 registerChildConversation 落 parentToolCallId）。
+      assert.equal(bound.length, 0)
+      await runNativeSpawn(th.deps, {
+        parentConversationId: 1,
+        prompt: '继续',
+        resume: 'agent-tc',
+        parentToolCallId: 'toolu_01RESUME',
+      } as never)
+      assert.equal(bound.length, 1)
+      assert.equal(bound[0]!.parentToolCallId, 'toolu_01RESUME')
+      assert.equal(bound[0]!.childId, createdId)
+    } finally {
+      await th.close()
+    }
+  })
+
+  it('缺省不带 parentToolCallId：resume 不触发 bindChildToolCall', { timeout: 60_000 }, async () => {
+    const th = await openSpawnHarness()
+    try {
+      th.faux.setResponses([fauxAssistantMessage('第一段'), fauxAssistantMessage('再续')])
+      let called = 0
+      th.deps.bindChildToolCall = () => {
+        called += 1
+      }
+      await runNativeSpawn(th.deps, { parentConversationId: 1, prompt: '第一段', agentId: 'agent-nt' } as never)
+      await runNativeSpawn(th.deps, {
+        parentConversationId: 1,
+        prompt: '继续',
+        resume: 'agent-nt',
+      } as never)
+      assert.equal(called, 0, '无 parentToolCallId 的派生不得触发 bindChildToolCall')
+    } finally {
+      await th.close()
+    }
   })
 })

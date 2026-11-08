@@ -31,6 +31,7 @@ import type {
   NodeIpcClosedEvent,
   NodeIpcEvent,
   NodeRegisterInput,
+  NodeUpgradeResult,
 } from '@helm/protocol'
 import type { Context } from '@earendil-works/chord/context'
 
@@ -90,6 +91,10 @@ export interface NodeConnection {
   lastSeenAt: number
   hostname: string
   platform: string
+  /** 节点上报的软件版本（非法/未提供时不保存）。 */
+  version?: string
+  /** 升级候选携带的尝试 ID（心跳 commit 按它对账）。 */
+  upgradeAttemptId?: string
   /** 节点端配置的 Hub 地址（远端受管子进程回连用）。 */
   hubUrl?: string
   /** 最近一次注册或心跳捎带的健康快照（边界校验后的可信数据）。 */
@@ -128,6 +133,25 @@ interface Waiter {
   cancelled: () => void
 }
 
+/** 升级等待器：有界内存承诺，仅由匹配的心跳 commit resolve。 */
+interface UpgradeWaiter {
+  nodeId: string
+  attemptId: string
+  targetVersion: string
+  previousVersion: string
+  resolve: (result: NodeUpgradeResult) => void
+  reject: (error: Error) => void
+  timer: NodeJS.Timeout
+}
+
+/** beginUpgrade 返回的受控等待器句柄。 */
+export interface UpgradeWaiterHandle {
+  /** 升级终态：仅匹配心跳 commit resolve 成功；超时/取消/断开 reject。 */
+  result: Promise<NodeUpgradeResult>
+  /** 主动取消（清理等待器；reason 作为 rejection 原因）。 */
+  cancel(reason?: Error): void
+}
+
 /** IPC 订阅回调集。 */
 export interface IpcSink {
   onEvent: (line: string) => void
@@ -139,6 +163,13 @@ const safeEqual = (a: string, b: string): boolean => {
   const bb = Buffer.from(b, 'utf8')
   return ba.length === bb.length && timingSafeEqual(ba, bb)
 }
+
+/** 同节点并发升级等待拒绝（调用方映射为 409）。 */
+export class HelmUpgradeBusyError extends Error {}
+/** 升级等待超时（未收到匹配 commit）。 */
+export class HelmUpgradeTimeoutError extends Error {}
+/** 升级等待被主动取消。 */
+export class HelmUpgradeCancelledError extends Error {}
 
 /** timing-safe 令牌校验回调（签发表存 sha256(wholeToken) 十六进制）。 */
 export function tokenAuthenticator(
@@ -166,6 +197,8 @@ export class NodeRegistry {
   readonly #outputSinks = new Map<string, Set<(event: EnvExecOutputEvent) => void>>()
   /** IPC 订阅路由：nodeId -> subscribeId -> sink。 */
   readonly #ipcSinks = new Map<string, Map<string, IpcSink>>()
+  /** 每节点至多一个在途升级等待器。 */
+  readonly #upgradeWaiters = new Map<string, UpgradeWaiter>()
   /** 节点撤销 epoch：每次 evict/disconnect/替换递增；在途注册醒后必须校验。 */
   readonly #nodeEpoch = new Map<string, number>()
   #sweeper: NodeJS.Timeout | undefined
@@ -251,11 +284,19 @@ export class NodeRegistry {
     attach: (local: HubConnectionLocal) => BirpcReturn<NodeSideFunctions, HubConnectionLocal>,
   ): Promise<RegisterOutcome> {
     if (this.#closed) return { accepted: false, reason: 'registry closed' }
-    const { nodeId, token, hostname, platform, hubUrl } = input ?? ({} as NodeRegisterInput)
+    const { nodeId, token, hostname, platform, hubUrl, version, upgradeAttemptId } = input ?? ({} as NodeRegisterInput)
     if (typeof nodeId !== 'string' || nodeId === 'local' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeId)) {
       return { accepted: false, reason: 'invalid nodeId' }
     }
     if (typeof token !== 'string' || token.length === 0) return { accepted: false, reason: 'missing token' }
+    // 边界校验：version / upgradeAttemptId 要么缺省要么非空字符串；
+    // 非法类型/空串显式拒绝注册（不静默丢弃——那会破坏升级对账身份）。
+    if (version !== undefined && (typeof version !== 'string' || version === '')) {
+      return { accepted: false, reason: 'invalid version' }
+    }
+    if (upgradeAttemptId !== undefined && (typeof upgradeAttemptId !== 'string' || upgradeAttemptId === '')) {
+      return { accepted: false, reason: 'invalid upgradeAttemptId' }
+    }
     // 撤销 epoch 快照：鉴权 await 期间 removeNode/轮换/顶替都会递增，
     // 迟到的 resolve(true) 不再把被撤销的旧连接发布在线。
     const epochAtStart = this.#epochOf(nodeId)
@@ -311,6 +352,8 @@ export class NodeRegistry {
       lastSeenAt: Date.now(),
       hostname: typeof hostname === 'string' ? hostname : '',
       platform: typeof platform === 'string' ? platform : '',
+      ...(version !== undefined ? { version } : {}),
+      ...(upgradeAttemptId !== undefined ? { upgradeAttemptId } : {}),
       ...(typeof hubUrl === 'string' && hubUrl !== '' ? { hubUrl } : {}),
       ...(health !== undefined ? { health } : {}),
     }
@@ -327,9 +370,118 @@ export class NodeRegistry {
     return { accepted: true, heartbeatMs: this.#heartbeatIntervalMs }
   }
 
+  /**
+   * 创建升级等待器：返回的 result 仅由匹配的心跳 upgradeCommit resolve；
+   * 超时 / cancel() / registry.close() reject（原 socket 传输断开不终结
+   * 等待器——升级本身就伴随候选顶替旧连接）。同节点并发升级等待显式拒绝。
+   * register 不 resolve 等待器——候选注册只携带 attemptId，真正的成功
+   * 确认只能来自候选自己的 commit 心跳。
+   */
+  beginUpgrade(
+    nodeId: string,
+    params: { attemptId: string; targetVersion: string; previousVersion: string; timeoutMs: number },
+  ): UpgradeWaiterHandle {
+    if (this.#closed) throw new Error('registry closed')
+    if (this.#upgradeWaiters.has(nodeId)) {
+      throw new HelmUpgradeBusyError(`节点 ${nodeId} 已有在途升级等待器`)
+    }
+    let waiter: UpgradeWaiter | undefined
+    const result = new Promise<NodeUpgradeResult>((resolve, reject) => {
+      waiter = {
+        nodeId,
+        attemptId: params.attemptId,
+        targetVersion: params.targetVersion,
+        previousVersion: params.previousVersion,
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          const w = this.#upgradeWaiters.get(nodeId)
+          if (w !== undefined && w.attemptId === params.attemptId) {
+            this.#upgradeWaiters.delete(nodeId)
+            w.reject(new HelmUpgradeTimeoutError(
+              `节点 ${nodeId} 升级到 ${params.targetVersion} 未在 ${params.timeoutMs}ms 内确认`,
+            ))
+          }
+        }, params.timeoutMs),
+      }
+      waiter.timer.unref?.()
+      this.#upgradeWaiters.set(nodeId, waiter)
+    })
+    // 防未处理 rejection：调用方始终 await result，但保险起见吞掉观察者缺位。
+    result.catch(() => undefined)
+    return {
+      result,
+      cancel: (reason?: Error) => {
+        const w = this.#upgradeWaiters.get(nodeId)
+        if (w === undefined || w.attemptId !== params.attemptId) return
+        clearTimeout(w.timer)
+        this.#upgradeWaiters.delete(nodeId)
+        w.reject(reason ?? new HelmUpgradeCancelledError(`节点 ${nodeId} 升级等待已取消`))
+      },
+    }
+  }
+
+  /** 测试内省：节点是否存在在途升级等待器。 */
+  hasUpgradeWaiter(nodeId: string): boolean {
+    return this.#upgradeWaiters.has(nodeId)
+  }
+
+  /**
+   * 升级心跳 commit 处理（noteHeartbeat 内部调用；已验证 conn 是当前连接），
+   * 返回值即心跳 ACK：
+   * - 仅 conn.upgradeAttemptId === commit.attemptId（候选以该 attempt 注册）
+   *   且 conn.version === commit.version（候选确实运行目标版本）才合法；
+   * - 合法且存在等待器时再核实 targetVersion / previousVersion 完全
+   *   一致才 resolve（pid 正整数），不一致不倒灌别的 attempt，且 ACK false
+   *   （节点据此重试/回滚，绝不误以为 Hub 已确认）；
+   * - 合法但无等待器（如本机 CLI 升级后重连）视为已接受（true）。
+   */
+  #applyUpgradeCommit(nodeId: string, conn: NodeConnection, commit: unknown): boolean {
+    if (commit === null || typeof commit !== 'object' || Array.isArray(commit)) {
+      return false
+    }
+    const c = commit as Record<string, unknown>
+    const { attemptId, version, previousVersion, pid } = c
+    if (typeof attemptId !== 'string' || attemptId === '' || typeof version !== 'string' || version === '') {
+      return false
+    }
+    if (typeof previousVersion !== 'string' || previousVersion === '') {
+      return false
+    }
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) {
+      return false
+    }
+    // 当前连接必须以该 attempt 注册且已运行目标版本（伪造/过期的 commit 拒绝）。
+    if (conn.upgradeAttemptId !== attemptId || conn.version !== version) {
+      return false
+    }
+    const waiter = this.#upgradeWaiters.get(nodeId)
+    if (waiter === undefined) return true
+    // 等待器与 commit 必须完全同源：不同 attempt/版本的迟到 commit 不倒灌。
+    if (
+      waiter.attemptId !== attemptId ||
+      waiter.targetVersion !== version ||
+      waiter.previousVersion !== previousVersion
+    ) {
+      return false
+    }
+    clearTimeout(waiter.timer)
+    this.#upgradeWaiters.delete(nodeId)
+    waiter.resolve({
+      ok: true,
+      previousVersion,
+      targetVersion: version,
+      upgraded: true,
+      pid,
+    })
+    return true
+  }
+
   /** 心跳：仅当 nodeId 与发送连接的注册身份一致才刷新；携带合法健康
    * 快照时同步覆盖 conn.health（非法快照忽略、不影响 lastSeenAt 刷新；
-   * birpc 缺省尾参会序列化为 null，同样按无载荷处理）。 */
+   * birpc 缺省尾参会序列化为 null，同样按无载荷处理）。携带 upgradeCommit
+   * 时 ACK 反映 commit 真实接受结果（非法/不匹配 → false）；普通心跳
+   * （无 commit）恒 true。 */
   noteHeartbeat(nodeId: string, fromSocket: WsSocket, input?: NodeHeartbeatInput): boolean {
     const conn = this.#connections.get(nodeId)
     if (conn === undefined || conn.socket !== fromSocket) return false
@@ -337,6 +489,9 @@ export class NodeRegistry {
     if (input !== undefined && input !== null) {
       const health = sanitizeNodeHealth(input.health)
       if (health !== undefined) conn.health = health
+      if (input.upgradeCommit !== undefined && input.upgradeCommit !== null) {
+        return this.#applyUpgradeCommit(nodeId, conn, input.upgradeCommit)
+      }
     }
     return true
   }
@@ -391,6 +546,9 @@ export class NodeRegistry {
   #evict(nodeId: string, conn: NodeConnection, reason: string): void {
     if (this.#connections.get(nodeId) !== conn) return
     this.#connections.delete(nodeId)
+    // 升级等待器不在断开时清理：升级过程本身就伴随旧 socket 关闭、
+    // 候选新连接顶替；成功确认只能来自候选的 commit 心跳。等待器由
+    // cancel / 超时 / registry.close / 匹配 commit 终结，绝不因断开假终态。
     // 撤销 epoch 递增：在途注册（鉴权 await 中）与本代迟到事件全部失效。
     this.#nodeEpoch.set(nodeId, this.#epochOf(nodeId) + 1)
     try {
@@ -483,6 +641,11 @@ export class NodeRegistry {
     if (this.#sweeper !== undefined) {
       clearInterval(this.#sweeper)
       this.#sweeper = undefined
+    }
+    for (const [nodeId, waiter] of [...this.#upgradeWaiters]) {
+      clearTimeout(waiter.timer)
+      this.#upgradeWaiters.delete(nodeId)
+      waiter.reject(new HelmUpgradeCancelledError('registry closed'))
     }
     for (const [nodeId, conn] of [...this.#connections]) {
       this.#evict(nodeId, conn, 'registry closed')

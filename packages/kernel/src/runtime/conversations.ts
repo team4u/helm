@@ -14,7 +14,9 @@
  * - run 消失（完成/失败）精确结算一次（settledRuns 防双报；失败取
  *   runFailure.inputs 精确清单）；
  * - abort 由 runtime.abortConversation 显式结算（观察路径不重复报 aborted）；
- * - run 观察到 failure 后又显式 abort：仅补 aborted（不重复 failed）。
+ * - run 观察到 failure 后又显式 abort：仅补 aborted（不重复 failed）；
+ * - run 活跃期间（启动 / doing 语义变化）推送实时摘要（emitRunSummary，
+ *   语义指纹去重、不逐 token；终态仍由 emitSettled 恰一次负责）。
  */
 
 import type {
@@ -96,6 +98,8 @@ export class ConversationTracker {
   private readonly detach = new Map<number, () => void>()
   /** 会话 -> 当前 live 镜像（最近一次 advance 值）。 */
   private readonly liveViews = new Map<number, LiveStateShape>()
+  /** 会话 -> 当前 pi.inbox 排队项镜像（queuedInputs 派生与实时推送用）。 */
+  private readonly inboxViews = new Map<number, ReadonlyArray<InboxItemShape>>()
   /** submissionId -> TrackedInput（submit 登记 + entry 观察重建双通道）。
    *
    * 键域（无碰撞区分）：
@@ -127,12 +131,16 @@ export class ConversationTracker {
   private readonly liveTimers = new Map<number, ReturnType<typeof setTimeout>>()
   /** 会话 -> 上次 live 内容指纹（相同快照不重复发帧）。 */
   private readonly lastLiveKey = new Map<number, string>()
+  /** 会话 -> 上次已发 queuedInputs 指纹（入队/出队 0ms 冲刷判定）。 */
+  private readonly lastQueuedLiveKeys = new Map<number, string>()
   /** 会话 -> 最近一次真实活动时间（仅活动内容变更时刷新，非每次快照刷新）。 */
   private readonly lastActivityAt = new Map<number, number>()
   /** 会话 -> 最近一次活动内容指纹（重复快照不刷新时间）。 */
   private readonly lastActivityKey = new Map<number, string>()
   /** 会话 -> 连续失败回合数（completed 归零）。 */
   private readonly consecutiveErrors = new Map<number, number>()
+  /** 会话 -> 最近一次已推送摘要的语义指纹（status|doing|pendingAsk；相同不重发）。 */
+  private readonly lastSummaryKey = new Map<number, string>()
 
   constructor(options: { harness: Harness; store: HelmStore; events: TrackerEvents }) {
     this.harness = options.harness
@@ -190,6 +198,12 @@ export class ConversationTracker {
       if (Number.isFinite(numeric) && numeric > watermark) watermark = numeric
     }
     this.lastEmittedEntry.set(id, watermark)
+    // inbox 镜像登记先于 run 判定：重启/停 run 但 inbox 仍有排队输入时，
+    // queuedInputs 派生与 listLiveViews 快照不丢排队事实（不在 web 伪造队列）。
+    const inbox = view.docs['pi.inbox'] as { items?: InboxItemShape[] } | undefined
+    const inboxItems = inbox?.items ?? []
+    this.inboxViews.set(id, inboxItems)
+    this.adoptInputsFromInbox(id, inboxItems)
     if (!live?.run) return
     this.runTaskIds.set(id, live.run.taskId)
     this.consumedInputs.set(id, new Set<number | string>())
@@ -202,11 +216,13 @@ export class ConversationTracker {
     if (this.observeGenerations.get(id) !== generation) return
     this.adoptInputsFromEntries(id, loaded.entries)
     this.bindRestoredInputs(id, loaded.pairs)
-    // queued（未放置）输入：inbox entry 载荷直读。
-    const inbox = view.docs['pi.inbox'] as { items?: InboxItemShape[] } | undefined
-    this.adoptInputsFromInbox(id, inbox?.items ?? [])
+    // queued（未放置）输入：inbox entry 载荷直读（上面已登记镜像，此处仅补输入元数据）。
+    this.adoptInputsFromInbox(id, inboxItems)
     for (const submissionId of live.run.inputs) this.markConsumed(id, submissionId)
     this.noteActivity(id, live)
+    // 恢复的活跃 run 已体现在快照摘要（listConversations）：登记语义指纹即可，
+    // 后续 advance 仅在真实变化时推送，不补发冗余 working 帧。
+    if (this.store.getConv(id)) this.lastSummaryKey.set(id, summaryKeyOf(this.summaryOf(id)))
   }
 
   /** 回读结果：helm.input entry 列表 + (submissionId, requestId) 权威对。 */
@@ -273,10 +289,12 @@ export class ConversationTracker {
     this.detach.get(id)?.()
     this.detach.delete(id)
     this.liveViews.delete(id)
+    this.inboxViews.delete(id)
     // 清 timer 且丢弃待发快照：删除/停观后绝不发出幽灵事件。
     this.clearLiveTimer(id)
     this.pendingLive.delete(id)
     this.lastLiveKey.delete(id)
+    this.lastQueuedLiveKeys.delete(id)
     // 彻底清理该会话的全部内存镜像：settledRuns 前缀键、run 状态、
     // 输入登记/消费集、水位线与活动指纹、结算等待者（先 resolve 防永久挂起）。
     // 否则反复建删会话的进程（CLI/Web 管理面）会随时间无限累积残留条目。
@@ -295,6 +313,7 @@ export class ConversationTracker {
     this.lastActivityAt.delete(id)
     this.lastActivityKey.delete(id)
     this.consecutiveErrors.delete(id)
+    this.lastSummaryKey.delete(id)
     this.lastAssistant.delete(id)
     this.settledInflight.delete(id)
     this.settledErrors.delete(id)
@@ -410,6 +429,26 @@ export class ConversationTracker {
     return this.liveViews.get(conversationId)?.run !== undefined
   }
 
+  /** SSE 快照用实时视图清单：仅活跃 run、流式 generation 或非空 queued 的会话。
+   *
+   * 从 liveViews/inboxViews 权威镜像同步派生（不依赖上次推送缓存）：
+   * 重连首帧即恢复排队胶囊与流式文本；空闲会话不复活（无内容可显示）。 */
+  listLiveViews(): ConversationLive[] {
+    const out: ConversationLive[] = []
+    for (const [id, live] of this.liveViews) {
+      const inboxItems = this.inboxViews.get(id)
+      const hasRun = live.run !== undefined
+      const hasStream =
+        live.generation !== undefined || (live.tools?.length ?? 0) > 0 || (live.nestedTools?.length ?? 0) > 0
+      if (!hasRun && !hasStream && (inboxItems?.length ?? 0) === 0) continue
+      const snapshot = deriveConversationLive(id, live, Date.now(), inboxItems)
+      // 空闲会话仅在派生出非空 queued 时保留（queue-only）；不复活 idle 空 live。
+      if (!hasRun && !hasStream && (snapshot.queuedInputs?.length ?? 0) === 0) continue
+      out.push(snapshot)
+    }
+    return out
+  }
+
   /** abort 结算（runtime.abortConversation 调用；与观察路径防双报）。 */
   settleAborted(conversationId: number): void {
     const taskId = this.runTaskIds.get(conversationId)
@@ -514,7 +553,9 @@ export class ConversationTracker {
     this.adoptInputsFromEntries(id, candidates)
     // inbox queued 项同样重建（busy 中 followUp/steer 输入未放置但需在册）。
     const inbox = view.docs['pi.inbox'] as { items?: InboxItemShape[] } | undefined
-    this.adoptInputsFromInbox(id, inbox?.items ?? [])
+    const inboxItems = inbox?.items ?? []
+    this.inboxViews.set(id, inboxItems)
+    this.adoptInputsFromInbox(id, inboxItems)
 
     // 新落库条目：按 id 序对每条恰发一次（提交顺序保持，SDK 同 commit 折叠时
     // 窗口仍是全序，逐条推进水位线）。
@@ -582,6 +623,8 @@ export class ConversationTracker {
     // 实时视图：真实活动变更记录 + 节流推送（终态在 emitSettled 内强制冲刷）。
     this.noteActivity(id, live)
     this.emitLiveThrottled(id, live)
+    // run 活跃期间的实时摘要：run 启动与 doing 语义变化（首字前即有 working）。
+    this.emitRunSummary(id)
   }
 
   /** 新落库条目：按 id 序推进水位线，每条恰发一次。 */
@@ -620,16 +663,40 @@ export class ConversationTracker {
     this.lastActivityAt.set(id, Date.now())
   }
 
-  /** 节流推送实时视图：窗口内只保留最新快照，同内容不重复发帧。 */
+  /** 节流推送实时视图：窗口内只保留最新快照，同内容不重复发帧。
+   *
+   * queuedInputs 变化（入队/出队）绕过 75ms 节流立即冲刷：用户提交
+   * steer / followUp 后时间线尾部胶囊尽快可见（受观察提交时序影响）。 */
   private emitLiveThrottled(id: number, live: LiveStateShape | undefined): void {
     if (this.events.onLiveChanged === undefined) return
-    if (!live?.run && !live?.generation && (live?.tools?.length ?? 0) === 0 && (live?.nestedTools?.length ?? 0) === 0) {
-      // 空闲视图不推送（终态冲刷由 emitSettled 负责）。
+    const inboxItems = this.inboxViews.get(id)
+    const queuedEmpty =
+      !live?.run &&
+      !live?.generation &&
+      (live?.tools?.length ?? 0) === 0 &&
+      (live?.nestedTools?.length ?? 0) === 0 &&
+      (inboxItems?.length ?? 0) === 0
+    if (queuedEmpty) {
+      // 空闲视图不推送（终态冲刷由 emitSettled 负责）；但「之前发过 queued、
+      // 现在权威 inbox 已空」时不能短路丢弃清理帧（否则客户端胶囊残留）。
+      if (this.lastQueuedLiveKeys.get(id) === undefined || this.lastQueuedLiveKeys.get(id) === '[]') return
+      const cleanup = deriveConversationLive(id, live, Date.now(), inboxItems)
+      this.sendLiveNow(id, cleanup)
       return
     }
-    const snapshot = deriveConversationLive(id, live, Date.now())
-    const key = JSON.stringify([snapshot.text, snapshot.thinking ?? '', snapshot.tools])
-    if (key === this.lastLiveKey.get(id)) return
+    const snapshot = deriveConversationLive(id, live, Date.now(), inboxItems)
+    const key = this.liveKeyOf(snapshot)
+    // 「上次已发 queued 指纹」统一语义：未登记视为空队列 '[]'（首次空队列
+    // 不因此误入立即冲刷路径）；仅 queue 变化绕过 75ms 节流。
+    const queuedKey = JSON.stringify(snapshot.queuedInputs ?? [])
+    const prevQueuedKey = this.lastQueuedLiveKeys.get(id) ?? '[]'
+    if (key === this.lastLiveKey.get(id) && queuedKey === prevQueuedKey) return
+    if (queuedKey !== prevQueuedKey) {
+      // 入队/出队实时性优先：清 timer 同步冲刷，不等 75ms 节流。
+      this.clearLiveTimer(id)
+      this.sendLiveNow(id, snapshot)
+      return
+    }
     this.pendingLive.set(id, snapshot)
     if (this.liveTimers.has(id)) return
     const timer = setTimeout(() => {
@@ -640,12 +707,27 @@ export class ConversationTracker {
     this.liveTimers.set(id, timer)
   }
 
-  /** 冲刷窗口内待发快照（timer 到期）。 */
+  /** live 帧内容指纹：text/thinking/tools/queuedInputs（发送与去重两处共用同一公式）。 */
+  private liveKeyOf(snapshot: ConversationLive): string {
+    return JSON.stringify([snapshot.text, snapshot.thinking ?? '', snapshot.tools, snapshot.queuedInputs ?? []])
+  }
+
+  /** 同步发送一帧 live（终态冲刷 / queued 清理共用）：登记两处指纹。 */
+  private sendLiveNow(id: number, snapshot: ConversationLive): void {
+    this.clearLiveTimer(id)
+    this.pendingLive.delete(id)
+    this.lastLiveKey.set(id, this.liveKeyOf(snapshot))
+    this.lastQueuedLiveKeys.set(id, JSON.stringify(snapshot.queuedInputs ?? []))
+    this.events.onLiveChanged?.(snapshot)
+  }
+
+  /** 冲刷窗口内待发快照（timer 到期或 queuedInputs 变化立即冲刷）。 */
   private flushPendingLive(id: number): void {
     const snapshot = this.pendingLive.get(id)
     if (snapshot === undefined) return
     this.pendingLive.delete(id)
-    this.lastLiveKey.set(id, JSON.stringify([snapshot.text, snapshot.thinking ?? '', snapshot.tools]))
+    this.lastLiveKey.set(id, this.liveKeyOf(snapshot))
+    this.lastQueuedLiveKeys.set(id, JSON.stringify(snapshot.queuedInputs ?? []))
     this.events.onLiveChanged?.(snapshot)
   }
 
@@ -658,10 +740,13 @@ export class ConversationTracker {
       conversationId,
       this.liveViews.get(conversationId),
       Date.now(),
+      this.inboxViews.get(conversationId),
     )
-    const key = JSON.stringify([snapshot.text, snapshot.thinking ?? '', snapshot.tools])
-    if (key === this.lastLiveKey.get(conversationId)) return
+    const key = this.liveKeyOf(snapshot)
+    const queuedKey = JSON.stringify(snapshot.queuedInputs ?? [])
+    if (key === this.lastLiveKey.get(conversationId) && queuedKey === (this.lastQueuedLiveKeys.get(conversationId) ?? '[]')) return
     this.lastLiveKey.set(conversationId, key)
+    this.lastQueuedLiveKeys.set(conversationId, queuedKey)
     this.events.onLiveChanged(snapshot)
   }
 
@@ -773,9 +858,10 @@ export class ConversationTracker {
           updatedAt: Date.now(),
         }
         this.store.upsertConv(updated)
-        this.events.onSummaryChanged(
-          summaryOf(updated, unread ? 'done' : statusNow(updated, outcome), 0),
-        )
+        const settledSummary = summaryOf(updated, unread ? 'done' : statusNow(updated, outcome), 0)
+        // 终态摘要登记语义指纹：后续空闲快照不重复推送同一终态。
+        this.lastSummaryKey.set(conversationId, summaryKeyOf(settledSummary))
+        this.events.onSummaryChanged(settledSummary)
       }
       const payload: TurnSettledPayload = {
         conversation: this.summaryOf(conversationId, outcome),
@@ -850,7 +936,29 @@ export class ConversationTracker {
       }
       this.store.upsertConv(updated)
     }
-    this.events.onSummaryChanged(this.summaryOf(conversationId, count))
+    const summary = this.summaryOf(conversationId, count)
+    this.lastSummaryKey.set(conversationId, summaryKeyOf(summary))
+    this.events.onSummaryChanged(summary)
+  }
+
+  /** run 活跃期间的实时摘要推送：run 启动与 doing 语义变化时各恰一次。
+   *
+   * - 仅当本快照存在活跃 run 才推送（只可能出现 working/blocked 二态）；
+   *   终态一律由 emitSettled 负责：adopt 不重复结算、不复活已结算回合；
+   * - 以（status, doing, pendingAskCount）语义指纹去重：纯流式 token 推进
+   *   （doing 不变）不推送，不逐 token 发摘要；
+   * - stateChangeSeq 随真实状态变化单调推进（协议契约），与 setPendingAskCount
+   *   同一机制；live 节流窗口（75ms）不受影响。
+   */
+  private emitRunSummary(id: number): void {
+    if (!this.liveViews.get(id)?.run) return
+    const meta = this.store.getConv(id)
+    if (!meta) return
+    if (this.lastSummaryKey.get(id) === summaryKeyOf(this.summaryOf(id))) return
+    this.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
+    const summary = this.summaryOf(id)
+    this.lastSummaryKey.set(id, summaryKeyOf(summary))
+    this.events.onSummaryChanged(summary)
   }
 
   /** 观察到的最新 assistant 文本（getLastAssistantText 数据源）。 */
@@ -884,6 +992,11 @@ function statusNow(meta: ConvMeta, outcome: TurnOutcome): ConversationStatus {
   if (outcome === 'failed') return 'error'
   if (outcome === 'aborted') return 'idle'
   return meta.unread ? 'done' : 'idle'
+}
+
+/** 摘要语义指纹：status/doing/pendingAskCount（其余字段不参与推送去重）。 */
+function summaryKeyOf(summary: ConversationSummary): string {
+  return `${summary.status}|${summary.doing ?? ''}|${summary.pendingAskCount}`
 }
 
 // 输入登记的临时 key 使用负数，避免与 submissionId 冲突。

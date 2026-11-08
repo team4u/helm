@@ -25,7 +25,7 @@ function sortConversations(list: ConversationSummary[]): ConversationSummary[] {
 
 /** 节点列表排序：local 恒在首项，其余按 id 稳定排列。 */
 export function sortNodes(list: NodeInfo[]): NodeInfo[] {
-  return [...list].sort((a, b) => Number(a.id === 'local') * -1 - Number(b.id === 'local') * -1 || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  return [...list].sort((a, b) => Number(b.id === 'local') - Number(a.id === 'local') || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 }
 
 function upsert<T extends { id: string | number }>(list: T[], item: T): T[] {
@@ -36,12 +36,35 @@ function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
   return Object.fromEntries(Object.entries(record).filter(([name]) => name !== key))
 }
 
+/** ConversationLive 边界形状校验（与内核 conversation.live 事件同一判定）。 */
+function isLiveShape(value: unknown): value is ConversationLive {
+  if (value === null || typeof value !== 'object') return false
+  const v = value as Record<string, unknown>
+  return (
+    typeof v['conversationId'] === 'number' && Number.isInteger(v['conversationId']) &&
+    typeof v['text'] === 'string' &&
+    Array.isArray(v['tools']) &&
+    typeof v['updatedAt'] === 'number' && Number.isFinite(v['updatedAt'])
+  )
+}
+
+/** 保留 queue-only live：清流式正文/工具/思考，仅保留权威 queuedInputs（等真实出队帧清理）。 */
+function queueOnlyLive(live: ConversationLive): ConversationLive {
+  return { conversationId: live.conversationId, text: '', tools: [], ...(live.queuedInputs !== undefined ? { queuedInputs: live.queuedInputs } : {}), updatedAt: live.updatedAt }
+}
+
 /** 新连接必须重新加载详情和 public docs：快照本身不包含这两类数据。 */
 export function applySnapshot(previous: LiveState, snapshot: HelmSnapshot): LiveState {
   if (!Number.isSafeInteger(snapshot.seq) || snapshot.seq < 0 || !Array.isArray(snapshot.conversations) || !Array.isArray(snapshot.pendingAsks) || !Array.isArray(snapshot.plugins) || !Array.isArray(snapshot.ui) || !Array.isArray(snapshot.workflowRuns)) {
     throw new Error('内核实时快照格式无效')
   }
-  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions: snapshot.ui, workflowRuns: snapshot.workflowRuns, nodes: Array.isArray(snapshot.nodes) ? sortNodes(snapshot.nodes) : [], resolvedAsksByConv: previous.resolvedAsksByConv }
+  if (snapshot.conversationLives !== undefined && !Array.isArray(snapshot.conversationLives)) throw new Error('内核实时快照格式无效')
+  const conversationLives: Record<number, ConversationLive> = {}
+  for (const live of snapshot.conversationLives ?? []) {
+    if (!isLiveShape(live)) throw new Error('内核实时快照格式无效')
+    conversationLives[live.conversationId] = live
+  }
+  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), conversationLives, pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions: snapshot.ui, workflowRuns: snapshot.workflowRuns, nodes: Array.isArray(snapshot.nodes) ? sortNodes(snapshot.nodes) : [], resolvedAsksByConv: previous.resolvedAsksByConv }
 }
 
 export function entryMatchesReference(entry: ConversationEntry, reference: string): boolean {
@@ -77,7 +100,15 @@ export function applyEventFrame(state: LiveState, frame: HelmEventFrame): LiveSt
         const conv = event.conversation
         next.conversations = sortConversations(upsert(state.conversations, conv))
         if (state.conversationDetails[conv.id]) next.conversationDetails = { ...state.conversationDetails, [conv.id]: { ...state.conversationDetails[conv.id]!, ...conv } }
-        if (conv.status !== 'working' && conv.status !== 'blocked') next.conversationLives = omit(state.conversationLives, String(conv.id))
+        if (conv.status !== 'working' && conv.status !== 'blocked') {
+          // 终态交接边界：若权威 live 快照仍带 queuedInputs（失败后 afterFailedRun
+          // 保留排队等场景），保留 queue-only live 等真实出队帧清理，不在 web
+          // 伪造队列；队列为空则原样删除，不让 done 显示旧回复 working。
+          const existing = state.conversationLives[conv.id]
+          next.conversationLives = existing !== undefined && (existing.queuedInputs?.length ?? 0) > 0
+            ? { ...state.conversationLives, [conv.id]: queueOnlyLive(existing) }
+            : omit(state.conversationLives, String(conv.id))
+        }
       }
       break
     case 'conversation.deleted':

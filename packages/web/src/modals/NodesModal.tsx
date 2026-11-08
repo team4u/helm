@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { NodeInfo } from '@helm/protocol'
 import { conversationsApi, nodesApi } from '../lib/api.js'
+import type { NodeUpgradeCheckResult } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { CopyButton } from '../conversation/CopyButton.js'
 import { deepLinkSelection, shouldSyncSelectionToStore } from './list-modal-selection.js'
 import {
   buildNodeConnectGuide,
+  canConfirmNodeUpgrade,
   formatBytes,
+  formatNodeVersion,
   formatUptime,
   formatUsage,
+  isNodeBehindHub,
+  resolveUpgradeTarget,
   validateNodeIdInput,
   type NodeConnectGuide,
 } from './nodes-modal-model.js'
@@ -27,7 +32,7 @@ function TokenGuideCard({
     {
       label: '前台连接（调试用）',
       command: guide.connectCommand,
-      hint: '前台常驻，Ctrl/Cmd+C 退出，不安装守护进程',
+      hint: '前台常驻，按 Ctrl+C 退出',
     },
     { label: '启动守护进程（已绑定身份）', command: guide.startDaemonCommand },
     {
@@ -238,14 +243,208 @@ function IssuePanel({
   )
 }
 
+/** 受控节点（byom）自升级卡片：检查更新（npm 最新）/ 显式目标 / 对齐 Hub / 强制重装。 */
+function NodeUpgradeCard({
+  node,
+  hubVersion,
+  check,
+  checking,
+  checkError,
+  targetVersion,
+  onTargetVersionChange,
+  force,
+  onForceChange,
+  upgrading,
+  upgradeError,
+  onRecheck,
+  onUpgrade,
+}: {
+  node: NodeInfo
+  /** Hub（local 节点）版本：仅作显式目标建议，是否可安装以 npm 检查为准。 */
+  hubVersion: string | undefined
+  check: NodeUpgradeCheckResult | null
+  checking: boolean
+  checkError: string | null
+  targetVersion: string
+  onTargetVersionChange: (value: string) => void
+  force: boolean
+  onForceChange: (value: boolean) => void
+  upgrading: boolean
+  upgradeError: string | null
+  onRecheck: () => void
+  onUpgrade: () => void
+}) {
+  const currentLabel = formatNodeVersion(check?.currentVersion ?? node.version) ?? '未知'
+  // 检查失败时旧 check 仅保留回滚记录展示，不作为门控与「最新」结论依据。
+  const effectiveCheck = checkError === null ? check : null
+  const confirmability = canConfirmNodeUpgrade({
+    online: node.online,
+    check: effectiveCheck,
+    targetVersion,
+    force,
+  })
+  const resolvedTarget = resolveUpgradeTarget(effectiveCheck, targetVersion)
+  const canForce = node.online && (targetVersion.trim() !== '' || (effectiveCheck !== null && (!effectiveCheck.updateAvailable || effectiveCheck.blocked !== undefined)))
+  const offlineTitle = '节点已离线，无法升级'
+  return (
+    <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <HelmIcon name="arrow-up" size={13} />
+        <span style={{ fontWeight: 600, fontSize: 12.5 }}>节点自升级</span>
+        <span className="badge badge-neutral mono">当前 {currentLabel}</span>
+        {effectiveCheck !== null && !checking && effectiveCheck.updateAvailable && (
+          <span className="badge badge-ok mono">
+            <HelmIcon name="arrow-up" size={10} />
+            发现新版本 v{effectiveCheck.latestVersion}
+          </span>
+        )}
+        {effectiveCheck !== null && !checking && !effectiveCheck.updateAvailable && (
+          <span className="badge badge-neutral">npm 当前已是最新版本 (v{effectiveCheck.currentVersion})</span>
+        )}
+      </div>
+
+      {checking && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--fg-muted)' }}>
+          <HelmIcon name="loader" size={13} />
+          正在检查最新版本...
+        </div>
+      )}
+
+      {!checking && checkError !== null && (
+        <div className="jr-callout jr-callout-err">
+          <HelmIcon name="alert-circle" size={13} />
+          <span className="selectable">{checkError}</span>
+          <span style={{ flex: 1 }} />
+          <button
+            className="btn btn-sm"
+            disabled={checking || upgrading || !node.online}
+            title={node.online ? undefined : offlineTitle}
+            onClick={onRecheck}
+          >
+            <HelmIcon name="refresh-cw" size={12} />
+            重新检查
+          </button>
+        </div>
+      )}
+
+      {!checking && check !== null && check.blocked && (
+        <div
+          className="selectable"
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 6,
+            fontSize: 11.5,
+            padding: '6px 8px',
+            borderRadius: 6,
+            background: 'var(--warn-bg, rgba(217, 119, 6, 0.12))',
+            color: 'var(--warn-fg, #b45309)',
+          }}
+        >
+          <HelmIcon name="shield-alert" size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            上次升级至 v{check.blocked.version} 失败回滚原因：{check.blocked.reason}（时间：{check.blocked.at}）
+          </span>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input
+          className="input mono"
+          style={{ flex: 1, minWidth: 180 }}
+          value={targetVersion}
+          placeholder="留空则安装本次检查到的最新版本"
+          aria-label="指定目标版本（可选）"
+          disabled={upgrading}
+          onChange={(e) => onTargetVersionChange(e.target.value)}
+        />
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--fg-muted)', cursor: canForce ? 'pointer' : 'not-allowed' }}>
+          <input
+            type="checkbox"
+            checked={force}
+            disabled={upgrading || !canForce}
+            onChange={(e) => onForceChange(e.target.checked)}
+          />
+          强制重装/重试
+        </label>
+      </div>
+      {canForce && (
+        <div style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>
+          勾选后将按目标版本强制重装（即使已是该版本），可用于重试失败回滚。
+        </div>
+      )}
+
+      {isNodeBehindHub(node.version, hubVersion) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <button
+            className="btn btn-sm"
+            disabled={upgrading}
+            title="以 Hub 当前版本作为显式目标；实际安装仍要求该版本已在 npm 发布"
+            onClick={() => onTargetVersionChange((hubVersion ?? '').trim().replace(/^v/, ''))}
+          >
+            <HelmIcon name="arrow-up" size={12} />
+            目标对齐 Hub {formatNodeVersion(hubVersion)}
+          </button>
+          <span style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>
+            检查最新（npm）与对齐 Hub 是两个不同目标，Hub 开发版本未必已发布。
+          </span>
+        </div>
+      )}
+
+      {confirmability.ok && resolvedTarget !== null && (
+        <div style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>
+          本次将安装 <span className="mono selectable">{formatNodeVersion(resolvedTarget) ?? resolvedTarget}</span>
+          {targetVersion.trim() === '' ? '（固定为本次检查到的 npm 最新版本）' : '（显式指定目标）'}
+        </div>
+      )}
+
+      {upgradeError !== null && (
+        <div className="jr-callout jr-callout-err">
+          <HelmIcon name="alert-circle" size={13} />
+          <span className="selectable">{upgradeError}</span>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <span style={{ flex: 1 }} />
+        <button
+          className="btn btn-sm"
+          disabled={checking || upgrading || !node.online}
+          title={node.online ? undefined : offlineTitle}
+          onClick={onRecheck}
+        >
+          <HelmIcon name={checking ? 'loader' : 'refresh-cw'} size={12} />
+          重新检查
+        </button>
+        <button
+          className="btn btn-primary btn-sm"
+          disabled={checking || upgrading || !node.online || !confirmability.ok}
+          title={!node.online ? offlineTitle : confirmability.ok ? undefined : (confirmability.hint ?? undefined)}
+          onClick={onUpgrade}
+        >
+          <HelmIcon name={upgrading ? 'loader' : 'arrow-up'} size={12} />
+          {upgrading ? '升级中...' : '确认升级'}
+        </button>
+      </div>
+
+      <div style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>
+        升级会先等待在途命令完成、校验安装包完整性并启动新进程，确认新进程已连接 Hub 后完成切换；若新版本启动异常将回退至当前版本。升级期间节点可能短暂离线。
+      </div>
+    </section>
+  )
+}
+
 /** 右栏「节点详情」模式。 */
 function NodeDetailPanel({
   node,
+  hubVersion,
   issuedToken,
   onTokenIssued,
   onClose,
 }: {
   node: NodeInfo
+  /** Hub（local 节点）版本，用于展示远端节点落后提示。 */
+  hubVersion: string | undefined
   /** 当次会话内签发/轮换得到的一次性明文令牌（仅本次展示）。 */
   issuedToken: string | undefined
   onTokenIssued: (token: string) => void
@@ -256,6 +455,15 @@ function NodeDetailPanel({
   const [removing, setRemoving] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState(false)
   const [creating, setCreating] = useState(false)
+  // 受控节点自升级：面板展开状态与检查/升级进度。
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
+  const [upgradeCheck, setUpgradeCheck] = useState<NodeUpgradeCheckResult | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [checkError, setCheckError] = useState<string | null>(null)
+  const [targetVersion, setTargetVersion] = useState('')
+  const [force, setForce] = useState(false)
+  const [upgrading, setUpgrading] = useState(false)
+  const [upgradeError, setUpgradeError] = useState<string | null>(null)
   // 远端节点新建会话必须显式指定目标机绝对路径工作目录：内核拒绝盲跑节点默认
   // 目录（init.cwd > profile.cwd > 父会话 cwd 均缺失时显式报错），也不拿 Hub
   // cwd 冒充远端路径；本机节点保持缺省 Hub 目录，无需输入。
@@ -343,6 +551,86 @@ function NodeDetailPanel({
     }
   }
 
+  const runUpgradeCheck = async () => {
+    if (checking || !node.online) return
+    setChecking(true)
+    setCheckError(null)
+    try {
+      const result = await nodesApi.checkUpgrade(node.id)
+      setUpgradeCheck(result)
+    } catch (err) {
+      // 检查失败：保留旧 check 仅供回滚记录展示，不再作为门控与「最新」结论依据。
+      setCheckError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  const openUpgrade = () => {
+    setUpgradeOpen(true)
+    if (upgradeCheck === null && checkError === null) void runUpgradeCheck()
+  }
+
+  const runUpgrade = async () => {
+    // 面板打开后掉线 / 进行中 / 门控未过：早返回，不发起请求。
+    if (upgrading || checking || !node.online) return
+    if (!canConfirmNodeUpgrade({ online: node.online, check: checkError === null ? upgradeCheck : null, targetVersion, force }).ok) return
+    const resolved = resolveUpgradeTarget(checkError === null ? upgradeCheck : null, targetVersion)
+    if (resolved === null) return
+    setUpgrading(true)
+    setUpgradeError(null)
+    try {
+      const res = await nodesApi.upgrade(node.id, {
+        targetVersion: resolved,
+        ...(force ? { force: true } : {}),
+      })
+      if (!res.ok) {
+        // 节点明确返回失败：如实报错，不显示成功通知。
+        const message = `节点返回升级未成功（previousVersion v${res.previousVersion}，targetVersion v${res.targetVersion}）`
+        setUpgradeError(message)
+        store.pushNotice({
+          type: 'notification',
+          level: 'error',
+          title: '升级节点未成功',
+          body: `${node.id}：${message}`,
+        })
+        return
+      }
+      if (res.upgraded) {
+        store.pushNotice({
+          type: 'notification',
+          level: 'info',
+          title: '节点升级完成',
+          body: `${node.id} 已从 v${res.previousVersion} 升级至 v${res.targetVersion}，新进程已连接 Hub 并确认接管`,
+        })
+      } else {
+        store.pushNotice({
+          type: 'notification',
+          level: 'info',
+          title: '节点无需升级',
+          body: `${node.id} 已在目标版本 v${res.targetVersion}`,
+        })
+      }
+      // 升级后当前版本已变：清空旧检查结果，下次进入面板重新拉取。
+      setUpgradeCheck(null)
+      setCheckError(null)
+      setForce(false)
+      await store.refreshNodes()
+      if (node.online) void runUpgradeCheck()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setUpgradeError(message)
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: '升级节点失败',
+        body: message,
+      })
+    } finally {
+      setUpgrading(false)
+    }
+  }
+
   return (
     <>
       <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -358,6 +646,17 @@ function NodeDetailPanel({
             <HelmIcon name={node.online ? 'check-circle' : 'circle'} size={10} />
             {node.online ? '在线' : '离线'}
           </span>
+          {formatNodeVersion(node.version) !== null && (
+            <span className="badge badge-neutral mono">{formatNodeVersion(node.version)}</span>
+          )}
+          {node.kind === 'byom' && isNodeBehindHub(node.version, hubVersion) && (
+            <span
+              className="badge badge-warn mono"
+              title={`节点版本低于 Hub 当前版本 ${formatNodeVersion(hubVersion) ?? ''}；能否安装该版本以 npm 检查结果为准`}
+            >
+              低于 Hub {formatNodeVersion(hubVersion)}
+            </span>
+          )}
           <span style={{ flex: 1 }} />
           {node.kind === 'local' && (
             <button className="btn btn-sm" disabled={creating} onClick={() => void createConversation()}>
@@ -367,6 +666,16 @@ function NodeDetailPanel({
           )}
           {node.kind === 'byom' && (
             <>
+              <button
+                className="btn btn-sm"
+                aria-label="检查更新与升级节点"
+                disabled={!node.online}
+                title={node.online ? undefined : '节点已离线，无法升级'}
+                onClick={openUpgrade}
+              >
+                <HelmIcon name={checking ? 'loader' : 'arrow-up'} size={12} />
+                检查更新 / 升级
+              </button>
               <button className="btn btn-sm" disabled={rotating} onClick={() => void rotate()}>
                 <HelmIcon name={rotating ? 'loader' : 'key'} size={12} />
                 轮换令牌
@@ -402,16 +711,6 @@ function NodeDetailPanel({
         </>
       )}
 
-      {(issuedToken !== undefined || (node.kind === 'byom' && !node.online)) && (
-        <>
-          {issuedToken !== undefined ? (
-            <TokenGuideCard guide={guide} token={issuedToken} />
-          ) : (
-            <OfflineHintCard guide={guide} />
-          )}
-        </>
-      )}
-
       {needsCwd && (
         <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -419,7 +718,7 @@ function NodeDetailPanel({
             <span style={{ fontWeight: 600, fontSize: 12.5 }}>在此节点新建对话</span>
           </div>
           <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-            远端节点会话必须显式指定目标机上的绝对路径工作目录（内核拒绝盲跑节点默认目录，也不会用 Hub 目录冒充）。
+            填写目标机器上的工作目录绝对路径。
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
             <input
@@ -441,11 +740,30 @@ function NodeDetailPanel({
         </section>
       )}
 
+      {node.kind === 'byom' && (upgradeOpen || upgradeCheck !== null) && (
+        <NodeUpgradeCard
+          node={node}
+          hubVersion={hubVersion}
+          check={upgradeCheck}
+          checking={checking}
+          checkError={checkError}
+          targetVersion={targetVersion}
+          onTargetVersionChange={setTargetVersion}
+          force={force}
+          onForceChange={setForce}
+          upgrading={upgrading}
+          upgradeError={upgradeError}
+          onRecheck={() => void runUpgradeCheck()}
+          onUpgrade={() => void runUpgrade()}
+        />
+      )}
+
       <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <HelmIcon name="terminal" size={13} />
           <span style={{ fontWeight: 600, fontSize: 12.5 }}>连接与环境</span>
         </div>
+        <InfoRow label="version" value={formatNodeVersion(node.version) ?? '--'} />
         <InfoRow label="hostname" value={node.hostname ?? '--'} />
         <InfoRow label="platform" value={node.platform ?? '--'} />
         <InfoRow label="hubUrl" value={node.hubUrl ?? '--'} />
@@ -474,6 +792,7 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
 
   // 移除事件到达后选中节点可能已不存在：兜底切回首项（local 恒在首位）。
   const nodes = store.nodes
+  const hubVersion = nodes.find((n) => n.id === 'local')?.version
   const existingNodeIds = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes])
   // 刚签发节点在 store 列表到位前（HTTP 刷新未返回、SSE 未推送）用占位详情
   // 先行选中并呈现令牌；仅声明 id/kind/离线，不伪造在线/健康/连接信息，
@@ -600,6 +919,17 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
                   <span className={node.online ? 'badge badge-ok' : 'badge badge-neutral'}>
                     {node.online ? '在线' : '离线'}
                   </span>
+                  {formatNodeVersion(node.version) !== null && (
+                    <span className="badge mono">{formatNodeVersion(node.version)}</span>
+                  )}
+                  {node.kind === 'byom' && isNodeBehindHub(node.version, hubVersion) && (
+                    <span
+                      className="badge badge-warn mono"
+                      title={`节点版本低于 Hub 当前版本 ${formatNodeVersion(hubVersion) ?? ''}；能否安装该版本以 npm 检查结果为准`}
+                    >
+                      低于 Hub {formatNodeVersion(hubVersion)}
+                    </span>
+                  )}
                 </span>
                 {(node.hostname !== undefined || node.platform !== undefined) && (
                   <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
@@ -616,6 +946,7 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
               <NodeDetailPanel
                 key={selected.id}
                 node={selected}
+                hubVersion={hubVersion}
                 issuedToken={issuedTokens[selected.id]}
                 onTokenIssued={(token) => setIssuedTokens((prev) => ({ ...prev, [selected.id]: token }))}
                 onClose={() => selectNode('local')}

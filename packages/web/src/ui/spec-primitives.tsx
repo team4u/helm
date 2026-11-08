@@ -21,6 +21,8 @@ export interface SpecRenderContext {
   runAction(rawAction: unknown, scope: EvalScope, pendingKey: string): void
   /** 该 pendingKey 的动作是否执行中（loading 防连点）。 */
   isPending(pendingKey: string): boolean
+  /** 该 pendingKey 的动作是否刚成功完成（原地确认态，如按钮打勾）。 */
+  isSucceeded?(pendingKey: string): boolean
 }
 
 function str(value: unknown, fallback = ''): string {
@@ -379,6 +381,7 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
                           label={str(evalIn(ra['label'], rowScope), '操作')}
                           tone={str(evalIn(ra['tone'], rowScope))}
                           pending={ctx.isPending(`${pendingKey}-${k}`)}
+                          succeeded={ctx.isSucceeded?.(`${pendingKey}-${k}`) === true}
                           onClick={() => ctx.runAction(ra['action'], rowScope, `${pendingKey}-${k}`)}
                         />
                       ))}
@@ -394,15 +397,24 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
   )
 }
 
+/** 交互按钮的确认/加载图标：pending 优先于 succeeded（新一轮请求中不显示旧 check）。 */
+function actionIconState(pending: boolean, succeeded: boolean, icon: string): { name: string | null; className?: string } {
+  if (pending) return { name: 'loader', className: 'spin-slow' }
+  if (succeeded) return { name: 'check' }
+  return icon !== '' ? { name: icon } : { name: null }
+}
+
 function RowActionButton({
   label,
   tone,
   pending,
+  succeeded,
   onClick,
 }: {
   label: string
   tone: string
   pending: boolean
+  succeeded: boolean
   onClick: () => void
 }) {
   const cls =
@@ -411,9 +423,10 @@ function RowActionButton({
       : tone === 'primary' || tone === 'accent'
         ? 'btn btn-sm btn-primary'
         : 'btn btn-sm'
+  const icon = actionIconState(pending, succeeded, '')
   return (
-    <button type="button" className={cls} disabled={pending} onClick={onClick}>
-      {pending && <HelmIcon name="loader" size={11} />}
+    <button type="button" className={cls} disabled={pending} aria-busy={pending} onClick={onClick}>
+      {icon.name !== null && <HelmIcon name={icon.name} size={11} className={icon.className} />}
       {label}
     </button>
   )
@@ -464,6 +477,7 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
   const [text, setText] = useRemoteSyncedState(remote, strictEquals)
   const pendingKey = useId()
   const pending = ctx.isPending(pendingKey)
+  const succeeded = ctx.isSucceeded?.(pendingKey) === true
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
       {label !== '' && (
@@ -486,10 +500,15 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
             type="button"
             className="btn"
             disabled={pending}
+            aria-busy={pending}
             onClick={() => ctx.runAction(node.props['action'], { ...ctx.scope, $value: text }, pendingKey)}
           >
-            {pending && <HelmIcon name="loader" size={12} />}
-            提交
+            {pending ? (
+              <HelmIcon name="loader" size={12} className="spin-slow" />
+            ) : succeeded ? (
+              <HelmIcon name="check" size={12} />
+            ) : null}
+            {pending ? '提交中' : succeeded ? '已提交' : '提交'}
           </button>
         )}
       </span>
@@ -659,15 +678,18 @@ function ButtonImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
   // 节点级唯一 pendingKey：多个 Button 并存时互不禁用
   const pendingKey = useId()
   const pending = ctx.isPending(pendingKey)
+  const succeeded = ctx.isSucceeded?.(pendingKey) === true
   const cls = BUTTON_VARIANT_CLASS[variant] ?? 'btn'
+  const iconState = actionIconState(pending, succeeded, icon)
   return (
     <button
       type="button"
       className={cls}
       disabled={pending || node.props['action'] === undefined}
+      aria-busy={pending}
       onClick={() => ctx.runAction(node.props['action'], ctx.scope, pendingKey)}
     >
-      {(icon !== '' || pending) && <HelmIcon name={pending ? 'loader' : icon} size={12} />}
+      {iconState.name !== null && <HelmIcon name={iconState.name} size={12} className={iconState.className} />}
       {label}
     </button>
   )
@@ -687,16 +709,19 @@ function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
           // 节点级唯一前缀 + 按钮序号：多个 ActionBar 并存时互不禁用
           const pendingKey = `${actionBarId}-${i}`
           const pending = ctx.isPending(pendingKey)
+          const succeeded = ctx.isSucceeded?.(pendingKey) === true
           const cls = BUTTON_VARIANT_CLASS[variant] ?? 'btn'
+          const iconState = actionIconState(pending, succeeded, icon)
           return (
             <button
               key={i}
               type="button"
               className={cls}
               disabled={pending}
+              aria-busy={pending}
               onClick={() => ctx.runAction(a['action'], ctx.scope, pendingKey)}
             >
-              {(icon !== '' || pending) && <HelmIcon name={pending ? 'loader' : icon} size={12} />}
+              {iconState.name !== null && <HelmIcon name={iconState.name} size={12} className={iconState.className} />}
               {label}
             </button>
           )

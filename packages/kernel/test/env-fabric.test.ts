@@ -518,10 +518,36 @@ describe('节点管理与 env/exec HTTP 路由', { timeout: 60_000 }, () => {
       assert.equal(list2.json[1].online, true)
       assert.ok(typeof list2.json[1].hostname === 'string' && list2.json[1].hostname.length > 0, 'daemon 注册上报 hostname')
 
+      // node.changed 事件序列（SSE 增量帧）：上线 -> 移除恰好一条含 removed:true；
+      // 事件为 NodeChangedEvent 形状（'node' in event），不坠入 Custom payload 嵌套。
+      const nodeEvents: Array<{ node: { id: string }; removed?: boolean; payload?: unknown }> = []
+      const releaseEvents = app.kernel.events.subscribe((frame) => {
+        const event = frame.event as { type: string; node?: unknown; removed?: unknown; payload?: unknown }
+        if (event.type === 'node.changed') {
+          assert.ok('node' in event, `node.changed 必须是 NodeChangedEvent 形状，得到 ${JSON.stringify(event)}`)
+          nodeEvents.push(event as { node: { id: string }; removed?: boolean })
+        }
+      })
+
       const removed = await call(app, 'DELETE', `/api/nodes/${encodeURIComponent('http-node')}`)
       assert.equal(removed.status, 200)
       assert.deepEqual(removed.json, { ok: true })
       await delay(300)
+      releaseEvents()
+      const removals = nodeEvents.filter((e) => e.removed === true && e.node.id === 'http-node')
+      assert.equal(
+        removals.length,
+        1,
+        `移除实际节点时恰好发布一条含 removed:true 的事件（onNodeChanged 去重后），得到 ${JSON.stringify(nodeEvents)}`,
+      )
+      assert.equal(
+        nodeEvents.filter((e) => e.node.id === 'http-node' && e.removed !== true).length,
+        0,
+        `移除后不得再发布 http-node 的非 removed 事件（离线事件须被去重），得到 ${JSON.stringify(nodeEvents)}`,
+      )
+      for (const e of nodeEvents) {
+        assert.equal(e.payload, undefined, 'NodeChangedEvent 不携带 payload 字段')
+      }
       const list3 = await call(app, 'GET', '/api/nodes')
       assert.equal(list3.json.length, 1, '移除后只剩 local')
 

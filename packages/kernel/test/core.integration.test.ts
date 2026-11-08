@@ -293,6 +293,84 @@ test('集成2: load_skill 读取 SKILL.md 与 references/ 子文件，路径穿�
 })
 
 // ---------------------------------------------------------------------------
+// 2.5 helm-cli 系统级内置技能自举（builtin:assistant service.start 幂等补齐）
+// ---------------------------------------------------------------------------
+
+test('集成2.5: createHelm 启动即自举 helm-cli 技能，load_skill 可读 SKILL.md 与三个 references，重启幂等保留用户改动', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    const kernel = env.app.kernel
+    // 启动即包含 helm-cli（managedByPlugin = builtin:assistant，含三个 references）
+    const skills = await kernel.skills.list()
+    const summary = skills.find((s) => s.id === 'helm-cli')
+    assert.ok(summary, 'helm-cli 技能应经 builtin:assistant 启动自举')
+    assert.equal(summary.managedByPlugin, 'builtin:assistant')
+    for (const ref of ['references/generative-ui.md', 'references/workflows-and-agents.md', 'references/skill-and-plugin-dev.md']) {
+      assert.ok(summary.references.includes(ref), `references 应含 ${ref}`)
+    }
+
+    // 普通回合只注入技能目录，不把 UI/工作流手册全文塞入常驻上下文。
+    env.faux.setResponses([env.capture()])
+    await env.submitAndWait('你好')
+    const sections = env.requests[0]!.systemSections.join('\n')
+    assert.ok(sections.includes('helm-cli'), '普通回合应能发现内建技能')
+    assert.ok(sections.includes('references/generative-ui.md'), '目录应指向按需 UI 手册')
+    assert.ok(!sections.includes('MetricGrid'), 'UI 组件字典不应常驻')
+    assert.ok(!sections.includes('workflow(ref, args?)'), '工作流手册不应常驻')
+
+    // load_skill 工具链路：SKILL.md 与三个 references 均可读且内容实质
+    const host = kernel.plugins!
+    const readSkill = (path?: string) =>
+      host.executeTool(
+        'load_skill',
+        path === undefined ? { skillId: 'helm-cli' } : { skillId: 'helm-cli', path },
+        { conversationId: ROOT_CONVERSATION_ID },
+      ) as Promise<{ text: string }>
+    const main = await readSkill()
+    assert.ok(main.text.includes('helm') && main.text.includes('--json'), 'SKILL.md 应含 CLI 铁律')
+    const ui = await readSkill('references/generative-ui.md')
+    assert.ok(ui.text.includes('MetricGrid') && ui.text.includes('helm:action'), 'generative-ui 应含组件契约与动作指令')
+    const wf = await readSkill('references/workflows-and-agents.md')
+    assert.ok(wf.text.includes('pipeline') && wf.text.includes('resumeFromRunId'), 'workflows 应含编排 API 与断点重放')
+    const dev = await readSkill('references/skill-and-plugin-dev.md')
+    assert.ok(dev.text.includes('definePlugin') && dev.text.includes('ctx.action'), 'skill-and-plugin-dev 应含插件开发指南')
+
+    // 重启（重建 app）后幂等：用户改写 SKILL.md 与单个 reference 后仅缺失文件被补齐，其余逐字节保留
+    const customMain = '---\nname: helm-cli\ndescription: 用户改写\n---\n我的版本\n'
+    const customRef = '# 我改过的 UI 手册\n'
+    writeFileSync(join(env.dataDir, 'skills', 'helm-cli', 'SKILL.md'), customMain)
+    writeFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'generative-ui.md'), customRef)
+    rmSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'skill-and-plugin-dev.md'))
+    await env.app.close()
+
+    const faux2 = fauxProvider()
+    const models2 = createModels()
+    models2.setProvider(faux2.provider)
+    const app2 = await createHelm({ dataDir: env.dataDir, cwd: env.dataDir, model: 'faux/faux-1', models: models2 })
+    try {
+      assert.equal(
+        readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'SKILL.md'), 'utf8'),
+        customMain,
+        '重启后既有 SKILL.md 必须逐字节保留',
+      )
+      assert.equal(
+        readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'generative-ui.md'), 'utf8'),
+        customRef,
+        '重启后既有 reference 必须逐字节保留',
+      )
+      const restored = readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'skill-and-plugin-dev.md'), 'utf8')
+      assert.ok(restored.includes('definePlugin'), '仅缺失的 reference 被补齐')
+      const again = await app2.kernel.skills.list()
+      assert.equal(again.find((s) => s.id === 'helm-cli')?.description, '用户改写')
+    } finally {
+      await app2.close()
+    }
+  } finally {
+    await env.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
 // 3. SecretStash：真实秘密值不进 SQLite、不进模型请求、SSE 帧
 // ---------------------------------------------------------------------------
 
@@ -862,6 +940,48 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
     assert.equal(childAuth.timedOut, false)
     assert.equal(childAuth.code, 0, `子进程鉴权应经 cli-token 生效：${childAuth.err}`)
     assert.ok((JSON.parse(childAuth.out) as Array<{ id: number }>).some((c) => c.id === ROOT_CONVERSATION_ID))
+  } finally {
+    await env.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// subagent 运行期实时关联：parentToolCallId 写镜像并广播 conversation.upsert
+// ---------------------------------------------------------------------------
+
+test('subagent 派生：子会话摘要携带 parentToolCallId 并经 conversation.upsert 广播', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    const kernel = env.app.kernel
+    const upserts: Array<{ id: number; parentConversationId?: number; parentToolCallId?: string }> = []
+    kernel.events.subscribe((frame) => {
+      const event = frame.event
+      if (event !== null && typeof event === 'object' && (event as { type?: string }).type === 'conversation.upsert') {
+        const conv = (event as { conversation?: { id: number; parentConversationId?: number; parentToolCallId?: string } }).conversation
+        if (conv !== undefined) upserts.push({ id: conv.id, parentConversationId: conv.parentConversationId, parentToolCallId: conv.parentToolCallId })
+      }
+    })
+    // 父会话模型调用 subagent 工具；子代理 faux 独立回答。
+    env.faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall('subagent', { prompt: '子任务：检查构建' })],
+        { stopReason: 'toolUse' },
+      ),
+      fauxAssistantMessage('子代理已返回，任务完成'),
+    ])
+    // 子会话用同一 faux provider（faux 队列按请求顺序消费：父工具轮 -> 子代理回合 -> 父收尾轮）。
+    await env.submitAndWait('请派一个子代理检查构建')
+
+    // 摘要层：派生出的子会话镜像带 parentToolCallId（父会话工具调用 ID）。
+    const child = kernel
+      .listConversations()
+      .find((c) => c.parentConversationId === ROOT_CONVERSATION_ID && c.parentToolCallId !== undefined)
+    assert.ok(child !== undefined, '子会话摘要必须携带 parentToolCallId（运行期实时关联契约）')
+    assert.ok(child!.parentToolCallId !== undefined && child!.parentToolCallId !== '')
+
+    // 事件层：conversation.upsert 广播中含该子会话与 parentToolCallId（前端 SSE 即刻可关联）。
+    const broadcast = upserts.find((u) => u.id === child!.id && u.parentToolCallId === child!.parentToolCallId)
+    assert.ok(broadcast !== undefined, 'conversation.upsert 必须广播含 parentToolCallId 的子会话摘要')
   } finally {
     await env.close()
   }

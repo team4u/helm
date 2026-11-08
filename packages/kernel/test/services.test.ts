@@ -26,6 +26,7 @@ import {
   type ProviderConfig,
   SecretStash,
   SkillService,
+  SYSTEM_DEFAULT,
   atomicWriteFile,
   atomicWriteJson,
   ensureDataDir,
@@ -267,6 +268,138 @@ test('skills: 严格拒绝绝对路径、..穿越、反斜杠与软链越界', {
   )
   // 非法 skill id
   await assert.rejects(() => skills.readFile('../demo'), /非法 skill id/)
+})
+
+test('profiles: SYSTEM_DEFAULT 分层——含 helm-cli 引导与 HELM_CONVERSATION_ID，不含生成式 UI 组件字典', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const profiles = new ProfileService(dataDir)
+  await profiles.ensureDefault()
+  const system = await profiles.getSystem('assistant')
+  // Layer 0 必须指引 load_skill helm-cli 与受管 CLI 环境变量
+  assert.ok(system.includes('# System Prompt'))
+  assert.ok(system.includes('helm-cli'), '应含 helm-cli 技能引导')
+  assert.ok(system.includes('HELM_CONVERSATION_ID'), '应含受管环境变量直觉')
+  assert.ok(system.includes('load_skill'), '应指引用 load_skill 按需加载')
+  // 分层铁律：常驻提示词不含具体生成式 UI 组件名（下沉 Layer 2 references）
+  for (const component of ['MetricGrid', 'CheckboxGroup', 'ActionBar', 'BarList', 'KeyValueList', 'Accordion', 'helm:action', 'helm:open', 'helm:send']) {
+    assert.ok(!system.includes(component), `SYSTEM_DEFAULT 不应含 Layer 2 细节: ${component}`)
+  }
+})
+
+test('skills: ensureSkill 逐文件幂等——自举、保留用户改动、仅补缺失子文件、拒绝软链覆盖', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  await ensureDataDir(dataDir)
+  const skills = new SkillService(dataDir)
+  const asset = {
+    id: 'demo-asset',
+    skillMd: '---\nname: demo-asset\ndescription: 自举技能\n---\n\n# 正文\n',
+    references: {
+      'guide.md': '# 指南\n内容。\n',
+      'extra.md': '# 附加\n内容。\n',
+    },
+  }
+
+  // 首次自举：全部写入且可读
+  await skills.ensureSkill(asset)
+  assert.ok((await skills.readFile('demo-asset')).includes('自举技能'))
+  assert.ok((await skills.readFile('demo-asset', 'references/guide.md')).includes('指南'))
+  assert.ok((await skills.readFile('demo-asset', 'references/extra.md')).includes('附加'))
+
+  // 用户修改 SKILL.md 与 guide.md：再次自举逐字节保留
+  const customMd = '---\nname: demo-asset\ndescription: 用户改写\n---\n\n我的自定义正文\n'
+  const customGuide = '# 用户改写的指南\n'
+  await writeFile(join(dataDir, 'skills', 'demo-asset', 'SKILL.md'), customMd)
+  await writeFile(join(dataDir, 'skills', 'demo-asset', 'references', 'guide.md'), customGuide)
+  await skills.ensureSkill(asset)
+  assert.equal(await readTextFile(join(dataDir, 'skills', 'demo-asset', 'SKILL.md')), customMd)
+  assert.equal(await readTextFile(join(dataDir, 'skills', 'demo-asset', 'references', 'guide.md')), customGuide)
+
+  // 删除一个子文件后再次自举：仅补缺失的 extra.md，其余不动
+  await rm(join(dataDir, 'skills', 'demo-asset', 'references', 'extra.md'))
+  await skills.ensureSkill(asset)
+  assert.equal(
+    await readTextFile(join(dataDir, 'skills', 'demo-asset', 'references', 'extra.md')),
+    asset.references['extra.md']!,
+  )
+  assert.equal(await readTextFile(join(dataDir, 'skills', 'demo-asset', 'references', 'guide.md')), customGuide)
+
+  // 目标已存在且为符号链接：拒绝覆写（防软链越界；目录/软链都不是常规文件）
+  const outside = join(scratchRoot, 'outside-target.md')
+  await writeFile(outside, '外部内容')
+  await rm(join(dataDir, 'skills', 'demo-asset', 'references', 'extra.md'))
+  await symlink(outside, join(dataDir, 'skills', 'demo-asset', 'references', 'extra.md'))
+  await assert.rejects(() => skills.ensureSkill(asset), /不是常规文件/)
+  assert.equal(await readFile(outside, 'utf8'), '外部内容')
+
+  // 非法资产 id 与非法 reference 名在边界拒绝，且不产生任何部分资产
+  await assert.rejects(
+    () => skills.ensureSkill({ ...asset, id: '../evil' }),
+    /非法 skill id/,
+  )
+  await assert.rejects(
+    () => skills.ensureSkill({ ...asset, id: 'ok-id', references: { '../evil.md': 'x' } }),
+    /穿越|非法/,
+  )
+  assert.ok(!existsSync(join(dataDir, 'skills', 'ok-id')), '非法 reference 不得产生部分资产')
+})
+
+test('skills: ensureSkill 拒绝目录软链与目录冒充文件，绝不向 skills 根之外写入', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const skills = new SkillService(dataDir)
+  const asset = {
+    id: 'demo-guard',
+    skillMd: '---\nname: demo-guard\ndescription: 守卫\n---\n\n# 正文\n',
+    references: { 'guide.md': '# 指南\n', 'rules/table.md': '# 规则\n' },
+  }
+
+  // skills 根本身是软链：与 requireSkillsRoot 语义一致，realpath 解析后正常自举
+  const realRoot = join(dataDir, 'real-skills')
+  await mkdir(realRoot, { recursive: true })
+  await symlink(realRoot, join(dataDir, 'skills'))
+  await skills.ensureSkill(asset)
+  assert.ok((await skills.readFile('demo-guard')).includes('守卫'))
+  assert.ok((await skills.readFile('demo-guard', 'references/rules/table.md')).includes('规则'))
+
+  // skills/<id> 是软链：拒绝写入，软链目标目录保持空（不向外写）
+  const evilDir = join(scratchRoot, 'evil-skill-dir')
+  await rm(evilDir, { recursive: true, force: true })
+  await mkdir(evilDir, { recursive: true })
+  await symlink(evilDir, join(realRoot, 'linked-skill'))
+  await assert.rejects(
+    () => skills.ensureSkill({ ...asset, id: 'linked-skill' }),
+    /符号链接/,
+  )
+  assert.deepEqual(await readdir(evilDir), [])
+
+  // references 目录是软链：拒绝写入，外部目录不被写入任何文件
+  const outsideRefs = join(scratchRoot, 'outside-refs')
+  await rm(outsideRefs, { recursive: true, force: true })
+  await mkdir(outsideRefs, { recursive: true })
+  await mkdir(join(realRoot, 'ref-link-skill'), { recursive: true })
+  await symlink(outsideRefs, join(realRoot, 'ref-link-skill', 'references'))
+  await assert.rejects(
+    () => skills.ensureSkill({ ...asset, id: 'ref-link-skill' }),
+    /符号链接/,
+  )
+  assert.deepEqual(await readdir(outsideRefs), [])
+  await assert.rejects(
+    () => skills.ensureSkill({ ...asset, id: 'ref-link-skill', references: {} }),
+    /符号链接/,
+  )
+
+  // SKILL.md 位置是目录：目录冒充文件不算自举成功
+  await mkdir(join(realRoot, 'dir-as-file', 'SKILL.md'), { recursive: true })
+  await assert.rejects(
+    () => skills.ensureSkill({ ...asset, id: 'dir-as-file' }),
+    /不是常规文件/,
+  )
+
+  // reference 位置是目录：同样拒绝
+  await mkdir(join(realRoot, 'ref-as-dir', 'references', 'guide.md'), { recursive: true })
+  await assert.rejects(
+    () => skills.ensureSkill({ ...asset, id: 'ref-as-dir' }),
+    /不是常规文件/,
+  )
 })
 
 // ---------------------------------------------------------------------------
