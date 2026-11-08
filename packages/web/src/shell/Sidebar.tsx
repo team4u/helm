@@ -35,14 +35,16 @@ function HoverIconButton({
   title,
   icon,
   onClick,
+  className,
 }: {
   title: string
   icon: string
   onClick: (e: React.MouseEvent) => void
+  className?: string
 }) {
   return (
     <button
-      className="btn btn-ghost btn-sm"
+      className={`btn btn-ghost btn-sm${className ? ` ${className}` : ''}`}
       title={title}
       style={{ height: 22, width: 22, padding: 0, flexShrink: 0 }}
       onClick={onClick}
@@ -87,8 +89,9 @@ function ConversationRow({
         <span className="tabular-nums">#{conv.id}</span>
         <StatusBadge conv={conv} />
         {onOpenSplit && (
-          <span style={{ display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
+          <span className="sidebar-split-action" style={{ display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
             <HoverIconButton
+              className="split-toggle-btn sidebar-split-btn"
               title="在右屏分屏打开"
               icon="columns"
               onClick={(e) => {

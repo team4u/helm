@@ -14,7 +14,11 @@
 .nav-open { border: 0; background: transparent; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; min-height: 22px; }
 button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 button, a, input, select, textarea { touch-action: manipulation; }
-.msg-human-row:focus-within .msg-hover-bar, .msg-ai-block:focus-within .msg-hover-bar { opacity: 1; }
+.msg-human-row:focus, .msg-ai-block:focus { outline: none; }
+.msg-human-row:focus-within .msg-hover-bar,
+.msg-ai-block:focus-within .msg-hover-bar,
+.msg-human-row:focus .msg-hover-bar,
+.msg-ai-block:focus .msg-hover-bar { opacity: 1; }
 .msg-ai-body table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; margin: 12px 0; }
 .msg-ai-body td, .msg-ai-body th { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
 .msg-ai-body th { background: var(--bg-subtle); }
@@ -33,12 +37,14 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .conversation-topbar .pane-cwd-subtitle { display: none; }
   .timeline-scroll { padding: 16px 14px 22px; }
   .msg-human-pill { max-width: 92%; }
+  .msg-hover-bar { opacity: 0.85; }
   .composer-shell { padding-inline: 10px; }
+  .composer-textarea { font-size: 16px; }
   .composer-toolbar { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 4px 8px 8px; }
   .composer-picker-root { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .composer-model-button { max-width: none; justify-content: flex-start; }
   .composer-model-label { flex: 1; text-align: left; }
-  .composer-thinking-select { width: 100%; max-width: none; }
+  .composer-thinking-select { width: 100%; max-width: none; font-size: 16px; }
   .composer-model-button, .composer-thinking-select, .composer-toolbar-left > .btn, .composer-toolbar-right > .btn { min-height: 34px; }
   .composer-action-label { display: none; }
   .composer-action-label-mobile { display: inline; }
@@ -47,11 +53,81 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .conversation-topbar .pane-title-group > .badge { display: none; }
   .composer-widgets .card { padding: 8px 10px; }
 }
+@media (hover: none) {
+  .msg-hover-bar { opacity: 0.85; }
+  .msg-human-row:focus-within .msg-hover-bar,
+  .msg-ai-block:focus-within .msg-hover-bar,
+  .msg-human-row:focus .msg-hover-bar,
+  .msg-ai-block:focus .msg-hover-bar,
+  .msg-hover-bar:active,
+  .msg-hover-bar:focus-within { opacity: 1; }
+  .msg-hover-bar .btn { min-height: 28px; min-width: 28px; padding: 0 4px; }
+}
+@media (max-width: 680px) {
+  .composer-textarea,
+  .composer-thinking-select,
+  .input,
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+@media (max-height: 450px) {
+  .composer-shell { padding-bottom: max(6px, env(safe-area-inset-bottom)); }
+  .composer-textarea { min-height: 38px; max-height: 90px; padding: 6px 10px 4px; }
+  .composer-toolbar {
+    min-height: 30px;
+    line-height: normal;
+    align-items: center;
+    overflow: visible;
+    padding: 0 6px 4px;
+  }
+  .composer-picker-root {
+    align-items: center;
+    line-height: normal;
+  }
+  .composer-model-button {
+    min-height: 28px;
+    min-width: 80px;
+    line-height: normal;
+    flex-shrink: 0;
+  }
+  .composer-model-label {
+    line-height: normal;
+  }
+  .composer-thinking-select {
+    height: 28px;
+    min-height: 28px;
+    line-height: normal;
+    font-size: 12px;
+  }
+  .composer-toolbar-left,
+  .composer-toolbar-right {
+    line-height: normal;
+    align-items: center;
+  }
+  .composer-toolbar-left {
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .composer-toolbar-left > .btn,
+  .composer-pill-item,
+  .composer-toolbar-right > .btn {
+    min-height: 28px;
+    line-height: normal;
+  }
+}
 @media (max-width: 1200px) {
   .helm-workbench { position: fixed; right: 0; top: 0; z-index: 60; width: min(92vw, 360px); min-width: 0; box-shadow: var(--shadow-lg); }
   .workbench-backdrop { display: block; position: fixed; inset: 0; z-index: 59; background: var(--bg-backdrop); border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 }
 @media (max-width: 860px) {
+  .split-toggle-btn,
+  .sidebar-split-action,
+  .sidebar-split-btn {
+    display: none !important;
+  }
   .helm-sidebar {
     position: fixed;
     left: 0;

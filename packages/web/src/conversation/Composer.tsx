@@ -7,6 +7,7 @@ import { useHelmStore } from '../lib/store-context.js'
 import { collectEnabledPluginIds, isSkillVisible } from '../shell/sidebar-model.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { AskDock } from './AskDock.js'
+import { getComposerPlaceholder, useIsMobile } from './composer-model.js'
 import { formatBytes } from './timeline-model.js'
 
 export interface ComposerProps {
@@ -289,6 +290,7 @@ export function Composer({ conversation, prefill }: ComposerProps) {
 
   const artifacts = store.conversationArtifacts[conversation.id] ?? []
   const working = conversation.status === 'working' || conversation.status === 'blocked'
+  const isMobile = useIsMobile(680)
 
   // 回填（编辑并重发）：prefill 引用变化即触发，同文本重复回填也生效
   useEffect(() => {
@@ -536,11 +538,7 @@ export function Composer({ conversation, prefill }: ComposerProps) {
             ref={textareaRef}
             className="composer-textarea selectable"
             value={text}
-            placeholder={
-              working
-                ? '补充说明或输入下一条指令（Enter 排队发送 · ⌘/Ctrl+Enter 插话引导）'
-                : '输入消息；/ 命令与技能，@ 引用产物，⌘V 粘贴附件'
-            }
+            placeholder={getComposerPlaceholder(working, isMobile)}
             onChange={(e) => {
               setText(e.target.value)
               detectPopover(e.target.value, e.target.selectionStart ?? e.target.value.length)
