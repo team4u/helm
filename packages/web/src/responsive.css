@@ -38,16 +38,13 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .timeline-scroll { padding: 16px 14px 22px; }
   .msg-human-pill { max-width: 92%; }
   .msg-hover-bar { opacity: 0.85; }
-  .composer-shell { padding-inline: 10px; }
-  .composer-textarea { font-size: 16px; }
-  .composer-toolbar { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 4px 8px 8px; }
-  .composer-picker-root { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .composer-model-button { max-width: none; justify-content: flex-start; }
-  .composer-model-label { flex: 1; text-align: left; }
-  .composer-thinking-select { width: 100%; max-width: none; font-size: 16px; }
-  .composer-model-button, .composer-thinking-select, .composer-toolbar-left > .btn, .composer-toolbar-right > .btn { min-height: 34px; }
+  .composer-shell { padding-inline: 10px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  .composer-textarea { font-size: 16px; max-height: 120px; }
+  .composer-picker-root { max-width: 180px; }
+  .composer-toolbar .composer-model-button { max-width: 180px; }
+  .composer-toolbar .composer-steer-button { width: 32px; height: 32px; padding: 0; border-radius: 50%; }
+  .composer-widgets { max-height: min(260px, 35dvh); overflow-y: auto; }
   .composer-action-label { display: none; }
-  .composer-action-label-mobile { display: inline; }
 }
 @container (max-width: 450px) {
   .conversation-topbar .pane-title-group > .badge { display: none; }
@@ -65,7 +62,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
 @media (max-width: 680px) {
   .composer-textarea,
-  .composer-thinking-select,
   .input,
   input,
   select,
@@ -75,7 +71,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
 @media (max-height: 450px) {
   .composer-shell { padding-bottom: max(6px, env(safe-area-inset-bottom)); }
-  .composer-textarea { min-height: 38px; max-height: 90px; padding: 6px 10px 4px; }
+  .composer-textarea { min-height: 34px; max-height: 90px; padding: 5px 10px 3px; }
   .composer-toolbar {
     min-height: 30px;
     line-height: normal;
@@ -89,33 +85,17 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   }
   .composer-model-button {
     min-height: 28px;
-    min-width: 80px;
+    min-width: 0;
     line-height: normal;
     flex-shrink: 0;
   }
   .composer-model-label {
     line-height: normal;
   }
-  .composer-thinking-select {
-    height: 28px;
-    min-height: 28px;
-    line-height: normal;
-    font-size: 12px;
-  }
   .composer-toolbar-left,
   .composer-toolbar-right {
     line-height: normal;
     align-items: center;
-  }
-  .composer-toolbar-left {
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-  .composer-toolbar-left > .btn,
-  .composer-pill-item,
-  .composer-toolbar-right > .btn {
-    min-height: 28px;
-    line-height: normal;
   }
 }
 @media (max-width: 1200px) {
@@ -161,6 +141,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     width: 32px;
     height: 32px;
     padding: 0;
+  }
+  .new-conversation-dropdown {
+    right: -36px !important;
   }
   .sidebar-footer .btn {
     min-width: 32px;

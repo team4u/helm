@@ -107,7 +107,13 @@ function ConversationRow({
 }
 
 /** 新建对话按钮 + Profile 下拉（默认或指定角色直聊；未启用插件与常驻单例角色不展示）。 */
-function NewConversationControl({ store }: { store: HelmStoreValue }) {
+function NewConversationControl({
+  store,
+  onNavigate,
+}: {
+  store: HelmStoreValue
+  onNavigate?: () => void
+}) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const profiles = useMemo(() => {
@@ -117,11 +123,11 @@ function NewConversationControl({ store }: { store: HelmStoreValue }) {
 
   useEffect(() => {
     if (!open) return
-    const onDocClick = (e: MouseEvent) => {
+    const onDocClick = (e: Event) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
     }
-    document.addEventListener('mousedown', onDocClick)
-    return () => document.removeEventListener('mousedown', onDocClick)
+    document.addEventListener('pointerdown', onDocClick)
+    return () => document.removeEventListener('pointerdown', onDocClick)
   }, [open])
 
   const createWith = async (profileId: string | null) => {
@@ -131,6 +137,7 @@ function NewConversationControl({ store }: { store: HelmStoreValue }) {
         profileId ? { profileId } : undefined,
       )
       store.openTarget({ kind: 'conversation', conversationId: conv.id })
+      onNavigate?.()
     } catch (err) {
       store.pushNotice({
         type: 'notification',
@@ -142,7 +149,7 @@ function NewConversationControl({ store }: { store: HelmStoreValue }) {
   }
 
   return (
-    <div ref={wrapRef} style={{ position: 'relative' }}>
+    <div ref={wrapRef} className="new-conversation-control" style={{ position: 'relative' }}>
       <div style={{ display: 'flex', gap: 0 }}>
         <button
           className="btn btn-sm"
@@ -153,10 +160,14 @@ function NewConversationControl({ store }: { store: HelmStoreValue }) {
           <HelmIcon name="plus" size={13} />
         </button>
         <button
-          className="btn btn-sm"
+          className="btn btn-sm new-conversation-dropdown-toggle"
           style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, padding: '0 5px' }}
           title="按角色 Profile 新建对话"
-          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          onClick={(e) => {
+            e.stopPropagation()
+            setOpen((v) => !v)
+          }}
         >
           <HelmIcon name="chevron-down" size={12} />
         </button>
@@ -168,15 +179,19 @@ function NewConversationControl({ store }: { store: HelmStoreValue }) {
             top: 'calc(100% + 4px)',
             right: 0,
             zIndex: 60,
-            minWidth: 220,
-            maxWidth: 300,
+            minWidth: 210,
+            maxWidth: 224,
+            boxShadow: 'var(--shadow-lg)',
+            maxHeight: 'min(360px, 60vh)',
+            overflowY: 'auto',
           }}
-          className="list"
+          className="list new-conversation-dropdown"
+          onClick={(e) => e.stopPropagation()}
         >
-          <div className="row" style={{ padding: '4px 10px', fontSize: 11, color: 'var(--fg-muted)' }}>
+          <div className="row" style={{ padding: '6px 10px', fontSize: 11, color: 'var(--fg-muted)' }}>
             选择角色 Profile 新建对话
           </div>
-          {profiles.length === 0 && <div className="row">暂无可用 Profile</div>}
+          {profiles.length === 0 && <div className="row" style={{ fontSize: 12 }}>暂无可用 Profile</div>}
           {profiles.map((p) => (
             <button
               key={p.id}
@@ -667,7 +682,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
           >
             <HelmIcon name="search" size={13} />
           </button>
-          <NewConversationControl store={store} />
+          <NewConversationControl store={store} onNavigate={onClose} />
           {onClose && (
             <button
               type="button"

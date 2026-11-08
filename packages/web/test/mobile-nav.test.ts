@@ -54,10 +54,39 @@ test('App.tsx 在 Modal 激活或底栏工具触发时自动关闭移动端侧�
     'App.tsx 点击底栏工具按钮时关闭移动侧栏抽屉',
   )
 
+  assert.doesNotMatch(
+    appSource,
+    /target\.closest\(['"]\.sidebar-header button['"]\)/,
+    'App.tsx 绝不得盲目拦截 .sidebar-header button，否则会误关新建对话下拉菜单',
+  )
+
   assert.match(
     appSource,
     /<Sidebar\s+onClose=\{\(\)\s*=>\s*setSidebarOpen\(false\)\}\s*\/>/,
     'App.tsx 必须向 Sidebar 注入 onClose 关闭回调',
+  )
+})
+
+test('Sidebar.tsx 新建对话下拉菜单支持触摸并安全展开，不误关抽屉', { timeout: 60_000 }, () => {
+  assert.match(
+    sidebarSource,
+    /<NewConversationControl\s+store=\{store\}\s+onNavigate=\{onClose\}\s*\/>/,
+    'Sidebar 必须将 onClose 传递给 NewConversationControl 作为导航后关闭回调',
+  )
+  assert.match(
+    sidebarSource,
+    /className=["'][^"']*new-conversation-dropdown-toggle[^"']*["']/,
+    'NewConversationControl 下拉展开按钮必须具备专用标识类名',
+  )
+  assert.match(
+    sidebarSource,
+    /className=["'][^"']*new-conversation-dropdown[^"']*["']/,
+    'NewConversationControl 弹出菜单必须具备 new-conversation-dropdown 类名',
+  )
+  assert.match(
+    sidebarSource,
+    /pointerdown/,
+    'NewConversationControl 必须使用 pointerdown 事件监听以适配移动端触控',
   )
 })
 
@@ -135,5 +164,10 @@ test('responsive.css 适配移动端视口安全区、触控热区与遮罩层�
     responsiveCss,
     /\.sidebar-open\s+\.sidebar-backdrop\s*\{[^}]*z-index:\s*71;[^}]*background:\s*var\(--bg-backdrop\);/,
     '.sidebar-backdrop 必须在侧栏展开时覆盖且 z-index: 71',
+  )
+  assert.match(
+    responsiveCss,
+    /\.new-conversation-dropdown\s*\{[^}]*right:\s*-36px\s*!important;/,
+    '.new-conversation-dropdown 必须声明移动端右对齐修正',
   )
 })

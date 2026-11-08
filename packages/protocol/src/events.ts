@@ -108,6 +108,8 @@ export interface WorkflowUpdatedEvent {
 export interface NodeChangedEvent {
   type: 'node.changed'
   node: NodeInfo
+  /** 当节点从 Hub 签发表移除时为 true，客户端据此从已知节点列表中移除该项。 */
+  removed?: boolean
 }
 
 /** 人类通知（如 Watchdog 只读诊断告警）。 */

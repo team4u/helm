@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ArtifactMetadata, ConversationSummary } from '@helm/protocol'
 import { conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
@@ -38,11 +38,21 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
 
   useEffect(() => {
     if (!open) return
-    const onDocClick = (e: MouseEvent): void => {
+    const onDocClick = (e: PointerEvent): void => {
       if (rootRef.current !== null && !rootRef.current.contains(e.target as Node)) setOpen(false)
     }
-    document.addEventListener('mousedown', onDocClick)
-    return () => document.removeEventListener('mousedown', onDocClick)
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        setOpen(false)
+        rootRef.current?.querySelector('button')?.focus()
+      }
+    }
+    document.addEventListener('pointerdown', onDocClick)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onDocClick)
+      document.removeEventListener('keydown', onKeyDown)
+    }
   }, [open])
 
   const pick = async (model: string): Promise<void> => {
@@ -86,38 +96,28 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
   const currentModel = store.models.find((model) => model.id === conversation.model)
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
   const supportsThinking = currentLevels.some((level) => level !== 'off')
+  // 当前生效档位：显式覆盖优先，否则会话继承的默认档位；off 或不支持时不展示
+  const activeLevel = conversation.thinkingLevelOverride ?? conversation.thinkingLevel ?? 'off'
+  const showLevel = supportsThinking && activeLevel !== 'off'
 
   return (
     <span className="composer-picker-root" ref={rootRef}>
       <button
         type="button"
-        className="btn btn-sm composer-model-button"
+        className="btn btn-ghost btn-sm composer-model-button"
         disabled={pending}
         onClick={() => setOpen((v) => !v)}
-        title={`当前模型：${conversation.model}`}
+        aria-expanded={open}
+        aria-label={`模型与思考档位：${shortName}${showLevel ? ` · ${activeLevel}` : ''}`}
+        title={`当前模型：${conversation.model}${showLevel ? ` · 思考 ${activeLevel}` : ''}`}
       >
-        <HelmIcon name={pending ? 'loader' : 'cpu'} size={12} />
+        {pending ? <HelmIcon name="loader" size={12} className="spin-slow" /> : null}
         <span className="composer-model-label">{shortName}</span>
-        <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
+        {showLevel ? <span className="composer-model-level">· {activeLevel}</span> : null}
+        <HelmIcon name="chevron-down" size={12} />
       </button>
-      <select
-          className="input composer-thinking-select"
-          aria-label="思考等级"
-          disabled={pending || !supportsThinking}
-          value={conversation.thinkingLevelOverride ?? ''}
-          onChange={(event) => void pickThinking(event.target.value)}
-          title={supportsThinking ? `思考等级：${currentLevels.join(' / ')}` : currentModel ? '所选模型不支持思考档位' : '模型目录尚未包含当前模型'}
-        >
-          <option value="">{supportsThinking ? `默认 · ${conversation.thinkingLevel || 'off'}` : currentModel ? '不支持思考' : '思考：模型未知'}</option>
-          {conversation.thinkingLevelOverride && !currentLevels.includes(conversation.thinkingLevelOverride) && (
-            <option value={conversation.thinkingLevelOverride}>思考：{conversation.thinkingLevelOverride}（当前模型不支持）</option>
-          )}
-          {currentLevels.map((level) => (
-            <option key={level} value={level}>思考 · {level}</option>
-          ))}
-        </select>
       {open ? (
-        <div className="composer-popover" style={{ bottom: 'calc(100% + 6px)', left: 0, minWidth: 260 }}>
+        <div className="composer-popover composer-model-popover">
           <button
             type="button"
             className="popover-item"
@@ -142,6 +142,36 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
           {store.models.every((model) => !model.available) && (
             <div className="popover-item" style={{ cursor: 'default', color: 'var(--fg-subtle)' }}>暂无可用模型；请先在「模型与凭据」配置供应商密钥</div>
           )}
+          {supportsThinking ? (
+            <>
+              <div className="popover-header">
+                思考档位
+                <span style={{ color: 'var(--fg-subtle)' }}>{shortName}</span>
+              </div>
+              <div className="composer-thinking-row">
+                <button
+                  type="button"
+                  className={`btn btn-sm${conversation.thinkingLevelOverride ? '' : ' btn-primary'}`}
+                  disabled={pending}
+                  title="跟随模型 / Profile 默认档位"
+                  onClick={() => void pickThinking('')}
+                >
+                  默认
+                </button>
+                {currentLevels.map((level) => (
+                  <button
+                    key={level}
+                    type="button"
+                    className={`btn btn-sm${conversation.thinkingLevelOverride === level ? ' btn-primary' : ''}`}
+                    disabled={pending}
+                    onClick={() => void pickThinking(level)}
+                  >
+                    {level}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
         </div>
       ) : null}
     </span>
@@ -285,12 +315,57 @@ export function Composer({ conversation, prefill }: ComposerProps) {
   const uploadingRef = useRef(0)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const extrasRef = useRef<HTMLDetailsElement | null>(null)
   const dragDepthRef = useRef(0)
   const [dragging, setDragging] = useState(false)
+  const [widgetsExpanded, setWidgetsExpanded] = useState(false)
 
   const artifacts = store.conversationArtifacts[conversation.id] ?? []
   const working = conversation.status === 'working' || conversation.status === 'blocked'
   const isMobile = useIsMobile(680)
+  const widgets = store.groupedUi.composerWidgets.filter((w) => matchesUiScope(conversation, w.spec.scope))
+  const pills = store.groupedUi.composerPills.filter((p) => matchesUiScope(conversation, p.spec.scope))
+
+  const autoGrow = useCallback((): void => {
+    const el = textareaRef.current
+    if (el === null) return
+    el.style.height = '0px'
+    el.style.height = `${el.scrollHeight}px`
+  }, [])
+  useLayoutEffect(() => {
+    autoGrow()
+  }, [text, isMobile, autoGrow])
+  useEffect(() => {
+    const el = textareaRef.current
+    if (el === null) return
+    let width = el.clientWidth
+    const observer = new ResizeObserver(() => {
+      if (el.clientWidth === width) return
+      width = el.clientWidth
+      autoGrow()
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [autoGrow])
+  useEffect(() => {
+    const extras = extrasRef.current
+    if (extras === null) return
+    const onPointerDown = (event: PointerEvent): void => {
+      if (!extras.contains(event.target as Node)) extras.open = false
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && extras.open) {
+        extras.open = false
+        extras.querySelector('summary')?.focus()
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [isMobile, pills.length, widgets.length])
 
   // 回填（编辑并重发）：prefill 引用变化即触发，同文本重复回填也生效
   useEffect(() => {
@@ -482,14 +557,10 @@ export function Composer({ conversation, prefill }: ComposerProps) {
     }
   }
 
-  // composer.widget / composer.pill 插件挂载区
-  const widgets = store.groupedUi.composerWidgets.filter((w) => matchesUiScope(conversation, w.spec.scope))
-  const pills = store.groupedUi.composerPills.filter((p) => matchesUiScope(conversation, p.spec.scope))
-
   return (
     <div className="composer-shell">
       <div className="composer-inner">
-        {widgets.length > 0 ? (
+        {widgets.length > 0 && (!isMobile || widgetsExpanded) ? (
           <div className="composer-widgets">
             {widgets.map((w) => (
               <div key={`${w.pluginId}/${w.spec.id}`} className="composer-widget-item">
@@ -538,6 +609,7 @@ export function Composer({ conversation, prefill }: ComposerProps) {
             ref={textareaRef}
             className="composer-textarea selectable"
             value={text}
+            rows={1}
             placeholder={getComposerPlaceholder(working, isMobile)}
             onChange={(e) => {
               setText(e.target.value)
@@ -557,16 +629,17 @@ export function Composer({ conversation, prefill }: ComposerProps) {
             />
           ) : null}
           <div className="composer-toolbar">
-            <ModelPicker conversation={conversation} />
-            <span className="composer-toolbar-left">
+            <div className="composer-toolbar-left">
               <button
                 type="button"
-                className="btn btn-ghost btn-sm"
+                className="btn btn-ghost btn-sm composer-icon-button"
                 title="上传附件"
+                aria-label="上传附件"
                 onClick={() => fileInputRef.current?.click()}
               >
-                <HelmIcon name="paperclip" size={13} />
+                <HelmIcon name="plus" size={19} />
               </button>
+              <ModelPicker conversation={conversation} />
               <input
                 ref={fileInputRef}
                 type="file"
@@ -578,75 +651,108 @@ export function Composer({ conversation, prefill }: ComposerProps) {
                   if (files.length > 0) void uploadFiles(files)
                 }}
               />
-              {pills.map((p) => (
-                <span key={`${p.pluginId}/${p.spec.id}`} className="composer-pill-item">
-                  <PluginUiView
-                    pluginId={p.pluginId}
-                    spec={p.spec}
-                    conversationId={conversation.id}
-                    label={`胶囊 ${p.spec.id}`}
-                    slotProps={{ conversation }}
-                  />
+              {!isMobile ? (
+                <span className="composer-pills">
+                  {pills.map((p) => (
+                    <span key={`${p.pluginId}/${p.spec.id}`} className="composer-pill-item">
+                      <PluginUiView
+                        pluginId={p.pluginId}
+                        spec={p.spec}
+                        conversationId={conversation.id}
+                        label={`胶囊 ${p.spec.id}`}
+                        slotProps={{ conversation }}
+                      />
+                    </span>
+                  ))}
                 </span>
-              ))}
-            </span>
+              ) : pills.length > 0 || widgets.length > 0 ? (
+                <details className="composer-extras" ref={extrasRef}>
+                  <summary className="btn btn-ghost btn-sm composer-icon-button" aria-label="会话工具" title="会话工具">
+                    <HelmIcon name="more" size={18} />
+                  </summary>
+                  <div className="composer-popover composer-extras-popover">
+                    {pills.map((p) => (
+                      <div key={`${p.pluginId}/${p.spec.id}`} className="composer-pill-item">
+                        <PluginUiView
+                          pluginId={p.pluginId}
+                          spec={p.spec}
+                          conversationId={conversation.id}
+                          label={`胶囊 ${p.spec.id}`}
+                          slotProps={{ conversation }}
+                        />
+                      </div>
+                    ))}
+                    {widgets.length > 0 ? (
+                      <button
+                        type="button"
+                        className="popover-item"
+                        aria-expanded={widgetsExpanded}
+                        onClick={(event) => {
+                          setWidgetsExpanded((v) => !v)
+                          event.currentTarget.closest('details')?.removeAttribute('open')
+                        }}
+                      >
+                        <HelmIcon name="layers" size={15} />
+                        {widgetsExpanded ? '收起' : '查看'}{widgets.length === 1 ? widgets[0]?.spec.title ?? '会话面板' : `会话面板 (${widgets.length})`}
+                      </button>
+                    ) : null}
+                  </div>
+                </details>
+              ) : null}
+            </div>
             <span className="composer-toolbar-right">
               {!working ? (
                 <button
                   type="button"
-                  className="btn btn-sm btn-primary btn-pill"
+                  className="btn btn-sm btn-primary btn-pill btn-send"
                   disabled={sending || uploading > 0 || text.trim() === ''}
                   onClick={() => void send()}
                   title="发送 (Enter)；Shift+Enter 换行"
+                  aria-label={uploading > 0 ? `上传中 (${uploading})` : '发送'}
                 >
-                  <HelmIcon name={sending ? 'loader' : 'send'} size={12} />
-                  {uploading > 0 ? `上传中 (${uploading})` : '发送'}
+                  <HelmIcon name={sending || uploading > 0 ? 'loader' : 'arrow-up'} size={18} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
                 </button>
               ) : text.trim() === '' ? (
                 <button
                   type="button"
-                  className="btn btn-sm btn-danger btn-pill"
+                  className="btn btn-sm btn-danger btn-pill btn-send"
                   onClick={() => void abortTurn()}
                   title="停止当前执行"
+                  aria-label="停止当前执行"
                 >
-                  <HelmIcon name="square" size={11} />
-                  {uploading > 0 ? `上传中 (${uploading})` : '停止'}
+                  <HelmIcon name="square" size={14} />
                 </button>
               ) : (
                 <>
                   <button
                     type="button"
-                    className="btn btn-sm btn-danger"
-                    style={{ padding: '0 7px' }}
+                    className="btn btn-sm btn-danger btn-send"
                     onClick={() => void abortTurn()}
                     title="停止当前执行"
                     aria-label="停止当前执行"
                   >
-                    <HelmIcon name="square" size={11} />
+                    <HelmIcon name="square" size={14} />
                   </button>
                   <button
                     type="button"
-                    className="btn btn-sm btn-pill"
+                    className="btn btn-ghost btn-sm composer-steer-button"
                     disabled={sending || uploading > 0}
                     onClick={() => void send('steer')}
                     title="立即插入当前回合引导方向 (⌘/Ctrl+Enter)"
                     aria-label="插话引导"
                   >
-                    <HelmIcon name={sending ? 'loader' : 'corner-down-right'} size={12} />
+                    <HelmIcon name={sending ? 'loader' : 'corner-down-right'} size={17} />
                     <span className="composer-action-label">插话引导</span>
-                    <span className="composer-action-label-mobile" aria-hidden="true">插话</span>
                   </button>
                   <button
                     type="button"
-                    className="btn btn-sm btn-primary btn-pill"
+                    className="btn btn-sm btn-primary btn-pill btn-send"
                     disabled={sending || uploading > 0}
                     onClick={() => void send('followUp')}
                     title="排在当前回合结束后自动发送 (Enter)"
                     aria-label={uploading > 0 ? `上传中 (${uploading})` : '排队发送'}
                   >
-                    <HelmIcon name={sending ? 'loader' : 'send'} size={12} />
-                    <span className="composer-action-label">{uploading > 0 ? `上传中 (${uploading})` : '排队发送'}</span>
-                    <span className="composer-action-label-mobile" aria-hidden="true">{uploading > 0 ? '上传中' : '排队'}</span>
+                    <HelmIcon name={sending || uploading > 0 ? 'loader' : 'arrow-up'} size={18} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
                   </button>
                 </>
               )}

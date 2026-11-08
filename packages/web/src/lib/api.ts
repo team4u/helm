@@ -17,6 +17,9 @@ import type {
   ModelCatalogEntry,
   ModelProviderSummary,
   ModelProvidersRefreshResult,
+  NodeHealthSnapshot,
+  NodeInfo,
+  NodeIssuedToken,
   PluginConfigFieldSchema,
   PluginSummary,
   Profile,
@@ -44,6 +47,7 @@ export type {
 export type AuthStatusResponse = AuthStatus
 export type AuthTokenResponse = AuthToken
 export type CredentialStatus = CredentialSummary
+export type { NodeInfo, NodeIssuedToken, NodeHealthSnapshot }
 
 export interface SubmitInputPayload {
   text: string
@@ -278,6 +282,18 @@ export const artifactsApi = {
       setTimeout(() => URL.revokeObjectURL(url), 5_000)
     }
   },
+}
+
+// ---------------------------------------------------------------------------
+// Nodes（跨平台计算节点）
+// ---------------------------------------------------------------------------
+
+export const nodesApi = {
+  list: () => apiRequest<NodeInfo[]>('GET', '/api/nodes'),
+  issueToken: (nodeId: string) =>
+    apiRequest<NodeIssuedToken>('POST', '/api/nodes/issue', { nodeId }),
+  remove: (nodeId: string) =>
+    apiRequest<{ ok: boolean }>('DELETE', `/api/nodes/${encodeURIComponent(nodeId)}`),
 }
 
 // ---------------------------------------------------------------------------

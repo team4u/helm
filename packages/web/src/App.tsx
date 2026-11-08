@@ -72,8 +72,7 @@ function HelmShellInner() {
         const target = event.target as HTMLElement
         if (
           target.closest('.nav-item') ||
-          target.closest('.sidebar-footer button') ||
-          target.closest('.sidebar-header button')
+          target.closest('.sidebar-footer button')
         ) {
           setSidebarOpen(false)
         }

@@ -3,13 +3,10 @@ import { useEffect, useState } from 'react'
 /** 根据是否处于移动端或小屏幕模式生成 Composer 占位符提示文案 */
 export function getComposerPlaceholder(working: boolean, isMobile: boolean): string {
   if (working) {
-    return isMobile
-      ? '补充说明或输入下一条指令'
-      : '补充说明或输入下一条指令（Enter 排队发送 · ⌘/Ctrl+Enter 插话引导）'
+    // 移动端占位符保持极短，避免窄屏折行撑高输入区
+    return isMobile ? '补充说明或排队指令…' : '补充说明或输入下一条指令（Enter 排队发送 · ⌘/Ctrl+Enter 插话引导）'
   }
-  return isMobile
-    ? '输入消息；/ 命令与技能，@ 引用产物'
-    : '输入消息；/ 命令与技能，@ 引用产物，⌘V 粘贴附件'
+  return isMobile ? '输入消息…' : '输入消息；/ 命令与技能，@ 引用产物，⌘V 粘贴附件'
 }
 
 /** 监听视口宽度是否在移动端阈值内（默认 <= 680px） */

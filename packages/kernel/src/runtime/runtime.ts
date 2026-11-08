@@ -496,7 +496,10 @@ export class KernelRuntime {
         buildManagedEnv(this.toolDeps, cwd, conversationId, nodeId),
     })
     // 节点上下线 -> node.changed SSE 事件（Web/CLI 实时感知）。
+    // removeNode 已先删 nodeTokenIndex 再触发 registry.disconnect 时，
+    // 离线事件交由 removeNode 统一发布（带 removed: true），此处不重复发。
     this.envFabric.registry.onNodeChanged((nodeId, online) => {
+      if (!online && !this.nodeTokenIndex.has(nodeId)) return
       const conn = online ? this.envFabric.registry.get(nodeId) : undefined
       this.events.publish('node.changed', {
         type: 'node.changed',
@@ -1288,10 +1291,13 @@ export class KernelRuntime {
     }
     this.nodeTokenIndex.delete(nodeId)
     await this.persistNodeTokens()
+    // 先掐断在途连接（可能触发 onNodeChanged 离线回调；彼时 nodeTokenIndex
+    // 已删除，回调侧会跳过），再统一发布带 removed: true 的移除事件。
     this.envFabric.registry.disconnect(nodeId)
     this.events.publish('node.changed', {
       type: 'node.changed',
       node: { id: nodeId, kind: 'byom', online: false },
+      removed: true,
     })
   }
 

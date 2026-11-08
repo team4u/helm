@@ -10,14 +10,15 @@ const timelineSource = readFileSync(new URL('../src/conversation/ConversationTim
 const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
 
-test('移动端 Placeholder 文案优化：小屏/移动端去掉 ⌘V 提示', { timeout: 60_000 }, () => {
+test('移动端 Placeholder 文案优化：小屏/移动端极短防折行', { timeout: 60_000 }, () => {
   // 移动端/小屏幕模式
   const mobileDefault = getComposerPlaceholder(false, true)
-  assert.equal(mobileDefault, '输入消息；/ 命令与技能，@ 引用产物')
+  assert.equal(mobileDefault, '输入消息…')
   assert.doesNotMatch(mobileDefault, /⌘/)
+  assert.doesNotMatch(mobileDefault, /[；;]/)
 
   const mobileWorking = getComposerPlaceholder(true, true)
-  assert.equal(mobileWorking, '补充说明或输入下一条指令')
+  assert.equal(mobileWorking, '补充说明或排队指令…')
   assert.doesNotMatch(mobileWorking, /⌘/)
 
   // 桌面端全功能模式
@@ -39,19 +40,15 @@ test('移动端输入框字号防 iOS 自动放大：有效字号不小于 16px'
     responsiveCss.indexOf('@container (max-width: 450px)'),
   )
   assert.match(containerSlice, /\.composer-textarea\s*\{[^}]*font-size:\s*16px/)
-  assert.match(containerSlice, /\.composer-thinking-select\s*\{[^}]*font-size:\s*16px/)
 
   // @media (max-width: 680px) 视口兜底保护，杜绝 iOS WebKit 输入放大
   const mediaSlice = responsiveCss.slice(responsiveCss.indexOf('@media (max-width: 680px)'))
   assert.match(mediaSlice, /font-size:\s*16px/)
 })
 
-test('横屏模式（高度 < 450px）适配：工具栏与下拉框完整显示且不被挤压', { timeout: 60_000 }, () => {
-  // styles.css 中模型按钮具有最小宽度，避免折叠成 "g. >"
-  assert.match(stylesCss, /\.composer-model-button\s*\{[^}]*min-width:\s*(?:80|90|100)px/)
-  // 下拉框高度调整且设置 line-height，避免文字被水平切掉
-  assert.match(stylesCss, /\.composer-thinking-select\s*\{[^}]*height:\s*28px/)
-  assert.match(stylesCss, /\.composer-thinking-select\s*\{[^}]*line-height:\s*normal/)
+test('横屏模式（高度 < 450px）适配：工具栏完整显示且不被挤压', { timeout: 60_000 }, () => {
+  // styles.css 中模型按钮限定最大宽度，窄屏不再需要固定最小宽度
+  assert.match(stylesCss, /\.composer-model-button\s*\{[^}]*max-width:\s*240px/)
 
   // responsive.css 声明 @media (max-height: 450px) 针对横屏视口
   assert.match(responsiveCss, /@media\s*\(max-height:\s*450px\)/)
@@ -62,7 +59,6 @@ test('横屏模式（高度 < 450px）适配：工具栏与下拉框完整显示
   assert.match(landscapeSlice, /\.composer-toolbar\s*\{[^}]*min-height:\s*30px/)
   assert.match(landscapeSlice, /\.composer-toolbar\s*\{[^}]*overflow:\s*visible/)
   assert.match(landscapeSlice, /\.composer-toolbar\s*\{[^}]*line-height:\s*normal/)
-  assert.match(landscapeSlice, /\.composer-thinking-select\s*\{[^}]*line-height:\s*normal/)
 })
 
 test('移动端窄屏（<860px）下隐藏顶部与侧栏中的分屏入口', { timeout: 60_000 }, () => {

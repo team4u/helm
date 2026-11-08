@@ -708,17 +708,17 @@ textarea {
 }
 
 .composer-box {
+  position: relative;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
+  border-radius: 18px;
   display: flex;
   flex-direction: column;
   transition: border-color 120ms ease;
 }
 
 .composer-box:focus-within {
-  border-color: var(--border-focus);
+  border-color: var(--fg-muted);
 }
 
 .composer-attachments {
@@ -742,62 +742,97 @@ textarea {
 
 .composer-textarea {
   width: 100%;
-  min-height: 56px;
+  min-height: 36px;
   max-height: 200px;
-  padding: 10px 12px 6px;
+  padding: 8px 14px 4px;
   border: none;
   outline: none;
   background: transparent;
   resize: none;
   font-size: 13.5px;
   line-height: 1.5;
+  overflow-y: auto;
 }
 
 .composer-toolbar {
-  min-height: 34px;
-  padding: 0 8px 4px;
+  min-height: 36px;
+  padding: 0 6px 6px;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   line-height: normal;
 }
 
 .composer-picker-root {
-  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
   min-width: 0;
-  max-width: 100%;
+  max-width: 240px;
+  flex: 0 1 auto;
 }
 
-.composer-model-button { min-width: 80px; max-width: 240px; line-height: normal; flex-shrink: 0; }
+.composer-toolbar .composer-model-button {
+  min-width: 0;
+  max-width: 240px;
+  height: 32px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  line-height: normal;
+  gap: 5px;
+}
 .composer-model-button > svg { flex-shrink: 0; }
-.composer-model-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: normal; }
-.composer-thinking-select { width: auto; min-width: 0; max-width: 180px; height: 28px; min-height: 28px; padding: 2px 6px; font-size: 11.5px; line-height: normal; }
+.composer-model-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: normal; }
+.composer-model-level { flex-shrink: 0; color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+.composer-thinking-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 4px 6px 8px;
+}
+.composer-thinking-row .btn { flex-shrink: 0; min-height: 32px; }
 
 .composer-toolbar-left,
 .composer-toolbar-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
   line-height: normal;
 }
-
-.composer-toolbar-left { overflow-x: auto; scrollbar-width: thin; }
-.composer-toolbar-left > button, .composer-pill-item, .composer-toolbar-right > button { flex-shrink: 0; }
 .composer-toolbar-right { justify-content: flex-end; }
-.composer-action-label-mobile { display: none; }
+.composer-toolbar-left > button, .composer-extras, .composer-pill-item, .composer-toolbar-right > button { flex-shrink: 0; }
+.composer-pills { display: flex; min-width: 0; overflow-x: auto; scrollbar-width: none; gap: 4px; }
+.composer-toolbar .composer-icon-button,
+.composer-toolbar .btn-send {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 50%;
+}
+.composer-toolbar .btn-send.btn-primary { background: var(--fg); border-color: transparent; color: var(--fg-on-solid); }
+.composer-toolbar .btn-send.btn-primary:hover:not(:disabled) { background: var(--fg-secondary); color: var(--fg-on-solid); border-color: transparent; }
+.composer-toolbar .btn-send.btn-primary:disabled { opacity: 1; background: var(--bg-muted); color: var(--fg-subtle); }
+.composer-extras > summary { list-style: none; }
+.composer-extras > summary::-webkit-details-marker { display: none; }
+.composer-extras-popover .composer-pill-item { display: flex; padding: 4px; }
+.composer-extras-popover .composer-pill-item > * { max-width: 100%; }
+.composer-popover.composer-model-popover { width: min(360px, calc(100% - 12px)); }
+.composer-popover.composer-extras-popover { width: min(280px, calc(100% - 12px)); }
 
 .composer-popover {
   position: absolute;
   bottom: calc(100% + 6px);
-  left: 0;
-  min-width: 280px;
-  max-width: 420px;
-  max-height: 260px;
+  left: 6px;
+  width: min(420px, calc(100% - 12px));
+  max-width: calc(100% - 12px);
+  max-height: min(360px, 50dvh);
   overflow-y: auto;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
@@ -1373,7 +1408,5 @@ textarea {
   height: auto;
 }
 
-.composer-picker-root .composer-popover {
-  min-width: 260px;
-}
+.composer-model-popover .input { width: 100%; }
 
