@@ -367,6 +367,12 @@ textarea {
   justify-content: space-between;
   gap: 4px;
 }
+.sidebar-theme-toggle {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  flex-shrink: 0;
+}
 
 /* ==========================================================================
  * 4. 会话顶栏（Topbar）与对话主画布（Conversation Canvas）

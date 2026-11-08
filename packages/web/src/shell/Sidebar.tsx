@@ -644,7 +644,7 @@ function MyConversationsGroup({ store }: { store: HelmStoreValue }) {
   )
 }
 
-export function Sidebar() {
+export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   const store = useHelmStore()
 
   return (
@@ -657,6 +657,7 @@ export function Sidebar() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <button
+            type="button"
             className="btn btn-sm"
             title="打开 Cmd K 全局搜索与命令面板"
             onClick={() => store.setActiveModal({ kind: 'command-palette' })}
@@ -664,6 +665,17 @@ export function Sidebar() {
             <HelmIcon name="search" size={13} />
           </button>
           <NewConversationControl store={store} />
+          {onClose && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm mobile-sidebar-close"
+              aria-label="关闭导航栏"
+              title="关闭导航栏"
+              onClick={onClose}
+            >
+              <HelmIcon name="x" size={14} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -683,6 +695,7 @@ export function Sidebar() {
       <div className="sidebar-footer">
         <div style={{ display: 'flex', gap: 2 }}>
           <button
+            type="button"
             className="btn btn-ghost btn-sm"
             title="角色 Profiles"
             onClick={() => store.setActiveModal({ kind: 'profile-editor' })}
@@ -690,6 +703,7 @@ export function Sidebar() {
             <HelmIcon name="bot" size={14} />
           </button>
           <button
+            type="button"
             className="btn btn-ghost btn-sm"
             title="模型与凭据"
             onClick={() => store.setActiveModal({ kind: 'provider-auth' })}
@@ -697,6 +711,7 @@ export function Sidebar() {
             <HelmIcon name="key" size={14} />
           </button>
           <button
+            type="button"
             className="btn btn-ghost btn-sm"
             title="技能库 Skills"
             onClick={() => store.setActiveModal({ kind: 'skill-viewer' })}
@@ -704,6 +719,7 @@ export function Sidebar() {
             <HelmIcon name="sparkles" size={14} />
           </button>
           <button
+            type="button"
             className="btn btn-ghost btn-sm"
             title="插件与设置"
             onClick={() => store.setActiveModal({ kind: 'plugin-settings' })}
@@ -712,8 +728,8 @@ export function Sidebar() {
           </button>
         </div>
         <button
-          className="btn btn-ghost btn-sm"
-          style={{ width: 28, height: 28, padding: 0 }}
+          type="button"
+          className="btn btn-ghost btn-sm sidebar-theme-toggle"
           title={
             store.themePreference === 'system'
               ? `跟随系统（当前${store.theme === 'dark' ? '暗色' : '浅色'}，点击切换为浅色模式）`

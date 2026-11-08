@@ -350,6 +350,17 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
             {tab.label}
           </button>
         ))}
+        <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm workbench-close-btn"
+          aria-label="关闭工作台"
+          title="关闭工作台"
+          style={{ width: 26, height: 26, padding: 0, flexShrink: 0 }}
+          onClick={() => store.setWorkbenchOpen(false)}
+        >
+          <HelmIcon name="x" size={14} />
+        </button>
       </div>
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {conversationId === undefined ? (

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { HelmIcon } from './lib/icons.js'
 import { ModalFocusScope } from './shell/ModalFocusScope.js'
 import { ArtifactPreviewModal } from './conversation/ArtifactPreviewModal.js'
@@ -22,12 +22,18 @@ function HelmShellInner() {
   const setActiveModal = store.setActiveModal
   const closeModal = useCallback(() => setActiveModal(null), [setActiveModal])
 
+  useEffect(() => {
+    if (store.activeModal !== null) {
+      setSidebarOpen(false)
+    }
+  }, [store.activeModal])
+
   if (!store.authReady) {
     return (
       <div
         style={{
           width: '100vw',
-          height: '100vh',
+          height: '100dvh',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -60,12 +66,36 @@ function HelmShellInner() {
         : undefined
 
   return (
-    <div className={`helm-shell${sidebarOpen ? ' sidebar-open' : ''}`} onClick={(event) => {
-      if ((event.target as HTMLElement).closest('.nav-item')) setSidebarOpen(false)
-    }}>
-      <button className="btn btn-ghost mobile-nav-toggle" aria-label="切换导航栏" onClick={() => setSidebarOpen((open) => !open)}><HelmIcon name="menu" /></button>
-      {sidebarOpen && <button className="sidebar-backdrop" aria-label="关闭导航栏" onClick={() => setSidebarOpen(false)} />}
-      <Sidebar />
+    <div
+      className={`helm-shell${sidebarOpen ? ' sidebar-open' : ''}`}
+      onClick={(event) => {
+        const target = event.target as HTMLElement
+        if (
+          target.closest('.nav-item') ||
+          target.closest('.sidebar-footer button') ||
+          target.closest('.sidebar-header button')
+        ) {
+          setSidebarOpen(false)
+        }
+      }}
+    >
+      <button
+        type="button"
+        className="btn btn-ghost mobile-nav-toggle"
+        aria-label="切换导航栏"
+        onClick={() => setSidebarOpen((open) => !open)}
+      >
+        <HelmIcon name="menu" />
+      </button>
+      {sidebarOpen && (
+        <button
+          type="button"
+          className="sidebar-backdrop"
+          aria-label="关闭导航栏"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+      <Sidebar onClose={() => setSidebarOpen(false)} />
 
       <main className="helm-main-stage">
         {!store.sseConnected && (
@@ -111,7 +141,17 @@ function HelmShellInner() {
         </div>
       </main>
 
-      {store.workbenchOpen && <WorkbenchDrawer conversationId={activeConversationId} />}
+      {store.workbenchOpen && (
+        <>
+          <button
+            type="button"
+            className="workbench-backdrop"
+            aria-label="关闭工作台"
+            onClick={() => store.setWorkbenchOpen(false)}
+          />
+          <WorkbenchDrawer conversationId={activeConversationId} />
+        </>
+      )}
 
       {store.activeModal?.kind === 'command-palette' && <CommandPaletteModal onClose={closeModal} />}
       {store.activeModal?.kind === 'profile-editor' && (
