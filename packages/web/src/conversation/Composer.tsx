@@ -4,6 +4,7 @@ import { conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { matchesUiScope, type HelmStoreValue } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { collectEnabledPluginIds, isSkillVisible } from '../shell/sidebar-model.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { AskDock } from './AskDock.js'
 import { formatBytes } from './timeline-model.js'
@@ -181,12 +182,16 @@ function CommandPopover({
         { id: '/clear', label: '/clear', hint: '重置上下文', apply: '/clear' },
         { id: '/compact', label: '/compact', hint: '精简上下文', apply: '/compact' },
       ]
-      const skills: PopoverItem[] = store.skills.map((s) => ({
-        id: `/skill:${s.id}`,
-        label: `/skill:${s.id}`,
-        hint: s.name,
-        apply: `/skill:${s.id} `,
-      }))
+      // 插件未启用时其自举技能不出现在 / 斜杠菜单
+      const enabledPluginIds = collectEnabledPluginIds(store.plugins)
+      const skills: PopoverItem[] = store.skills
+        .filter((s) => isSkillVisible(s, enabledPluginIds))
+        .map((s) => ({
+          id: `/skill:${s.id}`,
+          label: `/skill:${s.id}`,
+          hint: s.name,
+          apply: `/skill:${s.id} `,
+        }))
       return [...builtin, ...skills].filter((i) => i.id.toLowerCase().includes(q))
     }
     return artifacts
@@ -197,7 +202,7 @@ function CommandPopover({
         hint: `${a.mimeType} · ${formatBytes(a.size)}`,
         apply: `@${a.id} `,
       }))
-  }, [kind, query, artifacts, store.skills])
+  }, [kind, query, artifacts, store.skills, store.plugins])
 
   useEffect(() => {
     setActive(0)

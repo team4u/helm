@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { assetsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { collectEnabledPluginIds, isSkillVisible } from '../shell/sidebar-model.js'
 
 const SKILL_MAIN_FILE = 'SKILL.md'
 
@@ -13,7 +14,12 @@ export function SkillViewerModal({
   onClose: () => void
 }) {
   const store = useHelmStore()
-  const [selectedId, setSelectedId] = useState<string | null>(initialSkillId ?? store.skills[0]?.id ?? null)
+  // 插件未启用时其自举技能不展示：列表与默认选中仅消费可见技能。
+  const skills = useMemo(() => {
+    const enabledPluginIds = collectEnabledPluginIds(store.plugins)
+    return store.skills.filter((s) => isSkillVisible(s, enabledPluginIds))
+  }, [store.skills, store.plugins])
+  const [selectedId, setSelectedId] = useState<string | null>(initialSkillId ?? skills[0]?.id ?? null)
   const [activeFile, setActiveFile] = useState<string>(SKILL_MAIN_FILE)
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(false)
@@ -22,7 +28,7 @@ export function SkillViewerModal({
   // 请求代数守卫：快速切换技能/文件时慢返回的旧内容不得写入新选中项。
   const loadGeneration = useRef(0)
 
-  const skill = store.skills.find((s) => s.id === selectedId)
+  const skill = skills.find((s) => s.id === selectedId)
   const files = skill ? [SKILL_MAIN_FILE, ...skill.references] : []
 
   const loadFile = useCallback(async (skillId: string, path: string) => {
@@ -95,10 +101,10 @@ export function SkillViewerModal({
         </div>
         <div className="modal-body asset-modal-body" style={{ flexDirection: 'row', gap: 14, alignItems: 'stretch' }}>
           <div className="list asset-modal-list" style={{ width: 240, minWidth: 240, overflowY: 'auto' }}>
-            {store.skills.length === 0 && (
+            {skills.length === 0 && (
               <div className="row" style={{ color: 'var(--fg-subtle)' }}>暂无可用技能</div>
             )}
-            {store.skills.map((s) => (
+            {skills.map((s) => (
               <button
                 key={s.id}
                 className="row"

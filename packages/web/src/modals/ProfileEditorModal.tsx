@@ -3,6 +3,7 @@ import type { Profile } from '@helm/protocol'
 import { ApiClientError, assetsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { collectEnabledPluginIds, isProfileVisible } from '../shell/sidebar-model.js'
 import {
   argsTextToArgs,
   argsToText,
@@ -29,17 +30,19 @@ function confirmDiscard(profileId: string | null): boolean {
   return window.confirm(`${label} 有未保存的修改，确定放弃吗？`)
 }
 
-/** 左侧 Profile 列表。 */
+/** 左侧 Profile 列表（herdr 未启用时不渲染 herdr 徽章，零插件痕迹）。 */
 function ProfileListPanel({
   profiles,
   selectedId,
   onSelect,
   onCreate,
+  herdrEnabled,
 }: {
   profiles: Profile[]
   selectedId: string | null
   onSelect: (id: string) => void
   onCreate: () => void
+  herdrEnabled: boolean
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
@@ -68,7 +71,7 @@ function ProfileListPanel({
           >
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, width: '100%', justifyContent: 'space-between' }}>
               <span style={{ fontWeight: 500, fontSize: 12.5 }}>{p.name || p.id}</span>
-              {p.runtime?.kind === 'herdr' && (
+              {herdrEnabled && p.runtime?.kind === 'herdr' && (
                 <span className="badge badge-accent">
                   <HelmIcon name="terminal" size={10} />
                   herdr
@@ -86,17 +89,23 @@ function ProfileListPanel({
   )
 }
 
-/** Tab 1：基础与 Herdr 运行时。 */
+/**
+ * Tab 1：基础与 Herdr 运行时。
+ * herdr 插件未启用时完全不渲染 Herdr 运行时卡片：仅历史遗留 runtime 配置
+ * 预留一行克制提示与清除入口，不展开大段表单。
+ */
 function ProfileBasicTab({
   draft,
   patch,
   isNew,
   models,
+  herdrEnabled,
 }: {
   draft: ProfileDraft
   patch: (next: Profile) => void
   isNew: boolean
   models: Array<{ id: string; available?: boolean; thinkingLevels?: string[] }>
+  herdrEnabled: boolean
 }) {
   const profile = draft.profile
   const [runtimeEnabled, setRuntimeEnabled] = useState(profile.runtime !== undefined)
@@ -179,7 +188,7 @@ function ProfileBasicTab({
           id="helm-profile-tags"
           className="input mono"
           value={tagsToText(profile.tags)}
-          placeholder="逗号分隔，如 worker, coder"
+          placeholder="逗号分隔，如 research, coding"
           onChange={(e) => patch({ ...profile, tags: textToTags(e.target.value) })}
         />
         <label htmlFor="helm-profile-node" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>节点</label>
@@ -200,139 +209,160 @@ function ProfileBasicTab({
         />
       </div>
 
-      <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={runtimeEnabled}
-            onChange={(e) => {
-              const enabled = e.target.checked
-              setRuntimeEnabled(enabled)
-              if (enabled && !profile.runtime) {
-                patchRuntime({ kind: 'herdr', agent: '' })
-              } else if (!enabled) {
-                patchRuntime(undefined)
-              }
-            }}
-          />
-          <span style={{ fontWeight: 600, fontSize: 12.5 }}>
-            <HelmIcon name="terminal" size={13} /> 外部 Herdr 运行时
+      {!herdrEnabled && runtime !== undefined && (
+        <div
+          className="card"
+          style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 12px' }}
+        >
+          <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            该 Profile 遗留外部运行时配置（{runtime.kind}），启用对应插件后可编辑
           </span>
-          <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>（可选）作为 subagent 时绑定 Herdr CLI</span>
-        </label>
+          <button
+            className="btn btn-sm"
+            title="清除遗留的外部运行时配置"
+            onClick={() => patch({ ...profile, runtime: undefined })}
+          >
+            <HelmIcon name="x" size={12} />
+            清除
+          </button>
+        </div>
+      )}
 
-        {runtimeEnabled && runtime && (
-          <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: '8px 12px', alignItems: 'center' }}>
-            <label htmlFor="helm-runtime-agent" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Agent</label>
+      {herdrEnabled && (
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
             <input
-              id="helm-runtime-agent"
-              className="input mono"
-              list="helm-herdr-agents"
-              value={runtime.agent}
-              placeholder="如 pi / claude / codex / agy"
-              onChange={(e) => patchRuntimeField({ agent: e.target.value })}
-            />
-            <datalist id="helm-herdr-agents">
-              {COMMON_HERDR_AGENTS.map((a) => (
-                <option key={a} value={a} />
-              ))}
-            </datalist>
-            <label htmlFor="helm-runtime-node" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>节点</label>
-            <input
-              id="helm-runtime-node"
-              className="input mono"
-              value={runtime.nodeId ?? ''}
-              placeholder="Herdr 目标节点，留空继承 Profile 或父会话节点"
-              onChange={(e) => patchRuntimeField({ nodeId: e.target.value })}
-            />
-            <label htmlFor="helm-runtime-workspace" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Workspace</label>
-            <input
-              id="helm-runtime-workspace"
-              className="input mono"
-              value={runtime.workspace ?? ''}
-              placeholder="绑定工作目录绝对路径"
-              onChange={(e) => patchRuntimeField({ workspace: e.target.value })}
-            />
-            <label htmlFor="helm-runtime-args" style={{ fontSize: 12, color: 'var(--fg-muted)', alignSelf: 'start', paddingTop: 6 }}>Args</label>
-            <textarea
-              id="helm-runtime-args"
-              className="textarea mono"
-              style={{ minHeight: 64, fontSize: 12, resize: 'vertical' }}
-              spellCheck={false}
-              value={argsText}
-              placeholder={'每行一个参数，参数内的空格会原样保留，如：\n--prompt\n--title 周报 草稿'}
+              type="checkbox"
+              checked={runtimeEnabled}
               onChange={(e) => {
-                setArgsText(e.target.value)
-                patchRuntimeField({ args: argsTextToArgs(e.target.value) })
+                const enabled = e.target.checked
+                setRuntimeEnabled(enabled)
+                if (enabled && !profile.runtime) {
+                  patchRuntime({ kind: 'herdr', agent: '' })
+                } else if (!enabled) {
+                  patchRuntime(undefined)
+                }
               }}
             />
-          </div>
-        )}
-
-        {runtimeEnabled && runtime && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-              环境变量（仅非机密项；API Key 请使用凭据库）
+            <span style={{ fontWeight: 600, fontSize: 12.5 }}>
+              <HelmIcon name="terminal" size={13} /> 外部 Herdr 运行时
             </span>
-            {envPairs.map((pair, idx) => {
-              const keyId = `helm-runtime-env-key-${idx}`
-              const valueId = `helm-runtime-env-value-${idx}`
-              return (
-                <div key={idx} style={{ display: 'flex', gap: 6 }}>
-                  <input
-                    id={keyId}
-                    className="input mono"
-                    style={{ flex: 1 }}
-                    placeholder="KEY"
-                    aria-label={`环境变量 ${idx + 1} 键名`}
-                    value={pair.key}
-                    onChange={(e) => {
-                      const next = [...envPairs]
-                      next[idx] = { ...pair, key: e.target.value }
-                      setEnvPairs(next)
-                      patchRuntimeField({ env: pairsToEnvOrUndefined(next) })
-                    }}
-                  />
-                  <input
-                    id={valueId}
-                    className="input mono"
-                    style={{ flex: 1 }}
-                    placeholder="VALUE"
-                    aria-label={`环境变量 ${idx + 1} 值`}
-                    value={pair.value}
-                    onChange={(e) => {
-                      const next = [...envPairs]
-                      next[idx] = { ...pair, value: e.target.value }
-                      setEnvPairs(next)
-                      patchRuntimeField({ env: pairsToEnvOrUndefined(next) })
-                    }}
-                  />
-                  <button
-                    className="btn btn-sm"
-                    aria-label={`删除环境变量 ${pair.key || idx + 1}`}
-                    title="删除该变量"
-                    onClick={() => {
-                      const next = envPairs.filter((_, i) => i !== idx)
-                      setEnvPairs(next)
-                      patchRuntimeField({ env: pairsToEnvOrUndefined(next) })
-                    }}
-                  >
-                    <HelmIcon name="x" size={12} />
-                  </button>
-                </div>
-              )
-            })}
-            <button
-              className="btn btn-sm"
-              style={{ width: 'fit-content' }}
-              onClick={() => setEnvPairs((prev) => [...prev, { key: '', value: '' }])}
-            >
-              <HelmIcon name="plus" size={12} />
-              添加变量
-            </button>
-          </div>
-        )}
-      </div>
+            <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>（可选）作为 subagent 时绑定 Herdr CLI</span>
+          </label>
+
+          {runtimeEnabled && runtime && (
+            <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: '8px 12px', alignItems: 'center' }}>
+              <label htmlFor="helm-runtime-agent" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Agent</label>
+              <input
+                id="helm-runtime-agent"
+                className="input mono"
+                list="helm-herdr-agents"
+                value={runtime.agent}
+                placeholder="如 pi / claude / codex / agy"
+                onChange={(e) => patchRuntimeField({ agent: e.target.value })}
+              />
+              <datalist id="helm-herdr-agents">
+                {COMMON_HERDR_AGENTS.map((a) => (
+                  <option key={a} value={a} />
+                ))}
+              </datalist>
+              <label htmlFor="helm-runtime-node" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>节点</label>
+              <input
+                id="helm-runtime-node"
+                className="input mono"
+                value={runtime.nodeId ?? ''}
+                placeholder="Herdr 目标节点，留空继承 Profile 或父会话节点"
+                onChange={(e) => patchRuntimeField({ nodeId: e.target.value })}
+              />
+              <label htmlFor="helm-runtime-workspace" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Workspace</label>
+              <input
+                id="helm-runtime-workspace"
+                className="input mono"
+                value={runtime.workspace ?? ''}
+                placeholder="绑定工作目录绝对路径"
+                onChange={(e) => patchRuntimeField({ workspace: e.target.value })}
+              />
+              <label htmlFor="helm-runtime-args" style={{ fontSize: 12, color: 'var(--fg-muted)', alignSelf: 'start', paddingTop: 6 }}>Args</label>
+              <textarea
+                id="helm-runtime-args"
+                className="textarea mono"
+                style={{ minHeight: 64, fontSize: 12, resize: 'vertical' }}
+                spellCheck={false}
+                value={argsText}
+                placeholder={'每行一个参数，参数内的空格会原样保留，如：\n--prompt\n--title 周报 草稿'}
+                onChange={(e) => {
+                  setArgsText(e.target.value)
+                  patchRuntimeField({ args: argsTextToArgs(e.target.value) })
+                }}
+              />
+            </div>
+          )}
+
+          {runtimeEnabled && runtime && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                环境变量（仅非机密项；API Key 请使用凭据库）
+              </span>
+              {envPairs.map((pair, idx) => {
+                const keyId = `helm-runtime-env-key-${idx}`
+                const valueId = `helm-runtime-env-value-${idx}`
+                return (
+                  <div key={idx} style={{ display: 'flex', gap: 6 }}>
+                    <input
+                      id={keyId}
+                      className="input mono"
+                      style={{ flex: 1 }}
+                      placeholder="KEY"
+                      aria-label={`环境变量 ${idx + 1} 键名`}
+                      value={pair.key}
+                      onChange={(e) => {
+                        const next = [...envPairs]
+                        next[idx] = { ...pair, key: e.target.value }
+                        setEnvPairs(next)
+                        patchRuntimeField({ env: pairsToEnvOrUndefined(next) })
+                      }}
+                    />
+                    <input
+                      id={valueId}
+                      className="input mono"
+                      style={{ flex: 1 }}
+                      placeholder="VALUE"
+                      aria-label={`环境变量 ${idx + 1} 值`}
+                      value={pair.value}
+                      onChange={(e) => {
+                        const next = [...envPairs]
+                        next[idx] = { ...pair, value: e.target.value }
+                        setEnvPairs(next)
+                        patchRuntimeField({ env: pairsToEnvOrUndefined(next) })
+                      }}
+                    />
+                    <button
+                      className="btn btn-sm"
+                      aria-label={`删除环境变量 ${pair.key || idx + 1}`}
+                      title="删除该变量"
+                      onClick={() => {
+                        const next = envPairs.filter((_, i) => i !== idx)
+                        setEnvPairs(next)
+                        patchRuntimeField({ env: pairsToEnvOrUndefined(next) })
+                      }}
+                    >
+                      <HelmIcon name="x" size={12} />
+                    </button>
+                  </div>
+                )
+              })}
+              <button
+                className="btn btn-sm"
+                style={{ width: 'fit-content' }}
+                onClick={() => setEnvPairs((prev) => [...prev, { key: '', value: '' }])}
+              >
+                <HelmIcon name="plus" size={12} />
+                添加变量
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -354,7 +384,19 @@ export function ProfileEditorModal({
   onClose: () => void
 }) {
   const store = useHelmStore()
-  const [selectedId, setSelectedId] = useState<string | null>(initialProfileId ?? store.profiles[0]?.id ?? null)
+  const enabledPluginIds = useMemo(() => collectEnabledPluginIds(store.plugins), [store.plugins])
+  // 列表与默认选中仅消费可见 Profile：插件未启用时其自举 Profile 不残留痕迹。
+  const profiles = useMemo(
+    () => store.profiles.filter((p) => isProfileVisible(p, enabledPluginIds)),
+    [store.profiles, enabledPluginIds],
+  )
+  const herdrEnabled = useMemo(
+    () => store.plugins.some((p) => p.id === 'builtin:herdr' && p.enabled),
+    [store.plugins],
+  )
+  const [selectedId, setSelectedId] = useState<string | null>(
+    initialProfileId ?? store.profiles.find((p) => isProfileVisible(p, enabledPluginIds))?.id ?? null,
+  )
   const [isNew, setIsNew] = useState(false)
   const [draft, setDraft] = useState<ProfileDraft | null>(null)
   const [loading, setLoading] = useState(false)
@@ -366,7 +408,16 @@ export function ProfileEditorModal({
   // 请求代数守卫：快速切换 Profile 时慢返回的旧详情不得写入新 Profile 草稿。
   const detailGeneration = useRef(0)
 
-  const profiles = store.profiles
+  const profilesRef = useRef(profiles)
+  profilesRef.current = profiles
+  // 插件启停导致当前选中 Profile 被隐藏时，自动切换到首个可见 Profile，不留悬空选中。
+  useEffect(() => {
+    setSelectedId((current) => {
+      if (current === null || isNew) return current
+      return profilesRef.current.some((p) => p.id === current) ? current : (profilesRef.current[0]?.id ?? null)
+    })
+  }, [profiles, isNew])
+
   const dirty = draft !== null && isDraftDirty(draft)
 
   const loadDetail = useCallback(async (id: string) => {
@@ -503,7 +554,7 @@ export function ProfileEditorModal({
       await store.refreshAssets()
       store.pushNotice({ type: 'notification', level: 'info', title: 'Profile 已删除', body: selectedId })
       setIsNew(false)
-      const nextId = store.profiles.find((p) => p.id !== selectedId)?.id ?? null
+      const nextId = profiles.find((p) => p.id !== selectedId)?.id ?? null
       setSelectedId(nextId)
       setDraft(null)
     } catch (err) {
@@ -560,6 +611,7 @@ export function ProfileEditorModal({
               selectedId={isNew ? null : selectedId}
               onSelect={selectProfile}
               onCreate={startCreate}
+              herdrEnabled={herdrEnabled}
             />
           </div>
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -600,6 +652,7 @@ export function ProfileEditorModal({
                   patch={patchProfile}
                   isNew={isNew}
                   models={store.models}
+                  herdrEnabled={herdrEnabled}
                 />
               )}
               {!loading && draft && tab === 'system' && (

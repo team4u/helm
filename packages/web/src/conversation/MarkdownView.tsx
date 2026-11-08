@@ -30,6 +30,22 @@ function StandardCodeBlock({ language, code }: CodeBlockProps) {
   )
 }
 
+/**
+ * 独立语法高亮代码块（产物预览等非 Markdown 场景消费）：
+ * 语言为空串时优雅回退普通等宽代码样式，不猜造语言。
+ */
+export function CodeBlockView({ code, language }: { code: string; language: string }) {
+  return (
+    <div className="code-block-wrap" style={{ margin: 0 }}>
+      <div className="code-block-header">
+        <span>{language === '' ? 'text' : language}</span>
+        <CopyButton text={code} />
+      </div>
+      <SyntaxCode code={code} language={language} />
+    </div>
+  )
+}
+
 /** mermaid 图：250ms 防抖渲染 SVG 内联展示；右上角「放大预览」与「复制源码」。 */
 function MermaidBlock({ code }: { code: string }) {
   const [svg, setSvg] = useState<string | null>(null)

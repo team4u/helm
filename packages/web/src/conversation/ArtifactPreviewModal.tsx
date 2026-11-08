@@ -3,7 +3,8 @@ import type { ArtifactMetadata } from '@helm/protocol'
 import { artifactsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
-import { MarkdownView } from './MarkdownView.js'
+import { detectLanguage } from './code-language.js'
+import { CodeBlockView, MarkdownView } from './MarkdownView.js'
 import { formatBytes } from './timeline-model.js'
 
 export interface ArtifactPreviewModalProps {
@@ -29,7 +30,7 @@ function looksLikeText(mime: string): boolean {
   return TEXT_MIME_RE.test(mime)
 }
 
-/** 产物智能预览：Markdown 富文本/源码切换、代码/JSON 等宽、图片/PDF/音视频 ObjectURL。 */
+/** 产物智能预览：Markdown 富文本/源码切换、代码/JSON 语法高亮、图片/PDF/音视频 ObjectURL。 */
 export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: ArtifactPreviewModalProps) {
   const store = useHelmStore()
   const [state, setState] = useState<LoadState>({ phase: 'loading' })
@@ -86,6 +87,8 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
   const isPdf = mime === 'application/pdf'
   const isTextLike = !isImage && !isAudio && !isVideo && !isPdf && (looksLikeText(mime) || isMarkdown(meta?.name, mime))
   const markdown = isMarkdown(meta?.name, mime)
+  // Markdown 源码模式固定 markdown 高亮；其他文本产物按后缀 / mimeType 推导语言。
+  const language = markdown ? 'markdown' : detectLanguage(meta?.name, mime)
 
   const download = (): void => {
     void artifactsApi.downloadToBrowser(artifactId, name).catch((error: unknown) => store.pushNotice({ type: 'notification', level: 'error', title: '下载失败', body: error instanceof Error ? error.message : String(error) }))
@@ -171,12 +174,9 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
             ) : markdown && view === 'rich' && text !== null ? (
               <MarkdownView text={text} conversationId={conversationId} />
             ) : (
-              <pre
-                className="code-block-pre selectable"
-                style={{ background: 'var(--bg-subtle)', borderRadius: 'var(--radius-sm)', minHeight: 200 }}
-              >
-                <code>{text ?? '正在读取文本…'}</code>
-              </pre>
+              <div style={{ overflow: 'auto', minHeight: 200 }}>
+                <CodeBlockView code={text ?? '正在读取文本…'} language={language} />
+              </div>
             )
           ) : null}
         </div>
