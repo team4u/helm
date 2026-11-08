@@ -2,7 +2,7 @@
 
 Helm 是以 `pi-durable` 为底座的持久会话微内核。五个包分别负责共享契约（`@helm/protocol`）、Hub 与插件宿主（`@helm/kernel`，命令 `helm-hub`）、HTTP/SSE 客户端（`@helm/cli`，命令 `helm`）、受控节点守护进程（`@helm/node`，命令 `helm-node`）和 Web 界面（`@helm/web`）。
 
-核心、常驻 `builtin:assistant` 和 CLI 已实现；`builtin:herdr` 按需启用，负责终端 Agent 委派；实验性 `builtin:superagent` 按需启用，提供独立中枢、后台 Worker 与两层巡检；`builtin:triggers` 按需启用，提供 `cron` 与 `webhook` 入站触发器；`builtin:magpie` 按需启用，提供动态模型目录、原生协议分发及网关配额与路由视图。Web 外壳提供会话画布、审批和插件视图。架构约束见 [AGENTS.md](./AGENTS.md)，目标设计见 [设计文档](./docs/20261106%20helm极简微内核与双7扩展点设计文档.md)。当前验收记录见 [Triggers 开发交接](./docs/20261107-Triggers开发交接.md)，此前记录见 [SuperAgent 开发交接](./docs/20261107-SuperAgent开发交接.md)、[Herdr 开发交接](./docs/20261107-Herdr开发交接.md) 与 [核心开发交接](./docs/20261106-核心开发交接.md)。
+核心、常驻 `builtin:assistant` 和 CLI 已实现；`builtin:herdr` 按需启用，负责终端 Agent 委派；实验性 `builtin:superagent` 按需启用，提供独立中枢、后台 Worker 与两层巡检；`builtin:triggers` 按需启用，提供 `cron` 与 `webhook` 入站触发器；`builtin:magpie` 按需启用，提供动态模型目录、原生协议分发及网关配额与路由视图。Web 外壳提供会话画布、审批和插件视图。架构约束见 [AGENTS.md](./AGENTS.md)，目标设计见 [设计文档](./docs/20261106%20helm极简微内核与双7扩展点设计文档.md)。本轮验收记录见 [插件收口与界面隔离验收](./docs/20261108-插件收口与界面隔离验收.md)，此前记录见 [Triggers 开发交接](./docs/20261107-Triggers开发交接.md)、 [SuperAgent 开发交接](./docs/20261107-SuperAgent开发交接.md)、[Herdr 开发交接](./docs/20261107-Herdr开发交接.md) 与 [核心开发交接](./docs/20261106-核心开发交接.md)。
 
 需要 Node.js 24.12 或更新版本及 pnpm。
 
@@ -18,6 +18,8 @@ pnpm test
 ```bash
 HELM_PORT=3202 pnpm dev:kernel
 ```
+
+构建后，Hub 默认直接托管 `packages/web/dist`，浏览器可从同一个端口打开 Web 界面。通过 `HELM_WEB_DIST_DIR=/绝对路径/dist` 指定静态目录，或设为 `false` 禁用托管。静态资源与 SPA 路由由 Hub 提供，`/api` 仍使用原有鉴权与错误契约。
 
 默认监听 `127.0.0.1:3202`，数据目录为 `~/.helm`。通过 `HELM_DATA_DIR` 可指定独立数据目录。部署时可通过反向代理转发 HTTP 与 `/ws/node`，或设置 `HELM_HOST=0.0.0.0` 接受远端连接；节点的 Hub URL 应指向其实际可达地址。会话模型按“会话显式覆盖 > 所属 Profile 的 `model` > 全局默认”解析；全局默认按启动参数、`HELM_MODEL`、`config.json.model` 顺序读取。`PATCH { "model": "" }` 清除会话覆盖并恢复继承，切换 Profile 时同步更新继承模型。模型凭据使用凭据服务配置，未配置模型时提交输入会返回显式错误。
 
@@ -69,7 +71,33 @@ timeout 50s node scripts/env-node-smoke.mjs
 
 SSE 首帧包含会话、审批、启用插件 UI、计算节点和工作流运行摘要；随后推送时间线条目、流式状态、节点在线状态、公开插件文档和工作流更新。插件文档必须显式声明 `public: true` 才能通过 `helm plugins doc <id> <name>` 读取，仍需 Hub 鉴权。`helm workflows runs --json` 可查看运行摘要。
 
-项目处于开发阶段，不考虑向后兼容，不做数据迁移。代码、接口、配置和数据库结构可直接按最新设计调整；结构变化时可以清理开发数据并重新初始化。同一结构下的会话、记忆和工作流重启恢复仍需保证。外部插件的 `client.tsx` 编译交付后续实现；内置插件的轻量 UI 使用 JSON Spec，复杂 Screen 由 Web 内置组件表映射。
+项目处于开发阶段，不考虑向后兼容，不做数据迁移。代码、接口、配置和数据库结构可直接按最新设计调整；结构变化时可以清理开发数据并重新初始化。同一结构下的会话、记忆和工作流重启恢复仍需保证。插件 UI 支持 JSON Spec 与 `client.tsx` 双轨；客户端源码在插件根目录内编译，复用宿主 React，可用 `helm plugins client <id> --module client.tsx --json` 查看编译信息。
+
+插件停用时，Web 撤下其导航、视图与输入区贡献，并隐藏带 `managedByPlugin` 标记的专属 Profile 和 Skill。Herdr 的 Profile 运行时表单仅在插件启用时显示；已有运行时配置保留，可显式清除。插件创建的托管会话和子会话不会回落到“我的对话”。这些显示规则不删除资产，也不根据名称猜测用户自建角色的归属。
+
+外部插件放在 `<HELM_DATA_DIR>/plugins/<目录>/`（缺省 `~/.helm/plugins/`）。Hub 启动时读取 `plugin.json` 的 `main`，或依次探测 `index.mjs`、`index.js`、`plugin.mjs`、`plugin.js`。无清单与入口的目录视为插件数据目录并跳过；损坏清单、非法入口与加载错误明确报错。入口导出 `default` 或具名 `plugin` 对象，使用与内置插件相同的 `definePlugin(ctx)` 契约；客户端源根目录缺省为该插件目录。
+
+例如，将以下内容保存为 `~/.helm/plugins/example/index.mjs` 后重启 Hub：
+
+```js
+export default {
+  id: 'example',
+  name: '示例插件',
+  definePlugin(ctx) {
+    ctx.action({
+      id: 'ping',
+      description: '检查示例动作',
+      inputSchema: { type: 'object', additionalProperties: false },
+      outputSchema: {
+        type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'],
+      },
+      handler() { return { ok: true } },
+    })
+  },
+}
+```
+
+外部插件首次注册时停用；运行 `helm plugins enable example --json` 后即可调用 `helm example ping --json`。启停状态跨重启保留。插件是可信的进程内代码，导入时即可执行顶层代码，停用不提供代码沙箱。
 
 `builtin:magpie` 默认停用。通过「插件与设置」配置网关地址与 API Key，再启用插件；缺省地址为 Hub 所在机器的 `http://127.0.0.1:3425`。插件按网关目录中的 `native_endpoints` 为每个模型选择 Responses、Anthropic Messages 或 Chat Completions，保留思考档位与 Claude 自适应思考元数据。网关未提供模型价格，目录中的零价格不代表实际调用免费。远端网关可提供模型与路由请求，本机专属的配额和路由诊断能力会明确报告是否可用。
 
@@ -94,7 +122,7 @@ pnpm helm superagent set_router_mode --input '{"enabled":false}' --json
 pnpm helm superagent archive_worker --worker-conversation-id <会话ID> --json
 ```
 
-中枢的 `dispatch_worker` 创建持久 Worker 并提交任务后立即返回，不等待 Worker 回合完成。Worker 可绑定用户的专家 Profile，并在回合内使用 `subagent` 或 `SubagentWorkflow` 调用 Herdr。路由模式开启时，中枢移除重度执行工具；普通助理和专家单聊保持原有工具集。Worker 回合包含 `agent` 或 `trigger` 来源时，结算后向中枢汇报；纯 `human` 回合仅更新 `recall-graph`。归档保留历史与产物，并解除 `threadKey` 订阅。公开文档 `subscriptions` 与 `recall-graph` 可通过同一 `plugins doc` 命令读取。
+中枢的 `dispatch_worker` 创建持久 Worker 并提交任务后立即返回，不等待 Worker 回合完成。Worker 可绑定用户的专家 Profile，通过 `--node-id <节点>` 与 `--cwd <目标节点绝对路径>` 指定执行位置，支持 POSIX、Windows 盘符和 UNC 路径，并在回合内使用 `subagent` 或 `SubagentWorkflow` 调用 Herdr。路由模式开启时，中枢移除重度执行工具；普通助理和专家单聊保持原有工具集。Worker 回合包含 `agent` 或 `trigger` 来源时，结算后向中枢汇报；纯 `human` 回合仅更新 `recall-graph`。归档保留历史与产物，并解除 `threadKey` 订阅。公开文档 `subscriptions` 与 `recall-graph` 可通过同一 `plugins doc` 命令读取。
 
 Watchdog 根据权威状态序号去重，对异常先执行确定性规则，再按需唤醒独立排障会话。自动恢复和中止在执行前复核持久归属；人类会话与窗格只允许诊断和通知。缺少权威水位的目标只通知；Herdr 状态持续很久不能单独作为自动中止依据。Watchdog 的模型工具受声明与执行双重约束，不能通过 Shell 或 `run_action` 绕过归属检查。插件管理动作自动提供 HTTP、CLI 和工作流入口；UI 贡献经 SSE 发布，由 Web 外壳渲染。
 
