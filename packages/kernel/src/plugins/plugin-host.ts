@@ -49,6 +49,8 @@ import {
   type PluginConfigFieldSchema,
   type PluginDefinition,
   type PluginDocHandle,
+  type PluginDocOptions,
+  type PluginSessionDocHandle,
   type PublicPluginDoc,
   type PluginRouteSpec,
   type PluginServiceSpec,
@@ -66,6 +68,10 @@ import {
   type WorkbenchPanelSpec,
   type CommandSpec,
   type SettingsPanelSpec,
+  type ConversationActionSpec,
+  type PluginSlotContributionSpec,
+  type ProfileRuntimeUiSpec,
+  type TimelineEntryActionSpec,
 } from '@helm/protocol';
 import type { Provider } from '@earendil-works/pi-ai';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
@@ -2222,6 +2228,40 @@ export class PluginHost {
         return handle;
       },
 
+      sessionDoc: <TState>(name: string, initial: TState, opts?: PluginDocOptions): PluginSessionDocHandle<TState> => {
+        assertOpen(`声明 sessionDoc ${name}`);
+        self.assertValidId('sessionDoc', name);
+        const store = self.options.docs;
+        const normalizedInitial = jsonClone(initial);
+        const sessionKeys = new Map<number, string>();
+        const getSessionKey = (convId: number) => {
+          let k = sessionKeys.get(convId);
+          if (!k) {
+            k = `${pluginId}:session:${convId}:${name}`;
+            sessionKeys.set(convId, k);
+          }
+          return k;
+        };
+        const handle: PluginSessionDocHandle<TState> = {
+          get: (convId: number) => jsonClone(store.get<TState>(getSessionKey(convId), normalizedInitial)),
+          set: (convId: number, next: TState) => {
+            const safe = jsonClone(next);
+            store.set(getSessionKey(convId), safe);
+          },
+          update: (convId: number, fn: (current: TState) => TState) => {
+            const safe = jsonClone(fn(jsonClone(store.get<TState>(getSessionKey(convId), normalizedInitial))));
+            store.set(getSessionKey(convId), safe);
+          },
+          delete: (convId: number) => {
+            store.set(getSessionKey(convId), normalizedInitial);
+            sessionKeys.delete(convId);
+          },
+          listConversationIds: () => Array.from(sessionKeys.keys()),
+          flush: async () => store.flush(),
+        };
+        return handle;
+      },
+
       service: (spec: PluginServiceSpec) => {
         assertOpen(`声明服务 ${spec.id}`);
         self.assertValidId('服务', spec.id);
@@ -2277,6 +2317,11 @@ export class PluginHost {
         workbenchPanel: (spec: WorkbenchPanelSpec) => addUi('workbench.panel', spec, 'workbenchPanel'),
         command: (spec: CommandSpec) => addUi('commandPalette', spec, 'command'),
         settingsPanel: (spec: SettingsPanelSpec) => addUi('settings.panel', spec, 'settingsPanel'),
+        profileRuntime: (spec: ProfileRuntimeUiSpec) => addUi('profile.runtime', spec, 'profileRuntime'),
+        conversationHeaderAction: (spec: ConversationActionSpec) => addUi('conversation.header.action', spec, 'conversationHeaderAction'),
+        conversationRowAction: (spec: ConversationActionSpec) => addUi('conversation.row.action', spec, 'conversationRowAction'),
+        timelineEntryAction: (spec: TimelineEntryActionSpec) => addUi('timeline.entry.action', spec, 'timelineEntryAction'),
+        slot: (spec: PluginSlotContributionSpec) => addUi('plugin.slot', spec, 'slot'),
       },
 
       /**
