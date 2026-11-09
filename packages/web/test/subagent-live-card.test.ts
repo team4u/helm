@@ -18,6 +18,7 @@ import { renderToString } from 'react-dom/server'
 import type { ConversationEntry, ConversationSummary, WorkflowRunSummary } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
+import { buildSubagentStreamLines } from '../src/conversation/subagent-model.js'
 import {
   subagentBadge,
   toolResultPreviewTruncated,
@@ -292,57 +293,40 @@ test('详情加载失败：显式错误提示与重试按钮，不再永远加�
   assert.ok(!html.includes('正在加载子会话'), '失败态不得显示加载中')
 })
 
-test('长工具输出：resultPreview 仅预览并标识已截断，不伪装全文', { timeout: 60_000 }, () => {
+test('长工具输出：buildSubagentStreamLines 仅预览并标识已截断，不伪装全文', { timeout: 60_000 }, () => {
   const longFirstLine = 'a'.repeat(120)
-  const store = makeStore({
-    conversations: [summary(11, 'done')],
-    conversationDetails: {
-      11: { ...summary(11, 'done'), entries: entriesWithToolResult(`${longFirstLine}\nsecond line`) },
-    },
-  })
-  const html = renderCard(store)
-  assert.ok(html.includes('a'.repeat(100)), '应渲染截断后的首行预览')
-  assert.ok(!html.includes(longFirstLine), '不得渲染未截断全文')
-  assert.ok(html.includes('已截断'), '长输出应带已截断标识')
-  assert.ok(html.includes('仅为首行预览'), '应说明仅为预览')
+  const entries = entriesWithToolResult(`${longFirstLine}\nsecond line`)
+  const lines = buildSubagentStreamLines(entries)
+  const toolLine = lines.find((l) => l.kind === 'tool')
+  assert.ok(toolLine && toolLine.kind === 'tool')
+  assert.equal(toolLine.resultPreview, `${'a'.repeat(100)}…`)
+  assert.ok(toolResultPreviewTruncated(toolLine.resultPreview))
 })
 
-test('短工具输出：完整首行预览且无截断标识', { timeout: 60_000 }, () => {
-  const store = makeStore({
-    conversations: [summary(11, 'done')],
-    conversationDetails: { 11: { ...summary(11, 'done'), entries: entriesWithToolResult('exit 0') } },
-  })
-  const html = renderCard(store)
-  assert.ok(html.includes('exit 0'))
-  assert.ok(!html.includes('已截断'))
+test('短工具输出：buildSubagentStreamLines 完整首行预览且无截断标识', { timeout: 60_000 }, () => {
+  const entries = entriesWithToolResult('exit 0')
+  const lines = buildSubagentStreamLines(entries)
+  const toolLine = lines.find((l) => l.kind === 'tool')
+  assert.ok(toolLine && toolLine.kind === 'tool')
+  assert.equal(toolLine.resultPreview, 'exit 0')
+  assert.equal(toolResultPreviewTruncated(toolLine.resultPreview), false)
 })
 
-test('thinking/text 行不套两行 clamp：类名分离由外层限高滚动', { timeout: 60_000 }, () => {
-  const store = makeStore({
-    conversations: [summary(11, 'working')],
-    conversationDetails: {
-      11: {
-        ...summary(11, 'working'),
-        entries: [
-          { id: '1', kind: 'helm.input', data: { text: '继续任务', origin: 'agent' } },
-          {
-            id: '2',
-            kind: 'pi.assistant',
-            model: [{ role: 'assistant', content: [{ type: 'thinking', thinking: '思考内容' }] }],
-          },
-        ],
-      },
+test('thinking/text 行：buildSubagentStreamLines 正确解析思考与正文', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    { id: '1', kind: 'helm.input', data: { text: '继续任务', origin: 'agent' } },
+    {
+      id: '2',
+      kind: 'pi.assistant',
+      model: [{ role: 'assistant', content: [{ type: 'thinking', thinking: '思考内容' }] }],
     },
-    conversationLives: {
-      11: { conversationId: 11, text: '流式回复正文', thinking: undefined, tools: [], updatedAt: 1 },
-    },
-  })
-  const html = renderCard(store, 'running')
-  // clamp 仅保留在 prompt 行；thinking/text 行不带 -webkit-line-clamp 相关类
-  const promptMatch = /subagent-stream-line subagent-stream-prompt/.test(html)
-  const thinkingMatch = /subagent-stream-line subagent-stream-thinking/.test(html)
-  const textMatch = /subagent-stream-line subagent-stream-text/.test(html)
-  assert.ok(promptMatch && thinkingMatch && textMatch, '三类行均应渲染')
+  ]
+  const live = { conversationId: 11, text: '流式回复正文', thinking: undefined, tools: [], updatedAt: 1 }
+  const lines = buildSubagentStreamLines(entries, live, true)
+  const kinds = lines.map((l) => l.kind)
+  assert.ok(kinds.includes('prompt'))
+  assert.ok(kinds.includes('thinking'))
+  assert.ok(kinds.includes('text'))
 })
 
 // ---------------------------------------------------------------------------
@@ -412,16 +396,15 @@ test('backgroundRun 节点携带 worktree：无显式入参时回退展示 run �
   assert.ok(!html.includes('已完成'), '不得出现已完成徽章')
 })
 
-test('backgroundRun failed：流末尾渲染简洁错误提示，不被子会话旧 idle 覆盖', { timeout: 60_000 }, () => {
+test('backgroundRun failed：副栏渲染错误提示，不被子会话旧 idle 覆盖', { timeout: 60_000 }, () => {
   const store = makeStore({
     conversations: [summary(11, 'idle')],
     conversationDetails: { 11: { ...summary(11, 'idle'), entries: [] } },
   })
   const run = bgRun({ status: 'failed', error: 'gate 验收失败：pnpm test 退出码 1' })
   const html = renderCard(store, 'done', { backgroundRun: run })
-  assert.ok(html.includes('后台执行失败'), '应显示后台失败提示')
   assert.ok(html.includes('gate 验收失败'), '应包含具体错误信息')
-  assert.ok(html.includes('subagent-bg-error'), '错误行应有独立样式类')
+  assert.ok(html.includes('subagent-live-subline-error'), '副栏应使用 error 变体样式类')
   assert.ok(html.includes('异常'), '徽章应显示异常态')
 })
 
@@ -952,14 +935,16 @@ test('工作流业务卡隐藏重复工具行，但保留本次调用入参和�
   assert.ok(html.includes('原始工作流返回结果'))
 })
 
-test('展开子代理卡保留原始调用详情，与子会话日志分离', { timeout: 60_000 }, () => {
+test('子代理卡为极简胶囊卡：不渲染内联展开箭头与调用详情，由工作台与分屏承载', { timeout: 60_000 }, () => {
   const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [summary(11, 'done')] }) },
     e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done', defaultExpanded: true,
       toolCall: { key: 'tool:a', toolName: 'subagent', callId: 'a', status: 'done', isError: false, input: { resume: 11, prompt: '本次原始续接指令' }, resultText: '本次父工具原始输出' },
     })))
-  assert.ok(html.includes('调用详情'))
-  assert.ok(html.includes('本次原始续接指令'))
-  assert.ok(html.includes('本次父工具原始输出'))
+  assert.ok(!html.includes('subagent-live-toggle'), '不得渲染折叠展开箭头')
+  assert.ok(!html.includes('subagent-live-stream'), '不得内联渲染实时流')
+  assert.ok(!html.includes('进入会话'), '不得渲染进入会话页面按钮')
+  assert.ok(html.includes('并排查看'), '应保留并排查看分屏入口')
+  assert.ok(html.includes('点击打开工作台查看任务详情'), '应支持点击卡片打开工作台查看任务详情')
 })
 
 const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/u

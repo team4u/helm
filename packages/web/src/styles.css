@@ -1995,13 +1995,14 @@ textarea {
   border-bottom: 1px solid var(--border);
 }
 
-/* 等待审批 / 异常态左侧描边强调 */
+/* 等待审批左侧描边强调 */
 .subagent-live-card-warn {
   border-left: 3px solid var(--warn);
 }
 
 .subagent-live-card-error {
-  border-left: 3px solid var(--err);
+  /* 异常态状态徽章（badge-err）与副栏已具备明确视觉提示；卡片容器本身不设置红色边框 */
+  border-left: none;
 }
 
 /* 第 1 层触发按钮：左图标 + 标题 + 徽章 + 统计尾注为一个整体可点击区 */
