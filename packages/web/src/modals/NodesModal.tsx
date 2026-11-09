@@ -7,6 +7,7 @@ import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { CopyButton } from '../conversation/CopyButton.js'
 import { Checkbox } from '../ui/Checkbox.js'
+import { Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
 import { deepLinkSelection, shouldSyncSelectionToStore } from './list-modal-selection.js'
 import {
   buildNodeConnectGuide,
@@ -814,25 +815,26 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal"
-        style={{ maxWidth: 880 }}
-        role="dialog"
-        aria-modal="true"
-        aria-label="计算节点管理"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-header">
-          <span className="modal-title flex-row">
-            <HelmIcon name="network" size={15} />
-            计算节点
-          </span>
-          <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭" onClick={onClose}>
-            <HelmIcon name="x" size={14} />
-          </button>
-        </div>
-        <div className="modal-body asset-modal-body">
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogPortal>
+        <DialogOverlay className="modal-backdrop">
+          <DialogContent
+            className="modal"
+            style={{ maxWidth: 880 }}
+            aria-label="计算节点管理"
+          >
+            <div className="modal-header">
+              <DialogTitle className="modal-title flex-row">
+                <HelmIcon name="network" size={15} />
+                计算节点
+              </DialogTitle>
+              <DialogClose asChild>
+                <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭">
+                  <HelmIcon name="x" size={14} />
+                </button>
+              </DialogClose>
+            </div>
+            <div className="modal-body asset-modal-body">
           <div className="list asset-modal-list">
             <div className="flex-row">
               <button
@@ -918,7 +920,9 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
             )}
           </div>
         </div>
-      </div>
-    </div>
+          </DialogContent>
+        </DialogOverlay>
+      </DialogPortal>
+    </Dialog>
   )
 }

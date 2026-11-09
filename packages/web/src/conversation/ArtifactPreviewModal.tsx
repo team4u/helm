@@ -7,6 +7,7 @@ import { useIsMobile } from './composer-model.js'
 import { detectLanguage } from './code-language.js'
 import { CodeBlockView, MarkdownView } from './MarkdownView.js'
 import { formatBytes } from '../lib/format.js'
+import { Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
 
 export interface ArtifactPreviewModalProps {
   artifactId: string
@@ -107,25 +108,24 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
   }
 
   return (
-    <div className={`modal-backdrop${isFullscreen ? ' modal-fullscreen-backdrop' : ''}`} onClick={onClose}>
-      <div
-        className={`modal${isFullscreen ? ' modal-fullscreen' : ''}`}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`产物预览：${name}`}
-        style={isFullscreen ? undefined : { maxWidth: 'min(1100px, 94vw)', maxHeight: '90vh' }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-header artifact-preview-header">
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-            <HelmIcon name="file-text" size={14} />
-            <span className="modal-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {name}
-            </span>
-            {meta !== undefined ? (
-              <span className="badge badge-neutral mono tabular-nums">{formatBytes(meta.size)}</span>
-            ) : null}
-          </span>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogPortal>
+        <DialogOverlay className={`modal-backdrop${isFullscreen ? ' modal-fullscreen-backdrop' : ''}`}>
+          <DialogContent
+            className={`modal${isFullscreen ? ' modal-fullscreen' : ''}`}
+            aria-label={`产物预览：${name}`}
+            style={isFullscreen ? undefined : { maxWidth: 'min(1100px, 94vw)', maxHeight: '90vh' }}
+          >
+            <div className="modal-header artifact-preview-header">
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                <HelmIcon name="file-text" size={14} />
+                <DialogTitle className="modal-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {name}
+                </DialogTitle>
+                {meta !== undefined ? (
+                  <span className="badge badge-neutral mono tabular-nums">{formatBytes(meta.size)}</span>
+                ) : null}
+              </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             {markdown ? (
               <div className="segmented-control" role="group" aria-label="视图模式">
@@ -162,15 +162,16 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
               <HelmIcon name="download" size={12} />
               {!isMobile ? '下载文件' : null}
             </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-icon-sm"
-              onClick={onClose}
-              title="关闭 (Esc)"
-              aria-label="关闭预览"
-            >
-              <HelmIcon name="x" size={14} />
-            </button>
+            <DialogClose asChild>
+              <button
+                type="button"
+                className="btn btn-ghost btn-icon-sm"
+                title="关闭 (Esc)"
+                aria-label="关闭预览"
+              >
+                <HelmIcon name="x" size={14} />
+              </button>
+            </DialogClose>
           </span>
         </div>
         <div className="modal-body">
@@ -211,7 +212,9 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
             )
           ) : null}
         </div>
-      </div>
-    </div>
+          </DialogContent>
+        </DialogOverlay>
+      </DialogPortal>
+    </Dialog>
   )
 }

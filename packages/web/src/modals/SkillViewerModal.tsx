@@ -5,6 +5,7 @@ import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { collectEnabledPluginIds, isSkillVisible } from '../shell/sidebar-model.js'
 import { deepLinkSelection, fallbackSelection, shouldSyncSelectionToStore } from './list-modal-selection.js'
+import { Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
 
 const SKILL_MAIN_FILE = 'SKILL.md'
 
@@ -122,26 +123,27 @@ export function SkillViewerModal({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal"
-        style={{ maxWidth: 900 }}
-        role="dialog"
-        aria-modal="true"
-        aria-label="技能库"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-header">
-          <span className="modal-title flex-row">
-            <HelmIcon name="sparkles" size={15} />
-            技能库 Skills
-            <span className="badge badge-neutral">只读</span>
-          </span>
-          <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭" onClick={onClose}>
-            <HelmIcon name="x" size={14} />
-          </button>
-        </div>
-        <div className="modal-body asset-modal-body">
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogPortal>
+        <DialogOverlay className="modal-backdrop">
+          <DialogContent
+            className="modal"
+            style={{ maxWidth: 900 }}
+            aria-label="技能库"
+          >
+            <div className="modal-header">
+              <DialogTitle className="modal-title flex-row">
+                <HelmIcon name="sparkles" size={15} />
+                技能库 Skills
+                <span className="badge badge-neutral">只读</span>
+              </DialogTitle>
+              <DialogClose asChild>
+                <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭">
+                  <HelmIcon name="x" size={14} />
+                </button>
+              </DialogClose>
+            </div>
+            <div className="modal-body asset-modal-body">
           <div className="list asset-modal-list">
             {skills.length === 0 && (
               <div className="empty-state empty-state-compact">暂无可用技能</div>
@@ -215,7 +217,9 @@ export function SkillViewerModal({
             )}
           </div>
         </div>
-      </div>
-    </div>
+          </DialogContent>
+        </DialogOverlay>
+      </DialogPortal>
+    </Dialog>
   )
 }

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { copyToClipboard } from './clipboard.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { getMermaidConfig } from './mermaid-theme.js'
+import { Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
 
 export interface MermaidPreviewModalProps {
   code: string
@@ -391,24 +391,24 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     }
   }
 
-  if (typeof document === 'undefined') return null
-
-  return createPortal(
-    <div className="modal-backdrop modal-fullscreen-backdrop" onClick={onClose}>
-      <div className="modal modal-fullscreen" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header mermaid-modal-header">
-          <span
-            className="modal-title mermaid-modal-title"
-            style={{
-              minWidth: 0,
-              flex: 1,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            Mermaid 图预览
-          </span>
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogPortal>
+        <DialogOverlay className="modal-backdrop modal-fullscreen-backdrop">
+          <DialogContent className="modal modal-fullscreen" aria-label="Mermaid 图预览">
+            <div className="modal-header mermaid-modal-header">
+              <DialogTitle
+                className="modal-title mermaid-modal-title"
+                style={{
+                  minWidth: 0,
+                  flex: 1,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                Mermaid 图预览
+              </DialogTitle>
           <div className="mermaid-modal-actions">
             <span className="badge badge-neutral mono tabular-nums">{Math.round(scale * 100)}%</span>
             <button
@@ -473,15 +473,16 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
               复制源码
             </button>
           </div>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm mermaid-modal-close"
-            onClick={onClose}
-            title="关闭 (Esc)"
-            aria-label="关闭"
-          >
-            <HelmIcon name="x" size={13} />
-          </button>
+          <DialogClose asChild>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm mermaid-modal-close"
+              title="关闭 (Esc)"
+              aria-label="关闭"
+            >
+              <HelmIcon name="x" size={13} />
+            </button>
+          </DialogClose>
         </div>
         <div className="modal-body modal-body-flush">
           {view === 'source' ? (
@@ -527,8 +528,9 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
             </div>
           )}
         </div>
-      </div>
-    </div>,
-    document.body,
+          </DialogContent>
+        </DialogOverlay>
+      </DialogPortal>
+    </Dialog>
   )
 }

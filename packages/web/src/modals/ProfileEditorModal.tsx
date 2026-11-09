@@ -23,6 +23,7 @@ import {
   type ProfileDraft,
 } from './profile-editor-model.js'
 import { deepLinkSelection, fallbackSelection, shouldClearSelectionInStore, shouldSyncSelectionToStore } from './list-modal-selection.js'
+import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
 
 type EditorTab = 'basic' | 'system' | 'memory'
 
@@ -707,26 +708,35 @@ export function ProfileEditorModal({
   }
 
   return (
-    <div className="modal-backdrop" onClick={requestClose}>
-      <div
-        className="modal"
-        style={{ maxWidth: 860 }}
-        role="dialog"
-        aria-modal="true"
-        aria-label="角色 Profile 编辑器"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-header">
-          <span className="modal-title flex-row">
-            <HelmIcon name="bot" size={15} />
-            角色 Profile 编辑器
-            {dirty && <span className="badge badge-warn">有未保存修改</span>}
-          </span>
-          <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭" onClick={requestClose}>
-            <HelmIcon name="x" size={14} />
-          </button>
-        </div>
-        <div className="modal-body asset-modal-body">
+    <Dialog open onOpenChange={(open) => { if (!open) requestClose() }}>
+      <DialogPortal>
+        <DialogOverlay className="modal-backdrop">
+          <DialogContent
+            className="modal"
+            style={{ maxWidth: 860 }}
+            aria-label="角色 Profile 编辑器"
+            onEscapeKeyDown={(e) => {
+              if (!guardUnsaved(isNew ? null : selectedId)) {
+                e.preventDefault()
+              }
+            }}
+            onPointerDownOutside={(e) => {
+              if (!guardUnsaved(isNew ? null : selectedId)) {
+                e.preventDefault()
+              }
+            }}
+          >
+            <div className="modal-header">
+              <DialogTitle className="modal-title flex-row">
+                <HelmIcon name="bot" size={15} />
+                角色 Profile 编辑器
+                {dirty && <span className="badge badge-warn">有未保存修改</span>}
+              </DialogTitle>
+              <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭" onClick={requestClose}>
+                <HelmIcon name="x" size={14} />
+              </button>
+            </div>
+            <div className="modal-body asset-modal-body">
           <div className="asset-modal-list">
             <ProfileListPanel
               profiles={profiles}
@@ -826,7 +836,9 @@ export function ProfileEditorModal({
             保存修改
           </button>
         </div>
-      </div>
-    </div>
+          </DialogContent>
+        </DialogOverlay>
+      </DialogPortal>
+    </Dialog>
   )
 }
