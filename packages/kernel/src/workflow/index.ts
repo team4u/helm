@@ -14,6 +14,7 @@ export {
 } from './service.js'
 export {
   runWorkflow,
+  normalizeWorkflowArgs,
   validateScript,
   assertBoundarySafe,
   workflowConcurrency,

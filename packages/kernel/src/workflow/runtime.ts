@@ -284,6 +284,43 @@ export function assertBoundarySafe(value: unknown, path: string): void {
 }
 
 /**
+ * 规范化工作流 args：
+ * 模型在调用工具时常将 object/array 参数序列化为 JSON 字符串（如 '{"topics": ["a"]}'）。
+ * 若不反序列化，进入 worker 经 JSON.stringify + realmParse 闭环后仍为 string，
+ * 导致脚本内 args.items.map 报 TypeError。
+ *
+ * 此函数安全地将 JSON 对象/数组字符串解包为真实对象/数组；
+ * 标量（数字、布尔、普通字符串）及真对象/数组原样保持。
+ */
+export function normalizeWorkflowArgs(raw: unknown): unknown {
+  if (raw === undefined || raw === null) return raw
+  let current = raw
+  // 最多解包 2 层，防御模型端可能产生的双重 JSON 序列化
+  for (let i = 0; i < 2 && typeof current === 'string'; i++) {
+    const trimmed = current.trim()
+    if (
+      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))
+    ) {
+      try {
+        current = JSON.parse(trimmed)
+      } catch {
+        break
+      }
+    } else if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+      try {
+        current = JSON.parse(trimmed)
+      } catch {
+        break
+      }
+    } else {
+      break
+    }
+  }
+  return current
+}
+
+/**
  * 持久面值级脱敏：递归克隆并把每个字符串值经 redactText 替换（如 stash
  * secret → marker）。绝不做 stringify 后整体替换——嵌套深处的秘密必须同样
  * 被处理。边界安全值（纯对象/数组/标量）之外的原样返回。
@@ -456,7 +493,8 @@ export function validateScript(script: string): { meta: WorkflowMeta; body: stri
 export async function runWorkflow(options: RunWorkflowOptions): Promise<WorkflowRunResult> {
   const { script, host } = options
 
-  assertBoundarySafe(options.args, 'args')
+  const normalizedArgs = normalizeWorkflowArgs(options.args)
+  assertBoundarySafe(normalizedArgs, 'args')
 
   const { meta, body } = validateScript(script)
   const agentCap = options.agentCap ?? WORKFLOW_AGENT_CAP
@@ -591,7 +629,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
     workerData: {
       body,
       metaJson: JSON.stringify(meta),
-      argsJson: options.args === undefined ? undefined : JSON.stringify(options.args),
+      argsJson: normalizedArgs === undefined ? undefined : JSON.stringify(normalizedArgs),
       itemCap,
       nestedCap: options.nestedCap ?? WORKFLOW_NESTED_CAP,
     },

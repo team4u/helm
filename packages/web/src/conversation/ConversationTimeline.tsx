@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AskSpec,
   ConversationAttachmentRef,
@@ -27,6 +27,7 @@ import {
 } from './timeline-model.js'
 import {
   collectLatestSubagentToolKeys,
+  isAssistantTurnBusy,
   resolveSubagentConversationId,
   resolveSubagentExecutionMeta,
   resolveWorkflowRunForTool,
@@ -740,10 +741,12 @@ function AssistantTurnView({
   turn,
   conversation,
   latestSubagentToolKeys,
+  isLatestTurn = false,
 }: {
   turn: AssistantTurn
   conversation: ConversationSummary
   latestSubagentToolKeys?: ReadonlyMap<number, string>
+  isLatestTurn?: boolean
 }) {
   const store = useHelmStore()
   const [forking, setForking] = useState(false)
@@ -779,6 +782,12 @@ function AssistantTurnView({
     }
   }
 
+  const isBusy = isAssistantTurnBusy(turn, conversation, {
+    isLatestTurn,
+    workflowRuns: store.workflowRuns,
+    conversations: store.conversations,
+  })
+
   return (
     <div className="msg-ai-block" tabIndex={0}>
       {turn.segments.map((seg) => {
@@ -812,18 +821,20 @@ function AssistantTurnView({
           正在等待响应…
         </span>
       ) : null}
-      <span className="msg-hover-bar">
-        {lastText !== '' ? <CopyButton text={lastText} /> : null}
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          title="从此处分叉新会话"
-          disabled={forking || turn.entryIds.length === 0}
-          onClick={() => void forkFromHere()}
-        >
-          <HelmIcon name={forking ? 'loader' : 'git-fork'} size={12} />
-        </button>
-      </span>
+      {!isBusy && (lastText !== '' || turn.entryIds.length > 0) ? (
+        <span className="msg-hover-bar">
+          {lastText !== '' ? <CopyButton text={lastText} /> : null}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            title="从此处分叉新会话"
+            disabled={forking || turn.entryIds.length === 0}
+            onClick={() => void forkFromHere()}
+          >
+            <HelmIcon name={forking ? 'loader' : 'git-fork'} size={12} />
+          </button>
+        </span>
+      ) : null}
     </div>
   )
 }
@@ -870,6 +881,13 @@ export function ConversationTimeline({
     () => collectLatestSubagentToolKeys(items, conversation.id, store.conversations),
     [items, conversation.id, store.conversations],
   )
+
+  const lastAssistantKey = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i]!.kind === 'assistant') return items[i]!.key
+    }
+    return undefined
+  }, [items])
 
   // 贴底吸附：仅当用户主动上滚时脱离贴底（内容增长导致 scrollHeight 变大不得误判为脱离）。
   useEffect(() => {
@@ -1014,7 +1032,12 @@ export function ConversationTimeline({
               ref={highlightScrollRef}
               data-entry-id={anchorId}
             >
-              <AssistantTurnView turn={item} conversation={conversation} latestSubagentToolKeys={latestSubagentToolKeys} />
+              <AssistantTurnView
+                turn={item}
+                conversation={conversation}
+                latestSubagentToolKeys={latestSubagentToolKeys}
+                isLatestTurn={item.key === lastAssistantKey}
+              />
             </div>
           )
         })}

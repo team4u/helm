@@ -641,6 +641,13 @@ export class KernelRuntime {
         cancelAsk: (askId, reason) => this.cancelAsk(askId, reason),
         registerAskSeqResolver: (resolver) => this.registerAskSeqResolver(resolver),
         onWorkflowSettled: (listener) => this.onWorkflowSettled(listener),
+        onEvent: (type, listener) =>
+          this.events.subscribe((frame) => {
+            if (frame.event.type === type) {
+              const payload = (frame.event as unknown as { payload?: unknown }).payload ?? frame.event
+              void listener(payload)
+            }
+          }),
         emitEvent: (type, payload) => this.emitHostEvent(type, payload),
       },
       docs: this.documentStore,

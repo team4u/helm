@@ -464,6 +464,94 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       await app.close()
     }
   })
+
+  it('模型 tool_call 传 JSON 字符串或双重序列化 args 时，prepareArguments 与工具执行链自动规范化，持久化记录为真实对象', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'wf3')
+    const { models, faux } = makeFauxModels()
+    const app = await createHelm({
+      dataDir: dir,
+      cwd: dir,
+      model: 'faux/faux-1',
+      models: models as never,
+      watchdogIntervalMs: 0,
+    })
+    try {
+      // 1. 模型传 JSON 字符串形式的 args 对象：'{"topics": ["星辰", "大海"], "n": 42}'
+      const probeScript =
+        'export const meta = { name: "str-args-probe", description: "p" }\n' +
+        'return { type: typeof args, count: args.topics.length, n: args.n, topics: args.topics }'
+
+      faux.setResponses([
+        fauxAssistantMessage(
+          [
+            fauxToolCall('SubagentWorkflow', {
+              script: probeScript,
+              args: '{"topics": ["星辰", "大海"], "n": 42}',
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('探针完成'),
+      ])
+      await app.kernel.submitInput(1, '跑字符串 args 探针')
+      await app.kernel.waitForIdle(1)
+
+      const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const text = toolResultText(detail, 'SubagentWorkflow')
+      const runId = extractRunId(text)
+      assert.ok(runId, `应返回 runId：${text.slice(0, 300)}`)
+
+      const parsedSummary = JSON.parse(text) as {
+        status: string
+        result?: { type: string; count: number; n: number; topics: string[] }
+      }
+      assert.equal(parsedSummary.status, 'completed', '工作流应成功执行完成')
+      assert.equal(parsedSummary.result?.type, 'object', '脚本内收到的 args 类型必须为 object 而非 string')
+      assert.equal(parsedSummary.result?.count, 2, 'args.topics.length 真实计算')
+      assert.equal(parsedSummary.result?.n, 42, 'args.n 真实保留')
+      assert.deepEqual(parsedSummary.result?.topics, ['星辰', '大海'])
+
+      // 验证持久化层：state.sqlite 中的 run record 内 args 必须为真实 dict 而非 string
+      await app.kernel.documentStore.flush?.()
+      const persistedRecord = app.kernel.documentStore.get<{ args?: unknown } | null>(`workflow/run/${runId}`, null)
+      assert.ok(persistedRecord, 'run 应在 documentStore 中落盘')
+      assert.equal(typeof persistedRecord.args, 'object', '持久化 args 必须为真对象而非字符串')
+      assert.deepEqual(persistedRecord.args, { topics: ['星辰', '大海'], n: 42 })
+
+      // 2. 双重序列化 args：JSON.stringify('{"items": [10, 20]}')
+      const doubleScript =
+        'export const meta = { name: "double-str-args", description: "d" }\n' +
+        'return args.items.map((x) => x * 2)'
+      faux.setResponses([
+        fauxAssistantMessage(
+          [
+            fauxToolCall('SubagentWorkflow', {
+              script: doubleScript,
+              args: JSON.stringify('{"items": [10, 20]}'),
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('双重序列化完成'),
+      ])
+      await app.kernel.submitInput(1, '跑双重序列化 args')
+      await app.kernel.waitForIdle(1)
+
+      const detail2 = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const text2 = toolResultText(detail2, 'SubagentWorkflow')
+      const runId2 = extractRunId(text2)
+      assert.ok(runId2, '双重序列化调用应返回 runId')
+      const parsedSummary2 = JSON.parse(text2) as { status: string; result?: unknown }
+      assert.equal(parsedSummary2.status, 'completed')
+      assert.deepEqual(parsedSummary2.result, [20, 40], '双重序列化自动解包，map 正常计算')
+      const persistedRecord2 = app.kernel.documentStore.get<{ args?: unknown } | null>(`workflow/run/${runId2}`, null)
+      assert.ok(persistedRecord2, 'run2 应在 documentStore 中落盘')
+      assert.equal(typeof persistedRecord2.args, 'object', '持久化 args 必须为真对象')
+      assert.deepEqual(persistedRecord2.args, { items: [10, 20] })
+    } finally {
+      await app.close()
+    }
+  })
 })
 
 function extractRunId(text: string): string | undefined {

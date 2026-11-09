@@ -56,6 +56,19 @@ export function createPluginClientContext(
     callAction: (actionId, input) => store.invokePluginAction(pluginId, actionId, input, conversationId),
     openScreen: (target) => store.openTarget(target),
     openSplitScreen: (target) => store.openTarget(target, { split: true }),
+    openArtifact: (artifactId) => store.setActiveModal({ kind: 'artifact-preview', artifactId, conversationId }),
+    openWorkbench: (panelId) => {
+      store.setWorkbenchOpen(true)
+      if (panelId) store.setWorkbenchTab(panelId)
+    },
+    closeWorkbench: () => store.setWorkbenchOpen(false),
+    notify: (message, tone = 'info') =>
+      store.pushNotice({
+        type: 'notification',
+        level: tone === 'warning' ? 'warning' : tone === 'error' ? 'error' : 'info',
+        title: message,
+        ...(conversationId !== undefined ? { conversationId } : {}),
+      }),
     getPluginDoc: (docName) => store.ensurePluginDoc(pluginId, docName),
     ...(conversationId !== undefined ? { conversationId } : {}),
     theme: store.theme,

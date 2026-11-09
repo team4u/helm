@@ -839,20 +839,41 @@ textarea {
   border-radius: 4px;
 }
 
-/* 消息悬停操作条 */
+/* 消息悬停操作条（纯图标按钮，无卡边框与背景，避免喧宾夺主） */
 .msg-hover-bar {
   opacity: 0;
   transition: opacity 120ms ease;
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 2px;
-  box-shadow: var(--shadow-sm);
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
   width: fit-content;
   max-width: max-content;
+}
+
+.msg-hover-bar .btn {
+  height: 22px;
+  min-height: 22px;
+  padding: 0 4px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg-muted);
+  box-shadow: none;
+}
+
+.msg-hover-bar .btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+  border: none;
+}
+
+.msg-hover-bar .btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .msg-human-row .msg-hover-bar {

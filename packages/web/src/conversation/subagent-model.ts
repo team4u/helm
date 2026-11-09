@@ -12,7 +12,7 @@ import type {
   ConversationSummary,
   WorkflowRunSummary,
 } from '@helm/protocol'
-import { buildTimelineItems, toolSummaryText, type TimelineItem, type ToolTrace, type ToolTraceStatus } from './timeline-model.js'
+import { buildTimelineItems, toolSummaryText, type AssistantTurn, type TimelineItem, type ToolTrace, type ToolTraceStatus } from './timeline-model.js'
 
 // ---------------------------------------------------------------------------
 // subagent / SubagentWorkflow 运行期关联
@@ -386,4 +386,69 @@ export function buildSubagentStreamLines(
     ...(working !== undefined ? { working } : {}),
   })
   return linesOfTimelineItems(items)
+}
+
+export interface AssistantTurnBusyOptions {
+  isLatestTurn?: boolean
+  workflowRuns?: ReadonlyArray<WorkflowRunSummary>
+  conversations?: ReadonlyArray<Pick<ConversationSummary, 'id' | 'parentConversationId' | 'parentToolCallId' | 'status'>>
+}
+
+/**
+ * 判定 assistant 回合是否仍在响应或执行在途任务中：
+ * 1. turn.live 为 true（进行中 / 流式输出 / 思考中）；
+ * 2. 最新回合且父会话处于 working 或 blocked 状态；
+ * 3. 回合内任一工具状态为 running 或 unknown；
+ * 4. step-group 仍处于 active 激活态；
+ * 5. 关联的 SubagentWorkflow 仍在 running；
+ * 6. 关联的 subagent 后台 run 仍在 running 或子会话仍为 working / blocked。
+ *
+ * 只有当本回合所有任务与响应彻底完成时才返回 false（此时才展示复制/分叉按钮组）。
+ */
+export function isAssistantTurnBusy(
+  turn: AssistantTurn,
+  conversation: { id: number; status?: string },
+  options?: AssistantTurnBusyOptions,
+): boolean {
+  if (turn.live) return true
+  if (
+    options?.isLatestTurn &&
+    (conversation.status === 'working' || conversation.status === 'blocked')
+  ) {
+    return true
+  }
+
+  const workflowRuns = options?.workflowRuns ?? []
+  const conversations = options?.conversations ?? []
+
+  const isToolRunning = (tool: ToolTrace): boolean => {
+    if (tool.status === 'running' || tool.status === 'unknown') return true
+    if (tool.toolName === 'SubagentWorkflow') {
+      const wf = resolveWorkflowRunForTool(tool, conversation.id, workflowRuns)
+      if (wf?.status === 'running') return true
+    }
+    if (tool.toolName === 'subagent') {
+      const meta = resolveSubagentExecutionMeta(tool, conversation.id, workflowRuns)
+      if (meta.run?.status === 'running') return true
+      const childId = resolveSubagentConversationId(tool, conversation.id, conversations)
+      if (childId !== undefined) {
+        const childConv = conversations.find((c) => c.id === childId)
+        if (childConv?.status === 'working' || childConv?.status === 'blocked') return true
+      }
+    }
+    return false
+  }
+
+  for (const seg of turn.segments) {
+    if (seg.kind === 'tool') {
+      if (isToolRunning(seg.tool)) return true
+    } else if (seg.kind === 'step-group') {
+      if (seg.active) return true
+      for (const step of seg.steps) {
+        if (step.kind === 'tool' && isToolRunning(step.tool)) return true
+      }
+    }
+  }
+
+  return false
 }

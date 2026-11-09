@@ -19,6 +19,7 @@ import type {
   WhenBusy,
 } from './conversation.js'
 import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
+import type { WorkflowRunSummary } from './workflow.js'
 import type { WorktreeCleanupRequest, WorktreeCleanupResult } from './worktree.js'
 
 /** JSON Schema 对象；由宿主在边界处统一校验。 */
@@ -436,7 +437,7 @@ export interface HelmHostApi {
   /** 部分更新会话；返回更新后的摘要。 */
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
   /** 中止指定会话的在途执行。 */
-  abortConversation(id: number): Promise<void>
+  abortConversation?(id: number): Promise<void>
   /**
    * 声明插件对本会话的管理权（如 superagent 的 router/watchdog 会话）：
    * 受管期间会话删除保护（409 conversation_managed_by_plugin），
@@ -446,9 +447,9 @@ export interface HelmHostApi {
   /** 标记会话归属权；'human' 会话严禁自动按键/中止（Watchdog 红线）。 */
   markConversationOwnership(id: number, owner: 'helm' | 'bot' | 'human'): void
   /** 派生或续接子代理（经过 agent_spawn Hook 管道 + 原生子会话底座）。 */
-  spawnAgent(request: AgentSpawnRequest): Promise<unknown>
+  spawnAgent?(request: AgentSpawnRequest): Promise<unknown>
   /** 在目标节点/会话工作目录执行验证门禁命令。 */
-  runGate(
+  runGate?(
     command: string,
     options?: {
       cwd?: string
@@ -459,18 +460,18 @@ export interface HelmHostApi {
     },
   ): Promise<{ ok: boolean; output: string }>
   /** 重启恢复前持久标记中断的子会话任务取消（必须在调度器恢复前调用）。 */
-  prepareInterruptedConversations(ids: number[]): Promise<void>
+  prepareInterruptedConversations?(ids: number[]): Promise<void>
   /** 清理受管 Git 工作树。 */
-  cleanupWorktree(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult>
+  cleanupWorktree?(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult>
   /** 调用任意已启用插件的动作（输出已经过 JSON 校验与脱敏）。 */
-  invokeAction(
+  invokeAction?(
     pluginId: string,
     actionId: string,
     input: unknown,
     context?: PluginActionContext,
   ): Promise<unknown>
   /** 列出当前全部已启用插件的动作清单。 */
-  listActions(): ActionManifest[]
+  listActions?(): ActionManifest[]
   /**
    * 创建 AskDoc 并等待终态：正常三态（answered/cancelled/superseded）均 resolve，
    * 只有验证/I/O/宿主失败才 reject。secret 字段答案为 stash 引用。
@@ -480,7 +481,9 @@ export interface HelmHostApi {
   /** 注册 askId -> 当前 stateChangeSeq 解析器（AskDoc CAS 乐观锁用，可为异步——真实水位需远端 IO）；返回注销函数。 */
   registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void
   /** 订阅宿主通用事件（如 'workflow.settled'）；插件停用时自动解除。 */
-  onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void
+  onEvent?(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void
+  /** 订阅工作流终态（completed / failed / aborted）；插件停用时自动解除。 */
+  onWorkflowSettled(listener: (run: WorkflowRunSummary) => MaybePromise<void>): () => void
   emitEvent(type: string, payload: unknown): void
 }
 

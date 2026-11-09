@@ -1786,6 +1786,14 @@ export class PluginHost {
       markConversationOwnership: (id, owner) => backend.markConversationOwnership(id, owner),
       createAsk: (spec) => backend.createAsk(spec),
       cancelAsk: (askId, reason) => backend.cancelAsk(askId, reason),
+      onEvent: (type, listener) =>
+        acquire(`host.onEvent:${type}`)(() =>
+          backend.onEvent?.(type, (payload: unknown) =>
+            this.tracker.withTask(pluginId, `event:${type}`, async () => {
+              await listener(payload);
+            }),
+          ) ?? (() => {}),
+        ),
       emitEvent: (type, payload) => backend.emitEvent(type, payload),
       manageConversation: (id) =>
         acquire('host.manageConversation')(() => backend.manageConversation(id, pluginId)),

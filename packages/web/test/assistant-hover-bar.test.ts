@@ -1,0 +1,320 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { test } from 'node:test'
+import * as React from 'react'
+import { renderToString } from 'react-dom/server'
+import type { ConversationEntry, ConversationSummary, WorkflowRunSummary } from '@helm/protocol'
+import { isAssistantTurnBusy } from '../src/conversation/subagent-model.js'
+import type { AssistantTurn } from '../src/conversation/timeline-model.js'
+import { HelmStoreContext } from '../src/lib/store-context.js'
+import type { HelmStoreValue } from '../src/lib/types.js'
+
+const e = React.createElement
+;(globalThis as Record<string, unknown>).React = React
+const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
+
+function makeMockStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
+  return {
+    seq: 1,
+    conversations: [],
+    conversationDetails: { 1: { entries: [] } },
+    conversationLives: {},
+    loadErrors: {},
+    highlightedEntry: null,
+    pendingAsks: [],
+    plugins: [],
+    uiContributions: [],
+    groupedUi: {
+      sidebarItems: [],
+      sidebarSections: [],
+      screens: [],
+      timelineRenderers: [],
+      toolViews: [],
+      composerPills: [],
+      composerWidgets: [],
+      workbenchPanels: [],
+      commandPaletteItems: [],
+      settingsPanels: [],
+    },
+    workflowRuns: [],
+    nodes: [],
+    resolvedAsksByConv: {},
+    activeModal: null,
+    activeScreenId: null,
+    splitScreenId: null,
+    activeTarget: null,
+    splitTarget: null,
+    primaryConversationId: null,
+    splitConversationId: null,
+    theme: 'light',
+    themePreference: 'system',
+    workbenchOpen: false,
+    activeWorkbenchTab: null,
+    workbenchPinned: false,
+    notifications: [],
+    publicDocs: {},
+    setActiveModal: () => {},
+    openTarget: () => {},
+    closeTarget: () => {},
+    openWorkbench: () => {},
+    closeWorkbench: () => {},
+    toggleWorkbench: () => {},
+    setActiveWorkbenchTab: () => {},
+    setWorkbenchPinned: () => {},
+    setThemePreference: () => {},
+    setTheme: () => {},
+    pushNotice: () => {},
+    dismissNotice: () => {},
+    clearNotices: () => {},
+    withdrawInput: async () => false,
+    cancelAsk: async () => false,
+    executeSubagentAction: async () => {},
+    invokePluginAction: async () => {},
+    ensurePluginDoc: async () => undefined,
+    findConversation: () => undefined,
+    findNode: () => undefined,
+    ...overrides,
+  } as unknown as HelmStoreValue
+}
+
+const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+
+// ---------------------------------------------------------------------------
+// 1. 样式契约：无卡边框、无卡背景、纯按钮图标
+// ---------------------------------------------------------------------------
+
+test('样式契约：.msg-hover-bar 无背景、无边框、无阴影，纯按钮图标避免喧宾夺主', { timeout: 60_000 }, () => {
+  // .msg-hover-bar 容器本身透明且无边框阴影
+  assert.match(stylesCss, /\.msg-hover-bar\s*\{[^}]*background:\s*transparent/)
+  assert.match(stylesCss, /\.msg-hover-bar\s*\{[^}]*border:\s*none/)
+  assert.match(stylesCss, /\.msg-hover-bar\s*\{[^}]*box-shadow:\s*none/)
+  assert.match(stylesCss, /\.msg-hover-bar\s*\{[^}]*padding:\s*0/)
+
+  // 内部按钮小巧且默认静音色，悬停轻度高亮
+  assert.match(stylesCss, /\.msg-hover-bar\s+\.btn\s*\{[^}]*background:\s*transparent/)
+  assert.match(stylesCss, /\.msg-hover-bar\s+\.btn\s*\{[^}]*border:\s*none/)
+  assert.match(stylesCss, /\.msg-hover-bar\s+\.btn\s*\{[^}]*color:\s*var\(--fg-muted\)/)
+  assert.match(stylesCss, /\.msg-hover-bar\s+\.btn:hover:not\(:disabled\)\s*\{[^}]*background:\s*var\(--bg-hover\)/)
+})
+
+// ---------------------------------------------------------------------------
+// 2. 状态判定纯函数：isAssistantTurnBusy
+// ---------------------------------------------------------------------------
+
+test('isAssistantTurnBusy：turn.live 为 true 时判定为响应中', { timeout: 60_000 }, () => {
+  const turn: AssistantTurn = {
+    kind: 'assistant',
+    key: 'turn:1',
+    entryIds: ['1'],
+    segments: [{ kind: 'text', key: 'txt:1', text: '正在输出…' }],
+    live: true,
+  }
+  const conv = { id: 1, status: 'idle' }
+  assert.equal(isAssistantTurnBusy(turn, conv), true)
+})
+
+test('isAssistantTurnBusy：最新回合且父会话为 working 或 blocked 时判定为响应中', { timeout: 60_000 }, () => {
+  const turn: AssistantTurn = {
+    kind: 'assistant',
+    key: 'turn:1',
+    entryIds: ['1'],
+    segments: [{ kind: 'text', key: 'txt:1', text: '已有一段输出' }],
+    live: false,
+  }
+  assert.equal(isAssistantTurnBusy(turn, { id: 1, status: 'working' }, { isLatestTurn: true }), true)
+  assert.equal(isAssistantTurnBusy(turn, { id: 1, status: 'blocked' }, { isLatestTurn: true }), true)
+  // 非最新回合（历史回合）不受父会话当前 working 影响
+  assert.equal(isAssistantTurnBusy(turn, { id: 1, status: 'working' }, { isLatestTurn: false }), false)
+})
+
+test('isAssistantTurnBusy：回合内有 running 工具或激活的分组步骤时判定为响应中', { timeout: 60_000 }, () => {
+  const turnWithRunningTool: AssistantTurn = {
+    kind: 'assistant',
+    key: 'turn:1',
+    entryIds: ['1'],
+    segments: [
+      {
+        kind: 'tool',
+        key: 't:1',
+        tool: { key: 't:1', toolName: 'bash', status: 'running', isError: false },
+      },
+    ],
+    live: false,
+  }
+  assert.equal(isAssistantTurnBusy(turnWithRunningTool, { id: 1, status: 'idle' }), true)
+
+  const turnWithActiveStepGroup: AssistantTurn = {
+    kind: 'assistant',
+    key: 'turn:2',
+    entryIds: ['2'],
+    segments: [
+      {
+        kind: 'step-group',
+        key: 'g:1',
+        stepCount: 1,
+        active: true,
+        steps: [{ kind: 'thinking', thinking: { key: 'th:1', text: '思考中' } }],
+      },
+    ],
+    live: false,
+  }
+  assert.equal(isAssistantTurnBusy(turnWithActiveStepGroup, { id: 1, status: 'idle' }), true)
+})
+
+test('isAssistantTurnBusy：SubagentWorkflow 或 subagent 关联后台仍为 running / blocked 时判定为响应中', { timeout: 60_000 }, () => {
+  const turn: AssistantTurn = {
+    kind: 'assistant',
+    key: 'turn:1',
+    entryIds: ['1'],
+    segments: [
+      {
+        kind: 'tool',
+        key: 't:wf',
+        tool: {
+          key: 't:wf',
+          toolName: 'SubagentWorkflow',
+          callId: 'call_wf_1',
+          status: 'done',
+          isError: false,
+        },
+      },
+    ],
+    live: false,
+  }
+
+  const runningWf: WorkflowRunSummary = {
+    id: 'wf_1',
+    name: '编排流',
+    kind: 'workflow',
+    conversationId: 1,
+    parentToolCallId: 'call_wf_1',
+    status: 'running',
+    createdAt: 100,
+    updatedAt: 200,
+  }
+  assert.equal(
+    isAssistantTurnBusy(turn, { id: 1, status: 'idle' }, { workflowRuns: [runningWf] }),
+    true,
+  )
+
+  const doneWf: WorkflowRunSummary = { ...runningWf, status: 'completed' }
+  assert.equal(
+    isAssistantTurnBusy(turn, { id: 1, status: 'idle' }, { workflowRuns: [doneWf] }),
+    false,
+  )
+})
+
+test('isAssistantTurnBusy：子会话处于 working / blocked 时判定为响应中', { timeout: 60_000 }, () => {
+  const turn: AssistantTurn = {
+    kind: 'assistant',
+    key: 'turn:1',
+    entryIds: ['1'],
+    segments: [
+      {
+        kind: 'tool',
+        key: 't:sub',
+        tool: {
+          key: 't:sub',
+          toolName: 'subagent',
+          callId: 'call_sub_1',
+          status: 'done',
+          isError: false,
+        },
+      },
+    ],
+    live: false,
+  }
+
+  const childWorking = {
+    id: 12,
+    parentConversationId: 1,
+    parentToolCallId: 'call_sub_1',
+    status: 'working' as const,
+  }
+  assert.equal(
+    isAssistantTurnBusy(turn, { id: 1, status: 'idle' }, { conversations: [childWorking] }),
+    true,
+  )
+
+  const childDone = { ...childWorking, status: 'idle' as const }
+  assert.equal(
+    isAssistantTurnBusy(turn, { id: 1, status: 'idle' }, { conversations: [childDone] }),
+    false,
+  )
+})
+
+// ---------------------------------------------------------------------------
+// 3. ConversationTimeline SSR 渲染：响应中无悬停操作栏，完成后才出现
+// ---------------------------------------------------------------------------
+
+test('ConversationTimeline：agent 回合响应中不显示复制与分叉按钮，完成后才出现', { timeout: 60_000 }, () => {
+  const convWorking: ConversationSummary = {
+    id: 1,
+    title: '工作流演示',
+    profileId: 'default',
+    tags: [],
+    cwd: '/workspace',
+    model: '',
+    thinkingLevel: '',
+    status: 'working',
+    stateChangeSeq: 1,
+    completionSeq: 0,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    createdAt: 100,
+    updatedAt: 200,
+  }
+
+  const entriesDuringResponse: ConversationEntry[] = [
+    { id: '1', kind: 'helm.input', data: { text: '简单演示下工作流编排', origin: 'human' } },
+    {
+      id: '2',
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: '正在进行工作流编排…' }],
+        },
+      ],
+    },
+  ]
+
+  // 1. 响应中（working + live）：无 msg-hover-bar，不提前渲染「从此处分叉新会话」
+  const htmlDuring = renderToString(
+    e(
+      HelmStoreContext.Provider,
+      { value: makeMockStore({ conversations: [convWorking] }) },
+      e(ConversationTimeline, {
+        conversation: convWorking,
+        detailEntries: entriesDuringResponse,
+        live: {
+          conversationId: 1,
+          text: '正在进行工作流编排…',
+          tools: [],
+          updatedAt: 210,
+        },
+        onRequestEdit: () => {},
+      }),
+    ),
+  )
+
+  // 人类输入有自己的操作按钮，但 AI 回复块中绝对不得出现分叉与复制按钮
+  assert.doesNotMatch(htmlDuring, /从此处分叉新会话/)
+
+  // 2. 响应彻底完成（idle，live 消除）：展示「从此处分叉新会话」与复制按钮
+  const convIdle: ConversationSummary = { ...convWorking, status: 'idle' }
+  const htmlSettled = renderToString(
+    e(
+      HelmStoreContext.Provider,
+      { value: makeMockStore({ conversations: [convIdle] }) },
+      e(ConversationTimeline, {
+        conversation: convIdle,
+        detailEntries: entriesDuringResponse,
+        onRequestEdit: () => {},
+      }),
+    ),
+  )
+
+  assert.match(htmlSettled, /从此处分叉新会话/)
+})

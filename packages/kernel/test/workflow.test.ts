@@ -36,7 +36,7 @@ import {
   type JournalWriteInput,
 } from '../src/workflow/journal.js'
 import { extractMeta, WorkflowMetaError } from '../src/workflow/meta.js'
-import { runWorkflow, type WorkflowHost, type WorkflowSpawnResult } from '../src/workflow/runtime.js'
+import { normalizeWorkflowArgs, runWorkflow, type WorkflowHost, type WorkflowSpawnResult } from '../src/workflow/runtime.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/service.js'
 
 const timeout = { timeout: 60_000 } as const
@@ -1477,6 +1477,56 @@ describe('workflow real-SDK integration (faux provider)', () => {
       await service.close()
     } finally {
       await runtime.close()
+    }
+  })
+
+  it('normalizeWorkflowArgs：正确解包单层/双层 JSON 字符串并保持标量与对象原样', timeout, () => {
+    assert.equal(normalizeWorkflowArgs(undefined), undefined)
+    assert.equal(normalizeWorkflowArgs(null), null)
+    assert.equal(normalizeWorkflowArgs(42), 42)
+    assert.equal(normalizeWorkflowArgs(true), true)
+    assert.equal(normalizeWorkflowArgs('hello world'), 'hello world')
+    assert.deepEqual(normalizeWorkflowArgs({ a: 1 }), { a: 1 })
+    assert.deepEqual(normalizeWorkflowArgs([1, 2, 3]), [1, 2, 3])
+
+    // JSON 对象字符串解包为真对象
+    assert.deepEqual(normalizeWorkflowArgs('{"n": 42, "sentinel": "XYZZY"}'), { n: 42, sentinel: 'XYZZY' })
+    // JSON 数组字符串解包为真数组
+    assert.deepEqual(normalizeWorkflowArgs('["星辰", "大海"]'), ['星辰', '大海'])
+    // 空对象与空数组
+    assert.deepEqual(normalizeWorkflowArgs('{}'), {})
+    assert.deepEqual(normalizeWorkflowArgs('[]'), [])
+    // 带换行与空白的 JSON 字符串
+    assert.deepEqual(normalizeWorkflowArgs(' \n {"items": [1, 2]} \n '), { items: [1, 2] })
+    // 双重序列化的 JSON
+    assert.deepEqual(normalizeWorkflowArgs(JSON.stringify('{"items": [10, 20]}')), { items: [10, 20] })
+    // 损坏的 JSON 语法安全兜底原样返回，不抛异常
+    assert.equal(normalizeWorkflowArgs('{ broken json'), '{ broken json')
+    assert.equal(normalizeWorkflowArgs('[ broken json'), '[ broken json')
+  })
+
+  it('service.run：字符串形式的 args 自动规范化并持久化为对象，脚本内 args.topics.map 正常执行', timeout, async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'wf-str-args-'))
+    const host = makeServiceHost()
+    const state = makeStateStore()
+    const service = new WorkflowService({ dataDir, host, state })
+    try {
+      const summary = await service.run({
+        script: META('svc-str-args') + 'return args.topics.map((t) => t.toUpperCase())',
+        args: '{"topics": ["star", "ocean"]}',
+      })
+      const result = await service.wait(summary.id)
+      assert.equal(service.getRun(summary.id).status, 'completed', service.getRun(summary.id).error)
+      assert.deepEqual(result, ['STAR', 'OCEAN'], '脚本内 args 为真实对象，map 正常计算')
+
+      // 持久化记录必须是真实对象，不得为字符串
+      const stored = state.get<{ args?: unknown } | null>(`workflow/run/${summary.id}`, null)
+      assert.ok(stored, 'run 应持久化')
+      assert.equal(typeof stored.args, 'object', '持久化 args 必须为对象而非字符串')
+      assert.deepEqual(stored.args, { topics: ['star', 'ocean'] })
+    } finally {
+      await service.close()
+      rmSync(dataDir, { recursive: true, force: true })
     }
   })
 })

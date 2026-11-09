@@ -48,6 +48,7 @@ import {
 } from './spawn-exec.js'
 import {
   MAX_SCRIPT_LENGTH,
+  normalizeWorkflowArgs,
   redactJsonValue,
   runWorkflow,
   type WorkflowHost,
@@ -639,7 +640,7 @@ export class WorkflowService {
     // --- args（resume 沿用原 args；显式提供才覆盖） --------------------
     let args: unknown
     if (request.args !== undefined) {
-      args = request.args
+      args = normalizeWorkflowArgs(request.args)
     } else if (replayFrom?.args !== undefined) {
       args = replayFrom.args
     }

@@ -10,6 +10,7 @@ import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import type { AgentExecutionInfo, AgentSpawnRequest, WorkflowRunSummary } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
+import { normalizeWorkflowArgs } from '../workflow/index.js'
 import { executionOf, safeResultText, subagentFooter } from './runtime-helpers.js'
 
 /**
@@ -218,18 +219,28 @@ export function createWorkflowTool(host: KernelToolHost): ToolRegistration {
   return defineTool({
     name: 'SubagentWorkflow',
     description:
-      '执行一个 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本。返回真实执行 summary（runId/status/nodes/result）。编排引擎未挂接时显式报错。',
+      '执行一个 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为传给脚本的参数（支持 JSON 对象、数组或标量，字符串形式的 JSON 将自动解析为对象）。返回真实执行 summary（runId/status/nodes/result）。编排引擎未挂接时显式报错。',
     parameters: {
       type: 'object',
       properties: {
         script: { type: 'string', description: '编排脚本源码（内联）' },
         scriptPath: { type: 'string', description: '编排脚本文件路径（与 script、name 择一）' },
         name: { type: 'string', description: '已保存工作流名（与 script、scriptPath 择一）' },
-        args: { description: '传给脚本的任意 JSON args（对象/数组/标量均可，原样透传）' },
+        args: { description: '传给脚本的 args（可为 JSON 对象、数组或标量；若以 JSON 字符串形式传入，内核将自动解析为对象原样传给脚本）' },
         resumeFromRunId: { type: 'string', description: '断点恢复的既有 runId（可选）' },
       },
       additionalProperties: false,
     } as Record<string, unknown>,
+    prepareArguments(rawArgs: unknown) {
+      if (rawArgs === null || typeof rawArgs !== 'object' || Array.isArray(rawArgs)) {
+        return rawArgs as Record<string, unknown>
+      }
+      const args = { ...(rawArgs as Record<string, unknown>) }
+      if (args['args'] !== undefined) {
+        args['args'] = normalizeWorkflowArgs(args['args'])
+      }
+      return args
+    },
     structuredOutputSchema: {
       type: 'object',
       properties: {
@@ -243,8 +254,8 @@ export function createWorkflowTool(host: KernelToolHost): ToolRegistration {
       if (args['script'] !== undefined) input['script'] = String(args['script'])
       if (args['scriptPath'] !== undefined) input['scriptPath'] = String(args['scriptPath'])
       if (args['name'] !== undefined) input['name'] = String(args['name'])
-      // args 任意 JSON：原样透传（绝不 String 化——脚本内 args.items.map 等用法依赖真实结构）。
-      if (args['args'] !== undefined) input['args'] = args['args']
+      // args 任意 JSON：原样透传（若为 JSON 字符串则防御性规范化为真实对象/数组，绝不因模型 stringify 导致脚本内 args.items.map 报 TypeError）。
+      if (args['args'] !== undefined) input['args'] = normalizeWorkflowArgs(args['args'])
       if (args['resumeFromRunId'] !== undefined) input['resumeFromRunId'] = String(args['resumeFromRunId'])
       // 父会话本次工具调用 ID：内核受信注入 run 元数据（前端运行期精确关联，
       // 不猜同会话最新 run）；无 callId（异常环境）则无关联，绝不伪造。
