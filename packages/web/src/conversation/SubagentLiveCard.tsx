@@ -111,7 +111,6 @@ export function SubagentLiveCard({
 
   const openDrawer = (): void => {
     store.setActiveModal({ kind: 'conversation-drawer', conversationId: childConversationId })
-    onNavigate?.()
   }
 
   return (

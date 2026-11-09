@@ -12,6 +12,7 @@
  * 动态导入 .tsx 前把 React 挂全局以匹配 classic JSX 转换。
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
@@ -945,6 +946,16 @@ test('子代理卡为极简胶囊卡：不渲染内联展开箭头与调用详�
   assert.ok(!html.includes('进入会话'), '不得渲染进入会话页面按钮')
   assert.ok(html.includes('并排查看'), '应保留并排查看分屏入口')
   assert.ok(html.includes('点击打开子会话抽屉'), '应支持点击卡片打开子会话抽屉')
+})
+
+test('SubagentLiveCard 契约：openDrawer 不触发 onNavigate 收起工作台，避免打断排查上下文', { timeout: 60_000 }, () => {
+  const filePath = new URL('../src/conversation/SubagentLiveCard.tsx', import.meta.url)
+  const src = readFileSync(filePath, 'utf-8')
+  const start = src.indexOf('const openDrawer =')
+  const end = src.indexOf('return (', start)
+  const openDrawerBlock = src.slice(start, end)
+  assert.ok(start > 0 && end > start, '应截取到 openDrawer 定义块')
+  assert.ok(!openDrawerBlock.includes('onNavigate'), 'openDrawer 不得调用 onNavigate 导致工作台在排查时被强行关闭')
 })
 
 const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/u
