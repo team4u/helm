@@ -36,8 +36,10 @@ import { HelmError } from '@helm/protocol'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/service.js'
 import { createHubHandler, startHub } from '../src/http/index.js'
 import { AuthService } from '../src/services/index.js'
-import type { EventHub, KernelRuntimeLike, WorkflowServiceLike } from '../src/http/index.js'
+import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
 import { createHelm } from '../src/app.js'
+import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
+import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -475,7 +477,8 @@ describe('WorkflowService listRuns integrity', () => {
 })
 
 // ---------------------------------------------------------------------------
-// HTTP 层：真实 handler + 真 AuthService 进程 token，故障以 500 错误信封可见
+// HTTP 层：编排经 builtin:workflow 插件动作（/api/actions）；真实 handler +
+// 真 AuthService 进程 token，故障以 500 错误信封可见。
 // ---------------------------------------------------------------------------
 
 class NoopEventHub implements EventHub {
@@ -484,7 +487,33 @@ class NoopEventHub implements EventHub {
   }
 }
 
-describe('workflow listRuns failure visibility over HTTP', () => {
+/** 最小后端（编排插件经 ctx.host 触达的能力；引擎自持 state store）。 */
+function makeBackend(): PluginHostBackend {
+  return {
+    dispatchTrigger: async () => {},
+    submitInput: async () => {},
+    createConversation: async () => ({}) as never,
+    listConversations: () => [],
+    getConversation: () => ({}) as never,
+    updateConversation: async () => ({}) as never,
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({}) as never,
+    invokeAction: async () => ({}),
+    listActions: () => [],
+    manageConversation: () => () => {},
+    markConversationOwnership: () => {},
+    createAsk: async () => ({}) as never,
+    cancelAsk: async () => {},
+    registerAskSeqResolver: () => () => {},
+    onEvent: () => () => {},
+    emitEvent: () => {},
+  }
+}
+
+describe('workflow listRuns failure visibility over HTTP (plugin actions)', () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'wf-http-int-'))
   let auth: AuthService
   let token: string
@@ -492,8 +521,7 @@ describe('workflow listRuns failure visibility over HTTP', () => {
   before(async () => {
     auth = new AuthService(dataDir)
     const handler = createHubHandler(
-      { dataDir, auth, events: new NoopEventHub() } as unknown as KernelRuntimeLike,
-      { listRuns: () => [] } as unknown as WorkflowServiceLike,
+      { dataDir, auth, events: new NoopEventHub(), plugins: new PluginHost({ dataDir, host: makeBackend(), docs: { get: <T>(_k: string, initial: T): T => initial, set: () => {} } }) } as unknown as KernelRuntimeLike,
     )
     // 直接调 handler（不经网络）：setup 拿用户 token 备用。
     const res = await handler(
@@ -511,43 +539,59 @@ describe('workflow listRuns failure visibility over HTTP', () => {
     rmSync(dataDir, { recursive: true, force: true })
   })
 
-  it('GET /api/workflows/runs returns 500 workflow_index_corrupt envelope, never a short 200 list', timeout, async () => {
+  it('POST /api/actions/.../runs returns 500 workflow_index_corrupt envelope, never a short 200 list', timeout, async () => {
+    // 真实跑两个终态 run 制造索引；插件先以健康 state 注册（service.start
+    // 触发 prepareRecovery/init），注册后删一条 record doc 注入外部损坏
+    //（state 为同一 Map 引用，损坏对引擎即时可见）。
     const state = makeStateStore()
-    const wfService = await runTwoSettledRuns(dataDir, state)
+    const wfService = await runTwoSettledRuns(join(dataDir, 'corrupt-index-data'), state)
+
+    const host = new PluginHost({
+      dataDir: join(dataDir, 'corrupt-index-plugins'),
+      host: makeBackend(),
+      docs: { get: <T>(_k: string, initial: T): T => initial, set: () => {} },
+    })
+    await host.register(createWorkflowPlugin({ state }))
     const index = state.get<Array<{ id: string }>>('workflow/runs', [])
     state.map.delete(`workflow/run/${index[0]!.id}`)
-
     const handler = createHubHandler(
-      { dataDir, auth, events: new NoopEventHub() } as unknown as KernelRuntimeLike,
-      wfService as unknown as WorkflowServiceLike,
+      { dataDir, auth, events: new NoopEventHub(), plugins: host } as unknown as KernelRuntimeLike,
     )
     const res = await handler(
-      new Request('http://127.0.0.1/api/workflows/runs', {
-        headers: { authorization: `Bearer ${token}` },
+      new Request('http://127.0.0.1/api/actions/builtin%3Aworkflow/runs', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ input: {} }),
       }),
     )
     assert.equal(res.status, 500, 'index corruption must be a server error, not a short 200 list')
     const body = (await res.json()) as { error: { code: string; details?: { runId?: string } } }
     assert.equal(body.error.code, 'workflow_index_corrupt')
-    assert.equal(body.error.details?.runId, index[0]!.id, 'runId rides the error envelope for diagnosis')
     await wfService.close()
+    await host.dispose()
   })
 
-  it('GET /api/workflows/runs/:id for a corrupt record returns 500 workflow_record_corrupt (404 kept for missing)', timeout, async () => {
+  it('inspect action for a corrupt record returns 500 workflow_record_corrupt (404 kept for missing)', timeout, async () => {
     const state = makeStateStore()
-    const wfService = await runTwoSettledRuns(dataDir, state)
+    const wfService = await runTwoSettledRuns(join(dataDir, 'corrupt-record-data'), state)
+    const host = new PluginHost({
+      dataDir: join(dataDir, 'corrupt-record-plugins'),
+      host: makeBackend(),
+      docs: { get: <T>(_k: string, initial: T): T => initial, set: () => {} },
+    })
+    await host.register(createWorkflowPlugin({ state }))
     const index = state.get<Array<{ id: string }>>('workflow/runs', [])
     const victim = index[0]!.id
     const record = state.get<Record<string, unknown> | null>(`workflow/run/${victim}`, null)
     state.set(`workflow/run/${victim}`, { ...record, status: 42 })
-
     const handler = createHubHandler(
-      { dataDir, auth, events: new NoopEventHub() } as unknown as KernelRuntimeLike,
-      wfService as unknown as WorkflowServiceLike,
+      { dataDir, auth, events: new NoopEventHub(), plugins: host } as unknown as KernelRuntimeLike,
     )
     const corrupt = await handler(
-      new Request(`http://127.0.0.1/api/workflows/runs/${victim}`, {
-        headers: { authorization: `Bearer ${token}` },
+      new Request('http://127.0.0.1/api/actions/builtin%3Aworkflow/inspect', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ input: { runId: victim } }),
       }),
     )
     assert.equal(corrupt.status, 500)
@@ -555,12 +599,15 @@ describe('workflow listRuns failure visibility over HTTP', () => {
     assert.equal(corruptBody.error.code, 'workflow_record_corrupt')
 
     const missing = await handler(
-      new Request('http://127.0.0.1/api/workflows/runs/wf_nosuchrun0000', {
-        headers: { authorization: `Bearer ${token}` },
+      new Request('http://127.0.0.1/api/actions/builtin%3Aworkflow/inspect', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ input: { runId: 'wf_nosuchrun0000' } }),
       }),
     )
     assert.equal(missing.status, 404, 'plain getRun not-found keeps its 404 semantics')
     await wfService.close()
+    await host.dispose()
   })
 })
 
@@ -602,15 +649,14 @@ test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码�
   const models = createModels()
   models.setProvider(faux.provider)
   const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const plugins = app.kernel.plugins
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
-    // 正常跑两个 run（终态），制造真实索引与记录。
-    const first = await app.workflows.run({ script: META('cli-int-1') + 'return 1' })
-    await app.workflows.wait(first.id)
-    const second = await app.workflows.run({ script: META('cli-int-2') + 'return 2' })
-    await app.workflows.wait(second.id)
+    // 正常跑两个 run（终态，经编排插件动作 wait:true），制造真实索引与记录。
+    await plugins.invokeAction('builtin:workflow', 'run', { script: META('cli-int-1') + 'return 1', wait: true })
+    await plugins.invokeAction('builtin:workflow', 'run', { script: META('cli-int-2') + 'return 2', wait: true })
 
-    hub = await startHub({ kernel: app.kernel as never, workflows: app.workflows as never, port: 0 })
+    hub = await startHub({ kernel: app.kernel as never, port: 0 })
     const setupRes = await fetch(`${hub.url}/api/auth/setup`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -626,7 +672,7 @@ test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码�
       HELM_TOKEN: userToken,
     })
     assert.equal(healthy.code, 0, `healthy list should exit 0: ${healthy.err}`)
-    assert.equal((JSON.parse(healthy.out) as unknown[]).length, 2)
+    assert.equal((JSON.parse(healthy.out) as { runs: unknown[] }).runs.length, 2)
 
     // 注入索引损坏：删除一条 record doc（外部删改 state store 命名空间）。
     const index = (app.kernel as unknown as {

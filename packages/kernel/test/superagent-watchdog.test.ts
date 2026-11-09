@@ -176,7 +176,14 @@ async function makeHarness(opts: HarnessOptions = {}) {
     },
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
-    onWorkflowSettled: () => () => {},
+    onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    listActions: () => [],
     emitEvent: (type, payload) => {
       if (type === 'notification') {
         const p = payload as { level?: string; title?: string; body?: string }
@@ -443,7 +450,14 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     },
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
-    onWorkflowSettled: () => () => {},
+    onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    listActions: () => [],
     emitEvent: (type, payload) => {
       if (type === 'notification') {
         const p = payload as { level?: string; title?: string; body?: string }
@@ -932,7 +946,14 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
       cancelled.push(askId)
     },
     registerAskSeqResolver: () => () => {},
-    onWorkflowSettled: () => () => {},
+    onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    listActions: () => [],
     emitEvent: () => {},
   }
   const host = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-svc-')), host: backend, docs })
@@ -1147,7 +1168,14 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
       if (failMode === 'missing') throw new HelmError('not_found', '不存在', 404)
     },
     registerAskSeqResolver: () => () => {},
-    onWorkflowSettled: () => () => {},
+    onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    listActions: () => [],
     emitEvent: () => {},
   }
   const mkHost = async () => {

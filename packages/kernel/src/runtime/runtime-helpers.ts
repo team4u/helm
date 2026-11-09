@@ -93,18 +93,63 @@ export function subagentFooter(resumeRef: string | undefined, resolved: AgentExe
   return parts.length === 0 ? '' : `[subagent ${parts.join(' ')}]`
 }
 
-/** 插件工具原始返回 -> SDK ToolExecutionResult（裸文本/对象统一包 content；无 schema 不传 structuredOutput）。 */
-export function pluginToolResult(raw: unknown, redact: (text: string) => string): {
+/**
+ * 插件工具原始返回 -> SDK ToolExecutionResult：
+ * - 结构化结果信封 { output, structuredOutput?, isError? }：当 raw 是含
+ *   output（字符串或数组）/ structuredOutput / isError 字段的对象时按信封
+ *   规整（文本与 structuredOutput 均过脱敏；structuredOutput 仅在工具声明了
+ *   structuredOutputSchema 时保留，否则丢弃并归入文本通道）；
+ * - 其余任意值统一包单文本块 content（无 schema 不传 structuredOutput）。
+ */
+export function pluginToolResult(
+  raw: unknown,
+  redact: (text: string) => string,
+  options?: { structuredOutputSchema?: unknown },
+): {
   output: Array<{ type: 'text'; text: string }>
+  structuredOutput?: unknown
   isError?: boolean
 } {
-  if (
-    raw !== null &&
-    typeof raw === 'object' &&
-    Array.isArray((raw as { output?: unknown }).output)
-  ) {
-    // 已是契约形状（或另一工具结果）——原样透传。
-    return raw as { output: Array<{ type: 'text'; text: string }>; isError?: boolean }
+  if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+    const env = raw as { output?: unknown; structuredOutput?: unknown; isError?: unknown }
+    const hasOutput = env.output !== undefined
+    const hasStructured = env.structuredOutput !== undefined
+    const hasError = env.isError !== undefined
+    if (hasOutput || hasStructured || hasError) {
+      // output：字符串包单文本块；数组原样校验后透传。
+      let output: Array<{ type: 'text'; text: string }>
+      if (typeof env.output === 'string') {
+        output = [{ type: 'text', text: redact(env.output) }]
+      } else if (Array.isArray(env.output)) {
+        output = env.output.map((block) => {
+          if (block === null || typeof block !== 'object' || (block as { type?: unknown }).type !== 'text' || typeof (block as { text?: unknown }).text !== 'string') {
+            throw new HelmError(
+              'invalid_tool_result',
+              '插件工具结果信封的 output 数组仅接受 { type: \'text\', text } 块',
+              500,
+            )
+          }
+          return { type: 'text' as const, text: redact((block as { text: string }).text) }
+        })
+      } else if (env.output === undefined) {
+        output = []
+      } else {
+        throw new HelmError(
+          'invalid_tool_result',
+          '插件工具结果信封的 output 必须是字符串或 { type: \'text\', text } 数组',
+          500,
+        )
+      }
+      const result: { output: Array<{ type: 'text'; text: string }>; structuredOutput?: unknown; isError?: boolean } = {
+        output,
+      }
+      // structuredOutput 仅在工具声明 schema 时保留（SDK 契约）；值级脱敏。
+      if (hasStructured && options?.structuredOutputSchema !== undefined) {
+        result.structuredOutput = redactJsonValue(env.structuredOutput, redact)
+      }
+      if (env.isError === true) result.isError = true
+      return result
+    }
   }
   // 未声明 structuredOutputSchema 的工具不得返回 structuredOutput（SDK 契约）：
   // 结果统一走 output 文本通道。

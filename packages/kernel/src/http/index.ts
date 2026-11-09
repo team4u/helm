@@ -9,7 +9,6 @@ export { startHub, toWebRequest, writeWebResponse, type NodeHubHandle } from './
 export { createStaticServe, StaticServe } from './static.js'
 export {
   DEFAULT_MAX_BODY_BYTES,
-  MAX_WORKFLOW_BODY_BYTES,
   ALLOWED_CORS_ORIGINS,
   jsonOk,
   errorResponse,
@@ -43,5 +42,4 @@ export type {
   SkillService,
   StartHubOptions,
   HubHandle,
-  WorkflowServiceLike,
 } from './contracts.js'

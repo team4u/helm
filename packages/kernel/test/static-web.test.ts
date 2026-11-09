@@ -19,7 +19,7 @@ import { join } from 'node:path'
 
 import { createHubHandler, startHub, type HubHandlerOptions } from '../src/http/index.js'
 import { createHubHandler as createHandlerLegacy } from '../src/http/index.js'
-import type { KernelRuntimeLike, WorkflowServiceLike, EventHub } from '../src/http/index.js'
+import type { KernelRuntimeLike, EventHub } from '../src/http/index.js'
 import { AuthService } from '../src/services/index.js'
 import { HelmError } from '@helm/protocol'
 
@@ -84,17 +84,6 @@ function makeKernel(dataDir: string): KernelRuntimeLike {
   }
 }
 
-const workflows: WorkflowServiceLike = {
-  list: () => [],
-  listRuns: () => [],
-  run: async () => {
-    throw new Error('unused')
-  },
-  getRun: async () => undefined,
-  wait: async () => {},
-  abort: async () => {},
-}
-
 const BASE = 'http://127.0.0.1:3202'
 
 async function call(
@@ -120,7 +109,7 @@ before(async () => {
   await writeFile(join(webDist, 'assets', 'style-D4e5F6.css'), 'body{margin:0}')
   await writeFile(join(webDist, 'favicon.ico'), Buffer.from([0, 0, 1, 0]))
   await writeFile(join(webDist, 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>')
-  handler = createHubHandler({ kernel: makeKernel(dataDir), workflows, webDistDir: webDist })
+  handler = createHubHandler({ kernel: makeKernel(dataDir), webDistDir: webDist })
   // setup 一次性完成（AuthService 状态持久在 dataDir 内，重复 setup 会 409）
   token = (await new AuthService(dataDir).setup('static-test-password')).token
 })
@@ -228,7 +217,7 @@ test('无扩展名 symlink 越界不能伪装 SPA 成功：仍 404，不回退 i
 test('root 本身是文件（非目录）：webDistDir 显式指定时报 web_dist_invalid', { timeout: 60_000 }, async () => {
   const filePath = join(dataDir, 'not-a-dir')
   await writeFile(filePath, 'x')
-  const handler2 = createHubHandler({ kernel: makeKernel(dataDir), workflows, webDistDir: filePath })
+  const handler2 = createHubHandler({ kernel: makeKernel(dataDir), webDistDir: filePath })
   const res = await call(handler2, 'GET', '/')
   assert.equal(res.status, 500)
   const body = JSON.parse(res.text) as { error: { code: string } }
@@ -240,7 +229,7 @@ test('真实 IO 故障（ELOOP）显式 500，绝不伪装 404（root 用户同�
   try {
     await mkdir(join(root, 'assets'), { recursive: true })
     await writeFile(join(root, 'index.html'), 'x')
-    const handler2 = createHubHandler({ kernel: makeKernel(dataDir), workflows, webDistDir: root })
+    const handler2 = createHubHandler({ kernel: makeKernel(dataDir), webDistDir: root })
     // 自指 symlink 环：realpath 抛 ELOOP（真实 IO 故障，非缺失），root/win 均可触发
     await symlink(join(root, 'assets', 'loop.js'), join(root, 'assets', 'loop.js'))
     const res = await call(handler2, 'GET', '/assets/loop.js')
@@ -279,7 +268,7 @@ test('精确路径 /api（无尾段）同样走 API 路由逻辑', { timeout: 60
 // ---------------------------------------------------------------------------
 
 test('webDistDir: false 禁用静态托管（非 /api 回落 JSON 404）', { timeout: 60_000 }, async () => {
-  const disabled = createHubHandler({ kernel: makeKernel(dataDir), workflows, webDistDir: false })
+  const disabled = createHubHandler({ kernel: makeKernel(dataDir), webDistDir: false })
   const res = await call(disabled, 'GET', '/')
   assert.equal(res.status, 404)
   assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8')
@@ -290,7 +279,6 @@ test('webDistDir: false 禁用静态托管（非 /api 回落 JSON 404）', { tim
 test('指向不存在目录的 webDistDir：显式诊断 web_dist_invalid（不静默禁用）', { timeout: 60_000 }, async () => {
   const handler2 = createHubHandler({
     kernel: makeKernel(dataDir),
-    workflows,
     webDistDir: join(dataDir, 'no-such-dist'),
   })
   const res = await call(handler2, 'GET', '/')
@@ -301,8 +289,8 @@ test('指向不存在目录的 webDistDir：显式诊断 web_dist_invalid（不�
   assert.ok(body.error.message.includes('no-such-dist'), '诊断应包含具体目录路径')
 })
 
-test('旧双参调用形态（kernel, workflows）保持兼容：缺省 webDistDir 探测', { timeout: 60_000 }, async () => {
-  const legacy = createHandlerLegacy(makeKernel(dataDir), workflows)
+test('单参调用形态（kernel）：缺省 webDistDir 探测', { timeout: 60_000 }, async () => {
+  const legacy = createHandlerLegacy(makeKernel(dataDir))
   // 缺省探测依赖实际构建产物；构建后应走 SPA 回退，未构建时才返回 JSON 404。
   const hasDefaultDist = existsSync(new URL('../../web/dist/index.html', import.meta.url))
   const res = await call(legacy, 'GET', '/not-a-real-dist-check')
@@ -321,7 +309,7 @@ test('非 GET/HEAD 方法（POST /）不进静态托管，回落 JSON 404', { ti
 // ---------------------------------------------------------------------------
 
 test('startHub(port:0) 显式 webDistDir：真实 HTTP 静态往返 + HEAD 无 body', { timeout: 60_000 }, async () => {
-  const hub = await startHub({ kernel: makeKernel(dataDir), workflows, port: 0, webDistDir: webDist })
+  const hub = await startHub({ kernel: makeKernel(dataDir), port: 0, webDistDir: webDist })
   try {
     const res = await fetch(`${hub.url}/assets/app-B1b2C3.js`)
     assert.equal(res.status, 200)
@@ -343,7 +331,7 @@ test('startHub(port:0) 显式 webDistDir：真实 HTTP 静态往返 + HEAD 无 b
 })
 
 test('startHub(port:0) webDistDir: false：静态托管禁用，非 /api 回 JSON 404', { timeout: 60_000 }, async () => {
-  const hub = await startHub({ kernel: makeKernel(dataDir), workflows, port: 0, webDistDir: false })
+  const hub = await startHub({ kernel: makeKernel(dataDir), port: 0, webDistDir: false })
   try {
     const res = await fetch(`${hub.url}/`)
     assert.equal(res.status, 404)
@@ -357,7 +345,7 @@ test('startHub(port:0) webDistDir: false：静态托管禁用，非 /api 回 JSO
 
 test('startHub(port:0) 显式失效目录：启动显式报错（不静默禁用）', { timeout: 60_000 }, async () => {
   await assert.rejects(
-    startHub({ kernel: makeKernel(dataDir), workflows, port: 0, webDistDir: join(dataDir, 'no-such-dist') }),
+    startHub({ kernel: makeKernel(dataDir), port: 0, webDistDir: join(dataDir, 'no-such-dist') }),
     (err: unknown) => err instanceof HelmError && err.code === 'web_dist_invalid',
   )
 })

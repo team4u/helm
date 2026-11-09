@@ -74,7 +74,9 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
     ])
     await app.kernel.submitInput(1, '跑快工作流')
     await app.kernel.waitForIdle(1)
-    const runsAfterFast = app.workflows.listRuns()
+    const listRuns = () =>
+      (app.kernel.plugins.invokeAction('builtin:workflow', 'runs', {}) as Promise<{ runs: Array<{ id: string; name: string; parentToolCallId?: string; status: string }> }>).then((r) => r.runs)
+    const runsAfterFast = await listRuns()
     const fastRun = runsAfterFast.find((r) => r.name === 'fast-link')
     assert.ok(fastRun, '快 run 应存在')
     assert.equal(fastRun.parentToolCallId, 'call-fast-1', 'summary 应携带真实工具 callId')
@@ -92,7 +94,7 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
     // 轮询等待 run 出现（真实引擎异步启动），此时工具必然尚未返回。
     let slowRun: { id: string; parentToolCallId?: string; status: string } | undefined
     for (let i = 0; i < 200; i++) {
-      slowRun = app.workflows.listRuns().find((r) => r.name === 'slow-link')
+      slowRun = (await listRuns()).find((r) => r.name === 'slow-link')
       if (slowRun !== undefined) break
       await new Promise((r) => setTimeout(r, 20))
     }
@@ -101,7 +103,7 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
     assert.equal(slowRun.parentToolCallId, 'call-slow-2', '运行期关联不等工具返回')
 
     // 双 run 并存（一完成一运行）：按各自 callId 取互不串扰（不猜 running/最新）。
-    const runsNow = app.workflows.listRuns()
+    const runsNow = await listRuns()
     assert.equal(
       runsNow.find((r) => r.parentToolCallId === 'call-fast-1')?.id,
       fastRun.id,
@@ -114,7 +116,7 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
     )
 
     // 中止慢 run 收尾（子会话无响应会阻塞），并等待工具回合结束。
-    await app.workflows.abort(slowRun.id)
+    await app.kernel.plugins.invokeAction('builtin:workflow', 'abort', { runId: slowRun.id })
     await slowTurn.catch(() => {})
     await app.kernel.waitForIdle(1).catch(() => {})
   } finally {
@@ -129,11 +131,13 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
     models: models as never,
     watchdogIntervalMs: 0,
   })
+  const listRunsReopened = () =>
+    (reopened.kernel.plugins.invokeAction('builtin:workflow', 'runs', {}) as Promise<{ runs: Array<{ id: string; name: string; parentToolCallId?: string; status: string }> }>).then((r) => r.runs)
   try {
-    const fast = reopened.workflows.listRuns().find((r) => r.name === 'fast-link')
+    const fast = (await listRunsReopened()).find((r) => r.name === 'fast-link')
     assert.ok(fast)
     assert.equal(fast.parentToolCallId, 'call-fast-1', '重启后 parentToolCallId 保留')
-    const slow = reopened.workflows.listRuns().find((r) => r.name === 'slow-link')
+    const slow = (await listRunsReopened()).find((r) => r.name === 'slow-link')
     assert.ok(slow)
     assert.equal(slow.parentToolCallId, 'call-slow-2')
     assert.equal(slow.status, 'aborted', '重启前已中止的 run 保持 aborted')
@@ -161,7 +165,7 @@ test('run() 无受信 context（HTTP/CLI 路径事实）：run 无 parentToolCal
   })()
   const events = new EventHub({
     initialSeq: 0,
-    snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], workflowRuns: [] }),
+    snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }),
   })
   const host: WorkflowServiceHost = {
     async spawnAgent() {
@@ -209,40 +213,26 @@ test('run() 无受信 context（HTTP/CLI 路径事实）：run 无 parentToolCal
   }
 })
 
-test('HTTP body 不得注入 parentToolCallId（rejectUnknownKeys 拒绝未知字段）', { timeout: 60_000 }, async () => {
-  const { parseWorkflowRunBody } = await import('../src/http/validate.js')
-  // 语义冒充（同名写入 body）被显式拒绝：内部元数据仅受信 context 可注入。
-  assert.throws(
-    () => parseWorkflowRunBody({ script: FAST_SCRIPT, parentToolCallId: 'call-forged' }),
-    /不支持的字段/,
-  )
-  // 正常 body 无该字段：返回请求对象不含 parentToolCallId。
-  const parsed = parseWorkflowRunBody({ script: FAST_SCRIPT }) as Record<string, unknown>
-  assert.equal('parentToolCallId' in parsed, false)
-})
-
-// KernelRuntime 直启（无 setWorkflowRunner）时 runWorkflow 显式报错，供对照。
-test('内核未挂接 runner 时工具链 runWorkflow 显式失败（不静默无关联）', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-wf-norunner-'))
+test('run 动作 inputSchema 不得注入 parentToolCallId（additionalProperties:false 拒绝未知字段）', { timeout: 60_000 }, async () => {
+  // 编排已剥离为插件动作：run 的 inputSchema 不含 parentToolCallId 且
+  // additionalProperties:false——语义冒充在动作边界被拒绝，内部元数据仅
+  // 受信工具上下文（PluginToolContext.callId）可注入。
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-schema-'))
   const { models } = makeFauxModels()
-  const kernel = await KernelRuntime.open({
-    dataDir: dir,
-    cwd: dir,
-    model: 'faux/faux-1',
-    models: models as never,
-    watchdogIntervalMs: 0,
-  })
+  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: models as never, watchdogIntervalMs: 0 })
   try {
+    const manifests = app.kernel.plugins.listActions()
+    const runManifest = manifests.find((m) => m.pluginId === 'builtin:workflow' && m.id === 'run')
+    assert.ok(runManifest, 'builtin:workflow run 动作应存在')
+    assert.equal(runManifest.inputSchema.additionalProperties, false)
+    assert.equal(Object.prototype.hasOwnProperty.call(runManifest.inputSchema.properties ?? {}, 'parentToolCallId'), false)
+    // 语义冒充（同名写入 input）被动作输入校验拒绝。
     await assert.rejects(
-      () => kernel.runWorkflow({ script: FAST_SCRIPT }, 1),
-      (e: unknown) => {
-        assert.ok(e instanceof Error)
-        assert.ok(e.message.includes('尚未挂接'))
-        return true
-      },
+      () => app.kernel.plugins.invokeAction('builtin:workflow', 'run', { script: FAST_SCRIPT, parentToolCallId: 'call-forged' } as never),
+      (e: unknown) => e instanceof Error && e.message.includes('校验失败'),
     )
   } finally {
-    await kernel.close().catch(() => {})
-    rmSync(dir, { recursive: true, force: true })
+    await app.close().catch(() => {})
+    rmSync(dataDir, { recursive: true, force: true })
   }
 })

@@ -28,7 +28,7 @@ import {
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHubHandler } from '../src/http/index.js'
-import type { EventHub, KernelRuntimeLike, WorkflowServiceLike } from '../src/http/index.js'
+import type { EventHub, KernelRuntimeLike} from '../src/http/index.js'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
 
 // ---------------------------------------------------------------------------
@@ -141,14 +141,6 @@ function makeKernel(): KernelRuntimeLike {
   }
 }
 
-const workflows: WorkflowServiceLike = {
-  list: () => [],
-  listRuns: () => [],
-  run: async () => ({ runId: 'run-1' }) as never,
-  getRun: async () => undefined,
-  wait: async () => undefined,
-  abort: () => {},
-}
 
 async function call(
   method: string,
@@ -180,7 +172,7 @@ test.before(async () => {
   conversations.set(1, summary(1, '个人助理'))
   conversations.set(2, summary(2, '工作会话'))
   const kernel = makeKernel()
-  handler = createHubHandler(kernel, workflows)
+  handler = createHubHandler(kernel)
   // setup 拿 token
   const setupReq = new Request('http://127.0.0.1:3202/api/auth/setup', {
     method: 'POST',

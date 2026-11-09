@@ -1,6 +1,7 @@
 /**
  * 静态核心命令层汇总：按 REST 资源域聚合 coreCommands()。
  * 分发层（index.ts）用本表精确匹配核心命令——管理面故障隔离的根基。
+ * workflows / worktrees 域已剥离为 builtin:workflow 插件动作（动态命令）。
  */
 import type { CommandSpec } from './shared.js'
 import { CliError } from '../errors.js'
@@ -12,10 +13,8 @@ import { providersCommands } from './providers.js'
 import { nodesCommands } from './nodes.js'
 import { envCommands } from './env.js'
 import { pluginsCommands } from './plugins.js'
-import { workflowsCommands } from './workflows.js'
 import { artifactsCommands } from './artifacts.js'
 import { skillsCommands } from './skills.js'
-import { worktreesCommands } from './worktrees.js'
 import { modelsCommands } from './models.js'
 import { searchCommands } from './search.js'
 import { apiCommands } from './api.js'
@@ -90,10 +89,8 @@ export function coreCommands(): CommandSpec[] {
     ...nodesCommands(),
     ...envCommands(),
     ...pluginsCommands(),
-    ...workflowsCommands(),
     ...artifactsCommands(),
     ...skillsCommands(),
-    ...worktreesCommands(),
     ...modelsCommands(),
     ...searchCommands(),
     ...apiCommands(),

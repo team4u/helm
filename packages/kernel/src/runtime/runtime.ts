@@ -43,7 +43,6 @@ import type {
   NodeUpgradeCheckInput,
   NodeUpgradeCheckResult,
   NodeUpgradeResult,
-  WorkflowRunSummary,
   WorktreeCleanupRequest,
   WorktreeCleanupResult,
   EnvExecRequest,
@@ -81,7 +80,7 @@ import type { HelmToolDeps } from './tool-deps.js'
 import { buildManagedEnv, createBashTool, createEditTool, createReadArtifactTool, createReadTool, createWriteTool, runGate } from './tools.js'
 import { runNativeSpawn, THINKING_LEVELS, validateJsonSchema } from './spawn.js'
 import { assertSchemaCompilable } from '../plugins/schema.js'
-import { WorktreeAllocator, createCleanupWorktreeTool } from './worktree.js'
+import { WorktreeAllocator } from './worktree.js'
 import { gateResultMissingError, sanitizeExecutionInfo, sanitizeGateResult } from '../workflow/spawn-exec.js'
 import { HelmPluginConfigStore } from './plugin-config-store.js'
 import { redactJsonValue } from '../redact.js'
@@ -89,7 +88,7 @@ import { ConversationService } from './conversation-service.js'
 import { NodeManager } from './node-manager.js'
 import { ModelRegistry } from './model-registry.js'
 import { HookBridge, prepareToolResultWith } from './hook-bridge.js'
-import { createRunActionTool, createSubagentTool, createWorkflowTool } from './kernel-tools.js'
+import { createRunActionTool } from './kernel-tools.js'
 import { buildSpawnHost } from './spawn-host.js'
 import {
   escapeXml,
@@ -115,8 +114,8 @@ export interface KernelRuntimeOptions {
   models?: Models
   /**
    * 是否在 open 内立即 resume 调度（默认 true，独立 runtime 即用）。
-   * 组合层（createHelm）传 false：先注册 assistant 插件 / 挂 WorkflowRunner，
-   * 再 await start() 启动恢复，防止恢复任务在工具未注册时被判 orphaned。
+   * 组合层（createHelm）传 false：先注册插件 / 待插件服务启动，再 await
+   * start() 启动恢复，防止恢复任务在工具未注册时被判 orphaned。
    */
   autoResume?: boolean
   /**
@@ -126,23 +125,6 @@ export interface KernelRuntimeOptions {
   watchdogIntervalMs?: number
   /** 节点升级等待 commit 确认的超时毫秒（缺省 120000；测试可缩短）。 */
   nodeUpgradeTimeoutMs?: number
-}
-
-export interface WorkflowRunnerFn {
-  (
-    request: Record<string, unknown>,
-    conversationId: number,
-    signal?: AbortSignal,
-    /** 内核受信上下文（工具链真实 callId）；非用户输入，禁止 HTTP/DSL 冒充。 */
-    context?: { parentToolCallId?: string },
-  ): Promise<unknown>
-}
-
-/** plugin.changed 宿主事件（PluginHost emitEvent 入参的既有约定形状）。 */
-interface PluginChangedEmit {
-  type: 'plugin.changed'
-  plugin: unknown
-  ui?: unknown[]
 }
 
 /** watchdog 默认巡检间隔（singleflight 定时器；0 关闭）。 */
@@ -169,18 +151,13 @@ export class KernelRuntime {
   private readonly pluginConfig: HelmPluginConfigStore
   private readonly agentSessions = new Map<string, number>()
   private pluginHost: PluginHost | undefined
-  private workflowRunner: WorkflowRunnerFn | undefined
-  private backgroundAgentRunner: ((request: AgentSpawnRequest) => Promise<{ run: WorkflowRunSummary; execution?: AgentExecutionInfo }>) | undefined
   readonly worktrees: WorktreeAllocator
   /** 包含模型回合、结构化输出修复与 gate；用于阻止清理仍在使用的执行目录。 */
   private readonly activeSpawnExecutions = new Map<string, AgentExecutionInfo>()
-  private readonly backgroundReportInflight = new Map<string, Promise<void>>()
-  /** workflow run 摘要 provider（SSE snapshot 用；缺省 []）。 */
-  private workflowRunProvider: () => WorkflowRunSummary[] = () => []
-  /** onWorkflowSettled 监听器（app 接线；每 run 终态通知一次）。 */
-  private readonly workflowSettledListeners = new Set<(run: WorkflowRunSummary) => void | Promise<void>>()
   /** 会话插件管理权：conversationId -> 持有 pluginId 集合（删除保护）。 */
   private readonly managedConversations = new Map<number, Set<string>>()
+  /** 内部通用事件监听器（ctx.host.onEvent 后端；type -> listener 集合）。 */
+  private readonly hostEventListeners = new Map<string, Set<(payload: unknown) => MaybePromise<void>>>()
   /** 跨平台节点执行底座（local + 远端 BYOM 节点池；node-server 网关接线消费）。 */
   readonly envFabric: EnvFabric
   /** 受管进程 token（createProcessToken 产物；close dispose）。 */
@@ -488,7 +465,7 @@ export class KernelRuntime {
         pendingAsks: this.asks.listAsks('pending'),
         plugins: this.pluginHost ? this.pluginHost.list() : [],
         ui: this.pluginHost ? this.pluginHost.listUi() : [],
-        workflowRuns: this.workflowRunProvider(),
+        pluginDocs: this.pluginHost?.listPublicDocs() ?? [],
         // 重连首帧即恢复活跃会话实时视图（含 queuedInputs 排队胶囊）：
         // 从 tracker 权威镜像同步派生，不依赖上次推送缓存。
         conversationLives: this.tracker.listLiveViews(),
@@ -634,13 +611,20 @@ export class KernelRuntime {
         listConversations: (filter) => this.listConversations(filter),
         getConversation: (id) => this.getConversation(id),
         updateConversation: (id, patch) => this.updateConversation(id, patch),
+        abortConversation: (id) => this.abortConversation(id),
+        spawnAgent: (request) => this.spawnAgent(request),
+        runGate: (command, options) => this.runGate(command, options),
+        prepareInterruptedConversations: (ids) => this.prepareInterruptedConversations(ids),
+        cleanupWorktree: (request, signal) => this.cleanupWorktree(request, signal),
+        invokeAction: (pluginId, actionId, input, context) => this.plugins.invokeAction(pluginId, actionId, input, context),
+        listActions: () => this.plugins.listActions(),
         // PluginHost 在插件侧绑定身份，后端必须接收明确的 pluginId。
         manageConversation: (id, pluginId) => this.manageConversation(id, pluginId),
         markConversationOwnership: (id, owner) => this.markConversationOwnership(id, owner),
         createAsk: (spec) => this.createAsk(spec),
         cancelAsk: (askId, reason) => this.cancelAsk(askId, reason),
         registerAskSeqResolver: (resolver) => this.registerAskSeqResolver(resolver),
-        onWorkflowSettled: (listener) => this.onWorkflowSettled(listener),
+        onEvent: (type, listener) => this.onEvent(type, listener),
         emitEvent: (type, payload) => this.emitHostEvent(type, payload),
       },
       docs: this.documentStore,
@@ -717,23 +701,20 @@ export class KernelRuntime {
     await this.tracker.observe(root.id as number)
   }
 
-  /** 内核工具（bash/read/write/edit/read_artifact + subagent/SubagentWorkflow/run_action）
-   *  统一注册（与插件工具同一 registry 机制；execute 统一包 handled 接管）。 */
+  /**
+   * 内核基础工具（bash/read/write/edit/read_artifact + run_action 元工具）
+   *   统一注册（与插件工具同一 registry 机制；execute 统一包 handled 接管）。
+   *   subagent / SubagentWorkflow / cleanup_worktree 由 builtin:workflow 插件提供。
+   */
   private installKernelTools(): void {
     const runtime = this
     const toolHost = {
-      spawnAgent: (request: AgentSpawnRequest) => this.spawnAgent(request),
-      get backgroundAgentRunner() {
-        return runtime.backgroundAgentRunnerImpl
-      },
-      runWorkflow: (request: Record<string, unknown>, conversationId: number, signal?: AbortSignal, context?: { parentToolCallId?: string }) =>
-        this.runWorkflow(request, conversationId, signal, context),
       invokePluginAction: async (pluginId: string, actionId: string, input: unknown, context: { conversationId: number; signal?: AbortSignal }) => {
         const host = this.pluginHost
         if (!host) throw new HelmError('runtime_not_initialized', '插件宿主未初始化', 503)
         return host.invokeAction(pluginId, actionId, input, context)
       },
-      redact: (text: string) => this.stash.redact(text),
+      redact: (text: string) => runtime.stash.redact(text),
     }
     const kernelTools = [
       createBashTool(this.toolDeps),
@@ -743,9 +724,6 @@ export class KernelRuntime {
       createReadArtifactTool(this.toolDeps, (convId: number, artifactConvId: number) =>
         this.conversations.isArtifactAuthorized(convId, artifactConvId),
       ),
-      createSubagentTool(toolHost),
-      createCleanupWorktreeTool(this.worktrees),
-      createWorkflowTool(toolHost),
       createRunActionTool(toolHost),
     ].map((tool) => {
       const raw = tool as unknown as Record<string, unknown>
@@ -771,13 +749,11 @@ export class KernelRuntime {
     )
   }
 
-  /** 后台子代理运行服务（延迟绑定；组合层 setBackgroundAgentRunner 后生效）。 */
-  private get backgroundAgentRunnerImpl() {
-    return this.backgroundAgentRunner
-  }
-
-  /** 插件宿主事件：plugin.changed 携带完整事件对象（{type, plugin, ui}）。 */
-  private emitHostEvent(type: string, payload: unknown): void {
+  /**
+   * 插件宿主事件入口（ctx.host.emitEvent 后端）：发布到 SSE；type 为
+   * plugin.changed 时同步热装插件工具；其余类型同步触发内部 onEvent 监听器。
+   */
+  emitHostEvent(type: string, payload: unknown): void {
     if (type === 'plugin.changed') {
       this.refreshPluginTools()
       const envelope = payload as { type?: string; plugin?: unknown; ui?: unknown } | undefined
@@ -791,6 +767,50 @@ export class KernelRuntime {
       return
     }
     this.events.publish(type, payload)
+    this.dispatchInternalEvent(type, payload)
+  }
+
+  /**
+   * 内部通用事件订阅（ctx.host.onEvent 后端）：插件监听宿主事件
+   * （如 'workflow.settled'）；返回解除函数。插件停用时由 PluginHost
+   * 释放句柄统一解除。
+   */
+  onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void {
+    let listeners = this.hostEventListeners.get(type)
+    if (listeners === undefined) {
+      listeners = new Set()
+      this.hostEventListeners.set(type, listeners)
+    }
+    listeners.add(listener)
+    return () => {
+      listeners!.delete(listener)
+      if (listeners!.size === 0) this.hostEventListeners.delete(type)
+    }
+  }
+
+  /**
+   * 触发一类宿主内部事件的全部监听器（快照执行；异常与 rejection 显式上报，
+   * 绝不静默吞掉）。emitEvent 契约为同步 void，异步监听器以后台链执行：
+   * 错误发布 notification 事件 + stderr 诊断（与 turn_settled 钩子错误同策略）。
+   */
+  private dispatchInternalEvent(type: string, payload: unknown): void {
+    const listeners = this.hostEventListeners.get(type)
+    if (listeners === undefined || listeners.size === 0) return
+    const run = (async () => {
+      for (const listener of [...listeners]) {
+        await listener(payload)
+      }
+    })()
+    run.catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`[helm] host event '${type}' listener failed: ${message}\n`)
+      this.events.publish('notification', {
+        type: 'notification',
+        level: 'error',
+        title: `事件监听失败（${type}）`,
+        body: message,
+      })
+    })
   }
 
   /**
@@ -1039,14 +1059,20 @@ export class KernelRuntime {
         name: spec.name,
         description: spec.description,
         parameters: (spec.inputSchema ?? { type: 'object', properties: {} }) as Record<string, object>,
+        ...(spec.structuredOutputSchema !== undefined
+          ? { structuredOutputSchema: spec.structuredOutputSchema as Record<string, object> }
+          : {}),
         async execute(args: unknown, api: never, context: { abortSignal?: AbortSignal }) {
-          const toolApi = api as unknown as { conversationId: number }
+          const toolApi = api as unknown as { conversationId: number; callId?: string }
           const result = await host.executeTool(spec.name, args, {
             conversationId: toolApi.conversationId,
+            ...(typeof toolApi.callId === 'string' && toolApi.callId !== '' ? { callId: toolApi.callId } : {}),
             signal: context.abortSignal,
           })
           // 插件工具返回任意值：包成 SDK ToolExecutionResult 契约（content/text）。
-          return pluginToolResult(result, (text) => runtime.stash.redact(text))
+          return pluginToolResult(result, (text) => runtime.stash.redact(text), {
+            structuredOutputSchema: spec.structuredOutputSchema,
+          })
         },
       } as never) as unknown as {
         execute: (args: never, api: never, context: { abortSignal?: AbortSignal }) => Promise<unknown>
@@ -1486,83 +1512,6 @@ export class KernelRuntime {
     return this.worktrees.cleanup({ ...request, signal })
   }
 
-  setBackgroundAgentRunner(runner: (request: AgentSpawnRequest) => Promise<{ run: WorkflowRunSummary; execution?: AgentExecutionInfo }>): void {
-    this.backgroundAgentRunner = runner
-  }
-
-  async reportBackgroundAgent(run: WorkflowRunSummary, info: { parentConversationId: number; agentType?: string; execution?: AgentExecutionInfo }): Promise<void> {
-    const pending = this.backgroundReportInflight.get(run.id)
-    if (pending !== undefined) return pending
-    const delivery = this.deliverBackgroundAgentReport(run, info).finally(() => this.backgroundReportInflight.delete(run.id))
-    this.backgroundReportInflight.set(run.id, delivery)
-    return delivery
-  }
-
-  private async deliverBackgroundAgentReport(run: WorkflowRunSummary, info: { parentConversationId: number; agentType?: string; execution?: AgentExecutionInfo }): Promise<void> {
-    if (this.store.getConv(info.parentConversationId) === undefined || this.store.isDeleted(info.parentConversationId)) {
-      this.events.publish('notification', { type: 'notification', level: 'warning', title: '后台任务已结束', body: `运行 ${run.id} 已${run.status}，父会话已删除；可在任务列表检查结果。` })
-      return
-    }
-    const requestId = `helm:subagent-report:${run.id}`
-    const previous = await this.harness.commit((tx) => tx.submissionByRequest(info.parentConversationId as never, requestId), BACKGROUND_CONTEXT)
-    if (previous !== undefined) return
-    const report = {
-      runId: run.id, status: run.status,
-      ...(run.result !== undefined ? { result: run.result } : {}),
-      ...(run.error !== undefined ? { error: run.error } : {}),
-      ...(info.execution !== undefined ? { execution: executionOf(info.execution) } : {}),
-    }
-    await this.submitInput(info.parentConversationId, `后台子代理任务已结算。以下为运行 ${run.id} 的结果数据：\n${safeResultText(report, (text) => this.stashService.redact(text))}`, {
-      origin: 'agent', whenBusy: 'followUp', requestId, meta: { backgroundRunId: run.id, kind: 'subagent_report' },
-    })
-  }
-
-  /** workflow 执行注入（主代理组合 WorkflowService 后调用）。 */
-  setWorkflowRunner(fn: WorkflowRunnerFn): void {
-    this.workflowRunner = fn
-  }
-
-  /** workflow run 摘要 provider（SSE snapshot.workflowRuns 用；缺省 []）。 */
-  setWorkflowRunProvider(provider: () => WorkflowRunSummary[]): void {
-    this.workflowRunProvider = provider
-  }
-
-  /**
-   * 订阅工作流 run 终态（completed/failed/aborted，每 run 恰好一次）；
-   * 返回解除函数。监听器异常向上抛（app->kernel 通知插件清理失败必须显式，
-   * 禁止吞错伪成功）。
-   */
-  onWorkflowSettled(listener: (run: WorkflowRunSummary) => void | Promise<void>): () => void {
-    this.workflowSettledListeners.add(listener)
-    return () => {
-      this.workflowSettledListeners.delete(listener)
-    }
-  }
-
-  /**
-   * 工作流 run 终态通知（app 接线 WorkflowService.onRunSettled -> 此处）：
-   * 串行执行全部监听器；任一异常原样向上抛（调用方据此让清理失败显式），
-   * 绝不假成功。
-   */
-  async notifyWorkflowSettled(run: WorkflowRunSummary): Promise<void> {
-    for (const listener of [...this.workflowSettledListeners]) {
-      await listener(run)
-    }
-  }
-
-  /** 内部使用的 workflow 执行（spawnAgent 同源的 hook 链）。 */
-  async runWorkflow(
-    request: Record<string, unknown>,
-    conversationId: number,
-    signal?: AbortSignal,
-    context?: { parentToolCallId?: string },
-  ): Promise<unknown> {
-    if (!this.workflowRunner) {
-      throw new HelmError('unsupported_runtime', 'Workflow 引擎尚未挂接（setWorkflowRunner 未调用）', 503)
-    }
-    return this.workflowRunner(request, conversationId, signal, context)
-  }
-
   /**
    * watchdog tick（singleflight）：只采集真实事实，无业务策略、不自动恢复；
    * probe 携带 getProbeFacts 的真实 stalledMs/consecutiveErrors；
@@ -1880,11 +1829,7 @@ export class KernelRuntime {
     }
     return [...this.activeSpawnExecutions.values()].some((info) => info.nodeId === nodeId && info.effectiveCwd !== undefined && contains(info.effectiveCwd)) ||
       this.listConversations().some((conv) => (conv.nodeId ?? 'local') === nodeId && contains(conv.cwd) && (conv.status === 'working' || conv.status === 'blocked')) ||
-      this.workflowRunProvider().some((run) => run.status === 'running' && run.nodes?.some((node) => {
-        const targetNode = node.nodeId ?? (node.conversationId !== undefined ? this.store.getConv(node.conversationId)?.nodeId : undefined)
-        const cwd = node.effectiveCwd ?? node.worktree?.path
-        return node.status === 'running' && targetNode === nodeId && cwd !== undefined && contains(cwd)
-      }))
+      (this.pluginHost?.listLiveWorktrees() ?? []).some((wt) => wt.nodeId === nodeId && contains(wt.path))
   }
 
   async close(): Promise<void> {

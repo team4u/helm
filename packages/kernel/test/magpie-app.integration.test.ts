@@ -137,7 +137,7 @@ test('Magpie 经真实组合层注册、刷新、HTTP/CLI、缓存重启与停�
       assert.ok(gateway.requests.includes(path), `应请求精确协议路径 ${path}`)
     }
 
-    hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 0 })
+    hub = await startHub({ kernel: app.kernel, port: 0 })
     const credential = app.kernel.auth.createProcessToken()
     releaseCredential = credential.dispose
     const env = { HELM_HUB_URL: hub.url, HELM_DATA_DIR: join(dataDir, 'cli'), HELM_TOKEN: credential.token, HELM_CONVERSATION_ID: '1' }

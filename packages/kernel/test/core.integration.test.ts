@@ -642,7 +642,7 @@ test('集成5: 重启后根会话 #1 与历史经真实 SQLite 保留，faux 续
 })
 
 // ---------------------------------------------------------------------------
-// 6. HTTP 真实往返：真 startHub(port 0) + 真 app.kernel/app.workflows
+// 6. HTTP 真实往返：真 startHub(port 0) + 真 app.kernel
 // ---------------------------------------------------------------------------
 
 async function makeHttpEnv() {
@@ -706,8 +706,8 @@ async function makeHttpEnv() {
     },
   })
 
-  // 真 startHub：port 0（内核分配），kernel/workflows 全部来自 createHelm
-  const hub = await startHub({ kernel: app.kernel as never, workflows: app.workflows as never, port: 0 })
+  // 真 startHub：port 0（内核分配），kernel 全部来自 createHelm
+  const hub = await startHub({ kernel: app.kernel as never, port: 0 })
   return {
     hub, app, faux, dataDir, SECRET_TRICKY, trickyPlaceholder,
     rootPassword: '集成测试Root密码八位',
@@ -816,15 +816,18 @@ test('集成6: HTTP 真实往返——鉴权/根会话保护/动作校验同权/
     assert.equal(pub.status, 200)
     assert.equal((JSON.parse(await pub.text()) as { via: string }).via, 'plugin-route')
 
-    // --- workflows：真实引擎已挂接（经 createHelm），run 必须返回 202 真实 summary
-    const wf = await call('POST', '/api/workflows/run', {
+    // --- workflows：真实引擎经 builtin:workflow 插件动作（/api/actions 同链路）
+    const wf = await call('POST', '/api/actions/builtin:workflow/run', {
       body: {
-        script: 'export const meta = { name: "http-wf", description: "t" }\nreturn args.x',
-        args: { x: 7 },
+        input: {
+          script: 'export const meta = { name: "http-wf", description: "t" }\nreturn args.x',
+          args: { x: 7 },
+          wait: true,
+        },
       },
     })
-    assert.equal(wf.status, 202, `真实 workflow 引擎应接受 run：${wf.body}`)
-    const summary = JSON.parse(wf.body) as { id: string; status: string }
+    assert.equal(wf.status, 200, `真实 workflow 引擎应接受 run：${wf.body}`)
+    const summary = (JSON.parse(wf.body) as { run: { id: string; status: string } }).run
     assert.ok(summary.id.startsWith('wf_'), 'summary 应含 wf_ 前缀 runId')
     assert.ok(['running', 'completed'].includes(summary.status))
   } finally {

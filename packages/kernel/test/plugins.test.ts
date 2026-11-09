@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SecretStash, AuthService } from '../src/services/index.js';
-import { createHubHandler, type KernelRuntimeLike, type WorkflowServiceLike } from '../src/http/index.js';
+import { createHubHandler, type KernelRuntimeLike } from '../src/http/index.js';
 import {
   HelmError,
   type ConversationSummary,
@@ -79,9 +79,16 @@ function makeHostApi(events: string[] = []): PluginHostBackend {
     registerAskSeqResolver: () => () => {
       events.push('unregister-ask-seq');
     },
-    onWorkflowSettled: () => () => {
+    onEvent: () => () => {
       events.push('unregister-workflow-settled');
     },
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    listActions: () => [],
     emitEvent: (type, payload) => {
       events.push(`event:${type}`);
       eventPayloads.push({ type, payload });
@@ -1396,15 +1403,7 @@ test('真实 HTTP 桥：stop 失败的 disable 错误信封可序列化可脱敏
     plugins: httpHost,
     stash,
   } as unknown as KernelRuntimeLike;
-  const workflows = {
-    list: () => [],
-    listRuns: () => [],
-    run: async () => ({}),
-    getRun: async () => undefined,
-    wait: async () => ({}),
-    abort: () => {},
-  } as unknown as WorkflowServiceLike;
-  const handler = createHubHandler(kernel, workflows);
+  const handler = createHubHandler(kernel);
 
   const setup = await handler(new Request('http://127.0.0.1:3202/api/auth/setup', {
     method: 'POST',
@@ -1461,15 +1460,7 @@ test('真实 HTTP 桥：双失败（stop + 事件发布）信封同样可序列�
     events: { response: () => new Response(null, { status: 500 }) },
     plugins: httpHost,
   } as unknown as KernelRuntimeLike;
-  const workflows = {
-    list: () => [],
-    listRuns: () => [],
-    run: async () => ({}),
-    getRun: async () => undefined,
-    wait: async () => ({}),
-    abort: () => {},
-  } as unknown as WorkflowServiceLike;
-  const handler = createHubHandler(kernel, workflows);
+  const handler = createHubHandler(kernel);
   const setup = await handler(new Request('http://127.0.0.1:3202/api/auth/setup', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

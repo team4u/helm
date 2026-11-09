@@ -27,7 +27,6 @@
  *   部分失败先固化 worktree 已 removed 事实，保留 branchDeleted 状态与
  *   诊断、可重试）；目录缺失经节点真实 fs stat 证明时显式
  *   worktree_missing 并保留登记（绝不全仓 prune 他人的登记）；
- * - `createCleanupWorktreeTool`：内核工具 `cleanup_worktree`（模型可调用）。
  *
  * 诚实性纪律：非 Git 仓库、裸仓库/--separate-git-dir 等非常规布局、git
  * 失败、目录缺失均带真实输出显式抛 HelmError，绝不静默降级、绝不伪造
@@ -39,8 +38,6 @@
 
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord'
-import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
-import { bool, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { randomUUID } from 'node:crypto'
 import { HelmError } from '@helm/protocol'
 import type { EnvFabric } from '../env/fabric.js'
@@ -1122,71 +1119,4 @@ export class WorktreeAllocator {
       branchDeleted: result.branchDeleted,
     }
   }
-}
-
-// ---------------------------------------------------------------------------
-// cleanup_worktree 内核工具
-// ---------------------------------------------------------------------------
-
-const cleanupWorktreeParameters = obj({
-  worktreeId: opt(str({ description: '受管 worktree 登记 ID（node:path；精确选择器，与 conversationId/path/nodeId 互斥）' })),
-  conversationId: opt(int({ minimum: 1, description: '子会话 ID（与 path 择一）' })),
-  path: opt(str({ description: 'worktree 绝对路径（与 conversationId 择一；多节点同名路径需另附 nodeId）' })),
-  nodeId: opt(str({ description: '目标节点 ID（仅可与 path 搭配，跨节点同名路径消歧）' })),
-  deleteBranch: opt(bool({ description: '同时删除 helm/spawn-* 分支（默认保留）' })),
-  force: opt(bool({ description: '强制清理（仅越过未提交修改/未合入提交保护；不可越过占用/归属/locked 校验）' })),
-})
-
-/**
- * 内核工具 cleanup_worktree：清理受管隔离 worktree（模型可调用）。
- * 仅清理 WorktreeAllocator 登记的 helm/* 分支 worktree（可按 worktreeId /
- * conversationId / path[+nodeId] 定位，幂等）；脏工作区、占用中、归属不
- * 匹配、locked 显式拒绝（错误消息指导先检视/合入或传 force）。
- */
-export function createCleanupWorktreeTool(allocator: WorktreeAllocator): ToolRegistration<typeof cleanupWorktreeParameters, never> {
-  return defineTool({
-    name: 'cleanup_worktree',
-    description:
-      "清理一个受管的隔离 Git Worktree（isolation: 'worktree' 派生的子会话工作区）。按 worktreeId（node:path）、conversationId 或 worktree 路径（可附 nodeId 消歧）定位；工作区含未提交修改或未合入提交时默认拒绝（先检视/合入，或显式 force: true；force 不可越过占用/归属/locked 校验）；可选 deleteBranch: true 一并删除 helm/spawn-* 分支（分支删除失败可重试）。仅清理 helm 登记的受管 worktree，绝不触碰未登记目录。",
-    parameters: cleanupWorktreeParameters,
-    structuredOutputSchema: {
-      type: 'object',
-      properties: {
-        ok: { type: 'boolean' },
-        removed: { type: 'boolean' },
-        worktreeId: { type: 'string' },
-        path: { type: 'string' },
-        branch: { type: 'string' },
-        nodeId: { type: 'string' },
-        branchDeleted: { type: 'boolean' },
-      },
-      required: ['ok', 'removed', 'worktreeId', 'path', 'branch', 'nodeId', 'branchDeleted'],
-    } as never,
-    async execute(args, _api, context) {
-      try {
-        const result = await allocator.cleanup({
-          ...(args.worktreeId !== undefined ? { worktreeId: args.worktreeId } : {}),
-          ...(args.conversationId !== undefined ? { conversationId: args.conversationId } : {}),
-          ...(args.path !== undefined ? { path: args.path } : {}),
-          ...(args.nodeId !== undefined ? { nodeId: args.nodeId } : {}),
-          ...(args.deleteBranch !== undefined ? { deleteBranch: args.deleteBranch } : {}),
-          ...(args.force !== undefined ? { force: args.force } : {}),
-          signal: context.abortSignal,
-        })
-        const summary = result.removed
-          ? `已移除受管 worktree ${result.path}（branch: ${result.branch}，节点 ${result.nodeId}${result.branchDeleted ? '，分支已删除' : '，分支保留'}）`
-          : `受管 worktree ${result.path} 此前已清理（幂等跳过；branch: ${result.branch}${result.branchDeleted ? '，分支已删除' : ''}）`
-        return {
-          output: [{ type: 'text', text: summary }],
-          structuredOutput: { ok: true, ...result } as never,
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        return {
-          output: [{ type: 'text', text: `cleanup_worktree 失败：${message}` }],
-          isError: true,
-        }
-      }
-    },
-  }) as ToolRegistration<typeof cleanupWorktreeParameters, never>
 }

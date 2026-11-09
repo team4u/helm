@@ -746,6 +746,19 @@ export class ConversationService {
     const convMeta = requireConv(this.store, id)
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    // 跨重启幂等提交（requestId）：同一 requestId 重复提交直接返回既有
+    // submission（崩溃后补发场景不产生第二条输入）。查询先于 input hook——
+    // 已成功落库的提交不再重复执行钩子副作用。
+    if (opts?.requestId !== undefined) {
+      if (typeof opts.requestId !== 'string' || opts.requestId.trim() === '') {
+        throw new HelmError('validation_error', '内部 requestId 必须为非空字符串', 400)
+      }
+      const previous = await this.harness.commit(
+        (tx) => tx.submissionByRequest(id as never, opts.requestId!),
+        BACKGROUND_CONTEXT,
+      )
+      if (previous !== undefined) return { submissionId: String(previous.id) }
+    }
     // 模型解析链统一入口：全部缺失时只在提交时显式拒绝（其他读路径不报错）。
     const effectiveModelRef = await this.resolveEffectiveModel(convMeta.modelOverride, convMeta.profileId)
     if (!effectiveModelRef) {

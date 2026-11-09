@@ -31,7 +31,6 @@ import type {
   HelmSnapshot,
   NodeInfo,
   PublicPluginDoc,
-  WorkflowRunSummary,
 } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 
@@ -486,24 +485,6 @@ export class EventHub {
           )
         }
         return { type, doc: doc as PublicPluginDoc }
-      }
-      case 'workflow.updated': {
-        const source = (envelope ?? record) as Record<string, unknown> | undefined
-        const run = source?.['run']
-        if (
-          run === null ||
-          typeof run !== 'object' ||
-          typeof (run as { id?: unknown }).id !== 'string' ||
-          !Number.isInteger((run as { conversationId?: unknown }).conversationId) ||
-          typeof (run as { status?: unknown }).status !== 'string'
-        ) {
-          throw new HelmError(
-            'invalid_event',
-            'workflow.updated 需要 { id: string; conversationId: number; status; ... } 形状的 run',
-            500,
-          )
-        }
-        return { type, run: run as WorkflowRunSummary }
       }
       case 'node.changed': {
         const source = (envelope ?? record) as Record<string, unknown> | undefined

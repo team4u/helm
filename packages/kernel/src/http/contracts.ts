@@ -32,11 +32,8 @@ import type {
   PluginSummary,
   ProviderConfig,
   PublicPluginDoc,
-  SavedWorkflowSummary,
   SearchHit,
   SkillSummary,
-  WorkflowRunRequest,
-  WorkflowRunSummary,
   Profile,
 } from '@helm/protocol'
 import type {
@@ -120,8 +117,6 @@ export type { SearchHit }
 
 /** HTTP 消费的 KernelRuntime 形状（真实 KernelRuntime 结构化兼容于它）。 */
 export interface KernelRuntimeLike {
-  /** 受管工作树清理；可选端口供最小测试内核显式报告未实现。 */
-  cleanupWorktree?(request: import('@helm/protocol').WorktreeCleanupRequest, signal?: AbortSignal): Promise<import('@helm/protocol').WorktreeCleanupResult>
   readonly dataDir: string
   readonly auth: AuthService
   readonly events: EventHub
@@ -251,29 +246,9 @@ export interface KernelRuntimeLike {
   ): Promise<EnvExecResponse> | EnvExecResponse
 }
 
-// ---------------------------------------------------------------------------
-// Workflows
-// ---------------------------------------------------------------------------
-
-export interface WorkflowRunHandle {
-  runId: string
-}
-
-export interface WorkflowServiceLike {
-  list(): Promise<SavedWorkflowSummary[]> | SavedWorkflowSummary[]
-  /** 已知全部 run 摘要（含运行中与终态）。 */
-  listRuns(): Promise<WorkflowRunSummary[]> | WorkflowRunSummary[]
-  run(request: WorkflowRunRequest): Promise<WorkflowRunSummary | WorkflowRunHandle> | WorkflowRunSummary | WorkflowRunHandle
-  getRun(runId: string): Promise<WorkflowRunSummary | undefined> | WorkflowRunSummary | undefined
-  /** 等待 run 终态并返回结果（历史 run 直接返回 result）。 */
-  wait(runId: string): Promise<unknown> | unknown
-  abort(runId: string): Promise<void> | void
-}
-
 /** startHub 选项与返回。 */
 export interface StartHubOptions {
   kernel: KernelRuntimeLike
-  workflows: WorkflowServiceLike
   /** 默认 3202（HELM_PORT 约定；测试请用 0）。 */
   port?: number
   /** 默认 127.0.0.1。 */
@@ -292,4 +267,4 @@ export interface HubHandle {
 }
 
 // 导出供测试构造完整 Profile
-export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, WorkflowRunSummary, WorkflowRunRequest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, SavedWorkflowSummary, ConversationCompactResponse, ConversationWithdrawResponse }
+export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, ConversationCompactResponse, ConversationWithdrawResponse }

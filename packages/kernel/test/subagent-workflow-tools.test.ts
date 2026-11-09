@@ -41,6 +41,7 @@ import { after, before, describe, it, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHelm } from '../src/app.js'
 import { KernelRuntime } from '../src/runtime/index.js'
+import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
 import { buildManagedEnv, runShell } from '../src/runtime/tools.js'
 import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
 import { SecretStash } from '../src/services/index.js'
@@ -86,6 +87,17 @@ function toolNameOf(model: unknown[] | undefined): string | undefined {
   return message?.toolName
 }
 
+/** 进程内 state store（隔离 KernelRuntime 上的编排插件用；不跨重启）。 */
+function memoryState(): import('../src/workflow/index.js').WorkflowStateStore {
+  const map = new Map<string, unknown>()
+  return {
+    get: <T>(key: string, initial: T): T => (map.has(key) ? (map.get(key) as T) : initial),
+    set: <T>(key: string, value: T): void => {
+      map.set(key, value)
+    },
+  }
+}
+
 /** agent_spawn 观察插件：记录每次载荷，返回 void（continue）。 */
 function spawnObserver(spawns: AgentSpawnRequest[]) {
   return {
@@ -115,6 +127,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       watchdogIntervalMs: 0,
     })
     try {
+      await kernel.plugins.register(createWorkflowPlugin({ state: memoryState() }))
       const spawns: AgentSpawnRequest[] = []
       await kernel.plugins.register(spawnObserver(spawns))
 
@@ -204,6 +217,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       watchdogIntervalMs: 0,
     })
     try {
+      await kernel.plugins.register(createWorkflowPlugin({ state: memoryState() }))
       const spawns: AgentSpawnRequest[] = []
       await kernel.plugins.register(spawnObserver(spawns))
 
@@ -259,6 +273,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       watchdogIntervalMs: 0,
     })
     try {
+      await kernel.plugins.register(createWorkflowPlugin({ state: memoryState() }))
       const spawns: AgentSpawnRequest[] = []
       await kernel.plugins.register(spawnObserver(spawns))
 
@@ -301,6 +316,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       watchdogIntervalMs: 0,
     })
     try {
+      await kernel.plugins.register(createWorkflowPlugin({ state: memoryState() }))
       // 外部后端语义（如 builtin:herdr）：接管执行并经 onResolved 回传元数据。
       await kernel.plugins.register({
         id: 'test:external-backend',
@@ -353,6 +369,16 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
 // ---------------------------------------------------------------------------
 
 describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_000 }, () => {
+  /** 引擎动作（与 HTTP/CLI 同链路；wait:true 返回终态 run）。 */
+  const wfRun = (app: Awaited<ReturnType<typeof createHelm>>, request: Record<string, unknown>) =>
+    app.kernel.plugins.invokeAction('builtin:workflow', 'run', request) as Promise<{
+      run: import('@helm/protocol').WorkflowRunSummary
+    }>
+  const wfInspect = (app: Awaited<ReturnType<typeof createHelm>>, runId: string) =>
+    app.kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as Promise<{
+      run: import('@helm/protocol').WorkflowRunSummary
+    }>
+
   it('args 为任意 JSON 对象原样到达真实引擎（args.items.map 可用，绝不 String 化）；scriptPath 与 resumeFromRunId 均贯通', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'wf1')
     const { models, faux } = makeFauxModels()
@@ -385,8 +411,8 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       const parsedSummary = JSON.parse(text) as { status: string; result?: unknown }
       assert.equal(parsedSummary.status, 'completed', 'SubagentWorkflow 工具应等待终态返回')
       assert.deepEqual(parsedSummary.result, [2, 4, 6], '工具输出直接携带终态 result')
-      const result = (await app.workflows.wait(runId)) as unknown
-      assert.deepEqual(result, [2, 4, 6], 'args.items.map 真实计算——args 为对象而非字符串')
+      const doneRun = (await wfInspect(app, runId)).run
+      assert.deepEqual(doneRun.result, [2, 4, 6], 'args.items.map 真实计算——args 为对象而非字符串')
 
       // --- scriptPath：文件路径入口 ---
       const scriptFile = join(dir, 'wf-script-file.js')
@@ -406,7 +432,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       const detail2 = await app.kernel.getConversationDetail(1, { limit: 50 })
       const runId2 = extractRunId(toolResultText(detail2, 'SubagentWorkflow'))
       assert.ok(runId2, 'scriptPath 调用应返回新 runId')
-      assert.equal(await app.workflows.wait(runId2), 42, 'scriptPath 脚本真实执行')
+      assert.equal((await wfInspect(app, runId2)).run.result, 42, 'scriptPath 脚本真实执行')
 
       // --- resumeFromRunId：断点恢复（账本前缀重放，结果与原 run 一致） ---
       faux.setResponses([
@@ -421,9 +447,8 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       const detail3 = await app.kernel.getConversationDetail(1, { limit: 50 })
       const runId3 = extractRunId(toolResultText(detail3, 'SubagentWorkflow'))
       assert.ok(runId3, 'resume 调用应返回新 runId')
-      assert.deepEqual(await app.workflows.wait(runId3), [2, 4, 6], '重放结果与原 run 一致')
-      const resumedSummary = app.workflows.getRun(runId3)
-      assert.equal(resumedSummary.replayedFrom, runId, 'resume run 应标记账本重放来源')
+      assert.deepEqual((await wfInspect(app, runId3)).run.result, [2, 4, 6], '重放结果与原 run 一致')
+      assert.equal((await wfInspect(app, runId3)).run.replayedFrom, runId, 'resume run 应标记账本重放来源')
     } finally {
       await app.close()
     }

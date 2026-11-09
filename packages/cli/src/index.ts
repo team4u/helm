@@ -57,7 +57,12 @@ function printHelp(
   if (dynamic.length > 0) {
     io.out('\n插件命令（由 GET /api/actions 动态生成）:\n')
     for (const cmd of dynamic) {
-      io.out(`  ${cmd.path.join(' ')}\n    ${cmd.description}\n`)
+      const positional = cmd.positional ? ` ${cmd.positional}` : ''
+      io.out(`  ${cmd.path.join(' ')}${positional}\n    ${cmd.description}\n`)
+      for (const flag of cmd.flags ?? []) {
+        if (flag.name === 'input' || flag.name === 'current') continue
+        io.out(`    --${flag.name} <${flag.type}>${flag.help ? `  ${flag.help}` : ''}\n`)
+      }
     }
   } else {
     io.out('\n（当前未获取到插件动作命令；未启动 Hub、未登录或无可用动作时如此）\n')

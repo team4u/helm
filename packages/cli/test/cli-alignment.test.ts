@@ -19,9 +19,10 @@ interface Hit {
 
 async function startHub(
   routes: Record<string, (body: unknown) => { status?: number; body?: unknown }>,
+  manifests: readonly unknown[] = [],
 ): Promise<{ url: string; hits: Hit[]; close: () => Promise<void> }> {
   const allRoutes: Record<string, (body: unknown) => { status?: number; body?: unknown }> = {
-    'GET /api/actions': () => ({ body: [] }),
+    'GET /api/actions': () => ({ body: [...manifests] }),
     ...routes,
   }
   const hits: Hit[] = []
@@ -235,27 +236,77 @@ test('send --wait：?wait=1；json 输出完整 result、人类模式直出回�
 })
 
 // ---------------------------------------------------------------------------
-// workflows runs / run --wait
+// workflows（builtin:workflow 插件动态动作命令）
 // ---------------------------------------------------------------------------
+
+/** builtin:workflow 动作 manifest（与插件声明一致的最小契约形状）。 */
+const WF_RUN_MANIFESTS = [
+  {
+    pluginId: 'builtin:workflow',
+    id: 'run',
+    description: '启动工作流运行',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        script: { type: 'string' },
+        args: {},
+        resumeFromRunId: { type: 'string' },
+        conversationId: { type: 'number' },
+        wait: { type: 'boolean' },
+      },
+      additionalProperties: false,
+    },
+    outputSchema: { type: 'object', properties: { run: { type: 'object' } }, required: ['run'], additionalProperties: false },
+    cli: {
+      command: ['workflows', 'run'],
+      positional: [{ field: 'name', readFileInto: 'script' }],
+      timeoutMs: 0,
+    },
+  },
+  {
+    pluginId: 'builtin:workflow',
+    id: 'runs',
+    description: '列出工作流运行记录',
+    inputSchema: {
+      type: 'object',
+      properties: { conversationId: { type: 'number' } },
+      additionalProperties: false,
+    },
+    outputSchema: { type: 'object', properties: { runs: { type: 'array' } }, required: ['runs'], additionalProperties: false },
+    cli: { command: ['workflows', 'runs'] },
+  },
+]
 
 test('workflows runs：列出全部；--current 过滤 conversationId；多余位置参数拒绝', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
-  const hub = await startHub({
-    'GET /api/workflows/runs': () => ({
-      body: [{ id: 'wf_1', name: 'demo', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 1 }],
-    }),
-    'GET /api/workflows/runs?conversationId=7': () => ({ body: [] }),
-  })
+  const hub = await startHub(
+    {
+      'POST /api/actions/builtin%3Aworkflow/runs': (body) => {
+        const input = (body as { input?: { conversationId?: number } }).input ?? {}
+        return {
+          body:
+            input.conversationId === 7
+              ? { runs: [] }
+              : { runs: [{ id: 'wf_1', name: 'demo', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 1 }] },
+        }
+      },
+    },
+    WF_RUN_MANIFESTS,
+  )
   const env = makeEnv(hub.url, dir)
   try {
     const all = await run(['workflows', 'runs', '--json'], env)
     assert.equal(all.code, 0, all.err)
-    assert.equal(JSON.parse(all.out)[0].id, 'wf_1')
-    assert.equal(hub.hits.at(-1)?.path, '/api/workflows/runs')
+    assert.equal((JSON.parse(all.out) as { runs: Array<{ id: string }> }).runs[0]?.id, 'wf_1')
+    assert.equal(hub.hits.at(-1)?.path, '/api/actions/builtin%3Aworkflow/runs')
 
     const filtered = await run(['workflows', 'runs', '--current', '--json'], { ...env, HELM_CONVERSATION_ID: '7' })
     assert.equal(filtered.code, 0, filtered.err)
-    assert.equal(hub.hits.at(-1)?.path, '/api/workflows/runs?conversationId=7')
+    // --current 注入动作 conversationId 上下文（body.conversationId）；
+    // 服务端 runs 动作以它作为过滤器（input.conversationId 优先）。
+    const filteredBody = (hub.hits.at(-1) as { body?: { conversationId?: number } }).body
+    assert.equal(filteredBody?.conversationId, 7)
 
     const stray = await run(['workflows', 'runs', 'wf_1', '--json'], env)
     assert.equal(stray.code, 1)
@@ -265,9 +316,9 @@ test('workflows runs：列出全部；--current 过滤 conversationId；多余�
   }
 })
 
-test('workflows run --wait：终态成功输出 summary/result；failed 非零退出', { timeout: 60_000 }, async () => {
+test('workflows run --wait：终态成功输出 run/result；failed 非零退出', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
-  const doneSummary = {
+  const doneRun = {
     id: 'wf_w',
     name: 'demo',
     conversationId: 1,
@@ -276,37 +327,48 @@ test('workflows run --wait：终态成功输出 summary/result；failed 非零�
     updatedAt: 2,
     result: { answer: 42 },
   }
-  const hub = await startHub({
-    'POST /api/workflows/run?wait=1': () => ({ body: doneSummary }),
-    'POST /api/workflows/run': () => ({
-      status: 202,
-      body: { id: 'wf_w', name: 'demo', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 },
-    }),
-  })
+  const hub = await startHub(
+    {
+      'POST /api/actions/builtin%3Aworkflow/run': (body) => {
+        const input = (body as { input?: { wait?: boolean } }).input ?? {}
+        if (input.wait === true) return { body: { run: doneRun } }
+        return {
+          status: 200,
+          body: { run: { id: 'wf_w', name: 'demo', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 } },
+        }
+      },
+    },
+    WF_RUN_MANIFESTS,
+  )
   const env = makeEnv(hub.url, dir)
   try {
     const json = await run(['workflows', 'run', 'demo', '--wait', '--json'], env)
     assert.equal(json.code, 0, json.err)
-    assert.deepEqual(JSON.parse(json.out), doneSummary)
-    assert.equal(hub.hits.at(-1)?.path, '/api/workflows/run?wait=1')
+    assert.deepEqual((JSON.parse(json.out) as { run: unknown }).run, doneRun)
+    const waitBody = (hub.hits.at(-1) as { body?: { input?: { wait?: boolean; name?: string } } }).body
+    assert.equal(waitBody?.input?.wait, true)
+    assert.equal(waitBody?.input?.name, 'demo')
 
     const human = await run(['workflows', 'run', 'demo', '--wait'], env)
     assert.equal(human.code, 0, human.err)
-    assert.match(human.out, /run wf_w completed/)
+    assert.match(human.out, /wf_w/)
     assert.match(human.out, /42/)
 
-    // 不带 --wait 保持 202 异步语义
+    // 不带 --wait 返回运行中 run
     const asyncRun = await run(['workflows', 'run', 'demo', '--json'], env)
     assert.equal(asyncRun.code, 0, asyncRun.err)
-    assert.equal(JSON.parse(asyncRun.out).status, 'running')
+    assert.equal((JSON.parse(asyncRun.out) as { run: { status: string } }).run.status, 'running')
 
     // failed 终态：Hub 错误信封 → 非零退出（不把空 result 当成功）
-    const hub2 = await startHub({
-      'POST /api/workflows/run?wait=1': () => ({
-        status: 500,
-        body: { error: { code: 'workflow_failed', message: 'boom', details: { runId: 'wf_f', status: 'failed' } } },
-      }),
-    })
+    const hub2 = await startHub(
+      {
+        'POST /api/actions/builtin%3Aworkflow/run': () => ({
+          status: 500,
+          body: { error: { code: 'workflow_failed', message: 'boom', details: { runId: 'wf_f', status: 'failed' } } },
+        }),
+      },
+      WF_RUN_MANIFESTS,
+    )
     try {
       const failed = await run(['workflows', 'run', 'demo', '--wait', '--json'], makeEnv(hub2.url, dir))
       assert.equal(failed.code, 1)
@@ -314,6 +376,47 @@ test('workflows run --wait：终态成功输出 summary/result；failed 非零�
     } finally {
       await hub2.close()
     }
+  } finally {
+    await hub.close()
+  }
+})
+
+test('workflows run：文件位置参数读入 script、名称写入 name、--resume-from-run-id 与 --args 透传', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startHub(
+    {
+      'POST /api/actions/builtin%3Aworkflow/run': () => ({ body: { run: { id: 'wf_x', status: 'running' } } }),
+    },
+    WF_RUN_MANIFESTS,
+  )
+  const env = makeEnv(hub.url, dir)
+  try {
+    const scriptPath = path.join(dir, 'demo.workflow.js')
+    await fsp.writeFile(scriptPath, 'export const meta = { name: "f" }\nreturn 1\n', 'utf8')
+
+    // 文件位置参数 -> readFileInto script
+    const byFile = await run(['workflows', 'run', scriptPath, '--json'], env)
+    assert.equal(byFile.code, 0, byFile.err)
+    let body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
+    assert.match(String(body?.input?.script), /name: "f"/)
+    assert.equal(body?.input?.name, undefined)
+
+    // ./ 前缀但文件不存在：显式报错（不猜含义）
+    const missing = await run(['workflows', 'run', './nope.js', '--json'], env)
+    assert.equal(missing.code, 1)
+    assert.equal((JSON.parse(missing.err) as { error: { code: string } }).error.code, 'positional_file_not_found')
+
+    // 名称（非路径形态）-> name 字段；--resume-from-run-id kebab 映射 camelCase
+    const byName = await run(
+      ['workflows', 'run', 'demo', '--args', JSON.stringify({ x: 1 }), '--resume-from-run-id', 'wf_prev', '--json'],
+      env,
+    )
+    assert.equal(byName.code, 0, byName.err)
+    body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
+    assert.equal(body?.input?.name, 'demo')
+    assert.equal(body?.input?.script, undefined)
+    assert.deepEqual(body?.input?.args, { x: 1 })
+    assert.equal(body?.input?.resumeFromRunId, 'wf_prev')
   } finally {
     await hub.close()
   }

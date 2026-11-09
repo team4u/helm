@@ -417,8 +417,25 @@ class ProbeBackend implements PluginHostBackend {
   registerAskSeqResolver(): () => void {
     return () => {}
   }
-  onWorkflowSettled(): () => void {
+  onEvent(): () => void {
     return () => {}
+  }
+  async abortConversation(): Promise<void> {}
+  async spawnAgent(): Promise<unknown> {
+    return {}
+  }
+  async runGate(): Promise<{ ok: boolean; output: string }> {
+    return { ok: true, output: '' }
+  }
+  async prepareInterruptedConversations(): Promise<void> {}
+  async cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
+    return { removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }
+  }
+  async invokeAction(): Promise<unknown> {
+    return {}
+  }
+  listActions(): [] {
+    return []
   }
   emitEvent(type: string, payload: unknown): void {
     if (type === 'notification') {
