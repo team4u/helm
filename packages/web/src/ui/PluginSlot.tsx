@@ -12,7 +12,7 @@
  *
  * 本文件只导出组件（保 Fast Refresh）；排序与匹配纯函数在 plugin-slot-model.ts。
  */
-import { createContext, useContext, useMemo } from 'react'
+import { createContext, useContext } from 'react'
 import type { ReactNode } from 'react'
 import type { ConversationSummary, PluginSlotContributionSpec } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
@@ -70,10 +70,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
     ? store.conversations.find((c) => c.id === conversationId)
     : undefined
 
-  const items = useMemo(
-    () => collectSlotItems(store.groupedUi.pluginSlots, qualified, (scope) => matchesUiScope(conversation, scope)),
-    [store.groupedUi.pluginSlots, qualified, conversation],
-  )
+  const items = collectSlotItems(store.groupedUi.pluginSlots, qualified, (scope) => matchesUiScope(conversation, scope))
   const visible = mode === 'single' ? items.slice(0, 1) : items
 
   if (visible.length === 0) return fallback !== undefined ? <>{fallback}</> : null
@@ -109,6 +106,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
               spec={item.spec}
               slotProps={slotProps}
               conversationId={conversationId}
+              composer={clientCtx?.composer}
               label={`插槽 ${qualified}/${item.spec.id}`}
             />
           </SlotAncestryContext.Provider>

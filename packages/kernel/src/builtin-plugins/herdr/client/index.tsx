@@ -182,12 +182,8 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
     })
 
   return (
-    <div className="helm-pane">
-      <div className="pane-topbar">
-        <div className="pane-title-group">
-          <Icon name="terminal" size={14} />
-          <span className="pane-title">Herdr 终端总览</span>
-        </div>
+    <div className="herdr-overview">
+      <div className="herdr-overview-toolbar">
         <div className="pane-actions">
           <span className="badge badge-neutral">窗格 {stats.total}</span>
           <span className="badge badge-accent">工作中 {stats.working}</span>
@@ -245,7 +241,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
         </span>
       </div>
 
-      <div className="timeline-scroll">
+      <div className="herdr-overview-content">
         <div style={{ width: '100%', maxWidth: 1100, margin: '0 auto' }}>
           <div className="jr-table-wrap">
             <table className="jr-table">

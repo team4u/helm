@@ -11,7 +11,7 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { HelmStoreContext } from '../src/lib/store-context.js'
-import { sanitizeSlotPropsForSpec } from '../src/ui/PluginUiView.js'
+import { sanitizeSlotPropsForSpec } from '../src/ui/plugin-ui-data.js'
 import { HelmSpecView } from '../src/ui/HelmSpecView.js'
 import { makeTestStore } from './helpers/store.js'
 
@@ -34,20 +34,27 @@ test('sanitizeSlotPropsForSpec：函数/symbol/bigint 剔除，结构保留', { 
     when: new Date(0),
   })
   // 顶层函数/symbol 值整键剔除（sym 不在结果中）；嵌套对象内函数属性剔除
-  //（composer 仅剩可序列化子字段、meta 首元素仅剩空对象）；标量函数无、
-  // bigint/undefined 值保留键但值为 undefined。
+  //（composer 仅剩可序列化子字段、meta 首元素仅剩空对象）；
+  // bigint/undefined 不进入 JSON 数据。
   assert.deepEqual(cleaned, {
     conversationId: 7,
     composer: { draft: 'hi' },
     entry: { id: '3', data: { nested: { keep: 1 } }, meta: [{}, 'text'] },
-    big: undefined,
-    nil: undefined,
     when: '1970-01-01T00:00:00.000Z',
   })
   assert.equal('sym' in cleaned, false, '顶层 symbol 值整键剔除')
   // 关键断言：任何位置的函数都不得进入 JSON 求值域
   const json = JSON.stringify(cleaned)
   assert.ok(!json.includes('setDraft') && !json.includes('=>'), `求值域不得含函数：${json}`)
+})
+
+test('sanitizeSlotPropsForSpec：循环引用显式拒绝，原型键作为普通数据保留', { timeout: 60_000 }, () => {
+  const cycle: Record<string, unknown> = {}
+  cycle.self = cycle
+  assert.throws(() => sanitizeSlotPropsForSpec(cycle), /循环引用/)
+  const clean = sanitizeSlotPropsForSpec(JSON.parse('{"__proto__":{"safe":true}}'))
+  assert.equal(Object.getPrototypeOf(clean), Object.prototype)
+  assert.equal(Object.hasOwn(clean, '__proto__'), true)
 })
 
 test('PluginUiView JSON 轨：slotProps 经 sanitize 后进入 $data（函数不进求值域）', { timeout: 60_000 }, () => {

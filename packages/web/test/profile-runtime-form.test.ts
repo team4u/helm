@@ -17,6 +17,7 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginSummary, Profile, ProfileRuntimeUiSpec } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
+import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -29,6 +30,7 @@ const originalFetch = globalThis.fetch
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+  document.body.replaceChildren()
 })
 
 function plugin(id: string, enabled: boolean): PluginSummary {
@@ -94,6 +96,11 @@ function makeStore(profileRuntimes: Array<{ pluginId: string; spec: ProfileRunti
     activeModal: null,
     highlightedEntry: null,
     notices: [],
+    subscribeSessionDoc,
+    getSessionDocState,
+    getPluginSessionDoc: async () => undefined,
+    retrySessionDoc: noop,
+    setScreenParams: noop,
     setTheme: noop,
     setThemePreference: noop,
     toggleTheme: noop,
@@ -136,10 +143,12 @@ async function mountEditor(
     root.render(e(HelmStoreContext.Provider, { value: store }, e(ProfileEditorModal, { initialProfileId: detail.id, onClose: () => {} })))
   })
   // 等待详情 useEffect 完成（加载态文本消失）
-  for (let i = 0; i < 50 && host.textContent?.includes('正在读取') === true; i++) {
+  for (let i = 0; i < 50 && document.body.textContent?.includes('正在读取') === true; i++) {
     await act(async () => { await new Promise((r) => setTimeout(r, 5)) })
   }
-  return { root, host }
+  const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')
+  assert.ok(dialog, '编辑器通过统一 Dialog Portal 挂载')
+  return { root, host: dialog }
 }
 
 test('多 kind 注册：运行时类型下拉出现且按 spec 注入 agent 候选', { timeout: 60_000 }, async () => {

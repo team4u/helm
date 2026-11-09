@@ -14,6 +14,7 @@ import { createPluginClientContext, PluginClientContext } from '../lib/plugin-cl
 import { getCachedClientComponent, getPluginClientCacheRevision, loadPluginClientModule, PluginClientError, requireClientExport, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
 import { HelmSpecView } from './HelmSpecView.js'
 import { ViewBoundary } from './ViewBoundary.js'
+import { sanitizeSlotPropsForSpec } from './plugin-ui-data.js'
 
 export interface PluginUiViewProps {
   pluginId: string
@@ -35,7 +36,8 @@ type ClientState =
   | { phase: 'ready'; Component: ComponentType<Record<string, unknown>> }
 
 export function PluginUiView(props: PluginUiViewProps): ReactNode {
-  const { pluginId, spec, slotProps, conversationId } = props
+  const { pluginId, spec, conversationId, composer, label } = props
+  const store = useHelmStore()
   const revision = useSyncExternalStore(
     subscribePluginClientCacheInvalidation,
     () => getPluginClientCacheRevision(pluginId),
@@ -44,20 +46,29 @@ export function PluginUiView(props: PluginUiViewProps): ReactNode {
   const clientRef = spec.client
   if (clientRef === undefined) {
     if (spec.json === undefined) return <MissingTrackError pluginId={pluginId} />
-    // JSON 求值域只允许可序列化数据：函数（如 ComposerController）绝不经 $data 注入
     return (
-      <HelmSpecView
-        pluginId={pluginId}
-        spec={spec.json}
-        docs={spec.docs}
-        sessionDocs={spec.sessionDocs}
-        conversationId={conversationId}
-        data={sanitizeSlotPropsForSpec(slotProps)}
-      />
+      <ViewBoundary label={label ?? '插件视图'}>
+        <PluginClientContext.Provider value={createPluginClientContext(store, pluginId, conversationId, composer)}>
+          <JsonPluginUiView {...props} />
+        </PluginClientContext.Provider>
+      </ViewBoundary>
     )
   }
   // 快照重建也会失效缓存，已挂载视图必须重载，不能继续显示旧组件或丢失样式。
   return <ClientPluginUiView key={JSON.stringify([pluginId, clientRef.module, clientRef.export, revision])} {...props} clientRef={clientRef} />
+}
+
+function JsonPluginUiView({ pluginId, spec, slotProps, conversationId }: PluginUiViewProps): ReactNode {
+  return (
+    <HelmSpecView
+      pluginId={pluginId}
+      spec={spec.json!}
+      docs={spec.docs}
+      sessionDocs={spec.sessionDocs}
+      conversationId={conversationId}
+      data={sanitizeSlotPropsForSpec(slotProps)}
+    />
+  )
 }
 
 function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, composer, label }: PluginUiViewProps & { clientRef: ClientComponentRef }): ReactNode {
@@ -127,36 +138,6 @@ function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, co
       </PluginClientContext.Provider>
     </ViewBoundary>
   )
-}
-
-/** JSON 求值域仅允许可序列化数据：函数/类实例/symbol 等原样剔除（结构保留）。 */
-export function sanitizeSlotPropsForSpec(
-  slotProps: Record<string, unknown> | undefined,
-): Record<string, unknown> {
-  if (slotProps === undefined) return {}
-  const clean: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(slotProps)) {
-    if (typeof value === 'function' || typeof value === 'symbol') continue
-    clean[key] = sanitizeSpecValue(value)
-  }
-  return clean
-}
-
-function sanitizeSpecValue(value: unknown): unknown {
-  if (value === null) return null
-  const kind = typeof value
-  if (kind === 'object') {
-    if (Array.isArray(value)) return value.map(sanitizeSpecValue)
-    if (value instanceof Date) return value.toISOString()
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (typeof v === 'function' || typeof v === 'symbol') continue
-      out[k] = sanitizeSpecValue(v)
-    }
-    return out
-  }
-  if (kind === 'function' || kind === 'symbol' || kind === 'bigint' || kind === 'undefined') return undefined
-  return value
 }
 
 /** client 与 json 都未声明：显式契约错误（注册边界已拦截，防御渲染期）。 */

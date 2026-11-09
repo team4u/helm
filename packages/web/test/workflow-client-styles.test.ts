@@ -29,8 +29,6 @@ const context: PluginClientContextType = {
   submitInput: async () => {},
   getPluginSessionDoc: async () => undefined,
   getPluginDoc: async () => undefined,
-  submitInput: async () => {},
-  getPluginSessionDoc: async () => undefined,
   conversationId: 1,
   theme: 'dark',
 }

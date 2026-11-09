@@ -16,12 +16,6 @@ import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import type { QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
 
-/**
- * 内核默认 Profile ID（@helm/kernel DEFAULT_PROFILE_ID 同值；web 不能反向依赖
- * kernel，在此独立声明；仅用于根会话绑定与兑底站位，属通用契约非角色硬编码）。
- */
-const DEFAULT_PROFILE_ID = 'assistant'
-
 export interface SidebarPartition {
   /** sidebar.item 的 'conversation:profile:<id>' 已指向的 profileId 集合。 */
   pinnedProfileIds: Set<string>
@@ -120,7 +114,7 @@ interface SidebarPinMeta {
 
 /**
  * 构建左栏智能体站位列表：
- * - 可见 Profile 各占一个一级站位（assistant 保底存在）；
+ * - 可见 Profile 各占一个一级站位；未加载资产的会话按实际 profileId 展示；
  * - 会话指向型 sidebar.item 的 label/icon/order 覆盖对应站位的默认展示；
  * - 人类自由会话按 profileId 归集到各自 Agent 下（Profile 已删时生成孤儿兜底站位）；
  * - 插件停用后其 managedByPlugin 站位与 ownedBy=helm/bot 遗留会话自动隐藏。
@@ -130,12 +124,7 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
   const enabledPluginIds = collectEnabledPluginIds(plugins)
   const partition = partitionSidebarUi(sidebarItems, sidebarSections)
 
-  // 可见 Profile 集合；默认 assistant 尚未加载时兜底（不因接口时序丢主入口；
-  // 根会话 #1 绑定 assistant 属内核通用契约，非角色硬编码）。
   const visibleProfiles = profiles.filter((p) => isProfileVisible(p, enabledPluginIds))
-  if (!profiles.some((p) => p.id === DEFAULT_PROFILE_ID)) {
-    visibleProfiles.push({ id: DEFAULT_PROFILE_ID, name: '个人助理' })
-  }
   const visibleProfileIds = new Set(visibleProfiles.map((p) => p.id))
 
   // sidebar.item 会话指向项 -> profileId 展示元信息（screen: 视图项在此分流，不进站位）。
@@ -151,7 +140,7 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
       const rest = target.slice('conversation:'.length).trim()
       if (/^\d+$/.test(rest)) {
         const idNum = Number(rest)
-        pid = convById.get(idNum)?.profileId ?? (idNum === ROOT_CONVERSATION_ID ? DEFAULT_PROFILE_ID : null)
+        pid = convById.get(idNum)?.profileId ?? null
       }
     }
     if (pid && !pinMeta.has(pid)) {
@@ -229,13 +218,12 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
 
   for (const profile of visibleProfiles) {
     const meta = pinMeta.get(profile.id)
-    // 排序优先 pinMeta.order（builtin:assistant 注册 order:0 的根会话入口）；
-    // 无 pinMeta 的默认 Profile 兜底置顶，其余默认 100，孤儿兑底 200。
-    const order = meta?.order ?? (profile.id === DEFAULT_PROFILE_ID ? 0 : 100)
+    const order = meta?.order ?? 100
     emitStanding(profile.id, profile, meta, order, isHumanSelectableProfile(profile, enabledPluginIds))
   }
   for (const pid of orphanProfileIds) {
-    emitStanding(pid, undefined, pinMeta.get(pid), 200, false)
+    const meta = pinMeta.get(pid)
+    emitStanding(pid, undefined, meta, meta?.order ?? 200, false)
   }
 
   standings.sort((a, b) => a.order - b.order || a.profileId.localeCompare(b.profileId))

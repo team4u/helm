@@ -28,9 +28,6 @@ import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from 
 
 type EditorTab = 'basic' | 'system' | 'memory'
 
-/** Profile 默认保护（内核 DEFAULT_PROFILE_ID 通用机制，无角色硬编码）。 */
-const DEFAULT_PROFILE_ID = 'assistant'
-
 /** store.groupedUi.profileRuntimes 元素（pluginId + spec）。 */
 interface QualifiedRuntimeSpec {
   pluginId: string
@@ -239,7 +236,7 @@ function ProfileBasicTab({
           />
         ) : (
           <span className="badge badge-neutral">
-            {(profile.id === DEFAULT_PROFILE_ID || profile.managedByPlugin !== undefined) && <HelmIcon name="lock" size={11} />}
+            {profile.managedByPlugin !== undefined && <HelmIcon name="lock" size={11} />}
             {profile.id}
           </span>
         )}
@@ -715,14 +712,7 @@ export function ProfileEditorModal({
     }
   }
 
-  const isProtected = useMemo(
-    () =>
-      !isNew &&
-      ((selectedId !== null && selectedId === DEFAULT_PROFILE_ID) ||
-        (draft?.profile.id !== undefined && draft.profile.id === DEFAULT_PROFILE_ID) ||
-        draft?.profile.managedByPlugin !== undefined),
-    [isNew, selectedId, draft?.profile.id, draft?.profile.managedByPlugin],
-  )
+  const isProtected = !isNew && draft?.profile.managedByPlugin !== undefined
 
   const tabItems: Array<{ key: EditorTab; label: string }> = [
     // 无任何已注册运行时时本 Tab 只有基础字段，不预告运行时能力。

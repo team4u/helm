@@ -5,6 +5,15 @@
  * 插件停用/卸载时由宿主移除。仅使用宿主全局设计变量与通用类
  * （helm-pane / pane-topbar / jr-table / badge / btn 等），不覆盖宿主组件。
  */
+.herdr-overview-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px;
+}
+.herdr-overview-content {
+  padding: 12px 16px;
+}
 .herdr-overview-filters {
   padding: 10px 16px 0;
   justify-content: flex-start;

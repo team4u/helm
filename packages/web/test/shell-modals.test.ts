@@ -12,7 +12,7 @@ import type {
 } from '@helm/protocol'
 import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import { groupUiContributions, resolveTargetString, type HelmStoreValue } from '../src/lib/types.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import {
   type AgentStanding,
@@ -32,7 +32,6 @@ import {
   isSkillVisible,
   partitionSidebarUi,
 } from '../src/shell/sidebar-model.js'
-import { groupUiContributions, resolveTargetString } from '../src/lib/types.js'
 
 const noop = () => {}
 const asyncNoop = async () => undefined
@@ -252,21 +251,19 @@ test('buildAgentStandings：Profile 已删的人类历史对话生成孤儿兜�
   assert.equal(orphan.primaryConversation?.id, 70)
 })
 
-test('buildAgentStandings：profiles 未加载出 assistant 时兜底生成个人助理站位', { timeout: 60_000 }, () => {
+test('buildAgentStandings：资产未加载时按真实会话的 profileId 展示，不编造默认 Profile', { timeout: 60_000 }, () => {
+  const input = { profiles: [], plugins: [], sidebarItems: [], sidebarSections: [] }
   const standings = buildAgentStandings({
-    profiles: [],
-    conversations: [conv({ id: 1, title: '个人助理', profileId: 'assistant' })],
-    plugins: [{ id: 'builtin:assistant', enabled: true }],
-    sidebarItems: [],
-    sidebarSections: [],
+    ...input,
+    conversations: [conv({ id: 80, profileId: 'loading-profile' })],
   })
   assert.equal(standings.length, 1)
-  assert.equal(standings[0]!.profileId, 'assistant')
-  assert.equal(standings[0]!.label, '个人助理')
-  // 图标统一优先 pinMeta（sidebar.item）；无 pinMeta 时回退 bot（角色图标
-  // 由 builtin:assistant 的 sidebar.item 声明，不在宿主硬编码）。
+  assert.equal(standings[0]!.profileId, 'loading-profile')
+  assert.equal(standings[0]!.label, 'loading-profile')
   assert.equal(standings[0]!.icon, 'bot')
-  assert.equal(standings[0]!.primaryConversation?.id, 1)
+  assert.equal(standings[0]!.canCreateConversation, false)
+  assert.equal(standings[0]!.primaryConversation?.id, 80)
+  assert.deepEqual(buildAgentStandings({ ...input, conversations: [] }), [])
 })
 
 test('buildAgentStandings：assistant 站位图标与排序由 sidebar.item pinMeta 驱动（order:0 sparkles）', { timeout: 60_000 }, () => {
@@ -642,6 +639,7 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
     ensurePluginDoc: async () => undefined,
     openTarget: () => {},
     closeSplit: () => {},
+    setScreenParams: () => {},
     setWorkbenchOpen: () => {},
     setWorkbenchTab: () => {},
     setActiveModal: () => {},
