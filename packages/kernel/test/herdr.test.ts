@@ -386,9 +386,26 @@ class FakeBackend implements PluginHostBackend {
     this.askSeqResolvers.add(resolver)
     return () => { this.askSeqResolvers.delete(resolver) }
   }
-  onWorkflowSettled(listener: (run: WorkflowRunSummary) => void | Promise<void>): () => void {
-    this.workflowListeners.add(listener)
-    return () => { this.workflowListeners.delete(listener) }
+  async abortConversation(): Promise<void> {}
+  async spawnAgent(): Promise<unknown> {
+    return {}
+  }
+  async runGate(): Promise<{ ok: boolean; output: string }> {
+    return { ok: true, output: '' }
+  }
+  async prepareInterruptedConversations(): Promise<void> {}
+  async cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
+    return { removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }
+  }
+  async invokeAction(): Promise<unknown> {
+    return {}
+  }
+  listActions(): [] {
+    return []
+  }
+  onEvent(_type: string, listener: (payload: unknown) => void | Promise<void>): () => void {
+    this.workflowListeners.add(listener as (run: WorkflowRunSummary) => void | Promise<void>)
+    return () => { this.workflowListeners.delete(listener as (run: WorkflowRunSummary) => void | Promise<void>) }
   }
   emitEvent(type: string, payload: unknown): void {
     this.events.push({ type, payload })

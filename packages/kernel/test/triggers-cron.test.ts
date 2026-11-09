@@ -140,7 +140,14 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
       createAsk: async () => ({}) as never,
       cancelAsk: async () => {},
       registerAskSeqResolver: () => () => {},
-      onWorkflowSettled: () => () => {},
+      onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    listActions: () => [],
       emitEvent: (type, payload) => {
         events.push({ type, payload })
       },

@@ -29,6 +29,7 @@ export type {
 } from './env/index.js';
 export { createAssistantPlugin } from './builtin-plugins/assistant.js';
 export { createHerdrPlugin } from './builtin-plugins/herdr.js';
+export { createWorkflowPlugin, WORKFLOW_PLUGIN_ID, type WorkflowPluginOptions } from './builtin-plugins/workflow.js';
 export {
   createSuperAgentPlugin,
   SUPERAGENT_PLUGIN_ID,

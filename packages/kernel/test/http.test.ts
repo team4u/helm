@@ -37,7 +37,7 @@ import {
   type HelmPluginContext,
 } from '@helm/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
-import type { EventHub, KernelRuntimeLike, WorkflowServiceLike } from '../src/http/index.js'
+import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
 
 // ---------------------------------------------------------------------------
 // 测试基座
@@ -244,29 +244,8 @@ function makeKernelWithRefresh(refreshImpl?: KernelRuntimeLike['refreshModels'])
   return kernel
 }
 
-const workflows: WorkflowServiceLike = {
-  list: () => [{ name: 'demo' }],
-  listRuns: () => [{ id: 'run-1', name: 'demo', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }],
-  run: async (request) => ({
-    id: 'run-1',
-    name: request.name ?? 'inline',
-    conversationId: request.conversationId ?? ROOT_CONVERSATION_ID,
-    status: 'running',
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  }),
-  getRun: async (runId) =>
-    runId === 'run-1'
-      ? { id: 'run-1', name: 'demo', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }
-      : undefined,
-  wait: async (runId) => {
-    void runId
-  },
-  abort: () => {},
-}
-
 function makeHandlers(kernel = makeKernel()) {
-  return { kernel, handler: createHubHandler(kernel, workflows) }
+  return { kernel, handler: createHubHandler(kernel) }
 }
 
 async function call(handler: (req: Request) => Promise<Response>, method: string, path: string, opts?: { body?: unknown; auth?: boolean; raw?: string; contentType?: string; origin?: string }): Promise<{ status: number; body: any; headers: Headers; text: string }> {
@@ -320,7 +299,14 @@ function hostApiForPluginHost(): PluginHostBackend {
     createAsk: async () => ({ id: 'ask-1', status: 'answered', answers: {} }),
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
-    onWorkflowSettled: () => () => {},
+    onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    listActions: () => [],
     emitEvent: () => {},
   }
 }
@@ -386,7 +372,7 @@ before(async () => {
   pluginHost = new PluginHost({ dataDir, host: hostApiForPluginHost(), docs: docStore() })
   await registerRoutePlugin(pluginHost)
   hub0 = new TestEventHub()
-  handler0 = createHubHandler(makeKernel(), workflows)
+  handler0 = createHubHandler(makeKernel())
   conversations.set(ROOT_CONVERSATION_ID, summary(1, '个人助理'))
 })
 
@@ -443,7 +429,7 @@ test('恶意网页抢先 setup 防护：恶意 Origin 403 且不写配置；text
     const evilAuth = new AuthService(evilDir)
     const evilKernel = makeKernel()
     ;(evilKernel as { auth: AuthService }).auth = evilAuth
-    const handler = createHubHandler(evilKernel, workflows)
+    const handler = createHubHandler(evilKernel)
     // 非 JSON 的简单 POST（跨站表单可发）→ 415，不进入 setup
     const malicious = await call(handler, 'POST', '/api/auth/setup', {
       auth: false,
@@ -1003,7 +989,7 @@ test('artifacts 伪造 metadata（path=credentials.json）不得泄密', { timeo
   evilRepo.put(fakeMeta)
   const kernel = makeKernel()
   ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
-  const handler = createHubHandler(kernel, workflows)
+  const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', `/api/artifacts/evil-1/content`)
   assert.equal(res.status, 500)
   assert.equal(res.body.error.code, 'artifact_metadata_illegal')
@@ -1027,7 +1013,7 @@ test('artifacts 伪 metadata（artifacts/<convId>/../../escape）拒绝', { time
   evilRepo.put(fakeMeta)
   const kernel = makeKernel()
   ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
-  const handler = createHubHandler(kernel, workflows)
+  const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', `/api/artifacts/evil-2/content`)
   assert.equal(res.status, 500)
   assert.equal(res.body.error.code, 'artifact_metadata_illegal')
@@ -1054,7 +1040,7 @@ test('artifacts 符号链接越界拒绝（文件名段软链逃逸）', { timeo
   evilRepo.put(fakeMeta)
   const kernel = makeKernel()
   ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
-  const handler = createHubHandler(kernel, workflows)
+  const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', `/api/artifacts/evil-3/content`)
   assert.equal(res.status, 500)
   assert.equal(res.body.error.code, 'artifact_path_illegal')
@@ -1085,7 +1071,7 @@ test('artifacts 会话目录软链逃逸拒绝', { timeout: 60_000 }, async () =
   evilRepo.put(fakeMeta)
   const kernel = makeKernel()
   ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
-  const handler = createHubHandler(kernel, workflows)
+  const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', `/api/artifacts/evil-4/content`)
   assert.equal(res.status, 500)
   assert.equal(res.body.error.code, 'artifact_path_illegal')
@@ -1102,7 +1088,7 @@ test('artifacts 读权限错误不伪称 missing（非 ENOENT 原样 500）', { 
   await chmod(target, 0o000)
   const kernel = makeKernel()
   ;(kernel as { artifacts: ArtifactService }).artifacts = artifactsNoPerm
-  const handler = createHubHandler(kernel, workflows)
+  const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', `/api/artifacts/${meta.id}/content`)
   // 进程是 root 时 chmod 000 仍可读：此时应成功返回内容（如实反映可读性）
   if (process.getuid?.() === 0) {
@@ -1128,25 +1114,16 @@ test('search?q= 透传；空 q 400', { timeout: 60_000 }, async () => {
   assert.equal(empty.status, 400)
 })
 
-test('workflows list / run 202 / getRun / abort；run body 恰一 source', { timeout: 60_000 }, async () => {
+test('workflows / worktrees 硬编码路由已删除：一律 404（编排经插件动作 /api/actions）', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const list = await call(handler, 'GET', '/api/workflows')
-  assert.equal(list.status, 200)
-  assert.ok(Array.isArray(list.body))
-  const run = await call(handler, 'POST', '/api/workflows/run', { body: { name: 'demo', args: { x: 1 } } })
-  assert.equal(run.status, 202)
-  assert.equal(run.body.id, 'run-1')
-  const got = await call(handler, 'GET', '/api/workflows/runs/run-1')
-  assert.equal(got.status, 200)
-  assert.equal(got.body.status, 'running')
-  const abort = await call(handler, 'POST', '/api/workflows/runs/run-1/abort')
-  assert.equal(abort.status, 200)
-  const missing = await call(handler, 'GET', '/api/workflows/runs/none')
-  assert.equal(missing.status, 404)
-  const multi = await call(handler, 'POST', '/api/workflows/run', { body: { name: 'a', script: 'x' } })
-  assert.equal(multi.status, 400)
-  const zero = await call(handler, 'POST', '/api/workflows/run', { body: { args: {} } })
-  assert.equal(zero.status, 400)
+  assert.equal(list.status, 404)
+  const run = await call(handler, 'POST', '/api/workflows/run', { body: { name: 'demo' } })
+  assert.equal(run.status, 404)
+  const runs = await call(handler, 'GET', '/api/workflows/runs')
+  assert.equal(runs.status, 404)
+  const cleanup = await call(handler, 'POST', '/api/worktrees/cleanup', { body: { worktreeId: 'w1' } })
+  assert.equal(cleanup.status, 404)
 })
 
 // ---------------------------------------------------------------------------
@@ -1261,7 +1238,7 @@ test('出站 JSON 递归脱敏：含引号/换行的 secret 也不泄漏，marke
     { conversationId: 1, snippet: `prefix ${trickySecret} middle [marker]${placeholder} end` },
     { nested: { list: [trickySecret, { deep: trickySecret }] } },
   ]
-  const handler = createHubHandler(kernel, workflows)
+  const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', '/api/search?q=leak')
   assert.equal(res.status, 200)
   assert.ok(!res.text.includes('sk-"quoted"'))
@@ -1278,7 +1255,7 @@ test('error.details 同样脱敏', { timeout: 60_000 }, async () => {
   ;(kernel as { search: (q: string) => Promise<unknown[]> }).search = async () => {
     throw new HelmError('search_failed', '搜索失败', 500, { trace: secret })
   }
-  const handler = createHubHandler(kernel, workflows)
+  const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', '/api/search?q=x')
   assert.equal(res.status, 500)
   assert.ok(!res.text.includes(secret))
@@ -1305,13 +1282,6 @@ test('body 超 1MiB 413 body_too_large', { timeout: 60_000 }, async () => {
   assert.equal(res.body.error.code, 'body_too_large')
 })
 
-test('workflow body 超 512KiB 413', { timeout: 60_000 }, async () => {
-  const { handler } = makeHandlers()
-  const big = 'x'.repeat(512 * 1024 + 100)
-  const res = await call(handler, 'POST', '/api/workflows/run', { body: { script: big } })
-  assert.equal(res.status, 413)
-})
-
 test('未知路由 404；未知方法 405', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const nf = await call(handler, 'GET', '/api/no-such-thing')
@@ -1323,7 +1293,7 @@ test('未知路由 404；未知方法 405', { timeout: 60_000 }, async () => {
 
 test('非 /api 前缀 404（显式 webDistDir:false 的纯 API 行为；默认静态托管由 static-web.test.ts 覆盖）', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
-  const handler = createHubHandler({ kernel, workflows, webDistDir: false })
+  const handler = createHubHandler({ kernel, webDistDir: false })
   const res = await call(handler, 'GET', '/favicon.ico')
   assert.equal(res.status, 404)
 })
@@ -1336,7 +1306,7 @@ test('FileNotFoundError 映射 404 而非 500', { timeout: 60_000 }, async () =>
       throw new FileNotFoundError('config.json')
     },
   }
-  const handler = createHubHandler(kernel, workflows)
+  const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', '/api/plugins/builtin:triggers/config')
   assert.equal(res.status, 404)
 })
@@ -1347,7 +1317,7 @@ test('FileNotFoundError 映射 404 而非 500', { timeout: 60_000 }, async () =>
 
 test('startHub port:0 监听 127.0.0.1，真实 HTTP 往返，close 迅速完成且 SSE 无遗留', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
-  const handle = await startHub({ kernel, workflows, port: 0 })
+  const handle = await startHub({ kernel, port: 0 })
   try {
     assert.ok(handle.url.startsWith('http://127.0.0.1:'))
     assert.ok((handle.port as number) > 0)
@@ -1378,7 +1348,7 @@ test('startHub port:0 监听 127.0.0.1，真实 HTTP 往返，close 迅速完成
 
 test('startHub 真实往返：编码 pluginId 经 node 服务器命中 action', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
-  const handle = await startHub({ kernel, workflows, port: 0 })
+  const handle = await startHub({ kernel, port: 0 })
   try {
     const res = await fetch(`${handle.url}/api/actions/builtin%3Atriggers/echo`, {
       method: 'POST',

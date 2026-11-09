@@ -15,7 +15,7 @@ const app = await createHelm({
   model: process.env.HELM_MODEL,
 });
 try {
-  const hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port, hostname, ...(webDistDir !== undefined ? { webDistDir } : {}) });
+  const hub = await startHub({ kernel: app.kernel, port, hostname, ...(webDistDir !== undefined ? { webDistDir } : {}) });
   process.stdout.write(`Helm Hub: ${hub.url}\n数据目录: ${app.kernel.dataDir}\n`);
   let stopping = false;
   const stop = async () => {

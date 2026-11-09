@@ -21,7 +21,7 @@ import {
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHubHandler } from '../src/http/index.js'
-import type { EventHub, KernelRuntimeLike, WorkflowServiceLike } from '../src/http/index.js'
+import type { EventHub, KernelRuntimeLike} from '../src/http/index.js'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,14 @@ function makeBackend(): PluginHostBackend {
     createAsk: async () => ({ id: 'ask-1', status: 'answered', answers: {} }),
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
-    onWorkflowSettled: () => () => {},
+    onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    listActions: () => [],
     emitEvent: () => {},
   }
 }
@@ -103,14 +110,6 @@ function makeKernel(): KernelRuntimeLike {
   return kernel
 }
 
-const workflows: WorkflowServiceLike = {
-  list: () => [],
-  listRuns: () => [],
-  run: async () => ({ id: 'r', name: 'x', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 1 }),
-  getRun: async () => undefined,
-  wait: async () => {},
-  abort: async () => {},
-}
 
 async function call(
   handler: (req: Request) => Promise<Response>,
@@ -165,7 +164,7 @@ before(async () => {
   })
 
   const kernel = makeKernel()
-  handler = createHubHandler(kernel, workflows)
+  handler = createHubHandler(kernel)
   const auth = kernel.auth as unknown as { setup(password: string): Promise<{ token: string }> }
   const issued = await auth.setup('client-track-test-password')
   token = issued.token

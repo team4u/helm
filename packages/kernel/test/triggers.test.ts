@@ -44,7 +44,7 @@ async function makeEnv(): Promise<TestEnv> {
   models.setProvider(faux.provider)
   const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 })
   faux.setResponses([])
-  const handler = createHubHandler(app.kernel, app.workflows)
+  const handler = createHubHandler(app.kernel)
   const env: TestEnv = {
     dataDir,
     faux,
@@ -625,7 +625,7 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
     const { AuthService } = await import('../src/services/index.js')
     const auth2 = new AuthService(dataDir)
     const { token } = await auth2.login('setup-pw-triggers-1234')
-    const handler2 = createHubHandler(app2.kernel, app2.workflows)
+    const handler2 = createHubHandler(app2.kernel)
     const cfgRes = await handler2(
       new Request('http://127.0.0.1:3202/api/plugins/builtin%3Atriggers/config', {
         headers: { authorization: `Bearer ${token}` },
@@ -636,7 +636,7 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
     assert.equal(cfgText.includes(SECRET), false, 'GET config 不得泄漏 webhook secret')
     assert.equal(cfgText.includes('webhook:persist'), false, 'GET config 不得输出未声明的动态 pluginSecrets 键')
 
-    const handler = createHubHandler(app2.kernel, app2.workflows)
+    const handler = createHubHandler(app2.kernel)
     const post = async (body: string, sig: string): Promise<number> => {
       const res = await handler(
         new Request(`http://127.0.0.1:3202${WEBHOOK_BASE}/persist`, {

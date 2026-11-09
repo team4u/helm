@@ -110,7 +110,7 @@ test('Herdr 动作经真实 HTTP 自动映射 CLI，支持 --json 和 --current'
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   const credential = app.kernel.auth.createProcessToken()
   try {
-    hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 0 })
+    hub = await startHub({ kernel: app.kernel, port: 0 })
     const env = {
       HELM_HUB_URL: hub.url,
       HELM_DATA_DIR: join(dir, 'cli'),

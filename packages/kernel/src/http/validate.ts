@@ -502,36 +502,6 @@ export function parseActionInvokeBody(body: Record<string, unknown>): {
   return { input: body.input, ...(conversationId !== undefined ? { conversationId } : {}) }
 }
 
-export function parseWorkflowRunBody(body: Record<string, unknown>) {
-  const name = optionalString(body, 'name')
-  const script = optionalString(body, 'script')
-  const scriptPath = optionalString(body, 'scriptPath')
-  const resumeFromRunId = optionalString(body, 'resumeFromRunId')
-  const conversationIdRaw = optionalNumber(body, 'conversationId')
-  if (conversationIdRaw !== undefined && (!Number.isInteger(conversationIdRaw) || conversationIdRaw <= 0)) {
-    throw new ValidationError('conversationId 需为正整数')
-  }
-  const sources = [name, script, scriptPath].filter((v) => v !== undefined).length
-  if (sources !== 1) {
-    throw new ValidationError('name / script / scriptPath 必须恰好提供一个')
-  }
-  if (name !== undefined && !ID_PATTERN.test(name)) {
-    throw new ValidationError('name 需为合法标识符')
-  }
-  if (scriptPath !== undefined && !scriptPath.startsWith('/')) {
-    throw new ValidationError('scriptPath 需为绝对路径')
-  }
-  rejectUnknownKeys(body, new Set(['name', 'script', 'scriptPath', 'args', 'resumeFromRunId', 'conversationId']))
-  return {
-    ...(name !== undefined ? { name } : {}),
-    ...(script !== undefined ? { script } : {}),
-    ...(scriptPath !== undefined ? { scriptPath } : {}),
-    ...('args' in body ? { args: body.args } : {}),
-    ...(resumeFromRunId !== undefined ? { resumeFromRunId } : {}),
-    ...(conversationIdRaw !== undefined ? { conversationId: conversationIdRaw } : {}),
-  }
-}
-
 export function parsePluginConfigBody(body: Record<string, unknown>): Record<string, unknown> {
   const raw = body.values
   if (raw === undefined || typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
@@ -596,34 +566,6 @@ export function parseConversationWithdrawBody(body: Record<string, unknown>): { 
   }
   rejectUnknownKeys(body, new Set(['submissionId']))
   return { submissionId: raw }
-}
-
-/** POST /api/worktrees/cleanup：只接受精确的受管资源选择器。 */
-export function parseWorktreeCleanupBody(body: Record<string, unknown>): import('@helm/protocol').WorktreeCleanupRequest {
-  rejectUnknownKeys(body, new Set(['worktreeId', 'conversationId', 'path', 'nodeId', 'deleteBranch', 'force']))
-  const result: import('@helm/protocol').WorktreeCleanupRequest = {}
-  for (const key of ['worktreeId', 'path', 'nodeId'] as const) {
-    if (body[key] !== undefined) {
-      const value = requireString(body, key, { minLength: 1 })
-      if (value.trim() === '') throw new ValidationError(`${key} 需为非空字符串`)
-      result[key] = value
-    }
-  }
-  if (body.conversationId !== undefined) {
-    if (typeof body.conversationId !== 'number' || !Number.isSafeInteger(body.conversationId) || body.conversationId < 1) {
-      throw new ValidationError('conversationId 需为安全正整数')
-    }
-    result.conversationId = body.conversationId
-  }
-  const selectors = [result.worktreeId, result.conversationId, result.path].filter((value) => value !== undefined)
-  if (selectors.length !== 1) throw new ValidationError('worktreeId、conversationId、path 必须且只能提供一个')
-  if (result.nodeId !== undefined && result.path === undefined) throw new ValidationError('nodeId 仅可搭配 path 使用')
-  if (result.path !== undefined && !isCrossPlatformAbsolutePath(result.path)) throw new ValidationError('path 需为目标节点的绝对路径')
-  for (const key of ['deleteBranch', 'force'] as const) {
-    const value = optionalBoolean(body, key)
-    if (value !== undefined) result[key] = value
-  }
-  return result
 }
 
 // ---------------------------------------------------------------------------

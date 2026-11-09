@@ -2,7 +2,7 @@
  * @helm/kernel 运行时出口：KernelRuntime 与全部内部机制模块。
  */
 
-export { KernelRuntime, type KernelRuntimeOptions, type WorkflowRunnerFn } from './runtime.js'
+export { KernelRuntime, type KernelRuntimeOptions } from './runtime.js'
 export {
   isStrictSemVer,
   normalizeExplicitVersion,
@@ -26,4 +26,4 @@ export { ModelRegistry } from './model-registry.js'
 export { HookBridge, prepareToolResultWith } from './hook-bridge.js'
 export { ConversationService } from './conversation-service.js'
 export { buildSpawnHost, toResolvedProfile, type SpawnHost, type SpawnHostSource } from './spawn-host.js'
-export { createSubagentTool, createWorkflowTool, createRunActionTool, type KernelToolHost } from './kernel-tools.js'
+export { createRunActionTool, type KernelToolHost } from './kernel-tools.js'

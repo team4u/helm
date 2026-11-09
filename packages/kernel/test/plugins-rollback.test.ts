@@ -130,7 +130,14 @@ function makeControlledBackend(): ControlledBackend {
     async createAsk() { throw new HelmError('unsupported', 'test', 400) },
     async cancelAsk() {},
     registerAskSeqResolver() { return () => {} },
-    onWorkflowSettled() { return () => {} },
+    onEvent() { return () => {} },
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    listActions: () => [],
     emitEvent(type, payload) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
     },
@@ -532,7 +539,14 @@ async function makeWatchdogHarness(opts: {
     createAsk: async () => ({ id: 'ask-1', status: 'cancelled', answers: {} }),
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
-    onWorkflowSettled: () => () => {},
+    onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    listActions: () => [],
     emitEvent: (type, payload) => {
       if (type === 'notification') {
         const p = payload as { level?: string; title?: string; body?: string }

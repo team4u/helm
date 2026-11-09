@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { KernelRuntime } from '../src/runtime/index.js'
+import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
 
 test('外部子代理执行元数据的工具正文与持久结果统一脱敏', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-spawn-metadata-'))
@@ -19,6 +20,16 @@ test('外部子代理执行元数据的工具正文与持久结果统一脱敏',
   try {
     const secret = 'private-metadata-folder'
     kernel.stash.put(1, 'PATH_SECRET', secret)
+    // subagent 工具由 builtin:workflow 插件提供（进程内 state 即可）。
+    const docs = new Map<string, unknown>()
+    await kernel.plugins.register(createWorkflowPlugin({
+      state: {
+        get: <T>(key: string, initial: T): T => (docs.has(key) ? (docs.get(key) as T) : initial),
+        set: <T>(key: string, value: T): void => {
+          docs.set(key, value)
+        },
+      },
+    }))
     await kernel.plugins.register({
       id: 'test:metadata-boundary',
       definePlugin(ctx) {

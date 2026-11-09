@@ -69,7 +69,14 @@ function makeHostApi(events: string[]): PluginHostBackend {
     createAsk: async () => ({ id: 'ask-1', status: 'answered' as const, answers: {} }),
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
-    onWorkflowSettled: () => () => {},
+    onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    listActions: () => [],
     emitEvent: (type) => {
       events.push(`event:${type}`);
     },

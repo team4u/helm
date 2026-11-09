@@ -65,7 +65,6 @@ import {
   type WorkbenchPanelSpec,
   type CommandSpec,
   type SettingsPanelSpec,
-  type WorkflowRunSummary,
 } from '@helm/protocol';
 import type { Provider } from '@earendil-works/pi-ai';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
@@ -146,6 +145,8 @@ export interface DerivedToolSpec {
   name: string;
   description: string;
   inputSchema: JsonSchema;
+  /** 结构化输出 Schema（ctx.tool 声明时透传；run_action 派生工具无此字段）。 */
+  structuredOutputSchema?: JsonSchema;
   sourcePluginId: string;
   sourceKind: 'action' | 'tool';
   /** 仅 sourceKind === 'action'：pluginId.actionId 全限定 ID。 */
@@ -240,7 +241,7 @@ interface PluginState {
   configSchema: Record<string, PluginConfigFieldSchema> | null;
   /**
    * 本启用周期经 ctx.host 获取的宿主生命周期资源释放句柄
-   * （manageConversation 管理权 / onWorkflowSettled 监听 / askSeq 解析器）。
+   * （manageConversation 管理权 / onEvent 监听 / askSeq 解析器）。
    * 停用/回滚/dispose 时统一释放；句柄幂等，插件提前释放也安全。
    */
   hostReleases: Set<() => void>;
@@ -972,6 +973,9 @@ export class PluginHost {
           name: tool.spec.name,
           description: tool.spec.description,
           inputSchema: tool.spec.inputSchema,
+          ...(tool.spec.structuredOutputSchema !== undefined
+            ? { structuredOutputSchema: tool.spec.structuredOutputSchema }
+            : {}),
           sourcePluginId: state.definition.id,
           sourceKind: 'tool',
         });
@@ -1085,6 +1089,74 @@ export class PluginHost {
       name,
       value: jsonClone(this.options.docs.get(`${pluginId}:${name}`, reg.initial as never)),
     };
+  }
+
+  /**
+   * 全部已启用插件公共文档快照（SSE HelmSnapshot.pluginDocs 首帧直投用）：
+   * 合并每个 idle 插件中 isPublic === true 的文档；快照读取失败属单一插件
+   * 故障，聚合诊断后如实上抛（绝不静默丢一份公共快照让前端误判状态）。
+   */
+  listPublicDocs(): PublicPluginDoc[] {
+    this.assertNotDisposed();
+    const out: PublicPluginDoc[] = [];
+    for (const state of this.plugins.values()) {
+      if (!state.enabled || state.phase !== 'idle') continue;
+      for (const [name, reg] of state.docs) {
+        if (!reg.isPublic) continue;
+        out.push({
+          pluginId: state.definition.id,
+          name,
+          value: jsonClone(this.options.docs.get(`${state.definition.id}:${name}`, reg.initial as never)),
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 全部已启用且已启动服务声明的工作树占用清单（WorktreeAllocator 的
+   * isPathInUse 探测源）：合并各服务 liveWorktrees() 返回值。
+   * 服务声明函数抛错或返回非法形状时如实显式报错，绝不静默当空——
+   * 占用检查坏了就必须修，不能靠猜放行清理在途工作树。
+   */
+  listLiveWorktrees(): Array<{ nodeId: string; path: string }> {
+    this.assertNotDisposed();
+    const out: Array<{ nodeId: string; path: string }> = [];
+    for (const state of this.plugins.values()) {
+      if (!state.enabled) continue;
+      for (const svc of state.services) {
+        if (!svc.started || svc.liveWorktrees === undefined) continue;
+        let declared: Array<{ nodeId: string; path: string }>;
+        try {
+          declared = svc.liveWorktrees();
+        } catch (err) {
+          throw new HelmError(
+            'plugin_live_worktrees_check_failed',
+            `插件 ${state.definition.id} 服务 ${svc.id} 的 liveWorktrees 检查抛出异常`,
+            500,
+            { pluginId: state.definition.id, serviceId: svc.id, error: toJsonSafeError(err) },
+          );
+        }
+        if (
+          !Array.isArray(declared) ||
+          declared.some(
+            (item) =>
+              !isJsonObject(item) ||
+              typeof (item as { nodeId?: unknown }).nodeId !== 'string' ||
+              typeof (item as { path?: unknown }).path !== 'string',
+          )
+        ) {
+          throw new HelmError(
+            'plugin_live_worktrees_check_failed',
+            `插件 ${state.definition.id} 服务 ${svc.id} 的 liveWorktrees 必须返回 { nodeId, path } 数组`,
+            500,
+            { pluginId: state.definition.id, serviceId: svc.id },
+          );
+        }
+        out.push(...declared);
+      }
+    }
+    return out;
   }
 
   // --- Hook 管道 -----------------------------------------------------------
@@ -1557,6 +1629,57 @@ export class PluginHost {
             400,
           );
         }
+        // cli.positional：按序消费 CLI 位置参数的映射表；字段级形状校验。
+        if (spec.cli?.positional !== undefined) {
+          if (!Array.isArray(spec.cli.positional)) {
+            throw new HelmError(
+              'invalid_action_spec',
+              `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional 必须是数组`,
+              400,
+            );
+          }
+          for (const pos of spec.cli.positional) {
+            if (!isPlainObject(pos) || Object.keys(pos).some((k) => k !== 'field' && k !== 'required' && k !== 'readFileInto')) {
+              throw new HelmError(
+                'invalid_action_spec',
+                `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional 项仅允许 { field, required?, readFileInto? }`,
+                400,
+              );
+            }
+            if (typeof pos.field !== 'string' || pos.field.length === 0) {
+              throw new HelmError(
+                'invalid_action_spec',
+                `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional[].field 必须是非空字符串`,
+                400,
+              );
+            }
+            if (pos.required !== undefined && typeof pos.required !== 'boolean') {
+              throw new HelmError(
+                'invalid_action_spec',
+                `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional[${pos.field}].required 必须是 boolean`,
+                400,
+              );
+            }
+            if (pos.readFileInto !== undefined && (typeof pos.readFileInto !== 'string' || pos.readFileInto.length === 0)) {
+              throw new HelmError(
+                'invalid_action_spec',
+                `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional[${pos.field}].readFileInto 必须是非空字符串字段名`,
+                400,
+              );
+            }
+          }
+        }
+        // cli.timeoutMs：请求超时覆盖；0 表示无超时（长耗时动作如 workflow run --wait）。
+        if (
+          spec.cli?.timeoutMs !== undefined &&
+          (typeof spec.cli.timeoutMs !== 'number' || !Number.isFinite(spec.cli.timeoutMs) || spec.cli.timeoutMs < 0)
+        ) {
+          throw new HelmError(
+            'invalid_action_spec',
+            `插件 ${pluginId} 动作 ${spec.id} 的 cli.timeoutMs 必须是 >= 0 的有限数字（0 表示无超时）`,
+            400,
+          );
+        }
         assertConversationScope(pluginId, `插件 ${pluginId} 动作 ${spec.id}`, spec.scope);
         if (state.actions.has(spec.id)) {
           throw new HelmError('duplicate_action', `插件 ${pluginId} 重复声明动作 ${spec.id}`, 409);
@@ -1595,6 +1718,17 @@ export class PluginHost {
         }
         if (!isJsonObject(spec.inputSchema)) {
           throw new HelmError('invalid_tool_spec', `插件 ${pluginId} 工具 ${spec.name} 缺少 inputSchema`, 400);
+        }
+        // 结构化输出 Schema：声明即预编译检查（$async/非法 Schema 在注册边界拒绝）
+        if (spec.structuredOutputSchema !== undefined) {
+          if (!isJsonObject(spec.structuredOutputSchema)) {
+            throw new HelmError(
+              'invalid_tool_spec',
+              `插件 ${pluginId} 工具 ${spec.name} 的 structuredOutputSchema 必须是 JSON Schema 对象`,
+              400,
+            );
+          }
+          assertSchemaCompilable(spec.structuredOutputSchema);
         }
         if (typeof spec.execute !== 'function') {
           throw new HelmError('invalid_tool_spec', `插件 ${pluginId} 工具 ${spec.name} 缺少 execute`, 400);
@@ -1714,6 +1848,14 @@ export class PluginHost {
             { pluginId, serviceId: spec.id },
           );
         }
+        if (spec.liveWorktrees !== undefined && typeof spec.liveWorktrees !== 'function') {
+          throw new HelmError(
+            'invalid_service_spec',
+            `插件 ${pluginId} 服务 ${spec.id} 的 liveWorktrees 必须是返回 { nodeId, path } 数组的函数`,
+            400,
+            { pluginId, serviceId: spec.id },
+          );
+        }
         if (state.services.some((s) => s.id === spec.id)) {
           throw new HelmError('duplicate_service', `插件 ${pluginId} 重复声明服务 ${spec.id}`, 409);
         }
@@ -1758,9 +1900,9 @@ export class PluginHost {
 
   /**
    * 构造插件视角的 ctx.host：全部方法显式转发到后端端口。
-   * 生命周期资源（manageConversation / onWorkflowSettled / registerAskSeqResolver）
+   * 生命周期资源（manageConversation / onEvent / registerAskSeqResolver）
    * 经 acquire 包装：epoch 守卫 + 幂等释放 + 停用统一解除；
-   * onWorkflowSettled 的每次监听回调计入在途任务保护。
+   * onEvent 的每次事件回调计入在途任务保护（事件类型进任务标签）。
    */
   private wrapHostApi(state: PluginState, epoch: number): HelmHostApi {
     const pluginId = state.definition.id;
@@ -1783,6 +1925,13 @@ export class PluginHost {
       listConversations: (filter) => backend.listConversations(filter),
       getConversation: (id) => backend.getConversation(id),
       updateConversation: (id, patch) => backend.updateConversation(id, patch),
+      abortConversation: (id) => backend.abortConversation(id),
+      spawnAgent: (request) => backend.spawnAgent(request),
+      runGate: (command, options) => backend.runGate(command, options),
+      prepareInterruptedConversations: (ids) => backend.prepareInterruptedConversations(ids),
+      cleanupWorktree: (request, signal) => backend.cleanupWorktree(request, signal),
+      invokeAction: (pluginId, actionId, input, context) => this.invokeAction(pluginId, actionId, input, context),
+      listActions: () => this.listActions(),
       markConversationOwnership: (id, owner) => backend.markConversationOwnership(id, owner),
       createAsk: (spec) => backend.createAsk(spec),
       cancelAsk: (askId, reason) => backend.cancelAsk(askId, reason),
@@ -1799,11 +1948,11 @@ export class PluginHost {
         acquire('host.manageConversation')(() => backend.manageConversation(id, pluginId)),
       registerAskSeqResolver: (resolver) =>
         acquire('host.registerAskSeqResolver')(() => backend.registerAskSeqResolver(resolver)),
-      onWorkflowSettled: (listener) =>
-        acquire('host.onWorkflowSettled')(() =>
-          backend.onWorkflowSettled((run: WorkflowRunSummary) =>
-            this.tracker.withTask(pluginId, `workflow-settled:${run.id}`, async () => {
-              await listener(run);
+      onEvent: (type, listener) =>
+        acquire('host.onEvent')(() =>
+          backend.onEvent(type, (payload: unknown) =>
+            this.tracker.withTask(pluginId, `event:${type}`, async () => {
+              await listener(payload);
             }),
           ),
         ),
