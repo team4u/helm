@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ToolTraceStatus } from './timeline-model.js'
-import { buildSubagentStreamLines, formatDurationMs } from './timeline-model.js'
+import { buildSubagentStreamLines } from './subagent-model.js'
+import { formatDurationMs } from '../lib/format.js'
 import { subagentBadge, toolResultPreviewTruncated, isScrolledToBottom, compactCardTitle, type SubagentLiveCardProps } from './subagent-live-model.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'

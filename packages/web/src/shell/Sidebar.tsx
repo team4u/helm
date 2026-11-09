@@ -57,7 +57,7 @@ function HoverIconButton({
   )
 }
 
-export function ConversationStatusDot({ conv }: { conv: ConversationSummary }) {
+function ConversationStatusDot({ conv }: { conv: ConversationSummary }) {
   const dotClass = conversationStatusDotClass(conv.status)
   if (!dotClass) return null
   const tooltip = conversationStatusTooltip(conv.status, conv.doing)
@@ -251,7 +251,7 @@ function isConversationActive(store: HelmStoreValue, convId: number): boolean {
 }
 
 /** Agent 站位行（一级）。会话数 <= 1 时整行直接打开主会话；>= 2 时带折叠子列表。 */
-export function AgentStandingItem({
+function AgentStandingItem({
   agent,
   store,
   onCreate,

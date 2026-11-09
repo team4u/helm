@@ -6,6 +6,9 @@
  */
 
 import type { NodeInfo, NodeUpgradeCheckResult } from '@helm/protocol'
+import { formatBytes } from '../lib/format.js'
+
+export { formatBytes }
 
 /** 节点 ID 约束（与内核 issueNodeToken 校验同源：字母数字开头，可含 . _ -，最长 128）。 */
 export const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
@@ -49,15 +52,6 @@ export function buildNodeConnectGuide(
     serviceInstallCommand: 'helm-node service install',
     doctorCommand: 'helm-node doctor',
   }
-}
-
-/** 字节数人类可读化（GiB / MiB / KiB）。 */
-export function formatBytes(bytes: number | undefined): string {
-  if (bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return '--'
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`
-  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MiB`
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KiB`
-  return `${Math.round(bytes)} B`
 }
 
 /** 运行时长格式化（天/小时/分钟）。 */

@@ -3,7 +3,7 @@ import type { WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
 import { workflowsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
-import { formatDurationMs } from './timeline-model.js'
+import { formatDurationMs } from '../lib/format.js'
 import { SubagentLiveCard } from './SubagentLiveCard.js'
 import {
   buildWorkflowPhaseSections,

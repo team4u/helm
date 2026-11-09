@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { NodeInfo } from '@helm/protocol'
 import { conversationsApi, nodesApi } from '../lib/api.js'
+import { formatDateTime } from '../lib/format.js'
 import type { NodeUpgradeCheckResult } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
@@ -120,11 +121,6 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   )
 }
 
-function formatTime(ms: number | undefined): string {
-  if (ms === undefined) return '--'
-  return new Date(ms).toLocaleString()
-}
-
 /** 健康快照卡片：负载 / 运行时长 / 内存 / 磁盘。 */
 function HealthCard({ node }: { node: NodeInfo }) {
   const health = node.health
@@ -147,7 +143,7 @@ function HealthCard({ node }: { node: NodeInfo }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <HelmIcon name="activity" size={13} />
         <span style={{ fontWeight: 600, fontSize: 12.5 }}>健康快照</span>
-        <span className="badge badge-neutral">采集于 {formatTime(health.collectedAt)}</span>
+        <span className="badge badge-neutral">采集于 {formatDateTime(health.collectedAt)}</span>
       </div>
       <InfoRow label="负载" value={`1m ${la1.toFixed(2)} / 5m ${la5.toFixed(2)} / 15m ${la15.toFixed(2)}`} />
       <InfoRow label="运行时长" value={formatUptime(health.uptimeSec)} />
@@ -767,8 +763,8 @@ function NodeDetailPanel({
         <InfoRow label="hostname" value={node.hostname ?? '--'} />
         <InfoRow label="platform" value={node.platform ?? '--'} />
         <InfoRow label="hubUrl" value={node.hubUrl ?? '--'} />
-        <InfoRow label="connectedAt" value={formatTime(node.connectedAt)} />
-        <InfoRow label="lastSeenAt" value={formatTime(node.lastSeenAt)} />
+        <InfoRow label="connectedAt" value={formatDateTime(node.connectedAt)} />
+        <InfoRow label="lastSeenAt" value={formatDateTime(node.lastSeenAt)} />
       </section>
 
       <HealthCard node={node} />

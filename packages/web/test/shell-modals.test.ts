@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
@@ -34,7 +35,7 @@ import { resolveTargetString } from '../src/lib/types.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
-const { Sidebar, AgentStandingItem, ConversationStatusDot } = await import('../src/shell/Sidebar.js')
+const { Sidebar } = await import('../src/shell/Sidebar.js')
 
 function conv(partial: Partial<ConversationSummary> & { id: number }): ConversationSummary {
   return {
@@ -742,98 +743,74 @@ test('SSR 渲染回归：Sidebar 包含批量管理按钮与极简无 Emoji 验�
   assert.ok(!html.includes('✓') && !html.includes('✗') && !html.includes('▸'), '不得使用勾叉箭头类特殊字符')
 })
 
-test('批量模式下机器人行（agent-standing-row）绝对不得包含勾选框，仅会话子项可勾选', { timeout: 60_000 }, () => {
-  const store = makeTestStore()
-  const agentStanding: AgentStanding = {
-    profileId: 'coder',
-    label: '代码专家',
-    icon: 'code',
-    order: 0,
-    primaryConversation: conv({ id: 20, title: '代码重构', profileId: 'coder' }),
-    conversations: [conv({ id: 20, title: '代码重构', profileId: 'coder' })],
-    canCreateConversation: true,
-  }
+test('批量模式勾选框只存在于会话子项，机器人站位行绝不含勾选框（源码结构回归）', { timeout: 60_000 }, () => {
+  const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
 
-  const html = renderToString(
-    e(AgentStandingItem, {
-      agent: agentStanding,
-      store,
-      onCreate: () => {},
-      batchMode: true,
-      selectedIds: new Set([20]),
-    }),
+  // sidebar-batch-checkbox 仅出现在 AgentConversationRow（会话子行）内，
+  // 且位于其受控渲染块中；Agent 站位头部行只使用 agent-collapse-btn / nav-item-main 按钮。
+  const checkboxIdx = sidebarSource.indexOf('sidebar-batch-checkbox')
+  assert.ok(checkboxIdx > 0, '会话子行应渲染 sidebar-batch-checkbox')
+  const convRowStart = sidebarSource.lastIndexOf('function AgentConversationRow', checkboxIdx)
+  assert.ok(convRowStart > 0, '勾选框必须定义在 AgentConversationRow 组件内')
+  const convRowEnd = sidebarSource.indexOf('\nfunction ', convRowStart + 10)
+  assert.ok(
+    checkboxIdx < convRowEnd,
+    '勾选框必须只存在于会话子行组件，不得混入机器人站位头部行',
   )
 
-  // 1) 机器人角色头部行（agent-standing-row）严禁包含任何 checkbox
-  const rowMatch = html.match(/<div class="nav-item agent-standing-row[^"]*"[^>]*>([\s\S]*?)<\/div>/)
-  assert.ok(rowMatch, '应渲染 agent-standing-row')
-  const headerContent = rowMatch[1]!
-  assert.ok(!headerContent.includes('type="checkbox"'), '机器人行绝对不得包含勾选框（防止误勾选机器人）')
-  assert.ok(!headerContent.includes('sidebar-batch-checkbox'), '机器人行绝对不得包含复选框类名')
-
-  // 2) 只有下挂的会话项（agent-conversations-list）包含会话勾选框
-  assert.ok(html.includes('agent-conversations-list'), '应展开子列表渲染具体会话')
-  assert.ok(html.includes('sidebar-batch-checkbox'), '会话行应渲染勾选框供批量管理')
-  assert.ok(/#<!-- -->20|#20/.test(html), '会话行应包含具体会话 ID')
+  // 站位头部行（agent-standing-row 与其子按钮）不含任何 checkbox 类名。
+  const standingStart = sidebarSource.indexOf('function AgentStandingItem')
+  const standingEnd = sidebarSource.indexOf('function AgentConversationsList', standingStart)
+  const standingBody = sidebarSource.slice(standingStart, standingEnd)
+  assert.ok(!standingBody.includes('type="checkbox"'), '机器人站位头部行严禁包含 checkbox 输入框')
+  assert.ok(!standingBody.includes('sidebar-batch-checkbox'), '机器人站位头部行严禁复用会话勾选框类名')
+  // 批量模式下头部行仅切换展开，不提供勾选。
+  assert.match(standingBody, /if \(batchMode && hasSubList\) \{\s*setExpanded/, '批量模式下头部行仅切换子列表展开')
 })
 
-test('ConversationStatusDot 与 Sidebar 状态圆点渲染验证', { timeout: 60_000 }, () => {
-  // 1) idle 状态返回 null（空渲染）
-  const idleHtml = renderToString(e(ConversationStatusDot, { conv: conv({ id: 1, status: 'idle' }) }))
-  assert.equal(idleHtml, '')
-
-  // 2) working 状态渲染带 doing 提示的圆点
-  const workingHtml = renderToString(
-    e(ConversationStatusDot, { conv: conv({ id: 2, status: 'working', doing: '正在思考方案' }) }),
+test('Sidebar 状态圆点渲染验证：五态圆点与单会话站位行', { timeout: 60_000 }, () => {
+  const store = makeTestStore({
+    conversations: [
+      conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
+      // updatedAt 递减保证这四条落在子列表预览窗口（前 5 条）内。
+      conv({ id: 2, title: '任务 A', profileId: 'assistant', status: 'working', doing: '正在思考方案', updatedAt: 6000 }),
+      conv({ id: 3, title: '审批 B', profileId: 'assistant', status: 'blocked', updatedAt: 5000 }),
+      conv({ id: 4, title: '异常 C', profileId: 'assistant', status: 'error', updatedAt: 4000 }),
+      conv({ id: 5, title: '完成 D', profileId: 'assistant', status: 'done', updatedAt: 3000 }),
+      conv({ id: 10, title: '空闲 E', profileId: 'assistant', status: 'idle', updatedAt: 2000 }),
+    ],
+    profiles: [
+      { id: 'assistant', name: '个人助理' },
+      { id: 'coder', name: '编码专员' },
+    ],
+  })
+  // coder 单会话且 working：站位行头部直接渲染状态圆点而非文字徽章。
+  store.conversations.push(
+    conv({ id: 20, title: '代码重构', profileId: 'coder', status: 'working', doing: '重构中' }),
   )
-  assert.ok(workingHtml.includes('class="status-dot status-dot-working"'))
-  assert.ok(workingHtml.includes('title="运行中: 正在思考方案"'))
-  assert.ok(workingHtml.includes('aria-label="运行中: 正在思考方案"'))
-  assert.ok(workingHtml.includes('role="status"'))
+  const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
 
-  // 3) blocked 状态渲染待确认圆点
-  const blockedHtml = renderToString(
-    e(ConversationStatusDot, { conv: conv({ id: 3, status: 'blocked' }) }),
-  )
-  assert.ok(blockedHtml.includes('class="status-dot status-dot-blocked"'))
-  assert.ok(blockedHtml.includes('title="待确认"'))
-  assert.ok(blockedHtml.includes('role="status"'))
+  // 1) idle 不产生任何圆点（conversationStatusDotClass 对 idle 返回 null）
+  assert.ok(!html.includes('status-dot-idle'), 'idle 会话不得渲染状态圆点')
 
-  // 4) error 状态渲染异常圆点
-  const errorHtml = renderToString(
-    e(ConversationStatusDot, { conv: conv({ id: 4, status: 'error' }) }),
-  )
-  assert.ok(errorHtml.includes('class="status-dot status-dot-error"'))
-  assert.ok(errorHtml.includes('title="异常"'))
+  // 2) working 圆点带 doing 提示与无障碍属性
+  assert.ok(html.includes('class="status-dot status-dot-working"'), '应渲染 working 圆点')
+  assert.ok(html.includes('title="运行中: 正在思考方案"'), 'working 圆点应带 doing 提示')
+  assert.ok(html.includes('aria-label="运行中: 正在思考方案"'), '圆点应带 aria-label')
+  assert.ok(html.includes('role="status"'), '圆点应带 role=status')
 
-  // 5) done 状态渲染已完成圆点
-  const doneHtml = renderToString(
-    e(ConversationStatusDot, { conv: conv({ id: 5, status: 'done' }) }),
-  )
-  assert.ok(doneHtml.includes('class="status-dot status-dot-done"'))
-  assert.ok(doneHtml.includes('title="已完成"'))
+  // 3) blocked / error / done 圆点
+  assert.ok(html.includes('class="status-dot status-dot-blocked"'), '应渲染 blocked 圆点')
+  assert.ok(html.includes('title="待确认"'), 'blocked 圆点提示')
+  assert.ok(html.includes('class="status-dot status-dot-error"'), '应渲染 error 圆点')
+  assert.ok(html.includes('title="异常"'), 'error 圆点提示')
+  assert.ok(html.includes('class="status-dot status-dot-done"'), '应渲染 done 圆点')
+  assert.ok(html.includes('title="已完成"'), 'done 圆点提示')
 
-  // 6) AgentStandingItem 单会话渲染状态圆点而非 badge
-  const store = makeTestStore()
-  const singleStanding: AgentStanding = {
-    profileId: 'coder',
-    label: '代码专家',
-    icon: 'code',
-    order: 0,
-    primaryConversation: conv({ id: 20, title: '代码重构', profileId: 'coder', status: 'working', doing: '重构中' }),
-    conversations: [conv({ id: 20, title: '代码重构', profileId: 'coder', status: 'working', doing: '重构中' })],
-    canCreateConversation: true,
-  }
-  const itemHtml = renderToString(
-    e(AgentStandingItem, {
-      agent: singleStanding,
-      store,
-      onCreate: () => {},
-    }),
-  )
-  assert.ok(itemHtml.includes('class="status-dot status-dot-working"'), '单会话 Agent 站位行应渲染状态圆点')
-  assert.ok(itemHtml.includes('title="运行中: 重构中"'), '单会话 Agent 站位行圆点应带 tooltip')
-  assert.ok(!itemHtml.includes('badge-accent'), '不应再渲染文字徽章样式 badge-accent')
+  // 4) 多会话 Agent 的子列表渲染勾选无关的圆点；单会话 coder 站位行也渲染 working 圆点
+  assert.ok(html.includes('agent-conversations-list'), '多会话 Agent 应展开子列表')
+  assert.ok(html.includes('title="运行中: 重构中"'), '单会话 Agent 站位行圆点应带 tooltip')
+  assert.ok(!html.includes('badge-accent'), '不应再渲染文字徽章样式 badge-accent')
 })
 
 

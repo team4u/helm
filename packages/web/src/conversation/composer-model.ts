@@ -84,6 +84,17 @@ export function getComposerPlaceholder(working: boolean, isMobile: boolean): str
 /** 会话正忙时 Enter 的默认 whenBusy 策略（插话引导）。 */
 export const BUSY_ENTER_DEFAULT: 'steer' = 'steer'
 
+/** 空会话起始环境条回传 Composer 的发送门控状态（纯类型放 .ts 模块，保 Fast Refresh）。 */
+export interface SessionEnvBlocker {
+  /** 环境草稿未保存（或正在保存）时为 true：Composer 必须阻止发送。 */
+  blocked: boolean
+  /** 阻塞原因（用于禁用按钮的 title 提示）。 */
+  reason: string | null
+}
+
+/** 无阻塞哨兵值（引用稳定，供 useState 初始化与重置共用）。 */
+export const ENV_BLOCKER_CLEAR: SessionEnvBlocker = { blocked: false, reason: null }
+
 /**
  * 键盘事件 -> 正忙时 whenBusy 策略（纯函数，单测直测）：
  * Enter 默认插话引导（steer）；⌘/Ctrl+Enter 显式排队发送（followUp）。
