@@ -2962,3 +2962,147 @@ textarea {
   top: 8px;
   right: 8px;
 }
+
+/* ==========================================================================
+ * Radix UI Primitives: Popover, DropdownMenu, Tooltip
+ * 视觉规范：1px 发丝边框、--bg-elevated 背景、var(--radius-sm, 7px) 微圆角、极简低饱和
+ * ========================================================================== */
+
+[data-radix-popper-content-wrapper] {
+  z-index: 60;
+}
+
+/* Popover Content */
+.helm-popover-content {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 7px);
+  box-shadow: var(--shadow-lg, 0 10px 28px rgba(0, 0, 0, 0.16));
+  padding: 4px;
+  outline: none;
+  box-sizing: border-box;
+  max-width: calc(100vw - 16px);
+}
+
+.helm-popover-arrow {
+  fill: var(--bg-elevated);
+  stroke: var(--border-strong);
+  stroke-width: 1px;
+}
+
+/* Dropdown Menu Content */
+.helm-dropdown-content {
+  min-width: 180px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 7px);
+  box-shadow: var(--shadow-lg, 0 10px 28px rgba(0, 0, 0, 0.16));
+  padding: 4px;
+  outline: none;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  z-index: 60;
+}
+
+.helm-dropdown-arrow {
+  fill: var(--bg-elevated);
+  stroke: var(--border-strong);
+  stroke-width: 1px;
+}
+
+.helm-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-xs, 5px);
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+  box-sizing: border-box;
+  transition: background 80ms ease, color 80ms ease;
+}
+
+.helm-dropdown-item[data-highlighted],
+.helm-dropdown-item:hover:not([data-disabled]) {
+  background: var(--bg-hover);
+  color: var(--fg);
+  outline: none;
+}
+
+.helm-dropdown-item[data-disabled] {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.helm-dropdown-item-danger {
+  color: var(--err);
+}
+
+.helm-dropdown-item-danger[data-highlighted],
+.helm-dropdown-item-danger:hover:not([data-disabled]) {
+  background: var(--err-bg, rgba(224, 75, 59, 0.1));
+  color: var(--err);
+}
+
+.helm-dropdown-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.helm-dropdown-label {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+/* Tooltip Content */
+.helm-tooltip-content {
+  background: var(--bg-elevated);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 7px);
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.12));
+  padding: 4px 8px;
+  font-size: 11.5px;
+  line-height: 1.3;
+  z-index: 100;
+  user-select: none;
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.helm-tooltip-arrow {
+  fill: var(--bg-elevated);
+  stroke: var(--border-strong);
+  stroke-width: 1px;
+}
+
+/* Radix Popper Wrapper 嵌套适配 */
+[data-radix-popper-content-wrapper] .pane-more-popover {
+  position: static;
+  top: auto;
+  right: auto;
+  border-radius: var(--radius-sm, 7px);
+}
+
+[data-radix-popper-content-wrapper] .composer-model-popover {
+  position: static;
+  bottom: auto;
+  left: auto;
+  border-radius: var(--radius-sm, 7px);
+}
+

@@ -7,8 +7,10 @@ import { useHelmStore } from '../lib/store-context.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { collectEnabledPluginIds, isSkillVisible } from '../shell/sidebar-model.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '../ui/Popover.js'
 import { Select, type SelectOption } from '../ui/Select.js'
 import { Tabs, TabsList, TabsTrigger } from '../ui/Tabs.js'
+import { Tooltip } from '../ui/Tooltip.js'
 import { AskDock } from './AskDock.js'
 import {
   attachmentsOfEditTarget,
@@ -51,25 +53,6 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
   const [refreshing, setRefreshing] = useState(false)
   const [query, setQuery] = useState('')
   const rootRef = useRef<HTMLSpanElement | null>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onDocClick = (e: PointerEvent): void => {
-      if (rootRef.current !== null && !rootRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        setOpen(false)
-        rootRef.current?.querySelector('button')?.focus()
-      }
-    }
-    document.addEventListener('pointerdown', onDocClick)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', onDocClick)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [open])
 
   const refreshCatalog = async (): Promise<void> => {
     setRefreshing(true)
@@ -154,114 +137,135 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
 
   return (
     <span className="composer-picker-root" ref={rootRef}>
-      <button
-        type="button"
-        className="btn btn-ghost btn-sm composer-model-button"
-        disabled={pending}
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-label={`模型与思考档位：${shortName}${showLevel ? ` · ${activeLevel}` : ''}`}
-        title={`当前模型：${conversation.model}${showLevel ? ` · 思考 ${activeLevel}` : ''}`}
-      >
-        {pending ? <HelmIcon name="loader" size={12} className="spin-slow" /> : null}
-        <span className="composer-model-label">{shortName}</span>
-        {showLevel ? <span className="composer-model-level">· {activeLevel}</span> : null}
-        <HelmIcon name="chevron-down" size={12} />
-      </button>
-      {open ? (
-        <div className="composer-popover composer-model-popover">
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
           <button
             type="button"
-            className="popover-item"
-            onClick={() => void pick('')}
-            title="清除显式覆盖，重算 Profile/全局继承链"
+            className="btn btn-ghost btn-sm composer-model-button"
+            disabled={pending}
+            aria-expanded={open}
+            aria-label={`模型与思考档位：${shortName}${showLevel ? ` · ${activeLevel}` : ''}`}
+            title={`当前模型：${conversation.model}${showLevel ? ` · 思考 ${activeLevel}` : ''}`}
           >
-            跟随 Profile 默认（清除覆盖）
+            {pending ? <HelmIcon name="loader" size={12} className="spin-slow" /> : null}
+            <span className="composer-model-label">{shortName}</span>
+            {showLevel ? <span className="composer-model-level">· {activeLevel}</span> : null}
+            <HelmIcon name="chevron-down" size={12} />
           </button>
-          <div className="composer-model-search-bar" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
-              <HelmIcon name="search" size={13} />
-              <input
-                className="input"
-                aria-label="搜索模型"
-                placeholder="搜索模型…"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </div>
+        </PopoverTrigger>
+        <PopoverPortal>
+          <PopoverContent
+            side="top"
+            align="start"
+            sideOffset={8}
+            className="composer-popover composer-model-popover"
+          >
             <button
               type="button"
-              className="btn btn-ghost btn-icon-sm composer-model-refresh-btn"
-              disabled={refreshing}
-              title="刷新动态模型目录"
-              aria-label="刷新动态模型目录"
-              onClick={(e) => {
-                e.stopPropagation()
-                void refreshCatalog()
-              }}
+              className="popover-item"
+              onClick={() => void pick('')}
+              title="清除显式覆盖，重算 Profile/全局继承链"
             >
-              <HelmIcon name="rotate-cw" size={13} className={refreshing ? 'spin-slow' : undefined} />
+              跟随 Profile 默认（清除覆盖）
             </button>
-          </div>
-          {store.models.filter((model) => model.available && model.id.toLowerCase().includes(query.toLowerCase())).map((m) => (
-            <button
-              key={m.id}
-              title={m.id}
-              type="button"
-              className={`popover-item${m.id === conversation.model ? ' popover-item-active' : ''}`}
-              onClick={() => void pick(m.id)}
-            >
-              <span className="mono">{m.modelId}</span>
-              <span className="popover-item-meta">{m.provider}{m.thinkingLevels.length > 1 ? ' · 思考 ' + m.thinkingLevels[m.thinkingLevels.length - 1] : ''}</span>
-            </button>
-          ))}
-          {store.models.every((model) => !model.available) && (
-            <div className="popover-item" style={{ cursor: 'default', color: 'var(--fg-subtle)' }}>暂无可用模型；请先在「模型与凭据」配置供应商密钥</div>
-          )}
-          {supportsThinking ? (
-            <>
-              <div className="popover-header">
-                思考档位
-                <span style={{ color: 'var(--fg-subtle)' }}>{shortName}</span>
+            <div className="composer-model-search-bar" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
+                <HelmIcon name="search" size={13} />
+                <input
+                  className="input"
+                  aria-label="搜索模型"
+                  placeholder="搜索模型…"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                />
               </div>
-              <Tabs
-                value={conversation.thinkingLevelOverride || ''}
-                onValueChange={(val) => {
-                  if (val === '') {
-                    void pickThinking('')
-                  } else {
-                    const level = val
-                    void pickThinking(level)
-                  }
-                }}
-                variant="segmented"
-                style={{ width: '100%' }}
+            <div className="composer-model-search-bar" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
+                <HelmIcon name="search" size={13} />
+                <input
+                  className="input"
+                  aria-label="搜索模型"
+                  placeholder="搜索模型…"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                />
+              </div>
+              <Tooltip content="刷新动态模型目录" side="top">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-icon-sm composer-model-refresh-btn"
+                  disabled={refreshing}
+                  title="刷新动态模型目录"
+                  aria-label="刷新动态模型目录"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void refreshCatalog()
+                  }}
+                >
+                  <HelmIcon name="rotate-cw" size={13} className={refreshing ? 'spin-slow' : undefined} />
+                </button>
+              </Tooltip>
+            </div>
+            {store.models.filter((model) => model.available && model.id.toLowerCase().includes(query.toLowerCase())).map((m) => (
+              <button
+                key={m.id}
+                title={m.id}
+                type="button"
+                className={`popover-item${m.id === conversation.model ? ' popover-item-active' : ''}`}
+                onClick={() => void pick(m.id)}
               >
-                <TabsList className="segmented-control composer-thinking-row" aria-label="思考档位">
-                  <TabsTrigger
-                    value=""
-                    disabled={pending}
-                    title="跟随模型 / Profile 默认档位"
-                    onClick={() => void pickThinking('')}
-                  >
-                    默认
-                  </TabsTrigger>
-                  {currentLevels.map((level) => (
+                <span className="mono">{m.modelId}</span>
+                <span className="popover-item-meta">{m.provider}{m.thinkingLevels.length > 1 ? ' · 思考 ' + m.thinkingLevels[m.thinkingLevels.length - 1] : ''}</span>
+              </button>
+            ))}
+            {store.models.every((model) => !model.available) && (
+              <div className="popover-item" style={{ cursor: 'default', color: 'var(--fg-subtle)' }}>暂无可用模型；请先在「模型与凭据」配置供应商密钥</div>
+            )}
+            {supportsThinking ? (
+              <>
+                <div className="popover-header">
+                  思考档位
+                  <span style={{ color: 'var(--fg-subtle)' }}>{shortName}</span>
+                </div>
+                <Tabs
+                  value={conversation.thinkingLevelOverride || ''}
+                  onValueChange={(val) => {
+                    if (val === '') {
+                      void pickThinking('')
+                    } else {
+                      const level = val
+                      void pickThinking(level)
+                    }
+                  }}
+                  variant="segmented"
+                  style={{ width: '100%' }}
+                >
+                  <TabsList className="segmented-control composer-thinking-row" aria-label="思考档位">
                     <TabsTrigger
-                      key={level}
-                      value={level}
+                      value=""
                       disabled={pending}
-                      onClick={() => void pickThinking(level)}
+                      title="跟随模型 / Profile 默认档位"
+                      onClick={() => void pickThinking('')}
                     >
-                      {level}
+                      默认
                     </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
-            </>
-          ) : null}
-        </div>
-      ) : null}
+                    {currentLevels.map((level) => (
+                      <TabsTrigger
+                        key={level}
+                        value={level}
+                        disabled={pending}
+                        onClick={() => void pickThinking(level)}
+                      >
+                        {level}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
+              </>
+            ) : null}
+          </PopoverContent>
+        </PopoverPortal>
+      </Popover>
     </span>
   )
 }
@@ -980,19 +984,21 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                   <HelmIcon name="paperclip" size={11} />
                   <span>{att.name}</span>
                   <span className="mono tabular-nums">{formatBytes(att.size)}</span>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-icon-xs"
-                    title="移除附件"
-                    aria-label={`移除附件 ${att.name}`}
-                    onClick={() => setAttachments((prev) => {
-                      const next = prev.filter((a) => a.artifactId !== att.artifactId)
-                      syncLiveDraft(text, editingEntryId, next)
-                      return next
-                    })}
-                  >
-                    <HelmIcon name="x" size={10} />
-                  </button>
+                  <Tooltip content={`移除附件 ${att.name}`} side="top">
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-icon-xs"
+                      title="移除附件"
+                      aria-label={`移除附件 ${att.name}`}
+                      onClick={() => setAttachments((prev) => {
+                        const next = prev.filter((a) => a.artifactId !== att.artifactId)
+                        syncLiveDraft(text, editingEntryId, next)
+                        return next
+                      })}
+                    >
+                      <HelmIcon name="x" size={10} />
+                    </button>
+                  </Tooltip>
                 </span>
               ))}
             </div>
@@ -1024,15 +1030,17 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
           ) : null}
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm composer-icon-button"
-                title="上传附件"
-                aria-label="上传附件"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <HelmIcon name="plus" size={19} />
-              </button>
+              <Tooltip content="上传附件" side="top">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm composer-icon-button"
+                  title="上传附件"
+                  aria-label="上传附件"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <HelmIcon name="plus" size={19} />
+                </button>
+              </Tooltip>
               <ModelPicker conversation={conversation} />
               <input
                 ref={fileInputRef}
@@ -1113,26 +1121,30 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                   <HelmIcon name={sending || uploading > 0 ? 'loader' : 'arrow-up'} size={18} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
                 </button>
               ) : text.trim() === '' ? (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-danger btn-pill btn-send"
-                  onClick={() => void abortTurn()}
-                  title="停止当前执行"
-                  aria-label="停止当前执行"
-                >
-                  <HelmIcon name="square" size={14} />
-                </button>
-              ) : (
-                <>
+                <Tooltip content="停止当前执行" side="top">
                   <button
                     type="button"
-                    className="btn btn-sm btn-danger btn-send"
+                    className="btn btn-sm btn-danger btn-pill btn-send"
                     onClick={() => void abortTurn()}
                     title="停止当前执行"
                     aria-label="停止当前执行"
                   >
                     <HelmIcon name="square" size={14} />
                   </button>
+                </Tooltip>
+              ) : (
+                <>
+                  <Tooltip content="停止当前执行" side="top">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-danger btn-send"
+                      onClick={() => void abortTurn()}
+                      title="停止当前执行"
+                      aria-label="停止当前执行"
+                    >
+                      <HelmIcon name="square" size={14} />
+                    </button>
+                  </Tooltip>
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm composer-queue-button"
