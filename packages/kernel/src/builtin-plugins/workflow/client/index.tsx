@@ -43,7 +43,7 @@ import { SPIN, RUN_LABEL, RUN_BADGE, NODE_LABEL, NODE_BADGE, PHASE_ICON } from '
 // 图标（lucide-react 线性矢量，与宿主共享同一实例；无 Emoji）
 // ---------------------------------------------------------------------------
 
-import { Bot, Check, ChevronDown, ChevronRight, Circle, Clock, Columns2, ExternalLink, GitBranch, Loader2, RotateCw, Square, Terminal, X } from 'lucide-react'
+import { Bot, Check, ChevronDown, ChevronRight, Circle, Clock, CornerDownRight, ExternalLink, GitBranch, Loader2, RotateCw, Square, Terminal, X } from 'lucide-react'
 
 function Icon({ name, size = 12, className }: { name: string; size?: number; className?: string }): ReactNode {
   const map: Record<string, typeof Bot> = {
@@ -54,7 +54,7 @@ function Icon({ name, size = 12, className }: { name: string; size?: number; cla
     'chevron-right': ChevronRight,
     circle: Circle,
     clock: Clock,
-    columns: Columns2,
+    'corner-down-right': CornerDownRight,
     'external-link': ExternalLink,
     'git-branch': GitBranch,
     loader: Loader2,

@@ -1,8 +1,8 @@
 /**
  * SubagentLiveCard / ConversationPane 分屏早退分支行为测试：
- * - 纯逻辑（subagent-live-model）：状态优先真实 summary.status、
+ * - 纯逻辑（真实 esbuild 产物 models.ts）：状态优先真实 summary.status、
  *   父工具 toolStatus 仅作无 summary 兜底；resultPreview 截断标识、贴底判定；
- * - SSR 实际渲染（react-dom/server + HelmStoreContext 注入）：
+ * - SSR 实际渲染（真实插件编译产物 + 宿主共享 SDK hooks）：
  *   详情加载失败显式报错 + 重试按钮（不再永远“加载中”）；
  *   失败/加载中状态下“关闭分屏/进入会话”入口不消失；
  *   工具行渲染 resultPreview 且长输出带“已截断”预览标识（不伪装全文）；
@@ -106,14 +106,14 @@ function renderCard(
   extra: {
     backgroundRun?: WorkflowRunSummary
     worktree?: { path: string; branch: string }
-    defaultExpanded?: boolean
+    expanded?: boolean
     toolSummary?: SubagentParentToolSummary
   } = {},
 ): string {
   // 存量流式行 / 截断 / 报错测试均针对展开态流内容：默认展开保持覆盖语义，extra 可覆盖。
-  const { defaultExpanded = true, ...rest } = extra
+  const { expanded = true, ...rest } = extra
   return renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(SubagentLiveCard, { childConversationId: 11, toolStatus, expanded: defaultExpanded, ...rest })),
+    e(HelmStoreContext.Provider, { value: store }, e(SubagentLiveCard, { childConversationId: 11, toolStatus, expanded, ...rest })),
   )
 }
 
@@ -380,7 +380,7 @@ test('同步外部子代理无原生子会话：完成后卡片停止显示执�
 })
 
 // ---------------------------------------------------------------------------
-// SSR 实际渲染：defaultExpanded 折叠态与多次 resume 去重
+// SSR 实际渲染：紧凑卡与多次 resume 去重
 // ---------------------------------------------------------------------------
 
 test('resume 正在运行时：历史失败调用保留失败状态，只有最新调用挂载执行中的实时卡', { timeout: 60_000 }, () => {
@@ -402,7 +402,7 @@ test('resume 正在运行时：历史失败调用保留失败状态，只有最�
   assert.match(html, /subagent-live-card[\s\S]*?执行中/)
 })
 
-test('defaultExpanded=false：SSR 首帧折叠，不渲染实时流，仅头部与状态徽章', { timeout: 60_000 }, () => {
+test('expanded=false：SSR 首帧不渲染实时流，保留头部与状态徽章', { timeout: 60_000 }, () => {
   const store = makeStore({
     conversations: [summary(11, 'done')],
     conversationDetails: { 11: { ...summary(11, 'done'), entries: entriesWithToolResult('exit 0') } },
@@ -438,7 +438,7 @@ test('同一子会话 #12 被首次派生 + resume 续接：时间线仅 1 张�
   assert.match(html, /子会话 #<!-- -->12/, '唯一实时卡应挂在最新调用处并显示子会话编号')
 })
 
-test('工作台独立子会话：默认全部折叠零请求，第 2 层副栏渲染，working 排在 idle 前面', { timeout: 60_000 }, () => {
+test('工作台独立子会话：紧凑卡无实时流，保留副栏且 working 排在 idle 前面', { timeout: 60_000 }, () => {
   const child31 = { ...summary(31, 'idle'), parentConversationId: 1, updatedAt: 5 }
   const child32 = { ...summary(32, 'working'), parentConversationId: 1, updatedAt: 9, doing: '正在跑测试' }
   const store = makeStore({
@@ -450,7 +450,7 @@ test('工作台独立子会话：默认全部折叠零请求，第 2 层副栏�
   assert.ok(html.includes('子代理会话'), '分组标题应渲染')
   assert.ok(html.includes('子会话 #<!-- -->31') || html.includes('子会话 #31'), '折叠卡片头部应显示 #31')
   assert.ok(html.includes('子会话 #<!-- -->32') || html.includes('子会话 #32'), 'working 卡片头部应显示 #32')
-  // 默认全部折叠：零详情请求、零实时流容器
+  // 工作台仅展示紧凑卡，不渲染内嵌实时流容器。
   const streams = html.split('subagent-live-stream').length - 1
   assert.equal(streams, 0, `默认折叠态不得渲染实时流，实际 ${streams}`)
   // 第 2 层动态副栏正常渲染（working 卡显示实时 doing）
@@ -734,7 +734,7 @@ test('resolveSubagentHeaderSnippet：done 取 entries 结论 > toolSummary.resul
 // SSR：默认折叠 + 第 2 层副栏 + 时间线去冗余
 // ---------------------------------------------------------------------------
 
-test('默认折叠 SSR 首帧：未传 defaultExpanded 时只渲染头部', { timeout: 60_000 }, () => {
+test('紧凑卡 SSR 首帧：未传 expanded 时只渲染头部', { timeout: 60_000 }, () => {
   const store = makeStore({ conversations: [summary(11, 'done')] })
   const html = renderToString(
     e(HelmStoreContext.Provider, { value: store },
@@ -877,8 +877,7 @@ test('工作流业务卡隐藏重复工具行，但保留本次调用入参和�
 
 test('折叠子代理卡：不渲染内联流与展开箭头，整卡通过抽屉查看详情', { timeout: 60_000 }, () => {
   const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [summary(11, 'done')] }) },
-    e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done', defaultExpanded: true,
-      expanded: false, toolSummary: { prompt: '本次原始续接指令', resultText: '本次父工具原始输出' },
+    e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done', expanded: false, toolSummary: { prompt: '本次原始续接指令', resultText: '本次父工具原始输出' },
     })))
   assert.ok(!html.includes('subagent-live-toggle'), '不得渲染折叠展开箭头')
   assert.ok(!html.includes('subagent-live-stream'), '不得内联渲染实时流')
@@ -922,7 +921,7 @@ test('SSR：双层胶囊卡全程无任何 Emoji 或特殊符号字符', { timeo
       e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done', toolSummary: { prompt: '任务', durationMs: 1000, resultText: '结论' } }))),
     // 展开流式卡
     renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [summary(11, 'working')] }) },
-      e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'running', defaultExpanded: true }))),
+      e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'running', expanded: true }))),
     // blocked 折叠卡
     renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [summary(11, 'blocked')] }) },
       e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'running' }))),
