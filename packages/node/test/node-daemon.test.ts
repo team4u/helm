@@ -225,6 +225,22 @@ interface IpcTestServer {
   close(): Promise<void>;
 }
 
+/**
+ * 连接级错误：客户端主动断开（ipcUnsubscribe / ipcAbortCall / 超时清理）是 IPC 桥的正常路径。
+ * 对端关闭后 fixture 可能还有一次在途写入，内核回 RST 时即 EPIPE。
+ */
+const IPC_DISCONNECT_ERROR_CODES = new Set([
+  'EPIPE',
+  'ECONNRESET',
+  'ERR_STREAM_DESTROYED',
+  'ERR_STREAM_WRITE_AFTER_END',
+]);
+
+function isIpcDisconnectError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return typeof code === 'string' && IPC_DISCONNECT_ERROR_CODES.has(code);
+}
+
 /** 真实 Unix Socket 模拟 Herdr：每连接一行请求一行响应。 */
 async function startHerdrLikeServer(
   handler: (line: string, socket: net.Socket) => void,
@@ -232,8 +248,17 @@ async function startHerdrLikeServer(
   const dir = await tempDir('helm-node-ipc-');
   const sockPath = path.join(dir, 'herdr.sock');
   const sockets = new Set<net.Socket>();
+  /** 非连接级错误：fixture 自身故障必须在 close() 暴露，不能被对端断开掩盖。 */
+  const faults: Error[] = [];
+  const record = (error: unknown): void => {
+    if (isIpcDisconnectError(error)) return;
+    faults.push(error instanceof Error ? error : new Error(String(error)));
+  };
   const server = net.createServer((socket) => {
     sockets.add(socket);
+    // 缺少 error 监听时，服务端向已回 RST 的连接写入会把 EPIPE 抛成未捕获异常，
+    // 让无关测试（而非 fixture）失败。
+    socket.on('error', record);
     socket.once('close', () => sockets.delete(socket));
     let buffer = '';
     socket.on('data', (chunk: Buffer) => {
@@ -242,15 +267,21 @@ async function startHerdrLikeServer(
       if (nl === -1) return;
       const line = buffer.slice(0, nl);
       buffer = '';
-      handler(line, socket);
+      try {
+        handler(line, socket);
+      } catch (error) {
+        record(error);
+      }
     });
   });
   await new Promise<void>((resolve) => server.listen(sockPath, resolve));
   return {
     path: sockPath,
-    close: () => {
+    close: async () => {
       for (const s of sockets) s.destroy();
-      return new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await fs.rm(dir, { recursive: true, force: true });
+      if (faults.length > 0) throw faults[0];
     },
   };
 }
@@ -341,6 +372,12 @@ test('ipcSubscribe 订阅流、事件转发与 ipcUnsubscribe 关闭', { timeout
     socket.write(`${JSON.stringify({ id: req.id, result: { type: 'subscription_started' } })}\n`);
     let seq = 0;
     const timer = setInterval(() => {
+      // 对端断开后 close 事件可能晚于下一次 timer：可写性检查让 fixture 主动停流，
+      // 而不是向已关闭连接继续写。
+      if (socket.destroyed || !socket.writable) {
+        clearInterval(timer);
+        return;
+      }
       seq += 1;
       socket.write(`${JSON.stringify({ event: 'tick', data: { seq } })}\n`);
     }, 40);
@@ -414,6 +451,36 @@ test('ipcSubscribe 订阅流、事件转发与 ipcUnsubscribe 关闭', { timeout
     assert.match(!r.ok ? r.error.message : '', /unexpected|subscription_started/);
   } finally {
     await badAckSrv.close();
+  }
+});
+
+test('ipc fixture：对端断开后的在途写入按连接级错误隔离', { timeout: 60_000 }, async () => {
+  let writes = 0;
+  const srv = await startHerdrLikeServer((line, socket) => {
+    const req = JSON.parse(line) as { id: string };
+    socket.write(`${JSON.stringify({ id: req.id, result: { type: 'subscription_started' } })}\n`);
+    const timer = setInterval(() => {
+      writes += 1;
+      socket.write(`${JSON.stringify({ event: 'tick' })}\n`);
+    }, 10);
+    socket.once('close', () => clearInterval(timer));
+  });
+  const client = net.connect(srv.path);
+  try {
+    await new Promise<void>((resolve) => client.once('connect', resolve));
+    client.write(`${JSON.stringify({ id: 'sub', method: 'events.subscribe' })}\n`);
+    await new Promise<void>((resolve) => client.once('data', () => resolve()));
+
+    // 暂停读取让后续 tick 留在接收缓冲；再硬关闭，服务端的在途写入就会命中
+    // 已断开连接。缺少 error 监听时 EPIPE 会成为未捕获异常，拖垮整个测试文件。
+    client.pause();
+    await delay(50);
+    client.destroy();
+    await delay(150);
+    assert.ok(writes > 0, 'fixture 应确实在断开后尝试过写入');
+  } finally {
+    client.destroy();
+    await srv.close();
   }
 });
 
