@@ -152,7 +152,7 @@ export function SubagentLiveCard({
             size={13}
             className={badge.status === 'working' && detailError === undefined ? 'spin-slow' : undefined}
           />
-          <span className="subagent-live-title" title={taskTitle}>
+          <span className="subagent-live-title">
             <span className="subagent-live-id">子会话 #{childConversationId}</span>
             {summary?.profileId !== undefined && summary.profileId !== '' ? (
               <span className="badge badge-neutral">{summary.profileId}</span>
