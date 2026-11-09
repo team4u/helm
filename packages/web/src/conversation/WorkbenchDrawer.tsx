@@ -57,7 +57,9 @@ function WorkflowInspector({ conversationId }: { conversationId: number }) {
                 <span>
                   <strong>{`#${child.id}`}</strong> {child.title}
                 </span>
-                <span className={`badge ${conversationStatusBadge(child.status)}`}>{conversationStatusLabel(child.status)}</span>
+                {child.status !== 'idle' && (
+                  <span className={`badge ${conversationStatusBadge(child.status)}`}>{conversationStatusLabel(child.status)}</span>
+                )}
                 <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}>
                   <button
                     className="btn btn-sm"

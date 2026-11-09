@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { AskSpec, ConversationSummary } from '@helm/protocol'
 import { ROOT_CONVERSATION_ID } from '@helm/protocol'
-import { asksApi, conversationsApi, ApiClientError } from '../lib/api.js'
+import { asksApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
@@ -56,6 +56,7 @@ function HoverIconButton({
 }
 
 function StatusBadge({ conv }: { conv: ConversationSummary }) {
+  if (conv.status === 'idle') return null
   return (
     <span className={conversationStatusBadgeClass(conv.status)} title={conv.doing ?? ''}>
       {conv.status === 'working' && conv.doing ? conv.doing : conversationStatusLabel(conv.status)}
@@ -414,20 +415,6 @@ function AgentConversationRow({ conv, store }: { conv: ConversationSummary; stor
     }
   }
 
-  const removeConversation = async () => {
-    try {
-      await conversationsApi.remove(conv.id)
-      store.pushNotice({ type: 'notification', level: 'info', title: '会话已删除', body: `#${conv.id}` })
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '删除会话失败',
-        body: err instanceof ApiClientError ? `${err.code}: ${err.message}` : String(err),
-      })
-    }
-  }
-
   if (renaming) {
     return (
       <div className="nav-item nav-item-sub" style={{ display: 'flex', gap: 4 }}>
@@ -485,25 +472,15 @@ function AgentConversationRow({ conv, store }: { conv: ConversationSummary; stor
             />
           </span>
           {humanManageable && (
-            <>
-              <HoverIconButton
-                title="重命名会话"
-                icon="edit-3"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setDraft(conv.title)
-                  setRenaming(true)
-                }}
-              />
-              <HoverIconButton
-                title="删除会话"
-                icon="trash-2"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  void removeConversation()
-                }}
-              />
-            </>
+            <HoverIconButton
+              title="重命名会话"
+              icon="edit-3"
+              onClick={(e) => {
+                e.stopPropagation()
+                setDraft(conv.title)
+                setRenaming(true)
+              }}
+            />
           )}
         </span>
       </span>
