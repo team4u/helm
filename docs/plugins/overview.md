@@ -203,6 +203,20 @@ await monitorDoc.flush();
 2. **实时变更通知**：每次调用 `set()` 或 `update()`，内核自动广播 `plugin.doc.updated` 事件。
 3. **数据敏感隔离**：公共文档只存储展示状态，禁止包含未脱敏机密信息。
 
+### 按会话隔离的文档
+
+高频且只属于一个会话的状态使用 `ctx.sessionDoc()`，避免把全部会话详情塞进全局首帧：
+
+```typescript
+const metrics = ctx.sessionDoc('metrics', { tokens: 0 }, { public: true });
+metrics.update(conversationId, (state) => ({ tokens: state.tokens + 1 }));
+await metrics.flush();
+```
+
+同一插件内 `doc` 与 `sessionDoc` 不能同名。句柄读写深拷贝状态，要求会话真实存在，停用后失效；会话删除清理对应持久记录。`delete(conversationId)` 复位到初始值并通知当前订阅者，不删除其他会话的数据。
+
+公开会话文档通过 `GET /api/plugins/:id/docs/:name?conversationId=N` 读取，通过同路径的 `/events?conversationId=N` 专用 SSE 订阅。它不进入 `HelmSnapshot.pluginDocs`，也不通过普通 `/api/events` 广播。客户端 `usePluginSessionDoc` 和声明式 `sessionDocs` 仅在挂载期间订阅；重连以新首帧对齐状态，错误显式报告。
+
 ---
 
 ## 在途任务保护与安全卸载

@@ -687,15 +687,26 @@ helm plugins config herdr --set socketPath=/var/run/herdr.sock
 
 #### helm plugins doc / client
 
-获取插件导出的静态公共文档或前端 React 视图编译产物。
+读取插件公开状态文档，或导出前端 React 视图编译产物。私有文档、停用插件和不存在的文档不可读取。
 
 ```bash
-# 获取插件公开说明文档
-helm plugins doc superagent architecture
+# 全局轻量导航摘要
+helm plugins doc builtin:workflow run-badges --json
+
+# 指定会话的完整运行摘要
+helm plugins doc builtin:workflow runs --conversation 42 --json
+
+# 当前会话（从 HELM_CONVERSATION_ID 解析）
+helm plugins doc builtin:workflow runs --current --json
+
+# 持续订阅指定会话文档：首帧快照，随后逐条事件
+helm plugins doc builtin:workflow runs --current --watch --json
 
 # 导出前端组件脚本
 helm plugins client herdr --output ./dist/herdr-client.mjs
 ```
+
+`--conversation` 与 `--current` 互斥。会话文档必须提供会话上下文；`--watch` 对应按文档过滤的 SSE 订阅，不监听全局广播。正常中断订阅会释放连接。
 
 ---
 

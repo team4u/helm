@@ -223,7 +223,9 @@ export function SampleWidget() {
 
 | 共享 Hook | 作用 |
 | :--- | :--- |
-| `usePluginDoc(docName)` | 响应式订阅当前插件的公共文档，自动绑定插件 ID |
+| `usePluginDoc(docName, pluginId?)` | 响应式订阅公开全局文档，默认当前插件，也可显式跨插件寻址 |
+| `usePluginSessionDoc(docName, options?)` | 按当前会话订阅公开会话文档，可指定 `conversationId / pluginId`；引用归零时退订 |
+| `PluginSlot` | 声明本插件子插槽，供其他插件通过 `ctx.ui.slot()` 注入内容 |
 | `useConversations()` | 订阅宿主会话摘要列表 |
 | `useConversation(conversationId)` | 订阅单个会话的摘要、详情、流式状态和审批；按需加载详情并提供重试方法 |
 | `usePluginContext()` | 获取 `callAction`、`openConversationDrawer`、`openArtifact`、`openWorkbench`、`closeWorkbench`、`notify` 等宿主交互能力 |
@@ -232,6 +234,12 @@ export function SampleWidget() {
 `useToolActivity` 的注册表属于当前回合，不进入全局 Store。工具调用已经返回但后台任务仍在执行时，插件应根据自己的真实状态报告 `active: true`。同一调用的多个挂载来源独立清理；参数变化、卸载或插件停用会自动释放登记。缺少 `callId` 或组件不在时间线回合内时不登记，因此工作台视图不会影响其他回合。
 
 `openConversationDrawer(conversationId)` 打开现有子会话抽屉，不切换主屏、不创建分屏，也不改变工作台开关。
+
+`ctx.callAction(actionId, input, { pluginId?, conversationId? })` 支持显式跨插件调用。`ctx.submitInput(text, { conversationId?, whenBusy? })` 向指定或当前会话提交输入；缺少会话时明确报错。
+
+Screen 组件通过 `ScreenProps.params / setParams` 管理可深链子页面，并通过 `isSplit` 区分主屏与分屏。输入区组件通过 `props.composer` 或 `ctx.composer` 读写草稿、插入文本、读取附件和提交输入。控制函数不注入声明式求值域；JSON 子插槽只接收数据。
+
+`<PluginSlot name="cards" slotProps={{ selectedId }} />` 相对当前插件声明子插槽，贡献方注册 `ctx.ui.slot({ id: 'my-card', target: 'owner-plugin/cards', client: ... })`。`mode="single"` 用优先级选择单个贡献，默认 `list` 渲染全部。循环引用显示错误而不继续渲染。
 
 注意 `client.tsx` 是可信代码而非安全沙箱，宿主不提供隔离边界。插件 UI 的组件、交互与样式均为插件资产：宿主只提供通用扩展点与共享原语，不包含工作流/子代理业务类名或专用渲染分支。
 
