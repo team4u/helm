@@ -246,7 +246,7 @@ function isConversationActive(store: HelmStoreValue, convId: number): boolean {
 }
 
 /** Agent 站位行（一级）。会话数 <= 1 时整行直接打开主会话；>= 2 时带折叠子列表。 */
-function AgentStandingItem({
+export function AgentStandingItem({
   agent,
   store,
   onCreate,
@@ -263,22 +263,19 @@ function AgentStandingItem({
   selectedIds?: Set<number>
   onToggleSelect?: (id: number) => void
 }) {
-  const hasSubList = agent.conversations.length > 1
+  // 批量模式下：只要该 Agent 有会话（length > 0），就展开子列表展示会话行供勾选删除；
+  // 机器人的主站位行永远代表角色 Profile，绝不提供勾选框，避免用户误勾选机器人。
+  // 非批量模式下：只有多于 1 条会话时才折叠为子列表（单会话时行内直达主会话）。
+  const hasSubList = batchMode ? agent.conversations.length > 0 : agent.conversations.length > 1
   const [expanded, setExpanded] = useState(true)
   const [showAll, setShowAll] = useState(false)
 
   const activeInAgent = agent.conversations.some((c) => isConversationActive(store, c.id))
   const headerActive = activeInAgent && (!hasSubList || !expanded)
 
-  const primaryDeletable = agent.primaryConversation
-    ? isConversationDeletable(agent.primaryConversation)
-    : false
-
   const openPrimary = () => {
     if (batchMode) {
-      if (!hasSubList && agent.primaryConversation && primaryDeletable) {
-        onToggleSelect?.(agent.primaryConversation.id)
-      }
+      if (hasSubList) setExpanded((v) => !v)
       return
     }
     const primary = agent.primaryConversation
@@ -301,31 +298,11 @@ function AgentStandingItem({
         className={`nav-item agent-standing-row${headerActive ? ' nav-item-active' : ''}`}
         style={{ minHeight: 30 }}
         onClick={() => {
-          if (batchMode && !hasSubList && agent.primaryConversation && primaryDeletable) {
-            onToggleSelect?.(agent.primaryConversation.id)
+          if (batchMode && hasSubList) {
+            setExpanded((v) => !v)
           }
         }}
       >
-        {batchMode && !hasSubList && agent.primaryConversation && (
-          <input
-            type="checkbox"
-            className="sidebar-batch-checkbox"
-            checked={Boolean(selectedIds?.has(agent.primaryConversation.id))}
-            disabled={!primaryDeletable}
-            title={
-              agent.primaryConversation.id === ROOT_CONVERSATION_ID
-                ? '根会话不可删除'
-                : !primaryDeletable
-                ? '受保护会话不可删除'
-                : undefined
-            }
-            onChange={(e) => {
-              e.stopPropagation()
-              if (primaryDeletable) onToggleSelect?.(agent.primaryConversation!.id)
-            }}
-            onClick={(e) => e.stopPropagation()}
-          />
-        )}
         {hasSubList && (
           <button
             type="button"
@@ -347,9 +324,7 @@ function AgentStandingItem({
           onClick={(e) => {
             if (batchMode) {
               e.stopPropagation()
-              if (!hasSubList && agent.primaryConversation && primaryDeletable) {
-                onToggleSelect?.(agent.primaryConversation.id)
-              }
+              if (hasSubList) setExpanded((v) => !v)
               return
             }
             openPrimary()

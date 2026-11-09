@@ -13,6 +13,7 @@ import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
 import {
+  type AgentStanding,
   buildAgentStandings,
   collectEnabledPluginIds,
   conversationStatusBadgeClass,
@@ -31,7 +32,7 @@ import { resolveTargetString } from '../src/lib/types.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
-const { Sidebar } = await import('../src/shell/Sidebar.js')
+const { Sidebar, AgentStandingItem } = await import('../src/shell/Sidebar.js')
 
 function conv(partial: Partial<ConversationSummary> & { id: number }): ConversationSummary {
   return {
@@ -721,4 +722,40 @@ test('SSR 渲染回归：Sidebar 包含批量管理按钮与极简无 Emoji 验�
   assert.ok(!EMOJI_RE.test(html), 'Sidebar 渲染输出全程不得包含任何 Emoji')
   assert.ok(!html.includes('✓') && !html.includes('✗') && !html.includes('▸'), '不得使用勾叉箭头类特殊字符')
 })
+
+test('批量模式下机器人行（agent-standing-row）绝对不得包含勾选框，仅会话子项可勾选', { timeout: 60_000 }, () => {
+  const store = makeTestStore()
+  const agentStanding: AgentStanding = {
+    profileId: 'coder',
+    label: '代码专家',
+    icon: 'code',
+    order: 0,
+    primaryConversation: conv({ id: 20, title: '代码重构', profileId: 'coder' }),
+    conversations: [conv({ id: 20, title: '代码重构', profileId: 'coder' })],
+    canCreateConversation: true,
+  }
+
+  const html = renderToString(
+    e(AgentStandingItem, {
+      agent: agentStanding,
+      store,
+      onCreate: () => {},
+      batchMode: true,
+      selectedIds: new Set([20]),
+    }),
+  )
+
+  // 1) 机器人角色头部行（agent-standing-row）严禁包含任何 checkbox
+  const rowMatch = html.match(/<div class="nav-item agent-standing-row[^"]*"[^>]*>([\s\S]*?)<\/div>/)
+  assert.ok(rowMatch, '应渲染 agent-standing-row')
+  const headerContent = rowMatch[1]!
+  assert.ok(!headerContent.includes('type="checkbox"'), '机器人行绝对不得包含勾选框（防止误勾选机器人）')
+  assert.ok(!headerContent.includes('sidebar-batch-checkbox'), '机器人行绝对不得包含复选框类名')
+
+  // 2) 只有下挂的会话项（agent-conversations-list）包含会话勾选框
+  assert.ok(html.includes('agent-conversations-list'), '应展开子列表渲染具体会话')
+  assert.ok(html.includes('sidebar-batch-checkbox'), '会话行应渲染勾选框供批量管理')
+  assert.ok(/#<!-- -->20|#20/.test(html), '会话行应包含具体会话 ID')
+})
+
 
