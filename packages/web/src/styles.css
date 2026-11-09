@@ -1567,6 +1567,11 @@ textarea {
   font-size: 11.5px;
   color: var(--fg-secondary);
 }
+.attachment-chip .btn-icon-xs {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-xs);
+}
 
 .composer-textarea {
   width: 100%;
@@ -1617,11 +1622,13 @@ textarea {
 .composer-model-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: normal; }
 .composer-model-level { flex-shrink: 0; color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
 .composer-thinking-row {
+  margin: 4px 6px 8px;
+  width: calc(100% - 12px);
   display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-  padding: 4px 6px 8px;
+}
+.composer-thinking-row .segmented-control-btn {
+  flex: 1;
+  text-align: center;
 }
 .composer-thinking-row .btn { flex-shrink: 0; min-height: 32px; }
 
@@ -1918,6 +1925,14 @@ textarea {
   min-width: 0;
 }
 
+.palette-close-btn {
+  height: 22px;
+  padding: 0 6px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
 /* 统一空状态原语 */
 .empty-state {
   display: flex;
@@ -1946,6 +1961,9 @@ textarea {
 .empty-state-compact {
   padding: 16px 8px;
   min-height: 60px;
+  font-size: 12px;
+}
+.empty-state-compact .empty-state-title {
   font-size: 12px;
 }
 

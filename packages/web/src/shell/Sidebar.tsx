@@ -48,9 +48,8 @@ function HoverIconButton({
 }) {
   return (
     <button
-      className={`btn btn-ghost btn-sm${className ? ` ${className}` : ''}`}
+      className={`btn btn-ghost btn-icon-xs${className ? ` ${className}` : ''}`}
       title={title}
-      style={{ height: 22, width: 22, padding: 0, flexShrink: 0 }}
       onClick={onClick}
     >
       <HelmIcon name={icon} size={13} />
@@ -220,8 +219,7 @@ function AgentNewConversationButton({
   return (
     <button
       type="button"
-      className="btn btn-ghost btn-sm agent-new-conv-btn"
-      style={{ height: 20, width: 20, padding: 0 }}
+      className="btn btn-ghost btn-icon-xs agent-new-conv-btn"
       title={`在 ${agent.label} 下新建对话`}
       onClick={(e) => {
         e.stopPropagation()
@@ -312,8 +310,7 @@ function AgentStandingItem({
         {hasSubList && (
           <button
             type="button"
-            className="btn btn-ghost btn-sm agent-collapse-btn"
-            style={{ height: 20, width: 20, padding: 0, flexShrink: 0 }}
+            className="btn btn-ghost btn-icon-xs agent-collapse-btn"
             title={expanded ? '收起历史对话' : '展开历史对话'}
             aria-expanded={expanded}
             onClick={(e) => {
@@ -495,10 +492,10 @@ function AgentConversationRow({
           }}
           style={{ height: 24, fontSize: 12 }}
         />
-        <button className="btn btn-sm" style={{ height: 22, width: 22, padding: 0 }} onClick={() => void commitRename()}>
+        <button className="btn btn-icon-xs" onClick={() => void commitRename()}>
           <HelmIcon name="check" size={12} />
         </button>
-        <button className="btn btn-sm" style={{ height: 22, width: 22, padding: 0 }} onClick={() => setRenaming(false)}>
+        <button className="btn btn-icon-xs" onClick={() => setRenaming(false)}>
           <HelmIcon name="x" size={12} />
         </button>
       </div>
@@ -696,11 +693,8 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <button
             type="button"
-            className="btn btn-ghost btn-sm"
+            className="btn btn-ghost btn-icon-xs"
             style={{
-              height: 18,
-              width: 18,
-              padding: 0,
               color: batchMode ? 'var(--accent)' : undefined,
             }}
             title={batchMode ? '退出批量管理' : '批量管理会话'}
@@ -717,8 +711,7 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
           </button>
           <button
             type="button"
-            className="btn btn-ghost btn-sm"
-            style={{ height: 18, width: 18, padding: 0 }}
+            className="btn btn-ghost btn-icon-xs"
             title="管理智能体角色 (Profile)"
             onClick={() => store.setActiveModal({ kind: 'profile-editor' })}
           >
