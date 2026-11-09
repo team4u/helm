@@ -15,7 +15,9 @@ import {
   conversationStatusLabel,
   extractSidebarViews,
   filterConversationsByTag,
+  filterDeletableConversations,
   fuzzyMatchConversations,
+  isConversationDeletable,
   isHumanSelectableProfile,
   isProfileVisible,
   isSkillVisible,
@@ -490,3 +492,38 @@ test('collectEnabledPluginIds 仅收集启用插件', { timeout: 60_000 }, () =>
   ])
   assert.deepEqual([...ids].sort(), ['builtin:assistant', 'builtin:superagent'])
 })
+
+// ---------------------------------------------------------------------------
+// 会话可删除性判断：isConversationDeletable & filterDeletableConversations
+// ---------------------------------------------------------------------------
+
+test('isConversationDeletable 正确判定会话是否允许人类删除', { timeout: 60_000 }, () => {
+  // 根会话（ROOT_CONVERSATION_ID）受保护，禁止删除
+  assert.equal(isConversationDeletable({ id: ROOT_CONVERSATION_ID }), false)
+  assert.equal(isConversationDeletable({ id: 1, ownedBy: 'human' }), false)
+
+  // 机器/插件托管会话禁止删除
+  assert.equal(isConversationDeletable({ id: 2, ownedBy: 'bot' }), false)
+  assert.equal(isConversationDeletable({ id: 3, ownedBy: 'helm' }), false)
+
+  // 普通人类会话（无 ownedBy 或 ownedBy === 'human' 且 id !== ROOT_CONVERSATION_ID）允许删除
+  assert.equal(isConversationDeletable({ id: 10 }), true)
+  assert.equal(isConversationDeletable({ id: 11, ownedBy: 'human' }), true)
+})
+
+test('filterDeletableConversations 过滤出可删除会话', { timeout: 60_000 }, () => {
+  const sample = [
+    conv({ id: 1, title: '根会话' }), // ROOT_CONVERSATION_ID -> false
+    conv({ id: 2, title: '中枢', ownedBy: 'helm' }), // ownedBy: 'helm' -> false
+    conv({ id: 20, title: 'Worker', ownedBy: 'bot' }), // ownedBy: 'bot' -> false
+    conv({ id: 10, title: '人类会话1' }), // true
+    conv({ id: 11, title: '人类会话2', ownedBy: 'human' }), // true
+  ]
+
+  const deletable = filterDeletableConversations(sample)
+  assert.deepEqual(
+    deletable.map((c) => c.id),
+    [10, 11],
+  )
+})
+

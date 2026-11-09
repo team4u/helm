@@ -342,3 +342,21 @@ export function conversationStatusBadgeClass(status: ConversationSummary['status
       return 'badge badge-neutral'
   }
 }
+
+/**
+ * 判断会话是否允许被人类删除：
+ * - 根会话（#1，ROOT_CONVERSATION_ID）受系统保护，不可删除；
+ * - 插件托管或非人类拥有的会话（ownedBy !== 'human'，如 'helm' | 'bot'）不可删除；
+ * - 普通人类会话（ownedBy 为 undefined 或 'human'，且 id !== ROOT_CONVERSATION_ID）允许删除。
+ */
+export function isConversationDeletable(conv: Pick<ConversationSummary, 'id' | 'ownedBy'>): boolean {
+  if (conv.id === ROOT_CONVERSATION_ID) return false
+  if ((conv.ownedBy ?? 'human') !== 'human') return false
+  return true
+}
+
+/** 过滤出允许人类删除的会话列表。 */
+export function filterDeletableConversations(conversations: ConversationSummary[]): ConversationSummary[] {
+  return conversations.filter(isConversationDeletable)
+}
+
