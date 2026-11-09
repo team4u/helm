@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import * as React from 'react'
+import { renderToString } from 'react-dom/server'
 import type {
   ConversationSummary,
   Profile,
@@ -8,6 +10,8 @@ import type {
   SkillSummary,
 } from '@helm/protocol'
 import { ROOT_CONVERSATION_ID } from '@helm/protocol'
+import { HelmStoreContext } from '../src/lib/store-context.js'
+import type { HelmStoreValue } from '../src/lib/types.js'
 import {
   buildAgentStandings,
   collectEnabledPluginIds,
@@ -24,6 +28,10 @@ import {
   partitionSidebarUi,
 } from '../src/shell/sidebar-model.js'
 import { resolveTargetString } from '../src/lib/types.js'
+
+const e = React.createElement
+;(globalThis as Record<string, unknown>).React = React
+const { Sidebar } = await import('../src/shell/Sidebar.js')
 
 function conv(partial: Partial<ConversationSummary> & { id: number }): ConversationSummary {
   return {
@@ -525,5 +533,192 @@ test('filterDeletableConversations 过滤出可删除会话', { timeout: 60_000 
     deletable.map((c) => c.id),
     [10, 11],
   )
+})
+
+// ---------------------------------------------------------------------------
+// 侧边栏批量管理与批量删除逻辑
+// ---------------------------------------------------------------------------
+
+function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
+  return {
+    authReady: true,
+    authConfigured: true,
+    authenticated: true,
+    authError: null,
+    connectionError: null,
+    loadErrors: {},
+    sseConnected: true,
+    theme: 'dark',
+    themePreference: 'system',
+    conversations: [
+      conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
+      conv({ id: 10, title: '用户会话1', profileId: 'assistant' }),
+      conv({ id: 11, title: '用户会话2', profileId: 'assistant' }),
+    ],
+    conversationDetails: {},
+    conversationLives: {},
+    conversationArtifacts: {},
+    pendingAsks: [],
+    resolvedAsksByConv: {},
+    plugins: [{ id: 'builtin:assistant', name: '个人助理', locked: true, enabled: true, hooks: [], actions: [], tools: [] }],
+    uiContributions: [],
+    groupedUi: {
+      sidebarItems: [],
+      sidebarSections: [],
+      screens: [],
+      timelineRenderers: [],
+      toolViews: [],
+      composerPills: [],
+      composerWidgets: [],
+      workbenchPanels: [],
+      commands: [],
+      settingsPanels: [],
+    },
+    pluginDocs: {},
+    workflowRuns: [],
+    nodes: [],
+    profiles: [{ id: 'assistant', name: '个人助理' }],
+    models: [
+      {
+        id: 'zhipu/glm-4.6',
+        provider: 'zhipu',
+        modelId: 'glm-4.6',
+        available: true,
+        thinkingLevels: ['off', 'low', 'high'],
+      },
+    ],
+    providers: [],
+    credentials: [],
+    skills: [],
+    actions: [],
+    primaryTarget: { kind: 'conversation', conversationId: 1 },
+    splitTarget: null,
+    workbenchOpen: false,
+    workbenchTab: 'tasks',
+    activeModal: null,
+    highlightedEntry: null,
+    notices: [],
+    setTheme: () => {},
+    setThemePreference: () => {},
+    toggleTheme: () => {},
+    checkAuth: async () => {},
+    onAuthenticated: async () => {},
+    logout: () => {},
+    refreshAssets: async () => {},
+    refreshNodes: async () => undefined,
+    loadConversationDetail: async () => undefined,
+    loadEarlierEntries: async () => {},
+    loadConversationArtifacts: async () => undefined,
+    ensurePluginDoc: async () => undefined,
+    openTarget: () => {},
+    closeSplit: () => {},
+    setWorkbenchOpen: () => {},
+    setWorkbenchTab: () => {},
+    setActiveModal: () => {},
+    dismissNotice: () => {},
+    pushNotice: () => {},
+    invokePluginAction: async () => undefined,
+    ...partial,
+  }
+}
+
+test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_000 }, () => {
+  const standings = buildAgentStandings({
+    profiles: [
+      { id: 'assistant', name: '个人助理' },
+      { id: 'coder', name: '代码助手' },
+    ],
+    conversations: [
+      conv({ id: 1, title: '根会话', profileId: 'assistant' }),
+      conv({ id: 10, title: '会话 10', profileId: 'assistant' }),
+      conv({ id: 11, title: '会话 11', profileId: 'assistant' }),
+      conv({ id: 20, title: 'Worker', profileId: 'coder', ownedBy: 'bot' }),
+      conv({ id: 21, title: '系统中枢', profileId: 'coder', ownedBy: 'helm' }),
+      conv({ id: 22, title: '会话 22', profileId: 'coder' }),
+    ],
+    plugins: [{ id: 'builtin:assistant', enabled: true }],
+    sidebarItems: [],
+    sidebarSections: [],
+  })
+
+  // 提取所有智能体站位下的可删除会话
+  const allConvs = standings.flatMap((a) => a.conversations)
+  const allDeletableIds = filterDeletableConversations(allConvs).map((c) => c.id)
+
+  // 应该包含 10, 11, 22（排除 1 根会话，排除 bot 和 helm 拥有的会话）
+  assert.deepEqual(allDeletableIds.sort((a, b) => a - b), [10, 11, 22])
+
+  let selectedIds = new Set<number>()
+  const isAllSelected = (ids: Set<number>) =>
+    allDeletableIds.length > 0 && allDeletableIds.every((id) => ids.has(id))
+
+  // 初始为空
+  assert.equal(isAllSelected(selectedIds), false)
+  assert.equal(selectedIds.size, 0)
+
+  // 单选 10
+  selectedIds = new Set(selectedIds).add(10)
+  assert.equal(isAllSelected(selectedIds), false)
+  assert.equal(selectedIds.size, 1)
+
+  // 全选
+  selectedIds = new Set(allDeletableIds)
+  assert.equal(isAllSelected(selectedIds), true)
+  assert.equal(selectedIds.size, 3)
+
+  // 清空
+  selectedIds = new Set()
+  assert.equal(isAllSelected(selectedIds), false)
+  assert.equal(selectedIds.size, 0)
+})
+
+test('批量删除重定向保护仿真：主屏/分屏活跃会话删除时安全回退', { timeout: 60_000 }, () => {
+  function simulateRedirection(
+    selectedIds: Set<number>,
+    primaryTarget: { kind: string; conversationId: number },
+    splitTarget: { kind: string; conversationId: number } | null,
+  ) {
+    let redirectedTo: number | null = null
+    let splitClosed = false
+    if (primaryTarget.kind === 'conversation' && selectedIds.has(primaryTarget.conversationId)) {
+      redirectedTo = ROOT_CONVERSATION_ID
+    }
+    if (splitTarget?.kind === 'conversation' && selectedIds.has(splitTarget.conversationId)) {
+      splitClosed = true
+    }
+    return { redirectedTo, splitClosed }
+  }
+
+  // 场景 1：当前主屏为会话 10，分屏为会话 11；批量删除选中了 10 和 11
+  const r1 = simulateRedirection(
+    new Set([10, 11]),
+    { kind: 'conversation', conversationId: 10 },
+    { kind: 'conversation', conversationId: 11 },
+  )
+  assert.equal(r1.redirectedTo, ROOT_CONVERSATION_ID, '主屏正在查看的会话被删，自动重定向到根会话 #1')
+  assert.equal(r1.splitClosed, true, '分屏正在查看的会话被删，自动关闭分屏')
+
+  // 场景 2：当前主屏为根会话 1，分屏为会话 99；批量删除选中了 10
+  const r2 = simulateRedirection(
+    new Set([10]),
+    { kind: 'conversation', conversationId: ROOT_CONVERSATION_ID },
+    { kind: 'conversation', conversationId: 99 },
+  )
+  assert.equal(r2.redirectedTo, null, '未被删除的活跃主屏会话不被重定向')
+  assert.equal(r2.splitClosed, false, '未被删除的分屏会话不被关闭')
+})
+
+test('SSR 渲染回归：Sidebar 包含批量管理按钮与极简无 Emoji 验证', { timeout: 60_000 }, () => {
+  const store = makeTestStore()
+  const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
+
+  // 智能体分组头部包含 check-square 批量管理按钮
+  assert.ok(html.includes('title="批量管理会话"'), '应渲染批量管理切换按钮')
+  assert.ok(html.includes('check-square') || html.includes('lucide'), '应包含 check-square 图标')
+
+  // 极简无 Emoji 铁律验证
+  const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/u
+  assert.ok(!EMOJI_RE.test(html), 'Sidebar 渲染输出全程不得包含任何 Emoji')
+  assert.ok(!html.includes('✓') && !html.includes('✗') && !html.includes('▸'), '不得使用勾叉箭头类特殊字符')
 })
 

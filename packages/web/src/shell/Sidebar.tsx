@@ -13,6 +13,8 @@ import {
   conversationStatusLabel,
   extractSidebarViews,
   filterConversationsByTag,
+  filterDeletableConversations,
+  isConversationDeletable,
   type AgentStanding,
 } from './sidebar-model.js'
 
@@ -249,11 +251,17 @@ function AgentStandingItem({
   store,
   onCreate,
   onNavigate,
+  batchMode,
+  selectedIds,
+  onToggleSelect,
 }: {
   agent: AgentStanding
   store: HelmStoreValue
   onCreate: (profileId: string) => void
   onNavigate?: () => void
+  batchMode?: boolean
+  selectedIds?: Set<number>
+  onToggleSelect?: (id: number) => void
 }) {
   const hasSubList = agent.conversations.length > 1
   const [expanded, setExpanded] = useState(true)
@@ -262,7 +270,17 @@ function AgentStandingItem({
   const activeInAgent = agent.conversations.some((c) => isConversationActive(store, c.id))
   const headerActive = activeInAgent && (!hasSubList || !expanded)
 
+  const primaryDeletable = agent.primaryConversation
+    ? isConversationDeletable(agent.primaryConversation)
+    : false
+
   const openPrimary = () => {
+    if (batchMode) {
+      if (!hasSubList && agent.primaryConversation && primaryDeletable) {
+        onToggleSelect?.(agent.primaryConversation.id)
+      }
+      return
+    }
     const primary = agent.primaryConversation
     if (primary) {
       store.openTarget({ kind: 'conversation', conversationId: primary.id })
@@ -282,7 +300,32 @@ function AgentStandingItem({
       <div
         className={`nav-item agent-standing-row${headerActive ? ' nav-item-active' : ''}`}
         style={{ minHeight: 30 }}
+        onClick={() => {
+          if (batchMode && !hasSubList && agent.primaryConversation && primaryDeletable) {
+            onToggleSelect?.(agent.primaryConversation.id)
+          }
+        }}
       >
+        {batchMode && !hasSubList && agent.primaryConversation && (
+          <input
+            type="checkbox"
+            className="sidebar-batch-checkbox"
+            checked={Boolean(selectedIds?.has(agent.primaryConversation.id))}
+            disabled={!primaryDeletable}
+            title={
+              agent.primaryConversation.id === ROOT_CONVERSATION_ID
+                ? '根会话不可删除'
+                : !primaryDeletable
+                ? '受保护会话不可删除'
+                : undefined
+            }
+            onChange={(e) => {
+              e.stopPropagation()
+              if (primaryDeletable) onToggleSelect?.(agent.primaryConversation!.id)
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        )}
         {hasSubList && (
           <button
             type="button"
@@ -301,8 +344,17 @@ function AgentStandingItem({
         <button
           type="button"
           className="nav-item-main nav-open"
-          onClick={openPrimary}
-          disabled={!agent.primaryConversation && !agent.canCreateConversation}
+          onClick={(e) => {
+            if (batchMode) {
+              e.stopPropagation()
+              if (!hasSubList && agent.primaryConversation && primaryDeletable) {
+                onToggleSelect?.(agent.primaryConversation.id)
+              }
+              return
+            }
+            openPrimary()
+          }}
+          disabled={!batchMode && !agent.primaryConversation && !agent.canCreateConversation}
           aria-current={headerActive ? 'page' : undefined}
         >
           <HelmIcon name={agent.icon} size={14} />
@@ -318,16 +370,20 @@ function AgentStandingItem({
           {hasSubList && (
             <span className="badge badge-neutral tabular-nums">{agent.conversations.length}</span>
           )}
-          <AgentNewConversationButton agent={agent} onCreate={onCreate} />
-          {agent.primaryConversation && !hasSubList && (
-            <span className="sidebar-split-action" style={{ display: 'inline-flex' }}>
-              <HoverIconButton
-                className="split-toggle-btn sidebar-split-btn"
-                title="在右屏分屏打开"
-                icon="columns"
-                onClick={(e) => openSplit(e, agent.primaryConversation!.id)}
-              />
-            </span>
+          {!batchMode && (
+            <>
+              <AgentNewConversationButton agent={agent} onCreate={onCreate} />
+              {agent.primaryConversation && !hasSubList && (
+                <span className="sidebar-split-action" style={{ display: 'inline-flex' }}>
+                  <HoverIconButton
+                    className="split-toggle-btn sidebar-split-btn"
+                    title="在右屏分屏打开"
+                    icon="columns"
+                    onClick={(e) => openSplit(e, agent.primaryConversation!.id)}
+                  />
+                </span>
+              )}
+            </>
           )}
         </span>
       </div>
@@ -337,23 +393,32 @@ function AgentStandingItem({
           store={store}
           showAll={showAll}
           onToggleShowAll={() => setShowAll((v) => !v)}
+          batchMode={batchMode}
+          selectedIds={selectedIds}
+          onToggleSelect={onToggleSelect}
         />
       )}
     </div>
   )
 }
 
-/** Agent 名下二级历史会话子列表：默认显示前 5 条，超出可展开；行内重命名/删除/分屏。 */
+/** Agent 名下二级历史会话子列表：默认显示前 5 条，超出可展开；行内重命名/分屏。 */
 function AgentConversationsList({
   agent,
   store,
   showAll,
   onToggleShowAll,
+  batchMode,
+  selectedIds,
+  onToggleSelect,
 }: {
   agent: AgentStanding
   store: HelmStoreValue
   showAll: boolean
   onToggleShowAll: () => void
+  batchMode?: boolean
+  selectedIds?: Set<number>
+  onToggleSelect?: (id: number) => void
 }) {
   const convs = agent.conversations
   const activeIdx = convs.findIndex((c) => isConversationActive(store, c.id))
@@ -367,7 +432,14 @@ function AgentConversationsList({
   return (
     <div className="agent-conversations-list">
       {visible.map((conv) => (
-        <AgentConversationRow key={conv.id} conv={conv} store={store} />
+        <AgentConversationRow
+          key={conv.id}
+          conv={conv}
+          store={store}
+          batchMode={batchMode}
+          selected={selectedIds?.has(conv.id)}
+          onToggleSelect={onToggleSelect}
+        />
       ))}
       {hidden > 0 && (
         <button
@@ -391,11 +463,24 @@ function AgentConversationsList({
   )
 }
 
-/** Agent 名下单个历史会话行（缩进渲染 + 悬停重命名/删除/分屏）。 */
-function AgentConversationRow({ conv, store }: { conv: ConversationSummary; store: HelmStoreValue }) {
+/** Agent 名下单个历史会话行（缩进渲染 + 悬停重命名/分屏）。 */
+function AgentConversationRow({
+  conv,
+  store,
+  batchMode,
+  selected,
+  onToggleSelect,
+}: {
+  conv: ConversationSummary
+  store: HelmStoreValue
+  batchMode?: boolean
+  selected?: boolean
+  onToggleSelect?: (id: number) => void
+}) {
   const [renaming, setRenaming] = useState(false)
   const [draft, setDraft] = useState('')
   const active = isConversationActive(store, conv.id)
+  const deletable = isConversationDeletable(conv)
   const humanManageable =
     conv.id !== ROOT_CONVERSATION_ID && (conv.ownedBy ?? 'human') === 'human'
 
@@ -440,13 +525,41 @@ function AgentConversationRow({ conv, store }: { conv: ConversationSummary; stor
   }
 
   return (
-    <div className={`nav-item nav-item-sub${active ? ' nav-item-active' : ''}`}>
+    <div
+      className={`nav-item nav-item-sub${active ? ' nav-item-active' : ''}`}
+      onClick={() => {
+        if (batchMode && deletable) {
+          onToggleSelect?.(conv.id)
+        }
+      }}
+    >
+      {batchMode && (
+        <input
+          type="checkbox"
+          className="sidebar-batch-checkbox"
+          checked={Boolean(selected)}
+          disabled={!deletable}
+          title={deletable ? undefined : '受保护会话不可删除'}
+          onChange={(e) => {
+            e.stopPropagation()
+            if (deletable) onToggleSelect?.(conv.id)
+          }}
+          onClick={(e) => e.stopPropagation()}
+        />
+      )}
       <button
         type="button"
         className="nav-item-main nav-open"
-        onClick={() => store.openTarget({ kind: 'conversation', conversationId: conv.id })}
+        onClick={(e) => {
+          if (batchMode) {
+            e.stopPropagation()
+            if (deletable) onToggleSelect?.(conv.id)
+            return
+          }
+          store.openTarget({ kind: 'conversation', conversationId: conv.id })
+        }}
         onDoubleClick={() => {
-          if (humanManageable) {
+          if (!batchMode && humanManageable) {
             setDraft(conv.title)
             setRenaming(true)
           }
@@ -459,30 +572,32 @@ function AgentConversationRow({ conv, store }: { conv: ConversationSummary; stor
         <span className="tabular-nums">#{conv.id}</span>
         {conv.nodeId && conv.nodeId !== 'local' && <RemoteNodeTag nodeId={conv.nodeId} />}
         <StatusBadge conv={conv} />
-        <span className="nav-item-row-actions">
-          <span className="sidebar-split-action" style={{ display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
-            <HoverIconButton
-              className="split-toggle-btn sidebar-split-btn"
-              title="在右屏分屏打开"
-              icon="columns"
-              onClick={(e) => {
-                e.stopPropagation()
-                store.openTarget({ kind: 'conversation', conversationId: conv.id }, { split: true })
-              }}
-            />
+        {!batchMode && (
+          <span className="nav-item-row-actions">
+            <span className="sidebar-split-action" style={{ display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
+              <HoverIconButton
+                className="split-toggle-btn sidebar-split-btn"
+                title="在右屏分屏打开"
+                icon="columns"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  store.openTarget({ kind: 'conversation', conversationId: conv.id }, { split: true })
+                }}
+              />
+            </span>
+            {humanManageable && (
+              <HoverIconButton
+                title="重命名会话"
+                icon="edit-3"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setDraft(conv.title)
+                  setRenaming(true)
+                }}
+              />
+            )}
           </span>
-          {humanManageable && (
-            <HoverIconButton
-              title="重命名会话"
-              icon="edit-3"
-              onClick={(e) => {
-                e.stopPropagation()
-                setDraft(conv.title)
-                setRenaming(true)
-              }}
-            />
-          )}
-        </span>
+        )}
       </span>
     </div>
   )
@@ -490,6 +605,10 @@ function AgentConversationRow({ conv, store }: { conv: ConversationSummary; stor
 
 /** 「智能体」分组：每个 Agent 一个固定站位，下挂各自历史对话。 */
 function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onNavigate?: () => void }) {
+  const [batchMode, setBatchMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [deleting, setDeleting] = useState(false)
+
   const agentStandings = useMemo(
     () =>
       buildAgentStandings({
@@ -506,20 +625,173 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
     [store, onNavigate],
   )
 
+  const allDeletableIds = useMemo(() => {
+    const allConvs = agentStandings.flatMap((a) => a.conversations)
+    return filterDeletableConversations(allConvs).map((c) => c.id)
+  }, [agentStandings])
+
+  const isAllSelected = allDeletableIds.length > 0 && allDeletableIds.every((id) => selectedIds.has(id))
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  const handleBatchDelete = async () => {
+    const count = selectedIds.size
+    if (count === 0 || deleting) return
+    const confirmed =
+      typeof window !== 'undefined' && typeof window.confirm === 'function'
+        ? window.confirm(`确定删除选中的 ${count} 个会话吗？此操作无法撤销。`)
+        : true
+    if (!confirmed) return
+
+    setDeleting(true)
+    try {
+      const ids = Array.from(selectedIds)
+      const results = await Promise.allSettled(ids.map((id) => conversationsApi.remove(id)))
+      const fulfilled = results.filter((r) => r.status === 'fulfilled').length
+      const rejected = results.filter((r) => r.status === 'rejected').length
+
+      if (rejected === 0) {
+        store.pushNotice({
+          type: 'notification',
+          level: 'info',
+          title: '批量删除完成',
+          body: `成功删除 ${fulfilled} 个会话`,
+        })
+      } else if (fulfilled === 0) {
+        store.pushNotice({
+          type: 'notification',
+          level: 'error',
+          title: '批量删除失败',
+          body: `删除失败 ${rejected} 个会话`,
+        })
+      } else {
+        store.pushNotice({
+          type: 'notification',
+          level: 'warning',
+          title: '批量删除部分失败',
+          body: `成功删除 ${fulfilled} 个，失败 ${rejected} 个`,
+        })
+      }
+
+      if (
+        store.primaryTarget.kind === 'conversation' &&
+        selectedIds.has(store.primaryTarget.conversationId)
+      ) {
+        store.openTarget({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
+      }
+
+      if (
+        store.splitTarget?.kind === 'conversation' &&
+        selectedIds.has(store.splitTarget.conversationId)
+      ) {
+        store.closeSplit()
+      }
+
+      setSelectedIds(new Set())
+      setBatchMode(false)
+    } catch (err) {
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: '批量删除异常',
+        body: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
     <div className="sidebar-group agent-standing-group">
       <div className="sidebar-group-header">
         <span>智能体</span>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          style={{ height: 18, width: 18, padding: 0 }}
-          title="管理智能体角色 (Profile)"
-          onClick={() => store.setActiveModal({ kind: 'profile-editor' })}
-        >
-          <HelmIcon name="plus" size={12} />
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            style={{
+              height: 18,
+              width: 18,
+              padding: 0,
+              color: batchMode ? 'var(--accent)' : undefined,
+            }}
+            title={batchMode ? '退出批量管理' : '批量管理会话'}
+            onClick={() => {
+              setBatchMode((v) => {
+                if (v) {
+                  setSelectedIds(new Set())
+                }
+                return !v
+              })
+            }}
+          >
+            <HelmIcon name="check-square" size={12} />
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            style={{ height: 18, width: 18, padding: 0 }}
+            title="管理智能体角色 (Profile)"
+            onClick={() => store.setActiveModal({ kind: 'profile-editor' })}
+          >
+            <HelmIcon name="plus" size={12} />
+          </button>
+        </div>
       </div>
+      {batchMode && (
+        <div className="sidebar-batch-bar">
+          <div className="sidebar-batch-bar-header">
+            <span style={{ fontWeight: 500, color: 'var(--fg-secondary)' }}>
+              已选择 {selectedIds.size} 项
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => {
+                setBatchMode(false)
+                setSelectedIds(new Set())
+              }}
+              title="退出批量管理"
+            >
+              退出
+            </button>
+          </div>
+          <div className="sidebar-batch-bar-actions">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={allDeletableIds.length === 0 || deleting}
+              onClick={() => {
+                if (isAllSelected) {
+                  setSelectedIds(new Set())
+                } else {
+                  setSelectedIds(new Set(allDeletableIds))
+                }
+              }}
+            >
+              {isAllSelected ? '清空' : '全选可删'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-danger-sm"
+              disabled={selectedIds.size === 0 || deleting}
+              onClick={() => void handleBatchDelete()}
+            >
+              {deleting ? '删除中...' : `删除所选 (${selectedIds.size})`}
+            </button>
+          </div>
+        </div>
+      )}
       {agentStandings.map((agent) => (
         <AgentStandingItem
           key={agent.profileId}
@@ -527,6 +799,9 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
           store={store}
           onCreate={(profileId) => void createConversation(profileId)}
           onNavigate={onNavigate}
+          batchMode={batchMode}
+          selectedIds={selectedIds}
+          onToggleSelect={toggleSelect}
         />
       ))}
     </div>

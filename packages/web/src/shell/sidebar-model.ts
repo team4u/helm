@@ -98,8 +98,8 @@ export interface AgentStandingsInput {
   profiles: Profile[]
   conversations: ConversationSummary[]
   plugins: ReadonlyArray<{ id: string; enabled: boolean }>
-  sidebarItems: Array<QualifiedUiSpec<SidebarItemSpec>>
-  sidebarSections: Array<QualifiedUiSpec<SidebarSectionSpec>>
+  sidebarItems?: Array<QualifiedUiSpec<SidebarItemSpec>>
+  sidebarSections?: Array<QualifiedUiSpec<SidebarSectionSpec>>
 }
 
 /** Agent 名下二级历史会话子列表默认显示条数（超出可展开）。 */
@@ -120,7 +120,7 @@ interface SidebarPinMeta {
  * - 插件停用后其 managedByPlugin 站位与 ownedBy=helm/bot 遗留会话自动隐藏。
  */
 export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[] {
-  const { profiles, conversations, plugins, sidebarItems, sidebarSections } = input
+  const { profiles, conversations, plugins, sidebarItems = [], sidebarSections = [] } = input
   const enabledPluginIds = collectEnabledPluginIds(plugins)
   const partition = partitionSidebarUi(sidebarItems, sidebarSections)
 

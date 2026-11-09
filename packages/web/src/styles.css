@@ -430,6 +430,51 @@ textarea {
   color: var(--fg-muted);
 }
 
+.sidebar-batch-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: var(--radius-sm, 6px);
+  font-size: 12px;
+}
+
+.sidebar-batch-bar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sidebar-batch-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-batch-checkbox {
+  margin: 0 6px 0 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sidebar-batch-checkbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn-danger-sm {
+  color: #fff;
+  background-color: var(--err, #ef4444);
+  border-color: var(--err, #ef4444);
+}
+
+.btn-danger-sm:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
 .sidebar-footer {
   padding: 8px 10px;
   border-top: 1px solid var(--border);
