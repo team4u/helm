@@ -48,6 +48,8 @@ export interface HerdrTransportOptions {
   redact?: (text: string) => string
   /** 跨节点通道（EnvFabric 或测试 fixture 注入）。缺省时远端目标显式报错，绝不回退本机。 */
   nodeChannel?: HerdrNodeChannel
+  /** events.subscribe ack 等待期限；缺省 SUBSCRIBE_ACK_TIMEOUT_MS（测试可缩短）。 */
+  subscribeAckTimeoutMs?: number
 }
 
 export const HERDR_CALL_TIMEOUT_MS = 120_000
@@ -408,6 +410,7 @@ async function subscribeLocal(
   onError: (error: unknown) => void,
   redact: (s: string) => string,
   options?: HerdrSubscribeOptions,
+  subscribeAckTimeoutMs: number = SUBSCRIBE_ACK_TIMEOUT_MS,
 ): Promise<() => void> {
   const signal = options?.signal
   checkAborted(signal, target)
@@ -530,7 +533,7 @@ async function subscribeLocal(
 
   // ack 期限：无论哪条路径失败（超时/坏帧/断线）都必须经 failOnce 关闭 socket，
   // 否则服务端连接悬挂且 close 监听器残留。
-  const ackTimer = timeoutPromise(SUBSCRIBE_ACK_TIMEOUT_MS, target)
+  const ackTimer = timeoutPromise(subscribeAckTimeoutMs, target)
   try {
     await Promise.race([
       ack,
@@ -1017,9 +1020,9 @@ async function runNodeGate(
 
 // ------------------------------------------------------------- 工厂 --
 
-export function createHerdrTransport(options?: HerdrTransportOptions): HerdrTransport {
-  const redact = options?.redact ?? ((text: string) => text)
-  const nodeChannel = options?.nodeChannel
+export function createHerdrTransport(factoryOptions?: HerdrTransportOptions): HerdrTransport {
+  const redact = factoryOptions?.redact ?? ((text: string) => text)
+  const nodeChannel = factoryOptions?.nodeChannel
 
   async function call(target: HerdrTarget, method: string, params: Record<string, unknown>, callOptions?: HerdrCallOptions): Promise<unknown> {
     assertTarget(target)
@@ -1076,7 +1079,7 @@ export function createHerdrTransport(options?: HerdrTransportOptions): HerdrTran
           new HerdrTransportError('herdr_subscribe_unsupported', `node channel for '${nodeId}' does not stream events`, describeTarget(target)),
         )
       }
-      return subscribeLocal(resolveSocketPath(target), describeTarget(target), onEvent, onError, redact, options)
+      return subscribeLocal(resolveSocketPath(target), describeTarget(target), onEvent, onError, redact, options, factoryOptions?.subscribeAckTimeoutMs)
     },
   }
 }

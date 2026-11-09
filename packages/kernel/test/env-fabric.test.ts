@@ -61,6 +61,7 @@ function makeFauxModels() {
 /** 纯 EnvFabric 测试基座（HTTP server + gateway，不经 KernelRuntime）。 */
 async function startFabricHub(
   authenticate?: (nodeId: string, token: string) => boolean | Promise<boolean>,
+  registerTimeoutMs?: number,
 ) {
   const fabric = createEnvFabric({
     ...(authenticate !== undefined ? { authenticate } : {}),
@@ -76,7 +77,7 @@ async function startFabricHub(
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
   assert.ok(address !== null && typeof address === 'object')
-  const gateway = attachNodeWsGateway(server, { registry: fabric.registry })
+  const gateway = attachNodeWsGateway(server, { registry: fabric.registry, ...(registerTimeoutMs !== undefined ? { registerTimeoutMs } : {}) })
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     fabric,
@@ -154,13 +155,13 @@ describe('EnvFabric 节点连接与远端执行', { timeout: 60_000 }, () => {
   })
 
   it('未注册超时 4001：连接后不 register 即被网关关闭', { timeout: 60_000 }, async () => {
-    const hub = await startFabricHub(() => true)
+    const hub = await startFabricHub(() => true, 300)
     try {
       const ws = new WebSocket(`${hub.baseUrl.replace(/^http/, 'ws')}/ws/node`)
       const codes: number[] = []
       await new Promise<void>((resolve) => ws.once('open', () => resolve()))
       ws.on('close', (code) => codes.push(code))
-      await delay(10_600)
+      await delay(900)
       assert.ok(codes.includes(4001), `未注册连接应以 4001 关闭（收到 ${codes.join(',')}）`)
     } finally {
       await hub.close()
@@ -260,7 +261,7 @@ describe('EnvFabric 节点连接与远端执行', { timeout: 60_000 }, () => {
 
   it('撤销红线：延迟鉴权在途 disconnect 后 resolve(true) 不再发布旧连接', { timeout: 60_000 }, async () => {
     const TOKEN = 'node-rev:secret'
-    let authDelayMs = 500
+    let authDelayMs = 150
     const hub = await startFabricHub(async (nodeId, token) => {
       if (nodeId === 'node-rev' && token === TOKEN) {
         await delay(authDelayMs)
@@ -306,15 +307,15 @@ describe('EnvFabric 节点连接与远端执行', { timeout: 60_000 }, () => {
         hostname: 'revoke-probe',
         platform: process.platform,
       })
-      // 鉴权挂起中（authDelayMs=500）：立即 disconnect（模拟 removeNode/轮换）。
-      await delay(120)
+      // 鉴权挂起中（authDelayMs=150）：立即 disconnect（模拟 removeNode/轮换）。
+      await delay(50)
       hub.fabric.registry.disconnect('node-rev')
       // 鉴权随后 resolve(true)：register 必须被拒（register superseded by
       // revoke/replace），旧连接绝不发布在线。
       const outcome = await registerPromise
       assert.equal(outcome.ok, false, `迟到 resolve(true) 不得发布：${JSON.stringify(outcome)}`)
       assert.match(outcome.reason ?? '', /superseded/)
-      await delay(300)
+      await delay(100)
       assert.equal(hub.fabric.registry.get('node-rev'), undefined, '注册表仍离线')
       assert.equal(hub.fabric.isOnline('node-rev'), false)
       // 撤销完成后新注册不受影响（epoch 已推进但无在途注册）。

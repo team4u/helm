@@ -102,6 +102,8 @@ export class HerdrExecutor {
     private readonly host: ExecutorHost,
     private readonly transport: NonNullable<HerdrPluginDependencies['transport']>,
     localTarget: HerdrTarget,
+    /** 轮询间隔（测试可缩短；生产缺省 100ms）。用于 waitInteractiveReady 与 AskDoc 存续复核。 */
+    private readonly pollIntervalMs = 100,
   ) {
     this.localTarget = localTarget
   }
@@ -405,7 +407,7 @@ export class HerdrExecutor {
     let info = initial
     while (info.agentStatus !== 'blocked' && !(info.interactiveReady && (info.agentStatus === 'idle' || info.agentStatus === 'done'))) {
       if (Date.now() >= deadline) throw new HelmError('herdr_startup_timeout', `pane ${paneId} 未在启动期限内具备 interactive_ready`, 504)
-      await delay(100, undefined, { signal })
+      await delay(this.pollIntervalMs, undefined, { signal })
       info = await this.agentGet(target, paneId, signal)
     }
     return info
@@ -628,7 +630,7 @@ export class HerdrExecutor {
               throw new HelmError('aborted', `人类取消了 pane ${pane.paneId} 的审批`, 409)
             }
           } else {
-            await backoffForDuplicateBlocked(signalOf(request), ++attempts)
+            await backoffForDuplicateBlocked(signalOf(request), ++attempts, this.deps.blockedBackoffBaseMs, this.deps.blockedBackoffCapMs)
           }
         } else {
           if (!await this.bridgeBlocked(request, pane, info)) {
@@ -816,7 +818,7 @@ export class HerdrExecutor {
     const result = pending.finally(() => monitor.abort())
     const polling = (async () => {
       while (!monitor.signal.aborted) {
-        try { await delay(100, undefined, { signal: monitor.signal }) }
+        try { await delay(this.pollIntervalMs, undefined, { signal: monitor.signal }) }
         catch (error) { if (monitor.signal.aborted) return; throw error }
         if (request.signal?.aborted) {
           await this.cancelAskQuietly(entry.askId, 'cancelled')

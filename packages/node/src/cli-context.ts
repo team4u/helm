@@ -30,6 +30,8 @@ export interface NodeCliIo {
   isAlive?: (pid: number) => boolean;
   /** 就绪上报总超时（缺省 45s）：测试注入短时限。 */
   readyTimeoutMs?: number;
+  /** launcher 跟踪轮询间隔（缺省 2s）：测试注入短间隔。 */
+  launcherPollMs?: number;
   /** service install 入口覆盖（缺省解析编译产物 dist/cli.js）。 */
   serviceEntry?: string;
 }

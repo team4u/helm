@@ -293,10 +293,10 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
       })
       const tracker = trackerOfHarness(harness, store)
       await tracker.observe(id)
-      // 慢响应工厂：长回合在途（无工具依赖，纯 provider 延迟）。
+      // 慢响应工厂：长回合在途（无工具依赖，纯 provider 延迟；只需超过重启窗口 600ms 即可）。
       faux.setResponses([
         async () => {
-          await new Promise((r) => setTimeout(r, 8000))
+          await new Promise((r) => setTimeout(r, 3000))
           return fauxAssistantMessage('重启后回答')
         },
       ])
