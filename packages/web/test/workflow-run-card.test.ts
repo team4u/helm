@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import type { ConversationSummary, PluginClientContext, WorkbenchPanelProps, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
+import type { ConversationSummary, PluginClientContext as PluginClientContextType, WorkbenchPanelProps, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
 import { PluginClientContext } from '../src/lib/plugin-client-context.js'
 import {
   importWorkflowClientModule,
@@ -413,7 +413,7 @@ test('resolveNodeSummaryText：done 节点不随后来 child blocked 改写为�
 // SSR：编译产物组件真实渲染（共享 React + PluginClientContext 注入）
 // ---------------------------------------------------------------------------
 
-const stubCtx: PluginClientContext = {
+const stubCtx: PluginClientContextType = {
   pluginId: 'builtin:workflow',
   callAction: async () => undefined,
   openScreen: () => {},

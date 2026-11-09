@@ -21,15 +21,8 @@ import * as React from 'react'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
 import { renderToString } from 'react-dom/server'
-// web 不依赖 kernel（五包依赖方向单向）；测试直接从 kernel 构建产物引入真实编译器，
-// 未构建时显式报错引导先 pnpm --filter @helm/kernel build，不降级 mock。
-import { existsSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-const kernelDist = fileURLToPath(new URL('../../kernel/dist/plugins/client-compiler.js', import.meta.url))
-if (!existsSync(kernelDist)) {
-  throw new Error('测试需要真实 kernel 编译产物：请先运行 pnpm --filter @helm/kernel build')
-}
-const { compilePluginClientModule } = (await import(kernelDist)) as typeof import('../../kernel/dist/plugins/client-compiler.js')
+// 测试通过 tsx 执行当前 worktree 的真实编译器；生产 Web 不反向依赖 kernel。
+import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
 import { requireClientExport } from '../src/lib/plugin-client.js'
 // '@helm/plugin-client' 共享模块实例：宿主挂载的是 web/src/lib/plugin-client-context.ts
 // 的模块命名空间（HelmStoreProvider 挂载同一对象）；测试直接 import 该模块挂到全局。

@@ -23,6 +23,14 @@ import type {
 // ---------------------------------------------------------------------------
 
 /** 毫秒时长摘要（工具耗时 / 工作流节点耗时）；非法或缺失返回空串。 */
+export function toolResultPreviewTruncated(preview: string | undefined): boolean {
+  return preview?.endsWith('…') === true
+}
+
+export function isScrolledToBottom(element: { scrollHeight: number; scrollTop: number; clientHeight: number }): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= 36
+}
+
 export function formatDurationMs(ms: number | undefined): string {
   if (ms === undefined || !Number.isFinite(ms) || ms < 0) return ''
   if (ms < 1000) return `${Math.round(ms)}ms`
@@ -1200,29 +1208,22 @@ export function buildWorkbenchSubagentItems(
 export function isLatestSubagentCallForTarget(
   props: Pick<ToolViewProps, 'callId' | 'input' | 'result' | 'siblingCalls' | 'conversationId'>,
   childConversationId: number | undefined,
+  conversations: ReadonlyArray<Pick<ConversationSummary, 'id' | 'parentConversationId' | 'parentToolCallId'>>,
 ): boolean {
   if (childConversationId === undefined) return true
   const siblings = props.siblingCalls ?? []
-  let latestCallId = props.callId
-  for (const call of siblings) {
+  const selfIndex = siblings.findIndex((call) => call.callId === props.callId)
+  if (selfIndex === -1) return true
+  for (const call of siblings.slice(selfIndex + 1)) {
     if (call.toolName !== 'subagent') continue
-    if (call.callId === props.callId) continue
     const resolved = resolveSubagentConversationId(
       { callId: call.callId, input: call.input, result: typeof call.result === 'string' ? call.result : undefined },
       props.conversationId,
-      // conversations 参数仅用于 resume 兜底关联；siblingCalls 路径下运行期
-      // callId 关联由父组件（持有真实会话列表）在 childConversationId 解析时
-      // 已完成——这里只需比较已知目标，传空列表即可。
-      [],
+      conversations,
     )
-    if (resolved === childConversationId) {
-      // 后续调用也指向同一子会话：取 siblingCalls 中较后者（时间顺序在数组后面）。
-      const selfIdx = siblings.findIndex((c) => c.callId === props.callId)
-      const otherIdx = siblings.findIndex((c) => c.callId === call.callId)
-      if (otherIdx > selfIdx) latestCallId = call.callId
-    }
+    if (resolved === childConversationId) return false
   }
-  return latestCallId === props.callId
+  return true
 }
 
 /** 从 ToolViewProps 构造父工具轻量摘要。 */

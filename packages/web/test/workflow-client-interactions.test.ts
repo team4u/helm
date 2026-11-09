@@ -11,7 +11,7 @@ import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ConversationSummary, PluginClientContext } from '@helm/protocol'
+import type { ConversationSummary, PluginClientContext as PluginClientContextType } from '@helm/protocol'
 import { PluginClientContext } from '../src/lib/plugin-client-context.js'
 import {
   importWorkflowClientModule,
@@ -46,7 +46,7 @@ function summary(id: number, status: ConversationSummary['status']): Conversatio
   }
 }
 
-interface SpyCtx extends PluginClientContext {
+interface SpyCtx extends PluginClientContextType {
   drawerCalls: number[]
   screenCalls: string[]
   splitCalls: string[]
@@ -83,7 +83,7 @@ function makeSpyCtx(): SpyCtx {
 
 /** 真实客户端挂载编译产物组件并返回根容器与清理函数。 */
 async function mountClient(
-  ctx: PluginClientContext,
+  ctx: PluginClientContextType,
   element: React.ReactElement,
 ): Promise<{ host: HTMLElement; rerender: (element: React.ReactElement) => Promise<void>; unmount: () => void }> {
   const host = document.createElement('div')

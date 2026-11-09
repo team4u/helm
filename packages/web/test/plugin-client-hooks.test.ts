@@ -31,6 +31,7 @@ const e = React.createElement
 // 保证 effects / 事件 / 卸载路径都是 react-dom 真实执行。
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 GlobalRegistrator.register()
+;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 function summary(id: number, status: ConversationSummary['status']): ConversationSummary {
   return {
@@ -66,12 +67,7 @@ interface LoadCall {
   force: boolean
 }
 
-function makeStore(overrides: {
-  conversations?: ConversationSummary[]
-  pendingAsks?: AskSpec[]
-  loadErrors?: Record<string, string>
-  loadConversationDetail?: HelmStoreValue['loadConversationDetail']
-} = {}): HelmStoreValue {
+function makeStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
   const noop = () => {}
   const asyncNoop = async () => undefined
   return {
@@ -228,7 +224,7 @@ test('useConversation：详情已加载或加载失败时不重复发请求', { 
   })
   const p1 = mountProbe(loaded, () => useConversation(11))
   const r1 = p1.result()
-  assert.deepEqual(calls, [], '详情已存在时不得发请求')
+  assert.equal(calls.length, 0, '详情已存在时不得发请求')
   assert.equal(r1!.detail, detail)
   p1.unmount()
 

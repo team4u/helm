@@ -17,25 +17,26 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import type { ConversationEntry, ConversationSummary, WorkflowRunSummary } from '@helm/protocol'
-import { HelmStoreContext } from '../src/lib/store-context.js'
+import { TestStoreProvider, makeTestStore } from './helpers/store.js'
+import { groupUiContributions } from '../src/lib/types.js'
+import { seedPluginClientModule } from '../src/lib/plugin-client.js'
+import { workflowUi } from './helpers/workflow-ui.js'
+import { importWorkflowClientModule, importWorkflowModels, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
+const HelmStoreContext = { Provider: TestStoreProvider }
 import type { HelmStoreValue } from '../src/lib/types.js'
-import { buildSubagentStreamLines } from '../src/conversation/subagent-model.js'
-import {
-  subagentBadge,
-  toolResultPreviewTruncated,
-  isScrolledToBottom,
-  resolveSubagentTaskTitle,
-  resolveSubagentHeaderSnippet,
-  buildSubagentStatSegments,
-  extractSubagentResultPreview,
-  formatShortModelName,
-  formatSemanticToolAction,
-  type SubagentParentToolSummary,
-} from '../src/conversation/subagent-live-model.js'
+import type { SubagentParentToolSummary } from '../../kernel/src/builtin-plugins/workflow/client/models.ts'
+mountSharedPluginNamespaces({ realHooks: true })
+const {
+  buildSubagentStreamLines, subagentBadge, toolResultPreviewTruncated, isScrolledToBottom,
+  resolveSubagentTaskTitle, resolveSubagentHeaderSnippet, buildSubagentStatSegments,
+  extractSubagentResultPreview, formatShortModelName, formatSemanticToolAction,
+} = await importWorkflowModels()
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
-const { SubagentLiveCard } = await import('../src/conversation/SubagentLiveCard.js')
+const workflowClient = await importWorkflowClientModule()
+seedPluginClientModule('builtin:workflow', 'index.tsx', workflowClient)
+const SubagentLiveCard = workflowClient.SubagentLiveCard as React.ComponentType<Record<string, unknown>>
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
 const { WorkbenchDrawer } = await import('../src/conversation/WorkbenchDrawer.js')
@@ -91,74 +92,12 @@ interface StoreOverrides extends Partial<HelmStoreValue> {
 }
 
 function makeStore(overrides: StoreOverrides = {}): HelmStoreValue {
-  return {
-    authReady: true,
-    authConfigured: true,
-    authenticated: true,
-    authError: null,
-    connectionError: null,
-    loadErrors: {},
-    sseConnected: true,
-    theme: 'dark',
-    themePreference: 'system',
-    conversations: [],
-    conversationDetails: {},
-    conversationLives: {},
-    conversationArtifacts: {},
-    pendingAsks: [],
-    resolvedAsksByConv: {},
-    plugins: [],
-    uiContributions: [],
-    groupedUi: {
-      sidebarItems: [],
-      sidebarSections: [],
-      screens: [],
-      timelineRenderers: [],
-      toolViews: [],
-      composerPills: [],
-      composerWidgets: [],
-      workbenchPanels: [],
-      commands: [],
-      settingsPanels: [],
-    },
-    pluginDocs: {},
-    workflowRuns: [],
-    nodes: [],
-    profiles: [],
-    models: [],
-    providers: [],
-    credentials: [],
-    skills: [],
-    actions: [],
-    primaryTarget: { kind: 'conversation', conversationId: 1 },
-    splitTarget: null,
-    workbenchOpen: false,
-    workbenchTab: 'tasks',
-    activeModal: null,
-    highlightedEntry: null,
-    notices: [],
-    setTheme: () => {},
-    setThemePreference: () => {},
-    toggleTheme: () => {},
-    checkAuth: async () => {},
-    onAuthenticated: async () => {},
-    logout: () => {},
-    refreshAssets: async () => {},
-    refreshNodes: async () => undefined,
-    loadConversationDetail: async () => undefined,
-    loadEarlierEntries: async () => {},
-    loadConversationArtifacts: async () => undefined,
-    ensurePluginDoc: async () => undefined,
-    openTarget: () => {},
-    closeSplit: () => {},
-    setWorkbenchOpen: () => {},
-    setWorkbenchTab: () => {},
-    setActiveModal: () => {},
-    dismissNotice: () => {},
-    pushNotice: () => {},
-    invokePluginAction: async () => undefined,
+  return makeTestStore({
     ...overrides,
-  }
+    conversations: [summary(1, 'idle'), ...(overrides.conversations ?? [])],
+    groupedUi: groupUiContributions(workflowUi),
+    workbenchTab: 'plugin:builtin:workflow/tasks',
+  })
 }
 
 function renderCard(
@@ -174,7 +113,7 @@ function renderCard(
   // 存量流式行 / 截断 / 报错测试均针对展开态流内容：默认展开保持覆盖语义，extra 可覆盖。
   const { defaultExpanded = true, ...rest } = extra
   return renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(SubagentLiveCard, { childConversationId: 11, toolStatus, defaultExpanded, ...rest })),
+    e(HelmStoreContext.Provider, { value: store }, e(SubagentLiveCard, { childConversationId: 11, toolStatus, expanded: defaultExpanded, ...rest })),
   )
 }
 
@@ -455,7 +394,7 @@ test('resume 正在运行时：历史失败调用保留失败状态，只有最�
   ]
   const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent, child] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
-  assert.equal(html.split('subagent-live-card').length - 1, 1)
+  assert.equal((html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length, 1)
   const historicalRow = html.match(/<div class="trace-row trace-row-error"[\s\S]*?<\/div>/)?.[0]
   assert.ok(historicalRow, '历史失败调用的工具行应保留')
   assert.match(historicalRow, /已在下文续接[\s\S]*?trace-row-right">失败<\/span>/)
@@ -470,7 +409,7 @@ test('defaultExpanded=false：SSR 首帧折叠，不渲染实时流，仅头部�
   })
   const html = renderToString(
     e(HelmStoreContext.Provider, { value: store },
-      e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done', defaultExpanded: false })),
+      e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done', expanded: false })),
   )
   assert.ok(html.includes('subagent-live-card'), '卡片容器应渲染')
   assert.ok(html.includes('subagent-live-header'), '头部应渲染')
@@ -492,7 +431,7 @@ test('同一子会话 #12 被首次派生 + resume 续接：时间线仅 1 张�
   ]
   const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent, child12] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
-  const cardCount = html.split('subagent-live-card').length - 1
+  const cardCount = (html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length
   assert.equal(cardCount, 1, `同一子会话多次 resume 仅渲染 1 张实时卡，实际 ${cardCount}`)
   // React SSR 在插值两侧插入 <!-- --> 注释节点，用正则匹配「#12 · 已在下文续接」
   assert.match(html, /#<!-- -->12<!-- -->\s*·\s*已在下文续接/, '前序被续接的调用行应显示轻量续接标识')
@@ -874,7 +813,7 @@ test('时间线挂载实时卡后不再重复渲染 subagent trace-row；被 res
   ]
   const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent, child12] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
-  const cardCount = html.split('subagent-live-card').length - 1
+  const cardCount = (html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length
   assert.equal(cardCount, 1, `仅最新调用挂载 1 张实时卡，实际 ${cardCount}`)
   // 最新调用（挂卡处）不再渲染底部 trace-row；被续接的前序调用仍保留 trace-row
   const toolRows = html.match(/<div class="trace-row[\s\S]*?<\/div>/g) ?? []
@@ -896,7 +835,7 @@ test('时间线普通 subagent 调用无父 trace-row 双横条：胶囊卡独�
   ]
   const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent, child12] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
-  assert.equal(html.split('subagent-live-card').length - 1, 1, '唯一调用挂载 1 张实时卡')
+  assert.equal((html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length, 1, '唯一调用挂载 1 张实时卡')
   const subagentRows = (html.match(/<div class="trace-row[\s\S]*?<\/div>/g) ?? []).filter((r) => r.includes('subagent'))
   assert.equal(subagentRows.length, 0, `挂卡后不得再渲染 subagent trace-row，实际 ${subagentRows.length}`)
 })
@@ -927,7 +866,7 @@ test('工作流业务卡隐藏重复工具行，但保留本次调用入参和�
     { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'wf_call', name: 'SubagentWorkflow', arguments: { script: '原始脚本内容' } }] }] },
     { id: '2', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'wf_call', toolName: 'SubagentWorkflow', content: [{ type: 'text', text: '原始工作流返回结果' }] }] },
   ]
-  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent], workflowRuns: [workflow] }) },
+  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent], pluginDocs: { 'builtin:workflow/runs': { runs: [workflow] } } }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
   assert.ok(html.includes('workflow-run-card'))
   assert.ok(!html.includes('class="trace-row"'))
@@ -936,10 +875,10 @@ test('工作流业务卡隐藏重复工具行，但保留本次调用入参和�
   assert.ok(html.includes('原始工作流返回结果'))
 })
 
-test('子代理卡为极简胶囊卡：不渲染内联展开箭头与调用详情，由工作台与分屏承载', { timeout: 60_000 }, () => {
+test('折叠子代理卡：不渲染内联流与展开箭头，整卡通过抽屉查看详情', { timeout: 60_000 }, () => {
   const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [summary(11, 'done')] }) },
     e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done', defaultExpanded: true,
-      toolCall: { key: 'tool:a', toolName: 'subagent', callId: 'a', status: 'done', isError: false, input: { resume: 11, prompt: '本次原始续接指令' }, resultText: '本次父工具原始输出' },
+      expanded: false, toolSummary: { prompt: '本次原始续接指令', resultText: '本次父工具原始输出' },
     })))
   assert.ok(!html.includes('subagent-live-toggle'), '不得渲染折叠展开箭头')
   assert.ok(!html.includes('subagent-live-stream'), '不得内联渲染实时流')
@@ -948,14 +887,10 @@ test('子代理卡为极简胶囊卡：不渲染内联展开箭头与调用详�
   assert.ok(html.includes('点击打开子会话抽屉'), '应支持点击卡片打开子会话抽屉')
 })
 
-test('SubagentLiveCard 契约：openDrawer 不触发 onNavigate 收起工作台，避免打断排查上下文', { timeout: 60_000 }, () => {
-  const filePath = new URL('../src/conversation/SubagentLiveCard.tsx', import.meta.url)
-  const src = readFileSync(filePath, 'utf-8')
-  const start = src.indexOf('const openDrawer =')
-  const end = src.indexOf('return (', start)
-  const openDrawerBlock = src.slice(start, end)
-  assert.ok(start > 0 && end > start, '应截取到 openDrawer 定义块')
-  assert.ok(!openDrawerBlock.includes('onNavigate'), 'openDrawer 不得调用 onNavigate 导致工作台在排查时被强行关闭')
+test('宿主只按通用 tool.view 挂载，工作流状态不渗入父回合在途判定', { timeout: 60_000 }, () => {
+  const src = readFileSync(new URL('../src/conversation/ConversationTimeline.tsx', import.meta.url), 'utf8')
+  assert.ok(!/builtin:workflow|workflowRuns|SubagentLiveCard|WorkflowRunSummary/.test(src))
+  assert.match(src, /replaceRow/)
 })
 
 test('SubagentLiveCard 整体大卡片点击契约：外层整卡可点击，第 1 层和第 2 层无割裂的内层按钮链接', { timeout: 60_000 }, () => {

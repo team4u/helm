@@ -6,7 +6,10 @@
     "jsx": "react-jsx",
     "noEmit": true,
     "declaration": false,
-    "sourceMap": false
+    "sourceMap": false,
+    "paths": {
+      "@helm/protocol": ["../protocol/src/index.ts"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

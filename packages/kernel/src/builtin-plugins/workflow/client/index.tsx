@@ -33,10 +33,11 @@ import {
   resolveSubagentTaskTitle,
   resolveWorkflowRunForTool,
   subagentBadge,
+  toolResultPreviewTruncated,
   type SubagentCardStatus,
   type WorkflowPhaseSection,
 } from './models.ts'
-import { usePluginDoc } from './hooks.ts'
+import { usePluginDoc, useStreamFollow } from './hooks.ts'
 
 // ---------------------------------------------------------------------------
 // 图标（lucide-react 线性矢量，与宿主共享同一实例；无 Emoji）
@@ -146,6 +147,8 @@ export function SubagentLiveCard(props: {
     [props.expanded, detail?.entries, live, badge.status],
   )
 
+  const stream = useStreamFollow(streamLines)
+
   const cardClass = `subagent-live-card${badge.status === 'blocked' ? ' subagent-live-card-warn' : badge.status === 'error' || detailError !== undefined ? ' subagent-live-card-error' : ''}${props.expanded === true ? ' subagent-live-card-expanded' : ''}`
 
   const openChild = (): void => {
@@ -158,7 +161,7 @@ export function SubagentLiveCard(props: {
       tabIndex={0}
       className={`${cardClass} subagent-card-clickable`}
       aria-label={`打开子会话 #${childConversationId} 抽屉`}
-      title={[taskTitle, summary?.profileId, wt?.branch, statSegments.join(' · '), '点击打开子会话'].filter(Boolean).join('\n')}
+      title={[taskTitle, summary?.profileId, wt?.branch, statSegments.join(' · '), '点击打开子会话抽屉'].filter(Boolean).join('\n')}
       onClick={openChild}
       onKeyDown={(e) => {
         // 内嵌动作、details/summary 的键盘激活属于控件本身，而非卡片导航。
@@ -258,7 +261,7 @@ export function SubagentLiveCard(props: {
         </div>
       ) : null}
       {props.expanded === true && streamLines.length > 0 ? (
-        <div className="subagent-live-stream">
+        <div className="subagent-live-stream" ref={stream.ref} onScroll={stream.onScroll}>
           {streamLines.slice(-30).map((line) =>
             line.kind === 'prompt' ? (
               <div key={line.key} className="subagent-stream-line subagent-stream-prompt">
@@ -275,7 +278,7 @@ export function SubagentLiveCard(props: {
                 <Icon name={line.status === 'running' ? 'loader' : line.isError ? 'x' : 'check'} size={11} className={line.status === 'running' ? SPIN : undefined} />
                 <span className="subagent-stream-body">
                 {line.toolName} {line.summary}{line.resultPreview !== undefined ? `：${line.resultPreview}` : ''}
-                {line.resultPreview?.endsWith('…') ? <span className="subagent-stream-truncated">（已截断）</span> : null}
+                {toolResultPreviewTruncated(line.resultPreview) ? <span className="subagent-stream-truncated">（已截断）</span> : null}
               </span>
               </div>
             ) : (
@@ -398,12 +401,13 @@ export function SubagentToolView(props: {
       conversationId: props.conversationId,
     },
     childId,
+    conversations,
   )
   if (!isLatest) {
     return (
       <div className="trace-entry">
         <div
-          className="trace-row"
+          className={`trace-row${props.status === 'error' || props.isError === true ? ' trace-row-error' : ''}`}
           role="button"
           tabIndex={0}
           onClick={() => setExpanded((v) => !v)}
@@ -682,7 +686,7 @@ function WorkflowRunCardBody(props: {
           </button>
         ) : null}
         {!inWorkbench ? (
-          <button className="btn btn-sm" onClick={() => ctx.openWorkbench('tasks')}>
+          <button className="btn btn-sm" onClick={() => ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)}>
             工作台详情
           </button>
         ) : null}

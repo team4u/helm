@@ -7,7 +7,7 @@
  * - 插件 `timeline.renderer`（kinds + matchMeta）与 `tool.view`（toolNames）匹配判定。
  * - assistant 消息 thinking / text / toolCall 提取，`pi.tool-result` 按 callId 配对合并。
  * - 连续常规步骤「按回合收拢」：thinking 与常规工具行（含出错）
- *   收拢为 step-group；tool.view 业务卡、subagent/SubagentWorkflow 永远豁免折叠。
+ *   收拢为 step-group；命中 tool.view 的业务卡永远豁免折叠。
  * - `pi.reset` / `pi.compaction` -> 上下文分割线（reset 可携带 handoff 交接摘要）。
  * - live 合并：实时工具（running）与流式文本并入进行中回合。
  */
@@ -424,7 +424,7 @@ function makeToolTrace(
   }
 }
 
-/** 折叠豁免判定：thinking 与常规工具行（含执行中、完成与出错）可收拢；只有命中插件 tool.view 的业务卡独立展示（subagent / SubagentWorkflow 由插件注册 tool.view 接管）。 */
+/** 折叠豁免判定：thinking 与常规工具行（含执行中、完成与出错）可收拢；只有命中插件 tool.view 的业务卡独立展示。 */
 export function isFoldableStep(step: FoldableStep): boolean {
   if (step.kind === 'thinking') return true
   const tool = step.tool
@@ -439,7 +439,7 @@ function foldableOfRaw(seg: RawSegment): FoldableStep {
 
 /**
  * 原始段 -> 渲染段：连续可折叠步骤从第一步起就放入 step-group，避免后续追加步骤时搬移节点。
- * 豁免项（tool.view / subagent）与文本块保持独立。
+ * 豁免项（tool.view）与文本块保持独立。
  * 当回合仍在运行（live=true）且该 step-group 之后尚未产出任何 text 正文段时，标记 active=true（前端默认展开）。
  */
 export function foldTurnSegments(raw: ReadonlyArray<RawSegment>, live = false): AssistantSegment[] {
@@ -854,13 +854,8 @@ export function lastHumanTextOf(items: ReadonlyArray<TimelineItem>): string | un
 // assistant 回合在途判定（复制/分叉 hover 条仅在彻底完成时展示）
 // ---------------------------------------------------------------------------
 
-import type { ConversationSummary, WorkflowRunSummary } from '@helm/protocol'
-
 export interface AssistantTurnBusyOptions {
   isLatestTurn?: boolean
-  /** 工作流 run 快照（builtin:workflow 公共文档 runs；调用方自行提取）。 */
-  workflowRuns?: ReadonlyArray<WorkflowRunSummary>
-  conversations?: ReadonlyArray<Pick<ConversationSummary, 'id' | 'parentConversationId' | 'parentToolCallId' | 'status'>>
 }
 
 /**
@@ -869,10 +864,8 @@ export interface AssistantTurnBusyOptions {
  * 2. 最新回合且父会话处于 working 或 blocked 状态；
  * 3. 回合内任一工具状态为 running 或 unknown；
  * 4. step-group 仍处于 active 激活态；
- * 5. 关联的 SubagentWorkflow 仍在 running；
- * 6. 关联的 subagent 后台 run 仍在 running 或子会话仍为 working / blocked。
  *
- * 只有当本回合所有任务与响应彻底完成时才返回 false（此时才展示复制/分叉按钮组）。
+ * 后台任务不属于父回合生命周期；其状态由插件 tool.view 自行订阅与展示。
  */
 export function isAssistantTurnBusy(
   turn: AssistantTurn,
@@ -887,26 +880,7 @@ export function isAssistantTurnBusy(
     return true
   }
 
-  const workflowRuns = options?.workflowRuns ?? []
-  const conversations = options?.conversations ?? []
-
-  const isToolRunning = (tool: ToolTrace): boolean => {
-    if (tool.status === 'running' || tool.status === 'unknown') return true
-    if (tool.toolName === 'SubagentWorkflow') {
-      const wf = findWorkflowRunForTool(tool, conversation.id, workflowRuns)
-      if (wf?.status === 'running') return true
-    }
-    if (tool.toolName === 'subagent') {
-      const run = findSubagentBackgroundRun(tool, conversation.id, workflowRuns)
-      if (run?.status === 'running') return true
-      const childId = findSubagentChildId(tool, conversation.id, conversations)
-      if (childId !== undefined) {
-        const childConv = conversations.find((c) => c.id === childId)
-        if (childConv?.status === 'working' || childConv?.status === 'blocked') return true
-      }
-    }
-    return false
-  }
+  const isToolRunning = (tool: ToolTrace): boolean => tool.status === 'running' || tool.status === 'unknown'
 
   for (const seg of turn.segments) {
     if (seg.kind === 'tool') {
@@ -920,57 +894,4 @@ export function isAssistantTurnBusy(
   }
 
   return false
-}
-
-/** 结果文本里精确提取的 run id 全等匹配（不猜同会话最新）。 */
-const RUN_ID_IN_RESULT_RE = /"id"\s*:\s*"([^"]+)"/
-
-function findWorkflowRunForTool(
-  tool: ToolTrace,
-  parentConversationId: number,
-  workflowRuns: ReadonlyArray<WorkflowRunSummary>,
-): WorkflowRunSummary | undefined {
-  if (tool.callId !== undefined && tool.callId !== '') {
-    const byCallId = workflowRuns.find(
-      (r) => r.conversationId === parentConversationId && r.parentToolCallId === tool.callId,
-    )
-    if (byCallId !== undefined) return byCallId
-  }
-  const runId = tool.resultText !== undefined ? RUN_ID_IN_RESULT_RE.exec(tool.resultText)?.[1] : undefined
-  if (runId !== undefined) {
-    return workflowRuns.find((r) => r.conversationId === parentConversationId && r.id === runId)
-  }
-  return undefined
-}
-
-function findSubagentBackgroundRun(
-  tool: ToolTrace,
-  parentConversationId: number,
-  workflowRuns: ReadonlyArray<WorkflowRunSummary>,
-): WorkflowRunSummary | undefined {
-  return findWorkflowRunForTool(tool, parentConversationId, workflowRuns)
-}
-
-/** [subagent conversationId=N] footer 尾行提取（内核标准元数据）。 */
-const SUBAGENT_FOOTER_CONV_RE = /\[subagent[^\]]*?\bconversationId=(\d+)[^\]]*\]/g
-
-function findSubagentChildId(
-  tool: ToolTrace,
-  parentConversationId: number,
-  conversations: ReadonlyArray<Pick<ConversationSummary, 'id' | 'parentConversationId' | 'parentToolCallId'>>,
-): number | undefined {
-  if (tool.resultText !== undefined) {
-    let last: number | undefined
-    for (const match of tool.resultText.matchAll(SUBAGENT_FOOTER_CONV_RE)) {
-      const parsed = Number(match[1])
-      if (Number.isSafeInteger(parsed) && parsed > 0) last = parsed
-    }
-    if (last !== undefined) return last
-  }
-  if (tool.callId !== undefined && tool.callId !== '') {
-    for (const c of conversations) {
-      if (c.parentConversationId === parentConversationId && c.parentToolCallId === tool.callId) return c.id
-    }
-  }
-  return undefined
 }
