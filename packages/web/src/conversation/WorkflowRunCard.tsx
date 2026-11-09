@@ -62,16 +62,12 @@ const PHASE_ICON: Record<WorkflowPhaseSection['status'], string> = {
   failed: 'x',
 }
 
-/** 阶段分组小标题栏 + 该阶段全部节点行。 */
+/** 阶段分组小标题栏 + 该阶段全部节点卡片。 */
 function WorkflowPhaseGroup({
   section,
-  openNodes,
-  toggleNode,
   onNavigate,
 }: {
   section: WorkflowPhaseSection
-  openNodes: ReadonlySet<string>
-  toggleNode: (nodeId: string) => void
   onNavigate?: () => void
 }) {
   return (
@@ -92,7 +88,7 @@ function WorkflowPhaseGroup({
         section.title !== '' ? <div className="workflow-phase-empty">待进入此阶段</div> : null
       ) : (
         section.nodes.map((node) => (
-          <WorkflowNodeRow key={node.id} node={node} open={openNodes.has(node.id)} onToggle={() => toggleNode(node.id)} onNavigate={onNavigate} />
+          <WorkflowNodeCard key={node.id} node={node} onNavigate={onNavigate} />
         ))
       )}
     </div>
@@ -174,121 +170,120 @@ function safeJsonStringify(value: unknown): string {
   }
 }
 
-/** 单节点行：收起行高密度展示，展开体内嵌 SubagentLiveCard（默认展开防双重折叠）或结构化明细。 */
-function WorkflowNodeRow({ node, open, onToggle, onNavigate }: { node: WorkflowNodeState; open: boolean; onToggle: () => void; onNavigate?: () => void }) {
-  const store = useHelmStore()
-  const child = node.conversationId !== undefined
-    ? store.conversations.find((c) => c.id === node.conversationId)
-    : undefined
-  const pendingAskTitle = node.conversationId !== undefined
-    ? store.pendingAsks.find((a) => a.conversationId === node.conversationId)?.title
-    : undefined
-  const isBlocked = node.status === 'running' && child?.status === 'blocked'
-  const liveSnippet = node.status === 'running' ? resolveSubagentHeaderSnippet({
-    badgeStatus: isBlocked ? 'blocked' : 'working',
-    summary: child,
-    live: node.conversationId !== undefined ? store.conversationLives[node.conversationId] : undefined,
-    pendingAsk: pendingAskTitle ? { title: pendingAskTitle } : undefined,
-  }) : undefined
-  const summary = liveSnippet !== undefined
-    ? { text: liveSnippet.kind === 'blocked' ? `等待审批：${liveSnippet.text}` : [liveSnippet.tag, liveSnippet.text].filter(Boolean).join(' · '), isError: liveSnippet.kind === 'error' }
-    : resolveNodeSummaryText(node, child?.doing, child?.status, pendingAskTitle)
+/** 动作节点（无原生子会话）：采用与 SubagentLiveCard 对齐的扁平双层胶囊卡。 */
+function WorkflowActionNodeCard({ node }: { node: WorkflowNodeState }) {
+  const summary = resolveNodeSummaryText(node)
   const nodeStats = formatWorkflowNodeStats(node)
+  const isErr = node.status === 'failed'
+
+  const hasExtraDetail =
+    node.agentType !== undefined ||
+    node.executionId !== undefined ||
+    node.nodeId !== undefined ||
+    node.effectiveCwd !== undefined ||
+    node.gateCommand !== undefined ||
+    (node.gate !== undefined && node.gate.output !== '' && summary.text !== node.gate.output) ||
+    node.prompt !== undefined
+
   return (
-    <div className={`workflow-node-item${open ? ' workflow-node-item-open' : ''}`}>
-      <button type="button" className="workflow-node-line" onClick={onToggle} title={open ? '收起节点详情' : '展开节点详情'}>
-        <HelmIcon
-          name={isBlocked ? 'alert-circle' : NODE_ICON[node.status] ?? 'circle'}
-          size={11}
-          className={node.status === 'running' && !isBlocked ? 'spin-slow' : undefined}
-        />
-        {node.kind === 'action' ? <span className="badge badge-neutral">动作</span> : null}
-        <span className="workflow-node-label">{node.label ?? node.id}</span>
-        <span className={`badge ${isBlocked ? 'badge-warn' : NODE_BADGE[node.status] ?? 'badge-neutral'}`}>{isBlocked ? '等待审批' : NODE_LABEL[node.status] ?? node.status}</span>
-        {node.cached === true ? <span className="badge badge-warn">cached</span> : null}
-        {node.attempt !== undefined && node.attempt > 1 ? (
-          <span className="badge badge-neutral">{`第 ${node.attempt} 次`}</span>
-        ) : null}
-        {node.worktree !== undefined ? (
-          <span className="badge badge-neutral subagent-worktree-badge" title={`隔离工作树：${node.worktree.path}`}>
-            <HelmIcon name="git-branch" size={11} />
-            {node.worktree.branch}
+    <div className={`subagent-live-card workflow-action-card${isErr ? ' subagent-live-card-error' : ''}`}>
+      <div className="subagent-live-header">
+        <div className="subagent-live-trigger" style={{ cursor: 'default' }}>
+          <HelmIcon
+            name={NODE_ICON[node.status] ?? 'zap'}
+            size={13}
+            className={node.status === 'running' ? 'spin-slow' : undefined}
+          />
+          <span className="badge badge-neutral">动作</span>
+          <span className="subagent-live-title" title={node.label ?? node.id}>
+            <span className="subagent-live-title-text">{node.label ?? node.id}</span>
           </span>
-        ) : null}
-        {node.gate !== undefined ? (
-          <span className={`badge ${node.gate.ok ? 'badge-ok' : 'badge-err'}`}>{node.gate.ok ? 'Gate 通过' : 'Gate 失败'}</span>
-        ) : null}
-        {summary.text !== undefined ? (
-          <span
-            className={`workflow-node-progress${summary.isError ? ' workflow-node-progress-err' : ''}`}
-            title={summary.text}
-          >
-            {summary.text}
-          </span>
-        ) : null}
-        <span className="workflow-node-right">
-          {nodeStats.length > 0 ? (
-            <span className="workflow-node-stats tabular-nums">{nodeStats.join(' · ')}</span>
-          ) : null}
-          {node.durationMs !== undefined ? (
-            <span className="workflow-node-duration tabular-nums">{formatDurationMs(node.durationMs)}</span>
-          ) : null}
-          {node.conversationId !== undefined ? (
-            <span
-              className="btn btn-ghost btn-sm"
-              role="button"
-              title={`打开子会话抽屉 #${node.conversationId}`}
-              onClick={(e) => {
-                e.stopPropagation()
-                store.setActiveModal({ kind: 'conversation-drawer', conversationId: node.conversationId! })
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.stopPropagation()
-                  store.setActiveModal({ kind: 'conversation-drawer', conversationId: node.conversationId! })
-                }
-              }}
-            >
-              {`#${node.conversationId}`}
+          {node.worktree !== undefined ? (
+            <span className="badge badge-neutral subagent-worktree-badge" title={`隔离工作树：${node.worktree.path}`}>
+              <HelmIcon name="git-branch" size={11} />
+              {node.worktree.branch}
             </span>
           ) : null}
-          <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
-        </span>
-      </button>
-      {open ? (
-        <div className="workflow-node-expanded">
-          {node.conversationId !== undefined ? (
-            <>
-              <SubagentLiveCard
-                childConversationId={node.conversationId}
-                defaultExpanded={true}
-                startedAt={node.startedAt}
-                onNavigate={onNavigate}
-                toolStatus={
-                  node.status === 'running' ? 'running' : node.status === 'failed' ? 'error' : node.status === 'done' ? 'done' : 'unknown'
-                }
-                worktree={node.worktree}
-              />
-              {node.gate !== undefined ? (
-                <div className="workflow-node-gate-extra">
-                  <span className={`badge ${node.gate.ok ? 'badge-ok' : 'badge-err'}`}>{node.gate.ok ? 'Gate 通过' : 'Gate 失败'}</span>
-                  {node.gateCommand !== undefined ? <code className="mono workflow-node-gate-cmd">{node.gateCommand}</code> : null}
-                  {node.gate.output !== '' ? (
-                    <pre className="code-block-pre workflow-node-pre">
-                      <code>{node.gate.output}</code>
-                    </pre>
-                  ) : null}
-                </div>
-              ) : null}
-              {node.error !== undefined ? <p className="jr-callout jr-callout-err">{node.error}</p> : null}
-            </>
-          ) : (
-            <WorkflowNodeDetailCard node={node} />
-          )}
+          {node.cached === true ? <span className="badge badge-warn">cached</span> : null}
+          <span className={`badge ${NODE_BADGE[node.status] ?? 'badge-neutral'}`}>
+            {NODE_LABEL[node.status] ?? node.status}
+          </span>
+          {node.attempt !== undefined && node.attempt > 1 ? (
+            <span className="badge badge-neutral">{`第 ${node.attempt} 次`}</span>
+          ) : null}
+          {node.gate !== undefined ? (
+            <span className={`badge ${node.gate.ok ? 'badge-ok' : 'badge-err'}`}>
+              {node.gate.ok ? 'Gate 通过' : 'Gate 失败'}
+            </span>
+          ) : null}
+          {nodeStats.length > 0 ? (
+            <span className="subagent-live-stats workflow-node-stats tabular-nums">{nodeStats.join(' · ')}</span>
+          ) : null}
+          {node.durationMs !== undefined ? (
+            <span className="subagent-live-stats workflow-node-duration tabular-nums">{formatDurationMs(node.durationMs)}</span>
+          ) : null}
+        </div>
+      </div>
+      {summary.text !== undefined ? (
+        <div className={`subagent-live-subline${summary.isError ? ' subagent-live-subline-error' : ''}`}>
+          <HelmIcon name="corner-down-right" size={11} />
+          <span className="subagent-live-subline-tag">{summary.isError ? '错误' : '产出'}</span>
+          <span className="subagent-live-subline-text" title={summary.text}>{summary.text}</span>
         </div>
       ) : null}
+      {hasExtraDetail ? <WorkflowNodeDetailCard node={node} /> : null}
     </div>
   )
+}
+
+/** 工作流子代理节点：直接以 SubagentLiveCard 扁平双层胶囊卡直出。 */
+function WorkflowSubagentNodeCard({ node, onNavigate }: { node: WorkflowNodeState; onNavigate?: () => void }) {
+  const nodeStats = formatWorkflowNodeStats(node)
+  const outputText = typeof node.output === 'string' ? node.output : undefined
+
+  return (
+    <div className="workflow-subagent-node-card">
+      <SubagentLiveCard
+        childConversationId={node.conversationId!}
+        toolStatus={
+          node.status === 'running' ? 'running' : node.status === 'failed' ? 'error' : node.status === 'done' ? 'done' : 'unknown'
+        }
+        startedAt={node.startedAt}
+        worktree={node.worktree}
+        cached={node.cached}
+        onNavigate={onNavigate}
+        toolSummary={{
+          prompt: node.label,
+          durationMs: node.durationMs,
+          isError: node.status === 'failed',
+          resultText: outputText,
+        }}
+        extraStats={nodeStats.length > 0 ? nodeStats.join(' · ') : undefined}
+      />
+      {node.gate !== undefined ? (
+        <div className="workflow-node-gate-extra">
+          <span className={`badge ${node.gate.ok ? 'badge-ok' : 'badge-err'}`}>
+            {node.gate.ok ? 'Gate 通过' : 'Gate 失败'}
+          </span>
+          {node.gateCommand !== undefined ? <code className="mono workflow-node-gate-cmd">{node.gateCommand}</code> : null}
+          {node.gate.output !== '' ? (
+            <pre className={`code-block-pre workflow-node-pre${node.gate.ok ? '' : ' workflow-node-pre-err'}`}>
+              <code>{node.gate.output}</code>
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
+      {node.error !== undefined ? <p className="jr-callout jr-callout-err">{node.error}</p> : null}
+    </div>
+  )
+}
+
+/** 单节点卡片：子代理节点直出 SubagentLiveCard；无原生子会话节点直出扁平双层胶囊卡。全程无手风琴折叠。 */
+function WorkflowNodeCard({ node, onNavigate }: { node: WorkflowNodeState; onNavigate?: () => void }) {
+  if (node.conversationId !== undefined) {
+    return <WorkflowSubagentNodeCard node={node} onNavigate={onNavigate} />
+  }
+  return <WorkflowActionNodeCard node={node} />
 }
 
 /**
@@ -301,7 +296,6 @@ export function WorkflowRunCard({ run, inWorkbench = false, toolCall, onNavigate
   const [cardOpen, setCardOpen] = useState(true)
   const [busy, setBusy] = useState(false)
   const [resultOpen, setResultOpen] = useState(false)
-  const [openNodes, setOpenNodes] = useState<ReadonlySet<string>>(() => defaultOpenNodeIds(run))
   const nodes = run.nodes ?? []
   const done = nodes.filter((n) => n.status === 'done').length
   const tokens = nodes.reduce((sum, n) => sum + (n.tokens ?? 0), 0)
@@ -321,15 +315,6 @@ export function WorkflowRunCard({ run, inWorkbench = false, toolCall, onNavigate
     run.status === 'running' && nowMs !== undefined && Number.isFinite(run.createdAt) && nowMs >= run.createdAt
       ? nowMs - run.createdAt
       : run.updatedAt - run.createdAt
-
-  const toggleNode = (nodeId: string): void => {
-    setOpenNodes((prev) => {
-      const next = new Set(prev)
-      if (next.has(nodeId)) next.delete(nodeId)
-      else next.add(nodeId)
-      return next
-    })
-  }
 
   const abort = async (): Promise<void> => {
     setBusy(true)
@@ -454,7 +439,7 @@ export function WorkflowRunCard({ run, inWorkbench = false, toolCall, onNavigate
           ) : null}
           <div className="workflow-node-list">
             {sections.map((section) => (
-              <WorkflowPhaseGroup key={section.key} section={section} openNodes={openNodes} toggleNode={toggleNode} onNavigate={onNavigate} />
+              <WorkflowPhaseGroup key={section.key} section={section} onNavigate={onNavigate} />
             ))}
             {nodes.length === 0 ? <div className="workflow-phase-empty">暂无节点状态</div> : null}
           </div>
@@ -467,11 +452,6 @@ export function WorkflowRunCard({ run, inWorkbench = false, toolCall, onNavigate
       {toolCall !== undefined ? <ToolCallDetails tool={toolCall} /> : null}
     </section>
   )
-}
-
-/** 失败节点默认展开（错误详情直接可见），其余节点默认收起。 */
-function defaultOpenNodeIds(run: WorkflowRunSummary): ReadonlySet<string> {
-  return new Set((run.nodes ?? []).filter((n) => n.status === 'failed' && n.conversationId === undefined).map((n) => n.id))
 }
 
 /** 工作流最终产出：默认紧凑单行预览，长结果可展开完整 JSON。 */

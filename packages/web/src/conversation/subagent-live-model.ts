@@ -34,10 +34,16 @@ export interface SubagentLiveCardProps {
   backgroundRun?: WorkflowRunSummary
   /** 关联的隔离工作树；缺省时卡片回退 backgroundRun 节点上的 worktree。 */
   worktree?: { path: string; branch: string }
+  /** 是否为缓存/历史重放任务。 */
+  cached?: boolean
   /** 初始是否展开实时流（默认 false 折叠态零请求；工作流节点展开体内嵌时传 true）。 */
   defaultExpanded?: boolean
   /** 父工具轻量摘要：折叠态头部任务标题 / 统计尾注 / 结论预览的数据源。 */
   toolSummary?: SubagentParentToolSummary
+  /** 额外统计尾注（例如工作流节点模型与 token 统计）。 */
+  extraStats?: string
+  /** 工作流节点指定耗时（毫秒）。 */
+  durationMs?: number
   /** 时间线原始调用，供卡片内按需查看本次入参和结果。 */
   toolCall?: import('./timeline-model.js').ToolTrace
   /** 工作流节点已记录的起始时间。 */

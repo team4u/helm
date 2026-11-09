@@ -25,6 +25,9 @@ export function SubagentLiveCard({
   toolStatus,
   backgroundRun,
   worktree,
+  cached,
+  extraStats,
+  durationMs,
   toolSummary,
   startedAt,
   onNavigate,
@@ -157,9 +160,13 @@ export function SubagentLiveCard({
               {wt.branch}
             </span>
           ) : null}
+          {cached === true ? <span className="badge badge-warn">cached</span> : null}
           <span className={`badge ${badge.badge}`}>{badge.label}</span>
+          {extraStats !== undefined && extraStats !== '' ? (
+            <span className="subagent-live-stats workflow-node-stats tabular-nums">{extraStats}</span>
+          ) : null}
           {statSegments.length > 0 ? (
-            <span className="subagent-live-stats tabular-nums">{statSegments.join(' · ')}</span>
+            <span className="subagent-live-stats workflow-node-duration tabular-nums">{statSegments.join(' · ')}</span>
           ) : null}
         </button>
         <span className="subagent-live-actions">
@@ -194,12 +201,16 @@ export function SubagentLiveCard({
         <button
           type="button"
           className={`subagent-live-subline subagent-live-subline-${snippet.kind}`}
-          title={snippet.text}
-          aria-label={`查看子会话 #${childConversationId} 详情：${snippet.text}`}
+          title={snippet.kind === 'blocked' && snippet.tag ? `${snippet.tag}：${snippet.text}` : snippet.text}
+          aria-label={`查看子会话 #${childConversationId} 详情：${snippet.kind === 'blocked' && snippet.tag ? `${snippet.tag}：` : ''}${snippet.text}`}
           onClick={openDrawer}
         >
           <HelmIcon name="corner-down-right" size={11} />
-          {snippet.tag !== undefined ? <span className="subagent-live-subline-tag">{snippet.tag}</span> : null}
+          {snippet.tag !== undefined ? (
+            <span className="subagent-live-subline-tag">
+              {snippet.kind === 'blocked' ? `${snippet.tag}：` : snippet.tag}
+            </span>
+          ) : null}
           <span className="subagent-live-subline-text">{snippet.text}</span>
         </button>
       ) : null}

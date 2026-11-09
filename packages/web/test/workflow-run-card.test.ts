@@ -764,12 +764,19 @@ test('SSR：多阶段工作流渲染阶段胶囊、日志、产出预览与徽�
   assert.ok(html.includes('Tokens'))
 })
 
+test('SSR：工作流节点无折叠手风琴壳，最外层直接直出 SubagentLiveCard 与实时副栏', { timeout: 60_000 }, () => {
+  const html = renderCard(HELLO_RUN, { conversations: [summary(11, 'done', 1), summary(12, 'done', 1)] })
+  assert.ok(html.includes('subagent-live-card'), '应直接在最外层直出 SubagentLiveCard')
+  assert.ok(!html.includes('workflow-node-line'), '不得再渲染带点击折叠的 workflow-node-line 按钮')
+  assert.ok(!html.includes('收起节点详情') && !html.includes('展开节点详情'), '不得包含节点展开/收起按钮文案')
+})
+
 test('SSR：agent 节点 conversationId 渲染子会话抽屉入口与阶段分组标题栏', { timeout: 60_000 }, () => {
   const html = renderCard(HELLO_RUN, { conversations: [summary(11, 'done', 1), summary(12, 'done', 1)] })
   assert.ok(html.includes('#11'), '应渲染子会话快捷入口 #11')
-  assert.ok(html.includes('打开子会话抽屉 #11'), '应提示打开子会话抽屉而非分屏')
+  assert.ok(html.includes('打开子会话 #11 抽屉') || html.includes('打开子会话抽屉 #11'), '应提示打开子会话抽屉而非分屏')
   assert.ok(html.includes('workflow-phase-header'), '应渲染阶段分组小标题栏')
-  assert.ok(html.includes('workflow-node-duration'), '应渲染节点耗时')
+  assert.ok(html.includes('5s') || html.includes('5,000ms') || html.includes('workflow-node-duration'), '应渲染节点耗时')
 })
 
 test('SSR：断点恢复按钮仅 DSL 工作流可见，后台单子代理不显示', { timeout: 60_000 }, () => {

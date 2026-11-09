@@ -2455,17 +2455,17 @@ textarea {
   align-self: center;
 }
 
-/* 时间线内联工作流卡的紧凑实时节点列表 */
+/* 时间线内联工作流卡的紧凑实时节点列表（直接平铺直出子代理与动作胶囊卡） */
 .workflow-node-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
   background: var(--bg-subtle);
-  /* 渐进披露：节点再多也只占限高视口，内部滚动不撑爆主会话时间线 */
-  max-height: 220px;
+  /* 渐进披露：节点列表支持滚动，平铺胶囊卡清晰可见流动数据 */
+  max-height: 360px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -2628,26 +2628,14 @@ textarea {
   padding: 2px 0 2px 17px;
 }
 
-/* 节点行改为可点击展开的整行按钮 */
-.workflow-node-list .workflow-node-line {
-  width: 100%;
-  background: none;
-  border: none;
-  cursor: pointer;
-  text-align: left;
-  padding: 2px 0;
-  font: inherit;
-  color: inherit;
-}
-
-.workflow-node-item {
+.workflow-subagent-node-card {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.workflow-node-item-open > .workflow-node-line {
-  color: var(--fg);
+.workflow-action-card {
+  cursor: default;
 }
 
 .workflow-node-progress-err {
@@ -2665,13 +2653,6 @@ textarea {
 
 .workflow-node-duration {
   font-size: 10.5px;
-}
-
-.workflow-node-expanded {
-  margin: 0 0 4px 17px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
 /* 无原生子会话节点（action / cached / 外部窗格）的结构化明细 */
