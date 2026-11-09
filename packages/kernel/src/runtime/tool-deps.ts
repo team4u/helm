@@ -20,7 +20,8 @@ export interface HelmToolDeps {
   /** 受管进程 token（getter 每次读取；缺省或 dispose 后不注入 HELM_TOKEN）。 */
   processToken?: () => string | undefined
   /** 产物服务（与 services.ArtifactService 同签名：get/readContent/readBuffer 均异步）。 */
-  artifacts: Pick<ArtifactService, 'spill' | 'get' | 'readContent' | 'readBuffer'>
+  artifacts: Pick<ArtifactService, 'spill' | 'get' | 'readContent' | 'readBuffer'> &
+    Partial<Pick<ArtifactService, 'writeUploaded'>>
   /** 跨平台节点执行底座（远端 (nodeId, cwd) 靶点执行；缺省仅 local）。 */
   envFabric?: EnvFabric
   /** 会话 -> 绑定计算节点 ID（缺省 'local'；store 镜像的真实映射）。 */

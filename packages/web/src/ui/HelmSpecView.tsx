@@ -20,6 +20,7 @@ import type { EvalScope } from './evaluator.js'
 import { isDegradedNode, normalizeSpec, type NormalizedSpecNode } from './spec-normalize.js'
 import { resolveSpecAction } from './spec-action.js'
 import { SpecNodeList, type SpecRenderContext } from './spec-primitives.js'
+import { parseArtifactUrl } from '../conversation/artifact-link.js'
 
 export interface HelmSpecViewProps {
   pluginId?: string
@@ -162,7 +163,16 @@ export function HelmSpecView({ pluginId, spec, docs, data, conversationId }: Hel
           }
           if (resolved.kind === 'open') {
             beginRequest()
-            store.openTarget(resolved.target, { split: resolved.split })
+            const artifactId = parseArtifactUrl(resolved.target)
+            if (artifactId !== null) {
+              store.setActiveModal({
+                kind: 'artifact-preview',
+                artifactId,
+                ...(conversationId !== undefined ? { conversationId } : {}),
+              })
+            } else {
+              store.openTarget(resolved.target, { split: resolved.split })
+            }
             markSucceeded()
             return
           }
