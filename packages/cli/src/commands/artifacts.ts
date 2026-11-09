@@ -69,6 +69,9 @@ export function artifactsCommands(): CommandSpec[] {
       const hub = await ctx.hub()
       const metadata = await hub.uploadArtifact(id, fileName, bytes, mimeType)
       printResult(ctx, metadata)
+      if (!ctx.json) {
+        ctx.io.out(`[Artifact] id=${metadata.id} name=${metadata.name}\n`)
+      }
     },
   })
 

@@ -132,6 +132,25 @@ test('artifacts put：二进制流上传（octet-stream + 编码文件名 + 字�
   }
 })
 
+test('artifacts put：人类模式输出追加 [Artifact] id=<id> name=<name> 对齐前端时间线检测', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const file = path.join(dir, 'output.png')
+  await fsp.writeFile(file, 'image-binary')
+  const hub = await startHub({
+    'POST /api/conversations/3/artifacts': () => ({
+      status: 201,
+      body: { id: 'art-img-99', conversationId: 3, name: 'output.png', size: 12, mimeType: 'image/png', createdAt: 1 },
+    }),
+  })
+  try {
+    const r = await run(['artifacts', 'put', file, '3'], makeEnv(hub.url, dir))
+    assert.equal(r.code, 0, r.err)
+    assert.ok(r.out.includes('[Artifact] id=art-img-99 name=output.png\n'))
+  } finally {
+    await hub.close()
+  }
+})
+
 test('artifacts put：--name 与 --mime-type 覆盖；--current 目标会话', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
   const file = path.join(dir, 'plain.txt')

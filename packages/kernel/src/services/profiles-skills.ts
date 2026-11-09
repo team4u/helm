@@ -43,7 +43,7 @@ export const SYSTEM_DEFAULT = [
   '',
   '1. 受管 bash 已提供 `helm` CLI 与会话身份 `HELM_CONVERSATION_ID`，可用 `--current` 与 `--json` 调用。',
   '2. 操作 Helm 或回答宿主能力问题前，先 `load_skill({ skillId: "helm-cli" })` 并按需读取 references，通过命令帮助与实际状态核实能力。',
-  '3. 普通回复用 Markdown；需要交互展示时再读取 UI 手册。',
+  '3. 普通回复用 Markdown；需要交互展示时再读取 UI 手册。生成文件供用户在 Web 查看时，用 write(..., artifact: true) 或 helm artifacts put <path> --current 登记产物，并在回复中用 [文件名](artifact:<id>) 或 ![图片](artifact:<id>) 直接渲染。',
   '4. 用 `update_memory` 保存稳定的用户偏好与约定。',
   '',
 ].join('\n')

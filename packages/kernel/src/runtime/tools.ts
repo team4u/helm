@@ -49,7 +49,7 @@ import type { Context, JsonValue } from '@earendil-works/chord'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
-import { int, obj, opt, str } from '@earendil-works/pi-schema'
+import { bool, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { posix, win32 } from 'node:path'
 import { composeExecutionEnv } from '../env/scoped-env.js'
@@ -783,6 +783,12 @@ async function resolveWritableTarget(
 const writeParameters = obj({
   path: str({ description: '目标文件路径（相对会话 cwd；允许在 cwd 内创建新文件或子目录）' }),
   content: str({ description: '要写入的 UTF-8 文本内容（整体覆盖）' }),
+  artifact: opt(
+    bool({
+      description:
+        '是否同时登记为当前会话产物（Web 界面可见/可预览/可下载，并在输出中返回 [Artifact] id=<id>；在回复正文中可用 [文件名](artifact:<id>) 或 ![图片](artifact:<id>) 直接渲染）',
+    }),
+  ),
 })
 
 /** write 工具：在会话 (nodeId, cwd) 内安全写入文本文件（拒绝越界与软链逃逸）。 */
@@ -790,13 +796,14 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
   return defineTool({
     name: 'write',
     description:
-      '写入 UTF-8 文本文件（整体覆盖）。路径相对会话 cwd；允许在 cwd 内创建新文件或子目录；拒绝越出 cwd 的绝对路径、../ 逃逸与指向 cwd 外的软链；会话绑定远端节点时在目标节点写入。',
+      '写入 UTF-8 文本文件（整体覆盖）。路径相对会话 cwd；允许在 cwd 内创建新文件或子目录；拒绝越出 cwd 的绝对路径、../ 逃逸与指向 cwd 外的软链；会话绑定远端节点时在目标节点写入。默认文件仅写入会话 cwd（Web 界面不可见）；若需交付用户在 Web 预览或下载，传 artifact: true 同步登记为会话产物并获取产物 ID，在回复中用 [文件名](artifact:<id>) 或 ![标题](artifact:<id>) 直接渲染到聊天界面。',
     parameters: writeParameters,
     structuredOutputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string' },
         bytesWritten: { type: 'number' },
+        artifactId: { type: 'string' },
       },
       required: ['path', 'bytesWritten'],
     } as never,
@@ -807,6 +814,44 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
       }
       const { nodeId, base } = target0
       try {
+        const onWriteSuccess = async (targetAbs: string, bytes: number) => {
+          if (args.artifact === true) {
+            if (deps.artifacts.writeUploaded === undefined) {
+              return {
+                output: [
+                  {
+                    type: 'text' as const,
+                    text: 'write_failed: 产物服务未配置 writeUploaded，无法登记会话产物',
+                  },
+                ],
+                isError: true,
+              }
+            }
+            const fileName = pathRulesForShape(targetPathShape(targetAbs)).basename(targetAbs)
+            const meta = await deps.artifacts.writeUploaded(api.conversationId as number, {
+              name: fileName,
+              bytes: Buffer.from(args.content, 'utf8'),
+            })
+            return {
+              output: [
+                {
+                  type: 'text' as const,
+                  text: `write_ok: ${args.path}（${bytes} 字节）\n[Artifact] id=${meta.id} name=${meta.name}`,
+                },
+              ],
+              structuredOutput: {
+                path: args.path,
+                bytesWritten: bytes,
+                artifactId: meta.id,
+              } as JsonValue,
+            }
+          }
+          return {
+            output: [{ type: 'text' as const, text: `write_ok: ${args.path}（${bytes} 字节）` }],
+            structuredOutput: { path: args.path, bytesWritten: bytes } as JsonValue,
+          }
+        }
+
         if (nodeId !== 'local') {
           if (deps.envFabric === undefined) {
             return {
@@ -838,10 +883,7 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
           if (!mkdirResult.ok) throw new Error(mkdirResult.error.message)
           const writeResult = await env.writeFile(target.abs, args.content, context)
           if (!writeResult.ok) throw new Error(writeResult.error.message)
-          return {
-            output: [{ type: 'text', text: `write_ok: ${args.path}（${bytes} 字节）` }],
-            structuredOutput: { path: args.path, bytesWritten: bytes } as JsonValue,
-          }
+          return await onWriteSuccess(target.abs, bytes)
         }
         // local 节点：进程内 fs。
         const target = await resolveWritableTarget(
@@ -872,10 +914,7 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
         const bytes = Buffer.byteLength(args.content, 'utf8')
         await mkdir(pathRulesForShape(targetPathShape(target.abs)).dirname(target.abs), { recursive: true })
         await writeFile(target.abs, args.content, 'utf8')
-        return {
-          output: [{ type: 'text', text: `write_ok: ${args.path}（${bytes} 字节）` }],
-          structuredOutput: { path: args.path, bytesWritten: bytes } as JsonValue,
-        }
+        return await onWriteSuccess(target.abs, bytes)
       } catch (error) {
         return {
           output: [{ type: 'text', text: `write_failed: ${deps.redact(String(error))}` }],

@@ -8,6 +8,8 @@ import { useHelmStore } from '../lib/store-context.js'
 import { HelmSpecView } from '../ui/HelmSpecView.js'
 import { MermaidPreviewModal } from './MermaidPreviewModal.js'
 import { getMermaidConfig } from './mermaid-theme.js'
+import { artifactsApi } from '../lib/api.js'
+import { markdownUrlTransform, parseArtifactUrl } from './artifact-link.js'
 
 export interface MarkdownViewProps {
   text: string
@@ -180,7 +182,105 @@ function extractCodeBlock(node: unknown): { language: string; code: string } | n
   return { language: langClass.replace('language-', '').trim(), code }
 }
 
+interface ArtifactInlineMediaProps {
+  artifactId: string
+  conversationId?: number
+  alt?: string
+  title?: string
+}
+
+function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: ArtifactInlineMediaProps) {
+  const store = useHelmStore()
+  const [media, setMedia] = useState<{ url: string; mime: string } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const label = alt || title || '产物'
+
+  const openPreview = () => {
+    store.setActiveModal({
+      kind: 'artifact-preview',
+      artifactId,
+      ...(conversationId !== undefined ? { conversationId } : {}),
+    })
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    let createdUrl: string | null = null
+    setLoading(true)
+
+    void artifactsApi
+      .fetchBlob(artifactId)
+      .then((blob) => {
+        if (cancelled) return
+        createdUrl = URL.createObjectURL(blob)
+        setMedia({ url: createdUrl, mime: (blob.type || '').toLowerCase() })
+        setLoading(false)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+      if (createdUrl !== null) {
+        URL.revokeObjectURL(createdUrl)
+      }
+    }
+  }, [artifactId])
+
+  if (loading) {
+    return (
+      <span className="attachment-chip" style={{ verticalAlign: 'middle' }}>
+        <HelmIcon name="loader" size={11} />
+        <span>{label}</span>
+      </span>
+    )
+  }
+
+  if (media !== null) {
+    if (media.mime.startsWith('image/')) {
+      return (
+        <button
+          type="button"
+          className="attachment-image-thumb"
+          title={`点击放大：${label}`}
+          onClick={openPreview}
+        >
+          <img src={media.url} alt={label} loading="lazy" />
+        </button>
+      )
+    }
+    if (media.mime.startsWith('audio/')) {
+      return <audio controls src={media.url} style={{ maxWidth: '100%', display: 'block', margin: '6px 0' }} />
+    }
+    if (media.mime.startsWith('video/')) {
+      return (
+        <video
+          controls
+          src={media.url}
+          style={{ maxWidth: '100%', maxHeight: 360, display: 'block', margin: '6px 0' }}
+        />
+      )
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      className="attachment-chip"
+      style={{ verticalAlign: 'middle' }}
+      title={`点击预览：${label}`}
+      onClick={openPreview}
+    >
+      <HelmIcon name="file-text" size={11} />
+      <span>{label}</span>
+    </button>
+  )
+}
+
 export const MarkdownView = memo(function MarkdownView({ text, conversationId }: MarkdownViewProps) {
+  const store = useHelmStore()
   // 渲染器函数身份必须稳定，否则每次流式文本更新都会重挂载既有代码块。
   const components = useMemo<Components>(() => ({
     pre: ({ children, node }) => {
@@ -191,16 +291,57 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId }:
       return <pre className="code-block-pre selectable">{children}</pre>
     },
     code: ({ className, children }) => <code className={className}>{children}</code>,
-    a: ({ href, children }) => (
-      <a href={href} target="_blank" rel="noreferrer noopener">
-        {children}
-      </a>
-    ),
-  }), [conversationId])
+    a: ({ href, children }) => {
+      const artifactId = parseArtifactUrl(href)
+      if (artifactId !== null) {
+        return (
+          <button
+            type="button"
+            className="attachment-chip"
+            style={{ verticalAlign: 'middle' }}
+            title="点击预览产物"
+            onClick={() =>
+              store.setActiveModal({
+                kind: 'artifact-preview',
+                artifactId,
+                ...(conversationId !== undefined ? { conversationId } : {}),
+              })
+            }
+          >
+            <HelmIcon name="file-text" size={11} />
+            <span>{children}</span>
+          </button>
+        )
+      }
+      return (
+        <a href={href} target="_blank" rel="noreferrer noopener">
+          {children}
+        </a>
+      )
+    },
+    img: ({ src, alt, title }) => {
+      const artifactId = parseArtifactUrl(src)
+      if (artifactId !== null) {
+        return (
+          <ArtifactInlineMedia
+            artifactId={artifactId}
+            conversationId={conversationId}
+            alt={alt}
+            title={title}
+          />
+        )
+      }
+      return <img src={src} alt={alt} title={title} loading="lazy" />
+    },
+  }), [conversationId, store])
 
   return (
     <div className="msg-ai-body">
-      <Markdown remarkPlugins={[remarkGfm]} components={components}>
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        urlTransform={markdownUrlTransform}
+        components={components}
+      >
         {text}
       </Markdown>
     </div>
