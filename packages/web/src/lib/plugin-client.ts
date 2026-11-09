@@ -68,7 +68,10 @@ function removePluginStyleSheets(pluginId: string | undefined): void {
 const pluginStyleKey = (pluginId: string, moduleRef: string): string => `${pluginId}::${moduleRef}`
 
 function findPluginStyleNode(key: string): HTMLStyleElement | null {
-  return document.querySelector(`style[data-helm-plugin-css=${JSON.stringify(key)}]`)
+  for (const node of document.querySelectorAll<HTMLStyleElement>('style[data-helm-plugin-css]')) {
+    if (node.getAttribute('data-helm-plugin-css') === key) return node
+  }
+  return null
 }
 
 /**
@@ -84,13 +87,9 @@ function applyPluginClientCss(
   contentHash: string,
   moduleNamespace: Record<string, unknown>,
 ): void {
-  if (typeof document === 'undefined') return
-  const key = pluginStyleKey(pluginId, moduleRef)
-  if (!Object.hasOwn(moduleNamespace, PLUGIN_CLIENT_CSS_EXPORT)) {
-    findPluginStyleNode(key)?.remove()
-    return
-  }
-  const css = moduleNamespace[PLUGIN_CLIENT_CSS_EXPORT]
+  const css = Object.hasOwn(moduleNamespace, PLUGIN_CLIENT_CSS_EXPORT)
+    ? moduleNamespace[PLUGIN_CLIENT_CSS_EXPORT]
+    : ''
   if (typeof css !== 'string') {
     throw new PluginClientError(
       'client_module_css_invalid',
@@ -98,11 +97,13 @@ function applyPluginClientCss(
       0,
     )
   }
+  if (typeof document === 'undefined') return
+  const key = pluginStyleKey(pluginId, moduleRef)
+  const existing = findPluginStyleNode(key)
   if (css === '') {
-    findPluginStyleNode(key)?.remove()
+    existing?.remove()
     return
   }
-  const existing = findPluginStyleNode(key)
   if (existing === null) {
     const style = document.createElement('style')
     style.setAttribute('data-helm-plugin-css', key)
@@ -112,7 +113,7 @@ function applyPluginClientCss(
     document.head.appendChild(style)
     return
   }
-  if (existing.getAttribute('data-helm-plugin-css-hash') === contentHash) return
+  if (existing.getAttribute('data-helm-plugin-css-hash') === contentHash && existing.textContent === css) return
   existing.setAttribute('data-helm-plugin-css-hash', contentHash)
   existing.textContent = css
 }
@@ -231,15 +232,9 @@ export async function loadPluginClientModule(pluginId: string, moduleRef: string
       entry.resolved = moduleNamespace
       return moduleNamespace
     },
-    (err: unknown) => {
-      if (cache.get(key) === entry) cache.delete(key)
-      throw err
-    },
-  )
-  // 任何拒绝（含上方失效/契约错误）都要回收仍属于自己的 entry，否则同 hash 重试会 await
-  // 残留的 rejected Promise，把陈旧错误重复抛给无辜的新调用。
-  void entry.namespaced.catch(() => {
+  ).catch((err: unknown) => {
     if (cache.get(key) === entry) cache.delete(key)
+    throw err
   })
   cache.set(key, entry)
   const module = await entry.namespaced

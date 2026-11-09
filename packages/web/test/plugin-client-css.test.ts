@@ -274,6 +274,10 @@ test('seedPluginClientModule 遵循同一样式契约：装载、按新种子更
   seedPluginClientModule('p', 'index.tsx', { Panel: panel, __helmClientCss: '.seed1 { color: red }' })
   assert.equal(pluginStyle('p', 'index.tsx')?.textContent, '.seed1 { color: red }')
   assert.equal(pluginStyle('p', 'index.tsx')?.getAttribute('data-helm-plugin-css-hash'), 'seeded')
+  const node = pluginStyle('p', 'index.tsx')
+  seedPluginClientModule('p', 'index.tsx', { Panel: panel, __helmClientCss: '.reseeded { color: green }' })
+  assert.equal(pluginStyle('p', 'index.tsx'), node, '默认 seeded hash 相同也应按新命名空间原位更新')
+  assert.equal(node?.textContent, '.reseeded { color: green }')
 
   // 无样式导出的新种子移除旧样式
   seedPluginClientModule('p', 'index.tsx', { Panel: panel }, 'seed2')
@@ -300,6 +304,17 @@ test('SSR 无 document：合法跳过样式注入且不报错，缓存照常发�
     assert.equal(loaded.module.__helmClientCss, '.ssr { color: red }')
     assert.equal(getCachedClientComponent('p', 'index.tsx', 'Panel'), loaded.module.Panel, 'SSR 下 resolved 照常发布')
     seedPluginClientModule('q', 'index.tsx', { Panel: () => null, __helmClientCss: '.q { color: red }' })
+    serveModule(`export const __helmClientCss = 42\n${PANEL_EXPORT}`, 'invalid-ssr')
+    await assert.rejects(
+      loadPluginClientModule('bad-ssr', 'index.tsx'),
+      (error: unknown) => error instanceof PluginClientError && error.code === 'client_module_css_invalid',
+      'SSR 只跳过 DOM 写入，不能跳过产物契约校验',
+    )
+    assert.equal(getCachedClientComponent('bad-ssr', 'index.tsx', 'Panel'), undefined)
+    assert.throws(
+      () => seedPluginClientModule('bad-seed', 'index.tsx', { Panel: () => null, __helmClientCss: 42 }),
+      (error: unknown) => error instanceof PluginClientError && error.code === 'client_module_css_invalid',
+    )
   } finally {
     Object.defineProperty(globalThis, 'document', descriptor!)
   }
