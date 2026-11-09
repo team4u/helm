@@ -16,8 +16,8 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
 
   if (artifacts.length === 0) {
     return (
-      <div style={{ padding: '20px 14px', color: 'var(--fg-muted)', fontSize: 12, textAlign: 'center' }}>
-        当前会话暂无产物
+      <div className="empty-state empty-state-compact">
+        <p className="empty-state-title">当前会话暂无产物</p>
       </div>
     )
   }
@@ -102,10 +102,9 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
         <span style={{ flex: 1 }} />
         <button
           type="button"
-          className="btn btn-ghost btn-sm workbench-close-btn"
+          className="btn btn-ghost btn-icon-sm workbench-close-btn"
           aria-label="关闭工作台"
           title="关闭工作台"
-          style={{ width: 26, height: 26, padding: 0, flexShrink: 0 }}
           onClick={() => store.setWorkbenchOpen(false)}
         >
           <HelmIcon name="x" size={14} />
@@ -113,8 +112,8 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
       </div>
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {conversationId === undefined ? (
-          <div style={{ padding: '20px 14px', color: 'var(--fg-muted)', fontSize: 12, textAlign: 'center' }}>
-            无活跃会话上下文
+          <div className="empty-state empty-state-compact">
+            <p className="empty-state-title">无活跃会话上下文</p>
           </div>
         ) : activeTab === 'artifacts' ? (
           <ArtifactsTab conversationId={conversationId} />
@@ -129,8 +128,8 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
             />
           </div>
         ) : (
-          <div style={{ color: 'var(--fg-muted)', fontSize: 12, textAlign: 'center', padding: 16 }}>
-            工作台页签不存在或对当前会话不可用
+          <div className="empty-state empty-state-compact">
+            <p className="empty-state-title">工作台页签不存在或对当前会话不可用</p>
           </div>
         )}
       </div>

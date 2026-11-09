@@ -105,7 +105,7 @@ function AttachmentChips({
 }) {
   const store = useHelmStore()
   return (
-    <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}>
+    <span className="msg-attachments-wrap">
       {attachments.map((att) =>
         att.mimeType.startsWith('image/') ? (
           <AttachmentImage key={att.id} att={att} conversationId={conversationId} />
@@ -411,7 +411,7 @@ function TraceRow({
               {inputJson !== undefined ? (
                 <div>
                   <div className="trace-section-label">入参</div>
-                  <pre className="code-block-pre" style={{ padding: 0 }}>
+                  <pre className="code-block-pre code-block-pre-flush">
                     <code>{inputJson}</code>
                   </pre>
                 </div>
@@ -419,7 +419,7 @@ function TraceRow({
               {tool.resultText !== undefined ? (
                 <div>
                   <div className="trace-section-label">输出</div>
-                  <pre className="code-block-pre" style={{ padding: 0 }}>
+                  <pre className="code-block-pre code-block-pre-flush">
                     <code>{tool.resultText}</code>
                   </pre>
                 </div>
@@ -482,7 +482,7 @@ function StepGroup({
         {active ? `正在思考与执行 (${steps.length} 步)…` : `思考与执行过程 (${steps.length} 步)`}
       </button>
       {open ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 8 }}>
+        <div className="trace-group-steps">
           {steps.map((step, idx) =>
             step.kind === 'thinking' ? (
               <ThinkingRow key={`think:${idx}`} text={step.thinking.text} />
@@ -517,7 +517,7 @@ function ThinkingRow({ text }: { text: string }) {
       </button>
       {open ? (
         <div className="trace-expanded-body selectable">
-          <pre className="code-block-pre" style={{ padding: 0 }}>
+          <pre className="code-block-pre code-block-pre-flush">
             <code>{text}</code>
           </pre>
         </div>
@@ -533,9 +533,9 @@ function ThinkingRow({ text }: { text: string }) {
 function ContextDivider({ item }: { item: DividerItem }) {
   const [open, setOpen] = useState(false)
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div className="context-divider-wrap">
       <div className="context-divider">
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <span className="context-divider-label">
           <HelmIcon name={item.divider === 'reset' ? 'rotate-ccw' : 'archive'} size={11} />
           {item.divider === 'reset' ? '上下文已重置' : '上下文已精简'}
         </span>
@@ -543,8 +543,7 @@ function ContextDivider({ item }: { item: DividerItem }) {
       {item.handoff !== undefined ? (
         <button
           type="button"
-          className="trace-group-summary"
-          style={{ margin: '0 auto', display: 'flex' }}
+          className="trace-group-summary context-divider-handoff-btn"
           onClick={() => setOpen((v) => !v)}
         >
           <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
@@ -559,9 +558,9 @@ function ContextDivider({ item }: { item: DividerItem }) {
 function ResetHandoffBody({ item }: { item: DividerItem }) {
   if (item.handoff === undefined) return null
   return (
-    <div className="trace-expanded-body selectable" style={{ marginLeft: 0 }}>
+    <div className="trace-expanded-body selectable trace-expanded-body-flush">
       <div className="trace-section-label">交接摘要</div>
-      <pre className="code-block-pre" style={{ padding: 0 }}>
+      <pre className="code-block-pre code-block-pre-flush">
         <code>{item.handoff}</code>
       </pre>
     </div>
@@ -873,13 +872,13 @@ export function ConversationTimeline({
       )}
       {store.loadErrors[`history:${conversation.id}`] && <p className="jr-callout jr-callout-err" role="alert">{store.loadErrors[`history:${conversation.id}`]}</p>}
       {loading ? (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '48px 0', color: 'var(--fg-muted)', fontSize: 12 }}>
+        <div className="timeline-loading-state">
           <HelmIcon name="loader" size={14} className="spin-slow" />
           正在加载会话…
         </div>
       ) : null}
       {!loading && !sendingPending && !isWorking && items.length === 0 && resolvedAsks.length === 0 ? (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '64px 0', color: 'var(--fg-muted)', fontSize: 12 }}>
+        <div className="timeline-empty-state">
           <HelmIcon name="message-square" size={22} />
           <span>向助理描述目标，或从左侧选择会话开始</span>
         </div>
@@ -890,10 +889,9 @@ export function ConversationTimeline({
             return (
               <div
                 key={item.key}
-                className={highlightClass(item.entryId)}
+                className={`timeline-human-wrap ${highlightClass(item.entryId)}`}
                 ref={highlightScrollRef}
                 data-entry-id={item.entryId}
-                style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch' }}
               >
                 <HumanMessage
                   item={item}
@@ -956,7 +954,7 @@ export function ConversationTimeline({
           <ResolvedAskRow key={`ask:${ask.id}`} ask={ask} status={status} />
         ))}
       </div>
-      <div ref={bottomRef} style={{ height: 2 }} />
+      <div ref={bottomRef} className="timeline-scroll-anchor" />
     </div>
   )
 }

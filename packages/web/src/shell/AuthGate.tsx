@@ -68,7 +68,7 @@ export function AuthGate() {
           </div>
           <button
             type="button"
-            className="btn btn-ghost btn-sm"
+            className="btn btn-ghost btn-icon-sm"
             onClick={store.toggleTheme}
             title={
               store.themePreference === 'system'
@@ -135,7 +135,7 @@ export function AuthGate() {
           </div>
         )}
 
-        <button type="submit" className="btn btn-primary" disabled={submitting} style={{ height: 34 }}>
+        <button type="submit" className="btn btn-primary" disabled={submitting}>
           <HelmIcon name="lock" size={13} />
           <span>{submitting ? '正在验证...' : isSetup ? '初始化并进入 Helm' : '解锁主控台'}</span>
         </button>

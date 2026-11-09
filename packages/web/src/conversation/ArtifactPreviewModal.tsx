@@ -128,22 +128,24 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
           </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             {markdown ? (
-              <span className="btn-group" role="group">
+              <div className="segmented-control" role="group" aria-label="视图模式">
                 <button
                   type="button"
-                  className={`btn btn-sm${view === 'rich' ? ' btn-primary' : ''}`}
+                  className={`segmented-control-btn${view === 'rich' ? ' is-active' : ''}`}
+                  aria-pressed={view === 'rich'}
                   onClick={() => setView('rich')}
                 >
                   富文本
                 </button>
                 <button
                   type="button"
-                  className={`btn btn-sm${view === 'source' ? ' btn-primary' : ''}`}
+                  className={`segmented-control-btn${view === 'source' ? ' is-active' : ''}`}
+                  aria-pressed={view === 'source'}
                   onClick={() => setView('source')}
                 >
                   源码
                 </button>
-              </span>
+              </div>
             ) : null}
             {!isMobile ? (
               <button
@@ -160,8 +162,14 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
               <HelmIcon name="download" size={12} />
               {!isMobile ? '下载文件' : null}
             </button>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} title="关闭 (Esc)">
-              <HelmIcon name="x" size={13} />
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon-sm"
+              onClick={onClose}
+              title="关闭 (Esc)"
+              aria-label="关闭预览"
+            >
+              <HelmIcon name="x" size={14} />
             </button>
           </span>
         </div>

@@ -292,39 +292,38 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
       >
-        <div className="modal-header" style={{ padding: '8px 12px' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+        <div className="modal-header" style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
             <HelmIcon name="search" size={15} />
             <input
               ref={inputRef}
               className="input"
-              style={{ border: 'none', background: 'transparent', padding: '4px 0' }}
+              style={{ border: 'none', background: 'transparent' }}
               aria-label="搜索消息全文、跳转会话或执行命令"
               placeholder="搜索消息全文、跳转会话或执行命令..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-            {searching && (
-              <span className="badge badge-neutral" style={{ height: 22, padding: '0 6px' }}>
-                <HelmIcon name="loader" size={12} className="spin-slow" />
-                搜索中
-              </span>
-            )}
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm palette-close-btn"
-              onClick={close}
-              title="关闭"
-              aria-label="关闭"
-              style={{ padding: '2px 6px', height: 22, flexShrink: 0 }}
-            >
-              <span className="palette-close-desktop badge badge-neutral">Esc 关闭</span>
-              <span className="palette-close-mobile" style={{ alignItems: 'center', gap: 4 }}>
-                <HelmIcon name="x" size={13} />
-                <span style={{ fontSize: 11.5 }}>关闭</span>
-              </span>
-            </button>
-          </span>
+          </div>
+          {searching && (
+            <span className="badge badge-neutral" style={{ height: 22, padding: '0 6px', flexShrink: 0 }}>
+              <HelmIcon name="loader" size={12} className="spin-slow" />
+              搜索中
+            </span>
+          )}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm palette-close-btn"
+            onClick={close}
+            title="关闭"
+            aria-label="关闭"
+          >
+            <span className="palette-close-desktop badge badge-neutral">Esc 关闭</span>
+            <span className="palette-close-mobile" style={{ alignItems: 'center', gap: 4 }}>
+              <HelmIcon name="x" size={13} />
+              <span style={{ fontSize: 11.5 }}>关闭</span>
+            </span>
+          </button>
         </div>
         <div className="modal-body" style={{ padding: 6, gap: 2 }} ref={listRef}>
           {previewCmd && (

@@ -45,40 +45,34 @@ function TokenGuideCard({
     { label: '诊断', command: guide.doctorCommand, hint: '连接异常时在受控机运行' },
   ]
   return (
-    <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, borderColor: 'var(--accent)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+    <section className="section-flat border-accent">
+      <div className="section-flat-header">
         <HelmIcon name="key" size={13} />
-        <span style={{ fontWeight: 600, fontSize: 12.5 }}>接入令牌（仅本次展示）</span>
+        <span className="section-flat-title">接入令牌（仅本次展示）</span>
         <span className="badge badge-warn">
           <HelmIcon name="alert-triangle" size={10} />
           明文接入令牌仅展示一次（服务端仅存 SHA-256 摘要）
         </span>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-        <code
-          className="mono selectable"
-          style={{ flex: 1, minWidth: 0, fontSize: 11.5, padding: '4px 8px', background: 'var(--bg-inset)', borderRadius: 6, wordBreak: 'break-all' }}
-        >
+      <div className="flex-row">
+        <code className="code-box selectable flex-1">
           {token}
         </code>
         <CopyButton text={token} label="复制令牌" />
       </div>
-      <div style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>
+      <div className="text-muted">
         在受控机执行以下命令完成接入（需已安装 helm-node）：
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div className="flex-col">
         {rows.map((row) => (
-          <div key={row.label} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 11.5, color: 'var(--fg-muted)', flexShrink: 0 }}>{row.label}</span>
-              {row.hint && <span style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>{row.hint}</span>}
-              <span style={{ flex: 1 }} />
+          <div key={row.label} className="flex-col-xs">
+            <div className="flex-row">
+              <span className="text-muted flex-shrink-0">{row.label}</span>
+              {row.hint && <span className="text-subtle">{row.hint}</span>}
+              <span className="flex-1" />
               <CopyButton text={row.command} />
             </div>
-            <code
-              className="mono selectable"
-              style={{ fontSize: 11.5, padding: '4px 8px', background: 'var(--bg-inset)', borderRadius: 6, wordBreak: 'break-all' }}
-            >
+            <code className="code-box selectable">
               {row.command}
             </code>
           </div>
@@ -91,19 +85,16 @@ function TokenGuideCard({
 /** 离线 BYOM 节点的接入命令模板提示（无当次明文 token 时）。 */
 function OfflineHintCard({ guide }: { guide: NodeConnectGuide }) {
   return (
-    <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+    <section className="section-flat">
+      <div className="section-flat-header">
         <HelmIcon name="alert-circle" size={13} />
-        <span style={{ fontWeight: 600, fontSize: 12.5 }}>该节点当前未连接</span>
+        <span className="section-flat-title">该节点当前未连接</span>
       </div>
-      <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+      <div className="text-muted">
         若已在受控机绑定过身份，运行 <code className="mono">{guide.startDaemonCommand}</code> 即可启动后台守护进程恢复连接；若丢失令牌，可点击上方「轮换令牌」重新签发。
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-        <code
-          className="mono selectable"
-          style={{ flex: 1, minWidth: 0, fontSize: 11.5, padding: '4px 8px', background: 'var(--bg-inset)', borderRadius: 6 }}
-        >
+      <div className="flex-row">
+        <code className="code-box selectable flex-1">
           {guide.doctorCommand}
         </code>
         <CopyButton text={guide.doctorCommand} />
@@ -115,9 +106,9 @@ function OfflineHintCard({ guide }: { guide: NodeConnectGuide }) {
 /** 键值信息行。 */
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: '2px 12px', alignItems: 'baseline' }}>
-      <span style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{label}</span>
-      <span className="mono selectable" style={{ fontSize: 11.5, wordBreak: 'break-all' }}>{value}</span>
+    <div className="form-grid">
+      <span className="form-grid-label">{label}</span>
+      <span className="mono selectable form-grid-value">{value}</span>
     </div>
   )
 }
@@ -127,12 +118,12 @@ function HealthCard({ node }: { node: NodeInfo }) {
   const health = node.health
   if (!health) {
     return (
-      <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <section className="section-flat">
+        <div className="section-flat-header">
           <HelmIcon name="activity" size={13} />
-          <span style={{ fontWeight: 600, fontSize: 12.5 }}>健康快照</span>
+          <span className="section-flat-title">健康快照</span>
         </div>
-        <div style={{ fontSize: 12, color: 'var(--fg-subtle)' }}>暂无健康数据（节点离线或尚未上报心跳）。</div>
+        <div className="text-subtle">暂无健康数据（节点离线或尚未上报心跳）。</div>
       </section>
     )
   }
@@ -140,10 +131,10 @@ function HealthCard({ node }: { node: NodeInfo }) {
   const mem = formatUsage(health.memFreeBytes, health.memTotalBytes)
   const disk = formatUsage(health.diskFreeBytes, health.diskTotalBytes)
   return (
-    <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+    <section className="section-flat">
+      <div className="section-flat-header">
         <HelmIcon name="activity" size={13} />
-        <span style={{ fontWeight: 600, fontSize: 12.5 }}>健康快照</span>
+        <span className="section-flat-title">健康快照</span>
         <span className="badge badge-neutral">采集于 {formatDateTime(health.collectedAt)}</span>
       </div>
       <InfoRow label="负载" value={`1m ${la1.toFixed(2)} / 5m ${la5.toFixed(2)} / 15m ${la15.toFixed(2)}`} />
@@ -200,18 +191,17 @@ function IssuePanel({
   }
 
   return (
-    <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+    <section className="section-flat">
+      <div className="section-flat-header">
         <HelmIcon name="plus" size={13} />
-        <span style={{ fontWeight: 600, fontSize: 12.5 }}>接入新节点</span>
+        <span className="section-flat-title">接入新节点</span>
       </div>
-      <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+      <div className="text-muted">
         输入受控机的节点 ID（如 macbook-pro、gpu-box），签发一次性接入令牌；随后在受控机执行签发结果中的一键接入命令，绑定身份并后台启动守护进程。
       </div>
-      <div style={{ display: 'flex', gap: 6 }}>
+      <div className="flex-row">
         <input
-          className="input mono"
-          style={{ flex: 1 }}
+          className="input mono flex-1"
           value={input}
           autoFocus
           placeholder="节点 ID，如 macbook-pro"
@@ -284,10 +274,10 @@ function NodeUpgradeCard({
   const canForce = node.online && (targetVersion.trim() !== '' || (effectiveCheck !== null && (!effectiveCheck.updateAvailable || effectiveCheck.blocked !== undefined)))
   const offlineTitle = '节点已离线，无法升级'
   return (
-    <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+    <section className="section-flat">
+      <div className="section-flat-header">
         <HelmIcon name="arrow-up" size={13} />
-        <span style={{ fontWeight: 600, fontSize: 12.5 }}>节点自升级</span>
+        <span className="section-flat-title">节点自升级</span>
         <span className="badge badge-neutral mono">当前 {currentLabel}</span>
         {effectiveCheck !== null && !checking && effectiveCheck.updateAvailable && (
           <span className="badge badge-ok mono">
@@ -301,7 +291,7 @@ function NodeUpgradeCard({
       </div>
 
       {checking && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--fg-muted)' }}>
+        <div className="flex-row text-muted">
           <HelmIcon name="loader" size={13} />
           正在检查最新版本...
         </div>
@@ -311,7 +301,7 @@ function NodeUpgradeCard({
         <div className="jr-callout jr-callout-err">
           <HelmIcon name="alert-circle" size={13} />
           <span className="selectable">{checkError}</span>
-          <span style={{ flex: 1 }} />
+          <span className="flex-1" />
           <button
             className="btn btn-sm"
             disabled={checking || upgrading || !node.online}
@@ -325,30 +315,17 @@ function NodeUpgradeCard({
       )}
 
       {!checking && check !== null && check.blocked && (
-        <div
-          className="selectable"
-          style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: 6,
-            fontSize: 11.5,
-            padding: '6px 8px',
-            borderRadius: 6,
-            background: 'var(--warn-bg, rgba(217, 119, 6, 0.12))',
-            color: 'var(--warn-fg, #b45309)',
-          }}
-        >
-          <HelmIcon name="shield-alert" size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+        <div className="jr-callout jr-callout-warn selectable">
+          <HelmIcon name="shield-alert" size={13} className="flex-shrink-0" />
           <span>
             上次升级至 v{check.blocked.version} 失败回滚原因：{check.blocked.reason}（时间：{check.blocked.at}）
           </span>
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div className="flex-row-wrap">
         <input
-          className="input mono"
-          style={{ flex: 1, minWidth: 180 }}
+          className="input mono flex-1"
           value={targetVersion}
           placeholder="留空则安装本次检查到的最新版本"
           aria-label="指定目标版本（可选）"
@@ -358,13 +335,13 @@ function NodeUpgradeCard({
         <Checkbox checked={force} onChange={onForceChange} disabled={upgrading || !canForce} label="强制重装/重试" />
       </div>
       {canForce && (
-        <div style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>
+        <div className="text-subtle">
           勾选后将按目标版本强制重装（即使已是该版本），可用于重试失败回滚。
         </div>
       )}
 
       {isNodeBehindHub(node.version, hubVersion) && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <div className="flex-row-wrap">
           <button
             className="btn btn-sm"
             disabled={upgrading}
@@ -374,14 +351,14 @@ function NodeUpgradeCard({
             <HelmIcon name="arrow-up" size={12} />
             目标对齐 Hub {formatNodeVersion(hubVersion)}
           </button>
-          <span style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>
+          <span className="text-subtle">
             检查最新（npm）与对齐 Hub 是两个不同目标，Hub 开发版本未必已发布。
           </span>
         </div>
       )}
 
       {confirmability.ok && resolvedTarget !== null && (
-        <div style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>
+        <div className="text-muted">
           本次将安装 <span className="mono selectable">{formatNodeVersion(resolvedTarget) ?? resolvedTarget}</span>
           {targetVersion.trim() === '' ? '（固定为本次检查到的 npm 最新版本）' : '（显式指定目标）'}
         </div>
@@ -394,8 +371,8 @@ function NodeUpgradeCard({
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        <span style={{ flex: 1 }} />
+      <div className="flex-row">
+        <span className="flex-1" />
         <button
           className="btn btn-sm"
           disabled={checking || upgrading || !node.online}
@@ -416,7 +393,7 @@ function NodeUpgradeCard({
         </button>
       </div>
 
-      <div style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>
+      <div className="text-subtle">
         升级会先等待在途命令完成、校验安装包完整性并启动新进程，确认新进程已连接 Hub 后完成切换；若新版本启动异常将回退至当前版本。升级期间节点可能短暂离线。
       </div>
     </section>
@@ -622,9 +599,9 @@ function NodeDetailPanel({
 
   return (
     <>
-      <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontWeight: 600, fontSize: 13 }} className="mono">
+      <section className="section-flat">
+        <div className="flex-row-wrap">
+          <span className="mono font-semibold">
             {node.id}
           </span>
           <span className="badge badge-neutral">
@@ -646,7 +623,7 @@ function NodeDetailPanel({
               低于 Hub {formatNodeVersion(hubVersion)}
             </span>
           )}
-          <span style={{ flex: 1 }} />
+          <span className="flex-1" />
           {node.kind === 'local' && (
             <button className="btn btn-sm" disabled={creating} onClick={() => void createConversation()}>
               <HelmIcon name="plus" size={12} />
@@ -670,7 +647,7 @@ function NodeDetailPanel({
                 轮换令牌
               </button>
               {confirmRemove ? (
-                <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                <span className="flex-row">
                   <button className="btn btn-danger btn-sm" disabled={removing} onClick={() => void remove()}>
                     <HelmIcon name={removing ? 'loader' : 'trash-2'} size={12} />
                     确认移除
@@ -701,18 +678,17 @@ function NodeDetailPanel({
       )}
 
       {needsCwd && (
-        <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <section className="section-flat">
+          <div className="section-flat-header">
             <HelmIcon name="folder" size={13} />
-            <span style={{ fontWeight: 600, fontSize: 12.5 }}>在此节点新建对话</span>
+            <span className="section-flat-title">在此节点新建对话</span>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+          <div className="text-muted">
             填写目标机器上的工作目录绝对路径。
           </div>
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div className="flex-row">
             <input
-              className="input mono"
-              style={{ flex: 1 }}
+              className="input mono flex-1"
               value={newConversationCwd}
               placeholder="如 /home/user/project（目标机绝对路径）"
               aria-label="新对话工作目录，目标节点绝对路径"
@@ -747,10 +723,10 @@ function NodeDetailPanel({
         />
       )}
 
-      <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <section className="section-flat">
+        <div className="section-flat-header">
           <HelmIcon name="terminal" size={13} />
-          <span style={{ fontWeight: 600, fontSize: 12.5 }}>连接与环境</span>
+          <span className="section-flat-title">连接与环境</span>
         </div>
         <InfoRow label="version" value={formatNodeVersion(node.version) ?? '--'} />
         <InfoRow label="hostname" value={node.hostname ?? '--'} />
@@ -848,7 +824,7 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <span className="modal-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span className="modal-title flex-row">
             <HelmIcon name="network" size={15} />
             计算节点
           </span>
@@ -856,12 +832,11 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
             <HelmIcon name="x" size={14} />
           </button>
         </div>
-        <div className="modal-body asset-modal-body" style={{ flexDirection: 'row', gap: 14, alignItems: 'stretch' }}>
-          <div className="list asset-modal-list" style={{ width: 230, minWidth: 230, overflowY: 'auto', gap: 6 }}>
-            <div style={{ display: 'flex', gap: 6 }}>
+        <div className="modal-body asset-modal-body">
+          <div className="list asset-modal-list">
+            <div className="flex-row">
               <button
-                className={`btn btn-sm${issuingMode ? ' btn-primary' : ''}`}
-                style={{ flex: 1 }}
+                className={`btn btn-sm flex-1${issuingMode ? ' btn-primary' : ''}`}
                 onClick={() => setIssuingMode((v) => !v)}
               >
                 <HelmIcon name="plus" size={12} />
@@ -877,58 +852,54 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
               </button>
             </div>
             {nodes.length === 0 && (
-              <div className="row" style={{ color: 'var(--fg-subtle)' }}>暂无已知节点</div>
+              <div className="empty-state empty-state-compact">暂无已知节点</div>
             )}
-            {nodes.map((node) => (
-              <button
-                key={node.id}
-                className="row"
-                aria-pressed={selectedId === node.id && !issuingMode}
-                style={{
-                  width: '100%',
-                  background: selectedId === node.id && !issuingMode ? 'var(--bg-active)' : 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  flexDirection: 'column',
-                  alignItems: 'flex-start',
-                  gap: 3,
-                }}
-                onClick={() => {
-                  setIssuingMode(false)
-                  selectNode(node.id)
-                }}
-              >
-                <span style={{ fontWeight: 500, fontSize: 12.5, display: 'inline-flex', gap: 5, alignItems: 'center' }}>
-                  <HelmIcon name={node.kind === 'local' ? 'monitor' : 'network'} size={11} />
-                  {node.id}
-                </span>
-                <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <span className="badge badge-neutral">{node.kind === 'local' ? '本机' : 'BYOM'}</span>
-                  <span className={node.online ? 'badge badge-ok' : 'badge badge-neutral'}>
-                    {node.online ? '在线' : '离线'}
+            {nodes.map((node) => {
+              const isSelected = selectedId === node.id && !issuingMode
+              return (
+                <button
+                  key={node.id}
+                  className={`list-item-btn${isSelected ? ' is-active' : ''}`}
+                  aria-pressed={isSelected}
+                  onClick={() => {
+                    setIssuingMode(false)
+                    selectNode(node.id)
+                  }}
+                >
+                  <span className="list-item-btn-title">
+                    <span className="flex-row">
+                      <HelmIcon name={node.kind === 'local' ? 'monitor' : 'network'} size={11} />
+                      {node.id}
+                    </span>
                   </span>
-                  {formatNodeVersion(node.version) !== null && (
-                    <span className="badge mono">{formatNodeVersion(node.version)}</span>
-                  )}
-                  {node.kind === 'byom' && isNodeBehindHub(node.version, hubVersion) && (
-                    <span
-                      className="badge badge-warn mono"
-                      title={`节点版本低于 Hub 当前版本 ${formatNodeVersion(hubVersion) ?? ''}；能否安装该版本以 npm 检查结果为准`}
-                    >
-                      低于 Hub {formatNodeVersion(hubVersion)}
+                  <span className="list-item-btn-meta">
+                    <span className="badge badge-neutral">{node.kind === 'local' ? '本机' : 'BYOM'}</span>
+                    <span className={node.online ? 'badge badge-ok' : 'badge badge-neutral'}>
+                      <HelmIcon name={node.online ? 'check-circle' : 'circle'} size={10} />
+                      {node.online ? '在线' : '离线'}
+                    </span>
+                    {formatNodeVersion(node.version) !== null && (
+                      <span className="badge mono">{formatNodeVersion(node.version)}</span>
+                    )}
+                    {node.kind === 'byom' && isNodeBehindHub(node.version, hubVersion) && (
+                      <span
+                        className="badge badge-warn mono"
+                        title={`节点版本低于 Hub 当前版本 ${formatNodeVersion(hubVersion) ?? ''}；能否安装该版本以 npm 检查结果为准`}
+                      >
+                        低于 Hub {formatNodeVersion(hubVersion)}
+                      </span>
+                    )}
+                  </span>
+                  {(node.hostname !== undefined || node.platform !== undefined) && (
+                    <span className="mono text-muted">
+                      {[node.hostname, node.platform].filter(Boolean).join(' / ')}
                     </span>
                   )}
-                </span>
-                {(node.hostname !== undefined || node.platform !== undefined) && (
-                  <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
-                    {[node.hostname, node.platform].filter(Boolean).join(' / ')}
-                  </span>
-                )}
-              </button>
-            ))}
+                </button>
+              )
+            })}
           </div>
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12, overflowY: 'auto' }}>
+          <div className="asset-modal-main">
             {issuingMode ? (
               <IssuePanel existingNodeIds={existingNodeIds} onIssued={onIssued} />
             ) : selected ? (
@@ -941,7 +912,7 @@ export function NodesModal({ initialNodeId, onClose }: { initialNodeId?: string;
                 onClose={() => selectNode('local')}
               />
             ) : (
-              <div style={{ color: 'var(--fg-subtle)', fontSize: 12.5, padding: '24px 0', textAlign: 'center' }}>
+              <div className="empty-state">
                 选择左侧节点查看详情
               </div>
             )}

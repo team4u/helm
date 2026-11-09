@@ -50,45 +50,38 @@ function ProfileListPanel({
   herdrEnabled: boolean
 }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+    <div className="flex-col">
       <button className="btn btn-primary btn-sm" onClick={onCreate}>
         <HelmIcon name="plus" size={13} />
         新建 Profile
       </button>
       <div className="list">
-        {profiles.length === 0 && <div className="row" style={{ color: 'var(--fg-subtle)' }}>暂无 Profile</div>}
-        {profiles.map((p) => (
-          <button
-            key={p.id}
-            className="row"
-            aria-pressed={selectedId === p.id}
-            style={{
-              width: '100%',
-              background: selectedId === p.id ? 'var(--bg-active)' : 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              textAlign: 'left',
-              flexDirection: 'column',
-              alignItems: 'flex-start',
-              gap: 2,
-            }}
-            onClick={() => onSelect(p.id)}
-          >
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, width: '100%', justifyContent: 'space-between' }}>
-              <span style={{ fontWeight: 500, fontSize: 12.5 }}>{p.name || p.id}</span>
-              {herdrEnabled && p.runtime?.kind === 'herdr' && (
-                <span className="badge badge-accent">
-                  <HelmIcon name="terminal" size={10} />
-                  herdr
-                </span>
-              )}
-            </span>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
-              {p.id}
-              {p.model ? ` / ${p.model}` : ''}
-            </span>
-          </button>
-        ))}
+        {profiles.length === 0 && <div className="empty-state empty-state-compact">暂无 Profile</div>}
+        {profiles.map((p) => {
+          const isSelected = selectedId === p.id
+          return (
+            <button
+              key={p.id}
+              className={`list-item-btn${isSelected ? ' is-active' : ''}`}
+              aria-pressed={isSelected}
+              onClick={() => onSelect(p.id)}
+            >
+              <span className="list-item-btn-title">
+                <span>{p.name || p.id}</span>
+                {herdrEnabled && p.runtime?.kind === 'herdr' && (
+                  <span className="badge badge-accent">
+                    <HelmIcon name="terminal" size={10} />
+                    herdr
+                  </span>
+                )}
+              </span>
+              <span className="mono text-muted">
+                {p.id}
+                {p.model ? ` / ${p.model}` : ''}
+              </span>
+            </button>
+          )
+        })}
       </div>
     </div>
   )
@@ -215,9 +208,9 @@ function ProfileBasicTab({
   }, [knownNodes, runtime?.nodeId])
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: '8px 12px', alignItems: 'center' }}>
-        <label htmlFor="helm-profile-id" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>ID</label>
+    <div className="flex-col">
+      <div className="form-grid">
+        <label htmlFor="helm-profile-id" className="form-grid-label">ID</label>
         {isNew ? (
           <input
             id="helm-profile-id"
@@ -227,12 +220,12 @@ function ProfileBasicTab({
             onChange={(e) => patch({ ...profile, id: e.target.value })}
           />
         ) : (
-          <span className="badge badge-neutral" style={{ width: 'fit-content' }}>
+          <span className="badge badge-neutral">
             {BUILTIN_PROTECTED_PROFILES.has(profile.id) && <HelmIcon name="lock" size={11} />}
             {profile.id}
           </span>
         )}
-        <label htmlFor="helm-profile-name" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>展示名</label>
+        <label htmlFor="helm-profile-name" className="form-grid-label">展示名</label>
         <input
           id="helm-profile-name"
           className="input"
@@ -240,11 +233,11 @@ function ProfileBasicTab({
           placeholder="如：个人助理"
           onChange={(e) => patch({ ...profile, name: e.target.value })}
         />
-        <label htmlFor="helm-profile-model" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>模型</label>
-        <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <label htmlFor="helm-profile-model" className="form-grid-label">模型</label>
+        <span className="flex-row">
           <Select
             id="helm-profile-model"
-            style={{ flex: 1 }}
+            className="flex-1"
             value={profile.model ?? ''}
             options={modelSelectOptions}
             onChange={(e) => {
@@ -255,20 +248,20 @@ function ProfileBasicTab({
           />
           {!modelKnown && <span className="badge badge-warn">自定义</span>}
         </span>
-        <label htmlFor="helm-profile-thinking" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>思考等级</label>
-        <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <label htmlFor="helm-profile-thinking" className="form-grid-label">思考等级</label>
+        <span className="flex-row">
           <Select
             id="helm-profile-thinking"
-            style={{ flex: 1 }}
+            className="flex-1"
             value={profile.thinkingLevel ?? ''}
             options={thinkingSelectOptions}
             onChange={(e) => patch({ ...profile, thinkingLevel: e.target.value === '' ? undefined : e.target.value })}
           />
           {selectedModel && (selectedModel.thinkingLevels?.length ?? 0) <= 1 && (
-            <span className="provider-help" style={{ fontSize: 11 }}>该模型不支持思考档位</span>
+            <span className="provider-help text-subtle">该模型不支持思考档位</span>
           )}
         </span>
-        <label htmlFor="helm-profile-tags" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Tags</label>
+        <label htmlFor="helm-profile-tags" className="form-grid-label">Tags</label>
         <input
           id="helm-profile-tags"
           className="input"
@@ -276,14 +269,14 @@ function ProfileBasicTab({
           placeholder="逗号分隔，如 research, coding"
           onChange={(e) => patch({ ...profile, tags: textToTags(e.target.value) })}
         />
-        <label htmlFor="helm-profile-node" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>节点</label>
+        <label htmlFor="helm-profile-node" className="form-grid-label">节点</label>
         <Select
           id="helm-profile-node"
           value={profile.nodeId === 'local' ? '' : (profile.nodeId ?? '')}
           options={nodeSelectOptions}
           onChange={(e) => patch({ ...profile, nodeId: e.target.value === '' ? undefined : e.target.value })}
         />
-        <label htmlFor="helm-profile-cwd" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>工作目录</label>
+        <label htmlFor="helm-profile-cwd" className="form-grid-label">工作目录</label>
         <input
           id="helm-profile-cwd"
           className="input"
@@ -294,11 +287,8 @@ function ProfileBasicTab({
       </div>
 
       {!canEditHerdr && runtime !== undefined && (
-        <div
-          className="card"
-          style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 12px' }}
-        >
-          <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+        <div className="section-flat flex-row-between">
+          <span className="text-muted">
             已保存外部运行时配置（{runtime.kind}），不由本编辑器管理，保存时原样保留
           </span>
           <button
@@ -316,8 +306,8 @@ function ProfileBasicTab({
       )}
 
       {canEditHerdr && (
-        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="section-flat">
+          <div className="flex-row">
             <Switch
               checked={runtimeEnabled}
               onChange={(enabled) => {
@@ -329,17 +319,17 @@ function ProfileBasicTab({
                 }
               }}
               label={
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 12.5 }}>
+                <span className="section-flat-title flex-row">
                   <HelmIcon name="terminal" size={13} /> 外部 Herdr 运行时
                 </span>
               }
             />
-            <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>（可选）作为 subagent 时绑定 Herdr CLI</span>
+            <span className="text-subtle">（可选）作为 subagent 时绑定 Herdr CLI</span>
           </div>
 
           {runtimeEnabled && runtime && (
-            <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: '8px 12px', alignItems: 'center' }}>
-              <label htmlFor="helm-runtime-agent" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Agent</label>
+            <div className="form-grid">
+              <label htmlFor="helm-runtime-agent" className="form-grid-label">Agent</label>
               <input
                 id="helm-runtime-agent"
                 className="input mono"
@@ -353,14 +343,14 @@ function ProfileBasicTab({
                   <option key={a} value={a} />
                 ))}
               </datalist>
-              <label htmlFor="helm-runtime-node" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>节点</label>
+              <label htmlFor="helm-runtime-node" className="form-grid-label">节点</label>
               <Select
                 id="helm-runtime-node"
                 value={runtime.nodeId ?? ''}
                 options={runtimeNodeSelectOptions}
                 onChange={(e) => patchRuntimeField({ nodeId: e.target.value === '' ? undefined : e.target.value })}
               />
-              <label htmlFor="helm-runtime-workspace" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Workspace</label>
+              <label htmlFor="helm-runtime-workspace" className="form-grid-label">Workspace</label>
               <input
                 id="helm-runtime-workspace"
                 className="input mono"
@@ -368,11 +358,10 @@ function ProfileBasicTab({
                 placeholder="绑定工作目录绝对路径"
                 onChange={(e) => patchRuntimeField({ workspace: e.target.value })}
               />
-              <label htmlFor="helm-runtime-args" style={{ fontSize: 12, color: 'var(--fg-muted)', alignSelf: 'start', paddingTop: 6 }}>Args</label>
+              <label htmlFor="helm-runtime-args" className="form-grid-label form-grid-align-start">Args</label>
               <textarea
                 id="helm-runtime-args"
-                className="textarea mono"
-                style={{ minHeight: 64, fontSize: 12, resize: 'vertical' }}
+                className="textarea mono profile-args-textarea"
                 spellCheck={false}
                 value={argsText}
                 placeholder={'每行一个参数，参数内的空格会原样保留，如：\n--prompt\n--title 周报 草稿'}
@@ -385,19 +374,18 @@ function ProfileBasicTab({
           )}
 
           {runtimeEnabled && runtime && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            <div className="flex-col">
+              <span className="text-muted">
                 环境变量（仅非机密项；API Key 请使用凭据库）
               </span>
               {envPairs.map((pair, idx) => {
                 const keyId = `helm-runtime-env-key-${idx}`
                 const valueId = `helm-runtime-env-value-${idx}`
                 return (
-                  <div key={idx} style={{ display: 'flex', gap: 6 }}>
+                  <div key={idx} className="flex-row">
                     <input
                       id={keyId}
-                      className="input mono"
-                      style={{ flex: 1 }}
+                      className="input mono flex-1"
                       placeholder="KEY"
                       aria-label={`环境变量 ${idx + 1} 键名`}
                       value={pair.key}
@@ -410,8 +398,7 @@ function ProfileBasicTab({
                     />
                     <input
                       id={valueId}
-                      className="input mono"
-                      style={{ flex: 1 }}
+                      className="input mono flex-1"
                       placeholder="VALUE"
                       aria-label={`环境变量 ${idx + 1} 值`}
                       value={pair.value}
@@ -439,7 +426,6 @@ function ProfileBasicTab({
               })}
               <button
                 className="btn btn-sm"
-                style={{ width: 'fit-content' }}
                 onClick={() => setEnvPairs((prev) => [...prev, { key: '', value: '' }])}
               >
                 <HelmIcon name="plus" size={12} />
@@ -731,7 +717,7 @@ export function ProfileEditorModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <span className="modal-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span className="modal-title flex-row">
             <HelmIcon name="bot" size={15} />
             角色 Profile 编辑器
             {dirty && <span className="badge badge-warn">有未保存修改</span>}
@@ -740,8 +726,8 @@ export function ProfileEditorModal({
             <HelmIcon name="x" size={14} />
           </button>
         </div>
-        <div className="modal-body asset-modal-body" style={{ flexDirection: 'row', gap: 14, alignItems: 'stretch' }}>
-          <div className="asset-modal-list" style={{ width: 210, minWidth: 210, overflowY: 'auto' }}>
+        <div className="modal-body asset-modal-body">
+          <div className="asset-modal-list">
             <ProfileListPanel
               profiles={profiles}
               selectedId={isNew ? null : selectedId}
@@ -750,7 +736,7 @@ export function ProfileEditorModal({
               herdrEnabled={herdrEnabled}
             />
           </div>
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div className="asset-modal-main">
             <div className="tabs-bar">
               {tabItems.map((t) => (
                 <button
@@ -763,7 +749,7 @@ export function ProfileEditorModal({
                 </button>
               ))}
             </div>
-            <div style={{ flex: 1, minHeight: 280, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="profile-tab-content">
               {error && (
                 <div className="jr-callout jr-callout-err" role="alert">
                   <HelmIcon name="alert-circle" size={14} />
@@ -771,13 +757,13 @@ export function ProfileEditorModal({
                 </div>
               )}
               {loading && (
-                <div style={{ color: 'var(--fg-muted)', fontSize: 12.5, display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div className="flex-row text-muted">
                   <HelmIcon name="loader" size={13} />
                   正在读取 Profile 详情...
                 </div>
               )}
               {!loading && !draft && !isNew && (
-                <div style={{ color: 'var(--fg-subtle)', fontSize: 12.5, padding: '24px 0', textAlign: 'center' }}>
+                <div className="empty-state">
                   选择左侧 Profile 或新建一个
                 </div>
               )}
@@ -794,8 +780,7 @@ export function ProfileEditorModal({
               )}
               {!loading && draft && tab === 'system' && (
                 <textarea
-                  className="textarea mono selectable"
-                  style={{ minHeight: 320, fontSize: 12.5, lineHeight: 1.6, resize: 'vertical' }}
+                  className="textarea mono selectable profile-editor-textarea"
                   spellCheck={false}
                   aria-label="SYSTEM.md 系统提示词全文"
                   value={draft.profile.system ?? ''}
@@ -804,16 +789,15 @@ export function ProfileEditorModal({
                 />
               )}
               {!loading && draft && tab === 'memory' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1 }}>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <div className="flex-col flex-1">
+                  <div className="flex-row justify-end">
                     <button className="btn btn-sm" disabled={isNew} onClick={reloadFromDisk}>
                       <HelmIcon name="rotate-ccw" size={12} />
                       重新从磁盘读取
                     </button>
                   </div>
                   <textarea
-                    className="textarea mono selectable"
-                    style={{ minHeight: 280, fontSize: 12.5, lineHeight: 1.6, resize: 'vertical' }}
+                    className="textarea mono selectable profile-editor-textarea"
                     spellCheck={false}
                     aria-label="MEMORY.md 长期记忆全文"
                     value={draft.profile.memory ?? ''}
@@ -826,7 +810,7 @@ export function ProfileEditorModal({
           </div>
         </div>
         <div className="modal-footer">
-          <span style={{ flex: 1, fontSize: 11.5, color: 'var(--fg-muted)' }}>
+          <span className="text-muted flex-1">
             {isProtected ? `${selectedId} 为内置受保护 Profile，不可删除` : isNew ? '新建 Profile' : `正在编辑 ${selectedId}`}
           </span>
           <button

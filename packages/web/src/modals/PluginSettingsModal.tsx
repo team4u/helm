@@ -43,7 +43,7 @@ function PluginConfigForm({
   }, [config])
 
   if (entries.length === 0) {
-    return <div style={{ fontSize: 12, color: 'var(--fg-subtle)' }}>该插件未声明配置项。</div>
+    return <div className="text-subtle">该插件未声明配置项。</div>
   }
 
   const save = async () => {
@@ -63,16 +63,16 @@ function PluginConfigForm({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div className="config-fields" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div className="flex-col">
+      <div className="config-fields flex-col">
         {entries.map(([key, schema]) => {
           const fieldId = `helm-plugin-config-${pluginId}-${key}`
           return (
-            <div key={key} style={{ display: 'grid', gridTemplateColumns: '170px 1fr', gap: '6px 12px', alignItems: 'center' }}>
-              <label htmlFor={fieldId} style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'inline-flex', gap: 5, alignItems: 'center' }}>
+            <div key={key} className="form-grid">
+              <label htmlFor={fieldId} className="form-grid-label">
                 {schema.secret === true && <HelmIcon name="lock" size={11} />}
                 {schema.label ?? key}
-                {schema.required && <span style={{ color: 'var(--err)' }}>*</span>}
+                {schema.required && <span className="text-err">*</span>}
               </label>
               {schema.type === 'boolean' ? (
                 <Switch
@@ -238,7 +238,7 @@ export function PluginSettingsModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <span className="modal-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span className="modal-title flex-row">
             <HelmIcon name="settings" size={15} />
             插件与设置
           </span>
@@ -246,55 +246,50 @@ export function PluginSettingsModal({
             <HelmIcon name="x" size={14} />
           </button>
         </div>
-        <div className="modal-body asset-modal-body" style={{ flexDirection: 'row', gap: 14, alignItems: 'stretch' }}>
-          <div className="list asset-modal-list" style={{ width: 230, minWidth: 230, overflowY: 'auto' }}>
+        <div className="modal-body asset-modal-body">
+          <div className="list asset-modal-list">
             {store.plugins.length === 0 && (
-              <div className="row" style={{ color: 'var(--fg-subtle)' }}>暂无已加载插件</div>
+              <div className="empty-state empty-state-compact">暂无已加载插件</div>
             )}
-            {store.plugins.map((p: PluginSummary) => (
-              <button
-                key={p.id}
-                className="row"
-                aria-pressed={selectedId === p.id}
-                style={{
-                  width: '100%',
-                  background: selectedId === p.id ? 'var(--bg-active)' : 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  flexDirection: 'column',
-                  alignItems: 'flex-start',
-                  gap: 3,
-                }}
-                onClick={() => selectPlugin(p.id)}
-              >
-                <span style={{ fontWeight: 500, fontSize: 12.5, display: 'inline-flex', gap: 5, alignItems: 'center' }}>
-                  {p.name || p.id}
-                  {p.locked && <HelmIcon name="lock" size={11} />}
-                </span>
-                <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{p.id}</span>
-                <span>
-                  {p.enabled ? (
-                    <span className="badge badge-ok">
-                      <HelmIcon name="check" size={10} />
-                      已启用
+            {store.plugins.map((p: PluginSummary) => {
+              const isSelected = selectedId === p.id
+              return (
+                <button
+                  key={p.id}
+                  className={`list-item-btn${isSelected ? ' is-active' : ''}`}
+                  aria-pressed={isSelected}
+                  onClick={() => selectPlugin(p.id)}
+                >
+                  <span className="list-item-btn-title">
+                    <span className="flex-row">
+                      {p.name || p.id}
+                      {p.locked && <HelmIcon name="lock" size={11} />}
                     </span>
-                  ) : (
-                    <span className="badge badge-neutral">已停用</span>
-                  )}
-                </span>
-              </button>
-            ))}
+                  </span>
+                  <span className="mono text-muted">{p.id}</span>
+                  <span>
+                    {p.enabled ? (
+                      <span className="badge badge-ok">
+                        <HelmIcon name="check" size={10} />
+                        已启用
+                      </span>
+                    ) : (
+                      <span className="badge badge-neutral">已停用</span>
+                    )}
+                  </span>
+                </button>
+              )
+            })}
           </div>
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="asset-modal-main">
             {!plugin && (
-              <div style={{ color: 'var(--fg-subtle)', fontSize: 12.5, padding: '24px 0', textAlign: 'center' }}>
+              <div className="empty-state">
                 选择左侧插件查看详情
               </div>
             )}
             {plugin && (
               <>
-                <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <section className="section-flat">
                   <div
                     className="plugin-card-header"
                     style={{
@@ -319,11 +314,9 @@ export function PluginSettingsModal({
                       <span style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
                         {plugin.name || plugin.id}
                       </span>
-                      <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', whiteSpace: 'nowrap' }}>
-                        {plugin.id}
-                      </span>
+                      <span className="mono text-muted nowrap">{plugin.id}</span>
                       {plugin.version && (
-                        <span className="badge badge-neutral" style={{ whiteSpace: 'nowrap' }}>
+                        <span className="badge badge-neutral nowrap">
                           v{plugin.version}
                         </span>
                       )}
@@ -353,7 +346,7 @@ export function PluginSettingsModal({
                       )}
                     </button>
                   </div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 11.5, color: 'var(--fg-muted)' }}>
+                  <div className="flex-row-wrap text-muted">
                     {plugin.hooks.length > 0 && (
                       <span className="badge badge-neutral">Hooks: {plugin.hooks.join(', ')}</span>
                     )}
@@ -373,11 +366,11 @@ export function PluginSettingsModal({
                   </div>
                 )}
 
-                <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <h4 style={{ margin: 0, fontSize: 12.5 }}>配置项</h4>
+                <section className="section-flat">
+                  <h4 className="section-flat-title">配置项</h4>
                   {/* 加载完成前不渲染表单：避免旧插件配置残留在新插件下可被保存。 */}
                   {loadingConfig ? (
-                    <div style={{ color: 'var(--fg-muted)', fontSize: 12.5, display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <div className="flex-row text-muted">
                       <HelmIcon name="loader" size={13} />
                       正在读取配置...
                     </div>
@@ -388,13 +381,13 @@ export function PluginSettingsModal({
                       onSaved={() => void reloadConfig(plugin.id)}
                     />
                   ) : (
-                    <div style={{ fontSize: 12, color: 'var(--fg-subtle)' }}>配置读取失败或未声明。</div>
+                    <div className="text-subtle">配置读取失败或未声明。</div>
                   )}
                 </section>
 
                 {settingsPanel && (
-                  <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <h4 style={{ margin: 0, fontSize: 12.5, display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                  <section className="section-flat">
+                    <h4 className="section-flat-title flex-row">
                       <HelmIcon name="sliders" size={13} />
                       {settingsPanel.spec.label || '插件面板'}
                     </h4>

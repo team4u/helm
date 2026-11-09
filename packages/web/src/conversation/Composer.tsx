@@ -178,18 +178,19 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
             跟随 Profile 默认（清除覆盖）
           </button>
           <div className="composer-model-search-bar" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input
-              className="input"
-              style={{ flex: 1, minWidth: 0 }}
-              aria-label="搜索模型"
-              placeholder="搜索模型…"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
+            <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
+              <HelmIcon name="search" size={13} />
+              <input
+                className="input"
+                aria-label="搜索模型"
+                placeholder="搜索模型…"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
             <button
               type="button"
-              className="btn btn-ghost btn-sm composer-model-refresh-btn"
-              style={{ width: 28, height: 28, padding: 0, flexShrink: 0 }}
+              className="btn btn-ghost btn-icon-sm composer-model-refresh-btn"
               disabled={refreshing}
               title="刷新动态模型目录"
               aria-label="刷新动态模型目录"
@@ -222,10 +223,11 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
                 思考档位
                 <span style={{ color: 'var(--fg-subtle)' }}>{shortName}</span>
               </div>
-              <div className="composer-thinking-row">
+              <div className="segmented-control composer-thinking-row">
                 <button
                   type="button"
-                  className={`btn btn-sm${conversation.thinkingLevelOverride ? '' : ' btn-primary'}`}
+                  className={`segmented-control-btn${conversation.thinkingLevelOverride ? '' : ' is-active'}`}
+                  aria-pressed={!conversation.thinkingLevelOverride}
                   disabled={pending}
                   title="跟随模型 / Profile 默认档位"
                   onClick={() => void pickThinking('')}
@@ -236,7 +238,8 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
                   <button
                     key={level}
                     type="button"
-                    className={`btn btn-sm${conversation.thinkingLevelOverride === level ? ' btn-primary' : ''}`}
+                    className={`segmented-control-btn${conversation.thinkingLevelOverride === level ? ' is-active' : ''}`}
+                    aria-pressed={conversation.thinkingLevelOverride === level}
                     disabled={pending}
                     onClick={() => void pickThinking(level)}
                   >
@@ -968,9 +971,9 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                   <span className="mono tabular-nums">{formatBytes(att.size)}</span>
                   <button
                     type="button"
-                    className="btn btn-ghost btn-sm"
-                    style={{ height: 16, padding: '0 3px' }}
+                    className="btn btn-ghost btn-icon-xs"
                     title="移除附件"
+                    aria-label={`移除附件 ${att.name}`}
                     onClick={() => setAttachments((prev) => {
                       const next = prev.filter((a) => a.artifactId !== att.artifactId)
                       syncLiveDraft(text, editingEntryId, next)

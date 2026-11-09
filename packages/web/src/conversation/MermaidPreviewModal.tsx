@@ -394,7 +394,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
   if (typeof document === 'undefined') return null
 
   return createPortal(
-    <div className="modal-backdrop modal-fullscreen-backdrop" style={{ zIndex: 120 }} onClick={onClose}>
+    <div className="modal-backdrop modal-fullscreen-backdrop" onClick={onClose}>
       <div className="modal modal-fullscreen" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header mermaid-modal-header">
           <span
@@ -483,12 +483,9 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
             <HelmIcon name="x" size={13} />
           </button>
         </div>
-        <div className="modal-body" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="modal-body modal-body-flush">
           {view === 'source' ? (
-            <pre
-              className="code-block-pre selectable"
-              style={{ padding: 14, height: '100%', overflow: 'auto', margin: 0 }}
-            >
+            <pre className="code-block-pre selectable mermaid-source-pre">
               <code>{code}</code>
             </pre>
           ) : (
@@ -496,18 +493,9 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
               ref={stageRef}
               className="mermaid-modal-stage"
               style={{
-                flex: 1,
-                width: '100%',
-                height: '100%',
-                minHeight: 0,
-                overflow: 'hidden',
-                position: 'relative',
                 cursor: isDragging ? 'grabbing' : 'grab',
                 background: 'var(--bg)',
                 touchAction: 'none',
-                userSelect: 'none',
-                WebkitUserSelect: 'none',
-                overscrollBehavior: 'none',
               }}
               onDoubleClick={onDoubleClick}
               onWheel={onWheel}
@@ -518,18 +506,6 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
                 className="mermaid-transform-plane"
                 style={{
                   transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${scale})`,
-                  transformOrigin: 'top center',
-                  position: 'absolute',
-                  left: 0,
-                  right: 0,
-                  top: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  paddingTop: 32,
-                  paddingBottom: 64,
-                  pointerEvents: 'none',
-                  touchAction: 'none',
                   willChange: isDragging ? 'transform' : 'auto',
                 }}
               >
@@ -539,16 +515,11 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
                     style={{
                       width: intrinsicSize ? `${intrinsicSize.width}px` : 'auto',
                       height: intrinsicSize ? `${intrinsicSize.height}px` : 'auto',
-                      maxWidth: 'none',
-                      pointerEvents: 'auto',
-                      touchAction: 'none',
-                      userSelect: 'none',
-                      WebkitUserSelect: 'none',
                     }}
                     dangerouslySetInnerHTML={{ __html: renderedSvg }}
                   />
                 ) : (
-                  <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
+                  <span className="mermaid-status-hint">
                     {error !== null ? `渲染失败：${error}` : '正在渲染…'}
                   </span>
                 )}
