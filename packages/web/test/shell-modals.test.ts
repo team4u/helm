@@ -34,7 +34,7 @@ import { resolveTargetString } from '../src/lib/types.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
-const { Sidebar, AgentStandingItem } = await import('../src/shell/Sidebar.js')
+const { Sidebar, AgentStandingItem, ConversationStatusDot } = await import('../src/shell/Sidebar.js')
 
 function conv(partial: Partial<ConversationSummary> & { id: number }): ConversationSummary {
   return {
@@ -776,5 +776,65 @@ test('批量模式下机器人行（agent-standing-row）绝对不得包含勾�
   assert.ok(html.includes('sidebar-batch-checkbox'), '会话行应渲染勾选框供批量管理')
   assert.ok(/#<!-- -->20|#20/.test(html), '会话行应包含具体会话 ID')
 })
+
+test('ConversationStatusDot 与 Sidebar 状态圆点渲染验证', { timeout: 60_000 }, () => {
+  // 1) idle 状态返回 null（空渲染）
+  const idleHtml = renderToString(e(ConversationStatusDot, { conv: conv({ id: 1, status: 'idle' }) }))
+  assert.equal(idleHtml, '')
+
+  // 2) working 状态渲染带 doing 提示的圆点
+  const workingHtml = renderToString(
+    e(ConversationStatusDot, { conv: conv({ id: 2, status: 'working', doing: '正在思考方案' }) }),
+  )
+  assert.ok(workingHtml.includes('class="status-dot status-dot-working"'))
+  assert.ok(workingHtml.includes('title="运行中: 正在思考方案"'))
+  assert.ok(workingHtml.includes('aria-label="运行中: 正在思考方案"'))
+  assert.ok(workingHtml.includes('role="status"'))
+
+  // 3) blocked 状态渲染待确认圆点
+  const blockedHtml = renderToString(
+    e(ConversationStatusDot, { conv: conv({ id: 3, status: 'blocked' }) }),
+  )
+  assert.ok(blockedHtml.includes('class="status-dot status-dot-blocked"'))
+  assert.ok(blockedHtml.includes('title="待确认"'))
+  assert.ok(blockedHtml.includes('role="status"'))
+
+  // 4) error 状态渲染异常圆点
+  const errorHtml = renderToString(
+    e(ConversationStatusDot, { conv: conv({ id: 4, status: 'error' }) }),
+  )
+  assert.ok(errorHtml.includes('class="status-dot status-dot-error"'))
+  assert.ok(errorHtml.includes('title="异常"'))
+
+  // 5) done 状态渲染已完成圆点
+  const doneHtml = renderToString(
+    e(ConversationStatusDot, { conv: conv({ id: 5, status: 'done' }) }),
+  )
+  assert.ok(doneHtml.includes('class="status-dot status-dot-done"'))
+  assert.ok(doneHtml.includes('title="已完成"'))
+
+  // 6) AgentStandingItem 单会话渲染状态圆点而非 badge
+  const store = makeTestStore()
+  const singleStanding: AgentStanding = {
+    profileId: 'coder',
+    label: '代码专家',
+    icon: 'code',
+    order: 0,
+    primaryConversation: conv({ id: 20, title: '代码重构', profileId: 'coder', status: 'working', doing: '重构中' }),
+    conversations: [conv({ id: 20, title: '代码重构', profileId: 'coder', status: 'working', doing: '重构中' })],
+    canCreateConversation: true,
+  }
+  const itemHtml = renderToString(
+    e(AgentStandingItem, {
+      agent: singleStanding,
+      store,
+      onCreate: () => {},
+    }),
+  )
+  assert.ok(itemHtml.includes('class="status-dot status-dot-working"'), '单会话 Agent 站位行应渲染状态圆点')
+  assert.ok(itemHtml.includes('title="运行中: 重构中"'), '单会话 Agent 站位行圆点应带 tooltip')
+  assert.ok(!itemHtml.includes('badge-accent'), '不应再渲染文字徽章样式 badge-accent')
+})
+
 
 

@@ -9,8 +9,8 @@ import { isSameResolvedTarget, resolveTargetString, type HelmStoreValue } from '
 import {
   AGENT_SUB_LIST_PREVIEW,
   buildAgentStandings,
-  conversationStatusBadgeClass,
-  conversationStatusLabel,
+  conversationStatusDotClass,
+  conversationStatusTooltip,
   extractSidebarViews,
   filterConversationsByTag,
   filterDeletableConversations,
@@ -57,12 +57,17 @@ function HoverIconButton({
   )
 }
 
-function StatusBadge({ conv }: { conv: ConversationSummary }) {
-  if (conv.status === 'idle') return null
+export function ConversationStatusDot({ conv }: { conv: ConversationSummary }) {
+  const dotClass = conversationStatusDotClass(conv.status)
+  if (!dotClass) return null
+  const tooltip = conversationStatusTooltip(conv.status, conv.doing)
   return (
-    <span className={conversationStatusBadgeClass(conv.status)} title={conv.doing ?? ''}>
-      {conv.status === 'working' && conv.doing ? conv.doing : conversationStatusLabel(conv.status)}
-    </span>
+    <span
+      className={dotClass}
+      title={tooltip}
+      aria-label={tooltip}
+      role="status"
+    />
   )
 }
 
@@ -337,7 +342,7 @@ export function AgentStandingItem({
         </button>
         <span className="nav-item-meta" onClick={(e) => e.stopPropagation()}>
           {!hasSubList && agent.primaryConversation && (
-            <StatusBadge conv={agent.primaryConversation} />
+            <ConversationStatusDot conv={agent.primaryConversation} />
           )}
           {!hasSubList && agent.primaryConversation?.nodeId && agent.primaryConversation.nodeId !== 'local' && (
             <RemoteNodeTag nodeId={agent.primaryConversation.nodeId} />
@@ -546,7 +551,7 @@ function AgentConversationRow({
       <span className="nav-item-meta">
         <span className="tabular-nums">#{conv.id}</span>
         {conv.nodeId && conv.nodeId !== 'local' && <RemoteNodeTag nodeId={conv.nodeId} />}
-        <StatusBadge conv={conv} />
+        <ConversationStatusDot conv={conv} />
         {!batchMode && (
           <span className="nav-item-row-actions">
             <span className="sidebar-split-action" style={{ display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
@@ -827,7 +832,7 @@ function ConversationRow({
       </button>
       <span className="nav-item-meta">
         <span className="tabular-nums">#{conv.id}</span>
-        <StatusBadge conv={conv} />
+        <ConversationStatusDot conv={conv} />
         <span className="sidebar-split-action" style={{ display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
           <HoverIconButton
             className="split-toggle-btn sidebar-split-btn"
