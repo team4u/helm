@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ArtifactMetadata, ComposerController, ConversationAttachmentRef, ConversationSummary, WhenBusy } from '@helm/protocol'
+import type { ArtifactMetadata, ConversationAttachmentRef, ConversationSummary, WhenBusy } from '@helm/protocol'
 import { assetsApi, conversationsApi } from '../lib/api.js'
+import {
+  buildSlashMenuItems,
+  commandActionPluginId,
+  insertAtCaret,
+  matchExactPluginSlash,
+  pluginSlashCommandsFor,
+  removeTokenBeforeCaret,
+  type QualifiedCommand,
+} from '../lib/commands-model.js'
 import { HelmIcon } from '../lib/icons.js'
 import { matchesUiScope } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
@@ -12,6 +21,7 @@ import { Select, type SelectOption } from '../ui/Select.js'
 import { Tabs, TabsList, TabsTrigger } from '../ui/Tabs.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { AskDock } from './AskDock.js'
+import { focusWithCaret, useComposerController } from './composer-controller.js'
 import {
   attachmentsOfEditTarget,
   busyEnterMode,
@@ -267,19 +277,24 @@ interface PopoverItem {
   id: string
   label: string
   hint?: string
-  apply: string
+  /** 回填草稿的触发词（插件命令改用 run 直接执行，不回填）。 */
+  apply?: string
+  /** 插件命令：选中即执行（不回填触发词到草稿）。 */
+  run?: () => void
 }
-
 function CommandPopover({
   kind,
   query,
   artifacts,
+  slashItems,
   onPick,
   onClose,
 }: {
   kind: 'slash' | 'artifact'
   query: string
   artifacts: ArtifactMetadata[]
+  /** 已合并好的斜杠菜单条目（含插件命令）；省略时回退宿主内置三源构建。 */
+  slashItems?: ReadonlyArray<PopoverItem>
   onPick: (apply: string, caretSuffix?: string) => void
   onClose: () => void
 }) {
@@ -289,6 +304,9 @@ function CommandPopover({
   const items = useMemo<PopoverItem[]>(() => {
     const q = query.toLowerCase()
     if (kind === 'slash') {
+      if (slashItems !== undefined) {
+        return slashItems.filter((i) => i.id.toLowerCase().includes(q) || i.label.toLowerCase().includes(q))
+      }
       const builtin: PopoverItem[] = [
         { id: '/new', label: '/new', hint: '重置上下文', apply: '/new' },
         { id: '/clear', label: '/clear', hint: '重置上下文', apply: '/clear' },
@@ -314,7 +332,7 @@ function CommandPopover({
         hint: `${a.mimeType} · ${formatBytes(a.size)}`,
         apply: `@${a.id} `,
       }))
-  }, [kind, query, artifacts, store.skills, store.plugins])
+  }, [kind, query, artifacts, slashItems, store.skills, store.plugins])
 
   useEffect(() => {
     setActive(0)
@@ -338,7 +356,10 @@ function CommandPopover({
       } else if (e.key === 'Enter') {
         e.preventDefault()
         const item = items[active]
-        if (item !== undefined) onPick(item.apply)
+        if (item !== undefined) {
+          if (item.run !== undefined) item.run()
+          else if (item.apply !== undefined) onPick(item.apply)
+        }
       } else if (e.key === 'Escape') {
         e.preventDefault()
         onClose()
@@ -370,7 +391,10 @@ function CommandPopover({
           type="button"
           className={`popover-item${idx === active ? ' popover-item-active' : ''}`}
           onMouseEnter={() => setActive(idx)}
-          onClick={() => onPick(item.apply)}
+          onClick={() => {
+            if (item.run !== undefined) item.run()
+            else if (item.apply !== undefined) onPick(item.apply)
+          }}
         >
           <span className="mono">{item.label}</span>
           {item.hint !== undefined ? <span className="popover-item-meta">{item.hint}</span> : null}
@@ -759,6 +783,61 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     })
   }
 
+  const slashPluginCommands = useMemo(
+    () => pluginSlashCommandsFor(store.groupedUi.commands, conversation),
+    [store.groupedUi.commands, conversation],
+  )
+
+  // 斜杠菜单三源合并：宿主内置命令 + 可见技能 + 满足作用域的插件命令。
+  const enabledPluginIds = useMemo(() => collectEnabledPluginIds(store.plugins), [store.plugins])
+  const [slashMenuItems, setSlashMenuItems] = useState<Array<{ id: string; label: string; hint?: string; apply?: string; run?: () => void }>>([])
+  const runPluginCommandRef = useRef<(cmd: QualifiedCommand) => void>((cmd) => runPluginCommandFromRef.current(cmd))
+  useEffect(() => {
+    setSlashMenuItems(
+      buildSlashMenuItems(
+        store.skills.filter((s) => isSkillVisible(s, enabledPluginIds)),
+        slashPluginCommands,
+        (cmd) => runPluginCommandRef.current(cmd),
+      ),
+    )
+  }, [store.skills, enabledPluginIds, slashPluginCommands])
+
+  // 从草稿提交命中插件命令：触发词已随草稿整体清空，无需再移除 token。
+  const runPluginCommandFromRef = useRef<(cmd: QualifiedCommand) => void>(() => {})
+  const runPluginCommandFrom = useCallback((cmd: QualifiedCommand): void => {
+    const actionId = cmd.spec.actionId
+    if (actionId === undefined) return
+    setPopover(null)
+    void store
+      .invokePluginAction(commandActionPluginId(cmd), actionId, cmd.spec.input, conversation.id)
+      .then(() => {
+        store.pushNotice({
+          type: 'notification',
+          level: 'info',
+          title: '命令已执行',
+          body: `${cmd.spec.slash !== undefined ? `/${cmd.spec.slash} · ` : ''}${cmd.spec.title}`,
+          conversationId: conversation.id,
+        })
+      })
+      .catch((err: unknown) => {
+        notifyError(`命令执行失败：/${cmd.spec.slash ?? cmd.spec.id}`, err)
+      })
+  }, [store, conversation.id, notifyError])
+  runPluginCommandFromRef.current = runPluginCommandFrom
+
+  // 浮层选中插件命令：移除光标前触发词后执行（失败保留剩余草稿并报错，不吞未知内容）。
+  const runPluginCommand = useCallback((cmd: QualifiedCommand): void => {
+    const el = textareaRef.current
+    if (el !== null) {
+      const caret = el.selectionStart ?? text.length
+      const { next, nextCaret } = removeTokenBeforeCaret(text, caret)
+      setText(next)
+      syncLiveDraft(next, editingEntryId, attachments)
+      focusWithCaret(el, nextCaret)
+    }
+    runPluginCommandFrom(cmd)
+  }, [text, editingEntryId, attachments, syncLiveDraft, textareaRef, runPluginCommandFrom])
+
   const runSlashCommand = (raw: string): boolean => {
     const cmd = raw.trim()
     if (cmd === '/new' || cmd === '/clear') {
@@ -782,7 +861,28 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     return false
   }
 
-  const send = async (busyMode: 'followUp' | 'steer' = 'steer'): Promise<void> => {
+  const setDraftState = useCallback((next: string): void => {
+    setText(next)
+    syncLiveDraft(next, editingEntryId, attachments)
+  }, [editingEntryId, attachments, syncLiveDraft])
+
+  const insertTextState = useCallback((fragment: string): void => {
+    const el = textareaRef.current
+    if (el === null) {
+      // 无 textarea（SSR/卸载间隙）：整体追加到草稿尾部，不静默丢弃。
+      const appended = text + fragment
+      setText(appended)
+      syncLiveDraft(appended, editingEntryId, attachments)
+      return
+    }
+    const caret = el.selectionStart ?? text.length
+    const { next, nextCaret } = insertAtCaret(text, caret, fragment)
+    setText(next)
+    syncLiveDraft(next, editingEntryId, attachments)
+    focusWithCaret(el, nextCaret)
+  }, [text, editingEntryId, attachments, syncLiveDraft, textareaRef])
+
+  const send = useCallback(async (busyMode: 'followUp' | 'steer' = 'steer'): Promise<void> => {
     const payload = text.trim()
     if (payload === '' || sendingRef.current || uploadingRef.current > 0) return
     // 未保存环境或环境保存中不允许发送（同时覆盖 Enter 与发送按钮）
@@ -796,9 +896,17 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
       })
       return
     }
+    // 插件斜杠命令：草稿首 token 精确命中满足作用域的插件命令时执行（仅非编辑态）。
+    const pluginCmd = matchExactPluginSlash(payload, slashPluginCommands)
+    const editing = editingEntryId !== null
+    if (!editing && pluginCmd !== undefined) {
+      setText('')
+      syncLiveDraft('', editingEntryId, attachments)
+      runPluginCommandFrom(pluginCmd)
+      return
+    }
     // 编辑态正文中出现 /new 等管理命令只是被编辑消息的文本，不立即执行；
     // 仅非编辑输入才作为会话管理命令立即执行。
-    const editing = editingEntryId !== null
     const slash = editing ? false : runSlashCommand(payload)
     if (slash) {
       setText('')
@@ -843,67 +951,55 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
       setSending(false)
       onSendingChange?.(false)
     }
-  }
+  }, [text, attachments, editingEntryId, working, runSlashCommand, syncLiveDraft, onSendingChange, notifyError, store, conversation.id, uploadingRef, envBlocker, runPluginCommandFrom, slashPluginCommands])
 
-  // ---------------------------------------------------------------------------
-  // ComposerController：转发给 composer.pill / composer.widget 插件槽位
-  // （经 slotProps.composer 与 PluginClientContext.composer 双通道）。
-  // ---------------------------------------------------------------------------
-  const composerRef = useRef<ComposerController | null>(null)
-  const draftRef = useRef({ text, attachments, sending })
-  draftRef.current = { text, attachments, sending }
-  const sendRef = useRef(send)
-  sendRef.current = send
-  if (composerRef.current === null) {
-    composerRef.current = {
-      get draft() {
-        return draftRef.current.text
-      },
-      get attachments() {
-        // 草稿附件是本地待发对象：暴露协议附件引用形状（id 以 artifactId 定位）
-        return draftRef.current.attachments.map((a) => ({ id: a.artifactId, name: a.name, mimeType: a.mimeType, size: a.size }))
-      },
-      get sending() {
-        return draftRef.current.sending
-      },
-      setDraft(next: string) {
-        setText(next)
-        syncLiveDraft(next, editingEntryId, draftRef.current.attachments)
-        requestAnimationFrame(() => textareaRef.current?.focus())
-      },
-      insertText(fragment: string) {
-        const el = textareaRef.current
-        if (el === null || !el.isConnected) {
-          setText((current) => current + fragment)
-          return
-        }
-        const start = el.selectionStart ?? el.value.length
-        const end = el.selectionEnd ?? start
-        const next = el.value.slice(0, start) + fragment + el.value.slice(end)
-        setText(next)
-        syncLiveDraft(next, editingEntryId, draftRef.current.attachments)
-        requestAnimationFrame(() => {
-          const caret = start + fragment.length
-          el.focus()
-          el.setSelectionRange(caret, caret)
-        })
-      },
-      async submit(textArg?: string, options?: { whenBusy?: WhenBusy }) {
-        if (textArg !== undefined) {
-          // 显式 text：直接提交，不消费原草稿
-          await conversationsApi.submitInput(conversation.id, {
-            text: textArg,
-            origin: 'human',
-            ...(options?.whenBusy !== undefined ? { whenBusy: options.whenBusy } : {}),
-          })
-          return
-        }
-        // 省略 text：提交当前草稿及附件；steer 与宿主回车默认一致
-        await sendRef.current(options?.whenBusy === 'followUp' ? 'followUp' : 'steer')
-      },
+  // 显式文本提交：不消费草稿 / 编辑锚点 / 附件（插件命令结果等非用户键入内容）。
+  // 与 send 共用 sendingRef 并发保护与 onSendingChange 在途反馈；失败如实 reject。
+  const sendExplicit = useCallback(async (raw: string, whenBusy?: WhenBusy): Promise<void> => {
+    const payload = raw.trim()
+    if (payload === '' || sendingRef.current || uploadingRef.current > 0) {
+      throw new Error('composer_send_invalid')
     }
-  }
-  const composerController = composerRef.current
+    if (envBlockedRef.current) {
+      store.pushNotice({
+        type: 'notification',
+        level: 'warning',
+        title: '请先保存或取消起始环境修改',
+        body: envBlocker.reason ?? undefined,
+        conversationId: conversation.id,
+      })
+      throw new Error('composer_env_blocked')
+    }
+    sendingRef.current = true
+    setSending(true)
+    onSendingChange?.(true)
+    try {
+      await conversationsApi.submitInput(conversation.id, {
+        text: payload,
+        origin: 'human',
+        ...(working ? { whenBusy: whenBusy ?? 'steer' } : {}),
+      })
+    } catch (err) {
+      notifyError('发送失败', err)
+      throw err
+    } finally {
+      sendingRef.current = false
+      setSending(false)
+      onSendingChange?.(false)
+    }
+  }, [working, onSendingChange, notifyError, store, conversation.id, uploadingRef, envBlocker])
+
+  const composer = useComposerController({
+    text,
+    attachments,
+    sending,
+    textareaRef,
+    setDraftState,
+    insertTextState,
+    // reject 策略属后端能力，宿主发送而没有 reject UI：折为默认 steer。
+    submitDraft: (whenBusy) => send(whenBusy === 'followUp' ? 'followUp' : 'steer'),
+    submitExplicitText: sendExplicit,
+  })
 
   const abortTurn = async (): Promise<void> => {
     try {
@@ -985,8 +1081,8 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                   spec={w.spec}
                   conversationId={conversation.id}
                   label={`挂件 ${w.spec.id}`}
-                  slotProps={{ conversation, composer: composerController }}
-                  composer={composerController}
+                  slotProps={{ conversation, composer }}
+                  composer={composer}
                 />
               </div>
             ))}
@@ -1075,6 +1171,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
               kind={popover}
               query={popoverQuery}
               artifacts={artifacts}
+              slashItems={slashMenuItems}
               onPick={applyPopover}
               onClose={() => setPopover(null)}
             />
@@ -1113,8 +1210,8 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                         spec={p.spec}
                         conversationId={conversation.id}
                         label={`胶囊 ${p.spec.id}`}
-                        slotProps={{ conversation, composer: composerController }}
-                        composer={composerController}
+                        slotProps={{ conversation, composer }}
+                        composer={composer}
                       />
                     </span>
                   ))}
@@ -1132,8 +1229,8 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                           spec={p.spec}
                           conversationId={conversation.id}
                           label={`胶囊 ${p.spec.id}`}
-                          slotProps={{ conversation, composer: composerController }}
-                          composer={composerController}
+                          slotProps={{ conversation, composer }}
+                          composer={composer}
                         />
                       </div>
                     ))}

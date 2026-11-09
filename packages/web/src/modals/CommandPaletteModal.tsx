@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SearchHit } from '@helm/protocol'
 import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { conversationsApi, searchApi } from '../lib/api.js'
+import { commandActionPluginId, commandHint, commandsForConversation } from '../lib/commands-model.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
@@ -169,19 +170,26 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     [store.groupedUi.commands],
   )
 
+  // ⌘K 面板打开在当前会话上下文：与输入框 '/' 补全同一份作用域过滤，保证同一命令行为一致。
+  const paletteConversation = useMemo(() => {
+    const target = store.primaryTarget
+    if (target.kind !== 'conversation') return undefined
+    return store.conversations.find((c) => c.id === target.conversationId)
+  }, [store.primaryTarget, store.conversations])
+
   const pluginCommands = useMemo<Array<PaletteRow>>(
     () =>
-      store.groupedUi.commands.map((cmd) => ({
+      commandsForConversation(store.groupedUi.commands, paletteConversation).map((cmd) => ({
         kind: 'command' as const,
         id: `plugin:${cmd.pluginId}/${cmd.spec.id}`,
         title: cmd.spec.title,
-        hint: cmd.spec.actionId ? `${cmd.pluginId} / ${cmd.spec.actionId}` : cmd.pluginId,
-        icon: 'zap',
+        hint: commandHint(cmd.spec, cmd.pluginId),
+        icon: cmd.spec.icon ?? 'zap',
         keywords: cmd.spec.keywords,
         run: () => {
           if (!cmd.spec.actionId) return
           void store
-            .invokePluginAction(cmd.pluginId, cmd.spec.actionId, cmd.spec.input)
+            .invokePluginAction(commandActionPluginId(cmd), cmd.spec.actionId, cmd.spec.input, paletteConversation?.id)
             .then(() =>
               store.pushNotice({
                 type: 'notification',
@@ -200,7 +208,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
             )
         },
       })),
-    [store],
+    [store, paletteConversation],
   )
 
   const conversationRows = useMemo<Array<PaletteRow>>(
