@@ -328,27 +328,30 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   // 唯一的地址栏写回 effect 执行，保证与既有导航共用同一套同步与判重路径。
   const pendingForcePush = useRef(false)
   const setScreenParams = useCallback((patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }) => {
+    const entries = Object.entries(patch).filter(([key, value]) => {
+      if (SCREEN_PARAM_KEY_PATTERN.test(key) && !isPrototypeParamKey(key) && (value === undefined || typeof value === 'string')) return true
+      pushNotice({ type: 'notification', level: 'warning', title: '已忽略非法 Screen 参数键', body: `参数 ${key} 必须使用合法键和字符串值` })
+      return false
+    })
+    const currentTarget = options?.split ? splitTarget : primaryTarget
+    if (entries.length === 0 || currentTarget?.kind !== 'screen') return
     if (options?.push) pendingForcePush.current = true
     const update = (current: ResolvedTarget): ResolvedTarget => {
       if (current.kind !== 'screen') return current
       const next: Record<string, string> = { ...(current.params ?? {}) }
-      for (const [rawKey, rawValue] of Object.entries(patch)) {
-        if (!SCREEN_PARAM_KEY_PATTERN.test(rawKey) || isPrototypeParamKey(rawKey)) {
-          // 边界处拒绝非法键：显式告警而非静默丢弃，防止筛选器状态假象。
-          pushNotice({ type: 'notification', level: 'warning', title: '已忽略非法 Screen 参数键', body: `参数键 ${rawKey} 仅允许字母、数字、点、下划线与连字符` })
-          continue
-        }
+      for (const [rawKey, rawValue] of entries) {
         if (rawValue === undefined) delete next[rawKey]
         else if (rawValue !== '') next[rawKey] = rawValue
       }
       const params = Object.keys(next).length === 0 ? undefined : next
-      return params === undefined
+      const target: ResolvedTarget = params === undefined
         ? { kind: 'screen', pluginId: current.pluginId, screenId: current.screenId }
         : { kind: 'screen', pluginId: current.pluginId, screenId: current.screenId, params }
+      return target
     }
     if (options?.split) setSplitTarget((current) => (current === null ? current : update(current)))
     else setPrimaryTarget(update)
-  }, [pushNotice])
+  }, [pushNotice, primaryTarget, splitTarget])
   const invokePluginAction = useCallback(async (pluginId: string, actionId: string, input: unknown, conversationId?: number) => pluginsApi.invokeAction(pluginId, actionId, input, conversationId), [])
 
   const getPluginSessionDoc = useCallback(async (pluginId: string, docName: string, conversationId: number): Promise<unknown> => {

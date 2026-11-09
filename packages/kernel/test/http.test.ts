@@ -826,6 +826,19 @@ test('profiles 托管保护：managedByPlugin 拒绝删除与篡改，POST 不�
   })
   assert.equal(post.status, 403)
   assert.equal(post.body.error.code, 'profile_managed_by_plugin')
+
+  const overwrite = await call(handler, 'POST', '/api/profiles', {
+    body: { id: 'hub-managed', name: '覆盖并移除托管' },
+  })
+  assert.equal(overwrite.status, 403, 'POST 不得绕过 PUT 的托管保护')
+  assert.equal((await profiles.get('hub-managed'))?.managedByPlugin, 'builtin:superagent')
+
+  await profiles.save({ id: 'ordinary', name: '普通配置' })
+  const inject = await call(handler, 'PUT', '/api/profiles/ordinary', {
+    body: { name: '伪造受管配置', managedByPlugin: 'builtin:superagent' },
+  })
+  assert.equal(inject.status, 403, 'PUT 不得给普通配置伪造托管身份')
+  assert.equal((await profiles.get('ordinary'))?.managedByPlugin, undefined)
 })
 
 test('profiles DELETE 默认 assistant 受保护（被根会话绑定或内核默认保护，不可经 HTTP 删除）', { timeout: 60_000 }, async () => {

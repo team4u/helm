@@ -348,6 +348,10 @@ async function route(
             { profileId: profile.id },
           )
         }
+        const existing = await kernel.profiles.get(profile.id)
+        if (existing?.managedByPlugin !== undefined) {
+          throw new HelmError('profile_managed_by_plugin', `不可覆盖插件托管的 profile ${profile.id}`, 403)
+        }
         const saved = await kernel.profiles.save(profile)
         await kernel.alignProfileConversations?.(saved.id)
         return jsonOk(redactor, await enrichProfile(saved), { status: 201 })
@@ -374,10 +378,10 @@ async function route(
         if (existing === undefined) {
           throw new HelmError('not_found', `profile 不存在: ${profileId}`, 404)
         }
-        if (existing.managedByPlugin !== undefined && profile.managedByPlugin !== existing.managedByPlugin) {
+        if (profile.managedByPlugin !== existing.managedByPlugin) {
           throw new HelmError(
             'profile_managed_by_plugin',
-            `profile ${profileId} 由插件 ${existing.managedByPlugin} 托管，托管元数据不可经 HTTP 修改或移除`,
+            `profile ${profileId} 的托管元数据只能由插件声明，不可经 HTTP 设置、修改或移除`,
             403,
             { profileId, managedByPlugin: existing.managedByPlugin },
           )
