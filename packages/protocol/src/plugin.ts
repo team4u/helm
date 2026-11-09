@@ -18,8 +18,8 @@ import type {
   TurnSettledPayload,
   WhenBusy,
 } from './conversation.js'
-import type { WorkflowRunSummary } from './workflow.js'
 import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
+import type { WorktreeCleanupRequest, WorktreeCleanupResult } from './worktree.js'
 
 /** JSON Schema 对象；由宿主在边界处统一校验。 */
 export type JsonSchema = Record<string, unknown>
@@ -267,6 +267,19 @@ export interface PluginActionContext {
   signal?: AbortSignal
 }
 
+export interface PluginActionCliPositionalSpec {
+  /** 位置参数写入的 input 字段名。 */
+  field: string
+  /** 是否必填。 */
+  required?: boolean
+  /**
+   * 若该位置参数在 CLI 本地对应一个存在的文件（或以 ./ ../ / 开头），
+   * 自动读取本地文件 UTF-8 文本写入此目标字段（例如 run <file.js> 写入 script），
+   * 否则将位置参数字符串写入 field。
+   */
+  readFileInto?: string
+}
+
 export interface PluginActionCliSpec {
   /** 顶层命令路径；缺省为 [去掉 builtin: 的 pluginId, actionId]。 */
   command?: string[]
@@ -274,6 +287,10 @@ export interface PluginActionCliSpec {
   description?: string
   /** true 时不出现在顶层 `helm <plugin> <action>` 命令中。 */
   hidden?: boolean
+  /** 位置参数映射列表（按顺序消费 CLI 位置参数）。 */
+  positional?: PluginActionCliPositionalSpec[]
+  /** 覆盖 CLI 请求默认超时（毫秒；0 表示无超时，供长耗时动作如 workflow run 使用）。 */
+  timeoutMs?: number
 }
 
 export interface PluginActionSpec<TIn, TOut> {
@@ -294,6 +311,8 @@ export interface PluginActionSpec<TIn, TOut> {
 /** ctx.tool：模型专用工具。 */
 export interface PluginToolContext {
   conversationId: number
+  /** 当前工具调用 ID（供子会话/工作流绑定 parentToolCallId）。 */
+  callId?: string
   signal?: AbortSignal
 }
 
@@ -301,6 +320,8 @@ export interface PluginToolSpec<TIn = Record<string, unknown>> {
   name: string
   description: string
   inputSchema: JsonSchema
+  /** 可选的结构化输出 Schema（声明后支持返回 { output, structuredOutput, isError }）。 */
+  structuredOutputSchema?: JsonSchema
   /** 会话作用域：工具可见性与 executeTool 的双重过滤条件。 */
   scope?: ConversationScope
   execute(input: TIn, context: PluginToolContext): MaybePromise<unknown>
@@ -335,6 +356,8 @@ export interface PluginServiceSpec {
   stop(): MaybePromise<void>
   /** 返回仍需本服务保活的任务标签；宿主在停用/卸载前同步检查。 */
   liveTasks?(): string[]
+  /** 返回本服务当前正在占用的工作树路径（供宿主 WorktreeAllocator 拒绝清理在途工作树）。 */
+  liveWorktrees?(): Array<{ nodeId: string; path: string }>
 }
 
 /** Web Standard 原始路由（Request/Response 为 DOM lib 类型）。 */
@@ -400,6 +423,8 @@ export interface HelmHostApi {
       origin?: InputOrigin
       whenBusy?: WhenBusy
       meta?: Record<string, unknown>
+      /** 跨重启幂等提交标识（重复提交同一 requestId 自动跳过）。 */
+      requestId?: string
       /** 从指定历史条目起原地覆盖重发（截断该条及后续上下文后写入新输入）。 */
       replaceFromEntryId?: number
     },
@@ -410,6 +435,8 @@ export interface HelmHostApi {
   getConversation(id: number): ConversationSummary
   /** 部分更新会话；返回更新后的摘要。 */
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
+  /** 中止指定会话的在途执行。 */
+  abortConversation(id: number): Promise<void>
   /**
    * 声明插件对本会话的管理权（如 superagent 的 router/watchdog 会话）：
    * 受管期间会话删除保护（409 conversation_managed_by_plugin），
@@ -418,6 +445,32 @@ export interface HelmHostApi {
   manageConversation(id: number): () => void
   /** 标记会话归属权；'human' 会话严禁自动按键/中止（Watchdog 红线）。 */
   markConversationOwnership(id: number, owner: 'helm' | 'bot' | 'human'): void
+  /** 派生或续接子代理（经过 agent_spawn Hook 管道 + 原生子会话底座）。 */
+  spawnAgent(request: AgentSpawnRequest): Promise<unknown>
+  /** 在目标节点/会话工作目录执行验证门禁命令。 */
+  runGate(
+    command: string,
+    options?: {
+      cwd?: string
+      conversationId?: number
+      nodeId?: string
+      signal?: AbortSignal
+      env?: Record<string, string>
+    },
+  ): Promise<{ ok: boolean; output: string }>
+  /** 重启恢复前持久标记中断的子会话任务取消（必须在调度器恢复前调用）。 */
+  prepareInterruptedConversations(ids: number[]): Promise<void>
+  /** 清理受管 Git 工作树。 */
+  cleanupWorktree(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult>
+  /** 调用任意已启用插件的动作（输出已经过 JSON 校验与脱敏）。 */
+  invokeAction(
+    pluginId: string,
+    actionId: string,
+    input: unknown,
+    context?: PluginActionContext,
+  ): Promise<unknown>
+  /** 列出当前全部已启用插件的动作清单。 */
+  listActions(): ActionManifest[]
   /**
    * 创建 AskDoc 并等待终态：正常三态（answered/cancelled/superseded）均 resolve，
    * 只有验证/I/O/宿主失败才 reject。secret 字段答案为 stash 引用。
@@ -426,8 +479,8 @@ export interface HelmHostApi {
   cancelAsk(askId: string, reason?: 'cancelled' | 'superseded'): Promise<void>
   /** 注册 askId -> 当前 stateChangeSeq 解析器（AskDoc CAS 乐观锁用，可为异步——真实水位需远端 IO）；返回注销函数。 */
   registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void
-  /** 监听工作流 run 终态（completed/failed/aborted，每 run 恰好一次）；插件停用时自动解除。 */
-  onWorkflowSettled(listener: (run: WorkflowRunSummary) => MaybePromise<void>): () => void
+  /** 订阅宿主通用事件（如 'workflow.settled'）；插件停用时自动解除。 */
+  onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void
   emitEvent(type: string, payload: unknown): void
 }
 

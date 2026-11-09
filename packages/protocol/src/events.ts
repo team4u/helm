@@ -8,7 +8,6 @@ import type { ConversationEntry, ConversationLive, ConversationSummary } from '.
 import type { NodeInfo } from './env-rpc.js'
 import type { PluginSummary, PublicPluginDoc } from './plugin.js'
 import type { PluginUiContribution } from './ui.js'
-import type { WorkflowRunSummary } from './workflow.js'
 
 /** SSE 全局事件序号（水位线）。 */
 export type HelmEventSeq = number
@@ -22,8 +21,8 @@ export interface HelmSnapshot {
   plugins: PluginSummary[]
   /** 启用插件的公共 UI 贡献（全部扩展点）。 */
   ui: PluginUiContribution[]
-  /** 已知工作流 run 摘要（含运行中与终态）。 */
-  workflowRuns: WorkflowRunSummary[]
+  /** 已启用插件的公共文档快照（首帧直投，免额外拉取）。 */
+  pluginDocs?: PublicPluginDoc[]
   /** 活跃会话实时视图（working/blocked run 或仍有 queued 输入；重连首帧恢复时间线尾部胶囊）。 */
   conversationLives?: ConversationLive[]
   /** 已知计算节点列表（含 local 与 BYOM 节点）。 */
@@ -41,7 +40,6 @@ export type HelmEventType =
   | 'plugin.changed'
   | 'plugin.doc.updated'
   | 'models.changed'
-  | 'workflow.updated'
   | 'node.changed'
   | 'notification'
 
@@ -100,12 +98,6 @@ export interface ModelsChangedEvent {
   payload: { providers: string[] }
 }
 
-/** 工作流 run 状态/节点更新（含终态）。 */
-export interface WorkflowUpdatedEvent {
-  type: 'workflow.updated'
-  run: WorkflowRunSummary
-}
-
 /** 计算节点状态变更（上线/离线/注册/移除）。 */
 export interface NodeChangedEvent {
   type: 'node.changed'
@@ -144,7 +136,6 @@ export type HelmEvent =
   | PluginChangedEvent
   | PluginDocUpdatedEvent
   | ModelsChangedEvent
-  | WorkflowUpdatedEvent
   | NodeChangedEvent
   | NotificationEvent
   | CustomHelmEvent

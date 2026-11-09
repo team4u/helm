@@ -159,3 +159,21 @@ export type WorkflowJournalEntry =
       result?: unknown
       error?: string
     }
+
+/** 内置编排插件 ID 与公共运行态文档名。 */
+export const WORKFLOW_PLUGIN_ID = 'builtin:workflow' as const
+export const WORKFLOW_RUNS_DOC = 'runs' as const
+
+export interface WorkflowConversationBadgeSummary {
+  count: number
+  tone?: 'warn' | 'accent' | 'neutral'
+  footerText?: string
+}
+
+/** `builtin:workflow` 插件公开文档 `runs` 的结构化快照。 */
+export interface WorkflowRunsDocState {
+  runs: WorkflowRunSummary[]
+  /** 按会话 ID 聚合的工作台角标与底部状态文案（供 WorkbenchPanelSpec.badge 消费）。 */
+  byConversation?: Record<string, WorkflowConversationBadgeSummary>
+}
+

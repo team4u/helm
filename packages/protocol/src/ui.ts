@@ -70,6 +70,11 @@ export interface TimelineRendererSpec extends UiSpecBase {
 // 4. tool.view（按 toolName 接管工具调用内联卡片）
 export interface ToolViewSpec extends UiSpecBase {
   toolNames: string[]
+  /**
+   * true 时完全替换外层默认 .trace-row 工具行（由插件组件自行渲染胶囊横条与内嵌详情），
+   * 避免出现上下双横条。
+   */
+  replaceRow?: boolean
 }
 
 // 5. composer.pill & composer.widget
@@ -81,10 +86,26 @@ export interface ComposerPillSpec extends UiSpecBase {
 export interface ComposerWidgetSpec extends UiSpecBase {}
 
 // 6. workbench.panel（会话感知右栏抽屉面板）
+export interface WorkbenchPanelBadgeSpec {
+  /** 订阅的本插件 public doc 名称。 */
+  doc: string
+  /** 全局数字计数字段名（读取 docValue[countField]）。 */
+  countField?: string
+  /** 全局角标色调字段名（读取 docValue[toneField]，值：'warn' | 'accent' | 'neutral'）。 */
+  toneField?: string
+  /**
+   * 按会话 ID 索引的统计映射字段名（读取 docValue[byConversationField][String(conversationId)]，
+   * 形状为 { count: number; tone?: 'warn' | 'accent' | 'neutral'; footerText?: string }）。
+   */
+  byConversationField?: string
+}
+
 export interface WorkbenchPanelSpec extends UiSpecBase {
   label: string
   icon?: string
   order?: number
+  /** 动态角标与状态栏配置（驱动工作台抽屉页签计数、底部摘要与顶栏「工作台」按钮汇总角标）。 */
+  badge?: WorkbenchPanelBadgeSpec
 }
 
 // 7. commandPalette (⌘K) & settings.panel
@@ -131,6 +152,16 @@ export interface TimelineRendererProps {
   conversationId: number
 }
 
+/** 同会话内全部工具调用的轻量摘要（供插件组件自行去重，如同子会话多次 resume 折叠）。 */
+export interface ToolViewSiblingCall {
+  callId: string
+  toolName: string
+  input?: unknown
+  status: 'running' | 'done' | 'error'
+  result?: unknown
+  structuredOutput?: unknown
+}
+
 /** tool.view：工具调用过程与结果的可序列化数据。 */
 export interface ToolViewProps {
   callId: string
@@ -138,7 +169,14 @@ export interface ToolViewProps {
   input?: unknown
   status: 'running' | 'done' | 'error'
   result?: unknown
+  structuredOutput?: unknown
+  isError?: boolean
+  startedAt?: number
+  durationMs?: number
+  artifactRef?: string
   conversationId: number
+  /** 当前已加载时间线内的全部工具调用（按时间顺序），供插件自行计算折叠/续接关系。 */
+  siblingCalls?: ReadonlyArray<ToolViewSiblingCall>
 }
 
 /** composer.pill / composer.widget：输入区扩展。 */
@@ -179,6 +217,14 @@ export interface PluginClientContext {
   openScreen(target: string): void
   /** 在右侧分屏打开目标。 */
   openSplitScreen(target: string): void
+  /** 打开产物预览弹窗。 */
+  openArtifact(artifactId: string): void
+  /** 打开工作台抽屉（可指定激活面板 ID）。 */
+  openWorkbench(panelId?: string): void
+  /** 关闭工作台抽屉。 */
+  closeWorkbench(): void
+  /** 发送全局通知提示。 */
+  notify(message: string, tone?: 'info' | 'warning' | 'error'): void
   /** 读取本插件公共文档当前值（一次性 Promise；订阅式更新用 usePluginDoc 共享 hook）。 */
   getPluginDoc(docName: string): Promise<unknown>
   /** 当前会话 ID（无会话上下文的槽位为 undefined，如部分 settings.panel）。 */
