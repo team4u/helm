@@ -231,9 +231,9 @@ test('ProfileEditorModal：受保护 Profile 带锁展示、死 DOM 清理、Tag
     'utf-8',
   )
 
-  // 1. 内置受保护 profile（assistant, superagent, watchdog）
-  assert.match(profileEditorSource, /BUILTIN_PROTECTED_PROFILES = new Set\(\['assistant', 'superagent', 'watchdog'\]\)/)
-  assert.match(profileEditorSource, /BUILTIN_PROTECTED_PROFILES\.has\(profile\.id\)\s*&&\s*<HelmIcon name="lock"/)
+  // 托管保护由插件元数据驱动，不依赖内置 Profile 名单。
+  assert.doesNotMatch(profileEditorSource, /BUILTIN_PROTECTED_PROFILES|DEFAULT_PROFILE_ID/)
+  assert.match(profileEditorSource, /profile\.managedByPlugin !== undefined\s*&&\s*<HelmIcon name="lock"/)
 
   // 2. 死 DOM 清理
   assert.doesNotMatch(profileEditorSource, /<datalist id="helm-known-nodes">/)
