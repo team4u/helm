@@ -4,17 +4,51 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationEntry, ConversationLive, WorkflowRunSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive } from '@helm/protocol'
 import { conversationsApi, ApiClientError } from '../src/lib/api.js'
-import {
-  buildSubagentStreamLines,
-  collectLatestSubagentToolKeys,
-  resolveSubagentConversationId,
-  resolveSubagentExecutionMeta,
-  resolveWorkflowRunForTool,
-} from '../src/conversation/subagent-model.js'
+// subagent/workflow 纯逻辑已迁入 builtin:workflow 插件 client 模块（kernel 真实
+// esbuild 编译后动态 import；react 等 shim 在编译前挂载，类型经 helpers 断言）。
+import { importWorkflowModels, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
+mountSharedPluginNamespaces()
+const workflowModels = await importWorkflowModels()
+const buildSubagentStreamLines = workflowModels.buildSubagentStreamLines
+const resolveSubagentConversationIdImpl = workflowModels.resolveSubagentConversationId
+const resolveSubagentExecutionMetaImpl = workflowModels.resolveSubagentExecutionMeta
+const resolveWorkflowRunForToolImpl = workflowModels.resolveWorkflowRunForTool
+
+// ToolTrace -> 插件入参适配（resultText -> result）：宿主时间线模型与插件
+// ToolViewProps 的字段命名差异在此对齐，保持既有测试语义不变。
+function toWorkflowToolInput(tool: ToolTrace): { callId: string | undefined; input: unknown; result?: unknown } {
+  return {
+    callId: tool.callId,
+    ...(tool.input !== undefined || true ? { input: tool.input } : {}),
+    ...(tool.resultText !== undefined ? { result: tool.resultText } : {}),
+  }
+}
+function resolveSubagentConversationId(
+  tool: ToolTrace,
+  parentConversationId: number,
+  conversations: ReadonlyArray<Pick<import('@helm/protocol').ConversationSummary, 'id' | 'parentConversationId' | 'parentToolCallId'>>,
+): number | undefined {
+  return resolveSubagentConversationIdImpl(toWorkflowToolInput(tool), parentConversationId, conversations)
+}
+function resolveWorkflowRunForTool(
+  tool: ToolTrace,
+  parentConversationId: number,
+  workflowRuns: ReadonlyArray<import('@helm/protocol').WorkflowRunSummary>,
+): import('@helm/protocol').WorkflowRunSummary | undefined {
+  return resolveWorkflowRunForToolImpl(toWorkflowToolInput(tool), parentConversationId, workflowRuns)
+}
+function resolveSubagentExecutionMeta(
+  tool: ToolTrace,
+  parentConversationId: number,
+  workflowRuns: ReadonlyArray<import('@helm/protocol').WorkflowRunSummary>,
+) {
+  return resolveSubagentExecutionMetaImpl(toWorkflowToolInput(tool), parentConversationId, workflowRuns)
+}
 import {
   buildTimelineItems,
+  collectSiblingCalls,
   detectArtifactRef,
   filterRewoundEntries,
   findToolView,
@@ -180,8 +214,11 @@ test('连续常规步骤收拢为 step-group；出错工具保留在组内，too
   assert.ok(turn.segments.some((s) => s.kind === 'text' && s.text === '结论'))
 })
 
-test('isFoldableStep：tool.view 命中与 subagent/SubagentWorkflow 永不折叠', { timeout: 60_000 }, () => {
-  const toolViews = [{ pluginId: 'builtin:superagent', spec: { id: 'v', toolNames: ['dispatch_worker'] } }]
+test('isFoldableStep：仅 tool.view 命中豁免折叠（subagent/SubagentWorkflow 由 builtin:workflow 注册 tool.view 接管）', { timeout: 60_000 }, () => {
+  const toolViews = [
+    { pluginId: 'builtin:superagent', spec: { id: 'v', toolNames: ['dispatch_worker'] } },
+    { pluginId: 'builtin:workflow', spec: { id: 'subagent', toolNames: ['subagent', 'SubagentWorkflow'] } },
+  ]
   const items = buildTimelineItems(
     [
       assistantEntry('1', [
@@ -200,10 +237,19 @@ test('isFoldableStep：tool.view 命中与 subagent/SubagentWorkflow 永不折�
   const traces = collectToolTraces(items)
   assert.equal(traces.length, 4)
   assert.equal(traces[0]!.toolView?.pluginId, 'builtin:superagent')
+  assert.equal(traces[1]!.toolView?.pluginId, 'builtin:workflow')
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[0]! }), false)
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[1]! }), false)
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[2]! }), false)
   assert.equal(isFoldableStep({ kind: 'tool', tool: traces[3]! }), true)
+  // 未注册 tool.view 的 subagent 工具（如插件停用）与普通工具一样可折叠：零工具名硬编码。
+  const plain = buildTimelineItems(
+    [assistantEntry('1', [toolCallBlock('cx', 'subagent', { prompt: 'p' })])],
+    {},
+  )
+  const plainTraces = collectToolTraces(plain)
+  assert.equal(plainTraces[0]!.toolView, undefined)
+  assert.equal(isFoldableStep({ kind: 'tool', tool: plainTraces[0]! }), true)
   // 命中 tool.view 与业务工具的行独立露出；唯一的普通工具 c4 从第一步起进入分组。
   const turn = items.find((i) => i.kind === 'assistant')!
   assert.ok(turn.kind === 'assistant')
@@ -785,10 +831,11 @@ test('resolveSubagentConversationId：运行期经 parentToolCallId 命中，完
   }
   // 正文伪造值不存在（99 不在列表）时回退 callId 精确命中 11，而非误挂 99
   assert.equal(resolveSubagentConversationId(fakeBody, 1, conversations), 11)
-  // 非 subagent 工具不命中
+  // 插件化后不再硬编码工具名：非 subagent 工具不进 SubagentToolView（宿主按
+  // tool.view 匹配路由），纯数据函数对同形入参行为一致（callId 关联仍命中）。
   assert.equal(
     resolveSubagentConversationId({ ...running, toolName: 'bash' }, 1, conversations),
-    undefined,
+    11,
   )
 })
 
@@ -889,7 +936,7 @@ test('resolveSubagentConversationId：resume 支持正整数 number 入参（saf
   )
 })
 
-test('collectLatestSubagentToolKeys：同一子会话多次 resume 仅记最后一次 tool.key，其他子会话互不干扰', { timeout: 60_000 }, () => {
+test('collectSiblingCalls：收集全部工具调用轻量摘要（callId 顺序 / 状态归一 / 结果透传）', { timeout: 60_000 }, () => {
   const conversations = [convSummary(42, 1), convSummary(43, 1)]
   // 子会话 #42：首次派生（footer 携带 conversationId=42）+ 两次 resume（resume=42）
   // 子会话 #43：一次独立派生
@@ -909,27 +956,33 @@ test('collectLatestSubagentToolKeys：同一子会话多次 resume 仅记最后�
     toolResultEntry('10', 'call_3', 'subagent', { text: '第三轮完成\n[subagent conversationId=42]' }),
     toolResultEntry('11', 'call_4', 'subagent', { text: '新会话完成\n[subagent conversationId=43]' }),
   ])
-  const latest = collectLatestSubagentToolKeys(items, 1, conversations)
-  assert.equal(latest.size, 2)
-  assert.equal(latest.get(42), 'tool:call_3', '#42 仅记最后一次（resume string 形态的 call_3）')
-  assert.equal(latest.get(43), 'tool:call_4', '#43 记自身唯一一次 call_4')
-  // 首次调用 call_1 与第一次 resume call_2 均被覆盖：不再挂载实时卡
-  assert.notEqual(latest.get(42), 'tool:call_1')
-  assert.notEqual(latest.get(42), 'tool:call_2')
+  const calls = collectSiblingCalls(items)
+  // 4 次 subagent 调用全部收集（折叠去重由插件组件按 siblingCalls 自行计算）
+  assert.equal(calls.length, 4)
+  assert.deepEqual(calls.map((c) => c.callId), ['call_1', 'call_2', 'call_3', 'call_4'])
+  assert.ok(calls.every((c) => c.toolName === 'subagent'))
+  assert.ok(calls.every((c) => c.status === 'done'))
+  // 结果文本透传（footer 元数据行原样保留，供插件组件解析子会话关联）
+  assert.match(String(calls[0]!.result), /conversationId=42/)
+  assert.match(String(calls[2]!.result), /conversationId=42/)
+  assert.match(String(calls[3]!.result), /conversationId=43/)
+  // 入参透传（resume 形态保持原始类型：number 与 string）
+  assert.deepEqual(calls[1]!.input, { prompt: '继续', resume: 42 })
+  assert.deepEqual(calls[2]!.input, { prompt: '再继续', resume: '42' })
 })
 
-test('collectLatestSubagentToolKeys：跨父会话与无关联工具不产生条目', { timeout: 60_000 }, () => {
-  const conversations = [convSummary(51, 1), convSummary(52, 2)]
+test('collectSiblingCalls：无 callId 的调用跳过，step-group 内工具同样收集', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
     assistantEntry('1', [
-      toolCallBlock('c-bash', 'bash', { command: 'ls' }),
-      toolCallBlock('c-cross', 'subagent', { prompt: '跨会话续接', resume: 52 }),
+      toolCallBlock('c-fold-1', 'bash', { command: 'ls' }),
+      toolCallBlock('c-fold-2', 'read', { file_path: '/x' }),
     ]),
-    toolResultEntry('2', 'c-bash', 'bash', { text: 'ok' }),
-    toolResultEntry('3', 'c-cross', 'subagent', { text: '完成' }),
+    toolResultEntry('2', 'c-fold-1', 'bash', { text: 'ok' }),
+    toolResultEntry('3', 'c-fold-2', 'read', { text: '内容' }),
   ])
-  const latest = collectLatestSubagentToolKeys(items, 1, conversations)
-  assert.equal(latest.size, 0, '非 subagent 工具与跨父会话 resume 均不命中')
+  // 连续常规工具折叠进 step-group，但 siblingCalls 仍按时间序完整收集
+  const calls = collectSiblingCalls(items)
+  assert.deepEqual(calls.map((c) => c.callId), ['c-fold-1', 'c-fold-2'])
 })
 
 test('resolveWorkflowRunForTool：运行期按 parentToolCallId 精确命中（不猜最新），完成后结果 id 全等双保险', { timeout: 60_000 }, () => {
@@ -1006,8 +1059,9 @@ test('resolveWorkflowRunForTool：运行期按 parentToolCallId 精确命中（�
   const noCallId: ToolTrace = { ...running, callId: undefined }
   assert.equal(resolveWorkflowRunForTool(noCallId, 1, dualRunning), undefined)
 
-  // --- 非 SubagentWorkflow 工具不命中 ---
-  assert.equal(resolveWorkflowRunForTool({ ...running, toolName: 'bash' }, 1, dualRunning), undefined)
+  // 插件化后不再硬编码工具名：非 SubagentWorkflow 工具不进 WorkflowToolView
+  //（宿主按 tool.view 匹配路由），纯数据函数对同形入参行为一致。
+  assert.equal(resolveWorkflowRunForTool({ ...running, toolName: 'bash' }, 1, dualRunning)?.id, 'run-a')
 })
 
 test('buildSubagentStreamLines：剥离 structured_output_contract 样板并展开 step-group', { timeout: 60_000 }, () => {
@@ -1145,8 +1199,9 @@ test('resolveSubagentExecutionMeta：parentToolCallId + 同父会话精确关联
   assert.deepEqual(meta.worktree, { path: '/wt/link', branch: 'helm/bg-link' })
   // 跨父会话拒绝：同 callId 的 run 属其他会话不命中（不串卡片）
   assert.deepEqual(resolveSubagentExecutionMeta(tool, 2, [run]), {})
-  // 非 subagent 工具不命中
-  assert.deepEqual(resolveSubagentExecutionMeta({ ...tool, toolName: 'bash' }, 1, [run]), {})
+  // 插件化后不再硬编码工具名：非 subagent 工具不进 SubagentToolView（宿主按
+  // tool.view 匹配路由），纯数据函数对同形入参行为一致。
+  assert.equal(resolveSubagentExecutionMeta({ ...tool, toolName: 'bash' }, 1, [run]).run?.id, 'wf_link')
 })
 
 test('resolveSubagentExecutionMeta：后台 JSON 信封 runId 同会话全等匹配，execution 元数据与含空格路径还原', { timeout: 60_000 }, () => {

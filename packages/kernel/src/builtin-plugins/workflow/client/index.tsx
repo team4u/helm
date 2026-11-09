@@ -1,20 +1,970 @@
 /**
- * builtin:workflow 前端组件占位模块。
+ * builtin:workflow 插件 client.tsx 组件（只导出组件，保 Fast Refresh 契约）：
+ * - SubagentToolView：时间线内 subagent 工具调用的双层胶囊实时卡
+ *   （多次 resume 折叠：仅同目标最后一次调用挂载实时流）；
+ * - WorkflowToolView：时间线内 SubagentWorkflow 工具调用的工作流运行卡；
+ * - WorkflowWorkbenchPanel：工作台面板（当前会话工作流运行 + 子代理列表）。
  *
- * 完整实现（运行卡、工作台面板）由并行前端子代理在 packages/web 侧统一
- * 开发；本模块保证内核测试（client 模块编译边界校验）可通过：三个具名
- * 导出组件仅做最小数据渲染，不依赖宿主运行时能力。
+ * 全部数据经 @helm/plugin-client 共享 hooks（usePluginDoc / useConversations /
+ * useConversation）从宿主 store 响应式读取；动作经 ctx.callAction 走
+ * POST /api/actions/builtin:workflow/<actionId>，无任何宿主私有依赖。
  */
-import type { ToolViewProps, WorkbenchPanelProps } from '@helm/protocol'
+import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
+import type { WorkbenchPanelProps, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
+import { usePluginContext, useConversation, useConversations } from '@helm/plugin-client'
+import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
+import {
+  buildSubagentStatSegments,
+  buildSubagentStreamLines,
+  buildWorkbenchSubagentItems,
+  buildWorkflowPhaseSections,
+  canResumeWorkflowRun,
+  extractWorkflowLogs,
+  formatNodeOutputPreview,
+  formatSemanticToolAction,
+  formatWorkflowNodeStats,
+  isLatestSubagentCallForTarget,
+  parentToolSummaryOf,
+  resolveNodeSummaryText,
+  resolveSubagentConversationId,
+  resolveSubagentExecutionMeta,
+  resolveSubagentHeaderSnippet,
+  resolveSubagentTaskTitle,
+  resolveWorkflowRunForTool,
+  subagentBadge,
+  usePluginDoc,
+  type SubagentCardStatus,
+  type WorkflowPhaseSection,
+} from './models.ts'
 
-export function SubagentToolView(_props: ToolViewProps): null {
-  return null
+// ---------------------------------------------------------------------------
+// 图标（lucide-react 线性矢量，与宿主共享同一实例；无 Emoji）
+// ---------------------------------------------------------------------------
+
+import { Bot, Check, ChevronDown, ChevronRight, Circle, Clock, Columns2, ExternalLink, GitBranch, Loader2, RotateCw, Square, Terminal, X } from 'lucide-react'
+
+function Icon({ name, size = 12, className }: { name: string; size?: number; className?: string }): ReactNode {
+  const map: Record<string, typeof Bot> = {
+    bot: Bot,
+    check: Check,
+    'check-circle': Check,
+    'chevron-down': ChevronDown,
+    'chevron-right': ChevronRight,
+    circle: Circle,
+    clock: Clock,
+    columns: Columns2,
+    'external-link': ExternalLink,
+    'git-branch': GitBranch,
+    loader: Loader2,
+    'rotate-cw': RotateCw,
+    square: Square,
+    terminal: Terminal,
+    x: X,
+  }
+  const Cmp = map[name] ?? Circle
+  return <Cmp size={size} className={className} />
 }
 
-export function WorkflowToolView(_props: ToolViewProps): null {
-  return null
+const SPIN = 'spin-slow'
+
+// ---------------------------------------------------------------------------
+// 子代理双层胶囊卡（原 SubagentLiveCard 语义）
+// ---------------------------------------------------------------------------
+
+function toolStatusOf(status: 'running' | 'done' | 'error'): 'running' | 'done' | 'error' | 'unknown' {
+  return status
 }
 
-export function WorkflowWorkbenchPanel(_props: WorkbenchPanelProps): null {
-  return null
+function SubagentLiveCardBody(props: {
+  childConversationId: number
+  toolStatus: 'running' | 'done' | 'error' | 'unknown'
+  backgroundRun?: WorkflowRunSummary
+  worktree?: { path: string; branch: string }
+  toolSummary?: { prompt?: string; startedAt?: number; durationMs?: number; resultText?: string; isError?: boolean }
+  startedAt?: number
+  /** 展开态展示实时流与底部调用详情。 */
+  expanded?: boolean
+}) {
+  const ctx = usePluginContext()
+  const { childConversationId, toolStatus, backgroundRun, worktree, toolSummary, startedAt } = props
+  const conv = useConversation(childConversationId)
+  const summary = conv.summary
+  const detail = conv.detail
+  const live = conv.live
+  const pendingAsk = conv.pendingAsks[0]
+  const detailError = conv.loadError
+
+  const badge = subagentBadge(summary?.status, toolStatus, backgroundRun?.status)
+  const isWorking = badge.status === 'working'
+
+  // 运行中秒表：SSR 首帧不启动时钟（确定性渲染）。
+  const [nowMs, setNowMs] = useState<number | undefined>(undefined)
+  useInterval(isWorking, () => setNowMs(Date.now()))
+
+  const taskTitle = resolveSubagentTaskTitle(summary, childConversationId, toolSummary, backgroundRun)
+  const staticStats = useMemo(
+    () =>
+      buildSubagentStatSegments({
+        ...(summary !== undefined ? { summary } : {}),
+        ...(detail?.entries !== undefined ? { entries: detail.entries } : {}),
+        ...(live !== undefined ? { live } : {}),
+        ...(backgroundRun !== undefined ? { backgroundRun } : {}),
+        ...(toolSummary !== undefined ? { toolSummary } : {}),
+        isWorking: badge.status === 'working',
+      }),
+    [summary, detail?.entries, live, backgroundRun, toolSummary, badge.status],
+  )
+  const elapsed =
+    badge.status === 'working'
+      ? resolveElapsed({ backgroundRun, toolSummary, startedAt, nowMs, isWorking: true })
+      : undefined
+  const statSegments = elapsed !== undefined ? [...staticStats, formatDurationMsLocal(elapsed)] : staticStats
+  const snippet = useMemo(
+    () =>
+      resolveSubagentHeaderSnippet({
+        badgeStatus: badge.status,
+        ...(summary !== undefined ? { summary } : {}),
+        ...(live !== undefined ? { live } : {}),
+        ...(detail?.entries !== undefined ? { entries: detail.entries } : {}),
+        ...(pendingAsk !== undefined ? { pendingAsk } : {}),
+        ...(backgroundRun !== undefined ? { backgroundRun } : {}),
+        ...(toolSummary !== undefined ? { toolSummary } : {}),
+        ...(detailError !== undefined ? { detailError } : {}),
+      }),
+    [badge.status, summary, live, detail?.entries, pendingAsk, backgroundRun, toolSummary, detailError],
+  )
+
+  // 隔离工作树：显式入参优先，其次回退后台 run 首个节点的 worktree。
+  const wt = worktree ?? backgroundRun?.nodes?.find((n) => n.worktree !== undefined)?.worktree
+  const streamLines = useMemo(
+    () => (props.expanded === true && detail?.entries !== undefined ? buildSubagentStreamLines(detail.entries, live, badge.status === 'working') : []),
+    [props.expanded, detail?.entries, live, badge.status],
+  )
+
+  const cardClass = `subagent-live-card${badge.status === 'blocked' ? ' subagent-live-card-warn' : badge.status === 'error' || detailError !== undefined ? ' subagent-live-card-error' : ''}${props.expanded === true ? ' subagent-live-card-expanded' : ''}`
+
+  return (
+    <div className={cardClass}>
+      <div className="subagent-live-header">
+        <button
+          type="button"
+          className="subagent-live-trigger"
+          aria-label={`打开子会话 #${childConversationId} 抽屉`}
+          title={[taskTitle, summary?.profileId, wt?.branch, statSegments.join(' · '), '点击打开子会话抽屉'].filter(Boolean).join('\n')}
+          onClick={() => ctx.openSplitScreen(`conversation:${childConversationId}`)}
+        >
+          <Icon
+            name={detailError !== undefined ? 'x' : badge.status === 'working' ? 'loader' : badge.status === 'error' ? 'x' : 'bot'}
+            size={13}
+            className={badge.status === 'working' && detailError === undefined ? SPIN : undefined}
+          />
+          <span className="subagent-live-title" title={taskTitle}>
+            <span className="subagent-live-id">子会话 #{childConversationId}</span>
+            {summary?.profileId !== undefined && summary.profileId !== '' ? (
+              <span className="badge badge-neutral">{summary.profileId}</span>
+            ) : null}
+            {taskTitle !== undefined ? <span className="subagent-live-title-text">{taskTitle}</span> : null}
+          </span>
+          {wt !== undefined ? (
+            <span className="badge badge-neutral subagent-worktree-badge" title={`隔离工作树：${wt.path}`}>
+              <Icon name="git-branch" size={11} />
+              {wt.branch}
+            </span>
+          ) : null}
+          <span className={`badge ${badge.badge}`}>{badge.label}</span>
+          {statSegments.length > 0 ? (
+            <span className="subagent-live-stats tabular-nums">{statSegments.join(' · ')}</span>
+          ) : null}
+        </button>
+        <span className="subagent-live-actions">
+          {backgroundRun?.status === 'running' ? (
+            <button
+              type="button"
+              className="btn btn-xs btn-danger"
+              title="中止该后台子代理任务"
+              aria-label="中止该后台子代理任务"
+              onClick={() => {
+                void ctx
+                  .callAction('abort', { runId: backgroundRun.id })
+                  .catch((err: unknown) => ctx.notify(`中止后台子代理失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+              }}
+            >
+              <Icon name="square" size={11} />
+              <span className="subagent-action-label">中止</span>
+            </button>
+          ) : null}
+          {wt !== undefined ? (
+            <button
+              type="button"
+              className="btn btn-xs"
+              title="清理隔离工作树"
+              aria-label="清理隔离工作树"
+              onClick={() => {
+                void ctx
+                  .callAction('cleanup_worktree', { path: wt.path })
+                  .catch((err: unknown) => ctx.notify(`清理工作树失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+              }}
+            >
+              <Icon name="rotate-cw" size={11} />
+              <span className="subagent-action-label">清理工作树</span>
+            </button>
+          ) : null}
+          {detailError !== undefined ? (
+            <button
+              type="button"
+              className="btn btn-xs"
+              title="重新加载子会话详情"
+              aria-label="重新加载子会话详情"
+              onClick={conv.reload}
+            >
+              <Icon name="rotate-cw" size={11} />
+              <span className="subagent-action-label">重试</span>
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="btn btn-xs subagent-split-btn workbench-split-btn"
+            title="在分屏并排打开该子会话"
+            aria-label={`并排查看子会话 #${childConversationId}`}
+            onClick={() => ctx.openSplitScreen(`conversation:${childConversationId}`)}
+          >
+            <Icon name="columns" size={11} />
+            <span className="subagent-action-label">并排查看</span>
+          </button>
+        </span>
+      </div>
+      {snippet !== undefined ? (
+        <span className={`subagent-live-subline subagent-live-subline-${snippet.kind}`} title={snippet.text}>
+          <span className="subagent-live-subline-text">{snippet.tag !== undefined ? `${snippet.tag}：${snippet.text}` : snippet.text}</span>
+        </span>
+      ) : null}
+      {props.expanded === true && streamLines.length > 0 ? (
+        <div className="subagent-live-stream">
+          {streamLines.slice(-30).map((line) =>
+            line.kind === 'prompt' ? (
+              <div key={line.key} className="subagent-stream-line subagent-stream-prompt">
+                <span className="subagent-stream-tag">指令</span>
+                <span className="subagent-stream-body">{line.text}</span>
+              </div>
+            ) : line.kind === 'thinking' ? (
+              <div key={line.key} className="subagent-stream-line subagent-stream-thinking">
+                <span className="subagent-stream-tag">思考</span>
+                <span className="subagent-stream-body">{line.text}</span>
+              </div>
+            ) : line.kind === 'tool' ? (
+              <div key={line.key} className="subagent-stream-line subagent-stream-tool">
+                <Icon name={line.status === 'running' ? 'loader' : line.isError ? 'x' : 'check'} size={11} className={line.status === 'running' ? SPIN : undefined} />
+                <span className="subagent-stream-body">{line.toolName} {line.summary}{line.resultPreview !== undefined ? ` → ${line.resultPreview}` : ''}</span>
+              </div>
+            ) : (
+              <div key={line.key} className="subagent-stream-line">
+                <span className="subagent-stream-tag">回复</span>
+                <span className="subagent-stream-body">{line.text}</span>
+              </div>
+            ),
+          )}
+        </div>
+      ) : null}
+      {props.expanded === true ? (
+        <ToolCallDetailsInline input={toolSummaryPromptOf(toolSummary)} result={toolSummary?.resultText} artifactRef={undefined} />
+      ) : null}
+    </div>
+  )
+}
+
+function toolSummaryPromptOf(toolSummary: { prompt?: string } | undefined): string | undefined {
+  return toolSummary?.prompt
+}
+
+function resolveElapsed(input: {
+  backgroundRun?: WorkflowRunSummary
+  toolSummary?: { startedAt?: number; durationMs?: number }
+  startedAt?: number
+  nowMs?: number
+  isWorking?: boolean
+}): number | undefined {
+  if (input.isWorking) {
+    const start = input.backgroundRun?.status === 'running' ? input.backgroundRun.createdAt : input.startedAt ?? input.toolSummary?.startedAt
+    return start !== undefined && Number.isFinite(start) && input.nowMs !== undefined && input.nowMs >= start ? input.nowMs - start : undefined
+  }
+  const elapsed = input.backgroundRun !== undefined
+    ? input.backgroundRun.nodes?.[0]?.durationMs ?? input.backgroundRun.updatedAt - input.backgroundRun.createdAt
+    : input.toolSummary?.durationMs
+  return elapsed !== undefined && Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
+}
+
+function formatDurationMsLocal(ms: number | undefined): string {
+  if (ms === undefined || !Number.isFinite(ms) || ms < 0) return ''
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+  const minutes = Math.floor(ms / 60_000)
+  const seconds = Math.round((ms % 60_000) / 1000)
+  return `${minutes}m${seconds}s`
+}
+
+/** 轻量 interval hook（client 组件内部；不导出）。SSR 不启动计时器（useEffect 不执行）。 */
+function useInterval(active: boolean, fn: () => void): void {
+  useEffect(() => {
+    if (!active) return
+    const timer = globalThis.setInterval?.(fn, 1000)
+    return () => {
+      if (timer !== undefined) globalThis.clearInterval?.(timer)
+    }
+  }, [active])
+}
+
+// ---------------------------------------------------------------------------
+// SubagentToolView：tool.view 扩展点组件（subagent 工具行）
+// ---------------------------------------------------------------------------
+
+export function SubagentToolView(props: {
+  callId: string
+  toolName: string
+  input?: unknown
+  status: 'running' | 'done' | 'error'
+  result?: unknown
+  structuredOutput?: unknown
+  isError?: boolean
+  startedAt?: number
+  durationMs?: number
+  artifactRef?: string
+  conversationId: number
+  siblingCalls?: ReadonlyArray<{ callId: string; toolName: string; input?: unknown; status: 'running' | 'done' | 'error'; result?: unknown; structuredOutput?: unknown }>
+}): ReactNode {
+  const ctx = usePluginContext()
+  const conversations = useConversations()
+  const runsDoc = usePluginDoc<{ runs: WorkflowRunSummary[] }>('runs')
+  const [expanded, setExpanded] = useState(true)
+
+  const childId = useMemo(
+    () =>
+      resolveSubagentConversationId(
+        { callId: props.callId, input: props.input, result: typeof props.result === 'string' ? props.result : undefined },
+        props.conversationId,
+        conversations,
+      ),
+    [props.callId, props.input, props.result, props.conversationId, conversations],
+  )
+  const meta = useMemo(
+    () =>
+      resolveSubagentExecutionMeta(
+        { callId: props.callId, result: typeof props.result === 'string' ? props.result : undefined },
+        props.conversationId,
+        runsDoc?.runs ?? [],
+      ),
+    [props.callId, props.result, props.conversationId, runsDoc],
+  )
+  const toolSummary = useMemo(() => parentToolSummaryOf(props as never), [props])
+
+  // 外部执行（无原生子会话，如 Herdr 窗格）：如实展示后台 run 摘要，不虚构子会话。
+  if (childId === undefined) {
+    return (
+      <div className="trace-entry">
+        <ExternalRunSummary run={meta.run} worktree={meta.worktree} toolStatus={props.status} executionId={meta.executionId} />
+        <ToolCallDetailsInline input={props.input} result={props.result} artifactRef={props.artifactRef} />
+      </div>
+    )
+  }
+
+  // 多次 resume 折叠：历史已被后续调用接替的旧调用仅渲染单行摘要胶囊（可展开详情）。
+  const isLatest = isLatestSubagentCallForTarget(
+    {
+      callId: props.callId,
+      input: props.input,
+      result: props.result,
+      siblingCalls: props.siblingCalls,
+      conversationId: props.conversationId,
+    },
+    childId,
+  )
+  if (!isLatest) {
+    return (
+      <div className="trace-entry">
+        <div
+          className="trace-row"
+          role="button"
+          tabIndex={0}
+          onClick={() => setExpanded((v) => !v)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              setExpanded((v) => !v)
+            }
+          }}
+        >
+          <span className="trace-row-left">
+            <Icon name={props.isError === true ? 'x' : 'check'} size={12} />
+            <span className="trace-tool-name">subagent</span>
+            <span className="trace-tool-summary">{toolSummary.prompt ?? `子会话 #${childId}`}</span>
+            <span className="badge badge-neutral">#{childId} · 已在下文续接</span>
+          </span>
+          <span className="trace-row-right">{props.status === 'error' || props.isError === true ? '失败' : props.status === 'done' ? '完成' : '运行中'}</span>
+        </div>
+        {expanded ? <ToolCallDetailsInline input={props.input} result={props.result} artifactRef={props.artifactRef} /> : null}
+      </div>
+    )
+  }
+
+  return (
+    <SubagentLiveCardBody
+      childConversationId={childId}
+      toolStatus={toolStatusOf(props.status)}
+      backgroundRun={meta.run}
+      worktree={meta.worktree}
+      toolSummary={toolSummary}
+      startedAt={props.startedAt}
+      expanded={expanded}
+    />
+  )
+}
+
+/** 外部运行时（如 Herdr 窗格）的后台任务摘要（无原生子会话时如实展示）。 */
+function ExternalRunSummary(props: {
+  run?: WorkflowRunSummary
+  worktree?: { path: string; branch: string }
+  toolStatus: 'running' | 'done' | 'error'
+  executionId?: string
+}): ReactNode {
+  const { run, worktree, toolStatus, executionId } = props
+  const nodes = run?.nodes ?? []
+  const running = nodes.filter((n) => n.status === 'running').length
+  const failed = nodes.find((n) => n.status === 'failed')
+  const runError = run?.status === 'failed' || run?.status === 'aborted' ? (run.error ?? '后台执行失败') : undefined
+  const badge = subagentBadge(undefined, toolStatus, run?.status)
+  const active = badge.status === 'working'
+  const failedState = badge.status === 'error'
+  return (
+    <div className="subagent-live-card subagent-external-card">
+      <div className="subagent-live-header">
+        <Icon name={failedState ? 'x' : active ? 'loader' : 'bot'} size={13} className={active ? SPIN : undefined} />
+        <span className="subagent-live-title">外部执行</span>
+        {executionId !== undefined ? <span className="badge badge-neutral">{executionId}</span> : null}
+        {worktree !== undefined ? (
+          <span className="badge badge-neutral subagent-worktree-badge" title={`隔离工作树：${worktree.path}`}>
+            <Icon name="git-branch" size={11} />
+            {worktree.branch}
+          </span>
+        ) : null}
+        <span className={`badge ${badge.badge}`}>{badge.label}</span>
+      </div>
+      <div className="subagent-live-stream subagent-external-body">
+        {nodes.length > 0 ? (
+          <div className="workflow-node-list">
+            {nodes.map((n) => (
+              <div key={n.id} className="workflow-node-line">
+                <Icon name={n.status === 'running' ? 'loader' : n.status === 'failed' ? 'x' : n.status === 'done' ? 'check' : 'circle'} size={11} className={n.status === 'running' ? SPIN : undefined} />
+                <span className="workflow-node-label">{n.label ?? n.id}</span>
+                {n.executionId !== undefined ? <span className="subagent-external-exec">{n.executionId}</span> : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="subagent-stream-line subagent-stream-empty">
+            {run === undefined ? `外部执行${active ? '进行中' : failedState ? '异常' : '已结束'}（无子会话）` : `后台任务 ${run.id}`}
+          </div>
+        )}
+        {runError !== undefined ? (
+          <div className="subagent-stream-line subagent-stream-error subagent-bg-error" title={runError}>
+            <Icon name="x" size={11} />
+            <span className="subagent-stream-body">后台执行失败：{runError}</span>
+          </div>
+        ) : null}
+        {failed !== undefined && failed.error !== undefined ? (
+          <div className="subagent-stream-line subagent-stream-error subagent-bg-error" title={failed.error}>
+            <Icon name="x" size={11} />
+            <span className="subagent-stream-body">节点失败：{failed.error}</span>
+          </div>
+        ) : null}
+        {running > 0 ? <div className="subagent-stream-line subagent-stream-empty">{running} 个节点执行中</div> : null}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// WorkflowToolView：tool.view 扩展点组件（SubagentWorkflow 工具行）
+// ---------------------------------------------------------------------------
+
+export function WorkflowToolView(props: {
+  callId: string
+  toolName: string
+  input?: unknown
+  status: 'running' | 'done' | 'error'
+  result?: unknown
+  structuredOutput?: unknown
+  isError?: boolean
+  startedAt?: number
+  durationMs?: number
+  artifactRef?: string
+  conversationId: number
+  siblingCalls?: ReadonlyArray<{ callId: string; toolName: string; input?: unknown; status: 'running' | 'done' | 'error'; result?: unknown; structuredOutput?: unknown }>
+}): ReactNode {
+  const ctx = usePluginContext()
+  const runsDoc = usePluginDoc<{ runs: WorkflowRunSummary[] }>('runs')
+  const [cardOpen, setCardOpen] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [resultOpen, setResultOpen] = useState(false)
+
+  const run = useMemo(
+    () =>
+      resolveWorkflowRunForTool(
+        { callId: props.callId, result: typeof props.result === 'string' ? props.result : undefined },
+        props.conversationId,
+        runsDoc?.runs ?? [],
+      ),
+    [props.callId, props.result, props.conversationId, runsDoc],
+  )
+
+  if (run === undefined) {
+    // 无关联 run（旧数据 / 引擎尚未建 run）：保留默认工具行形态 + 调用详情。
+    return (
+      <div className="trace-entry">
+        <ToolCallDetailsInline input={props.input} result={props.result} artifactRef={props.artifactRef} />
+      </div>
+    )
+  }
+
+  return (
+    <WorkflowRunCardBody
+      run={run}
+      cardOpen={cardOpen}
+      onToggleCard={() => setCardOpen((v) => !v)}
+      resultOpen={resultOpen}
+      onToggleResult={() => setResultOpen((v) => !v)}
+      busy={busy}
+      setBusy={setBusy}
+      toolProps={props}
+      inWorkbench={false}
+    />
+  )
+}
+
+const RUN_LABEL: Record<string, string> = {
+  running: '执行中',
+  completed: '已完成',
+  failed: '失败',
+  aborted: '已中止',
+}
+
+const RUN_BADGE: Record<string, string> = {
+  running: 'badge-accent',
+  completed: 'badge-ok',
+  failed: 'badge-err',
+  aborted: 'badge-warn',
+}
+
+const NODE_LABEL: Record<string, string> = {
+  pending: '待执行',
+  running: '运行中',
+  done: '完成',
+  failed: '失败',
+  skipped: '跳过',
+}
+
+const NODE_BADGE: Record<string, string> = {
+  pending: 'badge-neutral',
+  running: 'badge-accent',
+  done: 'badge-ok',
+  failed: 'badge-err',
+  skipped: 'badge-neutral',
+}
+
+const PHASE_ICON: Record<WorkflowPhaseSection['status'], string> = {
+  pending: 'circle',
+  running: 'loader',
+  done: 'check',
+  failed: 'x',
+}
+
+/** 工作流运行卡主体（时间线与工作台共用）。 */
+function WorkflowRunCardBody(props: {
+  run: WorkflowRunSummary
+  cardOpen: boolean
+  onToggleCard: () => void
+  resultOpen: boolean
+  onToggleResult: () => void
+  busy: boolean
+  setBusy: (v: boolean) => void
+  toolProps?: { input?: unknown; result?: unknown; artifactRef?: string }
+  inWorkbench: boolean
+}): ReactNode {
+  const ctx = usePluginContext()
+  const { run, cardOpen, busy, setBusy, toolProps, inWorkbench } = props
+  const nodes = run.nodes ?? []
+  const done = nodes.filter((n) => n.status === 'done').length
+  const tokens = nodes.reduce((sum, n) => sum + (n.tokens ?? 0), 0)
+  const sections = useMemo(() => buildWorkflowPhaseSections(run), [run])
+  const logs = useMemo(() => extractWorkflowLogs(run), [run])
+  const hasNamedPhases = sections.length > 1 || (sections.length === 1 && sections[0]!.title !== '')
+
+  // 运行中秒表（SSR 首帧确定性）。
+  const [nowMs, setNowMs] = useState<number | undefined>(undefined)
+  useInterval(run.status === 'running', () => setNowMs(Date.now()))
+  const elapsedMs =
+    run.status === 'running' && nowMs !== undefined && Number.isFinite(run.createdAt) && nowMs >= run.createdAt
+      ? nowMs - run.createdAt
+      : run.updatedAt - run.createdAt
+
+  const abort = (): void => {
+    setBusy(true)
+    ctx
+      .callAction('abort', { runId: run.id })
+      .catch((err: unknown) => ctx.notify(`中止工作流失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+      .finally(() => setBusy(false))
+  }
+  const resume = (): void => {
+    setBusy(true)
+    ctx
+      .callAction('run', { resumeFromRunId: run.id, conversationId: run.conversationId })
+      .catch((err: unknown) => ctx.notify(`断点恢复失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+      .finally(() => setBusy(false))
+  }
+
+  const resultJson = useMemo(() => {
+    if (run.result === undefined) return undefined
+    try {
+      return JSON.stringify(run.result, null, 2) ?? String(run.result)
+    } catch {
+      return String(run.result)
+    }
+  }, [run.result])
+
+  return (
+    <section className="card jr-stack workflow-run-card" aria-label={`工作流：${run.name}`}>
+      <div className="jr-stack-row">
+        <button type="button" className="btn btn-ghost btn-sm" onClick={props.onToggleCard} title={cardOpen ? '收起工作流卡' : '展开工作流卡'}>
+          <Icon name={cardOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+        </button>
+        <Icon name={run.kind === 'subagent' ? 'bot' : 'terminal'} />
+        <strong>{run.name}</strong>
+        <span className={`badge ${RUN_BADGE[run.status] ?? 'badge-neutral'}`}>{RUN_LABEL[run.status] ?? run.status}</span>
+        {run.replayedFrom !== undefined ? (
+          <span className="badge badge-warn" title={`从 journal 前缀重放恢复（源 run ${run.replayedFrom}）`}>cached 重放</span>
+        ) : null}
+        <span style={{ flex: 1 }} />
+        <span className="workflow-run-stats tabular-nums">
+          {nodes.length > 0 ? <span>{`节点 ${done}/${nodes.length}`}</span> : null}
+          {tokens > 0 ? <span>{`${tokens.toLocaleString()} Tokens`}</span> : null}
+          <span>{formatDurationMsLocal(Math.max(0, elapsedMs))}</span>
+        </span>
+        {run.status === 'running' ? (
+          <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={abort}>
+            <Icon name="square" size={11} />
+            中止
+          </button>
+        ) : null}
+        {canResumeWorkflowRun(run) ? (
+          <button type="button" className="btn btn-sm" disabled={busy} onClick={resume} title="从 journal 断点重放恢复执行">
+            <Icon name="rotate-cw" size={11} />
+            断点恢复
+          </button>
+        ) : null}
+        {!inWorkbench ? (
+          <button className="btn btn-sm" onClick={() => ctx.openWorkbench('tasks')}>
+            工作台详情
+          </button>
+        ) : null}
+      </div>
+      {run.description !== undefined && run.description !== '' ? <p className="workflow-run-description">{run.description}</p> : null}
+      {cardOpen ? (
+        <>
+          {hasNamedPhases ? (
+            <div className="phase-bar">
+              {sections.map((section, idx) => (
+                <span
+                  key={section.key}
+                  className={`phase-segment${section.status === 'running' ? ' phase-segment-active' : section.status === 'done' ? ' phase-segment-done' : section.status === 'failed' ? ' phase-segment-failed' : ''}`}
+                  title={section.detail ?? section.title}
+                >
+                  <Icon name={PHASE_ICON[section.status]} size={11} className={section.status === 'running' ? SPIN : undefined} />
+                  {`${idx + 1}. ${section.title}`}
+                  {`(${section.doneCount}/${section.totalCount})`}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {logs.length > 0 ? (
+            <div className="workflow-log-list">
+              {logs.map((log) => (
+                <div key={log.key} className="workflow-log-line">
+                  <Icon name="terminal" size={11} />
+                  <span className="workflow-log-text">{log.message}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="workflow-node-list">
+            {sections.map((section) => (
+              <div key={section.key} className="workflow-phase-group">
+                {section.title !== '' ? (
+                  <div className="workflow-phase-header">
+                    <Icon name={PHASE_ICON[section.status]} size={11} className={section.status === 'running' ? SPIN : undefined} />
+                    <span className="workflow-phase-title">{`${section.index + 1}. ${section.title}`}</span>
+                    <span className="workflow-phase-count tabular-nums">{`(${section.doneCount}/${section.totalCount})`}</span>
+                  </div>
+                ) : null}
+                {section.nodes.map((node) => (
+                  <WorkflowNodeRow key={node.id} node={node} />
+                ))}
+              </div>
+            ))}
+            {nodes.length === 0 ? <div className="workflow-phase-empty">暂无节点状态</div> : null}
+          </div>
+          {run.status === 'completed' && resultJson !== undefined ? (
+            <div className="workflow-result-box">
+              <div className="workflow-result-header">
+                <span className="trace-section-label">最终产出</span>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={props.onToggleResult}>
+                  <Icon name={props.resultOpen ? 'chevron-down' : 'chevron-right'} size={11} />
+                  {props.resultOpen ? '收起完整结果' : '展开完整结果'}
+                </button>
+              </div>
+              {props.resultOpen ? (
+                <pre className="code-block-pre workflow-node-pre selectable"><code>{resultJson}</code></pre>
+              ) : (
+                <div className="workflow-result-preview selectable" title={firstLineLocal(resultJson)}>{truncatePreviewLocal(resultJson)}</div>
+              )}
+            </div>
+          ) : null}
+          {run.error !== undefined ? <p className="jr-callout jr-callout-err">{run.error}</p> : null}
+        </>
+      ) : null}
+      {toolProps !== undefined ? <ToolCallDetailsInline input={toolProps.input} result={toolProps.result} artifactRef={toolProps.artifactRef} /> : null}
+    </section>
+  )
+}
+
+function firstLineLocal(text: string): string {
+  const nl = text.indexOf('\n')
+  return nl === -1 ? text : text.slice(0, nl)
+}
+
+function truncatePreviewLocal(text: string, maxChars = 160): string {
+  const firstLine = firstLineLocal(text)
+  return firstLine.length > maxChars ? `${firstLine.slice(0, maxChars)}…` : firstLine
+}
+
+/** 工作流单节点行（收起摘要 + 子会话跳转 / 工作树清理）。 */
+function WorkflowNodeRow({ node }: { node: WorkflowNodeState }): ReactNode {
+  const ctx = usePluginContext()
+  const conv = useConversation(node.conversationId)
+  const child = conv.summary
+  const pendingAskTitle = conv.pendingAsks[0]?.title
+  const [open, setOpen] = useState(false)
+  const isBlocked = node.status === 'running' && child?.status === 'blocked'
+  const summaryText = resolveNodeSummaryText(node, child?.doing, child?.status, pendingAskTitle)
+  const nodeStats = formatWorkflowNodeStats(node)
+  return (
+    <div className={`workflow-node-item${open ? ' workflow-node-item-open' : ''}`}>
+      <button type="button" className="workflow-node-line" onClick={() => setOpen((v) => !v)} title={open ? '收起节点详情' : '展开节点详情'}>
+        <Icon name={node.status === 'running' ? 'loader' : node.status === 'failed' ? 'x' : node.status === 'done' ? 'check' : node.status === 'skipped' ? 'chevron-right' : 'clock'} size={11} className={node.status === 'running' && !isBlocked ? SPIN : undefined} />
+        {node.kind === 'action' ? <span className="badge badge-neutral">动作</span> : null}
+        <span className="workflow-node-label">{node.label ?? node.id}</span>
+        <span className={`badge ${isBlocked ? 'badge-warn' : NODE_BADGE[node.status] ?? 'badge-neutral'}`}>{isBlocked ? '等待审批' : NODE_LABEL[node.status] ?? node.status}</span>
+        {node.cached === true ? <span className="badge badge-warn">cached</span> : null}
+        {node.worktree !== undefined ? (
+          <span className="badge badge-neutral subagent-worktree-badge" title={`隔离工作树：${node.worktree.path}`}>
+            <Icon name="git-branch" size={11} />
+            {node.worktree.branch}
+          </span>
+        ) : null}
+        {node.gate !== undefined ? (
+          <span className={`badge ${node.gate.ok ? 'badge-ok' : 'badge-err'}`}>{node.gate.ok ? 'Gate 通过' : 'Gate 失败'}</span>
+        ) : null}
+        {summaryText.text !== undefined ? (
+          <span className={`workflow-node-progress${summaryText.isError ? ' workflow-node-progress-err' : ''}`} title={summaryText.text}>{summaryText.text}</span>
+        ) : null}
+        <span className="workflow-node-right">
+          {nodeStats.length > 0 ? <span className="workflow-node-stats tabular-nums">{nodeStats.join(' · ')}</span> : null}
+          {node.durationMs !== undefined ? <span className="workflow-node-duration tabular-nums">{formatDurationMsLocal(node.durationMs)}</span> : null}
+          {node.conversationId !== undefined ? <span className="btn btn-ghost btn-sm" role="button" title={`在分屏打开子会话 #${node.conversationId}`}>{`#${node.conversationId}`}</span> : null}
+          <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
+        </span>
+      </button>
+      {open ? (
+        <div className="workflow-node-expanded">
+          {node.conversationId !== undefined ? (
+            <>
+              <div style={{ display: 'flex', gap: 6, padding: '4px 8px' }}>
+                <button type="button" className="btn btn-xs" onClick={() => ctx.openScreen(`conversation:${node.conversationId}`)}>
+                  主屏打开 #{node.conversationId}
+                </button>
+                <button type="button" className="btn btn-xs" onClick={() => ctx.openSplitScreen(`conversation:${node.conversationId}`)}>
+                  分屏打开
+                </button>
+              </div>
+              {node.gateCommand !== undefined ? <pre className="code-block-pre workflow-node-pre"><code>{node.gateCommand}</code></pre> : null}
+              {node.gate !== undefined ? (
+                <pre className={`code-block-pre workflow-node-pre${node.gate.ok ? '' : ' workflow-node-pre-err'}`}><code>{node.gate.output}</code></pre>
+              ) : null}
+              {node.error !== undefined ? <p className="jr-callout jr-callout-err">{node.error}</p> : null}
+            </>
+          ) : (
+            <WorkflowNodeDetail node={node} />
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** 无原生子会话节点的结构化明细。 */
+function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
+  const ctx = usePluginContext()
+  const rows: Array<[string, string]> = []
+  if (node.agentType !== undefined) rows.push(['执行后端', node.agentType])
+  if (node.executionId !== undefined) rows.push(['外部执行', node.executionId])
+  if (node.nodeId !== undefined) rows.push(['执行节点', node.nodeId])
+  if (node.effectiveCwd !== undefined) rows.push(['工作目录', node.effectiveCwd])
+  if (node.worktree !== undefined) rows.push(['工作树', `${node.worktree.branch} @ ${node.worktree.path}`])
+  if (node.model !== undefined) rows.push(['模型', node.model])
+  if (node.durationMs !== undefined) rows.push(['耗时', formatDurationMsLocal(node.durationMs)])
+  if (node.tokens !== undefined && node.tokens > 0) rows.push(['Token', node.tokens.toLocaleString()])
+  const outputJson = useMemo(() => {
+    if (node.output === undefined) return undefined
+    if (typeof node.output === 'string') return node.output
+    try {
+      return JSON.stringify(node.output, null, 2) ?? String(node.output)
+    } catch {
+      return String(node.output)
+    }
+  }, [node.output])
+  return (
+    <div className="workflow-node-detail">
+      {rows.length > 0 ? (
+        <div className="jr-kv-list">
+          {rows.map(([k, v]) => (
+            <span key={k} style={{ display: 'contents' }}>
+              <span className="jr-kv-key">{k}</span>
+              <span className="jr-kv-val mono">{v}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {node.gateCommand !== undefined || node.gate !== undefined ? (
+        <div>
+          <div className="trace-section-label">Gate</div>
+          {node.gateCommand !== undefined ? <pre className="code-block-pre workflow-node-pre"><code>{node.gateCommand}</code></pre> : null}
+          {node.gate !== undefined ? (
+            <pre className={`code-block-pre workflow-node-pre${node.gate.ok ? '' : ' workflow-node-pre-err'}`}><code>{node.gate.output}</code></pre>
+          ) : null}
+        </div>
+      ) : null}
+      {node.prompt !== undefined ? (
+        <div>
+          <div className="trace-section-label">Prompt</div>
+          <pre className="code-block-pre workflow-node-pre"><code>{node.prompt}</code></pre>
+        </div>
+      ) : null}
+      {outputJson !== undefined ? (
+        <div>
+          <div className="trace-section-label">Output</div>
+          <pre className="code-block-pre workflow-node-pre"><code>{outputJson}</code></pre>
+        </div>
+      ) : null}
+      {node.error !== undefined ? (
+        <div>
+          <div className="trace-section-label">Error</div>
+          <pre className="code-block-pre workflow-node-pre workflow-node-pre-err"><code>{node.error}</code></pre>
+        </div>
+      ) : null}
+      {node.worktree !== undefined ? (
+        <button type="button" className="btn btn-xs" onClick={() => {
+          void ctx.callAction('cleanup_worktree', { path: node.worktree!.path }).catch((err: unknown) =>
+            ctx.notify(`清理工作树失败：${err instanceof Error ? err.message : String(err)}`, 'error'),
+          )
+        }}>
+          清理工作树
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// WorkflowWorkbenchPanel：workbench.panel 扩展点组件
+// ---------------------------------------------------------------------------
+
+export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
+  const ctx = usePluginContext()
+  const runsDoc = usePluginDoc<{ runs: WorkflowRunSummary[] }>('runs')
+  const conversations = useConversations()
+  const parent = useConversation(props.conversation.id)
+  const [inspectRunId, setInspectRunId] = useState<string | undefined>(undefined)
+
+  const runs = useMemo(
+    () => (runsDoc?.runs ?? []).filter((r) => r.conversationId === props.conversation.id),
+    [runsDoc, props.conversation.id],
+  )
+  const subagentItems = useMemo(
+    () => buildWorkbenchSubagentItems(conversations, props.conversation.id, runs),
+    [conversations, props.conversation.id, runs],
+  )
+  const workflowRuns = runs.filter((r) => r.kind !== 'subagent')
+  const externalSubagentRuns = runs.filter(
+    (r) => r.kind === 'subagent' && !(r.nodes ?? []).some((n) => n.conversationId !== undefined),
+  )
+  const inspectedRun = inspectRunId !== undefined ? runs.find((r) => r.id === inspectRunId) : undefined
+
+  if (inspectedRun !== undefined) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
+        <button type="button" className="btn btn-sm" onClick={() => setInspectRunId(undefined)}>
+          返回运行列表
+        </button>
+        <WorkflowRunCardBody
+          run={inspectedRun}
+          cardOpen
+          onToggleCard={() => undefined}
+          resultOpen
+          onToggleResult={() => undefined}
+          busy={false}
+          setBusy={() => undefined}
+          inWorkbench
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
+      {workflowRuns.length > 0 ? <div className="trace-section-label">工作流运行</div> : null}
+      {workflowRuns.map((run) => (
+        <div key={run.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <WorkflowRunCardBody
+            run={run}
+            cardOpen={false}
+            onToggleCard={() => setInspectRunId(run.id)}
+            resultOpen={false}
+            onToggleResult={() => undefined}
+            busy={false}
+            setBusy={() => undefined}
+            inWorkbench
+          />
+        </div>
+      ))}
+      {externalSubagentRuns.length > 0 ? <div className="trace-section-label">外部后台任务</div> : null}
+      {externalSubagentRuns.map((run) => (
+        <ExternalRunSummary key={run.id} run={run} toolStatus={run.status === 'running' ? 'running' : run.status === 'completed' ? 'done' : 'error'} />
+      ))}
+      {subagentItems.length > 0 ? (
+        <>
+          <div className="trace-section-label">子代理会话</div>
+          {subagentItems.map((item) => (
+            <SubagentLiveCardBody
+              key={item.conversationId}
+              childConversationId={item.conversationId}
+              toolStatus={item.summary?.status === 'working' ? 'running' : item.summary?.status === 'error' ? 'error' : item.backgroundRun?.status === 'running' ? 'running' : item.backgroundRun?.status === 'failed' || item.backgroundRun?.status === 'aborted' ? 'error' : 'done'}
+              backgroundRun={item.backgroundRun}
+              expanded={false}
+            />
+          ))}
+        </>
+      ) : null}
+      {runs.length === 0 && subagentItems.length === 0 ? (
+        <p style={{ color: 'var(--fg-muted)' }}>当前会话暂无工作流或子代理。</p>
+      ) : null}
+    </div>
+  )
 }

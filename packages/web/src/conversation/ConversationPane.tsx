@@ -3,12 +3,11 @@ import { conversationsApi } from '../lib/api.js'
 import type { ConversationAttachmentRef } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { isHumanSelectableProfile } from '../shell/sidebar-model.js'
-import { matchesUiScope } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
 import { ConversationTimeline } from './ConversationTimeline.js'
-import { summarizeWorkbenchTasks } from './workflow-card-model.js'
+import { buildWorkbenchTabs, resolveActiveWorkbenchTab, summarizeWorkbenchBadge } from './workbench-model.js'
 import type { EditRequestTarget } from './timeline-model.js'
 
 export interface ConversationPaneProps {
@@ -81,10 +80,20 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     setMoreOpen(false)
   }, [conversationId])
 
-  const taskSummary = useMemo(
-    () => summarizeWorkbenchTasks(store.conversations, conversationId, store.workflowRuns),
-    [store.conversations, conversationId, store.workflowRuns],
+  // 工作台汇总角标：内置产物计数 + 各插件面板 badge（从 public doc 动态提取）。
+  const artifactCount = store.conversationArtifacts[conversationId]?.length ?? 0
+  const workbenchTabs = useMemo(
+    () =>
+      buildWorkbenchTabs({
+        groupedUi: store.groupedUi,
+        pluginDocs: store.pluginDocs,
+        artifactCount,
+        conversationId,
+      }),
+    [store.groupedUi, store.pluginDocs, artifactCount, conversationId],
   )
+  const workbenchBadge = summarizeWorkbenchBadge(workbenchTabs)
+  const hasWorkbenchPanel = workbenchTabs.some((tab) => tab.id !== 'artifacts')
   const detailError = store.loadErrors[`conversation:${conversationId}`]
   if (detailError) {
     return (
@@ -120,11 +129,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   }
 
   const sendingPending = sendingPendingVisible(sendingInFlight, conversation.status)
-  const artifacts = store.conversationArtifacts[conversationId] ?? []
   // 去重后的工作台计数：工作流子会话不再被 runs 与 children 双重计入。
-  const workbenchCount = taskSummary.totalCount + artifacts.length
-  const workbenchBadge = taskSummary.blockedCount > 0 ? 'badge-warn' : taskSummary.activeCount > 0 ? 'badge-accent' : 'badge-neutral'
-  const hasWorkbenchPanel = store.groupedUi.workbenchPanels.some((panel) => matchesUiScope(conversation, panel.spec.scope))
+  const workbenchCount = workbenchBadge.totalCount
+  const workbenchBadgeClass = workbenchBadge.tone === 'warn' ? 'badge-warn' : workbenchBadge.tone === 'accent' ? 'badge-accent' : 'badge-neutral'
   const currentNodeId = conversation.nodeId || 'local'
   const envSubtitle = formatEnvSubtitle({
     profileId: conversation.profileId,
@@ -274,15 +281,20 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
             <button
               type="button"
               className={`btn btn-sm${store.workbenchOpen ? ' btn-primary' : ''}`}
-              title="展开右侧工作台（工作流与产物）"
+              title="展开右侧工作台（插件面板与产物）"
               onClick={() => {
-                store.setWorkbenchOpen(!store.workbenchOpen)
-                store.setWorkbenchTab('tasks')
+                // 打开首个可用页签；已打开时保持当前有效页签。
+                const target = resolveActiveWorkbenchTab(
+                  store.workbenchOpen ? store.workbenchTab : undefined,
+                  workbenchTabs,
+                )
+                if (!store.workbenchOpen || target !== store.workbenchTab) store.setWorkbenchTab(target)
+                store.setWorkbenchOpen(true)
               }}
             >
               <HelmIcon name="panel-right" size={12} />
               工作台
-              {workbenchCount > 0 && <span className={`badge ${workbenchBadge} tabular-nums`}>{workbenchCount}</span>}
+              {workbenchCount > 0 && <span className={`badge ${workbenchBadgeClass} tabular-nums`}>{workbenchCount}</span>}
             </button>
           ) : null}
           {isDrawer && onCloseDrawer !== undefined ? (

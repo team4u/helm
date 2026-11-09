@@ -18,6 +18,7 @@ import type {
   ConversationLive,
   InputOrigin,
   TimelineRendererSpec,
+  ToolViewSiblingCall,
   ToolViewSpec,
   WhenBusy,
 } from '@helm/protocol'
@@ -61,6 +62,8 @@ export interface ToolTrace {
   durationMs?: number
   /** 输出中检测到的产物引用（内核超长 Spill 标记 / art_ 前缀），供「打开完整产物」按钮。 */
   artifactRef?: string
+  /** 工具结构化输出（声明 structuredOutputSchema 的工具结果）；未声明或未落库时省略。 */
+  structuredOutput?: unknown
   /** 命中插件 tool.view（如 dispatch_worker）：豁免折叠，直接渲染业务卡片。 */
   toolView?: QualifiedToolView
 }
@@ -233,9 +236,6 @@ export interface BuildTimelineOptions {
   toolViews?: ReadonlyArray<QualifiedToolView>
 }
 
-/** 豁免折叠的业务工具名（后台子代理派生，需直接露出）。 */
-const BUSINESS_TOOL_NAMES = new Set(['subagent', 'SubagentWorkflow'])
-
 /** 单行轨迹入参摘要最大长度。 */
 const SUMMARY_MAX_CHARS = 60
 
@@ -406,7 +406,7 @@ function newTurn(): TurnAcc {
 function makeToolTrace(
   key: string,
   toolName: string,
-  opts: { callId?: string; input?: unknown; status?: ToolTraceStatus; isError?: boolean; resultText?: string; startedAt?: number; durationMs?: number; toolViews?: ReadonlyArray<QualifiedToolView> },
+  opts: { callId?: string; input?: unknown; status?: ToolTraceStatus; isError?: boolean; resultText?: string; structuredOutput?: unknown; startedAt?: number; durationMs?: number; toolViews?: ReadonlyArray<QualifiedToolView> },
 ): ToolTrace {
   const status = opts.status ?? 'unknown'
   return {
@@ -417,18 +417,18 @@ function makeToolTrace(
     status,
     isError: opts.isError ?? status === 'error',
     ...(opts.resultText !== undefined ? { resultText: opts.resultText } : {}),
+    ...(opts.structuredOutput !== undefined ? { structuredOutput: opts.structuredOutput } : {}),
     ...(opts.durationMs !== undefined ? { durationMs: opts.durationMs } : {}),
     ...(opts.startedAt !== undefined ? { startedAt: opts.startedAt } : {}),
     ...{ toolView: findToolView(toolName, opts.toolViews) },
   }
 }
 
-/** 折叠豁免判定：thinking 与常规工具行（含执行中、完成与出错）可收拢；只有业务卡（toolView / subagent / SubagentWorkflow）独立展示。 */
+/** 折叠豁免判定：thinking 与常规工具行（含执行中、完成与出错）可收拢；只有命中插件 tool.view 的业务卡独立展示（subagent / SubagentWorkflow 由插件注册 tool.view 接管）。 */
 export function isFoldableStep(step: FoldableStep): boolean {
   if (step.kind === 'thinking') return true
   const tool = step.tool
   if (tool.toolView !== undefined) return false
-  if (BUSINESS_TOOL_NAMES.has(tool.toolName)) return false
   return true
 }
 
@@ -564,13 +564,14 @@ function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: Bui
   for (let mi = 0; mi < model.length; mi++) {
     const msg = model[mi]
     if (msg === null || typeof msg !== 'object') continue
-    const m = msg as { role?: unknown; toolCallId?: unknown; toolName?: unknown; content?: unknown; isError?: unknown; durationMs?: unknown }
+    const m = msg as { role?: unknown; toolCallId?: unknown; toolName?: unknown; content?: unknown; isError?: unknown; durationMs?: unknown; structuredOutput?: unknown }
     if (m.role !== 'toolResult' && m.role !== 'tool') continue
     const callId = typeof m.toolCallId === 'string' ? m.toolCallId : undefined
     const toolName = typeof m.toolName === 'string' ? m.toolName : '(unknown tool)'
     const resultText = contentTextOf(m.content)
     const isError = m.isError === true
     const durationMs = typeof m.durationMs === 'number' && Number.isFinite(m.durationMs) ? m.durationMs : undefined
+    const structuredOutput = m.structuredOutput
     if (callId !== undefined) {
       let paired = false
       for (let i = acc.segments.length - 1; i >= 0; i--) {
@@ -581,6 +582,7 @@ function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: Bui
         seg.tool.status = isError ? 'error' : 'done'
         seg.tool.isError = isError
         if (resultText !== '') seg.tool.resultText = resultText
+        if (structuredOutput !== undefined) seg.tool.structuredOutput = structuredOutput
         if (durationMs !== undefined) seg.tool.durationMs = durationMs
         seg.tool.artifactRef = detectArtifactRef(seg.tool.resultText)
         paired = true
@@ -597,6 +599,7 @@ function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: Bui
         status: isError ? 'error' : 'done',
         isError,
         ...(resultText !== '' ? { resultText } : {}),
+        ...(structuredOutput !== undefined ? { structuredOutput } : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
         toolViews: opts.toolViews,
       }),
@@ -805,11 +808,169 @@ export function buildTimelineItems(
   return items
 }
 
+/**
+ * 从时间线 items 收集全部工具调用的轻量摘要（供 tool.view 插件组件去重/续接计算，
+ * 即 ToolViewProps.siblingCalls；按时间线出现顺序排列，无 callId 的调用跳过）。
+ */
+export function collectSiblingCalls(items: ReadonlyArray<TimelineItem>): ToolViewSiblingCall[] {
+  const calls: ToolViewSiblingCall[] = []
+  for (const item of items) {
+    if (item.kind !== 'assistant') continue
+    for (const seg of item.segments) {
+      if (seg.kind === 'tool') {
+        pushSiblingCall(calls, seg.tool)
+      } else if (seg.kind === 'step-group') {
+        for (const step of seg.steps) {
+          if (step.kind === 'tool') pushSiblingCall(calls, step.tool)
+        }
+      }
+    }
+  }
+  return calls
+}
+
+function pushSiblingCall(calls: ToolViewSiblingCall[], tool: ToolTrace): void {
+  if (tool.callId === undefined) return
+  calls.push({
+    callId: tool.callId,
+    toolName: tool.toolName,
+    ...(tool.input !== undefined ? { input: tool.input } : {}),
+    status: tool.status === 'running' ? 'running' : tool.status === 'error' ? 'error' : 'done',
+    ...(tool.resultText !== undefined ? { result: tool.resultText } : {}),
+    ...(tool.structuredOutput !== undefined ? { structuredOutput: tool.structuredOutput } : {}),
+  })
+}
+
 /** 最近一条人类输入文本（Composer 上箭头回填用）。 */
 export function lastHumanTextOf(items: ReadonlyArray<TimelineItem>): string | undefined {
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i]!
     if (item.kind === 'human' && item.text.trim() !== '') return item.text
+  }
+  return undefined
+}
+
+// ---------------------------------------------------------------------------
+// assistant 回合在途判定（复制/分叉 hover 条仅在彻底完成时展示）
+// ---------------------------------------------------------------------------
+
+import type { ConversationSummary, WorkflowRunSummary } from '@helm/protocol'
+
+export interface AssistantTurnBusyOptions {
+  isLatestTurn?: boolean
+  /** 工作流 run 快照（builtin:workflow 公共文档 runs；调用方自行提取）。 */
+  workflowRuns?: ReadonlyArray<WorkflowRunSummary>
+  conversations?: ReadonlyArray<Pick<ConversationSummary, 'id' | 'parentConversationId' | 'parentToolCallId' | 'status'>>
+}
+
+/**
+ * 判定 assistant 回合是否仍在响应或执行在途任务中：
+ * 1. turn.live 为 true（进行中 / 流式输出 / 思考中）；
+ * 2. 最新回合且父会话处于 working 或 blocked 状态；
+ * 3. 回合内任一工具状态为 running 或 unknown；
+ * 4. step-group 仍处于 active 激活态；
+ * 5. 关联的 SubagentWorkflow 仍在 running；
+ * 6. 关联的 subagent 后台 run 仍在 running 或子会话仍为 working / blocked。
+ *
+ * 只有当本回合所有任务与响应彻底完成时才返回 false（此时才展示复制/分叉按钮组）。
+ */
+export function isAssistantTurnBusy(
+  turn: AssistantTurn,
+  conversation: { id: number; status?: string },
+  options?: AssistantTurnBusyOptions,
+): boolean {
+  if (turn.live) return true
+  if (
+    options?.isLatestTurn &&
+    (conversation.status === 'working' || conversation.status === 'blocked')
+  ) {
+    return true
+  }
+
+  const workflowRuns = options?.workflowRuns ?? []
+  const conversations = options?.conversations ?? []
+
+  const isToolRunning = (tool: ToolTrace): boolean => {
+    if (tool.status === 'running' || tool.status === 'unknown') return true
+    if (tool.toolName === 'SubagentWorkflow') {
+      const wf = findWorkflowRunForTool(tool, conversation.id, workflowRuns)
+      if (wf?.status === 'running') return true
+    }
+    if (tool.toolName === 'subagent') {
+      const run = findSubagentBackgroundRun(tool, conversation.id, workflowRuns)
+      if (run?.status === 'running') return true
+      const childId = findSubagentChildId(tool, conversation.id, conversations)
+      if (childId !== undefined) {
+        const childConv = conversations.find((c) => c.id === childId)
+        if (childConv?.status === 'working' || childConv?.status === 'blocked') return true
+      }
+    }
+    return false
+  }
+
+  for (const seg of turn.segments) {
+    if (seg.kind === 'tool') {
+      if (isToolRunning(seg.tool)) return true
+    } else if (seg.kind === 'step-group') {
+      if (seg.active) return true
+      for (const step of seg.steps) {
+        if (step.kind === 'tool' && isToolRunning(step.tool)) return true
+      }
+    }
+  }
+
+  return false
+}
+
+/** 结果文本里精确提取的 run id 全等匹配（不猜同会话最新）。 */
+const RUN_ID_IN_RESULT_RE = /"id"\s*:\s*"([^"]+)"/
+
+function findWorkflowRunForTool(
+  tool: ToolTrace,
+  parentConversationId: number,
+  workflowRuns: ReadonlyArray<WorkflowRunSummary>,
+): WorkflowRunSummary | undefined {
+  if (tool.callId !== undefined && tool.callId !== '') {
+    const byCallId = workflowRuns.find(
+      (r) => r.conversationId === parentConversationId && r.parentToolCallId === tool.callId,
+    )
+    if (byCallId !== undefined) return byCallId
+  }
+  const runId = tool.resultText !== undefined ? RUN_ID_IN_RESULT_RE.exec(tool.resultText)?.[1] : undefined
+  if (runId !== undefined) {
+    return workflowRuns.find((r) => r.conversationId === parentConversationId && r.id === runId)
+  }
+  return undefined
+}
+
+function findSubagentBackgroundRun(
+  tool: ToolTrace,
+  parentConversationId: number,
+  workflowRuns: ReadonlyArray<WorkflowRunSummary>,
+): WorkflowRunSummary | undefined {
+  return findWorkflowRunForTool(tool, parentConversationId, workflowRuns)
+}
+
+/** [subagent conversationId=N] footer 尾行提取（内核标准元数据）。 */
+const SUBAGENT_FOOTER_CONV_RE = /\[subagent[^\]]*?\bconversationId=(\d+)[^\]]*\]/g
+
+function findSubagentChildId(
+  tool: ToolTrace,
+  parentConversationId: number,
+  conversations: ReadonlyArray<Pick<ConversationSummary, 'id' | 'parentConversationId' | 'parentToolCallId'>>,
+): number | undefined {
+  if (tool.resultText !== undefined) {
+    let last: number | undefined
+    for (const match of tool.resultText.matchAll(SUBAGENT_FOOTER_CONV_RE)) {
+      const parsed = Number(match[1])
+      if (Number.isSafeInteger(parsed) && parsed > 0) last = parsed
+    }
+    if (last !== undefined) return last
+  }
+  if (tool.callId !== undefined && tool.callId !== '') {
+    for (const c of conversations) {
+      if (c.parentConversationId === parentConversationId && c.parentToolCallId === tool.callId) return c.id
+    }
   }
   return undefined
 }

@@ -1,4 +1,4 @@
-import type { AskSpec, ConversationDetail, ConversationEntry, ConversationLive, ConversationSummary, HelmEventFrame, HelmSnapshot, NodeInfo, PluginSummary, PluginUiContribution, WorkflowRunSummary } from '@helm/protocol'
+import type { AskSpec, ConversationDetail, ConversationEntry, ConversationLive, ConversationSummary, HelmEventFrame, HelmSnapshot, NodeInfo, PluginSummary, PluginUiContribution } from '@helm/protocol'
 
 export interface LiveState {
   seq: number
@@ -11,12 +11,11 @@ export interface LiveState {
   plugins: PluginSummary[]
   uiContributions: PluginUiContribution[]
   pluginDocs: Record<string, unknown>
-  workflowRuns: WorkflowRunSummary[]
   nodes: NodeInfo[]
 }
 
 export function emptyLiveState(): LiveState {
-  return { seq: -1, conversations: [], conversationDetails: {}, pendingEntries: {}, conversationLives: {}, pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: [], pluginDocs: {}, workflowRuns: [], nodes: [] }
+  return { seq: -1, conversations: [], conversationDetails: {}, pendingEntries: {}, conversationLives: {}, pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: [], pluginDocs: {}, nodes: [] }
 }
 
 function sortConversations(list: ConversationSummary[]): ConversationSummary[] {
@@ -53,18 +52,28 @@ function queueOnlyLive(live: ConversationLive): ConversationLive {
   return { conversationId: live.conversationId, text: '', tools: [], ...(live.queuedInputs !== undefined ? { queuedInputs: live.queuedInputs } : {}), updatedAt: live.updatedAt }
 }
 
-/** 新连接必须重新加载详情和 public docs：快照本身不包含这两类数据。 */
+/** 新连接必须重新加载详情和未随快照提供的 public docs：快照只含 pluginDocs 直投部分。 */
 export function applySnapshot(previous: LiveState, snapshot: HelmSnapshot): LiveState {
-  if (!Number.isSafeInteger(snapshot.seq) || snapshot.seq < 0 || !Array.isArray(snapshot.conversations) || !Array.isArray(snapshot.pendingAsks) || !Array.isArray(snapshot.plugins) || !Array.isArray(snapshot.ui) || !Array.isArray(snapshot.workflowRuns)) {
+  if (!Number.isSafeInteger(snapshot.seq) || snapshot.seq < 0 || !Array.isArray(snapshot.conversations) || !Array.isArray(snapshot.pendingAsks) || !Array.isArray(snapshot.plugins) || !Array.isArray(snapshot.ui)) {
     throw new Error('内核实时快照格式无效')
   }
   if (snapshot.conversationLives !== undefined && !Array.isArray(snapshot.conversationLives)) throw new Error('内核实时快照格式无效')
+  if (snapshot.pluginDocs !== undefined && !Array.isArray(snapshot.pluginDocs)) throw new Error('内核实时快照格式无效')
   const conversationLives: Record<number, ConversationLive> = {}
   for (const live of snapshot.conversationLives ?? []) {
     if (!isLiveShape(live)) throw new Error('内核实时快照格式无效')
     conversationLives[live.conversationId] = live
   }
-  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), conversationLives, pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions: snapshot.ui, workflowRuns: snapshot.workflowRuns, nodes: Array.isArray(snapshot.nodes) ? sortNodes(snapshot.nodes) : [], resolvedAsksByConv: previous.resolvedAsksByConv }
+  // 快照 pluginDocs 直投：免额外拉取，键与 ensurePluginDoc 一致（`${pluginId}/${docName}`）。
+  const pluginDocs: Record<string, unknown> = {}
+  if (Array.isArray(snapshot.pluginDocs)) {
+    for (const doc of snapshot.pluginDocs) {
+      if (doc === null || typeof doc !== 'object') throw new Error('内核实时快照格式无效')
+      if (typeof doc.pluginId !== 'string' || typeof doc.name !== 'string') throw new Error('内核实时快照格式无效')
+      pluginDocs[`${doc.pluginId}/${doc.name}`] = doc.value
+    }
+  }
+  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), conversationLives, pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions: snapshot.ui, pluginDocs, nodes: Array.isArray(snapshot.nodes) ? sortNodes(snapshot.nodes) : [], resolvedAsksByConv: previous.resolvedAsksByConv }
 }
 
 export function entryMatchesReference(entry: ConversationEntry, reference: string): boolean {
@@ -149,9 +158,6 @@ export function applyEventFrame(state: LiveState, frame: HelmEventFrame): LiveSt
       break
     case 'plugin.doc.updated':
       if ('doc' in event && state.plugins.some((p) => p.id === event.doc.pluginId && p.enabled)) next.pluginDocs = { ...state.pluginDocs, [`${event.doc.pluginId}/${event.doc.name}`]: event.doc.value }
-      break
-    case 'workflow.updated':
-      if ('run' in event) next.workflowRuns = upsert(state.workflowRuns, event.run)
       break
     case 'node.changed':
       if ('node' in event) {

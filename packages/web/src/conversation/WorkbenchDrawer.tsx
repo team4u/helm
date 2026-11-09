@@ -5,75 +5,11 @@ import { useHelmStore } from '../lib/store-context.js'
 import { matchesUiScope } from '../lib/types.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { formatBytes } from '../lib/format.js'
-import { WorkflowRunCard } from './WorkflowRunCard.js'
-import { SubagentLiveCard } from './SubagentLiveCard.js'
-import { buildWorkbenchSubagentItems, summarizeWorkbenchTasks } from './workflow-card-model.js'
-
-/** 窄屏抽屉覆盖模式（<=1200px）下点击导航类按钮后自动收起抽屉，避免遮挡背后视图。 */
-function maybeCollapseWorkbench(store: { setWorkbenchOpen: (open: boolean) => void }): void {
-  if (typeof window === 'undefined' || !window.matchMedia) return
-  if (window.matchMedia('(max-width: 1200px)').matches) store.setWorkbenchOpen(false)
-}
-
-function WorkflowInspector({ conversationId }: { conversationId: number }) {
-  const store = useHelmStore()
-  const runs = useMemo(
-    () => store.workflowRuns.filter((r) => r.conversationId === conversationId),
-    [store.workflowRuns, conversationId],
-  )
-  // 子代理统一列表：单子代理后台 run 认领的子会话与独立子会话合并去重（Active-First），
-  // 有子会话的后台单不再套进三层嵌套 WorkflowRunCard；无子会话的外部 run 仍由卡片渲染。
-  const subagentItems = useMemo(
-    () => buildWorkbenchSubagentItems(store.conversations, conversationId, runs),
-    [store.conversations, conversationId, runs],
-  )
-  const taskSummary = useMemo(
-    () => summarizeWorkbenchTasks(store.conversations, conversationId, runs),
-    [store.conversations, conversationId, runs],
-  )
-  const workflowRuns = runs.filter((r) => r.kind !== 'subagent')
-  const externalSubagentRuns = runs.filter(
-    (r) => r.kind === 'subagent' && !(r.nodes ?? []).some((n) => n.conversationId !== undefined),
-  )
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
-      {taskSummary.totalCount > 0 ? (
-        <div className="workbench-fleet-bar tabular-nums">
-          {taskSummary.activeCount > 0 ? <span className="workbench-fleet-item">{`${taskSummary.activeCount} 执行中`}</span> : null}
-          {taskSummary.blockedCount > 0 ? <span className="workbench-fleet-item workbench-fleet-warn">{`${taskSummary.blockedCount} 等待审批`}</span> : null}
-          {taskSummary.errorCount > 0 ? <span className="workbench-fleet-item workbench-fleet-err">{`${taskSummary.errorCount} 异常`}</span> : null}
-          {taskSummary.doneCount > 0 ? <span className="workbench-fleet-item workbench-fleet-done">{`${taskSummary.doneCount} 已完成`}</span> : null}
-        </div>
-      ) : null}
-      {workflowRuns.length > 0 ? <div className="trace-section-label">工作流运行</div> : null}
-      {workflowRuns.map((run) => (
-        <WorkflowRunCard key={run.id} run={run} inWorkbench onNavigate={() => maybeCollapseWorkbench(store)} />
-      ))}
-      {externalSubagentRuns.length > 0 ? <div className="trace-section-label">外部后台任务</div> : null}
-      {externalSubagentRuns.map((run) => (
-        <WorkflowRunCard key={run.id} run={run} inWorkbench onNavigate={() => maybeCollapseWorkbench(store)} />
-      ))}
-      {subagentItems.length > 0 ? (
-        <>
-          <div className="trace-section-label">子代理会话</div>
-          {subagentItems.map((item) => (
-            <SubagentLiveCard
-              key={item.conversationId}
-              childConversationId={item.conversationId}
-              toolStatus={item.summary?.status === 'working' ? 'running' : item.summary?.status === 'error' ? 'error' : item.backgroundRun?.status === 'running' ? 'running' : item.backgroundRun?.status === 'failed' || item.backgroundRun?.status === 'aborted' ? 'error' : 'done'}
-              backgroundRun={item.backgroundRun}
-              onNavigate={() => maybeCollapseWorkbench(store)}
-            />
-          ))}
-        </>
-      ) : null}
-      {runs.length === 0 && subagentItems.length === 0 ? (
-        <p style={{ color: 'var(--fg-muted)' }}>当前会话暂无工作流或子代理。</p>
-      ) : null}
-    </div>
-  )
-}
+import {
+  buildWorkbenchFooter,
+  buildWorkbenchTabs,
+  resolveActiveWorkbenchTab,
+} from './workbench-model.js'
 
 function ArtifactsTab({ conversationId }: { conversationId: number }) {
   const store = useHelmStore()
@@ -118,7 +54,7 @@ export interface WorkbenchDrawerProps {
   conversationId?: number
 }
 
-/** 右侧工作台抽屉：工作流与子代理 / 会话产物 / 插件 workbench.panel。 */
+/** 右侧工作台抽屉：内置产物页签 + 插件 workbench.panel（动态排序与角标）。 */
 export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
   const store = useHelmStore()
   const conversationId =
@@ -136,30 +72,30 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
       store.conversations.find((c) => c.id === conversationId) ?? store.conversationDetails[conversationId]
     )
   }, [props.conversation, conversationId, store.conversations, store.conversationDetails])
-  const artifacts = conversationId !== undefined ? store.conversationArtifacts[conversationId] ?? [] : []
-  const runs =
-    conversationId !== undefined
-      ? store.workflowRuns.filter((r) => r.conversationId === conversationId)
+  const artifactCount =
+    conversationId !== undefined ? store.conversationArtifacts[conversationId]?.length ?? 0 : 0
+
+  // 插件面板按会话 scope 过滤；内置产物页签恒在。
+  const scopedPanels = useMemo(() => {
+    const panels = conversation !== undefined
+      ? store.groupedUi.workbenchPanels.filter((p) => matchesUiScope(conversation, p.spec.scope))
       : []
-  const taskSummary = useMemo(
+    return { workbenchPanels: panels }
+  }, [conversation, store.groupedUi.workbenchPanels])
+
+  const tabs = useMemo(
     () =>
-      conversationId !== undefined
-        ? summarizeWorkbenchTasks(store.conversations, conversationId, runs)
-        : { workflowCount: 0, subagentCount: 0, totalCount: 0, activeCount: 0, blockedCount: 0, errorCount: 0, doneCount: 0 },
-    [store.conversations, conversationId, runs],
+      buildWorkbenchTabs({
+        groupedUi: scopedPanels,
+        pluginDocs: store.pluginDocs,
+        artifactCount,
+        conversationId,
+      }),
+    [scopedPanels, store.pluginDocs, artifactCount, conversationId],
   )
-  const panels = conversation !== undefined ? store.groupedUi.workbenchPanels.filter((p) => matchesUiScope(conversation, p.spec.scope)) : []
-
-  const tabs = useMemo(() => {
-    const list: Array<{ id: string; label: string }> = [{ id: 'tasks', label: `工作流与子代理 (${taskSummary.totalCount})` }]
-    list.push({ id: 'artifacts', label: `会话产物 (${artifacts.length})` })
-    for (const p of panels) {
-      list.push({ id: `plugin:${p.pluginId}/${p.spec.id}`, label: p.spec.label ?? p.spec.id })
-    }
-    return list
-  }, [artifacts.length, panels, taskSummary.totalCount])
-
-  const activeTab = store.workbenchTab
+  const activeTab = resolveActiveWorkbenchTab(store.workbenchTab, tabs)
+  const activePanel = tabs.find((tab) => tab.id === activeTab && tab.pluginId !== undefined)
+  const footerParts = buildWorkbenchFooter(tabs)
 
   return (
     <aside className="helm-workbench">
@@ -172,6 +108,11 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
             onClick={() => store.setWorkbenchTab(tab.id)}
           >
             {tab.label}
+            {tab.count > 0 && tab.id !== activeTab ? (
+              <span className={`badge ${tab.tone === 'warn' ? 'badge-warn' : tab.tone === 'accent' ? 'badge-accent' : 'badge-neutral'} tabular-nums`}>
+                {tab.count}
+              </span>
+            ) : null}
           </button>
         ))}
         <span style={{ flex: 1 }} />
@@ -191,40 +132,29 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
           <div style={{ padding: '20px 14px', color: 'var(--fg-muted)', fontSize: 12, textAlign: 'center' }}>
             无活跃会话上下文
           </div>
-        ) : activeTab === 'tasks' ? (
-          <WorkflowInspector conversationId={conversationId} />
         ) : activeTab === 'artifacts' ? (
           <ArtifactsTab conversationId={conversationId} />
-        ) : (
+        ) : activePanel !== undefined && activePanel.spec !== undefined && activePanel.pluginId !== undefined ? (
           <div style={{ padding: 10 }}>
-            {(() => {
-              const pluginTab = activeTab.slice('plugin:'.length)
-              const matched = panels.find((p) => `${p.pluginId}/${p.spec.id}` === pluginTab)
-              if (matched === undefined) {
-                return (
-                  <div style={{ color: 'var(--fg-muted)', fontSize: 12, textAlign: 'center', padding: 16 }}>
-                    工作台页签不存在或对当前会话不可用
-                  </div>
-                )
-              }
-              return (
-                <PluginUiView
-                  pluginId={matched.pluginId}
-                  spec={matched.spec}
-                  conversationId={conversationId}
-                  label={`面板 ${matched.spec.id}`}
-                  slotProps={{ conversation: store.conversationDetails[conversationId] ?? store.conversations.find((c) => c.id === conversationId) }}
-                />
-              )
-            })()}
+            <PluginUiView
+              pluginId={activePanel.pluginId}
+              spec={activePanel.spec}
+              conversationId={conversationId}
+              label={`工作台 ${activePanel.spec.label ?? activePanel.spec.id}`}
+              slotProps={{ conversation: conversation ?? { id: conversationId } }}
+            />
+          </div>
+        ) : (
+          <div style={{ color: 'var(--fg-muted)', fontSize: 12, textAlign: 'center', padding: 16 }}>
+            工作台页签不存在或对当前会话不可用
           </div>
         )}
       </div>
-      {(taskSummary.totalCount > 0 || artifacts.length > 0) && conversation !== undefined ? (
+      {footerParts.length > 0 ? (
         <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', gap: 6, fontSize: 11, color: 'var(--fg-muted)' }}>
-          <span className="badge badge-neutral">{`工作流 ${taskSummary.workflowCount}`}</span>
-          <span className="badge badge-neutral">{`子代理 ${taskSummary.subagentCount}`}</span>
-          <span className="badge badge-neutral">{`产物 ${artifacts.length}`}</span>
+          {footerParts.map((part) => (
+            <span key={part} className="badge badge-neutral">{part}</span>
+          ))}
         </div>
       ) : null}
     </aside>

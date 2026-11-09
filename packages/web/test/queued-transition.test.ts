@@ -30,7 +30,7 @@ function render(live: ConversationLive): string {
     connectionError: null, sseConnected: true, theme: 'dark', themePreference: 'dark',
     profiles: [], models: [], providers: [], credentials: [], skills: [], actions: [],
     primaryTarget: { kind: 'conversation', conversationId: 1 }, splitTarget: null,
-    workbenchOpen: false, workbenchTab: 'tasks', activeModal: null, notices: [],
+    workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, notices: [],
     setTheme: noop, setThemePreference: noop, toggleTheme: noop, checkAuth: asyncNoop,
     onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: asyncNoop,
     loadConversationDetail: asyncNoop, loadEarlierEntries: asyncNoop, loadConversationArtifacts: asyncNoop,

@@ -11,7 +11,7 @@ import type { ClientComponentRef } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { createPluginClientContext, PluginClientContext } from '../lib/plugin-client-context.js'
-import { loadPluginClientModule, PluginClientError, requireClientExport } from '../lib/plugin-client.js'
+import { getCachedClientComponent, loadPluginClientModule, PluginClientError, requireClientExport } from '../lib/plugin-client.js'
 import { HelmSpecView } from './HelmSpecView.js'
 import { ViewBoundary } from './ViewBoundary.js'
 
@@ -34,10 +34,15 @@ type ClientState =
 
 export function PluginUiView({ pluginId, spec, slotProps, conversationId, label }: PluginUiViewProps): ReactNode {
   const store = useHelmStore()
-  const [client, setClient] = useState<ClientState>({ phase: 'loading' })
-
-  // client 轨道仅在声明了 client 引用时激活（json 优先级回落逻辑见下）
+  // client 轨道仅在声明了 client 引用时激活（json 优先级回落逻辑见下）；
+  // 已解析模块缓存命中时初始状态直接 ready（时间线重渲染 / SSR 零闪烁）。
   const clientRef = spec.client
+  const [client, setClient] = useState<ClientState>(() => {
+    if (clientRef === undefined) return { phase: 'loading' }
+    const cached = getCachedClientComponent(pluginId, clientRef.module, clientRef.export)
+    return cached !== undefined ? { phase: 'ready', Component: cached } : { phase: 'loading' }
+  })
+
   useEffect(() => {
     if (clientRef === undefined) return
     let cancelled = false
