@@ -6,22 +6,13 @@ import { matchesUiScope } from '../lib/types.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { formatBytes } from './timeline-model.js'
 import { WorkflowRunCard } from './WorkflowRunCard.js'
-import { conversationStatusLabel } from '../shell/sidebar-model.js'
+import { SubagentLiveCard } from './SubagentLiveCard.js'
 import { filterStandaloneSubagents } from './workflow-card-model.js'
 
 /** 窄屏抽屉覆盖模式（<=1200px）下点击导航类按钮后自动收起抽屉，避免遮挡背后视图。 */
 function maybeCollapseWorkbench(store: { setWorkbenchOpen: (open: boolean) => void }): void {
   if (typeof window === 'undefined' || !window.matchMedia) return
   if (window.matchMedia('(max-width: 1200px)').matches) store.setWorkbenchOpen(false)
-}
-
-/** 子会话状态徽章样式（与 Sidebar 同语义）。 */
-function conversationStatusBadge(status: ConversationSummary['status']): string {
-  if (status === 'working') return 'badge-accent'
-  if (status === 'blocked') return 'badge-warn'
-  if (status === 'error') return 'badge-err'
-  if (status === 'done') return 'badge-ok'
-  return 'badge-neutral'
 }
 
 function WorkflowInspector({ conversationId }: { conversationId: number }) {
@@ -51,40 +42,15 @@ function WorkflowInspector({ conversationId }: { conversationId: number }) {
       {standaloneChildren.length > 0 ? (
         <>
           <div className="trace-section-label">独立子会话</div>
-          <div className="list">
-            {standaloneChildren.map((child) => (
-              <div className="row" key={child.id}>
-                <span>
-                  <strong>{`#${child.id}`}</strong> {child.title}
-                </span>
-                {child.status !== 'idle' && (
-                  <span className={`badge ${conversationStatusBadge(child.status)}`}>{conversationStatusLabel(child.status)}</span>
-                )}
-                <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}>
-                  <button
-                    className="btn btn-sm"
-                    title="在主屏打开该子会话"
-                    onClick={() => {
-                      store.openTarget({ kind: 'conversation', conversationId: child.id })
-                      maybeCollapseWorkbench(store)
-                    }}
-                  >
-                    打开
-                  </button>
-                  <button
-                    className="btn btn-sm workbench-split-btn"
-                    title="在分屏并排打开该子会话"
-                    onClick={() => {
-                      store.openTarget({ kind: 'conversation', conversationId: child.id }, { split: true })
-                      maybeCollapseWorkbench(store)
-                    }}
-                  >
-                    并排查看
-                  </button>
-                </span>
-              </div>
-            ))}
-          </div>
+          {standaloneChildren.map((child) => (
+            <SubagentLiveCard
+              key={child.id}
+              childConversationId={child.id}
+              toolStatus={child.status === 'working' ? 'running' : child.status === 'error' ? 'error' : 'done'}
+              defaultExpanded={child.status === 'working'}
+              onNavigate={() => maybeCollapseWorkbench(store)}
+            />
+          ))}
         </>
       ) : null}
       {runs.length === 0 && standaloneChildren.length === 0 ? (

@@ -18,6 +18,10 @@ export interface SubagentLiveCardProps {
   backgroundRun?: WorkflowRunSummary
   /** 关联的隔离工作树；缺省时卡片回退 backgroundRun 节点上的 worktree。 */
   worktree?: { path: string; branch: string }
+  /** 初始是否展开实时流（时间线默认 true；工作台总览默认仅 working 时展开，折叠态按需懒加载详情）。 */
+  defaultExpanded?: boolean
+  /** 点击“进入会话 / 并排查看”后的附加回调（例如工作台窄屏抽屉自动收起）。 */
+  onNavigate?: () => void
 }
 
 /**
@@ -68,6 +72,18 @@ export function subagentBadge(
 /** 工具 resultPreview 由 buildSubagentStreamLines 截到首行 100 字符；带省略号即视为被截断。 */
 export function toolResultPreviewTruncated(preview: string): boolean {
   return preview.endsWith('…')
+}
+
+/**
+ * 卡片头部紧凑标题：仅当 summary.title 是有意义的用户标题（非默认生成形态
+ * 「子代理 N」/「子会话 N」）时返回，否则 undefined（头部只显示编号）。
+ */
+export function compactCardTitle(title: string | undefined, childConversationId: number): string | undefined {
+  if (title === undefined) return undefined
+  const trimmed = title.trim()
+  if (trimmed === '') return undefined
+  if (trimmed === `子代理 ${childConversationId}` || trimmed === `子会话 ${childConversationId}`) return undefined
+  return trimmed
 }
 
 /** 滚动贴底判定：距底部不超过容差即视为贴底（供测试与组件共用同一语义）。 */

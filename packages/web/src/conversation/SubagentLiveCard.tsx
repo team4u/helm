@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ToolTraceStatus } from './timeline-model.js'
 import { buildSubagentStreamLines, formatDurationMs } from './timeline-model.js'
-import { subagentBadge, toolResultPreviewTruncated, isScrolledToBottom, type SubagentLiveCardProps } from './subagent-live-model.js'
+import { subagentBadge, toolResultPreviewTruncated, isScrolledToBottom, compactCardTitle, type SubagentLiveCardProps } from './subagent-live-model.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 
@@ -24,9 +24,9 @@ function streamToolIcon(status: ToolTraceStatus, isError: boolean): string {
  * 派生的后台 run 状态参与判定——run 仍在 running 时绝不假完成。
  * 详情加载失败显式报错并可重试，绝不静默停在“加载中”。
  */
-export function SubagentLiveCard({ childConversationId, toolStatus, backgroundRun, worktree }: SubagentLiveCardProps) {
+export function SubagentLiveCard({ childConversationId, toolStatus, backgroundRun, worktree, defaultExpanded, onNavigate }: SubagentLiveCardProps) {
   const store = useHelmStore()
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(defaultExpanded ?? true)
   const streamRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = useRef(true)
   const summary = useMemo(
@@ -38,10 +38,10 @@ export function SubagentLiveCard({ childConversationId, toolStatus, backgroundRu
   const loadDetail = store.loadConversationDetail
   const detailError = detail === undefined ? store.loadErrors[`conversation:${childConversationId}`] : undefined
 
-  // 自动加载详情：一旦加载完成，live-state 会把后续 conversation.entry 实时并入。
+  // 仅在卡片展开时自动加载子会话详情，避免工作台挂载多张折叠卡片时触发 N+1 请求风暴。
   useEffect(() => {
-    if (detail === undefined && detailError === undefined) void loadDetail(childConversationId)
-  }, [childConversationId, detail === undefined, detailError, loadDetail])
+    if (expanded && detail === undefined && detailError === undefined) void loadDetail(childConversationId)
+  }, [expanded, childConversationId, detail === undefined, detailError, loadDetail])
 
   const isWorking = summary?.status === 'working'
   const lines = useMemo(
@@ -61,6 +61,7 @@ export function SubagentLiveCard({ childConversationId, toolStatus, backgroundRu
   }, [expanded, lines.length, lastLineFingerprint, live?.updatedAt, live?.text.length, live?.thinking?.length])
 
   const badge = subagentBadge(summary?.status, toolStatus, backgroundRun?.status)
+  const title = compactCardTitle(summary?.title, childConversationId)
   const emptyHint = detailError !== undefined
     ? `子会话详情加载失败：${detailError}`
     : isWorking
@@ -97,8 +98,14 @@ export function SubagentLiveCard({ childConversationId, toolStatus, backgroundRu
           size={13}
           className={badge.status === 'working' && detailError === undefined ? 'spin-slow' : undefined}
         />
-        <span className="subagent-live-title">
+        <span
+          className="subagent-live-title"
+          title={title}
+        >
           子会话 #{childConversationId}
+          {title !== undefined ? (
+            <span className="subagent-live-title-text">{title}</span>
+          ) : null}
           {summary?.profileId !== undefined && summary.profileId !== '' ? (
             <span className="badge badge-neutral">{summary.profileId}</span>
           ) : null}
@@ -131,18 +138,22 @@ export function SubagentLiveCard({ childConversationId, toolStatus, backgroundRu
             type="button"
             className="btn btn-sm"
             title="进入该子会话继续对话"
-            onClick={() => store.openTarget({ kind: 'conversation', conversationId: childConversationId })}
+            onClick={() => {
+              store.openTarget({ kind: 'conversation', conversationId: childConversationId })
+              onNavigate?.()
+            }}
           >
             <HelmIcon name="message-square" size={11} />
             进入会话
           </button>
           <button
             type="button"
-            className="btn btn-sm subagent-split-btn"
+            className="btn btn-sm subagent-split-btn workbench-split-btn"
             title="在分屏并排打开该子会话"
-            onClick={() =>
+            onClick={() => {
               store.openTarget({ kind: 'conversation', conversationId: childConversationId }, { split: true })
-            }
+              onNavigate?.()
+            }}
           >
             <HelmIcon name="columns" size={11} />
             并排查看

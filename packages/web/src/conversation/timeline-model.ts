@@ -977,13 +977,52 @@ export function resolveSubagentConversationId(
     tool.input !== null && typeof tool.input === 'object' && !Array.isArray(tool.input)
       ? (tool.input as Record<string, unknown>)['resume']
       : undefined
-  if (typeof resumeRef === 'string' && /^\d+$/.test(resumeRef)) {
-    const resumeId = Number(resumeRef)
-    if (conversations.some((c) => c.id === resumeId && c.parentConversationId === parentConversationId)) {
-      return resumeId
-    }
+  // resume 兼容正整数 number 与纯数字 string 两种入参形态（safe integer，负数/小数不命中）。
+  const resumeId =
+    typeof resumeRef === 'number' && Number.isSafeInteger(resumeRef) && resumeRef > 0
+      ? resumeRef
+      : typeof resumeRef === 'string' && /^\d+$/.test(resumeRef)
+        ? Number(resumeRef)
+        : undefined
+  if (
+    resumeId !== undefined && Number.isSafeInteger(resumeId) && resumeId > 0 &&
+    conversations.some((c) => c.id === resumeId && c.parentConversationId === parentConversationId)
+  ) {
+    return resumeId
   }
   return undefined
+}
+
+/**
+ * 扫描时间线条目中所有关联到子会话的 subagent 工具调用，返回每个
+ * childConversationId 最后一次出现的 tool.key 映射（childConversationId -> tool.key）。
+ *
+ * 当同一子会话被反复 resume 时，时间线仅在最新一次调用处挂载 SubagentLiveCard，
+ * 前序调用仅保留单行 trace-row（标注“已在下文续接”），避免多张相同实时卡刷屏与状态污染。
+ */
+export function collectLatestSubagentToolKeys(
+  items: ReadonlyArray<TimelineItem>,
+  parentConversationId: number,
+  conversations: ReadonlyArray<Pick<ConversationSummary, 'id' | 'parentConversationId' | 'parentToolCallId'>>,
+): ReadonlyMap<number, string> {
+  const latestByChild = new Map<number, string>()
+  for (const item of items) {
+    if (item.kind !== 'assistant') continue
+    for (const seg of item.segments) {
+      if (seg.kind === 'tool') {
+        const childId = resolveSubagentConversationId(seg.tool, parentConversationId, conversations)
+        if (childId !== undefined) latestByChild.set(childId, seg.tool.key)
+      } else if (seg.kind === 'step-group') {
+        // 防御性遍历：subagent 正常豁免折叠，但孤儿 tool-result 等异常形态可能落入分组。
+        for (const step of seg.steps) {
+          if (step.kind !== 'tool') continue
+          const childId = resolveSubagentConversationId(step.tool, parentConversationId, conversations)
+          if (childId !== undefined) latestByChild.set(childId, step.tool.key)
+        }
+      }
+    }
+  }
+  return latestByChild
 }
 
 /** 工具输出 JSON 里的 run id 字段（"id":"wf_xxx"）精确提取（不匹配子串/前缀）。 */

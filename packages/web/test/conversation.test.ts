@@ -9,6 +9,7 @@ import { conversationsApi, ApiClientError } from '../src/lib/api.js'
 import {
   buildSubagentStreamLines,
   buildTimelineItems,
+  collectLatestSubagentToolKeys,
   detectArtifactRef,
   filterRewoundEntries,
   findToolView,
@@ -851,6 +852,83 @@ test('resolveSubagentConversationId：resume 数字 ref 匹配同父会话子会
     resolveSubagentConversationId({ ...resumeTool, input: { prompt: '继续', resume: 'worker-1' } }, 1, conversations),
     undefined,
   )
+})
+
+test('resolveSubagentConversationId：resume 支持正整数 number 入参（safe integer），非法数字不命中', { timeout: 60_000 }, () => {
+  const conversations = [convSummary(21, 1)]
+  const base: ToolTrace = {
+    key: 'tool:call-num',
+    toolName: 'subagent',
+    callId: 'call-none',
+    status: 'running',
+    isError: false,
+  }
+  // 数字形态 resume（与字符串同语义）：命中同父会话子会话
+  assert.equal(
+    resolveSubagentConversationId({ ...base, input: { prompt: '继续', resume: 21 } }, 1, conversations),
+    21,
+  )
+  // 非正整数 number：不命中（不猜测）
+  assert.equal(
+    resolveSubagentConversationId({ ...base, input: { prompt: '继续', resume: 0 } }, 1, conversations),
+    undefined,
+  )
+  assert.equal(
+    resolveSubagentConversationId({ ...base, input: { prompt: '继续', resume: -21 } }, 1, conversations),
+    undefined,
+  )
+  assert.equal(
+    resolveSubagentConversationId({ ...base, input: { prompt: '继续', resume: 1.5 } }, 1, conversations),
+    undefined,
+  )
+  // 指向其他父会话：拒绝
+  assert.equal(
+    resolveSubagentConversationId({ ...base, input: { prompt: '继续', resume: 99 } }, 1, conversations),
+    undefined,
+  )
+})
+
+test('collectLatestSubagentToolKeys：同一子会话多次 resume 仅记最后一次 tool.key，其他子会话互不干扰', { timeout: 60_000 }, () => {
+  const conversations = [convSummary(42, 1), convSummary(43, 1)]
+  // 子会话 #42：首次派生（footer 携带 conversationId=42）+ 两次 resume（resume=42）
+  // 子会话 #43：一次独立派生
+  const items = buildTimelineItems([
+    entry('1', 'helm.input', { data: { text: '开始', origin: 'human' } }),
+    assistantEntry('2', [toolCallBlock('call_1', 'subagent', { prompt: '首次派生' })]),
+    toolResultEntry('3', 'call_1', 'subagent', { text: '首战告捷\n[subagent conversationId=42]' }),
+    assistantEntry('4', [{ type: 'text', text: '继续深挖' }]),
+    entry('5', 'helm.input', { data: { text: '续接 42', origin: 'human' } }),
+    assistantEntry('6', [toolCallBlock('call_2', 'subagent', { prompt: '继续', resume: 42 })]),
+    toolResultEntry('7', 'call_2', 'subagent', { text: '第二轮完成\n[subagent conversationId=42]' }),
+    entry('8', 'helm.input', { data: { text: '再续接 42 并派生 43', origin: 'human' } }),
+    assistantEntry('9', [
+      toolCallBlock('call_3', 'subagent', { prompt: '再继续', resume: '42' }),
+      toolCallBlock('call_4', 'subagent', { prompt: '新任务' }),
+    ]),
+    toolResultEntry('10', 'call_3', 'subagent', { text: '第三轮完成\n[subagent conversationId=42]' }),
+    toolResultEntry('11', 'call_4', 'subagent', { text: '新会话完成\n[subagent conversationId=43]' }),
+  ])
+  const latest = collectLatestSubagentToolKeys(items, 1, conversations)
+  assert.equal(latest.size, 2)
+  assert.equal(latest.get(42), 'tool:call_3', '#42 仅记最后一次（resume string 形态的 call_3）')
+  assert.equal(latest.get(43), 'tool:call_4', '#43 记自身唯一一次 call_4')
+  // 首次调用 call_1 与第一次 resume call_2 均被覆盖：不再挂载实时卡
+  assert.notEqual(latest.get(42), 'tool:call_1')
+  assert.notEqual(latest.get(42), 'tool:call_2')
+})
+
+test('collectLatestSubagentToolKeys：跨父会话与无关联工具不产生条目', { timeout: 60_000 }, () => {
+  const conversations = [convSummary(51, 1), convSummary(52, 2)]
+  const items = buildTimelineItems([
+    assistantEntry('1', [
+      toolCallBlock('c-bash', 'bash', { command: 'ls' }),
+      toolCallBlock('c-cross', 'subagent', { prompt: '跨会话续接', resume: 52 }),
+    ]),
+    toolResultEntry('2', 'c-bash', 'bash', { text: 'ok' }),
+    toolResultEntry('3', 'c-cross', 'subagent', { text: '完成' }),
+  ])
+  const latest = collectLatestSubagentToolKeys(items, 1, conversations)
+  assert.equal(latest.size, 0, '非 subagent 工具与跨父会话 resume 均不命中')
 })
 
 test('resolveWorkflowRunForTool：运行期按 parentToolCallId 精确命中（不猜最新），完成后结果 id 全等双保险', { timeout: 60_000 }, () => {

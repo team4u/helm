@@ -25,6 +25,7 @@ const e = React.createElement
 const { SubagentLiveCard } = await import('../src/conversation/SubagentLiveCard.js')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
+const { WorkbenchDrawer } = await import('../src/conversation/WorkbenchDrawer.js')
 
 function summary(id: number, status: ConversationSummary['status']): ConversationSummary {
   return {
@@ -435,4 +436,82 @@ test('同步外部子代理无原生子会话：完成后卡片停止显示执�
   assert.ok(html.includes('外部执行已结束'))
   assert.ok(html.includes('已完成'))
   assert.ok(!html.includes('外部运行时执行中'))
+})
+
+// ---------------------------------------------------------------------------
+// SSR 实际渲染：defaultExpanded 折叠态与多次 resume 去重
+// ---------------------------------------------------------------------------
+
+test('resume 正在运行时：历史失败调用保留失败状态，只有最新调用挂载执行中的实时卡', { timeout: 60_000 }, () => {
+  const parent = summary(1, 'working')
+  const child = { ...summary(12, 'working'), parentConversationId: 1, parentToolCallId: 'call_new' }
+  const entries: ConversationEntry[] = [
+    { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'call_old', name: 'subagent', arguments: { prompt: '首次派生' } }] }] },
+    { id: '2', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'call_old', toolName: 'subagent', content: [{ type: 'text', text: JSON.stringify({ ok: false, execution: { conversationId: 12 } }) }], isError: true }] },
+    { id: '3', kind: 'helm.input', data: { text: '重试', origin: 'human' } },
+    { id: '4', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'call_new', name: 'subagent', arguments: { prompt: '继续修复', resume: '12' } }] }] },
+  ]
+  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent, child] }) },
+    e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
+  assert.equal(html.split('subagent-live-card').length - 1, 1)
+  const historicalRow = html.match(/<div class="trace-row trace-row-error"[\s\S]*?<\/div>/)?.[0]
+  assert.ok(historicalRow, '历史失败调用的工具行应保留')
+  assert.match(historicalRow, /已在下文续接[\s\S]*?trace-row-right">失败<\/span>/)
+  assert.equal(historicalRow.includes('spin-slow'), false, '历史失败行不能随后续 resume 转圈')
+  assert.match(html, /subagent-live-card[\s\S]*?执行中/)
+})
+
+test('defaultExpanded=false：SSR 首帧折叠，不渲染实时流，仅头部与状态徽章', { timeout: 60_000 }, () => {
+  const store = makeStore({
+    conversations: [summary(11, 'done')],
+    conversationDetails: { 11: { ...summary(11, 'done'), entries: entriesWithToolResult('exit 0') } },
+  })
+  const html = renderToString(
+    e(HelmStoreContext.Provider, { value: store },
+      e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done', defaultExpanded: false })),
+  )
+  assert.ok(html.includes('subagent-live-card'), '卡片容器应渲染')
+  assert.ok(html.includes('subagent-live-header'), '头部应渲染')
+  assert.ok(html.includes('已完成'), '状态徽章应渲染')
+  assert.ok(!html.includes('subagent-live-stream'), '折叠态 SSR 首帧不得渲染实时流容器')
+})
+
+test('同一子会话 #12 被首次派生 + resume 续接：时间线仅 1 张实时卡，前序行标注已在下文续接', { timeout: 60_000 }, () => {
+  const parent = summary(1, 'idle')
+  const child12 = { ...summary(12, 'done'), parentConversationId: 1, title: '子会话 12' }
+  const entries: ConversationEntry[] = [
+    { id: '1', kind: 'helm.input', data: { text: '开始', origin: 'human' } },
+    { id: '2', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'call_1', name: 'subagent', arguments: { prompt: '首次派生' } }] }] },
+    { id: '3', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'call_1', toolName: 'subagent', content: [{ type: 'text', text: '首轮完成\n[subagent conversationId=12]' }], isError: false }] },
+    { id: '4', kind: 'helm.input', data: { text: '继续', origin: 'human' } },
+    { id: '5', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'call_2', name: 'subagent', arguments: { prompt: '继续', resume: 12 } }] }] },
+    { id: '6', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'call_2', toolName: 'subagent', content: [{ type: 'text', text: '第二轮完成\n[subagent conversationId=12]' }], isError: false }] },
+    { id: '7', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '全部完成' }], stopReason: 'stop' }] },
+  ]
+  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent, child12] }) },
+    e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
+  const cardCount = html.split('subagent-live-card').length - 1
+  assert.equal(cardCount, 1, `同一子会话多次 resume 仅渲染 1 张实时卡，实际 ${cardCount}`)
+  // React SSR 在插值两侧插入 <!-- --> 注释节点，用正则匹配「#12 · 已在下文续接」
+  assert.match(html, /#<!-- -->12<!-- -->\s*·\s*已在下文续接/, '前序被续接的调用行应显示轻量续接标识')
+  assert.match(html, /子会话 #<!-- -->12/, '唯一实时卡应挂在最新调用处并显示子会话编号')
+})
+
+test('工作台独立子会话：复用 SubagentLiveCard 渲染，仅 working 默认展开', { timeout: 60_000 }, () => {
+  const child31 = { ...summary(31, 'idle'), parentConversationId: 1 }
+  const child32 = { ...summary(32, 'working'), parentConversationId: 1 }
+  const store = makeStore({
+    conversations: [child31, child32],
+  })
+  const html = renderToString(
+    e(HelmStoreContext.Provider, { value: store }, e(WorkbenchDrawer, { conversationId: 1 })),
+  )
+  assert.ok(html.includes('独立子会话'), '分组标题应渲染')
+  assert.ok(html.includes('子会话 #<!-- -->31') || html.includes('子会话 #31'), '折叠卡片头部应显示 #31')
+  assert.ok(html.includes('子会话 #<!-- -->32') || html.includes('子会话 #32'), 'working 卡片头部应显示 #32')
+  // idle 子会话折叠态不渲染实时流；working 子会话默认展开渲染实时流容器
+  const streams = html.split('subagent-live-stream').length - 1
+  assert.equal(streams, 1, `仅 working 卡展开实时流，实际 ${streams}`)
+  // 并排按钮携带双类名（时间线 + 工作台窄屏收敛）
+  assert.ok(html.includes('subagent-split-btn') && html.includes('workbench-split-btn'), '并排按钮应携带双专用类名')
 })

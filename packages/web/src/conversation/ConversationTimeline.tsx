@@ -16,6 +16,7 @@ import { WorkflowRunCard } from './WorkflowRunCard.js'
 import { MarkdownView } from './MarkdownView.js'
 import {
   buildTimelineItems,
+  collectLatestSubagentToolKeys,
   formatBytes,
   formatDurationMs,
   resolveSubagentConversationId,
@@ -301,10 +302,13 @@ function TraceRow({
   tool,
   conversationId,
   defaultOpen,
+  latestSubagentToolKeys,
 }: {
   tool: ToolTrace
   conversationId: number
   defaultOpen: boolean
+  /** 同一子会话仅最后一次 subagent 调用挂载实时卡；前序续接调用只留单行。 */
+  latestSubagentToolKeys?: ReadonlyMap<number, string>
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const store = useHelmStore()
@@ -348,11 +352,17 @@ function TraceRow({
 
   const subagentId = resolveSubagentConversationId(tool, conversationId, store.conversations)
   const subagentIdNum = subagentId !== undefined ? Number(subagentId) : undefined
+  // 同一子会话被多次 resume：仅最后一次调用挂实时卡，前序调用降级为单行 + 续接标识。
+  const isSupersededSubagent =
+    subagentIdNum !== undefined &&
+    latestSubagentToolKeys !== undefined &&
+    latestSubagentToolKeys.get(subagentIdNum) !== undefined &&
+    latestSubagentToolKeys.get(subagentIdNum) !== tool.key
 
   return (
     <div className={`trace-entry${rowFailed ? ' trace-entry-error' : ''}`}>
       {workflow && <WorkflowRunCard run={workflow} />}
-      {subagentIdNum !== undefined ? (
+      {subagentIdNum !== undefined && !isSupersededSubagent ? (
         <SubagentLiveCard
           childConversationId={subagentIdNum}
           toolStatus={tool.status}
@@ -387,6 +397,9 @@ function TraceRow({
           />
           <span className="trace-tool-name">{tool.toolName}</span>
           <span className="trace-tool-summary">{toolSummaryText(tool.toolName, tool.input)}</span>
+          {isSupersededSubagent && subagentIdNum !== undefined ? (
+            <span className="badge badge-neutral">#{subagentIdNum} · 已在下文续接</span>
+          ) : null}
         </span>
         <span className="trace-row-right">{right}</span>
       </div>
@@ -516,10 +529,12 @@ function StepGroup({
   steps,
   active,
   conversationId,
+  latestSubagentToolKeys,
 }: {
   steps: FoldableStep[]
   active: boolean
   conversationId: number
+  latestSubagentToolKeys?: ReadonlyMap<number, string>
 }) {
   const [userOverride, setUserOverride] = useState<boolean | null>(null)
   const prevActiveRef = useRef(active)
@@ -549,7 +564,13 @@ function StepGroup({
             step.kind === 'thinking' ? (
               <ThinkingRow key={`think:${idx}`} text={step.thinking.text} />
             ) : (
-              <TraceRow key={step.tool.key} tool={step.tool} conversationId={conversationId} defaultOpen={false} />
+              <TraceRow
+                key={step.tool.key}
+                tool={step.tool}
+                conversationId={conversationId}
+                defaultOpen={false}
+                latestSubagentToolKeys={latestSubagentToolKeys}
+              />
             ),
           )}
         </div>
@@ -703,9 +724,11 @@ function useHighlightScroll(conversationId: number): (node: HTMLDivElement | nul
 function AssistantTurnView({
   turn,
   conversation,
+  latestSubagentToolKeys,
 }: {
   turn: AssistantTurn
   conversation: ConversationSummary
+  latestSubagentToolKeys?: ReadonlyMap<number, string>
 }) {
   const store = useHelmStore()
   const [forking, setForking] = useState(false)
@@ -754,10 +777,19 @@ function AssistantTurnView({
               steps={seg.steps}
               active={seg.active === true}
               conversationId={conversation.id}
+              latestSubagentToolKeys={latestSubagentToolKeys}
             />
           )
         }
-        return <TraceRow key={seg.key} tool={seg.tool} conversationId={conversation.id} defaultOpen={false} />
+        return (
+          <TraceRow
+            key={seg.key}
+            tool={seg.tool}
+            conversationId={conversation.id}
+            defaultOpen={false}
+            latestSubagentToolKeys={latestSubagentToolKeys}
+          />
+        )
       })}
       {turn.live ? (
         <span className="msg-origin-tag">
@@ -817,6 +849,12 @@ export function ConversationTimeline({
 
   const hasLiveTurn = items.some((item) => item.kind === 'assistant' && item.live)
   const resolvedAsks = store.resolvedAsksByConv[conversation.id] ?? []
+
+  // 同一子会话被多次 resume：仅最后一次 subagent 调用挂实时卡，前序降级单行（已在下文续接）。
+  const latestSubagentToolKeys = useMemo(
+    () => collectLatestSubagentToolKeys(items, conversation.id, store.conversations),
+    [items, conversation.id, store.conversations],
+  )
 
   // 贴底吸附：仅当用户主动上滚时脱离贴底（内容增长导致 scrollHeight 变大不得误判为脱离）。
   useEffect(() => {
@@ -961,7 +999,7 @@ export function ConversationTimeline({
               ref={highlightScrollRef}
               data-entry-id={anchorId}
             >
-              <AssistantTurnView turn={item} conversation={conversation} />
+              <AssistantTurnView turn={item} conversation={conversation} latestSubagentToolKeys={latestSubagentToolKeys} />
             </div>
           )
         })}
