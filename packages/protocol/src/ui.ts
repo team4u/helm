@@ -6,6 +6,9 @@
 
 import type { ConversationEntry, ConversationScope, ConversationSummary } from './conversation.js'
 
+/** 编译器保留的 CSS 文本导出名；加载器确认模块有效后才将其挂入页面。 */
+export const PLUGIN_CLIENT_CSS_EXPORT = '__helmClientCss' as const
+
 /** 插件 client.tsx 编译产物中的具名导出引用。 */
 export interface ClientComponentRef {
   /** 相对插件 clientRoot 的源模块路径（如 'client.tsx'、'panels/Status.tsx'；禁止绝对路径/越根 ../）。 */
