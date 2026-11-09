@@ -521,8 +521,8 @@ test('工作台独立子会话：默认全部折叠零请求，第 2 层副栏�
   const pos31 = html.indexOf('子会话 #<!-- -->31') !== -1 ? html.indexOf('子会话 #<!-- -->31') : html.indexOf('子会话 #31')
   const pos32 = html.indexOf('子会话 #<!-- -->32') !== -1 ? html.indexOf('子会话 #<!-- -->32') : html.indexOf('子会话 #32')
   assert.ok(pos31 !== -1 && pos32 !== -1 && pos32 < pos31, 'working #32 应按 Active-First 排在 idle #31 前面')
-  // 并排按钮携带双类名（时间线 + 工作台窄屏收敛）
-  assert.ok(html.includes('subagent-split-btn') && html.includes('workbench-split-btn'), '并排按钮应携带双专用类名')
+  // 彻底移除并排按钮，统一由抽屉模态承载
+  assert.ok(!html.includes('subagent-split-btn') && !html.includes('workbench-split-btn'), '不得再渲染并排按钮')
 })
 
 // ---------------------------------------------------------------------------
@@ -944,7 +944,7 @@ test('子代理卡为极简胶囊卡：不渲染内联展开箭头与调用详�
   assert.ok(!html.includes('subagent-live-toggle'), '不得渲染折叠展开箭头')
   assert.ok(!html.includes('subagent-live-stream'), '不得内联渲染实时流')
   assert.ok(!html.includes('进入会话'), '不得渲染进入会话页面按钮')
-  assert.ok(html.includes('并排查看'), '应保留并排查看分屏入口')
+  assert.ok(!html.includes('并排查看'), '卡片不得渲染并排查看按钮')
   assert.ok(html.includes('点击打开子会话抽屉'), '应支持点击卡片打开子会话抽屉')
 })
 

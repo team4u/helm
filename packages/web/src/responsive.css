@@ -201,7 +201,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .palette-close-desktop { display: none !important; }
   .palette-close-mobile { display: inline-flex !important; }
   .conversation-drawer { width: 100vw; }
-  .conversation-drawer-split-btn { display: none !important; }
   .conversation-drawer-close-btn { min-height: 44px; min-width: 44px; }
 }
 

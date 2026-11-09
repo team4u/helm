@@ -17,7 +17,7 @@ import { useHelmStore } from '../lib/store-context.js'
  * - 第 1 层头部展示任务标题 + 状态徽章 + 极简统计尾注；
  * - 第 2 层动态副栏单行展示当前动作 / 思考 / 结论 / 错误；
  * - 点击卡片（头部或副栏）直接打开右侧工作台抽屉；
- * - 右侧保留并排查看与任务控制（中止/重试），移除原「进入会话」按钮；
+ * - 右侧仅保留任务控制（中止/重试），点击卡片主体统一弹出子会话抽屉；
  * - 异常卡片保留状态徽章红字，容器本身不带红色边框。
  */
 export function SubagentLiveCard({
@@ -188,19 +188,6 @@ export function SubagentLiveCard({
               <span className="subagent-action-label">重试</span>
             </button>
           ) : null}
-          <button
-            type="button"
-            className="btn btn-xs subagent-split-btn workbench-split-btn"
-            title="在分屏并排打开该子会话"
-            aria-label={`并排查看子会话 #${childConversationId}`}
-            onClick={() => {
-              store.openTarget({ kind: 'conversation', conversationId: childConversationId }, { split: true })
-              onNavigate?.()
-            }}
-          >
-            <HelmIcon name="columns" size={11} />
-            <span className="subagent-action-label">并排查看</span>
-          </button>
         </span>
       </div>
       {snippet !== undefined ? (

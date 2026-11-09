@@ -289,18 +289,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
             <>
               <button
                 type="button"
-                className="btn btn-sm btn-ghost conversation-drawer-split-btn"
-                title="并在分屏中查看此会话"
-                onClick={() => {
-                  onCloseDrawer()
-                  store.openTarget({ kind: 'conversation', conversationId }, { split: true })
-                }}
-              >
-                <HelmIcon name="columns" size={12} />
-                <span className="pane-action-label">分屏</span>
-              </button>
-              <button
-                type="button"
                 className="btn btn-sm btn-ghost conversation-drawer-primary-btn"
                 title="在主屏中全屏打开此会话"
                 onClick={() => {

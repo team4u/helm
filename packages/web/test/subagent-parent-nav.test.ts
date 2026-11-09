@@ -61,7 +61,7 @@ test('ConversationPane.tsx 在存在 parentConversationId 时渲染父级回退�
   )
 })
 
-test('WorkbenchDrawer.tsx 与 SubagentLiveCard.tsx 并排按钮携带专用类名供移动端收敛', { timeout: 60_000 }, () => {
+test('WorkbenchDrawer.tsx 与 SubagentLiveCard.tsx 移除并排按钮，统一由抽屉模态承载', { timeout: 60_000 }, () => {
   // WorkbenchDrawer 复用 SubagentLiveCard 渲染独立子会话（不再自建文字行）
   assert.match(
     workbenchSource,
@@ -74,11 +74,11 @@ test('WorkbenchDrawer.tsx 与 SubagentLiveCard.tsx 并排按钮携带专用类�
     'WorkbenchDrawer 不得再自建携带 workbench-split-btn 的并排按钮（统一复用 SubagentLiveCard）',
   )
 
-  // SubagentLiveCard 中的「并排查看」同时携带两类专用类名（时间线 + 工作台窄屏收敛）
-  assert.match(
+  // SubagentLiveCard 移除并排查看，统一由抽屉承载
+  assert.doesNotMatch(
     liveCardSource,
-    /className=["'][^"']*subagent-split-btn[^"']*workbench-split-btn[^"']*["'][\s\S]*?并排查看/,
-    'SubagentLiveCard 并排按钮必须同时携带 subagent-split-btn 与 workbench-split-btn 类名',
+    /并排查看/,
+    'SubagentLiveCard 不得再渲染并排查看按钮',
   )
 })
 
