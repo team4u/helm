@@ -33,7 +33,7 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 
 import { HelmError } from '@helm/protocol'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/service.js'
+import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/builtin-plugins/workflow/engine/service.js'
 import { createHubHandler, startHub } from '../src/http/index.js'
 import { AuthService } from '../src/services/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'

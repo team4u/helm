@@ -88,7 +88,7 @@ function toolNameOf(model: unknown[] | undefined): string | undefined {
 }
 
 /** 进程内 state store（隔离 KernelRuntime 上的编排插件用；不跨重启）。 */
-function memoryState(): import('../src/workflow/index.js').WorkflowStateStore {
+function memoryState(): import('../src/builtin-plugins/workflow/engine/index.js').WorkflowStateStore {
   const map = new Map<string, unknown>()
   return {
     get: <T>(key: string, initial: T): T => (map.has(key) ? (map.get(key) as T) : initial),

@@ -19,13 +19,13 @@
 
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
-import type { WorkflowJournalEntry } from '@helm/protocol'
+import type { WorkflowJournalEntry } from '../src/builtin-plugins/workflow/engine/journal.js'
 import {
   actionJournalKey,
   agentJournalKey,
   type JournalWriteInput,
-} from '../src/workflow/journal.js'
-import { runWorkflow, type WorkflowHost, type WorkflowSpawnResult } from '../src/workflow/runtime.js'
+} from '../src/builtin-plugins/workflow/engine/journal.js'
+import { runWorkflow, type WorkflowHost, type WorkflowSpawnResult } from '../src/builtin-plugins/workflow/engine/runtime.js'
 
 const timeout = { timeout: 60_000 } as const
 

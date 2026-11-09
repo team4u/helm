@@ -26,7 +26,7 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
-import type { WorkflowJournalEntry } from '@helm/protocol'
+import type { WorkflowJournalEntry } from '../src/builtin-plugins/workflow/engine/journal.js'
 import { HelmError } from '@helm/protocol'
 import {
   JournalWriter,
@@ -34,10 +34,10 @@ import {
   agentJournalKey,
   readJournal,
   type JournalWriteInput,
-} from '../src/workflow/journal.js'
-import { extractMeta, WorkflowMetaError } from '../src/workflow/meta.js'
-import { normalizeWorkflowArgs, runWorkflow, type WorkflowHost, type WorkflowSpawnResult } from '../src/workflow/runtime.js'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/service.js'
+} from '../src/builtin-plugins/workflow/engine/journal.js'
+import { extractMeta, WorkflowMetaError } from '../src/builtin-plugins/workflow/engine/meta.js'
+import { normalizeWorkflowArgs, runWorkflow, type WorkflowHost, type WorkflowSpawnResult } from '../src/builtin-plugins/workflow/engine/runtime.js'
+import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/builtin-plugins/workflow/engine/service.js'
 
 const timeout = { timeout: 60_000 } as const
 

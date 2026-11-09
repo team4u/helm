@@ -9,7 +9,7 @@ import {
   WorkflowService,
   type WorkflowServiceHost,
   type WorkflowStateStore,
-} from '../src/workflow/service.js'
+} from '../src/builtin-plugins/workflow/engine/service.js'
 
 function makeEnv(
   t: TestContext,

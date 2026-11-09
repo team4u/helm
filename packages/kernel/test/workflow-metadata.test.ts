@@ -27,12 +27,12 @@ import type {
   AgentSpawnRequest,
   WorkflowRunSummary,
 } from '@helm/protocol'
-import { runWorkflow, type WorkflowHost } from '../src/workflow/runtime.js'
+import { runWorkflow, type WorkflowHost } from '../src/builtin-plugins/workflow/engine/runtime.js'
 import {
   WorkflowService,
   type WorkflowServiceHost,
   type WorkflowStateStore,
-} from '../src/workflow/service.js'
+} from '../src/builtin-plugins/workflow/engine/service.js'
 
 const timeout = { timeout: 60_000 } as const
 

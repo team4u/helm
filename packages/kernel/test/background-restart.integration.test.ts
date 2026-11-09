@@ -39,7 +39,7 @@ import { ROOT_CONVERSATION_ID, type HelmEventFrame, type PluginDefinition } from
 
 import { KernelRuntime } from '../src/runtime/index.js'
 import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/service.js'
+import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/builtin-plugins/workflow/engine/service.js'
 
 const require = createRequire(import.meta.url)
 /** 主仓 packages/kernel（测试随仓内 test/ 交付，src 依赖用相对导入；tsx loader 直跑源码）。 */

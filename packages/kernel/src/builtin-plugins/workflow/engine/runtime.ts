@@ -26,6 +26,7 @@ import {
   type AgentJournalKeyInput,
   JournalWriteError,
   type JournalWriteInput,
+  type WorkflowJournalEntry,
 } from './journal.js'
 import { type CompiledSchema, compileJsonSchema } from './json-schema.js'
 import { extractMeta, type WorkflowMeta } from './meta.js'
@@ -201,7 +202,7 @@ export interface RunWorkflowOptions {
    * action 路径 fatal；agent 路径仅诊断计数、不中断 run。
    */
   journal?: {
-    entries?: readonly import('@helm/protocol').WorkflowJournalEntry[]
+    entries?: readonly WorkflowJournalEntry[]
     append?(entry: JournalWriteInput): Promise<void> | void
   }
   /**
@@ -524,7 +525,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
   /** index → 该位次的终态行（agent 或 action；started 行不参与前缀匹配）。 */
   const settledByIndex = new Map<
     number,
-    import('@helm/protocol').WorkflowJournalEntry
+    WorkflowJournalEntry
   >()
   for (const entry of journalEntries) {
     if (entry.type === 'agent' || entry.type === 'action') settledByIndex.set(entry.index, entry)

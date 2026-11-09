@@ -29,14 +29,13 @@ import {
   type AgentSpawnRequest,
   type ConversationSummary,
   type SavedWorkflowSummary,
-  type WorkflowJournalEntry,
   type WorkflowProgressEntry,
   type WorkflowRunRequest,
   type WorkflowRunStatus,
   type WorkflowNodeState,
   type WorkflowRunSummary,
 } from '@helm/protocol'
-import { JournalWriter, readJournal } from './journal.js'
+import { JournalWriter, readJournal, type WorkflowJournalEntry } from './journal.js'
 import { extractMeta, hasMetaDeclaration, type WorkflowMeta } from './meta.js'
 import { collapse, type WorkflowEntry } from './progress.js'
 import {
