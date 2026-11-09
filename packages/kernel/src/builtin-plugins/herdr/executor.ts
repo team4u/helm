@@ -26,7 +26,7 @@ import type { CreateAskResultLike, CreateAskSpecLike, HerdrPluginDependencies, H
 import { targetNodeId } from './contracts.js'
 import { validateOrThrow } from '../../plugins/schema.js'
 import { AskCoordinator, backoffForDuplicateBlocked, type AskEntry } from './asks.js'
-import { buildHerdrAskPromptPlan, parseCustomKeys, type HerdrAskPromptPlan } from './prompt-options.js'
+import { buildHerdrAskPromptPlan, extractMenuItemsFromSnapshot, parseCustomKeys, type BlockedSnapshotAnalysis, type HerdrAskPromptPlan } from './prompt-options.js'
 import { MetadataProjector } from './metadata.js'
 import { PaneRegistry, nodeIdOf, targetOf, type ManagedPane, type PaneRouting } from './panes.js'
 import {
@@ -734,12 +734,45 @@ export class HerdrExecutor {
       return { outcome: { id: entry.askId, status: 'superseded', answers: {} }, plan: buildHerdrAskPromptPlan('') }
     }
     const snapshot = await this.readDiagnostic(pane)
-    const plan = buildHerdrAskPromptPlan(snapshot)
+    // 混合快慢路径：正则已识别标准菜单（>= 2 项）时走 0ms 确定性快路径，
+    // 绝不调 AI（省延迟、省 Token）；仅非标 TUI 快照（如横向按钮 / 快捷键提示）
+    // 且配置了模型端口时，才异步解析候选按键选项。
+    let aiAnalysis: BlockedSnapshotAnalysis | undefined
+    const fastItems = extractMenuItemsFromSnapshot(snapshot)
+    if (fastItems.length < 2 && snapshot.trim().length > 0 && this.deps.analyzeBlockedSnapshot !== undefined) {
+      try {
+        aiAnalysis = await this.deps.analyzeBlockedSnapshot({
+          snapshot,
+          conversationId,
+          signal: request.signal,
+        })
+      } catch (error) {
+        if (request.signal?.aborted) throw error
+        // 辅助层失败不阻塞审批主流程：回退确定性通用选项。
+        aiAnalysis = undefined
+      }
+      // AI 等待期间终端可能自行推进：权威复核 seq，过期则不挂旧 AskDoc。
+      const latest = await this.agentGet(targetOf(pane), pane.paneId, request.signal)
+      for (const superseded of this.asks.observeAuthority({
+        paneId: pane.paneId,
+        nodeId: nodeIdOf(pane),
+        seq: latest.stateChangeSeq,
+        status: latest.agentStatus,
+      })) {
+        await this.cancelAskQuietly(superseded.askId, 'superseded')
+      }
+      if (latest.stateChangeSeq !== entry.seq || latest.agentStatus !== 'blocked') {
+        this.asks.settle(entry, { keysSent: false })
+        return { outcome: { id: entry.askId, status: 'superseded', answers: {} }, plan: buildHerdrAskPromptPlan('') }
+      }
+    }
+    const plan = buildHerdrAskPromptPlan(snapshot, aiAnalysis)
     const retryHint =
       entry.attempt > 0 && entry.lastSentKeys && entry.lastSentKeys.length > 0
         ? `上次发送的按键 [${entry.lastSentKeys.join(', ')}] 未解除阻塞（终端仍停留在 seq ${entry.seq}），请对照快照重新选择。\n\n`
         : ''
-    const description = `${retryHint}终端 agent (${pane.agentName}) 在 ${pane.effectiveCwd} 等待选择。终端快照（脱敏）：\n\`\`\`\n${snapshot.slice(0, 1500)}\n\`\`\``
+    const aiSummaryLine = plan.summary ? `阻塞摘要：${this.deps.redact(plan.summary)}\n\n` : ''
+    const description = `${retryHint}${aiSummaryLine}终端 agent (${pane.agentName}) 在 ${pane.effectiveCwd} 等待选择。终端快照（脱敏）：\n\`\`\`\n${snapshot.slice(0, 1500)}\n\`\`\``
     const pending = this.host.createAsk({
       id: entry.askId,
       conversationId,

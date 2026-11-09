@@ -1,6 +1,7 @@
 import type { Context } from '@earendil-works/chord/context'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import type { AgentGateResult, AskFieldOption, Profile, RpcResult } from '@helm/protocol'
+import type { BlockedSnapshotAnalysis } from './prompt-options.js'
 
 /** One server, selected consistently for commands, files and event subscriptions. */
 export interface HerdrTarget {
@@ -130,7 +131,19 @@ export interface HerdrPluginDependencies {
   /** 跨节点通道（EnvFabric 注入；缺省时远端目标显式报错，绝不静默回退本机）。 */
   nodeChannel?: HerdrNodeChannel
   transport?: HerdrTransport
+  /**
+   * 可选：当确定性正则未从阻塞快照中识别出标准菜单时，调用会话模型解析
+   * 脱敏终端快照并提取候选按键选项。未配置模型、超时或解析失败时返回 undefined，
+   * 调用方自动回退至通用按键选项，绝不阻塞审批卡创建。
+   */
+  analyzeBlockedSnapshot?: (input: {
+    snapshot: string
+    conversationId: number
+    signal?: AbortSignal
+  }) => Promise<BlockedSnapshotAnalysis | undefined>
 }
+
+export type { BlockedSnapshotAiOption, BlockedSnapshotAnalysis } from './prompt-options.js'
 
 /** ctx.host.createAsk 的最小形状（与 AskCreateSpec/AskResult 对齐）。 */
 export interface CreateAskSpecLike {
