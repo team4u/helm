@@ -17,7 +17,9 @@ import {
   buildAgentStandings,
   collectEnabledPluginIds,
   conversationStatusBadgeClass,
+  conversationStatusDotClass,
   conversationStatusLabel,
+  conversationStatusTooltip,
   extractSidebarViews,
   filterConversationsByTag,
   filterDeletableConversations,
@@ -397,6 +399,23 @@ test('conversationStatusLabel / BadgeClass 覆盖五态', { timeout: 60_000 }, (
   assert.equal(conversationStatusBadgeClass('done'), 'badge badge-ok')
   assert.equal(conversationStatusBadgeClass('error'), 'badge badge-err')
   assert.equal(conversationStatusBadgeClass('idle'), 'badge badge-neutral')
+})
+
+test('conversationStatusDotClass 仅对非 idle 状态返回圆点类名', { timeout: 60_000 }, () => {
+  assert.equal(conversationStatusDotClass('idle'), null)
+  assert.equal(conversationStatusDotClass('working'), 'status-dot status-dot-working')
+  assert.equal(conversationStatusDotClass('blocked'), 'status-dot status-dot-blocked')
+  assert.equal(conversationStatusDotClass('done'), 'status-dot status-dot-done')
+  assert.equal(conversationStatusDotClass('error'), 'status-dot status-dot-error')
+})
+
+test('conversationStatusTooltip 生成准确悬停提示', { timeout: 60_000 }, () => {
+  assert.equal(conversationStatusTooltip('idle'), '空闲')
+  assert.equal(conversationStatusTooltip('blocked'), '待确认')
+  assert.equal(conversationStatusTooltip('done'), '已完成')
+  assert.equal(conversationStatusTooltip('error'), '异常')
+  assert.equal(conversationStatusTooltip('working'), '运行中')
+  assert.equal(conversationStatusTooltip('working', '正在分析代码'), '运行中: 正在分析代码')
 })
 
 test('resolveTargetString conversation:profile: 优先无父链常驻会话，不做标签硬编码', { timeout: 60_000 }, () => {

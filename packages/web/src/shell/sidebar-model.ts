@@ -343,6 +343,37 @@ export function conversationStatusBadgeClass(status: ConversationSummary['status
   }
 }
 
+/** 会话状态圆点样式类：idle 状态返回 null（不显示圆点）。 */
+export function conversationStatusDotClass(
+  status: ConversationSummary['status'],
+): string | null {
+  if (status === 'idle') return null
+  switch (status) {
+    case 'working':
+      return 'status-dot status-dot-working'
+    case 'blocked':
+      return 'status-dot status-dot-blocked'
+    case 'done':
+      return 'status-dot status-dot-done'
+    case 'error':
+      return 'status-dot status-dot-error'
+    default:
+      return 'status-dot'
+  }
+}
+
+/** 会话状态悬浮提示文案。 */
+export function conversationStatusTooltip(
+  status: ConversationSummary['status'],
+  doing?: string,
+): string {
+  const base = conversationStatusLabel(status)
+  if (status === 'working' && doing?.trim()) {
+    return `${base}: ${doing.trim()}`
+  }
+  return base
+}
+
 /**
  * 判断会话是否允许被人类删除：
  * - 根会话（#1，ROOT_CONVERSATION_ID）受系统保护，不可删除；
