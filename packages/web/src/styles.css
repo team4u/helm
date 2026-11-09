@@ -403,11 +403,46 @@ textarea {
   .nav-item-row-actions { display: inline-flex; }
 }
 
-.agent-standing .nav-item-meta .badge {
-  max-width: 64px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* 会话状态圆点与呼吸动效 */
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.status-dot-working {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-bg);
+  animation: status-dot-pulse 1.8s ease-in-out infinite;
+}
+
+.status-dot-blocked {
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--warn-bg);
+}
+
+.status-dot-done {
+  background: var(--ok);
+  box-shadow: 0 0 0 2px var(--ok-bg);
+}
+
+.status-dot-error {
+  background: var(--err);
+  box-shadow: 0 0 0 2px var(--err-bg);
+}
+
+@keyframes status-dot-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1.5px var(--accent-bg);
+    opacity: 0.85;
+  }
+  50% {
+    box-shadow: 0 0 0 3.5px var(--accent-bg);
+    opacity: 1;
+  }
 }
 
 .agent-standing .nav-item-sub .nav-item-meta > .tabular-nums {
