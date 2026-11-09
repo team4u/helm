@@ -407,8 +407,8 @@ test('ScreenHost 零插件 ID 特判，所有 screen 统一经 PluginUiView 渲�
   assert.ok(!source.includes('RecallGraphScreen'), 'RecallGraphScreen 专用组件应已删除')
   assert.ok(source.includes('PluginUiView'), '所有 screen 一律经 PluginUiView 渲染')
   try {
-    await readFile(new URL('../src/screens/RecallGraphScreen.tsx', import.meta.url), 'utf-8')
-    assert.fail('RecallGraphScreen.tsx 应已删除')
+    await readFile(new URL('../src/screens/HerdrOverviewScreen.tsx', import.meta.url), 'utf-8')
+    assert.fail('HerdrOverviewScreen.tsx 应已删除')
   } catch (err) {
     assert.ok((err as NodeJS.ErrnoException).code === 'ENOENT')
   }

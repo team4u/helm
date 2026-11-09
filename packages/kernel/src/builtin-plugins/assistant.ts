@@ -1,6 +1,6 @@
-import { ROOT_CONVERSATION_ID, type PluginDefinition } from '@helm/protocol';
+import { ROOT_CONVERSATION_ID, type PluginDefinition, type Profile } from '@helm/protocol';
 import { FileNotFoundError } from '../services/atomic-file.js';
-import { MAX_MEMORY_CHARS, type ProfileService, type SkillService } from '../services/index.js';
+import { DEFAULT_PROFILE_ID, MAX_MEMORY_CHARS, type ProfileService, type SkillService } from '../services/index.js';
 import { HELM_CLI_SKILL_ASSET } from './assistant/assets.js';
 
 interface AssistantServices {
@@ -25,6 +25,24 @@ export {
 /** 截断说明（注入时附在截断内容之后，绝不静默截断）。 */
 const MEMORY_TRUNCATION_NOTE = `\n[ helm 提示：MEMORY.md 超过 ${MAX_MEMORY_CHARS} 字符上限，以上为前 ${MAX_MEMORY_CHARS} 字符；请用 update_memory(mode='replace') 整理精简记忆 ]`;
 
+/**
+ * 自举默认 assistant Profile 的托管元数据：缺失时显式补写
+ * managedByPlugin: 'builtin:assistant'（已是其他值或已存在时原样保留，
+ * 不做旧数据归一化）；默认 Profile 不存在属内核未初始化异常，如实上抛。
+ * 写入经 ProfileService.save 整体保存（其余字段原样透传）。
+ */
+async function ensureDefaultProfileManaged(profiles: ProfileService): Promise<void> {
+  const existing = await profiles.get(DEFAULT_PROFILE_ID);
+  if (existing === undefined) {
+    throw new Error(
+      `默认 profile '${DEFAULT_PROFILE_ID}' 不存在（内核 ensureDefault 应先于插件启动执行）`,
+    );
+  }
+  if (existing.managedByPlugin !== undefined) return;
+  const next: Profile = { ...existing, managedByPlugin: 'builtin:assistant' };
+  await profiles.save(next);
+}
+
 function escapeXml(text: string): string {
   return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
@@ -38,10 +56,13 @@ export function createAssistantPlugin({ profiles, skills }: AssistantServices): 
     definePlugin(ctx) {
       // 启动时同步系统级内置技能 skills/helm-cli/（Layer 1 + Layer 2）：
       // 受管系统资产以源码版本为准逐文件覆盖，缺失补齐；常规接口写入被拒。
+      // 同时自举默认 assistant Profile 的托管元数据：缺失时显式补写
+      // managedByPlugin（ensureDefault 不做旧数据归一化，由本插件自举声明）。
       ctx.service({
         id: 'assistant-skills',
         async start() {
           await skills.ensureSkill(HELM_CLI_SKILL_ASSET);
+          await ensureDefaultProfileManaged(profiles);
         },
         async stop() {},
       });

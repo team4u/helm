@@ -338,6 +338,16 @@ async function route(
       if (method === 'POST') {
         const body = await readJsonBody(ctx.request)
         const profile = parseProfileBody(body, { requireId: true })
+        // 托管元数据仅可信插件自举可声明（ProfileService 直写）；HTTP 创建
+        // 不接受 managedByPlugin，防止伪造托管身份或提前占位锁删除。
+        if (profile.managedByPlugin !== undefined) {
+          throw new HelmError(
+            'profile_managed_by_plugin',
+            'managedByPlugin 由插件自举声明，不可经 HTTP 创建时设置',
+            403,
+            { profileId: profile.id },
+          )
+        }
         const saved = await kernel.profiles.save(profile)
         await kernel.alignProfileConversations?.(saved.id)
         return jsonOk(redactor, await enrichProfile(saved), { status: 201 })
@@ -357,6 +367,21 @@ async function route(
         if (profile.id !== undefined && profile.id !== profileId) {
           throw new ValidationError('body.id（若提供）需与路径参数一致')
         }
+        // 托管元数据不可篡改：既有 managedByPlugin 的 Profile，PUT 不得移除或
+        // 改写该字段（可信插件自举走 ProfileService 直写不经 HTTP）。缺失字段
+        // 视为移除（PUT 整体替换契约），显式拒绝而非静默接管。
+        const existing = await kernel.profiles.get(profileId)
+        if (existing === undefined) {
+          throw new HelmError('not_found', `profile 不存在: ${profileId}`, 404)
+        }
+        if (existing.managedByPlugin !== undefined && profile.managedByPlugin !== existing.managedByPlugin) {
+          throw new HelmError(
+            'profile_managed_by_plugin',
+            `profile ${profileId} 由插件 ${existing.managedByPlugin} 托管，托管元数据不可经 HTTP 修改或移除`,
+            403,
+            { profileId, managedByPlugin: existing.managedByPlugin },
+          )
+        }
         const saved = await kernel.profiles.save({ ...profile, id: profileId })
         await kernel.alignProfileConversations?.(saved.id)
         return jsonOk(redactor, await enrichProfile(saved))
@@ -367,6 +392,17 @@ async function route(
         const inUse = (await kernel.listConversations()).some((c) => c.profileId === profileId)
         if (inUse) {
           throw new HelmError('profile_in_use', `profile ${profileId} 仍被会话绑定，先解绑再删除`, 409)
+        }
+        // 插件托管 Profile（managedByPlugin 非空）拒绝删除：防止绕过 UI 直接
+        // 调 HTTP 删除插件自举资产；内核默认 profile 保护由 ProfileService 承担。
+        const target = await kernel.profiles.get(profileId)
+        if (target?.managedByPlugin !== undefined) {
+          throw new HelmError(
+            'profile_managed_by_plugin',
+            `profile ${profileId} 由插件 ${target.managedByPlugin} 托管，不可删除`,
+            403,
+            { profileId, managedByPlugin: target.managedByPlugin },
+          )
         }
         await kernel.profiles.delete(profileId)
         return jsonOk(redactor, { ok: true })

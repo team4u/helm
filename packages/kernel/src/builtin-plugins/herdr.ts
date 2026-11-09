@@ -22,6 +22,9 @@
  * 半途失败自行清理已获取资源；stop 清理订阅/定时器/Asks 与可回收自有 pane。
  */
 
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { HelmError, type PluginDefinition, type WorkflowRunSummary } from '@helm/protocol'
 import { createHerdrTransport } from './herdr/transport.js'
 import { targetNodeId, type HerdrConfig, type HerdrEvent, type HerdrPluginDependencies, type HerdrTarget, type HerdrTransport } from './herdr/contracts.js'
@@ -40,11 +43,38 @@ import { isValidSessionName, isValidNodeId, resolveSocketPath } from './herdr/tr
 import { normalizeStartupTimeoutMs } from './herdr/spawn-rules.js'
 import { OverviewProjector, type OverviewDoc } from './herdr/overview.js'
 
+/**
+ * clientRoot 兼容 src / dist 运行路径（与 workflow 插件同机制）：
+ * 编译后 dist/builtin-plugins/herdr.js 同级无 client/（tsx 源目录有）；
+ * 探测失败回退包内 src 源目录，仍失败显式抛错（不静默降级）。
+ */
+function resolveHerdrClientRoot(): string {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const local = join(here, 'herdr', 'client')
+  if (existsSync(local)) return local
+  const pkgRoot = dirname(dirname(here))
+  const srcFallback = join(pkgRoot, 'src', 'builtin-plugins', 'herdr', 'client')
+  if (existsSync(srcFallback)) return srcFallback
+  throw new HelmError(
+    'herdr_plugin_client_missing',
+    `内置插件 builtin:herdr 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
+    500,
+  )
+}
+
+/** Herdr 23 种 CLI agent.start kind（detect::agent_label 全集）；供 ProfileRuntimeUiSpec 候选。 */
+const HERDR_AGENT_SUGGESTIONS: ReadonlyArray<string> = [
+  'pi', 'claude', 'codex', 'gemini', 'cursor', 'devin', 'agy', 'cline',
+  'omp', 'mastracode', 'opencode', 'copilot', 'kimi', 'kiro', 'droid',
+  'amp', 'grok', 'hermes', 'kilo', 'qodercli', 'qwen', 'maki', 'muse',
+]
+
 export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefinition {
   return {
     id: 'builtin:herdr',
     name: 'Herdr 终端',
     version: '0.1.0',
+    clientRoot: resolveHerdrClientRoot(),
     definePlugin(ctx) {
       // ---- 状态（每次启用周期重建） ----
       const transport: HerdrTransport =
@@ -401,7 +431,21 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         target: 'screen:builtin:herdr/overview',
         order: 40,
       })
-      ctx.ui.screen({ id: 'overview', label: 'Herdr 终端总览', icon: 'terminal', docs: ['overview'] })
+      ctx.ui.screen({
+        id: 'overview',
+        label: 'Herdr 终端总览',
+        icon: 'terminal',
+        docs: ['overview'],
+        client: { module: 'index.tsx', export: 'HerdrOverviewScreen' },
+      })
+      ctx.ui.profileRuntime({
+        id: 'herdr',
+        kind: 'herdr',
+        label: '外部 Herdr 运行时',
+        icon: 'terminal',
+        description: '（可选）作为 subagent 时绑定 Herdr CLI',
+        agentSuggestions: [...HERDR_AGENT_SUGGESTIONS],
+      })
 
       // ---- hooks ----
       ctx.hook.onAgentSpawn(async (request) => {

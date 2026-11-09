@@ -1,0 +1,11 @@
+/**
+ * builtin:herdr 插件自有样式（clientRoot 内本地 CSS）。
+ *
+ * 编译器合并为插件 JS 的样式文本导出，由宿主确认加载有效后注入，
+ * 插件停用/卸载时由宿主移除。仅使用宿主全局设计变量与通用类
+ * （helm-pane / pane-topbar / jr-table / badge / btn 等），不覆盖宿主组件。
+ */
+.herdr-overview-filters {
+  padding: 10px 16px 0;
+  justify-content: flex-start;
+}

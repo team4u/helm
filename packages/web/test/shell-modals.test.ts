@@ -259,8 +259,25 @@ test('buildAgentStandings：profiles 未加载出 assistant 时兜底生成个�
   assert.equal(standings.length, 1)
   assert.equal(standings[0]!.profileId, 'assistant')
   assert.equal(standings[0]!.label, '个人助理')
-  assert.equal(standings[0]!.icon, 'sparkles')
+  // 图标统一优先 pinMeta（sidebar.item）；无 pinMeta 时回退 bot（角色图标
+  // 由 builtin:assistant 的 sidebar.item 声明，不在宿主硬编码）。
+  assert.equal(standings[0]!.icon, 'bot')
   assert.equal(standings[0]!.primaryConversation?.id, 1)
+})
+
+test('buildAgentStandings：assistant 站位图标与排序由 sidebar.item pinMeta 驱动（order:0 sparkles）', { timeout: 60_000 }, () => {
+  const standings = buildAgentStandings({
+    profiles: [],
+    conversations: [conv({ id: 1, title: '个人助理', profileId: 'assistant' })],
+    plugins: [{ id: 'builtin:assistant', enabled: true }],
+    sidebarItems: [
+      { pluginId: 'builtin:assistant', spec: { id: 'root', label: '个人助理', icon: 'sparkles', target: 'conversation:1', order: 0 } },
+    ],
+    sidebarSections: [],
+  })
+  assert.equal(standings[0]!.icon, 'sparkles')
+  assert.equal(standings[0]!.label, '个人助理')
+  assert.equal(standings[0]!.order, 0)
 })
 
 test('buildAgentStandings：子代理派生会话（有父链）不挂 Agent 站位', { timeout: 60_000 }, () => {

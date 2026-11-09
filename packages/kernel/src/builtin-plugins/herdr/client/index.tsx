@@ -1,73 +1,109 @@
 /**
- * Herdr 终端总览全屏视图（builtin:herdr/overview）。
+ * builtin:herdr 插件 client.tsx 组件（只导出组件，保 Fast Refresh 契约）：
+ * - HerdrOverviewScreen：Herdr 终端总览全屏视图（原 @helm/web 同构迁移）。
  *
- * 数据：usePluginDoc('builtin:herdr', 'overview') 实时订阅 OverviewDoc
- * （version 2：panes 全量基表 + asks，行以 nodeId 标识目标节点；stale/error 诚实告警）。
- * 交互：focus / read 为用户显式操作（read 弹窗展示脱敏终端尾部 40 行）；
+ * 数据经 @helm/plugin-client 共享 hooks（usePluginDoc / usePluginContext）
+ * 从宿主 store 响应式读取；focus / read / list 动作经 ctx.callAction 走
+ * POST /api/actions/builtin:herdr/<actionId>，无任何宿主私有 store 依赖。
  * 归属红线：human 行不携带任何管理字段，界面上也不提供管理动作。
+ * node / owner / status 筛选经 ScreenProps.params / setParams 深链可恢复。
  */
 import { useMemo, useState } from 'react'
+import './styles.css'
 import type { ReactNode } from 'react'
-import { HelmIcon } from '../lib/icons.js'
-import { formatCompactTimestamp } from '../lib/format.js'
-import { useHelmStore, usePluginDoc } from '../lib/store-context.js'
-import { Select, type SelectOption } from '../ui/Select.js'
-import { formatSpecText } from '../ui/spec-normalize.js'
+import type { ScreenProps } from '@helm/protocol'
+import { usePluginContext, usePluginDoc } from '@helm/plugin-client'
+import {
+  agentStatusTone,
+  collectNodes,
+  computeStats,
+  filterPanes,
+  filtersToParamsPatch,
+  outcomeLabel,
+  paneRowKey,
+  parseFilters,
+  parseManagedMap,
+  parseReadText,
+  type OverviewDoc,
+  type OverviewPaneRow,
+} from './models.ts'
 
-export interface HerdrOverviewScreenProps {
-  isSplit?: boolean
-  onCloseSplit?: () => void
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  Circle,
+  Loader2,
+  MessageSquare,
+  RefreshCw,
+  RotateCcw,
+  Terminal,
+  X,
+} from 'lucide-react'
+
+function Icon({ name, size = 12, className, style }: { name: string; size?: number; className?: string; style?: React.CSSProperties }): ReactNode {
+  const map: Record<string, typeof Terminal> = {
+    check: Check,
+    circle: Circle,
+    'chevron-down': ChevronDown,
+    loader: Loader2,
+    'message-square': MessageSquare,
+    'refresh-cw': RefreshCw,
+    'rotate-ccw': RotateCcw,
+    terminal: Terminal,
+    'alert-triangle': AlertTriangle,
+    x: X,
+  }
+  const Cmp = map[name] ?? Circle
+  return <Cmp size={size} strokeWidth={1.75} className={className} style={style} />
 }
 
-interface OverviewPaneRow {
-  nodeId: string
-  paneId: string
-  tabId: string
-  workspaceId: string
-  ownedBy: 'helm' | 'human'
-  agentStatus: string
-  cwd?: string
-  foregroundCwd?: string
-  label?: string
-  title?: string
-  agent?: string
-  agentName?: string
-  focused?: boolean
-  outcome?: string
-  pendingAsk?: boolean
+/** 紧凑时间戳 MM-DD HH:mm:ss（本地时区；0/缺失返回占位符）。 */
+function formatCompactTimestamp(ms: number): string {
+  if (!ms) return '未知'
+  const date = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
-interface OverviewDoc {
-  version: 2
-  updatedAt: number
-  stale: boolean
-  error?: string
-  panes: OverviewPaneRow[]
-  asks: Array<{ paneId: string; nodeId: string; seq: number; phase: string }>
+/** 原生极简下拉（无宿主 Select 依赖；仅插件视图内使用）。 */
+function NativeSelect({
+  value,
+  options,
+  ariaLabel,
+  onChange,
+  width,
+}: {
+  value: string
+  options: ReadonlyArray<{ value: string; label: string }>
+  ariaLabel: string
+  onChange: (next: string) => void
+  width?: number
+}): ReactNode {
+  return (
+    <select
+      className="input"
+      style={{ width, padding: '4px 8px', fontSize: 12 }}
+      value={value}
+      aria-label={ariaLabel}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {options.map((opt) => (
+        <option key={opt.value} value={opt.value}>
+          {opt.label}
+        </option>
+      ))}
+    </select>
+  )
 }
 
-const AGENT_STATUS_TONE: Record<string, string> = {
-  idle: 'neutral',
-  working: 'accent',
-  blocked: 'warn',
-  done: 'ok',
-  unknown: 'neutral',
-}
-
-const OUTCOME_LABEL: Record<string, { label: string; tone: string }> = {
-  running: { label: '运行中', tone: 'accent' },
-  keepalive: { label: '保活', tone: 'neutral' },
-  failed: { label: '失败', tone: 'err' },
-  settled: { label: '已收尾', tone: 'ok' },
-}
-
-const OWNER_FILTER_OPTIONS: ReadonlyArray<SelectOption<string>> = [
+const OWNER_FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'all', label: '全部归属' },
   { value: 'helm', label: 'helm 受管' },
   { value: 'human', label: 'human 直连' },
 ]
 
-const STATUS_FILTER_OPTIONS: ReadonlyArray<SelectOption<string>> = [
+const STATUS_FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'all', label: '全部状态' },
   { value: 'working', label: 'working' },
   { value: 'idle', label: 'idle' },
@@ -76,49 +112,32 @@ const STATUS_FILTER_OPTIONS: ReadonlyArray<SelectOption<string>> = [
   { value: 'unknown', label: 'unknown' },
 ]
 
-export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScreenProps): ReactNode {
-  const store = useHelmStore()
-  const doc = usePluginDoc<OverviewDoc>('builtin:herdr', 'overview')
+export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
+  const { isSplit, params, setParams } = props
+  const ctx = usePluginContext()
+  const doc = usePluginDoc<OverviewDoc>('overview')
 
-  const [nodeFilter, setNodeFilter] = useState('all')
-  const [ownerFilter, setOwnerFilter] = useState('all')
-  const [statusFilter, setStatusFilter] = useState('all')
+  const filters = useMemo(() => parseFilters(params), [params])
   const [busyPane, setBusyPane] = useState<string | null>(null)
   const [snapshot, setSnapshot] = useState<{ title: string; text: string } | null>(null)
+  const [managedMap, setManagedMap] = useState<Record<string, number>>({})
 
   const panes = doc?.panes ?? []
-  const nodes = useMemo(() => Array.from(new Set(panes.map((p) => p.nodeId))).sort(), [panes])
-  const nodeFilterOptions = useMemo<ReadonlyArray<SelectOption<string>>>(
+  const nodes = useMemo(() => collectNodes(panes), [panes])
+  const nodeFilterOptions = useMemo<ReadonlyArray<{ value: string; label: string }>>(
     () => [
       { value: 'all', label: '全部节点' },
-      ...nodes.map((m) => ({
-        value: m,
-        label: m === 'local' ? '本机 (local)' : m,
-      })),
+      ...nodes.map((m) => ({ value: m, label: m === 'local' ? '本机 (local)' : m })),
     ],
     [nodes],
   )
 
-  const filtered = useMemo(
-    () =>
-      panes.filter((p) => {
-        if (nodeFilter !== 'all' && p.nodeId !== nodeFilter) return false
-        if (ownerFilter !== 'all' && p.ownedBy !== ownerFilter) return false
-        if (statusFilter !== 'all' && p.agentStatus !== statusFilter) return false
-        return true
-      }),
-    [panes, nodeFilter, ownerFilter, statusFilter],
-  )
+  const filtered = useMemo(() => filterPanes(panes, filters), [panes, filters])
+  const stats = useMemo(() => computeStats(panes, nodes), [panes, nodes])
 
-  const stats = useMemo(
-    () => ({
-      total: panes.length,
-      working: panes.filter((p) => p.agentStatus === 'working').length,
-      blocked: panes.filter((p) => p.agentStatus === 'blocked').length,
-      nodes: nodes.length,
-    }),
-    [panes, nodes],
-  )
+  const updateFilter = (key: 'node' | 'owner' | 'status', next: string) => {
+    setParams(filtersToParamsPatch({ ...filters, [key]: next }))
+  }
 
   const invokeWithGuard = async (paneKey: string, fn: () => Promise<void>) => {
     if (busyPane !== null) return
@@ -126,64 +145,47 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
     try {
       await fn()
     } catch (error) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: 'Herdr 操作失败',
-        body: error instanceof Error ? error.message : String(error),
-      })
+      ctx.notify(
+        `Herdr 操作失败：${error instanceof Error ? error.message : String(error)}`,
+        'error',
+      )
     } finally {
       setBusyPane(null)
     }
   }
 
   const focusPane = (row: OverviewPaneRow) =>
-    invokeWithGuard(`focus:${row.nodeId}:${row.paneId}`, async () => {
-      await store.invokePluginAction('builtin:herdr', 'focus', {
+    invokeWithGuard(`focus:${paneRowKey(row)}`, async () => {
+      await ctx.callAction('focus', {
         paneId: row.paneId,
         ...(row.nodeId !== 'local' ? { nodeId: row.nodeId } : {}),
       })
     })
 
   const readPane = (row: OverviewPaneRow) =>
-    invokeWithGuard(`read:${row.nodeId}:${row.paneId}`, async () => {
-      const result = (await store.invokePluginAction('builtin:herdr', 'read', {
+    invokeWithGuard(`read:${paneRowKey(row)}`, async () => {
+      const result = await ctx.callAction('read', {
         paneId: row.paneId,
         lines: 40,
         ...(row.nodeId !== 'local' ? { nodeId: row.nodeId } : {}),
-      })) as { text?: unknown } | undefined
-      const text = result !== null && typeof result === 'object' && 'text' in result ? String(result.text) : formatSpecText(result)
-      setSnapshot({ title: `${row.paneId}@${row.nodeId}${row.agentName !== undefined ? ` (${row.agentName})` : ''}`, text })
+      })
+      setSnapshot({
+        title: `${row.paneId}@${row.nodeId}${row.agentName !== undefined ? ` (${row.agentName})` : ''}`,
+        text: parseReadText(result),
+      })
     })
 
-  // 受管行的关联会话：由 herdr 插件的 list 动作补充（overview doc 行不含
-  // conversationId；只有 registry 才有 parentConversationId）。这里用 invokes
-  // 是显式操作；但为避免每行一次调用，打开关联会话仅在行上存在
-  // parentConversationId（未来 doc 版本扩展）或经 asks 关联时可用。
-  // 现实写法：受管 pane 的 parentConversationId 经 list 动作一次性拉取。
-  const [managedMap, setManagedMap] = useState<Record<string, number>>({})
+  /** 受管 pane 的 parentConversationId 经 list 动作一次性拉取（显式操作，不逐行轮询）。 */
   const loadManagedMap = () =>
     invokeWithGuard('list', async () => {
-      const result = (await store.invokePluginAction('builtin:herdr', 'list', {})) as {
-        panes?: Array<Record<string, unknown>>
-      } | undefined
-      const map: Record<string, number> = {}
-      if (result !== null && typeof result === 'object' && Array.isArray(result.panes)) {
-        for (const p of result.panes) {
-          const paneId = typeof p['paneId'] === 'string' ? p['paneId'] : undefined
-          const nodeId = typeof p['nodeId'] === 'string' ? p['nodeId'] : 'local'
-          const parent = p['parentConversationId']
-          if (paneId !== undefined && typeof parent === 'number') map[`${nodeId}:${paneId}`] = parent
-        }
-      }
-      setManagedMap(map)
+      setManagedMap(parseManagedMap(await ctx.callAction('list', {})))
     })
 
   return (
     <div className="helm-pane">
       <div className="pane-topbar">
         <div className="pane-title-group">
-          <HelmIcon name="terminal" size={14} />
+          <Icon name="terminal" size={14} />
           <span className="pane-title">Herdr 终端总览</span>
         </div>
         <div className="pane-actions">
@@ -192,57 +194,51 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
           <span className="badge badge-warn">待确认 {stats.blocked}</span>
           <span className="badge badge-neutral">节点 {stats.nodes}</span>
           <button type="button" className="btn btn-sm" onClick={() => void loadManagedMap()}>
-            <HelmIcon name="refresh-cw" size={12} />
+            <Icon name="refresh-cw" size={12} />
             刷新关联
           </button>
           <button
             type="button"
             className="btn btn-sm"
             disabled={doc === undefined}
-            onClick={() => void store.ensurePluginDoc('builtin:herdr', 'overview')}
+            onClick={() => void ctx.getPluginDoc('overview')}
           >
-            <HelmIcon name="rotate-ccw" size={12} />
+            <Icon name="rotate-ccw" size={12} />
             重取
           </button>
-          {isSplit && (
-            <button type="button" className="btn btn-sm btn-ghost" onClick={onCloseSplit}>
-              <HelmIcon name="x" size={12} />
-              关闭分屏
-            </button>
-          )}
         </div>
       </div>
 
       {(doc?.stale === true || doc?.error !== undefined) && (
         <div className="jr-callout jr-callout-warn" style={{ margin: '10px 16px 0' }}>
-          <HelmIcon name="alert-triangle" size={13} style={{ flexShrink: 0, marginTop: 2 }} />
+          <Icon name="alert-triangle" size={13} style={{ flexShrink: 0, marginTop: 2 }} />
           <span>
             Herdr 连接降级或不可达：{doc?.error ?? '未知错误'}（以下为最后已知快照，时间 {formatCompactTimestamp(doc?.updatedAt ?? 0)}）
           </span>
         </div>
       )}
 
-      <div className="pane-actions" style={{ padding: '10px 16px 0', justifyContent: 'flex-start' }}>
-        <Select
-          style={{ width: 140 }}
-          value={nodeFilter}
+      <div className="pane-actions herdr-overview-filters">
+        <NativeSelect
+          width={140}
+          value={filters.node}
           options={nodeFilterOptions}
-          aria-label="节点筛选"
-          onChange={(e) => setNodeFilter(e.target.value)}
+          ariaLabel="节点筛选"
+          onChange={(next) => updateFilter('node', next)}
         />
-        <Select
-          style={{ width: 140 }}
-          value={ownerFilter}
+        <NativeSelect
+          width={140}
+          value={filters.owner}
           options={OWNER_FILTER_OPTIONS}
-          aria-label="归属筛选"
-          onChange={(e) => setOwnerFilter(e.target.value)}
+          ariaLabel="归属筛选"
+          onChange={(next) => updateFilter('owner', next)}
         />
-        <Select
-          style={{ width: 140 }}
-          value={statusFilter}
+        <NativeSelect
+          width={140}
+          value={filters.status}
           options={STATUS_FILTER_OPTIONS}
-          aria-label="状态筛选"
-          onChange={(e) => setStatusFilter(e.target.value)}
+          ariaLabel="状态筛选"
+          onChange={(next) => updateFilter('status', next)}
         />
         <span className="jr-metric-label">
           {filtered.length}/{panes.length} 行
@@ -282,9 +278,9 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
                   </tr>
                 )}
                 {filtered.map((row) => {
-                  const key = `${row.nodeId}:${row.paneId}`
-                  const statusTone = AGENT_STATUS_TONE[row.agentStatus] ?? 'neutral'
-                  const outcomeMeta = row.outcome !== undefined ? OUTCOME_LABEL[row.outcome] : undefined
+                  const key = paneRowKey(row)
+                  const statusTone = agentStatusTone(row.agentStatus)
+                  const outcomeMeta = outcomeLabel(row.outcome)
                   const parentConversationId = managedMap[key]
                   return (
                     <tr key={key}>
@@ -328,7 +324,7 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
                             disabled={busyPane !== null}
                             onClick={() => void focusPane(row)}
                           >
-                            {busyPane === `focus:${key}` && <HelmIcon name="loader" size={11} />}
+                            {busyPane === `focus:${key}` && <Icon name="loader" size={11} />}
                             聚焦
                           </button>
                           <button
@@ -337,7 +333,7 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
                             disabled={busyPane !== null}
                             onClick={() => void readPane(row)}
                           >
-                            {busyPane === `read:${key}` && <HelmIcon name="loader" size={11} />}
+                            {busyPane === `read:${key}` && <Icon name="loader" size={11} />}
                             快照
                           </button>
                           {(row.pendingAsk === true || parentConversationId !== undefined) && (
@@ -348,10 +344,11 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
                               title={parentConversationId !== undefined ? `会话 #${parentConversationId}` : '点「刷新关联」获取受管窗格的关联会话'}
                               onClick={() => {
                                 if (parentConversationId === undefined) return
-                                store.openTarget(`conversation:${parentConversationId}`, { split: isSplit !== true })
+                                if (isSplit) ctx.openConversationDrawer(parentConversationId)
+                                else ctx.openScreen(`conversation:${parentConversationId}`)
                               }}
                             >
-                              <HelmIcon name="message-square" size={11} />
+                              <Icon name="message-square" size={11} />
                               打开关联会话
                             </button>
                           )}
@@ -389,7 +386,7 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
             <div className="modal-header">
               <div className="modal-title mono">终端快照：{snapshot.title}</div>
               <button type="button" className="btn btn-sm btn-ghost" onClick={() => setSnapshot(null)}>
-                <HelmIcon name="x" size={12} />
+                <Icon name="x" size={12} />
                 关闭
               </button>
             </div>

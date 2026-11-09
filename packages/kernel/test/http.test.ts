@@ -785,6 +785,57 @@ test('profiles DELETE 仍被会话绑定返回 409 profile_in_use', { timeout: 6
   assert.equal(ok.status, 200)
 })
 
+test('profiles 托管保护：managedByPlugin 拒绝删除与篡改，POST 不可伪造托管身份', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  // 可信插件自举资产直写（不经 HTTP）：ProfileService.save 带 managedByPlugin
+  await profiles.save({
+    id: 'hub-managed',
+    name: '受管中枢',
+    managedByPlugin: 'builtin:superagent',
+    humanSelectable: false,
+  })
+  // DELETE：托管 Profile 403（无会话绑定占用，纯粹四托管保护）
+  const del = await call(handler, 'DELETE', '/api/profiles/hub-managed')
+  assert.equal(del.status, 403)
+  assert.equal(del.body.error.code, 'profile_managed_by_plugin')
+
+  // PUT 移除 managedByPlugin（整体替换契约下缺失即移除）：403
+  const putStrip = await call(handler, 'PUT', '/api/profiles/hub-managed', {
+    body: { name: '改名' },
+  })
+  assert.equal(putStrip.status, 403)
+  assert.equal(putStrip.body.error.code, 'profile_managed_by_plugin')
+
+  // PUT 改写为其他插件：403
+  const putFake = await call(handler, 'PUT', '/api/profiles/hub-managed', {
+    body: { name: '改名', managedByPlugin: 'builtin:other' },
+  })
+  assert.equal(putFake.status, 403)
+
+  // PUT 原样携带相同值：合法（保留其余字段编辑能力）
+  const putKeep = await call(handler, 'PUT', '/api/profiles/hub-managed', {
+    body: { name: '受管中枢改名', managedByPlugin: 'builtin:superagent', humanSelectable: false },
+  })
+  assert.equal(putKeep.status, 200)
+  assert.equal(putKeep.body.name, '受管中枢改名')
+  assert.equal(putKeep.body.managedByPlugin, 'builtin:superagent')
+
+  // POST 创建带 managedByPlugin：403（托管身份仅可信插件自举可声明）
+  const post = await call(handler, 'POST', '/api/profiles', {
+    body: { id: 'fake-managed', name: '伪造托管', managedByPlugin: 'builtin:superagent' },
+  })
+  assert.equal(post.status, 403)
+  assert.equal(post.body.error.code, 'profile_managed_by_plugin')
+})
+
+test('profiles DELETE 默认 assistant 受保护（被根会话绑定或内核默认保护，不可经 HTTP 删除）', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const del = await call(handler, 'DELETE', '/api/profiles/assistant')
+  // fixture 未建根会话时命中内核 DEFAULT_PROFILE_ID 保护（403）；
+  // 已建根会话时命中会话绑定保护（409）——两者均为拒绝，绝不允许 200。
+  assert.ok(del.status === 403 || del.status === 409, `assistant 删除应被拒绝（实际 ${del.status}）`)
+})
+
 test('providers PUT 接受完整原始数组（CLI 约定）与 { providers } 包裹', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const array = [

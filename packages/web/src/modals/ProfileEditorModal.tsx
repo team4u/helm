@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Profile } from '@helm/protocol'
+import type { Profile, ProfileRuntimeUiSpec } from '@helm/protocol'
 import { ApiClientError, assetsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
@@ -28,8 +28,14 @@ import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from 
 
 type EditorTab = 'basic' | 'system' | 'memory'
 
-const BUILTIN_PROTECTED_PROFILES = new Set(['assistant', 'superagent', 'watchdog'])
-const COMMON_HERDR_AGENTS = ['pi', 'claude', 'codex', 'agy', 'gemini', 'cursor', 'opencode', 'gemini-cli']
+/** Profile 默认保护（内核 DEFAULT_PROFILE_ID 通用机制，无角色硬编码）。 */
+const DEFAULT_PROFILE_ID = 'assistant'
+
+/** store.groupedUi.profileRuntimes 元素（pluginId + spec）。 */
+interface QualifiedRuntimeSpec {
+  pluginId: string
+  spec: ProfileRuntimeUiSpec
+}
 
 /** 有未保存改动时请求放弃；返回 true 表示可以安全离开。 */
 function confirmDiscard(profileId: string | null): boolean {
@@ -37,19 +43,20 @@ function confirmDiscard(profileId: string | null): boolean {
   return window.confirm(`${label} 有未保存的修改，确定放弃吗？`)
 }
 
-/** 左侧 Profile 列表（herdr 未启用时不渲染 herdr 徽章，零插件痕迹）。 */
+/** 左侧 Profile 列表（运行时徽章由 profileRuntimes 动态驱动，零插件 ID 硬编码）。 */
 function ProfileListPanel({
   profiles,
   selectedId,
   onSelect,
   onCreate,
-  herdrEnabled,
+  runtimeKinds,
 }: {
   profiles: Profile[]
   selectedId: string | null
   onSelect: (id: string) => void
   onCreate: () => void
-  herdrEnabled: boolean
+  /** 当前已注册的运行时 kind 集合（对应插件停用时其徽章零痕迹隐藏）。 */
+  runtimeKinds: ReadonlySet<string>
 }) {
   return (
     <div className="flex-col">
@@ -61,6 +68,7 @@ function ProfileListPanel({
         {profiles.length === 0 && <div className="empty-state empty-state-compact">暂无 Profile</div>}
         {profiles.map((p) => {
           const isSelected = selectedId === p.id
+          const runtimeBadge = p.runtime !== undefined && runtimeKinds.has(p.runtime.kind) ? p.runtime.kind : null
           return (
             <button
               key={p.id}
@@ -70,10 +78,10 @@ function ProfileListPanel({
             >
               <span className="list-item-btn-title">
                 <span>{p.name || p.id}</span>
-                {herdrEnabled && p.runtime?.kind === 'herdr' && (
+                {runtimeBadge !== null && (
                   <span className="badge badge-accent">
                     <HelmIcon name="terminal" size={10} />
-                    herdr
+                    {runtimeBadge}
                   </span>
                 )}
               </span>
@@ -90,10 +98,10 @@ function ProfileListPanel({
 }
 
 /**
- * Tab 1：基础信息与 Herdr 运行时。
- * 仅 herdr 插件已启用且当前 runtime 形状可由本编辑器管理（无 runtime 或
- * kind === 'herdr'）时才渲染 Herdr 表单；非 Herdr 的既有外部运行时一律
- * 只提供通用保留/清除提示，不冒充 Herdr 配置修改。
+ * Tab 1：基础信息与外部运行时（profileRuntimes 动态驱动，零插件 ID 硬编码）。
+ * 当前已注册 kind 且 Profile 无 runtime 或 kind 命中注册项时渲染通用运行时
+ * 表单；kind 未注册（插件停用）或无任何注册项时，已保存 runtime 只提供
+ * 通用保留/清除提示，不冒充运行时配置修改，也不悄悄丢失。
  */
 function ProfileBasicTab({
   draft,
@@ -101,14 +109,15 @@ function ProfileBasicTab({
   isNew,
   models,
   defaultModel,
-  herdrEnabled,
+  runtimeSpecs,
 }: {
   draft: ProfileDraft
   patch: (next: Profile) => void
   isNew: boolean
   models: Array<{ id: string; available?: boolean; thinkingLevels?: string[] }>
   defaultModel: string
-  herdrEnabled: boolean
+  /** 当前已注册的外部运行时 UI 定义（按 order 排序）。 */
+  runtimeSpecs: ReadonlyArray<QualifiedRuntimeSpec>
 }) {
   const profile = draft.profile
   const store = useHelmStore()
@@ -117,9 +126,11 @@ function ProfileBasicTab({
   const [envPairs, setEnvPairs] = useState<EnvPair[]>(envToPairs(profile.runtime?.env))
   const [argsText, setArgsText] = useState(argsToText(profile.runtime?.args))
   const runtime = profile.runtime
-  // Herdr 表单仅接管无 runtime 或已显式为 herdr 形状的配置；其他 kind 的
-  // 既有外部运行时不受本编辑器管理，只展示通用保留/清除提示。
-  const canEditHerdr = herdrEnabled && (runtime === undefined || runtime.kind === 'herdr')
+  const specsByKind = useMemo(() => new Map(runtimeSpecs.map((s) => [s.spec.kind, s])), [runtimeSpecs])
+  const activeSpec = runtime !== undefined ? specsByKind.get(runtime.kind) : undefined
+  // 已启用且当前 runtime 形状可由本编辑器管理：无 runtime（可新建）或 kind 已注册。
+  const canEditRuntime = runtimeSpecs.length > 0 && (runtime === undefined || activeSpec !== undefined)
+  const defaultSpec = runtimeSpecs[0]
 
   // 本地编辑态（args 多行文本 / env 键值行）不随每次 patch 重置：组件由父级
   // 以 baseline 引用为 key 控制——仅在重新加载 Profile 时重挂载初始化。
@@ -127,8 +138,13 @@ function ProfileBasicTab({
   const patchRuntime = (nextRuntime: Profile['runtime']) => patch({ ...profile, runtime: nextRuntime })
 
   const patchRuntimeField = (fieldPatch: Partial<NonNullable<Profile['runtime']>>) => {
-    const base = runtime ?? { kind: 'herdr', agent: '' }
+    const base = runtime ?? { kind: defaultSpec?.spec.kind ?? '', agent: '' }
     patchRuntime({ ...base, ...fieldPatch })
+  }
+
+  /** 切换运行时 kind（多运行时下拉）：重建为所选 kind 的空白配置。 */
+  const switchRuntimeKind = (kind: string) => {
+    patchRuntime({ kind, agent: '' })
   }
 
   const modelOptions = models.map((m) => m.id)
@@ -223,7 +239,7 @@ function ProfileBasicTab({
           />
         ) : (
           <span className="badge badge-neutral">
-            {BUILTIN_PROTECTED_PROFILES.has(profile.id) && <HelmIcon name="lock" size={11} />}
+            {(profile.id === DEFAULT_PROFILE_ID || profile.managedByPlugin !== undefined) && <HelmIcon name="lock" size={11} />}
             {profile.id}
           </span>
         )}
@@ -288,10 +304,10 @@ function ProfileBasicTab({
         />
       </div>
 
-      {!canEditHerdr && runtime !== undefined && (
+      {!canEditRuntime && runtime !== undefined && (
         <div className="section-flat flex-row-between">
           <span className="text-muted">
-            已保存外部运行时配置（{runtime.kind}），不由本编辑器管理，保存时原样保留
+            已保存外部运行时配置（{runtime.kind}），所属插件未启用或不由本编辑器管理，保存时原样保留
           </span>
           <button
             className="btn btn-sm"
@@ -307,7 +323,7 @@ function ProfileBasicTab({
         </div>
       )}
 
-      {canEditHerdr && (
+      {canEditRuntime && (
         <div className="section-flat">
           <div className="flex-row">
             <Switch
@@ -315,14 +331,14 @@ function ProfileBasicTab({
               onChange={(enabled) => {
                 setRuntimeEnabled(enabled)
                 if (enabled && !profile.runtime) {
-                  patchRuntime({ kind: 'herdr', agent: '' })
+                  patchRuntime({ kind: defaultSpec?.spec.kind ?? '', agent: '' })
                 } else if (!enabled) {
                   patchRuntime(undefined)
                 }
               }}
               label={
                 <span className="section-flat-title flex-row">
-                  <HelmIcon name="terminal" size={13} /> 外部 Herdr 运行时
+                  <HelmIcon name="terminal" size={13} /> {activeSpec?.spec.label ?? defaultSpec?.spec.label ?? '外部运行时'}
                 </span>
               }
             />
@@ -331,17 +347,28 @@ function ProfileBasicTab({
 
           {runtimeEnabled && runtime && (
             <div className="form-grid">
+              {runtimeSpecs.length > 1 && (
+                <>
+                  <label htmlFor="helm-runtime-kind" className="form-grid-label">运行时类型</label>
+                  <Select
+                    id="helm-runtime-kind"
+                    value={runtime.kind}
+                    options={runtimeSpecs.map((s) => ({ value: s.spec.kind, label: s.spec.label }))}
+                    onChange={(e) => switchRuntimeKind(e.target.value)}
+                  />
+                </>
+              )}
               <label htmlFor="helm-runtime-agent" className="form-grid-label">Agent</label>
               <input
                 id="helm-runtime-agent"
                 className="input mono"
-                list="helm-herdr-agents"
+                list="helm-runtime-agents"
                 value={runtime.agent}
-                placeholder="如 pi / claude / codex / agy"
+                placeholder={(activeSpec?.spec.agentSuggestions ?? []).slice(0, 4).join(' / ') || 'CLI kind'}
                 onChange={(e) => patchRuntimeField({ agent: e.target.value })}
               />
-              <datalist id="helm-herdr-agents">
-                {COMMON_HERDR_AGENTS.map((a) => (
+              <datalist id="helm-runtime-agents">
+                {(activeSpec?.spec.agentSuggestions ?? []).map((a) => (
                   <option key={a} value={a} />
                 ))}
               </datalist>
@@ -462,15 +489,15 @@ export function ProfileEditorModal({
   const knownNodes = store.nodes ?? []
   const [defaultModel, setDefaultModel] = useState('')
   const enabledPluginIds = useMemo(() => collectEnabledPluginIds(store.plugins), [store.plugins])
+  // 外部运行时定义由插件 profileRuntime 动态注册（已按 order 排序）。
+  const runtimeSpecs = useMemo(() => store.groupedUi.profileRuntimes, [store.groupedUi.profileRuntimes])
+  const runtimeKinds = useMemo(() => new Set(runtimeSpecs.map((s) => s.spec.kind)), [runtimeSpecs])
   // 列表与默认选中仅消费可见 Profile：插件未启用时其自举 Profile 不残留痕迹。
   const profiles = useMemo(
     () => store.profiles.filter((p) => isProfileVisible(p, enabledPluginIds)),
     [store.profiles, enabledPluginIds],
   )
-  const herdrEnabled = useMemo(
-    () => store.plugins.some((p) => p.id === 'builtin:herdr' && p.enabled),
-    [store.plugins],
-  )
+  const herdrTabLabel = runtimeSpecs.length > 0 ? '基础与运行时' : '基础信息'
   const [selectedId, setSelectedId] = useState<string | null>(
     initialProfileId ?? store.profiles.find((p) => isProfileVisible(p, enabledPluginIds))?.id ?? null,
   )
@@ -691,14 +718,15 @@ export function ProfileEditorModal({
   const isProtected = useMemo(
     () =>
       !isNew &&
-      ((selectedId !== null && BUILTIN_PROTECTED_PROFILES.has(selectedId)) ||
-        (draft?.profile.id !== undefined && BUILTIN_PROTECTED_PROFILES.has(draft.profile.id))),
-    [isNew, selectedId, draft?.profile.id],
+      ((selectedId !== null && selectedId === DEFAULT_PROFILE_ID) ||
+        (draft?.profile.id !== undefined && draft.profile.id === DEFAULT_PROFILE_ID) ||
+        draft?.profile.managedByPlugin !== undefined),
+    [isNew, selectedId, draft?.profile.id, draft?.profile.managedByPlugin],
   )
 
   const tabItems: Array<{ key: EditorTab; label: string }> = [
-    // herdr 未启用时本 Tab 只有基础字段，不预告运行时能力。
-    { key: 'basic', label: herdrEnabled ? '基础与运行时' : '基础信息' },
+    // 无任何已注册运行时时本 Tab 只有基础字段，不预告运行时能力。
+    { key: 'basic', label: herdrTabLabel },
     { key: 'system', label: 'SYSTEM.md' },
     { key: 'memory', label: 'MEMORY.md' },
   ]
@@ -744,7 +772,7 @@ export function ProfileEditorModal({
               selectedId={isNew ? null : selectedId}
               onSelect={selectProfile}
               onCreate={startCreate}
-              herdrEnabled={herdrEnabled}
+              runtimeKinds={runtimeKinds}
             />
           </div>
           <div className="asset-modal-main">
@@ -787,7 +815,7 @@ export function ProfileEditorModal({
                   isNew={isNew}
                   models={store.models}
                   defaultModel={defaultModel}
-                  herdrEnabled={herdrEnabled}
+                  runtimeSpecs={runtimeSpecs}
                 />
               )}
               {!loading && draft && tab === 'system' && (
@@ -823,7 +851,7 @@ export function ProfileEditorModal({
         </div>
         <div className="modal-footer">
           <span className="text-muted flex-1">
-            {isProtected ? `${selectedId} 为内置受保护 Profile，不可删除` : isNew ? '新建 Profile' : `正在编辑 ${selectedId}`}
+            {isProtected ? `${selectedId} 为受保护 Profile（内核默认或插件托管），不可删除` : isNew ? '新建 Profile' : `正在编辑 ${selectedId}`}
           </span>
           <button
             className="btn btn-danger"

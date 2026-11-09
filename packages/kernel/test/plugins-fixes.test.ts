@@ -685,3 +685,30 @@ test('assistant：存量 MEMORY.md 超限注入时截断并附显式说明', { t
     await env.close()
   }
 })
+
+test('assistant：自举补写默认 Profile 的 managedByPlugin（缺失显式补、已有原样保留）', { timeout: 60_000 }, async () => {
+  // 场景 1：ensureDefault 创建的 Profile 无托管元数据（服务层不做归一化），
+  // 插件 service.start 显式补写 managedByPlugin: builtin:assistant。
+  const env = await makeAssistantEnv()
+  try {
+    const before = await env.profiles.get('assistant')
+    assert.equal(before?.managedByPlugin, undefined, 'ensureDefault 不写托管元数据（不兼容归一化红线）')
+
+    const host = new PluginHost({
+      dataDir: env.dataDir,
+      host: makeControlledBackend(),
+      docs: new MemoryDocStore(),
+    })
+    const { createAssistantPlugin } = await import('../src/builtin-plugins/assistant.js')
+    await host.register(createAssistantPlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir) }), { enabled: true })
+
+    const after = await env.profiles.get('assistant')
+    assert.equal(after?.managedByPlugin, 'builtin:assistant', '插件自举后默认 Profile 显式声明托管')
+    // 其余字段原样保留（不覆盖用户改动）
+    assert.equal(after?.name, before?.name)
+
+    await host.dispose().catch(() => {})
+  } finally {
+    await env.close()
+  }
+})
