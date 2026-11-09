@@ -6,18 +6,7 @@ export function ToastOverlay() {
   if (store.notices.length === 0) return null
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        right: 16,
-        bottom: 16,
-        zIndex: 90,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-        maxWidth: 360,
-      }}
-    >
+    <div className="toast-overlay">
       {store.notices.map((n) => {
         const toneClass =
           n.level === 'error'
@@ -28,16 +17,10 @@ export function ToastOverlay() {
         return (
           <div
             key={n.id}
-            className={`jr-callout ${toneClass}`}
-            style={{
-              background: 'var(--bg-elevated)',
-              boxShadow: 'var(--shadow-md)',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}
+            className={`jr-callout toast-item ${toneClass}`}
           >
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+            <div className="toast-content">
+              <div className="toast-title">
                 <HelmIcon
                   name={
                     n.level === 'error'
@@ -51,15 +34,14 @@ export function ToastOverlay() {
                 <span>{n.title}</span>
               </div>
               {n.body && (
-                <div style={{ fontSize: 12, color: 'var(--fg-secondary)', wordBreak: 'break-word' }}>
+                <div className="toast-body">
                   {n.body}
                 </div>
               )}
               {n.conversationId !== undefined && (
                 <button
                   type="button"
-                  className="btn btn-ghost btn-sm"
-                  style={{ width: 'fit-content', padding: '0 4px', marginTop: 2 }}
+                  className="btn btn-ghost btn-sm toast-action-btn"
                   onClick={() => {
                     store.openTarget({ kind: 'conversation', conversationId: n.conversationId! })
                     store.dismissNotice(n.id)
@@ -71,7 +53,7 @@ export function ToastOverlay() {
             </div>
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-ghost btn-sm btn-icon-xs"
               onClick={() => store.dismissNotice(n.id)}
             >
               <HelmIcon name="x" size={12} />

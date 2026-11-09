@@ -756,6 +756,36 @@ textarea {
   gap: 14px;
 }
 
+.timeline-loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 48px 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.timeline-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 64px 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.timeline-human-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.timeline-scroll-anchor {
+  height: 2px;
+}
+
 /* 人类输入胶囊（右对齐轻胶囊） */
 .msg-human-row {
   display: flex;
@@ -763,6 +793,13 @@ textarea {
   align-items: flex-end;
   gap: 4px;
   position: relative;
+}
+
+.msg-attachments-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
 }
 
 .msg-origin-tag {
@@ -911,6 +948,13 @@ textarea {
   gap: 2px;
 }
 
+.trace-group-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 8px;
+}
+
 .trace-group-summary {
   height: 26px;
   padding: 0 8px;
@@ -1004,7 +1048,17 @@ textarea {
   overflow-x: auto;
 }
 
+.trace-expanded-body.trace-expanded-body-flush {
+  margin-left: 0;
+}
+
 /* 上下文重置 / 精简 26px 分割线 */
+.context-divider-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .context-divider {
   height: 26px;
   display: flex;
@@ -1022,9 +1076,26 @@ textarea {
   background: var(--border);
 }
 
+.context-divider-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.context-divider-handoff-btn {
+  margin: 0 auto;
+  display: flex;
+}
+
 /* ==========================================================================
  * 6. AskDoc 置底悬停审批卡 & Composer 底栏微操舱
  * ========================================================================== */
+
+.ask-dock-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 
 .ask-dock {
   margin: 0 auto 10px;
@@ -1038,6 +1109,90 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.ask-dock-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ask-dock-title {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.ask-dock-desc {
+  font-size: 12.5px;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+}
+
+.ask-dock-snapshot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ask-dock-snapshot-btn {
+  width: fit-content;
+}
+
+.ask-dock-snapshot-pre {
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.ask-dock-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ask-dock-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ask-dock-label {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ask-dock-required {
+  color: var(--err);
+}
+
+.ask-dock-confirm-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.ask-dock-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ask-dock-secret-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ask-dock-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .composer-shell {
@@ -1566,6 +1721,7 @@ textarea {
   border-radius: var(--radius-sm);
   font-size: 11.5px;
   color: var(--fg-secondary);
+  vertical-align: middle;
 }
 .attachment-chip .btn-icon-xs {
   width: 18px;
@@ -2264,6 +2420,14 @@ textarea {
   align-items: flex-start;
   gap: 8px;
 }
+.jr-callout-flush {
+  border-radius: 0 !important;
+  border-width: 0 !important;
+}
+.jr-callout span,
+.callout-text {
+  word-break: break-all;
+}
 .jr-callout-warn {
   background: var(--warn-bg);
   border-color: var(--warn-border);
@@ -2349,6 +2513,36 @@ textarea {
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
+}
+
+.code-block-pre-flush {
+  padding: 0 !important;
+}
+
+.code-block-wrap-flush {
+  margin: 0 !important;
+}
+
+.code-block-header-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.spec-block-wrap {
+  padding: 10px;
+}
+
+.markdown-media-audio {
+  max-width: 100%;
+  display: block;
+  margin: 6px 0;
+}
+
+.markdown-media-video {
+  max-width: 100%;
+  max-height: 360px;
+  display: block;
+  margin: 6px 0;
 }
 
 /* ==========================================================================
@@ -2553,6 +2747,8 @@ textarea {
 
 .mermaid-body {
   background: transparent;
+  padding: 10px 12px;
+  overflow-x: auto;
 }
 
 .mermaid-body svg {
@@ -2621,6 +2817,18 @@ textarea {
   box-shadow: none !important;
 }
 
+.modal-body-flush {
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+.mermaid-source-pre {
+  padding: 14px;
+  height: 100%;
+  overflow: auto;
+  margin: 0;
+}
+
 .mermaid-modal-stage,
 .mermaid-transform-plane,
 .mermaid-svg-layer,
@@ -2630,18 +2838,42 @@ textarea {
 }
 
 .mermaid-modal-stage {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  background: var(--bg);
   user-select: none !important;
   -webkit-user-select: none !important;
   overscroll-behavior: none !important;
 }
 
 .mermaid-transform-plane {
+  transform-origin: top center;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 32px;
+  padding-bottom: 64px;
+  pointer-events: none;
+  touch-action: none;
   will-change: transform;
 }
 
 .mermaid-svg-layer {
   display: block;
   background: transparent;
+  max-width: none;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .mermaid-svg-layer svg {
@@ -2650,6 +2882,59 @@ textarea {
   max-width: none !important;
   max-height: none !important;
   display: block !important;
+}
+
+.mermaid-status-hint {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+/* ==========================================================================
+ * 10. Toast 通知浮层
+ * ========================================================================== */
+
+.toast-overlay {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+}
+
+.toast-item {
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.toast-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.toast-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.toast-body {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  word-break: break-word;
+}
+
+.toast-action-btn {
+  width: fit-content;
+  padding: 0 4px;
+  margin-top: 2px;
 }
 
 .composer-model-popover .input { width: 100%; }

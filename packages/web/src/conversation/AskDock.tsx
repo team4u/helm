@@ -68,7 +68,7 @@ function AskFieldInput({
   }
   if (field.type === 'confirm') {
     return (
-      <span style={{ display: 'inline-flex', gap: 6 }}>
+      <span className="ask-dock-confirm-actions">
         <button
           type="button"
           className={`btn btn-sm ${value === 'true' ? 'btn-primary' : ''}`}
@@ -92,7 +92,7 @@ function AskFieldInput({
   }
   const secret = field.secret === true
   return (
-    <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+    <span className="ask-dock-input-wrap">
       <input
         id={inputId}
         className="input"
@@ -104,7 +104,7 @@ function AskFieldInput({
         autoComplete="off"
       />
       {secret ? (
-        <span style={{ fontSize: 11, color: 'var(--fg-muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span className="ask-dock-secret-hint">
           <HelmIcon name="lock" size={11} />
           机密直入内存 SecretStash，不落数据库
         </span>
@@ -151,9 +151,9 @@ function AskCard({ ask }: { ask: AskSpec }) {
 
   return (
     <div className="ask-dock">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div className="ask-dock-header">
         <HelmIcon name="shield-alert" size={15} />
-        <span style={{ fontWeight: 600, fontSize: 13.5 }}>{ask.title}</span>
+        <span className="ask-dock-title">{ask.title}</span>
         {ask.ownerPluginId !== undefined ? (
           <span className="badge badge-warn">{ask.ownerPluginId}</span>
         ) : null}
@@ -164,43 +164,39 @@ function AskCard({ ask }: { ask: AskSpec }) {
         ) : null}
       </div>
       {ask.description !== undefined && snapshot === undefined ? (
-        <div style={{ fontSize: 12.5, color: 'var(--fg-secondary)', whiteSpace: 'pre-wrap' }}>
+        <div className="ask-dock-desc">
           {ask.description}
         </div>
       ) : null}
       {ask.description !== undefined && snapshot !== undefined && snapshot.source === 'description' ? (
-        <div style={{ fontSize: 12.5, color: 'var(--fg-secondary)', whiteSpace: 'pre-wrap' }}>
+        <div className="ask-dock-desc">
           {ask.description.slice(0, ask.description.indexOf('```')).trim()}
         </div>
       ) : null}
       {snapshot !== undefined ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div className="ask-dock-snapshot">
           <button
             type="button"
-            className="btn btn-ghost btn-sm"
-            style={{ width: 'fit-content' }}
+            className="btn btn-ghost btn-sm ask-dock-snapshot-btn"
             onClick={() => setSnapshotOpen((v) => !v)}
           >
             <HelmIcon name={snapshotOpen ? 'chevron-down' : 'chevron-right'} size={12} />
             终端快照（最后 40 行）
           </button>
           {snapshotOpen ? (
-            <pre
-              className="code-block-pre selectable"
-              style={{ background: 'var(--bg-subtle)', borderRadius: 'var(--radius-sm)', padding: 10, maxHeight: 240, overflow: 'auto' }}
-            >
+            <pre className="code-block-pre selectable ask-dock-snapshot-pre">
               <code>{snapshot.text}</code>
             </pre>
           ) : null}
         </div>
       ) : null}
       {ask.fields.length > 0 ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div className="ask-dock-fields">
           {ask.fields.map((field) => (
-            <div key={field.name} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <label htmlFor={field.type === 'confirm' ? undefined : `${ask.id}-${field.name}`} style={{ fontSize: 12, color: 'var(--fg-secondary)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <div key={field.name} className="ask-dock-field">
+              <label htmlFor={field.type === 'confirm' ? undefined : `${ask.id}-${field.name}`} className="ask-dock-label">
                 {field.label}
-                {field.required === true ? <span style={{ color: 'var(--err)' }}>*</span> : null}
+                {field.required === true ? <span className="ask-dock-required">*</span> : null}
               </label>
               <AskFieldInput
                 inputId={`${ask.id}-${field.name}`}
@@ -216,10 +212,10 @@ function AskCard({ ask }: { ask: AskSpec }) {
       {error !== null ? (
         <div className="jr-callout jr-callout-err">
           <HelmIcon name="alert-circle" size={13} />
-          <span style={{ wordBreak: 'break-all' }}>{error}</span>
+          <span className="callout-text">{error}</span>
         </div>
       ) : null}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+      <div className="ask-dock-actions">
         <button type="button" className="btn" disabled={submitting !== null} onClick={() => void cancel()}>
           取消
         </button>
@@ -243,7 +239,7 @@ export function AskDock({ conversationId }: AskDockProps) {
   const pending = store.pendingAsks.filter((a) => a.conversationId === conversationId && a.status === 'pending')
   if (pending.length === 0) return null
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div className="ask-dock-stack">
       {pending.map((ask) => (
         <AskCard key={ask.id} ask={ask} />
       ))}

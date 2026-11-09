@@ -40,7 +40,7 @@ function StandardCodeBlock({ language, code }: CodeBlockProps) {
  */
 export function CodeBlockView({ code, language }: { code: string; language: string }) {
   return (
-    <div className="code-block-wrap" style={{ margin: 0 }}>
+    <div className="code-block-wrap code-block-wrap-flush">
       <div className="code-block-header">
         <span>{language === '' ? 'text' : language}</span>
         <CopyButton text={code} />
@@ -96,7 +96,7 @@ function MermaidBlock({ code }: { code: string }) {
     <div className="code-block-wrap">
       <div className="code-block-header">
         <span>mermaid</span>
-        <span style={{ display: 'inline-flex', gap: 4 }}>
+        <span className="code-block-header-actions">
           <button
             type="button"
             className="btn btn-ghost btn-sm"
@@ -109,7 +109,7 @@ function MermaidBlock({ code }: { code: string }) {
           <CopyButton text={code} label="复制源码" />
         </span>
       </div>
-      <div className="mermaid-body selectable" style={{ padding: '10px 12px', overflowX: 'auto' }}>
+      <div className="mermaid-body selectable">
         {svg !== null ? (
           <div
             className="mermaid-svg-host"
@@ -117,11 +117,11 @@ function MermaidBlock({ code }: { code: string }) {
             dangerouslySetInnerHTML={{ __html: svg }}
           />
         ) : error !== null ? (
-          <div className="jr-callout jr-callout-err" style={{ borderRadius: 0, borderWidth: 0 }}>
+          <div className="jr-callout jr-callout-err jr-callout-flush">
             <span>Mermaid 渲染失败：{error}</span>
           </div>
         ) : (
-          <pre className="code-block-pre" style={{ padding: 0 }}>
+          <pre className="code-block-pre code-block-pre-flush">
             <code>{code}</code>
           </pre>
         )}
@@ -149,7 +149,7 @@ function SpecBlock({ code, conversationId }: CodeBlockProps) {
     return <StandardCodeBlock language="json-render" code={code} />
   }
   return (
-    <div className="code-block-wrap" style={{ padding: 10 }}>
+    <div className="code-block-wrap spec-block-wrap">
       <HelmSpecView spec={parsed.spec} conversationId={conversationId} />
     </div>
   )
@@ -231,7 +231,7 @@ function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: Artifac
 
   if (loading) {
     return (
-      <span className="attachment-chip" style={{ verticalAlign: 'middle' }}>
+      <span className="attachment-chip">
         <HelmIcon name="loader" size={11} />
         <span>{label}</span>
       </span>
@@ -252,14 +252,14 @@ function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: Artifac
       )
     }
     if (media.mime.startsWith('audio/')) {
-      return <audio controls src={media.url} style={{ maxWidth: '100%', display: 'block', margin: '6px 0' }} />
+      return <audio controls src={media.url} className="markdown-media-audio" />
     }
     if (media.mime.startsWith('video/')) {
       return (
         <video
           controls
           src={media.url}
-          style={{ maxWidth: '100%', maxHeight: 360, display: 'block', margin: '6px 0' }}
+          className="markdown-media-video"
         />
       )
     }
@@ -269,7 +269,6 @@ function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: Artifac
     <button
       type="button"
       className="attachment-chip"
-      style={{ verticalAlign: 'middle' }}
       title={`点击预览：${label}`}
       onClick={openPreview}
     >
@@ -298,7 +297,6 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId }:
           <button
             type="button"
             className="attachment-chip"
-            style={{ verticalAlign: 'middle' }}
             title="点击预览产物"
             onClick={() =>
               store.setActiveModal({
