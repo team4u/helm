@@ -1098,11 +1098,206 @@ textarea {
 }
 .composer-env-select {
   width: auto;
-  min-width: 0;
-  max-width: 160px;
+  min-width: 120px;
+  max-width: 200px;
   font-size: 11.5px;
   cursor: pointer;
   flex-shrink: 1;
+}
+
+/* ==========================================================================
+ * 通用下拉选择器（符合项目极简克制气质的公共组件）
+ * ========================================================================== */
+
+.helm-select {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  vertical-align: middle;
+}
+
+.helm-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: 13px;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: background 100ms ease, border-color 100ms ease;
+  min-width: 0;
+  width: 100%;
+}
+
+.helm-select-trigger:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.helm-select-trigger:focus-visible,
+.helm-select-trigger:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.helm-select-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.helm-select-prefix {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
+}
+
+.helm-select-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.helm-select-label.helm-select-placeholder {
+  color: var(--fg-muted);
+}
+
+.helm-select-chevron {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  transition: transform 120ms ease;
+}
+
+.helm-select-chevron-open {
+  transform: rotate(180deg);
+}
+
+/* 浮层下拉列表 */
+.helm-select-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: 360px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.helm-select-popover.direction-up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.helm-select-sm .helm-select-trigger {
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11px;
+  border-radius: var(--radius-xs);
+  border-color: var(--border);
+}
+
+.helm-select-sm .helm-select-option {
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
+/* 会话起始环境紧凑下拉框：与旁边 cwd 输入框完全等高 (28px) 与圆角一致 */
+.composer-env-select .helm-select-trigger {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  border-radius: var(--radius-xs);
+  border-color: var(--border);
+}
+
+.composer-env-select .helm-select-option {
+  padding: 5px 8px;
+  font-size: 11.5px;
+}
+
+.helm-select.mono .helm-select-trigger,
+.helm-select.mono .helm-select-option-label {
+  font-family: var(--font-mono);
+}
+
+.provider-field .helm-select,
+.helm-select.w-full {
+  width: 100%;
+}
+
+.helm-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 80ms ease;
+}
+
+.helm-select-option:hover:not(:disabled),
+.helm-select-option.highlighted:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.helm-select-option.selected {
+  background: var(--bg-subtle);
+  font-weight: 500;
+}
+
+.helm-select-option:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.helm-select-option-icon {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
+}
+
+.helm-select-option-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.helm-select-option-meta {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-left: auto;
+}
+
+.helm-select-check {
+  flex-shrink: 0;
+  color: var(--accent);
+  margin-left: 4px;
 }
 
 .composer-env-cwd {
@@ -1479,6 +1674,10 @@ textarea {
   color: var(--fg);
   outline: none;
   font-size: 13px;
+}
+.input,
+.select {
+  height: 32px;
 }
 .input:focus,
 .select:focus,

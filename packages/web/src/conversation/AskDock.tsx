@@ -3,6 +3,7 @@ import type { AskFieldSpec, AskSpec } from '@helm/protocol'
 import { asksApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { Select } from '../ui/Select.js'
 
 export interface AskDockProps {
   conversationId: number
@@ -48,22 +49,21 @@ function AskFieldInput({
   disabled: boolean
 }) {
   if (field.type === 'select') {
-    const options = field.options ?? []
+    const options = [
+      { value: '', label: '请选择…' },
+      ...(field.options ?? []).map((opt) => ({
+        value: opt.value,
+        label: opt.label,
+      })),
+    ]
     return (
-      <select
+      <Select
         id={inputId}
-        className="select"
         value={value}
         disabled={disabled}
+        options={options}
         onChange={(e) => onChange(e.target.value)}
-      >
-        <option value="">请选择…</option>
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
+      />
     )
   }
   if (field.type === 'confirm') {

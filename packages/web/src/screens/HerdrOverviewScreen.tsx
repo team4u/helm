@@ -11,6 +11,7 @@ import type { ReactNode } from 'react'
 import { HelmIcon } from '../lib/icons.js'
 import { formatCompactTimestamp } from '../lib/format.js'
 import { useHelmStore, usePluginDoc } from '../lib/store-context.js'
+import { Select, type SelectOption } from '../ui/Select.js'
 import { formatSpecText } from '../ui/spec-normalize.js'
 
 export interface HerdrOverviewScreenProps {
@@ -60,6 +61,21 @@ const OUTCOME_LABEL: Record<string, { label: string; tone: string }> = {
   settled: { label: '已收尾', tone: 'ok' },
 }
 
+const OWNER_FILTER_OPTIONS: ReadonlyArray<SelectOption<string>> = [
+  { value: 'all', label: '全部归属' },
+  { value: 'helm', label: 'helm 受管' },
+  { value: 'human', label: 'human 直连' },
+]
+
+const STATUS_FILTER_OPTIONS: ReadonlyArray<SelectOption<string>> = [
+  { value: 'all', label: '全部状态' },
+  { value: 'working', label: 'working' },
+  { value: 'idle', label: 'idle' },
+  { value: 'blocked', label: 'blocked' },
+  { value: 'done', label: 'done' },
+  { value: 'unknown', label: 'unknown' },
+]
+
 export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScreenProps): ReactNode {
   const store = useHelmStore()
   const doc = usePluginDoc<OverviewDoc>('builtin:herdr', 'overview')
@@ -72,6 +88,16 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
 
   const panes = doc?.panes ?? []
   const nodes = useMemo(() => Array.from(new Set(panes.map((p) => p.nodeId))).sort(), [panes])
+  const nodeFilterOptions = useMemo<ReadonlyArray<SelectOption<string>>>(
+    () => [
+      { value: 'all', label: '全部节点' },
+      ...nodes.map((m) => ({
+        value: m,
+        label: m === 'local' ? '本机 (local)' : m,
+      })),
+    ],
+    [nodes],
+  )
 
   const filtered = useMemo(
     () =>
@@ -197,27 +223,27 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
       )}
 
       <div className="pane-actions" style={{ padding: '10px 16px 0', justifyContent: 'flex-start' }}>
-        <select className="select" style={{ width: 140 }} value={nodeFilter} onChange={(e) => setNodeFilter(e.target.value)}>
-          <option value="all">全部节点</option>
-          {nodes.map((m) => (
-            <option key={m} value={m}>
-              {m === 'local' ? '本机 (local)' : m}
-            </option>
-          ))}
-        </select>
-        <select className="select" style={{ width: 140 }} value={ownerFilter} onChange={(e) => setOwnerFilter(e.target.value)}>
-          <option value="all">全部归属</option>
-          <option value="helm">helm 受管</option>
-          <option value="human">human 直连</option>
-        </select>
-        <select className="select" style={{ width: 140 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-          <option value="all">全部状态</option>
-          <option value="working">working</option>
-          <option value="idle">idle</option>
-          <option value="blocked">blocked</option>
-          <option value="done">done</option>
-          <option value="unknown">unknown</option>
-        </select>
+        <Select
+          style={{ width: 140 }}
+          value={nodeFilter}
+          options={nodeFilterOptions}
+          aria-label="节点筛选"
+          onChange={(e) => setNodeFilter(e.target.value)}
+        />
+        <Select
+          style={{ width: 140 }}
+          value={ownerFilter}
+          options={OWNER_FILTER_OPTIONS}
+          aria-label="归属筛选"
+          onChange={(e) => setOwnerFilter(e.target.value)}
+        />
+        <Select
+          style={{ width: 140 }}
+          value={statusFilter}
+          options={STATUS_FILTER_OPTIONS}
+          aria-label="状态筛选"
+          onChange={(e) => setStatusFilter(e.target.value)}
+        />
         <span className="jr-metric-label">
           {filtered.length}/{panes.length} 行
         </span>

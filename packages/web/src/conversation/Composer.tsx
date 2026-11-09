@@ -7,6 +7,7 @@ import { useHelmStore } from '../lib/store-context.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { collectEnabledPluginIds, isSkillVisible } from '../shell/sidebar-model.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { Select, type SelectOption } from '../ui/Select.js'
 import { AskDock } from './AskDock.js'
 import {
   attachmentsOfEditTarget,
@@ -472,25 +473,38 @@ function SessionEnvBar({
     setError(null)
   }
 
+  const nodeOptions = useMemo<SelectOption<string>[]>(() => {
+    const list: SelectOption<string>[] = store.nodes.map((n) => ({
+      value: n.id,
+      label: nodeOptionLabel(n),
+      icon: n.id === 'local' ? 'monitor' : 'network',
+      meta: n.id !== 'local' ? (n.online ? '在线' : '离线') : undefined,
+    }))
+    if (!draftNodeKnown) {
+      list.push({
+        value: draft.nodeId,
+        label: `${draft.nodeId}（未知）`,
+        icon: 'alert-circle',
+      })
+    }
+    return list
+  }, [store.nodes, draftNodeKnown, draft.nodeId])
+
   return (
     <div className="composer-env-bar" data-dirty={dirty ? 'true' : undefined}>
       <span className="composer-env-item">
         <HelmIcon name="network" size={12} />
-        <select
-          className="input composer-env-select"
+        <Select
+          className="composer-env-select"
           aria-label="会话执行节点"
           disabled={saving || sendBlocked}
           value={draft.nodeId}
+          options={nodeOptions}
           onChange={(e) => {
             setError(null)
             setDraft((prev) => envDraftOnNodeChange(prev, e.target.value))
           }}
-        >
-          {store.nodes.map((n) => (
-            <option key={n.id} value={n.id}>{nodeOptionLabel(n)}</option>
-          ))}
-          {!draftNodeKnown && <option value={draft.nodeId}>{draft.nodeId}（未知）</option>}
-        </select>
+        />
       </span>
       <span className="composer-env-item">
         <HelmIcon name="folder" size={12} />
