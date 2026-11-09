@@ -4,9 +4,9 @@
  *
  * 验证点：
  * 1. 通用插件 service.stop 经 await 后仍能写 ctx.doc（disable 与 dispose 两路径），
- *    真实持久 doc 读回（非内存假象）；
+ *    从序列化测试存储读回（真实 SQLite 验证见 workflow-shutdown.integration.test.ts）；
  * 2. stop 之外（窗口外）同句柄写入被拒；stop 返回后拒绝；reenable 旧 epoch 拒绝；
- *    运行期异步残留回调（非 stop 链）在 deactivating 中被拒；
+ *    停止窗口允许当前周期已有回调收尾，窗口结束后残留回调一律被拒；
  * 3. 真实 builtin:workflow 带运行中任务受控 dispose/close：run 终态落私有 records
  *    与公共 runs，重启读取一致，无 unhandled rejection；
  * 4. start 屏障后某插件 start 失败 + 先前插件 stop 失败：错误同时含原始 start
@@ -137,8 +137,8 @@ class FakeBackend implements PluginHostBackend {
 }
 
 /**
- * 真实持久 doc store：值序列化为 JSON 写内存镜像（与 PluginDocStore 语义一致，
- * get 返回深拷贝），用于验证「真实持久读回」而非句柄内存缓存假象。
+ * 序列化文档测试替身：用内存 Map 存 JSON，验证句柄与底层存储的数据往返。
+ * 它不提供磁盘持久化；真实 SQLite 关闭与重开验证放在独立集成测试中。
  */
 class JsonDocStore implements PluginDocStore {
   private persisted = new Map<string, string>()
@@ -223,13 +223,13 @@ function stopWriterPlugin(id: string, opts: { writeKey: string; failStop?: boole
   return { definition, firstHandle }
 }
 
-test('disable 路径：service.stop 内经 await 后仍能写 ctx.doc，且真实持久层读回', { timeout: 60_000 }, async () => {
+test('disable 路径：service.stop 内经 await 后仍能写 ctx.doc，且序列化存储读回', { timeout: 60_000 }, async () => {
   const { definition, firstHandle } = stopWriterPlugin('test:stop-writer', { writeKey: 'disable-path' })
   const host = makeHost()
   await host.register(definition)
   assert.equal(docs.get('test:stop-writer:final-state', { phase: 'init' }).phase, 'init', '启动期未写')
   await host.disable('test:stop-writer')
-  // 真实持久层读回（JsonDocStore.get 反序列化）：不是句柄内存假象。
+  // 经测试存储反序列化读回，检查写入确实到达底层 store。
   const persisted = docs.get('test:stop-writer:final-state', { phase: 'missing' })
   assert.deepEqual(persisted, { phase: 'stopped-final', key: 'disable-path' }, 'stop 内最终写必须落持久层')
   // stop 返回后：同句柄写入立即恢复拒绝
@@ -238,6 +238,12 @@ test('disable 路径：service.stop 内经 await 后仍能写 ctx.doc，且真�
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_expired',
     'stop 返回后写入必须被拒',
   )
+  const flushCalls = docs.flushCalls
+  await assert.rejects(
+    firstHandle.current!.flush(),
+    (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_expired',
+  )
+  assert.equal(docs.flushCalls, flushCalls, '失效句柄不能再触发底层 flush')
   await host.dispose()
 })
 

@@ -271,7 +271,8 @@ interface PluginState {
    * stop 时 phase 已是 deactivating，常规 guard 会拒绝一切写入，引擎/服务的
    * 终态落盘会被悄悄丢弃（诚实性违规）。窗口只覆盖 stop 本身：stop 返回
    * （成功/失败/回滚）即复位；epoch 更替（reenable）后旧句柄仍拒绝。
-   * doc 句柄是插件私有能力，窗口内经句柄的写入均属插件自身 stop 链产物。
+   * 窗口允许本周期已有异步回调完成写入，不区分其 Promise 创建位置；服务
+   * 必须在 stop 返回前取消或等待这些回调。它不是插件内异步任务的隔离边界。
    */
   stopDocWrites: boolean;
 }
@@ -2197,7 +2198,10 @@ export class PluginHost {
           },
           // 真实持久化端口：透传 store 的排队写冲刷（同一持久化链，无按文档粒度
           // 队列）；失败原样上抛，不以镜像已写冒充持久化完成。
-          flush: () => store.flush(),
+          flush: async () => {
+            assertDocUsable(name);
+            return store.flush();
+          },
         };
         state.docs.set(name, { handle: handle as PluginDocHandle<unknown>, isPublic, initial: normalizedInitial });
         return handle;

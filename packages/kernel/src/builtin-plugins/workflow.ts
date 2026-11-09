@@ -316,7 +316,7 @@ export function createWorkflowPlugin(): PluginDefinition {
               const message = error instanceof Error ? error.message : String(error)
               process.stderr.write(`builtin:workflow stop: 最终 runs 投影失败（终态已持久于 records）: ${message}\n`)
               // 显式诊断事件（非静默）：前端与日志可见投影未同步及原因。
-              void ctx.host.emitEvent('notification', {
+              await ctx.host.emitEvent('notification', {
                 type: 'notification',
                 level: 'warning',
                 title: '工作流最终投影未同步',

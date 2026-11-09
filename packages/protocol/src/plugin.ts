@@ -365,6 +365,11 @@ export interface PluginServiceSpec {
    */
   prepare?(): MaybePromise<void>
   start(): MaybePromise<void>
+  /**
+   * 停止新回调并等待本服务的在途回调收敛。宿主等待 stop 时允许本插件当前
+   * 启用周期的 doc 句柄完成最终写入；stop 返回后句柄失效。此窗口不区分
+   * 回调的异步来源，服务必须自行取消或等待残留任务，不能在返回后继续写入。
+   */
   stop(): MaybePromise<void>
   /** 返回仍需本服务保活的任务标签；宿主在停用/卸载前同步检查。 */
   liveTasks?(): string[]
