@@ -23,7 +23,7 @@ mountSharedPluginNamespaces({ realHooks: true })
 const e = React.createElement
 const module = await importWorkflowClientModule()
 const originalFetch = globalThis.fetch
-afterEach(() => { globalThis.fetch = originalFetch; resetPluginClientCache() })
+afterEach(() => { resetSessionDocSubscriptions(); globalThis.fetch = originalFetch; resetPluginClientCache() })
 
 function conversation(id: number, status: ConversationSummary['status'] = 'idle'): ConversationSummary {
   return { id, title: `会话 ${id}`, profileId: 'coder', tags: [], cwd: '/tmp', model: '', thinkingLevel: '', status,
@@ -36,21 +36,35 @@ function seed() {
   globalThis.fetch = async () => new Response('', { headers: { 'x-helm-client-hash': 'seeded' } })
 }
 
-/**
- * mock 会话文档订阅（runs 分片）：初始 GET 返回 runs，SSE 事件流提供空挂起流
- * （不推送增量；测试经重渲染注入新快照）。
- */
+let publishSessionRuns = (): void => {}
+
+/** 与正式端点同契约：SSE 首帧 snapshot，后续增量不依赖全局 store 引用变化重连。 */
 function seedSessionRuns(runs: () => unknown): void {
   seedPluginClientModule('builtin:workflow', 'index.tsx', module)
+  const streams = new Set<{ controller: ReadableStreamDefaultController<Uint8Array>; conversationId: number }>()
+  const encoder = new TextEncoder()
+  let seq = 0
+  const doc = (conversationId: number) => ({ pluginId: 'builtin:workflow', name: 'runs', conversationId, value: { runs: runs() } })
+  const encode = (event: string, data: unknown) => encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+  publishSessionRuns = () => {
+    seq++
+    for (const stream of streams) stream.controller.enqueue(encode('plugin.session_doc.updated', {
+      seq, event: { type: 'plugin.session_doc.updated', doc: doc(stream.conversationId) },
+    }))
+  }
   globalThis.fetch = async (input: RequestInfo | URL) => {
     const url = String(input)
-    if (url.includes('/docs/runs?conversationId=')) {
-      return new Response(JSON.stringify({ pluginId: 'builtin:workflow', name: 'runs', conversationId: 1, value: { runs: runs() } }),
-        { headers: { 'content-type': 'application/json' } })
-    }
     if (url.includes('/docs/runs/events?conversationId=')) {
-      return new Response(new ReadableStream({ start() { /* 挂起空流：不推送帧 */ } }),
-        { headers: { 'content-type': 'text/event-stream' } })
+      const conversationId = Number(new URL(url, 'http://localhost').searchParams.get('conversationId'))
+      let entry: { controller: ReadableStreamDefaultController<Uint8Array>; conversationId: number }
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          entry = { controller, conversationId }
+          streams.add(entry)
+          controller.enqueue(encode('snapshot', { seq, doc: doc(conversationId) }))
+        },
+        cancel() { streams.delete(entry) },
+      }), { headers: { 'content-type': 'text/event-stream' } })
     }
     return new Response('', { headers: { 'x-helm-client-hash': 'seeded' } })
   }
@@ -69,7 +83,7 @@ function mount() {
   }
 }
 
-test('真实共享 hooks 消费 snapshot/plugin.doc.updated：父工具已返回仍展示后台运行，点击保留工作台', { timeout: 60_000 }, async () => {
+test('真实共享 hooks 消费会话文档 snapshot/增量：父工具已返回仍展示后台运行，点击保留工作台', { timeout: 60_000 }, async () => {
   let runsValue: unknown = []
   seedSessionRuns(() => runsValue)
   const parent = conversation(1)
@@ -111,9 +125,8 @@ test('真实共享 hooks 消费 snapshot/plugin.doc.updated：父工具已返回
     assert.match(ui.host.textContent!, /等待审批/)
     assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar') === null, 'blocked 子会话仍隐藏复制/分叉')
     state = applyEventFrame(state, { seq: 3, event: { type: 'conversation.upsert', conversation: child } })
-    // runs 已改会话分片：终态经 seedSessionRuns 注入的新值到达（下次订阅拉取）。
     runsValue = [{ ...run, status: 'failed', error: 'Gate 命令退出码 1' }]
-    await act(async () => { resetSessionDocSubscriptions() })
+    await act(async () => { publishSessionRuns() })
     await ui.render(store(), timeline)
     assert.match(ui.host.textContent!, /Gate 命令退出码 1/)
     assert.doesNotMatch(ui.host.textContent!, /后台运行中/)
@@ -126,7 +139,7 @@ test('真实共享 hooks 消费 snapshot/plugin.doc.updated：父工具已返回
     state = applyEventFrame(state, { seq: 5, event: { type: 'plugin.changed', plugin, ui: workflowUi } })
     // 重启用后经会话分片到达 completed 终态。
     runsValue = [{ ...run, status: 'completed' }]
-    await act(async () => { resetSessionDocSubscriptions() })
+    await act(async () => { publishSessionRuns() })
     await ui.render(store(), timeline)
     assert.equal(ui.host.querySelectorAll('.subagent-card-clickable').length, 1)
     assert.match(ui.host.textContent!, /已完成/)
@@ -186,12 +199,12 @@ test('WorkflowToolView 与无 nativechild 的外部 subagent 按真实 run.runni
       assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar') === null, `${toolName} done 工具仍有后台活动`)
       for (const status of ['failed', 'aborted', 'completed'] as const) {
         await ui.render(store(status), timeline)
-        await act(async () => { resetSessionDocSubscriptions() })
+        await act(async () => { publishSessionRuns() })
         await ui.render(store(status), timeline)
         assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar'), `${toolName} ${status} 必须释放活动`)
       }
       await ui.render(store('running'), timeline)
-      await act(async () => { resetSessionDocSubscriptions() })
+      await act(async () => { publishSessionRuns() })
       await ui.render(store('running'), timeline)
       assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar') === null)
       await ui.render(store('running', false), timeline)
@@ -259,7 +272,7 @@ test('外部 executionId 续接仅最新调用上报活动，不能编造 native
     assert.deepEqual(bars(), [true, false])
     assert.equal(ui.host.querySelectorAll('.subagent-card-clickable').length, 0)
     await ui.render(store('completed'), timeline)
-    await act(async () => { resetSessionDocSubscriptions() })
+    await act(async () => { publishSessionRuns() })
     await ui.render(store('completed'), timeline)
     assert.deepEqual(bars(), [true, true], '旧外部 run.running 不能让已续接完成的旧调用重新 busy')
   } finally { await ui.close() }
