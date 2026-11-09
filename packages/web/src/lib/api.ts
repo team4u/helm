@@ -30,6 +30,7 @@ import type {
   Profile,
   ProviderConfig,
   PublicPluginDoc,
+  PublicPluginSessionDoc,
   SearchHit,
   SkillSummary,
   ConversationWithdrawRequest,
@@ -461,6 +462,16 @@ export const pluginsApi = {
     apiRequest<PublicPluginDoc>(
       'GET',
       `/api/plugins/${encodeURIComponent(pluginId)}/docs/${encodeURIComponent(name)}`,
+    ),
+  /** 会话级文档一次性读取（扩展同一路径 ?conversationId=；订阅式更新用 usePluginSessionDoc）。 */
+  getPublicSessionDoc: (
+    pluginId: string,
+    name: string,
+    conversationId: number,
+  ) =>
+    apiRequest<PublicPluginSessionDoc>(
+      'GET',
+      `/api/plugins/${encodeURIComponent(pluginId)}/docs/${encodeURIComponent(name)}?conversationId=${conversationId}`,
     ),
   listActions: () => apiRequest<ActionManifest[]>('GET', '/api/actions'),
   invokeAction: <T = unknown>(

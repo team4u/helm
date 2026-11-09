@@ -7,6 +7,7 @@ import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 import { emptyLiveState } from '../src/lib/live-state.js'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 
 ;(globalThis as Record<string, unknown>).React = React
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
@@ -37,6 +38,10 @@ function render(live: ConversationLive): string {
     ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,
     setWorkbenchTab: noop, setActiveModal: noop, dismissNotice: noop, pushNotice: noop,
     invokePluginAction: asyncNoop,
+    subscribeSessionDoc: subscribeSessionDoc,
+    getSessionDocState,
+    getPluginSessionDoc: asyncNoop,
+    retrySessionDoc: noop,
   }
   return renderToString(React.createElement(HelmStoreContext.Provider, { value: store },
     React.createElement(ConversationTimeline, { conversation, detailEntries: [], live, onRequestEdit: () => {} })))

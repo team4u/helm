@@ -31,6 +31,9 @@ import type {
 } from '@helm/protocol'
 import { matchesConversationScope, ROOT_CONVERSATION_ID } from '@helm/protocol'
 import type { ModelDescriptor } from './api.js'
+import type { SessionDocKey } from './session-docs.js'
+
+export type { SessionDocKey }
 
 export type ThemeMode = 'light' | 'dark'
 export type ThemePreference = 'system' | 'light' | 'dark'
@@ -341,6 +344,14 @@ export interface HelmStoreValue {
   loadEarlierEntries(conversationId: number): Promise<void>
   loadConversationArtifacts(conversationId: number): Promise<ArtifactMetadata[] | undefined>
   ensurePluginDoc(pluginId: string, docName: string): Promise<unknown>
+  /** 订阅会话级文档元组（ref-count 共享专用 SSE 流；详见 lib/session-docs.ts）。 */
+  subscribeSessionDoc(key: SessionDocKey, listener: () => void): () => void
+  /** 读取会话级文档当前缓存态（含错误与删除标记；未订阅返回空态）。 */
+  getSessionDocState(key: SessionDocKey): { value?: unknown; hasValue: boolean; deleted: boolean; error?: string; connected: boolean }
+  /** 一次性读取会话级文档（GET /api/plugins/:id/docs/:name?conversationId=）。 */
+  getPluginSessionDoc(pluginId: string, docName: string, conversationId: number): Promise<unknown>
+  /** 会话级文档显式重连（订阅错误后的 UI 重试入口）。 */
+  retrySessionDoc(key: SessionDocKey): void
   openTarget(target: string | ResolvedTarget, opts?: { split?: boolean; highlightEntryId?: string }): void
   closeSplit(): void
   /** 更新当前 screen 路由参数（undefined 值删除键）；split 省略时作用于主屏。 */

@@ -14,10 +14,15 @@ import { Checkbox } from './Checkbox.js'
 import { Tabs, TabsList, TabsTrigger } from './Tabs.js'
 import { evaluateSpecValue, type EvalScope } from './evaluator.js'
 import { formatSpecText, normalizeSpec, resolveKeyValueItems, type NormalizedSpecNode } from './spec-normalize.js'
+import { PluginSlot } from './PluginSlot.js'
 
 export interface SpecRenderContext {
-  /** 属性求值作用域（$docs / $data / $row / $value）。 */
+  /** 属性求值作用域（$docs / $sessionDocs / $data / $row / $value）。 */
   scope: EvalScope
+  /** 当前会话上下文（Slot 原语传给子插槽贡献项 scope 过滤；无会话槽位 undefined）。 */
+  conversationId?: number
+  /** 当前渲染视图归属插件（Slot 原语解析本插件短名拼接全限定插槽名）。 */
+  pluginId?: string
   /** 子树渲染入口（原语间互相组合）。 */
   renderChildren(children: NormalizedSpecNode[]): ReactNode
   /** 执行一条声明式动作指令；pendingKey 相同的按钮进入 loading 防连点。 */
@@ -767,6 +772,35 @@ function TabChildren({ childrenRaw, ctx }: { childrenRaw: unknown; ctx: SpecRend
 }
 
 // ---------------------------------------------------------------------------
+// Slot 原语：声明式轨道的插件间子插槽注入（复用 client 轨 <PluginSlot />）
+// ---------------------------------------------------------------------------
+
+function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
+  const name = str(evalIn(node.props['name'], ctx.scope))
+  const modeRaw = str(evalIn(node.props['mode'], ctx.scope), 'list')
+  const mode = modeRaw === 'single' ? 'single' : 'list'
+  const fallback = node.children.length > 0 ? <SpecNodeList nodes={node.children} ctx={ctx} /> : undefined
+  if (name === '') {
+    return (
+      <div className="jr-callout jr-callout-warn">
+        <HelmIcon name="alert-triangle" size={13} />
+        <span>Slot 原语缺少 name 属性</span>
+      </div>
+    )
+  }
+  return (
+    <PluginSlot
+      name={name}
+      mode={mode}
+      fallback={fallback}
+      slotProps={{ ...ctx.scope['$data'] as Record<string, unknown> | undefined }}
+      conversationId={ctx.conversationId}
+      ownerPluginId={ctx.pluginId}
+    />
+  )
+}
+
+// ---------------------------------------------------------------------------
 // 分发表
 // ---------------------------------------------------------------------------
 
@@ -793,6 +827,7 @@ const PRIMITIVES: Record<string, SpecPrimitiveImpl> = {
   Button: ButtonImpl,
   ActionBar: ActionBarImpl,
   Tabs: TabsImpl,
+  Slot: SlotImpl,
 }
 
 /** 渲染一个归一化节点（未知组件显式提示，不静默吞掉）。 */

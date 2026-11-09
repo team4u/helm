@@ -9,6 +9,15 @@ import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, nodesApi, pluginsApi, setStoredToken, type CredentialSummary, type ModelDescriptor, type NodeInfo } from './api.js'
 import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, SseParser, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
+import {
+  bindSessionDocRuntime,
+  evictSessionDocSubscriptions,
+  evictSessionDocsOfConversation,
+  getSessionDocState,
+  resetSessionDocSubscriptions,
+  retrySessionDoc,
+  subscribeSessionDoc,
+} from './session-docs.js'
 import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.js'
 import * as HelmPluginClient from './plugin-client-context.js'
 import { formatLocationHash, isSameLocationState, parseLocationHash, shouldPushLocationHistory, type WorkspaceLocationState } from './url-hash-model.js'
@@ -158,6 +167,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     failedDocs.current.clear()
     assetGeneration.current++
     resetPluginClientCache()
+    resetSessionDocSubscriptions()
     setStoredToken(null)
     setAuthenticated(false)
     setSseConnected(false)
@@ -341,6 +351,11 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   }, [pushNotice])
   const invokePluginAction = useCallback(async (pluginId: string, actionId: string, input: unknown, conversationId?: number) => pluginsApi.invokeAction(pluginId, actionId, input, conversationId), [])
 
+  const getPluginSessionDoc = useCallback(async (pluginId: string, docName: string, conversationId: number): Promise<unknown> => {
+    const doc = await pluginsApi.getPublicSessionDoc(pluginId, docName, conversationId)
+    return doc.value
+  }, [])
+
   // ---- 地址栏 Hash 双向同步 --------------------------------------------------
   // 外部变更（前进/后退/手动改 Hash）：解析后覆盖本地状态。pushState/replaceState
   // 不会触发这两个事件，因此自身写回不会形成回环；与最近同步位置相同的事件是回声，忽略。
@@ -473,8 +488,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
               pluginEpoch.current.set(event.plugin.id, (pluginEpoch.current.get(event.plugin.id) ?? 0) + 1)
               for (const key of requests.current.keys()) if (key.startsWith(`doc:${event.plugin.id}/`)) requests.current.delete(key)
               failedDocs.current.clear()
-              // 插件停用/卸载（ui 贡献移除）时同步释放其 client 模块缓存
-              if (!event.plugin.enabled) evictPluginClientCache(event.plugin.id)
+              failedDocs.current.clear()
+              // 插件停用/卸载（ui 贡献移除）时同步释放其 client 模块缓存与全部会话文档订阅
+              if (!event.plugin.enabled) {
+                evictPluginClientCache(event.plugin.id)
+                evictSessionDocSubscriptions(event.plugin.id)
+              }
               void refreshAssets()
             }
             if (event.type === 'models.changed') void refreshAssets()
@@ -489,6 +508,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
               setPrimaryTarget((current) => current.kind === 'conversation' && current.conversationId === id ? { kind: 'conversation', conversationId: ROOT_CONVERSATION_ID } : current)
               setSplitTarget((current) => current?.kind === 'conversation' && current.conversationId === id ? null : current)
               setConversationArtifacts((prev) => { const next = { ...prev }; delete next[id]; return next })
+              evictSessionDocsOfConversation(id)
             }
           }
         })
@@ -521,14 +541,19 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     () => ({
       ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
       live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],
   )
+  useEffect(() => {
+    // 会话文档订阅运行时注入：真实 fetch 与 token 读取（模块内直接引用会成环）
+    bindSessionDocRuntime(globalThis.fetch.bind(globalThis), getStoredToken)
+    return () => bindSessionDocRuntime(undefined, () => null)
+  }, [])
   useEffect(() => {
     // 宿主共享运行时：
     // - __HELM_SHARED__：具名句柄（调试/未来消费者）；

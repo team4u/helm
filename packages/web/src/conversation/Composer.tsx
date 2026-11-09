@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ArtifactMetadata, ConversationAttachmentRef, ConversationSummary } from '@helm/protocol'
+import type { ArtifactMetadata, ComposerController, ConversationAttachmentRef, ConversationSummary, WhenBusy } from '@helm/protocol'
 import { assetsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { matchesUiScope } from '../lib/types.js'
@@ -682,6 +682,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     syncLiveDraft('', null, [])
   }, [syncLiveDraft])
 
+
   const notifyError = useCallback(
     (title: string, err: unknown) => {
       store.pushNotice({
@@ -844,6 +845,66 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // ComposerController：转发给 composer.pill / composer.widget 插件槽位
+  // （经 slotProps.composer 与 PluginClientContext.composer 双通道）。
+  // ---------------------------------------------------------------------------
+  const composerRef = useRef<ComposerController | null>(null)
+  const draftRef = useRef({ text, attachments, sending })
+  draftRef.current = { text, attachments, sending }
+  const sendRef = useRef(send)
+  sendRef.current = send
+  if (composerRef.current === null) {
+    composerRef.current = {
+      get draft() {
+        return draftRef.current.text
+      },
+      get attachments() {
+        // 草稿附件是本地待发对象：暴露协议附件引用形状（id 以 artifactId 定位）
+        return draftRef.current.attachments.map((a) => ({ id: a.artifactId, name: a.name, mimeType: a.mimeType, size: a.size }))
+      },
+      get sending() {
+        return draftRef.current.sending
+      },
+      setDraft(next: string) {
+        setText(next)
+        syncLiveDraft(next, editingEntryId, draftRef.current.attachments)
+        requestAnimationFrame(() => textareaRef.current?.focus())
+      },
+      insertText(fragment: string) {
+        const el = textareaRef.current
+        if (el === null || !el.isConnected) {
+          setText((current) => current + fragment)
+          return
+        }
+        const start = el.selectionStart ?? el.value.length
+        const end = el.selectionEnd ?? start
+        const next = el.value.slice(0, start) + fragment + el.value.slice(end)
+        setText(next)
+        syncLiveDraft(next, editingEntryId, draftRef.current.attachments)
+        requestAnimationFrame(() => {
+          const caret = start + fragment.length
+          el.focus()
+          el.setSelectionRange(caret, caret)
+        })
+      },
+      async submit(textArg?: string, options?: { whenBusy?: WhenBusy }) {
+        if (textArg !== undefined) {
+          // 显式 text：直接提交，不消费原草稿
+          await conversationsApi.submitInput(conversation.id, {
+            text: textArg,
+            origin: 'human',
+            ...(options?.whenBusy !== undefined ? { whenBusy: options.whenBusy } : {}),
+          })
+          return
+        }
+        // 省略 text：提交当前草稿及附件；steer 与宿主回车默认一致
+        await sendRef.current(options?.whenBusy === 'followUp' ? 'followUp' : 'steer')
+      },
+    }
+  }
+  const composerController = composerRef.current
+
   const abortTurn = async (): Promise<void> => {
     try {
       await conversationsApi.abort(conversation.id)
@@ -924,7 +985,8 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                   spec={w.spec}
                   conversationId={conversation.id}
                   label={`挂件 ${w.spec.id}`}
-                  slotProps={{ conversation }}
+                  slotProps={{ conversation, composer: composerController }}
+                  composer={composerController}
                 />
               </div>
             ))}
@@ -1051,7 +1113,8 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                         spec={p.spec}
                         conversationId={conversation.id}
                         label={`胶囊 ${p.spec.id}`}
-                        slotProps={{ conversation }}
+                        slotProps={{ conversation, composer: composerController }}
+                        composer={composerController}
                       />
                     </span>
                   ))}
@@ -1069,7 +1132,8 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                           spec={p.spec}
                           conversationId={conversation.id}
                           label={`胶囊 ${p.spec.id}`}
-                          slotProps={{ conversation }}
+                          slotProps={{ conversation, composer: composerController }}
+                          composer={composerController}
                         />
                       </div>
                     ))}

@@ -7,13 +7,13 @@
  *    编译器把该说明符虚拟化为 `module.exports = globalThis.__helm_shared_plugin_client`
  *    （HelmStoreProvider 挂载本模块导出），运行时取到的就是这里导出的同一批函数。
  *
- * 全部能力转发真实宿主 store（invokePluginAction / openTarget / ensurePluginDoc /
- * usePluginDoc），无任何 mock。
+ * 全部能力转发真实宿主 store（invokePluginAction / conversationsApi.submitInput /
+ * ensurePluginDoc / 会话文档订阅），无任何 mock。
  */
 import { createContext, useCallback, useContext, useEffect } from 'react'
-import type { PluginClientContext as PluginClientContextType } from '@helm/protocol'
-import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary } from '@helm/protocol'
-import { useHelmStore, usePluginDoc as usePluginDocFromStore } from './store-context.js'
+import type { AskSpec, ComposerController, ConversationDetail, ConversationLive, ConversationSummary, PluginClientContext as PluginClientContextType } from '@helm/protocol'
+import { conversationsApi } from './api.js'
+import { useHelmStore, usePluginDoc as usePluginDocFromStore, usePluginSessionDoc as usePluginSessionDocFromStore } from './store-context.js'
 import type { HelmStoreValue } from './types.js'
 export { useToolActivity } from './tool-activity.js'
 
@@ -28,9 +28,11 @@ export function usePluginContext(): PluginClientContextType {
 }
 
 /**
- * 响应式订阅当前插件的 public doc：首次自动 GET，随后随 SSE
- * `plugin.doc.updated` 实时重渲染（与宿主 usePluginDoc 同一 store，非 Promise 轮询）。
- * 必须在 <PluginUiView> 内的插件组件中调用（从 ctx.pluginId 解析当前插件）。
+ * 响应式订阅公开文档：pluginId 省略时取当前 ctx.pluginId（本插件），
+ * 传入时订阅其他插件的公开文档（跨插件寻址）。
+ * 首次自动 GET，随后随 SSE `plugin.doc.updated` 实时重渲染（与宿主
+ * usePluginDoc 同一 store，非 Promise 轮询）。
+ * 必须在 <PluginUiView> 内的插件组件中调用。
  *
  * 导出两个名字：插件源码 `import { usePluginDoc } from '@helm/plugin-client'`
  * （共享模块契约名）；宿主内部引用用 useClientPluginDoc 避免与
@@ -39,12 +41,36 @@ export function usePluginContext(): PluginClientContextType {
 export const usePluginDoc = useClientPluginDocInternal
 export { useClientPluginDocInternal as useClientPluginDoc }
 
-function useClientPluginDocInternal<T = unknown>(docName: string): T | undefined {
+function useClientPluginDocInternal<T = unknown>(docName: string, pluginId?: string): T | undefined {
   const ctx = useContext(PluginClientContext)
   if (ctx === null) {
     throw new Error('usePluginDoc 必须在 <PluginUiView> 内的插件组件中调用')
   }
-  return usePluginDocFromStore<T>(ctx.pluginId, docName)
+  return usePluginDocFromStore<T>(pluginId ?? ctx.pluginId, docName)
+}
+
+/**
+ * 响应式订阅会话级公开文档：pluginId 省略时取当前 ctx.pluginId，
+ * conversationId 省略时继承当前槽位 ctx.conversationId；两者都缺省时
+ * 无会话上下文，返回 undefined 且不发起订阅。
+ * 订阅走 (pluginId, docName, conversationId) 元组专用 SSE 流
+ * （GET /api/plugins/:id/docs/:name/events?conversationId=N），不依赖全局事件。
+ */
+export const usePluginSessionDoc = useClientPluginSessionDocInternal
+export { useClientPluginSessionDocInternal as useClientSessionPluginDoc }
+
+function useClientPluginSessionDocInternal<T = unknown>(
+  docName: string,
+  options?: { conversationId?: number; pluginId?: string },
+): T | undefined {
+  const ctx = useContext(PluginClientContext)
+  if (ctx === null) {
+    throw new Error('usePluginSessionDoc 必须在 <PluginUiView> 内的插件组件中调用')
+  }
+  return usePluginSessionDocFromStore<T>(docName, {
+    pluginId: options?.pluginId ?? ctx.pluginId,
+    conversationId: options?.conversationId ?? ctx.conversationId,
+  })
 }
 
 /** 全部会话摘要（SSE 实时同步；与宿主左栏同一数据源，无 mock）。 */
@@ -97,35 +123,56 @@ export function useConversation(conversationId: number | undefined): Conversatio
   return { summary, detail, live, pendingAsks, loadError, reload }
 }
 
-/** 从宿主 store 构造绑定插件 ID 的上下文实现（PluginUiView 内部使用）。 */
+/** 校验会话 ID 为正安全整数（与内核边界一致），非法即抛显式错误。 */
+function assertConversationId(id: number, label: string): void {
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(`${label} 需为正整数（收到 ${String(id)}）`)
+  }
+}
+
+/**
+ * 从宿主 store 构造绑定插件 ID 的上下文实现（PluginUiView 内部使用）。
+ * - callAction 第三参支持跨插件寻址（pluginId）与关联会话（conversationId）；
+ * - submitInput 向真实 conversationsApi 提交输入，无会话时显式 reject；
+ * - getPluginDoc 第二参读取其他插件公开文档；
+ * - composer 仅在宿主提供（输入区槽位）时透传。
+ */
 export function createPluginClientContext(
   store: HelmStoreValue,
   pluginId: string,
   conversationId: number | undefined,
+  composer?: ComposerController,
 ): PluginClientContextType {
   return {
     pluginId,
-    callAction: (actionId, input) => store.invokePluginAction(pluginId, actionId, input, conversationId),
+    callAction: (actionId, input, options) => {
+      const targetPlugin = options?.pluginId ?? pluginId
+      if (options?.conversationId !== undefined) assertConversationId(options.conversationId, 'options.conversationId')
+      return store.invokePluginAction(
+        targetPlugin,
+        actionId,
+        input,
+        options?.conversationId ?? conversationId,
+      )
+    },
     submitInput: async (text, options) => {
-      const targetConvId = options?.conversationId ?? conversationId
-      if (targetConvId === undefined) {
-        throw new Error('submitInput: 没有指定 conversationId')
+      const target = options?.conversationId ?? conversationId
+      if (target === undefined) {
+        throw new Error('submitInput 无目标会话：当前槽位无会话上下文且未传 options.conversationId')
       }
-      const res = await fetch(`/api/conversations/${targetConvId}/input`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, ...(options?.whenBusy ? { whenBusy: options.whenBusy } : {}) }),
+      assertConversationId(target, 'conversationId')
+      await conversationsApi.submitInput(target, {
+        text,
+        origin: 'agent',
+        ...(options?.whenBusy !== undefined ? { whenBusy: options.whenBusy } : {}),
       })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ message: res.statusText }))
-        throw new Error((err as { message?: string })?.message || `submitInput 失败 (${res.status})`)
-      }
     },
     openScreen: (target) => store.openTarget(target),
     openSplitScreen: (target) => store.openTarget(target, { split: true }),
     openConversationDrawer: (conversationId) =>
       store.setActiveModal({ kind: 'conversation-drawer', conversationId }),
-    openArtifact: (artifactId) => store.setActiveModal({ kind: 'artifact-preview', artifactId, conversationId }),
+    openArtifact: (artifactId) =>
+      store.setActiveModal({ kind: 'artifact-preview', artifactId, conversationId }),
     openWorkbench: (panelId) => {
       store.setWorkbenchOpen(true)
       if (panelId) store.setWorkbenchTab(panelId)
@@ -138,21 +185,17 @@ export function createPluginClientContext(
         title: message,
         ...(conversationId !== undefined ? { conversationId } : {}),
       }),
-    getPluginDoc: (docName) => store.ensurePluginDoc(pluginId, docName),
-    getPluginSessionDoc: async (docName, options) => {
-      const targetConvId = options?.conversationId ?? conversationId
-      if (targetConvId === undefined) {
-        throw new Error('getPluginSessionDoc: 没有指定 conversationId')
-      }
+    getPluginDoc: (docName, pluginId2) => store.ensurePluginDoc(pluginId2 ?? pluginId, docName),
+    getPluginSessionDoc: (docName, options) => {
       const targetPlugin = options?.pluginId ?? pluginId
-      const res = await fetch(`/api/conversations/${targetConvId}/plugins/${encodeURIComponent(targetPlugin)}/docs/${encodeURIComponent(docName)}`)
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ message: res.statusText }))
-        throw new Error((err as { message?: string })?.message || `getPluginSessionDoc 失败 (${res.status})`)
+      const target = options?.conversationId ?? conversationId
+      if (target === undefined) {
+        return Promise.reject(new Error('getPluginSessionDoc 无目标会话：当前槽位无会话上下文且未传 options.conversationId'))
       }
-      const data = await res.json().catch(() => ({}))
-      return (data as { value?: unknown })?.value
+      assertConversationId(target, 'conversationId')
+      return store.getPluginSessionDoc(targetPlugin, docName, target)
     },
+    ...(composer !== undefined ? { composer } : {}),
     ...(conversationId !== undefined ? { conversationId } : {}),
     theme: store.theme,
   }

@@ -59,6 +59,8 @@ function makeSpyCtx(): SpyCtx {
   return {
     pluginId: 'builtin:workflow',
     callAction: async () => undefined,
+    submitInput: async () => {},
+    getPluginSessionDoc: async () => undefined,
     openScreen: (t) => {
       screenCalls.push(t)
     },

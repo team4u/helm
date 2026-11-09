@@ -2,6 +2,11 @@ import * as React from 'react'
 import { HelmStoreContext } from '../../src/lib/store-context.js'
 import { PluginClientContext, createPluginClientContext } from '../../src/lib/plugin-client-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../../src/lib/types.js'
+import {
+  getSessionDocState,
+  subscribeSessionDoc,
+  type SessionDocKey,
+} from '../../src/lib/session-docs.js'
 
 export function makeTestStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
   const noop = () => {}
@@ -21,6 +26,10 @@ export function makeTestStore(overrides: Partial<HelmStoreValue> = {}): HelmStor
     ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,
     setWorkbenchTab: noop, setActiveModal: noop, dismissNotice: noop, pushNotice: noop,
     invokePluginAction: asyncNoop,
+    subscribeSessionDoc: (key: SessionDocKey, listener: () => void) => subscribeSessionDoc(key, listener),
+    getSessionDocState,
+    getPluginSessionDoc: asyncNoop,
+    retrySessionDoc: noop,
     ...overrides,
   }
 }

@@ -22,6 +22,7 @@ import {
   useConversations,
 } from '../src/lib/plugin-client-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -124,6 +125,10 @@ function makeStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
     dismissNotice: noop,
     pushNotice: noop,
     invokePluginAction: asyncNoop,
+    subscribeSessionDoc: subscribeSessionDoc,
+    getSessionDocState,
+    getPluginSessionDoc: asyncNoop,
+    retrySessionDoc: noop,
     ...overrides,
   }
 }
@@ -138,9 +143,9 @@ const stubCtx = {
   openWorkbench: () => {},
   closeWorkbench: () => {},
   notify: () => {},
-  getPluginDoc: async () => undefined,
   submitInput: async () => {},
   getPluginSessionDoc: async () => undefined,
+  getPluginDoc: async () => undefined,
   theme: 'dark' as const,
 }
 

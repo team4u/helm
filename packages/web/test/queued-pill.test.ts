@@ -18,6 +18,7 @@ import type { HumanInputItem } from '../src/conversation/timeline-model.js'
 import { emptyLiveState } from '../src/lib/live-state.js'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import { parseSendTarget, resolveSpecAction } from '../src/ui/spec-action.js'
 
 // 与现有 SSR 测试一致，为 tsx 的 classic JSX 转换提供 React。
@@ -120,6 +121,10 @@ function renderTimeline(
     ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,
     setWorkbenchTab: noop, setActiveModal: noop, dismissNotice: noop, pushNotice: noop,
     invokePluginAction: asyncNoop,
+    subscribeSessionDoc: subscribeSessionDoc,
+    getSessionDocState,
+    getPluginSessionDoc: asyncNoop,
+    retrySessionDoc: noop,
   }
   return renderToString(React.createElement(HelmStoreContext.Provider, { value: store },
     React.createElement(ConversationTimeline, {

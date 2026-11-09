@@ -7,7 +7,7 @@
  */
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ComponentType, ReactNode } from 'react'
-import type { ClientComponentRef } from '@helm/protocol'
+import type { ClientComponentRef, ComposerController } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { createPluginClientContext, PluginClientContext } from '../lib/plugin-client-context.js'
@@ -18,11 +18,13 @@ import { ViewBoundary } from './ViewBoundary.js'
 export interface PluginUiViewProps {
   pluginId: string
   /** 双轨 spec（client 优先于 json；两者皆缺显式报错）。 */
-  spec: { json?: Record<string, unknown>; docs?: string[]; client?: ClientComponentRef }
+  spec: { json?: Record<string, unknown>; docs?: string[]; sessionDocs?: string[]; client?: ClientComponentRef }
   /** 协议标准 Props（screenId / entry / toolView / conversation 等）。 */
   slotProps?: Record<string, unknown>
   /** 会话上下文 ID（无会话槽位省略）。 */
   conversationId?: number
+  /** 输入区控制器（仅 composer 槽位由宿主提供）。 */
+  composer?: ComposerController
   /** ViewBoundary 错误标题。 */
   label?: string
 }
@@ -42,13 +44,23 @@ export function PluginUiView(props: PluginUiViewProps): ReactNode {
   const clientRef = spec.client
   if (clientRef === undefined) {
     if (spec.json === undefined) return <MissingTrackError pluginId={pluginId} />
-    return <HelmSpecView pluginId={pluginId} spec={spec.json} docs={spec.docs} conversationId={conversationId} data={slotProps} />
+    // JSON 求值域只允许可序列化数据：函数（如 ComposerController）绝不经 $data 注入
+    return (
+      <HelmSpecView
+        pluginId={pluginId}
+        spec={spec.json}
+        docs={spec.docs}
+        sessionDocs={spec.sessionDocs}
+        conversationId={conversationId}
+        data={sanitizeSlotPropsForSpec(slotProps)}
+      />
+    )
   }
   // 快照重建也会失效缓存，已挂载视图必须重载，不能继续显示旧组件或丢失样式。
   return <ClientPluginUiView key={JSON.stringify([pluginId, clientRef.module, clientRef.export, revision])} {...props} clientRef={clientRef} />
 }
 
-function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, label }: PluginUiViewProps & { clientRef: ClientComponentRef }): ReactNode {
+function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, composer, label }: PluginUiViewProps & { clientRef: ClientComponentRef }): ReactNode {
   const store = useHelmStore()
   const [retry, setRetry] = useState(0)
   const [client, setClient] = useState<ClientState>(() => {
@@ -107,7 +119,7 @@ function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, la
     )
   }
 
-  const ctx = createPluginClientContext(store, pluginId, conversationId)
+  const ctx = createPluginClientContext(store, pluginId, conversationId, composer)
   return (
     <ViewBoundary label={label ?? '插件组件'}>
       <PluginClientContext.Provider value={ctx}>
@@ -115,6 +127,36 @@ function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, la
       </PluginClientContext.Provider>
     </ViewBoundary>
   )
+}
+
+/** JSON 求值域仅允许可序列化数据：函数/类实例/symbol 等原样剔除（结构保留）。 */
+export function sanitizeSlotPropsForSpec(
+  slotProps: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (slotProps === undefined) return {}
+  const clean: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(slotProps)) {
+    if (typeof value === 'function' || typeof value === 'symbol') continue
+    clean[key] = sanitizeSpecValue(value)
+  }
+  return clean
+}
+
+function sanitizeSpecValue(value: unknown): unknown {
+  if (value === null) return null
+  const kind = typeof value
+  if (kind === 'object') {
+    if (Array.isArray(value)) return value.map(sanitizeSpecValue)
+    if (value instanceof Date) return value.toISOString()
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof v === 'function' || typeof v === 'symbol') continue
+      out[k] = sanitizeSpecValue(v)
+    }
+    return out
+  }
+  if (kind === 'function' || kind === 'symbol' || kind === 'bigint' || kind === 'undefined') return undefined
+  return value
 }
 
 /** client 与 json 都未声明：显式契约错误（注册边界已拦截，防御渲染期）。 */

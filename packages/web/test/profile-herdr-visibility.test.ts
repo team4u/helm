@@ -24,7 +24,11 @@ import { renderToString } from 'react-dom/server'
 import type { PluginSummary, Profile, ProfileRuntimeUiSpec } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import type { ModelDescriptor } from '../src/lib/api.js'
+
+const noop = () => {}
+const asyncNoop = async () => undefined
 
 const e = React.createElement
 // classic JSX 转换的全局 React 供给（须在导入 .tsx 组件模块之前）
@@ -112,6 +116,10 @@ function makeStore(
     dismissNotice: () => {},
     pushNotice: () => {},
     invokePluginAction: async () => undefined,
+    subscribeSessionDoc: subscribeSessionDoc,
+    getSessionDocState,
+    getPluginSessionDoc: asyncNoop,
+    retrySessionDoc: noop,
   }
 }
 

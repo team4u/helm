@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ViewBoundary } from './ViewBoundary.js'
 import { conversationsApi } from '../lib/api.js'
-import { useHelmStore, usePluginDocsMap } from '../lib/store-context.js'
+import { useHelmStore, usePluginDocsMap, usePluginSessionDocsMap } from '../lib/store-context.js'
 import type { EvalScope } from './evaluator.js'
 import { isDegradedNode, normalizeSpec, type NormalizedSpecNode } from './spec-normalize.js'
 import { resolveSpecAction } from './spec-action.js'
@@ -26,6 +26,7 @@ export interface HelmSpecViewProps {
   pluginId?: string
   spec?: Record<string, unknown>
   docs?: string[]
+  sessionDocs?: string[]
   data?: Record<string, unknown>
   conversationId?: number
 }
@@ -33,9 +34,10 @@ export interface HelmSpecViewProps {
 /** 成功确认态保持时长（按钮打勾 1.5s 后回落）。 */
 const SUCCEED_CONFIRM_MS = 1_500
 
-export function HelmSpecView({ pluginId, spec, docs, data, conversationId }: HelmSpecViewProps): React.JSX.Element | null {
+export function HelmSpecView({ pluginId, spec, docs, sessionDocs, data, conversationId }: HelmSpecViewProps): React.JSX.Element | null {
   const store = useHelmStore()
   const docsMap = usePluginDocsMap(pluginId, docs)
+  const sessionDocsMap = usePluginSessionDocsMap(pluginId, sessionDocs, conversationId)
   const [pendingKeys, setPendingKeys] = useState<ReadonlySet<string>>(new Set())
   const [succeededKeys, setSucceededKeys] = useState<ReadonlySet<string>>(new Set())
   // 同步在途集合：防止同一按钮在 setState 异步生效前连续触发同一动作（竞态）
@@ -239,7 +241,9 @@ export function HelmSpecView({ pluginId, spec, docs, data, conversationId }: Hel
   }
 
   const ctx: SpecRenderContext = {
-    scope: { $docs: docsMap, $data: data ?? {} },
+    scope: { $docs: docsMap, $sessionDocs: sessionDocsMap, $data: data ?? {} },
+    conversationId,
+    pluginId,
     renderChildren: (children: NormalizedSpecNode[]) => <SpecNodeList nodes={children} ctx={ctx} />,
     runAction,
     isPending,
