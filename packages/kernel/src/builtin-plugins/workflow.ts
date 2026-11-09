@@ -32,7 +32,8 @@ import {
 } from '@helm/protocol'
 import { WorkflowService } from './workflow/engine/index.js'
 import { normalizeWorkflowArgs } from './workflow/engine/runtime.js'
-import { executionOf, safeResultText, subagentFooter } from '../runtime/runtime-helpers.js'
+import { safeResultText } from '../runtime/runtime-helpers.js'
+import { executionOf, subagentFooter } from './workflow/tool-result.js'
 import { redactJsonValue } from '../redact.js'
 
 export { WORKFLOW_PLUGIN_ID }

@@ -92,7 +92,6 @@ import { createRunActionTool } from './kernel-tools.js'
 import { buildSpawnHost } from './spawn-host.js'
 import {
   escapeXml,
-  executionOf,
   pluginToolResult,
   requireConv,
   safeResultText,
@@ -1661,11 +1660,11 @@ export class KernelRuntime {
   }
 
   /**
-   * 全局文档存储端口（WorkflowService / PluginHost docs 共用同一 SQLite 镜像与队列）：
+   * 全局文档存储端口（PluginHost docs 与内核元数据共用同一 SQLite 镜像与队列）：
    * - get(key, initial)：同步读，缺省返回 initial（不落盘）；
    * - set(key, value)：同步镜像 + 排队持久化（helm_plugin_docs 全局命名空间）；
    * - flush()：等待队列冲刷完成（失败显式抛 store_flush_failed）。
-   * 命名空间约定：'<owner>/<name>'（如 'workflow/runs-index'、'<pluginId>/<doc>'）。
+   * PluginHost 使用 '<pluginId>:<doc>' 隔离插件文档，内核元数据使用独立键。
    */
   readonly documentStore: {
     get<T>(key: string, initial: T): T

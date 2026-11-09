@@ -6,7 +6,7 @@
  */
 import type { JsonValue } from '@earendil-works/chord'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
-import type { AgentExecutionInfo, ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol'
 import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 import type { ConvMeta } from './store.js'
@@ -61,37 +61,6 @@ export function requireConv(store: HelmStore, id: number): NonNullable<ReturnTyp
 // ---------------------------------------------------------------------------
 // 工具结果契约 helpers（插件/钩子产物 -> SDK ToolExecutionResult）
 // ---------------------------------------------------------------------------
-
-/** AgentExecutionInfo -> structuredOutput.execution（仅保留已回传字段，JSON-safe）。 */
-export function executionOf(info: AgentExecutionInfo): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  if (info.nodeId !== undefined) out['nodeId'] = info.nodeId
-  if (info.conversationId !== undefined) out['conversationId'] = info.conversationId
-  if (info.executionId !== undefined) out['executionId'] = info.executionId
-  if (info.effectiveCwd !== undefined) out['effectiveCwd'] = info.effectiveCwd
-  if (info.worktree !== undefined) {
-    out['worktree'] = { ...info.worktree }
-  }
-  return out
-}
-
-/**
- * subagent 工具输出尾行：续接标识（resume 标识与实际执行环境元数据）。
- * 模型可把 conversationId / executionId 原样作为下次 resume 入参。
- */
-export function subagentFooter(resumeRef: string | undefined, resolved: AgentExecutionInfo | undefined): string {
-  const parts: string[] = []
-  if (resumeRef !== undefined) parts.push(`resume=${resumeRef}`)
-  if (resolved?.conversationId !== undefined) parts.push(`conversationId=${resolved.conversationId}`)
-  if (resolved?.executionId !== undefined) parts.push(`executionId=${resolved.executionId}`)
-  if (resolved?.effectiveCwd !== undefined) parts.push(`cwd=${resolved.effectiveCwd}`)
-  if (resolved?.worktree !== undefined) {
-    parts.push(`worktree=${resolved.worktree.path}@${resolved.worktree.branch}`)
-    if (resolved.worktree.id !== undefined) parts.push(`worktreeId=${JSON.stringify(resolved.worktree.id)}`)
-    parts.push('cleanup=cleanup_worktree')
-  }
-  return parts.length === 0 ? '' : `[subagent ${parts.join(' ')}]`
-}
 
 /**
  * 插件工具结构化结果信封的判别条件（防止任意含 output 字段的业务对象被误

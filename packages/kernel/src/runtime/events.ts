@@ -12,8 +12,7 @@
  * - publish 侧统一 JSON 校验 + 脱敏（字符串与字段名都过 redact），payload 非法直接抛
  *   HelmError，绝不静默降级；core 类型入参同时接受调用方直接 payload 与完整事件信封
  *   （如 PluginHost emitEvent('plugin.changed', {type, plugin})），信封只拆包不二次嵌套；
- *   新增四个 core 类型 conversation.entry / conversation.live / plugin.doc.updated /
- *   workflow.updated 同样双形状，字段级校验；
+ *   conversation.entry / conversation.live / plugin.doc.updated 同样接受双形状并校验字段；
  * - 未知 type 走 CustomHelmEvent {type, payload} 原样透传，不伪装成 notification；
  * - 背压有界：未决帧数/字节数超上限视为慢客户端，显式关流（客户端凭 snapshot 重连
  *   对齐），绝不静默丢帧；快照 provider 是同步的，无需异步快照系统。

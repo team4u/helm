@@ -1,7 +1,7 @@
 /**
  * 核心 API 路由：auth / events(SSE) / conversations / asks / profiles /
  * providers / credentials / models / skills / artifacts / search / plugins /
- * actions / workflows + 插件动态路由。
+ * actions 与插件动态路由。
  *
  * 路由规则：方法 + 精确路径段匹配（段数必须完全一致，多余段一律 404，
  * 绝不让 /auth/status/foo 之类落入操作分支）；段值经严格百分号解码
