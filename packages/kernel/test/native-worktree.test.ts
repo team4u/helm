@@ -609,6 +609,8 @@ async function executeCleanupTool(
     prepareInterruptedConversations: async () => {},
     cleanupWorktree: (request: import('@helm/protocol').WorktreeCleanupRequest, signal?: AbortSignal) => cleanup(request, signal) as Promise<import('@helm/protocol').WorktreeCleanupResult>,
     invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
     manageConversation: () => () => {},
     markConversationOwnership: () => {},

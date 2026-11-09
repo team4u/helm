@@ -87,6 +87,8 @@ export type WorkflowJournalEntry =
       type: 'action_started'
       index: number
       key: string
+      /** 声明幂等的动作：中断/失败后允许安全重跑，恢复时不计入 uncertain。 */
+      idempotent?: true
     }
   | {
       v: 1
@@ -98,6 +100,8 @@ export type WorkflowJournalEntry =
       ok: boolean
       result?: unknown
       error?: string
+      /** 与 action_started 行的幂等声明一致；恢复判定见 readJournal。 */
+      idempotent?: true
     }
 
 /** agent 调用的 key 输入（决定该 agent 做什么的所有字段）。 */

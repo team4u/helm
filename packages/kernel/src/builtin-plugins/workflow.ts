@@ -165,6 +165,12 @@ export function createWorkflowPlugin(): PluginDefinition {
             // ctx.host.invokeAction 已是宿主统一脱敏出口（protocol 契约）。
             return ctx.host.invokeAction(pluginId, actionId, input, invokeContext)
           },
+          // 真实宿主接完整 prepareAction preflight（插件状态/scope/inputSchema +
+          // 定义端 idempotent）；失败显式上抛，绝不退回 listActions 清单冒充。
+          prepareAction: (pluginId, actionId, input, prepareContext) =>
+            ctx.host.prepareAction(pluginId, actionId, input, prepareContext),
+          // 跨节点命令执行：取消信号透传，失败由引擎显式上抛（不吞、不假成功）。
+          execEnv: (req, signal) => ctx.host.execEnv(req, { signal }),
           listActions: () => ctx.host.listActions(),
           getConversation: (id) => ctx.host.getConversation(id),
           abortConversation: (id) => ctx.host.abortConversation(id),

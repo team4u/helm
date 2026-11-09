@@ -207,6 +207,12 @@ class FakeBackend implements PluginHostBackend {
   async invokeAction(): Promise<unknown> {
     return {}
   }
+  prepareAction(): { idempotent: boolean } {
+    return { idempotent: false }
+  }
+  async execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
+    throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
+  }
   listActions(): [] {
     return []
   }

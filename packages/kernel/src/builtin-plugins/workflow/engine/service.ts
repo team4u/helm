@@ -40,7 +40,7 @@ import {
 import { JournalWriter, readJournal, type WorkflowJournalEntry } from './journal.js'
 import { extractMeta, hasMetaDeclaration, type WorkflowMeta } from './meta.js'
 import { collapse, type WorkflowEntry } from './progress.js'
-import { isAbsoluteTargetPath } from '../runtime/tools.js'
+import { isAbsoluteTargetPath } from '../../../runtime/tools.js'
 import {
   gateResultMissingError,
   redactExecutionMetadata,
@@ -1608,7 +1608,7 @@ export class WorkflowService {
         const resolved = service.resolveActionId(actionId)
         if (resolved.builtin === 'env.exec') {
           const parsed = service.validateEnvExecInput(input)
-          const execPromise = service.host.execEnv!(
+          const execPromise = service.host.execEnv?.(
             {
               command: parsed.command,
               ...(parsed.nodeId !== undefined ? { nodeId: parsed.nodeId } : {}),
@@ -1619,6 +1619,9 @@ export class WorkflowService {
             },
             context.signal,
           )
+          if (execPromise === undefined) {
+            throw new HelmError('not_supported', '当前工作流宿主未配置 env.exec 命令执行端口', 501)
+          }
           run.pendingExecs.add(execPromise)
           let res: EnvExecResponse
           try {

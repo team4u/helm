@@ -23,6 +23,7 @@ import {
   HelmError,
   ROOT_CONVERSATION_ID,
   type ConversationSummary,
+  type EnvExecResponse,
   type PluginDefinition,
   type PluginDocHandle,
   type PublicPluginDoc,
@@ -100,6 +101,12 @@ class FakeBackend implements PluginHostBackend {
   }
   invokeAction(): Promise<unknown> {
     return Promise.resolve({})
+  }
+  prepareAction(): { idempotent: boolean } {
+    return { idempotent: false }
+  }
+  execEnv(): Promise<EnvExecResponse> {
+    return Promise.reject(new HelmError('unsupported', '本 fixture 不执行节点命令', 501))
   }
   listActions(): never[] {
     return []

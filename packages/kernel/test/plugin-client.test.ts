@@ -66,6 +66,8 @@ function makeBackend(): PluginHostBackend {
     prepareInterruptedConversations: async () => {},
     cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
     emitEvent: () => {},
   }

@@ -156,6 +156,8 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
     prepareInterruptedConversations: async () => {},
     cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
     emitEvent(type, payload) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string })
@@ -453,6 +455,8 @@ test('竞态：collectWorkerSettlement await 期间发生 rewind——旧节点�
     prepareInterruptedConversations: async () => {},
     cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
       emitEvent: (type, payload) => { if (type === 'notification') notifications.push(payload as { title: string; body: string }) },
     } satisfies PluginHostBackend,

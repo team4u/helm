@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import {
   HelmError,
   type ConversationSummary,
+  type EnvExecResponse,
   type MaybePromise,
   type PluginDefinition,
   type WorkflowRunSummary,
@@ -96,6 +97,12 @@ class FakeBackend implements PluginHostBackend {
     void pluginId;
     void actionId;
     return Promise.resolve({});
+  }
+  prepareAction(): { idempotent: boolean } {
+    return { idempotent: false };
+  }
+  execEnv(): Promise<EnvExecResponse> {
+    return Promise.reject(new HelmError('unsupported', '本 fixture 不执行节点命令', 501));
   }
   listActions(): [] {
     return [];

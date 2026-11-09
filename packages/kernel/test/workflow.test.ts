@@ -2191,6 +2191,12 @@ describe('workflow real-SDK integration (faux provider)', () => {
     const models = createModels()
     models.setProvider(fauxProvider().provider)
     const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+    // 插件化后编排引擎仅经 builtin:workflow 动作总线驱动（不再暴露 app.workflows）。
+    const workflows = app.kernel.plugins!
+    const runWorkflow = (request: Record<string, unknown>) =>
+      workflows.invokeAction('builtin:workflow', 'run', request) as Promise<
+        import('@helm/protocol').WorkflowRunSummary
+      >
     try {
       const sentinels: string[] = []
       for (const [index, ending] of ['return "early"', 'throw new Error("early failure")'].entries()) {
@@ -2205,16 +2211,26 @@ describe('workflow real-SDK integration (faux provider)', () => {
           `const fs = require("node:fs"); const deadline = setTimeout(() => process.exit(2), 5000); ` +
           `const poll = setInterval(() => { if (fs.existsSync(${JSON.stringify(ready)})) { clearTimeout(deadline); clearInterval(poll); } }, 5);`,
         ]
-        const run = await app.workflows.run({
-          script: META(`real-exec-cleanup-${index}`) +
-            `action("env.exec", { command: ${JSON.stringify(slowCommand)}, timeoutMs: 10000 });\n` +
-            `const ready = await action("env.exec", { command: ${JSON.stringify(readyCommand)}, timeoutMs: 10000 });\n` +
-            `if (!ready?.ok) throw new Error("child readiness check failed");\n${ending}`,
-        })
-        await app.workflows.wait(run.id)
-        const summary = app.workflows.getRun(run.id)
-        assert.equal(summary.status, 'failed', summary.error)
-        assert.match(summary.error ?? '', index === 0 ? /unawaited launch/ : /early failure/)
+        // wait:true 在终态 failed 时按动作契约显式拏（不伪造成功）；拏后经 runs 取真实终态。
+        await assert.rejects(
+          runWorkflow({
+            script: META(`real-exec-cleanup-${index}`) +
+              `action("env.exec", { command: ${JSON.stringify(slowCommand)}, timeoutMs: 10000 });\n` +
+              `const ready = await action("env.exec", { command: ${JSON.stringify(readyCommand)}, timeoutMs: 10000 });\n` +
+              `if (!ready?.ok) throw new Error("child readiness check failed");\n${ending}`,
+            wait: true,
+          }),
+          (error: unknown) => error instanceof HelmError && error.code === 'workflow_failed',
+        )
+        const listed = (await workflows.invokeAction('builtin:workflow', 'runs', {})) as unknown as {
+          runs: Array<import('@helm/protocol').WorkflowRunSummary>
+        }
+        // 取本脚本名下终态 failed 的那一条。
+        const failedRuns = listed.runs.filter((r) => r.name === `real-exec-cleanup-${index}`)
+        assert.ok(failedRuns.length >= 1, 'run 应出现在 runs 清单')
+        const failedRun = failedRuns[0]!
+        assert.equal(failedRun.status, 'failed', failedRun.error)
+        assert.match(failedRun.error ?? '', index === 0 ? /unawaited launch/ : /early failure/)
         assert.ok(existsSync(ready), 'the actual child must have started before the workflow ends')
       }
       await new Promise((resolve) => setTimeout(resolve, 1700))

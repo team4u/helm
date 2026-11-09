@@ -555,7 +555,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
   interface ReplayResult {
     hit: boolean
-    entry?: import('@helm/protocol').WorkflowJournalEntry
+    entry?: WorkflowJournalEntry
     conflictError?: string
   }
 

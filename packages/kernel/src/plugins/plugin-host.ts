@@ -1185,6 +1185,15 @@ export class PluginHost {
     return out;
   }
 
+  /** 单动作清单（enabled 插件限定）；不存在返回 undefined。 */
+  findActionManifest(pluginId: string, actionId: string): ActionManifest | undefined {
+    this.assertNotDisposed();
+    const state = this.plugins.get(pluginId);
+    if (state === undefined || !state.enabled) return undefined;
+    const entry = state.actions.get(actionId);
+    return entry === undefined ? undefined : this.toManifest(entry);
+  }
+
   /**
    * 模型工具清单：显式 ctx.tool + exposeAsTool 动作派生（run_action 接入由 runtime 承担）。
    * - 无参：全量（runtime 热注册用）；
@@ -2335,12 +2344,13 @@ export class PluginHost {
       cancelAsk: (askId, reason) => backend.cancelAsk(askId, reason),
       execEnv: async (req, opts) => {
         this.assertContextUsable(state, epoch, 'host.execEnv');
-        if (!backend.execEnv) {
-          throw new HelmError('not_supported', '当前插件宿主未配置 execEnv 执行端口', 501, { pluginId });
-        }
         return this.tracker.withTask(pluginId, 'host.execEnv', () =>
-          backend.execEnv!(req, opts),
+          Promise.resolve(backend.execEnv(req, opts)),
         );
+      },
+      prepareAction: (targetPluginId, actionId, input, context) => {
+        this.assertContextUsable(state, epoch, 'host.prepareAction');
+        return this.prepareAction(targetPluginId, actionId, input, context);
       },
       onEvent: (type, listener) =>
         acquire(`host.onEvent:${type}`)(() =>

@@ -139,6 +139,8 @@ function makeControlledBackend(): ControlledBackend {
     prepareInterruptedConversations: async () => {},
     cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
     emitEvent(type, payload) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
@@ -548,6 +550,8 @@ async function makeWatchdogHarness(opts: {
     prepareInterruptedConversations: async () => {},
     cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
     emitEvent: (type, payload) => {
       if (type === 'notification') {

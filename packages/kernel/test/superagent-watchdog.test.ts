@@ -185,6 +185,8 @@ async function makeHarness(opts: HarnessOptions = {}) {
     prepareInterruptedConversations: async () => {},
     cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
     emitEvent: (type, payload) => {
       if (type === 'notification') {
@@ -459,6 +461,8 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     prepareInterruptedConversations: async () => {},
     cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
     emitEvent: (type, payload) => {
       if (type === 'notification') {
@@ -955,6 +959,8 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
     prepareInterruptedConversations: async () => {},
     cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
     emitEvent: () => {},
   }
@@ -1177,6 +1183,8 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     prepareInterruptedConversations: async () => {},
     cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
     emitEvent: () => {},
   }

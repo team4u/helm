@@ -493,10 +493,22 @@ export interface HelmHostApi {
    * 靶点解析优先级：显式 nodeId/cwd > conversationId 绑定 (nodeId, cwd) > 'local'/Hub cwd。
    * 远端节点离线时显式抛 409 node_offline，绝不静默回退本机。
    */
-  execEnv?(
+  execEnv(
     req: Omit<EnvExecRequest, 'stream'>,
     opts?: { signal?: AbortSignal },
   ): Promise<EnvExecResponse>
+  /**
+   * 动作前置校验（与 invokeAction 同源的 prepare/preflight）：校验插件状态、
+   * 会话 scope 与 inputSchema（无 handler 副作用），并返回定义端 idempotent。
+   * 供编排引擎在落盘 action_started 前判定副作用语义；不能仅以 listActions
+   * 清单冒充。
+   */
+  prepareAction(
+    pluginId: string,
+    actionId: string,
+    input: unknown,
+    context?: PluginActionContext,
+  ): { idempotent: boolean }
   /** 重启恢复前持久标记中断的子会话任务取消（必须在调度器恢复前调用）。 */
   prepareInterruptedConversations(ids: number[]): Promise<void>
   /** 清理受管 Git 工作树。 */
