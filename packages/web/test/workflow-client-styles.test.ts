@@ -63,15 +63,16 @@ test('工作流真实编译与加载：阶段状态颜色不被基础样式覆�
 
     const checkColors = () => {
       const cases = [
-        ['.phase-segment-done', 'ok'],
-        ['.phase-segment-failed', 'err'],
-        ['.phase-segment-active', 'accent'],
+        ['.phase-segment-done', 'ok', 'ok-border', 'ok-bg'],
+        ['.phase-segment-failed', 'err', 'err-border', 'err-bg'],
+        ['.phase-segment-active', 'accent', 'accent-border', 'accent-bg'],
+        ['.phase-segment:not(.phase-segment-done):not(.phase-segment-failed):not(.phase-segment-active)', 'fg-muted', 'border', 'bg-subtle'],
       ] as const
-      for (const [selector, token] of cases) {
+      for (const [selector, foreground, border, background] of cases) {
         const phase = host.querySelector(selector)
         assert.ok(phase, `真实组件必须渲染 ${selector}`)
         const reference = document.createElement('span')
-        reference.style.cssText = `color: var(--${token}); border: 1px solid var(--${token}-border); background: var(--${token}-bg);`
+        reference.style.cssText = `color: var(--${foreground}); border: 1px solid var(--${border}); background: var(--${background});`
         document.body.appendChild(reference)
         try {
           const actual = getComputedStyle(phase)
