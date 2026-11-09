@@ -2038,11 +2038,16 @@ textarea {
 .subagent-card-clickable {
   cursor: pointer;
   user-select: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
 .subagent-card-clickable:hover {
-  background: var(--bg-surface);
+  background: var(--bg-hover);
   border-color: var(--border-hover, var(--border));
+}
+
+.subagent-card-clickable:active {
+  background: var(--bg-active, var(--bg-elevated));
 }
 
 .subagent-card-clickable:focus-visible {
@@ -2211,11 +2216,6 @@ textarea {
 .subagent-live-trigger > svg,
 .subagent-live-trigger > .badge {
   flex-shrink: 0;
-}
-
-.subagent-live-trigger:hover,
-.subagent-live-subline:hover {
-  background: var(--bg-hover);
 }
 
 /* 有意义用户标题：等宽克制排版，超长省略号截断不撑爆头部 */
