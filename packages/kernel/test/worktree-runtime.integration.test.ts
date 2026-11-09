@@ -1017,6 +1017,23 @@ describe('createHelm 后台子代理全链（background + worktree + gate + 父�
         if (run.status !== 'running') break
         await new Promise((r) => setTimeout(r, 20))
       }
+      // 关键等待：终态可见 ≠ 汇报已投递。引擎 settle 链在终态落盘后还要执行
+      // onBackgroundAgentSettled（向父会话 submitInput 汇报）——inspect 看到终态
+      // 时该步可能仍在途，此刻 waitForIdle(parent) 会立即返回（父尚无汇报输入），
+      // 旧写法随即断言 reports 得 0 条（全仓并发下暴露的等待竞态）。
+      // 必须等到真实的汇报 entry（origin=agent + meta.backgroundRunId=runId）
+      // 落盘后再继续；终态本身不是「父通知已完成」的证据。
+      let reported = false
+      for (let i = 0; i < 600; i++) {
+        const hits = (await agentReports(app.kernel, 1)).filter((r) => r.backgroundRunId === runId)
+        if (hits.length > 0) {
+          reported = true
+          break
+        }
+        await new Promise((r) => setTimeout(r, 20))
+      }
+      assert.ok(reported, `后台汇报 entry 应在行界内到达（runId=${runId}，status=${run.status}）`)
+      // 汇报 entry 到达后等父回合消费完（汇报轮模型回应），再验幂等恰一条。
       await app.kernel.waitForIdle(1)
 
       run = (await inspectRun(runId)).run
