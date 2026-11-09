@@ -201,8 +201,8 @@ test('ownership3: 新自举资产携带 managedByPlugin=builtin:superagent 与 h
     assert.equal(profiles.find((p) => p.id === 'superagent')?.humanSelectable, false)
     assert.equal(profiles.find((p) => p.id === 'watchdog')?.managedByPlugin, 'builtin:superagent')
     assert.equal(profiles.find((p) => p.id === 'watchdog')?.humanSelectable, false)
-    // 默认 assistant Profile 不受影响（非本插件托管，缺省可选中）
-    assert.equal(profiles.find((p) => p.id === 'assistant')?.managedByPlugin, undefined)
+    // 默认 assistant 由自身插件托管，不受 superagent 自举接管。
+    assert.equal(profiles.find((p) => p.id === 'assistant')?.managedByPlugin, 'builtin:assistant')
     assert.equal(profiles.find((p) => p.id === 'assistant')?.humanSelectable, undefined)
     // Skill：SKILL.md frontmatter 与 SkillService 读取双通道
     const skillMd = readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8')

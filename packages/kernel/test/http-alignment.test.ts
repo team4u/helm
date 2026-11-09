@@ -494,12 +494,13 @@ test('GET /api/plugins/:id/docs/:name 返回 {pluginId,name,value}；私有/未�
   assert.equal(extra.status, 404)
 })
 
-test('Profile 归属与选择策略经 HTTP 保存回读，并拒绝非法类型', { timeout: 60_000 }, async () => {
+test('Profile 托管身份仅可信自举可声明，HTTP 可读与编辑其它字段，并拒绝非法类型', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
-  const created = await call(handler, 'POST', '/api/profiles', {
+  const forged = await call(handler, 'POST', '/api/profiles', {
     body: { id: 'managed-profile', managedByPlugin: 'community:reporter', humanSelectable: false },
   })
-  assert.equal(created.status, 201)
+  assert.equal(forged.status, 403)
+  await profiles.save({ id: 'managed-profile', managedByPlugin: 'community:reporter', humanSelectable: false })
   const got = await call(handler, 'GET', '/api/profiles/managed-profile')
   assert.equal(got.body.managedByPlugin, 'community:reporter')
   assert.equal(got.body.humanSelectable, false)
