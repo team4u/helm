@@ -188,6 +188,14 @@ async function compileUncached(
         { pluginId, module: moduleRef },
       );
     }
+    if (Object.values(result.metafile.outputs).some((file) => file.exports?.includes(PLUGIN_CLIENT_CSS_EXPORT))) {
+      throw new HelmError(
+        'client_compile_failed',
+        `插件 ${pluginId} 模块 ${moduleRef} 占用了编译器保留导出名 "${PLUGIN_CLIENT_CSS_EXPORT}"，请改名该导出`,
+        422,
+        { pluginId, module: moduleRef, reservedExport: PLUGIN_CLIENT_CSS_EXPORT },
+      );
+    }
     const js = jsFiles[0]!.text;
     const css = cssFiles[0]?.text ?? '';
     output = appendCssExport(js, css);
@@ -213,63 +221,12 @@ async function compileUncached(
 // CSS：序列化为具名导出附在 JS 产物尾部（产物不注入 DOM，加载器负责注入）
 // ---------------------------------------------------------------------------
 
-/**
- * 把合并后的 CSS 以保留具名导出名附在 JS 产物尾部。
- *
- * 公开占用：插件自身导出保留名（export 子句或内联 export 声明）时显式拒绝，
- * 否则编译器附贴的导出会与插件语义冲突。
- *
- * 绑定名不直接用保留导出名：源码中未导出的同名局部变量会留存于 bundle 产物
- * （metafile exports 检测不到），直接 append `export const __helmClientCss`
- * 会形成重复声明。这里为 CSS 文本选择一个确定性绑定名，用保守 includes 避让
- * 产物已出现的标识符（逐步追加下划线；非解析/改写，只连缀新声明），再以
- * `export { binding as __helmClientCss }` 导出。
- */
+/** 元数据绑定必须避让产物中的局部变量，而非只避让其公开导出名。 */
 function appendCssExport(js: string, css: string): string {
   if (css.length === 0) return js;
-  if (exportClauseHasName(js, PLUGIN_CLIENT_CSS_EXPORT)) {
-    throw new HelmError(
-      'client_compile_failed',
-      `插件 CSS 导出冲突：插件模块自身占用了保留导出名 "${PLUGIN_CLIENT_CSS_EXPORT}"（编译器用它返回合并后的样式文本），请改名该导出`,
-      422,
-      { reservedExport: PLUGIN_CLIENT_CSS_EXPORT },
-    );
-  }
   let binding = '__helmCssText';
   while (js.includes(binding)) binding += '_';
-  const literal = JSON.stringify(css);
-  return `${js}\nconst ${binding} = ${literal};\nexport { ${binding} as ${PLUGIN_CLIENT_CSS_EXPORT} };\n`;
-}
-
-interface ExportClause {
-  names: string[]
-}
-
-/** 产物尾部 `export { ... };` 子句的定位与具名导出清单；无子句返回 null。 */
-function exportClauseIndex(js: string): ExportClause | null {
-  const re = /\nexport\s*\{([^}]*)\};?\s*$/;
-  const m = re.exec(js);
-  if (!m) return null;
-  const names = (m[1] ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-    .map((s) => {
-      // `local as exported` / `local as default`：取 as 后的导出名
-      const asMatch = /^[\w$]+(?:\s+as\s+([\w$]+))$/.exec(s);
-      return asMatch ? (asMatch[1] ?? s) : s;
-    });
-  return { names };
-}
-
-/** 产物是否已导出保留名（export 子句或内联 export 声明形式）。 */
-function exportClauseHasName(js: string, name: string): boolean {
-  const clause = exportClauseIndex(js);
-  if (clause && clause.names.includes(name)) return true;
-  const inline = new RegExp(
-    `\\bexport\\s+(?:const|let|var|function|class|async\\s+function)\\s+${name.replace(/\$/g, '\\$')}\\b`,
-  );
-  return inline.test(js);
+  return `${js}\nconst ${binding} = ${JSON.stringify(css)};\nexport { ${binding} as ${PLUGIN_CLIENT_CSS_EXPORT} };\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -388,7 +345,7 @@ function cssPolicyPlugin(pluginId: string): EsbuildPlugin {
   return {
     name: 'helm-css-policy',
     setup(b) {
-      b.onResolve({ filter: /.*/, namespace: 'file' }, (args) => {
+      b.onResolve({ filter: /.*/ }, (args) => {
         if (args.kind === 'url-token') {
           if (isAllowedCssAssetUrl(args.path)) return null; // 交回默认解析（esbuild 原样保留）
           return {

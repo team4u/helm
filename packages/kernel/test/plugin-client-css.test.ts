@@ -161,6 +161,16 @@ test('本地相对 / 根相对 / 片段资源 URL 显式拒绝并建议 data:', 
   }
 })
 
+test('内联 CSS 的嵌套 @import 同样经过资源边界，不能绕过远程引用拒绝', { timeout: 60_000 }, async () => {
+  const root = join(dataDir, 'inline-import-src')
+  const nested = `data:text/css,${encodeURIComponent('@import "https://example.com/remote.css"; .nested { color: red }')}`
+  await writePluginSource(root, { 'styles.css': `@import "${nested}";\n.local { color: blue }` }, ["'./styles.css'"])
+  await assert.rejects(
+    () => compilePluginClientModule('test:css-inline-import', root, 'index.tsx', dataDir),
+    (error: unknown) => error instanceof HelmError && error.code === 'client_compile_failed' && /远程 @import/.test(error.message),
+  )
+})
+
 test('CSS 符号链接逃逸拒绝：根内 symlink 指向根外样式', { timeout: 60_000 }, async () => {
   const outsideDir = await mkdtemp(join(tmpdir(), 'helm-plugin-css-outside-'))
   try {
@@ -219,6 +229,24 @@ test('保留导出冲突：插件自身占用 __helmClientCss 明确报错', { t
       /保留导出名|冲突/.test(err.message) &&
       err.message.includes(PLUGIN_CLIENT_CSS_EXPORT),
   )
+})
+
+test('保留导出校验使用模块元数据：无 CSS 或尾随许可证注释也不能占用', { timeout: 60_000 }, async () => {
+  for (const withCss of [false, true]) {
+    const root = join(dataDir, `metadata-conflict-${withCss}`)
+    await writePluginSource(root, { 'styles.css': '.reserved { color: red }' }, [])
+    await writeFile(join(root, 'index.tsx'), [
+      ...(withCss ? ["import './styles.css'"] : []),
+      "const value = 'not-managed-css'",
+      `export { value as ${PLUGIN_CLIENT_CSS_EXPORT} }`,
+      '/*! 保留的尾部许可证注释 */',
+    ].join('\n'))
+    await assert.rejects(
+      () => compilePluginClientModule(`test:css-reserved-${withCss}`, root, 'index.tsx', dataDir),
+      (error: unknown) => error instanceof HelmError && error.code === 'client_compile_failed' && error.message.includes(PLUGIN_CLIENT_CSS_EXPORT),
+      `withCss=${withCss} 都必须在编译边界拒绝保留导出名`,
+    )
+  }
 })
 
 test('未导出的同名局部变量不撞名：entry 内 const __helmClientCss 被组件引用仍可编译求值', { timeout: 60_000 }, async () => {
