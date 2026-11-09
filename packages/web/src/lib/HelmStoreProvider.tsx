@@ -19,7 +19,7 @@ import {
   subscribeSessionDoc,
 } from './session-docs.js'
 import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.js'
-import * as HelmPluginClient from './plugin-client-context.js'
+import * as HelmPluginClient from './plugin-client-sdk.js'
 import { formatLocationHash, isSameLocationState, parseLocationHash, shouldPushLocationHistory, type WorkspaceLocationState } from './url-hash-model.js'
 import { groupUiContributions, isPrototypeParamKey, resolveTargetString, SCREEN_PARAM_KEY_PATTERN, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
 import { errorText } from './format.js'

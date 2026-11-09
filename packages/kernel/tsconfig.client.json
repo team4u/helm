@@ -9,7 +9,7 @@
     "paths": {
       "@helm/protocol": ["../protocol/src/index.ts"],
       "@helm/plugin-client": [
-        "../web/src/lib/plugin-client-context.ts"
+        "../web/src/lib/plugin-client-sdk.ts"
       ],
       "lucide-react": [
         "../web/node_modules/lucide-react/dist/lucide-react.d.ts"
