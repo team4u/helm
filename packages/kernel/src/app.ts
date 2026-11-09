@@ -8,6 +8,7 @@ import { createMagpiePlugin } from './builtin-plugins/magpie.js';
 import { MAGPIE_PROVIDER_ID } from './builtin-plugins/magpie/contracts.js';
 import { loadExternalPlugins } from './plugins/external-loader.js';
 import type { HerdrNodeChannel, HerdrTransport } from './builtin-plugins/herdr/contracts.js';
+import { createBlockedSnapshotAnalyzer, type ConversationTextPort, type SnapshotAnalysisOutcome } from './builtin-plugins/herdr/snapshot-analysis.js';
 import type { EnvFabric } from './env/index.js';
 import type { SuperAgentDependencies } from './builtin-plugins/superagent/contracts.js';
 import { redactJsonValue } from './redact.js';
@@ -26,6 +27,20 @@ export function createHerdrNodeChannel(fabric: EnvFabric): HerdrNodeChannel {
     ipcCall: (id, input, context) => fabric.ipcCall(id, input, context.abortSignal),
     ipcSubscribe: (id, input, onLine, onClosed, context) => fabric.ipcSubscribe(id, input, onLine, onClosed, context.abortSignal),
   };
+}
+
+/** 内核通用文本补全端口形状（组合层注入插件 helper；机制在 KernelRuntime）。 */
+
+/**
+ * builtin:herdr 的阻塞快照 AI 解析（策略层）：插件专用提示词、JSON 解析与
+ * 真正有界的 deadline 都在 snapshot-analysis；组合层只把内核通用文本补全
+ * 端口接给插件 helper，不在内核/通用 ctx.host 复述任何插件语义。
+ */
+function analyzeBlockedSnapshot(
+  kernel: ConversationTextPort,
+  input: { snapshot: string; conversationId: number; signal?: AbortSignal },
+): Promise<SnapshotAnalysisOutcome> {
+  return createBlockedSnapshotAnalyzer(kernel).analyze(input);
 }
 
 export async function createHelm(options: HelmOptions = {}) {
@@ -80,7 +95,7 @@ export async function createHelm(options: HelmOptions = {}) {
       profiles: kernel.profiles,
       buildSpawnEnv: (id, cwd, nodeId) => kernel.buildSpawnEnv(id, cwd, nodeId),
       nodeChannel: createHerdrNodeChannel(kernel.envFabric),
-      analyzeBlockedSnapshot: (input) => kernel.analyzeHerdrBlockedSnapshot(input),
+      analyzeBlockedSnapshot: (input) => analyzeBlockedSnapshot(kernel, input),
       redact: (text) => kernel.stash.redact(text),
       runLocalGate: (command, context) => kernel.runGate(command, { ...context, nodeId: 'local' }),
       getArtifact: (id, conversationId) => kernel.resolveAuthorizedAttachment(conversationId, id),

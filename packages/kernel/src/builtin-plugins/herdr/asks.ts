@@ -290,21 +290,27 @@ export function askKey(nodeId: string | undefined, paneId: string, seq: number):
  * askId 即 askKey 字面量（可选 `:r<正整数>` 重试后缀）；nodeId 段原样保留
  * （不折叠 local，防解析歧义）。例：herdr:local:wR:p2:3916 与
  * herdr:local:wR:p2:3916:r1 均解析出 { nodeId: undefined, paneId: 'wR:p2', seq: 3916 }。
+ *
+ * 解析顺序：先剥离结尾合法的 ':r[1-9][0-9]*' 重试后缀（r0/r01/超大值/伪造
+ * 形状一律整体拒绝，不回退成 seq 解析），再按无歧义的「最后一个冒号 = seq」
+ * 解析；paneId 自带冒号不受影响。
  */
 function parseAskId(askId: string): { nodeId: string | undefined; paneId: string; seq: number } | undefined {
   if (!askId.startsWith('herdr:')) return undefined
-  const rest = askId.slice('herdr:'.length)
+  let rest = askId.slice('herdr:'.length)
+  // 剥离合规范的 ':r<正整数，无前导零>' 重试后缀；不合法后缀让后续 seq
+  // 解析失败（如 '...:3916:r01' 或 '...:3916:r0' 无法匹配 ^\d+$，整体拒绝）。
+  const retrySuffix = /:r([1-9][0-9]*)$/.exec(rest)
+  if (retrySuffix !== null) {
+    rest = rest.slice(0, rest.length - retrySuffix[0].length)
+  }
   const lastColon = rest.lastIndexOf(':')
   if (lastColon <= 0) return undefined
   const panePart = rest.slice(0, lastColon)
   const seqPart = rest.slice(lastColon + 1)
-  // 序列段允许一个可选重试后缀（:r<正整数>，重开审批的新 AskDoc ID）。
-  const retryMatch = /^(\d+)(?::r(\d+))?$/.exec(seqPart)
-  if (retryMatch === null) return undefined
-  const seq = Number(retryMatch[1]!)
-  const retry = retryMatch[2] !== undefined ? Number(retryMatch[2]) : undefined
-  if (!Number.isSafeInteger(seq) || seq < 0 || retryMatch[1]! !== String(seq)) return undefined
-  if (retry !== undefined && (!Number.isSafeInteger(retry) || retry < 1)) return undefined
+  if (!/^\d+$/.test(seqPart)) return undefined
+  const seq = Number(seqPart)
+  if (!Number.isSafeInteger(seq) || seq < 0 || seqPart !== String(seq)) return undefined
   const paneColon = panePart.indexOf(':')
   if (paneColon <= 0) return undefined
   const nodeId = panePart.slice(0, paneColon)

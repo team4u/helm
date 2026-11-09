@@ -73,6 +73,7 @@ function isHintOrDividerLine(line: string): boolean {
 interface NumberedLine {
   indent: string
   cursor: string | undefined
+  number: number
   label: string
 }
 
@@ -80,7 +81,7 @@ interface NumberedLine {
 function matchNumberedLine(line: string): NumberedLine | undefined {
   const m = /^(\s*)(?:([>❯›●◉▶]|->)\s*)?(\d+)[.)]\s+(.+?)\s*$/.exec(line)
   if (m === null) return undefined
-  return { indent: m[1]!, cursor: m[2], label: m[4]! }
+  return { indent: m[1]!, cursor: m[2], number: Number(m[3]), label: m[4]! }
 }
 
 interface CursorLine {
@@ -98,18 +99,17 @@ function matchCursorLine(line: string): CursorLine | undefined {
   return { indent: m[1]!, label }
 }
 
-/** 同级选项行（游标行上/下的候选）：以 1..8 空白开头的短非段落行。 */
-function matchSiblingOptionLine(line: string): CursorLine | undefined {
-  const m = /^(\s{1,8})(\S.+?)\s*$/.exec(line)
-  if (m === null) return undefined
-  const label = m[2]!
+/**
+ * 同级候选行内容校验：短非段落行、非问句正文（缩进合法性由调用方比对）。
+ */
+function validateSiblingLabel(indent: string, label: string): CursorLine | undefined {
   if (label.length > 80) return undefined
   if (label.endsWith('.')) return undefined
   if (label.endsWith('?')) return undefined
   const lower = label.toLowerCase()
   if (lower.includes('requires permission')) return undefined
   if (lower.includes('do you trust')) return undefined
-  return { indent: m[1]!, label }
+  return { indent, label }
 }
 
 /** 由菜单项与 selectedIndex 计算 keys/selected。 */
@@ -127,17 +127,45 @@ function keysFor(index: number, selectedIndex: number): string[] {
   return [...Array<string>(selectedIndex - index).fill('up'), 'enter']
 }
 
-/** 连续菜单块行数上限（超过视为正文段落而非菜单）。 */
+/** 连续菜单块行数上限（超过视为正文段落而非菜单，不截断成假菜单）。 */
 const MAX_MENU_LINES = 8
 /** 快照尾部扫描窗口。 */
 const TAIL_LINES = 30
 
+/** 现场交互证据：导航/确认提示（↑/↓ · enter / enter to confirm 等）。 */
+function isInteractionHintLine(line: string): boolean {
+  const lower = line.toLowerCase()
+  if (line.includes('↑/↓') || line.includes('↑ ↓')) return true
+  if (lower.includes('navigate') && (lower.includes('confirm') || lower.includes('select'))) return true
+  if (lower.includes('enter to confirm') || lower.includes('enter to select')) return true
+  if (lower.includes('enter confirm') || lower.includes('enter select')) return true
+  if (lower.includes('arrow keys') && lower.includes('select')) return true
+  return false
+}
+
+/** 确认/选择提问提示（无游标的编号菜单必须有，否则视为正文步骤列表）。 */
+function hasConfirmationPrompt(body: string[]): boolean {
+  return body.some((line) => {
+    const lower = line.toLowerCase()
+    // 明确的现场提问：现在/是否/请选择/确认 + 提问标记。
+    if (line.includes('？') || line.includes('?')) {
+      if (lower.includes('confirm') || lower.includes('select') || lower.includes('choose')) return true
+      if (line.includes('是否') || line.includes('请选择') || line.includes('确认') || line.includes('选择')) return true
+    }
+    if (lower.includes('select an option') || lower.includes('choose an option')) return true
+    return false
+  })
+}
+
 /**
- * 从终端快照尾部提取菜单选项：
+ * 从终端快照尾部提取菜单选项（确定性快路径）：
  * - 剥离底部键位说明栏 / 分隔线 / 状态栏；
- * - 识别编号列表（`1. x` / `> 2. y`，游标行或首项为高亮）；
- * - 识别无编号游标列表（恰 1 行游标 + 紧邻同级选项行）；
- * - 无法识别（不足 2 项）时返回空数组（调用方回退通用选项）。
+ * - 识别编号菜单（`1. x` / `> 2. y`）：需块内游标或块后确认/选择提示，
+ *   否则只是正文步骤列表（交 AI 慢路径处理，绝不默认首项高亮）；
+ * - 识别无编号游标列表（恰 1 行游标 + 同级缩进的紧邻选项行）；
+ * - 菜单块后只容许空行/键位提示/状态栏，跨过新正文的历史编号不当作菜单；
+ * - 疑似但证据不足（超 8 项、无选中信息）一律返回空数组（调用方走 AI 或
+ *   通用选项），绝不截断成假菜单。
  */
 export function extractMenuItemsFromSnapshot(snapshot: string): ExtractedMenuItem[] {
   const lines = snapshot
@@ -150,47 +178,92 @@ export function extractMenuItemsFromSnapshot(snapshot: string): ExtractedMenuIte
   const body = lines.slice(0, end)
   if (body.length === 0) return []
 
-  // 尝试 1：编号列表（自尾部向上找最长的连续编号块）。
+  // 尝试 1：编号菜单（需交互证据）。
   const numbered = extractNumberedBlock(body)
   if (numbered !== undefined) return numbered
 
-  // 尝试 2：无编号游标列表。
-  return extractCursorBlock(body)
+  // 尝试 2：无编号游标列表（需导航/确认提示作为现场交互证据）。
+  return extractCursorBlock(body, lines.some((line) => isInteractionHintLine(line)))
 }
 
-/** 编号列表块：块内存在游标行则以该行为高亮，否则首项默认高亮。 */
+/**
+ * 编号菜单块：需满足全部条件，否则返回 undefined（正文步骤列表交 AI）：
+ * - 编号从 1 开始连续递增（真实菜单的编号序列）；
+ * - 块内存在游标行（明确高亮），或无游标但有明确的确认/选择提问
+ *  （「是否…？」「select an option」等；无可靠选中信息不默认首项）；
+ * - 块后只容许空行/键位提示/状态栏（跨过新正文的历史编号不当作菜单）。
+ */
 function extractNumberedBlock(body: string[]): ExtractedMenuItem[] | undefined {
-  // 自尾行向上找连续编号行，收集最长候选块（含块内游标）。
-  const candidates: Array<{ labels: string[]; cursorIndex: number }> = []
+  // 自尾行向上找连续编号行，收集候选块（含块内游标与原始行号）。
+  interface Candidate {
+    labels: string[]
+    numbers: number[]
+    cursorIndex: number // 尾序索引；反转后正序高亮 = length - 1 - cursorIndex
+    firstRow: number
+    lastRow: number
+  }
+  const candidates: Candidate[] = []
   let labels: string[] = []
+  let numbers: number[] = []
   let cursorIndex = -1
+  let firstRow = -1
+  let lastRow = -1
+  const flush = () => {
+    if (labels.length >= 2 && labels.length <= MAX_MENU_LINES) {
+      candidates.push({ labels: [...labels].reverse(), numbers: [...numbers].reverse(), cursorIndex, firstRow, lastRow })
+    }
+    labels = []
+    numbers = []
+    cursorIndex = -1
+    firstRow = -1
+    lastRow = -1
+  }
   for (let i = body.length - 1; i >= 0; i -= 1) {
     const m = matchNumberedLine(body[i]!)
     if (m === undefined) {
-      if (labels.length >= 2) candidates.push({ labels: [...labels].reverse(), cursorIndex })
-      labels = []
-      cursorIndex = -1
+      flush()
       continue
     }
-    if (labels.length >= MAX_MENU_LINES) continue
-    // 首个遇到的游标行（自尾向上）即块内高亮项；labels 为尾序，收集完后反转。
+    if (labels.length >= MAX_MENU_LINES) {
+      // 超 8 项的连续编号更像正文步骤列表：疑似不截断成假菜单，放弃该块。
+      flush()
+      continue
+    }
     if (m.cursor !== undefined && cursorIndex < 0) cursorIndex = labels.length
     labels.push(m.label)
+    numbers.push(Number(m.number))
+    firstRow = i
+    if (lastRow < 0) lastRow = i
   }
-  if (labels.length >= 2) candidates.push({ labels: [...labels].reverse(), cursorIndex })
+  flush()
   if (candidates.length === 0) return undefined
-  // 最靠近尾部的块优先（弹出菜单总在快照末尾）；cursorIndex 随反转换算。
+  // 最靠近尾部的块优先（弹出菜单总在快照末尾）。
   const block = candidates[0]!
-  const selectedIndex =
-    block.cursorIndex >= 0 ? block.labels.length - 1 - block.cursorIndex : 0
+  // 块后内容：只容许空行/键位提示/状态栏（尾部 hint 已在 body 剥离，但块
+  // 可能不在最尾——其后跟了新正文时必须拒绝，防选历史菜单）。
+  for (let i = block.lastRow + 1; i < body.length; i += 1) {
+    const line = body[i]!
+    if (line.trim() === '' || isHintOrDividerLine(line) || isInteractionHintLine(line)) continue
+    return undefined
+  }
+  // 编号连续性：真实菜单从 1 开始连续递增。
+  for (let i = 0; i < block.numbers.length; i += 1) {
+    if (block.numbers[i] !== i + 1) return undefined
+  }
+  const cursorSeen = block.cursorIndex >= 0
+  if (!cursorSeen && !hasConfirmationPrompt(body)) return undefined
+  const selectedIndex = cursorSeen ? block.labels.length - 1 - block.cursorIndex : 0
   return buildMenuItems(block.labels, selectedIndex)
 }
 
 /**
- * 无编号游标列表：恰好 1 行游标前缀；紧邻其上/下方的同级选项行
- * （空白开头短行、非问句正文）组成菜单块（>= 2 行）。
+ * 无编号游标列表：恰好 1 行游标前缀 + 现场交互证据（↑/↓ 导航 / enter 确认
+ * 提示行，含已被剥离的尾部 hint）；紧邻上/下的候选行组成菜单块（>= 2 行）。
+ * 候选行之间必须**同级缩进**（菜单兄弟项排版一致；层级不齐的是正文段落，
+ * 如「> 建议\n    补充说明」的补充行），短非段落、非问句正文。
  */
-function extractCursorBlock(body: string[]): ExtractedMenuItem[] {
+function extractCursorBlock(body: string[], hasInteractionHint: boolean): ExtractedMenuItem[] {
+  if (!hasInteractionHint) return []
   const cursorIndexes: number[] = []
   for (let i = 0; i < body.length; i += 1) {
     if (matchCursorLine(body[i]!) !== undefined) cursorIndexes.push(i)
@@ -200,13 +273,23 @@ function extractCursorBlock(body: string[]): ExtractedMenuItem[] {
   const cursor = matchCursorLine(body[cursorAt]!)!
   const labels: string[] = [cursor.label]
   let selectedIndex = -1
-  // 块的连续范围：从游标行向上/向下扩展同级选项行，允许中间 0 行空隙外断开。
   const blockIndexes: number[] = [cursorAt]
+  // 兄弟项同级缩进：以首个被接纳的候选行为准，后续缩进不一致即断块。
+  let siblingIndent: string | undefined
+  const acceptSibling = (line: string): CursorLine | undefined => {
+    // 先按行自身解析出任意 1..8 空格缩进，再与同级基准比对。
+    const m = /^(\s{1,8})(\S.+?)\s*$/.exec(line)
+    if (m === null) return undefined
+    const candidate = validateSiblingLabel(m[1]!, m[2]!)
+    if (candidate === undefined) return undefined
+    if (siblingIndent === undefined) siblingIndent = candidate.indent
+    return candidate.indent === siblingIndent ? candidate : undefined
+  }
   // 向上收集。
   for (let i = cursorAt - 1; i >= 0 && blockIndexes.length < MAX_MENU_LINES; i -= 1) {
     const line = body[i]!
     if (isHintOrDividerLine(line)) break
-    const sibling = matchSiblingOptionLine(line)
+    const sibling = acceptSibling(line)
     if (sibling === undefined || matchCursorLine(line) !== undefined) break
     blockIndexes.unshift(i)
     labels.unshift(sibling.label)
@@ -216,7 +299,7 @@ function extractCursorBlock(body: string[]): ExtractedMenuItem[] {
   for (let i = cursorAt + 1; i < body.length && blockIndexes.length < MAX_MENU_LINES; i += 1) {
     const line = body[i]!
     if (isHintOrDividerLine(line)) break
-    const sibling = matchSiblingOptionLine(line)
+    const sibling = acceptSibling(line)
     if (sibling === undefined || matchCursorLine(line) !== undefined) break
     blockIndexes.push(i)
     labels.push(sibling.label)
@@ -231,11 +314,19 @@ function extractCursorBlock(body: string[]): ExtractedMenuItem[] {
  *   'allow-enter'（发送 enter），其余项 `menu-<idx>`（发送 up/down 序列 + enter）；
  * - 慢路径（正则未命中且传入有效 AI 解析）：注入 `ai-<idx>` 选项（发送模型
  *   识别的按键序列），首个恰为 ['enter'] 的选项复用 'allow-enter' value；
- * - 无菜单无 AI：首项 'allow-enter'（确认当前高亮选项）；
+ * - 无菜单无 AI：首项 'allow-enter'（发送 enter，确认当前高亮选项）；
  * - 恒追加通用选项 allow-y / deny-n / send-esc / custom（任何场景可选）；
  * - 兼容别名 send-y / send-n。
+ *
+ * 语义红线：所有选项只描述「会发送什么键」，不含任何授权承诺（allow-enter
+ * 不等于批准）；人类仍需显式选择后才发键。summary 与 labels 在本边界统一
+ * 脱敏（AI 输出同样不可信，进入 AskSpec 前必须过 redact）。
  */
-export function buildHerdrAskPromptPlan(snapshot: string, aiAnalysis?: BlockedSnapshotAnalysis): HerdrAskPromptPlan {
+export function buildHerdrAskPromptPlan(
+  snapshot: string,
+  aiAnalysis?: BlockedSnapshotAnalysis,
+  redact: (text: string) => string = (t) => t,
+): HerdrAskPromptPlan {
   const menuItems = extractMenuItemsFromSnapshot(snapshot)
   const options: AskFieldOption[] = []
   const decisionKeys = new Map<string, string[]>()
@@ -245,7 +336,7 @@ export function buildHerdrAskPromptPlan(snapshot: string, aiAnalysis?: BlockedSn
     // 快路径：正则已命中标准菜单，忽略 AI 解析（0ms、零 Token）。
     for (const item of menuItems) {
       if (item.selected) {
-        options.push({ label: `确认当前高亮项：${item.label}（发送 enter）`, value: 'allow-enter' })
+        options.push({ label: `发送 enter（确认当前高亮项：${redact(item.label)}）`, value: 'allow-enter' })
         decisionKeys.set('allow-enter', ['enter'])
       }
     }
@@ -253,33 +344,33 @@ export function buildHerdrAskPromptPlan(snapshot: string, aiAnalysis?: BlockedSn
       const item = menuItems[idx]!
       if (item.selected) continue
       const value = `menu-${idx}`
-      options.push({ label: `选择第 ${idx + 1} 项：${item.label}（发送 ${item.keys.join(' + ')}）`, value })
+      options.push({ label: `发送 ${item.keys.join(' + ')}（选择第 ${idx + 1} 项：${redact(item.label)}）`, value })
       decisionKeys.set(value, item.keys)
     }
   } else {
     // 慢路径：仅当模型返回经过白名单清洗的有效解析时注入 AI 选项。
     const sanitized = sanitizeBlockedSnapshotAnalysis(aiAnalysis)
-    summary = sanitized?.summary
+    summary = sanitized?.summary !== undefined ? redact(sanitized.summary) : undefined
     aiOptionsKept = sanitized?.options ?? []
     if (sanitized !== undefined && sanitized.options.length > 0) {
       for (let idx = 0; idx < sanitized.options.length; idx += 1) {
         const opt = sanitized.options[idx]!
         // 恰为 ['enter'] 的首个选项复用 'allow-enter'（语义与快路径一致）。
         if (opt.keys.length === 1 && opt.keys[0] === 'enter' && !decisionKeys.has('allow-enter')) {
-          options.push({ label: `AI 识别：${opt.label}（发送 enter）`, value: 'allow-enter' })
+          options.push({ label: `AI 识别：发送 enter（${redact(opt.label)}）`, value: 'allow-enter' })
           decisionKeys.set('allow-enter', ['enter'])
           continue
         }
         const value = `ai-${idx}`
-        options.push({ label: `AI 识别：${opt.label}（发送 ${opt.keys.join(' + ')}）`, value })
+        options.push({ label: `AI 识别：发送 ${opt.keys.join(' + ')}（${redact(opt.label)}）`, value })
         decisionKeys.set(value, opt.keys)
       }
       if (!decisionKeys.has('allow-enter')) {
-        options.unshift({ label: '允许（发送 enter，确认当前高亮选项）', value: 'allow-enter' })
+        options.unshift({ label: '发送 enter（确认当前高亮选项）', value: 'allow-enter' })
         decisionKeys.set('allow-enter', ['enter'])
       }
     } else {
-      options.push({ label: '允许（发送 enter，确认当前高亮选项）', value: 'allow-enter' })
+      options.push({ label: '发送 enter（确认当前高亮选项）', value: 'allow-enter' })
       decisionKeys.set('allow-enter', ['enter'])
     }
   }
@@ -355,11 +446,16 @@ const SINGLE_VISIBLE_ASCII = /^[!-\x7e]$/
 
 /**
  * Herdr logical key 白名单校验：防止模型幻觉输出 "yes" / "confirm" 等
- * 多字符单词（对齐服务端 parse_key_combo 支持的按键名）。
+ * 多字符单词（对齐服务端 parse_key_combo 支持的按键名，已对照
+ * /root/code/herdr/src/config/keybinds.rs 核实：semicolon/colon/ampersand/
+ * backtick 等命名键真实支持）。'+' 单字符是分隔符而非键名，必须拒绝
+ *（加号用 'plus'）。
  */
 export function isValidHerdrLogicalKey(key: string): boolean {
   const trimmed = key.trim()
   if (trimmed === '') return false
+  // '+' 是 combo 分隔符，不是可发送的单键；加号必须用命名键 'plus'。
+  if (trimmed === '+') return false
   if (NAMED_LOGICAL_KEYS.has(trimmed.toLowerCase())) return true
   if (FUNCTION_KEY.test(trimmed)) return true
   if (MODIFIER_COMBO.test(trimmed)) return true
@@ -371,7 +467,7 @@ export function isValidHerdrLogicalKey(key: string): boolean {
 const MAX_AI_OPTIONS = 6
 const MAX_AI_OPTION_KEYS = 6
 
-/** 键归一化：命名键（长度 > 1）转小写，单字符键保留原样。 */
+/** 键归一化：命名键（长度 > 1）转小写，单字符键保留原样（区分大小写）。 */
 function normalizeAiKey(key: string): string {
   const trimmed = key.trim()
   return trimmed.length > 1 ? trimmed.toLowerCase() : trimmed

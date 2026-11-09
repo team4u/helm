@@ -133,14 +133,15 @@ export interface HerdrPluginDependencies {
   transport?: HerdrTransport
   /**
    * 可选：当确定性正则未从阻塞快照中识别出标准菜单时，调用会话模型解析
-   * 脱敏终端快照并提取候选按键选项。未配置模型、超时或解析失败时返回 undefined，
-   * 调用方自动回退至通用按键选项，绝不阻塞审批卡创建。
+   * 脱敏终端快照并提取候选按键选项。返回 analysis 为 undefined 时附
+   * diagnostic（脱敏短诊断，仅用于通知/description，不含快照与响应原文）；
+   * 外部 signal 取消时以原始错误 reject（立即传播，不回退）。
    */
   analyzeBlockedSnapshot?: (input: {
     snapshot: string
     conversationId: number
     signal?: AbortSignal
-  }) => Promise<BlockedSnapshotAnalysis | undefined>
+  }) => Promise<{ analysis: BlockedSnapshotAnalysis | undefined; diagnostic?: string }>
 }
 
 export type { BlockedSnapshotAiOption, BlockedSnapshotAnalysis } from './prompt-options.js'

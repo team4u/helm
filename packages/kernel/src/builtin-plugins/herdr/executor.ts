@@ -738,18 +738,27 @@ export class HerdrExecutor {
     // 绝不调 AI（省延迟、省 Token）；仅非标 TUI 快照（如横向按钮 / 快捷键提示）
     // 且配置了模型端口时，才异步解析候选按键选项。
     let aiAnalysis: BlockedSnapshotAnalysis | undefined
+    let aiDiagnostic: string | undefined
     const fastItems = extractMenuItemsFromSnapshot(snapshot)
     if (fastItems.length < 2 && snapshot.trim().length > 0 && this.deps.analyzeBlockedSnapshot !== undefined) {
       try {
-        aiAnalysis = await this.deps.analyzeBlockedSnapshot({
+        const outcome = await this.deps.analyzeBlockedSnapshot({
           snapshot,
           conversationId,
           signal: request.signal,
         })
+        aiAnalysis = outcome.analysis
+        aiDiagnostic = outcome.diagnostic
+        if (aiDiagnostic !== undefined) {
+          // 增强未完成不阻塞审批主流程，但绝不静默：通知人类已回退通用选项。
+          this.host.notify('阻塞快照 AI 解析未完成', this.deps.redact(aiDiagnostic), 'info')
+        }
       } catch (error) {
+        // 外部取消立即传播；其余情况（含注入端口直接 throw）如实通知后回退。
         if (request.signal?.aborted) throw error
-        // 辅助层失败不阻塞审批主流程：回退确定性通用选项。
         aiAnalysis = undefined
+        aiDiagnostic = `阻塞快照 AI 解析异常（${error instanceof Error ? error.message.split('\n')[0]!.slice(0, 160) : String(error).split('\n')[0]!.slice(0, 160)}），已回退通用按键选项`
+        this.host.notify('阻塞快照 AI 解析未完成', this.deps.redact(aiDiagnostic), 'info')
       }
       // AI 等待期间终端可能自行推进：权威复核 seq，过期则不挂旧 AskDoc。
       const latest = await this.agentGet(targetOf(pane), pane.paneId, request.signal)
@@ -766,13 +775,16 @@ export class HerdrExecutor {
         return { outcome: { id: entry.askId, status: 'superseded', answers: {} }, plan: buildHerdrAskPromptPlan('') }
       }
     }
-    const plan = buildHerdrAskPromptPlan(snapshot, aiAnalysis)
+    const plan = buildHerdrAskPromptPlan(snapshot, aiAnalysis, (t) => this.deps.redact(t))
     const retryHint =
       entry.attempt > 0 && entry.lastSentKeys && entry.lastSentKeys.length > 0
         ? `上次发送的按键 [${entry.lastSentKeys.join(', ')}] 未解除阻塞（终端仍停留在 seq ${entry.seq}），请对照快照重新选择。\n\n`
         : ''
     const aiSummaryLine = plan.summary ? `阻塞摘要：${this.deps.redact(plan.summary)}\n\n` : ''
-    const description = `${retryHint}${aiSummaryLine}终端 agent (${pane.agentName}) 在 ${pane.effectiveCwd} 等待选择。终端快照（脱敏）：\n\`\`\`\n${snapshot.slice(0, 1500)}\n\`\`\``
+    const aiFallbackLine = aiDiagnostic ? `${this.deps.redact(aiDiagnostic)}\n\n` : ''
+    // 快照统一取尾部 1500 字符：与 AI 解析所据内容同口径，保证人类看到
+    // 模型做出判断所依据的当前菜单（长快照头部往往是无关节奏输出）。
+    const description = `${retryHint}${aiSummaryLine}${aiFallbackLine}终端 agent (${pane.agentName}) 在 ${pane.effectiveCwd} 等待选择。终端快照（脱敏）：\n\`\`\`\n${snapshot.slice(-1500)}\n\`\`\``
     const pending = this.host.createAsk({
       id: entry.askId,
       conversationId,
