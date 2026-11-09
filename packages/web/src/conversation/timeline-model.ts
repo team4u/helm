@@ -856,6 +856,8 @@ export function lastHumanTextOf(items: ReadonlyArray<TimelineItem>): string | un
 
 export interface AssistantTurnBusyOptions {
   isLatestTurn?: boolean
+  /** 插件仅报告调用 ID 的活动；宿主不解释其业务状态。 */
+  activeToolCallIds?: ReadonlySet<string>
 }
 
 /**
@@ -864,8 +866,7 @@ export interface AssistantTurnBusyOptions {
  * 2. 最新回合且父会话处于 working 或 blocked 状态；
  * 3. 回合内任一工具状态为 running 或 unknown；
  * 4. step-group 仍处于 active 激活态；
- *
- * 后台任务不属于父回合生命周期；其状态由插件 tool.view 自行订阅与展示。
+ * 5. 本回合工具调用仍有插件登记的后台活动。
  */
 export function isAssistantTurnBusy(
   turn: AssistantTurn,
@@ -880,7 +881,9 @@ export function isAssistantTurnBusy(
     return true
   }
 
-  const isToolRunning = (tool: ToolTrace): boolean => tool.status === 'running' || tool.status === 'unknown'
+  const isToolRunning = (tool: ToolTrace): boolean =>
+    tool.status === 'running' || tool.status === 'unknown' ||
+    (tool.callId !== undefined && options?.activeToolCallIds?.has(tool.callId) === true)
 
   for (const seg of turn.segments) {
     if (seg.kind === 'tool') {

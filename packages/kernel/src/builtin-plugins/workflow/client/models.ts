@@ -1207,26 +1207,32 @@ export function buildWorkbenchSubagentItems(
 // ---------------------------------------------------------------------------
 
 /**
- * 判断当前 callId 是否为同一目标子会话在 siblingCalls 中的最后一次 subagent 调用：
+ * 判断当前 callId 是否为同一原生/外部执行目标在 siblingCalls 中的最后一次 subagent 调用：
  * 前序被后续 resume 接替的旧调用仅渲染单行摘要胶囊，最新调用挂载实时子会话流。
  */
 export function isLatestSubagentCallForTarget(
   props: Pick<ToolViewProps, 'callId' | 'input' | 'result' | 'siblingCalls' | 'conversationId'>,
   childConversationId: number | undefined,
   conversations: ReadonlyArray<Pick<ConversationSummary, 'id' | 'parentConversationId' | 'parentToolCallId'>>,
+  externalExecutionId?: string,
 ): boolean {
-  if (childConversationId === undefined) return true
+  if (childConversationId === undefined && externalExecutionId === undefined) return true
   const siblings = props.siblingCalls ?? []
   const selfIndex = siblings.findIndex((call) => call.callId === props.callId)
   if (selfIndex === -1) return true
   for (const call of siblings.slice(selfIndex + 1)) {
     if (call.toolName !== 'subagent') continue
-    const resolved = resolveSubagentConversationId(
-      { callId: call.callId, input: call.input, result: typeof call.result === 'string' ? call.result : undefined },
-      props.conversationId,
-      conversations,
-    )
-    if (resolved === childConversationId) return false
+    if (childConversationId !== undefined) {
+      const resolved = resolveSubagentConversationId(
+        { callId: call.callId, input: call.input, result: call.result },
+        props.conversationId,
+        conversations,
+      )
+      if (resolved === childConversationId) return false
+    } else {
+      const execution = parseSubagentExecutionInfo(typeof call.result === 'string' ? call.result : undefined)
+      if ((execution?.executionId ?? inputString(call.input, 'resume')) === externalExecutionId) return false
+    }
   }
   return true
 }

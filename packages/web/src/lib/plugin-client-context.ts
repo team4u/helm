@@ -15,6 +15,7 @@ import type { PluginClientContext as PluginClientContextType } from '@helm/proto
 import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary } from '@helm/protocol'
 import { useHelmStore, usePluginDoc as usePluginDocFromStore } from './store-context.js'
 import type { HelmStoreValue } from './types.js'
+export { useToolActivity } from './tool-activity.js'
 
 export const PluginClientContext = createContext<PluginClientContextType | null>(null)
 

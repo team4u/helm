@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AskSpec,
   ConversationAttachmentRef,
@@ -11,6 +11,8 @@ import { artifactsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { ToolActivityContext } from '../lib/tool-activity.js'
+import { ToolActivityProvider } from './ToolActivityProvider.js'
 import { CopyButton } from './CopyButton.js'
 import { MarkdownView } from './MarkdownView.js'
 import {
@@ -642,18 +644,20 @@ function useHighlightScroll(conversationId: number): (node: HTMLDivElement | nul
 // Assistant 回合
 // ---------------------------------------------------------------------------
 
-function AssistantTurnView({
-  turn,
-  conversation,
-  siblingCalls,
-  isLatestTurn = false,
-}: {
+interface AssistantTurnViewProps {
   turn: AssistantTurn
   conversation: ConversationSummary
   siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
   isLatestTurn?: boolean
-}) {
+}
+
+function AssistantTurnView(props: AssistantTurnViewProps) {
+  return <ToolActivityProvider><AssistantTurnContent {...props} /></ToolActivityProvider>
+}
+
+function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn = false }: AssistantTurnViewProps) {
   const store = useHelmStore()
+  const activeToolCallIds = useContext(ToolActivityContext)?.activeToolCallIds
   const [forking, setForking] = useState(false)
   const lastText = useMemo(() => {
     const texts = turn.segments.filter((s) => s.kind === 'text') as Array<{ kind: 'text'; text: string }>
@@ -687,7 +691,7 @@ function AssistantTurnView({
     }
   }
 
-  const isBusy = isAssistantTurnBusy(turn, conversation, { isLatestTurn })
+  const isBusy = isAssistantTurnBusy(turn, conversation, { isLatestTurn, activeToolCallIds })
 
   return (
     <div className="msg-ai-block" tabIndex={0}>

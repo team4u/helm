@@ -12,7 +12,7 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewProps, WorkbenchPanelProps, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
-import { usePluginContext, useConversation, useConversations } from '@helm/plugin-client'
+import { usePluginContext, useConversation, useConversations, useToolActivity } from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import {
   buildSubagentStatSegments,
@@ -320,6 +320,20 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
     [props.callId, props.result, props.conversationId, runsDoc],
   )
   const toolSummary = useMemo(() => parentToolSummaryOf(props), [props])
+  const isLatest = isLatestSubagentCallForTarget(
+    {
+      callId: props.callId,
+      input: props.input,
+      result: props.result,
+      siblingCalls: props.siblingCalls,
+      conversationId: props.conversationId,
+    },
+    childId,
+    conversations,
+    meta.executionId ?? meta.run?.nodes?.find((node) => node.executionId !== undefined)?.executionId,
+  )
+  const childStatus = conversations.find((conversation) => conversation.id === childId)?.status
+  useToolActivity(props.callId, isLatest && (meta.run?.status === 'running' || childStatus === 'working' || childStatus === 'blocked'))
 
   // 外部执行（无原生子会话，如 Herdr 窗格）：如实展示后台 run 摘要，不虚构子会话。
   if (childId === undefined) {
@@ -332,17 +346,6 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   }
 
   // 多次 resume 折叠：历史已被后续调用接替的旧调用仅渲染单行摘要胶囊（可展开详情）。
-  const isLatest = isLatestSubagentCallForTarget(
-    {
-      callId: props.callId,
-      input: props.input,
-      result: props.result,
-      siblingCalls: props.siblingCalls,
-      conversationId: props.conversationId,
-    },
-    childId,
-    conversations,
-  )
   if (!isLatest) {
     return (
       <div className="trace-entry">
@@ -467,6 +470,8 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
       ),
     [props.callId, props.result, props.conversationId, runsDoc],
   )
+
+  useToolActivity(props.callId, run?.status === 'running')
 
   if (run === undefined) {
     // 引擎尚未建立关联 run：保留原始调用详情，不猜测其他 run。
