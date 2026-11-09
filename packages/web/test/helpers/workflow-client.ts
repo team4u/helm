@@ -14,7 +14,7 @@ import * as ReactDomClient from 'react-dom/client'
 import * as LucideReact from 'lucide-react'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import * as HelmPluginClient from '../../src/lib/plugin-client-context.js'
+import * as HelmPluginClient from '../src/lib/plugin-client-context.js'
 
 const kernelDist = fileURLToPath(new URL('../../../kernel/dist/plugins/client-compiler.js', import.meta.url))
 if (!existsSync(kernelDist)) {
@@ -84,6 +84,7 @@ const sharedPluginClientNamespace = {
       pluginId: 'builtin:workflow',
       callAction: async () => undefined,
       openScreen: () => {},
+  openConversationDrawer: () => {},
       openSplitScreen: () => {},
       openArtifact: () => {},
       openWorkbench: () => {},

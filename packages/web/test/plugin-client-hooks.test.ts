@@ -16,6 +16,7 @@ import { renderToString } from 'react-dom/server'
 import type { AskSpec, ConversationSummary } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import {
+  createPluginClientContext,
   PluginClientContext,
   useConversation,
   useConversations,
@@ -146,6 +147,7 @@ const stubCtx = {
   pluginId: 'test:plugin',
   callAction: async () => undefined,
   openScreen: () => {},
+  openConversationDrawer: () => {},
   openSplitScreen: () => {},
   openArtifact: () => {},
   openWorkbench: () => {},
@@ -294,4 +296,44 @@ test('useConversation：reload 调用 loadConversationDetail(id, true) 强制刷
   })
   assert.deepEqual(calls, [{ id: 11, force: true }], 'reload 必须以 force=true 重新拉取')
   probe.unmount()
+})
+
+// ---------------------------------------------------------------------------
+// openConversationDrawer：统一子会话抽屉入口（不改变工作台开关状态）
+// ---------------------------------------------------------------------------
+
+test('createPluginClientContext.openConversationDrawer：打开 conversation-drawer 模态且不触碰工作台开关', { timeout: 60_000 }, () => {
+  const modals: unknown[] = []
+  const workbenchCalls: boolean[] = []
+  const store = makeStore({
+    workbenchOpen: true,
+    setActiveModal: (modal) => {
+      modals.push(modal)
+    },
+    setWorkbenchOpen: (open) => {
+      workbenchCalls.push(open)
+    },
+  })
+  const ctx = createPluginClientContext(store, 'test:plugin', 1)
+  ctx.openConversationDrawer(42)
+  assert.deepEqual(modals, [{ kind: 'conversation-drawer', conversationId: 42 }], '必须设置 conversation-drawer 模态')
+  assert.deepEqual(workbenchCalls, [], '不得调用 setWorkbenchOpen（工作台保持原状）')
+})
+
+test('createPluginClientContext.openConversationDrawer：工作台关闭时同样只开抽屉，不强制打开工作台', { timeout: 60_000 }, () => {
+  const modals: unknown[] = []
+  const workbenchCalls: boolean[] = []
+  const store = makeStore({
+    workbenchOpen: false,
+    setActiveModal: (modal) => {
+      modals.push(modal)
+    },
+    setWorkbenchOpen: (open) => {
+      workbenchCalls.push(open)
+    },
+  })
+  const ctx = createPluginClientContext(store, 'test:plugin', undefined)
+  ctx.openConversationDrawer(7)
+  assert.deepEqual(modals, [{ kind: 'conversation-drawer', conversationId: 7 }])
+  assert.deepEqual(workbenchCalls, [], '抽屉入口不得强制展开工作台')
 })

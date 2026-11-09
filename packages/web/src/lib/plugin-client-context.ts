@@ -107,6 +107,8 @@ export function createPluginClientContext(
     callAction: (actionId, input) => store.invokePluginAction(pluginId, actionId, input, conversationId),
     openScreen: (target) => store.openTarget(target),
     openSplitScreen: (target) => store.openTarget(target, { split: true }),
+    openConversationDrawer: (conversationId) =>
+      store.setActiveModal({ kind: 'conversation-drawer', conversationId }),
     openArtifact: (artifactId) => store.setActiveModal({ kind: 'artifact-preview', artifactId, conversationId }),
     openWorkbench: (panelId) => {
       store.setWorkbenchOpen(true)

@@ -83,6 +83,10 @@ function SubagentLiveCardBody(props: {
   worktree?: { path: string; branch: string }
   toolSummary?: { prompt?: string; startedAt?: number; durationMs?: number; resultText?: string; isError?: boolean }
   startedAt?: number
+  /** 是否为缓存/历史重放任务。 */
+  cached?: boolean
+  /** 额外统计尾注（如工作流节点的模型与 token 统计）。 */
+  extraStats?: string
   /** 展开态展示实时流与底部调用详情。 */
   expanded?: boolean
 }) {
@@ -145,7 +149,7 @@ function SubagentLiveCardBody(props: {
   const cardClass = `subagent-live-card${badge.status === 'blocked' ? ' subagent-live-card-warn' : badge.status === 'error' || detailError !== undefined ? ' subagent-live-card-error' : ''}${props.expanded === true ? ' subagent-live-card-expanded' : ''}`
 
   const openChild = (): void => {
-    ctx.openScreen(`conversation:${childConversationId}`)
+    ctx.openConversationDrawer(childConversationId)
   }
 
   return (
@@ -183,9 +187,13 @@ function SubagentLiveCardBody(props: {
               {wt.branch}
             </span>
           ) : null}
+          {props.cached === true ? <span className="badge badge-warn">cached</span> : null}
           <span className={`badge ${badge.badge}`}>{badge.label}</span>
+          {props.extraStats !== undefined && props.extraStats !== '' ? (
+            <span className="subagent-live-stats workflow-node-stats tabular-nums">{props.extraStats}</span>
+          ) : null}
           {statSegments.length > 0 ? (
-            <span className="subagent-live-stats tabular-nums">{statSegments.join(' · ')}</span>
+            <span className="subagent-live-stats workflow-node-duration tabular-nums">{statSegments.join(' · ')}</span>
           ) : null}
         </div>
         <span className="subagent-live-actions" onClick={(e) => e.stopPropagation()}>
@@ -764,6 +772,8 @@ function WorkflowSubagentNodeCard({ node }: { node: WorkflowNodeState }): ReactN
         toolStatus={node.status === 'running' ? 'running' : node.status === 'failed' ? 'error' : node.status === 'done' ? 'done' : 'unknown'}
         startedAt={node.startedAt}
         worktree={node.worktree}
+        cached={node.cached}
+        extraStats={nodeStats.length > 0 ? nodeStats.join(' · ') : undefined}
         toolSummary={{
           prompt: node.label,
           durationMs: node.durationMs,
@@ -772,9 +782,6 @@ function WorkflowSubagentNodeCard({ node }: { node: WorkflowNodeState }): ReactN
         }}
         expanded={false}
       />
-      {nodeStats.length > 0 ? (
-        <div className="workflow-node-stats-extra tabular-nums">{nodeStats.join(' · ')}</div>
-      ) : null}
       {node.gate !== undefined ? (
         <div className="workflow-node-gate-extra">
           <span className={`badge ${node.gate.ok ? 'badge-ok' : 'badge-err'}`}>
