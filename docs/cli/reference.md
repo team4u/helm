@@ -945,8 +945,8 @@ RESULT=$(helm workflows run code-review.workflow.js \
   --json)
 
 # 提取执行状态与产物标识
-STATUS=$(echo "$RESULT" | jq -r '.status')
-SCORE=$(echo "$RESULT" | jq -r '.output.qualityScore')
+STATUS=$(echo "$RESULT" | jq -r '.run.status')
+SCORE=$(echo "$RESULT" | jq -r '.run.result.qualityScore')
 
 echo "工作流终态: $STATUS，质量评分: $SCORE"
 

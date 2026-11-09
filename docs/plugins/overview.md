@@ -269,11 +269,11 @@ export interface HelmHostApi {
   runGate(command: string, options?: { cwd?: string; conversationId?: number; nodeId?: string; signal?: AbortSignal; env?: Record<string, string> }): Promise<{ ok: boolean; output: string }>;
   prepareInterruptedConversations(ids: number[]): Promise<void>;
   cleanupWorktree(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult>;
-  
+
   // 跨插件动作互调
   invokeAction(pluginId: string, actionId: string, input: unknown, context?: PluginActionContext): Promise<unknown>;
   listActions(): ActionManifest[];
-  
+
   // 系统事件（订阅如 'workflow.settled'；插件停用时自动解除）
   onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void;
   emitEvent(type: string, payload: unknown): void;
