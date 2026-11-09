@@ -4,7 +4,7 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationSummary, PluginSummary, PluginUiContribution, WorkflowRunSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary, PluginSummary, PluginUiContribution, WorkflowRunSummary } from '@helm/protocol'
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
 import { ConversationPane } from '../src/conversation/ConversationPane.js'
 import { WorkbenchDrawer } from '../src/conversation/WorkbenchDrawer.js'
@@ -60,6 +60,7 @@ test('真实共享 hooks 消费 snapshot/plugin.doc.updated：父工具已返回
   const entries = [
     { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'call-bg', name: 'subagent', arguments: { prompt: '跑后台测试' } }] }] },
     { id: '2', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'call-bg', toolName: 'subagent', content: [{ type: 'text', text: JSON.stringify({ execution: { conversationId: 11 } }) }] }] },
+    { id: '3', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '后台任务已提交' }], stopReason: 'stop' }] },
   ]
   const modals: unknown[] = []
   const navigations: unknown[] = []
@@ -76,6 +77,7 @@ test('真实共享 hooks 消费 snapshot/plugin.doc.updated：父工具已返回
   try {
     await ui.render(store(), timeline)
     assert.match(ui.host.textContent!, /后台运行中/)
+    assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar') === null, 'done 工具的 run.running 仍隐藏复制/分叉')
     assert.deepEqual(docs, [], '首帧已直投文档，SDK 不得重新拉取')
     await act(async () => { (ui.host.querySelector('.subagent-card-clickable') as HTMLElement).click() })
     assert.deepEqual(modals, [{ kind: 'conversation-drawer', conversationId: 11 }])
@@ -85,11 +87,13 @@ test('真实共享 hooks 消费 snapshot/plugin.doc.updated：父工具已返回
     state = applyEventFrame(state, { seq: 2, event: { type: 'conversation.upsert', conversation: { ...child, status: 'blocked' } } })
     await ui.render(store(), timeline)
     assert.match(ui.host.textContent!, /等待审批/)
+    assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar') === null, 'blocked 子会话仍隐藏复制/分叉')
     state = applyEventFrame(state, { seq: 3, event: { type: 'conversation.upsert', conversation: child } })
     state = applyEventFrame(state, { seq: 4, event: { type: 'plugin.doc.updated', doc: { pluginId: plugin.id, name: 'runs', value: { runs: [{ ...run, status: 'failed', error: 'Gate 命令退出码 1' }] } } } })
     await ui.render(store(), timeline)
     assert.match(ui.host.textContent!, /Gate 命令退出码 1/)
     assert.doesNotMatch(ui.host.textContent!, /后台运行中/)
+    assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar'), '后台终态后恢复复制/分叉')
 
     state = applyEventFrame(state, { seq: 5, event: { type: 'plugin.changed', plugin: { ...plugin, enabled: false }, ui: [] } })
     await ui.render(store(), timeline)
@@ -101,6 +105,125 @@ test('真实共享 hooks 消费 snapshot/plugin.doc.updated：父工具已返回
     assert.equal(ui.host.querySelectorAll('.subagent-card-clickable').length, 1)
     assert.match(ui.host.textContent!, /已完成/)
     assert.doesNotMatch(ui.host.textContent!, /Gate 命令退出码 1/)
+  } finally { await ui.close() }
+})
+
+function settledEntries(callId: string, toolName: string, start = 1, input: unknown = {}, result = '已提交'): ConversationEntry[] {
+  return [
+    { id: String(start), kind: 'helm.input', data: { text: '执行任务', origin: 'human' } },
+    { id: String(start + 1), kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: callId, name: toolName, arguments: input }] }] },
+    { id: String(start + 2), kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: callId, toolName, content: [{ type: 'text', text: result }] }] },
+    { id: String(start + 3), kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '任务已提交，可等待后台完成' }], stopReason: 'stop' }] },
+  ]
+}
+
+test('真实子会话 working/blocked 独立报告后台活动；静态工具结果不伪造活动', { timeout: 60_000 }, async () => {
+  seed()
+  const ui = mount()
+  const parent = conversation(1)
+  const child = { ...conversation(11), parentConversationId: 1, parentToolCallId: 'child-call' }
+  const timeline = e(ConversationTimeline, { conversation: parent, detailEntries: settledEntries('child-call', 'subagent'), onRequestEdit: () => {} })
+  try {
+    for (const status of ['working', 'blocked', 'idle', 'done', 'error'] as const) {
+      await ui.render(makeTestStore({ conversations: [parent, { ...child, status }],
+        conversationDetails: { 11: { ...child, entries: [] } }, groupedUi: groupUiContributions(workflowUi),
+        pluginDocs: { 'builtin:workflow/runs': { runs: [] } },
+      }), timeline)
+      assert.equal(ui.host.querySelector('.msg-ai-block .msg-hover-bar') === null, status === 'working' || status === 'blocked', `子会话 ${status} 应如实决定复制/分叉状态`)
+    }
+    // 没有任何真实 run/child，即使输出字符串含 running，也不把静态文本推断成活动。
+    await ui.render(makeTestStore({ conversations: [parent], groupedUi: groupUiContributions(workflowUi), pluginDocs: { 'builtin:workflow/runs': { runs: [] } } }),
+      e(ConversationTimeline, { conversation: parent, detailEntries: settledEntries('unknown', 'subagent', 1, {}, '{"status":"running"}'), onRequestEdit: () => {} }))
+    assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar'))
+  } finally { await ui.close() }
+})
+
+test('WorkflowToolView 与无 nativechild 的外部 subagent 按真实 run.running 报告活动，终态和停用释放', { timeout: 60_000 }, async () => {
+  seed()
+  const ui = mount()
+  const parent = conversation(1)
+  try {
+    for (const toolName of ['SubagentWorkflow', 'subagent']) {
+      const callId = `${toolName}-call`
+      const run: WorkflowRunSummary = { id: `run-${toolName}`, kind: toolName === 'subagent' ? 'subagent' : 'workflow',
+        name: '真实后台运行', conversationId: 1, parentToolCallId: callId, status: 'running', createdAt: 1, updatedAt: 2,
+        nodes: [{ id: 'external', kind: 'agent', status: 'running', executionId: 'pane-42' }],
+      }
+      const timeline = e(ConversationTimeline, { conversation: parent, detailEntries: settledEntries(callId, toolName), onRequestEdit: () => {} })
+      const store = (status: WorkflowRunSummary['status'], enabled = true) => makeTestStore({ conversations: [parent],
+        groupedUi: groupUiContributions(enabled ? workflowUi : []), pluginDocs: { 'builtin:workflow/runs': { runs: [{ ...run, status }] } },
+      })
+      await ui.render(store('running'), timeline)
+      assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar') === null, `${toolName} done 工具仍有后台活动`)
+      for (const status of ['failed', 'aborted', 'completed'] as const) {
+        await ui.render(store(status), timeline)
+        assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar'), `${toolName} ${status} 必须释放活动`)
+      }
+      await ui.render(store('running'), timeline)
+      assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar') === null)
+      await ui.render(store('running', false), timeline)
+      assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar'), '停用 renderer 必须释放正在运行的来源')
+      await ui.render(store('completed'), timeline)
+      assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar'), '重启插件不保留旧 busy')
+    }
+  } finally { await ui.close() }
+})
+
+test('resume 仅最新调用报告活动；旧卡由活跃转历史或卸载不能清除新卡登记', { timeout: 60_000 }, async () => {
+  seed()
+  const ui = mount()
+  const parent = conversation(1)
+  const child = { ...conversation(11, 'working'), parentConversationId: 1, parentToolCallId: 'old-call' }
+  const oldRun: WorkflowRunSummary = { id: 'old-run', kind: 'subagent', name: '首次运行', conversationId: 1,
+    parentToolCallId: 'old-call', status: 'running', createdAt: 1, updatedAt: 2, nodes: [{ id: 'agent', kind: 'agent', status: 'running', conversationId: 11 }],
+  }
+  const oldEntries = settledEntries('old-call', 'subagent', 1, {}, JSON.stringify({ execution: { conversationId: 11 } }))
+  const newEntries = settledEntries('new-call', 'subagent', 5, { resume: 11, prompt: '继续任务' }, JSON.stringify({ execution: { conversationId: 11 } }))
+  const store = (resumed: boolean, status: ConversationSummary['status'] = 'working') => makeTestStore({
+    conversations: [parent, { ...child, status, parentToolCallId: resumed ? 'new-call' : 'old-call' }],
+    groupedUi: groupUiContributions(workflowUi), conversationDetails: { 11: { ...child, entries: [] } },
+    // 保留旧 run.running 验证最新调用不会被旧 run 污染。
+    pluginDocs: { 'builtin:workflow/runs': { runs: [oldRun] } },
+  })
+  const timeline = (entries: ConversationEntry[]) => e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })
+  const bars = () => [...ui.host.querySelectorAll('.msg-ai-block')].map((turn) => turn.querySelector('.msg-hover-bar') !== null)
+  try {
+    await ui.render(store(false), timeline(oldEntries))
+    assert.deepEqual(bars(), [false], '原调用初次挂载时确实上报活动')
+    await ui.render(store(true), timeline([...oldEntries, ...newEntries]))
+    assert.deepEqual(bars(), [true, false], '续接后仅最新调用 busy；历史回合恢复操作条')
+    assert.equal(ui.host.querySelectorAll('.subagent-card-clickable').length, 1)
+    assert.match(ui.host.textContent!, /已在下文续接/)
+    await ui.render(store(true), timeline(newEntries))
+    assert.deepEqual(bars(), [false], '移除旧卡不会误删最新调用的登记')
+    await ui.render(store(true, 'blocked'), timeline(newEntries))
+    assert.deepEqual(bars(), [false])
+    await ui.render(store(true, 'idle'), timeline(newEntries))
+    assert.deepEqual(bars(), [true], '新调用终态即释放，旧 run.running 不得污染新调用')
+  } finally { await ui.close() }
+})
+
+test('外部 executionId 续接仅最新调用上报活动，不能编造 nativechild 关联', { timeout: 60_000 }, async () => {
+  seed()
+  const ui = mount()
+  const parent = conversation(1)
+  const run: WorkflowRunSummary = { id: 'external-old', kind: 'subagent', name: '外部任务', conversationId: 1,
+    parentToolCallId: 'ext-old', status: 'running', createdAt: 1, updatedAt: 2,
+    nodes: [{ id: 'agent', kind: 'agent', status: 'running', executionId: 'pane-42' }],
+  }
+  const oldEntries = settledEntries('ext-old', 'subagent', 1, {}, JSON.stringify({ execution: { executionId: 'pane-42' } }))
+  const newEntries = settledEntries('ext-new', 'subagent', 5, { resume: 'pane-42' })
+  const timeline = e(ConversationTimeline, { conversation: parent, detailEntries: [...oldEntries, ...newEntries], onRequestEdit: () => {} })
+  try {
+    const store = (status: WorkflowRunSummary['status']) => makeTestStore({ conversations: [parent], groupedUi: groupUiContributions(workflowUi),
+      pluginDocs: { 'builtin:workflow/runs': { runs: [run, { ...run, id: 'external-new', parentToolCallId: 'ext-new', status }] } },
+    })
+    await ui.render(store('running'), timeline)
+    const bars = () => [...ui.host.querySelectorAll('.msg-ai-block')].map((turn) => turn.querySelector('.msg-hover-bar') !== null)
+    assert.deepEqual(bars(), [true, false])
+    assert.equal(ui.host.querySelectorAll('.subagent-card-clickable').length, 0)
+    await ui.render(store('completed'), timeline)
+    assert.deepEqual(bars(), [true, true], '旧外部 run.running 不能让已续接完成的旧调用重新 busy')
   } finally { await ui.close() }
 })
 
