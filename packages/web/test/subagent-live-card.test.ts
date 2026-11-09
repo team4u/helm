@@ -904,12 +904,14 @@ test('SubagentLiveCard 整体大卡片点击契约：外层整卡可点击，第
   assert.ok(!html.includes('<button') || !html.includes('class="subagent-live-subline"'), '第 2 层不得为独立 button')
 })
 
-test('SubagentLiveCard 样式契约：整卡统一样式，严禁内部子元素（trigger/subline）独立设置 hover 背景', { timeout: 60_000 }, () => {
-  const cssPath = new URL('../src/styles.css', import.meta.url)
-  const css = readFileSync(cssPath, 'utf-8')
-  assert.ok(css.includes('.subagent-card-clickable:hover'), '应包含整卡 hover 高亮规则')
-  assert.ok(!css.includes('.subagent-live-trigger:hover'), '严禁为 trigger 设置独立 hover 背景')
-  assert.ok(!css.includes('.subagent-live-subline:hover'), '严禁为 subline 设置独立 hover 背景')
+test('插件自有样式契约：整卡统一 hover，且宿主样式表不携带工作流业务类', { timeout: 60_000 }, () => {
+  const pluginCss = readFileSync(new URL('../../kernel/src/builtin-plugins/workflow/client/styles.css', import.meta.url), 'utf-8')
+  const hostCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf-8')
+  assert.ok(pluginCss.includes('.subagent-card-clickable:hover'), '插件样式应包含整卡 hover 高亮规则')
+  assert.ok(!pluginCss.includes('.subagent-live-trigger:hover'), '严禁为 trigger 设置独立 hover 背景')
+  assert.ok(!pluginCss.includes('.subagent-live-subline:hover'), '严禁为 subline 设置独立 hover 背景')
+  assert.doesNotMatch(hostCss, /\.(?:subagent|workflow)-/, '宿主样式表不得硬编码插件业务类')
+  assert.doesNotMatch(hostCss, /\.phase-segment/, '阶段胶囊样式同属插件')
 })
 
 const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/u

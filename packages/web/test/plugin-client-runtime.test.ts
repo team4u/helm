@@ -136,3 +136,23 @@ test('模块导入失败显式报错且不毒化同 hash 的重试', { timeout: 
     URL.revokeObjectURL = revokeObjectURL
   }
 })
+
+test('插件样式随停用/登出回收：仅移除目标插件注入的 style，不误删其他插件', { timeout: 60_000 }, async () => {
+  const addSheet = (key: string, pluginId: string): HTMLStyleElement => {
+    const style = document.createElement('style')
+    style.dataset.helmPluginCss = key
+    style.dataset.helmPluginCssPlugin = pluginId
+    style.textContent = `.${key} { color: red }`
+    document.head.appendChild(style)
+    return style
+  }
+  const alpha = addSheet('alpha::index.tsx', 'alpha')
+  const alphaTwin = addSheet('alpha::other.tsx', 'alpha')
+  const alphaLike = addSheet('alpha2::index.tsx', 'alpha2')
+  evictPluginClientCache('alpha')
+  assert.equal(alpha.isConnected, false)
+  assert.equal(alphaTwin.isConnected, false)
+  assert.equal(alphaLike.isConnected, true, '相似 ID 的插件样式不得误删')
+  resetPluginClientCache()
+  assert.equal(alphaLike.isConnected, false, '登出/全量重建必须回收全部插件样式')
+})

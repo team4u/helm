@@ -119,6 +119,49 @@ interface DepsListFile {
   dependencies: Array<{ path: string; sha256: string }>
 }
 
+function cssAsJsPlugin(pluginId: string, moduleRef: string): EsbuildPlugin {
+  return {
+    name: 'helm-plugin-css',
+    setup(b) {
+      b.onLoad({ filter: /\.css$/, namespace: 'file' }, (args) => {
+        const source = readFileSync(args.path, 'utf8');
+        // @import/url() 在注入页面后会相对页面解析，而非插件目录；静默错误基址
+        // 比显式拒绝更危险（样式会莫名指向宿主路径）。
+        const unsupported = /@import\b|url\(/i.exec(source);
+        if (unsupported !== null) {
+          return {
+            errors: [{
+              text:
+                `插件 ${pluginId} 的样式 ${args.path} 含 ${unsupported[0]}：` +
+                '插件样式必须自包含（不支持 @import 与 url()，避免相对页面解析错基址）',
+            }],
+          };
+        }
+        const key = `${pluginId}::${moduleRef}`;
+        const contents = [
+          `const css = ${JSON.stringify(source)};`,
+          'if (typeof document !== "undefined") {',
+          `  const key = ${JSON.stringify(key)};`,
+          '  let sheet = null;',
+          '  for (const node of document.querySelectorAll("style[data-helm-plugin-css]")) {',
+          '    if (node.dataset.helmPluginCss === key) { sheet = node; break; }',
+          '  }',
+          '  if (sheet === null) {',
+          '    sheet = document.createElement("style");',
+          '    sheet.dataset.helmPluginCss = key;',
+          `    sheet.dataset.helmPluginCssPlugin = ${JSON.stringify(pluginId)};`,
+          '    document.head.appendChild(sheet);',
+          '  }',
+          '  sheet.textContent = css;',
+          '}',
+          'export default css;',
+        ].join('\n');
+        return { contents, loader: 'js' };
+      });
+    },
+  };
+}
+
 async function compileUncached(
   pluginId: string,
   clientRoot: string,
@@ -156,7 +199,7 @@ async function compileUncached(
       metafile: true,
       absWorkingDir: rootReal,
       logLevel: 'silent',
-      plugins: [sharedShimPlugin(), containmentPlugin(pluginId, rootReal)],
+      plugins: [sharedShimPlugin(), containmentPlugin(pluginId, rootReal), cssAsJsPlugin(pluginId, moduleRef)],
     });
     const file = result.outputFiles?.[0];
     if (!file || result.outputFiles.length !== 1) {

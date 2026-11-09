@@ -10,6 +10,7 @@
  * POST /api/actions/builtin:workflow/<actionId>，无任何宿主私有依赖。
  */
 import { useMemo, useState } from 'react'
+import './styles.css'
 import type { ReactNode } from 'react'
 import type { ToolViewProps, WorkbenchPanelProps, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
 import { usePluginContext, useConversation, useConversations, useToolActivity } from '@helm/plugin-client'

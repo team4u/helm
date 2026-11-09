@@ -20,6 +20,7 @@ import {
   SkillService,
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
+import { compilePluginClientModule } from '../src/plugins/client-compiler.js'
 import { createHubHandler } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike} from '../src/http/index.js'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
@@ -189,6 +190,29 @@ test('真实编译：产物为 ESM，react external 重写为 __helm_shared_* �
   // 绝不打包第二份 React（external 生效）
   assert.doesNotMatch(result.code, /useState\s*\(\)\s*\{/)
   assert.match(result.contentHash, /^[0-9a-f]{24}$/)
+})
+
+test('插件本地 CSS：内联进 JS 并在加载时注入可回收的 style 标签', { timeout: 60_000 }, async () => {
+  const root = join(dataDir, 'css-plugin-src')
+  await mkdir(root, { recursive: true })
+  await writeFile(join(root, 'styles.css'), '.widget-card {\n  color: var(--fg);\n}\n')
+  await writeFile(join(root, 'index.tsx'), "import './styles.css'\nexport function Widget() { return <div className=\"widget-card\">x</div> }\n")
+  const result = await compilePluginClientModule('test:css', root, 'index.tsx', dataDir)
+  assert.match(result.code, /widget-card/, 'CSS 内容必须进入产物')
+  assert.match(result.code, /data-helm-plugin-css/, '产物必须在加载时注入 style')
+  assert.match(result.code, /test:css::index\.tsx/, '样式 key 必须按插件与模块隔离')
+  assert.doesNotMatch(result.code, /@import/, '不应把 @import 静默带到页面')
+})
+
+test('插件 CSS 不支持 @import / url()：显式编译错误而非错误基址静默生效', { timeout: 60_000 }, async () => {
+  const root = join(dataDir, 'css-unsupported-src')
+  await mkdir(root, { recursive: true })
+  await writeFile(join(root, 'styles.css'), '@import "./other.css";\n.card { color: red }\n')
+  await writeFile(join(root, 'index.tsx'), "import './styles.css'\nexport function Widget() { return <div className=\"card\">x</div> }\n")
+  await assert.rejects(
+    () => compilePluginClientModule('test:css-bad', root, 'index.tsx', dataDir),
+    (err: unknown) => err instanceof HelmError && err.code === 'client_compile_failed' && /@import/.test(err.message),
+  )
 })
 
 test('缓存命中：同源重复获取 contentHash 一致且产物已落盘', { timeout: 60_000 }, async () => {

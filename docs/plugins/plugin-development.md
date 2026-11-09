@@ -184,7 +184,12 @@ ctx.ui.settingsPanel({
 1. **依赖共享规范**：
    - 组件引入 `react`、`react-dom` 与 `lucide-react`。
    - 宿主自动映射到全局命名空间，绝不打包第二份依赖。
-2. **极简无 Emoji 铁律**：
+2. **样式归属**：
+   - 插件业务样式以 `clientRoot` 内本地 `.css` 导入（如 `import './styles.css'`），不得写进宿主 `styles.css`。
+   - 编译器把本地 CSS 内联进插件 JS；模块首次加载时注入带 `data-helm-plugin-css` 标记的 `<style>`，插件停用/卸载或登出时自动回收。
+   - CSS 必须自包含：`@import` 与 `url()` 会被显式拒绝（注入后相对页面解析，基址不可靠）。
+   - 可复用宿主全局设计变量（如 `var(--fg-muted)`、`var(--border)`）与通用组件类（如 `.badge`），不重复定义宿主原语。
+3. **极简无 Emoji 铁律**：
    - 界面文案与状态徽标严禁使用任何 Emoji。
    - 图标统一使用 `lucide-react` 线性图标。
 
@@ -225,7 +230,7 @@ export function SampleWidget() {
 
 `openConversationDrawer(conversationId)` 打开现有子会话抽屉，不切换主屏、不创建分屏，也不改变工作台开关。
 
-注意 `client.tsx` 是可信代码而非安全沙箱，宿主不提供隔离边界。
+注意 `client.tsx` 是可信代码而非安全沙箱，宿主不提供隔离边界。插件 UI 的组件、交互与样式均为插件资产：宿主只提供通用扩展点与共享原语，不包含工作流/子代理业务类名或专用渲染分支。
 
 3. **在后端注册组件**：
 

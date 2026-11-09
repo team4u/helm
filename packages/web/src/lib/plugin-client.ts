@@ -27,12 +27,21 @@ let cacheEpoch = 0
 
 const cacheKey = (pluginId: string, moduleRef: string): string => JSON.stringify([pluginId, moduleRef])
 
+/** 移除某插件注入的样式表（停用/卸载后不留全局样式泄漏）。 */
+function removePluginStyleSheets(pluginId: string | undefined): void {
+  if (typeof document === 'undefined') return
+  for (const node of [...document.querySelectorAll('style[data-helm-plugin-css-plugin]')]) {
+    if (pluginId === undefined || node.getAttribute('data-helm-plugin-css-plugin') === pluginId) node.remove()
+  }
+}
+
 /** 插件 UI 贡献变化时调用：移除该插件全部缓存模块（停用/卸载后不残留）。 */
 export function evictPluginClientCache(pluginId: string): void {
   pluginEpochs.set(pluginId, (pluginEpochs.get(pluginId) ?? 0) + 1)
   for (const [key, entry] of cache) {
     if (entry.pluginId === pluginId) cache.delete(key)
   }
+  removePluginStyleSheets(pluginId)
 }
 
 /** 全量重建（如登出）：清空所有插件 client 模块缓存。 */
@@ -40,6 +49,7 @@ export function resetPluginClientCache(): void {
   cacheEpoch++
   pluginEpochs.clear()
   cache.clear()
+  removePluginStyleSheets(undefined)
 }
 
 export class PluginClientError extends Error {
