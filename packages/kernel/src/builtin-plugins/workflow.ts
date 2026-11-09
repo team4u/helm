@@ -6,7 +6,9 @@
  *   引擎为插件自有资产（内核不 import 本目录）；跨 spawn 通用边界在
  *   runtime/spawn（内核侧）；
  * - 私有 state 经 ctx.doc 私有文档 `records`（插件 docs 命名空间，state.sqlite
- *   持久），公共 `runs` 文档为 UI 投影（SSE 首帧直投 + tool.view/workbench 消费）；
+ *   持久）；公共 `runs` 投影按会话分片（ctx.sessionDoc，仅写各自会话的 run，
+ *   不进全局首帧/全局 SSE）；全局仅保留紧凑 `run-badges` 角标文档
+ *   （每会话 count/tone/footerText，无完整 run 摘要）；
  *   无进程内 Map fallback、无 kernel.documentStore 注入；
  * - 后台子代理结算（kind=subagent）经 submitInput(requestId) 向父会话投递
  *   汇报（跨重启幂等；父会话已删除时 notification 通知）；
@@ -24,11 +26,13 @@ import {
   HelmError,
   WORKFLOW_PLUGIN_ID,
   WORKFLOW_RUNS_DOC,
+  WORKFLOW_RUN_BADGES_DOC,
   type AgentExecutionInfo,
   type AgentSpawnRequest,
   type PluginDefinition,
   type WorkflowRunSummary,
-  type WorkflowRunsDocState,
+  type WorkflowRunBadgesDocState,
+  type WorkflowRunSessionDocState,
 } from '@helm/protocol'
 import { WorkflowService } from './workflow/engine/index.js'
 import { normalizeWorkflowArgs } from './workflow/engine/runtime.js'
@@ -127,8 +131,17 @@ export function createWorkflowPlugin(): PluginDefinition {
     version: '0.1.0',
     clientRoot: resolveClientRoot(),
     definePlugin(ctx) {
-      // ---- 公共文档：runs（SSE 首帧直投 + tool.view/workbench 订阅） ----
-      const runsDoc = ctx.doc<WorkflowRunsDocState>(WORKFLOW_RUNS_DOC, { runs: [], byConversation: {} }, { public: true })
+      // ---- 会话分片公共文档：runs（每父会话只写自己的 run 列表） ----
+      // 不进全局首帧/全局 SSE；前端经专用订阅流按会话拉取与增量更新。
+      const runsDoc = ctx.sessionDoc<WorkflowRunSessionDocState>(WORKFLOW_RUNS_DOC, { runs: [] }, { public: true })
+
+      // ---- 全局紧凑角标文档：run-badges（仅 count/tone/footerText，有意全局） ----
+      // 工作台导航角标需要跨会话可见；完整 run 摘要绝不进入此文档/全局流。
+      const badgesDoc = ctx.doc<WorkflowRunBadgesDocState>(
+        WORKFLOW_RUN_BADGES_DOC,
+        { byConversation: {} },
+        { public: true },
+      )
 
       // ---- 引擎私有 records 文档（键值 store：run 索引 + 每 run 记录） ----
       // 私有 doc：不进公共快照/事件；引擎经此持久化，重启恢复读同一命名空间。
@@ -202,7 +215,7 @@ export function createWorkflowPlugin(): PluginDefinition {
       })
 
       /**
-       * 同步 runs 公共文档（含按会话聚合的角标统计）。
+       * 同步 runs 会话分片投影与全局紧凑角标（含按会话聚合的角标统计）。
        * stopping 拦截的只有运行期后台回调（引擎事件链里的投影刷新）；受控 stop
        * 链内的最终同步走 syncRunsDocFinal（不受 stopping 拦截，写入经宿主
        * 受控停止 doc 作用域放行，失败如实上抛）。
@@ -217,10 +230,58 @@ export function createWorkflowPlugin(): PluginDefinition {
         writeRunsDoc()
       }
 
+      /** 上一轮已写分片的值缓存（值相等时跳过写入，不发重复事件）。 */
+      const writtenRunsByConv = new Map<number, string>()
+      /** 上一轮已写角标摘要（值相等时跳过写入）。 */
+      let writtenBadgesJson = ''
+      /**
+       * 已持久化过 runs 分片的会话 ID 集合（start 时从持久层快照一次，此后
+       * 增量维护）。不复用句柄 listConversationIds 的原因：受控 stop 窗口内
+       * 该只读端口会被 assertNotDisposed 拒绝，而最终投影必须能在 stop 链内
+       * 写入；快照语义等价（分片只由本插件写入）。
+       */
+      const persistedRunsConvs = new Set<number>()
+
+      /** 序列化稳定性键：runs 顺序即引擎返回顺序，JSON 直比（字段由引擎结构化产出）。 */
+      function runsProjectionKey(runs: WorkflowRunSummary[]): string {
+        return JSON.stringify(runs.map((r) => [r.id, r.updatedAt, r.status]))
+      }
+
       function writeRunsDoc(): void {
         const runs = workflows.listRuns()
-        const byConversation: Record<string, { count: number; tone: 'warn' | 'accent' | 'neutral'; footerText: string }> = {}
+        // 会话存在集合：删除的父会话不重建孤儿 doc（store 已级联清理）。
+        const existingIds = new Set(
+          ctx.host.listConversations().map((c) => c.id),
+        )
+
+        // 1) 每个仍有会话的父会话：写自己的 runs 分片（值不变跳过）。
+        const runsByConversation = new Map<number, WorkflowRunSummary[]>()
         for (const run of runs) {
+          if (!existingIds.has(run.conversationId)) continue
+          const list = runsByConversation.get(run.conversationId) ?? []
+          list.push(run)
+          runsByConversation.set(run.conversationId, list)
+        }
+        for (const convId of persistedRunsConvs) {
+          if (!existingIds.has(convId)) {
+            persistedRunsConvs.delete(convId)
+            continue
+          }
+          // 已持久会话：无 runs 时清到空（不保留旧投影）；尚未写入的不重建。
+          if (!runsByConversation.has(convId)) runsByConversation.set(convId, [])
+        }
+        for (const [convId, convRuns] of runsByConversation) {
+          const key = runsProjectionKey(convRuns)
+          if (writtenRunsByConv.get(convId) === key) continue
+          runsDoc.set(convId, { runs: convRuns })
+          writtenRunsByConv.set(convId, key)
+          persistedRunsConvs.add(convId)
+        }
+
+        // 2) 全局紧凑角标（有意全局：仅导航元数据，无完整 run 摘要）。
+        const byConversation: WorkflowRunBadgesDocState['byConversation'] = {}
+        for (const run of runs) {
+          if (!existingIds.has(run.conversationId)) continue
           const key = String(run.conversationId)
           const entry = byConversation[key] ?? { count: 0, tone: 'neutral' as const, footerText: '' }
           entry.count += 1
@@ -237,7 +298,11 @@ export function createWorkflowPlugin(): PluginDefinition {
             failed > 0 ? `${failed} 失败` : '',
           ].filter((s) => s !== '').join(' · ')
         }
-        runsDoc.set({ runs, byConversation })
+        const badgesJson = JSON.stringify(byConversation)
+        if (badgesJson !== writtenBadgesJson) {
+          badgesDoc.set({ byConversation })
+          writtenBadgesJson = badgesJson
+        }
       }
 
       /** 后台子代理结算汇报（幂等 requestId；父会话已删时 notification）。 */
@@ -300,15 +365,19 @@ export function createWorkflowPlugin(): PluginDefinition {
         async start() {
           // 恢复阶段二（全部插件 prepare 完成后）：init 终止遗留子任务、把
           // running 显式标 failed(interrupted)、补发父会话通知（此刻工具已注册，
-          // 补发输入消费安全）。
+          // 补发输入消费安全）。随后快照已持久分片集合并同步投影。
           await workflows.init()
+          for (const convId of runsDoc.listConversationIds()) persistedRunsConvs.add(convId)
           syncRunsDoc()
         },
         async stop() {
           // 受控停止：先置 stopping 拦截运行期后台回调（引擎事件链的投影刷新与
           // 父会话投递），再 await 引擎 close（在途 run 终态写入私有 records doc；
           // 写入经宿主受控停止 doc 写入窗口放行，失败如实上抛）。随后做最终 runs
-          // 投影（不受 stopping 拦截）并 await 真实 flush（排队写真正落盘）。
+          // 分片与角标投影（不受 stopping 拦截）并 await records.flush 真实落盘
+          // （真实 runtime 中全局 doc 与会话 doc 共享同一事务队列：records.flush
+          // 等待 tail 链即含会话分片与角标的排队写；不重复调 runsDoc.flush——
+          // dispose 窗口内 sessionDoc 句柄 flush 守卫拒绝已拆除宿主）。
           // close/flush 失败直接上抛（真实持久化故障，不吞）；最终投影是派生观察面：
           // 读取失败（如持久层损坏）发布显式 notification 诊断后不阻断拆毁——
           // 引擎终态已在 records，损坏也会在任何业务读取路径显式报错，不静默。
@@ -810,19 +879,19 @@ export function createWorkflowPlugin(): PluginDefinition {
         },
       })
 
-      // ---- UI 扩展点（client.tsx 轨道；docs 订阅 runs 公共文档） ----
+      // ---- UI 扩展点（client.tsx 轨道；sessionDocs 按会话订阅 runs 分片） ----
       ctx.ui.toolView({
         id: 'subagent-card',
         toolNames: ['subagent'],
         replaceRow: true,
-        docs: ['runs'],
+        sessionDocs: [WORKFLOW_RUNS_DOC],
         client: { module: 'index.tsx', export: 'SubagentToolView' },
       })
       ctx.ui.toolView({
         id: 'workflow-card',
         toolNames: ['SubagentWorkflow'],
         replaceRow: true,
-        docs: ['runs'],
+        sessionDocs: [WORKFLOW_RUNS_DOC],
         client: { module: 'index.tsx', export: 'WorkflowToolView' },
       })
       ctx.ui.workbenchPanel({
@@ -830,8 +899,8 @@ export function createWorkflowPlugin(): PluginDefinition {
         label: '工作流与子代理',
         icon: 'git-branch',
         order: 10,
-        docs: ['runs'],
-        badge: { doc: WORKFLOW_RUNS_DOC, byConversationField: 'byConversation' },
+        sessionDocs: [WORKFLOW_RUNS_DOC],
+        badge: { doc: WORKFLOW_RUN_BADGES_DOC, byConversationField: 'byConversation' },
         client: { module: 'index.tsx', export: 'WorkflowWorkbenchPanel' },
       })
     },

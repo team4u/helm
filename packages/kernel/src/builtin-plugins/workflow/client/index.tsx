@@ -37,7 +37,7 @@ import {
   subagentBadge,
   toolResultPreviewTruncated,
 } from './models.ts'
-import { usePluginDoc, useStreamFollow, useElapsedNowMs } from './hooks.ts'
+import { usePluginSessionDoc, useStreamFollow, useElapsedNowMs } from './hooks.ts'
 import { SPIN, RUN_LABEL, RUN_BADGE, NODE_LABEL, NODE_BADGE, PHASE_ICON } from './presentation.ts'
 
 // ---------------------------------------------------------------------------
@@ -299,7 +299,7 @@ export function SubagentLiveCard(props: {
 
 export function SubagentToolView(props: ToolViewProps): ReactNode {
   const conversations = useConversations()
-  const runsDoc = usePluginDoc<{ runs: WorkflowRunSummary[] }>('runs')
+  const runsDoc = usePluginSessionDoc<{ runs: WorkflowRunSummary[] }>('runs', { conversationId: props.conversationId })
   const ctx = usePluginContext()
 
   const childId = useMemo(
@@ -456,7 +456,7 @@ function ExternalRunSummary(props: {
 // ---------------------------------------------------------------------------
 
 export function WorkflowToolView(props: ToolViewProps): ReactNode {
-  const runsDoc = usePluginDoc<{ runs: WorkflowRunSummary[] }>('runs')
+  const runsDoc = usePluginSessionDoc<{ runs: WorkflowRunSummary[] }>('runs', { conversationId: props.conversationId })
   const [cardOpen, setCardOpen] = useState(true)
   const [busy, setBusy] = useState(false)
   const [resultOpen, setResultOpen] = useState(false)
@@ -836,7 +836,7 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
 
 export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
   const ctx = usePluginContext()
-  const runsDoc = usePluginDoc<{ runs: WorkflowRunSummary[] }>('runs')
+  const runsDoc = usePluginSessionDoc<{ runs: WorkflowRunSummary[] }>('runs', { conversationId: props.conversation.id })
   const conversations = useConversations()
   const parent = useConversation(props.conversation.id)
   const [inspectRunId, setInspectRunId] = useState<string | undefined>(undefined)

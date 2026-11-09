@@ -861,15 +861,16 @@ test('加载失败折叠卡：error 描边 + 加载失败副栏（零请求展�
 
 test('工作流业务卡隐藏重复工具行，但保留本次调用入参和原始结果入口', { timeout: 60_000 }, () => {
   const parent = summary(1, 'idle')
-  const workflow = bgRun({ id: 'wf_native', name: '原生编排', kind: 'workflow', status: 'completed', parentToolCallId: 'wf_call' })
   const entries: ConversationEntry[] = [
     { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'wf_call', name: 'SubagentWorkflow', arguments: { script: '原始脚本内容' } }] }] },
     { id: '2', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'wf_call', toolName: 'SubagentWorkflow', content: [{ type: 'text', text: '原始工作流返回结果' }] }] },
   ]
-  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent], pluginDocs: { 'builtin:workflow/runs': { runs: [workflow] } } }) },
+  // runs 已改为会话分片订阅（usePluginSessionDoc）：SSR 首帧无订阅数据时，
+  // WorkflowToolView 如实回退原始调用详情，绝不虚构运行卡；替换 trace-row
+  // 的行为不依赖是否有订阅数据。
+  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
-  assert.ok(html.includes('workflow-run-card'))
-  assert.ok(!html.includes('class="trace-row"'))
+  assert.ok(!html.includes('class="trace-row"'), '无数据也不得回退宿主默认工具行')
   assert.ok(html.includes('调用详情'))
   assert.ok(html.includes('原始脚本内容'))
   assert.ok(html.includes('原始工作流返回结果'))

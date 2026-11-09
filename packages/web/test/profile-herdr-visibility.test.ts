@@ -96,6 +96,7 @@ function makeStore(
     activeModal: null,
     highlightedEntry: null,
     notices: [],
+    setScreenParams: () => {},
     setTheme: () => {},
     setThemePreference: () => {},
     toggleTheme: () => {},

@@ -105,6 +105,7 @@ function makeStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
     activeModal: null,
     highlightedEntry: null,
     notices: [],
+    setScreenParams: noop,
     setTheme: noop,
     setThemePreference: noop,
     toggleTheme: noop,

@@ -39,9 +39,24 @@ import { AuthService } from '../src/services/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
 import { createHelm } from '../src/app.js'
 import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
-import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
+import { PluginHost, type PluginHostBackend, type PluginSessionDocStore } from '../src/plugins/index.js'
 
 const timeout = { timeout: 60_000 } as const
+
+/** 内存会话文档存储（workflow 插件 runs 分片用；与真实契约同键语义）。 */
+const memorySessionDocData = new Map<string, string>()
+const memorySessionDocs: PluginSessionDocStore = {
+  get(pluginId, name, conversationId) { return memorySessionDocData.get(`${pluginId}\0${name}\0${conversationId}`) },
+  put(pluginId, name, conversationId, valueJson) { memorySessionDocData.set(`${pluginId}\0${name}\0${conversationId}`, valueJson) },
+  delete(pluginId, name, conversationId) { memorySessionDocData.delete(`${pluginId}\0${name}\0${conversationId}`) },
+  listConversationIds(pluginId, name) {
+    return [...memorySessionDocData.keys()]
+      .filter((k) => k.startsWith(`${pluginId}\0${name}\0`))
+      .map((k) => Number(k.split('\0')[2]))
+      .sort((a, b) => a - b)
+  },
+  async flush() {},
+}
 
 const META = (name: string) => `export const meta = { name: "${name}", description: "test" }\n`
 
@@ -579,6 +594,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
       dataDir: join(dataDir, 'corrupt-index-plugins'),
       host: makeBackend(),
       docs: docsStore,
+      sessionDocs: memorySessionDocs,
     })
     await host.register(createWorkflowPlugin())
     delete recordsDoc[`workflow/run/${index[0]!.id}`]
@@ -617,6 +633,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
       dataDir: join(dataDir, 'corrupt-record-plugins'),
       host: makeBackend(),
       docs: docsStore,
+      sessionDocs: memorySessionDocs,
     })
     await host.register(createWorkflowPlugin())
     // 注册后（prepare 已通过）再注入损坏：模拟持久层外部篡改，验证 HTTP

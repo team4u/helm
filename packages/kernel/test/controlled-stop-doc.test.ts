@@ -170,15 +170,49 @@ class JsonDocStore implements PluginDocStore {
   }
 }
 
+/**
+ * 会话文档持久层替身（镜像 PluginSessionDocStore 契约）：内存 Map 存 JSON，
+ * 写入记录到 writes 供「真实写入」断言；与 JsonDocStore 分开模拟两张表。
+ */
+class JsonSessionDocStore {
+  private persisted = new Map<string, string>()
+  writes: string[] = []
+  flushCalls = 0
+  get(pluginId: string, name: string, conversationId: number): string | undefined {
+    return this.persisted.get(`${pluginId}\0${name}\0${conversationId}`)
+  }
+  put(pluginId: string, name: string, conversationId: number, valueJson: string): void {
+    this.persisted.set(`${pluginId}\0${name}\0${conversationId}`, valueJson)
+    this.writes.push(`${pluginId}:${name}:${conversationId}`)
+  }
+  delete(pluginId: string, name: string, conversationId: number): void {
+    this.persisted.delete(`${pluginId}\0${name}\0${conversationId}`)
+  }
+  listConversationIds(pluginId: string, name: string): number[] {
+    const out: number[] = []
+    for (const key of this.persisted.keys()) {
+      if (!key.startsWith(`${pluginId}\0${name}\0`)) continue
+      const id = Number(key.split('\0')[2])
+      if (Number.isSafeInteger(id) && id > 0) out.push(id)
+    }
+    return out.sort((a, b) => a - b)
+  }
+  async flush(): Promise<void> {
+    this.flushCalls += 1
+  }
+}
+
 let dataDir: string
 let backend: FakeBackend
 let docs: JsonDocStore
+let sessionDocs: JsonSessionDocStore
 
 function makeHost(options: { deferServices?: boolean } = {}): PluginHost {
   return new PluginHost({
     dataDir,
     host: backend,
     docs,
+    sessionDocs,
     ...(options.deferServices !== undefined ? { deferServices: options.deferServices } : {}),
   })
 }
@@ -187,6 +221,7 @@ beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'helm-stop-doc-'))
   backend = new FakeBackend()
   docs = new JsonDocStore()
+  sessionDocs = new JsonSessionDocStore()
 })
 
 afterEach(() => {
@@ -411,11 +446,14 @@ test('真实 workflow 插件：运行中 run 受控 dispose，终态落私有 re
   assert.ok(record, `run 记录应已持久（实际 keys=${JSON.stringify(Object.keys(records))}）`)
   assert.equal(record!.status, 'aborted', `close 应把运行中 run 显式结算为 aborted（实际 ${JSON.stringify(record)}）`)
 
-  // 公共 runs 投影：终态同步（dispose 的 stop 末尾最终投影）。
-  const runsDoc = docs.get<{ runs: Array<{ id: string; status: string }> }>('builtin:workflow:runs', { runs: [] })
+  // 公共 runs 会话分片投影：终态同步（dispose 的 stop 末尾最终投影）。
+  const runsDoc = JSON.parse(sessionDocs.get('builtin:workflow', 'runs', 1) ?? '{"runs":[]}') as { runs: Array<{ id: string; status: string }> }
   const projected = runsDoc.runs.find((r) => r.id === started.run.id)
-  assert.ok(projected, `公共 runs 投影应含该 run（实际 ${JSON.stringify(runsDoc.runs)}）`)
+  assert.ok(projected, `公共 runs 会话分片应含该 run（实际 ${JSON.stringify(runsDoc.runs)}）`)
   assert.equal(projected!.status, 'aborted', '投影状态与终态一致')
+  // 全局紧凑角标：同步写入（仅 count/tone/footerText，无完整 run 摘要）。
+  const badges = docs.get<{ byConversation: Record<string, { count: number }> }>('builtin:workflow:run-badges', { byConversation: {} })
+  assert.equal(badges.byConversation['1']?.count ?? 0, 1, `run-badges 应含会话 1 计数（实际 ${JSON.stringify(badges)}）`)
 
   // 重启语义：新 host 读同一持久层，记录一致可见（真实持久读回）。
   const host2 = makeHost()
@@ -558,8 +596,11 @@ test('受控 stop：最终 runs 投影写后 await 真实 flush（dispose 完成
   const flushCallsBefore = docs.flushCalls
   await host.dispose()
   // stop 链：close（内部 state.flush）→ 最终投影 → records.flush（stop 尾部）。
+  // 真实 runtime 中会话分片与全局 doc 共享同一事务队列；本测试替身分表，
+  // 故分别断言两边都真实写入了。
   assert.ok(docs.flushCalls > flushCallsBefore, `stop 末尾必须 await 真实 flush（前 ${flushCallsBefore} 后 ${docs.flushCalls}）`)
   // 持久层含最终投影与 run 记录（真实读回）。
-  assert.ok(docs.writes.includes('builtin:workflow:runs'), '最终 runs 投影已写入')
+  assert.ok(sessionDocs.writes.includes('builtin:workflow:runs:1'), '最终 runs 会话分片已写入')
   assert.ok(docs.writes.includes('builtin:workflow:records'), 'records 已写入')
+  assert.ok(docs.writes.includes('builtin:workflow:run-badges'), 'run-badges 角标已写入')
 })

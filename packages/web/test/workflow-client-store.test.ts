@@ -12,6 +12,7 @@ import { HelmStoreContext } from '../src/lib/store-context.js'
 import { applySnapshot, applyEventFrame, emptyLiveState } from '../src/lib/live-state.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { seedPluginClientModule, resetPluginClientCache } from '../src/lib/plugin-client.js'
+import { resetSessionDocSubscriptions } from '../src/lib/session-docs.js'
 import { importWorkflowClientModule, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
 import { makeTestStore } from './helpers/store.js'
 import { workflowUi } from './helpers/workflow-ui.js'
@@ -35,6 +36,26 @@ function seed() {
   globalThis.fetch = async () => new Response('', { headers: { 'x-helm-client-hash': 'seeded' } })
 }
 
+/**
+ * mock 会话文档订阅（runs 分片）：初始 GET 返回 runs，SSE 事件流提供空挂起流
+ * （不推送增量；测试经重渲染注入新快照）。
+ */
+function seedSessionRuns(runs: () => unknown): void {
+  seedPluginClientModule('builtin:workflow', 'index.tsx', module)
+  globalThis.fetch = async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.includes('/docs/runs?conversationId=')) {
+      return new Response(JSON.stringify({ pluginId: 'builtin:workflow', name: 'runs', conversationId: 1, value: { runs: runs() } }),
+        { headers: { 'content-type': 'application/json' } })
+    }
+    if (url.includes('/docs/runs/events?conversationId=')) {
+      return new Response(new ReadableStream({ start() { /* 挂起空流：不推送帧 */ } }),
+        { headers: { 'content-type': 'text/event-stream' } })
+    }
+    return new Response('', { headers: { 'x-helm-client-hash': 'seeded' } })
+  }
+}
+
 function mount() {
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -49,14 +70,15 @@ function mount() {
 }
 
 test('真实共享 hooks 消费 snapshot/plugin.doc.updated：父工具已返回仍展示后台运行，点击保留工作台', { timeout: 60_000 }, async () => {
-  seed()
+  let runsValue: unknown = []
+  seedSessionRuns(() => runsValue)
   const parent = conversation(1)
   const child = { ...conversation(11), parentConversationId: 1, parentToolCallId: 'call-bg' }
   const run: WorkflowRunSummary = { id: 'wf_bg', kind: 'subagent', name: '后台任务', conversationId: 1,
     parentToolCallId: 'call-bg', status: 'running', createdAt: 1, updatedAt: 2,
     nodes: [{ id: 'agent', kind: 'agent', status: 'running', conversationId: 11 }] }
-  let state = applySnapshot(emptyLiveState(), { seq: 1, conversations: [parent, child], pendingAsks: [], plugins: [plugin], ui: workflowUi,
-    pluginDocs: [{ pluginId: plugin.id, name: 'runs', value: { runs: [run] } }] })
+  runsValue = [run]
+  let state = applySnapshot(emptyLiveState(), { seq: 1, conversations: [parent, child], pendingAsks: [], plugins: [plugin], ui: workflowUi })
   const entries = [
     { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'call-bg', name: 'subagent', arguments: { prompt: '跑后台测试' } }] }] },
     { id: '2', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'call-bg', toolName: 'subagent', content: [{ type: 'text', text: JSON.stringify({ execution: { conversationId: 11 } }) }] }] },
@@ -89,18 +111,22 @@ test('真实共享 hooks 消费 snapshot/plugin.doc.updated：父工具已返回
     assert.match(ui.host.textContent!, /等待审批/)
     assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar') === null, 'blocked 子会话仍隐藏复制/分叉')
     state = applyEventFrame(state, { seq: 3, event: { type: 'conversation.upsert', conversation: child } })
-    state = applyEventFrame(state, { seq: 4, event: { type: 'plugin.doc.updated', doc: { pluginId: plugin.id, name: 'runs', value: { runs: [{ ...run, status: 'failed', error: 'Gate 命令退出码 1' }] } } } })
+    // runs 已改会话分片：终态经 seedSessionRuns 注入的新值到达（下次订阅拉取）。
+    runsValue = [{ ...run, status: 'failed', error: 'Gate 命令退出码 1' }]
+    await act(async () => { resetSessionDocSubscriptions() })
     await ui.render(store(), timeline)
     assert.match(ui.host.textContent!, /Gate 命令退出码 1/)
     assert.doesNotMatch(ui.host.textContent!, /后台运行中/)
     assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar'), '后台终态后恢复复制/分叉')
 
-    state = applyEventFrame(state, { seq: 5, event: { type: 'plugin.changed', plugin: { ...plugin, enabled: false }, ui: [] } })
+    state = applyEventFrame(state, { seq: 4, event: { type: 'plugin.changed', plugin: { ...plugin, enabled: false }, ui: [] } })
     await ui.render(store(), timeline)
     assert.equal(ui.host.querySelector('.subagent-card-clickable'), null, '停用必须卸载插件 UI')
     assert.deepEqual(state.pluginDocs, {}, '停用必须清文档')
-    state = applyEventFrame(state, { seq: 6, event: { type: 'plugin.changed', plugin, ui: workflowUi } })
-    state = applyEventFrame(state, { seq: 7, event: { type: 'plugin.doc.updated', doc: { pluginId: plugin.id, name: 'runs', value: { runs: [{ ...run, status: 'completed' }] } } } })
+    state = applyEventFrame(state, { seq: 5, event: { type: 'plugin.changed', plugin, ui: workflowUi } })
+    // 重启用后经会话分片到达 completed 终态。
+    runsValue = [{ ...run, status: 'completed' }]
+    await act(async () => { resetSessionDocSubscriptions() })
     await ui.render(store(), timeline)
     assert.equal(ui.host.querySelectorAll('.subagent-card-clickable').length, 1)
     assert.match(ui.host.textContent!, /已完成/)
@@ -150,15 +176,22 @@ test('WorkflowToolView 与无 nativechild 的外部 subagent 按真实 run.runni
         nodes: [{ id: 'external', kind: 'agent', status: 'running', executionId: 'pane-42' }],
       }
       const timeline = e(ConversationTimeline, { conversation: parent, detailEntries: settledEntries(callId, toolName), onRequestEdit: () => {} })
-      const store = (status: WorkflowRunSummary['status'], enabled = true) => makeTestStore({ conversations: [parent],
-        groupedUi: groupUiContributions(enabled ? workflowUi : []), pluginDocs: { 'builtin:workflow/runs': { runs: [{ ...run, status }] } },
-      })
+      let shardStatus: WorkflowRunSummary['status'] = 'running'
+      seedSessionRuns(() => [{ ...run, status: shardStatus }])
+      const store = (status: WorkflowRunSummary['status'], enabled = true) => {
+        shardStatus = status
+        return makeTestStore({ conversations: [parent], groupedUi: groupUiContributions(enabled ? workflowUi : []) })
+      }
       await ui.render(store('running'), timeline)
       assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar') === null, `${toolName} done 工具仍有后台活动`)
       for (const status of ['failed', 'aborted', 'completed'] as const) {
         await ui.render(store(status), timeline)
+        await act(async () => { resetSessionDocSubscriptions() })
+        await ui.render(store(status), timeline)
         assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar'), `${toolName} ${status} 必须释放活动`)
       }
+      await ui.render(store('running'), timeline)
+      await act(async () => { resetSessionDocSubscriptions() })
       await ui.render(store('running'), timeline)
       assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar') === null)
       await ui.render(store('running', false), timeline)
@@ -215,13 +248,18 @@ test('外部 executionId 续接仅最新调用上报活动，不能编造 native
   const newEntries = settledEntries('ext-new', 'subagent', 5, { resume: 'pane-42' })
   const timeline = e(ConversationTimeline, { conversation: parent, detailEntries: [...oldEntries, ...newEntries], onRequestEdit: () => {} })
   try {
-    const store = (status: WorkflowRunSummary['status']) => makeTestStore({ conversations: [parent], groupedUi: groupUiContributions(workflowUi),
-      pluginDocs: { 'builtin:workflow/runs': { runs: [run, { ...run, id: 'external-new', parentToolCallId: 'ext-new', status }] } },
-    })
+    let extStatus: WorkflowRunSummary['status'] = 'running'
+    seedSessionRuns(() => [run, { ...run, id: 'external-new', parentToolCallId: 'ext-new', status: extStatus }])
+    const store = (status: WorkflowRunSummary['status']) => {
+      extStatus = status
+      return makeTestStore({ conversations: [parent], groupedUi: groupUiContributions(workflowUi) })
+    }
     await ui.render(store('running'), timeline)
     const bars = () => [...ui.host.querySelectorAll('.msg-ai-block')].map((turn) => turn.querySelector('.msg-hover-bar') !== null)
     assert.deepEqual(bars(), [true, false])
     assert.equal(ui.host.querySelectorAll('.subagent-card-clickable').length, 0)
+    await ui.render(store('completed'), timeline)
+    await act(async () => { resetSessionDocSubscriptions() })
     await ui.render(store('completed'), timeline)
     assert.deepEqual(bars(), [true, true], '旧外部 run.running 不能让已续接完成的旧调用重新 busy')
   } finally { await ui.close() }

@@ -145,15 +145,40 @@ class MemoryDocStore implements PluginDocStore {
   async flush(): Promise<void> {}
 }
 
+class MemorySessionDocStore {
+  store = new Map<string, string>()
+  get(pluginId: string, name: string, conversationId: number): string | undefined {
+    return this.store.get(`${pluginId}\0${name}\0${conversationId}`)
+  }
+  put(pluginId: string, name: string, conversationId: number, valueJson: string): void {
+    this.store.set(`${pluginId}\0${name}\0${conversationId}`, valueJson)
+  }
+  delete(pluginId: string, name: string, conversationId: number): void {
+    this.store.delete(`${pluginId}\0${name}\0${conversationId}`)
+  }
+  listConversationIds(pluginId: string, name: string): number[] {
+    const out: number[] = []
+    for (const key of this.store.keys()) {
+      if (!key.startsWith(`${pluginId}\0${name}\0`)) continue
+      const id = Number(key.split('\0')[2])
+      if (Number.isSafeInteger(id) && id > 0) out.push(id)
+    }
+    return out.sort((a, b) => a - b)
+  }
+  async flush(): Promise<void> {}
+}
+
 let dataDir: string
 let backend: FakeBackend
 let docs: MemoryDocStore
+let sessionDocs: MemorySessionDocStore
 
 function makeHost(options: { deferServices?: boolean } = {}): PluginHost {
   return new PluginHost({
     dataDir,
     host: backend,
     docs,
+    sessionDocs,
     ...(options.deferServices !== undefined ? { deferServices: options.deferServices } : {}),
   })
 }
@@ -189,6 +214,7 @@ beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'helm-plugin-barrier-'))
   backend = new FakeBackend()
   docs = new MemoryDocStore()
+  sessionDocs = new MemorySessionDocStore()
 })
 
 afterEach(() => {

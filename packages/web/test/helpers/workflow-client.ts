@@ -34,9 +34,13 @@ export function setWorkflowClientStub(options: WorkflowClientStubOptions = {}): 
 }
 
 // 编译产物持有这个对象的引用。测试只更新数据，不替换共享命名空间身份。
+// runs 已是会话分片：stub.docValue 同时充当 usePluginSessionDoc('runs', ...) 的
+// 返回值（组件不再读全局 runs 文档）。
 const sharedPluginClientNamespace = {
   ...HelmPluginClient,
   usePluginDoc: (name: string) => realHooks ? HelmPluginClient.usePluginDoc(name) : stub.docValue,
+  usePluginSessionDoc: (name: string, options?: { conversationId?: number }) =>
+    realHooks ? HelmPluginClient.usePluginSessionDoc(name, options) : stub.docValue,
   useConversations: () => realHooks ? HelmPluginClient.useConversations() : stub.conversations ?? [],
   useConversation: (id: number | undefined) => realHooks
     ? HelmPluginClient.useConversation(id)

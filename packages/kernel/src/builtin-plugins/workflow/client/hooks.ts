@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorkflowRunSummary } from '@helm/protocol'
-import { useConversation, useConversations, usePluginDoc } from '@helm/plugin-client'
+import { useConversation, useConversations, usePluginDoc, usePluginSessionDoc } from '@helm/plugin-client'
 import { isScrolledToBottom } from './models.ts'
 
 /** 只在用户仍贴底时跟随流式输出；上滚阅读历史后不抢回滚动位置。 */
@@ -20,9 +20,9 @@ export function useStreamFollow(content: unknown) {
   return { ref, onScroll }
 }
 
-/** 订阅 builtin:workflow 公开文档 runs（WorkflowRunsDocState）。 */
-export function useWorkflowRunsDoc<T = { runs: WorkflowRunSummary[] }>(docName: string): T | undefined {
-  return usePluginDoc<T>(docName)
+/** 订阅 builtin:workflow 公开文档 runs（会话分片，仅当前会话的 run 列表）。 */
+export function useWorkflowRunsDoc<T = { runs: WorkflowRunSummary[] }>(docName: string, conversationId: number | undefined): T | undefined {
+  return usePluginSessionDoc<T>(docName, conversationId !== undefined ? { conversationId } : undefined)
 }
 
 /** 运行中秒表：SSR 首帧不启动时钟，仅客户端 useEffect 定时推进（确定性渲染）。 */
@@ -44,4 +44,4 @@ function useElapsedState(active: boolean): [number | undefined, (v: number) => v
   return [nowMs, setNowMs]
 }
 
-export { useConversation, useConversations, usePluginDoc }
+export { useConversation, useConversations, usePluginDoc, usePluginSessionDoc }

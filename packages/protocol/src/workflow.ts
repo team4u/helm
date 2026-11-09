@@ -120,6 +120,9 @@ export type WorkflowRunState = WorkflowRunSummary
 export const WORKFLOW_PLUGIN_ID = 'builtin:workflow' as const
 export const WORKFLOW_RUNS_DOC = 'runs' as const
 
+/** 全局紧凑角标文档名（仅每会话 count/tone/footerText，不含完整 run 摘要）。 */
+export const WORKFLOW_RUN_BADGES_DOC = 'run-badges' as const
+
 export interface WorkflowConversationBadgeSummary {
   count: number
   tone?: 'warn' | 'accent' | 'neutral'
@@ -131,5 +134,15 @@ export interface WorkflowRunsDocState {
   runs: WorkflowRunSummary[]
   /** 按会话 ID 聚合的工作台角标与底部状态文案（供 WorkbenchPanelSpec.badge 消费）。 */
   byConversation?: Record<string, WorkflowConversationBadgeSummary>
+}
+
+/** `builtin:workflow` 会话级文档 `runs` 的分片快照（仅单会话自身的 run 列表）。 */
+export interface WorkflowRunSessionDocState {
+  runs: WorkflowRunSummary[]
+}
+
+/** `builtin:workflow` 全局紧凑角标文档 `run-badges` 的结构化快照。 */
+export interface WorkflowRunBadgesDocState {
+  byConversation: Record<string, WorkflowConversationBadgeSummary>
 }
 

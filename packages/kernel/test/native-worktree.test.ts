@@ -628,6 +628,13 @@ async function executeCleanupTool(
       set: () => {},
       flush: async () => {},
     },
+    sessionDocs: {
+      get: () => undefined,
+      put: () => {},
+      delete: () => {},
+      listConversationIds: () => [],
+      flush: async () => {},
+    },
   })
   try {
     await host.register(createWorkflowPlugin())
