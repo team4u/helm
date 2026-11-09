@@ -1,7 +1,5 @@
 /**
- * builtin:workflow 插件 client 交互测试（真实 DOM 客户端渲染，无 SSR 混用）：
- * 同一 React 实例上先 renderToString（server internals）再 createRoot 会污染
- * dispatcher，因此交互用例独立成文件，仅走 createRoot + act 真实事件路径。
+ * builtin:workflow 插件 client 交互测试（真实编译产物 + 共享宿主 SDK + DOM 事件）。
  *
  * - 一体化整卡点击 / 回车触发 ctx.openConversationDrawer（不跳主屏、不开分屏）；
  * - 工作流节点内嵌子代理卡同样走统一抽屉入口；
@@ -87,7 +85,7 @@ function makeSpyCtx(): SpyCtx {
 async function mountClient(
   ctx: PluginClientContext,
   element: React.ReactElement,
-): Promise<{ host: HTMLElement; unmount: () => void }> {
+): Promise<{ host: HTMLElement; rerender: (element: React.ReactElement) => Promise<void>; unmount: () => void }> {
   const host = document.createElement('div')
   document.body.appendChild(host)
   let root: ReturnType<typeof createRoot> | undefined
@@ -98,6 +96,9 @@ async function mountClient(
   await act(async () => {})
   return {
     host,
+    rerender: async (element) => {
+      await act(async () => { root?.render(e(PluginClientContext.Provider, { value: ctx }, element)) })
+    },
     unmount: () => {
       act(() => root?.unmount())
       host.remove()
@@ -138,6 +139,11 @@ test('一体化整卡点击 / 回车触发 openConversationDrawer（不跳主屏
       card!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
     assert.deepEqual(spy.drawerCalls, [11], '回车必须同样触发抽屉入口')
+    spy.drawerCalls.length = 0
+    const space = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
+    act(() => { card!.dispatchEvent(space) })
+    assert.deepEqual(spy.drawerCalls, [11], '空格必须同样触发抽屉入口')
+    assert.equal(space.defaultPrevented, true, '空格打开卡片时不得滚动页面')
   } finally {
     unmount()
   }
@@ -222,7 +228,72 @@ test('中止 / 清理按钮 stopPropagation：点击按钮不触发整卡打开�
       abortBtn!.click()
     })
     assert.deepEqual(actionCalls.map(([id]) => id), ['abort'], '按钮必须触发 abort 动作')
-    assert.deepEqual(spy.drawerCalls, [], '按钮点击不得冒泡触发整卡抽屉入口')
+    const cleanup = host.querySelector('[aria-label="清理隔离工作树"]') as HTMLElement
+    assert.ok(cleanup)
+    await act(async () => { cleanup.click() })
+    assert.deepEqual(actionCalls, [['abort', { runId: 'wf_bg' }], ['cleanup_worktree', { path: '/wt/x' }]])
+    for (const button of [abortBtn!, cleanup]) {
+      for (const key of ['Enter', ' ']) {
+        act(() => { button.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })
+      }
+    }
+    assert.deepEqual(spy.drawerCalls, [], '动作按钮点击与键盘不得冒泡触发整卡抽屉入口')
+  } finally {
+    unmount()
+  }
+})
+
+test('详情加载失败可重试；内嵌详情、重试与产物操作的点击/键盘不打开抽屉', { timeout: 60_000 }, async () => {
+  let reloads = 0
+  const child = summary(11, 'done')
+  setWorkflowClientStub({
+    conversation: () => ({ summary: child, pendingAsks: [], loadError: '网关超时', reload: () => { reloads++ } }),
+  })
+  const spy = makeSpyCtx()
+  const artifacts: string[] = []
+  spy.openArtifact = (id) => { artifacts.push(id) }
+  const mod = await importWorkflowClientModule()
+  const Card = mod.SubagentLiveCard as React.ComponentType<Record<string, unknown>>
+  const { host, unmount } = await mountClient(spy, e(Card, { childConversationId: 11, toolStatus: 'done', expanded: true }))
+  try {
+    assert.match(host.textContent!, /加载失败.*网关超时/)
+    const retry = host.querySelector('[aria-label="重新加载子会话详情"]') as HTMLElement
+    const details = host.querySelector('details')!
+    const summary = details.querySelector('summary')!
+    await act(async () => { retry.click(); summary.click() })
+    assert.equal(reloads, 1)
+    for (const control of [retry, summary]) {
+      for (const key of ['Enter', ' ']) {
+        act(() => { control.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })
+      }
+    }
+    assert.deepEqual(spy.drawerCalls, [], '重试与内嵌详情不得打开抽屉')
+
+    const Details = mod.ToolCallDetailsInline as React.ComponentType<Record<string, unknown>> | undefined
+    // 详情通过子代理卡的真实编译依赖路径覆盖；不得直接调用组件 props handler。
+    assert.ok(details.classList.contains('tool-call-details'))
+    assert.equal(Details, undefined, '内部详情不需要成为宿主专用导出')
+    assert.deepEqual(artifacts, [])
+  } finally {
+    unmount()
+  }
+})
+
+test('工具输出从未返回到对象再到文本时保留 hook 顺序，调用详情始终可用', { timeout: 60_000 }, async () => {
+  setWorkflowClientStub()
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('ToolCallDetailsInline.tsx')
+  const Details = mod.ToolCallDetailsInline as React.ComponentType<Record<string, unknown>>
+  const artifacts: string[] = []
+  spy.openArtifact = (id) => { artifacts.push(id) }
+  const { host, rerender, unmount } = await mountClient(spy, e(Details, { input: { prompt: '任务' } }))
+  try {
+    await rerender(e(Details, { result: { ok: true }, artifactRef: 'art_full' }))
+    assert.match(host.textContent!, /"ok": true/)
+    await act(async () => { (host.querySelector('button') as HTMLElement).click() })
+    assert.deepEqual(artifacts, ['art_full'])
+    await rerender(e(Details, { result: '完成' }))
+    assert.match(host.textContent!, /完成/)
   } finally {
     unmount()
   }

@@ -7,7 +7,7 @@
     "dev": "vite --port 3201 --strictPort",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p ../kernel/tsconfig.client.json",
-    "test": "tsx --test \"test/*.test.ts\""
+    "test": "tsx --tsconfig tsconfig.test.json --test \"test/*.test.ts\""
   },
   "dependencies": {
     "@helm/protocol": "workspace:*",

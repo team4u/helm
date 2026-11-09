@@ -5,31 +5,31 @@
  *   动态 import（与浏览器 Blob URL 动态 import 语义一致）；
  * - 共享依赖经 __helm_shared_* 命名空间解析（与 HelmStoreProvider 挂载一致）；
  * - @helm/plugin-client 共享模块注入 stub 上下文（纯逻辑/SSR 渲染均够用）；
- * - kernel 未构建时显式报错引导先 pnpm --filter @helm/kernel build，不降级 mock。
+ * - tsx 直接执行当前 worktree 的真实编译器源码，不依赖整个 kernel 构建或私有脚本。
  */
 import * as React from 'react'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as ReactDom from 'react-dom'
 import * as ReactDomClient from 'react-dom/client'
 import * as LucideReact from 'lucide-react'
-import { existsSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { after } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import * as HelmPluginClient from '../src/lib/plugin-client-context.js'
-
-const kernelDist = fileURLToPath(new URL('../../../kernel/dist/plugins/client-compiler.js', import.meta.url))
-if (!existsSync(kernelDist)) {
-  throw new Error('测试需要真实 kernel 编译产物：请先运行 pnpm --filter @helm/kernel build')
-}
-const { compilePluginClientModule } = (await import(kernelDist)) as typeof import('../../../kernel/dist/plugins/client-compiler.js')
+import { compilePluginClientModule } from '../../../kernel/src/plugins/client-compiler.js'
+import * as HelmPluginClient from '../../src/lib/plugin-client-context.js'
 
 const WORKFLOW_CLIENT_ROOT = fileURLToPath(new URL('../../../kernel/src/builtin-plugins/workflow/client', import.meta.url))
-const CACHE_DIR = '/tmp/helm-web-workflow-client-test'
+const CACHE_DIR = mkdtempSync(join(tmpdir(), 'helm-web-workflow-client-'))
+after(() => rmSync(CACHE_DIR, { recursive: true, force: true }))
 
 export interface StubPluginClientContext {
   pluginId: string
   callAction: (actionId: string, input?: unknown) => Promise<unknown>
   openScreen: (target: string) => void
   openSplitScreen: (target: string) => void
+  openConversationDrawer: (conversationId: number) => void
   openArtifact: (artifactId: string) => void
   openWorkbench: (panelId?: string) => void
   closeWorkbench: () => void
@@ -72,32 +72,23 @@ export function setWorkflowClientStub(opts: WorkflowClientStubOptions = {}): voi
   stubState.context = opts.context
 }
 
+let realHooks = false
 const sharedPluginClientNamespace = {
-  usePluginDoc: () => stubState.docValue,
-  useConversations: () => stubState.conversations,
-  useConversation: (id: number | undefined) =>
-    stubState.conversation !== undefined
-    ? (stubState.conversation(id) as never)
-    : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
-  usePluginContext: (): StubPluginClientContext =>
-    stubState.context ?? {
-      pluginId: 'builtin:workflow',
-      callAction: async () => undefined,
-      openScreen: () => {},
-  openConversationDrawer: () => {},
-      openSplitScreen: () => {},
-      openArtifact: () => {},
-      openWorkbench: () => {},
-      closeWorkbench: () => {},
-      notify: () => {},
-      getPluginDoc: async () => undefined,
-      theme: 'dark',
-    },
+  ...HelmPluginClient,
+  usePluginDoc: (name: string) => realHooks ? HelmPluginClient.usePluginDoc(name) : stubState.docValue,
+  useConversations: () => realHooks ? HelmPluginClient.useConversations() : stubState.conversations,
+  useConversation: (id: number | undefined) => realHooks
+    ? HelmPluginClient.useConversation(id)
+    : stubState.conversation?.(id) ?? { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
+  usePluginContext: (): StubPluginClientContext => {
+    const context = HelmPluginClient.usePluginContext()
+    return stubState.context ?? context
+  },
 }
 
 /** 挂载 __helm_shared_* 命名空间（幂等；每个测试文件 before 钩号调用一次即可）。 */
-export function mountSharedPluginNamespaces(_opts: WorkflowClientStubOptions = {}): void {
-  void _opts
+export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {}): void {
+  realHooks = options.realHooks === true
   const g = globalThis as unknown as Record<string, unknown>
   g.__helm_shared_react = React
   g.__helm_shared_react_dom = ReactDom

@@ -25,16 +25,24 @@ export function ToolCallDetailsInline({ input, result, artifactRef }: ToolCallDe
       return String(input)
     }
   }, [input])
-  const resultText = typeof result === 'string' ? result : result !== undefined ? useMemo(() => {
+  const resultText = useMemo(() => {
+    if (result === undefined) return undefined
+    if (typeof result === 'string') return result
     try {
       return JSON.stringify(result, null, 2)
     } catch {
       return String(result)
     }
-  }, [result]) : undefined
+  }, [result])
 
   return (
-    <details className="tool-call-details" open={open} onToggle={(e: unknown) => setOpen((e as { currentTarget: { open: boolean } }).currentTarget.open)}>
+    <details
+      className="tool-call-details"
+      open={open}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
       <summary>调用详情</summary>
       <div className="trace-expanded-body selectable">
         {inputJson !== undefined ? (

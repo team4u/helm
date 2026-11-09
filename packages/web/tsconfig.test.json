@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@helm/protocol": ["../protocol/src/index.ts"]
+    }
+  },
+  "include": ["test/**/*.ts", "test/**/*.tsx"]
+}

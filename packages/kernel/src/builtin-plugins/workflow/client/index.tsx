@@ -76,7 +76,7 @@ function toolStatusOf(status: 'running' | 'done' | 'error'): 'running' | 'done' 
   return status
 }
 
-function SubagentLiveCardBody(props: {
+export function SubagentLiveCard(props: {
   childConversationId: number
   toolStatus: 'running' | 'done' | 'error' | 'unknown'
   backgroundRun?: WorkflowRunSummary
@@ -157,10 +157,12 @@ function SubagentLiveCardBody(props: {
       role="button"
       tabIndex={0}
       className={`${cardClass} subagent-card-clickable`}
-      aria-label={`打开子会话 #${childConversationId}`}
+      aria-label={`打开子会话 #${childConversationId} 抽屉`}
       title={[taskTitle, summary?.profileId, wt?.branch, statSegments.join(' · '), '点击打开子会话'].filter(Boolean).join('\n')}
       onClick={openChild}
       onKeyDown={(e) => {
+        // 内嵌动作、details/summary 的键盘激活属于控件本身，而非卡片导航。
+        if (e.target !== e.currentTarget) return
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
           openChild()
@@ -271,7 +273,10 @@ function SubagentLiveCardBody(props: {
             ) : line.kind === 'tool' ? (
               <div key={line.key} className="subagent-stream-line subagent-stream-tool">
                 <Icon name={line.status === 'running' ? 'loader' : line.isError ? 'x' : 'check'} size={11} className={line.status === 'running' ? SPIN : undefined} />
-                <span className="subagent-stream-body">{line.toolName} {line.summary}{line.resultPreview !== undefined ? ` → ${line.resultPreview}` : ''}</span>
+                <span className="subagent-stream-body">
+                {line.toolName} {line.summary}{line.resultPreview !== undefined ? `：${line.resultPreview}` : ''}
+                {line.resultPreview?.endsWith('…') ? <span className="subagent-stream-truncated">（已截断）</span> : null}
+              </span>
               </div>
             ) : (
               <div key={line.key} className="subagent-stream-line">
@@ -423,7 +428,7 @@ export function SubagentToolView(props: {
   }
 
   return (
-    <SubagentLiveCardBody
+    <SubagentLiveCard
       childConversationId={childId}
       toolStatus={toolStatusOf(props.status)}
       backgroundRun={meta.run}
@@ -767,7 +772,7 @@ function WorkflowSubagentNodeCard({ node }: { node: WorkflowNodeState }): ReactN
   const nodeStats = useMemo(() => formatWorkflowNodeStats(node), [node])
   return (
     <div className="workflow-subagent-node-card">
-      <SubagentLiveCardBody
+      <SubagentLiveCard
         childConversationId={node.conversationId!}
         toolStatus={node.status === 'running' ? 'running' : node.status === 'failed' ? 'error' : node.status === 'done' ? 'done' : 'unknown'}
         startedAt={node.startedAt}
@@ -1018,7 +1023,7 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
         <>
           <div className="trace-section-label">子代理会话</div>
           {subagentItems.map((item) => (
-            <SubagentLiveCardBody
+            <SubagentLiveCard
               key={item.conversationId}
               childConversationId={item.conversationId}
               toolStatus={item.summary?.status === 'working' ? 'running' : item.summary?.status === 'error' ? 'error' : item.backgroundRun?.status === 'running' ? 'running' : item.backgroundRun?.status === 'failed' || item.backgroundRun?.status === 'aborted' ? 'error' : 'done'}
