@@ -70,7 +70,7 @@ import { PluginHost, type DerivedToolSpec } from '../plugins/index.js'
 import { createEnvFabric, tokenAuthenticator, type EnvFabric } from '../env/index.js'
 import { AskService } from './asks.js'
 import { ConversationTracker } from './conversations.js'
-import { EventHub } from './events.js'
+import { EventHub, SessionDocEventHub } from './events.js'
 import { createFileModelsStore } from './models-store.js'
 import { buildModels, requireModelRef } from './models.js'
 import type { ModelCatalog } from '@helm/protocol'
@@ -136,6 +136,8 @@ export class KernelRuntime {
   private readonly registry: Registry
   private readonly store: HelmStore
   readonly events: EventHub
+  /** 会话文档专用事件面（HTTP sessionDocEvents 端口；同一实例，构造器中接线）。 */
+  readonly sessionDocEvents: SessionDocEventHub
   private readonly tracker: ConversationTracker
   private readonly asks: AskService
   private readonly stashService = new SecretStash()
@@ -193,6 +195,8 @@ export class KernelRuntime {
   readonly modelsRegistry: ModelRegistry
   /** hook 桥（7 类生命周期钩子 -> PluginHost runHook）。 */
   private readonly hookBridge: HookBridge
+  /** 会话文档专用事件面（plugin.session_doc.updated 只进专用 SSE，不进全局广播）。 */
+  private readonly sessionDocStreams = new SessionDocEventHub()
 
   static async open(options: KernelRuntimeOptions = {}): Promise<KernelRuntime> {
     const dataDir = resolveDataDir(options.dataDir)
@@ -475,6 +479,8 @@ export class KernelRuntime {
       persistSeq: (seq) => this.store.setEventSeq(seq),
     })
     this.events.redactFn = (t) => this.stashService.redact(t)
+    this.sessionDocStreams.redact = (t) => this.stashService.redact(t)
+    this.sessionDocEvents = this.sessionDocStreams
 
     this.asks = new AskService({
       store: this.store,
@@ -641,6 +647,17 @@ export class KernelRuntime {
         emitEvent: (type, payload) => this.emitHostEvent(type, payload),
       },
       docs: this.documentStore,
+      sessionDocs: {
+        get: (pluginId, name, conversationId) =>
+          this.store.getPluginSessionDoc(pluginId, name, conversationId),
+        put: (pluginId, name, conversationId, valueJson) =>
+          this.store.putPluginSessionDoc(pluginId, name, conversationId, valueJson),
+        delete: (pluginId, name, conversationId) =>
+          this.store.deletePluginSessionDoc(pluginId, name, conversationId),
+        listConversationIds: (pluginId, name) =>
+          this.store.listPluginSessionDocConversations(pluginId, name),
+        flush: () => this.store.flushPublic(),
+      },
       config: this.pluginConfig,
     })
     this.pluginHost = host
@@ -781,6 +798,12 @@ export class KernelRuntime {
         ui: Array.isArray(envelope?.ui) ? envelope!.ui : [],
       })
       return
+    }
+    if (type === 'plugin.session_doc.updated') {
+      // 会话文档事件绝不进入全局 /api/events 广播：只投递内部订阅面
+      // （会话文档专用 SSE 流在 sessionDocStreams 消费），防止写放大与跨会话泄漏。
+      this.sessionDocStreams.dispatch(payload)
+      return this.dispatchInternalEvent(type, payload)
     }
     this.events.publish(type, payload)
     return this.dispatchInternalEvent(type, payload)
@@ -1901,6 +1924,7 @@ export class KernelRuntime {
     const storeError = await this.store.close()
     await this.database.close()
     this.events.close()
+    this.sessionDocStreams.close()
     this.stashService.clear()
     if (storeError !== undefined) {
       throw new HelmError('store_flush_failed', `退出时持久化失败：${String(storeError)}`, 500, {

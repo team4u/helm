@@ -70,6 +70,13 @@ export interface PluginDocRow {
   valueJson: string
 }
 
+export interface PluginSessionDocRow {
+  pluginId: string
+  name: string
+  conversationId: number
+  valueJson: string
+}
+
 type Deferred = () => Promise<void>
 
 export class HelmStore {
@@ -78,6 +85,8 @@ export class HelmStore {
   private readonly asks = new Map<string, AskRow>()
   private readonly artifacts = new Map<string, ArtifactRow>()
   private readonly pluginDocs = new Map<string, string>() // pluginId\0name -> json
+  /** 会话文档镜像：pluginId\0name\0conversationId -> json。 */
+  private readonly pluginSessionDocs = new Map<string, string>()
   /** 逻辑删除墓碑：重启后不重新导入 SDK 保留的内部历史。 */
   private readonly tombstones = new Set<number>()
   /**
@@ -199,6 +208,15 @@ export class HelmStore {
       parseStoredJson<unknown>(`helm_plugin_docs#${row.plugin_id}:${row.name}.value`, row.value)
       this.pluginDocs.set(row.plugin_id + '\0' + row.name, row.value)
     }
+    for (const row of await this.db.all<{ plugin_id: string; name: string; conversation_id: number; value: string }>(
+      'SELECT plugin_id, name, conversation_id, value FROM helm_plugin_session_docs',
+    )) {
+      parseStoredJson<unknown>(
+        `helm_plugin_session_docs#${row.plugin_id}:${row.name}#${row.conversation_id}.value`,
+        row.value,
+      )
+      this.pluginSessionDocs.set(`${row.plugin_id}\0${row.name}\0${row.conversation_id}`, row.value)
+    }
     const seqRow = await this.db.get<{ value: number }>(
       "SELECT value FROM helm_seq WHERE key = 'events'",
     )
@@ -317,6 +335,11 @@ export class HelmStore {
     for (const [artifactId, row] of this.artifacts) {
       if (row.conversationId === id) this.artifacts.delete(artifactId)
     }
+    // 会话文档镜像同步清理（库行在同一事务内删除，不留孤儿数据）。
+    for (const key of [...this.pluginSessionDocs.keys()]) {
+      const convId = Number(key.split('\0')[2])
+      if (convId === id) this.pluginSessionDocs.delete(key)
+    }
     this.enqueue(() =>
       this.db.transaction(async (tx) => {
         await tx.run(
@@ -329,6 +352,7 @@ export class HelmStore {
         await tx.run('DELETE FROM helm_asks WHERE conversation_id = ?', id)
         await tx.run('DELETE FROM helm_artifacts WHERE conversation_id = ?', id)
         await tx.run('DELETE FROM helm_conversation_fts WHERE conversation_id = ?', id)
+        await tx.run('DELETE FROM helm_plugin_session_docs WHERE conversation_id = ?', id)
       }),
     )
   }
@@ -458,6 +482,59 @@ export class HelmStore {
       if (key.startsWith(pluginId + '\0')) this.pluginDocs.delete(key)
     }
     this.enqueue(() => this.db.run('DELETE FROM helm_plugin_docs WHERE plugin_id = ?', pluginId))
+  }
+
+  // ---------------- plugin session docs ----------------
+
+  /** 会话文档镜像读取（未写过返回 undefined；调用方回退初值）。 */
+  getPluginSessionDoc(pluginId: string, name: string, conversationId: number): string | undefined {
+    return this.pluginSessionDocs.get(`${pluginId}\0${name}\0${conversationId}`)
+  }
+
+  /** 写入会话文档（valueJson 必须是合法 JSON：显式拒绝非法数据落盘）。 */
+  putPluginSessionDoc(pluginId: string, name: string, conversationId: number, valueJson: string): void {
+    this.assertWritable()
+    parseStoredJson<unknown>(
+      `helm_plugin_session_docs#${pluginId}:${name}#${conversationId}.value`,
+      valueJson,
+    )
+    this.pluginSessionDocs.set(`${pluginId}\0${name}\0${conversationId}`, valueJson)
+    this.enqueue(() =>
+      this.db.run(
+        `INSERT INTO helm_plugin_session_docs (plugin_id, name, conversation_id, value, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(plugin_id, name, conversation_id) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+        pluginId,
+        name,
+        conversationId,
+        valueJson,
+        Date.now(),
+      ),
+    )
+  }
+
+  deletePluginSessionDoc(pluginId: string, name: string, conversationId: number): void {
+    this.assertWritable()
+    this.pluginSessionDocs.delete(`${pluginId}\0${name}\0${conversationId}`)
+    this.enqueue(() =>
+      this.db.run(
+        'DELETE FROM helm_plugin_session_docs WHERE plugin_id = ? AND name = ? AND conversation_id = ?',
+        pluginId,
+        name,
+        conversationId,
+      ),
+    )
+  }
+
+  /** 列出某插件某文档已持久化的全部会话 ID（升序）。 */
+  listPluginSessionDocConversations(pluginId: string, name: string): number[] {
+    const out: number[] = []
+    for (const key of this.pluginSessionDocs.keys()) {
+      if (!key.startsWith(`${pluginId}\0${name}\0`)) continue
+      const convId = Number(key.split('\0')[2])
+      if (Number.isSafeInteger(convId) && convId > 0) out.push(convId)
+    }
+    return out.sort((a, b) => a - b)
   }
 
   // ---------------- FTS ----------------

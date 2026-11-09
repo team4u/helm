@@ -52,6 +52,8 @@ import {
   type PluginDocOptions,
   type PluginSessionDocHandle,
   type PublicPluginDoc,
+  type PublicPluginSessionDoc,
+  type PluginSessionDocHandle,
   type PluginRouteSpec,
   type PluginServiceSpec,
   type PluginSummary,
@@ -68,10 +70,10 @@ import {
   type WorkbenchPanelSpec,
   type CommandSpec,
   type SettingsPanelSpec,
-  type ConversationActionSpec,
-  type PluginSlotContributionSpec,
   type ProfileRuntimeUiSpec,
+  type ConversationActionSpec,
   type TimelineEntryActionSpec,
+  type PluginSlotContributionSpec,
 } from '@helm/protocol';
 import type { Provider } from '@earendil-works/pi-ai';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
@@ -86,6 +88,19 @@ export interface PluginDocStore {
   get<T>(key: string, initial: T): T;
   set<T>(key: string, value: T): void;
   /** 等待全部排队写真正落盘（同步镜像 ≠ 持久化完成；失败显式 reject）。 */
+  flush(): Promise<void>;
+}
+
+/**
+ * 插件会话文档持久层（helm_plugin_session_docs 表的同步镜像 + 排队写）。
+ * 键为 (pluginId, name, conversationId) 三元组；与全局文档持久层同一
+ * 事务队列语义（flush 等待真实落盘，失败显式 reject）。
+ */
+export interface PluginSessionDocStore {
+  get(pluginId: string, name: string, conversationId: number): string | undefined;
+  put(pluginId: string, name: string, conversationId: number, valueJson: string): void;
+  delete(pluginId: string, name: string, conversationId: number): void;
+  listConversationIds(pluginId: string, name: string): number[];
   flush(): Promise<void>;
 }
 
@@ -109,6 +124,12 @@ export interface PluginHostOptions {
   dataDir: string;
   host: PluginHostBackend;
   docs: PluginDocStore;
+  /**
+   * 可选的会话文档持久层（runtime 提供 HelmStore 适配）。
+   * 未提供时 ctx.sessionDoc 在启用提交点显式 501 拒绝（禁内存降级——
+   * 会话文档承诺跨重启存活，内存实现等于伪造持久化）。
+   */
+  sessionDocs?: PluginSessionDocStore;
   config?: PluginConfigStore;
   /**
    * 可选的插件 Provider 挂载端口（runtime 提供）：插件经 ctx.provider 声明的
@@ -184,6 +205,12 @@ export interface PluginRouteEntry extends PluginRouteSpec {
 /** 模型工具名的 provider 安全约束（OpenAI 函数名子集，全 provider 通用）。 */
 export const PROVIDER_SAFE_TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
+/** 宿主保留命令触发词：/new /clear /compact 与 skill: 命名空间（插件不得占用）。 */
+const RESERVED_COMMAND_SLASH = new Set(['new', 'clear', 'compact']);
+
+/** 插件命令斜杠触发词格式（不含前导 /；与设计文档 §2.2 同一规则）。 */
+const COMMAND_SLASH_RE = /^[a-z0-9][a-z0-9:_-]{0,63}$/;
+
 /**
  * 为 exposeAsTool 动作生成稳定 provider-safe 别名：语义前缀 + 全限定 ID 短哈希。
  * 纯函数、跨重启确定：pi-ai convertTools 原样发送 tool.name，含 ':'/'.' 的
@@ -241,6 +268,13 @@ interface DocRegistration {
   initial: unknown;
 }
 
+/** sessionDoc 注册项：与 DocRegistration 同构（句柄按 (name, conversationId) 寻址）。 */
+interface SessionDocRegistration {
+  handle: PluginSessionDocHandle<unknown>;
+  isPublic: boolean;
+  initial: unknown;
+}
+
 /**
  * 插件生命周期相位：
  * - defining：definePlugin 执行中（注册方法仅此相位可用）；
@@ -265,6 +299,8 @@ interface PluginState {
   providers: ProviderEntry[];
   ui: PluginUiContribution[];
   docs: Map<string, DocRegistration>;
+  /** 本周期 ctx.sessionDoc 注册项（与 docs 共享文档命名空间，禁止同名）。 */
+  sessionDocs: Map<string, SessionDocRegistration>;
   configSchema: Record<string, PluginConfigFieldSchema> | null;
   /**
    * 本启用周期经 ctx.host 获取的宿主生命周期资源释放句柄
@@ -459,6 +495,7 @@ export class PluginHost {
         providers: [],
         ui: [],
         docs: new Map(),
+        sessionDocs: new Map(),
         configSchema: null,
         hostReleases: new Set(),
         stopDocWrites: false,
@@ -496,6 +533,9 @@ export class PluginHost {
       }
 
       if (wantsEnabled) {
+        // 提交点终检（同步、无 await 窗口）：跨插件 kind/slash 唯一性与
+        // enable 同一串行化队列执行，并发 enable 至多一个暴露重复项。
+        this.assertUiCrossPluginUnique(state);
         state.enabled = true;
         try {
           // provider 先于服务挂载：服务 start 可依赖本插件 provider 已可用；
@@ -650,16 +690,18 @@ export class PluginHost {
       try {
         await state.definition.definePlugin(this.createContext(state, state.epoch));
         this.assertUiDocsRegistered(state);
+        // define 阶段提前检查（仅比比对当时已启用插件）：让冲突在进入服务
+        // 启动前暴露；最终裁决在提交点终检（见 enable 尾部）。
+        this.assertUiCrossPluginUnique(state);
         // provider 先于服务挂载（服务 start 可依赖自身 provider）；失败时回滚
         // 卸载已挂载 provider 并 stop 已启动服务，绝不留下 enabled:false 但 provider 泄漏。
         // 热启用（host.start 已完成后）：正常 prepare+start；未完成（首启注册期）：
         // 只登记，待全局屏障。
         await this.registerProviders(state);
         await this.activateServices(state);
-        // 对外提交点在启停持久化成功之后：服务已启动但落盘挂起期间保持
-        // defining 且 enabled=false——action 拒绝 / hook 不执行 / UI 不露出，
-        // 绝不给在途任务进入「即将被回滚拆掉」的注册表的机会；持久化失败时
-        // 零在途任务。enabled 只在提交点置 true。
+        // 提交点终检 + 对外提交：同一同步块（无 await 窗口），两个插件并发
+        // enable 时后到者的重复 kind/slash 在此显式拒绝并回滚。
+        this.assertUiCrossPluginUnique(state);
         await this.persistEnabled(state, true);
         state.enabled = true;
         state.phase = 'idle';
@@ -758,6 +800,7 @@ export class PluginHost {
     state.providers.length = 0;
     state.ui.length = 0;
     state.docs.clear();
+    state.sessionDocs.clear();
     state.hostReleases.clear();
     for (const pipeline of this.pipelines.values()) pipeline.removeByPlugin(state.definition.id);
     state.hooks.clear();
@@ -947,32 +990,45 @@ export class PluginHost {
   }
 
   /**
-   * definePlugin 完成后的末尾统一校验：UI 声明（含 badge.doc）引用的 docs
-   * 必须是本插件已注册的 public doc（doc 声明可晚于 UI 声明，故在定义期末校验；
-   * 非法引用会让 $docs 挂载/角标静默失效，必须显式拒绝）。
+   * definePlugin 完成后的末尾统一校验：
+   * - UI 声明引用的 docs / badge.doc 必须是本插件已注册的 public 全局 doc；
+   * - spec.sessionDocs 必须是本插件已注册的 public sessionDoc（独立于全局
+   *   docs 校验；badge.doc 仍要求全局 doc，不要求出现在 docs 数组中）。
+   * doc 声明可晚于 UI 声明，故在定义期末校验；非法引用会让 $docs/
+   * $sessionDocs 挂载/角标静默失效，必须显式拒绝。
    */
   private assertUiDocsRegistered(state: PluginState): void {
     const pluginId = state.definition.id;
-    const required = new Map<string, Array<{ surface: string; id: string }>>();
-    const collect = (doc: string, from: { surface: string; id: string }): void => {
-      const list = required.get(doc) ?? [];
+    const requiredDocs = new Map<string, Array<{ surface: string; id: string }>>();
+    const requiredSessionDocs = new Map<string, Array<{ surface: string; id: string }>>();
+    const collect = (
+      into: Map<string, Array<{ surface: string; id: string }>>,
+      doc: string,
+      from: { surface: string; id: string },
+    ): void => {
+      const list = into.get(doc) ?? [];
       list.push(from);
-      required.set(doc, list);
+      into.set(doc, list);
     };
     for (const u of state.ui) {
-      const spec = u.spec as { docs?: unknown; badge?: { doc?: unknown } };
-      const docs = spec.docs;
-      if (Array.isArray(docs)) {
-        for (const name of docs) {
-          if (typeof name === 'string') collect(name, { surface: u.surface, id: String((spec as { id?: unknown }).id) });
+      const spec = u.spec as { id?: unknown; docs?: unknown; sessionDocs?: unknown; badge?: { doc?: unknown } };
+      const from = { surface: u.surface, id: String(spec.id) };
+      if (Array.isArray(spec.docs)) {
+        for (const name of spec.docs) {
+          if (typeof name === 'string') collect(requiredDocs, name, from);
+        }
+      }
+      if (Array.isArray(spec.sessionDocs)) {
+        for (const name of spec.sessionDocs) {
+          if (typeof name === 'string') collect(requiredSessionDocs, name, from);
         }
       }
       const badgeDoc = spec.badge?.doc;
       if (typeof badgeDoc === 'string') {
-        collect(badgeDoc, { surface: u.surface, id: String((spec as { id?: unknown }).id) });
+        collect(requiredDocs, badgeDoc, from);
       }
     }
-    for (const [name, usages] of required) {
+    for (const [name, usages] of requiredDocs) {
       const reg = state.docs.get(name);
       if (reg === undefined || !reg.isPublic) {
         const where = usages.map((u) => `${u.surface}#${u.id}`).join(', ');
@@ -984,6 +1040,68 @@ export class PluginHost {
         );
       }
     }
+    for (const [name, usages] of requiredSessionDocs) {
+      const reg = state.sessionDocs.get(name);
+      if (reg === undefined || !reg.isPublic) {
+        const where = usages.map((u) => `${u.surface}#${u.id}`).join(', ');
+        throw new HelmError(
+          'invalid_ui_spec',
+          `插件 ${pluginId} 的 UI 声明（${where}）引用了未注册为 public sessionDoc 的会话文档 ${name}，或该文档缺少 public: true`,
+          400,
+          { pluginId, sessionDoc: name, usages },
+        );
+      }
+    }
+  }
+
+  /**
+   * 跨插件唯一性终检：全部已启用插件（含待提交的 pending）的 UI 贡献中：
+   * - profile.runtime 的 kind 不得重复（多插件声明同一 kind 会让 Profile
+   *   运行时表单出现歧义，显式拒绝而非按顺序吞掉）；
+   * - commandPalette 的 slash 不得重复（/补全列表触发词必须唯一）。
+   *
+   * 在启用提交点（enabled=true 同一同步块）执行：define 阶段的提前检查只
+   * 比对当时已启用插件（停用探测 enabled:false 不占用名字）；两个插件并发
+   * enable 时各自 define 检查都可能通过，但串行化的提交点终检保证至多一个
+   * 暴露重复项（后到者显式拒绝并回滚）。
+   */
+  private assertUiCrossPluginUnique(pending: PluginState): void {
+    const kindOwners = new Map<string, string>();
+    const slashOwners = new Map<string, string>();
+    const sweep = (state: PluginState, label: string): void => {
+      for (const u of state.ui) {
+        const spec = u.spec as { kind?: unknown; slash?: unknown };
+        if (u.surface === 'profile.runtime' && typeof spec.kind === 'string') {
+          const prev = kindOwners.get(spec.kind);
+          if (prev !== undefined) {
+            throw new HelmError(
+              'duplicate_profile_runtime_kind',
+              `插件 ${label} 声明的 profile.runtime kind "${spec.kind}" 已被插件 ${prev} 占用`,
+              409,
+              { pluginId: label, kind: spec.kind, ownerPluginId: prev },
+            );
+          }
+          kindOwners.set(spec.kind, label);
+        }
+        if (u.surface === 'commandPalette' && typeof spec.slash === 'string') {
+          const prev = slashOwners.get(spec.slash);
+          if (prev !== undefined) {
+            throw new HelmError(
+              'duplicate_command_slash',
+              `插件 ${label} 声明的命令斜杠触发词 /${spec.slash} 已被插件 ${prev} 占用`,
+              409,
+              { pluginId: label, slash: spec.slash, ownerPluginId: prev },
+            );
+          }
+          slashOwners.set(spec.slash, label);
+        }
+      }
+    };
+    for (const state of this.plugins.values()) {
+      if (!state.enabled) continue;
+      sweep(state, state.definition.id);
+    }
+    sweep(pending, pending.definition.id);
   }
 
   /**
@@ -1319,6 +1437,15 @@ export class PluginHost {
     }
     const reg = state.docs.get(name);
     if (!reg || !reg.isPublic) {
+      // 名称命中 sessionDoc：路由歧义明确提示需 conversationId（不泄私有存在性）
+      if (state.sessionDocs.has(name)) {
+        throw new HelmError(
+          'session_doc_requires_conversation',
+          `插件 ${pluginId} 的文档 ${name} 是会话文档，读取需携带 conversationId 查询参数`,
+          400,
+          { pluginId, name },
+        );
+      }
       throw new HelmError('plugin_doc_not_found', `插件 ${pluginId} 无公共文档 ${name}`, 404, { pluginId, name });
     }
     return {
@@ -1326,6 +1453,68 @@ export class PluginHost {
       name,
       value: jsonClone(this.options.docs.get(`${pluginId}:${name}`, reg.initial as never)),
     };
+  }
+
+  /**
+   * 读取插件公共 sessionDoc 快照（GET /api/plugins/:id/docs/:name?conversationId=N
+   * 与专用 SSE 首帧共用）。会话不存在 / 插件停用 / 文档私有或未声明一律 404
+   * plugin_doc_not_found（与全局公共文档同一错误面，不泄漏存在性差异）。
+   */
+  getPublicSessionDoc(pluginId: string, name: string, conversationId: number): PublicPluginSessionDoc {
+    this.assertSessionDocId(conversationId);
+    this.assertNotDisposed();
+    const state = this.plugins.get(pluginId);
+    if (!state || !state.enabled || state.phase !== 'idle') {
+      throw new HelmError('plugin_doc_not_found', `插件 ${pluginId} 无公共会话文档 ${name}`, 404, {
+        pluginId,
+        name,
+        conversationId,
+      });
+    }
+    const reg = state.sessionDocs.get(name);
+    if (!reg || !reg.isPublic) {
+      // 名称命中全局 doc：路由歧义明确提示（不泄漏私有存在性）。
+      if (state.docs.has(name)) {
+        throw new HelmError(
+          'global_doc_unexpected_conversation',
+          `插件 ${pluginId} 的文档 ${name} 是全局文档，不接 conversationId`,
+          400,
+          { pluginId, name, conversationId },
+        );
+      }
+      throw new HelmError('plugin_doc_not_found', `插件 ${pluginId} 无公共会话文档 ${name}`, 404, {
+        pluginId,
+        name,
+        conversationId,
+      });
+    }
+    // 会话存在性：不存在/已删除一律 404（host.getConversation 如实抛错）。
+    this.options.host.getConversation(conversationId);
+    return {
+      pluginId,
+      name,
+      conversationId,
+      value: this.readSessionDocValue(state, name, conversationId),
+    };
+  }
+
+  /** 会话文档当前值（未写过时回退归一化初值；JSON 深拷贝隔离）。 */
+  private readSessionDocValue(state: PluginState, name: string, conversationId: number): unknown {
+    const reg = state.sessionDocs.get(name)!;
+    const raw = this.options.sessionDocs?.get(state.definition.id, name, conversationId);
+    return jsonClone(raw === undefined ? reg.initial : (JSON.parse(raw) as unknown));
+  }
+
+  /** 会话 ID 边界校验：正安全整数（非法值一律 400 invalid_conversation_id）。 */
+  private assertSessionDocId(conversationId: number): void {
+    if (!Number.isSafeInteger(conversationId) || conversationId <= 0) {
+      throw new HelmError(
+        'invalid_conversation_id',
+        `会话文档的 conversationId 必须是正安全整数，收到：${String(conversationId)}`,
+        400,
+        { conversationId: String(conversationId) },
+      );
+    }
   }
 
   /**
@@ -1706,6 +1895,18 @@ export class PluginHost {
     };
 
     /**
+     * sessionDoc 句柄读写守卫：与 doc 同一生命周期规则（含受控停止写入窗口），
+     * 额外校验目标会话仍存在——会话删除后异步回调不得重建孤儿数据。
+     */
+    const assertSessionDocActive = (name: string, conversationId: number): void => {
+      self.assertSessionDocId(conversationId);
+      if (!(state.stopDocWrites && self.plugins.get(pluginId) === state && state.epoch === epoch)) {
+        self.assertContextUsable(state, epoch, `sessionDoc ${name} 句柄`);
+      }
+      self.options.host.getConversation(conversationId);
+    };
+
+    /**
      * 宿主生命周期资源（管理保护/监听/解析器）仅在本周期内可获取；
      * 停用后或旧周期的残留调用即刻失效，防止向新周期泄漏注册。
      */
@@ -1739,8 +1940,258 @@ export class PluginHost {
       if (state.ui.some((u) => u.surface === surface && (u.spec as { id?: string }).id === id)) {
         throw new HelmError('duplicate_ui', `插件 ${pluginId} 在 ${surface} 重复声明 id ${id}`, 409);
       }
-      // docs：声明式轨道订阅的本插件公开文档名列表；边界即校验
-      //（非法 doc 名/非数组会让 $docs 挂载静默失效，必须显式拒绝）。
+      // 优先级/排序字段：若提供必须为有限安全整数（非法值会让裁决顺序静默失控）。
+      for (const field of ['priority', 'order'] as const) {
+        const value = (spec as Record<string, unknown>)[field];
+        if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value))) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.${fnName} 的 ${field} 必须是安全整数（实际：${String(value)}）`,
+            400,
+            { pluginId, id, field },
+          );
+        }
+      }
+      // 微动作三轨：actionId / client / json 至少提供其一（否则宿主无法渲染也无法执行）。
+      if (
+        surface === 'conversation.header.action' ||
+        surface === 'conversation.row.action' ||
+        surface === 'timeline.entry.action'
+      ) {
+        const actionId = (spec as { actionId?: unknown }).actionId;
+        const hasClient = (spec as { client?: unknown }).client !== undefined;
+        const hasJson = (spec as { json?: unknown }).json !== undefined;
+        if (actionId === undefined && !hasClient && !hasJson) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.${fnName} 需至少提供 actionId、client、json 三者之一`,
+            400,
+            { pluginId, id },
+          );
+        }
+        // 动作绑定轨：actionId 必填时校验标识形状；跨插件调用（actionPluginId）
+        // 的目标存在性在提交点终检（define 顺序无法保证目标插件先注册）。
+        if (actionId !== undefined) {
+          if (typeof actionId !== 'string' || actionId.length === 0 || actionId.includes('.')) {
+            throw new HelmError(
+              'invalid_ui_spec',
+              `插件 ${pluginId} ui.${fnName} 的 actionId 必须是非空且不含点号的动作 id（跨插件请用 actionPluginId）`,
+              400,
+              { pluginId, id },
+            );
+          }
+        }
+        const actionPluginId = (spec as { actionPluginId?: unknown }).actionPluginId;
+        if (actionPluginId !== undefined && (typeof actionPluginId !== 'string' || actionPluginId.length === 0)) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.${fnName} 的 actionPluginId 必须是非空插件 id`,
+            400,
+            { pluginId, id },
+          );
+        }
+        // placement 仅 conversation.header.action 允许；kinds/roles 仅 timeline.entry.action 允许。
+        if (surface !== 'conversation.header.action') {
+          const placement = (spec as { placement?: unknown }).placement;
+          if (placement !== undefined) {
+            throw new HelmError(
+              'invalid_ui_spec',
+              `插件 ${pluginId} ui.${fnName} 不允许 placement（仅 conversationHeaderAction 支持）`,
+              400,
+              { pluginId, id },
+            );
+          }
+        } else {
+          const placement = (spec as { placement?: unknown }).placement;
+          if (placement !== undefined && placement !== 'toolbar' && placement !== 'menu') {
+            throw new HelmError(
+              'invalid_ui_spec',
+              `插件 ${pluginId} ui.${fnName} 的 placement 仅允许 'toolbar' | 'menu'`,
+              400,
+              { pluginId, id },
+            );
+          }
+        }
+        if (surface === 'timeline.entry.action') {
+          const kinds = (spec as { kinds?: unknown }).kinds;
+          if (
+            kinds !== undefined &&
+            (!Array.isArray(kinds) || kinds.length === 0 || kinds.some((k) => typeof k !== 'string' || k.length === 0))
+          ) {
+            throw new HelmError(
+              'invalid_ui_spec',
+              `插件 ${pluginId} ui.${fnName} 的 kinds 必须是非空字符串数组`,
+              400,
+              { pluginId, id },
+            );
+          }
+          const roles = (spec as { roles?: unknown }).roles;
+          if (roles !== undefined) {
+            if (!Array.isArray(roles) || roles.length === 0 || roles.some((r) => r !== 'user' && r !== 'assistant')) {
+              throw new HelmError(
+                'invalid_ui_spec',
+                `插件 ${pluginId} ui.${fnName} 的 roles 仅允许 'user' | 'assistant' 非空数组`,
+                400,
+                { pluginId, id },
+              );
+            }
+          }
+        } else {
+          const kinds = (spec as { kinds?: unknown }).kinds;
+          if (kinds !== undefined) {
+            throw new HelmError(
+              'invalid_ui_spec',
+              `插件 ${pluginId} ui.${fnName} 不允许 kinds（仅 timelineEntryAction 支持）`,
+              400,
+              { pluginId, id },
+            );
+          }
+          const roles = (spec as { roles?: unknown }).roles;
+          if (roles !== undefined) {
+            throw new HelmError(
+              'invalid_ui_spec',
+              `插件 ${pluginId} ui.${fnName} 不允许 roles（仅 timelineEntryAction 支持）`,
+              400,
+              { pluginId, id },
+            );
+          }
+        }
+      }
+      // commandPalette：slash 触发词格式与宿主保留词。
+      if (surface === 'commandPalette') {
+        const slash = (spec as { slash?: unknown }).slash;
+        if (slash !== undefined) {
+          if (typeof slash !== 'string' || !/^[a-z0-9][a-z0-9:_-]{0,63}$/.test(slash)) {
+            throw new HelmError(
+              'invalid_ui_spec',
+              `插件 ${pluginId} ui.command 的 slash 必须匹配 /^[a-z0-9][a-z0-9:_-]{0,63}$/（不含前导 /）`,
+              400,
+              { pluginId, id, slash: String(slash) },
+            );
+          }
+          if (RESERVED_COMMAND_SLASH.has(slash) || slash.startsWith('skill:')) {
+            throw new HelmError(
+              'invalid_ui_spec',
+              `插件 ${pluginId} ui.command 的 slash "${slash}" 与宿主保留命令冲突（new/clear/compact 与 skill: 前缀）`,
+              400,
+              { pluginId, id, slash },
+            );
+          }
+          // 插件内同名 slash 直接拒绝（跨插件冲突在提交点终检）。
+          for (const u of state.ui) {
+            if (u.surface !== 'commandPalette') continue;
+            const other = (u.spec as { slash?: unknown }).slash;
+            if (other === slash) {
+              throw new HelmError(
+                'duplicate_command_slash',
+                `插件 ${pluginId} 重复声明斜杠触发词 /${slash}`,
+                409,
+                { pluginId, slash },
+              );
+            }
+          }
+        }
+        const actionId = (spec as { actionId?: unknown }).actionId;
+        const hasClient = (spec as { client?: unknown }).client !== undefined;
+        const hasJson = (spec as { json?: unknown }).json !== undefined;
+        if (actionId === undefined && !hasClient && !hasJson) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.command 需至少提供 actionId、client、json 三者之一（命令必须可触发）`,
+            400,
+            { pluginId, id },
+          );
+        }
+        const actionPluginId = (spec as { actionPluginId?: unknown }).actionPluginId;
+        if (actionPluginId !== undefined && (typeof actionPluginId !== 'string' || actionPluginId.length === 0)) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.command 的 actionPluginId 必须是非空插件 id`,
+            400,
+            { pluginId, id },
+          );
+        }
+      }
+      // profile.runtime：kind 必填非空；重复 kind 在提交点终检（跨插件）。
+      if (surface === 'profile.runtime') {
+        const kind = (spec as { kind?: unknown }).kind;
+        if (typeof kind !== 'string' || kind.length === 0 || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(kind)) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.profileRuntime 的 kind 必须匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/`,
+            400,
+            { pluginId, id, kind: String(kind) },
+          );
+        }
+        const label = (spec as { label?: unknown }).label;
+        if (typeof label !== 'string' || label.length === 0) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.profileRuntime 需要非空 label`,
+            400,
+            { pluginId, id },
+          );
+        }
+        const agentSuggestions = (spec as { agentSuggestions?: unknown }).agentSuggestions;
+        if (
+          agentSuggestions !== undefined &&
+          (!Array.isArray(agentSuggestions) ||
+            agentSuggestions.some((s) => typeof s !== 'string' || s.length === 0))
+        ) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.profileRuntime 的 agentSuggestions 必须是非空字符串数组`,
+            400,
+            { pluginId, id },
+          );
+        }
+        // 插件内重复 kind 直接拒绝（跨插件冲突在提交点终检）。
+        for (const u of state.ui) {
+          if (u.surface !== 'profile.runtime') continue;
+          const other = (u.spec as { kind?: unknown }).kind;
+          if (other === kind) {
+            throw new HelmError(
+              'duplicate_profile_runtime_kind',
+              `插件 ${pluginId} 重复声明 profile.runtime kind "${kind}"`,
+              409,
+              { pluginId, kind },
+            );
+          }
+        }
+      }
+      // plugin.slot：target 必须恰有一个 '/'，两段均为合法标识。
+      if (surface === 'plugin.slot') {
+        const target = (spec as { target?: unknown }).target;
+        if (typeof target !== 'string' || target.length === 0 || target.length > 512) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.slot 的 target 必须是非空字符串（<ownerPluginId>/<slotName>）`,
+            400,
+            { pluginId, id },
+          );
+        }
+        const slash = target.indexOf('/');
+        if (slash <= 0 || slash !== target.lastIndexOf('/')) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.slot 的 target "${target}" 必须恰含一个 '/'（<ownerPluginId>/<slotName>）`,
+            400,
+            { pluginId, id, target },
+          );
+        }
+        const owner = target.slice(0, slash);
+        const slotName = target.slice(slash + 1);
+        if (!/^[A-Za-z0-9:_-]+$/.test(owner) || !/^[A-Za-z0-9._-]+$/.test(slotName)) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.slot 的 target "${target}" 段标识非法（ownerPluginId 允许 : _ -，slotName 允许 . _ -）`,
+            400,
+            { pluginId, id, target },
+          );
+        }
+      }
+      // docs / sessionDocs：声明式轨道订阅的本插件公开文档名列表；边界即校验
+      //（非法 doc 名/非数组会让 $docs/$sessionDocs 挂载静默失效，必须显式拒绝）。
       const docs = (spec as { docs?: unknown }).docs;
       if (docs !== undefined) {
         if (!Array.isArray(docs) || docs.length === 0 || docs.some((d) => typeof d !== 'string' || d.length === 0)) {
@@ -1759,6 +2210,33 @@ export class PluginHost {
             throw new HelmError(
               'invalid_ui_spec',
               `插件 ${pluginId} ui.${fnName} 的 docs 含非法文档名 ${JSON.stringify(name)}（允许字符 A-Za-z0-9._-）`,
+              400,
+            );
+          }
+        }
+      }
+      const sessionDocsList = (spec as { sessionDocs?: unknown }).sessionDocs;
+      if (sessionDocsList !== undefined) {
+        if (
+          !Array.isArray(sessionDocsList) ||
+          sessionDocsList.length === 0 ||
+          sessionDocsList.some((d) => typeof d !== 'string' || d.length === 0)
+        ) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.${fnName} 的 sessionDocs 必须是非空字符串数组的会话文档名列表`,
+            400,
+          );
+        }
+        const uniqueSession = new Set(sessionDocsList as string[]);
+        if (uniqueSession.size !== sessionDocsList.length) {
+          throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.${fnName} 的 sessionDocs 含重复文档名`, 400);
+        }
+        for (const name of uniqueSession) {
+          if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+            throw new HelmError(
+              'invalid_ui_spec',
+              `插件 ${pluginId} ui.${fnName} 的 sessionDocs 含非法文档名 ${JSON.stringify(name)}（允许字符 A-Za-z0-9._-）`,
               400,
             );
           }
@@ -2228,37 +2706,36 @@ export class PluginHost {
         return handle;
       },
 
-      sessionDoc: <TState>(name: string, initial: TState, opts?: PluginDocOptions): PluginSessionDocHandle<TState> => {
+      sessionDoc: <TState>(name: string, initial: TState, opts?: { public?: boolean }) => {
         assertOpen(`声明 sessionDoc ${name}`);
         self.assertValidId('sessionDoc', name);
-        const store = self.options.docs;
+        if (opts !== undefined && (!isPlainObject(opts) || Object.keys(opts).some((k) => k !== 'public'))) {
+          throw new HelmError('invalid_doc_spec', `插件 ${pluginId} sessionDoc ${name} 的选项仅允许 { public?: boolean }`, 400);
+        }
+        if (opts?.public !== undefined && typeof opts.public !== 'boolean') {
+          throw new HelmError('invalid_doc_spec', `插件 ${pluginId} sessionDoc ${name} 的 public 选项必须是布尔值`, 400);
+        }
+        // 文档名与 doc 共享命名空间：同名会让 GET /api/plugins/:id/docs/:name 路由歧义。
+        if (state.docs.has(name) || state.sessionDocs.has(name)) {
+          throw new HelmError(
+            'duplicate_doc',
+            `插件 ${pluginId} 重复声明文档名 ${name}（doc 与 sessionDoc 共享命名空间，禁止同名）`,
+            409,
+          );
+        }
+        // 持久层端口缺失时显式 501（禁内存降级：会话文档承诺跨重启存活）。
+        if (!self.options.sessionDocs) {
+          throw new HelmError(
+            'session_doc_store_unavailable',
+            `插件 ${pluginId} 声明 sessionDoc ${name}，但 PluginHost 未提供会话文档持久层（runtime 缺失），拒绝内存降级`,
+            501,
+            { pluginId, name },
+          );
+        }
+        const isPublic = opts?.public === true;
         const normalizedInitial = jsonClone(initial);
-        const sessionKeys = new Map<number, string>();
-        const getSessionKey = (convId: number) => {
-          let k = sessionKeys.get(convId);
-          if (!k) {
-            k = `${pluginId}:session:${convId}:${name}`;
-            sessionKeys.set(convId, k);
-          }
-          return k;
-        };
-        const handle: PluginSessionDocHandle<TState> = {
-          get: (convId: number) => jsonClone(store.get<TState>(getSessionKey(convId), normalizedInitial)),
-          set: (convId: number, next: TState) => {
-            const safe = jsonClone(next);
-            store.set(getSessionKey(convId), safe);
-          },
-          update: (convId: number, fn: (current: TState) => TState) => {
-            const safe = jsonClone(fn(jsonClone(store.get<TState>(getSessionKey(convId), normalizedInitial))));
-            store.set(getSessionKey(convId), safe);
-          },
-          delete: (convId: number) => {
-            store.set(getSessionKey(convId), normalizedInitial);
-            sessionKeys.delete(convId);
-          },
-          listConversationIds: () => Array.from(sessionKeys.keys()),
-          flush: async () => store.flush(),
-        };
+        const handle = self.createSessionDocHandle(state, epoch, name, normalizedInitial, isPublic);
+        state.sessionDocs.set(name, { handle: handle as PluginSessionDocHandle<unknown>, isPublic, initial: normalizedInitial });
         return handle;
       },
 
@@ -2318,9 +2795,12 @@ export class PluginHost {
         command: (spec: CommandSpec) => addUi('commandPalette', spec, 'command'),
         settingsPanel: (spec: SettingsPanelSpec) => addUi('settings.panel', spec, 'settingsPanel'),
         profileRuntime: (spec: ProfileRuntimeUiSpec) => addUi('profile.runtime', spec, 'profileRuntime'),
-        conversationHeaderAction: (spec: ConversationActionSpec) => addUi('conversation.header.action', spec, 'conversationHeaderAction'),
-        conversationRowAction: (spec: ConversationActionSpec) => addUi('conversation.row.action', spec, 'conversationRowAction'),
-        timelineEntryAction: (spec: TimelineEntryActionSpec) => addUi('timeline.entry.action', spec, 'timelineEntryAction'),
+        conversationHeaderAction: (spec: ConversationActionSpec) =>
+          addUi('conversation.header.action', spec, 'conversationHeaderAction'),
+        conversationRowAction: (spec: ConversationActionSpec) =>
+          addUi('conversation.row.action', spec, 'conversationRowAction'),
+        timelineEntryAction: (spec: TimelineEntryActionSpec) =>
+          addUi('timeline.entry.action', spec, 'timelineEntryAction'),
         slot: (spec: PluginSlotContributionSpec) => addUi('plugin.slot', spec, 'slot'),
       },
 
@@ -2428,6 +2908,106 @@ export class PluginHost {
   private emitDocUpdated(pluginId: string, name: string, value: unknown): void {
     const doc: PublicPluginDoc = { pluginId, name, value: jsonClone(value) };
     this.options.host.emitEvent('plugin.doc.updated', { type: 'plugin.doc.updated', doc });
+  }
+
+  /**
+   * 公共 sessionDoc 变更：只投递宿主内部的 plugin.session_doc.updated 订阅面
+   * （runtime 在此挂接专用 SSE 流），不经全局事件广播。
+   */
+  private emitSessionDocUpdated(
+    pluginId: string,
+    name: string,
+    conversationId: number,
+    value: unknown,
+    deleted?: boolean,
+  ): void {
+    const doc: PublicPluginSessionDoc = {
+      pluginId,
+      name,
+      conversationId,
+      value: jsonClone(value),
+      ...(deleted === true ? { deleted: true } : {}),
+    };
+    this.options.host.emitEvent('plugin.session_doc.updated', { type: 'plugin.session_doc.updated', doc });
+  }
+
+  /**
+   * 构造 sessionDoc 句柄：每次读写均校验正整数会话 ID 与会话存在性（删除后
+   * 异步回调重建孤儿数据被拒绝）；值一律 JSON 深拷贝；public 文档发布专用事件。
+   */
+  private createSessionDocHandle<TState>(
+    state: PluginState,
+    epoch: number,
+    name: string,
+    initial: TState,
+    isPublic: boolean,
+  ): PluginSessionDocHandle<TState> {
+    const pluginId = state.definition.id;
+    const store = this.options.sessionDocs!;
+    const readRaw = (conversationId: number): { persisted: boolean; value: TState } => {
+      const raw = store.get(pluginId, name, conversationId);
+      if (raw === undefined) return { persisted: false, value: jsonClone(initial) };
+      return { persisted: true, value: JSON.parse(raw) as TState };
+    };
+    return {
+      get: (conversationId) => {
+        this.assertSessionDocHandleUsable(state, epoch, name, conversationId, 'get');
+        return jsonClone(readRaw(conversationId).value);
+      },
+      set: (conversationId, next) => {
+        this.assertSessionDocHandleUsable(state, epoch, name, conversationId, 'set');
+        const safe = jsonClone(next);
+        store.put(pluginId, name, conversationId, JSON.stringify(safe));
+        if (isPublic) this.emitSessionDocUpdated(pluginId, name, conversationId, safe);
+      },
+      update: (conversationId, fn) => {
+        this.assertSessionDocHandleUsable(state, epoch, name, conversationId, 'update');
+        const safe = jsonClone(fn(jsonClone(readRaw(conversationId).value)));
+        store.put(pluginId, name, conversationId, JSON.stringify(safe));
+        if (isPublic) this.emitSessionDocUpdated(pluginId, name, conversationId, safe);
+      },
+      delete: (conversationId) => {
+        this.assertSessionDocHandleUsable(state, epoch, name, conversationId, 'delete');
+        const raw = store.get(pluginId, name, conversationId);
+        store.delete(pluginId, name, conversationId);
+        // 未写过的文档删除也发布 deleted（消费方据此回到初始态），值恒为初始值。
+        void raw;
+        if (isPublic) this.emitSessionDocUpdated(pluginId, name, conversationId, jsonClone(initial), true);
+      },
+      listConversationIds: () => {
+        this.assertSessionDocHandleAlive(state, epoch, `sessionDoc ${name} 句柄`);
+        return [...store.listConversationIds(pluginId, name)].sort((a, b) => a - b);
+      },
+      flush: async () => {
+        this.assertSessionDocHandleAlive(state, epoch, `sessionDoc ${name} 句柄`);
+        return store.flush();
+      },
+    };
+  }
+
+  /** sessionDoc 读写守卫：ID 边界 + 生命周期（含受控停止窗口）+ 会话存在性。 */
+  private assertSessionDocHandleUsable(
+    state: PluginState,
+    epoch: number,
+    name: string,
+    conversationId: number,
+    op: string,
+  ): void {
+    this.assertSessionDocId(conversationId);
+    if (!(state.stopDocWrites && this.plugins.get(state.definition.id) === state && state.epoch === epoch)) {
+      this.assertContextUsable(state, epoch, `sessionDoc ${name} 句柄`);
+    }
+    // 会话存在性：不存在/已删除一律拒绝（防删除后异步回调重建孤儿数据）。
+    this.options.host.getConversation(conversationId);
+    void op;
+  }
+
+  /** sessionDoc 只读操作守卫（不校验会话存在性：list/flush 不针对单会话）。 */
+  private assertSessionDocHandleAlive(state: PluginState, epoch: number, what: string): void {
+    this.assertNotDisposed();
+    if (!(state.stopDocWrites && this.plugins.get(state.definition.id) === state && state.epoch === epoch)) {
+      this.assertContextUsable(state, epoch, what);
+    }
   }
 
   /** 插件实际状态转换完成后向宿主发 plugin.changed 事件（转换失败但状态已落位时同样

@@ -313,6 +313,78 @@ export class HubClient {
   }
 
   /**
+   * SSE 订阅任意 GET 端点（专用事件流复用同一解析器）：帧解析兼容 \n\n 与
+   * \r\n\r\n；event: 名与 data: JSON 均上抛给 onFrame。建连/HTTP 错误统一
+   * 信封（404 等结构化错误原样抛 CliError，调用方据此决定是否停止重试）。
+   */
+  async streamSse(
+    path: string,
+    listeners: {
+      onFrame: (frame: { event: string; data: string }) => void
+      signal?: AbortSignal
+    },
+  ): Promise<void> {
+    const connectController = new AbortController()
+    const connectTimer = setTimeout(() => connectController.abort(), this.timeoutMs)
+    connectTimer.unref?.()
+    const callerAborted = (): boolean => listeners.signal?.aborted === true
+    let response: Response
+    try {
+      response = await this.io.fetchImpl(`${this.endpoint.baseUrl}${path}`, {
+        headers: this.authHeaders({ accept: 'text/event-stream' }),
+        signal: AbortSignal.any([connectController.signal, ...(listeners.signal ? [listeners.signal] : [])]),
+        redirect: 'error',
+      })
+    } catch (err) {
+      clearTimeout(connectTimer)
+      if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+        if (callerAborted()) throw new CliError('已取消', 'aborted')
+        throw new CliError(`建连超时（${this.timeoutMs}ms）：GET ${path}`, 'timeout')
+      }
+      throw new CliError(
+        `无法连接 Hub（${this.endpoint.baseUrl}）：${err instanceof Error ? err.message : String(err)}`,
+        'hub_unreachable',
+      )
+    }
+    clearTimeout(connectTimer)
+    if (callerAborted()) throw new CliError('已取消', 'aborted')
+    if (!response.ok || !response.body) throw await this.toCliError(response, `GET ${path}`)
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer = (buffer + decoder.decode(value, { stream: true })).replaceAll('\r\n', '\n')
+        let boundary = buffer.indexOf('\n\n')
+        while (boundary !== -1) {
+          const block = buffer.slice(0, boundary)
+          buffer = buffer.slice(boundary + 2)
+          boundary = buffer.indexOf('\n\n')
+          let event = 'message'
+          const dataLines: string[] = []
+          for (const line of block.split('\n')) {
+            if (line.startsWith('event:')) event = line.slice(6).trim()
+            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+          }
+          if (dataLines.length === 0) continue // 注释/keepalive 帧
+          listeners.onFrame({ event, data: dataLines.join('\n') })
+        }
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        if (callerAborted()) throw new CliError('已取消', 'aborted')
+        throw new CliError(`流中断：GET ${path}`, 'aborted')
+      }
+      throw err
+    } finally {
+      reader.releaseLock()
+      await (response.body as ReadableStream<Uint8Array>).cancel().catch(() => {})
+    }
+  }
+
+  /**
    * SSE 订阅 `GET /api/events`。超时仅约束建连阶段；流建立后由调用方 signal 控制。
    * 帧解析兼容 \n\n 与 \r\n\r\n；event: 名与 data: JSON 均上抛给 onFrame。
    */

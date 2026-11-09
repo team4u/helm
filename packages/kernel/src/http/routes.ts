@@ -532,10 +532,24 @@ async function route(
       return methodNotAllowed(redactor, method)
     }
     // 插件公共文档：GET /api/plugins/:pluginId/docs/:name（私有/停用/不存在 404）
-    if (third === 'docs' && method === 'GET' && fifth === undefined) {
+    // ?conversationId=N 切换为会话文档读取；/events 后缀为会话文档专用 SSE。
+    if (third === 'docs' && method === 'GET') {
+      // 专用 SSE：GET /api/plugins/:id/docs/:name/events?conversationId=N
+      // 路径段总数 = plugins(1) + id(2) + docs(3) + name(4) + events(5)。
+      if (fourth !== undefined && fifth === 'events' && segments.length === 5) {
+        return sessionDocEventsResponse(ctx, kernel, redactor, pluginId, decodeSegment(fourth))
+      }
+      if (fifth !== undefined) return errorResponse(redactor, 404, 'not_found', '路由不存在')
       if (fourth === undefined) throw new ValidationError('缺少 doc name 路径段')
       const name = parseDocNameParam(decodeSegment(fourth))
-      return jsonOk(redactor, await kernel.plugins.getPublicDoc(pluginId, name))
+      const conversationId = parseConversationIdQuery(ctx.url)
+      if (conversationId === undefined) {
+        return jsonOk(redactor, await kernel.plugins.getPublicDoc(pluginId, name))
+      }
+      return jsonOk(
+        redactor,
+        await kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId),
+      )
     }
     // 插件客户端模块：GET /api/plugins/:pluginId/client.mjs?module=<相对路径>
     // （鉴权由 hub 统一前置；停用/未声明/编译失败返回结构化错误 JSON，绝不返回半产物）
@@ -590,6 +604,67 @@ async function route(
 // 插件动态路由：强制 /api/plugins/:pluginId/routes/<rest...> 命名空间，
 // 不允许覆盖核心路由（核心路由全部先匹配，此处仅剩 routes/ 前缀）。
 // ---------------------------------------------------------------------------
+
+/**
+ * ?conversationId=N 查询参数：正整数会话 ID；非正整数/非数字 400。
+ */
+function parseConversationIdQuery(url: URL): number | undefined {
+  const raw = url.searchParams.get('conversationId')
+  if (raw === null) return undefined
+  if (!/^\d+$/.test(raw)) {
+    throw new ValidationError('conversationId 需为正整数')
+  }
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new ValidationError('conversationId 需为正整数')
+  }
+  return value
+}
+
+/**
+ * 会话文档专用 SSE：GET /api/plugins/:id/docs/:name/events?conversationId=N。
+ * - 鉴权与 GET 同源（hub 统一前置，无 public 豁免）；
+ * - 先同步读取快照（同时完成 public/会话存在性校验，失败即结构化错误——
+ *   插件停用/会话删除返回 404，客户端据此停止重试），再建订阅流；
+ * - 插件停用或会话删除后流被终止（shouldStop 轮询 + 每帧检查）；
+ * - kernel 未提供 sessionDocEvents 端口时 501（禁内存降级）。
+ */
+async function sessionDocEventsResponse(
+  ctx: RouteContext,
+  kernel: KernelRuntimeLike,
+  redactor: JsonRedactor | undefined,
+  pluginId: string,
+  rawName: string,
+): Promise<Response> {
+  const name = parseDocNameParam(rawName)
+  const conversationId = parseConversationIdQuery(ctx.url)
+  if (conversationId === undefined) {
+    throw new ValidationError('会话文档订阅必须携带 ?conversationId=<正整数>')
+  }
+  const port = kernel.sessionDocEvents
+  if (port === undefined) {
+    throw new HelmError(
+      'not_implemented',
+      '当前 runtime 未提供会话文档事件流（sessionDocEvents 端口缺失）',
+      501,
+    )
+  }
+  // 快照读取同时完成：插件启用 + 文档 public + 会话存在 三重校验（404 语义）。
+  const doc = await kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId)
+  const snapshot = { seq: port.seq, doc }
+  const target = { pluginId, name, conversationId }
+  // 建流后异步终山条件：插件停用（含注销）或会话已删除即关流，防订阅泄漏。
+  const shouldStop = (): boolean => {
+    try {
+      void kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId)
+      return false
+    } catch {
+      return true
+    }
+  }
+  void redactor
+  return port.response(ctx.request, { snapshot, target, shouldStop })
+}
 
 /**
  * 插件路由声明携带完整路径（PluginHost 强制 /api/plugins/<id>/ 前缀）。

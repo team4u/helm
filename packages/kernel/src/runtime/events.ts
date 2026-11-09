@@ -30,6 +30,7 @@ import type {
   HelmSnapshot,
   NodeInfo,
   PublicPluginDoc,
+  PublicPluginSessionDoc,
 } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 
@@ -485,6 +486,15 @@ export class EventHub {
         }
         return { type, doc: doc as PublicPluginDoc }
       }
+      case 'plugin.session_doc.updated': {
+        // 全局流防御性拒绝：会话文档事件只允许专用流（SessionDocEventHub），
+        // 误投全局广播属于契约违约，显式报错而不是降级透传（防写放大回归）。
+        throw new HelmError(
+          'invalid_event',
+          'plugin.session_doc.updated 不允许进入全局事件流（仅专用会话文档 SSE）',
+          500,
+        )
+      }
       case 'node.changed': {
         const source = (envelope ?? record) as Record<string, unknown> | undefined
         const node = source?.['node']
@@ -535,5 +545,216 @@ export class EventHub {
         return custom
       }
     }
+  }
+}
+
+/**
+ * SessionDocEventHub：会话文档专用事件面。
+ *
+ * plugin.session_doc.updated 绝不进入全局 /api/events（写放大与跨会话泄漏）；
+ * 本枢纽只把 (pluginId, name, conversationId) 三元组的更新分发给订阅了该
+ * 三元组的专用 SSE 流。帧形状与全局流一致（HelmEventFrame {seq, event}），
+ * seq 与全局水位共用同一单调序列的意义由调用方（HTTP 层）决定——此处只
+ * 维护自己的单调计数，首帧 snapshot 由 HTTP 层用 PluginSessionDocSnapshot
+ * 契约（seq, doc）单独构造。
+ */
+export class SessionDocEventHub {
+  private seqValue = 0
+  private readonly subscribers = new Map<string, Set<(frame: HelmEventFrame) => void>>()
+  /** 订阅建立到快照冲刷完成之间的未决帧数上限（溢出即慢客户端，关流重连）。 */
+  private readonly maxPending = 512
+  private redactFn: (text: string) => string = (t) => t
+
+  set redact(fn: (text: string) => string) {
+    this.redactFn = fn
+  }
+
+  get seq(): number {
+    return this.seqValue
+  }
+
+  private static keyOf(doc: { pluginId: string; name: string; conversationId: number }): string {
+    return `${doc.pluginId}\0${doc.name}\0${doc.conversationId}`
+  }
+
+  /** 当前活跃订阅数（诊断与测试用）。 */
+  get subscriberCount(): number {
+    return this.subscribers.size
+  }
+
+  /** 清空全部订阅（kernel.close 时调用，杜绝泄漏）。 */
+  close(): void {
+    this.subscribers.clear()
+  }
+
+  /**
+   * 发布一条会话文档更新：只投递订阅了该三元组的监听器。
+   * 载荷在边界做形状校验 + JSON 脱敏（与 EventHub.buildEvent 同一纪律），
+   * 非法载荷显式抛 HelmError，绝不静默降级。
+   */
+  dispatch(payload: unknown): void {
+    const source = payload as { type?: unknown; doc?: unknown } | undefined
+    const doc = source?.['doc']
+    const convId = (doc as { conversationId?: unknown }).conversationId
+    if (
+      doc === null ||
+      typeof doc !== 'object' ||
+      typeof (doc as { pluginId?: unknown }).pluginId !== 'string' ||
+      typeof (doc as { name?: unknown }).name !== 'string' ||
+      typeof convId !== 'number' ||
+      !Number.isSafeInteger(convId) ||
+      convId <= 0 ||
+      !('value' in (doc as Record<string, unknown>))
+    ) {
+      throw new HelmError(
+        'invalid_event',
+        'plugin.session_doc.updated 需要 { pluginId: string; name: string; conversationId: number; value } 形状的 doc',
+        500,
+      )
+    }
+    if ((doc as { deleted?: unknown }).deleted !== undefined && (doc as { deleted?: unknown }).deleted !== true) {
+      throw new HelmError('invalid_event', 'plugin.session_doc.updated 的 deleted 若有必须为 true', 500)
+    }
+    const clean = redactJsonValue(doc as PublicPluginSessionDoc, (t) => this.redactFn(t)) as PublicPluginSessionDoc
+    this.seqValue += 1
+    const frame: HelmEventFrame = {
+      seq: this.seqValue,
+      event: { type: 'plugin.session_doc.updated', doc: clean },
+    }
+    const key = SessionDocEventHub.keyOf(clean)
+    for (const deliver of [...(this.subscribers.get(key) ?? [])]) {
+      try {
+        deliver(frame)
+      } catch {
+        // 订阅方回调抛错只隔离自身（各订阅内部自行清理），不影响其他订阅者。
+      }
+    }
+  }
+
+  /**
+   * 订阅指定三元组的增量帧；返回退订函数。
+   * 与 EventHub.subscribe 同名语义：HTTP 层先订阅缓冲再同步取快照。
+   */
+  subscribe(
+    doc: { pluginId: string; name: string; conversationId: number },
+    listener: (frame: HelmEventFrame) => void,
+  ): () => void {
+    const key = SessionDocEventHub.keyOf(doc)
+    let set = this.subscribers.get(key)
+    if (set === undefined) {
+      set = new Set()
+      this.subscribers.set(key, set)
+    }
+    set.add(listener)
+    return () => {
+      const cur = this.subscribers.get(key)
+      if (cur === undefined) return
+      cur.delete(listener)
+      if (cur.size === 0) this.subscribers.delete(key)
+    }
+  }
+
+  /**
+   * 专用 SSE 响应：首帧 `event: snapshot`（PluginSessionDocSnapshot {seq, doc}），
+   * 随后 `event: plugin.session_doc.updated` + HelmEventFrame 增量。
+   * 复用全局流的有界背压（MAX_PENDING_EVENTS + 字节上限）与 abort/cancel
+   * 清理机制；重连即重新订阅并重置 snapshot（无跨连接状态残留）。
+   */
+  response(
+    request: Request,
+    options: {
+      snapshot: { seq: number; doc: PublicPluginSessionDoc }
+      target: { pluginId: string; name: string; conversationId: number }
+      /** 订阅应结束时同步关流（如插件停用 / 会话删除 / 宿主关闭）。 */
+      shouldStop?: () => boolean
+    },
+  ): Response {
+    const encoder = new TextEncoder()
+    let pending: string[] = []
+    let streaming = false
+    let closed = false
+    let unsubscribe: (() => void) | undefined
+    let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined
+
+    const encodeFrame = (name: string, data: unknown): string =>
+      `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
+
+    const write = (chunk: string): boolean => {
+      const controller = controllerRef
+      if (controller === undefined || closed) return false
+      try {
+        controller.enqueue(encoder.encode(chunk))
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    const shutdown = (): void => {
+      if (closed) return
+      closed = true
+      request.signal.removeEventListener('abort', shutdown)
+      unsubscribe?.()
+      unsubscribe = undefined
+      const controller = controllerRef
+      controllerRef = undefined
+      try {
+        controller?.close()
+      } catch {
+        // 已关：幂等。
+      }
+    }
+
+    unsubscribe = this.subscribe(options.target, (frame) => {
+      if (closed) return
+      const chunk = encodeFrame('plugin.session_doc.updated', frame)
+      if (streaming) {
+        if (!write(chunk)) shutdown()
+        return
+      }
+      if (pending.length >= this.maxPending) {
+        shutdown()
+        return
+      }
+      pending.push(chunk)
+    })
+
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        start: (controller) => {
+          controllerRef = controller
+          if (closed || request.signal.aborted) {
+            shutdown()
+            return
+          }
+          request.signal.addEventListener('abort', shutdown)
+          // 先订阅缓冲已建立（构造上方），此处同步发首帧 snapshot 再冲刷缓冲。
+          if (!write(encodeFrame('snapshot', options.snapshot))) {
+            shutdown()
+            return
+          }
+          streaming = true
+          for (const chunk of pending) {
+            if (!write(chunk)) {
+              shutdown()
+              return
+            }
+          }
+          pending = []
+        },
+        cancel: () => {
+          shutdown()
+        },
+      },
+      { highWaterMark: 0, size: (c) => c.byteLength } satisfies QueuingStrategy<Uint8Array>,
+    )
+    return new Response(stream, {
+      headers: {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+      },
+    })
   }
 }

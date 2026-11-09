@@ -32,6 +32,7 @@ import type {
   PluginSummary,
   ProviderConfig,
   PublicPluginDoc,
+  PublicPluginSessionDoc,
   SearchHit,
   SkillSummary,
   Profile,
@@ -107,6 +108,15 @@ export interface PluginHost {
   /** 读取插件公共文档；私有/停用/不存在一律 404（鉴权不能绕过可见性）。 */
   getPublicDoc(pluginId: string, name: string): Promise<PublicPluginDoc> | PublicPluginDoc
   /**
+   * 读取插件公共会话文档（GET /api/plugins/:id/docs/:name?conversationId=N
+   * 与专用 SSE 首帧共用）；停用/私有/未声明/会话不存在一律 404。
+   */
+  getPublicSessionDoc(
+    pluginId: string,
+    name: string,
+    conversationId: number,
+  ): Promise<PublicPluginSessionDoc> | PublicPluginSessionDoc
+  /**
    * 获取已启用插件 client.tsx 编译产物（GET /api/plugins/:id/client.mjs?module=...）。
    * 停用/未注册/未声明 clientRoot/越根/编译失败显式抛错（HelmError 语义）。
    */
@@ -115,11 +125,30 @@ export interface PluginHost {
 
 export type { SearchHit }
 
+/** 会话文档事件端口（kernel 侧 SessionDocEventHub 的结构化形状）。 */
+export interface SessionDocEventPort {
+  readonly seq: number
+  subscribe(
+    doc: { pluginId: string; name: string; conversationId: number },
+    listener: (frame: { seq: number; event: unknown }) => void,
+  ): () => void
+  response(
+    request: Request,
+    options: {
+      snapshot: { seq: number; doc: PublicPluginSessionDoc }
+      target: { pluginId: string; name: string; conversationId: number }
+      shouldStop?: () => boolean
+    },
+  ): Response
+}
+
 /** HTTP 消费的 KernelRuntime 形状（真实 KernelRuntime 结构化兼容于它）。 */
 export interface KernelRuntimeLike {
   readonly dataDir: string
   readonly auth: AuthService
   readonly events: EventHub
+  /** 会话文档专用事件流端口（未提供时专用 SSE 501）。 */
+  readonly sessionDocEvents?: SessionDocEventPort
   readonly profiles: ProfileService
   readonly skills: SkillService
   readonly credentials: CredentialService

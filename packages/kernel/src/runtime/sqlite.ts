@@ -73,6 +73,16 @@ CREATE TABLE IF NOT EXISTS helm_plugin_docs (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (plugin_id, name)
 );
+CREATE TABLE IF NOT EXISTS helm_plugin_session_docs (
+  plugin_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  conversation_id INTEGER NOT NULL,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (plugin_id, name, conversation_id)
+);
+CREATE INDEX IF NOT EXISTS helm_plugin_session_docs_conv
+  ON helm_plugin_session_docs (conversation_id);
 CREATE TABLE IF NOT EXISTS helm_seq (
   key TEXT PRIMARY KEY,
   value INTEGER NOT NULL

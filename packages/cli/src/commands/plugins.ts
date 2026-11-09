@@ -6,6 +6,7 @@ import type { ActionManifest, PluginSummary } from '@helm/protocol'
 import { CliError } from '../errors.js'
 import { parseFlags } from '../args.js'
 import { printValue } from '../output.js'
+import type { HubClient } from '../hub-client.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import {
   assertNoExtraPositionals,
@@ -16,7 +17,63 @@ import {
   printResult,
   repeatedValues,
   requirePositional,
+  resolveConversationTarget,
 } from './shared.js'
+
+/**
+ * 会话文档订阅（--watch）：消费专用 SSE（GET /api/plugins/:id/docs/:name/events?conversationId=N）。
+ * - --json：每帧 NDJSON 输出（snapshot 帧与增量帧均原样）；
+ * - 人类模式：snapshot 打印当前值，增量帧打印一行变更摘要 + 新值；
+ * - 建连 404（插件停用/会话删除/文档非 public）显式报错并停止（不重试）。
+ */
+async function watchSessionDoc(
+  ctx: CommandContext,
+  hub: HubClient,
+  base: string,
+  conversationId: number,
+  pluginId: string,
+  name: string,
+): Promise<void> {
+  const controller = new AbortController()
+  const onSignal = () => controller.abort()
+  process.once('SIGINT', onSignal)
+  process.once('SIGTERM', onSignal)
+  const label = `${pluginId}/${name}#会话${conversationId}`
+  try {
+    await hub.streamSse(`${base}/events?conversationId=${conversationId}`, {
+      signal: controller.signal,
+      onFrame: ({ event, data }) => {
+        let payload: unknown
+        try {
+          payload = JSON.parse(data)
+        } catch {
+          ctx.io.err(`helm: 忽略非 JSON SSE 帧（${data.slice(0, 120)}）\n`)
+          return
+        }
+        if (ctx.json) {
+          ctx.io.out(`${JSON.stringify(payload ?? null)}\n`)
+          return
+        }
+        if (event === 'snapshot') {
+          const snap = payload as { doc?: { value?: unknown; deleted?: boolean } }
+          ctx.io.out(`[${label}] 快照\n`)
+          printValue(ctx.io, snap.doc?.value ?? null, false)
+          return
+        }
+        const frame = payload as { seq?: number; event?: { doc?: { value?: unknown; deleted?: boolean } } }
+        const doc = frame.event?.doc
+        ctx.io.out(`[${label}] 更新 seq=${frame.seq ?? '?'}${doc?.deleted === true ? '（已删除）' : ''}\n`)
+        printValue(ctx.io, doc?.value ?? null, false)
+      },
+    })
+  } catch (err) {
+    if (err instanceof CliError && err.code === 'aborted') return
+    throw err
+  } finally {
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
+  }
+}
 
 export function pluginsCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
@@ -89,20 +146,62 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'doc'],
-    description: '读取插件公共文档（GET /api/plugins/:id/docs/:name；私有/不存在 404）',
+    description:
+      '读取插件公共文档（GET /api/plugins/:id/docs/:name；--conversation/--current 读会话文档；--watch 订阅会话文档专用 SSE）',
+    flags: [
+      { name: 'conversation', type: 'number', help: '会话文档目标会话 ID（与 --current 互斥）' },
+      { name: 'current', type: 'boolean', help: '使用 env HELM_CONVERSATION_ID（与 --conversation 互斥）' },
+      { name: 'watch', type: 'boolean', help: '订阅会话文档专用 SSE（需 --conversation/--current；Ctrl-C 退出）' },
+    ],
     positional: '<pluginId> <name>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([], ctx.args)
+      const parsed = parseFlags(
+        [
+          { name: 'conversation', type: 'number' },
+          { name: 'current', type: 'boolean' },
+          { name: 'watch', type: 'boolean' },
+        ],
+        ctx.args,
+      )
       const pluginId = parsed.positionals[0]
       const name = parsed.positionals[1]
       if (pluginId === undefined || name === undefined) {
         throw new CliError('缺少位置参数：plugins doc <pluginId> <name>', 'missing_id')
       }
       assertNoExtraPositionals(parsed.positionals, 2)
+      const hasConversation = parsed.flags.has('conversation')
+      const hasCurrent = parsed.flags.get('current') === true
+      if (hasConversation && hasCurrent) {
+        throw new CliError('--conversation 与 --current 互斥', 'conflicting_flags')
+      }
+      let conversationId: number | undefined
+      if (hasConversation) {
+        const value = parsed.flags.get('conversation')
+        if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+          throw new CliError('--conversation 需为正整数会话 ID', 'invalid_flag_value')
+        }
+        conversationId = value
+      } else if (hasCurrent) {
+        conversationId = resolveConversationTarget(parsed.flags, undefined, ctx.env)
+      }
+      const base = `/api/plugins/${encodeURIComponent(pluginId)}/docs/${encodeURIComponent(name)}`
       const hub = await ctx.hub()
-      const doc = await hub.get<{ pluginId: string; name: string; value: unknown }>(
-        `/api/plugins/${encodeURIComponent(pluginId)}/docs/${encodeURIComponent(name)}`,
-      )
+      if (parsed.flags.get('watch') === true) {
+        if (conversationId === undefined) {
+          throw new CliError('--watch 需要会话目标（--conversation <id> 或 --current）', 'missing_conversation_target')
+        }
+        await watchSessionDoc(ctx, hub, base, conversationId, pluginId, name)
+        return
+      }
+      const path =
+        conversationId === undefined ? base : `${base}?conversationId=${conversationId}`
+      const doc = await hub.get<{
+        pluginId: string
+        name: string
+        conversationId?: number
+        value: unknown
+        deleted?: boolean
+      }>(path)
       if (ctx.json) {
         printResult(ctx, doc)
         return
