@@ -86,7 +86,7 @@ flowchart TD
 ## 前端 7 大全界面插槽
 
 前端扩展点允许插件重塑界面交互。
-宿主为插件提供 10 个精确的注册方法。
+基础 7 类界面扩展面继续保留。宿主另外提供微操作、Profile 运行时元数据与插件子插槽，总计 15 个注册方法。
 
 ### 扩展插槽分类
 
@@ -119,7 +119,29 @@ flowchart TD
 | **工具卡** | `ctx.ui.toolView()` | 接管特定工具的调用参数卡片与执行结果展示 |
 | **输入区** | `ctx.ui.composerPill()`<br/>`ctx.ui.composerWidget()` | 注册输入框下方快捷药丸按钮或展开式面板小部件 |
 | **工作台** | `ctx.ui.workbenchPanel()` | 注册会话右侧抽屉面板。支持按当前会话上下文动态展示 |
-| **全局项** | `ctx.ui.command()`<br/>`ctx.ui.settingsPanel()` | 注册全局快捷键命令面板（⌘K）动作与系统配置面板标签页 |
+| **全局项** | `ctx.ui.command()`<br/>`ctx.ui.settingsPanel()` | 注册全局命令（⌘K）、可选 `/slash` 补全与配置面板；同一插件可以声明多个配置面板 |
+| **会话微操作** | `ctx.ui.conversationHeaderAction()`<br/>`ctx.ui.conversationRowAction()` | 向会话顶栏、更多菜单与左栏会话行菜单追加操作 |
+| **消息微操作** | `ctx.ui.timelineEntryAction()` | 向消息操作栏追加操作，支持按条目类型、角色和会话 scope 过滤 |
+| **运行时元数据** | `ctx.ui.profileRuntime()` | 声明 Profile 外部运行时的名称、图标、说明与 Agent 候选；宿主按通用 ProfileRuntime 结构编辑 |
+| **插件子插槽** | `ctx.ui.slot()` | 向 `<ownerPluginId>/<slotName>` 注入 JSON 或客户端组件 |
+
+`timelineRenderer` 与 `toolView` 支持 `priority`：数值较大者优先，缺省为 `0`，同优先级保持贡献顺序。多个插件接管同一工具时可以显式裁决；高优先级插件停用后由剩余候选接管。
+
+微操作可以直接声明 `actionId`，宿主负责按钮、pending 状态与失败通知；也可以声明 `json` / `client` 渲染内容。调用上下文固定为实际会话，`input` 不得覆盖宿主注入的 `conversationId` / `entryId`。`actionPluginId` 可显式指向另一个插件。
+
+### 参数化视图与输入区控制
+
+Screen 组件接收 `ScreenProps`：`pluginId / screenId / isSplit / params / setParams`。主屏参数在 URL Hash 中编码为 `sp.<key>`，分屏参数编码为 `ssp.<key>`；两边展示同一 Screen 时仍互相独立。`setParams(patch)` 默认替换历史记录，值为 `undefined` 时删除对应键，`{ push: true }` 则新增历史记录。组件不得直接操作 `history` 或自建路由。
+
+输入区组件接收 `ComposerScopeProps.composer`，可以读取草稿、附件与发送状态，调用 `setDraft / insertText / submit`。省略 `submit` 的文本参数时发送当前草稿及附件；显式提供文本时不消费已有草稿。失败通过 Promise 拒绝并展示诊断，不得视作发送成功。输入区子插槽继承同一个控制器。
+
+`ctx.ui.command({ slash: 'archive', actionId: 'archive', ... })` 同时派生 ⌘K 与输入框 `/archive` 菜单。斜杠词不能覆盖宿主保留命令或 `skill:` 命名空间，也不能与其他启用插件重名。
+
+### 插件间组合
+
+插件视图可以从 `@helm/plugin-client` 导入 `<PluginSlot name="cards" />`，供其他插件用 `ctx.ui.slot({ id: 'card', target: 'owner-plugin/cards', ... })` 注入内容。声明式 JSON 使用 `Slot` 原语。短名称相对当前插件，全限定名显式指定所属插件。
+
+`mode="list"` 渲染全部命中贡献，`mode="single"` 只选第一项；按 `priority` 降序、`order` 升序稳定排序。每个子项重新绑定贡献者的插件上下文，并有独立错误边界。循环引用与过深嵌套显示错误提示，不继续递归。
 
 ---
 
@@ -139,7 +161,7 @@ flowchart TD
 
 - **纯数据驱动**：无需前端编译打包环节。
 - **安全约束**：纯 JSON 模式描述表单与布局，避免执行任意脚本。
-- **文档联动**：可以通过 `docs: [...]` 字段直接订阅插件公开文档。
+- **文档联动**：`docs: [...]` 订阅本插件公开全局文档并注入 `$docs`；`sessionDocs: [...]` 按当前会话订阅公开会话文档并注入 `$sessionDocs`。
 
 ### 2. 原生组件 `client.tsx` 轨道
 
@@ -152,5 +174,20 @@ flowchart TD
 ### 双轨优先级纪律
 
 当插件同时声明 `client` 与 `json` 时，宿主优先渲染 `client` 组件。
-若宿主环境未开启动态加载，系统自动回退至 `json` 视图。
-系统严禁静默丢弃未适配的插件界面。
+客户端编译、导出校验或加载失败时，宿主显示明确错误与重试入口，不把 JSON 描述或空白静默冒充客户端组件加载成功。
+
+## 公开数据与会话投影
+
+`ctx.doc(name, initial, { public: true })` 适合全局设置或紧凑导航摘要，进入全局 SSE 首帧 `pluginDocs`，更新时广播完整文档。私有文档不公开。
+
+`ctx.sessionDoc(name, initial, { public: true })` 按 `conversationId` 持久化分片，不进入全局首帧，也不向普通 `/api/events` 发送会话文档事件。读写句柄使用 `get / set / update / delete(conversationId, ...)`，`flush()` 等待真实持久化；会话删除清理其文档，过期句柄或删除后的写入报错。
+
+客户端 `usePluginSessionDoc('runs')` 使用当前槽位的会话，也可通过第二参显式指定 `conversationId / pluginId`。同一文档的多个挂载组件共享订阅，引用归零时断开。专用 SSE 首帧提供当前值与水位，后续只传该元组的更新，重连重新取首帧。`usePluginDoc(name, pluginId?)` 和 `ctx.callAction(actionId, input, { pluginId?, conversationId? })` 支持显式跨插件寻址；只能读取公开文档，动作仍由后端校验。
+
+HTTP 与 CLI 同权：
+
+- 一次读取：`GET /api/plugins/:id/docs/:name?conversationId=N`；`helm plugins doc <id> <name> --conversation N --json`。
+- 当前会话：`helm plugins doc <id> <name> --current --json`。
+- 持续订阅：`GET /api/plugins/:id/docs/:name/events?conversationId=N`；`helm plugins doc <id> <name> --conversation N --watch --json`。
+
+`builtin:workflow` 将完整运行摘要放入会话文档 `runs`。全局 `run-badges` 仅保留计数、色调和底部短文案，不包含节点或输出；摘要没有变化时不重复发布。
