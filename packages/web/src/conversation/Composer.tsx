@@ -8,6 +8,7 @@ import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { collectEnabledPluginIds, isSkillVisible } from '../shell/sidebar-model.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { Select, type SelectOption } from '../ui/Select.js'
+import { Tabs, TabsList, TabsTrigger } from '../ui/Tabs.js'
 import { AskDock } from './AskDock.js'
 import {
   attachmentsOfEditTarget,
@@ -223,30 +224,40 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
                 思考档位
                 <span style={{ color: 'var(--fg-subtle)' }}>{shortName}</span>
               </div>
-              <div className="segmented-control composer-thinking-row">
-                <button
-                  type="button"
-                  className={`segmented-control-btn${conversation.thinkingLevelOverride ? '' : ' is-active'}`}
-                  aria-pressed={!conversation.thinkingLevelOverride}
-                  disabled={pending}
-                  title="跟随模型 / Profile 默认档位"
-                  onClick={() => void pickThinking('')}
-                >
-                  默认
-                </button>
-                {currentLevels.map((level) => (
-                  <button
-                    key={level}
-                    type="button"
-                    className={`segmented-control-btn${conversation.thinkingLevelOverride === level ? ' is-active' : ''}`}
-                    aria-pressed={conversation.thinkingLevelOverride === level}
+              <Tabs
+                value={conversation.thinkingLevelOverride || ''}
+                onValueChange={(val) => {
+                  if (val === '') {
+                    void pickThinking('')
+                  } else {
+                    const level = val
+                    void pickThinking(level)
+                  }
+                }}
+                variant="segmented"
+                style={{ width: '100%' }}
+              >
+                <TabsList className="segmented-control composer-thinking-row" aria-label="思考档位">
+                  <TabsTrigger
+                    value=""
                     disabled={pending}
-                    onClick={() => void pickThinking(level)}
+                    title="跟随模型 / Profile 默认档位"
+                    onClick={() => void pickThinking('')}
                   >
-                    {level}
-                  </button>
-                ))}
-              </div>
+                    默认
+                  </TabsTrigger>
+                  {currentLevels.map((level) => (
+                    <TabsTrigger
+                      key={level}
+                      value={level}
+                      disabled={pending}
+                      onClick={() => void pickThinking(level)}
+                    >
+                      {level}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
             </>
           ) : null}
         </div>

@@ -11,6 +11,7 @@ import remarkGfm from 'remark-gfm'
 import { HelmIcon } from '../lib/icons.js'
 import { Select } from './Select.js'
 import { Checkbox } from './Checkbox.js'
+import { Tabs, TabsList, TabsTrigger } from './Tabs.js'
 import { evaluateSpecValue, type EvalScope } from './evaluator.js'
 import { formatSpecText, normalizeSpec, resolveKeyValueItems, type NormalizedSpecNode } from './spec-normalize.js'
 
@@ -735,25 +736,25 @@ function TabsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
   const [activeId, setActiveId] = useState(tabs[0]?.id)
   const active = tabs.find((t) => t.id === activeId) ?? tabs[0]
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-      <div className="tabs-bar">
+    <Tabs
+      value={active?.id}
+      onValueChange={(val) => setActiveId(val)}
+      variant="underline"
+      style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}
+    >
+      <TabsList className="tabs-bar">
         {tabs.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className={`tab-btn ${t.id === active?.id ? 'tab-btn-active' : ''}`}
-            onClick={() => setActiveId(t.id)}
-          >
+          <TabsTrigger key={t.id} value={t.id} className="tab-btn">
             {t.label}
-          </button>
+          </TabsTrigger>
         ))}
-      </div>
+      </TabsList>
       {active !== undefined && (
         <div style={{ padding: '12px 4px' }}>
           <TabChildren childrenRaw={active.childrenRaw} ctx={ctx} />
         </div>
       )}
-    </div>
+    </Tabs>
   )
 }
 

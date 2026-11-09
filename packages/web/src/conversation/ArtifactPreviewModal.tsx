@@ -7,6 +7,7 @@ import { useIsMobile } from './composer-model.js'
 import { detectLanguage } from './code-language.js'
 import { CodeBlockView, MarkdownView } from './MarkdownView.js'
 import { formatBytes } from '../lib/format.js'
+import { SegmentedControl } from '../ui/Tabs.js'
 
 export interface ArtifactPreviewModalProps {
   artifactId: string
@@ -128,24 +129,15 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
           </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             {markdown ? (
-              <div className="segmented-control" role="group" aria-label="视图模式">
-                <button
-                  type="button"
-                  className={`segmented-control-btn${view === 'rich' ? ' is-active' : ''}`}
-                  aria-pressed={view === 'rich'}
-                  onClick={() => setView('rich')}
-                >
-                  富文本
-                </button>
-                <button
-                  type="button"
-                  className={`segmented-control-btn${view === 'source' ? ' is-active' : ''}`}
-                  aria-pressed={view === 'source'}
-                  onClick={() => setView('source')}
-                >
-                  源码
-                </button>
-              </div>
+              <SegmentedControl<'rich' | 'source'>
+                value={view}
+                onValueChange={(v) => setView(v)}
+                aria-label="视图模式"
+                items={[
+                  { value: 'rich', label: '富文本' },
+                  { value: 'source', label: '源码' },
+                ]}
+              />
             ) : null}
             {!isMobile ? (
               <button

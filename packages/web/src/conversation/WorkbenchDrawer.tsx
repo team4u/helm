@@ -3,6 +3,7 @@ import type { ConversationSummary } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { Tabs, TabsList, TabsTrigger } from '../ui/Tabs.js'
 import { formatBytes } from '../lib/format.js'
 import {
   buildWorkbenchFooter,
@@ -83,56 +84,64 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
 
   return (
     <aside className="helm-workbench">
-      <div className="tabs-bar">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            className={`tab-btn${tab.id === activeTab ? ' tab-btn-active' : ''}`}
-            onClick={() => store.setWorkbenchTab(tab.id)}
-          >
-            {tab.label}
-            {tab.count > 0 && tab.id !== activeTab ? (
-              <span className={`badge ${tab.tone === 'warn' ? 'badge-warn' : tab.tone === 'accent' ? 'badge-accent' : 'badge-neutral'} tabular-nums`}>
-                {tab.count}
-              </span>
-            ) : null}
-          </button>
-        ))}
-        <span style={{ flex: 1 }} />
-        <button
-          type="button"
-          className="btn btn-ghost btn-icon-sm workbench-close-btn"
-          aria-label="关闭工作台"
-          title="关闭工作台"
-          onClick={() => store.setWorkbenchOpen(false)}
-        >
-          <HelmIcon name="x" size={14} />
-        </button>
-      </div>
-      <div style={{ flex: 1, overflowY: 'auto' }}>
-        {conversationId === undefined ? (
-          <div className="empty-state empty-state-compact">
-            <p className="empty-state-title">无活跃会话上下文</p>
+      <Tabs
+        value={activeTab}
+        onValueChange={(val) => store.setWorkbenchTab(val)}
+        variant="underline"
+        style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
+      >
+        <TabsList asChild>
+          <div className="tabs-bar">
+            {tabs.map((tab) => (
+              <TabsTrigger
+                key={tab.id}
+                value={tab.id}
+                className={`tab-btn${tab.id === activeTab ? ' tab-btn-active' : ''}`}
+              >
+                {tab.label}
+                {tab.count > 0 && tab.id !== activeTab ? (
+                  <span className={`badge ${tab.tone === 'warn' ? 'badge-warn' : tab.tone === 'accent' ? 'badge-accent' : 'badge-neutral'} tabular-nums`}>
+                    {tab.count}
+                  </span>
+                ) : null}
+              </TabsTrigger>
+            ))}
+            <span style={{ flex: 1 }} />
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon-sm workbench-close-btn"
+              aria-label="关闭工作台"
+              title="关闭工作台"
+              onClick={() => store.setWorkbenchOpen(false)}
+            >
+              <HelmIcon name="x" size={14} />
+            </button>
           </div>
-        ) : activeTab === 'artifacts' ? (
-          <ArtifactsTab conversationId={conversationId} />
-        ) : activePanel !== undefined && activePanel.spec !== undefined && activePanel.pluginId !== undefined ? (
-          <div style={{ padding: 10 }}>
-            <PluginUiView
-              pluginId={activePanel.pluginId}
-              spec={activePanel.spec}
-              conversationId={conversationId}
-              label={`工作台 ${activePanel.spec.label ?? activePanel.spec.id}`}
-              slotProps={{ conversation: conversation ?? { id: conversationId } }}
-            />
-          </div>
-        ) : (
-          <div className="empty-state empty-state-compact">
-            <p className="empty-state-title">工作台页签不存在或对当前会话不可用</p>
-          </div>
-        )}
-      </div>
+        </TabsList>
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {conversationId === undefined ? (
+            <div className="empty-state empty-state-compact">
+              <p className="empty-state-title">无活跃会话上下文</p>
+            </div>
+          ) : activeTab === 'artifacts' ? (
+            <ArtifactsTab conversationId={conversationId} />
+          ) : activePanel !== undefined && activePanel.spec !== undefined && activePanel.pluginId !== undefined ? (
+            <div style={{ padding: 10 }}>
+              <PluginUiView
+                pluginId={activePanel.pluginId}
+                spec={activePanel.spec}
+                conversationId={conversationId}
+                label={`工作台 ${activePanel.spec.label ?? activePanel.spec.id}`}
+                slotProps={{ conversation: conversation ?? { id: conversationId } }}
+              />
+            </div>
+          ) : (
+            <div className="empty-state empty-state-compact">
+              <p className="empty-state-title">工作台页签不存在或对当前会话不可用</p>
+            </div>
+          )}
+        </div>
+      </Tabs>
       {footerParts.length > 0 ? (
         <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', gap: 6, fontSize: 11, color: 'var(--fg-muted)' }}>
           {footerParts.map((part) => (

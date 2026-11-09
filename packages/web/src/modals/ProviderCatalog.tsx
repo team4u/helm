@@ -4,6 +4,7 @@ import { assetsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { HelmSpecView } from '../ui/HelmSpecView.js'
+import { Tabs, TabsList, TabsTrigger } from '../ui/Tabs.js'
 import { buildProviderEntries, filterProviderEntries, type ProviderEntry, type ProviderFilter } from './provider-auth-model.js'
 
 function ProviderDetail({
@@ -223,20 +224,24 @@ export function ProviderCatalog({ onEditGateway }: { onEditGateway(): void }) {
               autoFocus
             />
           </div>
-          <div className="segmented-control provider-filters" role="group" aria-label="供应商状态筛选">
-            {([['all', '全部', entries.length], ['configured', '已配置', configuredCount], ['unconfigured', '待配置', entries.length - configuredCount]] as const).map(([id, label, count]) => (
-              <button
-                key={id}
-                type="button"
-                className={`segmented-control-btn provider-filter${filter === id ? ' is-active' : ''}`}
-                aria-pressed={filter === id}
-                onClick={() => setFilter(id)}
-              >
-                {label}
-                <span className="tabular-nums">{count}</span>
-              </button>
-            ))}
-          </div>
+          <Tabs
+            value={filter}
+            onValueChange={(val) => setFilter(val as ProviderFilter)}
+            variant="segmented"
+          >
+            <TabsList className="segmented-control provider-filters" aria-label="供应商状态筛选">
+              {([['all', '全部', entries.length], ['configured', '已配置', configuredCount], ['unconfigured', '待配置', entries.length - configuredCount]] as const).map(([id, label, count]) => (
+                <TabsTrigger
+                  key={id}
+                  value={id}
+                  className={`segmented-control-btn provider-filter${filter === id ? ' is-active' : ''}`}
+                >
+                  {label}
+                  <span className="tabular-nums">{count}</span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
         </div>
         <div className="provider-list" aria-busy={loading}>
           {loading && <div className="provider-list-message" role="status">加载 PI 供应商目录…</div>}

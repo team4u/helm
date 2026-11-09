@@ -6,6 +6,7 @@ import { useHelmStore } from '../lib/store-context.js'
 import { ProviderCatalog } from './ProviderCatalog.js'
 import { Select } from '../ui/Select.js'
 import { Switch } from '../ui/Switch.js'
+import { Tabs, TabsList, TabsTrigger } from '../ui/Tabs.js'
 import './provider-auth.css'
 
 type ProviderDraft = ProviderConfig & { modelText: string }
@@ -223,7 +224,16 @@ export function ProviderAuthModal({ onClose }: { onClose(): void }) {
             <HelmIcon name="x" size={14} />
           </button>
         </div>
-        <nav className="tabs-bar provider-tabs" aria-label="模型配置分类"><button className={`tab-btn${view === 'providers' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'providers'} onClick={() => setView('providers')}>供应商</button><button className={`tab-btn${view === 'gateways' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'gateways'} onClick={() => setView('gateways')}>自定义网关</button><button className={`tab-btn${view === 'defaults' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'defaults'} onClick={() => setView('defaults')}>全局模型</button><span className="provider-tabs-note">由 PI 原生模块提供</span></nav>
+        <Tabs value={view} onValueChange={(val) => setView(val as 'providers' | 'gateways' | 'defaults')} variant="underline">
+          <TabsList asChild>
+            <nav className="tabs-bar provider-tabs" aria-label="模型配置分类">
+              <TabsTrigger value="providers" className="tab-btn">供应商</TabsTrigger>
+              <TabsTrigger value="gateways" className="tab-btn">自定义网关</TabsTrigger>
+              <TabsTrigger value="defaults" className="tab-btn">全局模型</TabsTrigger>
+              <span className="provider-tabs-note">由 PI 原生模块提供</span>
+            </nav>
+          </TabsList>
+        </Tabs>
         {view === 'providers' && <ProviderCatalog onEditGateway={() => setView('gateways')} />}
         <div className="provider-gateway-panel" hidden={view !== 'gateways'}><ProvidersSection /></div>
         <div className="provider-gateway-panel" hidden={view !== 'defaults'}><DefaultsSection /></div>
