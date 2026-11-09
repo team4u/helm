@@ -212,21 +212,78 @@ export function ProviderCatalog({ onEditGateway }: { onEditGateway(): void }) {
     <div className={`provider-catalog${hasSelection ? ' has-selection' : ''}`}>
       <aside className="provider-sidebar" aria-label="供应商列表">
         <div className="provider-sidebar-controls">
-          <label className="provider-search"><HelmIcon name="search" size={14} /><input className="input" aria-label="搜索供应商或模型" placeholder="搜索供应商或模型…" value={query} onChange={(event) => setQuery(event.target.value)} autoFocus /></label>
-          <div className="provider-filters" role="group" aria-label="供应商状态筛选">
-            {([['all', '全部', entries.length], ['configured', '已配置', configuredCount], ['unconfigured', '待配置', entries.length - configuredCount]] as const).map(([id, label, count]) => <button key={id} className={`provider-filter${filter === id ? ' is-active' : ''}`} aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}<span>{count}</span></button>)}
+          <div className="search-box provider-search">
+            <HelmIcon name="search" size={14} />
+            <input
+              className="input"
+              aria-label="搜索供应商或模型"
+              placeholder="搜索供应商或模型…"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              autoFocus
+            />
+          </div>
+          <div className="segmented-control provider-filters" role="group" aria-label="供应商状态筛选">
+            {([['all', '全部', entries.length], ['configured', '已配置', configuredCount], ['unconfigured', '待配置', entries.length - configuredCount]] as const).map(([id, label, count]) => (
+              <button
+                key={id}
+                type="button"
+                className={`segmented-control-btn provider-filter${filter === id ? ' is-active' : ''}`}
+                aria-pressed={filter === id}
+                onClick={() => setFilter(id)}
+              >
+                {label}
+                <span className="tabular-nums">{count}</span>
+              </button>
+            ))}
           </div>
         </div>
         <div className="provider-list" aria-busy={loading}>
           {loading && <div className="provider-list-message" role="status">加载 PI 供应商目录…</div>}
-          {error && <div className="provider-list-message" role="alert"><p>供应商目录加载失败</p><p className="provider-help selectable">{error}</p><button className="btn btn-sm" onClick={() => setReload((previous) => previous + 1)}>重试</button></div>}
-          {!loading && !error && filtered.length === 0 && <div className="provider-list-message">没有匹配的供应商<button className="btn btn-ghost btn-sm" onClick={() => { setQuery(''); setFilter('all') }}>清除筛选</button></div>}
-          {filtered.map((provider) => <button key={provider.id} className={`provider-list-item${!manual && selected?.id === provider.id ? ' is-selected' : ''}`} aria-pressed={!manual && selected?.id === provider.id} title={`${provider.name} (${provider.id})`} onClick={() => { setSelectedId(provider.id); setManual(false) }}>
-            <span className="provider-list-item-copy"><strong>{provider.name}</strong><span className="mono">{provider.id}</span></span>
-            <span className={`provider-list-status${provider.available ? ' is-available' : ''}`}>{provider.available ? '可用' : provider.hasStoredKey ? '已存密钥' : `${provider.modelCount} 模型`}</span>
-          </button>)}
+          {error && (
+            <div className="provider-list-message" role="alert">
+              <p>供应商目录加载失败</p>
+              <p className="provider-help selectable">{error}</p>
+              <button className="btn btn-sm" type="button" onClick={() => setReload((previous) => previous + 1)}>重试</button>
+            </div>
+          )}
+          {!loading && !error && filtered.length === 0 && (
+            <div className="empty-state empty-state-compact provider-list-message">
+              <span>没有匹配的供应商</span>
+              <button className="btn btn-ghost btn-sm" type="button" onClick={() => { setQuery(''); setFilter('all') }}>清除筛选</button>
+            </div>
+          )}
+          {filtered.map((provider) => (
+            <button
+              key={provider.id}
+              type="button"
+              className={`provider-list-item${!manual && selected?.id === provider.id ? ' is-selected' : ''}`}
+              aria-pressed={!manual && selected?.id === provider.id}
+              title={`${provider.name} (${provider.id})`}
+              onClick={() => { setSelectedId(provider.id); setManual(false) }}
+            >
+              <span className="provider-list-item-copy">
+                <strong>{provider.name}</strong>
+                <span className="mono">{provider.id}</span>
+              </span>
+              <span className={`provider-list-status${provider.available ? ' is-available' : ''}`}>
+                {provider.available ? '可用' : provider.hasStoredKey ? '已存密钥' : `${provider.modelCount} 模型`}
+              </span>
+            </button>
+          ))}
         </div>
-        <div className="provider-sidebar-footer"><span>{query.trim() ? `${filtered.length} / ${entries.length} 家` : `${entries.length} 家供应商`}</span><button className="btn btn-ghost btn-sm" aria-pressed={manual} onClick={() => { setManual(true); setSelectedId(null) }}><HelmIcon name="plus" size={12} />按 ID 配置</button></div>
+        <div className="provider-sidebar-footer">
+          <span>{query.trim() ? `${filtered.length} / ${entries.length} 家` : `${entries.length} 家供应商`}</span>
+          <button
+            className="btn btn-ghost btn-sm"
+            type="button"
+            aria-pressed={manual}
+            onClick={() => { setManual(true); setSelectedId(null) }}
+          >
+            <HelmIcon name="plus" size={12} />
+            按 ID 配置
+          </button>
+        </div>
       </aside>
       <div className="provider-detail-scroll">
         {manual || selected ? (
@@ -241,7 +298,15 @@ export function ProviderCatalog({ onEditGateway }: { onEditGateway(): void }) {
             }}
           />
         ) : (
-          <div className="provider-empty"><HelmIcon name="cpu" size={32} /><h3>选择供应商，配置模型连接</h3><p>搜索名称、供应商 ID 或模型 ID。<br />已配置的供应商优先展示，目录与协议直接来自 PI。</p><span className="provider-help">自定义代理地址请使用「自定义网关」。</span></div>
+          <div className="empty-state provider-empty">
+            <div className="empty-state-icon"><HelmIcon name="cpu" size={24} /></div>
+            <h4 className="empty-state-title">选择供应商，配置模型连接</h4>
+            <p className="provider-help">
+              搜索名称、供应商 ID 或模型 ID。<br />
+              已配置的供应商优先展示，目录与协议直接来自 PI。
+            </p>
+            <span className="provider-help">自定义代理地址请使用「自定义网关」。</span>
+          </div>
         )}
       </div>
     </div>

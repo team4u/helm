@@ -84,7 +84,13 @@ function ProvidersSection() {
           <button className="btn btn-sm btn-danger" aria-label={`删除网关 ${provider.id}`} onClick={() => removeProvider(index)} disabled={saving}><HelmIcon name="trash-2" size={12} />删除网关</button>
         </div>
       ))}
-      {!list.length && <div className="provider-empty provider-empty-gateway"><HelmIcon name="network" size={28} /><h3>无需重复配置内置供应商</h3><p>使用自建服务或代理网关时，再添加自定义地址。</p></div>}
+      {!list.length && (
+        <div className="empty-state provider-empty-gateway">
+          <div className="empty-state-icon"><HelmIcon name="network" size={24} /></div>
+          <h4 className="empty-state-title">无需重复配置内置供应商</h4>
+          <p className="provider-help">使用自建服务或代理网关时，再添加自定义地址。</p>
+        </div>
+      )}
       {error && <div className="jr-callout jr-callout-err" role="alert"><HelmIcon name="alert-circle" size={13} /><span className="selectable">{error}</span></div>}
       <div className="provider-gateway-actions"><button className="btn" onClick={addProvider} disabled={saving}><HelmIcon name="plus" size={13} />新增网关</button><button className="btn btn-primary" disabled={saving || !dirty} onClick={() => void saveAll()}><HelmIcon name="check" size={13} />{saving ? '保存中…' : '保存网关配置'}</button>{dirty && <span className="provider-help" style={{ color: 'var(--warn)' }}>有未保存的修改</span>}</div>
     </section>
@@ -208,7 +214,15 @@ export function ProviderAuthModal({ onClose }: { onClose(): void }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal provider-modal" ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="provider-modal-title" onClick={(event) => event.stopPropagation()}>
-        <div className="modal-header"><span className="modal-title" id="provider-modal-title"><HelmIcon name="cpu" size={16} />模型供应商</span><button className="btn btn-ghost btn-sm" aria-label="关闭" onClick={onClose}><HelmIcon name="x" size={14} /></button></div>
+        <div className="modal-header">
+          <span className="modal-title flex-row" id="provider-modal-title">
+            <HelmIcon name="cpu" size={16} />
+            模型供应商
+          </span>
+          <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭" onClick={onClose}>
+            <HelmIcon name="x" size={14} />
+          </button>
+        </div>
         <nav className="tabs-bar provider-tabs" aria-label="模型配置分类"><button className={`tab-btn${view === 'providers' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'providers'} onClick={() => setView('providers')}>供应商</button><button className={`tab-btn${view === 'gateways' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'gateways'} onClick={() => setView('gateways')}>自定义网关</button><button className={`tab-btn${view === 'defaults' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'defaults'} onClick={() => setView('defaults')}>全局模型</button><span className="provider-tabs-note">由 PI 原生模块提供</span></nav>
         {view === 'providers' && <ProviderCatalog onEditGateway={() => setView('gateways')} />}
         <div className="provider-gateway-panel" hidden={view !== 'gateways'}><ProvidersSection /></div>
