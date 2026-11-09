@@ -146,7 +146,7 @@ flowchart TD
 - **组件共享**：复用宿主环境的 React 与组件库底座。宿主把 `@helm/plugin-client` 共享模块虚拟化为全局命名空间，插件编译产物不打包第二份 React。
 - **可信代码而非安全沙箱**：`client.tsx` 在浏览器中运行，与宿主页面共享 JavaScript 环境；它不是隔离的安全沙箱，也不因此获得后端进程权限。声明式 `@json-render` 则是纯数据轨道。
 - **状态管理**：支持复杂的局部交互、自定义动画与实时状态监听。
-- **插件自有样式**：本地 CSS 经编译器内联，加载时注入 `<style data-helm-plugin-css>`，停用/卸载时回收；宿主样式表不承载插件业务类。CSS 必须自包含（拒绝 `@import` 与 `url()`）。
+- **插件自有样式**：本地 CSS 及根内 `@import` 由 esbuild 合并，通过保留导出 `__helmClientCss` 内联为插件 JS 的文本数据；宿主确认导入成功且加载仍有效后才注入 `<style data-helm-plugin-css>`，入口更新时替换，停用/卸载或登出时回收。宿主样式表不承载插件业务类。资源 URL 支持 `data:` 与显式 HTTP(S)/协议相对地址；当前不提供插件静态资源端点，本地资源 URL 与远程 `@import` 显式拒绝。
 - **具名导出规范**：通过 `ClientComponentRef` 声明导出模块（`module`）与组件导出名（`export`）。
 
 ### 双轨优先级纪律

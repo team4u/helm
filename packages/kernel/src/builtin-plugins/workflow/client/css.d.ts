@@ -1,5 +1,2 @@
-/** 插件自有 CSS 在编译期被内联为 JS 模块并注入宿主页面（见 client-compiler）。 */
-declare module '*.css' {
-  const css: string
-  export default css
-}
+/** CSS 仅作副作用导入；编译器合并样式文本，宿主加载器负责挂载与回收。 */
+declare module '*.css' {}
