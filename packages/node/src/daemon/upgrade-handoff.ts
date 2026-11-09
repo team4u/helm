@@ -27,6 +27,8 @@ import { UpgradeCommitUnconfirmedError, type PreparedNodeReplacement, type Stage
 export const CANDIDATE_READY_TIMEOUT_MS = 150_000;
 /** activate 发出后等待本机 activated 确认的预算。 */
 export const ACTIVATE_ACK_TIMEOUT_MS = 30_000;
+/** 候选等待 activate 的总预算（父进程提交点在排空之后，这里取宽裕上限）。 */
+export const CANDIDATE_ACTIVATE_WAIT_MS = 10 * 60_000;
 
 /** 升级交接上下文（与引擎 prepareReplacement 回调的 context 同源）。 */
 export interface UpgradeHandoffContext {
@@ -58,14 +60,49 @@ export interface PrepareNodeReplacementOptions {
   readyTimeoutMs?: number;
   activateAckTimeoutMs?: number;
 }
-
-/** 候选侧协议消息（与 cli.ts 候选分支约定一致；测试 fixture 同步实现）。 */
+/** 候选侧协议消息（与父侧 commit() 发出的 ActivateMessage 同一契约）。 */
 export interface ActivateMessage {
   type: 'helm-node.activate';
   attemptId: string;
   version: string;
   previousVersion: string;
   pid: number;
+}
+
+/** 候选启动 env 注入的升级上下文（prepareNodeReplacement 写入、候选进程解析）。 */
+export interface CandidateUpgradeHandoff {
+  attemptId: string;
+  previousVersion?: string;
+  targetVersion?: string;
+}
+
+/**
+ * 候选侧解析启动 env 注入的升级上下文：HELM_NODE_UPGRADE_ATTEMPT 缺失即
+ * 非候选（返回 undefined）；previousVersion/targetVersion 可选透传。
+ */
+export function parseUpgradeHandoffEnv(env: NodeJS.ProcessEnv | undefined): CandidateUpgradeHandoff | undefined {
+  const attemptId = env?.['HELM_NODE_UPGRADE_ATTEMPT'];
+  if (attemptId === undefined || attemptId === '') return undefined;
+  const previousVersion = env?.['HELM_NODE_UPGRADE_PREVIOUS_VERSION'];
+  const targetVersion = env?.['HELM_NODE_UPGRADE_TARGET_VERSION'];
+  return {
+    attemptId,
+    ...(previousVersion !== undefined && previousVersion !== '' ? { previousVersion } : {}),
+    ...(targetVersion !== undefined && targetVersion !== '' ? { targetVersion } : {}),
+  };
+}
+
+/** 激活消息边界校验（候选侧）：完整 commit 上下文，字段缺失/类型非法一律拒绝。 */
+export function parseActivateMessage(message: unknown): ActivateMessage | undefined {
+  if (typeof message !== 'object' || message === null) return undefined;
+  const record = message as Record<string, unknown>;
+  if (record['type'] !== 'helm-node.activate') return undefined;
+  const { attemptId, version, previousVersion, pid } = record;
+  if (typeof attemptId !== 'string' || attemptId === '') return undefined;
+  if (typeof version !== 'string' || version === '') return undefined;
+  if (typeof previousVersion !== 'string' || previousVersion === '') return undefined;
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined;
+  return { type: 'helm-node.activate', attemptId, version, previousVersion, pid };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
