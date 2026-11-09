@@ -411,6 +411,7 @@ textarea {
   flex-shrink: 0;
   display: inline-block;
   vertical-align: middle;
+  background: var(--fg-muted);
 }
 
 .status-dot-working {
@@ -442,6 +443,12 @@ textarea {
   50% {
     box-shadow: 0 0 0 3.5px var(--accent-bg);
     opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot-working {
+    animation: none;
   }
 }
 
