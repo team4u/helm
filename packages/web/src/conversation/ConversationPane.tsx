@@ -12,6 +12,8 @@ import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
 import { ConversationTimeline } from './ConversationTimeline.js'
 import { resolveActiveWorkbenchTab, summarizeWorkbenchBadge } from './workbench-model.js'
 import { useWorkbenchTabs } from './workbench-hooks.js'
+import { matchConversationActions, splitConversationHeaderActions } from './action-model.js'
+import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import type { EditRequestTarget } from './timeline-model.js'
 
 export interface ConversationPaneProps {
@@ -152,6 +154,11 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     isHumanSelectableProfile(profile, enabledPluginIds) &&
     (conversation.ownedBy ?? 'human') === 'human'
 
+  // 插件微插槽 conversation.header.action：placement='toolbar' 直出顶栏按钮组，
+  // 其余（缺省 'menu'）收纳进「更多操作」下拉菜单；均按 scope 过滤当前会话。
+  const headerActions = matchConversationActions(store.groupedUi.conversationHeaderActions, conversation)
+  const { toolbar: toolbarActions, menu: menuActions } = splitConversationHeaderActions(headerActions)
+
   const saveTitle = async (): Promise<void> => {
     const next = titleDraft.trim()
     setRenaming(false)
@@ -254,6 +261,15 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               <span className="pane-action-label">新话题</span>
             </button>
           ) : null}
+          {toolbarActions.map((action) => (
+            <PluginMicroAction
+              key={`header:${action.pluginId}/${action.spec.id}`}
+              action={action}
+              variant="toolbar"
+              conversationId={conversation.id}
+              slotProps={{ conversation }}
+            />
+          ))}
           {!isDrawer && (workbenchCount > 0 || hasWorkbenchPanel) ? (
             <button
               type="button"
@@ -364,6 +380,21 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                       精简上下文 (/compact)
                     </span>
                   </DropdownMenuItem>
+                  {menuActions.length > 0 && (
+                    <>
+                      <DropdownMenuSeparator className="popover-separator" />
+                      {menuActions.map((action) => (
+                        <PluginMicroAction
+                          key={`header-menu:${action.pluginId}/${action.spec.id}`}
+                          action={action}
+                          variant="menu"
+                          conversationId={conversation.id}
+                          slotProps={{ conversation }}
+                          onInvoked={() => setMoreOpen(false)}
+                        />
+                      ))}
+                    </>
+                  )}
                   <DropdownMenuSeparator className="popover-separator" />
                   <DropdownMenuItem
                     className="popover-item popover-item-danger"

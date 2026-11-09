@@ -18,6 +18,7 @@ import { MarkdownView } from './MarkdownView.js'
 import {
   buildTimelineItems,
   collectSiblingCalls,
+  humanItemEntryKind,
   isAssistantTurnBusy,
   toolSummaryText,
   type AssistantTurn,
@@ -28,6 +29,8 @@ import {
   type PluginCardItem,
   type ToolTrace,
 } from './timeline-model.js'
+import { matchTimelineEntryActions } from './action-model.js'
+import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import { formatBytes, formatDurationMs } from '../lib/format.js'
 
 export interface ConversationTimelineProps {
@@ -155,6 +158,12 @@ function HumanMessage({
   const store = useHelmStore()
   const [forking, setForking] = useState(false)
   const [withdrawing, setWithdrawing] = useState(false)
+  // 插件微插槽 timeline.entry.action：按当前会话 scope + entry kinds/roles 过滤
+  const entryActions = matchTimelineEntryActions(
+    store.groupedUi.timelineEntryActions,
+    conversation,
+    { kind: humanItemEntryKind(item), role: 'user' },
+  )
 
   const editRequest = async (): Promise<void> => {
     // 仅人类输入可原地编辑：agent 汇报 / trigger 注入不是人类编辑对象（铅笔已收起，双重防御）
@@ -254,6 +263,16 @@ function HumanMessage({
         <AttachmentChips attachments={item.attachments} conversationId={conversation.id} />
       ) : null}
       <span className="msg-hover-bar">
+        {entryActions.map((action) => (
+          <PluginMicroAction
+            key={`entry:${action.pluginId}/${action.spec.id}`}
+            action={action}
+            variant="hover"
+            conversationId={conversation.id}
+            entryId={item.entryId}
+            slotProps={{ conversationId: conversation.id, entry: { id: item.entryId, kind: humanItemEntryKind(item), role: 'user' } }}
+          />
+        ))}
         <CopyButton text={item.text} />
         {item.origin === 'human' ? (
           <button
@@ -691,6 +710,12 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
   }
 
   const isBusy = isAssistantTurnBusy(turn, conversation, { isLatestTurn, activeToolCallIds })
+  // 插件微插槽 timeline.entry.action（assistant 回合：kind=pi.assistant，role=assistant）
+  const entryActions = matchTimelineEntryActions(
+    store.groupedUi.timelineEntryActions,
+    conversation,
+    { kind: 'pi.assistant', role: 'assistant' },
+  )
 
   return (
     <div className="msg-ai-block" tabIndex={0}>
@@ -727,6 +752,19 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
       ) : null}
       {!isBusy && (lastText !== '' || turn.entryIds.length > 0) ? (
         <span className="msg-hover-bar">
+          {entryActions.map((action) => {
+            const anchorId = turn.entryIds[turn.entryIds.length - 1] ?? turn.key
+            return (
+              <PluginMicroAction
+                key={`entry:${action.pluginId}/${action.spec.id}`}
+                action={action}
+                variant="hover"
+                conversationId={conversation.id}
+                entryId={anchorId}
+                slotProps={{ conversationId: conversation.id, entry: { id: anchorId, kind: 'pi.assistant', role: 'assistant' } }}
+              />
+            )
+          })}
           {lastText !== '' ? <CopyButton text={lastText} /> : null}
           <button
             type="button"

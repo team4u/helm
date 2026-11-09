@@ -7,6 +7,7 @@ import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { Checkbox } from '../ui/Checkbox.js'
 import { Tooltip } from '../ui/Tooltip.js'
+import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { isSameResolvedTarget, resolveTargetString, type HelmStoreValue } from '../lib/types.js'
 import {
   AGENT_SUB_LIST_PREVIEW,
@@ -575,6 +576,7 @@ function AgentConversationRow({
                 }}
               />
             </span>
+            <ConversationRowActionsMenu conversation={conv} />
             {humanManageable && (
               <HoverIconButton
                 title="重命名会话"
@@ -856,6 +858,7 @@ function ConversationRow({
             }}
           />
         </span>
+        <ConversationRowActionsMenu conversation={conv} />
       </span>
     </div>
   )

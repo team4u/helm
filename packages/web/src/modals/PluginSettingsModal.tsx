@@ -143,7 +143,9 @@ export function PluginSettingsModal({
   const configGeneration = useRef(0)
 
   const plugin = store.plugins.find((p) => p.id === selectedId)
-  const settingsPanel = store.groupedUi.settingsPanels.find((p) => p.pluginId === selectedId)
+  // 同插件多 settings.panel：全部渲染（groupedUi 已按 order ?? 100 升序稳定排序），
+  // 每个面板独立 PluginUiView 挂载，互不干扰；切换/停用插件时随 groupedUi 增量更新。
+  const settingsPanels = store.groupedUi.settingsPanels.filter((p) => p.pluginId === selectedId)
 
   // store 引用快照：effect 只依赖插件列表与选中，不因无关 SSE 帧重跑。
   const storeRef = useRef(store)
@@ -387,17 +389,24 @@ export function PluginSettingsModal({
                   )}
                 </section>
 
-                {settingsPanel && (
+                {settingsPanels.length > 0 && (
                   <section className="section-flat">
                     <h4 className="section-flat-title flex-row">
                       <HelmIcon name="sliders" size={13} />
-                      {settingsPanel.spec.label || '插件面板'}
+                      {settingsPanels.length > 1 ? `插件面板（${settingsPanels.length}）` : (settingsPanels[0]!.spec.label || '插件面板')}
                     </h4>
-                    <PluginUiView
-                      pluginId={plugin.id}
-                      spec={settingsPanel.spec}
-                      label={`设置面板 ${settingsPanel.spec.id}`}
-                    />
+                    {settingsPanels.map((panel) => (
+                      <div key={`${panel.pluginId}/${panel.spec.id}`} className="plugin-settings-panels">
+                        {settingsPanels.length > 1 && (
+                          <div className="plugin-settings-panel-title">{panel.spec.label || panel.spec.id}</div>
+                        )}
+                        <PluginUiView
+                          pluginId={plugin.id}
+                          spec={panel.spec}
+                          label={`设置面板 ${panel.spec.id}`}
+                        />
+                      </div>
+                    ))}
                   </section>
                 )}
               </>

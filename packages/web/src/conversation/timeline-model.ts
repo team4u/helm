@@ -303,7 +303,21 @@ function contentTextOf(content: unknown): string {
 // ---------------------------------------------------------------------------
 
 /**
- * timeline.renderer 匹配判定：
+ * priority 降序稳定排序：高优先级在前，同优先级（含缺省 0）保持贡献顺序
+ * （先注册先命中）。返回新数组，不修改传入的贡献列表（groupedUi 引用稳定）。
+ */
+export function sortByPriorityDescStable<T extends { spec: { priority?: number } }>(
+  items: ReadonlyArray<T>,
+): T[] {
+  return items
+    .map((item, index) => ({ item, index, priority: item.spec.priority ?? 0 }))
+    .sort((a, b) => (a.priority !== b.priority ? b.priority - a.priority : a.index - b.index))
+    .map((entry) => entry.item)
+}
+
+/**
+ * timeline.renderer 匹配判定（priority 降序稳定裁决）：
+ * - 先按 (spec.priority ?? 0) 降序、同优先级保持插件贡献顺序（先注册先命中）；
  * - kinds 缺省接管全部；提供时须包含 entry.kind；
  * - matchMeta.renderer 须等于 entry.data.meta.renderer 或 entry.data.renderer（与 kinds 取 AND）。
  */
@@ -316,7 +330,7 @@ export function matchTimelineRenderer(
   const meta = data && isStringRecord(data.meta) ? data.meta : undefined
   const metaRenderer = typeof meta?.renderer === 'string' ? meta.renderer : undefined
   const ownRenderer = typeof data?.renderer === 'string' ? data.renderer : undefined
-  for (const r of renderers) {
+  for (const r of sortByPriorityDescStable(renderers)) {
     const kinds = r.spec.kinds
     if (kinds !== undefined && (!Array.isArray(kinds) || !kinds.includes(entry.kind))) continue
     const want = r.spec.matchMeta?.renderer
@@ -326,13 +340,17 @@ export function matchTimelineRenderer(
   return undefined
 }
 
-/** tool.view 匹配：spec.toolNames 包含 toolName。 */
+/**
+ * tool.view 匹配（priority 降序稳定裁决）：spec.toolNames 包含 toolName。
+ * 按 (spec.priority ?? 0) 降序、同优先级保持贡献顺序取首个命中；
+ * replaceRow 等渲染语义由消费方按命中 spec 判定，匹配层不做干预。
+ */
 export function findToolView(
   toolName: string,
   toolViews: ReadonlyArray<QualifiedToolView> | undefined,
 ): QualifiedToolView | undefined {
   if (!toolViews) return undefined
-  for (const tv of toolViews) {
+  for (const tv of sortByPriorityDescStable(toolViews)) {
     if (Array.isArray(tv.spec.toolNames) && tv.spec.toolNames.includes(toolName)) return tv
   }
   return undefined
@@ -848,6 +866,15 @@ export function lastHumanTextOf(items: ReadonlyArray<TimelineItem>): string | un
     if (item.kind === 'human' && item.text.trim() !== '') return item.text
   }
   return undefined
+}
+
+// ---------------------------------------------------------------------------
+// timeline.entry.action 微插槽条目上下文
+// ---------------------------------------------------------------------------
+
+/** 人类输入条的源 entry kind：helm.input 归一化优先，兜底展示为 pi.user。 */
+export function humanItemEntryKind(item: HumanInputItem): string {
+  return item.fallback ? 'pi.user' : 'helm.input'
 }
 
 // ---------------------------------------------------------------------------
