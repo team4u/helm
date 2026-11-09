@@ -40,9 +40,9 @@ test('快照 pluginDocs 直投写入 pluginDocs 映射，非法形状显式拒�
     'builtin:workflow/runs': { runs: [] },
     'p2/index': 42,
   })
-  assert.throws(() => applySnapshot(emptyLiveState(), { ...snapshot, pluginDocs: 'bad' as unknown }), /无效/)
+  assert.throws(() => applySnapshot(emptyLiveState(), { ...snapshot, pluginDocs: 'bad' as unknown as HelmSnapshot['pluginDocs'] }), /无效/)
   assert.throws(
-    () => applySnapshot(emptyLiveState(), { ...snapshot, pluginDocs: [{ pluginId: 1, name: 'x', value: null } as unknown] }),
+    () => applySnapshot(emptyLiveState(), { ...snapshot, pluginDocs: [{ pluginId: 1, name: 'x', value: null } as unknown as NonNullable<HelmSnapshot['pluginDocs']>[number]] }),
     /无效/,
   )
 })

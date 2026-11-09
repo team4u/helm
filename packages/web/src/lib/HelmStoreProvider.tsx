@@ -420,6 +420,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
             session.current++
             requests.current.clear()
             failedDocs.current.clear()
+            // 断线期间可能发生停用/升级：旧模块与在途下载不能跨快照复活。
+            resetPluginClientCache()
             setLoadErrors({})
             updateLive((state) => applySnapshot(state, payload as HelmSnapshot))
             setConversationArtifacts({})

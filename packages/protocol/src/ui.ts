@@ -217,6 +217,8 @@ export interface PluginClientContext {
   openScreen(target: string): void
   /** 在右侧分屏打开目标。 */
   openSplitScreen(target: string): void
+  /** 打开子会话侧边抽屉模态（统一子会话查看入口；不改变当前工作台开关状态）。 */
+  openConversationDrawer(conversationId: number): void
   /** 打开产物预览弹窗。 */
   openArtifact(artifactId: string): void
   /** 打开工作台抽屉（可指定激活面板 ID）。 */

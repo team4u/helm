@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationEntry, ConversationLive } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, WorkflowRunSummary } from '@helm/protocol'
 import { conversationsApi, ApiClientError } from '../src/lib/api.js'
 // subagent/workflow 纯逻辑已迁入 builtin:workflow 插件 client 模块（kernel 真实
 // esbuild 编译后动态 import；react 等 shim 在编译前挂载，类型经 helpers 断言）。
@@ -21,7 +21,7 @@ const resolveWorkflowRunForToolImpl = workflowModels.resolveWorkflowRunForTool
 function toWorkflowToolInput(tool: ToolTrace): { callId: string | undefined; input: unknown; result?: unknown } {
   return {
     callId: tool.callId,
-    ...(tool.input !== undefined || true ? { input: tool.input } : {}),
+    input: tool.input,
     ...(tool.resultText !== undefined ? { result: tool.resultText } : {}),
   }
 }

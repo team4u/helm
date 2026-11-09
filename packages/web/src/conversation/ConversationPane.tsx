@@ -7,7 +7,8 @@ import { useHelmStore } from '../lib/store-context.js'
 import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
 import { ConversationTimeline } from './ConversationTimeline.js'
-import { buildWorkbenchTabs, resolveActiveWorkbenchTab, summarizeWorkbenchBadge } from './workbench-model.js'
+import { resolveActiveWorkbenchTab, summarizeWorkbenchBadge } from './workbench-model.js'
+import { useWorkbenchTabs } from './workbench-hooks.js'
 import type { EditRequestTarget } from './timeline-model.js'
 
 export interface ConversationPaneProps {
@@ -81,17 +82,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   }, [conversationId])
 
   // 工作台汇总角标：内置产物计数 + 各插件面板 badge（从 public doc 动态提取）。
-  const artifactCount = store.conversationArtifacts[conversationId]?.length ?? 0
-  const workbenchTabs = useMemo(
-    () =>
-      buildWorkbenchTabs({
-        groupedUi: store.groupedUi,
-        pluginDocs: store.pluginDocs,
-        artifactCount,
-        conversationId,
-      }),
-    [store.groupedUi, store.pluginDocs, artifactCount, conversationId],
-  )
+  const workbenchTabs = useWorkbenchTabs(conversationId, conversation)
   const workbenchBadge = summarizeWorkbenchBadge(workbenchTabs)
   const hasWorkbenchPanel = workbenchTabs.some((tab) => tab.id !== 'artifacts')
   const detailError = store.loadErrors[`conversation:${conversationId}`]
@@ -129,7 +120,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   }
 
   const sendingPending = sendingPendingVisible(sendingInFlight, conversation.status)
-  // 去重后的工作台计数：工作流子会话不再被 runs 与 children 双重计入。
+  // 计数与色调由插件 public-doc badge 与内置产物共同决定。
   const workbenchCount = workbenchBadge.totalCount
   const workbenchBadgeClass = workbenchBadge.tone === 'warn' ? 'badge-warn' : workbenchBadge.tone === 'accent' ? 'badge-accent' : 'badge-neutral'
   const currentNodeId = conversation.nodeId || 'local'

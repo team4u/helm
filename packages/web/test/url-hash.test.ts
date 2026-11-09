@@ -207,10 +207,10 @@ test('isSameLocationState: 五字段逐一比较；command-palette 等价于 nul
   assert.equal(isSameLocationState(base, { ...base, workbenchOpen: true, workbenchTab: 'artifacts' }), false)
   // 工作台打开时 Tab 参与比较；关闭时 Tab 只是记忆值不参与
   const openA = { ...base, workbenchOpen: true, workbenchTab: 'artifacts' }
-  const openB = { ...base, workbenchOpen: true, workbenchTab: 'artifacts' }
+  const openB = { ...base, workbenchOpen: true, workbenchTab: 'plugin:example/queue' }
   assert.equal(isSameLocationState(openA, openB), false)
   const closedA = { ...base, workbenchOpen: false, workbenchTab: 'artifacts' }
-  const closedB = { ...base, workbenchOpen: false, workbenchTab: 'artifacts' }
+  const closedB = { ...base, workbenchOpen: false, workbenchTab: 'plugin:example/queue' }
   assert.equal(isSameLocationState(closedA, closedB), true)
   assert.equal(isSameLocationState(base, { ...base, activeModal: { kind: 'command-palette' } }), true)
   assert.equal(isSameLocationState(base, { ...base, activeModal: { kind: 'profile-editor' } }), false)

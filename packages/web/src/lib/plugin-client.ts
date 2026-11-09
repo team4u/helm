@@ -14,6 +14,7 @@ export interface LoadedClientModule {
 }
 
 interface CacheEntry {
+  pluginId: string
   contentHash: string
   namespaced: Promise<Record<string, unknown>>
   /** 动态 import 完成后写入的已解析模块命名空间（同步快路径与 SSR 测试用）。 */
@@ -21,18 +22,23 @@ interface CacheEntry {
 }
 
 const cache = new Map<string, CacheEntry>()
+const pluginEpochs = new Map<string, number>()
+let cacheEpoch = 0
 
-const cacheKey = (pluginId: string, moduleRef: string): string => `${pluginId}::${moduleRef}`
+const cacheKey = (pluginId: string, moduleRef: string): string => JSON.stringify([pluginId, moduleRef])
 
 /** 插件 UI 贡献变化时调用：移除该插件全部缓存模块（停用/卸载后不残留）。 */
 export function evictPluginClientCache(pluginId: string): void {
-  for (const key of [...cache.keys()]) {
-    if (key.startsWith(`${pluginId}::`)) cache.delete(key)
+  pluginEpochs.set(pluginId, (pluginEpochs.get(pluginId) ?? 0) + 1)
+  for (const [key, entry] of cache) {
+    if (entry.pluginId === pluginId) cache.delete(key)
   }
 }
 
 /** 全量重建（如登出）：清空所有插件 client 模块缓存。 */
 export function resetPluginClientCache(): void {
+  cacheEpoch++
+  pluginEpochs.clear()
   cache.clear()
 }
 
@@ -83,10 +89,20 @@ async function fetchModuleText(pluginId: string, moduleRef: string): Promise<{ c
  */
 export async function loadPluginClientModule(pluginId: string, moduleRef: string): Promise<LoadedClientModule> {
   const key = cacheKey(pluginId, moduleRef)
+  const epoch = cacheEpoch
+  const pluginEpoch = pluginEpochs.get(pluginId)
+  const assertCurrent = () => {
+    if (epoch !== cacheEpoch || pluginEpoch !== pluginEpochs.get(pluginId)) {
+      throw new PluginClientError('client_module_invalidated', `插件 ${pluginId} 的 client 模块加载已失效，请重新加载`, 0)
+    }
+  }
   const { code, contentHash } = await fetchModuleText(pluginId, moduleRef)
+  assertCurrent()
   const cached = cache.get(key)
   if (cached && cached.contentHash === contentHash) {
-    return { module: await cached.namespaced, contentHash }
+    const module = await cached.namespaced
+    assertCurrent()
+    return { module, contentHash }
   }
   const namespaced = (async () => {
     const blobUrl = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))
@@ -102,18 +118,20 @@ export async function loadPluginClientModule(pluginId: string, moduleRef: string
       URL.revokeObjectURL(blobUrl)
     }
   })()
-  const entry: CacheEntry = { contentHash, namespaced }
+  const entry: CacheEntry = { pluginId, contentHash, namespaced }
   // 已解析模块落缓存：后续挂载（含时间线重渲染）经 getCachedClientComponent 同步命中，零闪烁。
   void namespaced.then(
     (mod) => {
-      entry.resolved = mod
+      if (epoch === cacheEpoch && pluginEpoch === pluginEpochs.get(pluginId)) entry.resolved = mod
     },
     () => {
-      /* 加载失败保留无 resolved 状态；错误由 loadPluginClientModule 调用方显式展示 */
+      if (cache.get(key) === entry) cache.delete(key)
     },
   )
   cache.set(key, entry)
-  return { module: await namespaced, contentHash }
+  const module = await namespaced
+  assertCurrent()
+  return { module, contentHash }
 }
 
 /**
@@ -143,6 +161,7 @@ export function seedPluginClientModule(
   contentHash = 'seeded',
 ): void {
   cache.set(cacheKey(pluginId, moduleRef), {
+    pluginId,
     contentHash,
     namespaced: Promise.resolve(moduleNamespace),
     resolved: moduleNamespace,

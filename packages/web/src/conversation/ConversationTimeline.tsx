@@ -6,7 +6,6 @@ import type {
   ConversationLive,
   ConversationSummary,
   ToolViewSpec,
-  WorkflowRunSummary,
 } from '@helm/protocol'
 import { artifactsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
@@ -688,13 +687,7 @@ function AssistantTurnView({
     }
   }
 
-  const isBusy = isAssistantTurnBusy(turn, conversation, {
-    isLatestTurn,
-    workflowRuns: store.pluginDocs['builtin:workflow/runs'] !== undefined && store.pluginDocs['builtin:workflow/runs'] !== null && typeof store.pluginDocs['builtin:workflow/runs'] === 'object'
-      ? ((store.pluginDocs['builtin:workflow/runs'] as { runs?: unknown }).runs as WorkflowRunSummary[] | undefined) ?? []
-      : [],
-    conversations: store.conversations,
-  })
+  const isBusy = isAssistantTurnBusy(turn, conversation, { isLatestTurn })
 
   return (
     <div className="msg-ai-block" tabIndex={0}>

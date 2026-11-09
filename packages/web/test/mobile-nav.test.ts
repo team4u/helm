@@ -218,15 +218,8 @@ test('responsive.css 窄屏仅隐藏未激活的开启分屏按钮，保留关�
   )
 })
 
-test('WorkbenchDrawer.tsx 窄屏抽屉模式下导航后自动收起抽屉', { timeout: 60_000 }, () => {
-  assert.match(
-    workbenchSource,
-    /matchMedia\('\(max-width: 1200px\)'\)/,
-    'WorkbenchDrawer 必须检测 <=1200px 抽屉覆盖模式',
-  )
-  assert.match(
-    workbenchSource,
-    /maybeCollapseWorkbench\(store\)/,
-    '子会话与工作流节点导航按钮必须调用 maybeCollapseWorkbench 收起抽屉',
-  )
+test('工作台不因插件抽屉导航而自动收起，窄屏同样保留排查上下文', { timeout: 60_000 }, () => {
+  assert.doesNotMatch(workbenchSource, /maybeCollapseWorkbench|onNavigate/)
+  assert.match(workbenchSource, /<PluginUiView/)
+  assert.match(workbenchSource, /onClick=\{\(\) => store\.setWorkbenchOpen\(false\)\}/, '仅显式关闭按钮收起工作台')
 })

@@ -17,14 +17,20 @@ import type {
   WorkflowNodeState,
   WorkflowRunSummary,
 } from '@helm/protocol'
-import { useEffect } from 'react'
-import { useConversation, useConversations, usePluginDoc } from '@helm/plugin-client'
 
 // ---------------------------------------------------------------------------
 // 格式化工具（原 lib/format.ts 相关子集）
 // ---------------------------------------------------------------------------
 
 /** 毫秒时长摘要（工具耗时 / 工作流节点耗时）；非法或缺失返回空串。 */
+export function toolResultPreviewTruncated(preview: string | undefined): boolean {
+  return preview?.endsWith('…') === true
+}
+
+export function isScrolledToBottom(element: { scrollHeight: number; scrollTop: number; clientHeight: number }): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= 36
+}
+
 export function formatDurationMs(ms: number | undefined): string {
   if (ms === undefined || !Number.isFinite(ms) || ms < 0) return ''
   if (ms < 1000) return `${Math.round(ms)}ms`
@@ -891,6 +897,11 @@ function countToolSteps(entries: ReadonlyArray<ConversationEntry> | undefined, l
 // ---------------------------------------------------------------------------
 
 /** 节点收起行主信息摘要。 */
+export function hasNodeExtraDetail(node: WorkflowNodeState): boolean {
+  return node.agentType !== undefined || node.executionId !== undefined || node.nodeId !== undefined ||
+    node.effectiveCwd !== undefined || node.gateCommand !== undefined || node.prompt !== undefined
+}
+
 export interface NodeSummaryText {
   text?: string
   isError: boolean
@@ -1202,29 +1213,22 @@ export function buildWorkbenchSubagentItems(
 export function isLatestSubagentCallForTarget(
   props: Pick<ToolViewProps, 'callId' | 'input' | 'result' | 'siblingCalls' | 'conversationId'>,
   childConversationId: number | undefined,
+  conversations: ReadonlyArray<Pick<ConversationSummary, 'id' | 'parentConversationId' | 'parentToolCallId'>>,
 ): boolean {
   if (childConversationId === undefined) return true
   const siblings = props.siblingCalls ?? []
-  let latestCallId = props.callId
-  for (const call of siblings) {
+  const selfIndex = siblings.findIndex((call) => call.callId === props.callId)
+  if (selfIndex === -1) return true
+  for (const call of siblings.slice(selfIndex + 1)) {
     if (call.toolName !== 'subagent') continue
-    if (call.callId === props.callId) continue
     const resolved = resolveSubagentConversationId(
       { callId: call.callId, input: call.input, result: typeof call.result === 'string' ? call.result : undefined },
       props.conversationId,
-      // conversations 参数仅用于 resume 兜底关联；siblingCalls 路径下运行期
-      // callId 关联由父组件（持有真实会话列表）在 childConversationId 解析时
-      // 已完成——这里只需比较已知目标，传空列表即可。
-      [],
+      conversations,
     )
-    if (resolved === childConversationId) {
-      // 后续调用也指向同一子会话：取 siblingCalls 中较后者（时间顺序在数组后面）。
-      const selfIdx = siblings.findIndex((c) => c.callId === props.callId)
-      const otherIdx = siblings.findIndex((c) => c.callId === call.callId)
-      if (otherIdx > selfIdx) latestCallId = call.callId
-    }
+    if (resolved === childConversationId) return false
   }
-  return latestCallId === props.callId
+  return true
 }
 
 /** 从 ToolViewProps 构造父工具轻量摘要。 */
@@ -1237,39 +1241,3 @@ export function parentToolSummaryOf(props: ToolViewProps): SubagentParentToolSum
     ...(props.isError === true ? { isError: true } : {}),
   }
 }
-
-// ---------------------------------------------------------------------------
-// 插件数据 hooks（供 client.tsx 组件消费，与宿主共享同一 store）
-// ---------------------------------------------------------------------------
-
-/** 订阅 builtin:workflow 公开文档 runs（WorkflowRunsDocState）。 */
-export function useWorkflowRunsDoc<T = { runs: WorkflowRunSummary[] }>(docName: string): T | undefined {
-  return usePluginDoc<T>(docName)
-}
-
-/** 运行中秒表：SSR 首帧不启动时钟，仅客户端 useEffect 定时推进（确定性渲染）。 */
-export function useElapsedNowMs(active: boolean): number | undefined {
-  const [nowMs, setNowMs] = useElapsedState(active)
-  return nowMs
-}
-
-// 小型受控 state hook（避免 .tsx 文件导出非组件；本文件为纯 .ts 模块）。
-import { useState } from 'react'
-function useElapsedState(active: boolean): [number | undefined, (v: number) => void] {
-  const [nowMs, setNowMs] = useState<number | undefined>(undefined)
-  useEffect(() => {
-    if (!active) return
-    setNowMs(Date.now())
-    const timer = globalThis.setInterval?.(() => setNowMs(Date.now()), 1000)
-    return () => {
-      if (timer !== undefined) globalThis.clearInterval?.(timer)
-    }
-  }, [active])
-  return [nowMs, setNowMs]
-}
-
-/** 插件组件内会话订阅 re-export（共享 hooks 与宿主同一 store）。 */
-export { useConversation, useConversations, usePluginDoc }
-
-/** 同会话全部工具调用轻量摘要类型 re-export。 */
-export type { ToolViewProps, ToolViewSiblingCall }
