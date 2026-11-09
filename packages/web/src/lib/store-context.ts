@@ -31,31 +31,16 @@ const EMPTY_SESSION_DOC: SessionDocSnapshotRef = { hasValue: false, deleted: fal
 
 /**
  * 响应式订阅会话级公开文档：(pluginId, docName, conversationId) 元组仅在
- * 有挂载订阅者时才开专用 SSE 流；返回当前值（未收到/已删除/出错时 undefined，
- * 错误经 diagnostics 可见）。conversationId 为 undefined 时返回 undefined 且不开流。
+ * 有挂载订阅者时才开专用 SSE 流。delete 帧（deleted=true）按协议携带
+ * value=initial（reset 语义），照常返回该初始值；只有不存在/未初始化/出错
+ * 才返回 undefined。conversationId 为 undefined 时返回 undefined 且不开流。
  */
 export function usePluginSessionDoc<T = unknown>(
   docName: string,
   options?: { conversationId?: number; pluginId?: string },
 ): T | undefined {
-  const store = useHelmStore()
-  const pluginId = options?.pluginId
-  const conversationId = options?.conversationId
-  const enabled = pluginId !== undefined && conversationId !== undefined && docName !== ''
-  const key = useMemo<SessionDocKey | null>(
-    () => (enabled ? { pluginId: pluginId!, docName, conversationId: conversationId! } : null),
-    [enabled, pluginId, docName, conversationId],
-  )
-  const subscribe = useCallback(
-    (listener: () => void) => (key === null ? () => {} : store.subscribeSessionDoc(key, listener)),
-    [store, key],
-  )
-  const state = useSyncExternalStore(
-    subscribe,
-    () => (key === null ? EMPTY_SESSION_DOC : store.getSessionDocState(key)),
-    () => EMPTY_SESSION_DOC,
-  )
-  if (state.deleted || !state.hasValue || state.error !== undefined) return undefined
+  const state = usePluginSessionDocDiagnostics(docName, options)
+  if (!state.hasValue || state.error !== undefined) return undefined
   return state.value as T | undefined
 }
 
@@ -64,7 +49,9 @@ export function usePluginSessionDocDiagnostics(
   docName: string,
   options?: { conversationId?: number; pluginId?: string },
 ): SessionDocSnapshotRef {
-  const store = useHelmStore()
+  // 仅依赖稳定的具名函数与 key：store 对象本身随全局 SSE 状态频繁换引用，
+  // 依赖它会导致每次全局事件都退订（refcount 归零清缓存）再重开流。
+  const { subscribeSessionDoc, getSessionDocState } = useHelmStore()
   const pluginId = options?.pluginId
   const conversationId = options?.conversationId
   const key = useMemo<SessionDocKey | null>(
@@ -72,12 +59,12 @@ export function usePluginSessionDocDiagnostics(
     [pluginId, docName, conversationId],
   )
   const subscribe = useCallback(
-    (listener: () => void) => (key === null ? () => {} : store.subscribeSessionDoc(key, listener)),
-    [store, key],
+    (listener: () => void) => (key === null ? () => {} : subscribeSessionDoc(key, listener)),
+    [subscribeSessionDoc, key],
   )
   return useSyncExternalStore(
     subscribe,
-    () => (key === null ? EMPTY_SESSION_DOC : store.getSessionDocState(key)),
+    () => (key === null ? EMPTY_SESSION_DOC : getSessionDocState(key)),
     () => EMPTY_SESSION_DOC,
   )
 }
@@ -85,24 +72,24 @@ export function usePluginSessionDocDiagnostics(
 /**
  * 批量订阅同一插件同一会话的多个会话级文档，返回 `{ [docName]: value }`，
  * 供 HelmSpecView 注入 `$sessionDocs` 求值上下文（声明式 sessionDocs 双轨集成）。
+ * 任一文档出错时对应键缺失，并在快照上如实暴露错误（不静默空表）。
  */
 export function usePluginSessionDocsMap(
   pluginId: string | undefined,
   docNames: string[] | undefined,
   conversationId: number | undefined,
 ): Record<string, unknown> {
-  const store = useHelmStore()
+  // 仅依赖稳定的具名函数：store 对象本身随全局 SSE 状态频繁换引用。
+  const { subscribeSessionDoc, getSessionDocState } = useHelmStore()
   const namesKey = JSON.stringify(docNames ?? [])
-  const { subscribeSessionDoc: subscribeTuple, getSessionDocState: readState } = store
-  // 逐文档订阅（每个元组独立 ref-count；任一更新触发本组件重渲染）
   const subscribe = useCallback(
     (listener: () => void) => {
       if (!pluginId || conversationId === undefined) return () => {}
       const unsubs = (JSON.parse(namesKey) as string[]).map((name) =>
-        subscribeTuple({ pluginId, docName: name, conversationId }, listener))
+        subscribeSessionDoc({ pluginId, docName: name, conversationId }, listener))
       return () => { for (const off of unsubs) off() }
     },
-    [pluginId, namesKey, conversationId, subscribeTuple],
+    [pluginId, namesKey, conversationId, subscribeSessionDoc],
   )
   const state = useSyncExternalStore(
     subscribe,
@@ -111,18 +98,22 @@ export function usePluginSessionDocsMap(
       const names = JSON.parse(namesKey) as string[]
       if (names.length === 0) return EMPTY_SESSION_DOCS_MAP
       const map: Record<string, unknown> = {}
-      let hasPartial = false
+      let error: string | undefined
       for (const name of names) {
-        const s = readState({ pluginId, docName: name, conversationId })
-        if (!s.deleted && s.hasValue && s.error === undefined) map[name] = s.value
-        else hasPartial = true
+        const s = getSessionDocState({ pluginId, docName: name, conversationId })
+        // delete 帧 value=initial（reset 语义）照常入表；仅不存在/出错才缺失。
+        if (s.error !== undefined) error = s.error
+        else if (s.hasValue) map[name] = s.value
       }
-      // 快照引用稳定：键集与值未变化时复用上次对象，避免无限重渲染
+      // 快照引用稳定：键集与值与错误都未变化时复用上次对象，避免无限重渲染
       const cached = snapshotCache.get(subscribe)
-      if (cached !== undefined && cached.pluginId === pluginId && cached.conversationId === conversationId && cacheSame(cached.map, map, names)) {
+      if (
+        cached !== undefined && cached.pluginId === pluginId && cached.conversationId === conversationId &&
+        cached.error === error && cacheSame(cached.map, map)
+      ) {
         return cached.result
       }
-      snapshotCache.set(subscribe, { pluginId, conversationId, map, result: map })
+      snapshotCache.set(subscribe, { pluginId, conversationId, map, error, result: map })
       return map
     },
     () => EMPTY_SESSION_DOCS_MAP,
@@ -131,13 +122,15 @@ export function usePluginSessionDocsMap(
 }
 
 const EMPTY_SESSION_DOCS_MAP: Record<string, unknown> = {}
-const snapshotCache = new WeakMap<(listener: () => void) => () => void, { pluginId?: string; conversationId?: number; map: Record<string, unknown>; result: Record<string, unknown> }>()
+interface SessionDocsMapCache { pluginId?: string; conversationId?: number; map: Record<string, unknown>; error?: string; result: Record<string, unknown> }
+const snapshotCache = new WeakMap<(listener: () => void) => () => void, SessionDocsMapCache>()
 
-function cacheSame(prev: Record<string, unknown>, next: Record<string, unknown>, names: string[]): boolean {
+/** 键集（按实际自有键）与对应值逐一相同才认为未变化；不要求覆盖全部 names。 */
+function cacheSame(prev: Record<string, unknown>, next: Record<string, unknown>): boolean {
   const prevKeys = Object.keys(prev)
   if (prevKeys.length !== Object.keys(next).length) return false
-  for (const name of names) {
-    if (!Object.hasOwn(prev, name) || prev[name] !== next[name]) return false
+  for (const key of prevKeys) {
+    if (!Object.hasOwn(next, key) || prev[key] !== next[key]) return false
   }
   return true
 }

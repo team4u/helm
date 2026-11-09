@@ -10,7 +10,6 @@ import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, n
 import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, SseParser, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
 import {
-  bindSessionDocRuntime,
   evictSessionDocSubscriptions,
   evictSessionDocsOfConversation,
   getSessionDocState,
@@ -552,11 +551,6 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],
   )
-  useEffect(() => {
-    // 会话文档订阅运行时注入：真实 fetch 与 token 读取（模块内直接引用会成环）
-    bindSessionDocRuntime(globalThis.fetch.bind(globalThis), getStoredToken)
-    return () => bindSessionDocRuntime(undefined, () => null)
-  }, [])
   useEffect(() => {
     // 宿主共享运行时：
     // - __HELM_SHARED__：具名句柄（调试/未来消费者）；
