@@ -5,6 +5,7 @@ import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { collectEnabledPluginIds, isProfileVisible } from '../shell/sidebar-model.js'
 import { Select, type SelectOption } from '../ui/Select.js'
+import { Switch } from '../ui/Switch.js'
 import { nodeOptionLabel } from './nodes-modal-model.js'
 import {
   argsTextToArgs,
@@ -25,6 +26,7 @@ import { deepLinkSelection, fallbackSelection, shouldClearSelectionInStore, shou
 
 type EditorTab = 'basic' | 'system' | 'memory'
 
+const BUILTIN_PROTECTED_PROFILES = new Set(['assistant', 'superagent', 'watchdog'])
 const COMMON_HERDR_AGENTS = ['pi', 'claude', 'codex', 'agy', 'gemini', 'cursor', 'opencode', 'gemini-cli']
 
 /** 有未保存改动时请求放弃；返回 true 表示可以安全离开。 */
@@ -216,14 +218,20 @@ function ProfileBasicTab({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: '8px 12px', alignItems: 'center' }}>
         <label htmlFor="helm-profile-id" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>ID</label>
-        <input
-          id="helm-profile-id"
-          className="input mono"
-          value={profile.id}
-          disabled={!isNew}
-          placeholder="小写字母、数字与连字符"
-          onChange={(e) => patch({ ...profile, id: e.target.value })}
-        />
+        {isNew ? (
+          <input
+            id="helm-profile-id"
+            className="input mono"
+            value={profile.id}
+            placeholder="小写字母、数字与连字符"
+            onChange={(e) => patch({ ...profile, id: e.target.value })}
+          />
+        ) : (
+          <span className="badge badge-neutral" style={{ width: 'fit-content' }}>
+            {BUILTIN_PROTECTED_PROFILES.has(profile.id) && <HelmIcon name="lock" size={11} />}
+            {profile.id}
+          </span>
+        )}
         <label htmlFor="helm-profile-name" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>展示名</label>
         <input
           id="helm-profile-name"
@@ -263,7 +271,7 @@ function ProfileBasicTab({
         <label htmlFor="helm-profile-tags" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Tags</label>
         <input
           id="helm-profile-tags"
-          className="input mono"
+          className="input"
           value={tagsToText(profile.tags)}
           placeholder="逗号分隔，如 research, coding"
           onChange={(e) => patch({ ...profile, tags: textToTags(e.target.value) })}
@@ -278,7 +286,7 @@ function ProfileBasicTab({
         <label htmlFor="helm-profile-cwd" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>工作目录</label>
         <input
           id="helm-profile-cwd"
-          className="input mono"
+          className="input"
           value={profile.cwd ?? ''}
           placeholder="普通会话默认工作目录绝对路径，留空由内核决定"
           onChange={(e) => patch({ ...profile, cwd: e.target.value })}
@@ -309,12 +317,10 @@ function ProfileBasicTab({
 
       {canEditHerdr && (
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Switch
               checked={runtimeEnabled}
-              onChange={(e) => {
-                const enabled = e.target.checked
+              onChange={(enabled) => {
                 setRuntimeEnabled(enabled)
                 if (enabled && !profile.runtime) {
                   patchRuntime({ kind: 'herdr', agent: '' })
@@ -322,12 +328,14 @@ function ProfileBasicTab({
                   patchRuntime(undefined)
                 }
               }}
+              label={
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 12.5 }}>
+                  <HelmIcon name="terminal" size={13} /> 外部 Herdr 运行时
+                </span>
+              }
             />
-            <span style={{ fontWeight: 600, fontSize: 12.5 }}>
-              <HelmIcon name="terminal" size={13} /> 外部 Herdr 运行时
-            </span>
             <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>（可选）作为 subagent 时绑定 Herdr CLI</span>
-          </label>
+          </div>
 
           {runtimeEnabled && runtime && (
             <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: '8px 12px', alignItems: 'center' }}>
@@ -692,8 +700,11 @@ export function ProfileEditorModal({
     }
   }
 
-  const isAssistant = useMemo(
-    () => !isNew && (selectedId === 'assistant' || draft?.profile.id === 'assistant'),
+  const isProtected = useMemo(
+    () =>
+      !isNew &&
+      ((selectedId !== null && BUILTIN_PROTECTED_PROFILES.has(selectedId)) ||
+        (draft?.profile.id !== undefined && BUILTIN_PROTECTED_PROFILES.has(draft.profile.id))),
     [isNew, selectedId, draft?.profile.id],
   )
 
@@ -730,11 +741,6 @@ export function ProfileEditorModal({
           </button>
         </div>
         <div className="modal-body asset-modal-body" style={{ flexDirection: 'row', gap: 14, alignItems: 'stretch' }}>
-          <datalist id="helm-known-nodes">
-            {knownNodes.map((n) => (
-              <option key={n.id} value={n.id} />
-            ))}
-          </datalist>
           <div className="asset-modal-list" style={{ width: 210, minWidth: 210, overflowY: 'auto' }}>
             <ProfileListPanel
               profiles={profiles}
@@ -821,11 +827,11 @@ export function ProfileEditorModal({
         </div>
         <div className="modal-footer">
           <span style={{ flex: 1, fontSize: 11.5, color: 'var(--fg-muted)' }}>
-            {isAssistant ? 'assistant 为默认 Profile，不可删除' : isNew ? '新建 Profile' : `正在编辑 ${selectedId}`}
+            {isProtected ? `${selectedId} 为内置受保护 Profile，不可删除` : isNew ? '新建 Profile' : `正在编辑 ${selectedId}`}
           </span>
           <button
             className="btn btn-danger"
-            disabled={isAssistant || isNew || !selectedId || saving}
+            disabled={isProtected || isNew || !selectedId || saving}
             onClick={() => void remove()}
           >
             <HelmIcon name="trash-2" size={13} />

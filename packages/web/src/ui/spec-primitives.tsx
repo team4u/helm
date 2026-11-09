@@ -10,6 +10,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { HelmIcon } from '../lib/icons.js'
 import { Select } from './Select.js'
+import { Checkbox } from './Checkbox.js'
 import { evaluateSpecValue, type EvalScope } from './evaluator.js'
 import { formatSpecText, normalizeSpec, resolveKeyValueItems, type NormalizedSpecNode } from './spec-normalize.js'
 
@@ -629,25 +630,20 @@ function CheckboxGroupImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecR
       {label !== '' && <span style={{ fontSize: 11.5, color: 'var(--fg-secondary)' }}>{label}</span>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         {options.map((o) => (
-          <label
+          <Checkbox
             key={o.value}
-            style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: 'var(--fg-secondary)', cursor: 'pointer' }}
-          >
-            <input
-              type="checkbox"
-              checked={selected.has(o.value)}
-              onChange={(e) => {
-                const next = new Set(selected)
-                if (e.target.checked) next.add(o.value)
-                else next.delete(o.value)
-                setSelected(next)
-                if (node.props['action'] !== undefined) {
-                  ctx.runAction(node.props['action'], { ...ctx.scope, $value: Array.from(next) }, pendingKey)
-                }
-              }}
-            />
-            {o.label}
-          </label>
+            checked={selected.has(o.value)}
+            label={o.label}
+            onChange={(checked) => {
+              const next = new Set(selected)
+              if (checked) next.add(o.value)
+              else next.delete(o.value)
+              setSelected(next)
+              if (node.props['action'] !== undefined) {
+                ctx.runAction(node.props['action'], { ...ctx.scope, $value: Array.from(next) }, pendingKey)
+              }
+            }}
+          />
         ))}
       </div>
       {pending && (

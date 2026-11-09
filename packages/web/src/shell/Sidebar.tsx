@@ -5,6 +5,7 @@ import { asksApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { Checkbox } from '../ui/Checkbox.js'
 import { isSameResolvedTarget, resolveTargetString, type HelmStoreValue } from '../lib/types.js'
 import {
   AGENT_SUB_LIST_PREVIEW,
@@ -514,17 +515,14 @@ function AgentConversationRow({
       }}
     >
       {batchMode && (
-        <input
-          type="checkbox"
+        <Checkbox
           className="sidebar-batch-checkbox"
           checked={Boolean(selected)}
           disabled={!deletable}
           title={deletable ? undefined : '受保护会话不可删除'}
-          onChange={(e) => {
-            e.stopPropagation()
+          onChange={() => {
             if (deletable) onToggleSelect?.(conv.id)
           }}
-          onClick={(e) => e.stopPropagation()}
         />
       )}
       <button

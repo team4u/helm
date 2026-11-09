@@ -6,6 +6,7 @@ import type { NodeUpgradeCheckResult } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { CopyButton } from '../conversation/CopyButton.js'
+import { Checkbox } from '../ui/Checkbox.js'
 import { deepLinkSelection, shouldSyncSelectionToStore } from './list-modal-selection.js'
 import {
   buildNodeConnectGuide,
@@ -354,15 +355,7 @@ function NodeUpgradeCard({
           disabled={upgrading}
           onChange={(e) => onTargetVersionChange(e.target.value)}
         />
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--fg-muted)', cursor: canForce ? 'pointer' : 'not-allowed' }}>
-          <input
-            type="checkbox"
-            checked={force}
-            disabled={upgrading || !canForce}
-            onChange={(e) => onForceChange(e.target.checked)}
-          />
-          强制重装/重试
-        </label>
+        <Checkbox checked={force} onChange={onForceChange} disabled={upgrading || !canForce} label="强制重装/重试" />
       </div>
       {canForce && (
         <div style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>
