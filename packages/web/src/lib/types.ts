@@ -35,9 +35,17 @@ import type { ModelDescriptor } from './api.js'
 export type ThemeMode = 'light' | 'dark'
 export type ThemePreference = 'system' | 'light' | 'dark'
 
+/** Screen 参数键：非空且仅限字母/数字/点/下划线/连字符（URL 查询串命名空间内的稳定子键）。 */
+export const SCREEN_PARAM_KEY_PATTERN = /^[A-Za-z0-9._-]+$/
+
+/** URL 参数键中的保留名：拒绝挂到普通对象上（防原型污染）。 */
+const PROTOTYPE_PARAM_KEY_RE = /^(?:__proto__|constructor|prototype)$/
+
+export const isPrototypeParamKey = (key: string): boolean => PROTOTYPE_PARAM_KEY_RE.test(key)
+
 export type ResolvedTarget =
   | { kind: 'conversation'; conversationId: number }
-  | { kind: 'screen'; pluginId: string; screenId: string }
+  | { kind: 'screen'; pluginId: string; screenId: string; params?: Record<string, string> }
 
 export type ActiveModal =
   | { kind: 'command-palette' }
@@ -182,6 +190,9 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
  * - 'conversation:profile:superagent' -> 查找该 profileId 的常驻或最新会话
  * - 'conversation:tag:worker' -> 查找含该 tag 的最新会话
  * - 'screen:builtin:herdr/overview' -> 打开全屏插件视图
+ * - 'screen:<pluginId>/<screenId>?k1=v1&k2=v2' -> 打开携带路由参数的全屏插件视图
+ *
+ * screen 查询串采用严格解析：非法百分号编码、空键值、重复键与保留的原型键一律整体判无效。
  */
 export function resolveTargetString(
   rawTarget: string,
@@ -210,16 +221,52 @@ export function resolveTargetString(
   }
   if (target.startsWith('screen:')) {
     const rest = target.slice('screen:'.length).trim()
-    const slashIdx = rest.lastIndexOf('/')
-    if (slashIdx > 0 && slashIdx < rest.length - 1) {
-      return {
-        kind: 'screen',
-        pluginId: rest.slice(0, slashIdx),
-        screenId: rest.slice(slashIdx + 1),
-      }
+    const queryIdx = rest.indexOf('?')
+    const pathPart = queryIdx === -1 ? rest : rest.slice(0, queryIdx)
+    const slashIdx = pathPart.lastIndexOf('/')
+    if (slashIdx <= 0 || slashIdx === pathPart.length - 1) return null
+    const params = queryIdx === -1 ? undefined : parseScreenTargetQuery(rest.slice(queryIdx + 1))
+    if (params === null) return null
+    return {
+      kind: 'screen',
+      pluginId: pathPart.slice(0, slashIdx),
+      screenId: pathPart.slice(slashIdx + 1),
+      ...(params === undefined ? {} : { params }),
     }
   }
   return null
+}
+
+/**
+ * 严格解析 `k1=v1&k2=v2` 查询串为 Screen 参数：
+ * - 键必须匹配 SCREEN_PARAM_KEY_PATTERN（含拒 __proto__ / constructor 等原型键）；
+ * - 值可含任意字符但不得为空串；非法百分号编码（decodeURIComponent 抛出）判整体无效；
+ * - 重复键判整体无效（不得静默取其一）；返回 undefined 表示无有效参数。
+ * 返回 null 表示查询串非法，调用方必须让整个目标判无效。
+ */
+export function parseScreenTargetQuery(rawQuery: string): Record<string, string> | undefined | null {
+  if (rawQuery === '') return undefined
+  const seen = new Set<string>()
+  const params: Record<string, string> = {}
+  for (const pair of rawQuery.split('&')) {
+    if (pair === '') return null
+    const eqIdx = pair.indexOf('=')
+    const rawKey = eqIdx === -1 ? pair : pair.slice(0, eqIdx)
+    const rawValue = eqIdx === -1 ? '' : pair.slice(eqIdx + 1)
+    if (eqIdx === -1 || rawKey === '' || rawValue === '') return null
+    if (!SCREEN_PARAM_KEY_PATTERN.test(rawKey) || isPrototypeParamKey(rawKey)) return null
+    if (seen.has(rawKey)) return null
+    let value: string
+    try {
+      value = decodeURIComponent(rawValue)
+    } catch {
+      return null
+    }
+    if (value === '') return null
+    seen.add(rawKey)
+    params[rawKey] = value
+  }
+  return Object.keys(params).length === 0 ? undefined : params
 }
 
 export function isSameResolvedTarget(a: ResolvedTarget | null, b: ResolvedTarget | null): boolean {
@@ -228,7 +275,13 @@ export function isSameResolvedTarget(a: ResolvedTarget | null, b: ResolvedTarget
     return a.conversationId === b.conversationId
   }
   if (a.kind === 'screen' && b.kind === 'screen') {
-    return a.pluginId === b.pluginId && a.screenId === b.screenId
+    if (a.pluginId !== b.pluginId || a.screenId !== b.screenId) return false
+    const ap = a.params ?? {}
+    const bp = b.params ?? {}
+    const apKeys = Object.keys(ap)
+    const bpKeys = Object.keys(bp)
+    if (apKeys.length !== bpKeys.length) return false
+    return apKeys.every((key) => Object.hasOwn(bp, key) && bp[key] === ap[key])
   }
   return false
 }
@@ -290,6 +343,8 @@ export interface HelmStoreValue {
   ensurePluginDoc(pluginId: string, docName: string): Promise<unknown>
   openTarget(target: string | ResolvedTarget, opts?: { split?: boolean; highlightEntryId?: string }): void
   closeSplit(): void
+  /** 更新当前 screen 路由参数（undefined 值删除键）；split 省略时作用于主屏。 */
+  setScreenParams(patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }): void
   setWorkbenchOpen(open: boolean): void
   setWorkbenchTab(tab: string): void
   setActiveModal(modal: ActiveModal): void

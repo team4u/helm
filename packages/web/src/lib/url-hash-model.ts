@@ -1,5 +1,5 @@
 import { ROOT_CONVERSATION_ID } from '@helm/protocol'
-import { isSameResolvedTarget, type ActiveModal, type ResolvedTarget } from './types.js'
+import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, type ActiveModal, type ResolvedTarget } from './types.js'
 
 /**
  * 地址栏 Hash 所表达的工作台位置：主屏目标、右分屏、工作台抽屉与顶层弹窗。
@@ -58,6 +58,53 @@ const parsePositiveInt = (raw: string): number | null => {
   if (!/^\d+$/.test(raw)) return null
   const value = Number(raw)
   return Number.isSafeInteger(value) && value > 0 ? value : null
+}
+
+/** 主屏 / 分屏 Screen 参数在 Hash 查询串中的命名空间前缀（互不冲突）。 */
+export const PRIMARY_SCREEN_PARAM_PREFIX = 'sp.'
+export const SPLIT_SCREEN_PARAM_PREFIX = 'ssp.'
+
+/** 严格解析单个 `sp.<k>=<v>` / `ssp.<k>=<v>` 参数：非法键 / 空值 / 非法编码返回 null。 */
+function parseNamespacedParam(
+  rawKey: string,
+  rawValue: string,
+  prefix: string,
+): { key: string; value: string } | null {
+  if (!rawKey.startsWith(prefix)) return null
+  const key = rawKey.slice(prefix.length)
+  if (key === '' || !SCREEN_PARAM_KEY_PATTERN.test(key) || isPrototypeParamKey(key)) return null
+  if (rawValue === '') return null
+  try {
+    const value = decodeURIComponent(rawValue)
+    return value === '' ? null : { key, value }
+  } catch {
+    return null
+  }
+}
+
+/** 从查询串提取命名空间 Screen 参数；非法项丢弃（静默防入侵），合法项不排序也可稳定往返。 */
+function extractScreenParams(
+  params: URLSearchParams,
+  prefix: string,
+): Record<string, string> | undefined {
+  const result: Record<string, string> = {}
+  for (const [rawKey, rawValue] of params) {
+    const parsed = parseNamespacedParam(rawKey, rawValue, prefix)
+    if (parsed !== null) result[parsed.key] = parsed.value
+  }
+  return Object.keys(result).length === 0 ? undefined : result
+}
+
+/** 字典序序列化 Screen 参数（编码后由 URLSearchParams 统一转义）。 */
+function formatScreenParams(
+  target: ResolvedTarget,
+  prefix: string,
+): Array<[string, string]> {
+  if (target.kind !== 'screen' || target.params === undefined) return []
+  return Object.keys(target.params)
+    .filter((key) => SCREEN_PARAM_KEY_PATTERN.test(key) && !isPrototypeParamKey(key) && target.params![key] !== '')
+    .sort()
+    .map((key) => [`${prefix}${key}`, target.params![key]] as [string, string])
 }
 
 /** 解析 `c/<id>` / `s/<pluginId>/<screenId>`；先切分路径，再分别解码，避免 ID 中的转义斜杠破坏结构。 */
@@ -139,19 +186,38 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
   const params = new URLSearchParams(queryIdx === -1 ? '' : raw.slice(queryIdx + 1))
   const splitRaw = params.get('split')
   const workbenchTab = params.get('wb')
+  const primaryTarget = parseTargetValue(path) ?? DEFAULT_PRIMARY
+  const splitTarget = splitRaw === null || splitRaw === '' ? null : parseTargetValue(splitRaw)
   return {
-    primaryTarget: parseTargetValue(path) ?? DEFAULT_PRIMARY,
-    splitTarget: splitRaw === null || splitRaw === '' ? null : parseTargetValue(splitRaw),
+    primaryTarget:
+      primaryTarget.kind === 'screen'
+        ? applyScreenParams(primaryTarget, extractScreenParams(params, PRIMARY_SCREEN_PARAM_PREFIX))
+        : primaryTarget,
+    splitTarget:
+      splitTarget !== null && splitTarget.kind === 'screen'
+        ? applyScreenParams(splitTarget, extractScreenParams(params, SPLIT_SCREEN_PARAM_PREFIX))
+        : splitTarget,
     workbenchOpen: params.has('wb'),
     workbenchTab: workbenchTab !== null && workbenchTab !== '' ? workbenchTab : DEFAULT_WORKBENCH_TAB,
     activeModal: parseActiveModal(params),
   }
 }
 
+/** 仅在确实存在合法参数时才挂 params 字段，保持无参数 screen 目标的形状稳定。 */
+function applyScreenParams(
+  target: { kind: 'screen'; pluginId: string; screenId: string },
+  params: Record<string, string> | undefined,
+): ResolvedTarget {
+  return params === undefined ? target : { ...target, params }
+}
+
 /** 始终返回以 `#/` 开头的规范形式；默认态输出 `#/c/1`，command-palette 不序列化。 */
 export function formatLocationHash(state: WorkspaceLocationState): string {
   const query: Array<[string, string]> = []
   if (state.splitTarget !== null) query.push(['split', formatTargetValue(state.splitTarget)])
+  // 主/分屏 Screen 参数各占 sp.* / ssp.* 命名空间：同一 screen 双开时参数互不串扰。
+  query.push(...formatScreenParams(state.primaryTarget, PRIMARY_SCREEN_PARAM_PREFIX))
+  if (state.splitTarget !== null) query.push(...formatScreenParams(state.splitTarget, SPLIT_SCREEN_PARAM_PREFIX))
   if (state.workbenchOpen) {
     query.push(['wb', state.workbenchTab === '' ? DEFAULT_WORKBENCH_TAB : state.workbenchTab])
   }
@@ -194,16 +260,31 @@ export function isSameLocationState(a: WorkspaceLocationState, b: WorkspaceLocat
   return modalSubId(modalA) === modalSubId(modalB)
 }
 
+/** 同一 screen 坐标（kind/pluginId/screenId 相同）即视为同一位置；params 差异不算坐标变化。 */
+const isSameScreenSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): boolean => {
+  if (a === null || b === null) return a === b
+  if (a.kind !== 'screen' || b.kind !== 'screen') return false
+  return a.pluginId === b.pluginId && a.screenId === b.screenId
+}
+
+/** 主/分屏位置是否发生坐标级变化（会话 ID 变化、screen 坐标变化、开/关分屏）。 */
+const isTargetSlotChanged = (prev: ResolvedTarget | null, next: ResolvedTarget | null): boolean =>
+  !isSameResolvedTarget(prev, next) && !isSameScreenSlot(prev, next)
+
 /**
  * 判断状态迁移是否值得入历史栈（pushState）：
  * - 主屏、分屏、工作台开关、弹窗开关或弹窗类型变化 → push（前进/后退可还原）；
+ * - 同一 screen 目标仅 params 变化 → replace，避免筛选器每次按键污染后退栈，
+ *   需要入栈时由调用方（setScreenParams push 标记）显式强制；
  * - 产物预览切换不同 artifactId → push（每个预览是可独立直达的视图）；
  * - 同一列表型弹窗内仅切换子项、或工作台已打开时仅切 Tab → replace
  *   （避免弹窗内点选 10 项后要后退 10 次才能关掉弹窗）。
  */
 export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: WorkspaceLocationState): boolean {
-  if (!isSameResolvedTarget(prev.primaryTarget, next.primaryTarget)) return true
-  if (!isSameResolvedTarget(prev.splitTarget, next.splitTarget)) return true
+  // 仅 params 变化（screen 坐标不变）→ replace，避免筛选器每次按键污染后退栈；
+  // 需要入栈时由调用方（setScreenParams push 标记）显式强制。
+  if (isTargetSlotChanged(prev.primaryTarget, next.primaryTarget)) return true
+  if (isTargetSlotChanged(prev.splitTarget, next.splitTarget)) return true
   if (prev.workbenchOpen !== next.workbenchOpen) return true
   const prevModal = normalizeModal(prev.activeModal)
   const nextModal = normalizeModal(next.activeModal)

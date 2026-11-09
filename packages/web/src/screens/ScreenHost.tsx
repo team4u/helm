@@ -1,12 +1,14 @@
 /**
- * 全屏视图宿主：仅 builtin:herdr/overview 同构映射为专用 Screen，
- * 其余一律走通用声明式 @json-render Spec 渲染（零插件 ID 特判）。
+ * 全屏视图宿主：所有 screen 一律经 PluginUiView 渲染（json / client 双轨，零插件 ID 特判）。
+ * 主屏 / 分屏分别由 App 传入对应 target；本组件把 params / isSplit / setParams
+ * 组装为协议标准 ScreenProps 经 slotProps 注入插件组件。
  */
-import type { ReactNode } from 'react'
+import * as React from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
+import type { ResolvedTarget } from '../lib/types.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { HerdrOverviewScreen } from './HerdrOverviewScreen.js'
 
 export interface ScreenHostProps {
   pluginId: string
@@ -17,31 +19,26 @@ export interface ScreenHostProps {
 
 export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: ScreenHostProps): React.JSX.Element {
   const store = useHelmStore()
-  const available = store.groupedUi.screens.some((item) => item.pluginId === pluginId && item.spec.id === screenId)
-  if (!available) return <GenericSpecScreen pluginId={pluginId} screenId={screenId} isSplit={isSplit} onCloseSplit={onCloseSplit} />
-  // 专用 Screen：仅内核内置的 Herdr 富交互总览视图。
-  if (pluginId === 'builtin:herdr' && screenId === 'overview') {
-    return <HerdrOverviewScreen isSplit={isSplit} onCloseSplit={onCloseSplit} />
-  }
-  return <GenericSpecScreen pluginId={pluginId} screenId={screenId} isSplit={isSplit} onCloseSplit={onCloseSplit} />
-}
-
-/** 通用兜底：groupedUi.screens 命中即用 PluginUiView 渲染（json/client 双轨）。 */
-function GenericSpecScreen({
-  pluginId,
-  screenId,
-  isSplit,
-  onCloseSplit,
-}: {
-  pluginId: string
-  screenId: string
-  isSplit?: boolean
-  onCloseSplit?: () => void
-}): ReactNode {
-  const store = useHelmStore()
   const matched = store.groupedUi.screens.find(
     (s) => s.pluginId === pluginId && (s.spec as { id?: string }).id === screenId,
   )
+
+  // 参数取自当前屏（主/分屏各自独立），setParams 同样绑定到当前屏的 store 方法。
+  const target: ResolvedTarget | null = isSplit ? store.splitTarget : store.primaryTarget
+  const slotProps = useMemo<Record<string, unknown>>(() => {
+    const params =
+      target !== null && target.kind === 'screen' && target.pluginId === pluginId && target.screenId === screenId
+        ? target.params ?? {}
+        : {}
+    return {
+      pluginId,
+      screenId,
+      isSplit: isSplit === true,
+      params,
+      setParams: (patch: Record<string, string | undefined>, options?: { push?: boolean }) =>
+        store.setScreenParams(patch, { split: isSplit === true, push: options?.push }),
+    }
+  }, [pluginId, screenId, isSplit, target, store])
 
   if (matched === undefined) {
     return (
@@ -103,7 +100,7 @@ function GenericSpecScreen({
           <PluginUiView
             pluginId={pluginId}
             spec={spec}
-            slotProps={{ pluginId, screenId }}
+            slotProps={slotProps}
             label={`视图 ${screenId}`}
           />
         </div>

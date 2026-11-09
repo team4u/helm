@@ -34,7 +34,7 @@ function render(live: ConversationLive): string {
     setTheme: noop, setThemePreference: noop, toggleTheme: noop, checkAuth: asyncNoop,
     onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: asyncNoop,
     loadConversationDetail: asyncNoop, loadEarlierEntries: asyncNoop, loadConversationArtifacts: asyncNoop,
-    ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setWorkbenchOpen: noop,
+    ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,
     setWorkbenchTab: noop, setActiveModal: noop, dismissNotice: noop, pushNotice: noop,
     invokePluginAction: asyncNoop,
   }

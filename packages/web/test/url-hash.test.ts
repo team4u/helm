@@ -536,9 +536,155 @@ test('契约: HelmStoreProvider 初始状态取自 Hash、监听外部变更、�
   const writeBack = source.slice(writeBackStart, writeBackEnd)
   assert.ok(writeBack.includes('nextHash === window.location.hash'), '写回前必须先比对当前地址栏')
   assert.ok(writeBack.includes('pushState') && writeBack.includes('replaceState'), '写回须区分 push/replace')
+  // setParams push 标记经唯一写回 effect 强制 push，组件不直接操作 history
+  assert.ok(writeBack.includes('pendingForcePush.current'), 'setScreenParams 的 push 标记须由唯一写回 effect 消费')
+  const screenParamsImpl = source.slice(source.indexOf('const setScreenParams'), source.indexOf('const invokePluginAction'))
+  assert.ok(!screenParamsImpl.includes('history.'), 'setScreenParams 不得直接操作浏览器历史')
   // logout 用 replaceState 复位地址栏，不污染历史栈
   const logoutBody = source.slice(source.indexOf('const logout'), source.indexOf('useEffect', source.indexOf('const logout')))
   assert.match(logoutBody, /replaceState\(null, '', '#\/c\/1'\)/)
   // 诚实性纪律：snapshot 到达时不得静默重置 primaryTarget（仅保留 conversation.deleted 实时事件处理）
   assert.ok(!/applySnapshot[\s\S]{0,400}setPrimaryTarget/.test(source), 'snapshot 处理不得触碰 primaryTarget')
+})
+
+// ---------------------------------------------------------------------------
+// Screen 路由参数（sp.* / ssp.* 命名空间）
+// ---------------------------------------------------------------------------
+
+test('screen params: sp.* 归主屏、ssp.* 归分屏，同一 screen 双开参数互不串扰', { timeout: 60_000 }, () => {
+  const parsed = parseLocationHash('#/s/builtin:workflow/runs?sp.runId=wf_1&split=s/builtin:herdr/overview&ssp.node=local&ssp.status=blocked')
+  assert.deepEqual(parsed.primaryTarget, {
+    kind: 'screen', pluginId: 'builtin:workflow', screenId: 'runs', params: { runId: 'wf_1' },
+  })
+  assert.deepEqual(parsed.splitTarget, {
+    kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview', params: { node: 'local', status: 'blocked' },
+  })
+  // 同一 screen 双开：两套命名空间各自编码，往返无损
+  const state: WorkspaceLocationState = {
+    primaryTarget: { kind: 'screen', pluginId: 'p', screenId: 'main', params: { tab: 'a', filter: 'x' } },
+    splitTarget: { kind: 'screen', pluginId: 'p', screenId: 'main', params: { tab: 'b' } },
+    workbenchOpen: false,
+    workbenchTab: 'artifacts',
+    activeModal: null,
+  }
+  assert.deepEqual(roundtrip(state), state)
+})
+
+test('screen params: 无参数时目标形状保持无 params 字段；切回会话自动丢弃命名空间参数', { timeout: 60_000 }, () => {
+  assert.deepEqual(parseLocationHash('#/s/p/main').primaryTarget, { kind: 'screen', pluginId: 'p', screenId: 'main' })
+  // 主屏切回 c/<id>：sp.* 无处可挂，自然丢弃；ssp.* 仍属分屏保留
+  const parsed = parseLocationHash('#/c/1?sp.k=v&split=s/p/main&ssp.k2=v2')
+  assert.deepEqual(parsed.primaryTarget, { kind: 'conversation', conversationId: 1 })
+  assert.deepEqual(parsed.splitTarget, { kind: 'screen', pluginId: 'p', screenId: 'main', params: { k2: 'v2' } })
+  // 关闭分屏后 format 不再输出 ssp.*（状态里已无分屏目标）
+  const closed: WorkspaceLocationState = { ...parsed, splitTarget: null }
+  assert.equal(formatLocationHash(closed), '#/c/1')
+})
+
+test('screen params: 字典序稳定序列化，与其它查询参数共存', { timeout: 60_000 }, () => {
+  const state: WorkspaceLocationState = {
+    primaryTarget: { kind: 'screen', pluginId: 'p', screenId: 'main', params: { zeta: '1', alpha: '2', mid: '3' } },
+    splitTarget: null,
+    workbenchOpen: true,
+    workbenchTab: 'tasks',
+    activeModal: null,
+  }
+  assert.equal(formatLocationHash(state), '#/s/p/main?sp.alpha=2&sp.mid=3&sp.zeta=1&wb=tasks')
+})
+
+test('screen params: 非法键 / 空值 / 非法编码 / 未知前缀全部丢弃，不产生半损参数', { timeout: 60_000 }, () => {
+  // 键不匹配 ^[A-Za-z0-9._-]+$（含空格、%、中文、括号）或空键：丢弃
+  for (const raw of [
+    '#/s/p/main?sp.=v',
+    '#/s/p/main?sp.a%20b=v',
+    '#/s/p/main?sp.a%28b%29=v',
+    '#/s/p/main?sp.%E4%B8%AD=v',
+    '#/s/p/main?sp.a=',
+    '#/s/p/main?sp.%E0%A4%A=v',
+  ]) {
+    assert.deepEqual(parseLocationHash(raw).primaryTarget, { kind: 'screen', pluginId: 'p', screenId: 'main' }, raw)
+  }
+  // 原型键不挂上对象
+  const proto = parseLocationHash('#/s/p/main?sp.__proto__=x&sp.constructor=y')
+  assert.equal((proto.primaryTarget as { params?: Record<string, string> }).params, undefined)
+  // 值里的特殊字符经 URLSearchParams 编码往返无损（空格、&、=、?、#）
+  const weird = parseLocationHash(formatLocationHash({
+    primaryTarget: { kind: 'screen', pluginId: 'p', screenId: 'main', params: { q: "a b&c=d?e#f", path: '/x/y' } },
+    splitTarget: null, workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null,
+  }))
+  const weirdParams = weird.primaryTarget.kind === 'screen' ? weird.primaryTarget.params : undefined
+  assert.deepEqual(weirdParams, { q: "a b&c=d?e#f", path: '/x/y' })
+  // 非 sp./ssp. 前缀的键不属于任何 screen，不误吞
+  const noPrefix = parseLocationHash('#/s/p/main?runId=wf_1').primaryTarget
+  assert.equal(noPrefix.kind === 'screen' ? noPrefix.params : undefined, undefined)
+})
+
+import { isSameResolvedTarget, parseScreenTargetQuery, resolveTargetString } from '../src/lib/types.js'
+
+test('screen params: isSameResolvedTarget 浅比较 params，仅 params 变化不入历史栈', { timeout: 60_000 }, () => {
+  const base = conversation(1)
+  const screen = (params: Record<string, string> | undefined) => ({
+    ...(params === undefined ? {} : { params }),
+    kind: 'screen' as const,
+    pluginId: 'p',
+    screenId: 'main',
+  })
+  // 同目标不同 params 不等价；params 与无 params 也不等价
+  assert.equal(isSameResolvedTarget(screen({ a: '1' }), screen({ a: '2' })), false)
+  assert.equal(isSameResolvedTarget(screen({ a: '1' }), screen(undefined)), false)
+  assert.equal(isSameResolvedTarget(screen({ a: '1' }), screen({ a: '1' })), true)
+  assert.equal(isSameResolvedTarget(screen({ a: '1', b: '2' }), screen({ b: '2', a: '1' })), true)
+  // 仅 params 变化：replace（不污染后退栈）
+  const withParams = { ...base, primaryTarget: screen({ runId: 'wf_1' }) }
+  const changedParams = { ...base, primaryTarget: screen({ runId: 'wf_2' }) }
+  assert.equal(shouldPushLocationHistory(withParams, changedParams), false)
+  // 跨 screen 坐标或会话切换仍 push；同坐标删除全部参数属参数变化仍 replace
+  const otherScreen: typeof withParams = { ...base, primaryTarget: { kind: 'screen', pluginId: 'p', screenId: 'other' } }
+  assert.equal(shouldPushLocationHistory(withParams, otherScreen), true)
+  assert.equal(shouldPushLocationHistory(withParams, { ...base, primaryTarget: screen(undefined) }), false)
+  assert.equal(shouldPushLocationHistory(withParams, conversation(2)), true)
+  // isSameLocationState 整体感知 params 差异
+  assert.equal(isSameLocationState(withParams, changedParams), false)
+})
+
+// ---------------------------------------------------------------------------
+// resolveTargetString：screen:<pluginId>/<screenId>?k=v 严格解析
+// ---------------------------------------------------------------------------
+
+// resolveTargetString 直携参数解析（sidebar target / helm:open 真实入口）
+
+test('resolveTargetString: screen 查询串解析进 params（helm:open / sidebar target 直携参数）', { timeout: 60_000 }, () => {
+  assert.deepEqual(
+    resolveTargetString('screen:builtin:workflow/runs?runId=wf_1&tab=all', []),
+    { kind: 'screen', pluginId: 'builtin:workflow', screenId: 'runs', params: { runId: 'wf_1', tab: 'all' } },
+  )
+  // 无查询串：保持无 params 字段（与既有形状兼容）
+  assert.deepEqual(resolveTargetString('screen:p/main', []), { kind: 'screen', pluginId: 'p', screenId: 'main' })
+  // 值可含编码后的特殊字符
+  assert.deepEqual(
+    resolveTargetString('screen:p/main?q=a%20b%26c', []),
+    { kind: 'screen', pluginId: 'p', screenId: 'main', params: { q: 'a b&c' } },
+  )
+})
+
+test('resolveTargetString: 非法查询串整体判无效（重复键 / 空键值 / 非法键 / 非法编码 / 无等号）', { timeout: 60_000 }, () => {
+  for (const raw of [
+    'screen:p/main?k=v&k=v2',       // 重复键
+    'screen:p/main?=v',              // 空键
+    'screen:p/main?k=',              // 空值
+    'screen:p/main?k',               // 无等号
+    'screen:p/main?a b=v',           // 键含空格
+    'screen:p/main?__proto__=x',     // 原型键
+    'screen:p/main?constructor=x',   // 原型键
+    'screen:p/main?k=%E0%A4%A',      // 非法百分号编码
+    'screen:p/main?&',               // 空片段
+  ]) {
+    assert.equal(resolveTargetString(raw, []), null, raw)
+  }
+  // 空查询串（尾部孤立 ?）视为无参数，目标仍合法
+  assert.deepEqual(resolveTargetString('screen:p/main?', []), { kind: 'screen', pluginId: 'p', screenId: 'main' })
+  // parseScreenTargetQuery 直接验证三态
+  assert.equal(parseScreenTargetQuery(''), undefined)
+  assert.equal(parseScreenTargetQuery('k=%E0%A4%A'), null)
+  assert.deepEqual(parseScreenTargetQuery('b=2&a=1'), { a: '1', b: '2' })
 })

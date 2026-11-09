@@ -12,7 +12,7 @@ import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js
 import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.js'
 import * as HelmPluginClient from './plugin-client-context.js'
 import { formatLocationHash, isSameLocationState, parseLocationHash, shouldPushLocationHistory, type WorkspaceLocationState } from './url-hash-model.js'
-import { groupUiContributions, resolveTargetString, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
+import { groupUiContributions, isPrototypeParamKey, resolveTargetString, SCREEN_PARAM_KEY_PATTERN, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
 import { errorText } from './format.js'
 
 const getStoredPreference = (): ThemePreference => {
@@ -312,6 +312,33 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     if (resolved.kind === 'conversation' && opts?.highlightEntryId) setHighlightedEntry({ conversationId: resolved.conversationId, entryId: opts.highlightEntryId })
   }, [pushNotice])
   const closeSplit = useCallback(() => setSplitTarget(null), [])
+
+  // ---- Screen 路由参数更新（唯一导航机制内实现，组件不得直接操作 history） ----
+  // setParams(..., { push: true }) 只标记下一拍强制 push；实际 pushState 仍由
+  // 唯一的地址栏写回 effect 执行，保证与既有导航共用同一套同步与判重路径。
+  const pendingForcePush = useRef(false)
+  const setScreenParams = useCallback((patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }) => {
+    if (options?.push) pendingForcePush.current = true
+    const update = (current: ResolvedTarget): ResolvedTarget => {
+      if (current.kind !== 'screen') return current
+      const next: Record<string, string> = { ...(current.params ?? {}) }
+      for (const [rawKey, rawValue] of Object.entries(patch)) {
+        if (!SCREEN_PARAM_KEY_PATTERN.test(rawKey) || isPrototypeParamKey(rawKey)) {
+          // 边界处拒绝非法键：显式告警而非静默丢弃，防止筛选器状态假象。
+          pushNotice({ type: 'notification', level: 'warning', title: '已忽略非法 Screen 参数键', body: `参数键 ${rawKey} 仅允许字母、数字、点、下划线与连字符` })
+          continue
+        }
+        if (rawValue === undefined) delete next[rawKey]
+        else if (rawValue !== '') next[rawKey] = rawValue
+      }
+      const params = Object.keys(next).length === 0 ? undefined : next
+      return params === undefined
+        ? { kind: 'screen', pluginId: current.pluginId, screenId: current.screenId }
+        : { kind: 'screen', pluginId: current.pluginId, screenId: current.screenId, params }
+    }
+    if (options?.split) setSplitTarget((current) => (current === null ? current : update(current)))
+    else setPrimaryTarget(update)
+  }, [pushNotice])
   const invokePluginAction = useCallback(async (pluginId: string, actionId: string, input: unknown, conversationId?: number) => pluginsApi.invokeAction(pluginId, actionId, input, conversationId), [])
 
   // ---- 地址栏 Hash 双向同步 --------------------------------------------------
@@ -347,13 +374,15 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     const nextHash = formatLocationHash(locationState)
     if (nextHash === window.location.hash) {
       lastSyncedLocation.current = locationState
+      pendingForcePush.current = false
       return
     }
-    if (shouldPushLocationHistory(lastSyncedLocation.current, locationState)) {
+    if (pendingForcePush.current || shouldPushLocationHistory(lastSyncedLocation.current, locationState)) {
       window.history.pushState(null, '', nextHash)
     } else {
       window.history.replaceState(null, '', nextHash)
     }
+    pendingForcePush.current = false
     lastSyncedLocation.current = locationState
   }, [authenticated, locationState])
 
@@ -492,12 +521,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     () => ({
       ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
       live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],
   )
   useEffect(() => {

@@ -395,22 +395,35 @@ test('evaluator 回归: 原型链逃逸被阻断（只读 own property）', { ti
 })
 
 // ---------------------------------------------------------------------------
-// ScreenHost 路由契约：零业务特判，仅 herdr/overview 同构映射
+// ScreenHost 路由契约：零业务特判，所有 screen 统一 PluginUiView 渲染
 // ---------------------------------------------------------------------------
 
-test('ScreenHost 仅保留 builtin:herdr/overview 专用映射，superagent/recall-graph 走声明式 JSON Spec', { timeout: 60_000 }, async () => {
+test('ScreenHost 零插件 ID 特判，所有 screen 统一经 PluginUiView 渲染（herdr 专用映射已清退）', { timeout: 60_000 }, async () => {
   const source = await readFile(new URL('../src/screens/ScreenHost.tsx', import.meta.url), 'utf-8')
-  // 唯一同构映射：Herdr 总览
-  assert.ok(source.includes("builtin:herdr"), 'herdr/overview 同构映射应保留')
-  // 严禁任何 superagent 专用分支（旧硬编码已移除，RecallGraphScreen 已删）
+  // herdr 专用同构映射已删除：不再出现任何插件 ID 字符串特判
+  assert.ok(!source.includes('builtin:herdr'), 'ScreenHost 不得出现 builtin:herdr 字符串特判')
+  assert.ok(!source.includes('HerdrOverviewScreen'), 'HerdrOverviewScreen 同构映射应已删除')
   assert.ok(!source.includes('superagent'), 'ScreenHost 不得出现 superagent 字符串特判')
   assert.ok(!source.includes('RecallGraphScreen'), 'RecallGraphScreen 专用组件应已删除')
+  assert.ok(source.includes('PluginUiView'), '所有 screen 一律经 PluginUiView 渲染')
   try {
     await readFile(new URL('../src/screens/RecallGraphScreen.tsx', import.meta.url), 'utf-8')
     assert.fail('RecallGraphScreen.tsx 应已删除')
   } catch (err) {
     assert.ok((err as NodeJS.ErrnoException).code === 'ENOENT')
   }
+})
+
+test('ScreenHost 从对应 target 组装 ScreenProps（params/isSplit/setParams 经 slotProps 注入）', { timeout: 60_000 }, async () => {
+  const source = await readFile(new URL('../src/screens/ScreenHost.tsx', import.meta.url), 'utf-8')
+  // 主/分屏分别取自 splitTarget / primaryTarget，参数互不串扰
+  assert.match(source, /isSplit \? store\.splitTarget : store\.primaryTarget/)
+  // 协议标准 ScreenProps 四字段全部注入 slotProps
+  for (const field of ['pluginId', 'screenId', 'isSplit', 'params', 'setParams']) {
+    assert.ok(source.includes(field), `slotProps 须包含 ${field}`)
+  }
+  // setParams 绑定 store 唯一导航机制，push 选项透传
+  assert.match(source, /store\.setScreenParams\(patch, \{ split: isSplit === true, push: options\?\.push \}\)/)
 })
 
 test('superagent recall-graph 插件声明的 JSON Spec 可经通用归一化渲染（GenericSpecScreen 路径）', { timeout: 60_000 }, () => {

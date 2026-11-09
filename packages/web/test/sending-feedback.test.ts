@@ -33,7 +33,7 @@ function renderTimeline(status: ConversationStatus, sending: boolean, entries: C
     setTheme: noop, setThemePreference: noop, toggleTheme: noop, checkAuth: asyncNoop,
     onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: async () => undefined,
     loadConversationDetail: async () => undefined, loadEarlierEntries: asyncNoop, loadConversationArtifacts: async () => undefined,
-    ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setWorkbenchOpen: noop,
+    ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,
     setWorkbenchTab: noop, setActiveModal: noop, dismissNotice: noop, pushNotice: noop,
     invokePluginAction: asyncNoop,
   }
