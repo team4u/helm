@@ -316,6 +316,7 @@ function docStore() {
   return {
     get: <T>(key: string, initial: T): T => (docs.has(key) ? (docs.get(key) as T) : initial),
     set: <T>(key: string, value: T): void => void docs.set(key, value),
+    flush: async () => {},
   }
 }
 

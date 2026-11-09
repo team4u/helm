@@ -144,6 +144,9 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value))
   }
+  async flush(): Promise<void> {
+    this.flushCount += 1
+  }
 }
 
 interface Harness {

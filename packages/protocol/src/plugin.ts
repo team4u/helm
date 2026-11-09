@@ -331,11 +331,17 @@ export interface PluginToolSpec<TIn = Record<string, unknown>> {
 // 持久状态、后台服务与原始路由
 // ---------------------------------------------------------------------------
 
-/** 插件自有持久文档句柄（state.sqlite）；同步接口方便 pi-durable store 直用。 */
+/**
+ * 插件自有持久文档句柄（state.sqlite）；get/set/update 同步镜像，
+ * flush 等待底层排队写真正落盘完成（失败显式 reject——镜像已写不等于持久化完成，
+ * 副作用执行前必须 await flush 防止「未落盘就派生副作用」）。
+ */
 export interface PluginDocHandle<T> {
   get(): T
   set(value: T): void
   update(fn: (current: T) => T): void
+  /** 等待本 store 全部排队写冲刷完成（同一持久化链，无按文档粒度队列）。 */
+  flush(): Promise<void>
 }
 
 /** 插件公共文档快照（跨端可读；逐值 JSON 校验/脱敏后发布，默认不公开）。 */

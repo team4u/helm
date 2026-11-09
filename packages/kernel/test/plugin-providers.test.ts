@@ -89,6 +89,7 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value));
   }
+  async flush(): Promise<void> {}
 }
 
 /** 最小合法 provider（形状满足 pi-ai Provider 契约，行为无需真实）。 */

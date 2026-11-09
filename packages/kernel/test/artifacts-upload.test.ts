@@ -89,6 +89,7 @@ function makeKernel(): KernelRuntimeLike {
       docs: {
         get: <T,>(_key: string, initial: T): T => initial,
         set: <T,>(_key: string, _value: T): void => {},
+        flush: async () => {},
       },
     }),
     stash,

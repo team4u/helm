@@ -104,6 +104,8 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value));
   }
+
+  async flush(): Promise<void> {}
 }
 
 class MemoryConfigStore implements PluginConfigStore {

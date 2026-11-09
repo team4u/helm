@@ -539,7 +539,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
   before(async () => {
     auth = new AuthService(dataDir)
     const handler = createHubHandler(
-      { dataDir, auth, events: new NoopEventHub(), plugins: new PluginHost({ dataDir, host: makeBackend(), docs: { get: <T>(_k: string, initial: T): T => initial, set: () => {} } }) } as unknown as KernelRuntimeLike,
+      { dataDir, auth, events: new NoopEventHub(), plugins: new PluginHost({ dataDir, host: makeBackend(), docs: { get: <T>(_k: string, initial: T): T => initial, set: () => {} , flush: async () => {}} }) } as unknown as KernelRuntimeLike,
     )
     // 直接调 handler（不经网络）：setup 拿用户 token 备用。
     const res = await handler(
@@ -570,6 +570,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
           Object.assign(recordsDoc, copy)
         }
       },
+      flush: async () => {},
     }
     const index = await seedRecordsDocInto(docsStore, join(dataDir, 'corrupt-index-seed'))
     const host = new PluginHost({
@@ -606,6 +607,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
           Object.assign(recordsDoc, copy)
         }
       },
+      flush: async () => {},
     }
     const index = await seedRecordsDocInto(docsStore, join(dataDir, 'corrupt-record-seed'))
     const victim = index[0]!.id

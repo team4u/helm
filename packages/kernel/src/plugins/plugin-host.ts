@@ -43,6 +43,7 @@ import {
   type HookResult,
   type HookOptions,
   type JsonSchema,
+  type MaybePromise,
   type PluginActionContext,
   type PluginActionSpec,
   type PluginConfigFieldSchema,
@@ -78,6 +79,8 @@ import { redactJsonValue } from '../redact.js';
 export interface PluginDocStore {
   get<T>(key: string, initial: T): T;
   set<T>(key: string, value: T): void;
+  /** 等待全部排队写真正落盘（同步镜像 ≠ 持久化完成；失败显式 reject）。 */
+  flush(): Promise<void>;
 }
 
 export interface PluginConfigStore {
@@ -262,6 +265,15 @@ interface PluginState {
    * 停用/回滚/dispose 时统一释放；句柄幂等，插件提前释放也安全。
    */
   hostReleases: Set<() => void>;
+  /**
+   * 受控停止 doc 写入窗口：宿主正在 await 本插件服务 stop 链期间为 true。
+   * 此窗口内本周期（epoch 一致）的 ctx.doc 句柄被允许完成最终持久化——
+   * stop 时 phase 已是 deactivating，常规 guard 会拒绝一切写入，引擎/服务的
+   * 终态落盘会被悄悄丢弃（诚实性违规）。窗口只覆盖 stop 本身：stop 返回
+   * （成功/失败/回滚）即复位；epoch 更替（reenable）后旧句柄仍拒绝。
+   * doc 句柄是插件私有能力，窗口内经句柄的写入均属插件自身 stop 链产物。
+   */
+  stopDocWrites: boolean;
 }
 
 /**
@@ -441,6 +453,7 @@ export class PluginHost {
         docs: new Map(),
         configSchema: null,
         hostReleases: new Set(),
+        stopDocWrites: false,
       };
       this.plugins.set(definition.id, state);
 
@@ -743,6 +756,23 @@ export class PluginHost {
   }
 
   /**
+   * 在受控停止 doc 写入窗口内执行服务 stop：stop 期间（含引擎 close 内部
+   * 由 abort 唤醒的异步 settle 链）本插件本周期 ctx.doc 句柄的最终持久化写入
+   * 被放行（phase 为 deactivating 时不再拒绝）；stop 返回（成功/失败）即
+   * 复位窗口，之后一切写入恢复常规拒绝。窗口按 PluginState 标记而非异步上下
+   * 文传播：引擎 settle 链的 promise 在 stop 之前创建，AsyncLocalStorage 无法
+   * 覆盖它们，但句柄本身是插件私有、epoch 一致性已由句柄闭包保证。
+   */
+  private async runControlledStop(state: PluginState, stop: () => MaybePromise<void>): Promise<void> {
+    state.stopDocWrites = true;
+    try {
+      await stop();
+    } finally {
+      state.stopDocWrites = false;
+    }
+  }
+
+  /**
    * 清理插件注册：逆向 stop 已启动服务、逆序卸载已挂载 provider、释放宿主生命
    * 周期资源（幂等）、清空全部能力注册表。stop / 卸载 / 释放失败聚合显式抛出，
    * 绝不静默吞掉；未挂载的 provider 声明跳过（enabled:false 探测路径零副作用）。
@@ -753,7 +783,7 @@ export class PluginHost {
       for (const svc of [...state.services].reverse()) {
         if (!svc.started) continue;
         try {
-          await svc.stop();
+          await this.runControlledStop(state, () => svc.stop());
         } catch (err) {
           // 不中断其余清理，但绝不静默吞掉：聚合后显式抛出（JSON-safe 形态）
           stopErrors.push({ serviceId: svc.id, error: toJsonSafeError(err) });
@@ -988,7 +1018,9 @@ export class PluginHost {
         );
       }
       // 阶段 2：逐插件 start；某插件失败时逆向 stop 本插件与之前已启动插件，
-      // 错误如实上抛，屏障标记不放行（半启动状态不允许被后续 enable 绕过）
+      // 错误如实上抛，屏障标记不放行（半启动状态不允许被后续 enable 绕过）。
+      // 回滚 stop 失败不丢弃：与原始 start 错误同层聚合（保留原 code/message，
+      // 附 rollbackStop 诊断，含 pluginId 与 JSON-safe stop 错误清单）。
       const started: PluginState[] = [];
       try {
         for (const state of participants) {
@@ -997,14 +1029,36 @@ export class PluginHost {
         }
         this.servicesStarted = true;
       } catch (err) {
+        const rollbackStopErrors: Array<{ pluginId: string; stopErrors: Array<{ serviceId: string; error: JsonSafeErrorInfo }> }> = [];
         for (const state of started.reverse()) {
           try {
             await this.stopServicesQuietly(state);
-          } catch {
-            // stop 失败聚合进下方诊断（stopServicesQuietly 已保证抛错）
+          } catch (rollbackErr) {
+            // stopServicesQuietly 抛 plugin_service_stop_failed（details.stopErrors 已聚合）
+            rollbackStopErrors.push({
+              pluginId: state.definition.id,
+              stopErrors:
+                rollbackErr instanceof HelmError && Array.isArray((rollbackErr.details as { stopErrors?: unknown })?.stopErrors)
+                  ? ((rollbackErr.details as { stopErrors: Array<{ serviceId: string; error: JsonSafeErrorInfo }> }).stopErrors)
+                  : [{ serviceId: '<unknown>', error: toJsonSafeError(rollbackErr) }],
+            });
           }
         }
         this.startPromise = undefined;
+        if (rollbackStopErrors.length > 0) {
+          if (err instanceof HelmError) {
+            throw new HelmError(err.code, err.message, err.status, {
+              ...((err.details as object) ?? {}),
+              rollbackStopErrors,
+            });
+          }
+          throw new HelmError(
+            'plugin_service_start_failed',
+            `插件服务启动失败：${err instanceof Error ? err.message : String(err)}`,
+            500,
+            { rollbackStopErrors },
+          );
+        }
         throw err;
       }
     })();
@@ -1038,7 +1092,7 @@ export class PluginHost {
     for (const svc of [...state.services].reverse()) {
       if (!svc.started) continue;
       try {
-        await svc.stop();
+        await this.runControlledStop(state, () => svc.stop());
         svc.started = false;
       } catch (err) {
         svc.started = false;
@@ -1068,7 +1122,7 @@ export class PluginHost {
       const stopErrors: Array<{ serviceId: string; error: JsonSafeErrorInfo }> = [];
       for (const svc of started.reverse()) {
         try {
-          await svc.stop();
+          await this.runControlledStop(state, () => svc.stop());
         } catch (stopErr) {
           stopErrors.push({ serviceId: svc.id, error: toJsonSafeError(stopErr) });
         } finally {
@@ -1619,8 +1673,17 @@ export class PluginHost {
       }
     };
 
-    /** doc 句柄在本周期内（含运行期）可写；停用中或周期更替后失效。 */
+    /**
+     * doc 句柄在本周期内（含运行期）可写；停用中或周期更替后失效。
+     * 例外：受控停止 doc 写入窗口（宿主正在 await 的本插件服务 stop 链，
+     * epoch 由句柄闭包保证一致）允许最终持久化写入，见 PluginState.stopDocWrites。
+     */
     const assertDocUsable = (name: string) => {
+      if (state.stopDocWrites && self.plugins.get(pluginId) === state && state.epoch === epoch) {
+        // 受控停止窗口：仅要求插件注册态与本周期仍在（dispose 后期 plugins.clear /
+        // reenable 周期更替后的残留调用依然拒绝）。
+        return;
+      }
       self.assertContextUsable(state, epoch, `doc ${name} 句柄`);
     };
 
@@ -2132,6 +2195,9 @@ export class PluginHost {
             store.set(key, safe);
             if (isPublic) self.emitDocUpdated(pluginId, name, safe);
           },
+          // 真实持久化端口：透传 store 的排队写冲刷（同一持久化链，无按文档粒度
+          // 队列）；失败原样上抛，不以镜像已写冒充持久化完成。
+          flush: () => store.flush(),
         };
         state.docs.set(name, { handle: handle as PluginDocHandle<unknown>, isPublic, initial: normalizedInitial });
         return handle;

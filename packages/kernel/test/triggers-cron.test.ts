@@ -37,6 +37,7 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value))
   }
+  async flush(): Promise<void> {}
 }
 
 /** 可控时钟：手动推进 now；setTimeout 暂存，advance 时触发到期项（含 unref 语义）。 */

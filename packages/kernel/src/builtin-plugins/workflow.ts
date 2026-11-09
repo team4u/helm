@@ -148,10 +148,7 @@ export function createWorkflowPlugin(): PluginDefinition {
         set<T>(key: string, value: T): void {
           records.update((current) => ({ ...current, [key]: structuredClone(value) }))
         },
-        flush: async (): Promise<void> => {
-          // ctx.doc 底层即 PluginDocStore（state.sqlite 排队持久化）；引擎各写点
-          // 后续业务自然冲刷，无独立 flush 端口——保持无操作即可（写入已同步镜像）。
-        },
+        flush: (): Promise<void> => records.flush(),
       }
 
       /** 停止中标记：stop 之后的引擎回调不再触碰 runs 投影（doc 句柄已交还）。 */
@@ -198,9 +195,23 @@ export function createWorkflowPlugin(): PluginDefinition {
         },
       })
 
-      /** 同步 runs 公共文档（含按会话聚合的角标统计）。 */
+      /**
+       * 同步 runs 公共文档（含按会话聚合的角标统计）。
+       * stopping 拦截的只有运行期后台回调（引擎事件链里的投影刷新）；受控 stop
+       * 链内的最终同步走 syncRunsDocFinal（不受 stopping 拦截，写入经宿主
+       * 受控停止 doc 作用域放行，失败如实上抛）。
+       */
       function syncRunsDoc(): void {
         if (stopping) return
+        writeRunsDoc()
+      }
+
+      /** 受控 stop 末尾的最终投影：禁止被 stopping 拦截；写失败上抛（不吞）。 */
+      function syncRunsDocFinal(): void {
+        writeRunsDoc()
+      }
+
+      function writeRunsDoc(): void {
         const runs = workflows.listRuns()
         const byConversation: Record<string, { count: number; tone: 'warn' | 'accent' | 'neutral'; footerText: string }> = {}
         for (const run of runs) {
@@ -288,19 +299,32 @@ export function createWorkflowPlugin(): PluginDefinition {
           syncRunsDoc()
         },
         async stop() {
-          // 受控停止：先置 stopping 拦截新回调，引擎 close 等待在途 run 终态并
-          // 落最终记录（写私有 records doc），随后最终同步 runs 投影——投影写入
-          // 在 stop 返回前完成，teardown 之后的 deactivating 废黜不影响这些写。
+          // 受控停止：先置 stopping 拦截运行期后台回调（引擎事件链的投影刷新与
+          // 父会话投递），再 await 引擎 close（在途 run 终态写入私有 records doc；
+          // 写入经宿主受控停止 doc 写入窗口放行，失败如实上抛）。随后做最终 runs
+          // 投影（不受 stopping 拦截）并 await 真实 flush（排队写真正落盘）。
+          // close/flush 失败直接上抛（真实持久化故障，不吞）；最终投影是派生观察面：
+          // 读取失败（如持久层损坏）发布显式 notification 诊断后不阻断拆毁——
+          // 引擎终态已在 records，损坏也会在任何业务读取路径显式报错，不静默。
           stopping = true
+          await workflows.close()
           try {
-            await workflows.close()
-          } finally {
-            try {
-              syncRunsDoc()
-            } catch {
-              // 投影是观察面：close 后引擎无新状态，失败仅意味着最终帧不同步；
-              // 引擎终态已持久在 records，下次启动 init 后同步。不吞 close 错误。
+            syncRunsDocFinal()
+            await records.flush()
+          } catch (error) {
+            if (error instanceof HelmError && (error.code === 'workflow_index_corrupt' || error.code === 'workflow_record_corrupt')) {
+              const message = error instanceof Error ? error.message : String(error)
+              process.stderr.write(`builtin:workflow stop: 最终 runs 投影失败（终态已持久于 records）: ${message}\n`)
+              // 显式诊断事件（非静默）：前端与日志可见投影未同步及原因。
+              void ctx.host.emitEvent('notification', {
+                type: 'notification',
+                level: 'warning',
+                title: '工作流最终投影未同步',
+                body: `关停时读取 runs 快照失败（运行终态已持久化）：${message}`,
+              })
+              return
             }
+            throw error
           }
         },
         liveTasks() {

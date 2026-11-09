@@ -156,6 +156,8 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value))
   }
+
+  async flush(): Promise<void> {}
 }
 
 class MemoryConfigStore implements PluginConfigStore {
@@ -903,7 +905,7 @@ test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、KeyValueList 表达式
     // 真实求值：用当前 status doc 快照作为 $docs scope，逐 key 取值。
     // web 求值器无法跨包导入（kernel 测试不依赖 web 构建产物）；本地实现
     // 同一 JSON Pointer 语义做等价验证（语法契约与 packages/web evaluator 一致）。
-    const scope = { $docs: { status: statusDoc(env) } }
+    const scope = { $docs: { status: statusDoc(env) , flush: async () => {}} }
     const resolve = (expr: string): unknown => {
       assert.ok(expr.startsWith('/$'), `表达式必须是 JSON Pointer：${expr}`)
       return expr.slice(1).split('/').reduce<unknown>((cur, seg) => {

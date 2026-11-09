@@ -624,6 +624,7 @@ async function executeCleanupTool(
     docs: {
       get: <T>(_key: string, initial: T): T => initial,
       set: () => {},
+      flush: async () => {},
     },
   })
   try {

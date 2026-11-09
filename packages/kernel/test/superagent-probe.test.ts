@@ -453,6 +453,7 @@ class ProbeDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value))
   }
+  async flush(): Promise<void> {}
 }
 
 interface ProbeEnv {
@@ -719,7 +720,7 @@ test('UI docs：合法 docs 进入 listUi 快照；声明同名 public doc 正�
 test('UI docs：非数组 / 空数组 / 非字符串项 / 非法文档名 / 重复名 显式拒绝', { timeout: 60_000 }, async () => {
   const cases: Array<{ label: string; docs: unknown }> = [
     { label: '非数组', docs: 'overview' },
-    { label: '对象冒充', docs: { 0: 'overview', length: 1 } },
+    { label: '对象冒充', docs: { 0: 'overview', length: 1 , flush: async () => {}} },
     { label: '空数组', docs: [] },
     { label: '非字符串项', docs: ['overview', 42] },
     { label: '空字符串名', docs: [''] },
