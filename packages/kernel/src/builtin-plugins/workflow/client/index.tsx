@@ -299,7 +299,7 @@ export function SubagentLiveCard(props: {
 export function SubagentToolView(props: ToolViewProps): ReactNode {
   const conversations = useConversations()
   const runsDoc = usePluginDoc<{ runs: WorkflowRunSummary[] }>('runs')
-  const [expanded, setExpanded] = useState(true)
+  const ctx = usePluginContext()
 
   const childId = useMemo(
     () =>
@@ -340,12 +340,11 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
     return (
       <div className="trace-entry">
         <ExternalRunSummary run={meta.run} worktree={meta.worktree} toolStatus={props.status} executionId={meta.executionId} />
-        <ToolCallDetailsInline input={props.input} result={props.result} artifactRef={props.artifactRef} />
       </div>
     )
   }
 
-  // 多次 resume 折叠：历史已被后续调用接替的旧调用仅渲染单行摘要胶囊（可展开详情）。
+  // 历史调用只保留当次状态；查看详情统一打开子会话抽屉，不在时间线展开。
   if (!isLatest) {
     return (
       <div className="trace-entry">
@@ -353,11 +352,13 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
           className={`trace-row${props.status === 'error' || props.isError === true ? ' trace-row-error' : ''}`}
           role="button"
           tabIndex={0}
-          onClick={() => setExpanded((v) => !v)}
+          aria-label={`打开子会话 #${childId} 抽屉`}
+          onClick={() => ctx.openConversationDrawer(childId)}
           onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
-              setExpanded((v) => !v)
+              ctx.openConversationDrawer(childId)
             }
           }}
         >
@@ -369,7 +370,6 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
           </span>
           <span className="trace-row-right">{props.status === 'error' || props.isError === true ? '失败' : props.status === 'done' ? '完成' : '运行中'}</span>
         </div>
-        {expanded ? <ToolCallDetailsInline input={props.input} result={props.result} artifactRef={props.artifactRef} /> : null}
       </div>
     )
   }
@@ -382,8 +382,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       worktree={meta.worktree}
       toolSummary={toolSummary}
       startedAt={props.startedAt}
-      expanded={expanded}
-      callDetails={props}
+      expanded={false}
     />
   )
 }

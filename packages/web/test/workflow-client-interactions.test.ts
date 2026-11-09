@@ -149,6 +149,100 @@ test('一体化整卡点击 / 回车触发 openConversationDrawer（不跳主屏
   }
 })
 
+test('会话子代理与工作台使用相同紧凑卡；有实时内容也不能内联展开', { timeout: 60_000 }, async () => {
+  const child = { ...summary(11, 'working'), parentConversationId: 1, parentToolCallId: 'compact-call' }
+  setWorkflowClientStub({
+    docValue: { runs: [] },
+    conversations: [child],
+    conversation: (id) => id === 11 ? {
+      summary: child,
+      detail: { ...child, entries: [{ id: '1', kind: 'helm.input', data: { text: '子代理历史指令' } }] },
+      live: { conversationId: 11, text: '实时回复内容', tools: [], updatedAt: 1 },
+      pendingAsks: [], reload: () => {},
+    } : { pendingAsks: [], reload: () => {} },
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule()
+  const Tool = mod.SubagentToolView as React.ComponentType<Record<string, unknown>>
+  const Panel = mod.WorkflowWorkbenchPanel as React.ComponentType<Record<string, unknown>>
+  const { host, rerender, unmount } = await mountClient(spy, e(Tool, {
+    callId: 'compact-call', toolName: 'subagent', status: 'running', conversationId: 1,
+    input: { prompt: '本次任务' }, result: '原始工具输出', artifactRef: 'art_original',
+  }))
+  const assertCompact = () => {
+    assert.equal(host.querySelector('.subagent-live-stream'), null, '不能显示内联实时流')
+    assert.equal(host.querySelector('.subagent-live-card-expanded'), null, '不能使用展开态样式')
+    assert.equal(host.querySelector('details'), null, '不能提供原始调用详情的展开入口')
+    assert.equal(host.querySelector('[aria-expanded]'), null, '不能有展开控件')
+  }
+  try {
+    assertCompact()
+    const card = host.querySelector('.subagent-card-clickable') as HTMLElement
+    assert.ok(card)
+    const timelineClass = card.className
+    const timelineLayers = [...card.children].map((element) => element.className)
+    await act(async () => { card.click() })
+    assert.deepEqual(spy.drawerCalls, [11], '整卡点击仅打开抽屉')
+    assertCompact()
+    await rerender(e(Panel, { conversation: summary(1, 'idle') }))
+    assertCompact()
+    const workbenchCard = host.querySelector('.subagent-card-clickable') as HTMLElement
+    assert.ok(workbenchCard)
+    assert.equal(workbenchCard.className, timelineClass, '两处必须使用相同的紧凑卡样式')
+    assert.deepEqual([...workbenchCard.children].map((element) => element.className), timelineLayers, '卡片层级一致')
+  } finally { unmount() }
+})
+
+test('历史续接行不展开详情，点击和键盘统一打开子会话抽屉', { timeout: 60_000 }, async () => {
+  const child = { ...summary(11, 'working'), parentConversationId: 1, parentToolCallId: 'new-call' }
+  setWorkflowClientStub({ conversations: [child] })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule()
+  const Tool = mod.SubagentToolView as React.ComponentType<Record<string, unknown>>
+  const oldResult = JSON.stringify({ execution: { conversationId: 11 } })
+  const { host, unmount } = await mountClient(spy, e(Tool, {
+    callId: 'old-call', toolName: 'subagent', status: 'error', isError: true, conversationId: 1,
+    input: { prompt: '首次任务' }, result: oldResult,
+    siblingCalls: [
+      { callId: 'old-call', toolName: 'subagent', status: 'error', result: oldResult },
+      { callId: 'new-call', toolName: 'subagent', status: 'running', input: { resume: '11' } },
+    ],
+  }))
+  try {
+    const row = host.querySelector('.trace-row') as HTMLElement
+    assert.ok(row)
+    assert.match(row.textContent!, /已在下文续接/)
+    assert.match(row.textContent!, /失败/)
+    assert.equal(host.querySelector('details'), null)
+    await act(async () => { row.click() })
+    for (const key of ['Enter', ' ']) {
+      act(() => { row.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })
+    }
+    assert.deepEqual(spy.drawerCalls, [11, 11, 11])
+    assert.deepEqual(spy.screenCalls, [])
+    assert.deepEqual(spy.splitCalls, [])
+    assert.equal(host.querySelector('details'), null, '打开后不能产生内联展开详情')
+    assert.equal(host.querySelector('.subagent-live-stream'), null)
+  } finally { unmount() }
+})
+
+test('外部子代理仅渲染工作台同款摘要，不附带可展开的原始调用详情', { timeout: 60_000 }, async () => {
+  setWorkflowClientStub({ conversations: [], docValue: { runs: [] } })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule()
+  const Tool = mod.SubagentToolView as React.ComponentType<Record<string, unknown>>
+  const { host, unmount } = await mountClient(spy, e(Tool, {
+    callId: 'external-call', toolName: 'subagent', status: 'done', conversationId: 1,
+    input: { prompt: '外部任务' }, result: JSON.stringify({ execution: { executionId: 'pane-42' } }),
+  }))
+  try {
+    assert.ok(host.querySelector('.subagent-external-card'))
+    assert.equal(host.querySelector('details'), null)
+    assert.equal(host.querySelector('.subagent-live-card-expanded'), null)
+    assert.deepEqual(spy.drawerCalls, [], '外部任务不能虚构原生子会话')
+  } finally { unmount() }
+})
+
 test('工作流节点内嵌子代理卡同样走统一抽屉入口（无手风琴折叠壳）', { timeout: 60_000 }, async () => {
   const child12 = { ...summary(12, 'done'), parentConversationId: 1 } as ConversationSummary
   const wf = {
