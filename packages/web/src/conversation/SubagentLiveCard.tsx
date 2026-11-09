@@ -118,22 +118,27 @@ export function SubagentLiveCard({
 
   return (
     <div
-      className={`subagent-live-card${
+      role="button"
+      tabIndex={0}
+      className={`subagent-live-card subagent-card-clickable${
         badge.status === 'blocked'
           ? ' subagent-live-card-warn'
           : badge.status === 'error' || detailError !== undefined
             ? ' subagent-live-card-error'
             : ''
       }`}
+      aria-label={`打开子会话 #${childConversationId} 抽屉`}
+      title={[taskTitle, summary?.profileId, wt?.branch, statSegments.join(' · '), '点击打开子会话抽屉'].filter(Boolean).join('\n')}
+      onClick={openDrawer}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          openDrawer()
+        }
+      }}
     >
       <div className="subagent-live-header">
-        <button
-          type="button"
-          className="subagent-live-trigger"
-          aria-label={`打开子会话 #${childConversationId} 抽屉`}
-          title={[taskTitle, summary?.profileId, wt?.branch, statSegments.join(' · '), '点击打开子会话抽屉'].filter(Boolean).join('\n')}
-          onClick={openDrawer}
-        >
+        <div className="subagent-live-trigger">
           <HelmIcon
             name={
               detailError !== undefined
@@ -147,7 +152,7 @@ export function SubagentLiveCard({
             size={13}
             className={badge.status === 'working' && detailError === undefined ? 'spin-slow' : undefined}
           />
-          <span className="subagent-live-title" title={taskTitle}>
+          <span className="subagent-live-title">
             <span className="subagent-live-id">子会话 #{childConversationId}</span>
             {summary?.profileId !== undefined && summary.profileId !== '' ? (
               <span className="badge badge-neutral">{summary.profileId}</span>
@@ -168,8 +173,8 @@ export function SubagentLiveCard({
           {statSegments.length > 0 ? (
             <span className="subagent-live-stats workflow-node-duration tabular-nums">{statSegments.join(' · ')}</span>
           ) : null}
-        </button>
-        <span className="subagent-live-actions">
+        </div>
+        <span className="subagent-live-actions" onClick={(e) => e.stopPropagation()}>
           {backgroundRun?.status === 'running' ? (
             <button
               type="button"
@@ -177,7 +182,10 @@ export function SubagentLiveCard({
               disabled={abortBusy}
               title="中止该后台子代理任务"
               aria-label="中止该后台子代理任务"
-              onClick={() => void abort()}
+              onClick={(e) => {
+                e.stopPropagation()
+                void abort()
+              }}
             >
               <HelmIcon name="square" size={11} />
               <span className="subagent-action-label">中止</span>
@@ -189,7 +197,10 @@ export function SubagentLiveCard({
               className="btn btn-xs"
               title="重新加载子会话详情"
               aria-label="重新加载子会话详情"
-              onClick={() => void loadDetail(childConversationId, true)}
+              onClick={(e) => {
+                e.stopPropagation()
+                void loadDetail(childConversationId, true)
+              }}
             >
               <HelmIcon name="refresh-cw" size={11} />
               <span className="subagent-action-label">重试</span>
@@ -198,12 +209,9 @@ export function SubagentLiveCard({
         </span>
       </div>
       {snippet !== undefined ? (
-        <button
-          type="button"
+        <div
           className={`subagent-live-subline subagent-live-subline-${snippet.kind}`}
           title={snippet.kind === 'blocked' && snippet.tag ? `${snippet.tag}：${snippet.text}` : snippet.text}
-          aria-label={`查看子会话 #${childConversationId} 详情：${snippet.kind === 'blocked' && snippet.tag ? `${snippet.tag}：` : ''}${snippet.text}`}
-          onClick={openDrawer}
         >
           <HelmIcon name="corner-down-right" size={11} />
           {snippet.tag !== undefined ? (
@@ -212,7 +220,7 @@ export function SubagentLiveCard({
             </span>
           ) : null}
           <span className="subagent-live-subline-text">{snippet.text}</span>
-        </button>
+        </div>
       ) : null}
     </div>
   )

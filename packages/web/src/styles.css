@@ -2032,6 +2032,27 @@ textarea {
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.subagent-card-clickable {
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.subagent-card-clickable:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-hover, var(--border));
+}
+
+.subagent-card-clickable:active {
+  background: var(--bg-active, var(--bg-elevated));
+}
+
+.subagent-card-clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .subagent-live-header {
@@ -2058,7 +2079,7 @@ textarea {
   border-left: none;
 }
 
-/* 第 1 层触发按钮：左图标 + 标题 + 徽章 + 统计尾注为一个整体可点击区 */
+/* 第 1 层触发区：左图标 + 标题 + 徽章 + 统计尾注 */
 .subagent-live-trigger {
   flex: 1;
   min-width: 0;
@@ -2068,7 +2089,7 @@ textarea {
   background: none;
   border: none;
   padding: 0;
-  cursor: pointer;
+  cursor: inherit;
   text-align: left;
   color: inherit;
   font: inherit;
@@ -2104,10 +2125,10 @@ textarea {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 8px 5px 26px;
+  padding: 0 8px 6px 26px;
   font-size: 11.5px;
   color: var(--fg-muted);
-  cursor: pointer;
+  cursor: inherit;
   min-width: 0;
 }
 
@@ -2195,11 +2216,6 @@ textarea {
 .subagent-live-trigger > svg,
 .subagent-live-trigger > .badge {
   flex-shrink: 0;
-}
-
-.subagent-live-trigger:hover,
-.subagent-live-subline:hover {
-  background: var(--bg-hover);
 }
 
 /* 有意义用户标题：等宽克制排版，超长省略号截断不撑爆头部 */
