@@ -1,6 +1,9 @@
 {
   "extends": "./tsconfig.base.json",
-  "compilerOptions": { "noEmit": true, "jsx": "react-jsx" },
+  "compilerOptions": {
+    "noEmit": true,
+    "jsx": "react-jsx"
+  },
   "include": [
     "packages/protocol/src/**/*.ts",
     "packages/kernel/src/**/*.ts",
@@ -11,5 +14,8 @@
     "packages/cli/test/**/*.ts",
     "packages/web/test/**/*.ts",
     "packages/web/test/**/*.tsx"
+  ],
+  "exclude": [
+    "packages/kernel/src/builtin-plugins/workflow/client"
   ]
 }

@@ -1,0 +1,26 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@helm/plugin-client": [
+        "../web/src/lib/plugin-client-context.ts"
+      ],
+      "lucide-react": [
+        "../web/node_modules/lucide-react/dist/lucide-react.d.ts"
+      ]
+    },
+    "baseUrl": ".",
+    "typeRoots": [
+      "../web/node_modules/@types"
+    ]
+  },
+  "include": [
+    "src/builtin-plugins/workflow/client/**/*.ts",
+    "src/builtin-plugins/workflow/client/**/*.tsx"
+  ]
+}
