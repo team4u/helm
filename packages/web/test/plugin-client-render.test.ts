@@ -59,7 +59,8 @@ export function WorkbenchInfo(props: { conversation: { id: number; title: string
   return <div className="wb">conv:{props.conversation.id}:{props.conversation.title}</div>
 }
 
-export const sharedHooks = { usePluginContext: typeof usePluginContext, usePluginDoc: typeof usePluginDoc }
+export const sharedReact = { useState }
+export const sharedHooks = { usePluginContext, usePluginDoc }
 `,
   )
 })
@@ -106,26 +107,17 @@ test('renderToString 真实渲染 ToolView 与 Workbench 面板组件（协议�
 
 test('共享 React 断言：插件组件与宿主使用同一 React 实例', { timeout: 60_000 }, async () => {
   const mod = await importCompiled()
-  // react/jsx-runtime 的 jsx 导出来自宿主命名空间；同一实例时 Symbol.for 注册一致
-  const jsxRuntime = g.__helm_shared_react_jsx_runtime as typeof ReactJsxRuntime
-  const element = (mod.ToolCard as (p: { toolName: string; status: string; callId: string }) => React.ReactElement)({
-    toolName: 'x',
-    status: 'error',
-    callId: 'c',
-  }) as unknown as { $$typeof: symbol }
-  const reactModule = React as unknown as { Symbol?: { for(key: string): symbol } }
-  assert.equal(element.$$typeof, reactModule.Symbol?.for?.('react.transitional.element') ?? element.$$typeof)
-  assert.equal(typeof jsxRuntime.jsx, 'function')
+  const shared = mod.sharedReact as { useState: unknown }
+  assert.equal(shared.useState, React.useState, '插件必须持有宿主的同一个 hook 函数')
+  assert.equal(g.__helm_shared_react, React)
+  assert.equal(g.__helm_shared_react_jsx_runtime, ReactJsxRuntime)
 })
 
 test("'@helm/plugin-client' 共享模块：产物内 hooks 与宿主为同一函数实例（usePluginContext/usePluginDoc）", { timeout: 60_000 }, async () => {
   const mod = await importCompiled()
-  const hooks = mod.sharedHooks as { usePluginContext: string; usePluginDoc: string }
-  assert.equal(hooks.usePluginContext, 'function')
-  assert.equal(hooks.usePluginDoc, 'function')
-  // 宿主模块确实导出这两个 hooks（编译 shim 只是转发，不克隆实现）
-  assert.equal(typeof HelmPluginClient.usePluginContext, 'function')
-  assert.equal(typeof HelmPluginClient.usePluginDoc, 'function')
+  const hooks = mod.sharedHooks as { usePluginContext: unknown; usePluginDoc: unknown }
+  assert.equal(hooks.usePluginContext, HelmPluginClient.usePluginContext)
+  assert.equal(hooks.usePluginDoc, HelmPluginClient.usePluginDoc)
 })
 
 test('requireClientExport：导出缺失显式报错并列出可用导出', { timeout: 60_000 }, async () => {

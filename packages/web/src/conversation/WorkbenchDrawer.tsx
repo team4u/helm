@@ -1,15 +1,14 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import type { ConversationSummary } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
-import { matchesUiScope } from '../lib/types.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { formatBytes } from '../lib/format.js'
 import {
   buildWorkbenchFooter,
-  buildWorkbenchTabs,
   resolveActiveWorkbenchTab,
 } from './workbench-model.js'
+import { useWorkbenchTabs } from './workbench-hooks.js'
 
 function ArtifactsTab({ conversationId }: { conversationId: number }) {
   const store = useHelmStore()
@@ -50,7 +49,7 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
 
 export interface WorkbenchDrawerProps {
   conversation?: ConversationSummary
-  /** 兼容旧调用：传 conversationId 时从 store 自行解析会话。 */
+  /** 仅传 ID 时从 store 读取会话。 */
   conversationId?: number
 }
 
@@ -72,30 +71,15 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
       store.conversations.find((c) => c.id === conversationId) ?? store.conversationDetails[conversationId]
     )
   }, [props.conversation, conversationId, store.conversations, store.conversationDetails])
-  const artifactCount =
-    conversationId !== undefined ? store.conversationArtifacts[conversationId]?.length ?? 0 : 0
-
-  // 插件面板按会话 scope 过滤；内置产物页签恒在。
-  const scopedPanels = useMemo(() => {
-    const panels = conversation !== undefined
-      ? store.groupedUi.workbenchPanels.filter((p) => matchesUiScope(conversation, p.spec.scope))
-      : []
-    return { workbenchPanels: panels }
-  }, [conversation, store.groupedUi.workbenchPanels])
-
-  const tabs = useMemo(
-    () =>
-      buildWorkbenchTabs({
-        groupedUi: scopedPanels,
-        pluginDocs: store.pluginDocs,
-        artifactCount,
-        conversationId,
-      }),
-    [scopedPanels, store.pluginDocs, artifactCount, conversationId],
-  )
+  const tabs = useWorkbenchTabs(conversationId, conversation)
   const activeTab = resolveActiveWorkbenchTab(store.workbenchTab, tabs)
   const activePanel = tabs.find((tab) => tab.id === activeTab && tab.pluginId !== undefined)
   const footerParts = buildWorkbenchFooter(tabs)
+  const { sseConnected, workbenchTab, setWorkbenchTab } = store
+  useEffect(() => {
+    // 首帧 UI 贡献和会话尚未返回时保留深链；确认不可用后才规范化 URL。
+    if (sseConnected && conversation !== undefined && activeTab !== workbenchTab) setWorkbenchTab(activeTab)
+  }, [sseConnected, conversation, activeTab, workbenchTab, setWorkbenchTab])
 
   return (
     <aside className="helm-workbench">

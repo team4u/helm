@@ -32,21 +32,26 @@ type ClientState =
   | { phase: 'error'; message: string }
   | { phase: 'ready'; Component: ComponentType<Record<string, unknown>> }
 
-export function PluginUiView({ pluginId, spec, slotProps, conversationId, label }: PluginUiViewProps): ReactNode {
-  const store = useHelmStore()
-  // client 轨道仅在声明了 client 引用时激活（json 优先级回落逻辑见下）；
-  // 已解析模块缓存命中时初始状态直接 ready（时间线重渲染 / SSR 零闪烁）。
+export function PluginUiView(props: PluginUiViewProps): ReactNode {
+  const { pluginId, spec, slotProps, conversationId } = props
   const clientRef = spec.client
+  if (clientRef === undefined) {
+    if (spec.json === undefined) return <MissingTrackError pluginId={pluginId} />
+    return <HelmSpecView pluginId={pluginId} spec={spec.json} docs={spec.docs} conversationId={conversationId} data={slotProps} />
+  }
+  // 身份切换须重建状态与错误边界，不能在新上下文中先渲染一次旧插件组件。
+  return <ClientPluginUiView key={JSON.stringify([pluginId, clientRef.module, clientRef.export])} {...props} clientRef={clientRef} />
+}
+
+function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, label }: PluginUiViewProps & { clientRef: ClientComponentRef }): ReactNode {
+  const store = useHelmStore()
   const [client, setClient] = useState<ClientState>(() => {
-    if (clientRef === undefined) return { phase: 'loading' }
     const cached = getCachedClientComponent(pluginId, clientRef.module, clientRef.export)
     return cached !== undefined ? { phase: 'ready', Component: cached } : { phase: 'loading' }
   })
 
   useEffect(() => {
-    if (clientRef === undefined) return
     let cancelled = false
-    setClient({ phase: 'loading' })
     void (async () => {
       try {
         const loaded = await loadPluginClientModule(pluginId, clientRef.module)
@@ -72,22 +77,6 @@ export function PluginUiView({ pluginId, spec, slotProps, conversationId, label 
       cancelled = true
     }
   }, [pluginId, clientRef?.module, clientRef?.export])
-
-  // json 回落：无 client 引用时渲染声明式 Spec
-  if (clientRef === undefined) {
-    if (spec.json === undefined) {
-      return <MissingTrackError pluginId={pluginId} />
-    }
-    return (
-      <HelmSpecView
-        pluginId={pluginId}
-        spec={spec.json}
-        docs={spec.docs}
-        conversationId={conversationId}
-        data={slotProps}
-      />
-    )
-  }
 
   if (client.phase === 'loading') {
     return (

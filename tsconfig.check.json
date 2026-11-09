@@ -16,6 +16,6 @@
     "packages/web/test/**/*.tsx"
   ],
   "exclude": [
-    "packages/kernel/src/builtin-plugins/workflow/client"
+    "packages/kernel/src/builtin-plugins/*/client"
   ]
 }

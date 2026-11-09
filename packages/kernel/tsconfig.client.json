@@ -21,7 +21,7 @@
     ]
   },
   "include": [
-    "src/builtin-plugins/workflow/client/**/*.ts",
-    "src/builtin-plugins/workflow/client/**/*.tsx"
+    "src/builtin-plugins/*/client/**/*.ts",
+    "src/builtin-plugins/*/client/**/*.tsx"
   ]
 }
