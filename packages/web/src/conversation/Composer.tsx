@@ -179,17 +179,6 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
                   onChange={(event) => setQuery(event.target.value)}
                 />
               </div>
-            <div className="composer-model-search-bar" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
-                <HelmIcon name="search" size={13} />
-                <input
-                  className="input"
-                  aria-label="搜索模型"
-                  placeholder="搜索模型…"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                />
-              </div>
               <Tooltip content="刷新动态模型目录" side="top">
                 <button
                   type="button"
