@@ -65,7 +65,6 @@ export function PluginMicroAction({
   const run = async (): Promise<void> => {
     if (pending || spec.actionId === undefined) return
     setPending(true)
-    onInvoked?.()
     try {
       await store.invokePluginAction(
         microActionPluginId(spec, action.pluginId),
@@ -73,6 +72,7 @@ export function PluginMicroAction({
         buildMicroActionInput(spec, { conversationId, entryId }),
         conversationId,
       )
+      onInvoked?.()
       store.pushNotice({
         type: 'notification',
         level: 'info',
@@ -98,7 +98,10 @@ export function PluginMicroAction({
         className="popover-item"
         disabled={pending}
         onClick={(event) => event.stopPropagation()}
-        onSelect={() => { void run() }}
+        onSelect={(event) => {
+          event.preventDefault()
+          void run()
+        }}
       >
         <span className="pane-more-item-label">
           <HelmIcon name={pending ? 'loader' : (spec.icon ?? 'zap')} size={13} className={pending ? 'spin-slow' : undefined} />
