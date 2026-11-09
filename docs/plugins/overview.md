@@ -7,7 +7,7 @@
 ## 插件宿主架构设计
 
 Helm 坚持机制与策略分离原则。
-内核只保留通用状态机、执行底座与编排引擎。
+内核只保留通用状态机、执行底座与插件宿主。
 所有业务角色、外部系统对接与高级交互均由插件实现。
 
 ```mermaid
@@ -104,6 +104,8 @@ flowchart LR
     Action --> Web["Web 前端 ({ type: 'helm:action' })"]
 ```
 
+> `pluginId` 含 `:` 时按 URI 编码传输，如 `builtin:workflow` 动作的标准端点为 `POST /api/actions/builtin%3Aworkflow/<actionId>`。
+
 ### 动作声明范例
 
 ```typescript
@@ -142,7 +144,7 @@ ctx.action({
 
 1. **HTTP API 映射**：
    - 宿主自动生成 `POST /api/actions/:pluginId/:actionId` 端点。
-   - 请求体与返回体自动执行 JSON Schema 强校验。
+   - 请求体为 `{ input, conversationId? }`，返回体自动执行 JSON Schema 强校验。
 2. **CLI 命令映射**：
    - 自动生成 `helm <plugin> <action>` 顶层命令。
    - 支持 `--json` 管道输出与参数提示。
@@ -221,7 +223,8 @@ flowchart TD
 1. **正在执行的动作**：通过 HTTP、CLI 或工作流发起的 Action 调用。
 2. **正在调用的工具**：模型正在执行的 Plugin Tool 任务。
 3. **执行中的子代理**：由该插件拦截接管的子代理派生。
-4. **服务自主声明的任务**：后台服务通过 `liveTasks()` 动态返回的未完成任务标签。
+4. **服务自主声明的任务**：后台服务通过 `liveTasks()` 动态返回的未完成任务标签（如 `builtin:workflow` 返回运行中的 `workflow:<runId>`）。
+5. **在途工作树占用**：后台服务通过 `liveWorktrees()` 声明运行中节点占用的受管工作树，供宿主 WorktreeAllocator 拒绝误清理（不阻断停用的任务检查由 `liveTasks` 负责）。
 
 ### 保护规则与错误处理
 
@@ -244,14 +247,15 @@ export interface HelmHostApi {
   // 外部事件投递
   dispatchTrigger(event: ExternalTriggerEnvelope): Promise<void>;
   
-  // 会话输入提交
-  submitInput(conversationId: number, text: string, opts?: { origin?: InputOrigin; whenBusy?: WhenBusy }): Promise<void>;
+  // 会话输入提交（requestId 支持跨重启幂等提交）
+  submitInput(conversationId: number, text: string, opts?: { origin?: InputOrigin; whenBusy?: WhenBusy; meta?: Record<string, unknown>; requestId?: string }): Promise<void>;
   
   // 会话管理
   createConversation(init: ConversationInit): Promise<ConversationSummary>;
   listConversations(filter?: { profileId?: string; tag?: string; status?: ConversationStatus }): ConversationSummary[];
   getConversation(id: number): ConversationSummary;
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>;
+  abortConversation(id: number): Promise<void>;
   manageConversation(id: number): () => void;
   markConversationOwnership(id: number, owner: 'helm' | 'bot' | 'human'): void;
   
@@ -260,11 +264,23 @@ export interface HelmHostApi {
   cancelAsk(askId: string, reason?: 'cancelled' | 'superseded'): Promise<void>;
   registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void;
   
-  // 工作流与系统事件
-  onWorkflowSettled(listener: (run: WorkflowRunSummary) => MaybePromise<void>): () => void;
+  // 子代理与工作树底座
+  spawnAgent(request: AgentSpawnRequest): Promise<unknown>;
+  runGate(command: string, options?: { cwd?: string; conversationId?: number; nodeId?: string; signal?: AbortSignal; env?: Record<string, string> }): Promise<{ ok: boolean; output: string }>;
+  prepareInterruptedConversations(ids: number[]): Promise<void>;
+  cleanupWorktree(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult>;
+  
+  // 跨插件动作互调
+  invokeAction(pluginId: string, actionId: string, input: unknown, context?: PluginActionContext): Promise<unknown>;
+  listActions(): ActionManifest[];
+  
+  // 系统事件（订阅如 'workflow.settled'；插件停用时自动解除）
+  onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void;
   emitEvent(type: string, payload: unknown): void;
 }
 ```
+
+工作流运行事件不再有专用订阅端口：插件通过通用 `onEvent` 订阅 `workflow.settled` 等事件（由 `builtin:workflow` 经 `emitEvent` 发出），或用 `await ctx.host.emitEvent(...)` 发出自有事件并等待监听方处理。
 
 插件只能通过此受限接口调用内核机制。
 严禁插件绕过宿主直接操作核心数据库或会话内部变量。

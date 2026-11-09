@@ -40,7 +40,7 @@ const result = await agent("重构认证模块并补齐单测", {
 
 ### 1. 主工作树权威解析
 
-内核组件 `WorktreeAllocator` 负责分配工作树。
+内核 `WorktreeAllocator` 负责分配工作树。
 分配前调用 `git worktree list --porcelain -z` 获取仓库权威清单。
 首条记录即为仓库真正的主工作树根目录。
 即使调用方当前处于已有的 Worktree 中，算法依然能精准定位主根。
@@ -160,38 +160,35 @@ flowchart TD
 
 ## 工作树管理与清理指令
 
-开发者可通过 CLI 或内核工具管理工作树。
+开发者可通过 CLI 或模型工具管理工作树。清理能力由 `builtin:workflow` 插件提供（默认启用；停用后 `helm worktrees cleanup` 命令与 `cleanup_worktree` 工具一并消失）。
 
 ### 1. CLI 清理命令 (`helm worktrees cleanup`)
 
-命令行支持通过四种互斥选择器定位工作树：
+命令行支持三种互斥选择器定位工作树：
 
 ```bash
-# 1. 按受管工作树 ID 清理
-helm worktrees cleanup --id local:/path/to/.helm-worktrees/repo-abc
+# 1. 按受管工作树登记 ID 清理（node:path 形式）
+helm worktrees cleanup --worktree-id local:/workspace/repo/.helm-worktrees/repo-abc
 
 # 2. 按关联子会话 ID 清理
-helm worktrees cleanup --conversation 42
+helm worktrees cleanup --conversation-id 42
 
-# 3. 按当前会话环境变量自动清理
-helm worktrees cleanup --current
-
-# 4. 按绝对路径与目标节点清理
-helm worktrees cleanup --path /path/to/.helm-worktrees/repo-abc --node local
+# 3. 按绝对路径与目标节点清理
+helm worktrees cleanup --path /workspace/repo/.helm-worktrees/repo-abc --node-id local
 ```
 
 #### 进阶清理选项
 
 - `--delete-branch`：清理工作树的同时删除对应的 Git 分支。
-- `--force`：强制清理，允许删除脏工作区与未合入代码。
+- `--force`：强制清理，允许删除脏工作区与未合入代码（不可越过占用、归属与 locked 校验）。
 
 ```bash
 # 强制清理并删除对应分支
-helm worktrees cleanup --current --delete-branch --force
+helm worktrees cleanup --conversation-id 42 --delete-branch --force
 ```
 
 ### 2. 智能体清理工具 (`cleanup_worktree`)
 
-内核向智能体暴露了原子工具 `cleanup_worktree`。
+`builtin:workflow` 插件向智能体暴露原子工具 `cleanup_worktree`。
 智能体可以在编排任务收尾时自行清理临时环境。
 工具调用完全复用上述安全检查链，保障仓库安全。

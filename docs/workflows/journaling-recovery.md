@@ -30,8 +30,8 @@ flowchart TD
 
 ## 执行流水存储与事件契约
 
-每个工作流任务拥有专属的 `journal.jsonl` 流水文件。
-存储路径位于 `~/.helm/workflows/runs/<runId>/journal.jsonl`。
+每个工作流任务拥有专属的 JSONL 流水文件（journal）。
+存储路径位于 `<dataDir>/artifacts/<conversationId>/workflow-<runId>.jsonl`（如 `~/.helm/artifacts/42/workflow-wf_abc123.jsonl`）。运行索引与摘要持久化在 `state.sqlite`。
 
 ### 1. 事件行类型
 

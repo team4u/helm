@@ -115,6 +115,7 @@ flowchart LR
 | 文档 | 说明 |
 | :--- | :--- |
 | [插件系统设计与契约](plugins/overview.md) | 宿主设计、Action 自动映射与在途任务保护 |
+| [确定性编排 (Workflow)](workflows/dsl-guide.md) | `builtin:workflow` 插件与原生 JS DSL 编排 |
 | [常驻个人助理 (Assistant)](plugins/assistant.md) | 根会话守护、独立记忆注入与动态技能加载 |
 | [Herdr 终端协同主控 (Herdr)](plugins/herdr.md) | 终端 CLI Agent 调度、文件交接与原地自愈 |
 | [SuperAgent 双层中枢 (SuperAgent)](plugins/superagent.md) | 零阻塞路由、驻留 Worker 与两层看门狗巡检 |

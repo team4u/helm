@@ -31,7 +31,7 @@ flowchart TD
 ### 1. 元数据对象 (`meta`)
 
 脚本顶部必须通过字面量导出 `meta` 对象。
-内核在求值前通过静态扫描提取该对象。
+编排引擎在求值前通过静态扫描提取该对象。
 
 ```javascript
 export const meta = {

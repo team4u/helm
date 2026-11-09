@@ -149,7 +149,7 @@ flowchart LR
     TrackChoice -- 高级交互式 --> Track2["轨道二: client.tsx (原生 React)"]
     Track1 --> FastRender["无编译直出 UI 视图"]
     Track2 --> Compiler["PluginClientCompiler 编译打包"]
-    Compiler --> SandboxedRun["沙箱执行并共享宿主 React"]
+    Compiler --> SharedRun["共享宿主 React 运行时执行（可信代码，非沙箱）"]
 ```
 
 ### 轨道一：`@json-render` 声明式视图
@@ -194,7 +194,8 @@ import { Activity } from 'lucide-react';
 import { usePluginDoc } from '@helm/plugin-client';
 
 export function SampleWidget() {
-  const stats = usePluginDoc<{ totalCalls: number }>('sample-plugin', 'stats');
+  // usePluginDoc 只需一个 docName：自动绑定当前插件（ctx.pluginId）
+  const stats = usePluginDoc<{ totalCalls: number }>('stats');
 
   return (
     <div className="p-4 border rounded-lg bg-card">
@@ -210,6 +211,8 @@ export function SampleWidget() {
 }
 ```
 
+`@helm/plugin-client` 是宿主共享模块（编译器虚拟化为全局命名空间）：`usePluginDoc(docName)` 响应式订阅当前插件的公共文档，`usePluginContext()` 提供宿主交互能力（`openArtifact` / `openWorkbench` / `closeWorkbench` / `notify` 等）。注意 `client.tsx` 是可信代码而非安全沙箱，宿主不提供隔离边界。
+
 3. **在后端注册组件**：
 
 ```typescript
@@ -218,7 +221,7 @@ ctx.ui.workbenchPanel({
   label: '业务监控',
   client: {
     module: 'widget.tsx',
-    exportName: 'SampleWidget',
+    export: 'SampleWidget',
   },
 });
 ```

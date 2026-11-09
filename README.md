@@ -61,7 +61,7 @@ flowchart TD
 
     subgraph Kernel["@helm/kernel (helm-hub / Port 3202)"]
         Durable["持久微内核 (pi-durable / SQLite / FTS5 / AskDoc)"]
-        Engine["确定性编排 (SubagentWorkflow / Journaling)"]
+        Spawn["原生子代理与 Worktree 底座"]
         Fabric["跨平台底座 (EnvFabric / NodeRegistry)"]
         Host["插件宿主 (PluginHost / 双 7 扩展点)"]
     end
@@ -72,6 +72,7 @@ flowchart TD
     end
 
     subgraph Plugins["内置插件生态"]
+        P0["builtin:workflow (确定性编排 / 默认启用)"]
         P1["builtin:assistant (常驻单兵个人助理)"]
         P2["builtin:herdr (终端 CLI Agent 主控)"]
         P3["builtin:superagent (双层中枢与看门狗)"]
@@ -246,6 +247,7 @@ Helm 采用微内核设计，所有扩展能力均通过插件实现：
 
 | 插件标识 | 插件名称 | 核心职责 | 启用状态 |
 | :--- | :--- | :--- | :--- |
+| `builtin:workflow` | 确定性编排引擎 | 提供 `subagent` / `SubagentWorkflow` / `cleanup_worktree` 工具、编排引擎与 `helm workflows` / `helm worktrees cleanup` 动态命令 | 默认启用（可停用） |
 | `builtin:assistant` | 常驻个人助理 | 守护根会话 `#1`，注入独立系统提示词与记忆文件，管理产物 | 常驻启用（系统核心） |
 | `builtin:herdr` | 终端 Agent 主控 | 连接 Herdr 终端 IPC，调度 23 种终端 CLI，负责结构化交接与追问自愈 | 默认停用，按需启用 |
 | `builtin:superagent` | 双层中枢与看门狗 | 提供零阻塞路由中枢，派生后台驻留 Worker，提供两层巡检与状态自愈 | 默认停用，按需启用 |
@@ -309,14 +311,14 @@ pnpm helm custom-checker lint --input '{"targetDir":"/workspace"}' --json
 | | `helm conversations create --node <id> --cwd <path>` | 创建指定节点与目录的持久会话 |
 | | `helm conversations get <id> --json` | 查看会话详情与最新时间线 |
 | | `helm send "<prompt>" --wait` | 向会话投递输入并等待完成 |
-| **确定性编排** | `helm workflows list --json` | 查看已注册工作流列表 |
+| **确定性编排** | `helm workflows list --json` | 查看已注册工作流列表（`builtin:workflow` 插件动态命令） |
 | | `helm workflows run <file> --args '<json>' --wait` | 执行确定性多智能体工作流 |
 | | `helm workflows inspect <runId> --json` | 查看工作流阶段状态与执行流水 |
 | | `helm workflows abort <runId>` | 中止在途工作流任务 |
 | **受控节点** | `helm nodes list --json` | 查看所有节点在线与离线状态 |
 | | `helm nodes issue <nodeId> --json` | 为新受控节点签发连接令牌 |
 | | `helm env exec --node <id> -- <cmd>` | 在目标节点受管环境中执行命令 |
-| | `helm worktrees cleanup --conversation <id>` | 清理已完成任务的 Git Worktree |
+| | `helm worktrees cleanup --conversation-id <id>` | 清理已完成任务的 Git Worktree |
 | **插件生态** | `helm plugins list --json` | 查看所有插件状态与信息 |
 | | `helm plugins enable <id> --json` | 启用指定插件并加载前后端扩展 |
 | | `helm plugins disable <id> --json` | 安全停用插件并核查在途任务 |

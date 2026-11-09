@@ -98,7 +98,7 @@ helm status --json
 
 #### helm events watch
 
-订阅全局服务端推送事件流（SSE）。首帧推送全量快照，后续推送增量修改。
+订阅全局服务端推送事件流（SSE）。首帧 `snapshot` 推送全量快照（含会话、待答提问、插件、UI 贡献与 `pluginDocs` 公共文档首帧），后续推送增量事件（如 `plugin.doc.updated`）。
 
 ```bash
 helm events watch
@@ -577,7 +577,9 @@ helm env exec --node node-worker-gpu --timeout 30000 --stream -- pnpm test
 
 ### 工作流与沙箱隔离
 
-#### helm workflows list / inspect / abort
+以下命令由 `builtin:workflow` 插件（默认启用）注册，经动作清单动态生成。插件停用后命令随动作清单一并消失。
+
+#### helm workflows list / runs / inspect / abort
 
 查看与管理多智能体确定性工作流。
 
@@ -585,22 +587,22 @@ helm env exec --node node-worker-gpu --timeout 30000 --stream -- pnpm test
 # 列出内置与自定义工作流模板
 helm workflows list
 
-# 查询历史执行记录
+# 查询历史执行记录（--current 绑定当前会话过滤）
 helm workflows runs
 helm workflows runs --current
 
-# 检查特定执行实例状态
+# 检查特定执行实例状态（runId 为必填位置参数）
 helm workflows inspect run-1024
 
 # 中止正在执行中的工作流
 helm workflows abort run-1024
 ```
 
----
-
 #### helm workflows run <nameOrFile>
 
 启动工作流实例。支持断点重放与同步等待终态。
+
+位置参数为已保存工作流名或本地脚本文件路径；传入本地文件时自动读取源码作为 `script` 提交。
 
 ```bash
 # 执行内置工作流并同步等待完成
@@ -615,37 +617,43 @@ helm workflows run custom.js --resume-from-run-id run-1024 --wait
 
 | 标志 | 类型 | 说明 |
 | :--- | :--- | :--- |
-| `--args <json>` | JSON 对象 | 传递给工作流上下文的入参字典。 |
+| `--args <json>` | JSON | 传给脚本上下文的任意 JSON 入参。 |
+| `--script <source>` | 字符串 | 内联编排脚本源码（与位置参数、`--name` 择一）。 |
+| `--script-path <path>` | 字符串 | 脚本文件绝对路径。 |
+| `--name <name>` | 字符串 | 已保存工作流名。 |
 | `--resume-from-run-id <id>` | 字符串 | 断点重放模式下的旧执行实例 ID。 |
+| `--conversation-id <id>` | 数值 | 目标会话 ID。 |
+| `--wait` | 布尔 | 同步阻塞等待终态。失败或中止时返回非零退出码。该命令无超时限制。 |
 | `--current` | 布尔 | 绑定当前环境变量对应的会话 ID。 |
-| `--wait` | 布尔 | 同步阻塞等待终态。失败时返回非零退出码。 |
-
----
 
 #### helm worktrees cleanup
 
 安全清理受管 Git Worktree 沙箱。系统严格检查元数据，绝不触碰非登记目录。
 
 ```bash
+# 按受管登记 ID 清理（node:path 形式）
+helm worktrees cleanup --worktree-id local:/workspace/helm/.helm-worktrees/repo-abc
+
 # 按会话清理对应工作树
-helm worktrees cleanup --conversation 42
+helm worktrees cleanup --conversation-id 42
 
 # 按路径清理并删除专用分支
-helm worktrees cleanup --path /workspace/helm/.worktrees/spawn-42 --delete-branch
+helm worktrees cleanup --path /workspace/helm/.helm-worktrees/repo-abc --delete-branch
 
 # 强制清理未提交改动的脏工作树
-helm worktrees cleanup --id wt-89 --force
+helm worktrees cleanup --worktree-id local:/workspace/helm/.helm-worktrees/repo-89 --force
 ```
 
 | 标志 | 类型 | 说明 |
 | :--- | :--- | :--- |
-| `--id <id>` | 字符串 | 受管工作树登记 ID。 |
-| `--conversation <id>` | 字符串 | 子会话 ID。 |
-| `--current` | 布尔 | 使用环境变量 `HELM_CONVERSATION_ID`。 |
-| `--path <path>` | 字符串 | 工作树物理绝对路径。 |
-| `--node <id>` | 字符串 | 计算节点 ID。搭配 `--path` 消歧。 |
+| `--worktree-id <id>` | 字符串 | 受管工作树登记 ID（`node:path`）。与 `--conversation-id` / `--path` 互斥。 |
+| `--conversation-id <id>` | 数值 | 子会话 ID。与 `--worktree-id` / `--path` 互斥。 |
+| `--path <path>` | 字符串 | 工作树物理绝对路径。与 `--worktree-id` / `--conversation-id` 互斥。 |
+| `--node-id <id>` | 字符串 | 计算节点 ID。仅可与 `--path` 搭配消歧。 |
 | `--delete-branch` | 布尔 | 清理时一并删除 `helm/spawn-*` 分支。 |
-| `--force` | 布尔 | 强制清理脏工作树。默认拒绝未提交目录。 |
+| `--force` | 布尔 | 强制清理脏工作树。默认拒绝未提交目录。不可越过占用、归属与 locked 校验。 |
+
+清理工作树同样暴露为插件动作 `builtin:workflow` 的 `cleanup_worktree`，可经标准动作端点或 `run_action` 调用。
 
 ---
 
@@ -694,7 +702,8 @@ helm plugins client herdr --output ./dist/herdr-client.mjs
 #### 动态插件命令映射机制
 
 插件通过 `ctx.action()` 声明的动作，自动映射为 CLI 二级命令。
-内置插件自动剥离 `builtin:` 前缀。
+内置插件自动剥离 `builtin:` 前缀，`ctx.action` 的 `cli.command` 可覆写默认命令路径（如 `builtin:workflow` 的 `run` 动作注册为 `helm workflows run`）。
+CLI 首选静态命令表；无匹配时拉取 `GET /api/actions` 动作清单动态生成命令。
 
 ```bash
 # 检查当前所有可用动作
@@ -705,12 +714,17 @@ helm herdr list --json
 
 # 归档已结束的后台 Worker
 helm superagent archive_worker --worker-conversation-id 88 --json
+
+# 启动工作流并等待终态（builtin:workflow 插件动作）
+helm workflows run review.workflow.js --wait
 ```
 
 映射规则如下：
-1. 路径格式：`helm <plugin-id> <action-id>`。
-2. 参数转换：JSON Schema 的 properties 自动转换为 kebab-case 选项。
-3. 冲突保护：若选项名与保留字冲突，降级为通过 `--input <json>` 提交。
+1. 路径格式：`helm <plugin-id> <action-id>`（可被 `cli.command` 覆写）。
+2. 参数转换：JSON Schema 的 camelCase 属性自动转换为 kebab-case 选项（如 `worktreeId` → `--worktree-id`）。
+3. 位置参数：`cli.positional` 按序消费位置参数；`readFileInto` 把本地文件内容读入目标字段（如 `workflows run <file>` → `script`）。
+4. 超时：`cli.timeoutMs` 覆盖请求默认超时，`0` 表示无超时（供长耗时动作如 `workflow run --wait`）。
+5. 冲突保护：若选项名与保留字冲突，降级为通过 `--input <json>` 提交。
 
 ---
 
