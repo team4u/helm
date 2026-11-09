@@ -318,9 +318,10 @@ test('workflows runs：列出全部；--current 过滤 conversationId；多余�
 
 test('workflows run --wait：终态成功输出 run/result；failed 非零退出', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
+  const workflowName = `saved-${path.basename(dir)}`
   const doneRun = {
     id: 'wf_w',
-    name: 'demo',
+    name: workflowName,
     conversationId: 1,
     status: 'completed',
     createdAt: 1,
@@ -334,7 +335,7 @@ test('workflows run --wait：终态成功输出 run/result；failed 非零退出
         if (input.wait === true) return { body: { run: doneRun } }
         return {
           status: 200,
-          body: { run: { id: 'wf_w', name: 'demo', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 } },
+          body: { run: { id: 'wf_w', name: workflowName, conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 } },
         }
       },
     },
@@ -342,20 +343,20 @@ test('workflows run --wait：终态成功输出 run/result；failed 非零退出
   )
   const env = makeEnv(hub.url, dir)
   try {
-    const json = await run(['workflows', 'run', 'demo', '--wait', '--json'], env)
+    const json = await run(['workflows', 'run', workflowName, '--wait', '--json'], env)
     assert.equal(json.code, 0, json.err)
     assert.deepEqual((JSON.parse(json.out) as { run: unknown }).run, doneRun)
     const waitBody = (hub.hits.at(-1) as { body?: { input?: { wait?: boolean; name?: string } } }).body
     assert.equal(waitBody?.input?.wait, true)
-    assert.equal(waitBody?.input?.name, 'demo')
+    assert.equal(waitBody?.input?.name, workflowName)
 
-    const human = await run(['workflows', 'run', 'demo', '--wait'], env)
+    const human = await run(['workflows', 'run', workflowName, '--wait'], env)
     assert.equal(human.code, 0, human.err)
     assert.match(human.out, /wf_w/)
     assert.match(human.out, /42/)
 
     // 不带 --wait 返回运行中 run
-    const asyncRun = await run(['workflows', 'run', 'demo', '--json'], env)
+    const asyncRun = await run(['workflows', 'run', workflowName, '--json'], env)
     assert.equal(asyncRun.code, 0, asyncRun.err)
     assert.equal((JSON.parse(asyncRun.out) as { run: { status: string } }).run.status, 'running')
 
@@ -370,7 +371,7 @@ test('workflows run --wait：终态成功输出 run/result；failed 非零退出
       WF_RUN_MANIFESTS,
     )
     try {
-      const failed = await run(['workflows', 'run', 'demo', '--wait', '--json'], makeEnv(hub2.url, dir))
+      const failed = await run(['workflows', 'run', workflowName, '--wait', '--json'], makeEnv(hub2.url, dir))
       assert.equal(failed.code, 1)
       assert.equal((JSON.parse(failed.err) as { error: { code: string } }).error.code, 'workflow_failed')
     } finally {
@@ -383,6 +384,7 @@ test('workflows run --wait：终态成功输出 run/result；failed 非零退出
 
 test('workflows run：文件位置参数读入 script、名称写入 name、--resume-from-run-id 与 --args 透传', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
+  const workflowName = `saved-${path.basename(dir)}`
   const hub = await startHub(
     {
       'POST /api/actions/builtin%3Aworkflow/run': () => ({ body: { run: { id: 'wf_x', status: 'running' } } }),
@@ -408,15 +410,22 @@ test('workflows run：文件位置参数读入 script、名称写入 name、--re
 
     // 名称（非路径形态）-> name 字段；--resume-from-run-id kebab 映射 camelCase
     const byName = await run(
-      ['workflows', 'run', 'demo', '--args', JSON.stringify({ x: 1 }), '--resume-from-run-id', 'wf_prev', '--json'],
+      ['workflows', 'run', workflowName, '--args', JSON.stringify({ x: 1 }), '--resume-from-run-id', 'wf_prev', '--json'],
       env,
     )
     assert.equal(byName.code, 0, byName.err)
     body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
-    assert.equal(body?.input?.name, 'demo')
+    assert.equal(body?.input?.name, workflowName)
     assert.equal(body?.input?.script, undefined)
     assert.deepEqual(body?.input?.args, { x: 1 })
     assert.equal(body?.input?.resumeFromRunId, 'wf_prev')
+
+    // 显式属性 flag 不经过 readFileInto，即使值指向真实目录也原样交给 Hub 校验。
+    const explicitName = await run(['workflows', 'run', '--name', dir, '--json'], env)
+    assert.equal(explicitName.code, 0, explicitName.err)
+    body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
+    assert.equal(body?.input?.name, dir)
+    assert.equal(body?.input?.script, undefined)
   } finally {
     await hub.close()
   }
