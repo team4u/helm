@@ -24,7 +24,7 @@
 克隆代码仓库并安装依赖：
 
 ```bash
-git clone https://github.com/helm-org/helm.git
+git clone https://github.com/helm/helm.git
 cd helm
 pnpm install
 ```
