@@ -2635,6 +2635,22 @@ textarea {
   gap: 6px;
 }
 
+/* 插件卡片悬停操作条：与消息 hover 条同语义（纯图标、悬停/聚焦可见） */
+.plugin-card-hover-bar {
+  opacity: 0;
+  transition: opacity 120ms ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  width: fit-content;
+  max-width: max-content;
+}
+
+.plugin-card:hover .plugin-card-hover-bar,
+.plugin-card:focus-within .plugin-card-hover-bar {
+  opacity: 1;
+}
+
 .attachment-image-thumb {
   display: inline-flex;
   border: 1px solid var(--border);

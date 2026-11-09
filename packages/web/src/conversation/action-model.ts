@@ -12,6 +12,7 @@
  */
 import type {
   ConversationActionSpec,
+  ConversationEntry,
   ConversationSummary,
   TimelineEntryActionSpec,
 } from '@helm/protocol'
@@ -60,6 +61,18 @@ export interface TimelineEntryActionContext {
   kind: string
   /** 文本消息角色：'user' | 'assistant'；非文本消息条目 undefined。 */
   role?: 'user' | 'assistant'
+}
+
+/**
+ * 真实 ConversationEntry -> timeline.entry.action 匹配上下文：
+ * kind 原样采用真实条目 kind；文本消息条目附角色
+ * （pi.user / helm.input -> user，pi.assistant -> assistant），
+ * 其余条目（自定义 kind、pi.tool-result 等）无角色，声明 roles 的动作不命中。
+ */
+export function timelineEntryActionContextOf(entry: ConversationEntry): TimelineEntryActionContext {
+  if (entry.kind === 'pi.user' || entry.kind === 'helm.input') return { kind: entry.kind, role: 'user' }
+  if (entry.kind === 'pi.assistant') return { kind: entry.kind, role: 'assistant' }
+  return { kind: entry.kind }
 }
 
 /**

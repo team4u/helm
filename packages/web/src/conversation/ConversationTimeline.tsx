@@ -18,7 +18,7 @@ import { MarkdownView } from './MarkdownView.js'
 import {
   buildTimelineItems,
   collectSiblingCalls,
-  humanItemEntryKind,
+  filterRewoundEntries,
   isAssistantTurnBusy,
   toolSummaryText,
   type AssistantTurn,
@@ -29,7 +29,7 @@ import {
   type PluginCardItem,
   type ToolTrace,
 } from './timeline-model.js'
-import { matchTimelineEntryActions } from './action-model.js'
+import { matchTimelineEntryActions, timelineEntryActionContextOf } from './action-model.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import { formatBytes, formatDurationMs } from '../lib/format.js'
 
@@ -149,21 +149,28 @@ const QUEUED_MODE_LABEL: Record<'steer' | 'followUp', { icon: string; text: stri
 function HumanMessage({
   item,
   conversation,
+  anchorEntry,
   onRequestEdit,
 }: {
   item: HumanInputItem
   conversation: ConversationSummary
+  /** item.entryId 对应的真实持久化条目；queued（无持久锚点）时 undefined。 */
+  anchorEntry?: ConversationEntry
   onRequestEdit: (target: EditRequestTarget) => void
 }) {
   const store = useHelmStore()
   const [forking, setForking] = useState(false)
   const [withdrawing, setWithdrawing] = useState(false)
-  // 插件微插槽 timeline.entry.action：按当前会话 scope + entry kinds/roles 过滤
-  const entryActions = matchTimelineEntryActions(
-    store.groupedUi.timelineEntryActions,
-    conversation,
-    { kind: humanItemEntryKind(item), role: 'user' },
-  )
+  // 插件微插槽 timeline.entry.action：按当前会话 scope + 真实 entry 的 kind/role 过滤；
+  // queued（无持久锚点）或 id 不在当前详情集合内（分页窗口外）不渲染，绝不编造占位 entry。
+  const entryActions =
+    anchorEntry !== undefined
+      ? matchTimelineEntryActions(
+          store.groupedUi.timelineEntryActions,
+          conversation,
+          timelineEntryActionContextOf(anchorEntry),
+        )
+      : []
 
   const editRequest = async (): Promise<void> => {
     // 仅人类输入可原地编辑：agent 汇报 / trigger 注入不是人类编辑对象（铅笔已收起，双重防御）
@@ -263,16 +270,18 @@ function HumanMessage({
         <AttachmentChips attachments={item.attachments} conversationId={conversation.id} />
       ) : null}
       <span className="msg-hover-bar">
-        {entryActions.map((action) => (
-          <PluginMicroAction
-            key={`entry:${action.pluginId}/${action.spec.id}`}
-            action={action}
-            variant="hover"
-            conversationId={conversation.id}
-            entryId={item.entryId}
-            slotProps={{ conversationId: conversation.id, entry: { id: item.entryId, kind: humanItemEntryKind(item), role: 'user' } }}
-          />
-        ))}
+        {anchorEntry !== undefined
+          ? entryActions.map((action) => (
+              <PluginMicroAction
+                key={`entry:${action.pluginId}/${action.spec.id}`}
+                action={action}
+                variant="hover"
+                conversationId={conversation.id}
+                entryId={anchorEntry.id}
+                slotProps={{ conversationId: conversation.id, entry: anchorEntry }}
+              />
+            ))
+          : null}
         <CopyButton text={item.text} />
         {item.origin === 'human' ? (
           <button
@@ -587,6 +596,18 @@ function ResetHandoffBody({ item }: { item: DividerItem }) {
 }
 
 function PluginCard({ item, conversationId }: { item: PluginCardItem; conversationId: number }) {
+  const store = useHelmStore()
+  const conversation = store.conversations.find((c) => c.id === conversationId)
+  // timeline.renderer 自定义条目同样消费 timeline.entry.action：真实 entry kind 匹配；
+  // 自定义 kind 无 user/assistant 角色，声明 roles 的动作不命中。
+  const entryActions =
+    conversation !== undefined
+      ? matchTimelineEntryActions(
+          store.groupedUi.timelineEntryActions,
+          conversation,
+          timelineEntryActionContextOf(item.entry),
+        )
+      : []
   return (
     <div className="plugin-card">
       <PluginUiView
@@ -596,6 +617,20 @@ function PluginCard({ item, conversationId }: { item: PluginCardItem; conversati
         label="时间线卡片"
         slotProps={{ entry: item.entry, conversationId }}
       />
+      {entryActions.length > 0 ? (
+        <span className="plugin-card-hover-bar">
+          {entryActions.map((action) => (
+            <PluginMicroAction
+              key={`entry:${action.pluginId}/${action.spec.id}`}
+              action={action}
+              variant="hover"
+              conversationId={conversationId}
+              entryId={item.entry.id}
+              slotProps={{ conversationId, entry: item.entry }}
+            />
+          ))}
+        </span>
+      ) : null}
     </div>
   )
 }
@@ -626,6 +661,59 @@ function ResolvedAskRow({ ask, status }: { ask: AskSpec; status: 'answered' | 'c
     </div>
   )
 }
+
+// ---------------------------------------------------------------------------
+// timeline.entry.action 真实锚点解析：从 detailEntries（props 实参）按
+// 归一化 item 的 entryId / entryIds 定位真实 ConversationEntry，不查 store、
+// 不编造占位。
+// ---------------------------------------------------------------------------
+
+function buildActiveEntryIndex(entries: ReadonlyArray<ConversationEntry>): Map<string, ConversationEntry> {
+  const index = new Map<string, ConversationEntry>()
+  for (const entry of filterRewoundEntries(entries)) index.set(entry.id, entry)
+  return index
+}
+
+function hasAssistantText(entry: ConversationEntry): boolean {
+  if (!Array.isArray(entry.model)) return false
+  for (const msg of entry.model) {
+    if ((msg as { role?: unknown } | null)?.role !== 'assistant') continue
+    const content = (msg as { content?: unknown }).content
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      if (
+        (block as { type?: unknown } | null)?.type === 'text' &&
+        typeof (block as { text?: unknown }).text === 'string' &&
+        (block as { text: string }).text !== ''
+      ) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * assistant 回合 action 锚点：优先取最后一个携带 assistant 正文文本块的
+ * pi.assistant 条目（与 hover 条复制语义同载体）；全无则退回最后一个
+ * pi.assistant（含纯 toolCall 载体）；回合仅有工具条目（live 起步）时
+ * undefined——绝不拿 pi.tool-result 伪造。
+ */
+function resolveAssistantAnchorEntry(
+  entryIds: ReadonlyArray<string>,
+  entriesById: ReadonlyMap<string, ConversationEntry>,
+): ConversationEntry | undefined {
+  let lastAssistant: ConversationEntry | undefined
+  let lastTextEntry: ConversationEntry | undefined
+  for (const id of entryIds) {
+    const entry = entriesById.get(id)
+    if (entry === undefined || entry.kind !== 'pi.assistant') continue
+    lastAssistant = entry
+    if (hasAssistantText(entry)) lastTextEntry = entry
+  }
+  return lastTextEntry ?? lastAssistant
+}
+
 
 // ---------------------------------------------------------------------------
 // 高亮定位
@@ -667,13 +755,15 @@ interface AssistantTurnViewProps {
   conversation: ConversationSummary
   siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
   isLatestTurn?: boolean
+  /** 回合锚点对应的真实持久化 pi.assistant 条目（见 resolveAssistantAnchorEntry）。 */
+  anchorEntry?: ConversationEntry
 }
 
 function AssistantTurnView(props: AssistantTurnViewProps) {
   return <ToolActivityProvider><AssistantTurnContent {...props} /></ToolActivityProvider>
 }
 
-function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn = false }: AssistantTurnViewProps) {
+function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn = false, anchorEntry }: AssistantTurnViewProps) {
   const store = useHelmStore()
   const activeToolCallIds = useContext(ToolActivityContext)?.activeToolCallIds
   const [forking, setForking] = useState(false)
@@ -710,12 +800,16 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
   }
 
   const isBusy = isAssistantTurnBusy(turn, conversation, { isLatestTurn, activeToolCallIds })
-  // 插件微插槽 timeline.entry.action（assistant 回合：kind=pi.assistant，role=assistant）
-  const entryActions = matchTimelineEntryActions(
-    store.groupedUi.timelineEntryActions,
-    conversation,
-    { kind: 'pi.assistant', role: 'assistant' },
-  )
+  // 插件微插槽 timeline.entry.action：锚点必须是真实持久化 pi.assistant 条目；
+  // live 回合（尚无落库锚点）不渲染，绝不拿 pi.tool-result 或 key 伪造。
+  const entryActions =
+    !isBusy && anchorEntry !== undefined
+      ? matchTimelineEntryActions(
+          store.groupedUi.timelineEntryActions,
+          conversation,
+          timelineEntryActionContextOf(anchorEntry),
+        )
+      : []
 
   return (
     <div className="msg-ai-block" tabIndex={0}>
@@ -752,19 +846,18 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
       ) : null}
       {!isBusy && (lastText !== '' || turn.entryIds.length > 0) ? (
         <span className="msg-hover-bar">
-          {entryActions.map((action) => {
-            const anchorId = turn.entryIds[turn.entryIds.length - 1] ?? turn.key
-            return (
-              <PluginMicroAction
-                key={`entry:${action.pluginId}/${action.spec.id}`}
-                action={action}
-                variant="hover"
-                conversationId={conversation.id}
-                entryId={anchorId}
-                slotProps={{ conversationId: conversation.id, entry: { id: anchorId, kind: 'pi.assistant', role: 'assistant' } }}
-              />
-            )
-          })}
+          {anchorEntry !== undefined
+            ? entryActions.map((action) => (
+                <PluginMicroAction
+                  key={`entry:${action.pluginId}/${action.spec.id}`}
+                  action={action}
+                  variant="hover"
+                  conversationId={conversation.id}
+                  entryId={anchorEntry.id}
+                  slotProps={{ conversationId: conversation.id, entry: anchorEntry }}
+                />
+              ))
+            : null}
           {lastText !== '' ? <CopyButton text={lastText} /> : null}
           <button
             type="button"
@@ -814,6 +907,10 @@ export function ConversationTimeline({
       }),
     [detailEntries, live, isWorking, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
   )
+
+  // timeline.entry.action 锚点索引：以 props 传入的 detailEntries（经 rewind
+  // 覆盖过滤，与渲染层同口径）定位真实 ConversationEntry。
+  const activeEntriesById = useMemo(() => buildActiveEntryIndex(detailEntries), [detailEntries])
 
   const hasLiveTurn = items.some((item) => item.kind === 'assistant' && item.live)
   const resolvedAsks = store.resolvedAsksByConv[conversation.id] ?? []
@@ -934,6 +1031,7 @@ export function ConversationTimeline({
                 <HumanMessage
                   item={item}
                   conversation={conversation}
+                  anchorEntry={activeEntriesById.get(item.entryId)}
                   onRequestEdit={onRequestEdit}
                 />
               </div>
@@ -975,6 +1073,7 @@ export function ConversationTimeline({
                 turn={item}
                 conversation={conversation}
                 siblingCalls={siblingCalls}
+                anchorEntry={resolveAssistantAnchorEntry(item.entryIds, activeEntriesById)}
                 isLatestTurn={item.key === lastAssistantKey}
               />
             </div>
