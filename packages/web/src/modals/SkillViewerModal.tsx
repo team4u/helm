@@ -132,7 +132,7 @@ export function SkillViewerModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <span className="modal-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span className="modal-title flex-row">
             <HelmIcon name="sparkles" size={15} />
             技能库 Skills
             <span className="badge badge-neutral">只读</span>
@@ -141,64 +141,56 @@ export function SkillViewerModal({
             <HelmIcon name="x" size={14} />
           </button>
         </div>
-        <div className="modal-body asset-modal-body" style={{ flexDirection: 'row', gap: 14, alignItems: 'stretch' }}>
-          <div className="list asset-modal-list" style={{ width: 240, minWidth: 240, overflowY: 'auto' }}>
+        <div className="modal-body asset-modal-body">
+          <div className="list asset-modal-list">
             {skills.length === 0 && (
-              <div className="row" style={{ color: 'var(--fg-subtle)' }}>暂无可用技能</div>
+              <div className="empty-state empty-state-compact">暂无可用技能</div>
             )}
-            {skills.map((s) => (
-              <button
-                key={s.id}
-                className="row"
-                aria-pressed={selectedId === s.id}
-                style={{
-                  width: '100%',
-                  background: selectedId === s.id ? 'var(--bg-active)' : 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  flexDirection: 'column',
-                  alignItems: 'flex-start',
-                  gap: 3,
-                }}
-                onClick={() => selectSkill(s.id)}
-              >
-                <span style={{ display: 'flex', gap: 6, alignItems: 'center', width: '100%', justifyContent: 'space-between' }}>
-                  <span style={{ fontWeight: 500, fontSize: 12.5 }}>{s.name}</span>
-                  {s.references.length > 0 && (
-                    <span className="badge badge-neutral tabular-nums">{s.references.length} 文件</span>
-                  )}
-                </span>
-                <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{s.id}</span>
-                {s.description && (
-                  <span style={{ fontSize: 11, color: 'var(--fg-muted)', whiteSpace: 'normal', wordBreak: 'break-word' }}>
-                    {s.description}
+            {skills.map((s) => {
+              const isSelected = selectedId === s.id
+              return (
+                <button
+                  key={s.id}
+                  className={`list-item-btn${isSelected ? ' is-active' : ''}`}
+                  aria-pressed={isSelected}
+                  onClick={() => selectSkill(s.id)}
+                >
+                  <span className="list-item-btn-title">
+                    <span>{s.name}</span>
+                    {s.references.length > 0 && (
+                      <span className="badge badge-neutral tabular-nums">{s.references.length} 文件</span>
+                    )}
                   </span>
-                )}
-              </button>
-            ))}
+                  <span className="mono text-muted">{s.id}</span>
+                  {s.description && (
+                    <span className="text-muted break-word">
+                      {s.description}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
           </div>
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="asset-modal-main">
             {!skill && (
-              <div style={{ color: 'var(--fg-subtle)', fontSize: 12.5, padding: '24px 0', textAlign: 'center' }}>
+              <div className="empty-state">
                 选择左侧技能查看内容
               </div>
             )}
             {skill && (
               <>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div className="flex-row-wrap">
                   {files.map((f) => (
                     <button
                       key={f}
-                      className={`badge${activeFile === f ? ' badge-accent' : ' badge-neutral'}`}
-                      style={{ cursor: 'pointer', height: 24 }}
+                      className={`badge badge-clickable${activeFile === f ? ' badge-accent' : ' badge-neutral'}`}
                       onClick={() => setActiveFile(f)}
                     >
                       <HelmIcon name="file-text" size={10} />
                       {f}
                     </button>
                   ))}
-                  <span style={{ flex: 1 }} />
+                  <span className="flex-1" />
                   <button className="btn btn-sm" onClick={() => void copyReference()}>
                     <HelmIcon name={copied ? 'check' : 'copy'} size={12} />
                     {copied ? '已复制' : `复制 /skill:${selectedId}`}
@@ -210,29 +202,12 @@ export function SkillViewerModal({
                     <span className="selectable">{error}</span>
                   </div>
                 ) : loading ? (
-                  <div style={{ color: 'var(--fg-muted)', fontSize: 12.5, display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <div className="flex-row text-muted">
                     <HelmIcon name="loader" size={13} />
                     正在读取文件...
                   </div>
                 ) : (
-                  <pre
-                    className="mono selectable"
-                    style={{
-                      margin: 0,
-                      flex: 1,
-                      minHeight: 300,
-                      maxHeight: '52vh',
-                      overflow: 'auto',
-                      padding: '12px 14px',
-                      background: 'var(--bg-subtle)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius-sm)',
-                      fontSize: 12,
-                      lineHeight: 1.6,
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                    }}
-                  >
+                  <pre className="mono selectable skill-file-pre">
                     {text}
                   </pre>
                 )}

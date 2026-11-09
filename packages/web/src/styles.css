@@ -1822,7 +1822,9 @@ textarea {
 /* 列表导航交互项原语 */
 .list-item-btn {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
   width: 100%;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
@@ -1848,6 +1850,22 @@ textarea {
   opacity: 0.45;
   cursor: not-allowed;
 }
+.list-item-btn-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  font-weight: 500;
+  font-size: 12.5px;
+  gap: 6px;
+}
+.list-item-btn-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  font-size: 11px;
+}
 
 /* 卡片与表单 */
 .card {
@@ -1863,6 +1881,20 @@ textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.section-flat-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.section-flat-title {
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--fg);
 }
 
 /* 统一搜索输入框原语 */
@@ -1911,6 +1943,11 @@ textarea {
   color: var(--fg);
   margin: 0;
 }
+.empty-state-compact {
+  padding: 16px 8px;
+  min-height: 60px;
+  font-size: 12px;
+}
 
 /* 表单两列网格对齐原语 */
 .form-grid {
@@ -1929,6 +1966,10 @@ textarea {
   gap: 5px;
   align-items: center;
   user-select: none;
+}
+.form-grid-value {
+  font-size: 11.5px;
+  word-break: break-all;
 }
 
 .input,
@@ -2024,6 +2065,81 @@ textarea {
   flex-direction: column;
   gap: 6px;
   overflow-y: auto;
+}
+
+.modal-main,
+.asset-modal-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+/* 代码片段展示框原语 */
+.code-box {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 4px 8px;
+  background: var(--bg-inset);
+  border-radius: var(--radius-xs);
+  word-break: break-all;
+}
+
+/* 技能文件预览区块 */
+.skill-file-pre {
+  margin: 0;
+  flex: 1;
+  min-height: 300px;
+  max-height: 52vh;
+  overflow: auto;
+  padding: 12px 14px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 弹窗常用无内联布局原语 */
+.flex-1 { flex: 1; min-width: 0; }
+.justify-end { justify-content: flex-end; }
+.flex-row { display: flex; align-items: center; gap: 6px; }
+.flex-row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.flex-row-wrap { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.flex-col { display: flex; flex-direction: column; gap: 6px; }
+.flex-col-xs { display: flex; flex-direction: column; gap: 3px; }
+.flex-shrink-0 { flex-shrink: 0; }
+.border-accent { border-color: var(--accent) !important; }
+.text-muted { font-size: 12px; color: var(--fg-muted); }
+.text-subtle { font-size: 11px; color: var(--fg-subtle); }
+.text-err { color: var(--err); }
+.nowrap { white-space: nowrap; }
+.break-word { white-space: normal; word-break: break-word; }
+.badge-clickable { cursor: pointer; height: 24px; }
+.plugin-card-header > button { flex-shrink: 0; }
+.font-semibold { font-weight: 600; }
+.profile-args-textarea {
+  min-height: 64px;
+  font-size: 12px;
+  resize: vertical;
+}
+.profile-editor-textarea {
+  min-height: 280px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.profile-tab-content {
+  flex: 1;
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .modal-footer {
