@@ -1334,8 +1334,19 @@ textarea {
   transition: transform 120ms ease;
 }
 
-.helm-select-chevron-open {
+.helm-select-chevron-open,
+.helm-select-trigger[data-state="open"] .helm-select-chevron {
   transform: rotate(180deg);
+}
+
+/* 下拉菜单面板通用样式规范 */
+.dropdown-panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 7px);
+  box-shadow: var(--shadow-lg, 0 10px 28px rgba(0, 0, 0, 0.16));
+  outline: none;
+  box-sizing: border-box;
 }
 
 /* 浮层下拉列表 */
@@ -1419,17 +1430,22 @@ textarea {
   transition: background 80ms ease;
 }
 
-.helm-select-option:hover:not(:disabled),
+.helm-select-option[data-highlighted],
+.helm-select-option:hover:not(:disabled):not([data-disabled]),
 .helm-select-option.highlighted:not(:disabled) {
   background: var(--bg-hover);
+  outline: none;
 }
 
+.helm-select-option[data-state="checked"],
 .helm-select-option.selected {
   background: var(--bg-subtle);
   font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
-.helm-select-option:disabled {
+.helm-select-option:disabled,
+.helm-select-option[data-disabled] {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -3104,5 +3120,23 @@ textarea {
   bottom: auto;
   left: auto;
   border-radius: var(--radius-sm, 7px);
+}
+
+[data-radix-popper-content-wrapper] .helm-select-popover {
+  position: static;
+  top: auto;
+  bottom: auto;
+  left: auto;
+  min-width: var(--radix-select-trigger-width, 100%);
+  max-width: var(--radix-select-content-available-width, 360px);
+  max-height: var(--radix-select-content-available-height, 240px);
+  border-radius: var(--radius-sm, 7px);
+}
+
+.helm-select-viewport {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
