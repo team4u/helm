@@ -128,7 +128,8 @@ export class HubClient {
       })
     } catch (err) {
       if (err instanceof Error && err.name === 'TimeoutError') {
-        throw new CliError(`请求超时（${this.timeoutMs}ms）：${method} ${path}`, 'timeout')
+        const ms = opts.timeoutMs !== undefined ? opts.timeoutMs : this.timeoutMs
+        throw new CliError(`请求超时（${ms}ms）：${method} ${path}`, 'timeout')
       }
       if (err instanceof Error && err.name === 'AbortError') {
         throw new CliError(`请求已取消：${method} ${path}`, 'aborted')

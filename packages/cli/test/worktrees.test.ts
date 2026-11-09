@@ -5,7 +5,8 @@
  * GET /api/actions manifest 注入），真实 CLI 命令分派（runCli）。覆盖：
  * 选择器 flag（--worktree-id/--conversation-id/--path[--node-id]）、--current
  * 会话上下文注入、--delete-branch/--force input 透传、--json 输出、人类模式
- * 摘要输出、未知 flag/多余位置参数拒绝、服务端错误信封透传。
+ * 通用 key-value 输出（零业务字段识别）、未知 flag/多余位置参数拒绝、服务端
+ * 错误信封透传。
  *
  * runner: tsx --test；每项显式 timeout: 60_000。
  */
@@ -176,7 +177,7 @@ test('--current 感知 HELM_CONVERSATION_ID（注入动作 conversationId 上下
   }
 })
 
-test('--delete-branch/--force 透传 input；--json 原样输出与人类模式摘要输出', { timeout: 60_000 }, async () => {
+test('--delete-branch/--force 透传 input；--json 原样输出与人类模式通用 key-value 输出', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
   const hub = await startWorktreesHub(() => ({
     body: { worktreeId: 'local:/wt/a', removed: true, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: true },
@@ -191,19 +192,21 @@ test('--delete-branch/--force 透传 input；--json 原样输出与人类模式�
     assert.deepEqual(inputOf(hub.hits.at(-1)), { conversationId: 7, deleteBranch: true, force: true })
     assert.deepEqual(JSON.parse(r.out), { worktreeId: 'local:/wt/a', removed: true, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: true })
 
+    // 人类模式：通用 key-value 输出（零业务字段识别，全部字段可见）
     const human = await run(['worktrees', 'cleanup', '--conversation-id', '7'], env)
     assert.equal(human.code, 0, human.err)
-    assert.match(human.out, /已移除受管 worktree \/wt\/a/)
-    assert.match(human.out, /分支已删除/)
+    assert.match(human.out, /worktreeId\s+local:\/wt\/a/)
+    assert.match(human.out, /removed\s+true/)
+    assert.match(human.out, /branchDeleted\s+true/)
 
-    // 幂等结果的人类输出（removed:false）
+    // 幂等结果（removed:false）同样通用输出：值忠实可见，不伪装成另一种文案
     const idemHub = await startWorktreesHub(() => ({
       body: { worktreeId: 'local:/wt/a', removed: false, path: '/wt/a', branch: 'helm/spawn-x', nodeId: 'local', branchDeleted: false },
     }))
     try {
       const idem = await run(['worktrees', 'cleanup', '--worktree-id', 'w1'], makeEnv(idemHub.url, dir))
       assert.equal(idem.code, 0, idem.err)
-      assert.match(idem.out, /此前已清理/)
+      assert.match(idem.out, /removed\s+false/)
     } finally {
       await idemHub.close()
     }

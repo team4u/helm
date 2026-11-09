@@ -2,14 +2,21 @@
  * 动态插件命令：GET /api/actions 的 ActionManifest -> 顶层 `helm <path...>` 命令。
  * - 默认路径 [stripBuiltin(pluginId), actionId]；cli.command 可整体改写。
  * - inputSchema.properties -> --kebab-case flag，按 JSON Schema 类型转换
- *   （kebab-case 自动映射 camelCase 属性；object/array/无类型按 JSON 解析）。
+ *   （kebab-case 自动映射 camelCase 属性；object/array/无类型按 JSON 解析；
+ *   位置参数同样按 schema 类型转换，如 runId 保持 string、数值字段转数字）。
  * - cli.positional：按序消费 CLI 位置参数写入 input 字段；readFileInto 把
- *   本地文件内容（UTF-8）写入目标字段（如 `workflows run <file>` -> script）。
+ *   本地已存在文件的内容（UTF-8）写入目标字段（如 `workflows run <file>` -> script）。
  * - cli.timeoutMs 透传请求超时（0 = 无超时，供长耗时动作如 workflow run --wait）。
+ * - manifest 是外部输入：positional/timeoutMs 在 CLI 侧独立校验
+ *   （字段需存在于 inputSchema.properties、readFileInto 目标为 string、
+ *   required positional 连续、field/目标不得重复），非法即显式报错，
+ *   不依赖服务端兜底。
  * - 与保留名/同 kebab 冲突的属性跳过独立 flag（仍可经整体 --input 表达），不禁用动作。
  * - 命令路径冲突/空路径/抢占核心命令路径均显式报错，绝不静默丢弃。
+ * - 结果输出走通用 printValue，展示层零业务字段识别；--json 原样保真。
  */
 import type { ActionManifest, JsonSchema, PluginActionCliPositionalSpec } from '@helm/protocol'
+import path from 'node:path'
 import { CliError } from './errors.js'
 import type { HubClient } from './hub-client.js'
 import type { CommandContext, CommandSpec } from './commands/index.js'
@@ -24,6 +31,10 @@ function stripBuiltin(pluginId: string): string {
   return pluginId.startsWith('builtin:') ? pluginId.slice('builtin:'.length) : pluginId
 }
 
+function manifestLabel(manifest: ActionManifest): string {
+  return `${manifest.pluginId}.${manifest.id}`
+}
+
 /** JSON Schema 简单类型 -> flag 类型；object/array/无类型用 json（或整体 --input）。 */
 function flagTypeOf(schema: unknown): FlagSpec['type'] | undefined {
   if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return undefined
@@ -35,6 +46,39 @@ function flagTypeOf(schema: unknown): FlagSpec['type'] | undefined {
   // 无 type 的宽松 schema（含 $ref/组合词/任意 JSON 值如 workflow args）按
   // JSON 传递（服务端 schema 校验兜底），比字符串更保真。
   return 'json'
+}
+
+/**
+ * 位置参数字符串按 schema 属性类型转换（与 flag 同纪律）：
+ * number/integer -> Number；boolean 严格 true/false；object/array/无 type
+ * 宽松 schema -> JSON.parse（非法 JSON 本地显式报错）；string 原样。
+ * readFileInto 的文件内容同理只写 string 目标（manifest 校验已保证）。
+ */
+function coercePositionalValue(raw: string, field: string, schema: unknown): unknown {
+  const type = flagTypeOf(schema)
+  if (type === 'number') {
+    const n = Number(raw)
+    if (!Number.isFinite(n)) {
+      throw new CliError(`位置参数 <${field}> 需要数字（schema type number/integer），实得 "${raw}"`, 'invalid_flag_value')
+    }
+    return n
+  }
+  if (type === 'boolean') {
+    if (raw === 'true') return true
+    if (raw === 'false') return false
+    throw new CliError(`位置参数 <${field}> 需要 true/false（schema type boolean），实得 "${raw}"`, 'invalid_flag_value')
+  }
+  if (type === 'json') {
+    try {
+      return JSON.parse(raw)
+    } catch (err) {
+      throw new CliError(
+        `位置参数 <${field}> 需要合法 JSON（schema type ${type === 'json' ? 'object/array/未声明' : type}）：${err instanceof Error ? err.message : String(err)}`,
+        'invalid_flag_value',
+      )
+    }
+  }
+  return raw
 }
 
 function kebabCase(name: string): string {
@@ -98,10 +142,236 @@ function schemaPropertyNames(schema: JsonSchema): Map<string, string | undefined
   return map
 }
 
+/** schema.properties 形状安全读取：无 properties/非对象时返回 undefined（额外字段校验另行报错）。 */
+function schemaPropertiesOf(schema: JsonSchema): Record<string, unknown> | undefined {
+  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return undefined
+  const properties = (schema as { properties?: unknown }).properties
+  if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) return undefined
+  return properties as Record<string, unknown>
+}
+
+/**
+ * manifest 侧 positional 校验（外部输入在 CLI 边界显式校验，不依赖服务端）：
+ * - field 必须存在于 inputSchema.properties（不存在则 CLI 无法回填必填检查，
+ *   必为坏清单）。
+ * - readFileInto 目标必须存在且 schema type 为 string（文件内容是 UTF-8 文本）。
+ * - required positional 必须连续：optional 出现后不得再出现 required
+ *   （否则中间缺参无法定位，属歧义清单）。
+ * - field 与 readFileInto 目标均不得重复（重复回填互相覆盖）。
+ * - 位置参数与属性 flag 同源：field/readFileInto 目标撞保留 flag 名时经 flag 提供，
+ *   位置参数回填会破坏「保留名属性仅 --input 可达」约定，直接拒绝。
+ */
+function validatePositionals(manifest: ActionManifest): PluginActionCliPositionalSpec[] {
+  const raw = manifest.cli?.positional
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) {
+    throw new CliError(`动作 ${manifestLabel(manifest)} 的 cli.positional 必须是数组`, 'invalid_action_manifest')
+  }
+  const properties = schemaPropertiesOf(manifest.inputSchema) ?? {}
+  const allWriteTargets = new Set<string>()
+  let seenOptional = false
+  for (const [index, item] of raw.entries()) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+      throw new CliError(`动作 ${manifestLabel(manifest)} 的 cli.positional[${index}] 必须是对象`, 'invalid_action_manifest')
+    }
+    const pos = item as Partial<PluginActionCliPositionalSpec>
+    // 拒绝未知键：manifest 是外部输入，多余字段（拼写错位的 declared/dest 等）
+    // 多半是写错了声明，静默忽略会伪装成生效
+    const allowedKeys = new Set(['field', 'required', 'readFileInto'])
+    for (const key of Object.keys(pos)) {
+      if (!allowedKeys.has(key)) {
+        throw new CliError(
+          `动作 ${manifestLabel(manifest)} 的 cli.positional[${index}] 含未知键 "${key}"（仅允许 field/required/readFileInto）`,
+          'invalid_action_manifest',
+        )
+      }
+    }
+    if (typeof pos.field !== 'string' || pos.field.length === 0) {
+      throw new CliError(`动作 ${manifestLabel(manifest)} 的 cli.positional[${index}].field 必须是非空字符串`, 'invalid_action_manifest')
+    }
+    if (pos.required !== undefined && typeof pos.required !== 'boolean') {
+      throw new CliError(
+        `动作 ${manifestLabel(manifest)} 的 cli.positional[${pos.field}].required 必须是 boolean`,
+        'invalid_action_manifest',
+      )
+    }
+    if (pos.readFileInto !== undefined && (typeof pos.readFileInto !== 'string' || pos.readFileInto.length === 0)) {
+      throw new CliError(
+        `动作 ${manifestLabel(manifest)} 的 cli.positional[${pos.field}].readFileInto 必须是非空字符串字段名`,
+        'invalid_action_manifest',
+      )
+    }
+    // 原型污染键拒绝：普通对象上 __proto__ 赋值会静默丢失/改写原型（JSON 文本
+    // 可携带自有 __proto__ 键），constructor/prototype 同理不可安全往返
+    for (const dangerous of [pos.field, pos.readFileInto]) {
+      if (dangerous !== undefined && (dangerous === '__proto__' || dangerous === 'constructor' || dangerous === 'prototype')) {
+        throw new CliError(
+          `动作 ${manifestLabel(manifest)} 的 cli.positional 字段名 "${dangerous}" 不可用（原型污染键）`,
+          'invalid_action_manifest',
+        )
+      }
+    }
+    // 先登记本项目标再查重复：顺序无关地拒绝任何两个 positional 写入同一字段
+    // （field:src+readFileInto:payload 与后续 field:payload 互相覆盖，两个 read 同目标同理）。
+    const writeTargets: string[] = pos.readFileInto !== undefined ? [pos.field, pos.readFileInto] : [pos.field]
+    for (const t of writeTargets) {
+      if (allWriteTargets.has(t)) {
+        throw new CliError(
+          `动作 ${manifestLabel(manifest)} 的 cli.positional 重复写入字段 "${t}"（field/readFileInto 目标不得重叠）`,
+          'invalid_action_manifest',
+        )
+      }
+      allWriteTargets.add(t)
+    }
+    if (!Object.hasOwn(properties, pos.field)) {
+      throw new CliError(
+        `动作 ${manifestLabel(manifest)} 的 cli.positional field "${pos.field}" 不在 inputSchema.properties 中`,
+        'invalid_action_manifest',
+      )
+    }
+    if (RESERVED_FLAG_NAMES.has(kebabCase(pos.field))) {
+      throw new CliError(
+        `动作 ${manifestLabel(manifest)} 的 cli.positional field "${pos.field}" 撞保留 flag 名（保留名属性仅可经 --input 表达，不能作为位置参数）`,
+        'invalid_action_manifest',
+      )
+    }
+    if (pos.readFileInto !== undefined) {
+      const targetSchema = properties[pos.readFileInto]
+      if (!Object.hasOwn(properties, pos.readFileInto)) {
+        throw new CliError(
+          `动作 ${manifestLabel(manifest)} 的 cli.positional "${pos.field}" 的 readFileInto 目标 "${pos.readFileInto}" 不在 inputSchema.properties 中`,
+          'invalid_action_manifest',
+        )
+      }
+      // 目标必须是真正的 type:'string'（枚举/const/其他形态都不接受文件内容）
+      const targetDecl = targetSchema as { type?: unknown }
+      if (targetDecl === null || typeof targetDecl !== 'object' || targetDecl.type !== 'string') {
+        throw new CliError(
+          `动作 ${manifestLabel(manifest)} 的 cli.positional "${pos.field}" 的 readFileInto 目标 "${pos.readFileInto}" 需为 type: string 属性`,
+          'invalid_action_manifest',
+        )
+      }
+      if (RESERVED_FLAG_NAMES.has(kebabCase(pos.readFileInto))) {
+        throw new CliError(
+          `动作 ${manifestLabel(manifest)} 的 cli.positional "${pos.field}" 的 readFileInto 目标 "${pos.readFileInto}" 撞保留 flag 名`,
+          'invalid_action_manifest',
+        )
+      }
+    }
+    if (pos.required === true) {
+      if (seenOptional) {
+        throw new CliError(
+          `动作 ${manifestLabel(manifest)} 的 cli.positional required 字段 "${pos.field}" 出现在 optional 之后（required 必须连续）`,
+          'invalid_action_manifest',
+        )
+      }
+    } else {
+      seenOptional = true
+    }
+  }
+  return raw as PluginActionCliPositionalSpec[]
+}
+
+/** manifest 侧 cli.timeoutMs 校验：>= 0 的有限数字（0 表示无超时）。 */
+function validateTimeoutMs(manifest: ActionManifest): number | undefined {
+  const raw = manifest.cli?.timeoutMs
+  if (raw === undefined) return undefined
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) {
+    throw new CliError(
+      `动作 ${manifestLabel(manifest)} 的 cli.timeoutMs 必须是 >= 0 的有限数字（0 表示无超时），实得 ${JSON.stringify(raw)}`,
+      'invalid_action_manifest',
+    )
+  }
+  return raw
+}
+
+/**
+ * 路径形态判定（跨平台，基于 node:path 判定而非正则）：
+ * 显式相对前缀（./ ../）、~ 或 ~/ 开头、或任一平台视角下的绝对路径
+ * （POSIX /、win32 盘符 C:\ / C:/ 与 UNC \\server\share；windows 上 \x 也算）。
+ * 其余（demo、demo.js）视为普通值（如已保存工作流名）。
+ */
+function isPathLike(raw: string): boolean {
+  // 显式相对前缀（正/反斜杠两形态）与 ~ 展开（两种分隔符，expandHome 同步支持）
+  if (
+    raw.startsWith('./') || raw.startsWith('../') ||
+    raw.startsWith('.\\') || raw.startsWith('..\\') ||
+    raw === '~' || raw.startsWith('~/') || raw.startsWith('~\\')
+  ) return true
+  if (raw.startsWith('\\') || raw.startsWith('/')) return true // POSIX 绝对；win32 \\ 根相对与 UNC 同前缀
+  // 盘符前缀（不区分大小写）：C:\x、C:/x、盘符相对 c:x 仅显式分隔符形态算路径
+  if (raw.length >= 3 && raw[1] === ':' && /[a-zA-Z]/.test(raw[0]!) && (raw[2] === '\\' || raw[2] === '/')) return true
+  return false
+}
+
+/** 解析 ~ 前缀为用户主目录；其余原样（win32 的路径分隔符由 fs 自行处理）。 */
+function expandHome(raw: string, env: NodeJS.ProcessEnv): string {
+  if (raw === '~') return env['HOME'] ?? env['USERPROFILE'] ?? raw
+  if (raw.startsWith('~/') || raw.startsWith('~\\')) {
+    const home = env['HOME'] ?? env['USERPROFILE']
+    if (home === undefined) return raw
+    return path.join(home, raw.slice(2))
+  }
+  return raw
+}
+
+/**
+ * readFileInto 位置参数解析：
+ * - 已存在普通文件 -> UTF-8 内容写入 readFileInto 目标。
+ * - 路径形态但目标不是普通文件（缺失/目录等）-> 显式报错（不猜含义、不静默当名字）。
+ * - 非路径形态 -> 按 schema 类型转换后写入 field 本身。
+ * stat/readFile 的非 ENOENT IO 故障（权限、非法路径等）显式上抛，绝不吞掉。
+ */
+async function resolveReadFilePositional(
+  manifest: ActionManifest,
+  pos: PluginActionCliPositionalSpec,
+  raw: string,
+  properties: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
+): Promise<{ field: string; value: unknown }> {
+  const fsp = await import('node:fs/promises')
+  const target = expandHome(raw, env)
+  let stat: Awaited<ReturnType<typeof fsp.stat>>
+  try {
+    stat = await fsp.stat(target)
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (isPathLike(raw)) {
+        throw new CliError(
+          `位置参数 <${pos.field}> 指向的路径不存在：${raw}`,
+          'positional_file_not_found',
+        )
+      }
+      // 非路径形态（如已保存工作流名）：写入 field 本身。
+      return { field: pos.field, value: coercePositionalValue(raw, pos.field, properties[pos.field]) }
+    }
+    throw new CliError(
+      `位置参数 <${pos.field}> 读取 ${raw} 失败：${err instanceof Error ? err.message : String(err)}`,
+      'positional_file_unreadable',
+    )
+  }
+  if (!stat.isFile()) {
+    throw new CliError(
+      `位置参数 <${pos.field}> 指向的不是普通文件（${raw}${stat.isDirectory() ? '，是目录' : ''}）`,
+      'positional_not_a_file',
+    )
+  }
+  let content: string
+  try {
+    content = await fsp.readFile(target, 'utf-8')
+  } catch (err) {
+    throw new CliError(
+      `位置参数 <${pos.field}> 读取文件 ${raw} 失败：${err instanceof Error ? err.message : String(err)}`,
+      'positional_file_unreadable',
+    )
+  }
+  return { field: pos.readFileInto!, value: content }
+}
+
 /**
  * 位置参数映射：按声明顺序消费 parsed.positionals，写入 input 字段。
- * - readFileInto：值是本地已存在文件（或以 ./ ../ / ~ 开头的路径形态）时读
- *   UTF-8 文本写入目标字段；路径形态但文件不存在显式报错（不猜含义）。
+ * - readFileInto：见 resolveReadFilePositional。
+ * - 已由属性 flag 提供的字段再给位置参数：显式冲突报错（不悄悄覆盖）。
  * - required：位置参数与 --input 均未提供该字段时显式报缺失。
  */
 async function applyPositionals(
@@ -109,6 +379,8 @@ async function applyPositionals(
   positionals: readonly string[],
   input: Record<string, unknown>,
   hasWholeInput: boolean,
+  properties: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
 ): Promise<void> {
   const specs: PluginActionCliPositionalSpec[] = manifest.cli?.positional ?? []
   for (const [index, pos] of specs.entries()) {
@@ -122,32 +394,17 @@ async function applyPositionals(
       }
       continue
     }
-    if (pos.readFileInto !== undefined) {
-      const looksLikePath = raw.startsWith('./') || raw.startsWith('../') || raw.startsWith('/') || raw.startsWith('~/')
-      const fsp = await import('node:fs/promises')
-      const pathMod = await import('node:path')
-      const target = raw.startsWith('~/') ? pathMod.join(process.env.HOME ?? '~', raw.slice(2)) : raw
-      let stat: Awaited<ReturnType<typeof fsp.stat>> | undefined
-      try {
-        stat = await fsp.stat(target)
-      } catch {
-        stat = undefined
-      }
-      if (stat?.isFile() === true) {
-        input[pos.readFileInto] = await fsp.readFile(target, 'utf-8')
-        continue
-      }
-      if (looksLikePath) {
-        throw new CliError(
-          `位置参数 <${pos.field}> 指向的文件不存在：${raw}`,
-          'positional_file_not_found',
-        )
-      }
-      // 非路径形态（如已保存工作流名）：写入 field 本身。
-      input[pos.field] = raw
-      continue
+    const resolved =
+      pos.readFileInto !== undefined
+        ? await resolveReadFilePositional(manifest, pos, raw, properties, env)
+        : { field: pos.field, value: coercePositionalValue(raw, pos.field, properties[pos.field]) }
+    if (input[resolved.field] !== undefined) {
+      throw new CliError(
+        `字段 ${resolved.field} 同时由 --${kebabCase(resolved.field)} flag 与位置参数 <${pos.field}> 提供：请只给一处`,
+        'conflicting_positional',
+      )
     }
-    input[pos.field] = raw
+    input[resolved.field] = resolved.value
   }
   if (positionals.length > specs.length) {
     throw new CliError(
@@ -157,61 +414,12 @@ async function applyPositionals(
   }
 }
 
-/**
- * 动作结果友好展示（非 --json）：识别常见形状输出摘要/表格，未知形状回
- * 退通用 printValue。这里只做展示层适配，不改变数据。
- */
-function printActionResult(io: Io, result: unknown, json: boolean): void {
-  if (json || result === null || typeof result !== 'object' || Array.isArray(result)) {
-    printValue(io, result, json)
-    return
-  }
-  const record = result as Record<string, unknown>
-  // { run: WorkflowRunSummary }
-  if ('run' in record && record['run'] !== null && typeof record['run'] === 'object') {
-    const run = record['run'] as { id?: string; status?: string; result?: unknown; error?: string; conversationId?: number }
-    if (typeof run.id === 'string' && typeof run.status === 'string') {
-      io.out(`run ${run.id} ${run.status}\n`)
-      if (run.result !== undefined) {
-        printValue(io, run.result, false)
-      } else if (run.error !== undefined) {
-        io.out(`${String(run.error)}\n`)
-      }
-      return
-    }
-  }
-  // { runs: [...] } / { workflows: [...] }
-  for (const key of ['runs', 'workflows'] as const) {
-    const list = record[key]
-    if (Array.isArray(list)) {
-      printValue(io, list, false)
-      return
-    }
-  }
-  // worktree cleanup 结果（removed/path/branch/nodeId/branchDeleted 形状）
-  if (
-    typeof record['removed'] === 'boolean' &&
-    typeof record['path'] === 'string' &&
-    typeof record['branch'] === 'string' &&
-    typeof record['nodeId'] === 'string' &&
-    typeof record['branchDeleted'] === 'boolean'
-  ) {
-    io.out(
-      record['removed']
-        ? `已移除受管 worktree ${record['path']}（branch: ${record['branch']}，节点 ${record['nodeId']}${record['branchDeleted'] ? '，分支已删除' : '，分支保留'}）\n`
-        : `受管 worktree ${record['path']} 此前已清理（幂等跳过；branch: ${record['branch']}${record['branchDeleted'] ? '，分支已删除' : ''}）\n`,
-    )
-    return
-  }
-  printValue(io, result, false)
-}
-
 interface DynamicCommand {
   spec: CommandSpec
   manifest: ActionManifest
 }
 
-/** manifest -> 动态命令（含路径校验）。 */
+/** manifest -> 动态命令（含路径与 cli 扩展字段校验）。 */
 export function dynamicCommandOf(manifest: ActionManifest): DynamicCommand {
   if (manifest.cli?.hidden === true) throw new CliError('hidden', 'hidden_action')
   const segments = manifest.cli?.command ?? [stripBuiltin(manifest.pluginId), manifest.id]
@@ -224,13 +432,13 @@ export function dynamicCommandOf(manifest: ActionManifest): DynamicCommand {
       )
     }
   }
+  const positionals = validatePositionals(manifest)
+  const timeoutMs = validateTimeoutMs(manifest)
   const { flags, skipped } = flagsFromSchema(manifest.inputSchema)
   const propertyNames = schemaPropertyNames(manifest.inputSchema)
-  const positionals = manifest.cli?.positional ?? []
-  const timeoutMs = manifest.cli?.timeoutMs
   const inputHelp = skipped.length > 0
     ? `整体 input JSON；属性 ${skipped.map((s) => `"${s}"`).join(', ')} 无独立 flag（名称冲突），只能经 --input 表达`
-    : '整体 input JSON（与属性 flag 互斥）'
+    : '整体 input JSON（与属性 flag/位置参数互斥）'
   const description = manifest.cli?.description ?? manifest.description
   const pluginId = manifest.pluginId
   const actionId = manifest.id
@@ -280,15 +488,24 @@ export function dynamicCommandOf(manifest: ActionManifest): DynamicCommand {
       if (parsed.flags.has('input')) {
         input = parsed.flags.get('input')
       } else {
-        const obj: Record<string, unknown> = {}
+        // null 原型：字段名即使为 __proto__ 也只写为自有属性，绝不改写原型链
+        //（manifest 校验已拒绝原型污染键，这里是无声丢弃的纵深防御）
+        const obj: Record<string, unknown> = Object.create(null)
         for (const [flagName, value] of parsed.flags) {
           if (flagName === 'current') continue
           const propName = propertyNames.get(flagName)
           if (propName === undefined) continue
           obj[propName] = value
         }
-        // 位置参数最后消费（属性 flag 之后；重复字段时位置参数覆盖 flag 更直观）
-        await applyPositionals(manifest, parsed.positionals, obj, false)
+        // 位置参数最后消费：与属性 flag 提供同名字段时显式冲突报错（绝不悄悄覆盖）
+        await applyPositionals(
+          manifest,
+          parsed.positionals,
+          obj,
+          false,
+          schemaPropertiesOf(manifest.inputSchema) ?? {},
+          ctx.env,
+        )
         input = obj
       }
       // 必填字段终检（schema required + positional.required 均覆盖：
@@ -317,7 +534,7 @@ export function dynamicCommandOf(manifest: ActionManifest): DynamicCommand {
         `/api/actions/${encodeURIComponent(pluginId)}/${encodeURIComponent(actionId)}`,
         { body, ...(timeoutMs !== undefined ? { timeoutMs } : {}) },
       )
-      printActionResult(ctx.io, result, ctx.json)
+      printValue(ctx.io, result, ctx.json)
     },
   }
   return { spec, manifest }
