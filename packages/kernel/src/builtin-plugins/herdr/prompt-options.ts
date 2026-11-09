@@ -48,23 +48,19 @@ export interface HerdrAskPromptPlan {
   aiOptions: BlockedSnapshotAnalysis['options']
 }
 
-/** 游标指示符（CLI TUI 常见集合）。 */
-const CURSOR_CHARS = ['>', '❯', '›', '●', '◉', '▶']
-
-function isCursorChar(s: string): boolean {
-  return CURSOR_CHARS.includes(s)
-}
-
-/** 键位说明栏 / 分隔线 / 状态栏（提取菜单前剥离的噪音行）。 */
+/** 键位说明栏 / 分隔线 / 状态栏 / 菜单装饰框线（提取菜单前剥离的噪音行）。 */
 function isHintOrDividerLine(line: string): boolean {
   const trimmed = line.trim()
   if (trimmed === '') return true
   if (/^[─━═\-]{4,}$/.test(trimmed)) return true
+  // 菜单装饰框线（╭─ bash ─╮ / ╰────╯ / ─── ───）：仅含制框/横线/空白/短标签。
+  if (/^[╭╮╰╯│┌┐└┘|][─━═\-\s\w]{2,}[╭╮╰╯│┌┐└┘|]?$/.test(trimmed) && /[─━═\-]{2,}/.test(trimmed)) return true
   const lower = trimmed.toLowerCase()
   if (lower.includes('navigate') && lower.includes('confirm')) return true
   if (lower.includes('esc to cancel')) return true
   if (lower.includes('enter to confirm')) return true
   if (lower.includes('enter to select')) return true
+  if (lower.includes('enter to continue')) return true
   if (lower.includes('? for shortcuts')) return true
   if (trimmed.includes('↑/↓')) return true
   return false
@@ -132,38 +128,25 @@ const MAX_MENU_LINES = 8
 /** 快照尾部扫描窗口。 */
 const TAIL_LINES = 30
 
-/** 现场交互证据：导航/确认提示（↑/↓ · enter / enter to confirm 等）。 */
+/** 现场交互证据：导航/确认提示（↑/↓ · enter / enter to continue 等）。 */
 function isInteractionHintLine(line: string): boolean {
   const lower = line.toLowerCase()
   if (line.includes('↑/↓') || line.includes('↑ ↓')) return true
   if (lower.includes('navigate') && (lower.includes('confirm') || lower.includes('select'))) return true
   if (lower.includes('enter to confirm') || lower.includes('enter to select')) return true
+  if (lower.includes('enter to continue') || lower.includes('press enter')) return true
   if (lower.includes('enter confirm') || lower.includes('enter select')) return true
   if (lower.includes('arrow keys') && lower.includes('select')) return true
   return false
 }
 
-/** 确认/选择提问提示（无游标的编号菜单必须有，否则视为正文步骤列表）。 */
-function hasConfirmationPrompt(body: string[]): boolean {
-  return body.some((line) => {
-    const lower = line.toLowerCase()
-    // 明确的现场提问：现在/是否/请选择/确认 + 提问标记。
-    if (line.includes('？') || line.includes('?')) {
-      if (lower.includes('confirm') || lower.includes('select') || lower.includes('choose')) return true
-      if (line.includes('是否') || line.includes('请选择') || line.includes('确认') || line.includes('选择')) return true
-    }
-    if (lower.includes('select an option') || lower.includes('choose an option')) return true
-    return false
-  })
-}
-
 /**
  * 从终端快照尾部提取菜单选项（确定性快路径）：
  * - 剥离底部键位说明栏 / 分隔线 / 状态栏；
- * - 识别编号菜单（`1. x` / `> 2. y`）：需块内游标或块后确认/选择提示，
- *   否则只是正文步骤列表（交 AI 慢路径处理，绝不默认首项高亮）；
- * - 识别无编号游标列表（恰 1 行游标 + 同级缩进的紧邻选项行）；
- * - 菜单块后只容许空行/键位提示/状态栏，跨过新正文的历史编号不当作菜单；
+ * - 识别编号菜单（`1. x` / `> 2. y`）：必须块内恰 1 行游标（可靠高亮），
+ *   否则只是正文步骤列表（交 AI 慢路径，绝不默认首项高亮）；
+ * - 识别无编号游标列表（恰 1 行游标 + 同级缩进的紧邻选项行 + 交互提示）；
+ * - 菜单块后只容许空行/键位提示/状态栏，跨过新正文的历史菜单不采纳；
  * - 疑似但证据不足（超 8 项、无选中信息）一律返回空数组（调用方走 AI 或
  *   通用选项），绝不截断成假菜单。
  */
@@ -189,8 +172,8 @@ export function extractMenuItemsFromSnapshot(snapshot: string): ExtractedMenuIte
 /**
  * 编号菜单块：需满足全部条件，否则返回 undefined（正文步骤列表交 AI）：
  * - 编号从 1 开始连续递增（真实菜单的编号序列）；
- * - 块内存在游标行（明确高亮），或无游标但有明确的确认/选择提问
- *  （「是否…？」「select an option」等；无可靠选中信息不默认首项）；
+ * - 块内恰有 1 行游标行（明确高亮）：无游标时无可靠选中信息，不默认首项，
+ *   交 AI 慢路径；多游标是解析噪声，同样拒绝；
  * - 块后只容许空行/键位提示/状态栏（跨过新正文的历史编号不当作菜单）。
  */
 function extractNumberedBlock(body: string[]): ExtractedMenuItem[] | undefined {
@@ -209,7 +192,7 @@ function extractNumberedBlock(body: string[]): ExtractedMenuItem[] | undefined {
   let firstRow = -1
   let lastRow = -1
   const flush = () => {
-    if (labels.length >= 2 && labels.length <= MAX_MENU_LINES) {
+    if (cursorIndex !== -2 && labels.length >= 2 && labels.length <= MAX_MENU_LINES) {
       candidates.push({ labels: [...labels].reverse(), numbers: [...numbers].reverse(), cursorIndex, firstRow, lastRow })
     }
     labels = []
@@ -229,7 +212,18 @@ function extractNumberedBlock(body: string[]): ExtractedMenuItem[] | undefined {
       flush()
       continue
     }
-    if (m.cursor !== undefined && cursorIndex < 0) cursorIndex = labels.length
+    if (m.cursor !== undefined) {
+      // 多游标是解析噪声（真实菜单只有一个高亮）：拒绝。
+      if (cursorIndex >= 0) {
+        labels = []
+        numbers = []
+        cursorIndex = -2 // 标记块已作废
+        firstRow = -1
+        lastRow = -1
+        continue
+      }
+      cursorIndex = labels.length
+    }
     labels.push(m.label)
     numbers.push(Number(m.number))
     firstRow = i
@@ -250,17 +244,19 @@ function extractNumberedBlock(body: string[]): ExtractedMenuItem[] | undefined {
   for (let i = 0; i < block.numbers.length; i += 1) {
     if (block.numbers[i] !== i + 1) return undefined
   }
-  const cursorSeen = block.cursorIndex >= 0
-  if (!cursorSeen && !hasConfirmationPrompt(body)) return undefined
-  const selectedIndex = cursorSeen ? block.labels.length - 1 - block.cursorIndex : 0
-  return buildMenuItems(block.labels, selectedIndex)
+  // 无游标：无可靠选中信息，不默认首项高亮（交 AI 慢路径）。
+  if (block.cursorIndex < 0) return undefined
+  return buildMenuItems(block.labels, block.labels.length - 1 - block.cursorIndex)
 }
 
 /**
  * 无编号游标列表：恰好 1 行游标前缀 + 现场交互证据（↑/↓ 导航 / enter 确认
  * 提示行，含已被剥离的尾部 hint）；紧邻上/下的候选行组成菜单块（>= 2 行）。
- * 候选行之间必须**同级缩进**（菜单兄弟项排版一致；层级不齐的是正文段落，
- * 如「> 建议\n    补充说明」的补充行），短非段落、非问句正文。
+ * - 候选行之间必须**同级缩进**（菜单兄弟项排版一致；层级不齐的是正文段落，
+ *   如「> 建议\n    补充说明」的补充行），短非段落、非问句正文；
+ * - 菜单块后只容许空行/键位提示/状态栏：旧菜单后跟新正文（如「现在请
+ *   确认？(y/n)」）时拒绝，不选历史菜单；
+ * - 达到 8 行上限仍未到块尾（后面还有候选行）时不截断成前 8 项，拒绝。
  */
 function extractCursorBlock(body: string[], hasInteractionHint: boolean): ExtractedMenuItem[] {
   if (!hasInteractionHint) return []
@@ -295,14 +291,27 @@ function extractCursorBlock(body: string[], hasInteractionHint: boolean): Extrac
     labels.unshift(sibling.label)
   }
   selectedIndex = labels.length - 1
-  // 向下收集。
-  for (let i = cursorAt + 1; i < body.length && blockIndexes.length < MAX_MENU_LINES; i += 1) {
+  // 向下收集；达到上限后仍有同级候选行时不截断（疑似长列表，交 AI）。
+  let truncatedByLimit = false
+  for (let i = cursorAt + 1; i < body.length; i += 1) {
     const line = body[i]!
     if (isHintOrDividerLine(line)) break
     const sibling = acceptSibling(line)
     if (sibling === undefined || matchCursorLine(line) !== undefined) break
+    if (blockIndexes.length >= MAX_MENU_LINES) {
+      truncatedByLimit = true
+      break
+    }
     blockIndexes.push(i)
     labels.push(sibling.label)
+  }
+  if (truncatedByLimit) return []
+  // 块后正文：菜单块之后只容许空行/键位提示/状态栏，新正文则整体拒绝。
+  const lastBlockRow = blockIndexes[blockIndexes.length - 1]!
+  for (let i = lastBlockRow + 1; i < body.length; i += 1) {
+    const line = body[i]!
+    if (line.trim() === '' || isHintOrDividerLine(line) || isInteractionHintLine(line)) continue
+    return []
   }
   if (labels.length < 2) return []
   return buildMenuItems(labels, selectedIndex)

@@ -1564,6 +1564,28 @@ test('单测E-4: 疑似不截断——超 8 项连续编号 / 编号不连续 / 
   // 无游标且无确认/选择提问：正文步骤（交 AI），不默认首项高亮。
   const noPrompt = ['  1. alpha', '  2. beta'].join('\n')
   assert.deepEqual(extractMenuItemsFromSnapshot(noPrompt), [], '无游标无确认提问交 AI')
+  // 无游标但带确认提问：同样不默认首项（无可靠选中信息一律交 AI）。
+  const numberedPrompt = ['Select an option:', '  1. Deploy to production', '  2. Deploy to staging'].join('\n')
+  assert.deepEqual(extractMenuItemsFromSnapshot(numberedPrompt), [], '无游标编号列表不默认首项高亮')
+  // 多游标编号块：解析噪声，拒绝。
+  const multiCursor = ['  > 1. Yes', '  > 2. No', '', '  ↑/↓ Navigate · enter Confirm'].join('\n')
+  assert.deepEqual(extractMenuItemsFromSnapshot(multiCursor), [], '多游标编号块拒绝')
+})
+
+test('单测E-4b: 菜单块后跟新正文拒绝；Press enter to continue 与装饰框线为合法提示', { timeout: 60_000 }, async () => {
+  const { extractMenuItemsFromSnapshot } = await import('../src/builtin-plugins/herdr/prompt-options.js')
+  // 旧 Agy 游标菜单后跟新正文 y/n 提问：整体拒绝，不选历史菜单。
+  const agyThenBody = ['> Yes, I trust this folder', '  No, exit', '', '  ↑/↓ Navigate · enter Confirm', '', '现在请确认？(y/n)'].join('\n')
+  assert.deepEqual(extractMenuItemsFromSnapshot(agyThenBody), [], '菜单块后新正文拒绝')
+  // Codex 'Press enter to continue' 是合法交互证据。
+  const codexHint = ['> Yes', '  No', '', 'Press enter to continue'].join('\n')
+  assert.equal(extractMenuItemsFromSnapshot(codexHint).length, 2, 'Press enter to continue 命中快路径')
+  // Codex 装饰框线（╭─ ─╮/╰─╯）是菜单装饰，不是正文。
+  const codexFramed = ['╭─ bash ─╮', '  > 1. Yes', '    2. Yes, and auto-accept', '    3. No', '╰────────╯', '  ↑/↓ Navigate · enter Confirm'].join('\n')
+  assert.equal(extractMenuItemsFromSnapshot(codexFramed).length, 3, '框线包围的编号菜单命中快路径')
+  // 超 8 项游标列表：不截断成前 8 项。
+  const tooManyCursor = ['> first', ...Array.from({ length: 10 }, (_, i) => `  option ${i + 2}`), '', '  ↑/↓ Navigate · enter Confirm'].join('\n')
+  assert.deepEqual(extractMenuItemsFromSnapshot(tooManyCursor), [], '超 8 项游标列表不截断')
 })
 
 test('单测E-5: AI labels 与 summary 在最终 AskSpec 边界统一脱敏', { timeout: 60_000 }, async () => {

@@ -302,6 +302,9 @@ function parseAskId(askId: string): { nodeId: string | undefined; paneId: string
   // 解析失败（如 '...:3916:r01' 或 '...:3916:r0' 无法匹配 ^\d+$，整体拒绝）。
   const retrySuffix = /:r([1-9][0-9]*)$/.exec(rest)
   if (retrySuffix !== null) {
+    // 超大重试整数（超出 safe integer）同样拒绝，与 seq 同一诚实性标准。
+    const retry = Number(retrySuffix[1])
+    if (!Number.isSafeInteger(retry)) return undefined
     rest = rest.slice(0, rest.length - retrySuffix[0].length)
   }
   const lastColon = rest.lastIndexOf(':')

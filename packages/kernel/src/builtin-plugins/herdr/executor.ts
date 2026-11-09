@@ -755,10 +755,11 @@ export class HerdrExecutor {
         }
       } catch (error) {
         // 外部取消立即传播；其余情况（含注入端口直接 throw）如实通知后回退。
+        // 诊断用固定安全文案，不回显上游 Error.message（可含 raw response/快照）。
         if (request.signal?.aborted) throw error
         aiAnalysis = undefined
-        aiDiagnostic = `阻塞快照 AI 解析异常（${error instanceof Error ? error.message.split('\n')[0]!.slice(0, 160) : String(error).split('\n')[0]!.slice(0, 160)}），已回退通用按键选项`
-        this.host.notify('阻塞快照 AI 解析未完成', this.deps.redact(aiDiagnostic), 'info')
+        aiDiagnostic = '阻塞快照 AI 解析异常（请求失败），已回退通用按键选项'
+        this.host.notify('阻塞快照 AI 解析未完成', aiDiagnostic, 'info')
       }
       // AI 等待期间终端可能自行推进：权威复核 seq，过期则不挂旧 AskDoc。
       const latest = await this.agentGet(targetOf(pane), pane.paneId, request.signal)

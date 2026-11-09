@@ -52,14 +52,25 @@ const MAX_OUTPUT_TOKENS = 640
 /** 提交给模型的快照尾部长度（与 AskDoc description 展示口径一致）。 */
 const SNAPSHOT_TAIL_CHARS = 1_500
 
-/** 非成功终态/超时的脱敏短诊断上限。 */
-const DIAGNOSTIC_MAX_LENGTH = 160
-
-/** 诊断脱敏：只保留错误 code 与单行裁剪后的 message，绝不内嵌响应或快照原文。 */
+/**
+ * 诊断分类：只输出固定安全中文，绝不回显上游 Error.message（SDK 错误可含
+ * raw response / 快照 / token），未知错误统一「请求失败」。
+ */
 function shortDiagnostic(error: unknown): string {
-  const message = (error instanceof Error ? error.message : String(error)).split('\n')[0]!.slice(0, DIAGNOSTIC_MAX_LENGTH)
-  const code = error instanceof HelmError ? error.code : 'error'
-  return `${code}: ${message}`
+  if (error instanceof HelmError) {
+    switch (error.code) {
+      case 'model_not_configured':
+        return 'model_not_configured: 会话未配置生效模型'
+      case 'model_not_found':
+        return 'model_not_found: 生效模型不在当前模型集合'
+      case 'aborted':
+        return 'aborted: 请求被取消'
+      default:
+        break
+    }
+  }
+  if (error instanceof Error && error.name === 'AbortError') return 'timeout: 请求被中止'
+  return '请求失败'
 }
 
 /** 分析结果：analysis 为 undefined 时 diagnostic 说明脱敏后的失败原因。 */
@@ -90,7 +101,7 @@ export function createBlockedSnapshotAnalyzer(
       // 外部预先取消：立即传播，不发起请求、不回退。
       input.signal?.throwIfAborted()
       const controller = new AbortController()
-      const onOuterAbort = () => controller.abort()
+      const onOuterAbort = () => controller.abort(input.signal?.reason)
       input.signal?.addEventListener('abort', onOuterAbort, { once: true })
 
       // deadline：单一 timer 同时驱动「中止底层请求」与「race 兜底结算」，
@@ -105,14 +116,19 @@ export function createBlockedSnapshotAnalyzer(
       }, timeoutMs)
 
       // 外部在途取消：独立 reject 通道立即传播（不等到 deadline）。
-      let onExternalAbort: ((error: HelmError) => void) | undefined
+      let onExternalAbort: ((error: unknown) => void) | undefined
       const externalAbortPromise = input.signal
         ? new Promise<never>((_, reject) => {
             onExternalAbort = (error) => reject(error)
           })
         : undefined
       const onExternalSignal = () => {
-        onExternalAbort?.(new HelmError('aborted', '阻塞快照 AI 解析被外部取消', 499))
+        // 外部取消优先于一切回退：保留 signal.reason 原始语义（不重造错误）。
+        onExternalAbort?.(
+          input.signal?.reason instanceof Error
+            ? input.signal.reason
+            : new HelmError('aborted', '阻塞快照 AI 解析被外部取消', 499),
+        )
       }
       if (input.signal !== undefined) {
         if (input.signal.aborted) onExternalSignal()
@@ -139,6 +155,9 @@ export function createBlockedSnapshotAnalyzer(
         const winner = await (externalAbortPromise === undefined
           ? Promise.race([request, deadlinePromise])
           : Promise.race([request, deadlinePromise, externalAbortPromise]))
+        // 外部取消优先于回退：cooperative port 抢先以 error 分支返回时，
+        // 先检查外部 signal——已取消则立即传播原始语义，不当 fallback 处理。
+        input.signal?.throwIfAborted()
         if (winner === 'deadline') {
           return {
             analysis: undefined,

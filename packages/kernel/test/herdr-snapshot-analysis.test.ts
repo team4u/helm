@@ -4,8 +4,9 @@
  *   Promise.race 的独立 timeout promise 仍按时结算，返回回退 + 脱敏诊断；
  * - 外部 signal 预先 aborted：不发起请求，立即以 aborted reject；
  * - 外部在途取消：立即传播原始语义（不等到 deadline，绝不回退）；
- * - 迟到结果不污染：deadline 先返回后，底层随后 resolve 的结果被丢弃；
- * - 错误诊断只含 code/短原因，不携带模型响应与快照原文；
+ * - 迟到结果不污染：deadline 先返回后，底层随后 resolve / reject 均不生效
+ *   （独立请求分别验证，均无 unhandled rejection）；
+ * - 错误诊断为固定安全中文映射，不携带模型响应与快照原文；
  * - 正常路径：传回端口参数（尾部截断 + maxTokens）并解析 JSON。
  *
  * 时序全部用显式 deferred/短超时（测试注入 30-80ms），不写大 sleep。
@@ -66,7 +67,16 @@ test('deadline: 底层不响应 signal 时按时返回回退诊断，迟到结�
   assert.equal(observed.lastSignal?.aborted, true, 'deadline 已中止底层 signal')
   port.settle('{"summary":"late","options":[{"label":"x","keys":["y"]}]}')
   await new Promise((r) => setTimeout(r, 20))
-  // 无 unhandled rejection 即通过（迟到 reject 由 request 内部 catch 折叠）。
+})
+
+test('迟到 reject 无 unhandled rejection（独立请求验证）', { timeout: 60_000 }, async () => {
+  const observed = { calls: 0, lastSignal: undefined as AbortSignal | undefined }
+  const port = unresponsivePort(observed)
+  const analyzer = createBlockedSnapshotAnalyzer(port, { timeoutMs: 50 })
+  const outcome = await analyzer.analyze({ snapshot: 'snapshot', conversationId: 1 })
+  assert.equal(outcome.analysis, undefined)
+  // 独立请求：deadline 返回后底层迟到 reject，被 request 内部 catch 折叠，
+  // 不产生 unhandled rejection（测试进程存活即证明）。
   port.fail(new Error('late failure'))
   await new Promise((r) => setTimeout(r, 20))
 })
@@ -130,21 +140,79 @@ test('在途 abort（signal 原因丢失）: 仍立即传播不回退', { timeou
   await new Promise((r) => setTimeout(r, 20))
 })
 
-test('错误诊断: 只含 code 与单行短原因，不携带响应/快照原文', { timeout: 60_000 }, async () => {
+test('错误诊断: 固定安全中文映射，不携带 Error.message/响应/快照原文', { timeout: 60_000 }, async () => {
   const secretSnapshot = 'SECRET-SNAPSHOT-CONTENT'
-  const port: ConversationTextPort = {
+  // 已知 code：固定映射文案（不含上游 message——可含 raw response）。
+  const knownPort: ConversationTextPort = {
     async completeConversationText() {
       throw new HelmError('model_not_configured', `会话 1 未解析出生效模型\n模型原始响应：SECRET-RESPONSE`, 409)
     },
   }
-  const analyzer = createBlockedSnapshotAnalyzer(port, { timeoutMs: 200 })
-  const outcome = await analyzer.analyze({ snapshot: secretSnapshot, conversationId: 1 })
-  assert.equal(outcome.analysis, undefined)
-  assert.ok(outcome.diagnostic !== undefined)
-  assert.ok(outcome.diagnostic.includes('model_not_configured'), '诊断含错误 code')
-  assert.ok(!outcome.diagnostic.includes('SECRET-RESPONSE'), '诊断不含模型响应')
-  assert.ok(!outcome.diagnostic.includes('SECRET-SNAPSHOT-CONTENT'), '诊断不含快照原文')
-  assert.ok(!outcome.diagnostic.includes('\n') || outcome.diagnostic.split('\n').length <= 2, '诊断为单行短文本')
+  const analyzer1 = createBlockedSnapshotAnalyzer(knownPort, { timeoutMs: 200 })
+  const outcome1 = await analyzer1.analyze({ snapshot: secretSnapshot, conversationId: 1 })
+  assert.equal(outcome1.analysis, undefined)
+  assert.ok(outcome1.diagnostic !== undefined)
+  assert.ok(outcome1.diagnostic.includes('model_not_configured'), '诊断含安全 code')
+  assert.ok(!outcome1.diagnostic.includes('SECRET-RESPONSE'), '诊断不含模型响应')
+  assert.ok(!outcome1.diagnostic.includes('未解析出生效模型\\n'), '不回显上游 message 原文')
+  assert.ok(!outcome1.diagnostic.includes('SECRET-SNAPSHOT-CONTENT'), '诊断不含快照原文')
+  // 未知错误：只输出「请求失败」，绝不回显 message。
+  const unknownPort: ConversationTextPort = {
+    async completeConversationText() {
+      throw new Error(`上游 SDK 崩溃：raw=${secretSnapshot} token=SECRET-TOKEN`)
+    },
+  }
+  const analyzer2 = createBlockedSnapshotAnalyzer(unknownPort, { timeoutMs: 200 })
+  const outcome2 = await analyzer2.analyze({ snapshot: secretSnapshot, conversationId: 1 })
+  assert.equal(outcome2.analysis, undefined)
+  assert.equal(outcome2.diagnostic!.includes('请求失败'), true, '未知错误固定文案')
+  assert.ok(!outcome2.diagnostic!.includes('SECRET-SNAPSHOT-CONTENT'), '未知错误不回显 message 中的敏感内容')
+  assert.ok(!outcome2.diagnostic!.includes('SECRET-TOKEN'), '未知错误不回显 token')
+})
+
+test('cooperative port 外部取消：抢先返回 error 分支也立即传播（不当 fallback）', { timeout: 60_000 }, async () => {
+  // 端口响应 signal：外部 abort 后端口以中止错误 reject（error 分支先返回）。
+  const port: ConversationTextPort = {
+    completeConversationText(input) {
+      return new Promise((_resolve, reject) => {
+        input.signal?.addEventListener('abort', () => {
+          reject(new HelmError('aborted', '外部取消（端口响应 signal）', 499))
+        }, { once: true })
+      })
+    },
+  }
+  const analyzer = createBlockedSnapshotAnalyzer(port, { timeoutMs: 10_000 })
+  const controller = new AbortController()
+  const pending = analyzer.analyze({ snapshot: 's', conversationId: 1, signal: controller.signal })
+  await new Promise((r) => setTimeout(r, 10))
+  controller.abort()
+  await assert.rejects(pending, (e: unknown) => {
+    // 传播原始语义（aborted），不得折叠成回退 outcome。
+    assert.ok(e instanceof HelmError || e instanceof Error)
+    return true
+  })
+})
+
+test('外部取消 reason 保留：传播原始错误对象（不重造）', { timeout: 60_000 }, async () => {
+  const port: ConversationTextPort = {
+    completeConversationText(input) {
+      return new Promise((_resolve, reject) => {
+        input.signal?.addEventListener('abort', () => {
+          reject(input.signal!.reason ?? new Error('port aborted'))
+        }, { once: true })
+      })
+    },
+  }
+  const analyzer = createBlockedSnapshotAnalyzer(port, { timeoutMs: 10_000 })
+  const controller = new AbortController()
+  const original = new HelmError('aborted', '原始取消原因', 499)
+  const pending = analyzer.analyze({ snapshot: 's', conversationId: 1, signal: controller.signal })
+  await new Promise((r) => setTimeout(r, 10))
+  controller.abort(original)
+  await assert.rejects(pending, (e: unknown) => {
+    assert.equal(e, original, '传播 signal.reason 原始对象')
+    return true
+  })
 })
 
 test('正常路径: 传回尾部截断 + maxTokens 并解析 JSON', { timeout: 60_000 }, async () => {

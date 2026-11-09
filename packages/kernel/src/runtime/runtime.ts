@@ -1216,8 +1216,12 @@ export class KernelRuntime {
     if (model === undefined) {
       throw new HelmError('model_not_found', `生效模型 '${effective}' 不在当前模型集合中（可能已热重载移除）`, 409, { model: effective })
     }
+    // profile 解析是异步间隙：调用前再检查取消，取消后不得发起请求。
+    input.signal?.throwIfAborted()
+    // maxTokens 属于请求 options（completeSimple 第三参），不是 Context 字段；
+    // tools 不传即无工具单次请求。
     const message = await this.modelsRegistry.models.completeSimple(model, {
-      systemPrompt: input.systemPrompt,
+      systemPrompt: this.stash.redact(input.systemPrompt),
       messages: [
         {
           role: 'user',
@@ -1225,8 +1229,10 @@ export class KernelRuntime {
           timestamp: Date.now(),
         },
       ],
+    }, {
+      signal: input.signal,
       ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
-    }, { signal: input.signal })
+    })
     input.signal?.throwIfAborted()
     if (message.stopReason !== 'stop') {
       throw new HelmError(
@@ -1236,10 +1242,11 @@ export class KernelRuntime {
         { stopReason: message.stopReason },
       )
     }
-    return message.content
+    const text = message.content
       .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
       .map((part) => part.text)
       .join('')
+    return this.stash.redact(text)
   }
 
   // ------------------------------------------------------------------
