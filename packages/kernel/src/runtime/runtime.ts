@@ -621,14 +621,8 @@ export class KernelRuntime {
         prepareInterruptedConversations: (ids) => this.prepareInterruptedConversations(ids),
         cleanupWorktree: (request, signal) => this.cleanupWorktree(request, signal),
         invokeAction: (pluginId, actionId, input, context) => this.plugins.invokeAction(pluginId, actionId, input, context),
-        // 完整 preflight（状态/scope/inputSchema 校验，无 handler 副作用）；宿主尚未
-        // 组装完成时仅同步回退到清单查询（不可 await 异步校验，不群发出假 idempotent）。
-        prepareAction: (pluginId, actionId, input, context) => {
-          if (this.pluginHost === undefined) {
-            return { idempotent: false }
-          }
-          return this.plugins.prepareAction(pluginId, actionId, input, context)
-        },
+        prepareAction: (pluginId, actionId, input, context) =>
+          this.plugins.prepareAction(pluginId, actionId, input, context),
         listActions: () => this.plugins.listActions(),
         // PluginHost 在插件侧绑定身份，后端必须接收明确的 pluginId。
         manageConversation: (id, pluginId) => this.manageConversation(id, pluginId),
