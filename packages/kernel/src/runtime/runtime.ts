@@ -81,7 +81,7 @@ import { buildManagedEnv, createBashTool, createEditTool, createReadArtifactTool
 import { runNativeSpawn, THINKING_LEVELS, validateJsonSchema } from './spawn.js'
 import { assertSchemaCompilable } from '../plugins/schema.js'
 import { WorktreeAllocator } from './worktree.js'
-import { gateResultMissingError, sanitizeExecutionInfo, sanitizeGateResult } from '../workflow/spawn-exec.js'
+import { gateResultMissingError, sanitizeExecutionInfo, sanitizeGateResult } from './spawn/spawn-exec.js'
 import { HelmPluginConfigStore } from './plugin-config-store.js'
 import { redactJsonValue } from '../redact.js'
 import { ConversationService } from './conversation-service.js'
@@ -598,6 +598,11 @@ export class KernelRuntime {
     await this.pluginConfig.load()
     const host = new PluginHost({
       dataDir: this.dataDir,
+      // 启动屏障：注册期只登记服务，全部插件注册完成后由 kernel.start()
+      // -> PluginHost.start() 统一 prepare+start，先于调度器 resume。
+      deferServices: true,
+      // 宿主统一脱敏（SecretStash）：插件间 ctx.host.invokeAction 输出过此脱敏。
+      redactText: (text) => this.stashService.redact(text),
       providers: {
         register: (provider, pluginId) => this.modelsRegistry.registerRuntimeProvider(provider, pluginId),
         assertIdle: (pluginId) => this.modelsRegistry.assertRuntimeProvidersIdle(pluginId),
@@ -752,8 +757,11 @@ export class KernelRuntime {
   /**
    * 插件宿主事件入口（ctx.host.emitEvent 后端）：发布到 SSE；type 为
    * plugin.changed 时同步热装插件工具；其余类型同步触发内部 onEvent 监听器。
+   * 可等待：内部监听器（含异步监听器）的完成被同步等待，错误上抛给发布方
+   * （如引擎结算等待 herdr 清理监听器；失败进入结算诊断而非后台 notification）。
+   * SSE publish 同步完成，其错误同样上抛（不再吞成 notification）。
    */
-  emitHostEvent(type: string, payload: unknown): void {
+  emitHostEvent(type: string, payload: unknown): MaybePromise<void> {
     if (type === 'plugin.changed') {
       this.refreshPluginTools()
       const envelope = payload as { type?: string; plugin?: unknown; ui?: unknown } | undefined
@@ -767,7 +775,7 @@ export class KernelRuntime {
       return
     }
     this.events.publish(type, payload)
-    this.dispatchInternalEvent(type, payload)
+    return this.dispatchInternalEvent(type, payload)
   }
 
   /**
@@ -789,11 +797,11 @@ export class KernelRuntime {
   }
 
   /**
-   * 触发一类宿主内部事件的全部监听器（快照执行；异常与 rejection 显式上报，
-   * 绝不静默吞掉）。emitEvent 契约为同步 void，异步监听器以后台链执行：
-   * 错误发布 notification 事件 + stderr 诊断（与 turn_settled 钩子错误同策略）。
+   * 触发一类宿主内部事件的全部监听器（同步等待：任一监听器 throw/reject
+   * 即中断后续监听器并上抛给发布方——发布方按自身语义处理，如 run 结算
+   * 写入诊断；绝不再 fire-and-forget 吞成后台 notification）。
    */
-  private dispatchInternalEvent(type: string, payload: unknown): void {
+  private dispatchInternalEvent(type: string, payload: unknown): MaybePromise<void> {
     const listeners = this.hostEventListeners.get(type)
     if (listeners === undefined || listeners.size === 0) return
     const run = (async () => {
@@ -801,28 +809,24 @@ export class KernelRuntime {
         await listener(payload)
       }
     })()
-    run.catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error)
-      process.stderr.write(`[helm] host event '${type}' listener failed: ${message}\n`)
-      this.events.publish('notification', {
-        type: 'notification',
-        level: 'error',
-        title: `事件监听失败（${type}）`,
-        body: message,
-      })
-    })
+    return run
   }
 
   /**
-   * 显式启动调度（幂等）：组合层（createHelm）在完成 assistant 插件注册、
-   * WorkflowService 实例化与 setWorkflowRunner 后调用，随后恢复的
-   * update_memory / load_skill / SubagentWorkflow 任务才不会因工具未注册
-   * 被判 missing/orphaned。独立 open（autoResume 默认 true）无需再调。
+   * 显式启动调度（幂等）：组合层（createHelm）在完成全部插件注册后调用。
+   * 内部先执行 PluginHost.start() 服务启动屏障（全局 prepare 先于任何 start，
+   * 防止服务 init 提交输入唤醒 SDK 时工具/插件未就绪），再 resume 调度器；
+   * 随后恢复的 update_memory / load_skill / SubagentWorkflow 任务不会因工具
+   * 未注册被判 missing/orphaned。独立 open（autoResume 默认 true）同样先走
+   * host.start 屏障（initialize 内已注册内核工具；插件服务即时启动模式无影响）。
    */
   async start(): Promise<void> {
     if (this.started) return
     if (this.startPromise) return this.startPromise
     this.startPromise = (async () => {
+      // 服务启动屏障：全部已启用插件 prepare + start 完成后才允许 resume。
+      // 屏障失败时保持未启动态（不 resume），错误如实上抛。
+      if (this.pluginHost) await this.pluginHost.start()
       this.harness.resume()
       this.startWatchdogTimer()
       this.started = true
@@ -848,9 +852,12 @@ export class KernelRuntime {
     this.watchdogTimer.unref()
   }
 
-  /** 恢复运行服务用：先持久标记旧任务取消，不唤醒 SDK 全局调度器。 */
+  /** 恢复运行服务用：先持久标记旧任务取消，不唤醒 SDK 全局调度器。
+   * ids 为空时不触及调度器状态检查：重新启用插件等无遗留任务的 prepare
+   * 不因调度器已恢复而被拒（无目标即无unsafe窗口）。 */
   async prepareInterruptedConversations(ids: number[]): Promise<void> {
     const targets = new Set(ids)
+    if (targets.size === 0) return
     const inspection = await this.harness.inspect(BACKGROUND_CONTEXT)
     if (inspection.scheduling !== 'paused') {
       throw new HelmError('recovery_already_started', '必须在调度器恢复之前标记中断子代理，拒绝不安全的恢复顺序', 409)
@@ -1072,6 +1079,8 @@ export class KernelRuntime {
           // 插件工具返回任意值：包成 SDK ToolExecutionResult 契约（content/text）。
           return pluginToolResult(result, (text) => runtime.stash.redact(text), {
             structuredOutputSchema: spec.structuredOutputSchema,
+            toolName: spec.name,
+            ...(typeof toolApi.callId === 'string' && toolApi.callId !== '' ? { callId: toolApi.callId } : {}),
           })
         },
       } as never) as unknown as {

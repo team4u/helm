@@ -73,17 +73,6 @@ CREATE TABLE IF NOT EXISTS helm_plugin_docs (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (plugin_id, name)
 );
-CREATE TABLE IF NOT EXISTS helm_workflow_runs (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  conversation_id INTEGER NOT NULL,
-  status TEXT NOT NULL DEFAULT 'running',
-  result TEXT,
-  error TEXT,
-  nodes TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
 CREATE TABLE IF NOT EXISTS helm_seq (
   key TEXT PRIMARY KEY,
   value INTEGER NOT NULL

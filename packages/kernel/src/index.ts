@@ -1,6 +1,5 @@
 export { createHelm, createHerdrNodeChannel, type HelmOptions } from './app.js';
 export { KernelRuntime } from './runtime/index.js';
-export { WorkflowService } from './workflow/index.js';
 export { createHubHandler, startHub } from './http/index.js';
 export {
   createEnvFabric,
@@ -29,7 +28,7 @@ export type {
 } from './env/index.js';
 export { createAssistantPlugin } from './builtin-plugins/assistant.js';
 export { createHerdrPlugin } from './builtin-plugins/herdr.js';
-export { createWorkflowPlugin, WORKFLOW_PLUGIN_ID, type WorkflowPluginOptions } from './builtin-plugins/workflow.js';
+export { createWorkflowPlugin, WORKFLOW_PLUGIN_ID } from './builtin-plugins/workflow.js';
 export {
   createSuperAgentPlugin,
   SUPERAGENT_PLUGIN_ID,

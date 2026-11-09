@@ -352,6 +352,12 @@ export interface PluginDocOptions {
 
 export interface PluginServiceSpec {
   id: string
+  /**
+   * 预备阶段（全局屏障）：宿主在启动任何服务 start() 之前，先等待全部已启用
+   * 服务的 prepare() 完成。用于必须先于调度器唤醒/输入提交的恢复标记
+   * （如编排引擎的 prepareRecovery）。热启用同样先 prepare 后 start。
+   */
+  prepare?(): MaybePromise<void>
   start(): MaybePromise<void>
   stop(): MaybePromise<void>
   /** 返回仍需本服务保活的任务标签；宿主在停用/卸载前同步检查。 */
@@ -462,7 +468,7 @@ export interface HelmHostApi {
   prepareInterruptedConversations(ids: number[]): Promise<void>
   /** 清理受管 Git 工作树。 */
   cleanupWorktree(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult>
-  /** 调用任意已启用插件的动作（输出已经过 JSON 校验与脱敏）。 */
+  /** 调用任意已启用插件的动作（输出已经过 JSON 校验与宿主统一脱敏）。 */
   invokeAction(
     pluginId: string,
     actionId: string,
@@ -479,9 +485,10 @@ export interface HelmHostApi {
   cancelAsk(askId: string, reason?: 'cancelled' | 'superseded'): Promise<void>
   /** 注册 askId -> 当前 stateChangeSeq 解析器（AskDoc CAS 乐观锁用，可为异步——真实水位需远端 IO）；返回注销函数。 */
   registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void
-  /** 订阅宿主通用事件（如 'workflow.settled'）；插件停用时自动解除。 */
+  /** 订阅宿主通用事件（如 'workflow.settled'）；插件停用时自动解除。监听器可异步，发布方会等待其完成。 */
   onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void
-  emitEvent(type: string, payload: unknown): void
+  /** 发布宿主事件；同步分发内部监听器（含异步监听器的等待），返回其完成情况（同步实现返回 void）。 */
+  emitEvent(type: string, payload: unknown): MaybePromise<void>
 }
 
 // ---------------------------------------------------------------------------

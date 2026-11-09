@@ -9,7 +9,7 @@
  *     特征真实回传模型上下文，原始 token 不回显。
  *  3. 输入 meta 全链（CLI --meta → helm.input entry → turn_settled）+ 详情分页
  *     首尾无丢 + conversation.entry/live 真实增量事件 + snapshot 扩展
- *     （ui/workflowRuns）+ plugin.changed 携带 ui + 纯脚本 workflow run --wait
+ *     （ui/pluginDocs）+ plugin.changed 携带 ui + 纯脚本 workflow run --wait
  *     与 workflow.updated 完成增量。
  *  4. 插件 doc 公私边界（私有 404 / 公共脱敏 marker / plugin.doc.updated 事件
  *     脱敏）、manageConversation 托管保护、scope 双过滤与 run_action 强制会话。
@@ -868,11 +868,14 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
       ', gate: ' + JSON.stringify(gateCmd) + ' })\n' +
       'return v'
 
-    // 结算链验证：run 终态经 builtin:workflow 插件动作（wait:true）返回；
-    // workflow.settled 事件恰好触发一次（settleGate 阻塞验证监听真实进入）。
-    const { run: started } = await env.runWorkflow({ script, conversationId: ROOT_CONVERSATION_ID, wait: true })
+    // 结算链验证：run 终态经 builtin:workflow 插件动作（wait:true）返回。
+    // emitEvent 可等待语义：引擎 onRunSettled 会 await workflow.settled 监听器
+    //（settleGate），因此必须先等监听器真实进入（settleEntered）再释放闸门，
+    // 最后才等待 run 终态——顺序颠倒会死等（运行等监听器、监听器等释放）。
+    const startedPromise = env.runWorkflow({ script, conversationId: ROOT_CONVERSATION_ID, wait: true })
     await waitFor(() => settleEntered === true)
     releaseSettle()
+    const { run: started } = await startedPromise
     const result = started.result as { answer: number; source?: string }
     assert.deepEqual(result, { answer: 42, source: 'external' }, '外部后端 handled 结果应回传脚本')
 

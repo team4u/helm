@@ -2,20 +2,20 @@
  * builtin:workflow：subagent / SubagentWorkflow / cleanup_worktree 编排插件。
  *
  * 职责：
- * - 封装 WorkflowService（DSL 编排引擎 + 后台单子代理运行记录），
- *   run 生命周期与公共文档 `runs`（WORKFLOW_RUNS_DOC）同步：前端 tool.view
- *   运行卡、workbench.panel 角标与 SSE 首帧 pluginDocs 都消费同一快照；
+ * - 封装编排引擎（engine/：DSL runtime + journal 重放 + WorkflowService），
+ *   引擎为插件自有资产（内核不 import 本目录）；跨 spawn 通用边界在
+ *   runtime/spawn（内核侧）；
+ * - 私有 state 经 ctx.doc 私有文档 `records`（插件 docs 命名空间，state.sqlite
+ *   持久），公共 `runs` 文档为 UI 投影（SSE 首帧直投 + tool.view/workbench 消费）；
+ *   无进程内 Map fallback、无 kernel.documentStore 注入；
  * - 后台子代理结算（kind=subagent）经 submitInput(requestId) 向父会话投递
  *   汇报（跨重启幂等；父会话已删除时 notification 通知）；
- * - 服务生命周期：start 执行 prepareRecovery + init（重启恢复遗留 running
- *   显式标 failed），stop 关停引擎；liveTasks/liveWorktrees 声明在途任务与
- *   工作树占用（阻断运行期停用 409 plugin_has_live_tasks 与误清理）；
+ * - 生命周期：service.prepare 执行 prepareRecovery（只落 abort 标记，不唤醒
+ *   调度器，必须在任何服务 start 之前——宿主全局 prepare 屏障保证）；
+ *   service.start 执行 init（终止遗留任务、标 failed、补发通知）与 close；
+ *   liveTasks/liveWorktrees 声明在途任务与工作树占用；
  * - 3 个模型工具（subagent / SubagentWorkflow / cleanup_worktree）与
  *   6 个动作（list/run/runs/inspect/abort/cleanup_worktree）五端复用。
- *
- * 恢复顺序纪律：prepareRecovery 必须在任何插件服务 start 提交输入唤醒
- * SDK 调度器之前执行——本插件在 createHelm 组合层首个注册（先于会提交
- * 输入的 assistant 等插件启用），service.start 内先 prepareRecovery 再 init。
  */
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -27,21 +27,15 @@ import {
   type AgentExecutionInfo,
   type AgentSpawnRequest,
   type PluginDefinition,
-  type WorkflowRunsDocState,
   type WorkflowRunSummary,
+  type WorkflowRunsDocState,
 } from '@helm/protocol'
-import { WorkflowService, type WorkflowStateStore } from '../workflow/index.js'
+import { WorkflowService } from './workflow/engine/index.js'
+import { normalizeWorkflowArgs } from './workflow/engine/runtime.js'
 import { executionOf, safeResultText, subagentFooter } from '../runtime/runtime-helpers.js'
 import { redactJsonValue } from '../redact.js'
 
 export { WORKFLOW_PLUGIN_ID }
-
-/** 插件可注入项；state 为 run 索引/summary 持久层（app 注入 kernel.documentStore）。 */
-export interface WorkflowPluginOptions {
-  redact?: (text: string) => string
-  /** run 索引/summary 持久层（app 注入 kernel.documentStore）；缺省为进程内不持久存储，仅供最小测试）。 */
-  state?: WorkflowStateStore
-}
 
 /**
  * clientRoot 兼容 src / dist 运行路径：编译后 dist/builtin-plugins/workflow.js
@@ -99,10 +93,11 @@ const workflowOutputSchema = {
   required: ['ok'],
 } as const
 
-const cleanupOutputSchema = {
+/** cleanup 成功分支（removed/worktreeId/path/branch/nodeId/branchDeleted 全为真实值）。 */
+const cleanupSuccessOutputSchema = {
   type: 'object',
   properties: {
-    ok: { type: 'boolean' },
+    ok: { type: 'boolean', const: true },
     removed: { type: 'boolean' },
     worktreeId: { type: 'string' },
     path: { type: 'string' },
@@ -113,55 +108,80 @@ const cleanupOutputSchema = {
   required: ['ok', 'removed', 'worktreeId', 'path', 'branch', 'nodeId', 'branchDeleted'],
 } as const
 
-export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): PluginDefinition {
+/** cleanup 失败分支：仅 ok:false + error，绝不伪造空 metadata。 */
+const cleanupErrorOutputSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean', const: false },
+    error: { type: 'string' },
+  },
+  required: ['ok', 'error'],
+  additionalProperties: false,
+} as const
+
+export function createWorkflowPlugin(): PluginDefinition {
   return {
     id: WORKFLOW_PLUGIN_ID,
     name: '工作流与子代理编排',
     version: '0.1.0',
     clientRoot: resolveClientRoot(),
     definePlugin(ctx) {
-      const redact = options.redact ?? ((text: string) => text)
-
       // ---- 公共文档：runs（SSE 首帧直投 + tool.view/workbench 订阅） ----
       const runsDoc = ctx.doc<WorkflowRunsDocState>(WORKFLOW_RUNS_DOC, { runs: [], byConversation: {} }, { public: true })
 
-      // stop 期间 doc 句柄已失效：跳过快照同步（引擎 close 后不再有新状态）。
+      // ---- 引擎私有 records 文档（键值 store：run 索引 + 每 run 记录） ----
+      // 私有 doc：不进公共快照/事件；引擎经此持久化，重启恢复读同一命名空间。
+      const records = ctx.doc<Record<string, unknown>>('records', {})
+
+      // 受控 stop 时序：teardown 先置 deactivating 会废黜 doc 句柄，但 service.stop
+      // 属宿主受控调用链——本插件在 stop 内最后再同步 runs 投影。为使 stop 期间的
+      // 最终落盘可写，引擎持有本周期 doc 句柄的直接引用（句柄在 stop 返回前仍由
+      // 本闭包保证不再被外部触发写）；旧周期（epoch 已递增）句柄被 ctx.doc 边界
+      // 拒绝，防停用残留写。
+      const stateStore = {
+        get<T>(key: string, initial: T): T {
+          const all = records.get()
+          const raw = all[key]
+          return raw === undefined ? initial : (structuredClone(raw) as T)
+        },
+        set<T>(key: string, value: T): void {
+          records.update((current) => ({ ...current, [key]: structuredClone(value) }))
+        },
+        flush: async (): Promise<void> => {
+          // ctx.doc 底层即 PluginDocStore（state.sqlite 排队持久化）；引擎各写点
+          // 后续业务自然冲刷，无独立 flush 端口——保持无操作即可（写入已同步镜像）。
+        },
+      }
+
+      /** 停止中标记：stop 之后的引擎回调不再触碰 runs 投影（doc 句柄已交还）。 */
       let stopping = false
 
       // ---- WorkflowService 实例（host 能力全部经 ctx.host 受信通道） ----
-      // state 缺省为进程内 Map（仅最小测试场景；生产路径 app.ts 注入
-      // kernel.documentStore——跨重启恢复依赖持久层，不注入即丢 run 历史）。
-      const memoryState = new Map<string, unknown>()
       const workflows = new WorkflowService({
         dataDir: ctx.dataDir,
-        state: options.state ?? {
-          get: <T>(key: string, initial: T): T => (memoryState.has(key) ? (memoryState.get(key) as T) : initial),
-          set: <T>(key: string, value: T): void => {
-            memoryState.set(key, value)
-          },
-        },
-        redact,
+        state: stateStore,
         host: {
           spawnAgent: (request) => ctx.host.spawnAgent(request),
           prepareInterruptedConversations: (ids) => ctx.host.prepareInterruptedConversations(ids),
           invokeAction: async (pluginId, actionId, input, invokeContext) => {
-            const result = await ctx.host.invokeAction(pluginId, actionId, input, invokeContext)
-            return redactJsonValue(result, redact)
+            // ctx.host.invokeAction 已是宿主统一脱敏出口（protocol 契约）。
+            return ctx.host.invokeAction(pluginId, actionId, input, invokeContext)
           },
           listActions: () => ctx.host.listActions(),
           getConversation: (id) => ctx.host.getConversation(id),
           abortConversation: (id) => ctx.host.abortConversation(id),
-          emitEvent: (type, payload) => {
+          emitEvent: async (type, payload) => {
             // 每次 workflow.updated（run 新增/节点状态变化）同步公共文档；
             // 事件继续向 SSE 透传（前端时间线与运行卡同帧更新）。
             if (type === 'workflow.updated') syncRunsDoc()
-            ctx.host.emitEvent(type, payload)
+            await ctx.host.emitEvent(type, payload)
           },
           onRunSettled: async (summary) => {
             syncRunsDoc()
-            // workflow.settled：herdr 双轨保活清理等插件监听（错误在宿主事件
-            // 派发层显式上报，绝不静默吞）。
-            ctx.host.emitEvent('workflow.settled', summary)
+            // workflow.settled：herdr 双轨保活清理等插件监听；emitEvent 可等待，
+            // 清理监听器的错误经此上抛给引擎结算链（写入 run 诊断，不吞成
+            // 后台 notification）。
+            await ctx.host.emitEvent('workflow.settled', summary)
           },
           onBackgroundAgentSettled: async (summary, info) => {
             syncRunsDoc()
@@ -211,11 +231,17 @@ export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): Plugi
         try {
           ctx.host.getConversation(info.parentConversationId)
           parentExists = true
-        } catch {
-          parentExists = false
+        } catch (error) {
+          // 仅「会话不存在」走 notification 降级；其他故障（store/IO/权限）上抛，
+          // 由引擎 outbox（notifiedAt 不置位）下次 init 补发，绝不吞错。
+          if (error instanceof HelmError && error.code === 'not_found') {
+            parentExists = false
+          } else {
+            throw error
+          }
         }
         if (!parentExists) {
-          ctx.host.emitEvent('notification', {
+          await ctx.host.emitEvent('notification', {
             type: 'notification',
             level: 'warning',
             title: '后台任务已结束',
@@ -233,7 +259,7 @@ export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): Plugi
         }
         await ctx.host.submitInput(
           info.parentConversationId,
-          `后台子代理任务已结算。以下为运行 ${run.id} 的结果数据：\n${safeResultText(report, redact)}`,
+          `后台子代理任务已结算。以下为运行 ${run.id} 的结果数据：\n${safeResultText(report)}`,
           {
             origin: 'agent',
             whenBusy: 'followUp',
@@ -246,16 +272,35 @@ export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): Plugi
       // ---- service：workflow-engine 生命周期 ----
       ctx.service({
         id: 'workflow-engine',
-        async start() {
-          // prepareRecovery 先于 init（也先于任何会提交输入的插件服务 start——
-          // 本插件在组合层首个注册启用，顺序由 createHelm 保证）。
+        async prepare() {
+          // 恢复阶段一（全局 prepare 屏障，先于任何服务 start）：只读遗留记录并
+          // 经 prepareInterruptedConversations 落持久 abort 标记，不唤醒 SDK
+          // 调度器、不提交输入——此时其他插件（assistant/herdr/外部）与工具尚未
+          // 注册完成，任何输入提交都会产生 orphan 回合。
           await workflows.prepareRecovery()
+        },
+        async start() {
+          // 恢复阶段二（全部插件 prepare 完成后）：init 终止遗留子任务、把
+          // running 显式标 failed(interrupted)、补发父会话通知（此刻工具已注册，
+          // 补发输入消费安全）。
           await workflows.init()
           syncRunsDoc()
         },
         async stop() {
+          // 受控停止：先置 stopping 拦截新回调，引擎 close 等待在途 run 终态并
+          // 落最终记录（写私有 records doc），随后最终同步 runs 投影——投影写入
+          // 在 stop 返回前完成，teardown 之后的 deactivating 废黜不影响这些写。
           stopping = true
-          await workflows.close()
+          try {
+            await workflows.close()
+          } finally {
+            try {
+              syncRunsDoc()
+            } catch {
+              // 投影是观察面：close 后引擎无新状态，失败仅意味着最终帧不同步；
+              // 引擎终态已持久在 records，下次启动 init 后同步。不吞 close 错误。
+            }
+          }
         },
         liveTasks() {
           return workflows
@@ -357,10 +402,10 @@ export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): Plugi
                 status: started.run.status,
                 ...(started.execution !== undefined ? { execution: executionOf(started.execution) } : {}),
               }
-              const footer = redact(subagentFooter(undefined, started.execution))
+              const footer = subagentFooter(undefined, started.execution)
               return {
-                output: [{ type: 'text', text: `${safeResultText(payload, redact)}${footer === '' ? '' : `\n${footer}`}` }],
-                structuredOutput: redactJsonValue(payload, redact),
+                output: [{ type: 'text', text: `${safeResultText(payload)}${footer === '' ? '' : `\n${footer}`}` }],
+                structuredOutput: payload,
               }
             }
             const result = await ctx.host.spawnAgent(request)
@@ -369,23 +414,23 @@ export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): Plugi
               result,
               ...(resolved !== undefined ? { execution: executionOf(resolved) } : {}),
             }
-            const body = safeResultText(payload, redact)
-            const footer = redact(subagentFooter(a['resume'] !== undefined ? String(a['resume']) : undefined, resolved))
+            const body = safeResultText(payload)
+            const footer = subagentFooter(a['resume'] !== undefined ? String(a['resume']) : undefined, resolved)
             return {
               output: [{ type: 'text', text: footer === '' ? body : `${body}\n${footer}` }],
-              structuredOutput: redactJsonValue(payload, redact),
+              structuredOutput: payload,
             }
           } catch (error) {
-            const message = redact(error instanceof Error ? error.message : String(error))
-            const footer = redact(subagentFooter(a['resume'] !== undefined ? String(a['resume']) : undefined, resolved))
+            const message = error instanceof Error ? error.message : String(error)
+            const footer = subagentFooter(a['resume'] !== undefined ? String(a['resume']) : undefined, resolved)
             return {
               output: [{ type: 'text', text: footer === '' ? `subagent_failed: ${message}` : `subagent_failed: ${message}\n${footer}` }],
               isError: true,
-              structuredOutput: redactJsonValue({
+              structuredOutput: {
                 ok: false,
                 result: message,
                 ...(resolved !== undefined ? { execution: executionOf(resolved) } : {}),
-              }, redact),
+              },
             }
           }
         },
@@ -395,14 +440,14 @@ export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): Plugi
       ctx.tool({
         name: 'SubagentWorkflow',
         description:
-          '执行一个 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本。返回真实执行 summary（runId/status/nodes/result）。',
+          '执行一个 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本（字符串形 JSON 自动解包）。返回真实执行 summary（runId/status/nodes/result）。',
         inputSchema: {
           type: 'object',
           properties: {
             script: { type: 'string', description: '编排脚本源码（内联）' },
             scriptPath: { type: 'string', description: '编排脚本文件路径（与 script、name 择一）' },
             name: { type: 'string', description: '已保存工作流名（与 script、scriptPath 择一）' },
-            args: { description: '传给脚本的任意 JSON args（对象/数组/标量均可，原样透传）' },
+            args: { description: '传给脚本的任意 JSON args（对象/数组/标量均可，字符串形 JSON 自动解包）' },
             resumeFromRunId: { type: 'string', description: '断点恢复的既有 runId（可选）' },
           },
           additionalProperties: false,
@@ -414,7 +459,9 @@ export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): Plugi
           if (a['script'] !== undefined) input['script'] = String(a['script'])
           if (a['scriptPath'] !== undefined) input['scriptPath'] = String(a['scriptPath'])
           if (a['name'] !== undefined) input['name'] = String(a['name'])
-          if (a['args'] !== undefined) input['args'] = a['args']
+          // 工具 args 归一化（原内核 kernel-tools 行为迁入插件）：模型常把 JSON
+          // 对象序列化成字符串传入，这里统一解包（双层/标量原样语义不变）。
+          if (a['args'] !== undefined) input['args'] = normalizeWorkflowArgs(a['args'])
           if (a['resumeFromRunId'] !== undefined) input['resumeFromRunId'] = String(a['resumeFromRunId'])
           try {
             const started = await workflows.run(
@@ -427,13 +474,13 @@ export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): Plugi
             context.signal?.addEventListener('abort', onAbort, { once: true })
             try {
               await workflows.wait(started.id).catch(() => {})
-              return workflowResultEnvelope(workflows.getRun(started.id), redact)
+              return workflowResultEnvelope(workflows.getRun(started.id))
             } finally {
               context.signal?.removeEventListener('abort', onAbort)
               syncRunsDoc()
             }
           } catch (error) {
-            const message = redact(error instanceof Error ? error.message : String(error))
+            const message = error instanceof Error ? error.message : String(error)
             return {
               output: [{ type: 'text', text: `workflow_failed: ${message}` }],
               isError: true,
@@ -460,14 +507,19 @@ export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): Plugi
           },
           additionalProperties: false,
         },
-        structuredOutputSchema: cleanupOutputSchema,
+        structuredOutputSchema: { anyOf: [cleanupSuccessOutputSchema, cleanupErrorOutputSchema] } as unknown as typeof cleanupSuccessOutputSchema,
         async execute(args, context) {
           const a = args as Record<string, unknown>
+          // --current 语义：无任何显式选择器时以当前会话为选择器（子会话自身
+          // 的 worktree）；显式 worktreeId/path/nodeId 永不被上下文覆盖。
+          const hasExplicit = a['worktreeId'] !== undefined || a['path'] !== undefined || a['conversationId'] !== undefined
+          const selectorConversationId =
+            a['conversationId'] !== undefined ? Number(a['conversationId']) : hasExplicit ? undefined : context.conversationId
           try {
             const result = await ctx.host.cleanupWorktree(
               {
                 ...(a['worktreeId'] !== undefined ? { worktreeId: String(a['worktreeId']) } : {}),
-                ...(a['conversationId'] !== undefined ? { conversationId: Number(a['conversationId']) } : {}),
+                ...(selectorConversationId !== undefined ? { conversationId: selectorConversationId } : {}),
                 ...(a['path'] !== undefined ? { path: String(a['path']) } : {}),
                 ...(a['nodeId'] !== undefined ? { nodeId: String(a['nodeId']) } : {}),
                 ...(a['deleteBranch'] !== undefined ? { deleteBranch: a['deleteBranch'] === true } : {}),
@@ -483,11 +535,12 @@ export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): Plugi
               structuredOutput: { ok: true, ...result },
             }
           } catch (error) {
-            const message = redact(error instanceof Error ? error.message : String(error))
+            // 错误分支仅 ok:false + error：绝不伪造空 worktreeId/path/branch/nodeId。
+            const message = error instanceof Error ? error.message : String(error)
             return {
               output: [{ type: 'text', text: `cleanup_worktree 失败：${message}` }],
               isError: true,
-              structuredOutput: { ok: false, removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false, error: message },
+              structuredOutput: { ok: false, error: message },
             }
           }
         },
@@ -540,8 +593,21 @@ export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): Plugi
         },
         async handler(input, context) {
           const { wait, ...request } = input as { wait?: boolean } & Record<string, unknown>
-          // 会话上下文（--current / run_action / workflow）缺省作为目标会话；
-          // 显式 input.conversationId 优先。
+          // 显式 input.conversationId 与调用上下文（--current / run_action / workflow）
+          // 同时存在且不一致时显式拒绝：静默选边等于在调用方不知情下改投目标。
+          if (
+            request.conversationId !== undefined &&
+            context.conversationId !== undefined &&
+            request.conversationId !== context.conversationId
+          ) {
+            throw new HelmError(
+              'validation_error',
+              `conversationId 冲突：输入指定 ${String(request.conversationId)} 与调用上下文 ${context.conversationId} 不一致，请显式统一`,
+              400,
+              { inputConversationId: request.conversationId, contextConversationId: context.conversationId },
+            )
+          }
+          // 会话上下文缺省作为目标会话；显式 input.conversationId 优先。
           if (request.conversationId === undefined && context.conversationId !== undefined) {
             request.conversationId = context.conversationId
           }
@@ -681,7 +747,35 @@ export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): Plugi
         },
         cli: { command: ['worktrees', 'cleanup'], description: '清理受管 Git 工作树' },
         async handler(input, context) {
-          return ctx.host.cleanupWorktree(input as Record<string, never>, context.signal)
+          const a = input as Record<string, unknown>
+          // 与工具同款语义：显式 conversationId 与上下文冲突拒绝；无任何显式
+          // 选择器时（--current）以调用上下文会话为选择器；显式选择器不覆盖。
+          if (
+            a['conversationId'] !== undefined &&
+            context.conversationId !== undefined &&
+            a['conversationId'] !== context.conversationId
+          ) {
+            throw new HelmError(
+              'validation_error',
+              `conversationId 冲突：输入指定 ${String(a['conversationId'])} 与调用上下文 ${context.conversationId} 不一致，请显式统一`,
+              400,
+              { inputConversationId: a['conversationId'], contextConversationId: context.conversationId },
+            )
+          }
+          const hasExplicit = a['worktreeId'] !== undefined || a['path'] !== undefined || a['conversationId'] !== undefined
+          const selectorConversationId =
+            a['conversationId'] !== undefined ? Number(a['conversationId']) : hasExplicit ? undefined : context.conversationId
+          return ctx.host.cleanupWorktree(
+            {
+              ...(a['worktreeId'] !== undefined ? { worktreeId: String(a['worktreeId']) } : {}),
+              ...(selectorConversationId !== undefined ? { conversationId: selectorConversationId } : {}),
+              ...(a['path'] !== undefined ? { path: String(a['path']) } : {}),
+              ...(a['nodeId'] !== undefined ? { nodeId: String(a['nodeId']) } : {}),
+              ...(a['deleteBranch'] !== undefined ? { deleteBranch: a['deleteBranch'] === true } : {}),
+              ...(a['force'] !== undefined ? { force: a['force'] === true } : {}),
+            } as Record<string, never>,
+            context.signal,
+          )
         },
       })
 
@@ -706,7 +800,7 @@ export function createWorkflowPlugin(options: WorkflowPluginOptions = {}): Plugi
         icon: 'git-branch',
         order: 10,
         docs: ['runs'],
-        badge: { doc: 'runs', byConversationField: 'byConversation' },
+        badge: { doc: WORKFLOW_RUNS_DOC, byConversationField: 'byConversation' },
         client: { module: 'index.tsx', export: 'WorkflowWorkbenchPanel' },
       })
     },
@@ -727,15 +821,19 @@ function envelopeError(text: string, result: string): {
 }
 
 /** workflow run -> 工具结果信封（failed/aborted 置 isError）。 */
-function workflowResultEnvelope(run: WorkflowRunSummary, redact: (text: string) => string): {
+function workflowResultEnvelope(run: WorkflowRunSummary): {
   output: Array<{ type: 'text'; text: string }>
   isError?: boolean
   structuredOutput: unknown
 } {
   const failed = run.status === 'failed' || run.status === 'aborted'
   return {
-    output: [{ type: 'text', text: safeResultText(run, redact) }],
+    output: [{ type: 'text', text: safeResultText(run) }],
     ...(failed ? { isError: true } : {}),
     structuredOutput: { ok: !failed, summary: run },
   }
 }
+
+// 引擎服务与运行时不再需要外部脱敏注入（宿主统一脱敏已覆盖边界）；
+// redactJsonValue 保留供未来插件内投影使用（当前 runs 投影为纯 summary）。
+void redactJsonValue

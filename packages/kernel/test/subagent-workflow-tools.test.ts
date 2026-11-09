@@ -127,7 +127,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       watchdogIntervalMs: 0,
     })
     try {
-      await kernel.plugins.register(createWorkflowPlugin({ state: memoryState() }))
+      await kernel.plugins.register(createWorkflowPlugin())
       const spawns: AgentSpawnRequest[] = []
       await kernel.plugins.register(spawnObserver(spawns))
 
@@ -217,7 +217,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       watchdogIntervalMs: 0,
     })
     try {
-      await kernel.plugins.register(createWorkflowPlugin({ state: memoryState() }))
+      await kernel.plugins.register(createWorkflowPlugin())
       const spawns: AgentSpawnRequest[] = []
       await kernel.plugins.register(spawnObserver(spawns))
 
@@ -273,7 +273,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       watchdogIntervalMs: 0,
     })
     try {
-      await kernel.plugins.register(createWorkflowPlugin({ state: memoryState() }))
+      await kernel.plugins.register(createWorkflowPlugin())
       const spawns: AgentSpawnRequest[] = []
       await kernel.plugins.register(spawnObserver(spawns))
 
@@ -316,7 +316,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       watchdogIntervalMs: 0,
     })
     try {
-      await kernel.plugins.register(createWorkflowPlugin({ state: memoryState() }))
+      await kernel.plugins.register(createWorkflowPlugin())
       // 外部后端语义（如 builtin:herdr）：接管执行并经 onResolved 回传元数据。
       await kernel.plugins.register({
         id: 'test:external-backend',
@@ -536,10 +536,12 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       assert.equal(parsedSummary.result?.n, 42, 'args.n 真实保留')
       assert.deepEqual(parsedSummary.result?.topics, ['星辰', '大海'])
 
-      // 验证持久化层：state.sqlite 中的 run record 内 args 必须为真实 dict 而非 string
+      // 验证持久化层：插件私有 records 文档（PluginDocStore 键
+      // 'builtin:workflow:records'）中 run record 的 args 必须为真实 dict 而非 string。
       await app.kernel.documentStore.flush?.()
-      const persistedRecord = app.kernel.documentStore.get<{ args?: unknown } | null>(`workflow/run/${runId}`, null)
-      assert.ok(persistedRecord, 'run 应在 documentStore 中落盘')
+      const recordsDoc = app.kernel.documentStore.get<Record<string, { args?: unknown } | undefined>>('builtin:workflow:records', {})
+      const persistedRecord = recordsDoc[`workflow/run/${runId}`] ?? null
+      assert.ok(persistedRecord, 'run 应在插件 records 文档中落盘')
       assert.equal(typeof persistedRecord.args, 'object', '持久化 args 必须为真对象而非字符串')
       assert.deepEqual(persistedRecord.args, { topics: ['星辰', '大海'], n: 42 })
 
@@ -569,8 +571,9 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       const parsedSummary2 = JSON.parse(text2) as { status: string; result?: unknown }
       assert.equal(parsedSummary2.status, 'completed')
       assert.deepEqual(parsedSummary2.result, [20, 40], '双重序列化自动解包，map 正常计算')
-      const persistedRecord2 = app.kernel.documentStore.get<{ args?: unknown } | null>(`workflow/run/${runId2}`, null)
-      assert.ok(persistedRecord2, 'run2 应在 documentStore 中落盘')
+      const recordsDoc2 = app.kernel.documentStore.get<Record<string, { args?: unknown } | undefined>>('builtin:workflow:records', {})
+      const persistedRecord2 = recordsDoc2[`workflow/run/${runId2}`] ?? null
+      assert.ok(persistedRecord2, 'run2 应在插件 records 文档中落盘')
       assert.equal(typeof persistedRecord2.args, 'object', '持久化 args 必须为真对象')
       assert.deepEqual(persistedRecord2.args, { items: [10, 20] })
     } finally {

@@ -44,7 +44,7 @@ import {
   redactGateResult,
   sanitizeExecutionInfo,
   sanitizeGateResult,
-} from './spawn-exec.js'
+} from '../../../runtime/spawn/spawn-exec.js'
 import {
   MAX_SCRIPT_LENGTH,
   normalizeWorkflowArgs,

@@ -185,6 +185,10 @@ test('插件停用进入服务 stop 后拒绝新模型刷新，避免预检后�
         ctx.service({ id: 'fixture', start() {}, async stop() { stopEntered(); await stopGate } })
       },
     })
+    // runtime 自建 host 为 deferServices 模式：显式 start 后服务才真正启动
+    //（生产路径 kernel.start 在插件全部注册后统一调用），随后 disable 才会
+    // 进入服务 stop（stop 与 start 配对）。
+    await kernel.start()
     disabling = kernel.plugins.disable('test:provider-stop')
     await stopping
     await assert.rejects(kernel.refreshModels({ providers: ['stopping-provider'] }), { code: 'plugin_disabled' })
