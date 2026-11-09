@@ -9,6 +9,7 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { HelmIcon } from '../lib/icons.js'
+import { formatCompactTimestamp } from '../lib/format.js'
 import { useHelmStore, usePluginDoc } from '../lib/store-context.js'
 import { formatSpecText } from '../ui/spec-normalize.js'
 
@@ -57,13 +58,6 @@ const OUTCOME_LABEL: Record<string, { label: string; tone: string }> = {
   keepalive: { label: '保活', tone: 'neutral' },
   failed: { label: '失败', tone: 'err' },
   settled: { label: '已收尾', tone: 'ok' },
-}
-
-function formatTime(ms: number): string {
-  if (!ms) return '未知'
-  const date = new Date(ms)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
 export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScreenProps): ReactNode {
@@ -197,7 +191,7 @@ export function HerdrOverviewScreen({ isSplit, onCloseSplit }: HerdrOverviewScre
         <div className="jr-callout jr-callout-warn" style={{ margin: '10px 16px 0' }}>
           <HelmIcon name="alert-triangle" size={13} style={{ flexShrink: 0, marginTop: 2 }} />
           <span>
-            Herdr 连接降级或不可达：{doc?.error ?? '未知错误'}（以下为最后已知快照，时间 {formatTime(doc?.updatedAt ?? 0)}）
+            Herdr 连接降级或不可达：{doc?.error ?? '未知错误'}（以下为最后已知快照，时间 {formatCompactTimestamp(doc?.updatedAt ?? 0)}）
           </span>
         </div>
       )}

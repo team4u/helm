@@ -22,8 +22,11 @@ import {
   type ComposerDraftVersion,
   type EnvDraft,
   type PendingAttachment,
+  type SessionEnvBlocker,
+  ENV_BLOCKER_CLEAR,
 } from './composer-model.js'
-import { formatBytes, lastEditableHumanInput } from './timeline-model.js'
+import { lastEditableHumanInput } from './timeline-model.js'
+import { formatBytes } from '../lib/format.js'
 
 export interface ComposerProps {
   conversation: ConversationSummary
@@ -372,14 +375,6 @@ function CommandPopover({
 // 空会话起始环境配置条（开聊即锁定）
 // ---------------------------------------------------------------------------
 
-export interface SessionEnvBlocker {
-  /** 环境草稿未保存（或正在保存）时为 true：Composer 必须阻止发送。 */
-  blocked: boolean
-  /** 阻塞原因（用于禁用按钮的 title 提示）。 */
-  reason: string | null
-}
-
-const ENV_BLOCKER_CLEAR: SessionEnvBlocker = { blocked: false, reason: null }
 
 /** 空会话（或 /reset 后未再发消息）时展示：草稿式配置起始执行节点与工作目录。
  * 选节点只进入草稿不立即提交；跨节点切换清空 cwd 草稿（协议无节点默认目录，绝不沿用旧节点路径）；

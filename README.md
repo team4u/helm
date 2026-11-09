@@ -141,7 +141,7 @@ pnpm helm send "请列出当前项目的所有核心包" --wait
 ### 6. 执行首个确定性工作流
 
 ```bash
-pnpm helm workflows run hello-orchestra.workflow.js --input '{"word":"开源"}' --wait
+pnpm helm workflows run demo/hello-orchestra.workflow.js --input '{"word":"开源"}' --wait
 ```
 
 ---
@@ -155,7 +155,7 @@ Helm 抛弃沉重的配置 DSL。开发者使用标准 JavaScript 编写工作�
 执行遇到意外中断后，系统自动跳过已完成步骤，恢复未完成任务。
 
 ```javascript
-// hello-orchestra.workflow.js
+// demo/hello-orchestra.workflow.js
 export const meta = {
   name: "hello-orchestra",
   description: "最小编排演示：并行两路 + 汇总",
@@ -179,7 +179,7 @@ return { replies, summary }
 执行工作流命令：
 
 ```bash
-pnpm helm workflows run hello-orchestra.workflow.js --input '{"word":"创新"}' --wait --json
+pnpm helm workflows run demo/hello-orchestra.workflow.js --input '{"word":"创新"}' --wait --json
 ```
 
 ### 2. 跨平台执行底座 `EnvFabric`

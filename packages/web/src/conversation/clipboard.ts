@@ -1,11 +1,6 @@
 /**
- * MarkdownView / 时间线共用的剪贴板与文本工具（纯 .ts，Fast Refresh 友好）。
+ * 时间线剪贴板工具（纯 .ts，Fast Refresh 友好）。
  */
-
-/** 长文本折叠：单行轨迹/代码块输出预览统一截断。 */
-export function clip(text: string, max = 4000): string {
-  return text.length > max ? `${text.slice(0, max)}\n…（已截断，共 ${text.length} 字符）` : text
-}
 
 export async function copyToClipboard(text: string): Promise<boolean> {
   // 1. 优先尝试现代 Clipboard API（仅在 HTTPS 或 localhost 等安全上下文生效）

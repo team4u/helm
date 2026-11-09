@@ -1,5 +1,7 @@
 import type { AskSpec, ConversationEntry, ConversationLive, ConversationSummary, WorkflowRunSummary } from '@helm/protocol'
-import { buildSubagentStreamLines, formatDurationMs, toolSummaryText, type ToolTraceStatus } from './timeline-model.js'
+import { buildSubagentStreamLines } from './subagent-model.js'
+import { formatDurationMs } from '../lib/format.js'
+import { toolSummaryText, type ToolTraceStatus } from './timeline-model.js'
 
 /** 子会话卡片状态：优先真实 summary.status，无 summary 再退回父工具 toolStatus。 */
 export type SubagentCardStatus = 'working' | 'blocked' | 'error' | 'done' | 'pending'

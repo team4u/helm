@@ -73,7 +73,7 @@ export const meta = {
 
 ## 完整示例：双路翻译与汇总
 
-创建示例文件 `hello-orchestra.workflow.js`：
+创建示例文件 `hello-orchestra.workflow.js`（仓库中已附带同款演示：`demo/hello-orchestra.workflow.js`）：
 
 ```javascript
 export const meta = {

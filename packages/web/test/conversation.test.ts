@@ -8,24 +8,25 @@ import type { ConversationEntry, ConversationLive, WorkflowRunSummary } from '@h
 import { conversationsApi, ApiClientError } from '../src/lib/api.js'
 import {
   buildSubagentStreamLines,
-  buildTimelineItems,
   collectLatestSubagentToolKeys,
+  resolveSubagentConversationId,
+  resolveSubagentExecutionMeta,
+  resolveWorkflowRunForTool,
+} from '../src/conversation/subagent-model.js'
+import {
+  buildTimelineItems,
   detectArtifactRef,
   filterRewoundEntries,
   findToolView,
-  formatBytes,
-  formatDurationMs,
   isFoldableStep,
   lastEditableHumanInput,
   lastHumanTextOf,
   matchTimelineRenderer,
   parseHelmInputData,
-  resolveSubagentConversationId,
-  resolveSubagentExecutionMeta,
-  resolveWorkflowRunForTool,
   toolSummaryText,
   type ToolTrace,
 } from '../src/conversation/timeline-model.js'
+import { formatBytes, formatDurationMs } from '../src/lib/format.js'
 
 function entry(id: string, kind: string, extra: { data?: unknown; model?: unknown[] } = {}): ConversationEntry {
   return { id, kind, ...(extra.data !== undefined ? { data: extra.data } : {}), ...(extra.model !== undefined ? { model: extra.model } : {}) }
@@ -513,8 +514,8 @@ test('lastHumanTextOf 与格式化工具', { timeout: 60_000 }, () => {
   assert.equal(lastHumanTextOf([]), undefined)
 
   assert.equal(formatBytes(512), '512 B')
-  assert.equal(formatBytes(2048), '2.0 KB')
-  assert.equal(formatBytes(5 * 1024 * 1024), '5.0 MB')
+  assert.equal(formatBytes(2048), '2.0 KiB')
+  assert.equal(formatBytes(5 * 1024 * 1024), '5.0 MiB')
   assert.equal(formatDurationMs(50), '50ms')
   assert.equal(formatDurationMs(1500), '1.5s')
   assert.equal(formatDurationMs(125_000), '2m5s')

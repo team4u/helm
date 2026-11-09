@@ -13,8 +13,8 @@ import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.
 import * as HelmPluginClient from './plugin-client-context.js'
 import { formatLocationHash, isSameLocationState, parseLocationHash, shouldPushLocationHistory, type WorkspaceLocationState } from './url-hash-model.js'
 import { groupUiContributions, resolveTargetString, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
+import { errorText } from './format.js'
 
-const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
 const getStoredPreference = (): ThemePreference => {
   try {
     const saved = localStorage.getItem('helm:theme')

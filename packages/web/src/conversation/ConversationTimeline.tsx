@@ -16,12 +16,6 @@ import { WorkflowRunCard } from './WorkflowRunCard.js'
 import { MarkdownView } from './MarkdownView.js'
 import {
   buildTimelineItems,
-  collectLatestSubagentToolKeys,
-  formatBytes,
-  formatDurationMs,
-  resolveSubagentConversationId,
-  resolveSubagentExecutionMeta,
-  resolveWorkflowRunForTool,
   toolSummaryText,
   type AssistantTurn,
   type DividerItem,
@@ -31,6 +25,13 @@ import {
   type PluginCardItem,
   type ToolTrace,
 } from './timeline-model.js'
+import {
+  collectLatestSubagentToolKeys,
+  resolveSubagentConversationId,
+  resolveSubagentExecutionMeta,
+  resolveWorkflowRunForTool,
+} from './subagent-model.js'
+import { formatBytes, formatDurationMs } from '../lib/format.js'
 import { SubagentLiveCard } from './SubagentLiveCard.js'
 import { subagentBadge } from './subagent-live-model.js'
 

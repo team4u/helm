@@ -5,7 +5,7 @@ import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { detectLanguage } from './code-language.js'
 import { CodeBlockView, MarkdownView } from './MarkdownView.js'
-import { formatBytes } from './timeline-model.js'
+import { formatBytes } from '../lib/format.js'
 
 export interface ArtifactPreviewModalProps {
   artifactId: string

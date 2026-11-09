@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { workflowsApi } from '../lib/api.js'
 import type { ToolTraceStatus } from './timeline-model.js'
-import { buildSubagentStreamLines, formatDurationMs } from './timeline-model.js'
+import { buildSubagentStreamLines } from './subagent-model.js'
+import { formatDurationMs } from '../lib/format.js'
 import {
   subagentBadge,
   toolResultPreviewTruncated,
