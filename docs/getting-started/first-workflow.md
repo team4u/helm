@@ -65,7 +65,7 @@ export const meta = {
 
 - `prompt`：子智能体提示词。
 - `options.label`：节点展示名称。
-- `options.profileId`：指定的 Profile 专家角色。
+- `options.agentType`：指定 Profile ID（专家 Bot 标识）或外部运行时标识。
 - `options.model`：指定的模型标识。
 - `options.gate`：代码门禁验收命令（如 `pnpm test`）。
 
@@ -115,11 +115,11 @@ return { replies, summary }
 执行以下命令并传入参数：
 
 ```bash
-helm workflows run hello-orchestra.workflow.js --input '{"word":"创新"}' --wait
+helm workflows run hello-orchestra.workflow.js --args '{"word":"创新"}' --wait
 ```
 
 参数说明：
-- `--input`：传入 JSON 格式输入参数，可在脚本中通过 `args` 访问。
+- `--args`：传入 JSON 格式输入参数，在脚本中通过 `args` 访问。
 - `--wait`：阻塞等待执行完成并直接输出最终返回数据。
 
 ### 2. 检查工作流执行列表
@@ -127,7 +127,7 @@ helm workflows run hello-orchestra.workflow.js --input '{"word":"创新"}' --wai
 查看历史工作流执行记录：
 
 ```bash
-helm workflows list --json
+helm workflows runs --json
 ```
 
 ### 3. 检查单次执行详情与阶段
@@ -166,10 +166,10 @@ flowchart LR
 
 ### 1. 断点恢复执行
 
-使用 `--resume` 参数指定失败的 `runId`：
+使用 `--resume-from-run-id` 参数指定失败的 `runId`：
 
 ```bash
-helm workflows run hello-orchestra.workflow.js --input '{"word":"创新"}' --resume <failedRunId> --wait
+helm workflows run hello-orchestra.workflow.js --args '{"word":"创新"}' --resume-from-run-id <failedRunId> --wait
 ```
 
 内核会自动读取原执行流水账本。
