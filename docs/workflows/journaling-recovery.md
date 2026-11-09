@@ -24,14 +24,20 @@ flowchart TD
 
 1. **精准记账**：每一步调用按序记录到独立流水文件中。
 2. **前缀复用**：恢复时跳过已成功的前缀节点，零 Token 消耗。
-3. **副作用保护**：严格保证动作副作用恰好一次，绝不盲目重复调用。
+3. **副作用保护**：动作执行前先持久化意图；遇到不确定状态时拒绝自动重放，避免盲目重复调用。不承诺外部系统的副作用恰好发生一次。
 
 ---
 
 ## 执行流水存储与事件契约
 
-每个工作流任务拥有专属的 JSONL 流水文件（journal）。
-存储路径位于 `<dataDir>/artifacts/<conversationId>/workflow-<runId>.jsonl`（如 `~/.helm/artifacts/42/workflow-wf_abc123.jsonl`）。运行索引与摘要持久化在 `state.sqlite`。
+每个工作流任务拥有专属的 JSONL 流水文件（journal），由 `builtin:workflow` 保存在自己的插件数据目录中。
+
+- 执行流水：`<Hub 数据目录>/plugins/builtin:workflow/artifacts/<conversationId>/workflow-<runId>.jsonl`。默认示例：`~/.helm/plugins/builtin:workflow/artifacts/42/workflow-wf_abc123.jsonl`。
+- 已保存的工作流脚本：`<Hub 数据目录>/plugins/builtin:workflow/workflows/`。
+- 运行索引与完整记录：插件私有的 `records` 文档，持久化在 Hub 的 `state.sqlite` 插件文档表中。
+- 界面运行摘要：插件公开的 `runs` 文档，通过标准插件文档快照与事件同步。
+
+Hub 数据目录默认为 `~/.helm`，可用 `HELM_DATA_DIR` 覆盖。引擎接收的 `dataDir` 是插件的 `ctx.dataDir`，不是 Hub 数据目录。
 
 ### 1. 事件行类型
 
@@ -102,11 +108,11 @@ flowchart LR
 
 ### 1. 智能体调用的弹性语义
 
-智能体推理不具有不可逆的外部物理副作用：
+智能体节点的账本采用尽力记录策略；这不表示节点及其调用的工具没有副作用：
 
 - 账本写入异常仅作为恢复优化损失，不阻断执行。
 - 系统上报 `ioErrors` 计数供排查参考。
-- 重放过程不会命中失败的智能体行，断点恢复时会直接重试。
+- 重放过程不会命中失败的智能体行，断点恢复时会重试该节点。任务作者需要自行保证节点重试安全；本机制不为智能体调用的文件写入、命令执行等副作用提供恰好一次保证。
 
 ### 2. 动作调用的强一致语义
 
