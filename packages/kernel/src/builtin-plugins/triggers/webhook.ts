@@ -465,6 +465,7 @@ export function registerWebhook(
   ctx.action({
     id: 'webhook_list',
     description: '列出全部 webhook 端点元数据（不含 secret）',
+    idempotent: true,
     cli: { command: ['webhook', 'list'] },
     inputSchema: { type: 'object', properties: {}, additionalProperties: false } as never,
     outputSchema: {

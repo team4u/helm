@@ -4,6 +4,8 @@ import { ApiClientError, assetsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { collectEnabledPluginIds, isProfileVisible } from '../shell/sidebar-model.js'
+import { Select, type SelectOption } from '../ui/Select.js'
+import { nodeOptionLabel } from './nodes-modal-model.js'
 import {
   argsTextToArgs,
   argsToText,
@@ -112,6 +114,8 @@ function ProfileBasicTab({
   herdrEnabled: boolean
 }) {
   const profile = draft.profile
+  const store = useHelmStore()
+  const knownNodes = store.nodes ?? []
   const [runtimeEnabled, setRuntimeEnabled] = useState(profile.runtime !== undefined)
   const [envPairs, setEnvPairs] = useState<EnvPair[]>(envToPairs(profile.runtime?.env))
   const [argsText, setArgsText] = useState(argsToText(profile.runtime?.args))
@@ -133,6 +137,80 @@ function ProfileBasicTab({
   const modelOptions = models.map((m) => m.id)
   const modelKnown = !profile.model || modelOptions.includes(profile.model)
   const selectedModel = models.find((m) => m.id === (profile.model || defaultModel))
+
+  const modelSelectOptions = useMemo<SelectOption<string>[]>(() => {
+    const list: SelectOption<string>[] = [
+      { value: '', label: '跟随全局默认模型' },
+    ]
+    for (const m of models.filter((entry) => entry.available)) {
+      list.push({
+        value: m.id,
+        label: `${m.id}${(m.thinkingLevels?.length ?? 0) > 1 ? '（支持思考）' : ''}`,
+      })
+    }
+    if (profile.model && !models.some((m) => m.id === profile.model && m.available)) {
+      list.push({
+        value: profile.model,
+        label: `${profile.model}（目录外）`,
+      })
+    }
+    return list
+  }, [models, profile.model])
+
+  const thinkingSelectOptions = useMemo<SelectOption<string>[]>(() => {
+    const list: SelectOption<string>[] = [
+      { value: '', label: '跟随全局缺省' },
+    ]
+    for (const level of selectedModel?.thinkingLevels ?? ['off']) {
+      list.push({ value: level, label: level })
+    }
+    return list
+  }, [selectedModel])
+
+  const nodeSelectOptions = useMemo<SelectOption<string>[]>(() => {
+    const list: SelectOption<string>[] = [
+      { value: '', label: '本机 local（默认）', icon: 'monitor' },
+    ]
+    for (const node of knownNodes.filter((n) => n.id !== 'local')) {
+      list.push({
+        value: node.id,
+        label: nodeOptionLabel(node),
+        icon: 'network',
+        meta: node.online ? '在线' : '离线',
+      })
+    }
+    if (profile.nodeId && profile.nodeId !== 'local' && !knownNodes.some((n) => n.id === profile.nodeId)) {
+      list.push({
+        value: profile.nodeId,
+        label: `${profile.nodeId}（未知）`,
+        icon: 'alert-circle',
+      })
+    }
+    return list
+  }, [knownNodes, profile.nodeId])
+
+  const runtimeNodeSelectOptions = useMemo<SelectOption<string>[]>(() => {
+    const list: SelectOption<string>[] = [
+      { value: '', label: '继承 Profile 或父会话节点' },
+      { value: 'local', label: '本机 local', icon: 'monitor' },
+    ]
+    for (const node of knownNodes.filter((n) => n.id !== 'local')) {
+      list.push({
+        value: node.id,
+        label: nodeOptionLabel(node),
+        icon: 'network',
+        meta: node.online ? '在线' : '离线',
+      })
+    }
+    if (runtime?.nodeId && runtime.nodeId !== 'local' && !knownNodes.some((n) => n.id === runtime.nodeId)) {
+      list.push({
+        value: runtime.nodeId,
+        label: `${runtime.nodeId}（未知）`,
+        icon: 'alert-circle',
+      })
+    }
+    return list
+  }, [knownNodes, runtime?.nodeId])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -156,41 +234,28 @@ function ProfileBasicTab({
         />
         <label htmlFor="helm-profile-model" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>模型</label>
         <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <select
+          <Select
             id="helm-profile-model"
-            className="input mono"
             style={{ flex: 1 }}
             value={profile.model ?? ''}
+            options={modelSelectOptions}
             onChange={(e) => {
               const nextModel = e.target.value
               const nextLevels = models.find((m) => m.id === (nextModel || defaultModel))?.thinkingLevels ?? ['off']
               patch({ ...profile, model: nextModel, thinkingLevel: profile.thinkingLevel && nextLevels.includes(profile.thinkingLevel) ? profile.thinkingLevel : undefined })
             }}
-          >
-            <option value="">跟随全局默认模型</option>
-            {models.filter((m) => m.available).map((m) => (
-              <option key={m.id} value={m.id}>{m.id}{(m.thinkingLevels?.length ?? 0) > 1 ? '（支持思考）' : ''}</option>
-            ))}
-            {profile.model && !models.some((m) => m.id === profile.model && m.available) && (
-              <option value={profile.model}>{profile.model}（目录外）</option>
-            )}
-          </select>
+          />
           {!modelKnown && <span className="badge badge-warn">自定义</span>}
         </span>
         <label htmlFor="helm-profile-thinking" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>思考等级</label>
         <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <select
+          <Select
             id="helm-profile-thinking"
-            className="input"
             style={{ flex: 1 }}
             value={profile.thinkingLevel ?? ''}
+            options={thinkingSelectOptions}
             onChange={(e) => patch({ ...profile, thinkingLevel: e.target.value === '' ? undefined : e.target.value })}
-          >
-            <option value="">跟随全局缺省</option>
-            {(selectedModel?.thinkingLevels ?? ['off']).map((level) => (
-              <option key={level} value={level}>{level}</option>
-            ))}
-          </select>
+          />
           {selectedModel && (selectedModel.thinkingLevels?.length ?? 0) <= 1 && (
             <span className="provider-help" style={{ fontSize: 11 }}>该模型不支持思考档位</span>
           )}
@@ -204,13 +269,11 @@ function ProfileBasicTab({
           onChange={(e) => patch({ ...profile, tags: textToTags(e.target.value) })}
         />
         <label htmlFor="helm-profile-node" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>节点</label>
-        <input
+        <Select
           id="helm-profile-node"
-          className="input mono"
-          list="helm-known-nodes"
-          value={profile.nodeId ?? ''}
-          placeholder="普通会话默认执行节点，留空为本机 local"
-          onChange={(e) => patch({ ...profile, nodeId: e.target.value })}
+          value={profile.nodeId === 'local' ? '' : (profile.nodeId ?? '')}
+          options={nodeSelectOptions}
+          onChange={(e) => patch({ ...profile, nodeId: e.target.value === '' ? undefined : e.target.value })}
         />
         <label htmlFor="helm-profile-cwd" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>工作目录</label>
         <input
@@ -283,13 +346,11 @@ function ProfileBasicTab({
                 ))}
               </datalist>
               <label htmlFor="helm-runtime-node" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>节点</label>
-              <input
+              <Select
                 id="helm-runtime-node"
-                className="input mono"
-                list="helm-known-nodes"
                 value={runtime.nodeId ?? ''}
-                placeholder="Herdr 目标节点，留空继承 Profile 或父会话节点"
-                onChange={(e) => patchRuntimeField({ nodeId: e.target.value })}
+                options={runtimeNodeSelectOptions}
+                onChange={(e) => patchRuntimeField({ nodeId: e.target.value === '' ? undefined : e.target.value })}
               />
               <label htmlFor="helm-runtime-workspace" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Workspace</label>
               <input

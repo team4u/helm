@@ -22,10 +22,11 @@
 
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
+import type { EnvExecResponse } from '@helm/protocol'
 import type { WorkflowJournalEntry } from '../src/builtin-plugins/workflow/engine/journal.js'
 import { HelmError } from '@helm/protocol'
 import {
@@ -36,6 +37,7 @@ import {
   type JournalWriteInput,
 } from '../src/builtin-plugins/workflow/engine/journal.js'
 import { extractMeta, WorkflowMetaError } from '../src/builtin-plugins/workflow/engine/meta.js'
+import { type WorkflowEntry, type WorkflowActionEntry } from '../src/builtin-plugins/workflow/engine/progress.js'
 import { normalizeWorkflowArgs, runWorkflow, type WorkflowHost, type WorkflowSpawnResult } from '../src/builtin-plugins/workflow/engine/runtime.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/builtin-plugins/workflow/engine/service.js'
 
@@ -48,6 +50,7 @@ const timeout = { timeout: 60_000 } as const
 interface FakeHostOptions {
   agentResult?: (prompt: string) => string
   actionHandler?: (actionId: string, input: unknown) => unknown
+  prepareAction?: WorkflowHost['prepareAction']
   spawnDelayMs?: number
   runGate?: WorkflowHost['runGate']
 }
@@ -74,9 +77,10 @@ function makeFakeHost(options: FakeHostOptions = {}): WorkflowHost & FakeHostExt
     async invokeAction(actionId, input) {
       extras.actionCalls++
       extras.calls.push(`action:${actionId}:${JSON.stringify(input)}`)
-      const result = options.actionHandler ? options.actionHandler(actionId, input) : { echoed: input }
+      const result = options.actionHandler ? await options.actionHandler(actionId, input) : { echoed: input }
       return { pluginId: 'p', actionId, result }
     },
+    ...(options.prepareAction !== undefined ? { prepareAction: options.prepareAction } : {}),
     ...(options.runGate !== undefined ? { runGate: options.runGate } : {}),
     loadWorkflow() {
       return { ok: false, message: 'no nested workflows in fake host' }
@@ -85,13 +89,25 @@ function makeFakeHost(options: FakeHostOptions = {}): WorkflowHost & FakeHostExt
 }
 
 /** 直接以返回值计 action 调用次数（真实字段）。 */
-function makeCountingActionHost(handler?: (id: string, input: unknown) => unknown) {
+function makeCountingActionHost(
+  handlerOrOptions?:
+    | ((id: string, input: unknown) => unknown)
+    | {
+        handler?: (id: string, input: unknown) => unknown
+        prepareAction?: WorkflowHost['prepareAction']
+      },
+) {
   let count = 0
+  const opts =
+    typeof handlerOrOptions === 'function'
+      ? { handler: handlerOrOptions }
+      : (handlerOrOptions ?? {})
   const host = makeFakeHost({
     actionHandler: (id, input) => {
       count++
-      return handler ? handler(id, input) : { n: count }
+      return opts.handler ? opts.handler(id, input) : { n: count }
     },
+    ...(opts.prepareAction !== undefined ? { prepareAction: opts.prepareAction } : {}),
   })
   return { host, getCount: () => count }
 }
@@ -586,20 +602,135 @@ describe('workflow action primitive', () => {
     assert.deepEqual(r2.value, { n: 1 })
   })
 
-  it('action key mismatch (changed input) runs live', timeout, async () => {
+  it('action key mismatch (changed input) runs live for idempotent action', timeout, async () => {
+    const { host, getCount } = makeCountingActionHost()
+    const lines: WorkflowJournalEntry[] = [
+      { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), idempotent: true },
+      { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), ok: true, result: { n: 1 }, idempotent: true },
+    ]
+    const result = await runWorkflow({
+      script: META('a2') + 'const v = await action("p.echo", { x: 999 }, { idempotent: true })\nreturn v',
+      host,
+      journal: { entries: lines, append: () => {} },
+    })
+    assert.equal(result.status, 'completed')
+    assert.equal(getCount(), 1, 'changed input runs live for idempotent action')
+    assert.deepEqual(result.value, { n: 1 })
+  })
+
+  it('action key mismatch for non-idempotent action rejects replay to prevent repeating side effects', timeout, async () => {
     const { host, getCount } = makeCountingActionHost()
     const lines: WorkflowJournalEntry[] = [
       { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', '{"x":1}') },
       { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), ok: true, result: { n: 1 } },
     ]
     const result = await runWorkflow({
-      script: META('a2') + 'const v = await action("p.echo", { x: 999 })\nreturn v',
+      script: META('a2-non-idem') + 'const v = await action("p.echo", { x: 999 })\nreturn v',
+      host,
+      journal: { entries: lines, append: () => {} },
+    })
+    assert.equal(result.status, 'failed')
+    assert.equal(getCount(), 0, 'must not run live on non-idempotent input mismatch')
+    assert.match(result.error ?? '', /workflow_action_uncertain/)
+  })
+
+  it('resume with failed idempotent action and non-idempotent action suffix rejects entering live', timeout, async () => {
+    let nonIdemCalled = 0
+    let idemCalled = 0
+    const host = makeFakeHost({
+      actionHandler: (id) => {
+        if (id === 'p.non_idem') {
+          nonIdemCalled++
+          return { sent: true }
+        }
+        idemCalled++
+        return { read: true }
+      },
+    })
+    const key0 = actionJournalKey('p.idem', '{}')
+    const key1 = actionJournalKey('p.non_idem', '{}')
+    const lines: WorkflowJournalEntry[] = [
+      { v: 1, seq: 0, type: 'action_started', index: 0, key: key0, idempotent: true },
+      { v: 1, seq: 1, type: 'action', index: 0, key: key0, ok: false, error: 'temp fail', idempotent: true },
+      { v: 1, seq: 2, type: 'action_started', index: 1, key: key1 },
+      { v: 1, seq: 3, type: 'action', index: 1, key: key1, ok: true, result: { sent: true } },
+    ]
+    const result = await runWorkflow({
+      script:
+        META('idem-fail-non-idem-suffix') +
+        `
+        const r0 = await action("p.idem", {}, { idempotent: true })
+        const r1 = await action("p.non_idem", {})
+        return [r0, r1]
+      `,
+      host,
+      journal: { entries: lines, append: () => {} },
+    })
+    assert.equal(result.status, 'failed')
+    assert.equal(nonIdemCalled, 0, 'must not call non-idempotent action handler on unsafe suffix')
+    assert.equal(idemCalled, 0, 'must block replay before live execution')
+    assert.match(result.error ?? '', /workflow_action_uncertain/)
+  })
+
+  it('a fatal replay conflict cannot be caught or bypassed by concurrent calls', timeout, async () => {
+    for (const body of [
+      'try { await action("p.read", {}) } catch {} return await action("p.write", {})',
+      'return await parallel([() => action("p.read", {}), () => action("p.write", {})])',
+    ]) {
+      const { host, getCount } = makeCountingActionHost()
+      const result = await runWorkflow({
+        script: META('fatal-replay-guard') + body,
+        host,
+        journal: {
+          entries: [
+            { v: 1, seq: 0, type: 'action', index: 0, key: actionJournalKey('p.read', '{}'), ok: false, idempotent: true },
+            { v: 1, seq: 1, type: 'action', index: 1, key: actionJournalKey('p.write', '{}'), ok: true, result: {} },
+          ],
+          append: () => {},
+        },
+      })
+      assert.equal(result.status, 'failed', result.error)
+      assert.match(result.error ?? '', /workflow_action_uncertain/)
+      assert.equal(getCount(), 0, 'fatal replay conflicts must stop every subsequent handler')
+    }
+  })
+
+  it('resume with all idempotent actions in suffix safely proceeds to live retry', timeout, async () => {
+    let act0Called = 0
+    let act1Called = 0
+    const host = makeFakeHost({
+      actionHandler: (id) => {
+        if (id === 'p.idem0') {
+          act0Called++
+          return { v: 0 }
+        }
+        act1Called++
+        return { v: 1 }
+      },
+    })
+    const key0 = actionJournalKey('p.idem0', '{}')
+    const key1 = actionJournalKey('p.idem1', '{}')
+    const lines: WorkflowJournalEntry[] = [
+      { v: 1, seq: 0, type: 'action_started', index: 0, key: key0, idempotent: true },
+      { v: 1, seq: 1, type: 'action', index: 0, key: key0, ok: false, error: 'retryable', idempotent: true },
+      { v: 1, seq: 2, type: 'action_started', index: 1, key: key1, idempotent: true },
+      { v: 1, seq: 3, type: 'action', index: 1, key: key1, ok: true, result: { v: 1 }, idempotent: true },
+    ]
+    const result = await runWorkflow({
+      script:
+        META('all-idem-suffix') +
+        `
+        const r0 = await action("p.idem0", {}, { idempotent: true })
+        const r1 = await action("p.idem1", {}, { idempotent: true })
+        return [r0, r1]
+      `,
       host,
       journal: { entries: lines, append: () => {} },
     })
     assert.equal(result.status, 'completed')
-    assert.equal(getCount(), 1, 'changed input runs live')
-    assert.deepEqual(result.value, { n: 1 })
+    assert.equal(act0Called, 1, 'idempotent action 0 retried live')
+    assert.equal(act1Called, 1, 'idempotent action 1 re-executed live')
+    assert.deepEqual(result.value, [{ v: 0 }, { v: 1 }])
   })
 
   it('action journal write failure on started line is fatal (uncertain)', timeout, async () => {
@@ -691,33 +822,231 @@ describe('workflow action primitive', () => {
     assert.equal(result.value, null)
   })
 
-  it('agent and action share one ordered index space', timeout, async () => {
-    const host = makeFakeHost()
-    const order: string[] = []
-    const realAction = host.invokeAction.bind(host)
-    host.invokeAction = async (id, input, ctx) => {
-      order.push(`action@${ctx.index}`)
-      return realAction(id, input, ctx)
-    }
-    const real = host.spawnAgent.bind(host)
+  it('agent and action share one ordered index space and obey concurrency semaphore', timeout, async () => {
+    let currentInFlight = 0
+    let maxInFlight = 0
+    const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+    const host = makeFakeHost({
+      spawnDelayMs: 40,
+      actionHandler: async () => {
+        currentInFlight++
+        maxInFlight = Math.max(maxInFlight, currentInFlight)
+        await delay(40)
+        currentInFlight--
+        return { ok: true }
+      },
+    })
+    const realSpawn = host.spawnAgent.bind(host)
     host.spawnAgent = async (req) => {
-      order.push(`agent@${req.index}`)
-      return real(req)
+      currentInFlight++
+      maxInFlight = Math.max(maxInFlight, currentInFlight)
+      try {
+        return await realSpawn(req)
+      } finally {
+        currentInFlight--
+      }
     }
+
     const result = await runWorkflow({
       script:
-        META('a7') +
+        META('mixed-concurrency') +
         `
         const a = agent("first")
         const act = action("p.echo", {})
         const b = agent("second")
-        return [await a, await act, await b]
+        const act2 = action("p.echo2", {})
+        return [await a, await act, await b, await act2]
+      `,
+      host,
+      concurrency: 2,
+      journal: { append: () => {} },
+    })
+
+    assert.equal(result.status, 'completed')
+    // 验证并发上限严格为 2
+    assert.ok(maxInFlight <= 2, `max in-flight must obey concurrency:2, was ${maxInFlight}`)
+    assert.ok(maxInFlight >= 2, `expected concurrency of 2 reached, was ${maxInFlight}`)
+
+    // 验证 index 分配严格单调
+    const indices = result.progress
+      .filter((p) => p.type === 'workflow_agent' || p.type === 'workflow_action')
+      .map((p) => `${p.type}@${p.index}`)
+    assert.ok(indices.includes('workflow_agent@0'))
+    assert.ok(indices.includes('workflow_action@1'))
+    assert.ok(indices.includes('workflow_agent@2'))
+    assert.ok(indices.includes('workflow_action@3'))
+  })
+
+  it('aborted workflow does not execute queued actions behind semaphore', timeout, async () => {
+    let actionCount = 0
+    let agentCount = 0
+    const abortCtrl = new AbortController()
+
+    const host = makeFakeHost({
+      actionHandler: async (id) => {
+        actionCount++
+        if (id === 'p.slow') {
+          // 在执行慢动作时触发中止
+          abortCtrl.abort()
+          await new Promise((r) => setTimeout(r, 50))
+        }
+        return { ok: true }
+      },
+    })
+    const realSpawn = host.spawnAgent.bind(host)
+    host.spawnAgent = async (req) => {
+      agentCount++
+      return realSpawn(req)
+    }
+
+    const result = await runWorkflow({
+      script:
+        META('abort-queue') +
+        `
+        const a1 = action("p.slow", {})
+        const a2 = action("p.queued", {})
+        const ag = agent("queued agent")
+        return [await a1, await a2, await ag]
+      `,
+      host,
+      concurrency: 1,
+      signal: abortCtrl.signal,
+    })
+
+    assert.equal(result.status, 'killed')
+    // 只有首个 slow 启动了，队列中的 a2 与 ag 绝不被调用
+    assert.equal(actionCount, 1)
+    assert.equal(agentCount, 0)
+  })
+
+  it('prepareAction pre-flight rejection writes idempotent failure line without action_started', timeout, async () => {
+    let prepareCalls = 0
+    const appends: JournalWriteInput[] = []
+    const append = (e: JournalWriteInput) => {
+      appends.push(e)
+    }
+
+    const { host, getCount } = makeCountingActionHost({
+      prepareAction: (actionId) => {
+        prepareCalls++
+        throw new Error(`Pre-flight rejection for ${actionId}`)
+      },
+    })
+
+    const result = await runWorkflow({
+      script: META('prep-reject') + 'const v = await action("p.bad", { x: 1 })\nreturn v',
+      host,
+      journal: { append },
+    })
+
+    assert.equal(result.status, 'completed')
+    // handler 绝对未执行
+    assert.equal(getCount(), 0)
+    assert.equal(prepareCalls, 1)
+    // 失败折叠为 null
+    assert.equal(result.value, null)
+
+    // 绝无 action_started，只有一条 ok:false 且带有 idempotent:true 的 action 终态行
+    assert.equal(appends.some((e) => e.type === 'action_started'), false)
+    const actionLines = appends.filter((e) => e.type === 'action')
+    assert.equal(actionLines.length, 1)
+    assert.equal(actionLines[0]?.ok, false)
+    assert.equal(actionLines[0]?.idempotent, true)
+
+    // 验证由该 appends 构建的账本，readJournal 确认 actionUncertain 为 false
+    const path = tmpJournalPath('prep-fail.jsonl')
+    const writer = new JournalWriter(path)
+    for (const line of appends) await writer.append(line)
+    await writer.close()
+    const read = readJournal(path)
+    assert.equal(read.actionUncertain, false)
+    assert.equal(read.failedActions, 0)
+  })
+
+  it('action() opts validation and label/phase propagation', timeout, async () => {
+    const { host } = makeCountingActionHost()
+    // 1) 正常传递 opts (idempotent, label, phase)
+    const result = await runWorkflow({
+      script:
+        META('opts-ok') +
+        `
+        phase("init-phase")
+        const res = await action("p.echo", { k: "v" }, { label: "custom-label", phase: "override-phase", idempotent: true })
+        return res
       `,
       host,
       journal: { append: () => {} },
     })
     assert.equal(result.status, 'completed')
-    assert.deepEqual(order, ['agent@0', 'action@1', 'agent@2'])
+    const actNode = result.progress.find((p) => p.type === 'workflow_action') as Extract<
+      WorkflowEntry,
+      { type: 'workflow_action' }
+    >
+    assert.ok(actNode)
+    assert.equal(actNode.label, 'custom-label')
+    assert.equal(actNode.phaseTitle, 'override-phase')
+
+    // 2) 未知 opts 键报错
+    const badKeyRes = await runWorkflow({
+      script: META('opts-bad-key') + 'await action("p.echo", {}, { unknownKey: true })\nreturn 1',
+      host,
+    })
+    assert.equal(badKeyRes.status, 'failed')
+    assert.match(badKeyRes.error ?? '', /action\(\) unknown option 'unknownKey'/)
+
+    // 3) 非布尔 idempotent 报错
+    const badIdemRes = await runWorkflow({
+      script: META('opts-bad-idem') + 'await action("p.echo", {}, { idempotent: "true" })\nreturn 1',
+      host,
+    })
+    assert.equal(badIdemRes.status, 'failed')
+    assert.match(badIdemRes.error ?? '', /action\(\) opts.idempotent must be a boolean/)
+  })
+
+  it('idempotent action replay semantics: ok:true replays without re-execution, ok:false allowed to resume', timeout, async () => {
+    const { host, getCount } = makeCountingActionHost({
+      prepareAction: (actionId) => ({ pluginId: 'p', actionId, idempotent: true }),
+    })
+    const appends: JournalWriteInput[] = []
+    const append = (e: JournalWriteInput) => {
+      appends.push(e)
+    }
+
+    // 第一次运行成功，记录账本
+    const r1 = await runWorkflow({
+      script: META('idem-replay') + 'const v = await action("p.echo", { a: 1 }, { idempotent: true })\nreturn v',
+      host,
+      journal: { append },
+    })
+    assert.equal(r1.status, 'completed')
+    assert.equal(getCount(), 1)
+
+    // 转换为 JournalEntry 列表并重放：幂等动作成功时 100% 缓存复用，handler 不重复执行
+    const lines: WorkflowJournalEntry[] = appends.map((e, i) => ({ v: 1, seq: i, ...e }) as WorkflowJournalEntry)
+    const r2 = await runWorkflow({
+      script: META('idem-replay') + 'const v = await action("p.echo", { a: 1 }, { idempotent: true })\nreturn v',
+      host,
+      journal: { entries: lines, append: () => {} },
+    })
+    assert.equal(r2.status, 'completed')
+    assert.equal(getCount(), 1, 'idempotent action on replay must reuse result without re-executing')
+    assert.equal(r2.replayedCount, 1)
+
+    // 若原账本中幂等动作失败（ok: false, idempotent: true）：
+    const failKey = actionJournalKey('p.echo', '{"a":1}')
+    const failLines: WorkflowJournalEntry[] = [
+      { v: 1, seq: 0, type: 'action_started', index: 0, key: failKey, idempotent: true },
+      { v: 1, seq: 1, type: 'action', index: 0, key: failKey, ok: false, error: 'transient error', idempotent: true },
+    ]
+    // 写入文件并用 readJournal 验证 actionUncertain 为 false
+    const failJournalPath = tmpJournalPath('idem-fail.jsonl')
+    const writer = new JournalWriter(failJournalPath)
+    for (const l of failLines) await writer.append(l)
+    await writer.close()
+    const readFail = readJournal(failJournalPath)
+    assert.equal(readFail.actionUncertain, false, 'idempotent failure must not lock journal uncertain')
+    assert.equal(readFail.failedActions, 0)
   })
 })
 
@@ -837,6 +1166,34 @@ describe('journal writer and reader', () => {
       () => writer.append({ type: 'action_started', index: 1, key: 'k1' }),
       /workflow journal/i,
     )
+  })
+
+  it('dangling action_started with idempotent:true reports actionUncertain as false', timeout, async () => {
+    const path = tmpJournalPath('idem-dangling.jsonl')
+    const writer = new JournalWriter(path)
+    await writer.append({ type: 'agent', index: 0, key: 'k0', ok: true, text: 'a' })
+    await writer.append({ type: 'action_started', index: 1, key: 'k1', idempotent: true })
+    await writer.close()
+    const read = readJournal(path)
+    assert.equal(read.actionUncertain, false, 'dangling idempotent action_started should not be uncertain')
+  })
+
+  it('failed action with idempotent:true reports actionUncertain as false and failedActions=0', timeout, async () => {
+    const path = tmpJournalPath('idem-failed.jsonl')
+    const writer = new JournalWriter(path)
+    await writer.append({ type: 'action_started', index: 0, key: 'k0', idempotent: true })
+    await writer.append({ type: 'action', index: 0, key: 'k0', ok: false, error: 'err', idempotent: true })
+    await writer.close()
+    const read = readJournal(path)
+    assert.equal(read.actionUncertain, false, 'idempotent ok:false action must not make journal uncertain')
+    assert.equal(read.failedActions, 0)
+  })
+
+  it('invalid idempotent value (non-boolean/false) is treated as corrupt uncertain', timeout, async () => {
+    const path = tmpJournalPath('idem-corrupt.jsonl')
+    writeFileSync(path, '{"v":1,"seq":0,"type":"action_started","index":0,"key":"k0","idempotent":false}\n')
+    const read = readJournal(path)
+    assert.equal(read.actionUncertain, true, 'idempotent:false or invalid must be treated as corrupt/uncertain')
   })
 })
 
@@ -1420,6 +1777,302 @@ describe('WorkflowService', () => {
     assert.ok(kinds.includes('log'), `log persisted: ${JSON.stringify(kinds)}`)
     await service.close()
   })
+
+  it('env.exec builtin action executes commands via host.execEnv and handles allowFailure', timeout, async () => {
+    const executed: Array<{ command: string | string[]; allowFailure?: boolean }> = []
+    const baseHost = makeServiceHost()
+    const host: WorkflowServiceHost = {
+      ...baseHost,
+      execEnv: async (req) => {
+        executed.push({ command: req.command })
+        if (Array.isArray(req.command) && req.command.includes('fail-cmd')) {
+          return { ok: false, exitCode: 1, output: 'command failed output', timedOut: false }
+        }
+        return { ok: true, exitCode: 0, output: 'hello-env-exec', timedOut: false }
+      },
+    }
+    const state = makeStateStore()
+    const service = new WorkflowService({ dataDir, host, state })
+
+    // 1) 正常执行 env.exec（带 label 与 idempotent: true）
+    const summary1 = await service.run({
+      script:
+        META('env-exec-1') +
+        `
+        const res = await action("env.exec", { command: ["echo", "hello"] }, { label: "run-echo", idempotent: true })
+        return res
+      `,
+    })
+    const res1 = await service.wait(summary1.id)
+    assert.deepEqual(res1, { ok: true, exitCode: 0, output: 'hello-env-exec', timedOut: false })
+    const run1 = service.getRun(summary1.id)
+    assert.equal(run1.status, 'completed')
+    const node1 = run1.nodes?.find((n) => n.id === 'action-0')
+    assert.equal(node1?.label, 'run-echo')
+
+    // 2) 无冲突短名 exec 解析为 env.exec
+    const summary2 = await service.run({
+      script: META('env-exec-2') + 'const res = await action("exec", { command: "uptime" })\nreturn res',
+    })
+    const res2 = await service.wait(summary2.id)
+    assert.deepEqual(res2, { ok: true, exitCode: 0, output: 'hello-env-exec', timedOut: false })
+
+    // 3) 非零退出码且 allowFailure 未设：抛 env_exec_failed，节点失败折叠为 null
+    const summary3 = await service.run({
+      script: META('env-exec-3') + 'const res = await action("env.exec", { command: ["fail-cmd"] })\nreturn res',
+    })
+    const res3 = await service.wait(summary3.id)
+    assert.equal(res3, null)
+    const run3 = service.getRun(summary3.id)
+    const node3 = run3.nodes?.find((n) => n.id === 'action-0')
+    assert.equal(node3?.status, 'failed')
+    assert.match(node3?.error ?? '', /命令执行失败.*exitCode=1/)
+
+    // 4) 非零退出码但 allowFailure: true：正常返回结果对象
+    const summary4 = await service.run({
+      script:
+        META('env-exec-4') +
+        'const res = await action("env.exec", { command: ["fail-cmd"], allowFailure: true })\nreturn res',
+    })
+    const res4 = await service.wait(summary4.id)
+    assert.deepEqual(res4, { ok: false, exitCode: 1, output: 'command failed output', timedOut: false })
+
+    // 5) 非法参数（如空 command 或未知选项）在 Pre-flight 阶段拒绝，节点折叠为 null 且不记 action_started
+    const summary5 = await service.run({
+      script: META('env-exec-5') + 'const res = await action("env.exec", { command: "", badField: 123 })\nreturn res',
+    })
+    const res5 = await service.wait(summary5.id)
+    assert.equal(res5, null)
+    const run5 = service.getRun(summary5.id)
+    const node5 = run5.nodes?.find((n) => n.id === 'action-0')
+    assert.equal(node5?.status, 'failed')
+    assert.match(node5?.error ?? '', /env\.exec/)
+
+    await service.close()
+  })
+
+  it('env.exec fails with 501 when host does not configure execEnv', timeout, async () => {
+    const baseHost = makeServiceHost()
+    // host 没有 execEnv
+    const host: WorkflowServiceHost = {
+      ...baseHost,
+      execEnv: undefined,
+    }
+    const state = makeStateStore()
+    const service = new WorkflowService({ dataDir, host, state })
+    const summary = await service.run({
+      script: META('env-exec-unsupported') + 'const res = await action("env.exec", { command: "date" })\nreturn res',
+    })
+    const res = await service.wait(summary.id)
+    assert.equal(res, null)
+    const run = service.getRun(summary.id)
+    const node = run.nodes?.find((n) => n.id === 'action-0')
+    assert.equal(node?.status, 'failed')
+    assert.match(node?.error ?? '', /当前工作流宿主未配置 env\.exec 命令执行端口/)
+    await service.close()
+  })
+
+  it('preflight rejection (unknown/ambiguous/inputSchema) preserves completed prefix and allows resume', timeout, async () => {
+    let agent1Runs = 0
+    let fixedActionRuns = 0
+    const baseHost = makeServiceHost()
+    const host: WorkflowServiceHost = {
+      ...baseHost,
+      spawnAgent: async () => {
+        agent1Runs++
+        return { ok: true, text: 'agent-1-done' }
+      },
+      invokeAction: async (pluginId, actionId, input) => {
+        if (actionId === 'good_act') {
+          fixedActionRuns++
+          return { success: true }
+        }
+        return baseHost.invokeAction(pluginId, actionId, input)
+      },
+      listActions: () => [
+        {
+          pluginId: 'builtin:assistant',
+          id: 'good_act',
+          description: '',
+          idempotent: true,
+          inputSchema: { type: 'object', properties: { count: { type: 'number' } }, required: ['count'], additionalProperties: false },
+          outputSchema: {},
+        },
+      ],
+      prepareAction: (pluginId, actionId, input) => {
+        if (actionId === 'good_act') {
+          const raw = input as Record<string, unknown>
+          if (typeof raw?.count !== 'number') {
+            throw new HelmError('validation_error', 'count must be number', 400)
+          }
+          return { idempotent: true }
+        }
+        throw new HelmError('unknown_action', `unknown action: ${actionId}`, 404)
+      },
+    }
+    const state = makeStateStore()
+    const service = new WorkflowService({ dataDir, host, state })
+
+    // 第一轮：Step 1 agent 成功，Step 2 action preflight 失败（未知动作）
+    const sum1 = await service.run({
+      script:
+        META('resume-preflight') +
+        `
+        const s1 = await agent("step1")
+        const s2 = await action("unknown_action_xyz", {})
+        if (!s2) throw new Error("step 2 failed")
+        return [s1, s2]
+      `,
+    })
+    await service.wait(sum1.id).catch(() => {})
+    assert.equal(agent1Runs, 1)
+    const run1 = service.getRun(sum1.id)
+    assert.equal(run1.status, 'failed')
+
+    // 检查账本没有 action_started，actionUncertain 为 false
+    const rec1 = state.get<{ journalPath: string } | null>(`workflow/run/${sum1.id}`, null)
+    assert.ok(rec1)
+    const journal1 = readJournal(rec1.journalPath)
+    assert.equal(journal1.actionUncertain, false)
+    assert.equal(journal1.entries.some((e) => e.type === 'action_started'), false)
+
+    // 第二轮：改正脚本，resumeFromRunId。Step 1 必须 100% 缓存命中，不重新跑 agent；Step 2 执行成功！
+    const sum2 = await service.run({
+      script:
+        META('resume-preflight') +
+        `
+        const s1 = await agent("step1")
+        const s2 = await action("builtin:assistant.good_act", { count: 42 }, { idempotent: true, label: "my-good-step", phase: "execution" })
+        return [s1, s2]
+      `,
+      resumeFromRunId: sum1.id,
+    })
+    const res2 = await service.wait(sum2.id)
+    assert.deepEqual(res2, ['{"ok":true,"text":"agent-1-done"}', { success: true }])
+    assert.equal(agent1Runs, 1, 'step1 agent was cached and not re-executed')
+    assert.equal(fixedActionRuns, 1, 'good_act executed')
+
+    // 验证 opts.phase 与 opts.label 在 summary.nodes 中生效
+    const run2 = service.getRun(sum2.id)
+    assert.equal(run2.status, 'completed')
+    const actionNode = run2.nodes?.find((n) => n.id === 'action-1')
+    assert.ok(actionNode)
+    assert.equal(actionNode.label, 'my-good-step')
+    assert.equal(actionNode.phaseTitle, 'execution')
+
+    await service.close()
+  })
+
+  it('validateEnvExecInput preflight rejects relative cwd, invalid nodeId, and out-of-range timeoutMs without action_started', timeout, async () => {
+    const baseHost = makeServiceHost()
+    const host: WorkflowServiceHost = {
+      ...baseHost,
+      execEnv: async () => ({ ok: true, exitCode: 0, output: 'ok', timedOut: false }),
+    }
+    const state = makeStateStore()
+    const service = new WorkflowService({ dataDir, host, state })
+
+    // 1) 相对路径 cwd 必须在 preflight 拦截
+    const sumRel = await service.run({
+      script: META('preflight-rel-cwd') + 'const res = await action("env.exec", { command: "ls", cwd: "relative/path" })\nreturn res',
+    })
+    const resRel = await service.wait(sumRel.id)
+    assert.equal(resRel, null)
+    const runRel = service.getRun(sumRel.id)
+    const nodeRel = runRel.nodes?.find((n) => n.id === 'action-0')
+    assert.equal(nodeRel?.status, 'failed')
+    assert.match(nodeRel?.error ?? '', /cwd 必须为跨平台绝对路径/)
+    const recRel = state.get<{ journalPath: string } | null>(`workflow/run/${sumRel.id}`, null)
+    assert.ok(recRel)
+    const jRel = readJournal(recRel.journalPath)
+    assert.equal(jRel.actionUncertain, false)
+    assert.equal(jRel.entries.some((e) => e.type === 'action_started'), false)
+
+    // 2) 非法 nodeId 必须在 preflight 拦截
+    const sumNode = await service.run({
+      script: META('preflight-bad-node') + 'const res = await action("env.exec", { command: "ls", nodeId: "_bad:node!*" })\nreturn res',
+    })
+    const resNode = await service.wait(sumNode.id)
+    assert.equal(resNode, null)
+    const runNode = service.getRun(sumNode.id)
+    const nodeNode = runNode.nodes?.find((n) => n.id === 'action-0')
+    assert.equal(nodeNode?.status, 'failed')
+    assert.match(nodeNode?.error ?? '', /nodeId 需匹配/)
+    const recNode = state.get<{ journalPath: string } | null>(`workflow/run/${sumNode.id}`, null)
+    assert.ok(recNode)
+    const jNode = readJournal(recNode.journalPath)
+    assert.equal(jNode.actionUncertain, false)
+    assert.equal(jNode.entries.some((e) => e.type === 'action_started'), false)
+
+    // 3) 越界 timeoutMs 必须在 preflight 拦截
+    const sumTimeout = await service.run({
+      script: META('preflight-bad-timeout') + 'const res = await action("env.exec", { command: "ls", timeoutMs: 999_999_999 })\nreturn res',
+    })
+    const resTimeout = await service.wait(sumTimeout.id)
+    assert.equal(resTimeout, null)
+    const runTimeout = service.getRun(sumTimeout.id)
+    const nodeTimeout = runTimeout.nodes?.find((n) => n.id === 'action-0')
+    assert.equal(nodeTimeout?.status, 'failed')
+    assert.match(nodeTimeout?.error ?? '', /timeoutMs 必须是 1 到 600000 之间的整数/)
+    const recTimeout = state.get<{ journalPath: string } | null>(`workflow/run/${sumTimeout.id}`, null)
+    assert.ok(recTimeout)
+    const jTimeout = readJournal(recTimeout.journalPath)
+    assert.equal(jTimeout.actionUncertain, false)
+    assert.equal(jTimeout.entries.some((e) => e.type === 'action_started'), false)
+
+    await service.close()
+  })
+
+  it('unawaited env.exec cancels and drains the pending execution channel on script error', timeout, async () => {
+    const sentinelFile = join(dataDir, `sentinel-${Date.now()}.txt`)
+    const baseHost = makeServiceHost()
+    const host: WorkflowServiceHost = {
+      ...baseHost,
+      execEnv: async (req, signal) => {
+        const cmd = Array.isArray(req.command) ? req.command.join(' ') : req.command
+        return new Promise<EnvExecResponse>((resolve) => {
+          let timer: ReturnType<typeof setTimeout> | undefined
+          if (cmd.includes('delay-write')) {
+            timer = setTimeout(() => {
+              writeFileSync(sentinelFile, 'executed', 'utf-8')
+              resolve({ ok: true, exitCode: 0, output: 'written', timedOut: false })
+            }, 1000)
+          } else {
+            resolve({ ok: true, exitCode: 0, output: 'fast-done', timedOut: false })
+          }
+
+          signal?.addEventListener('abort', () => {
+            if (timer) clearTimeout(timer)
+            resolve({ ok: false, exitCode: null, output: 'aborted', timedOut: false })
+          }, { once: true })
+        })
+      },
+    }
+    const state = makeStateStore()
+    const service = new WorkflowService({ dataDir, host, state })
+
+    // 未 await 慢命令就立即 throw 模拟早期失败
+    const sum = await service.run({
+      script:
+        META('unawaited-exec-leak') +
+        `
+        action("env.exec", { command: "delay-write" }) // 未 await！
+        await action("env.exec", { command: "fast-check" }) // 确保前一条已经进入通道
+        throw new Error("early crash")
+      `,
+    })
+    await service.wait(sum.id)
+    const run = service.getRun(sum.id)
+    assert.equal(run.status, 'failed')
+
+    // 等待超过计划延迟时间（1200ms）
+    await new Promise((r) => setTimeout(r, 1200))
+
+    // 哨兵文件绝不能被写入（在途命令必须已被 abort 取消并完成通道清理）
+    assert.equal(existsSync(sentinelFile), false, 'sentinel file must not be written by unawaited leaked command')
+
+    await service.close()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1526,6 +2179,120 @@ describe('workflow real-SDK integration (faux provider)', () => {
       assert.deepEqual(stored.args, { topics: ['star', 'ocean'] })
     } finally {
       await service.close()
+      rmSync(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('real env.exec child processes are cancelled on early return and script failure', timeout, async () => {
+    const { createHelm } = await import('../src/app.js')
+    const { fauxProvider } = await import('@earendil-works/pi-ai/providers/faux')
+    const { createModels } = await import('@earendil-works/pi-ai/models')
+    const dataDir = mkdtempSync(join(tmpdir(), 'wf-exec-cleanup-'))
+    const models = createModels()
+    models.setProvider(fauxProvider().provider)
+    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+    try {
+      const sentinels: string[] = []
+      for (const [index, ending] of ['return "early"', 'throw new Error("early failure")'].entries()) {
+        const ready = join(dataDir, `ready-${index}`)
+        const sentinel = join(dataDir, `sentinel-${index}`)
+        sentinels.push(sentinel)
+        const slowCommand = [process.execPath, '-e',
+          `const fs = require("node:fs"); fs.writeFileSync(${JSON.stringify(ready)}, "ready"); ` +
+          `setTimeout(() => fs.writeFileSync(${JSON.stringify(sentinel)}, "leaked"), 1500);`,
+        ]
+        const readyCommand = [process.execPath, '-e',
+          `const fs = require("node:fs"); const deadline = setTimeout(() => process.exit(2), 5000); ` +
+          `const poll = setInterval(() => { if (fs.existsSync(${JSON.stringify(ready)})) { clearTimeout(deadline); clearInterval(poll); } }, 5);`,
+        ]
+        const run = await app.workflows.run({
+          script: META(`real-exec-cleanup-${index}`) +
+            `action("env.exec", { command: ${JSON.stringify(slowCommand)}, timeoutMs: 10000 });\n` +
+            `const ready = await action("env.exec", { command: ${JSON.stringify(readyCommand)}, timeoutMs: 10000 });\n` +
+            `if (!ready?.ok) throw new Error("child readiness check failed");\n${ending}`,
+        })
+        await app.workflows.wait(run.id)
+        const summary = app.workflows.getRun(run.id)
+        assert.equal(summary.status, 'failed', summary.error)
+        assert.match(summary.error ?? '', index === 0 ? /unawaited launch/ : /early failure/)
+        assert.ok(existsSync(ready), 'the actual child must have started before the workflow ends')
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1700))
+      for (const sentinel of sentinels) {
+        assert.equal(existsSync(sentinel), false, 'a cancelled child process must never write the delayed sentinel')
+      }
+    } finally {
+      await app.close()
+      rmSync(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('env.exec in real KernelRuntime executes command without consuming tokens', timeout, async () => {
+    const { KernelRuntime } = await import('../src/runtime/index.js')
+    const { fauxProvider } = await import('@earendil-works/pi-ai/providers/faux')
+    const { createModels } = await import('@earendil-works/pi-ai/models')
+
+    const dataDir = mkdtempSync(join(tmpdir(), 'wf-env-exec-real-'))
+    const faux = fauxProvider()
+    const models = createModels()
+    models.setProvider(faux.provider)
+
+    const runtime = await KernelRuntime.open({
+      dataDir,
+      cwd: dataDir,
+      model: 'faux/faux-1',
+      models,
+      autoResume: false,
+    })
+    try {
+      const service = new WorkflowService({
+        dataDir,
+        state: runtime.documentStore,
+        host: {
+          spawnAgent: (request) => runtime.spawnAgent(request),
+          invokeAction: async (pluginId, actionId, input, context) => {
+            return runtime.plugins.invokeAction(pluginId, actionId, input, context)
+          },
+          prepareAction: (pluginId, actionId, input, context) => {
+            return runtime.plugins.prepareAction(pluginId, actionId, input, context)
+          },
+          execEnv: async (req, signal) => {
+            const res = await runtime.execEnv(req, undefined, signal)
+            return {
+              ...res,
+              output: runtime.stash.redact(res.output),
+            }
+          },
+          listActions: () => runtime.plugins.listActions(),
+          getConversation: (id) => runtime.getConversation(id),
+          abortConversation: (id) => runtime.abortConversation(id),
+          emitEvent: () => {},
+        },
+      })
+      await service.init()
+
+      const summary = await service.run({
+        script:
+          META('real-exec') +
+          `
+          const res = await action("env.exec", { command: ["node", "-e", "process.stdout.write('hello-from-node')"] }, { idempotent: true, label: "run-node" })
+          return res
+        `,
+      })
+      const result = (await service.wait(summary.id)) as { ok: boolean; exitCode: number; output: string; timedOut: boolean }
+      assert.equal(service.getRun(summary.id).status, 'completed', service.getRun(summary.id).error)
+      assert.equal(result.ok, true)
+      assert.equal(result.exitCode, 0)
+      assert.equal(result.output, 'hello-from-node')
+      assert.equal(result.timedOut, false)
+
+      const run = service.getRun(summary.id)
+      const actionNode = run.nodes?.find((n) => n.id === 'action-0')
+      assert.equal(actionNode?.label, 'run-node')
+
+      await service.close()
+    } finally {
+      await runtime.close()
       rmSync(dataDir, { recursive: true, force: true })
     }
   })

@@ -1092,6 +1092,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
       ctx.action({
         id: 'inspect_worker',
         description: '读取后台 Worker 最近时间线摘要与产物列表。',
+        idempotent: true,
         inputSchema: workerIdInputSchema,
         outputSchema: { type: 'object' },
         handler: (input: { workerConversationId: number }, context) => inspectWorker(input, context.conversationId),
@@ -1099,6 +1100,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
       ctx.action({
         id: 'recall_context',
         description: '检索 RecallGraph 记忆图谱。',
+        idempotent: true,
         inputSchema: {
           type: 'object',
           properties: { query: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100 } },

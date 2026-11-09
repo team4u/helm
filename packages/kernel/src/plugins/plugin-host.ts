@@ -203,6 +203,7 @@ interface ActionEntry {
   outputSchema: JsonSchema;
   cli?: PluginActionSpec<unknown, unknown>['cli'];
   exposeAsTool: boolean;
+  idempotent?: boolean;
   toolAlias: string;
   scope?: ConversationScope;
   handler: (input: never, context: PluginActionContext) => unknown;
@@ -1453,12 +1454,12 @@ export class PluginHost {
     return { pluginId: qualified.slice(0, dot), actionId: qualified.slice(dot + 1) };
   }
 
-  async invokeAction(
+  prepareAction(
     pluginId: string,
     actionId: string,
     input: unknown,
     context: PluginActionContext = {},
-  ): Promise<unknown> {
+  ): { idempotent: boolean } {
     this.assertNotDisposed();
     const state = this.requirePlugin(pluginId);
     this.assertActive(state);
@@ -1466,10 +1467,20 @@ export class PluginHost {
     if (!entry) {
       throw new HelmError('unknown_action', `插件 ${pluginId} 未声明动作 ${actionId}`, 404, { pluginId, actionId });
     }
-    // scope 是会话策略而非用户鉴权：无 conversationId 的人工 HTTP/CLI 调用放行；
-    // 提供 conversationId（模型 run_action / workflow）时必须命中才可执行。
     this.assertScopeAllows(pluginId, `动作 ${pluginId}.${actionId}`, entry.scope, context.conversationId);
     validatePluginInput(pluginId, actionId, entry.inputSchema, input);
+    return { idempotent: entry.idempotent === true };
+  }
+
+  async invokeAction(
+    pluginId: string,
+    actionId: string,
+    input: unknown,
+    context: PluginActionContext = {},
+  ): Promise<unknown> {
+    this.prepareAction(pluginId, actionId, input, context);
+    const state = this.requirePlugin(pluginId);
+    const entry = state.actions.get(actionId)!;
     const raw = await this.tracker.withTask(pluginId, `action:${pluginId}.${actionId}`, () =>
       Promise.resolve(entry.handler(input as never, context)),
     );
@@ -2045,6 +2056,9 @@ export class PluginHost {
           );
         }
         assertConversationScope(pluginId, `插件 ${pluginId} 动作 ${spec.id}`, spec.scope);
+        if (spec.idempotent !== undefined && typeof spec.idempotent !== 'boolean') {
+          throw new HelmError('validation_error', `插件 ${pluginId} 动作 ${spec.id} 的 idempotent 必须为 boolean`, 400);
+        }
         if (state.actions.has(spec.id)) {
           throw new HelmError('duplicate_action', `插件 ${pluginId} 重复声明动作 ${spec.id}`, 409);
         }
@@ -2060,6 +2074,7 @@ export class PluginHost {
           outputSchema: spec.outputSchema,
           cli: spec.cli,
           exposeAsTool: spec.exposeAsTool === true,
+          ...(spec.idempotent !== undefined ? { idempotent: spec.idempotent } : {}),
           toolAlias: actionToolAlias(pluginId, spec.id),
           ...(spec.scope !== undefined ? { scope: spec.scope } : {}),
           handler: spec.handler as (input: never, context: PluginActionContext) => unknown,
@@ -2318,6 +2333,15 @@ export class PluginHost {
       markConversationOwnership: (id, owner) => backend.markConversationOwnership(id, owner),
       createAsk: (spec) => backend.createAsk(spec),
       cancelAsk: (askId, reason) => backend.cancelAsk(askId, reason),
+      execEnv: async (req, opts) => {
+        this.assertContextUsable(state, epoch, 'host.execEnv');
+        if (!backend.execEnv) {
+          throw new HelmError('not_supported', '当前插件宿主未配置 execEnv 执行端口', 501, { pluginId });
+        }
+        return this.tracker.withTask(pluginId, 'host.execEnv', () =>
+          backend.execEnv!(req, opts),
+        );
+      },
       onEvent: (type, listener) =>
         acquire(`host.onEvent:${type}`)(() =>
           backend.onEvent(type, (payload: unknown) =>
@@ -2469,6 +2493,7 @@ export class PluginHost {
       outputSchema: entry.outputSchema,
       exposeAsTool: entry.exposeAsTool,
       ...(entry.scope !== undefined ? { scope: entry.scope } : {}),
+      ...(entry.idempotent !== undefined ? { idempotent: entry.idempotent } : {}),
     };
     if (entry.cli) manifest.cli = entry.cli;
     return manifest;

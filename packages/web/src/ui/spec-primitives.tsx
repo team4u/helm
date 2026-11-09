@@ -9,6 +9,7 @@ import { useEffect, useId, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { HelmIcon } from '../lib/icons.js'
+import { Select } from './Select.js'
 import { evaluateSpecValue, type EvalScope } from './evaluator.js'
 import { formatSpecText, normalizeSpec, resolveKeyValueItems, type NormalizedSpecNode } from './spec-normalize.js'
 
@@ -532,22 +533,16 @@ function SelectImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
       {label !== '' && <span style={{ fontSize: 11.5, color: 'var(--fg-secondary)' }}>{label}</span>}
-      <select
-        className="select"
+      <Select
         value={selected}
+        options={options}
         onChange={(e) => {
           setSelected(e.target.value)
           if (node.props['action'] !== undefined) {
             ctx.runAction(node.props['action'], { ...ctx.scope, $value: e.target.value }, pendingKey)
           }
         }}
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
+      />
     </label>
   )
 }

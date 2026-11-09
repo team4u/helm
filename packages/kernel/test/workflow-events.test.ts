@@ -224,9 +224,10 @@ test('节点按调用 index 全序输出：action 与 agent 混合并携带 labe
     'export const meta = { name: "mixed-order", description: "混合排序" }',
     'phase("阶段一")',
     'const slow = agent("首个慢任务", { label: "slow" })',
-    'await action("io.flush")',
+    'const flush = action("io.flush")',
     'const quick = agent("第二个任务", { label: "quick" })',
     'const results = await Promise.all([slow, quick])',
+    'await flush',
     'return results',
   ].join('\n')
   const env = makeEnv(
@@ -267,4 +268,8 @@ test('节点按调用 index 全序输出：action 与 agent 混合并携带 labe
     (u) => u.id === run.id && u.nodes?.some((n) => n.kind === 'agent' && n.label === 'quick' && n.status === 'pending'),
   )
   assert.ok(sawPending, '未获得并发槽位的排队 agent 必须展示为 pending')
+  assert.ok(
+    env.updates.some((u) => u.id === run.id && u.nodes?.some((n) => n.kind === 'action' && n.status === 'pending')),
+    'action 与 agent 共用并发槽位，等待中的 action 同样必须展示为 pending',
+  )
 })

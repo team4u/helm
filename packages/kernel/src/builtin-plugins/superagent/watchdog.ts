@@ -1338,6 +1338,7 @@ export function registerSuperAgentWatchdog(
   ctx.action<{ conversationId?: number; probe?: { targetKind: 'external'; nodeId?: string; targetId: string } }, Record<string, unknown>>({
     id: WATCHDOG_TOOL_INSPECT,
     description: '读取巡检目标真实详情（原生会话或最近外部探针事实，只读）',
+    idempotent: true,
     inputSchema: inspectSchema,
     outputSchema: inspectOutputSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },

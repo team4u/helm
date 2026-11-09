@@ -4,6 +4,7 @@ import { assetsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { ProviderCatalog } from './ProviderCatalog.js'
+import { Select } from '../ui/Select.js'
 import './provider-auth.css'
 
 type ProviderDraft = ProviderConfig & { modelText: string }
@@ -64,7 +65,17 @@ function ProvidersSection() {
           <div className="provider-gateway-fields">
             <label className="provider-field">ID<input className="input mono" value={provider.id} onChange={(event) => patch(index, { id: event.target.value })} disabled={saving} /></label>
             <label className="provider-field">展示名<input className="input" placeholder="可选" value={provider.label ?? ''} onChange={(event) => patch(index, { label: event.target.value })} disabled={saving} /></label>
-            <label className="provider-field">协议<select className="select" value={provider.protocol} onChange={(event) => patch(index, { protocol: event.target.value as 'openai' | 'anthropic' })} disabled={saving}><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic 兼容</option></select></label>
+            <label className="provider-field">协议
+              <Select
+                value={provider.protocol}
+                disabled={saving}
+                options={[
+                  { value: 'openai', label: 'OpenAI 兼容' },
+                  { value: 'anthropic', label: 'Anthropic 兼容' },
+                ]}
+                onChange={(event) => patch(index, { protocol: event.target.value as 'openai' | 'anthropic' })}
+              />
+            </label>
             <label className="provider-field">状态<span className="provider-gateway-toggle"><input type="checkbox" checked={provider.enabled} onChange={(event) => patch(index, { enabled: event.target.checked })} disabled={saving} />{provider.enabled ? '已启用' : '已停用'}</span></label>
             <label className="provider-field provider-gateway-url">Base URL<input className="input mono" placeholder="https://api.example.com/v1" value={provider.baseUrl} onChange={(event) => patch(index, { baseUrl: event.target.value })} disabled={saving} /></label>
           </div>
@@ -129,26 +140,39 @@ function DefaultsSection() {
       </div>
       <div className="provider-defaults-fields">
         <label className="provider-field">默认模型
-          <select className="select mono" aria-label="全局默认模型" disabled={!loaded || saving} value={model} onChange={(event) => {
-            const nextModel = event.target.value
-            const nextLevels = store.models.find((entry) => entry.id === nextModel)?.thinkingLevels ?? ['off']
-            setModel(nextModel)
-            if (thinkingLevel !== '' && !nextLevels.includes(thinkingLevel)) setThinkingLevel('')
-          }}>
-            <option value="">未设置（未配置模型的会话无法回复）</option>
-            {store.models.filter((entry) => entry.available).map((entry) => (
-              <option key={entry.id} value={entry.id}>{entry.id}</option>
-            ))}
-            {model !== '' && !store.models.some((entry) => entry.id === model && entry.available) && (
-              <option value={model}>{model}（目录外）</option>
-            )}
-          </select>
+          <Select
+            aria-label="全局默认模型"
+            disabled={!loaded || saving}
+            value={model}
+            options={[
+              { value: '', label: '未设置（未配置模型的会话无法回复）' },
+              ...store.models.filter((entry) => entry.available).map((entry) => ({
+                value: entry.id,
+                label: entry.id,
+              })),
+              ...(model !== '' && !store.models.some((entry) => entry.id === model && entry.available)
+                ? [{ value: model, label: `${model}（目录外）` }]
+                : []),
+            ]}
+            onChange={(event) => {
+              const nextModel = event.target.value
+              const nextLevels = store.models.find((entry) => entry.id === nextModel)?.thinkingLevels ?? ['off']
+              setModel(nextModel)
+              if (thinkingLevel !== '' && !nextLevels.includes(thinkingLevel)) setThinkingLevel('')
+            }}
+          />
         </label>
         <label className="provider-field">默认思考档位
-          <select className="select" aria-label="全局默认思考档位" disabled={!loaded || saving} value={thinkingLevel} onChange={(event) => setThinkingLevel(event.target.value)}>
-            <option value="">跟随 SDK 缺省</option>
-            {levelOptions.map((level) => <option key={level} value={level}>{level}</option>)}
-          </select>
+          <Select
+            aria-label="全局默认思考档位"
+            disabled={!loaded || saving}
+            value={thinkingLevel}
+            options={[
+              { value: '', label: '跟随 SDK 缺省' },
+              ...levelOptions.map((level) => ({ value: level, label: level })),
+            ]}
+            onChange={(event) => setThinkingLevel(event.target.value)}
+          />
         </label>
       </div>
       {model !== '' && levelOptions.length <= 1 && <p className="provider-help">所选模型不支持思考档位。</p>}

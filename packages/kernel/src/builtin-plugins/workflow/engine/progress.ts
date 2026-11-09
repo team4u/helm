@@ -86,6 +86,7 @@ export interface WorkflowActionEntry {
   type: 'workflow_action'
   index: number
   actionId: string
+  label?: string
   state: WorkflowEntryState
   /** 所属阶段（helm：与 agent 行同源的 ambient phase 透传）。 */
   phaseIndex?: number

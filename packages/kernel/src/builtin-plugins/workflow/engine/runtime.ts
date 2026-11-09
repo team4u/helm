@@ -148,6 +148,17 @@ export interface WorkflowHost {
    */
   runGate?(command: string, options: { agentId: string; cwd?: string }): Promise<WorkflowGateResult>
   /**
+   * 动作前置预检（Pre-flight，零副作用）：在落盘 `action_started` 之前调用。
+   * 用于校验 actionId 存在性/无歧义、插件启用、会话 scope 及 inputSchema，
+   * 并返回动作定义端的默认 `idempotent` 属性。
+   * 若抛错，说明 handler 完全未执行（零副作用），引擎不写 `action_started`。
+   */
+  prepareAction?(
+    actionId: string,
+    input: unknown,
+    context: { index: number; signal?: AbortSignal },
+  ): Promise<{ pluginId: string; actionId: string; idempotent?: boolean }> | { pluginId: string; actionId: string; idempotent?: boolean }
+  /**
    * 调用插件动作（helm action 原语）。pluginId/actionId 由宿主按 manifest
    * 精确解析后传入；input/output 均为安全 JSON。context.signal 随 run 中止。
    */
@@ -392,6 +403,8 @@ interface AgentCallPayload {
 interface ActionCallPayload {
   actionId: string
   input: unknown
+  label?: string
+  idempotent?: boolean
   phaseIndex?: number
   phaseTitle?: string
 }
@@ -531,12 +544,31 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
     if (entry.type === 'agent' || entry.type === 'action') settledByIndex.set(entry.index, entry)
   }
 
+  function hasNonIdempotentActionSuffix(fromIndex: number): boolean {
+    return journalEntries.some(
+      (entry) =>
+        entry.index >= fromIndex &&
+        (entry.type === 'action_started' || entry.type === 'action') &&
+        entry.idempotent !== true,
+    )
+  }
+
+  interface ReplayResult {
+    hit: boolean
+    entry?: import('@helm/protocol').WorkflowJournalEntry
+    conflictError?: string
+  }
+
   /**
    * 该 index 是否命中可复用前缀；失配即断链（此后全部 live）。
    * 类型必须与调用种类一致：agent 槽位撞上 action 行视同失配。
+   *
+   * 保守副作用安全：
+   * 首次断链时，若旧账本后续存在任何非幂等 action（无论成功、失败或未完成），
+   * 必须显式报错拒绝继续恢复转 live，防止自动重跑导致外部副作用重复执行。
    */
-  function replayAt(index: number, key: string, kind: 'agent' | 'action') {
-    if (!prefixIntact) return undefined
+  function replayAt(index: number, key: string, kind: 'agent' | 'action'): ReplayResult {
+    if (!prefixIntact) return { hit: false }
     const entry = settledByIndex.get(index)
     if (
       entry === undefined ||
@@ -546,9 +578,19 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       !entry.ok
     ) {
       prefixIntact = false
-      return undefined
+      if (hasNonIdempotentActionSuffix(index)) {
+        return {
+          hit: false,
+          conflictError:
+            `workflow_action_uncertain: journal replay broke prefix at index ${index}, ` +
+            `but the remaining journal suffix contains non-idempotent action(s). ` +
+            `Automatic live rerun would risk repeating external side effects. ` +
+            `Start a new run or confirm manually.`,
+        }
+      }
+      return { hit: false }
     }
-    return entry
+    return { hit: true, entry }
   }
 
   /** agent 行记账尽力而为：写失败只计数，不中断 run（resume 优化损失）。 */
@@ -595,6 +637,17 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         resolve()
       }
       live.wake = wake
+      pauseWaiters.add(wake)
+    })
+  }
+
+  function actionPauseGate(): Promise<void> {
+    if (!paused || aborted || settled) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      const wake = () => {
+        pauseWaiters.delete(wake)
+        resolve()
+      }
       pauseWaiters.add(wake)
     })
   }
@@ -652,6 +705,11 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
     ) => {
       openLaunches.delete(callId)
       if (settled) return
+      // 致命错误属于整个 run，不能让脚本 catch 或后续并发消息绕过副作用保护。
+      if (fatal) {
+        finish({ status: 'failed', error: error ?? 'Fatal workflow error.' })
+        return
+      }
       worker.postMessage({ type: 'response', callId, ok, value, error, fatal, spent: spentOutputTokens })
     }
 
@@ -780,28 +838,59 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         resume: payload.resume,
         schema: payload.schema !== undefined ? JSON.stringify(payload.schema) : undefined,
       }
-      let replayed = replayAt(index, agentJournalKey(keyInput), 'agent')
+      const replayed = replayAt(index, agentJournalKey(keyInput), 'agent')
+      if (replayed.conflictError !== undefined) {
+        respond(callId, false, undefined, replayed.conflictError, true)
+        return
+      }
+      let replayedEntry = replayed.hit ? replayed.entry : undefined
       // 伪造/不一致的缓存行拒绝：resumed 标记必须与本次调用是否 resume 严格
       // 对应（引擎只在真实 resume 调用时落该标记）。任一方向的不一致都不当
       // 合法缓存，按失配断链转 live。
       if (
-        replayed !== undefined &&
-        replayed.type === 'agent' &&
-        replayed.resumed === true !== (payload.resume !== undefined)
+        replayedEntry !== undefined &&
+        replayedEntry.type === 'agent' &&
+        replayedEntry.resumed === true !== (payload.resume !== undefined)
       ) {
         prefixIntact = false
-        replayed = undefined
-      }
-      if (replayed !== undefined && compiledSchema !== undefined) {
-        const recheck = applySchema({ ok: true, text: replayed.type === 'agent' ? replayed.text ?? '' : '' }, compiledSchema)
-        if (!recheck.ok) {
-          prefixIntact = false
-          replayed = undefined
+        replayedEntry = undefined
+        if (hasNonIdempotentActionSuffix(index)) {
+          respond(
+            callId,
+            false,
+            undefined,
+            `workflow_action_uncertain: journal replay broke prefix at index ${index}, ` +
+              `but the remaining journal suffix contains non-idempotent action(s). ` +
+              `Automatic live rerun would risk repeating external side effects. ` +
+              `Start a new run or confirm manually.`,
+            true,
+          )
+          return
         }
       }
-      if (replayed !== undefined && replayed.type === 'agent') {
+      if (replayedEntry !== undefined && compiledSchema !== undefined) {
+        const recheck = applySchema({ ok: true, text: replayedEntry.type === 'agent' ? replayedEntry.text ?? '' : '' }, compiledSchema)
+        if (!recheck.ok) {
+          prefixIntact = false
+          replayedEntry = undefined
+          if (hasNonIdempotentActionSuffix(index)) {
+            respond(
+              callId,
+              false,
+              undefined,
+              `workflow_action_uncertain: journal replay broke prefix at index ${index}, ` +
+                `but the remaining journal suffix contains non-idempotent action(s). ` +
+                `Automatic live rerun would risk repeating external side effects. ` +
+                `Start a new run or confirm manually.`,
+              true,
+            )
+            return
+          }
+        }
+      }
+      if (replayedEntry !== undefined && replayedEntry.type === 'agent') {
         replayedCount++
-        const replayedText = replayed.text ?? ''
+        const replayedText = replayedEntry.text ?? ''
         // 缓存节点也登记为可 resume 的 child（标 replayed）：同一脚本内后续
         // 匹配账本的 resume 调用可直接返回缓存文本；但它无活会话，前缀失配
         // 后需要真正续接时由上方 replayed 守卫显式失败。
@@ -830,10 +919,10 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         // 缓存分支记账保留 resumed 标记：原始调用是 resume 的，新账本必须如实。
         await recordAgent({
           index,
-          key: replayed.key,
+          key: replayedEntry.key,
           ok: true,
           text: replayedText,
-          ...(replayed.resumed === true ? { resumed: true } : {}),
+          ...(replayedEntry.type === 'agent' && replayedEntry.resumed === true ? { resumed: true } : {}),
         })
         respond(callId, true, replayedText)
         return
@@ -1041,148 +1130,278 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         actionId: payload.actionId,
         state: 'start',
         queuedAt,
+        ...(payload.label !== undefined ? { label: payload.label } : {}),
         ...(payload.phaseIndex !== undefined ? { phaseIndex: payload.phaseIndex } : {}),
         ...(payload.phaseTitle !== undefined ? { phaseTitle: payload.phaseTitle } : {}),
       }
       emit([{ ...base }])
 
-      let serializedInput: string
       try {
-        assertBoundarySafe(payload.input, `action('${payload.actionId}') input`)
-        serializedInput = JSON.stringify(payload.input ?? {})
-      } catch (error) {
-        respond(
-          callId,
-          false,
-          undefined,
-          `action('${payload.actionId}') input is not JSON-safe: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          true,
-        )
-        return
-      }
-      const key = actionJournalKey(payload.actionId, serializedInput)
-
-      const replayed = replayAt(index, key, 'action')
-      if (replayed !== undefined && replayed.type === 'action') {
-        replayedCount++
-        const at = Date.now()
-        const resultText = JSON.stringify(replayed.result ?? null)
-        emit([
-          {
-            ...base,
-            startedAt: at,
-            lastProgressAt: at,
-            durationMs: 0,
-            state: 'done',
-            cached: true,
-            resultPreview: preview(resultText),
-          },
-        ])
-        openLaunches.delete(callId)
-        // 只补记终态行（无副作用发生，无需 started 守护行）。补记失败即 fatal：
-        // 默默容忍会让新 run 账本缺失该 action 终态——下次 resume 无法复用，
-        // 可能重执行副作用。账本不可写 = 不可安全记账 = 不可继续。
+        let serializedInput: string
         try {
-          await appendJournal?.({ type: 'action', index, key, ok: true, result: redactJsonValue(replayed.result, redactText) })
+          assertBoundarySafe(payload.input, `action('${payload.actionId}') input`)
+          serializedInput = JSON.stringify(payload.input ?? {})
         } catch (error) {
-          const message =
-            error instanceof JournalWriteError
-              ? error.message
-              : `workflow journal append failed: ${error instanceof Error ? error.message : String(error)}`
+          openLaunches.delete(callId)
           respond(
             callId,
             false,
             undefined,
-            `workflow journal replay bookkeeping failed; aborting to keep the run resumable: ${message}`,
+            `action('${payload.actionId}') input is not JSON-safe: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
             true,
           )
           return
         }
-        respond(callId, true, replayed.result ?? null)
-        return
-      }
+        const key = actionJournalKey(payload.actionId, serializedInput)
 
-      // 执行前落 started 意图行；append 抛错（含 fsync 失败）即 fatal。
-      try {
-        await appendJournal?.({ type: 'action_started', index, key })
-      } catch (error) {
-        const message =
-          error instanceof JournalWriteError
-            ? error.message
-            : `workflow journal append failed: ${error instanceof Error ? error.message : String(error)}`
-        respond(callId, false, undefined, `workflow_action_uncertain: ${message}`, true)
-        return
-      }
+        const replayed = replayAt(index, key, 'action')
+        if (replayed.conflictError !== undefined) {
+          openLaunches.delete(callId)
+          respond(callId, false, undefined, replayed.conflictError, true)
+          return
+        }
 
-      const startedAt = Date.now()
-      emit([{ ...base, startedAt, lastProgressAt: startedAt }])
+        if (replayed.hit && replayed.entry !== undefined && replayed.entry.type === 'action') {
+          replayedCount++
+          const at = Date.now()
+          const resultText = JSON.stringify(replayed.entry.result ?? null)
+          emit([
+            {
+              ...base,
+              startedAt: at,
+              lastProgressAt: at,
+              durationMs: 0,
+              state: 'done',
+              cached: true,
+              resultPreview: preview(resultText),
+            },
+          ])
+          openLaunches.delete(callId)
+          // 只补记终态行（无副作用发生，无需 started 守护行）。补记失败即 fatal：
+          // 默默容忍会让新 run 账本缺失该 action 终态——下次 resume 无法复用，
+          // 可能重执行副作用。账本不可写 = 不可安全记账 = 不可继续。
+          const effectiveReplayedIdempotent = payload.idempotent ?? (replayed.entry.idempotent === true)
+          try {
+            await appendJournal?.({
+              type: 'action',
+              index,
+              key,
+              ok: true,
+              result: redactJsonValue(replayed.entry.result, redactText),
+              ...(effectiveReplayedIdempotent ? { idempotent: true } : {}),
+            })
+          } catch (error) {
+            const message =
+              error instanceof JournalWriteError
+                ? error.message
+                : `workflow journal append failed: ${error instanceof Error ? error.message : String(error)}`
+            respond(
+              callId,
+              false,
+              undefined,
+              `workflow journal replay bookkeeping failed; aborting to keep the run resumable: ${message}`,
+              true,
+            )
+            return
+          }
+          respond(callId, true, replayed.entry.result ?? null)
+          return
+        }
 
-      let outcome: { ok: true; result: unknown } | { ok: false; error: string }
-      try {
-        const invoked = await host.invokeAction(payload.actionId, payload.input ?? {}, {
-          index,
-          ...(options.signal !== undefined ? { signal: options.signal } : {}),
-        })
-        assertBoundarySafe(invoked.result, `action('${payload.actionId}') result`)
-        outcome = { ok: true, result: invoked.result }
-      } catch (error) {
-        outcome = { ok: false, error: error instanceof Error ? error.message : String(error) }
-      }
+        // 未命中缓存：必须等待并发许可后 live 执行（缓存命中不占 semaphore）
+        for (;;) {
+          await actionPauseGate()
+          await semaphore.acquire()
+          if (aborted || settled) {
+            semaphore.release()
+            openLaunches.delete(callId)
+            respond(callId, false, undefined, 'Workflow aborted.', true)
+            return
+          }
+          if (isPaused() && !aborted && !settled) {
+            semaphore.release()
+            continue
+          }
+          break
+        }
 
-      const finishedAt = Date.now()
-      // 终态行落盘（fsync）之后才 respond；写失败 = 已执行但无法记账，显式不确定。
-      try {
-        await appendJournal?.(
-          outcome.ok
-            ? { type: 'action', index, key, ok: true, result: redactJsonValue(outcome.result, redactText) }
-            : { type: 'action', index, key, ok: false, error: redactText(outcome.error) },
-        )
-      } catch (error) {
-        const message =
-          error instanceof JournalWriteError
-            ? error.message
-            : `workflow journal append failed: ${error instanceof Error ? error.message : String(error)}`
+        try {
+          if (aborted || settled) {
+            openLaunches.delete(callId)
+            respond(callId, false, undefined, 'Workflow aborted.', true)
+            return
+          }
+
+          // Pre-flight 预检
+          let prepared: { pluginId: string; actionId: string; idempotent?: boolean } | undefined
+          if (host.prepareAction !== undefined) {
+            try {
+              prepared = await host.prepareAction(payload.actionId, payload.input ?? {}, {
+                index,
+                ...(options.signal !== undefined ? { signal: options.signal } : {}),
+              })
+            } catch (error) {
+              const errMsg = error instanceof Error ? error.message : String(error)
+              try {
+                await appendJournal?.({
+                  type: 'action',
+                  index,
+                  key,
+                  ok: false,
+                  idempotent: true,
+                  error: redactText(errMsg),
+                })
+              } catch (jErr) {
+                const message =
+                  jErr instanceof JournalWriteError
+                    ? jErr.message
+                    : `workflow journal append failed: ${jErr instanceof Error ? jErr.message : String(jErr)}`
+                openLaunches.delete(callId)
+                respond(callId, false, undefined, `workflow_action_uncertain: ${message}`, true)
+                return
+              }
+              const finishedAt = Date.now()
+              emit([
+                {
+                  ...base,
+                  startedAt: queuedAt,
+                  lastProgressAt: finishedAt,
+                  durationMs: finishedAt - queuedAt,
+                  state: 'error',
+                  error: errMsg,
+                },
+              ])
+              openLaunches.delete(callId)
+              respond(callId, true, null)
+              return
+            }
+          }
+
+          if (aborted || settled) {
+            openLaunches.delete(callId)
+            respond(callId, false, undefined, 'Workflow aborted.', true)
+            return
+          }
+
+          const effectiveIdempotent = payload.idempotent ?? (prepared?.idempotent === true)
+
+          // 许可取得并完成 preflight 后才记 startedAt 与落 started 意图行
+          const startedAt = Date.now()
+          try {
+            await appendJournal?.({
+              type: 'action_started',
+              index,
+              key,
+              ...(effectiveIdempotent ? { idempotent: true } : {}),
+            })
+          } catch (error) {
+            const message =
+              error instanceof JournalWriteError
+                ? error.message
+                : `workflow journal append failed: ${error instanceof Error ? error.message : String(error)}`
+            openLaunches.delete(callId)
+            respond(callId, false, undefined, `workflow_action_uncertain: ${message}`, true)
+            return
+          }
+
+          if (aborted || settled) return
+          emit([{ ...base, startedAt, lastProgressAt: startedAt }])
+
+          let outcome: { ok: true; result: unknown } | { ok: false; error: string }
+          try {
+            const invoked = await host.invokeAction(payload.actionId, payload.input ?? {}, {
+              index,
+              ...(options.signal !== undefined ? { signal: options.signal } : {}),
+            })
+            assertBoundarySafe(invoked.result, `action('${payload.actionId}') result`)
+            outcome = { ok: true, result: invoked.result }
+          } catch (error) {
+            outcome = { ok: false, error: error instanceof Error ? error.message : String(error) }
+          } finally {
+            openLaunches.delete(callId)
+          }
+
+          const finishedAt = Date.now()
+          // 终态行落盘（fsync）之后才 respond；写失败 = 已执行但无法记账，显式不确定。
+          try {
+            await appendJournal?.(
+              outcome.ok
+                ? {
+                    type: 'action',
+                    index,
+                    key,
+                    ok: true,
+                    result: redactJsonValue(outcome.result, redactText),
+                    ...(effectiveIdempotent ? { idempotent: true } : {}),
+                  }
+                : {
+                    type: 'action',
+                    index,
+                    key,
+                    ok: false,
+                    error: redactText(outcome.error),
+                    ...(effectiveIdempotent ? { idempotent: true } : {}),
+                  },
+            )
+          } catch (error) {
+            const message =
+              error instanceof JournalWriteError
+                ? error.message
+                : `workflow journal append failed: ${error instanceof Error ? error.message : String(error)}`
+            respond(
+              callId,
+              false,
+              undefined,
+              outcome.ok
+                ? `workflow_action_uncertain: action executed but its outcome could not be journaled (${message}). The side effect may have happened; do not re-run blindly.`
+                : `workflow_action_uncertain: action failed and the failure could not be journaled (${message}).`,
+              true,
+            )
+            return
+          }
+
+          if (outcome.ok) {
+            const resultText = JSON.stringify(outcome.result)
+            emit([
+              {
+                ...base,
+                startedAt,
+                lastProgressAt: finishedAt,
+                durationMs: finishedAt - startedAt,
+                state: 'done',
+                resultPreview: preview(resultText),
+              },
+            ])
+            respond(callId, true, outcome.result)
+            return
+          }
+          emit([
+            {
+              ...base,
+              startedAt,
+              lastProgressAt: finishedAt,
+              durationMs: finishedAt - startedAt,
+              state: 'error',
+              error: outcome.error,
+            },
+          ])
+          // 失败照 agent 语义折叠为 null（pipeline/parallel 吞错为 null）。
+          respond(callId, true, null)
+        } finally {
+          semaphore.release()
+        }
+      } catch (unhandledError) {
+        openLaunches.delete(callId)
         respond(
           callId,
           false,
           undefined,
-          outcome.ok
-            ? `workflow_action_uncertain: action executed but its outcome could not be journaled (${message}). The side effect may have happened; do not re-run blindly.`
-            : `workflow_action_uncertain: action failed and the failure could not be journaled (${message}).`,
+          `Action execution unexpected error: ${unhandledError instanceof Error ? unhandledError.message : String(unhandledError)}`,
           true,
         )
-        return
       }
-
-      if (outcome.ok) {
-        const resultText = JSON.stringify(outcome.result)
-        emit([
-          {
-            ...base,
-            startedAt,
-            lastProgressAt: finishedAt,
-            durationMs: finishedAt - startedAt,
-            state: 'done',
-            resultPreview: preview(resultText),
-          },
-        ])
-        respond(callId, true, outcome.result)
-        return
-      }
-      emit([
-        {
-          ...base,
-          startedAt,
-          lastProgressAt: finishedAt,
-          durationMs: finishedAt - startedAt,
-          state: 'error',
-          error: outcome.error,
-        },
-      ])
-      // 失败照 agent 语义折叠为 null（pipeline/parallel 吞错为 null）。
-      respond(callId, true, null)
     }
 
     async function handleLoadWorkflow(callId: number, ref: WorkflowScriptRef): Promise<void> {
@@ -1223,14 +1442,20 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           break
         case 'call':
           if (message.method === 'workflow') {
-            void handleLoadWorkflow(message.callId, message.payload)
+            void handleLoadWorkflow(message.callId, message.payload).catch((error: unknown) => {
+              finish({ status: 'failed', error: error instanceof Error ? error.message : String(error) })
+            })
             break
           }
           if (message.method === 'action') {
-            void handleAction(message.callId, message.payload)
+            void handleAction(message.callId, message.payload).catch((error: unknown) => {
+              finish({ status: 'failed', error: error instanceof Error ? error.message : String(error) })
+            })
             break
           }
-          void handleAgent(message.callId, message.payload)
+          void handleAgent(message.callId, message.payload).catch((error: unknown) => {
+            finish({ status: 'failed', error: error instanceof Error ? error.message : String(error) })
+          })
           break
         case 'complete': {
           const unawaited = [...openLaunches.values()]
