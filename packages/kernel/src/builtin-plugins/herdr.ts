@@ -545,6 +545,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
       ctx.action<Record<string, never>, { panes: Array<Record<string, unknown>> }>({
         id: 'list',
         description: '列出本插件管理的 Herdr 窗格（nodeId/pane/状态/归属）',
+        idempotent: true,
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: {
           type: 'object',
@@ -607,6 +608,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
       ctx.action<{ paneId: string; nodeId?: string }, { paneId: string; nodeId: string; text: string }>({
         id: 'read',
         description: '读取本插件管理窗格的终端尾部快照（40 行，脱敏；跨节点同 ID 用 nodeId 消歧）',
+        idempotent: true,
         inputSchema: {
           type: 'object',
           properties: {

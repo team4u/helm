@@ -147,6 +147,8 @@ export type WorkflowJournalEntry =
       type: 'action_started'
       index: number
       key: string
+      /** 幂等动作标记：悬挂或失败时不触发 workflow_action_uncertain，恢复时允许断链重跑。 */
+      idempotent?: true
     }
   | {
       v: 1
@@ -158,6 +160,8 @@ export type WorkflowJournalEntry =
       ok: boolean
       result?: unknown
       error?: string
+      /** 幂等动作标记：悬挂或失败时不触发 workflow_action_uncertain，恢复时允许断链重跑。 */
+      idempotent?: true
     }
 
 /** 内置编排插件 ID 与公共运行态文档名。 */

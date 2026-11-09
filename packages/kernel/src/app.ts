@@ -52,6 +52,15 @@ export async function createHelm(options: HelmOptions = {}) {
           const result = await kernel.plugins.invokeAction(pluginId, actionId, input, context);
           return redactJsonValue(result, (text) => kernel.stash.redact(text));
         },
+        prepareAction: (pluginId, actionId, input, context) =>
+          kernel.plugins.prepareAction(pluginId, actionId, input, context),
+        execEnv: async (req, signal) => {
+          const res = await kernel.execEnv(req, undefined, signal);
+          return {
+            ...res,
+            output: kernel.stash.redact(res.output),
+          };
+        },
         listActions: () => kernel.plugins.listActions(),
         getConversation: (id) => kernel.getConversation(id),
         abortConversation: (id) => kernel.abortConversation(id),

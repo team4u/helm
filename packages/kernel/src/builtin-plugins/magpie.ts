@@ -329,6 +329,7 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
       ctx.action({
         id: 'status',
         description: 'Magpie 网关状态快照（可达性、模型数、配额、路由轨迹）',
+        idempotent: true,
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: STATUS_OUTPUT_SCHEMA,
         handler: () => {
@@ -384,6 +385,7 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
       ctx.action({
         id: 'quota',
         description: '实时查询 Magpie 配额（GET /v1/magpie/quotas）',
+        idempotent: true,
         inputSchema: {
           type: 'object',
           properties: { model: { type: 'string', description: '按模型归属 provider 过滤（可选）' } },
@@ -422,6 +424,7 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
       ctx.action({
         id: 'groups',
         description: '路由组列表与最近命中（本机读 magpie CLI + 网关 trace；远端仅网关 trace）',
+        idempotent: true,
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: GROUPS_OUTPUT_SCHEMA,
         handler: async () => {
@@ -486,6 +489,7 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
       ctx.action({
         id: 'group',
         description: '单个路由组的定义与最近一次路由决策',
+        idempotent: true,
         inputSchema: {
           type: 'object',
           required: ['id'],

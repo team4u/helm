@@ -199,18 +199,37 @@ log("开始执行依赖安全性扫描")
 
 日志会自动附带当前作用域前缀与阶段标识。
 
-### 6. `action(id, input)`
+### 6. `action(id, input, options)`
 
-零 Token 确定性调用 Helm 插件注册的动作能力。
+零 Token 确定性调用 Helm 插件注册的动作能力或内建动作。
 
-- `id` (`string`)：插件动作标识符，格式为 `pluginId:actionName`。
-- `input` (`object`)：传给动作的输入参数对象。
-- 特性：不消耗模型 Token，执行结果记入确定性流水账本。
+- `id` (`string`)：插件动作标识符，格式为 `pluginId.actionName`（唯一时可使用短名），或内建受控命令执行动作 `"env.exec"`（短名 `"exec"`）。
+- `input` (`object`)：传给动作的输入参数对象（可选，缺省 `{}`）。
+- `options` (`object`)：调用选项配置（可选）：
+  - `idempotent` (`boolean`)：覆盖声明动作的幂等性。为 `true` 时表示脚本作者对动作可安全重复执行（包含部分完成或异常重试）的承诺（非引擎检测所得），失败或中断时允许恢复放行并断链重跑；引擎以此阻止已知不安全的非幂等自动重放，但不提供外部分布式事务保证。
+  - `label` (`string`)：节点自定义显示标签，呈现在检查器与运行摘要中。
+  - `phase` (`string`)：覆盖当前所属阶段名称。
+
+#### 内建命令执行动作：`env.exec`（或短名 `exec`）
+
+通过内核 `EnvFabric` 在当前会话绑定的计算节点与工作目录执行命令：
+
+- `command` (`string | string[]`)：必填，待执行命令或命令行参数数组。
+- `cwd` (`string`)：可选，跨平台绝对路径工作目录。
+- `nodeId` (`string`)：可选，目标节点 ID（缺省当前会话所在节点）。
+- `env` (`Record<string, string>`)：可选，注入的环境变量字典（普通参数，不承诺任意明文机密不落源码/args）。
+- `timeoutMs` (`number`)：可选，超时毫秒数（1 ~ 600000）。
+- `allowFailure` (`boolean`)：可选，为 `true` 时非零退出码不抛异常，直接返回包含退出码与输出的结果对象。
+
+返回值结构为 `{ ok: boolean, exitCode: number | null, output: string, timedOut: boolean }`。
 
 ```javascript
-const result = await action("builtin:git:diff", {
-  base: "main",
-  head: "feature",
+// 执行 git diff 命令，标记为幂等只读操作
+const diffResult = await action("env.exec", {
+  command: ["git", "diff", "main...feature"],
+}, {
+  idempotent: true,
+  label: "获取代码变更",
 })
 ```
 
@@ -300,8 +319,11 @@ log(`开始针对分支 ${targetBranch} 执行审计`)
 
 // 2. 阶段一：环境准备与差异提取
 phase("环境准备")
-const diffSummary = await action("builtin:git:diff_stat", {
-  target: targetBranch,
+const diffSummary = await action("env.exec", {
+  command: ["git", "diff", "--stat", `origin/${targetBranch}`],
+}, {
+  idempotent: true,
+  label: "差异提取",
 })
 
 // 3. 阶段二：并行多维度代码审查

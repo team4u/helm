@@ -584,6 +584,7 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
   ctx.action({
     id: 'cron_list',
     description: '列出全部 cron 定时任务（含 lastRunAt/nextRunAt/lastError 调度状态）',
+    idempotent: true,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: {
       type: 'object',

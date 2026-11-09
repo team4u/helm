@@ -1902,3 +1902,177 @@ test('hook 数字字段收紧：非整数/负 id/负 seq 拒绝，合法空 text
   const okEnv = await host.runHook('trigger', makeEnvelope());
   assert.equal(okEnv.action, 'transform');
 });
+
+// ---------------------------------------------------------------------------
+// ctx.host.execEnv 与 prepareAction / idempotent
+// ---------------------------------------------------------------------------
+
+test('ctx.host.execEnv：未配置时抛 501 not_supported', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  let capturedError: unknown;
+  await host.register({
+    id: 'p:exec-unsupported',
+    definePlugin: (ctx) => {
+      ctx.action({
+        id: 'run-cmd',
+        description: 'run',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        async handler() {
+          try {
+            await ctx.host.execEnv!({ command: 'echo 1' });
+          } catch (err) {
+            capturedError = err;
+            throw err;
+          }
+          return {};
+        },
+      });
+    },
+  });
+
+  await rejectsCode(
+    host.invokeAction('p:exec-unsupported', 'run-cmd', {}),
+    'not_supported',
+    501,
+  );
+  assert.ok(capturedError instanceof HelmError);
+  assert.equal((capturedError as HelmError).code, 'not_supported');
+});
+
+test('ctx.host.execEnv：正常执行 + 在途任务保护（withTask）阻止 disable', { timeout: 60_000 }, async () => {
+  let finishExec!: (res: { ok: boolean; exitCode: number; output: string; timedOut: boolean }) => void;
+  const execPromise = new Promise<{ ok: boolean; exitCode: number; output: string; timedOut: boolean }>((resolve) => {
+    finishExec = resolve;
+  });
+
+  const backend: PluginHostBackend = {
+    ...makeHostApi(events),
+    execEnv: async () => {
+      return execPromise;
+    },
+  };
+  const host = new PluginHost({ dataDir, host: backend, docs });
+
+  let actionPromise!: Promise<unknown>;
+  await host.register({
+    id: 'p:exec-live',
+    definePlugin: (ctx) => {
+      ctx.action({
+        id: 'run-cmd',
+        description: 'run',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        async handler() {
+          const res = await ctx.host.execEnv!({ command: 'long-job' });
+          return { out: res.output };
+        },
+      });
+    },
+  });
+
+  // 发起动作，卡在 execEnv 中
+  actionPromise = host.invokeAction('p:exec-live', 'run-cmd', {});
+  await new Promise((r) => setTimeout(r, 20));
+
+  // 此时在途有 host.execEnv 和 action:p:exec-live.run-cmd，disable 必须被 409 拒绝
+  await rejectsCode(host.disable('p:exec-live'), 'plugin_has_live_tasks', 409);
+
+  // 放行 execEnv
+  finishExec({ ok: true, exitCode: 0, output: 'finished', timedOut: false });
+  const actionRes = (await actionPromise) as { out: string };
+  assert.equal(actionRes.out, 'finished');
+
+  // 在途任务清空后，可以成功 disable
+  await host.disable('p:exec-live');
+  assert.equal(host.list().find((p) => p.id === 'p:exec-live')!.enabled, false);
+});
+
+test('ctx.action idempotent：注册期校验与 manifest 反映', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  // 必须是 boolean
+  await assert.rejects(
+    host.register({
+      id: 'p:bad-idempotent',
+      definePlugin: (ctx) => {
+        ctx.action({
+          id: 'act',
+          description: 'x',
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object' },
+          idempotent: 'yes' as never,
+          handler: () => ({}),
+        });
+      },
+    }),
+    (err: unknown) => {
+      assert.ok(err instanceof HelmError);
+      assert.equal(err.code, 'validation_error');
+      return true;
+    },
+  );
+
+  await host.register({
+    id: 'p:good-idempotent',
+    definePlugin: (ctx) => {
+      ctx.action({
+        id: 'read-act',
+        description: 'x',
+        idempotent: true,
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        handler: () => ({}),
+      });
+      ctx.action({
+        id: 'write-act',
+        description: 'x',
+        idempotent: false,
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        handler: () => ({}),
+      });
+    },
+  });
+
+  const manifests = host.listActions();
+  const readM = manifests.find((m) => m.id === 'read-act');
+  const writeM = manifests.find((m) => m.id === 'write-act');
+  assert.equal(readM?.idempotent, true);
+  assert.equal(writeM?.idempotent, false);
+});
+
+test('prepareAction：Pre-flight 前置校验状态、scope 与 inputSchema 并返回 idempotent', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  await host.register({
+    id: 'p:prep',
+    definePlugin: (ctx) => {
+      ctx.action({
+        id: 'safe-read',
+        description: 'x',
+        idempotent: true,
+        inputSchema: {
+          type: 'object',
+          properties: { name: { type: 'string' } },
+          required: ['name'],
+          additionalProperties: false,
+        },
+        outputSchema: { type: 'object' },
+        handler: () => ({}),
+      });
+    },
+  });
+
+  // 1) 校验通过，返回定义端 idempotent: true
+  const prepOk = host.prepareAction('p:prep', 'safe-read', { name: 'helm' });
+  assert.equal(prepOk.idempotent, true);
+
+  // 2) 未知 action -> 404
+  throwsCode(() => host.prepareAction('p:prep', 'non-existent', {}), 'unknown_action');
+
+  // 3) inputSchema 校验失败 -> 400 validation_error
+  throwsCode(() => host.prepareAction('p:prep', 'safe-read', { name: 123 }), 'validation_error');
+
+  // 4) 插件未启用 -> 409 plugin_disabled
+  await host.disable('p:prep');
+  throwsCode(() => host.prepareAction('p:prep', 'safe-read', { name: 'helm' }), 'plugin_disabled');
+});

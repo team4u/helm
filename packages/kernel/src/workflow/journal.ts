@@ -45,7 +45,7 @@ import type { WorkflowJournalEntry } from '@helm/protocol'
  */
 export type JournalWriteInput =
   | { type: 'agent'; index: number; key: string; ok: boolean; text?: string; resumed?: true; seq?: number }
-  | { type: 'action_started'; index: number; key: string; seq?: number }
+  | { type: 'action_started'; index: number; key: string; seq?: number; idempotent?: true }
   | {
       type: 'action'
       index: number
@@ -54,6 +54,7 @@ export type JournalWriteInput =
       result?: unknown
       error?: string
       seq?: number
+      idempotent?: true
     }
 
 /** agent 调用的 key 输入（决定该 agent 做什么的所有字段）。 */
@@ -126,7 +127,13 @@ function isAgentEntry(value: unknown): value is Extract<WorkflowJournalEntry, { 
 function isActionStartedEntry(value: unknown): value is Extract<WorkflowJournalEntry, { type: 'action_started' }> {
   if (typeof value !== 'object' || value === null) return false
   const e = value as Record<string, unknown>
-  return e['type'] === 'action_started' && Number.isInteger(e['index']) && (e['index'] as number) >= 0 && typeof e['key'] === 'string'
+  return (
+    e['type'] === 'action_started' &&
+    Number.isInteger(e['index']) &&
+    (e['index'] as number) >= 0 &&
+    typeof e['key'] === 'string' &&
+    (e['idempotent'] === undefined || e['idempotent'] === true)
+  )
 }
 
 function isActionEntry(value: unknown): value is Extract<WorkflowJournalEntry, { type: 'action' }> {
@@ -137,7 +144,8 @@ function isActionEntry(value: unknown): value is Extract<WorkflowJournalEntry, {
     Number.isInteger(e['index']) &&
     (e['index'] as number) >= 0 &&
     typeof e['key'] === 'string' &&
-    typeof e['ok'] === 'boolean'
+    typeof e['ok'] === 'boolean' &&
+    (e['idempotent'] === undefined || e['idempotent'] === true)
   )
 }
 
@@ -217,9 +225,15 @@ export function readJournal(path: string): JournalReadResult {
   for (const entry of entries) {
     if (entry.type === 'action') startedByKey.delete(`${entry.index}:${entry.key}`)
   }
-  const dangling = startedByKey.size > 0
+  let dangling = false
+  for (const started of startedByKey.values()) {
+    if (started.idempotent !== true) {
+      dangling = true
+      break
+    }
+  }
 
-  const failedActions = entries.filter((e) => e.type === 'action' && !e.ok).length
+  const failedActions = entries.filter((e) => e.type === 'action' && !e.ok && e.idempotent !== true).length
 
   // 落盘顺序稳定化：seq 严格升序（去重：同 seq 以首行为准），index 顺序由前缀
   // 匹配逻辑按需检查。

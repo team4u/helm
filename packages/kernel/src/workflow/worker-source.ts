@@ -247,8 +247,8 @@ function makeScope(name, depth) {
   scope.workflow = function (ref, args) {
     return workflowIn(scope, ref, args);
   };
-  scope.action = function (actionId, input) {
-    return actionIn(scope, actionId, input);
+  scope.action = function (actionId, input, opts) {
+    return actionIn(scope, actionId, input, opts);
   };
   scope.console = makeConsole(scope);
   return scope;
@@ -393,25 +393,62 @@ async function agentIn(scope, prompt, opts) {
   }
 }
 
+const ACTION_OPT_KEYS = ["idempotent", "label", "phase"];
+
 /**
- * action(actionId, input) — helm 新增原语。
+ * action(actionId, input, opts) — helm 扩展原语。
  *
  * 零 Token 确定性调用宿主动作总线。input 必须是可序列化 JSON（可选参数，
- * 缺省为 {}）；宿主负责 manifest 精确匹配、schema 校验与账本重放语义，
- * worker 侧只做边界检查与转发。
+ * 缺省为 {}）；opts 支持 idempotent/label/phase；宿主负责 manifest 精确匹配、
+ * schema 校验与账本重放语义，worker 侧只做边界检查与转发。
  */
-async function actionIn(scope, actionId, input) {
-  const id = requireText(actionId, "action(actionId, input)");
+async function actionIn(scope, actionId, input, opts) {
+  const id = requireText(actionId, "action(actionId, input, opts)");
   if (input === undefined) input = {};
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
-    throw new Error("action(actionId, input) expects input to be a JSON object.");
+    throw new Error("action(actionId, input, opts) expects input to be a JSON object.");
   }
   checkBoundary(input, "action('" + id + "') input");
+
+  let idempotent = undefined;
+  let label = undefined;
+  let phaseName = undefined;
+
+  if (opts !== undefined) {
+    if (typeof opts !== "object" || opts === null || Array.isArray(opts)) {
+      throw new Error("action(actionId, input, opts) expects opts to be an object.");
+    }
+    const keys = Object.keys(opts);
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      if (ACTION_OPT_KEYS.indexOf(k) === -1) {
+        throw new Error("action() unknown option '" + k + "'. Allowed: " + ACTION_OPT_KEYS.join(", ") + ".");
+      }
+    }
+    if (opts.idempotent !== undefined) {
+      if (typeof opts.idempotent !== "boolean") {
+        throw new Error("action() opts.idempotent must be a boolean.");
+      }
+      idempotent = opts.idempotent;
+    }
+    if (opts.label !== undefined) {
+      label = requireText(opts.label, "action() opts.label");
+    }
+    if (opts.phase !== undefined) {
+      phaseName = requireText(opts.phase, "action() opts.phase");
+    }
+  }
+
+  const phaseIndex = phaseName !== undefined ? definePhaseIn(scope, phaseName) : scope.ambientPhaseIndex;
+  const phaseTitle = phaseName !== undefined ? scopedTitle(scope, phaseName) : scope.ambientPhaseTitle;
+
   return await callHost("action", {
     actionId: id,
     input: input,
-    phaseIndex: scope.ambientPhaseIndex,
-    phaseTitle: scope.ambientPhaseTitle,
+    label: label,
+    idempotent: idempotent,
+    phaseIndex: phaseIndex,
+    phaseTitle: phaseTitle,
   });
 }
 

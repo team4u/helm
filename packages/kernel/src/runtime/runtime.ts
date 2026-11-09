@@ -640,6 +640,13 @@ export class KernelRuntime {
         createAsk: (spec) => this.createAsk(spec),
         cancelAsk: (askId, reason) => this.cancelAsk(askId, reason),
         registerAskSeqResolver: (resolver) => this.registerAskSeqResolver(resolver),
+        execEnv: async (req, opts) => {
+          const res = await this.execEnv(req, undefined, opts?.signal)
+          return {
+            ...res,
+            output: this.stash.redact(res.output),
+          }
+        },
         onWorkflowSettled: (listener) => this.onWorkflowSettled(listener),
         onEvent: (type, listener) =>
           this.events.subscribe((frame) => {

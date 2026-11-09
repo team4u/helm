@@ -18,6 +18,7 @@ import type {
   TurnSettledPayload,
   WhenBusy,
 } from './conversation.js'
+import type { EnvExecRequest, EnvExecResponse } from './env-rpc.js'
 import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
 import type { WorkflowRunSummary } from './workflow.js'
 import type { WorktreeCleanupRequest, WorktreeCleanupResult } from './worktree.js'
@@ -304,6 +305,12 @@ export interface PluginActionSpec<TIn, TOut> {
   cli?: PluginActionCliSpec
   /** true 直接注入模型工具列表；否则经元工具 run_action 按需调用。 */
   exposeAsTool?: boolean
+  /**
+   * 该动作是否为幂等/只读操作（默认 false）：
+   * - false：中断或失败时账本标记 workflow_action_uncertain，拒绝自动恢复重跑副作用；
+   * - true：成功时前缀缓存复用，中断或失败时允许 resumeFromRunId 从该步起安全重跑。
+   */
+  idempotent?: boolean
   /** 会话作用域：提供 conversationId 的调用（含 run_action/workflow）必须命中才可执行；人工 HTTP/CLI 不受限制。 */
   scope?: ConversationScope
   handler(input: TIn, context: PluginActionContext): MaybePromise<TOut>
@@ -405,6 +412,12 @@ export interface ActionManifest {
   inputSchema: JsonSchema
   outputSchema: JsonSchema
   exposeAsTool?: boolean
+  /**
+   * 该动作是否为幂等/只读操作（默认 false）：
+   * - false：中断或失败时账本标记 workflow_action_uncertain，拒绝自动恢复重跑副作用；
+   * - true：成功时前缀缓存复用，中断或失败时允许 resumeFromRunId 从该步起安全重跑。
+   */
+  idempotent?: boolean
   cli?: PluginActionCliSpec
   scope?: ConversationScope
 }
@@ -459,6 +472,15 @@ export interface HelmHostApi {
       env?: Record<string, string>
     },
   ): Promise<{ ok: boolean; output: string }>
+  /**
+   * 经内核 EnvFabric 跨节点执行命令（复用 local / 远端 @helm/node 通道、SecretStash 注入与脱敏）。
+   * 靶点解析优先级：显式 nodeId/cwd > conversationId 绑定 (nodeId, cwd) > 'local'/Hub cwd。
+   * 远端节点离线时显式抛 409 node_offline，绝不静默回退本机。
+   */
+  execEnv?(
+    req: Omit<EnvExecRequest, 'stream'>,
+    opts?: { signal?: AbortSignal },
+  ): Promise<EnvExecResponse>
   /** 重启恢复前持久标记中断的子会话任务取消（必须在调度器恢复前调用）。 */
   prepareInterruptedConversations?(ids: number[]): Promise<void>
   /** 清理受管 Git 工作树。 */
