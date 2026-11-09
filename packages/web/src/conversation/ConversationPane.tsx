@@ -7,6 +7,7 @@ import { isConversationDeletable, isHumanSelectableProfile } from '../shell/side
 import { useHelmStore } from '../lib/store-context.js'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/DropdownMenu.js'
 import { Tooltip } from '../ui/Tooltip.js'
+import { ConfirmDialog } from '../ui/AlertDialog.js'
 import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
 import { ConversationTimeline } from './ConversationTimeline.js'
@@ -54,6 +55,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const [moreOpen, setMoreOpen] = useState(false)
   const [prefill, setPrefill] = useState<{ text: string; entryId?: number; attachments?: ConversationAttachmentRef[]; tick: number } | null>(null)
   const [sendingInFlight, setSendingInFlight] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<'reset' | 'delete' | null>(null)
   const moreMenuRef = useRef<HTMLSpanElement | null>(null)
   const moreButtonRef = useRef<HTMLButtonElement | null>(null)
 
@@ -402,9 +404,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                     danger
                     disabled={actionPending !== null}
                     onSelect={() => {
-                      // 危险操作先确认：reset 切换上下文但不删历史，文案如实说明后果
-                      if (!window.confirm(`重置会话 #${conversationId} 的上下文？历史消息保留，模型将从全新上下文开始。`)) return
-                      void runAction('reset', () => conversationsApi.reset(conversationId), '上下文已重置')
+                      setConfirmAction('reset')
                     }}
                   >
                     <span className="pane-more-item-label">
@@ -416,25 +416,8 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                     <DropdownMenuItem
                       className="popover-item popover-item-danger"
                       danger
-                      onSelect={async () => {
-                        if (!window.confirm(`确定删除会话 #${conversationId} 吗？此操作无法撤销。`)) return
-                        try {
-                          await conversationsApi.remove(conversationId)
-                          store.openTarget({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
-                          store.pushNotice({
-                            type: 'notification',
-                            level: 'info',
-                            title: '已删除会话',
-                            body: `会话 #${conversationId} 已删除`,
-                          })
-                        } catch (err) {
-                          store.pushNotice({
-                            type: 'notification',
-                            level: 'error',
-                            title: '删除会话失败',
-                            body: err instanceof Error ? err.message : String(err),
-                          })
-                        }
+                      onSelect={() => {
+                        setConfirmAction('delete')
                       }}
                     >
                       <span className="pane-more-item-label">
@@ -461,6 +444,56 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
       />
 
       <Composer key={`composer-${conversation.id}`} conversation={conversation} prefill={prefill} onSendingChange={setSendingInFlight} />
+
+      <ConfirmDialog
+        open={confirmAction === 'reset'}
+        onOpenChange={(open) => {
+          if (!open) setConfirmAction(null)
+        }}
+        title={`重置会话 #${conversationId} 的上下文？`}
+        description="历史消息保留，模型将从全新上下文开始。"
+        confirmText="重置上下文"
+        danger
+        onConfirm={() => {
+          setConfirmAction(null)
+          void runAction('reset', () => conversationsApi.reset(conversationId), '上下文已重置')
+        }}
+        onCancel={() => setConfirmAction(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmAction === 'delete'}
+        onOpenChange={(open) => {
+          if (!open) setConfirmAction(null)
+        }}
+        title={`确定删除会话 #${conversationId} 吗？`}
+        description="此操作无法撤销。"
+        confirmText="删除会话"
+        danger
+        onConfirm={() => {
+          setConfirmAction(null)
+          void (async () => {
+            try {
+              await conversationsApi.remove(conversationId)
+              store.openTarget({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
+              store.pushNotice({
+                type: 'notification',
+                level: 'info',
+                title: '已删除会话',
+                body: `会话 #${conversationId} 已删除`,
+              })
+            } catch (err) {
+              store.pushNotice({
+                type: 'notification',
+                level: 'error',
+                title: '删除会话失败',
+                body: err instanceof Error ? err.message : String(err),
+              })
+            }
+          })()
+        }}
+        onCancel={() => setConfirmAction(null)}
+      />
     </div>
   )
 }
