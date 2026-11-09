@@ -94,28 +94,58 @@ export function subagentFooter(resumeRef: string | undefined, resolved: AgentExe
 }
 
 /**
+ * 插件工具结构化结果信封的判别条件（防止任意含 output 字段的业务对象被误
+ * 识别为信封）：必须至少含 output（字符串或数组）/ structuredOutput /
+ * isError 三个信封字段之一，且出现的信封字段全部类型合法；任一信封字段
+ * 类型非法则显式报错（不是当普通对象静默走文本通道——工具作者意图不明，
+ * 边界拒绝优于猜测）。
+ */
+function envelopeProblem(raw: Record<string, unknown>): { isEnvelope: boolean; problem?: string } {
+  const hasOutput = raw['output'] !== undefined
+  const hasStructured = raw['structuredOutput'] !== undefined
+  const hasError = raw['isError'] !== undefined
+  if (!hasOutput && !hasStructured && !hasError) return { isEnvelope: false }
+  if (hasOutput && typeof raw['output'] !== 'string' && !Array.isArray(raw['output'])) {
+    return { isEnvelope: true, problem: 'output 必须是字符串或 { type: \'text\', text } 数组' }
+  }
+  if (hasError && typeof raw['isError'] !== 'boolean') {
+    return { isEnvelope: true, problem: 'isError 必须是布尔值' }
+  }
+  return { isEnvelope: true }
+}
+
+/**
  * 插件工具原始返回 -> SDK ToolExecutionResult：
- * - 结构化结果信封 { output, structuredOutput?, isError? }：当 raw 是含
- *   output（字符串或数组）/ structuredOutput / isError 字段的对象时按信封
- *   规整（文本与 structuredOutput 均过脱敏；structuredOutput 仅在工具声明了
- *   structuredOutputSchema 时保留，否则丢弃并归入文本通道）；
+ * - 结构化结果信封 { output, structuredOutput?, isError? }：仅当出现的信封
+ *   字段全部类型合法时按信封规整（文本与 structuredOutput 均过脱敏；
+ *   structuredOutput 仅在工具声明了 structuredOutputSchema 时保留）；
+ * - 工具未声明 structuredOutputSchema 却返回 structuredOutput：显式拒绝
+ *   （invalid_tool_result，不再静默丢弃——数据丢失必须让插件作者看见）；
  * - 其余任意值统一包单文本块 content（无 schema 不传 structuredOutput）。
  */
 export function pluginToolResult(
   raw: unknown,
   redact: (text: string) => string,
-  options?: { structuredOutputSchema?: unknown },
+  options?: { structuredOutputSchema?: unknown; toolName?: string; callId?: string },
 ): {
   output: Array<{ type: 'text'; text: string }>
   structuredOutput?: unknown
   isError?: boolean
 } {
+  const where = options?.toolName !== undefined
+    ? `工具 ${options.toolName}${options?.callId !== undefined ? `（callId=${options.callId}）` : ''}`
+    : '插件工具'
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
     const env = raw as { output?: unknown; structuredOutput?: unknown; isError?: unknown }
-    const hasOutput = env.output !== undefined
-    const hasStructured = env.structuredOutput !== undefined
-    const hasError = env.isError !== undefined
-    if (hasOutput || hasStructured || hasError) {
+    const verdict = envelopeProblem(raw as Record<string, unknown>)
+    if (verdict.isEnvelope) {
+      if (verdict.problem !== undefined) {
+        throw new HelmError(
+          'invalid_tool_result',
+          `${where} 的结果信封字段类型非法：${verdict.problem}`,
+          500,
+        )
+      }
       // output：字符串包单文本块；数组原样校验后透传。
       let output: Array<{ type: 'text'; text: string }>
       if (typeof env.output === 'string') {
@@ -125,7 +155,7 @@ export function pluginToolResult(
           if (block === null || typeof block !== 'object' || (block as { type?: unknown }).type !== 'text' || typeof (block as { text?: unknown }).text !== 'string') {
             throw new HelmError(
               'invalid_tool_result',
-              '插件工具结果信封的 output 数组仅接受 { type: \'text\', text } 块',
+              `${where} 的结果信封 output 数组仅接受 { type: 'text', text } 块`,
               500,
             )
           }
@@ -136,7 +166,7 @@ export function pluginToolResult(
       } else {
         throw new HelmError(
           'invalid_tool_result',
-          '插件工具结果信封的 output 必须是字符串或 { type: \'text\', text } 数组',
+          `${where} 的结果信封 output 必须是字符串或 { type: 'text', text } 数组`,
           500,
         )
       }
@@ -144,15 +174,23 @@ export function pluginToolResult(
         output,
       }
       // structuredOutput 仅在工具声明 schema 时保留（SDK 契约）；值级脱敏。
-      if (hasStructured && options?.structuredOutputSchema !== undefined) {
+      // 未声明 schema 却返回 structuredOutput：显式拒绝（不静默丢数据）。
+      if (env.structuredOutput !== undefined && options?.structuredOutputSchema === undefined) {
+        throw new HelmError(
+          'invalid_tool_result',
+          `${where} 未声明 structuredOutputSchema 却返回了 structuredOutput（SDK 契约禁止；请声明 schema 或改为纯 output 文本）`,
+          500,
+        )
+      }
+      if (env.structuredOutput !== undefined && options?.structuredOutputSchema !== undefined) {
         result.structuredOutput = redactJsonValue(env.structuredOutput, redact)
       }
       if (env.isError === true) result.isError = true
       return result
     }
   }
-  // 未声明 structuredOutputSchema 的工具不得返回 structuredOutput（SDK 契约）：
-  // 结果统一走 output 文本通道。
+  // 未命中信封判别（无任何信封字段，或字段类型全部合法但一个都没出现）：
+  // 普通业务值统一走文本通道（无 schema 不传 structuredOutput）。
   return { output: [{ type: 'text', text: safeResultText(raw, redact) }] }
 }
 

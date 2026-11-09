@@ -20,16 +20,8 @@ test('外部子代理执行元数据的工具正文与持久结果统一脱敏',
   try {
     const secret = 'private-metadata-folder'
     kernel.stash.put(1, 'PATH_SECRET', secret)
-    // subagent 工具由 builtin:workflow 插件提供（进程内 state 即可）。
-    const docs = new Map<string, unknown>()
-    await kernel.plugins.register(createWorkflowPlugin({
-      state: {
-        get: <T>(key: string, initial: T): T => (docs.has(key) ? (docs.get(key) as T) : initial),
-        set: <T>(key: string, value: T): void => {
-          docs.set(key, value)
-        },
-      },
-    }))
+    // subagent 工具由 builtin:workflow 插件提供（引擎 state 走插件私有 records doc）。
+    await kernel.plugins.register(createWorkflowPlugin())
     await kernel.plugins.register({
       id: 'test:metadata-boundary',
       definePlugin(ctx) {

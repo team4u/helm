@@ -13,7 +13,7 @@
  * 4. submitInput opts.meta 从 API 层直达 helm.input entry 与 turn_settled；
  * 5. 受管 token：不出现在任何落库/事件/模型文本（回显不落库）、close dispose、
  *    setHubUrl 热更新工具 env；
- * 6. snapshot ui/workflowRuns（provider 注入）、watchdog tick singleflight 有意义
+ * 6. snapshot ui/pluginDocs（provider 注入）、watchdog tick singleflight 有意义
  *    （真实 stalledMs/consecutiveErrors 事实）、getConversationDetail 分页与
  *    cursor 校验、waitForInput 精确回答与失败显式抛错。
  */

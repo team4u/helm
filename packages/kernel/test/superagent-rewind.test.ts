@@ -166,7 +166,7 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
   const skills = new SkillService(dataDir)
   await profiles.ensureDefault()
 
-  const hub = new EventHub({ initialSeq: 0, snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], workflowRuns: [] }) })
+  const hub = new EventHub({ initialSeq: 0, snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [] }) })
 
   const deps: SuperAgentDependencies = {
     dataDir,

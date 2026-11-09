@@ -1,5 +1,4 @@
 import { KernelRuntime } from './runtime/index.js';
-import { WorkflowService } from './workflow/index.js';
 import { createAssistantPlugin } from './builtin-plugins/assistant.js';
 import { createWorkflowPlugin } from './builtin-plugins/workflow.js';
 import { createHerdrPlugin } from './builtin-plugins/herdr.js';
@@ -39,19 +38,12 @@ export async function createHelm(options: HelmOptions = {}) {
   const { herdrTransport, ...runtimeOptions } = options;
   const kernel = await KernelRuntime.open({ ...runtimeOptions, autoResume: false });
   try {
-    // builtin:workflow 首个注册（默认启用）：prepareRecovery 在其服务 start
-    // 内先于任何会提交输入唤醒 SDK 调度器的插件服务执行；workflows.init()
-    // 同样在 start 内完成（所有插件注册完毕后 kernel.start() 前）。
-    // 引擎实例由组合层保留引用供 startHub 之外的场景显式关停（close 统一走
-    // kernel.plugins dispose 的 service.stop）。
-    let workflowsRef: WorkflowService | undefined
-    await kernel.plugins.register(createWorkflowPlugin({
-      redact: (text) => kernel.stash.redact(text),
-      state: kernel.documentStore,
-    }));
-    // 引用仅用于诊断/测试观察；生命周期归插件服务管理。
-    workflowsRef = undefined
-    void workflowsRef
+    // builtin:workflow 首个注册（默认启用）：服务 prepare/start 由 PluginHost
+    // 启动屏障统一调度——kernel.start() 在全部插件注册完成后先执行全局
+    // prepare（workflow 的 prepareRecovery 只落 abort 标记，不唤醒 SDK）
+    // 再逐插件 start（workflow 的 init 终止遗留任务并补发通知，此刻工具已
+    // 全部注册），最后才 resume 调度器。引擎生命周期自包含于插件服务。
+    await kernel.plugins.register(createWorkflowPlugin());
 
     const snapshotAnalyzer = createBlockedSnapshotAnalyzer(kernel);
     await kernel.plugins.register(createAssistantPlugin(kernel));

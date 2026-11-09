@@ -91,18 +91,10 @@ async function openRuntime(dataDir: string, cwd?: string): Promise<RuntimeEnv> {
     watchdogIntervalMs: 0,
     autoResume: false,
   })
-  // 编排插件（subagent / cleanup_worktree 动作与工具；引擎 state 用进程内
-  // 存储即可——本文件聚焦 worktree 生命周期而非跨重启 run 恢复）。
-  const docs = new Map<string, unknown>()
+  // 编排插件（subagent / cleanup_worktree 动作与工具；引擎 state 走插件私有
+  // records doc 持久层——本文件聚焦 worktree 生命周期而非跨重启 run 恢复）。
   await kernel.plugins.register(
-    createWorkflowPlugin({
-      state: {
-        get: <T>(key: string, initial: T): T => (docs.has(key) ? (docs.get(key) as T) : initial),
-        set: <T>(key: string, value: T): void => {
-          docs.set(key, value)
-        },
-      },
-    }),
+    createWorkflowPlugin(),
   )
   const handler = createHubHandler(kernel)
   const { token } = kernel.auth.createProcessToken()
