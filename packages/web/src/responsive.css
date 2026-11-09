@@ -190,6 +190,14 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .mermaid-modal-actions { order: 3; width: 100%; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-start; }
 }
 
+/* 产物预览弹窗：移动端全屏时标题独占一行，操作按钮折到第二行 */
+@media (max-width: 680px) {
+  .artifact-preview-header { flex-wrap: wrap; padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); gap: 8px 6px; }
+  .artifact-preview-header > span:first-child { order: 1; flex: 1 1 100%; min-width: 0; }
+  .artifact-preview-header > span:last-child { order: 2; justify-content: flex-start; }
+  .modal-fullscreen .modal-body { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+}
+
 /* 命令面板关闭按钮响应式 */
 .palette-close-btn { display: inline-flex; align-items: center; }
 .palette-close-desktop { display: inline-flex; }

@@ -940,7 +940,7 @@ export function ConversationTimeline({
                 conversation={conversation}
                 siblingCalls={siblingCalls}
                 isLatestTurn={item.key === lastAssistantKey}
-              />)
+              />
             </div>
           )
         })}
