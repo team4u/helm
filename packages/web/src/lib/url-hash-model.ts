@@ -26,6 +26,7 @@ const MODAL_KIND_TO_KEY = {
   'plugin-settings': 'plugins',
   nodes: 'nodes',
   'artifact-preview': 'artifact',
+  'conversation-drawer': 'drawer',
 } as const
 
 const MODAL_KEY_TO_KIND = {
@@ -35,6 +36,7 @@ const MODAL_KEY_TO_KIND = {
   plugins: 'plugin-settings',
   nodes: 'nodes',
   artifact: 'artifact-preview',
+  drawer: 'conversation-drawer',
 } as const
 
 /** 路径段只保留冒号可读；段内的斜杠必须编码，不能与目标分隔符混淆。 */
@@ -81,13 +83,14 @@ function formatTargetValue(target: ResolvedTarget): string {
   return `s/${encodeSegment(target.pluginId)}/${encodeSegment(target.screenId)}`
 }
 
-/** 列表型弹窗的子项 ID（profileId / skillId / pluginId / nodeId）。 */
+/** 列表型弹窗的子项 ID（profileId / skillId / pluginId / nodeId）或抽屉会话 ID。 */
 const modalSubId = (modal: PersistedModal): string | undefined => {
   switch (modal.kind) {
     case 'profile-editor': return modal.profileId
     case 'skill-viewer': return modal.skillId
     case 'plugin-settings': return modal.pluginId
     case 'nodes': return modal.nodeId
+    case 'conversation-drawer': return String(modal.conversationId)
     default: return undefined
   }
 }
@@ -117,6 +120,11 @@ function parseActiveModal(params: URLSearchParams): ActiveModal {
       return subId === undefined ? { kind: 'plugin-settings' } : { kind: 'plugin-settings', pluginId: subId }
     case 'nodes':
       return subId === undefined ? { kind: 'nodes' } : { kind: 'nodes', nodeId: subId }
+    case 'conversation-drawer': {
+      if (subId === undefined) return null
+      const convId = parsePositiveInt(subId)
+      return convId === null ? null : { kind: 'conversation-drawer', conversationId: convId }
+    }
   }
 }
 
@@ -205,6 +213,9 @@ export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: Wo
   if (prevModal.kind === 'artifact-preview' && nextModal.kind === 'artifact-preview') {
     return prevModal.artifactId !== nextModal.artifactId
       || (prevModal.conversationId ?? undefined) !== (nextModal.conversationId ?? undefined)
+  }
+  if (prevModal.kind === 'conversation-drawer' && nextModal.kind === 'conversation-drawer') {
+    return prevModal.conversationId !== nextModal.conversationId
   }
   return false
 }

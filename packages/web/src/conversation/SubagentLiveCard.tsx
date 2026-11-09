@@ -110,8 +110,7 @@ export function SubagentLiveCard({
   }
 
   const openDrawer = (): void => {
-    store.setWorkbenchTab('tasks')
-    store.setWorkbenchOpen(true)
+    store.setActiveModal({ kind: 'conversation-drawer', conversationId: childConversationId })
     onNavigate?.()
   }
 
@@ -129,8 +128,8 @@ export function SubagentLiveCard({
         <button
           type="button"
           className="subagent-live-trigger"
-          aria-label={`查看子会话 #${childConversationId} 详情`}
-          title={[taskTitle, summary?.profileId, wt?.branch, statSegments.join(' · '), '点击打开工作台查看任务详情'].filter(Boolean).join('\n')}
+          aria-label={`打开子会话 #${childConversationId} 抽屉`}
+          title={[taskTitle, summary?.profileId, wt?.branch, statSegments.join(' · '), '点击打开子会话抽屉'].filter(Boolean).join('\n')}
           onClick={openDrawer}
         >
           <HelmIcon

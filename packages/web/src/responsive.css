@@ -200,6 +200,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 680px), (pointer: coarse) {
   .palette-close-desktop { display: none !important; }
   .palette-close-mobile { display: inline-flex !important; }
+  .conversation-drawer { width: 100vw; }
 }
 
 /* 插件设置头部小屏折行与防挤压 */

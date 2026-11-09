@@ -250,6 +250,38 @@ textarea {
   overflow: hidden;
 }
 
+/* 子代理会话侧边抽屉 */
+.conversation-drawer-wrapper {
+  position: fixed;
+  inset: 0;
+  z-index: 68;
+}
+
+.conversation-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 68;
+  background: var(--bg-backdrop);
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.conversation-drawer {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: min(720px, 92vw);
+  z-index: 69;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 /* ==========================================================================
  * 3. 左栏导航（淡色选中背景 + 零左侧彩条）
  * ========================================================================== */
@@ -2086,9 +2118,12 @@ textarea {
   color: var(--warn);
 }
 
-.subagent-live-subline-error .subagent-live-subline-tag,
+.subagent-live-subline-error .subagent-live-subline-tag {
+  color: var(--fg-subtle);
+}
+
 .subagent-live-subline-error .subagent-live-subline-text {
-  color: var(--err);
+  color: var(--fg-muted);
 }
 
 /* 工作台顶部 Fleet 状态摘要条 */
@@ -2347,7 +2382,7 @@ textarea {
 }
 
 .subagent-stream-error {
-  color: var(--err);
+  color: var(--fg-muted);
 }
 
 .subagent-stream-meta {
@@ -2595,7 +2630,7 @@ textarea {
 }
 
 .workflow-node-progress-err {
-  color: var(--err);
+  color: var(--fg-muted);
 }
 
 .workflow-node-right {
@@ -2637,7 +2672,7 @@ textarea {
 }
 
 .workflow-node-pre-err {
-  color: var(--err);
+  color: var(--fg);
 }
 
 .workflow-node-gate-extra {

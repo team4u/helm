@@ -944,7 +944,7 @@ test('子代理卡为极简胶囊卡：不渲染内联展开箭头与调用详�
   assert.ok(!html.includes('subagent-live-stream'), '不得内联渲染实时流')
   assert.ok(!html.includes('进入会话'), '不得渲染进入会话页面按钮')
   assert.ok(html.includes('并排查看'), '应保留并排查看分屏入口')
-  assert.ok(html.includes('点击打开工作台查看任务详情'), '应支持点击卡片打开工作台查看任务详情')
+  assert.ok(html.includes('点击打开子会话抽屉'), '应支持点击卡片打开子会话抽屉')
 })
 
 const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/u

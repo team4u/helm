@@ -15,6 +15,8 @@ export interface ConversationPaneProps {
   conversationId: number
   isSplit?: boolean
   onCloseSplit?: () => void
+  isDrawer?: boolean
+  onCloseDrawer?: () => void
 }
 
 /** 分屏窗格右上角关闭入口：加载中/加载失败早退分支同样可见，手机不被困住。 */
@@ -34,7 +36,7 @@ function CloseSplitButton({ onCloseSplit }: { onCloseSplit: () => void }) {
 }
 
 /** 会话顶栏 + 时间线 + AskDock(Composer 内) + Composer 微操舱。 */
-export function ConversationPane({ conversationId, isSplit, onCloseSplit }: ConversationPaneProps) {
+export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDrawer, onCloseDrawer }: ConversationPaneProps) {
   const store = useHelmStore()
   const detail = store.conversationDetails[conversationId]
   const summary = useMemo(() => store.conversations.find((c) => c.id === conversationId), [store.conversations, conversationId])
@@ -91,7 +93,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
           <p>会话 #{conversationId} 加载失败：{detailError}</p>
           <span className="pane-error-actions">
             <button className="btn" onClick={() => void store.loadConversationDetail(conversationId, true)}>重试</button>
-            {isSplit && onCloseSplit !== undefined ? <CloseSplitButton onCloseSplit={onCloseSplit} /> : null}
+            {isDrawer && onCloseDrawer !== undefined ? (
+              <button type="button" className="btn btn-sm btn-ghost" onClick={onCloseDrawer}>关闭</button>
+            ) : isSplit && onCloseSplit !== undefined ? <CloseSplitButton onCloseSplit={onCloseSplit} /> : null}
           </span>
         </div>
       </div>
@@ -102,7 +106,11 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
     return (
       <div className={isSplit ? 'helm-split-pane' : 'helm-pane'} style={{ alignItems: 'center', justifyContent: 'center', color: 'var(--fg-muted)', fontSize: 12 }}>
         正在加载会话 #{conversationId}…
-        {isSplit && onCloseSplit !== undefined ? (
+        {isDrawer && onCloseDrawer !== undefined ? (
+          <span className="pane-loading-split-close">
+            <button type="button" className="btn btn-sm btn-ghost" onClick={onCloseDrawer}>关闭</button>
+          </span>
+        ) : isSplit && onCloseSplit !== undefined ? (
           <span className="pane-loading-split-close">
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           </span>
@@ -262,7 +270,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
               <span className="pane-action-label">新话题</span>
             </button>
           ) : null}
-          {workbenchCount > 0 || hasWorkbenchPanel ? (
+          {!isDrawer && (workbenchCount > 0 || hasWorkbenchPanel) ? (
             <button
               type="button"
               className={`btn btn-sm${store.workbenchOpen ? ' btn-primary' : ''}`}
@@ -277,7 +285,18 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
               {workbenchCount > 0 && <span className={`badge ${workbenchBadge} tabular-nums`}>{workbenchCount}</span>}
             </button>
           ) : null}
-          {isSplit && onCloseSplit !== undefined ? (
+          {isDrawer && onCloseDrawer !== undefined ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost drawer-close-btn"
+              aria-label="关闭抽屉"
+              title="关闭子会话抽屉"
+              onClick={onCloseDrawer}
+            >
+              <HelmIcon name="x" size={13} />
+              <span className="pane-action-label">关闭</span>
+            </button>
+          ) : isSplit && onCloseSplit !== undefined ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
             <button

@@ -44,6 +44,7 @@ export type ActiveModal =
   | { kind: 'plugin-settings'; pluginId?: string }
   | { kind: 'nodes'; nodeId?: string }
   | { kind: 'artifact-preview'; artifactId: string; conversationId?: number }
+  | { kind: 'conversation-drawer'; conversationId: number }
   | null
 
 export interface QualifiedUiSpec<T> {

@@ -244,10 +244,10 @@ cp -r ./* ~/.helm/plugins/sample-plugin/
 
 ```bash
 # 列出所有已发现插件
-helm plugin list
+helm plugins list
 
 # 启用指定插件
-helm plugin enable sample-plugin
+helm plugins enable sample-plugin
 ```
 
 ### 步骤三：验证 Action 动作调用

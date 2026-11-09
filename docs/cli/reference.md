@@ -700,11 +700,11 @@ helm plugins client herdr --output ./dist/herdr-client.mjs
 # 检查当前所有可用动作
 helm actions list
 
-# 触发 Herdr 终端窗格调度
-helm herdr create-tab --tool-kind claude --cwd /workspace/project
+# 触发 Herdr 终端窗格列表查询
+helm herdr list --json
 
-# 触发 SuperAgent 巡检
-helm superagent inspect-worker --worker-id 88
+# 归档已结束的后台 Worker
+helm superagent archive_worker --worker-conversation-id 88 --json
 ```
 
 映射规则如下：

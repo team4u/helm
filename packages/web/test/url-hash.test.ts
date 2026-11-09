@@ -87,6 +87,10 @@ test('parse: 六种弹窗及子项 ID（profiles/providers/skills/plugins/nodes/
     artifactId: 'art-123',
     conversationId: 42,
   })
+  assert.deepEqual(parseLocationHash('#/c/1?modal=drawer&id=42').activeModal, {
+    kind: 'conversation-drawer',
+    conversationId: 42,
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -147,6 +151,7 @@ test('roundtrip: 全部位置形态双向往返无损', { timeout: 60_000 }, () 
     { ...conversation(1), activeModal: { kind: 'nodes', nodeId: 'gpu-server' } },
     { ...conversation(1), activeModal: { kind: 'artifact-preview', artifactId: 'art-9' } },
     { ...conversation(1), activeModal: { kind: 'artifact-preview', artifactId: 'art-9', conversationId: 42 } },
+    { ...conversation(1), activeModal: { kind: 'conversation-drawer', conversationId: 11 } },
   ]
   for (const state of states) {
     const back = roundtrip(state)

@@ -3,6 +3,7 @@ import { HelmIcon } from './lib/icons.js'
 import { ModalFocusScope } from './shell/ModalFocusScope.js'
 import { ArtifactPreviewModal } from './conversation/ArtifactPreviewModal.js'
 import { ConversationPane } from './conversation/ConversationPane.js'
+import { ConversationDrawer } from './conversation/ConversationDrawer.js'
 import { WorkbenchDrawer } from './conversation/WorkbenchDrawer.js'
 import { HelmStoreProvider } from './lib/HelmStoreProvider.js'
 import { useHelmStore } from './lib/store-context.js'
@@ -170,6 +171,12 @@ function HelmShellInner() {
       {store.activeModal?.kind === 'artifact-preview' && (
         <ArtifactPreviewModal
           artifactId={store.activeModal.artifactId}
+          conversationId={store.activeModal.conversationId}
+          onClose={closeModal}
+        />
+      )}
+      {store.activeModal?.kind === 'conversation-drawer' && (
+        <ConversationDrawer
           conversationId={store.activeModal.conversationId}
           onClose={closeModal}
         />

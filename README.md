@@ -141,7 +141,7 @@ pnpm helm send "请列出当前项目的所有核心包" --wait
 ### 6. 执行首个确定性工作流
 
 ```bash
-pnpm helm workflows run demo/hello-orchestra.workflow.js --input '{"word":"开源"}' --wait
+pnpm helm workflows run demo/hello-orchestra.workflow.js --args '{"word":"开源"}' --wait
 ```
 
 ---
@@ -179,7 +179,7 @@ return { replies, summary }
 执行工作流命令：
 
 ```bash
-pnpm helm workflows run demo/hello-orchestra.workflow.js --input '{"word":"创新"}' --wait --json
+pnpm helm workflows run demo/hello-orchestra.workflow.js --args '{"word":"创新"}' --wait --json
 ```
 
 ### 2. 跨平台执行底座 `EnvFabric`
@@ -199,8 +199,8 @@ pnpm helm-node start -d
 # 步骤 3：在指定目标节点流式执行命令
 pnpm helm env exec --node build-server --cwd /workspace --stream -- git status
 
-# 步骤 4：在独立 Git Worktree 执行任务并自动门禁
-pnpm helm workflows run test.workflow.js --node build-server --isolation worktree --wait
+# 步骤 4：在指定节点会话中执行工作流，或通过 agent({ isolation: 'worktree', gate: 'pnpm test' }) 隔离执行
+pnpm helm workflows run demo/hello-orchestra.workflow.js --args '{"word":"集群"}' --current --wait
 ```
 
 ### 3. Herdr 终端 CLI Agent 深度协同
@@ -229,7 +229,7 @@ Hub 提供的每一个功能均具备完全一致的 CLI 命令映射。
 
 ```bash
 # 结合 jq 过滤活跃会话
-pnpm helm conversations list --json | jq '.items[] | select(.status == "active")'
+pnpm helm conversations list --json | jq '.[] | select(.status == "working")'
 
 # 获取当前会话最近消息
 pnpm helm conversations get --current --limit 5 --json
@@ -240,7 +240,7 @@ pnpm helm workflows inspect <runId> --json > workflow-result.json
 
 ---
 
-## 四大内置插件一览
+## 内置插件生态一览
 
 Helm 采用微内核设计，所有扩展能力均通过插件实现：
 
@@ -310,7 +310,7 @@ pnpm helm custom-checker lint --input '{"targetDir":"/workspace"}' --json
 | | `helm conversations get <id> --json` | 查看会话详情与最新时间线 |
 | | `helm send "<prompt>" --wait` | 向会话投递输入并等待完成 |
 | **确定性编排** | `helm workflows list --json` | 查看已注册工作流列表 |
-| | `helm workflows run <file> --input '<json>' --wait` | 执行确定性多智能体工作流 |
+| | `helm workflows run <file> --args '<json>' --wait` | 执行确定性多智能体工作流 |
 | | `helm workflows inspect <runId> --json` | 查看工作流阶段状态与执行流水 |
 | | `helm workflows abort <runId>` | 中止在途工作流任务 |
 | **受控节点** | `helm nodes list --json` | 查看所有节点在线与离线状态 |
