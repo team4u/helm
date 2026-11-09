@@ -211,7 +211,21 @@ export function SampleWidget() {
 }
 ```
 
-`@helm/plugin-client` 是宿主共享模块（编译器虚拟化为全局命名空间）：`usePluginDoc(docName)` 响应式订阅当前插件的公共文档，`usePluginContext()` 提供宿主交互能力（`openArtifact` / `openWorkbench` / `closeWorkbench` / `notify` 等）。注意 `client.tsx` 是可信代码而非安全沙箱，宿主不提供隔离边界。
+`@helm/plugin-client` 是宿主共享模块，编译器将其映射到全局命名空间：
+
+| 共享 Hook | 作用 |
+| :--- | :--- |
+| `usePluginDoc(docName)` | 响应式订阅当前插件的公共文档，自动绑定插件 ID |
+| `useConversations()` | 订阅宿主会话摘要列表 |
+| `useConversation(conversationId)` | 订阅单个会话的摘要、详情、流式状态和审批；按需加载详情并提供重试方法 |
+| `usePluginContext()` | 获取 `callAction`、`openConversationDrawer`、`openArtifact`、`openWorkbench`、`closeWorkbench`、`notify` 等宿主交互能力 |
+| `useToolActivity(callId, active)` | 工具视图向所在时间线回合报告真实后台活动，宿主据此控制复制/分叉按钮 |
+
+`useToolActivity` 的注册表属于当前回合，不进入全局 Store。工具调用已经返回但后台任务仍在执行时，插件应根据自己的真实状态报告 `active: true`。同一调用的多个挂载来源独立清理；参数变化、卸载或插件停用会自动释放登记。缺少 `callId` 或组件不在时间线回合内时不登记，因此工作台视图不会影响其他回合。
+
+`openConversationDrawer(conversationId)` 打开现有子会话抽屉，不切换主屏、不创建分屏，也不改变工作台开关。
+
+注意 `client.tsx` 是可信代码而非安全沙箱，宿主不提供隔离边界。
 
 3. **在后端注册组件**：
 

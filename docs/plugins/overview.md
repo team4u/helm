@@ -88,6 +88,10 @@ flowchart LR
 4. **停用阶段**：校验在途任务，停止后台服务，卸载 Hook 与动态动作。
 5. **卸载阶段**：清理运行时上下文，释放会话管理权。
 
+Hub 首次启动时，宿主先等待全部已启用服务的 `prepare()`，再启动任何服务的 `start()`，最后恢复会话调度。热启用同样先执行该插件的 `prepare()` 再执行 `start()`。
+
+`stop()` 必须取消或等待本服务的在途回调。宿主等待服务停止时，允许本插件当前启用周期的文档句柄完成最终写入；这个停止窗口不区分回调的异步来源。服务返回后旧句柄失效，不得留下继续写入的回调。需要保证落盘时，应在返回前等待文档 `flush()`。
+
 ---
 
 ## 动作单点 Schema 与五端映射
@@ -183,7 +187,12 @@ monitorDoc.update((state) => ({
   ...state,
   activeNodes: state.activeNodes + 1,
 }));
+
+// 必须先完成持久化再执行外部副作用时，显式等待冲刷。
+await monitorDoc.flush();
 ```
+
+`get()`、`set()` 和 `update()` 操作同步镜像；写入已排队不表示 SQLite 已完成持久化。`flush()` 等待底层存储的排队写完成，失败会拒绝。它冲刷共享存储队列，不是按单个文档划分的事务。
 
 ### 文档公开与实时事件
 
@@ -276,7 +285,7 @@ export interface HelmHostApi {
 
   // 系统事件（订阅如 'workflow.settled'；插件停用时自动解除）
   onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void;
-  emitEvent(type: string, payload: unknown): void;
+  emitEvent(type: string, payload: unknown): MaybePromise<void>;
 }
 ```
 
