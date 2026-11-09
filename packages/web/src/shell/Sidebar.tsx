@@ -7,6 +7,7 @@ import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { Checkbox } from '../ui/Checkbox.js'
 import { Tooltip } from '../ui/Tooltip.js'
+import { ConfirmDialog } from '../ui/AlertDialog.js'
 import { isSameResolvedTarget, resolveTargetString, type HelmStoreValue } from '../lib/types.js'
 import {
   AGENT_SUB_LIST_PREVIEW,
@@ -598,6 +599,7 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
   const [batchMode, setBatchMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [deleting, setDeleting] = useState(false)
+  const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
 
   const agentStandings = useMemo(
     () =>
@@ -634,15 +636,10 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
     })
   }
 
-  const handleBatchDelete = async () => {
+  const executeBatchDelete = async () => {
     const count = selectedIds.size
     if (count === 0 || deleting) return
-    const confirmed =
-      typeof window !== 'undefined' && typeof window.confirm === 'function'
-        ? window.confirm(`确定删除选中的 ${count} 个会话吗？此操作无法撤销。`)
-        : true
-    if (!confirmed) return
-
+    setBatchDeleteConfirmOpen(false)
     setDeleting(true)
     try {
       const ids = Array.from(selectedIds)
@@ -777,7 +774,7 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
               type="button"
               className="btn btn-sm btn-danger-sm"
               disabled={selectedIds.size === 0 || deleting}
-              onClick={() => void handleBatchDelete()}
+              onClick={() => setBatchDeleteConfirmOpen(true)}
             >
               {deleting ? '删除中...' : `删除所选 (${selectedIds.size})`}
             </button>
@@ -796,6 +793,18 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
           onToggleSelect={toggleSelect}
         />
       ))}
+      <ConfirmDialog
+        open={batchDeleteConfirmOpen}
+        onOpenChange={setBatchDeleteConfirmOpen}
+        title={`确定删除选中的 ${selectedIds.size} 个会话吗？`}
+        description="此操作无法撤销。"
+        confirmText="删除会话"
+        danger
+        onConfirm={() => {
+          void executeBatchDelete()
+        }}
+        onCancel={() => setBatchDeleteConfirmOpen(false)}
+      />
     </div>
   )
 }
