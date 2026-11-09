@@ -419,13 +419,21 @@ helm profiles update coder --cwd /workspace/helm
 
 ---
 
-#### helm models list / default / refresh
+#### helm models list / default / providers / refresh
 
-查询可用模型与配置全局默认模型。
+查询可用模型、配置默认模型、列出供应商与刷新目录。
+
+- `helm models list`：列出可用模型目录（`GET /api/models`）。
+- `helm models providers`：列出当前可用的 PI 供应商与认证方式清单（`GET /api/models/providers`）。
+- `helm models default`：查看或配置全局默认模型与思考档位（`GET/PUT /api/models/default`）。
+- `helm models refresh`：刷新动态网关模型目录（`POST /api/models/refresh`）。
 
 ```bash
 # 列出系统当前识别的模型
 helm models list
+
+# 列出当前可用的 PI 供应商与认证方式清单
+helm models providers
 
 # 查询当前全局默认模型
 helm models default
@@ -436,6 +444,12 @@ helm models default --set "anthropic/claude-3-7-sonnet" --thinking high
 # 刷新动态网关模型目录
 helm models refresh --provider magpie
 ```
+
+| 标志 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `--set <model>` | 字符串 | 配置默认模型标识。传入空字符串重置。 |
+| `--thinking <level>` | 字符串 | 配置默认思考档位。传入空字符串重置。 |
+| `--provider <id>` | 字符串 | 刷新指定供应商模型。缺省刷新全部动态供应商。 |
 
 ---
 
@@ -450,6 +464,32 @@ helm providers list
 # 整体替换模型网关配置
 helm providers set --input '[{"id":"deepseek","type":"deepseek","apiKeyEnv":"DEEPSEEK_API_KEY"}]'
 ```
+
+---
+
+#### helm credentials list / set / delete
+
+管理服务端凭据。明文机密直接持久化于 `credentials.json` 并注册到 SecretStash，不提供明文回读。
+
+- `helm credentials list`：列出服务端已配置凭据（`GET /api/credentials`，仅返回 keys 与 configured 状态，不包含明文机密）。
+- `helm credentials set <id> [--value <str>]`：写入或更新服务端凭据（`PUT /api/credentials/:id`，明文机密直接持久化于 `credentials.json` 并注册到 SecretStash，不回读）。
+- `helm credentials delete <id>`：删除指定的服务端凭据（`DELETE /api/credentials/:id`）。
+
+```bash
+# 列出服务端已配置凭据摘要
+helm credentials list
+
+# 写入或更新服务端凭据
+helm credentials set deepseek_api_key --value "sk-..."
+
+# 删除指定的服务端凭据
+helm credentials delete deepseek_api_key
+```
+
+| 参数 / 标志 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `<id>` | 字符串 | 凭据标识符。对应环境变量键名或密钥标识。 |
+| `--value <str>` | 字符串（必填） | 凭据明文内容。持久化后注册到 SecretStash。 |
 
 ---
 
