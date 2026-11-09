@@ -228,8 +228,8 @@ async function startManagedDaemon(options: {
     hubUrl: options.hubUrl,
     identity: { nodeId: options.nodeId ?? 'up-a', token: 'up-a:secret-a' },
     dataDir: options.dataDir,
-    reconnectBaseDelayMs: 200,
-    reconnectMaxDelayMs: 1_000,
+    reconnectBaseDelayMs: 60,
+    reconnectMaxDelayMs: 250,
     ...(options.withPrepare
       ? {
           prepareUpgradeReplacement: async (release, context) => {
@@ -443,7 +443,7 @@ test('upgrade 成功路径：排空 gate 生效、commit 唯一提交点、宿�
   // 升级已提交：断开后旧 daemon 不得重连（等待宿主退出）
   await hub.close();
   const hub2 = await startHubFixture({ expectedToken: 'up-a:secret-a', port: hub.port });
-  await delay(1_500);
+  await delay(500);
   assert.equal(hub2.registrations.length, 0, '升级提交后旧 daemon 不得重连');
   await hub2.close();
 });
@@ -659,7 +659,7 @@ test('候选 pendingActivation：创建即拒新命令；confirmUpgrade 身份�
 
   // 正确 commit：resolve、立即心跳携带 upgradeCommit、gate 解除
   await stub.daemon.confirmUpgrade({ attemptId: 'att-pend-1', version, previousVersion: '6.6.5', pid });
-  await delay(600);
+  await delay(300);
   const commits = hub.heartbeatInputs.filter((input) => input.upgradeCommit !== undefined);
   assert.ok(commits.length >= 1, 'confirmUpgrade 后应立即/随后心跳携带 upgradeCommit');
   assert.equal(commits[0]?.upgradeCommit?.attemptId, 'att-pend-1');
@@ -691,7 +691,7 @@ test('断线重连后，commit 在内存保留并在新连接心跳重试', { ti
 
   // 非候选 daemon 的 confirmUpgrade 不做身份对账（普通心跳上报路径）
   await stub.daemon.confirmUpgrade({ attemptId: 'att-retry-1', version: '5.5.5', previousVersion: '5.5.4', pid: 777 });
-  await delay(600);
+  await delay(300);
   assert.ok(hub.heartbeatInputs.some((input) => input.upgradeCommit?.attemptId === 'att-retry-1'));
 
   await hub.close();
@@ -699,7 +699,7 @@ test('断线重连后，commit 在内存保留并在新连接心跳重试', { ti
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline && hub.registrations.length === 0) await delay(200);
   assert.equal(hub.registrations.length, 1, '应重连成功');
-  await delay(800);
+  await delay(300);
   const retried = hub.heartbeatInputs.filter((input) => input.upgradeCommit?.attemptId === 'att-retry-1');
   assert.ok(retried.length >= 1, '重连后心跳应继续携带 commit');
   await hub.close();

@@ -36,7 +36,6 @@
 import { createHash } from 'node:crypto'
 import { appendFile, open, type FileHandle } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
-import type { WorkflowJournalEntry } from '@helm/protocol'
 
 /**
  * 追加写入的输入（seq/v 由写入器分配）。
@@ -54,6 +53,54 @@ export type JournalWriteInput =
       result?: unknown
       error?: string
       seq?: number
+      idempotent?: true
+    }
+
+/**
+ * 引擎私有前缀重放账本行（`dataDir/artifacts/<convId>/workflow-<runId>.jsonl`，每行一个 JSON 对象）。
+ *
+ * 这是编排引擎的恢复账本，**不是公开 API 数据形状**（原 protocol 契约迁回引擎）：
+ * - `seq` 是落盘顺序号（引擎内单调递增）；`index` 是调用发起位次（agent 与 action 共享同一全序）。
+ * - `key` 是调用载荷哈希；重放按 index 前缀匹配，首次失配起全部转 live 执行。
+ * - agent 失败行断链后 live 重试（沿用上游语义）；action 已确认的成败行重放时直接复用，
+ *   绝不重执行副作用；`action_started` 无对应终态行 = 进程在动作执行中崩溃，恢复必须
+ *   显式报 `workflow_action_uncertain`，由人类确认后再决定，禁止自动重放。
+ *
+ * HTTP / CLI 客户端不得依赖本类型的字段细节做任何重放决策；如需展示只应只读透传。
+ */
+export type WorkflowJournalEntry =
+  | {
+      v: 1
+      seq: number
+      type: 'agent'
+      index: number
+      key: string
+      ok: boolean
+      text?: string
+      /** 该调用续接了既有子会话（agent({ resume })）；重放时同其他行一样按 index+key 逐项匹配。 */
+      resumed?: true
+    }
+  | {
+      v: 1
+      seq: number
+      /** 动作意图先于执行落盘（fsync 成功后才允许执行 handler）。 */
+      type: 'action_started'
+      index: number
+      key: string
+      /** 声明幂等的动作：中断/失败后允许安全重跑，恢复时不计入 uncertain。 */
+      idempotent?: true
+    }
+  | {
+      v: 1
+      seq: number
+      /** 动作终态行；ok 为 true 时 result 为动作输出，false 时 error 为失败原因。 */
+      type: 'action'
+      index: number
+      key: string
+      ok: boolean
+      result?: unknown
+      error?: string
+      /** 与 action_started 行的幂等声明一致；恢复判定见 readJournal。 */
       idempotent?: true
     }
 

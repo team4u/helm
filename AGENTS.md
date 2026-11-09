@@ -28,15 +28,16 @@ pnpm dev:web                   # 只起前端（需内核已在 3202）
 pnpm build && pnpm typecheck && pnpm test
 ```
 
-## 架构铁律（微内核 + 双 7 扩展点 + 四大内置插件）
+## 架构铁律（微内核 + 双 7 扩展点 + 内置插件）
 
 1. **内核极度精简（零业务角色硬编码 + 跨平台节点底座 `EnvFabric`）**：
-   - `@helm/kernel`（`helm-hub`）包含核心通用机制：① `pi-durable` 持久会话增强（通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5、`AskDoc`、`SecretStash`、`Artifacts`、纯文件资产热重载）；② 跨平台执行编排底座 `EnvFabric` + `NodeRegistry`（`/ws/node`，内建 `local` 节点 + 远端 `@helm/node` 守护进程，驱动 `bash / read / write / edit / gate / env exec`，与任何插件是否启用正交）；③ `subagent` 与 `SubagentWorkflow` 确定性编排引擎；④ 唯一强类型插件宿主 `PluginHost`（`definePlugin(ctx)`）。
+   - `@helm/kernel`（`helm-hub`）包含核心通用机制：① `pi-durable` 持久会话增强（通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5、`AskDoc`、`SecretStash`、`Artifacts`、纯文件资产热重载）；② 跨平台执行编排底座 `EnvFabric` + `NodeRegistry`（`/ws/node`，内建 `local` 节点 + 远端 `@helm/node` 守护进程，驱动 `bash / read / write / edit / gate / env exec`，与任何插件是否启用正交）；③ 原生 `spawnAgent` 子会话派生与受管 Git Worktree 底座（`WorktreeAllocator`）；④ 唯一强类型插件宿主 `PluginHost`（`definePlugin(ctx)`）。**`subagent` / `SubagentWorkflow` / `cleanup_worktree` 模型工具与编排引擎不是内核能力**，由 `builtin:workflow` 插件提供（见第 3 点）。
    - **严禁在内核硬编码 `'router' | 'worker' | 'watchdog'` 枚举**；会话职责一律通过 `profileId` 与 `tags` 表达。
 2. **前后端对称「双 7 扩展点」，零 `if/else` 业务特判**：
    - **后端 7 大可组合生命周期 Hook**（支持 `continue | transform | handled | block`）：`trigger`、`input`、`before_turn`、`tool_call / tool_result`、`agent_spawn`、`turn_settled`（统一覆盖 `completed | failed | aborted`）、`watchdog_tick`。
    - **前端 7 大全界面扩展点**（同时支持 `@json-render` JSON Spec 与 `client.tsx` React 组件）：`sidebar.item/section`、`screen`（全屏自定义视图，支持左右 Split View 并排展示）、`timeline.renderer`、`tool.view`、`composer.pill/widget`、`workbench.panel`、`commandPalette (⌘K) / settings.panel`。
-3. **四大内置插件正交职责**：
+3. **内置插件正交职责**：
+   - `builtin:workflow`（**默认启用、非 locked 可停用**）：承载 `subagent` / `SubagentWorkflow` / `cleanup_worktree` 三个模型工具、DSL 编排引擎（`builtin-plugins/workflow/engine`）、6 个动作（`list / run / runs / inspect / abort / cleanup_worktree`，映射为 `helm workflows …` 与 `helm worktrees cleanup` 动态命令）与工作流运行卡/任务面板 UI。私有 run 记录与公共 `runs` 文档均经 `ctx.doc` 存 `state.sqlite`（公共文档进 SSE `pluginDocs` 首帧与 `plugin.doc.updated` 事件），不使用内存降级或内核私有存储注入；运行中任务经 `liveTasks` 阻止停用（`409 plugin_has_live_tasks`），在途工作树经 `liveWorktrees` 阻止误清理；停用后其动作、CLI 命令与 UI 贡献即时消失。
    - `builtin:assistant`（**常驻不可卸载**）：为所有会话按其绑定的 `profileId` 注入独立的 `SYSTEM.md` 与 `MEMORY.md`（提供按 `profileId` 原子写回的 `update_memory` 与支持按需加载 `references/*.md` 子文件的 `load_skill`），并守护常驻根会话 `Conversation #1` 作为单兵个人助理主入口。
    - `builtin:herdr`（**可选编程插件**）：拦截 `agent_spawn`，复用内核 `EnvFabric` 目标节点通道驱动当地 Herdr 的 23 种 CLI 工具（`herdr:agy`、`herdr:claude`、`herdr:codex`、`herdr:pi` 等），执行「后台标签页 + `.helm/wf-out-*` 文件交接与原地追问自愈」；监听节点 Herdr IPC（Unix Socket / Windows Named Pipe）实现带 `expectedStateSeq` CAS 乐观锁的 `blocked ↔ AskDoc` 远程审批桥；向终端侧栏投射 `$helm` 状态 Token。
    - `builtin:superagent`（实验性双层中枢）：首次启用时动态创建并持久化两个专属常驻会话——`routerConversationId`（`SuperAgent 中枢`，`profileId: 'superagent'`）与 `watchdogConversationId`（`巡检看门狗`，`profileId: 'watchdog'`）；角色由 `profileId` 表达，不重复打角色 Tag；通过挂载 `trigger / before_turn / turn_settled / watchdog_tick` 钩子与自有 `ctx.doc`，实现 0 阻塞总控路由、点名调用任意 `Profile` 专家 Bot 派生后台驻留 Worker、一键归档（`archive_worker`）、按 `origin` 自动向中枢汇报、`ThreadKey` 0ms 直通、`RecallGraph` 召回图谱与基于 `Skill(references/)` 的两层 Watchdog 巡检。
@@ -71,12 +72,13 @@ pnpm build && pnpm typecheck && pnpm test
 - 输入来源（`origin: 'human' | 'agent' | 'trigger'`）附着在每次提交的 `helm.input` entry 上；`turn_settled` 钩子统一覆盖 `completed | failed | aborted` 三种终态，后台 Worker 本回合消费的输入只要含任一 `agent / trigger` 来源即向 `routerConversationId`（SuperAgent 中枢）投递汇报卡片，纯 `human` 回合仅静默更新召回图谱。
 - `AskDoc` 支持 `expectedStateSeq` CAS 乐观锁：当终端窗格 `stateChangeSeq` 已推进（人类已在终端按键处理）时，Web 端对应的 `AskDoc` 自动流转为 `superseded` 销单，防止向终端重复发送回车。
 - 插件卸载遇在途任务（自定义任务、执行中 Tool、挂起 `agent_spawn`）时，显式拒绝并返回 `409 plugin_has_live_tasks`。
+- **插件服务统一启动屏障**：`PluginServiceSpec.prepare?` 是通用生命周期阶段——所有插件定义/工具/动作注册完毕后，`PluginHost.start` 先对全体服务执行 `prepare`（如 `builtin:workflow` 在 `prepareRecovery` 中先于 SDK 调度器恢复持久标记中断任务取消），再依次 `start`；`KernelRuntime.start` 负责调用 `PluginHost.start`，保证恢复取消先于任何插件 `start` 提交输入。
 - FTS5 是**可重建的派生索引**，不得写入 `pi_*` 表语义。
 
 ## API 与 CLI 同权（重要）
 
 - Hub 新增/变更任何面向用户的 HTTP 接口时，**同一次改动**必须补齐 `helm` CLI 映射（`packages/cli/src/commands/`，含 `--json` 输出与 `--current` 当前会话自动感知）。
-- 插件通过 `ctx.action({ id, inputSchema, outputSchema })` 声明的动作，自动映射为 HTTP 端点、顶层语义化 CLI 命令 `helm <plugin> <action>`（剥离 `builtin:` 前缀）、Agent Tool、`SubagentWorkflow` `action()` 与 Web UI 动作。
+- 插件通过 `ctx.action({ id, inputSchema, outputSchema })` 声明的动作，自动映射为 HTTP 端点（`POST /api/actions/<pluginId>/<actionId>`，`pluginId` 含 `:` 时按 URI 编码）、顶层语义化 CLI 命令 `helm <plugin> <action>`（剥离 `builtin:` 前缀，由 `cli.command` 可覆写）、Agent Tool、`SubagentWorkflow` `action()` 与 Web UI 动作。
 
 ## 测试与前端规范
 

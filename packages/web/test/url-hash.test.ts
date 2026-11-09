@@ -14,7 +14,7 @@ const conversation = (conversationId: number): WorkspaceLocationState => ({
   primaryTarget: { kind: 'conversation', conversationId },
   splitTarget: null,
   workbenchOpen: false,
-  workbenchTab: 'tasks',
+  workbenchTab: 'artifacts',
   activeModal: null,
 })
 
@@ -30,7 +30,7 @@ test('parse: 会话主屏（#/c/<id>）与空 Hash 默认根会话', { timeout: 
   assert.deepEqual(parsed.primaryTarget, { kind: 'conversation', conversationId: 42 })
   assert.equal(parsed.splitTarget, null)
   assert.equal(parsed.workbenchOpen, false)
-  assert.equal(parsed.workbenchTab, 'tasks')
+  assert.equal(parsed.workbenchTab, 'artifacts')
   assert.equal(parsed.activeModal, null)
   // "" / "#" / "#/" 均解析为默认 conversation:1
   for (const raw of ['', '#', '#/']) {
@@ -65,11 +65,14 @@ test('parse: 工作台参数 wb（开、Tab 值与缺省关闭）', { timeout: 6
   assert.equal(open.workbenchTab, 'artifacts')
   const closed = parseLocationHash('#/c/1')
   assert.equal(closed.workbenchOpen, false)
-  assert.equal(closed.workbenchTab, 'tasks')
-  // wb 存在但值为空：视为打开且 Tab 回退默认 tasks
+  assert.equal(closed.workbenchTab, 'artifacts')
+  // wb 存在但值为空：视为打开且 Tab 回退默认 artifacts；wb=tasks 解析为插件面板 ID
   const emptyTab = parseLocationHash('#/c/1?wb=')
   assert.equal(emptyTab.workbenchOpen, true)
-  assert.equal(emptyTab.workbenchTab, 'tasks')
+  assert.equal(emptyTab.workbenchTab, 'artifacts')
+  const pluginTab = parseLocationHash('#/c/1?wb=tasks')
+  assert.equal(pluginTab.workbenchOpen, true)
+  assert.equal(pluginTab.workbenchTab, 'tasks')
 })
 
 test('parse: 六种弹窗及子项 ID（profiles/providers/skills/plugins/nodes/artifact）', { timeout: 60_000 }, () => {
@@ -138,7 +141,7 @@ test('roundtrip: 全部位置形态双向往返无损', { timeout: 60_000 }, () 
       primaryTarget: { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' },
       splitTarget: { kind: 'screen', pluginId: 'builtin:superagent', screenId: 'router' },
       workbenchOpen: false,
-      workbenchTab: 'tasks',
+      workbenchTab: 'artifacts',
       activeModal: null,
     },
     { ...conversation(1), splitTarget: { kind: 'conversation', conversationId: 42 } },
@@ -201,13 +204,13 @@ test('isSameLocationState: 五字段逐一比较；command-palette 等价于 nul
   assert.equal(isSameLocationState(base, conversation(1)), true)
   assert.equal(isSameLocationState(base, conversation(2)), false)
   assert.equal(isSameLocationState(base, { ...base, splitTarget: { kind: 'conversation', conversationId: 1 } }), false)
-  assert.equal(isSameLocationState(base, { ...base, workbenchOpen: true, workbenchTab: 'tasks' }), false)
+  assert.equal(isSameLocationState(base, { ...base, workbenchOpen: true, workbenchTab: 'artifacts' }), false)
   // 工作台打开时 Tab 参与比较；关闭时 Tab 只是记忆值不参与
-  const openA = { ...base, workbenchOpen: true, workbenchTab: 'tasks' }
-  const openB = { ...base, workbenchOpen: true, workbenchTab: 'artifacts' }
+  const openA = { ...base, workbenchOpen: true, workbenchTab: 'artifacts' }
+  const openB = { ...base, workbenchOpen: true, workbenchTab: 'plugin:example/queue' }
   assert.equal(isSameLocationState(openA, openB), false)
-  const closedA = { ...base, workbenchOpen: false, workbenchTab: 'tasks' }
-  const closedB = { ...base, workbenchOpen: false, workbenchTab: 'artifacts' }
+  const closedA = { ...base, workbenchOpen: false, workbenchTab: 'artifacts' }
+  const closedB = { ...base, workbenchOpen: false, workbenchTab: 'plugin:example/queue' }
   assert.equal(isSameLocationState(closedA, closedB), true)
   assert.equal(isSameLocationState(base, { ...base, activeModal: { kind: 'command-palette' } }), true)
   assert.equal(isSameLocationState(base, { ...base, activeModal: { kind: 'profile-editor' } }), false)
@@ -222,7 +225,7 @@ test('shouldPushLocationHistory: 主屏/分屏/工作台/弹窗开关走 push', 
   assert.equal(shouldPushLocationHistory(base, conversation(2)), true)
   assert.equal(shouldPushLocationHistory(base, { ...base, primaryTarget: { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' } }), true)
   assert.equal(shouldPushLocationHistory(base, { ...base, splitTarget: { kind: 'conversation', conversationId: 2 } }), true)
-  assert.equal(shouldPushLocationHistory(base, { ...base, workbenchOpen: true, workbenchTab: 'tasks' }), true)
+  assert.equal(shouldPushLocationHistory(base, { ...base, workbenchOpen: true, workbenchTab: 'artifacts' }), true)
   assert.equal(shouldPushLocationHistory(base, { ...base, activeModal: { kind: 'nodes' } }), true)
   assert.equal(shouldPushLocationHistory({ ...base, activeModal: { kind: 'nodes' } }, base), true)
   // 弹窗类型切换也是 push
@@ -279,7 +282,7 @@ test('shouldPushLocationHistory: 同弹窗内切子项与工作台内切 Tab 走
   )
   assert.equal(
     shouldPushLocationHistory(
-      { ...base, workbenchOpen: true, workbenchTab: 'tasks' },
+      { ...base, workbenchOpen: true, workbenchTab: 'artifacts' },
       { ...base, workbenchOpen: true, workbenchTab: 'artifacts' },
     ),
     false,

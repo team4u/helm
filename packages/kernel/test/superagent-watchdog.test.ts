@@ -79,6 +79,8 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value))
   }
+
+  async flush(): Promise<void> {}
 }
 
 function makeRecorded(): Recorded {
@@ -176,7 +178,16 @@ async function makeHarness(opts: HarnessOptions = {}) {
     },
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
-    onWorkflowSettled: () => () => {},
+    onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    listActions: () => [],
     emitEvent: (type, payload) => {
       if (type === 'notification') {
         const p = payload as { level?: string; title?: string; body?: string }
@@ -443,7 +454,16 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     },
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
-    onWorkflowSettled: () => () => {},
+    onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    listActions: () => [],
     emitEvent: (type, payload) => {
       if (type === 'notification') {
         const p = payload as { level?: string; title?: string; body?: string }
@@ -932,7 +952,16 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
       cancelled.push(askId)
     },
     registerAskSeqResolver: () => () => {},
-    onWorkflowSettled: () => () => {},
+    onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    listActions: () => [],
     emitEvent: () => {},
   }
   const host = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-svc-')), host: backend, docs })
@@ -1147,7 +1176,16 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
       if (failMode === 'missing') throw new HelmError('not_found', '不存在', 404)
     },
     registerAskSeqResolver: () => () => {},
-    onWorkflowSettled: () => () => {},
+    onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    listActions: () => [],
     emitEvent: () => {},
   }
   const mkHost = async () => {

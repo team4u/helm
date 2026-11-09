@@ -30,14 +30,11 @@ import type {
   Profile,
   ProviderConfig,
   PublicPluginDoc,
-  SavedWorkflowSummary,
   SearchHit,
   SkillSummary,
   ConversationWithdrawRequest,
   ConversationWithdrawResponse,
   WhenBusy,
-  WorkflowRunRequest,
-  WorkflowRunSummary,
 } from '@helm/protocol'
 
 // HTTP 请求/响应形状以 @helm/protocol 为唯一事实源；下列别名仅兼容既有导入。
@@ -46,7 +43,6 @@ export type {
   AuthToken,
   CredentialSummary,
   ModelCatalogEntry,
-  SavedWorkflowSummary,
   SearchHit,
   ConversationForkRequest,
   ConversationCompactResponse,
@@ -484,42 +480,8 @@ export const pluginsApi = {
 }
 
 // ---------------------------------------------------------------------------
-// Workflows & Search
+// Search
 // ---------------------------------------------------------------------------
-
-/** 兼容后端 `{ name, path, description?, whenToUse?, phases?, metadataError? }` 形状（SavedWorkflowSummary 契约）。 */
-export function normalizeSavedWorkflows(raw: unknown): SavedWorkflowSummary[] {
-  if (!Array.isArray(raw)) throw new Error('工作流目录格式无效')
-  return raw.map((item: unknown): SavedWorkflowSummary => {
-    if (item === null || typeof item !== 'object') throw new Error('工作流目录条目格式无效')
-    const entry = item as Record<string, unknown>
-    if (typeof entry.name !== 'string') throw new Error('工作流目录条目格式无效')
-    return {
-      name: entry.name,
-      ...(typeof entry.path === 'string' ? { path: entry.path } : {}),
-      ...(typeof entry.description === 'string' ? { description: entry.description } : {}),
-      ...(typeof entry.whenToUse === 'string' ? { whenToUse: entry.whenToUse } : {}),
-      ...(Array.isArray(entry.phases) ? { phases: entry.phases as SavedWorkflowSummary['phases'] } : {}),
-      ...(typeof entry.metadataError === 'string' && entry.metadataError.length > 0
-        ? { metadataError: entry.metadataError }
-        : {}),
-    }
-  })
-}
-
-export const workflowsApi = {
-  listSaved: async () => normalizeSavedWorkflows(await apiRequest<unknown>('GET', '/api/workflows')),
-  listRuns: (conversationId?: number) => {
-    const qs = conversationId !== undefined ? `?conversationId=${conversationId}` : ''
-    return apiRequest<WorkflowRunSummary[]>('GET', `/api/workflows/runs${qs}`)
-  },
-  getRun: (runId: string) =>
-    apiRequest<WorkflowRunSummary>('GET', `/api/workflows/runs/${encodeURIComponent(runId)}`),
-  run: (req: WorkflowRunRequest, wait?: boolean) =>
-    apiRequest<WorkflowRunSummary>('POST', `/api/workflows/run${wait ? '?wait=1' : ''}`, req),
-  abort: (runId: string) =>
-    apiRequest<{ ok: boolean }>('POST', `/api/workflows/runs/${encodeURIComponent(runId)}/abort`),
-}
 
 export const searchApi = {
   query: (q: string) =>

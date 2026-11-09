@@ -7,6 +7,11 @@ import { join } from 'node:path'
 import { createServer, type Socket } from 'node:net'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider, fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+
+/** 单工具调用 faux 消息（stopReason: toolUse）。 */
+function fauxToolCallMessage(name: string, input: Record<string, unknown>): ReturnType<typeof fauxAssistantMessage> {
+  return fauxAssistantMessage([fauxToolCall(name, input as Record<string, never>)], { stopReason: 'toolUse' })
+}
 import { createHelm, createHerdrNodeChannel } from '../src/app.js'
 import { startHub } from '../src/http/index.js'
 import { createHerdrTransport } from '../src/builtin-plugins/herdr/transport.js'
@@ -24,7 +29,7 @@ async function openEnvironment() {
   const models = createModels()
   models.setProvider(faux.provider)
   const app = await createHelm({ dataDir: hubDir, cwd: hubDir, model: 'faux/faux-1', models })
-  const hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 0 })
+  const hub = await startHub({ kernel: app.kernel, port: 0 })
   const auth = app.kernel.auth.createProcessToken()
   let daemon: NodeDaemon | undefined
   const env = { HELM_HUB_URL: hub.url, HELM_TOKEN: auth.token, HELM_DATA_DIR: join(root, 'client') }
@@ -98,29 +103,62 @@ test('跨节点后台原生子代理：真实 WS 节点分配 worktree、执行 
     assert.equal(setup.code, 0, setup.err)
     assert.equal(JSON.parse(setup.out).ok, true, setup.out)
     const parent = await env.app.kernel.createConversation({ nodeId: 'integration-node', cwd: env.remoteCwd })
-    env.faux.setResponses(Array.from({ length: 4 }, () => fauxAssistantMessage('远端任务结果')))
-    const started = await env.app.workflows.startBackgroundAgent({
-      parentConversationId: parent.id, prompt: '执行远端验收', isolation: 'worktree',
-      gate: 'test "$HELM_NODE_TEST_ORIGIN" = remote-executor && printf "$HELM_NODE_TEST_ORIGIN" > remote-proof.txt',
-    })
-    const execution = started.execution as AgentExecutionInfo
-    assert.equal(execution.nodeId, 'integration-node')
-    assert.ok(execution.worktree?.id)
-    const child = env.app.kernel.getConversation(execution.conversationId!)
-    assert.equal(child.nodeId, 'integration-node')
-    assert.equal(child.cwd, execution.worktree!.path)
-    await env.app.workflows.wait(started.run.id)
+    // 后台子代理经模型工具链（subagent background:true）——与真实生产路径
+    // 一致（引擎 startBackgroundAgent 由 builtin:workflow 插件内部接线）。
+    //
+    // faux 响应是全共享 FIFO 队列；本次链路共有 4 个模型消费点，且除首个
+    // （父回合 toolCall）外其余三个（父工具结果回合 / 后台子代理回合 /
+    // 结算汇报触发的父回合）的到达次序在真实并发下不确定——不得假设
+    // 「父先子后」。为消除次序歧义，toolCall 之后一律供给同一良性文本答案：
+    // 任何消费次序下子代理回合都能得到合法回答（run 不会因响应耗尽假 failed，
+    // 也不会把真实错误 catch 成完成）。
+    // 旧写法先 set 4 个答案再整体覆盖成 [toolCall, parentAnswer]（2 个），
+    // 并发下子代理回合可能拿到空队列（No more faux responses）→ run 真实
+    // failed；单文件侥幸通过只是时序运气。
+    env.faux.setResponses([
+      fauxToolCallMessage('subagent', {
+        prompt: '执行远端验收',
+        background: true,
+        isolation: 'worktree',
+        gate: 'test "$HELM_NODE_TEST_ORIGIN" = remote-executor && printf "$HELM_NODE_TEST_ORIGIN" > remote-proof.txt',
+      }),
+      ...Array.from({ length: 4 }, () => fauxAssistantMessage('远端任务结果')),
+    ])
+    await env.app.kernel.submitInput(parent.id, '派后台隔离子代理')
     await env.app.kernel.waitForIdle(parent.id)
-    assert.equal(env.app.workflows.getRun(started.run.id).status, 'completed')
-    assert.equal(await readFile(join(execution.worktree!.path, 'remote-proof.txt'), 'utf8'), 'remote-executor', 'gate 必须读取节点专属环境，不能落回 Hub 执行')
-    const preserved = await env.cli(['worktrees', 'cleanup', '--id', execution.worktree!.id!, '--json'])
+    // 从工具输出提取 runId 与 execution（子会话即执行环境）。
+    const detail = await env.app.kernel.getConversationDetail(parent.id, { limit: 50 })
+    const toolText = JSON.stringify(detail)
+    const runIdMatch = /runId\\?":\\?"(wf_[0-9a-f]+)/.exec(toolText)
+    assert.ok(runIdMatch, `subagent 工具输出应含 runId：${toolText.slice(0, 400)}`)
+    const runId = runIdMatch[1]!
+    const child = env.app.kernel.listConversations().find((c) => c.parentConversationId === parent.id)
+    assert.ok(child, '后台子会话应已派生')
+    assert.equal(child.nodeId, 'integration-node')
+    const inspect = await env.app.kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as { run: { status: string; error?: string; nodes?: Array<{ id: string; status: string; error?: string }> } }
+    for (let i = 0; i < 300 && inspect.run.status === 'running'; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      inspect.run = ((await env.app.kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId })) as typeof inspect).run
+    }
+    // 失败时携带完整诊断（run.error + 节点 error）：不再裸 status 对比，
+    // 并发回归时可直指真实根因。
+    assert.equal(
+      inspect.run.status,
+      'completed',
+      `后台子代理 run 应 completed（实际 ${inspect.run.status}）：run.error=${JSON.stringify(inspect.run.error)} nodes=${JSON.stringify(inspect.run.nodes?.map((n) => ({ id: n.id, status: n.status, error: n.error })))}`,
+    )
+    // 子会话绑定的受管隔离树（后台 spawn 由 run 记录登记 conversationId）。
+    const record = env.app.kernel.worktrees.getForConversation(child.id)
+    assert.ok(record?.id, '后台子会话应绑定受管 worktree 记录')
+    assert.equal(await readFile(join(record!.path, 'remote-proof.txt'), 'utf8'), 'remote-executor', 'gate 必须读取节点专属环境，不能落回 Hub 执行')
+    const preserved = await env.cli(['worktrees', 'cleanup', '--worktree-id', record!.id, '--json'])
     assert.notEqual(preserved.code, 0, '远端未提交产物默认保留')
     assert.equal(JSON.parse(preserved.err).error.code, 'worktree_dirty')
-    const cleanup = await env.cli(['worktrees', 'cleanup', '--id', execution.worktree!.id!, '--force', '--delete-branch', '--json'])
+    const cleanup = await env.cli(['worktrees', 'cleanup', '--worktree-id', record!.id, '--force', '--delete-branch', '--json'])
     assert.equal(cleanup.code, 0, cleanup.err)
     assert.equal(JSON.parse(cleanup.out).nodeId, 'integration-node')
     assert.equal(JSON.parse(cleanup.out).removed, true)
-    await assert.rejects(access(execution.worktree!.path), { code: 'ENOENT' })
+    await assert.rejects(access(record!.path), { code: 'ENOENT' })
   } finally { await env.close() }
 })
 

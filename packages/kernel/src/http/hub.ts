@@ -33,12 +33,11 @@ import { handleApi } from './routes.js'
 import { decodeSegments, findPluginRoute, PathDecodeError } from './route-match.js'
 import { createStaticServe, isMissingError, type StaticServe } from './static.js'
 import { HelmError } from '@helm/protocol'
-import type { KernelRuntimeLike, WorkflowServiceLike } from './contracts.js'
+import type { KernelRuntimeLike } from './contracts.js'
 import { fileURLToPath } from 'node:url'
 
 export interface HubHandlerOptions {
   kernel: KernelRuntimeLike
-  workflows: WorkflowServiceLike
   /**
    * 生产静态托管目录（packages/web/dist）：
    * - false：禁用静态托管（非 /api 一律 JSON 404，与既有行为一致）；
@@ -62,12 +61,12 @@ interface StaticCacheEntry {
 
 export function createHubHandler(
   kernelOrOptions: KernelRuntimeLike | HubHandlerOptions,
-  workflowsArg?: WorkflowServiceLike,
 ): (request: Request) => Promise<Response> {
-  const options: HubHandlerOptions = workflowsArg === undefined
-    ? (kernelOrOptions as HubHandlerOptions)
-    : { kernel: kernelOrOptions as KernelRuntimeLike, workflows: workflowsArg }
-  const { kernel, workflows } = options
+  const options: HubHandlerOptions =
+    kernelOrOptions instanceof Object && 'kernel' in (kernelOrOptions as HubHandlerOptions)
+      ? (kernelOrOptions as HubHandlerOptions)
+      : { kernel: kernelOrOptions as KernelRuntimeLike }
+  const { kernel } = options
   const redactor: JsonRedactor | undefined = makeRedactor(kernel)
   const webDistDir = options.webDistDir
   // 目录解析缓存（handler 实例内，仅缓存成功结果）：dir → 服务
@@ -133,7 +132,7 @@ export function createHubHandler(
         if (request.method !== 'GET' && request.method !== 'HEAD' && !jsonContentTypeOk(request)) {
           return withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON 端点需 content-type: application/json'), origin)
         }
-        return withCors(await handleApi(request, kernel, workflows, redactor), origin)
+        return withCors(await handleApi(request, kernel, redactor), origin)
       }
 
       // 插件 public 路由豁免（其 handler 自行验签）；与派发共用匹配器。
@@ -142,7 +141,7 @@ export function createHubHandler(
         return withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON 端点需 content-type: application/json'), origin)
       }
       if (isPublic) {
-        return withCors(await handleApi(request, kernel, workflows, redactor), origin)
+        return withCors(await handleApi(request, kernel, redactor), origin)
       }
 
       const token = bearerToken(request)
@@ -154,7 +153,7 @@ export function createHubHandler(
         return withCors(errorResponse(redactor, 401, 'unauthorized', 'token 无效或已过期'), origin)
       }
 
-      return withCors(await handleApi(request, kernel, workflows, redactor), origin)
+      return withCors(await handleApi(request, kernel, redactor), origin)
     } catch (error) {
       // 非法路径编码（含 public 匹配阶段）也要给出结构化 400，而非 500。
       if (error instanceof PathDecodeError) {

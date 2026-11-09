@@ -15,11 +15,12 @@ flowchart TD
     subgraph Core["@helm/kernel 微内核底座"]
         Durable["pi-durable 持久会话增强"]
         Fabric["EnvFabric 跨平台执行底座"]
-        Workflow["SubagentWorkflow 确定性编排"]
+        Spawn["原生 spawnAgent 与 Worktree 底座"]
         Host["PluginHost 强类型插件宿主"]
     end
 
     subgraph Plugins["内置与外部插件生态"]
+        Workflow["builtin:workflow 确定性编排"]
         Assistant["builtin:assistant 个人助理"]
         Superagent["builtin:superagent 双层中枢"]
         Herdr["builtin:herdr 终端主控"]
@@ -34,8 +35,10 @@ flowchart TD
 
 1. **持久会话状态机与增强存储**：提供五态通用会话模型。集成 `state.sqlite` 单库、FTS5 全文检索、`AskDoc` 审批流与 `SecretStash` 机密隔离。
 2. **跨平台执行编排底座 `EnvFabric`**：提供反向 WebSocket 网关与令牌鉴权。支持受管命令执行、实时流传输与节点自升级。
-3. **确定性多智能体编排引擎**：提供 `subagent` 派生与 `SubagentWorkflow` 流程图调度。
+3. **原生子会话派生与工作树底座**：提供 `spawnAgent` 原生派生（`agent_spawn` Hook 管道 + 原生子会话默认行）与受管 Git Worktree 分配/清理机制。
 4. **强类型插件宿主 `PluginHost`**：提供基于 `definePlugin(ctx)` 的统一插件生命周期与多端复用机制。
+
+`subagent` / `SubagentWorkflow` / `cleanup_worktree` 模型工具与确定性编排引擎不在内核，由 `builtin:workflow` 插件提供。
 
 ---
 

@@ -147,5 +147,3 @@ test('契约：ProfileEditorModal 中的模型与节点选择均采用公共 Sel
   assert.match(stylesSource, /\.helm-select-trigger\s*\{[\s\S]*?height:\s*32px;/)
   assert.match(stylesSource, /\.helm-select-trigger\s*\{[\s\S]*?font-size:\s*13px;/)
 })
-
-

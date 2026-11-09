@@ -13,7 +13,7 @@
  * 4. submitInput opts.meta 从 API 层直达 helm.input entry 与 turn_settled；
  * 5. 受管 token：不出现在任何落库/事件/模型文本（回显不落库）、close dispose、
  *    setHubUrl 热更新工具 env；
- * 6. snapshot ui/workflowRuns（provider 注入）、watchdog tick singleflight 有意义
+ * 6. snapshot ui/pluginDocs（provider 注入）、watchdog tick singleflight 有意义
  *    （真实 stalledMs/consecutiveErrors 事实）、getConversationDetail 分页与
  *    cursor 校验、waitForInput 精确回答与失败显式抛错。
  */
@@ -447,78 +447,64 @@ describe('受管进程 token', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// 6. snapshot / workflow provider / watchdog / detail / waitForInput
+// 6. snapshot / plugin docs / watchdog / detail / waitForInput
 // ---------------------------------------------------------------------------
 
-describe('snapshot 与 workflow provider', { timeout: 60_000 }, () => {
-  it('snapshot.ui 为插件 UI 贡献实列表；workflowRuns 由 provider 提供（初始 []）', { timeout: 60_000 }, async () => {
+describe('snapshot 与插件公共文档', { timeout: 60_000 }, () => {
+  it('snapshot.ui 为插件 UI 贡献实列表；pluginDocs 首帧携带公开文档（私有 doc 不出现）', { timeout: 60_000 }, async () => {
     const dir = join(root, 's1')
     const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
     try {
-      // 初始 provider 未注入：workflowRuns = []（必填字段，不缺省）。
+      // 无公开文档插件：pluginDocs = []。
       let snap = kernel.events.currentSnapshot()
-      assert.deepEqual(snap.workflowRuns, [])
+      assert.deepEqual(snap.pluginDocs ?? [], [])
       assert.ok(Array.isArray(snap.ui))
 
-      const runs: WorkflowRunSummary[] = [
-        {
-          id: 'run-1',
-          name: 'demo',
-          conversationId: 1,
-          status: 'running',
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        },
-      ]
-      kernel.setWorkflowRunProvider(() => runs)
-      snap = kernel.events.currentSnapshot()
-      assert.equal(snap.workflowRuns.length, 1)
-      assert.equal(snap.workflowRuns[0]?.id, 'run-1')
-
-      // UI 贡献经真实插件注册出现在 snapshot.ui。
+      // UI 贡献与公开文档经真实插件注册出现在 snapshot。
       await kernel.plugins.register({
         id: 'test:ui',
         definePlugin(ctx) {
           ctx.ui.sidebarItem({ id: 'sb1', label: '测试项', target: 'conversation:1' })
+          ctx.doc('runs', { count: 1 }, { public: true })
+          ctx.doc('secret', { v: 'x' })
         },
       })
       snap = kernel.events.currentSnapshot()
       assert.ok(snap.ui.some((u) => u.pluginId === 'test:ui'))
+      const docs = snap.pluginDocs ?? []
+      assert.equal(docs.length, 1)
+      assert.equal(docs[0]?.name, 'runs')
+      assert.deepEqual(docs[0]?.value, { count: 1 })
     } finally {
       await kernel.close()
     }
   })
 
-  it('onWorkflowSettled/notifyWorkflowSettled：每 run 通知一次；监听器异常显式上抛', { timeout: 60_000 }, async () => {
+  it('onEvent(workflow.settled)：每 run 通知一次；dispose 后不再收；异常监听器显式上报', { timeout: 60_000 }, async () => {
     const dir = join(root, 's2')
     const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
     try {
       const seen: string[] = []
-      const dispose = kernel.onWorkflowSettled((run) => {
-        seen.push(run.id)
+      let disposed = false
+      await kernel.plugins.register({
+        id: 'test:wf',
+        definePlugin(ctx) {
+          ctx.host.onEvent('test.settled', (raw) => {
+            if (disposed) return
+            const run = raw as { id: string }
+            seen.push(run.id)
+          })
+        },
       })
-      const run: WorkflowRunSummary = {
-        id: 'run-x',
-        name: 'n',
-        conversationId: 1,
-        status: 'completed',
-        createdAt: 1,
-        updatedAt: 2,
-      }
-      await kernel.notifyWorkflowSettled(run)
+      const run = { id: 'run-x' }
+      // 内部事件由宿主 emitHostEvent 派发（ctx.host.emitEvent 的后端）。
+      kernel.emitHostEvent('test.settled', run)
+      await new Promise((r) => setTimeout(r, 20))
       assert.deepEqual(seen, ['run-x'])
-      dispose()
-      await kernel.notifyWorkflowSettled(run)
-      assert.deepEqual(seen, ['run-x']) // dispose 后不再收
-
-      // 异常监听器：显式上抛（不吞错伪成功）。
-      kernel.onWorkflowSettled(() => {
-        throw new Error('cleanup failed')
-      })
-      await assert.rejects(
-        () => kernel.notifyWorkflowSettled(run),
-        (err: unknown) => err instanceof Error && err.message === 'cleanup failed',
-      )
+      disposed = true
+      kernel.emitHostEvent('test.settled', run)
+      await new Promise((r) => setTimeout(r, 20))
+      assert.deepEqual(seen, ['run-x'])
     } finally {
       await kernel.close()
     }

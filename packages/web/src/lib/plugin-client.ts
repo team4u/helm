@@ -1,10 +1,11 @@
 /**
  * 插件 client.tsx 模块加载器（纯逻辑，无组件导出）：
  * - Bearer fetch 拉取编译产物（token 绝不进 URL）→ Blob URL 动态 import → 释放 URL；
- * - 按 (pluginId, module, contentHash) 缓存模块命名空间；插件停用/卸载
- *   （uiContributions 移除）时失效缓存；
+ * - 按 (pluginId, module, contentHash) 缓存模块命名空间（含已解析 resolved 快路径）；
+ *   插件停用/卸载（uiContributions 移除）时失效缓存；
  * - 导出不存在 / HTTP 错误 / import 抛错均显式报错，绝不静默空白。
  */
+import type { ComponentType } from 'react'
 import { getStoredToken } from './api.js'
 
 export interface LoadedClientModule {
@@ -13,24 +14,42 @@ export interface LoadedClientModule {
 }
 
 interface CacheEntry {
+  pluginId: string
   contentHash: string
   namespaced: Promise<Record<string, unknown>>
+  /** 动态 import 完成后写入的已解析模块命名空间（同步快路径与 SSR 测试用）。 */
+  resolved?: Record<string, unknown>
 }
 
 const cache = new Map<string, CacheEntry>()
+const pluginEpochs = new Map<string, number>()
+let cacheEpoch = 0
 
-const cacheKey = (pluginId: string, moduleRef: string): string => `${pluginId}::${moduleRef}`
+const cacheKey = (pluginId: string, moduleRef: string): string => JSON.stringify([pluginId, moduleRef])
+
+/** 移除某插件注入的样式表（停用/卸载后不留全局样式泄漏）。 */
+function removePluginStyleSheets(pluginId: string | undefined): void {
+  if (typeof document === 'undefined') return
+  for (const node of [...document.querySelectorAll('style[data-helm-plugin-css-plugin]')]) {
+    if (pluginId === undefined || node.getAttribute('data-helm-plugin-css-plugin') === pluginId) node.remove()
+  }
+}
 
 /** 插件 UI 贡献变化时调用：移除该插件全部缓存模块（停用/卸载后不残留）。 */
 export function evictPluginClientCache(pluginId: string): void {
-  for (const key of [...cache.keys()]) {
-    if (key.startsWith(`${pluginId}::`)) cache.delete(key)
+  pluginEpochs.set(pluginId, (pluginEpochs.get(pluginId) ?? 0) + 1)
+  for (const [key, entry] of cache) {
+    if (entry.pluginId === pluginId) cache.delete(key)
   }
+  removePluginStyleSheets(pluginId)
 }
 
 /** 全量重建（如登出）：清空所有插件 client 模块缓存。 */
 export function resetPluginClientCache(): void {
+  cacheEpoch++
+  pluginEpochs.clear()
   cache.clear()
+  removePluginStyleSheets(undefined)
 }
 
 export class PluginClientError extends Error {
@@ -80,10 +99,20 @@ async function fetchModuleText(pluginId: string, moduleRef: string): Promise<{ c
  */
 export async function loadPluginClientModule(pluginId: string, moduleRef: string): Promise<LoadedClientModule> {
   const key = cacheKey(pluginId, moduleRef)
+  const epoch = cacheEpoch
+  const pluginEpoch = pluginEpochs.get(pluginId)
+  const assertCurrent = () => {
+    if (epoch !== cacheEpoch || pluginEpoch !== pluginEpochs.get(pluginId)) {
+      throw new PluginClientError('client_module_invalidated', `插件 ${pluginId} 的 client 模块加载已失效，请重新加载`, 0)
+    }
+  }
   const { code, contentHash } = await fetchModuleText(pluginId, moduleRef)
+  assertCurrent()
   const cached = cache.get(key)
   if (cached && cached.contentHash === contentHash) {
-    return { module: await cached.namespaced, contentHash }
+    const module = await cached.namespaced
+    assertCurrent()
+    return { module, contentHash }
   }
   const namespaced = (async () => {
     const blobUrl = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))
@@ -99,8 +128,54 @@ export async function loadPluginClientModule(pluginId: string, moduleRef: string
       URL.revokeObjectURL(blobUrl)
     }
   })()
-  cache.set(key, { contentHash, namespaced })
-  return { module: await namespaced, contentHash }
+  const entry: CacheEntry = { pluginId, contentHash, namespaced }
+  // 已解析模块落缓存：后续挂载（含时间线重渲染）经 getCachedClientComponent 同步命中，零闪烁。
+  void namespaced.then(
+    (mod) => {
+      if (epoch === cacheEpoch && pluginEpoch === pluginEpochs.get(pluginId)) entry.resolved = mod
+    },
+    () => {
+      if (cache.get(key) === entry) cache.delete(key)
+    },
+  )
+  cache.set(key, entry)
+  const module = await namespaced
+  assertCurrent()
+  return { module, contentHash }
+}
+
+/**
+ * 同步取已解析缓存模块的具名导出组件：缓存命中且导出为函数时直接返回，
+ * 避免 PluginUiView 重复挂载（时间线重渲染 / SSR）时闪烁 loading 态。
+ * 未加载完成或导出非函数时返回 undefined（调用方走异步加载轨道）。
+ */
+export function getCachedClientComponent(
+  pluginId: string,
+  moduleRef: string,
+  exportName: string,
+): ComponentType<Record<string, unknown>> | undefined {
+  const cached = cache.get(cacheKey(pluginId, moduleRef))
+  const mod = cached?.resolved
+  if (mod === undefined || typeof mod[exportName] !== 'function') return undefined
+  return mod[exportName] as ComponentType<Record<string, unknown>>
+}
+
+/**
+ * 直接注入已解析的模块命名空间（测试与预加载用）：以 contentHash='seeded'
+ * 写入缓存，后续 getCachedClientComponent / loadPluginClientModule 同 hash 复用。
+ */
+export function seedPluginClientModule(
+  pluginId: string,
+  moduleRef: string,
+  moduleNamespace: Record<string, unknown>,
+  contentHash = 'seeded',
+): void {
+  cache.set(cacheKey(pluginId, moduleRef), {
+    pluginId,
+    contentHash,
+    namespaced: Promise.resolve(moduleNamespace),
+    resolved: moduleNamespace,
+  })
 }
 
 /** 取具名导出；不存在时显式报错（含可用导出清单，便于插件作者排查）。 */

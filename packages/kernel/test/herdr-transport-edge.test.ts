@@ -79,7 +79,7 @@ describe('socket 解析优先级', () => {
     await new Promise<void>((resolve) => server.listen(socketPath, resolve))
     process.env.HERDR_SOCKET_PATH = envSocket // 故意指向不存在的路径
     try {
-      const transport = createHerdrTransport()
+      const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
       const result = (await transport.call({ socketPath }, 'ping', {})) as Record<string, unknown>
       assert.equal(result['via'], 'explicit')
       assert.deepEqual(seen, ['ping'])
@@ -141,7 +141,7 @@ describe('订阅流终结语义', () => {
       write(`${ack}\n${e1}\n${e2}`)
     })
     const path = await listen(server)
-    const transport = createHerdrTransport()
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
     const events: { type: string; paneId?: string }[] = []
     const stop = await transport.subscribe({ socketPath: path }, (event) => events.push(event), () => assert.fail('不应有错误'))
     await new Promise((resolve) => setTimeout(resolve, 150))
@@ -161,7 +161,7 @@ describe('订阅流终结语义', () => {
       write('同样一行坏 JSON')
     })
     const path = await listen(server)
-    const transport = createHerdrTransport()
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
     const errors: unknown[] = []
     const stop = await transport.subscribe({ socketPath: path }, () => {}, (err) => errors.push(err))
     await new Promise((resolve) => setTimeout(resolve, 200))
@@ -178,7 +178,7 @@ describe('订阅流终结语义', () => {
       write(JSON.stringify({ event: 'pane_updated', data: { pane: {} } }))
     })
     const path = await listen(server)
-    const transport = createHerdrTransport()
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
     const errors: unknown[] = []
     const stop = await transport.subscribe({ socketPath: path }, () => {}, (err) => errors.push(err))
     await new Promise((resolve) => setTimeout(resolve, 150))
@@ -193,7 +193,7 @@ describe('订阅流终结语义', () => {
       /* 静默 */
     })
     const path = await listen(server)
-    const transport = createHerdrTransport()
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
     await assert.rejects(
       transport.subscribe({ socketPath: path }, () => {}, () => {}),
       (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_timeout',
@@ -209,7 +209,7 @@ describe('订阅流终结语义', () => {
       write(JSON.stringify({ id: request.id, result: { type: 'subscription_started' } }))
     })
     const path = await listen(server)
-    const transport = createHerdrTransport()
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
     const errors: unknown[] = []
     const stop = await transport.subscribe({ socketPath: path }, () => {}, (err) => errors.push(err))
     stop()
@@ -230,7 +230,7 @@ describe('call 帧边界', () => {
       })
     })
     await new Promise<void>((resolve) => server.listen(path, resolve))
-    const transport = createHerdrTransport()
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
     await assert.rejects(
       transport.call({ socketPath: path }, 'ping', {}),
       (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_protocol',
@@ -248,7 +248,7 @@ describe('call 帧边界', () => {
       })
     })
     await new Promise<void>((resolve) => server.listen(path, resolve))
-    const transport = createHerdrTransport()
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
     await assert.rejects(
       transport.call({ socketPath: path }, 'ping', {}),
       (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_protocol',
@@ -260,7 +260,7 @@ describe('call 帧边界', () => {
 
 describe('Gate 输出限额（不静默截断）', () => {
   it('超限输出 ok=false 且明确报限额', { timeout: 60_000 }, async () => {
-    const transport = createHerdrTransport()
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
     // 1MiB+ 输出：限额内成功保留完整；超出则显式失败。此处生成 1.1MiB。
     const result = await transport.runGate({}, 'head -c 1150000 /dev/zero | tr "\\0" "x"', process.cwd())
     if (result.ok) {
@@ -281,7 +281,7 @@ describe('父目录软链逃逸（本地）', () => {
     await writeFile(join(outside, 'wf-out-parent.json'), '{"private":true}')
     const { symlink } = await import('node:fs/promises')
     await symlink(outside, join(cwd, '.helm'))
-    const transport = createHerdrTransport()
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
     await assert.rejects(transport.readOutput({}, cwd, 'wf-out-parent.json'), (err: unknown) => err instanceof HerdrTransportError && (err.code === 'herdr_output_escaping' || err.code === 'herdr_output_not_file'))
     await assert.rejects(transport.removeOutput({}, cwd, 'wf-out-parent.json'), (err: unknown) => err instanceof HerdrTransportError && (err.code === 'herdr_output_escaping' || err.code === 'herdr_output_not_file'))
     const { readFile } = await import('node:fs/promises')

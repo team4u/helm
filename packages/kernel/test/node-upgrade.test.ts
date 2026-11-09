@@ -656,20 +656,10 @@ async function openHubApp(dir: string): Promise<{
     model: 'faux/faux-1',
     models: models as never,
     watchdogIntervalMs: 0,
-    nodeUpgradeTimeoutMs: 2_500,
+    nodeUpgradeTimeoutMs: 600,
   })
   const hub = await startHub({
     kernel: kernel as never,
-    workflows: {
-      list: () => [],
-      listRuns: () => [],
-      run: async () => {
-        throw new Error('本升级测试不提供工作流执行')
-      },
-      getRun: async () => undefined,
-      wait: async () => undefined,
-      abort: async () => undefined,
-    },
     port: 0,
   })
   const setup = await fetch(`${hub.url}/api/auth/setup`, {

@@ -8,10 +8,10 @@
  * 非法显式失败（gate_result_missing / execution_info_invalid），绝不依赖 TS。
  */
 
-import { isAbsoluteTargetPath } from '../runtime/tools.js'
+import { isAbsoluteTargetPath } from '../tools.js'
 import type { AgentExecutionInfo, AgentGateResult } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
-import { redactJsonValue } from '../redact.js'
+import { redactJsonValue } from '../../redact.js'
 
 /** 校验并克隆插件回传的 AgentExecutionInfo（拒绝多余/畸形字段，防注入）。 */
 export function sanitizeExecutionInfo(

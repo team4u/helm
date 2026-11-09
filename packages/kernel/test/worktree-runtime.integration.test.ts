@@ -38,7 +38,7 @@ import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { createHubHandler } from '../src/http/index.js'
-import type { WorkflowServiceLike } from '../src/http/index.js'
+import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -91,18 +91,12 @@ async function openRuntime(dataDir: string, cwd?: string): Promise<RuntimeEnv> {
     watchdogIntervalMs: 0,
     autoResume: false,
   })
-  // 最小 WorkflowServiceLike（本测试只打 /api/worktrees/cleanup）。
-  const workflows: WorkflowServiceLike = {
-    list: () => [],
-    listRuns: () => [],
-    run: async () => {
-      throw new HelmError('unsupported_runtime', '本测试不运行工作流', 501)
-    },
-    getRun: async () => undefined,
-    wait: async () => {},
-    abort: () => {},
-  }
-  const handler = createHubHandler(kernel, workflows)
+  // 编排插件（subagent / cleanup_worktree 动作与工具；引擎 state 走插件私有
+  // records doc 持久层——本文件聚焦 worktree 生命周期而非跨重启 run 恢复）。
+  await kernel.plugins.register(
+    createWorkflowPlugin(),
+  )
+  const handler = createHubHandler(kernel)
   const { token } = kernel.auth.createProcessToken()
   return {
     kernel,
@@ -116,13 +110,13 @@ async function openRuntime(dataDir: string, cwd?: string): Promise<RuntimeEnv> {
   }
 }
 
-/** HTTP POST /api/worktrees/cleanup 直调 handler（真实鉴权 + JSON 解析）。 */
-async function postCleanup(env: RuntimeEnv, body: unknown): Promise<{ status: number; json: any }> {
+/** HTTP POST /api/actions/builtin:workflow/cleanup_worktree 直调 handler（真实鉴权 + JSON 解析）。 */
+async function postCleanup(env: RuntimeEnv, input: unknown): Promise<{ status: number; json: any }> {
   const response = await env.handler(
-    new Request('http://127.0.0.1:3202/api/worktrees/cleanup', {
+    new Request('http://127.0.0.1:3202/api/actions/builtin%3Aworkflow/cleanup_worktree', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${env.token}` },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ input }),
     }),
   )
   const text = await response.text()
@@ -468,24 +462,17 @@ describe('占用中的 worktree 清理保护', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('HTTP worktrees/cleanup 路由', { timeout: 60_000 }, () => {
-  it('未知键 / 多选择器 / nodeId 无 path / 非法类型：显式 validation_error(400)，不触碰 kernel cleanup', { timeout: 60_000 }, async () => {
+  it('动作边界校验：未知键/多选择器/零选择器/非法类型显式 400；未登记选择器 404 不触碰实际清理', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't4a')
     const repo = makeGitRepo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
-      let cleanupCalls = 0
-      const original = env.kernel.cleanupWorktree.bind(env.kernel)
-      ;(env.kernel as unknown as { cleanupWorktree: unknown }).cleanupWorktree = async (...args: unknown[]) => {
-        cleanupCalls += 1
-        return (original as (...a: unknown[]) => Promise<unknown>)(...args)
-      }
-
-      // 未知键拒绝。
+      // 未知键拒绝（动作 inputSchema additionalProperties:false）。
       const unknownKey = await postCleanup(env, { conversationId: 5, oops: true })
       assert.equal(unknownKey.status, 400)
       assert.equal(unknownKey.json.error.code, 'validation_error')
 
-      // 多选择器拒绝（worktreeId + conversationId + path 必须恰好一）。
+      // 多选择器拒绝（worktreeId + conversationId / conversationId + path）。
       const multiA = await postCleanup(env, { conversationId: 5, path: '/tmp/x' })
       assert.equal(multiA.status, 400)
       assert.equal(multiA.json.error.code, 'validation_error')
@@ -497,15 +484,8 @@ describe('HTTP worktrees/cleanup 路由', { timeout: 60_000 }, () => {
       assert.equal(none.status, 400)
       assert.equal(none.json.error.code, 'validation_error')
 
-      // nodeId 只可搭配 path。
-      const nodeIdAlone = await postCleanup(env, { worktreeId: 'local:/tmp/x', nodeId: 'local' })
-      assert.equal(nodeIdAlone.status, 400)
-      assert.equal(nodeIdAlone.json.error.code, 'validation_error')
-      const nodeIdWithConv = await postCleanup(env, { conversationId: 5, nodeId: 'local' })
-      assert.equal(nodeIdWithConv.status, 400)
-      assert.equal(nodeIdWithConv.json.error.code, 'validation_error')
-
-      // 非法类型：conversationId 非正整数 / force 非布尔 / path 相对路径。
+      // 非法类型：conversationId 非正整数 / force 非布尔 / deleteBranch 非布尔
+      //（动作 JSON Schema 边界拒绝）。
       const badConv = await postCleanup(env, { conversationId: 0 })
       assert.equal(badConv.status, 400)
       assert.equal(badConv.json.error.code, 'validation_error')
@@ -518,12 +498,12 @@ describe('HTTP worktrees/cleanup 路由', { timeout: 60_000 }, () => {
       const badDelete = await postCleanup(env, { conversationId: 5, deleteBranch: 1 as unknown as boolean })
       assert.equal(badDelete.status, 400)
       assert.equal(badDelete.json.error.code, 'validation_error')
-      const badPath = await postCleanup(env, { path: 'relative/path' })
-      assert.equal(badPath.status, 400)
-      assert.equal(badPath.json.error.code, 'validation_error')
 
-      // 校验失败一律不进入 kernel cleanup。
-      assert.equal(cleanupCalls, 0, '校验失败绝不能触碰实际清理')
+      // 未登记选择器：选择器形状合法但无记录 -> 404 not_found（用户错误，
+      // 不伪装成校验失败；绝不误删未登记目录）。
+      const unregistered = await postCleanup(env, { worktreeId: 'local:/tmp/no-such-wt' })
+      assert.equal(unregistered.status, 404)
+      assert.equal(unregistered.json.error.code, 'not_found')
     } finally {
       await env.close()
     }
@@ -569,48 +549,20 @@ describe('HTTP worktrees/cleanup 路由', { timeout: 60_000 }, () => {
     }
   })
 
-  it('未带 token 401；kernel.cleanupWorktree 缺失（可选端口未实现）显式 unsupported_runtime(501)', { timeout: 60_000 }, async () => {
+  it('未带 token 401（动作端点同样强制鉴权）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't4c')
     const repo = makeGitRepo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
       const noAuth = await env.handler(
-        new Request('http://127.0.0.1:3202/api/worktrees/cleanup', {
+        new Request('http://127.0.0.1:3202/api/actions/builtin%3Aworkflow/cleanup_worktree', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ conversationId: 5 }),
+          body: JSON.stringify({ input: { conversationId: 5 } }),
         }),
       )
       assert.equal(noAuth.status, 401)
       assert.equal((JSON.parse(await noAuth.text()) as { error: { code: string } }).error.code, 'unauthorized')
-
-      // 最小内核不带 cleanupWorktree：路由显式 501（不静默成功）。
-      // Object.create + 描述符拷贝保留原型 getter（auth/stash 等），仅抹掉可选端口。
-      const minimal = Object.create(
-        Object.getPrototypeOf(env.kernel),
-        Object.getOwnPropertyDescriptors(env.kernel),
-      ) as KernelRuntime
-      Object.defineProperty(minimal, 'cleanupWorktree', { value: undefined, configurable: true })
-      const { createHubHandler: createHandler } = await import('../src/http/index.js')
-      const handler2 = createHandler(minimal as never, {
-        list: () => [],
-        listRuns: () => [],
-        run: async () => {
-          throw new HelmError('unsupported_runtime', 'no', 501)
-        },
-        getRun: async () => undefined,
-        wait: async () => {},
-        abort: () => {},
-      })
-      const res = await handler2(
-        new Request('http://127.0.0.1:3202/api/worktrees/cleanup', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', authorization: `Bearer ${env.token}` },
-          body: JSON.stringify({ conversationId: 5 }),
-        }),
-      )
-      assert.equal(res.status, 501)
-      assert.equal((JSON.parse(await res.text()) as { error: { code: string } }).error.code, 'unsupported_runtime')
     } finally {
       await env.close()
     }
@@ -874,27 +826,27 @@ async function agentReports(kernel: KernelRuntime, conversationId: number): Prom
   return out
 }
 
-describe('reportBackgroundAgent 幂等回报', { timeout: 60_000 }, () => {
+describe('后台回报 requestId 幂等（builtin:workflow 投递路径同机制）', { timeout: 60_000 }, () => {
   it('3 次并发 + 终态后重复调用只产生一条 origin=agent 且 meta.backgroundRunId=runId 的 helm.input；重启后持久去重', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't7')
     const repo = makeGitRepo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
     const runId = 'wf_testreport0001'
-    const summary = {
-      id: runId, name: 'background-agent', conversationId: 1, status: 'completed' as const,
-      createdAt: Date.now(), updatedAt: Date.now(), result: '后台任务完成内容',
-    }
+    const requestId = `helm:subagent-report:${runId}`
+    const deliver = () =>
+      env.kernel.submitInput(1, `后台子代理任务已结算。以下为运行 ${runId} 的结果数据：\n"后台任务完成内容"`, {
+        origin: 'agent',
+        whenBusy: 'followUp',
+        requestId,
+        meta: { backgroundRunId: runId, kind: 'subagent_report' },
+      })
     try {
       // faux 只给一次响应：第二次模型请求（若重复投递）将无脚本响应而暴露。
       env.faux.setResponses([fauxAssistantMessage('父会话收到回报后回答')])
-      await Promise.all([
-        env.kernel.reportBackgroundAgent(summary, { parentConversationId: 1 }),
-        env.kernel.reportBackgroundAgent(summary, { parentConversationId: 1 }),
-        env.kernel.reportBackgroundAgent(summary, { parentConversationId: 1 }),
-      ])
+      await Promise.all([deliver(), deliver(), deliver()])
       await env.kernel.waitForIdle(1)
-      // 终态后重复调用（singleflight 已清）：持久 requestId 拦截。
-      await env.kernel.reportBackgroundAgent(summary, { parentConversationId: 1 })
+      // 终态后重复调用：持久 submissionByRequest 拦截。
+      await deliver()
 
       const reports = (await agentReports(env.kernel, 1)).filter((r) => r.backgroundRunId === runId)
       assert.equal(reports.length, 1, `同 runId 只应投递一条回报，实得 ${JSON.stringify(reports)}`)
@@ -910,7 +862,12 @@ describe('reportBackgroundAgent 幂等回报', { timeout: 60_000 }, () => {
     const reopened = await openRuntime(join(dir, 'data'), repo)
     try {
       reopened.faux.setResponses([fauxAssistantMessage('不应出现的第二次回答')])
-      await reopened.kernel.reportBackgroundAgent(summary, { parentConversationId: 1 })
+      await reopened.kernel.submitInput(1, `后台子代理任务已结算。以下为运行 ${runId} 的结果数据：\n"重复"`, {
+        origin: 'agent',
+        whenBusy: 'followUp',
+        requestId,
+        meta: { backgroundRunId: runId, kind: 'subagent_report' },
+      })
       await reopened.kernel.waitForIdle(1)
       const reports = (await agentReports(reopened.kernel, 1)).filter((r) => r.backgroundRunId === runId)
       assert.equal(reports.length, 1, `重启后重复回报不得产生第二条 helm.input，实得 ${JSON.stringify(reports)}`)
@@ -1036,7 +993,9 @@ describe('createHelm 后台子代理全链（background + worktree + gate + 父�
 
       // 后台运行期：run running；子会话已建、进入 gate（blocked=gate 等待），
       // 父回合已结束（父 idle 不代表子结束——先结束语义）。
-      let run = app.workflows.getRun(runId)
+      const inspectRun = (id: string) =>
+        app.kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId: id }) as Promise<{ run: { id: string; status: string; error?: string } }>
+      let run = (await inspectRun(runId)).run
       assert.equal(run.status, 'running', `后台 run 应为 running，实得 ${run.status}`)
       const child = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
       assert.ok(child, '后台子会话应已派生')
@@ -1052,10 +1011,32 @@ describe('createHelm 后台子代理全链（background + worktree + gate + 父�
 
       // 释放 gate：写 release 文件，等待 run settle 与父会话回报轮完成。
       writeFileSync(releaseFile, 'release\n')
-      await app.workflows.wait(runId)
+      // 等待终态：轮询 inspect 动作（run 动作 wait:true 适用于新 run）。
+      for (let i = 0; i < 600; i++) {
+        run = (await inspectRun(runId)).run
+        if (run.status !== 'running') break
+        await new Promise((r) => setTimeout(r, 20))
+      }
+      // 关键等待：终态可见 ≠ 汇报已投递。引擎 settle 链在终态落盘后还要执行
+      // onBackgroundAgentSettled（向父会话 submitInput 汇报）——inspect 看到终态
+      // 时该步可能仍在途，此刻 waitForIdle(parent) 会立即返回（父尚无汇报输入），
+      // 旧写法随即断言 reports 得 0 条（全仓并发下暴露的等待竞态）。
+      // 必须等到真实的汇报 entry（origin=agent + meta.backgroundRunId=runId）
+      // 落盘后再继续；终态本身不是「父通知已完成」的证据。
+      let reported = false
+      for (let i = 0; i < 600; i++) {
+        const hits = (await agentReports(app.kernel, 1)).filter((r) => r.backgroundRunId === runId)
+        if (hits.length > 0) {
+          reported = true
+          break
+        }
+        await new Promise((r) => setTimeout(r, 20))
+      }
+      assert.ok(reported, `后台汇报 entry 应在行界内到达（runId=${runId}，status=${run.status}）`)
+      // 汇报 entry 到达后等父回合消费完（汇报轮模型回应），再验幂等恰一条。
       await app.kernel.waitForIdle(1)
 
-      run = app.workflows.getRun(runId)
+      run = (await inspectRun(runId)).run
       assert.equal(run.status, 'completed', `释放 gate 后 run 应 completed，实得 ${run.status}${run.error ? `（error: ${run.error}）` : ''}`)
 
       // 汇报输入：恰好一条 origin=agent、meta.backgroundRunId=runId 的 helm.input。

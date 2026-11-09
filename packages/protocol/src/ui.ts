@@ -217,6 +217,8 @@ export interface PluginClientContext {
   openScreen(target: string): void
   /** 在右侧分屏打开目标。 */
   openSplitScreen(target: string): void
+  /** 打开子会话侧边抽屉模态（统一子会话查看入口；不改变当前工作台开关状态）。 */
+  openConversationDrawer(conversationId: number): void
   /** 打开产物预览弹窗。 */
   openArtifact(artifactId: string): void
   /** 打开工作台抽屉（可指定激活面板 ID）。 */
@@ -237,8 +239,11 @@ export interface PluginClientContext {
  * 插件 client.tsx 可导入的宿主共享模块（编译器虚拟化为 __helm_shared_plugin_client
  * 全局命名空间，与 React 同机制共享，绝不打包第二份 React）：
  *
- *   import { usePluginContext, usePluginDoc } from '@helm/plugin-client'
+ *   import { usePluginContext, usePluginDoc, useToolActivity } from '@helm/plugin-client'
  *
+ * - useToolActivity(callId: string | undefined, active: boolean)：报告所在时间线回合的
+ *   工具后台活动（影响复制/分叉展示）；卸载/状态切换自动释放同一挂载来源的登记。
+ *   无 callId 或不在时间线 Provider 内时不登记，不创建全局状态（工作台不影响时间线）。
  * - usePluginContext：等价宿主 React Context usePluginContext（必须在 <PluginUiView> 内）；
  * - usePluginDoc<T>(docName)：响应式订阅本插件 public doc（SSE plugin.doc.updated
  *   实时重渲染，与宿主 usePluginDoc 同一 store，不足 Promise 轮询）。

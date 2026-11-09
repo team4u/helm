@@ -26,7 +26,7 @@ Helm 采用微内核架构，专注于工程任务的确定性与持久性。
 | :--- | :--- |
 | **微内核 (Kernel)** | 极简系统核心，零业务角色硬编码，统一托管插件与执行底座。 |
 | **持久会话 (Conversation)** | 绑定 `(nodeId, cwd)` 物理坐标的状态机，支持中断续接与全文检索。 |
-| **确定性工作流 (Workflow)** | 原生 JavaScript 编写的编排脚本，支持 `agent()` 与 `parallel()` 调度。 |
+| **确定性工作流 (Workflow)** | 原生 JavaScript 编写的编排脚本，由 `builtin:workflow` 插件驱动，支持 `agent()` 与 `parallel()` 调度。 |
 | **受控节点 (Node)** | 部署 `helm-node` 守护进程的计算机器，反向接入 Hub 承载命令执行。 |
 | **凭据隔离 (Credentials)** | CLI 登录态、服务端模型密钥与节点身份采用物理文件隔离存储。 |
 

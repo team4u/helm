@@ -17,7 +17,7 @@ export interface WorkspaceLocationState {
 type PersistedModal = Exclude<ActiveModal, null | { kind: 'command-palette' }>
 
 const DEFAULT_PRIMARY: ResolvedTarget = { kind: 'conversation', conversationId: ROOT_CONVERSATION_ID }
-const DEFAULT_WORKBENCH_TAB = 'tasks'
+const DEFAULT_WORKBENCH_TAB = 'artifacts'
 
 const MODAL_KIND_TO_KEY = {
   'profile-editor': 'profiles',

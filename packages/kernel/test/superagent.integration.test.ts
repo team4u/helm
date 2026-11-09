@@ -418,7 +418,7 @@ test('SA1: 默认停用不建业务会话/Profile/Doc；HTTP 启用后 #1 不变
     assert.equal(existsSync(join(dataDir, 'profiles', 'watchdog')), false, '默认停用不得自举 watchdog Profile')
 
     // HTTP Hub + 鉴权
-    hub = await startHub({ kernel: first.app.kernel as never, workflows: first.app.workflows as never, port: 0 })
+    hub = await startHub({ kernel: first.app.kernel as never, port: 0 })
     const base = hub.url
     const setup = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: PASSWORD } })
     const token = (JSON.parse(setup.body) as { token: string }).token
@@ -891,7 +891,7 @@ test('SA5: HTTP 动作与真实 CLI 子进程 --json 见同一结果；非法参
     writeProfile(env.dataDir, 'finance')
     const kernel = env.app.kernel
 
-    hub = await startHub({ kernel: kernel as never, workflows: env.app.workflows as never, port: 0 })
+    hub = await startHub({ kernel: kernel as never, port: 0 })
     const base = hub.url
     const setup = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: PASSWORD } })
     const token = (JSON.parse(setup.body) as { token: string }).token
@@ -1030,7 +1030,7 @@ test('SA6: SSE 先等 snapshot 首帧——启用后 UI 贡献与 publicDoc 增�
     const host = env.app.kernel.plugins
     const kernel = env.app.kernel
 
-    hub = await startHub({ kernel: kernel as never, workflows: env.app.workflows as never, port: 0 })
+    hub = await startHub({ kernel: kernel as never, port: 0 })
     const base = hub.url
     const setup = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: PASSWORD } })
     const token = (JSON.parse(setup.body) as { token: string }).token

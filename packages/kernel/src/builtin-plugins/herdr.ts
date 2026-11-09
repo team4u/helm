@@ -6,7 +6,7 @@
  * - blocked ↔ AskDoc 单飞审批桥（expectedStateSeq CAS 乐观锁，异步权威
  *   agent.get 现查真实 seq，绝不返回创建时快照）；
  * - $helm 状态 Token 投射（防自激环的去重心跳 + 随服务启停的有界续命）；
- * - 双轨保活清理（workflowRunId -> onWorkflowSettled；单回合 -> 父 turn_settled）；
+ * - 双轨保活清理（workflowRunId -> workflow.settled 事件；单回合 -> 父 turn_settled）；
  * - 启动对账回收 helm-wf-* 孤儿窗格（仅确认自有资源；failed 保留现场；
  *   真正仍 working/blocked 的保留并报告，绝不伪装结束；keepalive 孤儿可回收；
  *   精确 agent.name === 记录归属验证，身份不符放弃所有权）；
@@ -724,6 +724,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
             },
             transport,
             frozenLocalTarget,
+            deps.pollIntervalMs,
           )
           executorRef.current = executor
           overviewRef.current = new OverviewProjector(
@@ -764,7 +765,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
               }
             }),
           )
-          workflowRelease = ctx.host.onWorkflowSettled(settleWorkflow)
+          workflowRelease = ctx.host.onEvent('workflow.settled', (raw) => settleWorkflow(raw as WorkflowRunSummary))
 
           try {
             // subscribe ack 先行；任一步失败都释放解析器、监听与已获取资源。

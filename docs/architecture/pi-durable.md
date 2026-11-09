@@ -67,7 +67,7 @@ flowchart TD
             HConv["helm_conversations"]
             HAsks["helm_asks 审批提问表"]
             HArts["helm_artifacts 产物索引表"]
-            HRuns["helm_workflow_runs 工作流状态表"]
+            HDocs["helm_plugin_docs 插件文档表（含 workflow 运行记录）"]
         end
 
         subgraph FTS["FTS5 全文索引"]

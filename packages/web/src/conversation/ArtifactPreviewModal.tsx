@@ -3,6 +3,7 @@ import type { ArtifactMetadata } from '@helm/protocol'
 import { artifactsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { useIsMobile } from './composer-model.js'
 import { detectLanguage } from './code-language.js'
 import { CodeBlockView, MarkdownView } from './MarkdownView.js'
 import { formatBytes } from '../lib/format.js'
@@ -36,7 +37,10 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
   const [state, setState] = useState<LoadState>({ phase: 'loading' })
   const [view, setView] = useState<'rich' | 'source'>('rich')
   const [text, setText] = useState<string | null>(null)
-  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [desktopFullscreen, setDesktopFullscreen] = useState(false)
+  // 移动端固定全屏呈现：小窗模式下标题栏按钮拥挤错位，且滚动区域过于局促。
+  const isMobile = useIsMobile(680)
+  const isFullscreen = isMobile || desktopFullscreen
   const loadArtifacts = store.loadConversationArtifacts
   const artifactsLoaded = conversationId !== undefined && store.conversationArtifacts[conversationId] !== undefined
 
@@ -112,7 +116,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
         style={isFullscreen ? undefined : { maxWidth: 'min(1100px, 94vw)', maxHeight: '90vh' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="modal-header">
+        <div className="modal-header artifact-preview-header">
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             <HelmIcon name="file-text" size={14} />
             <span className="modal-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -143,18 +147,20 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
                 </button>
               </div>
             ) : null}
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => setIsFullscreen((v) => !v)}
-              title={isFullscreen ? '切换为窗口模式' : '全屏预览'}
-            >
-              <HelmIcon name={isFullscreen ? 'minimize-2' : 'maximize-2'} size={12} />
-              {isFullscreen ? '窗口' : '全屏'}
-            </button>
-            <button type="button" className="btn btn-sm" onClick={download}>
+            {!isMobile ? (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setDesktopFullscreen((v) => !v)}
+                title={desktopFullscreen ? '切换为窗口模式' : '全屏预览'}
+              >
+                <HelmIcon name={desktopFullscreen ? 'minimize-2' : 'maximize-2'} size={12} />
+                {desktopFullscreen ? '窗口' : '全屏'}
+              </button>
+            ) : null}
+            <button type="button" className="btn btn-sm" onClick={download} title="下载文件">
               <HelmIcon name="download" size={12} />
-              下载文件
+              {!isMobile ? '下载文件' : null}
             </button>
             <button
               type="button"

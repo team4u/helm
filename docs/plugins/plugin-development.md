@@ -149,7 +149,7 @@ flowchart LR
     TrackChoice -- 高级交互式 --> Track2["轨道二: client.tsx (原生 React)"]
     Track1 --> FastRender["无编译直出 UI 视图"]
     Track2 --> Compiler["PluginClientCompiler 编译打包"]
-    Compiler --> SandboxedRun["沙箱执行并共享宿主 React"]
+    Compiler --> SharedRun["共享宿主 React 运行时执行（可信代码，非沙箱）"]
 ```
 
 ### 轨道一：`@json-render` 声明式视图
@@ -184,7 +184,12 @@ ctx.ui.settingsPanel({
 1. **依赖共享规范**：
    - 组件引入 `react`、`react-dom` 与 `lucide-react`。
    - 宿主自动映射到全局命名空间，绝不打包第二份依赖。
-2. **极简无 Emoji 铁律**：
+2. **样式归属**：
+   - 插件业务样式以 `clientRoot` 内本地 `.css` 导入（如 `import './styles.css'`），不得写进宿主 `styles.css`。
+   - 编译器把本地 CSS 内联进插件 JS；模块首次加载时注入带 `data-helm-plugin-css` 标记的 `<style>`，插件停用/卸载或登出时自动回收。
+   - CSS 必须自包含：`@import` 与 `url()` 会被显式拒绝（注入后相对页面解析，基址不可靠）。
+   - 可复用宿主全局设计变量（如 `var(--fg-muted)`、`var(--border)`）与通用组件类（如 `.badge`），不重复定义宿主原语。
+3. **极简无 Emoji 铁律**：
    - 界面文案与状态徽标严禁使用任何 Emoji。
    - 图标统一使用 `lucide-react` 线性图标。
 
@@ -194,7 +199,8 @@ import { Activity } from 'lucide-react';
 import { usePluginDoc } from '@helm/plugin-client';
 
 export function SampleWidget() {
-  const stats = usePluginDoc<{ totalCalls: number }>('sample-plugin', 'stats');
+  // usePluginDoc 只需一个 docName：自动绑定当前插件（ctx.pluginId）
+  const stats = usePluginDoc<{ totalCalls: number }>('stats');
 
   return (
     <div className="p-4 border rounded-lg bg-card">
@@ -210,6 +216,22 @@ export function SampleWidget() {
 }
 ```
 
+`@helm/plugin-client` 是宿主共享模块，编译器将其映射到全局命名空间：
+
+| 共享 Hook | 作用 |
+| :--- | :--- |
+| `usePluginDoc(docName)` | 响应式订阅当前插件的公共文档，自动绑定插件 ID |
+| `useConversations()` | 订阅宿主会话摘要列表 |
+| `useConversation(conversationId)` | 订阅单个会话的摘要、详情、流式状态和审批；按需加载详情并提供重试方法 |
+| `usePluginContext()` | 获取 `callAction`、`openConversationDrawer`、`openArtifact`、`openWorkbench`、`closeWorkbench`、`notify` 等宿主交互能力 |
+| `useToolActivity(callId, active)` | 工具视图向所在时间线回合报告真实后台活动，宿主据此控制复制/分叉按钮 |
+
+`useToolActivity` 的注册表属于当前回合，不进入全局 Store。工具调用已经返回但后台任务仍在执行时，插件应根据自己的真实状态报告 `active: true`。同一调用的多个挂载来源独立清理；参数变化、卸载或插件停用会自动释放登记。缺少 `callId` 或组件不在时间线回合内时不登记，因此工作台视图不会影响其他回合。
+
+`openConversationDrawer(conversationId)` 打开现有子会话抽屉，不切换主屏、不创建分屏，也不改变工作台开关。
+
+注意 `client.tsx` 是可信代码而非安全沙箱，宿主不提供隔离边界。插件 UI 的组件、交互与样式均为插件资产：宿主只提供通用扩展点与共享原语，不包含工作流/子代理业务类名或专用渲染分支。
+
 3. **在后端注册组件**：
 
 ```typescript
@@ -218,7 +240,7 @@ ctx.ui.workbenchPanel({
   label: '业务监控',
   client: {
     module: 'widget.tsx',
-    exportName: 'SampleWidget',
+    export: 'SampleWidget',
   },
 });
 ```

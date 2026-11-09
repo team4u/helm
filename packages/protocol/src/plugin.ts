@@ -20,7 +20,6 @@ import type {
 } from './conversation.js'
 import type { EnvExecRequest, EnvExecResponse } from './env-rpc.js'
 import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
-import type { WorkflowRunSummary } from './workflow.js'
 import type { WorktreeCleanupRequest, WorktreeCleanupResult } from './worktree.js'
 
 /** JSON Schema 对象；由宿主在边界处统一校验。 */
@@ -339,11 +338,17 @@ export interface PluginToolSpec<TIn = Record<string, unknown>> {
 // 持久状态、后台服务与原始路由
 // ---------------------------------------------------------------------------
 
-/** 插件自有持久文档句柄（state.sqlite）；同步接口方便 pi-durable store 直用。 */
+/**
+ * 插件自有持久文档句柄（state.sqlite）；get/set/update 同步镜像，
+ * flush 等待底层排队写真正落盘完成（失败显式 reject——镜像已写不等于持久化完成，
+ * 副作用执行前必须 await flush 防止「未落盘就派生副作用」）。
+ */
 export interface PluginDocHandle<T> {
   get(): T
   set(value: T): void
   update(fn: (current: T) => T): void
+  /** 等待本 store 全部排队写冲刷完成（同一持久化链，无按文档粒度队列）。 */
+  flush(): Promise<void>
 }
 
 /** 插件公共文档快照（跨端可读；逐值 JSON 校验/脱敏后发布，默认不公开）。 */
@@ -360,7 +365,18 @@ export interface PluginDocOptions {
 
 export interface PluginServiceSpec {
   id: string
+  /**
+   * 预备阶段（全局屏障）：宿主在启动任何服务 start() 之前，先等待全部已启用
+   * 服务的 prepare() 完成。用于必须先于调度器唤醒/输入提交的恢复标记
+   * （如编排引擎的 prepareRecovery）。热启用同样先 prepare 后 start。
+   */
+  prepare?(): MaybePromise<void>
   start(): MaybePromise<void>
+  /**
+   * 停止新回调并等待本服务的在途回调收敛。宿主等待 stop 时允许本插件当前
+   * 启用周期的 doc 句柄完成最终写入；stop 返回后句柄失效。此窗口不区分
+   * 回调的异步来源，服务必须自行取消或等待残留任务，不能在返回后继续写入。
+   */
   stop(): MaybePromise<void>
   /** 返回仍需本服务保活的任务标签；宿主在停用/卸载前同步检查。 */
   liveTasks?(): string[]
@@ -450,7 +466,7 @@ export interface HelmHostApi {
   /** 部分更新会话；返回更新后的摘要。 */
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
   /** 中止指定会话的在途执行。 */
-  abortConversation?(id: number): Promise<void>
+  abortConversation(id: number): Promise<void>
   /**
    * 声明插件对本会话的管理权（如 superagent 的 router/watchdog 会话）：
    * 受管期间会话删除保护（409 conversation_managed_by_plugin），
@@ -460,9 +476,9 @@ export interface HelmHostApi {
   /** 标记会话归属权；'human' 会话严禁自动按键/中止（Watchdog 红线）。 */
   markConversationOwnership(id: number, owner: 'helm' | 'bot' | 'human'): void
   /** 派生或续接子代理（经过 agent_spawn Hook 管道 + 原生子会话底座）。 */
-  spawnAgent?(request: AgentSpawnRequest): Promise<unknown>
+  spawnAgent(request: AgentSpawnRequest): Promise<unknown>
   /** 在目标节点/会话工作目录执行验证门禁命令。 */
-  runGate?(
+  runGate(
     command: string,
     options?: {
       cwd?: string
@@ -477,23 +493,35 @@ export interface HelmHostApi {
    * 靶点解析优先级：显式 nodeId/cwd > conversationId 绑定 (nodeId, cwd) > 'local'/Hub cwd。
    * 远端节点离线时显式抛 409 node_offline，绝不静默回退本机。
    */
-  execEnv?(
+  execEnv(
     req: Omit<EnvExecRequest, 'stream'>,
     opts?: { signal?: AbortSignal },
   ): Promise<EnvExecResponse>
+  /**
+   * 动作前置校验（与 invokeAction 同源的 prepare/preflight）：校验插件状态、
+   * 会话 scope 与 inputSchema（无 handler 副作用），并返回定义端 idempotent。
+   * 供编排引擎在落盘 action_started 前判定副作用语义；不能仅以 listActions
+   * 清单冒充。
+   */
+  prepareAction(
+    pluginId: string,
+    actionId: string,
+    input: unknown,
+    context?: PluginActionContext,
+  ): { idempotent: boolean }
   /** 重启恢复前持久标记中断的子会话任务取消（必须在调度器恢复前调用）。 */
-  prepareInterruptedConversations?(ids: number[]): Promise<void>
+  prepareInterruptedConversations(ids: number[]): Promise<void>
   /** 清理受管 Git 工作树。 */
-  cleanupWorktree?(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult>
-  /** 调用任意已启用插件的动作（输出已经过 JSON 校验与脱敏）。 */
-  invokeAction?(
+  cleanupWorktree(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult>
+  /** 调用任意已启用插件的动作（输出已经过 JSON 校验与宿主统一脱敏）。 */
+  invokeAction(
     pluginId: string,
     actionId: string,
     input: unknown,
     context?: PluginActionContext,
   ): Promise<unknown>
   /** 列出当前全部已启用插件的动作清单。 */
-  listActions?(): ActionManifest[]
+  listActions(): ActionManifest[]
   /**
    * 创建 AskDoc 并等待终态：正常三态（answered/cancelled/superseded）均 resolve，
    * 只有验证/I/O/宿主失败才 reject。secret 字段答案为 stash 引用。
@@ -502,11 +530,10 @@ export interface HelmHostApi {
   cancelAsk(askId: string, reason?: 'cancelled' | 'superseded'): Promise<void>
   /** 注册 askId -> 当前 stateChangeSeq 解析器（AskDoc CAS 乐观锁用，可为异步——真实水位需远端 IO）；返回注销函数。 */
   registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void
-  /** 订阅宿主通用事件（如 'workflow.settled'）；插件停用时自动解除。 */
-  onEvent?(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void
-  /** 订阅工作流终态（completed / failed / aborted）；插件停用时自动解除。 */
-  onWorkflowSettled(listener: (run: WorkflowRunSummary) => MaybePromise<void>): () => void
-  emitEvent(type: string, payload: unknown): void
+  /** 订阅宿主通用事件（如 'workflow.settled'）；插件停用时自动解除。监听器可异步，发布方会等待其完成。 */
+  onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void
+  /** 发布宿主事件；同步分发内部监听器（含异步监听器的等待），返回其完成情况（同步实现返回 void）。 */
+  emitEvent(type: string, payload: unknown): MaybePromise<void>
 }
 
 // ---------------------------------------------------------------------------

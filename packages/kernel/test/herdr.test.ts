@@ -386,9 +386,32 @@ class FakeBackend implements PluginHostBackend {
     this.askSeqResolvers.add(resolver)
     return () => { this.askSeqResolvers.delete(resolver) }
   }
-  onWorkflowSettled(listener: (run: WorkflowRunSummary) => void | Promise<void>): () => void {
-    this.workflowListeners.add(listener)
-    return () => { this.workflowListeners.delete(listener) }
+  async abortConversation(): Promise<void> {}
+  async spawnAgent(): Promise<unknown> {
+    return {}
+  }
+  async runGate(): Promise<{ ok: boolean; output: string }> {
+    return { ok: true, output: '' }
+  }
+  async prepareInterruptedConversations(): Promise<void> {}
+  async cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
+    return { removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }
+  }
+  async invokeAction(): Promise<unknown> {
+    return {}
+  }
+  prepareAction(): { idempotent: boolean } {
+    return { idempotent: false }
+  }
+  async execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
+    throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
+  }
+  listActions(): [] {
+    return []
+  }
+  onEvent(_type: string, listener: (payload: unknown) => void | Promise<void>): () => void {
+    this.workflowListeners.add(listener as (run: WorkflowRunSummary) => void | Promise<void>)
+    return () => { this.workflowListeners.delete(listener as (run: WorkflowRunSummary) => void | Promise<void>) }
   }
   emitEvent(type: string, payload: unknown): void {
     this.events.push({ type, payload })
@@ -407,6 +430,7 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value))
   }
+  async flush(): Promise<void> {}
 }
 
 interface Env {
@@ -422,7 +446,7 @@ interface Env {
   close(): Promise<void>
 }
 
-async function makeEnv(options: { enabled?: boolean; docs?: MemoryDocStore; dataDir?: string; transport?: FakeTransport; backend?: FakeBackend; analyzeBlockedSnapshot?: HerdrPluginDependencies['analyzeBlockedSnapshot'] } = {}): Promise<Env> {
+async function makeEnv(options: { enabled?: boolean; docs?: MemoryDocStore; dataDir?: string; transport?: FakeTransport; backend?: FakeBackend; analyzeBlockedSnapshot?: HerdrPluginDependencies['analyzeBlockedSnapshot']; blockedBackoffBaseMs?: number; blockedBackoffCapMs?: number } = {}): Promise<Env> {
   const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'helm-herdr-test-'))
   const backend = options.backend ?? new FakeBackend()
   const docs = options.docs ?? new MemoryDocStore()
@@ -448,6 +472,9 @@ async function makeEnv(options: { enabled?: boolean; docs?: MemoryDocStore; data
         return { ok: true, output: 'local gate ok' }
       },
       ...(options.analyzeBlockedSnapshot !== undefined ? { analyzeBlockedSnapshot: options.analyzeBlockedSnapshot } : {}),
+      blockedBackoffBaseMs: options.blockedBackoffBaseMs ?? 5,
+      blockedBackoffCapMs: options.blockedBackoffCapMs ?? 20,
+      pollIntervalMs: 5,
       transport,
     }),
     { enabled: options.enabled ?? true },
@@ -707,7 +734,8 @@ test('非法输入拒绝: 相对 cwd / 非法 kind / nodeId 注入 / 显式 mode
 // ---------------------------------------------------------------------------
 
 test('审批桥: 双路径单飞——只建一次 Ask、只发一次键、CAS 复核', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
+  // 退避不用全局快参：本用例验证「同 seq 不重发不重建」窗口，重开需 2 次退避（400+800ms）后才触发。
+  const env = await makeEnv({ blockedBackoffBaseMs: 400, blockedBackoffCapMs: 800 })
   try {
     env.transport.promptStatus = 'blocked'
     const resultPromise = spawnDirect(env, { agentType: 'herdr:agy' })

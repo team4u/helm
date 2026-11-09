@@ -9,7 +9,7 @@
  *     特征真实回传模型上下文，原始 token 不回显。
  *  3. 输入 meta 全链（CLI --meta → helm.input entry → turn_settled）+ 详情分页
  *     首尾无丢 + conversation.entry/live 真实增量事件 + snapshot 扩展
- *     （ui/workflowRuns）+ plugin.changed 携带 ui + 纯脚本 workflow run --wait
+ *     （ui/pluginDocs）+ plugin.changed 携带 ui + 纯脚本 workflow run --wait
  *     与 workflow.updated 完成增量。
  *  4. 插件 doc 公私边界（私有 404 / 公共脱敏 marker / plugin.doc.updated 事件
  *     脱敏）、manageConversation 托管保护、scope 双过滤与 run_action 强制会话。
@@ -59,6 +59,9 @@ interface CoreEnv {
   dbPath: string
   faux: ReturnType<typeof fauxProvider>
   app: Awaited<ReturnType<typeof createHelm>>
+  /** 引擎经 builtin:workflow 插件动作驱动（run{wait:true} 返回终态 run）。 */
+  runWorkflow(request: Record<string, unknown>): Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>
+  inspectRun(runId: string): Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>
   close(): Promise<void>
 }
 
@@ -68,11 +71,16 @@ async function makeCoreEnv(): Promise<CoreEnv> {
   const models = createModels()
   models.setProvider(faux.provider)
   const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const plugins = app.kernel.plugins
   return {
     dataDir,
     dbPath: join(dataDir, 'state.sqlite'),
     faux,
     app,
+    runWorkflow: (request) =>
+      plugins.invokeAction('builtin:workflow', 'run', request) as Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>,
+    inspectRun: (runId) =>
+      plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>,
     async close() {
       await app.close().catch(() => {})
       rmSync(dataDir, { recursive: true, force: true })
@@ -246,7 +254,7 @@ test('对齐1: 受管 bash 内 CLI conversations get --current 不依赖磁盘�
   const env = await makeCoreEnv()
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
-    hub = await startHub({ kernel: env.app.kernel as never, workflows: env.app.workflows as never, port: 0 })
+    hub = await startHub({ kernel: env.app.kernel as never, port: 0 })
     const base = hub.url
     const setupRes = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: '对齐测试密码至少八位' } })
     const userToken = (JSON.parse(setupRes.body) as { token: string }).token
@@ -340,7 +348,7 @@ test('对齐2: 受管 bash 工具内执行 helm conversations get —— env 注
   const env = await makeCoreEnv()
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
-    hub = await startHub({ kernel: env.app.kernel as never, workflows: env.app.workflows as never, port: 0 })
+    hub = await startHub({ kernel: env.app.kernel as never, port: 0 })
     const base = hub.url
     const setupRes = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: '对齐测试密码至少八位' } })
     void setupRes
@@ -398,7 +406,7 @@ test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；�
   const env = await makeCoreEnv()
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
-    hub = await startHub({ kernel: env.app.kernel as never, workflows: env.app.workflows as never, port: 0 })
+    hub = await startHub({ kernel: env.app.kernel as never, port: 0 })
     const base = hub.url
     const setupRes = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: '对齐测试密码至少八位' } })
     const userToken = (JSON.parse(setupRes.body) as { token: string }).token
@@ -495,11 +503,11 @@ test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；�
     const inputFrame = frames.find((f) => f.includes('event: conversation.entry') && f.includes('test.render'))
     assert.ok(inputFrame, 'conversation.entry 增量应携带 helm.input 的 meta')
 
-    // 首帧 snapshot 扩展：ui 与 workflowRuns 必填
+    // 首帧 snapshot 扩展：ui 与 pluginDocs（builtin:workflow 公开 runs 文档）
     const snapFrame = frames.find((f) => f.startsWith('event: snapshot'))
     assert.ok(snapFrame, '订阅应收到首帧 snapshot')
     assert.ok(snapFrame!.includes('"ui"'), 'snapshot 应含 ui（插件 UI 贡献）')
-    assert.ok(snapFrame!.includes('"workflowRuns"'), 'snapshot 应含 workflowRuns')
+    assert.ok(snapFrame!.includes('"pluginDocs"'), 'snapshot 应含 pluginDocs')
 
     // 分页：limit=1 首页 + cursor 翻页到尾，聚合无丢失无重复
     const firstPageRes = await httpCall(base, 'GET', '/api/conversations/1?limit=1', { token: userToken })
@@ -566,7 +574,7 @@ test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；�
       if (wf.code !== 0) {
         assert.fail(`workflows run --wait 失败：${wf.err}`)
       }
-      const runSummary = JSON.parse(wf.out) as { id: string; status: string; result?: unknown }
+      const runSummary = (JSON.parse(wf.out) as { run: { id: string; status: string; result?: unknown } }).run
       assert.equal(runSummary.status, 'completed')
       assert.equal(runSummary.result, 42)
       const wfFrames = await subC.frames
@@ -667,7 +675,7 @@ test('对齐4: ctx.doc 公私边界、plugin.doc.updated 脱敏增量、manageCo
       },
     } satisfies PluginDefinition)
 
-    hub = await startHub({ kernel: kernel as never, workflows: env.app.workflows as never, port: 0 })
+    hub = await startHub({ kernel: kernel as never, port: 0 })
     const base = hub.url
     const setupRes = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: '对齐测试密码至少八位' } })
     const userToken = (JSON.parse(setupRes.body) as { token: string }).token
@@ -790,7 +798,6 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
   let releaseSettle: () => void = () => {}
   try {
     const kernel = env.app.kernel
-    const { workflows } = env.app
 
     // 外部执行环境（真实临时目录，不猜宿主目录）
     const execDir = join(env.dataDir, 'external-exec')
@@ -833,7 +840,7 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
           // Schema 业务数据（handled result；source 如实声明进 schema）
           return { action: 'handled', result: { answer: 42, source: 'external' } }
         })
-        ctx.host.onWorkflowSettled(async () => {
+        ctx.host.onEvent('workflow.settled', async () => {
           settleEntered = true
           settleCount += 1
           await settleGate
@@ -861,23 +868,19 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
       ', gate: ' + JSON.stringify(gateCmd) + ' })\n' +
       'return v'
 
-    const started = await workflows.run({ script, conversationId: ROOT_CONVERSATION_ID })
-
-    // 结算顺序死锁验证：先拿 wait promise，等 onWorkflowSettled 确已进入，
-    // 断言 wait 尚未返回（settleGate 未释放），再 release 并取真实结果。
-    let waitDone = false
-    const waitPromise = workflows.wait(started.id).then((r) => {
-      waitDone = true
-      return r
-    })
+    // 结算链验证：run 终态经 builtin:workflow 插件动作（wait:true）返回。
+    // emitEvent 可等待语义：引擎 onRunSettled 会 await workflow.settled 监听器
+    //（settleGate），因此必须先等监听器真实进入（settleEntered）再释放闸门，
+    // 最后才等待 run 终态——顺序颠倒会死等（运行等监听器、监听器等释放）。
+    const startedPromise = env.runWorkflow({ script, conversationId: ROOT_CONVERSATION_ID, wait: true })
     await waitFor(() => settleEntered === true)
-    assert.equal(waitDone, false, 'onWorkflowSettled 未完成前 workflows.wait 不得返回')
     releaseSettle()
-    const result = (await waitPromise) as { answer: number; source?: string }
+    const { run: started } = await startedPromise
+    const result = started.result as { answer: number; source?: string }
     assert.deepEqual(result, { answer: 42, source: 'external' }, '外部后端 handled 结果应回传脚本')
 
     // 节点元数据保留：executionId / effectiveCwd / worktree / gate
-    const summary = workflows.getRun(started.id)
+    const summary = (await env.inspectRun(started.id)).run
     const node = summary.nodes?.find((n) => n.kind === 'agent')
     assert.ok(node, '应含 agent 节点')
     assert.equal(node!.executionId, execId, '节点应保留外部 executionId')
@@ -891,12 +894,13 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
     // Gate 文件恰一次（onGateResult 回报使引擎跳过第二次执行）
     await waitFor(() => existsSync(join(gateDir, 'count')))
     assert.equal(readFileSync(join(gateDir, 'count'), 'utf8'), 'x', 'gate 恰好执行一次')
-    assert.equal(settleCount, 1, 'onWorkflowSettled 应恰好触发一次')
+    await waitFor(() => settleCount === 1)
+    assert.equal(settleCount, 1, 'workflow.settled 应恰好触发一次')
 
     // resume 重放不再 gate、不再执行外部后端
     const gatesBefore = gates.length
-    const resumed = await workflows.run({ resumeFromRunId: started.id, conversationId: ROOT_CONVERSATION_ID })
-    const resumedResult = (await workflows.wait(resumed.id)) as { answer: number; source?: string }
+    const { run: resumed } = await env.runWorkflow({ resumeFromRunId: started.id, conversationId: ROOT_CONVERSATION_ID, wait: true })
+    const resumedResult = resumed.result as { answer: number; source?: string }
     assert.equal(resumedResult.answer, 42)
     assert.equal(gates.length, gatesBefore, 'resume 重放不得再执行 gate')
     assert.equal(readFileSync(join(gateDir, 'count'), 'utf8'), 'x', 'gate 副作用不重复')
@@ -924,9 +928,18 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
       'const v = await agent("缺 gate 回报", { gate: ' + JSON.stringify(gateCmd) + ' })\n' +
       'if (v === null || v === undefined) throw new Error("agent 未返回结果")\n' +
       'return v'
-    const bad = await workflows.run({ script: badScript, conversationId: ROOT_CONVERSATION_ID })
-    await workflows.wait(bad.id)
-    const badSummary = workflows.getRun(bad.id)
+    // 引擎契约：脚本 throw 使 run failed；wait:true 动作对 failed 终态抛
+    // workflow_failed 错误信封，改用非 wait run + inspect 轮询终态。
+    let badId = ''
+    await assert.rejects(
+      () => env.runWorkflow({ script: badScript, conversationId: ROOT_CONVERSATION_ID, wait: true }),
+      (err: unknown) => {
+        badId = String((err as { details?: { runId?: string } }).details?.runId ?? '')
+        return err instanceof HelmError && err.code === 'workflow_failed'
+      },
+    )
+    assert.ok(badId !== '', '错误信封应携带 runId')
+    const badSummary = (await env.inspectRun(badId)).run
     assert.equal(badSummary.status, 'failed', '缺 gate 回报应显式 failed')
     const badNode = badSummary.nodes?.find((n) => n.kind === 'agent')
     assert.ok(badNode, '应含 agent 节点')
@@ -941,8 +954,8 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
     assert.equal(readFileSync(join(gateDir, 'count'), 'utf8'), 'x', '缺回报 run 不得在宿主目录执行 gate')
     assert.equal(gates.length, gatesBefore, '缺回报 run 不得经后端执行 gate')
   } finally {
-    // 失败路径兕底：释放 settle gate，避免 workflows.close() 经未完成的
-    // onWorkflowSettled 监听永久挂住（resolve 幂等）。
+    // 失败路径兕底：释放 settle gate，避免 workflow.settled 监听永久挂住
+    //（resolve 幂等）。
     releaseSettle()
     await env.close()
   }
@@ -1032,7 +1045,7 @@ test('对齐6: 双 Profile 独立 SYSTEM/MEMORY/模型，PATCH 切换与清覆�
     // HTTP PATCH 换 Profile：注入随之切换
     let hub: Awaited<ReturnType<typeof startHub>> | undefined
     try {
-      hub = await startHub({ kernel: second.app.kernel as never, workflows: second.app.workflows as never, port: 0 })
+      hub = await startHub({ kernel: second.app.kernel as never, port: 0 })
       const base = hub.url
       const setupRes = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: '对齐测试密码至少八位' } })
       const token = (JSON.parse(setupRes.body) as { token: string }).token

@@ -68,7 +68,6 @@ function makeStore(plugins: PluginSummary[], profiles: Profile[]): HelmStoreValu
       settingsPanels: [],
     },
     pluginDocs: {},
-    workflowRuns: [],
     nodes: [],
     profiles,
     models: [
@@ -87,7 +86,7 @@ function makeStore(plugins: PluginSummary[], profiles: Profile[]): HelmStoreValu
     primaryTarget: { kind: 'conversation', conversationId: 1 },
     splitTarget: null,
     workbenchOpen: false,
-    workbenchTab: 'tasks',
+    workbenchTab: 'artifacts',
     activeModal: null,
     highlightedEntry: null,
     notices: [],

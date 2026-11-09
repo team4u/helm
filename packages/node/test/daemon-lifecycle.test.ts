@@ -180,14 +180,14 @@ test('首次连接失败（Hub 未启动）后重连成功', { timeout: 60_000 }
     hubUrl: `http://127.0.0.1:${port}`,
     identity: { nodeId: 'ff-1', token: 'ff-1:sec' },
     dataDir: dir,
-    reconnectBaseDelayMs: 200,
-    reconnectMaxDelayMs: 1_000,
+    reconnectBaseDelayMs: 60,
+    reconnectMaxDelayMs: 300,
     log: (m) => logs.push(m),
   });
   let hub: HubHandle | undefined;
   try {
     // Hub 尚未监听：首连与若干次重连均失败，daemon 不得退出、不得崩溃。
-    await delay(900);
+    await delay(300);
     assert.equal(daemon.isConnected(), false, '失败期应离线');
     assert.equal(await daemon.waitUntilRegistered(50), false, '失败期等待不得伪造成功');
 
@@ -219,8 +219,8 @@ test('断线后 waitUntilRegistered 不伪造成功，重连后翻 true', { time
     hubUrl: hub.url,
     identity: { nodeId: 'w-1', token: 'w-1:sec' },
     dataDir: dir,
-    reconnectBaseDelayMs: 200,
-    reconnectMaxDelayMs: 1_000,
+    reconnectBaseDelayMs: 60,
+    reconnectMaxDelayMs: 300,
   });
   try {
     assert.equal(await daemon.waitUntilRegistered(10_000), true);
@@ -258,14 +258,14 @@ test('反复 register 拒绝期间始终至多一条并行连接', { timeout: 60
     hubUrl: hub.url,
     identity: { nodeId: 'r-1', token: 'r-1:wrong' },
     dataDir: dir,
-    reconnectBaseDelayMs: 150,
-    reconnectMaxDelayMs: 600,
+    reconnectBaseDelayMs: 50,
+    reconnectMaxDelayMs: 200,
   });
   try {
     assert.equal(await daemon.waitUntilRegistered(1_500), false, '鉴权拒绝必须 wait false');
     // 观察多个拒绝周期：任一时刻 Hub 侧至多一个节点 socket（无并行连接）。
     for (let i = 0; i < 12; i += 1) {
-      await delay(150);
+      await delay(80);
       assert.ok(hub.openSockets.size <= 1, `第 ${i} 次采样发现 ${hub.openSockets.size} 条并行连接`);
     }
     assert.ok(hub.registrations.length >= 2, '退避重试应多次尝试注册');
@@ -292,8 +292,8 @@ test('离线退避重连期间保持存活（不被 unref 计时器放空）', {
     hubUrl: `http://127.0.0.1:${port}`,
     identity: { nodeId: 'a-1', token: 'a-1:sec' },
     dataDir: dir,
-    reconnectBaseDelayMs: 300,
-    reconnectMaxDelayMs: 1_000,
+    reconnectBaseDelayMs: 80,
+    reconnectMaxDelayMs: 300,
   });
   let hub: HubHandle | undefined;
   try {
@@ -302,7 +302,7 @@ test('离线退避重连期间保持存活（不被 unref 计时器放空）', {
     const start = Date.now();
     let aliveMs = 0;
     while (Date.now() - start < 2_500) {
-      await delay(250);
+      await delay(120);
       aliveMs = Date.now() - start;
       assert.equal(daemon.isConnected(), false);
     }
@@ -337,7 +337,7 @@ test('close 返回前等待世代清理（在途 envExec 子进程被杀）', { 
     const pending = rpc!
       .envExec({ execId: 'long-1', command: 'sleep 60', timeout: 120 })
       .catch((error: unknown) => ({ ok: false as const, error: { code: 'closed', message: String(error) } }));
-    await delay(400); // 等子进程真正启动
+    await delay(250); // 等子进程真正启动
     const start = Date.now();
     await daemon.close();
     const closedMs = Date.now() - start;

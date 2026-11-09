@@ -7,7 +7,7 @@
 ## 插件宿主架构设计
 
 Helm 坚持机制与策略分离原则。
-内核只保留通用状态机、执行底座与编排引擎。
+内核只保留通用状态机、执行底座与插件宿主。
 所有业务角色、外部系统对接与高级交互均由插件实现。
 
 ```mermaid
@@ -88,6 +88,10 @@ flowchart LR
 4. **停用阶段**：校验在途任务，停止后台服务，卸载 Hook 与动态动作。
 5. **卸载阶段**：清理运行时上下文，释放会话管理权。
 
+Hub 首次启动时，宿主先等待全部已启用服务的 `prepare()`，再启动任何服务的 `start()`，最后恢复会话调度。热启用同样先执行该插件的 `prepare()` 再执行 `start()`。
+
+`stop()` 必须取消或等待本服务的在途回调。宿主等待服务停止时，允许本插件当前启用周期的文档句柄完成最终写入；这个停止窗口不区分回调的异步来源。服务返回后旧句柄失效，不得留下继续写入的回调。需要保证落盘时，应在返回前等待文档 `flush()`。
+
 ---
 
 ## 动作单点 Schema 与五端映射
@@ -103,6 +107,8 @@ flowchart LR
     Action --> Workflow["工作流 Action (SubagentWorkflow.action)"]
     Action --> Web["Web 前端 ({ type: 'helm:action' })"]
 ```
+
+> `pluginId` 含 `:` 时按 URI 编码传输，如 `builtin:workflow` 动作的标准端点为 `POST /api/actions/builtin%3Aworkflow/<actionId>`。
 
 ### 动作声明范例
 
@@ -142,7 +148,7 @@ ctx.action({
 
 1. **HTTP API 映射**：
    - 宿主自动生成 `POST /api/actions/:pluginId/:actionId` 端点。
-   - 请求体与返回体自动执行 JSON Schema 强校验。
+   - 请求体为 `{ input, conversationId? }`，返回体自动执行 JSON Schema 强校验。
 2. **CLI 命令映射**：
    - 自动生成 `helm <plugin> <action>` 顶层命令。
    - 支持 `--json` 管道输出与参数提示。
@@ -150,7 +156,8 @@ ctx.action({
    - 若配置 `exposeAsTool: true`，直接注入当前会话的工具列表。
    - 若未直接注入，模型可通过元工具 `run_action` 按需调用。
 4. **工作流编排映射**：
-   - 编排脚本可通过 `action('pluginId:actionId', input)` 调度。
+   - 编排脚本可通过 `action('pluginId.actionId', input, options)` 调度。
+   - 宿主在记账前校验插件状态、会话作用域和输入 Schema；动作的 `idempotent` 声明决定失败或中断后的默认重试语义。该声明是作者对安全重试的承诺，不是引擎检测所得。
 5. **Web 界面动作映射**：
    - 前端声明式 JSON Spec 中可通过 `{ type: 'helm:action', actionId, input }` 触发。
 
@@ -181,7 +188,12 @@ monitorDoc.update((state) => ({
   ...state,
   activeNodes: state.activeNodes + 1,
 }));
+
+// 必须先完成持久化再执行外部副作用时，显式等待冲刷。
+await monitorDoc.flush();
 ```
+
+`get()`、`set()` 和 `update()` 操作同步镜像；写入已排队不表示 SQLite 已完成持久化。`flush()` 等待底层存储的排队写完成，失败会拒绝。它冲刷共享存储队列，不是按单个文档划分的事务。
 
 ### 文档公开与实时事件
 
@@ -221,7 +233,8 @@ flowchart TD
 1. **正在执行的动作**：通过 HTTP、CLI 或工作流发起的 Action 调用。
 2. **正在调用的工具**：模型正在执行的 Plugin Tool 任务。
 3. **执行中的子代理**：由该插件拦截接管的子代理派生。
-4. **服务自主声明的任务**：后台服务通过 `liveTasks()` 动态返回的未完成任务标签。
+4. **服务自主声明的任务**：后台服务通过 `liveTasks()` 动态返回的未完成任务标签（如 `builtin:workflow` 返回运行中的 `workflow:<runId>`）。
+5. **在途工作树占用**：后台服务通过 `liveWorktrees()` 声明运行中节点占用的受管工作树，供宿主 WorktreeAllocator 拒绝误清理（不阻断停用的任务检查由 `liveTasks` 负责）。
 
 ### 保护规则与错误处理
 
@@ -244,14 +257,15 @@ export interface HelmHostApi {
   // 外部事件投递
   dispatchTrigger(event: ExternalTriggerEnvelope): Promise<void>;
   
-  // 会话输入提交
-  submitInput(conversationId: number, text: string, opts?: { origin?: InputOrigin; whenBusy?: WhenBusy }): Promise<void>;
+  // 会话输入提交（requestId 支持跨重启幂等提交）
+  submitInput(conversationId: number, text: string, opts?: { origin?: InputOrigin; whenBusy?: WhenBusy; meta?: Record<string, unknown>; requestId?: string }): Promise<void>;
   
   // 会话管理
   createConversation(init: ConversationInit): Promise<ConversationSummary>;
   listConversations(filter?: { profileId?: string; tag?: string; status?: ConversationStatus }): ConversationSummary[];
   getConversation(id: number): ConversationSummary;
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>;
+  abortConversation(id: number): Promise<void>;
   manageConversation(id: number): () => void;
   markConversationOwnership(id: number, owner: 'helm' | 'bot' | 'human'): void;
   
@@ -260,11 +274,27 @@ export interface HelmHostApi {
   cancelAsk(askId: string, reason?: 'cancelled' | 'superseded'): Promise<void>;
   registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void;
   
-  // 工作流与系统事件
-  onWorkflowSettled(listener: (run: WorkflowRunSummary) => MaybePromise<void>): () => void;
-  emitEvent(type: string, payload: unknown): void;
+  // 子代理与工作树底座
+  spawnAgent(request: AgentSpawnRequest): Promise<unknown>;
+  runGate(command: string, options?: { cwd?: string; conversationId?: number; nodeId?: string; signal?: AbortSignal; env?: Record<string, string> }): Promise<{ ok: boolean; output: string }>;
+  execEnv(req: Omit<EnvExecRequest, 'stream'>, opts?: { signal?: AbortSignal }): Promise<EnvExecResponse>;
+  prepareInterruptedConversations(ids: number[]): Promise<void>;
+  cleanupWorktree(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult>;
+
+  // 跨插件动作互调；prepareAction 只校验，不执行动作 handler
+  prepareAction(pluginId: string, actionId: string, input: unknown, context?: PluginActionContext): { idempotent: boolean };
+  invokeAction(pluginId: string, actionId: string, input: unknown, context?: PluginActionContext): Promise<unknown>;
+  listActions(): ActionManifest[];
+
+  // 系统事件（订阅如 'workflow.settled'；插件停用时自动解除）
+  onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void;
+  emitEvent(type: string, payload: unknown): MaybePromise<void>;
 }
 ```
+
+工作流运行事件不再有专用订阅端口：插件通过通用 `onEvent` 订阅 `workflow.settled` 等事件（由 `builtin:workflow` 经 `emitEvent` 发出），或用 `await ctx.host.emitEvent(...)` 发出自有事件并等待监听方处理。
+
+`execEnv` 复用内核 `EnvFabric`、取消信号、机密注入与输出脱敏。目标节点或目录缺省时继承请求中 `conversationId` 对应的会话坐标；节点离线会显式报错，不回退本机。`builtin:workflow` 通过此通用端口实现脚本内的 `action('env.exec', input)`，组合层不再直接持有或配置编排引擎。
 
 插件只能通过此受限接口调用内核机制。
 严禁插件绕过宿主直接操作核心数据库或会话内部变量。

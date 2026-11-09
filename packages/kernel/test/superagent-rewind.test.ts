@@ -51,6 +51,7 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value))
   }
+  async flush(): Promise<void> {}
 }
 
 function makeConversation(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
@@ -148,7 +149,16 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
     async createAsk() { throw new HelmError('unsupported', 'test', 400) },
     async cancelAsk() {},
     registerAskSeqResolver() { return () => {} },
-    onWorkflowSettled() { return () => {} },
+    onEvent() { return () => {} },
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    listActions: () => [],
     emitEvent(type, payload) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string })
     },
@@ -159,7 +169,7 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
   const skills = new SkillService(dataDir)
   await profiles.ensureDefault()
 
-  const hub = new EventHub({ initialSeq: 0, snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], workflowRuns: [] }) })
+  const hub = new EventHub({ initialSeq: 0, snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [] }) })
 
   const deps: SuperAgentDependencies = {
     dataDir,
@@ -438,7 +448,16 @@ test('竞态：collectWorkerSettlement await 期间发生 rewind——旧节点�
       async createAsk() { throw new HelmError('unsupported', 't', 400) },
       async cancelAsk() {},
       registerAskSeqResolver: () => () => {},
-      onWorkflowSettled: () => () => {},
+      onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    listActions: () => [],
       emitEvent: (type, payload) => { if (type === 'notification') notifications.push(payload as { title: string; body: string }) },
     } satisfies PluginHostBackend,
     docs,

@@ -13,7 +13,7 @@
 ```mermaid
 flowchart TD
     subgraph Helm["Helm 微内核"]
-        Engine["SubagentWorkflow 编排引擎"]
+        Engine["builtin:workflow 编排插件"]
         Plugin["builtin:herdr 插件"]
         Fabric["EnvFabric 跨节点底座"]
     end
@@ -61,7 +61,7 @@ flowchart TD
 
 ```mermaid
 sequenceDiagram
-    participant Engine as 工作流编排引擎
+    participant Engine as builtin:workflow 编排引擎
     participant Plugin as builtin:herdr
     participant Herdr as Herdr 终端窗格
     participant Disk as 本地文件系统

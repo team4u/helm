@@ -38,7 +38,9 @@ import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createEnvFabric } from '../src/env/fabric.js'
 import { runNativeSpawn, type NativeSpawnDeps } from '../src/runtime/spawn.js'
-import { WorktreeAllocator, createCleanupWorktreeTool, type ManagedWorktreeRecord } from '../src/runtime/worktree.js'
+import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/runtime/worktree.js'
+import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
+import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { ArtifactService, SecretStash } from '../src/services/index.js'
 
 type FauxHandle = ReturnType<typeof fauxProvider>
@@ -585,6 +587,62 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
   })
 })
 
+
+/** 经 builtin:workflow 插件工具执行 cleanup_worktree（backend.cleanupWorktree 绑定给定 allocator）。 */
+async function executeCleanupTool(
+  cleanup: (request: import('@helm/protocol').WorktreeCleanupRequest, signal?: AbortSignal) => Promise<unknown>,
+  input: Record<string, unknown>,
+): Promise<{ output?: Array<{ type: string; text?: string }>; structuredOutput?: Record<string, unknown>; isError?: boolean }> {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-tool-'))
+  const backend: PluginHostBackend = {
+    dispatchTrigger: async () => {},
+    submitInput: async () => {},
+    createConversation: async () => ({}) as never,
+    listConversations: () => [],
+    getConversation: () => {
+      throw new HelmError('not_found', 'no conv', 404)
+    },
+    updateConversation: async () => ({}) as never,
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: (request: import('@helm/protocol').WorktreeCleanupRequest, signal?: AbortSignal) => cleanup(request, signal) as Promise<import('@helm/protocol').WorktreeCleanupResult>,
+    invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    listActions: () => [],
+    manageConversation: () => () => {},
+    markConversationOwnership: () => {},
+    createAsk: async () => ({}) as never,
+    cancelAsk: async () => {},
+    registerAskSeqResolver: () => () => {},
+    onEvent: () => () => {},
+    emitEvent: () => {},
+  }
+  const host = new PluginHost({
+    dataDir,
+    host: backend,
+    docs: {
+      get: <T>(_key: string, initial: T): T => initial,
+      set: () => {},
+      flush: async () => {},
+    },
+  })
+  try {
+    await host.register(createWorkflowPlugin())
+    const result = (await host.executeTool('cleanup_worktree', input, { conversationId: 1 })) as {
+      output?: Array<{ type: string; text?: string }>
+      structuredOutput?: Record<string, unknown>
+      isError?: boolean
+    }
+    return result
+  } finally {
+    await host.dispose().catch(() => {})
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 6. cleanup_worktree
 // ---------------------------------------------------------------------------
@@ -760,24 +818,21 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
       writeFileSync(join(record!.path, 'wip.txt'), 'dirty\n')
       th.markIdle(childId)
 
-      const tool = createCleanupWorktreeTool(th.allocator)
-      const dirty = await tool.execute(
-        { conversationId: childId },
-        { conversationId: 1, callId: 'c1' } as never,
-        { abortSignal: undefined } as never,
-      )
+      const dirty = await executeCleanupTool((request, signal) => th.allocator.cleanup({ ...request, signal }), {
+        conversationId: childId,
+      })
       assert.equal(dirty.isError, true, '脏工作区应返回错误')
       const dirtyText = (dirty.output as Array<{ text: string }>)[0]!.text
       assert.ok(dirtyText.includes('worktree_dirty') || dirtyText.includes('未提交修改'), `错误应含指引：${dirtyText}`)
 
-      const ok = await tool.execute(
-        { conversationId: childId, deleteBranch: true, force: true },
-        { conversationId: 1, callId: 'c2' } as never,
-        { abortSignal: undefined } as never,
-      )
+      const ok = await executeCleanupTool((request, signal) => th.allocator.cleanup({ ...request, signal }), {
+        conversationId: childId,
+        deleteBranch: true,
+        force: true,
+      })
       assert.equal(ok.isError, undefined)
-      assert.equal((ok.structuredOutput as { ok: boolean }).ok, true)
-      assert.equal((ok.structuredOutput as { removed: boolean }).removed, true)
+      assert.equal(ok.structuredOutput?.['ok'], true)
+      assert.equal(ok.structuredOutput?.['removed'], true)
     } finally {
       await th.close()
     }
@@ -1253,12 +1308,9 @@ describe('cleanup_worktree 工具 schema 扩展', { timeout: 60_000 }, () => {
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
-      const tool = createCleanupWorktreeTool(allocator)
-      const ok = await tool.execute(
-        { worktreeId: record.id, deleteBranch: true },
-        { conversationId: 1, callId: 'c1' } as never,
-        { abortSignal: undefined } as never,
-      )
+      const cleanupVia = (request: import('@helm/protocol').WorktreeCleanupRequest, signal?: AbortSignal) =>
+        allocator.cleanup({ ...request, signal })
+      const ok = await executeCleanupTool(cleanupVia, { worktreeId: record.id, deleteBranch: true })
       assert.equal(ok.isError, undefined)
       const so = ok.structuredOutput as { ok: boolean; removed: boolean; worktreeId: string; branchDeleted: boolean }
       assert.equal(so.ok, true)
@@ -1266,11 +1318,7 @@ describe('cleanup_worktree 工具 schema 扩展', { timeout: 60_000 }, () => {
       assert.equal(so.worktreeId, record.id)
       assert.equal(so.branchDeleted, true)
       // 幂等重放（按 id）。
-      const again = await tool.execute(
-        { worktreeId: record.id },
-        { conversationId: 1, callId: 'c2' } as never,
-        { abortSignal: undefined } as never,
-      )
+      const again = await executeCleanupTool(cleanupVia, { worktreeId: record.id })
       assert.equal((again.structuredOutput as { removed: boolean }).removed, false)
     } finally {
       rmSync(dir, { recursive: true, force: true })

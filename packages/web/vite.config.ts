@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -6,6 +7,10 @@ const hubTarget = `http://127.0.0.1:${hubPort}`
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: { '@helm/protocol': fileURLToPath(new URL('../protocol/src/index.ts', import.meta.url)) },
+    dedupe: ['react', 'react-dom'],
+  },
   server: {
     host: process.env.VITE_HOST ?? '0.0.0.0',
     port: 3201,
