@@ -120,9 +120,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 窄屏只隐藏「开启分屏」入口；分屏已开启时保留激活态按钮与关闭按钮可点 */
   .split-toggle-btn:not(.split-active),
   .sidebar-split-action,
-  .sidebar-split-btn,
-  .workbench-split-btn,
-  .subagent-split-btn {
+  .sidebar-split-btn {
     display: none !important;
   }
   .helm-sidebar {

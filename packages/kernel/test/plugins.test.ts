@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SecretStash, AuthService } from '../src/services/index.js';
-import { createHubHandler, type KernelRuntimeLike, type WorkflowServiceLike } from '../src/http/index.js';
+import { createHubHandler, type KernelRuntimeLike } from '../src/http/index.js';
 import {
   HelmError,
   type ConversationSummary,
@@ -79,9 +79,20 @@ function makeHostApi(events: string[] = []): PluginHostBackend {
     registerAskSeqResolver: () => () => {
       events.push('unregister-ask-seq');
     },
-    onWorkflowSettled: () => () => {
+    onEvent: () => () => {
       events.push('unregister-workflow-settled');
     },
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => {
+      throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501);
+    },
+    listActions: () => [],
     emitEvent: (type, payload) => {
       events.push(`event:${type}`);
       eventPayloads.push({ type, payload });
@@ -97,6 +108,8 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value));
   }
+
+  async flush(): Promise<void> {}
 }
 
 class MemoryConfigStore implements PluginConfigStore {
@@ -1396,15 +1409,7 @@ test('真实 HTTP 桥：stop 失败的 disable 错误信封可序列化可脱敏
     plugins: httpHost,
     stash,
   } as unknown as KernelRuntimeLike;
-  const workflows = {
-    list: () => [],
-    listRuns: () => [],
-    run: async () => ({}),
-    getRun: async () => undefined,
-    wait: async () => ({}),
-    abort: () => {},
-  } as unknown as WorkflowServiceLike;
-  const handler = createHubHandler(kernel, workflows);
+  const handler = createHubHandler(kernel);
 
   const setup = await handler(new Request('http://127.0.0.1:3202/api/auth/setup', {
     method: 'POST',
@@ -1461,15 +1466,7 @@ test('真实 HTTP 桥：双失败（stop + 事件发布）信封同样可序列�
     events: { response: () => new Response(null, { status: 500 }) },
     plugins: httpHost,
   } as unknown as KernelRuntimeLike;
-  const workflows = {
-    list: () => [],
-    listRuns: () => [],
-    run: async () => ({}),
-    getRun: async () => undefined,
-    wait: async () => ({}),
-    abort: () => {},
-  } as unknown as WorkflowServiceLike;
-  const handler = createHubHandler(kernel, workflows);
+  const handler = createHubHandler(kernel);
   const setup = await handler(new Request('http://127.0.0.1:3202/api/auth/setup', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -1904,43 +1901,10 @@ test('hook 数字字段收紧：非整数/负 id/负 seq 拒绝，合法空 text
 });
 
 // ---------------------------------------------------------------------------
-// ctx.host.execEnv 与 prepareAction / idempotent
+// ctx.host.execEnv / prepareAction / idempotent
 // ---------------------------------------------------------------------------
 
-test('ctx.host.execEnv：未配置时抛 501 not_supported', { timeout: 60_000 }, async () => {
-  const host = makeHost();
-  let capturedError: unknown;
-  await host.register({
-    id: 'p:exec-unsupported',
-    definePlugin: (ctx) => {
-      ctx.action({
-        id: 'run-cmd',
-        description: 'run',
-        inputSchema: { type: 'object' },
-        outputSchema: { type: 'object' },
-        async handler() {
-          try {
-            await ctx.host.execEnv!({ command: 'echo 1' });
-          } catch (err) {
-            capturedError = err;
-            throw err;
-          }
-          return {};
-        },
-      });
-    },
-  });
-
-  await rejectsCode(
-    host.invokeAction('p:exec-unsupported', 'run-cmd', {}),
-    'not_supported',
-    501,
-  );
-  assert.ok(capturedError instanceof HelmError);
-  assert.equal((capturedError as HelmError).code, 'not_supported');
-});
-
-test('ctx.host.execEnv：正常执行 + 在途任务保护（withTask）阻止 disable', { timeout: 60_000 }, async () => {
+test('ctx.host.execEnv：真实调用 backend（required 端口）+ 在途任务保护（withTask）阻止 disable', { timeout: 60_000 }, async () => {
   let finishExec!: (res: { ok: boolean; exitCode: number; output: string; timedOut: boolean }) => void;
   const execPromise = new Promise<{ ok: boolean; exitCode: number; output: string; timedOut: boolean }>((resolve) => {
     finishExec = resolve;
@@ -1964,7 +1928,7 @@ test('ctx.host.execEnv：正常执行 + 在途任务保护（withTask）阻止 d
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         async handler() {
-          const res = await ctx.host.execEnv!({ command: 'long-job' });
+          const res = await ctx.host.execEnv({ command: 'long-job' });
           return { out: res.output };
         },
       });

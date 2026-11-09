@@ -70,18 +70,6 @@ export interface PluginDocRow {
   valueJson: string
 }
 
-export interface WorkflowRunRow {
-  id: string
-  name: string
-  conversationId: number
-  status: 'running' | 'completed' | 'failed' | 'aborted'
-  resultJson?: string
-  error?: string
-  nodesJson?: string
-  createdAt: number
-  updatedAt: number
-}
-
 type Deferred = () => Promise<void>
 
 export class HelmStore {
@@ -90,7 +78,6 @@ export class HelmStore {
   private readonly asks = new Map<string, AskRow>()
   private readonly artifacts = new Map<string, ArtifactRow>()
   private readonly pluginDocs = new Map<string, string>() // pluginId\0name -> json
-  private readonly workflowRuns = new Map<string, WorkflowRunRow>()
   /** 逻辑删除墓碑：重启后不重新导入 SDK 保留的内部历史。 */
   private readonly tombstones = new Set<number>()
   /**
@@ -211,33 +198,6 @@ export class HelmStore {
     )) {
       parseStoredJson<unknown>(`helm_plugin_docs#${row.plugin_id}:${row.name}.value`, row.value)
       this.pluginDocs.set(row.plugin_id + '\0' + row.name, row.value)
-    }
-    for (const row of await this.db.all<{
-      id: string
-      name: string
-      conversation_id: number
-      status: string
-      result: string | null
-      error: string | null
-      nodes: string | null
-      created_at: number
-      updated_at: number
-    }>(
-      'SELECT id, name, conversation_id, status, result, error, nodes, created_at, updated_at FROM helm_workflow_runs',
-    )) {
-      if (row.result !== null) parseStoredJson<unknown>(`helm_workflow_runs#${row.id}.result`, row.result)
-      if (row.nodes !== null) parseStoredJson<unknown>(`helm_workflow_runs#${row.id}.nodes`, row.nodes)
-      this.workflowRuns.set(row.id, {
-        id: row.id,
-        name: row.name,
-        conversationId: row.conversation_id,
-        status: row.status as WorkflowRunRow['status'],
-        resultJson: row.result ?? undefined,
-        error: row.error ?? undefined,
-        nodesJson: row.nodes ?? undefined,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      })
     }
     const seqRow = await this.db.get<{ value: number }>(
       "SELECT value FROM helm_seq WHERE key = 'events'",
@@ -498,34 +458,6 @@ export class HelmStore {
       if (key.startsWith(pluginId + '\0')) this.pluginDocs.delete(key)
     }
     this.enqueue(() => this.db.run('DELETE FROM helm_plugin_docs WHERE plugin_id = ?', pluginId))
-  }
-
-  // ---------------- workflow runs ----------------
-
-  getWorkflowRun(id: string): WorkflowRunRow | undefined {
-    const row = this.workflowRuns.get(id)
-    return row ? { ...row } : undefined
-  }
-
-  upsertWorkflowRun(row: WorkflowRunRow): void {
-    this.assertWritable()
-    this.workflowRuns.set(row.id, { ...row })
-    this.enqueue(() =>
-      this.db.run(
-        `INSERT INTO helm_workflow_runs (id, name, conversation_id, status, result, error, nodes, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET status=excluded.status, result=excluded.result, error=excluded.error, nodes=excluded.nodes, updated_at=excluded.updated_at`,
-        row.id,
-        row.name,
-        row.conversationId,
-        row.status,
-        row.resultJson ?? null,
-        row.error ?? null,
-        row.nodesJson ?? null,
-        row.createdAt,
-        row.updatedAt,
-      ),
-    )
   }
 
   // ---------------- FTS ----------------

@@ -449,14 +449,6 @@ describe('节点管理与 env/exec HTTP 路由', { timeout: 60_000 }, () => {
     })
     const hub = await startHub({
       kernel: kernel as never,
-      workflows: {
-        list: () => [],
-        listRuns: () => [],
-        run: async () => { throw new Error('此节点测试不提供工作流执行') },
-        getRun: async () => undefined,
-        wait: async () => undefined,
-        abort: async () => undefined,
-      },
       port: 0,
     })
     const setup = await fetch(`${hub.url}/api/auth/setup`, {
@@ -650,14 +642,6 @@ describe('节点管理与 env/exec HTTP 路由', { timeout: 60_000 }, () => {
     })
     const hub = await startHub({
       kernel: kernel as never,
-      workflows: {
-        list: () => [],
-        listRuns: () => [],
-        run: async () => { throw new Error('此节点测试不提供工作流执行') },
-        getRun: async () => undefined,
-        wait: async () => undefined,
-        abort: async () => undefined,
-      },
       port: 0,
     })
     try {

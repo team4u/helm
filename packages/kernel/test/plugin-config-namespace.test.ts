@@ -31,7 +31,7 @@ test('插件配置 HTTP 在重启和停用时均隐藏动态凭据，并保留�
       }, { enabled: false })
       const credential = app.kernel.auth.createProcessToken()
       try {
-        const handler = createHubHandler(app.kernel, app.workflows)
+        const handler = createHubHandler(app.kernel)
         const response = await handler(new Request(`http://localhost/api/plugins/${encodeURIComponent(pluginId)}/config`, {
           headers: { authorization: `Bearer ${credential.token}` },
         }))

@@ -110,8 +110,31 @@ class FakeBackend implements PluginHostBackend {
   registerAskSeqResolver(): () => void {
     return () => {}
   }
-  onWorkflowSettled(): () => void {
+  onEvent(): () => void {
     return () => {}
+  }
+  async abortConversation(): Promise<void> {}
+  async spawnAgent(): Promise<unknown> {
+    return {}
+  }
+  async runGate(): Promise<{ ok: boolean; output: string }> {
+    return { ok: true, output: '' }
+  }
+  async prepareInterruptedConversations(): Promise<void> {}
+  async cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
+    return { removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }
+  }
+  async invokeAction(): Promise<unknown> {
+    return {}
+  }
+  prepareAction(): { idempotent: boolean } {
+    return { idempotent: false }
+  }
+  async execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
+    throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
+  }
+  listActions(): [] {
+    return []
   }
   emitEvent(type: string, payload: unknown): void {
     this.events.push({ type, payload })
@@ -126,6 +149,9 @@ class MemoryDocStore implements PluginDocStore {
   }
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value))
+  }
+  async flush(): Promise<void> {
+    this.flushCount += 1
   }
 }
 

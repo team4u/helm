@@ -24,7 +24,6 @@ import type {
   TimelineRendererSpec,
   ToolViewSpec,
   WorkbenchPanelSpec,
-  WorkflowRunSummary,
 } from '@helm/protocol'
 import { matchesConversationScope, ROOT_CONVERSATION_ID } from '@helm/protocol'
 import type { ModelDescriptor } from './api.js'
@@ -224,7 +223,6 @@ export interface HelmStoreValue {
   uiContributions: PluginUiContribution[]
   groupedUi: GroupedUiSpecs
   pluginDocs: Record<string, unknown> // key: `${pluginId}/${docName}`
-  workflowRuns: WorkflowRunSummary[]
   nodes: NodeInfo[]
 
   // 静态配置资产
@@ -239,7 +237,7 @@ export interface HelmStoreValue {
   primaryTarget: ResolvedTarget
   splitTarget: ResolvedTarget | null
   workbenchOpen: boolean
-  workbenchTab: string // 'tasks' | 'artifacts' | `plugin:${pluginId}/${panelId}`
+  workbenchTab: string // 'artifacts' | `plugin:${pluginId}/${panelId}`（动态页签，由 WorkbenchDrawer 回退）
   activeModal: ActiveModal
   highlightedEntry: { conversationId: number; entryId: string } | null
   notices: ToastNotice[]

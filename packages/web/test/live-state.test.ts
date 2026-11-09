@@ -6,7 +6,7 @@ import { normalizeModelCatalogInfo } from '../src/lib/api.js'
 import type { NodeInfo } from '@helm/protocol'
 
 const conv: ConversationSummary = { id: 1, title: '助理', profileId: 'assistant', cwd: '/tmp', model: '', thinkingLevel: '', status: 'idle', tags: [], stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: true, pendingAskCount: 0, createdAt: 0, updatedAt: 0 }
-const snapshot: HelmSnapshot = { seq: 10, conversations: [conv], pendingAsks: [], plugins: [], ui: [], workflowRuns: [] }
+const snapshot: HelmSnapshot = { seq: 10, conversations: [conv], pendingAsks: [], plugins: [], ui: [] }
 
 test('SSE 分段 CRLF、多 data 行与注释不能丢帧', { timeout: 60_000 }, () => {
   const messages: Array<{ event: string; data: string }> = []
@@ -26,6 +26,25 @@ test('重连快照撤下过时插件文档和详情，重复帧忽略而缺帧�
   assert.equal(applyEventFrame(next, { seq: 10, event: { type: 'conversation.deleted', conversationId: 1 } }), next)
   assert.throws(() => applyEventFrame(next, { seq: 12, event: { type: 'notification', level: 'info', title: 'lost' } }), /不连续/)
   assert.equal(applyEventFrame(next, { seq: 11, event: { type: 'custom', payload: 1 } }).seq, 11)
+})
+
+test('快照 pluginDocs 直投写入 pluginDocs 映射，非法形状显式拒绝', { timeout: 60_000 }, () => {
+  const state = applySnapshot(emptyLiveState(), {
+    ...snapshot,
+    pluginDocs: [
+      { pluginId: 'builtin:workflow', name: 'runs', value: { runs: [] } },
+      { pluginId: 'p2', name: 'index', value: 42 },
+    ],
+  })
+  assert.deepEqual(state.pluginDocs, {
+    'builtin:workflow/runs': { runs: [] },
+    'p2/index': 42,
+  })
+  assert.throws(() => applySnapshot(emptyLiveState(), { ...snapshot, pluginDocs: 'bad' as unknown as HelmSnapshot['pluginDocs'] }), /无效/)
+  assert.throws(
+    () => applySnapshot(emptyLiveState(), { ...snapshot, pluginDocs: [{ pluginId: 1, name: 'x', value: null } as unknown as NonNullable<HelmSnapshot['pluginDocs']>[number]] }),
+    /无效/,
+  )
 })
 
 test('HTTP 详情返回时不得覆盖已收到的 SSE 新消息与摘要，历史游标能耗尽', { timeout: 60_000 }, () => {

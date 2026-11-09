@@ -9,7 +9,7 @@ import {
   WorkflowService,
   type WorkflowServiceHost,
   type WorkflowStateStore,
-} from '../src/workflow/service.js'
+} from '../src/builtin-plugins/workflow/engine/service.js'
 
 function makeEnv(
   t: TestContext,
@@ -26,12 +26,13 @@ function makeEnv(
   }
   const events = new EventHub({
     initialSeq: 0,
-    snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], workflowRuns: [] }),
+    snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }),
   })
   const updates: WorkflowRunSummary[] = []
   events.subscribe((frame) => {
-    const event = frame.event as { type: string; run?: WorkflowRunSummary }
-    if (event.type === 'workflow.updated' && event.run) updates.push(event.run)
+    // workflow.updated 现为自定义事件（{ type, payload: { run } } 原样透传）。
+    const event = frame.event as { type: string; payload?: { run?: WorkflowRunSummary } }
+    if (event.type === 'workflow.updated' && event.payload?.run) updates.push(event.payload.run)
   })
   const host: WorkflowServiceHost = {
     spawnAgent,

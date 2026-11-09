@@ -43,7 +43,7 @@ async function makeEnv(): Promise<Env> {
   const models = createModels()
   models.setProvider(faux.provider)
   const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
-  const hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 0 })
+  const hub = await startHub({ kernel: app.kernel, port: 0 })
   return {
     dataDir,
     faux,

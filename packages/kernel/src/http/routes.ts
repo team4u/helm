@@ -1,7 +1,7 @@
 /**
  * 核心 API 路由：auth / events(SSE) / conversations / asks / profiles /
  * providers / credentials / models / skills / artifacts / search / plugins /
- * actions / workflows + 插件动态路由。
+ * actions 与插件动态路由。
  *
  * 路由规则：方法 + 精确路径段匹配（段数必须完全一致，多余段一律 404，
  * 绝不让 /auth/status/foo 之类落入操作分支）；段值经严格百分号解码
@@ -19,7 +19,6 @@ import type {
   ConversationStatus,
   PluginConfigFieldSchema,
   Profile,
-  WorkflowRunSummary,
 } from '@helm/protocol'
 import { realpath as nodeFsRealpath, readFile as nodeFsReadFile } from 'node:fs/promises'
 import { join as joinPath, sep as PATH_SEP } from 'node:path'
@@ -32,11 +31,10 @@ import {
 import { MAX_ARTIFACT_BYTES } from '../services/artifacts.js'
 
 class AuthNotSetupError extends Error {}
-import type { KernelRuntimeLike, PluginRouteInfo, WorkflowServiceLike } from './contracts.js'
+import type { KernelRuntimeLike, PluginRouteInfo } from './contracts.js'
 import {
   errorResponse,
   jsonOk,
-  MAX_WORKFLOW_BODY_BYTES,
   readBinaryBodyWithLimit,
   readBody,
   readJsonBody,
@@ -63,8 +61,6 @@ import {
   parsePluginConfigBody,
   parseProfileBody,
   parseProvidersBody,
-  parseWorkflowRunBody,
-  parseWorktreeCleanupBody,
   requireIdParam,
   ValidationError,
   rejectUnknownKeys,
@@ -72,7 +68,6 @@ import {
 
 export interface RouterDeps {
   kernel: KernelRuntimeLike
-  workflows: WorkflowServiceLike
 }
 
 /** 已解析路径（/api 前缀已剥离，段已解码）。 */
@@ -87,7 +82,6 @@ interface RouteContext {
 export async function handleApi(
   request: Request,
   kernel: KernelRuntimeLike,
-  workflows: WorkflowServiceLike,
   redactor?: JsonRedactor,
 ): Promise<Response> {
   const url = new URL(request.url)
@@ -97,7 +91,7 @@ export async function handleApi(
   const ctx: RouteContext = { request, method: request.method, segments, url }
 
   try {
-    const response = await route(ctx, kernel, workflows, redactor)
+    const response = await route(ctx, kernel, redactor)
     return response
   } catch (error) {
     const mapped = mapServiceError(redactor, error)
@@ -136,7 +130,6 @@ function mapServiceError(redactor: JsonRedactor | undefined, error: unknown): Re
 async function route(
   ctx: RouteContext,
   kernel: KernelRuntimeLike,
-  workflows: WorkflowServiceLike,
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const { method, segments } = ctx
@@ -586,77 +579,6 @@ async function route(
       // null 是合法输出原样返回；undefined 是 output 边界违约，jsonOk
       // 显式抛错（伪造 {ok:true} 等于掩盖服务缺陷）。
       return jsonOk(redactor, result)
-    }
-    return errorResponse(redactor, 404, 'not_found', '路由不存在')
-  }
-
-  // ---- managed worktrees -----------------------------------------------------
-  if (head === 'worktrees' && second === 'cleanup' && third === undefined && method === 'POST') {
-    const input = parseWorktreeCleanupBody(await readJsonBody(ctx.request))
-    if (kernel.cleanupWorktree === undefined) throw new HelmError('unsupported_runtime', '内核未提供受管工作树清理', 501)
-    return jsonOk(redactor, await kernel.cleanupWorktree(input, ctx.request.signal))
-  }
-
-  // ---- workflows -------------------------------------------------------------
-  if (head === 'workflows') {
-    if (second === undefined && method === 'GET') {
-      return jsonOk(redactor, await workflows.list())
-    }
-    if (second === 'run' && method === 'POST' && third === undefined) {
-      const body = await readJsonBody(ctx.request, MAX_WORKFLOW_BODY_BYTES)
-      const wait = parseWaitFlag(ctx.url)
-      const runRequest = parseWorkflowRunBody(body)
-      const started = await workflows.run(runRequest)
-      const summary =
-        typeof started === 'object' && started !== null && 'status' in started
-          ? (started as WorkflowRunSummary)
-          : undefined
-      if (summary !== undefined) {
-        // wait=1：真实异步等待终态（不轮询），失败/中止终态如实返回错误信封。
-        if (wait) {
-          await workflows.wait(summary.id)
-          const terminal = await workflows.getRun(summary.id)
-          if (terminal !== undefined && (terminal.status === 'failed' || terminal.status === 'aborted')) {
-            throw new HelmError(
-              `workflow_${terminal.status}`,
-              terminal.error ?? `工作流运行 ${summary.id} 终态为 ${terminal.status}`,
-              500,
-              { runId: summary.id, status: terminal.status },
-            )
-          }
-          return jsonOk(redactor, terminal ?? summary)
-        }
-        return jsonOk(redactor, summary, { status: 202 })
-      }
-      // 只拿到 runId 句柄：如实返回句柄，不伪造完整 Summary。
-      return jsonOk(redactor, started, { status: 202 })
-    }
-    if (second === 'runs') {
-      // GET /api/workflows/runs：全部 run 摘要（可按 conversationId 过滤）。
-      if (method === 'GET' && third === undefined) {
-        const filterRaw = ctx.url.searchParams.get('conversationId')
-        let conversationId: number | undefined
-        if (filterRaw !== null) {
-          if (!/^\d+$/.test(filterRaw) || Number(filterRaw) < 1) {
-            throw new ValidationError('conversationId 需为正整数')
-          }
-          conversationId = Number(filterRaw)
-        }
-        const runs = await workflows.listRuns()
-        const filtered = conversationId === undefined ? runs : runs.filter((r) => r.conversationId === conversationId)
-        return jsonOk(redactor, filtered)
-      }
-      const runId = requireIdParam(third ?? '', 'runId')
-      if (method === 'GET' && fourth === undefined && fifth === undefined) {
-        const run = await workflows.getRun(runId)
-        if (run === undefined) throw new HelmError('not_found', `工作流运行不存在: ${runId}`, 404)
-        return jsonOk(redactor, run)
-      }
-      if (fourth === 'abort' && method === 'POST' && fifth === undefined) {
-        await workflows.abort(runId)
-        return jsonOk(redactor, { ok: true })
-      }
-      return errorResponse(redactor, 404, 'not_found', '路由不存在')
     }
     return errorResponse(redactor, 404, 'not_found', '路由不存在')
   }

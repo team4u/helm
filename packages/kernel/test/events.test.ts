@@ -45,7 +45,7 @@ function makeFixture(opts?: { maxPendingBytes?: number; initialSeq?: number }): 
   const persistedSeqs: number[] = []
   const initialSeq = opts?.initialSeq ?? 0
   const fixture: Fixture = {
-    snapshotValue: { seq: initialSeq, conversations: [], pendingAsks: [], plugins: [], ui: [], workflowRuns: [] },
+    snapshotValue: { seq: initialSeq, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] },
     persistedSeqs,
     hub: undefined as unknown as Fixture['hub'],
   }
@@ -298,7 +298,7 @@ describe('EventHub 快照竞态', { timeout: 60_000 }, () => {
     // provider 首次被调用同步发布 600 个事件（>512 缓冲上限）。
     let reentrant = false
     const persisted: number[] = []
-    const snapValue: HelmSnapshot = { seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], workflowRuns: [] }
+    const snapValue: HelmSnapshot = { seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }
     const hub = new EventHub({
       initialSeq: 0,
       snapshot: () => {

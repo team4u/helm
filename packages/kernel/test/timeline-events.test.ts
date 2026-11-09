@@ -6,7 +6,7 @@
  *    （id 转 string、model 保留、JSON 可用校验拒绝非 JSON、不静默截断）。
  * 2. EventHub 层：conversation.entry / conversation.live / plugin.doc.updated /
  *    workflow.updated 四个 core 类型的直传与完整信封双形状、非法 payload 显式
- *    抛错、脱敏保持；snapshot 必填 ui/workflowRuns。
+ *    抛错、脱敏保持；snapshot 必填 ui/pluginDocs。
  * 3. 真实 SDK 层：faux provider 驱动 ConversationTracker —— observe 初始历史
  *    不重发 entry、新落库 entry 每 id 恰一次、live 节流（75ms 窗口）与终态
  *    冲刷、stopObserving 后无幽灵事件、meta 从 entry.data 重建贯通回
@@ -214,7 +214,7 @@ describe('EventHub 新 core 事件类型', { timeout: 60_000 }, () => {
           pendingAsks: [],
           plugins: [],
           ui: [],
-          workflowRuns: [],
+          pluginDocs: [],
           ...snapshot,
         }) as HelmSnapshot,
     })
@@ -276,14 +276,14 @@ describe('EventHub 新 core 事件类型', { timeout: 60_000 }, () => {
     assert.deepEqual(e2.doc, doc)
   })
 
-  it('workflow.updated：双形状；run 原样', () => {
+  it('workflow.updated：自定义事件原样透传 payload（编排插件直发）', () => {
     const { hub, frames } = makeHub()
     hub.publish('workflow.updated', { run })
     hub.publish('workflow.updated', { type: 'workflow.updated', run })
-    const [e1, e2] = frames.map((f) => f.event) as Array<{ run: typeof run }>
+    const [e1, e2] = frames.map((f) => f.event) as Array<{ payload: { run: typeof run } }>
     assert.ok(e1 && e2)
-    assert.deepEqual(e1.run, run)
-    assert.deepEqual(e2.run, run)
+    assert.deepEqual(e1.payload.run, run)
+    assert.deepEqual(e2.payload.run, run)
   })
 
   it('非法 payload 显式抛 HelmError 且不推进 seq（不静默降级）', () => {
@@ -306,11 +306,8 @@ describe('EventHub 新 core 事件类型', { timeout: 60_000 }, () => {
       () => hub.publish('plugin.doc.updated', { doc: { pluginId: 'p', name: 'n' } }),
       HelmError,
     )
-    // workflow.updated：status 非 string
-    assert.throws(
-      () => hub.publish('workflow.updated', { run: { ...run, status: 3 } }),
-      HelmError,
-    )
+    // workflow.updated 现为自定义事件（payload 任意 JSON 直传），不再做
+    // 形状门禁；唯一边界是 JSON 合法性（循环引用等）。
     assert.equal(hub.seq, 0, '全部失败不推进序号')
     assert.equal(frames.length, 0)
   })
@@ -328,13 +325,13 @@ describe('EventHub 新 core 事件类型', { timeout: 60_000 }, () => {
     assert.ok(text.includes('[REDACTED]'))
   })
 
-  it('snapshot 必填 ui / workflowRuns 字段（新契约直出，无兼容缺省）', () => {
+  it('snapshot 必填 ui / pluginDocs 字段（新契约直出，无兼容缺省）', () => {
     const ui = [{ pluginId: 'p', surface: 'sidebar.item', spec: { id: 's1', label: 'X' } }]
-    const runs = [run]
-    const { hub } = makeHub({ ui, workflowRuns: runs })
+    const docs = [{ pluginId: 'builtin:workflow', name: 'runs', value: { runs: [] } }]
+    const { hub } = makeHub({ ui, pluginDocs: docs })
     const snap = hub.currentSnapshot()
     assert.deepEqual(snap.ui, ui)
-    assert.deepEqual(snap.workflowRuns, runs)
+    assert.deepEqual(snap.pluginDocs, docs)
   })
 })
 

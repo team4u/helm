@@ -596,7 +596,6 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
       settingsPanels: [],
     },
     pluginDocs: {},
-    workflowRuns: [],
     nodes: [],
     profiles: [{ id: 'assistant', name: '个人助理' }],
     models: [
@@ -615,7 +614,7 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
     primaryTarget: { kind: 'conversation', conversationId: 1 },
     splitTarget: null,
     workbenchOpen: false,
-    workbenchTab: 'tasks',
+    workbenchTab: 'artifacts',
     activeModal: null,
     highlightedEntry: null,
     notices: [],

@@ -38,7 +38,8 @@ import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { ROOT_CONVERSATION_ID, type HelmEventFrame, type PluginDefinition } from '@helm/protocol'
 
 import { KernelRuntime } from '../src/runtime/index.js'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/service.js'
+import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
+import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/builtin-plugins/workflow/engine/service.js'
 
 const require = createRequire(import.meta.url)
 /** 主仓 packages/kernel（测试随仓内 test/ 交付，src 依赖用相对导入；tsx loader 直跑源码）。 */
@@ -153,17 +154,21 @@ for (let i = 0; i < 200; i++) {
 }
 if (!childId) { process.stderr.write('seed: no child\\n'); process.exit(3) }
 await delay(1200) // 让部分 token 落盘（progress persistWithinMs 默认 1000ms）
-// 植入 startBackgroundAgent 的持久 run 记录（与 WorkflowService 契约同构）
+// 植入 startBackgroundAgent 的持久 run 记录（引擎 state 现住在插件私有
+// records 文档：PluginDocStore 键 'builtin:workflow:records'，值为引擎键值 dict）
 const now = Date.now()
 const doc = kernel.documentStore
-doc.set('workflow/runs', [{ id: 'wf_seed_real', conversationId: 1, createdAt: now }])
-doc.set('workflow/run/wf_seed_real', {
-  id: 'wf_seed_real', name: 'subagent', conversationId: 1, status: 'running',
-  createdAt: now, updatedAt: now, kind: 'subagent', notifyParentOnSettle: true,
-  journalPath: join(dataDir, 'wf-seed-real.jsonl'),
-  nodes: [{ id: 'subagent-0', kind: 'agent', label: 'subagent', status: 'running', startedAt: now, conversationId: childId }],
-  subagentMeta: { execution: { nodeId: 'local', conversationId: childId } },
-})
+const records: Record<string, unknown> = {
+  'workflow/runs': [{ id: 'wf_seed_real', conversationId: 1, createdAt: now }],
+  'workflow/run/wf_seed_real': {
+    id: 'wf_seed_real', name: 'subagent', conversationId: 1, status: 'running',
+    createdAt: now, updatedAt: now, kind: 'subagent', notifyParentOnSettle: true,
+    journalPath: join(dataDir, 'wf-seed-real.jsonl'),
+    nodes: [{ id: 'subagent-0', kind: 'agent', label: 'subagent', status: 'running', startedAt: now, conversationId: childId }],
+    subagentMeta: { execution: { nodeId: 'local', conversationId: childId } },
+  },
+}
+doc.set('builtin:workflow:records', records)
 await doc.flush()
 process.stdout.write('CHILD=' + childId + '\\n')
 await delay(300) // flush 落盘窗口
@@ -251,7 +256,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     await Promise.race([Promise.all(exits), delay(30_000, undefined, { ref: false }).then(() => { throw new Error('seeder 30s 未退出') })])
     assert.ok(childId > 1, `必须拿到子会话 ID（收到 ${childId}）`)
 
-    // ---- 2) 重启进程：KernelRuntime(autoResume:false) + WorkflowService（app 同款接线）----
+    // ---- 2) 重启进程：KernelRuntime(autoResume:false) + builtin:workflow 插件（app 同款顺序）----
     const faux = fauxProvider()
     const models = createModels()
     models.setProvider(faux.provider)
@@ -259,15 +264,6 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     t.after(async () => {
       await kernel.close().catch(() => {})
     })
-    await kernel.plugins.register({
-      id: 'test:restart-probe',
-      name: '重启恢复探针',
-      definePlugin(ctx) {
-        ctx.hook.onTurnSettled(() => {
-          // turn_settled 挂接验证插件注册路径可用；报告断言用事件订阅（下方）。
-        })
-      },
-    } satisfies PluginDefinition)
     const rootInputs: Array<{ conversationId: number; origin?: string; kind?: string }> = []
     kernel.events.subscribe((frame: HelmEventFrame) => {
       const e = frame.event as { type?: string; conversationId?: number; entry?: { kind?: string; data?: { origin?: string; meta?: { kind?: string } } } }
@@ -275,50 +271,67 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
         rootInputs.push({ conversationId: e.conversationId, origin: e.entry.data?.origin, kind: e.entry.data?.meta?.kind })
       }
     })
-    const workflows = new WorkflowService({
-      dataDir: kernel.dataDir,
-      state: kernel.documentStore,
-      redact: (text) => kernel.stash.redact(text),
-      host: {
-        spawnAgent: (request) => kernel.spawnAgent(request),
-        prepareInterruptedConversations: (ids) => kernel.prepareInterruptedConversations(ids),
-        runGate: (command, context) => kernel.runGate(command, context),
-        invokeAction: (pluginId, actionId, input, context) => kernel.plugins.invokeAction(pluginId, actionId, input, context),
-        listActions: () => kernel.plugins.listActions(),
-        getConversation: (id) => kernel.getConversation(id),
-        abortConversation: (id) => kernel.abortConversation(id),
-        emitEvent: (type, payload) => kernel.events.publish(type, payload),
-        onRunSettled: () => {},
-        onBackgroundAgentSettled: (summary) => kernel.reportBackgroundAgent(summary, { parentConversationId: ROOT }),
-      },
-    })
-    t.after(async () => {
-      await workflows.close().catch(() => {})
-    })
     assert.equal(kernel.getConversation(childId).parentConversationId, ROOT, '遗留子会话镜像与父关联必须在重启后恢复')
 
-    // ---- 3) prepareRecovery：只落 abort 标记；调度器仍 paused；零模型调用 ----
-    await workflows.prepareRecovery()
-    assert.equal(faux.state.callCount, 0, 'prepareRecovery 绝不发起任何模型调用')
-    const probe1 = await readOnlyInspect(dataDir)
-    assert.equal(probe1.scheduling, 'paused', 'prepareRecovery 后调度器必须仍 paused（未 resume）')
-    const gen = probe1.tasks.filter((task) => task.conversationId === childId && task.kind === 'pi.generation')
-    assert.equal(gen.length, 1, `应存在恰好 1 个遗留 pi.generation 任务（实际 ${probe1.tasks.map((x) => x.kind).join(',')}）`)
-    assert.equal(gen[0]!.abortRequested, true, '遗留任务必须已落持久 abort 标记')
-    assert.notEqual(gen[0]!.status, 'terminal', '标记阶段任务不得已终态（尚未终止）')
-
-    // ---- 4) workflows.init()：真正终止子任务，标 failed(interrupted)，父收报告 ----
-    // 父会话将消费 agent 来源报告并产生一次真实模型回合
+    // ---- 3+4) 注册 builtin:workflow 插件与探针插件（deferServices 启动屏障：
+    // 注册期不启动任何服务；kernel.start() 先全局 prepare 再逐插件 start）。
+    // 探针插件的 prepare 在 workflow prepareRecovery 完成后被调起并阻塞在
+    // 人工闸门上：此刻断言调度器仍 paused、遗留子任务已落 abortRequested
+    // 持久标记（prepare 阶段中间态，不是 init 后的最终状态）。
     faux.setResponses([fauxAssistantMessage('收到后台中断报告')])
-    await workflows.init()
+    let releasePrepare!: () => void
+    const prepareGate = new Promise<void>((resolve) => { releasePrepare = resolve })
+    const probeOrder: string[] = []
+    await kernel.plugins.register(createWorkflowPlugin())
+    await kernel.plugins.register({
+      id: 'test:restart-probe',
+      name: '重启恢复探针',
+      definePlugin(ctx) {
+        ctx.service({
+          id: 'barrier-probe',
+          async prepare() {
+            // 此刻全局屏障阶段 1 进行中：workflow 的 prepareRecovery 已完成
+            //（注册顺序在前），其后的 start 尚未发生（阶段 2 未开始）。
+            probeOrder.push('prepare')
+            await prepareGate
+          },
+          async start() {
+            probeOrder.push('start')
+          },
+          async stop() {},
+        })
+        ctx.hook.onTurnSettled(() => {
+          // turn_settled 挂接验证插件注册路径可用；报告断言用事件订阅（下方）。
+        })
+      },
+    } satisfies PluginDefinition)
+    const startPromise = kernel.start()
+    // 屏障中间：workflow prepareRecovery 已落 abort 标记，但没有任何服务 start，
+    // 调度器仍 paused、零模型调用。用只读探针 Harness 验证持久中间态。
+    await delay(200)
+    const midPrepare = await readOnlyInspect(dataDir)
+    assert.equal(midPrepare.scheduling, 'paused', `prepare 屏障期间调度器必须仍 paused（实际 ${midPrepare.scheduling}）`)
+    const interruptedTask = midPrepare.tasks.find(
+      (task) => task.conversationId === childId && task.kind.includes('generation'),
+    )
+    assert.ok(
+      interruptedTask !== undefined && interruptedTask.abortRequested === true,
+      `prepare 屏障期间遗留子任务必须已带持久 abortRequested 标记（实际 tasks=${JSON.stringify(midPrepare.tasks)}）`,
+    )
+    assert.equal(faux.state.callCount, 0, 'prepare 屏障期间零模型调用')
+    releasePrepare()
+    await startPromise
     await kernel.waitForIdle(ROOT).catch(() => {})
     assert.equal(faux.state.callCount, 1, `恢复期恰好一次模型调用（父会话报告回合；实际 ${faux.state.callCount}；旧子会话绝不能凭旧 checkpoint 复燃）`)
-    const run = workflows.getRun('wf_seed_real')
+    const runs = (await kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: Array<{ id: string; status: string; error?: string }> }
+    const run = runs.runs.find((r) => r.id === 'wf_seed_real')
+    assert.ok(run, `遗留 run 应存在（实际 ${JSON.stringify(runs.runs.map((r) => r.id))}）`)
     assert.equal(run.status, 'failed', `遗留 run 必须标 failed（实际 ${run.status}）`)
     assert.match(run.error ?? '', /interrupted/, 'failed 原因必须是进程重启中断')
     assert.equal(kernel.getConversation(childId).status, 'idle', '旧子会话终态 idle（不再 working）')
     const reportInputs = rootInputs.filter((i) => i.origin === 'agent' && i.kind === 'subagent_report')
     assert.equal(reportInputs.length, 1, `父会话恰好收到一次 agent 来源中断报告（实际 ${JSON.stringify(rootInputs)}）`)
+    assert.deepEqual(probeOrder, ['prepare', 'start'], `屏障顺序必须 prepare 全部完成后才 start（实际 ${JSON.stringify(probeOrder)}）`)
 
     // ---- 5) kernel.start() 恢复调度：旧子会话不再生成新回合 ----
     await kernel.start()

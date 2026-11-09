@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import {
   HelmError,
   type ConversationSummary,
+  type EnvExecResponse,
   type MaybePromise,
   type PluginDefinition,
   type WorkflowRunSummary,
@@ -77,6 +78,35 @@ class FakeBackend implements PluginHostBackend {
   updateConversation(id: number): Promise<ConversationSummary> {
     return Promise.resolve(this.getConversation(id));
   }
+  abortConversation(): Promise<void> {
+    return Promise.resolve();
+  }
+  spawnAgent(): Promise<unknown> {
+    return Promise.resolve({});
+  }
+  runGate(): Promise<{ ok: boolean; output: string }> {
+    return Promise.resolve({ ok: true, output: '' });
+  }
+  prepareInterruptedConversations(): Promise<void> {
+    return Promise.resolve();
+  }
+  cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
+    return Promise.resolve({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false });
+  }
+  invokeAction(pluginId: string, actionId: string): Promise<unknown> {
+    void pluginId;
+    void actionId;
+    return Promise.resolve({});
+  }
+  prepareAction(): { idempotent: boolean } {
+    return { idempotent: false };
+  }
+  execEnv(): Promise<EnvExecResponse> {
+    return Promise.reject(new HelmError('unsupported', '本 fixture 不执行节点命令', 501));
+  }
+  listActions(): [] {
+    return [];
+  }
   manageConversation(id: number, pluginId: string): () => void {
     const entry = { conversationId: id, pluginId };
     const key = `${id}:${pluginId}`;
@@ -101,10 +131,10 @@ class FakeBackend implements PluginHostBackend {
       this.askSeqResolvers.delete(resolver);
     };
   }
-  onWorkflowSettled(listener: (run: WorkflowRunSummary) => void | Promise<void>): () => void {
-    this.workflowListeners.add(listener);
+  onEvent(_type: string, listener: (payload: unknown) => void | Promise<void>): () => void {
+    this.workflowListeners.add(listener as (run: WorkflowRunSummary) => void | Promise<void>);
     return () => {
-      this.workflowListeners.delete(listener);
+      this.workflowListeners.delete(listener as (run: WorkflowRunSummary) => void | Promise<void>);
     };
   }
   emitEvent(type: string, payload: unknown): void {
@@ -120,6 +150,7 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value));
   }
+  async flush(): Promise<void> {}
 }
 
 let dataDir: string;
@@ -588,7 +619,7 @@ test('register/enable 失败不泄漏宿主生命周期资源（definePlugin 抛
       id: 'p:leak',
       definePlugin: (ctx) => {
         void ctx.host.manageConversation(2);
-        void ctx.host.onWorkflowSettled(() => {});
+        void ctx.host.onEvent('workflow.settled', () => {});
         void ctx.host.registerAskSeqResolver(() => undefined);
         throw new Error('definePlugin 崩溃');
       },
@@ -622,13 +653,14 @@ test('register/enable 失败不泄漏宿主生命周期资源（definePlugin 抛
   assert.equal(backend.managed.size, 0);
 });
 
-test('onWorkflowSettled 监听：停用自动解除；回调计入在途任务保护；每 run 只触发一次', { timeout: 60_000 }, async () => {
+test('onEvent(workflow.settled) 监听：停用自动解除；回调计入在途任务保护；每 run 只触发一次', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let settledRuns: string[] = [];
   await host.register({
     id: 'p:wf',
     definePlugin: (ctx) => {
-      void ctx.host.onWorkflowSettled(async (run) => {
+      void ctx.host.onEvent('workflow.settled', async (raw) => {
+        const run = raw as WorkflowRunSummary;
         await new Promise((r) => setTimeout(r, 10));
         settledRuns.push(run.id);
       });
@@ -680,7 +712,7 @@ test('registerAskSeqResolver 停用自动解除；旧周期 ctx 的宿主资源�
 
   // 旧周期句柄：获取宿主生命周期资源即刻失效（409 plugin_context_expired）
   throwsCode(() => stolenHost!.manageConversation(1), 'plugin_context_expired');
-  throwsCode(() => stolenHost!.onWorkflowSettled(() => {}), 'plugin_context_expired');
+  throwsCode(() => stolenHost!.onEvent('workflow.settled', () => {}), 'plugin_context_expired');
   throwsCode(() => stolenHost!.registerAskSeqResolver(() => undefined), 'plugin_context_expired');
 });
 

@@ -6,7 +6,7 @@ const base: WorkspaceLocationState = {
   primaryTarget: { kind: 'conversation', conversationId: 1 },
   splitTarget: null,
   workbenchOpen: false,
-  workbenchTab: 'tasks',
+  workbenchTab: 'artifacts',
   activeModal: null,
 }
 

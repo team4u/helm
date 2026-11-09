@@ -239,7 +239,7 @@ async function openEnv(dataDir: string, transport: HerdrTransport): Promise<Env>
   const models = createModels()
   models.setProvider(faux.provider)
   const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, herdrTransport: transport, watchdogIntervalMs: 0 })
-  const hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 0 })
+  const hub = await startHub({ kernel: app.kernel, port: 0 })
   const setup = await fetch(`${hub.url}/api/auth/setup`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

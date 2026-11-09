@@ -45,7 +45,7 @@ export const meta = {
 }
 ```
 
-内核通过静态词法提取元数据。
+编排引擎通过静态词法提取元数据。
 `meta` 必须是纯静态字面量，禁止使用动态变量插值。
 
 ### 2. 内置全局函数与变量
@@ -172,7 +172,7 @@ flowchart LR
 helm workflows run hello-orchestra.workflow.js --args '{"word":"创新"}' --resume-from-run-id <failedRunId> --wait
 ```
 
-内核会自动读取原执行流水账本。
+编排引擎会自动读取原执行流水账本。
 已经成功的 `agent` 节点会直接复用缓存结果，仅重跑失败或未执行的节点。
 
 ### 2. 手动中止在途任务

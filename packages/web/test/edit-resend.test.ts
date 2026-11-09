@@ -52,7 +52,7 @@ function renderTimelineHtml(entries: ConversationEntry[]): string {
     connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark', themePreference: 'dark',
     profiles: [], models: [], providers: [], credentials: [], skills: [], actions: [],
     primaryTarget: { kind: 'conversation', conversationId: 1 }, splitTarget: null,
-    workbenchOpen: false, workbenchTab: 'tasks', activeModal: null, highlightedEntry: null, notices: [],
+    workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices: [],
     setTheme: noop, setThemePreference: noop, toggleTheme: noop, checkAuth: asyncNoop,
     onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: async () => undefined,
     loadConversationDetail: async () => undefined, loadEarlierEntries: asyncNoop, loadConversationArtifacts: async () => undefined,

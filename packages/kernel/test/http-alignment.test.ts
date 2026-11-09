@@ -30,10 +30,9 @@ import {
   type ConversationPatch,
   type ConversationSummary,
   type HelmPluginContext,
-  type WorkflowRunSummary,
 } from '@helm/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
-import type { EventHub, KernelRuntimeLike, WorkflowServiceLike } from '../src/http/index.js'
+import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
 
 // ---------------------------------------------------------------------------
 // 基座
@@ -175,27 +174,9 @@ function makeKernel(): KernelRuntimeLike {
   }
 }
 
-const workflowRuns: WorkflowRunSummary[] = [
-  // service 契约：listRuns 按创建时间倒序（新→旧）
-  { id: 'wf_b', name: 'demo', conversationId: 2, status: 'running', createdAt: 300, updatedAt: 300 },
-  { id: 'wf_a', name: 'demo', conversationId: 1, status: 'completed', createdAt: 200, updatedAt: 200 },
-]
-
-const workflows: WorkflowServiceLike & { waitCalls: string[] } = {
-  list: () => [],
-  listRuns: () => [...workflowRuns],
-  run: async () => ({ id: 'wf_new', name: 'x', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }),
-  getRun: async (runId) => workflowRuns.find((r) => r.id === runId),
-  waitCalls: [],
-  async wait(runId) {
-    this.waitCalls.push(runId)
-  },
-  abort: async () => {},
-}
-
 function makeHandlers() {
   const kernel = makeKernel()
-  return { kernel, handler: createHubHandler(kernel, workflows) }
+  return { kernel, handler: createHubHandler(kernel) }
 }
 
 async function call(
@@ -237,6 +218,7 @@ function docStore() {
   return {
     get: <T>(key: string, initial: T): T => (docs.has(key) ? (docs.get(key) as T) : initial),
     set: <T>(key: string, value: T): void => void docs.set(key, value),
+    flush: async () => {},
   }
 }
 
@@ -468,55 +450,18 @@ test('POST input?wait=1 调用 waitForInput 并返回 ConversationInputResult；
 // GET /api/workflows/runs
 // ---------------------------------------------------------------------------
 
-test('GET /api/workflows/runs 返回 listRuns（新→旧）；?conversationId 过滤；非法 400', { timeout: 60_000 }, async () => {
+test('workflows / worktrees 硬编码路由已删除（一律 404）', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const all = await call(handler, 'GET', '/api/workflows/runs')
-  assert.equal(all.status, 200)
-  assert.deepEqual(all.body.map((r: any) => r.id), ['wf_b', 'wf_a']) // createdAt 倒序
-  const filtered = await call(handler, 'GET', '/api/workflows/runs?conversationId=2')
-  assert.deepEqual(filtered.body.map((r: any) => r.id), ['wf_b'])
-  const bad = await call(handler, 'GET', '/api/workflows/runs?conversationId=abc')
-  assert.equal(bad.status, 400)
-  // 旧路径不受影响：inspect / abort / run
+  assert.equal(all.status, 404)
   const inspect = await call(handler, 'GET', '/api/workflows/runs/wf_a')
-  assert.equal(inspect.status, 200)
+  assert.equal(inspect.status, 404)
   const run = await call(handler, 'POST', '/api/workflows/run', { body: { name: 'demo' } })
-  assert.equal(run.status, 202)
-  assert.equal(run.body.id, 'wf_new')
+  assert.equal(run.status, 404)
   const abort = await call(handler, 'POST', '/api/workflows/runs/wf_a/abort')
-  assert.equal(abort.status, 200)
-})
-
-test('POST /api/workflows/run?wait=1 等待终态返回 200 summary；failed/aborted 错误信封', { timeout: 60_000 }, async () => {
-  // run 返回 running summary；wait 后 getRun 返回 completed
-  const wfOk: WorkflowServiceLike = {
-    list: () => [],
-    listRuns: () => [],
-    run: async () => ({ id: 'wf_w', name: 'x', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }),
-    getRun: async (id) => ({ id, name: 'x', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 2, result: { ok: true } }),
-    wait: async () => {},
-    abort: async () => {},
-  }
-  const kernel = makeKernel()
-  const handler = createHubHandler(kernel, wfOk)
-  const ok = await call(handler, 'POST', '/api/workflows/run?wait=1', { body: { name: 'demo' } })
-  assert.equal(ok.status, 200)
-  assert.equal(ok.body.status, 'completed')
-  assert.deepEqual(ok.body.result, { ok: true })
-
-  const wfFail: WorkflowServiceLike = {
-    list: () => [],
-    listRuns: () => [],
-    run: async () => ({ id: 'wf_f', name: 'x', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }),
-    getRun: async (id) => ({ id, name: 'x', conversationId: 1, status: 'failed', createdAt: 1, updatedAt: 2, error: 'boom' }),
-    wait: async () => {},
-    abort: async () => {},
-  }
-  const failHandler = createHubHandler(makeKernel(), wfFail)
-  const failed = await call(failHandler, 'POST', '/api/workflows/run?wait=1', { body: { name: 'demo' } })
-  assert.equal(failed.status, 500)
-  assert.equal(failed.body.error.code, 'workflow_failed')
-  assert.equal(failed.body.error.details.status, 'failed')
+  assert.equal(abort.status, 404)
+  const cleanup = await call(handler, 'POST', '/api/worktrees/cleanup', { body: { worktreeId: 'w1' } })
+  assert.equal(cleanup.status, 404)
 })
 
 // ---------------------------------------------------------------------------
@@ -623,7 +568,7 @@ test('profiles runtime nodeId/workspace/env：合法保存回读；非法形状 
 test('startHub(port:0) 监听后 kernel.setHubUrl 收到真实 URL', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
   state.setHubUrlCalls = []
-  const handle = await startHub({ kernel, workflows, port: 0 })
+  const handle = await startHub({ kernel, port: 0 })
   try {
     assert.equal(state.setHubUrlCalls.length, 1)
     assert.equal(state.setHubUrlCalls[0], handle.url)
@@ -636,6 +581,6 @@ test('startHub(port:0) 监听后 kernel.setHubUrl 收到真实 URL', { timeout: 
   // 不提供 setHubUrl 的 kernel 也不报错
   const bare = makeKernel()
   delete (bare as { setHubUrl?: unknown }).setHubUrl
-  const handle2 = await startHub({ kernel: bare, workflows, port: 0 })
+  const handle2 = await startHub({ kernel: bare, port: 0 })
   await handle2.close()
 })

@@ -3,79 +3,15 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import type { ConversationEntry, ConversationSummary, WorkflowRunSummary } from '@helm/protocol'
-import { isAssistantTurnBusy } from '../src/conversation/subagent-model.js'
+import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
+import { isAssistantTurnBusy } from '../src/conversation/timeline-model.js'
 import type { AssistantTurn } from '../src/conversation/timeline-model.js'
 import { HelmStoreContext } from '../src/lib/store-context.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
+import { makeTestStore as makeMockStore } from './helpers/store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
-
-function makeMockStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
-  return {
-    seq: 1,
-    conversations: [],
-    conversationDetails: { 1: { entries: [] } },
-    conversationLives: {},
-    loadErrors: {},
-    highlightedEntry: null,
-    pendingAsks: [],
-    plugins: [],
-    uiContributions: [],
-    groupedUi: {
-      sidebarItems: [],
-      sidebarSections: [],
-      screens: [],
-      timelineRenderers: [],
-      toolViews: [],
-      composerPills: [],
-      composerWidgets: [],
-      workbenchPanels: [],
-      commandPaletteItems: [],
-      settingsPanels: [],
-    },
-    workflowRuns: [],
-    nodes: [],
-    resolvedAsksByConv: {},
-    activeModal: null,
-    activeScreenId: null,
-    splitScreenId: null,
-    activeTarget: null,
-    splitTarget: null,
-    primaryConversationId: null,
-    splitConversationId: null,
-    theme: 'light',
-    themePreference: 'system',
-    workbenchOpen: false,
-    activeWorkbenchTab: null,
-    workbenchPinned: false,
-    notifications: [],
-    publicDocs: {},
-    setActiveModal: () => {},
-    openTarget: () => {},
-    closeTarget: () => {},
-    openWorkbench: () => {},
-    closeWorkbench: () => {},
-    toggleWorkbench: () => {},
-    setActiveWorkbenchTab: () => {},
-    setWorkbenchPinned: () => {},
-    setThemePreference: () => {},
-    setTheme: () => {},
-    pushNotice: () => {},
-    dismissNotice: () => {},
-    clearNotices: () => {},
-    withdrawInput: async () => false,
-    cancelAsk: async () => false,
-    executeSubagentAction: async () => {},
-    invokePluginAction: async () => {},
-    ensurePluginDoc: async () => undefined,
-    findConversation: () => undefined,
-    findNode: () => undefined,
-    ...overrides,
-  } as unknown as HelmStoreValue
-}
 
 const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
 
@@ -161,7 +97,7 @@ test('isAssistantTurnBusy：回合内有 running 工具或激活的分组步骤�
   assert.equal(isAssistantTurnBusy(turnWithActiveStepGroup, { id: 1, status: 'idle' }), true)
 })
 
-test('isAssistantTurnBusy：SubagentWorkflow 或 subagent 关联后台仍为 running / blocked 时判定为响应中', { timeout: 60_000 }, () => {
+test('isAssistantTurnBusy：后台工具已返回但插件报告活动时仍 busy，终态释放后完成', { timeout: 60_000 }, () => {
   const turn: AssistantTurn = {
     kind: 'assistant',
     key: 'turn:1',
@@ -172,8 +108,8 @@ test('isAssistantTurnBusy：SubagentWorkflow 或 subagent 关联后台仍为 run
         key: 't:wf',
         tool: {
           key: 't:wf',
-          toolName: 'SubagentWorkflow',
-          callId: 'call_wf_1',
+          toolName: 'background_job',
+          callId: 'call_bg_1',
           status: 'done',
           isError: false,
         },
@@ -182,29 +118,13 @@ test('isAssistantTurnBusy：SubagentWorkflow 或 subagent 关联后台仍为 run
     live: false,
   }
 
-  const runningWf: WorkflowRunSummary = {
-    id: 'wf_1',
-    name: '编排流',
-    kind: 'workflow',
-    conversationId: 1,
-    parentToolCallId: 'call_wf_1',
-    status: 'running',
-    createdAt: 100,
-    updatedAt: 200,
-  }
-  assert.equal(
-    isAssistantTurnBusy(turn, { id: 1, status: 'idle' }, { workflowRuns: [runningWf] }),
-    true,
-  )
-
-  const doneWf: WorkflowRunSummary = { ...runningWf, status: 'completed' }
-  assert.equal(
-    isAssistantTurnBusy(turn, { id: 1, status: 'idle' }, { workflowRuns: [doneWf] }),
-    false,
-  )
+  assert.equal(isAssistantTurnBusy(turn, { id: 1, status: 'idle' }, { activeToolCallIds: new Set(['call_bg_1']) }), true)
+  assert.equal(isAssistantTurnBusy(turn, { id: 1, status: 'idle' }, { activeToolCallIds: new Set() }), false)
+  assert.equal(isAssistantTurnBusy(turn, { id: 1, status: 'idle' }, { activeToolCallIds: new Set(['another-turn']) }), false)
+  assert.equal(isAssistantTurnBusy(turn, { id: 1, status: 'working' }, { isLatestTurn: true }), true)
 })
 
-test('isAssistantTurnBusy：子会话处于 working / blocked 时判定为响应中', { timeout: 60_000 }, () => {
+test('isAssistantTurnBusy：任意插件工具均按本次工具状态判定，不按工具名称特判', { timeout: 60_000 }, () => {
   const turn: AssistantTurn = {
     kind: 'assistant',
     key: 'turn:1',
@@ -225,27 +145,30 @@ test('isAssistantTurnBusy：子会话处于 working / blocked 时判定为响应
     live: false,
   }
 
-  const childWorking = {
-    id: 12,
-    parentConversationId: 1,
-    parentToolCallId: 'call_sub_1',
-    status: 'working' as const,
+  assert.equal(isAssistantTurnBusy(turn, { id: 1, status: 'idle' }), false)
+  for (const status of ['running', 'unknown'] as const) {
+    const segment = turn.segments[0]!
+    assert.ok(segment.kind === 'tool')
+    segment.tool.status = status
+    assert.equal(isAssistantTurnBusy(turn, { id: 1, status: 'idle' }), true)
   }
-  assert.equal(
-    isAssistantTurnBusy(turn, { id: 1, status: 'idle' }, { conversations: [childWorking] }),
-    true,
-  )
-
-  const childDone = { ...childWorking, status: 'idle' as const }
-  assert.equal(
-    isAssistantTurnBusy(turn, { id: 1, status: 'idle' }, { conversations: [childDone] }),
-    false,
-  )
 })
 
 // ---------------------------------------------------------------------------
 // 3. ConversationTimeline SSR 渲染：响应中无悬停操作栏，完成后才出现
 // ---------------------------------------------------------------------------
+
+test('step-group 中 done 工具的后台活动也参与汇总；没有 callId 的工具不能误关联', { timeout: 60_000 }, () => {
+  const turn: AssistantTurn = { kind: 'assistant', key: 'g', entryIds: ['1'], live: false, segments: [{
+    kind: 'step-group', key: 'group', stepCount: 2, active: false, steps: [
+      { kind: 'tool', tool: { key: 't', callId: 'call', toolName: 'custom_tool', status: 'done', isError: false } },
+      { kind: 'tool', tool: { key: 'no-id', toolName: 'custom_tool', status: 'done', isError: false } },
+    ],
+  }] }
+  assert.equal(isAssistantTurnBusy(turn, { id: 1 }, { activeToolCallIds: new Set(['call']) }), true)
+  assert.equal(isAssistantTurnBusy(turn, { id: 1 }, { activeToolCallIds: new Set(['no-id']) }), false)
+  assert.equal(isAssistantTurnBusy(turn, { id: 1 }, { activeToolCallIds: new Set() }), false)
+})
 
 test('ConversationTimeline：agent 回合响应中不显示复制与分叉按钮，完成后才出现', { timeout: 60_000 }, () => {
   const convWorking: ConversationSummary = {

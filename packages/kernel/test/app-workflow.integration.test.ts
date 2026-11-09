@@ -1,8 +1,8 @@
 /**
  * helm 工作流端到端集成验收（app-workflow 组合链路，不修改实现）。
  *
- * 与 core.integration.test.ts 的分工：本文件专注 WorkflowService 经 createHelm
- * 组合后的两条真链路：
+ * 与 core.integration.test.ts 的分工：本文件专注 WorkflowService 经
+ * builtin:workflow 插件（createHelm 组合）后的两条真链路：
  * 1. workflow.run(script agent(...,{schema,gate})) -> agent_spawn 管道 -> 原生
  *    subagent（真子会话 + faux register_structured_output 工具自愈）-> gate
  *    真实 shell 只执行一次（sentinel 文件计数）-> wait 返回 Schema 校验对象；
@@ -53,6 +53,9 @@ interface WfEnv {
   app: Awaited<ReturnType<typeof createHelm>>
   /** echo action handler 执行计数（副作用哨兵）。 */
   echoCalls: string[]
+  /** 引擎经 builtin:workflow 插件动作总线驱动（与 HTTP/CLI/模型工具同链路）。 */
+  runWorkflow(request: Record<string, unknown>): Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>
+  inspectRun(runId: string): Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>
   close(): Promise<void>
 }
 
@@ -92,11 +95,16 @@ async function makeWfEnv(): Promise<WfEnv> {
     },
   } satisfies PluginDefinition)
 
+  const plugins = app.kernel.plugins
   return {
     dataDir,
     faux,
     app,
     echoCalls,
+    runWorkflow: (request) =>
+      plugins.invokeAction('builtin:workflow', 'run', request) as Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>,
+    inspectRun: (runId) =>
+      plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>,
     async close() {
       await app.close().catch(() => {})
       rmSync(dataDir, { recursive: true, force: true })
@@ -111,7 +119,6 @@ async function makeWfEnv(): Promise<WfEnv> {
 test('工作流1: agent schema/gate 真链路——原生 spawn + StructuredOutput 自愈 + gate shell 只跑一次 + resume 前缀命中不重跑', { timeout: 60_000 }, async () => {
   const env = await makeWfEnv()
   try {
-    const { workflows } = env.app
     const gateSentinel = join(env.dataDir, 'gate-count')
     writeFileSync(gateSentinel, '0', { flag: 'w' })
     const gateCmd = `printf x >> "${join(env.dataDir, 'gate-runs')}" && [ "$(cat ${join(env.dataDir, 'gate-runs')} | wc -c)" -ge 1 ]`
@@ -133,10 +140,10 @@ test('工作流1: agent schema/gate 真链路——原生 spawn + StructuredOutp
       fauxAssistantMessage('已提交结构化结果'),
     ])
 
-    const started = await workflows.run({ script, conversationId: ROOT_CONVERSATION_ID })
+    const { run: started } = await env.runWorkflow({ script, conversationId: ROOT_CONVERSATION_ID, wait: true })
     assert.ok(started.id.startsWith('wf_'), 'runId 应为 wf_ 前缀')
-    const result = (await workflows.wait(started.id)) as { answer: number }
-    const summary = workflows.getRun(started.id)
+    const result = started.result as { answer: number }
+    const summary = started
     assert.deepEqual(result, STRUCTURED, `wait 应返回 Schema 校验通过的结构化对象，节点诊断：${JSON.stringify(summary.nodes)}`)
     assert.equal(summary.status, 'completed', `run 应完成：${summary.error ?? ''}`)
 
@@ -152,12 +159,12 @@ test('工作流1: agent schema/gate 真链路——原生 spawn + StructuredOutp
     //     不再发起模型调用、不重跑 gate（副作用绝不重复）。
     const modelCallsBefore = env.faux.state.callCount
     const gateRunsBefore = readFileSync(join(env.dataDir, 'gate-runs'), 'utf8')
-    const resumed = await workflows.run({ resumeFromRunId: started.id, conversationId: ROOT_CONVERSATION_ID })
-    const resumedResult = (await workflows.wait(resumed.id)) as { answer: number }
+    const { run: resumed } = await env.runWorkflow({ resumeFromRunId: started.id, conversationId: ROOT_CONVERSATION_ID, wait: true })
+    const resumedResult = resumed.result as { answer: number }
     assert.deepEqual(resumedResult, STRUCTURED, '重放结果与原 run 一致（账本前缀命中）')
     assert.equal(env.faux.state.callCount, modelCallsBefore, 'resume 不得再发起模型调用')
     assert.equal(readFileSync(join(env.dataDir, 'gate-runs'), 'utf8'), gateRunsBefore, 'resume 不得重跑 gate')
-    assert.equal(workflows.getRun(resumed.id).replayedFrom, started.id, '公开摘要应保留重放来源')
+    assert.equal((await env.inspectRun(resumed.id)).run.replayedFrom, started.id, '公开摘要应保留重放来源')
 
     // 不新增子会话（重放不 live spawn）。
     assert.equal(env.app.kernel.listConversations().filter((c) => c.parentConversationId === ROOT_CONVERSATION_ID).length, 1)
@@ -173,15 +180,13 @@ test('工作流1: agent schema/gate 真链路——原生 spawn + StructuredOutp
 test('工作流2: action() 经 PluginHost 动作总线共享 Schema 校验——合法执行/非法显式失败/重放不重复 handler', { timeout: 60_000 }, async () => {
   const env = await makeWfEnv()
   try {
-    const { workflows } = env.app
-
     const script =
       'export const meta = { name: "e2e-action", description: "action bus" }\n' +
       'const a = await action("test:probe.echo", { text: "wf-hello" })\n' +
       'return a'
 
-    const started = await workflows.run({ script, conversationId: ROOT_CONVERSATION_ID })
-    const result = (await workflows.wait(started.id)) as { echoed: string }
+    const { run: started } = await env.runWorkflow({ script, conversationId: ROOT_CONVERSATION_ID, wait: true })
+    const result = started.result as { echoed: string }
     assert.deepEqual(result, { echoed: 'wf-hello' }, 'action 结果应回传脚本')
     assert.deepEqual(env.echoCalls, ['wf-hello'], 'handler 恰好执行一次')
 
@@ -191,10 +196,10 @@ test('工作流2: action() 经 PluginHost 动作总线共享 Schema 校验——
       'export const meta = { name: "e2e-action-bad", description: "bad input" }\n' +
       'const a = await action("test:probe.echo", { text: "" })\n' +
       'return a'
-    const bad = await workflows.run({ script: badScript, conversationId: ROOT_CONVERSATION_ID })
-    const badResult = (await workflows.wait(bad.id)) as unknown
-    assert.equal(badResult, null, '引擎契约：动作失败折叠为 null 回传脚本（不伪造结果）')
-    const badSummary = workflows.getRun(bad.id)
+    // wait:true 下引擎最终态为 completed（动作失败折叠 null 回传脚本，节点如实 failed）
+    const { run: bad } = await env.runWorkflow({ script: badScript, conversationId: ROOT_CONVERSATION_ID, wait: true })
+    assert.equal(bad.result, null, '引擎契约：动作失败折叠为 null 回传脚本（不伪造结果）')
+    const badSummary = (await env.inspectRun(bad.id)).run
     const badNode = badSummary.nodes?.find((n) => n.kind === 'action')
     assert.ok(badNode, '应含 action 节点')
     assert.equal(badNode!.status, 'failed', '非法入参动作节点应显式 failed')
@@ -206,16 +211,15 @@ test('工作流2: action() 经 PluginHost 动作总线共享 Schema 校验——
       'export const meta = { name: "e2e-action-unknown", description: "unknown" }\n' +
       'const a = await action("test:probe.nope", {})\n' +
       'return a'
-    const unknown = await workflows.run({ script: unknownScript, conversationId: ROOT_CONVERSATION_ID })
-    await workflows.wait(unknown.id)
-    const unknownNode = workflows.getRun(unknown.id).nodes?.find((n) => n.kind === 'action')
+    const { run: unknown } = await env.runWorkflow({ script: unknownScript, conversationId: ROOT_CONVERSATION_ID, wait: true })
+    const unknownNode = (await env.inspectRun(unknown.id)).run.nodes?.find((n) => n.kind === 'action')
     assert.ok(unknownNode, '应含 action 节点')
     assert.equal(unknownNode!.status, 'failed')
     assert.ok(/未注册的动作|unknown/.test(unknownNode!.error ?? ''), `应报未知动作：${unknownNode!.error}`)
 
     // --- resume：action 终态行重放直接复用，绝不重执行 handler（副作用语义）
-    const resumed = await workflows.run({ resumeFromRunId: started.id, conversationId: ROOT_CONVERSATION_ID })
-    const resumedResult = (await workflows.wait(resumed.id)) as { echoed: string }
+    const { run: resumed } = await env.runWorkflow({ resumeFromRunId: started.id, conversationId: ROOT_CONVERSATION_ID, wait: true })
+    const resumedResult = resumed.result as { echoed: string }
     assert.deepEqual(resumedResult, { echoed: 'wf-hello' })
     assert.deepEqual(env.echoCalls, ['wf-hello'], 'resume 重放不得重复执行 action handler')
   } finally {
@@ -329,7 +333,7 @@ test('工作流4: HTTP workflows run/inspect/abort 与 SubagentWorkflow 工具�
   const env = await makeWfEnv()
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
-    hub = await startHub({ kernel: env.app.kernel as never, workflows: env.app.workflows as never, port: 0 })
+    hub = await startHub({ kernel: env.app.kernel as never, port: 0 })
     const base = hub.url
 
     // setup 鉴权
@@ -343,45 +347,44 @@ test('工作流4: HTTP workflows run/inspect/abort 与 SubagentWorkflow 工具�
     const auth = { authorization: `Bearer ${token}` }
 
     // 纯脚本 run（无 agent）：args 透传 + 真实 worker 执行 + 状态可查询
-    const run = await fetch(`${base}/api/workflows/run`, {
+    //（编排已剥离为 builtin:workflow 插件动作，HTTP 经 /api/actions 同链路）
+    const run = await fetch(`${base}/api/actions/builtin:workflow/run`, {
       method: 'POST',
       headers: { ...auth, 'content-type': 'application/json' },
       body: JSON.stringify({
-        script: 'export const meta = { name: "http-pure", description: "t" }\nreturn args.x + 1',
-        args: { x: 41 },
+        input: {
+          script: 'export const meta = { name: "http-pure", description: "t" }\nreturn args.x + 1',
+          args: { x: 41 },
+          wait: true,
+        },
       }),
     })
-    assert.equal(run.status, 202)
-    const runBody = await run.text()
-    const summary0 = JSON.parse(runBody) as { id: string; status: string }
-
-    // inspect：轮询到 completed，result 为 42
-    let final: { id: string; status: string; result?: unknown } = summary0
-    for (let i = 0; i < 100 && final.status === 'running'; i++) {
-      await new Promise((r) => setTimeout(r, 100))
-      const insp = await fetch(`${base}/api/workflows/runs/${encodeURIComponent(summary0.id)}`, { headers: auth })
-      assert.equal(insp.status, 200)
-      final = JSON.parse(await insp.text())
-    }
+    assert.equal(run.status, 200)
+    const final = ((JSON.parse(await run.text()) as { run: { id: string; status: string; result?: unknown } }).run)
     assert.equal(final.status, 'completed', `HTTP run 应完成：${JSON.stringify(final)}`)
     assert.equal(final.result, 42, 'args.x + 1 经真实 worker 计算为 42')
 
     // abort 已完成 run：幂等成功（不误报）
-    const abort = await fetch(`${base}/api/workflows/runs/${encodeURIComponent(summary0.id)}/abort`, {
+    const abort = await fetch(`${base}/api/actions/builtin:workflow/abort`, {
       method: 'POST',
-      headers: auth,
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ input: { runId: final.id } }),
     })
     assert.equal(abort.status, 200)
 
     // 未知 runId inspect：显式 404
-    const missing = await fetch(`${base}/api/workflows/runs/wf_nosuchrun`, { headers: auth })
+    const missing = await fetch(`${base}/api/actions/builtin:workflow/inspect`, {
+      method: 'POST',
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ input: { runId: 'wf_nosuchrun' } }),
+    })
     assert.equal(missing.status, 404)
 
     // 非法请求（无 script/name）：显式 400 validation_error，不伪造运行
-    const bad = await fetch(`${base}/api/workflows/run`, {
+    const bad = await fetch(`${base}/api/actions/builtin:workflow/run`, {
       method: 'POST',
       headers: { ...auth, 'content-type': 'application/json' },
-      body: JSON.stringify({ args: { x: 1 } }),
+      body: JSON.stringify({ input: { args: { x: 1 } } }),
     })
     assert.equal(bad.status, 400)
     assert.equal((JSON.parse(await bad.text()) as { error: { code: string } }).error.code, 'validation_error')

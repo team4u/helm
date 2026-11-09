@@ -1,6 +1,6 @@
 import { KernelRuntime } from './runtime/index.js';
-import { WorkflowService } from './workflow/index.js';
 import { createAssistantPlugin } from './builtin-plugins/assistant.js';
+import { createWorkflowPlugin } from './builtin-plugins/workflow.js';
 import { createHerdrPlugin } from './builtin-plugins/herdr.js';
 import { createSuperAgentPlugin, SUPERAGENT_PLUGIN_ID } from './builtin-plugins/superagent.js';
 import { createTriggersPlugin } from './builtin-plugins/triggers.js';
@@ -11,7 +11,6 @@ import type { HerdrNodeChannel, HerdrTransport } from './builtin-plugins/herdr/c
 import { createBlockedSnapshotAnalyzer } from './builtin-plugins/herdr/snapshot-analysis.js';
 import type { EnvFabric } from './env/index.js';
 import type { SuperAgentDependencies } from './builtin-plugins/superagent/contracts.js';
-import { redactJsonValue } from './redact.js';
 
 export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'> & {
   /** 可注入同契约传输层；缺省复用内核 EnvFabric 连接目标节点的 Herdr IPC。 */
@@ -38,58 +37,14 @@ export function createHerdrNodeChannel(fabric: EnvFabric): HerdrNodeChannel {
 export async function createHelm(options: HelmOptions = {}) {
   const { herdrTransport, ...runtimeOptions } = options;
   const kernel = await KernelRuntime.open({ ...runtimeOptions, autoResume: false });
-  let closeWorkflows: (() => Promise<void>) | undefined;
   try {
-    const workflows = new WorkflowService({
-      dataDir: kernel.dataDir,
-      state: kernel.documentStore,
-      redact: (text) => kernel.stash.redact(text),
-      host: {
-        spawnAgent: (request) => kernel.spawnAgent(request),
-        prepareInterruptedConversations: (ids) => kernel.prepareInterruptedConversations(ids),
-        runGate: (command, context) => kernel.runGate(command, context),
-        async invokeAction(pluginId, actionId, input, context) {
-          const result = await kernel.plugins.invokeAction(pluginId, actionId, input, context);
-          return redactJsonValue(result, (text) => kernel.stash.redact(text));
-        },
-        prepareAction: (pluginId, actionId, input, context) =>
-          kernel.plugins.prepareAction(pluginId, actionId, input, context),
-        execEnv: async (req, signal) => {
-          const res = await kernel.execEnv(req, undefined, signal);
-          return {
-            ...res,
-            output: kernel.stash.redact(res.output),
-          };
-        },
-        listActions: () => kernel.plugins.listActions(),
-        getConversation: (id) => kernel.getConversation(id),
-        abortConversation: (id) => kernel.abortConversation(id),
-        emitEvent: (type, payload) => kernel.events.publish(type, payload),
-        onRunSettled: (summary) => kernel.notifyWorkflowSettled(summary),
-        onBackgroundAgentSettled: (summary, info) => kernel.reportBackgroundAgent(summary, info),
-      },
-    });
-    closeWorkflows = () => workflows.close();
-    kernel.setWorkflowRunProvider(() => workflows.listRuns());
-    kernel.setBackgroundAgentRunner((request) => workflows.startBackgroundAgent(request, {
-      parentToolCallId: request.parentToolCallId,
-      notifyParentOnSettle: true,
-    }));
-    kernel.setWorkflowRunner(async (request, conversationId, signal, context) => {
-      const started = await workflows.run({ ...request, conversationId }, context);
-      const onAbort = () => {
-        void workflows.abort(started.id).catch(() => {});
-      };
-      signal?.addEventListener('abort', onAbort, { once: true });
-      try {
-        await workflows.wait(started.id).catch(() => {});
-        return workflows.getRun(started.id);
-      } finally {
-        signal?.removeEventListener('abort', onAbort);
-      }
-    });
-    // 任何插件 start 都可能提交输入而唤醒全局调度；先将遗留子任务持久标记取消。
-    await workflows.prepareRecovery();
+    // builtin:workflow 首个注册（默认启用）：服务 prepare/start 由 PluginHost
+    // 启动屏障统一调度——kernel.start() 在全部插件注册完成后先执行全局
+    // prepare（workflow 的 prepareRecovery 只落 abort 标记，不唤醒 SDK）
+    // 再逐插件 start（workflow 的 init 终止遗留任务并补发通知，此刻工具已
+    // 全部注册），最后才 resume 调度器。引擎生命周期自包含于插件服务。
+    await kernel.plugins.register(createWorkflowPlugin());
+
     const snapshotAnalyzer = createBlockedSnapshotAnalyzer(kernel);
     await kernel.plugins.register(createAssistantPlugin(kernel));
     await kernel.plugins.register(createHerdrPlugin({
@@ -142,8 +97,8 @@ export async function createHelm(options: HelmOptions = {}) {
       flushDocs: () => kernel.documentStore.flush(),
     }), { enabled: false });
     await kernel.plugins.register(createMagpiePlugin({
-      refreshProviderModels: async (options) => {
-        const result = await kernel.refreshModels({ ...options, providers: [MAGPIE_PROVIDER_ID] });
+      refreshProviderModels: async (pluginOptions) => {
+        const result = await kernel.refreshModels({ ...pluginOptions, providers: [MAGPIE_PROVIDER_ID] });
         return {
           errors: result.errors,
           modelCount: result.providerCatalog.find((provider) => provider.id === MAGPIE_PROVIDER_ID)?.modelCount ?? 0,
@@ -154,25 +109,15 @@ export async function createHelm(options: HelmOptions = {}) {
     // 默认停用注册，config.json.pluginEnabled 持久化 true 的自动恢复启用
     await loadExternalPlugins(kernel.dataDir, kernel.plugins);
     // 恢复补发会提交父会话输入并启动 SDK，必须等全部工具与插件已注册。
-    await workflows.init();
     await kernel.start();
     return {
       kernel,
-      workflows,
       async close() {
-        try {
-          await workflows.close();
-        } finally {
-          await kernel.close();
-        }
+        await kernel.close();
       },
     };
   } catch (error) {
-    try {
-      await closeWorkflows?.();
-    } finally {
-      await kernel.close();
-    }
+    await kernel.close();
     throw error;
   }
 }

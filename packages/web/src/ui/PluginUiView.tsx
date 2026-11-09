@@ -11,7 +11,7 @@ import type { ClientComponentRef } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { createPluginClientContext, PluginClientContext } from '../lib/plugin-client-context.js'
-import { loadPluginClientModule, PluginClientError, requireClientExport } from '../lib/plugin-client.js'
+import { getCachedClientComponent, loadPluginClientModule, PluginClientError, requireClientExport } from '../lib/plugin-client.js'
 import { HelmSpecView } from './HelmSpecView.js'
 import { ViewBoundary } from './ViewBoundary.js'
 
@@ -32,16 +32,27 @@ type ClientState =
   | { phase: 'error'; message: string }
   | { phase: 'ready'; Component: ComponentType<Record<string, unknown>> }
 
-export function PluginUiView({ pluginId, spec, slotProps, conversationId, label }: PluginUiViewProps): ReactNode {
-  const store = useHelmStore()
-  const [client, setClient] = useState<ClientState>({ phase: 'loading' })
-
-  // client 轨道仅在声明了 client 引用时激活（json 优先级回落逻辑见下）
+export function PluginUiView(props: PluginUiViewProps): ReactNode {
+  const { pluginId, spec, slotProps, conversationId } = props
   const clientRef = spec.client
+  if (clientRef === undefined) {
+    if (spec.json === undefined) return <MissingTrackError pluginId={pluginId} />
+    return <HelmSpecView pluginId={pluginId} spec={spec.json} docs={spec.docs} conversationId={conversationId} data={slotProps} />
+  }
+  // 身份切换须重建状态与错误边界，不能在新上下文中先渲染一次旧插件组件。
+  return <ClientPluginUiView key={JSON.stringify([pluginId, clientRef.module, clientRef.export])} {...props} clientRef={clientRef} />
+}
+
+function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, label }: PluginUiViewProps & { clientRef: ClientComponentRef }): ReactNode {
+  const store = useHelmStore()
+  const [retry, setRetry] = useState(0)
+  const [client, setClient] = useState<ClientState>(() => {
+    const cached = getCachedClientComponent(pluginId, clientRef.module, clientRef.export)
+    return cached !== undefined ? { phase: 'ready', Component: cached } : { phase: 'loading' }
+  })
+
   useEffect(() => {
-    if (clientRef === undefined) return
     let cancelled = false
-    setClient({ phase: 'loading' })
     void (async () => {
       try {
         const loaded = await loadPluginClientModule(pluginId, clientRef.module)
@@ -66,23 +77,7 @@ export function PluginUiView({ pluginId, spec, slotProps, conversationId, label 
     return () => {
       cancelled = true
     }
-  }, [pluginId, clientRef?.module, clientRef?.export])
-
-  // json 回落：无 client 引用时渲染声明式 Spec
-  if (clientRef === undefined) {
-    if (spec.json === undefined) {
-      return <MissingTrackError pluginId={pluginId} />
-    }
-    return (
-      <HelmSpecView
-        pluginId={pluginId}
-        spec={spec.json}
-        docs={spec.docs}
-        conversationId={conversationId}
-        data={slotProps}
-      />
-    )
-  }
+  }, [pluginId, clientRef.module, clientRef.export, retry])
 
   if (client.phase === 'loading') {
     return (
@@ -99,6 +94,9 @@ export function PluginUiView({ pluginId, spec, slotProps, conversationId, label 
         <div>
           <strong>插件组件加载失败（{pluginId}）</strong>
           <p className="selectable">{client.message}</p>
+          <button type="button" className="btn btn-sm" onClick={() => { setClient({ phase: 'loading' }); setRetry((value) => value + 1) }}>
+            重试加载
+          </button>
         </div>
       </div>
     )

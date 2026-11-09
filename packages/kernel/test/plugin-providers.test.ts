@@ -69,7 +69,16 @@ function makeHostApi(): PluginHostBackend {
     createAsk: async () => ({ id: 'ask-1', status: 'answered', answers: {} }),
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
-    onWorkflowSettled: () => () => {},
+    onEvent: () => () => {},
+    abortConversation: async () => {},
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
+    invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    listActions: () => [],
     emitEvent: () => {},
   };
 }
@@ -82,6 +91,7 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value));
   }
+  async flush(): Promise<void> {}
 }
 
 /** 最小合法 provider（形状满足 pi-ai Provider 契约，行为无需真实）。 */

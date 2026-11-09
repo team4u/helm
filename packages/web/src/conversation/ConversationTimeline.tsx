@@ -1,21 +1,24 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AskSpec,
   ConversationAttachmentRef,
   ConversationEntry,
   ConversationLive,
   ConversationSummary,
-  WorkflowRunSummary,
+  ToolViewSpec,
 } from '@helm/protocol'
 import { artifactsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { ToolActivityContext } from '../lib/tool-activity.js'
+import { ToolActivityProvider } from './ToolActivityProvider.js'
 import { CopyButton } from './CopyButton.js'
-import { WorkflowRunCard } from './WorkflowRunCard.js'
 import { MarkdownView } from './MarkdownView.js'
 import {
   buildTimelineItems,
+  collectSiblingCalls,
+  isAssistantTurnBusy,
   toolSummaryText,
   type AssistantTurn,
   type DividerItem,
@@ -25,16 +28,7 @@ import {
   type PluginCardItem,
   type ToolTrace,
 } from './timeline-model.js'
-import {
-  collectLatestSubagentToolKeys,
-  isAssistantTurnBusy,
-  resolveSubagentConversationId,
-  resolveSubagentExecutionMeta,
-  resolveWorkflowRunForTool,
-} from './subagent-model.js'
 import { formatBytes, formatDurationMs } from '../lib/format.js'
-import { SubagentLiveCard } from './SubagentLiveCard.js'
-import { subagentBadge } from './subagent-live-model.js'
 
 export interface ConversationTimelineProps {
   conversation: ConversationSummary
@@ -300,48 +294,55 @@ function toolStatusIcon(tool: ToolTrace): string {
   return 'circle'
 }
 
+/** tool.view 完整标准 Props 构造（含 siblingCalls，供插件组件去重/续接计算）。 */
+function buildToolViewProps(
+  tool: ToolTrace,
+  conversationId: number,
+  siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>,
+): Record<string, unknown> {
+  return {
+    callId: tool.callId ?? '',
+    toolName: tool.toolName,
+    ...(tool.input !== undefined ? { input: tool.input } : {}),
+    status: tool.status === 'running' ? 'running' : tool.status === 'error' ? 'error' : 'done',
+    ...(tool.resultText !== undefined ? { result: tool.resultText } : {}),
+    ...(tool.structuredOutput !== undefined ? { structuredOutput: tool.structuredOutput } : {}),
+    isError: tool.isError,
+    ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}),
+    ...(tool.durationMs !== undefined ? { durationMs: tool.durationMs } : {}),
+    ...(tool.artifactRef !== undefined ? { artifactRef: tool.artifactRef } : {}),
+    conversationId,
+    siblingCalls,
+  }
+}
+
 function TraceRow({
   tool,
   conversationId,
   defaultOpen,
-  latestSubagentToolKeys,
+  siblingCalls,
 }: {
   tool: ToolTrace
   conversationId: number
   defaultOpen: boolean
-  /** 同一子会话仅最后一次 subagent 调用挂载实时卡；前序续接调用只留单行。 */
-  latestSubagentToolKeys?: ReadonlyMap<number, string>
+  /** 当前时间线内全部工具调用轻量摘要（透传给 tool.view 插件组件）。 */
+  siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const store = useHelmStore()
 
-  // background: true 的 subagent 与 SubagentWorkflow 工具行状态必须跟随关联 run 的真实状态，
-  // 绝不提前显示“完成”或把失败显示为成功。
-  const isSubagent = tool.toolName === 'subagent'
-  const { run: bgRun, worktree: bgWorktree } = isSubagent
-    ? resolveSubagentExecutionMeta(tool, conversationId, store.workflowRuns)
-    : {}
-  const workflow = resolveWorkflowRunForTool(tool, conversationId, store.workflowRuns)
-  const bgRunning = isSubagent && bgRun?.status === 'running'
-  const bgFailed = isSubagent && (bgRun?.status === 'failed' || bgRun?.status === 'aborted')
-  const wfRunning = workflow?.status === 'running'
-  const wfFailed = workflow?.status === 'failed' || workflow?.status === 'aborted'
-  const rowFailed = Boolean(tool.isError || bgFailed || wfFailed)
-
-  const right = bgRunning
-    ? '后台运行中'
-    : wfRunning || tool.status === 'running'
+  const rowFailed = Boolean(tool.isError)
+  const right =
+    tool.status === 'running'
       ? '运行中'
       : rowFailed && tool.durationMs === undefined
-        ? workflow?.status === 'aborted' || bgRun?.status === 'aborted'
-          ? '已中止'
-          : '失败'
+        ? '失败'
         : tool.durationMs !== undefined
           ? formatDurationMs(tool.durationMs)
           : tool.status === 'done'
             ? '完成'
             : ''
-  const rowIcon = bgRunning || wfRunning ? 'loader' : rowFailed ? 'alert-circle' : toolStatusIcon(tool)
+  const rowIcon = toolStatusIcon(tool)
 
   const inputJson = useMemo(() => {
     if (tool.input === undefined) return undefined
@@ -352,191 +353,97 @@ function TraceRow({
     }
   }, [tool.input])
 
-  const subagentId = resolveSubagentConversationId(tool, conversationId, store.conversations)
-  const subagentIdNum = subagentId !== undefined ? Number(subagentId) : undefined
-  // 同一子会话被多次 resume：仅最后一次调用挂实时卡，前序调用降级为单行 + 续接标识。
-  const isSupersededSubagent =
-    subagentIdNum !== undefined &&
-    latestSubagentToolKeys !== undefined &&
-    latestSubagentToolKeys.get(subagentIdNum) !== undefined &&
-    latestSubagentToolKeys.get(subagentIdNum) !== tool.key
-  const hasLiveSubagentCard = subagentIdNum !== undefined && !isSupersededSubagent
-  // 双横条去冗余：胶囊卡已承载工具行信息时不再重复渲染底部 trace-row；
-  // 被续接的历史前序调用 / 无原生子会话的调用（外部卡 / 普通工具）仍保留单行。
-  const hideToolRow = (hasLiveSubagentCard || workflow !== undefined) && tool.toolView === undefined
+  // 命中插件 tool.view：replaceRow=true 时插件组件完全替换默认工具行；
+  // 未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态。
+  const toolView = tool.toolView
+  const replaceRow = toolView !== undefined && (toolView.spec as ToolViewSpec).replaceRow === true
 
   return (
     <div className={`trace-entry${rowFailed ? ' trace-entry-error' : ''}`}>
-      {workflow && <WorkflowRunCard run={workflow} toolCall={tool} />}
-      {hasLiveSubagentCard ? (
-        <SubagentLiveCard
-          childConversationId={subagentIdNum!}
-          toolStatus={tool.status}
-          backgroundRun={bgRun}
-          worktree={bgWorktree}
-          toolCall={tool}
-          toolSummary={{
-            prompt: toolSummaryText(tool.toolName, tool.input),
-            ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}),
-            ...(tool.durationMs !== undefined ? { durationMs: tool.durationMs } : {}),
-            ...(tool.resultText !== undefined ? { resultText: tool.resultText } : {}),
-            ...(rowFailed ? { isError: true } : {}),
-          }}
-        />
-      ) : null}
-      {subagentIdNum === undefined && (bgRun !== undefined || bgWorktree !== undefined) ? (
-        <ExternalSubagentCard
-          run={bgRun}
-          worktree={bgWorktree}
-          tool={tool}
-        />
-      ) : null}
-      {!hideToolRow ? (
-        <div
-          className={`trace-row${rowFailed ? ' trace-row-error' : ''}`}
-          role="button"
-          tabIndex={0}
-          onClick={() => setOpen((v) => !v)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault()
-              setOpen((v) => !v)
-            }
-          }}
-        >
-          <span className="trace-row-left">
-            <HelmIcon
-              name={rowIcon}
-              size={12}
-              className={bgRunning || tool.status === 'running' ? 'spin-slow' : undefined}
-            />
-            <span className="trace-tool-name">{tool.toolName}</span>
-            <span className="trace-tool-summary">{toolSummaryText(tool.toolName, tool.input)}</span>
-            {isSupersededSubagent && subagentIdNum !== undefined ? (
-              <span className="badge badge-neutral">#{subagentIdNum} · 已在下文续接</span>
-            ) : null}
-          </span>
-          <span className="trace-row-right">{right}</span>
+      {toolView !== undefined && replaceRow ? (
+        <div className="trace-block">
+          <PluginUiView
+            pluginId={toolView.pluginId}
+            spec={toolView.spec}
+            conversationId={conversationId}
+            label={`工具视图 ${tool.toolName}`}
+            slotProps={buildToolViewProps(tool, conversationId, siblingCalls)}
+          />
         </div>
-      ) : null}
-      {tool.toolView !== undefined && <div className="trace-toolview"><PluginUiView
-        pluginId={tool.toolView.pluginId}
-        spec={tool.toolView.spec}
-        conversationId={conversationId}
-        label={`工具卡 ${tool.toolName}`}
-        slotProps={{ callId: tool.callId, toolName: tool.toolName, input: tool.input, status: tool.status, result: tool.resultText, conversationId }}
-      /></div>}
-      {open && !hideToolRow ? (
-        <div className="trace-expanded-body selectable">
-          {inputJson !== undefined ? (
-            <div>
-              <div className="trace-section-label">入参</div>
-              <pre className="code-block-pre" style={{ padding: 0 }}>
-                <code>{inputJson}</code>
-              </pre>
-            </div>
-          ) : null}
-          {tool.resultText !== undefined ? (
-            <div>
-              <div className="trace-section-label">输出</div>
-              <pre className="code-block-pre" style={{ padding: 0 }}>
-                <code>{tool.resultText}</code>
-              </pre>
-            </div>
-          ) : null}
-          {tool.artifactRef !== undefined ? (
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              onClick={() =>
-                store.setActiveModal({
-                  kind: 'artifact-preview',
-                  artifactId: tool.artifactRef!,
-                  conversationId,
-                })
+      ) : (
+        <>
+          <div
+            className={`trace-row${rowFailed ? ' trace-row-error' : ''}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => setOpen((v) => !v)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                setOpen((v) => !v)
               }
-            >
-              <HelmIcon name="external-link" size={12} />
-              打开完整产物 #{tool.artifactRef}
-            </button>
+            }}
+          >
+            <span className="trace-row-left">
+              <HelmIcon
+                name={rowIcon}
+                size={12}
+                className={tool.status === 'running' ? 'spin-slow' : undefined}
+              />
+              <span className="trace-tool-name">{tool.toolName}</span>
+              <span className="trace-tool-summary">{toolSummaryText(tool.toolName, tool.input)}</span>
+            </span>
+            <span className="trace-row-right">{right}</span>
+          </div>
+          {toolView !== undefined ? (
+            <div className="trace-toolview">
+              <PluginUiView
+                pluginId={toolView.pluginId}
+                spec={toolView.spec}
+                conversationId={conversationId}
+                label={`工具视图 ${tool.toolName}`}
+                slotProps={buildToolViewProps(tool, conversationId, siblingCalls)}
+              />
+            </div>
           ) : null}
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-/**
- * 外部运行时（如 Herdr 窗格）的后台任务摘要卡：无子会话时仍如实展示
- * 后台 run 节点/工作树/错误，不只更新工具图标而无卡片；绝不假造子会话。
- */
-function ExternalSubagentCard({
-  run,
-  worktree,
-  tool,
-}: {
-  run?: WorkflowRunSummary
-  worktree?: { path: string; branch: string }
-  tool: ToolTrace
-}) {
-  const nodes = run?.nodes ?? []
-  const running = nodes.filter((n) => n.status === 'running').length
-  const failed = nodes.find((n) => n.status === 'failed')
-  const runError = run?.status === 'failed' || run?.status === 'aborted' ? (run.error ?? '后台执行失败') : undefined
-  const badge = subagentBadge(undefined, run?.status === 'completed' ? 'done' : tool.status, run?.status)
-  const active = badge.status === 'working'
-  const failedState = badge.status === 'error'
-  return (
-    <div className="subagent-live-card subagent-external-card">
-      <div className="subagent-live-header">
-        <HelmIcon
-          name={failedState ? 'alert-circle' : active ? 'loader' : 'bot'}
-          size={13}
-          className={active ? 'spin-slow' : undefined}
-        />
-        <span className="subagent-live-title">外部执行</span>
-        {worktree !== undefined ? (
-          <span className="badge badge-neutral subagent-worktree-badge" title={`隔离工作树：${worktree.path}`}>
-            <HelmIcon name="git-branch" size={11} />
-            {worktree.branch}
-          </span>
-        ) : null}
-        <span className={`badge ${badge.badge}`}>{badge.label}</span>
-      </div>
-      <div className="subagent-live-stream subagent-external-body">
-        {nodes.length > 0 ? (
-          <div className="workflow-node-list">
-            {nodes.map((n) => (
-              <div key={n.id} className="workflow-node-line">
-                <HelmIcon
-                  name={n.status === 'running' ? 'loader' : n.status === 'failed' ? 'x' : n.status === 'done' ? 'check' : 'circle'}
-                  size={11}
-                  className={n.status === 'running' ? 'spin-slow' : undefined}
-                />
-                <span className="workflow-node-label">{n.label ?? n.id}</span>
-                {n.executionId !== undefined ? <span className="subagent-external-exec">{n.executionId}</span> : null}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="subagent-stream-line subagent-stream-empty">
-            {run === undefined ? `外部执行${active ? '进行中' : failedState ? '异常' : '已结束'}（无子会话）` : `后台任务 ${run.id}`}
-          </div>
-        )}
-        {runError !== undefined ? (
-          <div className="subagent-stream-line subagent-stream-error subagent-bg-error" title={runError}>
-            <HelmIcon name="alert-circle" size={11} />
-            <span className="subagent-stream-body">后台执行失败：{runError}</span>
-          </div>
-        ) : null}
-        {failed !== undefined && failed.error !== undefined ? (
-          <div className="subagent-stream-line subagent-stream-error subagent-bg-error" title={failed.error}>
-            <HelmIcon name="alert-circle" size={11} />
-            <span className="subagent-stream-body">节点失败：{failed.error}</span>
-          </div>
-        ) : null}
-        {running > 0 ? <div className="subagent-stream-line subagent-stream-empty">{running} 个节点执行中</div> : null}
-      </div>
+          {open ? (
+            <div className="trace-expanded-body selectable">
+              {inputJson !== undefined ? (
+                <div>
+                  <div className="trace-section-label">入参</div>
+                  <pre className="code-block-pre" style={{ padding: 0 }}>
+                    <code>{inputJson}</code>
+                  </pre>
+                </div>
+              ) : null}
+              {tool.resultText !== undefined ? (
+                <div>
+                  <div className="trace-section-label">输出</div>
+                  <pre className="code-block-pre" style={{ padding: 0 }}>
+                    <code>{tool.resultText}</code>
+                  </pre>
+                </div>
+              ) : null}
+              {tool.artifactRef !== undefined ? (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={() =>
+                    store.setActiveModal({
+                      kind: 'artifact-preview',
+                      artifactId: tool.artifactRef!,
+                      conversationId,
+                    })
+                  }
+                >
+                  <HelmIcon name="external-link" size={12} />
+                  打开完整产物 #{tool.artifactRef}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </>
+      )}
     </div>
   )
 }
@@ -545,12 +452,12 @@ function StepGroup({
   steps,
   active,
   conversationId,
-  latestSubagentToolKeys,
+  siblingCalls,
 }: {
   steps: FoldableStep[]
   active: boolean
   conversationId: number
-  latestSubagentToolKeys?: ReadonlyMap<number, string>
+  siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
 }) {
   const [userOverride, setUserOverride] = useState<boolean | null>(null)
   const prevActiveRef = useRef(active)
@@ -585,7 +492,7 @@ function StepGroup({
                 tool={step.tool}
                 conversationId={conversationId}
                 defaultOpen={false}
-                latestSubagentToolKeys={latestSubagentToolKeys}
+                siblingCalls={siblingCalls}
               />
             ),
           )}
@@ -737,18 +644,20 @@ function useHighlightScroll(conversationId: number): (node: HTMLDivElement | nul
 // Assistant 回合
 // ---------------------------------------------------------------------------
 
-function AssistantTurnView({
-  turn,
-  conversation,
-  latestSubagentToolKeys,
-  isLatestTurn = false,
-}: {
+interface AssistantTurnViewProps {
   turn: AssistantTurn
   conversation: ConversationSummary
-  latestSubagentToolKeys?: ReadonlyMap<number, string>
+  siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
   isLatestTurn?: boolean
-}) {
+}
+
+function AssistantTurnView(props: AssistantTurnViewProps) {
+  return <ToolActivityProvider><AssistantTurnContent {...props} /></ToolActivityProvider>
+}
+
+function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn = false }: AssistantTurnViewProps) {
   const store = useHelmStore()
+  const activeToolCallIds = useContext(ToolActivityContext)?.activeToolCallIds
   const [forking, setForking] = useState(false)
   const lastText = useMemo(() => {
     const texts = turn.segments.filter((s) => s.kind === 'text') as Array<{ kind: 'text'; text: string }>
@@ -782,11 +691,7 @@ function AssistantTurnView({
     }
   }
 
-  const isBusy = isAssistantTurnBusy(turn, conversation, {
-    isLatestTurn,
-    workflowRuns: store.workflowRuns,
-    conversations: store.conversations,
-  })
+  const isBusy = isAssistantTurnBusy(turn, conversation, { isLatestTurn, activeToolCallIds })
 
   return (
     <div className="msg-ai-block" tabIndex={0}>
@@ -801,7 +706,7 @@ function AssistantTurnView({
               steps={seg.steps}
               active={seg.active === true}
               conversationId={conversation.id}
-              latestSubagentToolKeys={latestSubagentToolKeys}
+              siblingCalls={siblingCalls}
             />
           )
         }
@@ -811,7 +716,7 @@ function AssistantTurnView({
             tool={seg.tool}
             conversationId={conversation.id}
             defaultOpen={false}
-            latestSubagentToolKeys={latestSubagentToolKeys}
+            siblingCalls={siblingCalls}
           />
         )
       })}
@@ -876,11 +781,9 @@ export function ConversationTimeline({
   const hasLiveTurn = items.some((item) => item.kind === 'assistant' && item.live)
   const resolvedAsks = store.resolvedAsksByConv[conversation.id] ?? []
 
-  // 同一子会话被多次 resume：仅最后一次 subagent 调用挂实时卡，前序降级单行（已在下文续接）。
-  const latestSubagentToolKeys = useMemo(
-    () => collectLatestSubagentToolKeys(items, conversation.id, store.conversations),
-    [items, conversation.id, store.conversations],
-  )
+  // 全量工具调用轻量摘要：一次性收集，透传给每个 tool.view 插件组件
+  //（siblingCalls 供其自行计算同目标多次调用折叠 / resume 续接关系）。
+  const siblingCalls = useMemo(() => collectSiblingCalls(items), [items])
 
   const lastAssistantKey = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
@@ -1035,9 +938,9 @@ export function ConversationTimeline({
               <AssistantTurnView
                 turn={item}
                 conversation={conversation}
-                latestSubagentToolKeys={latestSubagentToolKeys}
+                siblingCalls={siblingCalls}
                 isLatestTurn={item.key === lastAssistantKey}
-              />
+              />)
             </div>
           )
         })}

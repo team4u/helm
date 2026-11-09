@@ -43,6 +43,7 @@ import {
   type HookResult,
   type HookOptions,
   type JsonSchema,
+  type MaybePromise,
   type PluginActionContext,
   type PluginActionSpec,
   type PluginConfigFieldSchema,
@@ -65,7 +66,6 @@ import {
   type WorkbenchPanelSpec,
   type CommandSpec,
   type SettingsPanelSpec,
-  type WorkflowRunSummary,
 } from '@helm/protocol';
 import type { Provider } from '@earendil-works/pi-ai';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
@@ -79,6 +79,8 @@ import { redactJsonValue } from '../redact.js';
 export interface PluginDocStore {
   get<T>(key: string, initial: T): T;
   set<T>(key: string, value: T): void;
+  /** 等待全部排队写真正落盘（同步镜像 ≠ 持久化完成；失败显式 reject）。 */
+  flush(): Promise<void>;
 }
 
 export interface PluginConfigStore {
@@ -113,6 +115,21 @@ export interface PluginHostOptions {
    * 默认停用探测（enabled:false）只收集声明不受影响。
    */
   providers?: PluginProviderPort;
+  /**
+   * 宿主统一文本脱敏器（SecretStash 明文 -> marker）：ctx.host.invokeAction
+   * 返回的动作输出经此值级脱敏（兑现 protocol 契约"宿主统一脱敏"，
+   * 不依赖调用方插件自带 redactor）。未提供时原样返回（宿主模式/测试）。
+   */
+  redactText?: (text: string) => string;
+  /**
+   * 延迟服务启动屏障（runtime 自建 host 时使用）：true 时 register/enable 的
+   * 启用插件只完成定义收集、provider 挂载与服务 prepare 登记，不执行服务
+   * start()；由组合层在全部插件注册完成后统一调用 PluginHost.start()，
+   * 先全局执行全部 prepare 再逐插件 start（防止服务 init 提交输入唤醒
+   * SDK 调度器时其他插件/工具尚未注册）。默认 false：register 即时
+   * prepare+start（宿主模式，单插件测试语义不变）。
+   */
+  deferServices?: boolean;
 }
 
 /** 插件 Provider 挂载端口：机制由 runtime 实现，宿主只负责声明收集与生命周期时序。 */
@@ -146,6 +163,8 @@ export interface DerivedToolSpec {
   name: string;
   description: string;
   inputSchema: JsonSchema;
+  /** 结构化输出 Schema（ctx.tool 声明时透传；run_action 派生工具无此字段）。 */
+  structuredOutputSchema?: JsonSchema;
   sourcePluginId: string;
   sourceKind: 'action' | 'tool';
   /** 仅 sourceKind === 'action'：pluginId.actionId 全限定 ID。 */
@@ -198,6 +217,8 @@ interface ToolEntry {
 interface ServiceEntry extends PluginServiceSpec {
   pluginId: string;
   started: boolean;
+  /** prepare 已执行标记（避免重复执行；幂等由服务自身保证）。 */
+  prepared: boolean;
 }
 
 /** provider 声明项：definePlugin 阶段收集，启用时挂载（记录挂载顺序供逆序卸载）。 */
@@ -241,10 +262,20 @@ interface PluginState {
   configSchema: Record<string, PluginConfigFieldSchema> | null;
   /**
    * 本启用周期经 ctx.host 获取的宿主生命周期资源释放句柄
-   * （manageConversation 管理权 / onWorkflowSettled 监听 / askSeq 解析器）。
+   * （manageConversation 管理权 / onEvent 监听 / askSeq 解析器）。
    * 停用/回滚/dispose 时统一释放；句柄幂等，插件提前释放也安全。
    */
   hostReleases: Set<() => void>;
+  /**
+   * 受控停止 doc 写入窗口：宿主正在 await 本插件服务 stop 链期间为 true。
+   * 此窗口内本周期（epoch 一致）的 ctx.doc 句柄被允许完成最终持久化——
+   * stop 时 phase 已是 deactivating，常规 guard 会拒绝一切写入，引擎/服务的
+   * 终态落盘会被悄悄丢弃（诚实性违规）。窗口只覆盖 stop 本身：stop 返回
+   * （成功/失败/回滚）即复位；epoch 更替（reenable）后旧句柄仍拒绝。
+   * 窗口允许本周期已有异步回调完成写入，不区分其 Promise 创建位置；服务
+   * 必须在 stop 返回前取消或等待这些回调。它不是插件内异步任务的隔离边界。
+   */
+  stopDocWrites: boolean;
 }
 
 /**
@@ -361,11 +392,16 @@ export class PluginHost {
   private configStore?: PluginConfigStore;
   private disposed = false;
   private registerSeq = 0;
+  /** 服务启动屏障状态：deferServices 模式下 false（等待显式 start()），否则恒 true。 */
+  private servicesStarted: boolean;
+  /** 显式 start() 幂等：已启动/启动中直接复用。 */
+  private startPromise?: Promise<void>;
   /** per-plugin 生命周期操作串行链（register/enable/disable/unregister）。 */
   private lifecycle = new Map<string, Promise<unknown>>();
 
   constructor(private readonly options: PluginHostOptions) {
     this.configStore = options.config;
+    this.servicesStarted = options.deferServices !== true;
     for (const name of Object.keys(HOOK_ALLOWED_ACTIONS) as HookName[]) {
       this.pipelines.set(name, new HookPipeline(name));
     }
@@ -419,6 +455,7 @@ export class PluginHost {
         docs: new Map(),
         configSchema: null,
         hostReleases: new Set(),
+        stopDocWrites: false,
       };
       this.plugins.set(definition.id, state);
 
@@ -426,6 +463,7 @@ export class PluginHost {
         // 插件专属数据目录（~/.helm/plugins/<id>/），按 protocol 注释创建
         mkdirSync(dataDir, { recursive: true });
         await definition.definePlugin(this.createContext(state, state.epoch));
+        this.assertUiDocsRegistered(state);
       } catch (err) {
         // rollback：清除本插件一切注册痕迹（含宿主生命周期资源释放）；rollback
         // 失败不掩盖原始错误，聚合进 details（双方均已 JSON-safe 归一）
@@ -455,9 +493,11 @@ export class PluginHost {
         state.enabled = true;
         try {
           // provider 先于服务挂载：服务 start 可依赖本插件 provider 已可用；
-          // 半途失败时已挂载 provider 在 catch 回滚中统一卸载（禁 enabled:false 泄漏）
+          // 半途失败时已挂载 provider 在 catch 回滚中统一卸载（禁 enabled:false 泄漏）。
+          // deferServices：只挂载 provider 并登记服务（含 prepare 能力），不 start；
+          // 由显式 PluginHost.start() 统一执行全局 prepare 屏障 + 逐插件 start。
           await this.registerProviders(state);
-          await this.startServices(state);
+          await this.activateServices(state);
         } catch (err) {
           // 启动失败：回滚到停用形态（已挂载 provider 与已启动服务均由
           // teardownPlugin 逆向清理），注册痕迹移除，原始错误包
@@ -603,10 +643,13 @@ export class PluginHost {
       state.phase = 'defining';
       try {
         await state.definition.definePlugin(this.createContext(state, state.epoch));
+        this.assertUiDocsRegistered(state);
         // provider 先于服务挂载（服务 start 可依赖自身 provider）；失败时回滚
-        // 卸载已挂载 provider 并 stop 已启动服务，绝不留下 enabled:false 但 provider 泄漏
+        // 卸载已挂载 provider 并 stop 已启动服务，绝不留下 enabled:false 但 provider 泄漏。
+        // 热启用（host.start 已完成后）：正常 prepare+start；未完成（首启注册期）：
+        // 只登记，待全局屏障。
         await this.registerProviders(state);
-        await this.startServices(state);
+        await this.activateServices(state);
         // 对外提交点在启停持久化成功之后：服务已启动但落盘挂起期间保持
         // defining 且 enabled=false——action 拒绝 / hook 不执行 / UI 不露出，
         // 绝不给在途任务进入「即将被回滚拆掉」的注册表的机会；持久化失败时
@@ -715,6 +758,23 @@ export class PluginHost {
   }
 
   /**
+   * 在受控停止 doc 写入窗口内执行服务 stop：stop 期间（含引擎 close 内部
+   * 由 abort 唤醒的异步 settle 链）本插件本周期 ctx.doc 句柄的最终持久化写入
+   * 被放行（phase 为 deactivating 时不再拒绝）；stop 返回（成功/失败）即
+   * 复位窗口，之后一切写入恢复常规拒绝。窗口按 PluginState 标记而非异步上下
+   * 文传播：引擎 settle 链的 promise 在 stop 之前创建，AsyncLocalStorage 无法
+   * 覆盖它们，但句柄本身是插件私有、epoch 一致性已由句柄闭包保证。
+   */
+  private async runControlledStop(state: PluginState, stop: () => MaybePromise<void>): Promise<void> {
+    state.stopDocWrites = true;
+    try {
+      await stop();
+    } finally {
+      state.stopDocWrites = false;
+    }
+  }
+
+  /**
    * 清理插件注册：逆向 stop 已启动服务、逆序卸载已挂载 provider、释放宿主生命
    * 周期资源（幂等）、清空全部能力注册表。stop / 卸载 / 释放失败聚合显式抛出，
    * 绝不静默吞掉；未挂载的 provider 声明跳过（enabled:false 探测路径零副作用）。
@@ -725,7 +785,7 @@ export class PluginHost {
       for (const svc of [...state.services].reverse()) {
         if (!svc.started) continue;
         try {
-          await svc.stop();
+          await this.runControlledStop(state, () => svc.stop());
         } catch (err) {
           // 不中断其余清理，但绝不静默吞掉：聚合后显式抛出（JSON-safe 形态）
           stopErrors.push({ serviceId: svc.id, error: toJsonSafeError(err) });
@@ -880,6 +940,177 @@ export class PluginHost {
     }
   }
 
+  /**
+   * definePlugin 完成后的末尾统一校验：UI 声明（含 badge.doc）引用的 docs
+   * 必须是本插件已注册的 public doc（doc 声明可晚于 UI 声明，故在定义期末校验；
+   * 非法引用会让 $docs 挂载/角标静默失效，必须显式拒绝）。
+   */
+  private assertUiDocsRegistered(state: PluginState): void {
+    const pluginId = state.definition.id;
+    const required = new Map<string, Array<{ surface: string; id: string }>>();
+    const collect = (doc: string, from: { surface: string; id: string }): void => {
+      const list = required.get(doc) ?? [];
+      list.push(from);
+      required.set(doc, list);
+    };
+    for (const u of state.ui) {
+      const spec = u.spec as { docs?: unknown; badge?: { doc?: unknown } };
+      const docs = spec.docs;
+      if (Array.isArray(docs)) {
+        for (const name of docs) {
+          if (typeof name === 'string') collect(name, { surface: u.surface, id: String((spec as { id?: unknown }).id) });
+        }
+      }
+      const badgeDoc = spec.badge?.doc;
+      if (typeof badgeDoc === 'string') {
+        collect(badgeDoc, { surface: u.surface, id: String((spec as { id?: unknown }).id) });
+      }
+    }
+    for (const [name, usages] of required) {
+      const reg = state.docs.get(name);
+      if (reg === undefined || !reg.isPublic) {
+        const where = usages.map((u) => `${u.surface}#${u.id}`).join(', ');
+        throw new HelmError(
+          'invalid_ui_spec',
+          `插件 ${pluginId} 的 UI 声明（${where}）引用了未注册为 public doc 的文档 ${name}`,
+          400,
+          { pluginId, doc: name, usages },
+        );
+      }
+    }
+  }
+
+  /**
+   * 启用路径的服务激活：
+   * - servicesStarted（全局屏障已放行，含默认非 defer 模式）：单插件内先全部
+   *   prepare 再 start（插件内顺序），与全局屏障语义一致；
+   * - deferServices 启动期：只登记（不 prepare 不 start），等待 PluginHost.start()
+   *   的全局屏障（先全部已启用插件 prepare，再逐插件 start）。
+   */
+  private async activateServices(state: PluginState): Promise<void> {
+    if (!this.servicesStarted) return;
+    await this.prepareServices(state);
+    await this.startServices(state);
+  }
+
+  /**
+   * 显式启动屏障（deferServices 模式）：全部插件注册完成后、调度器 resume 前
+   * 调用。先对所有已启用插件逐个执行服务 prepare（任一失败：全部回滚为未启动，
+   * 原始错误上抛），再逐插件按声明顺序 start（失败者逆向 stop 已启动者）。
+   * 幂等；非 defer 模式调用为无害 no-op（已在各启用点即时启动）。
+   */
+  async start(): Promise<void> {
+    this.assertNotDisposed();
+    if (this.servicesStarted) return;
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = (async () => {
+      // 快照参与屏障的插件（后续 register/enable 的插件走 activateServices 即时路径）
+      const participants = [...this.plugins.values()].filter((s) => s.enabled);
+      // 阶段 1：全部 prepare 成功才允许任何 start（prepare 只做恢复标记，不产副作用）
+      try {
+        for (const state of participants) await this.prepareServices(state);
+      } catch (err) {
+        // prepare 失败零副作用零残留：直接上抛，屏障未放行（可修复后重试 start）
+        this.startPromise = undefined;
+        throw err instanceof HelmError ? err : new HelmError(
+          'plugin_service_prepare_failed',
+          `插件服务 prepare 失败：${err instanceof Error ? err.message : String(err)}`,
+          500,
+          {},
+        );
+      }
+      // 阶段 2：逐插件 start；某插件失败时逆向 stop 本插件与之前已启动插件，
+      // 错误如实上抛，屏障标记不放行（半启动状态不允许被后续 enable 绕过）。
+      // 回滚 stop 失败不丢弃：与原始 start 错误同层聚合（保留原 code/message，
+      // 附 rollbackStop 诊断，含 pluginId 与 JSON-safe stop 错误清单）。
+      const started: PluginState[] = [];
+      try {
+        for (const state of participants) {
+          await this.startServices(state);
+          started.push(state);
+        }
+        this.servicesStarted = true;
+      } catch (err) {
+        const rollbackStopErrors: Array<{ pluginId: string; stopErrors: Array<{ serviceId: string; error: JsonSafeErrorInfo }> }> = [];
+        for (const state of started.reverse()) {
+          try {
+            await this.stopServicesQuietly(state);
+          } catch (rollbackErr) {
+            // stopServicesQuietly 抛 plugin_service_stop_failed（details.stopErrors 已聚合）
+            rollbackStopErrors.push({
+              pluginId: state.definition.id,
+              stopErrors:
+                rollbackErr instanceof HelmError && Array.isArray((rollbackErr.details as { stopErrors?: unknown })?.stopErrors)
+                  ? ((rollbackErr.details as { stopErrors: Array<{ serviceId: string; error: JsonSafeErrorInfo }> }).stopErrors)
+                  : [{ serviceId: '<unknown>', error: toJsonSafeError(rollbackErr) }],
+            });
+          }
+        }
+        this.startPromise = undefined;
+        if (rollbackStopErrors.length > 0) {
+          if (err instanceof HelmError) {
+            throw new HelmError(err.code, err.message, err.status, {
+              ...((err.details as object) ?? {}),
+              rollbackStopErrors,
+            });
+          }
+          throw new HelmError(
+            'plugin_service_start_failed',
+            `插件服务启动失败：${err instanceof Error ? err.message : String(err)}`,
+            500,
+            { rollbackStopErrors },
+          );
+        }
+        throw err;
+      }
+    })();
+    return this.startPromise;
+  }
+
+  /** 插件内全部服务 prepare（按声明顺序；无 prepare 的服务跳过；每服务仅执行一次）。 */
+  private async prepareServices(state: PluginState): Promise<void> {
+    for (const svc of state.services) {
+      if (svc.prepare === undefined || svc.prepared) continue;
+      try {
+        await svc.prepare();
+        svc.prepared = true;
+      } catch (err) {
+        throw err instanceof HelmError ? err : new HelmError(
+          'plugin_service_prepare_failed',
+          `插件 ${state.definition.id} 服务 ${svc.id} prepare 失败：${err instanceof Error ? err.message : String(err)}`,
+          500,
+          { pluginId: state.definition.id, serviceId: svc.id },
+        );
+      }
+    }
+  }
+
+  /**
+   * 启动后失败的逆向 stop：聚合各服务 stop 错误（teardown 同款聚合），
+   * 已停用条目跳过；用于 start 屏障阶段 2 的回滚。
+   */
+  private async stopServicesQuietly(state: PluginState): Promise<void> {
+    const errors: Array<{ serviceId: string; error: JsonSafeErrorInfo }> = [];
+    for (const svc of [...state.services].reverse()) {
+      if (!svc.started) continue;
+      try {
+        await this.runControlledStop(state, () => svc.stop());
+        svc.started = false;
+      } catch (err) {
+        svc.started = false;
+        errors.push({ serviceId: svc.id, error: toJsonSafeError(err) });
+      }
+    }
+    if (errors.length > 0) {
+      throw new HelmError(
+        'plugin_service_stop_failed',
+        `回滚停止插件 ${state.definition.id} 服务时失败：${errors.map((e) => e.serviceId).join(', ')}`,
+        500,
+        { pluginId: state.definition.id, stopErrors: errors },
+      );
+    }
+  }
+
   /** 按声明顺序 start 服务；任一失败对已启动者逆向 stop（stop 失败聚合进诊断）。 */
   private async startServices(state: PluginState): Promise<void> {
     const started: ServiceEntry[] = [];
@@ -893,7 +1124,7 @@ export class PluginHost {
       const stopErrors: Array<{ serviceId: string; error: JsonSafeErrorInfo }> = [];
       for (const svc of started.reverse()) {
         try {
-          await svc.stop();
+          await this.runControlledStop(state, () => svc.stop());
         } catch (stopErr) {
           stopErrors.push({ serviceId: svc.id, error: toJsonSafeError(stopErr) });
         } finally {
@@ -973,6 +1204,9 @@ export class PluginHost {
           name: tool.spec.name,
           description: tool.spec.description,
           inputSchema: tool.spec.inputSchema,
+          ...(tool.spec.structuredOutputSchema !== undefined
+            ? { structuredOutputSchema: tool.spec.structuredOutputSchema }
+            : {}),
           sourcePluginId: state.definition.id,
           sourceKind: 'tool',
         });
@@ -1086,6 +1320,74 @@ export class PluginHost {
       name,
       value: jsonClone(this.options.docs.get(`${pluginId}:${name}`, reg.initial as never)),
     };
+  }
+
+  /**
+   * 全部已启用插件公共文档快照（SSE HelmSnapshot.pluginDocs 首帧直投用）：
+   * 合并每个 idle 插件中 isPublic === true 的文档；快照读取失败属单一插件
+   * 故障，聚合诊断后如实上抛（绝不静默丢一份公共快照让前端误判状态）。
+   */
+  listPublicDocs(): PublicPluginDoc[] {
+    this.assertNotDisposed();
+    const out: PublicPluginDoc[] = [];
+    for (const state of this.plugins.values()) {
+      if (!state.enabled || state.phase !== 'idle') continue;
+      for (const [name, reg] of state.docs) {
+        if (!reg.isPublic) continue;
+        out.push({
+          pluginId: state.definition.id,
+          name,
+          value: jsonClone(this.options.docs.get(`${state.definition.id}:${name}`, reg.initial as never)),
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 全部已启用且已启动服务声明的工作树占用清单（WorktreeAllocator 的
+   * isPathInUse 探测源）：合并各服务 liveWorktrees() 返回值。
+   * 服务声明函数抛错或返回非法形状时如实显式报错，绝不静默当空——
+   * 占用检查坏了就必须修，不能靠猜放行清理在途工作树。
+   */
+  listLiveWorktrees(): Array<{ nodeId: string; path: string }> {
+    this.assertNotDisposed();
+    const out: Array<{ nodeId: string; path: string }> = [];
+    for (const state of this.plugins.values()) {
+      if (!state.enabled) continue;
+      for (const svc of state.services) {
+        if (!svc.started || svc.liveWorktrees === undefined) continue;
+        let declared: Array<{ nodeId: string; path: string }>;
+        try {
+          declared = svc.liveWorktrees();
+        } catch (err) {
+          throw new HelmError(
+            'plugin_live_worktrees_check_failed',
+            `插件 ${state.definition.id} 服务 ${svc.id} 的 liveWorktrees 检查抛出异常`,
+            500,
+            { pluginId: state.definition.id, serviceId: svc.id, error: toJsonSafeError(err) },
+          );
+        }
+        if (
+          !Array.isArray(declared) ||
+          declared.some(
+            (item) =>
+              !isJsonObject(item) ||
+              typeof (item as { nodeId?: unknown }).nodeId !== 'string' ||
+              typeof (item as { path?: unknown }).path !== 'string',
+          )
+        ) {
+          throw new HelmError(
+            'plugin_live_worktrees_check_failed',
+            `插件 ${state.definition.id} 服务 ${svc.id} 的 liveWorktrees 必须返回 { nodeId, path } 数组`,
+            500,
+            { pluginId: state.definition.id, serviceId: svc.id },
+          );
+        }
+        out.push(...declared);
+      }
+    }
+    return out;
   }
 
   // --- Hook 管道 -----------------------------------------------------------
@@ -1383,8 +1685,17 @@ export class PluginHost {
       }
     };
 
-    /** doc 句柄在本周期内（含运行期）可写；停用中或周期更替后失效。 */
+    /**
+     * doc 句柄在本周期内（含运行期）可写；停用中或周期更替后失效。
+     * 例外：受控停止 doc 写入窗口（宿主正在 await 的本插件服务 stop 链，
+     * epoch 由句柄闭包保证一致）允许最终持久化写入，见 PluginState.stopDocWrites。
+     */
     const assertDocUsable = (name: string) => {
+      if (state.stopDocWrites && self.plugins.get(pluginId) === state && state.epoch === epoch) {
+        // 受控停止窗口：仅要求插件注册态与本周期仍在（dispose 后期 plugins.clear /
+        // reenable 周期更替后的残留调用依然拒绝）。
+        return;
+      }
       self.assertContextUsable(state, epoch, `doc ${name} 句柄`);
     };
 
@@ -1492,6 +1803,69 @@ export class PluginHost {
           }
         }
       }
+      // tool.view 的 replaceRow 必须是布尔（非法值会让前端行接管判定静默失效）
+      if (surface === 'tool.view') {
+        const replaceRow = (spec as { replaceRow?: unknown }).replaceRow;
+        if (replaceRow !== undefined && typeof replaceRow !== 'boolean') {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.toolView 的 replaceRow 必须是布尔值（实际：${typeof replaceRow}）`,
+            400,
+            { pluginId, id },
+          );
+        }
+        const toolNames = (spec as { toolNames?: unknown }).toolNames;
+        if (
+          !Array.isArray(toolNames) ||
+          toolNames.length === 0 ||
+          toolNames.some((t) => typeof t !== 'string' || t.length === 0)
+        ) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.toolView 的 toolNames 必须是非空字符串数组`,
+            400,
+            { pluginId, id },
+          );
+        }
+      }
+      // workbench.panel 的 badge 仅允许 { doc, countField?, toneField?, byConversationField? }
+      if (surface === 'workbench.panel') {
+        const badge = (spec as { badge?: unknown }).badge;
+        if (badge !== undefined) {
+          if (
+            !isPlainObject(badge) ||
+            Object.keys(badge).some(
+              (k) => k !== 'doc' && k !== 'countField' && k !== 'toneField' && k !== 'byConversationField',
+            )
+          ) {
+            throw new HelmError(
+              'invalid_ui_spec',
+              `插件 ${pluginId} ui.workbenchPanel 的 badge 仅允许 { doc, countField?, toneField?, byConversationField? }`,
+              400,
+              { pluginId, id },
+            );
+          }
+          if (typeof badge.doc !== 'string' || badge.doc.length === 0) {
+            throw new HelmError(
+              'invalid_ui_spec',
+              `插件 ${pluginId} ui.workbenchPanel 的 badge.doc 必须是非空字符串（订阅的本插件 public doc 名）`,
+              400,
+              { pluginId, id },
+            );
+          }
+          for (const field of ['countField', 'toneField', 'byConversationField'] as const) {
+            const value = badge[field];
+            if (value !== undefined && (typeof value !== 'string' || value.length === 0)) {
+              throw new HelmError(
+                'invalid_ui_spec',
+                `插件 ${pluginId} ui.workbenchPanel 的 badge.${field} 必须是非空字符串字段名`,
+                400,
+                { pluginId, id, field },
+              );
+            }
+          }
+        }
+      }
       // 声明性轨道只接受可 JSON 序列化 spec（HTTP/SSE 直接 JSON 输出）；
       // structuredClone 接受 Map/Set/Date 但 JSON.stringify 会改形丢数据，必须显式拒绝。
       // client.tsx 轨道由 web 编译器负责（本模块不编译）。
@@ -1568,6 +1942,119 @@ export class PluginHost {
             400,
           );
         }
+        // cli.positional：按序消费 CLI 位置参数的映射表；与 CLI 动作层同契约
+        // （未知键拒绝、field/readFileInto 必须是 inputSchema 自有属性、
+        // readFileInto 目标真 type:string、写入目标不重复、required 连续、
+        // 原型污染键拒绝、timeoutMs 有限 >= 0）——避免宿主接受但 CLI 清单拒绝。
+        if (spec.cli?.positional !== undefined) {
+          if (!Array.isArray(spec.cli.positional)) {
+            throw new HelmError(
+              'invalid_action_spec',
+              `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional 必须是数组`,
+              400,
+            );
+          }
+          const properties =
+            spec.inputSchema.type === 'object' && isJsonObject(spec.inputSchema.properties)
+              ? (spec.inputSchema.properties as Record<string, unknown>)
+              : undefined
+          if (properties === undefined) {
+            throw new HelmError(
+              'invalid_action_spec',
+              `插件 ${pluginId} 动作 ${spec.id} 声明 cli.positional 但 inputSchema 不是带 properties 的 object`,
+              400,
+            );
+          }
+          const writeTargets = new Set<string>()
+          let seenOptional = false
+          for (const pos of spec.cli.positional) {
+            if (!isPlainObject(pos) || Object.keys(pos).some((k) => k !== 'field' && k !== 'required' && k !== 'readFileInto')) {
+              throw new HelmError(
+                'invalid_action_spec',
+                `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional 项仅允许 { field, required?, readFileInto? }`,
+                400,
+              );
+            }
+            if (typeof pos.field !== 'string' || pos.field.length === 0) {
+              throw new HelmError(
+                'invalid_action_spec',
+                `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional[].field 必须是非空字符串`,
+                400,
+              );
+            }
+            if (pos.required !== undefined && typeof pos.required !== 'boolean') {
+              throw new HelmError(
+                'invalid_action_spec',
+                `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional[${pos.field}].required 必须是 boolean`,
+                400,
+              );
+            }
+            if (pos.readFileInto !== undefined && (typeof pos.readFileInto !== 'string' || pos.readFileInto.length === 0)) {
+              throw new HelmError(
+                'invalid_action_spec',
+                `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional[${pos.field}].readFileInto 必须是非空字符串字段名`,
+                400,
+              );
+            }
+            for (const name of [pos.field, pos.readFileInto] as const) {
+              if (name === undefined) continue
+              if (name === '__proto__' || name === 'constructor' || name === 'prototype') {
+                throw new HelmError(
+                  'invalid_action_spec',
+                  `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional 字段名 "${name}" 不可用（原型污染键）`,
+                  400,
+                );
+              }
+              if (writeTargets.has(name)) {
+                throw new HelmError(
+                  'invalid_action_spec',
+                  `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional 重复写入字段 "${name}"（field/readFileInto 目标不得重叠）`,
+                  400,
+                );
+              }
+              writeTargets.add(name)
+              if (!Object.hasOwn(properties, name)) {
+                throw new HelmError(
+                  'invalid_action_spec',
+                  `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional 字段 "${name}" 不在 inputSchema.properties 中`,
+                  400,
+                );
+              }
+            }
+            if (pos.readFileInto !== undefined) {
+              const target = properties[pos.readFileInto] as { type?: unknown } | undefined
+              if (target === null || typeof target !== 'object' || target.type !== 'string') {
+                throw new HelmError(
+                  'invalid_action_spec',
+                  `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional "${pos.field}" 的 readFileInto 目标 "${pos.readFileInto}" 需为 type: string 属性`,
+                  400,
+                );
+              }
+            }
+            if (pos.required === true) {
+              if (seenOptional) {
+                throw new HelmError(
+                  'invalid_action_spec',
+                  `插件 ${pluginId} 动作 ${spec.id} 的 cli.positional required 字段 "${pos.field}" 出现在 optional 之后（required 必须连续）`,
+                  400,
+                );
+              }
+            } else {
+              seenOptional = true
+            }
+          }
+        }
+        // cli.timeoutMs：请求超时覆盖；0 表示无超时（长耗时动作如 workflow run --wait）。
+        if (
+          spec.cli?.timeoutMs !== undefined &&
+          (typeof spec.cli.timeoutMs !== 'number' || !Number.isFinite(spec.cli.timeoutMs) || spec.cli.timeoutMs < 0)
+        ) {
+          throw new HelmError(
+            'invalid_action_spec',
+            `插件 ${pluginId} 动作 ${spec.id} 的 cli.timeoutMs 必须是 >= 0 的有限数字（0 表示无超时）`,
+            400,
+          );
+        }
         assertConversationScope(pluginId, `插件 ${pluginId} 动作 ${spec.id}`, spec.scope);
         if (spec.idempotent !== undefined && typeof spec.idempotent !== 'boolean') {
           throw new HelmError('validation_error', `插件 ${pluginId} 动作 ${spec.id} 的 idempotent 必须为 boolean`, 400);
@@ -1610,6 +2097,17 @@ export class PluginHost {
         }
         if (!isJsonObject(spec.inputSchema)) {
           throw new HelmError('invalid_tool_spec', `插件 ${pluginId} 工具 ${spec.name} 缺少 inputSchema`, 400);
+        }
+        // 结构化输出 Schema：声明即预编译检查（$async/非法 Schema 在注册边界拒绝）
+        if (spec.structuredOutputSchema !== undefined) {
+          if (!isJsonObject(spec.structuredOutputSchema)) {
+            throw new HelmError(
+              'invalid_tool_spec',
+              `插件 ${pluginId} 工具 ${spec.name} 的 structuredOutputSchema 必须是 JSON Schema 对象`,
+              400,
+            );
+          }
+          assertSchemaCompilable(spec.structuredOutputSchema);
         }
         if (typeof spec.execute !== 'function') {
           throw new HelmError('invalid_tool_spec', `插件 ${pluginId} 工具 ${spec.name} 缺少 execute`, 400);
@@ -1713,6 +2211,12 @@ export class PluginHost {
             store.set(key, safe);
             if (isPublic) self.emitDocUpdated(pluginId, name, safe);
           },
+          // 真实持久化端口：透传 store 的排队写冲刷（同一持久化链，无按文档粒度
+          // 队列）；失败原样上抛，不以镜像已写冒充持久化完成。
+          flush: async () => {
+            assertDocUsable(name);
+            return store.flush();
+          },
         };
         state.docs.set(name, { handle: handle as PluginDocHandle<unknown>, isPublic, initial: normalizedInitial });
         return handle;
@@ -1729,10 +2233,26 @@ export class PluginHost {
             { pluginId, serviceId: spec.id },
           );
         }
+        if (spec.liveWorktrees !== undefined && typeof spec.liveWorktrees !== 'function') {
+          throw new HelmError(
+            'invalid_service_spec',
+            `插件 ${pluginId} 服务 ${spec.id} 的 liveWorktrees 必须是返回 { nodeId, path } 数组的函数`,
+            400,
+            { pluginId, serviceId: spec.id },
+          );
+        }
+        if (spec.prepare !== undefined && typeof spec.prepare !== 'function') {
+          throw new HelmError(
+            'invalid_service_spec',
+            `插件 ${pluginId} 服务 ${spec.id} 的 prepare 必须是函数`,
+            400,
+            { pluginId, serviceId: spec.id },
+          );
+        }
         if (state.services.some((s) => s.id === spec.id)) {
           throw new HelmError('duplicate_service', `插件 ${pluginId} 重复声明服务 ${spec.id}`, 409);
         }
-        state.services.push({ ...spec, pluginId, started: false });
+        state.services.push({ ...spec, pluginId, started: false, prepared: false });
       },
 
       provider: (provider: Provider) => {
@@ -1773,9 +2293,9 @@ export class PluginHost {
 
   /**
    * 构造插件视角的 ctx.host：全部方法显式转发到后端端口。
-   * 生命周期资源（manageConversation / onWorkflowSettled / registerAskSeqResolver）
+   * 生命周期资源（manageConversation / onEvent / registerAskSeqResolver）
    * 经 acquire 包装：epoch 守卫 + 幂等释放 + 停用统一解除；
-   * onWorkflowSettled 的每次监听回调计入在途任务保护。
+   * onEvent 的每次事件回调计入在途任务保护（事件类型进任务标签）。
    */
   private wrapHostApi(state: PluginState, epoch: number): HelmHostApi {
     const pluginId = state.definition.id;
@@ -1798,39 +2318,46 @@ export class PluginHost {
       listConversations: (filter) => backend.listConversations(filter),
       getConversation: (id) => backend.getConversation(id),
       updateConversation: (id, patch) => backend.updateConversation(id, patch),
+      abortConversation: (id) => backend.abortConversation(id),
+      spawnAgent: (request) => backend.spawnAgent(request),
+      runGate: (command, options) => backend.runGate(command, options),
+      prepareInterruptedConversations: (ids) => backend.prepareInterruptedConversations(ids),
+      cleanupWorktree: (request, signal) => backend.cleanupWorktree(request, signal),
+      invokeAction: async (pluginId, actionId, input, context) => {
+        // 契约承诺插件动作输出经宿主统一脱敏（不再依赖调用方插件自带 redactor）。
+        const raw = await this.invokeAction(pluginId, actionId, input, context);
+        const redactText = this.options.redactText;
+        return redactText ? redactJsonValue(raw, redactText) : raw;
+      },
+      listActions: () => this.listActions(),
       markConversationOwnership: (id, owner) => backend.markConversationOwnership(id, owner),
       createAsk: (spec) => backend.createAsk(spec),
       cancelAsk: (askId, reason) => backend.cancelAsk(askId, reason),
       execEnv: async (req, opts) => {
         this.assertContextUsable(state, epoch, 'host.execEnv');
-        if (!backend.execEnv) {
-          throw new HelmError('not_supported', '当前插件宿主未配置 execEnv 执行端口', 501, { pluginId });
-        }
         return this.tracker.withTask(pluginId, 'host.execEnv', () =>
-          backend.execEnv!(req, opts),
+          Promise.resolve(backend.execEnv(req, opts)),
         );
+      },
+      prepareAction: (targetPluginId, actionId, input, context) => {
+        this.assertContextUsable(state, epoch, 'host.prepareAction');
+        return this.prepareAction(targetPluginId, actionId, input, context);
       },
       onEvent: (type, listener) =>
         acquire(`host.onEvent:${type}`)(() =>
-          backend.onEvent?.(type, (payload: unknown) =>
+          backend.onEvent(type, (payload: unknown) =>
             this.tracker.withTask(pluginId, `event:${type}`, async () => {
               await listener(payload);
             }),
-          ) ?? (() => {}),
+          ),
         ),
+      // 可等待：同步分发内部监听器（含异步监听器的 await），发布方（如引擎结算）
+      // 拿到完成/失败结果，错误不再被 fire-and-forget 吞成后台 notification。
       emitEvent: (type, payload) => backend.emitEvent(type, payload),
       manageConversation: (id) =>
         acquire('host.manageConversation')(() => backend.manageConversation(id, pluginId)),
       registerAskSeqResolver: (resolver) =>
         acquire('host.registerAskSeqResolver')(() => backend.registerAskSeqResolver(resolver)),
-      onWorkflowSettled: (listener) =>
-        acquire('host.onWorkflowSettled')(() =>
-          backend.onWorkflowSettled((run: WorkflowRunSummary) =>
-            this.tracker.withTask(pluginId, `workflow-settled:${run.id}`, async () => {
-              await listener(run);
-            }),
-          ),
-        ),
     };
   }
 

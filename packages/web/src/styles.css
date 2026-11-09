@@ -3000,6 +3000,13 @@ textarea {
   padding: 2px 0 2px 17px;
 }
 
+.workflow-node-stats-extra {
+  padding: 0 8px 2px 26px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-muted);
+}
+
 .workflow-subagent-node-card {
   display: flex;
   flex-direction: column;

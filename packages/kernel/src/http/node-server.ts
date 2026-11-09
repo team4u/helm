@@ -17,7 +17,7 @@ import { createHubHandler } from './hub.js'
 import { createStaticServe } from './static.js'
 import { HelmError } from '@helm/protocol'
 import { attachNodeWsGateway, type EnvFabric, type NodeWsGateway } from '../env/index.js'
-import type { HubHandle, KernelRuntimeLike, StartHubOptions, WorkflowServiceLike } from './contracts.js'
+import type { HubHandle, KernelRuntimeLike, StartHubOptions } from './contracts.js'
 
 const DEFAULT_PORT = 3202
 const DEFAULT_HOSTNAME = '127.0.0.1'
@@ -82,8 +82,8 @@ export interface NodeHubHandle extends HubHandle {
 }
 
 export async function startHub(options: StartHubOptions): Promise<NodeHubHandle> {
-  const { kernel, workflows, webDistDir } = options
-  const handler = createHubHandler({ kernel, workflows, ...(webDistDir !== undefined ? { webDistDir } : {}) })
+  const { kernel, webDistDir } = options
+  const handler = createHubHandler({ kernel, ...(webDistDir !== undefined ? { webDistDir } : {}) })
   // 显式指定静态目录时启动即验证（fail fast）：失效目录拒启并给出结构化诊断
   //（与 handler 首请求路径同构的 web_dist_invalid），不等到首个请求才暴露
   if (typeof webDistDir === 'string') {

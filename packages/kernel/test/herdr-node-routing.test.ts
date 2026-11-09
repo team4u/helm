@@ -193,9 +193,32 @@ class FakeBackend implements PluginHostBackend {
     this.askSeqResolvers.add(resolver)
     return () => { this.askSeqResolvers.delete(resolver) }
   }
-  onWorkflowSettled(listener: (run: WorkflowRunSummary) => void | Promise<void>): () => void {
-    this.workflowListeners.add(listener)
-    return () => { this.workflowListeners.delete(listener) }
+  async abortConversation(): Promise<void> {}
+  async spawnAgent(): Promise<unknown> {
+    return {}
+  }
+  async runGate(): Promise<{ ok: boolean; output: string }> {
+    return { ok: true, output: '' }
+  }
+  async prepareInterruptedConversations(): Promise<void> {}
+  async cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
+    return { removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }
+  }
+  async invokeAction(): Promise<unknown> {
+    return {}
+  }
+  prepareAction(): { idempotent: boolean } {
+    return { idempotent: false }
+  }
+  async execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
+    throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
+  }
+  listActions(): [] {
+    return []
+  }
+  onEvent(_type: string, listener: (payload: unknown) => void | Promise<void>): () => void {
+    this.workflowListeners.add(listener as (run: WorkflowRunSummary) => void | Promise<void>)
+    return () => { this.workflowListeners.delete(listener as (run: WorkflowRunSummary) => void | Promise<void>) }
   }
   emitEvent(type: string, payload: unknown): void {
     if (type === 'notification') {
@@ -213,6 +236,8 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value))
   }
+
+  async flush(): Promise<void> {}
 }
 
 interface Env {

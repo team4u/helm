@@ -6,7 +6,7 @@ import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
 import type { ActionManifest, ArtifactMetadata, ConversationDetail, HelmEventFrame, HelmSnapshot, Profile, ProviderConfig, SkillSummary } from '@helm/protocol'
 import { ROOT_CONVERSATION_ID } from '@helm/protocol'
-import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, nodesApi, pluginsApi, setStoredToken, workflowsApi, type CredentialSummary, type ModelDescriptor, type NodeInfo } from './api.js'
+import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, nodesApi, pluginsApi, setStoredToken, type CredentialSummary, type ModelDescriptor, type NodeInfo } from './api.js'
 import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, SseParser, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
 import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.js'
@@ -165,7 +165,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     setSplitTarget(null)
     setPrimaryTarget({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
     setWorkbenchOpen(false)
-    setWorkbenchTab('tasks')
+    setWorkbenchTab('artifacts')
     // 地址栏同步复位为默认深链（replaceState 不污染历史栈）；未认证期间禁用写回，避免覆盖用户粘贴的深链。
     lastSyncedLocation.current = parseLocationHash('#/c/1')
     window.history.replaceState(null, '', '#/c/1')
@@ -187,7 +187,6 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
 
   const refreshAssets = useCallback(async () => {
     const generation = ++assetGeneration.current
-    // savedWorkflows 无任何组件消费（N1）：不再启动即拉取全仓工作流目录，避免无用网络与全树重渲染；workflowsApi.listSaved 保留供显式调用。
     const results = await Promise.allSettled([assetsApi.listProfiles(), assetsApi.listModels(), assetsApi.listProviders(), assetsApi.listCredentials(), assetsApi.listSkills(), pluginsApi.listActions()])
     if (generation !== assetGeneration.current) return
     if (results[0].status === 'fulfilled') setProfiles(results[0].value)
@@ -421,6 +420,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
             session.current++
             requests.current.clear()
             failedDocs.current.clear()
+            // 断线期间可能发生停用/升级：旧模块与在途下载不能跨快照复活。
+            resetPluginClientCache()
             setLoadErrors({})
             updateLive((state) => applySnapshot(state, payload as HelmSnapshot))
             setConversationArtifacts({})

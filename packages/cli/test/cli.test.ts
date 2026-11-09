@@ -420,40 +420,44 @@ test('动态命令抢占核心路径时核心仍执行；调用动态路径才�
   }
 })
 
-test('workflows run：文件路径映射 scriptPath、名称映射 name、--resume 与 --args', { timeout: 60_000 }, async () => {
+test('workflows inspect/abort：位置参数映射 runId（动态动作命令）', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
-  const scriptFile = path.join(dir, 'deploy.js')
-  await fsp.writeFile(scriptFile, 'export default async function(){}')
+  const manifests = [
+    {
+      pluginId: 'builtin:workflow', id: 'inspect', description: '查看单个工作流运行详情',
+      inputSchema: { type: 'object', properties: { runId: { type: 'string' } }, required: ['runId'], additionalProperties: false },
+      outputSchema: { type: 'object', properties: { run: { type: 'object' } }, required: ['run'], additionalProperties: false },
+      cli: { command: ['workflows', 'inspect'], positional: [{ field: 'runId', required: true }] },
+    },
+    {
+      pluginId: 'builtin:workflow', id: 'abort', description: '中止工作流运行',
+      inputSchema: { type: 'object', properties: { runId: { type: 'string' } }, required: ['runId'], additionalProperties: false },
+      outputSchema: { type: 'object', properties: { run: { type: 'object' } }, required: ['run'], additionalProperties: false },
+      cli: { command: ['workflows', 'abort'], positional: [{ field: 'runId', required: true }] },
+    },
+  ]
   const hub = await startHub({
-    'POST /api/workflows/run': () => ({ body: { id: 'run-1', name: 'x', conversationId: 1, status: 'running', createdAt: 0, updatedAt: 0 } }),
-    'GET /api/workflows': () => ({ body: [] }),
-    'GET /api/workflows/runs/run-1': () => ({ body: { id: 'run-1', name: 'x', conversationId: 1, status: 'completed', createdAt: 0, updatedAt: 0 } }),
-    'POST /api/workflows/runs/run-1/abort': () => ({ body: { ok: true } }),
+    'GET /api/actions': () => ({ body: manifests }),
+    'POST /api/actions/builtin%3Aworkflow/inspect': () => ({ body: { run: { id: 'run-1', status: 'completed' } } }),
+    'POST /api/actions/builtin%3Aworkflow/abort': () => ({ body: { run: { id: 'run-1', status: 'aborted' } } }),
   })
   const env = makeEnv(hub.url, dir)
   try {
-    const byFile = await run(['workflows', 'run', scriptFile, '--args', '{"k":1}', '--json'], env)
-    assert.equal(byFile.code, 0, byFile.err)
-    const fileHit = hub.recorded.hits.find((h) => h.path === '/api/workflows/run')!
-    assert.equal((fileHit.body as { scriptPath: string }).scriptPath, path.resolve(scriptFile))
-    assert.deepEqual((fileHit.body as { args: unknown }).args, { k: 1 })
-
-    const byName = await run(['workflows', 'run', 'daily-report', '--resume-from-run-id', 'run-0', '--current', '--json'], { ...env, HELM_CONVERSATION_ID: '5' })
-    assert.equal(byName.code, 0, byName.err)
-    const nameHit = hub.recorded.hits.filter((h) => h.path === '/api/workflows/run').at(-1)!
-    assert.deepEqual(nameHit.body, { name: 'daily-report', resumeFromRunId: 'run-0', conversationId: 5 })
-
-    const byAutoConv = await run(['workflows', 'run', 'daily-report', '--json'], { ...env, HELM_CONVERSATION_ID: '9' })
-    assert.equal(byAutoConv.code, 0, byAutoConv.err)
-    const autoConvHit = hub.recorded.hits.filter((h) => h.path === '/api/workflows/run').at(-1)!
-    assert.deepEqual(autoConvHit.body, { name: 'daily-report', conversationId: 9 })
-
     const inspect = await run(['workflows', 'inspect', 'run-1', '--json'], env)
     assert.equal(inspect.code, 0, inspect.err)
-    assert.equal(JSON.parse(inspect.out).status, 'completed')
+    const inspectHit = hub.recorded.hits.find((h) => h.path === '/api/actions/builtin%3Aworkflow/inspect')!
+    assert.deepEqual(inspectHit.body, { input: { runId: 'run-1' } })
+    assert.equal((JSON.parse(inspect.out) as { run: { status: string } }).run.status, 'completed')
+
+    // 必填位置参数缺失：显式 missing_positional
+    const missing = await run(['workflows', 'inspect', '--json'], env)
+    assert.equal(missing.code, 1)
+    assert.equal((JSON.parse(missing.err) as { error: { code: string } }).error.code, 'missing_positional')
 
     const abort = await run(['workflows', 'abort', 'run-1', '--json'], env)
     assert.equal(abort.code, 0, abort.err)
+    const abortHit = hub.recorded.hits.find((h) => h.path === '/api/actions/builtin%3Aworkflow/abort')!
+    assert.deepEqual(abortHit.body, { input: { runId: 'run-1' } })
   } finally {
     await hub.close()
   }

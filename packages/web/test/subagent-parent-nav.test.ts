@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import * as React from 'react'
+import { renderToString } from 'react-dom/server'
+import { makeTestStore, TestStoreProvider } from './helpers/store.js'
+import { importWorkflowClientModule, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
 
 const iconsSource = readFileSync(new URL('../src/lib/icons.tsx', import.meta.url), 'utf8')
 const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
 const workbenchSource = readFileSync(new URL('../src/conversation/WorkbenchDrawer.tsx', import.meta.url), 'utf8')
-const liveCardSource = readFileSync(new URL('../src/conversation/SubagentLiveCard.tsx', import.meta.url), 'utf8')
+mountSharedPluginNamespaces({ realHooks: true })
 const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
 
@@ -61,50 +65,20 @@ test('ConversationPane.tsx 在存在 parentConversationId 时渲染父级回退�
   )
 })
 
-test('WorkbenchDrawer.tsx 与 SubagentLiveCard.tsx 移除并排按钮，统一由抽屉模态承载', { timeout: 60_000 }, () => {
-  // WorkbenchDrawer 复用 SubagentLiveCard 渲染独立子会话（不再自建文字行）
-  assert.match(
-    workbenchSource,
-    /<SubagentLiveCard/,
-    'WorkbenchDrawer 独立子会话必须复用 SubagentLiveCard 渲染',
-  )
-  assert.doesNotMatch(
-    workbenchSource,
-    /className=["'][^"']*workbench-split-btn[^"']*["']/,
-    'WorkbenchDrawer 不得再自建携带 workbench-split-btn 的并排按钮（统一复用 SubagentLiveCard）',
-  )
-
-  // SubagentLiveCard 移除并排查看，统一由抽屉承载
-  assert.doesNotMatch(
-    liveCardSource,
-    /并排查看/,
-    'SubagentLiveCard 不得再渲染并排查看按钮',
-  )
+test('宿主工作台仅挂载通用面板；真实编译子代理卡统一由抽屉承载且无并排按钮', { timeout: 60_000 }, async () => {
+  assert.match(workbenchSource, /<PluginUiView/)
+  assert.doesNotMatch(workbenchSource, /SubagentLiveCard|workflowRuns/)
+  const mod = await importWorkflowClientModule()
+  const Card = mod.SubagentLiveCard as React.ComponentType<Record<string, unknown>>
+  const html = renderToString(React.createElement(TestStoreProvider, { value: makeTestStore() },
+    React.createElement(Card, { childConversationId: 11, toolStatus: 'done' })))
+  assert.match(html, /subagent-card-clickable/)
+  assert.match(html, /打开子会话 #11 抽屉/)
+  assert.doesNotMatch(html, /并排查看|subagent-split-btn|workbench-split-btn/)
 })
 
-test('responsive.css 在 860px 窄屏媒体查询中收敛工作台与时间线卡片的并排按钮', { timeout: 60_000 }, () => {
-  const media860 = responsiveCss.slice(responsiveCss.indexOf('@media (max-width: 860px)'))
-
-  assert.match(
-    media860,
-    /\.workbench-split-btn/,
-    '@media (max-width: 860px) 必须包含 .workbench-split-btn 选择器',
-  )
-  assert.match(
-    media860,
-    /\.subagent-split-btn/,
-    '@media (max-width: 860px) 必须包含 .subagent-split-btn 选择器',
-  )
-  assert.match(
-    media860,
-    /\.workbench-split-btn[\s\S]*?display:\s*none\s*!important/,
-    '窄屏下必须隐藏 .workbench-split-btn',
-  )
-  assert.match(
-    media860,
-    /\.subagent-split-btn[\s\S]*?display:\s*none\s*!important/,
-    '窄屏下必须隐藏 .subagent-split-btn',
-  )
+test('响应式样式不保留已删除的工作台/子代理并排按钮选择器', { timeout: 60_000 }, () => {
+  assert.doesNotMatch(responsiveCss, /\.workbench-split-btn|\.subagent-split-btn/)
 })
 
 test('styles.css 与 responsive.css 规范父会话胶囊按钮排版与窄屏微调', { timeout: 60_000 }, () => {

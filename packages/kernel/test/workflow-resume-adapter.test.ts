@@ -33,7 +33,7 @@ import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AgentSpawnRequest } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/service.js'
+import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/builtin-plugins/workflow/engine/service.js'
 
 const timeout = { timeout: 60_000 } as const
 
