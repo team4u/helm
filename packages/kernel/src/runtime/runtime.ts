@@ -91,7 +91,7 @@ import { AskService } from './asks.js'
 import { ConversationTracker, deriveTitle } from './conversations.js'
 import { EventHub } from './events.js'
 import { createFileModelsStore } from './models-store.js'
-import { buildModels, listModelCatalog, listModelProviders, requireModelRef } from './models.js'
+import { buildModels, listModelCatalog, listModelProviders, parseModelRef, requireModelRef } from './models.js'
 import type { ModelCatalog } from '@helm/protocol'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import type { Models, Provider } from '@earendil-works/pi-ai/models'
@@ -108,6 +108,7 @@ import { gateResultMissingError, sanitizeExecutionInfo, sanitizeGateResult } fro
 import { HelmPluginConfigStore } from './plugin-config-store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import { redactJsonValue } from '../redact.js'
+import { parseAiSnapshotAnalysisText, type BlockedSnapshotAnalysis } from '../builtin-plugins/herdr/prompt-options.js'
 
 // ---------------------------------------------------------------------------
 // 版本语义（严格 SemVer，无依赖小实现；不依赖 @helm/node 引擎）
@@ -2613,6 +2614,74 @@ export class KernelRuntime {
       throw new HelmError('validation_error', `模型引用格式应为 'provider/model'：${ref}`)
     }
     return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
+  }
+
+  /** AI 阻塞快照解析的 systemPrompt（严格 JSON + Herdr 按键白名单约束）。 */
+  private static readonly BLOCKED_SNAPSHOT_SYSTEM_PROMPT = [
+    '你是终端审批辅助器。用户会给你一段终端阻塞快照（可能含敏感信息，已脱敏）。',
+    '请识别终端正在等待什么确认，并提取可发送的按键选项。',
+    '只输出严格 JSON，不要任何解释或 Markdown 围栏外文本，格式：',
+    '{"summary":"一句话中文说明终端在等待什么确认","options":[{"label":"选项中文说明","keys":["按键"]}]}',
+    '约束：',
+    '- keys 中每个元素必须是合法的 Herdr 按键名：命名键（enter, esc, tab, shift+tab, up, down, left, right, space, backspace）或单个按键字符（如 y, n, a, o, d, 1, 2）；',
+    '- 禁止输出 "yes" / "confirm" 等多字母单词；无法识别时 options 给空数组。',
+  ].join('\n')
+
+  /**
+   * 辅助解析 Herdr 终端阻塞快照（仅在正则未识别出菜单时由 builtin:herdr 调用）：
+   * 使用当前会话生效模型执行单次轻量 JSON 提取（默认 3000ms 超时）；
+   * 未配置模型、凭据缺失、网络超时或输出非法时一律返回 undefined 回退确定性选项，
+   * 绝不阻塞 createAsk 审批主流程。
+   */
+  async analyzeHerdrBlockedSnapshot(input: {
+    snapshot: string
+    conversationId: number
+    signal?: AbortSignal
+    timeoutMs?: number
+  }): Promise<BlockedSnapshotAnalysis | undefined> {
+    const timeoutMs = input.timeoutMs ?? 3_000
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    const onOuterAbort = () => controller.abort()
+    input.signal?.addEventListener('abort', onOuterAbort, { once: true })
+    try {
+      // 会话生效模型：覆盖 > Profile.model > 全局；任何解析失败回退全局默认。
+      const meta = this.store.getConv(input.conversationId)
+      const resolved = meta
+        ? await this.resolveEffectiveModel(meta.modelOverride, meta.profileId).catch(() => undefined)
+        : undefined
+      const modelRef = resolved || this.defaultModel
+      if (modelRef === undefined || modelRef === '') return undefined
+      let ref: { provider: string; modelId: string }
+      try {
+        ref = parseModelRef(modelRef)
+      } catch {
+        return undefined
+      }
+      const model = this.modelsCurrent.getModel(ref.provider, ref.modelId)
+      if (model === undefined) return undefined
+      const message = await this.modelsCurrent.completeSimple(model, {
+        systemPrompt: KernelRuntime.BLOCKED_SNAPSHOT_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: 'user',
+            content: this.stash.redact(input.snapshot).slice(-1500),
+            timestamp: Date.now(),
+          },
+        ],
+      }, { signal: controller.signal })
+      const text = message.content
+        .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
+        .map((part) => part.text)
+        .join('')
+      return parseAiSnapshotAnalysisText(text)
+    } catch (error) {
+      if (input.signal?.aborted) throw error
+      return undefined
+    } finally {
+      clearTimeout(timer)
+      input.signal?.removeEventListener('abort', onOuterAbort)
+    }
   }
 
   /** Profile 读取失败与不存在分开报告，避免损坏文件被当成缺少模型配置。 */

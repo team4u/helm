@@ -39,7 +39,7 @@ import {
 } from '@helm/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
-import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
+import type { HerdrEvent, HerdrPluginDependencies, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
 
 // ---------------------------------------------------------------------------
 // 受控 HerdrTransport
@@ -422,7 +422,7 @@ interface Env {
   close(): Promise<void>
 }
 
-async function makeEnv(options: { enabled?: boolean; docs?: MemoryDocStore; dataDir?: string; transport?: FakeTransport; backend?: FakeBackend } = {}): Promise<Env> {
+async function makeEnv(options: { enabled?: boolean; docs?: MemoryDocStore; dataDir?: string; transport?: FakeTransport; backend?: FakeBackend; analyzeBlockedSnapshot?: HerdrPluginDependencies['analyzeBlockedSnapshot'] } = {}): Promise<Env> {
   const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'helm-herdr-test-'))
   const backend = options.backend ?? new FakeBackend()
   const docs = options.docs ?? new MemoryDocStore()
@@ -447,6 +447,7 @@ async function makeEnv(options: { enabled?: boolean; docs?: MemoryDocStore; data
         gateLog.push({ command, cwd: opts.cwd, env: opts.env })
         return { ok: true, output: 'local gate ok' }
       },
+      ...(options.analyzeBlockedSnapshot !== undefined ? { analyzeBlockedSnapshot: options.analyzeBlockedSnapshot } : {}),
       transport,
     }),
     { enabled: options.enabled ?? true },
@@ -1320,5 +1321,163 @@ test('单测B: 按键未生效时闭环复核——自动重开 AskDoc 且带未
     assert.equal(env.backend.createdAsks.length, 2, '整个闭环恰好两次 AskDoc')
   } finally {
     await env.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 混合快慢路径：AI 快照解析辅助层
+// ---------------------------------------------------------------------------
+
+/** 非标快捷键提示快照（正则无法识别为标准菜单）。 */
+const NONSTANDARD_HINT_SNAPSHOT = [
+  'Tool bash requires confirmation',
+  'Press (o)nce, (a)lways allow, or (d)eny',
+].join('\n')
+
+test('单测C: 按键白名单与 AI JSON 清洗纯函数验证', { timeout: 60_000 }, async () => {
+  const { isValidHerdrLogicalKey, parseAiSnapshotAnalysisText } = await import('../src/builtin-plugins/herdr/prompt-options.js')
+
+  // 白名单：合法按键。
+  for (const key of ['enter', 'down', 'shift+tab', 'ctrl+c', 'f1', 'a', '1']) {
+    assert.equal(isValidHerdrLogicalKey(key), true, `合法按键 ${key}`)
+  }
+  // 白名单：非法按键（多字母单词 / 空串 / 带空格）。
+  for (const key of ['', 'yes', 'allow', 'enter key']) {
+    assert.equal(isValidHerdrLogicalKey(key), false, `非法按键 "${key}"`)
+  }
+
+  // JSON 提取：```json 围栏 + 脏选项剔除。
+  const fenced = '```json\n{"summary":"等待 bash 执行确认","options":[{"label":"仅本次允许","keys":["o"]},{"label":"总是允许","keys":["yes"]},{"label":"移到下一项后确认","keys":["right","enter"]}]}\n```'
+  const parsed = parseAiSnapshotAnalysisText(fenced)!
+  assert.ok(parsed !== undefined, '围栏 JSON 可解析')
+  assert.equal(parsed.summary, '等待 bash 执行确认')
+  assert.deepEqual(
+    parsed.options.map((o) => o.keys),
+    [['o'], ['right', 'enter']],
+    '含非法按键 ["yes"] 的脏选项被剔除，合法选项保留',
+  )
+
+  // JSON 提取：无围栏裸 JSON（截取首 { 到末 }）。
+  const bare = parseAiSnapshotAnalysisText('好的，解析结果如下 {"summary":"等待确认","options":[{"label":"允许","keys":["a"]}]} 以上。')
+  assert.ok(bare !== undefined)
+  assert.deepEqual(bare.options, [{ label: '允许', keys: ['a'] }])
+
+  // 解析失败：非 JSON 文本 / 非法 JSON / 全部选项被剔除且无摘要。
+  assert.equal(parseAiSnapshotAnalysisText('模型拒绝回答'), undefined)
+  assert.equal(parseAiSnapshotAnalysisText('{"broken": '), undefined)
+  assert.equal(parseAiSnapshotAnalysisText('{"options":[{"label":"x","keys":["yes"]}]}'), undefined)
+})
+
+test('单测D-1: 正则命中标准菜单时不调 AI（0ms 快路径优先）', { timeout: 60_000 }, async () => {
+  let aiCalls = 0
+  const env = await makeEnv({
+    analyzeBlockedSnapshot: async () => {
+      aiCalls += 1
+      return { summary: '不应被调用', options: [{ label: '幻觉选项', keys: ['z'] }] }
+    },
+  })
+  try {
+    env.transport.promptStatus = 'blocked'
+    env.transport.snapshotText = AGY_TRUST_SNAPSHOT
+    const resultPromise = spawnDirect(env, { agentType: 'herdr:agy' })
+    await waitFor(() => env.backend.createdAsks.length === 1)
+    await delay(200)
+    assert.equal(aiCalls, 0, '正则命中时不调 AI（省 Token）')
+    const ask = env.backend.createdAsks[0]!
+    const options = ((ask['fields'] as Array<{ name: string; options?: Array<{ label: string; value: string }> }>)[0]!.options)!
+    assert.equal(options[0]!.value, 'allow-enter', '仍是快路径菜单选项')
+    assert.ok(!options.some((o) => o.value.startsWith('ai-')), '无 AI 选项注入')
+    // 收尾。
+    const askId = ask['id'] as string
+    const pane = [...env.transport.panes.values()][0]!
+    env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-enter' } })
+    await waitFor(() => env.transport.sendKeysLog.length === 1)
+    const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
+    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'fast-path')
+    env.transport.consumeKeys(pane.paneId, 'done')
+    assert.equal(await resultPromise, 'fast-path')
+    assert.equal(aiCalls, 0, '全程零 AI 调用')
+  } finally {
+    await env.close()
+  }
+})
+
+test('单测D-2: 非标快照时调 AI 生成选项并正确发键', { timeout: 60_000 }, async () => {
+  const env = await makeEnv({
+    analyzeBlockedSnapshot: async () => ({
+      summary: '终端等待 bash 工具执行确认',
+      options: [
+        { label: '仅本次允许 (once)', keys: ['o'] },
+        { label: '总是允许 (always)', keys: ['a'] },
+        { label: '拒绝 (deny)', keys: ['d'] },
+      ],
+    }),
+  })
+  try {
+    env.transport.promptStatus = 'blocked'
+    env.transport.snapshotText = NONSTANDARD_HINT_SNAPSHOT
+    const resultPromise = spawnDirect(env, { agentType: 'herdr:agy' })
+    await waitFor(() => env.backend.createdAsks.length === 1)
+    const ask = env.backend.createdAsks[0]!
+    const description = ask['description'] as string
+    assert.ok(description.includes('阻塞摘要：终端等待 bash 工具执行确认'), 'description 含阻塞摘要')
+    const options = ((ask['fields'] as Array<{ name: string; options?: Array<{ label: string; value: string }> }>)[0]!.options)!
+    assert.equal(options[0]!.value, 'allow-enter', '首项补允许 enter')
+    const ai0 = options.find((o) => o.value === 'ai-0')!
+    const ai1 = options.find((o) => o.value === 'ai-1')!
+    const ai2 = options.find((o) => o.value === 'ai-2')!
+    assert.ok(ai0 && ai0.label.includes('仅本次允许') && ai0.label.includes('发送 o'), 'ai-0 标注按键')
+    assert.ok(ai1 && ai1.label.includes('总是允许'))
+    assert.ok(ai2 && ai2.label.includes('拒绝'))
+    // 人类选择 ai-1（总是允许）-> 发送 ['a']。
+    const askId = ask['id'] as string
+    const pane = [...env.transport.panes.values()][0]!
+    env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'ai-1' } })
+    await waitFor(() => env.transport.sendKeysLog.length === 1)
+    assert.deepEqual(env.transport.sendKeysLog[0]!.keys, ['a'], 'ai-1 准确发送 [a]')
+    const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
+    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'ai-allowed')
+    env.transport.consumeKeys(pane.paneId, 'done')
+    assert.equal(await resultPromise, 'ai-allowed')
+  } finally {
+    await env.close()
+  }
+})
+
+test('单测D-3: AI 抛错或返回 undefined 时无感回退通用选项', { timeout: 60_000 }, async () => {
+  for (const behavior of ['throw', 'undefined'] as const) {
+    const env = await makeEnv({
+      analyzeBlockedSnapshot: async () => {
+        if (behavior === 'throw') throw new Error('model timeout')
+        return undefined
+      },
+    })
+    try {
+      env.transport.promptStatus = 'blocked'
+      env.transport.snapshotText = NONSTANDARD_HINT_SNAPSHOT
+      const resultPromise = spawnDirect(env, { agentType: 'herdr:agy' })
+      await waitFor(() => env.backend.createdAsks.length === 1)
+      const ask = env.backend.createdAsks[0]!
+      const options = ((ask['fields'] as Array<{ name: string; options?: Array<{ label: string; value: string }> }>)[0]!.options)!
+      const values = options.map((o) => o.value)
+      assert.deepEqual(
+        values,
+        ['allow-enter', 'allow-y', 'deny-n', 'send-esc', 'custom'],
+        `${behavior} 时平稳回退默认选项`,
+      )
+      assert.ok(!(ask['description'] as string).includes('阻塞摘要'), '无 AI 摘要')
+      // 收尾：回答 deny-n -> 发送 ['n']。
+      const askId = ask['id'] as string
+      const pane = [...env.transport.panes.values()][0]!
+      env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'deny-n' } })
+      await waitFor(() => env.transport.sendKeysLog.length === 1)
+      assert.deepEqual(env.transport.sendKeysLog[0]!.keys, ['n'])
+      const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
+      env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'fallback')
+      env.transport.consumeKeys(pane.paneId, 'done')
+      assert.equal(await resultPromise, 'fallback')
+    } finally {
+      await env.close()
+    }
   }
 })

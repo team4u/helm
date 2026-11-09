@@ -80,6 +80,7 @@ export async function createHelm(options: HelmOptions = {}) {
       profiles: kernel.profiles,
       buildSpawnEnv: (id, cwd, nodeId) => kernel.buildSpawnEnv(id, cwd, nodeId),
       nodeChannel: createHerdrNodeChannel(kernel.envFabric),
+      analyzeBlockedSnapshot: (input) => kernel.analyzeHerdrBlockedSnapshot(input),
       redact: (text) => kernel.stash.redact(text),
       runLocalGate: (command, context) => kernel.runGate(command, { ...context, nodeId: 'local' }),
       getArtifact: (id, conversationId) => kernel.resolveAuthorizedAttachment(conversationId, id),

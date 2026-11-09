@@ -12,6 +12,20 @@
 
 import type { AskFieldOption } from '@helm/protocol'
 
+export interface BlockedSnapshotAiOption {
+  /** 人类可读的选项说明（如 "允许本次执行 (once)"）。 */
+  label: string
+  /** 选中该项需发送的 Herdr logical keys 序列（如 ['o'] 或 ['right', 'enter']）。 */
+  keys: string[]
+}
+
+export interface BlockedSnapshotAnalysis {
+  /** 一句话中文摘要：终端当前在等待什么确认（可选）。 */
+  summary?: string
+  /** AI 识别出的交互选项列表。 */
+  options: BlockedSnapshotAiOption[]
+}
+
 export interface ExtractedMenuItem {
   /** 菜单项展示文案（去除游标符号后）。 */
   label: string
@@ -28,6 +42,10 @@ export interface HerdrAskPromptPlan {
   decisionKeys: ReadonlyMap<string, string[]>
   /** 提取到的菜单项（无菜单时为空数组）。 */
   menuItems: ExtractedMenuItem[]
+  /** AI 解析摘要（仅正则未命中且模型返回有效摘要时存在）。 */
+  summary?: string
+  /** AI 识别的候选按键选项（仅正则未命中时可能非空）。 */
+  aiOptions: BlockedSnapshotAnalysis['options']
 }
 
 /** 游标指示符（CLI TUI 常见集合）。 */
@@ -208,18 +226,23 @@ function extractCursorBlock(body: string[]): ExtractedMenuItem[] {
 }
 
 /**
- * 构建 AskDoc 的 select options 与按键映射：
- * - 有菜单：当前高亮项固定 value 'allow-enter'（发送 enter），其余项
- *   `menu-<idx>`（发送 up/down 序列 + enter）；
- * - 无菜单：首项 'allow-enter'（确认当前高亮选项）；
+ * 构建 AskDoc 的 select options 与按键映射（混合快慢路径）：
+ * - 快路径（正则命中菜单，>= 2 项）：不调 AI，当前高亮项固定 value
+ *   'allow-enter'（发送 enter），其余项 `menu-<idx>`（发送 up/down 序列 + enter）；
+ * - 慢路径（正则未命中且传入有效 AI 解析）：注入 `ai-<idx>` 选项（发送模型
+ *   识别的按键序列），首个恰为 ['enter'] 的选项复用 'allow-enter' value；
+ * - 无菜单无 AI：首项 'allow-enter'（确认当前高亮选项）；
  * - 恒追加通用选项 allow-y / deny-n / send-esc / custom（任何场景可选）；
  * - 兼容别名 send-y / send-n。
  */
-export function buildHerdrAskPromptPlan(snapshot: string): HerdrAskPromptPlan {
+export function buildHerdrAskPromptPlan(snapshot: string, aiAnalysis?: BlockedSnapshotAnalysis): HerdrAskPromptPlan {
   const menuItems = extractMenuItemsFromSnapshot(snapshot)
   const options: AskFieldOption[] = []
   const decisionKeys = new Map<string, string[]>()
+  let summary: string | undefined
+  let aiOptionsKept: BlockedSnapshotAnalysis['options'] = []
   if (menuItems.length >= 2) {
+    // 快路径：正则已命中标准菜单，忽略 AI 解析（0ms、零 Token）。
     for (const item of menuItems) {
       if (item.selected) {
         options.push({ label: `确认当前高亮项：${item.label}（发送 enter）`, value: 'allow-enter' })
@@ -234,8 +257,31 @@ export function buildHerdrAskPromptPlan(snapshot: string): HerdrAskPromptPlan {
       decisionKeys.set(value, item.keys)
     }
   } else {
-    options.push({ label: '允许（发送 enter，确认当前高亮选项）', value: 'allow-enter' })
-    decisionKeys.set('allow-enter', ['enter'])
+    // 慢路径：仅当模型返回经过白名单清洗的有效解析时注入 AI 选项。
+    const sanitized = sanitizeBlockedSnapshotAnalysis(aiAnalysis)
+    summary = sanitized?.summary
+    aiOptionsKept = sanitized?.options ?? []
+    if (sanitized !== undefined && sanitized.options.length > 0) {
+      for (let idx = 0; idx < sanitized.options.length; idx += 1) {
+        const opt = sanitized.options[idx]!
+        // 恰为 ['enter'] 的首个选项复用 'allow-enter'（语义与快路径一致）。
+        if (opt.keys.length === 1 && opt.keys[0] === 'enter' && !decisionKeys.has('allow-enter')) {
+          options.push({ label: `AI 识别：${opt.label}（发送 enter）`, value: 'allow-enter' })
+          decisionKeys.set('allow-enter', ['enter'])
+          continue
+        }
+        const value = `ai-${idx}`
+        options.push({ label: `AI 识别：${opt.label}（发送 ${opt.keys.join(' + ')}）`, value })
+        decisionKeys.set(value, opt.keys)
+      }
+      if (!decisionKeys.has('allow-enter')) {
+        options.unshift({ label: '允许（发送 enter，确认当前高亮选项）', value: 'allow-enter' })
+        decisionKeys.set('allow-enter', ['enter'])
+      }
+    } else {
+      options.push({ label: '允许（发送 enter，确认当前高亮选项）', value: 'allow-enter' })
+      decisionKeys.set('allow-enter', ['enter'])
+    }
   }
   options.push({ label: '发送 y（适用于 y/n 确认提问）', value: 'allow-y' })
   options.push({ label: '发送 n（适用于 y/n 拒绝提问）', value: 'deny-n' })
@@ -247,7 +293,13 @@ export function buildHerdrAskPromptPlan(snapshot: string): HerdrAskPromptPlan {
   // 兼容别名（历史客户端可能提交的 value）。
   decisionKeys.set('send-y', ['y'])
   decisionKeys.set('send-n', ['n'])
-  return { options, decisionKeys, menuItems }
+  return {
+    options,
+    decisionKeys,
+    menuItems,
+    ...(summary !== undefined ? { summary } : {}),
+    aiOptions: aiOptionsKept,
+  }
 }
 
 /** 解析用户填写的自定义按键序列：按逗号或空白切分，去除空串。 */
@@ -257,4 +309,133 @@ export function parseCustomKeys(raw: string): string[] {
     .split(/[\s,]+/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
+}
+
+// ---------------------------------------------------------------------------
+// AI 快照解析辅助层（仅正则未命中标准菜单时调用）
+// ---------------------------------------------------------------------------
+
+/** Herdr 服务端 parse_key_combo 支持的命名功能键（小写比较）。 */
+const NAMED_LOGICAL_KEYS = new Set([
+  'enter',
+  'return',
+  'esc',
+  'escape',
+  'tab',
+  'shift+tab',
+  'space',
+  'backspace',
+  'bs',
+  'up',
+  'down',
+  'left',
+  'right',
+  'plus',
+  'minus',
+  'comma',
+  'period',
+  'slash',
+  'backslash',
+  'quote',
+  'double_quote',
+  'double-quote',
+  'semicolon',
+  'colon',
+  'percent',
+  'ampersand',
+  'backtick',
+])
+
+/** F1 ~ F12。 */
+const FUNCTION_KEY = /^[fF](?:[1-9]|1[0-2])$/
+/** ctrl/alt + 单字母数字。 */
+const MODIFIER_COMBO = /^(?:ctrl|alt)\+[a-z0-9]$/i
+/** 单个可见 ASCII 字符（0x21..0x7e）。 */
+const SINGLE_VISIBLE_ASCII = /^[!-\x7e]$/
+
+/**
+ * Herdr logical key 白名单校验：防止模型幻觉输出 "yes" / "confirm" 等
+ * 多字符单词（对齐服务端 parse_key_combo 支持的按键名）。
+ */
+export function isValidHerdrLogicalKey(key: string): boolean {
+  const trimmed = key.trim()
+  if (trimmed === '') return false
+  if (NAMED_LOGICAL_KEYS.has(trimmed.toLowerCase())) return true
+  if (FUNCTION_KEY.test(trimmed)) return true
+  if (MODIFIER_COMBO.test(trimmed)) return true
+  if (SINGLE_VISIBLE_ASCII.test(trimmed)) return true
+  return false
+}
+
+/** AI 选项数量与每项按键序列长度上限。 */
+const MAX_AI_OPTIONS = 6
+const MAX_AI_OPTION_KEYS = 6
+
+/** 键归一化：命名键（长度 > 1）转小写，单字符键保留原样。 */
+function normalizeAiKey(key: string): string {
+  const trimmed = key.trim()
+  return trimmed.length > 1 ? trimmed.toLowerCase() : trimmed
+}
+
+/**
+ * 校验并清洗模型输出的 BlockedSnapshotAnalysis：
+ * - label 非空截 80 字符；keys 需 1..6 个且全部命中白名单；
+ * - 命名键归一化小写；按按键序列去重；最多保留 6 项；
+ * - 无有效选项且无摘要时返回 undefined（调用方回退通用选项）。
+ */
+export function sanitizeBlockedSnapshotAnalysis(raw: unknown): BlockedSnapshotAnalysis | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const record = raw as { summary?: unknown; options?: unknown }
+  const summary =
+    typeof record.summary === 'string' && record.summary.trim().length > 0
+      ? record.summary.trim().slice(0, 200)
+      : undefined
+  const options: BlockedSnapshotAiOption[] = []
+  const seenKeySeqs = new Set<string>()
+  if (Array.isArray(record.options)) {
+    for (const candidate of record.options) {
+      if (options.length >= MAX_AI_OPTIONS) break
+      if (typeof candidate !== 'object' || candidate === null) continue
+      const opt = candidate as { label?: unknown; keys?: unknown }
+      if (typeof opt.label !== 'string' || opt.label.trim().length === 0) continue
+      if (!Array.isArray(opt.keys) || opt.keys.length === 0 || opt.keys.length > MAX_AI_OPTION_KEYS) continue
+      const keys: string[] = []
+      let allValid = true
+      for (const k of opt.keys) {
+        if (typeof k !== 'string' || !isValidHerdrLogicalKey(k)) {
+          allValid = false
+          break
+        }
+        keys.push(normalizeAiKey(k))
+      }
+      if (!allValid) continue
+      const seqKey = keys.join('+')
+      if (seenKeySeqs.has(seqKey)) continue
+      seenKeySeqs.add(seqKey)
+      options.push({ label: opt.label.trim().slice(0, 80), keys })
+    }
+  }
+  if (options.length === 0 && summary === undefined) return undefined
+  return { ...(summary !== undefined ? { summary } : {}), options }
+}
+
+/** 从模型回复中截取 JSON 子串：优先 ```json 围栏，否则取首个 { 到最后一个 }。 */
+function extractJsonSubstring(text: string): string | undefined {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text)
+  if (fenced !== null) return fenced[1]
+  const first = text.indexOf('{')
+  const last = text.lastIndexOf('}')
+  if (first < 0 || last <= first) return undefined
+  return text.slice(first, last + 1)
+}
+
+/** 解析模型回复文本为 BlockedSnapshotAnalysis；任何失败返回 undefined。 */
+export function parseAiSnapshotAnalysisText(text: string): BlockedSnapshotAnalysis | undefined {
+  const jsonText = extractJsonSubstring(text)
+  if (jsonText === undefined) return undefined
+  try {
+    return sanitizeBlockedSnapshotAnalysis(JSON.parse(jsonText))
+  } catch {
+    return undefined
+  }
 }
