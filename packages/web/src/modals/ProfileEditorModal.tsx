@@ -6,6 +6,7 @@ import { useHelmStore } from '../lib/store-context.js'
 import { collectEnabledPluginIds, isProfileVisible } from '../shell/sidebar-model.js'
 import { Select, type SelectOption } from '../ui/Select.js'
 import { Switch } from '../ui/Switch.js'
+import { Tabs, TabsList, TabsTrigger } from '../ui/Tabs.js'
 import { nodeOptionLabel } from './nodes-modal-model.js'
 import {
   argsTextToArgs,
@@ -747,18 +748,19 @@ export function ProfileEditorModal({
             />
           </div>
           <div className="asset-modal-main">
-            <div className="tabs-bar">
-              {tabItems.map((t) => (
-                <button
-                  key={t.key}
-                  className={`tab-btn${tab === t.key ? ' tab-btn-active' : ''}`}
-                  aria-pressed={tab === t.key}
-                  onClick={() => setTab(t.key)}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
+            <Tabs value={tab} onValueChange={(val) => setTab(val as EditorTab)} variant="underline">
+              <TabsList className="tabs-bar" aria-label="Profile 配置选项卡">
+                {tabItems.map((t) => (
+                  <TabsTrigger
+                    key={t.key}
+                    value={t.key}
+                    className={`tab-btn${tab === t.key ? ' tab-btn-active' : ''}`}
+                  >
+                    {t.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
             <div className="profile-tab-content">
               {error && (
                 <div className="jr-callout jr-callout-err" role="alert">

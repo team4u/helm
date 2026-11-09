@@ -2347,9 +2347,15 @@ textarea {
 .tab-btn:hover {
   color: var(--fg);
 }
-.tab-btn-active {
+.tab-btn-active,
+.tab-btn[data-state='active'] {
   color: var(--fg);
   border-bottom-color: var(--fg);
+}
+.tab-btn:disabled,
+.tab-btn[data-disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* ==========================================================================
@@ -2686,6 +2692,9 @@ textarea {
 }
 
 /* 分段控制器原语 */
+.helm-tabs-segmented {
+  display: inline-flex;
+}
 .segmented-control {
   display: inline-flex;
   align-items: center;
@@ -2717,12 +2726,14 @@ textarea {
   background: var(--bg-hover);
 }
 .segmented-control-btn.is-active,
-.segmented-control-btn[aria-pressed='true'] {
+.segmented-control-btn[aria-pressed='true'],
+.segmented-control-btn[data-state='active'] {
   background: var(--bg-elevated);
   color: var(--fg);
   box-shadow: var(--shadow-sm);
 }
-.segmented-control-btn:disabled {
+.segmented-control-btn:disabled,
+.segmented-control-btn[data-disabled] {
   opacity: 0.45;
   cursor: not-allowed;
 }
