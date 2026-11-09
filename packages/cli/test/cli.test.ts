@@ -443,6 +443,11 @@ test('workflows run：文件路径映射 scriptPath、名称映射 name、--resu
     const nameHit = hub.recorded.hits.filter((h) => h.path === '/api/workflows/run').at(-1)!
     assert.deepEqual(nameHit.body, { name: 'daily-report', resumeFromRunId: 'run-0', conversationId: 5 })
 
+    const byAutoConv = await run(['workflows', 'run', 'daily-report', '--json'], { ...env, HELM_CONVERSATION_ID: '9' })
+    assert.equal(byAutoConv.code, 0, byAutoConv.err)
+    const autoConvHit = hub.recorded.hits.filter((h) => h.path === '/api/workflows/run').at(-1)!
+    assert.deepEqual(autoConvHit.body, { name: 'daily-report', conversationId: 9 })
+
     const inspect = await run(['workflows', 'inspect', 'run-1', '--json'], env)
     assert.equal(inspect.code, 0, inspect.err)
     assert.equal(JSON.parse(inspect.out).status, 'completed')

@@ -382,6 +382,9 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       const text = toolResultText(detail, 'SubagentWorkflow')
       const runId = extractRunId(text)
       assert.ok(runId, `工具输出应含 runId：${text.slice(0, 300)}`)
+      const parsedSummary = JSON.parse(text) as { status: string; result?: unknown }
+      assert.equal(parsedSummary.status, 'completed', 'SubagentWorkflow 工具应等待终态返回')
+      assert.deepEqual(parsedSummary.result, [2, 4, 6], '工具输出直接携带终态 result')
       const result = (await app.workflows.wait(runId)) as unknown
       assert.deepEqual(result, [2, 4, 6], 'args.items.map 真实计算——args 为对象而非字符串')
 

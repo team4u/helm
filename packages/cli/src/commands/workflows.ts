@@ -67,6 +67,11 @@ export function workflowsCommands(): CommandSpec[] {
       if (resume !== undefined) body.resumeFromRunId = resume
       if (parsed.flags.get('current') === true) {
         body.conversationId = resolveConversationTarget(parsed.flags, undefined, ctx.env)
+      } else {
+        const envConv = ctx.env.HELM_CONVERSATION_ID?.trim()
+        if (envConv !== undefined && /^\d+$/.test(envConv) && Number(envConv) >= 1) {
+          body.conversationId = Number(envConv)
+        }
       }
       const wait = parsed.flags.get('wait') === true
       const hub = await ctx.hub()

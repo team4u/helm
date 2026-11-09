@@ -59,9 +59,19 @@ export async function createHelm(options: HelmOptions = {}) {
       parentToolCallId: request.parentToolCallId,
       notifyParentOnSettle: true,
     }));
-    kernel.setWorkflowRunner(async (request, conversationId, signal, context) =>
-      workflows.run({ ...request, conversationId }, context),
-    );
+    kernel.setWorkflowRunner(async (request, conversationId, signal, context) => {
+      const started = await workflows.run({ ...request, conversationId }, context);
+      const onAbort = () => {
+        void workflows.abort(started.id).catch(() => {});
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      try {
+        await workflows.wait(started.id).catch(() => {});
+        return workflows.getRun(started.id);
+      } finally {
+        signal?.removeEventListener('abort', onAbort);
+      }
+    });
     // 任何插件 start 都可能提交输入而唤醒全局调度；先将遗留子任务持久标记取消。
     await workflows.prepareRecovery();
     await kernel.plugins.register(createAssistantPlugin(kernel));
