@@ -1333,6 +1333,15 @@ textarea {
   border-radius: var(--radius-xs);
 }
 
+/* 紧凑小按钮：胶囊卡头部 / 工作台窄列内联动作 */
+.btn-xs {
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
+  gap: 4px;
+  border-radius: var(--radius-xs);
+}
+
 .btn-pill {
   border-radius: var(--radius-pill);
 }
@@ -1961,6 +1970,7 @@ textarea {
 }
 
 .subagent-live-card {
+  container: subagent-card / inline-size;
   margin: 2px 0 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1977,15 +1987,143 @@ textarea {
   gap: 6px;
   padding: 5px 8px;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+
+/* 展开态头部才有分隔底线（折叠态由第 2 层副栏收尾） */
+.subagent-live-card-expanded .subagent-live-header {
   border-bottom: 1px solid var(--border);
+}
+
+/* 等待审批 / 异常态左侧描边强调 */
+.subagent-live-card-warn {
+  border-left: 3px solid var(--warn);
+}
+
+.subagent-live-card-error {
+  border-left: 3px solid var(--err);
+}
+
+/* 第 1 层触发按钮：左图标 + 标题 + 徽章 + 统计尾注为一个整体可点击区 */
+.subagent-live-trigger {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
 }
 
 .subagent-live-toggle {
   padding: 0 2px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.subagent-live-stats {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 36%;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  padding-right: 4px;
+}
+
+/* 第 2 层动态副栏：折叠态单行展示当前动作 / 思考 / 结论 / 错误 */
+.subagent-live-subline {
+  width: 100%;
+  background: none;
+  border: none;
+  text-align: left;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 5px 26px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.subagent-live-subline > svg {
+  flex-shrink: 0;
+}
+
+.subagent-live-subline-tag {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.subagent-live-subline-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-live-subline-blocked .subagent-live-subline-tag,
+.subagent-live-subline-blocked .subagent-live-subline-text {
+  color: var(--warn);
+}
+
+.subagent-live-subline-error .subagent-live-subline-tag,
+.subagent-live-subline-error .subagent-live-subline-text {
+  color: var(--err);
+}
+
+/* 工作台顶部 Fleet 状态摘要条 */
+.workbench-fleet-bar {
+  flex-wrap: wrap;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
+.workbench-fleet-item {
+  white-space: nowrap;
+}
+
+.workbench-fleet-warn {
+  color: var(--warn);
+}
+
+.workbench-fleet-err {
+  color: var(--err);
+}
+
+.workbench-fleet-done {
+  color: var(--fg-subtle);
 }
 
 .subagent-live-title {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1993,6 +2131,18 @@ textarea {
   font-weight: 600;
   color: var(--fg);
   min-width: 0;
+}
+
+.subagent-live-id,
+.subagent-live-title > .badge,
+.subagent-live-trigger > svg,
+.subagent-live-trigger > .badge {
+  flex-shrink: 0;
+}
+
+.subagent-live-trigger:hover,
+.subagent-live-subline:hover {
+  background: var(--bg-hover);
 }
 
 /* 有意义用户标题：等宽克制排版，超长省略号截断不撑爆头部 */
@@ -2042,6 +2192,48 @@ textarea {
   gap: 6px;
   flex-shrink: 0;
 }
+
+.subagent-live-metadata { display: none; }
+
+@container subagent-card (max-width: 680px) {
+  .subagent-live-metadata {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    padding: 5px 8px 0;
+    font-size: 10.5px;
+    color: var(--fg-muted);
+    overflow-wrap: anywhere;
+  }
+  .subagent-action-label,
+  .subagent-live-trigger > .subagent-worktree-badge,
+  .subagent-live-stats {
+    display: none;
+  }
+  .subagent-live-actions .btn-xs {
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0 5px;
+  }
+}
+
+@container subagent-card (max-width: 420px) {
+  .subagent-live-title > .badge { display: none; }
+  .subagent-live-title { gap: 4px; }
+  .subagent-live-header { gap: 4px; padding-inline: 6px; }
+  .subagent-live-trigger { gap: 4px; }
+  .subagent-live-actions { gap: 2px; }
+}
+
+.tool-call-details {
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.tool-call-details > summary { cursor: pointer; }
+.tool-call-details .code-block-pre { max-height: 220px; overflow: auto; }
 
 .subagent-live-stream {
   max-height: 220px;
@@ -2257,7 +2449,15 @@ textarea {
  * ========================================================================== */
 
 .workflow-run-card {
+  container: workflow-card / inline-size;
   gap: 8px;
+}
+
+@container workflow-card (max-width: 420px) {
+  .workflow-node-stats { display: none; }
+  .workflow-node-label { flex-shrink: 0; max-width: 38%; }
+  .workflow-node-progress { flex: 1; }
+  .workflow-node-right { gap: 4px; }
 }
 
 .workflow-run-description {

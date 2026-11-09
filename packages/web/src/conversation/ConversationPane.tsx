@@ -8,6 +8,7 @@ import { useHelmStore } from '../lib/store-context.js'
 import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
 import { ConversationTimeline } from './ConversationTimeline.js'
+import { summarizeWorkbenchTasks } from './workflow-card-model.js'
 import type { EditRequestTarget } from './timeline-model.js'
 
 export interface ConversationPaneProps {
@@ -78,6 +79,10 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
     setMoreOpen(false)
   }, [conversationId])
 
+  const taskSummary = useMemo(
+    () => summarizeWorkbenchTasks(store.conversations, conversationId, store.workflowRuns),
+    [store.conversations, conversationId, store.workflowRuns],
+  )
   const detailError = store.loadErrors[`conversation:${conversationId}`]
   if (detailError) {
     return (
@@ -108,9 +113,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
 
   const sendingPending = sendingPendingVisible(sendingInFlight, conversation.status)
   const artifacts = store.conversationArtifacts[conversationId] ?? []
-  const runs = store.workflowRuns.filter((r) => r.conversationId === conversationId)
-  const children = store.conversations.filter((item) => item.parentConversationId === conversationId)
-  const workbenchCount = runs.length + artifacts.length + children.length
+  // 去重后的工作台计数：工作流子会话不再被 runs 与 children 双重计入。
+  const workbenchCount = taskSummary.totalCount + artifacts.length
+  const workbenchBadge = taskSummary.blockedCount > 0 ? 'badge-warn' : taskSummary.activeCount > 0 ? 'badge-accent' : 'badge-neutral'
   const hasWorkbenchPanel = store.groupedUi.workbenchPanels.some((panel) => matchesUiScope(conversation, panel.spec.scope))
   const currentNodeId = conversation.nodeId || 'local'
   const envSubtitle = formatEnvSubtitle({
@@ -269,7 +274,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit }: Conv
             >
               <HelmIcon name="panel-right" size={12} />
               工作台
-              {workbenchCount > 0 && <span className="badge badge-neutral tabular-nums">{workbenchCount}</span>}
+              {workbenchCount > 0 && <span className={`badge ${workbenchBadge} tabular-nums`}>{workbenchCount}</span>}
             </button>
           ) : null}
           {isSplit && onCloseSplit !== undefined ? (

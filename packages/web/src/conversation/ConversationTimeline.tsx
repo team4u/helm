@@ -358,16 +358,28 @@ function TraceRow({
     latestSubagentToolKeys !== undefined &&
     latestSubagentToolKeys.get(subagentIdNum) !== undefined &&
     latestSubagentToolKeys.get(subagentIdNum) !== tool.key
+  const hasLiveSubagentCard = subagentIdNum !== undefined && !isSupersededSubagent
+  // 双横条去冗余：胶囊卡已承载工具行信息时不再重复渲染底部 trace-row；
+  // 被续接的历史前序调用 / 无原生子会话的调用（外部卡 / 普通工具）仍保留单行。
+  const hideToolRow = (hasLiveSubagentCard || workflow !== undefined) && tool.toolView === undefined
 
   return (
     <div className={`trace-entry${rowFailed ? ' trace-entry-error' : ''}`}>
-      {workflow && <WorkflowRunCard run={workflow} />}
-      {subagentIdNum !== undefined && !isSupersededSubagent ? (
+      {workflow && <WorkflowRunCard run={workflow} toolCall={tool} />}
+      {hasLiveSubagentCard ? (
         <SubagentLiveCard
-          childConversationId={subagentIdNum}
+          childConversationId={subagentIdNum!}
           toolStatus={tool.status}
           backgroundRun={bgRun}
           worktree={bgWorktree}
+          toolCall={tool}
+          toolSummary={{
+            prompt: toolSummaryText(tool.toolName, tool.input),
+            ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}),
+            ...(tool.durationMs !== undefined ? { durationMs: tool.durationMs } : {}),
+            ...(tool.resultText !== undefined ? { resultText: tool.resultText } : {}),
+            ...(rowFailed ? { isError: true } : {}),
+          }}
         />
       ) : null}
       {subagentIdNum === undefined && (bgRun !== undefined || bgWorktree !== undefined) ? (
@@ -377,32 +389,34 @@ function TraceRow({
           tool={tool}
         />
       ) : null}
-      <div
-        className={`trace-row${rowFailed ? ' trace-row-error' : ''}`}
-        role="button"
-        tabIndex={0}
-        onClick={() => setOpen((v) => !v)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            setOpen((v) => !v)
-          }
-        }}
-      >
-        <span className="trace-row-left">
-          <HelmIcon
-            name={rowIcon}
-            size={12}
-            className={bgRunning || tool.status === 'running' ? 'spin-slow' : undefined}
-          />
-          <span className="trace-tool-name">{tool.toolName}</span>
-          <span className="trace-tool-summary">{toolSummaryText(tool.toolName, tool.input)}</span>
-          {isSupersededSubagent && subagentIdNum !== undefined ? (
-            <span className="badge badge-neutral">#{subagentIdNum} · 已在下文续接</span>
-          ) : null}
-        </span>
-        <span className="trace-row-right">{right}</span>
-      </div>
+      {!hideToolRow ? (
+        <div
+          className={`trace-row${rowFailed ? ' trace-row-error' : ''}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => setOpen((v) => !v)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              setOpen((v) => !v)
+            }
+          }}
+        >
+          <span className="trace-row-left">
+            <HelmIcon
+              name={rowIcon}
+              size={12}
+              className={bgRunning || tool.status === 'running' ? 'spin-slow' : undefined}
+            />
+            <span className="trace-tool-name">{tool.toolName}</span>
+            <span className="trace-tool-summary">{toolSummaryText(tool.toolName, tool.input)}</span>
+            {isSupersededSubagent && subagentIdNum !== undefined ? (
+              <span className="badge badge-neutral">#{subagentIdNum} · 已在下文续接</span>
+            ) : null}
+          </span>
+          <span className="trace-row-right">{right}</span>
+        </div>
+      ) : null}
       {tool.toolView !== undefined && <div className="trace-toolview"><PluginUiView
         pluginId={tool.toolView.pluginId}
         spec={tool.toolView.spec}
@@ -410,7 +424,7 @@ function TraceRow({
         label={`工具卡 ${tool.toolName}`}
         slotProps={{ callId: tool.callId, toolName: tool.toolName, input: tool.input, status: tool.status, result: tool.resultText, conversationId }}
       /></div>}
-      {open ? (
+      {open && !hideToolRow ? (
         <div className="trace-expanded-body selectable">
           {inputJson !== undefined ? (
             <div>

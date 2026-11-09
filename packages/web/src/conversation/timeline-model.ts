@@ -58,6 +58,8 @@ export interface ToolTrace {
   status: ToolTraceStatus
   isError: boolean
   resultText?: string
+  /** 工具调用所在已持久化条目的时间；流式调用尚无记录时省略。 */
+  startedAt?: number
   durationMs?: number
   /** 输出中检测到的产物引用（内核超长 Spill 标记 / art_ 前缀），供「打开完整产物」按钮。 */
   artifactRef?: string
@@ -441,7 +443,7 @@ function newTurn(): TurnAcc {
 function makeToolTrace(
   key: string,
   toolName: string,
-  opts: { callId?: string; input?: unknown; status?: ToolTraceStatus; isError?: boolean; resultText?: string; durationMs?: number; toolViews?: ReadonlyArray<QualifiedToolView> },
+  opts: { callId?: string; input?: unknown; status?: ToolTraceStatus; isError?: boolean; resultText?: string; startedAt?: number; durationMs?: number; toolViews?: ReadonlyArray<QualifiedToolView> },
 ): ToolTrace {
   const status = opts.status ?? 'unknown'
   return {
@@ -453,6 +455,7 @@ function makeToolTrace(
     isError: opts.isError ?? status === 'error',
     ...(opts.resultText !== undefined ? { resultText: opts.resultText } : {}),
     ...(opts.durationMs !== undefined ? { durationMs: opts.durationMs } : {}),
+    ...(opts.startedAt !== undefined ? { startedAt: opts.startedAt } : {}),
     ...{ toolView: findToolView(toolName, opts.toolViews) },
   }
 }
@@ -583,7 +586,7 @@ function appendAssistantEntry(acc: TurnAcc, entry: ConversationEntry, opts: Buil
         acc.segments.push({
           kind: 'tool',
           key: `tool:${callId ?? key}`,
-          tool: makeToolTrace(`tool:${callId ?? key}`, name, { callId, input, toolViews: opts.toolViews }),
+          tool: makeToolTrace(`tool:${callId ?? key}`, name, { callId, input, startedAt: entry.createdAt, toolViews: opts.toolViews }),
         })
       }
     }

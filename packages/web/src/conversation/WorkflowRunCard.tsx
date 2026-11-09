@@ -1,14 +1,17 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
 import { workflowsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
-import { formatDurationMs } from './timeline-model.js'
+import { formatDurationMs, type ToolTrace } from './timeline-model.js'
+import { resolveSubagentHeaderSnippet } from './subagent-live-model.js'
+import { ToolCallDetails } from './ToolCallDetails.js'
 import { SubagentLiveCard } from './SubagentLiveCard.js'
 import {
   buildWorkflowPhaseSections,
   canResumeWorkflowRun,
   extractWorkflowLogs,
+  formatWorkflowNodeStats,
   resolveNodeSummaryText,
   type WorkflowPhaseSection,
 } from './workflow-card-model.js'
@@ -63,10 +66,12 @@ function WorkflowPhaseGroup({
   section,
   openNodes,
   toggleNode,
+  onNavigate,
 }: {
   section: WorkflowPhaseSection
   openNodes: ReadonlySet<string>
   toggleNode: (nodeId: string) => void
+  onNavigate?: () => void
 }) {
   return (
     <div className="workflow-phase-group">
@@ -86,7 +91,7 @@ function WorkflowPhaseGroup({
         section.title !== '' ? <div className="workflow-phase-empty">待进入此阶段</div> : null
       ) : (
         section.nodes.map((node) => (
-          <WorkflowNodeRow key={node.id} node={node} open={openNodes.has(node.id)} onToggle={() => toggleNode(node.id)} />
+          <WorkflowNodeRow key={node.id} node={node} open={openNodes.has(node.id)} onToggle={() => toggleNode(node.id)} onNavigate={onNavigate} />
         ))
       )}
     </div>
@@ -168,24 +173,37 @@ function safeJsonStringify(value: unknown): string {
   }
 }
 
-/** 单节点行：收起行高密度展示，展开体内嵌 SubagentLiveCard 或结构化明细。 */
-function WorkflowNodeRow({ node, open, onToggle }: { node: WorkflowNodeState; open: boolean; onToggle: () => void }) {
+/** 单节点行：收起行高密度展示，展开体内嵌 SubagentLiveCard（默认展开防双重折叠）或结构化明细。 */
+function WorkflowNodeRow({ node, open, onToggle, onNavigate }: { node: WorkflowNodeState; open: boolean; onToggle: () => void; onNavigate?: () => void }) {
   const store = useHelmStore()
   const child = node.conversationId !== undefined
     ? store.conversations.find((c) => c.id === node.conversationId)
     : undefined
-  const summary = resolveNodeSummaryText(node, child?.doing)
+  const pendingAskTitle = node.conversationId !== undefined
+    ? store.pendingAsks.find((a) => a.conversationId === node.conversationId)?.title
+    : undefined
+  const isBlocked = node.status === 'running' && child?.status === 'blocked'
+  const liveSnippet = node.status === 'running' ? resolveSubagentHeaderSnippet({
+    badgeStatus: isBlocked ? 'blocked' : 'working',
+    summary: child,
+    live: node.conversationId !== undefined ? store.conversationLives[node.conversationId] : undefined,
+    pendingAsk: pendingAskTitle ? { title: pendingAskTitle } : undefined,
+  }) : undefined
+  const summary = liveSnippet !== undefined
+    ? { text: liveSnippet.kind === 'blocked' ? `等待审批：${liveSnippet.text}` : [liveSnippet.tag, liveSnippet.text].filter(Boolean).join(' · '), isError: liveSnippet.kind === 'error' }
+    : resolveNodeSummaryText(node, child?.doing, child?.status, pendingAskTitle)
+  const nodeStats = formatWorkflowNodeStats(node)
   return (
     <div className={`workflow-node-item${open ? ' workflow-node-item-open' : ''}`}>
       <button type="button" className="workflow-node-line" onClick={onToggle} title={open ? '收起节点详情' : '展开节点详情'}>
         <HelmIcon
-          name={NODE_ICON[node.status] ?? 'circle'}
+          name={isBlocked ? 'alert-circle' : NODE_ICON[node.status] ?? 'circle'}
           size={11}
-          className={node.status === 'running' ? 'spin-slow' : undefined}
+          className={node.status === 'running' && !isBlocked ? 'spin-slow' : undefined}
         />
         {node.kind === 'action' ? <span className="badge badge-neutral">动作</span> : null}
         <span className="workflow-node-label">{node.label ?? node.id}</span>
-        <span className={`badge ${NODE_BADGE[node.status] ?? 'badge-neutral'}`}>{NODE_LABEL[node.status] ?? node.status}</span>
+        <span className={`badge ${isBlocked ? 'badge-warn' : NODE_BADGE[node.status] ?? 'badge-neutral'}`}>{isBlocked ? '等待审批' : NODE_LABEL[node.status] ?? node.status}</span>
         {node.cached === true ? <span className="badge badge-warn">cached</span> : null}
         {node.attempt !== undefined && node.attempt > 1 ? (
           <span className="badge badge-neutral">{`第 ${node.attempt} 次`}</span>
@@ -208,6 +226,9 @@ function WorkflowNodeRow({ node, open, onToggle }: { node: WorkflowNodeState; op
           </span>
         ) : null}
         <span className="workflow-node-right">
+          {nodeStats.length > 0 ? (
+            <span className="workflow-node-stats tabular-nums">{nodeStats.join(' · ')}</span>
+          ) : null}
           {node.durationMs !== undefined ? (
             <span className="workflow-node-duration tabular-nums">{formatDurationMs(node.durationMs)}</span>
           ) : null}
@@ -219,11 +240,13 @@ function WorkflowNodeRow({ node, open, onToggle }: { node: WorkflowNodeState; op
               onClick={(e) => {
                 e.stopPropagation()
                 store.openTarget({ kind: 'conversation', conversationId: node.conversationId! }, { split: true })
+                onNavigate?.()
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.stopPropagation()
                   store.openTarget({ kind: 'conversation', conversationId: node.conversationId! }, { split: true })
+                  onNavigate?.()
                 }
               }}
             >
@@ -239,6 +262,9 @@ function WorkflowNodeRow({ node, open, onToggle }: { node: WorkflowNodeState; op
             <>
               <SubagentLiveCard
                 childConversationId={node.conversationId}
+                defaultExpanded={true}
+                startedAt={node.startedAt}
+                onNavigate={onNavigate}
                 toolStatus={
                   node.status === 'running' ? 'running' : node.status === 'failed' ? 'error' : node.status === 'done' ? 'done' : 'unknown'
                 }
@@ -271,7 +297,7 @@ function WorkflowNodeRow({ node, open, onToggle }: { node: WorkflowNodeState; op
  * 阶段进度条 + 脚本日志 + 按阶段分组节点列表 + 最终产出；
  * agent 节点展开体无缝内嵌 SubagentLiveCard 实时流。
  */
-export function WorkflowRunCard({ run, inWorkbench = false }: { run: WorkflowRunSummary; inWorkbench?: boolean }) {
+export function WorkflowRunCard({ run, inWorkbench = false, toolCall, onNavigate }: { run: WorkflowRunSummary; inWorkbench?: boolean; toolCall?: ToolTrace; onNavigate?: () => void }) {
   const store = useHelmStore()
   const [cardOpen, setCardOpen] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -283,6 +309,19 @@ export function WorkflowRunCard({ run, inWorkbench = false }: { run: WorkflowRun
   const sections = useMemo(() => buildWorkflowPhaseSections(run), [run])
   const logs = useMemo(() => extractWorkflowLogs(run), [run])
   const hasNamedPhases = sections.length > 1 || (sections.length === 1 && sections[0]!.title !== '')
+
+  // 运行中秒表：SSR 首帧不启动时钟，仅客户端 useEffect 定时推进（确定性渲染）。
+  const [nowMs, setNowMs] = useState<number | undefined>(undefined)
+  useEffect(() => {
+    if (run.status !== 'running') return
+    setNowMs(Date.now())
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [run.status])
+  const elapsedMs =
+    run.status === 'running' && nowMs !== undefined && Number.isFinite(run.createdAt) && nowMs >= run.createdAt
+      ? nowMs - run.createdAt
+      : run.updatedAt - run.createdAt
 
   const toggleNode = (nodeId: string): void => {
     setOpenNodes((prev) => {
@@ -354,7 +393,7 @@ export function WorkflowRunCard({ run, inWorkbench = false }: { run: WorkflowRun
         <span className="workflow-run-stats tabular-nums">
           {nodes.length > 0 ? <span>{`节点 ${done}/${nodes.length}`}</span> : null}
           {tokens > 0 ? <span>{`${tokens.toLocaleString()} Tokens`}</span> : null}
-          <span>{formatDurationMs(Math.max(0, run.updatedAt - run.createdAt))}</span>
+          <span>{formatDurationMs(Math.max(0, elapsedMs))}</span>
         </span>
         {run.status === 'running' ? (
           <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => void abort()}>
@@ -416,7 +455,7 @@ export function WorkflowRunCard({ run, inWorkbench = false }: { run: WorkflowRun
           ) : null}
           <div className="workflow-node-list">
             {sections.map((section) => (
-              <WorkflowPhaseGroup key={section.key} section={section} openNodes={openNodes} toggleNode={toggleNode} />
+              <WorkflowPhaseGroup key={section.key} section={section} openNodes={openNodes} toggleNode={toggleNode} onNavigate={onNavigate} />
             ))}
             {nodes.length === 0 ? <div className="workflow-phase-empty">暂无节点状态</div> : null}
           </div>
@@ -426,6 +465,7 @@ export function WorkflowRunCard({ run, inWorkbench = false }: { run: WorkflowRun
           {run.error !== undefined ? <p className="jr-callout jr-callout-err">{run.error}</p> : null}
         </>
       ) : null}
+      {toolCall !== undefined ? <ToolCallDetails tool={toolCall} /> : null}
     </section>
   )
 }

@@ -7,7 +7,7 @@ import { PluginUiView } from '../ui/PluginUiView.js'
 import { formatBytes } from './timeline-model.js'
 import { WorkflowRunCard } from './WorkflowRunCard.js'
 import { SubagentLiveCard } from './SubagentLiveCard.js'
-import { filterStandaloneSubagents } from './workflow-card-model.js'
+import { buildWorkbenchSubagentItems, summarizeWorkbenchTasks } from './workflow-card-model.js'
 
 /** 窄屏抽屉覆盖模式（<=1200px）下点击导航类按钮后自动收起抽屉，避免遮挡背后视图。 */
 function maybeCollapseWorkbench(store: { setWorkbenchOpen: (open: boolean) => void }): void {
@@ -21,39 +21,54 @@ function WorkflowInspector({ conversationId }: { conversationId: number }) {
     () => store.workflowRuns.filter((r) => r.conversationId === conversationId),
     [store.workflowRuns, conversationId],
   )
-  // 独立子会话：未被任何 run 节点卡片认领（claimed）的子会话才在此列出，避免与卡片内 SubagentLiveCard 重复。
-  const standaloneChildren = useMemo(
-    () => filterStandaloneSubagents(store.conversations, conversationId, runs),
+  // 子代理统一列表：单子代理后台 run 认领的子会话与独立子会话合并去重（Active-First），
+  // 有子会话的后台单不再套进三层嵌套 WorkflowRunCard；无子会话的外部 run 仍由卡片渲染。
+  const subagentItems = useMemo(
+    () => buildWorkbenchSubagentItems(store.conversations, conversationId, runs),
+    [store.conversations, conversationId, runs],
+  )
+  const taskSummary = useMemo(
+    () => summarizeWorkbenchTasks(store.conversations, conversationId, runs),
     [store.conversations, conversationId, runs],
   )
   const workflowRuns = runs.filter((r) => r.kind !== 'subagent')
-  const subagentRuns = runs.filter((r) => r.kind === 'subagent')
+  const externalSubagentRuns = runs.filter(
+    (r) => r.kind === 'subagent' && !(r.nodes ?? []).some((n) => n.conversationId !== undefined),
+  )
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
+      {taskSummary.totalCount > 0 ? (
+        <div className="workbench-fleet-bar tabular-nums">
+          {taskSummary.activeCount > 0 ? <span className="workbench-fleet-item">{`${taskSummary.activeCount} 执行中`}</span> : null}
+          {taskSummary.blockedCount > 0 ? <span className="workbench-fleet-item workbench-fleet-warn">{`${taskSummary.blockedCount} 等待审批`}</span> : null}
+          {taskSummary.errorCount > 0 ? <span className="workbench-fleet-item workbench-fleet-err">{`${taskSummary.errorCount} 异常`}</span> : null}
+          {taskSummary.doneCount > 0 ? <span className="workbench-fleet-item workbench-fleet-done">{`${taskSummary.doneCount} 已完成`}</span> : null}
+        </div>
+      ) : null}
       {workflowRuns.length > 0 ? <div className="trace-section-label">工作流运行</div> : null}
       {workflowRuns.map((run) => (
-        <WorkflowRunCard key={run.id} run={run} inWorkbench />
+        <WorkflowRunCard key={run.id} run={run} inWorkbench onNavigate={() => maybeCollapseWorkbench(store)} />
       ))}
-      {subagentRuns.length > 0 ? <div className="trace-section-label">后台子代理任务</div> : null}
-      {subagentRuns.map((run) => (
-        <WorkflowRunCard key={run.id} run={run} inWorkbench />
+      {externalSubagentRuns.length > 0 ? <div className="trace-section-label">外部后台任务</div> : null}
+      {externalSubagentRuns.map((run) => (
+        <WorkflowRunCard key={run.id} run={run} inWorkbench onNavigate={() => maybeCollapseWorkbench(store)} />
       ))}
-      {standaloneChildren.length > 0 ? (
+      {subagentItems.length > 0 ? (
         <>
-          <div className="trace-section-label">独立子会话</div>
-          {standaloneChildren.map((child) => (
+          <div className="trace-section-label">子代理会话</div>
+          {subagentItems.map((item) => (
             <SubagentLiveCard
-              key={child.id}
-              childConversationId={child.id}
-              toolStatus={child.status === 'working' ? 'running' : child.status === 'error' ? 'error' : 'done'}
-              defaultExpanded={child.status === 'working'}
+              key={item.conversationId}
+              childConversationId={item.conversationId}
+              toolStatus={item.summary?.status === 'working' ? 'running' : item.summary?.status === 'error' ? 'error' : item.backgroundRun?.status === 'running' ? 'running' : item.backgroundRun?.status === 'failed' || item.backgroundRun?.status === 'aborted' ? 'error' : 'done'}
+              backgroundRun={item.backgroundRun}
               onNavigate={() => maybeCollapseWorkbench(store)}
             />
           ))}
         </>
       ) : null}
-      {runs.length === 0 && standaloneChildren.length === 0 ? (
+      {runs.length === 0 && subagentItems.length === 0 ? (
         <p style={{ color: 'var(--fg-muted)' }}>当前会话暂无工作流或子代理。</p>
       ) : null}
     </div>
@@ -126,16 +141,23 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
     conversationId !== undefined
       ? store.workflowRuns.filter((r) => r.conversationId === conversationId)
       : []
+  const taskSummary = useMemo(
+    () =>
+      conversationId !== undefined
+        ? summarizeWorkbenchTasks(store.conversations, conversationId, runs)
+        : { workflowCount: 0, subagentCount: 0, totalCount: 0, activeCount: 0, blockedCount: 0, errorCount: 0, doneCount: 0 },
+    [store.conversations, conversationId, runs],
+  )
   const panels = conversation !== undefined ? store.groupedUi.workbenchPanels.filter((p) => matchesUiScope(conversation, p.spec.scope)) : []
 
   const tabs = useMemo(() => {
-    const list: Array<{ id: string; label: string }> = [{ id: 'tasks', label: '工作流与子代理' }]
+    const list: Array<{ id: string; label: string }> = [{ id: 'tasks', label: `工作流与子代理 (${taskSummary.totalCount})` }]
     list.push({ id: 'artifacts', label: `会话产物 (${artifacts.length})` })
     for (const p of panels) {
       list.push({ id: `plugin:${p.pluginId}/${p.spec.id}`, label: p.spec.label ?? p.spec.id })
     }
     return list
-  }, [artifacts.length, panels])
+  }, [artifacts.length, panels, taskSummary.totalCount])
 
   const activeTab = store.workbenchTab
 
@@ -198,10 +220,11 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
           </div>
         )}
       </div>
-      {(runs.length > 0 || artifacts.length > 0) && conversation !== undefined ? (
+      {(taskSummary.totalCount > 0 || artifacts.length > 0) && conversation !== undefined ? (
         <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', gap: 6, fontSize: 11, color: 'var(--fg-muted)' }}>
-          <span className="badge badge-neutral">工作流 {runs.length}</span>
-          <span className="badge badge-neutral">产物 {artifacts.length}</span>
+          <span className="badge badge-neutral">{`工作流 ${taskSummary.workflowCount}`}</span>
+          <span className="badge badge-neutral">{`子代理 ${taskSummary.subagentCount}`}</span>
+          <span className="badge badge-neutral">{`产物 ${artifacts.length}`}</span>
         </div>
       ) : null}
     </aside>
