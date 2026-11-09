@@ -5,13 +5,13 @@
  * - 注入 PluginClientContext（usePluginContext）与协议标准 Props；
  * - 组件函数校验：导出不是函数时显式报错。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import type { ClientComponentRef } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { createPluginClientContext, PluginClientContext } from '../lib/plugin-client-context.js'
-import { getCachedClientComponent, loadPluginClientModule, PluginClientError, requireClientExport } from '../lib/plugin-client.js'
+import { getCachedClientComponent, getPluginClientCacheRevision, loadPluginClientModule, PluginClientError, requireClientExport, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
 import { HelmSpecView } from './HelmSpecView.js'
 import { ViewBoundary } from './ViewBoundary.js'
 
@@ -34,13 +34,18 @@ type ClientState =
 
 export function PluginUiView(props: PluginUiViewProps): ReactNode {
   const { pluginId, spec, slotProps, conversationId } = props
+  const revision = useSyncExternalStore(
+    subscribePluginClientCacheInvalidation,
+    () => getPluginClientCacheRevision(pluginId),
+    () => getPluginClientCacheRevision(pluginId),
+  )
   const clientRef = spec.client
   if (clientRef === undefined) {
     if (spec.json === undefined) return <MissingTrackError pluginId={pluginId} />
     return <HelmSpecView pluginId={pluginId} spec={spec.json} docs={spec.docs} conversationId={conversationId} data={slotProps} />
   }
-  // 身份切换须重建状态与错误边界，不能在新上下文中先渲染一次旧插件组件。
-  return <ClientPluginUiView key={JSON.stringify([pluginId, clientRef.module, clientRef.export])} {...props} clientRef={clientRef} />
+  // 快照重建也会失效缓存，已挂载视图必须重载，不能继续显示旧组件或丢失样式。
+  return <ClientPluginUiView key={JSON.stringify([pluginId, clientRef.module, clientRef.export, revision])} {...props} clientRef={clientRef} />
 }
 
 function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, label }: PluginUiViewProps & { clientRef: ClientComponentRef }): ReactNode {

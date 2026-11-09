@@ -192,26 +192,33 @@ test('真实编译：产物为 ESM，react external 重写为 __helm_shared_* �
   assert.match(result.contentHash, /^[0-9a-f]{24}$/)
 })
 
-test('插件本地 CSS：内联进 JS 并在加载时注入可回收的 style 标签', { timeout: 60_000 }, async () => {
+test('插件本地 CSS：原生合并为保留具名导出 __helmClientCss，产物不注入 DOM', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'css-plugin-src')
   await mkdir(root, { recursive: true })
   await writeFile(join(root, 'styles.css'), '.widget-card {\n  color: var(--fg);\n}\n')
-  await writeFile(join(root, 'index.tsx'), "import './styles.css'\nexport function Widget() { return <div className=\"widget-card\">x</div> }\n")
+  await writeFile(join(root, 'index.tsx'), "import './styles.css'\nexport function Widget() { return 'w' }\n")
   const result = await compilePluginClientModule('test:css', root, 'index.tsx', dataDir)
   assert.match(result.code, /widget-card/, 'CSS 内容必须进入产物')
-  assert.match(result.code, /data-helm-plugin-css/, '产物必须在加载时注入 style')
-  assert.match(result.code, /test:css::index\.tsx/, '样式 key 必须按插件与模块隔离')
-  assert.doesNotMatch(result.code, /@import/, '不应把 @import 静默带到页面')
+  assert.match(result.code, /__helmClientCss/, '合并 CSS 必须经保留具名导出返回')
+  assert.doesNotMatch(result.code, /data-helm-plugin-css/, '产物不得自行注入 DOM（加载器负责注入）')
 })
 
-test('插件 CSS 不支持 @import / url()：显式编译错误而非错误基址静默生效', { timeout: 60_000 }, async () => {
-  const root = join(dataDir, 'css-unsupported-src')
+test('插件 CSS 本地 @import 正常合并（跨文件依赖），远程 @import 显式拒绝', { timeout: 60_000 }, async () => {
+  const root = join(dataDir, 'css-import-src')
   await mkdir(root, { recursive: true })
+  await writeFile(join(root, 'other.css'), '.other { color: blue }\n')
   await writeFile(join(root, 'styles.css'), '@import "./other.css";\n.card { color: red }\n')
-  await writeFile(join(root, 'index.tsx'), "import './styles.css'\nexport function Widget() { return <div className=\"card\">x</div> }\n")
+  await writeFile(join(root, 'index.tsx'), "import './styles.css'\nexport function Widget() { return 'w' }\n")
+  const ok = await compilePluginClientModule('test:css-import', root, 'index.tsx', dataDir)
+  assert.match(ok.code, /\.other/, '本地 @import 必须合并进产物')
+
+  const remoteRoot = join(dataDir, 'css-remote-import-src')
+  await mkdir(remoteRoot, { recursive: true })
+  await writeFile(join(remoteRoot, 'styles.css'), '@import "https://example.com/x.css";\n.card { color: red }\n')
+  await writeFile(join(remoteRoot, 'index.tsx'), "import './styles.css'\nexport function Widget() { return 'w' }\n")
   await assert.rejects(
-    () => compilePluginClientModule('test:css-bad', root, 'index.tsx', dataDir),
-    (err: unknown) => err instanceof HelmError && err.code === 'client_compile_failed' && /@import/.test(err.message),
+    () => compilePluginClientModule('test:css-remote', remoteRoot, 'index.tsx', dataDir),
+    (err: unknown) => err instanceof HelmError && err.code === 'client_compile_failed' && /远程 @import/.test(err.message),
   )
 })
 

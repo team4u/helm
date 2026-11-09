@@ -906,7 +906,9 @@ test('SubagentLiveCard 整体大卡片点击契约：外层整卡可点击，第
 
 test('插件自有样式契约：整卡统一 hover，且宿主样式表不携带工作流业务类', { timeout: 60_000 }, () => {
   const pluginCss = readFileSync(new URL('../../kernel/src/builtin-plugins/workflow/client/styles.css', import.meta.url), 'utf-8')
-  const hostCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf-8')
+  const hostCss = ['styles.css', 'responsive.css']
+    .map((file) => readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf-8'))
+    .join('\n')
   assert.ok(pluginCss.includes('.subagent-card-clickable:hover'), '插件样式应包含整卡 hover 高亮规则')
   assert.ok(!pluginCss.includes('.subagent-live-trigger:hover'), '严禁为 trigger 设置独立 hover 背景')
   assert.ok(!pluginCss.includes('.subagent-live-subline:hover'), '严禁为 subline 设置独立 hover 背景')

@@ -11,9 +11,19 @@
  *   named / namespace / default / as-别名 / export-from 全部由 esbuild 生成合法
  *   ESM 绑定（对比正则改写 import 会产出 `const {useState as s}` 这类非法 JS），
  *   运行时与宿主共享同一实例，绝不打包第二份 React；
+ * - CSS（v3 起）：交给 esbuild 原生 CSS bundling（虚拟 outfile + write:false，不落
+ *   真实产物文件），本地 @import 按依赖顺序原生合并；合并结果以具名导出
+ *   `__helmClientCss`（@helm/protocol PLUGIN_CLIENT_CSS_EXPORT）附在 JS 产物尾部，
+ *   产物本身不注入 DOM——加载器在 import 成功且缓存仍有效后才注入样式；无 CSS
+ *   时不产出该导出（加载器按空处理）；
+ *   - CSS 资源 URL 只允许 data: 与 http(s)/协议相对的显式绝对地址（不依赖插件
+ *     路径基址）；本地相对 / 根相对 / 片段 URL 显式编译错误并建议内联 data:；
+ *   - 远程 @import 显式拒绝（不受本地依赖校验与缓存管控）；本地 @import 进
+ *     依赖 hash；判定一律使用 esbuild resolver 的 kind（import-rule / url-token），
+ *     绝不用源码正则猜测语法（注释里的 @import/url() 不是 import）；
  * - containment：入口与每个被加载的本地文件 realpath 都必须位于 clientRoot realpath
  *   之内（符号链接逃逸逐文件拦截）；非共享裸依赖（npm 包）显式拒绝——当前不支持
- *   npm 安装，绝不把 node_modules 或根外文件悄悄打进 bundle；
+ *     npm 安装，绝不把 node_modules 或根外文件悄悄打进 bundle；
  * - 产物落盘：randomUUID 临时文件 + rename 原子改名；同 (pluginId, module, root)
  *   并发编译合并同一 in-flight Promise，失败清除可重试。
  *
@@ -22,7 +32,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, realpathSync, statSync, readFileSync, writeFileSync, renameSync, existsSync, rmSync } from 'node:fs';
 import { isAbsolute, join, dirname, relative, sep } from 'node:path';
-import { HelmError } from '@helm/protocol';
+import { HelmError, PLUGIN_CLIENT_CSS_EXPORT } from '@helm/protocol';
 import { build, type Plugin as EsbuildPlugin } from 'esbuild';
 
 /**
@@ -50,6 +60,9 @@ export const CLIENT_SHARED_GLOBALS: Readonly<Record<string, string>> = Object.fr
 
 /** ClientComponentRef.module 允许的字符集（相对路径段：字母数字 . _ -，禁止空段与 ..）。 */
 const MODULE_REF_PATTERN = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*\.(ts|tsx)$/;
+
+/** 依赖清单（deps.json）结构版本；v2 为 CSS-as-JS 旧格式，v3 起为原生 CSS bundling。 */
+const DEPS_LIST_VERSION = 3;
 
 export interface ClientCompileResult {
   /** 产物 JS 文本（自包含 ESM；共享依赖经 globalThis 命名空间运行时解析）。 */
@@ -110,56 +123,13 @@ export async function compilePluginClientModule(
 
 /** 依赖清单（deps.json）结构：跨重启可复查的缓存凭据。 */
 interface DepsListFile {
-  version: 2
+  version: 3
   module: string
   /** clientRoot realpath（根变更/移动后旧缓存直接失效，不误用）。 */
   root: string
   contentHash: string
   /** 全部本地依赖：相对 root 的路径 + 内容 sha256（含入口自身）。 */
   dependencies: Array<{ path: string; sha256: string }>
-}
-
-function cssAsJsPlugin(pluginId: string, moduleRef: string): EsbuildPlugin {
-  return {
-    name: 'helm-plugin-css',
-    setup(b) {
-      b.onLoad({ filter: /\.css$/, namespace: 'file' }, (args) => {
-        const source = readFileSync(args.path, 'utf8');
-        // @import/url() 在注入页面后会相对页面解析，而非插件目录；静默错误基址
-        // 比显式拒绝更危险（样式会莫名指向宿主路径）。
-        const unsupported = /@import\b|url\(/i.exec(source);
-        if (unsupported !== null) {
-          return {
-            errors: [{
-              text:
-                `插件 ${pluginId} 的样式 ${args.path} 含 ${unsupported[0]}：` +
-                '插件样式必须自包含（不支持 @import 与 url()，避免相对页面解析错基址）',
-            }],
-          };
-        }
-        const key = `${pluginId}::${moduleRef}`;
-        const contents = [
-          `const css = ${JSON.stringify(source)};`,
-          'if (typeof document !== "undefined") {',
-          `  const key = ${JSON.stringify(key)};`,
-          '  let sheet = null;',
-          '  for (const node of document.querySelectorAll("style[data-helm-plugin-css]")) {',
-          '    if (node.dataset.helmPluginCss === key) { sheet = node; break; }',
-          '  }',
-          '  if (sheet === null) {',
-          '    sheet = document.createElement("style");',
-          '    sheet.dataset.helmPluginCss = key;',
-          `    sheet.dataset.helmPluginCssPlugin = ${JSON.stringify(pluginId)};`,
-          '    document.head.appendChild(sheet);',
-          '  }',
-          '  sheet.textContent = css;',
-          '}',
-          'export default css;',
-        ].join('\n');
-        return { contents, loader: 'js' };
-      });
-    },
-  };
 }
 
 async function compileUncached(
@@ -182,7 +152,9 @@ async function compileUncached(
   const cached = readCachedResult(stagingDir, depsListPath, rootReal, moduleRef);
   if (cached) return cached;
 
-  // 真实编译：metafile 收集实际依赖闭包；onLoad 逐文件 containment；裸依赖显式拒绝
+  // 真实编译：metafile 收集实际依赖闭包；onLoad 逐文件 containment；裸依赖显式拒绝。
+  // 虚拟 outfile：esbuild 原生 CSS bundling 要求 JS→CSS import 有输出路径（write:false
+  // 不落盘，仅用于命名 outputFiles；JS 与 CSS 分别取自 outputFiles）。
   let output = '';
   let dependencies: string[];
   try {
@@ -198,20 +170,39 @@ async function compileUncached(
       sourcemap: false,
       metafile: true,
       absWorkingDir: rootReal,
+      outfile: join(stagingDir, `${baseName}.virtual.mjs`),
       logLevel: 'silent',
-      plugins: [sharedShimPlugin(), containmentPlugin(pluginId, rootReal), cssAsJsPlugin(pluginId, moduleRef)],
+      plugins: [
+        sharedShimPlugin(),
+        containmentPlugin(pluginId, rootReal),
+        cssPolicyPlugin(pluginId),
+      ],
     });
-    const file = result.outputFiles?.[0];
-    if (!file || result.outputFiles.length !== 1) {
-      throw new HelmError('client_compile_failed', `插件 ${pluginId} 编译 ${moduleRef} 未产出唯一 JS 文件`, 500, {
-        pluginId,
-        module: moduleRef,
-      });
+    const jsFiles = result.outputFiles.filter((f) => !f.path.endsWith('.css'));
+    const cssFiles = result.outputFiles.filter((f) => f.path.endsWith('.css'));
+    if (jsFiles.length !== 1 || cssFiles.length > 1) {
+      throw new HelmError(
+        'client_compile_failed',
+        `插件 ${pluginId} 编译 ${moduleRef} 未产出唯一 JS 文件（JS=${jsFiles.length}，CSS=${cssFiles.length}）`,
+        500,
+        { pluginId, module: moduleRef },
+      );
     }
-    output = file.text;
+    if (Object.values(result.metafile.outputs).some((file) => file.exports?.includes(PLUGIN_CLIENT_CSS_EXPORT))) {
+      throw new HelmError(
+        'client_compile_failed',
+        `插件 ${pluginId} 模块 ${moduleRef} 占用了编译器保留导出名 "${PLUGIN_CLIENT_CSS_EXPORT}"，请改名该导出`,
+        422,
+        { pluginId, module: moduleRef, reservedExport: PLUGIN_CLIENT_CSS_EXPORT },
+      );
+    }
+    const js = jsFiles[0]!.text;
+    const css = cssFiles[0]?.text ?? '';
+    output = appendCssExport(js, css);
     dependencies = collectLocalDependencies(result.metafile, rootReal);
   } catch (err) {
-    // esbuild 诊断（语法错误定位 / 越根 / 裸依赖拒绝）如实上抛，绝不静默截断
+    if (err instanceof HelmError) throw err;
+    // esbuild 诊断（语法错误定位 / 越根 / 裸依赖拒绝 / CSS 资源策略）如实上抛，绝不静默截断
     const message = err instanceof Error ? err.message : String(err);
     throw new HelmError('client_compile_failed', `插件 ${pluginId} 编译 ${moduleRef} 失败：${message}`, 422, {
       pluginId,
@@ -224,6 +215,18 @@ async function compileUncached(
   atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.mjs`), output);
   atomicWrite(depsListPath, `${JSON.stringify(list)}\n`);
   return { code: output, contentHash: list.contentHash };
+}
+
+// ---------------------------------------------------------------------------
+// CSS：序列化为具名导出附在 JS 产物尾部（产物不注入 DOM，加载器负责注入）
+// ---------------------------------------------------------------------------
+
+/** 元数据绑定必须避让产物中的局部变量，而非只避让其公开导出名。 */
+function appendCssExport(js: string, css: string): string {
+  if (css.length === 0) return js;
+  let binding = '__helmCssText';
+  while (js.includes(binding)) binding += '_';
+  return `${js}\nconst ${binding} = ${JSON.stringify(css)};\nexport { ${binding} as ${PLUGIN_CLIENT_CSS_EXPORT} };\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -273,15 +276,19 @@ function exactLiteralFilter(spec: string): RegExp {
 
 /**
  * esbuild 插件：
- * - 裸说明符（非共享）→ 显式编译错误（当前不支持 npm 安装；绝不解析 node_modules）；
+ * - 裸说明符（非共享、非 CSS 语法引用）→ 显式编译错误（当前不支持 npm 安装；绝不解析
+ *   node_modules）；CSS url()/@import 引用交由 cssPolicyPlugin 处理；
  * - 本地文件 onLoad 阶段 realpath containment：越出 clientRoot realpath（含符号链接
- *   逃逸与 ../ 相对越根）即拒绝——旧实现只检查入口，依赖文件可把根外代码带进 bundle。
+ *   逃逸和 CSS @import 越根）即拒绝——旧实现只检查入口，依赖文件可把根外代码带进 bundle。
  */
 function containmentPlugin(pluginId: string, rootReal: string): EsbuildPlugin {
   return {
     name: 'helm-containment',
     setup(b) {
       b.onResolve({ filter: /^[^./]/ }, (args) => {
+        // CSS 语法引用（url() 资源 / @import）不是 npm 说明符：交由 cssPolicyPlugin
+        // 按资源策略处理（data:/https: 放行，本地相对显式拒绝），绝不误报裸依赖
+        if (args.kind === 'url-token' || args.kind === 'import-rule') return null;
         // 共享说明符由 sharedShimPlugin（先注册）处理，这里只剩非共享裸依赖
         const importer = args.importer || '入口';
         return {
@@ -310,6 +317,65 @@ function containmentPlugin(pluginId: string, rootReal: string): EsbuildPlugin {
 }
 
 // ---------------------------------------------------------------------------
+// CSS 资源策略：esbuild resolver kind 判定（绝不用源码正则猜语法）
+// ---------------------------------------------------------------------------
+
+/**
+ * 允许的 CSS 资源 URL：不依赖插件路径基址的显式绝对地址（data: 内联与
+ * http(s)/协议相对外链）。空串（url() 无参）原样保留（合法 CSS，由浏览器处理）。
+ */
+function isAllowedCssAssetUrl(rawUrl: string): boolean {
+  const url = rawUrl.trim();
+  if (url.length === 0) return true;
+  if (/^data:/i.test(url)) return true;
+  if (/^https?:\/\//i.test(url)) return true;
+  if (url.startsWith('//')) return true;
+  return false;
+}
+
+/**
+ * esbuild 插件：按 resolver kind 管 CSS 语法引用——
+ * - url-token（url() 资源）：data: / http(s) / 协议相对放行（交回默认解析，esbuild
+ *   原样保留）；本地相对 / 根相对 / 片段等其余形态显式拒绝并建议内联 data:；
+ * - import-rule（CSS @import）：本地相对由默认解析器解析（经 onLoad containment
+ *   校验 realpath 越根，本地 @import 进依赖闭包与 hash）；远程（http(s)/协议相对）
+ *   显式拒绝——外链样式不受本地依赖校验与缓存管控。
+ */
+function cssPolicyPlugin(pluginId: string): EsbuildPlugin {
+  return {
+    name: 'helm-css-policy',
+    setup(b) {
+      b.onResolve({ filter: /.*/ }, (args) => {
+        if (args.kind === 'url-token') {
+          if (isAllowedCssAssetUrl(args.path)) return null; // 交回默认解析（esbuild 原样保留）
+          return {
+            errors: [{
+              text:
+                `插件 ${pluginId} 的样式 ${args.importer} 引用资源 "${args.path}" 被拒绝：` +
+                '本地相对/根相对/片段 URL 会相对宿主页面错误基址解析（插件无静态资源端点）；' +
+                '请改用内联 data: URL 或显式 https:// 绝对地址',
+            }],
+          };
+        }
+        if (args.kind === 'import-rule') {
+          if (/^(https?:)?\/\//i.test(args.path)) {
+            return {
+              errors: [{
+                text:
+                  `插件 ${pluginId} 的样式 ${args.importer} 远程 @import "${args.path}" 被拒绝：` +
+                  '远程样式不受本地依赖校验与缓存管控；请将样式复制进 clientRoot 后相对引用',
+              }],
+            };
+          }
+          return null; // 本地 @import：默认解析 + onLoad containment（越根拒绝）
+        }
+        return null;
+      });
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 缓存复查与依赖清单
 // ---------------------------------------------------------------------------
 
@@ -328,7 +394,7 @@ function readCachedResult(
     return undefined; // 清单损坏：视为未缓存，重新编译
   }
   if (
-    list.version !== 2 ||
+    list.version !== DEPS_LIST_VERSION ||
     list.module !== moduleRef ||
     list.root !== rootReal ||
     typeof list.contentHash !== 'string' ||
@@ -374,7 +440,7 @@ function collectLocalDependencies(
 /** 组装依赖清单：逐依赖 sha256（内容寻址，跨重启稳定；不依赖 mtime）。 */
 function buildDepsList(rootReal: string, moduleRef: string, dependencies: string[]): DepsListFile {
   const hash = createHash('sha256');
-  hash.update('helm-plugin-client-v2\n');
+  hash.update(`helm-plugin-client-v${DEPS_LIST_VERSION}\n`);
   hash.update(`module:${moduleRef}\n`);
   const entries = dependencies.map((abs) => {
     const rel = relative(rootReal, abs);
@@ -383,7 +449,7 @@ function buildDepsList(rootReal: string, moduleRef: string, dependencies: string
     return { path: rel, sha256: sha };
   });
   return {
-    version: 2,
+    version: DEPS_LIST_VERSION,
     module: moduleRef,
     root: rootReal,
     contentHash: hash.digest('hex').slice(0, 24),

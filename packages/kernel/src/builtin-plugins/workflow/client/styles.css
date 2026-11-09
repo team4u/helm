@@ -1,7 +1,7 @@
 /**
  * builtin:workflow 插件自有样式（clientRoot 内本地 CSS）。
  *
- * 编译器把它内联进插件 JS，模块加载时注入 <style data-helm-plugin-css>，
+ * 编译器合并为插件 JS 的样式文本导出，由宿主确认加载有效后注入，
  * 插件停用/卸载时由宿主移除；宿主 styles.css 不再包含任何 subagent/workflow
  * 业务类。仅使用宿主全局设计变量，不覆盖宿主通用组件。
  */
@@ -530,11 +530,27 @@
   white-space: nowrap;
 }
 
-/* 阶段胶囊完成 / 失败态（active 态沿用既有样式） */
+/* 同优先级的状态规则必须位于基础规则之后，避免状态色被覆盖。 */
+.phase-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
 .phase-segment {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+}
+.phase-segment-active {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
 }
 .phase-segment-done {
   color: var(--ok);
@@ -722,23 +738,4 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.phase-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.phase-segment {
-  font-size: 11px;
-  color: var(--fg-muted);
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: var(--bg-subtle);
-}
-.phase-segment-active {
-  color: var(--accent);
-  border-color: var(--accent-border);
-  background: var(--accent-bg);
 }
