@@ -16,12 +16,15 @@ import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { PluginUiView } from './PluginUiView.js'
+import { DropdownMenuItem } from './DropdownMenu.js'
 import { buildMicroActionInput, isActionOnlyActionSpec, microActionPluginId } from '../conversation/action-model.js'
 
 export interface PluginMicroActionProps {
   action: QualifiedUiSpec<ConversationActionSpec>
   /** 渲染形态：toolbar=顶栏图标按钮；menu=下拉菜单项；hover=消息悬停栏图标按钮。 */
   variant: 'toolbar' | 'menu' | 'hover'
+  /** 由 Radix 下拉菜单承载时参与其键盘导航与选中生命周期。 */
+  inDropdown?: boolean
   /** 实际会话上下文（载荷与 PluginUiView conversationId 都用它，绝不取 spec 伪造值）。 */
   conversationId: number
   /** timeline.entry.action 场景的目标条目 ID（注入载荷 entryId）。 */
@@ -35,6 +38,7 @@ export interface PluginMicroActionProps {
 export function PluginMicroAction({
   action,
   variant,
+  inDropdown,
   conversationId,
   entryId,
   slotProps,
@@ -86,6 +90,22 @@ export function PluginMicroAction({
     } finally {
       setPending(false)
     }
+  }
+
+  if (variant === 'menu' && inDropdown) {
+    return (
+      <DropdownMenuItem
+        className="popover-item"
+        disabled={pending}
+        onClick={(event) => event.stopPropagation()}
+        onSelect={() => { void run() }}
+      >
+        <span className="pane-more-item-label">
+          <HelmIcon name={pending ? 'loader' : (spec.icon ?? 'zap')} size={13} className={pending ? 'spin-slow' : undefined} />
+          {label}
+        </span>
+      </DropdownMenuItem>
+    )
   }
 
   if (variant === 'menu') {

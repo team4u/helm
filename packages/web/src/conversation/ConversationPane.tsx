@@ -388,6 +388,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                           key={`header-menu:${action.pluginId}/${action.spec.id}`}
                           action={action}
                           variant="menu"
+                          inDropdown
                           conversationId={conversation.id}
                           slotProps={{ conversation }}
                           onInvoked={() => setMoreOpen(false)}
