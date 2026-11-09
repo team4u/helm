@@ -4,6 +4,7 @@ import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/ap
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { Switch } from '../ui/Switch.js'
 import {
   buildPluginConfigPayload,
   configFieldInitialValue,
@@ -74,15 +75,12 @@ function PluginConfigForm({
                 {schema.required && <span style={{ color: 'var(--err)' }}>*</span>}
               </label>
               {schema.type === 'boolean' ? (
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
-                  <input
-                    id={fieldId}
-                    type="checkbox"
-                    checked={values[key] === true}
-                    onChange={(e) => setValues((prev) => ({ ...prev, [key]: e.target.checked }))}
-                  />
-                  {values[key] === true ? '开启' : '关闭'}
-                </label>
+                <Switch
+                  id={fieldId}
+                  checked={values[key] === true}
+                  onChange={(checked) => setValues((prev) => ({ ...prev, [key]: checked }))}
+                  label={values[key] === true ? '开启' : '关闭'}
+                />
               ) : schema.type === 'number' ? (
                 <input
                   id={fieldId}
@@ -337,7 +335,7 @@ export function PluginSettingsModal({
                       )}
                     </div>
                     <button
-                      className={`btn btn-sm ${plugin.enabled ? 'btn-danger' : 'btn-primary'}`}
+                      className={`btn btn-sm ${plugin.enabled ? 'btn' : 'btn-primary'}`}
                       style={{ flexShrink: 0 }}
                       disabled={plugin.locked || toggling}
                       onClick={() => void toggleEnabled()}

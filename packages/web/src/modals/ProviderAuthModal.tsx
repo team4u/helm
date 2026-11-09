@@ -5,6 +5,7 @@ import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { ProviderCatalog } from './ProviderCatalog.js'
 import { Select } from '../ui/Select.js'
+import { Switch } from '../ui/Switch.js'
 import './provider-auth.css'
 
 type ProviderDraft = ProviderConfig & { modelText: string }
@@ -76,7 +77,7 @@ function ProvidersSection() {
                 onChange={(event) => patch(index, { protocol: event.target.value as 'openai' | 'anthropic' })}
               />
             </label>
-            <label className="provider-field">状态<span className="provider-gateway-toggle"><input type="checkbox" checked={provider.enabled} onChange={(event) => patch(index, { enabled: event.target.checked })} disabled={saving} />{provider.enabled ? '已启用' : '已停用'}</span></label>
+            <label className="provider-field">状态<span className="provider-gateway-toggle"><Switch checked={provider.enabled} onChange={(enabled) => patch(index, { enabled })} disabled={saving} label={provider.enabled ? '已启用' : '已停用'} /></span></label>
             <label className="provider-field provider-gateway-url">Base URL<input className="input mono" placeholder="https://api.example.com/v1" value={provider.baseUrl} onChange={(event) => patch(index, { baseUrl: event.target.value })} disabled={saving} /></label>
           </div>
           <label className="provider-field">模型 ID<textarea className="textarea mono" rows={3} placeholder="每行一个模型 ID，或使用逗号分隔" value={provider.modelText} onChange={(event) => patch(index, { modelText: event.target.value })} disabled={saving} /></label>

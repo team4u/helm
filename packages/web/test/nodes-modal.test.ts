@@ -174,8 +174,9 @@ test('入口接线：App 挂载 / Sidebar 页脚与智能体站位 / 命令面�
   // 会话顶栏不再常驻节点下拉与 profile 徽章，改只读副标题（formatEnvSubtitle）。
   assert.match(paneSource, /formatEnvSubtitle/)
   assert.doesNotMatch(paneSource, /aria-label="会话执行节点"/)
-  // Profile 编辑器节点输入关联已知节点 datalist。
-  assert.match(profileEditorSource, /helm-known-nodes/)
+  // Profile 编辑器节点使用 Select 下拉选择已知节点（清理残留死 DOM helm-known-nodes）。
+  assert.match(profileEditorSource, /nodeSelectOptions/)
+  assert.doesNotMatch(profileEditorSource, /helm-known-nodes/)
 })
 
 test('Store：refreshNodes 更新 live.nodes 且异常时通知', { timeout: 60_000 }, () => {

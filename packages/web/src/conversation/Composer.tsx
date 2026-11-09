@@ -493,7 +493,6 @@ function SessionEnvBar({
   return (
     <div className="composer-env-bar" data-dirty={dirty ? 'true' : undefined}>
       <span className="composer-env-item">
-        <HelmIcon name="network" size={12} />
         <Select
           className="composer-env-select"
           aria-label="会话执行节点"
@@ -506,8 +505,8 @@ function SessionEnvBar({
           }}
         />
       </span>
-      <span className="composer-env-item">
-        <HelmIcon name="folder" size={12} />
+      <span className="composer-env-item composer-env-cwd-wrap">
+        <HelmIcon name="folder" size={12} className="composer-env-cwd-icon" />
         <input
           className="input mono composer-env-cwd-input"
           aria-label="会话工作目录"
