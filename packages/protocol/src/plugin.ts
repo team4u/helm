@@ -351,6 +351,25 @@ export interface PluginDocHandle<T> {
   flush(): Promise<void>
 }
 
+/** 按会话隔离的持久文档；读写深拷贝，生命周期与全局文档相同。 */
+export interface PluginSessionDocHandle<TState = unknown> {
+  get(conversationId: number): TState
+  set(conversationId: number, value: TState): void
+  update(conversationId: number, fn: (current: TState) => TState): void
+  delete(conversationId: number): void
+  listConversationIds(): number[]
+  flush(): Promise<void>
+}
+
+/** 会话文档不进入全局快照；仅经指定文档的订阅流发布。delete 的 value 为初始值。 */
+export interface PublicPluginSessionDoc {
+  pluginId: string
+  name: string
+  conversationId: number
+  value: unknown
+  deleted?: boolean
+}
+
 /** 插件公共文档快照（跨端可读；逐值 JSON 校验/脱敏后发布，默认不公开）。 */
 export interface PublicPluginDoc {
   pluginId: string
@@ -563,6 +582,9 @@ export interface HelmPluginContext<TConfig = Record<string, unknown>> {
 
   /** 持久状态文档；opts.public = true 时进入公共快照与 plugin.doc.updated 事件。 */
   doc<TState>(name: string, initial: TState, opts?: PluginDocOptions): PluginDocHandle<TState>
+
+  /** 按会话隔离的文档，不进入全局首帧或全局 SSE；文档名不得与 doc 重复。 */
+  sessionDoc<TState>(name: string, initial: TState, opts?: PluginDocOptions): PluginSessionDocHandle<TState>
 
   /** 后台服务（随插件启停生命周期管理）。 */
   service(spec: PluginServiceSpec): void

@@ -6,7 +6,7 @@
 import type { AskSpec } from './ask.js'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from './conversation.js'
 import type { NodeInfo } from './env-rpc.js'
-import type { PluginSummary, PublicPluginDoc } from './plugin.js'
+import type { PluginSummary, PublicPluginDoc, PublicPluginSessionDoc } from './plugin.js'
 import type { PluginUiContribution } from './ui.js'
 
 /** SSE 全局事件序号（水位线）。 */
@@ -39,6 +39,7 @@ export type HelmEventType =
   | 'ask.resolved'
   | 'plugin.changed'
   | 'plugin.doc.updated'
+  | 'plugin.session_doc.updated'
   | 'models.changed'
   | 'node.changed'
   | 'notification'
@@ -91,6 +92,18 @@ export interface PluginDocUpdatedEvent {
   doc: PublicPluginDoc
 }
 
+/** 仅出现在指定会话文档的 SSE 流，不广播至 /api/events。 */
+export interface PluginSessionDocUpdatedEvent {
+  type: 'plugin.session_doc.updated'
+  doc: PublicPluginSessionDoc
+}
+
+/** 会话文档订阅首帧；随后的更新使用 HelmEventFrame。 */
+export interface PluginSessionDocSnapshot {
+  seq: HelmEventSeq
+  doc: PublicPluginSessionDoc
+}
+
 /** 模型配置或动态目录已更新；客户端重新读取模型与供应商目录。 */
 export interface ModelsChangedEvent {
   type: 'models.changed'
@@ -135,6 +148,7 @@ export type HelmEvent =
   | AskResolvedEvent
   | PluginChangedEvent
   | PluginDocUpdatedEvent
+  | PluginSessionDocUpdatedEvent
   | ModelsChangedEvent
   | NodeChangedEvent
   | NotificationEvent

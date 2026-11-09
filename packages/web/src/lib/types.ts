@@ -5,6 +5,7 @@ import type {
   CommandSpec,
   ComposerPillSpec,
   ComposerWidgetSpec,
+  ConversationActionSpec,
   ConversationDetail,
   ConversationLive,
   ConversationScope,
@@ -13,6 +14,8 @@ import type {
   NodeInfo,
   NotificationEvent,
   PluginSummary,
+  PluginSlotContributionSpec,
+  ProfileRuntimeUiSpec,
   PluginUiContribution,
   Profile,
   ProviderConfig,
@@ -21,6 +24,7 @@ import type {
   SidebarItemSpec,
   SidebarSectionSpec,
   SkillSummary,
+  TimelineEntryActionSpec,
   TimelineRendererSpec,
   ToolViewSpec,
   WorkbenchPanelSpec,
@@ -62,6 +66,11 @@ export interface GroupedUiSpecs {
   workbenchPanels: Array<QualifiedUiSpec<WorkbenchPanelSpec>>
   commands: Array<QualifiedUiSpec<CommandSpec>>
   settingsPanels: Array<QualifiedUiSpec<SettingsPanelSpec>>
+  profileRuntimes: Array<QualifiedUiSpec<ProfileRuntimeUiSpec>>
+  conversationHeaderActions: Array<QualifiedUiSpec<ConversationActionSpec>>
+  conversationRowActions: Array<QualifiedUiSpec<ConversationActionSpec>>
+  timelineEntryActions: Array<QualifiedUiSpec<TimelineEntryActionSpec>>
+  pluginSlots: Array<QualifiedUiSpec<PluginSlotContributionSpec>>
 }
 
 export interface ToastNotice extends NotificationEvent {
@@ -79,7 +88,7 @@ export function matchesUiScope(
   return matchesConversationScope(scope, conversation)
 }
 
-/** 将 UI 贡献列表按 10 个扩展点分组并排序。 */
+/** 将 UI 贡献列表按扩展面分组并排序。 */
 export function groupUiContributions(contributions: PluginUiContribution[]): GroupedUiSpecs {
   const grouped: GroupedUiSpecs = {
     sidebarItems: [],
@@ -92,6 +101,11 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
     workbenchPanels: [],
     commands: [],
     settingsPanels: [],
+    profileRuntimes: [],
+    conversationHeaderActions: [],
+    conversationRowActions: [],
+    timelineEntryActions: [],
+    pluginSlots: [],
   }
   for (const item of contributions) {
     const spec = item.spec as Record<string, unknown> | undefined
@@ -125,6 +139,21 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
       case 'command':
         grouped.commands.push({ pluginId: item.pluginId, spec: spec as unknown as CommandSpec })
         break
+      case 'profile.runtime':
+        grouped.profileRuntimes.push({ pluginId: item.pluginId, spec: spec as unknown as ProfileRuntimeUiSpec })
+        break
+      case 'conversation.header.action':
+        grouped.conversationHeaderActions.push({ pluginId: item.pluginId, spec: spec as unknown as ConversationActionSpec })
+        break
+      case 'conversation.row.action':
+        grouped.conversationRowActions.push({ pluginId: item.pluginId, spec: spec as unknown as ConversationActionSpec })
+        break
+      case 'timeline.entry.action':
+        grouped.timelineEntryActions.push({ pluginId: item.pluginId, spec: spec as unknown as TimelineEntryActionSpec })
+        break
+      case 'plugin.slot':
+        grouped.pluginSlots.push({ pluginId: item.pluginId, spec: spec as unknown as PluginSlotContributionSpec })
+        break
       case 'settings.panel':
         grouped.settingsPanels.push({ pluginId: item.pluginId, spec: spec as unknown as SettingsPanelSpec })
         break
@@ -140,6 +169,10 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
   grouped.sidebarSections.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
   grouped.workbenchPanels.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
   grouped.settingsPanels.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
+  grouped.profileRuntimes.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
+  grouped.conversationHeaderActions.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
+  grouped.conversationRowActions.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
+  grouped.timelineEntryActions.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
   return grouped
 }
 
