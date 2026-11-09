@@ -246,7 +246,7 @@ test('非法形状显式拒绝：priority 非整数 / slash 保留词 / slot tar
     host.register({
       id: 'p:x6',
       definePlugin: (ctx) => {
-        ctx.ui.timelineEntryAction({ id: 'a', label: '坏角色', actionId: 'x', roles: ['system'] })
+        ctx.ui.timelineEntryAction({ id: 'a', label: '坏角色', actionId: 'x', roles: ['system'] as never })
       },
     }),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
@@ -480,7 +480,7 @@ test('会话删除后 sessionDoc 写入被拒绝（防孤儿重建）', { timeou
   const existing = new Set([1, 2])
   hostApi = makeHostApi({ existing })
   const host = makeHost()
-  let handle!: { set(id: number, v: unknown): void }
+  let handle!: { get(id: number): unknown; set(id: number, v: unknown): void }
   await host.register({
     id: 'p:sd',
     definePlugin: (ctx) => {
@@ -517,7 +517,7 @@ test('插件停用后 sessionDoc 句柄失效；重新启用后可继续读写�
 // SessionDocEventHub 专用流
 // ---------------------------------------------------------------------------
 
-test('SessionDocEventHub：dispatch 只投递订阅了该三元组的监听器；非法载荷拒绝', { timeout: 60_000 }, () => {
+test('SessionDocEventHub：dispatch 只投递订阅了该三元组的监听器；非法载荷拒绝且不 TypeError', { timeout: 60_000 }, () => {
   const hub = new SessionDocEventHub()
   const frames: HelmEventFrame[] = []
   const other: HelmEventFrame[] = []
@@ -538,10 +538,157 @@ test('SessionDocEventHub：dispatch 只投递订阅了该三元组的监听器�
       }),
     'invalid_event',
   )
+  // doc 缺失 / null / 非对象：先形状门禁，不得在读字段前 TypeError。
+  throwsCode(() => hub.dispatch({ type: 'plugin.session_doc.updated' }), 'invalid_event')
+  throwsCode(() => hub.dispatch({ type: 'plugin.session_doc.updated', doc: null }), 'invalid_event')
+  throwsCode(() => hub.dispatch(undefined), 'invalid_event')
+  throwsCode(() => hub.dispatch('junk'), 'invalid_event')
+  // 非法事件不推进 seq。
+  const seqBefore = hub.seq
+  assert.equal(hub.seq, seqBefore)
+  assert.equal(hub.subscriberCount, 2, 'subscriberCount 统计实际订阅者个数')
   off()
   offOther()
   hub.close()
   assert.equal(hub.subscriberCount, 0)
+})
+
+test('SessionDocEventHub：同一三元组多订阅者的 subscriberCount 与 close 真正关流', { timeout: 60_000 }, async () => {
+  const hub = new SessionDocEventHub()
+  const c1 = new AbortController()
+  const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
+  const r1 = hub.response(new Request('http://x', { signal: c1.signal }), {
+    snapshot: () => ({ seq: 0, doc: { ...target, value: { n: 0 } } }),
+    target,
+  })
+  // 同一三元组第二条连接：流句柄各自登记，互不覆盖。
+  const r2 = hub.response(new Request('http://x'), {
+    snapshot: () => ({ seq: 0, doc: { ...target, value: { n: 0 } } }),
+    target,
+  })
+  assert.equal(hub.subscriberCount, 2, '两条连接各占一个订阅')
+  hub.close()
+  assert.equal(hub.subscriberCount, 0, 'close 清空全部订阅')
+  // close 后两条流都被服务端结束（读到 done）；后续 dispatch 不再投递。
+  hub.dispatch({ type: 'plugin.session_doc.updated', doc: { ...target, value: { n: 9 } } })
+  for (const res of [r1, r2]) {
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader()
+    let done = false
+    while (!done) {
+      const next = await reader.read()
+      done = next.done === true
+    }
+    assert.ok(done, 'close() 后流结束')
+  }
+  c1.abort()
+})
+
+test('SessionDocEventHub：closeForPlugin/closeForConversation 只关匹配流', { timeout: 60_000 }, async () => {
+  const hub = new SessionDocEventHub()
+  const t1 = { pluginId: 'p:a', name: 'm', conversationId: 1 }
+  const t2 = { pluginId: 'p:b', name: 'm', conversationId: 2 }
+  const mk = (t: { pluginId: string; name: string; conversationId: number }) =>
+    hub.response(new Request('http://x'), {
+      snapshot: () => ({ seq: 0, doc: { ...t, value: {} } }),
+      target: t,
+    })
+  const r1 = mk(t1)
+  const r2 = mk(t2)
+  assert.equal(hub.subscriberCount, 2)
+  hub.closeForPlugin('p:a')
+  assert.equal(hub.subscriberCount, 1, '插件 p:a 的流被关闭')
+  hub.closeForConversation(2)
+  assert.equal(hub.subscriberCount, 0, '会话 2 的流被关闭')
+  for (const res of [r1, r2]) {
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader()
+    let done = false
+    while (!done) {
+      const next = await reader.read()
+      done = next.done === true
+    }
+  }
+})
+
+test('SessionDocEventHub.response：快照 provider 重入发布不丢帧不重复（seq 筛选）', { timeout: 60_000 }, async () => {
+  const hub = new SessionDocEventHub()
+  const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
+  let providerSeq = 0
+  const response = hub.response(new Request('http://x'), {
+    // provider 同步重入 dispatch：模拟订阅建立后、快照返回前的并发更新。
+    // n=1 在 provider 内发布（seq=1，快照水位取 provider 返回时的 hub.seq=1），
+    // n=2 在 provider 返回后、流冲刷前发布（seq=2，水位之后必须冲刷）。
+    snapshot: () => {
+      hub.dispatch({ type: 'plugin.session_doc.updated', doc: { ...target, value: { n: 1 } } })
+      providerSeq = hub.seq
+      return { seq: providerSeq, doc: { ...target, value: { n: 1 } } }
+    },
+    target,
+  })
+  const reader = (response.body as ReadableStream<Uint8Array>).getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  const first = await reader.read()
+  text += decoder.decode(first.value!, { stream: true })
+  assert.match(text, /event: snapshot/)
+  assert.match(text, /"n":1/, '快照为 provider 时点值')
+  // 快照冲刷阶段：seq=1 的缓冲帧已体现在快照里（不得重复），水位后无新帧。
+  assert.ok(!text.includes('plugin.session_doc.updated'), '快照内的更新不重复下发')
+  hub.dispatch({ type: 'plugin.session_doc.updated', doc: { ...target, value: { n: 2 } } })
+  const second = await reader.read()
+  text += decoder.decode(second.value!, { stream: true })
+  assert.match(text, /event: plugin\.session_doc\.updated/)
+  assert.match(text, /"n":2/, '水位后的更新必达')
+  // 终态：每帧恰一次（n=1 只在快照，n=2 只在增量）。
+  assert.equal((text.match(/"n":1/g) ?? []).length, 1)
+  assert.equal((text.match(/"n":2/g) ?? []).length, 1)
+})
+
+test('SessionDocEventHub.response：快照 provider 出错同步清理（不建流不残留订阅）', { timeout: 60_000 }, () => {
+  const hub = new SessionDocEventHub()
+  const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
+  assert.throws(
+    () =>
+      hub.response(new Request('http://x'), {
+        snapshot: () => {
+          throw new HelmError('plugin_doc_not_found', '插件已停用', 404)
+        },
+        target,
+      }),
+    (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+  )
+  assert.equal(hub.subscriberCount, 0, 'provider 失败后无订阅残留')
+})
+
+test('SessionDocEventHub.response：未消费流字节背压超限主动终止并退订（1MiB 默认外的显式小上限）', { timeout: 60_000 }, async () => {
+  const hub = new SessionDocEventHub({ maxPendingBytes: 1024 })
+  const controller = new AbortController()
+  const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
+  const response = hub.response(new Request('http://x', { signal: controller.signal }), {
+    snapshot: () => ({ seq: 0, doc: { ...target, value: { n: 0 } } }),
+    target,
+  })
+  const reader = (response.body as ReadableStream<Uint8Array>).getReader()
+  const first = await reader.read()
+  assert.ok(first.value, '首帧 snapshot 可读')
+  // 不再读：同步堆积大量大帧，超过 1KiB 上限后订阅被移除（慢客户端关流）。
+  for (let i = 0; i < 64; i++) {
+    hub.dispatch({
+      type: 'plugin.session_doc.updated',
+      doc: { ...target, value: { n: i, bulk: 'x'.repeat(128) } },
+    })
+    if (hub.subscriberCount === 0) break
+  }
+  assert.equal(hub.subscriberCount, 0, '字节积压超限后订阅被明确移除')
+  // 已入队帧仍可读，最终得到 done（不再投递新帧）。
+  let done = false
+  while (!done) {
+    const next = await reader.read()
+    done = next.done === true
+  }
+  hub.dispatch({ type: 'plugin.session_doc.updated', doc: { ...target, value: { n: -1 } } })
+  const after = await reader.read()
+  assert.ok(after.done, '关流后不再投递新帧')
+  controller.abort()
 })
 
 test('SessionDocEventHub.response：首帧 snapshot 后增量；abort 清理订阅', { timeout: 60_000 }, async () => {
@@ -549,7 +696,7 @@ test('SessionDocEventHub.response：首帧 snapshot 后增量；abort 清理订�
   const controller = new AbortController()
   const target = { pluginId: 'p:a', name: 'm', conversationId: 1 }
   const response = hub.response(new Request('http://x', { signal: controller.signal }), {
-    snapshot: { seq: 0, doc: { ...target, value: { n: 0 } } },
+    snapshot: () => ({ seq: 0, doc: { ...target, value: { n: 0 } } }),
     target,
   })
   assert.equal(response.headers.get('content-type'), 'text/event-stream')

@@ -39,6 +39,7 @@ export type {
   PluginRouteInfo,
   ProfileService,
   ProviderService,
+  SessionDocEventPort,
   SkillService,
   StartHubOptions,
   HubHandle,

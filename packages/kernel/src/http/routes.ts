@@ -19,6 +19,7 @@ import type {
   ConversationStatus,
   PluginConfigFieldSchema,
   Profile,
+  PublicPluginSessionDoc,
 } from '@helm/protocol'
 import { realpath as nodeFsRealpath, readFile as nodeFsReadFile } from 'node:fs/promises'
 import { join as joinPath, sep as PATH_SEP } from 'node:path'
@@ -663,10 +664,12 @@ function parseConversationIdQuery(url: URL): number | undefined {
 
 /**
  * 会话文档专用 SSE：GET /api/plugins/:id/docs/:name/events?conversationId=N。
- * - 鉴权与 GET 同源（hub 统一前置，无 public 豁免）；
- * - 先同步读取快照（同时完成 public/会话存在性校验，失败即结构化错误——
- *   插件停用/会话删除返回 404，客户端据此停止重试），再建订阅流；
- * - 插件停用或会话删除后流被终止（shouldStop 轮询 + 每帧检查）；
+ * - 鉴权与 GET 同源（hub 统一前置，无 public 豁免；未授权返回结构化 JSON 401）；
+ * - 传给端口的是同步快照 provider（而非预先取好的快照）：枢纽先建缓冲订阅
+ *   再调 provider，消除「先快照后订阅」的丢帧窗口；provider 内完成
+ *   插件启用 + 文档 public + 会话存在三重校验（失败抛 404/400，建连前即拒）；
+ * - 插件停用/会话删除由 kernel 侧事件驱动关流（plugin.changed /
+ *   conversation.deleted），HTTP 层不轮询；
  * - kernel 未提供 sessionDocEvents 端口时 501（禁内存降级）。
  */
 async function sessionDocEventsResponse(
@@ -689,21 +692,36 @@ async function sessionDocEventsResponse(
       501,
     )
   }
-  // 快照读取同时完成：插件启用 + 文档 public + 会话存在 三重校验（404 语义）。
-  const doc = await kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId)
-  const snapshot = { seq: port.seq, doc }
   const target = { pluginId, name, conversationId }
-  // 建流后异步终山条件：插件停用（含注销）或会话已删除即关流，防订阅泄漏。
-  const shouldStop = (): boolean => {
-    try {
-      void kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId)
-      return false
-    } catch {
-      return true
-    }
+  // 同步快照 provider：读取同时完成三重校验（404 语义），出错同步抛给
+  // 上层（hub 转结构化 JSON 错误，客户端据此停止重试）；建连 race 由
+  // provider 在订阅建立后再次校验兑底。
+  const snapshot = () => {
+    const doc = snapshotDocOf(kernel, pluginId, name, conversationId)
+    return { seq: port.seq, doc }
   }
   void redactor
-  return port.response(ctx.request, { snapshot, target, shouldStop })
+  return port.response(ctx.request, { snapshot, target })
+}
+
+/** 快照读取的同步包装：getPublicSessionDoc 同步返回时直接使用，异步时拒绝。 */
+function snapshotDocOf(
+  kernel: KernelRuntimeLike,
+  pluginId: string,
+  name: string,
+  conversationId: number,
+): PublicPluginSessionDoc {
+  const result = kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId)
+  if (result instanceof Promise) {
+    // 端口契约要求同步快照（专用流订阅与快照同一原子窗口）；异步实现
+    // 属于契约违约，显式拒绝而不是等待后伪造同步性。
+    throw new HelmError(
+      'not_implemented',
+      '当前 runtime 的 getPublicSessionDoc 为异步实现，无法提供同步会话文档快照',
+      501,
+    )
+  }
+  return result
 }
 
 /**

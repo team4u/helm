@@ -548,22 +548,52 @@ export class EventHub {
   }
 }
 
+/** 会话文档订阅首帧：{seq, doc}；由 HTTP 层经同步 provider 原子读取。 */
+export interface SessionDocSnapshot {
+  seq: number
+  doc: PublicPluginSessionDoc
+}
+
+interface SessionDocStreamEntry {
+  target: { pluginId: string; name: string; conversationId: number }
+  stop: () => void
+}
+
+/** 缓冲阶段的未决帧（保留 seq，冲刷时只发 seq > snapshot.seq 的帧）。 */
+interface SessionDocQueuedFrame {
+  seq: number
+  chunk: string
+}
+
 /**
  * SessionDocEventHub：会话文档专用事件面。
  *
  * plugin.session_doc.updated 绝不进入全局 /api/events（写放大与跨会话泄漏）；
  * 本枢纽只把 (pluginId, name, conversationId) 三元组的更新分发给订阅了该
  * 三元组的专用 SSE 流。帧形状与全局流一致（HelmEventFrame {seq, event}），
- * seq 与全局水位共用同一单调序列的意义由调用方（HTTP 层）决定——此处只
- * 维护自己的单调计数，首帧 snapshot 由 HTTP 层用 PluginSessionDocSnapshot
- * 契约（seq, doc）单独构造。
+ * seq 只维护本枢纽自己的单调计数；首帧 snapshot 由 response 的同步 provider
+ * （如 kernel.plugins.getPublicSessionDoc）在订阅建立之后调用，保证
+ * 「先订阅缓冲、后取快照」的原子窗口——快照与首帧增量之间不丢帧、不重复。
+ *
+ * 生命周期：response 为每条流登记 (target, stop)；hub.close() 真正关闭全部
+ * 流（ReadableStream close + 退订）；closeForPlugin/closeForConversation 由
+ * runtime 监听 core 事件驱动（plugin.changed enabled=false / conversation.deleted），
+ * 事件驱动而非轮询，无外部调用时零开销。
  */
 export class SessionDocEventHub {
   private seqValue = 0
   private readonly subscribers = new Map<string, Set<(frame: HelmEventFrame) => void>>()
+  /** 每条专用流的关闭句柄（close()/定向关闭用；同一三元组多连接各自登记）。 */
+  private readonly streams = new Set<SessionDocStreamEntry>()
   /** 订阅建立到快照冲刷完成之间的未决帧数上限（溢出即慢客户端，关流重连）。 */
-  private readonly maxPending = 512
+  private readonly maxPending = MAX_PENDING_EVENTS
+  /** 流式阶段未读字节上限（默认 1 MiB；慢客户端显式关流，绝不无限排队）。 */
+  private readonly maxPendingBytes: number
   private redactFn: (text: string) => string = (t) => t
+
+  constructor(options: { maxPendingBytes?: number } = {}) {
+    this.maxPendingBytes = options.maxPendingBytes ?? DEFAULT_MAX_PENDING_BYTES
+  }
 
   set redact(fn: (text: string) => string) {
     this.redactFn = fn
@@ -577,34 +607,64 @@ export class SessionDocEventHub {
     return `${doc.pluginId}\0${doc.name}\0${doc.conversationId}`
   }
 
-  /** 当前活跃订阅数（诊断与测试用）。 */
+  /** 当前活跃订阅数（实际监听器个数，诊断与测试用）。 */
   get subscriberCount(): number {
-    return this.subscribers.size
+    let total = 0
+    for (const set of this.subscribers.values()) total += set.size
+    return total
   }
 
-  /** 清空全部订阅（kernel.close 时调用，杜绝泄漏）。 */
+  /** 真正关闭全部专用流并清空订阅（kernel.close 时调用，杜绝泄漏）。 */
   close(): void {
-    this.subscribers.clear()
+    this.closeStreams(() => true)
+  }
+
+  /** 关闭指定插件的全部专用流（插件停用/注销：plugin.changed enabled=false）。 */
+  closeForPlugin(pluginId: string): void {
+    this.closeStreams((entry) => entry.target.pluginId === pluginId)
+  }
+
+  /** 关闭指定会话的全部专用流（会话删除：conversation.deleted）。 */
+  closeForConversation(conversationId: number): void {
+    this.closeStreams((entry) => entry.target.conversationId === conversationId)
+  }
+
+  private closeStreams(match: (entry: SessionDocStreamEntry) => boolean): void {
+    for (const entry of [...this.streams]) {
+      if (match(entry)) entry.stop()
+    }
   }
 
   /**
    * 发布一条会话文档更新：只投递订阅了该三元组的监听器。
    * 载荷在边界做形状校验 + JSON 脱敏（与 EventHub.buildEvent 同一纪律），
-   * 非法载荷显式抛 HelmError，绝不静默降级。
+   * 非法载荷显式抛 HelmError 且不推进 seq，绝不静默降级。
    */
   dispatch(payload: unknown): void {
-    const source = payload as { type?: unknown; doc?: unknown } | undefined
+    // 先做形状门禁（doc 为 null/非对象时不得进入任何字段读取），
+    // 再校验三元组字段，最后脱敏组装。
+    const source = (payload ?? undefined) as { type?: unknown; doc?: unknown } | undefined
     const doc = source?.['doc']
-    const convId = (doc as { conversationId?: unknown }).conversationId
+    if (doc === null || typeof doc !== 'object') {
+      throw new HelmError(
+        'invalid_event',
+        'plugin.session_doc.updated 需要 { pluginId: string; name: string; conversationId: number; value } 形状的 doc',
+        500,
+      )
+    }
+    const record = doc as Record<string, unknown>
+    const pluginId = record['pluginId']
+    const name = record['name']
+    const conversationId = record['conversationId']
     if (
-      doc === null ||
-      typeof doc !== 'object' ||
-      typeof (doc as { pluginId?: unknown }).pluginId !== 'string' ||
-      typeof (doc as { name?: unknown }).name !== 'string' ||
-      typeof convId !== 'number' ||
-      !Number.isSafeInteger(convId) ||
-      convId <= 0 ||
-      !('value' in (doc as Record<string, unknown>))
+      typeof pluginId !== 'string' ||
+      pluginId === '' ||
+      typeof name !== 'string' ||
+      name === '' ||
+      typeof conversationId !== 'number' ||
+      !Number.isSafeInteger(conversationId) ||
+      conversationId <= 0 ||
+      !('value' in record)
     ) {
       throw new HelmError(
         'invalid_event',
@@ -612,7 +672,7 @@ export class SessionDocEventHub {
         500,
       )
     }
-    if ((doc as { deleted?: unknown }).deleted !== undefined && (doc as { deleted?: unknown }).deleted !== true) {
+    if (record['deleted'] !== undefined && record['deleted'] !== true) {
       throw new HelmError('invalid_event', 'plugin.session_doc.updated 的 deleted 若有必须为 true', 500)
     }
     const clean = redactJsonValue(doc as PublicPluginSessionDoc, (t) => this.redactFn(t)) as PublicPluginSessionDoc
@@ -657,20 +717,28 @@ export class SessionDocEventHub {
   /**
    * 专用 SSE 响应：首帧 `event: snapshot`（PluginSessionDocSnapshot {seq, doc}），
    * 随后 `event: plugin.session_doc.updated` + HelmEventFrame 增量。
-   * 复用全局流的有界背压（MAX_PENDING_EVENTS + 字节上限）与 abort/cancel
-   * 清理机制；重连即重新订阅并重置 snapshot（无跨连接状态残留）。
+   *
+   * 原子窗口：先建立缓冲订阅，再同步调用 options.snapshot provider 读取快照
+   * （provider 同时完成 public/会话存在性再校验，失败同步抛给 HTTP 层），
+   * 发送快照后只冲刷 seq > snapshot.seq 的缓冲帧——不丢帧、不重复。
+   * provider 出错或 request 已 abort：同步退订清理，不建流。
+   *
+   * 背压与清理：缓冲阶段受 MAX_PENDING_EVENTS 限制，流式阶段以
+   * controller.desiredSize（hwm=0，恒为 -排队字节数）做字节上限判定，
+   * 超限即慢客户端，显式关流退订（绝不无限排队）；abort / cancel /
+   * hub 定向关闭同样关流。重连即重新订阅并重置 snapshot（无跨连接残留）。
    */
   response(
     request: Request,
     options: {
-      snapshot: { seq: number; doc: PublicPluginSessionDoc }
+      /** 同步快照 provider：在订阅建立后调用，返回 {seq, doc}；出错同步抛。 */
+      snapshot: () => SessionDocSnapshot
       target: { pluginId: string; name: string; conversationId: number }
-      /** 订阅应结束时同步关流（如插件停用 / 会话删除 / 宿主关闭）。 */
-      shouldStop?: () => boolean
     },
   ): Response {
     const encoder = new TextEncoder()
-    let pending: string[] = []
+    /** 快照冲刷完成前的未决帧（此后改用流内字节背压）。 */
+    let pending: SessionDocQueuedFrame[] = []
     let streaming = false
     let closed = false
     let unsubscribe: (() => void) | undefined
@@ -682,20 +750,27 @@ export class SessionDocEventHub {
     const write = (chunk: string): boolean => {
       const controller = controllerRef
       if (controller === undefined || closed) return false
+      const bytes = encoder.encode(chunk)
+      // 字节级有界背压：desiredSize = -排队字节数（hwm=0）；超限即慢客户端。
+      const queuedBytes = controller.desiredSize === null ? 0 : -controller.desiredSize
+      if (queuedBytes + bytes.byteLength > this.maxPendingBytes) return false
       try {
-        controller.enqueue(encoder.encode(chunk))
+        controller.enqueue(bytes)
         return true
       } catch {
         return false
       }
     }
 
+    /** shutdown 注册句柄；provider 阶段（尚未登记）为 undefined，删除幂等。 */
+    let streamEntry: SessionDocStreamEntry | undefined
     const shutdown = (): void => {
       if (closed) return
       closed = true
       request.signal.removeEventListener('abort', shutdown)
       unsubscribe?.()
       unsubscribe = undefined
+      if (streamEntry !== undefined) this.streams.delete(streamEntry)
       const controller = controllerRef
       controllerRef = undefined
       try {
@@ -705,6 +780,7 @@ export class SessionDocEventHub {
       }
     }
 
+    // 先订阅缓冲（与快照读取同一同步窗口，不丢帧；缓冲帧保留 seq 供冲刷筛选）。
     unsubscribe = this.subscribe(options.target, (frame) => {
       if (closed) return
       const chunk = encodeFrame('plugin.session_doc.updated', frame)
@@ -713,11 +789,27 @@ export class SessionDocEventHub {
         return
       }
       if (pending.length >= this.maxPending) {
+        // 快照尚未冲刷完就积压超限（provider 同步重入发布才会触发）：明确关流。
         shutdown()
         return
       }
-      pending.push(chunk)
+      pending.push({ seq: frame.seq, chunk })
     })
+
+    // 再同步取快照（provider 失败/已 abort：同步退订，不建流、不伪造快照）。
+    let snap: SessionDocSnapshot
+    try {
+      if (request.signal.aborted) throw new HelmError('aborted', '订阅建立前请求已中断', 499)
+      snap = options.snapshot()
+    } catch (error) {
+      unsubscribe()
+      unsubscribe = undefined
+      this.subscribersCleanup(options.target)
+      throw error
+    }
+    const snapshotChunk = encodeFrame('snapshot', snap)
+    streamEntry = { target: options.target, stop: shutdown }
+    this.streams.add(streamEntry)
 
     const stream = new ReadableStream<Uint8Array>(
       {
@@ -728,14 +820,16 @@ export class SessionDocEventHub {
             return
           }
           request.signal.addEventListener('abort', shutdown)
-          // 先订阅缓冲已建立（构造上方），此处同步发首帧 snapshot 再冲刷缓冲。
-          if (!write(encodeFrame('snapshot', options.snapshot))) {
+          // 订阅缓冲已建立且快照已取定：先发首帧 snapshot，再冲刷 seq 更新的
+          // 缓冲帧（seq <= snapshot.seq 的已体现在快照里，重发即重复）。
+          if (!write(snapshotChunk)) {
             shutdown()
             return
           }
           streaming = true
-          for (const chunk of pending) {
-            if (!write(chunk)) {
+          for (const frame of pending) {
+            if (frame.seq <= snap.seq) continue
+            if (!write(frame.chunk)) {
               shutdown()
               return
             }
@@ -746,6 +840,7 @@ export class SessionDocEventHub {
           shutdown()
         },
       },
+      // hwm=0：desiredSize 恒为 -排队字节数，供 write 做慢客户端判定。
       { highWaterMark: 0, size: (c) => c.byteLength } satisfies QueuingStrategy<Uint8Array>,
     )
     return new Response(stream, {
@@ -756,5 +851,12 @@ export class SessionDocEventHub {
         'x-accel-buffering': 'no',
       },
     })
+  }
+
+  /** provider 失败路径的同步清理（退订后清理空 tuple 键；不触碰其他流）。 */
+  private subscribersCleanup(target: { pluginId: string; name: string; conversationId: number }): void {
+    const key = SessionDocEventHub.keyOf(target)
+    const set = this.subscribers.get(key)
+    if (set !== undefined && set.size === 0) this.subscribers.delete(key)
   }
 }

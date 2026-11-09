@@ -135,9 +135,10 @@ export interface SessionDocEventPort {
   response(
     request: Request,
     options: {
-      snapshot: { seq: number; doc: PublicPluginSessionDoc }
+      /** 同步快照 provider：订阅建立后调用（避免先快照后订阅的丢帧窗口），
+       * 出错同步抛（HTTP 层转结构化错误）；内部再做 public/会话存在性校验。 */
+      snapshot: () => { seq: number; doc: PublicPluginSessionDoc }
       target: { pluginId: string; name: string; conversationId: number }
-      shouldStop?: () => boolean
     },
   ): Response
 }

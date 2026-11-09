@@ -197,6 +197,8 @@ export class KernelRuntime {
   private readonly hookBridge: HookBridge
   /** 会话文档专用事件面（plugin.session_doc.updated 只进专用 SSE，不进全局广播）。 */
   private readonly sessionDocStreams = new SessionDocEventHub()
+  /** 会话文档专用流生命周期订阅（plugin.changed / conversation.deleted 驱动关流）。 */
+  private sessionDocLifecycleRelease: (() => void) | undefined
 
   static async open(options: KernelRuntimeOptions = {}): Promise<KernelRuntime> {
     const dataDir = resolveDataDir(options.dataDir)
@@ -481,6 +483,17 @@ export class KernelRuntime {
     this.events.redactFn = (t) => this.stashService.redact(t)
     this.sessionDocStreams.redact = (t) => this.stashService.redact(t)
     this.sessionDocEvents = this.sessionDocStreams
+    // 会话文档专用流的事件驱动终止（非轮询）：plugin.changed enabled=false
+    // 关闭该插件的全部专用流，conversation.deleted 关闭该会话的全部专用流；
+    // kernel.close 时释放该订阅。
+    this.sessionDocLifecycleRelease = this.events.subscribe((frame) => {
+      const event = frame.event
+      if (event.type === 'plugin.changed' && 'plugin' in event && event.plugin.enabled === false) {
+        this.sessionDocStreams.closeForPlugin(event.plugin.id)
+      } else if (event.type === 'conversation.deleted' && 'conversationId' in event) {
+        this.sessionDocStreams.closeForConversation(event.conversationId)
+      }
+    })
 
     this.asks = new AskService({
       store: this.store,
@@ -1924,6 +1937,8 @@ export class KernelRuntime {
     const storeError = await this.store.close()
     await this.database.close()
     this.events.close()
+    this.sessionDocLifecycleRelease?.()
+    this.sessionDocLifecycleRelease = undefined
     this.sessionDocStreams.close()
     this.stashService.clear()
     if (storeError !== undefined) {
