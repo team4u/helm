@@ -254,7 +254,10 @@ test('详情加载失败可重试；内嵌详情、重试与产物操作的点�
   spy.openArtifact = (id) => { artifacts.push(id) }
   const mod = await importWorkflowClientModule()
   const Card = mod.SubagentLiveCard as React.ComponentType<Record<string, unknown>>
-  const { host, unmount } = await mountClient(spy, e(Card, { childConversationId: 11, toolStatus: 'done', expanded: true }))
+  const { host, unmount } = await mountClient(spy, e(Card, {
+    childConversationId: 11, toolStatus: 'done', expanded: true,
+    callDetails: { input: { resume: 11, prompt: '原始续接指令' }, result: '原始结果', artifactRef: 'art_full' },
+  }))
   try {
     assert.match(host.textContent!, /加载失败.*网关超时/)
     const retry = host.querySelector('[aria-label="重新加载子会话详情"]') as HTMLElement
@@ -262,18 +265,20 @@ test('详情加载失败可重试；内嵌详情、重试与产物操作的点�
     const summary = details.querySelector('summary')!
     await act(async () => { retry.click(); summary.click() })
     assert.equal(reloads, 1)
-    for (const control of [retry, summary]) {
+    const artifact = details.querySelector('button') as HTMLElement
+    assert.ok(artifact)
+    await act(async () => { artifact.click() })
+    assert.deepEqual(artifacts, ['art_full'])
+    assert.match(details.textContent!, /"resume": 11/)
+    assert.match(details.textContent!, /原始结果/)
+    for (const control of [retry, summary, artifact]) {
       for (const key of ['Enter', ' ']) {
         act(() => { control.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })
       }
     }
     assert.deepEqual(spy.drawerCalls, [], '重试与内嵌详情不得打开抽屉')
 
-    const Details = mod.ToolCallDetailsInline as React.ComponentType<Record<string, unknown>> | undefined
-    // 详情通过子代理卡的真实编译依赖路径覆盖；不得直接调用组件 props handler。
     assert.ok(details.classList.contains('tool-call-details'))
-    assert.equal(Details, undefined, '内部详情不需要成为宿主专用导出')
-    assert.deepEqual(artifacts, [])
   } finally {
     unmount()
   }

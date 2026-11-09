@@ -524,7 +524,9 @@ test('SSR：多阶段工作流渲染阶段胶囊、日志、产出预览与徽�
   const html = await renderHelloRun()
   assert.ok(/1\.<!-- -->\s*调研|1\. 调研/.test(html), '应渲染阶段 1 标题')
   assert.ok(/2\.<!-- -->\s*实现|2\. 实现/.test(html), '应渲染阶段 2 标题')
-  assert.ok(html.includes('3/3'), '应渲染阶段完成计数')
+  assert.ok(html.includes('3/3'), '应渲染全局节点完成计数')
+  assert.match(html, /workflow-phase-count[^>]*>\(2\/2\)/, '调研阶段应计入 agent 与 action 两个节点')
+  assert.match(html, /workflow-phase-count[^>]*>\(1\/1\)/, '实现阶段应计入 cached 完成节点')
   assert.ok(html.includes('workflow-log-text'))
   assert.ok(html.includes('开始调研'))
   assert.ok(html.includes('实现完成'))
@@ -536,6 +538,7 @@ test('SSR：多阶段工作流渲染阶段胶囊、日志、产出预览与徽�
   assert.ok(html.includes('隔离工作树：/root/code/helm/.worktrees/wf-hello'), 'title 应含完整工作树路径')
   assert.ok(html.includes('动作'), 'action 节点应显示动作徽章')
   assert.ok(html.includes('最终产出'), '完成 run 应渲染最终产出区')
+  assert.match(html, /workflow-result-preview[^>]*>[^<]*docs\/report\.md/, '折叠 JSON 结果预览不能只显示左花括号')
   assert.ok(html.includes('docs/report.md'))
   assert.ok(html.includes('已完成'))
   assert.ok(html.includes('节点 3/3'))
@@ -616,6 +619,21 @@ test('SSR：WorkflowWorkbenchPanel 列出当前会话工作流与子代理', { t
   assert.ok(html.includes('列表工作流'))
   assert.ok(html.includes('子代理会话'), '应渲染子代理分组标题')
   assert.ok(html.includes('正在跑测试'), '子代理卡副栏应显示实时 doing')
+})
+
+test('SSR：外部 agent 节点与 cached 无会话节点不伪造子会话或误标为动作', { timeout: 60_000 }, async () => {
+  const html = await renderWorkflowToolView(
+    { callId: 'external-call', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1 },
+    { runs: [run({ parentToolCallId: 'external-call', status: 'completed', nodes: [
+      node({ id: 'external', kind: 'agent', status: 'done', executionId: 'pane-42', label: '外部实现者', output: '完成' }),
+      node({ id: 'cached', kind: 'agent', status: 'done', cached: true, label: '复用缓存', output: '缓存结果' }),
+    ] })] },
+  )
+  assert.ok(!html.includes('subagent-card-clickable'), '没有真实会话就不能渲染导航卡')
+  assert.ok(!html.includes('子会话 #'), '不能编造子会话编号')
+  assert.ok(!html.includes('workflow-action-card'), 'agent 节点不能误标为 action')
+  assert.ok(html.includes('外部执行') && html.includes('pane-42'))
+  assert.ok(html.includes('cached') && html.includes('缓存结果'))
 })
 
 /** Emoji / 特殊符号黑名单。 */

@@ -897,6 +897,11 @@ function countToolSteps(entries: ReadonlyArray<ConversationEntry> | undefined, l
 // ---------------------------------------------------------------------------
 
 /** 节点收起行主信息摘要。 */
+export function hasNodeExtraDetail(node: WorkflowNodeState): boolean {
+  return node.agentType !== undefined || node.executionId !== undefined || node.nodeId !== undefined ||
+    node.effectiveCwd !== undefined || node.gateCommand !== undefined || node.prompt !== undefined
+}
+
 export interface NodeSummaryText {
   text?: string
   isError: boolean

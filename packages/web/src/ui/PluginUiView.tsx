@@ -45,6 +45,7 @@ export function PluginUiView(props: PluginUiViewProps): ReactNode {
 
 function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, label }: PluginUiViewProps & { clientRef: ClientComponentRef }): ReactNode {
   const store = useHelmStore()
+  const [retry, setRetry] = useState(0)
   const [client, setClient] = useState<ClientState>(() => {
     const cached = getCachedClientComponent(pluginId, clientRef.module, clientRef.export)
     return cached !== undefined ? { phase: 'ready', Component: cached } : { phase: 'loading' }
@@ -76,7 +77,7 @@ function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, la
     return () => {
       cancelled = true
     }
-  }, [pluginId, clientRef?.module, clientRef?.export])
+  }, [pluginId, clientRef.module, clientRef.export, retry])
 
   if (client.phase === 'loading') {
     return (
@@ -93,6 +94,9 @@ function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, la
         <div>
           <strong>插件组件加载失败（{pluginId}）</strong>
           <p className="selectable">{client.message}</p>
+          <button type="button" className="btn btn-sm" onClick={() => { setClient({ phase: 'loading' }); setRetry((value) => value + 1) }}>
+            重试加载
+          </button>
         </div>
       </div>
     )

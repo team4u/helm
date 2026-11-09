@@ -9,9 +9,9 @@
  * useConversation）从宿主 store 响应式读取；动作经 ctx.callAction 走
  * POST /api/actions/builtin:workflow/<actionId>，无任何宿主私有依赖。
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { WorkbenchPanelProps, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
+import type { ToolViewProps, WorkbenchPanelProps, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
 import { usePluginContext, useConversation, useConversations } from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import {
@@ -22,7 +22,8 @@ import {
   canResumeWorkflowRun,
   extractWorkflowLogs,
   formatNodeOutputPreview,
-  formatSemanticToolAction,
+  formatDurationMs,
+  hasNodeExtraDetail,
   formatWorkflowNodeStats,
   isLatestSubagentCallForTarget,
   parentToolSummaryOf,
@@ -34,10 +35,9 @@ import {
   resolveWorkflowRunForTool,
   subagentBadge,
   toolResultPreviewTruncated,
-  type SubagentCardStatus,
-  type WorkflowPhaseSection,
 } from './models.ts'
-import { usePluginDoc, useStreamFollow } from './hooks.ts'
+import { usePluginDoc, useStreamFollow, useElapsedNowMs } from './hooks.ts'
+import { SPIN, RUN_LABEL, RUN_BADGE, NODE_LABEL, NODE_BADGE, PHASE_ICON } from './presentation.ts'
 
 // ---------------------------------------------------------------------------
 // 图标（lucide-react 线性矢量，与宿主共享同一实例；无 Emoji）
@@ -67,15 +67,9 @@ function Icon({ name, size = 12, className }: { name: string; size?: number; cla
   return <Cmp size={size} className={className} />
 }
 
-const SPIN = 'spin-slow'
-
 // ---------------------------------------------------------------------------
 // 子代理双层胶囊卡（原 SubagentLiveCard 语义）
 // ---------------------------------------------------------------------------
-
-function toolStatusOf(status: 'running' | 'done' | 'error'): 'running' | 'done' | 'error' | 'unknown' {
-  return status
-}
 
 export function SubagentLiveCard(props: {
   childConversationId: number
@@ -90,6 +84,7 @@ export function SubagentLiveCard(props: {
   extraStats?: string
   /** 展开态展示实时流与底部调用详情。 */
   expanded?: boolean
+  callDetails?: Pick<ToolViewProps, 'input' | 'result' | 'artifactRef'>
 }) {
   const ctx = usePluginContext()
   const { childConversationId, toolStatus, backgroundRun, worktree, toolSummary, startedAt } = props
@@ -104,11 +99,10 @@ export function SubagentLiveCard(props: {
   const isWorking = badge.status === 'working'
 
   // 运行中秒表：SSR 首帧不启动时钟（确定性渲染）。
-  const [nowMs, setNowMs] = useState<number | undefined>(undefined)
-  useInterval(isWorking, () => setNowMs(Date.now()))
+  const nowMs = useElapsedNowMs(isWorking)
 
   const taskTitle = resolveSubagentTaskTitle(summary, childConversationId, toolSummary, backgroundRun)
-  const staticStats = useMemo(
+  const statSegments = useMemo(
     () =>
       buildSubagentStatSegments({
         ...(summary !== undefined ? { summary } : {}),
@@ -116,15 +110,12 @@ export function SubagentLiveCard(props: {
         ...(live !== undefined ? { live } : {}),
         ...(backgroundRun !== undefined ? { backgroundRun } : {}),
         ...(toolSummary !== undefined ? { toolSummary } : {}),
-        isWorking: badge.status === 'working',
+        isWorking,
+        startedAt,
+        nowMs,
       }),
-    [summary, detail?.entries, live, backgroundRun, toolSummary, badge.status],
+    [summary, detail?.entries, live, backgroundRun, toolSummary, isWorking, startedAt, nowMs],
   )
-  const elapsed =
-    badge.status === 'working'
-      ? resolveElapsed({ backgroundRun, toolSummary, startedAt, nowMs, isWorking: true })
-      : undefined
-  const statSegments = elapsed !== undefined ? [...staticStats, formatDurationMsLocal(elapsed)] : staticStats
   const snippet = useMemo(
     () =>
       resolveSubagentHeaderSnippet({
@@ -291,72 +282,21 @@ export function SubagentLiveCard(props: {
         </div>
       ) : null}
       {props.expanded === true ? (
-        <ToolCallDetailsInline input={toolSummaryPromptOf(toolSummary)} result={toolSummary?.resultText} artifactRef={undefined} />
+        <ToolCallDetailsInline
+          input={props.callDetails !== undefined ? props.callDetails.input : toolSummary?.prompt}
+          result={props.callDetails !== undefined ? props.callDetails.result : toolSummary?.resultText}
+          artifactRef={props.callDetails?.artifactRef}
+        />
       ) : null}
     </div>
   )
-}
-
-function toolSummaryPromptOf(toolSummary: { prompt?: string } | undefined): string | undefined {
-  return toolSummary?.prompt
-}
-
-function resolveElapsed(input: {
-  backgroundRun?: WorkflowRunSummary
-  toolSummary?: { startedAt?: number; durationMs?: number }
-  startedAt?: number
-  nowMs?: number
-  isWorking?: boolean
-}): number | undefined {
-  if (input.isWorking) {
-    const start = input.backgroundRun?.status === 'running' ? input.backgroundRun.createdAt : input.startedAt ?? input.toolSummary?.startedAt
-    return start !== undefined && Number.isFinite(start) && input.nowMs !== undefined && input.nowMs >= start ? input.nowMs - start : undefined
-  }
-  const elapsed = input.backgroundRun !== undefined
-    ? input.backgroundRun.nodes?.[0]?.durationMs ?? input.backgroundRun.updatedAt - input.backgroundRun.createdAt
-    : input.toolSummary?.durationMs
-  return elapsed !== undefined && Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
-}
-
-function formatDurationMsLocal(ms: number | undefined): string {
-  if (ms === undefined || !Number.isFinite(ms) || ms < 0) return ''
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
-  const minutes = Math.floor(ms / 60_000)
-  const seconds = Math.round((ms % 60_000) / 1000)
-  return `${minutes}m${seconds}s`
-}
-
-/** 轻量 interval hook（client 组件内部；不导出）。SSR 不启动计时器（useEffect 不执行）。 */
-function useInterval(active: boolean, fn: () => void): void {
-  useEffect(() => {
-    if (!active) return
-    const timer = globalThis.setInterval?.(fn, 1000)
-    return () => {
-      if (timer !== undefined) globalThis.clearInterval?.(timer)
-    }
-  }, [active])
 }
 
 // ---------------------------------------------------------------------------
 // SubagentToolView：tool.view 扩展点组件（subagent 工具行）
 // ---------------------------------------------------------------------------
 
-export function SubagentToolView(props: {
-  callId: string
-  toolName: string
-  input?: unknown
-  status: 'running' | 'done' | 'error'
-  result?: unknown
-  structuredOutput?: unknown
-  isError?: boolean
-  startedAt?: number
-  durationMs?: number
-  artifactRef?: string
-  conversationId: number
-  siblingCalls?: ReadonlyArray<{ callId: string; toolName: string; input?: unknown; status: 'running' | 'done' | 'error'; result?: unknown; structuredOutput?: unknown }>
-}): ReactNode {
-  const ctx = usePluginContext()
+export function SubagentToolView(props: ToolViewProps): ReactNode {
   const conversations = useConversations()
   const runsDoc = usePluginDoc<{ runs: WorkflowRunSummary[] }>('runs')
   const [expanded, setExpanded] = useState(true)
@@ -379,7 +319,7 @@ export function SubagentToolView(props: {
       ),
     [props.callId, props.result, props.conversationId, runsDoc],
   )
-  const toolSummary = useMemo(() => parentToolSummaryOf(props as never), [props])
+  const toolSummary = useMemo(() => parentToolSummaryOf(props), [props])
 
   // 外部执行（无原生子会话，如 Herdr 窗格）：如实展示后台 run 摘要，不虚构子会话。
   if (childId === undefined) {
@@ -434,12 +374,13 @@ export function SubagentToolView(props: {
   return (
     <SubagentLiveCard
       childConversationId={childId}
-      toolStatus={toolStatusOf(props.status)}
+      toolStatus={props.status}
       backgroundRun={meta.run}
       worktree={meta.worktree}
       toolSummary={toolSummary}
       startedAt={props.startedAt}
       expanded={expanded}
+      callDetails={props}
     />
   )
 }
@@ -511,21 +452,7 @@ function ExternalRunSummary(props: {
 // WorkflowToolView：tool.view 扩展点组件（SubagentWorkflow 工具行）
 // ---------------------------------------------------------------------------
 
-export function WorkflowToolView(props: {
-  callId: string
-  toolName: string
-  input?: unknown
-  status: 'running' | 'done' | 'error'
-  result?: unknown
-  structuredOutput?: unknown
-  isError?: boolean
-  startedAt?: number
-  durationMs?: number
-  artifactRef?: string
-  conversationId: number
-  siblingCalls?: ReadonlyArray<{ callId: string; toolName: string; input?: unknown; status: 'running' | 'done' | 'error'; result?: unknown; structuredOutput?: unknown }>
-}): ReactNode {
-  const ctx = usePluginContext()
+export function WorkflowToolView(props: ToolViewProps): ReactNode {
   const runsDoc = usePluginDoc<{ runs: WorkflowRunSummary[] }>('runs')
   const [cardOpen, setCardOpen] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -542,7 +469,7 @@ export function WorkflowToolView(props: {
   )
 
   if (run === undefined) {
-    // 无关联 run（旧数据 / 引擎尚未建 run）：保留默认工具行形态 + 调用详情。
+    // 引擎尚未建立关联 run：保留原始调用详情，不猜测其他 run。
     return (
       <div className="trace-entry">
         <ToolCallDetailsInline input={props.input} result={props.result} artifactRef={props.artifactRef} />
@@ -563,43 +490,6 @@ export function WorkflowToolView(props: {
       inWorkbench={false}
     />
   )
-}
-
-const RUN_LABEL: Record<string, string> = {
-  running: '执行中',
-  completed: '已完成',
-  failed: '失败',
-  aborted: '已中止',
-}
-
-const RUN_BADGE: Record<string, string> = {
-  running: 'badge-accent',
-  completed: 'badge-ok',
-  failed: 'badge-err',
-  aborted: 'badge-warn',
-}
-
-const NODE_LABEL: Record<string, string> = {
-  pending: '待执行',
-  running: '运行中',
-  done: '完成',
-  failed: '失败',
-  skipped: '跳过',
-}
-
-const NODE_BADGE: Record<string, string> = {
-  pending: 'badge-neutral',
-  running: 'badge-accent',
-  done: 'badge-ok',
-  failed: 'badge-err',
-  skipped: 'badge-neutral',
-}
-
-const PHASE_ICON: Record<WorkflowPhaseSection['status'], string> = {
-  pending: 'circle',
-  running: 'loader',
-  done: 'check',
-  failed: 'x',
 }
 
 /** 工作流运行卡主体（时间线与工作台共用）。 */
@@ -624,8 +514,7 @@ function WorkflowRunCardBody(props: {
   const hasNamedPhases = sections.length > 1 || (sections.length === 1 && sections[0]!.title !== '')
 
   // 运行中秒表（SSR 首帧确定性）。
-  const [nowMs, setNowMs] = useState<number | undefined>(undefined)
-  useInterval(run.status === 'running', () => setNowMs(Date.now()))
+  const nowMs = useElapsedNowMs(run.status === 'running')
   const elapsedMs =
     run.status === 'running' && nowMs !== undefined && Number.isFinite(run.createdAt) && nowMs >= run.createdAt
       ? nowMs - run.createdAt
@@ -671,7 +560,7 @@ function WorkflowRunCardBody(props: {
         <span className="workflow-run-stats tabular-nums">
           {nodes.length > 0 ? <span>{`节点 ${done}/${nodes.length}`}</span> : null}
           {tokens > 0 ? <span>{`${tokens.toLocaleString()} Tokens`}</span> : null}
-          <span>{formatDurationMsLocal(Math.max(0, elapsedMs))}</span>
+          <span>{formatDurationMs(Math.max(0, elapsedMs))}</span>
         </span>
         {run.status === 'running' ? (
           <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={abort}>
@@ -748,7 +637,7 @@ function WorkflowRunCardBody(props: {
               {props.resultOpen ? (
                 <pre className="code-block-pre workflow-node-pre selectable"><code>{resultJson}</code></pre>
               ) : (
-                <div className="workflow-result-preview selectable" title={firstLineLocal(resultJson)}>{truncatePreviewLocal(resultJson)}</div>
+                <div className="workflow-result-preview selectable" title={formatNodeOutputPreview(run.result, 160)}>{formatNodeOutputPreview(run.result, 160)}</div>
               )}
             </div>
           ) : null}
@@ -758,16 +647,6 @@ function WorkflowRunCardBody(props: {
       {toolProps !== undefined ? <ToolCallDetailsInline input={toolProps.input} result={toolProps.result} artifactRef={toolProps.artifactRef} /> : null}
     </section>
   )
-}
-
-function firstLineLocal(text: string): string {
-  const nl = text.indexOf('\n')
-  return nl === -1 ? text : text.slice(0, nl)
-}
-
-function truncatePreviewLocal(text: string, maxChars = 160): string {
-  const firstLine = firstLineLocal(text)
-  return firstLine.length > maxChars ? `${firstLine.slice(0, maxChars)}…` : firstLine
 }
 
 /** 工作流子代理节点：直接以一体化整卡直出（无手风琴折叠壳）。 */
@@ -809,13 +688,13 @@ function WorkflowSubagentNodeCard({ node }: { node: WorkflowNodeState }): ReactN
   )
 }
 
-/** 动作节点（无原生子会话）：与子代理卡对齐的扁平双层胶囊卡，无折叠箭头。 */
-function WorkflowActionNodeCard({ node }: { node: WorkflowNodeState }): ReactNode {
+/** 无原生子会话节点：动作与外部执行如实展示，均不伪造可导航的子会话。 */
+function WorkflowExecutionNodeCard({ node }: { node: WorkflowNodeState }): ReactNode {
   const summaryText = resolveNodeSummaryText(node)
   const nodeStats = useMemo(() => formatWorkflowNodeStats(node), [node])
   const isErr = node.status === 'failed'
   return (
-    <div className={`subagent-live-card workflow-action-card${isErr ? ' subagent-live-card-error' : ''}`}>
+    <div className={`subagent-live-card ${node.kind === 'action' ? 'workflow-action-card' : 'workflow-agent-card'}${isErr ? ' subagent-live-card-error' : ''}`}>
       <div className="subagent-live-header">
         <div className="subagent-live-trigger" style={{ cursor: 'default' }}>
           <Icon
@@ -823,7 +702,7 @@ function WorkflowActionNodeCard({ node }: { node: WorkflowNodeState }): ReactNod
             size={13}
             className={node.status === 'running' ? SPIN : undefined}
           />
-          <span className="badge badge-neutral">动作</span>
+          <span className="badge badge-neutral">{node.kind === 'action' ? '动作' : node.executionId !== undefined ? '外部执行' : '子代理节点'}</span>
           <span className="subagent-live-title" title={node.label ?? node.id}>
             <span className="subagent-live-title-text">{node.label ?? node.id}</span>
           </span>
@@ -849,7 +728,7 @@ function WorkflowActionNodeCard({ node }: { node: WorkflowNodeState }): ReactNod
             <span className="subagent-live-stats workflow-node-stats tabular-nums">{nodeStats.join(' · ')}</span>
           ) : null}
           {node.durationMs !== undefined ? (
-            <span className="subagent-live-stats workflow-node-duration tabular-nums">{formatDurationMsLocal(node.durationMs)}</span>
+            <span className="subagent-live-stats workflow-node-duration tabular-nums">{formatDurationMs(node.durationMs)}</span>
           ) : null}
         </div>
       </div>
@@ -865,23 +744,12 @@ function WorkflowActionNodeCard({ node }: { node: WorkflowNodeState }): ReactNod
   )
 }
 
-function hasNodeExtraDetail(node: WorkflowNodeState): boolean {
-  return (
-    node.agentType !== undefined ||
-    node.executionId !== undefined ||
-    node.nodeId !== undefined ||
-    node.effectiveCwd !== undefined ||
-    node.gateCommand !== undefined ||
-    node.prompt !== undefined
-  )
-}
-
 /** 单节点卡片：子代理节点直出一体化整卡；动作节点直出扁平双层卡。全程无手风琴折叠。 */
 function WorkflowNodeCard({ node }: { node: WorkflowNodeState }): ReactNode {
   if (node.conversationId !== undefined) {
     return <WorkflowSubagentNodeCard node={node} />
   }
-  return <WorkflowActionNodeCard node={node} />
+  return <WorkflowExecutionNodeCard node={node} />
 }
 
 /** 无原生子会话节点的结构化明细。 */
@@ -894,7 +762,7 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
   if (node.effectiveCwd !== undefined) rows.push(['工作目录', node.effectiveCwd])
   if (node.worktree !== undefined) rows.push(['工作树', `${node.worktree.branch} @ ${node.worktree.path}`])
   if (node.model !== undefined) rows.push(['模型', node.model])
-  if (node.durationMs !== undefined) rows.push(['耗时', formatDurationMsLocal(node.durationMs)])
+  if (node.durationMs !== undefined) rows.push(['耗时', formatDurationMs(node.durationMs)])
   if (node.tokens !== undefined && node.tokens > 0) rows.push(['Token', node.tokens.toLocaleString()])
   const outputJson = useMemo(() => {
     if (node.output === undefined) return undefined
