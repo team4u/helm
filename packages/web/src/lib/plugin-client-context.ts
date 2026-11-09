@@ -106,6 +106,21 @@ export function createPluginClientContext(
   return {
     pluginId,
     callAction: (actionId, input) => store.invokePluginAction(pluginId, actionId, input, conversationId),
+    submitInput: async (text, options) => {
+      const targetConvId = options?.conversationId ?? conversationId
+      if (targetConvId === undefined) {
+        throw new Error('submitInput: 没有指定 conversationId')
+      }
+      const res = await fetch(`/api/conversations/${targetConvId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, ...(options?.whenBusy ? { whenBusy: options.whenBusy } : {}) }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }))
+        throw new Error((err as { message?: string })?.message || `submitInput 失败 (${res.status})`)
+      }
+    },
     openScreen: (target) => store.openTarget(target),
     openSplitScreen: (target) => store.openTarget(target, { split: true }),
     openConversationDrawer: (conversationId) =>
@@ -124,6 +139,20 @@ export function createPluginClientContext(
         ...(conversationId !== undefined ? { conversationId } : {}),
       }),
     getPluginDoc: (docName) => store.ensurePluginDoc(pluginId, docName),
+    getPluginSessionDoc: async (docName, options) => {
+      const targetConvId = options?.conversationId ?? conversationId
+      if (targetConvId === undefined) {
+        throw new Error('getPluginSessionDoc: 没有指定 conversationId')
+      }
+      const targetPlugin = options?.pluginId ?? pluginId
+      const res = await fetch(`/api/conversations/${targetConvId}/plugins/${encodeURIComponent(targetPlugin)}/docs/${encodeURIComponent(docName)}`)
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }))
+        throw new Error((err as { message?: string })?.message || `getPluginSessionDoc 失败 (${res.status})`)
+      }
+      const data = await res.json().catch(() => ({}))
+      return (data as { value?: unknown })?.value
+    },
     ...(conversationId !== undefined ? { conversationId } : {}),
     theme: store.theme,
   }

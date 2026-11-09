@@ -20,7 +20,7 @@ import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import type { PluginSummary, Profile } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
+import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import type { ModelDescriptor } from '../src/lib/api.js'
 
 const e = React.createElement
@@ -55,18 +55,7 @@ function makeStore(plugins: PluginSummary[], profiles: Profile[]): HelmStoreValu
     resolvedAsksByConv: {},
     plugins,
     uiContributions: [],
-    groupedUi: {
-      sidebarItems: [],
-      sidebarSections: [],
-      screens: [],
-      timelineRenderers: [],
-      toolViews: [],
-      composerPills: [],
-      composerWidgets: [],
-      workbenchPanels: [],
-      commands: [],
-      settingsPanels: [],
-    },
+    groupedUi: groupUiContributions([]),
     pluginDocs: {},
     nodes: [],
     profiles,

@@ -31,7 +31,7 @@ import {
   isSkillVisible,
   partitionSidebarUi,
 } from '../src/shell/sidebar-model.js'
-import { resolveTargetString } from '../src/lib/types.js'
+import { groupUiContributions, resolveTargetString } from '../src/lib/types.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -583,18 +583,7 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
     resolvedAsksByConv: {},
     plugins: [{ id: 'builtin:assistant', name: '个人助理', locked: true, enabled: true, hooks: [], actions: [], tools: [] }],
     uiContributions: [],
-    groupedUi: {
-      sidebarItems: [],
-      sidebarSections: [],
-      screens: [],
-      timelineRenderers: [],
-      toolViews: [],
-      composerPills: [],
-      composerWidgets: [],
-      workbenchPanels: [],
-      commands: [],
-      settingsPanels: [],
-    },
+    groupedUi: groupUiContributions([]),
     pluginDocs: {},
     nodes: [],
     profiles: [{ id: 'assistant', name: '个人助理' }],

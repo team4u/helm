@@ -21,7 +21,7 @@ import {
   useConversation,
   useConversations,
 } from '../src/lib/plugin-client-context.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
+import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -88,18 +88,7 @@ function makeStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
     resolvedAsksByConv: {},
     plugins: [],
     uiContributions: [],
-    groupedUi: {
-      sidebarItems: [],
-      sidebarSections: [],
-      screens: [],
-      timelineRenderers: [],
-      toolViews: [],
-      composerPills: [],
-      composerWidgets: [],
-      workbenchPanels: [],
-      commands: [],
-      settingsPanels: [],
-    },
+    groupedUi: groupUiContributions([]),
     pluginDocs: {},
     nodes: [],
     profiles: [],
@@ -150,6 +139,8 @@ const stubCtx = {
   closeWorkbench: () => {},
   notify: () => {},
   getPluginDoc: async () => undefined,
+  submitInput: async () => {},
+  getPluginSessionDoc: async () => undefined,
   theme: 'dark' as const,
 }
 

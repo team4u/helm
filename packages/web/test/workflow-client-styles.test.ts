@@ -27,6 +27,8 @@ const context: PluginClientContextType = {
   closeWorkbench: () => {},
   notify: () => {},
   getPluginDoc: async () => undefined,
+  submitInput: async () => {},
+  getPluginSessionDoc: async () => undefined,
   conversationId: 1,
   theme: 'dark',
 }
