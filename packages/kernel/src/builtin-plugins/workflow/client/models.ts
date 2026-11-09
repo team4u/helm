@@ -17,8 +17,6 @@ import type {
   WorkflowNodeState,
   WorkflowRunSummary,
 } from '@helm/protocol'
-import { useEffect } from 'react'
-import { useConversation, useConversations, usePluginDoc } from '@helm/plugin-client'
 
 // ---------------------------------------------------------------------------
 // 格式化工具（原 lib/format.ts 相关子集）
@@ -1237,39 +1235,3 @@ export function parentToolSummaryOf(props: ToolViewProps): SubagentParentToolSum
     ...(props.isError === true ? { isError: true } : {}),
   }
 }
-
-// ---------------------------------------------------------------------------
-// 插件数据 hooks（供 client.tsx 组件消费，与宿主共享同一 store）
-// ---------------------------------------------------------------------------
-
-/** 订阅 builtin:workflow 公开文档 runs（WorkflowRunsDocState）。 */
-export function useWorkflowRunsDoc<T = { runs: WorkflowRunSummary[] }>(docName: string): T | undefined {
-  return usePluginDoc<T>(docName)
-}
-
-/** 运行中秒表：SSR 首帧不启动时钟，仅客户端 useEffect 定时推进（确定性渲染）。 */
-export function useElapsedNowMs(active: boolean): number | undefined {
-  const [nowMs, setNowMs] = useElapsedState(active)
-  return nowMs
-}
-
-// 小型受控 state hook（避免 .tsx 文件导出非组件；本文件为纯 .ts 模块）。
-import { useState } from 'react'
-function useElapsedState(active: boolean): [number | undefined, (v: number) => void] {
-  const [nowMs, setNowMs] = useState<number | undefined>(undefined)
-  useEffect(() => {
-    if (!active) return
-    setNowMs(Date.now())
-    const timer = globalThis.setInterval?.(() => setNowMs(Date.now()), 1000)
-    return () => {
-      if (timer !== undefined) globalThis.clearInterval?.(timer)
-    }
-  }, [active])
-  return [nowMs, setNowMs]
-}
-
-/** 插件组件内会话订阅 re-export（共享 hooks 与宿主同一 store）。 */
-export { useConversation, useConversations, usePluginDoc }
-
-/** 同会话全部工具调用轻量摘要类型 re-export。 */
-export type { ToolViewProps, ToolViewSiblingCall }
