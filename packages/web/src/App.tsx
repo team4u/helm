@@ -17,6 +17,7 @@ import { ScreenHost } from './screens/ScreenHost.js'
 import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
 import { ToastOverlay } from './shell/ToastOverlay.js'
+import { TooltipProvider } from './ui/Tooltip.js'
 
 function HelmShellInner() {
   const store = useHelmStore()
@@ -191,7 +192,9 @@ function HelmShellInner() {
 export function App() {
   return (
     <HelmStoreProvider>
-      <HelmShellInner />
+      <TooltipProvider delayDuration={300}>
+        <HelmShellInner />
+      </TooltipProvider>
     </HelmStoreProvider>
   )
 }

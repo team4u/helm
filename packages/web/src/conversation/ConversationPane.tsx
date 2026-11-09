@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
 import type { ConversationAttachmentRef } from '@helm/protocol'
+import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
-import { isHumanSelectableProfile } from '../shell/sidebar-model.js'
+import { isConversationDeletable, isHumanSelectableProfile } from '../shell/sidebar-model.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/DropdownMenu.js'
+import { Tooltip } from '../ui/Tooltip.js'
 import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
 import { ConversationTimeline } from './ConversationTimeline.js'
@@ -22,16 +25,18 @@ export interface ConversationPaneProps {
 /** 分屏窗格右上角关闭入口：加载中/加载失败早退分支同样可见，手机不被困住。 */
 function CloseSplitButton({ onCloseSplit }: { onCloseSplit: () => void }) {
   return (
-    <button
-      type="button"
-      className="btn btn-sm btn-ghost split-close-btn"
-      aria-label="关闭分屏"
-      title="关闭本分屏"
-      onClick={onCloseSplit}
-    >
-      <HelmIcon name="x" size={12} />
-      <span className="pane-action-label">关闭分屏</span>
-    </button>
+    <Tooltip content="关闭本分屏" side="bottom">
+      <button
+        type="button"
+        className="btn btn-sm btn-ghost split-close-btn"
+        aria-label="关闭分屏"
+        title="关闭本分屏"
+        onClick={onCloseSplit}
+      >
+        <HelmIcon name="x" size={12} />
+        <span className="pane-action-label">关闭分屏</span>
+      </button>
+    </Tooltip>
   )
 }
 
@@ -56,25 +61,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
       void loadDetail(conversationId, true)
     }
   }, [conversationId, detail, loadDetail])
-
-  // 更多操作菜单：点击外部或 Escape 关闭；Escape 关闭后焦点回触发按钮
-  useEffect(() => {
-    if (!moreOpen) return
-    const onDocClick = (e: PointerEvent): void => {
-      if (moreMenuRef.current !== null && !moreMenuRef.current.contains(e.target as Node)) setMoreOpen(false)
-    }
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      setMoreOpen(false)
-      moreButtonRef.current?.focus()
-    }
-    document.addEventListener('pointerdown', onDocClick)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', onDocClick)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [moreOpen])
 
   // 切换会话时关闭更多菜单（组件复用时也保持确定语义）
   useEffect(() => {
@@ -302,91 +288,132 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                 <HelmIcon name="external-link" size={12} />
                 <span className="pane-action-label">全屏</span>
               </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost conversation-drawer-close-btn"
-                aria-label="关闭抽屉"
-                title="关闭子会话抽屉 (Esc)"
-                onClick={onCloseDrawer}
-              >
-                <HelmIcon name="x" size={13} />
-                <span className="pane-action-label">关闭</span>
-              </button>
+              <Tooltip content="关闭子会话抽屉 (Esc)" side="bottom">
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost conversation-drawer-close-btn"
+                  aria-label="关闭抽屉"
+                  title="关闭子会话抽屉 (Esc)"
+                  onClick={onCloseDrawer}
+                >
+                  <HelmIcon name="x" size={13} />
+                  <span className="pane-action-label">关闭</span>
+                </button>
+              </Tooltip>
             </>
           ) : isSplit && onCloseSplit !== undefined ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
-            <button
-              type="button"
-              className={`btn btn-sm split-toggle-btn${store.splitTarget !== null ? ' btn-primary split-active' : ''}`}
-              aria-label={store.splitTarget !== null ? '关闭分屏' : '并排分屏'}
-              title="在右屏并排打开 / 关闭分屏"
-              onClick={toggleSplit}
-            >
-              <HelmIcon name="columns" size={12} />
-            </button>
+            <Tooltip content={store.splitTarget !== null ? '关闭分屏' : '并排分屏'} side="bottom">
+              <button
+                type="button"
+                className={`btn btn-sm split-toggle-btn${store.splitTarget !== null ? ' btn-primary split-active' : ''}`}
+                aria-label={store.splitTarget !== null ? '关闭分屏' : '并排分屏'}
+                title="在右屏并排打开 / 关闭分屏"
+                onClick={toggleSplit}
+              >
+                <HelmIcon name="columns" size={12} />
+              </button>
+            </Tooltip>
           )}
           <span className="pane-more-menu" ref={moreMenuRef}>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              aria-label="更多会话操作"
-              title="更多会话操作"
-              aria-expanded={moreOpen}
-              ref={moreButtonRef}
-              onClick={() => setMoreOpen((v) => !v)}
-            >
-              <HelmIcon name="more" size={14} />
-            </button>
-            {moreOpen ? (
-              <div className="pane-more-popover">
+            <DropdownMenu open={moreOpen} onOpenChange={setMoreOpen}>
+              <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="popover-item"
-                  onClick={() => {
-                    setMoreOpen(false)
-                    setTitleDraft(conversation.title)
-                    setRenaming(true)
+                  className="btn btn-ghost btn-sm"
+                  aria-label="更多会话操作"
+                  title="更多会话操作"
+                  aria-expanded={moreOpen}
+                  ref={moreButtonRef}
+                >
+                  <HelmIcon name="more" size={14} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuPortal>
+                <DropdownMenuContent
+                  className="pane-more-popover"
+                  align="end"
+                  sideOffset={6}
+                  onCloseAutoFocus={(e) => {
+                    e.preventDefault()
+                    moreButtonRef.current?.focus()
                   }}
                 >
-                  <span className="pane-more-item-label">
-                    <HelmIcon name="edit" size={13} />
-                    重命名会话
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="popover-item"
-                  disabled={actionPending !== null}
-                  onClick={() => {
-                    setMoreOpen(false)
-                    void runAction('compact', () => conversationsApi.compact(conversationId), '精简任务已提交')
-                  }}
-                >
-                  <span className="pane-more-item-label">
-                    <HelmIcon name={actionPending === 'compact' ? 'loader' : 'archive'} size={13} />
-                    精简上下文 (/compact)
-                  </span>
-                </button>
-                <div className="popover-separator" role="separator" />
-                <button
-                  type="button"
-                  className="popover-item popover-item-danger"
-                  disabled={actionPending !== null}
-                  onClick={() => {
-                    setMoreOpen(false)
-                    // 危险操作先确认：reset 切换上下文但不删历史，文案如实说明后果
-                    if (!window.confirm(`重置会话 #${conversationId} 的上下文？历史消息保留，模型将从全新上下文开始。`)) return
-                    void runAction('reset', () => conversationsApi.reset(conversationId), '上下文已重置')
-                  }}
-                >
-                  <span className="pane-more-item-label">
-                    <HelmIcon name={actionPending === 'reset' ? 'loader' : 'rotate-ccw'} size={13} />
-                    重置上下文 (/reset)
-                  </span>
-                </button>
-              </div>
-            ) : null}
+                  <DropdownMenuItem
+                    className="popover-item"
+                    onSelect={() => {
+                      setTitleDraft(conversation.title)
+                      setRenaming(true)
+                    }}
+                  >
+                    <span className="pane-more-item-label">
+                      <HelmIcon name="edit" size={13} />
+                      重命名会话
+                    </span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="popover-item"
+                    disabled={actionPending !== null}
+                    onSelect={() => {
+                      void runAction('compact', () => conversationsApi.compact(conversationId), '精简任务已提交')
+                    }}
+                  >
+                    <span className="pane-more-item-label">
+                      <HelmIcon name={actionPending === 'compact' ? 'loader' : 'archive'} size={13} />
+                      精简上下文 (/compact)
+                    </span>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator className="popover-separator" />
+                  <DropdownMenuItem
+                    className="popover-item popover-item-danger"
+                    danger
+                    disabled={actionPending !== null}
+                    onSelect={() => {
+                      // 危险操作先确认：reset 切换上下文但不删历史，文案如实说明后果
+                      if (!window.confirm(`重置会话 #${conversationId} 的上下文？历史消息保留，模型将从全新上下文开始。`)) return
+                      void runAction('reset', () => conversationsApi.reset(conversationId), '上下文已重置')
+                    }}
+                  >
+                    <span className="pane-more-item-label">
+                      <HelmIcon name={actionPending === 'reset' ? 'loader' : 'rotate-ccw'} size={13} />
+                      重置上下文 (/reset)
+                    </span>
+                  </DropdownMenuItem>
+                  {isConversationDeletable(conversation) && (
+                    <DropdownMenuItem
+                      className="popover-item popover-item-danger"
+                      danger
+                      onSelect={async () => {
+                        if (!window.confirm(`确定删除会话 #${conversationId} 吗？此操作无法撤销。`)) return
+                        try {
+                          await conversationsApi.remove(conversationId)
+                          store.openTarget({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
+                          store.pushNotice({
+                            type: 'notification',
+                            level: 'info',
+                            title: '已删除会话',
+                            body: `会话 #${conversationId} 已删除`,
+                          })
+                        } catch (err) {
+                          store.pushNotice({
+                            type: 'notification',
+                            level: 'error',
+                            title: '删除会话失败',
+                            body: err instanceof Error ? err.message : String(err),
+                          })
+                        }
+                      }}
+                    >
+                      <span className="pane-more-item-label">
+                        <HelmIcon name="trash-2" size={13} />
+                        删除会话
+                      </span>
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenuPortal>
+            </DropdownMenu>
           </span>
         </div>
       </header>

@@ -6,6 +6,7 @@ import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { Checkbox } from '../ui/Checkbox.js'
+import { Tooltip } from '../ui/Tooltip.js'
 import { isSameResolvedTarget, resolveTargetString, type HelmStoreValue } from '../lib/types.js'
 import {
   AGENT_SUB_LIST_PREVIEW,
@@ -47,13 +48,17 @@ function HoverIconButton({
   className?: string
 }) {
   return (
-    <button
-      className={`btn btn-ghost btn-icon-xs${className ? ` ${className}` : ''}`}
-      title={title}
-      onClick={onClick}
-    >
-      <HelmIcon name={icon} size={13} />
-    </button>
+    <Tooltip content={title} side="top">
+      <button
+        type="button"
+        className={`btn btn-ghost btn-icon-xs${className ? ` ${className}` : ''}`}
+        title={title}
+        aria-label={title}
+        onClick={onClick}
+      >
+        <HelmIcon name={icon} size={13} />
+      </button>
+    </Tooltip>
   )
 }
 
@@ -217,17 +222,20 @@ function AgentNewConversationButton({
 }) {
   if (!agent.canCreateConversation) return null
   return (
-    <button
-      type="button"
-      className="btn btn-ghost btn-icon-xs agent-new-conv-btn"
-      title={`在 ${agent.label} 下新建对话`}
-      onClick={(e) => {
-        e.stopPropagation()
-        onCreate(agent.profileId)
-      }}
-    >
-      <HelmIcon name="plus" size={13} />
-    </button>
+    <Tooltip content={`在 ${agent.label} 下新建对话`} side="right">
+      <button
+        type="button"
+        className="btn btn-ghost btn-icon-xs agent-new-conv-btn"
+        title={`在 ${agent.label} 下新建对话`}
+        aria-label={`在 ${agent.label} 下新建对话`}
+        onClick={(e) => {
+          e.stopPropagation()
+          onCreate(agent.profileId)
+        }}
+      >
+        <HelmIcon name="plus" size={13} />
+      </button>
+    </Tooltip>
   )
 }
 
@@ -308,18 +316,21 @@ function AgentStandingItem({
         }}
       >
         {hasSubList && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon-xs agent-collapse-btn"
-            title={expanded ? '收起历史对话' : '展开历史对话'}
-            aria-expanded={expanded}
-            onClick={(e) => {
-              e.stopPropagation()
-              setExpanded((v) => !v)
-            }}
-          >
-            <HelmIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={13} />
-          </button>
+          <Tooltip content={expanded ? '收起历史对话' : '展开历史对话'} side="top">
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon-xs agent-collapse-btn"
+              title={expanded ? '收起历史对话' : '展开历史对话'}
+              aria-label={expanded ? '收起历史对话' : '展开历史对话'}
+              aria-expanded={expanded}
+              onClick={(e) => {
+                e.stopPropagation()
+                setExpanded((v) => !v)
+              }}
+            >
+              <HelmIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={13} />
+            </button>
+          </Tooltip>
         )}
         <button
           type="button"
@@ -492,12 +503,16 @@ function AgentConversationRow({
           }}
           style={{ height: 24, fontSize: 12 }}
         />
-        <button className="btn btn-icon-xs" onClick={() => void commitRename()}>
-          <HelmIcon name="check" size={12} />
-        </button>
-        <button className="btn btn-icon-xs" onClick={() => setRenaming(false)}>
-          <HelmIcon name="x" size={12} />
-        </button>
+        <Tooltip content="确认重命名" side="top">
+          <button type="button" className="btn btn-icon-xs" aria-label="确认重命名" onClick={() => void commitRename()}>
+            <HelmIcon name="check" size={12} />
+          </button>
+        </Tooltip>
+        <Tooltip content="取消重命名" side="top">
+          <button type="button" className="btn btn-icon-xs" aria-label="取消重命名" onClick={() => setRenaming(false)}>
+            <HelmIcon name="x" size={12} />
+          </button>
+        </Tooltip>
       </div>
     )
   }
@@ -691,32 +706,38 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
       <div className="sidebar-group-header">
         <span>智能体</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon-xs"
-            style={{
-              color: batchMode ? 'var(--accent)' : undefined,
-            }}
-            title={batchMode ? '退出批量管理' : '批量管理会话'}
-            onClick={() => {
-              setBatchMode((v) => {
-                if (v) {
-                  setSelectedIds(new Set())
-                }
-                return !v
-              })
-            }}
-          >
-            <HelmIcon name="check-square" size={12} />
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon-xs"
-            title="管理智能体角色 (Profile)"
-            onClick={() => store.setActiveModal({ kind: 'profile-editor' })}
-          >
-            <HelmIcon name="plus" size={12} />
-          </button>
+          <Tooltip content={batchMode ? '退出批量管理' : '批量管理会话'} side="top">
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon-xs"
+              style={{
+                color: batchMode ? 'var(--accent)' : undefined,
+              }}
+              title={batchMode ? '退出批量管理' : '批量管理会话'}
+              aria-label={batchMode ? '退出批量管理' : '批量管理会话'}
+              onClick={() => {
+                setBatchMode((v) => {
+                  if (v) {
+                    setSelectedIds(new Set())
+                  }
+                  return !v
+                })
+              }}
+            >
+              <HelmIcon name="check-square" size={12} />
+            </button>
+          </Tooltip>
+          <Tooltip content="管理智能体角色 (Profile)" side="top">
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon-xs"
+              title="管理智能体角色 (Profile)"
+              aria-label="管理智能体角色 (Profile)"
+              onClick={() => store.setActiveModal({ kind: 'profile-editor' })}
+            >
+              <HelmIcon name="plus" size={12} />
+            </button>
+          </Tooltip>
         </div>
       </div>
       {batchMode && (
@@ -967,24 +988,29 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
           <StatusDot connected={store.sseConnected} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <button
-            type="button"
-            className="btn btn-sm"
-            title="打开 Cmd K 全局搜索与命令面板"
-            onClick={() => store.setActiveModal({ kind: 'command-palette' })}
-          >
-            <HelmIcon name="search" size={13} />
-          </button>
-          {onClose && (
+          <Tooltip content="打开 Cmd K 全局搜索与命令面板" side="bottom">
             <button
               type="button"
-              className="btn btn-ghost btn-sm mobile-sidebar-close"
-              aria-label="关闭导航栏"
-              title="关闭导航栏"
-              onClick={onClose}
+              className="btn btn-sm btn-icon"
+              title="打开 Cmd K 全局搜索与命令面板"
+              aria-label="打开 Cmd K 全局搜索与命令面板"
+              onClick={() => store.setActiveModal({ kind: 'command-palette' })}
             >
-              <HelmIcon name="x" size={14} />
+              <HelmIcon name="search" size={13} />
             </button>
+          </Tooltip>
+          {onClose && (
+            <Tooltip content="关闭导航栏" side="bottom">
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm mobile-sidebar-close"
+                aria-label="关闭导航栏"
+                title="关闭导航栏"
+                onClick={onClose}
+              >
+                <HelmIcon name="x" size={14} />
+              </button>
+            </Tooltip>
           )}
         </div>
       </div>
@@ -1001,78 +1027,103 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
 
       <div className="sidebar-footer">
         <div style={{ display: 'flex', gap: 2 }}>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            title="角色 Profiles"
-            onClick={() => store.setActiveModal({ kind: 'profile-editor' })}
-          >
-            <HelmIcon name="bot" size={14} />
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            title="模型与凭据"
-            onClick={() => store.setActiveModal({ kind: 'provider-auth' })}
-          >
-            <HelmIcon name="key" size={14} />
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            title="技能库 Skills"
-            onClick={() => store.setActiveModal({ kind: 'skill-viewer' })}
-          >
-            <HelmIcon name="sparkles" size={14} />
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            title="计算节点 Nodes"
-            aria-label="计算节点 Nodes"
-            onClick={() => store.setActiveModal({ kind: 'nodes' })}
-          >
-            <HelmIcon name="network" size={14} />
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            title="插件与设置"
-            onClick={() => store.setActiveModal({ kind: 'plugin-settings' })}
-          >
-            <HelmIcon name="settings" size={14} />
-          </button>
+          <Tooltip content="角色 Profiles" side="top">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              title="角色 Profiles"
+              aria-label="角色 Profiles"
+              onClick={() => store.setActiveModal({ kind: 'profile-editor' })}
+            >
+              <HelmIcon name="bot" size={14} />
+            </button>
+          </Tooltip>
+          <Tooltip content="模型与凭据" side="top">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              title="模型与凭据"
+              aria-label="模型与凭据"
+              onClick={() => store.setActiveModal({ kind: 'provider-auth' })}
+            >
+              <HelmIcon name="key" size={14} />
+            </button>
+          </Tooltip>
+          <Tooltip content="技能库 Skills" side="top">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              title="技能库 Skills"
+              aria-label="技能库 Skills"
+              onClick={() => store.setActiveModal({ kind: 'skill-viewer' })}
+            >
+              <HelmIcon name="sparkles" size={14} />
+            </button>
+          </Tooltip>
+          <Tooltip content="计算节点 Nodes" side="top">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              title="计算节点 Nodes"
+              aria-label="计算节点 Nodes"
+              onClick={() => store.setActiveModal({ kind: 'nodes' })}
+            >
+              <HelmIcon name="network" size={14} />
+            </button>
+          </Tooltip>
+          <Tooltip content="插件与设置" side="top">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              title="插件与设置"
+              aria-label="插件与设置"
+              onClick={() => store.setActiveModal({ kind: 'plugin-settings' })}
+            >
+              <HelmIcon name="settings" size={14} />
+            </button>
+          </Tooltip>
         </div>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm sidebar-theme-toggle"
-          title={
+        <Tooltip
+          content={
             store.themePreference === 'system'
               ? `跟随系统（当前${store.theme === 'dark' ? '暗色' : '浅色'}，点击切换为浅色模式）`
               : store.themePreference === 'light'
                 ? '浅色模式（点击切换为暗色模式）'
                 : '暗色模式（点击切换为跟随系统）'
           }
-          aria-label={
-            store.themePreference === 'system'
-              ? '跟随系统'
-              : store.themePreference === 'light'
-                ? '浅色模式'
-                : '暗色模式'
-          }
-          onClick={store.toggleTheme}
+          side="top"
         >
-          <HelmIcon
-            name={
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm sidebar-theme-toggle"
+            title={
               store.themePreference === 'system'
-                ? 'monitor'
+                ? `跟随系统（当前${store.theme === 'dark' ? '暗色' : '浅色'}，点击切换为浅色模式）`
                 : store.themePreference === 'light'
-                  ? 'sun'
-                  : 'moon'
+                  ? '浅色模式（点击切换为暗色模式）'
+                  : '暗色模式（点击切换为跟随系统）'
             }
-            size={14}
-          />
-        </button>
+            aria-label={
+              store.themePreference === 'system'
+                ? '跟随系统'
+                : store.themePreference === 'light'
+                  ? '浅色模式'
+                  : '暗色模式'
+            }
+            onClick={store.toggleTheme}
+          >
+            <HelmIcon
+              name={
+                store.themePreference === 'system'
+                  ? 'monitor'
+                  : store.themePreference === 'light'
+                    ? 'sun'
+                    : 'moon'
+              }
+              size={14}
+            />
+          </button>
+        </Tooltip>
       </div>
     </aside>
   )

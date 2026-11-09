@@ -3,6 +3,7 @@ import type { ConversationSummary } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { Tooltip } from '../ui/Tooltip.js'
 import { formatBytes } from '../lib/format.js'
 import {
   buildWorkbenchFooter,
@@ -100,15 +101,17 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
           </button>
         ))}
         <span style={{ flex: 1 }} />
-        <button
-          type="button"
-          className="btn btn-ghost btn-icon-sm workbench-close-btn"
-          aria-label="关闭工作台"
-          title="关闭工作台"
-          onClick={() => store.setWorkbenchOpen(false)}
-        >
-          <HelmIcon name="x" size={14} />
-        </button>
+        <Tooltip content="关闭工作台" side="left">
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon-sm workbench-close-btn"
+            aria-label="关闭工作台"
+            title="关闭工作台"
+            onClick={() => store.setWorkbenchOpen(false)}
+          >
+            <HelmIcon name="x" size={14} />
+          </button>
+        </Tooltip>
       </div>
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {conversationId === undefined ? (
