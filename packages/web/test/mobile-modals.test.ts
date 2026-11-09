@@ -120,3 +120,8 @@ test('Mermaid 预览弹窗：移动端触控 touch-action 禁用浏览器原生�
   assert.match(mermaidSource, /activePointersRef/)
   assert.match(mermaidSource, /requestAnimationFrame/)
 })
+
+test('移动端响应式样式包含子会话抽屉全宽与分屏按钮隐藏规则', { timeout: 60_000 }, () => {
+  assert.ok(responsiveCss.includes('.conversation-drawer-split-btn'), '应包含隐藏抽屉分屏按钮规则')
+  assert.ok(responsiveCss.includes('.conversation-drawer'), '应包含抽屉移动端规则')
+})
