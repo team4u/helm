@@ -156,7 +156,8 @@ ctx.action({
    - 若配置 `exposeAsTool: true`，直接注入当前会话的工具列表。
    - 若未直接注入，模型可通过元工具 `run_action` 按需调用。
 4. **工作流编排映射**：
-   - 编排脚本可通过 `action('pluginId:actionId', input)` 调度。
+   - 编排脚本可通过 `action('pluginId.actionId', input, options)` 调度。
+   - 宿主在记账前校验插件状态、会话作用域和输入 Schema；动作的 `idempotent` 声明决定失败或中断后的默认重试语义。该声明是作者对安全重试的承诺，不是引擎检测所得。
 5. **Web 界面动作映射**：
    - 前端声明式 JSON Spec 中可通过 `{ type: 'helm:action', actionId, input }` 触发。
 
@@ -276,10 +277,12 @@ export interface HelmHostApi {
   // 子代理与工作树底座
   spawnAgent(request: AgentSpawnRequest): Promise<unknown>;
   runGate(command: string, options?: { cwd?: string; conversationId?: number; nodeId?: string; signal?: AbortSignal; env?: Record<string, string> }): Promise<{ ok: boolean; output: string }>;
+  execEnv(req: Omit<EnvExecRequest, 'stream'>, opts?: { signal?: AbortSignal }): Promise<EnvExecResponse>;
   prepareInterruptedConversations(ids: number[]): Promise<void>;
   cleanupWorktree(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult>;
 
-  // 跨插件动作互调
+  // 跨插件动作互调；prepareAction 只校验，不执行动作 handler
+  prepareAction(pluginId: string, actionId: string, input: unknown, context?: PluginActionContext): { idempotent: boolean };
   invokeAction(pluginId: string, actionId: string, input: unknown, context?: PluginActionContext): Promise<unknown>;
   listActions(): ActionManifest[];
 
@@ -290,6 +293,8 @@ export interface HelmHostApi {
 ```
 
 工作流运行事件不再有专用订阅端口：插件通过通用 `onEvent` 订阅 `workflow.settled` 等事件（由 `builtin:workflow` 经 `emitEvent` 发出），或用 `await ctx.host.emitEvent(...)` 发出自有事件并等待监听方处理。
+
+`execEnv` 复用内核 `EnvFabric`、取消信号、机密注入与输出脱敏。目标节点或目录缺省时继承请求中 `conversationId` 对应的会话坐标；节点离线会显式报错，不回退本机。`builtin:workflow` 通过此通用端口实现脚本内的 `action('env.exec', input)`，组合层不再直接持有或配置编排引擎。
 
 插件只能通过此受限接口调用内核机制。
 严禁插件绕过宿主直接操作核心数据库或会话内部变量。
