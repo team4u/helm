@@ -5,6 +5,7 @@ import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { Switch } from '../ui/Switch.js'
+import { Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
 import {
   buildPluginConfigPayload,
   configFieldInitialValue,
@@ -228,25 +229,26 @@ export function PluginSettingsModal({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal"
-        style={{ maxWidth: 860 }}
-        role="dialog"
-        aria-modal="true"
-        aria-label="插件与设置"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-header">
-          <span className="modal-title flex-row">
-            <HelmIcon name="settings" size={15} />
-            插件与设置
-          </span>
-          <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭" onClick={onClose}>
-            <HelmIcon name="x" size={14} />
-          </button>
-        </div>
-        <div className="modal-body asset-modal-body">
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogPortal>
+        <DialogOverlay className="modal-backdrop">
+          <DialogContent
+            className="modal"
+            style={{ maxWidth: 860 }}
+            aria-label="插件与设置"
+          >
+            <div className="modal-header">
+              <DialogTitle className="modal-title flex-row">
+                <HelmIcon name="settings" size={15} />
+                插件与设置
+              </DialogTitle>
+              <DialogClose asChild>
+                <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭">
+                  <HelmIcon name="x" size={14} />
+                </button>
+              </DialogClose>
+            </div>
+            <div className="modal-body asset-modal-body">
           <div className="list asset-modal-list">
             {store.plugins.length === 0 && (
               <div className="empty-state empty-state-compact">暂无已加载插件</div>
@@ -402,7 +404,9 @@ export function PluginSettingsModal({
             )}
           </div>
         </div>
-      </div>
-    </div>
+          </DialogContent>
+        </DialogOverlay>
+      </DialogPortal>
+    </Dialog>
   )
 }

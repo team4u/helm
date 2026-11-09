@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ProviderConfig } from '@helm/protocol'
 import { assetsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
@@ -6,6 +6,7 @@ import { useHelmStore } from '../lib/store-context.js'
 import { ProviderCatalog } from './ProviderCatalog.js'
 import { Select } from '../ui/Select.js'
 import { Switch } from '../ui/Switch.js'
+import { Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
 import './provider-auth.css'
 
 type ProviderDraft = ProviderConfig & { modelText: string }
@@ -193,41 +194,35 @@ function DefaultsSection() {
 
 export function ProviderAuthModal({ onClose }: { onClose(): void }) {
   const [view, setView] = useState<'providers' | 'gateways' | 'defaults'>('providers')
-  const modalRef = useRef<HTMLDivElement>(null)
-  const closeRef = useRef(onClose)
-  closeRef.current = onClose
-  useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); closeRef.current(); return }
-      if (event.key !== 'Tab') return
-      const focusable = [...(modalRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary') ?? [])].filter((element) => element.getClientRects().length > 0)
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
-    }
-    document.addEventListener('keydown', handleKey)
-    return () => { document.removeEventListener('keydown', handleKey); previous?.focus() }
-  }, [])
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal provider-modal" ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="provider-modal-title" onClick={(event) => event.stopPropagation()}>
-        <div className="modal-header">
-          <span className="modal-title flex-row" id="provider-modal-title">
-            <HelmIcon name="cpu" size={16} />
-            模型供应商
-          </span>
-          <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭" onClick={onClose}>
-            <HelmIcon name="x" size={14} />
-          </button>
-        </div>
-        <nav className="tabs-bar provider-tabs" aria-label="模型配置分类"><button className={`tab-btn${view === 'providers' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'providers'} onClick={() => setView('providers')}>供应商</button><button className={`tab-btn${view === 'gateways' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'gateways'} onClick={() => setView('gateways')}>自定义网关</button><button className={`tab-btn${view === 'defaults' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'defaults'} onClick={() => setView('defaults')}>全局模型</button><span className="provider-tabs-note">由 PI 原生模块提供</span></nav>
-        {view === 'providers' && <ProviderCatalog onEditGateway={() => setView('gateways')} />}
-        <div className="provider-gateway-panel" hidden={view !== 'gateways'}><ProvidersSection /></div>
-        <div className="provider-gateway-panel" hidden={view !== 'defaults'}><DefaultsSection /></div>
-      </div>
-    </div>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogPortal>
+        <DialogOverlay className="modal-backdrop">
+          <DialogContent
+            className="modal provider-modal"
+            aria-labelledby="provider-modal-title"
+          >
+            <div className="modal-header">
+              <DialogTitle asChild>
+                <span className="modal-title flex-row" id="provider-modal-title">
+                  <HelmIcon name="cpu" size={16} />
+                  模型供应商
+                </span>
+              </DialogTitle>
+              <DialogClose asChild>
+                <button className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭">
+                  <HelmIcon name="x" size={14} />
+                </button>
+              </DialogClose>
+            </div>
+            <nav className="tabs-bar provider-tabs" aria-label="模型配置分类"><button className={`tab-btn${view === 'providers' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'providers'} onClick={() => setView('providers')}>供应商</button><button className={`tab-btn${view === 'gateways' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'gateways'} onClick={() => setView('gateways')}>自定义网关</button><button className={`tab-btn${view === 'defaults' ? ' tab-btn-active' : ''}`} aria-pressed={view === 'defaults'} onClick={() => setView('defaults')}>全局模型</button><span className="provider-tabs-note">由 PI 原生模块提供</span></nav>
+            {view === 'providers' && <ProviderCatalog onEditGateway={() => setView('gateways')} />}
+            <div className="provider-gateway-panel" hidden={view !== 'gateways'}><ProvidersSection /></div>
+            <div className="provider-gateway-panel" hidden={view !== 'defaults'}><DefaultsSection /></div>
+          </DialogContent>
+        </DialogOverlay>
+      </DialogPortal>
+    </Dialog>
   )
 }

@@ -5,6 +5,7 @@ import { conversationsApi, searchApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
 import type { CommandSpec } from '@helm/protocol'
 
 type PaletteRow =
@@ -282,49 +283,51 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
   }, [selectedIdx])
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal"
-        style={{ maxWidth: 620 }}
-        role="dialog"
-        aria-modal="true"
-        aria-label="命令面板与全局搜索"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={onKeyDown}
-      >
-        <div className="modal-header" style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
-            <HelmIcon name="search" size={15} />
-            <input
-              ref={inputRef}
-              className="input"
-              style={{ border: 'none', background: 'transparent' }}
-              aria-label="搜索消息全文、跳转会话或执行命令"
-              placeholder="搜索消息全文、跳转会话或执行命令..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </div>
-          {searching && (
-            <span className="badge badge-neutral" style={{ height: 22, padding: '0 6px', flexShrink: 0 }}>
-              <HelmIcon name="loader" size={12} className="spin-slow" />
-              搜索中
-            </span>
-          )}
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm palette-close-btn"
-            onClick={close}
-            title="关闭"
-            aria-label="关闭"
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogPortal>
+        <DialogOverlay className="modal-backdrop">
+          <DialogContent
+            className="modal"
+            style={{ maxWidth: 620 }}
+            aria-label="命令面板与全局搜索"
+            onKeyDown={onKeyDown}
           >
-            <span className="palette-close-desktop badge badge-neutral">Esc 关闭</span>
-            <span className="palette-close-mobile" style={{ alignItems: 'center', gap: 4 }}>
-              <HelmIcon name="x" size={13} />
-              <span style={{ fontSize: 11.5 }}>关闭</span>
-            </span>
-          </button>
-        </div>
+            <DialogTitle style={{ display: 'none' }}>命令面板与全局搜索</DialogTitle>
+            <div className="modal-header" style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
+                <HelmIcon name="search" size={15} />
+                <input
+                  ref={inputRef}
+                  className="input"
+                  style={{ border: 'none', background: 'transparent' }}
+                  aria-label="搜索消息全文、跳转会话或执行命令"
+                  placeholder="搜索消息全文、跳转会话或执行命令..."
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </div>
+              {searching && (
+                <span className="badge badge-neutral" style={{ height: 22, padding: '0 6px', flexShrink: 0 }}>
+                  <HelmIcon name="loader" size={12} className="spin-slow" />
+                  搜索中
+                </span>
+              )}
+              <DialogClose asChild>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm palette-close-btn"
+                  onClick={close}
+                  title="关闭"
+                  aria-label="关闭"
+                >
+                  <span className="palette-close-desktop badge badge-neutral">Esc 关闭</span>
+                  <span className="palette-close-mobile" style={{ alignItems: 'center', gap: 4 }}>
+                    <HelmIcon name="x" size={13} />
+                    <span style={{ fontSize: 11.5 }}>关闭</span>
+                  </span>
+                </button>
+              </DialogClose>
+            </div>
         <div className="modal-body" style={{ padding: 6, gap: 2 }} ref={listRef}>
           {previewCmd && (
             <div
@@ -423,7 +426,9 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
             ),
           )}
         </div>
-      </div>
-    </div>
+          </DialogContent>
+        </DialogOverlay>
+      </DialogPortal>
+    </Dialog>
   )
 }
