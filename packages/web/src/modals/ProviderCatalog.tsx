@@ -5,6 +5,7 @@ import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { HelmSpecView } from '../ui/HelmSpecView.js'
 import { Tabs, TabsList, TabsTrigger } from '../ui/Tabs.js'
+import { ConfirmDialog } from '../ui/AlertDialog.js'
 import { buildProviderEntries, filterProviderEntries, type ProviderEntry, type ProviderFilter } from './provider-auth-model.js'
 
 function ProviderDetail({
@@ -26,6 +27,7 @@ function ProviderDetail({
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [modelQuery, setModelQuery] = useState('')
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const activeId = provider?.id ?? customId.trim()
   const supportsKey = !provider || provider.authMethods.some((method) => method.type === 'api_key')
   const supportsOAuth = provider?.authMethods.some((method) => method.type === 'oauth')
@@ -70,8 +72,8 @@ function ProviderDetail({
     } finally { setBusy(false) }
   }
 
-  const remove = async () => {
-    if (!window.confirm(`删除 ${activeId} 的已存密钥？环境变量中的凭据不会被删除。`)) return
+  const executeRemove = async () => {
+    setDeleteConfirmOpen(false)
     setBusy(true)
     setError(null)
     try {
@@ -134,7 +136,17 @@ function ProviderDetail({
           <p className="provider-help">密钥写入本机 credentials.json（0600），不进入模型上下文。环境变量和供应商特有配置由 PI 原生模块解析。</p>
           <div className="provider-form-actions">
             <button className="btn btn-primary" type="submit" disabled={busy || !activeId || !value.trim()}><HelmIcon name={busy ? 'loader' : 'check'} size={13} />{busy ? '处理中…' : '保存密钥'}</button>
-            {provider?.hasStoredKey && <button className="btn btn-sm btn-danger" type="button" disabled={busy} onClick={() => void remove()}><HelmIcon name="trash-2" size={12} />删除密钥</button>}
+            {provider?.hasStoredKey && (
+              <button
+                className="btn btn-sm btn-danger"
+                type="button"
+                disabled={busy}
+                onClick={() => setDeleteConfirmOpen(true)}
+              >
+                <HelmIcon name="trash-2" size={12} />
+                删除密钥
+              </button>
+            )}
           </div>
         </form>
       ) : !supportsKey && !provider?.pluginId ? <div className="provider-status"><HelmIcon name="shield" size={16} /><span>此供应商仅支持 OAuth，不接受 API Key。</span></div> : null}
@@ -175,6 +187,19 @@ function ProviderDetail({
           </div>
         </details>
       )}
+
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        onOpenChange={setDeleteConfirmOpen}
+        title={`删除 ${activeId} 的已存密钥？`}
+        description="环境变量中的凭据不会被删除。"
+        confirmText="删除密钥"
+        danger
+        onConfirm={() => {
+          void executeRemove()
+        }}
+        onCancel={() => setDeleteConfirmOpen(false)}
+      />
     </section>
   )
 }

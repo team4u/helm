@@ -25,17 +25,12 @@ import {
 } from './profile-editor-model.js'
 import { deepLinkSelection, fallbackSelection, shouldClearSelectionInStore, shouldSyncSelectionToStore } from './list-modal-selection.js'
 import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
+import { ConfirmDialog } from '../ui/AlertDialog.js'
 
 type EditorTab = 'basic' | 'system' | 'memory'
 
 const BUILTIN_PROTECTED_PROFILES = new Set(['assistant', 'superagent', 'watchdog'])
 const COMMON_HERDR_AGENTS = ['pi', 'claude', 'codex', 'agy', 'gemini', 'cursor', 'opencode', 'gemini-cli']
-
-/** 有未保存改动时请求放弃；返回 true 表示可以安全离开。 */
-function confirmDiscard(profileId: string | null): boolean {
-  const label = profileId ? `Profile ${profileId}` : '当前 Profile'
-  return window.confirm(`${label} 有未保存的修改，确定放弃吗？`)
-}
 
 /** 左侧 Profile 列表（herdr 未启用时不渲染 herdr 徽章，零插件痕迹）。 */
 function ProfileListPanel({
@@ -553,12 +548,21 @@ export function ProfileEditorModal({
     void loadDetail(selectedId)
   }, [selectedId, isNew, loadDetail])
 
-  /** dirty guard：丢弃改动前必须显式确认；确认后同时满空草稿。 */
-  const guardUnsaved = (profileId: string | null): boolean => {
-    if (!dirty) return true
-    if (!confirmDiscard(profileId)) return false
-    setDraft(null)
-    return true
+  const [pendingDiscardAction, setPendingDiscardAction] = useState<(() => void) | null>(null)
+
+  const withDiscardGuard = (action: () => void) => {
+    if (!dirty) {
+      action()
+      return
+    }
+    setPendingDiscardAction(() => action)
+  }
+
+  const requestClose = () => {
+    withDiscardGuard(() => {
+      setDraft(null)
+      onClose()
+    })
   }
 
   // 本地 capture Esc：先于全局 ModalFocusScope（bubble 阶段）拦截，确保
@@ -567,56 +571,58 @@ export function ProfileEditorModal({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
       if (!dirty) return
+      if (pendingDiscardAction !== null) return
       e.preventDefault()
       e.stopPropagation()
-      if (confirmDiscard(selectedId)) onClose()
+      requestClose()
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [dirty, selectedId, onClose])
+  }, [dirty, pendingDiscardAction, requestClose])
 
   const startCreate = () => {
-    if (!guardUnsaved(selectedId)) return
-    setIsNew(true)
-    setSelectedId(null)
-    if (shouldClearSelectionInStore(store.activeModal, 'profile-editor')) {
-      store.setActiveModal({ kind: 'profile-editor' })
-    }
-    setTab('basic')
-    setError(null)
-    setDraft(createDraft({ id: '', name: '', model: '', tags: [], system: '', memory: '' }))
-    setLoadSeq((seq) => seq + 1)
+    withDiscardGuard(() => {
+      setDraft(null)
+      setIsNew(true)
+      setSelectedId(null)
+      if (shouldClearSelectionInStore(store.activeModal, 'profile-editor')) {
+        store.setActiveModal({ kind: 'profile-editor' })
+      }
+      setTab('basic')
+      setError(null)
+      setDraft(createDraft({ id: '', name: '', model: '', tags: [], system: '', memory: '' }))
+      setLoadSeq((seq) => seq + 1)
+    })
   }
 
   const selectProfile = (id: string) => {
-    if (isNew) {
-      if (!guardUnsaved(id)) return
-      setIsNew(false)
-    } else if (id === selectedId) {
-      return
-    } else if (!guardUnsaved(selectedId)) {
-      return
-    }
-    // 同步进入加载态：切换到详情返回之间不闪现旧 Profile 的可编辑表单。
-    setSelectedId(id)
-    if (shouldSyncSelectionToStore(store.activeModal, 'profile-editor', id)) {
-      store.setActiveModal({ kind: 'profile-editor', profileId: id })
-    }
-    setDraft(null)
-    setLoading(true)
-    setTab('basic')
-    setError(null)
+    if (!isNew && id === selectedId) return
+    withDiscardGuard(() => {
+      if (isNew) {
+        setIsNew(false)
+      }
+      setSelectedId(id)
+      if (shouldSyncSelectionToStore(store.activeModal, 'profile-editor', id)) {
+        store.setActiveModal({ kind: 'profile-editor', profileId: id })
+      }
+      setDraft(null)
+      setLoading(true)
+      setTab('basic')
+      setError(null)
+    })
   }
 
   const reloadFromDisk = () => {
     if (!selectedId || isNew) return
-    if (dirty && !confirmDiscard(selectedId)) return
-    void loadDetail(selectedId)
-    store.pushNotice({
-      type: 'notification',
-      level: 'info',
-      title: '已重新读取',
-      body: `Profile ${selectedId} 已从磁盘刷新（本地未保存修改已丢弃）`,
+    withDiscardGuard(() => {
+      setDraft(null)
+      void loadDetail(selectedId)
+      store.pushNotice({
+        type: 'notification',
+        level: 'info',
+        title: '已重新读取',
+        body: `Profile ${selectedId} 已从磁盘刷新（本地未保存修改已丢弃）`,
+      })
     })
   }
 
@@ -703,13 +709,9 @@ export function ProfileEditorModal({
     { key: 'memory', label: 'MEMORY.md' },
   ]
 
-  const requestClose = () => {
-    if (!guardUnsaved(isNew ? null : selectedId)) return
-    onClose()
-  }
-
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) requestClose() }}>
+    <>
+      <Dialog open onOpenChange={(open) => { if (!open) requestClose() }}>
       <DialogPortal>
         <DialogOverlay className="modal-backdrop">
           <DialogContent
@@ -717,13 +719,15 @@ export function ProfileEditorModal({
             style={{ maxWidth: 860 }}
             aria-label="角色 Profile 编辑器"
             onEscapeKeyDown={(e) => {
-              if (!guardUnsaved(isNew ? null : selectedId)) {
+              if (dirty) {
                 e.preventDefault()
+                requestClose()
               }
             }}
             onPointerDownOutside={(e) => {
-              if (!guardUnsaved(isNew ? null : selectedId)) {
+              if (dirty) {
                 e.preventDefault()
+                requestClose()
               }
             }}
           >
@@ -842,5 +846,23 @@ export function ProfileEditorModal({
         </DialogOverlay>
       </DialogPortal>
     </Dialog>
+    <ConfirmDialog
+      open={pendingDiscardAction !== null}
+      onOpenChange={(open) => {
+        if (!open) setPendingDiscardAction(null)
+      }}
+      title="放弃未保存的修改？"
+      description={`${selectedId ? `Profile ${selectedId}` : '当前 Profile'} 有未保存的修改，确定放弃并继续吗？`}
+      confirmText="放弃修改"
+      cancelText="继续编辑"
+      danger
+      onConfirm={() => {
+        const action = pendingDiscardAction
+        setPendingDiscardAction(null)
+        action?.()
+      }}
+      onCancel={() => setPendingDiscardAction(null)}
+    />
+  </>
   )
 }

@@ -153,15 +153,16 @@ test('会话顶栏极简：顶栏不显重复的状态/loading徽章（执行反
   const subtitleMatch = /<span className="pane-cwd-subtitle[\s\S]*?<\/span>\s*<\/div>/.exec(paneSource)
   assert.ok(subtitleMatch !== null)
   assert.doesNotMatch(subtitleMatch[0], /onClick/)
-  // compact 与 reset 收纳进更多菜单；reset 危险样式 + 分隔线 + window.confirm 确认。
+  // compact 与 reset 收纳进更多菜单；reset 危险样式 + 分隔线 + ConfirmDialog 确认。
   const moreMenuSlice = paneSource.slice(paneSource.indexOf('pane-more-popover'), paneSource.indexOf('</header>'))
   assert.match(moreMenuSlice, /conversationsApi\.compact\(conversationId\)/)
   assert.match(moreMenuSlice, /popover-item-danger/)
   assert.match(moreMenuSlice, /popover-separator/)
   const resetIdx = moreMenuSlice.indexOf('popover-item-danger')
-  const confirmIdx = moreMenuSlice.indexOf('window.confirm')
+  const confirmIdx = moreMenuSlice.indexOf("setConfirmAction('reset')")
   assert.ok(resetIdx > 0 && confirmIdx > resetIdx, '危险样式与确认属于 reset 项')
-  assert.match(moreMenuSlice, /conversationsApi\.reset\(conversationId\)/)
+  assert.match(paneSource, /conversationsApi\.reset\(conversationId\)/)
+  assert.match(paneSource, /confirmAction === 'reset'/)
   assert.match(moreMenuSlice, /重命名会话/)
   // 顶栏不再常驻精简/重置独立按钮。
   const actionsSlice = paneSource.slice(paneSource.indexOf('pane-actions'), paneSource.indexOf('pane-more-menu'))
