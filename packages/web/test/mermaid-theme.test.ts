@@ -81,6 +81,11 @@ test('MarkdownView 源码契约：MermaidBlock 依赖 theme 并使用 getMermaid
   assert.match(content, /const\s+isCodeChanged\s*=\s*lastCodeRef\.current\s*!==\s*code/)
   assert.match(content, /if\s*\(isCodeChanged\)\s*\{[\s\n]*setSvg\(null\)/)
   assert.match(content, /const\s+delay\s*=\s*isCodeChanged\s*\?\s*250\s*:\s*0/)
+
+  // 渲染稳定性断言：components 仅依赖稳定的 setActiveModal 与 conversationId，不依赖整个 store（弹窗开合不重挂载 Mermaid）
+  assert.match(content, /const\s+\{\s*setActiveModal\s*\}\s*=\s*useHelmStore\(\)/)
+  assert.match(content, /\[conversationId,\s*setActiveModal\]/)
+  assert.match(content, /mermaidSvgCache/)
 })
 
 test('MermaidPreviewModal 源码契约：全屏画板支持主题重绘、透明图层与 var(--bg) 画布底色', { timeout: 60_000 }, async () => {

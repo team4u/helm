@@ -50,10 +50,26 @@ export function CodeBlockView({ code, language }: { code: string; language: stri
   )
 }
 
+const MERMAID_CACHE_LIMIT = 200
+const mermaidSvgCache = new Map<string, string>()
+
+function mermaidCacheKey(theme: string, code: string): string {
+  return `${theme}:${code}`
+}
+
+function setCachedSvg(key: string, svg: string): void {
+  if (mermaidSvgCache.size >= MERMAID_CACHE_LIMIT) {
+    const first = mermaidSvgCache.keys().next().value
+    if (first !== undefined) mermaidSvgCache.delete(first)
+  }
+  mermaidSvgCache.set(key, svg)
+}
+
 /** mermaid 图：代码变化时 250ms 防抖，主题切换时即时重绘无闪烁；右上角「放大预览」与「复制源码」。 */
 function MermaidBlock({ code }: { code: string }) {
   const { theme } = useHelmStore()
-  const [svg, setSvg] = useState<string | null>(null)
+  const cacheKey = mermaidCacheKey(theme, code)
+  const [svg, setSvg] = useState<string | null>(() => mermaidSvgCache.get(cacheKey) ?? null)
   const [error, setError] = useState<string | null>(null)
   const [zoomOpen, setZoomOpen] = useState(false)
   const seqRef = useRef(0)
@@ -62,6 +78,14 @@ function MermaidBlock({ code }: { code: string }) {
   useEffect(() => {
     const isCodeChanged = lastCodeRef.current !== code
     lastCodeRef.current = code
+
+    const currentKey = mermaidCacheKey(theme, code)
+    const cached = mermaidSvgCache.get(currentKey)
+    if (cached) {
+      setSvg(cached)
+      setError(null)
+      return
+    }
 
     const seq = ++seqRef.current
     if (isCodeChanged) {
@@ -77,6 +101,7 @@ function MermaidBlock({ code }: { code: string }) {
           mermaid.initialize(getMermaidConfig(theme))
           const id = `helm-mermaid-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
           const { svg: rendered } = await mermaid.render(id, code)
+          setCachedSvg(currentKey, rendered)
           if (seqRef.current === seq) {
             setSvg(rendered)
             setError(null)
@@ -279,7 +304,7 @@ function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: Artifac
 }
 
 export const MarkdownView = memo(function MarkdownView({ text, conversationId }: MarkdownViewProps) {
-  const store = useHelmStore()
+  const { setActiveModal } = useHelmStore()
   // 渲染器函数身份必须稳定，否则每次流式文本更新都会重挂载既有代码块。
   const components = useMemo<Components>(() => ({
     pre: ({ children, node }) => {
@@ -299,7 +324,7 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId }:
             className="attachment-chip"
             title="点击预览产物"
             onClick={() =>
-              store.setActiveModal({
+              setActiveModal({
                 kind: 'artifact-preview',
                 artifactId,
                 ...(conversationId !== undefined ? { conversationId } : {}),
@@ -331,7 +356,7 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId }:
       }
       return <img src={src} alt={alt} title={title} loading="lazy" />
     },
-  }), [conversationId, store])
+  }), [conversationId, setActiveModal])
 
   return (
     <div className="msg-ai-body">
