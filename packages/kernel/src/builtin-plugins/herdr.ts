@@ -724,6 +724,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
             },
             transport,
             frozenLocalTarget,
+            deps.pollIntervalMs,
           )
           executorRef.current = executor
           overviewRef.current = new OverviewProjector(

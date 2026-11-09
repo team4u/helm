@@ -631,7 +631,7 @@ test('前台 start（无控制 env）成为 launcher：拉起受控 daemon 并�
   let child: ChildProcess | undefined;
   child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), cliEntry, 'start', '--data-dir', dir], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, HELM_HUB_URL: hub.url },
+    env: { ...process.env, HELM_HUB_URL: hub.url, HELM_NODE_LAUNCHER_POLL_MS: '100' },
   });
   let stdout = '';
   child.stdout?.on('data', (c: Buffer) => (stdout += c.toString('utf8')));
@@ -786,10 +786,10 @@ test('launcher shutdown：stop 慢应答（>200ms）时必须 await 落定后才
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
   await bindIdentityFromJoinToken(dir, 'slow-stop:s', 'http://127.0.0.1:1');
-  // 慢停延迟必须显著大于「跟踪轮询余量（≤2s）+ 旧实现固定等待 200ms」：
-  // 取 5s，旧 fire-and-forget 实现最迟 ~2.4s 返回（必然早干），新实现必须
-  // await 到 stop 应答（≥5s）后才返回。
-  const SLOW_MS = 5_000;
+  // 慢停延迟必须大于「跟踪轮询余量 + 旧实现固定等待 200ms」：取 1s，旧
+  // fire-and-forget 实现最迟 ~450ms 返回（必然早干），新实现必须 await 到
+  // stop 应答（≥1s）后才返回。轮询注入 100ms，验证窗口同步缩短。
+  const SLOW_MS = 1_000;
   let control: Awaited<ReturnType<typeof startFixtureControl>> | undefined;
   t.after(async () => {
     await control?.close();
@@ -798,6 +798,7 @@ test('launcher shutdown：stop 慢应答（>200ms）时必须 await 落定后才
   let stdout = '';
   const launcherPromise = runNodeCli(['start', '--data-dir', dir], {
     env: { ...process.env },
+    launcherPollMs: 100,
     out: (text) => (stdout += text),
     // 本测试进程即「daemon」：pid=自身，存活直到 fixture 应答 stop 后置停。
     isAlive: (pid) => pid === process.pid && !(control?.stopped() ?? false),
@@ -822,7 +823,7 @@ test('launcher shutdown：stop 慢应答（>200ms）时必须 await 落定后才
 
   assert.ok(control?.stopped(), 'fixture 必须已应答 stop');
   assert.ok(
-    returnedAt - sigtermAt >= SLOW_MS - 500,
+    returnedAt - sigtermAt >= SLOW_MS - 400,
     `launcher 在 stop 慢应答落定前早退（信号到返回仅 ${returnedAt - sigtermAt}ms < ${SLOW_MS - 500}ms 慢停延迟）`,
   );
   assert.equal(code, 0);

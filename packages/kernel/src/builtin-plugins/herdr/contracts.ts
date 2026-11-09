@@ -131,6 +131,11 @@ export interface HerdrPluginDependencies {
   /** 跨节点通道（EnvFabric 注入；缺省时远端目标显式报错，绝不静默回退本机）。 */
   nodeChannel?: HerdrNodeChannel
   transport?: HerdrTransport
+  /** 同 seq blocked 退避基数与上限（测试可缩短；缺省 500ms / 4000ms）。 */
+  blockedBackoffBaseMs?: number
+  blockedBackoffCapMs?: number
+  /** 审批轮询间隔（测试可缩短；缺省 100ms）。 */
+  pollIntervalMs?: number
   /**
    * 可选：当确定性正则未从阻塞快照中识别出标准菜单时，调用会话模型解析
    * 脱敏终端快照并提取候选按键选项。返回 analysis 为 undefined 时附

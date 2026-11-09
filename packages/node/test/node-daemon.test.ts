@@ -192,7 +192,7 @@ test('envExec 流式输出与 envAbortExec 立即终止子进程树', { timeout:
     // abort：sleep 长命令应被立即终止（aborted 结构化错误，且耗时应远小于 timeout）
     const start = Date.now();
     const slow = server.envExec({ execId: 'e2', command: 'sleep 30', timeout: 60 });
-    await delay(300); // 等子进程真正启动
+    await delay(200); // 等子进程真正启动
     assert.equal(server.getActiveExecCount(), 1);
     await server.envAbortExec('e2');
     const result = await slow;
@@ -335,7 +335,7 @@ test('ipcAbortCall 立即中断阻塞等待', { timeout: 60_000 }, async (t) => 
 test('ipcSubscribe 订阅流、事件转发与 ipcUnsubscribe 关闭', { timeout: 60_000 }, async (t) => {
   const events: NodeIpcEvent[] = [];
   const closed: NodeIpcClosedEvent[] = [];
-  // 服务端：ACK subscription_started，之后每 100ms 推一行事件帧
+  // 服务端：ACK subscription_started，之后每 40ms 推一行事件帧
   const srv = await startHerdrLikeServer((line, socket) => {
     const req = JSON.parse(line) as { id: string };
     socket.write(`${JSON.stringify({ id: req.id, result: { type: 'subscription_started' } })}\n`);
@@ -343,7 +343,7 @@ test('ipcSubscribe 订阅流、事件转发与 ipcUnsubscribe 关闭', { timeout
     const timer = setInterval(() => {
       seq += 1;
       socket.write(`${JSON.stringify({ event: 'tick', data: { seq } })}\n`);
-    }, 100);
+    }, 40);
     socket.once('close', () => clearInterval(timer));
   });
   t.after(async () => {
@@ -368,7 +368,7 @@ test('ipcSubscribe 订阅流、事件转发与 ipcUnsubscribe 关闭', { timeout
   assert.equal(ack.ok, true, ack.ok ? '' : ack.error.message);
   assert.equal(server.getActiveIpcSubscriptionCount(), 1);
 
-  await delay(450); // 至少 3-4 个事件
+  await delay(200); // 至少 3-4 个事件
   assert.ok(events.length >= 3, `应收到流式事件（实际 ${events.length}）`);
   assert.equal(events[0]?.subscribeId, 'sub-1');
   assert.equal(JSON.parse(events[0]!.line).event, 'tick');
@@ -638,7 +638,7 @@ test('createNodeDaemon：register + heartbeat + 反向 envExec/envReadTextFile/i
   const token = 'work-a:secret-a';
   const hub = await startHubFixture({
     expectedToken: token,
-    heartbeatMs: 300,
+    heartbeatMs: 120,
     execOutputs,
     ipcEvents,
     ipcClosed,
@@ -665,7 +665,7 @@ test('createNodeDaemon：register + heartbeat + 反向 envExec/envReadTextFile/i
     assert.equal(hub.registrations[0]?.hubUrl, hub.url);
 
     // 等至少一次心跳
-    await delay(500);
+    await delay(300);
     assert.ok(hub.heartbeats.length >= 1, '心跳应按 ack.heartbeatMs 发送');
 
     // 服务端反向调用：写文件 + 读回

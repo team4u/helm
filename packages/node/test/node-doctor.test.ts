@@ -108,7 +108,7 @@ async function startDoctorHub(expectedToken: string): Promise<DoctorHubFixture> 
         register: async (input: NodeRegisterInput): Promise<NodeRegisterResult> => {
           registrations.push(input);
           if (input.token !== expectedToken) return { ok: false, heartbeatMs: 0, reason: 'invalid token' };
-          return { ok: true, heartbeatMs: 300 };
+          return { ok: true, heartbeatMs: 100 };
         },
         heartbeat: async (nodeId: string, input?: NodeHeartbeatInput): Promise<boolean> => {
           heartbeats.push({ nodeId, input });
@@ -175,8 +175,8 @@ test('createNodeDaemon：register 与 heartbeat 真实携带 health 快照', { t
     if (registerHealth!.diskTotalBytes !== undefined) assert.ok(registerHealth!.diskTotalBytes > 0);
     assert.ok(Math.abs(registerHealth!.collectedAt - Date.now()) < 60_000);
 
-    // 等至少一次心跳（heartbeatMs=300ms）
-    await delay(1_000);
+    // 等至少一次心跳（heartbeatMs=100ms）
+    await delay(400);
     assert.ok(hub.heartbeats.length >= 1, '应收到心跳');
     for (const beat of hub.heartbeats) {
       assert.equal(beat.nodeId, 'health-node');
@@ -196,20 +196,21 @@ test('createNodeDaemon：register 与 heartbeat 真实携带 health 快照', { t
 // ---------------------------------------------------------------------------
 
 /**
- * 以 detached: true 派生孙进程：孙进程每 20ms 向继承的 stdout 持续写入，15s 后
- * 自行退出（自限制，避免测试遗留孤儿进程）；父进程 1s 后退出，孙进程继续拽住
+ * 以 detached: true 派生孙进程：孙进程每 20ms 向继承的 stdout 持续写入，5s 后
+ * 自行退出（自限制避免测试遗留孤儿进程；也不可过短——要热过 abort/timeout 的
+ * 杀窗，且 runner 需等管道排空才会收尾）；父进程 1s 后退出，孙进程继续拽住
  * 管道 fd——模拟真实的孤儿孙进程挂死场景。
  */
 const ORPHAN_PROGRAM = [
   "const cp = require('node:child_process');",
-  "const childCode = 'const t0 = Date.now(); setInterval(() => { if (Date.now() - t0 > 15000) process.exit(0); process.stdout.write(String(Date.now() % 10)); }, 20);';",
+  "const childCode = 'const t0 = Date.now(); setInterval(() => { if (Date.now() - t0 > 5000) process.exit(0); process.stdout.write(String(Date.now() % 10)); }, 20);';",
   "cp.spawn(process.execPath, ['-e', childCode], { stdio: ['ignore', 'inherit', 'inherit'], detached: true }).unref();",
   "setTimeout(() => {}, 1000);",
 ].join(' ');
 
 test('envAbortExec 后 500ms Drain 保护：孙进程拽住 stdout 不挂死', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-drain-abort-');
-  const server = createNodeEnvRpcServer({ defaultCwd: dir });
+  const server = createNodeEnvRpcServer({ defaultCwd: dir, abortDrainGraceMs: 200 });
   try {
     const start = Date.now();
     const pending = server.envExec({
@@ -218,7 +219,7 @@ test('envAbortExec 后 500ms Drain 保护：孙进程拽住 stdout 不挂死', {
       timeout: 60,
     });
     // 等父进程 spawn 完孙进程并退出（孙进程持续向继承管道写入）
-    await delay(800);
+    await delay(300);
     assert.equal(server.getActiveExecCount(), 1, 'exec 应仍在途（被孙进程管道拽住）');
     await server.envAbortExec('drain-abort');
     const result = await pending;
@@ -241,19 +242,19 @@ test('envAbortExec 后 500ms Drain 保护：孙进程拽住 stdout 不挂死', {
 
 test('命令 timeout 后 Drain 保护：强制 timeout 结算且 dispose 不挂死', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-drain-timeout-');
-  const server = createNodeEnvRpcServer({ defaultCwd: dir, abortDrainGraceMs: 500 });
+  const server = createNodeEnvRpcServer({ defaultCwd: dir, abortDrainGraceMs: 200 });
   try {
     const start = Date.now();
     const result = await server.envExec({
       execId: 'drain-timeout',
       command: [process.execPath, '-e', ORPHAN_PROGRAM],
-      timeout: 2, // 2s 超时 + 500ms Drain 宽限
+      timeout: 1, // 1s 超时 + 200ms Drain 宽限
     });
     const elapsed = Date.now() - start;
     assert.equal(result.ok, false, '应失败结算');
     assert.equal(!result.ok && result.error.code, 'timeout', '错误码应为 timeout');
     if (!result.ok) {
-      assert.match(result.error.message, /timed out after 2 seconds/);
+      assert.match(result.error.message, /timed out after 1 seconds/);
     }
     assert.ok(elapsed < 10_000, `timeout 后应在 Drain 宽限期内结算（实际 ${elapsed}ms）`);
     const disposeStart = Date.now();

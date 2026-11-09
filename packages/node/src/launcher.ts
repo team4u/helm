@@ -342,6 +342,9 @@ export async function runForegroundLauncher(
   json: boolean,
 ): Promise<number> {
   const isAlive = isAliveOf(io);
+  // env 覆盖优先于 io 注入：真实子进程 launcher 无法接 io，只能经 env 缩短轮询。
+  const envPollMs = Number(io.env?.HELM_NODE_LAUNCHER_POLL_MS ?? '')
+  const pollMs = Number.isFinite(envPollMs) && envPollMs > 0 ? envPollMs : (io.launcherPollMs ?? LAUNCHER_POLL_MS)
   const started = await startDaemon(io, dataDir, effectiveHub);
   if (!json) {
     io.out(`helm-node launcher：守护进程 pid ${started.pid}；launcher 保持存活跟踪，Ctrl+C 停止\n`);
@@ -400,7 +403,7 @@ export async function runForegroundLauncher(
         break;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, LAUNCHER_POLL_MS));
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
   // 信号监听器清理（finally 语义）；信号触发的关闭链必须 await 落定后才返回
   // （stop 结果确认、pid CAS 清理完成，不让 systemd 在 daemon 退出前早退）；

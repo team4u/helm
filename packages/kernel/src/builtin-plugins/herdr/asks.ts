@@ -327,8 +327,8 @@ function parseAskId(askId: string): { nodeId: string | undefined; paneId: string
  * socket 事件驱动会推进权威 seq；本函数只提供可取消的退避等待，供 wait
  * 循环在收到重复同 seq blocked 时使用（避免立刻再投 agent.wait 打满通道）。
  */
-export async function backoffForDuplicateBlocked(signal: AbortSignal, attempt: number): Promise<void> {
-  const ms = Math.min(500 * 2 ** Math.min(attempt, 4), 4_000)
+export async function backoffForDuplicateBlocked(signal: AbortSignal, attempt: number, baseMs = 500, capMs = 4_000): Promise<void> {
+  const ms = Math.min(baseMs * 2 ** Math.min(attempt, 4), capMs)
   await new Promise<void>((resolve, reject) => {
     if (signal.aborted) {
       reject(new HelmError('aborted', '等待终端进展期间被取消', 409))
