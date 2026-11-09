@@ -237,17 +237,15 @@ function WorkflowNodeRow({ node, open, onToggle, onNavigate }: { node: WorkflowN
             <span
               className="btn btn-ghost btn-sm"
               role="button"
-              title={`在分屏打开子会话 #${node.conversationId}`}
+              title={`打开子会话抽屉 #${node.conversationId}`}
               onClick={(e) => {
                 e.stopPropagation()
-                store.openTarget({ kind: 'conversation', conversationId: node.conversationId! }, { split: true })
-                onNavigate?.()
+                store.setActiveModal({ kind: 'conversation-drawer', conversationId: node.conversationId! })
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.stopPropagation()
-                  store.openTarget({ kind: 'conversation', conversationId: node.conversationId! }, { split: true })
-                  onNavigate?.()
+                  store.setActiveModal({ kind: 'conversation-drawer', conversationId: node.conversationId! })
                 }
               }}
             >

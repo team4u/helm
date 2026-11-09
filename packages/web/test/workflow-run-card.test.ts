@@ -764,9 +764,10 @@ test('SSR：多阶段工作流渲染阶段胶囊、日志、产出预览与徽�
   assert.ok(html.includes('Tokens'))
 })
 
-test('SSR：agent 节点 conversationId 渲染分屏快捷入口与阶段分组标题栏', { timeout: 60_000 }, () => {
+test('SSR：agent 节点 conversationId 渲染子会话抽屉入口与阶段分组标题栏', { timeout: 60_000 }, () => {
   const html = renderCard(HELLO_RUN, { conversations: [summary(11, 'done', 1), summary(12, 'done', 1)] })
-  assert.ok(html.includes('#11'), '应渲染子会话分屏快捷入口 #11')
+  assert.ok(html.includes('#11'), '应渲染子会话快捷入口 #11')
+  assert.ok(html.includes('打开子会话抽屉 #11'), '应提示打开子会话抽屉而非分屏')
   assert.ok(html.includes('workflow-phase-header'), '应渲染阶段分组小标题栏')
   assert.ok(html.includes('workflow-node-duration'), '应渲染节点耗时')
 })
