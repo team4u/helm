@@ -1301,9 +1301,15 @@ export class KernelRuntime {
               ? { parentToolCallId: parentCallId }
               : undefined,
           )
+          const status =
+            typeof summary === 'object' && summary !== null && 'status' in summary
+              ? (summary as { status?: unknown }).status
+              : undefined
+          const failed = status === 'failed' || status === 'aborted'
           return {
             output: [{ type: 'text', text: safeResultText(summary, (text) => runtime.stash.redact(text)) }],
-            structuredOutput: { ok: true, summary: summary as JsonValue } as JsonValue,
+            ...(failed ? { isError: true } : {}),
+            structuredOutput: { ok: !failed, summary: summary as JsonValue } as JsonValue,
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)

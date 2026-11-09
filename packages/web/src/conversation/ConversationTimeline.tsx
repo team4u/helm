@@ -309,27 +309,33 @@ function TraceRow({
   const [open, setOpen] = useState(defaultOpen)
   const store = useHelmStore()
 
-  // background: true 的 subagent 工具行拿到句柄即 done，但后台 run 仍在执行：
-  // 状态文案与图标必须跟随后台真实状态，绝不提前显示“完成”。
+  // background: true 的 subagent 与 SubagentWorkflow 工具行状态必须跟随关联 run 的真实状态，
+  // 绝不提前显示“完成”或把失败显示为成功。
   const isSubagent = tool.toolName === 'subagent'
   const { run: bgRun, worktree: bgWorktree } = isSubagent
     ? resolveSubagentExecutionMeta(tool, conversationId, store.workflowRuns)
     : {}
+  const workflow = resolveWorkflowRunForTool(tool, conversationId, store.workflowRuns)
   const bgRunning = isSubagent && bgRun?.status === 'running'
   const bgFailed = isSubagent && (bgRun?.status === 'failed' || bgRun?.status === 'aborted')
+  const wfRunning = workflow?.status === 'running'
+  const wfFailed = workflow?.status === 'failed' || workflow?.status === 'aborted'
+  const rowFailed = Boolean(tool.isError || bgFailed || wfFailed)
 
   const right = bgRunning
     ? '后台运行中'
-    : tool.status === 'running'
+    : wfRunning || tool.status === 'running'
       ? '运行中'
-      : tool.durationMs !== undefined
-        ? formatDurationMs(tool.durationMs)
-        : tool.isError
-          ? '失败'
+      : rowFailed && tool.durationMs === undefined
+        ? workflow?.status === 'aborted' || bgRun?.status === 'aborted'
+          ? '已中止'
+          : '失败'
+        : tool.durationMs !== undefined
+          ? formatDurationMs(tool.durationMs)
           : tool.status === 'done'
             ? '完成'
             : ''
-  const rowIcon = bgRunning ? 'loader' : bgFailed ? 'alert-circle' : toolStatusIcon(tool)
+  const rowIcon = bgRunning || wfRunning ? 'loader' : rowFailed ? 'alert-circle' : toolStatusIcon(tool)
 
   const inputJson = useMemo(() => {
     if (tool.input === undefined) return undefined
@@ -340,12 +346,11 @@ function TraceRow({
     }
   }, [tool.input])
 
-  const workflow = resolveWorkflowRunForTool(tool, conversationId, store.workflowRuns)
   const subagentId = resolveSubagentConversationId(tool, conversationId, store.conversations)
   const subagentIdNum = subagentId !== undefined ? Number(subagentId) : undefined
 
   return (
-    <div className={`trace-entry${tool.isError ? ' trace-entry-error' : ''}`}>
+    <div className={`trace-entry${rowFailed ? ' trace-entry-error' : ''}`}>
       {workflow && <WorkflowRunCard run={workflow} />}
       {subagentIdNum !== undefined ? (
         <SubagentLiveCard
@@ -363,7 +368,7 @@ function TraceRow({
         />
       ) : null}
       <div
-        className={`trace-row${tool.isError ? ' trace-row-error' : ''}`}
+        className={`trace-row${rowFailed ? ' trace-row-error' : ''}`}
         role="button"
         tabIndex={0}
         onClick={() => setOpen((v) => !v)}
