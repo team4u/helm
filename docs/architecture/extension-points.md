@@ -190,4 +190,4 @@ HTTP 与 CLI 同权：
 - 当前会话：`helm plugins doc <id> <name> --current --json`。
 - 持续订阅：`GET /api/plugins/:id/docs/:name/events?conversationId=N`；`helm plugins doc <id> <name> --conversation N --watch --json`。
 
-`builtin:workflow` 将完整运行摘要放入会话文档 `runs`。全局 `run-badges` 仅保留计数、色调和底部短文案，不包含节点或输出；摘要没有变化时不重复发布。
+`builtin:workflow` 将完整运行摘要放入会话文档 `runs`。全局 `run-badges` 仅保留计数、色调和底部短文案，不包含节点或输出；摘要没有变化时不重复发布。全局 `workflow.updated` 只包含 `id / conversationId / status` 提示，不旁路广播完整摘要；`workflow.settled` 通过 `ctx.host.emitEvent(..., { broadcast: false })` 仅交给进程内监听器，继续等待终态清理完成。

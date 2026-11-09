@@ -657,7 +657,7 @@ export class KernelRuntime {
           }
         },
         onEvent: (type, listener) => this.onEvent(type, listener),
-        emitEvent: (type, payload) => this.emitHostEvent(type, payload),
+        emitEvent: (type, payload, options) => this.emitHostEvent(type, payload, options),
       },
       docs: this.documentStore,
       sessionDocs: {
@@ -799,7 +799,13 @@ export class KernelRuntime {
    * （如引擎结算等待 herdr 清理监听器；失败进入结算诊断而非后台 notification）。
    * SSE publish 同步完成，其错误同样上抛（不再吞成 notification）。
    */
-  emitHostEvent(type: string, payload: unknown): MaybePromise<void> {
+  emitHostEvent(type: string, payload: unknown, options?: { broadcast?: boolean }): MaybePromise<void> {
+    if (options?.broadcast === false) {
+      if (type === 'plugin.changed' || type === 'plugin.session_doc.updated' || type.trim() === '') {
+        throw new HelmError('invalid_event', '宿主生命周期事件不可改为私有分发', 400)
+      }
+      return this.dispatchInternalEvent(type, payload)
+    }
     if (type === 'plugin.changed') {
       this.refreshPluginTools()
       const envelope = payload as { type?: string; plugin?: unknown; ui?: unknown } | undefined

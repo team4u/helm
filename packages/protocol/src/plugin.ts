@@ -551,8 +551,8 @@ export interface HelmHostApi {
   registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void
   /** 订阅宿主通用事件（如 'workflow.settled'）；插件停用时自动解除。监听器可异步，发布方会等待其完成。 */
   onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void
-  /** 发布宿主事件；同步分发内部监听器（含异步监听器的等待），返回其完成情况（同步实现返回 void）。 */
-  emitEvent(type: string, payload: unknown): MaybePromise<void>
+  /** 发布事件并等待内部监听器；broadcast:false 仅在进程内分发，不进入全局 SSE。 */
+  emitEvent(type: string, payload: unknown, options?: { broadcast?: boolean }): MaybePromise<void>
 }
 
 // ---------------------------------------------------------------------------

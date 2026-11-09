@@ -111,7 +111,6 @@ function makeStore(
     ensurePluginDoc: async () => undefined,
     openTarget: () => {},
     closeSplit: () => {},
-    setScreenParams: () => {},
     setWorkbenchOpen: () => {},
     setWorkbenchTab: () => {},
     setActiveModal: () => {},

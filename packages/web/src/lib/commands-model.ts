@@ -123,9 +123,10 @@ export function buildSlashMenuItems(
 }
 
 /** 在光标处插入文本片段；caret 越界时收敛到 [0, text.length]。 */
-export function insertAtCaret(text: string, caret: number, fragment: string): { next: string; nextCaret: number } {
+export function insertAtCaret(text: string, caret: number, fragment: string, selectionEnd = caret): { next: string; nextCaret: number } {
   const pos = Math.max(0, Math.min(text.length, Math.trunc(caret) || 0))
-  return { next: text.slice(0, pos) + fragment + text.slice(pos), nextCaret: pos + fragment.length }
+  const end = Math.max(pos, Math.min(text.length, Math.trunc(selectionEnd) || 0))
+  return { next: text.slice(0, pos) + fragment + text.slice(end), nextCaret: pos + fragment.length }
 }
 
 /**

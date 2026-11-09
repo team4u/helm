@@ -24,7 +24,9 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 // 直接 ta.value= 不会推进 react-dom 的 _valueTracker，onChange 被判为无变化而不触发。
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
-import type { ConversationSummary, PluginUiContribution } from '@helm/protocol'
+import type { ComposerController, ConversationSummary, PluginUiContribution } from '@helm/protocol'
+import { seedPluginClientModule } from '../src/lib/plugin-client.js'
+import { usePluginContext } from '../src/lib/plugin-client-context.js'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import {
@@ -199,6 +201,7 @@ function stubFetch(captured: CapturedRequest[], ok: boolean): () => void {
   const original = globalThis.fetch
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
+    if (path.includes('/client.mjs')) return new Response('', { headers: { 'x-helm-client-hash': 'seeded' } })
     captured.push({ method: String(init?.method ?? 'GET'), path, body: init?.body ? JSON.parse(String(init.body)) : {} })
     if (!ok) {
       return new Response(JSON.stringify({ error: { code: 'validation_error', message: '服务端拒绝' } }), {
@@ -475,4 +478,74 @@ test('斜杠浮层合并插件命令：输入 /ar 弹出 /archive，选中执行
     unmount()
     restore()
   }
+})
+
+function mountControllerProbe(conversation: ConversationSummary) {
+  let controller: ComposerController | undefined
+  function Probe(props: { composer: ComposerController }) {
+    controller = usePluginContext().composer
+    assert.equal(controller, props.composer, 'props 与共享 SDK 上下文使用同一控制器')
+    return React.createElement('span', null, 'controller probe')
+  }
+  seedPluginClientModule('test:controller', 'probe.tsx', { Probe })
+  const mounted = mountComposer(conversation, [{ pluginId: 'test:controller', surface: 'composer.widget', spec: {
+    id: 'probe', client: { module: 'probe.tsx', export: 'Probe' },
+  } }])
+  assert.ok(controller)
+  return { ...mounted, controller: controller! }
+}
+
+test('controller 真实集成：同一事件 setDraft 后 submit 使用最新草稿，reject 忙时策略不改为 steer', { timeout: 60_000 }, async () => {
+  const captured: CapturedRequest[] = []
+  const restore = stubFetch(captured, true)
+  const app = mountControllerProbe(summary(31, 'working'))
+  try {
+    await act(async () => {
+      app.controller.setDraft('立即提交的新草稿')
+      assert.equal(app.controller.draft, '立即提交的新草稿')
+      await app.controller.submit(undefined, { whenBusy: 'reject' })
+    })
+    assert.equal(captured.length, 1)
+    assert.equal(captured[0]!.body.text, '立即提交的新草稿')
+    assert.equal(captured[0]!.body.whenBusy, 'reject')
+  } finally { app.unmount(); restore() }
+})
+
+test('controller 真实集成：失败 reject 并恢复草稿；显式文本不消费草稿；插入替换选区', { timeout: 60_000 }, async () => {
+  const captured: CapturedRequest[] = []
+  let restore = stubFetch(captured, false)
+  const app = mountControllerProbe(summary(32))
+  try {
+    await act(async () => {
+      app.controller.setDraft('abcdef')
+      await assert.rejects(app.controller.submit(), /服务端拒绝/)
+    })
+    assert.equal(textareaOf(app.host).value, 'abcdef')
+    restore()
+    restore = stubFetch(captured, true)
+    await act(async () => { await app.controller.submit('独立消息') })
+    assert.equal(textareaOf(app.host).value, 'abcdef')
+    assert.equal(captured.at(-1)!.body.text, '独立消息')
+    await act(async () => {
+      textareaOf(app.host).setSelectionRange(1, 4)
+      app.controller.insertText('X')
+    })
+    assert.equal(textareaOf(app.host).value, 'aXef')
+  } finally { app.unmount(); restore() }
+})
+
+test('插件 slash 失败保留原草稿与显式诊断', { timeout: 60_000 }, async () => {
+  const restore = stubFetch([], true)
+  const app = mountComposer(summary(33), [{ pluginId: 'test:slash', surface: 'commandPalette', spec: {
+    id: 'archive', title: '归档', slash: 'archive', actionId: 'archive',
+  } }])
+  app.store.invokePluginAction = async () => { throw new Error('action unavailable') }
+  try {
+    await act(async () => { typeInto(textareaOf(app.host), '/archive') })
+    await act(async () => {
+      textareaOf(app.host).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.equal(textareaOf(app.host).value, '/archive')
+    assert.ok(app.store.notices.some((notice) => String(notice.title).includes('命令执行失败')))
+  } finally { app.unmount(); restore() }
 })

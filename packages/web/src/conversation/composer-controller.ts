@@ -11,11 +11,13 @@
  * - 本模块只导出 hook 与纯类型（无组件），保持 .tsx Fast Refresh 约定。
  */
 import { useCallback, useMemo, useRef } from 'react'
-import type { ComposerController, ConversationAttachmentRef, WhenBusy } from '@helm/protocol'
+import type { ComposerController, WhenBusy } from '@helm/protocol'
 
 export interface ComposerControllerBindings {
   /** 当前草稿文本（React state，渲染期读取）。 */
   text: string
+  /** 草稿控制函数可在同一事件中同步改写，立即读取时使用宿主最新镜像。 */
+  readDraft?: () => string
   /** 当前待发送附件（React state）。 */
   attachments: ReadonlyArray<{ artifactId: string; name: string; size: number; mimeType: string }>
   /** 是否有提交在途（React state）。 */
@@ -76,16 +78,9 @@ export function useComposerController(bindings: ComposerControllerBindings): Com
   }, [])
 
   return useMemo<ComposerController>(() => {
-    const b = latest.current
-    const attachments: ReadonlyArray<ConversationAttachmentRef> = b.attachments.map((a) => ({
-      id: a.artifactId,
-      name: a.name,
-      mimeType: a.mimeType,
-      size: a.size,
-    }))
     return {
       get draft() {
-        return latest.current.text
+        return latest.current.readDraft?.() ?? latest.current.text
       },
       get attachments() {
         return latest.current.attachments.map((a) => ({

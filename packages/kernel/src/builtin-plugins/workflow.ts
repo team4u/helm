@@ -188,9 +188,13 @@ export function createWorkflowPlugin(): PluginDefinition {
           getConversation: (id) => ctx.host.getConversation(id),
           abortConversation: (id) => ctx.host.abortConversation(id),
           emitEvent: async (type, payload) => {
-            // 每次 workflow.updated（run 新增/节点状态变化）同步公共文档；
-            // 事件继续向 SSE 透传（前端时间线与运行卡同帧更新）。
-            if (type === 'workflow.updated') syncRunsDoc()
+            if (type === 'workflow.updated') {
+              syncRunsDoc()
+              // 全局只发布状态失效提示，详情经会话投影订阅，不旁路广播节点输出。
+              const run = (payload as { run: WorkflowRunSummary }).run
+              await ctx.host.emitEvent(type, { run: { id: run.id, conversationId: run.conversationId, status: run.status } })
+              return
+            }
             await ctx.host.emitEvent(type, payload)
           },
           onRunSettled: async (summary) => {
@@ -198,7 +202,7 @@ export function createWorkflowPlugin(): PluginDefinition {
             // workflow.settled：herdr 双轨保活清理等插件监听；emitEvent 可等待，
             // 清理监听器的错误经此上抛给引擎结算链（写入 run 诊断，不吞成
             // 后台 notification）。
-            await ctx.host.emitEvent('workflow.settled', summary)
+            await ctx.host.emitEvent('workflow.settled', summary, { broadcast: false })
           },
           onBackgroundAgentSettled: async (summary, info) => {
             syncRunsDoc()
@@ -244,7 +248,7 @@ export function createWorkflowPlugin(): PluginDefinition {
 
       /** 序列化稳定性键：runs 顺序即引擎返回顺序，JSON 直比（字段由引擎结构化产出）。 */
       function runsProjectionKey(runs: WorkflowRunSummary[]): string {
-        return JSON.stringify(runs.map((r) => [r.id, r.updatedAt, r.status]))
+        return JSON.stringify(runs)
       }
 
       function writeRunsDoc(): void {

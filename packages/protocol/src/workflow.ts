@@ -129,13 +129,6 @@ export interface WorkflowConversationBadgeSummary {
   footerText?: string
 }
 
-/** `builtin:workflow` 插件公开文档 `runs` 的结构化快照。 */
-export interface WorkflowRunsDocState {
-  runs: WorkflowRunSummary[]
-  /** 按会话 ID 聚合的工作台角标与底部状态文案（供 WorkbenchPanelSpec.badge 消费）。 */
-  byConversation?: Record<string, WorkflowConversationBadgeSummary>
-}
-
 /** `builtin:workflow` 会话级文档 `runs` 的分片快照（仅单会话自身的 run 列表）。 */
 export interface WorkflowRunSessionDocState {
   runs: WorkflowRunSummary[]

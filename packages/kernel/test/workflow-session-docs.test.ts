@@ -21,6 +21,7 @@ import {
 } from '@helm/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
+import { createHelm } from '../src/app.js'
 
 function makeConversation(id: number): ConversationSummary {
   return {
@@ -162,6 +163,35 @@ function badgeDocEvents(): unknown[] {
   return backend.events.filter((e) => e.type === 'plugin.doc.updated' &&
     (e.payload as { doc: { name: string } }).doc.name === 'run-badges')
 }
+
+test('真实内核全局流不旁路广播 workflow.updated/settled 的完整输出，内部监听器仍收到终态', { timeout: 60_000 }, async () => {
+  const app = await createHelm({ dataDir, cwd: dataDir })
+  const frames: unknown[] = []
+  const release = app.kernel.events.subscribe((frame) => frames.push(frame))
+  const settled: unknown[] = []
+  const offSettled = app.kernel.onEvent('workflow.settled', (payload) => { settled.push(payload) })
+  try {
+    await app.kernel.plugins.invokeAction('builtin:workflow', 'run', {
+      script: `${META('private-output')}return { privateMarker: 'only-session-projection' }`,
+      wait: true,
+    }, { conversationId: 1 })
+    const doc = app.kernel.plugins.getPublicSessionDoc('builtin:workflow', 'runs', 1)
+    assert.match(JSON.stringify(doc.value), /only-session-projection/)
+    assert.match(JSON.stringify(settled), /only-session-projection/, '进程内终态监听器收到完整记录')
+    assert.doesNotMatch(JSON.stringify(frames), /only-session-projection/, '全局 SSE 不泄露完整运行输出')
+    const updates = frames.filter((frame) => (frame as { event: { type: string } }).event.type === 'workflow.updated')
+    assert.ok(updates.length > 0, '保留紧凑状态提示')
+    for (const frame of updates) {
+      const run = (frame as { event: { payload: { run: Record<string, unknown> } } }).event.payload.run
+      assert.deepEqual(Object.keys(run).sort(), ['conversationId', 'id', 'status'])
+    }
+    assert.equal(frames.some((frame) => (frame as { event: { type: string } }).event.type === 'workflow.settled'), false)
+  } finally {
+    release()
+    offSettled()
+    await app.close()
+  }
+})
 
 test('跨会话隔离：每父会话分片只含自己的 run；全局 runs 文档不再存在', { timeout: 60_000 }, async () => {
   const host = makeHost()

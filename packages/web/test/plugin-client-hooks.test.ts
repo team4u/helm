@@ -120,7 +120,6 @@ function makeStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
     ensurePluginDoc: asyncNoop,
     openTarget: noop,
     closeSplit: noop,
-    setScreenParams: noop,
     setWorkbenchOpen: noop,
     setWorkbenchTab: noop,
     setActiveModal: noop,

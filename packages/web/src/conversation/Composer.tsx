@@ -775,6 +775,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     const start = m !== null ? caret - (m[1]?.length ?? 0) : caret
     const next = `${text.slice(0, start)}${apply}${text.slice(caret)}`
     setText(next)
+    syncLiveDraft(next, editingEntryId, attachments)
     setPopover(null)
     requestAnimationFrame(() => {
       const pos = start + apply.length
@@ -791,7 +792,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
   // 斜杠菜单三源合并：宿主内置命令 + 可见技能 + 满足作用域的插件命令。
   const enabledPluginIds = useMemo(() => collectEnabledPluginIds(store.plugins), [store.plugins])
   const [slashMenuItems, setSlashMenuItems] = useState<Array<{ id: string; label: string; hint?: string; apply?: string; run?: () => void }>>([])
-  const runPluginCommandRef = useRef<(cmd: QualifiedCommand) => void>((cmd) => runPluginCommandFromRef.current(cmd))
+  const runPluginCommandRef = useRef<(cmd: QualifiedCommand) => void>(() => {})
   useEffect(() => {
     setSlashMenuItems(
       buildSlashMenuItems(
@@ -802,13 +803,12 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     )
   }, [store.skills, enabledPluginIds, slashPluginCommands])
 
-  // 从草稿提交命中插件命令：触发词已随草稿整体清空，无需再移除 token。
-  const runPluginCommandFromRef = useRef<(cmd: QualifiedCommand) => void>(() => {})
-  const runPluginCommandFrom = useCallback((cmd: QualifiedCommand): void => {
+  // ⌘K 与斜杠菜单复用同一动作寻址；失败必须返回给提交者。
+  const runPluginCommandFrom = useCallback(async (cmd: QualifiedCommand): Promise<void> => {
     const actionId = cmd.spec.actionId
-    if (actionId === undefined) return
+    if (actionId === undefined) throw new Error('插件命令未绑定动作')
     setPopover(null)
-    void store
+    await store
       .invokePluginAction(commandActionPluginId(cmd), actionId, cmd.spec.input, conversation.id)
       .then(() => {
         store.pushNotice({
@@ -821,22 +821,27 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
       })
       .catch((err: unknown) => {
         notifyError(`命令执行失败：/${cmd.spec.slash ?? cmd.spec.id}`, err)
+        throw err
       })
   }, [store, conversation.id, notifyError])
-  runPluginCommandFromRef.current = runPluginCommandFrom
 
-  // 浮层选中插件命令：移除光标前触发词后执行（失败保留剩余草稿并报错，不吞未知内容）。
+  const commandPendingRef = useRef(false)
+  // 命令成功后才消费触发词；用户已经修改草稿时不得覆盖新内容。
   const runPluginCommand = useCallback((cmd: QualifiedCommand): void => {
+    if (commandPendingRef.current) return
+    commandPendingRef.current = true
     const el = textareaRef.current
-    if (el !== null) {
-      const caret = el.selectionStart ?? text.length
-      const { next, nextCaret } = removeTokenBeforeCaret(text, caret)
+    const before = liveDraftRef.current
+    const caret = el?.selectionStart ?? before.text.length
+    const { next, nextCaret } = removeTokenBeforeCaret(before.text, caret)
+    void runPluginCommandFrom(cmd).then(() => {
+      if (!shouldRestoreEditOnFailure(liveDraftRef.current, before)) return
       setText(next)
       syncLiveDraft(next, editingEntryId, attachments)
-      focusWithCaret(el, nextCaret)
-    }
-    runPluginCommandFrom(cmd)
-  }, [text, editingEntryId, attachments, syncLiveDraft, textareaRef, runPluginCommandFrom])
+      if (el !== null) focusWithCaret(el, nextCaret)
+    }).catch(() => { /* 动作调用已发送明确失败通知，保留原草稿。 */ }).finally(() => { commandPendingRef.current = false })
+  }, [editingEntryId, attachments, syncLiveDraft, runPluginCommandFrom])
+  runPluginCommandRef.current = runPluginCommand
 
   const runSlashCommand = (raw: string): boolean => {
     const cmd = raw.trim()
@@ -868,23 +873,27 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
 
   const insertTextState = useCallback((fragment: string): void => {
     const el = textareaRef.current
+    const currentText = liveDraftRef.current.text
     if (el === null) {
-      // 无 textarea（SSR/卸载间隙）：整体追加到草稿尾部，不静默丢弃。
-      const appended = text + fragment
+      const appended = currentText + fragment
       setText(appended)
       syncLiveDraft(appended, editingEntryId, attachments)
       return
     }
-    const caret = el.selectionStart ?? text.length
-    const { next, nextCaret } = insertAtCaret(text, caret, fragment)
+    const caret = el.selectionStart ?? currentText.length
+    const { next, nextCaret } = insertAtCaret(currentText, caret, fragment, el.selectionEnd ?? caret)
     setText(next)
     syncLiveDraft(next, editingEntryId, attachments)
     focusWithCaret(el, nextCaret)
   }, [text, editingEntryId, attachments, syncLiveDraft, textareaRef])
 
-  const send = useCallback(async (busyMode: 'followUp' | 'steer' = 'steer'): Promise<void> => {
-    const payload = text.trim()
-    if (payload === '' || sendingRef.current || uploadingRef.current > 0) return
+  const send = useCallback(async (busyMode: WhenBusy = 'steer', strict = false): Promise<void> => {
+    const draft = liveDraftRef.current.text
+    const payload = draft.trim()
+    if (payload === '' || sendingRef.current || uploadingRef.current > 0 || commandPendingRef.current) {
+      if (strict) throw new Error('当前草稿为空或输入区已有在途操作')
+      return
+    }
     // 未保存环境或环境保存中不允许发送（同时覆盖 Enter 与发送按钮）
     if (envBlockedRef.current) {
       store.pushNotice({
@@ -894,15 +903,26 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
         body: envBlocker.reason ?? undefined,
         conversationId: conversation.id,
       })
+      if (strict) throw new Error('请先保存或取消起始环境修改')
       return
     }
     // 插件斜杠命令：草稿首 token 精确命中满足作用域的插件命令时执行（仅非编辑态）。
     const pluginCmd = matchExactPluginSlash(payload, slashPluginCommands)
     const editing = editingEntryId !== null
     if (!editing && pluginCmd !== undefined) {
-      setText('')
-      syncLiveDraft('', editingEntryId, attachments)
-      runPluginCommandFrom(pluginCmd)
+      commandPendingRef.current = true
+      const before = liveDraftRef.current
+      try {
+        await runPluginCommandFrom(pluginCmd)
+        if (shouldRestoreEditOnFailure(liveDraftRef.current, before)) {
+          setText('')
+          syncLiveDraft('', editingEntryId, attachments)
+        }
+      } catch (error) {
+        if (strict) throw error
+      } finally {
+        commandPendingRef.current = false
+      }
       return
     }
     // 编辑态正文中出现 /new 等管理命令只是被编辑消息的文本，不立即执行；
@@ -917,12 +937,11 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     const sentAttachments = new Set(attachments.map((attachment) => attachment.artifactId))
     // 冻结发送瞬间草稿：失败时只有 Composer 仍处于乐观清空后的期望状态
     // （用户未新输入、未选其他目标、未改附件）才回滚，旧 target 不得误绑新输入。
-    const frozenDraft = draftVersionOf(text, targetEntryId, attachments)
+    const frozenDraft = draftVersionOf(draft, targetEntryId, attachments)
     const expectedAfterClear = draftVersionOf('', null, attachments)
     sendingRef.current = true
     setSending(true)
     onSendingChange?.(true)
-    const draft = text
     setText('')
     setPopover(null)
     // 乐观退出编辑态；失败时在 catch 中按冻结版本回滚
@@ -946,6 +965,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
         syncLiveDraft(draft, frozenDraft.targetEntryId, attachments)
       }
       notifyError(targetEntryId !== null ? '更新消息失败' : '发送失败', err)
+      if (strict) throw err
     } finally {
       sendingRef.current = false
       setSending(false)
@@ -991,13 +1011,13 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
 
   const composer = useComposerController({
     text,
+    readDraft: () => liveDraftRef.current.text,
     attachments,
     sending,
     textareaRef,
     setDraftState,
     insertTextState,
-    // reject 策略属后端能力，宿主发送而没有 reject UI：折为默认 steer。
-    submitDraft: (whenBusy) => send(whenBusy === 'followUp' ? 'followUp' : 'steer'),
+    submitDraft: (whenBusy) => send(whenBusy ?? 'steer', true),
     submitExplicitText: sendExplicit,
   })
 

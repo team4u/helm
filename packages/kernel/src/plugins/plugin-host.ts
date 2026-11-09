@@ -2876,7 +2876,7 @@ export class PluginHost {
         ),
       // 可等待：同步分发内部监听器（含异步监听器的 await），发布方（如引擎结算）
       // 拿到完成/失败结果，错误不再被 fire-and-forget 吞成后台 notification。
-      emitEvent: (type, payload) => backend.emitEvent(type, payload),
+      emitEvent: (type, payload, options) => backend.emitEvent(type, payload, options),
       manageConversation: (id) =>
         acquire('host.manageConversation')(() => backend.manageConversation(id, pluginId)),
       registerAskSeqResolver: (resolver) =>
