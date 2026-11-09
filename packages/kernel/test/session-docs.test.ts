@@ -659,6 +659,29 @@ test('SessionDocEventHub.response：快照 provider 出错同步清理（不建�
   assert.equal(hub.subscriberCount, 0, 'provider 失败后无订阅残留')
 })
 
+test('SessionDocEventHub.response：快照期间缓冲溢出立即关流，随后抛错仍保留原诊断', { timeout: 60_000 }, async () => {
+  const target = { pluginId: 'p:overflow', name: 'metrics', conversationId: 1 }
+  for (const shouldThrow of [false, true]) {
+    const hub = new SessionDocEventHub()
+    const create = () => hub.response(new Request('http://localhost/events'), {
+      target,
+      snapshot: () => {
+        for (let index = 0; index < 514; index++) hub.dispatch({ doc: { ...target, value: index } })
+        if (shouldThrow) throw new Error('snapshot source failed')
+        return { seq: hub.seq, doc: { ...target, value: 514 } }
+      },
+    })
+    if (shouldThrow) assert.throws(create, /snapshot source failed/)
+    else {
+      const reader = create().body!.getReader()
+      assert.equal((await reader.read()).done, true)
+      reader.releaseLock()
+    }
+    assert.equal(hub.subscriberCount, 0)
+    hub.close()
+  }
+})
+
 test('SessionDocEventHub.response：未消费流字节背压超限主动终止并退订（1MiB 默认外的显式小上限）', { timeout: 60_000 }, async () => {
   const hub = new SessionDocEventHub({ maxPendingBytes: 1024 })
   const controller = new AbortController()

@@ -617,6 +617,7 @@ export class SessionDocEventHub {
   /** 真正关闭全部专用流并清空订阅（kernel.close 时调用，杜绝泄漏）。 */
   close(): void {
     this.closeStreams(() => true)
+    this.subscribers.clear()
   }
 
   /** 关闭指定插件的全部专用流（插件停用/注销：plugin.changed enabled=false）。 */
@@ -802,20 +803,22 @@ export class SessionDocEventHub {
       if (request.signal.aborted) throw new HelmError('aborted', '订阅建立前请求已中断', 499)
       snap = options.snapshot()
     } catch (error) {
-      unsubscribe()
-      unsubscribe = undefined
-      this.subscribersCleanup(options.target)
+      shutdown()
       throw error
     }
     const snapshotChunk = encodeFrame('snapshot', snap)
     streamEntry = { target: options.target, stop: shutdown }
-    this.streams.add(streamEntry)
+    if (!closed) this.streams.add(streamEntry)
 
     const stream = new ReadableStream<Uint8Array>(
       {
         start: (controller) => {
           controllerRef = controller
-          if (closed || request.signal.aborted) {
+          if (closed) {
+            controller.close()
+            return
+          }
+          if (request.signal.aborted) {
             shutdown()
             return
           }
@@ -853,10 +856,4 @@ export class SessionDocEventHub {
     })
   }
 
-  /** provider 失败路径的同步清理（退订后清理空 tuple 键；不触碰其他流）。 */
-  private subscribersCleanup(target: { pluginId: string; name: string; conversationId: number }): void {
-    const key = SessionDocEventHub.keyOf(target)
-    const set = this.subscribers.get(key)
-    if (set !== undefined && set.size === 0) this.subscribers.delete(key)
-  }
 }
