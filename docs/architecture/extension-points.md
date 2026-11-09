@@ -10,6 +10,8 @@ Helm 坚持机制与策略分离原则。
 系统拒绝在内核中堆砌业务特判代码。
 插件通过对称的双 7 扩展点接入系统。
 
+`PluginHost` 协调启停、服务屏障和 epoch 守卫。动作、工具与路由交给 `CapabilityRegistry`，全局与会话文档交给 `PluginDocRegistry`，界面声明校验、跨插件冲突裁决和客户端编译交给 `UiRegistry`。会话文档复用宿主提供的生命周期守卫与持久层端口；界面注册表由宿主在启用提交点传入当前启用插件集合，避免注册表另存一份启停状态。运行时继续通过 `RuntimeToolRegistry` 装配工具、通过 `AssetReloader` 协调资产热重载。
+
 ```mermaid
 flowchart LR
     subgraph Backend["后端 7 大生命周期 Hook"]

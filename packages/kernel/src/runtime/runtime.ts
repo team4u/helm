@@ -17,11 +17,7 @@ import {
   Harness,
   ROOT_CONVERSATION_ID,
   createRegistry,
-  defineExtension,
-  defineTool,
-  type Extension,
   type Registry,
-  type ToolRegistration,
 } from '@earendil-works/pi-durable'
 import type { ModelThinkingLevel, Models, ModelsStore } from '@earendil-works/pi-ai'
 import type {
@@ -53,7 +49,6 @@ import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
 import {
   ArtifactService as SvcArtifactService,
-  AssetWatcher,
   AuthService as SvcAuthService,
   ConfigService,
   CredentialService,
@@ -66,7 +61,7 @@ import {
   resolveDataDir,
   type Profile,
 } from '../services/index.js'
-import { PluginHost, type DerivedToolSpec } from '../plugins/index.js'
+import { PluginHost } from '../plugins/index.js'
 import { createEnvFabric, tokenAuthenticator, type EnvFabric } from '../env/index.js'
 import { AskService } from './asks.js'
 import { ConversationTracker } from './conversations.js'
@@ -77,7 +72,7 @@ import type { ModelCatalog } from '@helm/protocol'
 import { openHelmDatabase, type HelmDatabase } from './sqlite.js'
 import { HelmStore } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
-import { buildManagedEnv, createBashTool, createEditTool, createReadArtifactTool, createReadTool, createWriteTool, runGate } from './tools.js'
+import { buildManagedEnv, runGate } from './tools.js'
 import { runNativeSpawn, THINKING_LEVELS, validateJsonSchema } from './spawn.js'
 import { assertSchemaCompilable } from '../plugins/schema.js'
 import { WorktreeAllocator } from './worktree.js'
@@ -88,11 +83,11 @@ import { ConversationService } from './conversation-service.js'
 import { NodeManager } from './node-manager.js'
 import { ModelRegistry } from './model-registry.js'
 import { HookBridge, prepareToolResultWith } from './hook-bridge.js'
-import { createRunActionTool } from './kernel-tools.js'
+import { RuntimeToolRegistry } from './tool-registry.js'
+import { AssetReloader } from './asset-reloader.js'
 import { buildSpawnHost } from './spawn-host.js'
 import {
   escapeXml,
-  pluginToolResult,
   requireConv,
   safeResultText,
   stripEnvelope,
@@ -183,10 +178,10 @@ export class KernelRuntime {
   private startPromise: Promise<void> | undefined
   /** close 期间是否曾显式 abort 在途会话（保证 abort 结算至少一次）。 */
   private closeAborts: Array<Promise<void>> = []
-  private watcher: AssetWatcher | undefined
-  /** reloadModels 串行链 + 抖动合并（providers/credentials 热重载共用）。 */
-  private reloadChain: Promise<void> = Promise.resolve()
-  private reloadTimer: NodeJS.Timeout | undefined
+  /** 工具装配器（helm-core 基础工具与 helm-plugins 插件衍生工具注册/热装）。 */
+  private readonly toolRegistry: RuntimeToolRegistry
+  /** 资产热重载协调器（watcher / 配置镜像 / reloadChain 抖动串行链）。 */
+  private readonly assetReloader: AssetReloader
   /** 节点管理（令牌/升级/execEnv/磁盘；从上帝类拆出的内聚服务）。 */
   readonly nodes: NodeManager
   /** 会话服务（CRUD/submit/rewrite/fork/reset；从上帝类拆出的内聚服务）。 */
@@ -585,6 +580,32 @@ export class KernelRuntime {
       redact: (t) => this.stashService.redact(t),
       artifacts: this.artifactsSvc,
     })
+
+    // ---- 工具装配器（helm-core 基础工具 + helm-plugins 插件衍生工具）----
+    this.toolRegistry = new RuntimeToolRegistry({
+      registry: this.registry,
+      toolDeps: this.toolDeps,
+      getPluginHost: () => this.pluginHost,
+      isArtifactAuthorized: (convId, artifactConvId) =>
+        this.conversations.isArtifactAuthorized(convId, artifactConvId),
+      redact: (t) => this.stashService.redact(t),
+      handledToolCalls: this.handledToolCalls,
+    })
+
+    // ---- 资产热重载协调器（watcher / 配置镜像 / reloadChain 抖动串行链）----
+    this.assetReloader = new AssetReloader({
+      dataDir: this.dataDir,
+      externalModels: this.init.externalModels !== undefined,
+      reloadModels: () => this.reloadModels(),
+      reloadPluginConfig: () => this.pluginConfig.load(),
+      notifyError: (title, error) => {
+        this.events.publish('notification', {
+          level: 'error',
+          title,
+          body: error instanceof Error ? error.message : String(error),
+        })
+      },
+    })
   }
 
   private async initialize(): Promise<void> {
@@ -604,9 +625,10 @@ export class KernelRuntime {
     })
     await this.modelsRegistry.loadDefaultsFromConfig()
 
-    // 2) 内核工具（bash/read/read_artifact + subagent/SubagentWorkflow/run_action）
-    //    经扩展注册；插件工具由 attachPluginHost 热装。
-    this.installKernelTools()
+    // 2) 内核基础工具（bash/read/write/edit/read_artifact + run_action 元工具）
+    //    经扩展注册；subagent / SubagentWorkflow / cleanup_worktree 由 builtin:workflow
+    //    插件提供；插件衍生工具由 attachPluginHost/refreshPluginTools 热装。
+    this.toolRegistry.installKernelTools()
 
     // 3) hook 桥：SDK GenerationTask/ToolTask 钩子 -> helm 7 hook 管道。
     this.hookBridge.install()
@@ -708,7 +730,7 @@ export class KernelRuntime {
         updatedAt: now,
       })
     })
-    this.startAssetWatcher()
+    this.assetReloader.start()
     if (this.init.autoResume) await this.start()
   }
 
@@ -742,54 +764,6 @@ export class KernelRuntime {
       })
     }
     await this.tracker.observe(root.id as number)
-  }
-
-  /**
-   * 内核基础工具（bash/read/write/edit/read_artifact + run_action 元工具）
-   *   统一注册（与插件工具同一 registry 机制；execute 统一包 handled 接管）。
-   *   subagent / SubagentWorkflow / cleanup_worktree 由 builtin:workflow 插件提供。
-   */
-  private installKernelTools(): void {
-    const runtime = this
-    const toolHost = {
-      invokePluginAction: async (pluginId: string, actionId: string, input: unknown, context: { conversationId: number; signal?: AbortSignal }) => {
-        const host = this.pluginHost
-        if (!host) throw new HelmError('runtime_not_initialized', '插件宿主未初始化', 503)
-        return host.invokeAction(pluginId, actionId, input, context)
-      },
-      redact: (text: string) => runtime.stash.redact(text),
-    }
-    const kernelTools = [
-      createBashTool(this.toolDeps),
-      createReadTool(this.toolDeps),
-      createWriteTool(this.toolDeps),
-      createEditTool(this.toolDeps),
-      createReadArtifactTool(this.toolDeps, (convId: number, artifactConvId: number) =>
-        this.conversations.isArtifactAuthorized(convId, artifactConvId),
-      ),
-      createRunActionTool(toolHost),
-    ].map((tool) => {
-      const raw = tool as unknown as Record<string, unknown>
-      const execute = raw['execute'] as (
-        args: never,
-        api: never,
-        context: never,
-      ) => Promise<unknown>
-      return {
-        ...raw,
-        execute: wrapToolExecute(
-          this.handledToolCalls,
-          execute.bind(raw) as unknown as (
-            args: never,
-            api: never,
-            context: { abortSignal?: AbortSignal },
-          ) => Promise<unknown>,
-        ),
-      } as unknown as ToolRegistration
-    })
-    this.registry.install(
-      defineExtension({ name: 'helm-core', tools: kernelTools }) as Extension,
-    )
   }
 
   /**
@@ -1009,146 +983,23 @@ export class KernelRuntime {
   }
 
   // ------------------------------------------------------------------
-  // 静态资产热重载（AssetWatcher）
-  // ------------------------------------------------------------------
-
-  /**
-   * 仅监听静态资产路径（providers.json / credentials.json / config.json /
-   * profiles/** / skills/**）。排除 state.sqlite、artifacts、workflows、
-   * plugins 数据目录与一切临时文件——它们非「配置输入」，监听只增噪音。
-   * models 注入时（外部/测试 Models）模型集合归调用方，绝不重建替换。
-   */
-  private startAssetWatcher(): void {
-    if (this.watcher) return
-    this.watcher = new AssetWatcher(
-      this.dataDir,
-      (changed) => this.onAssetsChanged(changed),
-      {
-        onError: (err) => {
-          // watcher 故障显式通知，不静默吞（热重载降级但主流程不受影响）。
-          this.events.publish('notification', {
-            level: 'error',
-            title: '资产热重载监听失败',
-            body: String(err instanceof Error ? err.message : err),
-          })
-        },
-      },
-    )
-    this.watcher.start()
-  }
-
-  private onAssetsChanged(changedPaths: string[]): void {
-    let providersTouched = false
-    let credentialsTouched = false
-    let configTouched = false
-    let profilesOrSkills = false
-    for (const rel of changedPaths) {
-      const [head, second] = rel.split('/')
-      if (head === 'providers.json') providersTouched = true
-      else if (head === 'credentials.json') credentialsTouched = true
-      else if (head === 'config.json') configTouched = true
-      else if (head === 'profiles' || head === 'skills') profilesOrSkills = true
-      else continue
-      void second
-    }
-    // profiles/skills 每回合 before_turn 都 fresh 读取，无需缓存失效。
-    void profilesOrSkills
-    if (configTouched) {
-      // 插件配置镜像刷新（读取失败显式通知，不吞）。
-      void this.pluginConfig
-        .load()
-        .catch((error) => this.notifyWatcherError('插件配置热重载失败', error))
-    }
-    if (providersTouched || credentialsTouched) {
-      this.scheduleReloadModels()
-    }
-  }
-
-  private notifyWatcherError(title: string, error: unknown): void {
-    this.events.publish('notification', {
-      level: 'error',
-      title,
-      body: error instanceof Error ? error.message : String(error),
-    })
-  }
-
-  /** 抖动合并 + 串行 reloadModels（外部注入 Models 时空操作）。 */
-  private scheduleReloadModels(): void {
-    if (this.init.externalModels) return
-    if (this.reloadTimer !== undefined) clearTimeout(this.reloadTimer)
-    this.reloadTimer = setTimeout(() => {
-      this.reloadTimer = undefined
-      this.reloadChain = this.reloadChain
-        .then(() => this.reloadModels())
-        .catch((error) => this.notifyWatcherError('模型配置热重载失败', error))
-    }, 200)
-  }
-
-  // ------------------------------------------------------------------
   // 插件工具热装
   // ------------------------------------------------------------------
 
   /**
    * 插件宿主接入（外部已自建 PluginHost 的测试场景；正常路径由 initialize 自建）。
-   * listTools() 的 DerivedToolSpec 只有清单字段，缺 execute；这里 map 到
-   * host.executeTool 闭包生成真实 SDK 工具并经 registry 热装（同名扩展原地
-   * 替换，新回合生效，不影响在途回合）。
+   * listTools() 的 DerivedToolSpec 映射为真实 SDK 工具并经 registry 热装（同名扩展
+   * 原地替换，新回合生效，不影响在途回合）。
    */
   attachPluginHost(host: PluginHost): void {
     this.pluginHost = host
-    this.installPluginTools(host.listTools())
+    this.toolRegistry.installPluginTools(host.listTools())
   }
 
   /** 插件启停后热更新工具集（app 组合层与 enable/disable 路径调用）。 */
   refreshPluginTools(): void {
     if (!this.pluginHost) return
-    this.installPluginTools(this.pluginHost.listTools())
-  }
-
-  private installPluginTools(specs: DerivedToolSpec[]): void {
-    const runtime = this
-    const host = this.pluginHost
-    if (!host) return
-    // 同名扩展 install 语义为原地替换（registry.install 已核实）；
-    // 每次重建闭包绑定最新 executeTool，空集也安装（清空旧插件工具）。
-    const tools = specs.map((spec) => {
-      const raw = defineTool({
-        name: spec.name,
-        description: spec.description,
-        parameters: (spec.inputSchema ?? { type: 'object', properties: {} }) as Record<string, object>,
-        ...(spec.structuredOutputSchema !== undefined
-          ? { structuredOutputSchema: spec.structuredOutputSchema as Record<string, object> }
-          : {}),
-        async execute(args: unknown, api: never, context: { abortSignal?: AbortSignal }) {
-          const toolApi = api as unknown as { conversationId: number; callId?: string }
-          const result = await host.executeTool(spec.name, args, {
-            conversationId: toolApi.conversationId,
-            ...(typeof toolApi.callId === 'string' && toolApi.callId !== '' ? { callId: toolApi.callId } : {}),
-            signal: context.abortSignal,
-          })
-          // 插件工具返回任意值：包成 SDK ToolExecutionResult 契约（content/text）。
-          return pluginToolResult(result, (text) => runtime.stash.redact(text), {
-            structuredOutputSchema: spec.structuredOutputSchema,
-            toolName: spec.name,
-            ...(typeof toolApi.callId === 'string' && toolApi.callId !== '' ? { callId: toolApi.callId } : {}),
-          })
-        },
-      } as never) as unknown as {
-        execute: (args: never, api: never, context: { abortSignal?: AbortSignal }) => Promise<unknown>
-      }
-      return {
-        ...raw,
-        execute: wrapToolExecute(
-          this.handledToolCalls,
-          raw.execute.bind(raw) as unknown as (
-            args: never,
-            api: never,
-            context: { abortSignal?: AbortSignal },
-          ) => Promise<unknown>,
-        ),
-      } as never
-    })
-    this.registry.install(defineExtension({ name: 'helm-plugins', tools }) as Extension)
+    this.toolRegistry.refreshPluginTools()
   }
 
   get plugins(): PluginHost {
@@ -1900,13 +1751,12 @@ export class KernelRuntime {
       clearInterval(this.watchdogTimer)
       this.watchdogTimer = undefined
     }
-    this.watcher?.close()
-    if (this.reloadTimer !== undefined) clearTimeout(this.reloadTimer)
+    this.assetReloader.stop()
     await this.nodes.dispose()
     // 先等已进入 Hook 管道的巡检收敛，避免插件释放后仍有回调写旧 Doc。
     await this.watchdogPending
     // 2) 等待在途 reloadModels（可能还在写 models 引用）。
-    await this.reloadChain
+    await this.assetReloader.waitForInflight()
     await this.modelsRegistry.dispose()
     // 3) 等待 turn_settled 钩子在途执行。
     await this.settledInflight
@@ -1966,25 +1816,6 @@ async function assertModelsStoreHealthyAtBoot(models: Models): Promise<void> {
         500,
       )
     }
-  }
-}
-
-/** 内核/插件工具 execute 包装：tool_call handled 接管结果优先返回（不执行真实工具）。 */
-function wrapToolExecute(
-  handledToolCalls: Map<
-    string,
-    { conversationId: number | undefined; result: { output: Array<{ type: 'text'; text: string }>; isError: boolean } }
-  >,
-  execute: (args: never, api: never, context: { abortSignal?: AbortSignal }) => Promise<unknown>,
-): (args: never, api: never, context: { abortSignal?: AbortSignal }) => Promise<unknown> {
-  return async (args, api, context) => {
-    const callId = (api as unknown as { callId?: string }).callId
-    const handled = callId !== undefined ? handledToolCalls.get(callId) : undefined
-    if (handled !== undefined) {
-      handledToolCalls.delete(callId!)
-      return handled.result
-    }
-    return execute(args, api, context)
   }
 }
 

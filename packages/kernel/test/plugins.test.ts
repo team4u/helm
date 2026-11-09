@@ -4,7 +4,7 @@
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SecretStash, AuthService } from '../src/services/index.js';
@@ -24,6 +24,7 @@ import {
   type PluginConfigStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js';
+import type { UiRegistry, ClientModuleOptions } from '../src/plugins/ui-registry.js';
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -854,7 +855,7 @@ test('UI 七类十函数统一收集可序列化 spec；不可序列化 spec 拒
       ctx.ui.composerPill({ id: 'pill', label: 'P' });
       ctx.ui.composerWidget({ id: 'widget' });
       ctx.ui.workbenchPanel({ id: 'panel', label: '产物' });
-      ctx.ui.command({ id: 'cmd', title: '跑巡检', actionId: 'superagent.patrol' });
+      ctx.ui.command({ id: 'cmd', title: '跑巡检', actionPluginId: 'builtin:superagent', actionId: 'patrol' });
       ctx.ui.settingsPanel({ id: 'set', label: '设置' });
     },
   });
@@ -2039,4 +2040,123 @@ test('prepareAction：Pre-flight 前置校验状态、scope 与 inputSchema 并�
   // 4) 插件未启用 -> 409 plugin_disabled
   await host.disable('p:prep');
   throwsCode(() => host.prepareAction('p:prep', 'safe-read', { name: 'helm' }), 'plugin_disabled');
+});
+
+test('doc 生命周期回归：同 ID 卸载后重新注册（epoch 重置为 1），旧 doc 句柄全部拒绝且无副作用，新句柄可用', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  let oldHandle: PluginDocHandle<{ count: number }> | undefined;
+  let newHandle: PluginDocHandle<{ count: number }> | undefined;
+
+  // 1. 注册插件 P 并获取旧 doc 句柄（初始 epoch 为 1）
+  await host.register({
+    id: 'p:doc-lifecycle',
+    definePlugin: (ctx) => {
+      oldHandle = ctx.doc('state', { count: 10 }, { public: true });
+    },
+  });
+
+  assert.ok(oldHandle);
+  assert.deepEqual(oldHandle.get(), { count: 10 });
+  oldHandle.set({ count: 20 });
+  assert.deepEqual(oldHandle.get(), { count: 20 });
+
+  // 2. 取消注册 P
+  await host.unregister('p:doc-lifecycle');
+
+  // 清空事件历史以便精准断言后续无副作用
+  eventPayloads.length = 0;
+  const storeBefore = (docs as unknown as { get: (k: string, init: unknown) => unknown }).get('p:doc-lifecycle:state', null);
+
+  // 3. 再次以相同 ID 注册 P（全新 PluginState，epoch 重新为 1）
+  await host.register({
+    id: 'p:doc-lifecycle',
+    definePlugin: (ctx) => {
+      newHandle = ctx.doc('state', { count: 100 }, { public: true });
+    },
+  });
+
+  assert.ok(newHandle);
+  // 新句柄可用
+  assert.deepEqual(newHandle.get(), { count: 20 }); // 持久化 store 中已是 20
+
+  // 4. 旧句柄 get / set / update / flush 全部拒绝并抛出 plugin_context_expired
+  throwsCode(() => oldHandle!.get(), 'plugin_context_expired');
+  throwsCode(() => oldHandle!.set({ count: 999 }), 'plugin_context_expired');
+  throwsCode(() => oldHandle!.update((s) => ({ count: s.count + 1 })), 'plugin_context_expired');
+  await assert.rejects(
+    async () => {
+      await oldHandle!.flush();
+    },
+    (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_expired',
+  );
+
+  // 5. 校验旧句柄被拒绝时禁止存储与事件副作用
+  assert.deepEqual((docs as unknown as { get: (k: string, init: unknown) => unknown }).get('p:doc-lifecycle:state', null), storeBefore);
+  const docUpdatedEvents = eventPayloads.filter((e) => e.type === 'plugin.doc.updated');
+  assert.equal(docUpdatedEvents.length, 0, '旧 doc 句柄操作被拒绝后不得产生 plugin.doc.updated 事件副作用');
+
+  // 6. 新句柄依然完全正常可用
+  newHandle.set({ count: 42 });
+  assert.deepEqual(newHandle.get(), { count: 42 });
+  await newHandle.flush();
+  assert.deepEqual((docs as unknown as { get: (k: string, init: unknown) => unknown }).get('p:doc-lifecycle:state', null), { count: 42 });
+});
+
+test('client 模块编译在途回归：同 ID 卸载后重新注册（epoch 重置为 1），编译完成前旧周期作废并拒绝', { timeout: 60_000 }, async (t) => {
+  let compileStartedResolve!: () => void;
+  const compileStarted = new Promise<void>((r) => { compileStartedResolve = r; });
+  let compileFinishResolve!: () => void;
+  const compileFinishGate = new Promise<void>((r) => { compileFinishResolve = r; });
+
+  const host = makeHost();
+  t.after(() => host.dispose());
+  // 门控只替换内部编译端口，仍由真实宿主提供注册身份，不扩张 PluginHostOptions。
+  const registry = (host as unknown as { uiRegistry: UiRegistry }).uiRegistry;
+  const getClientModule = registry.getClientModule.bind(registry);
+  t.mock.method(registry, 'getClientModule', (pluginId: string, moduleRef: string, options: ClientModuleOptions) =>
+    getClientModule(pluginId, moduleRef, {
+      ...options,
+      compile: async () => {
+        compileStartedResolve();
+        await compileFinishGate;
+        return {
+          code: `console.log('compiled for ${pluginId}/${moduleRef}')`,
+          contentHash: 'hash-v1',
+        };
+      },
+    }),
+  );
+
+  const clientDir = join(dataDir, 'client-src');
+  mkdirSync(clientDir, { recursive: true });
+
+  const def: PluginDefinition = {
+    id: 'p:client-race',
+    clientRoot: clientDir,
+    definePlugin: () => {},
+  };
+
+  // 1. 注册插件 P
+  await host.register(def);
+
+  // 2. 发起 client 模块编译，进入内部 compile 门控中
+  const compilingPromise = host.getClientModule('p:client-race', 'index.tsx');
+
+  // 等待编译进入挂起状态（确定性门控，禁止 sleep）
+  await compileStarted;
+
+  // 3. 在编译挂起在途期间，取消注册 P
+  await host.unregister('p:client-race');
+
+  // 4. 再次以相同 ID 重新注册 P（全新 PluginState，epoch 重新为 1，状态 idle）
+  await host.register(def);
+
+  // 5. 放行编译完成
+  compileFinishResolve();
+
+  // 6. 验证在途编译因 registration identity 不匹配而被拒绝（409 plugin_client_unavailable）
+  await assert.rejects(
+    compilingPromise,
+    (err: unknown) => err instanceof HelmError && err.code === 'plugin_client_unavailable',
+  );
 });

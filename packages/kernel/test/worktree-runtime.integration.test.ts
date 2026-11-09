@@ -747,10 +747,9 @@ describe('同子会话并发 resume 互斥', { timeout: 60_000 }, () => {
       assert.ok(childId > 0)
 
       // 第一个 resume：写 marker + 结构化输出 + gate（模型挂起制造在途窗口）。
-      let entered = false
-      const held = heldResponse(() => {
-        entered = true
-      })
+      let markEntered!: () => void
+      const entered = new Promise<void>((resolve) => { markEntered = resolve })
+      const held = heldResponse(markEntered)
       env.faux.setResponses([
         fauxAssistantMessage([fauxToolCall('bash', { command: 'echo first > first-resume.txt' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage([fauxToolCall('register_structured_output', { output: { answer: '第一个续接的答案' } })], { stopReason: 'toolUse' }),
@@ -765,15 +764,14 @@ describe('同子会话并发 resume 互斥', { timeout: 60_000 }, () => {
         onResolved: () => {},
       } as AgentSpawnRequest)
 
-      // 等第一回合工具执行（marker 落盘）后再发第二个并发 resume。
+      // 必须等模型消费前两条响应并进入挂起点；仅等 marker 落盘会提前重置 faux 响应队列。
+      await Promise.race([
+        entered,
+        first.then(() => { throw new Error('首个续接在进入挂起响应前结束') }),
+      ])
       const record = env.kernel.worktrees.getForConversation(childId)
       assert.ok(record)
-      const deadline = Date.now() + 10_000
-      while (Date.now() < deadline) {
-        if (existsSync(join(record!.path, 'first-resume.txt'))) break
-        await new Promise((r) => setTimeout(r, 50))
-      }
-      assert.ok(existsSync(join(record!.path, 'first-resume.txt')), '第一个续接应在原 worktree 内执行')
+      assert.ok(existsSync(join(record.path, 'first-resume.txt')), '第一个续接应在原 worktree 内执行')
 
       // 并发第二 resume：同子会话在途，显式拒绝（不互抢 gate/结构化输出）。
       env.faux.setResponses([fauxAssistantMessage('第二个续接不应执行')])
