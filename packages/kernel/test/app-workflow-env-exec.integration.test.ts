@@ -178,20 +178,26 @@ test('env.exec2: 普通插件动作 preflight invalid input 不锁死 resume；�
   try {
     // 1) 非法入参（test:probe.echo text 为空串）经 ctx.host.prepareAction 在
     //    action_started 落盘前拒绝：写幂等失败行，账本无悬挂 started。
-    // 发起后轮询终态（真实等待；wait:true 在 failed 时拒绝，改用 inspect 观察终态）。
-    const started = (await env.runWorkflow({
+    // wait:true 等待结算链完成；仅 inspect 看到终态时，旧 run 仍可能在收尾。
+    let failedRunId: string | undefined
+    await assert.rejects(env.runWorkflow({
       script:
         META('preflight-invalid') +
         'const a = await action("test:probe.echo", { text: "" })\n' +
         'if (!a) throw new Error("step failed")\n' +
         'return a',
       conversationId: env.convId,
-    })).run
-    let badRun = (await env.inspectRun(started.id)).run
-    for (let i = 0; i < 200 && badRun.status === 'running'; i++) {
-      await new Promise((r) => setTimeout(r, 25))
-      badRun = (await env.inspectRun(started.id)).run
-    }
+      wait: true,
+    }), (error: unknown) => {
+      if (!(error instanceof HelmError) || error.code !== 'workflow_failed') return false
+      const details = error.details as { runId?: unknown } | undefined
+      if (typeof details?.runId !== 'string') return false
+      failedRunId = details.runId
+      return true
+    })
+    assert.ok(failedRunId)
+    const started = { id: failedRunId }
+    const badRun = (await env.inspectRun(started.id)).run
     assert.equal(badRun.status, 'failed', `参数错误应显式失败：${badRun.error}`)
     const badNode = badRun.nodes?.find((n) => n.kind === 'action')
     assert.ok(badNode)
@@ -264,19 +270,25 @@ test('env.exec3: 插件声明 idempotent: true 的动作在账本生效（resume
       app.kernel.plugins!.invokeAction('builtin:workflow', 'run', request) as Promise<{ run: WorkflowRunSummary }>
 
     // 第一次：handler 失败（副作用语义如实记录；动作失败折叠 null，脚本显式失败）。
-    const first = (await runWorkflow({
+    let failedRunId: string | undefined
+    await assert.rejects(runWorkflow({
       script:
         META('idem-probe') +
         'const a = await action("test:idem.probe", {})\n' +
         'if (!a) throw new Error("probe failed")\n' +
         'return a',
       conversationId: ROOT_CONVERSATION_ID,
-    })).run
-    let firstRun = (await app.kernel.plugins!.invokeAction('builtin:workflow', 'inspect', { runId: first.id })) as { run: WorkflowRunSummary }
-    for (let i = 0; i < 200 && firstRun.run.status === 'running'; i++) {
-      await new Promise((r) => setTimeout(r, 25))
-      firstRun = (await app.kernel.plugins!.invokeAction('builtin:workflow', 'inspect', { runId: first.id })) as { run: WorkflowRunSummary }
-    }
+      wait: true,
+    }), (error: unknown) => {
+      if (!(error instanceof HelmError) || error.code !== 'workflow_failed') return false
+      const details = error.details as { runId?: unknown } | undefined
+      if (typeof details?.runId !== 'string') return false
+      failedRunId = details.runId
+      return true
+    })
+    assert.ok(failedRunId)
+    const first = { id: failedRunId }
+    const firstRun = (await app.kernel.plugins!.invokeAction('builtin:workflow', 'inspect', { runId: first.id })) as { run: WorkflowRunSummary }
     assert.equal(firstRun.run.status, 'failed')
     assert.equal(handlerRuns, 1)
 
