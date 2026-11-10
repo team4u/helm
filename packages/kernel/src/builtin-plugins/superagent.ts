@@ -384,6 +384,21 @@ async function bootstrapAssets(host: Pick<HelmHostApi, 'profiles' | 'skills'> & 
 // 工厂入口
 // ---------------------------------------------------------------------------
 
+/** clientRoot 兼容 src / dist 运行路径（与 workflow/herdr/memory 插件同机制）。 */
+function resolveSuperAgentClientRoot(): string {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const local = join(here, 'superagent', 'client')
+  if (existsSync(local)) return local
+  const pkgRoot = dirname(dirname(here))
+  const srcFallback = join(pkgRoot, 'src', 'builtin-plugins', 'superagent', 'client')
+  if (existsSync(srcFallback)) return srcFallback
+  throw new HelmError(
+    'superagent_plugin_client_missing',
+    `内置插件 ${SUPERAGENT_PLUGIN_ID} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
+    500,
+  )
+}
+
 export function createSuperAgentPlugin(): PluginDefinition {
   return {
     id: SUPERAGENT_PLUGIN_ID,

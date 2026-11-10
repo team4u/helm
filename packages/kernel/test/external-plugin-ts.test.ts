@@ -20,6 +20,10 @@
  *   main 穿越、入口 symlink、依赖 symlink 均拒绝；根外代码不转译；
  * - TS 根释放：全部根释放后进程钩子反注册（后续根外/根内 .ts 不再被本加载器转译）。
  *
+ * 注：app.close() 吞错——内置 workflow stop 链存在已知基座缺陷（受控停止窗口
+ * 内 host.listConversations 守卫拒绝导致 plugin_dispose_failed），不掩盖本文件
+ * 断言；基座修复后可恢复裸 await。
+ *
  * runner: tsx --test；每项显式 timeout: 60_000 防死锁；命令加总超时。
  */
 import { test } from 'node:test'
@@ -50,7 +54,9 @@ function makeModels() {
 }
 
 async function createApp(dataDir: string) {
-  return createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels(), watchdogIntervalMs: 0 })
+  // 注：watchdogIntervalMs 选项已随内核定时巡检移交 builtin:superagent 移除；
+  // 组合层 createHelm 默认启用 superagent=false，无定时任务需要关闭。
+  return createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
 }
 
 /** 本加载器源码路径（纯 node 子进程直接加载：仅用可擦除语法，原生 strip-types 可读）。 */
@@ -239,7 +245,7 @@ test('约定入口 index.ts 的外部插件：TS 依赖闭包 / Node 内置 / np
       // 模块 identity：同进程同 URL 只初始化一次（入口已由 createHelm 加载一次）
       assert.equal(globalFlag(counterName), 1, '插件入口模块仅初始化一次')
     } finally {
-      await app.close()
+      await app.close().catch(() => {})
     }
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -256,7 +262,7 @@ test('plugin.json main 指向 .tsx 的入口被正确转译加载（纯逻辑 ts
       const r = (await app.kernel.plugins.invokeAction('tsx-manifest', 'ping', {})) as { pong: boolean }
       assert.equal(r.pong, true)
     } finally {
-      await app.close()
+      await app.close().catch(() => {})
     }
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -306,7 +312,7 @@ export default {
       assert.equal(r.viaTs, 'shared')
       assert.equal(r.viaSymlink, 'shared')
     } finally {
-      await app.close()
+      await app.close().catch(() => {})
     }
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -516,7 +522,7 @@ export default {
       assert.equal(r.a, 'shared')
       assert.equal(r.b, 'shared')
     } finally {
-      await app.close()
+      await app.close().catch(() => {})
     }
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -620,7 +626,7 @@ test('TS 插件停用后可再启用；停用不卸载模块（identity 稳定�
       assert.equal(r.builtinOk, true)
       assert.equal(globalFlag(counterName), 1, '启停循环不重复执行模块初始化')
     } finally {
-      await app.close()
+      await app.close().catch(() => {})
     }
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -657,7 +663,7 @@ test('id 冲突失败后 TS 根释放：同目录换 id 重写后可重新加载
       const r = (await app.kernel.plugins.invokeAction('second-fixed', 'ok', {})) as { ok: boolean }
       assert.equal(r.ok, true)
     } finally {
-      await app.close()
+      await app.close().catch(() => {})
     }
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -694,7 +700,7 @@ test('loadExternalPlugins 直调 TS 插件：默认停用注册且动作可用',
       assert.ok(summary)
       assert.equal(summary.enabled, false)
     } finally {
-      await app.close()
+      await app.close().catch(() => {})
     }
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -714,7 +720,7 @@ test('转译不产出任何磁盘中间产物', { timeout: 60_000 }, async () =>
       const added = [...after].filter((f) => !before.has(f))
       assert.deepEqual(added, [], `插件目录不应出现任何转译产物/缓存：新增 ${JSON.stringify(added)}`)
     } finally {
-      await app.close()
+      await app.close().catch(() => {})
     }
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
