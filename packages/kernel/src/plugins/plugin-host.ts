@@ -13,6 +13,9 @@
  * - 同插件的 register/enable/disable/unregister 经 per-plugin 队列串行执行；
  * - 停用先把 phase 置为 deactivating 再进入 await，期间新 invokeAction /
  *   executeTool / runHook 一律拒绝，绝不让任务进入正在拆毁的注册表；
+ *   服务 stop 链例外——受控停止窗口（PluginState.stopWindow）内放行
+ *   doc 最终落盘与 STOP_WINDOW_HOST_CALLS 清理子集（含 dispose 已置
+ *   disposed 的拆毁路径），新工作入口照拒；
  * - 每个启用周期递增 epoch：旧 definePlugin 上下文（含 doc 句柄与宿主
  *   生命周期资源）在新周期或停用后立即失效，防止异步残留注册污染新周期。
  * - runHook 只执行快照时刻「已启用且空闲」的处理器；未启用/正停用插件的
@@ -205,6 +208,28 @@ interface ProviderEntry {
  */
 type PluginPhase = 'idle' | 'defining' | 'deactivating';
 
+/**
+ * 受控停止窗口内仍可用的 ctx.host 调用（按 wrapHostApi 的 what 标签）：
+ * 停止链必需的只读（listConversations/getConversation/redact/nodeIpc.isOnline）、
+ * 取消（abortConversation/cancelAsk）、跨节点清理 IPC（nodeIpc.call）与最终
+ * 事件（emitEvent）。集合来自真实 stop 消费者（workflow close 的 runs 投影与
+ * 子会话中止、herdr 的销单/pane 清理/通知、superagent 的 Ask 取消）并按能力
+ * 通用表达，不按插件 ID 特判。其余调用——含 spawnAgent/submitInput/
+ * createConversation/dispatchTrigger/createAsk/execEnv/executionEnv/
+ * completeText 等一切新工作入口——在窗口内同样拒绝：停用语义是拆毁收尾，
+ * 不是继续干活的宽限期。
+ */
+const STOP_WINDOW_HOST_CALLS: ReadonlySet<string> = new Set([
+  'host.listConversations',
+  'host.getConversation',
+  'host.abortConversation',
+  'host.cancelAsk',
+  'host.emitEvent',
+  'host.redact',
+  'host.nodeIpc.isOnline',
+  'host.nodeIpc.call',
+]);
+
 interface PluginState {
   definition: PluginDefinition;
   enabled: boolean;
@@ -223,9 +248,13 @@ interface PluginState {
    */
   hostReleases: Set<() => void>;
   /**
-   * 受控停止 doc 写入窗口：宿主正在 await 本插件服务 stop 链期间为 true。
+   * 受控停止窗口：宿主正在 await 本插件服务 stop 链期间为 true。窗口内放行
+   * 本周期 doc 句柄的最终落盘与 ctx.host 清理子集（STOP_WINDOW_HOST_CALLS，
+   * 含 dispose 已置 disposed 的路径）；窗口关闭后一切旧句柄调用恢复拒绝。
+   * 按状态标记而非异步上下文传播：stop 等待的 settle 链 promise 在窗口
+   * 打开前创建，AsyncLocalStorage 无法跨越已存在的 promise 边界。
    */
-  stopDocWrites: boolean;
+  stopWindow: boolean;
 }
 
 export class PluginHost {
@@ -297,7 +326,7 @@ export class PluginHost {
         providers: [],
         configSchema: null,
         hostReleases: new Set(),
-        stopDocWrites: false,
+        stopWindow: false,
       };
       this.plugins.set(definition.id, state);
 
@@ -585,19 +614,20 @@ export class PluginHost {
   }
 
   /**
-   * 在受控停止 doc 写入窗口内执行服务 stop：stop 期间（含引擎 close 内部
-   * 由 abort 唤醒的异步 settle 链）本插件本周期 ctx.doc 句柄的最终持久化写入
-   * 被放行（phase 为 deactivating 时不再拒绝）；stop 返回（成功/失败）即
-   * 复位窗口，之后一切写入恢复常规拒绝。窗口按 PluginState 标记而非异步上下
-   * 文传播：引擎 settle 链的 promise 在 stop 之前创建，AsyncLocalStorage 无法
-   * 跨越已存在的 promise 边界。
+   * 在受控停止窗口内执行服务 stop：stop 期间（含引擎 close 内部由 abort 唤醒
+   * 的异步 settle 链）本插件本周期 ctx.doc 句柄的最终持久化写入与
+   * STOP_WINDOW_HOST_CALLS 清理子集被放行（phase 为 deactivating、乃至
+   * dispose 已置 disposed 时不再拒绝）；stop 返回（成功/失败）即复位窗口，
+   * 之后一切调用恢复常规拒绝。窗口按 PluginState 标记而非异步上下文传播：
+   * 引擎 settle 链的 promise 在 stop 之前创建，AsyncLocalStorage 无法跨越
+   * 已存在的 promise 边界。
    */
   private async runControlledStop(state: PluginState, stop: () => MaybePromise<void>): Promise<void> {
-    state.stopDocWrites = true;
+    state.stopWindow = true;
     try {
       await stop();
     } finally {
-      state.stopDocWrites = false;
+      state.stopWindow = false;
     }
   }
 
@@ -1396,11 +1426,11 @@ export class PluginHost {
 
     /**
      * doc 句柄在本周期内（含运行期）可写；停用中或周期更替后失效。
-     * 例外：受控停止 doc 写入窗口（宿主正在 await 的本插件服务 stop 链，
-     * epoch 由句柄闭包保证一致）允许最终持久化写入，见 PluginState.stopDocWrites。
+     * 例外：受控停止窗口（宿主正在 await 的本插件服务 stop 链，epoch 由句柄
+     * 闭包保证一致）允许最终持久化写入，见 PluginState.stopWindow。
      */
     const assertDocUsable = (name: string) => {
-      if (state.stopDocWrites && self.plugins.get(pluginId) === state && state.epoch === epoch) {
+      if (state.stopWindow && self.plugins.get(pluginId) === state && state.epoch === epoch) {
         // 受控停止窗口：仅要求插件注册态与本周期仍在（dispose 后期 plugins.clear /
         // reenable 周期更替后的残留调用依然拒绝）。
         return;
@@ -1599,8 +1629,22 @@ export class PluginHost {
   private wrapHostApi(state: PluginState, epoch: number): HelmHostApi {
     const pluginId = state.definition.id;
     const backend = this.options.host;
-    /** 每次调用的周期守卫（含并发问断首）；what 入诊断。 */
+    /**
+     * 每次调用的周期守卫；what 入诊断。
+     * 受控停止窗口例外：本周期、宿主正在 await 本插件服务 stop 链期间，仅
+     * STOP_WINDOW_HOST_CALLS（读取/取消/跨节点清理/最终事件）放行——含
+     * dispose 已置 disposed 的拆毁路径（assertNotDisposed 一并越过）；其余
+     * 调用（一切新工作入口）照拒，窗口不因 deactivating 全开。
+     */
     const guard = (what: string): void => {
+      if (
+        state.stopWindow &&
+        STOP_WINDOW_HOST_CALLS.has(what) &&
+        this.plugins.get(pluginId) === state &&
+        state.epoch === epoch
+      ) {
+        return;
+      }
       this.assertContextUsable(state, epoch, what);
     };
     /** 异步操作统一：先守卫再入任务（停用预检可见，不留盲区）。 */
@@ -1668,16 +1712,33 @@ export class PluginHost {
               tracked(`host.nodeIpc.call`, () => backend.nodeIpc!.call(nodeId, input, signal)),
             subscribe: (nodeId, input, onLine, onClosed, signal) => {
               guard('host.nodeIpc.subscribe');
-              // 竞态安全：acquire 时刻即建立 AbortController；释放时先 abort（后端
-              // 取消在建订阅并回调 onClosed），订阅晚到建立时立即用返回的 stop 收
-              // 割（不泄漏）。建立错误留在返回的 Promise（调用方可 await），绝不
-              // void 吐成 unhandled rejection。
+              // 竞态安全：acquire 时刻即建立 AbortController；调用方 stop /
+              // 宿主停用释放 / 外部 signal abort 汇入同一幂等收割点——后端退订
+              // 至多调用一次、外部 abort listener 必被摘除（不泄漏在调用方
+              // signal 上）、释放先于建立完成时晚到订阅立即收割。返回给调用方
+              // 的 stop 即 acquire 封装（同步解除 hostReleases 登记），调用方
+              // 直接 stop 与停用释放绝不叠加成两次退订；建立错误留在返回的
+              // Promise（调用方可 await），绝不 void 吐成 unhandled rejection。
               const controller = new AbortController();
-              const forwardAbort = () => controller.abort(signal?.reason);
-              if (signal?.aborted) forwardAbort();
-              signal?.addEventListener('abort', forwardAbort, { once: true });
-              let stop: (() => void) | undefined;
-              let released = false;
+              let backendStop: (() => void) | undefined;
+              let reaped = false;
+              /** 外部 abort 监听：终结订阅，转发进唯一收割路径（release 幂等）。 */
+              const onExternalAbort = () => release();
+              /** 唯一收割点（幂等）：摘外部 abort listener；后端退订至多一次。 */
+              const reap = (): void => {
+                if (reaped) return;
+                reaped = true;
+                signal?.removeEventListener('abort', onExternalAbort);
+                const stop = backendStop;
+                backendStop = undefined;
+                stop?.();
+              };
+              const release = acquire('host.nodeIpc.subscribe')(() => () => {
+                controller.abort(signal?.aborted ? signal.reason : undefined);
+                reap();
+              });
+              if (signal?.aborted) onExternalAbort();
+              else signal?.addEventListener('abort', onExternalAbort, { once: true });
               const establish = this.tracker.withTask(pluginId, 'host.nodeIpc.subscribe', async () => {
                 const unsubscribe = await backend.nodeIpc!.subscribe(
                   nodeId,
@@ -1686,14 +1747,12 @@ export class PluginHost {
                   onClosed,
                   controller.signal,
                 );
-                stop = unsubscribe;
-                if (released) unsubscribe(); // 释放先于建立完成：立即收割晚到订阅
-                return unsubscribe;
-              });
-              acquire('host.nodeIpc.subscribe')(() => () => {
-                released = true;
-                controller.abort();
-                stop?.();
+                if (reaped) {
+                  unsubscribe(); // 收割先于建立完成：晚到订阅立即退订（仍只此一次）
+                  return release;
+                }
+                backendStop = unsubscribe;
+                return release;
               });
               return establish;
             },
