@@ -13,6 +13,11 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HelmError } from '@helm/protocol'
+import {
+  HELM_CLI_SKILL_MD,
+  HELM_CLI_GENERATIVE_UI_MD,
+  HELM_CLI_SKILL_AND_PLUGIN_DEV_MD,
+} from '../src/builtin-plugins/assistant/assets.js'
 import { assert } from './helpers.js'
 import { waitFor } from './helpers.js'
 import {
@@ -285,6 +290,23 @@ test('profiles: SYSTEM_DEFAULT 分层——含 helm-cli 引导与 HELM_CONVERSAT
   for (const component of ['MetricGrid', 'CheckboxGroup', 'ActionBar', 'BarList', 'KeyValueList', 'Accordion', 'helm:action', 'helm:open', 'helm:send']) {
     assert.ok(!system.includes(component), `SYSTEM_DEFAULT 不应含 Layer 2 细节: ${component}`)
   }
+})
+
+test('helm-cli 技能资产同步界面扩展与会话投影能力面（防回退）', { timeout: 60_000 }, () => {
+  // SKILL.md：会话文档 CLI 参数已入迷查
+  assert.ok(HELM_CLI_SKILL_MD.includes('--conversation'), 'SKILL.md 应含 doc --conversation 会话文档读取')
+  assert.ok(HELM_CLI_SKILL_MD.includes('--watch'), 'SKILL.md 应含 doc --watch 订阅')
+  // generative-ui：21 原语含 Slot，求值域含 $sessionDocs
+  assert.ok(HELM_CLI_GENERATIVE_UI_MD.includes('21 个原语'), '原语计数应为 21（含 Slot）')
+  assert.ok(HELM_CLI_GENERATIVE_UI_MD.includes('`Slot`'), '应 documenting Slot 原语')
+  assert.ok(HELM_CLI_GENERATIVE_UI_MD.includes('$sessionDocs'), '求值域应含 $sessionDocs')
+  assert.ok(!HELM_CLI_GENERATIVE_UI_MD.includes('20 个原语'), '不应残留旧计数')
+  // 插件开发：15 注册方法 / sessionDoc / composer / sp-ssp / 共享 Hook
+  assert.ok(HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes('15 个注册方法'), '应 documenting 15 个 UI 注册方法')
+  for (const api of ['conversationHeaderAction', 'timelineEntryAction', 'profileRuntime', 'ctx.sessionDoc', 'usePluginSessionDoc', 'PluginSlot', 'composer']) {
+    assert.ok(HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(api), `插件开发参考应含 ${api}`)
+  }
+  assert.ok(HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes('sp.<key>'), '应 documenting sp./ssp. 深链命名空间')
 })
 
 test('skills: ensureSkill 受管覆盖——自举、重启覆盖源码版本、补缺文件、拒绝软链覆盖、写入只读', { timeout: 60_000 }, async () => {
