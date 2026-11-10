@@ -1,5 +1,5 @@
 /**
- * PluginUiView：10 个 UI 扩展点内容渲染的统一 wrapper。
+ * PluginUiView：所有视图类 UI 扩展点的统一 wrapper（纯数据注册项不经过本组件）。
  * - 双轨：spec.client 存在走动态编译模块（client 优先），否则 spec.json 走 HelmSpecView；
  * - client 轨道：加载/导出校验错误显式展示（绝不静默空白），ViewBoundary 隔离渲染异常；
  * - 注入 PluginClientContext（usePluginContext）与协议标准 Props；
