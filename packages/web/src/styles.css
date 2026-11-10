@@ -2129,7 +2129,22 @@ textarea {
 .composer-extras > summary::-webkit-details-marker { display: none; }
 .composer-extras-popover .composer-pill-item { display: flex; padding: 4px; }
 .composer-extras-popover .composer-pill-item > * { max-width: 100%; }
-.composer-popover.composer-model-popover { width: min(360px, calc(100% - 12px)); }
+.composer-popover.composer-model-popover {
+  width: min(500px, calc(100vw - 24px));
+  max-height: min(440px, 60dvh);
+}
+.composer-model-popover .popover-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  white-space: nowrap;
+}
+.composer-model-popover .popover-item .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .composer-popover.composer-extras-popover { width: min(280px, calc(100% - 12px)); }
 
 .composer-popover {

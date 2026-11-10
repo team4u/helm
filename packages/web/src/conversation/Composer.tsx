@@ -236,7 +236,7 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
                 onClick={() => void pick(m.id)}
               >
                 <span className="mono">{m.modelId}</span>
-                <span className="popover-item-meta">{m.provider}{m.thinkingLevels.length > 1 ? ' · 思考 ' + m.thinkingLevels[m.thinkingLevels.length - 1] : ''}</span>
+                <span className="popover-item-meta">{m.provider}</span>
               </button>
             ))}
             {store.models.every((model) => !model.available) && (
