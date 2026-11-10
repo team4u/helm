@@ -419,6 +419,8 @@ export function ProfileDetailDrawer({
                     id="profile-form-model"
                     value={form.model}
                     options={modelOptions}
+                    popoverClassName="helm-select-popover-wide"
+                    className="w-full mono"
                     onChange={(e) =>
                       setForm((prev) => ({ ...prev, model: e.target.value }))
                     }

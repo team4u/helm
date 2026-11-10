@@ -204,6 +204,8 @@ test('resolveTargetString: 支持 profiles, skills, nodes, models 及其子 ID �
 
   assert.deepEqual(resolveTargetString('models', []), { kind: 'models' })
   assert.deepEqual(resolveTargetString('models:anthropic', []), { kind: 'models', providerId: 'anthropic' })
+  // models:defaults 直达全局默认 Tab（历史虚拟卡片语义升级）
+  assert.deepEqual(resolveTargetString('models:defaults', []), { kind: 'models', tab: 'defaults' })
 })
 
 // ---------------------------------------------------------------------------

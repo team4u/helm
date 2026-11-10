@@ -155,6 +155,14 @@ function formatTargetValue(target: ResolvedTarget): string {
   return ''
 }
 
+/** 解析 models 目标 ?tab= 参数：仅接受 defaults（providers 为缺省，不序列化）。 */
+const parseModelsTabParam = (raw: string | null): 'defaults' | undefined =>
+  raw === 'defaults' ? 'defaults' : undefined
+
+/** 历史 id=defaults 深链升级：旧虚拟卡片已下线，重定向到全局默认 Tab。 */
+const upgradeLegacyModelsTarget = (target: { kind: 'models'; providerId?: string }): ResolvedTarget =>
+  target.providerId === 'defaults' ? { kind: 'models', tab: 'defaults' } : target
+
 function parseSplitTargetValue(raw: string): ResolvedTarget | null {
   const queryIdx = raw.indexOf('?')
   const path = queryIdx === -1 ? raw : raw.slice(0, queryIdx)
@@ -179,8 +187,14 @@ function parseSplitTargetValue(raw: string): ResolvedTarget | null {
   if (baseTarget.kind === 'nodes' && subId !== undefined) {
     return { kind: 'nodes', nodeId: subId }
   }
-  if (baseTarget.kind === 'models' && subId !== undefined) {
-    return { kind: 'models', providerId: subId }
+  if (baseTarget.kind === 'models') {
+    return upgradeLegacyModelsTarget({
+      kind: 'models',
+      ...(subId !== undefined ? { providerId: subId } : {}),
+      ...(parseModelsTabParam(params.get('tab')) !== undefined
+        ? { tab: parseModelsTabParam(params.get('tab')) as 'defaults' }
+        : {}),
+    })
   }
   return baseTarget
 }
@@ -200,7 +214,10 @@ function formatSplitTarget(target: ResolvedTarget): string {
     return `${base}?id=${encodeSegment(target.nodeId)}`
   }
   if (target.kind === 'models' && target.providerId) {
-    return `${base}?id=${encodeSegment(target.providerId)}`
+    return `${base}?id=${encodeSegment(target.providerId)}${target.tab === 'defaults' ? '&tab=defaults' : ''}`
+  }
+  if (target.kind === 'models' && target.tab === 'defaults') {
+    return `${base}?tab=defaults`
   }
   return base
 }
@@ -280,8 +297,18 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
     primaryTarget = { kind: 'skills', skillId: subId }
   } else if (primaryTarget.kind === 'nodes' && subId !== undefined) {
     primaryTarget = { kind: 'nodes', nodeId: subId }
-  } else if (primaryTarget.kind === 'models' && subId !== undefined) {
-    primaryTarget = { kind: 'models', providerId: subId }
+  } else if (primaryTarget.kind === 'models') {
+    const upgraded = upgradeLegacyModelsTarget({
+      kind: 'models',
+      ...(subId !== undefined ? { providerId: subId } : {}),
+    })
+    const tab = parseModelsTabParam(params.get('tab'))
+    primaryTarget =
+      tab === undefined
+        ? upgraded
+        : upgraded.kind === 'models' && upgraded.providerId !== undefined
+          ? { kind: 'models', providerId: upgraded.providerId, tab }
+          : { kind: 'models', tab }
   }
 
   const state: WorkspaceLocationState = {
@@ -332,6 +359,9 @@ export function formatLocationHash(state: WorkspaceLocationState): string {
   }
   if (state.primaryTarget.kind === 'models' && state.primaryTarget.providerId !== undefined && state.primaryTarget.providerId !== '') {
     query.push(['id', state.primaryTarget.providerId])
+  }
+  if (state.primaryTarget.kind === 'models' && state.primaryTarget.tab === 'defaults') {
+    query.push(['tab', 'defaults'])
   }
   if (state.splitTarget !== null) query.push(['split', formatSplitTarget(state.splitTarget)])
   // 主/分屏 Screen 参数各占 sp.* / ssp.* 命名空间：同一 screen 双开时参数互不串扰。

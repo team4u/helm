@@ -26,6 +26,8 @@ export interface BaseSelectProps<T extends string = string> {
   open?: boolean
   onOpenChange?: (open: boolean) => void
   inline?: boolean
+  /** 下拉浮层附加类名（如 helm-select-popover-wide 加宽长模型 ID 面板）。 */
+  popoverClassName?: string
 }
 
 export interface SingleSelectProps<T extends string = string> extends BaseSelectProps<T> {
@@ -88,6 +90,7 @@ function SingleSelectInner<T extends string = string>({
   open: openProp,
   onOpenChange,
   inline = false,
+  popoverClassName,
 }: SingleSelectProps<T>) {
   const generatedId = useId()
   const selectId = id ?? generatedId
@@ -161,7 +164,7 @@ function SingleSelectInner<T extends string = string>({
               side={popperSide}
               sideOffset={4}
               avoidCollisions
-              className="helm-select-popover dropdown-panel"
+              className={`helm-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
             >
               <RadixSelect.Viewport className="helm-select-viewport">
                 {options.map((opt) => {
@@ -176,7 +179,9 @@ function SingleSelectInner<T extends string = string>({
                     >
                       {opt.icon ? <HelmIcon name={opt.icon} size={12} className="helm-select-option-icon" /> : null}
                       <RadixSelect.ItemText asChild>
-                        <span className="helm-select-option-label">{opt.label}</span>
+                        <span className="helm-select-option-label" title={typeof opt.label === 'string' ? opt.label : undefined}>
+                          {opt.label}
+                        </span>
                       </RadixSelect.ItemText>
                       {opt.meta ? <span className="helm-select-option-meta">{opt.meta}</span> : null}
                       <RadixSelect.ItemIndicator asChild>
@@ -218,6 +223,7 @@ function MultiSelectInner<T extends string = string>({
   showActions = true,
   searchable = true,
   renderTriggerLabel,
+  popoverClassName,
 }: MultiSelectProps<T>) {
   const generatedId = useId()
   const selectId = id ?? generatedId
@@ -375,7 +381,7 @@ function MultiSelectInner<T extends string = string>({
                 aria-label={typeof opt.label === 'string' ? opt.label : String(opt.value)}
               />
               {opt.icon ? <HelmIcon name={opt.icon} size={12} className="helm-select-option-icon" /> : null}
-              <span className="helm-select-option-label">{opt.label}</span>
+              <span className="helm-select-option-label" title={typeof opt.label === 'string' ? opt.label : undefined}>{opt.label}</span>
               {opt.meta ? <span className="helm-select-option-meta">{opt.meta}</span> : null}
             </div>
           )
@@ -414,7 +420,7 @@ function MultiSelectInner<T extends string = string>({
 
         {inline ? (
           <div
-            className="helm-select-popover dropdown-panel"
+            className={`helm-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
             style={{ position: 'relative', marginTop: 4 }}
           >
             {contentNode}
@@ -424,7 +430,7 @@ function MultiSelectInner<T extends string = string>({
             side={popperSide}
             sideOffset={4}
             avoidCollisions
-            className="helm-select-popover dropdown-panel"
+            className={`helm-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
           >
             {contentNode}
           </PopoverContent>

@@ -48,6 +48,8 @@ const PROTOTYPE_PARAM_KEY_RE = /^(?:__proto__|constructor|prototype)$/
 
 export const isPrototypeParamKey = (key: string): boolean => PROTOTYPE_PARAM_KEY_RE.test(key)
 
+export type ModelsCenterTab = 'providers' | 'defaults'
+
 export type ResolvedTarget =
   | { kind: 'conversation'; conversationId: number }
   | { kind: 'screen'; pluginId: string; screenId: string; params?: Record<string, string> }
@@ -55,7 +57,7 @@ export type ResolvedTarget =
   | { kind: 'profiles'; profileId?: string }
   | { kind: 'skills'; skillId?: string }
   | { kind: 'nodes'; nodeId?: string }
-  | { kind: 'models'; providerId?: string }
+  | { kind: 'models'; providerId?: string; tab?: ModelsCenterTab }
 
 export type ActiveModal =
   | { kind: 'command-palette' }
@@ -246,8 +248,11 @@ export function resolveTargetString(
     return { kind: 'models' }
   }
   if (target.startsWith('models:')) {
-    const providerId = target.slice('models:'.length).trim()
-    return providerId === '' ? { kind: 'models' } : { kind: 'models', providerId }
+    const sub = target.slice('models:'.length).trim()
+    if (sub === '') return { kind: 'models' }
+    // models:defaults 直达全局默认 Tab（历史虚拟卡片语义升级）
+    if (sub === 'defaults') return { kind: 'models', tab: 'defaults' }
+    return { kind: 'models', providerId: sub }
   }
   if (target.startsWith('conversation:profile:')) {
     const profileId = target.slice('conversation:profile:'.length).trim()
@@ -346,7 +351,7 @@ export function isSameResolvedTarget(a: ResolvedTarget | null, b: ResolvedTarget
     return a.nodeId === b.nodeId
   }
   if (a.kind === 'models' && b.kind === 'models') {
-    return a.providerId === b.providerId
+    return a.providerId === b.providerId && a.tab === b.tab
   }
   return false
 }

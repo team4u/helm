@@ -12,12 +12,14 @@ import { HelmStoreContext } from '../src/lib/store-context.js'
 import { ModelCard } from '../src/models/ModelCard.js'
 import { ModelCenter } from '../src/models/ModelCenter.js'
 import {
+  buildDefaultModelOptions,
   buildMergedProviders,
   buildProviderCategoryCounts,
   DEFAULT_PROVIDERS,
   filterProviders,
   getProviderIconName,
   summarizeProviders,
+  UNSET_MODEL_VALUE,
   type ProviderItem,
 } from '../src/models/model-center-model.js'
 import { ModelDetailDrawer } from '../src/models/ModelDetailDrawer.js'
@@ -207,6 +209,49 @@ test('getProviderIconName: 为各大供应商匹配正确的矢量图标', { tim
   assert.equal(getProviderIconName('unknown-model'), 'cpu')
 })
 
+test('buildDefaultModelOptions: 哨兵空值项、可用模型过滤与目录外保留', { timeout: 60_000 }, () => {
+  const models: ModelDescriptor[] = [
+    {
+      id: 'anthropic/claude-3-7-sonnet',
+      provider: 'anthropic',
+      modelId: 'claude-3-7-sonnet',
+      available: true,
+      label: 'Claude 3.7 Sonnet',
+      thinkingLevels: ['off', 'low', 'high'],
+    },
+    {
+      id: 'openai/gpt-4o',
+      provider: 'openai',
+      modelId: 'gpt-4o',
+      available: false,
+      label: 'GPT-4o',
+      thinkingLevels: ['off'],
+    },
+  ]
+
+  // 未设置当前值：首项为非空哨兵（Radix Select 空串是 placeholder 语义），仅列可用模型
+  const options = buildDefaultModelOptions(models, '')
+  const first = options[0]
+  const second = options[1]
+  assert.ok(first && second)
+  assert.equal(first.value, UNSET_MODEL_VALUE)
+  assert.equal(options.length, 2)
+  assert.equal(second.value, 'anthropic/claude-3-7-sonnet')
+
+  // 当前值不在可用目录：保留并标注目录外
+  const stale = buildDefaultModelOptions(models, 'zhipu/glm-4.6')
+  const last = stale[stale.length - 1]
+  assert.ok(last)
+  assert.equal(last.value, 'zhipu/glm-4.6')
+  assert.equal(last.meta, '目录外')
+
+  // 哨兵值本身不触发目录外保留
+  const sentinel = buildDefaultModelOptions(models, UNSET_MODEL_VALUE)
+  const sentinelLast = sentinel[sentinel.length - 1]
+  assert.ok(sentinelLast)
+  assert.equal(sentinelLast.meta, 'anthropic')
+})
+
 // ---------------------------------------------------------------------------
 // 2. ModelCard SSR 渲染测试
 // ---------------------------------------------------------------------------
@@ -375,7 +420,7 @@ test('ModelDetailDrawer SSR: 未配置凭证供应商 placeholder 正确显示',
 // 4. ModelCenter SSR 渲染测试
 // ---------------------------------------------------------------------------
 
-test('ModelCenter SSR: 完整渲染顶栏、检索框、分类药丸与网格流，且绝对零 Emoji', { timeout: 60_000 }, () => {
+test('ModelCenter SSR: 完整渲染顶栏、Tab 栏、检索框、分类药丸与网格流，且绝对零 Emoji', { timeout: 60_000 }, () => {
   const store = makeTestStore({
     primaryTarget: { kind: 'models' },
     credentials: [
@@ -393,11 +438,10 @@ test('ModelCenter SSR: 完整渲染顶栏、检索框、分类药丸与网格流
   assert.match(html, /模型与凭证中心/)
   assert.match(html, /管理大语言模型供应商、API 凭证与模型路由配置/)
 
-  // 2. 统计摘要与全局默认模型横幅
+  // 2. 统计摘要、顶部 Tab 与全局默认状态行
   assert.match(html, /已配置\s*2\s*\/\s*共\s*(?:9|10)\s*个供应商/)
-  assert.match(html, /class="[^"]*model-global-banner[^"]*"/)
-  assert.match(html, /全局默认模型/)
-  assert.match(html, /配置全局默认/)
+  assert.match(html, /供应商<\/span>/)
+  assert.match(html, /全局默认/)
 
   // 3. 搜索框与占位符
   assert.match(html, /class="[^"]*primary-search-box[^"]*"/)
@@ -465,9 +509,9 @@ test('ModelCenter SSR: 空状态与分屏模式渲染', { timeout: 60_000 }, () 
   assert.equal(EMOJI_REGEX.test(htmlEmpty), false)
 })
 
-test('ModelCenter SSR: 目标携带 providerId 为 defaults 时唤出全局默认模型抽屉', { timeout: 60_000 }, () => {
+test('ModelCenter SSR: 目标携带 tab=defaults 时内联全局默认配置表单', { timeout: 60_000 }, () => {
   const store = makeTestStore({
-    primaryTarget: { kind: 'models', providerId: 'defaults' },
+    primaryTarget: { kind: 'models', tab: 'defaults' },
     models: [
       { id: 'anthropic/claude-3-7-sonnet', provider: 'anthropic', modelId: 'claude-3-7-sonnet', available: true, thinkingLevels: ['off', 'low', 'high'] },
       { id: 'openai/gpt-4o', provider: 'openai', modelId: 'gpt-4o', available: true, thinkingLevels: ['off'] },
@@ -478,11 +522,12 @@ test('ModelCenter SSR: 目标携带 providerId 为 defaults 时唤出全局默�
     e(HelmStoreContext.Provider, { value: store }, e(ModelCenter, { inlineDrawer: true })),
   )
 
-  // 抽屉展开且含有全局默认模型设置
-  assert.match(html, /class="[^"]*primary-drawer-content[^"]*"/)
-  assert.match(html, /全局默认模型与思考档位/)
+  // Tab 表单内联呈现，不再唤出 defaults 抽屉
+  assert.match(html, /全局模型规则/)
   assert.match(html, /新会话的继承链/)
   assert.match(html, /保存全局默认/)
+  assert.match(html, /aria-label="全局默认模型"/)
+  assert.doesNotMatch(html, /class="[^"]*primary-drawer-content[^"]*"/)
   assert.equal(EMOJI_REGEX.test(html), false)
 })
 
@@ -512,6 +557,7 @@ test('静态代码扫描: packages/web/src/models/ 全目录零 Emoji 铁律', {
     'ModelCard.tsx',
     'ModelDetailDrawer.tsx',
     'ModelCenter.tsx',
+    'GlobalDefaultsPanel.tsx',
   ]
 
   for (const file of files) {
@@ -524,4 +570,22 @@ test('静态代码扫描: packages/web/src/models/ 全目录零 Emoji 铁律', {
       `文件 ${file} 中发现非法 Emoji 字符: ${match ? match[0] : ''}，必须符合零 Emoji 规范！`,
     )
   }
+})
+
+test('静态代码扫描: 模型选择场景消费加宽下拉面板与哨兵空值', { timeout: 60_000 }, () => {
+  const panelSource = readFileSync(join(PKG_ROOT, 'src', 'models', 'GlobalDefaultsPanel.tsx'), 'utf8')
+  const profileDrawerSource = readFileSync(
+    join(PKG_ROOT, 'src', 'profiles', 'ProfileDetailDrawer.tsx'),
+    'utf8',
+  )
+  const stylesSource = readFileSync(join(PKG_ROOT, 'src', 'styles.css'), 'utf8')
+
+  // 全局默认 Tab 与 Profile 角色抽屉的模型 Select 均接入加宽浮层
+  assert.match(panelSource, /popoverClassName="helm-select-popover-wide"/)
+  assert.match(profileDrawerSource, /popoverClassName="helm-select-popover-wide"/)
+  assert.match(stylesSource, /\.helm-select-popover-wide\s*\{[^}]*max-width:\s*520px/)
+
+  // 哨兵空值：模型下拉选项不含空字符串 value（Radix Select placeholder 语义兼容）
+  assert.match(panelSource, /UNSET_MODEL_VALUE/)
+  assert.doesNotMatch(panelSource, /value: ''/) 
 })

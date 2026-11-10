@@ -24,7 +24,6 @@ export interface ModelDetailDrawerProps {
   onClose: () => void
   inline?: boolean
   availableModels?: ModelDescriptor[]
-  defaultModelInfo?: { defaultModel: string; defaultThinkingLevel: string } | null
   onSave?: (
     providerId: string,
     data: { apiKey?: string; baseUrl?: string; models?: ProviderModelItem[] },
@@ -33,14 +32,12 @@ export interface ModelDetailDrawerProps {
     providerId: string,
     baseUrl?: string,
   ) => Promise<{ success: boolean; latencyMs?: number; message?: string }>
-  onDefaultModelSaved?: (info: { defaultModel: string; defaultThinkingLevel: string }) => void
 }
 
 /**
- * 模型与凭证中心供应商详情、凭证配置与全局默认模型抽屉：
+ * 模型与凭证中心供应商详情、凭证配置抽屉：
  * - 基于 Radix UI Dialog 原语封装，540px 右侧滑出抽屉；
- * - 针对 provider.id === 'defaults'：渲染全局默认模型与思考档位配置；
- * - 针对常规供应商：渲染 API 密钥安全输入、服务端点、动态目录刷新与单个模型路由开关；
+ * - 渲染 API 密钥安全输入、服务端点、动态目录刷新与单个模型路由开关；
  * - 凭据删除支持 ConfirmDialog 二次确认；
  * - 绝对零 Emoji 规范，遵循 Fast Refresh 与 WAI-ARIA 原语。
  */
@@ -50,13 +47,10 @@ export function ModelDetailDrawer({
   onClose,
   inline = false,
   availableModels,
-  defaultModelInfo,
   onSave,
   onTestConnection,
-  onDefaultModelSaved,
 }: ModelDetailDrawerProps): React.JSX.Element {
   const store = useContext(HelmStoreContext)
-  const isDefaultsView = provider?.id === 'defaults'
   const catalogModels = availableModels ?? store?.models ?? []
 
   // 常规供应商表单状态
@@ -78,58 +72,16 @@ export function ModelDetailDrawer({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
-  // 全局默认模型表单状态
-  const [globalModel, setGlobalModel] = useState(() => defaultModelInfo?.defaultModel ?? '')
-  const [globalThinkingLevel, setGlobalThinkingLevel] = useState(
-    () => defaultModelInfo?.defaultThinkingLevel ?? '',
-  )
-  const [loadingDefaults, setLoadingDefaults] = useState(false)
-
-  // 同步全局默认模型
-  useEffect(() => {
-    if (defaultModelInfo) {
-      setGlobalModel(defaultModelInfo.defaultModel)
-      setGlobalThinkingLevel(defaultModelInfo.defaultThinkingLevel)
-    }
-  }, [defaultModelInfo])
-
-  // 若处于 defaults 视图且尚未获取，尝试主动拉取
-  useEffect(() => {
-    if (isDefaultsView && open && !defaultModelInfo) {
-      let cancelled = false
-      setLoadingDefaults(true)
-      assetsApi
-        .getDefaultModel()
-        .then((res) => {
-          if (!cancelled) {
-            setGlobalModel(res.defaultModel)
-            setGlobalThinkingLevel(res.defaultThinkingLevel)
-          }
-        })
-        .catch((err) => {
-          if (!cancelled) {
-            setSaveError(err instanceof Error ? err.message : String(err))
-          }
-        })
-        .finally(() => {
-          if (!cancelled) setLoadingDefaults(false)
-        })
-      return () => {
-        cancelled = true
-      }
-    }
-  }, [isDefaultsView, open, defaultModelInfo])
-
   // 当选中的供应商变化时同步本地表单状态
   useEffect(() => {
-    if (provider && !isDefaultsView) {
+    if (provider) {
       setApiKey('')
       setBaseUrl(provider.baseUrl ?? '')
       setModels(provider.models ? provider.models.map((m) => ({ ...m })) : [])
       setTestResult(null)
       setSaveError(null)
       setSaveSuccess(false)
-    } else if (!isDefaultsView) {
+    } else {
       setApiKey('')
       setBaseUrl('')
       setModels([])
@@ -137,9 +89,9 @@ export function ModelDetailDrawer({
       setSaveError(null)
       setSaveSuccess(false)
     }
-  }, [provider, isDefaultsView])
+  }, [provider])
 
-  const iconName = isDefaultsView ? 'sliders' : provider ? getProviderIconName(provider.id) : 'cpu'
+  const iconName = provider ? getProviderIconName(provider.id) : 'cpu'
 
   // 计算已启用的模型 ID 与多选下拉选项
   const enabledModelIds = useMemo(
@@ -305,44 +257,6 @@ export function ModelDetailDrawer({
     }
   }
 
-  // 保存全局默认模型设置
-  const handleSaveDefaults = async () => {
-    setSaving(true)
-    setSaveError(null)
-    try {
-      const res = await assetsApi.setDefaultModel(
-        globalModel,
-        globalThinkingLevel || undefined,
-      )
-      if (store?.refreshAssets) {
-        await store.refreshAssets()
-      }
-      onDefaultModelSaved?.({
-        defaultModel: res.defaultModel,
-        defaultThinkingLevel: res.defaultThinkingLevel,
-      })
-      store?.pushNotice?.({
-        type: 'notification',
-        level: 'info',
-        title: '全局默认模型已更新',
-        body: res.defaultModel ? `已设置为 ${res.defaultModel}` : '已清除全局默认模型',
-      })
-      setSaveSuccess(true)
-      setTimeout(() => setSaveSuccess(false), 2400)
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  // 计算全局模型的可用思考档位
-  const availableThinkingLevels = React.useMemo(() => {
-    if (!globalModel) return ['off']
-    const found = catalogModels.find((m) => m.id === globalModel)
-    return found?.thinkingLevels ?? ['off']
-  }, [globalModel, catalogModels])
-
   return (
     <>
       <Dialog
@@ -357,13 +271,7 @@ export function ModelDetailDrawer({
           <DialogContent
             className="primary-drawer-content"
             role="dialog"
-            aria-label={
-              isDefaultsView
-                ? '全局默认模型与思考档位'
-                : provider
-                  ? `${provider.name} 详情与凭证设置`
-                  : '供应商详情与凭证设置'
-            }
+            aria-label={provider ? `${provider.name} 详情与凭证设置` : '供应商详情与凭证设置'}
           >
             {/* 头部元信息 */}
             <div className="primary-drawer-header">
@@ -374,31 +282,19 @@ export function ModelDetailDrawer({
                 <div className="primary-drawer-title-col">
                   <div className="primary-drawer-title-row">
                     <DialogTitle className="primary-drawer-title">
-                      {isDefaultsView ? '全局默认模型与思考档位' : provider?.name || '供应商详情'}
+                      {provider?.name || '供应商详情'}
                     </DialogTitle>
-                    {isDefaultsView ? (
-                      <span className={`badge ${globalModel ? 'badge-ok' : 'badge-neutral'}`}>
-                        {globalModel ? '已配置' : '未设置'}
-                      </span>
+                    {provider?.configured ? (
+                      <span className="badge badge-ok">已配置</span>
                     ) : (
-                      <>
-                        {provider?.configured ? (
-                          <span className="badge badge-ok">已配置</span>
-                        ) : (
-                          <span className="badge badge-neutral">未配置</span>
-                        )}
-                        <span className="badge badge-neutral">
-                          {provider?.type === 'commercial' ? '商业云端' : '本地私有'}
-                        </span>
-                        {provider?.dynamic && (
-                          <span className="badge badge-neutral">动态同步</span>
-                        )}
-                      </>
+                      <span className="badge badge-neutral">未配置</span>
                     )}
+                    <span className="badge badge-neutral">
+                      {provider?.type === 'commercial' ? '商业云端' : '本地私有'}
+                    </span>
+                    {provider?.dynamic && <span className="badge badge-neutral">动态同步</span>}
                   </div>
-                  <div className="text-xs text-subtle mono">
-                    {isDefaultsView ? 'global-defaults' : provider?.id}
-                  </div>
+                  <div className="text-xs text-subtle mono">{provider?.id}</div>
                 </div>
               </div>
               <DialogClose asChild>
@@ -415,85 +311,7 @@ export function ModelDetailDrawer({
 
             {/* 抽屉主体 */}
             <div className="primary-drawer-body">
-              {isDefaultsView ? (
-                /* 全局默认模型设置视图 */
-                <div className="section-flat">
-                  <div className="section-flat-header">
-                    <HelmIcon name="sliders" size={14} />
-                    <span className="section-flat-title">全局模型规则</span>
-                  </div>
-                  <p className="text-xs text-subtle" style={{ margin: '4px 0 12px' }}>
-                    新会话的继承链：会话临时覆盖 &gt; Profile 模型 &gt; 此处全局默认。切换后对所有未显式覆盖模型的会话即时生效。
-                  </p>
-
-                  <div className="form-grid">
-                    <label htmlFor="model-drawer-global-model" className="form-grid-label">
-                      默认模型
-                    </label>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <Select
-                        id="model-drawer-global-model"
-                        value={globalModel}
-                        disabled={loadingDefaults || saving}
-                        inline={inline}
-                        aria-label="全局默认模型"
-                        options={[
-                          { value: '', label: '未设置（未配置模型的会话无法回复）' },
-                          ...catalogModels
-                            .filter((m) => m.available)
-                            .map((m) => ({
-                              value: m.id,
-                              label: m.id,
-                            })),
-                          ...(globalModel !== '' &&
-                          !catalogModels.some((m) => m.id === globalModel && m.available)
-                            ? [{ value: globalModel, label: `${globalModel}（目录外）` }]
-                            : []),
-                        ]}
-                        onChange={(e) => {
-                          const next = e.target.value
-                          setGlobalModel(next)
-                          const nextLevels =
-                            catalogModels.find((m) => m.id === next)?.thinkingLevels ?? ['off']
-                          if (
-                            globalThinkingLevel !== '' &&
-                            !nextLevels.includes(globalThinkingLevel)
-                          ) {
-                            setGlobalThinkingLevel('')
-                          }
-                        }}
-                      />
-                      <span className="text-xs text-subtle">
-                        可供选择的模型来自所有已配置且可用的供应商目录。
-                      </span>
-                    </div>
-
-                    <label htmlFor="model-drawer-thinking-level" className="form-grid-label">
-                      默认思考档位
-                    </label>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <Select
-                        id="model-drawer-thinking-level"
-                        value={globalThinkingLevel}
-                        disabled={loadingDefaults || saving || !globalModel}
-                        inline={inline}
-                        aria-label="全局默认思考档位"
-                        options={[
-                          { value: '', label: '跟随 SDK 缺省' },
-                          ...availableThinkingLevels.map((lvl) => ({
-                            value: lvl,
-                            label: lvl,
-                          })),
-                        ]}
-                        onChange={(e) => setGlobalThinkingLevel(e.target.value)}
-                      />
-                      {globalModel && availableThinkingLevels.length <= 1 && (
-                        <span className="text-xs text-subtle">所选模型不支持思考档位。</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ) : !provider ? (
+              {!provider ? (
                 <div className="primary-center-empty">
                   <div className="primary-center-empty-text">未选择供应商</div>
                 </div>
@@ -719,17 +537,11 @@ export function ModelDetailDrawer({
               <button
                 type="button"
                 className="btn btn-primary"
-                onClick={isDefaultsView ? handleSaveDefaults : handleSaveProvider}
-                disabled={saving || (!isDefaultsView && !provider)}
+                onClick={handleSaveProvider}
+                disabled={saving || !provider}
               >
                 <HelmIcon name="check" size={14} />
-                <span>
-                  {saving
-                    ? '保存中...'
-                    : isDefaultsView
-                      ? '保存全局默认'
-                      : '保存配置'}
-                </span>
+                <span>{saving ? '保存中...' : '保存配置'}</span>
               </button>
             </div>
           </DialogContent>

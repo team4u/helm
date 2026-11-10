@@ -246,6 +246,40 @@ export function filterProviders(
 }
 
 /**
+ * 全局默认模型下拉选项的空值哨兵：
+ * Radix Select 把空字符串 value 视为 placeholder 语义（选中后 onValueChange 不触发），
+ * 因此「未设置」用非空哨兵值承载，提交时再映射回空串。
+ */
+export const UNSET_MODEL_VALUE = '__unset__'
+
+/**
+ * 构造全局默认模型下拉选项：
+ * - 首项恒为「未设置」哨兵项（显式表达清除语义）；
+ * - 仅列出目录中可用的模型；
+ * - 当前值不在可用目录（凭据失效/外部模型）时保留并标注「目录外」。
+ */
+export function buildDefaultModelOptions(
+  models: ModelDescriptor[],
+  currentModel: string,
+): Array<{ value: string; label: string; meta?: string }> {
+  const list: Array<{ value: string; label: string; meta?: string }> = [
+    { value: UNSET_MODEL_VALUE, label: '未设置（未配置模型的会话无法回复）' },
+  ]
+  for (const m of models) {
+    if (!m.available) continue
+    list.push({ value: m.id, label: m.label ? `${m.label} (${m.id})` : m.id, meta: m.provider })
+  }
+  if (
+    currentModel !== '' &&
+    currentModel !== UNSET_MODEL_VALUE &&
+    !models.some((m) => m.id === currentModel && m.available)
+  ) {
+    list.push({ value: currentModel, label: currentModel, meta: '目录外' })
+  }
+  return list
+}
+
+/**
  * 汇总各分类 Tab 下的供应商数量
  */
 export function buildProviderCategoryCounts(

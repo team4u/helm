@@ -58,6 +58,62 @@ test('parse: 分屏参数 split（会话与插件视图、编码形式）', { ti
   assert.deepEqual(encodedSplit.splitTarget, { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' })
 })
 
+test('parse: 模型中心全局默认 Tab（#/models?tab=defaults）与旧 id=defaults 深链升级', { timeout: 60_000 }, () => {
+  // 新契约：tab=defaults 直达全局默认 Tab
+  assert.deepEqual(parseLocationHash('#/models?tab=defaults').primaryTarget, {
+    kind: 'models',
+    tab: 'defaults',
+  })
+  // 与供应商抽屉深链正交组合：providerId + tab 同时保留
+  const combo = parseLocationHash('#/models?id=anthropic&tab=defaults')
+  assert.deepEqual(combo.primaryTarget, { kind: 'models', providerId: 'anthropic', tab: 'defaults' })
+  // 旧深链 id=defaults（虚拟卡片）自动升级为全局默认 Tab
+  assert.deepEqual(parseLocationHash('#/models?id=defaults').primaryTarget, {
+    kind: 'models',
+    tab: 'defaults',
+  })
+  // 非法 tab 值静默丢弃（仅接受 defaults）
+  assert.deepEqual(parseLocationHash('#/models?tab=providers').primaryTarget, { kind: 'models' })
+  assert.deepEqual(parseLocationHash('#/models?tab=unknown').primaryTarget, { kind: 'models' })
+  // 分屏目标同样支持 tab=defaults
+  const split = parseLocationHash('#/c/1?split=models%3Ftab%3Ddefaults')
+  assert.deepEqual(split.splitTarget, { kind: 'models', tab: 'defaults' })
+})
+
+test('format: 模型中心 tab=defaults 序列化与往返无损；providers 缺省不序列化', { timeout: 60_000 }, () => {
+  assert.equal(
+    formatLocationHash({ ...conversation(1), primaryTarget: { kind: 'models', tab: 'defaults' } }),
+    '#/models?tab=defaults',
+  )
+  assert.equal(
+    formatLocationHash({ ...conversation(1), primaryTarget: { kind: 'models', tab: 'providers' } }),
+    '#/models',
+  )
+  // providerId + tab 组合
+  assert.equal(
+    formatLocationHash({
+      ...conversation(1),
+      primaryTarget: { kind: 'models', providerId: 'anthropic', tab: 'defaults' },
+    }),
+    '#/models?id=anthropic&tab=defaults',
+  )
+  // 往返无损
+  const state: WorkspaceLocationState = {
+    ...conversation(1),
+    primaryTarget: { kind: 'models', tab: 'defaults' },
+  }
+  assert.deepEqual(roundtrip(state), state)
+  // tab 差异参与位置比较；同中心切 Tab 不入历史栈（replace）
+  const providersState: WorkspaceLocationState = { ...conversation(1), primaryTarget: { kind: 'models' } }
+  const defaultsState: WorkspaceLocationState = {
+    ...conversation(1),
+    primaryTarget: { kind: 'models', tab: 'defaults' },
+  }
+  assert.equal(isSameLocationState(providersState, defaultsState), false)
+  assert.equal(shouldPushLocationHistory(providersState, defaultsState), false)
+  assert.equal(shouldPushLocationHistory(defaultsState, providersState), false)
+})
+
 test('parse: 工作台参数 wb（开、Tab 值与缺省关闭）', { timeout: 60_000 }, () => {
   const open = parseLocationHash('#/c/1?wb=artifacts')
   assert.equal(open.workbenchOpen, true)
