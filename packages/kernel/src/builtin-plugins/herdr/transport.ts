@@ -600,7 +600,8 @@ async function subscribeLocal(
   return () => {
     stopped = true
     signal?.removeEventListener('abort', onAbort)
-    socket.destroy()
+    // 正常退订发送 FIN，让对端及时释放订阅；写侧结束后再销毁读侧，避免长驻 socket。
+    socket.end(() => socket.destroy())
   }
 }
 

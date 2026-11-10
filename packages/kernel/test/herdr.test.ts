@@ -768,16 +768,19 @@ test('坏 JSON / Schema 不合格同样走自愈；两次后同样显式违约',
   }
 })
 
-test('交接文件非缺失 IO 错误不自愈，如实抛诊断', { timeout: 60_000 }, async () => {
+test('交接路径非普通文件时不自愈，如实抛诊断', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.transport.promptStatus = 'done'
-    env.transport.errors.set('readOutput', () => new HelmError('herdr_io', 'EACCES: permission denied', 500))
+    env.transport.onPrompt = (pane, text) => {
+      // 零参生产 transport 真实读取文件；目录作为输出路径稳定模拟非缺失 I/O 违约。
+      mkdirSync(join(pane.cwd, '.helm', fileNameOf(text)), { recursive: true })
+    }
     await assert.rejects(
       spawnDirect(env, { agentType: 'herdr:agy' }),
       (error: unknown) => {
         assert.ok(error instanceof HelmError)
-        assert.equal(error.code, 'herdr_io')
+        assert.equal(error.code, 'herdr_output_not_file')
         return true
       },
     )
@@ -976,9 +979,11 @@ test('远端节点: 全部调用走 nodeId target、剥除 loopback HUB_URL/TOKE
     const envSent = env.transport.calls.find((c) => c.method === 'tab.create')!.params['env'] as Record<string, string>
     assert.equal('HELM_HUB_URL' in envSent, false)
     assert.equal('HELM_TOKEN' in envSent, false)
-    // 远端 gate 走 transport.runGate（非本机 runLocalGate）。
+    // 远端 gate 不走本机 runLocalGate：生产 transport.runGate 经 nodeChannel
+    // .envFor（= backend.executionEnv 真实 NodeExecutionEnv）在实际 cwd 执行
+    // exit 0 成功；FakeTransport.runGate 不再是承载点。
     assert.equal(env.gateLog.length, 0)
-    assert.equal(env.transport.gateRuns, 1)
+    assert.equal(env.transport.calls.filter((c) => c.method === 'runGate').length, 0)
     // buildSpawnEnv 收到目标 nodeId（窗格 env 按节点构造）。
     assert.ok(env.spawnEnvLog.some((e) => e.nodeId === 'remote-node'), '远端窗格 env 按目标 nodeId 构造')
   } finally {
@@ -1180,7 +1185,9 @@ test('服务启动半途失败: snapshot 失败时自行清理订阅，注册整
       host.register(createHerdrPlugin()),
       (e: unknown) => ['plugin_registration_failed', 'plugin_service_start_failed', 'herdr_socket'].includes((e as HelmError).code),
     )
-    // 订阅已清理（listener 集空）。
+    // 订阅已清理（listener 集空）。wire stop() 只 destroy 客户端 socket；
+    // fixture server 侧的 close 释放是异步到达，等其收敛。
+    await waitFor(() => transport.eventListeners.length === 0)
     assert.equal(transport.eventListeners.length, 0, '半途失败清理订阅')
   } finally {
     await host.dispose().catch(() => {})
@@ -1223,6 +1230,10 @@ test('启动对账: 孤儿回收；failed 保留；同 ID 换 human agent 不误
   const served = await serveTransport(transport, socketPath)
   const host = new PluginHost({ dataDir, host: backend, docs, config: new MemoryConfigStore({ socketPath }) })
   try {
+    // doc pane target 显式指向测试 served socket：target:{} 会 resolve 到宿主
+    // 真实 ~/.config/herdr/herdr.sock（对账拿到外部 pane 集合，孤儿回收误判）。
+    const doc = docs.store.get('builtin:herdr:managed') as { panes: Array<{ target: Record<string, unknown> }> }
+    for (const pane of doc.panes) pane.target = { socketPath }
     await host.register(createHerdrPlugin())
     assert.equal(transport.tabs.get('ws-default:t1')!.closed, true, '孤儿（running+done）回收')
     assert.equal(transport.tabs.get('ws-default:t2')!.closed, false, 'failed 保留现场（即使实际 idle）')

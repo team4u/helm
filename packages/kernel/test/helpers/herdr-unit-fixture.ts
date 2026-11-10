@@ -83,6 +83,7 @@ export async function serveTransport(
   targetOf: () => { nodeId?: string } = () => ({}),
 ): Promise<ServedTransport> {
   const sockets = new Set<Socket>()
+  const socketsWithReleases: Array<{ socket: Socket; release: () => void }> = []
   const server: Server = createServer({ allowHalfOpen: true }, (socket) => {
     sockets.add(socket)
     socket.once('close', () => sockets.delete(socket))
@@ -108,7 +109,14 @@ export async function serveTransport(
                 writeFrame(`${JSON.stringify({ event })}\n`)
               }, () => {})
               writeFrame(`${JSON.stringify({ id: request.id, result: { type: 'subscription_started' } })}\n`)
+              // 生产 stop() 直接 socket.destroy()（FIN 不保证对端 close 事件同步
+              // 到达）：fixture 在订阅 socket 结束（close 或 error）时同步释放受控
+              // transport 监听，半途失败清理断言才能观测到释放。
+              // 客户端 stop() 只 destroy 本方 socket；fixture server 侧经 close
+              // 事件感知并释放受控 transport 监听（与生产对端释放语义一致）。
+              socket.once('end', () => release())
               socket.once('close', () => release())
+              socketsWithReleases.push({ socket, release })
               return
             }
             const result = await transport.call(targetOf(), request.method, request.params)
@@ -127,6 +135,8 @@ export async function serveTransport(
   return {
     socketPath,
     close: async () => {
+      // close() 销毁全部连接：触发每个订阅 socket 的 close 释放（见上）。
+      for (const entry of socketsWithReleases) entry.socket.destroy()
       for (const socket of sockets) socket.destroy()
       await new Promise<void>((resolve) => server.close(() => resolve()))
     },
