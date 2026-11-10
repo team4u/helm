@@ -13,11 +13,10 @@ import type { Profile } from '../services/index.js'
 import { requireModelRef } from './models.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import type { NativeSpawnDeps, ResolvedProfile } from './spawn.js'
-import type { WorktreeAllocator } from './worktree.js'
 
 /**
  * 宿主注入 runNativeSpawn 的完整依赖集（镜像登记、Profile 解析、会话配置
- * 更新、扩展安装、附件块构造、worktree 分配与节点可用性校验）。
+ * 更新、扩展安装、附件块构造与节点可用性校验）。
  *
  * 各端口的 Why 注释见 spawn.ts 的 NativeSpawnDeps 声明（单一事实来源）；
  * 本接口只是给它一个可在 runtime.ts 与测试中按名引用的显式名字。
@@ -40,7 +39,6 @@ export interface SpawnHostSource {
   readonly defaultModel: string | undefined
   readonly defaultThinkingLevel: string | undefined
   readonly agentSessions: Map<string, number>
-  readonly worktrees: WorktreeAllocator
   readonly resolvedAttachments: ResolvedAttachmentRef[] | undefined
   isNodeOnline(nodeId: string): boolean
   /** [Attached Files] 清单块（无正文前缀；spawn 任务提示词用）。 */
@@ -102,7 +100,6 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
     resolveModel: () => requireModelRef(source.defaultModel),
     resolveThinkingLevel: () => source.defaultThinkingLevel,
     agentSessions: source.agentSessions,
-    worktrees: source.worktrees,
     assertNodeAvailable: (nodeId) => {
       if (!source.isNodeOnline(nodeId)) {
         throw new HelmError('node_offline', `目标节点 ${nodeId} 离线，不能启动子代理`, 409, { nodeId })

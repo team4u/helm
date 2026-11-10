@@ -29,7 +29,6 @@ import type {
   RpcResult,
 } from './env-rpc.js'
 import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
-import type { WorktreeCleanupRequest, WorktreeCleanupResult } from './worktree.js'
 
 /** JSON Schema 对象；由宿主在边界处统一校验。 */
 export type JsonSchema = Record<string, unknown>
@@ -119,6 +118,8 @@ export interface ToolResultHookPayload {
  * 子代理派生请求：agent_spawn 钩子载荷。
  * agentType 为普通 Profile ID 时内核默认走 pi-durable 原生子会话；
  * 为 'herdr:<kind>' 时由 builtin:herdr 拦截接管。
+ * isolation/worktree 等执行环境要求由插件层经 next(request) 改写最终请求
+ * 兑现（内核零 Git 语义，不按业务分支）。
  */
 export interface AgentSpawnRequest {
   parentConversationId: number
@@ -131,7 +132,13 @@ export interface AgentSpawnRequest {
   agentType?: string
   model?: string
   effort?: string
-  isolation?: 'worktree'
+  /**
+   * 执行环境隔离要求（插件层策略 metadata，如 'worktree'）。
+   * 内核不解释该值：由具备对应能力的插件经 agent_spawn continuation 改写
+   * 最终请求的 cwd/元数据兑现；无插件兑现而原样到达原生执行行时显式
+   * unsupported_runtime（绝不静默忽略）。
+   */
+  isolation?: string
   /**
    * 执行环境确定后回传（原生子会话或外部运行时均适用）；
    * 编排宿主据此把 conversationId / worktree 等元数据写回节点状态。
@@ -166,7 +173,7 @@ export interface AgentExecutionInfo {
   executionId?: string
   /** 实际生效的工作目录绝对路径。 */
   effectiveCwd?: string
-  /** isolation: 'worktree' 时分配的隔离工作树。 */
+  /** isolation: 'worktree' 时分配的隔离工作树（插件层兑现后回传）。 */
   worktree?: {
     path: string
     branch: string
@@ -214,10 +221,22 @@ export type HookResult<TPayload, TResult = unknown> =
   | { action: 'handled'; result?: TResult }
   | { action: 'block'; reason: string }
 
-/** 同步或异步处理器；返回 void 等价于 continue。 */
-export type HookHandler<K extends HookName> = (
-  payload: HookPayloadMap[K],
-) => MaybePromise<HookResult<HookPayloadMap[K]> | void>
+/** 同步或异步处理器；返回 void 等价于 continue。
+ *
+ * agent_spawn 额外提供受控 continuation（第二参数 next）：
+ * - 不调用 next 而返回 handled = 完全接管（既有语义不变，如 builtin:herdr）；
+ * - await next(finalRequest) = around 包裹：宿主恰好一次执行后续管道与默认
+ *   原生执行行（finalRequest 为 transform 后的最终请求）；插件可在 next 前
+ *   分配资源、在 next 后按成败收敛（finally 语义）；
+ * - next 仅可调用一次：重复调用或与 handled/transform 混用将显式拒绝；
+ * - 包裹期间抛错：错误如实上抛（宿主不吞），next 前抛错则后续管道不执行。
+ */
+export type HookHandler<K extends HookName> = K extends 'agent_spawn'
+  ? (
+      payload: HookPayloadMap[K],
+      next: (request: AgentSpawnRequest) => Promise<unknown>,
+    ) => MaybePromise<HookResult<HookPayloadMap[K]> | void>
+  : (payload: HookPayloadMap[K]) => MaybePromise<HookResult<HookPayloadMap[K]> | void>
 
 export type TriggerHookHandler = HookHandler<'trigger'>
 export type InputHookHandler = HookHandler<'input'>
@@ -405,7 +424,7 @@ export interface PluginServiceSpec {
   stop(): MaybePromise<void>
   /** 返回仍需本服务保活的任务标签；宿主在停用/卸载前同步检查。 */
   liveTasks?(): string[]
-  /** 返回本服务当前正在占用的工作树路径（供宿主 WorktreeAllocator 拒绝清理在途工作树）。 */
+  /** 声明本服务当前正在占用的工作树/目录路径（通用机制面：供具备清理或探测能力的消费方拒绝误碰在途占用）。 */
   liveWorktrees?(): Array<{ nodeId: string; path: string }>
 }
 
@@ -712,8 +731,43 @@ export interface HelmHostApi {
   ): { idempotent: boolean }
   /** 重启恢复前持久标记中断的子会话任务取消（必须在调度器恢复前调用）。 */
   prepareInterruptedConversations(ids: number[]): Promise<void>
-  /** 清理受管 Git 工作树。 */
-  cleanupWorktree(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult>
+  /**
+   * 通用 spawn 靶点解析（机制，零业务语义）：按与原生执行行同构的链
+   * 「request.cwd > profile.cwd > 父会话 cwd」解析源目录，「显式
+   * profile.nodeId > 父会话绑定节点 > 'local'」解析实际执行节点，并返回
+   * 父会话 cwd 供插件层在分配资源前解析源目录。
+   * 返回值是内核权威事实；节点离线校验不在本端口（由 execEnv/gate 各自执行）。
+   */
+  resolveSpawnTarget(input: {
+    parentConversationId: number
+    /** Profile ID（缺省 'assistant'）；Profile 不存在时抛 not_found。 */
+    profileId?: string
+    /** 显式请求 cwd（优先于 Profile cwd）。 */
+    requestCwd?: string
+  }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }>
+  /**
+   * 当前进程内仍在执行的 spawn 执行事实（通用机制面）：包含每次在途
+   * spawnAgent 的 execution 元数据镜像（含插件层回传的 worktree 等扩展字段）。
+   * 供插件层判定路径占用（如拒绝清理在途工作树）；已结束的执行不出现。
+   */
+  listActiveSpawnExecutions(): AgentExecutionInfo[]
+  /**
+   * 目标节点真实 fs 探测（通用机制面，零业务语义）：exists / canonicalPath
+   * 经内核 EnvFabric 在目标节点真实执行。探测失败（节点离线/权限/超时）
+   * 如实 reject（HelmError），绝不编造结果；返回 value 为 boolean（exists）
+   * 或绝对路径字符串（canonicalPath）。
+   */
+  probeNodeFs(input: {
+    nodeId: string
+    op: 'exists' | 'canonicalPath'
+    path: string
+    signal?: AbortSignal
+  }): Promise<{ value: string | boolean }>
+  /**
+   * 宿主统一文本脱敏（SecretStash：明文机密 -> 标记）：插件持久化自身
+   * 元数据（如含路径/分支的工作树记录）前过此脱敏，防已登记机密落库。
+   */
+  redactText(text: string): string
   /** 调用任意已启用插件的动作（输出已经过 JSON 校验与宿主统一脱敏）。 */
   invokeAction(
     pluginId: string,

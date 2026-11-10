@@ -28,6 +28,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
+import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
 import { HelmError } from '@helm/protocol'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -38,12 +39,35 @@ import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createEnvFabric } from '../src/env/fabric.js'
 import { runNativeSpawn, type NativeSpawnDeps } from '../src/runtime/spawn.js'
-import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/runtime/worktree.js'
+import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/builtin-plugins/workflow/worktree.js'
+import { WorktreeIsolation } from '../src/builtin-plugins/workflow/isolation.js'
 import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { ArtifactService, SecretStash } from '../src/services/index.js'
 
 type FauxHandle = ReturnType<typeof fauxProvider>
+
+/**
+ * 本机真实执行端口适配（无 mock）：exec 走 NodeExecutionEnv 真实 argv
+ * 执行；exists/canonicalPath 走同 env 真实 fs。与生产（ctx.host.execEnv /
+ * probeNodeFs）同契约，供 allocator 直建测试使用。
+ */
+function localNodePorts() {
+  const envOf = (cwd: string) => new NodeExecutionEnv({ cwd })
+  return {
+    exec: async (
+      nodeId: string,
+      cwd: string,
+      args: readonly string[],
+      options: { cwd: string; timeout: number; onOutput: (text: string) => void },
+      context: import('@earendil-works/chord').Context,
+    ) => envOf(cwd).exec([...args], options, context) as never,
+    nodeExists: async (nodeId: string, path: string, context: import('@earendil-works/chord').Context) =>
+      envOf(path).exists(path, context) as never,
+    nodeCanonicalPath: async (nodeId: string, path: string, context: import('@earendil-works/chord').Context) =>
+      envOf(path).canonicalPath(path, context) as never,
+  }
+}
 
 /** 真实临时 Git 仓库（git init + 初始 commit；用户级配置隔离）。 */
 function makeGitRepo(dir: string): string {
@@ -65,6 +89,12 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
   deps: NativeSpawnDeps
   faux: FauxHandle
   allocator: WorktreeAllocator
+  isolation: WorktreeIsolation
+  /**
+   * 经隔离插件链派生（与生产同构：isolation.aroundSpawn -> runNativeSpawn）：
+   * isolation 请求在 around 内预分配 worktree 并改写 cwd 后进入原生执行行。
+   */
+  spawnIsolated: (request: Record<string, unknown>) => Promise<unknown>
   markIdle: (childId: number) => void
   mirrors: Map<number, { profileId: string; cwd: string; model: string; modelOverride?: string; title: string; tags: string[]; createdAt: number }>
   /** docStore 原始落库内容（记录状态/branchDeleted 等断言用）。 */
@@ -103,11 +133,87 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
     },
   }
   const working = new Set<number>()
+  // 与生产同构的嵌套 docStore（与 isolation 共享同一底层 Map：allocator
+  // 的 runtime/worktrees 键与租约表同层嵌套在 worktree-state 下）。
+  const nestedDocStore = {
+    get<T>(key: string, initial: T): T {
+      const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+      const raw = all[key]
+      return raw === undefined ? initial : (structuredClone(raw) as T)
+    },
+    set<T>(key: string, value: T): void {
+      const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+      all[key] = structuredClone(value)
+      docs.set('builtin:workflow:worktree-state', all)
+    },
+  }
   const allocator = new WorktreeAllocator({
-    envFabric,
-    docStore,
+    ...localNodePorts(),
+    docStore: nestedDocStore,
     redact: (t) => stash.redact(t),
     isConversationWorking: (id) => working.has(id),
+  })
+  /** 隔离链（与生产同构：插件 aroundSpawn 包裹原生执行行）。 */
+  const isolation = new WorktreeIsolation({
+    host: {
+      resolveSpawnTarget: async (input) => ({
+        nodeId: 'local',
+        sourceCwd: input.requestCwd ?? repoDir,
+        parentCwd: repoDir,
+      }),
+      execEnv: async (req) => {
+        const env = new NodeExecutionEnv({ cwd: req.cwd ?? repoDir })
+        let combined = ''
+        const result = await env.exec(
+          req.command as string | readonly string[],
+          {
+            ...(req.cwd !== undefined ? { cwd: req.cwd } : {}),
+            ...(req.timeoutMs !== undefined ? { timeout: req.timeoutMs / 1000 } : {}),
+            onOutput: (text: string) => {
+              combined += text
+            },
+          },
+          BACKGROUND_CONTEXT,
+        )
+        if (!result.ok) {
+          return { ok: false, exitCode: null, output: combined, timedOut: result.error.code === 'timeout' }
+        }
+        return { ok: true, exitCode: result.value.exitCode, output: combined, timedOut: false }
+      },
+      probeNodeFs: async (input) => {
+        const env = new NodeExecutionEnv({ cwd: input.path })
+        if (input.op === 'exists') {
+          const r = await env.exists(input.path, BACKGROUND_CONTEXT)
+          if (!r.ok) throw new HelmError('probe_failed', r.error.message, 502)
+          return { value: r.value }
+        }
+        const r = await env.canonicalPath(input.path, BACKGROUND_CONTEXT)
+        if (!r.ok) throw new HelmError('probe_failed', r.error.message, 502)
+        return { value: r.value }
+      },
+      listActiveSpawnExecutions: () => [],
+      redactText: (t) => stash.redact(t),
+      getConversation: (id: number) => {
+        const m = mirrors.get(id)
+        if (!m) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+        return { cwd: m.cwd, nodeId: 'local', status: working.has(id) ? 'working' : 'idle' }
+      },
+    },
+    docStore: {
+      // 与生产插件同构：worktree-state 文档嵌套全部 allocator/租约键
+      //（键名与 builtin:workflow 的 ctx.doc('worktree-state') 一致）。
+      get<T>(key: string, initial: T): T {
+        const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+        const raw = all[key]
+        return raw === undefined ? initial : (structuredClone(raw) as T)
+      },
+      set<T>(key: string, value: T): void {
+        const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+        all[key] = structuredClone(value)
+        docs.set('builtin:workflow:worktree-state', all)
+      },
+      flush: async () => {},
+    },
   })
   /** 标记子会话回合结束（占用检查与生产 tracker 同语义：回合后不在运行）。 */
   const markIdle = (childId: number): void => {
@@ -201,13 +307,15 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
     installChildExtension: (extension) => {
       registry.install(extension)
     },
-    worktrees: allocator,
   }
   return {
     harness,
     deps,
     faux,
     allocator,
+    isolation,
+    spawnIsolated: (request) =>
+      isolation.aroundSpawn(request as never, (final) => runNativeSpawn(deps, final)),
     mirrors,
     markIdle,
     docs,
@@ -272,7 +380,7 @@ describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
         fauxAssistantMessage([fauxToolCall('bash', { command: 'pwd && git branch --show-current' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('任务完成'),
       ])
-      const result = await runNativeSpawn(th.deps, {
+      const result = await th.spawnIsolated({
         parentConversationId: 1,
         prompt: '在 worktree 里执行 pwd',
         isolation: 'worktree',
@@ -320,7 +428,7 @@ describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
       let gateOutput = ''
       th.faux.setResponses([fauxAssistantMessage('gate 取证完成')])
       let wtPath = ''
-      await runNativeSpawn(th.deps, {
+      await th.spawnIsolated({
         parentConversationId: 1,
         prompt: 'gate 取证',
         isolation: 'worktree',
@@ -406,7 +514,7 @@ describe('非 Git 目录显式拒绝', { timeout: 60_000 }, () => {
       th.faux.setResponses([fauxAssistantMessage('不应到达')])
       await assert.rejects(
         () =>
-          runNativeSpawn(th.deps, {
+          th.spawnIsolated({
             parentConversationId: 1,
             prompt: '任务',
             isolation: 'worktree',
@@ -438,7 +546,7 @@ describe('dirty 源仓库诚实提示', { timeout: 60_000 }, () => {
     try {
       let childId = 0
       th.faux.setResponses([fauxAssistantMessage('完成')])
-      await runNativeSpawn(th.deps, {
+      await th.spawnIsolated({
         parentConversationId: 1,
         prompt: 'dirty 源任务',
         isolation: 'worktree',
@@ -475,7 +583,7 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
       let childId = 0
       let firstWt: { path: string; branch: string } | undefined
       th.faux.setResponses([fauxAssistantMessage('第一轮')])
-      await runNativeSpawn(th.deps, {
+      await th.spawnIsolated({
         parentConversationId: 1,
         prompt: '第一轮',
         isolation: 'worktree',
@@ -489,7 +597,7 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
       // resume：不传 isolation —— 严格沿用原 worktree。
       let resumedWt: { path: string; branch: string } | undefined
       th.faux.setResponses([fauxAssistantMessage('续接完成')])
-      const second = await runNativeSpawn(th.deps, {
+      const second = await th.spawnIsolated({
         parentConversationId: 1,
         prompt: '续接',
         resume: String(childId),
@@ -518,7 +626,7 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
     try {
       let childId = 0
       th.faux.setResponses([fauxAssistantMessage('第一轮')])
-      await runNativeSpawn(th.deps, {
+      await th.spawnIsolated({
         parentConversationId: 1,
         prompt: '第一轮',
         isolation: 'worktree',
@@ -531,7 +639,7 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
 
       await assert.rejects(
         () =>
-          runNativeSpawn(th.deps, {
+          th.spawnIsolated({
             parentConversationId: 1,
             prompt: '续接',
             resume: String(childId),
@@ -556,7 +664,7 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
     try {
       let childId = 0
       th.faux.setResponses([fauxAssistantMessage('第一轮')])
-      await runNativeSpawn(th.deps, {
+      await th.spawnIsolated({
         parentConversationId: 1,
         prompt: '第一轮',
         isolation: 'worktree',
@@ -570,7 +678,7 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
       rmSync(record!.path, { recursive: true, force: true })
       await assert.rejects(
         () =>
-          runNativeSpawn(th.deps, {
+          th.spawnIsolated({
             parentConversationId: 1,
             prompt: '续接',
             resume: String(childId),
@@ -588,20 +696,56 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
 })
 
 
-/** 经 builtin:workflow 插件工具执行 cleanup_worktree（backend.cleanupWorktree 绑定给定 allocator）。 */
+/**
+ * 经 builtin:workflow 插件工具执行 cleanup_worktree（真实插件内隔离能力：
+ * 本地真实 git 端口 + 共享 worktree-state doc）。docs 与 spawn 夹具共享，
+ * 使工具清理同一批受管记录。
+ */
 async function executeCleanupTool(
-  cleanup: (request: import('@helm/protocol').WorktreeCleanupRequest, signal?: AbortSignal) => Promise<unknown>,
+  docs: Map<string, unknown>,
   input: Record<string, unknown>,
 ): Promise<{ output?: Array<{ type: string; text?: string }>; structuredOutput?: Record<string, unknown>; isError?: boolean }> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-tool-'))
+  const localExec = async (
+    command: string | readonly string[],
+    options: { cwd?: string; timeout?: number },
+  ): Promise<{ ok: boolean; exitCode: number | null; output: string; timedOut: boolean }> => {
+    const env = new NodeExecutionEnv({ cwd: options.cwd ?? dataDir })
+    let combined = ''
+    const r = await env.exec(command, {
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+      ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
+      onOutput: (t: string) => {
+        combined += t
+      },
+    }, BACKGROUND_CONTEXT)
+    if (!r.ok) {
+      return { ok: false, exitCode: null, output: combined, timedOut: r.error.code === 'timeout' }
+    }
+    return { ok: true, exitCode: r.value.exitCode, output: combined, timedOut: false }
+  }
   const backend: PluginHostBackend = {
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async () => ({}) as never,
     listConversations: () => [],
-    getConversation: () => {
-      throw new HelmError('not_found', 'no conv', 404)
-    },
+    getConversation: (id: number) => ({
+      id,
+      title: `conv-${id}`,
+      profileId: 'assistant',
+      tags: [],
+      cwd: dataDir,
+      model: '',
+      thinkingLevel: '',
+      status: 'idle',
+      stateChangeSeq: 1,
+      completionSeq: 0,
+      unread: false,
+      pinned: false,
+      pendingAskCount: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    }),
     updateConversation: async () => ({}) as never,
     abortConversation: async () => {},
     getConversationActivity(): { consecutiveErrors: number } {
@@ -616,10 +760,24 @@ async function executeCleanupTool(
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: (request: import('@helm/protocol').WorktreeCleanupRequest, signal?: AbortSignal) => cleanup(request, signal) as Promise<import('@helm/protocol').WorktreeCleanupResult>,
+    resolveSpawnTarget: async () => ({ nodeId: 'local', sourceCwd: dataDir, parentCwd: dataDir }),
+    listActiveSpawnExecutions: () => [],
+    probeNodeFs: async (req: { nodeId: string; op: 'exists' | 'canonicalPath'; path: string }) => {
+      const env = new NodeExecutionEnv({ cwd: req.path })
+      if (req.op === 'exists') {
+        const r = await env.exists(req.path, BACKGROUND_CONTEXT)
+        if (!r.ok) throw new HelmError('probe_failed', r.error.message, 502)
+        return { value: r.value }
+      }
+      const r = await env.canonicalPath(req.path, BACKGROUND_CONTEXT)
+      if (!r.ok) throw new HelmError('probe_failed', r.error.message, 502)
+      return { value: r.value }
+    },
+    redactText: (t: string) => t,
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    execEnv: async (req: { command: string | string[]; cwd?: string; timeoutMs?: number }) =>
+      localExec(req.command, { ...(req.cwd !== undefined ? { cwd: req.cwd } : {}), ...(req.timeoutMs !== undefined ? { timeout: req.timeoutMs / 1000 } : {}) }),
     withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     manageConversation: () => () => {},
@@ -634,8 +792,17 @@ async function executeCleanupTool(
     dataDir,
     host: backend,
     docs: {
-      get: <T>(_key: string, initial: T): T => initial,
-      set: () => {},
+      // 插件 worktree-state doc 与 allocator/租约共享同一底层 Map（跨夹具
+      // 可见）；其余键（records 等）独立初始值即可。
+      get: <T>(key: string, initial: T): T => {
+        if (key !== 'builtin:workflow:worktree-state') return initial
+        const all = docs.get(key)
+        return all === undefined ? initial : (structuredClone(all) as T)
+      },
+      set: (key: string, value: unknown) => {
+        if (key !== 'builtin:workflow:worktree-state') return
+        docs.set(key, value)
+      },
       flush: async () => {},
     },
     sessionDocs: {
@@ -672,7 +839,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
     try {
       let childId = 0
       th.faux.setResponses([fauxAssistantMessage('完成')])
-      await runNativeSpawn(th.deps, {
+      await th.spawnIsolated({
         parentConversationId: 1,
         prompt: '任务',
         isolation: 'worktree',
@@ -710,7 +877,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
     try {
       let childId = 0
       th.faux.setResponses([fauxAssistantMessage('完成')])
-      await runNativeSpawn(th.deps, {
+      await th.spawnIsolated({
         parentConversationId: 1,
         prompt: '任务',
         isolation: 'worktree',
@@ -748,7 +915,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
     try {
       let childId = 0
       th.faux.setResponses([fauxAssistantMessage('完成')])
-      await runNativeSpawn(th.deps, {
+      await th.spawnIsolated({
         parentConversationId: 1,
         prompt: '任务',
         isolation: 'worktree',
@@ -822,7 +989,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
     try {
       let childId = 0
       th.faux.setResponses([fauxAssistantMessage('完成')])
-      await runNativeSpawn(th.deps, {
+      await th.spawnIsolated({
         parentConversationId: 1,
         prompt: '任务',
         isolation: 'worktree',
@@ -835,14 +1002,14 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
       writeFileSync(join(record!.path, 'wip.txt'), 'dirty\n')
       th.markIdle(childId)
 
-      const dirty = await executeCleanupTool((request, signal) => th.allocator.cleanup({ ...request, signal }), {
+      const dirty = await executeCleanupTool(th.docs, {
         conversationId: childId,
       })
       assert.equal(dirty.isError, true, '脏工作区应返回错误')
       const dirtyText = (dirty.output as Array<{ text: string }>)[0]!.text
       assert.ok(dirtyText.includes('worktree_dirty') || dirtyText.includes('未提交修改'), `错误应含指引：${dirtyText}`)
 
-      const ok = await executeCleanupTool((request, signal) => th.allocator.cleanup({ ...request, signal }), {
+      const ok = await executeCleanupTool(th.docs, {
         conversationId: childId,
         deleteBranch: true,
         force: true,
@@ -860,16 +1027,20 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
 // 7. 安全加固：external 登记 / 未合入检查 / 跨节点歧义 / fail closed
 // ---------------------------------------------------------------------------
 
-/** 直建 allocator（不经 spawn 链）的轻量夹具。 */
+/** 直建 allocator（不经 spawn 链）的轻量夹具（与生产同构的嵌套 doc）。 */
 function bareAllocator(docs: Map<string, unknown>, extra?: { isPathInUse?: (nodeId: string, path: string) => boolean; redact?: (t: string) => string }) {
   return new WorktreeAllocator({
-    envFabric: createEnvFabric({}),
+    ...localNodePorts(),
     docStore: {
       get<T>(key: string, initial: T): T {
-        return (docs.get(key) as T | undefined) ?? initial
+        const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+        const raw = all[key]
+        return raw === undefined ? initial : (structuredClone(raw) as T)
       },
       set<T>(key: string, value: T): void {
-        docs.set(key, value)
+        const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+        all[key] = structuredClone(value)
+        docs.set('builtin:workflow:worktree-state', all)
       },
     },
     ...(extra?.redact !== undefined ? { redact: extra.redact } : {}),
@@ -879,7 +1050,8 @@ function bareAllocator(docs: Map<string, unknown>, extra?: { isPathInUse?: (node
 
 /** 从 docStore 读全部受管记录（原始落库内容断言；无文档时空数组）。 */
 function rawRecords(docs: Map<string, unknown>): ManagedWorktreeRecord[] {
-  return ((docs.get('runtime/worktrees') as { records?: ManagedWorktreeRecord[] } | undefined)?.records ?? []) as ManagedWorktreeRecord[]
+  const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+  return ((all['runtime/worktrees'] as { records?: ManagedWorktreeRecord[] } | undefined)?.records ?? []) as ManagedWorktreeRecord[]
 }
 
 describe('external 登记与真实清理', { timeout: 60_000 }, () => {
@@ -1076,7 +1248,8 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
       // 模拟记录被外部篡改）。
       const wtRecords = rawRecords(docs)
       wtRecords.length = 0
-      docs.set('runtime/worktrees', {
+      const wtAll = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+      wtAll['runtime/worktrees'] = {
         version: 1,
         records: [
           {
@@ -1086,7 +1259,8 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
             branch: 'helm/spawn-fake1',
           },
         ],
-      })
+      }
+      docs.set('builtin:workflow:worktree-state', wtAll)
       // 主仓手工建同名分支，使权威登记 branch 匹配后进入 main-worktree 检查。
       execFileSync('git', ['branch', 'helm/spawn-fake1'], { cwd: repo })
       await assert.rejects(
@@ -1325,9 +1499,7 @@ describe('cleanup_worktree 工具 schema 扩展', { timeout: 60_000 }, () => {
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
-      const cleanupVia = (request: import('@helm/protocol').WorktreeCleanupRequest, signal?: AbortSignal) =>
-        allocator.cleanup({ ...request, signal })
-      const ok = await executeCleanupTool(cleanupVia, { worktreeId: record.id, deleteBranch: true })
+      const ok = await executeCleanupTool(docs, { worktreeId: record.id, deleteBranch: true })
       assert.equal(ok.isError, undefined)
       const so = ok.structuredOutput as { ok: boolean; removed: boolean; worktreeId: string; branchDeleted: boolean }
       assert.equal(so.ok, true)
@@ -1335,7 +1507,7 @@ describe('cleanup_worktree 工具 schema 扩展', { timeout: 60_000 }, () => {
       assert.equal(so.worktreeId, record.id)
       assert.equal(so.branchDeleted, true)
       // 幂等重放（按 id）。
-      const again = await executeCleanupTool(cleanupVia, { worktreeId: record.id })
+      const again = await executeCleanupTool(docs, { worktreeId: record.id })
       assert.equal((again.structuredOutput as { removed: boolean }).removed, false)
     } finally {
       rmSync(dir, { recursive: true, force: true })

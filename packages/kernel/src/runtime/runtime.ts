@@ -12,7 +12,7 @@
  * 各服务的 Why 注释在各自模块；本文件只保留组合顺序与跨服务协同。
  */
 
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import {
   Harness,
   createRegistry,
@@ -39,8 +39,6 @@ import type {
   NodeUpgradeCheckInput,
   NodeUpgradeCheckResult,
   NodeUpgradeResult,
-  WorktreeCleanupRequest,
-  WorktreeCleanupResult,
   EnvExecRequest,
   EnvExecResponse,
   MaybePromise,
@@ -80,10 +78,8 @@ import type { HelmToolDeps } from './tool-deps.js'
 import { buildManagedEnv, runGate } from './tools.js'
 import { runNativeSpawn, THINKING_LEVELS, validateJsonSchema } from './spawn.js'
 import { assertSchemaCompilable } from '../plugins/schema.js'
-import { WorktreeAllocator } from './worktree.js'
 import { gateResultMissingError, sanitizeExecutionInfo, sanitizeGateResult } from './spawn/spawn-exec.js'
 import { HelmPluginConfigStore } from './plugin-config-store.js'
-import { redactJsonValue } from '../redact.js'
 import { ConversationService } from './conversation-service.js'
 import { NodeManager } from './node-manager.js'
 import { ModelRegistry } from './model-registry.js'
@@ -170,8 +166,7 @@ export class KernelRuntime {
   /** 无 assistant 人类入口时合并并发的 trigger 缺省会话创建。 */
   private defaultTriggerTargetCreation: Promise<number> | undefined
   private pluginHost: PluginHost | undefined
-  readonly worktrees: WorktreeAllocator
-  /** 包含模型回合、结构化输出修复与 gate；用于阻止清理仍在使用的执行目录。 */
+  /** 包含模型回合、结构化输出修复与 gate；通用运行中执行事实面（供插件层占用判定）。 */
   private readonly activeSpawnExecutions = new Map<string, AgentExecutionInfo>()
   /** 会话插件管理权：conversationId -> 持有 pluginId 集合（删除保护）。 */
   private readonly managedConversations = new Map<number, Set<string>>()
@@ -445,17 +440,6 @@ export class KernelRuntime {
       // 严格落后 Hub 时异步触发同一 upgradeNode 路径；不阻塞注册回调。
       if (online && conn !== undefined) void this.nodes.autoUpgradeIfEligible(nodeId, conn.version)
     })
-    this.worktrees = new WorktreeAllocator({
-      envFabric: this.envFabric,
-      docStore: this.documentStore,
-      redact: (text) => this.stashService.redact(text),
-      isConversationWorking: (id) => {
-        if (this.store.getConv(id) === undefined) return false
-        const status = this.tracker.summaryOf(id).status
-        return status === 'working' || status === 'blocked'
-      },
-      isPathInUse: (nodeId, path) => this.isPathInUseForWorktrees(nodeId, path),
-    })
     this.store.ftsRedact = (t) => this.stashService.redact(t)
 
     // 受管进程 token：仅内存、入全局脱敏（任何落库/模型上下文/日志不可见明文）。
@@ -567,8 +551,6 @@ export class KernelRuntime {
       toolDeps: { defaultCwd: init.cwd },
       evictConversationBase: (id) => this.envFabric.evictConversation(id),
       managedConversations: this.managedConversations,
-      cleanupWorktree: (request) => this.cleanupWorktree(request),
-      worktrees: this.worktrees,
       cancelAsksByConversation: async (id) => {
         await this.asks.cancelByConversation(id)
       },
@@ -738,7 +720,10 @@ export class KernelRuntime {
         spawnAgent: (request) => this.spawnAgent(request),
         runGate: (command, options) => this.runGate(command, options),
         prepareInterruptedConversations: (ids) => this.prepareInterruptedConversations(ids),
-        cleanupWorktree: (request, signal) => this.cleanupWorktree(request, signal),
+        resolveSpawnTarget: (input) => this.resolveSpawnTarget(input),
+        listActiveSpawnExecutions: () => this.listActiveSpawnExecutions(),
+        probeNodeFs: (input) => this.probeNodeFs(input),
+        redactText: (text) => this.stash.redact(text),
         invokeAction: (pluginId, actionId, input, context) => this.plugins.invokeAction(pluginId, actionId, input, context),
         prepareAction: (pluginId, actionId, input, context) =>
           this.plugins.prepareAction(pluginId, actionId, input, context),
@@ -1323,11 +1308,12 @@ export class KernelRuntime {
     await this.submitInput(target, final.text, { origin: 'trigger', whenBusy: 'followUp' })
   }
 
-  /** 子代理派生：agent_spawn hook -> 默认原生 subagent（transform 传最终 payload）。 */
+  /** 子代理派生：agent_spawn around 管道（continuation）-> 默认原生 subagent。
+   * 内核零 Git/worktree 语义：隔离等执行环境要求由插件层经 next(finalReq)
+   * 兑现；内核只保留通用保证（schema 校验/gate 回报对账/结果验证）。 */
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
     if (request.schema !== undefined) assertSchemaCompilable(request.schema)
     const token = randomUUID()
-    let succeeded = false
     if (request.resume !== undefined) {
       const resumeId = /^\d+$/.test(request.resume) ? Number(request.resume) : this.agentSessions.get(request.resume)
       const child = resumeId !== undefined ? this.store.getConv(resumeId) : undefined
@@ -1346,31 +1332,8 @@ export class KernelRuntime {
       onResolved: (raw) => {
         const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
         info.nodeId ??= info.conversationId !== undefined ? this.store.getConv(info.conversationId)?.nodeId : undefined
-        if (request.isolation === 'worktree' && info.worktree === undefined) {
-          throw new HelmError('unsupported_runtime', '执行方未兑现请求的 worktree 隔离，拒绝按非隔离任务继续', 502)
-        }
-        if (info.worktree !== undefined) {
-          if (info.nodeId === undefined) throw new HelmError('execution_info_invalid', '隔离工作树必须回传实际 nodeId，不能推测外部运行时的节点', 502)
-          const managed = this.worktrees.findActive({ path: info.worktree.path, nodeId: info.nodeId }) ?? this.worktrees.registerExternal({
-            nodeId: info.nodeId, path: info.worktree.path, branch: info.worktree.branch,
-            parentConversationId: request.parentConversationId,
-            ...(info.conversationId !== undefined ? { conversationId: info.conversationId } : {}),
-            ...(info.executionId !== undefined ? { executionId: info.executionId } : {}),
-          })
-          info.worktree = { ...info.worktree, id: managed.id, ...(managed.repoRoot !== '' ? { repoRoot: managed.repoRoot } : {}), ...(managed.baseCommit !== '' ? { baseCommit: managed.baseCommit, dirtySource: managed.dirtySource } : {}) }
-        }
-        if (info.worktree !== undefined) {
-          const safe = redactJsonValue(info, (text) => this.stashService.redact(text)) as AgentExecutionInfo
-          if (JSON.stringify(safe) !== JSON.stringify(info)) {
-            throw new HelmError('worktree_metadata_secret', `隔离执行元数据包含已登记机密，拒绝持久化；执行标识 ${safe.executionId ?? safe.conversationId ?? '未知'}`, 400, { execution: safe })
-          }
-        }
         execution = info
         this.activeSpawnExecutions.set(token, info)
-        if (info.worktree !== undefined) {
-          const leases = this.documentStore.get<Record<string, AgentExecutionInfo>>('runtime/worktree-execution-leases', {})
-          this.documentStore.set('runtime/worktree-execution-leases', { ...leases, [token]: info })
-        }
         originalResolved?.(info)
       },
       onGateResult: (raw) => {
@@ -1384,124 +1347,109 @@ export class KernelRuntime {
         const validation = validateJsonSchema(result, request.schema)
         if (!validation.ok) throw new HelmError('schema_validation_failed', `子代理最终结果未满足 Schema：${validation.errors.join('; ')}`, 502)
       }
-      if (request.isolation === 'worktree' && execution?.worktree === undefined) {
-        throw new HelmError('unsupported_runtime', '执行方未回传请求的隔离工作树，不能报告成功', 502)
-      }
       if (request.gate !== undefined && execution?.executionId !== undefined && gate === undefined) {
         throw gateResultMissingError({ agentId: request.agentId ?? 'subagent', executionId: execution.executionId, command: request.gate })
       }
       if (gate !== undefined && !gate.ok) throw new HelmError('gate_failed', `子代理验收命令失败：${gate.output}`, 502)
-      succeeded = true
       return result
     } finally {
-      if (execution?.worktree !== undefined && (succeeded || execution.executionId === undefined)) {
-        const leases = this.documentStore.get<Record<string, AgentExecutionInfo>>('runtime/worktree-execution-leases', {})
-        const updated = Object.fromEntries(Object.entries(leases).filter(([key, info]) => {
-          if (key === token) return false
-          if (info.nodeId !== execution!.nodeId) return true
-          if (execution!.conversationId !== undefined) return info.conversationId !== execution!.conversationId
-          return info.executionId !== execution!.executionId
-        }))
-        this.documentStore.set('runtime/worktree-execution-leases', updated)
-      }
       this.activeSpawnExecutions.delete(token)
     }
   }
 
   private async spawnAgentObserved(request: AgentSpawnRequest): Promise<unknown> {
     // 附件门禁在进入 hook 链之前：agent_spawn 钩子与原生执行行均受统一授权
-    // 保护（产物存在 + 父会话链归属）；transform 改写后再校验一次。
+    // 保护（产物存在 + 父会话链归属）；插件 next 改写后再校验一次。
     if (request.attachments !== undefined && request.attachments.length > 0) {
       await this.resolveAuthorizedAttachments(request.parentConversationId, request.attachments)
     }
-    const outcome = await this.hookBridge.runHookChain('agent_spawn', request)
-    if (outcome?.action === 'handled') return outcome.result
-    const finalRequest =
-      outcome?.action === 'transform' ? (outcome.value as AgentSpawnRequest) : request
-    if (
-      finalRequest.attachments !== undefined &&
-      finalRequest.attachments.length > 0 &&
-      finalRequest !== request
-    ) {
-      await this.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
-    }
-    const resolvedAttachments =
-      finalRequest.attachments !== undefined && finalRequest.attachments.length > 0
-        ? await this.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
-        : undefined
-    // 显式命名的 SpawnHost（原 60+ 行内联对象字面量的提炼）。
-    return runNativeSpawn(
-      buildSpawnHost({
+    // around（continuation）管道：插件可包裹完整生命周期（在 next 前分配资源、
+    // next 后收敛）；handled 仍可完全接管；无插件时直接默认原生执行。
+    return this.hookBridge.runHookAround('agent_spawn', request, async (finalRequest) => {
+      if (
+        finalRequest.attachments !== undefined &&
+        finalRequest.attachments.length > 0 &&
+        finalRequest !== request
+      ) {
+        await this.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
+      }
+      const resolvedAttachments =
+        finalRequest.attachments !== undefined && finalRequest.attachments.length > 0
+          ? await this.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
+          : undefined
+      // 显式命名的 SpawnHost（原 60+ 行内联对象字面量的提炼）。
+      return runNativeSpawn(
+        buildSpawnHost({
+          finalRequest,
+          source: {
+            toolDeps: this.toolDeps,
+            harness: this.harness,
+            tracker: { getLastAssistantText: (id) => this.tracker.getLastAssistantText(id) },
+            defaultModel: this.modelsRegistry.defaultModel,
+            defaultThinkingLevel: this.modelsRegistry.defaultThinkingLevel,
+            agentSessions: this.agentSessions,
+            resolvedAttachments,
+            isNodeOnline: (nodeId) => this.envFabric.isOnline(nodeId),
+            buildAttachmentBlock: (resolved) => this.conversations.buildAttachmentBlock(resolved),
+            readProfileForSpawn: (profileId) => this.conversations.readProfile(profileId),
+            getConvMeta: (childId) => this.store.getConv(childId),
+            getConversationSummary: (childId) => {
+              const meta = this.store.getConv(childId)
+              return meta ? this.tracker.summaryOf(childId) : undefined
+            },
+            updateConversation: (childId, patch) => this.updateConversation(childId, patch),
+            installExtension: (extension) => {
+              this.registry.install(extension as never)
+            },
+            registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, parentToolCallId) => {
+              const profile = await this.conversations.readProfile(profileId)
+              const now = Date.now()
+              this.store.upsertConv({
+                id: childId,
+                title: `子代理 ${childId}`,
+                profileId,
+                // 内核零角色硬编码：tags 由调用方策略决定（原生 spawn 传 []）。
+                tags,
+                parentConversationId: parentId,
+                ...(parentToolCallId !== undefined && parentToolCallId !== ''
+                  ? { parentToolCallId }
+                  : {}),
+                // 与普通创建一致：Profile 节点优先于父会话缺省节点。
+                nodeId: nodeId ?? profile?.nodeId ?? this.store.getConv(parentId)?.nodeId ?? 'local',
+                cwd: childCwd,
+                model: modelMirror,
+                thinkingLevel: thinkingLevel ?? '',
+                thinkingLevelOverride: finalRequest.effort,
+                ...(finalRequest.model !== undefined && finalRequest.model !== '' ? { modelOverride: finalRequest.model } : {}),
+                unread: false,
+                pinned: false,
+                stateChangeSeq: 1,
+                completionSeq: 0,
+                createdAt: now,
+                updatedAt: now,
+              })
+              // 原生 spawn 自动 helm 归属（Watchdog 红线判定唯一可信来源）。
+              this.markConversationOwnership(childId, 'helm')
+              await this.tracker.observe(childId)
+              // 创建瞬间即广播含 parentConversationId / parentToolCallId 的摘要：
+              // 前端在 subagent 运行期 0ms 关联子会话，不等首轮摘要指纹变化。
+              if (this.store.getConv(childId) !== undefined && !this.store.isDeleted(childId)) {
+                this.events.publish('conversation.upsert', this.conversations.withOwnership(this.tracker.summaryOf(childId)))
+              }
+            },
+            bindChildToolCall: (childId, parentToolCallId) => {
+              const meta = this.store.getConv(childId)
+              if (meta === undefined || meta.parentToolCallId === parentToolCallId) return
+              this.store.upsertConv({ ...meta, parentToolCallId, updatedAt: Date.now() })
+              if (!this.store.isDeleted(childId)) {
+                this.events.publish('conversation.upsert', this.conversations.withOwnership(this.tracker.summaryOf(childId)))
+              }
+            },
+          },
+        }),
         finalRequest,
-        source: {
-          toolDeps: this.toolDeps,
-          harness: this.harness,
-          tracker: { getLastAssistantText: (id) => this.tracker.getLastAssistantText(id) },
-          defaultModel: this.modelsRegistry.defaultModel,
-          defaultThinkingLevel: this.modelsRegistry.defaultThinkingLevel,
-          agentSessions: this.agentSessions,
-          worktrees: this.worktrees,
-          resolvedAttachments,
-          isNodeOnline: (nodeId) => this.envFabric.isOnline(nodeId),
-          buildAttachmentBlock: (resolved) => this.conversations.buildAttachmentBlock(resolved),
-          readProfileForSpawn: (profileId) => this.conversations.readProfile(profileId),
-          getConvMeta: (childId) => this.store.getConv(childId),
-          getConversationSummary: (childId) => {
-            const meta = this.store.getConv(childId)
-            return meta ? this.tracker.summaryOf(childId) : undefined
-          },
-          updateConversation: (childId, patch) => this.updateConversation(childId, patch),
-          installExtension: (extension) => {
-            this.registry.install(extension as never)
-          },
-          registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, parentToolCallId) => {
-            const profile = await this.conversations.readProfile(profileId)
-            const now = Date.now()
-            this.store.upsertConv({
-              id: childId,
-              title: `子代理 ${childId}`,
-              profileId,
-              // 内核零角色硬编码：tags 由调用方策略决定（原生 spawn 传 []）。
-              tags,
-              parentConversationId: parentId,
-              ...(parentToolCallId !== undefined && parentToolCallId !== ''
-                ? { parentToolCallId }
-                : {}),
-              // 与普通创建一致：Profile 节点优先于父会话缺省节点。
-              nodeId: nodeId ?? profile?.nodeId ?? this.store.getConv(parentId)?.nodeId ?? 'local',
-              cwd: childCwd,
-              model: modelMirror,
-              thinkingLevel: thinkingLevel ?? '',
-              thinkingLevelOverride: finalRequest.effort,
-              ...(finalRequest.model !== undefined && finalRequest.model !== '' ? { modelOverride: finalRequest.model } : {}),
-              unread: false,
-              pinned: false,
-              stateChangeSeq: 1,
-              completionSeq: 0,
-              createdAt: now,
-              updatedAt: now,
-            })
-            // 原生 spawn 自动 helm 归属（Watchdog 红线判定唯一可信来源）。
-            this.markConversationOwnership(childId, 'helm')
-            await this.tracker.observe(childId)
-            // 创建瞬间即广播含 parentConversationId / parentToolCallId 的摘要：
-            // 前端在 subagent 运行期 0ms 关联子会话，不等首轮摘要指纹变化。
-            if (this.store.getConv(childId) !== undefined && !this.store.isDeleted(childId)) {
-              this.events.publish('conversation.upsert', this.conversations.withOwnership(this.tracker.summaryOf(childId)))
-            }
-          },
-          bindChildToolCall: (childId, parentToolCallId) => {
-            const meta = this.store.getConv(childId)
-            if (meta === undefined || meta.parentToolCallId === parentToolCallId) return
-            this.store.upsertConv({ ...meta, parentToolCallId, updatedAt: Date.now() })
-            if (!this.store.isDeleted(childId)) {
-              this.events.publish('conversation.upsert', this.conversations.withOwnership(this.tracker.summaryOf(childId)))
-            }
-          },
-        },
-      }),
-      finalRequest,
-    )
+      )
+    })
   }
 
   /**
@@ -1529,8 +1477,72 @@ export class KernelRuntime {
     return runGate(this.toolDeps, command, { ...options, ...(nodeId !== undefined ? { nodeId } : {}) })
   }
 
-  async cleanupWorktree(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult> {
-    return this.worktrees.cleanup({ ...request, signal })
+  /**
+   * 通用 spawn 靶点解析（ctx.host.resolveSpawnTarget 后端）：与原生执行行
+   * 同构的链——源目录 request.cwd > profile.cwd > 父会话 cwd；节点
+   * profile.nodeId > 父会话绑定节点 > 'local'。不含业务路由；父会话或
+   * Profile 不存在时如实抛 not_found，绝不编造。
+   */
+  async resolveSpawnTarget(input: {
+    parentConversationId: number
+    profileId?: string
+    requestCwd?: string
+  }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }> {
+    const parent = this.store.getConv(input.parentConversationId)
+    if (parent === undefined) {
+      throw new HelmError('not_found', `父会话 ${input.parentConversationId} 不存在，无法解析 spawn 靶点`, 404, {
+        parentConversationId: input.parentConversationId,
+      })
+    }
+    const profileId = input.profileId ?? 'assistant'
+    const profile = await this.conversations.readProfile(profileId)
+    if (profile === undefined) {
+      throw new HelmError('not_found', `agentType '${profileId}' 不是已注册的 Profile（profiles/${profileId} 不存在）`, 404)
+    }
+    const nodeId = profile.nodeId ?? parent.nodeId ?? 'local'
+    const sourceCwd = input.requestCwd ?? profile.cwd ?? parent.cwd ?? this.toolDeps.defaultCwd
+    return { nodeId, sourceCwd, parentCwd: parent.cwd }
+  }
+
+  /** 当前进程内仍在执行的 spawn 执行事实（ctx.host.listActiveSpawnExecutions 后端）。 */
+  listActiveSpawnExecutions(): AgentExecutionInfo[] {
+    return [...this.activeSpawnExecutions.values()].map((info) => ({ ...info }))
+  }
+
+  /**
+   * 目标节点真实 fs 探测（ctx.host.probeNodeFs 后端）：经 EnvFabric 在目标
+   * 节点真实执行 exists / canonicalPath；探测失败（节点离线/权限/超时）
+   * 如实 reject，绝不编造。输出经全局脱敏。
+   */
+  async probeNodeFs(input: {
+    nodeId: string
+    op: 'exists' | 'canonicalPath'
+    path: string
+    signal?: AbortSignal
+  }): Promise<{ value: string | boolean }> {
+    if (typeof input.nodeId !== 'string' || input.nodeId === '') {
+      throw new HelmError('validation_error', `probeNodeFs 需要非空 nodeId（收到 ${String(input.nodeId)}）`, 400)
+    }
+    if (input.op !== 'exists' && input.op !== 'canonicalPath') {
+      throw new HelmError('validation_error', `probeNodeFs op 仅允许 exists | canonicalPath（收到 ${String(input.op)}）`, 400)
+    }
+    if (typeof input.path !== 'string' || input.path === '') {
+      throw new HelmError('validation_error', 'probeNodeFs 需要非空 path', 400)
+    }
+    const env = this.envFabric.envFor(input.nodeId, input.path)
+    const context = input.signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(input.signal, BACKGROUND_CONTEXT)
+    const result = input.op === 'exists'
+      ? await env.exists(input.path, context)
+      : await env.canonicalPath(input.path, context)
+    if (!result.ok) {
+      throw new HelmError(
+        'node_fs_probe_failed',
+        `节点 ${input.nodeId} 上 ${input.op}('${this.stash.redact(input.path)}') 探测失败：${result.error.code}: ${this.stash.redact(result.error.message)}`,
+        502,
+        { nodeId: input.nodeId, op: input.op, path: this.stash.redact(input.path) },
+      )
+    }
+    return { value: result.value }
   }
 
   /**
@@ -1804,31 +1816,6 @@ export class KernelRuntime {
 
   get isClosing(): boolean {
     return this.closed
-  }
-
-  /** worktree isPathInUse 探测（构造器内闭包用；单方法拆出防构造器膨胀）。 */
-  private isPathInUseForWorktrees(nodeId: string, path: string): boolean {
-    const contains = (cwd: string) => {
-      const windows = /^[A-Za-z]:[\\/]|^\\\\/.test(path)
-      const normalize = (value: string) => {
-        const normalized = value.replaceAll('\\', '/').replace(/\/$/, '')
-        return windows ? normalized.toLowerCase() : normalized
-      }
-      const normalized = normalize(path)
-      const candidate = normalize(cwd)
-      return candidate === normalized || candidate.startsWith(`${normalized}/`)
-    }
-    const leases = this.documentStore.get<Record<string, AgentExecutionInfo>>('runtime/worktree-execution-leases', {})
-    for (const [leaseId, info] of Object.entries(leases)) {
-      if (info.nodeId !== nodeId || info.worktree === undefined || !contains(info.worktree.path)) continue
-      if (!this.activeSpawnExecutions.has(leaseId)) {
-        throw new HelmError('worktree_execution_unknown', '工作树存在重启中断或未确认停止的执行，不能清理；请先检视并续接收尾，或确认停止后在目标节点手动清理 Git 工作树', 409, { nodeId, path, executionId: info.executionId, conversationId: info.conversationId })
-      }
-      return true
-    }
-    return [...this.activeSpawnExecutions.values()].some((info) => info.nodeId === nodeId && info.effectiveCwd !== undefined && contains(info.effectiveCwd)) ||
-      this.listConversations().some((conv) => (conv.nodeId ?? 'local') === nodeId && contains(conv.cwd) && (conv.status === 'working' || conv.status === 'blocked')) ||
-      (this.pluginHost?.listLiveWorktrees() ?? []).some((wt) => wt.nodeId === nodeId && contains(wt.path))
   }
 
   async close(): Promise<void> {

@@ -15,3 +15,9 @@ export * from './plugin.js'
 export * from './ui.js'
 export * from './workflow.js'
 export * from './worktree.js'
+export {
+  isAbsoluteAgentPath,
+  sanitizeAgentExecutionInfo,
+  sanitizeAgentGateResult,
+  agentGateResultMissingError,
+} from './agent-exec.js'

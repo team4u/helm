@@ -1119,10 +1119,10 @@ export class PluginHost {
   }
 
   /**
-   * 全部已启用且已启动服务声明的工作树占用清单（WorktreeAllocator 的
-   * isPathInUse 探测源）：合并各服务 liveWorktrees() 返回值。
-   * 服务声明函数抛错或返回非法形状时如实显式报错，绝不静默当空——
-   * 占用检查坏了就必须修，不能靠猜放行清理在途工作树。
+   * 全部已启用且已启动服务声明的工作树占用清单（通用机制面）：合并各
+   * 服务 liveWorktrees() 返回值（如执行隔离的插件声明在途占用，供其他
+   * 能力查询）。服务声明函数抛错或返回非法形状时如实显式报错，绝不静默
+   * 当空——占用检查坏了就必须修，不能靠猜放行。
    */
   listLiveWorktrees(): Array<{ nodeId: string; path: string }> {
     this.assertNotDisposed();
@@ -1195,6 +1195,38 @@ export class PluginHost {
       for (const h of participants) this.tracker.end(h.pluginId, label);
     }
     return outcome;
+  }
+
+  /**
+   * around（continuation）钩子执行：仅 agent_spawn。与 runHook 同一参与者
+   * 快照与任务跟踪，但允许插件经受控 next 包裹完整执行（含后续管道与
+   * 默认原生执行行）。返回值即最终执行产物（handled 接管产物或 defaultRun
+   * 结果）；block 语义升维为 hook_blocked 异常（agent_spawn 默认不允许）。
+   */
+  async runHookAround(
+    name: 'agent_spawn',
+    payload: HookPayloadMap['agent_spawn'],
+    defaultRun: (finalPayload: HookPayloadMap['agent_spawn']) => Promise<unknown>,
+  ): Promise<unknown> {
+    this.assertNotDisposed();
+    const pipeline = this.pipelines.get(name);
+    if (!pipeline) {
+      throw new HelmError('unknown_hook', `未知的钩子挂载点：${name}`, 400, { hook: name });
+    }
+    const participants = pipeline.entries().filter((h) => this.isHookActive(h.pluginId));
+    const label = `hook:${name}`;
+    const snapshot = new Set(participants);
+    for (const h of participants) this.tracker.begin(h.pluginId, label);
+    try {
+      const spawnPipeline = pipeline as unknown as HookPipeline<'agent_spawn'>
+      return await spawnPipeline.runAround(
+        payload,
+        defaultRun,
+        (h: { pluginId: string }) => snapshot.has(h as never),
+      )
+    } finally {
+      for (const h of participants) this.tracker.end(h.pluginId, label);
+    }
   }
 
   private isHookActive(pluginId: string): boolean {
@@ -1758,8 +1790,16 @@ export class PluginHost {
       runGate: (command, options) => tracked('host.runGate', () => backend.runGate(command, options)),
       prepareInterruptedConversations: (ids) =>
         tracked('host.prepareInterruptedConversations', () => backend.prepareInterruptedConversations(ids)),
-      cleanupWorktree: (request, signal) =>
-        tracked('host.cleanupWorktree', () => backend.cleanupWorktree(request, signal)),
+      resolveSpawnTarget: (input) => tracked('host.resolveSpawnTarget', () => backend.resolveSpawnTarget(input)),
+      listActiveSpawnExecutions: () => {
+        guard('host.listActiveSpawnExecutions');
+        return backend.listActiveSpawnExecutions();
+      },
+      probeNodeFs: (input) => tracked('host.probeNodeFs', () => backend.probeNodeFs(input)),
+      redactText: (text) => {
+        guard('host.redactText');
+        return backend.redactText(text);
+      },
       invokeAction: async (targetPluginId, actionId, input, context) => {
         guard('host.invokeAction');
         const raw = await this.tracker.withTask(pluginId, `host.invokeAction:${targetPluginId}.${actionId}`, () =>

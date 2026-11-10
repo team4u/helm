@@ -41,13 +41,12 @@ import { JournalWriter, readJournal, type WorkflowJournalEntry } from './journal
 import { extractMeta, hasMetaDeclaration, type WorkflowMeta } from './meta.js'
 import { collapse, type WorkflowEntry } from './progress.js'
 import { isAbsoluteTargetPath } from '../../../runtime/tools.js'
+import { redactExecutionMetadata, redactGateResult } from '../../../runtime/spawn/spawn-exec.js'
 import {
-  gateResultMissingError,
-  redactExecutionMetadata,
-  redactGateResult,
-  sanitizeExecutionInfo,
-  sanitizeGateResult,
-} from '../../../runtime/spawn/spawn-exec.js'
+  agentGateResultMissingError as gateResultMissingError,
+  sanitizeAgentExecutionInfo as sanitizeExecutionInfo,
+  sanitizeAgentGateResult as sanitizeGateResult,
+} from '@helm/protocol'
 import {
   MAX_SCRIPT_LENGTH,
   normalizeWorkflowArgs,

@@ -245,6 +245,20 @@ export class HookBridge {
     if (result.action === 'continue') return undefined
     return result as HookDecision
   }
+
+  /**
+   * around（continuation）钩子执行（仅 agent_spawn）：插件可经受控 next
+   * 包裹完整执行（含后续管道与默认原生执行行）。无插件时直接 defaultRun。
+   */
+  runHookAround(
+    name: 'agent_spawn',
+    payload: import('@helm/protocol').AgentSpawnRequest,
+    defaultRun: (finalPayload: import('@helm/protocol').AgentSpawnRequest) => Promise<unknown>,
+  ): Promise<unknown> {
+    const host = this.options.pluginHost()
+    if (!host) return defaultRun(payload)
+    return host.runHookAround(name, payload, defaultRun)
+  }
 }
 
 /** SDK 结果出站统一处理：脱敏 + Spill 边界（artifacts 上限截断到产物）。 */
