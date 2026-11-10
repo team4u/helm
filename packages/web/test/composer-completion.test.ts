@@ -22,6 +22,7 @@ import type {
   ConversationSummary,
   PluginUiContribution,
 } from '@helm/protocol'
+import { conversationsApi } from '../src/lib/api.js'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import {
@@ -273,6 +274,55 @@ test('交互：@ 仅展示插件 doc 源候选，不注入会话产物；选中�
     assert.equal(app.ta().selectionStart, '请看 @记忆库 '.length, '光标落在插入文本后')
     assert.equal(app.completionPopover(), null, '选中后浮层关闭')
   } finally {
+    app.unmount()
+  }
+})
+
+test('交互：@ 弹窗后按回车仅选中角色并保留在文本框内，不发送消息', { timeout: 60_000 }, async () => {
+  const originalSubmit = conversationsApi.submitInput
+  let submitCalls = 0
+  conversationsApi.submitInput = (async () => {
+    submitCalls++
+    return { id: 1, text: '', role: 'user', createdAt: Date.now() } as any
+  }) as any
+  const app = await mount(conv(1), {
+    ui: [docCompleter('builtin:profile', '@', 'profiles')],
+    docs: { 'builtin:profile/profiles': { items: [{ id: 'coder', label: '@coder · 程序员', insertText: '@coder ' }] } },
+  })
+  try {
+    await app.type('@')
+    await act(async () => {})
+    assert.equal(app.completionItems().length, 1, '弹窗展示角色候选')
+    assert.match(app.completionPopover()!.textContent!, /coder/)
+
+    // 按回车确认角色候选
+    const ev = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    let propagationStopped = false
+    ev.stopPropagation = () => { propagationStopped = true }
+    await act(async () => {
+      app.ta().dispatchEvent(ev)
+    })
+    await act(async () => {})
+
+    assert.equal(ev.defaultPrevented, true, '回车已被浮层拦截')
+    assert.equal(propagationStopped, true, '事件停止冒泡，防止传递给 textarea 触发发送')
+    assert.equal(submitCalls, 0, '选中角色时绝不调用 submitInput 直接发送')
+    assert.equal(app.ta().value, '@coder ', '角色保留在文本框内')
+    assert.equal(app.ta().selectionStart, '@coder '.length, '光标落在角色文本后')
+    assert.equal(app.completionPopover(), null, '浮层已关闭')
+
+    // 随后继续输入消息并按回车，才真正触发发送
+    await app.type('@coder 帮我看下代码')
+    await act(async () => {})
+    assert.equal(app.completionPopover(), null, '浮层不再处于激活态')
+    await act(async () => {
+      const sendEv = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+      app.ta().dispatchEvent(sendEv)
+    })
+    await act(async () => {})
+    assert.equal(submitCalls, 1, '正常输入内容后按回车正常发送')
+  } finally {
+    conversationsApi.submitInput = originalSubmit
     app.unmount()
   }
 })

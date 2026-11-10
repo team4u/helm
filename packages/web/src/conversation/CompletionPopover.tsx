@@ -50,21 +50,33 @@ export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, an
       if (event.isComposing || event.keyCode === 229) return
       if (event.key === 'Escape') {
         event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
         onClose()
         return
       }
       if (visible.length === 0) {
-        if (event.key === 'Enter' || event.key === 'ArrowUp' || event.key === 'ArrowDown') event.preventDefault()
+        if (event.key === 'Enter' || event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+          event.preventDefault()
+          event.stopPropagation()
+          event.stopImmediatePropagation()
+        }
         return
       }
       if (event.key === 'ArrowDown') {
         event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
         setActiveIndex((i) => (i + 1) % visible.length)
       } else if (event.key === 'ArrowUp') {
         event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
         setActiveIndex((i) => (i - 1 + visible.length) % visible.length)
       } else if (event.key === 'Enter') {
         event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
         const item = visible[activeIndex]
         if (item !== undefined) onPick(item)
       }

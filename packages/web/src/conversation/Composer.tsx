@@ -348,18 +348,26 @@ function CommandPopover({
       if (visible.length === 0) {
         if (e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Escape') {
           e.preventDefault()
+          e.stopPropagation()
+          e.stopImmediatePropagation()
           onClose()
         }
         return
       }
       if (e.key === 'ArrowDown') {
         e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
         setActive((i) => (i + 1) % visible.length)
       } else if (e.key === 'ArrowUp') {
         e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
         setActive((i) => (i - 1 + visible.length) % visible.length)
       } else if (e.key === 'Enter') {
         e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
         const item = visible[active]
         if (item !== undefined) {
           if (item.run !== undefined) item.run()
@@ -367,6 +375,8 @@ function CommandPopover({
         }
       } else if (e.key === 'Escape') {
         e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
         onClose()
       }
     }
@@ -1126,6 +1136,10 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    // 浮层已消费或已被 defaultPrevented 的按键绝不再向下传递触发发送
+    if (e.defaultPrevented || e.nativeEvent.defaultPrevented) {
+      return
+    }
     if (
       (popover !== null || completionOpen) &&
       !e.nativeEvent.isComposing &&

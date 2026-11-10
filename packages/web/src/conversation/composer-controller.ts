@@ -37,8 +37,13 @@ export interface ComposerControllerBindings {
   submitExplicitText: (text: string, whenBusy?: WhenBusy) => Promise<void>
 }
 
-/** 聚焦输入框并把光标落到指定位置（下一动画帧，等 DOM 文本更新生效后再定位）。 */
+/** 聚焦输入框并把光标落到指定位置（立即聚焦并在下一动画帧定位光标，等 DOM 文本更新生效）。 */
 export function focusWithCaret(el: HTMLTextAreaElement, caret: number): void {
+  try {
+    el.focus()
+  } catch {
+    /* 忽略离线或未挂载时的 focus 异常 */
+  }
   requestAnimationFrame(() => {
     el.focus()
     el.setSelectionRange(caret, caret)
