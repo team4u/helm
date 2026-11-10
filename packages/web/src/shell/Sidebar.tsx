@@ -24,15 +24,8 @@ import {
 function StatusDot({ connected }: { connected: boolean }) {
   return (
     <span
+      className={`status-dot ${connected ? 'status-dot-done status-dot-connected' : 'status-dot-disconnected'}`}
       title={connected ? '实时连接正常' : '实时连接断开，正在重连'}
-      style={{
-        width: 7,
-        height: 7,
-        borderRadius: '50%',
-        flexShrink: 0,
-        background: connected ? 'var(--ok)' : 'var(--fg-subtle)',
-        boxShadow: connected ? '0 0 0 2px var(--ok-bg)' : 'none',
-      }}
     />
   )
 }
