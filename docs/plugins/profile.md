@@ -91,6 +91,8 @@ flowchart td
 
 ```bash
 helm profile list_mentionable --input '{"query":"review","conversationId":42}' --json
+# 受管 shell 内沿用 HELM_CONVERSATION_ID
+helm profile list_mentionable --current --json
 ```
 
 动作会校验真实会话。若调用带有当前会话上下文，不能用输入中的其他 `conversationId` 冒充该会话。
