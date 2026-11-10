@@ -4,6 +4,7 @@
  */
 export * from './plugin-host.js';
 export { loadExternalPlugins, type ExternalPluginHost } from './external-loader.js';
+export { registerPluginTsRoot, registeredPluginTsRoots } from './backend-ts-loader.js';
 export { compilePluginClientModule, assertModuleRefShape, CLIENT_SHARED_EXTERNALS } from './client-compiler.js';
 export { HookPipeline, HOOK_ALLOWED_ACTIONS, assertHookPayload, type RegisteredHook } from './hooks.js';
 export { PluginTaskTracker } from './tracking.js';
