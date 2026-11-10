@@ -1,9 +1,11 @@
 import type {
   ActionManifest,
   ArtifactMetadata,
+  ArtifactPreviewerSpec,
   AskSpec,
   CommandSpec,
   ComposerPillSpec,
+  ComposerCompleterSpec,
   ComposerWidgetSpec,
   ConversationActionSpec,
   ConversationDetail,
@@ -79,6 +81,8 @@ export interface GroupedUiSpecs {
   toolViews: Array<QualifiedUiSpec<ToolViewSpec>>
   composerPills: Array<QualifiedUiSpec<ComposerPillSpec>>
   composerWidgets: Array<QualifiedUiSpec<ComposerWidgetSpec>>
+  composerCompleters: Array<QualifiedUiSpec<ComposerCompleterSpec>>
+  artifactPreviewers: Array<QualifiedUiSpec<ArtifactPreviewerSpec>>
   workbenchPanels: Array<QualifiedUiSpec<WorkbenchPanelSpec>>
   commands: Array<QualifiedUiSpec<CommandSpec>>
   settingsPanels: Array<QualifiedUiSpec<SettingsPanelSpec>>
@@ -114,6 +118,8 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
     toolViews: [],
     composerPills: [],
     composerWidgets: [],
+    composerCompleters: [],
+    artifactPreviewers: [],
     workbenchPanels: [],
     commands: [],
     settingsPanels: [],
@@ -147,6 +153,12 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
         break
       case 'composer.widget':
         grouped.composerWidgets.push({ pluginId: item.pluginId, spec: spec as unknown as ComposerWidgetSpec })
+        break
+      case 'composer.completer':
+        grouped.composerCompleters.push({ pluginId: item.pluginId, spec: spec as unknown as ComposerCompleterSpec })
+        break
+      case 'artifact.previewer':
+        grouped.artifactPreviewers.push({ pluginId: item.pluginId, spec: spec as unknown as ArtifactPreviewerSpec })
         break
       case 'workbench.panel':
         grouped.workbenchPanels.push({ pluginId: item.pluginId, spec: spec as unknown as WorkbenchPanelSpec })
