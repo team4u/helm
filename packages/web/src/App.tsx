@@ -112,13 +112,13 @@ function HelmShellInner() {
             key={`primary-conv-${store.primaryTarget.conversationId}`}
             conversationId={store.primaryTarget.conversationId}
           />
-        ) : (
+        ) : store.primaryTarget.kind === 'screen' ? (
           <ScreenHost
             key={`primary-screen-${store.primaryTarget.pluginId}-${store.primaryTarget.screenId}`}
             pluginId={store.primaryTarget.pluginId}
             screenId={store.primaryTarget.screenId}
           />
-        )}
+        ) : null}
 
         {store.splitTarget && (
           <div className="helm-split-pane">
@@ -129,7 +129,7 @@ function HelmShellInner() {
                 isSplit
                 onCloseSplit={store.closeSplit}
               />
-            ) : (
+            ) : store.splitTarget.kind === 'screen' ? (
               <ScreenHost
                 key={`split-screen-${store.splitTarget.pluginId}-${store.splitTarget.screenId}`}
                 pluginId={store.splitTarget.pluginId}
@@ -137,7 +137,7 @@ function HelmShellInner() {
                 isSplit
                 onCloseSplit={store.closeSplit}
               />
-            )}
+            ) : null}
           </div>
         )}
         </div>
