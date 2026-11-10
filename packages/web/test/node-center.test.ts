@@ -316,14 +316,19 @@ test('NodeCard: 点击与 Enter/Space 键盘交互激活 onSelect', { timeout: 6
 
 test('NodeDetailDrawer: SSR 渲染系统概览、体检信息、接入命令行与 0 Emoji', { timeout: 60_000 }, () => {
   const remoteNode = mockNodes()[1]!
+  const store = makeTestStore()
 
   const html = renderToStaticMarkup(
-    e(NodeDetailDrawer, {
-      node: remoteNode,
-      open: true,
-      onClose: () => {},
-      inline: true,
-    }),
+    e(
+      HelmStoreContext.Provider,
+      { value: store },
+      e(NodeDetailDrawer, {
+        node: remoteNode,
+        open: true,
+        onClose: () => {},
+        inline: true,
+      }),
+    ),
   )
 
   // 1. 结构与语义
@@ -365,13 +370,17 @@ test('NodeDetailDrawer: SSR 渲染系统概览、体检信息、接入命令行�
 
 test('NodeDetailDrawer: 接入新节点模式 (isNew={true}) 正确渲染', { timeout: 60_000 }, () => {
   const html = renderToStaticMarkup(
-    e(NodeDetailDrawer, {
-      node: null,
-      open: true,
-      isNew: true,
-      onClose: () => {},
-      inline: true,
-    }),
+    e(
+      HelmStoreContext.Provider,
+      { value: makeTestStore() },
+      e(NodeDetailDrawer, {
+        node: null,
+        open: true,
+        isNew: true,
+        onClose: () => {},
+        inline: true,
+      }),
+    ),
   )
 
   assert.match(html, /接入新计算节点/)
