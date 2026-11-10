@@ -4668,3 +4668,53 @@ textarea.textarea,
 .composer-completion-error {
   color: var(--danger, var(--fg-muted));
 }
+
+/* Profile 详情抽屉：空白会话引导词编辑区块（紧凑列表，label/prompt 增删）。 */
+.profile-starters-header { justify-content: space-between; }
+.profile-starters-list { display: flex; flex-direction: column; gap: 8px; }
+.profile-starters-empty { padding: 2px 0; }
+.profile-starter-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 32px 8px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.profile-starter-fields { display: flex; flex-direction: column; gap: 6px; }
+.profile-starter-label { font-size: 13px; }
+.profile-starter-prompt { font-size: 13px; line-height: 1.5; resize: vertical; min-height: 44px; }
+.profile-starter-error { font-size: 11px; color: var(--danger); }
+.profile-starter-remove { position: absolute; top: 6px; right: 4px; }
+.profile-starter-add { margin-top: 6px; }
+
+/* ConversationTimeline：空白会话引导词按钮组（仅回填草稿，不直接发送）。 */
+.timeline-starters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 12px; }
+.timeline-starter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  text-align: left;
+}
+.timeline-starter-btn:hover {
+  background: var(--nav-active-bg);
+  border-color: var(--fg-muted);
+}
+.timeline-starter-btn .timeline-starter-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 680px) {
+  .profile-starter-item { padding: 6px 28px 6px 6px; }
+  .profile-starter-prompt { font-size: 13px; }
+  .timeline-starters { gap: 6px; }
+  .timeline-starter-btn { font-size: 12px; }
+}
