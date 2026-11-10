@@ -292,7 +292,7 @@ test('ModelCard SSR: 未配置与选中态渲染断言', { timeout: 60_000 }, ()
 // 3. ModelDetailDrawer SSR 渲染测试
 // ---------------------------------------------------------------------------
 
-test('ModelDetailDrawer SSR: inline={true} 渲染凭据表单、连通性按钮与模型 Switch 清单，且绝对零 Emoji', { timeout: 60_000 }, () => {
+test('ModelDetailDrawer SSR: inline={true} 渲染凭据表单、连通性按钮与模型多选下拉框，且绝对零 Emoji', { timeout: 60_000 }, () => {
   const provider: ProviderItem = {
     id: 'openai',
     name: 'OpenAI',
@@ -331,21 +331,19 @@ test('ModelDetailDrawer SSR: inline={true} 渲染凭据表单、连通性按钮�
   // 3. 测试连接按钮
   assert.match(html, /测试连接/)
 
-  // 4. 模型清单与 Switch 开关
+  // 4. 模型清单与多选下拉框
   assert.match(html, /模型清单与路由控制/)
+  assert.match(html, /aria-label="选择启用的模型"/)
+  assert.match(html, /helm-select-multi/)
+  assert.match(html, /role="checkbox"/)
   assert.match(html, /GPT-4o/)
   assert.match(html, /多模态/)
-  assert.match(html, /128K/)
-  assert.match(html, /o1 Reasoning/)
-  assert.match(html, /深度推理/)
+  assert.match(html, /model-drawer-tags-wrap/)
 
-  // 5. 包含开关按钮
-  assert.match(html, /role="switch"/)
-
-  // 6. 保存配置按钮
+  // 5. 保存配置按钮
   assert.match(html, /保存配置/)
 
-  // 7. 零 Emoji
+  // 6. 零 Emoji
   assert.equal(EMOJI_REGEX.test(html), false, '抽屉渲染不得包含任何 Emoji')
 })
 
@@ -395,8 +393,11 @@ test('ModelCenter SSR: 完整渲染顶栏、检索框、分类药丸与网格流
   assert.match(html, /模型与凭证中心/)
   assert.match(html, /管理大语言模型供应商、API 凭证与模型路由配置/)
 
-  // 2. 统计摘要
-  assert.match(html, /已配置\s*2\s*\/\s*共\s*9\s*个供应商/)
+  // 2. 统计摘要与全局默认模型横幅
+  assert.match(html, /已配置\s*2\s*\/\s*共\s*(?:9|10)\s*个供应商/)
+  assert.match(html, /class="[^"]*model-global-banner[^"]*"/)
+  assert.match(html, /全局默认模型/)
+  assert.match(html, /配置全局默认/)
 
   // 3. 搜索框与占位符
   assert.match(html, /class="[^"]*primary-search-box[^"]*"/)
@@ -462,6 +463,43 @@ test('ModelCenter SSR: 空状态与分屏模式渲染', { timeout: 60_000 }, () 
   assert.match(htmlEmpty, /未找到匹配的供应商/)
   assert.match(htmlEmpty, /aria-label="关闭分屏"/)
   assert.equal(EMOJI_REGEX.test(htmlEmpty), false)
+})
+
+test('ModelCenter SSR: 目标携带 providerId 为 defaults 时唤出全局默认模型抽屉', { timeout: 60_000 }, () => {
+  const store = makeTestStore({
+    primaryTarget: { kind: 'models', providerId: 'defaults' },
+    models: [
+      { id: 'anthropic/claude-3-7-sonnet', provider: 'anthropic', modelId: 'claude-3-7-sonnet', available: true, thinkingLevels: ['off', 'low', 'high'] },
+      { id: 'openai/gpt-4o', provider: 'openai', modelId: 'gpt-4o', available: true, thinkingLevels: ['off'] },
+    ],
+  })
+
+  const html = renderToString(
+    e(HelmStoreContext.Provider, { value: store }, e(ModelCenter, { inlineDrawer: true })),
+  )
+
+  // 抽屉展开且含有全局默认模型设置
+  assert.match(html, /class="[^"]*primary-drawer-content[^"]*"/)
+  assert.match(html, /全局默认模型与思考档位/)
+  assert.match(html, /新会话的继承链/)
+  assert.match(html, /保存全局默认/)
+  assert.equal(EMOJI_REGEX.test(html), false)
+})
+
+test('ModelCenter SSR: 正确呈现包含 Magpie 网关在内的全量动态供应商', { timeout: 60_000 }, () => {
+  const store = makeTestStore({
+    primaryTarget: { kind: 'models', providerId: 'magpie' },
+  })
+
+  const html = renderToString(
+    e(HelmStoreContext.Provider, { value: store }, e(ModelCenter, { inlineDrawer: true })),
+  )
+
+  // 包含 Magpie 卡片与抽屉
+  assert.match(html, /Magpie 网关/)
+  assert.match(html, /动态同步/)
+  assert.match(html, /刷新目录/)
+  assert.equal(EMOJI_REGEX.test(html), false)
 })
 
 // ---------------------------------------------------------------------------

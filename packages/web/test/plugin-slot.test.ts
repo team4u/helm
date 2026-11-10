@@ -25,7 +25,7 @@ const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register({ url: 'http://localhost:3201/' })
+GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const slotContribution = (pluginId: string, id: string, target: string, extra: Record<string, unknown> = {}): PluginUiContribution => ({
@@ -98,7 +98,7 @@ test('PluginSlot：短名拼全限定、贡献项渲染、子项 ctx.pluginId �
   const store = slotContributionUi([slotContribution('p2', 'badge', 'owner/zone', { client: { module: 'zone.tsx', export: 'ZoneBadge' } })])
   const ownerCtx = createPluginClientContext(store, 'owner', undefined)
   const host = document.createElement('div')
-  renderToString(host, e(
+  const root = renderToString(host, e(
     HelmStoreContext.Provider, { value: store },
     e(PluginClientContext.Provider, { value: ownerCtx },
       e(PluginSlot, { name: 'zone', slotProps: { zone: 'east' } })),
@@ -106,6 +106,7 @@ test('PluginSlot：短名拼全限定、贡献项渲染、子项 ctx.pluginId �
   const node = host.querySelector('[data-zone="east"]')
   assert.ok(node !== null, '贡献项渲染在插槽内')
   assert.equal(node!.textContent, 'contributor:p2', '子项上下文 pluginId 是贡献者 p2 而非 owner')
+  act(() => { root.unmount() })
 })
 
 test('PluginSlot：single 取首项、无命中回退 fallback', { timeout: 60_000 }, () => {
@@ -115,20 +116,22 @@ test('PluginSlot：single 取首项、无命中回退 fallback', { timeout: 60_0
   ])
   const ownerCtx = createPluginClientContext(store, 'owner', undefined)
   const host = document.createElement('div')
-  renderToString(host, e(
+  const root = renderToString(host, e(
     HelmStoreContext.Provider, { value: store },
     e(PluginClientContext.Provider, { value: ownerCtx },
       e(PluginSlot, { name: 'zone', mode: 'single' })),
   ))
   assert.equal(host.textContent, 'B', 'single 模式仅渲染 priority 最高的首项')
+  act(() => { root.unmount() })
 
   const host2 = document.createElement('div')
-  renderToString(host2, e(
+  const root2 = renderToString(host2, e(
     HelmStoreContext.Provider, { value: store },
     e(PluginClientContext.Provider, { value: ownerCtx },
       e(PluginSlot, { name: 'empty-slot', fallback: e('div', null, 'nope') })),
   ))
   assert.equal(host2.textContent, 'nope', '无命中渲染 fallback')
+  act(() => { root2.unmount() })
 })
 
 test('PluginSlot：环检测显式告警且不死循环', { timeout: 60_000 }, () => {
@@ -146,7 +149,7 @@ test('PluginSlot：环检测显式告警且不死循环', { timeout: 60_000 }, (
   const store = slotContributionUi([slotContribution('p2', 'cycle', 'owner/loop', { client: { module: 'cycle.tsx', export: 'CycleItem' } })])
   const ownerCtx = createPluginClientContext(store, 'owner', undefined)
   const host = document.createElement('div')
-  renderToString(host, e(
+  const root = renderToString(host, e(
     HelmStoreContext.Provider, { value: store },
     e(PluginClientContext.Provider, { value: ownerCtx },
       e(PluginSlot, { name: 'loop' })),
@@ -154,6 +157,7 @@ test('PluginSlot：环检测显式告警且不死循环', { timeout: 60_000 }, (
   assert.ok(host.textContent !== undefined)
   // 有限深度内终止：渲染结果包含环告警文本（链上 p2/cycle 两次出现）
   assert.match(host.textContent ?? '', /循环嵌套|最大深度/, '显式环告警而非栈溢出')
+  act(() => { root.unmount() })
 })
 
 test('JSON 轨 Slot 原语：$data 透传子项、无 PluginClientContext 也可用（ownerPluginId）', { timeout: 60_000 }, () => {
@@ -161,7 +165,7 @@ test('JSON 轨 Slot 原语：$data 透传子项、无 PluginClientContext 也可
     slotContribution('p1', 'a', 'owner/zone', { json: { component: 'Text', text: '{$data.zone}' } }),
   ])
   const host = document.createElement('div')
-  renderToString(host, e(
+  const root = renderToString(host, e(
     HelmStoreContext.Provider, { value: store },
     e(HelmSpecView, {
       pluginId: 'owner',
@@ -170,12 +174,13 @@ test('JSON 轨 Slot 原语：$data 透传子项、无 PluginClientContext 也可
     }),
   ))
   assert.equal(host.textContent, 'north-1', '声明式 Slot 原语渲染贡献项并透传 $data')
+  act(() => { root.unmount() })
 })
 
 test('JSON 轨 $sessionDocs：sessionDocs 声明挂载到求值域（未订阅时缺省）', { timeout: 60_000 }, () => {
   const store = makeTestStore()
   const host = document.createElement('div')
-  renderToString(host, e(
+  const root = renderToString(host, e(
     HelmStoreContext.Provider, { value: store },
     e(HelmSpecView, {
       pluginId: 'owner',
@@ -183,4 +188,5 @@ test('JSON 轨 $sessionDocs：sessionDocs 声明挂载到求值域（未订阅�
     }),
   ))
   assert.equal(host.textContent, '—', '$sessionDocs 求值域存在（未收到文档时 Text 显示占位破折号）')
+  act(() => { root.unmount() })
 })

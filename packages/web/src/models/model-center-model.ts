@@ -29,6 +29,10 @@ export interface ProviderItem {
   modelsCount: number
   description?: string
   baseUrl?: string
+  dynamic?: boolean
+  pluginId?: string
+  custom?: boolean
+  authMethods?: Array<{ type: 'api_key' | 'oauth'; label: string }>
   models?: ProviderModelItem[]
 }
 
@@ -153,6 +157,16 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
     ],
   },
   {
+    id: 'magpie',
+    name: 'Magpie 网关',
+    type: 'local',
+    configured: false,
+    modelsCount: 0,
+    dynamic: true,
+    pluginId: 'builtin:magpie',
+    description: '内置 Magpie 模型网关接入，支持多路由组、动态配额调度与高可用故障转移。',
+  },
+  {
     id: 'custom',
     name: '自定义 OpenAI 兼容接口',
     type: 'local',
@@ -186,6 +200,7 @@ export function getProviderIconName(id: string): string {
   if (norm.includes('openrouter')) return 'network'
   if (norm.includes('mistral')) return 'zap'
   if (norm.includes('groq')) return 'zap'
+  if (norm.includes('magpie')) return 'sparkles'
   if (norm.includes('custom')) return 'sliders'
   return 'cpu'
 }
@@ -265,13 +280,28 @@ export function summarizeProviders(
 }
 
 /**
- * 将静态预设供应商与运行时凭证、自定义网关及目录模型融合
+ * 判断供应商是否属于本地私有类型
+ */
+export function isLocalProvider(id: string): boolean {
+  const norm = (id ?? '').toLowerCase()
+  return (
+    norm.includes('ollama') ||
+    norm.includes('lmstudio') ||
+    norm.includes('local') ||
+    norm.includes('custom') ||
+    norm.includes('magpie')
+  )
+}
+
+/**
+ * 将预设供应商与后端真实目录、运行时凭证、自定义网关及目录模型全量融合
  */
 export function buildMergedProviders(
   baseProviders: ProviderItem[] = DEFAULT_PROVIDERS,
   credentials?: Array<{ id: string; configured?: boolean }>,
   gateways?: ProviderConfig[],
   catalogModels?: ModelDescriptor[],
+  catalog?: ModelProviderSummary[],
 ): ProviderItem[] {
   const configuredIds = new Set(
     (credentials ?? [])
@@ -286,12 +316,81 @@ export function buildMergedProviders(
     modelsByProvider.set(m.provider, list)
   }
 
-  const result: ProviderItem[] = baseProviders.map((base) => {
-    const isConfigured = configuredIds.has(base.id.toLowerCase())
-    const remoteModels = modelsByProvider.get(base.id)
+  // 1. 建立以 ID 为键的映射表，优先以 baseProviders 提供的高精元数据初始化
+  const providerMap = new Map<string, ProviderItem>()
+  for (const base of baseProviders) {
+    providerMap.set(base.id.toLowerCase(), { ...base })
+  }
 
-    let models = base.models
-    let modelsCount = base.modelsCount
+  // 2. 融入后端实时拉取的完整供应商目录（包含 magpie 与全部插件或外部注册的供应商）
+  for (const cat of catalog ?? []) {
+    const key = cat.id.toLowerCase()
+    const existing = providerMap.get(key)
+    if (existing) {
+      existing.name = existing.name || cat.name || cat.id
+      existing.baseUrl = cat.baseUrl || existing.baseUrl
+      existing.dynamic = Boolean(cat.dynamic || existing.dynamic)
+      existing.pluginId = cat.pluginId || existing.pluginId
+      existing.authMethods = cat.authMethods ?? existing.authMethods
+      if (cat.modelCount && cat.modelCount > existing.modelsCount) {
+        existing.modelsCount = cat.modelCount
+      }
+    } else {
+      providerMap.set(key, {
+        id: cat.id,
+        name: cat.name || cat.id,
+        type: isLocalProvider(cat.id) ? 'local' : 'commercial',
+        configured: false,
+        modelsCount: cat.modelCount ?? 0,
+        baseUrl: cat.baseUrl,
+        dynamic: Boolean(cat.dynamic),
+        pluginId: cat.pluginId,
+        authMethods: cat.authMethods,
+        description: cat.dynamic
+          ? '支持动态模型目录刷新的大语言模型供应商。'
+          : `${cat.name || cat.id} 模型供应商。`,
+      })
+    }
+  }
+
+  // 3. 融入自定义网关（store.providers）
+  for (const gw of gateways ?? []) {
+    const key = gw.id.toLowerCase()
+    const existing = providerMap.get(key)
+    if (existing) {
+      existing.baseUrl = gw.baseUrl || existing.baseUrl
+      existing.custom = true
+      if (gw.enabled) existing.configured = true
+    } else {
+      providerMap.set(key, {
+        id: gw.id,
+        name: gw.label || gw.id,
+        type: 'local',
+        custom: true,
+        configured: Boolean(gw.enabled),
+        baseUrl: gw.baseUrl,
+        modelsCount: gw.models?.length ?? 1,
+        description: '自定义 OpenAI 兼容协议接口网关。',
+        models: gw.models?.map((mid) => ({
+          id: mid,
+          name: mid,
+          tags: ['自定义'],
+          enabled: true,
+        })) ?? [{ id: 'default', name: 'Default Model', tags: ['自定义'], enabled: true }],
+      })
+    }
+  }
+
+  // 4. 计算每个供应商的模型与已配置状态
+  const result: ProviderItem[] = []
+  for (const provider of providerMap.values()) {
+    const remoteModels = modelsByProvider.get(provider.id)
+    const isConfiguredByKey = configuredIds.has(provider.id.toLowerCase())
+    const hasAvailableModel = Boolean(remoteModels && remoteModels.some((m) => m.available))
+    const isConfigured = provider.configured || isConfiguredByKey || hasAvailableModel
+
+    let models = provider.models
+    let modelsCount = provider.modelsCount
 
     if (remoteModels && remoteModels.length > 0) {
       models = remoteModels.map((rm) => ({
@@ -303,38 +402,18 @@ export function buildMergedProviders(
       modelsCount = models.length
     }
 
-    return {
-      ...base,
+    result.push({
+      ...provider,
       configured: isConfigured,
       models,
       modelsCount,
-    }
-  })
-
-  // 融合网关中的自定义提供商
-  for (const gw of gateways ?? []) {
-    const existing = result.find((r) => r.id === gw.id)
-    if (existing) {
-      existing.baseUrl = gw.baseUrl || existing.baseUrl
-      existing.configured = existing.configured || Boolean(gw.enabled)
-    } else {
-      result.push({
-        id: gw.id,
-        name: gw.label || gw.id,
-        type: 'local',
-        configured: Boolean(gw.enabled),
-        baseUrl: gw.baseUrl,
-        modelsCount: gw.models?.length ?? 1,
-        description: '自定义 OpenAI 兼容接口网关。',
-        models: gw.models?.map((mid) => ({
-          id: mid,
-          name: mid,
-          tags: ['自定义'],
-          enabled: true,
-        })) ?? [{ id: 'default', name: 'Default Model', tags: ['自定义'], enabled: true }],
-      })
-    }
+    })
   }
 
-  return result
+  // 5. 排序：已配置优先，其次按名称字母升序
+  return result.sort(
+    (a, b) =>
+      Number(b.configured) - Number(a.configured) ||
+      a.name.localeCompare(b.name),
+  )
 }

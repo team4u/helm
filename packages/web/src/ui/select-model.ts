@@ -16,6 +16,13 @@ export interface SelectChangeEvent<T extends string = string> {
   }
 }
 
+export interface MultiSelectChangeEvent<T extends string = string> {
+  target: {
+    value: T[]
+    name?: string
+  }
+}
+
 /**
  * 在可用选项中按步长寻找下一个未禁用的索引（支持上下环绕/边界截断）。
  */

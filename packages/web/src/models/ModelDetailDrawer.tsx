@@ -1,5 +1,8 @@
-import React, { useEffect, useState } from 'react'
+import React, { useContext, useEffect, useMemo, useState } from 'react'
+import { assetsApi, type ModelDescriptor } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
+import { HelmStoreContext } from '../lib/store-context.js'
+import { ConfirmDialog } from '../ui/AlertDialog.js'
 import {
   Dialog,
   DialogClose,
@@ -8,7 +11,7 @@ import {
   DialogPortal,
   DialogTitle,
 } from '../ui/Dialog.js'
-import { Switch } from '../ui/Switch.js'
+import { Select } from '../ui/Select.js'
 import {
   getProviderIconName,
   type ProviderItem,
@@ -20,6 +23,8 @@ export interface ModelDetailDrawerProps {
   open: boolean
   onClose: () => void
   inline?: boolean
+  availableModels?: ModelDescriptor[]
+  defaultModelInfo?: { defaultModel: string; defaultThinkingLevel: string } | null
   onSave?: (
     providerId: string,
     data: { apiKey?: string; baseUrl?: string; models?: ProviderModelItem[] },
@@ -28,31 +33,40 @@ export interface ModelDetailDrawerProps {
     providerId: string,
     baseUrl?: string,
   ) => Promise<{ success: boolean; latencyMs?: number; message?: string }>
+  onDefaultModelSaved?: (info: { defaultModel: string; defaultThinkingLevel: string }) => void
 }
 
 /**
- * 模型与凭证中心供应商详情与凭证配置抽屉：
+ * 模型与凭证中心供应商详情、凭证配置与全局默认模型抽屉：
  * - 基于 Radix UI Dialog 原语封装，540px 右侧滑出抽屉；
- * - 头部展示供应商名称、ID、状态与类型；
- * - 凭证与连接设置：API Key 安全掩码输入框、Base URL 输入框与连通性测试按钮；
- * - 模型列表管理：使用 Radix Switch 开关逐一启用或停用模型路由；
- * - 支持 inline 参数透传给 Dialog 与 DialogPortal 满足 SSR 单元测试断言；
- * - 绝对零 Emoji 规范。
+ * - 针对 provider.id === 'defaults'：渲染全局默认模型与思考档位配置；
+ * - 针对常规供应商：渲染 API 密钥安全输入、服务端点、动态目录刷新与单个模型路由开关；
+ * - 凭据删除支持 ConfirmDialog 二次确认；
+ * - 绝对零 Emoji 规范，遵循 Fast Refresh 与 WAI-ARIA 原语。
  */
 export function ModelDetailDrawer({
   provider,
   open,
   onClose,
   inline = false,
+  availableModels,
+  defaultModelInfo,
   onSave,
   onTestConnection,
+  onDefaultModelSaved,
 }: ModelDetailDrawerProps): React.JSX.Element {
+  const store = useContext(HelmStoreContext)
+  const isDefaultsView = provider?.id === 'defaults'
+  const catalogModels = availableModels ?? store?.models ?? []
+
+  // 常规供应商表单状态
   const [apiKey, setApiKey] = useState('')
   const [baseUrl, setBaseUrl] = useState(() => provider?.baseUrl ?? '')
   const [models, setModels] = useState<ProviderModelItem[]>(() =>
     provider?.models ? provider.models.map((m) => ({ ...m })) : [],
   )
   const [testing, setTesting] = useState(false)
+  const [refreshingCatalog, setRefreshingCatalog] = useState(false)
   const [testResult, setTestResult] = useState<{
     success: boolean
     latencyMs?: number
@@ -61,17 +75,61 @@ export function ModelDetailDrawer({
   const [saving, setSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  // 全局默认模型表单状态
+  const [globalModel, setGlobalModel] = useState(() => defaultModelInfo?.defaultModel ?? '')
+  const [globalThinkingLevel, setGlobalThinkingLevel] = useState(
+    () => defaultModelInfo?.defaultThinkingLevel ?? '',
+  )
+  const [loadingDefaults, setLoadingDefaults] = useState(false)
+
+  // 同步全局默认模型
+  useEffect(() => {
+    if (defaultModelInfo) {
+      setGlobalModel(defaultModelInfo.defaultModel)
+      setGlobalThinkingLevel(defaultModelInfo.defaultThinkingLevel)
+    }
+  }, [defaultModelInfo])
+
+  // 若处于 defaults 视图且尚未获取，尝试主动拉取
+  useEffect(() => {
+    if (isDefaultsView && open && !defaultModelInfo) {
+      let cancelled = false
+      setLoadingDefaults(true)
+      assetsApi
+        .getDefaultModel()
+        .then((res) => {
+          if (!cancelled) {
+            setGlobalModel(res.defaultModel)
+            setGlobalThinkingLevel(res.defaultThinkingLevel)
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setSaveError(err instanceof Error ? err.message : String(err))
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setLoadingDefaults(false)
+        })
+      return () => {
+        cancelled = true
+      }
+    }
+  }, [isDefaultsView, open, defaultModelInfo])
 
   // 当选中的供应商变化时同步本地表单状态
   useEffect(() => {
-    if (provider) {
+    if (provider && !isDefaultsView) {
       setApiKey('')
       setBaseUrl(provider.baseUrl ?? '')
       setModels(provider.models ? provider.models.map((m) => ({ ...m })) : [])
       setTestResult(null)
       setSaveError(null)
       setSaveSuccess(false)
-    } else {
+    } else if (!isDefaultsView) {
       setApiKey('')
       setBaseUrl('')
       setModels([])
@@ -79,14 +137,34 @@ export function ModelDetailDrawer({
       setSaveError(null)
       setSaveSuccess(false)
     }
-  }, [provider])
+  }, [provider, isDefaultsView])
 
-  const iconName = provider ? getProviderIconName(provider.id) : 'cpu'
+  const iconName = isDefaultsView ? 'sliders' : provider ? getProviderIconName(provider.id) : 'cpu'
 
-  // 模型启用/停用开关切换
-  const handleToggleModel = (modelId: string, nextChecked: boolean) => {
+  // 计算已启用的模型 ID 与多选下拉选项
+  const enabledModelIds = useMemo(
+    () => models.filter((m) => m.enabled).map((m) => m.id),
+    [models],
+  )
+
+  const modelOptions = useMemo(
+    () =>
+      models.map((m) => ({
+        value: m.id,
+        label: m.name,
+        meta: m.tags && m.tags.length > 0 ? m.tags.join(', ') : undefined,
+      })),
+    [models],
+  )
+
+  const handleModelsChange = (nextSelectedIds: string[]) => {
+    const set = new Set(nextSelectedIds)
+    setModels((prev) => prev.map((item) => ({ ...item, enabled: set.has(item.id) })))
+  }
+
+  const handleRemoveModel = (modelId: string) => {
     setModels((prev) =>
-      prev.map((item) => (item.id === modelId ? { ...item, enabled: nextChecked } : item)),
+      prev.map((item) => (item.id === modelId ? { ...item, enabled: false } : item)),
     )
   }
 
@@ -100,14 +178,36 @@ export function ModelDetailDrawer({
       if (onTestConnection) {
         const res = await onTestConnection(provider.id, baseUrl.trim() || undefined)
         setTestResult(res)
+      } else if (provider.dynamic) {
+        const start = Date.now()
+        const res = await assetsApi.refreshModels([provider.id])
+        const latencyMs = Date.now() - start
+        if (res.errors?.[provider.id]) {
+          setTestResult({
+            success: false,
+            latencyMs,
+            message: `连接失败: ${res.errors[provider.id]}`,
+          })
+        } else {
+          setTestResult({
+            success: true,
+            latencyMs,
+            message: '供应商端点连通正常，模型目录同步成功。',
+          })
+        }
       } else {
-        // 默认连通性模拟响应
-        await new Promise((r) => setTimeout(r, 200))
-        setTestResult({
-          success: true,
-          latencyMs: 124,
-          message: '供应商端点连通正常，服务协议握手成功。',
-        })
+        const isKeyPresent = Boolean(apiKey.trim() || provider.configured)
+        if (!isKeyPresent && provider.type === 'commercial') {
+          setTestResult({
+            success: false,
+            message: '未配置 API 密钥，请先输入密钥后再测试连接。',
+          })
+        } else {
+          setTestResult({
+            success: true,
+            message: '端点与凭证格式校验正常。',
+          })
+        }
       }
     } catch (err) {
       setTestResult({
@@ -119,8 +219,67 @@ export function ModelDetailDrawer({
     }
   }
 
-  // 保存配置
-  const handleSave = async () => {
+  // 动态供应商刷新模型目录
+  const handleRefreshCatalog = async () => {
+    if (!provider) return
+    setRefreshingCatalog(true)
+    setSaveError(null)
+    try {
+      const res = await assetsApi.refreshModels([provider.id])
+      if (store?.refreshAssets) {
+        await store.refreshAssets()
+      }
+      const refreshError = res.errors?.[provider.id]
+      if (refreshError) {
+        setSaveError(refreshError)
+      } else if (res.aborted) {
+        setSaveError('模型目录刷新已取消，请重试。')
+      } else {
+        setSaveSuccess(true)
+        setTimeout(() => setSaveSuccess(false), 2400)
+        store?.pushNotice?.({
+          type: 'notification',
+          level: 'info',
+          title: '模型目录已刷新',
+          body: `${provider.name} 已重新同步最新模型目录。`,
+        })
+      }
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRefreshingCatalog(false)
+    }
+  }
+
+  // 真实删除密钥
+  const handleDeleteCredential = async () => {
+    if (!provider) return
+    setDeleting(true)
+    setSaveError(null)
+    try {
+      await assetsApi.deleteCredential(provider.id)
+      setApiKey('')
+      if (store?.refreshAssets) {
+        await store.refreshAssets()
+      }
+      store?.pushNotice?.({
+        type: 'notification',
+        level: 'info',
+        title: '密钥已删除',
+        body: `${provider.name} 的本地凭证已成功移除。`,
+      })
+      setDeleteConfirmOpen(false)
+      setSaveSuccess(true)
+      setTimeout(() => setSaveSuccess(false), 2400)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  // 保存常规供应商配置
+  const handleSaveProvider = async () => {
     if (!provider) return
     setSaving(true)
     setSaveError(null)
@@ -131,6 +290,11 @@ export function ModelDetailDrawer({
           baseUrl: baseUrl.trim() ? baseUrl.trim() : undefined,
           models,
         })
+      } else if (apiKey.trim()) {
+        await assetsApi.setCredential(provider.id, apiKey.trim())
+        if (store?.refreshAssets) {
+          await store.refreshAssets()
+        }
       }
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 2400)
@@ -141,256 +305,450 @@ export function ModelDetailDrawer({
     }
   }
 
+  // 保存全局默认模型设置
+  const handleSaveDefaults = async () => {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const res = await assetsApi.setDefaultModel(
+        globalModel,
+        globalThinkingLevel || undefined,
+      )
+      if (store?.refreshAssets) {
+        await store.refreshAssets()
+      }
+      onDefaultModelSaved?.({
+        defaultModel: res.defaultModel,
+        defaultThinkingLevel: res.defaultThinkingLevel,
+      })
+      store?.pushNotice?.({
+        type: 'notification',
+        level: 'info',
+        title: '全局默认模型已更新',
+        body: res.defaultModel ? `已设置为 ${res.defaultModel}` : '已清除全局默认模型',
+      })
+      setSaveSuccess(true)
+      setTimeout(() => setSaveSuccess(false), 2400)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // 计算全局模型的可用思考档位
+  const availableThinkingLevels = React.useMemo(() => {
+    if (!globalModel) return ['off']
+    const found = catalogModels.find((m) => m.id === globalModel)
+    return found?.thinkingLevels ?? ['off']
+  }, [globalModel, catalogModels])
+
   return (
-    <Dialog
-      open={open}
-      inline={inline}
-      onOpenChange={(isOpen) => {
-        if (!isOpen) onClose()
-      }}
-    >
-      <DialogPortal inline={inline}>
-        <DialogOverlay className="modal-backdrop primary-drawer-backdrop" />
-        <DialogContent
-          className="primary-drawer-content"
-          role="dialog"
-          aria-label={provider ? `${provider.name} 详情与凭证设置` : '供应商详情与凭证设置'}
-        >
-          {/* 头部元信息 */}
-          <div className="primary-drawer-header">
-            <div className="primary-drawer-header-left">
-              <div className="primary-drawer-icon-wrap">
-                <HelmIcon name={iconName} size={20} />
-              </div>
-              <div className="primary-drawer-title-col">
-                <div className="primary-drawer-title-row">
-                  <DialogTitle className="primary-drawer-title">
-                    {provider?.name || '供应商详情'}
-                  </DialogTitle>
-                  {provider?.configured ? (
-                    <span className="badge badge-ok">已配置</span>
-                  ) : (
-                    <span className="badge badge-neutral">未配置</span>
-                  )}
-                  <span className="badge badge-neutral">
-                    {provider?.type === 'commercial' ? '商业云端' : '本地私有'}
-                  </span>
+    <>
+      <Dialog
+        open={open}
+        inline={inline}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) onClose()
+        }}
+      >
+        <DialogPortal inline={inline}>
+          <DialogOverlay className="modal-backdrop primary-drawer-backdrop" />
+          <DialogContent
+            className="primary-drawer-content"
+            role="dialog"
+            aria-label={
+              isDefaultsView
+                ? '全局默认模型与思考档位'
+                : provider
+                  ? `${provider.name} 详情与凭证设置`
+                  : '供应商详情与凭证设置'
+            }
+          >
+            {/* 头部元信息 */}
+            <div className="primary-drawer-header">
+              <div className="primary-drawer-header-left">
+                <div className="primary-drawer-icon-wrap">
+                  <HelmIcon name={iconName} size={20} />
                 </div>
-                {provider && <div className="text-xs text-subtle mono">{provider.id}</div>}
-              </div>
-            </div>
-            <DialogClose asChild>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                aria-label="关闭"
-                title="关闭"
-              >
-                <HelmIcon name="x" size={14} />
-              </button>
-            </DialogClose>
-          </div>
-
-          {/* 抽屉主体 */}
-          <div className="primary-drawer-body">
-            {!provider ? (
-              <div className="primary-center-empty">
-                <div className="primary-center-empty-text">未选择供应商</div>
-              </div>
-            ) : (
-              <>
-                {/* 凭证与连接设置 */}
-                <div className="section-flat">
-                  <div className="section-flat-header">
-                    <HelmIcon name="key" size={14} />
-                    <span className="section-flat-title">凭证与连接设置</span>
-                  </div>
-                  <div className="form-grid">
-                    <label htmlFor="model-drawer-api-key" className="form-grid-label">
-                      API 密钥
-                    </label>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <input
-                        id="model-drawer-api-key"
-                        type="password"
-                        className="input"
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                        placeholder={
-                          provider.configured
-                            ? '已配置（留空保持不变）'
-                            : '请输入 API 密钥'
-                        }
-                        autoComplete="off"
-                      />
-                      <span className="text-xs text-subtle">
-                        密钥密文将安全存储于系统保密箱中，调用时由内核自动注入，不向模型泄露。
+                <div className="primary-drawer-title-col">
+                  <div className="primary-drawer-title-row">
+                    <DialogTitle className="primary-drawer-title">
+                      {isDefaultsView ? '全局默认模型与思考档位' : provider?.name || '供应商详情'}
+                    </DialogTitle>
+                    {isDefaultsView ? (
+                      <span className={`badge ${globalModel ? 'badge-ok' : 'badge-neutral'}`}>
+                        {globalModel ? '已配置' : '未设置'}
                       </span>
-                    </div>
-
-                    <label htmlFor="model-drawer-base-url" className="form-grid-label">
-                      服务端点
-                    </label>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <input
-                        id="model-drawer-base-url"
-                        type="text"
-                        className="input mono"
-                        value={baseUrl}
-                        onChange={(e) => setBaseUrl(e.target.value)}
-                        placeholder={
-                          provider.type === 'local'
-                            ? 'http://127.0.0.1:11434'
-                            : 'https://api.example.com/v1（留空使用默认地址）'
-                        }
-                      />
-                      <span className="text-xs text-subtle">
-                        用于反向代理、内网转发端点或本地推理服务接口。
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* 连通性测试按钮与测试状态 */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6 }}>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={handleTest}
-                      disabled={testing}
-                    >
-                      <HelmIcon name="activity" size={12} />
-                      <span>{testing ? '正在测试连接...' : '测试连接'}</span>
-                    </button>
-                  </div>
-
-                  {testResult && (
-                    <div
-                      className={`jr-callout ${testResult.success ? 'jr-callout-ok' : 'jr-callout-err'}`}
-                      role={testResult.success ? 'status' : 'alert'}
-                      style={{ marginTop: 8 }}
-                    >
-                      <HelmIcon
-                        name={testResult.success ? 'check' : 'alert-circle'}
-                        size={13}
-                      />
-                      <span className="selectable">
-                        {testResult.message}
-                        {testResult.latencyMs !== undefined &&
-                          `（延迟 ${testResult.latencyMs}ms）`}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* 模型列表管理 */}
-                <div className="section-flat">
-                  <div className="section-flat-header" style={{ justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <HelmIcon name="cpu" size={14} />
-                      <span className="section-flat-title">模型清单与路由控制</span>
-                    </div>
-                    <span className="badge badge-neutral mono" style={{ fontSize: 11 }}>
-                      {`共 ${models.length} 个模型`}
-                    </span>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-                    {models.length === 0 ? (
-                      <div className="text-subtle text-xs" style={{ padding: '8px 0' }}>
-                        该供应商暂未登记预置模型，保存端点配置后将自动同步目录。
-                      </div>
                     ) : (
-                      models.map((model) => (
-                        <div
-                          key={model.id}
-                          className="list-item-btn"
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            padding: '10px 12px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            background: 'var(--bg-elevated)',
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: 2,
-                              minWidth: 0,
-                              flex: 1,
-                              marginRight: 12,
-                            }}
-                          >
-                            <div
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 6,
-                                flexWrap: 'wrap',
-                              }}
-                            >
-                              <span
-                                style={{
-                                  fontSize: 13,
-                                  fontWeight: 500,
-                                  color: 'var(--fg)',
-                                }}
-                              >
-                                {model.name}
-                              </span>
-                              {model.tags?.map((tag) => (
-                                <span
-                                  key={tag}
-                                  className="badge badge-neutral"
-                                  style={{ fontSize: 10 }}
-                                >
-                                  {tag}
-                                </span>
-                              ))}
-                            </div>
-                            <span className="text-xs text-subtle mono">{model.id}</span>
-                          </div>
-                          <Switch
-                            checked={model.enabled}
-                            onChange={(checked) => handleToggleModel(model.id, checked)}
-                            aria-label={`启用或停用 ${model.name}`}
-                          />
-                        </div>
-                      ))
+                      <>
+                        {provider?.configured ? (
+                          <span className="badge badge-ok">已配置</span>
+                        ) : (
+                          <span className="badge badge-neutral">未配置</span>
+                        )}
+                        <span className="badge badge-neutral">
+                          {provider?.type === 'commercial' ? '商业云端' : '本地私有'}
+                        </span>
+                        {provider?.dynamic && (
+                          <span className="badge badge-neutral">动态同步</span>
+                        )}
+                      </>
                     )}
                   </div>
+                  <div className="text-xs text-subtle mono">
+                    {isDefaultsView ? 'global-defaults' : provider?.id}
+                  </div>
                 </div>
-              </>
-            )}
-          </div>
+              </div>
+              <DialogClose asChild>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  aria-label="关闭"
+                  title="关闭"
+                >
+                  <HelmIcon name="x" size={14} />
+                </button>
+              </DialogClose>
+            </div>
 
-          {/* 抽屉底部动作栏 */}
-          <div className="primary-drawer-footer">
-            {saveSuccess && (
-              <span className="text-xs text-ok" style={{ marginRight: 'auto' }}>
-                配置已成功保存
-              </span>
-            )}
-            {saveError && (
-              <span className="text-xs text-danger" style={{ marginRight: 'auto' }}>
-                {saveError}
-              </span>
-            )}
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={handleSave}
-              disabled={saving || !provider}
-            >
-              <HelmIcon name="check" size={14} />
-              <span>{saving ? '保存中...' : '保存配置'}</span>
-            </button>
-          </div>
-        </DialogContent>
-      </DialogPortal>
-    </Dialog>
+            {/* 抽屉主体 */}
+            <div className="primary-drawer-body">
+              {isDefaultsView ? (
+                /* 全局默认模型设置视图 */
+                <div className="section-flat">
+                  <div className="section-flat-header">
+                    <HelmIcon name="sliders" size={14} />
+                    <span className="section-flat-title">全局模型规则</span>
+                  </div>
+                  <p className="text-xs text-subtle" style={{ margin: '4px 0 12px' }}>
+                    新会话的继承链：会话临时覆盖 &gt; Profile 模型 &gt; 此处全局默认。切换后对所有未显式覆盖模型的会话即时生效。
+                  </p>
+
+                  <div className="form-grid">
+                    <label htmlFor="model-drawer-global-model" className="form-grid-label">
+                      默认模型
+                    </label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <Select
+                        id="model-drawer-global-model"
+                        value={globalModel}
+                        disabled={loadingDefaults || saving}
+                        inline={inline}
+                        aria-label="全局默认模型"
+                        options={[
+                          { value: '', label: '未设置（未配置模型的会话无法回复）' },
+                          ...catalogModels
+                            .filter((m) => m.available)
+                            .map((m) => ({
+                              value: m.id,
+                              label: m.id,
+                            })),
+                          ...(globalModel !== '' &&
+                          !catalogModels.some((m) => m.id === globalModel && m.available)
+                            ? [{ value: globalModel, label: `${globalModel}（目录外）` }]
+                            : []),
+                        ]}
+                        onChange={(e) => {
+                          const next = e.target.value
+                          setGlobalModel(next)
+                          const nextLevels =
+                            catalogModels.find((m) => m.id === next)?.thinkingLevels ?? ['off']
+                          if (
+                            globalThinkingLevel !== '' &&
+                            !nextLevels.includes(globalThinkingLevel)
+                          ) {
+                            setGlobalThinkingLevel('')
+                          }
+                        }}
+                      />
+                      <span className="text-xs text-subtle">
+                        可供选择的模型来自所有已配置且可用的供应商目录。
+                      </span>
+                    </div>
+
+                    <label htmlFor="model-drawer-thinking-level" className="form-grid-label">
+                      默认思考档位
+                    </label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <Select
+                        id="model-drawer-thinking-level"
+                        value={globalThinkingLevel}
+                        disabled={loadingDefaults || saving || !globalModel}
+                        inline={inline}
+                        aria-label="全局默认思考档位"
+                        options={[
+                          { value: '', label: '跟随 SDK 缺省' },
+                          ...availableThinkingLevels.map((lvl) => ({
+                            value: lvl,
+                            label: lvl,
+                          })),
+                        ]}
+                        onChange={(e) => setGlobalThinkingLevel(e.target.value)}
+                      />
+                      {globalModel && availableThinkingLevels.length <= 1 && (
+                        <span className="text-xs text-subtle">所选模型不支持思考档位。</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : !provider ? (
+                <div className="primary-center-empty">
+                  <div className="primary-center-empty-text">未选择供应商</div>
+                </div>
+              ) : (
+                <>
+                  {/* 凭证与连接设置 */}
+                  <div className="section-flat">
+                    <div
+                      className="section-flat-header"
+                      style={{ justifyContent: 'space-between' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <HelmIcon name="key" size={14} />
+                        <span className="section-flat-title">凭证与连接设置</span>
+                      </div>
+                      {provider.dynamic && (
+                        <button
+                          type="button"
+                          className="btn btn-xs btn-ghost"
+                          onClick={handleRefreshCatalog}
+                          disabled={refreshingCatalog}
+                          title="重新同步该供应商的动态模型目录"
+                        >
+                          <HelmIcon
+                            name="refresh-cw"
+                            size={12}
+                            className={refreshingCatalog ? 'spin' : ''}
+                          />
+                          <span>{refreshingCatalog ? '刷新中...' : '刷新目录'}</span>
+                        </button>
+                      )}
+                    </div>
+                    <div className="form-grid">
+                      <label htmlFor="model-drawer-api-key" className="form-grid-label">
+                        API 密钥
+                      </label>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <input
+                          id="model-drawer-api-key"
+                          type="password"
+                          className="input"
+                          value={apiKey}
+                          onChange={(e) => setApiKey(e.target.value)}
+                          placeholder={
+                            provider.configured
+                              ? '已配置（留空保持不变）'
+                              : '请输入 API 密钥'
+                          }
+                          autoComplete="off"
+                        />
+                        <span className="text-xs text-subtle">
+                          密钥密文将安全存储于系统保密箱中，调用时由内核自动注入，不向模型泄露。
+                        </span>
+                      </div>
+
+                      <label htmlFor="model-drawer-base-url" className="form-grid-label">
+                        服务端点
+                      </label>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <input
+                          id="model-drawer-base-url"
+                          type="text"
+                          className="input mono"
+                          value={baseUrl}
+                          onChange={(e) => setBaseUrl(e.target.value)}
+                          placeholder={
+                            provider.baseUrl ||
+                            (provider.type === 'local'
+                              ? 'http://127.0.0.1:11434'
+                              : 'https://api.example.com/v1（留空使用默认地址）')
+                          }
+                        />
+                        <span className="text-xs text-subtle">
+                          用于反向代理、内网转发端点或本地推理服务接口。
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* 连通性测试与删除密钥 */}
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 10,
+                        marginTop: 10,
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={handleTest}
+                        disabled={testing}
+                      >
+                        <HelmIcon name="activity" size={12} />
+                        <span>{testing ? '正在测试连接...' : '测试连接'}</span>
+                      </button>
+
+                      {provider.configured && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost text-danger"
+                          onClick={() => setDeleteConfirmOpen(true)}
+                          disabled={deleting}
+                        >
+                          <HelmIcon name="trash" size={12} />
+                          <span>删除凭证</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {testResult && (
+                      <div
+                        className={`jr-callout ${testResult.success ? 'jr-callout-ok' : 'jr-callout-err'}`}
+                        role={testResult.success ? 'status' : 'alert'}
+                        style={{ marginTop: 8 }}
+                      >
+                        <HelmIcon
+                          name={testResult.success ? 'check' : 'alert-circle'}
+                          size={13}
+                        />
+                        <span className="selectable">
+                          {testResult.message}
+                          {testResult.latencyMs !== undefined &&
+                            `（延迟 ${testResult.latencyMs}ms）`}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 模型列表管理 */}
+                  <div className="section-flat">
+                    <div
+                      className="section-flat-header"
+                      style={{ justifyContent: 'space-between' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <HelmIcon name="cpu" size={14} />
+                        <span className="section-flat-title">模型清单与路由控制</span>
+                      </div>
+                      <span className="badge badge-neutral mono" style={{ fontSize: 11 }}>
+                        {`已启用 ${enabledModelIds.length} / 共 ${models.length} 个模型`}
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-subtle" style={{ margin: '4px 0 10px' }}>
+                      通过多选下拉框勾选允许调用的模型，未选中的模型将被内核路由层过滤屏蔽。
+                    </p>
+
+                    {models.length === 0 ? (
+                      <div className="text-subtle text-xs" style={{ padding: '8px 0' }}>
+                        {provider.dynamic
+                          ? '该动态供应商可通过上方「刷新目录」拉取可用模型。'
+                          : '该供应商暂未登记预置模型，保存端点配置后将自动同步目录。'}
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <Select
+                          multiple
+                          id="model-drawer-models-multiselect"
+                          aria-label="选择启用的模型"
+                          placeholder="点击下拉框选择或切换启用的模型..."
+                          options={modelOptions}
+                          value={enabledModelIds}
+                          onChange={(e) => handleModelsChange(e.target.value)}
+                          inline={inline}
+                        />
+
+                        {/* 已选模型标签胶囊清单 */}
+                        <div className="model-drawer-tags-wrap">
+                          {enabledModelIds.length === 0 ? (
+                            <span className="text-xs text-subtle">
+                              未启用任何模型（请在上方多选框中勾选）
+                            </span>
+                          ) : (
+                            models
+                              .filter((m) => m.enabled)
+                              .map((model) => (
+                                <span key={model.id} className="model-drawer-tag">
+                                  <span>{model.name}</span>
+                                  {model.tags?.map((tag) => (
+                                    <span
+                                      key={tag}
+                                      className="badge badge-neutral"
+                                      style={{ fontSize: 9, padding: '1px 4px' }}
+                                    >
+                                      {tag}
+                                    </span>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    className="model-drawer-tag-remove"
+                                    onClick={() => handleRemoveModel(model.id)}
+                                    aria-label={`移除 ${model.name}`}
+                                    title={`停用 ${model.name}`}
+                                  >
+                                    <HelmIcon name="x" size={10} />
+                                  </button>
+                                </span>
+                              ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* 抽屉底部动作栏 */}
+            <div className="primary-drawer-footer">
+              {saveSuccess && (
+                <span className="text-xs text-ok" style={{ marginRight: 'auto' }}>
+                  配置已成功保存
+                </span>
+              )}
+              {saveError && (
+                <span className="text-xs text-danger" style={{ marginRight: 'auto' }}>
+                  {saveError}
+                </span>
+              )}
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={isDefaultsView ? handleSaveDefaults : handleSaveProvider}
+                disabled={saving || (!isDefaultsView && !provider)}
+              >
+                <HelmIcon name="check" size={14} />
+                <span>
+                  {saving
+                    ? '保存中...'
+                    : isDefaultsView
+                      ? '保存全局默认'
+                      : '保存配置'}
+                </span>
+              </button>
+            </div>
+          </DialogContent>
+        </DialogPortal>
+      </Dialog>
+
+      {/* 删除凭据二次确认对话框 */}
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        onOpenChange={setDeleteConfirmOpen}
+        title="确认删除凭证"
+        description={`确定要删除 ${provider?.name ?? '该供应商'} 的本地密钥凭据吗？删除后未单独配置其他密钥的会话将无法访问此供应商。`}
+        confirmText="确认删除"
+        cancelText="取消"
+        danger
+        inline={inline}
+        onConfirm={handleDeleteCredential}
+        onCancel={() => setDeleteConfirmOpen(false)}
+      />
+    </>
   )
 }

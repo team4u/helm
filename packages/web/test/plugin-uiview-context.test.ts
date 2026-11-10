@@ -19,7 +19,7 @@ const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register({ url: 'http://localhost:3201/' })
+GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 test('sanitizeSlotPropsForSpec：函数/symbol/bigint 剔除，结构保留', { timeout: 60_000 }, () => {

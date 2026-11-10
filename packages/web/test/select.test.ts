@@ -206,7 +206,7 @@ test('Select：键盘首字母跳转（Typeahead Search）与 Enter 键选择触
         options,
         open: true,
         inline: true,
-        onChange: (event) => {
+        onChange: (event: SelectChangeEvent<string>) => {
           changedEvent = event
         },
       }),
@@ -240,6 +240,61 @@ test('Select：键盘首字母跳转（Typeahead Search）与 Enter 键选择触
     root.unmount()
   })
   container.remove()
+})
+
+test('Select multiple: 渲染多选触发器、全选与清空操作栏及复选框，且零 Emoji', { timeout: 60_000 }, () => {
+  const options: SelectOption<string>[] = [
+    { value: 'm1', label: 'Model 1', meta: '200K' },
+    { value: 'm2', label: 'Model 2', meta: '128K' },
+    { value: 'm3', label: 'Model 3' },
+  ]
+
+  const html = renderToString(
+    e(Select, {
+      multiple: true,
+      value: ['m1', 'm2'],
+      options,
+      onChange: () => {},
+      inline: true,
+      'aria-label': '模型多选',
+    }),
+  )
+
+  // 1. 结构与多选类名
+  assert.match(html, /class="[^"]*helm-select-multi[^"]*"/)
+  assert.match(html, /已选择[\s\S]*?2[\s\S]*?项/)
+  assert.match(html, /aria-label="模型多选"/)
+
+  // 2. 快捷全选与清空按钮
+  assert.match(html, /全选/)
+  assert.match(html, /清空/)
+
+  // 3. 复选框与选项呈现
+  assert.match(html, /role="checkbox"/)
+  assert.match(html, /Model 1/)
+  assert.match(html, /Model 2/)
+  assert.match(html, /200K/)
+
+  // 4. 零 Emoji
+  assert.equal(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u.test(html), false)
+})
+
+test('Select multiple: 全选时触发器显示已全选摘要文案', { timeout: 60_000 }, () => {
+  const options: SelectOption<string>[] = [
+    { value: 'm1', label: 'Model 1' },
+    { value: 'm2', label: 'Model 2' },
+  ]
+
+  const html = renderToString(
+    e(Select, {
+      multiple: true,
+      value: ['m1', 'm2'],
+      options,
+      onChange: () => {},
+    }),
+  )
+
+  assert.match(html, /已全选[\s\S]*?\(2\)/)
 })
 
 // ---------------------------------------------------------------------------

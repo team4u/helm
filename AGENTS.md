@@ -4,7 +4,7 @@
 
 ## 工作目录与历史仓库隔离（重要）
 
-- **必须在 `/root/code/helm` 下工作**：开发智能体的继承 `cwd` 可能位于 `/root/code/botx` 或 `/root/code/botd`（旧仓库），禁止沿用；每次开工先显式 `cd /root/code/helm`（或专属 `/root/code/helm-worktrees/<name>` 路径）。
+- **必须在 `/root/code/helm` 下工作**：开发智能体的继承 `cwd` 可能位于 `/root/code/botx` 或 `/root/code/botd`（旧仓库），禁止沿用；每次开工先显式 `cd /root/code/helm`（或同级专属 `../helm-worktrees/<name>` 路径）。
 - `/root/code/botx`、`/root/code/botd` 与 `/root/code/herdr` **只读**：可参考其代码与 `node_modules` 验证 SDK / 协议行为，绝不修改。
 - 数据目录为 `~/.helm`（可通过 `HELM_DATA_DIR` 覆盖），与 `~/.botx`、`~/.botd` 完全隔离；不得读写旧系统的运行数据。
 
@@ -98,8 +98,5 @@ pnpm build && pnpm typecheck && pnpm test
 
 - **主代理职责**：负责拆分任务、确定接口、协调子代理、审查结果与最终验收。重实现、大范围开发和成套测试交给子代理。
 - **子代理模型**：所有子代理统一使用 GLM（`glm-agent`），包括调查、审查、规划、实现与验收；除非用户明确变更此偏好。
-- **Worktree 隔离（严禁使用 `/tmp`）**：首 commit 之后并行开发一律在 `git worktree` 隔离目录进行：
-  - **存放位置**：统一使用磁盘目录 `/root/code/helm-worktrees/<name>`（如 `/root/code/helm-worktrees/feat-primary-centers`）。
-  - **严禁建在 `/tmp` 下**：避开 `tmpfs` 内存虚拟盘（防止多工作树及其 `node_modules`、构建产物吃满物理 RAM 导致系统 OOM，防重启丢失与损坏）。
-  - **子代理委派约束**：主代理规划并发任务与委派子代理时，必须在提示词中显式指定目标 worktree 位于 `/root/code/helm-worktrees/<name>`，并附带本文件的核心约束（专属 worktree 路径、旧仓只读、诚实性纪律、API/CLI 同步）；启动与续接子代理时不设置 `max_turns`。
+- **Worktree 隔离（严禁 `/tmp`）**：首 commit 后并行开发一律在主仓同级磁盘目录（`../helm-worktrees/<name>`）建 worktree，严禁建在 `/tmp`（避开 tmpfs 内存盘）；委派子代理提示词须显式指定该路径及核心约束，不设 `max_turns`。
 - **Git 提交**：中文 Conventional Commits（如 `feat(kernel): ...`），不加 `Co-Authored-By`。

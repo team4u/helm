@@ -25,7 +25,7 @@ const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register({ url: 'http://localhost:3201/' })
+GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 type ProbeResult = { value: unknown; diagnostics: { error?: string; connected: boolean; deleted: boolean; hasValue: boolean } }

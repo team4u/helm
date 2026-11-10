@@ -1417,6 +1417,97 @@ textarea {
   bottom: calc(100% + 4px);
 }
 
+/* 多选下拉框专用快捷条与搜索框 */
+.helm-select-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  gap: 6px;
+}
+
+.helm-select-action-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  height: 22px;
+  line-height: 20px;
+}
+
+.helm-select-search {
+  padding: 4px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.helm-select-search input {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--fg);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.helm-select-search input:focus {
+  border-color: var(--accent);
+}
+
+.helm-select-multi-option {
+  cursor: pointer;
+  user-select: none;
+}
+
+/* 模型抽屉标签胶囊网格 */
+.model-drawer-tags-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-height: 38px;
+  align-items: center;
+}
+
+.model-drawer-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--fg);
+}
+
+.model-drawer-tag-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color 100ms ease, background 100ms ease;
+}
+
+.model-drawer-tag-remove:hover {
+  color: var(--danger, #ef4444);
+  background: var(--bg-hover);
+}
+
 .helm-select-sm .helm-select-trigger {
   height: 24px;
   padding: 0 6px;
@@ -1627,7 +1718,7 @@ textarea {
 
 .helm-switch:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--bg-canvas), 0 0 0 4px var(--primary);
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
 }
 
 .helm-switch:disabled {
@@ -1646,12 +1737,12 @@ textarea {
 }
 
 .helm-switch.is-checked {
-  background: var(--primary);
-  border-color: var(--primary);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .helm-switch.is-checked .helm-switch-thumb {
-  background: #ffffff;
+  background: var(--fg-on-solid);
   transform: translateX(12px);
 }
 
@@ -1700,7 +1791,7 @@ textarea {
 
 .helm-checkbox:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--bg-canvas), 0 0 0 4px var(--primary);
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
 }
 
 .helm-checkbox:disabled {
@@ -1709,9 +1800,9 @@ textarea {
 
 .helm-checkbox.is-checked,
 .helm-checkbox.is-indeterminate {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: #ffffff;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--fg-on-solid);
 }
 
 .helm-checkbox-icon {
@@ -3886,6 +3977,82 @@ textarea {
   font-size: 12px;
   color: var(--fg-muted);
   white-space: nowrap;
+}
+
+/* 模型与凭证中心：全局默认模型状态横幅 */
+.model-global-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-subtle);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.model-global-banner-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.model-global-banner-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg);
+  flex-shrink: 0;
+}
+
+.model-global-banner-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.model-global-banner-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.model-global-banner-desc {
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+
+.model-global-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 680px) {
+  .model-global-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 14px;
+  }
+  .model-global-banner-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
 }
 
 .primary-center-toolbar {
