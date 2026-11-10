@@ -25,10 +25,16 @@
   - 平坦化区域：`.section-flat`、`.section-flat-header`、`.section-flat-title`（彻底移除嵌套卡片）；
   - 表单网格：`.form-grid`、`.form-grid-label`（两列弹性自适应，标签支持锁图标与必填星号）；
   - 空状态：`.empty-state`（线性矢量图标 + 居中说明文本）。
-- **公共组件使用规范**：
-  - **下拉菜单（Select）**：**严禁使用原生 `<select>`**，全仓统一使用基于 Radix 封装的 `packages/web/src/ui/Select.tsx`（高度统一 30px，字号 12px，无障碍 combobox 契约）；
-  - **开关控件（Switch）**：布尔值与启停控制统一使用 `packages/web/src/ui/Switch.tsx`；
-  - **弹窗与浮层（Dialog）**：统一使用 `packages/web/src/ui/Dialog.tsx`（自带 SSR / `renderToString` 兼容与 `inline` 渲染）。
+- **以 Radix UI 为唯一无头交互原语底座**：
+  - 凡涉及浮层、对话框、下拉选择、标签页、气泡提示等复杂交互组件，**必须统一使用或封装 `packages/web/src/ui/` 下基于 `@radix-ui/react-*` 的公共原语**，严禁使用原生控件（如 `<select>`），严禁随意引入第三方重量级 UI 库：
+    - **弹窗与抽屉（`Dialog` / `AlertDialog`）**：全屏抽屉与居中模态统一基于 `packages/web/src/ui/Dialog.tsx` 与 `AlertDialog.tsx`；
+    - **下拉菜单（`Select`）**：**全仓严禁使用原生 `<select>`**，统一使用 `packages/web/src/ui/Select.tsx`（高度统一 30px，字号 12px，无障碍 combobox 契约）；
+    - **下拉与气泡（`DropdownMenu` / `Popover`）**：操作菜单与弹出浮层统一使用 `packages/web/src/ui/DropdownMenu.tsx` 与 `Popover.tsx`；
+    - **标签页（`Tabs`）**：分段控制与视图切换统一使用 `packages/web/src/ui/Tabs.tsx`；
+    - **轻量提示（`Tooltip`）**：悬浮说明统一使用 `packages/web/src/ui/Tooltip.tsx`；
+    - **开关与勾选（`Switch` / `Checkbox`）**：布尔值与启停控制统一使用 `packages/web/src/ui/Switch.tsx` 与 `Checkbox.tsx`。
+  - **严禁手写简陋交互浮层**：严禁用原生 `div` + `position: absolute` + 随意 `onClick` 拼凑浮层，杜绝缺乏键盘无障碍（WAI-ARIA）、Focus Trap 焦点逃逸、Escape 键无法退出与遮罩穿透问题。
+  - **SSR 与单元测试防破裂契约**：所有基于 Radix 的封装原语必须保证在 Node / SSR（`renderToString`）测试环境下可用（统一采用 `typeof window === 'undefined'` 或 `inline` 属性降级直接渲染 children，避免 Portal 导致测试断言拿到空 DOM）。
 
 ## 3. 字体层次与移动端响应式规范
 
