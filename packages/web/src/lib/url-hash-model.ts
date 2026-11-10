@@ -108,10 +108,22 @@ function formatScreenParams(
     .map((key) => [`${prefix}${key}`, target.params![key]] as [string, string])
 }
 
-/** 解析 `c/<id>` / `s/<pluginId>/<screenId>` / `plugins`；先切分路径，再分别解码，避免 ID 中的转义斜杠破坏结构。 */
+/** 解析 `c/<id>` / `s/<pluginId>/<screenId>` / 各大一级全屏中心；先切分路径，再分别解码，避免 ID 中的转义斜杠破坏结构。 */
 function parseTargetValue(raw: string): ResolvedTarget | null {
   if (raw === 'plugins') {
     return { kind: 'plugins' }
+  }
+  if (raw === 'profiles') {
+    return { kind: 'profiles' }
+  }
+  if (raw === 'skills') {
+    return { kind: 'skills' }
+  }
+  if (raw === 'nodes') {
+    return { kind: 'nodes' }
+  }
+  if (raw === 'models' || raw === 'providers') {
+    return { kind: 'models' }
   }
   if (raw.startsWith('c/')) {
     const conversationId = parsePositiveInt(raw.slice(2))
@@ -132,7 +144,62 @@ function parseTargetValue(raw: string): ResolvedTarget | null {
 function formatTargetValue(target: ResolvedTarget): string {
   if (target.kind === 'conversation') return `c/${target.conversationId}`
   if (target.kind === 'screen') return `s/${encodeSegment(target.pluginId)}/${encodeSegment(target.screenId)}`
-  return 'plugins'
+  if (target.kind === 'plugins') return 'plugins'
+  if (target.kind === 'profiles') return 'profiles'
+  if (target.kind === 'skills') return 'skills'
+  if (target.kind === 'nodes') return 'nodes'
+  if (target.kind === 'models') return 'models'
+  return ''
+}
+
+function parseSplitTargetValue(raw: string): ResolvedTarget | null {
+  const queryIdx = raw.indexOf('?')
+  const path = queryIdx === -1 ? raw : raw.slice(0, queryIdx)
+  const baseTarget = parseTargetValue(path)
+  if (baseTarget === null) return null
+  if (queryIdx === -1) return baseTarget
+  const params = new URLSearchParams(raw.slice(queryIdx + 1))
+  const pluginParam = params.get('p')
+  const pluginId = pluginParam !== null && pluginParam.trim() !== '' ? pluginParam.trim() : undefined
+  const idParam = params.get('id')
+  const subId = idParam !== null && idParam.trim() !== '' ? idParam.trim() : undefined
+  if (baseTarget.kind === 'plugins') {
+    const pId = pluginId ?? subId
+    return pId !== undefined ? { kind: 'plugins', pluginId: pId } : baseTarget
+  }
+  if (baseTarget.kind === 'profiles' && subId !== undefined) {
+    return { kind: 'profiles', profileId: subId }
+  }
+  if (baseTarget.kind === 'skills' && subId !== undefined) {
+    return { kind: 'skills', skillId: subId }
+  }
+  if (baseTarget.kind === 'nodes' && subId !== undefined) {
+    return { kind: 'nodes', nodeId: subId }
+  }
+  if (baseTarget.kind === 'models' && subId !== undefined) {
+    return { kind: 'models', providerId: subId }
+  }
+  return baseTarget
+}
+
+function formatSplitTarget(target: ResolvedTarget): string {
+  const base = formatTargetValue(target)
+  if (target.kind === 'plugins' && target.pluginId) {
+    return `${base}?p=${encodeSegment(target.pluginId)}`
+  }
+  if (target.kind === 'profiles' && target.profileId) {
+    return `${base}?id=${encodeSegment(target.profileId)}`
+  }
+  if (target.kind === 'skills' && target.skillId) {
+    return `${base}?id=${encodeSegment(target.skillId)}`
+  }
+  if (target.kind === 'nodes' && target.nodeId) {
+    return `${base}?id=${encodeSegment(target.nodeId)}`
+  }
+  if (target.kind === 'models' && target.providerId) {
+    return `${base}?id=${encodeSegment(target.providerId)}`
+  }
+  return base
 }
 
 /** 列表型弹窗的子项 ID（profileId / skillId / pluginId / nodeId）或抽屉会话 ID。 */
@@ -192,12 +259,26 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
   const splitRaw = params.get('split')
   const workbenchTab = params.get('wb')
   let primaryTarget = parseTargetValue(path) ?? DEFAULT_PRIMARY
-  const splitTarget = splitRaw === null || splitRaw === '' ? null : parseTargetValue(splitRaw)
+  const splitTarget = splitRaw === null || splitRaw === '' ? null : parseSplitTargetValue(splitRaw)
 
   const pluginParam = params.get('p')
   const pluginId = pluginParam !== null && pluginParam.trim() !== '' ? pluginParam.trim() : undefined
-  if (primaryTarget.kind === 'plugins' && pluginId !== undefined) {
-    primaryTarget = { kind: 'plugins', pluginId }
+  const idParam = params.get('id')
+  const subId = idParam !== null && idParam.trim() !== '' ? idParam.trim() : undefined
+
+  if (primaryTarget.kind === 'plugins') {
+    const pId = pluginId ?? subId
+    if (pId !== undefined) {
+      primaryTarget = { kind: 'plugins', pluginId: pId }
+    }
+  } else if (primaryTarget.kind === 'profiles' && subId !== undefined) {
+    primaryTarget = { kind: 'profiles', profileId: subId }
+  } else if (primaryTarget.kind === 'skills' && subId !== undefined) {
+    primaryTarget = { kind: 'skills', skillId: subId }
+  } else if (primaryTarget.kind === 'nodes' && subId !== undefined) {
+    primaryTarget = { kind: 'nodes', nodeId: subId }
+  } else if (primaryTarget.kind === 'models' && subId !== undefined) {
+    primaryTarget = { kind: 'models', providerId: subId }
   }
 
   const state: WorkspaceLocationState = {
@@ -237,7 +318,19 @@ export function formatLocationHash(state: WorkspaceLocationState): string {
   if (state.primaryTarget.kind === 'plugins' && state.primaryTarget.pluginId !== undefined && state.primaryTarget.pluginId !== '') {
     query.push(['p', state.primaryTarget.pluginId])
   }
-  if (state.splitTarget !== null) query.push(['split', formatTargetValue(state.splitTarget)])
+  if (state.primaryTarget.kind === 'profiles' && state.primaryTarget.profileId !== undefined && state.primaryTarget.profileId !== '') {
+    query.push(['id', state.primaryTarget.profileId])
+  }
+  if (state.primaryTarget.kind === 'skills' && state.primaryTarget.skillId !== undefined && state.primaryTarget.skillId !== '') {
+    query.push(['id', state.primaryTarget.skillId])
+  }
+  if (state.primaryTarget.kind === 'nodes' && state.primaryTarget.nodeId !== undefined && state.primaryTarget.nodeId !== '') {
+    query.push(['id', state.primaryTarget.nodeId])
+  }
+  if (state.primaryTarget.kind === 'models' && state.primaryTarget.providerId !== undefined && state.primaryTarget.providerId !== '') {
+    query.push(['id', state.primaryTarget.providerId])
+  }
+  if (state.splitTarget !== null) query.push(['split', formatSplitTarget(state.splitTarget)])
   // 主/分屏 Screen 参数各占 sp.* / ssp.* 命名空间：同一 screen 双开时参数互不串扰。
   query.push(...formatScreenParams(state.primaryTarget, PRIMARY_SCREEN_PARAM_PREFIX))
   if (state.splitTarget !== null) query.push(...formatScreenParams(state.splitTarget, SPLIT_SCREEN_PARAM_PREFIX))
@@ -290,15 +383,20 @@ const isSameScreenSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): b
   return a.pluginId === b.pluginId && a.screenId === b.screenId
 }
 
-/** 同一 plugins 坐标（kind 均为 plugins）视为同一主舞台位置槽位；drawer 切换或关闭不算坐标级切屏。 */
-const isSamePluginsSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): boolean => {
+/** 同一中心坐标（kind 均为对应的一级全屏中心）视为同一主舞台位置槽位；drawer 切换或关闭不算坐标级切屏。 */
+const isSamePrimaryCenterSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): boolean => {
   if (a === null || b === null) return a === b
-  return a.kind === 'plugins' && b.kind === 'plugins'
+  if (a.kind === 'plugins' && b.kind === 'plugins') return true
+  if (a.kind === 'profiles' && b.kind === 'profiles') return true
+  if (a.kind === 'skills' && b.kind === 'skills') return true
+  if (a.kind === 'nodes' && b.kind === 'nodes') return true
+  if (a.kind === 'models' && b.kind === 'models') return true
+  return false
 }
 
 /** 主/分屏位置是否发生坐标级变化（会话 ID 变化、screen 坐标变化、视图类型变化、开/关分屏）。 */
 const isTargetSlotChanged = (prev: ResolvedTarget | null, next: ResolvedTarget | null): boolean =>
-  !isSameResolvedTarget(prev, next) && !isSameScreenSlot(prev, next) && !isSamePluginsSlot(prev, next)
+  !isSameResolvedTarget(prev, next) && !isSameScreenSlot(prev, next) && !isSamePrimaryCenterSlot(prev, next)
 
 /**
  * 判断状态迁移是否值得入历史栈（pushState）：
@@ -310,13 +408,27 @@ const isTargetSlotChanged = (prev: ResolvedTarget | null, next: ResolvedTarget |
  *   （避免弹窗内点选 10 项后要后退 10 次才能关掉弹窗）。
  */
 export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: WorkspaceLocationState): boolean {
-  // 从列表打开插件抽屉（无 pluginId -> 有 pluginId）入栈（push），支持浏览器后退关闭抽屉
-  if (
-    prev.primaryTarget.kind === 'plugins' &&
-    next.primaryTarget.kind === 'plugins' &&
-    prev.primaryTarget.pluginId === undefined &&
-    next.primaryTarget.pluginId !== undefined
-  ) {
+  const isOpeningDrawer = (prevT: ResolvedTarget, nextT: ResolvedTarget): boolean => {
+    if (prevT.kind === 'plugins' && nextT.kind === 'plugins') {
+      return prevT.pluginId === undefined && nextT.pluginId !== undefined
+    }
+    if (prevT.kind === 'profiles' && nextT.kind === 'profiles') {
+      return prevT.profileId === undefined && nextT.profileId !== undefined
+    }
+    if (prevT.kind === 'skills' && nextT.kind === 'skills') {
+      return prevT.skillId === undefined && nextT.skillId !== undefined
+    }
+    if (prevT.kind === 'nodes' && nextT.kind === 'nodes') {
+      return prevT.nodeId === undefined && nextT.nodeId !== undefined
+    }
+    if (prevT.kind === 'models' && nextT.kind === 'models') {
+      return prevT.providerId === undefined && nextT.providerId !== undefined
+    }
+    return false
+  }
+
+  // 从列表打开任一中心的抽屉（无 ID -> 有 ID）入栈（push），支持浏览器后退关闭抽屉
+  if (isOpeningDrawer(prev.primaryTarget, next.primaryTarget)) {
     return true
   }
   // 仅 params 变化（screen 坐标不变）或 plugins 抽屉内切换/关闭 → replace，避免筛选器每次按键污染后退栈；
@@ -350,7 +462,16 @@ export type HashSerializable =
  * 兼容接收 WorkspaceLocationState、携带 target/primaryTarget 的局部对象、或直接输入 ResolvedTarget。
  */
 export function serializeHash(input: HashSerializable): string {
-  if ('kind' in input && (input.kind === 'conversation' || input.kind === 'screen' || input.kind === 'plugins')) {
+  if (
+    'kind' in input &&
+    (input.kind === 'conversation' ||
+      input.kind === 'screen' ||
+      input.kind === 'plugins' ||
+      input.kind === 'profiles' ||
+      input.kind === 'skills' ||
+      input.kind === 'nodes' ||
+      input.kind === 'models')
+  ) {
     return formatLocationHash({
       primaryTarget: input,
       splitTarget: null,
@@ -377,3 +498,49 @@ export function serializeHash(input: HashSerializable): string {
 
 /** 反向解析 Hash 契约辅助别名，指向 parseLocationHash。 */
 export const parseHash = parseLocationHash
+
+/**
+ * 历史旧弹窗参数平滑升级守卫：
+ * 当 URL 携带旧的 modal=profiles|skills|nodes|providers|plugins 时，
+ * 自动升格为对应的一级全屏中心路由（primaryTarget），并销毁旧 modal。
+ */
+export function upgradeLegacyLocationState(state: WorkspaceLocationState): WorkspaceLocationState {
+  if (state.activeModal !== null) {
+    if (state.activeModal.kind === 'profile-editor') {
+      return {
+        ...state,
+        primaryTarget: { kind: 'profiles', profileId: state.activeModal.profileId },
+        activeModal: null,
+      }
+    }
+    if (state.activeModal.kind === 'skill-viewer') {
+      return {
+        ...state,
+        primaryTarget: { kind: 'skills', skillId: state.activeModal.skillId },
+        activeModal: null,
+      }
+    }
+    if (state.activeModal.kind === 'nodes') {
+      return {
+        ...state,
+        primaryTarget: { kind: 'nodes', nodeId: state.activeModal.nodeId },
+        activeModal: null,
+      }
+    }
+    if (state.activeModal.kind === 'provider-auth') {
+      return {
+        ...state,
+        primaryTarget: { kind: 'models' },
+        activeModal: null,
+      }
+    }
+    if (state.activeModal.kind === 'plugin-settings') {
+      return {
+        ...state,
+        primaryTarget: { kind: 'plugins', pluginId: state.activeModal.pluginId },
+        activeModal: null,
+      }
+    }
+  }
+  return state
+}

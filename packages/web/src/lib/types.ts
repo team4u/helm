@@ -50,6 +50,10 @@ export type ResolvedTarget =
   | { kind: 'conversation'; conversationId: number }
   | { kind: 'screen'; pluginId: string; screenId: string; params?: Record<string, string> }
   | { kind: 'plugins'; pluginId?: string }
+  | { kind: 'profiles'; profileId?: string }
+  | { kind: 'skills'; skillId?: string }
+  | { kind: 'nodes'; nodeId?: string }
+  | { kind: 'models'; providerId?: string }
 
 export type ActiveModal =
   | { kind: 'command-palette' }
@@ -210,6 +214,34 @@ export function resolveTargetString(
     const pluginId = target.slice('plugins:'.length).trim()
     return pluginId === '' ? { kind: 'plugins' } : { kind: 'plugins', pluginId }
   }
+  if (target === 'profiles') {
+    return { kind: 'profiles' }
+  }
+  if (target.startsWith('profiles:')) {
+    const profileId = target.slice('profiles:'.length).trim()
+    return profileId === '' ? { kind: 'profiles' } : { kind: 'profiles', profileId }
+  }
+  if (target === 'skills') {
+    return { kind: 'skills' }
+  }
+  if (target.startsWith('skills:')) {
+    const skillId = target.slice('skills:'.length).trim()
+    return skillId === '' ? { kind: 'skills' } : { kind: 'skills', skillId }
+  }
+  if (target === 'nodes') {
+    return { kind: 'nodes' }
+  }
+  if (target.startsWith('nodes:')) {
+    const nodeId = target.slice('nodes:'.length).trim()
+    return nodeId === '' ? { kind: 'nodes' } : { kind: 'nodes', nodeId }
+  }
+  if (target === 'models') {
+    return { kind: 'models' }
+  }
+  if (target.startsWith('models:')) {
+    const providerId = target.slice('models:'.length).trim()
+    return providerId === '' ? { kind: 'models' } : { kind: 'models', providerId }
+  }
   if (target.startsWith('conversation:profile:')) {
     const profileId = target.slice('conversation:profile:'.length).trim()
     // 常驻会话优先：无 parentConversationId 的即插件/用户直接创建的长期会话，
@@ -296,6 +328,18 @@ export function isSameResolvedTarget(a: ResolvedTarget | null, b: ResolvedTarget
   }
   if (a.kind === 'plugins' && b.kind === 'plugins') {
     return a.pluginId === b.pluginId
+  }
+  if (a.kind === 'profiles' && b.kind === 'profiles') {
+    return a.profileId === b.profileId
+  }
+  if (a.kind === 'skills' && b.kind === 'skills') {
+    return a.skillId === b.skillId
+  }
+  if (a.kind === 'nodes' && b.kind === 'nodes') {
+    return a.nodeId === b.nodeId
+  }
+  if (a.kind === 'models' && b.kind === 'models') {
+    return a.providerId === b.providerId
   }
   return false
 }
