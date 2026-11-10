@@ -218,7 +218,7 @@ function optionalText(value, what) {
 
 const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
-const AGENT_OPTIONS = ["label", "phase", "model", "agentType", "isolation", "gate", "resume", "effort", "schema"];
+const AGENT_OPTIONS = ["label", "phase", "model", "agentType", "isolation", "gate", "resume", "effort", "schema", "attachments"];
 
 /* ------------------------------------------------------------------ *
  * Script globals
@@ -337,6 +337,22 @@ async function agentIn(scope, prompt, opts) {
     }
     checkBoundary(schema, "agent() opts.schema");
   }
+  // attachments：产物 ID 列表。非数组、非字符串项、空/纯空白 ID 一律显式拒绝
+  //（宿主按 ID 解析产物，空串无意义且可能掩盖上游 bug）；空数组允许（= 无附件）。
+  // 语义不归一化：未提供（undefined）与空数组（[]）在重放指纹上是不同调用。
+  const attachments = options.attachments;
+  if (attachments !== undefined) {
+    if (!Array.isArray(attachments)) {
+      throw new Error("agent() opts.attachments must be an array of artifact IDs.");
+    }
+    for (let i = 0; i < attachments.length; i++) {
+      if (typeof attachments[i] !== "string" || attachments[i].trim() === "") {
+        throw new Error(
+          "agent() opts.attachments requires non-empty string artifact IDs; item " + i + " is empty or blank."
+        );
+      }
+    }
+  }
   if (effort !== undefined && EFFORT_LEVELS.indexOf(effort) === -1) {
     throw new Error("agent() opts.effort must be one of: " + EFFORT_LEVELS.join(", ") + ".");
   }
@@ -362,8 +378,9 @@ async function agentIn(scope, prompt, opts) {
         "agent() opts.resume and opts.effort are mutually exclusive: a resumed agent keeps the reasoning effort it was started with."
       );
     }
-    // schema 与 gate 允许与 resume 组合：续接回合可带新的输出契约与验收门禁，
-    // 两者经 resumeAgent options 下传实际执行环境（原生补挂 StructuredOutput
+    // schema 与 gate/attachments 允许与 resume 组合：续接回合可带新的输出契约、
+    // 验收门禁与本轮附件（附件只属于本轮提交，绝不自动沿用原任务的附件列表）。
+    // schema/gate 经 resumeAgent options 下传实际执行环境（原生补挂 StructuredOutput
     // 扩展；gate 在实际执行环境内恰好一次执行并经 onGateResult 回报）。
   }
 
@@ -382,6 +399,7 @@ async function agentIn(scope, prompt, opts) {
     resume: resume,
     effort: effort,
     schema: schema,
+    attachments: attachments,
   });
   if (result === undefined || result === null) return null;
   if (schema === undefined) return result;

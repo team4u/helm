@@ -117,10 +117,28 @@ export interface AgentJournalKeyInput {
   resume?: string
   /** agent({ schema }) 的序列化形式。 */
   schema?: string
+  /**
+   * agent({ attachments }) 的产物 ID 列表（原样序列化，不去重不排序：不同
+   * ID 或次序变化都是不同调用）。未提供与空数组语义不同，不归一化。
+   */
+  attachments?: string[]
 }
 
+/**
+ * agent 调用 key 的 canonical 版本（v2 固定槽）。
+ *
+ * v1（旧账本）在 resume 槽后用变长追加（schema 存在时多一个尾槽）。新增
+ * attachments 若继续尾追加，会与 v1 的 schema 尾槽直接碰撞：v1 的
+ * `[p,l,m,t,e,i,g,r,schema]` 与 v2 假想的 `[p,l,m,t,e,i,g,r,schema?,attachments?]`
+ * 在 schema 有/无与 attachments 有/无的四象限里产生同 canonical 异语义的碰撞。
+ * 因此 v2 一次性收敛为带版本标记的固定槽：attachments 恒占第 10 槽（null =
+ * 未提供），schema 恒占第 11 槽（null = 未提供），任何后续新字段只能追加在
+ * 版本号之后。v1→v2 变更即 key 全体失配（开发阶段无迁移，旧账本安全降级为
+ * 断链重跑）。
+ */
 export function agentJournalKey(input: AgentJournalKeyInput): string {
   const canonical = JSON.stringify([
+    'v2',
     input.prompt,
     input.label ?? null,
     input.model ?? null,
@@ -129,8 +147,8 @@ export function agentJournalKey(input: AgentJournalKeyInput): string {
     input.isolation ?? null,
     input.gate ?? null,
     input.resume ?? null,
-    // 仅存在时追加：无条件加第十槽会改变既有账本的 canonical 形式。
-    ...(input.schema !== undefined ? [input.schema] : []),
+    input.attachments !== undefined ? input.attachments : null,
+    input.schema !== undefined ? input.schema : null,
   ])
   return createHash('sha256').update(canonical).digest('hex').slice(0, 32)
 }

@@ -1561,10 +1561,11 @@ export class WorkflowService {
             prompt,
             label: agentId,
             // resume 缺省不携带 agentType（不重配原子会话 Profile）；
-            // schema/gate/回调由引擎续接调用原样下传。
+            // schema/gate/attachments/回调由引擎续接调用原样下传（附件仅属本轮提交）。
             agentType: '',
             ...(options?.schema !== undefined ? { schema: options.schema } : {}),
             ...(options?.gate !== undefined ? { gate: options.gate } : {}),
+            ...(options?.attachments !== undefined ? { attachments: options.attachments } : {}),
             ...(options?.onResolved !== undefined ? { onResolved: options.onResolved } : {}),
             ...(options?.onGateResult !== undefined ? { onGateResult: options.onGateResult } : {}),
           },
@@ -1715,6 +1716,7 @@ export class WorkflowService {
       ...(request.effort !== undefined ? { effort: request.effort } : {}),
       ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
       ...(request.schema !== undefined ? { schema: request.schema.schema } : {}),
+      ...(request.attachments !== undefined ? { attachments: request.attachments } : {}),
       ...(resumeRef !== undefined ? { resume: resumeRef } : {}),
       // cwd 不注入：执行行按自身链解析（原生 request>Profile>parent镜像>Hub；
       // herdr request>Profile.workspace>parent>Hub）。引擎层注入会压过 Profile

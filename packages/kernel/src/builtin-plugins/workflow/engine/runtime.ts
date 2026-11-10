@@ -86,6 +86,8 @@ export interface WorkflowSpawnRequest {
   onGateResult?(result: AgentGateResult): void
   /** 由脚本 agent({ schema }) 编译出的结构化输出契约。 */
   schema?: CompiledSchema
+  /** 由脚本 agent({ attachments }) 传入的产物 ID 列表（原样透传，宿主做存在性/授权校验）。 */
+  attachments?: string[]
   phaseIndex?: number
   phaseTitle?: string
   /**
@@ -177,6 +179,8 @@ export interface ResumeAgentOptions {
   schema?: CompiledSchema
   /** 续接回合的 gate 命令（在实际执行环境内恰好一次执行后经 onGateResult 回报）。 */
   gate?: string
+  /** 续接回合携带的产物 ID 列表（仅属本轮提交，不自动沿用原任务附件）。 */
+  attachments?: string[]
   onResolved?: WorkflowSpawnRequest['onResolved']
   onGateResult?: WorkflowSpawnRequest['onGateResult']
 }
@@ -398,6 +402,7 @@ interface AgentCallPayload {
   resume?: string
   effort?: string
   schema?: unknown
+  attachments?: string[]
 }
 
 interface ActionCallPayload {
@@ -426,6 +431,15 @@ const preview = (text: string) =>
 function derivedLabel(prompt: string): string {
   const line = prompt.split('\n', 1)[0]!.trim()
   return line.length <= 60 ? line || 'agent' : `${line.slice(0, 59)}…`
+}
+
+/**
+ * host 边界的 attachments 形状校验：字符串数组且每项非空非纯空白；空数组合法。
+ * worker 层已有同构拒绝；此处不信任消息面再拦一道（非法值 fatal，不下发宿主）。
+ */
+function isValidAttachments(value: unknown): value is string[] {
+  if (!Array.isArray(value)) return false
+  return value.every((id) => typeof id === 'string' && id.trim() !== '')
 }
 
 /** resume 可复活的子代理，按 label 记忆。 */
@@ -790,6 +804,13 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         compiledSchema = compilation.compiled
       }
 
+      // host 边界二次校验（不信任 worker 消息面）：非法 attachments 是 fatal，
+      // 绝不带病下发到真实宿主 spawn/resume 端口。
+      if (payload.attachments !== undefined && !isValidAttachments(payload.attachments)) {
+        respond(callId, false, undefined, 'agent() opts.attachments must be an array of non-empty string artifact IDs.', true)
+        return
+      }
+
       if (agentCount >= agentCap) {
         respond(callId, false, undefined, `Workflow exceeded its cap of ${agentCap} agents.`, true)
         return
@@ -836,6 +857,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         isolation: payload.isolation,
         gate: payload.gate,
         resume: payload.resume,
+        attachments: payload.attachments,
         schema: payload.schema !== undefined ? JSON.stringify(payload.schema) : undefined,
       }
       const replayed = replayAt(index, agentJournalKey(keyInput), 'agent')
@@ -1010,6 +1032,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                 ? await resumeAgent(resumed.agentId, payload.prompt!, {
                     ...(compiledSchema !== undefined ? { schema: compiledSchema } : {}),
                     ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
+                    ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
                     onResolved,
                     ...(payload.gate !== undefined ? { onGateResult } : {}),
                   })
@@ -1026,6 +1049,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                     ...(payload.phaseIndex !== undefined ? { phaseIndex: payload.phaseIndex } : {}),
                     ...(payload.phaseTitle !== undefined ? { phaseTitle: payload.phaseTitle } : {}),
                     ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
+                    ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
                     onResolved,
                     ...(payload.gate !== undefined ? { onGateResult } : {}),
                   })
