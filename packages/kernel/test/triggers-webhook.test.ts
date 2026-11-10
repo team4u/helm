@@ -296,9 +296,10 @@ test('工厂注册：cron/webhook 动作、路由与声明式贡献完整注册'
   assert.ok(ui.some((u) => u.surface === 'sidebar.item'))
   assert.ok(ui.some((u) => u.surface === 'screen'))
   assert.ok(ui.some((u) => u.surface === 'settings.panel'))
-  // screen 订阅 crons + webhooks 两个公共 doc
-  const screen = ui.find((u) => u.surface === 'screen')!.spec as { docs: string[] }
-  assert.deepEqual([...screen.docs].sort(), ['crons', 'webhooks'])
+  // screen subscription is now client code using plugin-client-sdk/usePluginDoc.
+  const screen = ui.find((u) => u.surface === 'screen')!.spec as { client: { module: string; export: string } }
+  assert.equal(screen.client.module, 'index.tsx')
+  assert.equal(screen.client.export, 'TriggersManagerScreen')
   await h.host.dispose()
   rmSync(h.dataDir, { recursive: true, force: true })
 })
