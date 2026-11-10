@@ -433,6 +433,15 @@ export class CapabilityRegistry {
     return list ? [...list.keys()] : [];
   }
 
+  /**
+   * 只读动作绑定查询（UI 声明引用动作的存在性与 idempotent 标记校验用）。
+   * 未声明返回 undefined；不触发任何注册副作用。
+   */
+  getActionBinding(pluginId: string, actionId: string): { idempotent: boolean } | undefined {
+    const entry = this.actions.get(pluginId)?.get(actionId);
+    return entry ? { idempotent: entry.idempotent === true } : undefined;
+  }
+
   listActions(activePluginIds: Iterable<string>): ActionManifest[] {
     const out: ActionManifest[] = [];
     for (const pluginId of activePluginIds) {
