@@ -356,6 +356,7 @@ test('工作流4: HTTP workflows run/inspect/abort 与 SubagentWorkflow 工具�
       headers: { ...auth, 'content-type': 'application/json' },
       body: JSON.stringify({
         input: {
+          conversationId: env.app.kernel.listConversations()[0]!.id,
           script: 'export const meta = { name: "http-pure", description: "t" }\nreturn args.x + 1',
           args: { x: 41 },
           wait: true,
@@ -387,7 +388,7 @@ test('工作流4: HTTP workflows run/inspect/abort 与 SubagentWorkflow 工具�
     const bad = await fetch(`${base}/api/actions/builtin:workflow/run`, {
       method: 'POST',
       headers: { ...auth, 'content-type': 'application/json' },
-      body: JSON.stringify({ input: { args: { x: 1 } } }),
+      body: JSON.stringify({ input: { args: { x: 1 }, conversationId: env.app.kernel.listConversations()[0]!.id } }),
     })
     assert.equal(bad.status, 400)
     assert.equal((JSON.parse(await bad.text()) as { error: { code: string } }).error.code, 'validation_error')

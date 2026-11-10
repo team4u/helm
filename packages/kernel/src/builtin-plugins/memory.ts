@@ -22,7 +22,7 @@
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmError, PROFILE_DETAIL_SECTION_SLOT, type PluginDefinition } from '@helm/protocol'
+import { HelmError, PROFILE_DETAIL_SECTION_SLOT, type PluginActionContext, type PluginDefinition } from '@helm/protocol'
 import { FileNotFoundError } from '../services/atomic-file.js'
 import { assertProfileId, type ProfileService } from '../services/index.js'
 import { MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MemoryStore } from './memory/store.js'
@@ -73,11 +73,30 @@ interface MemoryPluginServices {
 
 /** 校验 Profile 存在（与 Profile 详情接口同一存在性判定）。 */
 async function requireProfile(profiles: ProfileService, profileId: string): Promise<void> {
-  assertProfileId(profileId)
+  try {
+    assertProfileId(profileId)
+  } catch (error) {
+    throw new HelmError('validation_error', error instanceof Error ? error.message : String(error), 400, { profileId })
+  }
   const found = await profiles.get(profileId)
   if (found === undefined) {
     throw new HelmError('profile_not_found', `Profile '${profileId}' 不存在`, 404, { profileId })
   }
+}
+
+/** 显式 Profile 优先；否则从调用会话继承，不猜测默认 Profile。 */
+function resolveActionProfileId(
+  explicitProfileId: string | undefined,
+  context: PluginActionContext,
+  getConversation: (id: number) => { profileId: string },
+): string {
+  if (explicitProfileId !== undefined) return explicitProfileId
+  if (context.conversationId !== undefined) return getConversation(context.conversationId).profileId
+  throw new HelmError(
+    'validation_error',
+    '缺少 Profile 目标：提供 --profile-id 或会话上下文（CLI 使用 --current）',
+    400,
+  )
 }
 
 export function createMemoryPlugin({ profiles }: MemoryPluginServices): PluginDefinition {
@@ -115,13 +134,12 @@ export function createMemoryPlugin({ profiles }: MemoryPluginServices): PluginDe
       // ctx.action：get / set / configure（自动映射 helm memory … CLI 与 HTTP）
       // ------------------------------------------------------------------
 
-      ctx.action<{ profileId: string }, { profileId: string; enabled: boolean; content: string; initialized: boolean }>({
+      ctx.action<{ profileId?: string }, { profileId: string; enabled: boolean; content: string; initialized: boolean }>({
         id: 'get',
-        description: '读取指定 Profile 的长期记忆内容与开关状态（helm memory get）',
+        description: '读取 Profile 的长期记忆内容与开关状态（可用 --profile-id 指定，或用 --current 取当前会话）',
         inputSchema: {
           type: 'object',
           properties: { profileId: { type: 'string', minLength: 1 } },
-          required: ['profileId'],
           additionalProperties: false,
         },
         outputSchema: {
@@ -136,27 +154,28 @@ export function createMemoryPlugin({ profiles }: MemoryPluginServices): PluginDe
           additionalProperties: false,
         },
         idempotent: true,
-        async handler(input) {
-          await requireProfile(profiles, input.profileId)
+        async handler(input, context) {
+          const profileId = resolveActionProfileId(input.profileId, context, (id) => ctx.host.getConversation(id))
+          await requireProfile(profiles, profileId)
           let content = ''
           try {
-            content = await store.getMemory(input.profileId)
+            content = await store.getMemory(profileId)
           } catch (err) {
             if (!(err instanceof FileNotFoundError)) throw err
             // 文件不存在：如实返回空串（前端显示真实状态，不伪造内容）。
           }
           return {
-            profileId: input.profileId,
-            enabled: isEnabled(input.profileId),
+            profileId,
+            enabled: isEnabled(profileId),
             content,
-            initialized: isInitialized(input.profileId),
+            initialized: isInitialized(profileId),
           }
         },
       })
 
-      ctx.action<{ profileId: string; text: string; mode?: 'append' | 'replace' }, { profileId: string; updated: boolean; length: number }>({
+      ctx.action<{ profileId?: string; text: string; mode?: 'append' | 'replace' }, { profileId: string; updated: boolean; length: number }>({
         id: 'set',
-        description: '显式写入指定 Profile 的 MEMORY.md 全文或追加（helm memory set）',
+        description: '写入 Profile 的 MEMORY.md 全文或追加（--profile-id 或 --current 选目标）',
         inputSchema: {
           type: 'object',
           properties: {
@@ -164,7 +183,7 @@ export function createMemoryPlugin({ profiles }: MemoryPluginServices): PluginDe
             text: { type: 'string' },
             mode: { type: 'string', enum: ['replace', 'append'] },
           },
-          required: ['profileId', 'text'],
+          required: ['text'],
           additionalProperties: false,
         },
         outputSchema: {
@@ -177,29 +196,30 @@ export function createMemoryPlugin({ profiles }: MemoryPluginServices): PluginDe
           required: ['profileId', 'updated', 'length'],
           additionalProperties: false,
         },
-        async handler(input) {
-          await requireProfile(profiles, input.profileId)
+        async handler(input, context) {
+          const profileId = resolveActionProfileId(input.profileId, context, (id) => ctx.host.getConversation(id))
+          await requireProfile(profiles, profileId)
           const mode = input.mode ?? 'replace'
-          if (!isEnabled(input.profileId)) {
+          if (!isEnabled(profileId)) {
             throw new HelmError(
               'memory_disabled_for_profile',
-              `Profile '${input.profileId}' 已关闭长期记忆，禁止写入 MEMORY.md`,
+              `Profile '${profileId}' 已关闭长期记忆，禁止写入 MEMORY.md`,
               403,
-              { profileId: input.profileId },
+              { profileId },
             )
           }
-          const written = await store.updateMemory(input.profileId, input.text, mode)
-          markInitialized(input.profileId)
-          return { profileId: input.profileId, updated: true, length: written.length }
+          const written = await store.updateMemory(profileId, input.text, mode)
+          markInitialized(profileId)
+          return { profileId, updated: true, length: written.length }
         },
       })
 
       ctx.action<
-        { profileId: string; enabled: boolean; text?: string },
+        { profileId?: string; enabled: boolean; text?: string },
         { profileId: string; enabled: boolean }
       >({
         id: 'configure',
-        description: '配置指定 Profile 的长期记忆启停（可同时携带替换文本；helm memory configure）',
+        description: '配置 Profile 的长期记忆启停（--profile-id 或 --current 选目标）',
         inputSchema: {
           type: 'object',
           properties: {
@@ -207,7 +227,7 @@ export function createMemoryPlugin({ profiles }: MemoryPluginServices): PluginDe
             enabled: { type: 'boolean' },
             text: { type: 'string' },
           },
-          required: ['profileId', 'enabled'],
+          required: ['enabled'],
           additionalProperties: false,
         },
         outputSchema: {
@@ -219,35 +239,36 @@ export function createMemoryPlugin({ profiles }: MemoryPluginServices): PluginDe
           required: ['profileId', 'enabled'],
           additionalProperties: false,
         },
-        async handler(input) {
-          await requireProfile(profiles, input.profileId)
+        async handler(input, context) {
+          const profileId = resolveActionProfileId(input.profileId, context, (id) => ctx.host.getConversation(id))
+          await requireProfile(profiles, profileId)
           // 先写入文本（若提供），成功后才提交开关——失败时不留半配置。
           if (input.text !== undefined) {
-            if (!isEnabled(input.profileId) && !input.enabled) {
+            if (!isEnabled(profileId) && !input.enabled) {
               throw new HelmError(
                 'memory_disabled_for_profile',
-                `Profile '${input.profileId}' 已关闭长期记忆，禁止写入 MEMORY.md`,
+                `Profile '${profileId}' 已关闭长期记忆，禁止写入 MEMORY.md`,
                 403,
-                { profileId: input.profileId },
+                { profileId },
               )
             }
-            await store.updateMemory(input.profileId, input.text, 'replace')
-            markInitialized(input.profileId)
+            await store.updateMemory(profileId, input.text, 'replace')
+            markInitialized(profileId)
           }
-          if (input.enabled && !isInitialized(input.profileId)) {
+          if (input.enabled && !isInitialized(profileId)) {
             // 开启且尚无初始化标记：惰性创建文件（已有文件时原样保留）。
-            await store.ensureMemory(input.profileId)
-            markInitialized(input.profileId)
+            await store.ensureMemory(profileId)
+            markInitialized(profileId)
           }
           stateDoc.update((current) => ({
             ...current,
             disabledProfiles: input.enabled
-              ? current.disabledProfiles.filter((id) => id !== input.profileId)
-              : current.disabledProfiles.includes(input.profileId)
+              ? current.disabledProfiles.filter((id) => id !== profileId)
+              : current.disabledProfiles.includes(profileId)
                 ? current.disabledProfiles
-                : [...current.disabledProfiles, input.profileId],
+                : [...current.disabledProfiles, profileId],
           }))
-          return { profileId: input.profileId, enabled: input.enabled }
+          return { profileId, enabled: input.enabled }
         },
       })
 
@@ -288,17 +309,13 @@ export function createMemoryPlugin({ profiles }: MemoryPluginServices): PluginDe
           } else {
             // 已初始化后被外部删除：显式告警（按 profileId 独立去重），不重建。
             if (!missingNotified.has(profileId)) {
+              ctx.host.emitEvent('notification', {
+                type: 'notification',
+                level: 'warning',
+                title: `长期记忆文件缺失：${profileId}/MEMORY.md`,
+                body: `Profile '${profileId}' 的 MEMORY.md 曾存在但已被外部删除；本回合按无记忆处理，下次 update_memory 写入或恢复文件后自愈`,
+              })
               missingNotified.add(profileId)
-              try {
-                ctx.host.emitEvent('notification', {
-                  type: 'notification',
-                  level: 'warning',
-                  title: `长期记忆文件缺失：${profileId}/MEMORY.md`,
-                  body: `Profile '${profileId}' 的 MEMORY.md 曾存在但已被外部删除；本回合按无记忆处理，下次 update_memory 写入或恢复文件后自愈`,
-                })
-              } catch {
-                // 通知失败不阻断回合（事件通道故障由宿主诊断）。
-              }
             }
             sections.push({
               id: 'memory.assets-missing',

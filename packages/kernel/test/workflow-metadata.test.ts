@@ -265,6 +265,7 @@ describe('WorkflowService external spawn integration', () => {
     })
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
     const summary = await service.run({
+      conversationId: 1,
       script: META('ext-missing-gate') + 'const v = await agent("work", { gate: "make check" })\nreturn v',
     })
     await service.wait(summary.id)
@@ -285,7 +286,7 @@ describe('WorkflowService external spawn integration', () => {
       return 'text'
     })
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
-    const summary = await service.run({ script: META('bad-resolved') + 'return await agent("x")' })
+    const summary = await service.run({ conversationId: 1, script: META('bad-resolved') + 'return await agent("x")' })
     await service.wait(summary.id)
     const node = (service.getRun(summary.id).nodes ?? []).find((n) => n.kind === 'agent')
     assert.ok(node !== undefined)
@@ -302,6 +303,7 @@ describe('WorkflowService external spawn integration', () => {
     })
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
     const summary = await service.run({
+      conversationId: 1,
       script: META('bad-gate') + 'return await agent("x", { gate: "true" })',
     })
     await service.wait(summary.id)
@@ -318,7 +320,7 @@ describe('WorkflowService external spawn integration', () => {
       executionInfo: { conversationId: 101, effectiveCwd: '/tmp/child' },
     })
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
-    const summary = await service.run({ script: META('idem') + 'return await agent("x")' })
+    const summary = await service.run({ conversationId: 1, script: META('idem') + 'return await agent("x")' })
     await service.wait(summary.id)
     const node = (service.getRun(summary.id).nodes ?? []).find((n) => n.kind === 'agent')
     assert.ok(node !== undefined)
@@ -332,7 +334,7 @@ describe('WorkflowService external spawn integration', () => {
   it('workflowRunId rides every spawn request', timeout, async () => {
     const host = makeExternalSpawnHost()
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
-    const summary = await service.run({ script: META('wfid') + 'return await agent("x")' })
+    const summary = await service.run({ conversationId: 1, script: META('wfid') + 'return await agent("x")' })
     await service.wait(summary.id)
     assert.equal(host.spawns[0]?.workflowRunId, summary.id)
     await service.close()
@@ -373,7 +375,7 @@ describe('WorkflowService listRuns and settlement', () => {
     const state = makeStateStore()
     const host = makeExternalSpawnHost()
     const service = new WorkflowService({ dataDir, host, state })
-    const first = await service.run({ script: META('l1') + 'return 1' })
+    const first = await service.run({ conversationId: 1, script: META('l1') + 'return 1' })
     await service.wait(first.id)
     // 第二个 run 带 agent（活跃中挂起 spawn 以验证实时 nodes）。
     let release: (() => void) | undefined
@@ -384,7 +386,7 @@ describe('WorkflowService listRuns and settlement', () => {
       })
       return realSpawn(request)
     }
-    const second = await service.run({ script: META('l2') + 'return await agent("hang")' })
+    const second = await service.run({ conversationId: 1, script: META('l2') + 'return await agent("hang")' })
     await new Promise((r) => setTimeout(r, 120))
     let runs = service.listRuns()
     assert.equal(runs.length, 2, 'both runs listed')
@@ -413,6 +415,7 @@ describe('WorkflowService listRuns and settlement', () => {
     const host = makeExternalSpawnHost({ externalGate: { ok: true, output: 'checked' } })
     const service = new WorkflowService({ dataDir, host, state })
     const first = await service.run({
+      conversationId: 1,
       script: META('r1') + 'const v = await agent("work", { gate: "true" })\nreturn v',
     })
     await service.wait(first.id)
@@ -439,12 +442,12 @@ describe('WorkflowService listRuns and settlement', () => {
     }
     const service = new WorkflowService({ dataDir, host, state })
 
-    const ok = await service.run({ script: META('s1') + 'return 1' })
+    const ok = await service.run({ conversationId: 1, script: META('s1') + 'return 1' })
     await service.wait(ok.id)
     assert.deepEqual(settled, [ok.id], 'exactly once, and wait returned after it finished')
 
     failNext = true
-    const bad = await service.run({ script: META('s2') + 'return 2' })
+    const bad = await service.run({ conversationId: 1, script: META('s2') + 'return 2' })
     await assert.rejects(() => service.wait(bad.id), /cleanup blew up/)
     const final = service.getRun(bad.id)
     assert.ok((final.error ?? '').includes('onRunSettled failed'), `error: ${final.error}`)
@@ -471,6 +474,7 @@ describe('WorkflowService listRuns and settlement', () => {
       redact: (text) => text.replaceAll(SECRET, '{{REDACTED}}'),
     })
     const summary = await service.run({
+      conversationId: 1,
       script: META('meta') + `return await agent("do ${SECRET}", { gate: "make check" })`,
     })
     const result = (await service.wait(summary.id)) as string

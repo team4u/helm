@@ -332,6 +332,8 @@ export interface PluginClientContext {
  *
  *   import { usePluginContext, usePluginDoc, useToolActivity } from '@helm/plugin-client'
  *
+ * - Switch：宿主共享的受控布尔开关组件（checked / onChange / disabled / label），
+ *   插件复用宿主的 WAI-ARIA 与样式，不另外实现原生 checkbox。
  * - useToolActivity(callId: string | undefined, active: boolean)：报告所在时间线回合的
  *   工具后台活动（影响复制/分叉展示）；卸载/状态切换自动释放同一挂载来源的登记。
  *   无 callId 或不在时间线 Provider 内时不登记，不创建全局状态（工作台不影响时间线）。

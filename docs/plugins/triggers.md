@@ -26,7 +26,7 @@ flowchart TD
 
     subgraph Core["内核与执行会话"]
         Pipeline["Host.dispatchTrigger() 管道"]
-        RootConv["Conversation #1 常驻入口"]
+        RootConv["当前 assistant 人类入口"]
         WorkerConv["按 ThreadKey 直投订阅 Worker"]
     end
 
@@ -146,7 +146,7 @@ export interface ExternalTriggerEnvelope {
    - 若外部事件携带 `threadKey`。
    - 管道根据订阅表将目标直接指向后台 Worker 会话。
 3. **默认常驻入口**：
-   - 若未指定直投目标，事件默认派发至 `Conversation #1`。
+   - 若未指定直投目标且插件钩子未定向，内核选择 assistant Profile 下最新的无父链 human-owned 会话；没有候选时按需创建，并合并同进程并发创建。显式目标在 trigger 钩子前校验，已删除目标明确报错，不允许被 ThreadKey 改写掩盖。
 
 ---
 

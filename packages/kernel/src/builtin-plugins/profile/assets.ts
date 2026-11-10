@@ -18,10 +18,7 @@ import {
 } from '@helm/protocol'
 import type { BuiltinSkillAsset } from '../../services/index.js'
 
-/** 托管本技能资产的插件 ID（SKILL.md frontmatter managedByPlugin 值）。 */
-export const ASSISTANT_MANAGED_BY = 'builtin:profile'
-
-/** builtin:profile 自举资产的托管插件 ID（Profile.managedByPlugin 标记值）。 */
+/** 托管本技能资产与自举 Profile 的插件 ID（SKILL.md frontmatter managedByPlugin 值）。 */
 export const PROFILE_MANAGED_BY = 'builtin:profile'
 
 /** 系统级内置技能 ID（SYSTEM.md Layer 0 指引的 load_skill 目标）。 */
@@ -83,7 +80,7 @@ const skillDir = resolveProfileSkillDir()
 
 const skillVars: Record<string, string> = {
   SKILL_ID: HELM_CLI_SKILL_ID,
-  MANAGED_BY: ASSISTANT_MANAGED_BY,
+  MANAGED_BY: PROFILE_MANAGED_BY,
   PRIMITIVE_COUNT: String(SPEC_PRIMITIVE_NAMES.length),
   HOOK_COUNT: String(PLUGIN_HOOK_NAMES.length),
   HOOK_NAMES: PLUGIN_HOOK_NAMES.join('、'),

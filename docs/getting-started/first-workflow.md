@@ -112,14 +112,18 @@ return { replies, summary }
 
 ### 1. 使用 CLI 命令行执行
 
-执行以下命令并传入参数：
+新工作流必须指定所属会话。可用 `--current` 取 `HELM_CONVERSATION_ID` 指定的当前会话，也可用 `--conversation-id` 显式指定：
 
 ```bash
-helm workflows run hello-orchestra.workflow.js --args '{"word":"创新"}' --wait
+HELM_CONVERSATION_ID=<当前会话 ID> helm workflows run hello-orchestra.workflow.js --args '{"word":"创新"}' --current --wait
+# 或显式指定目标
+helm workflows run hello-orchestra.workflow.js --args '{"word":"创新"}' --conversation-id 23 --wait
 ```
 
 参数说明：
 - `--args`：传入 JSON 格式输入参数，在脚本中通过 `args` 访问。
+- `--current`：把 `HELM_CONVERSATION_ID` 作为工作流所属会话；该变量未设置时 CLI 显式报错。
+- `--conversation-id`：显式指定工作流所属会话。
 - `--wait`：阻塞等待执行完成并直接输出最终返回数据。
 
 ### 2. 检查工作流执行列表
@@ -169,8 +173,10 @@ flowchart LR
 使用 `--resume-from-run-id` 参数指定失败的 `runId`：
 
 ```bash
-helm workflows run hello-orchestra.workflow.js --args '{"word":"创新"}' --resume-from-run-id <failedRunId> --wait
+HELM_CONVERSATION_ID=<原工作流会话 ID> helm workflows run hello-orchestra.workflow.js --args '{"word":"创新"}' --resume-from-run-id <failedRunId> --current --wait
 ```
+
+省略目标时，恢复沿用 run 记录的会话；若显式目标与原 run 所属会话不同，恢复会以 `400 validation_error` 拒绝。
 
 编排引擎会自动读取原执行流水账本。
 已经成功的 `agent` 节点会直接复用缓存结果，仅重跑失败或未执行的节点。

@@ -255,7 +255,7 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations delete ----
   cmds.push({
     path: ['conversations', 'delete'],
-    description: '删除会话（DELETE /api/conversations/:id；#1 受保护）',
+    description: '删除会话（DELETE /api/conversations/:id；插件管理权会话受保护）',
     flags: convFlags,
     positional: '[id]',
     async run(ctx: CommandContext) {

@@ -569,6 +569,7 @@ test('对齐3: CLI send --meta → helm.input entry → turn_settled 全链；�
           'workflows', 'run',
           wfScriptPath,
           '--args', JSON.stringify({ x: 21 }),
+          '--conversation-id', String(env.app.kernel.listConversations()[0]!.id),
           '--wait', '--json',
         ],
         { ...process.env, HELM_HUB_URL: base, HELM_DATA_DIR: cliDataDir2, HELM_TOKEN: userToken },

@@ -70,7 +70,7 @@ export interface ExternalTriggerEnvelope {
   text: string
   /** 订阅直通键（ThreadSubscriptionDoc 路由）。 */
   threadKey?: string
-  /** 定向投递会话；缺省投递常驻入口 Conversation #1。 */
+  /** 可选定向投递会话；缺省目标由内核按当前 assistant 入口解析。 */
   targetConversationId?: number
   metadata?: Record<string, unknown>
   createdAt: number

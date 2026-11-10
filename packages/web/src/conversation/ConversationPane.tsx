@@ -474,9 +474,8 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           void (async () => {
             try {
               await conversationsApi.remove(conversationId)
-              // 删除后回退到无会话依赖的角色中心（conversation.deleted 事件
-              // 同样会触发回退；这里主动导航避免残留在已删会话视图）。
-              store.openTarget({ kind: 'profiles' })
+              // 导航由 conversation.deleted 事件按当前目标做条件更新；这里不使用
+              // await 前捕获的主屏/分屏快照，避免删除完成时打断用户的新导航。
               store.pushNotice({
                 type: 'notification',
                 level: 'info',

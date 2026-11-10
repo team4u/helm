@@ -5,7 +5,7 @@
 
 import type { AgentExecutionInfo, AgentGateResult } from './plugin.js'
 
-/** `GET /api/workflows` 已保存工作流摘要。 */
+/** builtin:workflow/list 动作返回的已保存工作流摘要。 */
 export interface SavedWorkflowSummary {
   name: string
   path?: string
@@ -16,7 +16,7 @@ export interface SavedWorkflowSummary {
   phases?: Array<{ title: string; detail?: string; model?: string }>
 }
 
-/** `POST /api/workflows/run` 请求体。 */
+/** 工作流引擎运行请求（经 builtin:workflow 动作或内核编排调用）。 */
 export interface WorkflowRunRequest {
   /** 已保存工作流的名称。name、script、scriptPath 必须恰好提供一个。 */
   name?: string
@@ -25,6 +25,7 @@ export interface WorkflowRunRequest {
   /** 原样传给脚本 args，不限于对象。 */
   args?: unknown
   resumeFromRunId?: string
+  /** 目标会话；新 run 必须明确指定，resume 省略时沿用原 run 的会话。 */
   conversationId?: number
 }
 
@@ -86,7 +87,7 @@ export type WorkflowProgressEntry =
   | { at: number; kind: 'phase'; index: number; title: string }
   | { at: number; kind: 'log'; message: string }
 
-/** `GET /api/workflows/runs/:runId` 响应。 */
+/** builtin:workflow 的 run/runs/inspect 动作与会话投影使用的运行摘要。 */
 export interface WorkflowRunSummary {
   id: string
   name: string

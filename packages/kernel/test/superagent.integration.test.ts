@@ -783,6 +783,27 @@ test('SA4: threadKey 事件直投 Worker 不经 router；归档拒绝 busy、解
     await waitFor(() => workerReportCount(kernel, routerId, workerId).then((n) => n >= 1))
     await kernel.waitForIdle(routerId)
 
+    // 显式目标在 trigger hook 前校验：失效 target 不得被有效 threadKey 订阅改写掩盖。
+    const workerInputsBeforeInvalidTarget = await inputEntriesOf(kernel, workerId)
+    const deletedExplicitTarget = await kernel.createConversation({ profileId: 'assistant', title: '即将删除的目标' })
+    await kernel.deleteConversation(deletedExplicitTarget.id)
+    await assert.rejects(
+      () => kernel.dispatchTrigger({
+        id: 'evt-invalid-explicit-target',
+        source: 'webhook:ci',
+        text: '不得送达 Worker',
+        targetConversationId: deletedExplicitTarget.id,
+        threadKey: THREAD_KEY,
+        createdAt: Date.now(),
+      }),
+      (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
+    )
+    assert.equal(
+      (await inputEntriesOf(kernel, workerId)).length,
+      workerInputsBeforeInvalidTarget.length,
+      '已删除的显式 target 即使有有效 threadKey 订阅，也不得向 Worker 提交输入',
+    )
+
     // ---- threadKey 事件直投：Worker 收到 origin=trigger 输入；router 无 origin=trigger
     env.faux.appendResponses(okPool(2))
     await kernel.dispatchTrigger({

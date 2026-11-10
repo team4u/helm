@@ -141,9 +141,9 @@ function makeServiceHost(): WorkflowServiceHost {
 /** 跑两个真实 run（不同完成时间），返回 service 与 state。 */
 async function runTwoSettledRuns(dataDir: string, state: WorkflowStateStore): Promise<WorkflowService> {
   const service = new WorkflowService({ dataDir, host: makeServiceHost(), state })
-  const first = await service.run({ script: META('hist-int-1') + 'return 1' })
+  const first = await service.run({ conversationId: 1, script: META('hist-int-1') + 'return 1' })
   await service.wait(first.id)
-  const second = await service.run({ script: META('hist-int-2') + 'return 2' })
+  const second = await service.run({ conversationId: 1, script: META('hist-int-2') + 'return 2' })
   await service.wait(second.id)
   return service
 }
@@ -194,7 +194,7 @@ describe('WorkflowService listRuns integrity', () => {
       await activeService.close()
       await service.close()
     })
-    const active = await activeService.run({ script: META('hist-int-active') + 'return await agent("hang")' })
+    const active = await activeService.run({ conversationId: 1, script: META('hist-int-active') + 'return await agent("hang")' })
     await ready.promise
     let runs = activeService.listRuns()
     assert.equal(runs.length, 3, 'active + two settled runs all listed')
@@ -290,11 +290,11 @@ describe('WorkflowService listRuns integrity', () => {
       await service.close()
     })
     // 旧活跃 run 先启（active.values() 插入序在前），随后夹一个较新的终态历史。
-    const olderActive = await service.run({ script: META('ord-a') + 'return await agent("hang-a")' })
+    const olderActive = await service.run({ conversationId: 1, script: META('ord-a') + 'return await agent("hang-a")' })
     await ready[0]!.promise
-    const settled = await service.run({ script: META('ord-mid') + 'return 1' })
+    const settled = await service.run({ conversationId: 1, script: META('ord-mid') + 'return 1' })
     await service.wait(settled.id)
-    const newerActive = await service.run({ script: META('ord-b') + 'return await agent("hang-b")' })
+    const newerActive = await service.run({ conversationId: 1, script: META('ord-b') + 'return await agent("hang-b")' })
     await ready[1]!.promise
 
     const runs = service.listRuns()
@@ -708,8 +708,9 @@ test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码�
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
     // 正常跑两个 run（终态，经编排插件动作 wait:true），制造真实索引与记录。
-    await plugins.invokeAction('builtin:workflow', 'run', { script: META('cli-int-1') + 'return 1', wait: true })
-    await plugins.invokeAction('builtin:workflow', 'run', { script: META('cli-int-2') + 'return 2', wait: true })
+    const conversationId = app.kernel.listConversations()[0]!.id
+    await plugins.invokeAction('builtin:workflow', 'run', { script: META('cli-int-1') + 'return 1', wait: true }, { conversationId })
+    await plugins.invokeAction('builtin:workflow', 'run', { script: META('cli-int-2') + 'return 2', wait: true }, { conversationId })
 
     hub = await startHub({ kernel: app.kernel as never, port: 0 })
     const setupRes = await fetch(`${hub.url}/api/auth/setup`, {

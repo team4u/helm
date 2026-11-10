@@ -1,0 +1,22 @@
+.memory-section-header {
+  justify-content: space-between;
+}
+.memory-section-error {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.memory-section-load {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.memory-section-actions {
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}

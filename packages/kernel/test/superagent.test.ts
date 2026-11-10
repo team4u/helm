@@ -22,6 +22,7 @@ import { fauxProvider, fauxAssistantMessage, fauxToolCall } from '@earendil-work
 
 import { HelmError } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
+import { MemoryStore } from '../src/builtin-plugins/memory/store.js'
 import {
   parseMutedSources,
   resolveSuperAgentConfig,
@@ -150,7 +151,9 @@ const route = (map: Record<string, ReturnType<typeof fauxAssistantMessage>>) => 
   return fauxAssistantMessage(`（未脚本化：${text.slice(0, 40)}）`)
 }
 
-/** 中枢汇报握手：等 Router 收到含 marker 的汇报卡输入（汇报真实落库）。 */
+/** 中枢汇报握手：等 Router 收到含 marker 的汇报卡输入（汇报真实落库）。
+ * marker 匹配卡片 meta 字段（如 workerId），不依赖 summary 文本——
+ * summary 优先取回合作答文本，仅无文本时才回落到含 Worker # 的模板。 */
 async function waitfoWorkerReport(env: TestEnv, router: number, marker: string): Promise<void> {
   await waitFor(async () => {
     const detail = await env.app.kernel.getConversationDetail(router, { limit: 50 })
@@ -315,8 +318,9 @@ test('superagent4: 启用自举——Profile/技能/两常驻会话/公开 doc/�
     assert.deepEqual(profilesList.find((p) => p.id === 'watchdog')?.skills, ['watchdog-playbooks'])
     assert.ok(existsSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'references', 'herdr-stalled.md')))
     assert.ok(existsSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'references', 'ci-failure.md')))
-    assert.ok(existsSync(join(env.dataDir, 'profiles', 'superagent', 'MEMORY.md')))
-    assert.ok(existsSync(join(env.dataDir, 'profiles', 'watchdog', 'MEMORY.md')))
+    // MEMORY.md 归 builtin:memory 自治：superagent 自举不创建记忆文件。
+    assert.equal(existsSync(join(env.dataDir, 'profiles', 'superagent', 'MEMORY.md')), false)
+    assert.equal(existsSync(join(env.dataDir, 'profiles', 'watchdog', 'MEMORY.md')), false)
 
     // 常驻会话：动态分配 + 持久化 + 无角色 Tag + helm 归属 + 管理保护
     const ids = await residentIds(env)
@@ -395,8 +399,9 @@ test('superagent5: 幂等自举——不覆盖用户文件；partial-start 补�
     await enableSuperAgent(env)
     assert.match(readFileSync(join(env.dataDir, 'profiles', 'superagent', 'SYSTEM.md'), 'utf8'), /SuperAgent 中枢/)
     assert.match(readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'references', 'ci-failure.md'), 'utf8'), /CI 失败处置/)
-    // 用户文件仍原样（watchdog SYSTEM.md 未被删除步骤触及，保持自举默认或用户版本）
-    assert.ok(existsSync(join(env.dataDir, 'profiles', 'watchdog', 'MEMORY.md')))
+    // MEMORY.md 由 builtin:memory 自治：partial-start 补齐只针对 SYSTEM.md 与
+    // 技能 references，不创建/补回记忆文件。
+    assert.equal(existsSync(join(env.dataDir, 'profiles', 'watchdog', 'MEMORY.md')), false)
   } finally {
     await env.close()
   }
@@ -841,29 +846,31 @@ test('superagent12: 三终态覆盖——failed/aborted 同样汇报且 outcome 
     }
     await kernel.waitForIdle(w1.workerConversationId)
     await waitFor(async () => env.faux.getPendingResponseCount() === 0)
-    env.faux.setResponses([
-      route({
-        '失败任务': fauxAssistantMessage('boom', { stopReason: 'error' }),
-        '回合失败': fauxAssistantMessage('汇报知悉'),
-      }),
-    ])
+    // 两组响应各覆盖一次调用：worker 失败回合一组、中枢消化汇报卡一组——
+    // 调度顺序无关（首回合文件惰性初始化等微小时序不再影响命中归属）。
+    const failedRoute = route({
+      '失败任务': fauxAssistantMessage('boom', { stopReason: 'error' }),
+      '回合失败': fauxAssistantMessage('汇报知悉'),
+    })
+    env.faux.setResponses([failedRoute, failedRoute])
     await env.submitAndWait(w1.workerConversationId, '失败任务', { origin: 'agent' })
     // failed 节点落图 + 中枢汇报回合结算（握手而非 sleep）。
     await waitFor(async () => {
       const doc = (await readDocRaw(env, 'recall-graph')) as { nodes: Array<{ conversationId: number; outcome: string }> }
       return doc.nodes.some((n) => n.conversationId === w1.workerConversationId && n.outcome === 'failed')
     })
-    await waitfoWorkerReport(env, ids.router!, `Worker #${w1.workerConversationId}`)
+    await waitfoWorkerReport(env, ids.router!, `\"workerId\":${w1.workerConversationId}`).then(() =>
+      waitfoWorkerReport(env, ids.router!, '"outcome":"failed"'),
+    )
     await kernel.waitForIdle(ids.router!)
     await waitFor(async () => env.faux.getPendingResponseCount() === 0)
 
     // aborted：工具在途时中止（真实 bash sleep，确定性观察到 working 后中止）
-    env.faux.setResponses([
-      route({
-        '中止任务': fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 5 && echo done' })], { stopReason: 'toolUse' }),
-        '回合被中止': fauxAssistantMessage('汇报知悉'),
-      }),
-    ])
+    const abortRoute = route({
+      '中止任务': fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 5 && echo done' })], { stopReason: 'toolUse' }),
+      '回合被中止': fauxAssistantMessage('汇报知悉'),
+    })
+    env.faux.setResponses([abortRoute, abortRoute])
     const w2 = (await kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: '中止任务' })) as {
       workerConversationId: number
     }
@@ -874,9 +881,12 @@ test('superagent12: 三终态覆盖——failed/aborted 同样汇报且 outcome 
       const doc = (await readDocRaw(env, 'recall-graph')) as { nodes: Array<{ conversationId: number; outcome: string }> }
       return doc.nodes.some((n) => n.conversationId === w2.workerConversationId && n.outcome === 'aborted')
     })
-    await waitfoWorkerReport(env, ids.router!, `Worker #${w2.workerConversationId}`)
+    await waitfoWorkerReport(env, ids.router!, `\"workerId\":${w2.workerConversationId}`).then(() =>
+      waitfoWorkerReport(env, ids.router!, '"outcome":"aborted"'),
+    )
     await kernel.waitForIdle(ids.router!)
-    await waitFor(async () => env.faux.getPendingResponseCount() === 0)
+    // abort 可能发生在模型请求前，脚本响应池允许有未消费项；以真实回合结算与
+    // 汇报落库握手为准，不把响应池清空当作业务完成条件。
     // 两个 worker 的汇报都入了中枢（renderer 卡片；握手已确保先后落库）
     const routerDetail = await kernel.getConversationDetail(ids.router!, { limit: 50 })
     const reports = routerDetail.entries.filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('superagent:worker-report'))
@@ -1105,5 +1115,90 @@ test('superagent17: 持久 doc 损坏时启用显式失败（不静默重建）'
     )
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// MEMORY.md 归属边界：superagent 自举绝不创建/补回记忆文件
+// ---------------------------------------------------------------------------
+
+test('superagent 记忆归属: memory 停用时启用 superagent 不创建 MEMORY.md', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    await env.app.kernel.plugins.disable('builtin:memory')
+    await enableSuperAgent(env)
+    // 自举完成 Profile/SYSTEM，但绝不造记忆文件
+    assert.ok(existsSync(join(env.dataDir, 'profiles', 'superagent', 'SYSTEM.md')), 'SYSTEM.md 正常自举')
+    assert.equal(existsSync(join(env.dataDir, 'profiles', 'superagent', 'MEMORY.md')), false, 'memory 停用时不得创建记忆文件')
+    assert.equal(existsSync(join(env.dataDir, 'profiles', 'watchdog', 'MEMORY.md')), false, 'watchdog 同理')
+    // 重新启用 memory 后仍未静默补文件（惰性创建发生在首次需要记忆时）
+    await env.app.kernel.plugins.enable('builtin:memory')
+    assert.equal(existsSync(join(env.dataDir, 'profiles', 'superagent', 'MEMORY.md')), false, 'memory 启用本身不创建文件')
+  } finally {
+    await env.close()
+  }
+})
+
+test('superagent 记忆归属: 已初始化文件被删后重启/superagent 重启自举不补回，memory 检测仍告警', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    await enableSuperAgent(env)
+    // memory 插件初始化 superagent 记忆（真实 before_turn 建立初始化标记）
+    const host = env.app.kernel.plugins!
+    const notifications: Array<{ title: string }> = []
+    env.app.kernel.events.subscribe((frame) => {
+      const event = frame.event as { type?: string; title?: string }
+      if (event.type === 'notification' && event.title) notifications.push({ title: event.title })
+    })
+    const routerId = (host.getPublicDoc('builtin:superagent', 'index').value as { routerConversationId: number }).routerConversationId
+    env.faux.setResponses([fauxAssistantMessage('中枢就绪')])
+    await env.submitAndWait(routerId, '初始化记忆的回合')
+    const memoryPath = join(env.dataDir, 'profiles', 'superagent', 'MEMORY.md')
+    assert.ok(existsSync(memoryPath), '首次回合后 memory 已惰性创建文件')
+
+    // 外部删除已初始化的记忆文件
+    rmSync(memoryPath)
+
+    // 重启整个内核（superagent + memory 均随 createHelm 重新自举）
+    const dataDir = env.dataDir
+    await env.app.close()
+    const faux2 = fauxProvider()
+    const models2 = createModels()
+    models2.setProvider(faux2.provider)
+    const app2 = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: models2, watchdogIntervalMs: 0 })
+    try {
+      assert.equal(existsSync(memoryPath), false, '重启自举不得补回已删除的记忆文件')
+      // memory 检测：在 superagent 会话跑一回合，应发缺失告警（不重建）
+      const host2 = app2.kernel.plugins!
+      const routerId2 = (host2.getPublicDoc('builtin:superagent', 'index').value as { routerConversationId: number }).routerConversationId
+      const notifications2: Array<{ title: string }> = []
+      app2.kernel.events.subscribe((frame) => {
+        const event = frame.event as { type?: string; title?: string }
+        if (event.type === 'notification' && event.title) notifications2.push({ title: event.title })
+      })
+      const missingSystemSections: string[] = []
+      faux2.setResponses([(context) => {
+        for (const message of context.messages) {
+          if (message.role === 'system') {
+            missingSystemSections.push(...Object.values((message as { sections?: Record<string, string> }).sections ?? {}))
+          }
+        }
+        return fauxAssistantMessage('重启后回合')
+      }])
+      await app2.kernel.submitInput(routerId2, '重启后的自检')
+      await app2.kernel.waitForIdle(routerId2)
+      assert.ok(
+        notifications2.some((n) => n.title.includes('长期记忆文件缺失')),
+        'memory 插件应检测到已初始化文件的缺失并显式告警',
+      )
+      assert.ok(missingSystemSections.some((section) => section.includes('<memory_assets_missing>')), '缺失段落真实进入重启后的模型请求')
+      assert.equal(existsSync(memoryPath), false, '告警路径绝不重建文件（自愈只经显式写入）')
+    } finally {
+      await app2.close()
+    }
+    void notifications
+  } finally {
+    // dataDir 由第二个 app 的 finally 之后清理；此处兜底
+    rmSync(env.dataDir, { recursive: true, force: true })
   }
 })

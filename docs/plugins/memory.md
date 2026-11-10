@@ -54,7 +54,7 @@ flowchart TD
 | :--- | :--- | :--- | :--- | :--- |
 | 已启用（默认） | 未禁用（默认开启） | `memory.content` / `memory.guide` + 工具用法提示 | 可见 | 正常原子写盘（64k 防线） |
 | 已启用（默认） | 已禁用（单角色关闭） | 不读取、不注入 | 从本回合工具表剥离 | `403 memory_disabled_for_profile` |
-| 已停用（全局） | 任意 | 不注入 | 已从宿主卸载 | `tool_not_found` |
+| 已停用（全局） | 任意 | 不注入 | 已从宿主卸载 | `unknown_tool` |
 
 停用插件后：动作（`helm memory` 命令与 HTTP 端点）、工具与 Web 插槽贡献即时消失；`builtin:profile` 的 SYSTEM.md 注入与 `load_skill` 不受影响。
 
@@ -87,12 +87,14 @@ flowchart TD
 
 ## 动作契约（五端复用）
 
-三个 `ctx.action` 自动映射为 HTTP `POST /api/actions/builtin:memory/<action>`、CLI `helm memory <action>`（支持 `--json`）与 Web `invokeAction`：
+三个 `ctx.action` 自动映射为 HTTP `POST /api/actions/builtin:memory/<action>`、CLI `helm memory <action>`（支持 `--json` 与通用 `--current`）与 Web `invokeAction`。`profileId` 可省略：显式 `profileId` 优先；省略时从 `conversationId` 调用上下文解析 Profile（CLI 用 `--current` 传入会话 ID）。两者都缺失时显式返回 `400 validation_error`；显式目标无效时返回对应错误，不回退到调用上下文。
 
 ### `helm memory get`
 
 ```bash
 helm memory get --profile-id coder --json
+# 按当前会话 Profile 读取
+helm memory get --current --json
 ```
 
 ```json
@@ -105,6 +107,8 @@ helm memory get --profile-id coder --json
 
 ```bash
 helm memory set --profile-id coder --text '# Memory\n\n偏好简洁回复。' --json
+# 写入当前会话所属 Profile
+helm memory set --current --text '偏好简洁回复。' --json
 # 追加模式
 helm memory set --profile-id coder --text '新事实' --mode append --json
 ```
@@ -115,14 +119,17 @@ helm memory set --profile-id coder --text '新事实' --mode append --json
 ### `helm memory configure`
 
 ```bash
-helm memory configure --profile-id coder --enabled false --json
+helm memory configure --profile-id coder --enabled=false --json
+# 修改当前会话所属 Profile
+helm memory configure --current --enabled=false --json
 # 开启并惰性创建文件
-helm memory configure --profile-id coder --enabled true --json
+helm memory configure --profile-id coder --enabled=true --json
 # 携带替换文本（先写成功再提交开关，不留半配置）
-helm memory configure --profile-id coder --enabled true --text '# 重置后的记忆' --json
+helm memory configure --profile-id coder --enabled=true --text '# 重置后的记忆' --json
 ```
 
-- 单角色开关即时生效；已有 `MEMORY.md` 文件保留在磁盘上，重新开启即可恢复。
+- 单角色开关影响后续调用与回合；不取消已经开始的写入或回合。已有 `MEMORY.md` 文件保留在磁盘上，重新开启即可恢复。
+- Profile 删除后以相同 ID 重建时，私有 `disabledProfiles` / `initializedProfiles` 标记仍按 ID 生效；本设计不提供 Profile 删除时的记忆状态清理。
 
 ---
 
@@ -133,7 +140,7 @@ helm memory configure --profile-id coder --enabled true --text '# 重置后的�
 - 单角色「启用长期记忆」开关（即时生效）；
 - `MEMORY.md` 编辑器与「保存记忆」按钮（内容独立保存，不随「取消角色编辑」回滚）；
 - 新建尚未落盘的 Profile 只提示先创建角色，再配置记忆；
-- 异步切换 Profile 带代数竞争保护（不串数据），后台刷新不覆盖未保存的本地草稿。
+- 异步切换 Profile 带代数竞争保护（不串数据）；宿主 store 更新导致的 client context 重建不会触发 Profile 记忆状态重置。保存期间继续编辑时，只提交保存开始时捕获的文本，保存完成不覆盖后续输入。加载失败显式显示状态错误，不伪装为关闭。
 
 ---
 

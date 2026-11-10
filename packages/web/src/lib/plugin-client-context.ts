@@ -11,6 +11,7 @@
  * ensurePluginDoc / 会话文档订阅），无任何 mock。
  */
 import { createContext, useCallback, useContext, useEffect } from 'react'
+import { Switch } from '../ui/Switch.js'
 import type { AskSpec, ComposerController, ConversationDetail, ConversationLive, ConversationSummary, PluginClientContext as PluginClientContextType } from '@helm/protocol'
 import { conversationsApi } from './api.js'
 import { useHelmStore, usePluginDoc as usePluginDocFromStore, usePluginSessionDoc as usePluginSessionDocFromStore } from './store-context.js'
@@ -18,6 +19,9 @@ import type { HelmStoreValue } from './types.js'
 export { useToolActivity } from './tool-activity.js'
 
 export const PluginClientContext = createContext<PluginClientContextType | null>(null)
+
+/** 宿主共享的布尔开关原语，供插件 client.tsx 复用同一无障碍组件实现。 */
+export { Switch }
 
 export function usePluginContext(): PluginClientContextType {
   const ctx = useContext(PluginClientContext)

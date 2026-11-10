@@ -177,7 +177,7 @@ test('conversations create/send/abort/update/delete 的路径、body 与 --curre
     'POST /api/conversations/7/abort': () => ({ body: { ok: true } }),
     'PATCH /api/conversations/7': (body) => ({ body: { id: 7, ...body as object } }),
     'DELETE /api/conversations/7': () => ({ status: 204 }),
-    'DELETE /api/conversations/1': () => ({ status: 403, body: { error: { code: 'root_conversation_protected', message: '#1 受保护' } } }),
+    'DELETE /api/conversations/1': () => ({ status: 409, body: { error: { code: 'conversation_managed_by_plugin', message: '会话由已启用插件托管，禁止删除' } } }),
   })
   const env = makeEnv(hub.url, dir)
   try {
@@ -220,11 +220,11 @@ test('conversations create/send/abort/update/delete 的路径、body 与 --curre
     const deleted = await run(['conversations', 'delete', '7', '--json'], env)
     assert.equal(deleted.code, 0, deleted.err)
 
-    // 服务端 403 错误信封 -> stderr JSON + 非零退出
+    // 通用插件管理权 409 错误信封 -> stderr JSON + 非零退出
     const forbidden = await run(['conversations', 'delete', '1', '--json'], env)
     assert.equal(forbidden.code, 1)
     const parsed = JSON.parse(forbidden.err) as { error: { code: string; message: string } }
-    assert.equal(parsed.error.code, 'root_conversation_protected')
+    assert.equal(parsed.error.code, 'conversation_managed_by_plugin')
   } finally {
     await hub.close()
   }

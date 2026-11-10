@@ -117,7 +117,7 @@ test('专用 SSE：插件停用后已建流被终止（事件驱动关流）', {
 test('专用 SSE：会话删除后已建流被终止（conversation.deleted 关流）', { timeout: 60_000 }, async () => {
   const app = await openApp()
   try {
-    // 根会话 #1 受保护：新建会话验证删除语义。
+    // 新建独立会话验证删除级联，不依赖播种入口的固定 ID。
     const conv = await app.kernel.createConversation({})
     const conversationId = conv.id
     app.metrics.set(conversationId, { n: 1 })

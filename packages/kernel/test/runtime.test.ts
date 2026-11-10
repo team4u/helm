@@ -491,7 +491,110 @@ describe('原生 subagent', { timeout: 60_000 }, () => {
 })
 
 describe('trigger 与删除级联', { timeout: 60_000 }, () => {
-  it('dispatchTrigger defang 后投递 #1（origin trigger）；载荷逃逸被转义', { timeout: 60_000 }, async () => {
+  it('dispatchTrigger 缺省选择 human-owned assistant 入口，不被较新的 bot/helm 会话压过', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'trigger-ownership'))
+    try {
+      const humanId = 1
+      const bot = await kernel.createConversation({ title: '较新的 Bot', profileId: 'assistant' })
+      const helm = await kernel.createConversation({ title: '较新的 Helm', profileId: 'assistant' })
+      kernel.markConversationOwnership(bot.id, 'bot')
+      kernel.markConversationOwnership(helm.id, 'helm')
+      kernel.__faux.setResponses([fauxAssistantMessage('事件处理完成')])
+
+      await kernel.dispatchTrigger({ id: 'evt-human-owner', source: 'cron', text: '只投 human', createdAt: Date.now() })
+      await kernel.waitForIdle(humanId)
+
+      const humanInputs = (await kernel.getConversationDetail(humanId, { limit: 100 })).entries
+        .filter((entry) => entry.kind === 'helm.input')
+      assert.ok(humanInputs.some((entry) => JSON.stringify(entry.data).includes('只投 human')))
+      for (const id of [bot.id, helm.id]) {
+        const inputs = (await kernel.getConversationDetail(id, { limit: 100 })).entries
+          .filter((entry) => entry.kind === 'helm.input')
+        assert.equal(inputs.length, 0, `ownedBy assistant 会话 ${id} 不得抢占 human 入口`)
+      }
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('dispatchTrigger 无会话时并发共享一次创建，显式目标仍直接投递', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'trigger-single-flight'))
+    try {
+      await kernel.deleteConversation(1)
+      kernel.__faux.setResponses(Array.from({ length: 8 }, (_, i) => fauxAssistantMessage(`并发 ${i}`)))
+      await Promise.all(Array.from({ length: 4 }, (_, i) => kernel.dispatchTrigger({
+        id: `evt-concurrent-${i}`,
+        source: 'cron',
+        text: `并发事件 ${i}`,
+        createdAt: Date.now(),
+      })))
+      const created = kernel.listConversations().filter((conversation) =>
+        conversation.profileId === 'assistant' && conversation.parentConversationId === undefined,
+      )
+      assert.equal(created.length, 1, '空会话并发 dispatchTrigger 只能创建一个缺省入口')
+      const [target] = created
+      assert.ok(target)
+      await kernel.waitForIdle(target.id)
+      const targetInputs = (await kernel.getConversationDetail(target.id, { limit: 100 })).entries
+        .filter((entry) => entry.kind === 'helm.input')
+      assert.equal(targetInputs.length, 4)
+
+      const explicit = await kernel.createConversation({ title: '显式目标', profileId: 'assistant' })
+      kernel.__faux.setResponses([fauxAssistantMessage('显式事件完成')])
+      await kernel.dispatchTrigger({
+        id: 'evt-explicit-target',
+        source: 'cron',
+        text: '显式投递',
+        targetConversationId: explicit.id,
+        createdAt: Date.now(),
+      })
+      await kernel.waitForIdle(explicit.id)
+      const explicitInputs = (await kernel.getConversationDetail(explicit.id, { limit: 100 })).entries
+        .filter((entry) => entry.kind === 'helm.input')
+      assert.ok(explicitInputs.some((entry) => JSON.stringify(entry.data).includes('显式投递')))
+
+      await kernel.deleteConversation(target.id)
+      await kernel.deleteConversation(explicit.id)
+      kernel.__faux.setResponses([fauxAssistantMessage('再次创建完成')])
+      await kernel.dispatchTrigger({ id: 'evt-after-deleting-target', source: 'cron', text: '再建入口', createdAt: Date.now() })
+      const recreated = kernel.listConversations()
+      assert.equal(recreated.length, 1, '已完成的 in-flight Promise 不能缓存已删的旧入口')
+      assert.notEqual(recreated[0]!.id, target.id)
+      await kernel.waitForIdle(recreated[0]!.id)
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('dispatchTrigger 缺省创建失败会清理 in-flight，后续可重试', { timeout: 60_000 }, async (t) => {
+    const kernel = await openRuntime(join(root, 'trigger-create-retry'))
+    try {
+      await kernel.deleteConversation(1)
+      const service = (kernel as unknown as {
+        conversations: { createConversation(init: Record<string, unknown>): Promise<import('@helm/protocol').ConversationSummary> }
+      }).conversations
+      const originalCreate = service.createConversation.bind(service)
+      let attempts = 0
+      const mocked = t.mock.method(service, 'createConversation', async (init: Record<string, unknown>) => {
+        attempts += 1
+        if (attempts === 1) throw new HelmError('create_failed', '创建故障探针', 500)
+        return originalCreate(init)
+      })
+      const envelope = { id: 'evt-create-retry', source: 'cron', text: '重试', createdAt: Date.now() }
+      await assert.rejects(() => kernel.dispatchTrigger(envelope), { code: 'create_failed' })
+      assert.equal(kernel.listConversations().length, 0)
+      kernel.__faux.setResponses([fauxAssistantMessage('重试完成')])
+      await kernel.dispatchTrigger(envelope)
+      assert.equal(attempts, 2)
+      assert.equal(kernel.listConversations().length, 1)
+      await kernel.waitForIdle(kernel.listConversations()[0]!.id)
+      mocked.mock.restore()
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('dispatchTrigger defang 后投递缺省 assistant 会话（origin trigger）；载荷逃逸被转义', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't17'))
     try {
       kernel.__faux.setResponses([fauxAssistantMessage('已处理外部事件')])

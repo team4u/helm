@@ -198,10 +198,10 @@ test('run() 无受信 context（HTTP/CLI 路径事实）：run 无 parentToolCal
   const service = new WorkflowService({ dataDir, state, host })
   try {
     // 直接调用（HTTP/CLI 相同路径）：不传 context -> 无 parentToolCallId。
-    const summary = await service.run({ script: FAST_SCRIPT })
+    const summary = await service.run({ conversationId: 1, script: FAST_SCRIPT })
     assert.equal(summary.parentToolCallId, undefined, '无受信 context 时绝不虚构关联')
     // 受信 context 注入（仅内部通道可及）。
-    const linked = await service.run({ script: FAST_SCRIPT }, { parentToolCallId: 'call-internal-9' })
+    const linked = await service.run({ conversationId: 1, script: FAST_SCRIPT }, { parentToolCallId: 'call-internal-9' })
     assert.equal(linked.parentToolCallId, 'call-internal-9')
     await service.wait(linked.id)
   } finally {

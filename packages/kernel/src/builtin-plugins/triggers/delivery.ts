@@ -5,8 +5,8 @@
  * - envelope.targetConversationId 优先（与第二参 targetProfileId 互斥）；
  * - 仅 targetProfileId：取该 Profile 现有会话中最低 ID；无会话则校验 Profile
  *   存在后创建新会话（绝不发给错误角色）；
- * - 均无：保持缺省（不带 targetConversationId，由内核默认投 #1、
- *   superagent trigger hook 决定是否路由中枢）；
+ * - 均无：保持缺省（不带 targetConversationId，由内核解析 assistant 入口，
+ *   superagent trigger hook 可决定是否路由中枢）；
  * - text 传原始文本（runtime.dispatchTrigger 统一 defang 防逃逸包裹，
  *   连接器绝不双层包裹）；source 约定 cron:<id> / webhook:<id>；
  * - runtime 关闭中（isClosing）显式拒绝，防 close 期触发新回合。

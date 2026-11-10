@@ -26,15 +26,11 @@ interface ProfilePluginServices {
 }
 
 export {
-  ASSISTANT_MANAGED_BY,
   HELM_CLI_SKILL_ID,
   HELM_CLI_SKILL_ASSET,
   PROFILE_MANAGED_BY,
   renderSkillTemplate,
-} from './profile/assets.js';
-
-/** 系统级内置技能 ID（SYSTEM.md Layer 0 指引的 load_skill 目标）。 */
-export { HELM_CLI_SKILL_ID as HELM_SKILL_ID } from './profile/assets.js';
+} from './profile/assets.js'
 
 /**
  * 自举默认 assistant Profile 的托管元数据：缺失时显式补写

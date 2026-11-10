@@ -54,7 +54,7 @@ interface TestEnv {
   app: Awaited<ReturnType<typeof createHelm>>
   /** 每次模型请求的完整消息（faux 官方 TranscriptContext 捕获）。 */
   requests: Array<{ roles: string[]; systemSections: string[]; userTexts: string[]; assistantTexts: string[] }>
-  /** 首次启动播种的普通 assistant 入口会话 ID（SDK 保留 #1，实际从 2 起）。 */
+  /** 首次启动播种的初始 assistant 入口会话 ID（由 SDK root #1 承载，普通会话语义）。 */
   initialConvId: number
   /** 真实提交 + 等待空闲（含 turn_settled 钩子）。 */
   submitAndWait(text: string, opts?: { origin?: 'human' | 'agent' | 'trigger' }): Promise<void>
@@ -970,6 +970,29 @@ test('集成6: HTTP 真实往返——鉴权/初始会话可删/动作校验同�
     const actionList = await call('GET', '/api/actions')
     assert.equal(actionList.status, 200)
     assert.ok(JSON.parse(actionList.body).some((a: { pluginId: string; id: string }) => a.pluginId === 'test:probe' && a.id === 'echo'))
+    const memoryWithoutTarget = await call('POST', '/api/actions/builtin:memory/get', { body: { input: {} } })
+    assert.equal(memoryWithoutTarget.status, 400)
+    assert.equal(JSON.parse(memoryWithoutTarget.body).error.code, 'validation_error')
+    const memoryWithContext = await call('POST', '/api/actions/builtin:memory/get', {
+      body: { input: {}, conversationId: httpConvId },
+    })
+    assert.equal(memoryWithContext.status, 200, memoryWithContext.body)
+    assert.equal(JSON.parse(memoryWithContext.body).profileId, 'assistant', 'HTTP conversationId 上下文解析当前 Profile')
+    const memoryInvalidExplicit = await call('POST', '/api/actions/builtin:memory/get', {
+      body: { input: { profileId: 'missing' }, conversationId: httpConvId },
+    })
+    assert.equal(memoryInvalidExplicit.status, 404)
+    assert.equal(JSON.parse(memoryInvalidExplicit.body).error.code, 'profile_not_found', '失效显式 Profile 不得回退到 HTTP 上下文')
+    const memoryInvalidId = await call('POST', '/api/actions/builtin:memory/get', {
+      body: { input: { profileId: '../outside' }, conversationId: httpConvId },
+    })
+    assert.equal(memoryInvalidId.status, 400)
+    assert.equal(JSON.parse(memoryInvalidId.body).error.code, 'validation_error', '非法 Profile ID 在动作边界显式 400')
+    const workflowWithoutTarget = await call('POST', '/api/actions/builtin:workflow/run', {
+      body: { input: { script: 'export const meta = { name: "no-target", description: "t" }\nreturn 1' } },
+    })
+    assert.equal(workflowWithoutTarget.status, 400)
+    assert.equal(JSON.parse(workflowWithoutTarget.body).error.code, 'validation_error')
     const badAction = await call('POST', '/api/actions/test:probe/echo', { body: { input: { text: 123 } } })
     assert.equal(badAction.status, 400)
     assert.equal(JSON.parse(badAction.body).error.code, 'validation_error')
@@ -1028,7 +1051,7 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
   const { runCli } = await import('../../cli/src/index.js')
   const hubUrl = new URL(env.hub.url)
 
-  const run = async (argv: string[]): Promise<{ code: number; out: string; err: string }> => {
+  const run = async (argv: string[], extraEnv: NodeJS.ProcessEnv = {}): Promise<{ code: number; out: string; err: string }> => {
     let out = ''
     let err = ''
     const code = await runCli(argv, {
@@ -1036,6 +1059,7 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
         HELM_HUB_URL: hubUrl.toString(),
         HELM_DATA_DIR: env.dataDir,
         PATH: process.env.PATH,
+        ...extraEnv,
       },
       stdout: (t) => (out += t),
       stderr: (t) => (err += t),
@@ -1104,6 +1128,28 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
     const convs = JSON.parse(list.out) as Array<{ id: number; profileId: string }>
     assert.ok(convs.some((c) => c.profileId === 'assistant'), '应列出 assistant 会话')
 
+    // --- memory 动态命令：真实 CLI ↔ Hub，经 --current 解析会话所属 Profile
+    await env.app.kernel.services.profiles.save({ id: 'coder', name: 'Coder', tags: [] })
+    const memoryConversation = await env.app.kernel.createConversation({ profileId: 'coder' })
+    const currentEnv = { HELM_CONVERSATION_ID: String(memoryConversation.id) }
+    const memorySet = await run(['memory', 'set', '--current', '--text', '# Coder memory', '--json'], currentEnv)
+    assert.equal(memorySet.code, 0, memorySet.err)
+    assert.equal(JSON.parse(memorySet.out).profileId, 'coder')
+    const memoryGet = await run(['memory', 'get', '--current', '--json'], currentEnv)
+    assert.equal(memoryGet.code, 0, memoryGet.err)
+    assert.equal(JSON.parse(memoryGet.out).content, '# Coder memory')
+    const memoryConfigure = await run(['memory', 'configure', '--current', '--enabled=false', '--json'], currentEnv)
+    assert.equal(memoryConfigure.code, 0, memoryConfigure.err)
+    assert.equal(JSON.parse(memoryConfigure.out).enabled, false)
+    const memoryDisabled = await run(['memory', 'get', '--current', '--json'], currentEnv)
+    assert.equal(JSON.parse(memoryDisabled.out).enabled, false)
+    const explicitMemory = await run(['memory', 'get', '--profile-id', 'assistant', '--current', '--json'], currentEnv)
+    assert.equal(explicitMemory.code, 0, explicitMemory.err)
+    assert.equal(JSON.parse(explicitMemory.out).profileId, 'assistant', '显式 --profile-id 优先于 --current')
+    const memoryNoTarget = await run(['memory', 'get', '--json'])
+    assert.notEqual(memoryNoTarget.code, 0)
+    assert.equal((JSON.parse(memoryNoTarget.err) as { error: { code: string } }).error.code, 'validation_error')
+
     // --- send：CLI 提交 → 真实模型回合
     const callCountBefore = env.faux.state.callCount
     env.faux.setResponses([fauxAssistantMessage('CLI 回合完成')])
@@ -1148,11 +1194,36 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
     assert.equal(childAuth.code, 0, `子进程鉴权应经 cli-token 生效：${childAuth.err}`)
     assert.ok((JSON.parse(childAuth.out) as Array<{ id: number }>).some((c) => c.id === cliConvId))
 
-    // --- 初始会话删除同权（无 id 级豁免；放最后避免影响前述引用）
+    // --- 删除初始会话后：工作流无目标明确 400；--current 与显式目标正常
     const delInitial = await run(['conversations', 'delete', String(env.initialConvId), '--json'])
     assert.equal(delInitial.code, 0, `删除初始会话应成功：${delInitial.err}`)
     const goneCheck = await run(['conversations', 'get', String(env.initialConvId), '--json'])
     assert.notEqual(goneCheck.code, 0, '删除后 GET 应非零（404）')
+
+    const workflowScript = (name: string) => `export const meta = { name: "${name}", description: "t" }\nreturn 42`
+    const workflowNoTarget = await run(['workflows', 'run', '--script', workflowScript('no-target-after-delete'), '--wait', '--json'])
+    assert.notEqual(workflowNoTarget.code, 0)
+    assert.equal((JSON.parse(workflowNoTarget.err) as { error: { code: string } }).error.code, 'validation_error')
+
+    const workflowCurrent = await run([
+      'workflows', 'run', '--script', workflowScript('current-target'), '--wait', '--current', '--json',
+    ], { HELM_CONVERSATION_ID: String(cliConvId) })
+    assert.equal(workflowCurrent.code, 0, workflowCurrent.err)
+    assert.equal(JSON.parse(workflowCurrent.out).run.conversationId, cliConvId)
+
+    const workflowExplicit = await run([
+      'workflows', 'run', '--script', workflowScript('explicit-target'), '--wait', '--conversation-id', String(cliConvId), '--json',
+    ])
+    assert.equal(workflowExplicit.code, 0, workflowExplicit.err)
+    assert.equal(JSON.parse(workflowExplicit.out).run.conversationId, cliConvId)
+
+    const toolRun = await env.app.kernel.plugins!.executeTool(
+      'SubagentWorkflow',
+      { script: workflowScript('tool-target') },
+      { conversationId: cliConvId, callId: 'workflow-tool-target' },
+    ) as { isError?: boolean; structuredOutput?: { summary?: { conversationId?: number } } }
+    assert.equal(toolRun.isError, undefined)
+    assert.equal(toolRun.structuredOutput?.summary?.conversationId, cliConvId, 'Workflow 工具使用真实当前会话，不依赖 id 1')
   } finally {
     await env.close()
   }

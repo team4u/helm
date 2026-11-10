@@ -544,7 +544,7 @@ export function createWorkflowPlugin(): PluginDefinition {
       ctx.tool({
         name: 'SubagentWorkflow',
         description:
-          '执行一个 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本（字符串形 JSON 自动解包）。返回真实执行 summary（runId/status/nodes/result）。',
+          '在当前会话执行 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本（字符串形 JSON 自动解包）。返回真实执行 summary（runId/status/nodes/result）。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -669,7 +669,7 @@ export function createWorkflowPlugin(): PluginDefinition {
 
       ctx.action({
         id: 'run',
-        description: '启动工作流运行',
+        description: '在指定或当前会话启动工作流运行；CLI 使用 --current 传入当前会话',
         inputSchema: {
           type: 'object',
           properties: {
@@ -678,7 +678,7 @@ export function createWorkflowPlugin(): PluginDefinition {
             scriptPath: { type: 'string', description: '编排脚本文件绝对路径' },
             args: { description: '原样传给脚本的任意 JSON args' },
             resumeFromRunId: { type: 'string', description: '断点恢复的既有 runId' },
-            conversationId: { type: 'number', minimum: 1, description: '目标会话（缺省 #1）' },
+            conversationId: { type: 'number', minimum: 1, description: '目标会话；新 run 必须指定，CLI 可用 --current' },
             wait: { type: 'boolean', description: '等待终态后返回最新 run（failed/aborted 抛错）' },
           },
           additionalProperties: false,
@@ -691,7 +691,7 @@ export function createWorkflowPlugin(): PluginDefinition {
         },
         cli: {
           command: ['workflows', 'run'],
-          description: '启动工作流运行',
+          description: '在指定或当前会话启动工作流运行（CLI 使用 --current）',
           positional: [{ field: 'name', readFileInto: 'script' }],
           timeoutMs: 0,
         },

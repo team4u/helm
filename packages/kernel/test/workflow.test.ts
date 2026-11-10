@@ -1303,10 +1303,30 @@ function makeServiceHost(options: { actionFail?: boolean } = {}): WorkflowServic
 describe('WorkflowService', () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'wf-service-'))
 
+  it('新 run 缺少目标会话时显式 400；resume 复用原 run 会话并拒绝改投', timeout, async () => {
+    const host = makeServiceHost()
+    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    await assert.rejects(
+      () => service.run({ script: META('missing-target') + 'return 1' }),
+      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400 && /目标会话/.test(err.message),
+    )
+
+    const first = await service.run({ script: META('resume-target') + 'return 2', conversationId: 2 })
+    await service.wait(first.id)
+    assert.equal(first.conversationId, 2)
+    const resumed = await service.run({ resumeFromRunId: first.id })
+    assert.equal(resumed.conversationId, 2, 'resume 缺省目标取原 run 所属会话，不猜测 ID 1')
+    await assert.rejects(
+      () => service.run({ resumeFromRunId: first.id, conversationId: 1 }),
+      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400 && /目标不匹配/.test(err.message),
+    )
+    await service.close()
+  })
+
   it('run returns immediately with running summary; wait resolves result', timeout, async () => {
     const host = makeServiceHost()
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
-    const summary = await service.run({ script: META('svc1') + 'return 1 + 1' })
+    const summary = await service.run({ conversationId: 1, script: META('svc1') + 'return 1 + 1' })
     assert.equal(summary.status, 'running')
     const result = await service.wait(summary.id)
     assert.equal(result, 2)
@@ -1320,6 +1340,7 @@ describe('WorkflowService', () => {
     const service = new WorkflowService({ dataDir, host, state })
     // 坏 meta：meta 块插值——引擎 validate 前 extractMeta 即抛。
     const summary = await service.run({
+      conversationId: 1,
       script: 'export const meta = { name: `bad${1}`, description: "d" }\nreturn 1',
     })
     await service.wait(summary.id)
@@ -1338,7 +1359,7 @@ describe('WorkflowService', () => {
     // 首次 flush（running 快照）成功，此后全部失败——终态写入失败。
     const state = makeFailingFlushStore(1)
     const service = new WorkflowService({ dataDir, host, state })
-    const summary = await service.run({ script: META('svc-flush') + 'return 42' })
+    const summary = await service.run({ conversationId: 1, script: META('svc-flush') + 'return 42' })
     // wait 必须如实抛出终态落盘失败，不假成功。
     await assert.rejects(
       () => service.wait(summary.id),
@@ -1358,7 +1379,7 @@ describe('WorkflowService', () => {
     const state = makeFailingFlushStore(0) // 首次 flush 即失败
     const service = new WorkflowService({ dataDir, host, state })
     await assert.rejects(
-      () => service.run({ script: META('svc-flush0') + 'return 1' }),
+      () => service.run({ conversationId: 1, script: META('svc-flush0') + 'return 1' }),
       /simulated store flush failure/,
     )
     // 不留 active：abort 对不存在的 run 报 not_found（而非假 running）。
@@ -1370,6 +1391,7 @@ describe('WorkflowService', () => {
     const host = makeServiceHost()
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
     const bad = await service.run({
+      conversationId: 1,
       script: META('svc2') + 'const v = await action("update.memory", {})\nreturn v',
     })
     const badResult = await service.wait(bad.id)
@@ -1383,6 +1405,7 @@ describe('WorkflowService', () => {
     assert.ok((actionNode!.error ?? '').includes('命中多个插件'), actionNode!.error)
 
     const good = await service.run({
+      conversationId: 1,
       script: META('svc3') + 'const v = await action("builtin:profile.update.memory", {})\nreturn v',
     })
     const goodResult = await service.wait(good.id)
@@ -1407,6 +1430,7 @@ describe('WorkflowService', () => {
     }
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
     const summary = await service.run({
+      conversationId: 1,
       script: META('svc4') + 'const v = await agent("hang")\nreturn v',
     })
     // 等 spawn 进入在途。
@@ -1426,6 +1450,7 @@ describe('WorkflowService', () => {
     const state = makeStateStore()
     const service = new WorkflowService({ dataDir, host, state })
     const first = await service.run({
+      conversationId: 1,
       script: META('svc5') + 'const a = await agent("one")\nreturn a',
     })
     await service.wait(first.id)
@@ -1467,6 +1492,7 @@ describe('WorkflowService', () => {
     const state = makeStateStore()
     const service = new WorkflowService({ dataDir, host, state })
     const first = await service.run({
+      conversationId: 1,
       script: META('svc-failed-action') + 'const v = await action("builtin:profile.update.memory", {})\nreturn v',
     })
     await service.wait(first.id)
@@ -1493,6 +1519,7 @@ describe('WorkflowService', () => {
     const state = makeStateStore()
     const service = new WorkflowService({ dataDir, host, state })
     const first = await service.run({
+      conversationId: 1,
       script: META('svc-unreadable') + 'const a = await agent("one")\nconst b = await agent("two")\nreturn [a, b]',
     })
     await service.wait(first.id)
@@ -1524,6 +1551,7 @@ describe('WorkflowService', () => {
     const state = makeStateStore()
     const service = new WorkflowService({ dataDir, host, state })
     const first = await service.run({
+      conversationId: 1,
       script: META('svc-args') + 'const a = await agent(args.topic)\nreturn a',
       args: { topic: 'hello' },
     })
@@ -1551,8 +1579,8 @@ describe('WorkflowService', () => {
     const host = makeServiceHost()
     const service = new WorkflowService({ dataDir, host, state: makeStateStore(), concurrency: 4 })
     const [s1, s2] = await Promise.all([
-      service.run({ script: META('conc-id-1') + 'const a = await agent("one")\nreturn a' }),
-      service.run({ script: META('conc-id-2') + 'const a = await agent("two")\nreturn a' }),
+      service.run({ conversationId: 1, script: META('conc-id-1') + 'const a = await agent("one")\nreturn a' }),
+      service.run({ conversationId: 1, script: META('conc-id-2') + 'const a = await agent("two")\nreturn a' }),
     ])
     await Promise.all([service.wait(s1.id), service.wait(s2.id)])
     assert.equal(host.spawns.length, 2)
@@ -1585,8 +1613,8 @@ describe('WorkflowService', () => {
       META(name) +
       `const a = await agent("${tag}")\nconst b = await agent("${tag}", { resume: "${tag}" })\nreturn [a, b]`
     const [s1, s2] = await Promise.all([
-      service.run({ script: script('conc-res-1', 'left') }),
-      service.run({ script: script('conc-res-2', 'right') }),
+      service.run({ conversationId: 1, script: script('conc-res-1', 'left') }),
+      service.run({ conversationId: 1, script: script('conc-res-2', 'right') }),
     ])
     await Promise.all([service.wait(s1.id), service.wait(s2.id)])
     assert.equal(resumeRefs.length, 2, 'each run resumed its own agent')
@@ -1700,6 +1728,7 @@ describe('WorkflowService', () => {
       redact: (text) => text.replaceAll(SECRET, '{{REDACTED}}'),
     })
     const summary = await service.run({
+      conversationId: 1,
       script: META('svc-redact') + 'return { nested: { token: args.token }, list: [args.token] }',
       args: { token: SECRET },
     })
@@ -1714,10 +1743,10 @@ describe('WorkflowService', () => {
 
   it('validates request: exactly one source, safe name, size limit', timeout, async () => {
     const service = new WorkflowService({ dataDir, host: makeServiceHost(), state: makeStateStore() })
-    await assert.rejects(() => service.run({ name: 'a', script: 'x' }), /恰好提供一个/)
-    await assert.rejects(() => service.run({}), /必须提供/)
-    await assert.rejects(() => service.run({ name: '../evil' }), /非法/)
-    await assert.rejects(() => service.run({ name: 'x'.repeat(200) }), /非法/)
+    await assert.rejects(() => service.run({ conversationId: 1, name: 'a', script: 'x' }), /恰好提供一个/)
+    await assert.rejects(() => service.run({ conversationId: 1 }), /必须提供/)
+    await assert.rejects(() => service.run({ conversationId: 1, name: '../evil' }), /非法/)
+    await assert.rejects(() => service.run({ conversationId: 1, name: 'x'.repeat(200) }), /非法/)
     await service.close()
   })
 
@@ -1732,7 +1761,7 @@ describe('WorkflowService', () => {
       rmSync(link, { force: true })
       const { symlinkSync } = await import('node:fs')
       symlinkSync(outside, link)
-      await assert.rejects(() => service.run({ name: 'escape' }), /符号链接|非法|不可读/)
+      await assert.rejects(() => service.run({ conversationId: 1, name: 'escape' }), /符号链接|非法|不可读/)
     } finally {
       rmSync(link, { force: true })
       rmSync(outside, { force: true })
@@ -1760,6 +1789,7 @@ describe('WorkflowService', () => {
     const service = new WorkflowService({ dataDir, host, state })
     // phase() 声明 + 长脚本：onProgress 节流窗口内落 progress。
     const summary = await service.run({
+      conversationId: 1,
       script:
         META('svc-progress') +
         `
@@ -1796,6 +1826,7 @@ describe('WorkflowService', () => {
 
     // 1) 正常执行 env.exec（带 label 与 idempotent: true）
     const summary1 = await service.run({
+      conversationId: 1,
       script:
         META('env-exec-1') +
         `
@@ -1812,6 +1843,7 @@ describe('WorkflowService', () => {
 
     // 2) 无冲突短名 exec 解析为 env.exec
     const summary2 = await service.run({
+      conversationId: 1,
       script: META('env-exec-2') + 'const res = await action("exec", { command: "uptime" })\nreturn res',
     })
     const res2 = await service.wait(summary2.id)
@@ -1819,6 +1851,7 @@ describe('WorkflowService', () => {
 
     // 3) 非零退出码且 allowFailure 未设：抛 env_exec_failed，节点失败折叠为 null
     const summary3 = await service.run({
+      conversationId: 1,
       script: META('env-exec-3') + 'const res = await action("env.exec", { command: ["fail-cmd"] })\nreturn res',
     })
     const res3 = await service.wait(summary3.id)
@@ -1830,6 +1863,7 @@ describe('WorkflowService', () => {
 
     // 4) 非零退出码但 allowFailure: true：正常返回结果对象
     const summary4 = await service.run({
+      conversationId: 1,
       script:
         META('env-exec-4') +
         'const res = await action("env.exec", { command: ["fail-cmd"], allowFailure: true })\nreturn res',
@@ -1839,6 +1873,7 @@ describe('WorkflowService', () => {
 
     // 5) 非法参数（如空 command 或未知选项）在 Pre-flight 阶段拒绝，节点折叠为 null 且不记 action_started
     const summary5 = await service.run({
+      conversationId: 1,
       script: META('env-exec-5') + 'const res = await action("env.exec", { command: "", badField: 123 })\nreturn res',
     })
     const res5 = await service.wait(summary5.id)
@@ -1861,6 +1896,7 @@ describe('WorkflowService', () => {
     const state = makeStateStore()
     const service = new WorkflowService({ dataDir, host, state })
     const summary = await service.run({
+      conversationId: 1,
       script: META('env-exec-unsupported') + 'const res = await action("env.exec", { command: "date" })\nreturn res',
     })
     const res = await service.wait(summary.id)
@@ -1915,6 +1951,7 @@ describe('WorkflowService', () => {
 
     // 第一轮：Step 1 agent 成功，Step 2 action preflight 失败（未知动作）
     const sum1 = await service.run({
+      conversationId: 1,
       script:
         META('resume-preflight') +
         `
@@ -1938,6 +1975,7 @@ describe('WorkflowService', () => {
 
     // 第二轮：改正脚本，resumeFromRunId。Step 1 必须 100% 缓存命中，不重新跑 agent；Step 2 执行成功！
     const sum2 = await service.run({
+      conversationId: 1,
       script:
         META('resume-preflight') +
         `
@@ -1974,6 +2012,7 @@ describe('WorkflowService', () => {
 
     // 1) 相对路径 cwd 必须在 preflight 拦截
     const sumRel = await service.run({
+      conversationId: 1,
       script: META('preflight-rel-cwd') + 'const res = await action("env.exec", { command: "ls", cwd: "relative/path" })\nreturn res',
     })
     const resRel = await service.wait(sumRel.id)
@@ -1990,6 +2029,7 @@ describe('WorkflowService', () => {
 
     // 2) 非法 nodeId 必须在 preflight 拦截
     const sumNode = await service.run({
+      conversationId: 1,
       script: META('preflight-bad-node') + 'const res = await action("env.exec", { command: "ls", nodeId: "_bad:node!*" })\nreturn res',
     })
     const resNode = await service.wait(sumNode.id)
@@ -2006,6 +2046,7 @@ describe('WorkflowService', () => {
 
     // 3) 越界 timeoutMs 必须在 preflight 拦截
     const sumTimeout = await service.run({
+      conversationId: 1,
       script: META('preflight-bad-timeout') + 'const res = await action("env.exec", { command: "ls", timeoutMs: 999_999_999 })\nreturn res',
     })
     const resTimeout = await service.wait(sumTimeout.id)
@@ -2053,6 +2094,7 @@ describe('WorkflowService', () => {
 
     // 未 await 慢命令就立即 throw 模拟早期失败
     const sum = await service.run({
+      conversationId: 1,
       script:
         META('unawaited-exec-leak') +
         `
@@ -2122,6 +2164,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
 
       // 不显式指定 agentType：默认必须经 assistant profile（ensureDefault 保证存在）。
       const summary = await service.run({
+        conversationId: runtime.listConversations()[0]!.id,
         script: META('sdk-default') + 'const a = await agent("ping")\nreturn a',
       })
       const result = await service.wait(summary.id)
@@ -2165,6 +2208,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
     const service = new WorkflowService({ dataDir, host, state })
     try {
       const summary = await service.run({
+        conversationId: 1,
         script: META('svc-str-args') + 'return args.topics.map((t) => t.toUpperCase())',
         args: '{"topics": ["star", "ocean"]}',
       })
@@ -2194,7 +2238,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
     // 插件化后编排引擎仅经 builtin:workflow 动作总线驱动（不再暴露 app.workflows）。
     const workflows = app.kernel.plugins!
     const runWorkflow = (request: Record<string, unknown>) =>
-      workflows.invokeAction('builtin:workflow', 'run', request) as Promise<
+      workflows.invokeAction('builtin:workflow', 'run', request, { conversationId: app.kernel.listConversations()[0]!.id }) as Promise<
         import('@helm/protocol').WorkflowRunSummary
       >
     try {
@@ -2288,6 +2332,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
       await service.init()
 
       const summary = await service.run({
+        conversationId: runtime.listConversations()[0]!.id,
         script:
           META('real-exec') +
           `

@@ -3,7 +3,7 @@
  * profiles/skills/providers/artifacts/SecretStash）+ 真实 PluginHost 路由
  * 注册（ctx.route 完整路径声明）+ 模拟 runtime 会话面。
  *
- * 覆盖：鉴权边界（status 如实反映 token）、setup/login、根会话保护、
+ * 覆盖：鉴权边界（status 如实反映 token）、setup/login、初始会话删除、
  * 会话 CRUD 与 origin、路径段解码（编码 pluginId / 非法编码 400 / 多余
  * 段 404）、插件动态路由（真实 register、public 豁免、原始 URL 透传）、
  * 动作 null 原样 / undefined 违约 500、出站 JSON stash 脱敏（含引号/

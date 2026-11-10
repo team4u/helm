@@ -15,9 +15,10 @@
  *   router/watchdog 自身），completed/failed/aborted 三态统一处理；回合输入
  *   含 agent|trigger 即向中枢投递汇报卡（meta.renderer=superagent:worker-report），
  *   纯 human 回合仅静默写 RecallGraph；按 conversationId:completionSeq 稳定去重；
- * - 自举幂等（Profile / SYSTEM / MEMORY / watchdog-playbooks 逐文件补齐，
- *   不覆盖用户文件），常驻会话动态分配、持久复用，管理保护 + helm 归属
- *   随启停获取/释放；停用期间被删的常驻会话在下次启用时重建；
+ * - 自举幂等（Profile / SYSTEM / watchdog-playbooks 逐文件补齐，不覆盖
+ *   用户文件；MEMORY.md 归 builtin:memory 自治，不在此补齐），常驻会话
+ *   动态分配、持久复用，管理保护 + helm 归属随启停获取/释放；停用期间
+ *   被删的常驻会话在下次启用时重建；
  * - Watchdog 巡检策略由 watchdog.ts 独立模块挂载（runtime 桥在此构造）。
  *
  * 诚实性纪律：

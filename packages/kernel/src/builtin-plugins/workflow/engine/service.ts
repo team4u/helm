@@ -574,7 +574,7 @@ export class WorkflowService {
   /**
    * 启动一个工作流 run：后台执行，立即返回 summary（不等完成）。
    * context 由内核受信注入（工具链真实 callId），不是用户可写输入；
-   * HTTP/CLI 不传（无关联）。
+   * 新 run 必须提供 conversationId；resume 未另指定时复用原 run 的会话。
    * @throws HelmError validation_error / not_found / workflow_action_uncertain / journal_read_failed。
    */
   async run(
@@ -601,16 +601,6 @@ export class WorkflowService {
       )
     }
 
-    const conversationId = request.conversationId ?? 1
-    let parent: ConversationSummary
-    try {
-      parent = this.host.getConversation(conversationId)
-    } catch {
-      throw new HelmError('not_found', `会话 ${conversationId} 不存在，无法在其下运行工作流`, 404, {
-        conversationId,
-      })
-    }
-
     // --- resume 目标解析 ---------------------------------------------
     let replayFrom: RunRecord | undefined
     if (request.resumeFromRunId !== undefined) {
@@ -628,6 +618,32 @@ export class WorkflowService {
       if (this.active.has(replayFrom.id)) {
         throw new HelmError('conflict', `工作流 ${replayFrom.id} 仍在运行中`, 409, { runId: replayFrom.id })
       }
+    }
+
+    const conversationId = request.conversationId ?? replayFrom?.conversationId
+    if (conversationId === undefined) {
+      throw new HelmError(
+        'validation_error',
+        '缺少工作流目标会话：提供 conversationId，或从 CLI 使用 --current；工具调用会使用当前会话',
+        400,
+      )
+    }
+    if (replayFrom !== undefined && request.conversationId !== undefined && request.conversationId !== replayFrom.conversationId) {
+      throw new HelmError(
+        'validation_error',
+        `恢复目标不匹配：工作流 ${replayFrom.id} 属于会话 ${replayFrom.conversationId}，不能改在会话 ${request.conversationId} 下恢复`,
+        400,
+        { runId: replayFrom.id, recordedConversationId: replayFrom.conversationId, requestedConversationId: request.conversationId },
+      )
+    }
+
+    let parent: ConversationSummary
+    try {
+      parent = this.host.getConversation(conversationId)
+    } catch {
+      throw new HelmError('not_found', `会话 ${conversationId} 不存在，无法在其下运行工作流`, 404, {
+        conversationId,
+      })
     }
 
     // --- 脚本源 ------------------------------------------------------

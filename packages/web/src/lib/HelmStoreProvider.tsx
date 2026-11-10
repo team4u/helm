@@ -510,6 +510,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
               // 绝不指向另一个会话（可能也已不存在）。
               setPrimaryTarget((current) => current.kind === 'conversation' && current.conversationId === id ? { kind: 'profiles' } : current)
               setSplitTarget((current) => current?.kind === 'conversation' && current.conversationId === id ? null : current)
+              setActiveModal((current) => current?.kind === 'conversation-drawer' && current.conversationId === id ? null : current)
               setConversationArtifacts((prev) => { const next = { ...prev }; delete next[id]; return next })
               evictSessionDocsOfConversation(id)
             }

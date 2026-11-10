@@ -12,7 +12,7 @@ export interface HelmErrorDetail {
 
 /**
  * 机器可读错误码 + HTTP 状态码的错误。
- * code 稳定（如 'root_conversation_protected'、'validation_error'、
+ * code 稳定（如 'validation_error'、'not_found'、
  * 'plugin_has_live_tasks'），message 面向人类，details 附加诊断。
  */
 export class HelmError extends Error {

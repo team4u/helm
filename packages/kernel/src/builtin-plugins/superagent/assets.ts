@@ -1,8 +1,11 @@
 /**
  * builtin:superagent 自举资产内容与逐文件幂等补齐。
  *
- * 幂等语义（覆盖 partial-start）：profile.json 已存在而 SYSTEM.md / MEMORY.md
- * 缺失时仍补齐缺文件；既有文件（含用户同名资产）一律不覆盖、不回填标记。
+ * 幂等语义（覆盖 partial-start）：profile.json 已存在而 SYSTEM.md 缺失时
+ * 仍补齐缺文件；既有文件（含用户同名资产）一律不覆盖、不回填标记。
+ * MEMORY.md 长期记忆归 builtin:memory 插件自治：本模块绝不创建/补齐
+ * 记忆文件（memory 插件停用时不得造记忆；已初始化文件被删后也不得在
+ * superagent 重启自举时悄悄补回掩盖丢失）。
  * 读取只以 ENOENT 视为缺失，损坏 / 权限错误如实传播（不吞、不伪造）。
  */
 import { existsSync, readFileSync } from 'node:fs'
@@ -81,7 +84,7 @@ export interface ProfileAsset {
   systemMd: string
 }
 
-/** 逐文件幂等补齐 Profile 目录（profile.json / SYSTEM.md / MEMORY.md）。
+/** 逐文件幂等补齐 Profile 目录（profile.json / SYSTEM.md；不含 MEMORY.md）。
  *
  * 仅补缺失文件（partial-start 场景）；已存在文件（含用户同名资产与全部
  * 字段）一律原样保留，不做任何回填改写。 */
@@ -93,9 +96,6 @@ export async function ensureProfileDir(dataDir: string, asset: ProfileAsset): Pr
   }
   if (!(await fileExists(join(dir, 'SYSTEM.md')))) {
     await atomicWriteFile(join(dir, 'SYSTEM.md'), asset.systemMd)
-  }
-  if (!(await fileExists(join(dir, 'MEMORY.md')))) {
-    await atomicWriteFile(join(dir, 'MEMORY.md'), '# Memory\n\n')
   }
 }
 

@@ -69,6 +69,7 @@ pnpm build && pnpm typecheck && pnpm test
 ## 并发与正确性
 
 - 初始入口会话（SDK 保留 `#1` 承载，普通 assistant 会话语义）：首次启动播种，**无 id 级删除豁免**——删除后重启凭 tombstone 不复活、不补种；通用保护是插件管理权（`409 conversation_managed_by_plugin`）与归属权（`ownedBy`，human 会话严禁自动按键/中止），产品逻辑不依赖任何固定会话 ID。`superagent` 插件的 `routerConversationId`（SuperAgent 中枢）与 `watchdogConversationId`（巡检看门狗）在插件首次启用时动态分配并持久化于 `SuperAgentIndexDoc`（不硬编码 ID，启用期间同样受删除保护，`409 conversation_managed_by_plugin`）。
+- 无显式目标的 trigger 在钩子链后选择最新的无父链、human-owned assistant 会话；没有候选时同进程并发共享一次在途创建。原始显式目标在 trigger 钩子前校验，失效目标不得由 ThreadKey 路由掩盖。工作流新 run 则必须提供显式会话或调用上下文（CLI `--current`），不使用 trigger 的缺省策略；resume 沿用原 run 目标。
 - 会话正忙时 `whenBusy` 仅有 `steer | followUp | reject`；批处理用 `settings.followUpMode = 'all'`。
 - 输入来源（`origin: 'human' | 'agent' | 'trigger'`）附着在每次提交的 `helm.input` entry 上；`turn_settled` 钩子统一覆盖 `completed | failed | aborted` 三种终态，后台 Worker 本回合消费的输入只要含任一 `agent / trigger` 来源即向 `routerConversationId`（SuperAgent 中枢）投递汇报卡片，纯 `human` 回合仅静默更新召回图谱。
 - `AskDoc` 支持 `expectedStateSeq` CAS 乐观锁：当终端窗格 `stateChangeSeq` 已推进（人类已在终端按键处理）时，Web 端对应的 `AskDoc` 自动流转为 `superseded` 销单，防止向终端重复发送回车。
@@ -80,6 +81,7 @@ pnpm build && pnpm typecheck && pnpm test
 
 - Hub 新增/变更任何面向用户的 HTTP 接口时，**同一次改动**必须补齐 `helm` CLI 映射（`packages/cli/src/commands/`，含 `--json` 输出与 `--current` 当前会话自动感知）。
 - 插件通过 `ctx.action({ id, inputSchema, outputSchema })` 声明的动作，自动映射为 HTTP 端点（`POST /api/actions/<pluginId>/<actionId>`，`pluginId` 含 `:` 时按 URI 编码）、顶层语义化 CLI 命令 `helm <plugin> <action>`（剥离 `builtin:` 前缀，由 `cli.command` 可覆写）、Agent Tool、`SubagentWorkflow` `action()` 与 Web UI 动作。
+- `builtin:memory` 的 get/set/configure 由可选 `profileId` 显式选目标，省略时从调用会话上下文解析；两者都无则 `400 validation_error`，不猜测默认角色。开关影响后续调用与回合，不取消在途写入；删除 Profile 后同 ID 重建保留插件按 ID 持久化的状态。
 
 ## 测试与前端规范
 

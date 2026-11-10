@@ -145,6 +145,8 @@ export class KernelRuntime {
   private readonly configSvc: ConfigService
   private readonly pluginConfig: HelmPluginConfigStore
   private readonly agentSessions = new Map<string, number>()
+  /** 无 assistant 人类入口时合并并发的 trigger 缺省会话创建。 */
+  private defaultTriggerTargetCreation: Promise<number> | undefined
   private pluginHost: PluginHost | undefined
   readonly worktrees: WorktreeAllocator
   /** 包含模型回合、结构化输出修复与 gate；用于阻止清理仍在使用的执行目录。 */
@@ -1206,27 +1208,43 @@ export class KernelRuntime {
   /**
    * 无显式目标 trigger 的缺省投递靶点解析：
    * - 无 targetConversationId 的信封（transform 可能已改写）进入本方法；
-   * - 选择 assistant Profile 下最新的无父链人类会话；
-   * - 全部删空时按需新建一个普通 assistant 会话（并发安全：复用创建锁）。
-   * 显式指定 targetConversationId 的信封不进入本方法（不存在时 submitInput
-   * 显式 404，绝不静默改投）。
+   * - 选择 assistant Profile 下最新的无父链 human-owned 会话；ownership 只读权威
+   *   conversation-ownership 文档，不从 tags/parent 或摘要投影推断；
+   * - 没有候选时按需新建普通 assistant 会话，并合并同进程并发创建；Promise 完成后
+   *   即清理，不缓存可被删除的会话 ID，失败后可重试。
+   * 显式指定的目标在 trigger hook 运行前已校验存在，不会进入本方法。
    */
   private async resolveDefaultTriggerTarget(): Promise<number> {
     const candidates = this.store
       .listConvs()
-      .filter((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)
+      .filter((c) =>
+        c.profileId === 'assistant' &&
+        c.parentConversationId === undefined &&
+        this.getConversationOwnership(c.id) === 'human',
+      )
       .sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id)
     if (candidates[0] !== undefined) return candidates[0].id
-    const created = await this.conversations.createConversation({
+
+    if (this.defaultTriggerTargetCreation !== undefined) return this.defaultTriggerTargetCreation
+    const creation = this.conversations.createConversation({
       title: '个人助理',
       profileId: 'assistant',
       tags: ['assistant'],
-    })
-    return created.id
+    }).then((created) => created.id)
+    this.defaultTriggerTargetCreation = creation
+    try {
+      return await creation
+    } finally {
+      if (this.defaultTriggerTargetCreation === creation) this.defaultTriggerTargetCreation = undefined
+    }
   }
 
-  /** 外部触发：trigger hook -> 无显式目标时解析缺省靶点（transform 后 target 与 text 都生效）。 */
+  /** 外部触发：先校验原始显式目标，再运行可改写路由的 trigger hook。 */
   async dispatchTrigger(envelope: ExternalTriggerEnvelope): Promise<void> {
+    if (envelope.targetConversationId !== undefined) {
+      // Hook（包括 ThreadKey 直投）不得把无效的显式目标改写成有效目标来掩盖错误。
+      this.getConversation(envelope.targetConversationId)
+    }
     const initial: ExternalTriggerEnvelope = { ...envelope, text: this.defang(envelope) }
     const outcome = await this.hookBridge.runHookChain('trigger', initial)
     if (outcome?.action === 'handled') return

@@ -68,7 +68,7 @@ test('重放缓存标记透传到 getRun、listRuns、事件与重启后的公�
   let spawns = 0
   const env = makeEnv(t, async () => { spawns += 1; return '同一结果' })
   const script = 'export const meta = { name: "cache-summary", description: "public cache metadata" }\nconst a = await agent("first", { label: "a" }); const b = await agent("second", { resume: "a" }); return { a, b }'
-  const original = await env.service.run({ script })
+  const original = await env.service.run({ conversationId: 1, script })
   assert.deepEqual(await env.service.wait(original.id), { a: '同一结果', b: '同一结果' })
   assert.equal(spawns, 2)
   const replay = await env.service.run({ script, resumeFromRunId: original.id })
@@ -96,6 +96,7 @@ test('节点更新跨过 250ms 窗口时仍发布合法 run 信封，不把成�
     return '真实宿主结果'
   })
   const run = await env.service.run({
+    conversationId: 1,
     script: 'export const meta = { name: "node-events", description: "event contract" }\nreturn await agent("任务")',
   })
   assert.equal(await env.service.wait(run.id), '真实宿主结果')
@@ -136,7 +137,7 @@ test('run 摘要携带 meta 元数据：kind=workflow、description、phases；�
     'await agent("先检查")',
     'return "完成"',
   ].join('\n')
-  const run = await env.service.run({ script })
+  const run = await env.service.run({ conversationId: 1, script })
   assert.equal(run.kind, 'workflow')
   assert.equal(run.description, '验证元数据透传')
   assert.deepEqual(JSON.parse(JSON.stringify(run.phases)), [
@@ -188,7 +189,7 @@ test('phase/log 与 onResolved 元数据立即推送：workflow.updated 携带 p
     'log("开始执行")',
     'return await agent("干活", { gate: "pnpm test" })',
   ].join('\n')
-  const run = await env.service.run({ script })
+  const run = await env.service.run({ conversationId: 1, script })
   assert.equal(await env.service.wait(run.id), '完成结果')
 
   // phase/log 立即推送：running 事件里必须已能看到 progress 时间线。
@@ -252,7 +253,7 @@ test('节点按调用 index 全序输出：action 与 agent 混合并携带 labe
     },
   )
 
-  const run = await env.service.run({ script })
+  const run = await env.service.run({ conversationId: 1, script })
   assert.deepEqual(await env.service.wait(run.id), ['慢完成', '快完成'])
 
   // 终态节点：严格按调用位次 agent-0 → action-1 → agent-2；action 携带 label=actionId 与 phaseTitle。

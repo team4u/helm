@@ -151,18 +151,23 @@ function makeTurn(profileId: string, withMemoryTool = true) {
   }
 }
 
-async function setup(dataDir: string, extraPlugins: PluginDefinition[] = []) {
+async function setup(
+  dataDir: string,
+  extraPlugins: PluginDefinition[] = [],
+  docs: PluginDocStore = new MemoryDocStore(),
+) {
   const profiles = new ProfileService(dataDir)
   await profiles.ensureDefault()
   await profiles.save({ id: 'coder', name: ' coder '.trim(), tags: [] })
-  const host = new PluginHost({ dataDir, host: makeBackend(), docs: new MemoryDocStore() })
+  const backend = makeBackend()
+  const host = new PluginHost({ dataDir, host: backend, docs })
   await host.register(createMemoryPlugin({ profiles }), { enabled: true })
   for (const plugin of extraPlugins) await host.register(plugin, { enabled: true })
-  return { host, profiles, store: new MemoryStore(dataDir) }
+  return { host, profiles, store: new MemoryStore(dataDir), backend }
 }
 
 let scratchRoot: string
-test('memory 插件行为', async (t) => {
+test('memory 插件行为', { timeout: 60_000 }, async (t) => {
   scratchRoot = mkdtempSync(join(tmpdir(), 'helm-memory-plugin-'))
   t.after(() => rmSync(scratchRoot, { recursive: true, force: true }))
 
@@ -185,6 +190,46 @@ test('memory 插件行为', async (t) => {
       () => host.invokeAction('builtin:memory', 'get', { profileId: '../etc' }),
       (err: unknown) => err instanceof Error && /非法 profile id/.test(err.message),
     )
+  })
+
+  await t.test('动作目标：显式 profileId 优先；省略时取 conversationId Profile；无目标显式 400', { timeout: 60_000 }, async () => {
+    const dir = join(scratchRoot, 'action-target')
+    const { host, store } = await setup(dir)
+    const coder = await host.invokeAction('builtin:memory', 'get', {}, { conversationId: 2 }) as { profileId: string }
+    assert.equal(coder.profileId, 'coder')
+
+    const written = await host.invokeAction('builtin:memory', 'set', { text: '# 当前会话' }, { conversationId: 2 }) as { profileId: string }
+    assert.equal(written.profileId, 'coder')
+    assert.equal(await store.getMemory('coder'), '# 当前会话')
+
+    await host.invokeAction('builtin:memory', 'set', { profileId: 'assistant', text: '# 显式优先' }, { conversationId: 2 })
+    assert.equal(await store.getMemory('assistant'), '# 显式优先')
+    await host.invokeAction('builtin:memory', 'configure', { enabled: false }, { conversationId: 2 })
+    const status = await host.invokeAction('builtin:memory', 'get', {}, { conversationId: 2 }) as { profileId: string; enabled: boolean }
+    assert.deepEqual(status, { profileId: 'coder', enabled: false, content: '# 当前会话', initialized: true })
+
+    for (const [actionId, input] of [
+      ['get', {}],
+      ['set', { text: 'no target' }],
+      ['configure', { enabled: true }],
+    ] as const) {
+      await assert.rejects(
+        () => host.invokeAction('builtin:memory', actionId, input),
+        (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+        `${actionId} 缺少显式 Profile 与会话上下文时应返回 validation_error`,
+      )
+    }
+    await assert.rejects(
+      () => host.invokeAction('builtin:memory', 'get', { profileId: 'missing' }, { conversationId: 2 }),
+      (err: unknown) => err instanceof HelmError && err.code === 'profile_not_found' && err.status === 404,
+      '失效显式目标不得回退到当前会话 Profile',
+    )
+    await assert.rejects(
+      () => host.invokeAction('builtin:memory', 'get', {}, { conversationId: 999 }),
+      (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
+      '失效会话上下文不得回退到 assistant Profile',
+    )
+    await host.dispose()
   })
 
   await t.test('set 动作：写全文、惰性标记初始化、关闭后拒绝写入', async () => {
@@ -274,17 +319,7 @@ test('memory 插件行为', async (t) => {
     assert.ok((await store.getMemory('assistant')).includes('偏好深色主题'))
   })
 
-  await t.test('doc 持久状态跨重启保持：disabledProfiles / initializedProfiles', async () => {
-    const dir = join(scratchRoot, 't7')
-    {
-      const { host, store } = await setup(dir)
-      await store.updateMemory('coder', '# C', 'replace')
-      await host.invokeAction('builtin:memory', 'get', { profileId: 'coder' }) // 标记初始化
-      await host.invokeAction('builtin:memory', 'configure', { profileId: 'coder', enabled: false })
-      await host.dispose().catch(() => {})
-    }
-    // 重启：私有 doc 状态由持久层恢复（MemoryDocStore 仅进程内；用真实语义断言
-    // isProfileMemoryEnabled 与 disabledProfiles 结构）
+  await t.test('开关判定：列表内禁用，未出现的 Profile 与缺省状态均开启', { timeout: 60_000 }, () => {
     const doc: MemoryPluginDoc = { disabledProfiles: ['coder'], initializedProfiles: ['coder', 'assistant'] }
     assert.equal(isProfileMemoryEnabled(doc, 'coder'), false)
     assert.equal(isProfileMemoryEnabled(doc, 'assistant'), true)
@@ -356,6 +391,49 @@ test('memory 插件行为', async (t) => {
     await host.disable('builtin:memory')
     const summary = host.list().find((p) => p.id === 'builtin:memory')
     assert.equal(summary?.enabled, false)
+  })
+
+  await t.test('已初始化文件跨重启被删后告警不重建；写入或外部恢复自愈后再次删除可再告警', { timeout: 60_000 }, async () => {
+    const dir = join(scratchRoot, 'missing-after-restart')
+    const docs = new MemoryDocStore()
+    const memoryPath = join(dir, 'profiles', 'assistant', 'MEMORY.md')
+    const first = await setup(dir, [], docs)
+    await first.host.runHook('before_turn', makeTurn('assistant') as never)
+    assert.equal(existsSync(memoryPath), true, '首次需要记忆时惰性初始化')
+    await first.host.dispose()
+    rmSync(memoryPath)
+
+    const restarted = await setup(dir, [], docs)
+    const missing = await restarted.host.runHook('before_turn', makeTurn('assistant') as never)
+    assert.ok(missing.action === 'transform')
+    assert.ok(missing.value.sections.some((section: { id: string }) => section.id === 'memory.assets-missing'))
+    assert.equal(existsSync(memoryPath), false, '跨重启缺失告警不得补建')
+    assert.equal(restarted.backend.notifications.length, 1)
+    await restarted.host.runHook('before_turn', makeTurn('assistant') as never)
+    assert.equal(restarted.backend.notifications.length, 1, '同一次连续缺失只通知一次')
+
+    await restarted.host.executeTool('update_memory', { text: '经工具恢复', mode: 'replace' }, { conversationId: 1 })
+    assert.equal(existsSync(memoryPath), true, 'update_memory 明确写入后恢复文件')
+    const recovered = await restarted.host.runHook('before_turn', makeTurn('assistant') as never)
+    assert.ok(recovered.action === 'transform')
+    assert.ok(!recovered.value.sections.some((section: { id: string }) => section.id === 'memory.assets-missing'))
+
+    rmSync(memoryPath)
+    const missingAgain = await restarted.host.runHook('before_turn', makeTurn('assistant') as never)
+    assert.ok(missingAgain.action === 'transform')
+    assert.ok(missingAgain.value.sections.some((section: { id: string }) => section.id === 'memory.assets-missing'))
+    assert.equal(restarted.backend.notifications.length, 2, '文件恢复后再次缺失应重新告警')
+    assert.equal(existsSync(memoryPath), false)
+
+    writeFileSync(memoryPath, '')
+    const externallyRestored = await restarted.host.runHook('before_turn', makeTurn('assistant') as never)
+    assert.ok(externallyRestored.action === 'transform')
+    assert.ok(externallyRestored.value.sections.some((section: { id: string }) => section.id === 'memory.guide'))
+    assert.ok(!externallyRestored.value.sections.some((section: { id: string }) => section.id === 'memory.assets-missing'))
+    rmSync(memoryPath)
+    await restarted.host.runHook('before_turn', makeTurn('assistant') as never)
+    assert.equal(restarted.backend.notifications.length, 3, '外部恢复的空白文件同样自愈并重置告警去重')
+    await restarted.host.dispose()
   })
 
   await t.test('空白文件注入 memory.guide（合法态无告警）；文件恢复自愈', async () => {
@@ -451,6 +529,7 @@ test('memory 动作清单：get/set/configure 注册且默认 CLI 命令路径�
       assert.equal(m.cli, undefined, 'memory 动作未覆写 cli（默认路径 memory <action>）')
       assert.ok(m.inputSchema.type === 'object')
       assert.ok(m.outputSchema.type === 'object')
+      assert.ok(!(m.inputSchema as { required?: string[] }).required?.includes('profileId'), 'profileId 是可选的目标 selector')
     }
     // set 的 mode 可选枚举（append/replace）
     const setManifest = manifests.find((m) => m.id === 'set')!
