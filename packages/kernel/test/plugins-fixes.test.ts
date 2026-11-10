@@ -21,11 +21,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
-import {
-  HelmError,
-  type ConversationSummary,
-  type WatchdogTickHookPayload,
-} from '@helm/protocol'
+import { HelmError, type ConversationSummary } from '@helm/protocol'
+import type { DiagnosticsCollection } from '../src/builtin-plugins/diagnostics.js'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
 import { createSuperAgentPlugin } from '../src/builtin-plugins/superagent.js'
@@ -83,6 +80,7 @@ function makeControlledBackend(dataDir: string): ControlledBackend {
   const conversations = new Map<number, ConversationSummary>()
   conversations.set(1, makeConversation(1, { tags: ['root'] }))
   conversations.set(3, makeConversation(3))
+  const eventListeners = new Map<string, Array<(payload: unknown) => unknown>>()
   const notifications: Array<{ title: string; body: string; level: string }> = []
   const submits: Array<{ conversationId: number; origin?: string }> = []
   const backend: ControlledBackend = {
@@ -126,7 +124,19 @@ function makeControlledBackend(dataDir: string): ControlledBackend {
     async createAsk() { throw new HelmError('unsupported', 'test', 400) },
     async cancelAsk() {},
     registerAskSeqResolver() { return () => {} },
-    onEvent() { return () => {} },
+    onEvent(type, listener) {
+      const list = eventListeners.get(type) ?? []
+      list.push(listener)
+      eventListeners.set(type, list)
+      return () => {
+        const cur = eventListeners.get(type) ?? []
+        const idx = cur.indexOf(listener)
+        if (idx >= 0) cur.splice(idx, 1)
+      }
+    },
+    getConversationActivity: () => ({ consecutiveErrors: 0 }),
+    getConversationOwnership: () => 'helm',
+    isClosing: false,
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
@@ -137,8 +147,13 @@ function makeControlledBackend(dataDir: string): ControlledBackend {
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
-    emitEvent(type, payload) {
+    async emitEvent(type, payload) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
+      if (type === 'diagnostics.collect') {
+        for (const listener of [...(eventListeners.get(type) ?? [])]) {
+          await listener(payload)
+        }
+      }
     },
   }
   return backend
@@ -283,9 +298,10 @@ async function makeHerdrEnv(
   }
 }
 
-async function runHerdrTick(env: HerdrEnv): Promise<WatchdogTickHookPayload> {
-  const payload: WatchdogTickHookPayload = { timestamp: Date.now(), conversations: [], probes: [] }
-  await env.host.runHook('watchdog_tick', payload)
+async function runHerdrTick(env: HerdrEnv): Promise<DiagnosticsCollection> {
+  const payload: DiagnosticsCollection = { timestamp: Date.now(), conversations: [], probes: [] }
+  // 真实链路：采集事件分发（herdr 监听器追加探针；await 语义）。
+  await env.backend.emitEvent('diagnostics.collect', payload)
   return payload
 }
 

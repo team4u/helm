@@ -299,7 +299,6 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
       cwd: dir,
       model: 'faux/faux-1',
       models,
-      watchdogIntervalMs: 0,
     })
     try {
       const conv = await kernel.createConversation({ title: '快照恢复' })
@@ -360,7 +359,6 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
       cwd: dir,
       model: 'faux/faux-1',
       models,
-      watchdogIntervalMs: 0,
     })
     try {
       const conv = await kernel.createConversation({ title: '默认插话' })
@@ -427,7 +425,6 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
       cwd: dir,
       model: 'faux/faux-1',
       models,
-      watchdogIntervalMs: 0,
     })
     try {
       const conv = await kernel.createConversation({ title: '空闲' })

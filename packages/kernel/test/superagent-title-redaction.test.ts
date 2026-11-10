@@ -13,7 +13,7 @@ test('派工自动标题和召回元数据不持久化已登记机密', { timeou
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 })
+  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     await app.kernel.plugins.enable('builtin:superagent')
     const secret = 'private-title-token-9f4d2a'

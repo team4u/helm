@@ -61,6 +61,9 @@ class FakeBackend implements PluginHostBackend {
   }
   updateConversation(id: number): Promise<ConversationSummary> { return Promise.resolve(this.getConversation(id)) }
   abortConversation(): Promise<void> { return Promise.resolve() }
+  getConversationActivity(): { consecutiveErrors: number } { return { consecutiveErrors: 0 } }
+  getConversationOwnership(): 'helm' | 'bot' | 'human' { return 'human' }
+  get isClosing(): boolean { return false }
   spawnAgent(): Promise<unknown> { return Promise.resolve('spawned') }
   runGate(): Promise<{ ok: boolean; output: string }> { return Promise.resolve({ ok: true, output: '' }) }
   prepareInterruptedConversations(): Promise<void> { return Promise.resolve() }

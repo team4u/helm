@@ -257,7 +257,6 @@ async function openRealEnv(dataDir: string): Promise<RealEnv> {
     model: 'faux/faux-1',
     models,
     autoResume: false,
-    watchdogIntervalMs: 0,
   })
   const originalRunGate = kernel.runGate.bind(kernel)
   let gateFallbackRuns = 0

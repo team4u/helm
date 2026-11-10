@@ -61,7 +61,6 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
     cwd: dir,
     model: 'faux/faux-1',
     models: models as never,
-    watchdogIntervalMs: 0,
   })
   try {
     // --- 1. 快速 run：完成后 summary.parentToolCallId 即真实工具 callId ---
@@ -129,7 +128,6 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
     cwd: dir,
     model: 'faux/faux-1',
     models: models as never,
-    watchdogIntervalMs: 0,
   })
   const listRunsReopened = () =>
     (reopened.kernel.plugins.invokeAction('builtin:workflow', 'runs', {}) as Promise<{ runs: Array<{ id: string; name: string; parentToolCallId?: string; status: string }> }>).then((r) => r.runs)
@@ -219,7 +217,7 @@ test('run 动作 inputSchema 不得注入 parentToolCallId（additionalPropertie
   // 受信工具上下文（PluginToolContext.callId）可注入。
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-schema-'))
   const { models } = makeFauxModels()
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: models as never, watchdogIntervalMs: 0 })
+  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: models as never })
   try {
     const manifests = app.kernel.plugins.listActions()
     const runManifest = manifests.find((m) => m.pluginId === 'builtin:workflow' && m.id === 'run')

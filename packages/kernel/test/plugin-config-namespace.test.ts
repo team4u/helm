@@ -19,7 +19,7 @@ test('插件配置 HTTP 在重启和停用时均隐藏动态凭据，并保留�
   let app: Awaited<ReturnType<typeof createHelm>> | undefined
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      app = await createHelm({ dataDir, cwd: dataDir, watchdogIntervalMs: 0 })
+      app = await createHelm({ dataDir, cwd: dataDir })
       await app.kernel.plugins.register({
         id: pluginId,
         definePlugin(ctx) {

@@ -340,6 +340,8 @@ class FakeBackend implements PluginHostBackend {
   notifications: Array<{ title: string; body: string; level: string }> = []
   askSeqResolvers = new Set<(askId: string) => MaybePromise<number | undefined>>()
   workflowListeners = new Set<(run: WorkflowRunSummary) => void | Promise<void>>()
+  /** 按类型分发的插件事件监听（与 runtime.emitHostEvent 同构）。 */
+  typedListeners = new Map<string, Set<(payload: unknown) => void | Promise<void>>>()
   createdAsks: Array<Record<string, unknown>> = []
   cancelledAsks: Array<{ id: string; reason?: string }> = []
   /** pending ask 的结算通道：askId -> resolver。 */
@@ -387,6 +389,15 @@ class FakeBackend implements PluginHostBackend {
     return () => { this.askSeqResolvers.delete(resolver) }
   }
   async abortConversation(): Promise<void> {}
+  getConversationActivity(): { consecutiveErrors: number } {
+    return { consecutiveErrors: 0 }
+  }
+  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    return 'human'
+  }
+  get isClosing(): boolean {
+    return false
+  }
   async spawnAgent(): Promise<unknown> {
     return {}
   }
@@ -410,15 +421,29 @@ class FakeBackend implements PluginHostBackend {
   listActions(): [] {
     return []
   }
-  onEvent(_type: string, listener: (payload: unknown) => void | Promise<void>): () => void {
-    this.workflowListeners.add(listener as (run: WorkflowRunSummary) => void | Promise<void>)
-    return () => { this.workflowListeners.delete(listener as (run: WorkflowRunSummary) => void | Promise<void>) }
+  onEvent(type: string, listener: (payload: unknown) => void | Promise<void>): () => void {
+    // 按事件类型分发注册（与 runtime.emitHostEvent 同构）：不同插件事件监听
+    // 互不串扰（workflow.settled / diagnostics.collect 各自投递）。
+    const set = this.typedListeners.get(type) ?? new Set()
+    set.add(listener)
+    this.typedListeners.set(type, set)
+    // workflowListeners 仅为测试手动投递 workflow.settled 保留（类型隔离）。
+    if (type === 'workflow.settled') {
+      this.workflowListeners.add(listener as (run: WorkflowRunSummary) => void | Promise<void>)
+    }
+    return () => {
+      set.delete(listener)
+      this.workflowListeners.delete(listener as (run: WorkflowRunSummary) => void | Promise<void>)
+    }
   }
-  emitEvent(type: string, payload: unknown): void {
+  async emitEvent(type: string, payload: unknown): Promise<void> {
     this.events.push({ type, payload })
     if (type === 'notification') {
       const n = payload as { title: string; body: string; level: string }
       this.notifications.push(n)
+    }
+    for (const listener of [...(this.typedListeners.get(type) ?? [])]) {
+      await listener(payload)
     }
   }
 }

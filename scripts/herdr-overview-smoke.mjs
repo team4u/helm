@@ -156,7 +156,7 @@ try {
     runGate: (...args) => base.runGate(...args),
   };
   const { createHelm } = await import(pathToFileURL(appPath));
-  app = await createHelm({ dataDir: join(root, 'helm-data'), cwd: firstCwd, herdrTransport: transport, watchdogIntervalMs: 0 });
+  app = await createHelm({ dataDir: join(root, 'helm-data'), cwd: firstCwd, herdrTransport: transport });
   await app.kernel.plugins.setConfig('builtin:herdr', { socketPath, startupTimeoutMs: 30_000 });
   await app.kernel.plugins.enable('builtin:herdr');
   const row = overview().panes.find(pane => pane.paneId === firstPane.pane_id);

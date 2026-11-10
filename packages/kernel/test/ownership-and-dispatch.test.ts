@@ -50,7 +50,7 @@ async function makeEnv(): Promise<TestEnv> {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 })
+  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   faux.setResponses([fauxAssistantMessage('收到')])
   const env: TestEnv = {
     dataDir,

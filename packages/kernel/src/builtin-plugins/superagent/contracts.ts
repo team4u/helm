@@ -6,8 +6,8 @@ import type {
   MaybePromise,
   PluginDocHandle,
   TurnOutcome,
-  WatchdogOwnership,
 } from '@helm/protocol'
+import type { WatchdogOwnership } from '../diagnostics.js'
 import type { ProfileService, SkillService } from '../../services/index.js'
 
 /** 业务策略依赖由组合层注入，不扩张通用 ctx.host。 */

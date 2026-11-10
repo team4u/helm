@@ -38,7 +38,7 @@ async function success(args) {
   return JSON.parse(result.stdout);
 }
 async function open() {
-  app = await createHelm({ dataDir, cwd: dataDir, watchdogIntervalMs: 0 });
+  app = await createHelm({ dataDir, cwd: dataDir });
   hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 0 });
 }
 async function close() {

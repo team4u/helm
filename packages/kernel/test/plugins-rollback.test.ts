@@ -24,11 +24,8 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import {
-  HelmError,
-  type ConversationSummary,
-  type WatchdogProbe,
-} from '@helm/protocol'
+import { HelmError, type ConversationSummary } from '@helm/protocol'
+import type { DiagnosticsCollection, WatchdogProbe } from '../src/builtin-plugins/diagnostics.js'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createProfilePlugin } from '../src/builtin-plugins/profile.js'
 import { createMemoryPlugin, MAX_MEMORY_CHARS as MEM_MAX, MemoryStore } from '../src/builtin-plugins/memory.js'
@@ -136,6 +133,9 @@ function makeControlledBackend(dataDir: string): ControlledBackend {
     async cancelAsk() {},
     registerAskSeqResolver() { return () => {} },
     onEvent() { return () => {} },
+    getConversationActivity: () => ({ consecutiveErrors: 0 }),
+    getConversationOwnership: () => 'human',
+    isClosing: false,
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
@@ -522,6 +522,7 @@ async function makeWatchdogHarness(opts: {
   const routerId = 100
   const watchdogId = 200
   const conversations = new Map<number, ConversationSummary>()
+  const eventListeners = new Map<string, Array<(payload: unknown) => unknown>>()
   conversations.set(watchdogId, makeConversation(watchdogId, { profileId: 'watchdog', title: '巡检看门狗' }))
   conversations.set(routerId, makeConversation(routerId, { profileId: 'superagent', title: 'SuperAgent 中枢' }))
   conversations.set(1, makeConversation(1, { title: '个人助理' }))
@@ -549,7 +550,19 @@ async function makeWatchdogHarness(opts: {
     createAsk: async () => ({ id: 'ask-1', status: 'cancelled', answers: {} }),
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
-    onEvent: () => () => {},
+    onEvent: (type, listener) => {
+      const list = eventListeners.get(type) ?? []
+      list.push(listener)
+      eventListeners.set(type, list)
+      return () => {
+        const cur = eventListeners.get(type) ?? []
+        const idx = cur.indexOf(listener)
+        if (idx >= 0) cur.splice(idx, 1)
+      }
+    },
+    getConversationActivity: () => ({ consecutiveErrors: 0 }),
+    getConversationOwnership: (id) => opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helm'),
+    isClosing: false,
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
@@ -560,10 +573,15 @@ async function makeWatchdogHarness(opts: {
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
-    emitEvent: (type, payload) => {
+    emitEvent: async (type, payload) => {
       if (type === 'notification') {
         const p = payload as { level?: string; title?: string; body?: string }
         recorded.notifications.push({ level: p.level ?? 'info', title: p.title ?? '', body: p.body ?? '' })
+      }
+      if (type === 'diagnostics.collect') {
+        for (const listener of [...(eventListeners.get(type) ?? [])]) {
+          await listener(payload)
+        }
       }
     },
   }
@@ -621,8 +639,17 @@ async function makeWatchdogHarness(opts: {
       abortShouldFail = value
     },
     async tick(probes: WatchdogProbe[]) {
-      const payload = { timestamp: Date.now(), conversations: [...conversations.values()], probes }
-      await host.runHook('watchdog_tick', payload as never)
+      // 真实链路：手动 tick 动作（探针经采集事件注入；runTick 会另行构造
+      // 全部原生会话探针——本 harness 预置会话为 idle，无自动处置）。
+      const release = backend.onEvent('diagnostics.collect', (raw) => {
+        const collection = raw as DiagnosticsCollection
+        collection.probes.push(...structuredClone(probes))
+      })
+      try {
+        await host.invokeAction('builtin:superagent', 'watchdog_tick', {})
+      } finally {
+        release()
+      }
       await new Promise((resolve) => setImmediate(resolve))
     },
     /** 直改去重文档（构造淘汰场景：预置大量陈旧/新鲜外部键）。 */

@@ -14,7 +14,7 @@ const root = await mkdtemp(join(tmpdir(), 'helm-env-compiled-'))
 const nodeDir = join(root, 'node')
 const workspace = join(root, 'workspace')
 await Promise.all([mkdir(nodeDir), mkdir(workspace)])
-const app = await createHelm({ dataDir: join(root, 'hub'), cwd: root, watchdogIntervalMs: 0 })
+const app = await createHelm({ dataDir: join(root, 'hub'), cwd: root })
 let hub
 let credential
 

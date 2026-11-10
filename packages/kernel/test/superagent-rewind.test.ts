@@ -151,6 +151,15 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
     registerAskSeqResolver() { return () => {} },
     onEvent() { return () => {} },
     abortConversation: async () => {},
+    getConversationActivity(): { consecutiveErrors: number } {
+      return { consecutiveErrors: 0 }
+    },
+    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+      return 'human'
+    },
+    get isClosing(): boolean {
+      return false
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
@@ -450,6 +459,11 @@ test('竞态：collectWorkerSettlement await 期间发生 rewind——旧节点�
       async cancelAsk() {},
       registerAskSeqResolver: () => () => {},
       onEvent: () => () => {},
+      getConversationActivity: () => ({ consecutiveErrors: 0 }),
+      getConversationOwnership: () => 'helm' as const,
+      get isClosing(): boolean {
+        return false
+      },
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),

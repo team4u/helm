@@ -195,6 +195,15 @@ function makeHostApi(overrides: Partial<PluginHostBackend> = {}): PluginHostBack
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
+    getConversationActivity(): { consecutiveErrors: number } {
+      return { consecutiveErrors: 0 }
+    },
+    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+      return 'human'
+    },
+    get isClosing(): boolean {
+      return false
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},

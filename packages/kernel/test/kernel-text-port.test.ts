@@ -98,7 +98,6 @@ async function openEnv(options: { model?: string } = {}): Promise<Env> {
     cwd: rootDir,
     model: options.model ?? 'faux/faux-1',
     models: models as never,
-    watchdogIntervalMs: 0,
     autoResume: false,
   })
   return {
@@ -250,7 +249,6 @@ describe('completeConversationText（内核通用模型端口）', () => {
       dataDir: join(rootDir, `bare-${Math.random().toString(36).slice(2)}`),
       cwd: rootDir,
       models: models as never,
-      watchdogIntervalMs: 0,
       autoResume: false,
     })
     try {

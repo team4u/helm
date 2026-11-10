@@ -194,6 +194,15 @@ class FakeBackend implements PluginHostBackend {
     return () => { this.askSeqResolvers.delete(resolver) }
   }
   async abortConversation(): Promise<void> {}
+  getConversationActivity(): { consecutiveErrors: number } {
+    return { consecutiveErrors: 0 }
+  }
+  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    return 'human'
+  }
+  get isClosing(): boolean {
+    return false
+  }
   async spawnAgent(): Promise<unknown> {
     return {}
   }

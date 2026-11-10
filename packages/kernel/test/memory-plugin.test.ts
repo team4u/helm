@@ -106,6 +106,15 @@ function makeBackend(): PluginHostBackend & {
       return () => {}
     },
     async abortConversation() {},
+    getConversationActivity(): { consecutiveErrors: number } {
+      return { consecutiveErrors: 0 }
+    },
+    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+      return 'human'
+    },
+    get isClosing(): boolean {
+      return false
+    },
     async spawnAgent() {
       return {}
     },
@@ -466,7 +475,7 @@ test('memory 单 Profile 开关跨重启持久（真实 createHelm）', { timeou
       const faux = fauxProvider()
       const models = createModels()
       models.setProvider(faux.provider)
-      return createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 })
+      return createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
     }
     const first = await build()
     try {

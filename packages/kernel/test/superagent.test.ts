@@ -59,7 +59,7 @@ async function makeEnv(): Promise<TestEnv> {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 })
+  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   faux.setResponses([])
   const env: TestEnv = {
     dataDir,
@@ -414,12 +414,12 @@ test('superagent6: 重启复用常驻 ID；停用期间被删则重建；Profile
     const faux = fauxProvider()
     const models = createModels()
     models.setProvider(faux.provider)
-    const first = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 })
+    const first = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
     await first.kernel.plugins.enable('builtin:superagent')
     const ids1 = await residentIdsRaw(dataDir)
     await first.close()
     // 第二次启动：持久启停状态沿用（enabled），ID 复用
-    const second = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 })
+    const second = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
     try {
       const summary = second.kernel.plugins.list().find((p) => p.id === 'builtin:superagent')!
       assert.equal(summary.enabled, true, '重启后应沿用持久化启用状态')
@@ -1110,7 +1110,7 @@ test('superagent17: 持久 doc 损坏时启用显式失败（不静默重建）'
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const first = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 })
+  const first = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     await first.kernel.plugins.enable('builtin:superagent')
     // 经真实写路径写入坏值（模拟持久损坏）并落盘
@@ -1122,7 +1122,7 @@ test('superagent17: 持久 doc 损坏时启用显式失败（不静默重建）'
   // 重启：持久启停为 true → 注册期 service.start 读入坏 doc，启动显式失败
   // （createHelm 如实 reject，不静默重建、不吞错）。
   try {
-    await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 }).then(
+    await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models }).then(
       () => assert.fail('损坏 doc 下启动应显式失败'),
       (err: unknown) => {
         assert.ok(err instanceof HelmError, `应为 HelmError，实际 ${String(err)}`)
@@ -1181,7 +1181,7 @@ test('superagent 记忆归属: 已初始化文件被删后重启/superagent 重�
     const faux2 = fauxProvider()
     const models2 = createModels()
     models2.setProvider(faux2.provider)
-    const app2 = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: models2, watchdogIntervalMs: 0 })
+    const app2 = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: models2 })
     try {
       assert.equal(existsSync(memoryPath), false, '重启自举不得补回已删除的记忆文件')
       // memory 检测：在 superagent 会话跑一回合，应发缺失告警（不重建）

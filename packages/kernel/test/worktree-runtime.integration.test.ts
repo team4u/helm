@@ -88,7 +88,6 @@ async function openRuntime(dataDir: string, cwd?: string): Promise<RuntimeEnv> {
     cwd: cwd ?? dataDir,
     model: 'faux/faux-1',
     models: models as never,
-    watchdogIntervalMs: 0,
     autoResume: false,
   })
   // 编排插件（subagent / cleanup_worktree 动作与工具；引擎 state 走插件私有

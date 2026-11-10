@@ -27,11 +27,14 @@ import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/provid
 import {
   HelmError,
   type ConversationSummary,
-  type WatchdogProbe,
-  type WatchdogTickHookPayload,
 } from '@helm/protocol'
+import {
+  appendProbes,
+  collectionViolation,
+  type DiagnosticsCollection,
+  type WatchdogProbe,
+} from '../src/builtin-plugins/diagnostics.js'
 import { KernelRuntime } from '../src/runtime/index.js'
-import { HookPipeline } from '../src/plugins/hooks.js'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
 import type { HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
@@ -57,7 +60,6 @@ async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxH
     cwd: dir,
     model: 'faux/faux-1',
     models,
-    watchdogIntervalMs: 0,
   })
   return Object.assign(runtime, { __faux: faux })
 }
@@ -82,13 +84,12 @@ test('关闭内核后拒绝新输入，结算回调不能重新启动模型回�
 // 1. 原生 tick：权威 seq / ownership 即时更改 / root human
 // ---------------------------------------------------------------------------
 
-test('native tick：probe 携带 targetKind/conversationId/权威 stateChangeSeq；ownership 即时更改；root 恒 human', { timeout: 60_000 }, async () => {
+test('原生事实端口：getConversationOwnership/getConversationActivity 现读真实事实（探针构造同源）', { timeout: 60_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'helm-probe-native-'))
   const kernel = await openRuntime(join(root, 'k1'))
   try {
-    // 用户直连会话（未登记）：human。
+    // 用户直连会话（未登记）：human；spawn 子会话：自动 helm 归属。
     const manual = await kernel.createConversation({})
-    // spawn 子会话：自动 helm 归属。
     kernel.__faux.setResponses([fauxAssistantMessage('worker 完成')])
     let childId: number | undefined
     await kernel.spawnAgent({
@@ -100,40 +101,18 @@ test('native tick：probe 携带 targetKind/conversationId/权威 stateChangeSeq
     })
     assert.ok(childId !== undefined)
 
-    const tick1 = (await kernel.watchdogTick()) as WatchdogTickHookPayload
-    const rootProbe = tick1.probes.find((p) => p.targetId === '1')
-    const childProbe = tick1.probes.find((p) => p.targetId === String(childId))
-    const manualProbe = tick1.probes.find((p) => p.targetId === String(manual.id))
-    // root：恒 human + 原生目标字段齐全。
-    assert.ok(rootProbe)
-    assert.equal(rootProbe.targetKind, 'conversation')
-    assert.equal(rootProbe.conversationId, 1)
-    assert.equal(rootProbe.ownedBy, 'human')
-    assert.equal(typeof rootProbe.stateChangeSeq, 'number')
-    assert.ok(rootProbe.stateChangeSeq! >= 0)
-    // spawn 子会话：helm。
-    assert.ok(childProbe)
-    assert.equal(childProbe.targetKind, 'conversation')
-    assert.equal(childProbe.conversationId, childId)
-    assert.equal(childProbe.ownedBy, 'helm')
-    // 权威 seq 与会话摘要一致（不猜造）。
-    const childSummary = kernel.getConversation(childId)
-    assert.equal(childProbe.stateChangeSeq, childSummary.stateChangeSeq)
-    // 用户直连：human。
-    assert.ok(manualProbe)
-    assert.equal(manualProbe.ownedBy, 'human')
+    // 归属权事实由 getConversationOwnership 现读（superagent 探针构造同源端口）。
+    assert.equal(kernel.getConversationOwnership(1), 'human', 'root 恒 human')
+    assert.equal(kernel.getConversationOwnership(manual.id), 'human', '用户直连默认 human')
+    assert.equal(kernel.getConversationOwnership(childId), 'helm', 'spawn 子会话自动 helm')
+    // 活动事实端口：空闲会话无停滞、有连续错误计数（结构真实）。
+    const activity = kernel.getConversationActivity(childId)
+    assert.equal(activity.consecutiveErrors, 0)
+    assert.ok(activity.stalledMs === undefined, '空闲会话不报停滞（idle 非停滞）')
 
-    // 即时更改：manual 标记 bot 后下一 tick 立即生效。
+    // 即时更改：manual 标记 bot 后端口现读立即生效。
     kernel.markConversationOwnership(manual.id, 'bot')
-    const tick2 = (await kernel.watchdogTick()) as WatchdogTickHookPayload
-    assert.equal(
-      tick2.probes.find((p) => p.targetId === String(manual.id))?.ownedBy,
-      'bot',
-      'markConversationOwnership 即时生效',
-    )
-    // 同一 tick 内 stateChangeSeq 与摘要一致（权威现读，非缓存）。
-    const manual2 = tick2.probes.find((p) => p.targetId === String(manual.id))!
-    assert.equal(manual2.stateChangeSeq, kernel.getConversation(manual.id).stateChangeSeq)
+    assert.equal(kernel.getConversationOwnership(manual.id), 'bot', 'markConversationOwnership 即时生效')
   } finally {
     await kernel.close()
     rmSync(root, { recursive: true, force: true })
@@ -196,8 +175,8 @@ function makeSummary(id: number): ConversationSummary {
   }
 }
 
-function makeTickPayload(probes: WatchdogProbe[]): WatchdogTickHookPayload {
-  return { timestamp: Date.now(), conversations: [makeSummary(1)], probes }
+function makeTickPayload(probes: WatchdogProbe[]): DiagnosticsCollection {
+  return { timestamp: Date.now(), conversations: [{ id: 1, profileId: 'assistant' }], probes }
 }
 
 const validProbe: WatchdogProbe = {
@@ -212,7 +191,7 @@ const validProbe: WatchdogProbe = {
   facts: { doing: 'x' },
 }
 
-test('非法探针在管道入口即拒绝（invalid_hook_result），不进入下游处理器', { timeout: 60_000 }, async () => {
+test('非法探针在采集边界即拒绝（invalid_diagnostics_probe），不进入追加', { timeout: 60_000 }, async () => {
   const invalid: WatchdogProbe[] = [
     { ...validProbe, targetKind: 'session' as never }, // 非法枚举
     { ...validProbe, conversationId: 0 }, // 非正整数
@@ -227,22 +206,23 @@ test('非法探针在管道入口即拒绝（invalid_hook_result），不进入�
     { ...validProbe, facts: null as never }, // facts 非对象
   ]
   for (const probe of invalid) {
-    const pipeline = new HookPipeline<'watchdog_tick'>('watchdog_tick')
-    let downstreamCalled = false
-    pipeline.add('p:down', () => {
-      downstreamCalled = true
-    })
-    await assert.rejects(
-      () => pipeline.run(makeTickPayload([probe])),
-      (err: unknown) => err instanceof HelmError && err.code === 'invalid_hook_result',
-      `探针 ${JSON.stringify(probe)} 必须被边界拒绝`,
+    const collection: DiagnosticsCollection = makeTickPayload([validProbe])
+    let appended = false
+    assert.throws(
+      () => {
+        appendProbes(collection, [probe])
+        appended = true
+      },
+      (err: unknown) => err instanceof HelmError && err.code === 'invalid_diagnostics_probe',
+      `探针 ${JSON.stringify(probe)} 必须被采集边界拒绝`,
     )
-    assert.equal(downstreamCalled, false, '非法载荷绝不进入下游')
+    assert.equal(appended, false, '非法探针绝不进入 collection')
+    assert.equal(collection.probes.length, 1, '原集合不受污染')
   }
 })
 
-test('合法探针（含可选字段缺省与全部新字段）通过边界并到达下游', { timeout: 60_000 }, async () => {
-  // 缺省可选字段（旧形状探针）仍合法。
+test('合法探针（含可选字段缺省与全部新字段）通过采集边界', { timeout: 60_000 }, async () => {
+  // 缺省可选字段（最小形状探针）合法。
   const legacy: WatchdogProbe = { targetId: '1', ownedBy: 'human', status: 'idle' }
   // 全字段外部探针。
   const external: WatchdogProbe = {
@@ -255,28 +235,21 @@ test('合法探针（含可选字段缺省与全部新字段）通过边界并�
     stalledMs: 0,
     facts: { kind: 'herdr', parentConversationId: 3, pendingAskCount: 1 },
   }
-  const pipeline = new HookPipeline<'watchdog_tick'>('watchdog_tick')
-  let received: WatchdogTickHookPayload | undefined
-  pipeline.add('p:down', (payload) => {
-    received = payload
-  })
-  const { finalPayload } = await pipeline.run(makeTickPayload([legacy, external]))
-  assert.ok(received)
-  assert.equal(finalPayload.probes.length, 2)
-  assert.equal(finalPayload.probes[1]!.nodeId, 'build-01')
-  assert.equal(finalPayload.probes[1]!.stateChangeSeq, 9)
+  const collection = makeTickPayload([legacy])
+  appendProbes(collection, [external])
+  assert.equal(collection.probes.length, 2)
+  assert.equal(collection.probes[1]!.nodeId, 'build-01')
+  assert.equal(collection.probes[1]!.stateChangeSeq, 9)
 })
 
-test('transform 破坏探针字段同样拒绝（transform 后复验）', { timeout: 60_000 }, async () => {
-  const pipeline = new HookPipeline<'watchdog_tick'>('watchdog_tick')
-  pipeline.add('p:bad', () => ({
-    action: 'transform' as const,
-    value: makeTickPayload([{ ...validProbe, stateChangeSeq: -5 }]),
-  }))
-  await assert.rejects(
-    () => pipeline.run(makeTickPayload([validProbe])),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_hook_result',
-  )
+test('collection 整体形状校验：timestamp/conversations/probes 非法显式拒绝', { timeout: 60_000 }, async () => {
+  const base = makeTickPayload([])
+  assert.ok(collectionViolation({ ...base, timestamp: -1 }) !== null)
+  assert.ok(collectionViolation({ ...base, conversations: [{ id: 0, profileId: 'x' }] as never }) !== null)
+  assert.ok(collectionViolation({ ...base, conversations: 'x' as never }) !== null)
+  assert.ok(collectionViolation({ ...base, probes: 'x' as never }) !== null)
+  assert.ok(collectionViolation(null) !== null)
+  assert.equal(collectionViolation(base), null, '合法 collection 通过')
 })
 
 // ---------------------------------------------------------------------------
@@ -382,6 +355,8 @@ class ProbeFakeTransport implements HerdrTransport {
 class ProbeBackend implements PluginHostBackend {
   conversations = new Map<number, ConversationSummary>()
   notifications: Array<{ title: string; body: string; level: string }> = []
+  /** 内部事件监听注册表（模拟 runtime.emitHostEvent broadcast:false 分发）。 */
+  private listeners = new Map<string, Array<(payload: unknown) => Promise<void>>>()
   constructor() {
     this.conversations.set(1, makeSummary(1))
     this.conversations.set(3, makeSummary(3))
@@ -417,10 +392,26 @@ class ProbeBackend implements PluginHostBackend {
   registerAskSeqResolver(): () => void {
     return () => {}
   }
-  onEvent(): () => void {
-    return () => {}
+  onEvent(type: string, listener: (payload: unknown) => unknown): () => void {
+    const list = this.listeners.get(type) ?? []
+    list.push(listener as (payload: unknown) => Promise<void>)
+    this.listeners.set(type, list)
+    return () => {
+      const cur = this.listeners.get(type) ?? []
+      const idx = cur.indexOf(listener as (payload: unknown) => Promise<void>)
+      if (idx >= 0) cur.splice(idx, 1)
+    }
   }
   async abortConversation(): Promise<void> {}
+  getConversationActivity(): { consecutiveErrors: number } {
+    return { consecutiveErrors: 0 }
+  }
+  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    return 'human'
+  }
+  get isClosing(): boolean {
+    return false
+  }
   async spawnAgent(): Promise<unknown> {
     return {}
   }
@@ -444,10 +435,15 @@ class ProbeBackend implements PluginHostBackend {
   listActions(): [] {
     return []
   }
-  emitEvent(type: string, payload: unknown): void {
+  async emitEvent(type: string, payload: unknown): Promise<void> {
     if (type === 'notification') {
       const n = payload as { title: string; body: string; level: string }
       this.notifications.push(n)
+    }
+    if (type === 'diagnostics.collect') {
+      for (const listener of [...(this.listeners.get(type) ?? [])]) {
+        await listener(payload)
+      }
     }
   }
 }
@@ -544,12 +540,13 @@ async function makeProbeEnv(
 }
 
 async function runHerdrTick(env: ProbeEnv): Promise<WatchdogProbe[]> {
-  const payload: WatchdogTickHookPayload = {
+  const payload: DiagnosticsCollection = {
     timestamp: Date.now(),
     conversations: [],
     probes: [],
   }
-  await env.host.runHook('watchdog_tick', payload)
+  // 真实链路：superagent 侧同款采集事件分发（herdr 监听器追加探针）。
+  await env.backend.emitEvent('diagnostics.collect', payload)
   if (payload.probes.length === 0) {
     // 诊断：对账可能把 pane 判为 settled，附通知尾部，绝不静默断言失败。
     assert.fail(
@@ -590,8 +587,8 @@ test('Herdr tick：同名 Agent 换至其他 tab 后不再投射自动化归属'
   ])
   try {
     env.transport.panes.get('w:p1')!.tabId = 'human-tab'
-    const payload: WatchdogTickHookPayload = { timestamp: Date.now(), conversations: [], probes: [] }
-    await env.host.runHook('watchdog_tick', payload)
+    const payload: DiagnosticsCollection = { timestamp: Date.now(), conversations: [], probes: [] }
+    await env.backend.emitEvent('diagnostics.collect', payload)
     assert.deepEqual(payload.probes, [])
     assert.equal(env.transport.calls.some((call) => call.method === 'tab.close'), false)
   } finally {

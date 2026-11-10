@@ -65,7 +65,6 @@ async function openEnv(dataDir: string): Promise<TestEnv> {
     cwd: dataDir,
     model: 'faux/faux-1',
     models: models as never,
-    watchdogIntervalMs: 0,
   })
   return {
     kernel,

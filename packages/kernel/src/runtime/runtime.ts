@@ -111,17 +111,9 @@ export interface KernelRuntimeOptions {
    * start() 启动恢复，防止恢复任务在工具未注册时被判 orphaned。
    */
   autoResume?: boolean
-  /**
-   * watchdog 巡检间隔毫秒（默认 15000；start 后启动 singleflight 定时器）。
-   * 传 0 关闭定时巡检（测试用；仍可手动 watchdogTick）。
-   */
-  watchdogIntervalMs?: number
   /** 节点升级等待 commit 确认的超时毫秒（缺省 120000；测试可缩短）。 */
   nodeUpgradeTimeoutMs?: number
 }
-
-/** watchdog 默认巡检间隔（singleflight 定时器；0 关闭）。 */
-const DEFAULT_WATCHDOG_INTERVAL_MS = 15_000
 
 export class KernelRuntime {
   readonly dataDir: string
@@ -159,10 +151,6 @@ export class KernelRuntime {
   readonly envFabric: EnvFabric
   /** 受管进程 token（createProcessToken 产物；close dispose）。 */
   private processTokenHandle: { tokenOf(): string | undefined; dispose(): void } | undefined
-  /** watchdog 定时器（singleflight；unref 不阻退出）。 */
-  private watchdogTimer: NodeJS.Timeout | undefined
-  private watchdogInflight = false
-  private watchdogPending: Promise<void> | undefined
   /** turn_settled 钩子的在途执行（waitForIdle 前等待）。 */
   private settledInflight: Promise<void> = Promise.resolve()
   /** tool_call handled 接管缓存（callId -> 结果与归属会话；execute 层包装器消费）。 */
@@ -173,7 +161,6 @@ export class KernelRuntime {
   private closed = false
   /** 实际 hub URL（setHubUrl 可更新；工具 env 每次读取最新值）。 */
   private hubUrlValue: string
-  private readonly watchdogIntervalMs: number
   /** start() 幂等守护：组合层完成插件/Workflow 挂接后显式启动调度。 */
   private started = false
   private startPromise: Promise<void> | undefined
@@ -279,7 +266,6 @@ export class KernelRuntime {
       seedKeyCache: apiKeyCache,
       autoResume: options.autoResume !== false,
       externalModels: modelsExternal,
-      watchdogIntervalMs: options.watchdogIntervalMs ?? DEFAULT_WATCHDOG_INTERVAL_MS,
       nodeUpgradeTimeoutMs: options.nodeUpgradeTimeoutMs ?? 120_000,
       modelsStore,
       redactReport: (fn: (text: string) => string) => {
@@ -312,7 +298,6 @@ export class KernelRuntime {
     seedKeyCache: Record<string, string>
     autoResume: boolean
     externalModels?: Models
-    watchdogIntervalMs: number
     /** 节点升级等待 commit 确认超时（毫秒；缺省 120000）。 */
     nodeUpgradeTimeoutMs: number
     /** 动态模型目录持久缓存（open 创建，实例全存续期共用）。 */
@@ -351,7 +336,6 @@ export class KernelRuntime {
     const hubUrl =
       init.hubUrl ?? `http://127.0.0.1:${process.env['HELM_PORT'] ?? '3202'}`
     this.hubUrlValue = hubUrl
-    this.watchdogIntervalMs = init.watchdogIntervalMs
 
     // ---- 模型集合注册表（Models/Provider 全家；外部注入时空操作）----
     this.modelsRegistry = new ModelRegistry(
@@ -640,6 +624,7 @@ export class KernelRuntime {
     // 4) PluginHost：内核内创建并接入（app 只消费 runtime.plugins，不再自建）。
     //    config/credentials 分离持久经 HelmPluginConfigStore；损坏显式上抛。
     await this.pluginConfig.load()
+    const runtimeRef = this
     const host = new PluginHost({
       dataDir: this.dataDir,
       // 启动屏障：注册期只登记服务，全部插件注册完成后由 kernel.start()
@@ -661,6 +646,11 @@ export class KernelRuntime {
         getConversation: (id) => this.getConversation(id),
         updateConversation: (id, patch) => this.updateConversation(id, patch),
         abortConversation: (id) => this.abortConversation(id),
+        getConversationActivity: (id) => this.getConversationActivity(id),
+        getConversationOwnership: (id) => this.getConversationOwnership(id),
+        get isClosing() {
+          return runtimeRef.closed
+        },
         spawnAgent: (request) => this.spawnAgent(request),
         runGate: (command, options) => this.runGate(command, options),
         prepareInterruptedConversations: (ids) => this.prepareInterruptedConversations(ids),
@@ -867,28 +857,9 @@ export class KernelRuntime {
       // 屏障失败时保持未启动态（不 resume），错误如实上抛。
       if (this.pluginHost) await this.pluginHost.start()
       this.harness.resume()
-      this.startWatchdogTimer()
       this.started = true
     })()
     return this.startPromise
-  }
-
-  /**
-   * watchdog 定时巡检（默认 15s；intervalMs=0 关闭）：unref 不阻进程退出，
-   * singleflight 防重入；tick 异常显式通知（不静默吞）。
-   */
-  private startWatchdogTimer(): void {
-    if (this.watchdogIntervalMs <= 0 || this.watchdogTimer !== undefined) return
-    this.watchdogTimer = setInterval(() => {
-      void this.watchdogTick().catch((error) => {
-        this.events.publish('notification', {
-          level: 'error',
-          title: 'watchdog 巡检失败',
-          body: String(error instanceof Error ? error.message : error),
-        })
-      })
-    }, this.watchdogIntervalMs)
-    this.watchdogTimer.unref()
   }
 
   /** 恢复运行服务用：先持久标记旧任务取消，不唤醒 SDK 全局调度器。
@@ -1479,57 +1450,6 @@ export class KernelRuntime {
   }
 
   /**
-   * watchdog tick（singleflight）：只采集真实事实，无业务策略、不自动恢复；
-   * probe 携带 getProbeFacts 的真实 stalledMs/consecutiveErrors；
-   * human 归属仅只读诊断（红线由插件与 host 共同遵守）。
-   */
-  async watchdogTick(): Promise<unknown> {
-    if (this.closed) throw new HelmError('runtime_closed', '内核正在关闭，拒绝启动巡检', 503)
-    if (this.watchdogInflight) {
-      // singleflight：上一轮未结束时不叠加执行（事实采集不重入）。
-      return { skipped: true, reason: 'watchdog tick already running' }
-    }
-    this.watchdogInflight = true
-    let finishTick!: () => void
-    const pending = new Promise<void>((resolve) => { finishTick = resolve })
-    this.watchdogPending = pending
-    try {
-      const summaries = this.listConversations()
-      const probes = summaries.map((summary) => {
-        const facts = this.tracker.getProbeFacts(summary.id)
-        return {
-          targetId: String(summary.id),
-          /**
-           * 归属权判定依据显式登记的 ownership 标记（conversation-ownership doc），
-           * 绝不依赖用户可改的 tags/parent 推断；判不准一律 human 只读
-           * （红线：宁可漏管不可越权）。
-           */
-          ownedBy: this.getConversationOwnership(summary.id),
-          status: summary.status,
-          targetKind: 'conversation' as const,
-          conversationId: summary.id,
-          stateChangeSeq: summary.stateChangeSeq,
-          ...(facts.stalledMs !== undefined ? { stalledMs: facts.stalledMs } : {}),
-          ...(facts.consecutiveErrors > 0 ? { consecutiveErrors: facts.consecutiveErrors } : {}),
-          facts: { doing: summary.doing, pendingAskCount: summary.pendingAskCount },
-        }
-      })
-      const payload = { timestamp: Date.now(), conversations: summaries, probes }
-      const outcome = await this.hookBridge.runHookChain('watchdog_tick', payload)
-      // 插件（如 builtin:herdr）可经 transform 扩充 payload（如附加探针字段）：
-      // 巡检调用方拿到的是钩子链最终形态，而非初始快照。
-      if (outcome?.action === 'transform' && outcome.value !== undefined) {
-        return outcome.value
-      }
-      return payload
-    } finally {
-      this.watchdogInflight = false
-      if (this.watchdogPending === pending) this.watchdogPending = undefined
-      finishTick()
-    }
-  }
-
-  /**
    * 会话归属权现读（Watchdog 红线判定唯一可信来源；superagent 工厂注入用）：
    * - 会话不存在（含已删除 tombstone）时抛 not_found，绝不把已删会话的
    *   残留登记当作可执行授权返回；
@@ -1543,6 +1463,19 @@ export class KernelRuntime {
     const owners = this.documentStore.get<Record<string, string>>('conversation-ownership', {})
     const marked = owners[String(conversationId)]
     return marked === 'helm' || marked === 'bot' ? marked : 'human'
+  }
+
+  /**
+   * 只读运行事实（ctx.host.getConversationActivity 后端）：基于真实活动
+   * 变更与回合结算计数，无在途 run 时不报停滞（空闲非停滞）；策略消费
+   * 归插件（如 superagent Watchdog），内核零业务判定。
+   */
+  getConversationActivity(conversationId: number): { stalledMs?: number; consecutiveErrors: number } {
+    const meta = this.store.getConv(conversationId)
+    if (meta === undefined || this.store.isDeleted(conversationId)) {
+      throw new HelmError('not_found', `会话不存在：${conversationId}`, 404, { conversationId })
+    }
+    return this.tracker.getProbeFacts(conversationId)
   }
 
   // ------------------------------------------------------------------
@@ -1791,15 +1724,9 @@ export class KernelRuntime {
     if (this.closed) return
     this.closed = true
     this.modelsRegistry.abortRefresh(new Error('kernel closing'))
-    // 1) 停定时器与资产监听（不再产生新副作用）。
-    if (this.watchdogTimer !== undefined) {
-      clearInterval(this.watchdogTimer)
-      this.watchdogTimer = undefined
-    }
+    // 1) 停资产监听（不再产生新副作用）。
     this.assetReloader.stop()
     await this.nodes.dispose()
-    // 先等已进入 Hook 管道的巡检收敛，避免插件释放后仍有回调写旧 Doc。
-    await this.watchdogPending
     // 2) 等待在途 reloadModels（可能还在写 models 引用）。
     await this.assetReloader.waitForInflight()
     await this.modelsRegistry.dispose()

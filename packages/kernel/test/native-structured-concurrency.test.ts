@@ -26,7 +26,7 @@ test('并行原生子代理的结构化输出工具按真实子会话隔离校�
     return fauxAssistantMessage([fauxToolCall('register_structured_output', { output: { tag } })], { stopReason: 'toolUse' })
   }
   faux.setResponses(Array.from({ length: 8 }, () => response))
-  const kernel = await KernelRuntime.open({ dataDir: dir, cwd: dir, models, model: 'faux/faux-1', watchdogIntervalMs: 0 })
+  const kernel = await KernelRuntime.open({ dataDir: dir, cwd: dir, models, model: 'faux/faux-1' })
   try {
     const schema = (tag: string) => ({ type: 'object', properties: { tag: { const: tag } }, required: ['tag'], additionalProperties: false })
     const results = await Promise.all([

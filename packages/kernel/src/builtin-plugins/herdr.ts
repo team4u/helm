@@ -26,6 +26,11 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HelmError, type PluginDefinition, type WorkflowRunSummary } from '@helm/protocol'
+import {
+  DIAGNOSTICS_COLLECT_EVENT,
+  appendProbes,
+  parseCollection,
+} from './diagnostics.js'
 import { createHerdrTransport } from './herdr/transport.js'
 import { targetNodeId, type HerdrConfig, type HerdrEvent, type HerdrPluginDependencies, type HerdrTarget, type HerdrTransport } from './herdr/contracts.js'
 import { AskCoordinator, type AskEntry } from './herdr/asks.js'
@@ -466,71 +471,71 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         await settleParentTurn(payload.conversation.id)
       })
 
-      // watchdog_tick（priority 100）：追加本插件自有窗格的真实 probes（含远端轮询）。
+      // diagnostics.collect 监听（原 watchdog_tick priority 100 鉤子改道）：
+      // 巡检发起方（builtin:superagent Watchdog service）采集原生事实后经宿主
+      // 内部事件追加本插件自有窗格的真实 probes（含远端轮询）。事件在宿主
+      // await，采集失败如实上抛给发起方，绝不静默吞。
       // human 归属红线：非自有 pane 一律不产生 probe；总览重取为只读采集。
-      ctx.hook.onWatchdogTick(
-        async (payload) => {
-          const registry = registryRef.current
-          if (!registry) return
-          const overview = overviewRef.current
-          if (overview !== undefined) {
-            // cwd/seen 等无事件变化（官方 actions.rs:1780 只改 cwd 不发事件）
-            // 依赖本 tick 重取快照对齐；单飞合并，不新增独立定时器。
-            await overview.refresh(registry, asks, frozenLocalTarget)
-          }
-          const now = Date.now()
-          const activePanes = registry.all().filter((pane) => pane.outcome !== 'settled')
-          // 并发探针：单窗格 agent.get 带 5s 短超时且 Promise.all 并发采集，
-          // 防止单个慢/挂节点串行卡死全局 watchdogTick 预算。
-          const probes = await Promise.all(
-            activePanes.map(async (pane): Promise<ReturnType<typeof buildProbe> | undefined> => {
-              const scope = scopeKey(nodeIdOf(pane), pane.paneId)
-              let status = 'unknown'
-              let authoritySeq: number | undefined
-              try {
-                const info = parseAgentResult(
-                  await transport.call(
-                    pane.target,
-                    'agent.get',
-                    { target: pane.paneId },
-                    { signal: connectionAbort.signal, timeoutMs: 5_000 },
-                  ),
+      ctx.host.onEvent(DIAGNOSTICS_COLLECT_EVENT, async (raw) => {
+        // 事件入口边界校验：非法载荷显式抛错给发布方（await 语义），不猜不吞。
+        const collection = parseCollection(raw)
+        const registry = registryRef.current
+        if (!registry) return
+        const overview = overviewRef.current
+        if (overview !== undefined) {
+          // cwd/seen 等无事件变化（官方 actions.rs:1780 只改 cwd 不发事件）
+          // 依赖本 tick 重取快照对齐；单飞合并，不新增独立定时器。
+          await overview.refresh(registry, asks, frozenLocalTarget)
+        }
+        const now = Date.now()
+        const activePanes = registry.all().filter((pane) => pane.outcome !== 'settled')
+        // 并发探针：单窗格 agent.get 带 5s 短超时且 Promise.all 并发采集，
+        // 防止单个慢/挂节点串行卡死采集预算。
+        const probes = await Promise.all(
+          activePanes.map(async (pane): Promise<ReturnType<typeof buildProbe> | undefined> => {
+            const scope = scopeKey(nodeIdOf(pane), pane.paneId)
+            let status = 'unknown'
+            let authoritySeq: number | undefined
+            try {
+              const info = parseAgentResult(
+                await transport.call(
+                  pane.target,
                   'agent.get',
-                  'agent_info',
-                )
-                if (info.name !== pane.agentName || info.tabId !== pane.tabId) {
-                  registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
-                  forgetPaneCaches(nodeIdOf(pane), pane.paneId)
-                  return undefined
-                }
-                for (const superseded of asks.observeAuthority({
-                  paneId: pane.paneId,
-                  nodeId: nodeIdOf(pane),
-                  seq: info.stateChangeSeq,
-                  status: info.agentStatus,
-                })) {
-                  await cancelQuietly(superseded, 'superseded')
-                }
-                status = info.agentStatus
-                authoritySeq = info.stateChangeSeq
-                probeFailures.delete(scope)
-              } catch {
-                status = 'unreachable'
-                // 权威不可达：绝不猜造 seq；水位不变更（停滞继续累计），
-                // 连续失败计数如实递增。
-                probeFailures.set(scope, (probeFailures.get(scope) ?? 0) + 1)
+                  { target: pane.paneId },
+                  { signal: connectionAbort.signal, timeoutMs: 5_000 },
+                ),
+                'agent.get',
+                'agent_info',
+              )
+              if (info.name !== pane.agentName || info.tabId !== pane.tabId) {
+                registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+                forgetPaneCaches(nodeIdOf(pane), pane.paneId)
+                return undefined
               }
-              return buildProbe(pane, status, authoritySeq, now)
-            }),
-          )
-          for (const probe of probes) {
-            if (probe !== undefined) payload.probes.push(probe)
-          }
-        },
-        { priority: 100 },
-      )
+              for (const superseded of asks.observeAuthority({
+                paneId: pane.paneId,
+                nodeId: nodeIdOf(pane),
+                seq: info.stateChangeSeq,
+                status: info.agentStatus,
+              })) {
+                await cancelQuietly(superseded, 'superseded')
+              }
+              status = info.agentStatus
+              authoritySeq = info.stateChangeSeq
+              probeFailures.delete(scope)
+            } catch {
+              status = 'unreachable'
+              // 权威不可达：绝不猜造 seq；水位不变更（停滞继续累计），
+              // 连续失败计数如实递增。
+              probeFailures.set(scope, (probeFailures.get(scope) ?? 0) + 1)
+            }
+            return buildProbe(pane, status, authoritySeq, now)
+          }),
+        )
+        appendProbes(collection, probes.filter((probe) => probe !== undefined))
+      })
 
-      /** 单窗格探针构造（停滞水位维护与 facts 口径间 watchdogTick 主体）。 */
+      /** 单窗格探针构造（停滞水位维护与 facts 口径；采集事件主体）。 */
       function buildProbe(
         pane: ManagedPane,
         status: string,

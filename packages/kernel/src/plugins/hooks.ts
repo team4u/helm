@@ -25,7 +25,6 @@ import {
   type ToolCallHookPayload,
   type ToolResultHookPayload,
   type TurnSettledPayload,
-  type WatchdogTickHookPayload,
 } from '@helm/protocol';
 
 /**
@@ -33,7 +32,7 @@ import {
  * - trigger / input / tool_call 可拦截或改写；
  * - before_turn 只允许原地修改；
  * - tool_result 可改写结果；agent_spawn 可接管；
- * - turn_settled / watchdog_tick 偏通知，不提供 block 门控。
+ * - turn_settled 偏通知，不提供 block 门控。
  */
 export const HOOK_ALLOWED_ACTIONS: Record<HookName, ReadonlySet<string>> = {
   trigger: new Set(['continue', 'transform', 'handled']),
@@ -43,7 +42,6 @@ export const HOOK_ALLOWED_ACTIONS: Record<HookName, ReadonlySet<string>> = {
   tool_result: new Set(['continue', 'transform', 'handled']),
   agent_spawn: new Set(['continue', 'transform', 'handled']),
   turn_settled: new Set(['continue', 'transform', 'handled']),
-  watchdog_tick: new Set(['continue', 'transform', 'handled']),
 };
 
 export interface RegisteredHook<K extends HookName = HookName> {
@@ -218,35 +216,6 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
     for (const i of v.inputs as unknown[]) if ((err = checkConversationInput(i))) return err;
     return null;
   },
-  watchdog_tick: (v) => {
-    if (!isObj(v)) return '必须是 WatchdogTickHookPayload 对象';
-    let err = reqNonNegativeInt(v, 'timestamp') ?? reqArray(v, 'conversations') ?? reqArray(v, 'probes');
-    if (err) return err;
-    for (const c of v.conversations as unknown[]) if ((err = checkConversationSummary(c))) return err;
-    for (const p of v.probes as unknown[]) {
-      if (
-        !isObj(p) ||
-        typeof p.targetId !== 'string' ||
-        p.targetId.length === 0 ||
-        (p.targetKind !== undefined && !['conversation', 'external'].includes(String(p.targetKind))) ||
-        (p.conversationId !== undefined &&
-          !(typeof p.conversationId === 'number' && Number.isInteger(p.conversationId) && p.conversationId > 0)) ||
-        (p.nodeId !== undefined && (typeof p.nodeId !== 'string' || p.nodeId.length === 0)) ||
-        !['helm', 'bot', 'human'].includes(String(p.ownedBy)) ||
-        typeof p.status !== 'string' ||
-        (p.stateChangeSeq !== undefined &&
-          !(typeof p.stateChangeSeq === 'number' && Number.isInteger(p.stateChangeSeq) && p.stateChangeSeq >= 0)) ||
-        (p.stalledMs !== undefined &&
-          !(typeof p.stalledMs === 'number' && Number.isFinite(p.stalledMs) && p.stalledMs >= 0)) ||
-        (p.consecutiveErrors !== undefined &&
-          !(typeof p.consecutiveErrors === 'number' && Number.isFinite(p.consecutiveErrors) && p.consecutiveErrors >= 0)) ||
-        (p.facts !== undefined && !isObj(p.facts))
-      ) {
-        return '字段 probes 的每项必须是 WatchdogProbe（targetKind/conversationId/nodeId/stateChangeSeq/stalledMs/consecutiveErrors 若存在必须类型合法且非负）';
-      }
-    }
-    return null;
-  },
 };
 
 /** 校验某 Hook 载荷的必要字段（入口 / transform 后 / runtime 默认行为前均可调用）。 */
@@ -377,5 +346,4 @@ export type {
   ToolCallHookPayload,
   ToolResultHookPayload,
   TurnSettledPayload,
-  WatchdogTickHookPayload,
 };

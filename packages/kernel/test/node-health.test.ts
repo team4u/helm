@@ -205,7 +205,6 @@ async function openHubApp(dir: string): Promise<{
     cwd: dir,
     model: 'faux/faux-1',
     models: models as never,
-    watchdogIntervalMs: 0,
   })
   const hub = await startHub({
     kernel: kernel as never,

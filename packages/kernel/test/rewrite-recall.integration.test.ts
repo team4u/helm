@@ -13,7 +13,7 @@ test('真实组合：编辑 Worker 历史输入经 SDK 事件清理对应召回�
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 })
+  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     const { kernel } = app
     await kernel.profiles.save({ id: 'rewrite-expert', name: '编辑回归专家' })

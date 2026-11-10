@@ -1380,7 +1380,6 @@ export class PluginHost {
         onToolResult: (fn, o) => addHook('tool_result', fn, o),
         onAgentSpawn: (fn, o) => addHook('agent_spawn', fn, o),
         onTurnSettled: (fn, o) => addHook('turn_settled', fn, o),
-        onWatchdogTick: (fn, o) => addHook('watchdog_tick', fn, o),
       },
 
       action: (spec) => {
@@ -1555,6 +1554,11 @@ export class PluginHost {
       getConversation: (id) => backend.getConversation(id),
       updateConversation: (id, patch) => backend.updateConversation(id, patch),
       abortConversation: (id) => backend.abortConversation(id),
+      getConversationActivity: (id) => backend.getConversationActivity(id),
+      getConversationOwnership: (id) => backend.getConversationOwnership(id),
+      get isClosing() {
+        return backend.isClosing;
+      },
       spawnAgent: (request) => backend.spawnAgent(request),
       runGate: (command, options) => backend.runGate(command, options),
       prepareInterruptedConversations: (ids) => backend.prepareInterruptedConversations(ids),

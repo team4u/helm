@@ -1,10 +1,15 @@
 /**
  * builtin:superagent —— 独立 Watchdog 模块（两层巡检：0-Token 规则表 + L2 认知排障）。
  *
- * 本模块只做巡检策略，机制全部来自 PluginHost / runtime / Herdr 探针：
- * - watchdog_tick（priority 0，位于 Herdr priority 100 追加外部探针之后）汇总
- *   native + external 探针，按确定性规则表执行 notify / bridge_to_ask /
- *   auto_abort_and_notify / wake_watchdog；
+ * 本模块只做巡检策略，机制全部来自 PluginHost / ctx.host / Herdr 探针：
+ * - 定时巡检（原内核 watchdog 定时器 + watchdog_tick 钩子已移除）完全由本模块
+ *   ctx.service 拥有：singleflight 定时 tick（默认 15s，unref）先经
+ *   ctx.host 只读端口（listConversations / getConversationActivity /
+ *   getConversationOwnership）构造原生会话事实，再以 'diagnostics.collect'
+ *   内部事件（broadcast:false，await 全部监听器）采集外部探针（如 Herdr 终端
+ *   窗格），汇总后按确定性规则表执行 notify / bridge_to_ask /
+ *   auto_abort_and_notify / wake_watchdog；另提供 watchdog_tick 手动动作
+ *   （HTTP/CLI/Tool 同权，scope 强制 watchdog Profile）；
  * - 去重状态持久化于私有 ctx.doc（同 (targetKind,nodeId,targetId,stateChangeSeq)
  *   同类动作恰好一次；未达阈值绝不预先占坑，跨重启不重复危险动作）；
  * - L2：向专属 watchdog 会话合并投递异常事实（origin agent / followUp），
@@ -16,7 +21,7 @@
  * - Watchdog 自身（id 或 profileId=watchdog）绝不做探针目标；其 failed/aborted
  *   仅通知（turn_settled），防自巡检死循环；
  * - ownedBy=human 与一切外部终端窗格只读：只允许 notify / 诊断，绝无按键、
- *   恢复注入、自动中止；mutation 前一律现查 deps.getConversationOwnership；
+ *   恢复注入、自动中止；mutation 前一律现查 ctx.host.getConversationOwnership；
  * - 外部窗格的中止只能经由核对 facts.parentConversationId 指向的 owned 原生
  *   工作会话后由 L2/规则对该会话 abort，由 Herdr 原取消链清理；
  * - 外部探针 facts.stalledBasis='since-last-state-change'：stalledMs 只反映
@@ -29,11 +34,15 @@ import {
   type BeforeTurnHookPayload,
   type HelmPluginContext,
   type TurnSettledPayload,
+} from '@helm/protocol'
+import { redactJsonValue } from './redact.js'
+import {
+  DIAGNOSTICS_COLLECT_EVENT,
+  assertValidCollection,
+  type DiagnosticsCollection,
   type WatchdogOwnership,
   type WatchdogProbe,
-  type WatchdogTickHookPayload,
-} from '@helm/protocol'
-import { redactJsonValue } from '../../redact.js'
+} from '../diagnostics.js'
 import type { SuperAgentDependencies, SuperAgentWatchdogRuntime } from './contracts.js'
 
 // ---------------------------------------------------------------------------
@@ -70,6 +79,13 @@ const WATCHDOG_EXCLUSIVE_TOOLS: ReadonlySet<string> = new Set([
 
 /** 外部目标（无权威 seq，以哨兵水位去重）的同类动作再触发间隔。 */
 const EXTERNAL_REFRACTORY_MS = 60 * 60 * 1000
+
+/** 定时巡检间隔（毫秒；与原内核 watchdog 定时器口径一致）。 */
+const TICK_INTERVAL_MS = 15_000
+
+/** stop 等待在途 tick 的有界上限（跨插件采集不可取消，防与慢监听方互挂死）。 */
+const STOP_TICK_WAIT_MS = 30_000
+
 /** 去重文档允许的动作类别（私有 Doc 只信本模块写出的形状）。 */
 const DEDUP_ACTIONS: ReadonlySet<string> = new Set(['notify', 'wake', 'abort', 'bridge'])
 
@@ -206,6 +222,16 @@ export function registerSuperAgentWatchdog(
   const inFlightWakes = new Set<string>()
   /** 服务停止后不再发起新的自动处置（close 期间不无边界等待）。 */
   let closing = false
+  /** 定时巡检定时器（unref 不阻退出；stop 清理）。 */
+  let tickTimer: NodeJS.Timeout | undefined
+  /** 在途 tick（singleflight；timer 与手动动作共用同一 Promise 与最终结果）。 */
+  let tickInflight: Promise<DiagnosticsCollection> | undefined
+
+  /** 手动/定时共用的 singleflight 结果：skipped=true 表示复用在途轮真实结果。 */
+  interface TickOutcome {
+    skipped: boolean
+    collection: DiagnosticsCollection
+  }
 
   // ---- 通知 / fire-and-forget --------------------------------------------
 
@@ -411,7 +437,7 @@ export function registerSuperAgentWatchdog(
 
   /**
    * mutation 前的即时归属核对：probe 携带的 ownedBy 可能已过期，
-   * 一律以 deps.getConversationOwnership 现读为准（未标记一律 human）。
+   * 一律以 ctx.host.getConversationOwnership 现读为准（未标记一律 human）。
    */
   function assertOwnedTarget(conversationId: number): void {
     if (isProtectedTarget(conversationId)) {
@@ -422,7 +448,7 @@ export function registerSuperAgentWatchdog(
         { conversationId },
       )
     }
-    const ownedBy = deps.getConversationOwnership(conversationId)
+    const ownedBy = ctx.host.getConversationOwnership(conversationId)
     if (ownedBy === 'human') {
       throw new HelmError(
         'watchdog_target_human',
@@ -434,56 +460,135 @@ export function registerSuperAgentWatchdog(
   }
 
   // ---------------------------------------------------------------------------
-  // watchdog_tick（priority 0）：规则表评估（只读分类，动单另行执行）
+  // 定时巡检（原内核 watchdog_tick：singleflight；事实采集 + 策略评估）
   // ---------------------------------------------------------------------------
 
-  ctx.hook.onWatchdogTick(
-    async (payload: WatchdogTickHookPayload) => {
-      const cfg = runtime.getConfig()
-      if (!cfg.watchdogEnabled || closing || deps.isClosing()) return
-      readDedup()
-      // 历史键安全淘汰（已删会话 / 超限外部目标）：防 7×24 无限膨胀。
-      evictStaleTargets(collectActiveExternalKeys(payload.probes))
-      const shuttingDown = false
-
-      // 防自激：排除 watchdog 自身 id 与一切 profileId=watchdog 的会话（含直聊）。
-      const watchdogIds = new Set<number>()
-      const watchdogId = runtime.getWatchdogConversationId()
-      if (watchdogId !== undefined) watchdogIds.add(watchdogId)
-      for (const summary of payload.conversations) {
-        if (summary.profileId === WATCHDOG_PROFILE_ID) watchdogIds.add(summary.id)
+  /**
+   * 单轮巡检：先从 ctx.host 构造原生会话事实（getConversationActivity /
+   * getConversationOwnership / listConversations 均为宿主只读端口），再经
+   * 'diagnostics.collect' 内部事件（broadcast:false，await 全部监听器）采集
+   * 外部探针（如 builtin:herdr 终端窗格）。任一环节失败显式抛出，绝不静默
+   * 跳过（诚实性纪律）。
+   */
+  async function runTick(): Promise<DiagnosticsCollection> {
+    if (closing || ctx.host.isClosing) {
+      throw new HelmError('plugin_disabled', 'builtin:superagent 或内核正在关闭，拒绝启动巡检', 409)
+    }
+    const summaries = ctx.host.listConversations()
+    const probes: WatchdogProbe[] = summaries.map((summary) => {
+      const activity = ctx.host.getConversationActivity(summary.id)
+      return {
+        targetId: String(summary.id),
+        /**
+         * 归属权判定依据显式登记的 ownership 标记，绝不依赖用户可改的
+         * tags/parent 推断；判不准一律 human 只读（宁漏管不越权）。
+         */
+        ownedBy: ctx.host.getConversationOwnership(summary.id),
+        status: summary.status,
+        targetKind: 'conversation' as const,
+        conversationId: summary.id,
+        stateChangeSeq: summary.stateChangeSeq,
+        ...(activity.stalledMs !== undefined ? { stalledMs: activity.stalledMs } : {}),
+        ...(activity.consecutiveErrors > 0 ? { consecutiveErrors: activity.consecutiveErrors } : {}),
+        facts: { doing: summary.doing, pendingAskCount: summary.pendingAskCount },
       }
+    })
+    const collection: DiagnosticsCollection = {
+      timestamp: Date.now(),
+      conversations: summaries.map((summary) => ({ id: summary.id, profileId: summary.profileId })),
+      probes,
+    }
+    // 外部采集（Herdr 等）：宿主事件会等待全部监听器，失败如实上抛。
+    await ctx.host.emitEvent(DIAGNOSTICS_COLLECT_EVENT, collection, { broadcast: false })
+    // 终态复验：监听方直接改写 collection（绕过 appendProbes）或注入非法探针
+    // 在此拦截，非法产物绝不进入规则表（诚实性纪律）。
+    assertValidCollection(collection)
+    return collection
+  }
 
-      const findings: Finding[] = []
-      const ops: PlannedOp[] = []
+  /** 定时入口：异常显式通知（不静默吞）；与手动动作共用 singleflightTick。 */
+  function scheduleTick(): void {
+    if (closing || tickTimer !== undefined) return
+    tickTimer = setInterval(() => {
+      void singleflightTick().catch((error) => {
+        notify(
+          'error',
+          'watchdog 巡检失败',
+          error instanceof Error ? error.message : String(error),
+        )
+      })
+    }, TICK_INTERVAL_MS)
+    tickTimer.unref()
+  }
 
-      for (const probe of payload.probes) {
-        // 未声明 targetKind 的探针不作为自动干预授权：不猜数字 targetId 的类别。
-        if (probe.targetKind !== 'conversation' && probe.targetKind !== 'external') {
-          const finding: Finding = {
-            key: targetKey('unknown', probe.nodeId, probe.targetId),
-            targetKind: 'conversation',
-            targetId: probe.targetId,
-            ownedBy: probe.ownedBy,
-            status: probe.status,
-            evidence: `探针未声明 targetKind（targetId=${probe.targetId}），不猜测目标类别，仅只读告知`,
-            disposition: 'notify_only（未声明目标类别）',
-          }
-          findings.push(finding)
-          ops.push({ type: 'notify', finding, refractoryMs: EXTERNAL_REFRACTORY_MS })
-          continue
-        }
-        if (probe.targetKind === 'external') {
-          classifyExternal(probe, watchdogIds, cfg, findings, ops)
-        } else {
-          classifyNative(probe, watchdogIds, cfg, findings, ops)
-        }
+  /**
+   * 唯一 tick 入口（singleflight）：定时与手动共用同一在途 Promise；重入时
+   * 返回在途轮的真实结果（skipped=true，计数为真实采集值，绝不伪造 0）。
+   */
+  function singleflightTick(): Promise<TickOutcome> {
+    if (tickInflight !== undefined) {
+      return tickInflight.then((collection) => ({ skipped: true, collection }))
+    }
+    let self: Promise<DiagnosticsCollection> | undefined
+    const run = (async () => {
+      try {
+        const collection = await runTick()
+        await evaluateCollection(collection)
+        return collection
+      } finally {
+        if (tickInflight === self) tickInflight = undefined
       }
+    })()
+    self = run
+    tickInflight = run
+    return run.then((collection) => ({ skipped: false, collection }))
+  }
 
-      await executeOps(payload.timestamp, shuttingDown, findings, ops)
-    },
-    { priority: 0 },
-  )
+  /** 规则表评估（原 watchdog_tick 处理器主体：只读分类，动单另行执行）。 */
+  async function evaluateCollection(payload: DiagnosticsCollection): Promise<void> {
+    const cfg = runtime.getConfig()
+    if (!cfg.watchdogEnabled || closing || ctx.host.isClosing) return
+    readDedup()
+    // 历史键安全淘汰（已删会话 / 超限外部目标）：防 7×24 无限膨胀。
+    evictStaleTargets(collectActiveExternalKeys(payload.probes))
+    const shuttingDown = false
+
+    // 防自激：排除 watchdog 自身 id 与一切 profileId=watchdog 的会话（含直聊）。
+    const watchdogIds = new Set<number>()
+    const watchdogId = runtime.getWatchdogConversationId()
+    if (watchdogId !== undefined) watchdogIds.add(watchdogId)
+    for (const summary of payload.conversations) {
+      if (summary.profileId === WATCHDOG_PROFILE_ID) watchdogIds.add(summary.id)
+    }
+
+    const findings: Finding[] = []
+    const ops: PlannedOp[] = []
+
+    for (const probe of payload.probes) {
+      // 未声明 targetKind 的探针不作为自动干预授权：不猜数字 targetId 的类别。
+      if (probe.targetKind !== 'conversation' && probe.targetKind !== 'external') {
+        const finding: Finding = {
+          key: targetKey('unknown', probe.nodeId, probe.targetId),
+          targetKind: 'conversation',
+          targetId: probe.targetId,
+          ownedBy: probe.ownedBy,
+          status: probe.status,
+          evidence: `探针未声明 targetKind（targetId=${probe.targetId}），不猜测目标类别，仅只读告知`,
+          disposition: 'notify_only（未声明目标类别）',
+        }
+        findings.push(finding)
+        ops.push({ type: 'notify', finding, refractoryMs: EXTERNAL_REFRACTORY_MS })
+        continue
+      }
+      if (probe.targetKind === 'external') {
+        classifyExternal(probe, watchdogIds, cfg, findings, ops)
+      } else {
+        classifyNative(probe, watchdogIds, cfg, findings, ops)
+      }
+    }
+
+    await executeOps(payload.timestamp, shuttingDown, findings, ops)
+  }
 
   function classifyNative(
     probe: WatchdogProbe,
@@ -746,14 +851,14 @@ export function registerSuperAgentWatchdog(
     for (const key of wakeKeys) inFlightWakes.add(key)
     fireAndForget('watchdog:wake-l2', async () => {
       try {
-        if (closing || deps.isClosing()) return
+        if (closing || ctx.host.isClosing) return
         const valid = dueWakes.filter((op) => {
           const finding = op.finding
           if (finding.targetKind === 'external') return finding.stateChangeSeq !== undefined && finding.ownedBy !== 'human'
           const id = finding.conversationId
           if (id === undefined) return false
           try {
-            return deps.getConversationOwnership(id) !== 'human' && ctx.host.getConversation(id).stateChangeSeq === finding.stateChangeSeq
+            return ctx.host.getConversationOwnership(id) !== 'human' && ctx.host.getConversation(id).stateChangeSeq === finding.stateChangeSeq
           } catch (error) {
             if (error instanceof HelmError && error.code === 'not_found') return false
             throw error
@@ -821,11 +926,11 @@ export function registerSuperAgentWatchdog(
       notify(level, title, detail, conversationId)
     }
     // 异步任务在真正操作前再查关闭状态：排队期间内核可能已开始关闭。
-    if (closing || deps.isClosing()) {
+    if (closing || ctx.host.isClosing) {
       giveUp('info', 'Watchdog 跳过自动中止', '内核/插件正在关闭，不再执行自动中止')
       return
     }
-    if (deps.getConversationOwnership(conversationId) === 'human') {
+    if (ctx.host.getConversationOwnership(conversationId) === 'human') {
       giveUp('warning', 'Watchdog 放弃自动中止', `${finding.evidence}；执行前归属已变为 human，仅通知`)
       return
     }
@@ -900,12 +1005,12 @@ export function registerSuperAgentWatchdog(
     const askId = `superagent-watchdog-bridge-${conversationId}-${seq}`
 
     // 异步任务在真正操作前再查关闭状态：排队期间内核可能已开始关闭。
-    if (closing || deps.isClosing()) return
+    if (closing || ctx.host.isClosing) return
     if (isProtectedTarget(conversationId)) {
       giveUpBridge(finding, '常驻入口受保护，仅通知')
       return
     }
-    if (deps.getConversationOwnership(conversationId) === 'human') {
+    if (ctx.host.getConversationOwnership(conversationId) === 'human') {
       giveUpBridge(finding, '创建前归属已变为 human，仅通知')
       return
     }
@@ -1004,7 +1109,7 @@ export function registerSuperAgentWatchdog(
     }
     // 结算后现查：归属仍 owned、仍 blocked、本回合未结算（completionSeq 未变）。
     // 关闭中不执行任何变更（stop 已取消/将取消在途 Ask）。
-    if (closing || deps.isClosing()) {
+    if (closing || ctx.host.isClosing) {
       notify('info', 'Watchdog 放弃执行授权', '内核/插件正在关闭，不执行授权变更', conversationId)
       return
     }
@@ -1012,7 +1117,7 @@ export function registerSuperAgentWatchdog(
       notify('warning', 'Watchdog 放弃执行授权', '常驻入口受保护，不执行授权变更', conversationId)
       return
     }
-    if (deps.getConversationOwnership(conversationId) === 'human') {
+    if (ctx.host.getConversationOwnership(conversationId) === 'human') {
       notify('warning', 'Watchdog 放弃执行授权', `${finding.evidence}；授权后归属已变为 human，仅通知`, conversationId)
       return
     }
@@ -1071,7 +1176,7 @@ export function registerSuperAgentWatchdog(
     if (payload.outcome !== 'failed' && payload.outcome !== 'aborted') return
     const conversation = payload.conversation
     if (!isWatchdogSession(conversation.id, conversation.profileId)) return
-    if (deps.isClosing()) return // 关闭中大量 abort 结算是预期行为，不告警不自激
+    if (ctx.host.isClosing) return // 关闭中大量 abort 结算是预期行为，不告警不自激
     notify(
       payload.outcome === 'failed' ? 'error' : 'warning',
       '巡检看门狗回合异常',
@@ -1178,7 +1283,7 @@ export function registerSuperAgentWatchdog(
         stateChangeSeq: summary.stateChangeSeq,
         completionSeq: summary.completionSeq,
         pendingAskCount: summary.pendingAskCount,
-        ownedBy: deps.getConversationOwnership(summary.id), // 现查，非探针旧值
+        ownedBy: ctx.host.getConversationOwnership(summary.id), // 现查，非探针旧值
       },
       entries,
     }
@@ -1217,7 +1322,7 @@ export function registerSuperAgentWatchdog(
     return text.length > 400 ? `${text.slice(0, 400)}…` : text
   }
 
-  /** facts 深度脱敏：复用 kernel redactJsonValue（覆盖数组/嵌套对象/键名，避免自研遗漏）。 */
+  /** facts 深度脱敏：插件内 JSON 遍历 helper（覆盖数组/嵌套对象/键名）。 */
   function redactFacts(value: Record<string, unknown>): unknown {
     return redactJsonValue(value, deps.redact)
   }
@@ -1378,9 +1483,29 @@ export function registerSuperAgentWatchdog(
     id: 'superagent-watchdog',
     start() {
       closing = false
+      scheduleTick()
     },
     async stop() {
       closing = true
+      // 先停定时器（不再产生新 tick），再有界等在途 tick 收敛：跨插件采集
+      //（diagnostics.collect 监听器）不可取消，无界等待会与慢监听方互相挂死，
+      // 超时即放弃等待并继续取消自有 Ask（残留诊断如实通知，不伤主流程）。
+      if (tickTimer !== undefined) {
+        clearInterval(tickTimer)
+        tickTimer = undefined
+      }
+      if (tickInflight !== undefined) {
+        const bounded = tickInflight.catch(() => undefined)
+        const timeout = new Promise<void>((resolve) => setTimeout(resolve, STOP_TICK_WAIT_MS).unref?.())
+        const settled = await Promise.race([bounded.then(() => true), timeout.then(() => false)])
+        if (!settled) {
+          notify(
+            'warning',
+            'Watchdog 停用时在途巡检未收敛',
+            `stop 等待在途 tick 超过 ${STOP_TICK_WAIT_MS}ms（外部采集监听器不可取消），已放弃等待；该轮不再产生新处置`,
+          )
+        }
+      }
       // 逐个 await 取消（非 allSettled 吞错）：已结算/不存在的 Ask 属事实性状态
       // 可忽略；其余失败聚合为显式错误上抛（PluginHost 聚合为 plugin_service_stop_failed）。
       const failures: Array<{ askId: string; error: unknown }> = []
@@ -1404,9 +1529,48 @@ export function registerSuperAgentWatchdog(
       }
     },
     liveTasks() {
-      // 挂起的人类授权 Ask 是在途任务：停用/卸载前 PluginHost 据此 409 拒绝，
-      // 避免吞掉待答审批；close() 路径则由 stop 主动取消。
-      return [...inFlightBridges.entries()].map(([key, askId]) => `bridge-ask:${askId}(${key})`)
+      // 挂起的人类授权 Ask 与在途 tick 是在途任务：停用/卸载前 PluginHost 据此
+      // 409 拒绝，避免吞掉待答审批或撕裂进行中的巡检；close() 路径则由 stop
+      // 主动取消并等待。
+      return [
+        ...(tickInflight !== undefined ? ['watchdog-tick'] : []),
+        ...[...inFlightBridges.entries()].map(([key, askId]) => `bridge-ask:${askId}(${key})`),
+      ]
+    },
+  })
+
+  // ---------------------------------------------------------------------------
+  // 手动 tick 动作（HTTP/CLI/Agent Tool 同权；owner scope 强制：仅 watchdog
+  // Profile 会话可用，人工 HTTP/CLI 无会话上下文放行）
+  // ---------------------------------------------------------------------------
+
+  ctx.action<Record<string, never>, { timestamp: number; conversations: number; probes: number; skipped?: boolean }>({
+    id: 'watchdog_tick',
+    description: '手动触发一轮 Watchdog 巡检（采集原生会话与外部探针事实并执行规则表）',
+    idempotent: false,
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        timestamp: { type: 'number' },
+        conversations: { type: 'integer', minimum: 0 },
+        probes: { type: 'integer', minimum: 0 },
+        skipped: { type: 'boolean' },
+      },
+      required: ['timestamp', 'conversations', 'probes'],
+      additionalProperties: false,
+    },
+    scope: { profileIds: [WATCHDOG_PROFILE_ID] },
+    async handler(input, context) {
+      assertActionCaller(context)
+      // 与定时 tick 共用唯一 singleflight 入口：重入返回在途轮真实结果。
+      const outcome = await singleflightTick()
+      return {
+        timestamp: outcome.collection.timestamp,
+        conversations: outcome.collection.conversations.length,
+        probes: outcome.collection.probes.length,
+        ...(outcome.skipped ? { skipped: true } : {}),
+      }
     },
   })
 }

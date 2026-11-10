@@ -63,44 +63,44 @@ async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxH
   return Object.assign(runtime, { __faux: faux })
 }
 
-describe('watchdogTick 返回 transform 后的 payload', { timeout: 60_000 }, () => {
-  it('插件 transform 扩充的字段出现在返回值中', timeout, async () => {
+describe('diagnostics.collect 外部采集（原 watchdogTick transform 扩充同语义）', { timeout: 60_000 }, () => {
+  it('采集监听器追加的事实出现在最终 collection 中（await 语义）', timeout, async () => {
     const kernel = await openRuntime(join(root, 'tick-1'))
     try {
       await kernel.plugins.register({
-        id: 'test:tick-transform',
+        id: 'test:collector',
         definePlugin(ctx) {
-          ctx.hook.onWatchdogTick(async (payload) => {
-            // 模拟 builtin:herdr 式扩充：在 payload 上附加诊断字段（保留原字段）。
-            return {
-              action: 'transform',
-              value: { ...payload, diagnostics: { scannedAt: 12345, extra: true } },
-            }
+          // 模拟 builtin:herdr 式外部采集：在 collection 上追加探针（保留原字段）。
+          ctx.host.onEvent('diagnostics.collect', (raw) => {
+            const collection = raw as { probes: unknown[] }
+            collection.probes.push({
+              targetId: 'ext:p1',
+              targetKind: 'external',
+              nodeId: 'local',
+              ownedBy: 'helm',
+              status: 'working',
+              stalledMs: 0,
+              facts: { kind: 'test-collector' },
+            })
           })
         },
       })
-      const result = (await kernel.watchdogTick()) as { diagnostics?: { scannedAt: number; extra: boolean } }
-      assert.ok(result.diagnostics !== undefined, 'transform 扩充字段必须出现在返回值')
-      assert.equal(result.diagnostics.scannedAt, 12345)
-      assert.equal(result.diagnostics.extra, true)
+      // 事件由宿主 emitEvent 分发（broadcast:false 仅内部监听器）。
+      const collected: { probes: unknown[] } = { probes: [] }
+      await kernel.emitHostEvent('diagnostics.collect', collected, { broadcast: false })
+      assert.equal(collected.probes.length, 1, '监听器追加事实进入 collection')
+      assert.equal((collected.probes[0] as { targetId: string }).targetId, 'ext:p1')
     } finally {
       await kernel.close()
     }
   })
 
-  it('无插件 transform 时返回初始 payload（probes/conversations 原样）', timeout, async () => {
+  it('无监听器时 emitHostEvent 正常完成（空采集不报错）', timeout, async () => {
     const kernel = await openRuntime(join(root, 'tick-2'))
     try {
-      const result = (await kernel.watchdogTick()) as {
-        timestamp: number
-        probes: Array<{ targetId: string; ownedBy: string }>
-        diagnostics?: unknown
-      }
-      assert.equal(typeof result.timestamp, 'number')
-      assert.ok(Array.isArray(result.probes))
-      assert.equal(result.diagnostics, undefined)
-      // root #1 在 probes 中恒 human。
-      assert.equal(result.probes.find((p) => p.targetId === '1')?.ownedBy, 'human')
+      const collected: { probes: unknown[] } = { probes: [] }
+      await kernel.emitHostEvent('diagnostics.collect', collected, { broadcast: false })
+      assert.equal(collected.probes.length, 0)
     } finally {
       await kernel.close()
     }

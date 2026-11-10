@@ -28,7 +28,7 @@ async function open(dir: string): Promise<Runtime> {
   const faux = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
   models.setProvider(faux.provider)
   return Object.assign(await KernelRuntime.open({
-    dataDir: dir, cwd: dir, models, watchdogIntervalMs: 0,
+    dataDir: dir, cwd: dir, models,
   }), { faux })
 }
 

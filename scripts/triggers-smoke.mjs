@@ -123,7 +123,7 @@ async function cliOk(args) {
 }
 
 async function open() {
-  app = await createHelm({ dataDir, cwd: dataDir, watchdogIntervalMs: 0 });
+  app = await createHelm({ dataDir, cwd: dataDir });
   hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 0 });
   await app.kernel.plugins.register({
     id: 'test:triggers-smoke',

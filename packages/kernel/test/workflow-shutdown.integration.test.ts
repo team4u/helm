@@ -13,7 +13,7 @@ test('真实 SQLite：关闭在途工作流后，未启动插件也能从重开�
   let app: Awaited<ReturnType<typeof createHelm>> | undefined
   let reopened: KernelRuntime | undefined
   try {
-    app = await createHelm({ dataDir, cwd: dataDir, watchdogIntervalMs: 0 })
+    app = await createHelm({ dataDir, cwd: dataDir })
     const { run } = await app.kernel.plugins.invokeAction('builtin:workflow', 'run', {
       conversationId: 1,
       script: 'export const meta = { name: "shutdown-persistence", description: "验证在途任务关闭落盘" }; await new Promise(() => {})',
@@ -24,7 +24,7 @@ test('真实 SQLite：关闭在途工作流后，未启动插件也能从重开�
     app = undefined
 
     // 不注册 workflow，防止其 start() 重算 runs 投影后掩盖停止阶段的漏写。
-    reopened = await KernelRuntime.open({ dataDir, cwd: dataDir, watchdogIntervalMs: 0, autoResume: false })
+    reopened = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
     assert.equal(reopened.plugins.list().some((plugin) => plugin.id === 'builtin:workflow'), false)
     const records = reopened.documentStore.get<Record<string, unknown>>('builtin:workflow:records', {})
     const persisted = Object.values(records).find((value): value is WorkflowRunSummary =>

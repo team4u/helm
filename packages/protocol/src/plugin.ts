@@ -1,8 +1,8 @@
 /**
  * PluginHost 唯一强类型插件契约：definePlugin(ctx)。
  * 后端 7 大可组合生命周期 Hook + ctx.action 单点 Schema 五端复用 + 宿主运行时 API。
- * 本文件只定义类型，不含任何运行时；动作合法性（如 watchdog_tick 不允许 block）
- * 由 host 在运行时校验。
+ * 本文件只定义类型，不含任何运行时；动作合法性（如 tool_call 允许 block、
+ * before_turn 只允许原地改写）由 host 在运行时校验。
  */
 
 import type { Provider } from '@earendil-works/pi-ai'
@@ -39,7 +39,6 @@ export type HookName =
   | 'tool_result'
   | 'agent_spawn'
   | 'turn_settled'
-  | 'watchdog_tick'
 
 /** 后端 Hook 挂载点名称唯一真源（与 HookName 类型双向锁定）。 */
 export const PLUGIN_HOOK_NAMES = [
@@ -50,7 +49,6 @@ export const PLUGIN_HOOK_NAMES = [
   'tool_result',
   'agent_spawn',
   'turn_settled',
-  'watchdog_tick',
 ] as const satisfies readonly HookName[]
 
 type _AssertAllHookNamesListed =
@@ -177,44 +175,11 @@ export interface AgentGateResult {
   output: string
 }
 
-/**
- * Watchdog 探针归属权：'human' 会话/终端窗格严禁发送按键或中止指令，
- * 仅允许只读诊断与通知（红线由 host 与插件共同遵守）。
+/*
+ * 探针契约（WatchdogProbe 等）已移出 protocol 核心，由插件侧共享契约模块提供
+ *（packages/kernel/src/builtin-plugins/diagnostics.ts，'diagnostics.collect'
+ * 内部事件采集）。
  */
-export type WatchdogOwnership = 'helm' | 'bot' | 'human'
-
-/** 探针目标类别：conversation = 原生会话；external = 外部运行时目标（如 Herdr 窗格）。 */
-export type WatchdogTargetKind = 'conversation' | 'external'
-
-/** 单个巡检探针采集到的事实。 */
-export interface WatchdogProbe {
-  /** 探针目标：会话 ID 或 Herdr 窗格 ID 等外部标识。 */
-  targetId: string
-  /** 目标类别；未声明类别的探针不作为自动干预授权。 */
-  targetKind?: WatchdogTargetKind
-  /** targetKind 为 conversation 时的原生目标会话 ID（仅目标本身；外部 pane 的父会话不得冒充此字段）。 */
-  conversationId?: number
-  /** targetKind 为 external 时的目标节点 ID（'local' 或 BYOM 节点 ID）。 */
-  nodeId?: string
-  ownedBy: WatchdogOwnership
-  /** 目标当前状态（通用字符串，容纳会话五态与 Herdr 窗格状态）。 */
-  status: string
-  /** 权威状态变化序号（会话 stateChangeSeq / 外部 state_change_seq）；无法读取权威值时必须省略，绝不猜造。 */
-  stateChangeSeq?: number
-  /** 停滞毫秒数。 */
-  stalledMs?: number
-  /** 连续报错次数。 */
-  consecutiveErrors?: number
-  /** 附加事实（如终端尾部快照摘要）。 */
-  facts?: Record<string, unknown>
-}
-
-/** watchdog_tick 钩子载荷：探针采集快照。 */
-export interface WatchdogTickHookPayload {
-  timestamp: number
-  conversations: ConversationSummary[]
-  probes: WatchdogProbe[]
-}
 
 /** 每个钩子的完整载荷类型映射。 */
 export interface HookPayloadMap {
@@ -225,7 +190,6 @@ export interface HookPayloadMap {
   tool_result: ToolResultHookPayload
   agent_spawn: AgentSpawnRequest
   turn_settled: TurnSettledPayload
-  watchdog_tick: WatchdogTickHookPayload
 }
 
 /**
@@ -253,7 +217,6 @@ export type ToolCallHookHandler = HookHandler<'tool_call'>
 export type ToolResultHookHandler = HookHandler<'tool_result'>
 export type AgentSpawnHookHandler = HookHandler<'agent_spawn'>
 export type TurnSettledHookHandler = HookHandler<'turn_settled'>
-export type WatchdogTickHookHandler = HookHandler<'watchdog_tick'>
 
 export interface HookOptions {
   /** 优先级，默认 0；数值大的先执行。 */
@@ -268,7 +231,6 @@ export interface PluginHookRegistry {
   onToolResult(fn: ToolResultHookHandler, opts?: HookOptions): void
   onAgentSpawn(fn: AgentSpawnHookHandler, opts?: HookOptions): void
   onTurnSettled(fn: TurnSettledHookHandler, opts?: HookOptions): void
-  onWatchdogTick(fn: WatchdogTickHookHandler, opts?: HookOptions): void
 }
 
 // ---------------------------------------------------------------------------
@@ -503,6 +465,20 @@ export interface HelmHostApi {
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
   /** 中止指定会话的在途执行。 */
   abortConversation(id: number): Promise<void>
+  /**
+   * 只读运行事实：在途回合停滞毫秒（无在途 run 时省略）与连续失败回合数。
+   * 巡检/诊断类插件（如 builtin:superagent Watchdog）据此构造事实，内核
+   * 不做任何策略消费。
+   */
+  getConversationActivity(id: number): { stalledMs?: number; consecutiveErrors: number }
+  /**
+   * 会话归属权现读（Watchdog 红线判定唯一可信来源）：'human' 会话严禁
+   * 自动按键/中止；未标记或标记非法值一律 human（宁漏管不越权）。
+   * 会话不存在时抛 HelmError('not_found')。
+   */
+  getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
+  /** 宿主是否正在关闭（true 后插件不应再发起新的自动处置）。 */
+  readonly isClosing: boolean
   /**
    * 声明插件对本会话的管理权（如 superagent 的 router/watchdog 会话）：
    * 受管期间会话删除保护（409 conversation_managed_by_plugin），
