@@ -357,7 +357,6 @@ test('activeRuntimeKinds：只认 profile.runtime surface 的 kind 字符串', (
 test('toCatalogEntry：runtime 标注与 workspace 覆盖 cwd；describePosition 继承语义', () => {
   const native = toCatalogEntry({ id: 'coder', name: 'Coder' } as Profile)
   assert.equal(native.runtimeKind, 'native')
-  assert.equal(native.runtimeAvailable, true)
   assert.equal(describePosition(native), undefined, '无显式配置 → 继承（不谎报 local）')
 
   const external = toCatalogEntry({
@@ -368,7 +367,6 @@ test('toCatalogEntry：runtime 标注与 workspace 覆盖 cwd；describePosition
     runtime: { kind: 'herdr', agent: 'agy', workspace: '/ws/override' },
   } as Profile)
   assert.equal(external.runtimeKind, 'herdr')
-  assert.equal(external.runtimeAvailable, false, '接管判定由候选过滤负责，条目只投影声明')
   assert.equal(external.cwd, '/ws/override', 'runtime.workspace 覆盖顶层 cwd')
   assert.equal(describePosition(external), 'node-a · /ws/override')
 
@@ -376,7 +374,7 @@ test('toCatalogEntry：runtime 标注与 workspace 覆盖 cwd；describePosition
   assert.equal(describePosition(nodeOnly), 'node-b · 继承当前会话目录', '部分显式时明确标注继承项')
   assert.ok(describeHint({ ...nodeOnly, summary: undefined }).includes('node-b'), 'hint 含显式节点')
   assert.ok(
-    describeHint({ id: 'p', name: 'P', runtimeKind: 'native', runtimeAvailable: true, summary: undefined }).includes(
+    describeHint({ id: 'p', name: 'P', runtimeKind: 'native', summary: undefined }).includes(
       '继承当前会话节点与目录',
     ),
     '全继承时 hint 明确标注',
@@ -386,8 +384,8 @@ test('toCatalogEntry：runtime 标注与 workspace 覆盖 cwd；describePosition
 test('renderProfileCatalogSection：动态字段 XML 转义 + runtime 标注 + 边界指引', () => {
   const section = renderProfileCatalogSection(
     [
-      { id: 'coder', name: 'C&A<>"', runtimeKind: 'native', runtimeAvailable: true, summary: '专&注<迁移>' },
-      { id: 'ops', name: 'Ops', runtimeKind: 'herdr', runtimeAvailable: true, nodeId: 'node-a', cwd: '/ws' },
+      { id: 'coder', name: 'C&A<>"', runtimeKind: 'native', summary: '专&注<迁移>' },
+      { id: 'ops', name: 'Ops', runtimeKind: 'herdr', nodeId: 'node-a', cwd: '/ws' },
     ],
     { dispatchToolNames: ['subagent'] },
   )
@@ -402,7 +400,7 @@ test('renderProfileCatalogSection：动态字段 XML 转义 + runtime 标注 + �
   assert.ok(section.includes('external 运行时生命周期由其插件管理'))
   assert.ok(!/\p{Extended_Pictographic}/u.test(section), '无 Emoji')
 
-  const noTools = renderProfileCatalogSection([{ id: 'x', name: 'X', runtimeKind: 'native', runtimeAvailable: true }], {
+  const noTools = renderProfileCatalogSection([{ id: 'x', name: 'X', runtimeKind: 'native' }], {
     dispatchToolNames: [],
   })
   assert.ok(noTools.includes('本回合无派工工具'))
@@ -425,7 +423,7 @@ test('before_turn：顶层 + 有派工工具时注入 profile.catalog；候选�
     }
     const result = await env.host.runHook('before_turn', turn as never)
     assert.ok(result.action === 'transform')
-    const catalog = result.value.sections.find((s: { id: string }) => s.id === 'profile.catalog')
+    const catalog = sectionsOf(result, turn).find((s) => s.id === 'profile.catalog')
     assert.ok(catalog, '顶层且有派工工具 → 注入目录')
     assert.ok(catalog.text.includes('id="coder"'))
     assert.ok(catalog.text.includes('擅长重构与测试'), '候选 SYSTEM 摘要进入目录')
@@ -435,7 +433,8 @@ test('before_turn：顶层 + 有派工工具时注入 profile.catalog；候选�
     await env.profiles.delete('coder')
     await seedProfile(env.profiles, env.dataDir, { id: 'ops', name: '运维' }, '# Ops\n外部执行。')
     const again = await env.host.runHook('before_turn', { ...turn, sections: [] } as never)
-    const againCatalog = again.value.sections.find((s: { id: string }) => s.id === 'profile.catalog')
+    const againCatalog = sectionsOf(again, turn).find((s) => s.id === 'profile.catalog')
+    if (againCatalog === undefined) throw new Error('增删改后应保留 profile.catalog')
     assert.ok(againCatalog.text.includes('id="ops"'))
     assert.ok(!againCatalog.text.includes('id="coder"'), '删除的候选下次回合消失')
   } finally {
@@ -535,7 +534,8 @@ test('before_turn：托管插件停用隐藏其 Profile；runtime 无接管贡�
       messages: [],
     }
     const first = await env.host.runHook('before_turn', turn as never)
-    const catalog = first.value.sections.find((s: { id: string }) => s.id === 'profile.catalog')
+    const catalog = sectionsOf(first, turn).find((s) => s.id === 'profile.catalog')
+    if (catalog === undefined) throw new Error('启用runtime Profile后应保留profile.catalog')
     assert.ok(catalog.text.includes('id="custom-worker"'), '接管插件启用的 runtime Profile 进入目录')
     assert.ok(catalog.text.includes('runtime="external:customrt"'))
     assert.ok(!catalog.text.includes('orphan-rt'), '无接管贡献的 runtime Profile 不进目录（不误导原生调用）')
@@ -568,9 +568,9 @@ test('before_turn：候选 SYSTEM 缺失不告警不伪造；IO 错误显式上�
       messages: [],
     }
     const result = await env.host.runHook('before_turn', turn as never)
-    const catalog = result.value.sections.find((s: { id: string }) => s.id === 'profile.catalog')
+    const catalog = sectionsOf(result, turn).find((s) => s.id === 'profile.catalog')
     assert.ok(catalog, '候选缺 SYSTEM 不阻断目录注入')
-    assert.ok(/<profile id="coder" name="编码" runtime="native"( at="[^"]*")?><\/profile>/.test(catalog.text), 'summary 空元素（不伪造）')
+    assert.ok(/<profile id="coder" name="编码" mention="@coder" runtime="native"( at="[^"]*")?><\/profile>/.test(catalog.text), 'summary 空元素（不伪造）')
     assert.equal(env.backend.notifications.length, 0, '候选缺失不告警（告警纪律只针对当前会话资产）')
 
     // 当前会话自身 SYSTEM 缺失仍走既有告警（回归保护）
@@ -602,8 +602,8 @@ test('before_turn：候选 SYSTEM 缺失不告警不伪造；IO 错误显式上�
 // 动作契约：list_mentionable
 // ---------------------------------------------------------------------------
 
-test('list_mentionable：上下文会话为真实身份来源，body 无法伪造', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
+test('list_mentionable：上下文会话为真实身份来源；Workflow 启停实时影响候选', { timeout: 60_000 }, async () => {
+  const env = await makeEnv([createWorkflowPlugin()], true)
   try {
     await seedProfile(env.profiles, env.dataDir, { id: 'coder', name: '编码专家' })
     env.backend.conversations.set(2, makeConversation(2, { profileId: 'coder', parentConversationId: 1 }))
@@ -616,6 +616,17 @@ test('list_mentionable：上下文会话为真实身份来源，body 无法伪�
       { conversationId: 1 },
     )) as { items: Array<{ id: string }> }
     assert.ok(byContext.items.some((i) => i.id === 'coder'), '上下文会话 1（assistant）的候选包含 coder')
+
+    await env.host.disable('builtin:workflow')
+    const disabled = (await env.host.invokeAction(
+      'builtin:profile', 'list_mentionable', { query: '', conversationId: 1 }, { conversationId: 1 },
+    )) as { items: unknown[] }
+    assert.equal(disabled.items.length, 0, 'Workflow 停用时不推荐无法调用的角色')
+    await env.host.enable('builtin:workflow')
+    const enabled = (await env.host.invokeAction(
+      'builtin:profile', 'list_mentionable', { query: '', conversationId: 1 }, { conversationId: 1 },
+    )) as { items: Array<{ id: string }> }
+    assert.ok(enabled.items.some((i) => i.id === 'coder'), 'Workflow 重新启用后候选恢复')
 
     // 无上下文 + 显式 conversationId：真实 getConversation 校验（子会话 → 空）
     const subCtx = (await env.host.invokeAction('builtin:profile', 'list_mentionable', { conversationId: 2 })) as {
@@ -640,7 +651,7 @@ test('list_mentionable：上下文会话为真实身份来源，body 无法伪�
 })
 
 test('list_mentionable：输出 schema 严格（label/hint/insertText/icon 契约）与 query 过滤', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
+  const env = await makeEnv([createWorkflowPlugin()], true)
   try {
     await seedProfile(env.profiles, env.dataDir, { id: 'coder', name: '编码专家' }, '# C\n数据库迁移专家。')
     await seedProfile(env.profiles, env.dataDir, { id: 'reviewer', name: '评审' }, '# R\n代码评审。')
@@ -672,7 +683,7 @@ test('list_mentionable：输出 schema 严格（label/hint/insertText/icon 契�
 })
 
 test('list_mentionable：幂等只读（补全源绑定契约）且无副作用', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
+  const env = await makeEnv([createWorkflowPlugin()], true)
   try {
     await seedProfile(env.profiles, env.dataDir, { id: 'coder', name: '编码' })
     const manifest = env.host.listActions().find((a) => a.pluginId === 'builtin:profile' && a.id === 'list_mentionable')
@@ -738,7 +749,7 @@ test('回归：SYSTEM 与 skills 注入不受目录逻辑影响（sections 顺�
 test('list_mentionable：CLI --current 形态（仅上下文会话，input 完全省略目标与 query）', { timeout: 60_000 }, async () => {
   // 动态命令只把 --current 写入外层 body.conversationId（即 PluginActionContext），
   // input 不自动回填；本用例验证该形态下 handler 能从 context 解析且 query 缺省 ''。
-  const env = await makeEnv()
+  const env = await makeEnv([createWorkflowPlugin()], true)
   try {
     await seedProfile(env.profiles, env.dataDir, { id: 'coder', name: '编码' })
     const cliForm = (await env.host.invokeAction('builtin:profile', 'list_mentionable', {}, { conversationId: 1 })) as {

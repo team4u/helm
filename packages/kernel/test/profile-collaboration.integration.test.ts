@@ -9,13 +9,13 @@
  * 2. 真 HTTP POST /api/actions/builtin%3Aprofile/list_mentionable：
  *    按 query 过滤候选、insertText 为 '@<id> '（尾随空格）、动作只读
  *    （不派生会话、零模型调用）、显式校验真实会话（不存在 404）、
- *    外层 body.conversationId 与 input.conversationId 冲突时显式报错
- *    （不静默替换目标会话）。
+ *    外层 body.conversationId 存在时优先作为可信上下文（不接受 input
+ *    伪造目标会话）。
  * 3. 真 runCli 动态命令 helm profile list_mentionable（manifest 经真 HTTP
  *    拉取，不 mock 服务端响应）：--current（读 HELM_CONVERSATION_ID）与
  *    无上下文 --input 显式 conversationId 均正确；空查询命中完整目录排除
  *    规则（当前 Profile / humanSelectable:false / 停用插件托管角色）；
- *    --current 与 --input 目标冲突非零退出。
+ *    --current 存在时优先使用 HELM_CONVERSATION_ID，不接受 input 冒充目标。
  * 4. 父会话输入「让 @reviewer 审查」→ faux 脚本显式调用
  *    subagent({agentType:'reviewer'}) → 真子会话（parentConversationId 与
  *    profileId 如实落库，携带 parentToolCallId）→ 父收尾轮模型上下文含
@@ -254,7 +254,7 @@ test('协作1: builtin:profile 注册 @ 补全源（trigger/source/label）与�
 // 2. 真 HTTP 动作：过滤 / insertText / 只读 / 会话校验 / 上下文冲突
 // ---------------------------------------------------------------------------
 
-test('协作2: HTTP list_mentionable——query 过滤/insertText 尾随空格/只读零副作用/会话校验/上下文冲突显式报错', { timeout: 60_000 }, async () => {
+test('协作2: HTTP list_mentionable——query 过滤/insertText 尾随空格/只读零副作用/会话校验/上下文身份优先', { timeout: 60_000 }, async () => {
   const env = await makeCollabHttpEnv()
   try {
     const kernel = env.app.kernel
@@ -291,22 +291,15 @@ test('协作2: HTTP list_mentionable——query 过滤/insertText 尾随空格/�
       '错误码应指向会话不存在',
     )
 
-    // --- 上下文冲突：外层 body.conversationId 与 input.conversationId 不同
-    //     → 显式报错，绝不静默替换目标会话后照常返回候选
-    const conflict = await env.call({
+    // --- 上下文身份优先：外层 body.conversationId 决定真实会话，input.conversationId 只在无上下文时生效
+    const contextWins = await env.call({
       input: { query: 'review', conversationId: env.rootId },
       conversationId: env.secondConvId,
     })
-    assert.ok(
-      conflict.status === 400 || conflict.status === 409,
-      `外层与 input 会话冲突应显式 4xx（400/409）：${conflict.body}`,
-    )
-    assert.ok(!conflict.body.includes('"items"'), '冲突响应不得返回候选列表（不静默替换目标）')
-    assert.equal(
-      typeof (JSON.parse(conflict.body) as { error?: { code?: unknown } }).error?.code,
-      'string',
-      '冲突响应应携带结构化错误码',
-    )
+    assert.equal(contextWins.status, 200, contextWins.body)
+    const contextItems = parseItems(contextWins.body)
+    assert.equal(contextItems.length, 1)
+    assert.equal(contextItems[0]!.id, 'reviewer', '有调用上下文时不能被 input.conversationId 冒充')
 
     // --- Schema 边界：query 非字符串 400 validation_error（HTTP/CLI 同一校验器）
     const bad = await env.call({ input: { query: 42, conversationId: env.rootId } })
@@ -321,7 +314,7 @@ test('协作2: HTTP list_mentionable——query 过滤/insertText 尾随空格/�
 // 3. 真 CLI 动态命令：--current / 无上下文 --input / 目录排除 / 冲突
 // ---------------------------------------------------------------------------
 
-test('协作3: CLI 动态命令 helm profile list_mentionable——--current/无上下文 --input/目录排除规则/--current 与 --input 冲突非零退出', { timeout: 60_000 }, async () => {
+test('协作3: CLI 动态命令 helm profile list_mentionable——--current/无上下文 --input/目录排除规则/上下文身份优先', { timeout: 60_000 }, async () => {
   const env = await makeCollabHttpEnv()
   const { runCli } = await import('../../cli/src/index.js')
   const run = async (argv: string[], extraEnv: NodeJS.ProcessEnv = {}): Promise<{ code: number; out: string; err: string }> => {
@@ -377,16 +370,16 @@ test('协作3: CLI 动态命令 helm profile list_mentionable——--current/无
     const noTarget = await run(['profile', 'list_mentionable', '--query', 'review', '--json'])
     assert.notEqual(noTarget.code, 0, '缺少会话目标应显式失败')
 
-    // --- --current 与 --input.conversationId 冲突：非零退出（不静默替换目标）
-    const conflict = await run(
+    // --- --current 与 --input 目标同时存在时，外层当前会话优先，不允许 input 冒充身份
+    const contextWins = await run(
       [
         'profile', 'list_mentionable', '--current', '--json',
         '--input', JSON.stringify({ query: 'review', conversationId: env.secondConvId }),
       ],
       { HELM_CONVERSATION_ID: String(env.rootId) },
     )
-    assert.notEqual(conflict.code, 0, '--current 与 --input 会话冲突必须显式失败')
-    assert.ok(!conflict.out.includes('"items"'), '冲突不得输出候选列表')
+    assert.equal(contextWins.code, 0, contextWins.err)
+    assert.deepEqual(parseItems(contextWins.out).map((i) => i.id), ['reviewer'])
   } finally {
     await env.close()
   }
@@ -428,8 +421,8 @@ test('协作4: 点名委派真链路——subagent(agentType reviewer) 派生真
 
     // --- 请求分类：父工具轮 + 子代理轮 + 父收尾轮，恰三次模型调用
     assert.equal(env.requests.length, 3, `应恰三次模型请求（父/子/父），实得 ${env.requests.length}`)
-    const childRequests = env.requests.filter((r) => r.systemSections.some((s) => s.includes(REVIEWER_SIGN)))
-    assert.equal(childRequests.length, 1, 'reviewer SYSTEM 应注入恰一次（子代理回合）')
+    const childRequests = env.requests.filter((r) => r.systemSections.some((s) => s.startsWith('# 代码审查员')))
+    assert.equal(childRequests.length, 1, `reviewer SYSTEM 应注入恰一次（子代理回合）：${JSON.stringify(env.requests)}`)
     const childReq = childRequests[0]!
     assert.ok(
       childReq.systemSections.every((s) => !s.includes('<available_profiles>')),

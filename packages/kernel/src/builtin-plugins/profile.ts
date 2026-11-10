@@ -221,6 +221,10 @@ export function createProfilePlugin({ profiles, skills, plugins }: ProfilePlugin
           plugins.list(),
           plugins.listUi(),
         ])
+        const dispatchTools = new Set(['subagent', 'SubagentWorkflow'])
+        if (!pluginSummaries.some((plugin) => plugin.enabled && plugin.tools.some((name) => dispatchTools.has(name)))) {
+          return []
+        }
         const enabledPluginIds = new Set(pluginSummaries.filter((p) => p.enabled).map((p) => p.id))
         const runtimeKinds = activeRuntimeKinds(uiContributions)
         const candidates = allProfiles.filter((p) => isCollaborationCandidate(p, currentProfileId, enabledPluginIds, runtimeKinds))

@@ -28,8 +28,6 @@ export interface ProfileCatalogEntry {
   name: string
   /** 'native' 或外部运行时 kind（如 'herdr'；来自 profile.runtime.kind）。 */
   runtimeKind: string
-  /** runtime.kind 对应的运行时是否已由插件声明接管（profile.runtime UI 贡献存在）。 */
-  runtimeAvailable: boolean
   /** 候选 SYSTEM.md 首个非标题自然段摘要；缺失为 undefined（不伪造）。 */
   summary?: string
   /** 展示用执行位置（Profile 显式配置；undefined = 继承调用方上下文）。 */
@@ -77,9 +75,8 @@ export function toCatalogEntry(profile: Profile): ProfileCatalogEntry {
     id: profile.id,
     name: profile.name ?? profile.id,
     runtimeKind: runtime?.kind ?? 'native',
-    runtimeAvailable: runtime === undefined,
     summary: undefined,
-    nodeId: profile.nodeId,
+    nodeId: runtime?.nodeId ?? profile.nodeId,
     // runtime.workspace 是外部执行目录（覆盖顶层 cwd 语义）；原生路径沿用 cwd。
     cwd: runtime?.workspace ?? profile.cwd,
   }
@@ -163,7 +160,7 @@ export function renderProfileCatalogSection(
   options: { dispatchToolNames: readonly string[] },
 ): string {
   const lines = entries.map((entry) => {
-    const attrs = [`id="${escapeXmlText(entry.id)}"`, `name="${escapeXmlText(entry.name)}"`]
+    const attrs = [`id="${escapeXmlText(entry.id)}"`, `name="${escapeXmlText(entry.name)}"`, `mention="@${escapeXmlText(entry.id)}"`]
     attrs.push(
       entry.runtimeKind === 'native'
         ? 'runtime="native"'

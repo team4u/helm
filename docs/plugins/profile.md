@@ -95,7 +95,7 @@ helm profile list_mentionable --input '{"query":"review","conversationId":42}' -
 helm profile list_mentionable --current --json
 ```
 
-动作会校验真实会话。若调用带有当前会话上下文，不能用输入中的其他 `conversationId` 冒充该会话。
+动作会校验真实会话。若调用带有当前会话上下文，外层上下文优先；输入中的其他 `conversationId` 不会改变目标，也不能用来冒充该会话。只有没有调用上下文时，CLI 才可用显式 `conversationId` 指定真实目标。
 
 目录计算排除当前 Profile、`humanSelectable: false` 的内部角色、所属插件已停用的受管角色，以及没有活动 `profile.runtime` UI 声明的外部运行时角色。运行时发现不按 `builtin:<kind>` 猜测插件 ID；未声明该扩展点的外部运行时不会被目录主动推荐，但不改变原有显式 `agent_spawn` 调用机制。候选不是在线健康检查，节点离线、模型未配置等执行故障仍由执行边界显式报告。
 
