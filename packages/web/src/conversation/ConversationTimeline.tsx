@@ -531,7 +531,7 @@ function StepGroup({
         <div className="trace-group-steps">
           {steps.map((step, idx) =>
             step.kind === 'thinking' ? (
-              <ThinkingRow key={`think:${idx}`} text={step.thinking.text} />
+              <ThinkingRow key={`think:${idx}`} text={step.thinking.text} conversationId={conversationId} />
             ) : (
               <TraceRow
                 key={step.tool.key}
@@ -548,7 +548,7 @@ function StepGroup({
   )
 }
 
-function ThinkingRow({ text }: { text: string }) {
+export function ThinkingRow({ text, conversationId }: { text: string; conversationId?: number }) {
   const [open, setOpen] = useState(true)
   return (
     <div className="trace-group">
@@ -562,10 +562,8 @@ function ThinkingRow({ text }: { text: string }) {
         思考过程
       </button>
       {open ? (
-        <div className="trace-expanded-body selectable">
-          <pre className="code-block-pre code-block-pre-flush">
-            <code>{text}</code>
-          </pre>
+        <div className="trace-expanded-body selectable thinking-expanded-body">
+          <MarkdownView text={text} conversationId={conversationId} />
         </div>
       ) : null}
     </div>
@@ -873,9 +871,8 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
         )
       })}
       {turn.live ? (
-        <span className="msg-origin-tag">
-          <HelmIcon name="loader" size={11} className="spin-slow" />
-          正在等待响应…
+        <span className="msg-origin-tag" aria-label="正在生成" role="status">
+          <HelmIcon name="loader" size={12.5} className="spin-slow" />
         </span>
       ) : null}
       {hasTimeInfo || showHoverBar ? (
@@ -1206,9 +1203,8 @@ export function ConversationTimeline({
         })}
         {(isWorking && !hasLiveTurn) || (sendingPending && !isWorking) ? (
           <div className="msg-ai-block" role="status" aria-live="polite">
-            <span className="msg-origin-tag">
-              <HelmIcon name="loader" size={11} className="spin-slow" />
-              正在等待响应…
+            <span className="msg-origin-tag" aria-label="正在生成">
+              <HelmIcon name="loader" size={12.5} className="spin-slow" />
             </span>
           </div>
         ) : null}

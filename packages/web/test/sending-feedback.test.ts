@@ -51,13 +51,14 @@ function renderTimeline(status: ConversationStatus, sending: boolean, entries: C
 }
 
 function waitingCount(html: string): number {
-  return (html.match(/正在等待响应…/g) ?? []).length
+  return (html.match(/aria-label="正在生成"/g) ?? []).length
 }
 
 test('首条输入请求在途时立即显示一次等待，隐藏空会话引导', { timeout: 60_000 }, () => {
   const html = renderTimeline('idle', true)
   assert.equal(waitingCount(html), 1)
   assert.match(html, /role="status"/)
+  assert.doesNotMatch(html, /正在等待响应…/)
   assert.doesNotMatch(html, /向助理描述目标/)
   assert.doesNotMatch(html, /msg-human-pill/)
 })
