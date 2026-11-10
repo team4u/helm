@@ -1077,6 +1077,23 @@ test('superagent16: UI 贡献——侧栏/分组/胶囊挂件/工具卡/时间�
     const screen = ui.find((u) => u.surface === 'screen')!.spec as { id: string; docs?: string[] }
     assert.equal(screen.id, 'recall-graph')
     assert.deepEqual(screen.docs!.sort(), ['recall-graph', 'subscriptions'])
+    // 六个视图型扩展点全部单轨 client（不再声明 json；client 引用真实导出）
+    const expectedClientExports: Record<string, string> = {
+      'composer.widget': 'SuperAgentComposerWidget',
+      'composer.pill': 'SuperAgentRouterModePill',
+      'tool.view': 'SuperAgentDispatchToolView',
+      'timeline.renderer': 'SuperAgentWorkerReportCard',
+      screen: 'SuperAgentRecallScreen',
+      'settings.panel': 'SuperAgentSettingsPanel',
+    }
+    for (const [surface, exportName] of Object.entries(expectedClientExports)) {
+      const spec = ui.find((u) => u.surface === surface)!.spec as {
+        json?: unknown
+        client?: { module: string; export: string }
+      }
+      assert.equal(spec.json, undefined, `${surface} 不再声明 JSON Spec（单轨 client）`)
+      assert.deepEqual(spec.client, { module: 'index.tsx', export: exportName }, `${surface} client 引用`)
+    }
     // 无 Emoji（设计规范）
     const serialized = JSON.stringify(ui)
     assert.doesNotMatch(serialized, /\p{Extended_Pictographic}/u, 'UI 文案不得包含 Emoji')

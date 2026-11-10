@@ -708,3 +708,38 @@ test('triggers11: disable 后路由撤下、动作拒绝；doc 404', { timeout: 
     await env.close()
   }
 })
+
+// ---------------------------------------------------------------------------
+// 12. UI 贡献：client 单轨声明
+// ---------------------------------------------------------------------------
+
+test('triggers12: UI 贡献——管理视图与设置面板为 client 单轨', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    await enableTriggers(env)
+    const ui = env.app.kernel.plugins.listUi().filter((u) => u.pluginId === TRIGGERS)
+    const surfaces = ui.map((u) => u.surface).sort()
+    assert.deepEqual(surfaces, ['screen', 'settings.panel', 'sidebar.item'], '三个 UI 贡献面')
+    const expectedClientExports: Record<string, string> = {
+      screen: 'TriggersManagerScreen',
+      'settings.panel': 'TriggersSettingsPanel',
+    }
+    for (const [surface, exportName] of Object.entries(expectedClientExports)) {
+      const spec = ui.find((u) => u.surface === surface)!.spec as {
+        json?: unknown
+        client?: { module: string; export: string }
+      }
+      assert.equal(spec.json, undefined, `${surface} 不再声明 JSON Spec（单轨 client）`)
+      assert.deepEqual(spec.client, { module: 'index.tsx', export: exportName }, `${surface} client 引用`)
+    }
+    const screen = ui.find((u) => u.surface === 'screen')!.spec as { id: string; docs?: string[] }
+    assert.equal(screen.id, 'manager')
+    assert.deepEqual(screen.docs!.sort(), ['crons', 'webhooks'], '订阅真实公开 doc')
+    const emoji = /\p{Extended_Pictographic}/u
+    for (const item of ui) {
+      assert.equal(emoji.test(JSON.stringify(item.spec)), false, `UI ${item.surface} 不得含 Emoji`)
+    }
+  } finally {
+    await env.close()
+  }
+})

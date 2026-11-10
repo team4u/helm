@@ -22,7 +22,8 @@ import { test, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { createModels } from '@earendil-works/pi-ai/models'
 import type { Provider } from '@earendil-works/pi-ai'
@@ -35,6 +36,7 @@ import {
   type PluginProviderPort,
 } from '../src/plugins/index.js'
 import { createMagpiePlugin } from '../src/builtin-plugins/magpie.js'
+import { compilePluginClientModule } from '../src/plugins/client-compiler.js'
 import {
   MAGPIE_PLUGIN_ID,
   MAGPIE_PROVIDER_ID,
@@ -875,7 +877,7 @@ test('magpie18: 配额失败不清空成「没有配额」——diagnostics 明�
 // 7. UI spec：无 Emoji / 求值表达式真实可取值 / scope 绑定
 // ---------------------------------------------------------------------------
 
-test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、KeyValueList 表达式真实求值', { timeout: 60_000 }, async () => {
+test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、client 轨道组件导出真实可用', { timeout: 60_000 }, async () => {
   const env = await makeEnv({ backendAtDefault: { models: { data: [] }, quotas: { data: [] } } })
   try {
     await env.host.enable(MAGPIE)
@@ -887,54 +889,26 @@ test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、KeyValueList 表达式
     }
     assert.equal(ui.some((u) => u.surface === 'composer.pill'), false, 'magpie 不再向 composer 注册占位胶囊')
 
-    // settingsPanel：KeyValueList 的 JSON Pointer 表达式用真实求值器验证取值
-    //（key 写法 '/$docs/status/<field>'，与 web evaluator 语法一致——不是 '/$docs.status.x'）
+    // settingsPanel：client 轨道（不再声明 json；真实编译产物可编译且导出组件函数）
     const panel = ui.find((u) => u.surface === 'settings.panel')!.spec as {
-      label: string; docs: string[]; json: { children: Array<Record<string, unknown>> }
+      label: string; docs: string[]; json?: unknown; client?: { module: string; export: string }
     }
     assert.equal(panel.label, 'Magpie 网关')
-    const kv = panel.json.children.find((c) => c['component'] === 'KeyValueList') as {
-      items: Array<{ key: string; label: string }>
-    }
-    assert.ok(kv, '面板含 KeyValueList')
-    const keys = kv.items.map((item) => item.key)
-    for (const key of keys) {
-      assert.match(key, /^\/\$docs\/status\//, `key 必须是 JSON Pointer 写法：${key}`)
-    }
-    assert.ok(keys.includes('/$docs/status/gatewayUrl'))
-    assert.ok(keys.includes('/$docs/status/modelCount'))
+    assert.equal(panel.json, undefined, 'settingsPanel 不再声明 JSON Spec（单轨 client）')
+    assert.deepEqual(panel.docs, ['status'], '订阅真实公开 doc status')
+    assert.equal(panel.client!.module, 'index.tsx')
+    assert.equal(panel.client!.export, 'MagpieSettingsPanel')
 
-    // 真实求值：用当前 status doc 快照作为 $docs scope，逐 key 取值。
-    // web 求值器无法跨包导入（kernel 测试不依赖 web 构建产物）；本地实现
-    // 同一 JSON Pointer 语义做等价验证（语法契约与 packages/web evaluator 一致）。
-    const scope = { $docs: { status: statusDoc(env) , flush: async () => {}} }
-    const resolve = (expr: string): unknown => {
-      assert.ok(expr.startsWith('/$'), `表达式必须是 JSON Pointer：${expr}`)
-      return expr.slice(1).split('/').reduce<unknown>((cur, seg) => {
-        if (cur === null || cur === undefined) return undefined
-        if (Array.isArray(cur)) {
-          if (seg === 'length') return cur.length
-          const idx = Number(seg)
-          return Number.isInteger(idx) && idx >= 0 && idx < cur.length ? cur[idx] : undefined
-        }
-        if (typeof cur === 'object') return (cur as Record<string, unknown>)[seg]
-        return undefined
-      }, scope)
+    // 真实编译：clientRoot 内 index.tsx 可编译为浏览器 ESM（面板含刷新按钮由 web 端 DOM 测试覆盖）
+    const clientRoot = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'builtin-plugins', 'magpie', 'client')
+    const cacheDir = mkdtempSync(join(tmpdir(), 'helm-magpie-client-'))
+    try {
+      const { code } = await compilePluginClientModule(MAGPIE, clientRoot, 'index.tsx', cacheDir)
+      assert.ok(code.length > 0, '编译产物非空')
+      assert.doesNotMatch(code, /\p{Extended_Pictographic}/u, '编译产物不含 Emoji')
+    } finally {
+      rmSync(cacheDir, { recursive: true, force: true })
     }
-    const gatewayValue = resolve('/$docs/status/gatewayUrl')
-    const countValue = resolve('/$docs/status/modelCount')
-    assert.equal(gatewayValue, DEFAULT_MAGPIE_ROOT, '网关地址可从 doc 求值（不再是空指针破折号）')
-    assert.equal(countValue, 0, 'modelCount 可从 doc 求值')
-    // lastError 可选字段：present-but-undefined 时求值为 undefined（面板显示占位）
-    assert.equal(resolve('/$docs/status/lastError'), undefined)
-
-    // 诊断表 rows 绑定与刷新按钮存在
-    const diagTable = panel.json.children.find((c) => c['component'] === 'Table' && (c['columns'] as Array<{ key: string }> | undefined)?.[0]?.key === 'message')
-    assert.ok(diagTable, '面板含诊断 Table')
-    assert.equal(diagTable!['rows'], '{$docs.status.diagnostics}')
-    const panelJson = JSON.stringify(panel.json)
-    assert.ok(panelJson.includes('KeyValueList') && panelJson.includes('Table'), '面板含 KeyValueList 与 Table')
-    assert.ok(panelJson.includes('刷新模型目录'), '面板提供刷新按钮')
 
     const command = ui.find((u) => u.surface === 'commandPalette')!.spec as { title: string; actionId: string }
     assert.equal(command.title, '刷新 Magpie 模型目录')

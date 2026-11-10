@@ -29,6 +29,9 @@
  * - 关停（service.stop）先置 shutdown 再释放资源，此后不再向 router 投递
  *   任何汇报（KernelRuntime.close 的 abort 回调不会在关停后无限唤醒中枢）。
  */
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { HelmError, type ConversationEntry, type PluginDefinition, type PluginToolContext } from '@helm/protocol'
 import type {
   ConversationSummary,
@@ -353,11 +356,27 @@ async function bootstrapAssets(deps: SuperAgentDependencies): Promise<void> {
 // 工厂入口
 // ---------------------------------------------------------------------------
 
+/** clientRoot 兼容 src / dist 运行路径（与 workflow/herdr/memory 插件同机制）。 */
+function resolveSuperAgentClientRoot(): string {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const local = join(here, 'superagent', 'client')
+  if (existsSync(local)) return local
+  const pkgRoot = dirname(dirname(here))
+  const srcFallback = join(pkgRoot, 'src', 'builtin-plugins', 'superagent', 'client')
+  if (existsSync(srcFallback)) return srcFallback
+  throw new HelmError(
+    'superagent_plugin_client_missing',
+    `内置插件 ${SUPERAGENT_PLUGIN_ID} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
+    500,
+  )
+}
+
 export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefinition {
   return {
     id: SUPERAGENT_PLUGIN_ID,
     name: 'SuperAgent 中枢',
     version: '0.1.0',
+    clientRoot: resolveSuperAgentClientRoot(),
     definePlugin(ctx) {
       /** 本启用周期生命周期状态（每次 enable 重建）。 */
       let active = false
@@ -1413,7 +1432,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
       })
 
       // ------------------------------------------------------------------
-      // UI 贡献（@json-render 声明式；无 Emoji；icon 用 lucide 线性名）
+      // UI 贡献（client.tsx 轨道；无 Emoji；icon 用 lucide 线性名）
       // ------------------------------------------------------------------
 
       ctx.ui.sidebarItem({
@@ -1458,22 +1477,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         title: '中枢态势',
         scope: ROUTER_TOOL_SCOPE,
         docs: [INDEX_DOC_NAME, SUBSCRIPTIONS_DOC_NAME],
-        json: {
-          component: 'Card',
-          children: [
-            { component: 'Text', variant: 'title', text: '中枢态势' },
-            { component: 'Text', variant: 'muted', text: '活跃 Worker {$docs.index.workers.length} 个；事件订阅 {$docs.subscriptions.subscriptions.length} 条。' },
-            {
-              component: 'Table',
-              columns: [
-                { key: 'conversationId', label: 'Worker' },
-                { key: 'profileId', label: 'Profile' },
-              ],
-              rows: '{$docs.index.workers}',
-              rowActions: [{ label: '打开', action: { type: 'helm:open', target: 'conversation:{$row.conversationId}' } }],
-            },
-          ],
-        },
+        client: { module: 'index.tsx', export: 'SuperAgentComposerWidget' },
       })
       ctx.ui.composerPill({
         id: 'superagent-router-mode',
@@ -1481,109 +1485,34 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         title: '中枢路由收敛模式',
         scope: ROUTER_TOOL_SCOPE,
         docs: [ROUTING_DOC_NAME],
-        json: {
-          component: 'Switch',
-          label: '中枢路由',
-          value: '{$docs.routing.routerMode}',
-          action: { type: 'helm:action', actionId: 'set_router_mode', input: { enabled: '{$value}' } },
-        },
+        client: { module: 'index.tsx', export: 'SuperAgentRouterModePill' },
       })
       ctx.ui.toolView({
         id: 'superagent-dispatch',
         title: '派工状态',
         toolNames: ['dispatch_worker'],
         docs: [INDEX_DOC_NAME],
-        json: {
-          component: 'Card',
-          children: [
-            { component: 'Text', variant: 'title', text: '后台 Worker 派工' },
-            {
-              component: 'Table',
-              columns: [
-                { key: 'conversationId', label: '会话' },
-                { key: 'profileId', label: 'Profile' },
-              ],
-              rows: '{$docs.index.workers}',
-              rowActions: [
-                { label: '查看', action: { type: 'helm:open', target: 'conversation:{$row.conversationId}' } },
-                { label: '归档', action: { type: 'helm:action', actionId: 'archive_worker', input: { workerConversationId: '{$row.conversationId}' } } },
-              ],
-            },
-          ],
-        },
+        client: { module: 'index.tsx', export: 'SuperAgentDispatchToolView' },
       })
       ctx.ui.timelineRenderer({
         id: 'superagent-worker-report',
         title: 'Worker 汇报卡',
         matchMeta: { renderer: WORKER_REPORT_RENDERER },
-        json: {
-          component: 'Card',
-          children: [
-            { component: 'Badge', tone: 'accent', icon: 'bot', text: 'Worker 汇报' },
-            { component: 'Text', variant: 'body', text: '{$data.entry.data.meta.summary}' },
-            {
-              component: 'ActionBar',
-              actions: [{ label: '在右屏并排打开', action: { type: 'helm:open', target: 'conversation:{$data.entry.data.meta.workerId}', split: true } }],
-            },
-          ],
-        },
+        client: { module: 'index.tsx', export: 'SuperAgentWorkerReportCard' },
       })
       ctx.ui.screen({
         id: RECALL_DOC_NAME,
         label: '记忆与订阅图谱',
         icon: 'git-fork',
         docs: [RECALL_DOC_NAME, SUBSCRIPTIONS_DOC_NAME],
-        json: {
-          component: 'Stack',
-          children: [
-            { component: 'Text', variant: 'title', text: 'RecallGraph 记忆图谱' },
-            {
-              component: 'Table',
-              columns: [
-                { key: 'conversationId', label: '会话' },
-                { key: 'profileId', label: 'Profile' },
-                { key: 'outcome', label: '终态' },
-                { key: 'summary', label: '摘要' },
-              ],
-              rows: '{$docs["recall-graph"].nodes}',
-              rowActions: [{ label: '打开会话', action: { type: 'helm:open', target: 'conversation:{$row.conversationId}' } }],
-            },
-            { component: 'Text', variant: 'title', text: '事件订阅' },
-            {
-              component: 'Table',
-              columns: [
-                { key: 'threadKey', label: 'ThreadKey' },
-                { key: 'workerConversationId', label: 'Worker' },
-              ],
-              rows: '{$docs.subscriptions.subscriptions}',
-              rowActions: [{ label: '打开 Worker', action: { type: 'helm:open', target: 'conversation:{$row.workerConversationId}' } }],
-            },
-          ],
-        },
+        client: { module: 'index.tsx', export: 'SuperAgentRecallScreen' },
       })
       ctx.ui.settingsPanel({
         id: 'superagent-settings',
         label: 'SuperAgent 中枢',
         order: 30,
         docs: [INDEX_DOC_NAME],
-        json: {
-          component: 'Stack',
-          children: [
-            { component: 'Text', variant: 'title', text: 'SuperAgent 中枢' },
-            {
-              component: 'Text',
-              variant: 'muted',
-              text: '修改路由开关、静默事件源与看门狗参数请前往本插件的配置项设置；本面板只读展示托管状态。',
-            },
-            {
-              component: 'KeyValueList',
-              items: [
-                { key: '/$docs/index/routerConversationId', label: '中枢会话' },
-                { key: '/$docs/index/watchdogConversationId', label: '看门狗会话' },
-              ],
-            },
-          ],
-        },
+        client: { module: 'index.tsx', export: 'SuperAgentSettingsPanel' },
       })
     },
   }
