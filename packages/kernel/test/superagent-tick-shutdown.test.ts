@@ -17,11 +17,8 @@ import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/
 import {
   registerSuperAgentWatchdog,
 } from '../src/builtin-plugins/superagent/watchdog.js'
-import type {
-  SuperAgentDependencies,
-  SuperAgentWatchdogRuntime,
-} from '../src/builtin-plugins/superagent/contracts.js'
-import type { ProfileService, SkillService } from '../src/services/index.js'
+import type { SuperAgentWatchdogRuntime } from '../src/builtin-plugins/superagent/contracts.js'
+import { hostBackendStub } from './helpers/host-backend-stub.js'
 
 function makeSummary(id: number): ConversationSummary {
   return {
@@ -70,6 +67,7 @@ test('service stop 等待已进入采集的在途 tick，插件释放前完成 D
   let wrote = false
 
   const backend: PluginHostBackend = {
+    ...hostBackendStub(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async () => makeSummary(1),
@@ -80,9 +78,7 @@ test('service stop 等待已进入采集的在途 tick，插件释放前完成 D
     markConversationOwnership: () => {},
     getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'helm',
-    get isClosing() {
-      return false
-    },
+    isClosing: () => false,
     createAsk: async () => { throw new HelmError('unsupported', '本测试不建 Ask', 400) },
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
@@ -106,30 +102,17 @@ test('service stop 等待已进入采集的在途 tick，插件释放前完成 D
         wrote = true
       }
     },
+    getConversationDetail: async (id) => ({ ...makeSummary(id), entries: [] }),
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
   }
 
-  const deps: SuperAgentDependencies = {
-    dataDir,
-    profiles: {} as ProfileService,
-    skills: {} as SkillService,
-    subscribeConversationEntries: () => () => {},
-    getConversationDetail: async (id) => ({ ...makeSummary(id), entries: [] }),
-    listArtifacts: async () => [],
-    abortConversation: async () => {},
-    getConversationOwnership: () => 'helm',
-    isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
-  }
   const runtime: SuperAgentWatchdogRuntime = {
     getConfig: () => ({
       routerMode: true,
@@ -148,7 +131,7 @@ test('service stop 等待已进入采集的在途 tick，插件释放前完成 D
   await host.register({
     id: 'builtin:superagent',
     definePlugin(ctx) {
-      registerSuperAgentWatchdog(ctx, deps, runtime)
+      registerSuperAgentWatchdog(ctx, runtime)
     },
   })
 

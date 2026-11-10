@@ -125,9 +125,6 @@ class FakeBackend implements PluginHostBackend {
   getConversationOwnership(): 'helm' | 'bot' | 'human' {
     return 'human'
   }
-  get isClosing(): boolean {
-    return false
-  }
   async spawnAgent(): Promise<unknown> {
     return {}
   }
@@ -135,9 +132,6 @@ class FakeBackend implements PluginHostBackend {
     return { ok: true, output: '' }
   }
   async prepareInterruptedConversations(): Promise<void> {}
-  async cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
-    return { removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }
-  }
   async invokeAction(): Promise<unknown> {
     return {}
   }
@@ -159,7 +153,28 @@ class FakeBackend implements PluginHostBackend {
   isClosing(): boolean {
     return this.closing
   }
-  readonly secrets = {
+  skills = {
+    list: async () => [],
+    readFile: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+    directory: async (id: string) => `/tmp/triggers-fixture-skills/${id}`,
+    ensureSkill: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+  }
+  setPluginConfig(): Promise<void> { return Promise.resolve() }
+  async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
+  async listArtifacts(): Promise<never[]> { return [] }
+  async getArtifact(): Promise<never> { throw new HelmError('not_found', '无产物', 404) }
+  redact(text: string): string { return text }
+  redactText(text: string): string { return text }
+  async completeText(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型', 501) }
+  executionEnv(): never { throw new HelmError('unsupported', '本 fixture 无执行环境', 501) }
+  withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() }
+  async atomicWriteFile(): Promise<void> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
+  buildSpawnEnv(): Record<string, string> { return {} }
+  async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
+  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
+  listActiveSpawnExecutions(): [] { return [] }
+  async probeNodeFs(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不探测节点 fs', 501) }
+  secrets = {
     get: async (pluginId: string, key: string) => this.secretsStore.get(`${pluginId}:${key}`),
     set: async (pluginId: string, key: string, value: string) => {
       this.secretsStore.set(`${pluginId}:${key}`, value)
@@ -174,8 +189,18 @@ class FakeBackend implements PluginHostBackend {
       }
     },
   }
-  readonly profiles = {
+  profiles = {
+    list: async () => [...this.profileIds].map((id) => ({ id })),
     get: async (id: string) => (this.profileIds.has(id) ? { id } : undefined),
+    getSystem: async () => {
+      throw new HelmError('unsupported', '本 fixture 不提供 profiles.getSystem', 501)
+    },
+    save: async () => {
+      throw new HelmError('unsupported', '本 fixture 不提供 profiles.save', 501)
+    },
+    directory: async () => {
+      throw new HelmError('unsupported', '本 fixture 不提供 profiles.directory', 501)
+    },
   }
 }
 
@@ -296,7 +321,7 @@ test('工厂注册：cron/webhook 动作、路由与声明式贡献完整注册'
   assert.ok(ui.some((u) => u.surface === 'sidebar.item'))
   assert.ok(ui.some((u) => u.surface === 'screen'))
   assert.ok(ui.some((u) => u.surface === 'settings.panel'))
-  // screen subscription is now client code using plugin-client-sdk/usePluginDoc.
+  // screen 贡献指向 client.tsx 组件（doc 订阅由插件 client 经 plugin-client-sdk 完成）
   const screen = ui.find((u) => u.surface === 'screen')!.spec as { client: { module: string; export: string } }
   assert.equal(screen.client.module, 'index.tsx')
   assert.equal(screen.client.export, 'TriggersManagerScreen')

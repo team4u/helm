@@ -130,7 +130,7 @@ test('mermaid client 真实编译（受控 npm bundle）：模块可导入且不
 })
 
 test('mermaid 编译器边界：未声明 npm 说明符显式拒绝（不留旁门）', { timeout: 120_000 }, async () => {
-  const { HelmError } = await import('../../kernel/src/error.js').catch(() => ({ HelmError: Error }))
+  const { HelmError } = await import('@helm/protocol')
   // 直接以空 npmRoots 编译 mermaid client：import 'mermaid' 必须被拒绝
   await assert.rejects(
     compilePluginClientModule('builtin:mermaid', MERMAID_ROOT, 'index.tsx', CACHE),

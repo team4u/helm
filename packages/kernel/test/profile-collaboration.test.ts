@@ -161,9 +161,6 @@ function makeControlledBackend(): ControlledBackend {
       return { ok: true, output: '' }
     },
     async prepareInterruptedConversations() {},
-    async cleanupWorktree() {
-      return { removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }
-    },
     async invokeAction() {
       return {}
     },

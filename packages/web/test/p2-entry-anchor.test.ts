@@ -327,12 +327,12 @@ test('action-only entry action 点击：载荷 entryId 为真实 entry.id，kind
       {
         pluginId: 'p',
         surface: 'timeline.entry.action',
-        spec: { id: 'pin', label: '置顶该消息', actionId: 'pin_entry', kinds: ['helm.input'] } satisfies UiActionSpec,
+        spec: { target: 'timeline:entry', id: 'pin', label: '置顶该消息', actionId: 'pin_entry', kinds: ['helm.input'] } satisfies UiActionSpec,
       },
       {
         pluginId: 'p',
         surface: 'timeline.entry.action',
-        spec: { id: 'wrong-kind', label: '错误kind动作', actionId: 'x', kinds: ['pi.assistant'] } satisfies UiActionSpec,
+        spec: { target: 'timeline:entry', id: 'wrong-kind', label: '错误kind动作', actionId: 'x', kinds: ['pi.assistant'] } satisfies UiActionSpec,
       },
     ]),
     invokePluginAction: async (pluginId, actionId, input, conversationId) => {

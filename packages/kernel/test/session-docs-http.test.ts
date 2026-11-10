@@ -79,7 +79,6 @@ const backend: PluginHostBackend = {
   spawnAgent: async () => ({}),
   runGate: async () => ({ ok: true, output: '' }),
   prepareInterruptedConversations: async () => {},
-  cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
   invokeAction: async () => ({}),
   prepareAction: () => ({ idempotent: false }),
   execEnv: async () => {

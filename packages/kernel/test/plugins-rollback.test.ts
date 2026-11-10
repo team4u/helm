@@ -27,13 +27,13 @@ import { join } from 'node:path'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
 import type { DiagnosticsCollection, WatchdogProbe } from '../src/builtin-plugins/diagnostics.js'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
+import { hostBackendStub } from './helpers/host-backend-stub.js'
 import { createProfilePlugin } from '../src/builtin-plugins/profile.js'
 import { createMemoryPlugin, MAX_MEMORY_CHARS as MEM_MAX, MemoryStore } from '../src/builtin-plugins/memory.js'
 import { createProfileFileHost } from './helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { createSuperAgentPlugin } from '../src/builtin-plugins/superagent.js'
 import { ProfileService, SkillService } from '../src/services/index.js'
-import type { SuperAgentDependencies } from '../src/builtin-plugins/superagent/contracts.js'
 
 // ---------------------------------------------------------------------------
 // 共享基建
@@ -72,7 +72,7 @@ function makeConversation(id: number, over: Partial<ConversationSummary> = {}): 
   }
 }
 
-interface ControlledBackend extends PluginHostBackend {
+interface ControlledBackend {
   conversations: Map<number, ConversationSummary>
   notifications: Array<{ title: string; body: string; level: string }>
   submits: Array<{ conversationId: number; origin?: string }>
@@ -82,12 +82,12 @@ interface ControlledBackend extends PluginHostBackend {
   submitRejector: ((conversationId: number) => Error | undefined) | undefined
 }
 
-function makeControlledBackend(dataDir: string): ControlledBackend {
+function makeControlledBackend(dataDir: string): ControlledBackend & PluginHostBackend {
   const conversations = new Map<number, ConversationSummary>()
   conversations.set(1, makeConversation(1, { tags: ['root'] }))
   const notifications: Array<{ title: string; body: string; level: string }> = []
   const submits: Array<{ conversationId: number; origin?: string }> = []
-  const backend: ControlledBackend = {
+  const rawBackend: ControlledBackend & Partial<PluginHostBackend> = {
     ...createPluginHostBackendFixture(),
     ...createProfileFileHost(dataDir),
     conversations,
@@ -141,7 +141,6 @@ function makeControlledBackend(dataDir: string): ControlledBackend {
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
@@ -150,7 +149,7 @@ function makeControlledBackend(dataDir: string): ControlledBackend {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
     },
   }
-  return backend
+  return Object.assign(hostBackendStub(), rawBackend) as ControlledBackend & PluginHostBackend
 }
 
 // ---------------------------------------------------------------------------
@@ -379,7 +378,7 @@ test('memory：权限/IO 错误不被吞（仅 FileNotFoundError 走缺失路径
 
 interface SuperAgentEnv {
   host: PluginHost
-  backend: ControlledBackend
+  backend: ControlledBackend & Pick<PluginHostBackend, 'emitEvent' | 'markConversationOwnership'>
   docs: MemoryDocStore
   close(): Promise<void>
 }
@@ -388,24 +387,34 @@ async function makeSuperAgentEnv(): Promise<SuperAgentEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-roll-'))
   const backend = makeControlledBackend(dataDir)
   const docs = new MemoryDocStore()
-  const host = new PluginHost({ dataDir, host: backend, docs })
+  // 真实 ProfileService/SkillService（临时目录）：自举资产走真实文件路径，
+  // 经公开 host 子端口注入受控 backend。
   const profiles = new ProfileService(dataDir)
   const skills = new SkillService(dataDir)
   await profiles.ensureDefault()
-  const deps: SuperAgentDependencies = {
-    dataDir,
-    profiles,
-    skills,
-    subscribeConversationEntries: () => () => {},
-    getConversationDetail: async (id) => ({ ...makeConversation(id), entries: [] }) as never,
+  const fullBackend = Object.assign(hostBackendStub(), backend, {
+    profiles: {
+      list: () => profiles.list(),
+      get: (id: string) => profiles.get(id),
+      getSystem: (id: string) => profiles.getSystem(id),
+      save: (p: Parameters<typeof profiles.save>[0]) => profiles.save(p),
+      directory: async (id: string) => join(dataDir, 'profiles', id),
+    },
+    skills: {
+      list: () => skills.list(),
+      readFile: (skillId: string, path?: string) => skills.readFile(skillId, path),
+      directory: async (id: string) => join(dataDir, 'skills', id),
+      ensureSkill: (asset: Parameters<typeof skills.ensureSkill>[0]) => skills.ensureSkill(asset),
+    },
+    getConversationDetail: async (id: number) => ({ ...makeConversation(id), entries: [] }) as never,
     listArtifacts: async () => [],
-    abortConversation: async () => {},
-    getConversationOwnership: () => 'helm',
+    getConversationOwnership: () => 'helm' as const,
     isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
-  }
-  await host.register(createSuperAgentPlugin(deps), { enabled: true })
+    redact: (t: string) => t,
+    setPluginConfig: async () => {},
+  })
+  const host = new PluginHost({ dataDir, host: fullBackend, docs })
+  await host.register(createSuperAgentPlugin(), { enabled: true })
   return {
     host,
     backend,
@@ -567,7 +576,6 @@ async function makeWatchdogHarness(opts: {
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
@@ -620,7 +628,7 @@ async function makeWatchdogHarness(opts: {
     id: 'builtin:superagent',
     name: 'SuperAgent',
     definePlugin(ctx) {
-      registerSuperAgentWatchdog(ctx, deps as never, {
+      registerSuperAgentWatchdog(ctx, {
         getConfig: () => config,
         getRouterConversationId: () => routerId,
         getWatchdogConversationId: () => watchdogId,

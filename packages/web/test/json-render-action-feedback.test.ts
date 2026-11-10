@@ -8,8 +8,20 @@ import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as HelmPluginClient from '../src/lib/plugin-client-sdk.js'
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
-import { normalizeSpec } from '../../kernel/src/builtin-plugins/json-render/client/spec-normalize.js'
-import type { SpecRenderContext } from '../../kernel/src/builtin-plugins/json-render/client/spec-primitives.js'
+import { normalizeSpec, type NormalizedSpecNode } from '../../kernel/src/builtin-plugins/json-render/client/spec-normalize.js'
+import type { EvalScope } from '../../kernel/src/builtin-plugins/json-render/client/evaluator.js'
+import type { ReactNode } from 'react'
+
+/** spec-primitives 的渲染上下文形状（client 目录不入 typecheck，此处本地最小声明）。 */
+interface SpecRenderContext {
+  scope: EvalScope
+  conversationId?: number
+  pluginId?: string
+  renderChildren(children: NormalizedSpecNode[]): ReactNode
+  runAction(rawAction: unknown, scope: EvalScope, pendingKey: string): void
+  isPending(pendingKey: string): boolean
+  isSucceeded?(pendingKey: string): boolean
+}
 
 ;(globalThis as Record<string, unknown>).React = React
 ;(globalThis as Record<string, unknown>).__helm_shared_react = React

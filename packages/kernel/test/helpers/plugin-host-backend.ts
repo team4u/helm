@@ -214,11 +214,28 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     unsupported('host.prepareInterruptedConversations')
   }
 
-  cleanupWorktree(
-    ...args: Parameters<Port<'cleanupWorktree'>>
-  ): ReturnType<Port<'cleanupWorktree'>> {
+  resolveSpawnTarget(
+    ...args: Parameters<Port<'resolveSpawnTarget'>>
+  ): ReturnType<Port<'resolveSpawnTarget'>> {
     void args
-    unsupported('host.cleanupWorktree')
+    unsupported('host.resolveSpawnTarget')
+  }
+
+  listActiveSpawnExecutions(
+    ...args: Parameters<Port<'listActiveSpawnExecutions'>>
+  ): ReturnType<Port<'listActiveSpawnExecutions'>> {
+    void args
+    unsupported('host.listActiveSpawnExecutions')
+  }
+
+  probeNodeFs(...args: Parameters<Port<'probeNodeFs'>>): ReturnType<Port<'probeNodeFs'>> {
+    void args
+    unsupported('host.probeNodeFs')
+  }
+
+  redactText(...args: Parameters<Port<'redactText'>>): ReturnType<Port<'redactText'>> {
+    void args
+    unsupported('host.redactText')
   }
 
   invokeAction(...args: Parameters<Port<'invokeAction'>>): ReturnType<Port<'invokeAction'>> {
@@ -327,7 +344,10 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
       ),
     prepareAction: f(d.prepareAction),
     prepareInterruptedConversations: f(d.prepareInterruptedConversations),
-    cleanupWorktree: f(d.cleanupWorktree),
+    resolveSpawnTarget: f(d.resolveSpawnTarget),
+    listActiveSpawnExecutions: f(d.listActiveSpawnExecutions),
+    probeNodeFs: f(d.probeNodeFs),
+    redactText: f(d.redactText),
     invokeAction: f(d.invokeAction),
     listActions: f(d.listActions),
     refreshModels: f(d.refreshModels),

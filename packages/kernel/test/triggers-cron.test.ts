@@ -24,6 +24,7 @@ import {
   type CronDoc,
   type CronJob,
 } from '../src/builtin-plugins/triggers/cron.js'
+import { hostBackendStub } from './helpers/host-backend-stub.js'
 
 // ---------------------------------------------------------------------------
 // 测试基建：内存 doc store + 可控时钟 + host fake
@@ -139,6 +140,7 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
     dataDir,
     docs,
     host: {
+      ...hostBackendStub(),
       dispatchTrigger: async () => {},
       submitInput: async () => {},
       createConversation: async (init) => ({ id: 42, title: init.title ?? 'x' }) as never,
@@ -158,13 +160,10 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
     },
-    get isClosing(): boolean {
-      return false
-    },
+    isClosing: () => false,
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },

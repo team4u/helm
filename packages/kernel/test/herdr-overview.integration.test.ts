@@ -25,6 +25,7 @@ import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { serveTransport } from './helpers/herdr-unit-fixture.js'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -238,7 +239,12 @@ async function openEnv(dataDir: string, transport: HerdrTransport): Promise<Env>
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, herdrTransport: transport })
+  // 受控 transport 经真实 UDS 行协议暴露：零参 herdr 插件以配置 socketPath
+  // 直连（组合层已无 herdrTransport 注入缝）。
+  const socketPath = join(dataDir, 'herdr.sock')
+  const served = await serveTransport(transport, socketPath)
+  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  await app.kernel.plugins.setConfig('builtin:herdr', { socketPath })
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   const setup = await fetch(`${hub.url}/api/auth/setup`, {
     method: 'POST',
@@ -258,6 +264,7 @@ async function openEnv(dataDir: string, transport: HerdrTransport): Promise<Env>
     async close() {
       credential.dispose()
       await hub.close()
+      await served.close()
       await app.close()
     },
   }

@@ -753,8 +753,10 @@ async function executeCleanupTool(
     getConversationActivity(): { consecutiveErrors: number } {
       return { consecutiveErrors: 0 }
     },
-    getConversationOwnership(): 'helm' | 'bot' | 'human' {
-      return 'human'
+    getConversationOwnership(id: number): 'helm' | 'bot' | 'human' {
+      // 入口会话 #1 为 human；spawn 派生子会话为 helm-owned（cleanup 工具的
+      // 归属安全校验依赖真实区分，不能全部伪装 human 遮蔽拒绝分支）。
+      return id === 1 ? 'human' : 'helm'
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),

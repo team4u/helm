@@ -37,6 +37,7 @@ import {
   type PluginHostBackend,
   type PluginProviderPort,
 } from '../src/plugins/index.js'
+import { hostBackendStub } from './helpers/host-backend-stub.js'
 import { createMagpiePlugin } from '../src/builtin-plugins/magpie.js'
 import { compilePluginClientModule } from '../src/plugins/client-compiler.js'
 import {
@@ -211,6 +212,7 @@ function makeConversation(id: number, model = 'test/model'): ConversationSummary
 
 function makeHostApi(overrides: Partial<PluginHostBackend> = {}): PluginHostBackend {
   return {
+    ...hostBackendStub(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async (init) => ({ ...makeConversation(42), title: init.title ?? 'new' }),
@@ -230,13 +232,10 @@ function makeHostApi(overrides: Partial<PluginHostBackend> = {}): PluginHostBack
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
     },
-    get isClosing(): boolean {
-      return false
-    },
+    isClosing: () => false,
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
@@ -325,12 +324,10 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
   const host = new PluginHost({
     dataDir,
     host: makeHostApi({
-      ...(options.hostApi ?? {}),
+      ...options.hostApi,
       refreshModels: hostRefreshModels as never,
-      get isClosing(): boolean {
-        return false
-      },
-    } as Partial<PluginHostBackend>),
+      isClosing: () => false,
+    }),
     docs,
     config,
     providers: new ModelsProviderPort(models),

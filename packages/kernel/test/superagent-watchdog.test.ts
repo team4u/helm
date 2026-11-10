@@ -42,6 +42,7 @@ import {
   type PluginDocStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js'
+import { hostBackendStub } from './helpers/host-backend-stub.js'
 import {
   DIAGNOSTICS_COLLECT_EVENT,
   type DiagnosticsCollection,
@@ -53,10 +54,8 @@ import {
 } from '../src/builtin-plugins/superagent/watchdog.js'
 import type {
   SuperAgentConfig,
-  SuperAgentDependencies,
   SuperAgentWatchdogRuntime,
 } from '../src/builtin-plugins/superagent/contracts.js'
-import type { ProfileService, SkillService } from '../src/services/index.js'
 
 // ---------------------------------------------------------------------------
 // 受控依赖基座
@@ -162,6 +161,7 @@ async function makeHarness(opts: HarnessOptions = {}) {
   const docs = new MemoryDocStore()
 
   const backend: PluginHostBackend = {
+    ...hostBackendStub(),
     dispatchTrigger: async () => {},
     submitInput: async (conversationId, text, o) => {
       recorded.submits.push({ conversationId, text, origin: o?.origin, whenBusy: o?.whenBusy })
@@ -178,14 +178,17 @@ async function makeHarness(opts: HarnessOptions = {}) {
       if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
       return found
     },
+    getConversationDetail: async (id) => ({
+      ...makeConversationSummary(id),
+      entries: [{ id: 'e1', kind: 'message', createdAt: 1, model: [{ role: 'assistant', content: 'hello' }] }],
+    }),
     updateConversation: async (id) => conversations.get(id) ?? makeConversationSummary(id),
+    setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: (id, owner) => ownership.set(id, owner),
     getConversationActivity: (id) => activity.get(id) ?? { consecutiveErrors: 0 },
     getConversationOwnership: (id) => opts.ownership?.(id) ?? ownership.get(id) ?? (id === 1 ? 'human' : 'helm'),
-    get isClosing() {
-      return backendClosing || (opts.isClosing?.() ?? false)
-    },
+    isClosing: () => backendClosing || (opts.isClosing?.() ?? false),
     createAsk: async (spec) => {
       recorded.asks.push(spec)
       opts.onAskCreated?.(spec)
@@ -217,15 +220,14 @@ async function makeHarness(opts: HarnessOptions = {}) {
         await listener(payload)
       }
     },
-    abortConversation: async () => {},
+    abortConversation: async (id) => {
+      recorded.aborts.push(id)
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
   }
 
@@ -244,25 +246,6 @@ async function makeHarness(opts: HarnessOptions = {}) {
     errorThreshold: 3,
   }
 
-  const deps: SuperAgentDependencies = {
-    dataDir: '/tmp/helm-test-superagent',
-    profiles: {} as ProfileService,
-    skills: {} as SkillService,
-    subscribeConversationEntries: () => () => {},
-    getConversationDetail: async (id) => ({
-      ...makeConversationSummary(id),
-      entries: [{ id: 'e1', kind: 'message', createdAt: 1, model: [{ role: 'assistant', content: 'hello' }] }],
-    }),
-    listArtifacts: async () => [],
-    abortConversation: async (id) => {
-      recorded.aborts.push(id)
-    },
-    getConversationOwnership: (id) => opts.ownership?.(id) ?? ownership.get(id) ?? (id === 1 ? 'human' : 'helm'),
-    isClosing: () => opts.isClosing?.() ?? false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
-  }
-
   const runtime: SuperAgentWatchdogRuntime = {
     getConfig: () => config,
     getRouterConversationId: () => routerId,
@@ -279,7 +262,7 @@ async function makeHarness(opts: HarnessOptions = {}) {
     id: PLUGIN_ID,
     name: 'SuperAgent',
     definePlugin(ctx) {
-      registerSuperAgentWatchdog(ctx, deps, runtime)
+      registerSuperAgentWatchdog(ctx, runtime)
     },
   }
   await host.register(definition)
@@ -521,6 +504,7 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
   const conversations = new Map<number, ConversationSummary>()
   const eventListeners = new Map<string, Array<(payload: unknown) => MaybePromise<void>>>()
   const backend: PluginHostBackend = {
+    ...hostBackendStub(),
     dispatchTrigger: async () => {},
     submitInput: async (conversationId, text, o) => {
       recorded.submits.push({ conversationId, text, origin: o?.origin, whenBusy: o?.whenBusy })
@@ -532,14 +516,14 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
       if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404)
       return found
     },
+    getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
     updateConversation: async (id) => conversations.get(id) ?? makeConversationSummary(id),
+    setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
     getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: (id) => opts.ownership?.(id) ?? 'helm',
-    get isClosing() {
-      return opts.isClosing?.() ?? false
-    },
+    isClosing: () => opts.isClosing?.() ?? false,
     createAsk: async (spec) => {
       recorded.asks.push(spec)
       return recorded.askResults.get(spec.id ?? 'auto') ?? { id: spec.id ?? 'ask-1', status: 'cancelled', answers: {} }
@@ -566,15 +550,14 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
         await listener(payload)
       }
     },
-    abortConversation: async () => {},
+    abortConversation: async (id) => {
+      recorded.aborts.push(id)
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
   }
   const host = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-')), host: backend, docs })
@@ -586,21 +569,6 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     abortAfterMs: 600_000,
     errorThreshold: 3,
   }
-  const deps: SuperAgentDependencies = {
-    dataDir: '/tmp/x',
-    profiles: {} as ProfileService,
-    skills: {} as SkillService,
-    subscribeConversationEntries: () => () => {},
-    getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
-    listArtifacts: async () => [],
-    abortConversation: async (id) => {
-      recorded.aborts.push(id)
-    },
-    getConversationOwnership: (id) => opts.ownership?.(id) ?? 'helm',
-    isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
-  }
   const runtime: SuperAgentWatchdogRuntime = {
     getConfig: () => config,
     getRouterConversationId: () => routerId,
@@ -610,7 +578,7 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
   await host.register({
     id: PLUGIN_ID,
     definePlugin(ctx) {
-      registerSuperAgentWatchdog(ctx, deps, runtime)
+      registerSuperAgentWatchdog(ctx, runtime)
     },
   })
   return {
@@ -1068,6 +1036,7 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
   const docs = new MemoryDocStore()
   let releaseAsk: ((r: AskResult) => void) | undefined
   const backend: PluginHostBackend = {
+    ...hostBackendStub(),
     dispatchTrigger: async () => {},
     submitInput: async (conversationId, text, o) => {
       recorded.submits.push({ conversationId, text, origin: o?.origin })
@@ -1075,14 +1044,14 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
     createConversation: async () => makeConversationSummary(1),
     listConversations: () => [...conversations.values()],
     getConversation: (id) => conversations.get(id)!,
+    getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
     updateConversation: async (id) => conversations.get(id)!,
+    setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
     getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'helm',
-    get isClosing() {
-      return false
-    },
+    isClosing: () => false,
     createAsk: (spec) =>
       new Promise<AskResult>((resolve, reject) => {
         recorded.asks.push(spec)
@@ -1094,34 +1063,18 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
     },
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
-    abortConversation: async () => {},
+    abortConversation: async (id) => {
+      recorded.aborts.push(id)
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: () => {},
   }
   const host = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-svc-')), host: backend, docs })
-  const deps: SuperAgentDependencies = {
-    dataDir: '/tmp/x',
-    profiles: {} as ProfileService,
-    skills: {} as SkillService,
-    subscribeConversationEntries: () => () => {},
-    getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
-    listArtifacts: async () => [],
-    abortConversation: async (id) => {
-      recorded.aborts.push(id)
-    },
-    getConversationOwnership: () => 'helm',
-    isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
-  }
   const runtime: SuperAgentWatchdogRuntime = {
     getConfig: () => ({
       routerMode: true,
@@ -1138,7 +1091,7 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
   await host.register({
     id: PLUGIN_ID,
     definePlugin(ctx) {
-      registerSuperAgentWatchdog(ctx, deps, runtime)
+      registerSuperAgentWatchdog(ctx, runtime)
     },
   })
 
@@ -1163,7 +1116,7 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
   await host2.register({
     id: PLUGIN_ID,
     definePlugin(ctx) {
-      registerSuperAgentWatchdog(ctx, deps, runtime)
+      registerSuperAgentWatchdog(ctx, runtime)
     },
   })
   await invokeManualTick(host2, [nativeProbe(55, { status: 'blocked', stateChangeSeq: 20 })])
@@ -1292,19 +1245,20 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
   const docs = new MemoryDocStore()
   let releaseAsk: ((r: AskResult) => void) | undefined
   const backend: PluginHostBackend = {
+    ...hostBackendStub(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async () => makeConversationSummary(1),
     listConversations: () => [...conversations.values()],
     getConversation: (id) => conversations.get(id)!,
+    getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
     updateConversation: async (id) => conversations.get(id)!,
+    setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
     getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'helm',
-    get isClosing() {
-      return false
-    },
+    isClosing: () => false,
     createAsk: (spec) =>
       new Promise<AskResult>((resolve, reject) => {
         recorded.asks.push(spec)
@@ -1323,36 +1277,10 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: () => {},
-  }
-  const mkHost = async () => {
-    const host = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-cancel-')), host: backend, docs })
-    await host.register({
-      id: PLUGIN_ID,
-      definePlugin(ctx) {
-        registerSuperAgentWatchdog(ctx, deps, runtime)
-      },
-    })
-    return host
-  }
-  const deps: SuperAgentDependencies = {
-    dataDir: '/tmp/x',
-    profiles: {} as ProfileService,
-    skills: {} as SkillService,
-    subscribeConversationEntries: () => () => {},
-    getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
-    listArtifacts: async () => [],
-    abortConversation: async () => {},
-    getConversationOwnership: () => 'helm',
-    isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
   }
   const runtime: SuperAgentWatchdogRuntime = {
     getConfig: () => ({
@@ -1366,6 +1294,16 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     getRouterConversationId: () => 100,
     getWatchdogConversationId: () => 200,
     track: async <T>(_label: string, task: () => Promise<T>) => task(),
+  }
+  const mkHost = async () => {
+    const host = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-cancel-')), host: backend, docs })
+    await host.register({
+      id: PLUGIN_ID,
+      definePlugin(ctx) {
+        registerSuperAgentWatchdog(ctx, runtime)
+      },
+    })
+    return host
   }
 
   // 硬失败：stop 聚合显式错误（plugin_service_stop_failed 包含 watchdog_ask_cancel_failed）。
@@ -1396,7 +1334,7 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     await host2.register({
       id: PLUGIN_ID,
       definePlugin(ctx) {
-        registerSuperAgentWatchdog(ctx, deps, runtime)
+        registerSuperAgentWatchdog(ctx, runtime)
       },
     })
     await invokeManualTick(host2, [nativeProbe(55, { status: 'blocked', stateChangeSeq: seq })])

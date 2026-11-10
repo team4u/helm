@@ -30,9 +30,9 @@ function herdrNodeChannelOf(fabric: EnvFabric): HerdrNodeChannel {
     isOnline: (id) => fabric.isOnline(id),
     getNodeHubUrl: (id) => fabric.getNodeHubUrl(id),
     envFor: (id, cwd) => fabric.envFor(id, cwd),
-    ipcCall: (id, input, context) => fabric.ipcCall(id, input, context.abortSignal),
-    ipcSubscribe: (id, input, onLine, onClosed, context) =>
-      fabric.ipcSubscribe(id, input, onLine, onClosed, context.abortSignal),
+    ipcCall: (id, input, signal) => fabric.ipcCall(id, input, signal),
+    ipcSubscribe: (id, input, onLine, onClosed, signal) =>
+      fabric.ipcSubscribe(id, input, onLine, onClosed, signal),
   }
 }
 

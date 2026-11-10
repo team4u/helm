@@ -300,15 +300,6 @@ class FakeBackend implements PluginHostBackend {
     return () => { this.askSeqResolvers.delete(resolver) }
   }
   async abortConversation(): Promise<void> {}
-  getConversationActivity(): { consecutiveErrors: number } {
-    return { consecutiveErrors: 0 }
-  }
-  getConversationOwnership(): 'helm' | 'bot' | 'human' {
-    return 'human'
-  }
-  get isClosing(): boolean {
-    return false
-  }
   async spawnAgent(): Promise<unknown> {
     return {}
   }
@@ -317,9 +308,6 @@ class FakeBackend implements PluginHostBackend {
     return { ok: true, output: 'fixture gate ok' }
   }
   async prepareInterruptedConversations(): Promise<void> {}
-  async cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
-    return { removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }
-  }
   async invokeAction(): Promise<unknown> {
     return {}
   }
@@ -330,6 +318,14 @@ class FakeBackend implements PluginHostBackend {
     throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
   }
   withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
+  redactText(text: string): string {
+    return text
+  }
+  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
+  listActiveSpawnExecutions(): [] {
+    return []
+  }
+  async probeNodeFs(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不探测节点 fs', 501) }
   listActions(): [] {
     return []
   }

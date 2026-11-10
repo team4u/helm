@@ -60,6 +60,10 @@ function makeBackend(over: {
   const calls = over.nodeIpcCalls ?? { subscribeStarted: [], stopCalls: 0 }
   return {
     isClosing: () => false,
+    async resolveSpawnTarget() { throw new HelmError('unsupported', 'fixture 不解析 spawn 靶点', 501) },
+    listActiveSpawnExecutions: () => [],
+    async probeNodeFs() { throw new HelmError('unsupported', 'fixture 不探测节点 fs', 501) },
+    redactText: (text: string) => text,
     profiles: {
       list: async () => [{ id: 'assistant' }] as never,
       get: async (id) => ({ id }) as never,
@@ -127,7 +131,6 @@ function makeBackend(over: {
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', 'fixture', 501) },

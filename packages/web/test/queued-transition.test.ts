@@ -63,7 +63,7 @@ test('只有排队项尚无正文时仍显示一次执行等待', { timeout: 60_
 test('输入被插件时间线接管后，同身份队列快照不重复显示', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([entry], {
     live: { conversationId: 1, text: '', tools: [], queuedInputs: [queued], updatedAt: 1 },
-    timelineRenderers: [{ pluginId: 'test:render', spec: { id: 'input-card', kinds: ['helm.input'], json: { component: 'Text', text: '自定义消息卡片' } } }],
+    timelineRenderers: [{ pluginId: 'test:render', spec: { id: 'input-card', kinds: ['helm.input'], client: { module: 'index.tsx', export: 'InputCard' } } }],
   })
   assert.equal(items.filter((item) => item.kind === 'plugin-card').length, 1)
   assert.equal(items.filter((item) => item.kind === 'human').length, 0)

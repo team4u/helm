@@ -17,7 +17,7 @@ function createHostBackend(): PluginHostBackend {
     getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'human' as const,
     markConversationOwnership: unused, spawnAgent: unused, runGate: unused,
-    prepareInterruptedConversations: unused, cleanupWorktree: unused,
+    prepareInterruptedConversations: unused,
     execEnv: unused, withFileMutationQueue: unused, prepareAction: unused, invokeAction: unused, listActions: () => [],
     createAsk: unused, cancelAsk: unused, registerAskSeqResolver: () => () => {},
     onEvent: () => () => {}, emitEvent: () => {},

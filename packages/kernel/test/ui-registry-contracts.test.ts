@@ -187,7 +187,6 @@ function createHostBackend(): PluginHostBackend {
     spawnAgent: unused,
     runGate: unused,
     prepareInterruptedConversations: unused,
-    cleanupWorktree: unused,
     execEnv: unused,
     withFileMutationQueue: unused,
     prepareAction: unused,

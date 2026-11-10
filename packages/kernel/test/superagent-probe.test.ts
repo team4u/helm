@@ -37,6 +37,7 @@ import {
 import { KernelRuntime } from '../src/runtime/index.js'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
+import { serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
 import type { Profile } from '@helm/protocol'
 
@@ -357,6 +358,41 @@ class ProbeBackend implements PluginHostBackend {
   notifications: Array<{ title: string; body: string; level: string }> = []
   /** 内部事件监听注册表（模拟 runtime.emitHostEvent broadcast:false 分发）。 */
   private listeners = new Map<string, Array<(payload: unknown) => Promise<void>>>()
+  profiles = {
+    list: async () => [],
+    get: async () => undefined,
+    getSystem: async () => { throw new HelmError('not_found', '无 SYSTEM.md', 404) },
+    save: async () => { throw new HelmError('unsupported', 'fixture 只读', 501) },
+    directory: async (id: string) => `/tmp/probe-fixture-profiles/${id}`,
+  }
+  skills = {
+    list: async () => [],
+    readFile: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+    directory: async (id: string) => `/tmp/probe-fixture-skills/${id}`,
+    ensureSkill: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+  }
+  secrets = {
+    get: async () => undefined,
+    set: async () => { throw new HelmError('unsupported', 'fixture 只读 secrets', 501) },
+    delete: async () => { throw new HelmError('unsupported', 'fixture 只读 secrets', 501) },
+    addRedaction: () => () => {},
+  }
+  setPluginConfig(): Promise<void> { return Promise.resolve() }
+  nodeIpc = undefined
+  redact(text: string): string { return text }
+  redactText(text: string): string { return text }
+  buildSpawnEnv(): Record<string, string> { return {} }
+  async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
+  async listArtifacts(): Promise<never[]> { return [] }
+  async getArtifact(): Promise<never> { throw new HelmError('not_found', '无产物', 404) }
+  async completeText(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型', 501) }
+  executionEnv(): never { throw new HelmError('unsupported', '本 fixture 无执行环境', 501) }
+  withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() }
+  async atomicWriteFile(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
+  async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
+  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
+  listActiveSpawnExecutions(): [] { return [] }
+  async probeNodeFs(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不探测节点 fs', 501) }
   constructor() {
     this.conversations.set(1, makeSummary(1))
     this.conversations.set(3, makeSummary(3))
@@ -409,7 +445,7 @@ class ProbeBackend implements PluginHostBackend {
   getConversationOwnership(): 'helm' | 'bot' | 'human' {
     return 'human'
   }
-  get isClosing(): boolean {
+  isClosing(): boolean {
     return false
   }
   async spawnAgent(): Promise<unknown> {
@@ -419,9 +455,6 @@ class ProbeBackend implements PluginHostBackend {
     return { ok: true, output: '' }
   }
   async prepareInterruptedConversations(): Promise<void> {}
-  async cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
-    return { removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }
-  }
   async invokeAction(): Promise<unknown> {
     return {}
   }
@@ -512,28 +545,26 @@ async function makeProbeEnv(
       transport.remotePanes.set(p.nodeId, bucket)
     }
   }
+  // 受控协议服务器：零参插件的生产 transport 经插件配置 socketPath 直连。
+  const socketPath = join(dataDir, 'herdr.sock')
+  const served = await serveTransport(transport, socketPath)
   const host = new PluginHost({
     dataDir,
     host: backend,
     docs,
+    config: new (class {
+      get(): Record<string, unknown> { return { socketPath } }
+      set(): void {}
+    })(),
   })
-  await host.register(
-    createHerdrPlugin({
-      defaultCwd: '/tmp',
-      profiles: { get: async () => undefined as Profile | undefined },
-      buildSpawnEnv: () => ({}),
-      redact: (t: string) => t,
-      runLocalGate: async () => ({ ok: true, output: '' }),
-      transport,
-    }),
-    { enabled: true },
-  )
+  await host.register(createHerdrPlugin(), { enabled: true })
   return {
     host,
     backend,
     transport,
     async close() {
       await host.dispose().catch(() => {})
+      await served.close()
       rmSync(dataDir, { recursive: true, force: true })
     },
   }
@@ -697,24 +728,27 @@ async function makeUiHost(): Promise<{ host: PluginHost; dataDir: string }> {
   return { host, dataDir }
 }
 
-test('UI docs：合法 docs 进入 listUi 快照；声明同名 public doc 正常共存', { timeout: 60_000 }, async () => {
+test('UI docs：screen spec 如实进入 listUi 快照；声明同名 public doc 正常共存（docs 订阅已迁 client 轨）', { timeout: 60_000 }, async () => {
   const { host, dataDir } = await makeUiHost()
   try {
     await host.register({
       id: 'test:docs-ok',
       definePlugin(ctx) {
+        // docs 订阅由插件 client 代码经 plugin-client-sdk 完成；screen 只带
+        // client 引用，不再有声明式 docs 字段（json-render 类整体迁出内核）。
         ctx.doc('overview', { version: 1 }, { public: true })
-        ctx.ui.screen({ id: 'main', label: '主视图', docs: ['overview'] })
-        ctx.ui.workbenchPanel({ id: 'plain', label: '无 docs 面板' })
+        ctx.ui.screen({ id: 'main', label: '主视图', client: { module: 'index.tsx', export: 'MainScreen' } })
+        ctx.ui.workbenchPanel({ id: 'plain', label: '普通面板' })
       },
     })
     const ui = host.listUi()
     const screen = ui.find((u) => u.surface === 'screen')!
     assert.ok(screen)
-    assert.deepEqual((screen.spec as { docs?: string[] }).docs, ['overview'])
-    // 无 docs 声明不受影响。
+    assert.deepEqual((screen.spec as { client?: unknown }).client, { module: 'index.tsx', export: 'MainScreen' })
+    assert.equal((screen.spec as { docs?: string[] }).docs, undefined, 'docs 字段已删除')
+    // 无 client 面板不受影响。
     const panel = ui.find((u) => u.surface === 'workbench.panel')!
-    assert.equal((panel.spec as { docs?: string[] }).docs, undefined)
+    assert.deepEqual(panel.spec, { id: 'plain', label: '普通面板' })
   } finally {
     await host.dispose().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })

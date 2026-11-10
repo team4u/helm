@@ -298,6 +298,7 @@ test('PluginMicroAction action-only：渲染图标按钮，点击调用 actionPl
   const action = {
     pluginId: 'contributor',
     spec: {
+      target: 'conversation:header',
       id: 'archive',
       label: '归档',
       icon: 'archive',
@@ -365,7 +366,7 @@ test('PluginMicroAction：pending 期间禁用防重复提交，失败显式通�
   })
   const action = {
     pluginId: 'p',
-    spec: { id: 'kill', label: '中止', actionId: 'kill_worker' } satisfies UiActionSpec,
+    spec: { target: 'timeline:entry', id: 'kill', label: '中止', actionId: 'kill_worker' } satisfies UiActionSpec,
   }
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -402,7 +403,7 @@ test('PluginMicroAction menu 形态：popover-item 菜单项 + onInvoked 关闭�
   const store = makeTestStore({ invokePluginAction: async () => undefined })
   const action = {
     pluginId: 'p',
-    spec: { id: 'm', label: '菜单动作', actionId: 'act' } satisfies UiActionSpec,
+    spec: { target: 'conversation:header', id: 'm', label: '菜单动作', actionId: 'act' } satisfies UiActionSpec,
   }
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -437,6 +438,7 @@ test('PluginMicroAction 声明 client：内联 PluginUiView 渲染组件内容�
     pluginId: 'p',
     target: 'conversation:header',
     spec: {
+      target: 'conversation:header',
       id: 'card',
       label: '卡片动作',
       actionId: 'unused',
@@ -475,10 +477,10 @@ async function loadHostComponents() {
   return { ConversationTimeline, ConversationRowActionsMenu }
 }
 
-const headerActionContribution = (spec: UiActionSpec): PluginUiContribution => ({
+const headerActionContribution = (spec: Omit<UiActionSpec, 'target'>): PluginUiContribution => ({
   pluginId: 'builtin:superagent',
   surface: 'conversation.header.action',
-  spec,
+  spec: { ...spec, target: 'conversation:header' },
 })
 
 test('ConversationTimeline：timeline.entry.action 仅在匹配 kind/role 的消息 hover 栏渲染（T7）', { timeout: 60_000 }, async () => {
@@ -486,9 +488,9 @@ test('ConversationTimeline：timeline.entry.action 仅在匹配 kind/role 的消
   const { makeTestStore } = await import('./helpers/store.js')
   const { HelmStoreContext } = await import('../src/lib/store-context.js')
   const contributions: PluginUiContribution[] = [
-    { pluginId: 'builtin:superagent', surface: 'timeline.entry.action', spec: { id: 'user-only', label: '引用用户消息', actionId: 'quote', roles: ['user'] } satisfies UiActionSpec },
-    { pluginId: 'builtin:superagent', surface: 'timeline.entry.action', spec: { id: 'ai-only', label: '引用回复', actionId: 'cite', roles: ['assistant'] } satisfies UiActionSpec },
-    { pluginId: 'builtin:superagent', surface: 'timeline.entry.action', spec: { id: 'scoped', label: '仅Worker', actionId: 'w', scope: { tags: ['worker'] } } satisfies UiActionSpec },
+    { pluginId: 'builtin:superagent', surface: 'timeline.entry.action', spec: { target: 'timeline:entry',  id: 'user-only', label: '引用用户消息', actionId: 'quote', roles: ['user'] } satisfies UiActionSpec },
+    { pluginId: 'builtin:superagent', surface: 'timeline.entry.action', spec: { target: 'timeline:entry',  id: 'ai-only', label: '引用回复', actionId: 'cite', roles: ['assistant'] } satisfies UiActionSpec },
+    { pluginId: 'builtin:superagent', surface: 'timeline.entry.action', spec: { target: 'timeline:entry', id: 'scoped', label: '仅Worker', actionId: 'w', scope: { tags: ['worker'] } } satisfies UiActionSpec },
   ]
   const store = makeTestStore({
     conversations: [humanConv],
@@ -548,9 +550,9 @@ test('ConversationPane SSR：placement=toolbar 的插件动作直出顶栏，men
   const { makeTestStore } = await import('./helpers/store.js')
   const { HelmStoreContext } = await import('../src/lib/store-context.js')
   const contributions: PluginUiContribution[] = [
-    { pluginId: 'p1', surface: 'conversation.header.action', spec: { id: 'tb', label: '巡查', icon: 'activity', actionId: 'patrol', placement: 'toolbar' } satisfies UiActionSpec },
-    { pluginId: 'p2', surface: 'conversation.header.action', spec: { id: 'mn', label: '归档汇报', actionId: 'archive', placement: 'menu' } satisfies UiActionSpec },
-    { pluginId: 'p3', surface: 'conversation.header.action', spec: { id: 'no', label: '别处会话', actionId: 'x', placement: 'toolbar', scope: { tags: ['worker'] } } satisfies UiActionSpec },
+    { pluginId: 'p1', surface: 'conversation.header.action', spec: { target: 'conversation:header',  id: 'tb', label: '巡查', icon: 'activity', actionId: 'patrol', placement: 'toolbar' } satisfies UiActionSpec },
+    { pluginId: 'p2', surface: 'conversation.header.action', spec: { target: 'conversation:header',  id: 'mn', label: '归档汇报', actionId: 'archive', placement: 'menu' } satisfies UiActionSpec },
+    { pluginId: 'p3', surface: 'conversation.header.action', spec: { target: 'conversation:header', id: 'no', label: '别处会话', actionId: 'x', placement: 'toolbar', scope: { tags: ['worker'] } } satisfies UiActionSpec },
   ]
   const store = makeTestStore({
     conversations: [humanConv],
@@ -582,8 +584,8 @@ test('groupedUi 微插槽分组：surface 正确归组并按 order 排序', { ti
   const contributions: PluginUiContribution[] = [
     headerActionContribution({ id: 'h2', label: '二', actionId: 'a', order: 20 }),
     headerActionContribution({ id: 'h1', label: '一', actionId: 'a', order: 10 }),
-    { pluginId: 'p', surface: 'conversation.row.action', spec: { id: 'r1', label: '行', actionId: 'a' } },
-    { pluginId: 'p', surface: 'timeline.entry.action', spec: { id: 't1', label: '条目', actionId: 'a' } },
+    { pluginId: 'p', surface: 'conversation.row.action', spec: { target: 'conversation:row', id: 'r1', label: '行', actionId: 'a' } },
+    { pluginId: 'p', surface: 'timeline.entry.action', spec: { target: 'timeline:entry', id: 't1', label: '条目', actionId: 'a' } },
   ]
   const grouped = groupUiContributions(contributions)
   const header = grouped.uiActions.filter((a) => a.target === 'conversation:header')

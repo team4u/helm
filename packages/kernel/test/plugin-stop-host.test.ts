@@ -250,6 +250,12 @@ class StopWindowBackend implements PluginHostBackend {
   async atomicWriteFile(): Promise<void> {
     this.record('atomicWriteFile')
   }
+  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', 'fixture 不解析 spawn 靶点', 501) }
+  listActiveSpawnExecutions(): [] { return [] }
+  async probeNodeFs(): Promise<never> { throw new HelmError('unsupported', 'fixture 不探测节点 fs', 501) }
+  redactText(text: string): string {
+    return text
+  }
   redact(text: string): string {
     this.cleanCalls.push('redact')
     return text
@@ -258,7 +264,7 @@ class StopWindowBackend implements PluginHostBackend {
     list: async () => [{ id: 'assistant' }] as never,
     get: async (id: string) => ({ id }) as never,
     getSystem: async () => '',
-    save: async (p: unknown) => p,
+    save: async (p: import('@helm/protocol').Profile) => p,
     directory: async (id: string) => `/data/profiles/${id}`,
   }
   readonly skills = {
@@ -280,7 +286,7 @@ class StopWindowBackend implements PluginHostBackend {
       return nodeId === 'local' || nodeId === 'remote-1'
     },
     getNodeHubUrl: () => undefined,
-    call: async (nodeId: string) => {
+    call: async (nodeId: string): Promise<{ ok: true; value: string }> => {
       this.record('nodeIpc.call')
       return { ok: true, value: `echo:${nodeId}` }
     },
