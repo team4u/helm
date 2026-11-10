@@ -43,7 +43,7 @@ import {
   type WatchdogOwnership,
   type WatchdogProbe,
 } from '../diagnostics.js'
-import type { SuperAgentDependencies, SuperAgentWatchdogRuntime } from './contracts.js'
+import type { SuperAgentWatchdogRuntime } from './contracts.js'
 
 // ---------------------------------------------------------------------------
 // 常量与私有类型
@@ -209,7 +209,6 @@ function corruptDedupDoc(detail: string): HelmError {
 
 export function registerSuperAgentWatchdog(
   ctx: HelmPluginContext,
-  deps: SuperAgentDependencies,
   runtime: SuperAgentWatchdogRuntime,
 ): void {
   const dedup = ctx.doc<WatchdogDedupDoc>('watchdog-dedup', { version: 1, fired: {} })
@@ -241,12 +240,12 @@ export function registerSuperAgentWatchdog(
       ctx.host.emitEvent('notification', {
         type: 'notification',
         level,
-        title: deps.redact(title),
-        body: deps.redact(body),
+        title: ctx.host.redact(title),
+        body: ctx.host.redact(body),
         ...(conversationId !== undefined ? { conversationId } : {}),
       })
     } catch (err) {
-      console.error(`[superagent-watchdog] ${deps.redact(`通知发送失败：${err instanceof Error ? err.message : String(err)}`)}`)
+      console.error(`[superagent-watchdog] ${ctx.host.redact(`通知发送失败：${err instanceof Error ? err.message : String(err)}`)}`)
     }
   }
 
@@ -905,7 +904,7 @@ export function registerSuperAgentWatchdog(
       '4) 外部探针 stalledBasis=since-last-state-change：stalledMs 只是状态翻转间隔，不是工作停滞证据，不得据此中止。',
       '5) 先用 load_skill(skillId="watchdog-playbooks", path="references/<手册>.md") 加载排障手册再决策；无对应手册时保守通知人类。',
       '<findings>',
-      escapeXml(deps.redact(factsJson)),
+      escapeXml(ctx.host.redact(factsJson)),
       '</findings>',
     ].join('\n')
   }
@@ -961,7 +960,7 @@ export function registerSuperAgentWatchdog(
     }
     markFired(finding.key, 'abort', seq)
     try {
-      await deps.abortConversation(conversationId)
+      await ctx.host.abortConversation(conversationId)
     } catch (err) {
       // 中止失败：撤销消费标记（与 bridge 失败语义一致），下一 tick 可重试；
       // 如实通知失败原因，绝不记成功。
@@ -1046,7 +1045,7 @@ export function registerSuperAgentWatchdog(
         conversationId,
         ownerPluginId: ctx.pluginId,
         title: `Watchdog：后台会话 #${conversationId} 阻塞待授权`,
-        description: deps.redact(
+        description: ctx.host.redact(
           `${finding.evidence}；doing=${String(current.doing ?? '')}。授权后 Watchdog 将按选择执行恢复注入或中止。`,
         ),
         fields: [
@@ -1155,7 +1154,7 @@ export function registerSuperAgentWatchdog(
       return
     }
     void runtime
-      .track('watchdog:bridge-abort', () => deps.abortConversation(conversationId))
+      .track('watchdog:bridge-abort', () => ctx.host.abortConversation(conversationId))
       .then(() => {
         notify('error', 'Watchdog 已按授权中止会话', `${finding.evidence}；已中止会话 ${conversationId}`, conversationId)
       })
@@ -1267,11 +1266,11 @@ export function registerSuperAgentWatchdog(
 
   async function inspectConversation(conversationId: number): Promise<Record<string, unknown>> {
     const summary = ctx.host.getConversation(conversationId) // 不存在显式 not_found
-    const detail = await deps.getConversationDetail(conversationId, { limit: 10 })
+    const detail = await ctx.host.getConversationDetail(conversationId, { limit: 10 })
     const entries = detail.entries.slice(0, 10).map((entry) => ({
       kind: entry.kind,
       createdAt: entry.createdAt,
-      preview: deps.redact(truncatePreview(JSON.stringify(entry.model ?? entry.data ?? null))),
+      preview: ctx.host.redact(truncatePreview(JSON.stringify(entry.model ?? entry.data ?? null))),
     }))
     return {
       kind: 'conversation' as const,
@@ -1324,7 +1323,7 @@ export function registerSuperAgentWatchdog(
 
   /** facts 深度脱敏：插件内 JSON 遍历 helper（覆盖数组/嵌套对象/键名）。 */
   function redactFacts(value: Record<string, unknown>): unknown {
-    return redactJsonValue(value, deps.redact)
+    return redactJsonValue(value, (text) => ctx.host.redact(text))
   }
 
   async function recoverCore(input: { conversationId: number; hint: string }, label: string): Promise<Record<string, unknown>> {
@@ -1337,7 +1336,7 @@ export function registerSuperAgentWatchdog(
 
   async function abortCore(input: { conversationId: number }, label: string): Promise<Record<string, unknown>> {
     assertOwnedTarget(input.conversationId)
-    await runtime.track(label, () => deps.abortConversation(input.conversationId))
+    await runtime.track(label, () => ctx.host.abortConversation(input.conversationId))
     notify('warning', 'Watchdog 会话已被手动中止', `会话 ${input.conversationId} 经 watchdog_abort 中止（操作方见审计日志）`, input.conversationId)
     return { conversationId: input.conversationId, aborted: true }
   }

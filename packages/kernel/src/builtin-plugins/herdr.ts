@@ -487,7 +487,7 @@ export function createHerdrPlugin(): PluginDefinition {
         await settleParentTurn(payload.conversation.id)
       })
 
-      // diagnostics.collect 监听（原 watchdog_tick priority 100 鉤子改道）：
+      // diagnostics.collect 监听（原 watchdog_tick priority 100 钩子改道）：
       // 巡检发起方（builtin:superagent Watchdog service）采集原生事实后经宿主
       // 内部事件追加本插件自有窗格的真实 probes（含远端轮询）。事件在宿主
       // await，采集失败如实上抛给发起方，绝不静默吞。

@@ -34,7 +34,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HelmError, type ConversationEntry, type PluginDefinition, type PluginToolContext } from '@helm/protocol'
 import type {
+  ConversationEntryEvent,
   ConversationSummary,
+  HelmHostApi,
   MaybePromise,
   TurnOutcome,
   TurnSettledPayload,
@@ -44,9 +46,7 @@ import type {
   ConversationDetail,
   ConversationScope,
 } from '@helm/protocol'
-import { withFileLock } from '../services/index.js'
-import { redactJsonValue } from '../redact.js'
-import { isAbsoluteTargetPath } from '../runtime/tools.js'
+import { redactJsonValue } from './superagent/redact.js'
 import { registerSuperAgentWatchdog } from './superagent/watchdog.js'
 import type {
   RecallGraphDoc,
@@ -54,7 +54,6 @@ import type {
   RegisterSuperAgentWatchdog,
   RouterModeDoc,
   SuperAgentConfig,
-  SuperAgentDependencies,
   SuperAgentDocs,
   SuperAgentIndexDoc,
   SuperAgentWorker,
@@ -66,7 +65,36 @@ import {
   WATCHDOG_PLAYBOOK_SKILL_ASSET,
   ensureProfileDir,
   ensureSkillDir,
+  type AssetHostPorts,
 } from './superagent/assets.js'
+
+/**
+ * conversation.entry 事件载荷边界守卫：公开 ConversationEntryEvent 形状
+ *（type + conversationId 正整数 + entry.id/kind 非空字符串）；非法返回
+ * undefined（调用方丢弃并诊断），绝不粗 as 信任。
+ */
+export function asConversationEntryEvent(payload: unknown): ConversationEntryEvent | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const p = payload as Record<string, unknown>
+  if (p['type'] !== 'conversation.entry') return undefined
+  const conversationId = p['conversationId']
+  if (typeof conversationId !== 'number' || !Number.isInteger(conversationId) || conversationId <= 0) return undefined
+  const entry = p['entry']
+  if (typeof entry !== 'object' || entry === null) return undefined
+  const e = entry as Record<string, unknown>
+  if (typeof e['id'] !== 'string' || e['id'] === '') return undefined
+  if (typeof e['kind'] !== 'string' || e['kind'] === '') return undefined
+  return payload as ConversationEntryEvent
+}
+
+/**
+ * 跨平台绝对路径判定（插件纯函数；与内核工具同语义）：POSIX `/` 开头、
+ * Windows 盘符 `C:\\...`/`C:/...` 或 UNC `\\\\server\\share`。
+ * 目标节点可能与 Hub 异平台，不得用宿主 node:path 规则判定。
+ */
+export function isAbsoluteTargetPath(value: string): boolean {
+  return value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')
+}
 
 // ---------------------------------------------------------------------------
 // 常量与配置
@@ -335,13 +363,13 @@ export function assertRecallDoc(value: unknown): void {
 // ---------------------------------------------------------------------------
 
 /** 自举 superagent/watchdog Profile 与 watchdog-playbooks 技能包（逐文件幂等）。 */
-async function bootstrapAssets(deps: SuperAgentDependencies): Promise<void> {
-  await ensureProfileDir(deps.dataDir, SUPERAGENT_PROFILE_ASSET)
-  await ensureProfileDir(deps.dataDir, WATCHDOG_PROFILE_ASSET)
-  await ensureSkillDir(deps.dataDir, WATCHDOG_PLAYBOOK_SKILL_ASSET)
-  // 自举后经 ProfileService 真实读取校验（损坏/缺失显式上抛，不吞）。
+async function bootstrapAssets(host: Pick<HelmHostApi, 'profiles' | 'skills'> & AssetHostPorts): Promise<void> {
+  await ensureProfileDir(host, SUPERAGENT_PROFILE_ASSET)
+  await ensureProfileDir(host, WATCHDOG_PROFILE_ASSET)
+  await ensureSkillDir(host, WATCHDOG_PLAYBOOK_SKILL_ASSET)
+  // 自举后经公开 profiles 端口真实读取校验（损坏/缺失显式上抛，不吞）。
   for (const id of SUPERAGENT_PROFILE_IDS) {
-    if ((await deps.profiles.get(id)) === undefined) {
+    if ((await host.profiles.get(id)) === undefined) {
       throw new HelmError(
         'superagent_bootstrap_failed',
         `自举后 Profile ${id} 仍不可读（profile.json 缺失或损坏）`,
@@ -356,22 +384,7 @@ async function bootstrapAssets(deps: SuperAgentDependencies): Promise<void> {
 // 工厂入口
 // ---------------------------------------------------------------------------
 
-/** clientRoot 兼容 src / dist 运行路径（与 workflow/herdr/memory 插件同机制）。 */
-function resolveSuperAgentClientRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, 'superagent', 'client')
-  if (existsSync(local)) return local
-  const pkgRoot = dirname(dirname(here))
-  const srcFallback = join(pkgRoot, 'src', 'builtin-plugins', 'superagent', 'client')
-  if (existsSync(srcFallback)) return srcFallback
-  throw new HelmError(
-    'superagent_plugin_client_missing',
-    `内置插件 ${SUPERAGENT_PLUGIN_ID} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
-    500,
-  )
-}
-
-export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefinition {
+export function createSuperAgentPlugin(): PluginDefinition {
   return {
     id: SUPERAGENT_PLUGIN_ID,
     name: 'SuperAgent 中枢',
@@ -424,21 +437,21 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
 
       /** 诊断日志始终 stderr（脱敏）：失败不可仅 HELM_DEBUG 才可见（静默诊断）。 */
       const logDiagnostic = (message: string): void => {
-        console.error(`[superagent] ${deps.redact(message)}`)
+        console.error(`[superagent] ${ctx.host.redact(message)}`)
       }
 
       /** 显式错误上报：notification 事件 + 尽力投递错误报告卡入中枢（各仅一次，不递归）。 */
       const reportError = (title: string, detail: unknown): void => {
         const message = detail instanceof Error ? detail.message : String(detail)
-        const body = deps.redact(`${title}：${message}`)
+        const body = ctx.host.redact(`${title}：${message}`)
         try {
-          ctx.host.emitEvent('notification', { type: 'notification', level: 'error', title: deps.redact(title), body })
+          ctx.host.emitEvent('notification', { type: 'notification', level: 'error', title: ctx.host.redact(title), body })
         } catch (eventErr) {
           logDiagnostic(`superagent 事件上报失败：${eventErr instanceof Error ? eventErr.message : String(eventErr)}`)
         }
         const target = routerId
         // 内核关闭中不再唤醒中枢（正常关机 abort 回调触发的失败仅通知 + stderr）。
-        if (target === undefined || shutdown || deps.isClosing()) return
+        if (target === undefined || shutdown || ctx.host.isClosing) return
         void track('report-error', async () => {
           try {
             await ctx.host.submitInput(target, body, { origin: 'agent', whenBusy: 'followUp' })
@@ -581,7 +594,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         // 连接器声明的定向目标在订阅匹配之后生效，避免被缺省中枢路由覆盖。
         if (envelope.targetConversationId !== undefined) return
         const target = getRouterConversationId()
-        if (target === undefined || deps.isClosing()) return // 自举未完成：交内核默认靶点解析
+        if (target === undefined || ctx.host.isClosing) return // 自举未完成：交内核默认靶点解析
         return { action: 'transform', value: { ...envelope, targetConversationId: target } }
       })
 
@@ -603,7 +616,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
             if (err instanceof HelmError && err.code === 'not_found') status = 'deleted'
             else throw err
           }
-          const detail = doing !== '' ? ` doing="${escapeXmlAttribute(deps.redact(doing))}"` : ''
+          const detail = doing !== '' ? ` doing="${escapeXmlAttribute(ctx.host.redact(doing))}"` : ''
           return `<worker id="${w.conversationId}" profile="${escapeXmlAttribute(w.profileId)}" status="${status}"${detail} />`
         })
         return `<active_workers>\n${lines.join('\n')}\n</active_workers>`
@@ -757,7 +770,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
             { profileId: targetProfile },
           )
         }
-        if ((await deps.profiles.get(targetProfile)) === undefined) {
+        if ((await ctx.host.profiles.get(targetProfile)) === undefined) {
           throw new HelmError('validation_error', `Profile 不存在：${targetProfile}`, 400, { profileId: targetProfile })
         }
         const threadKey = input.threadKey === undefined ? undefined : assertThreadKey(input.threadKey)
@@ -896,9 +909,9 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
             workerConversationId: workerId,
           })
         }
-        const detail = await deps.getConversationDetail(workerId, { limit: 20 })
-        const artifacts = await deps.listArtifacts(workerId)
-        const summaries = recentEntrySummaries(deps, detail.entries)
+        const detail = await ctx.host.getConversationDetail(workerId, { limit: 20 })
+        const artifacts = await ctx.host.listArtifacts(workerId)
+        const summaries = recentEntrySummaries(ctx.host, detail.entries)
         return {
           conversationId: detail.id,
           title: detail.title,
@@ -1036,7 +1049,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         if (typeof input.enabled !== 'boolean') {
           throw new HelmError('validation_error', 'enabled 必须是布尔值', 400, {})
         }
-        await deps.setRouterMode(input.enabled)
+        await ctx.host.setConfig({ routerMode: input.enabled })
         // 成功后从真实配置回读更新镜像（配置单一来源；镜像不作为配置依据）。
         const applied = getConfig()
         syncRoutingDoc()
@@ -1221,7 +1234,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
           for (;;) {
             let page: ConversationDetail
             try {
-              page = await deps.getConversationDetail(conversationId, {
+              page = await ctx.host.getConversationDetail(conversationId, {
                 limit: REWIND_REPLAY_PAGE_SIZE,
                 ...(cursor !== undefined ? { cursor } : {}),
               })
@@ -1275,7 +1288,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
           // 结算前纪元快照：await 期间发生 helm.rewind 即放弃写图/汇报，
           // 防止被覆盖的旧回合在编辑重发后复活进记忆图谱。
           const epochAtStart = rewindEpochs.get(conversation.id) ?? 0
-          const { summary, artifacts, keywords } = await collectWorkerSettlement(deps, payload)
+          const { summary, artifacts, keywords } = await collectWorkerSettlement(ctx.host, payload)
           if ((rewindEpochs.get(conversation.id) ?? 0) !== epochAtStart) return
           const node: RecallNode = {
             id: nodeId,
@@ -1301,7 +1314,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
           // rewind（与写图同一保护窗口），旧回合汇报不再投递。
           if ((rewindEpochs.get(conversation.id) ?? 0) !== epochAtStart) return
           const target = getRouterConversationId()
-          if (target === undefined || shutdown || deps.isClosing()) return
+          if (target === undefined || shutdown || ctx.host.isClosing) return
           try {
             await ctx.host.submitInput(target, node.summary, {
               origin: 'agent',
@@ -1377,7 +1390,13 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         },
         async start() {
           shutdown = false
-          await bootstrapAssets(deps)
+          await bootstrapAssets({
+            profileDirectory: (id) => ctx.host.profiles.directory(id),
+            skillDirectory: (id) => ctx.host.skills.directory(id),
+            atomicWriteFile: (path, content) => ctx.host.atomicWriteFile(path, content),
+            profiles: ctx.host.profiles,
+            skills: ctx.host.skills,
+          })
           // 三个 doc 读入即验证（持久损坏显式 error，不静默重建）。
           assertRecallDoc(docs!.recall.get())
           readSubscriptions()
@@ -1393,11 +1412,18 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
           // 停用期间错过的 helm.rewind 补偿（分页读详情；API 不可读则本 start
           // 显式失败，绝不伪成功）。
           await replayMissedRewinds()
-          // conversation.entry 订阅：实时 helm.rewind 联动（退订句柄随本周期）。
-          entriesUnsubscribe = deps.subscribeConversationEntries((conversationId, entry) => {
+          // conversation.entry 订阅（通用宿主事件；退订句柄随本周期）：实时
+          // helm.rewind 联动。事件载荷为公开 ConversationEntryEvent 形状，
+          // 边界守卫校验 conversationId/entry，非法载荷丢弃并诊断（不粗 as）。
+          entriesUnsubscribe = ctx.host.onEvent('conversation.entry', (payload) => {
             if (!active || shutdown) return
-            if (entry.kind !== 'helm.rewind') return
-            handleRewindMarker(conversationId, entry)
+            const event = asConversationEntryEvent(payload)
+            if (event === undefined) {
+              logDiagnostic(`conversation.entry 事件载荷非法被丢弃：${JSON.stringify(payload)?.slice(0, 120)}`)
+              return
+            }
+            if (event.entry.kind !== 'helm.rewind') return
+            handleRewindMarker(event.conversationId, event.entry)
           })
           // 启动时以真实配置校准 routing 镜像（停用期间可能被 helm plugins config 修改）。
           syncRoutingDoc()
@@ -1424,7 +1450,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
       // 生命周期归属本启用周期；其 service.start 后于 superagent-core，getter
       // 可实时读取 router/watchdog 会话 ID，无需自举时序耦合）
       // ------------------------------------------------------------------
-      registerSuperAgentWatchdog(ctx, deps, {
+      registerSuperAgentWatchdog(ctx, {
         getConfig,
         getRouterConversationId,
         getWatchdogConversationId,
@@ -1613,13 +1639,13 @@ export function searchRecallNodes(docRaw: unknown, query: string, limit: number)
 
 /** 从真实会话详情与产物列表收集结算摘要（不调用模型）。 */
 export async function collectWorkerSettlement(
-  deps: SuperAgentDependencies,
+  host: Pick<HelmHostApi, 'getConversationDetail' | 'listArtifacts' | 'redact'>,
   payload: TurnSettledPayload,
 ): Promise<{ summary: string; artifacts: ArtifactMetadata[]; keywords: string[] }> {
   const id = payload.conversation.id
   const [detail, artifacts] = await Promise.all([
-    deps.getConversationDetail(id, { limit: 10 }),
-    deps.listArtifacts(id),
+    host.getConversationDetail(id, { limit: 10 }),
+    host.listArtifacts(id),
   ])
   const lastText = lastAssistantText(detail.entries)
   const outcome: TurnOutcome = payload.outcome
@@ -1631,11 +1657,11 @@ export async function collectWorkerSettlement(
       : outcome === 'failed'
         ? `Worker #${id}（${payload.conversation.profileId}）回合失败${payload.error !== undefined ? `：${payload.error}` : ''}`
         : `Worker #${id}（${payload.conversation.profileId}）回合被中止`
-  const summary = truncate(deps.redact(head), 600)
+  const summary = truncate(host.redact(head), 600)
   const keywords = [payload.conversation.profileId, outcome, detail.title]
     .filter((k) => k !== '')
-    .map((k) => deps.redact(k))
-  const redactedArtifacts = redactJsonValue(artifacts, (t) => deps.redact(t)) as ArtifactMetadata[]
+    .map((k) => host.redact(k))
+  const redactedArtifacts = redactJsonValue(artifacts, (t) => host.redact(t)) as ArtifactMetadata[]
   return { summary, artifacts: redactedArtifacts, keywords }
 }
 
@@ -1645,11 +1671,11 @@ export async function collectWorkerSettlement(
 
 /** 时间线条目受控摘要：assistant 取真实文本，其余取 JSON 概要（脱敏 + 截断）。 */
 export function recentEntrySummaries(
-  deps: SuperAgentDependencies,
+  host: Pick<HelmHostApi, 'redact'>,
   entries: Array<{ id: string; kind: string; data?: unknown; model?: unknown }>,
   maxEntries = 20,
 ): Array<{ id: string; kind: string; text: string }> {
-  const redacted = redactJsonValue(entries.slice(-maxEntries), (t) => deps.redact(t)) as typeof entries
+  const redacted = redactJsonValue(entries.slice(-maxEntries), (t) => host.redact(t)) as typeof entries
   return redacted.map((e) => ({
     id: e.id,
     kind: e.kind,
