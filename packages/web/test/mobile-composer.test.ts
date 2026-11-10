@@ -9,6 +9,7 @@ const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.me
 const timelineSource = readFileSync(new URL('../src/conversation/ConversationTimeline.tsx', import.meta.url), 'utf8')
 const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
+const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
 
 test('移动端 Placeholder 文案优化：小屏/移动端极短防折行', { timeout: 60_000 }, () => {
   // 移动端/小屏幕模式
@@ -35,17 +36,22 @@ test('移动端 Placeholder 文案优化：小屏/移动端极短防折行', { t
   assert.match(composerSource, /getComposerPlaceholder\(working,\s*isMobile\)/)
 })
 
-test('移动端输入框字号防 iOS 自动放大：有效字号不小于 16px', { timeout: 60_000 }, () => {
-  // @container (max-width: 680px) 保护
+test('移动端与桌面端输入框字号保持统一：全屏/窄屏/分屏均不强行放大到 16px，由 viewport 防缩放', { timeout: 60_000 }, () => {
+  // 容器查询保护：@container (max-width: 680px) 绝不能硬编码 16px，避免桌面分屏或移动端输入框文字突兀变大
   const containerSlice = responsiveCss.slice(
     responsiveCss.indexOf('@container (max-width: 680px)'),
     responsiveCss.indexOf('@container (max-width: 450px)'),
   )
-  assert.match(containerSlice, /\.composer-textarea\s*\{[^}]*font-size:\s*16px/)
+  assert.doesNotMatch(containerSlice, /font-size:\s*16px/, '容器查询不得强行放大字号')
 
-  // @media (max-width: 680px) 视口兜底保护，杜绝 iOS WebKit 输入放大
-  const mediaSlice = responsiveCss.slice(responsiveCss.indexOf('@media (max-width: 680px)'))
-  assert.match(mediaSlice, /font-size:\s*16px/)
+  // 全局响应式 CSS 彻底清除对输入类控件的 16px 暴力放大，保持与全局正文 13.5px 协调
+  assert.doesNotMatch(responsiveCss, /\.composer-textarea[^{]*\{[^}]*font-size:\s*16px/)
+  assert.doesNotMatch(responsiveCss, /textarea\s*\{[^}]*font-size:\s*16px/)
+
+  // 移动端通过 index.html 中的 viewport 契约实现杜绝失控缩放
+  assert.match(indexHtml, /name="viewport"/)
+  assert.match(indexHtml, /maximum-scale=1\.0/)
+  assert.match(indexHtml, /user-scalable=no/)
 })
 
 test('横屏模式（高度 < 450px）适配：工具栏完整显示且不被挤压', { timeout: 60_000 }, () => {

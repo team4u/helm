@@ -206,8 +206,9 @@ test('Composer 空会话起始环境配置条：草稿式编辑，跨节点清�
   assert.match(styles, /\.pane-cwd-subtitle \{[^}]*background: transparent;[^}]*border: none;[^}]*padding: 0;/)
   const narrow = responsive.slice(responsive.indexOf('@container (max-width: 680px)'), responsive.indexOf('@container (max-width: 450px)'))
   assert.match(narrow, /\.composer-env-hint \{ display: none; \}/)
-  // iOS 输入放大防护：环境控件字号 16px 且高度放宽。
-  assert.match(narrow, /\.composer-env-select,\n  \.composer-env-cwd-input \{ font-size: 16px; height: 30px; \}/)
+  // 输入控件字号与正文保持统一，不强行放大到 16px（无论桌面分屏还是移动端均不突兀）
+  assert.doesNotMatch(narrow, /font-size:\s*16px/)
+  assert.doesNotMatch(responsive, /\.composer-env-select[^{]*\{[^}]*font-size:\s*16px/)
 })
 
 test('侧边栏远端节点标记：非本机会话行展示 @nodeId', { timeout: 60_000 }, () => {

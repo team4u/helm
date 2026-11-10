@@ -43,15 +43,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .composer-env-select { max-width: 128px; }
   .composer-env-cwd { max-width: 180px; }
   .composer-env-cwd-input { width: min(180px, 100%); }
-  /* iOS 输入放大防护：输入类控件有效字号 ≥ 16px（高度同步放宽防裁切） */
-  .composer-env-select,
-  .composer-env-cwd-input { font-size: 16px; height: 30px; }
   .composer-env-cwd { font-size: 11px; }
   .timeline-scroll { padding: 16px 14px 22px; }
   .msg-human-pill { max-width: 92%; }
   .msg-hover-bar { opacity: 0.85; }
   .composer-shell { padding-inline: 10px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
-  .composer-textarea { font-size: 16px; max-height: 120px; }
+  .composer-textarea { max-height: 120px; }
   .composer-picker-root { max-width: 180px; }
   .composer-toolbar .composer-model-button { max-width: 180px; }
   .composer-toolbar .composer-queue-button { width: 32px; height: 32px; padding: 0; border-radius: 50%; }
@@ -73,15 +70,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .msg-hover-bar:active,
   .msg-hover-bar:focus-within { opacity: 1; }
   .msg-hover-bar .btn { min-height: 28px; min-width: 28px; padding: 0 4px; }
-}
-@media (max-width: 680px) {
-  .composer-textarea,
-  .input,
-  input,
-  select,
-  textarea {
-    font-size: 16px;
-  }
 }
 @media (max-height: 450px) {
   .composer-shell { padding-bottom: max(6px, env(safe-area-inset-bottom)); }
