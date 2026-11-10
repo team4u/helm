@@ -224,6 +224,46 @@ test('shouldPushLocationHistory: 插件中心列表打开抽屉走 push，抽屉
   assert.equal(shouldPushLocationHistory(detailA, pluginsState), false)
 })
 
+test('shouldPushLocationHistory: 插件中心主屏下打开弹窗、工作台或分屏均正确走 push', { timeout: 60_000 }, () => {
+  const pluginsState = baseState({ kind: 'plugins' })
+  const drawerOpenState = baseState({ kind: 'plugins', pluginId: 'builtin:workflow' })
+
+  // 1. 列表态下打开弹窗（activeModal）走 push
+  assert.equal(
+    shouldPushLocationHistory(pluginsState, { ...pluginsState, activeModal: { kind: 'provider-auth' } }),
+    true,
+  )
+  assert.equal(
+    shouldPushLocationHistory(pluginsState, { ...pluginsState, activeModal: { kind: 'profile-editor' } }),
+    true,
+  )
+
+  // 2. 抽屉打开态下打开弹窗走 push
+  assert.equal(
+    shouldPushLocationHistory(drawerOpenState, { ...drawerOpenState, activeModal: { kind: 'nodes' } }),
+    true,
+  )
+
+  // 3. 插件中心下打开工作台抽屉（workbenchOpen）走 push
+  assert.equal(
+    shouldPushLocationHistory(pluginsState, { ...pluginsState, workbenchOpen: true }),
+    true,
+  )
+  assert.equal(
+    shouldPushLocationHistory(drawerOpenState, { ...drawerOpenState, workbenchOpen: true }),
+    true,
+  )
+
+  // 4. 插件中心下打开分屏（splitTarget）走 push
+  assert.equal(
+    shouldPushLocationHistory(pluginsState, {
+      ...pluginsState,
+      splitTarget: { kind: 'conversation', conversationId: 10 },
+    }),
+    true,
+  )
+})
+
 // ---------------------------------------------------------------------------
 // 5. 浏览器前进/后退/replace 序列一致性仿真
 // ---------------------------------------------------------------------------
@@ -235,7 +275,7 @@ test('浏览器前进/后退/replace 序列一致性验证', { timeout: 60_000 }
   const navigate = (nextState: WorkspaceLocationState) => {
     const nextHash = formatLocationHash(nextState)
     if (currentIndex >= 0) {
-      const prevState = parseLocationHash(history[currentIndex])
+      const prevState = parseLocationHash(history[currentIndex]!)
       if (shouldPushLocationHistory(prevState, nextState)) {
         history.splice(currentIndex + 1)
         history.push(nextHash)
@@ -253,44 +293,44 @@ test('浏览器前进/后退/replace 序列一致性验证', { timeout: 60_000 }
 
   // 1. 用户从根会话开始
   navigate(baseState({ kind: 'conversation', conversationId: 1 }))
-  assert.equal(history[currentIndex], '#/c/1')
+  assert.equal(history[currentIndex]!, '#/c/1')
   assert.equal(history.length, 1)
 
   // 2. 点击左侧栏插件中心 -> push
   navigate(baseState({ kind: 'plugins' }))
-  assert.equal(history[currentIndex], '#/plugins')
+  assert.equal(history[currentIndex]!, '#/plugins')
   assert.equal(history.length, 2)
 
   // 3. 点击 workflow 卡片打开抽屉 -> push
   navigate(baseState({ kind: 'plugins', pluginId: 'builtin:workflow' }))
-  assert.equal(history[currentIndex], '#/plugins?p=builtin%3Aworkflow')
+  assert.equal(history[currentIndex]!, '#/plugins?p=builtin%3Aworkflow')
   assert.equal(history.length, 3)
 
   // 4. 抽屉内切换至 herdr -> replace（栈深保持 3，未污染后退栈）
   navigate(baseState({ kind: 'plugins', pluginId: 'builtin:herdr' }))
-  assert.equal(history[currentIndex], '#/plugins?p=builtin%3Aherdr')
+  assert.equal(history[currentIndex]!, '#/plugins?p=builtin%3Aherdr')
   assert.equal(history.length, 3)
 
   // 5. 用户按浏览器后退键（popstate）-> 退回上一历史帧 #/plugins（抽屉收起）
   currentIndex--
-  assert.equal(history[currentIndex], '#/plugins')
-  const backToPlugins = parseLocationHash(history[currentIndex])
+  assert.equal(history[currentIndex]!, '#/plugins')
+  const backToPlugins = parseLocationHash(history[currentIndex]!)
   assert.deepEqual(backToPlugins.primaryTarget, { kind: 'plugins' })
 
   // 6. 用户再次按浏览器后退键 -> 回到 #/c/1
   currentIndex--
-  assert.equal(history[currentIndex], '#/c/1')
-  const backToConv = parseLocationHash(history[currentIndex])
+  assert.equal(history[currentIndex]!, '#/c/1')
+  const backToConv = parseLocationHash(history[currentIndex]!)
   assert.deepEqual(backToConv.primaryTarget, { kind: 'conversation', conversationId: 1 })
 
   // 7. 用户点击浏览器前进键 -> 回到 #/plugins
   currentIndex++
-  assert.equal(history[currentIndex], '#/plugins')
+  assert.equal(history[currentIndex]!, '#/plugins')
 
   // 8. 用户再次点击浏览器前进键 -> 还原选中的插件抽屉状态
   currentIndex++
-  assert.equal(history[currentIndex], '#/plugins?p=builtin%3Aherdr')
-  const forwardToDetail = parseLocationHash(history[currentIndex])
+  assert.equal(history[currentIndex]!, '#/plugins?p=builtin%3Aherdr')
+  const forwardToDetail = parseLocationHash(history[currentIndex]!)
   assert.deepEqual(forwardToDetail.primaryTarget, {
     kind: 'plugins',
     pluginId: 'builtin:herdr',
@@ -298,6 +338,6 @@ test('浏览器前进/后退/replace 序列一致性验证', { timeout: 60_000 }
 
   // 9. 用户点击抽屉上的关闭按钮 -> replace 为 #/plugins（不增加历史栈深度）
   navigate(baseState({ kind: 'plugins' }))
-  assert.equal(history[currentIndex], '#/plugins')
+  assert.equal(history[currentIndex]!, '#/plugins')
   assert.equal(history.length, 3)
 })

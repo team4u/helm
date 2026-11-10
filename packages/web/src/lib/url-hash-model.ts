@@ -290,9 +290,15 @@ const isSameScreenSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): b
   return a.pluginId === b.pluginId && a.screenId === b.screenId
 }
 
-/** 主/分屏位置是否发生坐标级变化（会话 ID 变化、screen 坐标变化、开/关分屏）。 */
+/** 同一 plugins 坐标（kind 均为 plugins）视为同一主舞台位置槽位；drawer 切换或关闭不算坐标级切屏。 */
+const isSamePluginsSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): boolean => {
+  if (a === null || b === null) return a === b
+  return a.kind === 'plugins' && b.kind === 'plugins'
+}
+
+/** 主/分屏位置是否发生坐标级变化（会话 ID 变化、screen 坐标变化、视图类型变化、开/关分屏）。 */
 const isTargetSlotChanged = (prev: ResolvedTarget | null, next: ResolvedTarget | null): boolean =>
-  !isSameResolvedTarget(prev, next) && !isSameScreenSlot(prev, next)
+  !isSameResolvedTarget(prev, next) && !isSameScreenSlot(prev, next) && !isSamePluginsSlot(prev, next)
 
 /**
  * 判断状态迁移是否值得入历史栈（pushState）：
@@ -304,16 +310,16 @@ const isTargetSlotChanged = (prev: ResolvedTarget | null, next: ResolvedTarget |
  *   （避免弹窗内点选 10 项后要后退 10 次才能关掉弹窗）。
  */
 export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: WorkspaceLocationState): boolean {
-  // 插件中心内抽屉开关与切换策略：
-  // 1. 从列表打开抽屉（无 pluginId -> 有 pluginId）入栈（push），支持浏览器后退关闭抽屉；
-  // 2. 抽屉内切换插件或关闭抽屉（有 pluginId -> 无 pluginId）平滑替换（replace），不污染后退栈。
-  if (prev.primaryTarget.kind === 'plugins' && next.primaryTarget.kind === 'plugins') {
-    if (prev.primaryTarget.pluginId === undefined && next.primaryTarget.pluginId !== undefined) {
-      return true
-    }
-    return false
+  // 从列表打开插件抽屉（无 pluginId -> 有 pluginId）入栈（push），支持浏览器后退关闭抽屉
+  if (
+    prev.primaryTarget.kind === 'plugins' &&
+    next.primaryTarget.kind === 'plugins' &&
+    prev.primaryTarget.pluginId === undefined &&
+    next.primaryTarget.pluginId !== undefined
+  ) {
+    return true
   }
-  // 仅 params 变化（screen 坐标不变）→ replace，避免筛选器每次按键污染后退栈；
+  // 仅 params 变化（screen 坐标不变）或 plugins 抽屉内切换/关闭 → replace，避免筛选器每次按键污染后退栈；
   // 需要入栈时由调用方（setScreenParams push 标记）显式强制。
   if (isTargetSlotChanged(prev.primaryTarget, next.primaryTarget)) return true
   if (isTargetSlotChanged(prev.splitTarget, next.splitTarget)) return true
