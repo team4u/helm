@@ -703,40 +703,27 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
     <div className="sidebar-group agent-standing-group">
       <div className="sidebar-group-header">
         <span>智能体</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <Tooltip content={batchMode ? '退出批量管理' : '批量管理会话'} side="top">
-            <button
-              type="button"
-              className="btn btn-ghost btn-icon-xs"
-              style={{
-                color: batchMode ? 'var(--accent)' : undefined,
-              }}
-              title={batchMode ? '退出批量管理' : '批量管理会话'}
-              aria-label={batchMode ? '退出批量管理' : '批量管理会话'}
-              onClick={() => {
-                setBatchMode((v) => {
-                  if (v) {
-                    setSelectedIds(new Set())
-                  }
-                  return !v
-                })
-              }}
-            >
-              <HelmIcon name="check-square" size={12} />
-            </button>
-          </Tooltip>
-          <Tooltip content="管理智能体角色 (Profile)" side="top">
-            <button
-              type="button"
-              className="btn btn-ghost btn-icon-xs"
-              title="管理智能体角色 (Profile)"
-              aria-label="管理智能体角色 (Profile)"
-              onClick={() => store.setActiveModal({ kind: 'profile-editor' })}
-            >
-              <HelmIcon name="plus" size={12} />
-            </button>
-          </Tooltip>
-        </div>
+        <Tooltip content={batchMode ? '退出批量管理' : '批量管理会话'} side="top">
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon-xs"
+            style={{
+              color: batchMode ? 'var(--accent)' : undefined,
+            }}
+            title={batchMode ? '退出批量管理' : '批量管理会话'}
+            aria-label={batchMode ? '退出批量管理' : '批量管理会话'}
+            onClick={() => {
+              setBatchMode((v) => {
+                if (v) {
+                  setSelectedIds(new Set())
+                }
+                return !v
+              })
+            }}
+          >
+            <HelmIcon name="check-square" size={12} />
+          </button>
+        </Tooltip>
       </div>
       {batchMode && (
         <div className="sidebar-batch-bar">
