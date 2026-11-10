@@ -767,6 +767,7 @@ export function summaryOf(
   status: ConversationStatus,
   pendingAskCount: number,
   doing?: string,
+  lastError?: string,
 ): ConversationSummary {
   return {
     id: meta.id,
@@ -784,6 +785,7 @@ export function summaryOf(
     ...(meta.thinkingLevelOverride !== undefined ? { thinkingLevelOverride: meta.thinkingLevelOverride } : {}),
     status,
     doing,
+    ...(lastError !== undefined && lastError !== '' ? { lastError } : {}),
     stateChangeSeq: meta.stateChangeSeq,
     completionSeq: meta.completionSeq,
     unread: meta.unread,

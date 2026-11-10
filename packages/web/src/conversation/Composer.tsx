@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ArtifactMetadata, ConversationAttachmentRef, ConversationSummary, WhenBusy } from '@helm/protocol'
+import type { ConversationAttachmentRef, ConversationSummary, WhenBusy } from '@helm/protocol'
 import { assetsApi, conversationsApi } from '../lib/api.js'
 import {
   buildSlashMenuItems,
@@ -17,12 +17,26 @@ import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
 import { slashMenuSkills } from './slash-menu-skills.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import {
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRoot,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '../ui/DropdownMenu.js'
 import { Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '../ui/Popover.js'
 import { Select, type SelectOption } from '../ui/Select.js'
 import { Tabs, TabsList, TabsTrigger } from '../ui/Tabs.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { AskDock } from './AskDock.js'
+import { CompletionPopover } from './CompletionPopover.js'
 import { focusWithCaret, useComposerController } from './composer-controller.js'
+import {
+  detectCompletionToken,
+  replaceTriggerToken,
+  type CompletionToken,
+} from './composer-completion-model.js'
+import { useComposerCompletionSources } from './use-composer-completion.js'
 import {
   attachmentsOfEditTarget,
   busyEnterMode,
@@ -46,12 +60,19 @@ import { formatBytes } from '../lib/format.js'
 export interface ComposerProps {
   conversation: ConversationSummary
   /** 请求回填文本（时间线「编辑并重发」）；每次递增 tick 保证同文本也能再次触发。 */
-  prefill: { text: string; entryId?: number; attachments?: ConversationAttachmentRef[]; tick: number } | null
+  prefill: {
+    text: string
+    entryId?: number
+    attachments?: ConversationAttachmentRef[]
+    tick: number
+    /** true 时仅当草稿完全空闲（无文本/附件/编辑锚点/在途操作）才回填；否则警告并拒绝。 */
+    onlyIfEmpty?: boolean
+  } | null
   /** 真实发送请求开始/结束时通知父层（在途反馈；斜杠命令不触发）。 */
   onSendingChange?: (sending: boolean) => void
 }
 
-type PopoverKind = 'slash' | 'artifact' | null
+type PopoverKind = 'slash' | null
 
 // ---------------------------------------------------------------------------
 // ModelPicker
@@ -215,7 +236,7 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
                 onClick={() => void pick(m.id)}
               >
                 <span className="mono">{m.modelId}</span>
-                <span className="popover-item-meta">{m.provider}{m.thinkingLevels.length > 1 ? ' · 思考 ' + m.thinkingLevels[m.thinkingLevels.length - 1] : ''}</span>
+                <span className="popover-item-meta">{m.provider}</span>
               </button>
             ))}
             {store.models.every((model) => !model.available) && (
@@ -283,22 +304,17 @@ interface PopoverItem {
   /** 插件命令：选中即执行（不回填触发词到草稿）。 */
   run?: () => void
 }
+/** 键盘可见候选上限：↑↓ 循环只在此列表内（显示与键盘索引一致）。 */
+const SLASH_VISIBLE_LIMIT = 12
 function CommandPopover({
-  kind,
   query,
-  artifacts,
   slashItems,
-  availableSkills,
   onPick,
   onClose,
 }: {
-  kind: 'slash' | 'artifact'
   query: string
-  artifacts: ArtifactMetadata[]
   /** 已合并好的斜杠菜单条目（含插件命令）；省略时回退宿主内置三源构建。 */
   slashItems?: ReadonlyArray<PopoverItem>
-  /** 回退路径的可见技能（已按当前会话 profile.skills + 插件启用双过滤；缺省不展示技能）。 */
-  availableSkills?: ReadonlyArray<{ id: string; name: string }>
   onPick: (apply: string, caretSuffix?: string) => void
   onClose: () => void
 }) {
@@ -306,42 +322,31 @@ function CommandPopover({
 
   const items = useMemo<PopoverItem[]>(() => {
     const q = query.toLowerCase()
-    if (kind === 'slash') {
-      if (slashItems !== undefined) {
-        return slashItems.filter((i) => i.id.toLowerCase().includes(q) || i.label.toLowerCase().includes(q))
-      }
-      const builtin: PopoverItem[] = [
-        { id: '/new', label: '/new', hint: '重置上下文', apply: '/new' },
-        { id: '/clear', label: '/clear', hint: '重置上下文', apply: '/clear' },
-        { id: '/compact', label: '/compact', hint: '精简上下文', apply: '/compact' },
-      ]
-      // 回退路径同样只展示已按当前会话 profile 过滤的技能，绝不放开全部。
-      const skills: PopoverItem[] = (availableSkills ?? []).map((s) => ({
-        id: `/skill:${s.id}`,
-        label: `/skill:${s.id}`,
-        hint: s.name,
-        apply: `/skill:${s.id} `,
-      }))
-      return [...builtin, ...skills].filter((i) => i.id.toLowerCase().includes(q))
+    if (slashItems !== undefined) {
+      return slashItems.filter((i) => i.id.toLowerCase().includes(q) || i.label.toLowerCase().includes(q))
     }
-    return artifacts
-      .filter((a) => a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
-      .map((a) => ({
-        id: `@${a.id}`,
-        label: `@${a.name}`,
-        hint: `${a.mimeType} · ${formatBytes(a.size)}`,
-        apply: `@${a.id} `,
-      }))
-  }, [kind, query, artifacts, slashItems, availableSkills])
+    const builtin: PopoverItem[] = [
+      { id: '/new', label: '/new', hint: '重置上下文', apply: '/new' },
+      { id: '/clear', label: '/clear', hint: '重置上下文', apply: '/clear' },
+      { id: '/compact', label: '/compact', hint: '精简上下文', apply: '/compact' },
+    ]
+    return builtin.filter((i) => i.id.toLowerCase().includes(q))
+  }, [query, slashItems])
+
+  // 键盘循环限定可见候选，修复显示截断但索引越界到不可见项的旧问题。
+  const visible = items.slice(0, SLASH_VISIBLE_LIMIT)
+  const visibleKeys = visible.map((item) => item.id).join('|')
 
   useEffect(() => {
     setActive(0)
-  }, [kind, query])
+  }, [query, visibleKeys])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (items.length === 0) {
-        if (e.key === 'Enter' || e.key === 'Escape') {
+      // IME 组合中不拦截（组合音节可能含触发符，Enter 属确认候选）。
+      if (e.isComposing || e.keyCode === 229) return
+      if (visible.length === 0) {
+        if (e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Escape') {
           e.preventDefault()
           onClose()
         }
@@ -349,13 +354,13 @@ function CommandPopover({
       }
       if (e.key === 'ArrowDown') {
         e.preventDefault()
-        setActive((i) => (i + 1) % items.length)
+        setActive((i) => (i + 1) % visible.length)
       } else if (e.key === 'ArrowUp') {
         e.preventDefault()
-        setActive((i) => (i - 1 + items.length) % items.length)
+        setActive((i) => (i - 1 + visible.length) % visible.length)
       } else if (e.key === 'Enter') {
         e.preventDefault()
-        const item = items[active]
+        const item = visible[active]
         if (item !== undefined) {
           if (item.run !== undefined) item.run()
           else if (item.apply !== undefined) onPick(item.apply)
@@ -367,13 +372,13 @@ function CommandPopover({
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [items, active, onPick, onClose])
+  }, [visible, active, onPick, onClose])
 
-  if (items.length === 0) {
+  if (visible.length === 0) {
     return (
       <div className="composer-popover">
         <div className="popover-item" style={{ color: 'var(--fg-muted)' }}>
-          {kind === 'slash' ? '没有匹配的命令或技能' : '没有匹配的会话产物'}
+          没有匹配的命令或技能
         </div>
       </div>
     )
@@ -382,10 +387,10 @@ function CommandPopover({
   return (
     <div className="composer-popover">
       <div className="popover-header">
-        {kind === 'slash' ? '命令与技能' : '引用会话产物'}
+        命令与技能
         <span style={{ color: 'var(--fg-subtle)' }}>↑↓ 选择 · Enter 确认 · Esc 关闭</span>
       </div>
-      {items.slice(0, 12).map((item, idx) => (
+      {visible.map((item, idx) => (
         <button
           key={item.id}
           type="button"
@@ -400,6 +405,11 @@ function CommandPopover({
           {item.hint !== undefined ? <span className="popover-item-meta">{item.hint}</span> : null}
         </button>
       ))}
+      {items.length > visible.length ? (
+        <div className="popover-item" style={{ color: 'var(--fg-subtle)', cursor: 'default' }}>
+          候选过多，仅显示前 {SLASH_VISIBLE_LIMIT} 项，可继续输入过滤
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -597,6 +607,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
   const [editingEntryId, setEditingEntryId] = useState<number | null>(null)
   const [popover, setPopover] = useState<PopoverKind>(null)
   const [popoverQuery, setPopoverQuery] = useState('')
+  const [completionToken, setCompletionToken] = useState<CompletionToken | null>(null)
   const [sending, setSending] = useState(false)
   const [uploading, setUploading] = useState(0)
   const [envBlocker, setEnvBlocker] = useState<SessionEnvBlocker>(ENV_BLOCKER_CLEAR)
@@ -604,6 +615,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
   const uploadingRef = useRef(0)
   const envBlockedRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const composerBoxRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const extrasRef = useRef<HTMLDetailsElement | null>(null)
   const dragDepthRef = useRef(0)
@@ -684,6 +696,25 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
   // 每次选择编辑目标都整体替换附件（目标无附件则清空），绝不保留上一个目标的草稿残留。
   useEffect(() => {
     if (prefill === null) return
+    // onlyIfEmpty：草稿非空/编辑中/在途时拒绝回填（经 ref 读取，不新增 effect 依赖）。
+    if (prefill.onlyIfEmpty === true) {
+      const live = liveDraftRef.current
+      if (
+        live.text.trim() !== '' ||
+        live.attachments.length > 0 ||
+        live.targetEntryId !== null ||
+        sendingRef.current ||
+        uploadingRef.current > 0
+      ) {
+        store.pushNotice({
+          type: 'notification',
+          level: 'warning',
+          title: '请先处理当前草稿，再选择引导词',
+          conversationId: conversation.id,
+        })
+        return
+      }
+    }
     const target = { text: prefill.text, ...(prefill.entryId !== undefined ? { entryId: prefill.entryId } : {}), ...(prefill.attachments !== undefined ? { attachments: prefill.attachments } : {}) }
     const nextEditing = isHistoricalEdit(target) ? prefill.entryId! : null
     const nextAttachments = attachmentsOfEditTarget(target)
@@ -694,9 +725,11 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     textareaRef.current?.focus()
   }, [prefill, syncLiveDraft])
 
-  // 切换会话时退出历史编辑态
+  // 切换会话时退出历史编辑态并关闭全部浮层（补全源订阅随 token 置空停订）
   useEffect(() => {
     setEditingEntryId(null)
+    setPopover(null)
+    setCompletionToken(null)
   }, [conversation.id])
 
   const cancelEdit = useCallback((): void => {
@@ -744,23 +777,24 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     [conversation.id, notifyError],
   )
 
-  // 斜杠 / @ 引用检测：光标前最近一个 / 或 @ 起始 token。
-  const detectPopover = (value: string, caret: number): void => {
-    const before = value.slice(0, caret)
-    const slashMatch = /(?:^|\s)\/([a-zA-Z0-9:_-]*)$/.exec(before)
-    if (slashMatch !== null) {
-      setPopover('slash')
-      setPopoverQuery(slashMatch[1] ?? '')
+  // 触发检测：'/' 进斜杠命令浮层；'@' '#' ':' 进统一补全浮层（含 '@' 内置产物）。
+  const detectPopover = useCallback((value: string, caret: number): void => {
+    const token = detectCompletionToken(value.slice(0, caret))
+    if (token === null) {
+      setPopover(null)
+      setCompletionToken(null)
       return
     }
-    const atMatch = /(?:^|\s)@([a-zA-Z0-9_.\-]*)$/.exec(before)
-    if (atMatch !== null) {
-      setPopover('artifact')
-      setPopoverQuery(atMatch[1] ?? '')
+    if (token.trigger === '/') {
+      setPopover('slash')
+      setPopoverQuery(token.query)
+      setCompletionToken(null)
       return
     }
     setPopover(null)
-  }
+    setPopoverQuery('')
+    setCompletionToken(token)
+  }, [])
 
   const applyPopover = (apply: string): void => {
     const el = textareaRef.current
@@ -770,7 +804,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     }
     const caret = el.selectionStart ?? text.length
     const before = text.slice(0, caret)
-    const tokenRe = /(?:^|\s)([/@][a-zA-Z0-9:_.\-]*)$/
+    const tokenRe = /(?:^|\s)(\/[a-zA-Z0-9:_-]*)$/
     const m = tokenRe.exec(before)
     const start = m !== null ? caret - (m[1]?.length ?? 0) : caret
     const next = `${text.slice(0, start)}${apply}${text.slice(caret)}`
@@ -783,6 +817,42 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
       el.setSelectionRange(pos, pos)
     })
   }
+
+  // 补全选中：只替换光标前触发 token（含触发符）为 insertText，前后文本/附件/编辑锚点不动。
+  const applyCompletion = useCallback(
+    (insertText: string): void => {
+      const el = textareaRef.current
+      if (el === null) {
+        setCompletionToken(null)
+        return
+      }
+      const caret = el.selectionStart ?? liveDraftRef.current.text.length
+      const { next, nextCaret } = replaceTriggerToken(liveDraftRef.current.text, caret, insertText)
+      setText(next)
+      syncLiveDraft(next, editingEntryId, attachments)
+      setCompletionToken(null)
+      focusWithCaret(el, nextCaret)
+    },
+    [editingEntryId, attachments, syncLiveDraft],
+  )
+
+  // '@' 内置会话产物候选（无产物时为空表，浮层展示空态而非隐藏：与旧浮层语义一致）。
+  const hostArtifactItems = useMemo(
+    () =>
+      artifacts.map((a) => ({
+        id: `@${a.id}`,
+        label: `@${a.name}`,
+        insertText: `@${a.id} `,
+        hint: `${a.mimeType} · ${formatBytes(a.size)}`,
+      })),
+    [artifacts],
+  )
+  const completionSnapshot = useComposerCompletionSources({
+    token: completionToken,
+    completers: store.groupedUi.composerCompleters,
+    conversation,
+    hostArtifactItems,
+  })
 
   const slashPluginCommands = useMemo(
     () => pluginSlashCommandsFor(store.groupedUi.commands, conversation),
@@ -1067,10 +1137,14 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (popover !== null && (e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Escape')) {
-      return // 由浮层全局捕获处理
+    if (
+      (popover !== null || completionToken !== null) &&
+      !e.nativeEvent.isComposing &&
+      (e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Escape')
+    ) {
+      return // 由浮层全局捕获处理（IME composing 时不拦截，交给输入法）
     }
-    if (e.key === 'Escape' && popover === null && editingEntryId !== null) {
+    if (e.key === 'Escape' && popover === null && completionToken === null && editingEntryId !== null) {
       e.preventDefault()
       cancelEdit()
       return
@@ -1128,6 +1202,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
         ) : null}
         <div
           className="composer-box"
+          ref={composerBoxRef}
           data-dragging={dragging ? 'true' : undefined}
           onDragEnter={onDragEnter}
           onDragOver={(e) => e.preventDefault()}
@@ -1191,21 +1266,36 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
               syncLiveDraft(e.target.value, editingEntryId, attachments)
               detectPopover(e.target.value, e.target.selectionStart ?? e.target.value.length)
             }}
+            onKeyUp={(e) => {
+              // 光标移动（方向键/Home/End）后重新检测：光标可能移回/移出触发 token。
+              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
+                detectPopover(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length)
+              }
+            }}
+            onClick={(e) => {
+              // 点击移动光标同样重新检测（不改文本）。
+              detectPopover(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length)
+            }}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             spellCheck={false}
           />
           {popover !== null ? (
             <CommandPopover
-              kind={popover}
               query={popoverQuery}
-              artifacts={artifacts}
               slashItems={slashMenuItems}
-              availableSkills={availableSkills}
               onPick={applyPopover}
               onClose={() => setPopover(null)}
             />
           ) : null}
+          <CompletionPopover
+            open={completionToken !== null}
+            trigger={completionToken !== null && completionToken.trigger !== '/' ? completionToken.trigger : '@'}
+            snapshot={completionSnapshot}
+            onPick={(entry) => applyCompletion(entry.item.insertText)}
+            onClose={() => setCompletionToken(null)}
+            anchorRef={composerBoxRef}
+          />
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">
               <Tooltip content="上传附件" side="top">
@@ -1304,7 +1394,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                 <Tooltip content="停止当前执行" side="top">
                   <button
                     type="button"
-                    className="btn btn-sm btn-danger btn-pill btn-send"
+                    className="btn btn-sm btn-danger btn-pill btn-send composer-abort-button"
                     onClick={() => void abortTurn()}
                     title="停止当前执行"
                     aria-label="停止当前执行"
@@ -1313,40 +1403,77 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                   </button>
                 </Tooltip>
               ) : (
-                <>
-                  <Tooltip content="停止当前执行" side="top">
+                <DropdownMenuRoot>
+                  <div className="composer-split-send">
                     <button
                       type="button"
-                      className="btn btn-sm btn-danger btn-send"
+                      className="composer-split-main composer-steer-action"
+                      disabled={sending || uploading > 0 || envBlocker.blocked}
+                      onClick={() => void send('steer')}
+                      title="下一个步骤边界注入（Enter）"
+                      aria-label={uploading > 0 ? `上传中 (${uploading})` : editingEntryId !== null ? '更新并重新生成' : '插话引导'}
+                    >
+                      <HelmIcon
+                        name={sending || uploading > 0 ? 'loader' : 'corner-down-right'}
+                        size={14}
+                        className={sending || uploading > 0 ? 'spin-slow' : undefined}
+                      />
+                      <span className="composer-action-label">{editingEntryId !== null ? '更新' : '插话'}</span>
+                    </button>
+                    <div className="composer-split-divider" />
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className="composer-split-trigger"
+                        disabled={sending || uploading > 0 || envBlocker.blocked}
+                        aria-label="选择发送策略"
+                        title="选择发送策略（插话 / 排队）"
+                      >
+                        <HelmIcon name="chevron-down" size={12} />
+                      </button>
+                    </DropdownMenuTrigger>
+                  </div>
+                  <DropdownMenuContent portalled align="end" side="top" sideOffset={6} className="composer-busy-dropdown-content">
+                    <DropdownMenuItem
+                      className="composer-busy-menu-item"
+                      onClick={() => void send('steer')}
+                    >
+                      <HelmIcon name="corner-down-right" size={14} className="composer-busy-menu-icon" />
+                      <div className="composer-busy-menu-text">
+                        <div className="composer-busy-menu-title">插话引导</div>
+                        <div className="composer-busy-menu-desc">下一个步骤边界注入</div>
+                      </div>
+                      <span className="composer-busy-menu-kbd">Enter</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      className="composer-busy-menu-item composer-queue-button"
+                      onClick={() => void send('followUp')}
+                      title="当前回合结束后处理（⌘/Ctrl+Enter）"
+                      aria-label="排队发送"
+                    >
+                      <HelmIcon name="clock" size={14} className="composer-busy-menu-icon" />
+                      <div className="composer-busy-menu-text">
+                        <div className="composer-busy-menu-title">排队发送</div>
+                        <div className="composer-busy-menu-desc">当前回合结束后处理</div>
+                      </div>
+                      <span className="composer-busy-menu-kbd">⌘/Ctrl+Enter</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      danger
+                      className="composer-busy-menu-item"
                       onClick={() => void abortTurn()}
                       title="停止当前执行"
                       aria-label="停止当前执行"
                     >
-                      <HelmIcon name="square" size={14} />
-                    </button>
-                  </Tooltip>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm composer-queue-button"
-                    disabled={sending || uploading > 0 || envBlocker.blocked}
-                    onClick={() => void send('followUp')}
-                    title="当前回合结束后处理（⌘/Ctrl+Enter）"
-                    aria-label="排队发送"
-                  >
-                    <HelmIcon name={sending ? 'loader' : 'clock'} size={16} />
-                    <span className="composer-action-label">排队发送</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-primary btn-pill btn-send"
-                    disabled={sending || uploading > 0 || envBlocker.blocked}
-                    onClick={() => void send('steer')}
-                    title="下一个步骤边界注入（Enter）"
-                    aria-label={uploading > 0 ? `上传中 (${uploading})` : editingEntryId !== null ? '更新并重新生成' : '插话引导'}
-                  >
-                    <HelmIcon name={sending || uploading > 0 ? 'loader' : 'corner-down-right'} size={17} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
-                  </button>
-                </>
+                      <HelmIcon name="square" size={13} className="composer-busy-menu-icon" />
+                      <div className="composer-busy-menu-text">
+                        <div className="composer-busy-menu-title">停止执行</div>
+                        <div className="composer-busy-menu-desc">立即中止当前回合</div>
+                      </div>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenuRoot>
               )}
             </span>
           </div>

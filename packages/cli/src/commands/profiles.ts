@@ -23,7 +23,7 @@ import {
   requirePositional,
 } from './shared.js'
 
-/** 语义化 flag -> Profile 字段（--system[-file]/--skills/--all-skills 在应用期单独处理）。 */
+/** 语义化 flag -> Profile 字段（--system[-file]/--skills/--all-skills/--starters 在应用期单独处理）。 */
 const PROFILE_FIELD_FLAGS: ReadonlyArray<{ flag: string; key: string }> = [
   { flag: 'name', key: 'name' },
   { flag: 'model', key: 'model' },
@@ -34,6 +34,7 @@ const PROFILE_FIELD_FLAGS: ReadonlyArray<{ flag: string; key: string }> = [
 
 const DOC_FLAGS = ['system', 'system-file'] as const
 const SKILLS_FLAGS = ['skills', 'all-skills'] as const
+const STARTERS_FLAGS = ['starters'] as const
 
 const semanticFlags: FlagSpec[] = [
   { name: 'input', type: 'json', help: 'Profile JSON（update 单独使用=全量替换；与语义化 flag 组合则作为合并层）' },
@@ -42,6 +43,7 @@ const semanticFlags: FlagSpec[] = [
   { name: 'system-file', type: 'string', help: 'SYSTEM.md 从本地文件读取' },
   { name: 'skills', type: 'json', help: '技能白名单 JSON 字符串数组（如 \'["git-commit"]\'；[] 禁用全部技能；与 --all-skills 互斥）' },
   { name: 'all-skills', type: 'boolean', help: '删除 skills 键恢复全部可用技能（与 --skills 互斥）' },
+  { name: 'starters', type: 'json', help: '空白会话引导词 JSON 数组（如 \'[{"label":"写周报","prompt":"…"}]\'，最多 6 项；[] 清空恢复默认）' },
 ]
 
 const PARSE_FLAGS_SPEC = semanticFlags.map((f) => ({ ...f }))
@@ -51,7 +53,8 @@ function hasSemanticFlags(flags: Map<string, unknown>): boolean {
   return (
     PROFILE_FIELD_FLAGS.some(({ flag }) => flags.has(flag)) ||
     DOC_FLAGS.some((flag) => flags.has(flag)) ||
-    SKILLS_FLAGS.some((flag) => flags.has(flag))
+    SKILLS_FLAGS.some((flag) => flags.has(flag)) ||
+    STARTERS_FLAGS.some((flag) => flags.has(flag))
   )
 }
 
@@ -80,6 +83,45 @@ function applySkillsFlags(flags: Map<string, unknown>, body: Record<string, unkn
   }
 }
 
+/** --starters 本地校验：{ label, prompt } 对象数组（在任何 HTTP 请求前拒绝）。
+ * 与 Hub 边界同规：label trim 非空 ≤24 码点、prompt 非纯空白 ≤4000 码点、最多 6 项。 */
+function validateStartersFlag(flags: Map<string, unknown>): void {
+  if (!flags.has('starters')) return
+  const raw = flags.get('starters')
+  if (!Array.isArray(raw)) {
+    throw new CliError("--starters 需为 JSON 数组（如 --starters '[{\"label\":\"写周报\",\"prompt\":\"…\"}]'，空数组 [] 清空）", 'invalid_flag_value')
+  }
+  const codePoints = (text: string): number => {
+    let count = 0
+    for (const _ of text) count += 1
+    return count
+  }
+  for (let i = 0; i < raw.length; i++) {
+    const item = raw[i]
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw new CliError(`--starters[${i}] 需为 { label, prompt } 对象`, 'invalid_flag_value')
+    }
+    for (const key of Object.keys(item)) {
+      if (key !== 'label' && key !== 'prompt') {
+        throw new CliError(`--starters[${i}] 仅接受 label 与 prompt 字段（未知字段 '${key}'）`, 'invalid_flag_value')
+      }
+    }
+    const { label, prompt } = item as Record<string, unknown>
+    if (typeof label !== 'string') throw new CliError(`--starters[${i}].label 需为字符串`, 'invalid_flag_value')
+    if (typeof prompt !== 'string') throw new CliError(`--starters[${i}].prompt 需为字符串`, 'invalid_flag_value')
+    if (label.trim() === '') throw new CliError(`--starters[${i}].label 去除首尾空白后不能为空`, 'invalid_flag_value')
+    if (codePoints(label.trim()) > 24) throw new CliError(`--starters[${i}].label 最多 24 个 Unicode 码点`, 'invalid_flag_value')
+    if (prompt.trim() === '') throw new CliError(`--starters[${i}].prompt 不能是纯空白`, 'invalid_flag_value')
+    if (codePoints(prompt) > 4000) throw new CliError(`--starters[${i}].prompt 最多 4000 个 Unicode 码点`, 'invalid_flag_value')
+  }
+  if (raw.length > 6) throw new CliError('--starters 最多 6 项', 'invalid_flag_value')
+}
+
+/** --starters 应用到 body：显式给 flag 才写键（[] 同样写入=清空恢复默认）。 */
+function applyStartersFlag(flags: Map<string, unknown>, body: Record<string, unknown>): void {
+  if (flags.has('starters')) body['starters'] = flags.get('starters')
+}
+
 /** 将语义化 flag 应用到 body（显式给出才写键；-file 与内联同给时内联优先）。 */
 async function applySemanticFlags(flags: Map<string, unknown>, body: Record<string, unknown>): Promise<void> {
   for (const { flag, key } of PROFILE_FIELD_FLAGS) {
@@ -93,6 +135,7 @@ async function applySemanticFlags(flags: Map<string, unknown>, body: Record<stri
     if (systemFile !== undefined) body.system = await readTextFileFlag(systemFile, 'system-file')
   }
   applySkillsFlags(flags, body)
+  applyStartersFlag(flags, body)
 }
 
 /**
@@ -145,10 +188,11 @@ export function profilesCommands(): CommandSpec[] {
       const id = parsed.positionals[0]
       assertNoExtraPositionals(parsed.positionals, 1)
       validateSkillsFlags(parsed.flags)
+      validateStartersFlag(parsed.flags)
       const hasInput = parsed.flags.has('input')
       if (!hasInput && !hasSemanticFlags(parsed.flags)) {
         throw new CliError(
-          '未提供任何字段：--input <json> 或语义化 flag（--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills）（profiles create）',
+          '未提供任何字段：--input <json> 或语义化 flag（--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills/--starters）（profiles create）',
           'missing_update_fields',
         )
       }
@@ -175,11 +219,12 @@ export function profilesCommands(): CommandSpec[] {
       const id = requirePositional(parsed.positionals, 0, 'id')
       assertNoExtraPositionals(parsed.positionals, 1)
       validateSkillsFlags(parsed.flags)
+      validateStartersFlag(parsed.flags)
       const hasInput = parsed.flags.has('input')
       const semantic = hasSemanticFlags(parsed.flags)
       if (!hasInput && !semantic) {
         throw new CliError(
-          '未提供任何字段：--input <json> 或语义化 flag（--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills）（profiles update）',
+          '未提供任何字段：--input <json> 或语义化 flag（--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills/--starters）（profiles update）',
           'missing_update_fields',
         )
       }

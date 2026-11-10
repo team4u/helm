@@ -48,6 +48,8 @@ import {
   type ToolViewSpec,
   type ComposerPillSpec,
   type ComposerWidgetSpec,
+  type ComposerCompleterSpec,
+  type ArtifactPreviewerSpec,
   type WorkbenchPanelSpec,
   type CommandSpec,
   type SettingsPanelSpec,
@@ -282,6 +284,7 @@ export class PluginHost {
         mkdirSync(dataDir, { recursive: true });
         await definition.definePlugin(this.createContext(state, state.epoch));
         this.assertUiDocsRegistered(state);
+        this.assertUiCompleterActionBindings(state, false);
       } catch (err) {
         let rollbackError: JsonSafeErrorInfo | undefined;
         try {
@@ -309,6 +312,7 @@ export class PluginHost {
       if (wantsEnabled) {
         try {
           this.uiRegistry.assertCrossPluginUnique(definition.id, this.getActiveEnabledPluginIds());
+          this.assertUiCompleterActionBindings(state, true);
           state.enabled = true;
           await this.registerProviders(state);
           await this.activateServices(state);
@@ -446,6 +450,7 @@ export class PluginHost {
       try {
         await state.definition.definePlugin(this.createContext(state, state.epoch));
         this.assertUiDocsRegistered(state);
+        this.assertUiCompleterActionBindings(state, false);
         this.uiRegistry.assertCrossPluginUnique(pluginId, this.getActiveEnabledPluginIds());
         await this.registerProviders(state);
         await this.activateServices(state);
@@ -453,6 +458,7 @@ export class PluginHost {
         persistedEnabled = true;
         // 最终裁决与 enabled 发布之间无 await，封住不同插件并发启用的冲突窗口。
         this.uiRegistry.assertCrossPluginUnique(pluginId, this.getActiveEnabledPluginIds());
+        this.assertUiCompleterActionBindings(state, true);
         state.enabled = true;
         state.phase = 'idle';
       } catch (err) {
@@ -966,6 +972,69 @@ export class PluginHost {
     );
   }
 
+  /**
+   * composer.completer 动作源绑定校验（定义期末 / 启用提交点）：
+   * - 本插件引用：动作必须已声明且 idempotent: true（补全查询高频触发，
+   *   不得绑定非幂等副作用动作）；动作声明可晚于 UI 声明，故在定义期末校验；
+   * - 跨插件引用：仅在启用提交点（crossPlugin=true，与 enabled 发布同一同步块）
+   *   且目标插件当前已启用时校验存在与 idempotent；目标尚未注册/启用时不拒绝
+   *   （合法的稍后注册，运行期前端经 action manifest 兑底校验可用性）。
+   * idempotent 只是声明性标记（允许断链重跑），不代表代码安全沙箱。
+   */
+  private assertUiCompleterActionBindings(state: PluginState, crossPlugin: boolean): void {
+    const pluginId = state.definition.id;
+    for (const u of this.uiRegistry.getUiByPlugin(pluginId)) {
+      if (u.surface !== 'composer.completer') continue;
+      const source = (u.spec as { source?: unknown }).source;
+      if (!isPlainObject(source) || source['kind'] !== 'action') continue;
+      const actionId = source['actionId'];
+      if (typeof actionId !== 'string') continue; // 注册边界已拒绝非法形状
+      const actionPluginId = source['actionPluginId'];
+      const targetPluginId =
+        typeof actionPluginId === 'string' && actionPluginId.length > 0 ? actionPluginId : pluginId;
+      if (targetPluginId !== pluginId && !crossPlugin) continue;
+      if (targetPluginId !== pluginId) {
+        const target = this.plugins.get(targetPluginId);
+        if (!target || !target.enabled) continue; // 目标未注册/未启用：允许稍后注册
+        const binding = this.capabilityRegistry.getActionBinding(targetPluginId, actionId);
+        if (binding === undefined) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} 的补全源引用了插件 ${targetPluginId} 未声明的动作 ${actionId}`,
+            400,
+            { pluginId, id: String((u.spec as { id?: unknown }).id), targetPluginId, actionId },
+          );
+        }
+        if (!binding.idempotent) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} 的补全源绑定的动作 ${targetPluginId}.${actionId} 必须 idempotent: true`,
+            400,
+            { pluginId, id: String((u.spec as { id?: unknown }).id), targetPluginId, actionId },
+          );
+        }
+        continue;
+      }
+      const binding = this.capabilityRegistry.getActionBinding(pluginId, actionId);
+      if (binding === undefined) {
+        throw new HelmError(
+          'invalid_ui_spec',
+          `插件 ${pluginId} 的补全源引用了本插件未声明的动作 ${actionId}`,
+          400,
+          { pluginId, id: String((u.spec as { id?: unknown }).id), actionId },
+        );
+      }
+      if (!binding.idempotent) {
+        throw new HelmError(
+          'invalid_ui_spec',
+          `插件 ${pluginId} 的补全源绑定的动作 ${actionId} 必须 idempotent: true（补全查询不得触发非幂等副作用）`,
+          400,
+          { pluginId, id: String((u.spec as { id?: unknown }).id), actionId },
+        );
+      }
+    }
+  }
+
   // --- client.tsx 编译产物 --------------------------------------------------
 
   /**
@@ -1409,6 +1478,14 @@ export class PluginHost {
         composerWidget: (spec: ComposerWidgetSpec) => {
           assertOpen('声明 ui.composerWidget');
           self.uiRegistry.registerUi(pluginId, 'composer.widget', spec, 'composerWidget', state.definition.clientRoot);
+        },
+        composerCompleter: (spec: ComposerCompleterSpec) => {
+          assertOpen('声明 ui.composerCompleter');
+          self.uiRegistry.registerUi(pluginId, 'composer.completer', spec, 'composerCompleter', state.definition.clientRoot);
+        },
+        artifactPreviewer: (spec: ArtifactPreviewerSpec) => {
+          assertOpen('声明 ui.artifactPreviewer');
+          self.uiRegistry.registerUi(pluginId, 'artifact.previewer', spec, 'artifactPreviewer', state.definition.clientRoot);
         },
         workbenchPanel: (spec: WorkbenchPanelSpec) => {
           assertOpen('声明 ui.workbenchPanel');

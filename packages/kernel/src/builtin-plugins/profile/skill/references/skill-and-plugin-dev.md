@@ -71,7 +71,7 @@ export default {
 
 扩展入口：
 - 后端 Hook（{{HOOK_COUNT}} 个）：{{HOOK_NAMES}}；各 Hook 允许的 continue/transform/handled/block 结果以 protocol 契约为准。
-- 前端 {{UI_METHOD_COUNT}} 个 ctx.ui 注册方法：基础 10 个（sidebarItem/sidebarSection、screen、timelineRenderer、toolView、composerPill/composerWidget、workbenchPanel、command、settingsPanel）+ 三类微操作（conversationHeaderAction/conversationRowAction/timelineEntryAction：绑 actionId 后宿主代管按钮/pending/失败提示，scope 按标签过滤会话，kinds/roles 过滤消息条目；宿主注入的真实 conversationId/entryId 强制覆盖 input 同名字段）+ profileRuntime（Profile 外部运行时元数据，宿主通用表单渲染）+ slot（向 `owner/插槽名` 注入内容供其他插件 `<PluginSlot />` 或声明式 `Slot` 原语消费）。
+- 前端 {{UI_METHOD_COUNT}} 个 ctx.ui 注册方法：基础 10 个（sidebarItem/sidebarSection、screen、timelineRenderer、toolView、composerPill/composerWidget、workbenchPanel、command、settingsPanel）+ 三类微操作（conversationHeaderAction/conversationRowAction/timelineEntryAction：绑 actionId 后宿主代管按钮/pending/失败提示，scope 按标签过滤会话，kinds/roles 过滤消息条目；宿主注入的真实 conversationId/entryId 强制覆盖 input 同名字段）+ profileRuntime（Profile 外部运行时元数据）+ slot（插件子插槽）+ artifactPreviewer（按 MIME/后缀预览产物）+ composerCompleter（输入引用候选源）。
 - timelineRenderer/toolView/artifactPreviewer/composerCompleter 支持 priority（降序裁决，缺省 0；同优先级保持贡献顺序）；同一插件可声明多块 settings.panel（order 排序）。
 - `Profile.starters` 是静态配置的空白会话提示，不是 UI 扩展点；每 Profile 最多六项，label 最多 24 个 Unicode 码点，prompt 最多 4000 个码点。只在历史完整加载的真实空会话展示，点击回填草稿而不发送；已有草稿、附件、编辑或在途操作不覆盖。CLI 使用 `helm profiles update <id> --starters '<json数组>' --json`，传 `[]` 清空。
 - command 的 slash（不含 / 的触发词）同时派生输入框 `/` 补全：保留词 {{RESERVED_SLASH_COMMANDS}} 与 skill: 前缀禁占，跨启用插件不得重名，声明 slash 必须绑定本插件 actionId（跨插件动作用 actionPluginId）。

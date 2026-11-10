@@ -6,6 +6,7 @@
  *   profile.runtime, 微动作（header/row/entry.action）与 plugin.slot 等界面声明；
  * - 声明边界静态校验（id 唯一性、priority/order 安全整数、命令 slash 与宿主保留词、
  *   微动作三轨至少其一、slot target 形状、sessionDocs 列表形状、声明式 public doc 依赖预检、
+ *   artifact.previewer 的 MIME/后缀匹配声明、composer.completer 的补全源互斥与禁用轨、
  *   ConversationScope 纯对象校验、JSON-safe 序列化保真）；
  * - client.tsx 动态组件引用的形状校验（assertModuleRefShape）与 clientRoot 归属校验；
  * - 获取已编译 client 模块产物，并严格校验生命周期与 epoch 状态（防止已停用/已轮转插件返回脏产物）；
@@ -25,6 +26,68 @@ const MICRO_ACTION_SURFACES = new Set([
   'conversation.row.action',
   'timeline.entry.action',
 ]);
+
+/**
+ * artifact.previewer 的规范 MIME：小写 type/subtype 精确值或显式 type/* 通配。
+ * 拒绝 '星号斜杠星号'（等于吞掉所有产物且无裁决意义）、参数、前后缀/glob 与大写形态
+ * ——匹配规则必须精确可预期，前端裁决与内核校验共用同一事实源。
+ */
+const CANONICAL_MIME_PATTERN = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/(?:[a-z0-9][a-z0-9!#$&^_.+-]*|\*)$/;
+
+/** artifact.previewer 的文件后缀：小写、前导点、可多段（如 .tar.gz），无路径段与通配符。 */
+const ARTIFACT_EXTENSION_PATTERN = /^\.[a-z0-9]+(?:\.[a-z0-9]+)*$/;
+
+/** 补全源 doc 形态的文档名（与 docs/sessionDocs 列表同一命名约束）。 */
+const COMPLETER_DOC_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * 补全源 itemsField：安全顶层键字符集（拒 __proto__/constructor/prototype）。
+ * 仅字符集限制还不够，原型污染键名单在补全源校验中单独拒绝。
+ */
+const COMPLETER_ITEMS_FIELD_PATTERN = /^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,127}$/;
+
+const UNSAFE_TOP_LEVEL_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * artifact.previewer 匹配声明列表的公共校验：非空字符串数组、逐项合法、无重复。
+ */
+function assertArtifactMatchList(
+  pluginId: string,
+  fnName: string,
+  id: string,
+  field: 'mimeTypes' | 'extensions',
+  values: unknown,
+  isValid: (value: string) => boolean,
+  expect: string,
+): void {
+  if (values === undefined) return;
+  if (!Array.isArray(values) || values.length === 0 || values.some((v) => typeof v !== 'string')) {
+    throw new HelmError(
+      'invalid_ui_spec',
+      `插件 ${pluginId} ui.${fnName} 的 ${field} 必须是非空字符串数组`,
+      400,
+      { pluginId, id, field },
+    );
+  }
+  for (const value of values as string[]) {
+    if (!isValid(value)) {
+      throw new HelmError(
+        'invalid_ui_spec',
+        `插件 ${pluginId} ui.${fnName} 的 ${field} 项 "${value}" 非法（${expect}）`,
+        400,
+        { pluginId, id, field, value },
+      );
+    }
+  }
+  const unique = new Set(values as string[]);
+  if (unique.size !== values.length) {
+    throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.${fnName} 的 ${field} 含重复项`, 400, {
+      pluginId,
+      id,
+      field,
+    });
+  }
+}
 
 export interface ClientModuleOptions {
   getPluginLifecycle: (pluginId: string) => {
@@ -442,6 +505,143 @@ export class UiRegistry {
       }
     }
 
+    if (surface === 'artifact.previewer') {
+      const label = (spec as { label?: unknown }).label;
+      if (typeof label !== 'string' || label.length === 0) {
+        throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.artifactPreviewer 需要非空 label`, 400, {
+          pluginId,
+          id,
+        });
+      }
+      assertArtifactMatchList(
+        pluginId,
+        fnName,
+        id,
+        'mimeTypes',
+        (spec as { mimeTypes?: unknown }).mimeTypes,
+        (value) => CANONICAL_MIME_PATTERN.test(value) && value !== '*/*',
+        '仅允许小写 type/subtype 精确值或 type/* 通配，不允许 */*、参数、glob 与大写',
+      );
+      assertArtifactMatchList(
+        pluginId,
+        fnName,
+        id,
+        'extensions',
+        (spec as { extensions?: unknown }).extensions,
+        (value) => ARTIFACT_EXTENSION_PATTERN.test(value),
+        '仅允许小写、前导点、可多段的后缀（如 .md、.tar.gz），不含路径段与通配符',
+      );
+    }
+
+    if (surface === 'composer.completer') {
+      const label = (spec as { label?: unknown }).label;
+      if (typeof label !== 'string' || label.length === 0) {
+        throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.composerCompleter 需要非空 label`, 400, {
+          pluginId,
+          id,
+        });
+      }
+      // '/' 保留给宿主命令与技能补全；宿主统一渲染，不接受 client/json/docs/sessionDocs 轨。
+      const forbidden = ['client', 'json', 'docs', 'sessionDocs'] as const;
+      for (const field of forbidden) {
+        if ((spec as Record<string, unknown>)[field] !== undefined) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.composerCompleter 不允许声明 ${field}（补全由宿主统一渲染，仅接受声明式数据源）`,
+            400,
+            { pluginId, id, field },
+          );
+        }
+      }
+      const trigger = (spec as { trigger?: unknown }).trigger;
+      if (trigger !== '@' && trigger !== '#' && trigger !== ':') {
+        throw new HelmError(
+          'invalid_ui_spec',
+          `插件 ${pluginId} ui.composerCompleter 的 trigger 仅允许 '@' | '#' | ':'（'/' 保留给命令与技能）`,
+          400,
+          { pluginId, id, trigger: String(trigger) },
+        );
+      }
+      const source = (spec as { source?: unknown }).source;
+      if (!isPlainObject(source)) {
+        throw new HelmError(
+          'invalid_ui_spec',
+          `插件 ${pluginId} ui.composerCompleter 需要 source（{ kind: 'action' | 'doc' | 'sessionDoc', ... }）`,
+          400,
+          { pluginId, id },
+        );
+      }
+      const kind = source['kind'];
+      if (kind === 'action') {
+        const sourceKeys = Object.keys(source);
+        if (sourceKeys.some((k) => k !== 'kind' && k !== 'actionId' && k !== 'actionPluginId')) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.composerCompleter 的 action 源仅允许 { kind, actionId, actionPluginId? }，不得混入 doc 源字段`,
+            400,
+            { pluginId, id },
+          );
+        }
+        const actionId = source['actionId'];
+        if (typeof actionId !== 'string' || actionId.length === 0 || actionId.includes('.')) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.composerCompleter 的 actionId 必须是非空且不含点号的动作 id（跨插件请用 actionPluginId）`,
+            400,
+            { pluginId, id },
+          );
+        }
+        const actionPluginId = source['actionPluginId'];
+        if (actionPluginId !== undefined && (typeof actionPluginId !== 'string' || actionPluginId.length === 0)) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.composerCompleter 的 actionPluginId 必须是非空插件 id`,
+            400,
+            { pluginId, id },
+          );
+        }
+      } else if (kind === 'doc' || kind === 'sessionDoc') {
+        const sourceKeys = Object.keys(source);
+        if (sourceKeys.some((k) => k !== 'kind' && k !== 'name' && k !== 'itemsField')) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.composerCompleter 的 ${kind} 源仅允许 { kind, name, itemsField }，不得混入 action 源字段`,
+            400,
+            { pluginId, id },
+          );
+        }
+        const name = source['name'];
+        if (typeof name !== 'string' || !COMPLETER_DOC_NAME_PATTERN.test(name)) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.composerCompleter 的 ${kind} 源 name 必须是本插件公开文档名（允许字符 A-Za-z0-9._-）`,
+            400,
+            { pluginId, id, name: String(name) },
+          );
+        }
+        const itemsField = source['itemsField'];
+        if (
+          typeof itemsField !== 'string' ||
+          !COMPLETER_ITEMS_FIELD_PATTERN.test(itemsField) ||
+          UNSAFE_TOP_LEVEL_KEYS.has(itemsField)
+        ) {
+          throw new HelmError(
+            'invalid_ui_spec',
+            `插件 ${pluginId} ui.composerCompleter 的 itemsField 必须是安全顶层键（拒 __proto__/constructor/prototype 与非常规字符）`,
+            400,
+            { pluginId, id, itemsField: String(itemsField) },
+          );
+        }
+      } else {
+        throw new HelmError(
+          'invalid_ui_spec',
+          `插件 ${pluginId} ui.composerCompleter 的 source.kind 仅允许 'action' | 'doc' | 'sessionDoc'`,
+          400,
+          { pluginId, id, kind: String(kind) },
+        );
+      }
+    }
+
     if (surface === 'workbench.panel') {
       const badge = (spec as { badge?: unknown }).badge;
       if (badge !== undefined) {
@@ -498,11 +698,11 @@ export class UiRegistry {
 
   /**
    * definePlugin 完成后的末尾统一校验：
-   * - UI 声明引用的 docs / badge.doc 必须是本插件已注册的 public 全局 doc；
-   * - spec.sessionDocs 必须是本插件已注册的 public sessionDoc（独立于全局
-   *   docs 校验；badge.doc 仍要求全局 doc，不要求出现在 docs 数组中）。
+   * - UI 声明引用的 docs / badge.doc / composer.completer doc 源必须是本插件已注册的 public 全局 doc；
+   * - spec.sessionDocs / composer.completer sessionDoc 源必须是本插件已注册的 public
+   *   sessionDoc（独立于全局 docs 校验；badge.doc 仍要求全局 doc，不要求出现在 docs 数组中）。
    * doc 声明可晚于 UI 声明，故在定义期末校验；非法引用会让 $docs/
-   * $sessionDocs 挂载/角标静默失效，必须显式拒绝。
+   * $sessionDocs 挂载/角标/补全源静默失效，必须显式拒绝。
    * hasPublicSessionDoc 缺省视为无任何公开会话文档（声明了 sessionDocs 即拒绝），
    * 纯 global 校验的既有调用方与单测不受影响。
    */
@@ -525,7 +725,13 @@ export class UiRegistry {
       into.set(doc, l);
     };
     for (const u of list) {
-      const spec = u.spec as { id?: unknown; docs?: unknown; sessionDocs?: unknown; badge?: { doc?: unknown } };
+      const spec = u.spec as {
+        id?: unknown;
+        docs?: unknown;
+        sessionDocs?: unknown;
+        badge?: { doc?: unknown };
+        source?: { kind?: unknown; name?: unknown };
+      };
       const from = { surface: u.surface, id: String(spec.id) };
       if (Array.isArray(spec.docs)) {
         for (const name of spec.docs) {
@@ -535,6 +741,16 @@ export class UiRegistry {
       if (Array.isArray(spec.sessionDocs)) {
         for (const name of spec.sessionDocs) {
           if (typeof name === 'string') collect(requiredSessionDocs, name, from);
+        }
+      }
+      // composer.completer 的 doc/sessionDoc 源同样要求本插件公开文档
+      //（文档源只读贡献插件自己的公开文档，不允许读取他插件或私有内容）。
+      if (u.surface === 'composer.completer' && isPlainObject(spec.source)) {
+        const sourceKind = spec.source['kind'];
+        const sourceName = spec.source['name'];
+        if (typeof sourceName === 'string') {
+          if (sourceKind === 'doc') collect(requiredDocs, sourceName, from);
+          if (sourceKind === 'sessionDoc') collect(requiredSessionDocs, sourceName, from);
         }
       }
       const badgeDoc = spec.badge?.doc;

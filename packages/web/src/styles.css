@@ -1959,11 +1959,192 @@ textarea {
 .composer-toolbar .btn-send.btn-primary { background: var(--fg); border-color: transparent; color: var(--fg-on-solid); }
 .composer-toolbar .btn-send.btn-primary:hover:not(:disabled) { background: var(--fg-secondary); color: var(--fg-on-solid); border-color: transparent; }
 .composer-toolbar .btn-send.btn-primary:disabled { opacity: 1; background: var(--bg-muted); color: var(--fg-subtle); }
+
+/* 正忙分体引导/发送主按钮（方案 B） */
+.composer-split-send {
+  display: inline-flex;
+  align-items: stretch;
+  height: 32px;
+  min-height: 32px;
+  background: var(--fg);
+  color: var(--fg-on-solid);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.composer-split-send:has(.composer-split-main:disabled) {
+  opacity: 0.55;
+  background: var(--bg-muted);
+  color: var(--fg-subtle);
+  box-shadow: none;
+}
+
+.composer-split-main.composer-steer-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 100%;
+  padding: 0 10px 0 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  border-top-left-radius: var(--radius-pill);
+  border-bottom-left-radius: var(--radius-pill);
+  transition: background 100ms ease;
+}
+
+.composer-split-main.composer-steer-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg-on-solid) 14%, transparent);
+}
+
+.composer-split-main.composer-steer-action:disabled {
+  cursor: not-allowed;
+}
+
+.composer-split-divider {
+  width: 1px;
+  height: 16px;
+  align-self: center;
+  background: color-mix(in srgb, var(--fg-on-solid) 20%, transparent);
+  flex-shrink: 0;
+}
+
+.composer-split-send:has(.composer-split-main:disabled) .composer-split-divider {
+  background: var(--border-subtle);
+}
+
+.composer-split-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  border-top-right-radius: var(--radius-pill);
+  border-bottom-right-radius: var(--radius-pill);
+  transition: background 100ms ease;
+}
+
+.composer-split-trigger:hover:not(:disabled),
+.composer-split-trigger[data-state="open"] {
+  background: color-mix(in srgb, var(--fg-on-solid) 18%, transparent);
+}
+
+.composer-split-trigger:disabled {
+  cursor: not-allowed;
+}
+
+/* 策略选择下拉浮层 */
+.composer-busy-dropdown-content {
+  min-width: 230px;
+  padding: 5px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.composer-busy-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background 80ms ease;
+  user-select: none;
+}
+
+.composer-busy-menu-item[data-highlighted],
+.composer-busy-menu-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.composer-busy-menu-icon {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.composer-busy-menu-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-busy-menu-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fg);
+  line-height: 1.2;
+}
+
+.composer-busy-menu-desc {
+  font-size: 11px;
+  color: var(--fg-muted);
+  line-height: 1.2;
+}
+
+.composer-busy-menu-kbd {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--fg-subtle);
+  background: var(--bg-muted);
+  padding: 2px 5px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-subtle);
+}
+
+.composer-busy-menu-item[data-highlighted] .composer-busy-menu-icon,
+.composer-busy-menu-item:hover:not(:disabled) .composer-busy-menu-icon {
+  color: var(--fg);
+}
+
+.composer-busy-menu-item.helm-dropdown-item-danger .composer-busy-menu-icon,
+.composer-busy-menu-item.helm-dropdown-item-danger .composer-busy-menu-title {
+  color: var(--err);
+}
+
+.composer-busy-menu-item.helm-dropdown-item-danger[data-highlighted],
+.composer-busy-menu-item.helm-dropdown-item-danger:hover:not(:disabled) {
+  background: var(--err-bg);
+}
 .composer-extras > summary { list-style: none; }
 .composer-extras > summary::-webkit-details-marker { display: none; }
 .composer-extras-popover .composer-pill-item { display: flex; padding: 4px; }
 .composer-extras-popover .composer-pill-item > * { max-width: 100%; }
-.composer-popover.composer-model-popover { width: min(360px, calc(100% - 12px)); }
+.composer-popover.composer-model-popover {
+  width: min(500px, calc(100vw - 24px));
+  max-height: min(440px, 60dvh);
+}
+.composer-model-popover .popover-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  white-space: nowrap;
+}
+.composer-model-popover .popover-item .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .composer-popover.composer-extras-popover { width: min(280px, calc(100% - 12px)); }
 
 .composer-popover {
@@ -4454,4 +4635,97 @@ textarea.textarea,
     width: 100vw;
     border-left: none;
   }
+}
+
+/* 产物预览：插件预览器选择与插件视图容器 */
+.artifact-previewer-select {
+  width: 132px;
+  flex-shrink: 0;
+}
+
+.artifact-plugin-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.artifact-plugin-view > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ============================================================================
+ * composerCompleter 补全浮层（Radix Popover 锚定在 .composer-box 上方）
+ * ========================================================================== */
+.composer-completion-popover {
+  width: min(420px, calc(100vw - 16px));
+  max-height: 300px;
+  overflow-y: auto;
+}
+.composer-completion-list {
+  display: flex;
+  flex-direction: column;
+}
+.composer-completion-state {
+  cursor: default;
+  color: var(--fg-muted);
+  font-size: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.composer-completion-error {
+  color: var(--danger, var(--fg-muted));
+}
+
+/* Profile 详情抽屉：空白会话引导词编辑区块（紧凑列表，label/prompt 增删）。 */
+.profile-starters-header { justify-content: space-between; }
+.profile-starters-list { display: flex; flex-direction: column; gap: 8px; }
+.profile-starters-empty { padding: 2px 0; }
+.profile-starter-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 32px 8px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.profile-starter-fields { display: flex; flex-direction: column; gap: 6px; }
+.profile-starter-label { font-size: 13px; }
+.profile-starter-prompt { font-size: 13px; line-height: 1.5; resize: vertical; min-height: 44px; }
+.profile-starter-error { font-size: 11px; color: var(--danger); }
+.profile-starter-remove { position: absolute; top: 6px; right: 4px; }
+.profile-starter-add { margin-top: 6px; }
+
+/* ConversationTimeline：空白会话引导词按钮组（仅回填草稿，不直接发送）。 */
+.timeline-starters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 12px; }
+.timeline-starter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  text-align: left;
+}
+.timeline-starter-btn:hover {
+  background: var(--nav-active-bg);
+  border-color: var(--fg-muted);
+}
+.timeline-starter-btn .timeline-starter-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 680px) {
+  .profile-starter-item { padding: 6px 28px 6px 6px; }
+  .profile-starter-prompt { font-size: 13px; }
+  .timeline-starters { gap: 6px; }
+  .timeline-starter-btn { font-size: 12px; }
 }

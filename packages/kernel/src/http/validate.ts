@@ -3,6 +3,12 @@
  * 不用 `as` 断言充当校验；非法输入统一 400 validation_error。
  */
 import { HelmError } from '@helm/protocol'
+import {
+  PROFILE_STARTERS_MAX_ITEMS,
+  PROFILE_STARTER_LABEL_MAX_LENGTH,
+  PROFILE_STARTER_PROMPT_MAX_LENGTH,
+  type ProfileStarterPrompt,
+} from '@helm/protocol'
 import type {
   ConversationInit,
   ConversationPatch,
@@ -332,8 +338,9 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
     throw new ValidationError('managedByPlugin 需为非空插件 ID')
   }
   const humanSelectable = optionalBoolean(body, 'humanSelectable')
+  const starters = parseProfileStarters(body.starters)
   const system = optionalString(body, 'system', { maxLength: 512 * 1024 })
-  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'thinkingLevel', 'nodeId', 'cwd', 'tags', 'skills', 'runtime', 'managedByPlugin', 'humanSelectable', 'system']))
+  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'thinkingLevel', 'nodeId', 'cwd', 'tags', 'skills', 'starters', 'runtime', 'managedByPlugin', 'humanSelectable', 'system']))
   const nodeId = optionalProfileNodeId(body)
   const cwd = optionalString(body, 'cwd')
   if (cwd !== undefined && cwd.length === 0) throw new ValidationError('cwd 需为非空字符串')
@@ -356,8 +363,45 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   if (skills !== undefined) profile.skills = skills
   if (managedByPlugin !== undefined) profile.managedByPlugin = managedByPlugin
   if (humanSelectable !== undefined) profile.humanSelectable = humanSelectable
+  if (starters !== undefined) profile.starters = starters
   if (system !== undefined) profile.system = system
   return profile
+}
+
+/** Profile starters：与 ProfileService.validateProfileInput 同规的边界校验
+ * （不在 HTTP 层丢弃非法项——服务层只会拒绝，不会修正）。 */
+function parseProfileStarters(raw: unknown): ProfileStarterPrompt[] | undefined {
+  if (raw === undefined) return undefined
+  if (!Array.isArray(raw)) throw new ValidationError('starters 需为 { label, prompt } 对象数组')
+  if (raw.length > PROFILE_STARTERS_MAX_ITEMS) {
+    throw new ValidationError(`starters 最多 ${PROFILE_STARTERS_MAX_ITEMS} 项`)
+  }
+  const pointLength = (text: string): number => {
+    let count = 0
+    for (const _ of text) count += 1
+    return count
+  }
+  return raw.map((item, index) => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw new ValidationError(`starters[${index}] 需为 { label, prompt } 对象`)
+    }
+    if (Object.keys(item).some((key) => key !== 'label' && key !== 'prompt')) {
+      throw new ValidationError(`starters[${index}] 仅接受 label 与 prompt 字段`)
+    }
+    const { label, prompt } = item as Record<string, unknown>
+    if (typeof label !== 'string') throw new ValidationError(`starters[${index}].label 需为字符串`)
+    if (typeof prompt !== 'string') throw new ValidationError(`starters[${index}].prompt 需为字符串`)
+    const trimmed = label.trim()
+    if (pointLength(trimmed) === 0) throw new ValidationError(`starters[${index}].label 去除首尾空白后不能为空`)
+    if (pointLength(trimmed) > PROFILE_STARTER_LABEL_MAX_LENGTH) {
+      throw new ValidationError(`starters[${index}].label 最多 ${PROFILE_STARTER_LABEL_MAX_LENGTH} 个 Unicode 码点`)
+    }
+    if (prompt.trim() === '') throw new ValidationError(`starters[${index}].prompt 不能是纯空白`)
+    if (pointLength(prompt) > PROFILE_STARTER_PROMPT_MAX_LENGTH) {
+      throw new ValidationError(`starters[${index}].prompt 最多 ${PROFILE_STARTER_PROMPT_MAX_LENGTH} 个 Unicode 码点`)
+    }
+    return { label: trimmed, prompt }
+  })
 }
 
 /** Profile 可选 nodeId：非空 + 节点 ID 格式。 */

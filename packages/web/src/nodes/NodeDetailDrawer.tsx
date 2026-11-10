@@ -18,6 +18,7 @@ import {
   DialogPortal,
   DialogTitle,
 } from '../ui/Dialog.js'
+import { PluginSlot } from '../ui/PluginSlot.js'
 import {
   formatNodePlatformArch,
   getNodeDisplayName,
@@ -25,6 +26,7 @@ import {
   isNodeOnline,
   type NodeInfo,
 } from './node-center-model.js'
+import { NODE_DETAIL_SECTION_SLOT } from '@helm/protocol'
 
 export interface NodeDetailDrawerProps {
   node: NodeInfo | null
@@ -46,6 +48,8 @@ export interface NodeDetailDrawerProps {
  * - 节点健康体检：体检触发按钮、CPU 负载、内存与磁盘容量图表、版本诊断；
  * - 远程节点接入与命令：签发接入令牌（调用 nodesApi.issueToken）、一键复制接入命令行及复制反馈；
  * - 注册工具能力列表：bash / read / write / edit 矢量能力清单；
+ * - 插件扩展子插槽：已有节点在系统概览后挂载 builtin:node/detail-section
+ *   （其他插件注入节点维度扩展区块；仅传节点公开快照，不含接入令牌等凭据）；
  * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
  */
 export function NodeDetailDrawer({
@@ -271,6 +275,20 @@ export function NodeDetailDrawer({
                       <span className="mono selectable form-grid-value">{uptime}</span>
                     </div>
                   </section>
+                )}
+
+                {/* 1.5 插件扩展子插槽（其他插件向 builtin:node/detail-section 注入节点扩展区块） */}
+                {!isNew && node && (
+                  <PluginSlot
+                    ownerPluginId="builtin:node"
+                    name={NODE_DETAIL_SECTION_SLOT}
+                    slotProps={{
+                      nodeId: node.id,
+                      isLocal,
+                      isOnline,
+                      isNew: false,
+                    }}
+                  />
                 )}
 
                 {/* 2. 节点健康体检 */}

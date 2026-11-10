@@ -47,6 +47,9 @@ export interface ConversationSummary {
   status: ConversationStatus
   /** 零 Token 实时动作摘要，如 'bash: pnpm test' 或 'thinking…'。 */
   doing?: string
+  /** 当前未清除失败的诊断摘要（如 'model_error: <detail>'）；仅在 status === 'error' 时出现，
+   * 随下一回合开始（run 重新启动）自动清除。 */
+  lastError?: string
   /** 任何状态/doing/Ask 变化均单调递增（SSE 水位线与 CAS 校验）。 */
   stateChangeSeq: number
   /** 每次回合结束单调递增。 */

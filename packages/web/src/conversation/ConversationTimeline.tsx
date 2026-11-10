@@ -5,6 +5,7 @@ import type {
   ConversationEntry,
   ConversationLive,
   ConversationSummary,
+  ProfileStarterPrompt,
   ToolViewSpec,
 } from '@helm/protocol'
 import { artifactsApi, conversationsApi } from '../lib/api.js'
@@ -20,6 +21,7 @@ import {
   collectSiblingCalls,
   filterRewoundEntries,
   isAssistantTurnBusy,
+  lastEditableHumanInput,
   toolSummaryText,
   type AssistantTurn,
   type DividerItem,
@@ -42,6 +44,10 @@ export interface ConversationTimelineProps {
   sendingPending?: boolean
   /** 请求将文本回填 Composer 并聚焦（编辑并重发；可携带历史 entryId 与附件）。 */
   onRequestEdit: (target: EditRequestTarget) => void
+  /** 点击空白会话引导词：仅请求回填草稿，不是历史编辑。 */
+  onRequestStarter?: (text: string) => void
+  /** 当前会话 Profile 的引导词列表（空列表/未定义不渲染按钮）。 */
+  starters?: ProfileStarterPrompt[]
 }
 
 // ---------------------------------------------------------------------------
@@ -916,6 +922,50 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
 }
 
 // ---------------------------------------------------------------------------
+// 回合失败诊断（当前未清除失败的内联展示；随下一回合开始自动消失）
+// ---------------------------------------------------------------------------
+
+/** 失败回合内联诊断块：内容来自 ConversationSummary.lastError（同一权威状态源），
+ * 不新增持久化 timeline item；lastError 空缺时只给明确通用文案，绝不编造详情。 */
+function TurnErrorNotice({
+  conversation,
+  detailEntries,
+  onRequestEdit,
+}: {
+  conversation: ConversationSummary
+  detailEntries: ReadonlyArray<ConversationEntry>
+  onRequestEdit: (target: EditRequestTarget) => void
+}) {
+  // 最近一条可编辑的人类输入：复用与 Composer ↑ 相同的安全解析（校验 entryId、
+  // 不跨 reset 边界、复用已有 attachments）；无法可靠定位则不提供快捷操作，
+  // 绝不误编辑旧消息。
+  const editTarget = useMemo(() => lastEditableHumanInput(detailEntries), [detailEntries])
+  return (
+    <div className="jr-callout jr-callout-err" role="alert" aria-label="本回合失败">
+      <HelmIcon name="alert-triangle" size={12} />
+      <span className="callout-text">
+        本回合失败：{conversation.lastError?.trim() || '模型或服务请求未成功，未产生回答。'}
+        {editTarget !== undefined ? (
+          <>
+            {' '}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              title="编辑并重发最近一条消息"
+              aria-label="编辑并重发最近一条消息"
+              onClick={() => onRequestEdit(editTarget)}
+            >
+              <HelmIcon name="edit" size={12} />
+              编辑并重发
+            </button>
+          </>
+        ) : null}
+      </span>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // 主时间线
 // ---------------------------------------------------------------------------
 
@@ -925,6 +975,8 @@ export function ConversationTimeline({
   live,
   sendingPending = false,
   onRequestEdit,
+  onRequestStarter,
+  starters,
 }: ConversationTimelineProps) {
   const store = useHelmStore()
   const [loadingOlder, setLoadingOlder] = useState(false)
@@ -1032,6 +1084,22 @@ export function ConversationTimeline({
 
   const loading = store.conversationDetails[conversation.id] === undefined
 
+  // 引导词仅出现在「确实空白」的会话：历史已加载完且无更早分页、无在途
+  // 发送/运行、无排队输入与待审批。任一不满足都不渲染，避免误判。
+  const conversationDetail = store.conversationDetails[conversation.id]
+  const startersVisible =
+    starters !== undefined &&
+    starters.length > 0 &&
+    onRequestStarter !== undefined &&
+    !loading &&
+    conversationDetail?.nextCursor === undefined &&
+    !isWorking &&
+    conversation.status !== 'blocked' &&
+    !sendingPending &&
+    (live?.queuedInputs?.length ?? 0) === 0 &&
+    items.length === 0 &&
+    resolvedAsks.length === 0
+
   return (
     <div ref={scrollRef} className="timeline-scroll">
       {store.conversationDetails[conversation.id]?.nextCursor && (
@@ -1057,6 +1125,22 @@ export function ConversationTimeline({
         <div className="timeline-empty-state">
           <HelmIcon name="message-square" size={22} />
           <span>向助理描述目标，或从左侧选择会话开始</span>
+        </div>
+      ) : null}
+      {startersVisible ? (
+        <div className="timeline-starters">
+          {starters.map((starter, index) => (
+            <button
+              key={`starter-${index}-${starter.label}`}
+              type="button"
+              className="timeline-starter-btn"
+              title={starter.prompt}
+              onClick={() => onRequestStarter?.(starter.prompt)}
+            >
+              <HelmIcon name="corner-down-right" size={11} />
+              <span className="timeline-starter-label">{starter.label}</span>
+            </button>
+          ))}
         </div>
       ) : null}
       <div ref={innerRef} className="timeline-inner">
@@ -1131,6 +1215,9 @@ export function ConversationTimeline({
         {resolvedAsks.map(({ ask, status }) => (
           <ResolvedAskRow key={`ask:${ask.id}`} ask={ask} status={status} />
         ))}
+        {conversation.status === 'error' ? (
+          <TurnErrorNotice conversation={conversation} detailEntries={detailEntries} onRequestEdit={onRequestEdit} />
+        ) : null}
       </div>
       <div ref={bottomRef} className="timeline-scroll-anchor" />
     </div>

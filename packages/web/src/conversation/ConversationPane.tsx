@@ -52,7 +52,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const [titleDraft, setTitleDraft] = useState('')
   const [actionPending, setActionPending] = useState<string | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
-  const [prefill, setPrefill] = useState<{ text: string; entryId?: number; attachments?: ConversationAttachmentRef[]; tick: number } | null>(null)
+  const [prefill, setPrefill] = useState<{ text: string; entryId?: number; attachments?: ConversationAttachmentRef[]; tick: number; onlyIfEmpty?: boolean } | null>(null)
   const [sendingInFlight, setSendingInFlight] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'reset' | 'delete' | null>(null)
   const moreMenuRef = useRef<HTMLSpanElement | null>(null)
@@ -150,6 +150,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   }
 
   const profile = store.profiles.find((p) => p.id === conversation.profileId)
+  const profileStarters = profile !== undefined && profile.starters !== undefined && profile.starters.length > 0 ? profile.starters : undefined
   const enabledPluginIds = new Set(store.plugins.filter((p) => p.enabled).map((p) => p.id))
   const canCreateThread = profile !== undefined &&
     isHumanSelectableProfile(profile, enabledPluginIds) &&
@@ -170,6 +171,11 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const requestEdit = (target: EditRequestTarget): void => {
     // prefill 绑定会话 id：即使未来 Pane 复用不重挂载，旧会话的编辑目标也不会注入新会话 Composer
     setPrefill(target.text.trim() === '' && target.entryId === undefined ? null : { ...target, tick: Date.now() })
+  }
+
+  // 空白会话引导词：仅回填草稿（onlyIfEmpty 交 Composer 原子保护，非空草稿不覆盖）
+  const requestStarter = (text: string): void => {
+    setPrefill({ text, tick: Date.now(), onlyIfEmpty: true })
   }
 
   const toggleSplit = (): void => {
@@ -439,7 +445,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         {...(store.conversationLives[conversationId] !== undefined
           ? { live: store.conversationLives[conversationId] }
           : {})}
+        starters={profileStarters}
         onRequestEdit={requestEdit}
+        onRequestStarter={requestStarter}
       />
 
       <Composer key={`composer-${conversation.id}`} conversation={conversation} prefill={prefill} onSendingChange={setSendingInFlight} />
