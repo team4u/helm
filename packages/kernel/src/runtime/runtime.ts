@@ -654,7 +654,6 @@ export class KernelRuntime {
     // 4) PluginHost：内核内创建并接入（app 只消费 runtime.plugins，不再自建）。
     //    config/credentials 分离持久经 HelmPluginConfigStore；损坏显式上抛。
     await this.pluginConfig.load()
-    const runtimeRef = this
     const host = new PluginHost({
       dataDir: this.dataDir,
       // 启动屏障：注册期只登记服务，全部插件注册完成后由 kernel.start()

@@ -15,8 +15,8 @@ import {
   PLUGIN_UI_METHOD_NAMES,
   RESERVED_SLASH_COMMANDS,
   PLUGIN_HOOK_NAMES,
+  type SkillAsset,
 } from '@helm/protocol'
-import type { BuiltinSkillAsset } from '../../services/index.js'
 
 /** 托管本技能资产与自举 Profile 的插件 ID（SKILL.md frontmatter managedByPlugin 值）。 */
 export const PROFILE_MANAGED_BY = 'builtin:profile'
@@ -108,8 +108,8 @@ export const HELM_CLI_SKILL_AND_PLUGIN_DEV_MD = renderSkillTemplate(
   skillVars,
 )
 
-/** 汇总资产：id + SKILL.md + 3 个 references。SkillService.ensureSkill 受管覆盖同步。 */
-export const HELM_CLI_SKILL_ASSET: BuiltinSkillAsset = {
+/** 汇总资产：id + SKILL.md + 3 个 references；由宿主按受管技能契约同步。 */
+export const HELM_CLI_SKILL_ASSET: SkillAsset = {
   id: HELM_CLI_SKILL_ID,
   skillMd: HELM_CLI_SKILL_MD,
   references: {
