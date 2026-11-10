@@ -928,6 +928,44 @@ textarea {
   opacity: 1;
 }
 
+/* 消息底部栏（时间元数据 + 悬停操作条） */
+.msg-ai-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  width: fit-content;
+  align-self: flex-start;
+}
+
+.msg-human-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-height: 22px;
+  width: fit-content;
+  align-self: flex-end;
+}
+
+/* 消息时间与耗时元数据（极简无 Emoji，极淡浅灰） */
+.msg-time-meta {
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.msg-time-sep {
+  opacity: 0.6;
+}
+
 /* 搜索定位闪烁高亮 */
 @keyframes entryPulse {
   0% { background: var(--accent-bg); }

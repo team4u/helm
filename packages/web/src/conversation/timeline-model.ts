@@ -90,6 +90,12 @@ export interface AssistantTurn {
   segments: AssistantSegment[]
   /** true = 已与 ConversationLive 合并的进行中回合。 */
   live: boolean
+  /** 回合开始时间戳（毫秒）；未采集时省略。 */
+  startedAt?: number
+  /** 回合结算时间戳（毫秒）；未结算或未采集时省略。 */
+  settledAt?: number
+  /** 回合总耗时（毫秒）；未采集时省略。 */
+  durationMs?: number
 }
 
 export interface HumanInputItem {
@@ -106,6 +112,8 @@ export interface HumanInputItem {
   queuedMode?: 'steer' | 'followUp'
   /** true = 无前置 helm.input 的裸 pi.user 兜底展示。 */
   fallback: boolean
+  /** 消息创建/发送时间戳（毫秒）；未知或缺省时省略。 */
+  createdAt?: number
 }
 
 export interface DividerItem {
@@ -415,6 +423,9 @@ interface RawSegment {
 interface TurnAcc {
   entryIds: string[]
   segments: RawSegment[]
+  startedAt?: number
+  settledAt?: number
+  durationMs?: number
 }
 
 function newTurn(): TurnAcc {
@@ -524,12 +535,22 @@ function flushTurn(acc: TurnAcc | null, items: TimelineItem[], live: boolean): v
   if (segments.length === 0 && acc.entryIds.length === 0) return
   if (segments.length === 0) return
   const prevKey = items.length > 0 ? items[items.length - 1]!.key : 'root'
+  const durationMs =
+    acc.durationMs !== undefined
+      ? acc.durationMs
+      : acc.startedAt !== undefined && acc.settledAt !== undefined && acc.settledAt > acc.startedAt
+        ? acc.settledAt - acc.startedAt
+        : undefined
+
   items.push({
     kind: 'assistant',
     key: `turn:${prevKey}`,
     entryIds: [...acc.entryIds],
     segments,
     live,
+    ...(acc.startedAt !== undefined ? { startedAt: acc.startedAt } : {}),
+    ...(acc.settledAt !== undefined ? { settledAt: acc.settledAt } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
   })
 }
 
@@ -537,40 +558,72 @@ function flushTurn(acc: TurnAcc | null, items: TimelineItem[], live: boolean): v
 function appendAssistantEntry(acc: TurnAcc, entry: ConversationEntry, opts: BuildTimelineOptions): void {
   acc.entryIds.push(entry.id)
   const model = entry.model
-  if (!Array.isArray(model)) return
-  for (let mi = 0; mi < model.length; mi++) {
-    const msg = model[mi]
-    if (msg === null || typeof msg !== 'object') continue
-    const content = (msg as { content?: unknown }).content
-    if (!Array.isArray(content)) continue
-    for (let bi = 0; bi < content.length; bi++) {
-      const block = content[bi]
-      if (block === null || typeof block !== 'object') continue
-      const b = block as { type?: unknown; text?: unknown; thinking?: unknown; id?: unknown; callId?: unknown; name?: unknown; arguments?: unknown; input?: unknown }
-      const key = `${entry.id}:${mi}:${bi}`
-      if (b.type === 'thinking') {
-        if (typeof b.thinking === 'string' && b.thinking.trim() !== '') {
-          acc.segments.push({ kind: 'thinking', key: `think:${key}`, text: b.thinking })
-        }
-        continue
+  if (Array.isArray(model)) {
+    for (let mi = 0; mi < model.length; mi++) {
+      const msg = model[mi]
+      if (msg === null || typeof msg !== 'object') continue
+      const m = msg as {
+        role?: unknown
+        timestamp?: unknown
+        durationMs?: unknown
+        content?: unknown
       }
-      if (b.type === 'text') {
-        if (typeof b.text === 'string' && b.text !== '') {
-          acc.segments.push({ kind: 'text', key: `text:${key}`, text: b.text })
-        }
-        continue
+
+      const msgTimestamp =
+        typeof m.timestamp === 'number' && Number.isFinite(m.timestamp) && m.timestamp > 0
+          ? m.timestamp
+          : typeof entry.createdAt === 'number' && Number.isFinite(entry.createdAt) && entry.createdAt > 0
+            ? entry.createdAt
+            : undefined
+
+      const msgDurationMs =
+        typeof m.durationMs === 'number' && Number.isFinite(m.durationMs) && m.durationMs >= 0
+          ? m.durationMs
+          : undefined
+
+      if (msgTimestamp !== undefined) {
+        acc.startedAt = acc.startedAt !== undefined ? Math.min(acc.startedAt, msgTimestamp) : msgTimestamp
+        const settled = msgTimestamp + (msgDurationMs ?? 0)
+        acc.settledAt = acc.settledAt !== undefined ? Math.max(acc.settledAt, settled) : settled
       }
-      if (b.type === 'toolCall' || b.type === 'tool_use') {
-        const callId = typeof b.id === 'string' ? b.id : typeof b.callId === 'string' ? b.callId : undefined
-        const name = typeof b.name === 'string' ? b.name : '(unknown tool)'
-        const input = 'arguments' in b ? b.arguments : b.input
-        acc.segments.push({
-          kind: 'tool',
-          key: `tool:${callId ?? key}`,
-          tool: makeToolTrace(`tool:${callId ?? key}`, name, { callId, input, startedAt: entry.createdAt, toolViews: opts.toolViews }),
-        })
+      if (msgDurationMs !== undefined) {
+        acc.durationMs = (acc.durationMs ?? 0) + msgDurationMs
+      }
+
+      const content = m.content
+      if (!Array.isArray(content)) continue
+      for (let bi = 0; bi < content.length; bi++) {
+        const block = content[bi]
+        if (block === null || typeof block !== 'object') continue
+        const b = block as { type?: unknown; text?: unknown; thinking?: unknown; id?: unknown; callId?: unknown; name?: unknown; arguments?: unknown; input?: unknown }
+        const key = `${entry.id}:${mi}:${bi}`
+        if (b.type === 'thinking') {
+          if (typeof b.thinking === 'string' && b.thinking.trim() !== '') {
+            acc.segments.push({ kind: 'thinking', key: `think:${key}`, text: b.thinking })
+          }
+          continue
+        }
+        if (b.type === 'text') {
+          if (typeof b.text === 'string' && b.text !== '') {
+            acc.segments.push({ kind: 'text', key: `text:${key}`, text: b.text })
+          }
+          continue
+        }
+        if (b.type === 'toolCall' || b.type === 'tool_use') {
+          const callId = typeof b.id === 'string' ? b.id : typeof b.callId === 'string' ? b.callId : undefined
+          const name = typeof b.name === 'string' ? b.name : '(unknown tool)'
+          const input = 'arguments' in b ? b.arguments : b.input
+          acc.segments.push({
+            kind: 'tool',
+            key: `tool:${callId ?? key}`,
+            tool: makeToolTrace(`tool:${callId ?? key}`, name, { callId, input, startedAt: entry.createdAt, toolViews: opts.toolViews }),
+          })
+        }
       }
     }
+  } else if (typeof entry.createdAt === 'number' && Number.isFinite(entry.createdAt) && entry.createdAt > 0) {
+    acc.startedAt = acc.startedAt !== undefined ? Math.min(acc.startedAt, entry.createdAt) : entry.createdAt
+    acc.settledAt = acc.settledAt !== undefined ? Math.max(acc.settledAt, entry.createdAt) : entry.createdAt
   }
 }
 
@@ -699,6 +752,12 @@ export function buildTimelineItems(
   const pushHuman = (entry: ConversationEntry, data: HelmInputData, fallback: boolean): void => {
     flushTurn(turn, items, false)
     turn = null
+    const createdAt =
+      typeof data.createdAt === 'number' && Number.isFinite(data.createdAt) && data.createdAt > 0
+        ? data.createdAt
+        : typeof entry.createdAt === 'number' && Number.isFinite(entry.createdAt) && entry.createdAt > 0
+          ? entry.createdAt
+          : undefined
     items.push({
       kind: 'human',
       key: data.id !== undefined ? `human:id:${data.id}` : `human:${entry.id}`,
@@ -708,6 +767,7 @@ export function buildTimelineItems(
       origin: data.origin,
       ...(data.meta !== undefined ? { meta: data.meta } : {}),
       ...(data.attachments !== undefined && data.attachments.length > 0 ? { attachments: data.attachments } : {}),
+      ...(createdAt !== undefined ? { createdAt } : {}),
       fallback,
     })
   }
@@ -819,6 +879,9 @@ export function buildTimelineItems(
       text: q.text,
       origin: q.origin === 'agent' || q.origin === 'trigger' ? q.origin : 'human',
       ...(Array.isArray(q.attachments) && q.attachments.length > 0 ? { attachments: q.attachments } : {}),
+      ...(typeof q.createdAt === 'number' && Number.isFinite(q.createdAt) && q.createdAt > 0
+        ? { createdAt: q.createdAt }
+        : {}),
       fallback: false,
       queuedMode: q.mode,
     })
