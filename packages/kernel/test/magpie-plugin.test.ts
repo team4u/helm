@@ -3,7 +3,9 @@
  *
  * 组合纪律：真实 PluginHost + 真实 providers 挂载端口（service.start 前
  * 注册 / stop 后注销，与 runtime 相同生命周期）+ 真实 pi-ai Models
- * （createModels）；受控 fetchImpl（不触真实网络）与受控 runMagpieCli 注入。
+ * （createModels）；零参工厂（无 DI 后门）：网络经 mock.method(globalThis,
+ * 'fetch')（结束恢复），本机 CLI 经 PATH 前置真实可执行 fixture（execFile
+ * 公开环境端口解析），绝不触真实外网 / 真实 magpie。
  *
  * 诚实性重点用例：
  * - provider.refreshModels 网络失败一律 throw → models.refresh errors['magpie']
@@ -18,9 +20,9 @@
  *
  * runner: tsx --test；每项显式 timeout: 60_000 防死锁；命令加总超时。
  */
-import { test, beforeEach, afterEach } from 'node:test'
+import { mock, test, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -95,7 +97,7 @@ const CLI_GROUP_SHOW = [
 ].join('\n')
 
 // ---------------------------------------------------------------------------
-// 受控 fetch
+// 受控网络（mock.method(globalThis,'fetch')，结束恢复）与真实 CLI fixture
 // ---------------------------------------------------------------------------
 
 interface FakeBackend {
@@ -108,7 +110,8 @@ interface FakeBackend {
   gateModels?: Promise<void>
 }
 
-function makeFetch(backends: Map<string, FakeBackend>) {
+/** mock globalThis.fetch：按 origin 分发受控后端（未知 origin 显式 unreachable）。 */
+function installFetchMock(backends: Map<string, FakeBackend>): { calls: string[]; restore(): void } {
   const calls: string[] = []
   const impl: typeof fetch = async (input) => {
     const url = typeof input === 'string' ? input : (input as URL).toString()
@@ -132,7 +135,33 @@ function makeFetch(backends: Map<string, FakeBackend>) {
     }
     return new Response('not found', { status: 404 })
   }
-  return { impl, calls }
+  const mocked = mock.method(globalThis, 'fetch', impl)
+  return { calls, restore: () => mocked.mock.restore() }
+}
+
+/**
+ * PATH 前置真实可执行 magpie fixture：node 脚本回放固定输出并把每次调用
+ * 参数追加到日志文件（execFile 经 PATH 解析，与生产同一公开环境端口）。
+ */
+function makeCliFixture(binDir: string): { binDir: string; logPath: string } {
+  mkdirSync(binDir, { recursive: true })
+  const logPath = join(binDir, 'cli-invocations.log')
+  const script = [
+    '#!/usr/bin/env node',
+    `const GROUPS = ${JSON.stringify(CLI_GROUPS)}`,
+    `const SHOW = ${JSON.stringify(CLI_GROUP_SHOW)}`,
+    'const args = process.argv.slice(2)',
+    'const log = process.env.HELM_MAGPIE_CLI_LOG',
+    "if (log) require('node:fs').appendFileSync(log, JSON.stringify(args) + '\\n')",
+    "if (args[0] === 'groups') { process.stdout.write(GROUPS + '\\n'); process.exit(0) }",
+    "if (args[0] === 'group') { process.stdout.write(SHOW + '\\n'); process.exit(0) }",
+    "process.stderr.write('unknown command ' + args.join(' '))",
+    'process.exit(1)',
+  ].join('\n')
+  const bin = join(binDir, 'magpie')
+  writeFileSync(bin, script)
+  chmodSync(bin, 0o755)
+  return { binDir, logPath }
 }
 
 // ---------------------------------------------------------------------------
@@ -223,9 +252,9 @@ interface TestEnv {
   models: ReturnType<typeof createModels>
   fetchState: { calls: string[] }
   backends: Map<string, FakeBackend>
-  refreshCalls: Array<{ allowNetwork?: boolean; force?: boolean }>
+  refreshCalls: Array<{ providers?: string[]; allowNetwork?: boolean; force?: boolean }>
+  /** 真实 CLI fixture 的调用参数序列（读日志文件）。 */
   cliRuns: Array<readonly string[]>
-  cliResponse: (args: readonly string[]) => { ok: boolean; stdout?: string; error?: string }
   host: PluginHost
   config: MemoryConfigStore
   setRefreshError(error: string | undefined): void
@@ -243,8 +272,21 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
   const backends = new Map<string, FakeBackend>([
     [new URL(DEFAULT_MAGPIE_ROOT).origin, options.backendAtDefault ?? { models: CATALOG, quotas: QUOTAS, trace: TRACE }],
   ])
-  const { impl, calls } = makeFetch(backends)
-  const fetchCalls: string[] = calls
+  const fetchMock = installFetchMock(backends)
+  const fetchCalls = fetchMock.calls
+  const { binDir, logPath } = makeCliFixture(join(dataDir, 'bin'))
+  // PATH 前置 fixture bin：execFile('magpie') 解析到受控脚本（公开环境端口，
+  // 无 DI 后门）；调用记录经 HELM_MAGPIE_CLI_LOG 追加到日志文件。
+  const savedPath = process.env.PATH
+  process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
+  process.env.HELM_MAGPIE_CLI_LOG = logPath
+  const readCliRuns = (): Array<readonly string[]> => {
+    try {
+      return readFileSync(logPath, 'utf8').split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l) as string[])
+    } catch {
+      return []
+    }
+  }
   const config = new MemoryConfigStore()
   const docs = new MemoryDocStore()
   const refreshResult: { errors: Record<string, string> } = { errors: {} }
@@ -255,50 +297,46 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
     fetchState: { calls: fetchCalls },
     refreshCalls: [],
     cliRuns: [],
-    cliResponse: (args) => {
-      env.cliRuns.push(args)
-      if (args[0] === 'groups') return { ok: true, stdout: CLI_GROUPS }
-      if (args[0] === 'group') return { ok: true, stdout: CLI_GROUP_SHOW }
-      return { ok: false, error: `unknown command ${args.join(' ')}` }
-    },
     config,
     setRefreshError(error) {
       refreshResult.errors = error === undefined ? {} : { magpie: error }
     },
     host: undefined as unknown as PluginHost,
   }
-  // 组合层 refreshProviderModels 端口：真实 models.refresh({ providers:['magpie'] })
-  // 的等价包装（记录调用 + 返回 errors 映射；注入式失败可覆盖）。
-  const refreshProviderModels = async (opts?: { allowNetwork?: boolean; force?: boolean }) => {
+  Object.defineProperty(env, 'cliRuns', {
+    get: () => readCliRuns(),
+  })
+  // 宿主 refreshModels 后端端口：真实 models.refresh({ providers:['magpie'] })
+  // 同链路（记录调用 + 返回 errors 映射；注入式失败可覆盖）。
+  const hostRefreshModels = async (opts?: { providers?: string[]; allowNetwork?: boolean; force?: boolean }) => {
     env.refreshCalls.push({ ...opts })
     if (Object.keys(refreshResult.errors).length > 0) {
-      return { errors: { ...refreshResult.errors } }
+      return { providers: opts?.providers ?? [], aborted: false, errors: { ...refreshResult.errors }, models: [], providerCatalog: [] }
     }
     const result = await models.refresh({
       allowNetwork: opts?.allowNetwork ?? true,
       force: opts?.force,
-      providers: [MAGPIE_PROVIDER_ID],
+      providers: opts?.providers ?? [MAGPIE_PROVIDER_ID],
     })
     const errors: Record<string, string> = {}
     for (const [id, err] of result.errors) errors[id] = err instanceof Error ? err.message : String(err)
-    return { errors, modelCount: models.getModels(MAGPIE_PROVIDER_ID).length }
+    return { providers: opts?.providers ?? [MAGPIE_PROVIDER_ID], aborted: result.aborted, errors, models: [], providerCatalog: [] }
   }
   const host = new PluginHost({
     dataDir,
-    host: makeHostApi(options.hostApi),
+    host: makeHostApi({
+      ...(options.hostApi ?? {}),
+      refreshModels: hostRefreshModels as never,
+      get isClosing(): boolean {
+        return false
+      },
+    } as Partial<PluginHostBackend>),
     docs,
     config,
     providers: new ModelsProviderPort(models),
   })
   await host.register(
-    createMagpiePlugin({
-      refreshProviderModels,
-      fetchImpl: impl,
-      runMagpieCli: (args, o) => {
-        void o
-        return Promise.resolve(env.cliResponse(args))
-      },
-    }),
+    createMagpiePlugin(),
     { enabled: false },
   )
   env.host = host
@@ -306,6 +344,10 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
     try {
       await host.dispose()
     } finally {
+      fetchMock.restore()
+      if (savedPath === undefined) delete process.env.PATH
+      else process.env.PATH = savedPath
+      delete process.env.HELM_MAGPIE_CLI_LOG
       rmSync(dataDir, { recursive: true, force: true })
     }
   }
@@ -513,12 +555,18 @@ test('magpie6: 启用经 providers 端口挂载并拉取目录；停用后注销
 
 test('magpie7: 宿主缺 providers 端口时启用显式 501（不静默降级）', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-magpie-test-'))
-  const host = new PluginHost({ dataDir, host: makeHostApi(), docs: new MemoryDocStore(), config: new MemoryConfigStore() })
+  const backends = new Map<string, FakeBackend>()
+  const fetchMock = installFetchMock(backends)
   try {
-    await host.register(
-      createMagpiePlugin({ refreshProviderModels: async () => ({ errors: {} }), fetchImpl: async () => new Response('{}') }),
-      { enabled: false },
-    )
+    const host = new PluginHost({
+      dataDir,
+      host: makeHostApi({
+        refreshModels: (async () => ({ providers: [], aborted: false, errors: {}, models: [], providerCatalog: [] })) as never,
+      }),
+      docs: new MemoryDocStore(),
+      config: new MemoryConfigStore(),
+    })
+    await host.register(createMagpiePlugin(), { enabled: false })
     // 注册（停用探测）成功：只收集声明零挂载；启用阶段才显式拒绝
     assert.equal(host.list().find((p) => p.id === MAGPIE)!.enabled, false)
     await assert.rejects(
@@ -532,8 +580,9 @@ test('magpie7: 宿主缺 providers 端口时启用显式 501（不静默降级�
     )
     // 回滚后插件回到停用形态，可再次注册探测
     assert.equal(host.list().find((p) => p.id === MAGPIE)!.enabled, false)
-  } finally {
     await host.dispose()
+  } finally {
+    fetchMock.restore()
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
