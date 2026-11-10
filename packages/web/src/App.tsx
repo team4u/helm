@@ -8,12 +8,12 @@ import { WorkbenchDrawer } from './conversation/WorkbenchDrawer.js'
 import { HelmStoreProvider } from './lib/HelmStoreProvider.js'
 import { useHelmStore } from './lib/store-context.js'
 import { CommandPaletteModal } from './modals/CommandPaletteModal.js'
-import { NodesModal } from './modals/NodesModal.js'
-import { ProfileEditorModal } from './modals/ProfileEditorModal.js'
-import { ProviderAuthModal } from './modals/ProviderAuthModal.js'
-import { SkillViewerModal } from './modals/SkillViewerModal.js'
+import { ModelCenter } from './models/ModelCenter.js'
+import { NodeCenter } from './nodes/NodeCenter.js'
 import { PluginCenter } from './plugins/PluginCenter.js'
+import { ProfileCenter } from './profiles/ProfileCenter.js'
 import { ScreenHost } from './screens/ScreenHost.js'
+import { SkillCenter } from './skills/SkillCenter.js'
 import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
 import { ToastOverlay } from './shell/ToastOverlay.js'
@@ -128,6 +128,14 @@ function HelmShellInner() {
           />
         ) : store.primaryTarget.kind === 'plugins' ? (
           <PluginCenter key="primary-plugins" />
+        ) : store.primaryTarget.kind === 'profiles' ? (
+          <ProfileCenter key="primary-profiles" />
+        ) : store.primaryTarget.kind === 'skills' ? (
+          <SkillCenter key="primary-skills" />
+        ) : store.primaryTarget.kind === 'nodes' ? (
+          <NodeCenter key="primary-nodes" />
+        ) : store.primaryTarget.kind === 'models' ? (
+          <ModelCenter key="primary-models" />
         ) : null}
 
         {store.splitTarget && (
@@ -149,6 +157,14 @@ function HelmShellInner() {
               />
             ) : store.splitTarget.kind === 'plugins' ? (
               <PluginCenter key="split-plugins" isSplit onCloseSplit={store.closeSplit} />
+            ) : store.splitTarget.kind === 'profiles' ? (
+              <ProfileCenter key="split-profiles" isSplit onCloseSplit={store.closeSplit} />
+            ) : store.splitTarget.kind === 'skills' ? (
+              <SkillCenter key="split-skills" isSplit onCloseSplit={store.closeSplit} />
+            ) : store.splitTarget.kind === 'nodes' ? (
+              <NodeCenter key="split-nodes" isSplit onCloseSplit={store.closeSplit} />
+            ) : store.splitTarget.kind === 'models' ? (
+              <ModelCenter key="split-models" isSplit onCloseSplit={store.closeSplit} />
             ) : null}
           </div>
         )}
@@ -168,16 +184,6 @@ function HelmShellInner() {
       )}
 
       {store.activeModal?.kind === 'command-palette' && <CommandPaletteModal onClose={closeModal} />}
-      {store.activeModal?.kind === 'profile-editor' && (
-        <ProfileEditorModal initialProfileId={store.activeModal.profileId} onClose={closeModal} />
-      )}
-      {store.activeModal?.kind === 'provider-auth' && <ProviderAuthModal onClose={closeModal} />}
-      {store.activeModal?.kind === 'skill-viewer' && (
-        <SkillViewerModal initialSkillId={store.activeModal.skillId} onClose={closeModal} />
-      )}
-      {store.activeModal?.kind === 'nodes' && (
-        <NodesModal initialNodeId={store.activeModal.nodeId} onClose={closeModal} />
-      )}
       {store.activeModal?.kind === 'artifact-preview' && (
         <ArtifactPreviewModal
           artifactId={store.activeModal.artifactId}

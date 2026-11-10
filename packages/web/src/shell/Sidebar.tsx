@@ -1042,10 +1042,14 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
           <Tooltip content="角色 Profiles" side="top">
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'profiles' ? ' is-active' : ''}`}
               title="角色 Profiles"
               aria-label="角色 Profiles"
-              onClick={() => store.setActiveModal({ kind: 'profile-editor' })}
+              aria-current={store.primaryTarget.kind === 'profiles' ? 'page' : undefined}
+              onClick={() => {
+                store.openTarget({ kind: 'profiles' })
+                onClose?.()
+              }}
             >
               <HelmIcon name="bot" size={14} />
             </button>
@@ -1053,10 +1057,14 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
           <Tooltip content="模型与凭据" side="top">
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'models' ? ' is-active' : ''}`}
               title="模型与凭据"
               aria-label="模型与凭据"
-              onClick={() => store.setActiveModal({ kind: 'provider-auth' })}
+              aria-current={store.primaryTarget.kind === 'models' ? 'page' : undefined}
+              onClick={() => {
+                store.openTarget({ kind: 'models' })
+                onClose?.()
+              }}
             >
               <HelmIcon name="key" size={14} />
             </button>
@@ -1064,10 +1072,14 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
           <Tooltip content="技能库 Skills" side="top">
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'skills' ? ' is-active' : ''}`}
               title="技能库 Skills"
               aria-label="技能库 Skills"
-              onClick={() => store.setActiveModal({ kind: 'skill-viewer' })}
+              aria-current={store.primaryTarget.kind === 'skills' ? 'page' : undefined}
+              onClick={() => {
+                store.openTarget({ kind: 'skills' })
+                onClose?.()
+              }}
             >
               <HelmIcon name="sparkles" size={14} />
             </button>
@@ -1075,10 +1087,14 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
           <Tooltip content="计算节点 Nodes" side="top">
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'nodes' ? ' is-active' : ''}`}
               title="计算节点 Nodes"
               aria-label="计算节点 Nodes"
-              onClick={() => store.setActiveModal({ kind: 'nodes' })}
+              aria-current={store.primaryTarget.kind === 'nodes' ? 'page' : undefined}
+              onClick={() => {
+                store.openTarget({ kind: 'nodes' })
+                onClose?.()
+              }}
             >
               <HelmIcon name="network" size={14} />
             </button>
@@ -1090,7 +1106,10 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
               title="插件中心"
               aria-label="插件中心"
               aria-current={store.primaryTarget.kind === 'plugins' ? 'page' : undefined}
-              onClick={() => store.openTarget({ kind: 'plugins' })}
+              onClick={() => {
+                store.openTarget({ kind: 'plugins' })
+                onClose?.()
+              }}
             >
               <HelmIcon name="settings" size={14} />
             </button>

@@ -306,10 +306,9 @@ test('全局入口收敛：CommandPaletteModal.tsx 导航至 plugins', { timeout
   assert.doesNotMatch(cmdPaletteSrc, /setActiveModal\(\{\s*kind:\s*'plugin-settings'/)
 })
 
-test('全局入口收敛：ProviderCatalog.tsx 插件连接按钮导航至 plugins 目标', { timeout: 60_000 }, () => {
-  const catalogSrc = readFileSync(join(PKG_ROOT, 'src/modals/ProviderCatalog.tsx'), 'utf-8')
-  assert.match(catalogSrc, /openTarget\(\{\s*kind:\s*'plugins',\s*pluginId:\s*provider\.pluginId\s*\}\)/)
-  assert.doesNotMatch(catalogSrc, /setActiveModal\(\{\s*kind:\s*'plugin-settings'/)
+test('全局入口收敛：ProviderCatalog.tsx 已彻底物理删除', { timeout: 60_000 }, () => {
+  const catalogPath = join(PKG_ROOT, 'src/modals/ProviderCatalog.tsx')
+  assert.equal(existsSync(catalogPath), false, 'src/modals/ProviderCatalog.tsx 必须已被物理删除')
 })
 
 // ---------------------------------------------------------------------------

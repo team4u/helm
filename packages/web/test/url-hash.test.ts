@@ -472,53 +472,6 @@ test('仿真: 进入新建模式时仅弹窗仍是本类型才清深链子项 id
 const readSource = (relative: string): Promise<string> =>
   readFile(new URL(relative, import.meta.url), 'utf8')
 
-test('契约: 列表型 Modal 均消费共享决策模块且写回经守卫（仿真与实现同构）', { timeout: 60_000 }, async () => {
-  for (const [file, kind] of [
-    ['ProfileEditorModal.tsx', 'profile-editor'],
-    ['SkillViewerModal.tsx', 'skill-viewer'],
-    ['NodesModal.tsx', 'nodes'],
-  ] as const) {
-    const source = await readSource(`../src/modals/${file}`)
-    assert.match(source, /from '\.\/list-modal-selection\.js'/, `${file} 须导入共享决策模块`)
-    assert.match(
-      source,
-      new RegExp(`shouldSyncSelectionToStore\\([\\s\\S]{0,60}'${kind.replace(':', ':')}'`),
-      `${file} 守卫写回须使用自己的 kind`,
-    )
-    // 反模式禁止：不得再用 kind !== 自己 的 selected effect 强灌 store
-    assert.ok(
-      !new RegExp(`activeModal\\?\\.kind !== '${kind}'`).test(source),
-      `${file} 不得存在 kind !== 自己 且强制 setActiveModal 的 effect（回环源头）`,
-    )
-    // 深链跟随不写回：导入 deepLinkSelection 且其 effect 段内无 setActiveModal
-    if (source.includes('deepLinkSelection')) {
-      const effectStart = source.indexOf('外部深链')
-      const effectEnd = source.indexOf('}, [initial', effectStart)
-      const effect = source.slice(effectStart, effectEnd)
-      assert.ok(!effect.includes('setActiveModal'), `${file} 深链跟随帧不得写回 store（防回环）`)
-    }
-  }
-})
-
-test('契约: ProfileEditor 两个重复 fallback effect 已合并且 guard 仍在写回之前', { timeout: 60_000 }, async () => {
-  const source = await readSource('../src/modals/ProfileEditorModal.tsx')
-  assert.equal((source.match(/fallbackSelection\(/g) ?? []).length, 1, 'fallbackSelection 调用点应唯一（两个重复 effect 已合并）')
-  const selectFn = source.slice(source.indexOf('const selectProfile'), source.indexOf('const reloadFromDisk'))
-  assert.ok(selectFn.indexOf('guardUnsaved') < selectFn.indexOf('setActiveModal'), 'dirty guard 必须先于写回 store')
-})
-
-test('契约: SkillViewer 清单确实清空时作废加载世代，从未到达时保留深链', { timeout: 60_000 }, async () => {
-  const source = await readSource('../src/modals/SkillViewerModal.tsx')
-  assert.match(source, /hadSkillsRef/)
-  const fallbackEffect = source.slice(source.indexOf('// 列表兑底'), source.indexOf('}, [selectedId, skills])'))
-  assert.match(fallbackEffect, /loadGeneration\.current \+= 1/, '失效路径必须作废在途读取世代')
-})
-
-test('契约: Nodes 空列表不覆盖深链 initialNodeId', { timeout: 60_000 }, async () => {
-  const nodesSource = await readSource('../src/modals/NodesModal.tsx')
-  const fallbackEffect = nodesSource.slice(nodesSource.indexOf('// 列表为空'), nodesSource.indexOf('}, [selected, issuingMode, nodes, pendingNodeId, store])'))
-  assert.match(fallbackEffect, /nodes\.length > 0/)
-})
 test('契约: HelmStoreProvider 初始状态取自 Hash、监听外部变更、认证后才写回', { timeout: 60_000 }, async () => {
   const source = await readSource('../src/lib/HelmStoreProvider.tsx')
   // 初始状态从 window.location.hash 解析（含 SSR 安全守卫）

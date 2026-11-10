@@ -5,9 +5,8 @@ import { readFileSync } from 'node:fs'
 const mermaidSource = readFileSync(new URL('../src/conversation/MermaidPreviewModal.tsx', import.meta.url), 'utf8')
 const pluginCardSource = readFileSync(new URL('../src/plugins/PluginCard.tsx', import.meta.url), 'utf8')
 const pluginDrawerSource = readFileSync(new URL('../src/plugins/PluginDetailDrawer.tsx', import.meta.url), 'utf8')
-const providerCatalogSource = readFileSync(new URL('../src/modals/ProviderCatalog.tsx', import.meta.url), 'utf8')
+const modelDrawerSource = readFileSync(new URL('../src/models/ModelDetailDrawer.tsx', import.meta.url), 'utf8')
 const commandPaletteSource = readFileSync(new URL('../src/modals/CommandPaletteModal.tsx', import.meta.url), 'utf8')
-const providerAuthCss = readFileSync(new URL('../src/modals/provider-auth.css', import.meta.url), 'utf8')
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
 const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
 
@@ -47,24 +46,14 @@ test('插件卡片与抽屉：卡片头部支持自适应排版且标题与状�
   assert.match(pluginDrawerSource, /disabled=\{plugin\.locked \|\| toggling\}/)
 })
 
-test('供应商配置：消除小屏双层滚动陷阱，选中后切换视图并提供返回按钮', { timeout: 60_000 }, () => {
-  // ProviderCatalog 绑定 has-selection 状态与 onBack 回调
-  assert.match(providerCatalogSource, /const hasSelection = Boolean\(manual \|\| selected\)/)
-  assert.match(providerCatalogSource, /className=\{`provider-catalog\$\{hasSelection \? ' has-selection' : ''\}`\}/)
-  assert.match(providerCatalogSource, /onBack=\{\(\) => \{\s*setSelectedId\(null\)\s*setManual\(false\)\s*\}\}/)
+test('模型抽屉：小屏幕下自适应全屏宽度（100vw），消除嵌套滚动陷阱', { timeout: 60_000 }, () => {
+  // ModelDetailDrawer 消费标准抽屉类名
+  assert.match(modelDrawerSource, /className=["'][^"']*primary-drawer-content/)
 
-  // ProviderDetail 渲染返回列表按钮
-  assert.match(providerCatalogSource, /className="btn btn-ghost btn-sm provider-mobile-back"/)
-  assert.match(providerCatalogSource, /返回供应商列表/)
-
-  // provider-auth.css 规则：桌面端隐藏返回按钮，小屏下单视图排版消除双重滚动
-  assert.match(providerAuthCss, /\.provider-mobile-back\s*\{\s*display:\s*none;\s*\}/)
-  const mobileCatalog = providerAuthCss.slice(providerAuthCss.indexOf('@media (max-width: 680px)'))
-  assert.match(mobileCatalog, /\.provider-catalog\.has-selection \.provider-sidebar\s*\{\s*display:\s*none;\s*\}/)
-  assert.match(mobileCatalog, /\.provider-catalog:not\(\.has-selection\) \.provider-detail-scroll\s*\{\s*display:\s*none;\s*\}/)
-  assert.match(mobileCatalog, /\.provider-mobile-back\s*\{[^}]*display:\s*inline-flex/)
-  // 确保旧有的上下双层网格高度已被废除
-  assert.doesNotMatch(mobileCatalog, /grid-template-rows:\s*minmax\(180px,\s*38%\)/)
+  // styles.css 移动端媒体查询确保抽屉自适应 100vw
+  assert.match(stylesCss, /\.primary-drawer-content\s*\{[^}]*width:\s*min\(540px,\s*100vw\);/)
+  const mobileStyles = stylesCss.slice(stylesCss.indexOf('@media (max-width: 640px)'))
+  assert.match(mobileStyles, /\.primary-drawer-content\s*\{[^}]*width:\s*100vw;/)
 })
 
 test('命令面板：根据屏幕尺寸/触屏设备自适应切换 Esc 与关闭文案', { timeout: 60_000 }, () => {

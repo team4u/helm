@@ -55,7 +55,7 @@ function makeSkill(partial: Partial<SkillSummary> & { id: string }): SkillSummar
   }
 }
 
-const mockSkills: SkillSummary[] = [
+const mockSkills: [SkillSummary, SkillSummary, SkillSummary, SkillSummary, SkillSummary] = [
   makeSkill({
     id: 'helm-cli',
     name: 'Helm 命令行操作手册',
@@ -159,32 +159,32 @@ test('skill-center-model: filterSkills 分类筛选与多维搜索（ID / 名称
 
   const pluginSkills = filterSkills(mockSkills, { query: '', categoryTab: 'plugins' })
   assert.equal(pluginSkills.length, 1)
-  assert.equal(pluginSkills[0].id, 'community-linter')
+  assert.equal(pluginSkills[0]!.id, 'community-linter')
 
   // 关键字按名称搜索
   const nameSearch = filterSkills(mockSkills, { query: '代码审查', categoryTab: 'all' })
   assert.equal(nameSearch.length, 1)
-  assert.equal(nameSearch[0].id, 'code-review')
+  assert.equal(nameSearch[0]!.id, 'code-review')
 
   // 关键字按 ID 搜索
   const idSearch = filterSkills(mockSkills, { query: 'helm-cli', categoryTab: 'all' })
   assert.equal(idSearch.length, 1)
-  assert.equal(idSearch[0].id, 'helm-cli')
+  assert.equal(idSearch[0]!.id, 'helm-cli')
 
   // 关键字按描述搜索
   const descSearch = filterSkills(mockSkills, { query: 'PostgreSQL', categoryTab: 'all' })
   assert.equal(descSearch.length, 1)
-  assert.equal(descSearch[0].id, 'database-migration')
+  assert.equal(descSearch[0]!.id, 'database-migration')
 
   // 关键字按参考文件搜索
   const refSearch = filterSkills(mockSkills, { query: 'generative-ui.md', categoryTab: 'all' })
   assert.equal(refSearch.length, 1)
-  assert.equal(refSearch[0].id, 'helm-cli')
+  assert.equal(refSearch[0]!.id, 'helm-cli')
 
   // 组合过滤：分类 + 搜索
   const comboMatch = filterSkills(mockSkills, { query: '多节点', categoryTab: 'builtin' })
   assert.equal(comboMatch.length, 1)
-  assert.equal(comboMatch[0].id, 'herdr-deploy')
+  assert.equal(comboMatch[0]!.id, 'herdr-deploy')
 
   const comboMismatch = filterSkills(mockSkills, { query: '多节点', categoryTab: 'workspace' })
   assert.equal(comboMismatch.length, 0)
@@ -383,8 +383,8 @@ test('SkillDetailDrawer: 异步读取文件正文与代数防竞态 (loadGenerat
 
   // 初始加载 SKILL.md
   assert.equal(readCalls.length, 1)
-  assert.equal(readCalls[0].id, 'helm-cli')
-  assert.equal(readCalls[0].path, undefined)
+  assert.equal(readCalls[0]!.id, 'helm-cli')
+  assert.equal(readCalls[0]!.path, undefined)
 
   const pre = host.querySelector('.skill-file-pre') as HTMLElement
   assert.ok(pre.textContent?.includes('内容来自 helm-cli 路径 SKILL.md'), '应成功加载根文件正文')
@@ -399,7 +399,7 @@ test('SkillDetailDrawer: 异步读取文件正文与代数防竞态 (loadGenerat
   })
 
   assert.equal(readCalls.length, 2)
-  assert.equal(readCalls[1].path, 'references/cli-reference.md')
+  assert.equal(readCalls[1]!.path, 'references/cli-reference.md')
   assert.ok(
     pre.textContent?.includes('内容来自 helm-cli 路径 references/cli-reference.md'),
     '应更新展示参考文件正文',
@@ -565,7 +565,7 @@ test('SkillCenter: 交互过滤、搜索与抽屉联动 (openTarget)', { timeout
 
   let cards = host.querySelectorAll('.skill-card')
   assert.equal(cards.length, 1, '搜索 PostgreSQL 应仅过滤出一张卡片')
-  assert.ok(cards[0].textContent?.includes('数据库迁移演练'))
+  assert.ok(cards[0]!.textContent?.includes('数据库迁移演练'))
 
   // 2. 清空搜索
   const clearBtn = host.querySelector('.primary-search-clear') as HTMLButtonElement
@@ -589,10 +589,11 @@ test('SkillCenter: 交互过滤、搜索与抽屉联动 (openTarget)', { timeout
 
   // 4. 点击卡片触发 openTarget 打开抽屉
   await act(async () => {
-    cards[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    cards[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
   assert.ok(openTargetCalls.length > 0, '点击卡片应调用 openTarget')
   const lastCall = openTargetCalls[openTargetCalls.length - 1]
+  assert.ok(lastCall)
   assert.deepEqual(lastCall.target, { kind: 'skills', skillId: 'helm-cli' })
 
   await act(async () => {

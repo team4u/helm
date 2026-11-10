@@ -98,31 +98,46 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       {
         kind: 'command',
         id: 'builtin:open-profile-editor',
-        title: '打开角色 Profile 编辑器',
+        title: '打开智能体角色中心',
         icon: 'bot',
-        run: () => store.setActiveModal({ kind: 'profile-editor' }),
+        keywords: ['profile', 'profiles', '角色', '智能体'],
+        run: () => {
+          close()
+          store.openTarget({ kind: 'profiles' })
+        },
       },
       {
         kind: 'command',
         id: 'builtin:open-provider-auth',
-        title: '打开模型与 API Key 设置',
+        title: '打开模型与凭据中心',
         icon: 'key',
-        run: () => store.setActiveModal({ kind: 'provider-auth' }),
+        keywords: ['model', 'models', 'provider', 'providers', 'key', '模型', '凭据'],
+        run: () => {
+          close()
+          store.openTarget({ kind: 'models' })
+        },
       },
       {
         kind: 'command',
         id: 'builtin:open-skill-viewer',
-        title: '打开技能查看器',
+        title: '打开技能中心',
         icon: 'sparkles',
-        run: () => store.setActiveModal({ kind: 'skill-viewer' }),
+        keywords: ['skill', 'skills', '技能'],
+        run: () => {
+          close()
+          store.openTarget({ kind: 'skills' })
+        },
       },
       {
         kind: 'command',
         id: 'builtin:open-nodes',
-        title: '打开计算节点管理',
+        title: '打开计算节点中心',
         icon: 'network',
         keywords: ['node', 'nodes', 'byom', 'helm-node', '节点'],
-        run: () => store.setActiveModal({ kind: 'nodes' }),
+        run: () => {
+          close()
+          store.openTarget({ kind: 'nodes' })
+        },
       },
       {
         kind: 'command',

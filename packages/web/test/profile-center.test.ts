@@ -38,7 +38,7 @@ const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u
 // 辅助 Mock 角色与资产数据
 // ---------------------------------------------------------------------------
 
-const mockProfiles: Profile[] = [
+const mockProfiles: [Profile, Profile, Profile, Profile, Profile] = [
   {
     id: 'superagent',
     name: 'SuperAgent 中枢',
@@ -152,44 +152,44 @@ test('profile-center-model：filterProfiles 分类标签筛选', { timeout: 60_0
 
   const herdr = filterProfiles(mockProfiles, { query: '', categoryTab: 'herdr' })
   assert.equal(herdr.length, 1)
-  assert.equal(herdr[0].id, 'herdr-worker')
+  assert.equal(herdr[0]!.id, 'herdr-worker')
 })
 
 test('profile-center-model：filterProfiles 多维模糊检索', { timeout: 60_000 }, () => {
   // 1. 匹配 ID
   const resId = filterProfiles(mockProfiles, { query: 'reviewer', categoryTab: 'all' })
   assert.equal(resId.length, 1)
-  assert.equal(resId[0].id, 'code-reviewer')
+  assert.equal(resId[0]!.id, 'code-reviewer')
 
   // 2. 匹配 Name
   const resName = filterProfiles(mockProfiles, { query: '巡检', categoryTab: 'all' })
   assert.equal(resName.length, 1)
-  assert.equal(resName[0].id, 'watchdog')
+  assert.equal(resName[0]!.id, 'watchdog')
 
   // 3. 匹配 Description
   const resDesc = filterProfiles(mockProfiles, { query: '总控与中枢', categoryTab: 'all' })
   assert.equal(resDesc.length, 1)
-  assert.equal(resDesc[0].id, 'superagent')
+  assert.equal(resDesc[0]!.id, 'superagent')
 
   // 4. 匹配 Tags
   const resTag = filterProfiles(mockProfiles, { query: 'dev', categoryTab: 'all' })
   assert.equal(resTag.length, 1)
-  assert.equal(resTag[0].id, 'code-reviewer')
+  assert.equal(resTag[0]!.id, 'code-reviewer')
 
   // 5. 匹配 Model / defaultModel
   const resModel = filterProfiles(mockProfiles, { query: 'deepseek', categoryTab: 'all' })
   assert.equal(resModel.length, 1)
-  assert.equal(resModel[0].id, 'code-reviewer')
+  assert.equal(resModel[0]!.id, 'code-reviewer')
 
   // 6. 匹配 System 提示词全文
   const resSystem = filterProfiles(mockProfiles, { query: '总控编排', categoryTab: 'all' })
   assert.equal(resSystem.length, 1)
-  assert.equal(resSystem[0].id, 'superagent')
+  assert.equal(resSystem[0]!.id, 'superagent')
 
   // 7. 匹配 Skills 技能名称
   const resSkills = filterProfiles(mockProfiles, { query: 'git-commit', categoryTab: 'all' })
   assert.equal(resSkills.length, 1)
-  assert.equal(resSkills[0].id, 'code-reviewer')
+  assert.equal(resSkills[0]!.id, 'code-reviewer')
 
   // 8. 检索与分类交集门控
   const resCross = filterProfiles(mockProfiles, { query: '终端专家', categoryTab: 'system' })

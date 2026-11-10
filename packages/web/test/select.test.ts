@@ -275,20 +275,15 @@ test('契约：packages/web/src 下全部原生 select 已替换为公共 Select
   assert.deepEqual(violations, [], 'packages/web/src 下不得存在任何原生 <select> 标签')
 })
 
-test('契约：ProfileEditorModal 中的模型与节点选择均采用公共 Select，且高度与字号契约对齐', { timeout: 60_000 }, () => {
-  const profileEditorSource = readFileSync(new URL('../src/modals/ProfileEditorModal.tsx', import.meta.url), 'utf8')
+test('契约：ProfileDetailDrawer 中的模型选择采用公共 Select，且高度与字号契约对齐', { timeout: 60_000 }, () => {
+  const profileDrawerSource = readFileSync(new URL('../src/profiles/ProfileDetailDrawer.tsx', import.meta.url), 'utf8')
   const stylesSource = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
 
-  // 1. Profile 中的模型、思考等级、节点均使用 <Select>
-  assert.match(profileEditorSource, /<Select[\s\S]*?id="helm-profile-model"/)
-  assert.match(profileEditorSource, /<Select[\s\S]*?id="helm-profile-thinking"/)
-  assert.match(profileEditorSource, /<Select[\s\S]*?id="helm-profile-node"/)
-  assert.match(profileEditorSource, /<Select[\s\S]*?id="helm-runtime-node"/)
+  // 1. Profile 中的默认模型使用 <Select>
+  assert.match(profileDrawerSource, /import\s*\{[^}]*Select[^}]*\}\s*from\s*['"]\.\.\/ui\/Select(?:\.js)?['"]/)
+  assert.match(profileDrawerSource, /<Select[\s\S]*?options=\{modelOptions\}/)
 
-  // 2. 模型下拉不强制 mono，避免中文（如“跟随全局默认模型”）字体被等宽扭曲
-  assert.doesNotMatch(profileEditorSource, /id="helm-profile-model"[\s\S]*?className="mono"/)
-
-  // 3. 样式契约：.input 与 .helm-select-trigger 严格等高（32px）与相同边框圆角规范
+  // 2. 样式契约：.input 与 .helm-select-trigger 严格等高（32px）与相同边框圆角规范
   assert.match(stylesSource, /\.input,\s*\.select\s*\{[\s\S]*?height:\s*32px;/)
   assert.match(stylesSource, /\.helm-select-trigger\s*\{[\s\S]*?height:\s*32px;/)
   assert.match(stylesSource, /\.helm-select-trigger\s*\{[\s\S]*?font-size:\s*13px;/)

@@ -222,28 +222,23 @@ test('设计系统契约：人类消息对称微圆角、状态徽章发丝微�
 })
 
 // ---------------------------------------------------------------------------
-// 5. ProfileEditorModal & PluginDetailDrawer 细节契约
+// 5. ProfileDetailDrawer & PluginDetailDrawer 细节契约
 // ---------------------------------------------------------------------------
 
-test('ProfileEditorModal：受保护 Profile 带锁展示、死 DOM 清理、Tags 与 cwd 无 mono 滥用', { timeout: 60_000 }, () => {
-  const profileEditorSource = readFileSync(
-    join(PKG_ROOT, 'src/modals/ProfileEditorModal.tsx'),
+test('ProfileDetailDrawer：技能白名单使用 Switch 与 Checkbox，受保护角色禁止删除', { timeout: 60_000 }, () => {
+  const profileDrawerSource = readFileSync(
+    join(PKG_ROOT, 'src/profiles/ProfileDetailDrawer.tsx'),
     'utf-8',
   )
 
-  // 托管保护由插件元数据驱动，不依赖内置 Profile 名单。
-  assert.doesNotMatch(profileEditorSource, /BUILTIN_PROTECTED_PROFILES|DEFAULT_PROFILE_ID/)
-  assert.match(profileEditorSource, /profile\.managedByPlugin !== undefined\s*&&\s*<HelmIcon name="lock"/)
+  // 1. 技能白名单限制开关使用 Switch
+  assert.match(profileDrawerSource, /<Switch[\s\S]*?checked=\{form\.useAllSkills\}/)
 
-  // 2. 死 DOM 清理
-  assert.doesNotMatch(profileEditorSource, /<datalist id="helm-known-nodes">/)
+  // 2. 技能多选清单使用 Checkbox
+  assert.match(profileDrawerSource, /<Checkbox[\s\S]*?checked=\{form\.selectedSkillIds\.includes/)
 
-  // 3. Tags 与 工作目录输入框恢复 className="input"，无 input mono
-  assert.match(profileEditorSource, /<input\s+id="helm-profile-tags"\s+className="input"\s+value=\{tagsToText/)
-  assert.match(profileEditorSource, /<input\s+id="helm-profile-cwd"\s+className="input"\s+value=\{profile\.cwd/)
-
-  // 4. 外部 Herdr 运行时使用 Switch
-  assert.match(profileEditorSource, /<Switch[^>]*checked=\{runtimeEnabled\}/)
+  // 3. 受保护系统角色禁止删除
+  assert.match(profileDrawerSource, /isSystemProfile\(profile\)/)
 })
 
 test('PluginDetailDrawer：布尔字段使用 Switch，停用按钮使用低饱和中性按钮', { timeout: 60_000 }, () => {

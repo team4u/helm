@@ -19,8 +19,7 @@ const stylesCss = readFileSync(join(PKG_ROOT, 'src/styles.css'), 'utf8')
 const composerSource = readFileSync(join(PKG_ROOT, 'src/conversation/Composer.tsx'), 'utf8')
 const artifactModalSource = readFileSync(join(PKG_ROOT, 'src/conversation/ArtifactPreviewModal.tsx'), 'utf8')
 const workbenchSource = readFileSync(join(PKG_ROOT, 'src/conversation/WorkbenchDrawer.tsx'), 'utf8')
-const profileEditorSource = readFileSync(join(PKG_ROOT, 'src/modals/ProfileEditorModal.tsx'), 'utf8')
-const providerCatalogSource = readFileSync(join(PKG_ROOT, 'src/modals/ProviderCatalog.tsx'), 'utf8')
+const profileDrawerSource = readFileSync(join(PKG_ROOT, 'src/profiles/ProfileDetailDrawer.tsx'), 'utf8')
 const tabsSource = readFileSync(join(PKG_ROOT, 'src/ui/Tabs.tsx'), 'utf8')
 
 // ---------------------------------------------------------------------------
@@ -412,14 +411,6 @@ test('源码级重构契约：5 大业务组件均已迁移至 Radix Tabs / Segm
   // 3. WorkbenchDrawer 产物/插件页签已使用 Tabs / TabsList / TabsTrigger
   assert.match(workbenchSource, /import\s*\{[^}]*Tabs[^}]*\}\s*from\s*['"]\.\.\/ui\/Tabs(?:\.js)?['"]/)
   assert.match(workbenchSource, /<Tabs[\s\S]*?<TabsList\s+asChild>[\s\S]*?<div\s+className=["']tabs-bar["']>[\s\S]*?<TabsTrigger/)
-
-  // 4. ProfileEditorModal 顶部 Tab 切换已使用 Tabs / TabsList / TabsTrigger
-  assert.match(profileEditorSource, /import\s*\{[^}]*Tabs[^}]*\}\s*from\s*['"]\.\.\/ui\/Tabs(?:\.js)?['"]/)
-  assert.match(profileEditorSource, /<Tabs[\s\S]*?<TabsList[^>]*tabs-bar[\s\S]*?<TabsTrigger/)
-
-  // 5. ProviderCatalog 供应商筛选已使用 Tabs / TabsList / TabsTrigger
-  assert.match(providerCatalogSource, /import\s*\{[^}]*Tabs[^}]*\}\s*from\s*['"]\.\.\/ui\/Tabs(?:\.js)?['"]/)
-  assert.match(providerCatalogSource, /<Tabs[\s\S]*?<TabsList[^>]*provider-filters[\s\S]*?<TabsTrigger/)
 })
 
 test('铁律验证：Tabs.tsx 仅导出 React 组件，且代码中 0 Emoji 表情', { timeout: 60_000 }, () => {
@@ -430,8 +421,7 @@ test('铁律验证：Tabs.tsx 仅导出 React 组件，且代码中 0 Emoji 表�
   assert.doesNotMatch(composerSource, emojiRegex, 'Composer.tsx 不得含有任何 Emoji 表情')
   assert.doesNotMatch(artifactModalSource, emojiRegex, 'ArtifactPreviewModal.tsx 不得含有任何 Emoji 表情')
   assert.doesNotMatch(workbenchSource, emojiRegex, 'WorkbenchDrawer.tsx 不得含有任何 Emoji 表情')
-  assert.doesNotMatch(profileEditorSource, emojiRegex, 'ProfileEditorModal.tsx 不得含有任何 Emoji 表情')
-  assert.doesNotMatch(providerCatalogSource, emojiRegex, 'ProviderCatalog.tsx 不得含有任何 Emoji 表情')
+  assert.doesNotMatch(profileDrawerSource, emojiRegex, 'ProfileDetailDrawer.tsx 不得含有任何 Emoji 表情')
 
   // Fast Refresh 验证：只导出 React 组件和类型
   const exportedConsts = [...tabsSource.matchAll(/export\s+const\s+(\w+)/g)].map((m) => m[1])
