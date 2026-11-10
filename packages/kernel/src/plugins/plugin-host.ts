@@ -25,6 +25,7 @@ import {
   type ActionManifest,
   type ConversationSummary,
   type HelmHostApi,
+  type HelmHostNodeIpcPort,
   type HelmPluginContext,
   type HookHandler,
   type HookName,
@@ -59,6 +60,7 @@ import {
   type TimelineEntryActionSpec,
 } from '@helm/protocol';
 import type { Provider } from '@earendil-works/pi-ai';
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
 import { PluginTaskTracker } from './tracking.js';
 import { type ClientCompileResult } from './client-compiler.js';
@@ -154,10 +156,34 @@ export interface PluginProviderPort {
 
 /**
  * 宿主后端端口：ctx.host 的实现来源（Runtime 提供）。
+ * secrets / setConfig 由 PluginHost 在此之上包装 pluginId 命名空间；isClosing
+ * 归一为 getter；listPlugins 转发 PluginHost 自身 list()。
  */
-export type PluginHostBackend = Omit<HelmHostApi, 'manageConversation'> & {
+export type PluginHostBackend = Omit<
+  HelmHostApi,
+  | 'manageConversation'
+  | 'secrets'
+  | 'setConfig'
+  | 'isClosing'
+  | 'listPlugins'
+  | 'listUi'
+  | 'nodeIpc'
+> & {
   /** 声明 pluginId 对会话的管理权；返回释放函数（受管期间删除保护）。 */
   manageConversation(id: number, pluginId: string): () => void;
+  /** 节点 IPC 机制端口（EnvFabric 通道；测试宿主未提供时调用显式报 501，不静默降级）。 */
+  nodeIpc?: HelmHostNodeIpcPort;
+  /** 插件私有 secrets 后端（PluginHost 在此之上包装 pluginId 命名空间）。 */
+  secrets: {
+    get(pluginId: string, key: string): Promise<string | undefined>;
+    set(pluginId: string, key: string, value: string): Promise<void>;
+    delete(pluginId: string, key: string): Promise<void>;
+    addRedaction(value: string): () => void;
+  };
+  /** 插件配置写入后端（PluginHost 校验目标 pluginId 后转发；值已按 schema 校验）。 */
+  setPluginConfig(pluginId: string, value: Record<string, unknown>): Promise<void>;
+  /** 宿主关闭状态。 */
+  isClosing(): boolean;
 };
 
 // 内部注册态 -------------------------------------------------------------------
@@ -1528,17 +1554,31 @@ export class PluginHost {
 
   /**
    * 构造插件视角的 ctx.host：全部方法显式转发到后端端口。
-   * 生命周期资源（manageConversation / onEvent / registerAskSeqResolver）
-   * 经 acquire 包装：epoch 守卫 + 幂等释放 + 停用统一解除；
-   * onEvent 的每次事件回调计入在途任务保护（事件类型进任务标签）。
+   * 生命周期红线（每个周期统一遵守）：
+   * - 每次调用前 assertContextUsable（epoch 守卫：停用/重启用后旧句柄立即失效）；
+   * - 所有异步操作包 tracker.withTask（停用预检可见在途任务，不留盲区）；
+   * - 生命周期资源（manageConversation / onEvent / registerAskSeqResolver /
+   *   secrets.addRedaction / nodeIpc 资源型订阅）经 acquire 包装：幂等释放 +
+   *   停用统一解除；
+   * - 子端口（profiles / skills / secrets / nodeIpc / executionEnv 代理）逐方法
+   *   同一守卫，绝不裸泄漏 backend 引用（旧周期句柄不可在 disable 后继续读写）。
    */
   private wrapHostApi(state: PluginState, epoch: number): HelmHostApi {
     const pluginId = state.definition.id;
     const backend = this.options.host;
+    /** 每次调用的周期守卫（含并发问断首）；what 入诊断。 */
+    const guard = (what: string): void => {
+      this.assertContextUsable(state, epoch, what);
+    };
+    /** 异步操作统一：先守卫再入任务（停用预检可见，不留盲区）。 */
+    const tracked = <T>(what: string, op: () => Promise<T>): Promise<T> => {
+      guard(what);
+      return this.tracker.withTask(pluginId, what, op);
+    };
     const acquire =
       (what: string) =>
       (acquireFn: () => () => void): (() => void) => {
-        this.assertContextUsable(state, epoch, what);
+        guard(what);
         const release = idempotentRelease(acquireFn());
         state.hostReleases.add(release);
         return () => {
@@ -1547,33 +1587,199 @@ export class PluginHost {
         };
       };
     return {
-      dispatchTrigger: (event) => backend.dispatchTrigger(event),
-      submitInput: (id, text, opts) => backend.submitInput(id, text, opts),
-      createConversation: (init) => backend.createConversation(init),
-      listConversations: (filter) => backend.listConversations(filter),
-      getConversation: (id) => backend.getConversation(id),
-      updateConversation: (id, patch) => backend.updateConversation(id, patch),
-      abortConversation: (id) => backend.abortConversation(id),
-      getConversationActivity: (id) => backend.getConversationActivity(id),
-      getConversationOwnership: (id) => backend.getConversationOwnership(id),
       get isClosing() {
-        return backend.isClosing;
+        return backend.isClosing();
       },
-      spawnAgent: (request) => backend.spawnAgent(request),
-      runGate: (command, options) => backend.runGate(command, options),
-      prepareInterruptedConversations: (ids) => backend.prepareInterruptedConversations(ids),
-      cleanupWorktree: (request, signal) => backend.cleanupWorktree(request, signal),
+      profiles: {
+        list: () => tracked('host.profiles.list', () => backend.profiles.list()),
+        get: (id) => tracked('host.profiles.get', () => backend.profiles.get(id)),
+        getSystem: (id) => tracked('host.profiles.getSystem', () => backend.profiles.getSystem(id)),
+        save: (profile) => tracked('host.profiles.save', () => backend.profiles.save(profile)),
+        directory: (id) => tracked('host.profiles.directory', () => backend.profiles.directory(id)),
+      },
+      skills: {
+        list: () => tracked('host.skills.list', () => backend.skills.list()),
+        readFile: (skillId, path) => tracked('host.skills.readFile', () => backend.skills.readFile(skillId, path)),
+        directory: (id) => tracked('host.skills.directory', () => backend.skills.directory(id)),
+        ensureSkill: (asset) => tracked('host.skills.ensureSkill', () => backend.skills.ensureSkill(asset)),
+      },
+      nodeIpc: backend.nodeIpc === undefined
+        ? {
+            isOnline: () => {
+              guard('host.nodeIpc.isOnline');
+              throw new HelmError('node_ipc_unavailable', '宿主未提供节点 IPC 通道（EnvFabric 未接线）', 501);
+            },
+            call: () => {
+              guard('host.nodeIpc.call');
+              throw new HelmError('node_ipc_unavailable', '宿主未提供节点 IPC 通道（EnvFabric 未接线）', 501);
+            },
+            subscribe: () => {
+              guard('host.nodeIpc.subscribe');
+              throw new HelmError('node_ipc_unavailable', '宿主未提供节点 IPC 通道（EnvFabric 未接线）', 501);
+            },
+          }
+        : {
+            isOnline: (nodeId) => {
+              guard('host.nodeIpc.isOnline');
+              return backend.nodeIpc!.isOnline(nodeId);
+            },
+            ...(backend.nodeIpc.getNodeHubUrl !== undefined
+              ? {
+                  getNodeHubUrl: (nodeId: string) => {
+                    guard('host.nodeIpc.getNodeHubUrl');
+                    return backend.nodeIpc!.getNodeHubUrl?.(nodeId);
+                  },
+                }
+              : {}),
+            call: (nodeId, input, signal) =>
+              tracked(`host.nodeIpc.call`, () => backend.nodeIpc!.call(nodeId, input, signal)),
+            subscribe: (nodeId, input, onLine, onClosed, signal) => {
+              guard('host.nodeIpc.subscribe');
+              // 竞态安全：acquire 时刻即建立 AbortController；释放时先 abort（后端
+              // 取消在建订阅并回调 onClosed），订阅晚到建立时立即用返回的 stop 收
+              // 割（不泄漏）。建立错误留在返回的 Promise（调用方可 await），绝不
+              // void 吐成 unhandled rejection。
+              const controller = new AbortController();
+              const forwardAbort = () => controller.abort(signal?.reason);
+              if (signal?.aborted) forwardAbort();
+              signal?.addEventListener('abort', forwardAbort, { once: true });
+              let stop: (() => void) | undefined;
+              let released = false;
+              const establish = this.tracker.withTask(pluginId, 'host.nodeIpc.subscribe', async () => {
+                const unsubscribe = await backend.nodeIpc!.subscribe(
+                  nodeId,
+                  input,
+                  onLine,
+                  onClosed,
+                  controller.signal,
+                );
+                stop = unsubscribe;
+                if (released) unsubscribe(); // 释放先于建立完成：立即收割晚到订阅
+                return unsubscribe;
+              });
+              acquire('host.nodeIpc.subscribe')(() => () => {
+                released = true;
+                controller.abort();
+                stop?.();
+              });
+              return establish;
+            },
+          },
+      secrets: {
+        get: (key) => tracked('host.secrets.get', () => backend.secrets.get(pluginId, key)),
+        set: (key, value) => tracked('host.secrets.set', () => backend.secrets.set(pluginId, key, value)),
+        delete: (key) => tracked('host.secrets.delete', () => backend.secrets.delete(pluginId, key)),
+        addRedaction: (value) =>
+          acquire('host.secrets.addRedaction')(() => backend.secrets.addRedaction(value)),
+      },
+      setConfig: async (patch) => {
+        guard('host.setConfig');
+        // 增量合并：未提供字段保留现值（插件自更新常见场景是改单个开关，
+        // 不要求携带全部字段）；校验与持久化走 PluginHost 同一 setConfig 链。
+        const current = this.getConfig(pluginId);
+        await this.setConfig(pluginId, { ...current, ...patch });
+      },
+      listPlugins: () => {
+        guard('host.listPlugins');
+        return this.list();
+      },
+      listUi: () => {
+        guard('host.listUi');
+        return this.listUi();
+      },
+      refreshModels: (options) => tracked('host.refreshModels', () => backend.refreshModels(options)),
+      withFileLock: <T,>(path: string, fn: () => Promise<T>, opts?: { signal?: AbortSignal }) => {
+        guard('host.withFileLock');
+        // 队列内二次守卫：获得锁真正调用 fn 前再验周期（等待锁跨停用时旧
+        // 周期闭包不得落写，与 fileMutationQueue 修正同语义）。
+        return this.tracker.withTask(pluginId, 'host.withFileLock', () =>
+          backend.withFileLock(path, async () => {
+            guard('host.withFileLock.fn')
+            return fn()
+          }, opts),
+        )
+      },
+      atomicWriteFile: (path, content) => tracked('host.atomicWriteFile', () => backend.atomicWriteFile(path, content)),
+      redact: (text) => {
+        guard('host.redact');
+        return backend.redact(text);
+      },
+      dispatchTrigger: (event) => {
+        guard('host.dispatchTrigger');
+        return this.tracker.withTask(pluginId, 'host.dispatchTrigger', () =>
+          Promise.resolve(backend.dispatchTrigger(event)),
+        );
+      },
+      submitInput: (id, text, opts) => {
+        guard('host.submitInput');
+        return this.tracker.withTask(pluginId, 'host.submitInput', () =>
+          Promise.resolve(backend.submitInput(id, text, opts)),
+        );
+      },
+      createConversation: (init) => tracked('host.createConversation', () => backend.createConversation(init)),
+      listConversations: (filter) => {
+        guard('host.listConversations');
+        return backend.listConversations(filter);
+      },
+      getConversation: (id) => {
+        guard('host.getConversation');
+        return backend.getConversation(id);
+      },
+      getConversationDetail: (id, options) =>
+        tracked('host.getConversationDetail', () => backend.getConversationDetail(id, options)),
+      updateConversation: (id, patch) => tracked('host.updateConversation', () => backend.updateConversation(id, patch)),
+      abortConversation: (id) => tracked('host.abortConversation', () => backend.abortConversation(id)),
+      getConversationOwnership: (id) => {
+        guard('host.getConversationOwnership');
+        return backend.getConversationOwnership(id);
+      },
+      getConversationActivity: (id) => {
+        guard('host.getConversationActivity');
+        return backend.getConversationActivity(id);
+      },
+      listArtifacts: (conversationId) => tracked('host.listArtifacts', () => backend.listArtifacts(conversationId)),
+      getArtifact: (artifactId, conversationId) =>
+        tracked('host.getArtifact', () => backend.getArtifact(artifactId, conversationId)),
+      completeText: (input) => tracked('host.completeText', () => backend.completeText(input)),
+      executionEnv: (nodeId, cwd) => {
+        guard('host.executionEnv');
+        return this.controlledExecutionEnv(state, epoch, backend.executionEnv(nodeId, cwd));
+      },
+      buildSpawnEnv: (conversationId, cwd, nodeId) => {
+        guard('host.buildSpawnEnv');
+        return backend.buildSpawnEnv(conversationId, cwd, nodeId);
+      },
+      spawnAgent: (request) => {
+        guard('host.spawnAgent');
+        return this.tracker.withTask(pluginId, 'host.spawnAgent', () =>
+          Promise.resolve(backend.spawnAgent(request)),
+        );
+      },
+      runGate: (command, options) => tracked('host.runGate', () => backend.runGate(command, options)),
+      prepareInterruptedConversations: (ids) =>
+        tracked('host.prepareInterruptedConversations', () => backend.prepareInterruptedConversations(ids)),
+      cleanupWorktree: (request, signal) =>
+        tracked('host.cleanupWorktree', () => backend.cleanupWorktree(request, signal)),
       invokeAction: async (targetPluginId, actionId, input, context) => {
-        const raw = await this.invokeAction(targetPluginId, actionId, input, context);
+        guard('host.invokeAction');
+        const raw = await this.tracker.withTask(pluginId, `host.invokeAction:${targetPluginId}.${actionId}`, () =>
+          Promise.resolve(this.invokeAction(targetPluginId, actionId, input, context)),
+        );
         const redactText = this.options.redactText;
         return redactText ? redactJsonValue(raw, redactText) : raw;
       },
-      listActions: () => this.listActions(),
-      markConversationOwnership: (id, owner) => backend.markConversationOwnership(id, owner),
-      createAsk: (spec) => backend.createAsk(spec),
-      cancelAsk: (askId, reason) => backend.cancelAsk(askId, reason),
+      listActions: () => {
+        guard('host.listActions');
+        return this.listActions();
+      },
+      markConversationOwnership: (id, owner) => {
+        guard('host.markConversationOwnership');
+        backend.markConversationOwnership(id, owner);
+      },
+      createAsk: (spec) => tracked('host.createAsk', () => backend.createAsk(spec)),
+      cancelAsk: (askId, reason) => tracked('host.cancelAsk', () => backend.cancelAsk(askId, reason)),
       execEnv: async (req, opts) => {
-        this.assertContextUsable(state, epoch, 'host.execEnv');
+        guard('host.execEnv');
         return this.tracker.withTask(pluginId, 'host.execEnv', () =>
           Promise.resolve(backend.execEnv(req, opts)),
         );
@@ -1594,7 +1800,7 @@ export class PluginHost {
           }, opts),
         ),
       prepareAction: (targetPluginId, actionId, input, context) => {
-        this.assertContextUsable(state, epoch, 'host.prepareAction');
+        guard('host.prepareAction');
         return this.prepareAction(targetPluginId, actionId, input, context);
       },
       onEvent: (type, listener) =>
@@ -1605,12 +1811,43 @@ export class PluginHost {
             }),
           ),
         ),
-      emitEvent: (type, payload, options) => backend.emitEvent(type, payload, options),
+      emitEvent: (type, payload, options) => {
+        guard('host.emitEvent');
+        return backend.emitEvent(type, payload, options);
+      },
       manageConversation: (id) =>
         acquire('host.manageConversation')(() => backend.manageConversation(id, pluginId)),
       registerAskSeqResolver: (resolver) =>
         acquire('host.registerAskSeqResolver')(() => backend.registerAskSeqResolver(resolver)),
     };
+  }
+
+  /**
+   * executionEnv 受控代理：每个方法调用时重新校验周期（停用/re-enable 后旧
+   * env 代理立即失效），异步操作入任务跟踪；绝不裸返回 backend 原始 env 实例。
+   * 代理保留 SDK ExecutionEnv 完整形状（方法级包装，含可选方法）。
+   */
+  private controlledExecutionEnv(state: PluginState, epoch: number, env: ExecutionEnv): ExecutionEnv {
+    const pluginId = state.definition.id;
+    const self = this;
+    return new Proxy(env, {
+      get(target, prop) {
+        const value = Reflect.get(target, prop, target);
+        if (typeof value !== 'function') return value;
+        const name = String(prop);
+        const fn = value as (...args: unknown[]) => unknown;
+        const wrapped = (...args: unknown[]): unknown => {
+          self.assertContextUsable(state, epoch, `host.executionEnv.${name}`);
+          const result = fn.apply(target, args);
+          if (result instanceof Promise) {
+            return self.tracker.withTask(pluginId, `host.executionEnv.${name}`, () => result);
+          }
+          return result;
+        };
+        Object.defineProperty(wrapped, 'name', { value: name, configurable: true });
+        return wrapped;
+      },
+    });
   }
 
   /** 周期内可用性守卫：周期更替/停用中/已停用一律失效（doc 句柄与宿主资源共用）。 */

@@ -38,6 +38,10 @@ export interface DerivedToolSpec {
   inputSchema: JsonSchema;
   /** 结构化输出 Schema（ctx.tool 声明时透传；run_action 派生工具无此字段）。 */
   structuredOutputSchema?: JsonSchema;
+  /** 工具使用指引完整段落（仅激活工具投射；未激活不产生幻影文本）。 */
+  promptSnippet?: string;
+  /** 单行要点（聚合进 prompt.tools.guidelines 共享 section）。 */
+  promptGuidelines?: string[];
   sourcePluginId: string;
   sourceKind: 'action' | 'tool';
   /** 仅 sourceKind === 'action'：pluginId.actionId 全限定 ID。 */
@@ -351,6 +355,25 @@ export class CapabilityRegistry {
       }
       assertSchemaCompilable(spec.structuredOutputSchema);
     }
+    if (spec.promptSnippet !== undefined && (typeof spec.promptSnippet !== 'string' || spec.promptSnippet.length === 0)) {
+      throw new HelmError(
+        'invalid_tool_spec',
+        `插件 ${pluginId} 工具 ${spec.name} 的 promptSnippet 必须是非空字符串`,
+        400,
+      );
+    }
+    if (
+      spec.promptGuidelines !== undefined &&
+      (!Array.isArray(spec.promptGuidelines) ||
+        spec.promptGuidelines.length === 0 ||
+        spec.promptGuidelines.some((item) => typeof item !== 'string' || item.length === 0))
+    ) {
+      throw new HelmError(
+        'invalid_tool_spec',
+        `插件 ${pluginId} 工具 ${spec.name} 的 promptGuidelines 必须是非空字符串数组（每项非空）`,
+        400,
+      );
+    }
     if (typeof spec.execute !== 'function') {
       throw new HelmError('invalid_tool_spec', `插件 ${pluginId} 工具 ${spec.name} 缺少 execute`, 400);
     }
@@ -468,6 +491,8 @@ export class CapabilityRegistry {
             ...(tool.spec.structuredOutputSchema !== undefined
               ? { structuredOutputSchema: tool.spec.structuredOutputSchema }
               : {}),
+            ...(tool.spec.promptSnippet !== undefined ? { promptSnippet: tool.spec.promptSnippet } : {}),
+            ...(tool.spec.promptGuidelines !== undefined ? { promptGuidelines: tool.spec.promptGuidelines } : {}),
             sourcePluginId: pluginId,
             sourceKind: 'tool',
           });

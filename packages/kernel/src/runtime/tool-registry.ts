@@ -115,6 +115,8 @@ export class RuntimeToolRegistry {
   /**
    * 根据插件提供的 DerivedToolSpec 清单构造 helm-plugins 扩展并安装。
    * 同名扩展 install 语义为原地替换；空集也会安装以清空旧插件工具。
+   * onUpdate partial 经 SDK 原生 api.output 机制进入实时视图（conversation.live
+   * 工具卡）；字符串/文本块均过统一脱敏，结算后调用静默忽略（SDK 契约）。
    */
   installPluginTools(specs: DerivedToolSpec[]): void {
     const { registry, getPluginHost, redact, handledToolCalls } = this.options
@@ -129,11 +131,31 @@ export class RuntimeToolRegistry {
           ? { structuredOutputSchema: spec.structuredOutputSchema as Record<string, object> }
           : {}),
         async execute(args: unknown, api: never, context: { abortSignal?: AbortSignal }) {
-          const toolApi = api as unknown as { conversationId: number; callId?: string }
+          const toolApi = api as unknown as { conversationId: number; callId?: string; output?: (chunk: string) => void }
           const result = await host.executeTool(spec.name, args, {
             conversationId: toolApi.conversationId,
             ...(typeof toolApi.callId === 'string' && toolApi.callId !== '' ? { callId: toolApi.callId } : {}),
             signal: context.abortSignal,
+            ...(typeof toolApi.output === 'function'
+              ? {
+                  onUpdate: (partial) => {
+                    // SDK 契约：结算后 output 抛错（Tool call has settled）——仅
+                    // 此一类迟到 partial 静默丢弃；其他异常（宿主故障等）如实
+                    // 上抛给插件作者，绝不吞掉伪装成功。脱敏按完整 partial 全串
+                    // 执行（secret 可能跨 chunk 拼接，同步全串 redactor 覆盖当次
+                    // 快照；不声称消除一切进程内泄漏）。
+                    const text = typeof partial.output === 'string'
+                      ? partial.output
+                      : partial.output.map((block) => block.text).join('')
+                    try {
+                      toolApi.output!(redact(text))
+                    } catch (err) {
+                      if (err instanceof Error && err.message.includes('has settled')) return
+                      throw err
+                    }
+                  },
+                }
+              : {}),
           })
           // 插件工具返回任意值：包成 SDK ToolExecutionResult 契约（content/text）。
           return pluginToolResult(result, (text) => redact(text), {

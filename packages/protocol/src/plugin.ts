@@ -6,8 +6,10 @@
  */
 
 import type { Provider } from '@earendil-works/pi-ai'
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import type { AskCreateSpec, AskResult } from './ask.js'
 import type {
+  ConversationDetail,
   ConversationInit,
   ConversationInput,
   ConversationPatch,
@@ -18,7 +20,14 @@ import type {
   TurnSettledPayload,
   WhenBusy,
 } from './conversation.js'
-import type { EnvExecRequest, EnvExecResponse } from './env-rpc.js'
+import type { ArtifactMetadata } from './artifact.js'
+import type { Profile, SkillSummary, ModelProvidersRefreshResult } from './assets.js'
+import type {
+  EnvExecRequest,
+  EnvExecResponse,
+  NodeIpcCallInput,
+  RpcResult,
+} from './env-rpc.js'
 import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
 import type { WorktreeCleanupRequest, WorktreeCleanupResult } from './worktree.js'
 
@@ -300,6 +309,16 @@ export interface PluginToolContext {
   /** 当前工具调用 ID（供子会话/工作流绑定 parentToolCallId）。 */
   callId?: string
   signal?: AbortSignal
+  /**
+   * 流式进度上报（完整 partial 语义，与 SDK ToolExecutionResult 同构）：
+   * - output: string | Array<{ type: 'text'; text: string }> —— 至今累计快照
+   *   （非增量；宿主对全量脱敏后按差量经 SDK 原生 api.output 转发进 Web
+   *   实时工具卡，跨 chunk 拼接的机密不因分片遥漏脱敏）；
+   * - isError: true 时提前标记错误态（最终结果仍以 execute 返回为准）；
+   * - 结算后的迟到调用静默丢弃；结算前的真实故障显式抛出（不吞）；
+   * - 不支持流式的宿主（HTTP 直接调用等）静默丢弃，绝不伪装完成。
+   */
+  onUpdate?(partial: { output: string | Array<{ type: 'text'; text: string }>; isError?: boolean }): void
 }
 
 export interface PluginToolSpec<TIn = Record<string, unknown>> {
@@ -310,6 +329,14 @@ export interface PluginToolSpec<TIn = Record<string, unknown>> {
   structuredOutputSchema?: JsonSchema
   /** 会话作用域：工具可见性与 executeTool 的双重过滤条件。 */
   scope?: ConversationScope
+  /**
+   * 工具使用指引（仅激活工具投射进系统提示词，未激活不产生幻影文本）：
+   * - promptSnippet：完整段落文本，原样注入 prompt.tools.<name> 命名 section；
+   * - promptGuidelines：要点列表（每项非空字符串），聚合进 prompt.tools.guidelines
+   *   共享 section；两者可同时声明；均未声明时仅依赖 provider 原生 tools 声明。
+   */
+  promptSnippet?: string
+  promptGuidelines?: string[]
   execute(input: TIn, context: PluginToolContext): MaybePromise<unknown>
 }
 
@@ -440,8 +467,116 @@ export interface ActionManifest {
 // 宿主运行时能力
 // ---------------------------------------------------------------------------
 
+/** 插件可用的 Profile 数据端口（类型化只读 + 托管写入；服务机制仍在内核）。 */
+export interface HelmHostProfilesPort {
+  /** 全部 Profile（不含 system 全文）。 */
+  list(): Promise<Profile[]>
+  /** 单个 Profile；不存在时返回 undefined。id 非法时抛 HelmError。 */
+  get(id: string): Promise<Profile | undefined>
+  /** 读取 Profile 的 SYSTEM.md 全文；缺失抛 FileNotFoundError 语义（HelmError not_found）。 */
+  getSystem(id: string): Promise<string>
+  /**
+   * 新建或整体保存 Profile（携带 system 时原子同步至 SYSTEM.md）。
+   * 供插件自举托管元数据（managedByPlugin）；常规管理仍走 HTTP/CLI。
+   */
+  save(profile: Profile): Promise<Profile>
+  /**
+   * Profile 资产目录的真实磁盘绝对路径（仅 id 边界校验 + 坐标返回；目录可能
+   * 尚不存在——首次初始化（如 MEMORY.md）由调用方自行创建，宿主不 mkdir）。
+   * 供插件管理同目录自有资产文件，不做 ../.. 相对逃逸。
+   */
+  directory(id: string): Promise<string>
+}
+
+/** 插件自举的技能包资产（SKILL.md + references 子文件内容；与 kernel services 同形）。 */
+export interface SkillAsset {
+  id: string
+  skillMd: string
+  references: Record<string, string>
+}
+
+/** 插件可用的技能数据端口（读 + 受管自举）。 */
+export interface HelmHostSkillsPort {
+  /** 全部技能摘要（含 references 相对路径）。 */
+  list(): Promise<SkillSummary[]>
+  /** 读取技能内相对路径文件（SKILL.md / references/...）；穿越/绝对路径/软链均拒绝。 */
+  readFile(skillId: string, path?: string): Promise<string>
+  /**
+   * 技能目录的磁盘绝对路径（仅 id 边界校验 + 坐标返回；目录可能尚不存在，
+   * 宿主不 mkdir；调用方自管逐文件幂等补齐，不覆盖用户资产）。
+   */
+  directory(id: string): Promise<string>
+  /**
+   * 受管自举技能包：以声明版本为准逐文件覆盖，缺失补齐；登记受管后常规
+   * 写入口统一 403。边界非法（id/相对路径）整体拒绝，不产生部分文件。
+   * 通用受管资产安装机制，内外插件同权。
+   */
+  ensureSkill(asset: SkillAsset): Promise<void>
+}
+
+/**
+ * 插件私有 secrets（绑定 pluginId 命名空间）：持久化于 credentials.json
+ * pluginSecrets.<pluginId>（恒 0600），明文绝不进入公共文档、事件或模型上下文。
+ */
+export interface HelmHostSecretsPort {
+  /** 读取（不存在返回 undefined）。 */
+  get(key: string): Promise<string | undefined>
+  /** 写入（空值拒绝）；成功后可逃逸的旧值（若有）仍保留脱敏。 */
+  set(key: string, value: string): Promise<void>
+  /** 幂等删除。 */
+  delete(key: string): Promise<void>
+  /** 登记全局逐值脱敏（明文出现在任何日志/事件/文档中自动替换 [REDACTED]）；返回解除函数。 */
+  addRedaction(value: string): () => void
+}
+
+/** 会话活动事实（Watchdog 探针口径；仅真实活动计数，不猜测）。 */
+export interface ConversationActivity {
+  /** 无在途 run 时缺省（空闲非停滞）；有 run 且有活动记录时为距今毫秒数。 */
+  stalledMs?: number
+  /** 连续回合失败次数（无失败为 0）。 */
+  consecutiveErrors: number
+}
+
+/** 节点 IPC 机制端口（经内核 EnvFabric 跨节点 Unix Socket / Named Pipe；不静默回退本机）。 */
+export interface HelmHostNodeIpcPort {
+  /** 节点是否在线（'local' 恒 true）。 */
+  isOnline(nodeId: string): boolean
+  /** 节点注册时上报的可达 Hub URL（若有）。 */
+  getNodeHubUrl?(nodeId: string): string | undefined
+  /** 单次行协议 IPC 调用；节点不支持或离线时显式报错。 */
+  call(
+    nodeId: string,
+    input: { endpoint?: string; session?: string; line: string; timeoutMs?: number },
+    signal?: AbortSignal,
+  ): Promise<RpcResult<string>>
+  /** 流式行协议 IPC 订阅；返回停止函数。节点不支持时抛错。 */
+  subscribe(
+    nodeId: string,
+    input: { endpoint?: string; session?: string; line: string },
+    onLine: (line: string) => void,
+    onClosed: (error?: string) => void,
+    signal?: AbortSignal,
+  ): Promise<() => void>
+}
+
 /** ctx.host：插件可调用的宿主内核能力（插件拿到的实现已绑定其 pluginId，不可伪造他人身份）。 */
 export interface HelmHostApi {
+  /** 宿主关闭状态（get）：true 后拒绝新回合/新后台任务，插件据此停投递。 */
+  readonly isClosing: boolean
+  /** Profile 数据端口（读 + system 读取；写入仍经 HTTP/CLI 管理面）。 */
+  readonly profiles: HelmHostProfilesPort
+  /** 技能数据端口（读 + 受管自举 ensureSkill）。 */
+  readonly skills: HelmHostSkillsPort
+  /** 插件私有 secrets（pluginId 命名空间；不进文档/事件/模型上下文）。 */
+  readonly secrets: HelmHostSecretsPort
+  /** 跨节点 IPC 机制端口（EnvFabric；herdr 等外部运行时桥接用）。 */
+  readonly nodeIpc: HelmHostNodeIpcPort
+  /**
+   * 更新本插件自身配置（不可改其他插件）：与 HTTP PUT /api/plugins/:id/config
+   * 同一校验与持久化链（configSchema 边界校验；secret 字段落 credentials.json）。
+   * 值为增量合并（未提供字段保留现值）；未知字段拒绝。
+   */
+  setConfig(patch: Record<string, unknown>): Promise<void>
   dispatchTrigger(event: ExternalTriggerEnvelope): Promise<void>
   submitInput(
     conversationId: number,
@@ -461,24 +596,65 @@ export interface HelmHostApi {
   listConversations(filter?: { profileId?: string; tag?: string; status?: ConversationStatus }): ConversationSummary[]
   /** 读取单个会话摘要；不存在时抛 HelmError。 */
   getConversation(id: number): ConversationSummary
+  /** 会话详情（时间线条目 + 元数据；limit 1..500，cursor 分页）。 */
+  getConversationDetail(
+    id: number,
+    options?: { limit?: number; cursor?: string },
+  ): Promise<ConversationDetail>
   /** 部分更新会话；返回更新后的摘要。 */
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
   /** 中止指定会话的在途执行。 */
   abortConversation(id: number): Promise<void>
-  /**
-   * 只读运行事实：在途回合停滞毫秒（无在途 run 时省略）与连续失败回合数。
-   * 巡检/诊断类插件（如 builtin:superagent Watchdog）据此构造事实，内核
-   * 不做任何策略消费。
-   */
-  getConversationActivity(id: number): { stalledMs?: number; consecutiveErrors: number }
-  /**
-   * 会话归属权现读（Watchdog 红线判定唯一可信来源）：'human' 会话严禁
-   * 自动按键/中止；未标记或标记非法值一律 human（宁漏管不越权）。
-   * 会话不存在时抛 HelmError('not_found')。
-   */
+  /** 会话归属权现读（Watchdog 红线判定唯一可信来源；未标记一律 human）。 */
   getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
-  /** 宿主是否正在关闭（true 后插件不应再发起新的自动处置）。 */
-  readonly isClosing: boolean
+  /** 会话活动事实（stalledMs / consecutiveErrors；探针口径）。 */
+  getConversationActivity(id: number): ConversationActivity
+  /** 列出会话产物元数据（本会话全部；明文内容不进返回值）。 */
+  listArtifacts(conversationId: number): Promise<ArtifactMetadata[]>
+  /**
+   * 授权读取单个产物（存在 + 属于会话或父链；越权 403、不存在 404）：
+   * 返回轻量元数据 + 绝对路径（内容读取由调用方在目标节点执行）。
+   */
+  getArtifact(
+    artifactId: string,
+    conversationId: number,
+  ): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }>
+  /** 全局文本脱敏（SecretStash 明文 -> marker；诊断/日志出站前用）。 */
+  redact(text: string): string
+  /**
+   * 通用无工具单次文本补全（机制，无业务策略）：按会话解析生效模型
+   * （会话覆盖 > profile.model > 全局），输入输出均过全局脱敏；
+   * stopReason 非成功终态显式拒绝，不返回部分文本。
+   */
+  completeText(input: {
+    conversationId: number
+    systemPrompt: string
+    text: string
+    maxTokens?: number
+    signal?: AbortSignal
+  }): Promise<string>
+  /**
+   * 在目标节点获取无会话作用域执行环境（短生命周期对象，用后即弃，绝不缓存）：
+   * local 进程内直建；远端经 RPC；未知节点返回 Remote env（操作时等待重连），
+   * 绝不回落 local。返回 SDK ExecutionEnv 类型（type-only 引自
+   * @earendil-works/pi-durable/env，protocol 零运行时重依赖）；宿主 wrapper
+   * 为受控代理（方法调用过 assertContextUsable + task 跟踪，停用后旧句柄失效）。
+   */
+  executionEnv(nodeId: string, cwd: string): ExecutionEnv
+  /**
+   * 按 realpath 的文件锁：同一 Hub 进程内同一路径（含不同相对写法）全局互斥，
+   * 闭包执行全窗持锁（停用预检可见在途任务；停用/重启用后旧周期闭包内续用
+   * 会被 epoch 守卫拒绝）。仅承诺本 Hub 进程内串行（不含跨进程协议）。
+   * 通用文件机制，不注入任何插件业务语义。
+   */
+  withFileLock<T>(path: string, fn: () => Promise<T>, opts?: { signal?: AbortSignal }): Promise<T>
+  /** 原子写文件（临时文件 + rename；通用机制，失败显式拒绝）。 */
+  atomicWriteFile(path: string, content: string): Promise<void>
+  /**
+   * 外部 spawn 环境变量（目标节点受管回连集合：stash + 受管 HELM_*）；
+   * nodeId 为实际选定目标节点；绝不携带宿主 process.env。
+   */
+  buildSpawnEnv(conversationId: number, cwd: string, nodeId: string): Record<string, string>
   /**
    * 声明插件对本会话的管理权（如 superagent 的 router/watchdog 会话）：
    * 受管期间会话删除保护（409 conversation_managed_by_plugin），
@@ -547,6 +723,19 @@ export interface HelmHostApi {
   ): Promise<unknown>
   /** 列出当前全部已启用插件的动作清单。 */
   listActions(): ActionManifest[]
+  /** 当前插件清单（含启停状态；只读快照）。 */
+  listPlugins(): PluginSummary[]
+  /** 当前全部 UI 贡献清单（仅已启用插件；只读快照，供 Profile 目录 runtime 声明事实）。 */
+  listUi(): PluginUiContribution[]
+  /**
+   * 刷新动态模型目录（与 POST /api/models/refresh 同链路；options 现有形状）。
+   * 供 provider 插件触发自身目录刷新；错误以 result.errors 返回（不 reject）。
+   */
+  refreshModels(options?: {
+    providers?: string[]
+    allowNetwork?: boolean
+    force?: boolean
+  }): Promise<ModelProvidersRefreshResult>
   /**
    * 创建 AskDoc 并等待终态：正常三态（answered/cancelled/superseded）均 resolve，
    * 只有验证/I/O/宿主失败才 reject。secret 字段答案为 stash 引用。
@@ -555,7 +744,9 @@ export interface HelmHostApi {
   cancelAsk(askId: string, reason?: 'cancelled' | 'superseded'): Promise<void>
   /** 注册 askId -> 当前 stateChangeSeq 解析器（AskDoc CAS 乐观锁用，可为异步——真实水位需远端 IO）；返回注销函数。 */
   registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void
-  /** 订阅宿主通用事件（如 'workflow.settled'）；插件停用时自动解除。监听器可异步，发布方会等待其完成。 */
+  /** 订阅宿主通用事件（真实 EventHub 广播事件与 broadcast:false 进程内事件；
+   * 含 'conversation.entry' 等 core 事件，payload 为 HelmEvent 形状）；
+   * 插件停用时自动解除。监听器可异步，发布方会等待其完成。 */
   onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void
   /** 发布事件并等待内部监听器；broadcast:false 仅在进程内分发，不进入全局 SSE。 */
   emitEvent(type: string, payload: unknown, options?: { broadcast?: boolean }): MaybePromise<void>

@@ -218,6 +218,107 @@ export function systemSectionsOf(messages: ReadonlyArray<{ role?: string; sectio
   return [...sections.entries()].map(([id, text]) => ({ id, text }))
 }
 
+/**
+ * 把 before_turn 终局 active tools 的提示词元数据统一投射进 sections：
+ * - prompt.tools.<name>：每工具完整段落（promptSnippet）；
+ * - prompt.tools.guidelines：全部 promptGuidelines 聚合的共享段；
+ * - 旧同名段整体覆盖（停用插件/剥离工具不留幻影文本）；无任何元数据的
+ *   工具集产生空投射（清除全部旧段）；sections 未变化时原样返回引用。
+ */
+export function projectToolPromptSections(
+  sections: ReadonlyArray<{ id: string; text: string }>,
+  tools: ReadonlyArray<{ name: string; promptSnippet?: string; promptGuidelines?: string[] }>,
+): Array<{ id: string; text: string }> {
+  const snippets = tools.filter((t) => t.promptSnippet !== undefined)
+  const guidelines = tools.filter((t) => t.promptGuidelines !== undefined)
+  const desired = new Map<string, string>()
+  for (const tool of snippets) {
+    desired.set(`prompt.tools.${tool.name}`, tool.promptSnippet!)
+  }
+  if (guidelines.length > 0) {
+    const lines = guidelines.flatMap((tool) => tool.promptGuidelines!.map((item) => `- ${tool.name}: ${item}`))
+    desired.set('prompt.tools.guidelines', `可用工具使用要点：\n${lines.join('\n')}`)
+  }
+  const projectedIds = new Set([...desired.keys()])
+  const isManaged = (id: string) =>
+    id === 'prompt.tools.guidelines' || id.startsWith('prompt.tools.')
+  let changed = false
+  const out: Array<{ id: string; text: string }> = []
+  for (const section of sections) {
+    if (isManaged(section.id)) {
+      const next = desired.get(section.id)
+      if (next !== undefined) {
+        out.push({ id: section.id, text: next })
+        desired.delete(section.id)
+        if (next !== section.text) changed = true
+      } else {
+        changed = true // 移除幻影段
+      }
+      continue
+    }
+    out.push(section)
+  }
+  for (const [id, text] of desired) {
+    out.push({ id, text })
+    changed = true
+  }
+  return changed ? out : (sections as Array<{ id: string; text: string }>)
+}
+
+/**
+ * before_turn messages 整体替换的边界校验（防 system 头损坏与历史伪造）：
+ * - 必须是非空数组且首条为 system 消息（SDK 回放依赖前导 system）；
+ * - 前导 system 的 content 基底必须与原消息一致（sections/toolsRemoved/
+ *   toolsAdded 等声明字段可改，人格正文绝不可覆写）；
+ * - 原首条非 system 消息起的历史必须原序原样保留（只允许在其后追加，
+ *   不允许截断/重写/伪造——需要截断清走 rewrite/reset 通道）。
+ * 违规一律 invalid_hook_result 显式拒绝，绝不静默采纳破坏性改写。
+ */
+export function assertSafeMessageSurgery(
+  original: ReadonlyArray<Record<string, unknown>>,
+  replacement: unknown,
+): Array<Record<string, unknown>> {
+  const fail = (detail: string): HelmError =>
+    new HelmError('invalid_hook_result', `before_turn messages 改写越界：${detail}`, 500)
+  if (!Array.isArray(replacement) || replacement.length === 0) {
+    throw fail('必须是非空消息数组')
+  }
+  const lead = replacement[0]!
+  if (lead['role'] !== 'system') {
+    throw fail('首条消息必须保持 system（SDK 回放机制依赖前导 system 消息）')
+  }
+  if (original.length === 0 || original[0]!['role'] !== 'system') {
+    throw fail('原始请求缺少前导 system 消息（内核状态异常，拒绝改写）')
+  }
+  if (contentTextOf(original[0]!) !== contentTextOf(lead)) {
+    throw fail('前导 system 消息的 content 基底被覆写（人格与历史正文不可改；sections/tools 声明请走声明的字段）')
+  }
+  // 历史保留：原首条非 system 消息起的子序列必须原样出现在替换结果中（前缀对齐）。
+  let firstNonSystem = 0
+  while (firstNonSystem < original.length && original[firstNonSystem]!['role'] === 'system') firstNonSystem += 1
+  const historyLen = original.length - firstNonSystem
+  const tail = replacement.slice(replacement.length - historyLen)
+  if (historyLen > 0) {
+    for (let i = 0; i < historyLen; i += 1) {
+      if (tail[i] !== original[firstNonSystem + i]!) {
+        throw fail('历史消息只允许在其后追加，不允许截断、重写或伪造（截断请走 rewrite/reset 通道）')
+      }
+    }
+  }
+  return replacement as Array<Record<string, unknown>>
+}
+
+/** system 消息 content 基底文本（字符串或文本块拼接；与 SDK 回放口径一致）。 */
+function contentTextOf(message: Record<string, unknown>): string {
+  const content = message['content']
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return (content as Array<{ type?: string; text?: string }>)
+    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text as string)
+    .join('\n')
+}
+
 export function sectionsEqual(a: Array<{ id: string; text: string }>, b: Array<{ id: string; text: string }>): boolean {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i += 1) {

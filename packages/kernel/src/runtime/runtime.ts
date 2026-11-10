@@ -26,6 +26,7 @@ import type {
   AskResult,
   AskSpec,
   ConversationDetail,
+  ConversationEntry,
   ConversationInit,
   ConversationInputResult,
   ConversationPatch,
@@ -46,6 +47,7 @@ import type {
 } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 import {
   ArtifactService as SvcArtifactService,
   AuthService as SvcAuthService,
@@ -56,8 +58,12 @@ import {
   ProviderService,
   SecretStash,
   SkillService,
+  assertProfileId,
+  assertSkillId,
+  atomicWriteFile,
   ensureDataDir,
   resolveDataDir,
+  withFileLock,
   type Profile,
 } from '../services/index.js'
 import { PluginHost } from '../plugins/index.js'
@@ -113,6 +119,30 @@ export interface KernelRuntimeOptions {
   autoResume?: boolean
   /** 节点升级等待 commit 确认的超时毫秒（缺省 120000；测试可缩短）。 */
   nodeUpgradeTimeoutMs?: number
+}
+
+/** Profile id 公共边界校验：非法 id 归一为 HelmError 400（不外泄私有构造器）。 */
+function assertProfileIdPublic(id: string): void {
+  try {
+    assertProfileId(id)
+  } catch (err) {
+    throw new HelmError(
+      'validation_error',
+      `Profile id 非法：${err instanceof Error ? err.message : String(err)}`,
+      400,
+      { profileId: id },
+    )
+  }
+}
+
+/** profiles.get/directory 边界归一：非法 id -> 400 validation_error；其余错误原样上抛。 */
+function normalizeProfileBoundaryError(id: string, err: unknown): unknown {
+  try {
+    assertProfileId(id)
+    return err
+  } catch {
+    return new HelmError('validation_error', `Profile id 非法：${String(id)}`, 400, { profileId: id })
+  }
 }
 
 export class KernelRuntime {
@@ -637,6 +667,50 @@ export class KernelRuntime {
         assertIdle: (pluginId) => this.modelsRegistry.assertRuntimeProvidersIdle(pluginId),
       },
       host: {
+        isClosing: () => this.closed,
+        profiles: {
+          list: () => this.profilesSvc.list(),
+          get: (id) =>
+            this.profilesSvc.get(id).catch((err: unknown) => {
+              // 非法 id：私有 assert Error 归一为公共 400 validation_error；
+              // 其余错误（EIO/EACCES 等）原样上抛，绝不吞。
+              throw normalizeProfileBoundaryError(id, err)
+            }),
+          getSystem: async (id) => {
+            try {
+              return await this.profilesSvc.getSystem(id)
+            } catch (err) {
+              // 公共端口规范化：私有 FileNotFoundError 不外泄给插件（公共契约
+              // 是 HelmError not_found 404）；其余 I/O 错误原样上抛。
+              if (err instanceof FileNotFoundError) {
+                throw new HelmError('not_found', `Profile '${id}' 的 SYSTEM.md 不存在`, 404, { profileId: id })
+              }
+              throw err
+            }
+          },
+          save: (profile) => this.profilesSvc.save(profile),
+          directory: (id) => this.profileDirectory(id),
+        },
+        skills: {
+          list: () => this.skillsSvc.list(),
+          readFile: (skillId, path) => this.skillsSvc.readFile(skillId, path),
+          directory: (id) => this.skillDirectory(id),
+          ensureSkill: (asset) => this.skillsSvc.ensureSkill(asset),
+        },
+        secrets: {
+          get: (pluginId, key) => this.credentialsSvc.getPluginSecret(pluginId, key),
+          set: (pluginId, key, value) => this.credentialsSvc.setPluginSecret(pluginId, key, value),
+          delete: (pluginId, key) => this.credentialsSvc.deletePluginSecret(pluginId, key),
+          addRedaction: (value) => this.stashService.addRedaction(value),
+        },
+        setPluginConfig: (pluginId, value) => this.pluginConfig.set(pluginId, value, this.pluginHost?.getConfigSchema(pluginId) ?? {}),
+        nodeIpc: {
+          isOnline: (nodeId) => this.envFabric.isOnline(nodeId),
+          getNodeHubUrl: (nodeId) => this.envFabric.getNodeHubUrl(nodeId),
+          call: (nodeId, input, signal) => this.envFabric.ipcCall(nodeId, input, signal),
+          subscribe: (nodeId, input, onLine, onClosed, signal) =>
+            this.envFabric.ipcSubscribe(nodeId, input, onLine, onClosed, signal),
+        },
         dispatchTrigger: (event) => this.dispatchTrigger(event),
         submitInput: async (id, text, opts) => {
           await this.submitInput(id, text, opts)
@@ -644,13 +718,24 @@ export class KernelRuntime {
         createConversation: (init) => this.createConversation(init),
         listConversations: (filter) => this.listConversations(filter),
         getConversation: (id) => this.getConversation(id),
+        getConversationDetail: (id, options) => this.getConversationDetail(id, options),
         updateConversation: (id, patch) => this.updateConversation(id, patch),
         abortConversation: (id) => this.abortConversation(id),
-        getConversationActivity: (id) => this.getConversationActivity(id),
         getConversationOwnership: (id) => this.getConversationOwnership(id),
-        get isClosing() {
-          return runtimeRef.closed
-        },
+        getConversationActivity: (id) => this.getConversationActivity(id),
+        listArtifacts: (conversationId) => Promise.resolve(this.artifactsSvc.list(conversationId)),
+        getArtifact: (artifactId, conversationId) => this.resolveAuthorizedAttachment(conversationId, artifactId),
+        redact: (text) => this.stashService.redact(text),
+        refreshModels: (options) => this.refreshModels(options),
+        withFileLock: <T,>(path: string, fn: () => Promise<T>, opts?: { signal?: AbortSignal }) =>
+          withFileLock(path, async () => {
+            opts?.signal?.throwIfAborted()
+            return fn()
+          }),
+        atomicWriteFile: (path, content) => atomicWriteFile(path, content),
+        completeText: (input) => this.completeConversationText(input),
+        executionEnv: (nodeId, cwd) => this.envFabric.envFor(nodeId, cwd),
+        buildSpawnEnv: (conversationId, cwd, nodeId) => this.buildSpawnEnv(conversationId, cwd, nodeId),
         spawnAgent: (request) => this.spawnAgent(request),
         runGate: (command, options) => this.runGate(command, options),
         prepareInterruptedConversations: (ids) => this.prepareInterruptedConversations(ids),
@@ -1450,7 +1535,34 @@ export class KernelRuntime {
   }
 
   /**
-   * 会话归属权现读（Watchdog 红线判定唯一可信来源；superagent 工厂注入用）：
+   * 技能目录坐标（仅 id 边界校验；目录可能尚不存在，宿主不 mkdir）。
+   */
+  private async skillDirectory(id: string): Promise<string> {
+    try {
+      assertSkillId(id)
+    } catch (err) {
+      throw new HelmError(
+        'validation_error',
+        `Skill id 非法：${err instanceof Error ? err.message : String(err)}`,
+        400,
+        { skillId: id },
+      )
+    }
+    return join(this.dataDir, 'skills', id)
+  }
+
+  /**
+   * Profile 资产目录坐标（仅 id 边界校验；目录可能尚不存在——首次初始化由
+   * 调用方创建，宿主不 mkdir）。供插件管理同目录自有资产，不做 ../.. 逃逸。
+   */
+  private async profileDirectory(id: string): Promise<string> {
+    // id 边界规范化：assertProfileId 私有 Error 归一为公共 HelmError 400
+    // （与 get() 同口径，不外泄 kernel 私有构造器）。
+    assertProfileIdPublic(id)
+    return join(this.dataDir, 'profiles', id)
+  }
+
+  /** 会话归属权现读（未标记一律 human）：
    * - 会话不存在（含已删除 tombstone）时抛 not_found，绝不把已删会话的
    *   残留登记当作可执行授权返回；
    * - 未标记/标记非法值一律 human（宁漏管不越权）。

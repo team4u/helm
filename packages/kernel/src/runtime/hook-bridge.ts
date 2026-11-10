@@ -12,7 +12,16 @@ import { randomUUID } from 'node:crypto'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import type { PluginHost } from '../plugins/index.js'
 import { redactJsonValue } from '../redact.js'
-import { normalizeToolResult, sectionsEqual, systemSectionsOf, toolResultOf, withSections, withToolDeclarations } from './runtime-helpers.js'
+import {
+  assertSafeMessageSurgery,
+  normalizeToolResult,
+  projectToolPromptSections,
+  sectionsEqual,
+  systemSectionsOf,
+  toolResultOf,
+  withSections,
+  withToolDeclarations,
+} from './runtime-helpers.js'
 
 export type HookDecision =
   | { action: 'continue' }
@@ -123,6 +132,7 @@ export class HookBridge {
              * beforeRequest 收到的 messages 是最终模型消息（含 system 前导）。
              * 这里把 sections/tools/messages 真实载荷交给插件，transform 结果
              * 通过 system 消息 sections / toolsAdded 真正改写模型请求。
+             * 钩子链收敛后宿主统一投射 prompt.tools.* 段（见 transformBeforeTurn）。
              */
             beforeRequest: async (request, api) => {
               const conversationId = api.conversationId as number
@@ -155,16 +165,31 @@ export class HookBridge {
       messages: request.messages as unknown as Array<Record<string, unknown>>,
     }
     const outcome = await this.runHookChain('before_turn', payload)
-    if (outcome?.action !== 'transform') return undefined
-    const value = outcome.value as typeof payload
+    // 宿主终局投射：无论钩子是否 transform，按最终 active tools 统一重写
+    // prompt.tools.* 段（仅激活工具进提示词；停用/剥离的工具旧段一并清除，
+    // 不留幻影文本）。投射基于 PluginHost 当前声明（含 prompt 元数据）。
+    const activeTools = this.activeToolPrompts(summary, payload.tools, outcome)
+    const outcomeSections = outcome?.action === 'transform'
+      ? (outcome.value as typeof payload).sections
+      : payload.sections
+    const projected = projectToolPromptSections(outcomeSections, activeTools)
+    if (outcome?.action !== 'transform' && projected === outcomeSections) return undefined
+    const value: typeof payload = outcome?.action === 'transform'
+      ? { ...(outcome.value as typeof payload), sections: projected }
+      : { ...payload, sections: projected }
 
     // sections 变更 -> 改写前导 system 消息的 sections（SDK 原生机制）。
-    // messages 变更 -> 整体替换（插件显式要求时）。
+    // messages 变更 -> 整体替换（插件显式要求时）。边界校验：
+    // 1. 必须是非空数组且前导为 system 消息（SDK 回放机制依赖前导 system）；
+    // 2. 保留原前导 system 的 content 基底（sections/tools 声明可改，人格与
+    //    历史正文绝不可被插件覆写——防原地 mutation diff 不可靠与 system 头损坏）；
+    // 3. 原第一条非 system 消息之后的历史一律保留原序（只允许截断头部，
+    //    不允许重写/伪造历史）。
     const original = request.messages as unknown as Array<Record<string, unknown>>
     let messages = original
     const sectionsChanged = !sectionsEqual(value.sections, payload.sections)
     const messagesChanged = value.messages !== payload.messages
-    if (messagesChanged) messages = value.messages
+    if (messagesChanged) messages = assertSafeMessageSurgery(original, value.messages)
     if (sectionsChanged) messages = withSections(messages, value.sections)
 
     const initialNames = new Set(runtimeTools.map((tool) => tool.name))
@@ -174,6 +199,42 @@ export class HookBridge {
     }
     if (messages === original) return undefined
     return { messages: messages as unknown as typeof request.messages }
+  }
+
+  /**
+   * 最终 active tools 的提示词元数据集：PluginHost 当前声明（scope 过滤）
+   * 与钩子链收敛后的工具清单取交集——被插件剥离（如 memory 关闭）的工具
+   * 不投射任何段落。钩子未 transform 时以 SDK 解析的请求工具集为准。
+   */
+  private activeToolPrompts(
+    summary: ConversationSummary,
+    requestTools: Array<{ name: string }>,
+    outcome: { action: string; value?: unknown } | undefined,
+  ): Array<{ name: string; promptSnippet?: string; promptGuidelines?: string[] }> {
+    const host = this.options.pluginHost()
+    if (!host) return []
+    const declared = host.listTools(summary)
+    const requestNames = new Set(requestTools.map((tool) => tool.name))
+    const finalNames =
+      outcome?.action === 'transform'
+        ? new Set(
+            ((outcome.value as { tools?: Array<{ name?: unknown }> }).tools ?? [])
+              .filter((t) => typeof t.name === 'string')
+              .map((t) => t.name as string),
+          )
+        : requestNames
+    const out: Array<{ name: string; promptSnippet?: string; promptGuidelines?: string[] }> = []
+    for (const spec of declared) {
+      if (!requestNames.has(spec.name)) continue
+      if (!finalNames.has(spec.name)) continue
+      if (spec.promptSnippet === undefined && spec.promptGuidelines === undefined) continue
+      out.push({
+        name: spec.name,
+        ...(spec.promptSnippet !== undefined ? { promptSnippet: spec.promptSnippet } : {}),
+        ...(spec.promptGuidelines !== undefined ? { promptGuidelines: spec.promptGuidelines } : {}),
+      })
+    }
+    return out
   }
 
   /** 统一 hook 管道执行；返回最终决定（continue 归一为 undefined 由调用方走默认）。 */
