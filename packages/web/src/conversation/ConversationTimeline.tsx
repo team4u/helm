@@ -505,6 +505,17 @@ function StepGroup({
   conversationId: number
   siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
 }) {
+  const firstStep = steps[0]
+  if (steps.length === 1 && firstStep !== undefined && firstStep.kind === 'thinking') {
+    return (
+      <ThinkingRow
+        text={firstStep.thinking.text}
+        active={firstStep.thinking.active ?? active}
+        conversationId={conversationId}
+      />
+    )
+  }
+
   const [userOverride, setUserOverride] = useState<boolean | null>(null)
   const prevActiveRef = useRef(active)
   if (prevActiveRef.current !== active) {
@@ -515,23 +526,37 @@ function StepGroup({
   }
   const open = userOverride ?? active
 
+  const hasOnlyThinking = steps.every((s) => s.kind === 'thinking')
+  const summaryTitle = hasOnlyThinking
+    ? active
+      ? `正在思考 (${steps.length} 步)…`
+      : `思考过程 (${steps.length} 步)`
+    : active
+      ? `正在思考与执行 (${steps.length} 步)…`
+      : `思考与执行过程 (${steps.length} 步)`
+
   return (
     <div className="trace-group">
       <button
         type="button"
         className="trace-group-summary"
         onClick={() => setUserOverride(!open)}
-        title="展开 / 收起思考与执行过程"
+        title={open ? '收起思考与执行过程' : '展开思考与执行过程'}
       >
         <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
         {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
-        {active ? `正在思考与执行 (${steps.length} 步)…` : `思考与执行过程 (${steps.length} 步)`}
+        {summaryTitle}
       </button>
       {open ? (
         <div className="trace-group-steps">
           {steps.map((step, idx) =>
             step.kind === 'thinking' ? (
-              <ThinkingRow key={`think:${idx}`} text={step.thinking.text} conversationId={conversationId} />
+              <ThinkingRow
+                key={`think:${idx}`}
+                text={step.thinking.text}
+                active={step.thinking.active}
+                conversationId={conversationId}
+              />
             ) : (
               <TraceRow
                 key={step.tool.key}
@@ -548,18 +573,38 @@ function StepGroup({
   )
 }
 
-export function ThinkingRow({ text, conversationId }: { text: string; conversationId?: number }) {
-  const [open, setOpen] = useState(true)
+export function ThinkingRow({
+  text,
+  conversationId,
+  active = false,
+  defaultOpen = false,
+}: {
+  text: string
+  conversationId?: number
+  active?: boolean
+  defaultOpen?: boolean
+}) {
+  const [userOverride, setUserOverride] = useState<boolean | null>(null)
+  const prevActiveRef = useRef(active)
+  if (prevActiveRef.current !== active) {
+    prevActiveRef.current = active
+    if (!active && userOverride !== null) {
+      setUserOverride(null)
+    }
+  }
+  const open = userOverride ?? (active || defaultOpen)
+
   return (
     <div className="trace-group">
       <button
         type="button"
         className="trace-group-summary"
-        onClick={() => setOpen((v) => !v)}
-        title="展开 / 收起思考过程"
+        onClick={() => setUserOverride(!open)}
+        title={open ? '收起思考过程' : '展开思考过程'}
       >
         <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-        思考过程
+        {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
+        {active ? '正在思考…' : '思考过程'}
       </button>
       {open ? (
         <div className="trace-expanded-body selectable thinking-expanded-body">

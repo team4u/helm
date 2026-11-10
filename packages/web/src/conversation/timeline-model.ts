@@ -71,6 +71,7 @@ export interface ToolTrace {
 export interface ThinkingTrace {
   key: string
   text: string
+  active?: boolean
 }
 
 export type FoldableStep =
@@ -516,7 +517,16 @@ export function foldTurnSegments(raw: ReadonlyArray<RawSegment>, live = false): 
     const seg = out[i]!
     if (seg.kind === 'step-group') {
       const hasRunningTool = seg.steps.some((s) => s.kind === 'tool' && s.tool.status === 'running')
-      seg.active = live && (i > lastTextIndex || hasRunningTool)
+      const groupActive = live && (i > lastTextIndex || hasRunningTool)
+      seg.active = groupActive
+
+      for (let sIdx = 0; sIdx < seg.steps.length; sIdx++) {
+        const step = seg.steps[sIdx]!
+        if (step.kind === 'thinking') {
+          const hasSubsequentTool = seg.steps.slice(sIdx + 1).some((s) => s.kind === 'tool')
+          step.thinking.active = groupActive && !hasSubsequentTool && !hasRunningTool && i > lastTextIndex
+        }
+      }
     }
   }
   return out
