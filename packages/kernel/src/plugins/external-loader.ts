@@ -79,28 +79,31 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
     const dirPath = resolve(pluginsDir, entry.name);
     const entryPath = await resolvePluginEntry(dirPath);
     if (entryPath === undefined) continue; // 纯插件数据目录：静默跳过
-    // 为插件目录启用后端 TS 转译（含运行期动态 import 的相对 TS 依赖）；
-    // 加载失败释放计数，成功则常驻本进程（插件模块永不重复初始化）。
+    // 为插件目录启用后端 TS 转译（含运行期动态 import 的相对 TS 依赖）。
+    // 任一失败路径（导入 / id 冲突 / 宿主注册）都释放计数；成功注册则根常驻
+    // 本进程：插件运行期动态 import 依赖转译可用，已加载模块在 ESM 缓存中保持
+    // identity。因此插件停用/卸载不释放根、不卸载已加载模块（同进程内重新
+    // 注册不重复初始化）；释放仅发生在加载失败回退时。
     const releaseTsRoot = registerPluginTsRoot(dirPath);
-    let definition: PluginDefinition;
+    let committed = false;
     try {
-      definition = await importPluginDefinition(dirPath, entryPath);
-    } catch (err) {
-      releaseTsRoot();
-      throw err;
+      const definition = await importPluginDefinition(dirPath, entryPath);
+      const existingIds = new Set((await plugins.list()).map((summary) => summary.id));
+      if (existingIds.has(definition.id)) {
+        throw new HelmError(
+          'plugin_already_registered',
+          `外部插件 ${dirPath} 的 id 与已注册插件冲突: ${definition.id}`,
+          409,
+          { dirPath, id: definition.id },
+        );
+      }
+      const normalized = normalizeDefinition(definition, dirPath);
+      await plugins.register(normalized, { enabled: false });
+      committed = true;
+      registered.push(normalized.id);
+    } finally {
+      if (!committed) releaseTsRoot();
     }
-    const existingIds = new Set((await plugins.list()).map((summary) => summary.id));
-    if (existingIds.has(definition.id)) {
-      throw new HelmError(
-        'plugin_already_registered',
-        `外部插件 ${dirPath} 的 id 与已注册插件冲突: ${definition.id}`,
-        409,
-        { dirPath, id: definition.id },
-      );
-    }
-    const normalized = normalizeDefinition(definition, dirPath);
-    await plugins.register(normalized, { enabled: false });
-    registered.push(normalized.id);
   }
   return registered;
 }
