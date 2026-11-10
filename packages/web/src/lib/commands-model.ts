@@ -5,11 +5,11 @@
  * 光标插入/触发词清理的纯文本计算，以及命令面板的会话作用域过滤与 hint 派生。
  * 纯函数无 React 依赖，供 Composer / CommandPaletteModal 与单测共同消费。
  */
-import type { CommandSpec, ConversationSummary } from '@helm/protocol'
+import { RESERVED_SLASH_COMMANDS, type CommandSpec, type ConversationSummary } from '@helm/protocol'
 import { matchesUiScope } from './types.js'
 
 /** 宿主保留的会话内管理命令斜杠词；插件 slash 声明不得覆盖（后端注册边界拒绝，前端防御性跳过）。 */
-export const RESERVED_SLASH_WORDS: ReadonlySet<string> = new Set(['new', 'clear', 'compact'])
+export const RESERVED_SLASH_WORDS: ReadonlySet<string> = new Set(RESERVED_SLASH_COMMANDS)
 
 /** 宿主保留的技能引用斜杠命名空间前缀。 */
 export const SKILL_SLASH_PREFIX = 'skill:'

@@ -8,6 +8,7 @@
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import type { SpecPrimitiveName } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { Select } from './Select.js'
 import { Checkbox } from './Checkbox.js'
@@ -806,7 +807,7 @@ function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
 
 export type SpecPrimitiveImpl = (args: { node: NormalizedSpecNode; ctx: SpecRenderContext }) => ReactNode
 
-const PRIMITIVES: Record<string, SpecPrimitiveImpl> = {
+const PRIMITIVES: Record<SpecPrimitiveName, SpecPrimitiveImpl> = {
   Stack: StackImpl,
   Card: CardImpl,
   Text: TextImpl,
@@ -832,7 +833,7 @@ const PRIMITIVES: Record<string, SpecPrimitiveImpl> = {
 
 /** 渲染一个归一化节点（未知组件显式提示，不静默吞掉）。 */
 export function SpecNodeView({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }): ReactNode {
-  const impl = PRIMITIVES[node.component]
+  const impl = (PRIMITIVES as Record<string, SpecPrimitiveImpl | undefined>)[node.component]
   if (impl === undefined) {
     return (
       <div className="jr-callout jr-callout-warn">

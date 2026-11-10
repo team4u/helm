@@ -12,7 +12,14 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, symlink, writeFile, rm
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmError } from '@helm/protocol'
+import {
+  HelmError,
+  SPEC_PRIMITIVE_NAMES,
+  PLUGIN_UI_METHOD_NAMES,
+  PLUGIN_HOOK_NAMES,
+  RESERVED_SLASH_COMMANDS,
+  PLUGIN_CLIENT_SHARED_EXPORTS,
+} from '@helm/protocol'
 import {
   HELM_CLI_SKILL_MD,
   HELM_CLI_GENERATIVE_UI_MD,
@@ -293,17 +300,68 @@ test('profiles: SYSTEM_DEFAULT 分层——含 helm-cli 引导与 HELM_CONVERSAT
 })
 
 test('helm-cli 技能资产同步界面扩展与会话投影能力面（防回退）', { timeout: 60_000 }, () => {
-  // SKILL.md：会话文档 CLI 参数已入迷查
+  // SKILL.md 与 generative-ui.md：原语计数与双向契约对齐
+  assert.ok(
+    HELM_CLI_SKILL_MD.includes(`${SPEC_PRIMITIVE_NAMES.length} 个原语`),
+    `SKILL.md 应含 ${SPEC_PRIMITIVE_NAMES.length} 个原语`,
+  )
+  assert.ok(
+    HELM_CLI_GENERATIVE_UI_MD.includes(`${SPEC_PRIMITIVE_NAMES.length} 个原语`),
+    `generative-ui 应含 ${SPEC_PRIMITIVE_NAMES.length} 个原语`,
+  )
+  for (const name of SPEC_PRIMITIVE_NAMES) {
+    assert.ok(
+      HELM_CLI_GENERATIVE_UI_MD.includes(`\`${name}\``),
+      `generative-ui 应列出原语 \`${name}\``,
+    )
+  }
+
+  // SKILL.md：会话文档 CLI 参数
   assert.ok(HELM_CLI_SKILL_MD.includes('--conversation'), 'SKILL.md 应含 doc --conversation 会话文档读取')
   assert.ok(HELM_CLI_SKILL_MD.includes('--watch'), 'SKILL.md 应含 doc --watch 订阅')
-  // generative-ui：21 原语含 Slot，求值域含 $sessionDocs
-  assert.ok(HELM_CLI_GENERATIVE_UI_MD.includes('21 个原语'), '原语计数应为 21（含 Slot）')
-  assert.ok(HELM_CLI_GENERATIVE_UI_MD.includes('`Slot`'), '应 documenting Slot 原语')
+
+  // generative-ui：求值域与旧计数防御
   assert.ok(HELM_CLI_GENERATIVE_UI_MD.includes('$sessionDocs'), '求值域应含 $sessionDocs')
   assert.ok(!HELM_CLI_GENERATIVE_UI_MD.includes('20 个原语'), '不应残留旧计数')
-  // 插件开发：15 注册方法 / sessionDoc / composer / sp-ssp / 共享 Hook
-  assert.ok(HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes('15 个注册方法'), '应 documenting 15 个 UI 注册方法')
-  for (const api of ['conversationHeaderAction', 'timelineEntryAction', 'profileRuntime', 'ctx.sessionDoc', 'usePluginSessionDoc', 'PluginSlot', 'composer']) {
+
+  // 插件开发：ctx.ui 注册方法契约对齐
+  assert.ok(
+    HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(`${PLUGIN_UI_METHOD_NAMES.length} 个 ctx.ui 注册方法`),
+    `应 documenting ${PLUGIN_UI_METHOD_NAMES.length} 个 ctx.ui 注册方法`,
+  )
+  for (const method of PLUGIN_UI_METHOD_NAMES) {
+    assert.ok(
+      HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(method),
+      `插件开发参考应含 ctx.ui 注册方法 ${method}`,
+    )
+  }
+
+  // 插件开发：后端 Hook 契约对齐
+  for (const hook of PLUGIN_HOOK_NAMES) {
+    assert.ok(
+      HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(hook),
+      `插件开发参考应含后端 Hook ${hook}`,
+    )
+  }
+
+  // 插件开发：保留斜杠词契约对齐
+  for (const slash of RESERVED_SLASH_COMMANDS) {
+    assert.ok(
+      HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(slash),
+      `插件开发参考应含保留斜杠词 ${slash}`,
+    )
+  }
+
+  // 插件开发：@helm/plugin-client 导出符号契约对齐
+  for (const exportName of PLUGIN_CLIENT_SHARED_EXPORTS) {
+    assert.ok(
+      HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(exportName),
+      `插件开发参考应含 @helm/plugin-client 导出符号 ${exportName}`,
+    )
+  }
+
+  // 插件开发：保留对 sessionDoc、composer、sp.<key> 的断言
+  for (const api of ['ctx.sessionDoc', 'composer']) {
     assert.ok(HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(api), `插件开发参考应含 ${api}`)
   }
   assert.ok(HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes('sp.<key>'), '应 documenting sp./ssp. 深链命名空间')

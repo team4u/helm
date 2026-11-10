@@ -41,6 +41,23 @@ export type HookName =
   | 'turn_settled'
   | 'watchdog_tick'
 
+/** 后端 Hook 挂载点名称唯一真源（与 HookName 类型双向锁定）。 */
+export const PLUGIN_HOOK_NAMES = [
+  'trigger',
+  'input',
+  'before_turn',
+  'tool_call',
+  'tool_result',
+  'agent_spawn',
+  'turn_settled',
+  'watchdog_tick',
+] as const satisfies readonly HookName[]
+
+type _AssertAllHookNamesListed =
+  Exclude<HookName, (typeof PLUGIN_HOOK_NAMES)[number]> extends never ? true : never
+const _assertAllHookNamesListed: _AssertAllHookNamesListed = true
+void _assertAllHookNamesListed
+
 /**
  * 外部入站事件信封（cron / webhook 经 defang 防逃逸包裹后投递）。
  * 命中 threadKey 订阅时可被 transform 改写 targetConversationId 直投 Worker。
