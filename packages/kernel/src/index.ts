@@ -26,7 +26,8 @@ export type {
   NodeWsGatewayOptions,
   sanitizeNodeHealth,
 } from './env/index.js';
-export { createAssistantPlugin } from './builtin-plugins/assistant.js';
+export { createProfilePlugin } from './builtin-plugins/profile.js';
+export { createMemoryPlugin, MEMORY_PLUGIN_ID } from './builtin-plugins/memory.js';
 export { createHerdrPlugin } from './builtin-plugins/herdr.js';
 export { createWorkflowPlugin, WORKFLOW_PLUGIN_ID } from './builtin-plugins/workflow.js';
 export {

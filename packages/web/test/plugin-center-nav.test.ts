@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { ROOT_CONVERSATION_ID } from '@helm/protocol'
+const ROOT_CONVERSATION_ID = 1 as const // 初始会话 id（SDK 保留 #1 承载；普通会话语义）
 import {
   formatLocationHash,
   isSameLocationState,

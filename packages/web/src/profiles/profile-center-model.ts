@@ -84,7 +84,6 @@ export function filterProfiles(
     const model = resolveProfileModel(p)
     if (model?.toLowerCase().includes(q)) return true
     if (p.system?.toLowerCase().includes(q)) return true
-    if (p.memory?.toLowerCase().includes(q)) return true
     if (p.skills?.some((s) => s.toLowerCase().includes(q))) return true
 
     return false

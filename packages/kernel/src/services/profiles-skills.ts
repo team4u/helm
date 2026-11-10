@@ -1,7 +1,8 @@
 /**
- * ProfileService：管理 `profiles/<id>/`（profile.json + SYSTEM.md + MEMORY.md）。
+ * ProfileService：管理 `profiles/<id>/`（profile.json + SYSTEM.md）。
  * Profile 形状以 @helm/protocol 为准（id 必填，name/model/runtime/tags 可选）；
  * model 为空串或缺省表示「未配置」，由 runtime 显式报错，服务层不伪造默认模型。
+ * MEMORY.md 长期记忆由 builtin:memory 插件自治管理，不进本服务。
  */
 import { lstat, mkdir, readdir, readFile, realpath, rm } from 'node:fs/promises'
 import { dirname, join, relative, sep } from 'node:path'
@@ -25,16 +26,10 @@ const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
 const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
 /**
- * MEMORY.md 长期记忆字符上限（防线单一事实来源）：
- * 长期记忆逐回合全量注入系统提示，无上限会让每次调用成本无界增长。
- * 所有服务层写入路径（updateMemory / save(memory)）在文件锁内合并后统一
- * 强制；assistant 插件注入侧另有截断 + 显式说明兜底（存量外部手改文件）。
- */
-export const MAX_MEMORY_CHARS = 64_000
-/**
  * Layer 0 常驻系统提示（三层渐进式披露的最顶层）：只声明身份与受管 helm
  * CLI 环境直觉；命令表、生成式 UI 组件字典等工作细节下沉 Layer 1/2
  *（skills/helm-cli），详细手册不常驻（目录描述仍有少量成本）。
+ * update_memory 使用指引由 builtin:memory 插件按 Profile 开关动态注入。
  */
 export const SYSTEM_DEFAULT = [
   '# System Prompt',
@@ -44,10 +39,8 @@ export const SYSTEM_DEFAULT = [
   '1. 受管 bash 已提供 `helm` CLI 与会话身份 `HELM_CONVERSATION_ID`，可用 `--current` 与 `--json` 调用。',
   '2. 当前可用技能含 helm-cli 时，操作 Helm 或回答宿主能力问题前，先 `load_skill({ skillId: "helm-cli" })` 并按需读取 references，通过命令帮助与实际状态核实能力；该技能不在当前可用目录中时跳过此步。',
   '3. 普通回复用 Markdown；需要交互展示时再读取 UI 手册。生成文件供用户在 Web 查看时，用 write(..., artifact: true) 或 helm artifacts put <path> --current 登记产物，并在回复中用 [文件名](artifact:<id>) 或 ![图片](artifact:<id>) 直接渲染。',
-  '4. 用 `update_memory` 保存稳定的用户偏好与约定。',
   '',
 ].join('\n')
-const MEMORY_DEFAULT = ['# Memory', '', ''].join('\n')
 
 /** 校验 profile id：小写字母数字与连字符，防目录注入与路径穿越。 */
 export function assertProfileId(id: string): void {
@@ -58,21 +51,6 @@ export function assertProfileId(id: string): void {
 
 function nowIso(): string {
   return new Date().toISOString()
-}
-
-/** 上限拒绝统一错误（code/status 与 assistant update_memory 契约一致）。 */
-function memoryLimitError(
-  profileId: string,
-  wouldBe: number,
-  mode: 'append' | 'replace' | 'save',
-  extra: { maxChars: number; inputLength?: number } = { maxChars: MAX_MEMORY_CHARS },
-): HelmError {
-  return new HelmError(
-    'memory_limit_exceeded',
-    `MEMORY.md 写入后达 ${wouldBe} 字符，超过上限 ${extra.maxChars}；请精简后再写入（长期记忆请整体 replace 整理）`,
-    400,
-    { profileId, wouldBe, limit: extra.maxChars, ...(mode !== 'save' ? { mode } : {}), ...(extra.inputLength !== undefined ? { inputLength: extra.inputLength } : {}) },
-  )
 }
 
 function profileDir(dataDir: string, id: string): string {
@@ -248,7 +226,6 @@ export class ProfileService {
     const dir = profileDir(this.dataDir, profile.id)
     await atomicWriteJson(join(dir, 'profile.json'), profile)
     await atomicWriteFile(join(dir, 'SYSTEM.md'), SYSTEM_DEFAULT)
-    await atomicWriteFile(join(dir, 'MEMORY.md'), MEMORY_DEFAULT)
     return profile
   }
 
@@ -277,23 +254,14 @@ export class ProfileService {
     return normalizeProfile(value, id)
   }
 
-  /** 新建或整体保存 profile（若携带 system / memory 则原子同步至 SYSTEM.md / MEMORY.md，不写入 profile.json）。 */
+  /** 新建或整体保存 profile（若携带 system 则原子同步至 SYSTEM.md，不写入 profile.json）。 */
   async save(input: unknown): Promise<Profile> {
     if (!isPlainObject(input)) throw new Error('profile 必须是对象')
     const rawSystem = input['system']
     if (rawSystem !== undefined && typeof rawSystem !== 'string') {
       throw new Error('profile system 必须是字符串')
     }
-    const rawMemory = input['memory']
-    if (rawMemory !== undefined && typeof rawMemory !== 'string') {
-      throw new Error('profile memory 必须是字符串')
-    }
     const profile = validateProfileInput(input)
-    // 管理员显式导入也受同一上限约束（写入前先拒，避免 profile.json 已写而
-    // MEMORY.md 被拒的半截 save）；锁内 updateMemory 仍会复核（防并发窗口）。
-    if (rawMemory !== undefined && rawMemory.length > MAX_MEMORY_CHARS) {
-      throw memoryLimitError(profile.id, rawMemory.length, 'save')
-    }
     const dir = profileDir(this.dataDir, profile.id)
     const existing = await this.get(profile.id)
     await atomicWriteJson(join(dir, 'profile.json'), profile)
@@ -301,11 +269,6 @@ export class ProfileService {
       await this.updateSystem(profile.id, rawSystem)
     } else if (existing === undefined) {
       await atomicWriteFile(join(dir, 'SYSTEM.md'), SYSTEM_DEFAULT)
-    }
-    if (rawMemory !== undefined) {
-      await this.updateMemory(profile.id, rawMemory, 'replace', { maxChars: MAX_MEMORY_CHARS })
-    } else if (existing === undefined) {
-      await atomicWriteFile(join(dir, 'MEMORY.md'), MEMORY_DEFAULT)
     }
     return profile
   }
@@ -331,55 +294,6 @@ export class ProfileService {
     return withFileLock(path, async () => {
       await atomicWriteFile(path, text)
       return text
-    })
-  }
-
-  async getMemory(id: string): Promise<string> {
-    assertProfileId(id)
-    return readTextFile(join(profileDir(this.dataDir, id), 'MEMORY.md'))
-  }
-
-  /**
-   * 原子更新 MEMORY.md：replace 整体替换；append 追加（保尾部换行）。
-   * append 的读改写按该文件真实路径加进程内共享锁串行化——多个
-   * ProfileService 实例并发 append 也不会读到同一旧内容后互相覆盖。
-   * options.maxChars 上限在锁内对**合并后**的最终内容统一强制：并发调用
-   * 不可能各自「预读旧值 + 检查通过」后叠加突破上限（大小防线唯一权威点）。
-   * 通过 temp+rename 落盘，AssetWatcher 可实时感知且绝不见半截内容。
-   */
-  async updateMemory(
-    id: string,
-    text: string,
-    mode: 'append' | 'replace' = 'append',
-    options?: { maxChars?: number },
-  ): Promise<string> {
-    assertProfileId(id)
-    if (typeof text !== 'string') throw new Error('memory 文本必须是字符串')
-    if (options?.maxChars !== undefined && (!Number.isInteger(options.maxChars) || options.maxChars <= 0)) {
-      throw new Error(`maxChars 必须是正整数（收到 ${String(options.maxChars)}）`)
-    }
-    const path = join(profileDir(this.dataDir, id), 'MEMORY.md')
-    return withFileLock(path, async () => {
-      let next: string
-      if (mode === 'replace') {
-        next = text
-      } else {
-        let current = ''
-        try {
-          current = await readTextFile(path)
-        } catch (err) {
-          if (!(err instanceof FileNotFoundError)) throw err
-          // MEMORY.md 缺失时 append 视为从空开始（ensureDefault 已保证存在，兜底诚实创建）。
-        }
-        next = current.endsWith('\n') || current === '' ? current + text : current + '\n' + text
-      }
-      // 锁内合并后检查：并发 append 的最终内容在此处串行判定，突破即整体拒绝
-      //（不写半截文件），绝不出现「各自预读检查通过、落盘叠加超限」的竞态。
-      if (options?.maxChars !== undefined && next.length > options.maxChars) {
-        throw memoryLimitError(id, next.length, mode, { maxChars: options.maxChars, inputLength: text.length })
-      }
-      await atomicWriteFile(path, next)
-      return next
     })
   }
 }

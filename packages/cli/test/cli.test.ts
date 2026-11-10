@@ -505,7 +505,7 @@ test('search、models、plugins、actions list、status', { timeout: 60_000 }, a
         providerCatalog: [],
       },
     }),
-    'GET /api/plugins': () => ({ body: [{ id: 'builtin:assistant', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] }] }),
+    'GET /api/plugins': () => ({ body: [{ id: 'builtin:profile', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] }] }),
     'POST /api/plugins/builtin%3Aherdr/disable': () => ({ body: { ok: 1 } }),
     'GET /api/plugins/builtin%3Aherdr/config': () => ({ body: { values: { a: 1 }, schema: {} } }),
     'PUT /api/plugins/builtin%3Aherdr/config': (body) => {
@@ -545,7 +545,7 @@ test('search、models、plugins、actions list、status', { timeout: 60_000 }, a
 
     const p = await run(['plugins', 'list', '--json'], env)
     assert.equal(p.code, 0, p.err)
-    assert.equal(JSON.parse(p.out)[0]?.id, 'builtin:assistant')
+    assert.equal(JSON.parse(p.out)[0]?.id, 'builtin:profile')
 
     const d = await run(['plugins', 'disable', 'builtin:herdr', '--json'], env)
     assert.equal(d.code, 0, d.err)

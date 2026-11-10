@@ -24,6 +24,9 @@ import { ProfileCenter } from '../src/profiles/ProfileCenter.js'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import type { ModelDescriptor } from '../src/lib/api.js'
 import { makeTestStore } from './helpers/store.js'
+import { seedPluginClientModule } from '../src/lib/plugin-client.js'
+import { groupUiContributions } from '../src/lib/types.js'
+import { PROFILE_DETAIL_SECTION_SLOT } from '@helm/protocol'
 
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -47,7 +50,6 @@ const mockProfiles: [Profile, Profile, Profile, Profile, Profile] = [
     defaultModel: 'claude-3-7-sonnet',
     tags: ['superagent', 'router'],
     system: '你作为超级代理中枢执行总控编排',
-    memory: '长期记忆上下文...',
     skills: ['search', 'bash'],
   },
   {
@@ -295,7 +297,8 @@ test('ProfileDetailDrawer：编辑已有角色模式渲染与 0 Emoji', { timeou
   assert.match(html, /code-reviewer/)
   assert.match(html, /严格的代码规范与缺陷审查专家/)
   assert.match(html, /系统提示词 \(SYSTEM\.md\)/)
-  assert.match(html, /长期记忆 \(MEMORY\.md\)/)
+  // 长期记忆区块由 builtin:memory 插槽注入（无插件贡献时不渲染，宿主不再硬编码）
+  assert.doesNotMatch(html, /长期记忆 \(MEMORY\.md\)/)
   assert.match(html, /可用技能白名单/)
   assert.match(html, /保存角色/)
   assert.match(html, /删除角色/, '自定义角色应渲染删除按钮')
@@ -439,4 +442,72 @@ test('ProfileCenter：所有源码文件 0 Emoji 静态扫描', { timeout: 60_00
       `文件 ${rel} 源码中严禁含有任何 Emoji 字符`,
     )
   }
+})
+
+
+// ---------------------------------------------------------------------------
+// builtin:memory 插槽注入（ProfileDetailDrawer 宿主零记忆业务硬编码）
+// ---------------------------------------------------------------------------
+
+test('ProfileDetailDrawer：经 PluginSlot 渲染 builtin:memory 注入的长期记忆区块', { timeout: 60_000 }, () => {
+  function ProfileMemorySectionProbe(props: { profileId: string; isNew: boolean; disabled: boolean }) {
+    return React.createElement(
+      'section',
+      { className: 'section-flat', 'data-probe': 'memory' },
+      React.createElement('span', null, `长期记忆 (${props.profileId})`),
+      props.isNew ? '请先创建角色' : '启用长期记忆',
+    )
+  }
+  seedPluginClientModule('builtin:memory', 'index.tsx', { ProfileMemorySection: ProfileMemorySectionProbe })
+
+  const store = makeTestStore({
+    models: mockModels,
+    skills: mockSkills,
+    groupedUi: groupUiContributions([
+      {
+        pluginId: 'builtin:memory',
+        surface: 'plugin.slot',
+        spec: {
+          id: 'profile-memory-section',
+          target: PROFILE_DETAIL_SECTION_SLOT,
+          client: { module: 'index.tsx', export: 'ProfileMemorySection' },
+        },
+      },
+    ]),
+  })
+
+  const html = renderToStaticMarkup(
+    e(
+      HelmStoreContext.Provider,
+      { value: store },
+      e(ProfileDetailDrawer, {
+        profile: mockProfiles[3], // code-reviewer (custom)
+        isNew: false,
+        open: true,
+        inline: true,
+        onClose: () => {},
+      }),
+    ),
+  )
+  assert.match(html, /data-probe="memory"/, 'memory 插件插槽应经 PluginSlot 渲染')
+  assert.match(html, /长期记忆 \(code-reviewer\)/, '插槽收到 profileId props')
+  assert.match(html, /启用长期记忆/, '插槽内容实际渲染（非 fallback）')
+})
+
+test('ProfileDetailDrawer：无 memory 插件贡献时不渲染长期记忆区块（宿主无硬编码）', { timeout: 60_000 }, () => {
+  const store = makeTestStore({ models: mockModels, skills: mockSkills })
+  const html = renderToStaticMarkup(
+    e(
+      HelmStoreContext.Provider,
+      { value: store },
+      e(ProfileDetailDrawer, {
+        profile: mockProfiles[3],
+        isNew: false,
+        open: true,
+        inline: true,
+        onClose: () => {},
+      }),
+    ),
+  )
+  assert.doesNotMatch(html, /长期记忆/, '无插件贡献时不得出现记忆区块')
 })

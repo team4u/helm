@@ -11,7 +11,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HelmError } from '@helm/protocol'
 import { atomicWriteFile, atomicWriteJson } from '../../services/index.js'
-import { renderSkillTemplate } from '../assistant/assets.js'
+import { renderSkillTemplate } from '../profile/assets.js'
 
 /** 托管本插件自举资产的插件 ID（managedByPlugin 标记值）。 */
 export const SUPERAGENT_MANAGED_BY = 'builtin:superagent'

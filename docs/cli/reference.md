@@ -225,7 +225,7 @@ helm conversations update 42 --model "" # 清除模型覆盖，恢复继承链
 
 #### helm conversations delete [id]
 
-删除指定会话。注意根会话 `#1` 受系统保护不可删除。
+删除指定会话。插件托管（ownedBy 非 human）的会话不可删除；初始会话无 id 级豁免。
 
 ```bash
 helm conversations delete 108

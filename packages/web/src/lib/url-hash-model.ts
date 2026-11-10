@@ -1,4 +1,3 @@
-import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, type ActiveModal, type ResolvedTarget } from './types.js'
 
 /**
@@ -17,7 +16,11 @@ export interface WorkspaceLocationState {
 /** 需要持久化进 URL 的弹窗（command-palette 是瞬态搜索框，排除在外）。 */
 type PersistedModal = Exclude<ActiveModal, null | { kind: 'command-palette' }>
 
-const DEFAULT_PRIMARY: ResolvedTarget = { kind: 'conversation', conversationId: ROOT_CONVERSATION_ID }
+/**
+ * 缺省主屏：智能体角色中心（无会话依赖，零会话/全部删除后仍可用；
+ * 历史缺省 conversation:1 已随根会话特殊设计移除）。
+ */
+const DEFAULT_PRIMARY: ResolvedTarget = { kind: 'profiles' }
 const DEFAULT_WORKBENCH_TAB = 'artifacts'
 
 const MODAL_KIND_TO_KEY = {
@@ -249,7 +252,7 @@ function parseActiveModal(params: URLSearchParams): ActiveModal {
 
 /**
  * 解析 `#/path?searchParams` 形式的 Hash。所有非法段均回退默认
- * （conversation:1 / 无分屏 / 工作台关闭 / 无弹窗），绝不抛出或产生 NaN。
+ * （角色中心 / 无分屏 / 工作台关闭 / 无弹窗），绝不抛出或产生 NaN。
  */
 export function parseLocationHash(rawHash: string): WorkspaceLocationState {
   const raw = rawHash.startsWith('#') ? rawHash.slice(1) : rawHash

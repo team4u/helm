@@ -8,7 +8,7 @@
  *    重启后继承语义保持（fresh 无 override 即继承）；
  * 2. ProfileRuntime nodeId/workspace/env 边界验证与保留；
  * 3. 会话插件管理权：managed 删除保护 409 owners、release 后可删、
- *    root 403 不变；markConversationOwnership 通用且 root 禁改自动归属；
+ *    初始会话无 id 级豁免；markConversationOwnership 通用（未标记 human）；
  *    原生 spawn 子会话零业务标签且自动 helm 归属；
  * 4. submitInput opts.meta 从 API 层直达 helm.input entry 与 turn_settled；
  * 5. 受管 token：不出现在任何落库/事件/模型文本（回显不落库）、close dispose、
@@ -253,7 +253,7 @@ describe('ProfileRuntime nodeId/workspace/env 边界验证', { timeout: 60_000 }
 // ---------------------------------------------------------------------------
 
 describe('会话管理权与归属权', { timeout: 60_000 }, () => {
-  it('managed 会话删除 409 含 owners；release 后可删；root 403 不变', { timeout: 60_000 }, async () => {
+  it('managed 会话删除 409 含 owners；release 后可删；初始会话无 id 级豁免', { timeout: 60_000 }, async () => {
     const dir = join(root, 'o1')
     const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
     try {
@@ -270,21 +270,27 @@ describe('会话管理权与归属权', { timeout: 60_000 }, () => {
       release()
       await kernel.deleteConversation(conv.id)
       assert.equal(kernel.listConversations().find((c) => c.id === conv.id), undefined)
-      // root 保护不受管理权影响。
+      // 初始会话 #1：管理权保护同样生效（通用保护，无 id 豁免）。
+      const releaseRoot = kernel.manageConversation(1, 'test:owner-root')
       await assert.rejects(
         () => kernel.deleteConversation(1),
-        (err: unknown) => err instanceof HelmError && err.code === 'root_conversation_protected',
+        (err: unknown) => err instanceof HelmError && err.code === 'conversation_managed_by_plugin',
       )
+      releaseRoot()
+      // 释放后即可删（无 root 403）。
+      await kernel.deleteConversation(1)
+      assert.equal(kernel.listConversations().some((c) => c.id === 1), false)
     } finally {
       await kernel.close()
     }
   })
 
-  it('markConversationOwnership：root 禁改自动归属；子 spawn 自动 helm', { timeout: 60_000 }, async () => {
+  it('markConversationOwnership：通用标记；子 spawn 自动 helm', { timeout: 60_000 }, async () => {
     const dir = join(root, 'o2')
     const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
     try {
-      await assertThrowsSync(() => kernel.markConversationOwnership(1, 'helm'), 'root_ownership_immutable')
+      // 初始会话 #1 与普通会话同一标记语义（未标记一律 human，无 id 特判）。
+      assert.equal(kernel.getConversationOwnership(1), 'human')
       kernel.__faux.setResponses([fauxAssistantMessage('done')])
       let childId: number | undefined
       await kernel.spawnAgent({

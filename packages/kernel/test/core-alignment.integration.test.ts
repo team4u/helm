@@ -38,11 +38,14 @@ import { DatabaseSync } from 'node:sqlite'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider, fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
-import { ROOT_CONVERSATION_ID, HelmError, type PluginDefinition } from '@helm/protocol'
+import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
 import { startHub } from '../src/http/index.js'
 
 import assert from 'node:assert/strict'
+
+/** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
+const ROOT_CONVERSATION_ID = 1 as const
 
 const testDir = fileURLToPath(new URL('.', import.meta.url))
 const repoRoot = join(testDir, '..', '..', '..')

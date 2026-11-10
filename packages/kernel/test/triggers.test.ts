@@ -22,9 +22,12 @@ import { DatabaseSync } from 'node:sqlite'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 
-import { ROOT_CONVERSATION_ID, HelmError } from '@helm/protocol'
+import { HelmError } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
 import { createHubHandler } from '../src/http/index.js'
+
+/** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
+const ROOT_CONVERSATION_ID = 1 as const
 
 const TRIGGERS = 'builtin:triggers'
 const WEBHOOK_BASE = '/api/plugins/builtin%3Atriggers/routes/webhook'

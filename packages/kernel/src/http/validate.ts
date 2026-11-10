@@ -333,8 +333,7 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   }
   const humanSelectable = optionalBoolean(body, 'humanSelectable')
   const system = optionalString(body, 'system', { maxLength: 512 * 1024 })
-  const memory = optionalString(body, 'memory', { maxLength: 512 * 1024 })
-  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'thinkingLevel', 'nodeId', 'cwd', 'tags', 'skills', 'runtime', 'managedByPlugin', 'humanSelectable', 'system', 'memory']))
+  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'thinkingLevel', 'nodeId', 'cwd', 'tags', 'skills', 'runtime', 'managedByPlugin', 'humanSelectable', 'system']))
   const nodeId = optionalProfileNodeId(body)
   const cwd = optionalString(body, 'cwd')
   if (cwd !== undefined && cwd.length === 0) throw new ValidationError('cwd 需为非空字符串')
@@ -358,7 +357,6 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   if (managedByPlugin !== undefined) profile.managedByPlugin = managedByPlugin
   if (humanSelectable !== undefined) profile.humanSelectable = humanSelectable
   if (system !== undefined) profile.system = system
-  if (memory !== undefined) profile.memory = memory
   return profile
 }
 

@@ -12,7 +12,6 @@ import type {
   SidebarSectionSpec,
   SkillSummary,
 } from '@helm/protocol'
-import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import type { QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
 
@@ -180,9 +179,8 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
     }
   }
 
-  // 站位内排序：常驻/根会话置顶，其余 updatedAt 倒序（同刻按 id 倒序）。
+  // 站位内排序：常驻会话置顶，其余 updatedAt 倒序（同刻按 id 倒序）。
   const residentTier = (c: ConversationSummary): number => {
-    if (c.id === ROOT_CONVERSATION_ID) return 0
     if (c.ownedBy === 'helm') return 1
     if (partition.pinnedConversationIds.has(c.id)) return 2
     return 3
@@ -373,12 +371,11 @@ export function conversationStatusTooltip(
 
 /**
  * 判断会话是否允许被人类删除：
- * - 根会话（#1，ROOT_CONVERSATION_ID）受系统保护，不可删除；
  * - 插件托管或非人类拥有的会话（ownedBy !== 'human'，如 'helm' | 'bot'）不可删除；
- * - 普通人类会话（ownedBy 为 undefined 或 'human'，且 id !== ROOT_CONVERSATION_ID）允许删除。
+ * - 普通人类会话（ownedBy 为 undefined 或 'human'）允许删除（无 id 级豁免；
+ *   插件管理权保护在服务端 conversation_managed_by_plugin 统一判定）。
  */
 export function isConversationDeletable(conv: Pick<ConversationSummary, 'id' | 'ownedBy'>): boolean {
-  if (conv.id === ROOT_CONVERSATION_ID) return false
   if ((conv.ownedBy ?? 'human') !== 'human') return false
   return true
 }

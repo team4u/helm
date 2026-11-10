@@ -98,9 +98,9 @@ test('secretConfigured 仅由服务端原始值判断占位提示', { timeout: 6
 })
 
 // ---------------------------------------------------------------------------
-// ProfileEditorModal：PUT 整体替换语义的完整基础配置 + system/memory 按需提交
+// ProfileEditorModal：PUT 整体替换语义的完整基础配置 + system 按需提交
 //（真实链路：routes.ts PUT /profiles/:id → profiles.save → 整体重写 profile.json；
-//  省 system/memory 表示不动 SYSTEM.md / MEMORY.md，见 profile-binding 组合测试）
+//  省 system 表示不动 SYSTEM.md；MEMORY.md 由 builtin:memory 自治，见 profile-binding 组合测试）
 // ---------------------------------------------------------------------------
 
 function baseProfile(overrides: Partial<Profile> = {}): Profile {
@@ -113,12 +113,11 @@ function baseProfile(overrides: Partial<Profile> = {}): Profile {
     tags: ['worker'],
     runtime: { kind: 'herdr', agent: 'agy', nodeId: 'ops-box', workspace: '/srv/herdr' },
     system: '# SYSTEM\n基础提示词',
-    memory: '# MEMORY\n旧记忆',
     ...overrides,
   }
 }
 
-test('仅改展示名：载荷仍携带完整基础配置，不丢节点/目录/运行时；system / memory 省略', { timeout: 60_000 }, () => {
+test('仅改展示名：载荷仍携带完整基础配置，不丢节点/目录/运行时；system 省略', { timeout: 60_000 }, () => {
   const draft = createDraft(baseProfile())
   const next = editProfileField(draft, { name: '重构工人' })
   const payload = buildProfileSavePayload(next, { isNew: false })
@@ -129,7 +128,6 @@ test('仅改展示名：载荷仍携带完整基础配置，不丢节点/目录/
   assert.deepEqual(payload.tags, ['worker'])
   assert.deepEqual(payload.runtime, { kind: 'herdr', agent: 'agy', nodeId: 'ops-box', workspace: '/srv/herdr' }, '只改名不丢外部运行时')
   assert.equal('system' in payload, false, '未编辑 system 时必须省略')
-  assert.equal('memory' in payload, false, '未编辑 memory 时必须省略（保护 Agent 追加的新记忆）')
 })
 
 test('未做任何修改：载荷为完整规范化基础配置，dirty 为 false', { timeout: 60_000 }, () => {
@@ -159,20 +157,21 @@ test('基线无可选字段：载荷仍提交骨架（tags 空数组），不携
   assert.equal('memory' in payload, false)
 })
 
-test('显式编辑过 memory 才提交 memory 全文', { timeout: 60_000 }, () => {
+test('载荷永不携带 memory（MEMORY.md 由 builtin:memory 插件自治管理）', { timeout: 60_000 }, () => {
   const draft = createDraft(baseProfile())
-  const edited = {
+  const payload = buildProfileSavePayload(draft, { isNew: false })
+  assert.equal('memory' in payload, false)
+  const editedSystem = {
     ...draft,
-    profile: { ...draft.profile, memory: '# MEMORY\n新记忆' },
-    editedFields: new Set<'system' | 'memory'>(['memory']),
+    profile: { ...draft.profile, system: '# SYSTEM\n新提示词' },
+    editedFields: new Set<'system'>(['system']),
   }
-  const payload = buildProfileSavePayload(edited, { isNew: false })
-  assert.equal(payload.memory, '# MEMORY\n新记忆')
-  assert.equal('system' in payload, false)
+  const payload2 = buildProfileSavePayload(editedSystem, { isNew: false })
+  assert.equal('memory' in payload2, false)
 })
 
-test('新建 Profile：提交完整基础配置 + 当前 system / memory 全文', { timeout: 60_000 }, () => {
-  const draft = createDraft({ ...baseProfile(), id: 'reviewer', system: '# 新提示词', memory: '' })
+test('新建 Profile：提交完整基础配置 + 当前 system 全文', { timeout: 60_000 }, () => {
+  const draft = createDraft({ ...baseProfile(), id: 'reviewer', system: '# 新提示词' })
   const payload = buildProfileSavePayload(draft, { isNew: true })
   assert.equal(payload.id, 'reviewer')
   assert.equal(payload.name, '代码工人')
@@ -182,7 +181,7 @@ test('新建 Profile：提交完整基础配置 + 当前 system / memory 全文'
   assert.deepEqual(payload.tags, ['worker'])
   assert.deepEqual(payload.runtime, { kind: 'herdr', agent: 'agy', nodeId: 'ops-box', workspace: '/srv/herdr' })
   assert.equal(payload.system, '# 新提示词')
-  assert.equal(payload.memory, '')
+  assert.equal('memory' in payload, false)
 })
 
 // ---------------------------------------------------------------------------
@@ -309,24 +308,22 @@ test('model 清空与修改：trim 后空串归一为省略（删除覆盖，回
   assert.equal(changed.model, 'zhipu/glm-5')
 })
 
-test('载荷永不携带 system / memory 以外的 Profile 大文本快照（防 Object.assign 泄漏）', { timeout: 60_000 }, () => {
-  // draft.profile 携带加载时的大文本快照；未编辑时载荷绝不含这两个键。
+test('载荷永不携带 system 以外的 Profile 大文本快照（防 Object.assign 泄漏）', { timeout: 60_000 }, () => {
+  // draft.profile 携带加载时的大文本快照；未编辑时载荷绝不含该键。
   const payload = buildProfileSavePayload(createDraft(baseProfile()), { isNew: false })
   assert.equal('system' in payload, false)
-  assert.equal('memory' in payload, false)
   // 编辑其他字段也不会把大文本带出。
   const edited = editProfileField(createDraft(baseProfile()), { name: '重构工人' })
   const editedPayload = buildProfileSavePayload(edited, { isNew: false })
   assert.equal('system' in editedPayload, false)
-  assert.equal('memory' in editedPayload, false)
 })
 
 test('大文本字段一经编辑即 dirty（即使内容改回原文仍提交，保守不丢数据）', { timeout: 60_000 }, () => {
   const draft = createDraft(baseProfile())
   const edited: typeof draft = {
     ...draft,
-    profile: { ...draft.profile, memory: draft.profile.memory },
-    editedFields: new Set(['memory']),
+    profile: { ...draft.profile, system: draft.profile.system },
+    editedFields: new Set(['system']),
   }
   assert.equal(isDraftDirty(edited), true)
 })

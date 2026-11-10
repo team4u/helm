@@ -405,18 +405,18 @@ test('HelmPluginConfigStore：pluginEnabled 独立落盘 config.json，与 plugi
 
   // 与既有 plugins 配置、credentials 共存同一 config.json：互不干扰
   await store.setEnabled('builtin:herdr', false);
-  await store.setEnabled('builtin:assistant', true);
+  await store.setEnabled('builtin:profile', true);
   await store.set('builtin:herdr', { endpoint: 'unix:///x' }, { endpoint: { type: 'string' } });
 
   const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>;
-  assert.deepEqual(raw['pluginEnabled'], { 'builtin:herdr': false, 'builtin:assistant': true });
+  assert.deepEqual(raw['pluginEnabled'], { 'builtin:herdr': false, 'builtin:profile': true });
   assert.deepEqual(raw['plugins'], { 'builtin:herdr': { endpoint: 'unix:///x' } }, 'pluginEnabled 与 plugins 配置分离');
 
   // 新实例（模拟重启）：load 预热后 getEnabled 同步可读
   const store2 = new HelmPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) });
   await store2.load();
   assert.equal(store2.getEnabled('builtin:herdr'), false);
-  assert.equal(store2.getEnabled('builtin:assistant'), true);
+  assert.equal(store2.getEnabled('builtin:profile'), true);
   assert.equal(store2.getEnabled('p:unknown'), undefined);
   assert.equal(store2.get('builtin:herdr')['endpoint'], 'unix:///x');
 });
@@ -461,14 +461,14 @@ test('locked 插件恒启用：声明 enabled:false 也强行启用，disable 40
   const host = makeHost(store);
   const started: string[] = [];
   await host.register(
-    servicePlugin('builtin:assistant', { onStart: () => started.push('start'), locked: true }),
+    servicePlugin('builtin:profile', { onStart: () => started.push('start'), locked: true }),
     { enabled: false },
   );
-  assert.equal(host.list().find((p) => p.id === 'builtin:assistant')!.enabled, true);
+  assert.equal(host.list().find((p) => p.id === 'builtin:profile')!.enabled, true);
   assert.deepEqual(started, ['start']);
-  await rejectsCode(host.disable('builtin:assistant'), 'plugin_locked');
+  await rejectsCode(host.disable('builtin:profile'), 'plugin_locked');
   // locked 未持久化任何启停值（disable 被拒不产生写副作用）
-  assert.equal(store.enabled.has('builtin:assistant'), false);
+  assert.equal(store.enabled.has('builtin:profile'), false);
 });
 
 // ---------------------------------------------------------------------------

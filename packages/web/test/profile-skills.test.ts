@@ -97,7 +97,7 @@ test('toggleSkillInAllowlist：不可选技能（停用/缺失）勾选请求被
 })
 
 test('buildSkillsSectionModel：可见 / 不可用分区与保留语义', { timeout: 60_000 }, () => {
-  const enabled = new Set(['builtin:assistant'])
+  const enabled = new Set(['builtin:profile'])
   // undefined 模式：全部可见技能列出、无失效行
   const all = buildSkillsSectionModel(undefined, CATALOG, enabled)
   assert.deepEqual(all.visible.map((r) => r.skill.id), ['review', 'tally'])
@@ -119,7 +119,7 @@ test('buildSkillsSectionModel：可见 / 不可用分区与保留语义', { time
   assert.equal(notChecked.unavailable.length, 0)
 
   // 插件启用后停用技能回到可见区
-  const enabledHerdr = buildSkillsSectionModel(['herdr-tool'], CATALOG, new Set(['builtin:assistant', 'builtin:herdr']))
+  const enabledHerdr = buildSkillsSectionModel(['herdr-tool'], CATALOG, new Set(['builtin:profile', 'builtin:herdr']))
   assert.deepEqual(enabledHerdr.visible.map((r) => r.skill.id), ['review', 'tally', 'herdr-tool'])
   assert.equal(enabledHerdr.unavailable.length, 0)
 })

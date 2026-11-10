@@ -27,9 +27,10 @@ import {
   HELM_CLI_SKILL_AND_PLUGIN_DEV_MD,
   HELM_CLI_SKILL_ASSET,
   renderSkillTemplate,
-} from '../src/builtin-plugins/assistant/assets.js'
+} from '../src/builtin-plugins/profile/assets.js'
 import { MANAGED_EXEC_ENV_VARS } from '../src/env/scoped-env.js'
 import { WATCHDOG_PLAYBOOK_SKILL_ASSET } from '../src/builtin-plugins/superagent/assets.js'
+import { MemoryStore } from '../src/builtin-plugins/memory/store.js'
 import { assert } from './helpers.js'
 import { waitFor } from './helpers.js'
 import {
@@ -155,9 +156,8 @@ test('profiles: ensureDefault 自举 model 空串、重复自举不覆盖、CRUD
   assert.equal(p.id, 'assistant')
   assert.equal(p.model, undefined) // 未配置即缺省，由 runtime 显式报错
   assert.ok(p.tags?.includes('assistant'))
-  // 自举同时落 SYSTEM.md / MEMORY.md
+  // 自举只落 SYSTEM.md（MEMORY.md 由 builtin:memory 插件自治管理）
   assert.ok((await profiles.getSystem('assistant')).length > 0)
-  assert.ok((await profiles.getMemory('assistant')).length > 0)
 
   // 二次 ensureDefault 不覆盖已有（用户改过的 model 保留）
   await profiles.save({ ...p, model: 'openai/gpt-4o', name: '助理', tags: ['assistant'] })
@@ -187,21 +187,22 @@ test('profiles: ensureDefault 自举 model 空串、重复自举不覆盖、CRUD
   )
 })
 
-test('profiles: memory append/replace 原子更新且最终内容正确', { timeout: 60_000 }, async () => {
+test('profiles: save 不再读写 MEMORY.md（记忆由 builtin:memory 自治）', { timeout: 60_000 }, async () => {
   const dataDir = await freshDataDir()
   const profiles = new ProfileService(dataDir)
   await profiles.ensureDefault()
-  await profiles.updateMemory('assistant', '第一行', 'replace')
-  await profiles.updateMemory('assistant', '第二行', 'append')
-  const text = await profiles.getMemory('assistant')
-  assert.ok(text.includes('第一行') && text.includes('第二行'))
-  // append 在无尾换行时补换行
-  await profiles.updateMemory('assistant', '第三行', 'append')
-  const text2 = await profiles.getMemory('assistant')
-  assert.ok(text2.includes('第二行\n第三行'))
-  // replace 整体替换
-  await profiles.updateMemory('assistant', '全部重来', 'replace')
-  assert.equal(await profiles.getMemory('assistant'), '全部重来')
+  await profiles.save({ id: 'writer', name: '写手', tags: [] })
+  // 新建 Profile 不自动创建 MEMORY.md
+  const entries = await readdir(join(dataDir, 'profiles', 'writer'))
+  assert.ok(!entries.includes('MEMORY.md'), 'ProfileService.save 不得创建 MEMORY.md')
+  // 传入 memory 字段（旧契约）被服务层静默剥离：不落 profile.json、不写 MEMORY.md
+  //（HTTP 边界 rejectUnknownKeys 显式 400，见 http.test.ts）。
+  const saved = await profiles.save({ id: 'writer2', name: '写手', tags: [], memory: '# 旧字段' } as never)
+  assert.equal('memory' in saved, false, 'memory 不进 Profile 契约')
+  assert.ok(
+    !(await readdir(join(dataDir, 'profiles', 'writer2'))).includes('MEMORY.md'),
+    'memory 字段不得触发 MEMORY.md 写入',
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -1339,20 +1340,20 @@ test('跨进程锁回归: 真实 CLI 子进程与 CredentialService 并发写 cr
   }
 })
 
-test('并发回归: 不同 ProfileService 实例并发 append 不丢行', { timeout: 60_000 }, async () => {
+test('并发回归: 不同 MemoryStore 实例并发 append 不丢行', { timeout: 60_000 }, async () => {
   const dataDir = await freshDataDir()
-  const base = new ProfileService(dataDir)
-  await base.ensureDefault()
-  const services = Array.from({ length: 5 }, () => new ProfileService(dataDir))
+  const base = new MemoryStore(dataDir)
+  await base.ensureMemory('assistant')
+  const stores = Array.from({ length: 5 }, () => new MemoryStore(dataDir))
   await Promise.all(
-    services.map((svc, i) => svc.updateMemory('assistant', `行-${i}`, 'append')),
+    stores.map((store, i) => store.updateMemory('assistant', `行-${i}`, 'append')),
   )
   const text = await base.getMemory('assistant')
   for (let i = 0; i < 5; i++) {
     assert.ok(text.includes(`行-${i}`), `并发 append 不得丢失 行-${i}`)
   }
   // 总行数 = 默认头部（1 行非空）+ 5 次追加
-  const lines = text.split('\n').filter((l) => l.length > 0)
+  const lines = text.split('\n').filter((l: string) => l.length > 0)
   assert.equal(lines.length, 1 + 5)
 })
 
@@ -1419,13 +1420,13 @@ test('credentials 回归: 保留 CLI 等未知顶层键、非法结构显式拒�
 })
 
 // ---------------------------------------------------------------------------
-// 集成：memory 原子更新 + watcher 实时感知（assistant 插件消费路径）
+// 集成：memory 原子更新 + watcher 实时感知（builtin:memory 消费路径）
 // ---------------------------------------------------------------------------
-test('集成: update_memory 原子更新被 watcher 实时捕获（无 temp 事件）', { timeout: 60_000 }, async () => {
+test('集成: MemoryStore 原子更新被 watcher 实时捕获（无 temp 事件）', { timeout: 60_000 }, async () => {
   const dataDir = await freshDataDir()
   await ensureDataDir(dataDir)
-  const profiles = new ProfileService(dataDir)
-  await profiles.ensureDefault()
+  const store = new MemoryStore(dataDir)
+  await store.ensureMemory('assistant')
 
   const seen: string[] = []
   const watcher = new AssetWatcher(
@@ -1435,10 +1436,10 @@ test('集成: update_memory 原子更新被 watcher 实时捕获（无 temp 事�
   )
   watcher.start()
   try {
-    await profiles.updateMemory('assistant', '用户偏好：简洁回复', 'append')
+    await store.updateMemory('assistant', '用户偏好：简洁回复', 'append')
     await waitFor(() => seen.some((p) => p === 'profiles/assistant/MEMORY.md'))
     // 读取到的永远是完整内容（原子性）
-    const memory = await profiles.getMemory('assistant')
+    const memory = await store.getMemory('assistant')
     assert.ok(memory.includes('用户偏好：简洁回复'))
     for (const p of seen) assert.ok(!p.includes('.tmp'))
   } finally {

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SearchHit } from '@helm/protocol'
-import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { conversationsApi, searchApi } from '../lib/api.js'
 import { commandActionPluginId, commandHint, commandsForConversation } from '../lib/commands-model.js'
 import { HelmIcon } from '../lib/icons.js'
@@ -90,10 +89,10 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       {
         kind: 'command',
         id: 'builtin:goto-assistant',
-        title: '跳转 #1 个人助理',
-        hint: '#1',
+        title: '打开个人助理角色',
+        hint: 'assistant',
         icon: 'sparkles',
-        run: () => store.openTarget({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID }),
+        run: () => store.openTarget({ kind: 'profiles', profileId: 'assistant' }),
       },
       {
         kind: 'command',

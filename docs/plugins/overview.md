@@ -258,7 +258,7 @@ flowchart TD
 - **服务校验错误**：若 `liveTasks()` 执行崩溃或返回非法数据：
   - 错误码：`500 plugin_live_tasks_check_failed`。
   - 宿主绝不默认放行，保持插件状态不变。
-- **常驻插件保护**：声明 `locked: true` 的内置插件（如 `builtin:assistant`）永久禁止停用或卸载。
+- **常驻插件保护**：声明 `locked: true` 的内置插件（如 `builtin:profile`）永久禁止停用或卸载。
 
 ---
 

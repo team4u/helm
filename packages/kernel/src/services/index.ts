@@ -38,7 +38,6 @@ export {
   ProfileService,
   SkillService,
   DEFAULT_PROFILE_ID,
-  MAX_MEMORY_CHARS,
   SYSTEM_DEFAULT,
   assertProfileId,
   validateProfileInput,

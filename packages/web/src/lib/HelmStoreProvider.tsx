@@ -5,7 +5,6 @@ import * as ReactDomClient from 'react-dom/client'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
 import type { ActionManifest, ArtifactMetadata, ConversationDetail, HelmEventFrame, HelmSnapshot, Profile, ProviderConfig, SkillSummary } from '@helm/protocol'
-import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, nodesApi, pluginsApi, setStoredToken, type CredentialSummary, type ModelDescriptor, type NodeInfo } from './api.js'
 import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, SseParser, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
@@ -172,12 +171,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     setSseConnected(false)
     setActiveModal(null)
     setSplitTarget(null)
-    setPrimaryTarget({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
+    setPrimaryTarget({ kind: 'profiles' })
     setWorkbenchOpen(false)
     setWorkbenchTab('artifacts')
     // 地址栏同步复位为默认深链（replaceState 不污染历史栈）；未认证期间禁用写回，避免覆盖用户粘贴的深链。
-    lastSyncedLocation.current = parseLocationHash('#/c/1')
-    window.history.replaceState(null, '', '#/c/1')
+    lastSyncedLocation.current = parseLocationHash('#/profiles')
+    window.history.replaceState(null, '', '#/profiles')
     updateLive(emptyLiveState)
     setConversationArtifacts({})
     setLoadErrors({})
@@ -507,7 +506,9 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
             }
             if (event.type === 'conversation.deleted' && 'conversationId' in event) {
               const id = event.conversationId
-              setPrimaryTarget((current) => current.kind === 'conversation' && current.conversationId === id ? { kind: 'conversation', conversationId: ROOT_CONVERSATION_ID } : current)
+              // 当前主屏/分屏正在查看的会话被删：回退到无会话依赖的角色中心，
+              // 绝不指向另一个会话（可能也已不存在）。
+              setPrimaryTarget((current) => current.kind === 'conversation' && current.conversationId === id ? { kind: 'profiles' } : current)
               setSplitTarget((current) => current?.kind === 'conversation' && current.conversationId === id ? null : current)
               setConversationArtifacts((prev) => { const next = { ...prev }; delete next[id]; return next })
               evictSessionDocsOfConversation(id)

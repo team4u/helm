@@ -7,9 +7,6 @@ import type { ConversationAttachmentRef } from './artifact.js'
 
 export type { ConversationAttachmentRef }
 
-/** 常驻个人助理根会话 ID，固定不可删除（`DELETE /api/conversations/1` 返回 403）。 */
-export const ROOT_CONVERSATION_ID = 1
-
 /** 五态状态机；任何状态变化均推进 stateChangeSeq。 */
 export type ConversationStatus =
   | 'working' // 正在执行推理、工具调用或等待子代理

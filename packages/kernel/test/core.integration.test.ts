@@ -2,7 +2,7 @@
  * helm 核心端到端集成验收（仅本文件与 app-workflow.integration.test.ts，不修改实现）。
  *
  * 组合纪律：一律经真实组合入口 createHelm（src/app.ts）组装——真 pi-durable
- * SQLite 持久层 + 真 PluginHost + 真 builtin:assistant + 真 WorkflowService +
+ * SQLite 持久层 + 真 PluginHost + 真 builtin:profile / builtin:memory + 真 WorkflowService +
  * faux provider（pi-ai 官方测试 provider，进程内脚本化响应）。不 new
  * KernelRuntime、不自建 MemoryDocStore、不手拼 HTTP kernel adapter。
  *
@@ -31,8 +31,9 @@ import {
   type FauxResponseStep,
 } from '@earendil-works/pi-ai/providers/faux'
 
-import { ROOT_CONVERSATION_ID, HelmError, type PluginDefinition } from '@helm/protocol'
-import { HELM_CLI_SKILL_ASSET } from '../src/builtin-plugins/assistant.js'
+import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { HELM_CLI_SKILL_ASSET } from '../src/builtin-plugins/profile.js'
+import { MemoryStore } from '../src/builtin-plugins/memory/store.js'
 import { createHelm } from '../src/app.js'
 import { startHub } from '../src/http/index.js'
 import { redactJsonValue } from '../src/redact.js'
@@ -53,6 +54,8 @@ interface TestEnv {
   app: Awaited<ReturnType<typeof createHelm>>
   /** 每次模型请求的完整消息（faux 官方 TranscriptContext 捕获）。 */
   requests: Array<{ roles: string[]; systemSections: string[]; userTexts: string[]; assistantTexts: string[] }>
+  /** 首次启动播种的普通 assistant 入口会话 ID（SDK 保留 #1，实际从 2 起）。 */
+  initialConvId: number
   /** 真实提交 + 等待空闲（含 turn_settled 钩子）。 */
   submitAndWait(text: string, opts?: { origin?: 'human' | 'agent' | 'trigger' }): Promise<void>
   /** 追加一个 capture 响应到 faux 队列。 */
@@ -68,7 +71,7 @@ async function makeEnv(): Promise<TestEnv> {
   const models = createModels()
   models.setProvider(faux.provider)
 
-  // 真实组合入口：真 SQLite + 真 PluginHost + assistant + WorkflowService。
+  // 真实组合入口：真 SQLite + 真 PluginHost + profile/memory + WorkflowService。
   const app = await createHelm({
     dataDir,
     cwd: dataDir,
@@ -79,15 +82,20 @@ async function makeEnv(): Promise<TestEnv> {
   const requests: TestEnv['requests'] = []
   faux.setResponses([])
 
+  const initialConv = app.kernel
+    .listConversations()
+    .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)
+  if (initialConv === undefined) throw new Error('首次启动应播种 assistant 入口会话')
   const env: TestEnv = {
     dataDir,
     dbPath,
     faux,
     app,
     requests,
+    initialConvId: initialConv.id,
     async submitAndWait(text, opts) {
-      await app.kernel.submitInput(ROOT_CONVERSATION_ID, text, opts)
-      await app.kernel.waitForIdle(ROOT_CONVERSATION_ID)
+      await app.kernel.submitInput(initialConv.id, text, opts)
+      await app.kernel.waitForIdle(initialConv.id)
     },
     capture(): FauxResponseStep {
       return (context) => {
@@ -163,29 +171,34 @@ async function rejectsExplicitly(
 }
 
 // ---------------------------------------------------------------------------
-// 1. assistant 自举 + 真实回合 + before_turn sections 真实进入模型请求
+// 1. profile/memory 自举 + 真实回合 + before_turn sections 真实进入模型请求
 // ---------------------------------------------------------------------------
 
-test('集成1: createHelm 组合——assistant 自举 #1、locked 保护、SYSTEM/MEMORY sections 真实进入模型请求、update_memory 跨回合持久', { timeout: 60_000 }, async () => {
+test('集成1: createHelm 组合——profile/memory 默认协同、locked 保护、SYSTEM/MEMORY sections 真实进入模型请求、update_memory 跨回合持久', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const kernel = env.app.kernel
     // 修复后的 plugins getter 非 undefined（runtime 集成修复目标）；测试按契约直接消费
     const host = kernel.plugins!
 
-    // --- 自举：locked assistant 已注册启用，工具清单暴露 update_memory / load_skill
-    const summary = host.list().find((p) => p.id === 'builtin:assistant')
-    assert.ok(summary, 'builtin:assistant 应经 createHelm 注册')
-    assert.equal(summary.locked, true)
-    assert.equal(summary.enabled, true)
-    assert.ok(summary.tools.includes('update_memory'))
-    assert.ok(summary.tools.includes('load_skill'))
-    await rejectsExplicitly(() => host.disable('builtin:assistant'), { code: 'plugin_locked', message: /锁定/ })
-    await rejectsExplicitly(() => host.unregister('builtin:assistant'), { code: 'plugin_locked', message: /锁定/ })
+    // --- 自举：locked builtin:profile + 默认启用可停用的 builtin:memory
+    const profileSummary = host.list().find((p) => p.id === 'builtin:profile')
+    assert.ok(profileSummary, 'builtin:profile 应经 createHelm 注册')
+    assert.equal(profileSummary.locked, true)
+    assert.equal(profileSummary.enabled, true)
+    assert.ok(profileSummary.tools.includes('load_skill'))
+    await rejectsExplicitly(() => host.disable('builtin:profile'), { code: 'plugin_locked', message: /锁定/ })
+    await rejectsExplicitly(() => host.unregister('builtin:profile'), { code: 'plugin_locked', message: /锁定/ })
+    const memorySummary = host.list().find((p) => p.id === 'builtin:memory')
+    assert.ok(memorySummary, 'builtin:memory 应经 createHelm 注册')
+    assert.equal(memorySummary.locked, false)
+    assert.equal(memorySummary.enabled, true)
+    assert.ok(memorySummary.tools.includes('update_memory'))
+    assert.ok(memorySummary.actions.includes('get') && memorySummary.actions.includes('set') && memorySummary.actions.includes('configure'))
 
     // --- 根会话 #1 由 createHelm 创建（真实 SQLite 持久）
-    const conv = kernel.getConversation(ROOT_CONVERSATION_ID)
-    assert.equal(conv.id, ROOT_CONVERSATION_ID)
+    const conv = kernel.getConversation(env.initialConvId)
+    assert.equal(conv.id, env.initialConvId)
     assert.equal(conv.profileId, 'assistant')
 
     // --- 首轮请求：before_turn sections 经真实 system 消息进入模型（faux 捕获）
@@ -210,7 +223,7 @@ test('集成1: createHelm 组合——assistant 自举 #1、locked 保护、SYST
     ])
     await env.submitAndWait('请记住我最喜欢的颜色是青瓷绿')
 
-    const memoryFile = await kernel.services.profiles.getMemory('assistant')
+    const memoryFile = await new MemoryStore(kernel.dataDir).getMemory('assistant')
     assert.ok(memoryFile.includes(MEMORY_FACT), 'MEMORY.md 应含新记忆（真实文件写入）')
 
     // 收尾轮请求带新记忆（跨模块：工具写入 → before_turn 重读 → 模型请求）
@@ -257,27 +270,27 @@ test('集成2: load_skill 读取 SKILL.md 与 references/ 子文件，路径穿�
     const readMain = (await host.executeTool(
       'load_skill',
       { skillId: 'deploy-playbook' },
-      { conversationId: ROOT_CONVERSATION_ID },
+      { conversationId: env.initialConvId },
     )) as { text: string }
     assert.ok(readMain.text.includes('部署'), '缺省读取 SKILL.md')
 
     const readRef = (await host.executeTool(
       'load_skill',
       { skillId: 'deploy-playbook', path: 'references/rollback.md' },
-      { conversationId: ROOT_CONVERSATION_ID },
+      { conversationId: env.initialConvId },
     )) as { text: string }
     assert.ok(readRef.text.includes('helm rollback'), '应能按需读取 references 子文件')
 
     await rejectsExplicitly(
-      () => host.executeTool('load_skill', { skillId: 'deploy-playbook', path: '../profiles/assistant/MEMORY.md' }, { conversationId: 1 }),
+      () => host.executeTool('load_skill', { skillId: 'deploy-playbook', path: '../profiles/assistant/MEMORY.md' }, { conversationId: env.initialConvId }),
       { message: /路径穿越|入参校验失败/ },
     )
     await rejectsExplicitly(
-      () => host.executeTool('load_skill', { skillId: 'deploy-playbook', path: '/etc/passwd' }, { conversationId: 1 }),
+      () => host.executeTool('load_skill', { skillId: 'deploy-playbook', path: '/etc/passwd' }, { conversationId: env.initialConvId }),
       { message: /绝对路径|入参校验失败/ },
     )
     await rejectsExplicitly(
-      () => host.executeTool('load_skill', { skillId: 'no-such-skill' }, { conversationId: 1 }),
+      () => host.executeTool('load_skill', { skillId: 'no-such-skill' }, { conversationId: env.initialConvId }),
       { message: /不存在|no-such-skill/ },
     )
 
@@ -294,18 +307,18 @@ test('集成2: load_skill 读取 SKILL.md 与 references/ 子文件，路径穿�
 })
 
 // ---------------------------------------------------------------------------
-// 2.5 helm-cli 系统级内置技能自举（builtin:assistant service.start 幂等补齐）
+// 2.5 helm-cli 系统级内置技能自举（builtin:profile service.start 幂等补齐）
 // ---------------------------------------------------------------------------
 
 test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），load_skill 可读 SKILL.md 与三个 references，重启覆盖回源码版本', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const kernel = env.app.kernel
-    // 启动即包含 helm-cli（managedByPlugin = builtin:assistant，含三个 references）
+    // 启动即包含 helm-cli（managedByPlugin = builtin:profile，含三个 references）
     const skills = await kernel.skills.list()
     const summary = skills.find((s) => s.id === 'helm-cli')
-    assert.ok(summary, 'helm-cli 技能应经 builtin:assistant 启动自举')
-    assert.equal(summary.managedByPlugin, 'builtin:assistant')
+    assert.ok(summary, 'helm-cli 技能应经 builtin:profile 启动自举')
+    assert.equal(summary.managedByPlugin, 'builtin:profile')
     for (const ref of ['references/generative-ui.md', 'references/workflows-and-agents.md', 'references/skill-and-plugin-dev.md']) {
       assert.ok(summary.references.includes(ref), `references 应含 ${ref}`)
     }
@@ -325,7 +338,7 @@ test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），
       host.executeTool(
         'load_skill',
         path === undefined ? { skillId: 'helm-cli' } : { skillId: 'helm-cli', path },
-        { conversationId: ROOT_CONVERSATION_ID },
+        { conversationId: env.initialConvId },
       ) as Promise<{ text: string }>
     const main = await readSkill()
     assert.ok(main.text.includes('helm') && main.text.includes('--json'), 'SKILL.md 应含 CLI 铁律')
@@ -557,7 +570,7 @@ test('集成3: 双引号+换行秘密值不出现在 SQLite 任何表、模型�
     const kernel = env.app.kernel
     // 双引号 + 换行：只对 JSON.stringify 后文本脱敏的朴素实现会漏这种值
     const SECRET_TRICKY = ['quote"', 'line'].join('\n')
-    const placeholder = kernel.services.stash.put(ROOT_CONVERSATION_ID, 'TRICKY_TOKEN', SECRET_TRICKY)
+    const placeholder = kernel.services.stash.put(env.initialConvId, 'TRICKY_TOKEN', SECRET_TRICKY)
     assert.match(placeholder, /^\[REDACTED:stash:[0-9a-f-]{36}\]$/)
 
     // 模型回合：占位符入上下文，秘密值永不达 provider
@@ -569,7 +582,7 @@ test('集成3: 双引号+换行秘密值不出现在 SQLite 任何表、模型�
     assert.ok(!reqAll.includes(SECRET_TRICKY), '秘密值不得进入任何模型消息')
 
     // envFor 会话隔离
-    assert.equal(kernel.services.stash.envFor(ROOT_CONVERSATION_ID)['TRICKY_TOKEN'], SECRET_TRICKY)
+    assert.equal(kernel.services.stash.envFor(env.initialConvId)['TRICKY_TOKEN'], SECRET_TRICKY)
     assert.equal(kernel.services.stash.envFor(999)['TRICKY_TOKEN'], undefined)
 
     // SSE 帧（EventHub publish 统一脱敏）：订阅后发布含秘密 payload，帧中只有占位符
@@ -597,7 +610,7 @@ test('集成3: 双引号+换行秘密值不出现在 SQLite 任何表、模型�
 
     // clear 后 stash 语义销毁
     kernel.services.stash.clear()
-    assert.equal(kernel.services.stash.envFor(ROOT_CONVERSATION_ID)['TRICKY_TOKEN'], undefined)
+    assert.equal(kernel.services.stash.envFor(env.initialConvId)['TRICKY_TOKEN'], undefined)
   } finally {
     await env.close()
   }
@@ -740,7 +753,7 @@ test('集成4: 插件 ctx.action 共享 Schema 校验器——合法执行、非
 // 5. 持久会话重启：同一 dataDir 重开 createHelm，#1/历史/SSE seq 保留
 // ---------------------------------------------------------------------------
 
-test('集成5: 重启后根会话 #1 与历史经真实 SQLite 保留，faux 续接可见完整历史，SSE seq 持久不回退', { timeout: 60_000 }, async () => {
+test('集成5: 重启后播种会话与历史经真实 SQLite 保留，faux 续接可见完整历史，SSE seq 持久不回退', { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-core-e2e-'))
   const dbPath = join(dir, 'state.sqlite')
 
@@ -755,10 +768,14 @@ test('集成5: 重启后根会话 #1 与历史经真实 SQLite 保留，faux 续
   const MARK = '重启前的关键结论-PERSIST-MARK'
   let seqAfterFirst = 0
   const first = await build()
+  const firstConv = first.app.kernel
+    .listConversations()
+    .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)
+  if (firstConv === undefined) throw new Error('首次启动应播种 assistant 入口会话')
   try {
     first.faux.setResponses([fauxAssistantMessage(`已记录：${MARK}`)])
-    await first.app.kernel.submitInput(ROOT_CONVERSATION_ID, `请记住：${MARK}`)
-    await first.app.kernel.waitForIdle(ROOT_CONVERSATION_ID)
+    await first.app.kernel.submitInput(firstConv.id, `请记住：${MARK}`)
+    await first.app.kernel.waitForIdle(firstConv.id)
     assert.equal(first.faux.state.callCount, 1)
     seqAfterFirst = first.app.kernel.events.seq
     assert.ok(seqAfterFirst > 0, '第一回合应推进 SSE seq')
@@ -769,12 +786,12 @@ test('集成5: 重启后根会话 #1 与历史经真实 SQLite 保留，faux 续
   const second = await build()
   try {
     const convs = second.app.kernel.listConversations()
-    assert.ok(convs.some((c) => c.id === ROOT_CONVERSATION_ID), '重启后根会话 #1 仍在')
+    assert.ok(convs.some((c) => c.id === firstConv.id), '重启后播种的入口会话仍在')
     assert.ok(
       second.app.kernel.events.seq >= seqAfterFirst,
       `重启后 SSE seq（${second.app.kernel.events.seq}）应 >= 首回合后（${seqAfterFirst}）`,
     )
-    const conv = second.app.kernel.getConversation(ROOT_CONVERSATION_ID)
+    const conv = second.app.kernel.getConversation(firstConv.id)
     assert.ok(conv.completionSeq >= 1, 'completionSeq 跨重启保留')
 
     // 续接回合：模型可见完整历史
@@ -785,8 +802,8 @@ test('集成5: 重启后根会话 #1 与历史经真实 SQLite 保留，faux 续
         return fauxAssistantMessage('已回顾历史')
       },
     ])
-    await second.app.kernel.submitInput(ROOT_CONVERSATION_ID, '回顾一下我们说过什么')
-    await second.app.kernel.waitForIdle(ROOT_CONVERSATION_ID)
+    await second.app.kernel.submitInput(firstConv.id, '回顾一下我们说过什么')
+    await second.app.kernel.waitForIdle(firstConv.id)
     assert.ok(seen[0]!.includes(MARK), '重启后模型请求应含历史消息')
     assert.ok(sqliteTablesContaining(dbPath, MARK).length > 0, '历史 entry 应持久化')
   } finally {
@@ -806,10 +823,16 @@ async function makeHttpEnv() {
   models.setProvider(faux.provider)
   const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
 
+  // 播种入口会话 ID（首个 assistant 无父链会话；此环境内仍存在）
+  const initialConv = app.kernel
+    .listConversations()
+    .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)
+  if (initialConv === undefined) throw new Error('makeHttpEnv：首次启动应播种 assistant 入口会话')
+
   // 集成探针插件：echo 动作回显 stash 真实值（验证出站脱敏链路）
   const stash = app.kernel.services.stash
   const SECRET_TRICKY = ['quote"', 'line'].join('\n')
-  const trickyPlaceholder = stash.put(ROOT_CONVERSATION_ID, 'TRICKY_TOKEN', SECRET_TRICKY)
+  const trickyPlaceholder = stash.put(initialConv.id, 'TRICKY_TOKEN', SECRET_TRICKY)
 
   await app.kernel.plugins!.register({
     id: 'test:probe',
@@ -863,7 +886,7 @@ async function makeHttpEnv() {
   // 真 startHub：port 0（内核分配），kernel 全部来自 createHelm
   const hub = await startHub({ kernel: app.kernel as never, port: 0 })
   return {
-    hub, app, faux, dataDir, SECRET_TRICKY, trickyPlaceholder,
+    hub, app, faux, dataDir, SECRET_TRICKY, trickyPlaceholder, initialConvId: initialConv.id,
     rootPassword: '集成测试Root密码八位',
     async close() {
       await hub.close()
@@ -873,7 +896,7 @@ async function makeHttpEnv() {
   }
 }
 
-test('集成6: HTTP 真实往返——鉴权/根会话保护/动作校验同权/secret 不泄漏出站/SSE snapshot 首帧/插件 public 路由', { timeout: 60_000 }, async () => {
+test('集成6: HTTP 真实往返——鉴权/初始会话可删/动作校验同权/secret 不泄漏出站/SSE snapshot 首帧/插件 public 路由', { timeout: 60_000 }, async () => {
   const env = await makeHttpEnv()
   let token: string | undefined
   try {
@@ -910,27 +933,33 @@ test('集成6: HTTP 真实往返——鉴权/根会话保护/动作校验同权/
     const relogin = await call('POST', '/api/auth/login', { body: { password: env.rootPassword }, auth: false })
     assert.equal(relogin.status, 200)
 
-    // --- 根会话保护：DELETE #1 → 403（HTTP 边界显式拦截）
-    const delRoot = await call('DELETE', '/api/conversations/1')
-    assert.equal(delRoot.status, 403)
-    assert.equal(JSON.parse(delRoot.body).error.code, 'root_conversation_protected')
+    // --- 初始入口会话可删（id 级豁免已移除；通用保护为插件管理权 409）
+    const initialId = env.initialConvId
+    const delInitial = await call('DELETE', `/api/conversations/${initialId}`)
+    assert.equal(delInitial.status, 200, `删除初始会话应成功：${delInitial.body}`)
+    const goneInitial = await call('GET', `/api/conversations/${initialId}`)
+    assert.equal(goneInitial.status, 404)
+    // 重建普通会话供后续回合使用
+    const created = await call('POST', '/api/conversations', { body: { title: '集成会话', profileId: 'assistant' } })
+    assert.equal(created.status, 201)
+    const httpConvId = (JSON.parse(created.body) as { id: number }).id
 
     // --- 真实模型回合（HTTP submit → 真 kernel → faux）
-    const conv = await call('GET', '/api/conversations/1')
+    const conv = await call('GET', `/api/conversations/${httpConvId}`)
     assert.equal(conv.status, 200)
-    assert.equal(JSON.parse(conv.body).id, ROOT_CONVERSATION_ID)
+    assert.equal(JSON.parse(conv.body).id, httpConvId)
     env.faux.setResponses([fauxAssistantMessage('HTTP 回合完成')])
     // 非等待提交：路由默认 submission accepted（202 + {submissionId}），不伪造同步回答
-    const sent = await call('POST', '/api/conversations/1/input', { body: { text: '你好，集成测试' } })
+    const sent = await call('POST', `/api/conversations/${httpConvId}/input`, { body: { text: '你好，集成测试' } })
     assert.equal(sent.status, 202)
     const submission = JSON.parse(sent.body) as { submissionId: string }
     assert.ok(typeof submission.submissionId === 'string' && submission.submissionId.length > 0, '202 应携带 submissionId')
-    await env.app.kernel.waitForIdle(ROOT_CONVERSATION_ID)
+    await env.app.kernel.waitForIdle(httpConvId)
     assert.ok(env.faux.state.callCount >= 1, 'HTTP submit 应触发真实模型回合')
 
     // 显式等待链：?wait=1 精确等待本次提交的回答（200 ConversationInputResult）
     env.faux.setResponses([fauxAssistantMessage('HTTP 等待回答')])
-    const waited = await call('POST', '/api/conversations/1/input?wait=1', { body: { text: '等待链验证' } })
+    const waited = await call('POST', `/api/conversations/${httpConvId}/input?wait=1`, { body: { text: '等待链验证' } })
     assert.equal(waited.status, 200, `wait=1 应返回本次回答：${waited.body}`)
     const waitResult = JSON.parse(waited.body) as { submissionId: string; text: string; entry: { id: string; kind: string } }
     assert.ok(waitResult.submissionId.length > 0)
@@ -978,6 +1007,7 @@ test('集成6: HTTP 真实往返——鉴权/根会话保护/动作校验同权/
           args: { x: 7 },
           wait: true,
         },
+        conversationId: httpConvId,
       },
     })
     assert.equal(wf.status, 200, `真实 workflow 引擎应接受 run：${wf.body}`)
@@ -1071,15 +1101,15 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
     // --- conversations list：经凭据文件 token 鉴权
     const list = await run(['conversations', 'list', '--json'])
     assert.equal(list.code, 0, list.err)
-    const convs = JSON.parse(list.out) as Array<{ id: number }>
-    assert.ok(convs.some((c) => c.id === ROOT_CONVERSATION_ID), '应列出根会话 #1')
+    const convs = JSON.parse(list.out) as Array<{ id: number; profileId: string }>
+    assert.ok(convs.some((c) => c.profileId === 'assistant'), '应列出 assistant 会话')
 
     // --- send：CLI 提交 → 真实模型回合
     const callCountBefore = env.faux.state.callCount
     env.faux.setResponses([fauxAssistantMessage('CLI 回合完成')])
     const send = await run(['send', '1', '你好 CLI 集成', '--json'])
     assert.equal(send.code, 0, send.err)
-    await env.app.kernel.waitForIdle(ROOT_CONVERSATION_ID)
+    await env.app.kernel.waitForIdle(env.initialConvId)
     assert.ok(env.faux.state.callCount > callCountBefore, 'CLI send 应触发真实模型回合')
 
     // --- 动态动作命令：GET /api/actions 生成 helm probe double
@@ -1096,13 +1126,10 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
     assert.notEqual(badSchema.code, 0)
     assert.equal((JSON.parse(badSchema.err) as { error: { code: string } }).error.code, 'validation_error')
 
-    // --- 根会话保护同权
-    const delRoot = await run(['conversations', 'delete', '1', '--json'])
-    assert.notEqual(delRoot.code, 0)
-    assert.equal(
-      (JSON.parse(delRoot.err) as { error: { code: string } }).error.code,
-      'root_conversation_protected',
-    )
+    // --- 建一个普通会话供后续子进程 get 验证
+    const mkConv = await run(['conversations', 'create', '--title', 'CLI 会话', '--profile-id', 'assistant', '--json'])
+    assert.equal(mkConv.code, 0, mkConv.err)
+    const cliConvId = (JSON.parse(mkConv.out) as { id: number }).id
 
     // --- 子进程真 CLI 入口（异步 spawn；父进程事件循环保持响应，Hub 可答）：
     //     setup 已完成，子进程经 cli-token 凭据访问同一真 Hub。
@@ -1111,15 +1138,21 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
     assert.equal(childStatus.code, 0, `子进程 status 失败：${childStatus.err}`)
     assert.equal(JSON.parse(childStatus.out).configured, true)
 
-    const childGet = await runCliChild(['conversations', 'get', '1', '--json'])
+    const childGet = await runCliChild(['conversations', 'get', String(cliConvId), '--json'])
     assert.equal(childGet.timedOut, false, '子进程 CLI 不得挂起')
     assert.equal(childGet.code, 0, `子进程 conversations get 失败：${childGet.err}`)
-    assert.equal(JSON.parse(childGet.out).id, ROOT_CONVERSATION_ID)
+    assert.equal(JSON.parse(childGet.out).id, cliConvId)
 
     const childAuth = await runCliChild(['conversations', 'list', '--json'])
     assert.equal(childAuth.timedOut, false)
     assert.equal(childAuth.code, 0, `子进程鉴权应经 cli-token 生效：${childAuth.err}`)
-    assert.ok((JSON.parse(childAuth.out) as Array<{ id: number }>).some((c) => c.id === ROOT_CONVERSATION_ID))
+    assert.ok((JSON.parse(childAuth.out) as Array<{ id: number }>).some((c) => c.id === cliConvId))
+
+    // --- 初始会话删除同权（无 id 级豁免；放最后避免影响前述引用）
+    const delInitial = await run(['conversations', 'delete', String(env.initialConvId), '--json'])
+    assert.equal(delInitial.code, 0, `删除初始会话应成功：${delInitial.err}`)
+    const goneCheck = await run(['conversations', 'get', String(env.initialConvId), '--json'])
+    assert.notEqual(goneCheck.code, 0, '删除后 GET 应非零（404）')
   } finally {
     await env.close()
   }
@@ -1155,7 +1188,7 @@ test('subagent 派生：子会话摘要携带 parentToolCallId 并经 conversati
     // 摘要层：派生出的子会话镜像带 parentToolCallId（父会话工具调用 ID）。
     const child = kernel
       .listConversations()
-      .find((c) => c.parentConversationId === ROOT_CONVERSATION_ID && c.parentToolCallId !== undefined)
+      .find((c) => c.parentConversationId === env.initialConvId && c.parentToolCallId !== undefined)
     assert.ok(child !== undefined, '子会话摘要必须携带 parentToolCallId（运行期实时关联契约）')
     assert.ok(child!.parentToolCallId !== undefined && child!.parentToolCallId !== '')
 

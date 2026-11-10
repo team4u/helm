@@ -46,7 +46,7 @@ export interface PluginCategoryCounts {
  *
  * - orchestration: 协同编排类（如 builtin:workflow, builtin:herdr, builtin:superagent）
  * - tools: 工具扩展类（如 builtin:tools, tools:*）
- * - builtin: 核心系统内置插件（如 builtin:assistant, builtin:triggers）
+ * - builtin: 核心系统内置插件（如 builtin:profile, builtin:triggers）
  * - external: 外部三方及社区自定义插件
  */
 export function derivePluginCategory(id: string): PluginCategory {

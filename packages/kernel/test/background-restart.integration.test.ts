@@ -35,7 +35,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
-import { ROOT_CONVERSATION_ID, type HelmEventFrame, type PluginDefinition } from '@helm/protocol'
+import { type HelmEventFrame, type PluginDefinition } from '@helm/protocol'
 
 import { KernelRuntime } from '../src/runtime/index.js'
 import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
@@ -47,6 +47,8 @@ const KERNEL_DIR = new URL('../', import.meta.url).pathname
 const PI_AI_DIR = join(KERNEL_DIR, 'node_modules/@earendil-works/pi-ai')
 const KERNEL_SRC = pathToFileURL(join(KERNEL_DIR, 'src/runtime/index.ts')).href
 
+/** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
+const ROOT_CONVERSATION_ID = 1 as const
 const ROOT = ROOT_CONVERSATION_ID
 
 // ---------------------------------------------------------------------------

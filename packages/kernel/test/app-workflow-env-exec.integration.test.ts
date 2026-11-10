@@ -26,9 +26,12 @@ import { fileURLToPath } from 'node:url'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 
-import { ROOT_CONVERSATION_ID, HelmError, type PluginDefinition, type WorkflowRunSummary } from '@helm/protocol'
+import { HelmError, type PluginDefinition, type WorkflowRunSummary } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
 import { readJournal, type WorkflowJournalEntry } from '../src/builtin-plugins/workflow/engine/journal.js'
+
+/** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
+const ROOT_CONVERSATION_ID = 1 as const
 
 function dirnameOf(u: string): string {
   return fileURLToPath(new URL('.', u))

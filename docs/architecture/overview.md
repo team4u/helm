@@ -21,7 +21,8 @@ flowchart TD
 
     subgraph Plugins["内置与外部插件生态"]
         Workflow["builtin:workflow 确定性编排"]
-        Assistant["builtin:assistant 个人助理"]
+        Profile["builtin:profile 角色与技能底座"]
+        Memory["builtin:memory 长期记忆"]
         Superagent["builtin:superagent 双层中枢"]
         Herdr["builtin:herdr 终端主控"]
         Triggers["builtin:triggers 定时与钩子"]

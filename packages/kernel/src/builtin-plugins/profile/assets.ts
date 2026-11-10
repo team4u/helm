@@ -1,5 +1,5 @@
 /**
- * builtin:assistant 自举的系统级内置技能资产（三层渐进式披露的 Layer 1/2）。
+ * builtin:profile 自举的系统级内置技能资产（三层渐进式披露的 Layer 1/2）。
  *
  * Layer 1（SKILL.md）：helm CLI 黄金法则、核心命令全景与 references 下钻索引，
  * 由 SkillService.ensureSkill 在插件启动时同步为源码版本（受管覆盖，常规接口只读）。
@@ -19,7 +19,10 @@ import {
 import type { BuiltinSkillAsset } from '../../services/index.js'
 
 /** 托管本技能资产的插件 ID（SKILL.md frontmatter managedByPlugin 值）。 */
-export const ASSISTANT_MANAGED_BY = 'builtin:assistant'
+export const ASSISTANT_MANAGED_BY = 'builtin:profile'
+
+/** builtin:profile 自举资产的托管插件 ID（Profile.managedByPlugin 标记值）。 */
+export const PROFILE_MANAGED_BY = 'builtin:profile'
 
 /** 系统级内置技能 ID（SYSTEM.md Layer 0 指引的 load_skill 目标）。 */
 export const HELM_CLI_SKILL_ID = 'helm-cli'
@@ -58,25 +61,25 @@ export function renderSkillTemplate(
   return rendered
 }
 
-/** 解析 assistant skill 资产目录（兼容 src 与 dist 运行时）。 */
-export function resolveAssistantSkillDir(): string {
+/** 解析 profile skill 资产目录（兼容 src 与 dist 运行时）。 */
+export function resolveProfileSkillDir(): string {
   const here = dirname(fileURLToPath(import.meta.url))
   const candidate1 = join(here, 'skill')
   if (existsSync(candidate1)) return candidate1
 
   const pkgRoot = resolve(here, '../../..')
-  const candidate2 = join(pkgRoot, 'src', 'builtin-plugins', 'assistant', 'skill')
+  const candidate2 = join(pkgRoot, 'src', 'builtin-plugins', 'profile', 'skill')
   if (existsSync(candidate2)) return candidate2
 
   throw new HelmError(
-    'assistant_skill_asset_missing',
-    `内置 assistant 技能资产目录未找到（tried: "${candidate1}", "${candidate2}"）`,
+    'profile_skill_asset_missing',
+    `内置 profile 技能资产目录未找到（tried: "${candidate1}", "${candidate2}"）`,
     500,
     { paths: [candidate1, candidate2] },
   )
 }
 
-const skillDir = resolveAssistantSkillDir()
+const skillDir = resolveProfileSkillDir()
 
 const skillVars: Record<string, string> = {
   SKILL_ID: HELM_CLI_SKILL_ID,

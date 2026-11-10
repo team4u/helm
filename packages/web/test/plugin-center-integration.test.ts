@@ -68,7 +68,7 @@ function makePlugin(partial: Partial<PluginSummary> & { id: string }): PluginSum
 
 const mockPlugins: PluginSummary[] = [
   makePlugin({
-    id: 'builtin:assistant',
+    id: 'builtin:profile',
     name: '个人助理',
     locked: true,
     enabled: true,
@@ -159,7 +159,7 @@ test('PluginCenter SSR：渲染搜索框、分类药丸、统计徽章与卡片�
 
   // 5. 响应式自适应网格与所有卡片
   assert.match(html, /class="[^"]*plugin-center-grid[^"]*"/)
-  assert.match(html, /data-plugin-id="builtin:assistant"/)
+  assert.match(html, /data-plugin-id="builtin:profile"/)
   assert.match(html, /data-plugin-id="builtin:workflow"/)
   assert.match(html, /data-plugin-id="builtin:herdr"/)
   assert.match(html, /data-plugin-id="builtin:triggers"/)

@@ -7,7 +7,7 @@
  *   NodeManager（令牌/升级/execEnv）、ModelRegistry（模型全家）、
  *   HookBridge（7 类生命周期钩子桥）、内核工具工厂；
  * - PluginHost 组合（config/credentials 分离持久、工具热装）；
- * - root #1 创建与恢复调度（open/initialize/start/close）。
+ * - 首次空库播种普通 assistant 入口会话与恢复调度（open/initialize/start/close）。
  *
  * 各服务的 Why 注释在各自模块；本文件只保留组合顺序与跨服务协同。
  */
@@ -15,7 +15,6 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import {
   Harness,
-  ROOT_CONVERSATION_ID,
   createRegistry,
   type Registry,
 } from '@earendil-works/pi-durable'
@@ -45,7 +44,7 @@ import type {
   EnvExecResponse,
   MaybePromise,
 } from '@helm/protocol'
-import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT } from '@helm/protocol'
+import { HelmError } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
 import {
   ArtifactService as SvcArtifactService,
@@ -697,11 +696,9 @@ export class KernelRuntime {
     })
     this.pluginHost = host
 
-    // 5) root #1（不注入业务 system；SYSTEM/MEMORY 由 assistant 插件 before_turn
-    //    sections 注入，经 SDK PromptSection 真实进入模型请求）。
-    // root 模型与普通会话同链：显式 override（无）> assistant profile.model > 全局。
-    // 思考档位同链：assistant profile.thinkingLevel > 全局默认；均未设置不注入。
-    await this.ensureRootConversation()
+    // 5) 初始 assistant 入口会话（SDK root #1 承载，普通会话语义：无 id 级
+    //    删除豁免；用户删除后重启凭 tombstone 不复活、不补种）。
+    await this.ensureInitialConversation()
 
     // 6) 恢复：autoResume 时立即启动调度；否则等组合层 await start()。
     this.asks.reportOrphans()
@@ -734,27 +731,36 @@ export class KernelRuntime {
     if (this.init.autoResume) await this.start()
   }
 
-  /** root #1 创建（assistant profile 绑定；模型/思考档位走继承链）。 */
-  private async ensureRootConversation(): Promise<void> {
-    const rootThinking = await this.conversations.resolveEffectiveThinkingLevel(undefined, 'assistant')
-    const rootEffective = await this.conversations.resolveEffectiveModel(undefined, 'assistant')
-    const modelRef = rootEffective ? requireModelRef(rootEffective) : undefined
+  /**
+   * 初始 assistant 入口会话（SDK root #1 承载，普通会话语义）：
+   * - 模型/思考档位走继承链：assistant profile.model > 全局；
+   * - 已删除（tombstone）后重启不复活：跳过镜像与观察，绝不补种——
+   *   SDK 保留的 #1 存储行只是内部机制，不再暴露为产品不变量；
+   * - SYSTEM.md / MEMORY.md 由 builtin:profile / builtin:memory 在
+   *   before_turn sections 注入，这里不写业务 system。
+   */
+  private async ensureInitialConversation(): Promise<void> {
+    const thinking = await this.conversations.resolveEffectiveThinkingLevel(undefined, 'assistant')
+    const effective = await this.conversations.resolveEffectiveModel(undefined, 'assistant')
+    const modelRef = effective ? requireModelRef(effective) : undefined
     const root = await this.harness.root(BACKGROUND_CONTEXT, {
       agent: {
         ...(modelRef ? { model: { provider: modelRef.provider, modelId: modelRef.modelId } } : {}),
-        ...(rootThinking ? { thinkingLevel: rootThinking as ModelThinkingLevel } : {}),
+        ...(thinking ? { thinkingLevel: thinking as ModelThinkingLevel } : {}),
       },
     })
-    if (!this.store.getConv(root.id as number)) {
+    const id = root.id as number
+    if (this.store.isDeleted(id)) return // 用户已删除：不复活、不补种
+    if (!this.store.getConv(id)) {
       this.store.upsertConv({
-        id: root.id as number,
+        id,
         title: '个人助理',
         profileId: 'assistant',
         tags: ['assistant'],
         nodeId: 'local',
         cwd: this.init.cwd,
-        model: rootEffective ?? '',
-        thinkingLevel: rootThinking ?? '',
+        model: effective ?? '',
+        thinkingLevel: thinking ?? '',
         unread: false,
         pinned: false,
         stateChangeSeq: 1,
@@ -763,7 +769,7 @@ export class KernelRuntime {
         updatedAt: Date.now(),
       })
     }
-    await this.tracker.observe(root.id as number)
+    await this.tracker.observe(id)
   }
 
   /**
@@ -1197,7 +1203,29 @@ export class KernelRuntime {
     return `<external_event id="${id}" source="${source}" untrusted="true">\n${body}\n</external_event>`
   }
 
-  /** 外部触发：trigger hook -> 默认投递 #1（transform 后 target 与 text 都生效）。 */
+  /**
+   * 无显式目标 trigger 的缺省投递靶点解析：
+   * - 无 targetConversationId 的信封（transform 可能已改写）进入本方法；
+   * - 选择 assistant Profile 下最新的无父链人类会话；
+   * - 全部删空时按需新建一个普通 assistant 会话（并发安全：复用创建锁）。
+   * 显式指定 targetConversationId 的信封不进入本方法（不存在时 submitInput
+   * 显式 404，绝不静默改投）。
+   */
+  private async resolveDefaultTriggerTarget(): Promise<number> {
+    const candidates = this.store
+      .listConvs()
+      .filter((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)
+      .sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id)
+    if (candidates[0] !== undefined) return candidates[0].id
+    const created = await this.conversations.createConversation({
+      title: '个人助理',
+      profileId: 'assistant',
+      tags: ['assistant'],
+    })
+    return created.id
+  }
+
+  /** 外部触发：trigger hook -> 无显式目标时解析缺省靶点（transform 后 target 与 text 都生效）。 */
   async dispatchTrigger(envelope: ExternalTriggerEnvelope): Promise<void> {
     const initial: ExternalTriggerEnvelope = { ...envelope, text: this.defang(envelope) }
     const outcome = await this.hookBridge.runHookChain('trigger', initial)
@@ -1208,7 +1236,10 @@ export class KernelRuntime {
       // transform 后的 text 再防一次（插件可能替换了原文）。
       final = { ...final, text: this.defang({ ...final, text: stripEnvelope(final.text) }) }
     }
-    const target = final.targetConversationId ?? PROTO_ROOT
+    const target =
+      final.targetConversationId !== undefined
+        ? final.targetConversationId
+        : await this.resolveDefaultTriggerTarget()
     await this.submitInput(target, final.text, { origin: 'trigger', whenBusy: 'followUp' })
   }
 
@@ -1475,13 +1506,11 @@ export class KernelRuntime {
 
   /**
    * 会话归属权现读（Watchdog 红线判定唯一可信来源；superagent 工厂注入用）：
-   * - root #1 恒 human；
    * - 会话不存在（含已删除 tombstone）时抛 not_found，绝不把已删会话的
    *   残留登记当作可执行授权返回；
    * - 未标记/标记非法值一律 human（宁漏管不越权）。
    */
   getConversationOwnership(conversationId: number): 'helm' | 'bot' | 'human' {
-    if (conversationId === PROTO_ROOT) return 'human'
     const meta = this.store.getConv(conversationId)
     if (meta === undefined || this.store.isDeleted(conversationId)) {
       throw new HelmError('not_found', `会话不存在：${conversationId}`, 404, { conversationId })
@@ -1587,18 +1616,9 @@ export class KernelRuntime {
   /**
    * 会话归属权标记（Watchdog 红线判定唯一可信来源）：
    * - 不依赖用户可改的 tags/parent 推断；未标记一律视为 human（宁漏管不越权）；
-   * - root #1 恒 human，禁止改写（个人助理主入口是人类直连会话）；
    * - 持久化于全局 doc（'conversation-ownership'），重启保留。
    */
   markConversationOwnership(conversationId: number, owner: 'helm' | 'bot' | 'human'): void {
-    if (conversationId === PROTO_ROOT && owner !== 'human') {
-      throw new HelmError(
-        'root_ownership_immutable',
-        `根会话 #1 归属恒为 human，禁止标记为 ${owner}`,
-        403,
-        { conversationId, owner },
-      )
-    }
     const key = 'conversation-ownership'
     const current = this.documentStore.get<Record<string, string>>(key, {})
     const previous = current[String(conversationId)]
@@ -1818,5 +1838,3 @@ async function assertModelsStoreHealthyAtBoot(models: Models): Promise<void> {
     }
   }
 }
-
-export { PROTO_ROOT }

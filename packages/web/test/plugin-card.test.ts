@@ -201,7 +201,7 @@ test('PluginCard：常驻锁定插件（locked: true）与 toggling 态禁用 Sw
 
   let toggleTriggered = false
   const lockedPlugin = makePlugin({
-    id: 'builtin:assistant',
+    id: 'builtin:profile',
     name: '个人助理',
     locked: true,
     enabled: true,

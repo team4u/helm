@@ -4,7 +4,8 @@
  */
 
 /**
- * 会话 Profile：`~/.helm/profiles/<id>/profile.json` + SYSTEM.md + MEMORY.md。
+ * 会话 Profile：`~/.helm/profiles/<id>/profile.json` + SYSTEM.md。
+ * MEMORY.md 长期记忆由 builtin:memory 插件自治管理（不进 Profile 契约）。
  * runtime 为协议层配置形状（如绑定 Herdr CLI），实际驱动在 builtin:herdr。
  */
 export interface Profile {
@@ -29,8 +30,6 @@ export interface Profile {
   humanSelectable?: boolean
   /** SYSTEM.md 全文（详情接口读写，不写入 profile.json）。 */
   system?: string
-  /** MEMORY.md 全文（详情接口读写，不写入 profile.json）。 */
-  memory?: string
 }
 
 /** Profile 绑定的外部 Agent 运行时配置（如 'herdr'，由对应插件接管驱动）。 */

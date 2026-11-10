@@ -67,7 +67,7 @@ export function actionToolAlias(pluginId: string, actionId: string): string {
 }
 
 /**
- * 解析全限定 actionId（pluginId.actionId）。pluginId 允许含 ':'（builtin:assistant），
+ * 解析全限定 actionId（pluginId.actionId）。pluginId 允许含 ':'（builtin:profile），
  * 因此不能简单 split 最后一个 '.' —— 以第一个 '.' 分割。
  */
 export function parseQualifiedActionId(qualified: string): { pluginId: string; actionId: string } {

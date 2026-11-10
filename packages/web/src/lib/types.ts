@@ -29,7 +29,7 @@ import type {
   ToolViewSpec,
   WorkbenchPanelSpec,
 } from '@helm/protocol'
-import { matchesConversationScope, ROOT_CONVERSATION_ID } from '@helm/protocol'
+import { matchesConversationScope } from '@helm/protocol'
 import type { ModelDescriptor } from './api.js'
 import type { SessionDocKey } from './session-docs.js'
 
@@ -175,12 +175,7 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
         break
     }
   }
-  const sidebarOrder = (spec: SidebarItemSpec): number => {
-    if (spec.order !== undefined) return spec.order
-    // 根会话入口未显式指定 order 时置顶；其余默认 100，不做插件 ID 字符串特判。
-    if (spec.target === `conversation:${ROOT_CONVERSATION_ID}`) return 0
-    return 100
-  }
+  const sidebarOrder = (spec: SidebarItemSpec): number => spec.order ?? 100
   grouped.sidebarItems.sort((a, b) => sidebarOrder(a.spec) - sidebarOrder(b.spec))
   grouped.sidebarSections.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
   grouped.workbenchPanels.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))

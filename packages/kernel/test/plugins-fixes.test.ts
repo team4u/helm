@@ -29,7 +29,7 @@ import {
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
 import { createSuperAgentPlugin } from '../src/builtin-plugins/superagent.js'
-import { MAX_MEMORY_CHARS } from '../src/builtin-plugins/assistant.js'
+import { MAX_MEMORY_CHARS, createMemoryPlugin, MemoryStore } from '../src/builtin-plugins/memory.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
 import type { SuperAgentDependencies } from '../src/builtin-plugins/superagent/contracts.js'
 import { ProfileService, SkillService } from '../src/services/index.js'
@@ -572,7 +572,7 @@ test('assistant：MEMORY.md 上限常量导出为 64000', { timeout: 60_000 }, (
   assert.equal(MAX_MEMORY_CHARS, 64_000)
 })
 
-test('assistant：update_memory 超限显式拒绝（append 累计与 replace 直写双路径）', { timeout: 60_000 }, async () => {
+test('memory：update_memory 超限显式拒绝（append 累计与 replace 直写双路径）', { timeout: 60_000 }, async () => {
   const env = await makeAssistantEnv()
   try {
     const pluginHostBackend = makeControlledBackend()
@@ -582,13 +582,13 @@ test('assistant：update_memory 超限显式拒绝（append 累计与 replace �
       host: pluginHostBackend,
       docs,
     })
-    const { createAssistantPlugin } = await import('../src/builtin-plugins/assistant.js')
-    await host.register(createAssistantPlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir), plugins: host }), { enabled: true })
+    await host.register(createMemoryPlugin({ profiles: env.profiles }), { enabled: true })
+    const store = new MemoryStore(env.dataDir)
     const runUpdate = (input: { text: string; mode: string }) =>
       host.executeTool('update_memory', input, { conversationId: 1 })
 
     // 1) append 超限：先写接近上限，再追加使总和超限。
-    await env.profiles.updateMemory('assistant', 'x'.repeat(MAX_MEMORY_CHARS - 10), 'replace')
+    await store.updateMemory('assistant', 'x'.repeat(MAX_MEMORY_CHARS - 10), 'replace')
     await assert.rejects(
       () => runUpdate({ text: 'y'.repeat(20), mode: 'append' }),
       (err: unknown) => {
@@ -600,7 +600,7 @@ test('assistant：update_memory 超限显式拒绝（append 累计与 replace �
       },
     )
     // 拒绝后文件保持旧值（不写半截）。
-    const afterReject = await env.profiles.getMemory('assistant')
+    const afterReject = await store.getMemory('assistant')
     assert.equal(afterReject.length, MAX_MEMORY_CHARS - 10)
 
     // 2) replace 直写超限：单次 text 即超。
@@ -611,27 +611,31 @@ test('assistant：update_memory 超限显式拒绝（append 累计与 replace �
 
     // 3) 合法 replace（恰在上限内）成功。
     await runUpdate({ text: 'a'.repeat(MAX_MEMORY_CHARS), mode: 'replace' })
-    assert.equal((await env.profiles.getMemory('assistant')).length, MAX_MEMORY_CHARS)
+    assert.equal((await store.getMemory('assistant')).length, MAX_MEMORY_CHARS)
   } finally {
     await env.close()
   }
 })
 
-test('assistant：MEMORY.md 被误删时回合按空处理并告警一次（不 500）', { timeout: 60_000 }, async () => {
+test('memory：已初始化 Profile 的 MEMORY.md 被误删时告警并注入 memory.assets-missing（不重建）', { timeout: 60_000 }, async () => {
   const env = await makeAssistantEnv()
   try {
     const backend = makeControlledBackend()
     const docs = new MemoryDocStore()
     const host = new PluginHost({ dataDir: env.dataDir, host: backend, docs })
-    const { createAssistantPlugin } = await import('../src/builtin-plugins/assistant.js')
-    await host.register(createAssistantPlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir), plugins: host }), { enabled: true })
+    await host.register(createMemoryPlugin({ profiles: env.profiles }), { enabled: true })
 
-    // 外部误删 MEMORY.md（绕过服务层）。
+    // 先跑一回合建立 initializedProfiles 标记。
+    {
+      const turn = { conversation: makeConversation(1), sections: [], tools: [], inputs: [], messages: [] }
+      await host.runHook('before_turn', turn as never)
+    }
+    // 外部误删 MEMORY.md（绕过插件防线）。
     const memoryPath = join(env.dataDir, 'profiles', 'assistant', 'MEMORY.md')
-    assert.ok(existsSync(memoryPath), '前置：默认 MEMORY.md 存在')
+    assert.ok(existsSync(memoryPath), '前置：初始化后的 MEMORY.md 存在')
     unlinkSync(memoryPath)
 
-    // before_turn：应视为空内容并告警一次，回合 transform 正常返回。
+    // before_turn：显式告警 + memory.assets-missing，绝不静默重建。
     const turn = {
       conversation: makeConversation(1),
       sections: [{ id: 'base', text: 'base' }],
@@ -641,12 +645,14 @@ test('assistant：MEMORY.md 被误删时回合按空处理并告警一次（不 
     }
     const result = await host.runHook('before_turn', turn as never)
     assert.ok(result.action === 'transform' || result.action === 'continue', `回合不崩溃（实际 ${result.action}）`)
-    const memorySections = (result.action === 'transform' ? result.value.sections : turn.sections).filter(
-      (s: { id: string }) => s.id === 'assistant.memory',
-    )
-    assert.equal(memorySections.length, 0, 'MEMORY.md 缺失按空处理（无 memory section）')
+    const sections = result.action === 'transform' ? result.value.sections : turn.sections
     assert.ok(
-      backend.notifications.some((n) => n.title.includes('缺失') || n.title.includes('误删')),
+      sections.some((s: { id: string }) => s.id === 'memory.assets-missing'),
+      '已初始化后缺失应注入 memory.assets-missing',
+    )
+    assert.ok(!existsSync(memoryPath), '缺失不得被静默重建')
+    assert.ok(
+      backend.notifications.some((n) => n.title.includes('缺失') || n.title.includes('删除')),
       '应发出文件缺失告警',
     )
   } finally {
@@ -654,7 +660,57 @@ test('assistant：MEMORY.md 被误删时回合按空处理并告警一次（不 
   }
 })
 
-test('assistant：存量 MEMORY.md 超限注入时截断并附显式说明', { timeout: 60_000 }, async () => {
+test('memory：从未初始化的 Profile 首次回合惰性创建默认 MEMORY.md（不误报缺失）', { timeout: 60_000 }, async () => {
+  const env = await makeAssistantEnv()
+  try {
+    const backend = makeControlledBackend()
+    const docs = new MemoryDocStore()
+    const host = new PluginHost({ dataDir: env.dataDir, host: backend, docs })
+    await host.register(createMemoryPlugin({ profiles: env.profiles }), { enabled: true })
+
+    // 前置：MEMORY.md 不存在（ProfileService.ensureDefault 不再创建）。
+    const memoryPath = join(env.dataDir, 'profiles', 'assistant', 'MEMORY.md')
+    assert.ok(!existsSync(memoryPath), '前置：未初始化')
+
+    const turn = {
+      conversation: makeConversation(1),
+      sections: [{ id: 'base', text: 'base' }],
+      tools: [],
+      inputs: [],
+      messages: [],
+    }
+    const result = await host.runHook('before_turn', turn as never)
+    const sections = result.action === 'transform' ? result.value.sections : turn.sections
+    // 惰性创建默认骨架（# Memory 标题非空白）→ 注入 memory.content（无告警）。
+    assert.ok(
+      sections.some((s: { id: string }) => s.id === 'memory.content'),
+      '首次惰性创建后注入 memory.content（默认骨架非空白）',
+    )
+    assert.ok(
+      !sections.some((s: { id: string }) => s.id === 'memory.assets-missing'),
+      '从未初始化不误报缺失',
+    )
+    assert.ok(existsSync(memoryPath), '惰性创建默认 MEMORY.md')
+    assert.equal(backend.notifications.length, 0, '惰性初始化不发告警')
+
+    // 真空白文件是合法 memory.guide 态（无缺失告警）。
+    writeFileSync(memoryPath, '   \n\n')
+    const blank = await host.runHook('before_turn', { ...turn, sections: [] } as never)
+    const blankSections = blank.action === 'transform' ? blank.value.sections : turn.sections
+    assert.ok(
+      blankSections.some((s: { id: string }) => s.id === 'memory.guide'),
+      '空白 MEMORY.md 应注入 memory.guide（合法态，无内容）',
+    )
+    assert.ok(
+      !blankSections.some((s: { id: string }) => s.id === 'memory.assets-missing'),
+      '空白文件不误报缺失',
+    )
+  } finally {
+    await env.close()
+  }
+})
+
+test('memory：存量 MEMORY.md 超限注入时截断并附显式说明', { timeout: 60_000 }, async () => {
   const env = await makeAssistantEnv()
   try {
     // 外部手改绕过 update_memory 防线（模拟历史遗留超限文件）。
@@ -664,8 +720,7 @@ test('assistant：存量 MEMORY.md 超限注入时截断并附显式说明', { t
     const backend = makeControlledBackend()
     const docs = new MemoryDocStore()
     const host = new PluginHost({ dataDir: env.dataDir, host: backend, docs })
-    const { createAssistantPlugin } = await import('../src/builtin-plugins/assistant.js')
-    await host.register(createAssistantPlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir), plugins: host }), { enabled: true })
+    await host.register(createMemoryPlugin({ profiles: env.profiles }), { enabled: true })
 
     const turn = {
       conversation: makeConversation(1),
@@ -677,8 +732,8 @@ test('assistant：存量 MEMORY.md 超限注入时截断并附显式说明', { t
     const result = await host.runHook('before_turn', turn as never)
     assert.ok(result.action === 'transform')
     const sections = (result as { value: { sections: Array<{ id: string; text: string }> } }).value.sections
-    const memory = sections.find((s) => s.id === 'assistant.memory')
-    assert.ok(memory !== undefined, '超限仍应注入 memory section')
+    const memory = sections.find((s) => s.id === 'memory.content')
+    assert.ok(memory !== undefined, '超限仍应注入 memory.content section')
     assert.ok(memory.text.includes('超过'), '截断应附显式说明')
     assert.ok(memory.text.length <= MAX_MEMORY_CHARS + 500, '注入内容应截断到上限附近（含说明）')
   } finally {
@@ -686,9 +741,9 @@ test('assistant：存量 MEMORY.md 超限注入时截断并附显式说明', { t
   }
 })
 
-test('assistant：自举补写默认 Profile 的 managedByPlugin（缺失显式补、已有原样保留）', { timeout: 60_000 }, async () => {
+test('profile：自举补写默认 Profile 的 managedByPlugin（缺失显式补、已有原样保留）', { timeout: 60_000 }, async () => {
   // 场景 1：ensureDefault 创建的 Profile 无托管元数据（服务层不做归一化），
-  // 插件 service.start 显式补写 managedByPlugin: builtin:assistant。
+  // 插件 service.start 显式补写 managedByPlugin: builtin:profile。
   const env = await makeAssistantEnv()
   try {
     const before = await env.profiles.get('assistant')
@@ -699,11 +754,11 @@ test('assistant：自举补写默认 Profile 的 managedByPlugin（缺失显式�
       host: makeControlledBackend(),
       docs: new MemoryDocStore(),
     })
-    const { createAssistantPlugin } = await import('../src/builtin-plugins/assistant.js')
-    await host.register(createAssistantPlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir), plugins: host }), { enabled: true })
+    const { createProfilePlugin } = await import('../src/builtin-plugins/profile.js')
+    await host.register(createProfilePlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir), plugins: host }), { enabled: true })
 
     const after = await env.profiles.get('assistant')
-    assert.equal(after?.managedByPlugin, 'builtin:assistant', '插件自举后默认 Profile 显式声明托管')
+    assert.equal(after?.managedByPlugin, 'builtin:profile', '插件自举后默认 Profile 显式声明托管')
     // 其余字段原样保留（不覆盖用户改动）
     assert.equal(after?.name, before?.name)
 

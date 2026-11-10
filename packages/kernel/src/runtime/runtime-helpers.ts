@@ -7,7 +7,7 @@
 import type { JsonValue } from '@earendil-works/chord'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import type { ConversationSummary } from '@helm/protocol'
-import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT } from '@helm/protocol'
+import { HelmError } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 import type { ConvMeta } from './store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
@@ -427,5 +427,4 @@ export function assertEditableHumanInput(
   }
 }
 
-export { PROTO_ROOT }
 export type { ToolExecutionResult }

@@ -33,6 +33,7 @@ test('Hash 边界：所有路径段、查询值都按各自层级编解码', { t
 })
 
 test('Hash 边界：未编码的多余路径段不能冒充合法插件目标', { timeout: 60_000 }, () => {
-  assert.deepEqual(parseLocationHash('#/s/a/b/c').primaryTarget, base.primaryTarget)
+  // 非法 screen 目标整体判无效 -> 回退默认角色中心（与 base 的显式会话目标无关）
+  assert.deepEqual(parseLocationHash('#/s/a/b/c').primaryTarget, { kind: 'profiles' })
   assert.equal(parseLocationHash('#/c/1?split=s/a/b/c').splitTarget, null)
 })

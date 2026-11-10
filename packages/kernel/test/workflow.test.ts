@@ -1257,7 +1257,7 @@ function makeServiceHost(options: { actionFail?: boolean } = {}): WorkflowServic
     listActions() {
       return [
         {
-          pluginId: 'builtin:assistant',
+          pluginId: 'builtin:profile',
           id: 'update.memory',
           description: '',
           inputSchema: {},
@@ -1383,7 +1383,7 @@ describe('WorkflowService', () => {
     assert.ok((actionNode!.error ?? '').includes('命中多个插件'), actionNode!.error)
 
     const good = await service.run({
-      script: META('svc3') + 'const v = await action("builtin:assistant.update.memory", {})\nreturn v',
+      script: META('svc3') + 'const v = await action("builtin:profile.update.memory", {})\nreturn v',
     })
     const goodResult = await service.wait(good.id)
     assert.deepEqual(goodResult, { ok: true, n: 1, input: {} })
@@ -1467,7 +1467,7 @@ describe('WorkflowService', () => {
     const state = makeStateStore()
     const service = new WorkflowService({ dataDir, host, state })
     const first = await service.run({
-      script: META('svc-failed-action') + 'const v = await action("builtin:assistant.update.memory", {})\nreturn v',
+      script: META('svc-failed-action') + 'const v = await action("builtin:profile.update.memory", {})\nreturn v',
     })
     await service.wait(first.id)
     assert.equal(host.actionCount(), 1)
@@ -1891,7 +1891,7 @@ describe('WorkflowService', () => {
       },
       listActions: () => [
         {
-          pluginId: 'builtin:assistant',
+          pluginId: 'builtin:profile',
           id: 'good_act',
           description: '',
           idempotent: true,
@@ -1942,7 +1942,7 @@ describe('WorkflowService', () => {
         META('resume-preflight') +
         `
         const s1 = await agent("step1")
-        const s2 = await action("builtin:assistant.good_act", { count: 42 }, { idempotent: true, label: "my-good-step", phase: "execution" })
+        const s2 = await action("builtin:profile.good_act", { count: 42 }, { idempotent: true, label: "my-good-step", phase: "execution" })
         return [s1, s2]
       `,
       resumeFromRunId: sum1.id,

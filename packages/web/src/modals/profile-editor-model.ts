@@ -6,9 +6,8 @@
  * profile.json——省略的基础字段即被删除，而不是保留旧值。因此：
  * - 基础配置（name/model/nodeId/cwd/tags/runtime）无论是否修改，一律
  *   提交规范化后的完整形态：用户只改展示名也绝不丢执行节点与运行时；
- * - system / memory 是按需的文件更新而非整体替换：仅在用户显式编辑
- *   （或新建）时提交全文——编辑器打开期间 Agent 可能仍在追加 MEMORY.md
- *   （update_memory），绝不把弹窗打开瞬间的旧快照整篇写回。
+ * - system 是按需的文件更新而非整体替换：仅在用户显式编辑（或新建）时
+ *   提交全文。MEMORY.md 由 builtin:memory 插件自治管理，不经本模型。
  */
 
 import type { Profile, ProfileRuntime } from '@helm/protocol'
@@ -22,8 +21,8 @@ export interface ProfileDraft {
   profile: Profile
   /** 加载时的基线快照：dirty 判断与规范化对比的基准。 */
   baseline: Profile
-  /** 用户显式编辑过的大文本字段（system / memory）。 */
-  editedFields: Set<'system' | 'memory'>
+  /** 用户显式编辑过的大文本字段（system）。 */
+  editedFields: Set<'system'>
 }
 
 export function profileIdValid(id: string): boolean {
@@ -99,8 +98,8 @@ export function editRuntime(draft: ProfileDraft, runtime: Profile['runtime']): P
   return editProfileField(draft, { runtime })
 }
 
-/** 编辑大文本字段（system / memory）：标记为已编辑，保存时会提交全文。 */
-export function editBigText(draft: ProfileDraft, field: 'system' | 'memory', value: string): ProfileDraft {
+/** 编辑大文本字段（system）：标记为已编辑，保存时会提交全文。 */
+export function editBigText(draft: ProfileDraft, field: 'system', value: string): ProfileDraft {
   const edited = new Set(draft.editedFields)
   edited.add(field)
   return { ...draft, profile: { ...draft.profile, [field]: value }, editedFields: edited }
@@ -121,7 +120,7 @@ export function isDraftDirty(draft: ProfileDraft): boolean {
  *   也不得丢，且绝不把三者互相归一（[] 是用户显式选择，不是空值）；
  * - runtime 规范化，undefined 保持省略（关闭外部运行时）。
  *
- * 逐字段显式构造（不 spread Profile）：system / memory 永不混入载荷，
+ * 逐字段显式构造（不 spread Profile）：system 永不混入载荷，
  * 杜绝旧大文本快照随基础字段泄漏写回。
  */
 function normalizeProfileConfig(profile: Profile): Profile {
@@ -145,12 +144,11 @@ function normalizeProfileConfig(profile: Profile): Profile {
 
 /**
  * 保存载荷：完整基础配置（isNew 与更新同构，均为整体替换）+ 按需大文本。
- * system / memory 仅在新建或用户显式编辑过时提交全文；否则省略，让
- * HTTP 层跳过对应文件，保护弹窗打开期间 Agent 新写入的记忆。
+ * system 仅在新建或用户显式编辑过时提交全文；否则省略，让 HTTP 层跳过
+ * 对应文件，保护弹窗打开期间 Agent 新写入的内容。
  */
 export function buildProfileSavePayload(draft: ProfileDraft, opts: { isNew: boolean }): Profile {
   const payload = normalizeProfileConfig(draft.profile)
   if (opts.isNew || draft.editedFields.has('system')) payload.system = draft.profile.system ?? ''
-  if (opts.isNew || draft.editedFields.has('memory')) payload.memory = draft.profile.memory ?? ''
   return payload
 }

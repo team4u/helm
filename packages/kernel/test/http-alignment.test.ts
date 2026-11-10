@@ -22,17 +22,12 @@ import {
   SecretStash,
 } from '../src/services/index.js'
 import { PluginHost } from '../src/plugins/index.js'
-import {
-  HelmError,
-  ROOT_CONVERSATION_ID,
-  type ConversationDetail,
-  type ConversationInputResult,
-  type ConversationPatch,
-  type ConversationSummary,
-  type HelmPluginContext,
-} from '@helm/protocol'
+import { HelmError, type ConversationDetail, type ConversationInputResult, type ConversationPatch, type ConversationSummary, type HelmPluginContext } from '@helm/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
+
+/** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
+const ROOT_CONVERSATION_ID = 1 as const
 
 // ---------------------------------------------------------------------------
 // 基座

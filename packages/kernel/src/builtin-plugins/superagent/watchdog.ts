@@ -25,7 +25,6 @@
 
 import {
   HelmError,
-  ROOT_CONVERSATION_ID,
   type AskResult,
   type BeforeTurnHookPayload,
   type HelmPluginContext,
@@ -402,10 +401,9 @@ export function registerSuperAgentWatchdog(
     return profileId === WATCHDOG_PROFILE_ID
   }
 
-  /** 受保护目标：root / 中枢 / watchdog 自身（防自激与误伤常驻入口）。 */
+  /** 受保护目标：中枢 / watchdog 自身（防自激与误伤常驻入口）。 */
   function isProtectedTarget(conversationId: number): boolean {
     return (
-      conversationId === ROOT_CONVERSATION_ID ||
       conversationId === runtime.getRouterConversationId() ||
       conversationId === runtime.getWatchdogConversationId()
     )
@@ -413,13 +411,13 @@ export function registerSuperAgentWatchdog(
 
   /**
    * mutation 前的即时归属核对：probe 携带的 ownedBy 可能已过期，
-   * 一律以 deps.getConversationOwnership 现读为准（root 恒 human）。
+   * 一律以 deps.getConversationOwnership 现读为准（未标记一律 human）。
    */
   function assertOwnedTarget(conversationId: number): void {
     if (isProtectedTarget(conversationId)) {
       throw new HelmError(
         'watchdog_target_protected',
-        `会话 ${conversationId} 受保护（root/中枢/巡检自身），拒绝 Watchdog 自动处置`,
+        `会话 ${conversationId} 受保护（中枢/巡检自身），拒绝 Watchdog 自动处置`,
         403,
         { conversationId },
       )

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
 import type { ConversationAttachmentRef } from '@helm/protocol'
-import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { isConversationDeletable, isHumanSelectableProfile } from '../shell/sidebar-model.js'
 import { useHelmStore } from '../lib/store-context.js'
@@ -475,7 +474,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           void (async () => {
             try {
               await conversationsApi.remove(conversationId)
-              store.openTarget({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
+              // 删除后回退到无会话依赖的角色中心（conversation.deleted 事件
+              // 同样会触发回退；这里主动导航避免残留在已删会话视图）。
+              store.openTarget({ kind: 'profiles' })
               store.pushNotice({
                 type: 'notification',
                 level: 'info',

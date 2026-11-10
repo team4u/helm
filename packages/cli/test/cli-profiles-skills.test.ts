@@ -101,7 +101,6 @@ const EXISTING_WORKER = {
   runtime: { kind: 'herdr', agent: 'pi', nodeId: 'node-a', workspace: '/srv/work' },
   skills: ['git-commit', 'herdr'],
   system: '# SYSTEM',
-  memory: '# MEMORY',
 }
 
 test('profiles create --skills：白名单写入 body；[] 表示无技能', { timeout: 60_000 }, async () => {
@@ -146,10 +145,9 @@ test('profiles update --skills：GET 合并后仅替换 skills，nodeId/cwd/runt
       runtime: EXISTING_WORKER.runtime,
       skills: ['git-commit'],
     })
-    // GET 带回的 system/memory 全文不回传（剥离规则不变）
+    // GET 带回的 system 全文不回传（剥离规则不变；MEMORY.md 由 builtin:memory 管理）
     const body = put.body as Record<string, unknown>
     assert.equal('system' in body, false)
-    assert.equal('memory' in body, false)
   } finally {
     await hub.close()
   }

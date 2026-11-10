@@ -19,16 +19,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import {
-  HelmError,
-  ROOT_CONVERSATION_ID,
-  type ConversationSummary,
-  type EnvExecResponse,
-  type PluginDefinition,
-  type PluginDocHandle,
-  type PublicPluginDoc,
-} from '@helm/protocol'
+import { HelmError, type ConversationSummary, type EnvExecResponse, type PluginDefinition, type PluginDocHandle, type PublicPluginDoc } from '@helm/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
+
+/** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
+const ROOT_CONVERSATION_ID = 1 as const
 
 // ---------------------------------------------------------------------------
 // 测试基建

@@ -511,12 +511,10 @@ test('profiles create：语义化 flag（--name/--model/--node/--cwd）直接构
   }
 })
 
-test('profiles create：--system-file/--memory-file 全文进 body；语义化 flag 覆盖 --input 同名字段', { timeout: 60_000 }, async () => {
+test('profiles create：--system-file 全文进 body；语义化 flag 覆盖 --input 同名字段', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
   const systemFile = path.join(dir, 'SYSTEM.md')
-  const memoryFile = path.join(dir, 'MEMORY.md')
   await fsp.writeFile(systemFile, '# 系统\n你是工人。')
-  await fsp.writeFile(memoryFile, '# 记忆\n喜欢简洁。')
   const hub = await startHub({
     'GET /api/actions': () => ({ body: [] }),
     'POST /api/profiles': (body) => ({ body }),
@@ -524,13 +522,12 @@ test('profiles create：--system-file/--memory-file 全文进 body；语义化 f
   const env = makeEnv(hub.url, dir)
   try {
     const r = await run(
-      ['profiles', 'create', 'worker', '--system-file', systemFile, '--memory-file', memoryFile, '--json'],
+      ['profiles', 'create', 'worker', '--system-file', systemFile, '--json'],
       env,
     )
     assert.equal(r.code, 0, r.err)
     const body = JSON.parse(r.out) as Record<string, unknown>
     assert.equal(body['system'], '# 系统\n你是工人。')
-    assert.equal(body['memory'], '# 记忆\n喜欢简洁。')
 
     // --input 为基底，语义化 flag 覆盖对应字段（name/model 被覆盖，cwd 保留）
     const merged = await run(
@@ -572,7 +569,6 @@ test('profiles update：语义化 flag 先 GET 合并后 PUT（整体替换契�
     tags: ['a', 'b'],
     runtime: { kind: 'herdr', agent: 'agy' },
     system: '# 系统提示词全文',
-    memory: '# 记忆全文',
   }
   let putBody: unknown
   const hub = await startHub({
@@ -602,9 +598,8 @@ test('profiles update：语义化 flag 先 GET 合并后 PUT（整体替换契�
       tags: ['a', 'b'],
       runtime: { kind: 'herdr', agent: 'agy' },
     })
-    // GET 带回的 system/memory 全文不得回传（未显式给出时）
+    // GET 带回的 system 全文不得回传（未显式给出时）
     assert.ok(!('system' in (putBody as Record<string, unknown>)))
-    assert.ok(!('memory' in (putBody as Record<string, unknown>)))
 
     // 只改 --name 同样不丢 nodeId（防会话误跑 local 的回归键）
     const rename = await run(['profiles', 'update', 'worker', '--name', '新名', '--json'], env)
@@ -614,13 +609,12 @@ test('profiles update：语义化 flag 先 GET 合并后 PUT（整体替换契�
     assert.equal(lastPut['nodeId'], 'gpu-box')
     assert.equal(lastPut['cwd'], '/workspace')
     assert.ok(!('system' in lastPut))
-    assert.ok(!('memory' in lastPut))
   } finally {
     await hub.close()
   }
 })
 
-test('profiles update：显式 --system/--memory 进 body；--input 与语义化 flag 组合稳定合并', { timeout: 60_000 }, async () => {
+test('profiles update：显式 --system 进 body；--input 与语义化 flag 组合稳定合并', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
   const existing = {
     id: 'worker',
@@ -629,7 +623,6 @@ test('profiles update：显式 --system/--memory 进 body；--input 与语义化
     nodeId: 'gpu-box',
     cwd: '/workspace',
     system: '旧系统提示词',
-    memory: '旧记忆',
   }
   const hub = await startHub({
     'GET /api/actions': () => ({ body: [] }),
@@ -638,7 +631,7 @@ test('profiles update：显式 --system/--memory 进 body；--input 与语义化
   })
   const env = makeEnv(hub.url, dir)
   try {
-    // 显式 --system 覆盖，未给的 --memory 不回传旧全文（剥离基底，防意外重写）
+    // 显式 --system 覆盖（MEMORY.md 由 builtin:memory 插件管理，不经 Profile）
     const r = await run(
       ['profiles', 'update', 'worker', '--system', '新系统提示词', '--node', 'laptop', '--json'],
       env,
@@ -648,7 +641,6 @@ test('profiles update：显式 --system/--memory 进 body；--input 与语义化
     assert.equal(body['system'], '新系统提示词')
     assert.equal(body['nodeId'], 'laptop')
     assert.equal(body['name'], '基底')
-    assert.ok(!('memory' in body), '未显式给出的 memory 不得回传 GET 全文')
 
     // --input + 语义化 flag 组合：以 GET 基底 + --input 覆盖 + flag 覆盖，字段不丢
     const merged = await run(

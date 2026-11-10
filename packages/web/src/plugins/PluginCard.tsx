@@ -16,7 +16,8 @@ export interface PluginCardProps {
  */
 function getPluginIcon(id: string): string {
   const norm = (id ?? '').toLowerCase()
-  if (norm.includes('assistant')) return 'bot'
+  if (norm.includes('profile')) return 'bot'
+  if (norm.includes('memory')) return 'sparkles'
   if (norm.includes('workflow')) return 'workflow'
   if (norm.includes('herdr')) return 'terminal'
   if (norm.includes('superagent')) return 'sparkles'
@@ -30,8 +31,11 @@ function getPluginIcon(id: string): string {
  */
 function getPluginDescription(plugin: PluginSummary): string {
   const norm = (plugin.id ?? '').toLowerCase()
-  if (norm === 'builtin:assistant' || norm === 'assistant') {
-    return '常驻根会话与个人助理，注入系统提示词与长期记忆，提供技能扩展。'
+  if (norm === 'builtin:profile' || norm === 'profile') {
+    return '常驻角色与技能底座：注入 SYSTEM.md 与可用技能目录，提供 load_skill 与默认助理角色。'
+  }
+  if (norm === 'builtin:memory' || norm === 'memory') {
+    return '长期记忆：管理各 Profile 的 MEMORY.md 注入、单角色记忆启停与 update_memory 工具。'
   }
   if (norm === 'builtin:workflow' || norm === 'workflow') {
     return '多智能体确定性工作流 DSL 引擎、受管工作树与动态任务面板。'

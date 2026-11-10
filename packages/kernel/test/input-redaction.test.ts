@@ -25,8 +25,11 @@ import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 
 import { KernelRuntime } from '../src/runtime/index.js'
-import { ROOT_CONVERSATION_ID } from '@helm/protocol'
+
 import assert from 'node:assert/strict'
+
+/** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
+const ROOT_CONVERSATION_ID = 1 as const
 
 interface Env {
   dataDir: string

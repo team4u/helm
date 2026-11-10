@@ -11,7 +11,7 @@
  * 出站 JSON 一律经 redactor 脱敏（kernel.stash 存在时）；插件动作结果
  * 原样返回（null 就是 null，undefined 是 output 边界违约，显式 500）。
  */
-import { ROOT_CONVERSATION_ID, HelmError } from '@helm/protocol'
+import { HelmError } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 import type {
   EnvExecStreamFrame,
@@ -251,9 +251,6 @@ async function route(
         return jsonOk(redactor, await kernel.updateConversation(id, parseConversationPatch(body)))
       }
       if (method === 'DELETE') {
-        if (id === ROOT_CONVERSATION_ID) {
-          throw new HelmError('root_conversation_protected', '常驻根会话 #1 不可删除', 403)
-        }
         await kernel.deleteConversation(id)
         return jsonOk(redactor, { ok: true })
       }
@@ -328,11 +325,8 @@ async function route(
   // ---- profiles -------------------------------------------------------------
   if (head === 'profiles') {
     const enrichProfile = async (profile: Profile): Promise<Profile> => {
-      const [system, memory] = await Promise.all([
-        kernel.profiles.getSystem(profile.id),
-        kernel.profiles.getMemory(profile.id),
-      ])
-      return { ...profile, system, memory }
+      const system = await kernel.profiles.getSystem(profile.id)
+      return { ...profile, system }
     }
     if (second === undefined) {
       if (method === 'GET') return jsonOk(redactor, await kernel.profiles.list())

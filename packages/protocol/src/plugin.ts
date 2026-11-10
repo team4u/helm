@@ -448,7 +448,7 @@ export interface PluginSummary {
   id: string
   name: string
   version?: string
-  /** 常驻不可卸载（如 builtin:assistant）。 */
+  /** 常驻不可卸载（如 builtin:profile）。 */
   locked: boolean
   enabled: boolean
   hooks: HookName[]
@@ -626,11 +626,11 @@ export interface HelmPluginContext<TConfig = Record<string, unknown>> {
 }
 
 export interface PluginDefinition {
-  /** 插件 ID，如 'builtin:assistant'、'builtin:herdr'。 */
+  /** 插件 ID，如 'builtin:profile'、'builtin:herdr'。 */
   id: string
   name?: string
   version?: string
-  /** true 表示常驻不可卸载（builtin:assistant）。 */
+  /** true 表示常驻不可卸载（builtin:profile）。 */
   locked?: boolean
   /**
    * 客户端源根目录（绝对路径，可选）：声明了 client.tsx 组件引用（UiSpecBase.client）

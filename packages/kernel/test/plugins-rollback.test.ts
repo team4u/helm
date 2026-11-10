@@ -20,7 +20,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -30,9 +30,10 @@ import {
   type WatchdogProbe,
 } from '@helm/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
-import { createAssistantPlugin } from '../src/builtin-plugins/assistant.js'
+import { createProfilePlugin } from '../src/builtin-plugins/profile.js'
+import { createMemoryPlugin, MAX_MEMORY_CHARS as MEM_MAX, MemoryStore } from '../src/builtin-plugins/memory.js'
 import { createSuperAgentPlugin } from '../src/builtin-plugins/superagent.js'
-import { MAX_MEMORY_CHARS, ProfileService, SkillService } from '../src/services/index.js'
+import { ProfileService, SkillService } from '../src/services/index.js'
 import type { SuperAgentDependencies } from '../src/builtin-plugins/superagent/contracts.js'
 
 // ---------------------------------------------------------------------------
@@ -150,23 +151,22 @@ function makeControlledBackend(): ControlledBackend {
 }
 
 // ---------------------------------------------------------------------------
-// 1. ProfileService：锁内大小防线（并发 append 不可叠加突破）+ save 同限
+// 1. MemoryStore：锁内大小防线（并发 append 不可叠加突破；无绕过上限参数）
 // ---------------------------------------------------------------------------
 
-test('profiles：并发 append（跨实例、锁内合并检查）最终不超上限且超限方显式拒绝', { timeout: 60_000 }, async () => {
+test('memory：并发 append（跨实例、锁内合并检查）最终不超上限且超限方显式拒绝', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-mem-limit-'))
   try {
     // 预置接近上限：剩余空间只够一次追加。
-    const base = new ProfileService(dataDir)
-    await base.ensureDefault()
-    await base.updateMemory('assistant', 'x'.repeat(MAX_MEMORY_CHARS - 1_000), 'replace')
+    const base = new MemoryStore(dataDir)
+    await base.ensureMemory('assistant')
+    await base.updateMemory('assistant', 'x'.repeat(MEM_MAX - 1_000), 'replace')
 
     // 跨实例并发 append（每个都单独看是合法的 800 字符）：合并后必有一笔超限。
-    const services = Array.from({ length: 4 }, () => new ProfileService(dataDir))
+    const stores = Array.from({ length: 4 }, () => new MemoryStore(dataDir))
     const outcomes = await Promise.allSettled(
-      services.map((svc) => svc.updateMemory('assistant', 'y'.repeat(800), 'append', { maxChars: MAX_MEMORY_CHARS })),
+      stores.map((store) => store.updateMemory('assistant', 'y'.repeat(800), 'append')),
     )
-    const fulfilled = outcomes.filter((o) => o.status === 'fulfilled')
     const rejected = outcomes.filter((o) => o.status === 'rejected')
     // 4 笔 × 800 = 3200 > 1000 余量：至少一笔被锁内拒绝；全部成功即防线失效。
     assert.ok(rejected.length >= 1, `至少一笔 append 应被锁内拒绝（实际 ${rejected.length} 笔被拒）`)
@@ -178,51 +178,44 @@ test('profiles：并发 append（跨实例、锁内合并检查）最终不超�
     }
     // 最终文件 ≤ 上限（锁内串行合并，绝不写半截超限内容）。
     const final = await base.getMemory('assistant')
-    assert.ok(final.length <= MAX_MEMORY_CHARS, `最终内容 ${final.length} 不得超过上限`)
+    assert.ok(final.length <= MEM_MAX, `最终内容 ${final.length} 不得超过上限`)
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
-test('profiles：save(memory) 超限在写盘前拒绝（profile.json 不半截写入）', { timeout: 60_000 }, async () => {
+test('memory：set 动作超限在写盘前拒绝（MEMORY.md 不半截写入）', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-mem-save-'))
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
+    const backend = makeControlledBackend()
+    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+    await host.register(createMemoryPlugin({ profiles }), { enabled: true })
     await assert.rejects(
-      () =>
-        profiles.save({
-          id: 'assistant',
-          name: '助理',
-          memory: 'M'.repeat(MAX_MEMORY_CHARS + 1),
-        }),
+      () => host.invokeAction('builtin:memory', 'set', { profileId: 'assistant', text: 'M'.repeat(MEM_MAX + 1) }),
       (err: unknown) => err instanceof HelmError && err.code === 'memory_limit_exceeded' && err.status === 400,
     )
-    // 既有 MEMORY.md 未被破坏；profile.json 未因半截 save 损坏（服务仍可读）。
-    const memory = await profiles.getMemory('assistant')
-    assert.ok(!memory.startsWith('M'.repeat(100)), '超限 memory 不得落盘')
-    const fetched = await profiles.get('assistant')
-    assert.ok(fetched !== undefined)
+    // MEMORY.md 未被创建（超限拒绝不留半截）。
+    const memoryExists = existsSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
+    assert.ok(!memoryExists || !(await new MemoryStore(dataDir).getMemory('assistant')).startsWith('M'.repeat(100)), '超限 memory 不得落盘')
     // 合法大小（恰在上限）通过。
-    await profiles.save({ id: 'assistant', name: '助理', memory: 'M'.repeat(MAX_MEMORY_CHARS) })
-    assert.equal((await profiles.getMemory('assistant')).length, MAX_MEMORY_CHARS)
+    await host.invokeAction('builtin:memory', 'set', { profileId: 'assistant', text: 'M'.repeat(MEM_MAX) })
+    assert.equal((await new MemoryStore(dataDir).getMemory('assistant')).length, MEM_MAX)
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
-test('profiles：无 maxChars 时不设限（服务层 API 语义：上限由调用方显式声明）', { timeout: 60_000 }, async () => {
+test('memory：写入路径无绕过上限参数（任何调用均强制 64k）', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-mem-nolimit-'))
   try {
-    const profiles = new ProfileService(dataDir)
-    await profiles.ensureDefault()
-    // 不传 maxChars：超限也允许（路径自选上限，服务层不强制全局策略）。
-    const written = await profiles.updateMemory('assistant', 'x'.repeat(MAX_MEMORY_CHARS + 100), 'replace')
-    assert.equal(written.length, MAX_MEMORY_CHARS + 100)
-    // 非法 maxChars 显式拒绝。
+    const store = new MemoryStore(dataDir)
+    await store.ensureMemory('assistant')
+    // MemoryStore 公开 API 无 maxChars 参数：超限即拒绝，无「不设限」路径。
     await assert.rejects(
-      () => profiles.updateMemory('assistant', 'x', 'append', { maxChars: 0 }),
-      /maxChars/,
+      () => store.updateMemory('assistant', 'x'.repeat(MEM_MAX + 100), 'replace'),
+      (err: unknown) => err instanceof HelmError && err.code === 'memory_limit_exceeded',
     )
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -230,20 +223,20 @@ test('profiles：无 maxChars 时不设限（服务层 API 语义：上限由调
 })
 
 // ---------------------------------------------------------------------------
-// 2. assistant：update_memory 并发 + 资产缺失的模型可见告知
+// 2. memory：update_memory 并发 + 资产缺失的模型可见告知
 // ---------------------------------------------------------------------------
 
-test('assistant：同 Profile 双会话并发 update_memory append 最终不超上限', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-assistant-conc-'))
+test('memory：同 Profile 双会话并发 update_memory append 最终不超上限', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-memory-conc-'))
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
-    await profiles.updateMemory('assistant', 'x'.repeat(MAX_MEMORY_CHARS - 1_000), 'replace')
+    await new MemoryStore(dataDir).updateMemory('assistant', 'x'.repeat(MEM_MAX - 1_000), 'replace')
     const backend = makeControlledBackend()
     backend.conversations.set(10, makeConversation(10))
     backend.conversations.set(20, makeConversation(20))
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createAssistantPlugin({ profiles, skills: new SkillService(dataDir), plugins: host }), { enabled: true })
+    await host.register(createMemoryPlugin({ profiles }), { enabled: true })
 
     const outcomes = await Promise.allSettled([
       host.executeTool('update_memory', { text: 'y'.repeat(800), mode: 'append' }, { conversationId: 10 }),
@@ -255,22 +248,28 @@ test('assistant：同 Profile 双会话并发 update_memory append 最终不超�
     for (const r of rejected) {
       assert.ok(r.reason instanceof HelmError && r.reason.code === 'memory_limit_exceeded')
     }
-    const final = await profiles.getMemory('assistant')
-    assert.ok(final.length <= MAX_MEMORY_CHARS, `最终 ${final.length} ≤ 上限`)
+    const final = await new MemoryStore(dataDir).getMemory('assistant')
+    assert.ok(final.length <= MEM_MAX, `最终 ${final.length} ≤ 上限`)
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
-test('assistant：SYSTEM/MEMORY 缺失时向模型注入显式 assets-missing 节（不沉默换人格）', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-assistant-missing-'))
+test('profile/memory：SYSTEM 与已初始化 MEMORY 缺失时注入显式 assets-missing 节（不沉默换人格）', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-pm-missing-'))
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
     const backend = makeControlledBackend()
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createAssistantPlugin({ profiles, skills: new SkillService(dataDir), plugins: host }), { enabled: true })
+    await host.register(createProfilePlugin({ profiles, skills: new SkillService(dataDir), plugins: host }), { enabled: true })
+    await host.register(createMemoryPlugin({ profiles }), { enabled: true })
 
+    // 先跑一回合建立 memory initializedProfiles 标记（惰性初始化 MEMORY.md）。
+    {
+      const turn = { conversation: makeConversation(1), sections: [], tools: [], inputs: [], messages: [] }
+      await host.runHook('before_turn', turn as never)
+    }
     unlinkSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
     unlinkSync(join(dataDir, 'profiles', 'assistant', 'SYSTEM.md'))
 
@@ -284,14 +283,16 @@ test('assistant：SYSTEM/MEMORY 缺失时向模型注入显式 assets-missing �
     const result = await host.runHook('before_turn', turn as never)
     assert.ok(result.action === 'transform')
     const sections = (result as { value: { sections: Array<{ id: string; text: string }> } }).value.sections
-    const missing = sections.find((s) => s.id === 'assistant.assets-missing')
-    assert.ok(missing !== undefined, '必须注入 assets-missing 节')
-    assert.ok(missing.text.includes('SYSTEM.md'), '显式点名 SYSTEM.md 缺失')
-    assert.ok(missing.text.includes('MEMORY.md'), '显式点名 MEMORY.md 缺失')
-    assert.ok(missing.text.includes('不要假装'), '明确指示模型不得假装拥有记忆/人格')
+    const sysMissing = sections.find((s) => s.id === 'profile.assets-missing')
+    assert.ok(sysMissing !== undefined, '必须注入 profile.assets-missing 节')
+    assert.ok(sysMissing.text.includes('SYSTEM.md'), '显式点名 SYSTEM.md 缺失')
+    const memMissing = sections.find((s) => s.id === 'memory.assets-missing')
+    assert.ok(memMissing !== undefined, '必须注入 memory.assets-missing 节')
+    assert.ok(memMissing.text.includes('MEMORY.md'), '显式点名 MEMORY.md 缺失')
+    assert.ok(memMissing.text.includes('不要假装') || sysMissing.text.includes('不要假装'), '明确指示模型不得假装拥有记忆/人格')
     // 人类侧告警也发出（双通道：模型可见 + 人类通知）。
     assert.ok(
-      backend.notifications.some((n) => n.title.includes('MEMORY.md')),
+      backend.notifications.some((n) => n.title.includes('MEMORY.md') || n.title.includes('长期记忆')),
       'MEMORY.md 缺失应有人类侧告警',
     )
     assert.ok(
@@ -305,7 +306,8 @@ test('assistant：SYSTEM/MEMORY 缺失时向模型注入显式 assets-missing �
     assert.ok(again.action === 'transform')
     assert.equal(backend.notifications.length, 0, '持续缺失不重复告警')
     const sections2 = (again as { value: { sections: Array<{ id: string }> } }).value.sections
-    assert.ok(sections2.some((s) => s.id === 'assistant.assets-missing'), '模型每回合仍可见缺失说明')
+    assert.ok(sections2.some((s) => s.id === 'profile.assets-missing'), '模型每回合仍可见 SYSTEM 缺失说明')
+    assert.ok(sections2.some((s) => s.id === 'memory.assets-missing'), '模型每回合仍可见 MEMORY 缺失说明')
 
     // 文件恢复：告警标记复位——再次缺失可重新告警。
     const memoryPath = join(dataDir, 'profiles', 'assistant', 'MEMORY.md')
@@ -313,16 +315,15 @@ test('assistant：SYSTEM/MEMORY 缺失时向模型注入显式 assets-missing �
     const healed = await host.runHook('before_turn', { ...turn, sections: [] } as never)
     assert.ok(healed.action === 'transform')
     const healedSections = (healed as { value: { sections: Array<{ id: string; text: string }> } }).value.sections
-    // SYSTEM 仍缺失：assets-missing 节仍在，但不再点名 MEMORY（恢复即移除）。
-    const healedMissing = healedSections.find((s) => s.id === 'assistant.assets-missing')
-    assert.ok(healedMissing !== undefined, 'SYSTEM 仍缺失时节仍在')
-    assert.ok(!healedMissing.text.includes('MEMORY.md'), 'MEMORY 恢复后不再点名其缺失')
-    assert.ok(healedSections.some((s) => s.id === 'assistant.memory'), '恢复后正常注入 memory')
+    // SYSTEM 仍缺失：profile.assets-missing 节仍在；MEMORY 恢复后 memory 段落回归。
+    assert.ok(healedSections.some((s) => s.id === 'profile.assets-missing'), 'SYSTEM 仍缺失时节仍在')
+    assert.ok(!healedSections.some((s) => s.id === 'memory.assets-missing'), 'MEMORY 恢复后缺失节移除')
+    assert.ok(healedSections.some((s) => s.id === 'memory.content'), '恢复后正常注入 memory.content')
     backend.notifications.length = 0
     unlinkSync(memoryPath)
     await host.runHook('before_turn', { ...turn, sections: [] } as never)
     assert.ok(
-      backend.notifications.some((n) => n.title.includes('MEMORY.md')),
+      backend.notifications.some((n) => n.title.includes('MEMORY.md') || n.title.includes('长期记忆')),
       '恢复后再次缺失应重新告警（去重状态已复位）',
     )
   } finally {
@@ -330,19 +331,21 @@ test('assistant：SYSTEM/MEMORY 缺失时向模型注入显式 assets-missing �
   }
 })
 
-test('assistant：权限/IO 错误不被吞（仅 FileNotFoundError 走缺失路径）', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-assistant-ioerr-'))
+test('memory：权限/IO 错误不被吞（仅 FileNotFoundError 走缺失路径）', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-memory-ioerr-'))
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
-    // 把 MEMORY.md 换成同名目录：readFile 得 EISDIR（真实 IO 错，非 ENOENT 缺失）。
+    // 先建立已初始化状态，再把 MEMORY.md 换成同名目录：readFile 得 EISDIR
+    //（真实 IO 错，非 ENOENT 缺失）。
+    await new MemoryStore(dataDir).ensureMemory('assistant')
     unlinkSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
     const { mkdirSync } = await import('node:fs')
     mkdirSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
 
     const backend = makeControlledBackend()
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createAssistantPlugin({ profiles, skills: new SkillService(dataDir), plugins: host }), { enabled: true })
+    await host.register(createMemoryPlugin({ profiles }), { enabled: true })
     const turn = {
       conversation: makeConversation(1),
       sections: [],

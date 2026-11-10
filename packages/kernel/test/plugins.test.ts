@@ -446,8 +446,8 @@ test('invokeAction：入参校验失败 400 validation_error，输出违约 500 
 });
 
 test('parseQualifiedActionId：pluginId 含 ":" 时按首个 "." 正确分割', { timeout: 60_000 }, () => {
-  assert.deepEqual(PluginHost.parseQualifiedActionId('builtin:assistant.update_memory'), {
-    pluginId: 'builtin:assistant',
+  assert.deepEqual(PluginHost.parseQualifiedActionId('builtin:profile.update_memory'), {
+    pluginId: 'builtin:profile',
     actionId: 'update_memory',
   });
   assert.deepEqual(PluginHost.parseQualifiedActionId('triggers.cron.create'), {
@@ -696,17 +696,17 @@ test('正常 disable：服务按注册逆序 stop', { timeout: 60_000 }, async (
 test('locked 插件 disable/unregister 403 plugin_locked', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
-    id: 'builtin:assistant',
+    id: 'builtin:profile',
     locked: true,
     definePlugin: () => {},
   });
-  await assert.rejects(host.disable('builtin:assistant'), (err: unknown) => {
+  await assert.rejects(host.disable('builtin:profile'), (err: unknown) => {
     assert.ok(err instanceof HelmError);
     assert.equal(err.code, 'plugin_locked');
     assert.equal(err.status, 403);
     return true;
   });
-  await rejectsCode(host.unregister('builtin:assistant'), 'plugin_locked', 403);
+  await rejectsCode(host.unregister('builtin:profile'), 'plugin_locked', 403);
 });
 
 test('doc 命名空间隔离 pluginId:name；get 返回 clone 防未持久化突变', { timeout: 60_000 }, async () => {

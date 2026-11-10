@@ -19,8 +19,10 @@ import {
   DialogPortal,
   DialogTitle,
 } from '../ui/Dialog.js'
+import { PluginSlot } from '../ui/PluginSlot.js'
 import { Select, type SelectOption } from '../ui/Select.js'
 import { Switch } from '../ui/Switch.js'
+import { PROFILE_DETAIL_SECTION_SLOT } from '@helm/protocol'
 
 export interface ProfileDetailDrawerProps {
   profile: Profile | null
@@ -39,7 +41,6 @@ interface FormState {
   model: string
   cwd: string
   system: string
-  memory: string
   useAllSkills: boolean
   selectedSkillIds: string[]
 }
@@ -53,7 +54,6 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
       model: '',
       cwd: '',
       system: '',
-      memory: '',
       useAllSkills: true,
       selectedSkillIds: [],
     }
@@ -66,7 +66,6 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
     model: resolveProfileModel(profile) ?? '',
     cwd: profile.cwd ?? '',
     system: profile.system ?? '',
-    memory: profile.memory ?? '',
     useAllSkills: profile.skills === undefined,
     selectedSkillIds: Array.isArray(profile.skills) ? [...profile.skills] : [],
   }
@@ -75,7 +74,7 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
 /**
  * 智能体角色详情与配置抽屉（520px-560px 宽度）：
  * - 基于 Radix Dialog 原语实现平滑右侧滑出；
- * - 覆盖角色 ID、名称、描述、默认模型、工作目录、系统提示词、长期记忆与技能白名单；
+ * - 覆盖角色 ID、名称、描述、默认模型、工作目录、系统提示词、插件扩展子插槽与技能白名单；
  * - 提供脏表单防护、新建校验与删除二次确认；
  * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
  */
@@ -114,7 +113,8 @@ export function ProfileDetailDrawer({
     setBaseline(initial)
     setError(null)
 
-    // 若编辑已有角色，尝试拉取全文详情（含完整 SYSTEM.md 与 MEMORY.md）
+    // 若编辑已有角色，尝试拉取全文详情（含完整 SYSTEM.md；MEMORY.md 由
+    // builtin:memory 插件子插槽自治拉取，不经宿主 Profile 表单）
     if (!isNew && profile?.id) {
       const targetId = profile.id
       activeFetchIdRef.current = targetId
@@ -131,7 +131,6 @@ export function ProfileDetailDrawer({
               model: resolveProfileModel(detail) ?? prev.model,
               cwd: detail.cwd ?? prev.cwd,
               system: detail.system ?? prev.system,
-              memory: detail.memory ?? prev.memory,
               useAllSkills: detail.skills === undefined,
               selectedSkillIds: Array.isArray(detail.skills) ? [...detail.skills] : prev.selectedSkillIds,
             }
@@ -158,7 +157,6 @@ export function ProfileDetailDrawer({
         form.model.trim() !== '' ||
         form.cwd.trim() !== '' ||
         form.system.trim() !== '' ||
-        form.memory.trim() !== '' ||
         !form.useAllSkills ||
         form.selectedSkillIds.length > 0
       )
@@ -170,7 +168,6 @@ export function ProfileDetailDrawer({
     if (form.model !== baseline.model) return true
     if (form.cwd !== baseline.cwd) return true
     if (form.system !== baseline.system) return true
-    if (form.memory !== baseline.memory) return true
     if (form.useAllSkills !== baseline.useAllSkills) return true
 
     const sortedCurrent = [...form.selectedSkillIds].sort().join(',')
@@ -233,12 +230,9 @@ export function ProfileDetailDrawer({
       const payload: Profile = {
         id: normalizedId,
         name: form.name.trim() || undefined,
-        description: form.description.trim() || undefined,
         model: form.model.trim() || undefined,
-        defaultModel: form.model.trim() || undefined,
         cwd: form.cwd.trim() || undefined,
         system: form.system,
-        memory: form.memory,
         skills: form.useAllSkills ? undefined : form.selectedSkillIds,
       }
 
@@ -474,23 +468,16 @@ export function ProfileDetailDrawer({
               />
             </section>
 
-            {/* 长期记忆区块 */}
-            <section className="section-flat">
-              <div className="section-flat-header">
-                <span className="section-flat-title">长期记忆 (MEMORY.md)</span>
-              </div>
-              <textarea
-                id="profile-form-memory"
-                className="input"
-                rows={4}
-                placeholder="输入该角色的初始长期记忆..."
-                value={form.memory}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, memory: e.target.value }))
-                }
-                aria-label="长期记忆"
-              />
-            </section>
+            {/* 插件扩展子插槽（builtin:memory 注入长期记忆区块等） */}
+            <PluginSlot
+              ownerPluginId="builtin:profile"
+              name={PROFILE_DETAIL_SECTION_SLOT}
+              slotProps={{
+                profileId: form.id.trim(),
+                isNew,
+                disabled: isSaving || isDeleting,
+              }}
+            />
 
             {/* 技能白名单配置 */}
             <section className="section-flat">

@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
-import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import {
   formatLocationHash,
   isSameLocationState,
@@ -25,17 +24,17 @@ const roundtrip = (state: WorkspaceLocationState): WorkspaceLocationState =>
 // parseLocationHash：主屏、分屏、工作台与弹窗
 // ---------------------------------------------------------------------------
 
-test('parse: 会话主屏（#/c/<id>）与空 Hash 默认根会话', { timeout: 60_000 }, () => {
+test('parse: 会话主屏（#/c/<id>）与空 Hash 默认角色中心', { timeout: 60_000 }, () => {
   const parsed = parseLocationHash('#/c/42')
   assert.deepEqual(parsed.primaryTarget, { kind: 'conversation', conversationId: 42 })
   assert.equal(parsed.splitTarget, null)
   assert.equal(parsed.workbenchOpen, false)
   assert.equal(parsed.workbenchTab, 'artifacts')
   assert.equal(parsed.activeModal, null)
-  // "" / "#" / "#/" 均解析为默认 conversation:1
+  // "" / "#" / "#/" 均解析为默认角色中心（无会话依赖，零会话可用）
   for (const raw of ['', '#', '#/']) {
     const empty = parseLocationHash(raw)
-    assert.deepEqual(empty.primaryTarget, { kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
+    assert.deepEqual(empty.primaryTarget, { kind: 'profiles' })
     assert.equal(empty.splitTarget, null)
     assert.equal(empty.workbenchOpen, false)
     assert.equal(empty.activeModal, null)
@@ -100,12 +99,12 @@ test('parse: 六种弹窗及子项 ID（profiles/providers/skills/plugins/nodes/
 // formatLocationHash：规范形式与往返
 // ---------------------------------------------------------------------------
 
-test('format: 默认态输出规范 #/c/1', { timeout: 60_000 }, () => {
-  assert.equal(formatLocationHash(conversation(ROOT_CONVERSATION_ID)), '#/c/1')
+test('format: 会话目标输出规范 #/c/<id>', { timeout: 60_000 }, () => {
+  assert.equal(formatLocationHash(conversation(1)), '#/c/1')
 })
 
 test('format: command-palette 是瞬态弹窗，不序列化进 URL', { timeout: 60_000 }, () => {
-  const state: WorkspaceLocationState = { ...conversation(ROOT_CONVERSATION_ID), activeModal: { kind: 'command-palette' } }
+  const state: WorkspaceLocationState = { ...conversation(1), activeModal: { kind: 'command-palette' } }
   assert.equal(formatLocationHash(state), '#/c/1')
 })
 
@@ -166,10 +165,10 @@ test('roundtrip: 全部位置形态双向往返无损', { timeout: 60_000 }, () 
 // 边界防御：非法 / 脏 Hash 输入
 // ---------------------------------------------------------------------------
 
-test('parse: 非法主屏路径回退默认根会话（无 NaN / 空段）', { timeout: 60_000 }, () => {
+test('parse: 非法主屏路径回退默认角色中心（无 NaN / 空段）', { timeout: 60_000 }, () => {
   for (const raw of ['#/c/abc', '#/c/0', '#/c/-5', '#/c/1.5', '#/c/ 1', '#/unknown', '#/s/onlyone', '#/s//x', '#/s/x/', '#/c/9999999999999999999999']) {
     const parsed = parseLocationHash(raw)
-    assert.deepEqual(parsed.primaryTarget, { kind: 'conversation', conversationId: ROOT_CONVERSATION_ID }, raw)
+    assert.deepEqual(parsed.primaryTarget, { kind: 'profiles' }, raw)
   }
 })
 
@@ -192,7 +191,7 @@ test('parse: 未知 modal 值与 artifact 缺 id 均丢弃为 null', { timeout: 
 })
 
 test('parse: 非法百分号序列不抛出（decode 失败按无效段回退默认）', { timeout: 60_000 }, () => {
-  assert.deepEqual(parseLocationHash('#/s/%E0%A4%A/x').primaryTarget, { kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
+  assert.deepEqual(parseLocationHash('#/s/%E0%A4%A/x').primaryTarget, { kind: 'profiles' })
 })
 
 // ---------------------------------------------------------------------------
@@ -492,7 +491,7 @@ test('契约: HelmStoreProvider 初始状态取自 Hash、监听外部变更、�
   assert.ok(!screenParamsImpl.includes('history.'), 'setScreenParams 不得直接操作浏览器历史')
   // logout 用 replaceState 复位地址栏，不污染历史栈
   const logoutBody = source.slice(source.indexOf('const logout'), source.indexOf('useEffect', source.indexOf('const logout')))
-  assert.match(logoutBody, /replaceState\(null, '', '#\/c\/1'\)/)
+  assert.match(logoutBody, /replaceState\(null, '', '#\/profiles'\)/)
   // 诚实性纪律：snapshot 到达时不得静默重置 primaryTarget（仅保留 conversation.deleted 实时事件处理）
   assert.ok(!/applySnapshot[\s\S]{0,400}setPrimaryTarget/.test(source), 'snapshot 处理不得触碰 primaryTarget')
 })

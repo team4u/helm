@@ -61,7 +61,7 @@ after(async () => {
 })
 
 describe('KernelRuntime 基础生命周期', { timeout: 60_000 }, () => {
-  it('root #1 自动创建且不可删除；五态 idle；profiles ensureDefault 先行', { timeout: 60_000 }, async () => {
+  it('root #1 自动创建为普通 assistant 会话（可删除）；五态 idle；profiles ensureDefault 先行', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't1'))
     try {
       const convs = kernel.listConversations()
@@ -70,10 +70,9 @@ describe('KernelRuntime 基础生命周期', { timeout: 60_000 }, () => {
       assert.equal(convs[0].id, 1)
       assert.equal(convs[0].profileId, 'assistant')
       assert.equal(convs[0].status, 'idle')
-      await assert.rejects(
-        () => kernel.deleteConversation(1),
-        (err: unknown) => err instanceof HelmError && err.code === 'root_conversation_protected',
-      )
+      // 普通会话语义：无 id 级删除豁免
+      await kernel.deleteConversation(1)
+      assert.equal(kernel.listConversations().length, 0)
       // ensureDefault 已建 assistant profile
       const profiles = await kernel.services.profiles.list()
       assert.ok(profiles.some((p) => p.id === 'assistant'))
@@ -190,7 +189,7 @@ describe('busy 来源与 followUp', { timeout: 60_000 }, () => {
 })
 
 describe('重启恢复', { timeout: 60_000 }, () => {
-  it('close 后重开：会话/标题/seq/事件 seq 恢复；root 仍受保护', { timeout: 60_000 }, async () => {
+  it('close 后重开：会话/标题/seq/事件 seq 恢复；初始会话删除后重启不复活', { timeout: 60_000 }, async () => {
     const dir = join(root, 't6')
     const kernel = await openRuntime(dir)
     kernel.__faux.setResponses([fauxAssistantMessage('重启前的回答')])
@@ -207,10 +206,19 @@ describe('重启恢复', { timeout: 60_000 }, () => {
       assert.equal(conv.title, '重启前的问题')
       assert.equal(conv.stateChangeSeq, seqBefore)
       assert.ok(kernel2.events.seq >= eventSeqBefore)
-      await assert.rejects(
-        () => kernel2.deleteConversation(1),
-        (err: unknown) => err instanceof HelmError && err.code === 'root_conversation_protected',
-      )
+      // 初始会话 #1 删除后重启不复活（tombstone 生效；无 id 级豁免）
+      await kernel2.deleteConversation(1)
+      const kernel3 = await openRuntime(dir)
+      try {
+        assert.equal(
+          kernel3.listConversations().some((c) => c.id === 1),
+          false,
+          '重启后已删除的初始会话不得复活',
+        )
+        assert.equal(kernel3.listConversations().some((c) => c.id === fresh.id), true, '普通会话不受影响')
+      } finally {
+        await kernel3.close()
+      }
       // 搜索仍命中（FTS 持久化）
       const hits = await kernel2.search('重启前的问题')
       assert.ok(hits.length >= 1)

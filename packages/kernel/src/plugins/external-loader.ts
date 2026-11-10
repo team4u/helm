@@ -3,7 +3,7 @@
  *
  * `<dataDir>/plugins/` 下混杂两类目录（关键背景：PluginHost.register 会为每个
  * 已注册插件创建 `<dataDir>/plugins/<pluginId>` 作为其 ctx.dataDir）：
- * 1. 已注册插件的纯数据目录（如 `builtin:assistant`、`builtin:herdr`）；
+ * 1. 已注册插件的纯数据目录（如 `builtin:profile`、`builtin:herdr`）；
  * 2. 用户放入的外部第三方插件目录（含 plugin.json 或约定入口文件）。
  *
  * 判定规则（只认「插件入口」标记，绝不靠目录名猜测）：
@@ -59,7 +59,7 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
   }
   const registered: string[] = [];
   for (const entry of entries) {
-    // 数据目录（builtin:assistant 等）与隐藏目录一律不参与外部插件发现
+    // 数据目录（builtin:profile 等）与隐藏目录一律不参与外部插件发现
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith('.') || entry.name.startsWith('builtin:')) continue;
     const dirPath = resolve(pluginsDir, entry.name);

@@ -170,6 +170,19 @@ export interface PluginSlotContributionSpec extends UiSpecBase {
   priority?: number
 }
 
+/** Profile 详情抽屉的插件扩展子插槽全限定名（builtin:profile 提供，其他插件注入）。 */
+export const PROFILE_DETAIL_SECTION_SLOT = 'builtin:profile/detail-section' as const
+
+/** target: PROFILE_DETAIL_SECTION_SLOT 子插槽传递给插件 client.tsx 组件的通用 Props（不含具体插件业务字段）。 */
+export interface ProfileDetailSlotProps {
+  /** 当前正在查看/编辑的单个 Profile ID（新建模式为空串）。 */
+  profileId: string
+  /** 是否处于新建 Profile 模式（尚未创建落盘）。 */
+  isNew: boolean
+  /** 宿主抽屉是否处于保存或删除中的禁用态。 */
+  disabled: boolean
+}
+
 /** ctx.ui：基础扩展面与细粒度组合扩展面。 */
 export interface PluginUiRegistry {
   sidebarItem(spec: SidebarItemSpec): void

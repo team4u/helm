@@ -61,7 +61,7 @@ const mockSkills: [SkillSummary, SkillSummary, SkillSummary, SkillSummary, Skill
     name: 'Helm 命令行操作手册',
     description: '指导大模型通过 helm 命令行控制 Hub、检查状态与排查问题',
     references: ['references/cli-reference.md', 'references/generative-ui.md'],
-    managedByPlugin: 'builtin:assistant',
+    managedByPlugin: 'builtin:profile',
   }),
   makeSkill({
     id: 'code-review',
@@ -96,7 +96,7 @@ const mockSkills: [SkillSummary, SkillSummary, SkillSummary, SkillSummary, Skill
 // ---------------------------------------------------------------------------
 
 test('skill-center-model: 技能类别判定纯函数（内置 / 插件 / 工作区）', { timeout: 60_000 }, () => {
-  const builtinAssistant = makeSkill({ id: 'assistant-helper', managedByPlugin: 'builtin:assistant' })
+  const builtinAssistant = makeSkill({ id: 'assistant-helper', managedByPlugin: 'builtin:profile' })
   const builtinCli = makeSkill({ id: 'helm-cli' })
   const pluginManaged = makeSkill({ id: 'custom-skill', managedByPlugin: 'vendor:tools' })
   const workspacePrivate = makeSkill({ id: 'my-private-skill' })
@@ -123,7 +123,7 @@ test('skill-center-model: 技能类别判定纯函数（内置 / 插件 / 工作
 test('skill-center-model: buildSkillCategoryCounts 准确统计各分类数量', { timeout: 60_000 }, () => {
   const counts = buildSkillCategoryCounts(mockSkills)
   // mockSkills 包含：
-  // 1. helm-cli (builtin:assistant) -> builtin
+  // 1. helm-cli (builtin:profile) -> builtin
   // 2. code-review (无 managedByPlugin) -> workspace
   // 3. database-migration (无 managedByPlugin) -> workspace
   // 4. herdr-deploy (builtin:herdr) -> builtin

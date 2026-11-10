@@ -28,16 +28,12 @@ import {
   FileNotFoundError,
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
-import {
-  ROOT_CONVERSATION_ID,
-  HelmError,
-  type ConversationSummary,
-  type AskSpec,
-  type PluginSummary,
-  type HelmPluginContext,
-} from '@helm/protocol'
+import { HelmError, type ConversationSummary, type AskSpec, type PluginSummary, type HelmPluginContext } from '@helm/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
+
+/** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
+const ROOT_CONVERSATION_ID = 1 as const
 
 // ---------------------------------------------------------------------------
 // 测试基座
@@ -515,7 +511,7 @@ test('无效 token 401；有效 token 通过', { timeout: 60_000 }, async () => 
 // 会话生命周期
 // ---------------------------------------------------------------------------
 
-test('POST /api/conversations 创建；PATCH 更新；DELETE 根会话 403 root_conversation_protected', { timeout: 60_000 }, async () => {
+test('POST /api/conversations 创建；PATCH 更新；DELETE 会话 200（无 id 级豁免）', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const created = await call(handler, 'POST', '/api/conversations', { body: { title: '测试会话', cwd: '/tmp', tags: ['worker'] } })
   assert.equal(created.status, 201)
@@ -525,11 +521,10 @@ test('POST /api/conversations 创建；PATCH 更新；DELETE 根会话 403 root_
   assert.equal(patched.status, 200)
   assert.equal(patched.body.title, '改名')
   assert.equal(patched.body.pinned, true)
-  const root = await call(handler, 'DELETE', `/api/conversations/${ROOT_CONVERSATION_ID}`)
-  assert.equal(root.status, 403)
-  assert.equal(root.body.error.code, 'root_conversation_protected')
   const deleted = await call(handler, 'DELETE', `/api/conversations/${id}`)
   assert.equal(deleted.status, 200)
+  const gone = await call(handler, 'GET', `/api/conversations/${id}`)
+  assert.equal(gone.status, 404)
 })
 
 test('非法 conversationId 与非法字段 400 validation_error', { timeout: 60_000 }, async () => {
@@ -719,7 +714,7 @@ test('SSE 未认证 401', { timeout: 60_000 }, async () => {
 // Profiles / Providers / Credentials / Skills / Models
 // ---------------------------------------------------------------------------
 
-test('profiles CRUD（真实 ProfileService + system/memory 在线读写）', { timeout: 60_000 }, async () => {
+test('profiles CRUD（真实 ProfileService + system 在线读写；memory 契约已删）', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const created = await call(handler, 'POST', '/api/profiles', {
     body: {
@@ -727,13 +722,12 @@ test('profiles CRUD（真实 ProfileService + system/memory 在线读写）', { 
       name: '研究员',
       runtime: { kind: 'herdr', agent: 'agy' },
       system: '# 研究员系统提示词\n保持严谨。',
-      memory: '# 研究员记忆\n偏好第一性原理。',
     },
   })
   assert.equal(created.status, 201)
   assert.equal(created.body.id, 'researcher')
   assert.equal(created.body.system, '# 研究员系统提示词\n保持严谨。')
-  assert.equal(created.body.memory, '# 研究员记忆\n偏好第一性原理。')
+  assert.equal(created.body.memory, undefined, 'Profile 契约不再含 memory 字段')
   const list = await call(handler, 'GET', '/api/profiles')
   assert.ok(list.body.some((p: any) => p.id === 'researcher'))
   const put = await call(handler, 'PUT', '/api/profiles/researcher', {
@@ -742,11 +736,15 @@ test('profiles CRUD（真实 ProfileService + system/memory 在线读写）', { 
   assert.equal(put.status, 200)
   assert.equal(put.body.name, '资深研究员')
   assert.equal(put.body.system, '# 资深研究员提示词\n升级版。')
-  assert.equal(put.body.memory, '# 研究员记忆\n偏好第一性原理。')
   const got = await call(handler, 'GET', '/api/profiles/researcher')
   assert.equal(got.status, 200)
   assert.equal(got.body.system, '# 资深研究员提示词\n升级版。')
-  assert.equal(got.body.memory, '# 研究员记忆\n偏好第一性原理。')
+  // 旧 memory 字段请求被边界拒绝（不做兼容读取）
+  const rejected = await call(handler, 'PUT', '/api/profiles/researcher', {
+    body: { memory: '# 旧记忆' },
+  })
+  assert.equal(rejected.status, 400)
+  assert.match(String(rejected.body?.error?.message ?? ''), /memory/)
   const del = await call(handler, 'DELETE', '/api/profiles/researcher')
   assert.equal(del.status, 200)
   const gone = await call(handler, 'GET', '/api/profiles/researcher')

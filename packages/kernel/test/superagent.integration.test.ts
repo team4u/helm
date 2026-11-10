@@ -50,11 +50,14 @@ import {
 } from '@earendil-works/pi-ai/providers/faux'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 
-import { ROOT_CONVERSATION_ID, HelmError } from '@helm/protocol'
+import { HelmError } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
 import { startHub } from '../src/http/index.js'
 
 import assert from 'node:assert/strict'
+
+/** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
+const ROOT_CONVERSATION_ID = 1 as const
 
 const testDir = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(testDir, '..', '..', '..')
@@ -398,7 +401,7 @@ async function workerReportCount(
 // 验收 1：默认停用零业务资产；启用后自举、动态 ID、删除保护、重启持久、停用释放
 // ---------------------------------------------------------------------------
 
-test('SA1: 默认停用不建业务会话/Profile/Doc；HTTP 启用后 #1 不变、动态 ID 可读、常驻删除 409、重启同 ID、停用释放保护', { timeout: 60_000 }, async () => {
+test('SA1: 默认停用不建业务会话/Profile/Doc；HTTP 启用后动态 ID 可读、常驻删除 409、初始会话可删、重启同 ID、停用释放保护', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-sa1-'))
   const first = await makeEnv(dataDir)
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
@@ -468,10 +471,13 @@ test('SA1: 默认停用不建业务会话/Profile/Doc；HTTP 启用后 #1 不变
       assert.equal(del.status, 409, `受管常驻会话删除应 409：${del.body}`)
       assert.equal(JSON.parse(del.body).error.code, 'conversation_managed_by_plugin')
     }
-    // #1 仍不可删（403），且与插件保护不混
-    const delRoot = await httpCall(base, 'DELETE', `/api/conversations/${ROOT_CONVERSATION_ID}`, { token })
-    assert.equal(delRoot.status, 403)
-    assert.equal(JSON.parse(delRoot.body).error.code, 'root_conversation_protected')
+    // 初始会话 #1 无 id 级豁免（可删）；与插件管理权保护不混。
+    const initialId = first.app.kernel
+      .listConversations()
+      .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)?.id
+    assert.ok(initialId !== undefined, '初始 assistant 会话应存在')
+    const delInitial = await httpCall(base, 'DELETE', `/api/conversations/${initialId}`, { token })
+    assert.equal(delInitial.status, 200, `初始会话删除应 200：${delInitial.body}`)
 
     // --- 重启：同 dataDir 重建，开关持久 + 同 ID + Profile 保留
     await hub.close()

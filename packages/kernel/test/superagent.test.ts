@@ -20,7 +20,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider, fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
-import { ROOT_CONVERSATION_ID, HelmError } from '@helm/protocol'
+import { HelmError } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
 import {
   parseMutedSources,
@@ -33,6 +33,9 @@ import {
   recallHasNode,
   type RecallNodeInput,
 } from '../src/builtin-plugins/superagent.js'
+
+/** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
+const ROOT_CONVERSATION_ID = 1 as const
 
 // ---------------------------------------------------------------------------
 // 基建
@@ -207,8 +210,8 @@ test('superagent2: doc 边界验证与 RecallGraph 去重/检索纯函数', { ti
     () => assertSubscriptionsDoc({ version: 1, subscriptions: [{ threadKey: 'a', workerConversationId: 2, createdAt: 1 }, { threadKey: 'a', workerConversationId: 3, createdAt: 2 }] }),
     /重复订阅/,
   )
-  // 常驻 ID：#1 拒绝、非整数拒绝、router=watchdog 拒绝；worker 重复登记拒绝。
-  assert.throws(() => assertIndexDoc({ version: 1, routerConversationId: 1, workers: [] }), /routerConversationId/)
+  // 常驻 ID：非正整数拒绝、router=watchdog 拒绝；worker 重复登记拒绝。
+  assert.throws(() => assertIndexDoc({ version: 1, routerConversationId: 0, workers: [] }), /routerConversationId/)
   assert.throws(() => assertIndexDoc({ version: 1, routerConversationId: 2.5, workers: [] }), /routerConversationId/)
   assert.throws(() => assertIndexDoc({ version: 1, routerConversationId: 3, watchdogConversationId: 3, workers: [] }), /不得相同/)
   assert.throws(

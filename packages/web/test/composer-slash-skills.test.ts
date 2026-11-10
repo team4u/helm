@@ -55,7 +55,7 @@ const CATALOG: SkillSummary[] = [
 // ---------------------------------------------------------------------------
 
 test('slashMenuSkills：undefined 全部可见技能；[] 全部隐藏；白名单精确过滤', { timeout: 60_000 }, () => {
-  const enabled = new Set(['builtin:assistant', 'builtin:herdr'])
+  const enabled = new Set(['builtin:profile', 'builtin:herdr'])
   // undefined：全部（含启用插件托管的）
   assert.deepEqual(
     slashMenuSkills({ id: 'p', skills: undefined }, CATALOG, enabled).map((s) => s.id),
@@ -71,12 +71,12 @@ test('slashMenuSkills：undefined 全部可见技能；[] 全部隐藏；白名�
 })
 
 test('slashMenuSkills：缺少 Profile 先不展示技能（不意外放开全部）', { timeout: 60_000 }, () => {
-  const enabled = new Set(['builtin:assistant'])
+  const enabled = new Set(['builtin:profile'])
   assert.deepEqual(slashMenuSkills(undefined, CATALOG, enabled), [], 'Profile 缺失 -> 空技能列表')
 })
 
 test('slashMenuSkills：停用插件托管技能恒不可用（即使白名单命中）', { timeout: 60_000 }, () => {
-  const disabled = new Set(['builtin:assistant'])
+  const disabled = new Set(['builtin:profile'])
   assert.deepEqual(
     slashMenuSkills({ id: 'p', skills: undefined }, CATALOG, disabled).map((s) => s.id),
     ['review', 'tally'],
@@ -110,7 +110,7 @@ function makeStore(conversation: ConversationSummary, opts: MountOptions): HelmS
     conversations: [conversation], conversationDetails: {}, conversationLives: {}, conversationArtifacts: {},
     pendingAsks: [], resolvedAsksByConv: {},
     plugins: opts.plugins ?? [
-      { id: 'builtin:assistant', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] },
+      { id: 'builtin:profile', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] },
       { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
     ],
     uiContributions: [],
@@ -204,7 +204,7 @@ test('交互：profile.skills=[] -> 无任何技能，仅内置命令', { timeou
 
 test('交互：白名单 profile -> 仅白名单内技能；停用插件托管技能即使命中白名单也不出现', { timeout: 60_000 }, async () => {
   const plugins = [
-    { id: 'builtin:assistant', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] },
+    { id: 'builtin:profile', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] },
     { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: false, hooks: [], actions: [], tools: [] },
   ] as PluginSummary[]
   const { typeSlash, unmount } = await mountComposer(conv(3, 'coder'), {
@@ -240,7 +240,7 @@ test('交互：切换 Profile（模拟 store 刷新）依赖动态更新', { tim
   // 同一会话 profileId 下 store 数据变化（如保存后 refreshAssets）：白名单收紧后浮层随之更新。
   // 该行为经 useMemo([store.profiles, conversation.profileId, store.skills, enabledPluginIds]) 依赖链保证，
   // 纯模型层验证同一输入换不同 profile 的结果差异（分屏 / 菜单切换场景共用此函数）。
-  const enabled = new Set(['builtin:assistant'])
+  const enabled = new Set(['builtin:profile'])
   const a = slashMenuSkills({ id: 'a', skills: undefined }, CATALOG, enabled).map((s) => s.id)
   const b = slashMenuSkills({ id: 'b', skills: ['tally'] }, CATALOG, enabled).map((s) => s.id)
   assert.deepEqual(a, ['review', 'tally'])

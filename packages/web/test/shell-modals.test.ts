@@ -10,7 +10,6 @@ import type {
   SidebarSectionSpec,
   SkillSummary,
 } from '@helm/protocol'
-import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, resolveTargetString, type HelmStoreValue } from '../src/lib/types.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
@@ -82,7 +81,7 @@ const sidebarItems: Array<{ pluginId: string; spec: SidebarItemSpec }> = [
     spec: { id: 'watchdog', label: '巡检看门狗', icon: 'shield', target: 'conversation:profile:watchdog', order: 11 },
   },
   {
-    pluginId: 'builtin:assistant',
+    pluginId: 'builtin:profile',
     spec: { id: 'root', label: '个人助理', icon: 'sparkles', target: 'conversation:1', order: 0 },
   },
   {
@@ -123,7 +122,7 @@ const profiles: Profile[] = [
 ]
 
 const plugins = [
-  { id: 'builtin:assistant', enabled: true },
+  { id: 'builtin:profile', enabled: true },
   { id: 'builtin:superagent', enabled: true },
   { id: 'builtin:herdr', enabled: true },
 ]
@@ -214,7 +213,7 @@ test('buildAgentStandings：插件停用后其 managedByPlugin 站位与 ownedBy
   const standings = buildAgentStandings(
     standingsInput({
       plugins: [
-        { id: 'builtin:assistant', enabled: true },
+        { id: 'builtin:profile', enabled: true },
         { id: 'builtin:herdr', enabled: true },
       ],
       sidebarItems: [sidebarItems[2]!],
@@ -270,9 +269,9 @@ test('buildAgentStandings：assistant 站位图标与排序由 sidebar.item pinM
   const standings = buildAgentStandings({
     profiles: [],
     conversations: [conv({ id: 1, title: '个人助理', profileId: 'assistant' })],
-    plugins: [{ id: 'builtin:assistant', enabled: true }],
+    plugins: [{ id: 'builtin:profile', enabled: true }],
     sidebarItems: [
-      { pluginId: 'builtin:assistant', spec: { id: 'root', label: '个人助理', icon: 'sparkles', target: 'conversation:1', order: 0 } },
+      { pluginId: 'builtin:profile', spec: { id: 'root', label: '个人助理', icon: 'sparkles', target: 'conversation:1', order: 0 } },
     ],
     sidebarSections: [],
   })
@@ -308,14 +307,14 @@ test('buildAgentStandings：同刻 updatedAt 按 id 倒序；被 sidebar.item �
   const standings = buildAgentStandings({
     profiles: [{ id: 'assistant', name: '个人助理' }],
     conversations: sameTime,
-    plugins: [{ id: 'builtin:assistant', enabled: true }],
+    plugins: [{ id: 'builtin:profile', enabled: true }],
     sidebarItems: [
-      { pluginId: 'builtin:assistant', spec: { id: 'pin-10', label: '置顶话题', target: 'conversation:10' } },
+      { pluginId: 'builtin:profile', spec: { id: 'pin-10', label: '置顶话题', target: 'conversation:10' } },
     ],
     sidebarSections: [],
   })
-  // #1 根会话 -> #10 被 sidebar.item 指向 -> 其余同刻按 id 倒序
-  assert.deepEqual(standings[0]!.conversations.map((c) => c.id), [1, 10, 11])
+  // #10 被 sidebar.item 指向置顶 -> 其余（含 #1）同刻按 id 倒序（无根会话特判）
+  assert.deepEqual(standings[0]!.conversations.map((c) => c.id), [10, 11, 1])
 })
 
 test('buildAgentStandings：runtime Profile 默认 terminal 图标，sidebar.item icon 优先', { timeout: 60_000 }, () => {
@@ -326,9 +325,9 @@ test('buildAgentStandings：runtime Profile 默认 terminal 图标，sidebar.ite
       { id: 'plain', name: '普通专家' },
     ],
     conversations: [conv({ id: 1, profileId: 'assistant' })],
-    plugins: [{ id: 'builtin:assistant', enabled: true }],
+    plugins: [{ id: 'builtin:profile', enabled: true }],
     sidebarItems: [
-      { pluginId: 'builtin:assistant', spec: { id: 'root', label: '个人助理', icon: 'sparkles', target: 'conversation:1' } },
+      { pluginId: 'builtin:profile', spec: { id: 'root', label: '个人助理', icon: 'sparkles', target: 'conversation:1' } },
     ],
     sidebarSections: [],
   })
@@ -464,20 +463,18 @@ test('resolveTargetString conversation:profile: 优先无父链常驻会话，�
   )
 })
 
-test('ROOT_CONVERSATION_ID 从 @helm/protocol 导入且为 1', { timeout: 60_000 }, () => {
-  assert.equal(ROOT_CONVERSATION_ID, 1)
-})
+
 
 // ---------------------------------------------------------------------------
 // 插件痕迹清理：ownedBy / parentConversationId 归一 + 插件自举资产可见性
 // ---------------------------------------------------------------------------
 
 test('isProfileVisible：仅依据 managedByPlugin 字段过滤（不按 id 猜归属），任意插件 id 同样生效', { timeout: 60_000 }, () => {
-  const disabled = new Set<string>(['builtin:assistant'])
+  const disabled = new Set<string>(['builtin:profile'])
   const plain: Profile = { id: 'coder', name: '编码' }
   // 无字段的同名 Profile 不猜隐藏（用户自建同 id 资产）
   const hubNoMeta: Profile = { id: 'superagent', name: 'SuperAgent 中枢' }
-  const managed = new Set<string>(['builtin:assistant', 'builtin:superagent'])
+  const managed = new Set<string>(['builtin:profile', 'builtin:superagent'])
   const hubManaged: Profile = { id: 'superagent', name: 'SuperAgent 中枢', managedByPlugin: 'builtin:superagent' }
   // 任意第三方插件的托管资产同样按字段过滤（验证不依赖特定插件 id）
   const thirdParty: Profile = { id: 'custom-x', managedByPlugin: 'community:reporter' }
@@ -487,14 +484,14 @@ test('isProfileVisible：仅依据 managedByPlugin 字段过滤（不按 id 猜�
   assert.equal(isProfileVisible(hubManaged, disabled), false)
   assert.equal(isProfileVisible(thirdParty, disabled), false)
   assert.equal(isProfileVisible(herdrManaged, disabled), false)
-  const enabled = new Set<string>(['builtin:assistant', 'builtin:superagent', 'builtin:herdr', 'community:reporter'])
+  const enabled = new Set<string>(['builtin:profile', 'builtin:superagent', 'builtin:herdr', 'community:reporter'])
   assert.equal(isProfileVisible(hubManaged, enabled), true)
   assert.equal(isProfileVisible(thirdParty, enabled), true)
   assert.equal(isProfileVisible(herdrManaged, enabled), true)
 })
 
 test('isHumanSelectableProfile：仅依据通用 humanSelectable 字段排除常驻单例，其他插件专家 Profile 可选', { timeout: 60_000 }, () => {
-  const enabled = new Set<string>(['builtin:assistant', 'builtin:superagent', 'community:reporter'])
+  const enabled = new Set<string>(['builtin:profile', 'builtin:superagent', 'community:reporter'])
   const assistant: Profile = { id: 'assistant', name: '个人助理' }
   // 常驻单例：插件显式声明 humanSelectable=false
   const hub: Profile = { id: 'superagent', name: 'SuperAgent 中枢', managedByPlugin: 'builtin:superagent', humanSelectable: false }
@@ -504,7 +501,7 @@ test('isHumanSelectableProfile：仅依据通用 humanSelectable 字段排除常
   const pluginSingleton: Profile = { id: 'night-hub', name: '夜间中枢', managedByPlugin: 'community:reporter', humanSelectable: false }
   // 用户自建同名资产（无字段）：不猜隐藏，可选
   const userHubNamed: Profile = { id: 'superagent', name: '我的自定义角色' }
-  const disabled = new Set<string>(['builtin:assistant'])
+  const disabled = new Set<string>(['builtin:profile'])
   assert.equal(isHumanSelectableProfile(assistant, enabled), true)
   assert.equal(isHumanSelectableProfile(hub, enabled), false)
   assert.equal(isHumanSelectableProfile(watchdog, enabled), false)
@@ -515,29 +512,29 @@ test('isHumanSelectableProfile：仅依据通用 humanSelectable 字段排除常
 })
 
 test('isSkillVisible：仅依据 managedByPlugin 字段过滤（任意插件 id），不按 skill id 猜', { timeout: 60_000 }, () => {
-  const disabled = new Set<string>(['builtin:assistant'])
+  const disabled = new Set<string>(['builtin:profile'])
   const plain: SkillSummary = { id: 'weekly-report', name: '周报', references: [] }
   // 无字段同名 skill 不猜隐藏（用户自建）
   const legacy: SkillSummary = { id: 'watchdog-playbooks', name: '巡检手册', references: [] }
-  const managed = new Set<string>(['builtin:assistant', 'builtin:superagent'])
+  const managed = new Set<string>(['builtin:profile', 'builtin:superagent'])
   const managedPlaybooks: SkillSummary = { id: 'watchdog-playbooks', name: '巡检手册', references: [], managedByPlugin: 'builtin:superagent' }
   const herdrManaged: SkillSummary = { id: 'herdr-flow', name: 'Herdr 流程', references: [], managedByPlugin: 'builtin:herdr' }
   assert.equal(isSkillVisible(plain, disabled), true)
   assert.equal(isSkillVisible(legacy, disabled), true, '无 managedByPlugin 字段不得按 id 猜测隐藏')
   assert.equal(isSkillVisible(managedPlaybooks, disabled), false)
   assert.equal(isSkillVisible(herdrManaged, disabled), false)
-  const enabled = new Set<string>(['builtin:assistant', 'builtin:superagent', 'builtin:herdr'])
+  const enabled = new Set<string>(['builtin:profile', 'builtin:superagent', 'builtin:herdr'])
   assert.equal(isSkillVisible(managedPlaybooks, enabled), true)
   assert.equal(isSkillVisible(herdrManaged, enabled), true)
 })
 
 test('collectEnabledPluginIds 仅收集启用插件', { timeout: 60_000 }, () => {
   const ids = collectEnabledPluginIds([
-    { id: 'builtin:assistant', enabled: true },
+    { id: 'builtin:profile', enabled: true },
     { id: 'builtin:herdr', enabled: false },
     { id: 'builtin:superagent', enabled: true },
   ])
-  assert.deepEqual([...ids].sort(), ['builtin:assistant', 'builtin:superagent'])
+  assert.deepEqual([...ids].sort(), ['builtin:profile', 'builtin:superagent'])
 })
 
 // ---------------------------------------------------------------------------
@@ -545,22 +542,22 @@ test('collectEnabledPluginIds 仅收集启用插件', { timeout: 60_000 }, () =>
 // ---------------------------------------------------------------------------
 
 test('isConversationDeletable 正确判定会话是否允许人类删除', { timeout: 60_000 }, () => {
-  // 根会话（ROOT_CONVERSATION_ID）受保护，禁止删除
-  assert.equal(isConversationDeletable({ id: ROOT_CONVERSATION_ID }), false)
-  assert.equal(isConversationDeletable({ id: 1, ownedBy: 'human' }), false)
+  // 初始会话（#1）无 id 级豁免：与普通人类会话同样可删
+  assert.equal(isConversationDeletable({ id: 1 }), true)
+  assert.equal(isConversationDeletable({ id: 1, ownedBy: 'human' }), true)
 
   // 机器/插件托管会话禁止删除
   assert.equal(isConversationDeletable({ id: 2, ownedBy: 'bot' }), false)
   assert.equal(isConversationDeletable({ id: 3, ownedBy: 'helm' }), false)
 
-  // 普通人类会话（无 ownedBy 或 ownedBy === 'human' 且 id !== ROOT_CONVERSATION_ID）允许删除
+  // 普通人类会话（无 ownedBy 或 ownedBy === 'human'）允许删除
   assert.equal(isConversationDeletable({ id: 10 }), true)
   assert.equal(isConversationDeletable({ id: 11, ownedBy: 'human' }), true)
 })
 
 test('filterDeletableConversations 过滤出可删除会话', { timeout: 60_000 }, () => {
   const sample = [
-    conv({ id: 1, title: '根会话' }), // ROOT_CONVERSATION_ID -> false
+    conv({ id: 1, title: '初始会话' }), // 无 id 级豁免 -> true
     conv({ id: 2, title: '中枢', ownedBy: 'helm' }), // ownedBy: 'helm' -> false
     conv({ id: 20, title: 'Worker', ownedBy: 'bot' }), // ownedBy: 'bot' -> false
     conv({ id: 10, title: '人类会话1' }), // true
@@ -570,7 +567,7 @@ test('filterDeletableConversations 过滤出可删除会话', { timeout: 60_000 
   const deletable = filterDeletableConversations(sample)
   assert.deepEqual(
     deletable.map((c) => c.id),
-    [10, 11],
+    [1, 10, 11],
   )
 })
 
@@ -599,7 +596,7 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
     conversationArtifacts: {},
     pendingAsks: [],
     resolvedAsksByConv: {},
-    plugins: [{ id: 'builtin:assistant', name: '个人助理', locked: true, enabled: true, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'builtin:profile', name: '个人助理', locked: true, enabled: true, hooks: [], actions: [], tools: [] }],
     uiContributions: [],
     groupedUi: groupUiContributions([]),
     pluginDocs: {},
@@ -668,7 +665,7 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
       conv({ id: 21, title: '系统中枢', profileId: 'coder', ownedBy: 'helm' }),
       conv({ id: 22, title: '会话 22', profileId: 'coder' }),
     ],
-    plugins: [{ id: 'builtin:assistant', enabled: true }],
+    plugins: [{ id: 'builtin:profile', enabled: true }],
     sidebarItems: [],
     sidebarSections: [],
   })
@@ -677,8 +674,8 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
   const allConvs = standings.flatMap((a) => a.conversations)
   const allDeletableIds = filterDeletableConversations(allConvs).map((c) => c.id)
 
-  // 应该包含 10, 11, 22（排除 1 根会话，排除 bot 和 helm 拥有的会话）
-  assert.deepEqual(allDeletableIds.sort((a, b) => a - b), [10, 11, 22])
+  // 应该包含 1, 10, 11, 22（初始会话无豁免；排除 bot 和 helm 拥有的会话）
+  assert.deepEqual(allDeletableIds.sort((a, b) => a - b), [1, 10, 11, 22])
 
   let selectedIds = new Set<number>()
   const isAllSelected = (ids: Set<number>) =>
@@ -696,7 +693,7 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
   // 全选
   selectedIds = new Set(allDeletableIds)
   assert.equal(isAllSelected(selectedIds), true)
-  assert.equal(selectedIds.size, 3)
+  assert.equal(selectedIds.size, 4)
 
   // 清空
   selectedIds = new Set()
@@ -704,21 +701,21 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
   assert.equal(selectedIds.size, 0)
 })
 
-test('批量删除重定向保护仿真：主屏/分屏活跃会话删除时安全回退', { timeout: 60_000 }, () => {
+test('批量删除重定向保护仿真：主屏/分屏活跃会话删除时回退角色中心', { timeout: 60_000 }, () => {
   function simulateRedirection(
     selectedIds: Set<number>,
     primaryTarget: { kind: string; conversationId: number },
     splitTarget: { kind: string; conversationId: number } | null,
   ) {
-    let redirectedTo: number | null = null
+    let fellBackToCenter = false
     let splitClosed = false
     if (primaryTarget.kind === 'conversation' && selectedIds.has(primaryTarget.conversationId)) {
-      redirectedTo = ROOT_CONVERSATION_ID
+      fellBackToCenter = true // 回退无会话依赖的角色中心（不指向另一个可能已删的会话）
     }
     if (splitTarget?.kind === 'conversation' && selectedIds.has(splitTarget.conversationId)) {
       splitClosed = true
     }
-    return { redirectedTo, splitClosed }
+    return { fellBackToCenter, splitClosed }
   }
 
   // 场景 1：当前主屏为会话 10，分屏为会话 11；批量删除选中了 10 和 11
@@ -727,16 +724,16 @@ test('批量删除重定向保护仿真：主屏/分屏活跃会话删除时安�
     { kind: 'conversation', conversationId: 10 },
     { kind: 'conversation', conversationId: 11 },
   )
-  assert.equal(r1.redirectedTo, ROOT_CONVERSATION_ID, '主屏正在查看的会话被删，自动重定向到根会话 #1')
+  assert.equal(r1.fellBackToCenter, true, '主屏正在查看的会话被删，回退角色中心')
   assert.equal(r1.splitClosed, true, '分屏正在查看的会话被删，自动关闭分屏')
 
-  // 场景 2：当前主屏为根会话 1，分屏为会话 99；批量删除选中了 10
+  // 场景 2：当前主屏为初始会话 1，分屏为会话 99；批量删除选中了 10
   const r2 = simulateRedirection(
     new Set([10]),
-    { kind: 'conversation', conversationId: ROOT_CONVERSATION_ID },
+    { kind: 'conversation', conversationId: 1 },
     { kind: 'conversation', conversationId: 99 },
   )
-  assert.equal(r2.redirectedTo, null, '未被删除的活跃主屏会话不被重定向')
+  assert.equal(r2.fellBackToCenter, false, '未被删除的活跃主屏会话不被重定向')
   assert.equal(r2.splitClosed, false, '未被删除的分屏会话不被关闭')
 })
 

@@ -4,7 +4,8 @@
  * PUT /api/profiles/:id 为整体替换契约（profiles.save 全量覆盖 profile.json）：
  * - update 语义化 flag 路径必须先 GET 完整 Profile 合并后 PUT——只改 --name 也不丢
  *   nodeId/cwd/model 等绑定字段（否则后续会话误跑 local）；
- * - GET 响应带回的 system/memory 全文不回传（仅显式 --system/--memory[-file] 才写）；
+ * - GET 响应带回的 system 全文不回传（仅显式 --system[-file] 才写）；
+ *   MEMORY.md 长期记忆由 builtin:memory 插件管理（helm memory get/set/configure）。
  * - --input 单独使用 = 显式全量替换（不 GET）；与语义化 flag 组合时作为合并层，字段不丢。
  * - create 无既有配置可合并，语义化 flag / --input 直接构造新对象。
  */
@@ -22,7 +23,7 @@ import {
   requirePositional,
 } from './shared.js'
 
-/** 语义化 flag -> Profile 字段（--system[-file]/--memory[-file]/--skills/--all-skills 在应用期单独处理）。 */
+/** 语义化 flag -> Profile 字段（--system[-file]/--skills/--all-skills 在应用期单独处理）。 */
 const PROFILE_FIELD_FLAGS: ReadonlyArray<{ flag: string; key: string }> = [
   { flag: 'name', key: 'name' },
   { flag: 'model', key: 'model' },
@@ -31,7 +32,7 @@ const PROFILE_FIELD_FLAGS: ReadonlyArray<{ flag: string; key: string }> = [
   { flag: 'cwd', key: 'cwd' },
 ]
 
-const DOC_FLAGS = ['system', 'system-file', 'memory', 'memory-file'] as const
+const DOC_FLAGS = ['system', 'system-file'] as const
 const SKILLS_FLAGS = ['skills', 'all-skills'] as const
 
 const semanticFlags: FlagSpec[] = [
@@ -39,8 +40,6 @@ const semanticFlags: FlagSpec[] = [
   ...PROFILE_FIELD_FLAGS.map(({ flag }) => ({ name: flag, type: 'string' }) as FlagSpec),
   { name: 'system', type: 'string', help: 'SYSTEM.md 全文' },
   { name: 'system-file', type: 'string', help: 'SYSTEM.md 从本地文件读取' },
-  { name: 'memory', type: 'string', help: 'MEMORY.md 全文' },
-  { name: 'memory-file', type: 'string', help: 'MEMORY.md 从本地文件读取' },
   { name: 'skills', type: 'json', help: '技能白名单 JSON 字符串数组（如 \'["git-commit"]\'；[] 禁用全部技能；与 --all-skills 互斥）' },
   { name: 'all-skills', type: 'boolean', help: '删除 skills 键恢复全部可用技能（与 --skills 互斥）' },
 ]
@@ -93,18 +92,12 @@ async function applySemanticFlags(flags: Map<string, unknown>, body: Record<stri
     const systemFile = flagValue<string>(flags, 'system-file')
     if (systemFile !== undefined) body.system = await readTextFileFlag(systemFile, 'system-file')
   }
-  const memoryInline = flagValue<string>(flags, 'memory')
-  if (memoryInline !== undefined) body.memory = memoryInline
-  else {
-    const memoryFile = flagValue<string>(flags, 'memory-file')
-    if (memoryFile !== undefined) body.memory = await readTextFileFlag(memoryFile, 'memory-file')
-  }
   applySkillsFlags(flags, body)
 }
 
 /**
- * update 合并基底：GET 完整 Profile 并剥离 system/memory 全文
- * （PUT 回传会导致整文件重写；仅显式 --system/--memory[-file] 才写）。
+ * update 合并基底：GET 完整 Profile 并剥离 system 全文
+ * （PUT 回传会导致整文件重写；仅显式 --system[-file] 才写）。
  * Profile 不存在时 GET 错误信封如实上抛（整体替换契约下无法盲改）。
  */
 async function fetchProfileBase(hub: HubClient, id: string): Promise<Record<string, unknown>> {
@@ -114,7 +107,6 @@ async function fetchProfileBase(hub: HubClient, id: string): Promise<Record<stri
   }
   const base: Record<string, unknown> = { ...current }
   delete base['system']
-  delete base['memory']
   return base
 }
 
@@ -156,7 +148,7 @@ export function profilesCommands(): CommandSpec[] {
       const hasInput = parsed.flags.has('input')
       if (!hasInput && !hasSemanticFlags(parsed.flags)) {
         throw new CliError(
-          '未提供任何字段：--input <json> 或语义化 flag（--name/--model/--node/--cwd/--system[-file]/--memory[-file]/--skills/--all-skills）（profiles create）',
+          '未提供任何字段：--input <json> 或语义化 flag（--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills）（profiles create）',
           'missing_update_fields',
         )
       }
@@ -187,7 +179,7 @@ export function profilesCommands(): CommandSpec[] {
       const semantic = hasSemanticFlags(parsed.flags)
       if (!hasInput && !semantic) {
         throw new CliError(
-          '未提供任何字段：--input <json> 或语义化 flag（--name/--model/--node/--cwd/--system[-file]/--memory[-file]/--skills/--all-skills）（profiles update）',
+          '未提供任何字段：--input <json> 或语义化 flag（--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills）（profiles update）',
           'missing_update_fields',
         )
       }

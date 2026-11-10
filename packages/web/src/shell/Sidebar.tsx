@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import type { AskSpec, ConversationSummary } from '@helm/protocol'
-import { ROOT_CONVERSATION_ID } from '@helm/protocol'
 import { asksApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
@@ -472,8 +471,7 @@ function AgentConversationRow({
   const [draft, setDraft] = useState('')
   const active = isConversationActive(store, conv.id)
   const deletable = isConversationDeletable(conv)
-  const humanManageable =
-    conv.id !== ROOT_CONVERSATION_ID && (conv.ownedBy ?? 'human') === 'human'
+  const humanManageable = (conv.ownedBy ?? 'human') === 'human'
 
   const commitRename = async () => {
     const title = draft.trim()
@@ -676,7 +674,8 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
         store.primaryTarget.kind === 'conversation' &&
         selectedIds.has(store.primaryTarget.conversationId)
       ) {
-        store.openTarget({ kind: 'conversation', conversationId: ROOT_CONVERSATION_ID })
+        // 删除当前主屏会话：回退到无会话依赖的角色中心。
+        store.openTarget({ kind: 'profiles' })
       }
 
       if (

@@ -1758,7 +1758,7 @@ export class WorkflowService {
 
   /**
    * 全限定 actionId 解析：以 listActions() 的 manifest 精确匹配，支持内建 env.exec。
-   * pluginId 含 ':'（builtin:assistant），actionId 理论上可含 '.'，简单 split
+   * pluginId 含 ':'（builtin:profile），actionId 理论上可含 '.'，简单 split
    * 会在坏点号上错位——只信 manifest 与内建白名单。
    */
   private resolveActionId(qualified: string): { pluginId: string; actionId: string; builtin?: 'env.exec' } {

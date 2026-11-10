@@ -1,5 +1,6 @@
 import { KernelRuntime } from './runtime/index.js';
-import { createAssistantPlugin } from './builtin-plugins/assistant.js';
+import { createProfilePlugin } from './builtin-plugins/profile.js';
+import { createMemoryPlugin } from './builtin-plugins/memory.js';
 import { createWorkflowPlugin } from './builtin-plugins/workflow.js';
 import { createHerdrPlugin } from './builtin-plugins/herdr.js';
 import { createSuperAgentPlugin, SUPERAGENT_PLUGIN_ID } from './builtin-plugins/superagent.js';
@@ -46,7 +47,10 @@ export async function createHelm(options: HelmOptions = {}) {
     await kernel.plugins.register(createWorkflowPlugin());
 
     const snapshotAnalyzer = createBlockedSnapshotAnalyzer(kernel);
-    await kernel.plugins.register(createAssistantPlugin(kernel));
+    await kernel.plugins.register(createProfilePlugin(kernel));
+    // builtin:memory：默认启用、可停用（locked: false）；单 Profile 记忆开关、
+    // MEMORY.md 注入与 update_memory 工具全部自治，停用后能力即时消失。
+    await kernel.plugins.register(createMemoryPlugin(kernel));
     await kernel.plugins.register(createHerdrPlugin({
       defaultCwd: runtimeOptions.cwd ?? process.cwd(),
       profiles: kernel.profiles,

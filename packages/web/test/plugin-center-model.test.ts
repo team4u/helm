@@ -36,7 +36,7 @@ function makePlugin(overrides: Partial<PluginSummary> & { id: string }): PluginS
 }
 
 test('derivePluginCategory: 核心内置插件推导为 builtin', { timeout: 60_000 }, () => {
-  assert.equal(derivePluginCategory('builtin:assistant'), 'builtin')
+  assert.equal(derivePluginCategory('builtin:profile'), 'builtin')
   assert.equal(derivePluginCategory('builtin:triggers'), 'builtin')
   assert.equal(derivePluginCategory('builtin:system'), 'builtin')
   assert.equal(derivePluginCategory('BUILTIN:ASSISTANT'), 'builtin')
@@ -67,7 +67,7 @@ test('derivePluginCategory: 外部与社区插件推导为 external', { timeout:
 
 test('filterPlugins: 空 query 与 all 过滤返回全量克隆列表', { timeout: 60_000 }, () => {
   const plugins: PluginSummary[] = [
-    makePlugin({ id: 'builtin:assistant', name: '个人助理' }),
+    makePlugin({ id: 'builtin:profile', name: '个人助理' }),
     makePlugin({ id: 'builtin:workflow', name: '工作流引擎' }),
   ]
   const result = filterPlugins(plugins, { query: '', status: 'all', category: 'all' })
@@ -77,7 +77,7 @@ test('filterPlugins: 空 query 与 all 过滤返回全量克隆列表', { timeou
 
 test('filterPlugins: 按名称检索匹配且不区分大小写', { timeout: 60_000 }, () => {
   const plugins: PluginSummary[] = [
-    makePlugin({ id: 'builtin:assistant', name: '个人助理' }),
+    makePlugin({ id: 'builtin:profile', name: '个人助理' }),
     makePlugin({ id: 'builtin:workflow', name: '工作流引擎' }),
     makePlugin({ id: 'community:slack', name: 'Slack Bot' }),
   ]
@@ -92,7 +92,7 @@ test('filterPlugins: 按名称检索匹配且不区分大小写', { timeout: 60_
 
 test('filterPlugins: 按插件 ID 模糊匹配', { timeout: 60_000 }, () => {
   const plugins: PluginSummary[] = [
-    makePlugin({ id: 'builtin:assistant', name: '个人助理' }),
+    makePlugin({ id: 'builtin:profile', name: '个人助理' }),
     makePlugin({ id: 'builtin:workflow', name: '工作流引擎' }),
     makePlugin({ id: 'community:slack', name: 'Slack Bot' }),
   ]
@@ -103,7 +103,7 @@ test('filterPlugins: 按插件 ID 模糊匹配', { timeout: 60_000 }, () => {
 
 test('filterPlugins: 按暴露的 tools 列表项匹配', { timeout: 60_000 }, () => {
   const plugins: PluginSummary[] = [
-    makePlugin({ id: 'builtin:assistant', name: '个人助理', tools: ['update_memory', 'load_skill'] }),
+    makePlugin({ id: 'builtin:profile', name: '个人助理', tools: ['update_memory', 'load_skill'] }),
     makePlugin({ id: 'builtin:workflow', name: '工作流引擎', tools: ['subagent', 'cleanup_worktree'] }),
   ]
   const result = filterPlugins(plugins, { query: 'subagent', status: 'all', category: 'all' })
@@ -112,7 +112,7 @@ test('filterPlugins: 按暴露的 tools 列表项匹配', { timeout: 60_000 }, (
 
   const partialResult = filterPlugins(plugins, { query: 'MEMORY', status: 'all', category: 'all' })
   assert.equal(partialResult.length, 1)
-  assert.equal(partialResult[0]?.id, 'builtin:assistant')
+  assert.equal(partialResult[0]?.id, 'builtin:profile')
 })
 
 test('filterPlugins: 按暴露的 actions 列表项匹配', { timeout: 60_000 }, () => {
@@ -127,7 +127,7 @@ test('filterPlugins: 按暴露的 actions 列表项匹配', { timeout: 60_000 },
 
 test('filterPlugins: 状态筛选 enabled 与 disabled', { timeout: 60_000 }, () => {
   const plugins: PluginSummary[] = [
-    makePlugin({ id: 'builtin:assistant', enabled: true }),
+    makePlugin({ id: 'builtin:profile', enabled: true }),
     makePlugin({ id: 'builtin:workflow', enabled: true }),
     makePlugin({ id: 'builtin:herdr', enabled: false }),
   ]
@@ -142,7 +142,7 @@ test('filterPlugins: 状态筛选 enabled 与 disabled', { timeout: 60_000 }, ()
 
 test('filterPlugins: 分类筛选 category', { timeout: 60_000 }, () => {
   const plugins: PluginSummary[] = [
-    makePlugin({ id: 'builtin:assistant' }),
+    makePlugin({ id: 'builtin:profile' }),
     makePlugin({ id: 'builtin:workflow' }),
     makePlugin({ id: 'builtin:herdr' }),
     makePlugin({ id: 'tools:calculator' }),
@@ -154,7 +154,7 @@ test('filterPlugins: 分类筛选 category', { timeout: 60_000 }, () => {
 
   const builtinOnly = filterPlugins(plugins, { query: '', status: 'all', category: 'builtin' })
   assert.equal(builtinOnly.length, 1)
-  assert.equal(builtinOnly[0]?.id, 'builtin:assistant')
+  assert.equal(builtinOnly[0]?.id, 'builtin:profile')
 
   const toolsOnly = filterPlugins(plugins, { query: '', status: 'all', category: 'tools' })
   assert.equal(toolsOnly.length, 1)
@@ -167,7 +167,7 @@ test('filterPlugins: 分类筛选 category', { timeout: 60_000 }, () => {
 
 test('filterPlugins: 多条件组合筛选及无匹配回退', { timeout: 60_000 }, () => {
   const plugins: PluginSummary[] = [
-    makePlugin({ id: 'builtin:assistant', name: '个人助理', enabled: true, tools: ['update_memory'] }),
+    makePlugin({ id: 'builtin:profile', name: '个人助理', enabled: true, tools: ['update_memory'] }),
     makePlugin({ id: 'builtin:workflow', name: '工作流引擎', enabled: false, tools: ['subagent'] }),
     makePlugin({ id: 'builtin:superagent', name: 'SuperAgent', enabled: true, tools: ['subagent'] }),
   ]
@@ -195,7 +195,7 @@ test('summarizePlugins: 空数组统计全零', { timeout: 60_000 }, () => {
 test('summarizePlugins: 正确统计总数、启停数、工具数与动作数', { timeout: 60_000 }, () => {
   const plugins: PluginSummary[] = [
     makePlugin({
-      id: 'builtin:assistant',
+      id: 'builtin:profile',
       enabled: true,
       tools: ['update_memory', 'load_skill'],
       actions: [],

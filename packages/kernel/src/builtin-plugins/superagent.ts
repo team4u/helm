@@ -4,7 +4,7 @@
  * 职界（设计文档 §4.3）：
  * - L0 确定性事件路由（trigger）：muted source 静默丢弃（handled）、threadKey
  *   命中活跃订阅直投 Worker（transform target）、其余进 SuperAgent 中枢，
- *   不打扰 #1；订阅目标已删/归档时清理残留订阅并回退中枢；
+ *   不打扰普通人类会话；订阅目标已删/归档时清理残留订阅并回退中枢；
  * - L1 中枢认知路由（before_turn）：仅实际 router 会话且 routerMode 开启时
  *   剥离重度阻塞工具并注入 <active_workers> 态势；tool_call 二次守卫阻止
  *   旧上下文绕过；
@@ -28,7 +28,7 @@
  * - 关停（service.stop）先置 shutdown 再释放资源，此后不再向 router 投递
  *   任何汇报（KernelRuntime.close 的 abort 回调不会在关停后无限唤醒中枢）。
  */
-import { HelmError, ROOT_CONVERSATION_ID, type ConversationEntry, type PluginDefinition, type PluginToolContext } from '@helm/protocol'
+import { HelmError, type ConversationEntry, type PluginDefinition, type PluginToolContext } from '@helm/protocol'
 import type {
   ConversationSummary,
   MaybePromise,
@@ -163,7 +163,7 @@ const SETTLED_OUTCOMES = new Set(['completed', 'failed', 'aborted'])
 const docCorrupt = (detail: string): HelmError =>
   new HelmError('superagent_doc_corrupt', `插件 doc ${INDEX_DOC_NAME} ${detail}`, 500, { pluginId: SUPERAGENT_PLUGIN_ID })
 
-/** 正整数会话 ID（> 0；#1 是根会话，永不作为 worker/常驻）。 */
+/** 正整数会话 ID（> 0；无保留会话概念，常驻/worker 只需正整数）。 */
 function isPosIntId(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v > 0
 }
@@ -185,8 +185,8 @@ export function assertIndexDoc(value: unknown): SuperAgentIndexDoc {
   for (const key of ['routerConversationId', 'watchdogConversationId'] as const) {
     const id = value[key]
     if (id === undefined) continue // 常驻 ID 自举后写入；缺省合法
-    if (!isPosIntId(id) || id === ROOT_CONVERSATION_ID) {
-      throw docCorrupt(`${key} 必须是不为 #1 的正整数（收到：${String(id)}）`)
+    if (!isPosIntId(id)) {
+      throw docCorrupt(`${key} 必须是正整数（收到：${String(id)}）`)
     }
     if (id === value.routerConversationId && id === value.watchdogConversationId) {
       throw docCorrupt('routerConversationId 与 watchdogConversationId 不得相同')
@@ -197,7 +197,6 @@ export function assertIndexDoc(value: unknown): SuperAgentIndexDoc {
     if (
       !isPlainObject(w) ||
       !isPosIntId(w.conversationId) ||
-      w.conversationId === ROOT_CONVERSATION_ID ||
       !isPosIntId(w.parentConversationId) ||
       typeof w.profileId !== 'string' ||
       w.profileId.trim() === '' ||
@@ -562,7 +561,7 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         // 连接器声明的定向目标在订阅匹配之后生效，避免被缺省中枢路由覆盖。
         if (envelope.targetConversationId !== undefined) return
         const target = getRouterConversationId()
-        if (target === undefined || deps.isClosing()) return // 自举未完成：交默认路径（#1）
+        if (target === undefined || deps.isClosing()) return // 自举未完成：交内核默认靶点解析
         return { action: 'transform', value: { ...envelope, targetConversationId: target } }
       })
 

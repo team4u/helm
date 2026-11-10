@@ -130,9 +130,9 @@ test('约定入口 index.mjs 的外部插件在 createHelm 启动时被自动发
   try {
     // 预置外部插件目录（先于 createHelm，模拟用户手工放入）
     writeConventionPlugin(join(dataDir, 'plugins'))
-    // 同时预置一个内置插件会留下的纯数据目录形态干扰项：builtin:assistant
-    mkdirSync(join(dataDir, 'plugins', 'builtin:assistant'), { recursive: true })
-    writeFileSync(join(dataDir, 'plugins', 'builtin:assistant', 'MEMORY.md'), 'assistant data')
+    // 同时预置一个内置插件会留下的纯数据目录形态干扰项：builtin:memory
+    mkdirSync(join(dataDir, 'plugins', 'builtin:memory'), { recursive: true })
+    writeFileSync(join(dataDir, 'plugins', 'builtin:memory', 'notes.md'), 'memory plugin data')
 
     const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels(), watchdogIntervalMs: 0 })
     try {
@@ -140,9 +140,9 @@ test('约定入口 index.mjs 的外部插件在 createHelm 启动时被自动发
       assert.ok(summary, '外部插件应被自动注册')
       assert.equal(summary.enabled, false, '外部插件默认停用（最小权限）')
       assert.equal(summary.locked, false, '外部插件不可自封 locked')
-      // 内置 assistant 数据目录不被误认（仍只有一次 builtin:assistant）
-      const assistant = app.kernel.plugins.list().filter((p) => p.id === 'builtin:assistant')
-      assert.equal(assistant.length, 1)
+      // 内置 memory 数据目录不被误认（仍只有一次 builtin:memory）
+      const memoryPlugins = app.kernel.plugins.list().filter((p) => p.id === 'builtin:memory')
+      assert.equal(memoryPlugins.length, 1)
     } finally {
       await app.close()
     }
@@ -280,7 +280,7 @@ test('普通插件留下的纯数据目录（无 plugin.json / 约定入口）�
       assert.ok(!ids.includes('some-plugin-data'), '纯数据目录不注册')
       assert.ok(!ids.includes('.hidden'), '隐藏目录不参与发现')
       assert.ok(!ids.includes('empty-dir'), '空目录不注册')
-      assert.ok(ids.includes('builtin:assistant'), '内置插件不受影响')
+      assert.ok(ids.includes('builtin:profile'), '内置插件不受影响')
     } finally {
       await app.close()
     }

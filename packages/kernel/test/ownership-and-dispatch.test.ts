@@ -28,8 +28,11 @@ import { join } from 'node:path'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 
-import { ROOT_CONVERSATION_ID, HelmError, type HelmEventFrame } from '@helm/protocol'
+import { HelmError, type HelmEventFrame } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
+
+/** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
+const ROOT_CONVERSATION_ID = 1 as const
 
 // ---------------------------------------------------------------------------
 // 基建
@@ -213,7 +216,7 @@ test('ownership3: 新自举资产携带 managedByPlugin=builtin:superagent 与 h
       '新自举 watchdog Profile skills 应仅含 watchdog-playbooks',
     )
     // 默认 assistant 由自身插件托管，不受 superagent 自举接管。
-    assert.equal(profiles.find((p) => p.id === 'assistant')?.managedByPlugin, 'builtin:assistant')
+    assert.equal(profiles.find((p) => p.id === 'assistant')?.managedByPlugin, 'builtin:profile')
     assert.equal(profiles.find((p) => p.id === 'assistant')?.humanSelectable, undefined)
     // Skill：SKILL.md frontmatter 与 SkillService 读取双通道
     const skillMd = readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8')

@@ -23,7 +23,7 @@ import type {
   InputOrigin,
   WhenBusy,
 } from '@helm/protocol'
-import { HelmError, ROOT_CONVERSATION_ID as PROTO_ROOT } from '@helm/protocol'
+import { HelmError } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { FileNotFoundError } from '../services/index.js'
@@ -32,13 +32,11 @@ import type { Profile } from '../services/index.js'
 import { deriveTitle, type ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
 import { requireModelRef } from './models.js'
-import { assertEditableHumanInput, assistantTextOfModel, coveredByRewind, entryModelText, normalizeBusyError, PROTO_ROOT as _P, requireConv, rewindIntervalOf, RewindInterval, safeResultText } from './runtime-helpers.js'
+import { assertEditableHumanInput, assistantTextOfModel, coveredByRewind, entryModelText, normalizeBusyError, requireConv, rewindIntervalOf, RewindInterval, safeResultText } from './runtime-helpers.js'
 import { toConversationEntry } from './entries.js'
 import { THINKING_LEVELS } from './spawn.js'
 import type { HelmStore } from './store.js'
 import { redactJsonValue } from '../redact.js'
-
-void _P
 
 /** 图片类 mime：附件拼装多模态 ImageContent 的判定集。 */
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
@@ -555,15 +553,14 @@ export class ConversationService {
   }
 
   /**
-   * 删除会话：root 保护；abort 在途 -> 取消 asks -> 清 artifacts（物理文件）->
+   * 删除会话：abort 在途 -> 取消 asks -> 清 artifacts（物理文件）->
    * FTS 行 -> Helm 索引移除 + tombstone。
    * 注：SDK 无 deleteConversation 写 API，pi_* 内部历史由 SDK 保留，
-   * helm 侧重启后凭 tombstone 不再重新导入（逻辑删除）。
+   * helm 侧重启后凭 tombstone 不再重新导入（逻辑删除）；插件管理权与
+   * 归属权（ownedBy）是通用保护，任何会话（含初始 assistant 会话）均无
+   * id 级豁免。
    */
   async deleteConversation(id: number): Promise<void> {
-    if (id === PROTO_ROOT) {
-      throw new HelmError('root_conversation_protected', '根会话 #1 不可删除', 403)
-    }
     requireConv(this.store, id)
     // 插件管理权保护：任何活跃 owner 持有时拒绝（在一切清理副作用之前）。
     const owners = [...(this.o.managedConversations.get(id) ?? [])]
