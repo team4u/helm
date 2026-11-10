@@ -235,7 +235,7 @@ export type HookHandler<K extends HookName> = K extends 'agent_spawn'
   ? (
       payload: HookPayloadMap[K],
       next: (request: AgentSpawnRequest) => Promise<unknown>,
-    ) => MaybePromise<HookResult<HookPayloadMap[K]> | void>
+    ) => MaybePromise<HookResult<HookPayloadMap[K]> | void> | Promise<unknown>
   : (payload: HookPayloadMap[K]) => MaybePromise<HookResult<HookPayloadMap[K]> | void>
 
 export type TriggerHookHandler = HookHandler<'trigger'>
