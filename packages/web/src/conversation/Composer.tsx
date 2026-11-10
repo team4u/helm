@@ -14,7 +14,8 @@ import { HelmIcon } from '../lib/icons.js'
 import { matchesUiScope } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
-import { collectEnabledPluginIds, isSkillVisible } from '../shell/sidebar-model.js'
+import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
+import { slashMenuSkills } from './slash-menu-skills.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '../ui/Popover.js'
 import { Select, type SelectOption } from '../ui/Select.js'
@@ -287,6 +288,7 @@ function CommandPopover({
   query,
   artifacts,
   slashItems,
+  availableSkills,
   onPick,
   onClose,
 }: {
@@ -295,11 +297,12 @@ function CommandPopover({
   artifacts: ArtifactMetadata[]
   /** 已合并好的斜杠菜单条目（含插件命令）；省略时回退宿主内置三源构建。 */
   slashItems?: ReadonlyArray<PopoverItem>
+  /** 回退路径的可见技能（已按当前会话 profile.skills + 插件启用双过滤；缺省不展示技能）。 */
+  availableSkills?: ReadonlyArray<{ id: string; name: string }>
   onPick: (apply: string, caretSuffix?: string) => void
   onClose: () => void
 }) {
   const [active, setActive] = useState(0)
-  const store = useHelmStore()
 
   const items = useMemo<PopoverItem[]>(() => {
     const q = query.toLowerCase()
@@ -312,16 +315,13 @@ function CommandPopover({
         { id: '/clear', label: '/clear', hint: '重置上下文', apply: '/clear' },
         { id: '/compact', label: '/compact', hint: '精简上下文', apply: '/compact' },
       ]
-      // 插件未启用时其自举技能不出现在 / 斜杠菜单
-      const enabledPluginIds = collectEnabledPluginIds(store.plugins)
-      const skills: PopoverItem[] = store.skills
-        .filter((s) => isSkillVisible(s, enabledPluginIds))
-        .map((s) => ({
-          id: `/skill:${s.id}`,
-          label: `/skill:${s.id}`,
-          hint: s.name,
-          apply: `/skill:${s.id} `,
-        }))
+      // 回退路径同样只展示已按当前会话 profile 过滤的技能，绝不放开全部。
+      const skills: PopoverItem[] = (availableSkills ?? []).map((s) => ({
+        id: `/skill:${s.id}`,
+        label: `/skill:${s.id}`,
+        hint: s.name,
+        apply: `/skill:${s.id} `,
+      }))
       return [...builtin, ...skills].filter((i) => i.id.toLowerCase().includes(q))
     }
     return artifacts
@@ -332,7 +332,7 @@ function CommandPopover({
         hint: `${a.mimeType} · ${formatBytes(a.size)}`,
         apply: `@${a.id} `,
       }))
-  }, [kind, query, artifacts, slashItems, store.skills, store.plugins])
+  }, [kind, query, artifacts, slashItems, availableSkills])
 
   useEffect(() => {
     setActive(0)
@@ -789,19 +789,28 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     [store.groupedUi.commands, conversation],
   )
 
-  // 斜杠菜单三源合并：宿主内置命令 + 可见技能 + 满足作用域的插件命令。
+  // 斜杠菜单三源合并：宿主内置命令 + 当前会话可用技能（profile.skills 白名单 +
+  // 插件启用双过滤，缺 Profile 时先不展示技能）+ 满足作用域的插件命令。
   const enabledPluginIds = useMemo(() => collectEnabledPluginIds(store.plugins), [store.plugins])
+  const conversationProfile = useMemo(
+    () => store.profiles.find((p) => p.id === conversation.profileId),
+    [store.profiles, conversation.profileId],
+  )
+  const availableSkills = useMemo(
+    () => slashMenuSkills(conversationProfile, store.skills, enabledPluginIds),
+    [conversationProfile, store.skills, enabledPluginIds],
+  )
   const [slashMenuItems, setSlashMenuItems] = useState<Array<{ id: string; label: string; hint?: string; apply?: string; run?: () => void }>>([])
   const runPluginCommandRef = useRef<(cmd: QualifiedCommand) => void>(() => {})
   useEffect(() => {
     setSlashMenuItems(
       buildSlashMenuItems(
-        store.skills.filter((s) => isSkillVisible(s, enabledPluginIds)),
+        availableSkills,
         slashPluginCommands,
         (cmd) => runPluginCommandRef.current(cmd),
       ),
     )
-  }, [store.skills, enabledPluginIds, slashPluginCommands])
+  }, [availableSkills, slashPluginCommands])
 
   // ⌘K 与斜杠菜单复用同一动作寻址；失败必须返回给提交者。
   const runPluginCommandFrom = useCallback(async (cmd: QualifiedCommand): Promise<void> => {
@@ -1192,6 +1201,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
               query={popoverQuery}
               artifacts={artifacts}
               slashItems={slashMenuItems}
+              availableSkills={availableSkills}
               onPick={applyPopover}
               onClose={() => setPopover(null)}
             />

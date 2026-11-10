@@ -583,7 +583,7 @@ test('assistant：update_memory 超限显式拒绝（append 累计与 replace �
       docs,
     })
     const { createAssistantPlugin } = await import('../src/builtin-plugins/assistant.js')
-    await host.register(createAssistantPlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir) }), { enabled: true })
+    await host.register(createAssistantPlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir), plugins: host }), { enabled: true })
     const runUpdate = (input: { text: string; mode: string }) =>
       host.executeTool('update_memory', input, { conversationId: 1 })
 
@@ -624,7 +624,7 @@ test('assistant：MEMORY.md 被误删时回合按空处理并告警一次（不 
     const docs = new MemoryDocStore()
     const host = new PluginHost({ dataDir: env.dataDir, host: backend, docs })
     const { createAssistantPlugin } = await import('../src/builtin-plugins/assistant.js')
-    await host.register(createAssistantPlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir) }), { enabled: true })
+    await host.register(createAssistantPlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir), plugins: host }), { enabled: true })
 
     // 外部误删 MEMORY.md（绕过服务层）。
     const memoryPath = join(env.dataDir, 'profiles', 'assistant', 'MEMORY.md')
@@ -665,7 +665,7 @@ test('assistant：存量 MEMORY.md 超限注入时截断并附显式说明', { t
     const docs = new MemoryDocStore()
     const host = new PluginHost({ dataDir: env.dataDir, host: backend, docs })
     const { createAssistantPlugin } = await import('../src/builtin-plugins/assistant.js')
-    await host.register(createAssistantPlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir) }), { enabled: true })
+    await host.register(createAssistantPlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir), plugins: host }), { enabled: true })
 
     const turn = {
       conversation: makeConversation(1),
@@ -700,7 +700,7 @@ test('assistant：自举补写默认 Profile 的 managedByPlugin（缺失显式�
       docs: new MemoryDocStore(),
     })
     const { createAssistantPlugin } = await import('../src/builtin-plugins/assistant.js')
-    await host.register(createAssistantPlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir) }), { enabled: true })
+    await host.register(createAssistantPlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir), plugins: host }), { enabled: true })
 
     const after = await env.profiles.get('assistant')
     assert.equal(after?.managedByPlugin, 'builtin:assistant', '插件自举后默认 Profile 显式声明托管')

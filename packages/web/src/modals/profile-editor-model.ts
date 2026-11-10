@@ -116,6 +116,9 @@ export function isDraftDirty(draft: ProfileDraft): boolean {
  * - name / model / nodeId / cwd trim 后非空才保留——空值归一为省略，
  *   在整体替换语义下即「删除覆盖」（nodeId/cwd 回退默认 local）；
  * - tags 恒为数组：空数组原样提交（整体替换语义下可清空）；
+ * - skills 全量保留并保持 undefined / [] / 白名单三态差异：undefined 表示
+ *   全部可用（省略键），[] 显式禁用全部技能，非空数组为白名单——未编辑
+ *   也不得丢，且绝不把三者互相归一（[] 是用户显式选择，不是空值）；
  * - runtime 规范化，undefined 保持省略（关闭外部运行时）。
  *
  * 逐字段显式构造（不 spread Profile）：system / memory 永不混入载荷，
@@ -134,6 +137,7 @@ function normalizeProfileConfig(profile: Profile): Profile {
   if (cwd) config.cwd = cwd
   const runtime = normalizeRuntime(profile.runtime)
   if (runtime) config.runtime = runtime
+  if (profile.skills !== undefined) config.skills = [...profile.skills]
   if (profile.managedByPlugin !== undefined) config.managedByPlugin = profile.managedByPlugin
   if (profile.humanSelectable !== undefined) config.humanSelectable = profile.humanSelectable
   return config

@@ -297,6 +297,19 @@ test('superagent4: 启用自举——Profile/技能/两常驻会话/公开 doc/�
     assert.match(sys, /SuperAgent 中枢/)
     assert.match(readFileSync(join(env.dataDir, 'profiles', 'watchdog', 'SYSTEM.md'), 'utf8'), /巡检看门狗/)
     assert.match(readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8'), /watchdog-playbooks/)
+    // 新自举默认技能策略：router skills=[]、watchdog 仅 watchdog-playbooks
+    const routerJson = JSON.parse(
+      readFileSync(join(env.dataDir, 'profiles', 'superagent', 'profile.json'), 'utf8'),
+    ) as { skills?: string[] }
+    const watchdogJson = JSON.parse(
+      readFileSync(join(env.dataDir, 'profiles', 'watchdog', 'profile.json'), 'utf8'),
+    ) as { skills?: string[] }
+    assert.deepEqual(routerJson.skills, [], '新自举 router skills 应为空数组（禁用全部）')
+    assert.deepEqual(watchdogJson.skills, ['watchdog-playbooks'], '新自举 watchdog skills 应仅含排障手册')
+    // Profile 服务层读回同一形状（validateProfileInput 往返）
+    const profilesList = await kernel.profiles.list()
+    assert.deepEqual(profilesList.find((p) => p.id === 'superagent')?.skills, [])
+    assert.deepEqual(profilesList.find((p) => p.id === 'watchdog')?.skills, ['watchdog-playbooks'])
     assert.ok(existsSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'references', 'herdr-stalled.md')))
     assert.ok(existsSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'references', 'ci-failure.md')))
     assert.ok(existsSync(join(env.dataDir, 'profiles', 'superagent', 'MEMORY.md')))

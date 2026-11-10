@@ -2140,6 +2140,38 @@ textarea {
   color: var(--fg);
 }
 
+/* Profile 编辑器可用技能区块：Checkbox 多选行与不可用保留行 */
+.profile-skill-list {
+  gap: 4px;
+}
+.profile-skill-option {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.profile-skill-name {
+  color: inherit;
+}
+.profile-skill-id {
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+.profile-skill-unavailable {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.profile-skill-unavailable .helm-checkbox-wrap {
+  flex: 1;
+  min-width: 0;
+}
+.profile-skill-unavailable .profile-skill-id {
+  text-decoration: line-through;
+  text-decoration-color: var(--fg-subtle);
+}
+
 /* 统一搜索输入框原语 */
 .search-box {
   position: relative;

@@ -128,6 +128,8 @@ export const SUPERAGENT_PROFILE_ASSET: ProfileAsset = {
     name: 'SuperAgent 中枢',
     managedByPlugin: SUPERAGENT_MANAGED_BY,
     humanSelectable: false,
+    // 中枢只做路由与调度，不直接消费技能（含排障手册）；空数组禁用全部。
+    skills: [],
   },
   systemMd: SUPERAGENT_PROFILE_SYSTEM_MD,
 }
@@ -139,6 +141,8 @@ export const WATCHDOG_PROFILE_ASSET: ProfileAsset = {
     name: '巡检看门狗',
     managedByPlugin: SUPERAGENT_MANAGED_BY,
     humanSelectable: false,
+    // 看门狗仅按需加载本插件自举的排障手册，其余技能一律不可见。
+    skills: ['watchdog-playbooks'],
   },
   systemMd: WATCHDOG_PROFILE_SYSTEM_MD,
 }

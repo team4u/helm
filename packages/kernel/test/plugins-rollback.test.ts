@@ -243,7 +243,7 @@ test('assistant：同 Profile 双会话并发 update_memory append 最终不超�
     backend.conversations.set(10, makeConversation(10))
     backend.conversations.set(20, makeConversation(20))
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createAssistantPlugin({ profiles, skills: new SkillService(dataDir) }), { enabled: true })
+    await host.register(createAssistantPlugin({ profiles, skills: new SkillService(dataDir), plugins: host }), { enabled: true })
 
     const outcomes = await Promise.allSettled([
       host.executeTool('update_memory', { text: 'y'.repeat(800), mode: 'append' }, { conversationId: 10 }),
@@ -269,7 +269,7 @@ test('assistant：SYSTEM/MEMORY 缺失时向模型注入显式 assets-missing �
     await profiles.ensureDefault()
     const backend = makeControlledBackend()
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createAssistantPlugin({ profiles, skills: new SkillService(dataDir) }), { enabled: true })
+    await host.register(createAssistantPlugin({ profiles, skills: new SkillService(dataDir), plugins: host }), { enabled: true })
 
     unlinkSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
     unlinkSync(join(dataDir, 'profiles', 'assistant', 'SYSTEM.md'))
@@ -342,7 +342,7 @@ test('assistant：权限/IO 错误不被吞（仅 FileNotFoundError 走缺失路
 
     const backend = makeControlledBackend()
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createAssistantPlugin({ profiles, skills: new SkillService(dataDir) }), { enabled: true })
+    await host.register(createAssistantPlugin({ profiles, skills: new SkillService(dataDir), plugins: host }), { enabled: true })
     const turn = {
       conversation: makeConversation(1),
       sections: [],

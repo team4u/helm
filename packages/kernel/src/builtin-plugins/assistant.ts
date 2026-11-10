@@ -1,11 +1,16 @@
-import { ROOT_CONVERSATION_ID, type PluginDefinition, type Profile } from '@helm/protocol';
+import { ROOT_CONVERSATION_ID, HelmError, isSkillAvailable, type PluginDefinition, type Profile, type SkillSummary } from '@helm/protocol';
 import { FileNotFoundError } from '../services/atomic-file.js';
+import type { PluginHost } from '../plugins/index.js';
 import { DEFAULT_PROFILE_ID, MAX_MEMORY_CHARS, type ProfileService, type SkillService } from '../services/index.js';
 import { HELM_CLI_SKILL_ASSET } from './assistant/assets.js';
 
 interface AssistantServices {
   profiles: ProfileService;
   skills: SkillService;
+  /** 只读当前插件启用状态（技能可用性过滤：插件停用则其托管技能不可用）。
+   * 显式工厂依赖而非扩展公共 PluginHost 端口——组合层（app.ts）已有
+   * kernel.plugins 可直接满足。 */
+  plugins: Pick<PluginHost, 'list'>;
 }
 
 /**
@@ -47,7 +52,7 @@ function escapeXml(text: string): string {
   return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
-export function createAssistantPlugin({ profiles, skills }: AssistantServices): PluginDefinition {
+export function createAssistantPlugin({ profiles, skills, plugins }: AssistantServices): PluginDefinition {
   return {
     id: 'builtin:assistant',
     name: '个人助理',
@@ -105,12 +110,28 @@ export function createAssistantPlugin({ profiles, skills }: AssistantServices): 
         }
       }
 
+      /**
+       * 读取当前 Profile 真实配置 + 插件启用状态，按共享 isSkillAvailable 规则
+       * 过滤技能目录（Profile.skills 缺省全部、[] 禁用全部、非空白名单；
+       * 插件停用则其托管技能不可用）。每回合重读——运行时修改 Profile 或
+       * 插件启停在下一回合即时生效。Profile 不存在属配置异常，显式报错。
+       */
+      const listAvailableSkills = async (profileId: string): Promise<SkillSummary[]> => {
+        const profile = await profiles.get(profileId)
+        if (profile === undefined) {
+          throw new HelmError('profile_not_found', `会话绑定 profile '${profileId}' 不存在（技能目录无法按 Profile 过滤）`, 500, { profileId })
+        }
+        const enabledPluginIds = new Set(plugins.list().filter((p) => p.enabled).map((p) => p.id))
+        const all = await skills.list()
+        return all.filter((skill) => isSkillAvailable(skill, profile, enabledPluginIds))
+      }
+
       ctx.hook.onBeforeTurn(async (turn) => {
         const profileId = turn.conversation.profileId;
         const [rawSystem, rawMemory, available] = await Promise.all([
           readAssetOrEmpty(() => profiles.getSystem(profileId), 'system', `${profileId}/SYSTEM.md`),
           readAssetOrEmpty(() => profiles.getMemory(profileId), 'memory', `${profileId}/MEMORY.md`),
-          skills.list(),
+          listAvailableSkills(profileId),
         ]);
         const sections = [...turn.sections];
         if (rawSystem.trim()) sections.push({ id: 'assistant.system', text: rawSystem });
@@ -177,7 +198,31 @@ export function createAssistantPlugin({ profiles, skills }: AssistantServices): 
           required: ['skillId'],
           additionalProperties: false,
         },
-        async execute(input) {
+        async execute(input, context) {
+          // 会话当前 Profile 的白名单与插件启停状态实时判定（与目录注入同规则）：
+          // Profile 白名单外或托管插件停用 → 403 skill_not_available；
+          // 技能不存在 → 404 not_found（不泄漏内容）。路径安全校验在
+          // SkillService.readFile 原样保留（穿越/绝对路径/软链均拒绝）。
+          // 注意：这只是认知目录边界，不是权限沙箱——bash/API 仍可读文件。
+          const conversation = ctx.host.getConversation(context.conversationId);
+          const profileId = conversation.profileId;
+          const profile = await profiles.get(profileId);
+          if (profile === undefined) {
+            throw new HelmError('profile_not_found', `会话绑定 profile '${profileId}' 不存在，无法判定技能可用性`, 500, { profileId });
+          }
+          const enabledPluginIds = new Set(plugins.list().filter((p) => p.enabled).map((p) => p.id));
+          const skill = (await skills.list()).find((s) => s.id === input.skillId);
+          if (skill === undefined) {
+            throw new HelmError('not_found', `技能不存在: ${input.skillId}`, 404, { skillId: input.skillId });
+          }
+          if (!isSkillAvailable(skill, profile, enabledPluginIds)) {
+            throw new HelmError(
+              'skill_not_available',
+              `技能 '${input.skillId}' 对 profile '${profileId}' 不可用（不在白名单内，或托管插件已停用）；如需使用请调整 profile skills 配置`,
+              403,
+              { skillId: input.skillId, profileId, managedByPlugin: skill.managedByPlugin },
+            );
+          }
           return { text: await skills.readFile(input.skillId, input.path) };
         },
       });

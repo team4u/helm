@@ -14,7 +14,7 @@
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
 import { join } from 'node:path'
-import { writeFile, mkdir, mkdtemp, rm, symlink, chmod } from 'node:fs/promises'
+import { writeFile, mkdir, mkdtemp, rm, symlink, chmod, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import {
   AuthService,
@@ -783,6 +783,53 @@ test('profiles DELETE 仍被会话绑定返回 409 profile_in_use', { timeout: 6
   conv.profileId = 'assistant'
   const ok = await call(handler, 'DELETE', '/api/profiles/bound-profile')
   assert.equal(ok.status, 200)
+})
+
+test('profiles skills 白名单 HTTP roundtrip：创建/更新/读回三态，非法 id 与未知字段拒绝', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  // 创建：白名单去重 + 允许暂缺 id（运行时可后装）
+  const created = await call(handler, 'POST', '/api/profiles', {
+    body: { id: 'skills-profile', name: '技能白名单', skills: ['helm-cli', 'future-skill', 'helm-cli'] },
+  })
+  assert.equal(created.status, 201)
+  assert.deepEqual(created.body.skills, ['helm-cli', 'future-skill'], '重复项去重后返回')
+
+  // PUT 更新为空数组（禁用全部）——整体替换契约，非缺省
+  const put = await call(handler, 'PUT', '/api/profiles/skills-profile', {
+    body: { name: '技能白名单', skills: [] },
+  })
+  assert.equal(put.status, 200)
+  assert.deepEqual(put.body.skills, [], '空数组必须透传持久化')
+  const onDisk = JSON.parse(
+    await readFile(join(dataDir, 'profiles', 'skills-profile', 'profile.json'), 'utf8'),
+  ) as { skills?: string[] }
+  assert.deepEqual(onDisk.skills, [], 'HTTP 写入路径落盘保留空数组')
+
+  // PUT 不带 skills（整体替换语义：回到缺省全部可用）
+  const put2 = await call(handler, 'PUT', '/api/profiles/skills-profile', {
+    body: { name: '技能白名单' },
+  })
+  assert.equal(put2.status, 200)
+  assert.equal(put2.body.skills, undefined, 'PUT 省略 skills 回到缺省（不写键）')
+
+  // GET 读回服务层真实状态
+  const got = await call(handler, 'GET', '/api/profiles/skills-profile')
+  assert.equal(got.status, 200)
+  assert.equal(got.body.skills, undefined)
+
+  // 非法 skill id（路径注入形态）拒绝，不产生部分写入
+  const bad = await call(handler, 'POST', '/api/profiles', {
+    body: { id: 'bad-skills', skills: ['../profiles/assistant'] },
+  })
+  assert.equal(bad.status, 400)
+  assert.equal(bad.body.error.code, 'validation_error')
+  const bad2 = await call(handler, 'PUT', '/api/profiles/skills-profile', {
+    body: { skills: 'helm-cli' },
+  })
+  assert.equal(bad2.status, 400)
+  // 上述拒绝不改变已保存状态（仍是缺省）
+  const after = await call(handler, 'GET', '/api/profiles/skills-profile')
+  assert.equal(after.body.skills, undefined)
 })
 
 test('profiles 托管保护：managedByPlugin 拒绝删除与篡改，POST 不可伪造托管身份', { timeout: 60_000 }, async () => {

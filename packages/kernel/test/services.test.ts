@@ -607,6 +607,42 @@ test('skills: ensureSkill 拒绝目录软链与目录冒充文件，绝不向 sk
   )
 })
 
+test('profiles: skills 三态——缺省不写字段、空数组持久保留、白名单去重与非法值拒绝', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const profiles = new ProfileService(dataDir)
+  await profiles.ensureDefault()
+
+  // ① 缺省：不带 skills 字段保存，持久层不写该键（get 回读 undefined）
+  await profiles.save({ id: 'p-default', name: '缺省', tags: [] })
+  assert.equal((await profiles.get('p-default'))?.skills, undefined)
+  const onDiskDefault = JSON.parse(await readFile(join(dataDir, 'profiles', 'p-default', 'profile.json'), 'utf8')) as Record<string, unknown>
+  assert.equal('skills' in onDiskDefault, false, '缺省时 profile.json 不写 skills 键')
+
+  // ② 空数组：持久保留（禁用全部技能的显式配置，不得被丢弃）
+  await profiles.save({ id: 'p-none', name: '全禁', tags: [], skills: [] })
+  assert.deepEqual((await profiles.get('p-none'))?.skills, [])
+  const onDiskNone = JSON.parse(await readFile(join(dataDir, 'profiles', 'p-none', 'profile.json'), 'utf8')) as { skills?: string[] }
+  assert.deepEqual(onDiskNone.skills, [], '空数组必须原样落盘')
+
+  // ③ 非空白名单：重复项规范化去重后持久化；未知/暂缺 id 允许保存（运行时可后装）
+  await profiles.save({ id: 'p-white', name: '白名单', tags: [], skills: ['helm-cli', 'watchdog-playbooks', 'helm-cli', 'future-skill'] })
+  assert.deepEqual((await profiles.get('p-white'))?.skills, ['helm-cli', 'watchdog-playbooks', 'future-skill'])
+
+  // 非法值：非数组 / 非字符串元素 / 非法 skill id 格式（路径注入）显式拒绝
+  await assert.rejects(
+    () => profiles.save({ id: 'p-bad', tags: [], skills: 'helm-cli' } as unknown as Parameters<ProfileService['save']>[0]),
+    /skills 必须是字符串数组/,
+  )
+  await assert.rejects(
+    () => profiles.save({ id: 'p-bad', tags: [], skills: ['ok-skill', 42] } as unknown as Parameters<ProfileService['save']>[0]),
+    /skills 必须是字符串数组/,
+  )
+  await assert.rejects(
+    () => profiles.save({ id: 'p-bad', tags: [], skills: ['../profiles/assistant'] }),
+    /非法 skill id/,
+  )
+})
+
 // ---------------------------------------------------------------------------
 // AssetWatcher
 // ---------------------------------------------------------------------------

@@ -312,6 +312,20 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   const model = optionalString(body, 'model')
   const thinkingLevel = optionalEnum(body, 'thinkingLevel', ['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const)
   const tags = optionalStringArray(body, 'tags')
+  // 技能白名单：字符串数组，元素须为合法 skill id，重复去重；未知/暂缺 id
+  // 允许保存（运行时技能目录可能后装，与 ProfileService.validateProfileInput 同规）。
+  const skillsRaw = optionalStringArray(body, 'skills')
+  let skills: string[] | undefined
+  if (skillsRaw !== undefined) {
+    const seen = new Set<string>()
+    for (const skillId of skillsRaw) {
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(skillId)) {
+        throw new ValidationError(`skills 每项需为合法 skill id（字母数字开头，可含 . _ -，长度 1-64）: ${skillId}`)
+      }
+      seen.add(skillId)
+    }
+    skills = [...seen]
+  }
   const runtime = parseProfileRuntime(body.runtime)
   const managedByPlugin = optionalString(body, 'managedByPlugin')
   if (managedByPlugin !== undefined && managedByPlugin.trim() === '') {
@@ -320,7 +334,7 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   const humanSelectable = optionalBoolean(body, 'humanSelectable')
   const system = optionalString(body, 'system', { maxLength: 512 * 1024 })
   const memory = optionalString(body, 'memory', { maxLength: 512 * 1024 })
-  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'thinkingLevel', 'nodeId', 'cwd', 'tags', 'runtime', 'managedByPlugin', 'humanSelectable', 'system', 'memory']))
+  rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'thinkingLevel', 'nodeId', 'cwd', 'tags', 'skills', 'runtime', 'managedByPlugin', 'humanSelectable', 'system', 'memory']))
   const nodeId = optionalProfileNodeId(body)
   const cwd = optionalString(body, 'cwd')
   if (cwd !== undefined && cwd.length === 0) throw new ValidationError('cwd 需为非空字符串')
@@ -340,6 +354,7 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
     profile.tags = tags
   }
   if (runtime !== undefined) profile.runtime = runtime
+  if (skills !== undefined) profile.skills = skills
   if (managedByPlugin !== undefined) profile.managedByPlugin = managedByPlugin
   if (humanSelectable !== undefined) profile.humanSelectable = humanSelectable
   if (system !== undefined) profile.system = system

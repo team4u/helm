@@ -394,6 +394,160 @@ test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），
 })
 
 // ---------------------------------------------------------------------------
+// 2.7 Profile skills 白名单：双 Profile 隔离、[] 禁用、插件启停同步过滤
+// ---------------------------------------------------------------------------
+
+test('集成2.7: Profile skills 白名单——双 Profile 目录隔离、[] 无目录且拒绝、白名单内 references 可读、插件启停同步、运行时改写下轮生效', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    const kernel = env.app.kernel
+    const host = kernel.plugins!
+
+    // 三个用户技能：普通甲/乙 + 插件托管技能（frontmatter 声明托管者）
+    writeSkill(
+      env.dataDir,
+      'alpha-guide',
+      '---\nname: Alpha 手册\ndescription: 甲\n---\n# Alpha\n见 references/。',
+      { 'intro.md': 'Alpha 引言：只入白名单。' },
+    )
+    writeSkill(
+      env.dataDir,
+      'beta-guide',
+      '---\nname: Beta 手册\ndescription: 乙\n---\n# Beta\n正文。',
+      {},
+    )
+    writeSkill(
+      env.dataDir,
+      'managed-guide',
+      '---\nname: 托管手册\ndescription: 托管\nmanagedByPlugin: builtin:superagent\n---\n# 托管\n正文。',
+      {},
+    )
+
+    // 双 Profile：白名单只含 alpha-guide；全禁 Profile skills=[]
+    await kernel.profiles.save({ id: 'white-profile', name: '白名单', tags: [], skills: ['alpha-guide'] })
+    await kernel.profiles.save({ id: 'none-profile', name: '全禁', tags: [], skills: [] })
+    const convWhite = await kernel.createConversation({ title: '白名单会话', profileId: 'white-profile' })
+    const convNone = await kernel.createConversation({ title: '全禁会话', profileId: 'none-profile' })
+
+    // ① 白名单内技能可读，references 子文件同规则可读
+    const main = (await host.executeTool(
+      'load_skill',
+      { skillId: 'alpha-guide' },
+      { conversationId: convWhite.id },
+    )) as { text: string }
+    assert.ok(main.text.includes('Alpha'), '白名单内 SKILL.md 可读')
+    const ref = (await host.executeTool(
+      'load_skill',
+      { skillId: 'alpha-guide', path: 'references/intro.md' },
+      { conversationId: convWhite.id },
+    )) as { text: string }
+    assert.ok(ref.text.includes('白名单'), '白名单内 references 子文件可读')
+
+    // ② 白名单外（在目录里但不在 profile.skills）→ 403 skill_not_available
+    await rejectsExplicitly(
+      () => host.executeTool('load_skill', { skillId: 'beta-guide' }, { conversationId: convWhite.id }),
+      { code: 'skill_not_available', message: /不可用/ },
+    )
+
+    // ③ [] Profile：目录不注入 + 全部技能拒绝（含 helm-cli 内置技能）
+    {
+      // 用 kernel.submitInput 直接驱动全禁会话（faux 捕获该回合 sections）
+      env.requests.length = 0
+      env.faux.setResponses([env.capture()])
+      await kernel.submitInput(convNone.id, '全禁回台')
+      await kernel.waitForIdle(convNone.id)
+      const catalogNone = env.requests[0]!.systemSections.find((s) => s.includes('<available_skills>'))
+      assert.equal(catalogNone, undefined, 'skills=[] 的 Profile 不得注入技能目录')
+    }
+    await rejectsExplicitly(
+      () => host.executeTool('load_skill', { skillId: 'alpha-guide' }, { conversationId: convNone.id }),
+      { code: 'skill_not_available', message: /不可用/ },
+    )
+    await rejectsExplicitly(
+      () => host.executeTool('load_skill', { skillId: 'helm-cli' }, { conversationId: convNone.id }),
+      { code: 'skill_not_available', message: /不可用/ },
+    )
+
+    // ④ 默认 assistant Profile（缺省）：全部可用技能注入（含 helm-cli 与白名单外的 beta）
+    {
+      env.requests.length = 0
+      env.faux.setResponses([env.capture()])
+      await env.submitAndWait('缺省目录')
+      const catalog = env.requests[0]!.systemSections.find((s) => s.includes('<available_skills>'))
+      assert.ok(catalog, '缺省 Profile 应注入目录')
+      for (const id of ['helm-cli', 'alpha-guide', 'beta-guide']) {
+        assert.ok(catalog!.includes(`id="${id}"`), `缺省目录应含 ${id}`)
+      }
+    }
+
+    // ⑤ 白名单 Profile 目录：只含白名单内技能，不含其它（含托管的 managed-guide 未启用插件）
+    {
+      env.requests.length = 0
+      env.faux.setResponses([env.capture()])
+      await kernel.submitInput(convWhite.id, '白名单回台')
+      await kernel.waitForIdle(convWhite.id)
+      const catalogW = env.requests[0]!.systemSections.find((s) => s.includes('<available_skills>'))
+      assert.ok(catalogW, '白名单 Profile 应注入目录')
+      assert.ok(catalogW!.includes('id="alpha-guide"'), '目录应含白名单内技能')
+      for (const absent of ['beta-guide', 'helm-cli', 'managed-guide']) {
+        assert.ok(!catalogW!.includes(`id="${absent}"`), `目录不得含 ${absent}`)
+      }
+      // 白名单 Profile 目录也不含 helm-cli：SYSTEM_DEFAULT 指引「含 helm-cli 时」才加载的条件语义生效
+    }
+
+    // ⑥ 插件托管技能：插件停用（superagent 默认未启用）→ 白名单内也 403
+    await kernel.profiles.save({ id: 'white-profile', name: '白名单', tags: [], skills: ['alpha-guide', 'managed-guide'] })
+    await rejectsExplicitly(
+      () => host.executeTool('load_skill', { skillId: 'managed-guide' }, { conversationId: convWhite.id }),
+      { code: 'skill_not_available', message: /不可用|停用/ },
+    )
+    // 启用插件后同一技能即时可读（enabledPluginIds 同回合重读）
+    await host.enable('builtin:superagent')
+    {
+      const managed = (await host.executeTool(
+        'load_skill',
+        { skillId: 'managed-guide' },
+        { conversationId: convWhite.id },
+      )) as { text: string }
+      assert.ok(managed.text.includes('托管'), '插件启用后托管技能可读')
+    }
+    // 目录同步：启用后白名单含托管技能 → 目录出现
+    {
+      env.requests.length = 0
+      env.faux.setResponses([env.capture()])
+      await kernel.submitInput(convWhite.id, '启用托管后回台')
+      await kernel.waitForIdle(convWhite.id)
+      const catalogE = env.requests[0]!.systemSections.find((s) => s.includes('<available_skills>'))
+      assert.ok(catalogE?.includes('id="managed-guide"'), '插件启用后目录应含托管技能')
+    }
+    await host.disable('builtin:superagent')
+    await rejectsExplicitly(
+      () => host.executeTool('load_skill', { skillId: 'managed-guide' }, { conversationId: convWhite.id }),
+      { code: 'skill_not_available', message: /不可用|停用/ },
+    )
+
+    // ⑦ 运行时修改 Profile（改白名单）下一回合生效：白名单清成 [] 后目录消失
+    await kernel.profiles.save({ id: 'white-profile', name: '白名单', tags: [], skills: [] })
+    {
+      env.requests.length = 0
+      env.faux.setResponses([env.capture()])
+      await kernel.submitInput(convWhite.id, '改为全禁后回台')
+      await kernel.waitForIdle(convWhite.id)
+      const catalogGone = env.requests[0]!.systemSections.find((s) => s.includes('<available_skills>'))
+      assert.equal(catalogGone, undefined, 'Profile 改为 [] 后下回合目录即消失')
+    }
+
+    // ⑧ 未知技能 404（不泄漏内容）；白名单内但未安装 → 404 同样
+    await rejectsExplicitly(
+      () => host.executeTool('load_skill', { skillId: 'no-such-skill' }, { conversationId: convWhite.id }),
+      { code: 'not_found', message: /不存在/ },
+    )
+  } finally {
+    await env.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
 // 3. SecretStash：真实秘密值不进 SQLite、不进模型请求、SSE 帧
 // ---------------------------------------------------------------------------
 

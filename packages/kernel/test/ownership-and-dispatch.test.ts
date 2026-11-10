@@ -201,6 +201,17 @@ test('ownership3: 新自举资产携带 managedByPlugin=builtin:superagent 与 h
     assert.equal(profiles.find((p) => p.id === 'superagent')?.humanSelectable, false)
     assert.equal(profiles.find((p) => p.id === 'watchdog')?.managedByPlugin, 'builtin:superagent')
     assert.equal(profiles.find((p) => p.id === 'watchdog')?.humanSelectable, false)
+    // 新自举默认技能策略：中枢 skills=[]（禁用全部）；看门狗仅 watchdog-playbooks
+    assert.deepEqual(
+      (JSON.parse(readFileSync(join(env.dataDir, 'profiles', 'superagent', 'profile.json'), 'utf8')) as { skills?: string[] }).skills,
+      [],
+      '新自举 router Profile skills 应为空数组',
+    )
+    assert.deepEqual(
+      (JSON.parse(readFileSync(join(env.dataDir, 'profiles', 'watchdog', 'profile.json'), 'utf8')) as { skills?: string[] }).skills,
+      ['watchdog-playbooks'],
+      '新自举 watchdog Profile skills 应仅含 watchdog-playbooks',
+    )
     // 默认 assistant 由自身插件托管，不受 superagent 自举接管。
     assert.equal(profiles.find((p) => p.id === 'assistant')?.managedByPlugin, 'builtin:assistant')
     assert.equal(profiles.find((p) => p.id === 'assistant')?.humanSelectable, undefined)

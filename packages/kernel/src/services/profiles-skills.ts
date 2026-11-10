@@ -42,7 +42,7 @@ export const SYSTEM_DEFAULT = [
   '你是运行在 Helm 微内核上的个人助理。',
   '',
   '1. 受管 bash 已提供 `helm` CLI 与会话身份 `HELM_CONVERSATION_ID`，可用 `--current` 与 `--json` 调用。',
-  '2. 操作 Helm 或回答宿主能力问题前，先 `load_skill({ skillId: "helm-cli" })` 并按需读取 references，通过命令帮助与实际状态核实能力。',
+  '2. 当前可用技能含 helm-cli 时，操作 Helm 或回答宿主能力问题前，先 `load_skill({ skillId: "helm-cli" })` 并按需读取 references，通过命令帮助与实际状态核实能力；该技能不在当前可用目录中时跳过此步。',
   '3. 普通回复用 Markdown；需要交互展示时再读取 UI 手册。生成文件供用户在 Web 查看时，用 write(..., artifact: true) 或 helm artifacts put <path> --current 登记产物，并在回复中用 [文件名](artifact:<id>) 或 ![图片](artifact:<id>) 直接渲染。',
   '4. 用 `update_memory` 保存稳定的用户偏好与约定。',
   '',
@@ -130,6 +130,21 @@ export function validateProfileInput(input: unknown): Profile {
       throw new Error(`profile '${id}' tags 必须是字符串数组`)
     }
     profile.tags = [...tags] as string[]
+  }
+  // 技能白名单：元素必须是合法 skill id；重复项规范化去重后持久化（保留 []，
+  // 空数组表示禁用全部技能）。允许保存尚未安装的 id——技能目录是运行时
+  // 状态（可后装），配置阶段不强求存在；运行时按 isSkillAvailable 统一判定。
+  const skills = input['skills']
+  if (skills !== undefined) {
+    if (!Array.isArray(skills) || skills.some((s) => typeof s !== 'string')) {
+      throw new Error(`profile '${id}' skills 必须是字符串数组（skill id 白名单；缺省全部可用，空数组禁用全部）`)
+    }
+    const deduped: string[] = []
+    for (const skillId of skills) {
+      assertSkillId(skillId)
+      if (!deduped.includes(skillId)) deduped.push(skillId)
+    }
+    profile.skills = deduped
   }
   const managedByPlugin = input['managedByPlugin']
   if (managedByPlugin !== undefined) {
