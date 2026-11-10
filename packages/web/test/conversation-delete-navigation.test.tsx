@@ -71,6 +71,10 @@ function installFetch(): void {
         cancel() { eventController = undefined },
       }), { status: 200, headers: { 'content-type': 'text/event-stream' } })
     }
+    const artifactMatch = /^\/api\/conversations\/(\d+)\/artifacts$/.exec(url)
+    if (artifactMatch && method === 'GET') {
+      return new Response(JSON.stringify([]), { status: 200 })
+    }
     const deleteMatch = /^\/api\/conversations\/(\d+)$/.exec(url)
     if (deleteMatch && method === 'DELETE') {
       const conversationId = Number(deleteMatch[1])
