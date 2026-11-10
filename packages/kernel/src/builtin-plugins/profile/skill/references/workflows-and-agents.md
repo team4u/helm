@@ -1,5 +1,13 @@
 # 工作流与多智能体参考
 
+## 跨 Profile 点名协同
+
+- 用户写 `@<profileId>` 时，由当前会话理解任务并主持协作；它不是强制转发指令。引用、代码或示例里的 `@` 不表示授权执行任务。
+- 若本回合提供 `<available_profiles>`，按其中的真实 ID 与摘要选择角色；调用 `agentType` 时不带 `@`。目录不存在时，不猜测角色 ID 或假装工具可用。
+- 只传必要任务、结论与当前会话有权使用的附件，不默认复制主会话全部历史或读取其他角色的完整 SYSTEM.md / MEMORY.md。子会话各有对话上下文，但同一 Profile 的长期记忆由该 Profile 共享。
+- 节点、目录和 Worktree 可能不同；没有自动同步文件。不要把一个节点的本地路径当作另一节点可访问的文件。附件授权只覆盖调用会话及其父链，不能凭子会话或兄弟会话的产物 ID 任意转交。
+- 由主会话汇总各角色结论并处理冲突；多轮复核设置明确终止条件与轮数上限，不无限派生或争论。
+
 ## subagent 工具（模型内派生）
 
 当前会话可调用 `subagent` 派生子代理；默认等待最终结果，`background: true` 在环境就绪后返回运行句柄并继续后台执行：
@@ -39,7 +47,7 @@ return { reports: reports.filter(report => report !== null) }
 
 - `meta`：必须是纯字面量对象（`export const meta = { name, description, phases? }`，phases 为 `[{ title, detail?, model? }]`）；禁止模板串/变量/函数调用。
 - `args`：运行时经 `--args` 或工具入参传入的 JSON（对象/数组/标量，经反序列化注入；缺省 undefined，可自由约定形状）。
-- `agent(prompt, opts?)`：调用同一子代理执行接口并等待真实结果；opts 为 `{ label?, phase?, model?, agentType?, isolation?("worktree"), gate?, resume?, effort?, schema? }`。脚本用 pipeline/parallel 表达并发，节点不提前返回后台句柄。
+- `agent(prompt, opts?)`：调用同一子代理执行接口并等待真实结果；opts 为 `{ label?, phase?, model?, agentType?, isolation?("worktree"), gate?, resume?, effort?, schema?, attachments? }`。脚本用 pipeline/parallel 表达并发，节点不提前返回后台句柄。
 - `pipeline(items, ...stages)`：对每个 item 依序过全部 stage（同一 item 串行、不同 item 并行），单条失败该项置 null 不炸全局；优先于 parallel 组织批量任务。
 - `parallel(thunks)`：全量并发，单项失败置 null。
 - `action(actionId, input?, opts?)`：零 Token 确定性调用宿主动作总线（`pluginId.actionId` 全限定或无冲突短名；输入输出经 schema 校验；opts 支持 `{ idempotent?, label?, phase? }`）。
@@ -57,7 +65,7 @@ return { reports: reports.filter(report => report !== null) }
 ### 断点重放（resumeFromRunId）
 
 调用 `SubagentWorkflow({ resumeFromRunId: "<runId>", ... })`（或 CLI `helm workflows run <name> --resume-from-run-id <runId> --current --wait`）读取旧账本；匹配的已完成节点直接重放结果，agent/action 与已通过的 gate 不重复执行。参数变化（包括 gate 命令）会使对应节点重新执行。
-`agent(..., { resume: "<label>" })` 则是续接代理上下文，与账本重放不同；不要同时指定 agentType/model/isolation/effort，schema 和 gate 可以随续接提交。
+`agent(..., { resume: "<label>" })` 则是续接代理上下文，与账本重放不同；不要同时指定 agentType/model/isolation/effort，schema、gate 与本轮 attachments 可以随续接提交。续接不自动继承上轮附件；附件 ID 或顺序变化也会影响账本匹配。原生子会话须仍存在、归属当前父会话且空闲；外部运行时还受其清理生命周期限制，失效时如实报错，不假装续接成功。
 
 ## 与 builtin:herdr 终端 Agent 路由
 

@@ -103,6 +103,7 @@ log(`开始处理拉取请求 #${prId}`)
 | `resume` | `string` | 续接的历史智能体会话标识 |
 | `effort` | `string` | 推理思考级别 |
 | `schema` | `object` | 结构化输出的 JSON Schema 规范 |
+| `attachments` | `string[]` | 本次调用携带的产物 ID；只允许当前编排会话或其父链有权使用的产物 |
 
 `effort` 可选值包括：`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。
 
@@ -112,7 +113,8 @@ log(`开始处理拉取请求 #${prId}`)
 - `resume` 与 `model` 互斥。续接会话保持原模型。
 - `resume` 与 `isolation` 互斥。续接会话保持原工作目录。
 - `resume` 与 `effort` 互斥。续接会话保持原思考配置。
-- `resume` 允许与 `schema` 和 `gate` 组合使用。
+- `resume` 允许与 `schema`、`gate` 和 `attachments` 组合使用。
+- `attachments` 只作用于本次调用；续接时不会自动继承上次调用的附件。
 
 #### 结构化输出 (`schema`)
 
@@ -137,6 +139,29 @@ log(`范围: ${result.scope}, 风险: ${result.riskLevel}`)
 ```
 
 若子智能体输出无法满足契约，返回 `null`。
+
+#### 跨 Profile 点名与附件
+
+`agentType` 使用真实 Profile ID，不使用显示名称或 `@` 前缀。用户在会话中写 `@reviewer` 是向当前智能体点名，并不直接执行脚本或绕过当前会话路由。
+
+```javascript
+const review = await agent("只读审查附件中的变更说明，返回风险与依据", {
+  label: "reviewer",
+  agentType: "reviewer",
+  attachments: args.artifactIds,
+})
+if (review === null) throw new Error("审查未完成")
+
+return await agent(`请复核以下审查结论：\n${review}`, {
+  resume: "reviewer",
+})
+```
+
+示例要求 `reviewer` Profile 已存在，且 `args.artifactIds` 是当前编排会话有权使用的产物 ID 数组。数组可为空，但不能包含空 ID、纯空白 ID 或非字符串项。宿主会校验产物存在性与授权；附件不会绕过权限或远端可达性检查。
+
+不同节点、目录和 Worktree 之间没有自动文件同步。当前授权只覆盖调用会话及其父链，不包含其子会话或兄弟会话；不能将上一个子代理生成的产物 ID 直接转交给下一个子代理。需要交接时，先由有权读取文件的会话显式导出必要内容，再按接收方有权使用的方式登记或传递。
+
+原生子会话只有在仍存在、归属校验通过且不忙时才能续接。Herdr 外部执行上下文还受父回合或 Workflow 结算清理约束，不应假设跨回合、跨运行的 `resume` 一定有效。`resume` 续接会话上下文，`resumeFromRunId` 则重放工作流账本，两者不是同一操作。
 
 ### 2. `parallel(thunks)`
 

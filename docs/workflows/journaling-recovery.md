@@ -57,7 +57,7 @@ Hub 数据目录默认为 `~/.helm`，可用 `HELM_DATA_DIR` 覆盖。引擎接�
 
 系统通过 SHA-256 算法生成唯一调用 Key：
 
-- **智能体 Key**：涵盖 `prompt`、`label`、`model`、`agentType`、`effort`、`isolation`、`gate`、`resume` 与 `schema`。
+- **智能体 Key**：涵盖 `prompt`、`label`、`model`、`agentType`、`effort`、`isolation`、`gate`、`resume`、`schema` 与本轮 `attachments`。附件 ID 或顺序变化会使对应调用失配；附件内容不复制进账本。
 - **动作 Key**：涵盖全限定 `actionId` 与序列化后的输入对象。
 
 任何参数微调都会改变 Key，防止误用过期缓存。
