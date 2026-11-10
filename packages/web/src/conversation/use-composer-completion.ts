@@ -30,6 +30,8 @@ export interface CompletionSourceError {
 }
 
 export interface CompletionSourceSnapshot {
+  /** 当前触发符在会话作用域内是否有注册源（false 时浮层不打开，输入不受拦截）。 */
+  hasSources: boolean
   /** 查询过滤后的合并候选（已按 priority 源顺序稳定排列并去重）。 */
   items: MergedCompletionItem[]
   /** 过滤后候选总数（不含合并上限截断）。 */
@@ -41,7 +43,7 @@ export interface CompletionSourceSnapshot {
   errors: CompletionSourceError[]
 }
 
-const EMPTY_SNAPSHOT: CompletionSourceSnapshot = { items: [], total: 0, truncated: false, loading: false, errors: [] }
+const EMPTY_SNAPSHOT: CompletionSourceSnapshot = { hasSources: false, items: [], total: 0, truncated: false, loading: false, errors: [] }
 
 interface ActionSourceState {
   loading: boolean
@@ -245,7 +247,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
     }
 
     const merged = mergeCompletionItems(groups)
-    return { items: merged.items, total: merged.total, truncated: merged.truncated, loading, errors }
+    return { hasSources: sources.length > 0, items: merged.items, total: merged.total, truncated: merged.truncated, loading, errors }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, active, query, docSources, sessionDocSources, actionSources, pluginDocs, loadErrors, sessionStates, actionState])
 }

@@ -840,6 +840,8 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     completers: store.groupedUi.composerCompleters,
     conversation,
   })
+  // 浮层真正打开 = 触发符激活且该会话作用域内有注册源；无源时不弹窗也不拦截输入。
+  const completionOpen = completionSnapshot.hasSources
 
   const slashPluginCommands = useMemo(
     () => pluginSlashCommandsFor(store.groupedUi.commands, conversation),
@@ -1125,13 +1127,13 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (
-      (popover !== null || completionToken !== null) &&
+      (popover !== null || completionOpen) &&
       !e.nativeEvent.isComposing &&
       (e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Escape')
     ) {
       return // 由浮层全局捕获处理（IME composing 时不拦截，交给输入法）
     }
-    if (e.key === 'Escape' && popover === null && completionToken === null && editingEntryId !== null) {
+    if (e.key === 'Escape' && popover === null && !completionOpen && editingEntryId !== null) {
       e.preventDefault()
       cancelEdit()
       return
@@ -1276,7 +1278,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
             />
           ) : null}
           <CompletionPopover
-            open={completionToken !== null}
+            open={completionOpen}
             trigger={completionToken !== null && completionToken.trigger !== '/' ? completionToken.trigger : '@'}
             snapshot={completionSnapshot}
             onPick={(entry) => applyCompletion(entry.item.insertText)}

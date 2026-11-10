@@ -277,17 +277,25 @@ test('交互：@ 仅展示插件 doc 源候选，不注入会话产物；选中�
   }
 })
 
-test('回归：有会话产物但未注册 @ 源时，不生成产物候选', { timeout: 60_000 }, async () => {
+test('回归：有会话产物但未注册 @ 源时，不弹浮层、不吞 Enter', { timeout: 60_000 }, async () => {
   const app = await mount(conv(10), {
     artifacts: [{ id: 'art-1', name: '报告.pdf', mimeType: 'application/pdf', size: 1024 }],
   })
   try {
     await app.type('@')
+    assert.equal(app.completionPopover(), null, '无注册源时浮层不弹出')
     assert.equal(app.completionItems().length, 0, '产物不构成内置补全源')
-    assert.doesNotMatch(app.completionPopover()?.textContent ?? '', /报告\.pdf/)
     await app.type('@报告')
     assert.equal(app.completionItems().length, 0, '搜索也不会注入产物候选')
     assert.equal(app.ta().value, '@报告', '触发符和输入文本保留')
+    // 无源时 Enter 不被浮层吞键：走发送分支（无条件 preventDefault），
+    // 而浮层拦截路径不会 preventDefault 且浮层根本未挂载。
+    await act(async () => {
+      const ev = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+      app.ta().dispatchEvent(ev)
+      assert.equal(ev.defaultPrevented, true, 'Enter 进入发送分支而非被浮层吞键')
+    })
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
   } finally {
     app.unmount()
   }
@@ -311,7 +319,7 @@ test('交互：# 与 : 仅注册源激活；scope 不命中的源不参与', { t
     await app.key('Escape')
     await app.type(':')
     await act(async () => {})
-    assert.match(app.completionPopover()!.textContent!, /没有匹配的候选/, 'scope 不命中的 : 源不出现，仅空态')
+    assert.equal(app.completionPopover(), null, 'scope 不命中的 : 无注册源，浮层不弹出')
   } finally {
     app.unmount()
   }
