@@ -1574,6 +1574,22 @@ export class PluginHost {
           Promise.resolve(backend.execEnv(req, opts)),
         );
       },
+      ...(backend.withFileMutationQueue === undefined
+        ? {}
+        : {
+            withFileMutationQueue: async <T>(
+              target: { nodeId: string; cwd: string; path: string },
+              fn: () => Promise<T>,
+              opts?: { signal?: AbortSignal },
+            ) => {
+              this.assertContextUsable(state, epoch, 'host.withFileMutationQueue');
+              return this.tracker.withTask(
+                pluginId,
+                `host.fileQueue:${target.nodeId}`,
+                () => Promise.resolve(backend.withFileMutationQueue!(target, fn, opts)),
+              );
+            },
+          }),
       prepareAction: (targetPluginId, actionId, input, context) => {
         this.assertContextUsable(state, epoch, 'host.prepareAction');
         return this.prepareAction(targetPluginId, actionId, input, context);

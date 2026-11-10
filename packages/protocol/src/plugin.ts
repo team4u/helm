@@ -534,6 +534,18 @@ export interface HelmHostApi {
     opts?: { signal?: AbortSignal },
   ): Promise<EnvExecResponse>
   /**
+   * 文件互斥队列（宿主节点通道）：在目标节点 (nodeId, cwd) 内按 canonical 路径
+   * 串行执行 fn（读-改-写窗口整体持锁），与内核 write/edit 工具共享同一进程级
+   * 队列——同一文件不丢更新；其他文件、其他节点互不等待。锁语义与 pi-durable
+   * 的 withFileMutationQueue 对齐：不是对 bash 或其他进程的锁，也不可重入
+   * （fn 内不得再对同一文件入队）。后端未接线时为 undefined（插件不得假定存在）。
+   */
+  withFileMutationQueue?(
+    target: { nodeId: string; cwd: string; path: string },
+    fn: () => Promise<unknown>,
+    opts?: { signal?: AbortSignal },
+  ): Promise<unknown>
+  /**
    * 动作前置校验（与 invokeAction 同源的 prepare/preflight）：校验插件状态、
    * 会话 scope 与 inputSchema（无 handler 副作用），并返回定义端 idempotent。
    * 供编排引擎在落盘 action_started 前判定副作用语义；不能仅以 listActions

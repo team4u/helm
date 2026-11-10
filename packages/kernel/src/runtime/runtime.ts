@@ -682,6 +682,10 @@ export class KernelRuntime {
             output: this.stash.redact(res.output),
           }
         },
+        // 文件互斥队列：插件读-改-写与内核 write/edit 共享同一目标节点队列
+        //（EnvFabric.withFileMutationQueue；语义见 env/file-mutation-queue.ts）。
+        withFileMutationQueue: (target, fn, opts) =>
+          this.envFabric.withFileMutationQueue(target, fn, opts?.signal),
         onEvent: (type, listener) => this.onEvent(type, listener),
         emitEvent: (type, payload, options) => this.emitHostEvent(type, payload, options),
       },

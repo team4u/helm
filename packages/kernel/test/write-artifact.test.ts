@@ -140,6 +140,13 @@ describe('write 工具登记产物特性', { timeout: 60_000 }, () => {
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
     const remoteFiles = new Map<string, string>()
     const stubEnv = {
+      id: 'remote:stub-node',
+      async absolutePath(p: string) {
+        return { ok: true as const, value: p }
+      },
+      async joinPath(parts: string[]) {
+        return { ok: true as const, value: parts.join('/') }
+      },
       async canonicalPath(p: string) {
         return { ok: true as const, value: p }
       },

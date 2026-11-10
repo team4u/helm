@@ -38,7 +38,9 @@
  *   拒绝目录与软链越界；远端节点经 env RPC 的 canonicalPath/fileInfo/readTextFile
  *   同样做 realpath 越界检查；read 错误一律脱敏。
  * - write/edit 工具：会话 (nodeId, cwd) 内安全写文本与精确替换（唯一匹配校验），
- *   越出 cwd 的绝对路径 / `..` 逃逸 / 指向 cwd 外的软链一律拒绝。
+ *   越出 cwd 的绝对路径 / `..` 逃逸 / 指向 cwd 外的软链一律拒绝；读-改-写窗口经
+ *   env/file-mutation-queue 与插件 API 共享同一目标节点 canonical 路径互斥队列
+ *   （同文件不丢更新；详见该文件契约）。
  * - spill 指引指向 read_artifact；分页 ≤4KiB 防同量 spill 循环；
  *   read_artifact 仅允许当前会话（含父会话授权链）产物，不接受任意路径。
  * - timeoutMs 必须为正有限整数且 ≤ 上限，非法值显式 invalid_timeout。
@@ -53,6 +55,7 @@ import { bool, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { posix, win32 } from 'node:path'
 import { composeExecutionEnv } from '../env/scoped-env.js'
+import { envWithFileMutationQueue, localWithFileMutationQueue } from '../env/file-mutation-queue.js'
 import { redactJsonValue } from '../redact.js'
 import type { HelmToolDeps } from './tool-deps.js'
 
@@ -876,14 +879,17 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
             return { output: [{ type: 'text', text: target.message }], isError: true }
           }
           const bytes = Buffer.byteLength(args.content, 'utf8')
+          // 互斥队列：同文件读-改-写窗口与插件/其他工具排队（见 env/file-mutation-queue.ts）。
           // 新文件的父目录可能不存在：先确保目录（recursive，仍在 containment 内）；
           // dirname 按目标形状规则（win32 反斜杠分隔符）。
-          const parent = pathRulesForShape(targetPathShape(target.abs)).dirname(target.abs)
-          const mkdirResult = await env.createDir(parent, { recursive: true }, context)
-          if (!mkdirResult.ok) throw new Error(mkdirResult.error.message)
-          const writeResult = await env.writeFile(target.abs, args.content, context)
-          if (!writeResult.ok) throw new Error(writeResult.error.message)
-          return await onWriteSuccess(target.abs, bytes)
+          return await envWithFileMutationQueue(env, target.abs, async () => {
+            const parent = pathRulesForShape(targetPathShape(target.abs)).dirname(target.abs)
+            const mkdirResult = await env.createDir(parent, { recursive: true }, context)
+            if (!mkdirResult.ok) throw new Error(mkdirResult.error.message)
+            const writeResult = await env.writeFile(target.abs, args.content, context)
+            if (!writeResult.ok) throw new Error(writeResult.error.message)
+            return await onWriteSuccess(target.abs, bytes)
+          }, context)
         }
         // local 节点：进程内 fs。
         const target = await resolveWritableTarget(
@@ -912,9 +918,13 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
           return { output: [{ type: 'text', text: target.message }], isError: true }
         }
         const bytes = Buffer.byteLength(args.content, 'utf8')
-        await mkdir(pathRulesForShape(targetPathShape(target.abs)).dirname(target.abs), { recursive: true })
-        await writeFile(target.abs, args.content, 'utf8')
-        return await onWriteSuccess(target.abs, bytes)
+        // local 与远端共享同一进程级队列（localWithFileMutationQueue 的 key 前缀
+        // 与 NodeExecutionEnv.id 一致，两种入口互斥）。
+        return await localWithFileMutationQueue(target.abs, async () => {
+          await mkdir(pathRulesForShape(targetPathShape(target.abs)).dirname(target.abs), { recursive: true })
+          await writeFile(target.abs, args.content, 'utf8')
+          return await onWriteSuccess(target.abs, bytes)
+        }, context.abortSignal)
       } catch (error) {
         return {
           output: [{ type: 'text', text: `write_failed: ${deps.redact(String(error))}` }],
@@ -979,33 +989,36 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
           if (!target.ok) {
             return { output: [{ type: 'text', text: target.message }], isError: true }
           }
-          const readResult = await env.readTextFile(target.abs, context)
-          if (!readResult.ok) throw new Error(readResult.error.message)
-          const count = countOccurrences(readResult.value, args.oldText)
-          if (count === 0) {
-            return {
-              output: [{ type: 'text', text: `edit_failed: oldText 在 ${args.path} 中不存在（拒绝无操作编辑）` }],
-              isError: true,
+          // 互斥队列：读-改-写整体持锁（读旧内容与写回之间不被其他变更插入）。
+          return await envWithFileMutationQueue(env, target.abs, async () => {
+            const readResult = await env.readTextFile(target.abs, context)
+            if (!readResult.ok) throw new Error(readResult.error.message)
+            const count = countOccurrences(readResult.value, args.oldText)
+            if (count === 0) {
+              return {
+                output: [{ type: 'text', text: `edit_failed: oldText 在 ${args.path} 中不存在（拒绝无操作编辑）` }],
+                isError: true,
+              }
             }
-          }
-          if (count > 1) {
-            return {
-              output: [
-                {
-                  type: 'text',
-                  text: `edit_failed: oldText 在 ${args.path} 中出现 ${count} 次（需唯一匹配；请扩大上下文使 oldText 唯一）`,
-                },
-              ],
-              isError: true,
+            if (count > 1) {
+              return {
+                output: [
+                  {
+                    type: 'text',
+                    text: `edit_failed: oldText 在 ${args.path} 中出现 ${count} 次（需唯一匹配；请扩大上下文使 oldText 唯一）`,
+                  },
+                ],
+                isError: true,
+              }
             }
-          }
-          const updated = readResult.value.replace(args.oldText, args.newText)
-          const writeResult = await env.writeFile(target.abs, updated, context)
-          if (!writeResult.ok) throw new Error(writeResult.error.message)
-          return {
-            output: [{ type: 'text', text: `edit_ok: ${args.path}（已替换 1 处）` }],
-            structuredOutput: { path: args.path, replaced: true } as JsonValue,
-          }
+            const updated = readResult.value.replace(args.oldText, args.newText)
+            const writeResult = await env.writeFile(target.abs, updated, context)
+            if (!writeResult.ok) throw new Error(writeResult.error.message)
+            return {
+              output: [{ type: 'text', text: `edit_ok: ${args.path}（已替换 1 处）` }],
+              structuredOutput: { path: args.path, replaced: true } as JsonValue,
+            }
+          }, context)
         }
         // local 节点：进程内 fs。
         const target = await resolveWritableTarget(
@@ -1032,31 +1045,33 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
         if (!target.ok) {
           return { output: [{ type: 'text', text: target.message }], isError: true }
         }
-        const content = await readFile(target.abs, 'utf8')
-        const count = countOccurrences(content, args.oldText)
-        if (count === 0) {
-          return {
-            output: [{ type: 'text', text: `edit_failed: oldText 在 ${args.path} 中不存在（拒绝无操作编辑）` }],
-            isError: true,
+        return await localWithFileMutationQueue(target.abs, async () => {
+          const content = await readFile(target.abs, 'utf8')
+          const count = countOccurrences(content, args.oldText)
+          if (count === 0) {
+            return {
+              output: [{ type: 'text', text: `edit_failed: oldText 在 ${args.path} 中不存在（拒绝无操作编辑）` }],
+              isError: true,
+            }
           }
-        }
-        if (count > 1) {
-          return {
-            output: [
-              {
-                type: 'text',
-                text: `edit_failed: oldText 在 ${args.path} 中出现 ${count} 次（需唯一匹配；请扩大上下文使 oldText 唯一）`,
-              },
-            ],
-            isError: true,
+          if (count > 1) {
+            return {
+              output: [
+                {
+                  type: 'text',
+                  text: `edit_failed: oldText 在 ${args.path} 中出现 ${count} 次（需唯一匹配；请扩大上下文使 oldText 唯一）`,
+                },
+              ],
+              isError: true,
+            }
           }
-        }
-        const updated = content.replace(args.oldText, args.newText)
-        await writeFile(target.abs, updated, 'utf8')
-        return {
-          output: [{ type: 'text', text: `edit_ok: ${args.path}（已替换 1 处）` }],
-          structuredOutput: { path: args.path, replaced: true } as JsonValue,
-        }
+          const updated = content.replace(args.oldText, args.newText)
+          await writeFile(target.abs, updated, 'utf8')
+          return {
+            output: [{ type: 'text', text: `edit_ok: ${args.path}（已替换 1 处）` }],
+            structuredOutput: { path: args.path, replaced: true } as JsonValue,
+          }
+        }, context.abortSignal)
       } catch (error) {
         return {
           output: [{ type: 'text', text: `edit_failed: ${deps.redact(String(error))}` }],

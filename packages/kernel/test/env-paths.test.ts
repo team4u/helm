@@ -47,6 +47,9 @@ function makeRecordingEnv(options: {
   files?: Map<string, string>
 }): {
   env: {
+    id: string
+    absolutePath(path: string, context: Context): Promise<{ ok: true; value: string } | { ok: false; error: { code: string; message: string } }>
+    joinPath(parts: string[], context: Context): Promise<{ ok: true; value: string } | { ok: false; error: { code: string; message: string } }>
     canonicalPath(path: string, context: Context): Promise<{ ok: true; value: string } | { ok: false; error: { code: string; message: string } }>
     fileInfo(path: string, context: Context): Promise<{ ok: true; value: { kind: 'file' | 'directory'; size: number } } | { ok: false; error: { code: string; message: string } }>
     readTextFile(path: string, context: Context): Promise<{ ok: true; value: string } | { ok: false; error: { code: string; message: string } }>
@@ -62,6 +65,15 @@ function makeRecordingEnv(options: {
   return {
     calls,
     env: {
+      // 互斥队列 key 所需的最小面（见 env/file-mutation-queue.ts）：恒等
+      // absolutePath/joinPath + 受控 canonical；路径形状由测试自行控制。
+      id: 'remote:stub-node',
+      async absolutePath(path, _context) {
+        return { ok: true, value: path }
+      },
+      async joinPath(parts, _context) {
+        return { ok: true, value: parts.join('/') }
+      },
       async canonicalPath(path, context) {
         record('canonicalPath', path, context)
         return { ok: true, value: options.canonical(path) }
