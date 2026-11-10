@@ -3,6 +3,18 @@
  * 存储与热重载机制在 kernel，这里只定义跨端共享的数据形状。
  */
 
+/** 空白会话的静态引导词；点击仅回填草稿，不直接提交。 */
+export interface ProfileStarterPrompt {
+  /** 展示标题，去除首尾空白后最多 24 个 Unicode 码点。 */
+  label: string
+  /** 保留原文，非纯空白，最多 4000 个 Unicode 码点。 */
+  prompt: string
+}
+
+export const PROFILE_STARTERS_MAX_ITEMS = 6
+export const PROFILE_STARTER_LABEL_MAX_LENGTH = 24
+export const PROFILE_STARTER_PROMPT_MAX_LENGTH = 4000
+
 /**
  * 会话 Profile：`~/.helm/profiles/<id>/profile.json` + SYSTEM.md。
  * MEMORY.md 长期记忆由 builtin:memory 插件自治管理（不进 Profile 契约）。
@@ -28,6 +40,8 @@ export interface Profile {
   managedByPlugin?: string
   /** 人类是否可在「新建对话」下拉选择该 Profile；常驻单例角色置 false，缺省 true。 */
   humanSelectable?: boolean
+  /** 最多六项；缺省或空数组使用宿主空白会话提示。 */
+  starters?: ProfileStarterPrompt[]
   /** SYSTEM.md 全文（详情接口读写，不写入 profile.json）。 */
   system?: string
 }

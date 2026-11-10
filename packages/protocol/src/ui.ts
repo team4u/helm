@@ -93,6 +93,61 @@ export interface ComposerPillSpec extends UiSpecBase {
 
 export interface ComposerWidgetSpec extends UiSpecBase {}
 
+/** 补全仅插入文本，不执行候选携带的命令。 */
+export interface ComposerCompletionItem {
+  id: string
+  label: string
+  insertText: string
+  hint?: string
+  icon?: string
+}
+
+/** 查询动作只接收文本与会话身份；nodeId/cwd 应从服务端真实会话解析。 */
+export interface ComposerCompletionQuery {
+  query: string
+  conversationId: number
+}
+
+export interface ComposerCompletionResult {
+  items: ComposerCompletionItem[]
+}
+
+/** 文档源只读取贡献插件自己的公开文档；itemsField 为顶层数组字段名。 */
+export type ComposerCompletionSource =
+  | { kind: 'action'; actionId: string; actionPluginId?: string }
+  | { kind: 'doc' | 'sessionDoc'; name: string; itemsField: string }
+
+/** 补全由宿主统一渲染，不接受 client/json 回调或视图。'/' 保留给命令和技能。 */
+export interface ComposerCompleterSpec extends Omit<UiSpecBase, 'client' | 'json' | 'docs' | 'sessionDocs'> {
+  label: string
+  trigger: '@' | '#' | ':'
+  priority?: number
+  source: ComposerCompletionSource
+}
+
+/** MIME 精确值或 type/*；extensions 为含点号的小写后缀（含多段后缀）。两类匹配取 OR。 */
+export interface ArtifactPreviewerSpec extends UiSpecBase {
+  label: string
+  icon?: string
+  priority?: number
+  mimeTypes?: string[]
+  extensions?: string[]
+}
+
+/** 预览组件在主站运行，是可信插件代码；blob 内容不是可信 HTML。 */
+export interface ArtifactPreviewerProps {
+  artifactId: string
+  conversationId?: number
+  /** 未加载名称元数据时缺省，不用 artifactId 冒充文件名。 */
+  name?: string
+  mimeType: string
+  size: number
+  /** 由宿主管理生命周期，插件不得自行撤销。 */
+  blobUrl: string
+  /** 仅解码最多 1 MiB 的文本内容；二进制或超限时为 null。 */
+  text: string | null
+}
+
 // 6. workbench.panel（会话感知右栏抽屉面板）
 export interface WorkbenchPanelBadgeSpec {
   /** 订阅的本插件 public doc 名称。 */
@@ -173,6 +228,17 @@ export interface PluginSlotContributionSpec extends UiSpecBase {
 /** Profile 详情抽屉的插件扩展子插槽全限定名（builtin:profile 提供，其他插件注入）。 */
 export const PROFILE_DETAIL_SECTION_SLOT = 'builtin:profile/detail-section' as const
 
+/** 宿主节点中心保留的命名空间，不代表存在 builtin:node 插件。 */
+export const NODE_DETAIL_SECTION_SLOT = 'builtin:node/detail-section' as const
+
+/** 仅已有节点挂载；不包含节点接入令牌或其他凭据。 */
+export interface NodeDetailSlotProps {
+  nodeId: string
+  isLocal: boolean
+  isOnline: boolean
+  isNew: boolean
+}
+
 /** target: PROFILE_DETAIL_SECTION_SLOT 子插槽传递给插件 client.tsx 组件的通用 Props（不含具体插件业务字段）。 */
 export interface ProfileDetailSlotProps {
   /** 当前正在查看/编辑的单个 Profile ID（新建模式为空串）。 */
@@ -192,6 +258,8 @@ export interface PluginUiRegistry {
   toolView(spec: ToolViewSpec): void
   composerPill(spec: ComposerPillSpec): void
   composerWidget(spec: ComposerWidgetSpec): void
+  composerCompleter(spec: ComposerCompleterSpec): void
+  artifactPreviewer(spec: ArtifactPreviewerSpec): void
   workbenchPanel(spec: WorkbenchPanelSpec): void
   command(spec: CommandSpec): void
   settingsPanel(spec: SettingsPanelSpec): void
@@ -388,6 +456,8 @@ export const PLUGIN_UI_METHOD_NAMES = [
   'toolView',
   'composerPill',
   'composerWidget',
+  'composerCompleter',
+  'artifactPreviewer',
   'workbenchPanel',
   'command',
   'settingsPanel',
