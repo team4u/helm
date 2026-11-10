@@ -457,7 +457,6 @@ export function createHerdrPlugin(): PluginDefinition {
         id: 'overview',
         label: 'Herdr 终端总览',
         icon: 'terminal',
-        docs: ['overview'],
         client: { module: 'index.tsx', export: 'HerdrOverviewScreen' },
       })
       ctx.ui.profileRuntime({
@@ -515,7 +514,7 @@ export function createHerdrPlugin(): PluginDefinition {
             let authoritySeq: number | undefined
             try {
               const info = parseAgentResult(
-                await transport.call(
+                await transportOf().call(
                   pane.target,
                   'agent.get',
                   { target: pane.paneId },
