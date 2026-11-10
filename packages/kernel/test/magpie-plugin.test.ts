@@ -891,11 +891,11 @@ test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、client 轨道组件导
 
     // settingsPanel：client 轨道（不再声明 json；真实编译产物可编译且导出组件函数）
     const panel = ui.find((u) => u.surface === 'settings.panel')!.spec as {
-      label: string; docs: string[]; json?: unknown; client?: { module: string; export: string }
+      label: string; json?: unknown; docs?: unknown; client?: { module: string; export: string }
     }
     assert.equal(panel.label, 'Magpie 网关')
     assert.equal(panel.json, undefined, 'settingsPanel 不再声明 JSON Spec（单轨 client）')
-    assert.deepEqual(panel.docs, ['status'], '订阅真实公开 doc status')
+    assert.equal(panel.docs, undefined, 'settingsPanel 不再声明 docs（组件 usePluginDoc 自主订阅）')
     assert.equal(panel.client!.module, 'index.tsx')
     assert.equal(panel.client!.export, 'MagpieSettingsPanel')
 

@@ -9,7 +9,8 @@
  *
  * 数据经 @helm/plugin-client 共享 hooks（usePluginDoc）响应式订阅本插件
  * public doc；动作经 ctx.callAction 走 POST /api/actions，导航经 ctx.openScreen /
- * ctx.openSplitScreen，无宿主私有 store 依赖。
+ * ctx.openSplitScreen。样式全部为 sa- 前缀本地类 + 宿主核心通用类（badge/btn），
+ * 不依赖 json-render（jr-*）类。
  */
 import { useState } from 'react'
 import './styles.css'
@@ -66,17 +67,20 @@ function ActionError({ message }: { message: string }): ReactNode {
   )
 }
 
-/** Worker 行动作按钮（pending 态禁用防重复提交）。 */
+/**
+ * Worker 行动作按钮。受同一 pending 守卫的按钮统一 disabled：
+ * 任一动作在途时其余按钮同样不可点，杜绝「看似可点实际无动作」。
+ */
 function RowAction({
   label,
   icon,
-  pending,
+  disabled,
   danger,
   onClick,
 }: {
   label: string
   icon?: ReactNode
-  pending?: boolean
+  disabled?: boolean
   danger?: boolean
   onClick: () => void
 }): ReactNode {
@@ -84,10 +88,10 @@ function RowAction({
     <button
       type="button"
       className={`btn btn-xs ${danger === true ? 'btn-danger' : ''}`}
-      disabled={pending === true}
+      disabled={disabled === true}
       onClick={onClick}
     >
-      {pending === true ? <Loader2 size={11} className="spin-slow" /> : icon}
+      {disabled === true ? <Loader2 size={11} className="spin-slow" /> : icon}
       <span>{label}</span>
     </button>
   )
@@ -97,7 +101,7 @@ function RowAction({
 // composerWidget：中枢态势
 // ---------------------------------------------------------------------------
 
-/** 中枢态势挂件：活跃 Worker / 事件订阅实时计数与表（docs: index + subscriptions）。 */
+/** 中枢态势挂件：活跃 Worker / 事件订阅实时计数与表。 */
 export function SuperAgentComposerWidget(_props: ComposerScopeProps): ReactNode {
   const ctx = usePluginContext()
   const index = usePluginDoc<SuperAgentIndexDoc>('index')
@@ -119,19 +123,19 @@ export function SuperAgentComposerWidget(_props: ComposerScopeProps): ReactNode 
           <div className="sa-widget-muted">
             活跃 Worker {workers.length} 个；事件订阅 {subs.length} 条。
           </div>
-          <div className="jr-table-wrap">
-            <table className="jr-table">
+          <div className="sa-table-wrap">
+            <table className="sa-table">
               <thead>
                 <tr>
                   <th>Worker</th>
                   <th>Profile</th>
-                  <th style={{ textAlign: 'right' }}>操作</th>
+                  <th className="sa-th-actions">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {workers.length === 0 ? (
                   <tr>
-                    <td colSpan={3} style={{ color: 'var(--fg-muted)' }}>
+                    <td colSpan={3} className="sa-table-empty">
                       暂无数据
                     </td>
                   </tr>
@@ -140,7 +144,7 @@ export function SuperAgentComposerWidget(_props: ComposerScopeProps): ReactNode 
                     <tr key={w.conversationId}>
                       <td>#{w.conversationId}</td>
                       <td>{w.profileId}</td>
-                      <td style={{ textAlign: 'right' }}>
+                      <td className="sa-cell-actions">
                         <div className="sa-row-actions">
                           <RowAction label="打开" icon={<ExternalLink size={11} />} onClick={() => ctx.openScreen(`conversation:${w.conversationId}`)} />
                         </div>
@@ -161,7 +165,7 @@ export function SuperAgentComposerWidget(_props: ComposerScopeProps): ReactNode 
 // composerPill：中枢路由收敛模式开关
 // ---------------------------------------------------------------------------
 
-/** 中枢路由收敛模式胶囊（docs: routing 镜像；动作 set_router_mode 真实写配置）。 */
+/** 中枢路由收敛模式胶囊（routing 镜像 doc；动作 set_router_mode 真实写配置）。 */
 export function SuperAgentRouterModePill(_props: ComposerScopeProps): ReactNode {
   const ctx = usePluginContext()
   const routing = usePluginDoc<RouterModeDoc>('routing')
@@ -209,12 +213,12 @@ export function SuperAgentDispatchToolView(props: ToolViewProps): ReactNode {
   const workers = parseWorkers(index)
   const input = dispatchInput(props)
   const resultWorkerId = dispatchedWorkerId(props)
-  const [archiving, setArchiving] = useState<number | undefined>(undefined)
+  const [archiving, setArchiving] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
 
   const archive = (workerConversationId: number): void => {
-    if (archiving !== undefined) return
-    setArchiving(workerConversationId)
+    if (archiving) return
+    setArchiving(true)
     setError(undefined)
     void ctx
       .callAction('archive_worker', { workerConversationId })
@@ -222,7 +226,7 @@ export function SuperAgentDispatchToolView(props: ToolViewProps): ReactNode {
         setError(err instanceof Error ? err.message : String(err))
       })
       .finally(() => {
-        setArchiving(undefined)
+        setArchiving(false)
       })
   }
 
@@ -252,19 +256,19 @@ export function SuperAgentDispatchToolView(props: ToolViewProps): ReactNode {
       {index === undefined ? (
         <DocLoading label="Worker 清单读取中..." />
       ) : (
-        <div className="jr-table-wrap">
-          <table className="jr-table">
+        <div className="sa-table-wrap">
+          <table className="sa-table">
             <thead>
               <tr>
                 <th>会话</th>
                 <th>Profile</th>
-                <th style={{ textAlign: 'right' }}>操作</th>
+                <th className="sa-th-actions">操作</th>
               </tr>
             </thead>
             <tbody>
               {workers.length === 0 ? (
                 <tr>
-                  <td colSpan={3} style={{ color: 'var(--fg-muted)' }}>
+                  <td colSpan={3} className="sa-table-empty">
                     暂无数据
                   </td>
                 </tr>
@@ -273,13 +277,14 @@ export function SuperAgentDispatchToolView(props: ToolViewProps): ReactNode {
                   <tr key={w.conversationId}>
                     <td>#{w.conversationId}</td>
                     <td>{w.profileId}</td>
-                    <td style={{ textAlign: 'right' }}>
+                    <td className="sa-cell-actions">
+                      {/* 归档在途时统一禁用本卡全部行按钮（一致防重行为） */}
                       <div className="sa-row-actions">
-                        <RowAction label="查看" icon={<ExternalLink size={11} />} onClick={() => ctx.openScreen(`conversation:${w.conversationId}`)} />
+                        <RowAction label="查看" icon={<ExternalLink size={11} />} disabled={archiving} onClick={() => ctx.openScreen(`conversation:${w.conversationId}`)} />
                         <RowAction
-                          label={archiving === w.conversationId ? '归档中' : '归档'}
+                          label="归档"
                           icon={<Boxes size={11} />}
-                          pending={archiving === w.conversationId}
+                          disabled={archiving}
                           danger
                           onClick={() => archive(w.conversationId)}
                         />
@@ -354,7 +359,7 @@ export function SuperAgentWorkerReportCard(props: TimelineRendererProps): ReactN
 // screen：RecallGraph 记忆图谱 + 事件订阅
 // ---------------------------------------------------------------------------
 
-/** 记忆与订阅图谱全屏视图（docs: recall-graph + subscriptions 实时订阅）。 */
+/** 记忆与订阅图谱全屏视图（recall-graph + subscriptions doc 实时订阅）。 */
 export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
   const ctx = usePluginContext()
   const recall = usePluginDoc<RecallGraphDoc>('recall-graph')
@@ -376,15 +381,15 @@ export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
       </div>
 
       <div className="sa-section">
-        <div className="jr-table-wrap">
-          <table className="jr-table">
+        <div className="sa-table-wrap">
+          <table className="sa-table">
             <thead>
               <tr>
                 <th>会话</th>
                 <th>Profile</th>
                 <th>终态</th>
                 <th>摘要</th>
-                <th style={{ textAlign: 'right' }}>操作</th>
+                <th className="sa-th-actions">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -396,7 +401,7 @@ export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
                 </tr>
               ) : nodes.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ color: 'var(--fg-muted)' }}>
+                  <td colSpan={5} className="sa-table-empty">
                     暂无数据
                   </td>
                 </tr>
@@ -410,8 +415,8 @@ export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
                         <span>{outcomeLabel(n.outcome)}</span>
                       </span>
                     </td>
-                    <td className="sa-report-summary" style={{ maxWidth: 420 }}>{n.summary}</td>
-                    <td style={{ textAlign: 'right' }}>
+                    <td className="sa-summary-cell">{n.summary}</td>
+                    <td className="sa-cell-actions">
                       <div className="sa-row-actions">
                         <RowAction label="打开会话" icon={<ExternalLink size={11} />} onClick={() => ctx.openScreen(`conversation:${n.conversationId}`)} />
                       </div>
@@ -429,14 +434,14 @@ export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
           <Network size={13} strokeWidth={1.75} />
           <span>事件订阅</span>
         </div>
-        <div className="jr-table-wrap">
-          <table className="jr-table">
+        <div className="sa-table-wrap">
+          <table className="sa-table">
             <thead>
               <tr>
                 <th>ThreadKey</th>
                 <th>Worker</th>
                 <th>创建时间</th>
-                <th style={{ textAlign: 'right' }}>操作</th>
+                <th className="sa-th-actions">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -448,7 +453,7 @@ export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
                 </tr>
               ) : subs.length === 0 ? (
                 <tr>
-                  <td colSpan={4} style={{ color: 'var(--fg-muted)' }}>
+                  <td colSpan={4} className="sa-table-empty">
                     暂无数据
                   </td>
                 </tr>
@@ -458,7 +463,7 @@ export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
                     <td>{s.threadKey}</td>
                     <td>#{s.workerConversationId}</td>
                     <td>{formatTime(s.createdAt)}</td>
-                    <td style={{ textAlign: 'right' }}>
+                    <td className="sa-cell-actions">
                       <div className="sa-row-actions">
                         <RowAction label="打开 Worker" icon={<ExternalLink size={11} />} onClick={() => ctx.openScreen(`conversation:${s.workerConversationId}`)} />
                       </div>
@@ -497,13 +502,13 @@ export function SuperAgentSettingsPanel(): ReactNode {
       {index === undefined ? (
         <DocLoading label="托管状态读取中..." />
       ) : (
-        <div className="jr-kv-list">
-          <div className="jr-kv-key">中枢会话</div>
-          <div className="jr-kv-val sa-kv-value">{routerId !== undefined ? `#${routerId}` : '未自举'}</div>
-          <div className="jr-kv-key">看门狗会话</div>
-          <div className="jr-kv-val sa-kv-value">{watchdogId !== undefined ? `#${watchdogId}` : '未自举'}</div>
-          <div className="jr-kv-key">活跃 Worker</div>
-          <div className="jr-kv-val sa-kv-value">{workers.length}</div>
+        <div className="sa-kv-list">
+          <div className="sa-kv-key">中枢会话</div>
+          <div className="sa-kv-val">{routerId !== undefined ? `#${routerId}` : '未自举'}</div>
+          <div className="sa-kv-key">看门狗会话</div>
+          <div className="sa-kv-val">{watchdogId !== undefined ? `#${watchdogId}` : '未自举'}</div>
+          <div className="sa-kv-key">活跃 Worker</div>
+          <div className="sa-kv-val">{workers.length}</div>
         </div>
       )}
     </div>

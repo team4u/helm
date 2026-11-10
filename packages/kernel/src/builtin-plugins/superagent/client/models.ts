@@ -5,7 +5,7 @@
  * 边界宽容解析：doc 尚未到达（undefined）或字段缺失时返回安全缺省，
  * 不虚构数据。
  */
-import type { TimelineRendererProps, ToolViewProps, ComposerScopeProps } from '@helm/protocol'
+import type { TimelineRendererProps, ToolViewProps } from '@helm/protocol'
 
 /** SuperAgentIndexDoc（public doc 'index'）。 */
 export interface SuperAgentIndexDoc {
@@ -124,17 +124,4 @@ export function outcomeTone(outcome: string | undefined): 'ok' | 'err' | 'warn' 
 export function outcomeLabel(outcome: string | undefined): string {
   if (outcome === undefined || outcome === '') return '未知'
   return outcome
-}
-
-/** Worker 状态徽章色调（会话状态 → 徽章 tone）。 */
-export function workerStatusTone(status: string | undefined): 'ok' | 'warn' | 'accent' | 'neutral' {
-  if (status === 'idle' || status === 'done') return 'ok'
-  if (status === 'working') return 'accent'
-  if (status === 'blocked') return 'warn'
-  return 'neutral'
-}
-
-/** ComposerScopeProps 的会话摘要最小面（避免直接依赖完整协议形状做展示）。 */
-export function conversationStatus(props: ComposerScopeProps): string | undefined {
-  return props.conversation?.status
 }

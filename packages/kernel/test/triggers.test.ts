@@ -727,14 +727,15 @@ test('triggers12: UI 贡献——管理视图与设置面板为 client 单轨', 
     for (const [surface, exportName] of Object.entries(expectedClientExports)) {
       const spec = ui.find((u) => u.surface === surface)!.spec as {
         json?: unknown
+        docs?: unknown
         client?: { module: string; export: string }
       }
       assert.equal(spec.json, undefined, `${surface} 不再声明 JSON Spec（单轨 client）`)
+      assert.equal(spec.docs, undefined, `${surface} 不再声明 docs（组件 usePluginDoc 自主订阅）`)
       assert.deepEqual(spec.client, { module: 'index.tsx', export: exportName }, `${surface} client 引用`)
     }
-    const screen = ui.find((u) => u.surface === 'screen')!.spec as { id: string; docs?: string[] }
+    const screen = ui.find((u) => u.surface === 'screen')!.spec as { id: string }
     assert.equal(screen.id, 'manager')
-    assert.deepEqual(screen.docs!.sort(), ['crons', 'webhooks'], '订阅真实公开 doc')
     const emoji = /\p{Extended_Pictographic}/u
     for (const item of ui) {
       assert.equal(emoji.test(JSON.stringify(item.spec)), false, `UI ${item.surface} 不得含 Emoji`)

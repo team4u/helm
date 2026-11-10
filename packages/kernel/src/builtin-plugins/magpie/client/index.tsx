@@ -40,27 +40,27 @@ function ActionError({ message }: { message: string }): ReactNode {
 /** 网关状态概览（KeyValueList 同构布局）。 */
 function StatusSummary({ status }: { status: MagpieStatusView }): ReactNode {
   return (
-    <div className="jr-kv-list">
-      <div className="jr-kv-key">网关地址</div>
-      <div className="jr-kv-val">{status.gatewayUrl || '—'}</div>
-      <div className="jr-kv-key">本机 loopback</div>
-      <div className="jr-kv-val">{boolLabel(status.local)}</div>
-      <div className="jr-kv-key">可达</div>
-      <div className="jr-kv-val">
+    <div className="mp-kv-list">
+      <div className="mp-kv-key">网关地址</div>
+      <div className="mp-kv-val">{status.gatewayUrl || '—'}</div>
+      <div className="mp-kv-key">本机 loopback</div>
+      <div className="mp-kv-val">{boolLabel(status.local)}</div>
+      <div className="mp-kv-key">可达</div>
+      <div className="mp-kv-val">
         <span className={`badge badge-${status.reachable ? 'ok' : 'warn'}`}>
           <span>{boolLabel(status.reachable)}</span>
         </span>
       </div>
-      <div className="jr-kv-key">{status.reachable ? '模型数' : '模型数（缓存）'}</div>
-      <div className="jr-kv-val">{status.modelCount}</div>
-      <div className="jr-kv-key">路由组数</div>
-      <div className="jr-kv-val">{status.groupCount}</div>
-      <div className="jr-kv-key">最近刷新</div>
-      <div className="jr-kv-val">{formatTime(status.lastRefreshedAt) || '—'}</div>
+      <div className="mp-kv-key">{status.reachable ? '模型数' : '模型数（缓存）'}</div>
+      <div className="mp-kv-val">{status.modelCount}</div>
+      <div className="mp-kv-key">路由组数</div>
+      <div className="mp-kv-val">{status.groupCount}</div>
+      <div className="mp-kv-key">最近刷新</div>
+      <div className="mp-kv-val">{formatTime(status.lastRefreshedAt) || '—'}</div>
       {status.lastError !== undefined ? (
         <>
-          <div className="jr-kv-key">最近错误</div>
-          <div className="jr-kv-val">{status.lastError}</div>
+          <div className="mp-kv-key">最近错误</div>
+          <div className="mp-kv-val">{status.lastError}</div>
         </>
       ) : null}
     </div>
@@ -70,8 +70,8 @@ function StatusSummary({ status }: { status: MagpieStatusView }): ReactNode {
 /** 诊断列表（不可用项；空时如实展示无诊断信息）。 */
 function DiagnosticsTable({ diagnostics }: { diagnostics: string[] }): ReactNode {
   return (
-    <div className="jr-table-wrap">
-      <table className="jr-table">
+    <div className="mp-table-wrap">
+      <table className="mp-table">
         <thead>
           <tr>
             <th>不可用项</th>
@@ -80,7 +80,7 @@ function DiagnosticsTable({ diagnostics }: { diagnostics: string[] }): ReactNode
         <tbody>
           {diagnostics.length === 0 ? (
             <tr>
-              <td style={{ color: 'var(--fg-muted)' }}>无诊断信息</td>
+              <td className="mp-table-empty">无诊断信息</td>
             </tr>
           ) : (
             diagnostics.map((message, i) => (
@@ -98,8 +98,8 @@ function DiagnosticsTable({ diagnostics }: { diagnostics: string[] }): ReactNode
 /** 配额表（剩余百分比按阈值着色）。 */
 function QuotaTable({ quotas }: { quotas: MagpieStatusView['quotas'] }): ReactNode {
   return (
-    <div className="jr-table-wrap">
-      <table className="jr-table">
+    <div className="mp-table-wrap">
+      <table className="mp-table">
         <thead>
           <tr>
             <th>Provider</th>
@@ -112,7 +112,7 @@ function QuotaTable({ quotas }: { quotas: MagpieStatusView['quotas'] }): ReactNo
         <tbody>
           {quotas.length === 0 ? (
             <tr>
-              <td colSpan={5} style={{ color: 'var(--fg-muted)' }}>
+              <td colSpan={5} className="mp-table-empty">
                 暂无配额数据
               </td>
             </tr>
@@ -140,8 +140,8 @@ function QuotaTable({ quotas }: { quotas: MagpieStatusView['quotas'] }): ReactNo
 /** 路由轨迹表。 */
 function RouteTable({ routes }: { routes: MagpieStatusView['routes'] }): ReactNode {
   return (
-    <div className="jr-table-wrap">
-      <table className="jr-table">
+    <div className="mp-table-wrap">
+      <table className="mp-table">
         <thead>
           <tr>
             <th>路由组</th>
@@ -154,7 +154,7 @@ function RouteTable({ routes }: { routes: MagpieStatusView['routes'] }): ReactNo
         <tbody>
           {routes.length === 0 ? (
             <tr>
-              <td colSpan={5} style={{ color: 'var(--fg-muted)' }}>
+              <td colSpan={5} className="mp-table-empty">
                 暂无路由记录
               </td>
             </tr>

@@ -578,7 +578,6 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
         id: 'magpie-panel',
         label: 'Magpie 网关',
         order: 25,
-        docs: [MAGPIE_STATUS_DOC],
         client: { module: 'index.tsx', export: 'MagpieSettingsPanel' },
       })
 
@@ -588,7 +587,6 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
         actionId: 'refresh',
         input: {},
         keywords: ['magpie', 'models', 'refresh'],
-        docs: [MAGPIE_STATUS_DOC],
       })
     },
   }

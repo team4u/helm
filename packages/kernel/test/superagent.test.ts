@@ -1073,11 +1073,8 @@ test('superagent16: UI 贡献——侧栏/分组/胶囊挂件/工具卡/时间�
     // composer 贡献 scope 限定中枢
     const pill = ui.find((u) => u.surface === 'composer.pill')!.spec as { scope?: { profileIds: string[] } }
     assert.deepEqual(pill.scope!.profileIds, ['superagent'])
-    // screen 目标可寻址 + docs 订阅真实公开 doc
-    const screen = ui.find((u) => u.surface === 'screen')!.spec as { id: string; docs?: string[] }
-    assert.equal(screen.id, 'recall-graph')
-    assert.deepEqual(screen.docs!.sort(), ['recall-graph', 'subscriptions'])
-    // 六个视图型扩展点全部单轨 client（不再声明 json；client 引用真实导出）
+    // 六个视图型扩展点全部单轨 client（不再声明 json/docs；client 引用真实导出；
+    // doc 订阅由组件内 usePluginDoc 自主声明）
     const expectedClientExports: Record<string, string> = {
       'composer.widget': 'SuperAgentComposerWidget',
       'composer.pill': 'SuperAgentRouterModePill',
@@ -1089,9 +1086,11 @@ test('superagent16: UI 贡献——侧栏/分组/胶囊挂件/工具卡/时间�
     for (const [surface, exportName] of Object.entries(expectedClientExports)) {
       const spec = ui.find((u) => u.surface === surface)!.spec as {
         json?: unknown
+        docs?: unknown
         client?: { module: string; export: string }
       }
       assert.equal(spec.json, undefined, `${surface} 不再声明 JSON Spec（单轨 client）`)
+      assert.equal(spec.docs, undefined, `${surface} 不再声明 docs（组件 usePluginDoc 自主订阅）`)
       assert.deepEqual(spec.client, { module: 'index.tsx', export: exportName }, `${surface} client 引用`)
     }
     // 无 Emoji（设计规范）

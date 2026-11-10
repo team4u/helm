@@ -83,14 +83,12 @@ export function createTriggersPlugin(deps: TriggersDependencies): PluginDefiniti
         id: TRIGGERS_SCREEN_ID,
         label: '触发器管理',
         icon: 'clock',
-        docs: ['crons', 'webhooks'],
         client: { module: 'index.tsx', export: 'TriggersManagerScreen' },
       })
       ctx.ui.settingsPanel({
         id: 'triggers-settings',
         label: '触发器',
         order: 40,
-        docs: ['crons', 'webhooks'],
         client: { module: 'index.tsx', export: 'TriggersSettingsPanel' },
       })
     },

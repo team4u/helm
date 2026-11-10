@@ -215,8 +215,16 @@ test('composerPill：开关渲染当前值并触发 set_router_mode 动作', { t
   }
 })
 
-test('toolView：派工卡展示 Worker 表并支持归档动作', { timeout: 60_000 }, async () => {
+test('toolView：派工卡展示 Worker 表并支持归档；在途时统一禁用本卡全部行按钮', { timeout: 60_000 }, async () => {
   const spy = makeSpyCtx()
+  let release: (() => void) | undefined
+  spy.callAction = async (actionId, input) => {
+    spy.actionCalls.push({ actionId, input })
+    await new Promise<void>((resolve) => {
+      release = resolve
+    })
+    return {}
+  }
   const { host, unmount } = await mount(
     spy,
     e(components.SuperAgentDispatchToolView, {
@@ -240,6 +248,20 @@ test('toolView：派工卡展示 Worker 表并支持归档动作', { timeout: 60
       [{ actionId: 'archive_worker', input: { workerConversationId: 11 } }],
       '归档触发 archive_worker',
     )
+    // 在途期间：本卡全部行按钮（查看 + 归档）统一 disabled
+    const rowButtons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(
+      (b) => b.textContent?.includes('查看') || b.textContent?.includes('归档'),
+    )
+    assert.equal(rowButtons.length, 4, '2 Worker × (查看+归档) = 4 个行按钮')
+    for (const b of rowButtons) {
+      assert.equal(b.disabled, true, `在途时统一禁用：${b.textContent}`)
+    }
+    await act(async () => {
+      release?.()
+    })
+    for (const b of rowButtons) {
+      assert.equal(b.disabled, false, `完成后恢复可点：${b.textContent}`)
+    }
   } finally {
     unmount()
   }

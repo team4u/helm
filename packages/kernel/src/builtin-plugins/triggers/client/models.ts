@@ -48,10 +48,3 @@ export function formatTime(ms: number | undefined): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
-
-/** 投递目标描述（显式会话 / Profile / 缺省路由）。 */
-export function targetLabel(job: Pick<CronJobRow, 'targetConversationId' | 'targetProfileId'>): string {
-  if (job.targetConversationId !== undefined) return `会话 #${job.targetConversationId}`
-  if (job.targetProfileId !== undefined && job.targetProfileId !== '') return job.targetProfileId
-  return '缺省路由'
-}

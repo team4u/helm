@@ -124,8 +124,16 @@ test('manager screen：cron 表渲染行、状态徽章与错误列', { timeout:
   }
 })
 
-test('manager screen：cron 行动作立即触发 / 删除', { timeout: 60_000 }, async () => {
+test('manager screen：cron 行动作立即触发 / 删除；在途时统一禁用全部行按钮', { timeout: 60_000 }, async () => {
   const spy = makeSpyCtx()
+  let release: (() => void) | undefined
+  spy.callAction = async (actionId, input) => {
+    spy.actionCalls.push({ actionId, input })
+    await new Promise<void>((resolve) => {
+      release = resolve
+    })
+    return {}
+  }
   const { host, unmount } = await mount(
     spy,
     e(components.TriggersManagerScreen, { pluginId: 'builtin:triggers', screenId: 'manager', isSplit: false, params: {}, setParams: () => {} }),
@@ -137,16 +145,36 @@ test('manager screen：cron 行动作立即触发 / 删除', { timeout: 60_000 }
       trigger!.click()
     })
     assert.deepEqual(spy.actionCalls[0], { actionId: 'cron_trigger', input: { id: 'daily-report' } }, '触发 cron_trigger')
+    // 在途期间：同一守卫的全部行按钮统一 disabled，不出现「看似可点实际无动作」
+    const allRowButtons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(
+      (b) => b.textContent?.includes('立即触发') || b.textContent?.includes('删除'),
+    )
+    assert.equal(allRowButtons.length, 5, 'cron 2行×2 + webhook 1行×1 = 5 个行按钮')
+    for (const b of allRowButtons) {
+      assert.equal(b.disabled, true, `在途时行按钮统一禁用：${b.textContent}`)
+    }
+    // 恢复后重新可点
+    await act(async () => {
+      release?.()
+    })
+    for (const b of allRowButtons) {
+      assert.equal(b.disabled, false, `完成后恢复可点：${b.textContent}`)
+    }
     const del = [...host.querySelectorAll<HTMLButtonElement>('button')].filter((b) => b.textContent?.includes('删除'))
-    assert.equal(del.length, 3, 'cron 2 行删除 + webhook 1 行删除')
     await act(async () => {
       del[0]!.click()
     })
     assert.deepEqual(spy.actionCalls[1], { actionId: 'cron_delete', input: { id: 'daily-report' } }, '触发 cron_delete')
     await act(async () => {
+      release?.()
+    })
+    await act(async () => {
       del[2]!.click()
     })
     assert.deepEqual(spy.actionCalls[2], { actionId: 'webhook_delete', input: { id: 'ci' } }, '触发 webhook_delete')
+    await act(async () => {
+      release?.()
+    })
   } finally {
     unmount()
   }

@@ -1476,7 +1476,6 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         id: 'superagent-router-status',
         title: '中枢态势',
         scope: ROUTER_TOOL_SCOPE,
-        docs: [INDEX_DOC_NAME, SUBSCRIPTIONS_DOC_NAME],
         client: { module: 'index.tsx', export: 'SuperAgentComposerWidget' },
       })
       ctx.ui.composerPill({
@@ -1484,14 +1483,12 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         label: '中枢路由',
         title: '中枢路由收敛模式',
         scope: ROUTER_TOOL_SCOPE,
-        docs: [ROUTING_DOC_NAME],
         client: { module: 'index.tsx', export: 'SuperAgentRouterModePill' },
       })
       ctx.ui.toolView({
         id: 'superagent-dispatch',
         title: '派工状态',
         toolNames: ['dispatch_worker'],
-        docs: [INDEX_DOC_NAME],
         client: { module: 'index.tsx', export: 'SuperAgentDispatchToolView' },
       })
       ctx.ui.timelineRenderer({
@@ -1504,14 +1501,12 @@ export function createSuperAgentPlugin(deps: SuperAgentDependencies): PluginDefi
         id: RECALL_DOC_NAME,
         label: '记忆与订阅图谱',
         icon: 'git-fork',
-        docs: [RECALL_DOC_NAME, SUBSCRIPTIONS_DOC_NAME],
         client: { module: 'index.tsx', export: 'SuperAgentRecallScreen' },
       })
       ctx.ui.settingsPanel({
         id: 'superagent-settings',
         label: 'SuperAgent 中枢',
         order: 30,
-        docs: [INDEX_DOC_NAME],
         client: { module: 'index.tsx', export: 'SuperAgentSettingsPanel' },
       })
     },
