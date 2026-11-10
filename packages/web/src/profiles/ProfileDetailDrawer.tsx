@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { Profile } from './profile-center-model.js'
 import {
+  buildProfileModelOptions,
   getProfileIcon,
   isSystemProfile,
   profileIdValid,
@@ -187,16 +188,10 @@ export function ProfileDetailDrawer({
     }
   }
 
-  // 模型下拉选项列表
+  // 模型下拉选项列表（过滤为已配置模型）
   const modelOptions = useMemo<SelectOption<string>[]>(() => {
-    const list: SelectOption<string>[] = [{ value: '', label: '跟随系统默认' }]
-    const registered = store.models ?? []
-    for (const m of registered) {
-      const label = m.label ? `${m.label} (${m.id})` : m.id
-      list.push({ value: m.id, label })
-    }
-    return list
-  }, [store.models])
+    return buildProfileModelOptions(store.models ?? [], form.model)
+  }, [store.models, form.model])
 
   // 可用技能列表
   const availableSkills = store.skills ?? []
