@@ -12,12 +12,12 @@
  * - enable 提交点的跨插件唯一性终检（profile.runtime kind 与 commandPalette slash），
  *   由 PluginHost 在启用提交块调用；默认停用的探测注册不占用全局名字。
  */
-import { HelmError, type PluginUiContribution } from '@helm/protocol';
+import { HelmError, RESERVED_SLASH_COMMANDS, type PluginUiContribution } from '@helm/protocol';
 import { assertModuleRefShape, compilePluginClientModule, type ClientCompileResult } from './client-compiler.js';
 import { assertConversationScope, isPlainObject, jsonClone } from './shared.js';
 
 /** 宿主保留的命令斜杠触发词（skill: 前缀整体保留），插件不得占用。 */
-const RESERVED_COMMAND_SLASH = new Set(['new', 'clear', 'compact']);
+const RESERVED_COMMAND_SLASH: ReadonlySet<string> = new Set(RESERVED_SLASH_COMMANDS);
 
 /** 微动作三类 surface：actionId / client / json 三轨至少提供其一。 */
 const MICRO_ACTION_SURFACES = new Set([

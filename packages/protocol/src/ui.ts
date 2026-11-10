@@ -336,3 +336,69 @@ export interface PluginClientModuleInfo {
   /** 编译产物内容 hash（含全部本地依赖；源变更副重新编译）。 */
   contentHash: string
 }
+
+/** 声明式 @json-render 轨道支持的全部原语名称唯一真源。 */
+export const SPEC_PRIMITIVE_NAMES = [
+  'Stack',
+  'Card',
+  'Text',
+  'Badge',
+  'Markdown',
+  'MetricGrid',
+  'MetricCard',
+  'KeyValueList',
+  'Callout',
+  'Steps',
+  'BarList',
+  'Table',
+  'Accordion',
+  'TextInput',
+  'Select',
+  'Switch',
+  'CheckboxGroup',
+  'Button',
+  'ActionBar',
+  'Tabs',
+  'Slot',
+] as const
+
+export type SpecPrimitiveName = (typeof SPEC_PRIMITIVE_NAMES)[number]
+
+/** ctx.ui 全部注册方法名唯一真源（与 PluginUiRegistry 接口双向锁定）。 */
+export const PLUGIN_UI_METHOD_NAMES = [
+  'sidebarItem',
+  'sidebarSection',
+  'screen',
+  'timelineRenderer',
+  'toolView',
+  'composerPill',
+  'composerWidget',
+  'workbenchPanel',
+  'command',
+  'settingsPanel',
+  'profileRuntime',
+  'conversationHeaderAction',
+  'conversationRowAction',
+  'timelineEntryAction',
+  'slot',
+] as const satisfies readonly (keyof PluginUiRegistry)[]
+
+type _AssertAllPluginUiMethodsListed =
+  Exclude<keyof PluginUiRegistry, (typeof PLUGIN_UI_METHOD_NAMES)[number]> extends never
+    ? true
+    : never
+const _assertAllPluginUiMethodsListed: _AssertAllPluginUiMethodsListed = true
+void _assertAllPluginUiMethodsListed
+
+/** 宿主保留的会话内斜杠命令触发词（插件 command.slash 禁止占用）。 */
+export const RESERVED_SLASH_COMMANDS = ['new', 'clear', 'compact'] as const
+
+/** @helm/plugin-client 面向插件 client.tsx 导出的运行时符号唯一真源。 */
+export const PLUGIN_CLIENT_SHARED_EXPORTS = [
+  'usePluginContext',
+  'usePluginDoc',
+  'usePluginSessionDoc',
+  'useToolActivity',
+  'PluginSlot',
+] as const
+

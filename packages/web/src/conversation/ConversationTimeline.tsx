@@ -31,7 +31,8 @@ import {
 } from './timeline-model.js'
 import { matchTimelineEntryActions, timelineEntryActionContextOf } from './action-model.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
-import { formatBytes, formatDurationMs } from '../lib/format.js'
+import { Tooltip } from '../ui/Tooltip.js'
+import { formatBytes, formatDurationMs, formatFullTimestamp, formatMessageTime } from '../lib/format.js'
 
 export interface ConversationTimelineProps {
   conversation: ConversationSummary
@@ -172,6 +173,10 @@ function HumanMessage({
         )
       : []
 
+  const humanTime = formatMessageTime(item.createdAt)
+  const humanFullTime = formatFullTimestamp(item.createdAt)
+  const hasHumanTime = item.createdAt !== undefined && humanTime !== ''
+
   const editRequest = async (): Promise<void> => {
     // 仅人类输入可原地编辑：agent 汇报 / trigger 注入不是人类编辑对象（铅笔已收起，双重防御）
     if (item.origin !== 'human') return
@@ -269,44 +274,51 @@ function HumanMessage({
       {item.attachments !== undefined && item.attachments.length > 0 ? (
         <AttachmentChips attachments={item.attachments} conversationId={conversation.id} />
       ) : null}
-      <span className="msg-hover-bar">
-        {anchorEntry !== undefined
-          ? entryActions.map((action) => (
-              <PluginMicroAction
-                key={`entry:${action.pluginId}/${action.spec.id}`}
-                action={action}
-                variant="hover"
-                conversationId={conversation.id}
-                entryId={anchorEntry.id}
-                slotProps={{ conversationId: conversation.id, entry: anchorEntry }}
-              />
-            ))
-          : null}
-        <CopyButton text={item.text} />
-        {item.origin === 'human' ? (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            title={item.queuedMode !== undefined ? '撤回排队并编辑' : '编辑并重发'}
-            aria-label={item.queuedMode !== undefined ? '撤回排队并编辑' : '编辑并重发'}
-            disabled={withdrawing}
-            onClick={() => void editRequest()}
-          >
-            <HelmIcon name={withdrawing ? 'loader' : 'edit'} size={12} className={withdrawing ? 'spin-slow' : undefined} />
-          </button>
+      <div className="msg-human-footer">
+        <span className="msg-hover-bar">
+          {anchorEntry !== undefined
+            ? entryActions.map((action) => (
+                <PluginMicroAction
+                  key={`entry:${action.pluginId}/${action.spec.id}`}
+                  action={action}
+                  variant="hover"
+                  conversationId={conversation.id}
+                  entryId={anchorEntry.id}
+                  slotProps={{ conversationId: conversation.id, entry: anchorEntry }}
+                />
+              ))
+            : null}
+          <CopyButton text={item.text} />
+          {item.origin === 'human' ? (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              title={item.queuedMode !== undefined ? '撤回排队并编辑' : '编辑并重发'}
+              aria-label={item.queuedMode !== undefined ? '撤回排队并编辑' : '编辑并重发'}
+              disabled={withdrawing}
+              onClick={() => void editRequest()}
+            >
+              <HelmIcon name={withdrawing ? 'loader' : 'edit'} size={12} className={withdrawing ? 'spin-slow' : undefined} />
+            </button>
+          ) : null}
+          {item.queuedMode === undefined ? (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              title="从此消息分叉新会话"
+              disabled={forking}
+              onClick={() => void forkFromHere()}
+            >
+              <HelmIcon name={forking ? 'loader' : 'git-fork'} size={12} />
+            </button>
+          ) : null}
+        </span>
+        {hasHumanTime ? (
+          <Tooltip content={`发送于 ${humanFullTime}`}>
+            <span className="msg-time-meta" title={`发送于 ${humanFullTime}`}>{humanTime}</span>
+          </Tooltip>
         ) : null}
-        {item.queuedMode === undefined ? (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            title="从此消息分叉新会话"
-            disabled={forking}
-            onClick={() => void forkFromHere()}
-          >
-            <HelmIcon name={forking ? 'loader' : 'git-fork'} size={12} />
-          </button>
-        ) : null}
-      </span>
+      </div>
     </div>
   )
 }
@@ -811,6 +823,22 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
         )
       : []
 
+  const timeMs = turn.settledAt ?? turn.startedAt
+  const displayTime = formatMessageTime(timeMs)
+  const durationText = turn.durationMs !== undefined && turn.durationMs > 0 ? formatDurationMs(turn.durationMs) : ''
+  const hasTimeInfo = !isBusy && (displayTime !== '' || durationText !== '')
+  const fullTimestamp = formatFullTimestamp(timeMs)
+  let tooltipText = ''
+  if (fullTimestamp !== '' && durationText !== '') {
+    tooltipText = `完成于 ${fullTimestamp} · 耗时 ${durationText}`
+  } else if (fullTimestamp !== '') {
+    tooltipText = `完成于 ${fullTimestamp}`
+  } else if (durationText !== '') {
+    tooltipText = `耗时 ${durationText}`
+  }
+
+  const showHoverBar = !isBusy && (lastText !== '' || turn.entryIds.length > 0)
+
   return (
     <div className="msg-ai-block" tabIndex={0}>
       {turn.segments.map((seg) => {
@@ -844,31 +872,44 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
           正在等待响应…
         </span>
       ) : null}
-      {!isBusy && (lastText !== '' || turn.entryIds.length > 0) ? (
-        <span className="msg-hover-bar">
-          {anchorEntry !== undefined
-            ? entryActions.map((action) => (
-                <PluginMicroAction
-                  key={`entry:${action.pluginId}/${action.spec.id}`}
-                  action={action}
-                  variant="hover"
-                  conversationId={conversation.id}
-                  entryId={anchorEntry.id}
-                  slotProps={{ conversationId: conversation.id, entry: anchorEntry }}
-                />
-              ))
-            : null}
-          {lastText !== '' ? <CopyButton text={lastText} /> : null}
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            title="从此处分叉新会话"
-            disabled={forking || turn.entryIds.length === 0}
-            onClick={() => void forkFromHere()}
-          >
-            <HelmIcon name={forking ? 'loader' : 'git-fork'} size={12} />
-          </button>
-        </span>
+      {hasTimeInfo || showHoverBar ? (
+        <div className="msg-ai-footer">
+          {hasTimeInfo ? (
+            <Tooltip content={tooltipText}>
+              <span className="msg-time-meta" title={tooltipText}>
+                {displayTime !== '' ? <span>{displayTime}</span> : null}
+                {displayTime !== '' && durationText !== '' ? <span className="msg-time-sep">·</span> : null}
+                {durationText !== '' ? <span>耗时 {durationText}</span> : null}
+              </span>
+            </Tooltip>
+          ) : null}
+          {showHoverBar ? (
+            <span className="msg-hover-bar">
+              {anchorEntry !== undefined
+                ? entryActions.map((action) => (
+                    <PluginMicroAction
+                      key={`entry:${action.pluginId}/${action.spec.id}`}
+                      action={action}
+                      variant="hover"
+                      conversationId={conversation.id}
+                      entryId={anchorEntry.id}
+                      slotProps={{ conversationId: conversation.id, entry: anchorEntry }}
+                    />
+                  ))
+                : null}
+              {lastText !== '' ? <CopyButton text={lastText} /> : null}
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                title="从此处分叉新会话"
+                disabled={forking || turn.entryIds.length === 0}
+                onClick={() => void forkFromHere()}
+              >
+                <HelmIcon name={forking ? 'loader' : 'git-fork'} size={12} />
+              </button>
+            </span>
+          ) : null}
+        </div>
       ) : null}
     </div>
   )

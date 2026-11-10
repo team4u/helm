@@ -82,9 +82,13 @@ pnpm build && pnpm typecheck && pnpm test
 
 ## 测试与前端规范
 
+- **Web 前端设计系统与开发约定（重要）**：编写、重构 Web 界面、新增主舞台/视图/弹窗/抽屉、排查移动端样式或字号问题时，**必须先阅读并遵守 [Web 前端设计系统与开发约定](docs/conventions/web-frontend.md)**。
+  - **视图形态分级**：轻量交互用模态；海量项、多维检索、管理与市场类（插件/技能/模板）**必须升格为全屏一级视图（主舞台卡片网格 + 右侧 520px 详情抽屉）**，严禁把海量扩展内容塞入居中弹窗。
+  - **Radix UI 唯一交互原语底座**：凡涉及浮层、对话框、下拉、标签页、提示等交互组件，**一律基于 `packages/web/src/ui/` 下的 Radix Primitives 封装**（`Dialog` / `AlertDialog` / `Select` / `DropdownMenu` / `Popover` / `Tabs` / `Tooltip`）；全仓严禁使用原生 `<select>`，严禁手写无 WAI-ARIA/Focus Trap 的简陋浮层；表单与布局严格使用 `.form-grid`、`.section-flat`、`.list-item-btn` 原语类，严禁大面积内联样式。
+  - **移动端与自适应字号规范**：保持紧凑克制，正文 13/14px，移动端（≤680px）与分屏下严禁输入框字号突兀放大；移动端抽屉与弹窗自适应 100% 宽。
 - **UI 极简无 Emoji 规范（重要）**：Web 界面与所有内置/外置插件 UI 遵循极简克制风格，**严禁在界面文案、左栏导航项、分组标题、按钮、状态徽章或卡片中使用任何 Emoji 表情图标**；图标统一使用 `lucide-react` 线性矢量图标或纯文本排版。
 - **单测防死锁**：单测显式声明 `{ timeout: 60_000 }`（runner 为 `tsx --test`）；测试命令必须加总超时（如 `timeout 50s ...`），保留完整日志，不用过滤管道隐藏失败。
-- **前端保 Fast Refresh**：`.tsx` 组件文件**只导出组件**；纯函数/常量放独立模块。
+- **前端保 Fast Refresh**：`.tsx` 组件文件**只导出组件与 TS 类型**；纯函数/常量放独立模块。
 
 ## Web 导航与 URL Hash（重要）
 

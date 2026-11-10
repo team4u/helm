@@ -6,6 +6,12 @@
  * Layer 2（references/*.md）：生成式 UI、确定性工作流、技能与插件自举开发
  * 三个专题手册，模型经 load_skill({ skillId, path }) 按需读取，正文不常驻。
  */
+import {
+  SPEC_PRIMITIVE_NAMES,
+  PLUGIN_UI_METHOD_NAMES,
+  RESERVED_SLASH_COMMANDS,
+  PLUGIN_HOOK_NAMES,
+} from '@helm/protocol'
 import type { BuiltinSkillAsset } from '../../services/index.js'
 
 /** 托管本技能资产的插件 ID（SKILL.md frontmatter managedByPlugin 值）。 */
@@ -92,7 +98,7 @@ export const HELM_CLI_SKILL_MD = [
   '',
   '- 渲染交互式卡片/表单/表格（```ui 或 ```json-render 代码块）前：',
   '  `load_skill({ skillId: "helm-cli", path: "references/generative-ui.md" })`',
-  '  （21 个原语真实 Props、双形态、三大声明式动作指令与适用边界）。',
+  `  （${SPEC_PRIMITIVE_NAMES.length} 个原语真实 Props、双形态、三大声明式动作指令与适用边界）。`,
   '- 编排多代理/多阶段任务（subagent、SubagentWorkflow 确定性脚本）或与 Herdr 终端 Agent、SuperAgent Worker 协作前：',
   '  `load_skill({ skillId: "helm-cli", path: "references/workflows-and-agents.md" })`。',
   '- 自举编写新技能（~/.helm/skills/<id>/SKILL.md）或开发外置插件（~/.helm/plugins/<id>/）前：',
@@ -124,7 +130,7 @@ export const HELM_CLI_GENERATIVE_UI_MD = [
   '- 整个属性值恰好为单个 `{...}` 表达式时保持原始 JS 类型（number/boolean/array/object）；嵌在长文本中则为字符串插值。',
   '- `{$row.<field>}` 仅在 Table 的 rowActions 内可用；`{$value}` 在表单组件的 action 内可用（提交值）。',
   '',
-  '## 全部 21 个原语真实 Props 契约',
+  `## 全部 ${SPEC_PRIMITIVE_NAMES.length} 个原语真实 Props 契约`,
   '',
   '### 布局与展示（13 个）',
   '',
@@ -340,10 +346,10 @@ export const HELM_CLI_SKILL_AND_PLUGIN_DEV_MD = [
   '```',
   '',
   '扩展入口：',
-  '- 后端 Hook：trigger、input、before_turn、tool_call/tool_result、agent_spawn、turn_settled、watchdog_tick；各 Hook 允许的 continue/transform/handled/block 结果以 protocol 契约为准。',
-  '- 前端 15 个注册方法：基础 10 个（sidebar.item/section、screen、timeline.renderer、tool.view、composer.pill/widget、workbench.panel、command、settings.panel）+ 三类微操作（conversationHeaderAction/conversationRowAction/timelineEntryAction：绑 actionId 后宿主代管按钮/pending/失败提示，scope 按标签过滤会话，kinds/roles 过滤消息条目；宿主注入的真实 conversationId/entryId 强制覆盖 input 同名字段）+ profileRuntime（Profile 外部运行时元数据，宿主通用表单渲染）+ slot（向 `owner/插槽名` 注入内容供其他插件 `<PluginSlot />` 或声明式 `Slot` 原语消费）。',
+  `- 后端 Hook（${PLUGIN_HOOK_NAMES.length} 个）：${PLUGIN_HOOK_NAMES.join('、')}；各 Hook 允许的 continue/transform/handled/block 结果以 protocol 契约为准。`,
+  `- 前端 ${PLUGIN_UI_METHOD_NAMES.length} 个 ctx.ui 注册方法：基础 10 个（sidebarItem/sidebarSection、screen、timelineRenderer、toolView、composerPill/composerWidget、workbenchPanel、command、settingsPanel）+ 三类微操作（conversationHeaderAction/conversationRowAction/timelineEntryAction：绑 actionId 后宿主代管按钮/pending/失败提示，scope 按标签过滤会话，kinds/roles 过滤消息条目；宿主注入的真实 conversationId/entryId 强制覆盖 input 同名字段）+ profileRuntime（Profile 外部运行时元数据，宿主通用表单渲染）+ slot（向 \`owner/插槽名\` 注入内容供其他插件 \`<PluginSlot />\` 或声明式 \`Slot\` 原语消费）。`,
   '- timelineRenderer/toolView 支持 priority（降序裁决，缺省 0；高优先级插件停用后剩余候选自动接管）；同一插件可声明多块 settings.panel（order 排序）。',
-  '- command 的 slash（不含 / 的触发词）同时派生输入框 `/` 补全：保留词 new/clear/compact 与 skill: 前缀禁占，跨启用插件不得重名，声明 slash 必须绑定本插件 actionId（跨插件动作用 actionPluginId）。',
+  `- command 的 slash（不含 / 的触发词）同时派生输入框 \`/\` 补全：保留词 ${RESERVED_SLASH_COMMANDS.join('/')} 与 skill: 前缀禁占，跨启用插件不得重名，声明 slash 必须绑定本插件 actionId（跨插件动作用 actionPluginId）。`,
   '- screen 组件收到 params/setParams：URL Hash 中主屏 `sp.<key>`、分屏 `ssp.<key>` 命名空间隔离，同屏双开互不串扰；setParams 默认 replace，`{push:true}` 入栈；组件不得自建路由或直接操作 history。',
   '- composer.pill/widget 收到受控句柄 composer（draft/attachments/sending、setDraft/insertText/submit；submit() 失败 reject 且保留草稿）。',
   '- `ctx.action({ id, description, inputSchema, outputSchema, idempotent?, handler })` 将 Schema 动作统一映射到 HTTP、CLI、Workflow action()、Web；`idempotent: true` 标记只读/幂等动作，失败或中断时允许工作流断链重跑；模型可经 run_action 调用，设置 exposeAsTool: true 才直接列为工具。',
@@ -357,7 +363,7 @@ export const HELM_CLI_SKILL_AND_PLUGIN_DEV_MD = [
   '- 启用：`helm plugins enable my-plugin`；修改入口代码后需重启 Hub 重新导入。停用/启用仅重建已有定义的生命周期。停用或卸载遇在途任务会显式拒绝（409 plugin_has_live_tasks）。',
   '- 不要在自己的回合内重启 Hub；先完成结果交付，再安排进程重启。',
   '- 前端 React 组件（client.tsx）经 esbuild 动态编译，可 import react / react-dom / lucide-react / @helm/plugin-client（宿主共享实例，不打包第二份 React）。',
-  '- 共享 Hook：`usePluginDoc(name, pluginId?)` 响应式订阅公开全局文档（可跨插件寻址）；`usePluginSessionDoc(name, {conversationId?, pluginId?}?)` 按当前会话订阅公开会话文档（多组件共享订阅，引用归零退订，重连首帧恢复）；`<PluginSlot name>` 声明子插槽；`usePluginContext()` 提供 `callAction(actionId, input, {pluginId?, conversationId?})`（可跨插件）、`submitInput(text, {conversationId?, whenBusy?})`、openScreen/openSplitScreen/openConversationDrawer/openArtifact/openWorkbench、notify 等。',
+  '- 共享 Hook：useToolActivity(callId, active) 报告所在时间线回合的工具后台活动；usePluginDoc(name, pluginId?) 响应式订阅公开全局文档（可跨插件寻址）；usePluginSessionDoc(name, {conversationId?, pluginId?}?) 按当前会话订阅公开会话文档（多组件共享订阅，引用归零退订，重连首帧恢复）；<PluginSlot name> 声明子插槽；usePluginContext() 提供 callAction(actionId, input, {pluginId?, conversationId?})（可跨插件）、submitInput(text, {conversationId?, whenBusy?})、openScreen/openSplitScreen/openConversationDrawer/openArtifact/openWorkbench、notify 等。',
   '- 插件视图样式写在 clientRoot 内本地 .css（import 引入，esbuild 合并为保留导出 __helmClientCss，宿主托管注入与回收），不得写宿主 styles.css。',
   '- UI 文案严禁 Emoji；图标用 lucide 图标名。',
   '- 完整扩展点与双轨机制见仓库内 docs/architecture/extension-points.md 与 docs/plugins/plugin-development.md。',
