@@ -357,14 +357,18 @@ export function conversationStatusDotClass(
   }
 }
 
-/** 会话状态悬浮提示文案。 */
+/** 会话状态悬浮提示文案；error 附带当前失败诊断摘要（lastError）。 */
 export function conversationStatusTooltip(
   status: ConversationSummary['status'],
   doing?: string,
+  lastError?: string,
 ): string {
   const base = conversationStatusLabel(status)
   if (status === 'working' && doing?.trim()) {
     return `${base}: ${doing.trim()}`
+  }
+  if (status === 'error' && lastError?.trim()) {
+    return `${base}: ${lastError.trim()}`
   }
   return base
 }

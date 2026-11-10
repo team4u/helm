@@ -21,6 +21,7 @@ import {
   collectSiblingCalls,
   filterRewoundEntries,
   isAssistantTurnBusy,
+  lastEditableHumanInput,
   toolSummaryText,
   type AssistantTurn,
   type DividerItem,
@@ -921,6 +922,50 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
 }
 
 // ---------------------------------------------------------------------------
+// 回合失败诊断（当前未清除失败的内联展示；随下一回合开始自动消失）
+// ---------------------------------------------------------------------------
+
+/** 失败回合内联诊断块：内容来自 ConversationSummary.lastError（同一权威状态源），
+ * 不新增持久化 timeline item；lastError 空缺时只给明确通用文案，绝不编造详情。 */
+function TurnErrorNotice({
+  conversation,
+  detailEntries,
+  onRequestEdit,
+}: {
+  conversation: ConversationSummary
+  detailEntries: ReadonlyArray<ConversationEntry>
+  onRequestEdit: (target: EditRequestTarget) => void
+}) {
+  // 最近一条可编辑的人类输入：复用与 Composer ↑ 相同的安全解析（校验 entryId、
+  // 不跨 reset 边界、复用已有 attachments）；无法可靠定位则不提供快捷操作，
+  // 绝不误编辑旧消息。
+  const editTarget = useMemo(() => lastEditableHumanInput(detailEntries), [detailEntries])
+  return (
+    <div className="jr-callout jr-callout-err" role="alert" aria-label="本回合失败">
+      <HelmIcon name="alert-triangle" size={12} />
+      <span className="callout-text">
+        本回合失败：{conversation.lastError?.trim() || '模型或服务请求未成功，未产生回答。'}
+        {editTarget !== undefined ? (
+          <>
+            {' '}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              title="编辑并重发最近一条消息"
+              aria-label="编辑并重发最近一条消息"
+              onClick={() => onRequestEdit(editTarget)}
+            >
+              <HelmIcon name="edit" size={12} />
+              编辑并重发
+            </button>
+          </>
+        ) : null}
+      </span>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // 主时间线
 // ---------------------------------------------------------------------------
 
@@ -1170,6 +1215,9 @@ export function ConversationTimeline({
         {resolvedAsks.map(({ ask, status }) => (
           <ResolvedAskRow key={`ask:${ask.id}`} ask={ask} status={status} />
         ))}
+        {conversation.status === 'error' ? (
+          <TurnErrorNotice conversation={conversation} detailEntries={detailEntries} onRequestEdit={onRequestEdit} />
+        ) : null}
       </div>
       <div ref={bottomRef} className="timeline-scroll-anchor" />
     </div>

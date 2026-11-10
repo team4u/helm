@@ -142,11 +142,21 @@ export class ConversationTracker {
   /** 会话 -> 最近一次已推送摘要的语义指纹（status|doing|pendingAsk；相同不重发）。 */
   private readonly lastSummaryKey = new Map<number, string>()
 
-  constructor(options: { harness: Harness; store: HelmStore; events: TrackerEvents }) {
+  constructor(options: {
+    harness: Harness
+    store: HelmStore
+    events: TrackerEvents
+    /** 错误摘要对外脱敏（与运行时 SecretStash 同源）；缺省恒等（仅测试环境）。 */
+    redactError?: (text: string) => string
+  }) {
     this.harness = options.harness
     this.store = options.store
     this.events = options.events
+    this.redactError = options.redactError ?? ((text) => text)
   }
+
+  /** 错误诊断摘要脱敏（Runtime 注入 stashService.redact；防 provider 错误回显已登记秘密）。 */
+  private readonly redactError: (text: string) => string
 
   /** 每次观察独立令牌；停观即删除，迟到异步结果不得复活状态。 */
   private readonly observeGenerations = new Map<number, symbol>()
@@ -871,7 +881,16 @@ export class ConversationTracker {
           updatedAt: Date.now(),
         }
         this.store.upsertConv(updated)
-        const settledSummary = summaryOf(updated, unread ? 'done' : statusNow(updated, outcome), 0)
+        const settledStatus = unread ? 'done' : statusNow(updated, outcome)
+        // 失败终态的诊断摘要与 summaryOf 同源：emitSettled 不经 tracker 派生路径，
+        // 必须在此同样携带 lastError（否则首个 conversation.upsert 事件漏掉原因）。
+        const settledSummary = summaryOf(
+          updated,
+          settledStatus,
+          0,
+          undefined,
+          settledStatus === 'error' ? lastErrorOf(this.liveViews.get(conversationId), this.redactError) : undefined,
+        )
         // 终态摘要登记语义指纹：后续空闲快照不重复推送同一终态。
         this.lastSummaryKey.set(conversationId, summaryKeyOf(settledSummary))
         this.events.onSummaryChanged(settledSummary)
@@ -930,7 +949,9 @@ export class ConversationTracker {
         ? `${live.tools[live.tools.length - 1]?.name}: ${live.tools[live.tools.length - 1]?.status ?? 'running'}`
         : 'thinking…'
       : undefined
-    return summaryOf(meta, status, pendingAsks, doing)
+    // 失败诊断摘要仅随 error 状态携带（新 run 启动后 live.runFailure 被清除，自然同步消失）。
+    const lastError = status === 'error' ? lastErrorOf(live, this.redactError) : undefined
+    return summaryOf(meta, status, pendingAsks, doing, lastError)
   }
 
   private readonly pendingAskCounts = new Map<number, number>()
@@ -1020,9 +1041,23 @@ function statusNow(meta: ConvMeta, outcome: TurnOutcome): ConversationStatus {
   return meta.unread ? 'done' : 'idle'
 }
 
-/** 摘要语义指纹：status/doing/pendingAskCount（其余字段不参与推送去重）。 */
+/** 摘要语义指纹：status/doing/pendingAskCount/lastError（其余字段不参与推送去重）。 */
 function summaryKeyOf(summary: ConversationSummary): string {
-  return `${summary.status}|${summary.doing ?? ''}|${summary.pendingAskCount}`
+  return `${summary.status}|${summary.doing ?? ''}|${summary.pendingAskCount}|${summary.lastError ?? ''}`
+}
+
+/** 从 live.runFailure 构造可读诊断摘要（'reason: detail'；aborted/reset 非失败不携带）。 */
+function lastErrorOf(
+  live: LiveStateShape | undefined,
+  redact: (text: string) => string,
+): string | undefined {
+  const failure = live?.runFailure
+  if (!failure || failure.reason === 'aborted' || failure.reason === 'reset') return undefined
+  const detail =
+    typeof failure.detail === 'string' && failure.detail.trim() !== ''
+      ? `: ${redact(failure.detail).slice(0, 400)}`
+      : ''
+  return `${failure.reason}${detail}`
 }
 
 // 输入登记的临时 key 使用负数，避免与 submissionId 冲突。

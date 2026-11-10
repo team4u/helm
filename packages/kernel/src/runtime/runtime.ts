@@ -505,6 +505,9 @@ export class KernelRuntime {
     this.tracker = new ConversationTracker({
       harness: this.harness,
       store: this.store,
+      // 失败诊断摘要对外前先过 SecretStash 脱敏（与事件发布同源）：
+      // provider 原始错误可能回显请求中的秘密，绝不经 ConversationSummary 泄漏。
+      redactError: (text) => this.stashService.redact(text),
       events: {
         // tracker 摘要统一附加实时归属（ownedBy）：SSE 消费方（Web store/CLI）
         // 与 getConversation/listConversations 读到同一形状。

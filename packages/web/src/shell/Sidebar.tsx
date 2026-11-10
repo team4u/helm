@@ -59,14 +59,16 @@ function HoverIconButton({
 function ConversationStatusDot({ conv }: { conv: ConversationSummary }) {
   const dotClass = conversationStatusDotClass(conv.status)
   if (!dotClass) return null
-  const tooltip = conversationStatusTooltip(conv.status, conv.doing)
+  const tooltip = conversationStatusTooltip(conv.status, conv.doing, conv.lastError)
   return (
-    <span
-      className={dotClass}
-      title={tooltip}
-      aria-label={tooltip}
-      role="status"
-    />
+    <Tooltip content={tooltip} side="top">
+      <span
+        className={dotClass}
+        title={tooltip}
+        aria-label={tooltip}
+        role="status"
+      />
+    </Tooltip>
   )
 }
 
