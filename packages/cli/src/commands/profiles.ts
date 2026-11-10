@@ -22,7 +22,7 @@ import {
   requirePositional,
 } from './shared.js'
 
-/** 语义化 flag -> Profile 字段（--system[-file]/--memory[-file] 在应用期单独处理）。 */
+/** 语义化 flag -> Profile 字段（--system[-file]/--memory[-file]/--skills/--all-skills 在应用期单独处理）。 */
 const PROFILE_FIELD_FLAGS: ReadonlyArray<{ flag: string; key: string }> = [
   { flag: 'name', key: 'name' },
   { flag: 'model', key: 'model' },
@@ -32,6 +32,7 @@ const PROFILE_FIELD_FLAGS: ReadonlyArray<{ flag: string; key: string }> = [
 ]
 
 const DOC_FLAGS = ['system', 'system-file', 'memory', 'memory-file'] as const
+const SKILLS_FLAGS = ['skills', 'all-skills'] as const
 
 const semanticFlags: FlagSpec[] = [
   { name: 'input', type: 'json', help: 'Profile JSON（update 单独使用=全量替换；与语义化 flag 组合则作为合并层）' },
@@ -40,6 +41,8 @@ const semanticFlags: FlagSpec[] = [
   { name: 'system-file', type: 'string', help: 'SYSTEM.md 从本地文件读取' },
   { name: 'memory', type: 'string', help: 'MEMORY.md 全文' },
   { name: 'memory-file', type: 'string', help: 'MEMORY.md 从本地文件读取' },
+  { name: 'skills', type: 'json', help: '技能白名单 JSON 字符串数组（如 \'["git-commit"]\'；[] 禁用全部技能；与 --all-skills 互斥）' },
+  { name: 'all-skills', type: 'boolean', help: '删除 skills 键恢复全部可用技能（与 --skills 互斥）' },
 ]
 
 const PARSE_FLAGS_SPEC = semanticFlags.map((f) => ({ ...f }))
@@ -48,8 +51,34 @@ const PARSE_FLAGS_SPEC = semanticFlags.map((f) => ({ ...f }))
 function hasSemanticFlags(flags: Map<string, unknown>): boolean {
   return (
     PROFILE_FIELD_FLAGS.some(({ flag }) => flags.has(flag)) ||
-    DOC_FLAGS.some((flag) => flags.has(flag))
+    DOC_FLAGS.some((flag) => flags.has(flag)) ||
+    SKILLS_FLAGS.some((flag) => flags.has(flag))
   )
+}
+
+/** --skills/--all-skills 本地校验：互斥 + 字符串数组（在任何 HTTP 请求前拒绝）。 */
+function validateSkillsFlags(flags: Map<string, unknown>): void {
+  const hasSkills = flags.has('skills')
+  const hasAll = flags.get('all-skills') === true
+  if (hasSkills && hasAll) {
+    throw new CliError('--skills 与 --all-skills 互斥（二选一）', 'conflicting_flags')
+  }
+  if (hasSkills) {
+    const raw = flags.get('skills')
+    if (!Array.isArray(raw) || !raw.every((x) => typeof x === 'string')) {
+      throw new CliError('--skills 需为 JSON 字符串数组（如 --skills \'["git-commit"]\'，空数组 [] 禁用全部技能）', 'invalid_flag_value')
+    }
+  }
+}
+
+/** --skills/--all-skills 应用到 body（调用前已 validate；写入白名单或删键恢复全部）。 */
+function applySkillsFlags(flags: Map<string, unknown>, body: Record<string, unknown>): void {
+  if (flags.has('skills')) {
+    body['skills'] = flags.get('skills')
+  } else if (flags.get('all-skills') === true) {
+    // 恢复 undefined = 全部当前可用技能：整体替换契约下显式删键
+    delete body['skills']
+  }
 }
 
 /** 将语义化 flag 应用到 body（显式给出才写键；-file 与内联同给时内联优先）。 */
@@ -70,6 +99,7 @@ async function applySemanticFlags(flags: Map<string, unknown>, body: Record<stri
     const memoryFile = flagValue<string>(flags, 'memory-file')
     if (memoryFile !== undefined) body.memory = await readTextFileFlag(memoryFile, 'memory-file')
   }
+  applySkillsFlags(flags, body)
 }
 
 /**
@@ -122,10 +152,11 @@ export function profilesCommands(): CommandSpec[] {
       const parsed = parseFlags(PARSE_FLAGS_SPEC, ctx.args)
       const id = parsed.positionals[0]
       assertNoExtraPositionals(parsed.positionals, 1)
+      validateSkillsFlags(parsed.flags)
       const hasInput = parsed.flags.has('input')
       if (!hasInput && !hasSemanticFlags(parsed.flags)) {
         throw new CliError(
-          '未提供任何字段：--input <json> 或语义化 flag（--name/--model/--node/--cwd/--system[-file]/--memory[-file]）（profiles create）',
+          '未提供任何字段：--input <json> 或语义化 flag（--name/--model/--node/--cwd/--system[-file]/--memory[-file]/--skills/--all-skills）（profiles create）',
           'missing_update_fields',
         )
       }
@@ -151,11 +182,12 @@ export function profilesCommands(): CommandSpec[] {
       const parsed = parseFlags(PARSE_FLAGS_SPEC, ctx.args)
       const id = requirePositional(parsed.positionals, 0, 'id')
       assertNoExtraPositionals(parsed.positionals, 1)
+      validateSkillsFlags(parsed.flags)
       const hasInput = parsed.flags.has('input')
       const semantic = hasSemanticFlags(parsed.flags)
       if (!hasInput && !semantic) {
         throw new CliError(
-          '未提供任何字段：--input <json> 或语义化 flag（--name/--model/--node/--cwd/--system[-file]/--memory[-file]）（profiles update）',
+          '未提供任何字段：--input <json> 或语义化 flag（--name/--model/--node/--cwd/--system[-file]/--memory[-file]/--skills/--all-skills）（profiles update）',
           'missing_update_fields',
         )
       }

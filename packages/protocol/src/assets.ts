@@ -21,6 +21,8 @@ export interface Profile {
   /** 作为 subagent / 工作流节点调用时的外部执行配置；持久会话仍由 pi-durable 承载。 */
   runtime?: ProfileRuntime
   tags?: string[]
+  /** 可加载技能白名单；缺省为全部可用技能，空数组禁用全部。插件停用时其托管技能始终不可用。 */
+  skills?: string[]
   /** 自举或托管该 Profile 的插件 ID（对应插件未启用时前端可按此隐藏）。 */
   managedByPlugin?: string
   /** 人类是否可在「新建对话」下拉选择该 Profile；常驻单例角色置 false，缺省 true。 */
@@ -52,8 +54,18 @@ export interface SkillSummary {
   description?: string
   /** 支持按需读取的子文件相对路径（如 'references/xxx.md'）。 */
   references: string[]
-  /** 自举或托管该 Skill 的插件 ID（对应插件未启用时前端可按此隐藏）。 */
+  /** 托管该 Skill 的插件 ID；对应插件未启用时，会话目录、技能菜单与 load_skill 均不可用。 */
   managedByPlugin?: string
+}
+
+/** 会话技能目录与 load_skill 共用的可用性规则；不是文件系统或工具执行权限边界。 */
+export function isSkillAvailable(
+  skill: SkillSummary,
+  profile: Pick<Profile, 'skills'>,
+  enabledPluginIds: ReadonlySet<string>,
+): boolean {
+  return (skill.managedByPlugin === undefined || enabledPluginIds.has(skill.managedByPlugin)) &&
+    (profile.skills === undefined || profile.skills.includes(skill.id))
 }
 
 /** `GET /api/models` 公开模型目录条目。 */

@@ -402,6 +402,15 @@ helm profiles create reviewer \
 
 # 增量修改已有角色工作目录
 helm profiles update coder --cwd /workspace/helm
+
+# 设置技能白名单（仅允许加载指定技能）
+helm profiles update coder --skills '["git-commit","herdr"]'
+
+# 清空白名单：禁用全部技能
+helm profiles update coder --skills '[]'
+
+# 删除 skills 键：恢复加载全部当前可用技能
+helm profiles update coder --all-skills
 ```
 
 | 标志 | 类型 | 说明 |
@@ -415,6 +424,8 @@ helm profiles update coder --cwd /workspace/helm
 | `--system-file <f>` | 字符串 | 自本地文件载入系统提示词。 |
 | `--memory <str>` | 字符串 | 长期记忆提示词文本。 |
 | `--memory-file <f>` | 字符串 | 自本地文件载入长期记忆。 |
+| `--skills <json>` | JSON 字符串数组 | 技能白名单，如 `'["git-commit"]'`；空数组 `[]` 禁用全部技能；未设置（键不存在）时加载全部可用技能；与 `--all-skills` 互斥。 |
+| `--all-skills` | 布尔 | 删除 `skills` 键，恢复加载全部当前可用技能；与 `--skills` 互斥。 |
 | `--input <json>` | JSON 对象 | 整体 Profile 结构体。update 单独使用代表全量覆盖。 |
 
 ---

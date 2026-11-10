@@ -155,7 +155,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    Catalog["Layer 1: 技能轻量目录 (全量注入)"] --> Model["大语言模型决策"]
+    Catalog["Layer 1: 当前 Profile 可用技能目录"] --> Model["大语言模型决策"]
     Model --> Tool["调用 load_skill 工具"]
     Tool --> Detail["Layer 2: 完整 SKILL.md 与参考文件"]
 ```
@@ -163,12 +163,36 @@ flowchart TD
 ### 技能分层设计
 
 1. **Layer 1 轻量目录**：
-   - 在 `before_turn` 中注入所有可用技能的名称、描述与引用清单。
-   - 单个技能摘要通常少于 100 字符。
+   - 在 `before_turn` 中按当前会话的 Profile 配置注入可用技能的名称、描述与引用清单。
+   - 只注入摘要，不自动读取所有技能正文。
 2. **Layer 2 详细内容**：
    - 模型在需要时调用 `load_skill` 工具。
    - 支持读取 `SKILL.md` 核心流程。
    - 支持按需读取 `references/*.md` 子指引文件。
+
+### Profile 可用技能配置
+
+`profile.json` 的 `skills` 字段控制当前 Profile 的技能目录与 `load_skill`：
+
+| 配置 | 行为 |
+| --- | --- |
+| 省略 `skills` | 所有当前可用技能；新安装的技能自动可用 |
+| `"skills": []` | 不提供任何技能 |
+| `"skills": ["helm-cli", "git-commit"]` | 只提供指定 ID 的技能 |
+
+托管技能还要求其 `managedByPlugin` 对应插件处于启用状态。插件停用后，即使技能仍在磁盘上或白名单中，也不进入会话目录，`load_skill` 同样拒绝读取。每次回合与工具调用均读取当前配置；不需要重建会话。
+
+Web 的 Profile 编辑器提供「全部可用技能」开关与技能多选。关闭开关后，未选择任何技能即保存为 `[]`。白名单内缺失或暂不可用的技能会保留配置并显示不可用，用户可显式移除。会话的 `/skill:` 菜单使用同一规则；全局技能库与 `helm skills list/read` 保持管理视角，不按当前 Profile 过滤。
+
+新自举的个人助理 Profile 省略 `skills`；SuperAgent 中枢为 `[]`，巡检看门狗为 `["watchdog-playbooks"]`。已存在的 Profile 不自动改写，也不迁移。可通过编辑器或 CLI 显式修改。
+
+```bash
+helm profiles update coder --skills '["helm-cli","git-commit"]' --json
+helm profiles update coder --skills '[]' --json
+helm profiles update coder --all-skills --json
+```
+
+此配置是 Helm 的技能发现与加载策略，不是权限沙箱。`bash`、文件读取、管理 API 与可信插件的权限不会因此收窄；已加载到历史消息中的技能正文也不会被追溯删除。外部 CLI Agent 自己发现的技能不受该字段控制。限制实际执行能力仍需工具作用域、执行环境与凭据边界。
 
 ### 内置技能保护
 
