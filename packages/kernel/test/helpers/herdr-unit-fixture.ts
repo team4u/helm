@@ -86,6 +86,12 @@ export async function serveTransport(
   const server: Server = createServer({ allowHalfOpen: true }, (socket) => {
     sockets.add(socket)
     socket.once('close', () => sockets.delete(socket))
+    // 客户端结束请求后，异步事件帧可能晚到；测试服务器不得因写入已关闭
+    // 的订阅 socket 产生未处理 EPIPE，生产协议仍由客户端负责取消订阅。
+    socket.on('error', () => {})
+    const writeFrame = (frame: string): void => {
+      if (!socket.destroyed && socket.writable) socket.write(frame, () => {})
+    }
     let buffer = ''
     socket.on('data', (chunk: Buffer) => {
       buffer += chunk.toString('utf8')
@@ -99,9 +105,9 @@ export async function serveTransport(
           try {
             if (request.method === 'events.subscribe') {
               const release = await transport.subscribe(targetOf(), (event) => {
-                socket.write(`${JSON.stringify({ event })}\n`)
+                writeFrame(`${JSON.stringify({ event })}\n`)
               }, () => {})
-              socket.write(`${JSON.stringify({ id: request.id, result: { type: 'subscription_started' } })}\n`)
+              writeFrame(`${JSON.stringify({ id: request.id, result: { type: 'subscription_started' } })}\n`)
               socket.once('close', () => release())
               return
             }

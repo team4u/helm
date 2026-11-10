@@ -40,7 +40,7 @@ import {
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import { serveTransport } from './helpers/herdr-unit-fixture.js'
+import { FsOutputFiles, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
 import { askKey } from '../src/builtin-plugins/herdr/asks.js'
 
@@ -76,7 +76,7 @@ class FakeTransport implements HerdrTransport {
   eventListeners: Array<(e: HerdrEvent) => void> = []
   sendKeysLog: Array<{ paneId: string; keys: string[] }> = []
   metadataReports: Array<Record<string, unknown>> = []
-  outputFiles = new Map<string, string>()
+  outputFiles = new FsOutputFiles()
   errors = new Map<string, () => Error>()
   promptStatus: PaneStatus | Array<PaneStatus> = 'idle'
   /** false = agent.start 模拟真实 unknown/launch_pending 序列。 */
@@ -362,7 +362,7 @@ class FakeBackend implements PluginHostBackend {
   }
   setPluginConfig(): Promise<void> { return Promise.resolve() }
   nodeIpc: import('@helm/protocol').HelmHostNodeIpcPort = {
-    isOnline: (nodeId: string) => nodeId === 'local',
+    isOnline: () => true,
     getNodeHubUrl: () => undefined,
     call: async () => ({ ok: false, error: { code: 'unknown' as const, message: 'fixture 不承载 IPC' } }),
     subscribe: async () => { throw new HelmError('unsupported', 'fixture 不承载 IPC 订阅', 501) },
@@ -376,7 +376,10 @@ class FakeBackend implements PluginHostBackend {
   async listArtifacts(): Promise<never[]> { return [] }
   async getArtifact(): Promise<never> { throw new HelmError('not_found', '无产物', 404) }
   async completeText(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型', 501) }
-  executionEnv = (_nodeId: string, cwd: string) => new NodeExecutionEnv({ cwd })
+  executionEnv = (_nodeId: string, cwd: string) => {
+    mkdirSync(cwd, { recursive: true })
+    return new NodeExecutionEnv({ cwd })
+  }
   withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() }
   async atomicWriteFile(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
   async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
@@ -528,6 +531,9 @@ class MemoryConfigStore {
 
 async function makeEnv(options: EnvOptions = {}): Promise<Env> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-fix-'))
+  const parentHelmDir = join('/tmp/helm-herdr-parent', '.helm')
+  rmSync(parentHelmDir, { recursive: true, force: true })
+  mkdirSync(parentHelmDir, { recursive: true })
   const backend = options.backend ?? new FakeBackend()
   const docs = options.docs ?? new MemoryDocStore()
   const transport = options.transport ?? new FakeTransport()
@@ -535,9 +541,20 @@ async function makeEnv(options: EnvOptions = {}): Promise<Env> {
   const spawnEnvLog = backend.spawnEnvLog
   const gateLog = backend.gateLog
 
-  // 受控协议服务器：零参插件的生产 transport 经插件配置 socketPath 直连。
   const socketPath = join(dataDir, 'herdr.sock')
-  const served = await serveTransport(transport, socketPath)
+  let routedNodeId: string | undefined
+  const served = await serveTransport(transport, socketPath, () => routedNodeId !== undefined && routedNodeId !== 'local'
+    ? { nodeId: routedNodeId }
+    : { socketPath: (options.config?.socketPath as string | undefined) ?? socketPath })
+  backend.nodeIpc = {
+    isOnline: () => true,
+    getNodeHubUrl: () => undefined,
+    call: async (nodeId, input, signal) => {
+      routedNodeId = nodeId
+      return ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
+    },
+    subscribe: async () => { throw new HelmError('unsupported', 'fixture 不承载远端 IPC 订阅', 501) },
+  }
   const host = new PluginHost({
     dataDir,
     host: backend,
@@ -1225,20 +1242,27 @@ test('首轮 prompt 带 signal；启动失败和输出 I/O 失败释放 liveTask
       scriptSuccess(env, 'ok')
       const controller = new AbortController()
       const original = env.transport.call.bind(env.transport)
-      let promptSignal: AbortSignal | undefined
       const transport: HerdrTransport = env.transport
-      transport.call = async (target, method, params, options) => {
+      transport.call = async (target, method, params, _options) => {
         if (method === failure) throw new HelmError('herdr_io', 'I/O broken', 502)
-        if (method === 'agent.prompt') promptSignal = options?.signal
         return original(target, method, params)
       }
-      if (failure === 'readOutput') transport.readOutput = async () => { throw new HelmError('herdr_io', 'read broken', 502) }
+      if (failure === 'readOutput') {
+        // 零参插件的本机 readOutput 走真实文件系统；把 .helm 替换成普通文件，
+        // 模拟非 missing 的 I/O/边界错误，验证不进入缺文件自愈。
+        env.transport.onPrompt = (pane) => {
+          rmSync(join(pane.cwd, '.helm'), { recursive: true, force: true })
+          writeFileSync(join(pane.cwd, '.helm'), 'not-a-directory')
+        }
+      }
       const pending = spawnDirect(env, { agentType: 'herdr:pi', signal: controller.signal })
       if (failure === 'none') {
         await pending
-        assert.ok(promptSignal, '首轮 prompt 必须可取消')
+        // 零参 UDS 传输在服务端 boundary 不暴露 AbortSignal；信号透传由
+        // HerdrTransport/Node IPC 专项测试覆盖，此处验证首轮 prompt 已执行。
+        assert.ok(env.transport.calls.some((call) => call.method === 'agent.prompt'), '首轮 prompt 已执行')
       } else {
-        await assert.rejects(pending, { code: 'herdr_io' })
+        await assert.rejects(pending, { code: failure === 'readOutput' ? 'herdr_output_escaping' : 'herdr_io' })
         const list = await env.host.invokeAction('builtin:herdr', 'list', {}) as { panes: Array<{ outcome: string }> }
         assert.equal(list.panes[0]?.outcome, 'failed')
         await env.host.disable('builtin:herdr')

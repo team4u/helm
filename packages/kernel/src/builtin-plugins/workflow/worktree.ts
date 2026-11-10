@@ -888,7 +888,10 @@ export class WorktreeAllocator {
           const del = await this.deleteManagedBranch(record.nodeId, authority.mainPath, record.branch, input.force === true, input.signal)
           branchDeleted = del.deleted
           if (del.deleted) {
-            this.updateRecord(record.id, (r) => ({ ...r, branchDeleted: true, branchDeleteError: undefined }))
+            this.updateRecord(record.id, (r) => {
+              const { branchDeleteError: _previousError, ...clean } = r
+              return { ...clean, branchDeleted: true }
+            })
           } else {
             this.updateRecord(record.id, (r) => ({ ...r, branchDeleted: false, branchDeleteError: (del.failureOutput ?? '').slice(0, 2000) }))
             throw new HelmError(
@@ -1133,12 +1136,11 @@ export class WorktreeAllocator {
           )
         }
       }
-      this.updateRecord(fresh.id, (r) => ({
-        ...r,
-        status: 'removed' as const,
-        removedAt: Date.now(),
-        ...(input.deleteBranch === true ? { branchDeleted: true, branchDeleteError: undefined } : {}),
-      }))
+      this.updateRecord(fresh.id, (r) => {
+        if (input.deleteBranch !== true) return { ...r, status: 'removed' as const, removedAt: Date.now() }
+        const { branchDeleteError: _previousError, ...clean } = r
+        return { ...clean, status: 'removed' as const, removedAt: Date.now(), branchDeleted: true }
+      })
       outcome = { removed: true, branchDeleted }
     })
 

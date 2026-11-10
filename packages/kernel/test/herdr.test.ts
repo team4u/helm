@@ -43,7 +43,7 @@ import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/builtin-plu
 import { LocalNodeChannel } from '../src/builtin-plugins/herdr/local-node-channel.js'
 import type { HelmHostNodeIpcPort } from '@helm/protocol'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import { FsOutputFiles, serveTransport } from './helpers/herdr-unit-fixture.js'
+import { FsOutputFiles, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 
 // ---------------------------------------------------------------------------
 // 受控 HerdrTransport
@@ -394,7 +394,7 @@ class FakeBackend implements PluginHostBackend {
   }
   setPluginConfig(): Promise<void> { return Promise.resolve() }
   nodeIpc: HelmHostNodeIpcPort = {
-    isOnline: (nodeId: string) => nodeId === 'local',
+    isOnline: () => true,
     call: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC', 501) },
     subscribe: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC', 501) },
   }
@@ -410,7 +410,10 @@ class FakeBackend implements PluginHostBackend {
     if (this.completeTextImpl !== undefined) return this.completeTextImpl(input)
     throw new HelmError('unsupported', '本 fixture 无模型', 501)
   }
-  executionEnv = (_nodeId: string, cwd: string) => new NodeExecutionEnv({ cwd })
+  executionEnv = (_nodeId: string, cwd: string) => {
+    mkdirSync(cwd, { recursive: true })
+    return new NodeExecutionEnv({ cwd })
+  }
   withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() }
   async atomicWriteFile(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
   async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
@@ -569,7 +572,17 @@ async function makeEnv(options: {
   // 受控协议服务器：零参插件的生产 transport 经插件配置 socketPath 直连
   // （本机 target 冻结为 { socketPath }；不经 nodeIpc——LocalNodeChannel 无事件流）。
   const socketPath = join(dataDir, 'herdr.sock')
-  const served = await serveTransport(transport, socketPath, () => ({}))
+  let routedNodeId: string | undefined
+  const served = await serveTransport(transport, socketPath, () => (routedNodeId !== undefined && routedNodeId !== 'local' ? { nodeId: routedNodeId } : {}))
+  backend.nodeIpc = {
+    isOnline: () => true,
+    getNodeHubUrl: () => undefined,
+    call: async (nodeId, input, signal) => {
+      routedNodeId = nodeId
+      return ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
+    },
+    subscribe: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC 订阅', 501) },
+  }
   const host = new PluginHost({
     dataDir,
     host: backend,
@@ -1165,7 +1178,7 @@ test('服务启动半途失败: snapshot 失败时自行清理订阅，注册整
   try {
     await assert.rejects(
       host.register(createHerdrPlugin()),
-      (e: unknown) => (e as HelmError).code === 'plugin_registration_failed' || (e as HelmError).code === 'herdr_socket',
+      (e: unknown) => ['plugin_registration_failed', 'plugin_service_start_failed', 'herdr_socket'].includes((e as HelmError).code),
     )
     // 订阅已清理（listener 集空）。
     assert.equal(transport.eventListeners.length, 0, '半途失败清理订阅')

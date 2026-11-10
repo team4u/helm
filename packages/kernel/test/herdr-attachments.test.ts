@@ -10,7 +10,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -18,7 +18,7 @@ import { HelmError, type Profile } from '@helm/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import { serveTransport } from './helpers/herdr-unit-fixture.js'
+import { FsOutputFiles, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrNodeChannel, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
 
 // ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ class FakeTransport implements HerdrTransport {
   panes = new Map<string, PaneState>()
   tabs = new Map<string, { closed: boolean }>()
   calls: Array<{ target: HerdrTarget; method: string; params: Record<string, unknown> }> = []
-  outputFiles = new Map<string, string>()
+  outputFiles = new FsOutputFiles()
   promptStatus: PaneStatus | Array<PaneStatus> = 'idle'
   onPrompt: ((pane: PaneState, text: string) => void) | undefined
 
@@ -212,7 +212,7 @@ class FakeBackend implements PluginHostBackend {
   }
   setPluginConfig(): Promise<void> { return Promise.resolve() }
   nodeIpc: import('@helm/protocol').HelmHostNodeIpcPort = {
-    isOnline: () => false,
+    isOnline: (nodeId: string) => nodeId === 'local',
     getNodeHubUrl: () => undefined,
     call: async () => ({ ok: false, error: { code: 'unknown', message: 'fixture 不承载 IPC' } }),
     subscribe: async () => { throw new HelmError('unsupported', 'fixture 不承载 IPC 订阅', 501) },
@@ -233,10 +233,13 @@ class FakeBackend implements PluginHostBackend {
   getArtifactImpl: ((id: string, conversationId: number) => Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }>) | undefined
   async getArtifact(id: string, conversationId: number): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }> {
     if (this.getArtifactImpl !== undefined) return this.getArtifactImpl(id, conversationId)
-    throw new HelmError('not_found', '无产物', 404)
+    return undefined as never
   }
   async completeText(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型', 501) }
-  executionEnv = (_nodeId: string, cwd: string) => new NodeExecutionEnv({ cwd })
+  executionEnv = (_nodeId: string, cwd: string) => {
+    mkdirSync(cwd, { recursive: true })
+    return new NodeExecutionEnv({ cwd })
+  }
   withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() }
   async atomicWriteFile(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
   async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
@@ -372,23 +375,19 @@ async function makeEnv(opts: { withGetArtifact?: boolean; hubUrls?: Record<strin
   // 受控协议服务器：远端 nodeId 目标经 backend.nodeIpc 路由到同一 fixture
   // （hubUrl 事实由 nodeIpc.getNodeHubUrl 提供；本机 target 走配置 socketPath）。
   const socketPath = join(dataDir, 'herdr.sock')
-  const remoteNodeIds = Object.keys(opts.hubUrls ?? {})
   const served = await serveTransport(transport, socketPath, () => {
-    // 远端折叠：最近一次 spawn env 的 nodeId 即当前 spawn 的目标节点。
     const last = backend.spawnEnvLog.at(-1)?.nodeId
-    if (last !== undefined && last !== 'local' && remoteNodeIds.includes(last)) return { nodeId: last }
+    if (last !== undefined && last !== 'local') return { nodeId: last }
     return {}
   })
   const hubUrls = opts.hubUrls ?? {}
   backend.nodeIpc = {
-    isOnline: (nodeId: string) => nodeId in hubUrls || nodeId === 'local',
+    isOnline: (nodeId: string) => nodeId === 'local' || nodeId in hubUrls || nodeId === 'remote-node',
     getNodeHubUrl: (nodeId: string) => hubUrls[nodeId],
     // 远端行协议与本地同一受控 transport：经 nodeIpc（serve 侧把 target
     // 折叠为对应 nodeId）一问一答。
     call: async (nodeId: string, input: { endpoint?: string; session?: string; line: string; timeoutMs?: number }, signal?: AbortSignal) => {
       signal?.throwIfAborted()
-      void nodeId
-      const { ipcLineCall } = await import('./helpers/herdr-unit-fixture.js')
       return ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
     },
     subscribe: async () => { throw new HelmError('unsupported', 'attachments fixture 不订阅远端事件', 501) },
