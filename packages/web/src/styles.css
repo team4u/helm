@@ -4460,7 +4460,26 @@ textarea.textarea,
   }
 }
 
-/* ==========================================================================
+/* 产物预览：插件预览器选择与插件视图容器 */
+.artifact-previewer-select {
+  width: 132px;
+  flex-shrink: 0;
+}
+
+.artifact-plugin-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.artifact-plugin-view > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ============================================================================
  * composerCompleter 补全浮层（Radix Popover 锚定在 .composer-box 上方）
  * ========================================================================== */
 .composer-completion-popover {
