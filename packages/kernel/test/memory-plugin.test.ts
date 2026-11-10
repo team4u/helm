@@ -122,6 +122,7 @@ function makeBackend(): PluginHostBackend & {
     async execEnv() {
       throw new HelmError('unsupported', 'fixture', 501)
     },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent(type: string, payload: unknown) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })

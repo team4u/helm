@@ -8,11 +8,7 @@ export { createEnvFabric } from './fabric.js'
 export type { EnvFabric, EnvFabricOptions, EnvOptionsComposer } from './fabric.js'
 export { createScopedExecutionEnv, MANAGED_EXEC_ENV_VARS } from './scoped-env.js'
 export type { EnvTarget, ScopedExecutionEnv } from './scoped-env.js'
-export {
-  envWithFileMutationQueue,
-  localWithFileMutationQueue,
-  fileMutationQueueSize,
-} from './file-mutation-queue.js'
+export { envWithFileMutationQueue, localWithFileMutationQueue } from './file-mutation-queue.js'
 export { NodeRegistry, tokenAuthenticator, sha256hex, sanitizeNodeHealth, HelmUpgradeBusyError, HelmUpgradeTimeoutError, HelmUpgradeCancelledError } from './registry.js'
 export type { NodeRegistryOptions, NodeConnection, RegisterOutcome, HubConnectionLocal, NodeSideFunctions, UpgradeWaiterHandle } from './registry.js'
 export { RemoteExecutionEnv } from './remote-env.js'

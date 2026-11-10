@@ -158,6 +158,7 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent(type, payload) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string })
@@ -457,6 +458,7 @@ test('竞态：collectWorkerSettlement await 期间发生 rewind——旧节点�
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
       emitEvent: (type, payload) => { if (type === 'notification') notifications.push(payload as { title: string; body: string }) },
     } satisfies PluginHostBackend,

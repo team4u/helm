@@ -1574,22 +1574,21 @@ export class PluginHost {
           Promise.resolve(backend.execEnv(req, opts)),
         );
       },
-      ...(backend.withFileMutationQueue === undefined
-        ? {}
-        : {
-            withFileMutationQueue: async <T>(
-              target: { nodeId: string; cwd: string; path: string },
-              fn: () => Promise<T>,
-              opts?: { signal?: AbortSignal },
-            ) => {
-              this.assertContextUsable(state, epoch, 'host.withFileMutationQueue');
-              return this.tracker.withTask(
-                pluginId,
-                `host.fileQueue:${target.nodeId}`,
-                () => Promise.resolve(backend.withFileMutationQueue!(target, fn, opts)),
-              );
-            },
-          }),
+      // 必选能力（protocol 契约）：tracker 覆盖排队到执行全程；插件停用与
+      // epoch 失效由 backend 的 EnvFabric 路径自然传播，而真正拿到锁、即将
+      // 执行插件 fn 前再复查一次上下文——排队等待期间插件被停用的残留回调
+      // 不得进入执行窗口。
+      withFileMutationQueue: async <T>(
+        target: { nodeId: string; cwd: string; path: string },
+        fn: () => Promise<T>,
+        opts?: { signal?: AbortSignal },
+      ): Promise<T> =>
+        this.tracker.withTask(pluginId, `host.fileQueue:${target.nodeId}`, async () =>
+          backend.withFileMutationQueue<T>(target, async () => {
+            this.assertContextUsable(state, epoch, 'host.withFileMutationQueue(locked)');
+            return fn();
+          }, opts),
+        ),
       prepareAction: (targetPluginId, actionId, input, context) => {
         this.assertContextUsable(state, epoch, 'host.prepareAction');
         return this.prepareAction(targetPluginId, actionId, input, context);

@@ -187,6 +187,7 @@ async function makeHarness(opts: HarnessOptions = {}) {
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: (type, payload) => {
       if (type === 'notification') {
@@ -463,6 +464,7 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: (type, payload) => {
       if (type === 'notification') {
@@ -961,6 +963,7 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: () => {},
   }
@@ -1185,6 +1188,7 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: () => {},
   }

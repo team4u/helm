@@ -78,6 +78,7 @@ function makeHostApi(): PluginHostBackend {
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: () => {},
   };

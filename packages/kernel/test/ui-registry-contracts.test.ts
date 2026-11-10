@@ -256,6 +256,7 @@ function createHostBackend(): PluginHostBackend {
     prepareInterruptedConversations: unused,
     cleanupWorktree: unused,
     execEnv: unused,
+    withFileMutationQueue: unused,
     prepareAction: unused,
     invokeAction: unused,
     listActions: () => [],

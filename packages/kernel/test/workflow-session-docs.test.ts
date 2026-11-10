@@ -70,6 +70,7 @@ class FakeBackend implements PluginHostBackend {
   invokeAction(): Promise<unknown> { return Promise.resolve({}) }
   prepareAction(): { idempotent: boolean } { return { idempotent: false } }
   execEnv(): Promise<never> { return Promise.reject(new HelmError('unsupported', '本 fixture 不执行节点命令', 501)) }
+  withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
   listActions(): never[] { return [] }
   manageConversation(): () => void { return () => {} }
   markConversationOwnership(): void {}

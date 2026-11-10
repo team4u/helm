@@ -77,6 +77,7 @@ const backend: PluginHostBackend = {
   execEnv: async () => {
     throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
   },
+  withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
   listActions: () => [],
   emitEvent: (type, payload) => {
     if (type === 'plugin.session_doc.updated') {
@@ -160,6 +161,7 @@ beforeEach(async () => {
     execEnv: async () => {
       throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
     },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
   }
   const handle = await startHub({ kernel, port: 0 })
   hubUrl = handle.url

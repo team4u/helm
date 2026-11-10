@@ -36,12 +36,12 @@ import {
 import { createWriteTool, createEditTool } from '../src/runtime/tools.js'
 import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
 import type { EnvFabric } from '../src/env/index.js'
+import { createEnvFabric } from '../src/env/index.js'
 import {
-  createEnvFabric,
   envWithFileMutationQueue,
   localWithFileMutationQueue,
   fileMutationQueueSize,
-} from '../src/env/index.js'
+} from '../src/env/file-mutation-queue.js'
 
 let rootDir: string
 
@@ -273,44 +273,101 @@ describe('envWithFileMutationQueue 核心语义', { timeout: 60_000 }, () => {
     assert.equal(fileMutationQueueSize(), 0)
   })
 
-  test('signal 取消：排队等待中取消立即失败且不执行 fn、不阻塞后续', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 'abort')
+  test('三任务取消链：A 持锁不放；B 排队后 abort 立即拒绝；C 不得在 A 释放前执行', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'abort-chain')
     mkdirSync(dir, { recursive: true })
-    const file = join(dir, 'abort.txt')
+    const file = join(dir, 'chain.txt')
     writeFileSync(file, '0')
     const env = new NodeExecutionEnv({ cwd: dir })
 
-    // 慢任务持锁 300ms。
-    const slow = envWithFileMutationQueue(
+    // A：拿锁后不释放（门控 holdA）。
+    let releaseA!: () => void
+    const holdA = new Promise<void>((resolve) => { releaseA = resolve })
+    let aRan = false
+    const taskA = envWithFileMutationQueue(
       env,
       file,
       async () => {
-        await delay(300)
-        return 'slow'
+        aRan = true
+        await holdA
+        return 'A'
       },
       BACKGROUND_CONTEXT,
     )
-    await delay(30) // 慢任务先拿锁
+    await delay(30) // A 已拿锁（aRan 翻转即证）
+    assert.ok(aRan, 'A 应已持有锁')
 
-    const controller = new AbortController()
-    const queued = envWithFileMutationQueue(
+    // B：排队等待中 abort —— 必须立即拒绝（不等 A，300ms 预算内）。
+    const controllerB = new AbortController()
+    let bRan = false
+    const taskB = envWithFileMutationQueue(
       env,
       file,
-      async () => 'queued-ran',
-      withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
+      async () => {
+        bRan = true
+        return 'B'
+      },
+      withAbortSignal(controllerB.signal, BACKGROUND_CONTEXT),
     )
-    await delay(50)
-    controller.abort() // 排队等待中取消：立即拒绝、fn 不执行、队列位置释放
-    await assert.rejects(queued)
-    assert.equal(await slow, 'slow')
+    await delay(30) // B 已入队等待
+    const abortAt = Date.now()
+    controllerB.abort()
+    await assert.rejects(taskB, (err: unknown) => {
+      assert.equal((err as Error).name, 'AbortError')
+      return true
+    })
+    const rejectElapsed = Date.now() - abortAt
+    assert.ok(rejectElapsed < 300, `B 必须在 A 释放前立即拒绝（实际 ${rejectElapsed}ms）`)
+    assert.equal(bRan, false, 'B 的 fn 不得执行')
 
-    // 取消后的队列条目已清，下一任务正常执行。
-    const next = await envWithFileMutationQueue(
+    // C：B 被取消后入队——A 释放前不得执行（被取消的 B 不得腾出假锁）。
+    let cRan = false
+    const taskC = envWithFileMutationQueue(
       env,
       file,
-      async () => 'next',
+      async () => {
+        cRan = true
+        return 'C'
+      },
       BACKGROUND_CONTEXT,
     )
+    await delay(80)
+    assert.equal(cRan, false, 'A 未释放，C 不得执行（取消链不得误删头部锁）')
+
+    // A 释放：C 立即接管，链恢复正常。
+    releaseA()
+    assert.equal(await taskA, 'A')
+    assert.equal(await taskC, 'C')
+    assert.ok(cRan)
+    await delay(10)
+    assert.equal(fileMutationQueueSize(), 0, '链全部结算后队列清空')
+  })
+
+  test('执行窗口内取消：signal 语义交由 fn（fn 返回后链正常释放）', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'abort-running')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'running.txt')
+    writeFileSync(file, '0')
+    const env = new NodeExecutionEnv({ cwd: dir })
+
+    const controller = new AbortController()
+    let fnObservedAbort = false
+    const result = await envWithFileMutationQueue(
+      env,
+      file,
+      async () => {
+        await delay(50)
+        controller.abort()
+        await delay(10)
+        fnObservedAbort = controller.signal.aborted
+        return 'done-anyway'
+      },
+      withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
+    )
+    assert.equal(result, 'done-anyway', '已持锁的 fn 正常结算（窗口内取消不强制中断）')
+    assert.ok(fnObservedAbort)
+    // 链释放后下一任务立即可入队。
+    const next = await envWithFileMutationQueue(env, file, async () => 'next', BACKGROUND_CONTEXT)
     assert.equal(next, 'next')
     assert.equal(fileMutationQueueSize(), 0)
   })
@@ -568,5 +625,123 @@ describe('内核 write/edit 与队列', { timeout: 60_000 }, () => {
     await Promise.all([pluginBump, builtinWrite])
     const final = readFileSync(file, 'utf8')
     assert.ok(final === 'v1' || final === 'v0+p' || final === 'v1+p', `终态合法：${final}`)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. 错误语义与重入诊断
+// ---------------------------------------------------------------------------
+
+describe('错误语义与嵌套重入', { timeout: 60_000 }, () => {
+  test('canonical 错误分类：permission_denied 等如实上抛（不吞成 not-found 拼接）', { timeout: 60_000 }, async () => {
+    // root 容器内 chmod 0o000 无法制造真实 EACCES（root 绕过 DAC），故用
+    // 受控 env 在协议层验证同一分类逻辑：canonicalPath 返回非 not_found
+    // 错误时必须原样上抛。local 层的 fs code 分类（仅 ENOENT/ENOTDIR 视为
+    // 缺失，EACCES/EIO 上抛）与其同构（localCanonical）。
+    const files = new Map<string, string>()
+    const env = {
+      id: 'remote:perm-node',
+      async absolutePath(path: string) { return { ok: true, value: path } },
+      async joinPath(parts: string[]) { return { ok: true, value: parts.join('/') } },
+      async canonicalPath(path: string) {
+        return { ok: false, error: { code: 'permission_denied', message: `EACCES: ${path}` } }
+      },
+    } as never
+    await assert.rejects(
+      envWithFileMutationQueue(env, '/workspace/protected.txt', async () => 'never', BACKGROUND_CONTEXT),
+      (err: unknown) => {
+        assert.equal((err as { code?: string }).code, 'permission_denied', '原始错误必须如实上抛')
+        return true
+      },
+    )
+  })
+
+  test('localCanonical 根终止：空链上溯到根后停止（不无限递归）', { timeout: 60_000 }, async () => {
+    // 整条链不存在的深路径：逐级上溯到 '/'（真实存在）终止拼接。
+    const deep = '/definitely-not-exist-a/b/c/d/e/f.txt'
+    const result = await localWithFileMutationQueue(deep, async () => 'ok')
+    assert.equal(result, 'ok', '全缺失链必须正常上溯到根并终止')
+  })
+
+  test('嵌套同 key：持锁 fn 内再次入队立即显式报错（不挂死）', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'reentrant')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'same.txt')
+    writeFileSync(file, 'x')
+    const env = new NodeExecutionEnv({ cwd: dir })
+
+    await assert.rejects(
+      envWithFileMutationQueue(
+        env,
+        file,
+        async () => {
+          // 同一异步链内嵌套同文件入队：必须立即报错而非排队挂死。
+          return envWithFileMutationQueue(env, file, async () => 'inner', BACKGROUND_CONTEXT)
+        },
+        BACKGROUND_CONTEXT,
+      ),
+      (err: unknown) => {
+        assert.match((err as Error).message, /file_mutation_queue_reentrant/)
+        return true
+      },
+    )
+    // 链自愈：报错释放后下一任务正常。
+    const next = await envWithFileMutationQueue(env, file, async () => 'next', BACKGROUND_CONTEXT)
+    assert.equal(next, 'next')
+    assert.equal(fileMutationQueueSize(), 0)
+  })
+
+  test('持锁 fn 内直接底层写合法（不重入队列）；同链对不同文件入队合法', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'inner-direct')
+    mkdirSync(dir, { recursive: true })
+    const fileA = join(dir, 'a.txt')
+    const fileB = join(dir, 'b.txt')
+    writeFileSync(fileA, 'a0')
+    writeFileSync(fileB, 'b0')
+    const env = new NodeExecutionEnv({ cwd: dir })
+
+    const result = await envWithFileMutationQueue(
+      env,
+      fileA,
+      async () => {
+        // 直接底层写同一文件（不再次入队）：合法路径。
+        writeFileSync(fileA, 'a1')
+        // 同异步链对另一文件入队：不同 key，合法。
+        await envWithFileMutationQueue(env, fileB, async () => {
+          writeFileSync(fileB, 'b1')
+          return 'b-done'
+        }, BACKGROUND_CONTEXT)
+        return 'a-done'
+      },
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(result, 'a-done')
+    assert.equal(readFileSync(fileA, 'utf8'), 'a1')
+    assert.equal(readFileSync(fileB, 'utf8'), 'b1')
+    assert.equal(fileMutationQueueSize(), 0)
+  })
+
+  test('不同异步链的「嵌套」（外层持锁者不等待即返回，内层排队）：不死锁但如实排队', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'cross-chain')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'cc.txt')
+    writeFileSync(file, '0')
+    const env = new NodeExecutionEnv({ cwd: dir })
+
+    let releaseOuter!: () => void
+    const hold = new Promise<void>((resolve) => { releaseOuter = resolve })
+    const outer = envWithFileMutationQueue(env, file, async () => {
+      await hold
+      return 'outer'
+    }, BACKGROUND_CONTEXT)
+    await delay(30)
+
+    // 独立异步链（非 outer 的 fn 内发起）对同一文件入队：ALS 检测不到
+    // 「嵌套」——按普通排队语义等待 outer 释放（不死锁也不误报）。
+    const inner = envWithFileMutationQueue(env, file, async () => 'inner', BACKGROUND_CONTEXT)
+    await delay(60)
+    releaseOuter()
+    assert.equal(await outer, 'outer')
+    assert.equal(await inner, 'inner')
   })
 })

@@ -93,6 +93,7 @@ function makeHostApi(events: string[] = []): PluginHostBackend {
     execEnv: async () => {
       throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501);
     },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: (type, payload) => {
       events.push(`event:${type}`);
@@ -1916,6 +1917,7 @@ test('ctx.host.execEnv：真实调用 backend（required 端口）+ 在途任务
     execEnv: async () => {
       return execPromise;
     },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
   };
   const host = new PluginHost({ dataDir, host: backend, docs });
 
