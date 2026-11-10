@@ -17,6 +17,13 @@ import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
 import { slashMenuSkills } from './slash-menu-skills.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import {
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRoot,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '../ui/DropdownMenu.js'
 import { Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '../ui/Popover.js'
 import { Select, type SelectOption } from '../ui/Select.js'
 import { Tabs, TabsList, TabsTrigger } from '../ui/Tabs.js'
@@ -1387,7 +1394,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                 <Tooltip content="停止当前执行" side="top">
                   <button
                     type="button"
-                    className="btn btn-sm btn-danger btn-pill btn-send"
+                    className="btn btn-sm btn-danger btn-pill btn-send composer-abort-button"
                     onClick={() => void abortTurn()}
                     title="停止当前执行"
                     aria-label="停止当前执行"
@@ -1396,40 +1403,77 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
                   </button>
                 </Tooltip>
               ) : (
-                <>
-                  <Tooltip content="停止当前执行" side="top">
+                <DropdownMenuRoot>
+                  <div className="composer-split-send">
                     <button
                       type="button"
-                      className="btn btn-sm btn-danger btn-send"
+                      className="composer-split-main composer-steer-action"
+                      disabled={sending || uploading > 0 || envBlocker.blocked}
+                      onClick={() => void send('steer')}
+                      title="下一个步骤边界注入（Enter）"
+                      aria-label={uploading > 0 ? `上传中 (${uploading})` : editingEntryId !== null ? '更新并重新生成' : '插话引导'}
+                    >
+                      <HelmIcon
+                        name={sending || uploading > 0 ? 'loader' : 'corner-down-right'}
+                        size={14}
+                        className={sending || uploading > 0 ? 'spin-slow' : undefined}
+                      />
+                      <span className="composer-action-label">{editingEntryId !== null ? '更新' : '插话'}</span>
+                    </button>
+                    <div className="composer-split-divider" />
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className="composer-split-trigger"
+                        disabled={sending || uploading > 0 || envBlocker.blocked}
+                        aria-label="选择发送策略"
+                        title="选择发送策略（插话 / 排队）"
+                      >
+                        <HelmIcon name="chevron-down" size={12} />
+                      </button>
+                    </DropdownMenuTrigger>
+                  </div>
+                  <DropdownMenuContent portalled align="end" side="top" sideOffset={6} className="composer-busy-dropdown-content">
+                    <DropdownMenuItem
+                      className="composer-busy-menu-item"
+                      onClick={() => void send('steer')}
+                    >
+                      <HelmIcon name="corner-down-right" size={14} className="composer-busy-menu-icon" />
+                      <div className="composer-busy-menu-text">
+                        <div className="composer-busy-menu-title">插话引导</div>
+                        <div className="composer-busy-menu-desc">下一个步骤边界注入</div>
+                      </div>
+                      <span className="composer-busy-menu-kbd">Enter</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      className="composer-busy-menu-item composer-queue-button"
+                      onClick={() => void send('followUp')}
+                      title="当前回合结束后处理（⌘/Ctrl+Enter）"
+                      aria-label="排队发送"
+                    >
+                      <HelmIcon name="clock" size={14} className="composer-busy-menu-icon" />
+                      <div className="composer-busy-menu-text">
+                        <div className="composer-busy-menu-title">排队发送</div>
+                        <div className="composer-busy-menu-desc">当前回合结束后处理</div>
+                      </div>
+                      <span className="composer-busy-menu-kbd">⌘/Ctrl+Enter</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      danger
+                      className="composer-busy-menu-item"
                       onClick={() => void abortTurn()}
                       title="停止当前执行"
                       aria-label="停止当前执行"
                     >
-                      <HelmIcon name="square" size={14} />
-                    </button>
-                  </Tooltip>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm composer-queue-button"
-                    disabled={sending || uploading > 0 || envBlocker.blocked}
-                    onClick={() => void send('followUp')}
-                    title="当前回合结束后处理（⌘/Ctrl+Enter）"
-                    aria-label="排队发送"
-                  >
-                    <HelmIcon name={sending ? 'loader' : 'clock'} size={16} />
-                    <span className="composer-action-label">排队发送</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-primary btn-pill btn-send"
-                    disabled={sending || uploading > 0 || envBlocker.blocked}
-                    onClick={() => void send('steer')}
-                    title="下一个步骤边界注入（Enter）"
-                    aria-label={uploading > 0 ? `上传中 (${uploading})` : editingEntryId !== null ? '更新并重新生成' : '插话引导'}
-                  >
-                    <HelmIcon name={sending || uploading > 0 ? 'loader' : 'corner-down-right'} size={17} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
-                  </button>
-                </>
+                      <HelmIcon name="square" size={13} className="composer-busy-menu-icon" />
+                      <div className="composer-busy-menu-text">
+                        <div className="composer-busy-menu-title">停止执行</div>
+                        <div className="composer-busy-menu-desc">立即中止当前回合</div>
+                      </div>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenuRoot>
               )}
             </span>
           </div>

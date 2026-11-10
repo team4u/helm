@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { ConversationEntry, ConversationSummary, Profile } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary, InputOrigin, Profile } from '@helm/protocol'
 import {
   startersToDrafts,
   validateStarterDraft,
@@ -121,7 +121,7 @@ function renderTimeline(opts: {
   nextCursor?: string
   starters?: Array<{ label: string; prompt: string }>
   sendingPending?: boolean
-  live?: { tools: never[]; queuedInputs: Array<{ id: string; text: string; mode: 'steer' | 'followUp'; origin: string; createdAt: number; submissionId: string }> }
+  live?: { tools?: never[]; queuedInputs: Array<{ id: string; text: string; mode: 'steer' | 'followUp'; origin: InputOrigin; createdAt: number; submissionId: string }> }
 }): { html: string; clicks: string[] } {
   const conversation = opts.conversation ?? convSummary()
   const clicks: string[] = []

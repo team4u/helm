@@ -52,6 +52,8 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .composer-picker-root { max-width: 180px; }
   .composer-toolbar .composer-model-button { max-width: 180px; }
   .composer-toolbar .composer-queue-button { width: 32px; height: 32px; padding: 0; border-radius: 50%; }
+  .composer-split-send .composer-split-main { padding: 0 8px; }
+  .composer-split-trigger { width: 22px; }
   .composer-widgets { max-height: min(260px, 35dvh); overflow-y: auto; }
   .composer-action-label { display: none; }
 }
