@@ -24,7 +24,7 @@ test('移动端 Placeholder 文案优化：小屏/移动端极短防折行', { t
 
   // 桌面端全功能模式
   const desktopDefault = getComposerPlaceholder(false, false)
-  assert.equal(desktopDefault, '输入消息；/ 命令与技能，@ 引用产物，⌘V 粘贴附件')
+  assert.equal(desktopDefault, '输入消息；/ 命令与技能，⌘V 粘贴附件')
   assert.match(desktopDefault, /⌘V 粘贴附件/)
 
   const desktopWorking = getComposerPlaceholder(true, false)

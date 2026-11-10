@@ -2,10 +2,10 @@
  * composerCompleter 前端闭环核心测试：
  * - 纯模型：token 检测（中文/路径斜杠/邮箱 URL 边界）、替换、源过滤排序、
  *   doc/action 边界校验、manifest 核对、合并去重截断、过滤；
- * - 交互（真实挂载 Composer）：'@' 合并内置产物 + 插件源、'#' ':' 仅注册源激活、
+ * - 交互（真实挂载 Composer）：'@' '#' ':' 插件源补全，不注入宿主产物候选、
  *   scope 过滤、action 真实 conversationId 与 manifest 核对、防抖竞态（晚响应不恢复）、
  *   键盘只选可见候选（>12）、IME 不误提交、caret 替换、prefill.onlyIfEmpty 草稿保护、
- *   '/' 斜杠与 '@' 产物回归。
+ *   '/' 斜杠回归。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -253,7 +253,7 @@ const manifest = (pluginId: string, id: string, idempotent = true): ActionManife
   pluginId, id, description: '', inputSchema: {}, outputSchema: {}, idempotent,
 })
 
-test('交互：@ 合并内置产物与 doc 源候选；选中替换触发 token 保留前后文本与光标', { timeout: 60_000 }, async () => {
+test('交互：@ 仅展示插件 doc 源候选，不注入会话产物；选中保留文本与光标', { timeout: 60_000 }, async () => {
   const app = await mount(conv(1), {
     ui: [docCompleter('p1', '@', 'catalog')],
     docs: { 'p1/catalog': { items: [{ id: 'memory', label: '@记忆库', insertText: '@记忆库 ' }] } },
@@ -263,15 +263,31 @@ test('交互：@ 合并内置产物与 doc 源候选；选中替换触发 token 
     await app.type('请看 @')
     await act(async () => {})
     const items = app.completionItems()
-    assert.ok(items.length >= 2, '内置产物与插件源合并展示')
-    assert.match(app.completionPopover()!.textContent!, /报告\.pdf/)
+    assert.equal(items.length, 1, '仅展示插件源候选')
+    assert.doesNotMatch(app.completionPopover()!.textContent!, /报告\.pdf/)
     assert.match(app.completionPopover()!.textContent!, /记忆库/)
-    // 键盘选中第一项（产物）：只替换 @，前后文本保留
+    // 键盘选中插件候选：只替换 @，前后文本保留
     await app.key('Enter')
     await act(async () => {})
-    assert.equal(app.ta().value, '请看 @art-1 ')
-    assert.equal(app.ta().selectionStart, '请看 @art-1 '.length, '光标落在插入文本后')
+    assert.equal(app.ta().value, '请看 @记忆库 ')
+    assert.equal(app.ta().selectionStart, '请看 @记忆库 '.length, '光标落在插入文本后')
     assert.equal(app.completionPopover(), null, '选中后浮层关闭')
+  } finally {
+    app.unmount()
+  }
+})
+
+test('回归：有会话产物但未注册 @ 源时，不生成产物候选', { timeout: 60_000 }, async () => {
+  const app = await mount(conv(10), {
+    artifacts: [{ id: 'art-1', name: '报告.pdf', mimeType: 'application/pdf', size: 1024 }],
+  })
+  try {
+    await app.type('@')
+    assert.equal(app.completionItems().length, 0, '产物不构成内置补全源')
+    assert.doesNotMatch(app.completionPopover()?.textContent ?? '', /报告\.pdf/)
+    await app.type('@报告')
+    assert.equal(app.completionItems().length, 0, '搜索也不会注入产物候选')
+    assert.equal(app.ta().value, '@报告', '触发符和输入文本保留')
   } finally {
     app.unmount()
   }

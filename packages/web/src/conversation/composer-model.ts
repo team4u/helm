@@ -78,7 +78,7 @@ export function getComposerPlaceholder(working: boolean, isMobile: boolean): str
     // 移动端占位符保持极短，避免窄屏折行撑高输入区
     return isMobile ? '补充说明或排队指令…' : '补充说明或输入下一条指令（Enter 插话引导 · ⌘/Ctrl+Enter 排队发送）'
   }
-  return isMobile ? '输入消息…' : '输入消息；/ 命令与技能，@ 引用产物，⌘V 粘贴附件'
+  return isMobile ? '输入消息…' : '输入消息；/ 命令与技能，⌘V 粘贴附件'
 }
 
 /** 会话正忙时 Enter 的默认 whenBusy 策略（插话引导）。 */

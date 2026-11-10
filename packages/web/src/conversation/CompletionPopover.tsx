@@ -1,5 +1,5 @@
 /**
- * composerCompleter 浮层（'@' 插件源合并 / '#' ':' 插件源）：
+ * composerCompleter 插件源浮层（'@' '#' ':'）：
  * - 定位复用既有 .composer-box 相对定位 + .composer-popover 视觉类（Radix
  *   Popover Anchor 挂载，满足 WAI-ARIA combobox/listbox 契约，非裸 div）；
  * - 键盘：↑↓ 仅在可见候选内循环（修复旧 12 显示/全量索引不一致），Enter 选中、

@@ -166,7 +166,7 @@ Screen 组件接收 `ScreenProps`：`pluginId / screenId / isSplit / params / se
 - `{ kind: 'action', actionId, actionPluginId? }`：绑定声明为 `idempotent: true` 的查询动作。输入 `{ query, conversationId }`，输出 `{ items: ComposerCompletionItem[] }`。目标节点和目录应由服务端读取真实会话，不信任浏览器自报坐标。幂等标记不等于宿主能证明插件没有副作用。
 - `{ kind: 'doc', name, itemsField }` 或 `{ kind: 'sessionDoc', name, itemsField }`：读取贡献插件自己的公开文档中的顶层数组字段，不用 `docs[0]` 推断来源。会话文档按需订阅，不旁路进入全局广播。
 
-每个候选提供 `id / label / insertText`，可选 `hint / icon`。选中仅替换光标前的触发词，不提交输入或执行候选命令。`/` 保留原有命令与技能路径；`@` 合并会话产物与插件源；`# / :` 无注册源时不弹出菜单。异步查询防抖并防止旧请求覆盖新会话、草稿或已停用源。动作源通过已有 Action HTTP、CLI、Agent 与 Workflow 路径同权访问，不新增补全专用 RPC。
+每个候选提供 `id / label / insertText`，可选 `hint / icon`。选中仅替换光标前的触发词，不提交输入或执行候选命令。`/` 保留原有命令与技能路径；`@ / # / :` 均通过注册的插件源提供候选，宿主不内置产物引用。异步查询防抖并防止旧请求覆盖新会话、草稿或已停用源。动作源通过已有 Action HTTP、CLI、Agent 与 Workflow 路径同权访问，不新增补全专用 RPC。
 
 ## 双轨渲染机制
 

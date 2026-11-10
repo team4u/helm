@@ -18,9 +18,6 @@ import { matchesUiScope } from '../lib/types.js'
 
 export type CompletionTrigger = '@' | '#' | ':'
 
-/** 内置 Artifacts 源在合并去重中的命名空间（与插件 id 不冲突）。 */
-export const HOST_ARTIFACT_SOURCE = '__host_artifacts__'
-
 /** 浮层可见候选上限：键盘循环同样只在此列表内（修复旧 12 显示 / 全量索引不一致）。 */
 export const COMPLETION_VISIBLE_LIMIT = 12
 

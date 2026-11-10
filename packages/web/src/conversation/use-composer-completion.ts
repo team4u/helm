@@ -13,7 +13,6 @@ import { useHelmStore } from '../lib/store-context.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import {
   COMPLETION_QUERY_DEBOUNCE_MS,
-  HOST_ARTIFACT_SOURCE,
   completersForTrigger,
   extractCompletionItems,
   filterByQuery,
@@ -25,7 +24,7 @@ import {
 } from './composer-completion-model.js'
 
 export interface CompletionSourceError {
-  /** 源标识（pluginId/specId 或宿主命名空间），逐源显式诊断。 */
+  /** 源标识（pluginId/specId），逐源显式诊断。 */
   source: string
   message: string
 }
@@ -69,12 +68,10 @@ export interface UseComposerCompletionSourcesInput {
   token: CompletionToken | null
   completers: ReadonlyArray<QualifiedUiSpec<ComposerCompleterSpec>>
   conversation: ConversationSummary
-  /** '@' 触发时的宿主内置会话产物候选（与插件源合并去重）。 */
-  hostArtifactItems: ComposerCompletionItem[] | null
 }
 
 export function useComposerCompletionSources(input: UseComposerCompletionSourcesInput): CompletionSourceSnapshot {
-  const { token, completers, conversation, hostArtifactItems } = input
+  const { token, completers, conversation } = input
   const store = useHelmStore()
   const trigger = token === null ? null : token.trigger
   const query = token?.query ?? ''
@@ -193,16 +190,12 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey, query, conversation.id, invokePluginAction, actions, actionSources])
 
-  // ---- 合并（渲染期纯计算）：宿主产物 → 各源按 priority 源顺序 ----
+  // ---- 合并（渲染期纯计算）：各插件源按 priority 源顺序 ----
   return useMemo(() => {
     if (token === null || !active) return EMPTY_SNAPSHOT
     const groups: Array<{ pluginId: string; items: ComposerCompletionItem[] | null }> = []
     const errors: CompletionSourceError[] = []
     let loading = false
-
-    if (trigger === '@' && hostArtifactItems !== null) {
-      groups.push({ pluginId: HOST_ARTIFACT_SOURCE, items: filterByQuery(hostArtifactItems, query) })
-    }
 
     for (const src of docSources) {
       const source = src.spec.source as { kind: 'doc'; name: string; itemsField: string }
@@ -254,7 +247,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
     const merged = mergeCompletionItems(groups)
     return { items: merged.items, total: merged.total, truncated: merged.truncated, loading, errors }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, active, trigger, query, hostArtifactItems, docSources, sessionDocSources, actionSources, pluginDocs, loadErrors, sessionStates, actionState])
+  }, [token, active, query, docSources, sessionDocSources, actionSources, pluginDocs, loadErrors, sessionStates, actionState])
 }
 
 function itemsFieldOf(

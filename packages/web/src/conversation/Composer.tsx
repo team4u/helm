@@ -627,7 +627,6 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     liveDraftRef.current = draftVersionOf(text, target, attachments)
   }, [])
 
-  const artifacts = store.conversationArtifacts[conversation.id] ?? []
   const working = conversation.status === 'working' || conversation.status === 'blocked'
   const isMobile = useIsMobile(680)
   const detail = store.conversationDetails[conversation.id]
@@ -777,7 +776,7 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     [conversation.id, notifyError],
   )
 
-  // 触发检测：'/' 进斜杠命令浮层；'@' '#' ':' 进统一补全浮层（含 '@' 内置产物）。
+  // 触发检测：'/' 进斜杠命令浮层；'@' '#' ':' 进统一插件补全浮层。
   const detectPopover = useCallback((value: string, caret: number): void => {
     const token = detectCompletionToken(value.slice(0, caret))
     if (token === null) {
@@ -836,22 +835,10 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
     [editingEntryId, attachments, syncLiveDraft],
   )
 
-  // '@' 内置会话产物候选（无产物时为空表，浮层展示空态而非隐藏：与旧浮层语义一致）。
-  const hostArtifactItems = useMemo(
-    () =>
-      artifacts.map((a) => ({
-        id: `@${a.id}`,
-        label: `@${a.name}`,
-        insertText: `@${a.id} `,
-        hint: `${a.mimeType} · ${formatBytes(a.size)}`,
-      })),
-    [artifacts],
-  )
   const completionSnapshot = useComposerCompletionSources({
     token: completionToken,
     completers: store.groupedUi.composerCompleters,
     conversation,
-    hostArtifactItems,
   })
 
   const slashPluginCommands = useMemo(
