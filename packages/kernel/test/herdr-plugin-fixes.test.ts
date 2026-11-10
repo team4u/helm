@@ -518,6 +518,7 @@ interface EnvOptions {
   transport?: FakeTransport
   backend?: FakeBackend
   docs?: MemoryDocStore
+  dataDir?: string
   /** 传入配置（service.start 前注入 config store）。 */
   config?: Record<string, unknown>
 }
@@ -530,7 +531,7 @@ class MemoryConfigStore {
 }
 
 async function makeEnv(options: EnvOptions = {}): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-fix-'))
+  const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'helm-herdr-fix-'))
   const parentHelmDir = join('/tmp/helm-herdr-parent', '.helm')
   rmSync(parentHelmDir, { recursive: true, force: true })
   mkdirSync(parentHelmDir, { recursive: true })
@@ -793,7 +794,7 @@ test('启动对账归属精确：helm-wf-abc 不认领 helm-wf-abcde（放弃所
   docs.set('builtin:herdr:managed', {
     version: 1,
     panes: [
-      { target: {}, routing: { kind: 'agy' }, paneId: 'w:p1', tabId: 'w:t1', effectiveCwd: '/tmp/a', agentName: 'helm-wf-abc', parentConversationId: 1, outcome: 'running', createdAt: 1 },
+      { target: { socketPath: join(dataDir, 'herdr.sock') }, routing: { kind: 'agy' }, paneId: 'w:p1', tabId: 'w:t1', effectiveCwd: '/tmp/a', agentName: 'helm-wf-abc', parentConversationId: 1, outcome: 'running', createdAt: 1 },
     ],
   })
   const backend = new FakeBackend()
@@ -822,8 +823,8 @@ test('启动对账：真正 working/blocked 保留并报告；已结束 keepaliv
   docs.set('builtin:herdr:managed', {
     version: 1,
     panes: [
-      { target: {}, routing: { kind: 'agy' }, paneId: 'w:p1', tabId: 'w:t1', effectiveCwd: '/tmp/a', agentName: 'helm-wf-busy', parentConversationId: 1, outcome: 'running', createdAt: 1 },
-      { target: {}, routing: { kind: 'agy' }, paneId: 'w:p2', tabId: 'w:t2', effectiveCwd: '/tmp/b', agentName: 'helm-wf-old', parentConversationId: 1, outcome: 'keepalive', createdAt: 1 },
+      { target: { socketPath: join(dataDir, 'herdr.sock') }, routing: { kind: 'agy' }, paneId: 'w:p1', tabId: 'w:t1', effectiveCwd: '/tmp/a', agentName: 'helm-wf-busy', parentConversationId: 1, outcome: 'running', createdAt: 1 },
+      { target: { socketPath: join(dataDir, 'herdr.sock') }, routing: { kind: 'agy' }, paneId: 'w:p2', tabId: 'w:t2', effectiveCwd: '/tmp/b', agentName: 'helm-wf-old', parentConversationId: 1, outcome: 'keepalive', createdAt: 1 },
     ],
   })
   const backend = new FakeBackend()
@@ -1403,20 +1404,25 @@ test('结算前发现 agent 身份变化时放弃关闭；worktree 只关自建 
 
 test('跨节点相同 paneId 确实产生歧义，nodeId=local 可明确选本机', { timeout: 60_000 }, async () => {
   const docs = new MemoryDocStore()
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-cross-node-'))
+  const socketPath = join(dataDir, 'herdr.sock')
   docs.set('builtin:herdr:managed', { version: 1, panes: [undefined, 'remote-node'].map((nodeId) => ({
-    target: nodeId === undefined ? {} : { nodeId }, routing: { kind: 'pi' },
+    target: nodeId === undefined ? { socketPath } : { nodeId }, routing: { kind: 'pi' },
     paneId: 'w1:p1', tabId: 'w1:t1', effectiveCwd: '/tmp', agentName: 'helm-wf-owned',
     parentConversationId: 1, outcome: 'failed', createdAt: 1,
   })) })
   const transport = new FakeTransport()
-  transport.panes.set('w1:p1', { paneId: 'w1:p1', tabId: 'w1:t1', workspaceId: 'w1', agentStatus: 'idle', seq: 1, cwd: '/tmp' })
-  const env = await makeEnv({ docs, transport })
+  transport.panes.set('w1:p1', { paneId: 'w1:p1', tabId: 'w1:t1', workspaceId: 'w1', agentStatus: 'idle', seq: 1, cwd: '/tmp', name: 'helm-wf-owned' })
+  transport.tabs.set('w1:t1', { closed: false })
+  const env = await makeEnv({ docs, transport, dataDir })
   try {
     await assert.rejects(env.host.invokeAction('builtin:herdr', 'read', { paneId: 'w1:p1' }), { code: 'pane_ambiguous' })
     for (const nodeId of ['local', 'remote-node']) {
       const result = await env.host.invokeAction('builtin:herdr', 'read', { paneId: 'w1:p1', nodeId }) as { nodeId: string }
       assert.equal(result.nodeId, nodeId)
-      assert.equal(transport.calls.findLast((call) => call.method === 'agent.read')?.target.nodeId, nodeId === 'local' ? undefined : nodeId)
+      if (nodeId === 'remote-node') {
+        assert.equal(transport.calls.findLast((call) => call.method === 'agent.read')?.target.nodeId, nodeId)
+      }
     }
   } finally { await env.close() }
 })

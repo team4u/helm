@@ -853,6 +853,7 @@ test('UI 七类十函数统一收集可序列化 spec；不可序列化 spec 拒
   const host = makeHost();
   await host.register({
     id: 'p:ui',
+    clientRoot: process.cwd(),
     definePlugin: (ctx) => {
       ctx.ui.sidebarItem({ id: 'home', label: '个人助理', target: 'conversation:1' });
       ctx.ui.sidebarSection({ id: 'workers', label: 'Worker' });
