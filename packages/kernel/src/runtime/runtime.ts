@@ -677,7 +677,7 @@ export class KernelRuntime {
           list: () => this.skillsSvc.list(),
           readFile: (skillId, path) => this.skillsSvc.readFile(skillId, path),
           directory: (id) => this.skillDirectory(id),
-          ensureSkill: (asset) => this.skillsSvc.ensureSkill(asset),
+          ensureSkill: (asset, pluginId) => this.ensurePluginSkill(asset, pluginId),
         },
         secrets: {
           get: (pluginId, key) => this.credentialsSvc.getPluginSecret(pluginId, key),
@@ -748,9 +748,6 @@ export class KernelRuntime {
           this.envFabric.withFileMutationQueue(target, fn, opts?.signal),
         onEvent: (type, listener) => this.onEvent(type, listener),
         emitEvent: (type, payload, options) => this.emitHostEvent(type, payload, options),
-        skills: {
-          ensureSkill: (asset, pluginId) => this.ensurePluginSkill(asset, pluginId),
-        },
       },
       docs: this.documentStore,
       sessionDocs: {
