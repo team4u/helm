@@ -9,6 +9,7 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { Profile, SkillSummary } from '@helm/protocol'
 import {
   buildProfileCategoryCounts,
+  buildProfileModelOptions,
   filterProfiles,
   getProfileIcon,
   isHerdrProfile,
@@ -105,6 +106,14 @@ const mockModels: ModelDescriptor[] = [
     modelId: 'deepseek-reasoner',
     available: true,
     label: 'DeepSeek R1',
+    thinkingLevels: ['off'],
+  },
+  {
+    id: 'unconfigured-provider/unconfigured-model',
+    provider: 'unconfigured-provider',
+    modelId: 'unconfigured-model',
+    available: false,
+    label: 'Unconfigured Model',
     thinkingLevels: ['off'],
   },
 ]
@@ -228,6 +237,69 @@ test('profile-center-model：profileIdValid 与 getProfileIcon', { timeout: 60_0
   assert.equal(getProfileIcon({ id: 'custom-bot' }), 'bot')
 })
 
+test('profile-center-model：buildProfileModelOptions 仅展示已配置模型且未配置模型不出现', { timeout: 60_000 }, () => {
+  const testModels: ModelDescriptor[] = [
+    {
+      id: 'openai/gpt-4o',
+      provider: 'openai',
+      modelId: 'gpt-4o',
+      available: true,
+      label: 'GPT-4o',
+      thinkingLevels: ['off'],
+    },
+    {
+      id: 'anthropic/claude-3-5-sonnet',
+      provider: 'anthropic',
+      modelId: 'claude-3-5-sonnet',
+      available: false,
+      label: 'Claude 3.5 Sonnet',
+      thinkingLevels: ['off'],
+    },
+    {
+      id: 'google/gemini-2.5-pro',
+      provider: 'google',
+      modelId: 'gemini-2.5-pro',
+      available: true,
+      thinkingLevels: ['off'],
+    },
+    {
+      id: 'meta/llama-3.3-70b',
+      provider: 'meta',
+      modelId: 'llama-3.3-70b',
+      available: false,
+      thinkingLevels: ['off'],
+    },
+  ]
+
+  // 1. 无当前已绑定模型：只包含系统默认与已配置可用模型，未配置模型绝对不出现
+  const options1 = buildProfileModelOptions(testModels)
+  assert.deepEqual(options1, [
+    { value: '', label: '跟随系统默认' },
+    { value: 'openai/gpt-4o', label: 'GPT-4o (openai/gpt-4o)' },
+    { value: 'google/gemini-2.5-pro', label: 'google/gemini-2.5-pro' },
+  ])
+  assert.equal(options1.some((o) => o.value.includes('claude')), false, '未配置模型不得出现在选项中')
+  assert.equal(options1.some((o) => o.value.includes('llama')), false, '未配置模型不得出现在选项中')
+
+  // 2. 当前角色已绑定可用模型：正常高亮可用项，不重复追加
+  const options2 = buildProfileModelOptions(testModels, 'openai/gpt-4o')
+  assert.deepEqual(options2, [
+    { value: '', label: '跟随系统默认' },
+    { value: 'openai/gpt-4o', label: 'GPT-4o (openai/gpt-4o)' },
+    { value: 'google/gemini-2.5-pro', label: 'google/gemini-2.5-pro' },
+  ])
+
+  // 3. 当前角色已绑定历史失效/未配置模型：保留该项并清晰标注未配置，但不带出其他未配置模型
+  const options3 = buildProfileModelOptions(testModels, 'anthropic/claude-3-5-sonnet')
+  assert.deepEqual(options3, [
+    { value: '', label: '跟随系统默认' },
+    { value: 'openai/gpt-4o', label: 'GPT-4o (openai/gpt-4o)' },
+    { value: 'google/gemini-2.5-pro', label: 'google/gemini-2.5-pro' },
+    { value: 'anthropic/claude-3-5-sonnet', label: 'anthropic/claude-3-5-sonnet（未配置）' },
+  ])
+  assert.equal(options3.some((o) => o.value.includes('llama')), false, '其他未配置模型不得因当前项未配置而带出')
+})
+
 // ---------------------------------------------------------------------------
 // 2. ProfileCard SSR 渲染与零 Emoji 断言
 // ---------------------------------------------------------------------------
@@ -302,6 +374,8 @@ test('ProfileDetailDrawer：编辑已有角色模式渲染与 0 Emoji', { timeou
   assert.match(html, /可用技能白名单/)
   assert.match(html, /保存角色/)
   assert.match(html, /删除角色/, '自定义角色应渲染删除按钮')
+  assert.doesNotMatch(html, /unconfigured-provider\/unconfigured-model/, '未配置的模型绝对不得在 Profile 抽屉的模型选项中出现')
+  assert.doesNotMatch(html, /Unconfigured Model/, '未配置的模型名称绝对不得在 Profile 抽屉的模型选项中出现')
   assert.doesNotMatch(html, EMOJI_REGEX, '已有角色抽屉渲染输出严禁含有 Emoji')
 })
 

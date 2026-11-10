@@ -1,5 +1,6 @@
 import type { Profile as ProtocolProfile, ProfileRuntime } from '@helm/protocol'
-import { assetsApi } from '../lib/api.js'
+import { assetsApi, type ModelDescriptor } from '../lib/api.js'
+import type { SelectOption } from '../ui/select-model.js'
 
 declare module '@helm/protocol' {
   interface Profile {
@@ -48,6 +49,30 @@ export function isHerdrProfile(p: Profile): boolean {
  */
 export function resolveProfileModel(p: Profile): string | undefined {
   return p.defaultModel ?? p.model
+}
+
+/**
+ * 构造角色绑定的可选模型下拉列表：
+ * - 第一项恒为「跟随系统默认」（value: ''）；
+ * - 过滤只展示已配置的模型（m.available === true），未配置的不能出来；
+ * - 若当前角色已配置的模型不在可用列表内（例如凭据失效或外部模型），
+ *   保留该项并注明「未配置」，确保既有值不丢失且明确提示。
+ */
+export function buildProfileModelOptions(
+  models: ModelDescriptor[],
+  currentModel?: string,
+): SelectOption<string>[] {
+  const list: SelectOption<string>[] = [{ value: '', label: '跟随系统默认' }]
+  const trimmedCurrent = currentModel?.trim() ?? ''
+  for (const m of models) {
+    if (!m.available) continue
+    const label = m.label ? `${m.label} (${m.id})` : m.id
+    list.push({ value: m.id, label })
+  }
+  if (trimmedCurrent !== '' && !models.some((m) => m.id === trimmedCurrent && m.available)) {
+    list.push({ value: trimmedCurrent, label: `${trimmedCurrent}（未配置）` })
+  }
+  return list
 }
 
 /**
