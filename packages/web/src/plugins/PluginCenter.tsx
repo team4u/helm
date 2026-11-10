@@ -68,13 +68,6 @@ export function PluginCenter({
 
   const isDrawerOpen = Boolean(selectedPluginId && selectedPlugin)
 
-  // 联动确保激活插件的公开文档已尝试加载
-  useEffect(() => {
-    if (selectedPluginId && store.authenticated) {
-      void store.ensurePluginDoc(selectedPluginId, 'status').catch(() => {})
-    }
-  }, [selectedPluginId, store.authenticated, store.ensurePluginDoc])
-
   const handleSelectPlugin = (pluginId: string) => {
     store.openTarget({ kind: 'plugins', pluginId })
   }
