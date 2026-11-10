@@ -5,7 +5,8 @@
  * - 组装共享 dispatchTrigger helper（delivery.ts：目标解析 + isClosing 门禁，
  *   经 host.dispatchTrigger 统一 defang 防逃逸投递）；
  * - webhook 连接器（webhook.ts：HMAC 验签公开路由 + 生命周期动作 + secret
- *   持久化于 credentials.json pluginSecrets，stash 全局脱敏）；
+ *   持久化于 credentials.json pluginSecrets，经 ctx.host.secrets 绑定本
+ *   插件命名空间，addRedaction 全局脱敏）；
  * - cron 连接器（cron.ts：持久调度与生命周期动作）；
  * - 声明式管理 UI 改为 client.tsx React 组件（screen 'manager' 订阅 crons/webhooks
  *   公共 doc；动作经 ctx.callAction；无 Emoji，icon 用 lucide 线性名）。
@@ -13,14 +14,14 @@
  * 诚实性边界：
  * - webhook secret 仅允许人工 HTTP/CLI 配置；拒绝会话上下文（run_action）
  *   创建——raw secret 已进模型工具历史，本插件无法清理已入上下文的秘密；
- * - create/delete 无跨存储事务：顺序写入 + 显式回滚/报错，成功前 flushDocs，
- *   不承诺原子 exactly-once（重启 catch-up 策略由 cron 模块文档声明）。
+ * - create/delete 无跨存储事务：顺序写入 + 显式回滚/报错，成功前 doc.flush()
+ *   真实冲刷，不承诺原子 exactly-once（重启 catch-up 策略由 cron 模块文档声明）。
  */
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
-import { TRIGGERS_PLUGIN_ID, type TriggersDependencies } from './triggers/contracts.js'
+import { TRIGGERS_PLUGIN_ID } from './triggers/contracts.js'
 import { createDeliveryDispatch } from './triggers/delivery.js'
 import { registerWebhook } from './triggers/webhook.js'
 import { registerCron } from './triggers/cron.js'
@@ -43,7 +44,7 @@ function resolveTriggersClientRoot(): string {
   )
 }
 
-export function createTriggersPlugin(deps: TriggersDependencies): PluginDefinition {
+export function createTriggersPlugin(): PluginDefinition {
   return {
     id: TRIGGERS_PLUGIN_ID,
     name: '触发器（cron + webhook）',
@@ -51,25 +52,17 @@ export function createTriggersPlugin(deps: TriggersDependencies): PluginDefiniti
     clientRoot: resolveTriggersClientRoot(),
     definePlugin(ctx) {
       // 共享投递 helper：cron（targetProfileId 第二参）与 webhook（envelope
-      // 携带已解析 target）同一实现；isClosing 在 helper 内检查。
+      // 携带已解析 target）同一实现；isClosing 在 helper 内检查（ctx.host
+      // getter 的读取函数包装）。
       const dispatch = createDeliveryDispatch({
         host: ctx.host,
-        profiles: deps.profiles,
-        isClosing: deps.isClosing,
+        profiles: ctx.host.profiles,
+        isClosing: () => ctx.host.isClosing,
       })
 
-      registerWebhook(ctx, {
-        credentials: deps.credentials,
-        stash: deps.stash,
-        profiles: deps.profiles,
-        dispatch,
-        flushDocs: deps.flushDocs,
-      })
+      registerWebhook(ctx, { dispatch })
 
-      registerCron(ctx, {
-        dispatchTrigger: dispatch,
-        flush: deps.flushDocs,
-      })
+      registerCron(ctx, { dispatchTrigger: dispatch })
 
       // ---- 管理 UI（client.tsx React 轨道；无 Emoji） ----
       ctx.ui.sidebarItem({

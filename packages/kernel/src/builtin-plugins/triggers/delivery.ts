@@ -9,7 +9,7 @@
  *   superagent trigger hook 可决定是否路由中枢）；
  * - text 传原始文本（runtime.dispatchTrigger 统一 defang 防逃逸包裹，
  *   连接器绝不双层包裹）；source 约定 cron:<id> / webhook:<id>；
- * - runtime 关闭中（isClosing）显式拒绝，防 close 期触发新回合。
+ * - 宿主关闭中（ctx.host.isClosing）显式拒绝，防 close 期触发新回合。
  */
 import { HelmError } from '@helm/protocol'
 import type { ExternalTriggerEnvelope } from '@helm/protocol'
@@ -25,6 +25,7 @@ export function createDeliveryDispatch(options: {
     dispatchTrigger(event: ExternalTriggerEnvelope): Promise<void>
   } & ConversationLookup
   profiles: ProfileLookup
+  /** 宿主关闭状态（ctx.host.isClosing getter）。 */
   isClosing(): boolean
 }): DispatchTriggerHelper {
   const { host, profiles, isClosing } = options

@@ -17,10 +17,15 @@
  * - reachable:false 时 modelCount 为缓存计数，绝不冒充实时刷新成功；
  * - 非 loopback 网关不读本机 magpie CLI 数据（那是另一个实例），只用所选
  *   网关 trace 并标注 source；apiKey 绝不进 doc / 动作输出 / 错误文本。
+ * - 零参工厂：目录刷新经 ctx.host.refreshModels({ providers: ['magpie'] })，
+ *   网络读取用 global fetch，本机 CLI 经 execFile 公开端口（runMagpieCli，
+ *   无注入后门；测试用 PATH fixture / global fetch mock）。
  */
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { HelmError, type PluginDefinition, type TurnSettledPayload } from '@helm/protocol'
 import {
   DEFAULT_MAGPIE_ROOT,
@@ -30,8 +35,8 @@ import {
   sameGateway,
   type MagpieGatewayRef,
   type MagpiePluginConfig,
-  type MagpiePluginDependencies,
   type MagpieStatusDoc,
+  type RunMagpieCli,
 } from './magpie/contracts.js'
 import { fetchQuotas, fetchTrace, resolveGateway } from './magpie/gateway.js'
 import { quotaRows } from './magpie/quota.js'
@@ -151,9 +156,32 @@ function resolveMagpieClientRoot(): string {
   )
 }
 
-export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefinition {
-  const fetchImpl = deps.fetchImpl ?? fetch
-  const runCli = deps.runMagpieCli
+const execFileAsync = promisify(execFile)
+
+/**
+ * 公开环境端口：本机 magpie CLI 经 execFile（PATH 解析，无隐藏注入）。
+ * 失败返回 { ok:false, error }；超时 10s；错误文本脱敏后限长。
+ */
+export function runMagpieCli(
+  args: readonly string[],
+  options?: { signal?: AbortSignal },
+): Promise<{ ok: boolean; stdout?: string; error?: string }> {
+  return execFileAsync('magpie', [...args], {
+    signal: options?.signal,
+    timeout: 10_000,
+    maxBuffer: 1024 * 1024,
+    encoding: 'utf8',
+  })
+    .then(({ stdout }) => ({ ok: true, stdout }))
+    .catch((error: unknown) => ({
+      ok: false,
+      error: sanitizeErrorText(error instanceof Error ? error : new Error(String(error))),
+    }))
+}
+
+export function createMagpiePlugin(): PluginDefinition {
+  const fetchImpl: typeof fetch = fetch
+  const runCli: RunMagpieCli = runMagpieCli
 
   return {
     id: MAGPIE_PLUGIN_ID,
@@ -302,11 +330,12 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
           })
           // 非阻塞后台刷新：失败只更新 reachable:false / lastError，绝不阻断
           // 启用与内核启动（provider.refreshModels 本身 throw——那是给通用
-          // 目录刷新的显式信号；这里经 deps 端口拿 errors 映射，不 reject）。
+          // 目录刷新的显式信号；这里经 ctx.host.refreshModels 拿 errors 映射，
+          // 不 reject）。
           void (async () => {
             try {
               const snapshotInner = gateway()
-              const result = await deps.refreshProviderModels({ allowNetwork: true, force: true })
+              const result = await ctx.host.refreshModels({ providers: [MAGPIE_PROVIDER_ID], allowNetwork: true, force: true })
               const error = result.errors['magpie']
               if (error !== undefined) {
                 publishCatalogStatus(snapshotInner, false, error)
@@ -384,7 +413,7 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
         outputSchema: REFRESH_OUTPUT_SCHEMA,
         handler: async () => {
           const snapshot = gateway()
-          const result = await deps.refreshProviderModels({ allowNetwork: true, force: true })
+          const result = await ctx.host.refreshModels({ providers: [MAGPIE_PROVIDER_ID], allowNetwork: true, force: true })
           const error = result.errors['magpie']
           publishCatalogStatus(snapshot, error === undefined, error)
           if (error !== undefined) {

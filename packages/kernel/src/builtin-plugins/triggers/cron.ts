@@ -3,7 +3,7 @@
  *
  * 职责：标准五字段 cron 表达式（cron-parser）驱动的定时投递。
  * - 运行态持久化于公共 doc `crons`（纯 JSON；lastRunAt/nextRunAt 随 claim 推进）；
- * - 持久 claim：调度点触发时先推进 nextRunAt 并 await deps.flush() 真实落盘，
+ * - 持久 claim：调度点触发时先推进 nextRunAt 并 await doc.flush() 真实落盘，
  *   再投递。同一计划点最多一次投递尝试；claim 落盘后、投递完成前崩溃则该次
  *   丢失（诚实语义：持久 claim 与异步输入提交不构成原子事务，不承诺 exactly-once）；
  * - catchUp:true 重启后将错过的时段合并补跑一次；
@@ -68,8 +68,6 @@ export interface CronDoc {
 export interface CronDeps {
   /** 投递入口（共享 dispatch helper：校验 Profile、解析/创建会话后进 trigger 管道）。 */
   dispatchTrigger(event: ExternalTriggerEnvelope, targetProfileId?: string): Promise<void>
-  /** 等待 doc 持久化队列真实落盘（SQLite drain）；失败显式抛错。 */
-  flush(): Promise<void>
 }
 
 /** 定时原语抽象（测试注入可控时钟；缺省 Date.now/setTimeout+unref）。 */
@@ -409,8 +407,9 @@ function clearLastError(job: CronJob): CronJob {
 
 /**
  * 注册 cron 调度：公共 doc + 4 个 action（cron_list/create/delete/trigger）+
- * 定时 service。主插件在 definePlugin 内调用；deps.dispatchTrigger 由组合层
- * 提供（校验 Profile、解析/创建会话后进 ctx.host.dispatchTrigger，内核已 defang）。
+ * 定时 service。主插件在 definePlugin 内调用；deps.dispatchTrigger 为共享
+ * delivery helper（校验 Profile、解析/创建会话后进 ctx.host.dispatchTrigger，
+ * 内核已 defang）。
  */
 export function registerCron(ctx: HelmPluginContext, deps: CronDeps): CronRuntime {
   return createCronScheduler(ctx, deps, defaultClock())
@@ -443,10 +442,10 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
   /** 读取并严格校验 doc；坏数据显式抛错，绝不静默重置。 */
   const readDoc = (): CronDoc => parseCronDoc(doc.get())
 
-  /** 写回 + 真实落盘；持久化失败显式抛错（调用方不得继续投递）。 */
+  /** 写回 + 真实落盘（doc.flush 冲刷本 store 排队写）；持久化失败显式抛错。 */
   const writeDoc = async (next: CronDoc): Promise<void> => {
     doc.set(next)
-    await deps.flush()
+    await doc.flush()
   }
 
   /**

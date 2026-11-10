@@ -10,7 +10,6 @@
  *   errors 中，绝不因 provider 静默吞错而弹「刷新成功」；
  * - 公开 status doc 与动作输出绝不携带 apiKey / token（密钥只经 Bearer 头）。
  */
-import type { PluginDefinition } from '@helm/protocol'
 
 export const MAGPIE_PLUGIN_ID = 'builtin:magpie'
 
@@ -54,23 +53,28 @@ export function sameGateway(a: MagpieGatewayRef, b: MagpieGatewayRef): boolean {
 }
 
 /**
- * 组合层注入依赖（app.ts 提供；测试可替换）：
- * - refreshProviderModels：经宿主 Models 集合刷新动态供应商目录
- *   （models.refresh({ providers: ['magpie'] }) 的包装），错误以
- *   errors: Record<providerId, message> 返回（不 reject）；
- * - fetchImpl / runMagpieCli：受控注入端口，测试不走真实网络 / 真实 CLI。
+ * 零参工厂：全部依赖直接消费 ctx.host 公共端口（HelmHostApi）：
+ * - refreshModels({ providers: ['magpie'] })：经宿主通用目录刷新链路刷新
+ *   自身 provider（错误以 result.errors['magpie'] 返回，不 reject）；
+ * - 网络读取用 global fetch；本机 magpie CLI 经 execFile 公开环境端口
+ *   （测试以 PATH fixture / mock global fetch 替代，不留生产后门）。
  */
-export interface MagpiePluginDependencies {
-  refreshProviderModels(options?: {
+export interface MagpieRefreshPort {
+  refreshModels(options?: {
+    providers?: string[]
     allowNetwork?: boolean
     force?: boolean
-  }): Promise<{ errors: Record<string, string>; modelCount?: number }>
-  fetchImpl?: typeof fetch
-  runMagpieCli?: (
-    args: readonly string[],
-    options?: { signal?: AbortSignal },
-  ) => Promise<{ ok: boolean; stdout?: string; error?: string }>
+  }): Promise<{ errors: Record<string, string> }>
 }
+
+/**
+ * 本机 magpie CLI 执行端口（公开环境端口：execFile 走 PATH，无隐藏注入）：
+ * 输出 stdout 或 error 文本；信号取消与超时由实现统一处理。
+ */
+export type RunMagpieCli = (
+  args: readonly string[],
+  options?: { signal?: AbortSignal },
+) => Promise<{ ok: boolean; stdout?: string; error?: string }>
 
 // ---------------------------------------------------------------------------
 // 公开 status doc（composer.pill / settings.panel / CLI helm magpie status 共用）
@@ -123,6 +127,4 @@ export const MAGPIE_STATUS_DOC = 'status'
 // ---------------------------------------------------------------------------
 
 // 真实宿主（@helm/protocol HelmPluginContext）已内置 ctx.provider 注册能力；
-// 跨 worktree 过渡期的 MagpiePluginContext / asMagpieContext 适配层已删除。
-
-export type MagpiePluginFactory = (deps: MagpiePluginDependencies) => PluginDefinition
+// ctx.host.refreshModels 为宿主通用目录刷新端口（kernel-host 交付）。

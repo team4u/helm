@@ -59,6 +59,10 @@ class FakeBackend implements PluginHostBackend {
   dispatched: ExternalTriggerEnvelope[] = []
   nextId = 100
   closing = false
+  /** 插件私有 secrets 后端（与 PluginHost 后端契约同形：pluginId 命名空间）。 */
+  pluginSecrets = new Map<string, string>()
+  redactions = new Set<string>()
+  profiles = new Set(['assistant', 'worker', 'watchdog'])
   /** 可控门：dispatchTrigger 在此 pending，resolve 后才返回（并发门禁测试）。 */
   dispatchGate: Promise<void> | null = null
   /** body 读取门：首 chunk 已可读、第二 chunk 挂起（流式超限测试）。 */
@@ -149,6 +153,29 @@ class FakeBackend implements PluginHostBackend {
   emitEvent(type: string, payload: unknown): void {
     this.events.push({ type, payload })
   }
+  // ---- 零参工厂消费的宿主公共端口（与 kernel-host 后端同形） ----
+  get isClosing(): boolean {
+    return this.closing
+  }
+  readonly secrets = {
+    get: async (key: string) => this.pluginSecrets.get(key),
+    set: async (key: string, value: string) => {
+      this.pluginSecrets.set(key, value)
+    },
+    delete: async (key: string) => {
+      this.pluginSecrets.delete(key)
+    },
+    addRedaction: (value: string) => {
+      this.redactions.add(value)
+      return () => {
+        this.redactions.delete(value)
+      }
+    },
+  }
+  readonly profiles = {
+    get: async (id: string) => (this.profileIds.has(id) ? { id } : undefined),
+  }
+  readonly profileIds = new Set(['assistant', 'worker', 'watchdog'])
 }
 
 class MemoryDocStore implements PluginDocStore {
@@ -182,19 +209,25 @@ async function makeHarness(over: Partial<{ closing: boolean }> = {}): Promise<Ha
   const host = new PluginHost({ dataDir, host: backend, docs })
   const credentials = new CredentialService(dataDir)
   const stash = new SecretStash()
-  const plugin = createTriggersPlugin({
-    credentials,
-    stash,
-    profiles: {
-      get: async (id: string) =>
-        id === 'assistant' || id === 'worker' || id === 'watchdog' ? { id } : undefined,
-    },
-    isClosing: () => backend.closing,
-    flushDocs: async () => {
-      docs.flushCount += 1
-    },
-  })
-  await host.register(plugin)
+  // 零参工厂：直接注册（secrets/profiles/isClosing/doc.flush 全走宿主端口）。
+  // 本 harness 的 PluginHost 后端 secrets 为内存实现，另以真实 CredentialService
+  // 镜像写入供落盘断言（0600 / 精确键 / 跨重启）——生产链路则由 runtime 后端
+  // 直连 credentialsSvc（见 kernel-host host backend）。
+  backend.secrets.set = async (key, value) => {
+    await credentials.setPluginSecret(TRIGGERS_PLUGIN_ID, key, value)
+    backend.pluginSecrets.set(key, value)
+  }
+  backend.secrets.delete = async (key) => {
+    await credentials.deletePluginSecret(TRIGGERS_PLUGIN_ID, key)
+    backend.pluginSecrets.delete(key)
+  }
+  backend.secrets.get = async (key) =>
+    (await credentials.getPluginSecret(TRIGGERS_PLUGIN_ID, key)) ?? backend.pluginSecrets.get(key)
+  backend.secrets.addRedaction = (value) => {
+    const release = stash.addRedaction(value)
+    return () => release()
+  }
+  await host.register(createTriggersPlugin())
   return { host, backend, docs, credentials, stash, dataDir }
 }
 

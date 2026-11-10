@@ -95,8 +95,10 @@ interface Harness {
   dispatched: Array<{ envelope: ExternalTriggerEnvelope; targetProfileId?: string }>
   /** dispatch 行为注入：抛错模拟投递失败。 */
   dispatchImpl: (envelope: ExternalTriggerEnvelope, targetProfileId?: string) => Promise<void>
+  /** doc.flush 调用计数（假持久断言用）。 */
   flushCalls: number
-  /** flush 行为注入：抛错模拟持久化失败。 */
+  /** flush 行为注入：抛错模拟持久化失败（doc.flush 走 MemoryDocStore，此处
+   * 直接覆盖 store.flush 实现）。 */
   flushImpl: () => Promise<void>
   events: Array<{ type: string; payload: unknown }>
   runtime: ReturnType<typeof createCronScheduler>
@@ -126,6 +128,13 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
     registration: undefined as never,
     dataDir,
   }
+  // doc.flush 注入：生产走 doc 句柄 flush（真实 SQLite 排队冲刷），此处将
+  // 内存 store 的 flush 指向可控实现以模拟持久化失败。
+  const innerFlush = (): Promise<void> => {
+    h.flushCalls += 1
+    return h.flushImpl()
+  }
+  docs.flush = innerFlush
   const host = new PluginHost({
     dataDir,
     docs,
@@ -174,10 +183,6 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
           ctx,
           {
             dispatchTrigger: async (envelope, targetProfileId) => h.dispatchImpl(envelope, targetProfileId),
-            flush: async () => {
-              h.flushCalls += 1
-              await h.flushImpl()
-            },
           },
           clock.api,
         )

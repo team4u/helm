@@ -3,18 +3,14 @@
  *
  * 设计（§4.4）：
  * - cron 与 webhook 共用同一 dispatchTrigger helper（目标解析见 delivery.ts）；
- * - public doc 只存元数据（绝不存 secret）；HMAC secret 落
- *   credentials.json pluginSecrets['builtin:triggers']['webhook:<id>']（0600），
- *   并经 stash.addRedaction 全局脱敏；
- * - 组合层依赖（credentials/stash/profiles/isClosing/flushDocs）由 app.ts
- *   显式注入，不经通用 ctx.host 扩张（机制与策略分离）。
+ * - public doc 只存元数据（绝不存 secret）；HMAC secret 落 credentials.json
+ *   pluginSecrets['builtin:triggers']['webhook:<id>']（0600，经 ctx.host.secrets
+ *   已绑定本插件 ID），并经 secrets.addRedaction 全局脱敏；
+ * - 组合层零依赖注入：secrets / profiles / isClosing 全部直接消费
+ *   ctx.host 公共端口（HelmHostApi），不接受注入式工厂参数。
  */
 import { HelmError } from '@helm/protocol'
-import type {
-  ConversationSummary,
-  PluginDefinition,
-} from '@helm/protocol'
-import type { CredentialService } from '../../services/credentials.js'
+import type { ConversationSummary, ExternalTriggerEnvelope } from '@helm/protocol'
 
 export const TRIGGERS_PLUGIN_ID = 'builtin:triggers'
 
@@ -69,20 +65,9 @@ export function assertDescription(description: string): string {
   return description
 }
 
-/** 目标 Profile 存在性端口（ProfileService 的最小面）。 */
+/** 目标 Profile 存在性端口（ctx.host.profiles 的最小面）。 */
 export interface ProfileLookup {
   get(id: string): Promise<{ id: string } | undefined>
-}
-
-/** 组合层注入依赖（app.ts 提供；测试可替换）。 */
-export interface TriggersDependencies {
-  credentials: Pick<CredentialService, 'getPluginSecret' | 'setPluginSecret' | 'deletePluginSecret'>
-  stash: { addRedaction(value: string): () => void }
-  profiles: ProfileLookup
-  /** runtime 关闭中标志：webhook 路由 / dispatch 前检查，防 close 期新回合。 */
-  isClosing(): boolean
-  /** doc 镜像排队持久化的真实冲刷（kernel.documentStore.flush）。 */
-  flushDocs(): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -201,4 +186,17 @@ export interface ConversationLookup {
   createConversation(init: { title?: string; profileId?: string }): Promise<ConversationSummary>
 }
 
-export type TriggersPluginFactory = (deps: TriggersDependencies) => PluginDefinition
+/**
+ * delivery 纯 helper 消费的宿主端口面（明确 Pick 语义，非 cast 桥）：
+ * 由调用处（definePlugin 内传 ctx.host）与测试 fixture 双向类型检查。
+ */
+export interface DeliveryHost extends ConversationLookup {
+  dispatchTrigger(event: ExternalTriggerEnvelope): Promise<void>
+}
+
+/** 投递 helper 构造入参：isClosing 为宿主 getter 的读取函数包装。 */
+export interface DeliveryOptions {
+  host: DeliveryHost
+  profiles: ProfileLookup
+  isClosing(): boolean
+}
