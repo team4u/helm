@@ -39,12 +39,16 @@ flowchart td
 
 ## 启动自举
 
+插件经零参工厂 `createProfilePlugin()` 注册，在 `definePlugin(ctx)` 内使用公开宿主端口 `ctx.host.profiles`（`list / get / getSystem / save / directory`）与 `ctx.host.skills`（`list / readFile / directory / ensureSkill`），不直接依赖内核 `ProfileService` / `SkillService`。
+
 插件服务（`profile-skills`）在启动时完成两件事：
 
-1. **系统级内置技能同步**：调用 `SkillService.ensureSkill` 同步 `skills/helm-cli/`（SKILL.md + references），以源码版本为准逐文件覆盖，缺失补齐；常规写入接口对受管技能统一 403 拒绝。
-2. **默认 Profile 托管声明**：若默认角色 `assistant` 的 `profile.json` 缺少 `managedByPlugin`，显式补写 `builtin:profile`（已存在时原样保留，不做归一化）。
+1. **系统级内置技能同步**：经 `ctx.host.skills.ensureSkill` 同步 `skills/helm-cli/`（SKILL.md + references），以源码版本为准逐文件覆盖，缺失补齐；PluginHost 校验 SKILL.md frontmatter 的 `managedByPlugin` 绑定调用插件（`builtin:profile`），登记受管后常规写入接口统一 403 拒绝。
+2. **默认 Profile 托管声明**：若默认角色 `assistant` 的 `profile.json` 缺少 `managedByPlugin`，经 `ctx.host.profiles.save` 显式补写 `builtin:profile`（已存在时原样保留，不做归一化）。
 
-默认 `assistant` Profile 由内核 `ProfileService.ensureDefault` 先行创建（`profile.json` + `SYSTEM.md`）。
+默认 `assistant` Profile 由内核 `ProfileService.ensureDefault` 先行创建（`profile.json` + `SYSTEM.md`）；插件启动后仅同步技能与补写托管声明，不重建被外部删除的资产。
+
+公共端口 `profiles.directory` / `skills.directory` 仅做 id 边界校验并返回真实磁盘路径，不负责 mkdir（首次初始化由调用方自建）；Profile 不存在时 `get` 返回 `undefined`、`getSystem` 抛 `not_found`，非法 id 统一 `validation_error`。Profile 资产经公开端口访问，可信插件不是安全沙箱。
 
 ---
 
@@ -69,9 +73,11 @@ flowchart td
 若外部误删 `SYSTEM.md`：
 
 1. **降级为空文本**：系统不阻断当前回合执行。
-2. **发送告警事件**：宿主触发 warning 级别系统通知（按 `profileId` 独立去重）。
+2. **发送告警事件**：插件经 `ctx.host.emitEvent` 发送 warning 级别系统通知（按 `profileId` 独立去重，恢复即停、再次缺失可重新告警）。
 3. **注入显式说明**：向模型注入 `profile.assets-missing` 段落。
-4. **自动重建自愈**：后续执行 `profiles update --system` 等写入时可自愈重建。
+4. **写入时自愈**：后续执行 `profiles update --system` 等写入时可自愈重建（不是启动时自动恢复）。
+
+缺失（`not_found`）之外的 I/O / 权限错误显式上抛，不吞、不降级。
 
 ---
 
@@ -99,11 +105,11 @@ helm profile list_mentionable --current --json
 
 目录计算排除当前 Profile、`humanSelectable: false` 的内部角色、所属插件已停用的受管角色，以及没有活动 `profile.runtime` UI 声明的外部运行时角色。运行时发现不按 `builtin:<kind>` 猜测插件 ID；未声明该扩展点的外部运行时不会被目录主动推荐，但不改变原有显式 `agent_spawn` 调用机制。候选不是在线健康检查，节点离线、模型未配置等执行故障仍由执行边界显式报告。
 
-候选查询与每轮提示词均重读资产和活动插件状态。修改 SYSTEM.md、增删 Profile 或启停插件，会在下一次查询或回合生效，不维护第二份持久目录。缺失 SYSTEM.md 会发送去重告警，不伪造职责摘要；权限或其他 I/O 故障显式传播。
+候选查询与每轮提示词均经公开宿主端口（`ctx.host.profiles` / `ctx.host.skills`）重读资产和活动插件状态。修改 SYSTEM.md、增删 Profile 或启停插件，会在下一次查询或回合生效，不维护第二份持久目录。候选缺失 SYSTEM.md 不告警、不伪造职责摘要（摘要留空）；权限或其他 I/O 故障显式传播。
 
 ### 当前会话主持编排
 
-满足顶层会话、Workflow 已启用且对应工具可用等条件时，`before_turn` 增加 `profile.catalog` 段落，包含 `<available_profiles>` 和协作指引。没有可委派角色时不注入。被派生的子会话不提供团队目录或角色补全，默认专注自身任务。
+满足顶层会话、已启用插件实际注册了 `subagent` / `SubagentWorkflow` 派工工具、且当回合工具清单仍含其一时，`before_turn` 增加 `profile.catalog` 段落，包含 `<available_profiles>` 和协作指引。没有可委派角色时不注入。被派生的子会话不提供团队目录或角色补全，默认专注自身任务。
 
 不注入目录只是认知引导，不是工具权限沙箱或硬性递归深度限制。宿主或其他插件若在后续钩子中移除工具，应同步移除引用该工具的提示词，不能仅凭曾经注册过工具就要求模型调用。
 
@@ -160,7 +166,7 @@ helm profiles update coder --all-skills --json
 
 ### 内置技能保护
 
-系统启动时自动同步内置管理技能 `skills/helm-cli/`：版本强制对齐、禁止常规 API 篡改。
+插件启动时经 `ctx.host.skills.ensureSkill` 同步内置管理技能 `skills/helm-cli/`：以源码版本为准逐文件覆盖，`managedByPlugin` 归属由 PluginHost 绑定校验，常规 API 篡改统一 403 拒绝。
 
 ---
 
