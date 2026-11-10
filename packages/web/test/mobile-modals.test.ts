@@ -2,7 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-const mermaidSource = readFileSync(new URL('../src/conversation/MermaidPreviewModal.tsx', import.meta.url), 'utf8')
+const mermaidSource = readFileSync(new URL('../../kernel/src/builtin-plugins/mermaid/client/MermaidPreviewModal.tsx', import.meta.url), 'utf8')
+const mermaidPluginCss = readFileSync(new URL('../../kernel/src/builtin-plugins/mermaid/client/styles.css', import.meta.url), 'utf8')
 const pluginCardSource = readFileSync(new URL('../src/plugins/PluginCard.tsx', import.meta.url), 'utf8')
 const pluginDrawerSource = readFileSync(new URL('../src/plugins/PluginDetailDrawer.tsx', import.meta.url), 'utf8')
 const modelDrawerSource = readFileSync(new URL('../src/models/ModelDetailDrawer.tsx', import.meta.url), 'utf8')
@@ -24,7 +25,7 @@ test('Mermaid 预览弹窗：头部标题自适应截断、操作组折行且关
   assert.match(mermaidSource, /className="btn btn-ghost btn-sm mermaid-modal-close"/)
 
   // responsive.css 中小屏媒体查询确保关闭按钮在首排右上角、操作组换行
-  const mobileMermaid = responsiveCss.slice(responsiveCss.indexOf('.mermaid-modal-header'))
+  const mobileMermaid = mermaidPluginCss.slice(mermaidPluginCss.indexOf('.mermaid-modal-header'))
   assert.match(mobileMermaid, /@media\s*\(max-width:\s*680px\)/)
   assert.match(mobileMermaid, /\.mermaid-modal-header\s*\{[^}]*flex-wrap:\s*wrap/)
   assert.match(mobileMermaid, /\.mermaid-modal-title\s*\{[^}]*order:\s*1/)
@@ -83,10 +84,10 @@ test('Mermaid 预览弹窗：纯全屏沉浸式画板、默认 1:1 实际比例�
   assert.match(mermaidSource, />\s*适屏\s*</)
   assert.match(mermaidSource, />\s*适宽\s*</)
   assert.match(mermaidSource, />\s*1:1\s*</)
-  // styles.css 提供全屏覆盖样式与 svg 层
+  // 宿主 styles 提供全屏 modal 通用类；mermaid 专属图层样式在插件 CSS
   assert.match(stylesCss, /\.modal-fullscreen-backdrop\s*\{[^}]*padding:\s*0\s*!important/)
   assert.match(stylesCss, /\.modal-fullscreen\s*\{[^}]*width:\s*100vw\s*!important/)
-  assert.match(stylesCss, /\.mermaid-svg-layer\s+svg\s*\{[^}]*width:\s*100%\s*!important/)
+  assert.match(mermaidPluginCss, /\.mermaid-svg-layer\s+svg\s*\{[^}]*width:\s*100%\s*!important/)
 })
 
 test('侧边栏页脚底栏按钮尺寸统一与内边距防挤压', { timeout: 60_000 }, () => {
@@ -98,9 +99,9 @@ test('侧边栏页脚底栏按钮尺寸统一与内边距防挤压', { timeout: 
 })
 
 test('Mermaid 预览弹窗：移动端触控 touch-action 禁用浏览器原生劫持与 GPU 硬件加速平移', { timeout: 60_000 }, () => {
-  // CSS 样式中针对 stage、transform-plane 和 svg-layer 强制禁止默认手势劫持
-  assert.match(stylesCss, /\.mermaid-modal-stage,\s*\n\.mermaid-transform-plane,\s*\n\.mermaid-svg-layer,\s*\n\.mermaid-svg-layer\s*\*\s*\{[^}]*touch-action:\s*none\s*!important;/)
-  assert.match(stylesCss, /\.mermaid-transform-plane\s*\{[^}]*will-change:\s*transform;/)
+  // 插件 CSS 中针对 stage、transform-plane 和 svg-layer 强制禁止默认手势劫持
+  assert.match(mermaidPluginCss, /\.mermaid-modal-stage,\s*\n\.mermaid-transform-plane,\s*\n\.mermaid-svg-layer,\s*\n\.mermaid-svg-layer\s*\*\s*\{[^}]*touch-action:\s*none\s*!important;/)
+  assert.match(mermaidPluginCss, /\.mermaid-transform-plane\s*\{[^}]*will-change:\s*transform;/)
   // 组件层配置直接 GPU 驱动 transform 与 multi-touch 支持
   assert.match(mermaidSource, /touchAction:\s*['"]none['"]/)
   assert.match(mermaidSource, /translate3d\(/)

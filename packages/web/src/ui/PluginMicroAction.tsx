@@ -1,17 +1,17 @@
 /**
- * PluginMicroAction：三类微插槽（conversation.header.action / conversation.row.action /
- * timeline.entry.action）的统一渲染组件。
+ * PluginMicroAction：UI 动作（ctx.ui.action：conversation:header / conversation:row /
+ * timeline:entry 三类微插槽）的统一渲染组件。
  *
  * - action-only（仅 actionId）：按 variant 渲染标准极简图标按钮（toolbar / hover）
  *   或菜单项（menu），点击调用 actionPluginId ?? pluginId 的 action，载荷由
  *   宿主实际上下文强制覆盖 spec.input（见 action-model.buildMicroActionInput）；
- * - 声明 client/json：内联 <PluginUiView />（独立 ViewBoundary 隔离，卸载即清理）；
+ * - 声明 client：内联 <PluginUiView />（独立 ViewBoundary 隔离，卸载即清理）；
  * - pending 期间禁用防重复提交；失败/成功经 store.pushNotice 显式通知，绝不静默吞错；
  * - 点击不冒泡（宿主行点击切换会话等行为不受干扰）。
  */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ConversationActionSpec } from '@helm/protocol'
+import type { UiActionSpec } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
@@ -20,7 +20,7 @@ import { DropdownMenuItem } from './DropdownMenu.js'
 import { buildMicroActionInput, isActionOnlyActionSpec, microActionPluginId } from '../conversation/action-model.js'
 
 export interface PluginMicroActionProps {
-  action: QualifiedUiSpec<ConversationActionSpec>
+  action: QualifiedUiSpec<UiActionSpec>
   /** 渲染形态：toolbar=顶栏图标按钮；menu=下拉菜单项；hover=消息悬停栏图标按钮。 */
   variant: 'toolbar' | 'menu' | 'hover'
   /** 由 Radix 下拉菜单承载时参与其键盘导航与选中生命周期。 */
@@ -48,7 +48,7 @@ export function PluginMicroAction({
   const [pending, setPending] = useState(false)
   const spec = action.spec
 
-  // 双轨内容：client/json 内联挂载（独立 ViewBoundary，与 action-only 互斥）。
+  // client 内容内联挂载（独立 ViewBoundary，与 action-only 互斥）。
   if (!isActionOnlyActionSpec(spec)) {
     return (
       <PluginUiView

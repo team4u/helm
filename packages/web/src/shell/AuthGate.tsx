@@ -98,7 +98,7 @@ export function AuthGate() {
         </div>
 
         {error && (
-          <div className="jr-callout jr-callout-err">
+          <div className="callout callout--error">
             <HelmIcon name="alert-circle" size={14} />
             <span>{error}</span>
           </div>

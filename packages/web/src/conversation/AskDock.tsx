@@ -210,7 +210,7 @@ function AskCard({ ask }: { ask: AskSpec }) {
         </div>
       ) : null}
       {error !== null ? (
-        <div className="jr-callout jr-callout-err">
+        <div className="callout callout--error">
           <HelmIcon name="alert-circle" size={13} />
           <span className="callout-text">{error}</span>
         </div>

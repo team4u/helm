@@ -17,12 +17,11 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import type {
-  ConversationActionSpec,
+  UiActionSpec,
   ConversationSummary,
   PluginUiContribution,
   SettingsPanelSpec,
-  TimelineEntryActionSpec,
-} from '@helm/protocol'
+  } from '@helm/protocol'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import {
   buildMicroActionInput,
@@ -153,23 +152,23 @@ test('matchTimelineRenderer：priority 降序 + kinds/matchMeta 组合裁决', {
 
 test('matchConversationActions：按 scope 与执行轨过滤，无会话上下文返回空', { timeout: 60_000 }, () => {
   const actions = [
-    { pluginId: 'p1', spec: { id: 'a1', label: '归档 Worker', actionId: 'archive', scope: { tags: ['worker'] } } satisfies ConversationActionSpec },
-    { pluginId: 'p2', spec: { id: 'a2', label: '全局动作', actionId: 'ping' } satisfies ConversationActionSpec },
-    { pluginId: 'p3', spec: { id: 'a3', label: '无执行轨', scope: { tags: ['worker'] } } as unknown as { spec: ConversationActionSpec } },
-  ] as Array<{ pluginId: string; spec: ConversationActionSpec }>
-  const matchedWorker = matchConversationActions(actions, workerConv)
+    { pluginId: 'p1', target: 'conversation:header', spec: { id: 'a1', label: '归档 Worker', actionId: 'archive', scope: { tags: ['worker'] } } },
+    { pluginId: 'p2', target: 'conversation:header', spec: { id: 'a2', label: '全局动作', actionId: 'ping' } },
+    { pluginId: 'p3', target: 'conversation:header', spec: { id: 'a3', label: '无执行轨', scope: { tags: ['worker'] } } },
+  ] as Array<{ pluginId: string; target: 'conversation:header'; spec: UiActionSpec }>
+  const matchedWorker = matchConversationActions(actions, 'conversation:header', workerConv)
   assert.deepEqual(matchedWorker.map((a) => a.spec.id), ['a1', 'a2'])
-  const matchedHuman = matchConversationActions(actions, humanConv)
+  const matchedHuman = matchConversationActions(actions, 'conversation:header', humanConv)
   assert.deepEqual(matchedHuman.map((a) => a.spec.id), ['a2'])
-  assert.deepEqual(matchConversationActions(actions, undefined), [])
+  assert.deepEqual(matchConversationActions(actions, 'conversation:header', undefined), [])
 })
 
 test('splitConversationHeaderActions：toolbar 直出、menu（缺省）收纳', { timeout: 60_000 }, () => {
   const actions = [
-    { pluginId: 'p1', spec: { id: 't1', label: '工具栏', actionId: 'x', placement: 'toolbar' } },
-    { pluginId: 'p2', spec: { id: 'm1', label: '菜单项', actionId: 'y' } },
-    { pluginId: 'p3', spec: { id: 'm2', label: '显式菜单', actionId: 'z', placement: 'menu' } },
-  ] as Array<{ pluginId: string; spec: ConversationActionSpec }>
+    { pluginId: 'p1', target: 'conversation:header', spec: { id: 't1', label: '工具栏', actionId: 'x', placement: 'toolbar' } },
+    { pluginId: 'p2', target: 'conversation:header', spec: { id: 'm1', label: '菜单项', actionId: 'y' } },
+    { pluginId: 'p3', target: 'conversation:header', spec: { id: 'm2', label: '显式菜单', actionId: 'z', placement: 'menu' } },
+  ] as Array<{ pluginId: string; target: 'conversation:header'; spec: UiActionSpec }>
   const { toolbar, menu } = splitConversationHeaderActions(actions)
   assert.deepEqual(toolbar.map((a) => a.spec.id), ['t1'])
   assert.deepEqual(menu.map((a) => a.spec.id), ['m1', 'm2'])
@@ -177,12 +176,12 @@ test('splitConversationHeaderActions：toolbar 直出、menu（缺省）收纳',
 
 test('matchTimelineEntryActions：kinds / roles 过滤正确（T7 语义）', { timeout: 60_000 }, () => {
   const actions = [
-    { pluginId: 'p1', spec: { id: 'e1', label: '仅用户消息', actionId: 'a', roles: ['user'] } satisfies TimelineEntryActionSpec },
-    { pluginId: 'p2', spec: { id: 'e2', label: '仅助手消息', actionId: 'a', roles: ['assistant'] } satisfies TimelineEntryActionSpec },
-    { pluginId: 'p3', spec: { id: 'e3', label: '仅 helm.input kind', actionId: 'a', kinds: ['helm.input'] } satisfies TimelineEntryActionSpec },
-    { pluginId: 'p4', spec: { id: 'e4', label: '任意条目', actionId: 'a' } satisfies TimelineEntryActionSpec },
-    { pluginId: 'p5', spec: { id: 'e5', label: 'scope 过滤', actionId: 'a', scope: { tags: ['worker'] } } satisfies TimelineEntryActionSpec },
-  ] as Array<{ pluginId: string; spec: TimelineEntryActionSpec }>
+    { pluginId: 'p1', target: 'timeline:entry', spec: { id: 'e1', label: '仅用户消息', actionId: 'a', roles: ['user'] } },
+    { pluginId: 'p2', target: 'timeline:entry', spec: { id: 'e2', label: '仅助手消息', actionId: 'a', roles: ['assistant'] } },
+    { pluginId: 'p3', target: 'timeline:entry', spec: { id: 'e3', label: '仅 helm.input kind', actionId: 'a', kinds: ['helm.input'] } },
+    { pluginId: 'p4', target: 'timeline:entry', spec: { id: 'e4', label: '任意条目', actionId: 'a' } },
+    { pluginId: 'p5', target: 'timeline:entry', spec: { id: 'e5', label: 'scope 过滤', actionId: 'a', scope: { tags: ['worker'] } } },
+  ] as Array<{ pluginId: string; target: 'timeline:entry'; spec: UiActionSpec }>
 
   // 用户文本消息（helm.input，role=user）
   const userMsg = matchTimelineEntryActions(actions, humanConv, { kind: 'helm.input', role: 'user' })
@@ -224,11 +223,9 @@ test('microActionPluginId：actionPluginId 覆写，缺省贡献插件自身', {
   assert.equal(microActionPluginId({}, 'contributor'), 'contributor')
 })
 
-test('isActionOnlyActionSpec：仅 actionId 且无 client/json', { timeout: 60_000 }, () => {
-  assert.equal(isActionOnlyActionSpec({ id: 'a', label: 'x', actionId: 'act' }), true)
-  assert.equal(isActionOnlyActionSpec({ id: 'a', label: 'x', actionId: 'act', json: {} }), false)
-  assert.equal(isActionOnlyActionSpec({ id: 'a', label: 'x', actionId: 'act', client: { module: 'index.tsx', export: 'C' } }), false)
-  assert.equal(isActionOnlyActionSpec({ id: 'a', label: 'x', json: {} }), false)
+test('isActionOnlyActionSpec：仅 actionId 且无 client', { timeout: 60_000 }, () => {
+  assert.equal(isActionOnlyActionSpec({ id: 'a', target: 'conversation:header', label: 'x', actionId: 'act' }), true)
+  assert.equal(isActionOnlyActionSpec({ id: 'a', target: 'conversation:header', label: 'x', actionId: 'act', client: { module: 'index.tsx', export: 'C' } }), false)
 })
 
 test('humanItemEntryKind：helm.input 归一化优先，兜底 pi.user', { timeout: 60_000 }, () => {
@@ -307,7 +304,7 @@ test('PluginMicroAction action-only：渲染图标按钮，点击调用 actionPl
       actionId: 'archive_worker',
       actionPluginId: 'builtin:superagent',
       input: { conversationId: 999, reason: 'done' },
-    } satisfies ConversationActionSpec,
+    } satisfies UiActionSpec,
   }
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -368,7 +365,7 @@ test('PluginMicroAction：pending 期间禁用防重复提交，失败显式通�
   })
   const action = {
     pluginId: 'p',
-    spec: { id: 'kill', label: '中止', actionId: 'kill_worker' } satisfies ConversationActionSpec,
+    spec: { id: 'kill', label: '中止', actionId: 'kill_worker' } satisfies UiActionSpec,
   }
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -405,7 +402,7 @@ test('PluginMicroAction menu 形态：popover-item 菜单项 + onInvoked 关闭�
   const store = makeTestStore({ invokePluginAction: async () => undefined })
   const action = {
     pluginId: 'p',
-    spec: { id: 'm', label: '菜单动作', actionId: 'act' } satisfies ConversationActionSpec,
+    spec: { id: 'm', label: '菜单动作', actionId: 'act' } satisfies UiActionSpec,
   }
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -425,31 +422,46 @@ test('PluginMicroAction menu 形态：popover-item 菜单项 + onInvoked 关闭�
   }
 })
 
-test('PluginMicroAction 声明 json：内联 PluginUiView 渲染声明式内容（不渲染按钮）', { timeout: 60_000 }, async () => {
+test('PluginMicroAction 声明 client：内联 PluginUiView 渲染组件内容（不渲染按钮）', { timeout: 60_000 }, async () => {
   const { act, createRoot, HelmStoreContext, makeTestStore, PluginMicroAction } = await setupMicroActionDom()
+  const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
+  seedPluginClientModule('p', 'card.tsx', { CardAction: () => e('div', null, '面板内容 XYZ') })
+  // 相对 URL fetch 需要 location 上下文：指向 127.0.0.1（请求本身因 seed 缓存
+  // 同步命中而不必成功；此 stub 仅避免 Invalid URL 异常遮蔽真实断言）。
+  const origFetch = globalThis.fetch
+  // 返回同 contentHash（seeded）：loadPluginClientModule 命中 seed 缓存复用模块命名空间。
+  globalThis.fetch = (async () =>
+    new Response('// seeded cache hit', { status: 200, headers: { 'x-helm-client-hash': 'seeded' } })) as typeof fetch
   const store = makeTestStore()
   const action = {
     pluginId: 'p',
+    target: 'conversation:header',
     spec: {
       id: 'card',
       label: '卡片动作',
       actionId: 'unused',
-      json: { component: 'Card', children: [{ component: 'Text', text: '面板内容 XYZ' }] },
-    } satisfies ConversationActionSpec,
+      client: { module: 'card.tsx', export: 'CardAction' },
+    } satisfies UiActionSpec,
   }
   const host = document.createElement('div')
   document.body.appendChild(host)
-  const root = createRoot(host)
+  const element = e(HelmStoreContext.Provider, { value: store },
+    e(PluginMicroAction, { action, variant: 'toolbar', conversationId: 1, slotProps: { conversationId: 1 } }))
+  const first = createRoot(host)
+  let root = first
   try {
-    await act(async () => {
-      root.render(e(HelmStoreContext.Provider, { value: store },
-        e(PluginMicroAction, { action, variant: 'toolbar', conversationId: 1, slotProps: { conversationId: 1 } })))
-    })
+    // 首挂触发异步加载（测试环境 fetch 不可用，失败态不缓存）；重挂新实例
+    // 后同步命中 seed 缓存（getCachedClientComponent 快路径）。
+    await act(async () => { first.render(element) })
+    act(() => { first.unmount() })
+    root = createRoot(host)
+    await act(async () => { root.render(element) })
     assert.match(host.textContent!, /面板内容 XYZ/)
-    assert.equal(host.querySelector('button'), null, '声明 json 轨时不渲染标准按钮')
+    assert.equal(host.querySelector('button'), null, '声明 client 轨时不渲染标准按钮')
   } finally {
     act(() => root.unmount())
     host.remove()
+    globalThis.fetch = origFetch
   }
 })
 
@@ -463,7 +475,7 @@ async function loadHostComponents() {
   return { ConversationTimeline, ConversationRowActionsMenu }
 }
 
-const headerActionContribution = (spec: ConversationActionSpec): PluginUiContribution => ({
+const headerActionContribution = (spec: UiActionSpec): PluginUiContribution => ({
   pluginId: 'builtin:superagent',
   surface: 'conversation.header.action',
   spec,
@@ -474,9 +486,9 @@ test('ConversationTimeline：timeline.entry.action 仅在匹配 kind/role 的消
   const { makeTestStore } = await import('./helpers/store.js')
   const { HelmStoreContext } = await import('../src/lib/store-context.js')
   const contributions: PluginUiContribution[] = [
-    { pluginId: 'builtin:superagent', surface: 'timeline.entry.action', spec: { id: 'user-only', label: '引用用户消息', actionId: 'quote', roles: ['user'] } satisfies TimelineEntryActionSpec },
-    { pluginId: 'builtin:superagent', surface: 'timeline.entry.action', spec: { id: 'ai-only', label: '引用回复', actionId: 'cite', roles: ['assistant'] } satisfies TimelineEntryActionSpec },
-    { pluginId: 'builtin:superagent', surface: 'timeline.entry.action', spec: { id: 'scoped', label: '仅Worker', actionId: 'w', scope: { tags: ['worker'] } } satisfies TimelineEntryActionSpec },
+    { pluginId: 'builtin:superagent', surface: 'timeline.entry.action', spec: { id: 'user-only', label: '引用用户消息', actionId: 'quote', roles: ['user'] } satisfies UiActionSpec },
+    { pluginId: 'builtin:superagent', surface: 'timeline.entry.action', spec: { id: 'ai-only', label: '引用回复', actionId: 'cite', roles: ['assistant'] } satisfies UiActionSpec },
+    { pluginId: 'builtin:superagent', surface: 'timeline.entry.action', spec: { id: 'scoped', label: '仅Worker', actionId: 'w', scope: { tags: ['worker'] } } satisfies UiActionSpec },
   ]
   const store = makeTestStore({
     conversations: [humanConv],
@@ -525,7 +537,7 @@ test('ConversationRowActionsMenu：仅在该会话 scope 命中时渲染菜单�
 
 test('ConversationPane 源码契约：顶栏消费 conversation.header.action（toolbar 直出 + menu 收纳）', { timeout: 60_000 }, () => {
   const src = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
-  assert.match(src, /matchConversationActions\(store\.groupedUi\.conversationHeaderActions, conversation\)/)
+  assert.match(src, /matchConversationActions\(store\.groupedUi\.uiActions, 'conversation:header', conversation\)/)
   assert.match(src, /splitConversationHeaderActions\(headerActions\)/)
   assert.match(src, /variant="toolbar"/)
   assert.match(src, /variant="menu"/)
@@ -536,9 +548,9 @@ test('ConversationPane SSR：placement=toolbar 的插件动作直出顶栏，men
   const { makeTestStore } = await import('./helpers/store.js')
   const { HelmStoreContext } = await import('../src/lib/store-context.js')
   const contributions: PluginUiContribution[] = [
-    { pluginId: 'p1', surface: 'conversation.header.action', spec: { id: 'tb', label: '巡查', icon: 'activity', actionId: 'patrol', placement: 'toolbar' } satisfies ConversationActionSpec },
-    { pluginId: 'p2', surface: 'conversation.header.action', spec: { id: 'mn', label: '归档汇报', actionId: 'archive', placement: 'menu' } satisfies ConversationActionSpec },
-    { pluginId: 'p3', surface: 'conversation.header.action', spec: { id: 'no', label: '别处会话', actionId: 'x', placement: 'toolbar', scope: { tags: ['worker'] } } satisfies ConversationActionSpec },
+    { pluginId: 'p1', surface: 'conversation.header.action', spec: { id: 'tb', label: '巡查', icon: 'activity', actionId: 'patrol', placement: 'toolbar' } satisfies UiActionSpec },
+    { pluginId: 'p2', surface: 'conversation.header.action', spec: { id: 'mn', label: '归档汇报', actionId: 'archive', placement: 'menu' } satisfies UiActionSpec },
+    { pluginId: 'p3', surface: 'conversation.header.action', spec: { id: 'no', label: '别处会话', actionId: 'x', placement: 'toolbar', scope: { tags: ['worker'] } } satisfies UiActionSpec },
   ]
   const store = makeTestStore({
     conversations: [humanConv],
@@ -574,7 +586,10 @@ test('groupedUi 微插槽分组：surface 正确归组并按 order 排序', { ti
     { pluginId: 'p', surface: 'timeline.entry.action', spec: { id: 't1', label: '条目', actionId: 'a' } },
   ]
   const grouped = groupUiContributions(contributions)
-  assert.deepEqual(grouped.conversationHeaderActions.map((a) => a.spec.id), ['h1', 'h2'])
-  assert.deepEqual(grouped.conversationRowActions.map((a) => a.spec.id), ['r1'])
-  assert.deepEqual(grouped.timelineEntryActions.map((a) => a.spec.id), ['t1'])
+  const header = grouped.uiActions.filter((a) => a.target === 'conversation:header')
+  const row = grouped.uiActions.filter((a) => a.target === 'conversation:row')
+  const entry = grouped.uiActions.filter((a) => a.target === 'timeline:entry')
+  assert.deepEqual(header.map((a) => a.spec.id), ['h1', 'h2'], 'header 按 order 升序')
+  assert.deepEqual(row.map((a) => a.spec.id), ['r1'])
+  assert.deepEqual(entry.map((a) => a.spec.id), ['t1'])
 })

@@ -929,19 +929,17 @@ export function createWorkflowPlugin(): PluginDefinition {
         },
       })
 
-      // ---- UI 扩展点（client.tsx 轨道；sessionDocs 按会话订阅 runs 分片） ----
+      // ---- UI 扩展点（client.tsx 轨道；组件经 usePluginSessionDoc 自行订阅 runs 分片） ----
       ctx.ui.toolView({
         id: 'subagent-card',
         toolNames: ['subagent'],
         replaceRow: true,
-        sessionDocs: [WORKFLOW_RUNS_DOC],
         client: { module: 'index.tsx', export: 'SubagentToolView' },
       })
       ctx.ui.toolView({
         id: 'workflow-card',
         toolNames: ['SubagentWorkflow'],
         replaceRow: true,
-        sessionDocs: [WORKFLOW_RUNS_DOC],
         client: { module: 'index.tsx', export: 'WorkflowToolView' },
       })
       ctx.ui.workbenchPanel({
@@ -949,7 +947,6 @@ export function createWorkflowPlugin(): PluginDefinition {
         label: '工作流与子代理',
         icon: 'git-branch',
         order: 10,
-        sessionDocs: [WORKFLOW_RUNS_DOC],
         badge: { doc: WORKFLOW_RUN_BADGES_DOC, byConversationField: 'byConversation' },
         client: { module: 'index.tsx', export: 'WorkflowWorkbenchPanel' },
       })

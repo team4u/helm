@@ -440,7 +440,6 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         id: 'overview',
         label: 'Herdr 终端总览',
         icon: 'terminal',
-        docs: ['overview'],
         client: { module: 'index.tsx', export: 'HerdrOverviewScreen' },
       })
       ctx.ui.profileRuntime({

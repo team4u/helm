@@ -58,21 +58,36 @@ export default {
       },
     })
     ctx.ui.sidebarItem({ id: "my", label: "我的插件", icon: "terminal", target: "screen:my-plugin/main" })
+    // 前端组件放 clientRoot（默认 <插件目录>/client/index.tsx）
     ctx.ui.screen({
-      id: "main", label: "计数器", docs: ["state"],
-      json: { component: "Card", title: "计数器", children: [
-        { component: "Text", text: "{$docs.state.count}" },
-        { component: "Button", label: "加一", action: { type: "helm:action", actionId: "increment", input: {} } },
-      ] },
+      id: "main", label: "计数器",
+      client: { module: "index.tsx", export: "CounterScreen" },
     })
   },
 }
 ```
 
+client/index.tsx（共享宿主 React 与 SDK，不打包第二份 React）：
+
+```tsx
+import { usePluginContext, usePluginDoc } from '@helm/plugin-client'
+
+export function CounterScreen() {
+  const { callAction } = usePluginContext()
+  const state = usePluginDoc<{ count: number }>('state')
+  return (
+    <div className="card">
+      <div>计数：{state?.count ?? 0}</div>
+      <button type="button" className="btn btn-primary" onClick={() => void callAction('increment', {})}>加一</button>
+    </div>
+  )
+}
+```
+
 扩展入口：
 - 后端 Hook（{{HOOK_COUNT}} 个）：{{HOOK_NAMES}}；各 Hook 允许的 continue/transform/handled/block 结果以 protocol 契约为准。
-- 前端 {{UI_METHOD_COUNT}} 个 ctx.ui 注册方法：基础 10 个（sidebarItem/sidebarSection、screen、timelineRenderer、toolView、composerPill/composerWidget、workbenchPanel、command、settingsPanel）+ 三类微操作（conversationHeaderAction/conversationRowAction/timelineEntryAction：绑 actionId 后宿主代管按钮/pending/失败提示，scope 按标签过滤会话，kinds/roles 过滤消息条目；宿主注入的真实 conversationId/entryId 强制覆盖 input 同名字段）+ profileRuntime（Profile 外部运行时元数据）+ slot（插件子插槽）+ artifactPreviewer（按 MIME/后缀预览产物）+ composerCompleter（输入引用候选源）。
-- timelineRenderer/toolView/artifactPreviewer/composerCompleter 支持 priority（降序裁决，缺省 0；同优先级保持贡献顺序）；同一插件可声明多块 settings.panel（order 排序）。
+- 前端 {{UI_METHOD_COUNT}} 个 ctx.ui 注册方法：基础 10 个（sidebarItem/sidebarSection、screen、timelineRenderer、markdownCodeBlock、toolView、composerPill/composerWidget、workbenchPanel、command、settingsPanel）+ 统一 UI 动作 action（target 三选一：conversation:header / conversation:row / timeline:entry；绑 actionId 后宿主代管按钮/pending/失败提示，scope 按标签过滤会话，timeline:entry 的 kinds/roles 过滤消息条目；宿主注入的真实 conversationId/entryId 强制覆盖 input 同名字段）+ profileRuntime（Profile 外部运行时元数据）+ slot（插件子插槽）+ artifactPreviewer（按 MIME/后缀预览产物）+ composerCompleter（输入引用候选源）。
+- timelineRenderer/markdownCodeBlock/toolView/artifactPreviewer/composerCompleter 支持 priority（降序裁决，缺省 0；同优先级保持贡献顺序）；同一插件可声明多块 settings.panel（order 排序）。markdownCodeBlock 按围栏语言（languages）接管 Markdown 代码块渲染，无注册命中时回退普通代码块。
 - `Profile.starters` 是静态配置的空白会话提示，不是 UI 扩展点；每 Profile 最多六项，label 最多 24 个 Unicode 码点，prompt 最多 4000 个码点。只在历史完整加载的真实空会话展示，点击回填草稿而不发送；已有草稿、附件、编辑或在途操作不覆盖。CLI 使用 `helm profiles update <id> --starters '<json数组>' --json`，传 `[]` 清空。
 - command 的 slash（不含 / 的触发词）同时派生输入框 `/` 补全：保留词 {{RESERVED_SLASH_COMMANDS}} 与 skill: 前缀禁占，跨启用插件不得重名，声明 slash 必须绑定本插件 actionId（跨插件动作用 actionPluginId）。
 - screen 组件收到 params/setParams：URL Hash 中主屏 `sp.<key>`、分屏 `ssp.<key>` 命名空间隔离，同屏双开互不串扰；setParams 默认 replace，`{push:true}` 入栈；组件不得自建路由或直接操作 history。
@@ -90,8 +105,8 @@ export default {
 - 外部插件 id 禁止 `builtin:` 前缀、禁止与已注册插件重名、不可自封 locked；放入目录后重启 Hub 自动发现并默认停用注册。
 - 启用：`helm plugins enable my-plugin`；修改入口代码后需重启 Hub 重新导入。停用/启用仅重建已有定义的生命周期。停用或卸载遇在途任务会显式拒绝（409 plugin_has_live_tasks）。
 - 不要在自己的回合内重启 Hub；先完成结果交付，再安排进程重启。
-- 前端 React 组件（client.tsx）经 esbuild 动态编译，可 import react / react-dom / lucide-react / @helm/plugin-client（宿主共享实例，不打包第二份 React）。
-- 共享 Hook：useToolActivity(callId, active) 报告所在时间线回合的工具后台活动；usePluginDoc(name, pluginId?) 响应式订阅公开全局文档（可跨插件寻址）；usePluginSessionDoc(name, {conversationId?, pluginId?}?) 按当前会话订阅公开会话文档（多组件共享订阅，引用归零退订，重连首帧恢复）；<PluginSlot name> 声明子插槽；usePluginContext() 提供 callAction(actionId, input, {pluginId?, conversationId?})（可跨插件）、submitInput(text, {conversationId?, whenBusy?})、openScreen/openSplitScreen/openConversationDrawer/openArtifact/openWorkbench、notify 等。
+- 前端 React 组件（client.tsx）经 esbuild 动态编译，可 import react / react-dom / lucide-react / @helm/plugin-client（宿主共享实例，不打包第二份 React）。@helm/plugin-client 另共享无障碍底座组件：Switch、Select、MultiSelect、Checkbox、Tabs/TabsList/TabsTrigger/TabsContent、SegmentedControl、HelmIcon、ViewBoundary、Callout、Dialog/DialogPortal/DialogOverlay/DialogContent/DialogTitle/DialogDescription/DialogClose/DialogTrigger、MarkdownView、MarkdownText、CodeBlockView、CopyButton、PluginSlot——复用宿主样式，不要另造原生控件。
+- 共享 Hook：useToolActivity(callId, active) 报告所在时间线回合的工具后台活动；usePluginDoc(name, pluginId?) 响应式订阅公开全局文档（可跨插件寻址）；usePluginSessionDoc(name, {conversationId?, pluginId?}?) 按当前会话订阅公开会话文档（多组件共享订阅，引用归零退订，重连首帧恢复）；useConversations() 全部会话摘要；useConversation(id) 单会话实时视图（summary/detail/live/pendingAsks）；<PluginSlot name> 声明子插槽；usePluginContext() 提供 callAction(actionId, input, {pluginId?, conversationId?})（可跨插件）、submitInput(text, {conversationId?, whenBusy?})、openScreen/openSplitScreen/openConversationDrawer/openArtifact/openWorkbench、notify 等。
 - 插件视图样式写在 clientRoot 内本地 .css（import 引入，esbuild 合并为保留导出 __helmClientCss，宿主托管注入与回收），不得写宿主 styles.css。
 - UI 文案严禁 Emoji；图标用 lucide 图标名。
 - 完整扩展点与双轨机制见仓库内 docs/architecture/extension-points.md 与 docs/plugins/plugin-development.md。
@@ -110,10 +125,10 @@ definePlugin(ctx) {
         return metrics.get(input.conversationId)
       },
     })
-    // 声明式轨道按当前会话订阅；client.tsx 用 usePluginSessionDoc("metrics")
+    // client.tsx 组件用 usePluginSessionDoc("metrics") 按当前会话订阅
     ctx.ui.workbenchPanel({
-      id: "metrics", label: "会话指标", sessionDocs: ["metrics"],
-      json: { component: "Text", text: "{$sessionDocs.metrics.count}" },
+      id: "metrics", label: "会话指标",
+      client: { module: "index.tsx", export: "MetricsPanel" },
     })
   }
 ```

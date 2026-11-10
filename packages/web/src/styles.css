@@ -148,9 +148,7 @@ pre,
 code,
 table,
 input,
-textarea,
-.jr-markdown,
-.jr-table td {
+textarea {
   user-select: text;
 }
 
@@ -2823,66 +2821,8 @@ textarea.textarea,
   cursor: not-allowed;
 }
 
-/* ==========================================================================
- * 8. @json-render 20 个标准原语组件样式
- * ========================================================================== */
-
-.jr-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.jr-stack-row {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.jr-metric-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px;
-}
-
-.jr-metric-card {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.jr-metric-label {
-  font-size: 11px;
-  color: var(--fg-muted);
-}
-
-.jr-metric-value {
-  font-size: 18px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.jr-kv-list {
-  display: grid;
-  grid-template-columns: minmax(90px, auto) 1fr;
-  gap: 6px 14px;
-  font-size: 12.5px;
-}
-.jr-kv-key {
-  color: var(--fg-muted);
-}
-.jr-kv-val {
-  color: var(--fg);
-  font-variant-numeric: tabular-nums;
-  word-break: break-all;
-}
-
-.jr-callout {
+/* 通用信息提示原语（core 自有；与任何插件样式无关） */
+.callout {
   padding: 9px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
@@ -2892,69 +2832,28 @@ textarea.textarea,
   align-items: flex-start;
   gap: 8px;
 }
-.jr-callout-flush {
+.callout--flush {
   border-radius: 0 !important;
   border-width: 0 !important;
 }
-.jr-callout span,
+.callout span,
 .callout-text {
   word-break: break-all;
 }
-.jr-callout-warn {
+.callout--warning {
   background: var(--warn-bg);
   border-color: var(--warn-border);
   color: var(--warn);
 }
-.jr-callout-err {
+.callout--error {
   background: var(--err-bg);
   border-color: var(--err-border);
   color: var(--err);
 }
-.jr-callout-ok {
+.callout--success {
   background: var(--ok-bg);
   border-color: var(--ok-border);
   color: var(--ok);
-}
-
-.jr-table-wrap {
-  width: 100%;
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-}
-
-.jr-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-}
-
-.jr-table th {
-  text-align: left;
-  padding: 7px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--fg-muted);
-  background: var(--bg-subtle);
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-}
-
-.jr-table td {
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--border);
-  color: var(--fg);
-  vertical-align: middle;
-}
-
-.jr-table tr:last-child td {
-  border-bottom: none;
-}
-
-.jr-table tr:hover td {
-  background: var(--bg-hover);
 }
 
 /* 代码块容器 */
@@ -2998,10 +2897,6 @@ textarea.textarea,
 .code-block-header-actions {
   display: inline-flex;
   gap: 4px;
-}
-
-.spec-block-wrap {
-  padding: 10px;
 }
 
 .markdown-media-audio {
@@ -3792,57 +3687,6 @@ textarea.textarea,
   opacity: 0.45;
   cursor: not-allowed;
 }
-.mermaid-body {
-  background: transparent;
-  padding: 10px 12px;
-  overflow-x: auto;
-}
-
-.mermaid-body svg {
-  max-width: 100%;
-  height: auto;
-}
-
-/* Mermaid 节点文本防截断与外边框保护：
- * 1. svg 与 foreignObject 设为 overflow: visible，避免顶部标题（如 subgraph）及边缘被 viewBox 削去；
- * 2. foreignObject 内层 div 覆盖 Mermaid 内部写死的 120px max-width，保证多行文本利用容器全宽；
- * 3. 标签行高紧凑居中，外层段落 margin 清零，杜绝因行距溢出导致文字被截断。
- */
-.mermaid-body svg,
-.mermaid-svg-layer svg {
-  overflow: visible !important;
-}
-
-.mermaid-body foreignObject,
-.mermaid-svg-layer foreignObject {
-  overflow: visible !important;
-}
-
-.mermaid-body foreignObject > div,
-.mermaid-svg-layer foreignObject > div {
-  width: 100% !important;
-  max-width: 100% !important;
-  height: 100% !important;
-  white-space: normal !important;
-  word-break: break-word !important;
-  box-sizing: border-box !important;
-}
-
-.mermaid-body .nodeLabel,
-.mermaid-svg-layer .nodeLabel,
-.mermaid-body .edgeLabel,
-.mermaid-svg-layer .edgeLabel {
-  display: inline-block !important;
-  line-height: 1.4 !important;
-}
-
-.mermaid-body .nodeLabel p,
-.mermaid-svg-layer .nodeLabel p {
-  margin: 0 !important;
-  padding: 0 !important;
-  line-height: 1.4 !important;
-}
-
 /* 模态弹窗全屏覆盖模式与 Mermaid 画布图层 */
 .modal-fullscreen-backdrop {
   position: fixed !important;
@@ -3867,73 +3711,6 @@ textarea.textarea,
 .modal-body-flush {
   padding: 0 !important;
   overflow: hidden !important;
-}
-
-.mermaid-source-pre {
-  padding: 14px;
-  height: 100%;
-  overflow: auto;
-  margin: 0;
-}
-
-.mermaid-modal-stage,
-.mermaid-transform-plane,
-.mermaid-svg-layer,
-.mermaid-svg-layer * {
-  touch-action: none !important;
-  -webkit-touch-callout: none !important;
-}
-
-.mermaid-modal-stage {
-  flex: 1;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  position: relative;
-  background: var(--bg);
-  user-select: none !important;
-  -webkit-user-select: none !important;
-  overscroll-behavior: none !important;
-}
-
-.mermaid-transform-plane {
-  transform-origin: top center;
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 32px;
-  padding-bottom: 64px;
-  pointer-events: none;
-  touch-action: none;
-  will-change: transform;
-}
-
-.mermaid-svg-layer {
-  display: block;
-  background: transparent;
-  max-width: none;
-  pointer-events: auto;
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.mermaid-svg-layer svg {
-  width: 100% !important;
-  height: 100% !important;
-  max-width: none !important;
-  max-height: none !important;
-  display: block !important;
-}
-
-.mermaid-status-hint {
-  color: var(--fg-muted);
-  font-size: 12px;
 }
 
 /* ==========================================================================

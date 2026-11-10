@@ -42,6 +42,7 @@ import type {
   EnvExecRequest,
   EnvExecResponse,
   MaybePromise,
+  PluginSkillAsset,
 } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
@@ -747,6 +748,9 @@ export class KernelRuntime {
           this.envFabric.withFileMutationQueue(target, fn, opts?.signal),
         onEvent: (type, listener) => this.onEvent(type, listener),
         emitEvent: (type, payload, options) => this.emitHostEvent(type, payload, options),
+        skills: {
+          ensureSkill: (asset, pluginId) => this.ensurePluginSkill(asset, pluginId),
+        },
       },
       docs: this.documentStore,
       sessionDocs: {
@@ -807,6 +811,21 @@ export class KernelRuntime {
    * - SYSTEM.md / MEMORY.md 由 builtin:profile / builtin:memory 在
    *   before_turn sections 注入，这里不写业务 system。
    */
+  /** 插件受管技能自举：委托 SkillService.ensureSkill（受管覆盖 + 只读登记）。
+   * frontmatter managedByPlugin 必须指向调用插件（技能目录可用性随插件启停过滤的前提）。 */
+  private async ensurePluginSkill(asset: PluginSkillAsset, pluginId: string): Promise<void> {
+    const managed = /^managedByPlugin:[ \t]*['\"]?([^'\"\n]+)['\"]?[ \t]*$/m.exec(asset.skillMd)
+    if (managed?.[1]?.trim() !== pluginId) {
+      throw new HelmError(
+        'invalid_plugin_skill',
+        `插件 ${pluginId} 自举技能 ${asset.id} 的 SKILL.md frontmatter 必须声明 managedByPlugin: ${pluginId}（实际：${managed?.[1] ?? '缺失'}）`,
+        400,
+        { pluginId, skillId: asset.id },
+      )
+    }
+    await this.skillsSvc.ensureSkill(asset)
+  }
+
   private async ensureInitialConversation(): Promise<void> {
     const thinking = await this.conversations.resolveEffectiveThinkingLevel(undefined, 'assistant')
     const effective = await this.conversations.resolveEffectiveModel(undefined, 'assistant')

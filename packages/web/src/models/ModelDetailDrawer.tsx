@@ -426,7 +426,7 @@ export function ModelDetailDrawer({
 
                     {testResult && (
                       <div
-                        className={`jr-callout ${testResult.success ? 'jr-callout-ok' : 'jr-callout-err'}`}
+                        className={`callout ${testResult.success ? 'callout callout--success' : 'callout callout--error'}`}
                         role={testResult.success ? 'status' : 'alert'}
                         style={{ marginTop: 8 }}
                       >

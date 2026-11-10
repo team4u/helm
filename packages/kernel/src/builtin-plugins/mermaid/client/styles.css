@@ -1,0 +1,137 @@
+/*
+ * builtin:mermaid 插件样式（编译为保留导出 __helmClientCss，宿主托管注入与回收）。
+ * 复用宿主设计令牌与通用模窗类（.modal/.modal-fullscreen 等）；仅 Mermaid 图表专属规则。
+ */
+
+.mermaid-body {
+  background: transparent;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+.mermaid-body svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Mermaid 节点文本防截断与外边框保护：
+ * 1. svg 与 foreignObject 设为 overflow: visible，避免顶部标题（如 subgraph）及边缘被 viewBox 削去；
+ * 2. foreignObject 内层 div 覆盖 Mermaid 内部写死的 120px max-width，保证多行文本利用容器全宽；
+ * 3. 标签行高紧凑居中，外层段落 margin 清零，杜绝因行距溢出导致文字被截断。
+ */
+.mermaid-body svg,
+.mermaid-svg-layer svg {
+  overflow: visible !important;
+}
+
+.mermaid-body foreignObject,
+.mermaid-svg-layer foreignObject {
+  overflow: visible !important;
+}
+
+.mermaid-body foreignObject > div,
+.mermaid-svg-layer foreignObject > div {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100% !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+  box-sizing: border-box !important;
+}
+
+.mermaid-body .nodeLabel,
+.mermaid-svg-layer .nodeLabel,
+.mermaid-body .edgeLabel,
+.mermaid-svg-layer .edgeLabel {
+  display: inline-block !important;
+  line-height: 1.4 !important;
+}
+
+.mermaid-body .nodeLabel p,
+.mermaid-svg-layer .nodeLabel p {
+  margin: 0 !important;
+  padding: 0 !important;
+  line-height: 1.4 !important;
+}
+
+.mermaid-source-pre {
+  padding: 14px;
+  height: 100%;
+  overflow: auto;
+  margin: 0;
+}
+
+.mermaid-modal-stage,
+.mermaid-transform-plane,
+.mermaid-svg-layer,
+.mermaid-svg-layer * {
+  touch-action: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+.mermaid-modal-stage {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  background: var(--bg);
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  overscroll-behavior: none !important;
+}
+
+.mermaid-transform-plane {
+  transform-origin: top center;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 32px;
+  padding-bottom: 64px;
+  pointer-events: none;
+  touch-action: none;
+  will-change: transform;
+}
+
+.mermaid-svg-layer {
+  display: block;
+  background: transparent;
+  max-width: none;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.mermaid-svg-layer svg {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  display: block !important;
+}
+
+.mermaid-status-hint {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+
+/* 预览弹窗响应式（移动端折行；随插件注入） */
+.mermaid-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.mermaid-modal-title { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mermaid-modal-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mermaid-modal-close { flex-shrink: 0; }
+
+@media (max-width: 680px) {
+  .mermaid-modal-header { flex-wrap: wrap; padding: 10px 12px; gap: 8px; }
+  .mermaid-modal-title { order: 1; flex: 1; min-width: 0; }
+  .mermaid-modal-close { order: 2; margin-left: auto; }
+  .mermaid-modal-actions { order: 3; width: 100%; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-start; }
+}
+

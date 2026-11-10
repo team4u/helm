@@ -217,6 +217,9 @@ importers:
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
+      mermaid:
+        specifier: ^12.2.0
+        version: 12.3.0
       typebox:
         specifier: ^1.0.0
         version: 1.4.4

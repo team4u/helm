@@ -1,10 +1,9 @@
 /**
  * P3 Plugin-to-Plugin 子插槽测试：
  * - plugin-slot-model 纯函数：target 匹配、scope 过滤、priority 降序 order 升序稳定排序；
- * - <PluginSlot /> 真实渲染（client 轨 PluginClientContext + JSON 轨 HelmSpecView Slot 原语）：
- *   短名自动拼全限定名、single 取首项、fallback、子项 ctx.pluginId 是贡献者；
- * - 环保护：同一贡献项在渲染链再次出现时显式环告警且不死循环；
- * - JSON 轨 $data 透传给子项（可序列化数据）。
+ * - <PluginSlot /> 真实渲染（client 轨）：短名自动拼全限定名、single 取首项、
+ *   fallback、子项 ctx.pluginId 是贡献者；
+ * - 环保护：同一贡献项在渲染链再次出现时显式环告警且不死循环。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -17,7 +16,6 @@ import { PluginClientContext, createPluginClientContext, usePluginContext } from
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { PluginSlot } from '../src/lib/plugin-client-sdk.js'
 import { collectSlotItems, isValidSlotTarget } from '../src/ui/plugin-slot-model.js'
-import { HelmSpecView } from '../src/ui/HelmSpecView.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
 
@@ -110,9 +108,11 @@ test('PluginSlot：短名拼全限定、贡献项渲染、子项 ctx.pluginId �
 })
 
 test('PluginSlot：single 取首项、无命中回退 fallback', { timeout: 60_000 }, () => {
+  seedPluginClientModule('p1', 'a.tsx', { ItemA: () => e('div', null, 'A') })
+  seedPluginClientModule('p2', 'b.tsx', { ItemB: () => e('div', null, 'B') })
   const store = slotContributionUi([
-    slotContribution('p1', 'a', 'owner/zone', { json: { component: 'Text', text: 'A' } }),
-    slotContribution('p2', 'b', 'owner/zone', { json: { component: 'Text', text: 'B' }, priority: 5 }),
+    slotContribution('p1', 'a', 'owner/zone', { client: { module: 'a.tsx', export: 'ItemA' } }),
+    slotContribution('p2', 'b', 'owner/zone', { client: { module: 'b.tsx', export: 'ItemB' }, priority: 5 }),
   ])
   const ownerCtx = createPluginClientContext(store, 'owner', undefined)
   const host = document.createElement('div')
@@ -157,36 +157,5 @@ test('PluginSlot：环检测显式告警且不死循环', { timeout: 60_000 }, (
   assert.ok(host.textContent !== undefined)
   // 有限深度内终止：渲染结果包含环告警文本（链上 p2/cycle 两次出现）
   assert.match(host.textContent ?? '', /循环嵌套|最大深度/, '显式环告警而非栈溢出')
-  act(() => { root.unmount() })
-})
-
-test('JSON 轨 Slot 原语：$data 透传子项、无 PluginClientContext 也可用（ownerPluginId）', { timeout: 60_000 }, () => {
-  const store = slotContributionUi([
-    slotContribution('p1', 'a', 'owner/zone', { json: { component: 'Text', text: '{$data.zone}' } }),
-  ])
-  const host = document.createElement('div')
-  const root = renderToString(host, e(
-    HelmStoreContext.Provider, { value: store },
-    e(HelmSpecView, {
-      pluginId: 'owner',
-      spec: { component: 'Slot', name: 'zone', mode: 'list' },
-      data: { zone: 'north-1' },
-    }),
-  ))
-  assert.equal(host.textContent, 'north-1', '声明式 Slot 原语渲染贡献项并透传 $data')
-  act(() => { root.unmount() })
-})
-
-test('JSON 轨 $sessionDocs：sessionDocs 声明挂载到求值域（未订阅时缺省）', { timeout: 60_000 }, () => {
-  const store = makeTestStore()
-  const host = document.createElement('div')
-  const root = renderToString(host, e(
-    HelmStoreContext.Provider, { value: store },
-    e(HelmSpecView, {
-      pluginId: 'owner',
-      spec: { component: 'Text', text: '{$sessionDocs.metrics}' },
-    }),
-  ))
-  assert.equal(host.textContent, '—', '$sessionDocs 求值域存在（未收到文档时 Text 显示占位破折号）')
   act(() => { root.unmount() })
 })

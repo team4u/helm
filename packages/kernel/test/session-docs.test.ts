@@ -181,10 +181,11 @@ test('profileRuntime/微动作/slot 注册成功并进 listUi；priority/order �
     id: 'p:ui',
     definePlugin: (ctx) => {
       ctx.ui.profileRuntime({ id: 'herdr', kind: 'herdr', label: 'Herdr 运行时', order: 10 })
-      ctx.ui.conversationHeaderAction({ id: 'a1', label: '归档', actionId: 'archive', placement: 'toolbar' })
-      ctx.ui.conversationRowAction({ id: 'a2', label: '清理', actionId: 'cleanup' })
-      ctx.ui.timelineEntryAction({
+      ctx.ui.action({ id: 'a1', target: 'conversation:header', label: '归档', actionId: 'archive', placement: 'toolbar' })
+      ctx.ui.action({ id: 'a2', target: 'conversation:row', label: '清理', actionId: 'cleanup' })
+      ctx.ui.action({
         id: 'a3',
+        target: 'timeline:entry',
         label: '引用',
         actionId: 'quote',
         kinds: ['user'],
@@ -247,7 +248,7 @@ test('非法形状显式拒绝：priority 非整数 / slash 保留词 / slot tar
     host.register({
       id: 'p:x5',
       definePlugin: (ctx) => {
-        ctx.ui.conversationHeaderAction({ id: 'a', label: '空' })
+        ctx.ui.action({ id: 'a', target: 'conversation:header', label: '空' })
       },
     }),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
@@ -256,42 +257,27 @@ test('非法形状显式拒绝：priority 非整数 / slash 保留词 / slot tar
     host.register({
       id: 'p:x6',
       definePlugin: (ctx) => {
-        ctx.ui.timelineEntryAction({ id: 'a', label: '坏角色', actionId: 'x', roles: ['system'] as never })
+        ctx.ui.action({ id: 'a', target: 'timeline:entry', label: '坏角色', actionId: 'x', roles: ['system'] as never })
       },
     }),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
   )
 })
 
-test('sessionDocs 引用校验：未注册或非 public 的 sessionDoc 在定义期末拒绝；public 命中通过', { timeout: 60_000 }, async () => {
+test('sessionDocs 声明已随声明式轨道移除：spec 不得再携带该字段', { timeout: 60_000 }, async () => {
   const host = makeHost()
-  await assert.rejects(
-    host.register({
-      id: 'p:s1',
-      definePlugin: (ctx) => {
-        ctx.ui.toolView({ id: 't', toolNames: ['bash'], sessionDocs: ['missing'] })
-      },
-    }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
-  )
-  await assert.rejects(
-    host.register({
-      id: 'p:s2',
-      definePlugin: (ctx) => {
-        ctx.sessionDoc('m', { tokens: 0 })
-        ctx.ui.toolView({ id: 't', toolNames: ['bash'], sessionDocs: ['m'] })
-      },
-    }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
-  )
+  // sessionDoc 本身仍可声明（client.tsx 组件经 usePluginSessionDoc 订阅）
   await host.register({
     id: 'p:s3',
     definePlugin: (ctx) => {
       ctx.sessionDoc('m', { tokens: 0 }, { public: true })
-      ctx.ui.toolView({ id: 't', toolNames: ['bash'], sessionDocs: ['m'] })
+      ctx.ui.toolView({ id: 't', toolNames: ['bash'] })
     },
   })
-  assert.ok(host.listUi().some((u) => u.surface === 'tool.view'))
+  const ui = host.listUi()
+  const tool = ui.find((u) => u.surface === 'tool.view')
+  assert.ok(tool !== undefined)
+  assert.equal('sessionDocs' in (tool.spec as Record<string, unknown>), false, 'spec 无 sessionDocs 字段（JSON 轨道已移除）')
 })
 
 test('跨插件同 kind 显式拒绝（提交点终检）；停用探测 enabled:false 不占用名字', { timeout: 60_000 }, async () => {

@@ -21,7 +21,7 @@ export function ConversationRowActionsMenu({ conversation }: { conversation: Con
   const rootRef = useRef<HTMLSpanElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
 
-  const actions = matchConversationActions(store.groupedUi.conversationRowActions, conversation)
+  const actions = matchConversationActions(store.groupedUi.uiActions, 'conversation:row', conversation)
 
   useEffect(() => {
     if (!open) return

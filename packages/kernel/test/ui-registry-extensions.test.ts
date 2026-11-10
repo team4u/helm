@@ -17,6 +17,9 @@ import { UiRegistry } from '../src/plugins/ui-registry.js';
 
 const isHelmError = (code: string) => (err: unknown): boolean => err instanceof HelmError && err.code === code;
 
+/** 测试用 clientRoot（client 引用形状校验需要；目录不必真实存在——形状校验先行）。 */
+const CLIENT_ROOT = '/tmp/helm-test-client-root';
+
 /** 注册一个合法 commandPalette 声明的最小助手（默认走 actionId 轨；slash 未提供时不携带该键）。 */
 function registerCommand(ui: UiRegistry, pluginId: string, id: string, slash?: string): void {
   const spec: Record<string, unknown> = { id, title: id, actionId: 'noop' };
@@ -29,126 +32,97 @@ function registerProfileRuntime(ui: UiRegistry, pluginId: string, kind: string):
   ui.registerUi(pluginId, 'profile.runtime', { id: `rt-${kind}`, kind, label: kind }, 'profileRuntime');
 }
 
-test('sessionDocs：列表形状校验与 assertUiDocsRegistered 第三参', { timeout: 60_000 }, () => {
+test('markdown.codeBlock：languages 形状、重复拒绝与 client 必填', { timeout: 60_000 }, () => {
   const ui = new UiRegistry();
+  const client = { module: 'index.tsx', export: 'C' };
 
-  // 合法 sessionDocs 列表可注册
+  // 合法声明（多语言 + priority）
   ui.registerUi(
     'p1',
-    'workbench.panel',
-    { id: 'panel1', title: 'Panel', sessionDocs: ['tasks'] },
-    'workbenchPanel',
+    'markdown.codeBlock',
+    { id: 'cb1', languages: ['ui', 'json-render'], priority: 5, client },
+    'markdownCodeBlock',
+    CLIENT_ROOT,
   );
 
-  // 空数组 / 非字符串 / 重复名 / 非法字符 均拒绝
+  // 空数组 / 非字符串 / 大写非法形态 / 重复 均拒绝
   assert.throws(
-    () => ui.registerUi('p1', 'workbench.panel', { id: 'bad1', sessionDocs: [] }, 'workbenchPanel'),
+    () => ui.registerUi('p1', 'markdown.codeBlock', { id: 'bad1', languages: [], client }, 'markdownCodeBlock'),
     isHelmError('invalid_ui_spec'),
   );
   assert.throws(
-    () => ui.registerUi('p1', 'workbench.panel', { id: 'bad2', sessionDocs: ['a', 1] }, 'workbenchPanel'),
+    () => ui.registerUi('p1', 'markdown.codeBlock', { id: 'bad2', languages: ['a', 1], client }, 'markdownCodeBlock'),
     isHelmError('invalid_ui_spec'),
   );
   assert.throws(
-    () => ui.registerUi('p1', 'workbench.panel', { id: 'bad3', sessionDocs: ['a', 'a'] }, 'workbenchPanel'),
+    () => ui.registerUi('p1', 'markdown.codeBlock', { id: 'bad3', languages: ['UI'], client }, 'markdownCodeBlock'),
     isHelmError('invalid_ui_spec'),
   );
   assert.throws(
-    () => ui.registerUi('p1', 'workbench.panel', { id: 'bad4', sessionDocs: ['非法名'] }, 'workbenchPanel'),
+    () => ui.registerUi('p1', 'markdown.codeBlock', { id: 'bad4', languages: ['a', 'a'], client }, 'markdownCodeBlock'),
     isHelmError('invalid_ui_spec'),
   );
-
-  // sessionDocs 校验走第三参：未公开的会话文档拒绝
+  // 缺 client：拒绝（无声明式轨道）
   assert.throws(
-    () => ui.assertUiDocsRegistered('p1', () => false, () => false),
-    isHelmError('invalid_ui_spec'),
-  );
-  // session 公开但 global 未公开：sessionDocs 不要求 global，通过
-  ui.assertUiDocsRegistered('p1', () => false, (name) => name === 'tasks');
-
-  // 缺省第三参：声明了 sessionDocs 即视为未公开，显式拒绝（防静默挂空）
-  assert.throws(
-    () => ui.assertUiDocsRegistered('p1', () => false),
+    () => ui.registerUi('p1', 'markdown.codeBlock', { id: 'bad5', languages: ['a'] }, 'markdownCodeBlock'),
     isHelmError('invalid_ui_spec'),
   );
 
-  // docs（global）与 sessionDocs 双轨道独立校验
-  const ui2 = new UiRegistry();
-  ui2.registerUi(
-    'p2',
-    'sidebar.item',
-    { id: 's1', label: 'S', docs: ['globalDoc'], sessionDocs: ['sessionDoc'] },
-    'sidebarItem',
-  );
-  assert.throws(
-    () => ui2.assertUiDocsRegistered('p2', () => false, () => true),
-    isHelmError('invalid_ui_spec'),
-  );
-  ui2.assertUiDocsRegistered('p2', (n) => n === 'globalDoc', (n) => n === 'sessionDoc');
+  // assertUiDocsRegistered 现为无文档引用校验的挂点：任何参数下均不再抛出
+  ui.assertUiDocsRegistered('p1', () => false, () => false);
 });
 
-test('微动作三轨：actionId/client/json 至少其一与字段归属', { timeout: 60_000 }, () => {
+test('ui.action：actionId/client 至少其一与字段归属', { timeout: 60_000 }, () => {
   const ui = new UiRegistry();
+  const client = { module: 'index.tsx', export: 'C' };
 
-  // 三者皆缺拒绝（三类 surface 同规则）
-  for (const surface of ['conversation.header.action', 'conversation.row.action', 'timeline.entry.action']) {
-    assert.throws(
-      () => ui.registerUi('p1', surface, { id: 'none' }, 'fn'),
-      isHelmError('invalid_ui_spec'),
-    );
-  }
-  // actionId 轨：含点号拒绝（跨插件走 actionPluginId）
-  assert.throws(
-    () => ui.registerUi('p1', 'conversation.header.action', { id: 'a1', actionId: 'x.y' }, 'fn'),
-    isHelmError('invalid_ui_spec'),
-  );
-  // actionPluginId 必须非空字符串
-  assert.throws(
-    () => ui.registerUi('p1', 'conversation.row.action', { id: 'a2', actionId: 'x', actionPluginId: '' }, 'fn'),
-    isHelmError('invalid_ui_spec'),
-  );
-  // json 轨单独成立
-  ui.registerUi('p1', 'timeline.entry.action', { id: 'a3', json: { type: 'static' } }, 'fn');
-  // client 轨单独成立（提供 clientRoot）
+  // 合法：header + actionId + placement toolbar
   ui.registerUi(
     'p1',
     'conversation.header.action',
-    { id: 'a4', client: { module: './x.tsx', export: 'X' } },
-    'fn',
-    '/tmp/client-root',
+    { id: 'a1', target: 'conversation:header', label: 'L', actionId: 'x', placement: 'toolbar' },
+    'action',
+  );
+  // 合法：timeline:entry + kinds/roles
+  ui.registerUi(
+    'p1',
+    'timeline.entry.action',
+    { id: 'a2', target: 'timeline:entry', label: 'L', actionId: 'x', kinds: ['pi.user'], roles: ['user'] },
+    'action',
+  );
+  // 合法：client 轨（无 actionId）
+  ui.registerUi(
+    'p1',
+    'conversation.row.action',
+    { id: 'a3', target: 'conversation:row', label: 'L', client },
+    'action',
+    CLIENT_ROOT,
   );
 
-  // placement 仅 conversation.header.action 允许，值域 toolbar|menu
+  // 三轨全空：拒绝
   assert.throws(
-    () => ui.registerUi('p1', 'conversation.row.action', { id: 'a5', actionId: 'x', placement: 'toolbar' }, 'fn'),
+    () => ui.registerUi('p1', 'conversation.header.action', { id: 'bad1', target: 'conversation:header', label: 'L' }, 'action'),
     isHelmError('invalid_ui_spec'),
   );
+  // actionId 含点号：拒绝
   assert.throws(
-    () =>
-      ui.registerUi('p1', 'conversation.header.action', { id: 'a6', actionId: 'x', placement: 'side' }, 'fn'),
+    () => ui.registerUi('p1', 'conversation.header.action', { id: 'bad2', target: 'conversation:header', label: 'L', actionId: 'x.y' }, 'action'),
     isHelmError('invalid_ui_spec'),
   );
-  ui.registerUi('p1', 'conversation.header.action', { id: 'a7', actionId: 'x', placement: 'menu' }, 'fn');
-
-  // kinds/roles 仅 timeline.entry.action 允许；roles 值域 user|assistant
+  // placement 仅 header 允许
   assert.throws(
-    () => ui.registerUi('p1', 'conversation.row.action', { id: 'a8', actionId: 'x', kinds: ['k'] }, 'fn'),
+    () => ui.registerUi('p1', 'conversation.row.action', { id: 'bad3', target: 'conversation:row', label: 'L', actionId: 'x', placement: 'toolbar' }, 'action'),
     isHelmError('invalid_ui_spec'),
   );
+  // kinds/roles 仅 timeline:entry 允许
   assert.throws(
-    () => ui.registerUi('p1', 'conversation.row.action', { id: 'a9', actionId: 'x', roles: ['user'] }, 'fn'),
+    () => ui.registerUi('p1', 'conversation.header.action', { id: 'bad4', target: 'conversation:header', label: 'L', actionId: 'x', kinds: ['a'] }, 'action'),
     isHelmError('invalid_ui_spec'),
   );
-  assert.throws(
-    () =>
-      ui.registerUi('p1', 'timeline.entry.action', { id: 'a10', actionId: 'x', roles: ['other'] }, 'fn'),
-    isHelmError('invalid_ui_spec'),
-  );
-  assert.throws(
-    () => ui.registerUi('p1', 'timeline.entry.action', { id: 'a11', actionId: 'x', kinds: [] }, 'fn'),
-    isHelmError('invalid_ui_spec'),
-  );
-  ui.registerUi('p1', 'timeline.entry.action', { id: 'a12', actionId: 'x', kinds: ['k'], roles: ['user'] }, 'fn');
+  // target 字段在注册时剔除（surface 已携带语义）
+  const list = ui.listUi();
+  const stored = list.find((u) => (u.spec as { id?: string }).id === 'a1');
+  assert.equal('target' in (stored?.spec as Record<string, unknown>), false, 'target 不进存储 spec');
 });
 
 test('priority/order 必须是有限安全整数', { timeout: 60_000 }, () => {
@@ -204,10 +178,10 @@ test('commandPalette：slash 格式、保留词与插件内重复', { timeout: 6
     () => ui.registerUi('p1', 'commandPalette', { id: 'cmd-empty', title: 'E' }, 'command'),
     isHelmError('invalid_ui_spec'),
   );
-  // json 轨命令合法，但 slash 必须有可执行动作，不能只显示候选却无法执行。
-  ui.registerUi('p1', 'commandPalette', { id: 'cmd-json', title: 'J', json: { type: 'x' } }, 'command');
+  // client 轨命令合法；slash 必须有可执行动作，不能只显示候选却无法执行。
+  ui.registerUi('p1', 'commandPalette', { id: 'cmd-client', title: 'C', client: { module: 'index.tsx', export: 'X' } }, 'command', CLIENT_ROOT);
   assert.throws(
-    () => ui.registerUi('p1', 'commandPalette', { id: 'slash-json', title: 'J', slash: 'json-only', json: {} }, 'command'),
+    () => ui.registerUi('p1', 'commandPalette', { id: 'slash-client-only', title: 'C', slash: 'client-only' }, 'command'),
     isHelmError('invalid_ui_spec'),
   );
   for (const actionId of ['', 5, 'bad.id']) {

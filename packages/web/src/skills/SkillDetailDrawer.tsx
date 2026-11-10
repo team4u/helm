@@ -235,7 +235,7 @@ export function SkillDetailDrawer({
                   </div>
 
                   {error ? (
-                    <div className="jr-callout jr-callout-err" role="alert">
+                    <div className="callout callout--error" role="alert">
                       <HelmIcon name="alert-circle" size={13} />
                       <span>{`读取失败：${error}`}</span>
                     </div>

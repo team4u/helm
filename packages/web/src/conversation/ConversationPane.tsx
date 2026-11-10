@@ -158,7 +158,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
 
   // 插件微插槽 conversation.header.action：placement='toolbar' 直出顶栏按钮组，
   // 其余（缺省 'menu'）收纳进「更多操作」下拉菜单；均按 scope 过滤当前会话。
-  const headerActions = matchConversationActions(store.groupedUi.conversationHeaderActions, conversation)
+  const headerActions = matchConversationActions(store.groupedUi.uiActions, 'conversation:header', conversation)
   const { toolbar: toolbarActions, menu: menuActions } = splitConversationHeaderActions(headerActions)
 
   const saveTitle = async (): Promise<void> => {

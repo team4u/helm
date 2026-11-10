@@ -179,11 +179,11 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     return rows
   }, [store])
 
-  // 声明了 client/json 内容的插件命令：作为可选中命令行列出（选中即内联渲染）
+  // 声明了 client 内容的插件命令：作为可选中命令行列出（选中即内联渲染）
   const pluginContentCommands = useMemo(
     () =>
       store.groupedUi.commands
-        .filter((cmd) => cmd.spec.client !== undefined || cmd.spec.json !== undefined)
+        .filter((cmd) => cmd.spec.client !== undefined)
         .map((cmd) => ({ pluginId: cmd.pluginId, spec: cmd.spec })),
     [store.groupedUi.commands],
   )

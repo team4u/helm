@@ -1,6 +1,6 @@
 ---
 name: {{SKILL_ID}}
-description: 操作 Helm 或查询宿主能力时使用；涵盖会话、模型、节点、插件动作、触发器与产物，按需查阅生成式 UI、工作流和插件开发。
+description: 操作 Helm 或查询宿主能力时使用；涵盖会话、模型、节点、插件动作、触发器与产物，按需查阅工作流和插件开发专题。
 managedByPlugin: {{MANAGED_BY}}
 ---
 
@@ -74,10 +74,8 @@ managedByPlugin: {{MANAGED_BY}}
 
 遇到对应专题时先读对应参考文件，再动手：
 
-- 渲染交互式卡片/表单/表格（```ui 或 ```json-render 代码块）前：
-  `load_skill({ skillId: "helm-cli", path: "references/generative-ui.md" })`
-  （{{PRIMITIVE_COUNT}} 个原语真实 Props、双形态、三大声明式动作指令与适用边界）。
 - 编排多代理/多阶段任务（subagent、SubagentWorkflow 确定性脚本）或与 Herdr 终端 Agent、SuperAgent Worker 协作前：
   `load_skill({ skillId: "helm-cli", path: "references/workflows-and-agents.md" })`。
 - 自举编写新技能（~/.helm/skills/<id>/SKILL.md）或开发外置插件（~/.helm/plugins/<id>/）前：
   `load_skill({ skillId: "helm-cli", path: "references/skill-and-plugin-dev.md" })`。
+- 交互式卡片/表单等富展示能力由可用技能目录中的 generative-ui 技能提供（托管插件 builtin:json-render）：目录中存在时按其指引输出，不在时用普通 Markdown。

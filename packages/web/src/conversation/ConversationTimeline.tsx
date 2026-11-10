@@ -173,7 +173,7 @@ function HumanMessage({
   const entryActions =
     anchorEntry !== undefined
       ? matchTimelineEntryActions(
-          store.groupedUi.timelineEntryActions,
+          store.groupedUi.uiActions,
           conversation,
           timelineEntryActionContextOf(anchorEntry),
         )
@@ -664,7 +664,7 @@ function PluginCard({ item, conversationId }: { item: PluginCardItem; conversati
   const entryActions =
     conversation !== undefined
       ? matchTimelineEntryActions(
-          store.groupedUi.timelineEntryActions,
+          store.groupedUi.uiActions,
           conversation,
           timelineEntryActionContextOf(item.entry),
         )
@@ -866,7 +866,7 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
   const entryActions =
     !isBusy && anchorEntry !== undefined
       ? matchTimelineEntryActions(
-          store.groupedUi.timelineEntryActions,
+          store.groupedUi.uiActions,
           conversation,
           timelineEntryActionContextOf(anchorEntry),
         )
@@ -983,7 +983,7 @@ function TurnErrorNotice({
   // 绝不误编辑旧消息。
   const editTarget = useMemo(() => lastEditableHumanInput(detailEntries), [detailEntries])
   return (
-    <div className="jr-callout jr-callout-err" role="alert" aria-label="本回合失败">
+    <div className="callout callout--error" role="alert" aria-label="本回合失败">
       <HelmIcon name="alert-triangle" size={12} />
       <span className="callout-text">
         本回合失败：{conversation.lastError?.trim() || '模型或服务请求未成功，未产生回答。'}
@@ -1156,7 +1156,7 @@ export function ConversationTimeline({
           })
         }}>{loadingOlder ? '正在加载历史…' : '加载更早的消息'}</button>
       )}
-      {store.loadErrors[`history:${conversation.id}`] && <p className="jr-callout jr-callout-err" role="alert">{store.loadErrors[`history:${conversation.id}`]}</p>}
+      {store.loadErrors[`history:${conversation.id}`] && <p className="callout callout--error" role="alert">{store.loadErrors[`history:${conversation.id}`]}</p>}
       {loading ? (
         <div className="timeline-loading-state">
           <HelmIcon name="loader" size={14} className="spin-slow" />

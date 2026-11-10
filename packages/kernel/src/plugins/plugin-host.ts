@@ -34,6 +34,7 @@ import {
   type HookOptions,
   type MaybePromise,
   type PluginActionContext,
+  type PluginSkillAsset,
   type PluginConfigFieldSchema,
   type PluginDefinition,
   type PublicPluginDoc,
@@ -54,10 +55,10 @@ import {
   type WorkbenchPanelSpec,
   type CommandSpec,
   type SettingsPanelSpec,
-  type ConversationActionSpec,
+  type UiActionSpec,
+  type MarkdownCodeBlockSpec,
   type PluginSlotContributionSpec,
   type ProfileRuntimeUiSpec,
-  type TimelineEntryActionSpec,
 } from '@helm/protocol';
 import type { Provider } from '@earendil-works/pi-ai';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
@@ -78,7 +79,7 @@ import {
   actionToolAlias,
   parseQualifiedActionId,
 } from './capability-registry.js';
-import { UiRegistry } from './ui-registry.js';
+import { UiRegistry, UI_ACTION_SURFACES } from './ui-registry.js';
 import {
   assertValidId,
   idempotentRelease,
@@ -159,18 +160,12 @@ export interface PluginProviderPort {
  * secrets / setConfig 由 PluginHost 在此之上包装 pluginId 命名空间；isClosing
  * 归一为 getter；listPlugins 转发 PluginHost 自身 list()。
  */
-export type PluginHostBackend = Omit<
-  HelmHostApi,
-  | 'manageConversation'
-  | 'secrets'
-  | 'setConfig'
-  | 'isClosing'
-  | 'listPlugins'
-  | 'listUi'
-  | 'nodeIpc'
-> & {
+export type PluginHostBackend = Omit<HelmHostApi, 'manageConversation' | 'skills' | 'secrets' | 'setConfig' | 'isClosing' | 'listPlugins' | 'listUi' | 'nodeIpc'> & {
   /** 声明 pluginId 对会话的管理权；返回释放函数（受管期间删除保护）。 */
   manageConversation(id: number, pluginId: string): () => void;
+  skills: Omit<HelmHostApi['skills'], 'ensureSkill'> & {
+    ensureSkill(asset: PluginSkillAsset, pluginId: string): Promise<void>;
+  };
   /** 节点 IPC 机制端口（EnvFabric 通道；测试宿主未提供时调用显式报 501，不静默降级）。 */
   nodeIpc?: HelmHostNodeIpcPort;
   /** 插件私有 secrets 后端（PluginHost 在此之上包装 pluginId 命名空间）。 */
@@ -1080,6 +1075,7 @@ export class PluginHost {
           phase: s.phase,
           epoch: s.epoch,
           clientRoot: s.definition.clientRoot,
+          npmDependencies: s.definition.npmDependencies,
         };
       },
       dataDir: this.options.dataDir,
@@ -1524,6 +1520,10 @@ export class PluginHost {
           assertOpen('声明 ui.timelineRenderer');
           self.uiRegistry.registerUi(pluginId, 'timeline.renderer', spec, 'timelineRenderer', state.definition.clientRoot);
         },
+        markdownCodeBlock: (spec: MarkdownCodeBlockSpec) => {
+          assertOpen('声明 ui.markdownCodeBlock');
+          self.uiRegistry.registerUi(pluginId, 'markdown.codeBlock', spec, 'markdownCodeBlock', state.definition.clientRoot);
+        },
         toolView: (spec: ToolViewSpec) => {
           assertOpen('声明 ui.toolView');
           self.uiRegistry.registerUi(pluginId, 'tool.view', spec, 'toolView', state.definition.clientRoot);
@@ -1560,17 +1560,18 @@ export class PluginHost {
           assertOpen('声明 ui.profileRuntime');
           self.uiRegistry.registerUi(pluginId, 'profile.runtime', spec, 'profileRuntime', state.definition.clientRoot);
         },
-        conversationHeaderAction: (spec: ConversationActionSpec) => {
-          assertOpen('声明 ui.conversationHeaderAction');
-          self.uiRegistry.registerUi(pluginId, 'conversation.header.action', spec, 'conversationHeaderAction', state.definition.clientRoot);
-        },
-        conversationRowAction: (spec: ConversationActionSpec) => {
-          assertOpen('声明 ui.conversationRowAction');
-          self.uiRegistry.registerUi(pluginId, 'conversation.row.action', spec, 'conversationRowAction', state.definition.clientRoot);
-        },
-        timelineEntryAction: (spec: TimelineEntryActionSpec) => {
-          assertOpen('声明 ui.timelineEntryAction');
-          self.uiRegistry.registerUi(pluginId, 'timeline.entry.action', spec, 'timelineEntryAction', state.definition.clientRoot);
+        action: (spec: UiActionSpec) => {
+          assertOpen(`声明 ui.action（${spec.target}）`);
+          const surface = UI_ACTION_SURFACES[spec.target];
+          if (surface === undefined) {
+            throw new HelmError(
+              'invalid_ui_spec',
+              `插件 ${pluginId} ui.action 的 target 非法（${String(spec.target)}；允许 conversation:header | conversation:row | timeline:entry）`,
+              400,
+              { pluginId, target: String(spec.target) },
+            );
+          }
+          self.uiRegistry.registerUi(pluginId, surface, spec, 'action', state.definition.clientRoot);
         },
         slot: (spec: PluginSlotContributionSpec) => {
           assertOpen('声明 ui.slot');
@@ -1633,7 +1634,7 @@ export class PluginHost {
         list: () => tracked('host.skills.list', () => backend.skills.list()),
         readFile: (skillId, path) => tracked('host.skills.readFile', () => backend.skills.readFile(skillId, path)),
         directory: (id) => tracked('host.skills.directory', () => backend.skills.directory(id)),
-        ensureSkill: (asset) => tracked('host.skills.ensureSkill', () => backend.skills.ensureSkill(asset)),
+        ensureSkill: (asset) => tracked('host.skills.ensureSkill', () => backend.skills.ensureSkill(asset, pluginId)),
       },
       nodeIpc: backend.nodeIpc === undefined
         ? {

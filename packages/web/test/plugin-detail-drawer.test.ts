@@ -259,7 +259,7 @@ test('PluginDetailDrawer：启停按钮响应用户操作并调用 onToggleEnabl
     })
 
     // 验证错误提示框出现且包含在途任务解释
-    const callout = container.querySelector('.jr-callout-err')
+    const callout = container.querySelector('.callout--error')
     assert.ok(callout, '发生 409 错误时必须呈现错误提示条')
     assert.match(callout.textContent || '', /plugin_has_live_tasks/)
   } finally {

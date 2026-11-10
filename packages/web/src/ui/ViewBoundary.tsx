@@ -9,7 +9,7 @@ export class ViewBoundary extends Component<{ children: ReactNode; label?: strin
   }
   render() {
     if (!this.state.message) return this.props.children
-    return <div className="jr-callout jr-callout-err" role="alert">
+    return <div className="callout callout--error" role="alert">
       <HelmIcon name="alert-triangle" />
       <div>
         <strong>{this.props.label ?? '界面'}渲染失败</strong>

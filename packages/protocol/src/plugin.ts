@@ -438,6 +438,16 @@ export interface PluginRouteSpec {
   handler(req: Request): MaybePromise<Response>
 }
 
+/** 插件自举受管技能资产（ctx.host.skills.ensureSkill 入参；形状与内核 BuiltinSkillAsset 同构）。 */
+export interface PluginSkillAsset {
+  /** 技能 ID（skills/<id>/ 目录名）。 */
+  id: string
+  /** SKILL.md 全文（含 frontmatter，managedByPlugin 应指向本插件）。 */
+  skillMd: string
+  /** references 相对路径 -> 内容。 */
+  references: Record<string, string>
+}
+
 /** 插件配置字段 Schema；secret: true 自动分离至 credentials.json。 */
 export interface PluginConfigFieldSchema {
   type: 'string' | 'number' | 'boolean'
@@ -508,12 +518,6 @@ export interface HelmHostProfilesPort {
 }
 
 /** 插件自举的技能包资产（SKILL.md + references 子文件内容；与 kernel services 同形）。 */
-export interface SkillAsset {
-  id: string
-  skillMd: string
-  references: Record<string, string>
-}
-
 /** 插件可用的技能数据端口（读 + 受管自举）。 */
 export interface HelmHostSkillsPort {
   /** 全部技能摘要（含 references 相对路径）。 */
@@ -530,7 +534,7 @@ export interface HelmHostSkillsPort {
    * 写入口统一 403。边界非法（id/相对路径）整体拒绝，不产生部分文件。
    * 通用受管资产安装机制，内外插件同权。
    */
-  ensureSkill(asset: SkillAsset): Promise<void>
+  ensureSkill(asset: PluginSkillAsset): Promise<void>
 }
 
 /**
@@ -874,5 +878,9 @@ export interface PluginDefinition {
    * 不属于用户可配置面。
    */
   clientRoot?: string
+  /** 插件自带的受控 npm 依赖（内置插件声明；外部插件不支持）：说明符 -> 提供包的解析根。
+   * 解析根须为内核包根（含锁定版本的 node_modules）；编译器把声明的说明符解析进
+   * bundle 并逐文件 containment 校验，随依赖 hash 与缓存复查。 */
+  npmDependencies?: Readonly<Record<string, string>>
   definePlugin(ctx: HelmPluginContext): MaybePromise<void>
 }

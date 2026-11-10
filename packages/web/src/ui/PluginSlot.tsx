@@ -58,7 +58,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
 
   if (owner === undefined) {
     return (
-      <div className="jr-callout jr-callout-warn">
+      <div className="callout callout--warning">
         <HelmIcon name="alert-triangle" size={13} />
         <span>PluginSlot 无宿主插件上下文（需在 PluginUiView 内使用或显式传 ownerPluginId）</span>
       </div>
@@ -77,7 +77,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
 
   if (ancestry.depth >= MAX_SLOT_DEPTH) {
     return (
-      <div className="jr-callout jr-callout-warn" role="alert">
+      <div className="callout callout--warning" role="alert">
         <HelmIcon name="alert-triangle" size={13} />
         <span>插件子插槽嵌套超过最大深度 {MAX_SLOT_DEPTH}，已终止渲染</span>
       </div>
@@ -90,7 +90,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
         const key = `${item.pluginId}/${item.spec.id}`
         if (ancestry.chain.some(([pid, cid]) => pid === item.pluginId && cid === item.spec.id)) {
           return (
-            <div className="jr-callout jr-callout-warn" role="alert" key={key}>
+            <div className="callout callout--warning" role="alert" key={key}>
               <HelmIcon name="alert-triangle" size={13} />
               <span>插件子插槽循环嵌套（{key}），已终止递归</span>
             </div>

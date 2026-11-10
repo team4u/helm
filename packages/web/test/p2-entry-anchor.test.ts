@@ -28,7 +28,7 @@ import type {
   ConversationLive,
   ConversationSummary,
   PluginUiContribution,
-  TimelineEntryActionSpec,
+  UiActionSpec,
 } from '@helm/protocol'
 import { groupUiContributions } from '../src/lib/types.js'
 import { timelineEntryActionContextOf } from '../src/conversation/action-model.js'
@@ -37,6 +37,15 @@ import { makeTestStore } from './helpers/store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
+
+// client 轨组件种子：渲染真实 entry 数据（{$data.entry...} 等价物），供断言。
+import { seedPluginClientModule } from '../src/lib/plugin-client.js'
+seedPluginClientModule('p', 'entry-badge.tsx', {
+  EntryBadge: (props: Record<string, unknown>) => {
+    const entry = (props['entry'] ?? {}) as { id?: string; kind?: string; data?: { ref?: string } }
+    return e('span', null, `${entry.id ?? ''}:${entry.kind ?? ''}:${entry.data?.ref ?? ''}`)
+  },
+})
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
 
 // ---------------------------------------------------------------------------
@@ -65,17 +74,17 @@ function conv(partial: Partial<ConversationSummary> & { id: number }): Conversat
 
 const humanConv = conv({ id: 10 })
 
-/** json 轨动作：渲染 {$data.entry...} 文本，透出真实 entry 给断言。 */
-const jsonAction = (id: string, label: string, extra: Partial<TimelineEntryActionSpec> = {}): PluginUiContribution => ({
+/** client 轨动作：渲染真实 entry 数据文本，供断言（json 轨已移除内核）。 */
+const jsonAction = (id: string, label: string, extra: Record<string, unknown> = {}): PluginUiContribution => ({
   pluginId: 'p',
   surface: 'timeline.entry.action',
   spec: {
     id,
     label,
     actionId: 'act',
-    json: { component: 'Text', text: `{$data.entry.id}:{$data.entry.kind}:{$data.entry.data.ref}` },
+    client: { module: 'entry-badge.tsx', export: 'EntryBadge' },
     ...extra,
-  } as TimelineEntryActionSpec,
+  },
 })
 
 function renderTimeline(
@@ -318,12 +327,12 @@ test('action-only entry action 点击：载荷 entryId 为真实 entry.id，kind
       {
         pluginId: 'p',
         surface: 'timeline.entry.action',
-        spec: { id: 'pin', label: '置顶该消息', actionId: 'pin_entry', kinds: ['helm.input'] } satisfies TimelineEntryActionSpec,
+        spec: { id: 'pin', label: '置顶该消息', actionId: 'pin_entry', kinds: ['helm.input'] } satisfies UiActionSpec,
       },
       {
         pluginId: 'p',
         surface: 'timeline.entry.action',
-        spec: { id: 'wrong-kind', label: '错误kind动作', actionId: 'x', kinds: ['pi.assistant'] } satisfies TimelineEntryActionSpec,
+        spec: { id: 'wrong-kind', label: '错误kind动作', actionId: 'x', kinds: ['pi.assistant'] } satisfies UiActionSpec,
       },
     ]),
     invokePluginAction: async (pluginId, actionId, input, conversationId) => {

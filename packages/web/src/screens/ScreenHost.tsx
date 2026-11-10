@@ -60,7 +60,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
           )}
         </div>
         <div className="timeline-scroll">
-          <div className="jr-callout jr-callout-warn">
+          <div className="callout callout--warning">
             <HelmIcon name="alert-triangle" size={13} />
             <span>
               该视图不存在或所属插件未启用（{pluginId}/{screenId}）。请确认插件已在设置中启用。

@@ -498,7 +498,7 @@ test('依赖符号链接越根拒绝：本地 import 指向根外符号链接（
     await assert.rejects(
       pluginHost.getClientModule('test:client-fixture', 'entry-linked.ts'),
       (err: unknown) =>
-        err instanceof HelmError && err.code === 'client_compile_failed' && err.message.includes('越出 clientRoot'),
+        err instanceof HelmError && err.code === 'client_compile_failed' && err.message.includes('越界'),
     )
   } finally {
     await rm(join(clientRoot, 'linked-dep.ts'), { force: true })

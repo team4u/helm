@@ -516,68 +516,6 @@ test('addUi 校验：workbench badge 形状非法拒绝（未知字段/doc 非 s
   await host.dispose()
 })
 
-test('addUi 末尾校验：docs 引用必须是本插件已注册的 public doc（私有/缺失拒绝）', { timeout: 60_000 }, async () => {
-  const host = makeHost()
-  // 缺失 doc
-  await assert.rejects(
-    () =>
-      host.register({
-        clientRoot: dataDir,
-        id: 'test:docs-missing',
-        name: 'bad',
-        definePlugin(ctx) {
-          ctx.ui.workbenchPanel({
-            id: 'p',
-            label: 'P',
-            docs: ['runs'],
-            client: { module: 'index.tsx', export: 'X' },
-          } as never)
-        },
-      }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec' && err.message.includes('public doc'),
-  )
-  // 私有 doc 拒绝
-  await assert.rejects(
-    () =>
-      host.register({
-        clientRoot: dataDir,
-        id: 'test:docs-private',
-        name: 'bad2',
-        definePlugin(ctx) {
-          ctx.doc('runs', {})
-          ctx.ui.workbenchPanel({
-            id: 'p',
-            label: 'P',
-            docs: ['runs'],
-            client: { module: 'index.tsx', export: 'X' },
-          } as never)
-        },
-      }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec' && err.message.includes('public doc'),
-  )
-  // doc 声明晚于 UI 声明：末尾统一校验允许（顺序自由）
-  await host.register({
-    id: 'test:docs-late',
-    name: 'late',
-    clientRoot: dataDir,
-    definePlugin(ctx) {
-      ctx.ui.workbenchPanel({
-        id: 'p',
-        label: 'P',
-        docs: ['runs'],
-        badge: { doc: 'runs', byConversationField: 'byConversation' },
-        client: { module: 'index.tsx', export: 'X' },
-      } as never)
-      ctx.doc('runs', {}, { public: true })
-    },
-  })
-  await host.dispose()
-})
-
-// ---------------------------------------------------------------------------
-// 5. builtin:workflow 动作边界：conversationId 冲突 / cleanup 选择器
-// ---------------------------------------------------------------------------
-
 test('workflow run 动作：input.conversationId 与调用上下文冲突显式拒绝', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register({
