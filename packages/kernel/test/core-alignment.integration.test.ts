@@ -1018,11 +1018,14 @@ test('对齐6: 双 Profile 独立 SYSTEM/MEMORY/模型，PATCH 切换与清覆�
 
     assert.ok(requests.length >= 2)
     assert.ok(requests[0]!.includes('ALIGN-SYS-RESEARCHER'), 'researcher 回合应注入其 SYSTEM')
-    assert.ok(!requests[0]!.includes('ALIGN-SYS-CODER'), 'researcher 回合不得串入 coder SYSTEM')
+    // 注意：跨 Profile 协作目录（profile.catalog）会带 coder 的 SYSTEM 首段单行摘要
+    //（含 ALIGN-SYS-CODER 标记），这是设计内的认知共享；此处断言的是「完整 SYSTEM
+    // 不串入」——以标题行 # Coder System 为准。
+    assert.ok(!requests[0]!.includes('# Coder System'), 'researcher 回合不得串入 coder 完整 SYSTEM')
     assert.ok(requests[0]!.includes('RESEARCHER-MEM'), 'researcher 回合应注入其 MEMORY')
     assert.ok(requests[1]!.includes('ALIGN-SYS-CODER'), 'coder 回合应注入其 SYSTEM')
     assert.ok(requests[1]!.includes('CODER-MEM'), 'coder 回合应注入其 MEMORY')
-    assert.ok(!requests[1]!.includes('ALIGN-SYS-RESEARCHER'), 'coder 回合不得串入 researcher SYSTEM')
+    assert.ok(!requests[1]!.includes('# Researcher System'), 'coder 回合不得串入 researcher 完整 SYSTEM')
   } finally {
     await first.app.close()
   }
@@ -1070,7 +1073,7 @@ test('对齐6: 双 Profile 独立 SYSTEM/MEMORY/模型，PATCH 切换与清覆�
       await second.app.kernel.submitInput(r1!.id, '换 profile 后再问')
       await second.app.kernel.waitForIdle(r1!.id)
       assert.ok(requests3[0]!.includes('ALIGN-SYS-CODER'), 'PATCH 换 Profile 后注入应切换')
-      assert.ok(!requests3[0]!.includes('ALIGN-SYS-RESEARCHER'), '不得残留旧 Profile SYSTEM')
+      assert.ok(!requests3[0]!.includes('# Researcher System'), '不得残留旧 Profile 完整 SYSTEM')
 
       // 显式模型覆盖 + 清覆盖：summary 与真实请求一致
       const override = await httpCall(base, 'PATCH', `/api/conversations/${r1!.id}`, {

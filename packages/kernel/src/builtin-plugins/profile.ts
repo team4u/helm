@@ -6,7 +6,12 @@
  *   Profile 的托管元数据；
  * - before_turn 注入 profile.system（SYSTEM.md）、profile.skills（可用技能
  *   目录）与 profile.assets-missing（SYSTEM.md 缺失告警）；
- * - 注册 load_skill 工具（Profile 白名单 + 插件启停实时判定）；
+ * - 低优先级 before_turn（在默认优先级的工具剥离钩子之后运行）按当回合
+ *   实际 turn.tools 注入 profile.catalog（跨 Profile 协作目录；子会话不注入、
+ *   builtin:workflow 停用时无派工工具则不注入）；
+ * - 注册 load_skill 工具（Profile 白名单 + 插件启停实时判定）与
+ *   list_mentionable 幂等动作（@ 补全源，自动映射 HTTP / helm profile
+ *   list_mentionable CLI）；
  * - 左栏 assistant Profile 站位导航（conversation:profile:assistant，不依赖
  *   某一具体会话存在）。
  */
@@ -15,14 +20,23 @@ import { FileNotFoundError } from '../services/atomic-file.js';
 import type { PluginHost } from '../plugins/index.js';
 import { DEFAULT_PROFILE_ID, type ProfileService, type SkillService } from '../services/index.js';
 import { HELM_CLI_SKILL_ASSET, PROFILE_MANAGED_BY } from './profile/assets.js';
+import {
+  activeRuntimeKinds,
+  describeHint,
+  extractSystemSummary,
+  isCollaborationCandidate,
+  renderProfileCatalogSection,
+  toCatalogEntry,
+  type ProfileCatalogEntry,
+} from './profile/catalog.js';
 
 interface ProfilePluginServices {
   profiles: ProfileService;
   skills: SkillService;
-  /** 只读当前插件启用状态（技能可用性过滤：插件停用则其托管技能不可用）。
+  /** 只读当前插件启用状态与 UI 贡献（技能过滤 / 协作目录的运行时接管判定）。
    * 显式工厂依赖而非扩展公共 PluginHost 端口——组合层（app.ts）已有
    * kernel.plugins 可直接满足。 */
-  plugins: Pick<PluginHost, 'list'>;
+  plugins: Pick<PluginHost, 'list' | 'listUi'>;
 }
 
 export {
@@ -31,6 +45,18 @@ export {
   PROFILE_MANAGED_BY,
   renderSkillTemplate,
 } from './profile/assets.js'
+export {
+  PROFILE_SUMMARY_MAX_CODEPOINTS,
+  activeRuntimeKinds,
+  describeHint,
+  describePosition,
+  extractSystemSummary,
+  isCollaborationCandidate,
+  renderProfileCatalogSection,
+  toCatalogEntry,
+  truncateCodePoints,
+  type ProfileCatalogEntry,
+} from './profile/catalog.js'
 
 /**
  * 自举默认 assistant Profile 的托管元数据：缺失时显式补写
@@ -53,6 +79,10 @@ async function ensureDefaultProfileManaged(profiles: ProfileService): Promise<vo
 function escapeXml(text: string): string {
   return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
+
+/** 目录注入钩子优先级：低于默认 0，确保在默认优先级的工具剥离钩子（如路由
+ * 模式收敛）之后运行，按届时的实际 turn.tools 决定注入与否。 */
+const CATALOG_HOOK_PRIORITY = -100;
 
 export function createProfilePlugin({ profiles, skills, plugins }: ProfilePluginServices): PluginDefinition {
   return {
@@ -157,6 +187,158 @@ export function createProfilePlugin({ profiles, skills, plugins }: ProfilePlugin
         }
         return { action: 'transform', value: { ...turn, sections } };
       });
+
+      /**
+       * 读取候选 Profile 的 SYSTEM.md 提取单行摘要：缺失（FileNotFoundError）
+       * 只影响该候选的 summary 字段（undefined，不伪造简介），不告警——
+       * 认知缺失告警纪律只针对「当前会话绑定 Profile」的人格资产（见
+       * readSystemOrEmpty）；候选缺 SYSTEM 属配置态，不放大告警面。
+       * 其余 IO / 权限错误如实上抛（不吞、不降级）。
+       */
+      const readCandidateSummary = async (profileId: string): Promise<string | undefined> => {
+        try {
+          const text = await profiles.getSystem(profileId)
+          return extractSystemSummary(text)
+        } catch (err) {
+          if (err instanceof FileNotFoundError) return undefined
+          throw err
+        }
+      }
+
+      /**
+       * 协作目录统一计算（补全动作与 before_turn 注入共用同一事实源）：
+       * - 排除自身 / humanSelectable:false / 托管插件未启用 / runtime.kind
+       *   无已启用 profile.runtime UI 贡献对应（详见 catalog.ts 规则）；
+       * - 子会话（parentConversationId 存在）返回空：缺省不鼓励嵌套协作，
+       *   这不是安全沙箱或硬深度限制，只是默认策略；
+       * - 每次调用实时重读 Profile 目录与插件状态（增删改 / 启停下次生效）。
+       * 任一候选摘要读取的非 FileNotFoundError 错误如实上抛（显式失败）。
+       */
+      const computeCatalog = async (currentProfileId: string, isSubConversation: boolean): Promise<ProfileCatalogEntry[]> => {
+        if (isSubConversation) return []
+        const [allProfiles, pluginSummaries, uiContributions] = await Promise.all([
+          profiles.list(),
+          plugins.list(),
+          plugins.listUi(),
+        ])
+        const enabledPluginIds = new Set(pluginSummaries.filter((p) => p.enabled).map((p) => p.id))
+        const runtimeKinds = activeRuntimeKinds(uiContributions)
+        const candidates = allProfiles.filter((p) => isCollaborationCandidate(p, currentProfileId, enabledPluginIds, runtimeKinds))
+        return Promise.all(
+          candidates.map(async (profile) => ({
+            ...toCatalogEntry(profile),
+            summary: await readCandidateSummary(profile.id),
+          })),
+        )
+      }
+
+      /**
+       * 本回合实际可用的派工工具名（只认 turn.tools 现存声明，避免幻影工具）。
+       * 目录注入钩子以低于默认值的 priority 运行（见 CATALOG_HOOK_PRIORITY），
+       * 因此此处看到的是默认优先级钩子（如路由模式剥离 subagent）收敛后的
+       * 最终工具清单——补全动作拿不到回合工具时另行降级判定（见动作实现）。
+       */
+      const dispatchToolNames = (tools: readonly { name: string }[]): string[] =>
+        ['subagent', 'SubagentWorkflow'].filter((name) => tools.some((t) => t.name === name))
+
+      ctx.hook.onBeforeTurn(
+        async (turn) => {
+          // 只对顶层会话注入；无可用派工工具的回合也不注入目录（避免教唆
+          // 调用不存在的工具）。工具收敛后的 tools 只读，不改动。
+          const tools = dispatchToolNames(turn.tools)
+          if (turn.conversation.parentConversationId !== undefined || tools.length === 0) return { action: 'continue' }
+          const entries = await computeCatalog(turn.conversation.profileId, false)
+          if (entries.length === 0) return { action: 'continue' }
+          const sections = [...turn.sections, { id: 'profile.catalog', text: renderProfileCatalogSection(entries, { dispatchToolNames: tools }) }]
+          return { action: 'transform', value: { ...turn, sections } }
+        },
+        { priority: CATALOG_HOOK_PRIORITY },
+      )
+
+      // ---- @ 补全动作：list_mentionable（幂等只读；自动映射 HTTP / CLI） ----
+      ctx.action<
+        { query?: string; conversationId?: number },
+        { items: Array<{ id: string; label: string; insertText: string; hint: string; icon: string }> }
+      >({
+        id: 'list_mentionable',
+        description: '列出当前会话可 @ 点名协作的 Profile 候选（@ 补全源；--current 或显式 --conversation-id 选上下文）',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: '过滤前缀（缺省空）' },
+            conversationId: { type: 'number', description: '显式目标会话（CLI 无调用上下文时使用；Web 补全不传，以服务端上下文为准）' },
+          },
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  label: { type: 'string' },
+                  insertText: { type: 'string' },
+                  hint: { type: 'string' },
+                  icon: { type: 'string' },
+                },
+                required: ['id', 'label', 'insertText', 'hint', 'icon'],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ['items'],
+          additionalProperties: false,
+        },
+        idempotent: true,
+        async handler(input, context) {
+          // 身份裁决：调用上下文会话（Web / --current 注入的外层 conversationId）
+          // 是唯一可信来源；input.conversationId 仅在无上下文时作为 CLI 显式
+          // 目标，且必须经真实 getConversation 校验存在。两者都缺 → 显式
+          // validation_error，绝不猜测默认会话。
+          let conversationId = context.conversationId
+          if (conversationId === undefined) {
+            if (input.conversationId === undefined) {
+              throw new HelmError(
+                'validation_error',
+                '缺少会话上下文：Web 补全自动携带；CLI 请用 --current 或 --conversation-id 显式指定',
+                400,
+              )
+            }
+            conversationId = input.conversationId
+          }
+          const conversation = ctx.host.getConversation(conversationId)
+          const query = (input.query ?? '').trim().toLowerCase()
+          // 补全无回合工具清单：按顶层 + 插件可用性判定候选（不伪称能确定
+          // 最终工具清单——注入目录时另有回合级收敛，两者规则同源）。
+          const entries = await computeCatalog(conversation.profileId, conversation.parentConversationId !== undefined)
+          const items = entries
+            .filter((entry) => {
+              if (query === '') return true
+              const haystack = `${entry.id}\n${entry.name}\n${entry.summary ?? ''}`.toLowerCase()
+              return haystack.includes(query)
+            })
+            .map((entry) => ({
+              id: entry.id,
+              label: `@${entry.id} · ${entry.name}${entry.runtimeKind === 'native' ? '' : ` (external:${entry.runtimeKind})`}`,
+              insertText: `@${entry.id} `,
+              hint: describeHint(entry),
+              icon: 'bot',
+            }))
+          return { items }
+        },
+      })
+
+      // ---- @ 补全源声明（复用宿主通用补全渲染；label 仅用于插件源间排序） ----
+      ctx.ui.composerCompleter({
+        id: 'profile-mentions',
+        label: '点名角色',
+        trigger: '@',
+        priority: 100,
+        source: { kind: 'action', actionId: 'list_mentionable' },
+      })
 
       ctx.tool<{ skillId: string; path?: string }>({
         name: 'load_skill',
