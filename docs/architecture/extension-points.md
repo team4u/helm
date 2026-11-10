@@ -88,7 +88,7 @@ flowchart TD
 ## 前端 7 大全界面插槽
 
 前端扩展点允许插件重塑界面交互。
-基础 7 类界面扩展面继续保留。宿主另外提供微操作、Profile 运行时元数据与插件子插槽，总计 15 个注册方法。
+基础 7 类界面扩展面继续保留。宿主另外提供微操作、Profile 运行时元数据、插件子插槽、产物预览与输入补全，总计 17 个注册方法。七类是职责分组，不要求每个局部容器各有一个顶层方法；详情区优先复用 `slot`。
 
 ### 扩展插槽分类
 
@@ -126,6 +126,8 @@ flowchart TD
 | **消息微操作** | `ctx.ui.timelineEntryAction()` | 向消息操作栏追加操作，支持按条目类型、角色和会话 scope 过滤 |
 | **运行时元数据** | `ctx.ui.profileRuntime()` | 声明 Profile 外部运行时的名称、图标、说明与 Agent 候选；宿主按通用 ProfileRuntime 结构编辑 |
 | **插件子插槽** | `ctx.ui.slot()` | 向 `<ownerPluginId>/<slotName>` 注入 JSON 或客户端组件 |
+| **产物预览** | `ctx.ui.artifactPreviewer()` | 按 MIME 或文件后缀匹配预览内容，保留宿主默认视图与下载 |
+| **输入补全** | `ctx.ui.composerCompleter()` | 声明 `@ / # / :` 的候选数据源，宿主统一查询、校验与插入文本 |
 
 `timelineRenderer` 与 `toolView` 支持 `priority`：数值较大者优先，缺省为 `0`，同优先级保持贡献顺序。多个插件接管同一工具时可以显式裁决；高优先级插件停用后由剩余候选接管。
 
@@ -147,10 +149,29 @@ Screen 组件接收 `ScreenProps`：`pluginId / screenId / isSplit / params / se
 
 ---
 
+### 宿主详情子插槽与静态引导
+
+- `PROFILE_DETAIL_SECTION_SLOT`：`builtin:profile/detail-section`，传入 `ProfileDetailSlotProps`。
+- `NODE_DETAIL_SECTION_SLOT`：`builtin:node/detail-section`，仅已有节点挂载，传入 `NodeDetailSlotProps`（`nodeId / isLocal / isOnline / isNew: false`）。`builtin:node` 在此是宿主保留命名空间，不代表节点底座依赖一个同名插件。插槽不传接入令牌，也不隐式借用当前打开的会话。
+- 空白会话引导是 `Profile.starters` 静态配置，不增加 UI 扩展点。最多六项，每项 `label` 去首尾空白后最多 24 个 Unicode 码点，`prompt` 非纯空白且最多 4000 个码点、保留原文。点击仅回填草稿；已有草稿、附件、历史编辑或在途输入操作时拒绝覆盖。
+
+### 产物预览与引用补全
+
+`artifact.previewer` 的 `mimeTypes` 支持精确值或 `type/*`，不支持任意前缀与全匹配 `*/*`；`extensions` 使用含点号的小写后缀，可声明 `.topo.json`。两类条件取 OR，至少声明一类。命中当前会话 `scope` 后按 `priority` 降序稳定排列。组件收到 `ArtifactPreviewerProps`，`size` 来自真实 Blob，名称元数据未获得时省略 `name`；`text` 仅提供最多 1 MiB 的文本内容，二进制或超限为 `null`。插件不得撤销宿主管理的 `blobUrl`。
+
+插件预览是双轨视图，默认预览与下载始终可用。插件失败显示诊断，不悄悄改用其他内容冒充成功。`client.tsx` 仍是可信代码，不因进入产物预览而成为沙箱；插件展示不可信 HTML 时应使用 `iframe sandbox`，默认不授予脚本、同源、表单或导航权限。禁止把产物 HTML 直接注入宿主 DOM；若确需脚本，必须另行评估网络外传与交互能力，而不能只以“没有 allow-same-origin”声称绝对安全。
+
+`composer.completer` 是可序列化的数据源声明，不是视图扩展，不接受 `client / json / docs / sessionDocs`。`source` 显式选择：
+
+- `{ kind: 'action', actionId, actionPluginId? }`：绑定声明为 `idempotent: true` 的查询动作。输入 `{ query, conversationId }`，输出 `{ items: ComposerCompletionItem[] }`。目标节点和目录应由服务端读取真实会话，不信任浏览器自报坐标。幂等标记不等于宿主能证明插件没有副作用。
+- `{ kind: 'doc', name, itemsField }` 或 `{ kind: 'sessionDoc', name, itemsField }`：读取贡献插件自己的公开文档中的顶层数组字段，不用 `docs[0]` 推断来源。会话文档按需订阅，不旁路进入全局广播。
+
+每个候选提供 `id / label / insertText`，可选 `hint / icon`。选中仅替换光标前的触发词，不提交输入或执行候选命令。`/` 保留原有命令与技能路径；`@` 合并会话产物与插件源；`# / :` 无注册源时不弹出菜单。异步查询防抖并防止旧请求覆盖新会话、草稿或已停用源。动作源通过已有 Action HTTP、CLI、Agent 与 Workflow 路径同权访问，不新增补全专用 RPC。
+
 ## 双轨渲染机制
 
-每个前端扩展点均支持双轨声明。
-插件可以按需选择声明式 JSON 或 React 原生组件。
+视图类扩展点支持声明式 JSON 或 React 原生组件。
+运行时元数据和输入补全是纯数据声明，不走组件双轨。
 
 ```mermaid
 flowchart TD

@@ -258,6 +258,85 @@ ctx.ui.workbenchPanel({
 
 ---
 
+## 节点详情、产物预览与输入补全
+
+### 在节点详情内注入内容
+
+使用现有 `slot`，不新增节点管理端点，也不把节点底座变成可停用插件：
+
+```ts
+import { NODE_DETAIL_SECTION_SLOT } from '@helm/protocol';
+
+ctx.ui.slot({
+  id: 'node-inspection',
+  target: NODE_DETAIL_SECTION_SLOT,
+  client: { module: 'client.tsx', export: 'NodeInspectionSection' },
+});
+```
+
+组件接收 `{ nodeId, isLocal, isOnline, isNew: false }`，按 `nodeId` 调用插件自己的 Action 获取诊断。新节点接入表单不挂载此插槽，Props 不包含令牌、连接命令或隐式会话。
+
+### 声明产物预览器
+
+```ts
+ctx.ui.artifactPreviewer({
+  id: 'csv',
+  label: '数据表',
+  mimeTypes: ['text/csv'],
+  extensions: ['.csv', '.tsv'],
+  priority: 10,
+  client: { module: 'client.tsx', export: 'CsvPreview' },
+});
+```
+
+`CsvPreview` 接收 `ArtifactPreviewerProps`。`text` 在二进制或文本超过 1 MiB 时为 `null`，组件必须明确提示而非展示空表冒充结果；`blobUrl` 由宿主管理、组件不得撤销。名称元数据未就绪时 `name` 缺省。用户可以切回宿主默认预览并下载原件。
+
+预览组件本身是与宿主同环境运行的可信插件，不受内容沙箱保护。不可信 HTML 应放入 `<iframe sandbox="" srcDoc={html} />`，不得直接注入宿主 DOM。空 sandbox 是保守起点，不是任意网络资源的零外传保证；需要脚本或外部资源的报表应另行明确 CSP、网络与消息通道约束。不要同时授予 `allow-scripts` 与 `allow-same-origin`。
+
+### 声明引用候选源
+
+已有公开文档可直接作为候选源：
+
+```ts
+ctx.doc('references', {
+  items: [{ id: 'guide', label: '项目指南', insertText: '请参考项目指南：', hint: '常用引用' }],
+}, { public: true });
+ctx.ui.composerCompleter({
+  id: 'references',
+  label: '项目引用',
+  trigger: '#',
+  source: { kind: 'doc', name: 'references', itemsField: 'items' },
+});
+```
+
+会话候选改用 `ctx.sessionDoc` 与 `source.kind: 'sessionDoc'`。文档只能来自当前贡献插件，`itemsField` 仅支持顶层字段，不执行表达式或对象路径。
+
+需要远端查询时注册 `idempotent: true` 的 Action，再声明：
+
+```ts
+ctx.ui.composerCompleter({
+  id: 'workspace-files',
+  label: '工作区文件',
+  trigger: '@',
+  source: { kind: 'action', actionId: 'search_files' },
+});
+```
+
+`search_files` 的输入 Schema 为 `{ query: string, conversationId: number }`，输出为 `{ items: Array<{ id, label, insertText, hint?, icon? }> }`。服务端从真实会话解析 `(nodeId, cwd)`，通过已有 `ctx.host.execEnv` / EnvFabric 查询目标节点，不在浏览器拼接 shell，不自行建立 SSH 通道。Action 应只查询；声明幂等并不会自动禁止插件副作用。跨插件动作使用显式 `actionPluginId`，调用时仍检查动作可用性与幂等标记。
+
+该查询天然可通过 `helm <plugin> search_files --query <text> --current --json` 调用。补全仅将候选的 `insertText` 插入草稿，不能把候选选中当成执行、发送或审批。
+
+### 配置角色引导词
+
+```bash
+helm profiles update reviewer --starters '[{"label":"审查改动","prompt":"请审查当前工作区的未提交改动。"}]' --json
+helm profiles update reviewer --starters '[]' --json
+```
+
+引导词落入 `profile.json`，也可在角色详情编辑。仅真正空白且历史已加载完整的会话显示；点击回填后由用户确认发送。草稿、附件、历史编辑和在途上传/发送不被覆盖。最大六项，标题最多 24 个 Unicode 码点，提示词最多 4000 个码点。
+
+---
+
 ## 本地调试与测试验证
 
 完成代码编写后，在本地执行验证与测试。

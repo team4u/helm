@@ -72,10 +72,14 @@ export default {
 扩展入口：
 - 后端 Hook（{{HOOK_COUNT}} 个）：{{HOOK_NAMES}}；各 Hook 允许的 continue/transform/handled/block 结果以 protocol 契约为准。
 - 前端 {{UI_METHOD_COUNT}} 个 ctx.ui 注册方法：基础 10 个（sidebarItem/sidebarSection、screen、timelineRenderer、toolView、composerPill/composerWidget、workbenchPanel、command、settingsPanel）+ 三类微操作（conversationHeaderAction/conversationRowAction/timelineEntryAction：绑 actionId 后宿主代管按钮/pending/失败提示，scope 按标签过滤会话，kinds/roles 过滤消息条目；宿主注入的真实 conversationId/entryId 强制覆盖 input 同名字段）+ profileRuntime（Profile 外部运行时元数据，宿主通用表单渲染）+ slot（向 `owner/插槽名` 注入内容供其他插件 `<PluginSlot />` 或声明式 `Slot` 原语消费）。
-- timelineRenderer/toolView 支持 priority（降序裁决，缺省 0；高优先级插件停用后剩余候选自动接管）；同一插件可声明多块 settings.panel（order 排序）。
+- timelineRenderer/toolView/artifactPreviewer/composerCompleter 支持 priority（降序裁决，缺省 0；同优先级保持贡献顺序）；同一插件可声明多块 settings.panel（order 排序）。
+- `Profile.starters` 是静态配置的空白会话提示，不是 UI 扩展点；每 Profile 最多六项，label 最多 24 个 Unicode 码点，prompt 最多 4000 个码点。只在历史完整加载的真实空会话展示，点击回填草稿而不发送；已有草稿、附件、编辑或在途操作不覆盖。CLI 使用 `helm profiles update <id> --starters '<json数组>' --json`，传 `[]` 清空。
 - command 的 slash（不含 / 的触发词）同时派生输入框 `/` 补全：保留词 {{RESERVED_SLASH_COMMANDS}} 与 skill: 前缀禁占，跨启用插件不得重名，声明 slash 必须绑定本插件 actionId（跨插件动作用 actionPluginId）。
 - screen 组件收到 params/setParams：URL Hash 中主屏 `sp.<key>`、分屏 `ssp.<key>` 命名空间隔离，同屏双开互不串扰；setParams 默认 replace，`{push:true}` 入栈；组件不得自建路由或直接操作 history。
 - composer.pill/widget 收到受控句柄 composer（draft/attachments/sending、setDraft/insertText/submit；submit() 失败 reject 且保留草稿）。
+- `composerCompleter` 为 `@ / # / :` 声明纯数据补全源（`/` 留给命令/技能）：`source` 必须显式选择 `{kind:'action', actionId, actionPluginId?}` 或 `{kind:'doc'|'sessionDoc', name, itemsField}`。Action 输入 `{query, conversationId}`、输出 `{items:[{id,label,insertText,hint?,icon?}]}`，且必须 `idempotent: true`；文档源必须是本插件 public doc/sessionDoc 的顶层数组字段，不猜 `docs[0]`。补全只替换触发 token、只插入文本，不提交/执行。Web 防抖查询，CLI/Agent/Workflow 经同一 Action。
+- `artifactPreviewer` 按 MIME（精确值或 `type/*`）和/或小写扩展名（如 `.csv`、`.topo.json`）匹配；至少声明一类，MIME 与后缀取 OR，按 scope 和 priority 裁决。组件接收宿主管理的 `blobUrl`、可选元数据名和最多 1 MiB 的文本；用户仍可切回默认预览与下载。client 仍是可信代码不是沙箱；展示不可信 HTML 时放入默认无权限的 `<iframe sandbox="">`，不注入宿主 DOM，不要声称 `allow-scripts` 无风险。
+- `NODE_DETAIL_SECTION_SLOT` (`builtin:node/detail-section`) 是节点中心宿主保留插槽，不是 `builtin:node` 插件。用 `ctx.ui.slot` 注入已有节点的扩展区，Props 为 `{nodeId,isLocal,isOnline,isNew:false}`；不传令牌/连接命令，不在新节点接入表单挂载。
 - `ctx.action({ id, description, inputSchema, outputSchema, idempotent?, handler })` 将 Schema 动作统一映射到 HTTP、CLI、Workflow action()、Web；`idempotent: true` 标记只读/幂等动作，失败或中断时允许工作流断链重跑；模型可经 run_action 调用，设置 exposeAsTool: true 才直接列为工具。
 - `ctx.host.execEnv(req, opts?)` 经内核 EnvFabric 跨节点执行命令（复用 local / 远端 @helm/node 通道、SecretStash 注入与脱敏），纳入在途任务追踪（withTask）。
 - `ctx.doc(name, initial, { public: true })` 公开持久全局状态（进全局 SSE 首帧，更新广播全量）；界面通过 docs 列表订阅。`ctx.configSchema` 的 secret 字段进入凭据存储，避免公开到 doc。
