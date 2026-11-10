@@ -195,9 +195,18 @@ export class HerdrExecutor {
 
   private async spawnNew(request: AgentSpawnRequest, routing: SpawnRouting, target: HerdrTarget, existing?: ManagedPane): Promise<unknown> {
     if (existing === undefined) {
-      // 新窗格：cwd 解析链 request.cwd > profile.workspace > 父 cwd > default。
+      // 新窗格：cwd 解析链 request.cwd > profile.workspace > 父 cwd；
+      // 链尾无真实 cwd 时显式拒绝（绝不猜进程 cwd，更不让远端窗格默认落 Hub 目录）。
       const parentCwd = this.parentCwdOrThrow(request.parentConversationId)
-      const cwd = resolveCwd(request.cwd, routing, parentCwd) || this.deps.defaultCwd
+      const cwd = resolveCwd(request.cwd, routing, parentCwd)
+      if (cwd === '') {
+        throw new HelmError(
+          'validation_error',
+          `无法解析 herdr 窗格工作目录（request.cwd / profile.workspace / 父会话 ${request.parentConversationId} cwd 均未提供绝对路径）；请在 spawn 请求显式指定 cwd 或为父会话/Profile 绑定真实工作目录`,
+          400,
+          { parentConversationId: request.parentConversationId },
+        )
+      }
       existing = await this.createManagedPane(request, routing, target, cwd)
     }
     const pane = existing

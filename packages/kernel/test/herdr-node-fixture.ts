@@ -11,7 +11,6 @@ import { createServer, type Server, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TestContext } from 'node:test'
-import type { Context } from '@earendil-works/chord/context'
 import { LocalNodeChannel } from '../src/builtin-plugins/herdr/local-node-channel.js'
 import type { HerdrNodeChannel } from '../src/builtin-plugins/herdr/contracts.js'
 
@@ -99,14 +98,14 @@ export class MutableNodeChannel implements HerdrNodeChannel {
   async ipcCall(
     nodeId: string,
     input: { endpoint?: string; session?: string; line: string; timeoutMs?: number },
-    context: Context,
+    signal?: AbortSignal,
   ) {
     const target = this.channelOf(nodeId)
     if (nodeId !== 'local') this.seenCallInputs.push({ nodeId, endpoint: input.endpoint, session: input.session })
     if (target === undefined) {
       return { ok: false as const, error: { code: 'unknown' as const, message: `node '${nodeId}' unknown` } }
     }
-    return target.ipcCall(nodeId, input, context)
+    return target.ipcCall(nodeId, input, signal)
   }
 
   envFor(nodeId: string, cwd: string) {
@@ -131,7 +130,7 @@ export function relabelChannel(local: HerdrNodeChannel, nodeId: string): HerdrNo
   return {
     isOnline: (id) => id === nodeId && local.isOnline('local'),
     getNodeHubUrl: () => undefined,
-    ipcCall: (id, input, context) => local.ipcCall('local', input, context),
+    ipcCall: (id, input, signal) => local.ipcCall('local', input, signal),
     envFor: (id, cwd) => local.envFor('local', cwd),
   }
 }

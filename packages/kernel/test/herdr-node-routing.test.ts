@@ -11,9 +11,10 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer, type Server, type Socket } from 'node:net'
 import {
   HelmError,
   type AgentGateResult,
@@ -25,7 +26,12 @@ import {
 } from '@helm/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
+import { LocalNodeChannel } from '../src/builtin-plugins/herdr/local-node-channel.js'
+import type { PluginConfigStore } from '../src/plugins/index.js'
+import type { HelmHostNodeIpcPort } from '@helm/protocol'
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
+import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 
 // ---------------------------------------------------------------------------
 // 受控环境（与 herdr-plugin-fixes 同构；父会话 nodeId 可配置）
@@ -125,6 +131,59 @@ class FakeTransport implements HerdrTransport {
   async subscribe(_target: HerdrTarget, _onEvent: (event: HerdrEvent) => void, _onError: (error: unknown) => void): Promise<() => void> {
     return () => {}
   }
+
+  /**
+   * 真实 UDS 服务器：把本 transport 的方法路由暴露给零参插件的生产
+   * transport（backend.nodeIpc → LocalNodeChannel → 本 socket）。
+   * 一连接一请求；events.subscribe 回 ack 后保持连接（与生产协议一致）。
+   */
+  async serve(socketPath: string, targetOf: () => HerdrTarget = () => ({})): Promise<{ server: Server; close(): Promise<void> }> {
+    const sockets = new Set<Socket>()
+    const server = createServer({ allowHalfOpen: true }, (socket) => {
+      sockets.add(socket)
+      socket.once('close', () => sockets.delete(socket))
+      let buffer = ''
+      socket.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString('utf8')
+        let newline = buffer.indexOf('\n')
+        while (newline >= 0) {
+          const line = buffer.slice(0, newline)
+          buffer = buffer.slice(newline + 1)
+          newline = buffer.indexOf('\n')
+          void (async () => {
+            const request = JSON.parse(line) as { id: string; method: string; params: Record<string, unknown> }
+            try {
+              if (request.method === 'events.subscribe') {
+                socket.write(`${JSON.stringify({ id: request.id, result: { type: 'subscription_started' } })}\n`)
+                return
+              }
+              const result = await this.call(targetOf(), request.method, request.params)
+              socket.end(`${JSON.stringify({ id: request.id, result })}\n`)
+            } catch (error) {
+              const body = error instanceof HelmError
+                ? { code: error.code, message: error.message }
+                : { code: 'internal', message: String(error) }
+              socket.end(`${JSON.stringify({ id: request.id, error: body })}\n`)
+            }
+          })()
+        }
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve))
+    return {
+      server,
+      close: async () => {
+        for (const socket of sockets) socket.destroy()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      },
+    }
+  }
+}
+
+class MemoryConfigStore implements PluginConfigStore {
+  constructor(private readonly initial: Record<string, unknown> = {}) {}
+  get(pluginId: string): Record<string, unknown> { return this.initial }
+  set(): void {}
 }
 
 class FakeBackend implements PluginHostBackend {
@@ -135,6 +194,10 @@ class FakeBackend implements PluginHostBackend {
   createdAsks: Array<Record<string, unknown>> = []
   cancelledAsks: Array<{ id: string; reason?: string }> = []
   pendingAskResolvers = new Map<string, (r: AskResult) => void>()
+  /** buildSpawnEnv 调用记录（节点继承断言用）。 */
+  spawnEnvCalls: Array<{ conversationId: number; cwd: string; nodeId: string }> = []
+  profileStore = new Map<string, Profile>()
+  gateCalls: Array<{ command: string; cwd?: string; env?: Record<string, string> }> = []
 
   constructor() {
     this.conversations.set(1, this.makeConversation(1))
@@ -165,6 +228,49 @@ class FakeBackend implements PluginHostBackend {
   submitInput(): Promise<void> { return Promise.resolve() }
   createConversation(): Promise<ConversationSummary> { return Promise.resolve(this.makeConversation(99)) }
   listConversations(): ConversationSummary[] { return [...this.conversations.values()] }
+  profiles = {
+    list: async () => [...this.profileStore.values()],
+    get: async (id: string) => this.profileStore.get(id),
+    getSystem: async (id: string) => {
+      throw new HelmError('not_found', `Profile ${id} 无 SYSTEM.md`, 404)
+    },
+    save: async () => { throw new HelmError('unsupported', 'fixture 只读', 501) },
+    directory: async (id: string) => `/tmp/herdr-fixture-profiles/${id}`,
+  }
+  skills = {
+    list: async () => [],
+    readFile: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+    directory: async (id: string) => `/tmp/herdr-fixture-skills/${id}`,
+    ensureSkill: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+  }
+  secrets = {
+    get: async () => undefined,
+    set: async () => {},
+    delete: async () => {},
+    addRedaction: () => () => {},
+  }
+  setPluginConfig(): Promise<void> { return Promise.resolve() }
+  nodeIpc: HelmHostNodeIpcPort = {
+    isOnline: (nodeId: string) => nodeId === 'local',
+    call: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC', 501) },
+    subscribe: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC', 501) },
+  }
+  isClosing(): boolean { return false }
+  withFileLock(): never { throw new HelmError('unsupported', '本 fixture 无文件锁', 501) }
+  atomicWriteFile(): never { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
+  refreshModels(): never { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
+  redact = (text: string) => text
+  buildSpawnEnv = (conversationId: number, cwd: string, nodeId: string) => {
+    this.spawnEnvCalls.push({ conversationId, cwd, nodeId })
+    return { HELM_ENV: '1', HELM_HUB_URL: 'http://127.0.0.1:3202', HELM_TOKEN: 'T', HELM_CWD: cwd }
+  }
+  async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
+  getConversationOwnership(): 'human' { return 'human' }
+  getConversationActivity(): { stalledMs: number; consecutiveErrors: number } { return { stalledMs: 0, consecutiveErrors: 0 } }
+  async listArtifacts(): Promise<never[]> { return [] }
+  async getArtifact(): Promise<never> { throw new HelmError('not_found', '无产物', 404) }
+  async completeText(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型', 501) }
+  executionEnv: (nodeId: string, cwd: string) => ExecutionEnv = (_nodeId, cwd) => new NodeExecutionEnv({ cwd })
   getConversation(id: number): ConversationSummary {
     const found = this.conversations.get(id)
     if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
@@ -206,8 +312,9 @@ class FakeBackend implements PluginHostBackend {
   async spawnAgent(): Promise<unknown> {
     return {}
   }
-  async runGate(): Promise<{ ok: boolean; output: string }> {
-    return { ok: true, output: '' }
+  async runGate(command: string, options?: { cwd?: string; env?: Record<string, string> }): Promise<{ ok: boolean; output: string }> {
+    this.gateCalls.push({ command, cwd: options?.cwd, env: options?.env })
+    return { ok: true, output: 'fixture gate ok' }
   }
   async prepareInterruptedConversations(): Promise<void> {}
   async cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
@@ -261,35 +368,52 @@ interface Env {
 
 async function makeEnv(over: Partial<ConversationSummary> = {}): Promise<Env> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-nodechain-'))
+  // 父会话真实 cwd（零参链尾无 defaultCwd：必须真实目录，不能猜进程 cwd）。
+  const parentCwd = mkdtempSync(join(tmpdir(), 'helm-herdr-parent-cwd-'))
+  mkdirSync(join(parentCwd, '.helm'), { recursive: true })
   const backend = new FakeBackend()
-  Object.assign(backend.conversations.get(1)!, over)
+  Object.assign(backend.conversations.get(1)!, over, { cwd: parentCwd })
   const transport = new FakeTransport()
-  const profiles = new Map<string, Profile>()
-  const spawnEnvLog: Env['spawnEnvLog'] = []
-  const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+  // 受控协议服务器：零参插件的生产 transport 经 backend.nodeIpc 真实到达。
+  const socketPath = join(dataDir, 'herdr.sock')
+  // target 记录：buildSpawnEnv 在每次建窗前同步调用且携带确切目标 nodeId，
+  // 以其最近记录标注 serve 内的 tab.create target（local 折叠为无 nodeId 本机形态）。
+  const served = await transport.serve(socketPath, () => {
+    const nodeId = backend.spawnEnvCalls.at(-1)?.nodeId
+    return nodeId === undefined || nodeId === 'local' ? {} : { nodeId }
+  })
+  const local = new LocalNodeChannel()
+  const callViaFixture = (nodeId: string, input: { endpoint?: string; session?: string; line: string; timeoutMs?: number }, signal?: AbortSignal) =>
+    local.ipcCall('local', { ...input, endpoint: input.endpoint ?? socketPath }, signal)
+  backend.nodeIpc = {
+    // 测试节点语义：所有 nodeId 均指向同一受控 fixture 服务器（远端路由
+    // 断言基于 tab.create 的 target 记录，不依赖真实多节点拓扑）；本测试
+    // 不消费远端事件流（服务启动走本机冻结 target 订阅）。
+    isOnline: () => true,
+    call: callViaFixture,
+    subscribe: async () => { throw new HelmError('unsupported', '本 fixture 不订阅远端事件', 501) },
+  }
+  const host = new PluginHost({
+    dataDir,
+    host: backend,
+    docs: new MemoryDocStore(),
+    config: new MemoryConfigStore({ socketPath }),
+  })
   await host.register(
-    createHerdrPlugin({
-      defaultCwd: '/tmp/helm-herdr-default',
-      profiles: { get: async (id) => profiles.get(id) },
-      buildSpawnEnv: (conversationId, cwd, nodeId) => {
-        spawnEnvLog.push({ conversationId, cwd, nodeId })
-        return { HELM_ENV: '1', HELM_HUB_URL: 'http://127.0.0.1:3202', HELM_TOKEN: 'T', HELM_CWD: cwd }
-      },
-      redact: (t) => t,
-      runLocalGate: async () => ({ ok: true, output: '' }),
-      transport,
-    }),
+    createHerdrPlugin(),
     { enabled: true },
   )
   return {
     host,
     backend,
     transport,
-    profiles,
-    spawnEnvLog,
+    profiles: backend.profileStore,
+    spawnEnvLog: backend.spawnEnvCalls,
     async close() {
       await host.dispose().catch(() => {})
+      await served.close()
       rmSync(dataDir, { recursive: true, force: true })
+      rmSync(parentCwd, { recursive: true, force: true })
     },
   }
 }
@@ -298,7 +422,18 @@ function scriptSuccess(env: Env, content: string): void {
   env.transport.onPrompt = (paneId, text) => {
     const pane = env.transport.panes.get(paneId)!
     const fileName = text.match(/wf-out-[A-Za-z0-9_.-]+\.(json|md)/)?.[0] ?? ''
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, content)
+    const dir = join(pane.cwd, '.helm')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, fileName), content)
+  }
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 5_000, intervalMs = 25): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    if (predicate()) return
+    if (Date.now() > deadline) throw new Error('waitFor 超时')
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
   }
 }
 
@@ -381,41 +516,51 @@ test('优先级链：Profile.runtime.nodeId > Profile 顶层 nodeId > 父节点'
 
 test('Profile.cwd 作为工作目录回退（runtime.workspace 优先）', { timeout: 60_000 }, async () => {
   const env = await makeEnv({ nodeId: 'remote-a' })
+  // 真实临时目录（零参链尾无 defaultCwd；远端 executionEnv 在本测试即本机 fs）。
+  const profileHome = mkdtempSync(join(tmpdir(), 'helm-ws-profile-'))
+  const runtimeWs = mkdtempSync(join(tmpdir(), 'helm-ws-runtime-'))
+  const requestCwd = mkdtempSync(join(tmpdir(), 'helm-ws-request-'))
   try {
     // 无 workspace：Profile.cwd 生效。
-    env.profiles.set('ws-cwd', { id: 'ws-cwd', cwd: '/srv/profile-home', runtime: { kind: 'herdr', agent: 'agy' } })
+    env.profiles.set('ws-cwd', { id: 'ws-cwd', cwd: profileHome, runtime: { kind: 'herdr', agent: 'agy' } })
     scriptSuccess(env, 'a')
     await spawnDirect(env, { agentType: 'ws-cwd' })
     let create = env.transport.calls.find((c) => c.method === 'tab.create')!
-    assert.equal(create.params['cwd'], '/srv/profile-home', 'Profile.cwd 作为窗格工作目录')
+    assert.equal(create.params['cwd'], profileHome, 'Profile.cwd 作为窗格工作目录')
 
     // runtime.workspace 覆盖 Profile.cwd。
-    env.profiles.set('ws-rt', { id: 'ws-rt', cwd: '/srv/profile-home', runtime: { kind: 'herdr', agent: 'agy', workspace: '/srv/runtime-ws' } })
+    env.profiles.set('ws-rt', { id: 'ws-rt', cwd: profileHome, runtime: { kind: 'herdr', agent: 'agy', workspace: runtimeWs } })
     scriptSuccess(env, 'b')
     await spawnDirect(env, { agentType: 'ws-rt' })
     create = env.transport.calls.findLast((c) => c.method === 'tab.create')!
-    assert.equal(create.params['cwd'], '/srv/runtime-ws', 'runtime.workspace 优先于 Profile.cwd')
+    assert.equal(create.params['cwd'], runtimeWs, 'runtime.workspace 优先于 Profile.cwd')
 
     // request.cwd 最高。
     scriptSuccess(env, 'c')
-    await spawnDirect(env, { agentType: 'ws-rt', cwd: '/srv/request-cwd' })
+    await spawnDirect(env, { agentType: 'ws-rt', cwd: requestCwd })
     create = env.transport.calls.findLast((c) => c.method === 'tab.create')!
-    assert.equal(create.params['cwd'], '/srv/request-cwd')
+    assert.equal(create.params['cwd'], requestCwd)
   } finally {
     await env.close()
+    for (const dir of [profileHome, runtimeWs, requestCwd]) rmSync(dir, { recursive: true, force: true })
   }
 })
 
 test('spawn cwd 接受 Windows 盘符与 UNC 绝对路径（纯规则，不依赖 Hub 平台）', { timeout: 60_000 }, async () => {
   const env = await makeEnv({ nodeId: 'win-build' })
   try {
-    scriptSuccess(env, 'win-ok')
-    await spawnDirect(env, { agentType: 'herdr:agy', cwd: 'C:\\build\\helm' })
+    // 盘符/UNC 是绝对路径形态：校验放行且透传到 tab.create；真实 Windows
+    // 节点的交接由其本机执行环境承担（本 Linux fixture 无 C:\ 文件系统，
+    // spawn 最终以交接不可达失败——诚实反映，不 mock 成功）。
+    const drive = spawnDirect(env, { agentType: 'herdr:agy', cwd: 'C:\\build\\helm' }).catch((e: unknown) => e)
+    await waitFor(() => env.transport.calls.some((c) => c.method === 'tab.create'))
     assert.equal(env.transport.calls.find((c) => c.method === 'tab.create')!.params['cwd'], 'C:\\build\\helm', '盘符绝对路径放行')
+    await drive
 
-    scriptSuccess(env, 'unc-ok')
-    await spawnDirect(env, { agentType: 'herdr:agy', cwd: '\\\\srv\\share\\work' })
+    const unc = spawnDirect(env, { agentType: 'herdr:agy', cwd: '\\\\srv\\share\\work' }).catch((e: unknown) => e)
+    await waitFor(() => env.transport.calls.filter((c) => c.method === 'tab.create').length >= 2)
     assert.equal(env.transport.calls.findLast((c) => c.method === 'tab.create')!.params['cwd'], '\\\\srv\\share\\work', 'UNC 绝对路径放行')
+    await unc
 
     // C:relative（盘符后无分隔）是相对形态：拒绝。
     await assert.rejects(

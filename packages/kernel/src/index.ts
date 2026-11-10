@@ -1,4 +1,4 @@
-export { createHelm, createHerdrNodeChannel, type HelmOptions } from './app.js';
+export { createHelm, type HelmOptions } from './app.js';
 export { KernelRuntime } from './runtime/index.js';
 export { createHubHandler, startHub } from './http/index.js';
 export {

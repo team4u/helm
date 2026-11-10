@@ -661,7 +661,7 @@ async function callRemote(
       line,
       timeoutMs,
     },
-    contextOf(options?.signal, targetLabel),
+    options?.signal,
   )
   if (!result.ok) raiseChannelError(result.error.code, result.error.message, targetLabel)
   const envelope = parseJsonLine(result.value, targetLabel)
@@ -1218,7 +1218,7 @@ function subscribeNode(
               : new HerdrTransportError('herdr_disconnected', `subscription stream closed: ${error}`, targetLabel),
           )
         },
-        withAbortSignal(signal ?? new AbortController().signal, BACKGROUND_CONTEXT),
+        signal,
       )
       .then(
         (stop) => {

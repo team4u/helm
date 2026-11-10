@@ -165,8 +165,8 @@ export function isValidEnvName(name: string): boolean {
 
 /**
  * cwd 解析链：request.cwd（必须绝对路径）> Profile.workspace（runtime.workspace
- * > Profile.cwd）> 父会话 cwd（getConversation 现取）> defaultCwd。
- * 返回 undefined 表示用 defaultCwd。
+ * > Profile.cwd）> 父会话 cwd（getConversation 现取）。
+ * 返回 ''（空串）表示链尾无真实 cwd，由调用方显式拒绝（不猜进程 cwd）。
  */
 export function resolveCwd(
   requestCwd: string | undefined,

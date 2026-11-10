@@ -12,7 +12,7 @@ import { fauxProvider, fauxAssistantMessage, fauxToolCall } from '@earendil-work
 function fauxToolCallMessage(name: string, input: Record<string, unknown>): ReturnType<typeof fauxAssistantMessage> {
   return fauxAssistantMessage([fauxToolCall(name, input as Record<string, never>)], { stopReason: 'toolUse' })
 }
-import { createHelm, createHerdrNodeChannel } from '../src/app.js'
+import { createHelm } from '../src/app.js'
 import { startHub } from '../src/http/index.js'
 import { createHerdrTransport } from '../src/builtin-plugins/herdr/transport.js'
 import { createNodeDaemon, type NodeDaemon } from '../../node/src/index.js'
@@ -391,7 +391,9 @@ test('Herdr 传输复用真实节点 IPC，订阅 ACK 只消费一次', { timeou
   let release: (() => void) | undefined
   try {
     await new Promise<void>((resolve, reject) => { ipc.once('error', reject); ipc.listen(socketPath, resolve) })
-    const transport = createHerdrTransport({ nodeChannel: createHerdrNodeChannel(env.app.kernel.envFabric) })
+    // EnvFabric 与 HerdrNodeChannel 结构同构（ipcCall/ipcSubscribe/envFor/isOnline/
+    // getNodeHubUrl 均为 signal 签名）：真实节点 IPC 生产路径直连，无适配层。
+    const transport = createHerdrTransport({ nodeChannel: env.app.kernel.envFabric })
     assert.deepEqual(await transport.call({ nodeId: 'integration-node', socketPath }, 'session.snapshot', {}), { source: 'remote-node-ipc' })
     const events: unknown[] = []
     const errors: unknown[] = []
