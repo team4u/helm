@@ -1950,6 +1950,24 @@ textarea {
   border-radius: var(--radius-xs);
 }
 
+/* 产物预览：插件预览器选择与插件视图容器 */
+.artifact-previewer-select {
+  width: 132px;
+  flex-shrink: 0;
+}
+
+.artifact-plugin-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.artifact-plugin-view > * {
+  flex: 1;
+  min-height: 0;
+}
+
 .composer-textarea {
   width: 100%;
   min-height: 36px;

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { ArtifactMetadata } from '@helm/protocol'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ArtifactMetadata, ArtifactPreviewerProps } from '@helm/protocol'
 import { artifactsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
@@ -8,37 +8,63 @@ import { detectLanguage } from './code-language.js'
 import { CodeBlockView, MarkdownView } from './MarkdownView.js'
 import { formatBytes } from '../lib/format.js'
 import { Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
+import { Select } from '../ui/Select.js'
 import { SegmentedControl } from '../ui/Tabs.js'
+import { PluginUiView } from '../ui/PluginUiView.js'
+import { collectArtifactPreviewers } from './artifact-preview-model.js'
+import { decodePreviewText, isMarkdown, looksLikeText, MAX_PREVIEW_TEXT_BYTES, shouldDecodeText } from './artifact-preview-text.js'
 
 export interface ArtifactPreviewModalProps {
   artifactId: string
   conversationId?: number
   onClose: () => void
+  /** 强制内联渲染（跳过 body portal；node 测试环境 Radix portal 不可用时用）。 */
+  inline?: boolean
 }
 
 type LoadState =
   | { phase: 'loading' }
-  | { phase: 'loaded'; blobUrl: string; mime: string; meta?: ArtifactMetadata }
+  | { phase: 'loaded'; blob: Blob; blobUrl: string }
   | { phase: 'error'; message: string }
 
-const TEXT_MIME_RE = /^(text\/|application\/(json|xml|javascript|x-yaml|x-sh))/i
+/** 插件预览器选择：'default' 为宿主默认渲染。 */
+type PreviewerChoice = 'default' | string
 
-function isMarkdown(name: string | undefined, mime: string): boolean {
-  if (mime.startsWith('text/markdown')) return true
-  if (name !== undefined && /\.md$/i.test(name)) return true
-  return false
+/** 命中产物元数据时合成给插件组件的标准 Props（协议 ArtifactPreviewerProps）。 */
+function buildPreviewerProps(
+  artifactId: string,
+  conversationId: number | undefined,
+  meta: ArtifactMetadata | undefined,
+  mime: string,
+  size: number,
+  blobUrl: string,
+  text: string | null,
+): ArtifactPreviewerProps {
+  return {
+    artifactId,
+    conversationId,
+    name: meta?.name,
+    mimeType: mime,
+    size,
+    blobUrl,
+    text,
+  }
 }
 
-function looksLikeText(mime: string): boolean {
-  return TEXT_MIME_RE.test(mime)
-}
-
-/** 产物智能预览：Markdown 富文本/源码切换、代码/JSON 语法高亮、图片/PDF/音视频 ObjectURL。 */
-export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: ArtifactPreviewModalProps) {
+/**
+ * 产物智能预览：插件 artifact.previewer 贡献（双轨）+ 宿主默认渲染兜底。
+ * - 插件命中需真实会话上下文（scope）与已加载元数据；多命中可切换，可手动切回默认；
+ * - text 只解码 ≤1MiB 文本（超限显式说明，不截断伪装）；切换产物/插件移除时
+ *   有效回退，ObjectURL 及时回收，绝不让旧 blob/text/name 混入新产物。
+ */
+export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inline }: ArtifactPreviewModalProps) {
   const store = useHelmStore()
   const [state, setState] = useState<LoadState>({ phase: 'loading' })
   const [view, setView] = useState<'rich' | 'source'>('rich')
   const [text, setText] = useState<string | null>(null)
+  /** text 为 null 的原因：'idle' 未尝试解码 / 'decoding' 进行中 / 'exceeded' 超 1MiB 上限 / 'binary' 非文本。 */
+  const [textState, setTextState] = useState<'idle' | 'decoding' | 'exceeded' | 'binary'>('idle')
+  const [previewer, setPreviewer] = useState<PreviewerChoice | null>(null)
   const [desktopFullscreen, setDesktopFullscreen] = useState(false)
   // 移动端固定全屏呈现：小窗模式下标题栏按钮拥挤错位，且滚动区域过于局促。
   const isMobile = useIsMobile(680)
@@ -46,10 +72,15 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
   const loadArtifacts = store.loadConversationArtifacts
   const artifactsLoaded = conversationId !== undefined && store.conversationArtifacts[conversationId] !== undefined
 
+  // store 可能以浅拷贝对象传入（如测试 rerender），loadArtifacts 引用会每次变化；
+  // 经由 ref 调用，避免 effect 因此重触发导致重复加载。
+  const loadArtifactsRef = useRef(loadArtifacts)
+  loadArtifactsRef.current = loadArtifacts
+
   // 深链预览所属会话不一定在主屏或分屏中，不能依赖会话面板预先加载元数据。
   useEffect(() => {
-    if (conversationId !== undefined && !artifactsLoaded) void loadArtifacts(conversationId)
-  }, [conversationId, artifactsLoaded, loadArtifacts])
+    if (conversationId !== undefined && !artifactsLoaded) void loadArtifactsRef.current(conversationId)
+  }, [conversationId, artifactsLoaded])
 
   const meta = useMemo(() => {
     if (conversationId === undefined) return undefined
@@ -64,22 +95,20 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  // 产物加载（含代数竞争保护与 ObjectURL 回收）；MIME 回退在渲染时响应式计算，
+  // 深链元数据后到不触发重新拉取。
   useEffect(() => {
     let objectUrl: string | null = null
     let cancelled = false
     setState({ phase: 'loading' })
     setText(null)
+    setTextState('idle')
     void artifactsApi
       .fetchBlob(artifactId)
       .then(async (blob) => {
         if (cancelled) return
         objectUrl = URL.createObjectURL(blob)
-        const mime = blob.type || meta?.mimeType || ''
-        setState({ phase: 'loaded', blobUrl: objectUrl, mime, meta })
-        if (looksLikeText(mime) || isMarkdown(meta?.name, mime)) {
-          const value = await blob.text()
-          if (!cancelled) setText(value)
-        }
+        setState({ phase: 'loaded', blob, blobUrl: objectUrl })
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -90,10 +119,76 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
       cancelled = true
       if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
     }
-  }, [artifactId, meta?.mimeType, meta?.name])
+  }, [artifactId])
+
+  // MIME：已加载用真实 Blob.type，否则回退元数据（响应式，深链元数据后到不重新拉取）。
+  const mime = state.phase === 'loaded' ? (state.blob.type || meta?.mimeType || '') : (meta?.mimeType ?? '')
+
+  // 文本解码（独立于产物加载；MIME 响应式回退，超限显式说明不截断伪装全文）。
+  const loadedBlob = state.phase === 'loaded' ? state.blob : undefined
+  useEffect(() => {
+    if (loadedBlob === undefined) return
+    if (!shouldDecodeText(meta, mime)) {
+      setText(null)
+      setTextState('binary')
+      return
+    }
+    let cancelled = false
+    setText(null)
+    setTextState('decoding')
+    void decodePreviewText(loadedBlob)
+      .then((value) => {
+        if (cancelled) return
+        if (value === null) {
+          setTextState('exceeded')
+        } else {
+          setText(value)
+          setTextState('idle')
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setTextState('binary')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [loadedBlob, mime, meta])
+
+  const conversation = useMemo(
+    () => (conversationId !== undefined ? store.conversations.find((c) => c.id === conversationId) : undefined),
+    [store.conversations, conversationId],
+  )
+
+  // 插件命中判定用已加载的真实元数据（名称未知不猜）；加载中/失败不给插件命中。
+  const pluginMatchInput = useMemo(
+    () =>
+      state.phase === 'loaded'
+        ? { name: meta?.name, mimeType: mime }
+        : undefined,
+    [state, meta, mime],
+  )
+
+  const matchedPreviewers = useMemo(
+    () =>
+      pluginMatchInput === undefined
+        ? []
+        : collectArtifactPreviewers(store.groupedUi.artifactPreviewers, pluginMatchInput, conversation),
+    [store.groupedUi.artifactPreviewers, pluginMatchInput, conversation],
+  )
+
+  // 选择回退：未手动选择时默认取命中首位（priority 最高）；已选择项不在命中列表
+  // （产物切换 / 插件停用移除 / scope 失配）时回落默认渲染。
+  const previewerKey = (p: { pluginId: string; spec: { id: string } }): string => `${p.pluginId}/${p.spec.id}`
+  const effectivePreviewer: PreviewerChoice =
+    previewer !== null && matchedPreviewers.some((p) => previewerKey(p) === previewer)
+      ? previewer
+      : previewer === null && matchedPreviewers.length > 0
+        ? previewerKey(matchedPreviewers[0]!)
+        : 'default'
+
+  const selected = matchedPreviewers.find((p) => previewerKey(p) === effectivePreviewer)
 
   const name = meta?.name ?? artifactId
-  const mime = state.phase === 'loaded' ? state.mime : meta?.mimeType ?? ''
 
   const isImage = mime.startsWith('image/')
   const isAudio = mime.startsWith('audio/')
@@ -109,8 +204,8 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
   }
 
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogPortal>
+    <Dialog open inline={inline} onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogPortal inline={inline}>
         <DialogOverlay className={`modal-backdrop${isFullscreen ? ' modal-fullscreen-backdrop' : ''}`}>
           <DialogContent
             className={`modal${isFullscreen ? ' modal-fullscreen' : ''}`}
@@ -123,12 +218,31 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
                 <DialogTitle className="modal-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {name}
                 </DialogTitle>
-                {meta !== undefined ? (
+                {state.phase === 'loaded' ? (
+                  <span className="badge badge-neutral mono tabular-nums">{formatBytes(state.blob.size)}</span>
+                ) : meta !== undefined ? (
                   <span className="badge badge-neutral mono tabular-nums">{formatBytes(meta.size)}</span>
                 ) : null}
               </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            {markdown ? (
+            {matchedPreviewers.length > 0 ? (
+              <Select<PreviewerChoice>
+                size="sm"
+                value={effectivePreviewer}
+                onChange={(e) => setPreviewer(e.target.value)}
+                aria-label="预览方式"
+                className="artifact-previewer-select"
+                options={[
+                  { value: 'default', label: '默认预览' },
+                  ...matchedPreviewers.map((p) => ({
+                    value: `${p.pluginId}/${p.spec.id}`,
+                    label: p.spec.label,
+                    meta: p.spec.title,
+                  })),
+                ]}
+              />
+            ) : null}
+            {markdown && effectivePreviewer === 'default' ? (
               <SegmentedControl<'rich' | 'source'>
                 value={view}
                 onValueChange={(v) => setView(v)}
@@ -179,7 +293,44 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
               <span style={{ wordBreak: 'break-all' }}>产物加载失败：{state.message}</span>
             </div>
           ) : null}
-          {state.phase === 'loaded' ? (
+          {state.phase === 'loaded' && selected !== undefined ? (
+            <>
+              <div className="artifact-plugin-view">
+                <PluginUiView
+                  pluginId={selected.pluginId}
+                  spec={selected.spec}
+                  conversationId={conversationId}
+                  slotProps={{
+                    ...buildPreviewerProps(
+                      artifactId,
+                      conversationId,
+                      meta,
+                      mime,
+                      state.blob.size,
+                      state.blobUrl,
+                      text,
+                    ),
+                  }}
+                  label={`预览 ${selected.spec.label}`}
+                />
+              </div>
+              {textState === 'exceeded' ? (
+                <div className="jr-callout">文本内容超过 {formatBytes(MAX_PREVIEW_TEXT_BYTES)} 预览上限，已停止解码，text 为 null。请下载文件查看完整内容。</div>
+              ) : null}
+              <div>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setPreviewer('default')}
+                  title="切回宿主默认预览"
+                >
+                  <HelmIcon name="rotate-ccw" size={12} />
+                  默认预览
+                </button>
+              </div>
+            </>
+          ) : null}
+          {state.phase === 'loaded' && selected === undefined ? (
             isImage ? (
               <img
                 src={state.blobUrl}
@@ -195,6 +346,10 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose }: Ar
               <iframe src={state.blobUrl} title={name} style={{ width: '100%', height: '64vh', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} />
             ) : !isTextLike ? (
               <div className="jr-callout">此文件类型暂不支持在线预览，请下载后查看。</div>
+            ) : textState === 'exceeded' ? (
+              <div className="jr-callout">
+                文本内容超过 {formatBytes(MAX_PREVIEW_TEXT_BYTES)} 预览上限，已停止解码。请下载文件查看完整内容。
+              </div>
             ) : markdown && view === 'rich' && text !== null ? (
               <MarkdownView text={text} conversationId={conversationId} />
             ) : (
