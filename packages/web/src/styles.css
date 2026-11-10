@@ -437,7 +437,7 @@ textarea {
   .nav-item-row-actions { display: inline-flex; }
 }
 
-/* 会话与系统状态指示灯（StatusDot）及呼吸动效：采用清透明亮的浅色系指示色 */
+/* 会话状态圆点与呼吸动效 */
 .status-dot {
   width: 7px;
   height: 7px;
@@ -446,61 +446,36 @@ textarea {
   display: inline-block;
   vertical-align: middle;
   background: var(--fg-muted);
-  box-shadow: none;
 }
 
-/* 静态指示灯：无多余光晕圈，纯净小圆点 */
-.status-dot-blocked {
-  background: #f59e0b;
-  box-shadow: none;
-}
-
-.status-dot-done,
-.status-dot-connected {
-  background: #34c759;
-  box-shadow: none;
-}
-
-.status-dot-error {
-  background: #ff5a5f;
-  box-shadow: none;
-}
-
-.status-dot-disconnected {
-  background: var(--fg-subtle);
-  box-shadow: none;
-}
-
-/* 动态指示灯：仅运行态与呼吸态带有脉冲光晕动效 */
 .status-dot-working {
-  background: #4f80ff;
-  box-shadow: 0 0 0 2px rgba(79, 128, 255, 0.22);
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-bg);
   animation: status-dot-pulse 1.8s ease-in-out infinite;
 }
 
-.status-dot-done.status-dot-working {
-  background: #34c759;
-  animation-name: status-dot-pulse-green;
+.status-dot-blocked {
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--warn-bg);
+}
+
+.status-dot-done {
+  background: var(--ok);
+  box-shadow: 0 0 0 2px var(--ok-bg);
+}
+
+.status-dot-error {
+  background: var(--err);
+  box-shadow: 0 0 0 2px var(--err-bg);
 }
 
 @keyframes status-dot-pulse {
   0%, 100% {
-    box-shadow: 0 0 0 1.5px rgba(79, 128, 255, 0.22);
+    box-shadow: 0 0 0 1.5px var(--accent-bg);
     opacity: 0.85;
   }
   50% {
-    box-shadow: 0 0 0 3.5px rgba(79, 128, 255, 0.42);
-    opacity: 1;
-  }
-}
-
-@keyframes status-dot-pulse-green {
-  0%, 100% {
-    box-shadow: 0 0 0 1.5px rgba(52, 199, 89, 0.22);
-    opacity: 0.85;
-  }
-  50% {
-    box-shadow: 0 0 0 3.5px rgba(52, 199, 89, 0.42);
+    box-shadow: 0 0 0 3.5px var(--accent-bg);
     opacity: 1;
   }
 }
@@ -839,12 +814,6 @@ textarea {
   color: var(--fg-muted);
 }
 
-.msg-turn-loader {
-  display: inline-flex;
-  align-items: center;
-  color: var(--fg-muted);
-}
-
 .msg-human-pill {
   max-width: min(82%, 620px);
   padding: 9px 14px;
@@ -1123,47 +1092,6 @@ textarea {
 
 .trace-expanded-body.trace-expanded-body-flush {
   margin-left: 0;
-}
-
-.trace-expanded-body.thinking-expanded-body {
-  font-family: inherit;
-  color: var(--fg-muted);
-  width: auto;
-  max-width: 100%;
-  box-sizing: border-box;
-}
-
-.thinking-expanded-body .msg-ai-body {
-  width: 100%;
-  max-width: 100%;
-  font-size: 12.5px;
-  line-height: 1.6;
-  color: var(--fg-muted);
-}
-
-.thinking-expanded-body .msg-ai-body p,
-.thinking-expanded-body .msg-ai-body ul,
-.thinking-expanded-body .msg-ai-body ol,
-.thinking-expanded-body .msg-ai-body pre,
-.thinking-expanded-body .msg-ai-body blockquote {
-  margin: 0 0 8px;
-  max-width: 100%;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.thinking-expanded-body .msg-ai-body h1,
-.thinking-expanded-body .msg-ai-body h2,
-.thinking-expanded-body .msg-ai-body h3,
-.thinking-expanded-body .msg-ai-body h4 {
-  margin: 10px 0 6px;
-  font-size: 13px;
-  color: var(--fg);
-  max-width: 100%;
-}
-
-.thinking-expanded-body .msg-ai-body code:not(pre code) {
-  font-size: 11.5px;
 }
 
 /* 上下文重置 / 精简 26px 分割线 */
@@ -1950,24 +1878,6 @@ textarea {
   border-radius: var(--radius-xs);
 }
 
-/* 产物预览：插件预览器选择与插件视图容器 */
-.artifact-previewer-select {
-  width: 132px;
-  flex-shrink: 0;
-}
-
-.artifact-plugin-view {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-}
-.artifact-plugin-view > * {
-  flex: 1;
-  min-height: 0;
-}
-
 .composer-textarea {
   width: 100%;
   min-height: 36px;
@@ -2049,54 +1959,11 @@ textarea {
 .composer-toolbar .btn-send.btn-primary { background: var(--fg); border-color: transparent; color: var(--fg-on-solid); }
 .composer-toolbar .btn-send.btn-primary:hover:not(:disabled) { background: var(--fg-secondary); color: var(--fg-on-solid); border-color: transparent; }
 .composer-toolbar .btn-send.btn-primary:disabled { opacity: 1; background: var(--bg-muted); color: var(--fg-subtle); }
-
-.composer-toolbar .composer-abort-button {
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-  border-radius: var(--radius-xs);
-}
-
-.composer-toolbar .composer-queue-button,
-.composer-toolbar .composer-steer-action {
-  height: 28px;
-  min-height: 28px;
-  padding: 0 10px;
-  gap: 5px;
-  font-size: 11.5px;
-  border-radius: var(--radius-pill);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  white-space: nowrap;
-}
-
-.composer-toolbar .composer-steer-action {
-  background: var(--fg);
-  border-color: transparent;
-  color: var(--fg-on-solid);
-}
-
-.composer-toolbar .composer-steer-action:hover:not(:disabled) {
-  background: var(--fg-secondary);
-  color: var(--fg-on-solid);
-  border-color: transparent;
-}
-
-.composer-toolbar .composer-steer-action:disabled {
-  opacity: 1;
-  background: var(--bg-muted);
-  color: var(--fg-subtle);
-}
 .composer-extras > summary { list-style: none; }
 .composer-extras > summary::-webkit-details-marker { display: none; }
 .composer-extras-popover .composer-pill-item { display: flex; padding: 4px; }
 .composer-extras-popover .composer-pill-item > * { max-width: 100%; }
-.composer-popover.composer-model-popover {
-  width: min(500px, calc(100vw - 24px));
-  max-height: min(440px, 60dvh);
-}
+.composer-popover.composer-model-popover { width: min(360px, calc(100% - 12px)); }
 .composer-popover.composer-extras-popover { width: min(280px, calc(100% - 12px)); }
 
 .composer-popover {
@@ -3600,10 +3467,10 @@ textarea.textarea,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
-  min-height: 32px;
-  padding: 5px 10px;
+  min-height: 30px;
+  padding: 4px 10px;
   border: none;
   border-radius: var(--radius-xs);
   background: transparent;
@@ -3612,20 +3479,12 @@ textarea.textarea,
   text-align: left;
   cursor: pointer;
 }
-.composer-popover .popover-item > .mono {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .composer-popover .popover-item:hover,
 .composer-popover .popover-item-active {
   background: var(--bg-hover);
   color: var(--fg);
 }
 .composer-popover .popover-item-meta {
-  flex-shrink: 0;
   font-size: 11px;
   color: var(--fg-muted);
   font-family: var(--font-mono);
@@ -4073,8 +3932,6 @@ textarea.textarea,
   position: static;
   bottom: auto;
   left: auto;
-  width: min(500px, calc(100vw - 24px));
-  max-height: min(440px, 60dvh);
   border-radius: var(--radius-sm, 7px);
 }
 
@@ -4603,52 +4460,26 @@ textarea.textarea,
   }
 }
 
-/* Profile 详情抽屉：空白会话引导词编辑区块（紧凑列表，label/prompt 增删）。 */
-.profile-starters-header { justify-content: space-between; }
-.profile-starters-list { display: flex; flex-direction: column; gap: 8px; }
-.profile-starters-empty { padding: 2px 0; }
-.profile-starter-item {
-  position: relative;
+/* ==========================================================================
+ * composerCompleter 补全浮层（Radix Popover 锚定在 .composer-box 上方）
+ * ========================================================================== */
+.composer-completion-popover {
+  width: min(420px, calc(100vw - 16px));
+  max-height: 300px;
+  overflow-y: auto;
+}
+.composer-completion-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 32px 8px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
 }
-.profile-starter-fields { display: flex; flex-direction: column; gap: 6px; }
-.profile-starter-label { font-size: 13px; }
-.profile-starter-prompt { font-size: 13px; line-height: 1.5; resize: vertical; min-height: 44px; }
-.profile-starter-error { font-size: 11px; color: var(--danger); }
-.profile-starter-remove { position: absolute; top: 6px; right: 4px; }
-.profile-starter-add { margin-top: 6px; }
-
-/* ConversationTimeline：空白会话引导词按钮组（仅回填草稿，不直接发送）。 */
-.timeline-starters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 12px; }
-.timeline-starter-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  padding: 5px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--fg);
+.composer-completion-state {
+  cursor: default;
+  color: var(--fg-muted);
   font-size: 12px;
-  line-height: 1.4;
-  cursor: pointer;
-  text-align: left;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
 }
-.timeline-starter-btn:hover {
-  background: var(--nav-active-bg);
-  border-color: var(--fg-muted);
-}
-.timeline-starter-btn .timeline-starter-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-@media (max-width: 680px) {
-  .profile-starter-item { padding: 6px 28px 6px 6px; }
-  .profile-starter-prompt { font-size: 13px; }
-  .timeline-starters { gap: 6px; }
-  .timeline-starter-btn { font-size: 12px; }
+.composer-completion-error {
+  color: var(--danger, var(--fg-muted));
 }
