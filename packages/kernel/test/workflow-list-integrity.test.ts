@@ -40,6 +40,7 @@ import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
 import { createHelm } from '../src/app.js'
 import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
 import { PluginHost, type PluginHostBackend, type PluginSessionDocStore } from '../src/plugins/index.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -523,6 +524,7 @@ class NoopEventHub implements EventHub {
 /** 最小后端（编排插件经 ctx.host 触达的能力；引擎自持 state store）。 */
 function makeBackend(): PluginHostBackend {
   return {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async () => ({}) as never,
@@ -532,7 +534,6 @@ function makeBackend(): PluginHostBackend {
     abortConversation: async () => {},
     getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'human' as const,
-    isClosing: false,
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
@@ -540,7 +541,6 @@ function makeBackend(): PluginHostBackend {
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     manageConversation: () => () => {},
     markConversationOwnership: () => {},

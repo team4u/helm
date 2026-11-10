@@ -21,6 +21,7 @@ import {
   type PluginHostBackend,
 } from '../src/plugins/index.js'
 import { projectToolPromptSections } from '../src/runtime/runtime-helpers.js'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 
 // ---------------------------------------------------------------------------
 // 基建
@@ -69,6 +70,12 @@ function makeBackend(over: {
     skills: {
       list: async () => [],
       readFile: async () => '',
+      directory: async (id) => {
+        if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
+          throw new HelmError('validation_error', `Skill id 非法：${id}`, 400, { skillId: id })
+        }
+        return `/data/skills/${id}`
+      },
       ensureSkill: async () => {},
     },
     secrets: {
@@ -124,8 +131,8 @@ function makeBackend(over: {
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', 'fixture', 501) },
+    withFileMutationQueue(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不承载文件互斥队列', 501) },
     listActions: () => [],
-    listUi: () => [],
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
     createAsk: async () => ({ id: 'a', status: 'answered', answers: {} }),
@@ -176,7 +183,7 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
       () => captured!.completeText({ conversationId: 1, systemPrompt: '', text: '' }),
       () => captured!.refreshModels(),
       () => captured!.redact('x'),
-      () => captured!.executionEnv('local', '/tmp').canonicalPath('/tmp/x'),
+      () => captured!.executionEnv('local', '/tmp').canonicalPath('/tmp/x', BACKGROUND_CONTEXT),
       () => captured!.withFileLock('/tmp/x', async () => 1),
       () => captured!.atomicWriteFile('/tmp/x', 'y'),
     ]

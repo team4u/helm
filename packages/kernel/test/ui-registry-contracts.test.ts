@@ -27,6 +27,7 @@ import {
 } from '@helm/protocol';
 import { UiRegistry } from '../src/plugins/ui-registry.js';
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js';
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 
 const isHelmError = (code: string) => (err: unknown): boolean => err instanceof HelmError && err.code === code;
 
@@ -171,6 +172,7 @@ function createHostBackend(): PluginHostBackend {
     throw new Error('本测试只验证 UI 注册，不应执行宿主业务操作');
   };
   return {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: unused,
     submitInput: unused,
     createConversation: unused,
@@ -180,7 +182,6 @@ function createHostBackend(): PluginHostBackend {
     abortConversation: unused,
     getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'human' as const,
-    isClosing: false,
     manageConversation: () => () => {},
     markConversationOwnership: unused,
     spawnAgent: unused,

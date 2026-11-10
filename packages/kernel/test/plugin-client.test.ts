@@ -20,6 +20,7 @@ import {
   SkillService,
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { compilePluginClientModule } from '../src/plugins/client-compiler.js'
 import { createHubHandler } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike} from '../src/http/index.js'
@@ -49,6 +50,7 @@ function makeConversation(id: number): ConversationSummary {
 
 function makeBackend(): PluginHostBackend {
   return {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async (init) => ({ ...makeConversation(42), title: init.title ?? 'new' }),
@@ -67,9 +69,6 @@ function makeBackend(): PluginHostBackend {
     },
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
-    },
-    get isClosing(): boolean {
-      return false
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),

@@ -26,6 +26,7 @@ import {
   type PluginHostBackend,
   type PluginSessionDocStore,
 } from '../src/plugins/index.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { SessionDocEventHub } from '../src/runtime/events.js'
 import { openHelmDatabase } from '../src/runtime/sqlite.js'
 import { HelmStore } from '../src/runtime/store.js'
@@ -58,6 +59,7 @@ function makeConversation(id: number): ConversationSummary {
 function makeHostApi(options: { existing: Set<number> } = { existing: new Set([1, 2]) }) {
   const events: Array<{ type: string; payload: unknown }> = []
   const backend: PluginHostBackend = {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async () => makeConversation(42),
@@ -82,9 +84,6 @@ function makeHostApi(options: { existing: Set<number> } = { existing: new Set([1
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
     },
-    get isClosing(): boolean {
-      return false
-    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
@@ -94,7 +93,6 @@ function makeHostApi(options: { existing: Set<number> } = { existing: new Set([1
     execEnv: async () => {
       throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
     },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: (type, payload) => {
       events.push({ type, payload })

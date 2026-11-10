@@ -18,6 +18,7 @@ import {
   type PluginHostBackend,
   type PluginProviderPort,
 } from '../src/plugins/index.js';
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 
 // ---------------------------------------------------------------------------
 // fake 基建
@@ -26,6 +27,7 @@ import {
 function makeHostApi(): PluginHostBackend {
   const noop = () => {};
   return {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async (init) => ({
@@ -76,9 +78,6 @@ function makeHostApi(): PluginHostBackend {
     },
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
-    },
-    get isClosing(): boolean {
-      return false
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),

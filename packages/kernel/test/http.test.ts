@@ -28,6 +28,7 @@ import {
   FileNotFoundError,
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { HelmError, type ConversationSummary, type AskSpec, type PluginSummary, type HelmPluginContext } from '@helm/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
@@ -276,6 +277,7 @@ let privateHandlerCalls: Request[] = []
 
 function hostApiForPluginHost(): PluginHostBackend {
   return {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async () => summary(99, 'x'),
@@ -302,9 +304,6 @@ function hostApiForPluginHost(): PluginHostBackend {
     },
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
-    },
-    get isClosing(): boolean {
-      return false
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),

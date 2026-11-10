@@ -28,6 +28,7 @@ import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
 import { createSuperAgentPlugin } from '../src/builtin-plugins/superagent.js'
 import { MAX_MEMORY_CHARS, createMemoryPlugin, MemoryStore } from '../src/builtin-plugins/memory.js'
 import { createProfileFileHost } from './helpers/profile-file-host.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
 import type { SuperAgentDependencies } from '../src/builtin-plugins/superagent/contracts.js'
 import { ProfileService, SkillService } from '../src/services/index.js'
@@ -84,6 +85,7 @@ function makeControlledBackend(dataDir: string): ControlledBackend {
   const notifications: Array<{ title: string; body: string; level: string }> = []
   const submits: Array<{ conversationId: number; origin?: string }> = []
   const backend: ControlledBackend = {
+    ...createPluginHostBackendFixture(),
     ...createProfileFileHost(dataDir),
     conversations,
     notifications,
@@ -136,7 +138,6 @@ function makeControlledBackend(dataDir: string): ControlledBackend {
     },
     getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'helm',
-    isClosing: false,
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),

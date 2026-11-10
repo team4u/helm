@@ -24,6 +24,7 @@ import {
   type PluginConfigStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js';
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 import type { UiRegistry, ClientModuleOptions } from '../src/plugins/ui-registry.js';
 
 // ---------------------------------------------------------------------------
@@ -57,6 +58,7 @@ function makeConversation(id: number): ConversationSummary {
  */
 function makeHostApi(events: string[] = []): PluginHostBackend {
   return {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {
       events.push('dispatchTrigger');
     },
@@ -90,9 +92,6 @@ function makeHostApi(events: string[] = []): PluginHostBackend {
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
     },
-    get isClosing(): boolean {
-      return false
-    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
@@ -102,7 +101,6 @@ function makeHostApi(events: string[] = []): PluginHostBackend {
     execEnv: async () => {
       throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501);
     },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: (type, payload) => {
       events.push(`event:${type}`);
@@ -1926,7 +1924,6 @@ test('ctx.host.execEnv：真实调用 backend（required 端口）+ 在途任务
     execEnv: async () => {
       return execPromise;
     },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
   };
   const host = new PluginHost({ dataDir, host: backend, docs });
 

@@ -28,6 +28,7 @@ import {
   type PluginConfigStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js';
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -55,6 +56,7 @@ function makeConversation(id: number): ConversationSummary {
 
 function makeHostApi(events: string[]): PluginHostBackend {
   return {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async (init) => ({ ...makeConversation(42), title: init.title ?? 'new' }),
@@ -76,9 +78,6 @@ function makeHostApi(events: string[]): PluginHostBackend {
     },
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
-    },
-    get isClosing(): boolean {
-      return false
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),

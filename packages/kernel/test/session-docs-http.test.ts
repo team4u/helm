@@ -16,6 +16,7 @@ import {
   type PublicPluginSessionDoc,
 } from '@helm/protocol'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { SessionDocEventHub } from '../src/runtime/events.js'
 import { AuthService } from '../src/services/index.js'
 import { createHubHandler, startHub, type KernelRuntimeLike, type SessionDocEventPort } from '../src/http/index.js'
@@ -52,6 +53,7 @@ let metricsHandle: PluginSessionDocHandle<{ n: number }> | undefined
 let globalFrames: HelmEventFrame[] = []
 
 const backend: PluginHostBackend = {
+  ...createPluginHostBackendFixture(),
   dispatchTrigger: async () => {},
   submitInput: async () => {},
   createConversation: async () => makeConversation(42),
@@ -74,9 +76,6 @@ const backend: PluginHostBackend = {
   getConversationOwnership(): 'helm' | 'bot' | 'human' {
     return 'human'
   },
-  get isClosing(): boolean {
-    return false
-  },
   spawnAgent: async () => ({}),
   runGate: async () => ({ ok: true, output: '' }),
   prepareInterruptedConversations: async () => {},
@@ -86,7 +85,6 @@ const backend: PluginHostBackend = {
   execEnv: async () => {
     throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
   },
-  withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
   listActions: () => [],
   emitEvent: (type, payload) => {
     if (type === 'plugin.session_doc.updated') {
@@ -170,7 +168,6 @@ beforeEach(async () => {
     execEnv: async () => {
       throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
     },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
   }
   const handle = await startHub({ kernel, port: 0 })
   hubUrl = handle.url

@@ -2,13 +2,27 @@ import { join } from 'node:path'
 import { HelmError, type HelmHostApi } from '@helm/protocol'
 import { atomicWriteFile, FileNotFoundError } from '../../src/services/atomic-file.js'
 import { withFileLock } from '../../src/services/file-lock.js'
-import { assertProfileId, ProfileService, SkillService } from '../../src/services/profiles-skills.js'
+import {
+  assertProfileId,
+  assertSkillId,
+  ProfileService,
+  SkillService,
+} from '../../src/services/profiles-skills.js'
 
 function validateId(id: string): void {
   try {
     assertProfileId(id)
   } catch (error) {
     throw new HelmError('validation_error', error instanceof Error ? error.message : String(error), 400, { profileId: id })
+  }
+}
+
+/** skill id 边界归一（镜像 kernel skillDirectory：非法 id -> HelmError 400）。 */
+function validateSkillId(id: string): void {
+  try {
+    assertSkillId(id)
+  } catch (error) {
+    throw new HelmError('validation_error', `Skill id 非法：${error instanceof Error ? error.message : String(error)}`, 400, { skillId: id })
   }
 }
 
@@ -44,6 +58,10 @@ export function createProfileFileHost(
     skills: {
       list: () => skills.list(),
       readFile: (id, path) => skills.readFile(id, path),
+      async directory(id) {
+        validateSkillId(id)
+        return join(dataDir, 'skills', id)
+      },
       ensureSkill: (asset) => skills.ensureSkill(asset),
     },
     atomicWriteFile,

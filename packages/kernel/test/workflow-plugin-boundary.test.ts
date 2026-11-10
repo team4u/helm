@@ -16,7 +16,8 @@ import {
   type PluginDefinition,
   type PluginToolContext,
 } from '@helm/protocol'
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
+import { PluginHost, type PluginDocStore } from '../src/plugins/index.js'
+import { PluginHostBackendFixtureBase } from './helpers/plugin-host-backend.js'
 import { pluginToolResult } from '../src/runtime/runtime-helpers.js'
 
 // ---------------------------------------------------------------------------
@@ -44,12 +45,13 @@ function makeConversation(id: number): ConversationSummary {
 }
 
 /** 可编程后端：emitEvent 可等待（内部监听器顺序执行、错误上抛）。 */
-class FakeBackend implements PluginHostBackend {
+class FakeBackend extends PluginHostBackendFixtureBase {
   conversations = new Map<number, ConversationSummary>()
   emitted: Array<{ type: string; payload: unknown }> = []
   private listeners = new Map<string, Set<(payload: unknown) => MaybePromise<void>>>()
 
   constructor() {
+    super()
     this.conversations.set(1, makeConversation(1))
     this.conversations.set(2, makeConversation(2))
   }
@@ -81,9 +83,6 @@ class FakeBackend implements PluginHostBackend {
   }
   getConversationOwnership(): 'helm' | 'bot' | 'human' {
     return 'human'
-  }
-  get isClosing(): boolean {
-    return false
   }
   spawnAgent(): Promise<unknown> {
     return Promise.resolve('spawned')

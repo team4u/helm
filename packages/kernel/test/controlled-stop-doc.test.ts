@@ -20,7 +20,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, type ConversationSummary, type EnvExecResponse, type PluginDefinition, type PluginDocHandle, type PublicPluginDoc } from '@helm/protocol'
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
+import { PluginHost, type PluginDocStore } from '../src/plugins/index.js'
+import { PluginHostBackendFixtureBase } from './helpers/plugin-host-backend.js'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -49,13 +50,14 @@ function makeConversation(id: number): ConversationSummary {
   }
 }
 
-class FakeBackend implements PluginHostBackend {
+class FakeBackend extends PluginHostBackendFixtureBase {
   conversations = new Map<number, ConversationSummary>()
   emitted: Array<{ type: string; payload: unknown }> = []
   private listeners = new Map<string, Set<(payload: unknown) => unknown>>()
   cleanupWorktreeImpl: (() => Promise<{ removed: boolean; worktreeId: string; path: string; branch: string; nodeId: string; branchDeleted: boolean }>) | undefined
 
   constructor() {
+    super()
     this.conversations.set(1, makeConversation(1))
   }
   dispatchTrigger(): Promise<void> {
@@ -86,9 +88,6 @@ class FakeBackend implements PluginHostBackend {
   }
   getConversationOwnership(): 'helm' | 'bot' | 'human' {
     return 'human'
-  }
-  get isClosing(): boolean {
-    return false
   }
   spawnAgent(): Promise<unknown> {
     return Promise.resolve('spawned')

@@ -43,6 +43,7 @@ import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/builtin-pl
 import { WorktreeIsolation } from '../src/builtin-plugins/workflow/isolation.js'
 import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { ArtifactService, SecretStash } from '../src/services/index.js'
 
 type FauxHandle = ReturnType<typeof fauxProvider>
@@ -725,6 +726,7 @@ async function executeCleanupTool(
     return { ok: true, exitCode: r.value.exitCode, output: combined, timedOut: false }
   }
   const backend: PluginHostBackend = {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async () => ({}) as never,
@@ -753,9 +755,6 @@ async function executeCleanupTool(
     },
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
-    },
-    get isClosing(): boolean {
-      return false
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),

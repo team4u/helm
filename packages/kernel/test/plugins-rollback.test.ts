@@ -30,6 +30,7 @@ import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/
 import { createProfilePlugin } from '../src/builtin-plugins/profile.js'
 import { createMemoryPlugin, MAX_MEMORY_CHARS as MEM_MAX, MemoryStore } from '../src/builtin-plugins/memory.js'
 import { createProfileFileHost } from './helpers/profile-file-host.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { createSuperAgentPlugin } from '../src/builtin-plugins/superagent.js'
 import { ProfileService, SkillService } from '../src/services/index.js'
 import type { SuperAgentDependencies } from '../src/builtin-plugins/superagent/contracts.js'
@@ -87,6 +88,7 @@ function makeControlledBackend(dataDir: string): ControlledBackend {
   const notifications: Array<{ title: string; body: string; level: string }> = []
   const submits: Array<{ conversationId: number; origin?: string }> = []
   const backend: ControlledBackend = {
+    ...createPluginHostBackendFixture(),
     ...createProfileFileHost(dataDir),
     conversations,
     notifications,
@@ -135,7 +137,6 @@ function makeControlledBackend(dataDir: string): ControlledBackend {
     onEvent() { return () => {} },
     getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'human',
-    isClosing: false,
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
@@ -144,7 +145,6 @@ function makeControlledBackend(dataDir: string): ControlledBackend {
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent(type, payload) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
@@ -528,6 +528,7 @@ async function makeWatchdogHarness(opts: {
   conversations.set(1, makeConversation(1, { title: '个人助理' }))
   const docs = new MemoryDocStore()
   const backend: PluginHostBackend = {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {},
     submitInput: async (conversationId, text, o) => {
       recorded.submits.push({ conversationId, text, origin: o?.origin })
@@ -562,7 +563,6 @@ async function makeWatchdogHarness(opts: {
     },
     getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: (id) => opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helm'),
-    isClosing: false,
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
@@ -571,7 +571,6 @@ async function makeWatchdogHarness(opts: {
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: async (type, payload) => {
       if (type === 'notification') {

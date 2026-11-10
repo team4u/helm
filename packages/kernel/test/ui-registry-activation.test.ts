@@ -5,16 +5,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 
 function createHostBackend(): PluginHostBackend {
   const unused = (): never => { throw new Error('本测试只验证 UI 启用，不应执行宿主业务操作') }
   return {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: unused, submitInput: unused, createConversation: unused,
     listConversations: () => [], getConversation: unused, updateConversation: unused,
     abortConversation: unused, manageConversation: () => () => {},
     getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'human' as const,
-    isClosing: false,
     markConversationOwnership: unused, spawnAgent: unused, runGate: unused,
     prepareInterruptedConversations: unused, cleanupWorktree: unused,
     execEnv: unused, withFileMutationQueue: unused, prepareAction: unused, invokeAction: unused, listActions: () => [],

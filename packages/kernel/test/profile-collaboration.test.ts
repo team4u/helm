@@ -30,6 +30,7 @@ import {
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { ProfileService } from '../src/services/index.js'
 import { createProfileFileHost } from './helpers/profile-file-host.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { createProfilePlugin } from '../src/builtin-plugins/profile.js'
 import {
   PROFILE_SUMMARY_MAX_CODEPOINTS,
@@ -108,6 +109,7 @@ function makeControlledBackend(): ControlledBackend {
   conversations.set(1, makeConversation(1))
   const notifications: Array<{ title: string; body: string; level: string }> = []
   const backend: ControlledBackend = {
+    ...createPluginHostBackendFixture(),
     conversations,
     notifications,
     async dispatchTrigger() {},

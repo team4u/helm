@@ -21,6 +21,7 @@ import { createMemoryPlugin, isProfileMemoryEnabled, type MemoryPluginDoc } from
 import { MemoryStore } from '../src/builtin-plugins/memory/store.js'
 import { createProfilePlugin } from '../src/builtin-plugins/profile.js'
 import { createProfileFileHost } from './helpers/profile-file-host.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 
 // ---------------------------------------------------------------------------
 // 基建
@@ -66,6 +67,7 @@ function makeBackend(): PluginHostBackend & {
   conversations.set(2, makeConversation(2, 'coder'))
   const notifications: Array<{ title: string; body: string; level: string }> = []
   const backend = {
+    ...createPluginHostBackendFixture(),
     conversations,
     notifications,
     async dispatchTrigger() {},
@@ -112,9 +114,6 @@ function makeBackend(): PluginHostBackend & {
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
     },
-    get isClosing(): boolean {
-      return false
-    },
     async spawnAgent() {
       return {}
     },
@@ -132,13 +131,12 @@ function makeBackend(): PluginHostBackend & {
     async execEnv() {
       throw new HelmError('unsupported', 'fixture', 501)
     },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent(type: string, payload: unknown) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
     },
   }
-  return backend as PluginHostBackend & { notifications: Array<{ title: string; body: string; level: string }> }
+  return backend
 }
 
 function makeTurn(profileId: string, withMemoryTool = true) {
