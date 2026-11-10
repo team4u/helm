@@ -49,6 +49,7 @@ export const isPrototypeParamKey = (key: string): boolean => PROTOTYPE_PARAM_KEY
 export type ResolvedTarget =
   | { kind: 'conversation'; conversationId: number }
   | { kind: 'screen'; pluginId: string; screenId: string; params?: Record<string, string> }
+  | { kind: 'plugins'; pluginId?: string }
 
 export type ActiveModal =
   | { kind: 'command-palette' }
@@ -202,6 +203,13 @@ export function resolveTargetString(
   conversations: ConversationSummary[],
 ): ResolvedTarget | null {
   const target = rawTarget.trim()
+  if (target === 'plugins') {
+    return { kind: 'plugins' }
+  }
+  if (target.startsWith('plugins:')) {
+    const pluginId = target.slice('plugins:'.length).trim()
+    return pluginId === '' ? { kind: 'plugins' } : { kind: 'plugins', pluginId }
+  }
   if (target.startsWith('conversation:profile:')) {
     const profileId = target.slice('conversation:profile:'.length).trim()
     // 常驻会话优先：无 parentConversationId 的即插件/用户直接创建的长期会话，
@@ -285,6 +293,9 @@ export function isSameResolvedTarget(a: ResolvedTarget | null, b: ResolvedTarget
     const bpKeys = Object.keys(bp)
     if (apKeys.length !== bpKeys.length) return false
     return apKeys.every((key) => Object.hasOwn(bp, key) && bp[key] === ap[key])
+  }
+  if (a.kind === 'plugins' && b.kind === 'plugins') {
+    return a.pluginId === b.pluginId
   }
   return false
 }

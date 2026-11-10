@@ -7,6 +7,7 @@ import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, ty
  */
 export interface WorkspaceLocationState {
   primaryTarget: ResolvedTarget
+  target?: ResolvedTarget
   splitTarget: ResolvedTarget | null
   workbenchOpen: boolean
   workbenchTab: string
@@ -107,8 +108,11 @@ function formatScreenParams(
     .map((key) => [`${prefix}${key}`, target.params![key]] as [string, string])
 }
 
-/** 解析 `c/<id>` / `s/<pluginId>/<screenId>`；先切分路径，再分别解码，避免 ID 中的转义斜杠破坏结构。 */
+/** 解析 `c/<id>` / `s/<pluginId>/<screenId>` / `plugins`；先切分路径，再分别解码，避免 ID 中的转义斜杠破坏结构。 */
 function parseTargetValue(raw: string): ResolvedTarget | null {
+  if (raw === 'plugins') {
+    return { kind: 'plugins' }
+  }
   if (raw.startsWith('c/')) {
     const conversationId = parsePositiveInt(raw.slice(2))
     return conversationId === null ? null : { kind: 'conversation', conversationId }
@@ -127,7 +131,8 @@ function parseTargetValue(raw: string): ResolvedTarget | null {
 
 function formatTargetValue(target: ResolvedTarget): string {
   if (target.kind === 'conversation') return `c/${target.conversationId}`
-  return `s/${encodeSegment(target.pluginId)}/${encodeSegment(target.screenId)}`
+  if (target.kind === 'screen') return `s/${encodeSegment(target.pluginId)}/${encodeSegment(target.screenId)}`
+  return 'plugins'
 }
 
 /** 列表型弹窗的子项 ID（profileId / skillId / pluginId / nodeId）或抽屉会话 ID。 */
@@ -182,13 +187,20 @@ function parseActiveModal(params: URLSearchParams): ActiveModal {
 export function parseLocationHash(rawHash: string): WorkspaceLocationState {
   const raw = rawHash.startsWith('#') ? rawHash.slice(1) : rawHash
   const queryIdx = raw.indexOf('?')
-  const path = (queryIdx === -1 ? raw : raw.slice(0, queryIdx)).replace(/^\/+/, '')
+  const path = (queryIdx === -1 ? raw : raw.slice(0, queryIdx)).replace(/^\/+/, '').replace(/\/+$/, '')
   const params = new URLSearchParams(queryIdx === -1 ? '' : raw.slice(queryIdx + 1))
   const splitRaw = params.get('split')
   const workbenchTab = params.get('wb')
-  const primaryTarget = parseTargetValue(path) ?? DEFAULT_PRIMARY
+  let primaryTarget = parseTargetValue(path) ?? DEFAULT_PRIMARY
   const splitTarget = splitRaw === null || splitRaw === '' ? null : parseTargetValue(splitRaw)
-  return {
+
+  const pluginParam = params.get('p')
+  const pluginId = pluginParam !== null && pluginParam.trim() !== '' ? pluginParam.trim() : undefined
+  if (primaryTarget.kind === 'plugins' && pluginId !== undefined) {
+    primaryTarget = { kind: 'plugins', pluginId }
+  }
+
+  const state: WorkspaceLocationState = {
     primaryTarget:
       primaryTarget.kind === 'screen'
         ? applyScreenParams(primaryTarget, extractScreenParams(params, PRIMARY_SCREEN_PARAM_PREFIX))
@@ -201,6 +213,14 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
     workbenchTab: workbenchTab !== null && workbenchTab !== '' ? workbenchTab : DEFAULT_WORKBENCH_TAB,
     activeModal: parseActiveModal(params),
   }
+  Object.defineProperty(state, 'target', {
+    get() {
+      return this.primaryTarget
+    },
+    enumerable: false,
+    configurable: true,
+  })
+  return state
 }
 
 /** 仅在确实存在合法参数时才挂 params 字段，保持无参数 screen 目标的形状稳定。 */
@@ -214,6 +234,9 @@ function applyScreenParams(
 /** 始终返回以 `#/` 开头的规范形式；默认态输出 `#/c/1`，command-palette 不序列化。 */
 export function formatLocationHash(state: WorkspaceLocationState): string {
   const query: Array<[string, string]> = []
+  if (state.primaryTarget.kind === 'plugins' && state.primaryTarget.pluginId !== undefined && state.primaryTarget.pluginId !== '') {
+    query.push(['p', state.primaryTarget.pluginId])
+  }
   if (state.splitTarget !== null) query.push(['split', formatTargetValue(state.splitTarget)])
   // 主/分屏 Screen 参数各占 sp.* / ssp.* 命名空间：同一 screen 双开时参数互不串扰。
   query.push(...formatScreenParams(state.primaryTarget, PRIMARY_SCREEN_PARAM_PREFIX))
@@ -281,6 +304,15 @@ const isTargetSlotChanged = (prev: ResolvedTarget | null, next: ResolvedTarget |
  *   （避免弹窗内点选 10 项后要后退 10 次才能关掉弹窗）。
  */
 export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: WorkspaceLocationState): boolean {
+  // 插件中心内抽屉开关与切换策略：
+  // 1. 从列表打开抽屉（无 pluginId -> 有 pluginId）入栈（push），支持浏览器后退关闭抽屉；
+  // 2. 抽屉内切换插件或关闭抽屉（有 pluginId -> 无 pluginId）平滑替换（replace），不污染后退栈。
+  if (prev.primaryTarget.kind === 'plugins' && next.primaryTarget.kind === 'plugins') {
+    if (prev.primaryTarget.pluginId === undefined && next.primaryTarget.pluginId !== undefined) {
+      return true
+    }
+    return false
+  }
   // 仅 params 变化（screen 坐标不变）→ replace，避免筛选器每次按键污染后退栈；
   // 需要入栈时由调用方（setScreenParams push 标记）显式强制。
   if (isTargetSlotChanged(prev.primaryTarget, next.primaryTarget)) return true
@@ -300,3 +332,42 @@ export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: Wo
   }
   return false
 }
+
+export type HashSerializable =
+  | WorkspaceLocationState
+  | { target: ResolvedTarget; splitTarget?: ResolvedTarget | null; workbenchOpen?: boolean; workbenchTab?: string; activeModal?: ActiveModal }
+  | { primaryTarget: ResolvedTarget; splitTarget?: ResolvedTarget | null; workbenchOpen?: boolean; workbenchTab?: string; activeModal?: ActiveModal }
+  | ResolvedTarget
+
+/**
+ * 序列化 Hash 契约辅助函数。
+ * 兼容接收 WorkspaceLocationState、携带 target/primaryTarget 的局部对象、或直接输入 ResolvedTarget。
+ */
+export function serializeHash(input: HashSerializable): string {
+  if ('kind' in input && (input.kind === 'conversation' || input.kind === 'screen' || input.kind === 'plugins')) {
+    return formatLocationHash({
+      primaryTarget: input,
+      splitTarget: null,
+      workbenchOpen: false,
+      workbenchTab: DEFAULT_WORKBENCH_TAB,
+      activeModal: null,
+    })
+  }
+  const primaryTarget: ResolvedTarget =
+    'primaryTarget' in input
+      ? input.primaryTarget
+      : 'target' in input
+        ? input.target
+        : DEFAULT_PRIMARY
+
+  return formatLocationHash({
+    primaryTarget,
+    splitTarget: input.splitTarget ?? null,
+    workbenchOpen: input.workbenchOpen ?? false,
+    workbenchTab: input.workbenchTab ?? DEFAULT_WORKBENCH_TAB,
+    activeModal: input.activeModal ?? null,
+  })
+}
+
+/** 反向解析 Hash 契约辅助别名，指向 parseLocationHash。 */
+export const parseHash = parseLocationHash
