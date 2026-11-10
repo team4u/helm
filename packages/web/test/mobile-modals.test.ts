@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const mermaidSource = readFileSync(new URL('../src/conversation/MermaidPreviewModal.tsx', import.meta.url), 'utf8')
-const pluginSettingsSource = readFileSync(new URL('../src/modals/PluginSettingsModal.tsx', import.meta.url), 'utf8')
+const pluginCardSource = readFileSync(new URL('../src/plugins/PluginCard.tsx', import.meta.url), 'utf8')
+const pluginDrawerSource = readFileSync(new URL('../src/plugins/PluginDetailDrawer.tsx', import.meta.url), 'utf8')
 const providerCatalogSource = readFileSync(new URL('../src/modals/ProviderCatalog.tsx', import.meta.url), 'utf8')
 const commandPaletteSource = readFileSync(new URL('../src/modals/CommandPaletteModal.tsx', import.meta.url), 'utf8')
 const providerAuthCss = readFileSync(new URL('../src/modals/provider-auth.css', import.meta.url), 'utf8')
@@ -34,19 +35,16 @@ test('Mermaid 预览弹窗：头部标题自适应截断、操作组折行且关
   assert.match(mobileMermaid, /\.mermaid-modal-actions\s*\{[^}]*flex-wrap:\s*wrap/)
 })
 
-test('插件设置弹窗：卡片头部支持 flex-wrap 且标题与状态标签不被挤压重叠', { timeout: 60_000 }, () => {
-  // 卡片头部和元数据容器支持 flexWrap: 'wrap'
-  assert.match(pluginSettingsSource, /className="plugin-card-header"/)
-  assert.match(pluginSettingsSource, /flexWrap:\s*['"]wrap['"]/)
-  assert.match(pluginSettingsSource, /className="plugin-card-meta"/)
+test('插件卡片与抽屉：卡片头部支持自适应排版且标题与状态标签不被挤压重叠', { timeout: 60_000 }, () => {
+  // 卡片头部和元数据容器
+  assert.match(pluginCardSource, /className="plugin-card-header"/)
+  assert.match(pluginCardSource, /className="plugin-card-meta"/)
+  assert.match(pluginCardSource, /className="plugin-card-title-row"/)
 
-  // 标题防止竖排折字
-  assert.match(pluginSettingsSource, /fontWeight:\s*600,\s*fontSize:\s*13,\s*whiteSpace:\s*['"]nowrap['"]/)
-
-  // 锁定核心插件标签设置 whiteSpace: nowrap，停用按钮设置 flexShrink: 0
-  assert.match(pluginSettingsSource, /常驻核心插件，不可停用/)
-  assert.match(pluginSettingsSource, /style=\{\{\s*whiteSpace:\s*['"]nowrap['"]\s*\}\}>\s*<HelmIcon name="lock"/)
-  assert.match(pluginSettingsSource, /style=\{\{\s*flexShrink:\s*0\s*\}\}\s*disabled=\{plugin\.locked/)
+  // 锁定核心插件标签与开关受控
+  assert.match(pluginCardSource, /常驻核心插件，不可停用/)
+  assert.match(pluginCardSource, /<HelmIcon name="lock" size=\{10\} \/>/)
+  assert.match(pluginDrawerSource, /disabled=\{plugin\.locked \|\| toggling\}/)
 })
 
 test('供应商配置：消除小屏双层滚动陷阱，选中后切换视图并提供返回按钮', { timeout: 60_000 }, () => {

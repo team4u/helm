@@ -222,7 +222,7 @@ test('设计系统契约：人类消息对称微圆角、状态徽章发丝微�
 })
 
 // ---------------------------------------------------------------------------
-// 5. ProfileEditorModal & PluginSettingsModal 细节契约
+// 5. ProfileEditorModal & PluginDetailDrawer 细节契约
 // ---------------------------------------------------------------------------
 
 test('ProfileEditorModal：受保护 Profile 带锁展示、死 DOM 清理、Tags 与 cwd 无 mono 滥用', { timeout: 60_000 }, () => {
@@ -246,18 +246,18 @@ test('ProfileEditorModal：受保护 Profile 带锁展示、死 DOM 清理、Tag
   assert.match(profileEditorSource, /<Switch[^>]*checked=\{runtimeEnabled\}/)
 })
 
-test('PluginSettingsModal：布尔字段使用 Switch，停用按钮使用低饱和中性按钮', { timeout: 60_000 }, () => {
-  const pluginSettingsSource = readFileSync(
-    join(PKG_ROOT, 'src/modals/PluginSettingsModal.tsx'),
+test('PluginDetailDrawer：布尔字段使用 Switch，停用按钮使用低饱和中性按钮', { timeout: 60_000 }, () => {
+  const pluginDrawerSource = readFileSync(
+    join(PKG_ROOT, 'src/plugins/PluginDetailDrawer.tsx'),
     'utf-8',
   )
 
   // 1. 布尔字段使用 Switch
-  assert.match(pluginSettingsSource, /schema\.type === 'boolean'\s*\?\s*\(\s*<Switch/)
+  assert.match(pluginDrawerSource, /schema\.type === 'boolean'\s*\?\s*\(\s*<Switch/)
 
   // 2. 停用按钮从 btn-danger 改为 btn
-  assert.match(pluginSettingsSource, /className=\{`btn btn-sm \$\{plugin\.enabled \? 'btn' : 'btn-primary'\}`\}/)
-  assert.doesNotMatch(pluginSettingsSource, /plugin\.enabled \? 'btn-danger' : 'btn-primary'/)
+  assert.match(pluginDrawerSource, /className=\{`btn btn-sm \$\{plugin\.enabled \? 'btn' : 'btn-primary'\}`\}/)
+  assert.doesNotMatch(pluginDrawerSource, /plugin\.enabled \? 'btn-danger' : 'btn-primary'/)
 })
 
 test('Composer：SessionEnvBar 消除外挂图标套娃，内嵌 folder 图标', { timeout: 60_000 }, () => {

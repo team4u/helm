@@ -1,5 +1,5 @@
 /**
- * 插件配置表单纯数据模型（PluginSettingsModal 消费）。
+ * 插件配置表单纯数据模型（PluginDetailDrawer / PluginCenter 消费）。
  *
  * secret 字段的服务端契约：GET config 只回 '******' 掩码（已配置）或空串
  * （未配置），明文绝不出站。因此表单侧必须遵守两条铁律：

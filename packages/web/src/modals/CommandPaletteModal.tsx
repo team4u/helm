@@ -126,10 +126,14 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       },
       {
         kind: 'command',
-        id: 'builtin:open-plugin-settings',
-        title: '打开插件设置',
-        icon: 'settings',
-        run: () => store.setActiveModal({ kind: 'plugin-settings' }),
+        id: 'builtin:open-plugin-center',
+        title: '打开插件中心',
+        icon: 'boxes',
+        keywords: ['plugin', 'plugins', 'settings', '插件', '设置', '插件中心'],
+        run: () => {
+          close()
+          store.openTarget({ kind: 'plugins' })
+        },
       },
       {
         kind: 'command',
@@ -231,9 +235,34 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     [hits],
   )
 
+  const pluginRows = useMemo<Array<PaletteRow>>(
+    () =>
+      (store.plugins ?? []).map((plugin) => ({
+        kind: 'command' as const,
+        id: `plugin-item:${plugin.id}`,
+        title: `插件：${plugin.name || plugin.id}`,
+        hint: `在插件中心查看与配置 ${plugin.id}`,
+        icon: 'boxes',
+        keywords: [
+          'plugin',
+          'plugins',
+          '插件',
+          plugin.id,
+          plugin.name ?? '',
+          ...(plugin.tools ?? []),
+          ...(plugin.actions ?? []),
+        ],
+        run: () => {
+          close()
+          store.openTarget({ kind: 'plugins', pluginId: plugin.id })
+        },
+      })),
+    [store.plugins, store.openTarget, close],
+  )
+
   const rows = useMemo<Array<PaletteRow>>(() => {
     const q = query.trim().toLowerCase()
-    const commands = [...builtinCommands, ...pluginCommands].filter((row) => {
+    const commands = [...builtinCommands, ...pluginCommands, ...pluginRows].filter((row) => {
       if (row.kind !== 'command') return true
       if (!q) return true
       return (
@@ -243,7 +272,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       )
     })
     return [...commands, ...conversationRows, ...searchRows]
-  }, [query, builtinCommands, pluginCommands, conversationRows, searchRows])
+  }, [query, builtinCommands, pluginCommands, pluginRows, conversationRows, searchRows])
 
   useEffect(() => {
     setSelectedIdx(0)

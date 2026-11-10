@@ -19,7 +19,7 @@ import {
 } from '../src/modals/profile-editor-model.js'
 
 // ---------------------------------------------------------------------------
-// PluginSettingsModal：secret 掩码不得覆盖真实密钥
+// 插件配置表单：secret 掩码不得覆盖真实密钥
 // ---------------------------------------------------------------------------
 
 const SECRET_SCHEMA: Record<string, PluginConfigFieldSchema> = {

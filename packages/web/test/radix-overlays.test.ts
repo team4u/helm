@@ -255,7 +255,7 @@ test('Sidebar 与 Workbench 纯图标按钮接入 Tooltip 规范悬浮提示', {
   assert.match(sidebarSource, /<Tooltip content="模型与凭据"/)
   assert.match(sidebarSource, /<Tooltip content="技能库 Skills"/)
   assert.match(sidebarSource, /<Tooltip content="计算节点 Nodes"/)
-  assert.match(sidebarSource, /<Tooltip content="插件与设置"/)
+  assert.match(sidebarSource, /<Tooltip content="插件中心"/)
   assert.match(sidebarSource, /<Tooltip content="打开 Cmd K 全局搜索与命令面板"/)
 
   // HoverIconButton 封装了 Tooltip

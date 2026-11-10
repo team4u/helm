@@ -568,6 +568,10 @@ textarea {
   justify-content: center;
   flex-shrink: 0;
 }
+.sidebar-footer .btn.is-active {
+  background: var(--nav-active-bg);
+  color: var(--nav-active-fg);
+}
 .sidebar-theme-toggle {
   width: 28px;
   height: 28px;
@@ -2630,8 +2634,209 @@ textarea {
 }
 
 /* --------------------------------------------------------------------------
- * 全屏插件中心：响应式卡片网格与卡片组件
+ * 全屏插件中心：容器、顶栏、检索工具栏、卡片网格与空态
  * -------------------------------------------------------------------------- */
+
+.plugin-center {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  overflow: hidden;
+  position: relative;
+}
+
+.plugin-center-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+.plugin-center-title-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.plugin-center-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+}
+
+.plugin-center-subtitle {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plugin-center-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.plugin-center-stats {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.plugin-center-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.plugin-search-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: min(320px, 100%);
+  color: var(--fg-muted);
+}
+
+.plugin-search-box > svg {
+  position: absolute;
+  left: 10px;
+  pointer-events: none;
+  color: var(--fg-muted);
+}
+
+.plugin-search-box .input {
+  width: 100%;
+  padding-left: 32px;
+  padding-right: 28px;
+  height: 32px;
+  font-size: 12.5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.plugin-search-clear {
+  position: absolute;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0 !important;
+}
+
+.plugin-category-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.plugin-category-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  outline: none;
+}
+
+.plugin-category-pill:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+
+.plugin-category-pill.is-active {
+  background: var(--nav-active-bg);
+  color: var(--nav-active-fg);
+  border-color: var(--accent);
+  font-weight: 500;
+}
+
+.plugin-category-pill .badge {
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+}
+
+.plugin-category-pill.is-active .badge {
+  background: var(--bg-elevated);
+  color: var(--nav-active-fg);
+  border-color: var(--accent);
+}
+
+.plugin-center-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  min-height: 0;
+}
+
+.plugin-center-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.plugin-center-empty-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-subtle);
+  margin-bottom: 4px;
+}
+
+.plugin-center-empty-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.plugin-center-empty-hint {
+  font-size: 12px;
+  color: var(--fg-muted);
+  max-width: 320px;
+}
 
 .plugin-center-grid {
   display: grid;

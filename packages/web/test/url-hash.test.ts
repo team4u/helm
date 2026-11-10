@@ -472,11 +472,10 @@ test('仿真: 进入新建模式时仅弹窗仍是本类型才清深链子项 id
 const readSource = (relative: string): Promise<string> =>
   readFile(new URL(relative, import.meta.url), 'utf8')
 
-test('契约: 四个列表型 Modal 均消费共享决策模块且写回经守卫（仿真与实现同构）', { timeout: 60_000 }, async () => {
+test('契约: 列表型 Modal 均消费共享决策模块且写回经守卫（仿真与实现同构）', { timeout: 60_000 }, async () => {
   for (const [file, kind] of [
     ['ProfileEditorModal.tsx', 'profile-editor'],
     ['SkillViewerModal.tsx', 'skill-viewer'],
-    ['PluginSettingsModal.tsx', 'plugin-settings'],
     ['NodesModal.tsx', 'nodes'],
   ] as const) {
     const source = await readSource(`../src/modals/${file}`)
@@ -515,9 +514,7 @@ test('契约: SkillViewer 清单确实清空时作废加载世代，从未到达
   assert.match(fallbackEffect, /loadGeneration\.current \+= 1/, '失效路径必须作废在途读取世代')
 })
 
-test('契约: PluginSettings/Nodes 空列表不覆盖深链 initial*Id', { timeout: 60_000 }, async () => {
-  const pluginSource = await readSource('../src/modals/PluginSettingsModal.tsx')
-  assert.match(pluginSource, /plugins\.length === 0\) return/)
+test('契约: Nodes 空列表不覆盖深链 initialNodeId', { timeout: 60_000 }, async () => {
   const nodesSource = await readSource('../src/modals/NodesModal.tsx')
   const fallbackEffect = nodesSource.slice(nodesSource.indexOf('// 列表为空'), nodesSource.indexOf('}, [selected, issuingMode, nodes, pendingNodeId, store])'))
   assert.match(fallbackEffect, /nodes\.length > 0/)

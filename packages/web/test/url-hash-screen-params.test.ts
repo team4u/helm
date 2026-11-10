@@ -151,7 +151,7 @@ function mountApp(): Mount {
     root.render(e(HelmStoreProvider, null, e(App)))
   })
   return {
-    probe: () => ({ ...captured, hash: window.location.hash }),
+    probe: () => ({ ...captured, hash: window.location.hash, historyLength: window.history.length }),
     primaryScreen: () => primaryProps,
     splitScreen: () => splitProps,
     openTarget: (target, opts) => openTargetFn!(target, opts),

@@ -1,7 +1,7 @@
 /**
  * P2 界面增强测试：
  * 1. timeline.renderer / tool.view 的 priority 降序稳定裁决（replaceRow 语义不变）；
- * 2. PluginSettingsModal 同插件多 settings.panel 全量按 order 渲染；
+ * 2. PluginDetailDrawer 同插件多 settings.panel 全量按 order 渲染；
  * 3. 三类微插槽（conversation.header.action / conversation.row.action /
  *    timeline.entry.action）宿主挂载渲染与 Action 触发闭环：
  *    - scope 按实际会话过滤、entry kinds/roles 过滤；
@@ -237,16 +237,16 @@ test('humanItemEntryKind：helm.input 归一化优先，兜底 pi.user', { timeo
 })
 
 // ---------------------------------------------------------------------------
-// 3. PluginSettingsModal：同插件多 settings.panel 全量按 order 渲染
+// 3. PluginDetailDrawer：同插件多 settings.panel 全量按 order 渲染
 // ---------------------------------------------------------------------------
 
-function pluginSettingsModalSource(): string {
-  return readFileSync(new URL('../src/modals/PluginSettingsModal.tsx', import.meta.url), 'utf8')
+function pluginDetailDrawerSource(): string {
+  return readFileSync(new URL('../src/plugins/PluginDetailDrawer.tsx', import.meta.url), 'utf8')
 }
 
-test('PluginSettingsModal 源码契约：filter 全量渲染同插件面板，不再 find 首个', { timeout: 60_000 }, () => {
-  const src = pluginSettingsModalSource()
-  assert.match(src, /settingsPanels\.filter\(\(p\) => p\.pluginId === selectedId\)/)
+test('PluginDetailDrawer 源码契约：filter 全量渲染同插件面板，不再 find 首个', { timeout: 60_000 }, () => {
+  const src = pluginDetailDrawerSource()
+  assert.match(src, /filter\(\(p\) => p\.pluginId === plugin\?\.id\)/)
   assert.doesNotMatch(src, /settingsPanels\.find\(/)
   // 逐面板独立 PluginUiView 挂载（key 稳定）
   assert.match(src, /settingsPanels\.map\(\(panel\) =>/)

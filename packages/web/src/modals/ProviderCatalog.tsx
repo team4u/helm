@@ -166,7 +166,17 @@ function ProviderDetail({
           <div className="provider-plugin-heading">
             <HelmIcon name="sliders" size={14} />
             <span>{owningPlugin?.name ?? provider.name} 提供连接配置与专属面板。</span>
-            <button className="btn btn-sm" type="button" onClick={() => store.setActiveModal({ kind: 'plugin-settings', pluginId: provider.pluginId })}><HelmIcon name="settings" size={12} />插件连接设置</button>
+            <button
+              className="btn btn-sm"
+              type="button"
+              onClick={() => {
+                store.setActiveModal(null)
+                store.openTarget({ kind: 'plugins', pluginId: provider.pluginId })
+              }}
+            >
+              <HelmIcon name="settings" size={12} />
+              插件连接设置
+            </button>
           </div>
           {pluginPanels.map((panel) => (
             <div key={`${panel.pluginId}/${panel.spec.id}`} className="provider-plugin-panel">

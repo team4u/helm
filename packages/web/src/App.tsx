@@ -9,10 +9,10 @@ import { HelmStoreProvider } from './lib/HelmStoreProvider.js'
 import { useHelmStore } from './lib/store-context.js'
 import { CommandPaletteModal } from './modals/CommandPaletteModal.js'
 import { NodesModal } from './modals/NodesModal.js'
-import { PluginSettingsModal } from './modals/PluginSettingsModal.js'
 import { ProfileEditorModal } from './modals/ProfileEditorModal.js'
 import { ProviderAuthModal } from './modals/ProviderAuthModal.js'
 import { SkillViewerModal } from './modals/SkillViewerModal.js'
+import { PluginCenter } from './plugins/PluginCenter.js'
 import { ScreenHost } from './screens/ScreenHost.js'
 import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
@@ -30,6 +30,14 @@ function HelmShellInner() {
       setSidebarOpen(false)
     }
   }, [store.activeModal])
+
+  useEffect(() => {
+    if (store.activeModal?.kind === 'plugin-settings') {
+      const pluginId = store.activeModal.pluginId
+      closeModal()
+      store.openTarget({ kind: 'plugins', pluginId })
+    }
+  }, [store.activeModal, closeModal, store.openTarget])
 
   if (!store.authReady) {
     return (
@@ -118,6 +126,8 @@ function HelmShellInner() {
             pluginId={store.primaryTarget.pluginId}
             screenId={store.primaryTarget.screenId}
           />
+        ) : store.primaryTarget.kind === 'plugins' ? (
+          <PluginCenter key="primary-plugins" />
         ) : null}
 
         {store.splitTarget && (
@@ -137,6 +147,8 @@ function HelmShellInner() {
                 isSplit
                 onCloseSplit={store.closeSplit}
               />
+            ) : store.splitTarget.kind === 'plugins' ? (
+              <PluginCenter key="split-plugins" isSplit onCloseSplit={store.closeSplit} />
             ) : null}
           </div>
         )}
@@ -162,9 +174,6 @@ function HelmShellInner() {
       {store.activeModal?.kind === 'provider-auth' && <ProviderAuthModal onClose={closeModal} />}
       {store.activeModal?.kind === 'skill-viewer' && (
         <SkillViewerModal initialSkillId={store.activeModal.skillId} onClose={closeModal} />
-      )}
-      {store.activeModal?.kind === 'plugin-settings' && (
-        <PluginSettingsModal initialPluginId={store.activeModal.pluginId} onClose={closeModal} />
       )}
       {store.activeModal?.kind === 'nodes' && (
         <NodesModal initialNodeId={store.activeModal.nodeId} onClose={closeModal} />

@@ -7,11 +7,19 @@ import type { PluginSummary } from '@helm/protocol'
 
 export type PluginStatusFilter = 'all' | 'enabled' | 'disabled'
 export type PluginCategory = 'all' | 'builtin' | 'orchestration' | 'tools' | 'external'
+export type PluginCategoryTab =
+  | 'all'
+  | 'runtime'
+  | 'tools'
+  | 'orchestration'
+  | 'system'
+  | 'enabled'
 
 export interface PluginFilterState {
   query: string
-  status: PluginStatusFilter
-  category: PluginCategory
+  status?: PluginStatusFilter
+  category?: PluginCategory
+  categoryTab?: PluginCategoryTab
 }
 
 export interface PluginSummaryStats {
@@ -20,6 +28,17 @@ export interface PluginSummaryStats {
   disabled: number
   totalTools: number
   totalActions: number
+}
+
+export interface PluginCategoryCounts {
+  all: number
+  runtime: number
+  tools: number
+  orchestration: number
+  system: number
+  enabled: number
+  builtin?: number
+  external?: number
 }
 
 /**
@@ -57,6 +76,72 @@ export function derivePluginCategory(id: string): PluginCategory {
 }
 
 /**
+ * 判断插件是否属于指定的分类药丸标签
+ */
+export function isPluginInTab(plugin: PluginSummary, tab: PluginCategoryTab): boolean {
+  if (tab === 'all') return true
+  if (tab === 'enabled') return Boolean(plugin.enabled)
+  const id = (plugin.id ?? '').toLowerCase()
+  const category = derivePluginCategory(plugin.id)
+
+  if (tab === 'orchestration') {
+    return category === 'orchestration'
+  }
+  if (tab === 'runtime') {
+    return (
+      id.includes('herdr') ||
+      id.includes('runtime') ||
+      id.includes('node') ||
+      id.includes('sandbox') ||
+      (plugin.actions ?? []).some((a) => a.includes('bridge') || a.includes('exec') || a.includes('node'))
+    )
+  }
+  if (tab === 'tools') {
+    return category === 'tools' || (plugin.tools?.length ?? 0) > 0
+  }
+  if (tab === 'system') {
+    return category === 'builtin' && !id.includes('herdr')
+  }
+  return false
+}
+
+/**
+ * 计算多维分类标签与状态的数量徽章统计
+ */
+export function buildCategoryCounts(plugins: PluginSummary[]): PluginCategoryCounts {
+  const list = Array.isArray(plugins) ? plugins : []
+  let enabled = 0
+  let runtime = 0
+  let tools = 0
+  let orchestration = 0
+  let system = 0
+  let builtin = 0
+  let external = 0
+
+  for (const p of list) {
+    if (p.enabled) enabled++
+    if (isPluginInTab(p, 'runtime')) runtime++
+    if (isPluginInTab(p, 'tools')) tools++
+    if (isPluginInTab(p, 'orchestration')) orchestration++
+    if (isPluginInTab(p, 'system')) system++
+    const cat = derivePluginCategory(p.id)
+    if (cat === 'builtin') builtin++
+    if (cat === 'external') external++
+  }
+
+  return {
+    all: list.length,
+    runtime,
+    tools,
+    orchestration,
+    system,
+    enabled,
+    builtin,
+    external,
+  }
+}
+
+/**
  * 按多维条件过滤插件列表（纯函数，返回新数组，不修改原数组）
  */
 export function filterPlugins(plugins: PluginSummary[], filter: PluginFilterState): PluginSummary[] {
@@ -64,6 +149,7 @@ export function filterPlugins(plugins: PluginSummary[], filter: PluginFilterStat
   const query = filter.query?.trim().toLowerCase() ?? ''
   const status = filter.status ?? 'all'
   const category = filter.category ?? 'all'
+  const categoryTab = filter.categoryTab ?? 'all'
 
   return plugins.filter((plugin) => {
     // 1. 状态筛选
@@ -76,7 +162,12 @@ export function filterPlugins(plugins: PluginSummary[], filter: PluginFilterStat
       if (pluginCategory !== category) return false
     }
 
-    // 3. 关键字搜索匹配（name / id / tools / actions）
+    // 3. 药丸标签分类筛选
+    if (categoryTab !== 'all') {
+      if (!isPluginInTab(plugin, categoryTab)) return false
+    }
+
+    // 4. 关键字搜索匹配（name / id / tools / actions）
     if (query) {
       const matchName = (plugin.name ?? '').toLowerCase().includes(query)
       const matchId = (plugin.id ?? '').toLowerCase().includes(query)

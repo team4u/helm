@@ -295,7 +295,7 @@ export function PluginDetailDrawer({
             </div>
             <DialogClose asChild>
               <button
-                className="btn btn-ghost btn-sm"
+                className="btn btn-ghost btn-sm plugin-drawer-close-btn"
                 aria-label="关闭"
                 title="关闭"
               >

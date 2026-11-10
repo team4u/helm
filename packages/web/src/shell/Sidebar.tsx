@@ -1083,13 +1083,14 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
               <HelmIcon name="network" size={14} />
             </button>
           </Tooltip>
-          <Tooltip content="插件与设置" side="top">
+          <Tooltip content="插件中心" side="top">
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
-              title="插件与设置"
-              aria-label="插件与设置"
-              onClick={() => store.setActiveModal({ kind: 'plugin-settings' })}
+              className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'plugins' ? ' is-active' : ''}`}
+              title="插件中心"
+              aria-label="插件中心"
+              aria-current={store.primaryTarget.kind === 'plugins' ? 'page' : undefined}
+              onClick={() => store.openTarget({ kind: 'plugins' })}
             >
               <HelmIcon name="settings" size={14} />
             </button>
