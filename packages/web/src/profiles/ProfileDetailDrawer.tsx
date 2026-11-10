@@ -401,8 +401,8 @@ export function ProfileDetailDrawer({
                 <div className="form-grid-value">
                   <textarea
                     id="profile-form-desc"
-                    className="input"
-                    rows={2}
+                    className="input profile-desc-textarea"
+                    rows={3}
                     placeholder="简要描述该角色的职责、背景与能力专长..."
                     value={form.description}
                     onChange={(e) =>
@@ -447,20 +447,26 @@ export function ProfileDetailDrawer({
 
             {/* 系统提示词区块 */}
             <section className="section-flat">
-              <div className="section-flat-header">
+              <div className="section-flat-header flex-row-between">
                 <span className="section-flat-title">系统提示词 (SYSTEM.md)</span>
+                <span className="mono profile-editor-meta">
+                  {form.system.length} 字符{form.system ? ` · ${form.system.split('\n').length} 行` : ''}
+                </span>
               </div>
               <textarea
                 id="profile-form-system"
-                className="input mono"
-                rows={6}
-                placeholder="输入该角色的系统提示词指令..."
+                className="input mono profile-editor-textarea"
+                rows={10}
+                placeholder="输入该角色的系统提示词指令（支持 Markdown）..."
                 value={form.system}
                 onChange={(e) =>
                   setForm((prev) => ({ ...prev, system: e.target.value }))
                 }
                 aria-label="系统提示词"
               />
+              <div className="profile-editor-hint">
+                提示：系统指令定义角色的核心职责与行动准则，保存后对后续会话即时生效。
+              </div>
             </section>
 
             {/* 插件扩展子插槽（builtin:memory 注入长期记忆区块等） */}

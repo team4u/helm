@@ -235,10 +235,15 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
         </div>
       ) : (
         <>
+          <div className="flex-row-between memory-section-meta">
+            <span className="mono">
+              {effectiveDraft.length} / 65536 字符{effectiveDraft ? ` · ${effectiveDraft.split('\n').length} 行` : ''}
+            </span>
+          </div>
           <textarea
-            className="input mono"
-            rows={6}
-            placeholder="该角色的长期记忆全文…"
+            className="input mono memory-section-textarea"
+            rows={8}
+            placeholder="该角色的长期记忆全文（支持 Markdown）…"
             value={effectiveDraft}
             disabled={disabled}
             onChange={(e) => {

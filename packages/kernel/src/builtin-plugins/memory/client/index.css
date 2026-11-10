@@ -20,3 +20,20 @@
   margin-top: 6px;
   flex-wrap: wrap;
 }
+.memory-section-meta {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  margin-bottom: 4px;
+}
+.memory-section-textarea {
+  min-height: 220px;
+  max-height: 520px;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: break-word;
+  resize: vertical;
+}
