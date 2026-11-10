@@ -3,6 +3,7 @@
  * 分发层（index.ts）用本表精确匹配核心命令——管理面故障隔离的根基。
  * workflows / worktrees 域已剥离为 builtin:workflow 插件动作（动态命令）。
  */
+import { CORE_CLI_COMMAND_PATHS } from '@helm/protocol'
 import type { CommandSpec } from './shared.js'
 import { CliError } from '../errors.js'
 import { authCommands } from './auth.js'
@@ -75,6 +76,23 @@ function assertCommandTableValid(commands: readonly CommandSpec[]): void {
           'command_table_conflict',
         )
       }
+    }
+  }
+  const expected = new Set<string>(CORE_CLI_COMMAND_PATHS)
+  for (const key of seen.keys()) {
+    if (!expected.has(key)) {
+      throw new CliError(
+        `静态命令表内部错误：新增命令 "${key}" 未同步登记至 @helm/protocol CORE_CLI_COMMAND_PATHS（及内置 helm-cli 技能）`,
+        'command_table_conflict',
+      )
+    }
+  }
+  for (const key of expected) {
+    if (!seen.has(key)) {
+      throw new CliError(
+        `静态命令表内部错误：CORE_CLI_COMMAND_PATHS 中的 "${key}" 在 coreCommands() 中不存在`,
+        'command_table_conflict',
+      )
     }
   }
 }

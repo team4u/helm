@@ -45,7 +45,7 @@ export interface ScopedExecutionEnvOptions {
 
 /** 受管变量名集（大小写不敏感剥除；Windows env 名语义下 helm_token / Helm_Token
  *  等同名变体一并剥除，受管值最后固定覆写——策略由 composer 提供权威值）。 */
-const MANAGED_ENV_NAMES = new Set([
+export const MANAGED_EXEC_ENV_VARS = [
   'HELM_ENV',
   'HELM_HUB_URL',
   'HELM_CONVERSATION_ID',
@@ -53,7 +53,9 @@ const MANAGED_ENV_NAMES = new Set([
   'HELM_DATA_DIR',
   'HELM_NODE_ID',
   'HELM_TOKEN',
-])
+] as const
+
+const MANAGED_ENV_NAMES = new Set<string>(MANAGED_EXEC_ENV_VARS)
 
 /** Scoped 环境与本机直接执行共用的合成机制；调用方仅提供受管策略产物。 */
 export function composeExecutionEnv(

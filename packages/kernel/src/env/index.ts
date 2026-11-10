@@ -6,7 +6,7 @@
 
 export { createEnvFabric } from './fabric.js'
 export type { EnvFabric, EnvFabricOptions, EnvOptionsComposer } from './fabric.js'
-export { createScopedExecutionEnv } from './scoped-env.js'
+export { createScopedExecutionEnv, MANAGED_EXEC_ENV_VARS } from './scoped-env.js'
 export type { EnvTarget, ScopedExecutionEnv } from './scoped-env.js'
 export { NodeRegistry, tokenAuthenticator, sha256hex, sanitizeNodeHealth, HelmUpgradeBusyError, HelmUpgradeTimeoutError, HelmUpgradeCancelledError } from './registry.js'
 export type { NodeRegistryOptions, NodeConnection, RegisterOutcome, HubConnectionLocal, NodeSideFunctions, UpgradeWaiterHandle } from './registry.js'

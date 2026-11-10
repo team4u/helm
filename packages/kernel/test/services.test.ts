@@ -19,12 +19,17 @@ import {
   PLUGIN_HOOK_NAMES,
   RESERVED_SLASH_COMMANDS,
   PLUGIN_CLIENT_SHARED_EXPORTS,
+  CORE_CLI_COMMAND_PATHS,
 } from '@helm/protocol'
 import {
   HELM_CLI_SKILL_MD,
   HELM_CLI_GENERATIVE_UI_MD,
   HELM_CLI_SKILL_AND_PLUGIN_DEV_MD,
+  HELM_CLI_SKILL_ASSET,
+  renderSkillTemplate,
 } from '../src/builtin-plugins/assistant/assets.js'
+import { MANAGED_EXEC_ENV_VARS } from '../src/env/scoped-env.js'
+import { WATCHDOG_PLAYBOOK_SKILL_ASSET } from '../src/builtin-plugins/superagent/assets.js'
 import { assert } from './helpers.js'
 import { waitFor } from './helpers.js'
 import {
@@ -365,6 +370,61 @@ test('helm-cli 技能资产同步界面扩展与会话投影能力面（防回�
     assert.ok(HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(api), `插件开发参考应含 ${api}`)
   }
   assert.ok(HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes('sp.<key>'), '应 documenting sp./ssp. 深链命名空间')
+
+  // CLI 51 条核心命令全量对齐
+  for (const cmdPath of CORE_CLI_COMMAND_PATHS) {
+    const parts = cmdPath.split(' ')
+    if (parts.length === 1) {
+      assert.ok(
+        HELM_CLI_SKILL_MD.includes(`helm ${cmdPath}`),
+        `SKILL.md 应包含单词核心命令 "helm ${cmdPath}"`,
+      )
+    } else {
+      const [root, sub] = parts
+      const pattern = new RegExp(`helm ${root} [\\w|]*\\b${sub}\\b`)
+      const matched = HELM_CLI_SKILL_MD.includes(`helm ${cmdPath}`) || pattern.test(HELM_CLI_SKILL_MD)
+      assert.ok(
+        matched,
+        `SKILL.md 应包含或通过合并写法正则匹配核心命令 "helm ${cmdPath}"`,
+      )
+    }
+  }
+
+  // 受管环境变量全量对齐
+  for (const envVar of MANAGED_EXEC_ENV_VARS) {
+    assert.ok(
+      HELM_CLI_SKILL_MD.includes(envVar),
+      `SKILL.md 应包含受管环境变量 ${envVar}`,
+    )
+  }
+
+  // 模板占位符零残留与错误防护验证
+  assert.ok(
+    !HELM_CLI_SKILL_ASSET.skillMd.includes('{{') && !HELM_CLI_SKILL_ASSET.skillMd.includes('}}'),
+    'HELM_CLI_SKILL_ASSET.skillMd 不应残留模板占位符',
+  )
+  for (const [refName, refContent] of Object.entries(HELM_CLI_SKILL_ASSET.references)) {
+    assert.ok(
+      !refContent.includes('{{') && !refContent.includes('}}'),
+      `HELM_CLI_SKILL_ASSET reference "${refName}" 不应残留模板占位符`,
+    )
+  }
+
+  assert.ok(
+    !WATCHDOG_PLAYBOOK_SKILL_ASSET.skillMd.includes('{{') && !WATCHDOG_PLAYBOOK_SKILL_ASSET.skillMd.includes('}}'),
+    'WATCHDOG_PLAYBOOK_SKILL_ASSET.skillMd 不应残留模板占位符',
+  )
+  for (const [refName, refContent] of Object.entries(WATCHDOG_PLAYBOOK_SKILL_ASSET.references)) {
+    assert.ok(
+      !refContent.includes('{{') && !refContent.includes('}}'),
+      `WATCHDOG_PLAYBOOK_SKILL_ASSET reference "${refName}" 不应残留模板占位符`,
+    )
+  }
+
+  assert.throws(
+    () => renderSkillTemplate('hello {{UNKNOWN_VAR}}', {}),
+    (err: unknown) => err instanceof HelmError && err.code === 'unreplaced_skill_placeholder',
+  )
 })
 
 test('skills: ensureSkill 受管覆盖——自举、重启覆盖源码版本、补缺文件、拒绝软链覆盖、写入只读', { timeout: 60_000 }, async () => {
