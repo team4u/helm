@@ -37,9 +37,9 @@ flowchart TD
     Host --> Consumers
 ```
 
-插件宿主提供统一的沙箱隔离与生命周期管理：
+插件宿主提供统一的生命周期管理与能力边界（插件是可信代码，宿主不提供安全沙箱；隔离是状态与配置层面的隔离，不是权限沙箱）：
 
-1. **唯一强类型入口**：每个插件必须导出标准定义并实现 `definePlugin(ctx)`。
+1. **唯一强类型入口**：每个插件必须导出标准定义并实现 `definePlugin(ctx)`。内置插件的 `createXxxPlugin()` 工厂一律零参数，只通过公开 `ctx` 获取宿主能力，不接收私有依赖注入。
 2. **状态与配置隔离**：每个插件分配专属数据目录 `~/.helm/plugins/<id>/`。
 3. **单点动作声明**：一次定义 Schema，自动映射到五端消费入口。
 4. **安全受控卸载**：停用与卸载时校验在途任务，杜绝状态破坏。
@@ -61,12 +61,12 @@ flowchart TD
 | `ctx.configSchema()` | 声明插件配置字段的结构校验规则 | 属性配置与机密隔离 |
 | `ctx.hook` | 注册后端生命周期 Hook | 请求与回合生命周期 |
 | `ctx.action()` | 注册五端复用的强类型动作 | 跨端业务能力 |
-| `ctx.tool()` | 注册仅对大模型可见的专用工具 | 模型上下文执行 |
+| `ctx.tool()` | 注册仅对大模型可见的专用工具（含 `promptSnippet` / `promptGuidelines` 提示词声明与 `onUpdate` 真实流式回传） | 模型上下文执行 |
 | `ctx.route()` | 挂载 Web Standard 原始 HTTP 路由 | 自定义协议与回调 |
 | `ctx.doc()` | 声明受管的持久状态文档 | SQLite 状态存储 |
 | `ctx.service()` | 注册后台长周期驻留服务 | 守护进程与定时轮询 |
 | `ctx.provider()` | 注册自定义模型供应商网关 | 模型接入 |
-| `ctx.ui` | 注册前端 7 大扩展点视图 | 界面渲染 |
+| `ctx.ui` | 注册前端全界面扩展点视图 | 界面渲染 |
 | `ctx.host` | 调用内核受限的基础运行时能力 | 会话调度与审批交互 |
 
 ### 插件生命周期状态流转
@@ -91,6 +91,16 @@ flowchart LR
 Hub 首次启动时，宿主先等待全部已启用服务的 `prepare()`，再启动任何服务的 `start()`，最后恢复会话调度。热启用同样先执行该插件的 `prepare()` 再执行 `start()`。
 
 `stop()` 必须取消或等待本服务的在途回调。宿主等待服务停止时，允许本插件当前启用周期的文档句柄完成最终写入；这个停止窗口不区分回调的异步来源。服务返回后旧句柄失效，不得留下继续写入的回调。需要保证落盘时，应在返回前等待文档 `flush()`。
+
+---
+
+## 插件工具声明与流式更新 (`ctx.tool`)
+
+`ctx.tool(spec)` 注册仅对大模型可见的专用工具。`PluginToolSpec` 支持提示词声明与真实流式回传：
+
+- `promptSnippet`：随工具定义注入的静态用法片段；
+- `promptGuidelines`：随工具定义注入的使用准则；
+- `onUpdate`：工具执行过程中的真实流式更新回调，宿主只透传插件真实产生的进度，不伪造中间结果。
 
 ---
 
@@ -248,7 +258,7 @@ flowchart TD
 2. **正在调用的工具**：模型正在执行的 Plugin Tool 任务。
 3. **执行中的子代理**：由该插件拦截接管的子代理派生。
 4. **服务自主声明的任务**：后台服务通过 `liveTasks()` 动态返回的未完成任务标签（如 `builtin:workflow` 返回运行中的 `workflow:<runId>`）。
-5. **在途工作树占用**：后台服务通过 `liveWorktrees()` 声明运行中节点占用的受管工作树，供宿主 WorktreeAllocator 拒绝误清理（不阻断停用的任务检查由 `liveTasks` 负责）。
+5. **在途工作树占用**：后台服务通过 `liveWorktrees()` 声明运行中节点占用的受管工作树，供 `builtin:workflow` 的 Worktree 管理拒绝误清理（不阻断停用的任务检查由 `liveTasks` 负责）。受管 Git Worktree 的租约、续接与安全清理（`WorktreeAllocator`）整体属于 `builtin:workflow` 插件，不在内核。
 
 ### 保护规则与错误处理
 
@@ -288,12 +298,11 @@ export interface HelmHostApi {
   cancelAsk(askId: string, reason?: 'cancelled' | 'superseded'): Promise<void>;
   registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void;
   
-  // 子代理与工作树底座
+  // 子代理与执行底座
   spawnAgent(request: AgentSpawnRequest): Promise<unknown>;
   runGate(command: string, options?: { cwd?: string; conversationId?: number; nodeId?: string; signal?: AbortSignal; env?: Record<string, string> }): Promise<{ ok: boolean; output: string }>;
   execEnv(req: Omit<EnvExecRequest, 'stream'>, opts?: { signal?: AbortSignal }): Promise<EnvExecResponse>;
   prepareInterruptedConversations(ids: number[]): Promise<void>;
-  cleanupWorktree(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult>;
 
   // 跨插件动作互调；prepareAction 只校验，不执行动作 handler
   prepareAction(pluginId: string, actionId: string, input: unknown, context?: PluginActionContext): { idempotent: boolean };
@@ -307,6 +316,8 @@ export interface HelmHostApi {
 ```
 
 工作流运行事件不再有专用订阅端口：插件通过通用 `onEvent` 订阅 `workflow.settled` 等事件（由 `builtin:workflow` 经 `emitEvent` 发出），或用 `await ctx.host.emitEvent(...)` 发出自有事件并等待监听方处理。
+
+受管 Git Worktree 的清理不在 `ctx.host`：插件如需清理受管工作树，调用 `builtin:workflow` 的 `cleanup_worktree` 动作（经 `invokeAction` 或 CLI `helm worktrees cleanup`），该插件内置完整的安全检查链与在途保护。
 
 `execEnv` 复用内核 `EnvFabric`、取消信号、机密注入与输出脱敏。目标节点或目录缺省时继承请求中 `conversationId` 对应的会话坐标；节点离线会显式报错，不回退本机。`builtin:workflow` 通过此通用端口实现脚本内的 `action('env.exec', input)`，组合层不再直接持有或配置编排引擎。
 

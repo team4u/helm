@@ -12,7 +12,7 @@
 
 Helm 是面向复杂工程任务的轻量持久微内核系统。
 系统集成状态机、确定性编排引擎与跨平台节点底座。
-内核采用前后端对称双 7 扩展点架构。
+内核只保留持久会话、节点执行底座、Model/Auth 与插件宿主，其余能力全部由插件提供。
 所有业务角色由配置定义，内核零硬编码。
 
 ### 代码库包结构
@@ -46,7 +46,7 @@ Helm 解决多智能体协作不可控、跨机运维繁重与终端工具脱节
 
 ## 全景架构拓扑
 
-微内核通过前后端对称双 7 扩展点驱动生态，所有外部通信经由统一契约。
+微内核通过生命周期 Hook 与全界面扩展点驱动生态，所有外部通信经由统一契约。
 
 ```mermaid
 flowchart TD
@@ -60,10 +60,10 @@ flowchart TD
     end
 
     subgraph Kernel["@helm/kernel (helm-hub / Port 3202)"]
-        Durable["持久微内核 (pi-durable / SQLite / FTS5 / AskDoc)"]
-        Spawn["原生子代理与 Worktree 底座"]
-        Fabric["跨平台底座 (EnvFabric / NodeRegistry)"]
-        Host["插件宿主 (PluginHost / 双 7 扩展点)"]
+        Durable["持久微内核 (pi-durable / SQLite / FTS5 / AskDoc / spawnAgent)"]
+        Fabric["跨平台底座 (EnvFabric / NodeRegistry / 节点文件互斥)"]
+        ModelAuth["Model 与 Auth"]
+        Host["插件宿主 (PluginHost / Hook 与 UI 扩展点)"]
     end
 
     subgraph Nodes["受控计算节点"]
@@ -72,13 +72,15 @@ flowchart TD
     end
 
     subgraph Plugins["内置插件生态"]
-        P0["builtin:workflow (确定性编排 / 默认启用)"]
+        P0["builtin:workflow (确定性编排与 Worktree 租约 / 默认启用)"]
         P1["builtin:profile (角色与技能底座 / 常驻)"]
         P1M["builtin:memory (长期记忆 / 默认启用)"]
         P2["builtin:herdr (终端 CLI Agent 主控)"]
         P3["builtin:superagent (双层中枢与看门狗)"]
         P4["builtin:triggers (Cron 与 Webhook 触发器)"]
         P5["builtin:magpie (动态模型网关)"]
+        P6["builtin:json-render (声明式渲染 / 默认启用)"]
+        P7["builtin:mermaid (图表渲染 / 默认启用)"]
     end
 
     Web --> Prot
@@ -248,13 +250,15 @@ Helm 采用微内核设计，所有扩展能力均通过插件实现：
 
 | 插件标识 | 插件名称 | 核心职责 | 启用状态 |
 | :--- | :--- | :--- | :--- |
-| `builtin:workflow` | 确定性编排引擎 | 提供 `subagent` / `SubagentWorkflow` / `cleanup_worktree` 工具、编排引擎与 `helm workflows` / `helm worktrees cleanup` 动态命令 | 默认启用（可停用） |
+| `builtin:workflow` | 确定性编排引擎 | 提供 `subagent` / `SubagentWorkflow` / `cleanup_worktree` 工具、编排引擎、Git Worktree 租约与 `helm workflows` / `helm worktrees cleanup` 动态命令 | 默认启用（可停用） |
 | `builtin:profile` | 角色与技能底座 | 为全部 Profile 注入 SYSTEM.md 与可用技能目录，提供 load_skill 与默认助理角色 | 常驻启用（系统核心） |
 | `builtin:memory` | 长期记忆 | 管理各 Profile 的 MEMORY.md 注入、单角色记忆启停（`helm memory`）与 update_memory 工具 | 默认启用（可停用） |
 | `builtin:herdr` | 终端 Agent 主控 | 连接 Herdr 终端 IPC，调度 23 种终端 CLI，负责结构化交接与追问自愈 | 默认停用，按需启用 |
-| `builtin:superagent` | 双层中枢与看门狗 | 提供零阻塞路由中枢，派生后台驻留 Worker，提供两层巡检与状态自愈 | 默认停用，按需启用 |
+| `builtin:superagent` | 双层中枢与看门狗 | 提供零阻塞路由中枢，派生后台驻留 Worker，提供两层巡检与状态自愈（巡检周期由插件服务自管） | 默认停用，按需启用 |
 | `builtin:triggers` | 自动化触发器 | 提供 Cron 定时调度与 Webhook 入站，验证签名并防逃逸投递 | 默认停用，按需启用 |
 | `builtin:magpie` | 动态模型网关 | 连接动态模型网关，原生协议分发，提供目录热重载与配额路由视图 | 默认停用，按需启用 |
+| `builtin:json-render` | 声明式渲染 | 提供 JSON DSL、求值器与界面原语，支撑纯数据驱动的插件界面 | 默认启用（可停用） |
+| `builtin:mermaid` | 图表渲染 | 接管 Markdown 中 Mermaid 代码块渲染；停用后回退普通代码块 | 默认启用（可停用） |
 
 ### 编写自定义插件
 
@@ -341,8 +345,8 @@ pnpm helm custom-checker lint --input '{"targetDir":"/workspace"}' --json
   - [编写首个工作流](docs/getting-started/first-workflow.md)：从零编写并执行确定性多智能体编排
 - **架构与原理**
   - [极简微内核哲学](docs/architecture/overview.md)：零业务角色硬编码与单向依赖设计
-  - [前后端对称双 7 扩展点](docs/architecture/extension-points.md)：后端 7 大 Hook 与前端 7 大扩展视图
-  - [EnvFabric 分布式执行底座](docs/architecture/envfabric.md)：反向 WebSocket、安全升级与 Worktree 隔离
+  - [生命周期 Hook 与全界面扩展点](docs/architecture/extension-points.md)：后端生命周期 Hook 与前端界面扩展详解
+  - [EnvFabric 分布式执行底座](docs/architecture/envfabric.md)：反向 WebSocket、安全升级与节点文件互斥
   - [pi-durable 持久会话状态机](docs/architecture/pi-durable.md)：五态状态机、FTS5 全文搜索与 AskDoc 乐观锁
 - **确定性多智能体编排**
   - [原生 JavaScript DSL 手册](docs/workflows/dsl-guide.md)：`agent`, `parallel`, `pipeline`, `phase` 语法规范

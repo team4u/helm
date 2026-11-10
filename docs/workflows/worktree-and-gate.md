@@ -15,7 +15,7 @@ Helm 提供基于 Git Worktree 的物理代码沙箱与自动化门禁保障：
 
 ```mermaid
 flowchart TD
-    Req["agent({ isolation: 'worktree', gate: 'pnpm test' })"] --> Alloc["WorktreeAllocator 派生独立工作树"]
+    Req["agent({ isolation: 'worktree', gate: 'pnpm test' })"] --> Alloc["builtin:workflow WorktreeAllocator 派生独立工作树"]
     Alloc --> Branch["创建 helm/spawn-* 独立分支"]
     Branch --> Exec["子智能体在沙箱目录中执行代码修改"]
     Exec --> Gate["自动化门禁：执行 runGate 检查命令"]
@@ -40,7 +40,7 @@ const result = await agent("重构认证模块并补齐单测", {
 
 ### 1. 主工作树权威解析
 
-内核 `WorktreeAllocator` 负责分配工作树。
+受管工作树由 `builtin:workflow` 插件的 WorktreeAllocator 负责（完整租约、续接与安全清理均在该插件内，不在内核）。
 分配前调用 `git worktree list --porcelain -z` 获取仓库权威清单。
 首条记录即为仓库真正的主工作树根目录。
 即使调用方当前处于已有的 Worktree 中，算法依然能精准定位主根。
@@ -48,7 +48,7 @@ const result = await agent("重构认证模块并补齐单测", {
 
 ### 2. 独立目录与基线分支
 
-`WorktreeAllocator` 在主工作树同级目录创建隔离环境：
+WorktreeAllocator 在主工作树同级目录创建隔离环境：
 
 - **目录路径**：`.helm-worktrees/<repo>-<shortId>`。
 - **分支命名**：`helm/spawn-<shortId>`。
@@ -63,7 +63,7 @@ const result = await agent("重构认证模块并补齐单测", {
 
 ### 4. 元数据登记
 
-分配成功后，元数据持久化存入内核文档存储：
+分配成功后，元数据持久化存入 `builtin:workflow` 插件的文档存储（不再依赖内核私有存储）：
 
 | 属性 | 类型 | 说明 |
 | :--- | :--- | :--- |
@@ -77,7 +77,7 @@ const result = await agent("重构认证模块并补齐单测", {
 | `status` | `'active' \| 'removed'` | 工作树当前生命周期状态 |
 
 > [!SECURITY]
-> 若路径或分支名称中包含系统已登记的机密信息，内核拒绝落库。
+> 若路径或分支名称中包含系统已登记的机密信息，插件拒绝落库。
 > 系统抛出异常并输出脱敏后的诊断日志。
 
 ---
@@ -155,6 +155,12 @@ flowchart TD
 - 仅允许删除以 `helm/spawn-` 或 `helm/wf-` 开头的受管分支。
 - 严禁删除开发者的个人分支或主干分支。
 - 若工作树已删除但分支删除失败，系统保留记录供后续重试。
+
+### 4. 节点文件互斥的边界
+
+内核 `EnvFabric` 提供按 `nodeId + canonicalPath` 为目标的文件互斥：读-改-写（RMW）序列在同一目标上串行化，防止两个受管工具并发改写同一文件。
+
+该互斥只约束经过 EnvFabric 的受管操作：同步 Shell 命令与外部编辑器直接写文件，不受它保证。并发场景中不要假设文件互斥能阻止进程外的写入。
 
 ---
 
