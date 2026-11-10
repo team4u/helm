@@ -85,7 +85,7 @@ flowchart td
 
 ### 补全与目录使用同一候选集
 
-插件注册只读动作 `list_mentionable` 和 `trigger: '@'` 的 `composerCompleter`。候选显示 `@<id> · <name>`，并提示默认节点、目录和职责摘要；选择后插入 `@<id> `。会话产物仍由宿主提供，不因角色点名而变成新附件。
+插件注册只读动作 `list_mentionable` 和 `trigger: '@'` 的 `composerCompleter`。候选显示 `@<id> · <name>`，并提示默认节点、目录和职责摘要；选择后插入 `@<id> `。当前没有宿主内置的产物 `@` 候选；其他插件可注册同触发符的数据源，按优先级合并展示，角色点名本身不会变成附件。
 
 动作复用标准插件接口，无需新增专用 HTTP 路由或 CLI 命令实现：
 
