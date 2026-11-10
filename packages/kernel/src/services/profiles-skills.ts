@@ -6,7 +6,12 @@
  */
 import { lstat, mkdir, readdir, readFile, realpath, rm } from 'node:fs/promises'
 import { dirname, join, relative, sep } from 'node:path'
-import { HelmError, type Profile, type SkillSummary } from '@helm/protocol'
+import { HelmError, type Profile, type ProfileStarterPrompt, type SkillSummary } from '@helm/protocol'
+import {
+  PROFILE_STARTERS_MAX_ITEMS,
+  PROFILE_STARTER_LABEL_MAX_LENGTH,
+  PROFILE_STARTER_PROMPT_MAX_LENGTH,
+} from '@helm/protocol'
 import { isValidEnvName } from './secret-stash.js'
 
 export type { Profile, SkillSummary }
@@ -59,6 +64,36 @@ function profileDir(dataDir: string, id: string): string {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Unicode 码点长度（代理对计 1，与展示宽度直觉一致；契约统一口径）。 */
+export function codePointLength(text: string): number {
+  let count = 0
+  for (const _ of text) count += 1
+  return count
+}
+
+/** 单条引导词边界校验：label 规范化为 trim 形态，prompt 保留原文；
+ * 未知字段拒绝（引导词是用户可编辑数据，静默丢字段会造成 UI 保存后丢内容）。 */
+export function validateProfileStarter(item: unknown, at: string): ProfileStarterPrompt {
+  if (!isPlainObject(item)) throw new Error(`${at} 必须是 { label, prompt } 对象`)
+  const label = item['label']
+  const prompt = item['prompt']
+  if (Object.keys(item).some((key) => key !== 'label' && key !== 'prompt')) {
+    throw new Error(`${at} 仅接受 label 与 prompt 字段`)
+  }
+  if (typeof label !== 'string') throw new Error(`${at}.label 必须是字符串`)
+  const normalizedLabel = label.trim()
+  if (codePointLength(normalizedLabel) === 0) throw new Error(`${at}.label 去除首尾空白后不能为空`)
+  if (codePointLength(normalizedLabel) > PROFILE_STARTER_LABEL_MAX_LENGTH) {
+    throw new Error(`${at}.label 最多 ${PROFILE_STARTER_LABEL_MAX_LENGTH} 个 Unicode 码点`)
+  }
+  if (typeof prompt !== 'string') throw new Error(`${at}.prompt 必须是字符串`)
+  if (prompt.trim() === '') throw new Error(`${at}.prompt 不能是纯空白`)
+  if (codePointLength(prompt) > PROFILE_STARTER_PROMPT_MAX_LENGTH) {
+    throw new Error(`${at}.prompt 最多 ${PROFILE_STARTER_PROMPT_MAX_LENGTH} 个 Unicode 码点（保留原文，不截断）`)
+  }
+  return { label: normalizedLabel, prompt }
 }
 
 /** Profile 输入边界校验（新增/更新共用）；返回规范化后的可持久化形态。 */
@@ -123,6 +158,19 @@ export function validateProfileInput(input: unknown): Profile {
       if (!deduped.includes(skillId)) deduped.push(skillId)
     }
     profile.skills = deduped
+  }
+  // 空白会话引导词：最多六项；label trim 后非空且 ≤24 码点（规范化为 trim
+  // 形态持久化），prompt 非纯空白且保留原文（≤4000 码点，不截断）。
+  // 空数组 [] 显式保留（表示「清空自定义，回宿主默认提示」），缺省不写字段。
+  const starters = input['starters']
+  if (starters !== undefined) {
+    if (!Array.isArray(starters)) {
+      throw new Error(`profile '${id}' starters 必须是 { label, prompt } 对象数组`)
+    }
+    if (starters.length > PROFILE_STARTERS_MAX_ITEMS) {
+      throw new Error(`profile '${id}' starters 最多 ${PROFILE_STARTERS_MAX_ITEMS} 项`)
+    }
+    profile.starters = starters.map((item, index) => validateProfileStarter(item, `profile '${id}' starters[${index}]`))
   }
   const managedByPlugin = input['managedByPlugin']
   if (managedByPlugin !== undefined) {

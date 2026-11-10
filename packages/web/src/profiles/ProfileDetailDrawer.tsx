@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { Profile } from './profile-center-model.js'
+import type { StarterDraft } from './profile-center-model.js'
 import {
   buildProfileModelOptions,
   getProfileIcon,
@@ -7,6 +8,10 @@ import {
   profileIdValid,
   profilesApi,
   resolveProfileModel,
+  startersAtLimit,
+  startersToDrafts,
+  validateStarterDraft,
+  validateStarterDrafts,
 } from './profile-center-model.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
@@ -23,7 +28,7 @@ import {
 import { PluginSlot } from '../ui/PluginSlot.js'
 import { Select, type SelectOption } from '../ui/Select.js'
 import { Switch } from '../ui/Switch.js'
-import { PROFILE_DETAIL_SECTION_SLOT } from '@helm/protocol'
+import { PROFILE_DETAIL_SECTION_SLOT, PROFILE_STARTERS_MAX_ITEMS } from '@helm/protocol'
 
 export interface ProfileDetailDrawerProps {
   profile: Profile | null
@@ -44,6 +49,9 @@ interface FormState {
   system: string
   useAllSkills: boolean
   selectedSkillIds: string[]
+  starters: StarterDraft[]
+  /** 保存时未暴露字段原样回传：nodeId/runtime/tags/thinkingLevel 等不得因表单裁剪而丢。 */
+  source: Profile | null
 }
 
 function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
@@ -57,6 +65,8 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
       system: '',
       useAllSkills: true,
       selectedSkillIds: [],
+      starters: [],
+      source: null,
     }
   }
 
@@ -69,6 +79,8 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
     system: profile.system ?? '',
     useAllSkills: profile.skills === undefined,
     selectedSkillIds: Array.isArray(profile.skills) ? [...profile.skills] : [],
+    starters: startersToDrafts(profile.starters),
+    source: profile,
   }
 }
 
@@ -134,6 +146,8 @@ export function ProfileDetailDrawer({
               system: detail.system ?? prev.system,
               useAllSkills: detail.skills === undefined,
               selectedSkillIds: Array.isArray(detail.skills) ? [...detail.skills] : prev.selectedSkillIds,
+              starters: startersToDrafts(detail.starters),
+              source: detail,
             }
             setBaseline(next)
             return next
@@ -150,6 +164,8 @@ export function ProfileDetailDrawer({
 
   // 计算脏表单状态
   const isDirty = useMemo(() => {
+    const startersDirty = (a: StarterDraft[], b: StarterDraft[]): boolean =>
+      a.length !== b.length || a.some((item, i) => item.label !== b[i]?.label || item.prompt !== b[i]?.prompt)
     if (isNew) {
       return (
         form.id.trim() !== '' ||
@@ -159,7 +175,8 @@ export function ProfileDetailDrawer({
         form.cwd.trim() !== '' ||
         form.system.trim() !== '' ||
         !form.useAllSkills ||
-        form.selectedSkillIds.length > 0
+        form.selectedSkillIds.length > 0 ||
+        form.starters.length > 0
       )
     }
 
@@ -170,6 +187,7 @@ export function ProfileDetailDrawer({
     if (form.cwd !== baseline.cwd) return true
     if (form.system !== baseline.system) return true
     if (form.useAllSkills !== baseline.useAllSkills) return true
+    if (startersDirty(form.starters, baseline.starters)) return true
 
     const sortedCurrent = [...form.selectedSkillIds].sort().join(',')
     const sortedBaseline = [...baseline.selectedSkillIds].sort().join(',')
@@ -220,16 +238,36 @@ export function ProfileDetailDrawer({
       return
     }
 
+    const starterError = validateStarterDrafts(form.starters)
+    if (starterError !== null) {
+      setError(`引导词 ${starterError.index + 1}：${starterError.error}`)
+      return
+    }
+
     setIsSaving(true)
     try {
-      const payload: Profile = {
+      // 整体替换契约：以最近一次完整详情为基底，仅覆写表单暴露字段——
+      // nodeId/runtime/tags/thinkingLevel 等未暴露字段原样保留，不因表单裁剪而丢。
+      const base = (isNew ? {} : { ...form.source }) as Record<string, unknown>
+      const payload = {
+        ...base,
         id: normalizedId,
-        name: form.name.trim() || undefined,
-        model: form.model.trim() || undefined,
-        cwd: form.cwd.trim() || undefined,
         system: form.system,
         skills: form.useAllSkills ? undefined : form.selectedSkillIds,
+        ...(form.name.trim() !== '' ? { name: form.name.trim() } : {}),
+        ...(form.model.trim() !== '' ? { model: form.model.trim() } : {}),
+        ...(form.cwd.trim() !== '' ? { cwd: form.cwd.trim() } : {}),
+        ...(form.starters.length > 0
+          ? { starters: form.starters.map((s) => ({ label: s.label.trim(), prompt: s.prompt })) }
+          : {}),
+      } as Profile
+      if (!isNew && form.starters.length === 0) {
+        // 编辑既有角色：空列表显式清空（恢复宿主默认提示）；新建则不携带键
+        payload.starters = []
       }
+      if (form.name.trim() === '') delete (payload as { name?: string }).name
+      if (form.model.trim() === '') delete (payload as { model?: string }).model
+      if (form.cwd.trim() === '') delete (payload as { cwd?: string }).cwd
 
       let saved: Profile
       if (isNew) {
@@ -479,6 +517,95 @@ export function ProfileDetailDrawer({
                 disabled: isSaving || isDeleting,
               }}
             />
+
+            {/* 空白会话引导词（最多 6 项） */}
+            <section className="section-flat">
+              <div className="section-flat-header profile-starters-header">
+                <span className="section-flat-title">空白会话引导词</span>
+                <span className="mono profile-editor-meta">
+                  {form.starters.length}/{PROFILE_STARTERS_MAX_ITEMS}
+                </span>
+              </div>
+              <div className="profile-starters-list">
+                {form.starters.length === 0 ? (
+                  <div className="text-subtle text-xs profile-starters-empty">
+                    未配置时使用系统默认引导提示。
+                  </div>
+                ) : (
+                  form.starters.map((starter, index) => {
+                    const issue = validateStarterDraft(starter)
+                    return (
+                      <div key={`starter-${index}`} className="profile-starter-item">
+                        <div className="profile-starter-fields">
+                          <input
+                            type="text"
+                            className="input profile-starter-label"
+                            placeholder="标题（≤24 码点）"
+                            value={starter.label}
+                            aria-label={`引导词 ${index + 1} 标题`}
+                            onChange={(e) =>
+                              setForm((prev) => {
+                                const starters = [...prev.starters]
+                                starters[index] = { ...starters[index]!, label: e.target.value }
+                                return { ...prev, starters }
+                              })
+                            }
+                          />
+                          <textarea
+                            className="input profile-starter-prompt"
+                            rows={2}
+                            placeholder="点击后回填到输入框的提示词（≤4000 码点，不自动发送）"
+                            value={starter.prompt}
+                            aria-label={`引导词 ${index + 1} 提示词`}
+                            onChange={(e) =>
+                              setForm((prev) => {
+                                const starters = [...prev.starters]
+                                starters[index] = { ...starters[index]!, prompt: e.target.value }
+                                return { ...prev, starters }
+                              })
+                            }
+                          />
+                        </div>
+                        {issue !== null ? (
+                          <div className="profile-starter-error" role="alert">
+                            {issue}
+                          </div>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm profile-starter-remove"
+                          aria-label={`删除引导词 ${index + 1}`}
+                          title="删除此条引导词"
+                          disabled={isSaving || isDeleting}
+                          onClick={() =>
+                            setForm((prev) => ({
+                              ...prev,
+                              starters: prev.starters.filter((_, i) => i !== index),
+                            }))
+                          }
+                        >
+                          <HelmIcon name="trash-2" size={12} />
+                        </button>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm profile-starter-add"
+                disabled={isSaving || isDeleting || startersAtLimit(form.starters)}
+                onClick={() =>
+                  setForm((prev) => ({
+                    ...prev,
+                    starters: [...prev.starters, { label: '', prompt: '' }],
+                  }))
+                }
+              >
+                <HelmIcon name="plus" size={12} />
+                <span>添加引导词</span>
+              </button>
+            </section>
 
             {/* 技能白名单配置 */}
             <section className="section-flat">

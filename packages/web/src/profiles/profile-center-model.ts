@@ -1,4 +1,9 @@
-import type { Profile as ProtocolProfile, ProfileRuntime } from '@helm/protocol'
+import type { Profile as ProtocolProfile, ProfileRuntime, ProfileStarterPrompt } from '@helm/protocol'
+import {
+  PROFILE_STARTERS_MAX_ITEMS,
+  PROFILE_STARTER_LABEL_MAX_LENGTH,
+  PROFILE_STARTER_PROMPT_MAX_LENGTH,
+} from '@helm/protocol'
 import { assetsApi, type ModelDescriptor } from '../lib/api.js'
 import type { SelectOption } from '../ui/select-model.js'
 
@@ -179,6 +184,60 @@ export function getProfileIcon(p: Partial<Profile>): string {
   if (id.includes('workflow') || tags.includes('workflow')) return 'workflow'
   if (id.includes('assistant')) return 'bot'
   return 'bot'
+}
+
+/** 表单内编辑中的引导词条目（尚未保存，允许临时空值）。 */
+export interface StarterDraft {
+  label: string
+  prompt: string
+}
+
+/** Unicode 码点计数（代理对计 1；与服务层/HTTP 边界同口径）。 */
+function starterCodePoints(text: string): number {
+  let count = 0
+  for (const _ of text) count += 1
+  return count
+}
+
+/** 校验单条编辑草稿；返回首个错误文案，合法返回 null。 */
+export function validateStarterDraft(draft: StarterDraft): string | null {
+  const label = draft.label.trim()
+  if (starterCodePoints(label) === 0) return '标题去除首尾空白后不能为空'
+  if (starterCodePoints(label) > PROFILE_STARTER_LABEL_MAX_LENGTH) {
+    return `标题最多 ${PROFILE_STARTER_LABEL_MAX_LENGTH} 个 Unicode 码点`
+  }
+  if (draft.prompt.trim() === '') return '提示词不能是纯空白'
+  if (starterCodePoints(draft.prompt) > PROFILE_STARTER_PROMPT_MAX_LENGTH) {
+    return `提示词最多 ${PROFILE_STARTER_PROMPT_MAX_LENGTH} 个 Unicode 码点`
+  }
+  return null
+}
+
+/** 校验整份 starters 草稿；通过返回 null，否则返回（索引, 错误）。 */
+export function validateStarterDrafts(
+  drafts: StarterDraft[],
+): { index: number; error: string } | null {
+  for (let i = 0; i < drafts.length; i++) {
+    const error = validateStarterDraft(drafts[i]!)
+    if (error !== null) return { index: i, error }
+  }
+  return null
+}
+
+/** Profile.starters -> 表单草稿（未定义时为空列表：保存为空=清空）。 */
+export function startersToDrafts(starters: ProfileStarterPrompt[] | undefined): StarterDraft[] {
+  return (starters ?? []).map((s) => ({ label: s.label, prompt: s.prompt }))
+}
+
+/** 空白会话可展示的引导词：空数组回退 undefined（宿主默认提示由 UI 层另行处理）。 */
+export function visibleStarters(profile: Profile | undefined): ProfileStarterPrompt[] | undefined {
+  const starters = profile?.starters
+  return starters !== undefined && starters.length > 0 ? starters : undefined
+}
+
+/** 是否已达上限（禁止继续新增）。 */
+export function startersAtLimit(drafts: StarterDraft[]): boolean {
+  return drafts.length >= PROFILE_STARTERS_MAX_ITEMS
 }
 
 /**
