@@ -31,6 +31,7 @@ import {
 import { MANAGED_EXEC_ENV_VARS } from '../src/env/scoped-env.js'
 import { WATCHDOG_PLAYBOOK_SKILL_ASSET } from '../src/builtin-plugins/superagent/assets.js'
 import { MemoryStore } from '../src/builtin-plugins/memory/store.js'
+import { createProfileFileHost } from './helpers/profile-file-host.js'
 import { assert } from './helpers.js'
 import { waitFor } from './helpers.js'
 import {
@@ -1342,9 +1343,9 @@ test('跨进程锁回归: 真实 CLI 子进程与 CredentialService 并发写 cr
 
 test('并发回归: 不同 MemoryStore 实例并发 append 不丢行', { timeout: 60_000 }, async () => {
   const dataDir = await freshDataDir()
-  const base = new MemoryStore(dataDir)
+  const base = new MemoryStore(createProfileFileHost(dataDir))
   await base.ensureMemory('assistant')
-  const stores = Array.from({ length: 5 }, () => new MemoryStore(dataDir))
+  const stores = Array.from({ length: 5 }, () => new MemoryStore(createProfileFileHost(dataDir)))
   await Promise.all(
     stores.map((store, i) => store.updateMemory('assistant', `行-${i}`, 'append')),
   )
@@ -1425,7 +1426,7 @@ test('credentials 回归: 保留 CLI 等未知顶层键、非法结构显式拒�
 test('集成: MemoryStore 原子更新被 watcher 实时捕获（无 temp 事件）', { timeout: 60_000 }, async () => {
   const dataDir = await freshDataDir()
   await ensureDataDir(dataDir)
-  const store = new MemoryStore(dataDir)
+  const store = new MemoryStore(createProfileFileHost(dataDir))
   await store.ensureMemory('assistant')
 
   const seen: string[] = []

@@ -30,6 +30,7 @@ import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
 import { createSuperAgentPlugin } from '../src/builtin-plugins/superagent.js'
 import { MAX_MEMORY_CHARS, createMemoryPlugin, MemoryStore } from '../src/builtin-plugins/memory.js'
+import { createProfileFileHost } from './helpers/profile-file-host.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
 import type { SuperAgentDependencies } from '../src/builtin-plugins/superagent/contracts.js'
 import { ProfileService, SkillService } from '../src/services/index.js'
@@ -78,13 +79,14 @@ interface ControlledBackend extends PluginHostBackend {
   submitRejector: ((conversationId: number) => Error | undefined) | undefined
 }
 
-function makeControlledBackend(): ControlledBackend {
+function makeControlledBackend(dataDir: string): ControlledBackend {
   const conversations = new Map<number, ConversationSummary>()
   conversations.set(1, makeConversation(1, { tags: ['root'] }))
   conversations.set(3, makeConversation(3))
   const notifications: Array<{ title: string; body: string; level: string }> = []
   const submits: Array<{ conversationId: number; origin?: string }> = []
   const backend: ControlledBackend = {
+    ...createProfileFileHost(dataDir),
     conversations,
     notifications,
     submits,
@@ -232,7 +234,7 @@ async function makeHerdrEnv(
   panes: Array<{ paneId: string; agentName: string; cwd: string; status?: string; seq?: number }>,
 ): Promise<HerdrEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-fix2-'))
-  const backend = makeControlledBackend()
+  const backend = makeControlledBackend(dataDir)
   const docs = new MemoryDocStore()
   docs.set('builtin:herdr:managed', {
     version: 1,
@@ -408,7 +410,7 @@ interface SuperAgentEnv {
 
 async function makeSuperAgentEnv(): Promise<SuperAgentEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-fix-'))
-  const backend = makeControlledBackend()
+  const backend = makeControlledBackend(dataDir)
   const docs = new MemoryDocStore()
   const host = new PluginHost({ dataDir, host: backend, docs })
   // 真实 ProfileService/SkillService（临时目录）：自举资产走真实文件路径。
@@ -576,15 +578,15 @@ test('assistant：MEMORY.md 上限常量导出为 64000', { timeout: 60_000 }, (
 test('memory：update_memory 超限显式拒绝（append 累计与 replace 直写双路径）', { timeout: 60_000 }, async () => {
   const env = await makeAssistantEnv()
   try {
-    const pluginHostBackend = makeControlledBackend()
+    const pluginHostBackend = makeControlledBackend(env.dataDir)
     const docs = new MemoryDocStore()
     const host = new PluginHost({
       dataDir: env.dataDir,
       host: pluginHostBackend,
       docs,
     })
-    await host.register(createMemoryPlugin({ profiles: env.profiles }), { enabled: true })
-    const store = new MemoryStore(env.dataDir)
+    await host.register(createMemoryPlugin(), { enabled: true })
+    const store = new MemoryStore(createProfileFileHost(env.dataDir))
     const runUpdate = (input: { text: string; mode: string }) =>
       host.executeTool('update_memory', input, { conversationId: 1 })
 
@@ -621,10 +623,10 @@ test('memory：update_memory 超限显式拒绝（append 累计与 replace 直�
 test('memory：已初始化 Profile 的 MEMORY.md 被误删时告警并注入 memory.assets-missing（不重建）', { timeout: 60_000 }, async () => {
   const env = await makeAssistantEnv()
   try {
-    const backend = makeControlledBackend()
+    const backend = makeControlledBackend(env.dataDir)
     const docs = new MemoryDocStore()
     const host = new PluginHost({ dataDir: env.dataDir, host: backend, docs })
-    await host.register(createMemoryPlugin({ profiles: env.profiles }), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
 
     // 先跑一回合建立 initializedProfiles 标记。
     {
@@ -664,10 +666,10 @@ test('memory：已初始化 Profile 的 MEMORY.md 被误删时告警并注入 me
 test('memory：从未初始化的 Profile 首次回合惰性创建默认 MEMORY.md（不误报缺失）', { timeout: 60_000 }, async () => {
   const env = await makeAssistantEnv()
   try {
-    const backend = makeControlledBackend()
+    const backend = makeControlledBackend(env.dataDir)
     const docs = new MemoryDocStore()
     const host = new PluginHost({ dataDir: env.dataDir, host: backend, docs })
-    await host.register(createMemoryPlugin({ profiles: env.profiles }), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
 
     // 前置：MEMORY.md 不存在（ProfileService.ensureDefault 不再创建）。
     const memoryPath = join(env.dataDir, 'profiles', 'assistant', 'MEMORY.md')
@@ -718,10 +720,10 @@ test('memory：存量 MEMORY.md 超限注入时截断并附显式说明', { time
     const memoryDir = join(env.dataDir, 'profiles', 'assistant')
     writeFileSync(join(memoryDir, 'MEMORY.md'), 'M'.repeat(MAX_MEMORY_CHARS + 5_000))
 
-    const backend = makeControlledBackend()
+    const backend = makeControlledBackend(env.dataDir)
     const docs = new MemoryDocStore()
     const host = new PluginHost({ dataDir: env.dataDir, host: backend, docs })
-    await host.register(createMemoryPlugin({ profiles: env.profiles }), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
 
     const turn = {
       conversation: makeConversation(1),
@@ -752,11 +754,11 @@ test('profile：自举补写默认 Profile 的 managedByPlugin（缺失显式补
 
     const host = new PluginHost({
       dataDir: env.dataDir,
-      host: makeControlledBackend(),
+      host: makeControlledBackend(env.dataDir),
       docs: new MemoryDocStore(),
     })
     const { createProfilePlugin } = await import('../src/builtin-plugins/profile.js')
-    await host.register(createProfilePlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir), plugins: host }), { enabled: true })
+    await host.register(createProfilePlugin(), { enabled: true })
 
     const after = await env.profiles.get('assistant')
     assert.equal(after?.managedByPlugin, 'builtin:profile', '插件自举后默认 Profile 显式声明托管')

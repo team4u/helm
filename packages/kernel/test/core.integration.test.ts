@@ -34,6 +34,7 @@ import {
 import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { HELM_CLI_SKILL_ASSET } from '../src/builtin-plugins/profile.js'
 import { MemoryStore } from '../src/builtin-plugins/memory/store.js'
+import { createProfileFileHost } from './helpers/profile-file-host.js'
 import { createHelm } from '../src/app.js'
 import { startHub } from '../src/http/index.js'
 import { redactJsonValue } from '../src/redact.js'
@@ -223,7 +224,7 @@ test('集成1: createHelm 组合——profile/memory 默认协同、locked 保�
     ])
     await env.submitAndWait('请记住我最喜欢的颜色是青瓷绿')
 
-    const memoryFile = await new MemoryStore(kernel.dataDir).getMemory('assistant')
+    const memoryFile = await new MemoryStore(createProfileFileHost(kernel.dataDir)).getMemory('assistant')
     assert.ok(memoryFile.includes(MEMORY_FACT), 'MEMORY.md 应含新记忆（真实文件写入）')
 
     // 收尾轮请求带新记忆（跨模块：工具写入 → before_turn 重读 → 模型请求）

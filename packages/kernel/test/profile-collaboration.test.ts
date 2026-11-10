@@ -28,7 +28,8 @@ import {
   type Profile,
 } from '@helm/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
-import { ProfileService, SkillService } from '../src/services/index.js'
+import { ProfileService } from '../src/services/index.js'
+import { createProfileFileHost } from './helpers/profile-file-host.js'
 import { createProfilePlugin } from '../src/builtin-plugins/profile.js'
 import {
   PROFILE_SUMMARY_MAX_CODEPOINTS,
@@ -222,14 +223,14 @@ async function makeEnv(extraPlugins: PluginDefinition[] = [], withSessionDocs = 
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-profile-collab-'))
   const profiles = new ProfileService(dataDir)
   await profiles.ensureDefault()
-  const backend = makeControlledBackend()
+  const backend = Object.assign(makeControlledBackend(), createProfileFileHost(dataDir, profiles))
   const host = new PluginHost({
     dataDir,
     host: backend,
     docs: new MemoryDocStore(),
     ...(withSessionDocs ? { sessionDocs: new MemorySessionDocStore() } : {}),
   })
-  await host.register(createProfilePlugin({ profiles, skills: new SkillService(dataDir), plugins: host }), { enabled: true })
+  await host.register(createProfilePlugin(), { enabled: true })
   for (const plugin of extraPlugins) await host.register(plugin, { enabled: true })
   return {
     dataDir,

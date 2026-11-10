@@ -15,10 +15,7 @@
  * - 左栏 assistant Profile 站位导航（conversation:profile:assistant，不依赖
  *   某一具体会话存在）。
  */
-import { HelmError, isSkillAvailable, type PluginDefinition, type Profile, type SkillSummary } from '@helm/protocol';
-import { FileNotFoundError } from '../services/atomic-file.js';
-import type { PluginHost } from '../plugins/index.js';
-import { DEFAULT_PROFILE_ID, type ProfileService, type SkillService } from '../services/index.js';
+import { HelmError, isSkillAvailable, type HelmHostProfilesPort, type PluginDefinition, type Profile, type SkillSummary } from '@helm/protocol';
 import { HELM_CLI_SKILL_ASSET, PROFILE_MANAGED_BY } from './profile/assets.js';
 import {
   activeRuntimeKinds,
@@ -30,14 +27,7 @@ import {
   type ProfileCatalogEntry,
 } from './profile/catalog.js';
 
-interface ProfilePluginServices {
-  profiles: ProfileService;
-  skills: SkillService;
-  /** 只读当前插件启用状态与 UI 贡献（技能过滤 / 协作目录的运行时接管判定）。
-   * 显式工厂依赖而非扩展公共 PluginHost 端口——组合层（app.ts）已有
-   * kernel.plugins 可直接满足。 */
-  plugins: Pick<PluginHost, 'list' | 'listUi'>;
-}
+const DEFAULT_PROFILE_ID = 'assistant';
 
 export {
   HELM_CLI_SKILL_ID,
@@ -62,9 +52,9 @@ export {
  * 自举默认 assistant Profile 的托管元数据：缺失时显式补写
  * managedByPlugin: 'builtin:profile'（已是其他值或已存在时原样保留，
  * 不做旧数据归一化）；默认 Profile 不存在属内核未初始化异常，如实上抛。
- * 写入经 ProfileService.save 整体保存（其余字段原样透传）。
+ * 写入经公共 profiles.save 整体保存（其余字段原样透传）。
  */
-async function ensureDefaultProfileManaged(profiles: ProfileService): Promise<void> {
+async function ensureDefaultProfileManaged(profiles: HelmHostProfilesPort): Promise<void> {
   const existing = await profiles.get(DEFAULT_PROFILE_ID);
   if (existing === undefined) {
     throw new Error(
@@ -84,13 +74,14 @@ function escapeXml(text: string): string {
  * 模式收敛）之后运行，按届时的实际 turn.tools 决定注入与否。 */
 const CATALOG_HOOK_PRIORITY = -100;
 
-export function createProfilePlugin({ profiles, skills, plugins }: ProfilePluginServices): PluginDefinition {
+export function createProfilePlugin(): PluginDefinition {
   return {
     id: 'builtin:profile',
     name: '角色与技能底座',
     version: '0.1.0',
     locked: true,
     definePlugin(ctx) {
+      const { profiles, skills } = ctx.host;
       // 启动时同步系统级内置技能 skills/helm-cli/（Layer 1 + Layer 2）：
       // 受管系统资产以源码版本为准逐文件覆盖，缺失补齐；常规接口写入被拒。
       // 同时自举默认 assistant Profile 的托管元数据：缺失时显式补写
@@ -105,7 +96,7 @@ export function createProfilePlugin({ profiles, skills, plugins }: ProfilePlugin
       });
 
       /**
-       * 读取 SYSTEM.md：文件被外部误删（FileNotFoundError）时按空处理，
+       * 读取 SYSTEM.md：文件被外部误删（not_found）时按空处理，
        * 但绝不沉默改变人格——① 向人类发一次性告警（按 profileId 独立去重，
        * 文件恢复即停、再次缺失可重新告警）；② 向模型注入显式的
        * <profile_assets_missing> 说明节，告知本轮人格资产缺失及其后果。
@@ -120,19 +111,15 @@ export function createProfilePlugin({ profiles, skills, plugins }: ProfilePlugin
           missingNotified.delete(profileId) // 恢复即停；下次再缺失可重新告警
           return text
         } catch (err) {
-          if (err instanceof FileNotFoundError) {
+          if (err instanceof HelmError && err.code === 'not_found') {
             if (!missingNotified.has(profileId)) {
+              await ctx.host.emitEvent('notification', {
+                type: 'notification',
+                level: 'warning',
+                title: `角色资产文件缺失：${profileId}/SYSTEM.md`,
+                body: `Profile 资产 ${profileId}/SYSTEM.md 不存在（可能被外部误删），本回合按空内容处理；再次写入系统提示词可自愈重建`,
+              })
               missingNotified.add(profileId)
-              try {
-                ctx.host.emitEvent('notification', {
-                  type: 'notification',
-                  level: 'warning',
-                  title: `角色资产文件缺失：${profileId}/SYSTEM.md`,
-                  body: `Profile 资产 ${profileId}/SYSTEM.md 不存在（可能被外部误删），本回合按空内容处理；再次写入系统提示词可自愈重建`,
-                })
-              } catch {
-                // 通知失败不阻断回合（事件通道故障由宿主诊断）。
-              }
             }
             return ''
           }
@@ -151,7 +138,7 @@ export function createProfilePlugin({ profiles, skills, plugins }: ProfilePlugin
         if (profile === undefined) {
           throw new HelmError('profile_not_found', `会话绑定 profile '${profileId}' 不存在（技能目录无法按 Profile 过滤）`, 500, { profileId })
         }
-        const enabledPluginIds = new Set(plugins.list().filter((p) => p.enabled).map((p) => p.id))
+        const enabledPluginIds = new Set(ctx.host.listPlugins().filter((p) => p.enabled).map((p) => p.id))
         const all = await skills.list()
         return all.filter((skill) => isSkillAvailable(skill, profile, enabledPluginIds))
       }
@@ -189,7 +176,7 @@ export function createProfilePlugin({ profiles, skills, plugins }: ProfilePlugin
       });
 
       /**
-       * 读取候选 Profile 的 SYSTEM.md 提取单行摘要：缺失（FileNotFoundError）
+       * 读取候选 Profile 的 SYSTEM.md 提取单行摘要：缺失（not_found）
        * 只影响该候选的 summary 字段（undefined，不伪造简介），不告警——
        * 认知缺失告警纪律只针对「当前会话绑定 Profile」的人格资产（见
        * readSystemOrEmpty）；候选缺 SYSTEM 属配置态，不放大告警面。
@@ -200,7 +187,7 @@ export function createProfilePlugin({ profiles, skills, plugins }: ProfilePlugin
           const text = await profiles.getSystem(profileId)
           return extractSystemSummary(text)
         } catch (err) {
-          if (err instanceof FileNotFoundError) return undefined
+          if (err instanceof HelmError && err.code === 'not_found') return undefined
           throw err
         }
       }
@@ -212,14 +199,14 @@ export function createProfilePlugin({ profiles, skills, plugins }: ProfilePlugin
        * - 子会话（parentConversationId 存在）返回空：缺省不鼓励嵌套协作，
        *   这不是安全沙箱或硬深度限制，只是默认策略；
        * - 每次调用实时重读 Profile 目录与插件状态（增删改 / 启停下次生效）。
-       * 任一候选摘要读取的非 FileNotFoundError 错误如实上抛（显式失败）。
+       * 任一候选摘要读取的非 not_found 错误如实上抛（显式失败）。
        */
       const computeCatalog = async (currentProfileId: string, isSubConversation: boolean): Promise<ProfileCatalogEntry[]> => {
         if (isSubConversation) return []
         const [allProfiles, pluginSummaries, uiContributions] = await Promise.all([
           profiles.list(),
-          plugins.list(),
-          plugins.listUi(),
+          ctx.host.listPlugins(),
+          ctx.host.listUi(),
         ])
         const dispatchTools = new Set(['subagent', 'SubagentWorkflow'])
         if (!pluginSummaries.some((plugin) => plugin.enabled && plugin.tools.some((name) => dispatchTools.has(name)))) {
@@ -365,7 +352,7 @@ export function createProfilePlugin({ profiles, skills, plugins }: ProfilePlugin
           if (profile === undefined) {
             throw new HelmError('profile_not_found', `会话绑定 profile '${profileId}' 不存在，无法判定技能可用性`, 500, { profileId });
           }
-          const enabledPluginIds = new Set(plugins.list().filter((p) => p.enabled).map((p) => p.id));
+          const enabledPluginIds = new Set(ctx.host.listPlugins().filter((p) => p.enabled).map((p) => p.id));
           const skill = (await skills.list()).find((s) => s.id === input.skillId);
           if (skill === undefined) {
             throw new HelmError('not_found', `技能不存在: ${input.skillId}`, 404, { skillId: input.skillId });

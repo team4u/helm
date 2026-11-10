@@ -32,6 +32,7 @@ import {
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createProfilePlugin } from '../src/builtin-plugins/profile.js'
 import { createMemoryPlugin, MAX_MEMORY_CHARS as MEM_MAX, MemoryStore } from '../src/builtin-plugins/memory.js'
+import { createProfileFileHost } from './helpers/profile-file-host.js'
 import { createSuperAgentPlugin } from '../src/builtin-plugins/superagent.js'
 import { ProfileService, SkillService } from '../src/services/index.js'
 import type { SuperAgentDependencies } from '../src/builtin-plugins/superagent/contracts.js'
@@ -83,12 +84,13 @@ interface ControlledBackend extends PluginHostBackend {
   submitRejector: ((conversationId: number) => Error | undefined) | undefined
 }
 
-function makeControlledBackend(): ControlledBackend {
+function makeControlledBackend(dataDir: string): ControlledBackend {
   const conversations = new Map<number, ConversationSummary>()
   conversations.set(1, makeConversation(1, { tags: ['root'] }))
   const notifications: Array<{ title: string; body: string; level: string }> = []
   const submits: Array<{ conversationId: number; origin?: string }> = []
   const backend: ControlledBackend = {
+    ...createProfileFileHost(dataDir),
     conversations,
     notifications,
     submits,
@@ -159,12 +161,12 @@ test('memory：并发 append（跨实例、锁内合并检查）最终不超上�
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-mem-limit-'))
   try {
     // 预置接近上限：剩余空间只够一次追加。
-    const base = new MemoryStore(dataDir)
+    const base = new MemoryStore(createProfileFileHost(dataDir))
     await base.ensureMemory('assistant')
     await base.updateMemory('assistant', 'x'.repeat(MEM_MAX - 1_000), 'replace')
 
     // 跨实例并发 append（每个都单独看是合法的 800 字符）：合并后必有一笔超限。
-    const stores = Array.from({ length: 4 }, () => new MemoryStore(dataDir))
+    const stores = Array.from({ length: 4 }, () => new MemoryStore(createProfileFileHost(dataDir)))
     const outcomes = await Promise.allSettled(
       stores.map((store) => store.updateMemory('assistant', 'y'.repeat(800), 'append')),
     )
@@ -190,19 +192,19 @@ test('memory：set 动作超限在写盘前拒绝（MEMORY.md 不半截写入）
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
-    const backend = makeControlledBackend()
+    const backend = makeControlledBackend(dataDir)
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createMemoryPlugin({ profiles }), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
     await assert.rejects(
       () => host.invokeAction('builtin:memory', 'set', { profileId: 'assistant', text: 'M'.repeat(MEM_MAX + 1) }),
       (err: unknown) => err instanceof HelmError && err.code === 'memory_limit_exceeded' && err.status === 400,
     )
     // MEMORY.md 未被创建（超限拒绝不留半截）。
     const memoryExists = existsSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
-    assert.ok(!memoryExists || !(await new MemoryStore(dataDir).getMemory('assistant')).startsWith('M'.repeat(100)), '超限 memory 不得落盘')
+    assert.ok(!memoryExists || !(await new MemoryStore(createProfileFileHost(dataDir)).getMemory('assistant')).startsWith('M'.repeat(100)), '超限 memory 不得落盘')
     // 合法大小（恰在上限）通过。
     await host.invokeAction('builtin:memory', 'set', { profileId: 'assistant', text: 'M'.repeat(MEM_MAX) })
-    assert.equal((await new MemoryStore(dataDir).getMemory('assistant')).length, MEM_MAX)
+    assert.equal((await new MemoryStore(createProfileFileHost(dataDir)).getMemory('assistant')).length, MEM_MAX)
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
@@ -211,7 +213,7 @@ test('memory：set 动作超限在写盘前拒绝（MEMORY.md 不半截写入）
 test('memory：写入路径无绕过上限参数（任何调用均强制 64k）', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-mem-nolimit-'))
   try {
-    const store = new MemoryStore(dataDir)
+    const store = new MemoryStore(createProfileFileHost(dataDir))
     await store.ensureMemory('assistant')
     // MemoryStore 公开 API 无 maxChars 参数：超限即拒绝，无「不设限」路径。
     await assert.rejects(
@@ -232,12 +234,12 @@ test('memory：同 Profile 双会话并发 update_memory append 最终不超上�
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
-    await new MemoryStore(dataDir).updateMemory('assistant', 'x'.repeat(MEM_MAX - 1_000), 'replace')
-    const backend = makeControlledBackend()
+    await new MemoryStore(createProfileFileHost(dataDir)).updateMemory('assistant', 'x'.repeat(MEM_MAX - 1_000), 'replace')
+    const backend = makeControlledBackend(dataDir)
     backend.conversations.set(10, makeConversation(10))
     backend.conversations.set(20, makeConversation(20))
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createMemoryPlugin({ profiles }), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
 
     const outcomes = await Promise.allSettled([
       host.executeTool('update_memory', { text: 'y'.repeat(800), mode: 'append' }, { conversationId: 10 }),
@@ -249,7 +251,7 @@ test('memory：同 Profile 双会话并发 update_memory append 最终不超上�
     for (const r of rejected) {
       assert.ok(r.reason instanceof HelmError && r.reason.code === 'memory_limit_exceeded')
     }
-    const final = await new MemoryStore(dataDir).getMemory('assistant')
+    const final = await new MemoryStore(createProfileFileHost(dataDir)).getMemory('assistant')
     assert.ok(final.length <= MEM_MAX, `最终 ${final.length} ≤ 上限`)
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -261,10 +263,10 @@ test('profile/memory：SYSTEM 与已初始化 MEMORY 缺失时注入显式 asset
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
-    const backend = makeControlledBackend()
+    const backend = makeControlledBackend(dataDir)
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createProfilePlugin({ profiles, skills: new SkillService(dataDir), plugins: host }), { enabled: true })
-    await host.register(createMemoryPlugin({ profiles }), { enabled: true })
+    await host.register(createProfilePlugin(), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
 
     // 先跑一回合建立 memory initializedProfiles 标记（惰性初始化 MEMORY.md）。
     {
@@ -339,14 +341,14 @@ test('memory：权限/IO 错误不被吞（仅 FileNotFoundError 走缺失路径
     await profiles.ensureDefault()
     // 先建立已初始化状态，再把 MEMORY.md 换成同名目录：readFile 得 EISDIR
     //（真实 IO 错，非 ENOENT 缺失）。
-    await new MemoryStore(dataDir).ensureMemory('assistant')
+    await new MemoryStore(createProfileFileHost(dataDir)).ensureMemory('assistant')
     unlinkSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
     const { mkdirSync } = await import('node:fs')
     mkdirSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
 
-    const backend = makeControlledBackend()
+    const backend = makeControlledBackend(dataDir)
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createMemoryPlugin({ profiles }), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
     const turn = {
       conversation: makeConversation(1),
       sections: [],
@@ -384,7 +386,7 @@ interface SuperAgentEnv {
 
 async function makeSuperAgentEnv(): Promise<SuperAgentEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-roll-'))
-  const backend = makeControlledBackend()
+  const backend = makeControlledBackend(dataDir)
   const docs = new MemoryDocStore()
   const host = new PluginHost({ dataDir, host: backend, docs })
   const profiles = new ProfileService(dataDir)

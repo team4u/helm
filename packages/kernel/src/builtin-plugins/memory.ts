@@ -20,11 +20,9 @@
  * - 空白 MEMORY.md 是合法的 memory.guide 状态（无缺失告警）。
  */
 import { existsSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmError, PROFILE_DETAIL_SECTION_SLOT, type PluginActionContext, type PluginDefinition } from '@helm/protocol'
-import { FileNotFoundError } from '../services/atomic-file.js'
-import { assertProfileId, type ProfileService } from '../services/index.js'
+import { HelmError, PROFILE_DETAIL_SECTION_SLOT, type HelmHostProfilesPort, type PluginActionContext, type PluginDefinition } from '@helm/protocol'
 import { MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MemoryStore } from './memory/store.js'
 
 export { MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MEMORY_DEFAULT, MemoryStore } from './memory/store.js'
@@ -67,17 +65,8 @@ function resolveClientRoot(): string {
   )
 }
 
-interface MemoryPluginServices {
-  profiles: ProfileService
-}
-
-/** 校验 Profile 存在（与 Profile 详情接口同一存在性判定）。 */
-async function requireProfile(profiles: ProfileService, profileId: string): Promise<void> {
-  try {
-    assertProfileId(profileId)
-  } catch (error) {
-    throw new HelmError('validation_error', error instanceof Error ? error.message : String(error), 400, { profileId })
-  }
+/** 公共端口校验 ID 并读取 Profile（不猜测缺失目标）。 */
+async function requireProfile(profiles: HelmHostProfilesPort, profileId: string): Promise<void> {
   const found = await profiles.get(profileId)
   if (found === undefined) {
     throw new HelmError('profile_not_found', `Profile '${profileId}' 不存在`, 404, { profileId })
@@ -99,7 +88,7 @@ function resolveActionProfileId(
   )
 }
 
-export function createMemoryPlugin({ profiles }: MemoryPluginServices): PluginDefinition {
+export function createMemoryPlugin(): PluginDefinition {
   return {
     id: MEMORY_PLUGIN_ID,
     name: '长期记忆',
@@ -107,11 +96,8 @@ export function createMemoryPlugin({ profiles }: MemoryPluginServices): PluginDe
     locked: false,
     clientRoot: resolveClientRoot(),
     definePlugin(ctx) {
-      const store = new MemoryStore(
-        // ctx.dataDir 为 <dataDir>/plugins/builtin:memory；MEMORY.md 物理路径
-        // <dataDir>/profiles/<id>/MEMORY.md（与 Profile 目录同根，不随插件移动）。
-        resolve(ctx.dataDir, '../..'),
-      )
+      const { profiles } = ctx.host
+      const store = new MemoryStore(ctx.host)
       // 私有紧凑状态：disabledProfiles + initializedProfiles（磁盘全文是唯一权威）。
       const stateDoc = ctx.doc<MemoryPluginDoc>(DOC_NAME, {
         disabledProfiles: [],
@@ -161,7 +147,7 @@ export function createMemoryPlugin({ profiles }: MemoryPluginServices): PluginDe
           try {
             content = await store.getMemory(profileId)
           } catch (err) {
-            if (!(err instanceof FileNotFoundError)) throw err
+            if (!(err instanceof HelmError && err.code === 'not_found')) throw err
             // 文件不存在：如实返回空串（前端显示真实状态，不伪造内容）。
           }
           return {
@@ -301,7 +287,7 @@ export function createMemoryPlugin({ profiles }: MemoryPluginServices): PluginDe
           missingNotified.delete(profileId) // 恢复即停；下次再缺失可重新告警
           if (!isInitialized(profileId)) markInitialized(profileId)
         } catch (err) {
-          if (!(err instanceof FileNotFoundError)) throw err
+          if (!(err instanceof HelmError && err.code === 'not_found')) throw err
           if (!isInitialized(profileId)) {
             // 从未初始化的合法 Profile 首次需要记忆：惰性创建默认文件。
             rawMemory = await store.ensureMemory(profileId)
@@ -309,7 +295,7 @@ export function createMemoryPlugin({ profiles }: MemoryPluginServices): PluginDe
           } else {
             // 已初始化后被外部删除：显式告警（按 profileId 独立去重），不重建。
             if (!missingNotified.has(profileId)) {
-              ctx.host.emitEvent('notification', {
+              await ctx.host.emitEvent('notification', {
                 type: 'notification',
                 level: 'warning',
                 title: `长期记忆文件缺失：${profileId}/MEMORY.md`,
