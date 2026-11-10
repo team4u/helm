@@ -67,6 +67,7 @@ function useRowAction() {
 
 interface RowActionApi {
   pending: string | undefined
+  error: string | undefined
   run: (key: string, actionId: string, input: Record<string, unknown>) => void
 }
 
