@@ -30,8 +30,8 @@
  * 加载失败回退时，只影响后续解析行为。
  *
  * 边界与诚实性：
- * - 根外代码不转译（.ts 原生加载自然失败，如实报错）；根外 .js/.cjs 等原生可
- *   加载文件透传 Node 原生——本加载器只负责「正确地运行可信插件代码」，不是
+ * - 根外代码不经本加载器转译，加载能力与结果由 Node 原生决定；根外
+ *   .js/.cjs 等文件同样透传 Node——本加载器负责运行可信插件代码，不是
  *   沙箱：可信插件与宿主同权限，路径边界是转译范围的约定而非安全承诺；
  * - 后端 .tsx 的真实用途是「与前端共享源文件形态的纯逻辑模块」（JSX 语法可写、
  *   转译为 react/jsx-runtime 导入，需插件目录自备 react 或改用纯 .ts）；React
@@ -109,8 +109,10 @@ function tsResolutionCandidates(resolvedPath: string): string[] {
 function isFile(path: string): boolean {
   try {
     return statSync(path).isFile();
-  } catch {
-    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    throw error;
   }
 }
 
@@ -153,8 +155,10 @@ function ensureHooks(): void {
             let real: string;
             try {
               real = realpathSync(candidate);
-            } catch {
-              continue; // 竞态消失：探测下一候选
+            } catch (error) {
+              const code = (error as NodeJS.ErrnoException).code;
+              if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+              throw error;
             }
             if (!isInsideAnyRoot(pathToFileURL(real).href)) {
               throw rootEscapeError(specifier, candidate, real);
@@ -176,8 +180,10 @@ function ensureHooks(): void {
           let real: string;
           try {
             real = realpathSync(fileURLToPath(resolvedUrl));
-          } catch {
-            return resolved; // 竞态消失：交回原生链路如实报错
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code === 'ENOENT' || code === 'ENOTDIR') return resolved;
+            throw error;
           }
           if (!isInsideAnyRoot(pathToFileURL(real).href)) {
             throw rootEscapeError(specifier, resolvedUrl, real);
@@ -263,12 +269,7 @@ function transpileError(file: string, err: unknown): HelmError {
  * 本加载器的钩子实例，不影响宿主进程内其他 hooks）。
  */
 export function registerPluginTsRoot(rootDir: string): () => void {
-  let root: string;
-  try {
-    root = realpathSync(rootDir);
-  } catch {
-    root = rootDir; // 入口存在性由 external-loader 显式校验，这里不重复报错
-  }
+  const root = realpathSync(rootDir);
   const count = rootRefCounts.get(root) ?? 0;
   rootRefCounts.set(root, count + 1);
   if (count === 0) ensureHooks();
