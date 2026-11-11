@@ -105,10 +105,19 @@ export function PluginCenter({
     store.openTarget({ kind: 'plugins' })
   }
 
-  // 安装成功：刷新列表并导航至新插件详情抽屉（HTTP 结果先到，SSE 随后 upsert，两者幂等）
-  const handleInstalled = (pluginId: string) => {
+  // 安装成功：刷新列表并导航至新插件详情抽屉（HTTP 结果先到，SSE 随后 upsert，两者幂等）。
+  // enable=true 但启用失败时，安装仍成功；必须显式提示，不把 disabled 状态伪装成已启用。
+  const handleInstalled = (pluginId: string, enableError?: { code: string; message: string }) => {
     store.openTarget({ kind: 'plugins', pluginId })
     handlePackageChanged()
+    if (enableError !== undefined) {
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: '插件已安装，但启用失败',
+        body: `${enableError.code}: ${enableError.message}`,
+      })
+    }
   }
 
   // 卸载成功：关闭抽屉并刷新列表（列表已无该插件，抽屉必须先收起）

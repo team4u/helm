@@ -23,8 +23,8 @@ import {
 export interface PluginInstallModalProps {
   open: boolean
   onClose: () => void
-  /** 安装成功（服务端已注册插件）后回调；携带新插件 id 供导航进详情抽屉。 */
-  onInstalled: (pluginId: string) => void
+  /** 安装成功（服务端已注册插件）后回调；携带新插件 id 供导航进详情抽屉与启用诊断。 */
+  onInstalled: (pluginId: string, enableError?: { code: string; message: string }) => void
   /** 显式指定是否内联渲染（便于测试与 SSR 统一断言） */
   inline?: boolean
 }
@@ -70,8 +70,8 @@ export function PluginInstallModal({
     setDoctorReport(null)
     try {
       const result = await pluginsApi.install(trimmed, enableAfterInstall)
-      // 安装成功：交由父级刷新列表并导航至新插件详情抽屉。
-      onInstalled(result.summary.id)
+      // 安装成功：交由父级刷新列表并导航至新插件详情抽屉；启用失败仍如实向父级传递。
+      onInstalled(result.summary.id, result.enableError)
       onClose()
     } catch (err) {
       // 安装失败时如实展示错误；doctor 报告（真实 Hub 在 details.report，经形状校验）逐项渲染。
