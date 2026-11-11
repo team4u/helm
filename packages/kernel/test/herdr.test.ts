@@ -558,6 +558,11 @@ async function makeEnv(options: {
 } = {}): Promise<Env> {
   const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'helm-herdr-test-'))
   const backend = options.backend ?? new FakeBackend()
+  // 每个测试的父 cwd 位于独立 dataDir 下，避免并行测试互相删除/覆盖同名交接文件。
+  const parentCwd = join(dataDir, 'parent')
+  mkdirSync(parentCwd, { recursive: true })
+  const parentConversation = backend.conversations.get(1)
+  if (parentConversation !== undefined) parentConversation.cwd = parentCwd
   const docs = options.docs ?? new MemoryDocStore()
   const transport = options.transport ?? new FakeTransport()
   if (options.analyzeBlockedSnapshot !== undefined) {
@@ -827,7 +832,7 @@ test('cwd 解析链: request.cwd > profile.workspace > 父会话 cwd > defaultCw
     scriptSuccess(env, 'ok')
     await spawnDirect(env, { agentType: 'herdr:agy' })
     let tabCreate = env.transport.calls.find((c) => c.method === 'tab.create')!
-    assert.equal(tabCreate.params['cwd'], '/tmp/helm-herdr-parent', '缺省用父会话 cwd')
+    assert.equal(tabCreate.params['cwd'], env.backend.conversations.get(1)!.cwd, '缺省用父会话 cwd')
   } finally {
     await env.close()
   }
@@ -958,9 +963,9 @@ test('Gate 恰好一次 + env 注入（本机 runLocalGate 携带 spawn env）',
     await spawnDirect(env, { agentType: 'herdr:agy', gate: 'exit 0' })
     assert.equal(env.gateLog.length, 1, 'gate 恰好一次')
     assert.equal(env.gateLog[0]!.command, 'exit 0')
-    assert.equal(env.gateLog[0]!.cwd, '/tmp/helm-herdr-parent', 'gate 在实际 cwd 执行')
+    assert.equal(env.gateLog[0]!.cwd, env.backend.conversations.get(1)!.cwd, 'gate 在实际 cwd 执行')
     assert.equal(env.gateLog[0]!.env?.['HELM_ENV'], '1')
-    assert.equal(env.gateLog[0]!.env?.['HELM_CWD'], '/tmp/helm-herdr-parent')
+    assert.equal(env.gateLog[0]!.env?.['HELM_CWD'], env.backend.conversations.get(1)!.cwd)
   } finally {
     await env.close()
   }
