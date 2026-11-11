@@ -675,24 +675,34 @@ helm worktrees cleanup --worktree-id local:/workspace/helm/.helm-worktrees/repo-
 管理插件生命周期与运行时配置。
 
 ```bash
-# 查看所有插件加载状态
+# 查看所有插件加载状态（含 status: active|disabled|failed 与失败诊断 error）
 helm plugins list
 
 # 启用与停用插件
 helm plugins enable herdr
 helm plugins disable triggers
 
+# 强制停用（忽略持久配置/资源占用告警；在途运行任务仍不可跳过）
+helm plugins disable triggers --force
+
 # 查看插件配置与 JSON Schema
 helm plugins config herdr
 
 # 动态修改插件配置键值
 helm plugins config herdr --set socketPath=/var/run/herdr.sock
+
+# 重置指定配置键回默认值（可重复，可与 --set 组合）
+helm plugins config herdr --unset socketPath --unset verbose
 ```
+
+停用预检说明：插件声明了持久生效资源（如 Cron 规则、Webhook 端点、Profile 运行时依赖）时，默认返回 `409 plugin_in_use` 并在错误中列出占用清单；确认后可用 `--force` 强制停用（磁盘上的关联配置保留，下次启用时恢复）。存在在途运行任务时始终返回 `409 plugin_has_live_tasks`，`--force` 不可跳过。插件加载/启用失败时 `plugins list` 中 `status` 为 `failed` 并携带结构化诊断 `error`（含阶段 `scan|load|define|enable` 与错误码）。
 
 | 标志 | 类型 | 说明 |
 | :--- | :--- | :--- |
+| `--force` | 布尔 | 仅 `disable`：强制停用，忽略持久配置/资源占用告警（在途运行任务仍不可跳过）。 |
 | `--input <json>` | JSON 对象 | 整体配置值 JSON 对象。 |
 | `--set <k=v>` | 键值对 | 单项配置赋值。支持多次指定。 |
+| `--unset <key>` | 字符串 | 重置指定配置键回默认值（发送 `null` 删除显式覆写值）。支持多次指定；与 `--set` 同 key 时报错。 |
 
 ---
 

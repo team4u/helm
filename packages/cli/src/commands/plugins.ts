@@ -138,22 +138,41 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'disable'],
-    description: '停用插件（POST /api/plugins/:id/disable）',
+    description: '停用插件（POST /api/plugins/:id/disable；--force 忽略持久资源占用告警）',
+    flags: [
+      { name: 'force', type: 'boolean', help: '强制停用（忽略持久配置/资源占用告警；在途运行任务仍不可跳过）' },
+    ],
     positional: '<id>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([], ctx.args)
+      const parsed = parseFlags([{ name: 'force', type: 'boolean' }], ctx.args)
       const id = requirePositional(parsed.positionals, 0, 'id')
+      assertNoExtraPositionals(parsed.positionals, 1)
+      const force = parsed.flags.get('force') === true
       const hub = await ctx.hub()
-      printResult(ctx, await hub.post<unknown>(`/api/plugins/${encodeURIComponent(id)}/disable`))
+      const path = `/api/plugins/${encodeURIComponent(id)}/disable`
+      try {
+        // 无 --force 时保持无 body 调用：服务端遇持久资源占用返回 409
+        // plugin_in_use，由下方富化为占用清单 + --force 提示。
+        printResult(
+          ctx,
+          force ? await hub.post<unknown>(path, { force: true }) : await hub.post<unknown>(path),
+        )
+      } catch (err) {
+        if (!force && err instanceof CliError && err.code === 'plugin_in_use') {
+          throw enrichPluginInUseError(err)
+        }
+        throw err
+      }
     },
   })
 
   cmds.push({
     path: ['plugins', 'config'],
-    description: '查看/更新插件配置（GET 返回 {values,schema}；PUT 发送 {values}；--set key=value 可重复）',
+    description: '查看/更新插件配置（GET 返回 {values,schema}；PUT 发送 {values}；--set key=value 与 --unset key 可重复）',
     flags: [
       { name: 'input', type: 'json', help: '整体 values JSON 对象（与 --set 可共存，--set 覆盖对应键）' },
       { name: 'set', type: 'string', repeated: true, help: '单项赋值 key=value，可重复；值按 JSON boolean/number 解析，否则 string' },
+      { name: 'unset', type: 'string', repeated: true, help: '重置指定配置键回默认值（发送 null 删除显式覆写值，可重复）' },
     ],
     positional: '<id>',
     async run(ctx: CommandContext) {
@@ -161,6 +180,7 @@ export function pluginsCommands(): CommandSpec[] {
         [
           { name: 'input', type: 'json' },
           { name: 'set', type: 'string', repeated: true },
+          { name: 'unset', type: 'string', repeated: true },
         ],
         ctx.args,
       )
@@ -168,14 +188,27 @@ export function pluginsCommands(): CommandSpec[] {
       assertNoExtraPositionals(parsed.positionals, 1)
       const hasInput = parsed.flags.has('input')
       const sets = repeatedValues(parsed.flags, 'set')
+      const unsets = repeatedValues(parsed.flags, 'unset')
+      for (const key of unsets) {
+        if (key.length === 0 || key.includes('=')) {
+          throw new CliError(`--unset 需为配置键名（非空、不含 =），实得 "${key}"`, 'invalid_flag_value')
+        }
+      }
       const hub = await ctx.hub()
       const path = `/api/plugins/${encodeURIComponent(id)}/config`
-      if (!hasInput && sets.length === 0) {
+      if (!hasInput && sets.length === 0 && unsets.length === 0) {
         printResult(ctx, await hub.get<unknown>(path))
         return
       }
+      const setValues = parseKeyValues(sets, 'set')
+      for (const key of unsets) {
+        if (key in setValues) {
+          throw new CliError(`--set 与 --unset 不能同时作用于同一字段: ${key}`, 'conflicting_flags')
+        }
+      }
       const values: Record<string, unknown> = hasInput ? coerceMetaFlag(parsed.flags.get('input'), 'input') : {}
-      Object.assign(values, parseKeyValues(sets, 'set'))
+      Object.assign(values, setValues)
+      for (const key of unsets) values[key] = null
       printResult(ctx, await hub.put<unknown>(path, { values }))
     },
   })
@@ -529,6 +562,37 @@ export function pluginsCommands(): CommandSpec[] {
   })
 
   return cmds
+}
+
+// ---------------------------------------------------------------------------
+// 409 plugin_in_use 富化：保留 code/details，消息附带占用清单与 --force 提示
+// ---------------------------------------------------------------------------
+
+/** 从错误 details 中提取结构合法的占用列表（usages: [{kind,id,label}]）。 */
+function extractInUseUsages(details: unknown): Array<{ kind: string; id: string; label: string }> {
+  if (details === null || typeof details !== 'object') return []
+  const usages = (details as { usages?: unknown }).usages
+  if (!Array.isArray(usages)) return []
+  return usages.filter(
+    (item): item is { kind: string; id: string; label: string } =>
+      item !== null &&
+      typeof item === 'object' &&
+      typeof (item as { kind?: unknown }).kind === 'string' &&
+      typeof (item as { id?: unknown }).id === 'string' &&
+      typeof (item as { label?: unknown }).label === 'string',
+  )
+}
+
+/** 保留原 CliError 的 code/details/exitCode，仅富化人类可读消息。 */
+function enrichPluginInUseError(err: CliError): CliError {
+  const usages = extractInUseUsages(err.details)
+  if (usages.length === 0) return err
+  const lines = [err.message, '占用中的持久资源：']
+  for (const usage of usages) {
+    lines.push(`  - [${usage.kind}] ${usage.id}：${usage.label}`)
+  }
+  lines.push('确认后可使用 --force 强制停用（在途运行任务仍不可跳过）。')
+  return new CliError(lines.join('\n'), err.code, err.exitCode, err.details)
 }
 
 // ---------------------------------------------------------------------------

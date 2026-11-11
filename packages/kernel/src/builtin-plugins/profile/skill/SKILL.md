@@ -58,7 +58,7 @@ managedByPlugin: {{MANAGED_BY}}
 - `helm workflows list` / `helm workflows run <nameOrFile> [--args <json>] [--resume-from-run-id <id>] [--current] [--wait]` / `helm workflows runs` / `helm workflows inspect <runId>` / `helm workflows abort <runId>`。
 
 ### 插件与动作
-- `helm plugins list` / `helm plugins enable|disable <id>` / `helm plugins config <id> [--input <json>]` / `helm plugins client <id>`。
+- `helm plugins list`（含 status: active|disabled|failed 与失败诊断）/ `helm plugins enable <id>` / `helm plugins disable <id> [--force]`（占用预检 409 plugin_in_use 时可 --force 强制；在途运行任务仍不可跳过）/ `helm plugins config <id> [--input <json>] [--set k=v] [--unset <key>]`（--unset 发送 null 删除显式覆写，可重复，与 --set 同 key 冲突时报错）/ `helm plugins client <id>`。
 - `helm plugins doctor <id|dir>`：外部插件源码静态自检（真实代际导入+真实注册断言+client 真实编译与悬空 export 校验）；目标择一：目录绝对路径或已注册插件 id；预检失败项逐条列出，不静默。
 - `helm plugins reload <id>`：外部插件受控热重载（先 doctor 预检，失败时旧实例保持不动；在途任务拒绝 409；启用状态保持）。
 - `helm plugins rescan`：增量重扫描插件目录（只注册新外部插件，默认停用）。
