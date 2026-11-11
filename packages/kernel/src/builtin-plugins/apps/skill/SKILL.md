@@ -33,23 +33,26 @@ apps/<app-id>/
 - **clientRoot 必填**：前端组件放在 `client/` 子目录时，`index.ts` 的 `PluginDefinition`（或 `plugin.json`）必须显式声明 `clientRoot: './client'`——未声明时默认根是插件目录本身，`apps_validate` 会因找不到 `index.tsx` 报 client 模块不存在；
 - 界面文案与图标遵守零 Emoji 铁律；图标用 lucide 图标名（如 layout-grid、list-checks、wallet）。
 
-### 2. 全栈编码约束
+### 2. 全栈编码约束与共享 SDK
 
 后端 `index.ts`（标准 `PluginDefinition`）：
 
-- `ctx.doc('<name>', initialState, { public: true })` 持久化业务数据；**写操作后 `await doc.flush()`**；
-- `ctx.action({ id, description, inputSchema, outputSchema, exposeAsTool: true, handler })` 编写增删改查或跨节点逻辑（`ctx.host.execEnv` 跨节点执行）；动作自动获得 HTTP / CLI / Agent Tool / Workflow / Web 五端映射；
+- `ctx.doc('<name>', initialState, { public: true })` 持久化全局数据；按会话隔离的状态用 `ctx.sessionDoc('<name>', initialState, { public: true })`；**写操作后 `await doc.flush()`**；
+- `ctx.action({ id, description, inputSchema, outputSchema, idempotent?, exposeAsTool: true, handler })`：动作必须**同时声明 `inputSchema` 与 `outputSchema`**（只读动作用 `idempotent: true`），底层可调 `ctx.host.execEnv` 跨节点执行命令；动作自动获得 HTTP / CLI / Agent Tool / Workflow / Web 五端映射；
 - **必须注册至少一个 `ctx.ui.screen({ id: 'main', label: '...', client: { module: 'index.tsx', export: 'MainScreen' } })`**——这是全栈应用的硬性要求，validate 会强制检查；
 - **默认不注册 `ctx.ui.sidebarItem`**（应用入口由应用中心统一收敛，防止左栏膨胀）。
 
-前端 `client/index.tsx`：
+前端 `client/index.tsx`（宿主共享 SDK，免安装直引）：
 
-- 从 `@helm/plugin-client` 导入 `usePluginContext`（`callAction` / `openScreen` / `notify`）、`usePluginDoc` 订阅公开文档；
-- 复用共享 UI 原语（`HelmIcon`、`Tabs`、`Select`、`Switch`、`Dialog`、`Callout` 等），不造原生控件；
-- 样式用宿主 CSS 变量（`var(--bg-elevated)`、`var(--border)` 等）保持暗色/亮色自适应；本地 `.css` 文件经 import 打包，不写宿主 styles.css；
-- 组件文件只导出组件与类型（保 Fast Refresh）；`client/index.tsx` 中引用的模块路径必须真实存在且具名导出匹配。
+- **允许的运行时裸导入仅限**：`react`、`react-dom`、`lucide-react`、`@helm/plugin-client`（类型可 `import type ... from '@helm/protocol'`）；禁止引入未声明的第三方裸 npm 包（esbuild 静态自检会直接拒绝）；
+- **`@helm/plugin-client` 共享导出清单**：
+  - **响应式 Hooks**：`usePluginContext()`（提供 `callAction` / `submitInput` / `openScreen` / `openSplitScreen` / `openConversationDrawer` / `openArtifact` / `openWorkbench` / `notify`）、`usePluginDoc(name, pluginId?)`、`usePluginSessionDoc(name, opts?)`、`useConversations()`、`useConversation(id)`、`usePlugins()`、`useToolActivity(callId, active)`；
+  - **页面布局原语（优先使用，免手搓页面骨架）**：`Screen`（全屏容器+标准页头 `title/subtitle/actions`）、`ScreenSection`（分节容器 `title/titleExtra`）、`DataTable`（组合式表格外壳，统一 `loading/empty` 占位，`thead/tbody` 由 JSX 表达）、`KvGrid`（`items: [{ key, value }]` 键值网格）；
+  - **无障碍控件与内容组件**：`HelmIcon`、`Switch`、`Select`、`MultiSelect`、`Checkbox`、`Tabs / TabsList / TabsTrigger / TabsContent`、`SegmentedControl`、`Dialog / DialogTrigger / DialogContent / DialogTitle / DialogDescription / DialogClose`、`Callout`、`MarkdownView`、`MarkdownText`、`CodeBlockView`、`CopyButton`、`ViewBoundary`、`PluginSlot`；
+- 样式用宿主 CSS 变量（`var(--bg-elevated)`、`var(--border)` 等）保持暗色/亮色自适应；本地 `.css` 文件经 `import './styles.css'` 打包，不写宿主 styles.css；
+- 组件文件只导出组件与类型（保 Fast Refresh）；`client` 引用的 `module` 路径与具名 `export` 必须真实匹配（doctor 会校验编译产物 exports）。
 
-完整可运行模板：`load_skill({ skillId: "app-builder", path: "references/fullstack-template.md" })`
+完整可运行模板：`load_skill({ skillId: "app-builder", path: "references/fullstack-template.md" })`；若需高级扩展点（后端生命周期 Hook、`composerCompleter`、`artifactPreviewer`、工作台面板等），按需查阅 `load_skill({ skillId: "helm-cli", path: "references/skill-and-plugin-dev.md" })`。
 
 ### 3. 强制静态自检（Zero-Broken-App）
 

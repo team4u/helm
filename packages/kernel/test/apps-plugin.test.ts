@@ -720,6 +720,13 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
           assert.equal(pluginId, APPS_PLUGIN_ID, 'ensureSkill 应以本插件身份登记')
           const m = /managedByPlugin:\s*(\S+)/.exec(asset.skillMd)
           skillCalls.push({ id: asset.id, managedBy: m?.[1] })
+          assert.ok(asset.skillMd.includes("clientRoot: './client'"), 'app-builder SKILL.md 应强调 clientRoot: ./client')
+          for (const sym of ['Screen', 'ScreenSection', 'DataTable', 'KvGrid', 'usePluginContext', 'usePluginDoc', 'usePluginSessionDoc', 'usePlugins']) {
+            assert.ok(asset.skillMd.includes(sym), `app-builder SKILL.md 应涵盖 @helm/plugin-client 共享符号 ${sym}`)
+          }
+          const tpl = asset.references['fullstack-template.md'] ?? ''
+          assert.ok(tpl.includes("clientRoot: './client'"), 'fullstack-template.md 应包含 clientRoot: ./client')
+          assert.ok(tpl.includes('ScreenSection') && tpl.includes('DataTable'), 'fullstack-template.md 应示范使用 ScreenSection/DataTable 原语')
         },
       },
     })

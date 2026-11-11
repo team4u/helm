@@ -100,11 +100,18 @@ export default {
 } satisfies PluginDefinition
 ```
 
-## client/index.tsx（前端）
+## client/index.tsx（前端：直接复用 `@helm/plugin-client` 布局与控件原语）
 
 ```tsx
 import { useState, type ReactNode } from 'react'
-import { usePluginContext, usePluginDoc, HelmIcon } from '@helm/plugin-client'
+import {
+  usePluginContext,
+  usePluginDoc,
+  Screen,
+  ScreenSection,
+  DataTable,
+  Checkbox,
+} from '@helm/plugin-client'
 import './styles.css'
 
 interface Item { id: string; title: string; done: boolean; createdAt: number }
@@ -114,6 +121,9 @@ export function MainScreen(): ReactNode {
   const doc = usePluginDoc<{ list: Item[] }>('items')
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState(false)
+
+  const list = doc?.list ?? []
+  const doneCount = list.filter((it) => it.done).length
 
   const add = async () => {
     const title = draft.trim()
@@ -130,38 +140,46 @@ export function MainScreen(): ReactNode {
   }
 
   return (
-    <div className="sd-wrap">
-      <header className="sd-header">
-        <HelmIcon name="list-checks" />
-        <h2>示例工作台</h2>
-        <span className="sd-count">{doc?.list.length ?? 0} 项</span>
-      </header>
-      <div className="sd-form">
-        <input
-          className="sd-input"
-          value={draft}
-          placeholder="新增条目…"
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void add() }}
-        />
-        <button type="button" className="btn btn-primary" disabled={pending} onClick={() => void add()}>
-          新增
-        </button>
-      </div>
-      <ul className="sd-list">
-        {(doc?.list ?? []).map((it) => (
-          <li key={it.id} className="sd-item">
-            <input
-              id={`sd-${it.id}`}
-              type="checkbox"
-              checked={it.done}
-              onChange={() => void callAction('set_done', { id: it.id, done: !it.done })}
-            />
-            <label htmlFor={`sd-${it.id}`} className={it.done ? 'sd-done' : ''}>{it.title}</label>
-          </li>
-        ))}
-      </ul>
-    </div>
+    <Screen title="示例工作台" subtitle={`已完成 ${doneCount} / ${list.length}`}>
+      <ScreenSection title="新增条目">
+        <div className="sd-form">
+          <input
+            className="sd-input"
+            value={draft}
+            placeholder="输入待办事项后回车…"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void add() }}
+          />
+          <button type="button" className="btn btn-primary" disabled={pending} onClick={() => void add()}>
+            新增
+          </button>
+        </div>
+      </ScreenSection>
+
+      <ScreenSection title="条目列表">
+        <DataTable loading={doc === undefined} empty={list.length === 0} emptyLabel="暂无条目" columns={2}>
+          <thead>
+            <tr>
+              <th>状态</th>
+              <th>内容</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((it) => (
+              <tr key={it.id}>
+                <td className="sd-col-check">
+                  <Checkbox
+                    checked={it.done}
+                    onCheckedChange={(checked) => void callAction('set_done', { id: it.id, done: checked })}
+                  />
+                </td>
+                <td className={it.done ? 'sd-done' : ''}>{it.title}</td>
+              </tr>
+            ))}
+          </tbody>
+        </DataTable>
+      </ScreenSection>
+    </Screen>
   )
 }
 ```
@@ -169,21 +187,17 @@ export function MainScreen(): ReactNode {
 ## client/styles.css
 
 ```css
-.sd-wrap { display: flex; flex-direction: column; gap: 12px; padding: 16px; max-width: 640px; }
-.sd-header { display: flex; align-items: center; gap: 8px; }
-.sd-header h2 { font-size: 16px; margin: 0; }
-.sd-count { color: var(--text-muted); font-size: 12px; }
 .sd-form { display: flex; gap: 8px; }
-.sd-input { flex: 1; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
-.sd-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.sd-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated); }
-.sd-done { text-decoration: line-through; color: var(--text-muted); }
+.sd-input { flex: 1; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: var(--fg); }
+.sd-col-check { width: 48px; }
+.sd-done { text-decoration: line-through; color: var(--fg-muted); }
 ```
 
 ## 检查点对照
 
 - `index.ts`（及 `plugin.json`）显式声明 `clientRoot: './client'`（未声明时默认根为插件目录本身，会导致 `client/index.tsx` 找不到）；
 - 后端 `ctx.doc('items', ..., { public: true })` + 写后 `flush()`；
-- `ctx.action` 带 inputSchema/outputSchema，`exposeAsTool: true`；
+- `ctx.action` 同时声明 `inputSchema` 与 `outputSchema`，`exposeAsTool: true`；
+- 前端优先复用 `@helm/plugin-client` 的 `Screen / ScreenSection / DataTable / KvGrid` 布局原语与无障碍控件，不引入未声明的裸 npm 包；
 - `ctx.ui.screen({ id: 'main', client: { module: 'index.tsx', export: 'MainScreen' } })` 且前端确实导出 `MainScreen`；
 - 未注册 sidebarItem；无 Emoji；样式走宿主 CSS 变量。
