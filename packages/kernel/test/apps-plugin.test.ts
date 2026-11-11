@@ -221,9 +221,29 @@ function makeBackend(conversations: Map<number, ConversationSummary>, pluginsPor
     },
     emitEvent: () => {},
   }
-  return pluginsPort === undefined
-    ? base
-    : Object.assign(base, { plugins: pluginsPort })
+  if (pluginsPort === undefined) return Object.assign(base, { plugins: undefined })
+  const port = pluginsPort as {
+    doctor: FakePackageManagerState['doctorImpl']
+    install: (source: string, options?: { enable?: boolean }) => Promise<PluginInstallResult>
+    update: (pluginId: string) => Promise<PluginUpdateResult>
+    remove: (pluginId: string) => Promise<PluginRemoveResult>
+    enable: (pluginId: string) => Promise<PluginSummary | void>
+    disable: (pluginId: string, options?: { force?: boolean }) => Promise<PluginSummary | void>
+    list: () => PluginSummary[]
+    listUi: () => PluginUiContribution[]
+  }
+  return Object.assign(base, {
+    plugins: {
+      doctorPlugin: port.doctor,
+      installPlugin: port.install,
+      updatePlugin: port.update,
+      removePlugin: port.remove,
+      enablePlugin: port.enable,
+      disablePlugin: port.disable,
+      list: port.list,
+      listUi: port.listUi,
+    },
+  })
 }
 
 async function setup(options: {
@@ -289,7 +309,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
       if (actionId === 'list') continue
       await assert.rejects(
         () => host.invokeAction(APPS_PLUGIN_ID, actionId, input),
-        (err: unknown) => err instanceof HelmError && err.code === 'host_plugins_port_unavailable' && err.status === 501,
+        (err: unknown) => err instanceof HelmError && err.code === 'not_supported' && err.status === 501,
         `${actionId} 应显式 501`,
       )
     }
@@ -411,6 +431,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
           { id: 'manifest', label: 'x' }, { id: 'backend', label: 'x' },
           { id: 'register', label: 'x' }, { id: 'client', label: 'x' },
         ],
+        screens: ['main'],
       }),
     })
     const { host, docs } = await setup({ pluginsPort: port, conversations: new Map([[1, makeConversation(1)]]) })
@@ -443,7 +464,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
     await host.dispose()
   })
 
-  await t.test('publish 安装后无 Screen：422 missing_app_screen 且不登记 catalog', async () => {
+  await t.test('publish 无 Screen：validate 阶段 422 且不登记 catalog', async () => {
     const { port } = fakePackageManager({
       screensOnInstall: false,
       doctorImpl: async () => ({
@@ -451,12 +472,13 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
         pluginId: 'no-screen-app',
         ok: true,
         checks: [{ id: 'manifest', label: 'x' }, { id: 'backend', label: 'x' }, { id: 'register', label: 'x' }, { id: 'client', label: 'x' }],
+        screens: [],
       }),
     })
     const { host, docs } = await setup({ pluginsPort: port })
     await assert.rejects(
       () => host.invokeAction(APPS_PLUGIN_ID, 'publish', { dir: '/ws/no-screen-app' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'missing_app_screen' && err.status === 422,
+      (err: unknown) => err instanceof HelmError && err.code === 'app_validate_failed' && err.status === 422 && /ctx\.ui\.screen/.test(err.message),
     )
     const catalog = readCatalog(host)
     assert.equal(catalog?.apps['no-screen-app'], undefined, '失败不登记 catalog')
@@ -490,6 +512,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
         pluginId: 'todo-app',
         ok: true,
         checks: [{ id: 'manifest', label: 'x' }, { id: 'backend', label: 'x' }, { id: 'register', label: 'x' }, { id: 'client', label: 'x' }],
+        screens: ['main'],
       }),
     })
     const { host, docs } = await setup({ pluginsPort: port })
@@ -532,6 +555,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
         pluginId: 'todo-app',
         ok: true,
         checks: [],
+        screens: ['main'],
       }),
     })
     // 预置已注册且受管 source 指向别处（自带 main screen 事实）
@@ -595,6 +619,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
       doctorImpl: async () => ({
         dir: '/ws/todo-app', pluginId: 'todo-app', ok: true,
         checks: [{ id: 'manifest', label: 'x' }, { id: 'backend', label: 'x' }, { id: 'register', label: 'x' }, { id: 'client', label: 'x' }],
+        screens: ['main'],
       }),
     })
     const { host, docs } = await setup({ pluginsPort: port })
@@ -634,6 +659,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
       doctorImpl: async () => ({
         dir: '/ws/todo-app', pluginId: 'todo-app', ok: true,
         checks: [{ id: 'manifest', label: 'x' }, { id: 'backend', label: 'x' }, { id: 'register', label: 'x' }, { id: 'client', label: 'x' }],
+        screens: ['main'],
       }),
     })
     const { host, docs } = await setup({ pluginsPort: port })

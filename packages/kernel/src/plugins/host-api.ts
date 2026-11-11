@@ -164,14 +164,22 @@ export function wrapHostApi(
     return redactText ? (redactJsonValue(value, redactText) as T) : value;
   };
 
+  const backendPlugins = backend.plugins as
+    | (BackendPluginsLifecyclePort & {
+        /** Test/alternate backends may expose their own read snapshots; runtime falls back to PluginHost. */
+        list?: () => PluginSummary[]
+        listUi?: () => PluginUiContribution[]
+      })
+    | undefined
+
   const pluginsPort: HelmHostApi['plugins'] = {
     list: () => {
       guard('host.plugins.list');
-      return deps.list();
+      return backendPlugins?.list?.() ?? deps.list();
     },
     listUi: () => {
       guard('host.plugins.listUi');
-      return deps.listUi();
+      return backendPlugins?.listUi?.() ?? deps.listUi();
     },
     doctor: (target) =>
       tracked('host.plugins.doctor', async () =>

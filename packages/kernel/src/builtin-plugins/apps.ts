@@ -30,11 +30,7 @@ import {
   type HelmHostApi,
   type PluginDefinition,
   type PluginDoctorReport,
-  type PluginInstallResult,
-  type PluginRemoveResult,
   type PluginSummary,
-  type PluginUiContribution,
-  type PluginUpdateResult,
 } from '@helm/protocol'
 
 export const APPS_PLUGIN_ID = 'builtin:apps'
@@ -84,56 +80,12 @@ export const EMPTY_APPS_CATALOG: AppsCatalogDoc = { apps: {} }
 const CATALOG_DOC = 'catalog'
 
 // ---------------------------------------------------------------------------
-// 宿主受管包端口（本地兼容类型）
+// 宿主受管包端口
 // ---------------------------------------------------------------------------
 
-/**
- * 宿主受管插件包生命周期端口（ctx.host.plugins）。
- *
- * 【合并注意事项】本接口与 protocol-host 分支将定义的 HelmHostPluginsPort
- * 形状一致（方法名与返回值对齐 PluginHost 现有公开 API：
- * doctorExternalPlugin / installPluginPackage / updatePluginPackage /
- * removePluginPackage / enable / disable / list / listUi）。主代理合并
- * protocol-host 分支后：
- * 1. 删除本接口与 hostPluginsPort 的兼容访问，改为直接读 ctx.host.plugins；
- * 2. doctor 返回值中可选的 screens 字段（本分支为草稿目录 Screen 检查预留）
- *    以 protocol 真实契约为准；若 protocol doctor 不携带 screens，保留
- *    万不得已的「已注册插件以 listUi 事实为准、草稿以 publish 后置复核为准」
- *    策略（见 validateAppDir 注释）。
- */
-export interface AppsHostPluginsPort {
-  /** 对指定目录或已注册插件 id 执行四阶段静态自检；screens 为可选附加字段（草稿 Screen 事实）。 */
-  doctor(target: { dir?: string; id?: string }): Promise<PluginDoctorReport & { screens?: string[] }>
-  /** 从 local/npm/git 来源受管安装；enable: true 安装后立即启用。 */
-  install(source: string, options?: { enable?: boolean }): Promise<PluginInstallResult>
-  /** 重取安装来源、预检并原子热重载（保持启用状态与既有 ctx.doc 数据）。 */
-  update(pluginId: string): Promise<PluginUpdateResult>
-  /** 卸载受管安装的外部插件并清理受管目录。 */
-  remove(pluginId: string): Promise<PluginRemoveResult>
-  /** 启用已注册插件。 */
-  enable(pluginId: string): Promise<PluginSummary | void>
-  /** 停用已注册插件。 */
-  disable(pluginId: string, options?: { force?: boolean }): Promise<PluginSummary | void>
-  /** 当前全部插件摘要（与 listPlugins 同源）。 */
-  list(): PluginSummary[]
-  /** 当前全部已启用插件的 UI 贡献（与 listUi 同源）。 */
-  listUi(): PluginUiContribution[]
-}
-
-/**
- * 从 ctx.host 提取受管包端口；未接线时显式 501（绝不静默降级）。
- * protocol-host 分支合并后应替换为直接读取 ctx.host.plugins。
- */
-function hostPluginsPort(host: HelmHostApi): AppsHostPluginsPort {
-  const candidate = (host as HelmHostApi & { plugins?: AppsHostPluginsPort }).plugins
-  if (candidate !== undefined && typeof candidate.doctor === 'function') {
-    return candidate
-  }
-  throw new HelmError(
-    'host_plugins_port_unavailable',
-    '宿主未接线受管插件包端口（ctx.host.plugins），builtin:apps 的 validate/publish/remove 不可用',
-    501,
-  )
+/** 直接消费 protocol 定义的宿主插件治理端口，不复制第二套包管理契约。 */
+function hostPluginsPort(host: HelmHostApi): HelmHostApi['plugins'] {
+  return host.plugins
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +203,7 @@ interface AppValidateResult {
   dir: string
   checks: PluginDoctorReport['checks']
   screenIds: string[]
-  /** Screen 事实来源：host-doctor（端口回传）/ registered（listUi 事实）/ deferred（草稿无法静态断言，发布时后置复核）。 */
+  /** Screen 事实来源：host-doctor（真实临时注册捕获）/ registered（listUi 事实）/ deferred（诊断失败时无可用结论）。 */
   screenBasis: 'host-doctor' | 'registered' | 'deferred'
   summary?: string
 }
@@ -259,15 +211,13 @@ interface AppValidateResult {
 /**
  * 执行 validate：宿主 doctor 真实四阶段 + 全栈应用 Screen 强制检查。
  *
- * Screen 事实的三级来源（诚实性优先，不做静态猜测）：
- * 1. host-doctor：宿主端口 doctor 回传 screens 字段（protocol-host 分支预期能力）；
- * 2. registered：目标插件已注册时从 listUi 读取事实；
- * 3. deferred：草稿目录且端口未回传 screens 时无法静态断言——此时不判失败
- *    （ok 交给 doctor 四阶段决定），screenBasis 如实标记 deferred；缺 Screen
- *    的硬门禁在 publish 安装后以 listUi 事实后置复核（见 publish handler）。
+ * Screen 事实来自真实声明执行：优先使用 doctor 临时宿主 register 阶段捕获的
+ * screens；旧/定制宿主缺少字段时，已注册插件回退到 PluginHost listUi。若
+ * doctor 报告成功但两处都没有 Screen，则作为 missing_app_screen 拒绝，绝不把
+ * 未经验证的草稿标记为可发布。doctor 失败时保持原诊断，不使用部分注册结果。
  */
 async function validateAppDir(
-  port: AppsHostPluginsPort,
+  port: HelmHostApi['plugins'],
   dir: string,
 ): Promise<AppValidateResult> {
   const report = await port.doctor({ dir })
@@ -284,7 +234,7 @@ async function validateAppDir(
     screenBasis = 'registered'
   }
 
-  if (screenBasis !== 'deferred' && screenIds.length === 0) {
+  if (screenIds.length === 0 && (screenBasis !== 'deferred' || report.ok)) {
     checks.push({
       id: 'missing_app_screen',
       label: '全栈应用 Screen 检查',
@@ -308,7 +258,7 @@ async function validateAppDir(
 }
 
 /** 基于宿主 listUi 收集指定插件的 screen id 列表（已注册插件事实）。 */
-function screensOf(port: AppsHostPluginsPort, pluginId: string): string[] {
+function screensOf(port: HelmHostApi['plugins'], pluginId: string): string[] {
   return port
     .listUi()
     .filter((c) => c.pluginId === pluginId && c.surface === 'screen')
