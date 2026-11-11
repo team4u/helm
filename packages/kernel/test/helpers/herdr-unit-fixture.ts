@@ -107,7 +107,11 @@ export async function serveTransport(
             if (request.method === 'events.subscribe') {
               const release = await transport.subscribe(targetOf(), (event) => {
                 writeFrame(`${JSON.stringify({ event })}\n`)
-              }, () => {})
+              }, () => {
+                // 受控 transport 注入流故障：销毁订阅 socket 模拟真实断线，
+                // 客户端 close 路径如实触发其 onError（不静默吞掉注入故障）。
+                socket.destroy()
+              })
               writeFrame(`${JSON.stringify({ id: request.id, result: { type: 'subscription_started' } })}\n`)
               // 生产 stop() 直接 socket.destroy()（FIN 不保证对端 close 事件同步
               // 到达）：fixture 在订阅 socket 结束（close 或 error）时同步释放受控
