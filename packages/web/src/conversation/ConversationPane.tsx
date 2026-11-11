@@ -244,18 +244,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               }}
               onBlur={() => void saveTitle()}
             />
-          ) : (
-            <span
-              className="pane-title"
-              title="点击重命名"
-              onClick={() => {
-                setTitleDraft(conversation.title)
-                setRenaming(true)
-              }}
-            >
-              {conversation.title === '' ? `会话 #${conversationId}` : conversation.title}
-            </span>
-          )}
+          ) : null}
           <TopicPicker
             conversation={conversation}
             isSplit={isSplit}

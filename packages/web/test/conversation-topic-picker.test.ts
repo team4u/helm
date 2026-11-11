@@ -88,15 +88,16 @@ test('TopicPicker 切换目标：分屏窗格 openTarget 带 split 选项', { ti
   )
 })
 
-test('ConversationPane 接入话题切换器且保留主顶栏新话题与重命名语义', { timeout: 60_000 }, () => {
+test('ConversationPane 接入话题切换器且保留主顶栏新话题语义（标题身份收敛进切换器）', { timeout: 60_000 }, () => {
   assert.match(paneSource, /import\s*\{\s*TopicPicker\s*\}\s*from\s*'\.\/conversation-topic-picker\.js'/)
   assert.match(paneSource, /<TopicPicker\s+conversation=\{conversation\}/)
   // 主顶栏新话题入口保留，且与 Popover 共用同一 createNewThread（继承 node/cwd/profile）
   assert.match(paneSource, /const createNewThread = \(\): void => \{/)
   assert.match(paneSource, /onClick=\{createNewThread\}/)
   assert.match(paneSource, /profileId:\s*conversation\.profileId,\s*nodeId:\s*currentNodeId,\s*cwd:\s*conversation\.cwd/)
-  // 重命名入口保留
-  assert.match(paneSource, /title="点击重命名"/)
+  // 顶栏不再保留独立的可重命名 pane-title；重命名收纳进「更多操作」菜单
+  assert.doesNotMatch(paneSource, /title="点击重命名"/)
+  assert.match(paneSource, /重命名会话/)
 })
 
 test('computeTopicPickerModel 推导身份与话题列表', { timeout: 60_000 }, () => {
