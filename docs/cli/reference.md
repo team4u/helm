@@ -757,7 +757,9 @@ minimal 模板仅生成 `plugin.json`（不声明 `clientRoot`）、`index.ts`�
 
 #### helm plugins install / update / remove
 
-外部插件包受管安装（契约已定义，服务端实现待补）。
+外部插件包受管安装：`install` 从 npm / Git / 本地路径获取插件包并注册，`update` / `remove` 针对受管安装的插件更新或卸载。
+
+**安全须知**：安装并启用插件等于在 Hub 进程内执行可信插件代码（与手放置入插件目录同一信任级），系统不提供沙箱。仅安装可信来源的插件包。
 
 ```bash
 # source 四种写法：npm 说明符 / git 前缀 / HTTPS Git URL / 本地路径
@@ -766,18 +768,30 @@ helm plugins install git:https://github.com/user/helm-plugin-foo.git@v1.2.0
 helm plugins install https://github.com/user/helm-plugin-foo.git#v1.2.0
 helm plugins install /root/code/helm-plugin-foo
 
+# 安装后立即启用（缺省注册为停用）
+helm plugins install npm:helm-plugin-foo@^1.2.0 --enable
+
 # 更新与移除（目标为受管安装的插件 id）
 helm plugins update helm-plugin-foo
-helm plugins remove helm-plugin-foo
+helm plugins remove helm-plugin-foo --yes
 ```
 
 | 命令 | 端点 | 说明 |
 | :--- | :--- | :--- |
-| `plugins install <source>` | `POST /api/plugins/install` | 安装并注册（默认停用）；返回 `{ record, summary }`。 |
+| `plugins install <source> [--enable]` | `POST /api/plugins/install` | 请求体 `{source, enable?}`；安装并注册（默认停用）；返回 `{ record, summary }`。 |
 | `plugins update <id>` | `POST /api/plugins/:id/update` | 更新并重载；返回 `{ record, summary, changed, previousVersion }`。 |
-| `plugins remove <id>` | `POST /api/plugins/:id/remove` | 停用并清理安装目录与记录；返回 `{ pluginId, installPath, wasEnabled, installId }`。 |
+| `plugins remove <id> [--yes]` | `POST /api/plugins/:id/remove` | 停用并清理安装目录与记录；返回 `{ pluginId, installPath, wasEnabled, installId }`。 |
 
-source 语法：`npm:<spec>`（npm 依赖说明符）、`git:<repo>@<ref>`（ref 可选，支持子目录）、HTTPS Git URL（`#<ref>` 可选）、绝对/相对本地路径。具体解析由 Hub 执行；当前实现待补，落地前用 `plugins init` + `rescan` 手管目录。
+| 参数 / 标志 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `<source>` | 字符串 | 安装来源，四种写法：`npm:<spec>`（npm 依赖说明符）、`git:<repo>@<ref>`（ref 可选，支持子目录）、HTTPS Git URL（`#<ref>` 可选）、绝对/相对本地路径。 |
+| `--enable` | 布尔 | 安装后立即启用；缺省注册为停用。 |
+| `--yes` | 布尔 | 跳过 remove 的破坏性操作确认（脚本/非交互环境）。 |
+
+行为说明：
+
+- **source 由 Hub 服务端解析与获取**：npm 拉取、git clone、本地路径读取均发生在 Hub 主机上（不是客户端本机上传）；相对路径相对 Hub 主机的工作目录解析。路径指向的目录须已存在于 Hub 主机。
+- **remove 是破坏性操作**：停用插件、删除 Hub 主机上的安装目录与安装记录，不可恢复。人类模式 TTY 下要求输入 `yes` 确认；非交互环境（管道/脚本）未提供 `--yes` 时直接拒绝（退出码非零，错误码 `confirmation_required`）；`--json` 机器模式不交互。
 
 ---
 

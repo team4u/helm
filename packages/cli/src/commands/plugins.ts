@@ -1,7 +1,8 @@
 /**
  * 插件域：plugins list/enable/disable/config/doc/client 与 doctor/reload/rescan
- * （DX 闭环）与 actions list。config 除 --input <json> 外支持可重复 --set key=value
- * （值按 JSON boolean/number 语义解析，否则 string）。plugins init 为本地脚手架命令。
+ * （DX 闭环）、install/update/remove（受管包管理）与 actions list。config 除
+ * --input <json> 外支持可重复 --set key=value（值按 JSON boolean/number 语义
+ * 解析，否则 string）。plugins init 为本地脚手架命令。
  */
 import type {
   ActionManifest,
@@ -82,6 +83,32 @@ async function watchSessionDoc(
   } finally {
     process.off('SIGINT', onSignal)
     process.off('SIGTERM', onSignal)
+  }
+}
+
+/**
+ * 破坏性移除确认（复用 CLI 既有 TTY/非 TTY 分流惯例，与 login 密码同风格）：
+ * --yes 与 --json 非交互放行；TTY 终端 stdin 提问一行（y/yes 确认）；
+ * 非 TTY 无 --yes 显式拒绝——绝不在无人值守的管道上悬等输入。
+ */
+async function confirmRemove(ctx: CommandContext, assumedYes: boolean, pluginId: string): Promise<void> {
+  if (ctx.json || assumedYes) return
+  if (process.stdin.isTTY !== true) {
+    throw new CliError(
+      `移除 ${pluginId} 为破坏性操作（清理 Hub 主机安装目录，不可恢复）：非交互环境需 --yes 确认`,
+      'confirmation_required',
+    )
+  }
+  const { createInterface } = await import('node:readline/promises')
+  const rl = createInterface({ input: process.stdin, output: process.stderr })
+  try {
+    const answer = await rl.question(`将移除插件 ${pluginId} 及其安装目录（不可恢复）。输入 yes 确认：`)
+    const normalized = answer.trim().toLowerCase()
+    if (normalized !== 'y' && normalized !== 'yes') {
+      throw new CliError('已取消：未确认移除', 'not_confirmed')
+    }
+  } finally {
+    rl.close()
   }
 }
 
@@ -403,40 +430,91 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'install'],
-    description: '从 npm/git/本地路径安装外部插件包（POST /api/plugins/install；契约已定义，服务端实现待补）',
+    description:
+      '从 npm/git/本地路径安装外部插件包并注册（POST /api/plugins/install；默认停用，--enable 装后即启用）。source 由 Hub 解析，本地路径相对 Hub 主机；安装启用即在 Hub 内执行可信插件代码，无沙箱',
+    flags: [{ name: 'enable', type: 'boolean', help: '安装后立即启用（缺省注册为停用）' }],
     positional: '<source>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([], ctx.args)
+      const parsed = parseFlags([{ name: 'enable', type: 'boolean' }], ctx.args)
       const source = requirePositional(parsed.positionals, 0, 'source')
+      if (source.trim() === '') {
+        throw new CliError(
+          '<source> 不能为空（npm:<spec> / git:<repo>@<ref> / HTTPS Git URL / 本地路径，语法由 Hub 解析）',
+          'invalid_flag_value',
+        )
+      }
       assertNoExtraPositionals(parsed.positionals, 1)
+      const enable = parsed.flags.get('enable') === true
       const hub = await ctx.hub()
-      printResult(ctx, await hub.post<PluginInstallResult>('/api/plugins/install', { source }))
+      const result = await hub.post<PluginInstallResult>('/api/plugins/install', {
+        source,
+        ...(enable ? { enable: true } : {}),
+      })
+      if (ctx.json) {
+        printResult(ctx, result)
+        return
+      }
+      ctx.io.out(
+        `已安装 ${result.summary.id}${result.record.version === '' ? '' : ` ${result.record.version}`}（来源 ${result.record.source.raw}）\n`,
+      )
+      ctx.io.out(`安装目录（Hub 主机）：${result.record.installPath}\n`)
+      ctx.io.out(
+        result.summary.enabled
+          ? '状态：已启用\n'
+          : `状态：已停用（启用：helm plugins enable ${result.summary.id}）\n`,
+      )
     },
   })
 
   cmds.push({
     path: ['plugins', 'update'],
-    description: '更新已安装的外部插件包（POST /api/plugins/:id/update；契约已定义，服务端实现待补）',
+    description: '更新已安装的外部插件包并重载（POST /api/plugins/:id/update；目标须为受管安装的插件）',
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)
       const id = requirePositional(parsed.positionals, 0, 'id')
       assertNoExtraPositionals(parsed.positionals, 1)
       const hub = await ctx.hub()
-      printResult(ctx, await hub.post<PluginUpdateResult>(`/api/plugins/${encodeURIComponent(id)}/update`))
+      const result = await hub.post<PluginUpdateResult>(
+        `/api/plugins/${encodeURIComponent(id)}/update`,
+      )
+      if (ctx.json) {
+        printResult(ctx, result)
+        return
+      }
+      const ver = (v: string): string => (v === '' ? '未知版本' : v)
+      if (result.changed) {
+        ctx.io.out(`已更新 ${result.record.pluginId}：${ver(result.previousVersion)} -> ${ver(result.record.version)}\n`)
+      } else {
+        ctx.io.out(`${result.record.pluginId} 源未变化，无更新（当前 ${ver(result.record.version)}）\n`)
+      }
+      ctx.io.out(
+        `安装目录（Hub 主机）：${result.record.installPath}；状态：${result.summary.enabled ? '已启用' : '已停用'}\n`,
+      )
     },
   })
 
   cmds.push({
     path: ['plugins', 'remove'],
-    description: '移除已安装的外部插件包（POST /api/plugins/:id/remove；契约已定义，服务端实现待补）',
+    description:
+      '移除受管安装的外部插件包（POST /api/plugins/:id/remove；停用并清理 Hub 主机上的安装目录与记录，不可恢复）。人类模式默认确认（TTY 输入 yes），非交互环境用 --yes',
+    flags: [{ name: 'yes', type: 'boolean', help: '跳过确认（非交互/脚本环境）' }],
     positional: '<id>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([], ctx.args)
+      const parsed = parseFlags([{ name: 'yes', type: 'boolean' }], ctx.args)
       const id = requirePositional(parsed.positionals, 0, 'id')
       assertNoExtraPositionals(parsed.positionals, 1)
+      await confirmRemove(ctx, parsed.flags.get('yes') === true, id)
       const hub = await ctx.hub()
-      printResult(ctx, await hub.post<PluginRemoveResult>(`/api/plugins/${encodeURIComponent(id)}/remove`))
+      const result = await hub.post<PluginRemoveResult>(
+        `/api/plugins/${encodeURIComponent(id)}/remove`,
+      )
+      if (ctx.json) {
+        printResult(ctx, result)
+        return
+      }
+      ctx.io.out(`已移除 ${result.pluginId}（安装记录 ${result.installId}；移除前${result.wasEnabled ? '启用中' : '已停用'}）\n`)
+      ctx.io.out(`已清理目录（Hub 主机）：${result.installPath}\n`)
     },
   })
 

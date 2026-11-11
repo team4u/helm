@@ -103,7 +103,7 @@ export function CounterScreen() {
 
 要点：
 - 外部插件 id 禁止 `builtin:` 前缀、禁止与已注册插件重名、不可自封 locked；放入目录后 `helm plugins rescan` 增量发现（或重启 Hub 自动发现），默认停用注册。
-- 受管安装（契约已定义、服务端实现待补）：`helm plugins install <source>` 支持 `npm:<spec>`、`git:<repo>@<ref>`、HTTPS Git URL 与本地路径四种 source；`helm plugins update <id>` 更新、`helm plugins remove <id>` 移除；安装记录（PluginPackageRecord）由安装器持久化，PluginSummary 附可选 managed 元数据。在实现落地前，仍用 init + rescan 手管目录。
+- 受管安装：`helm plugins install <source>` 支持 `npm:<spec>`、`git:<repo>@<ref>`、HTTPS Git URL 与本地路径四种 source（由 Hub 服务端解析获取；本地路径指 Hub 主机上的路径）；`helm plugins update <id>` 更新、`helm plugins remove <id> [--yes]` 移除（破坏性操作需确认，非交互用 --yes）；安装记录（PluginPackageRecord）由安装器持久化，PluginSummary 附可选 managed 元数据。安装启用即在 Hub 进程内执行可信插件代码，无沙箱，仅装可信来源。手管目录（init + rescan）方式继续可用。
 - 启用：`helm plugins enable my-plugin`；修改入口代码后用 `helm plugins reload my-plugin` 受控热重载（先静态自检预检，失败时旧实例保持不动，无需重启 Hub）。停用/启用仅重建已有定义的生命周期。停用或卸载遇在途任务会显式拒绝（409 plugin_has_live_tasks）。
 - 不要在自己的回合内重启 Hub；先完成结果交付，再安排进程重启。
 - 前端 React 组件（client.tsx）经 esbuild 动态编译，可 import react / react-dom / lucide-react / @helm/plugin-client（宿主共享实例，不打包第二份 React）。@helm/plugin-client 另共享无障碍底座组件：Switch、Select、MultiSelect、Checkbox、Tabs/TabsList/TabsTrigger/TabsContent、SegmentedControl、HelmIcon、ViewBoundary、Callout、Dialog/DialogPortal/DialogOverlay/DialogContent/DialogTitle/DialogDescription/DialogClose/DialogTrigger、MarkdownView、MarkdownText、CodeBlockView、CopyButton、PluginSlot——复用宿主样式，不要另造原生控件。

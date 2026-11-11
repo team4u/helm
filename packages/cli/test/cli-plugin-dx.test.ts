@@ -223,76 +223,168 @@ test('plugins rescan：POST /api/plugins/rescan', { timeout: 60_000 }, async () 
   }
 })
 
-test('plugins install/update/remove：POST 端点与请求体契约（含 URI 编码）', { timeout: 60_000 }, async () => {
+test('plugins install：source 透传、--enable 请求体、人类模式输出与空 source 拒绝', { timeout: 60_000 }, async () => {
   const npmSource = 'npm:helm-plugin-foo@^1.2.0'
-  const record = {
-    id: 'inst-1',
-    pluginId: 'helm-plugin-foo',
-    source: { kind: 'npm', raw: npmSource, spec: 'helm-plugin-foo@^1.2.0' },
-    installPath: '/data/plugins/helm-plugin-foo',
-    version: '1.2.0',
-    installedAt: 1_700_000_000_000,
-    updatedAt: 1_700_000_000_000,
-  }
-  const summary = {
-    id: 'helm-plugin-foo',
-    name: 'helm-plugin-foo',
-    locked: false,
-    enabled: false,
-    hooks: [],
-    actions: [],
-    tools: [],
-    managed: {
-      source: record.source,
-      installId: record.id,
-      installedVersion: record.version,
-      installedAt: record.installedAt,
+  const installBody = {
+    record: {
+      id: 'inst-1',
+      pluginId: 'helm-plugin-foo',
+      source: { kind: 'npm', raw: npmSource, spec: 'helm-plugin-foo@^1.2.0' },
+      installPath: '/data/plugins/helm-plugin-foo',
+      version: '1.2.0',
+      installedAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_000_000,
+    },
+    summary: {
+      id: 'helm-plugin-foo',
+      name: 'helm-plugin-foo',
+      locked: false,
+      enabled: false,
+      hooks: [],
+      actions: [],
+      tools: [],
+      managed: { installId: 'inst-1', installedVersion: '1.2.0', installedAt: 1_700_000_000_000, source: { kind: 'npm', raw: npmSource } },
     },
   }
   const hub = await startHub({
     'POST /api/plugins/install': (body) => {
-      assert.deepEqual(body, { source: npmSource })
-      return { body: { record, summary } }
+      const enable = (body as { enable?: boolean }).enable === true
+      return { body: { ...installBody, summary: { ...installBody.summary, enabled: enable } } }
     },
+  })
+  const dataDir = await fsp.mkdtemp(os.tmpdir() + '/helm-cli-dx-')
+  try {
+    // --enable：请求体携带 enable:true，人类模式回显已启用
+    const r1 = await run(['plugins', 'install', npmSource, '--enable'], hub.url, dataDir)
+    assert.equal(r1.code, 0, r1.err)
+    assert.deepEqual(hub.hits[0]!.body, { source: npmSource, enable: true })
+    assert.ok(r1.out.includes('helm-plugin-foo 1.2.0'))
+    assert.ok(r1.out.includes('已启用'))
+
+    // 缺省：请求体仅 source，回显停用与启用提示
+    const r2 = await run(['plugins', 'install', npmSource, '--json'], hub.url, dataDir)
+    assert.equal(r2.code, 0, r2.err)
+    assert.deepEqual(hub.hits[1]!.body, { source: npmSource })
+    const install = JSON.parse(r2.out) as { record: { id: string }; summary: { managed?: { installId: string } } }
+    assert.equal(install.record.id, 'inst-1')
+    assert.equal(install.summary.managed?.installId, 'inst-1')
+
+    // 空 source 显式拒绝（不请求 Hub）
+    const empty = await run(['plugins', 'install', '   '], hub.url, dataDir)
+    assert.notEqual(empty.code, 0)
+    assert.ok(empty.err.includes('source'))
+    assert.equal(hub.hits.length, 2)
+  } finally {
+    await hub.close()
+  }
+})
+
+test('plugins update：POST /api/plugins/:id/update（含 URI 编码）与人类模式输出', { timeout: 60_000 }, async () => {
+  const hub = await startHub({
     'POST /api/plugins/my%3Apl/update': () => ({
       body: {
-        record: { ...record, pluginId: 'my:pl', version: '1.3.0', updatedAt: 1_700_000_100_000 },
-        summary: { ...summary, enabled: true },
+        record: {
+          id: 'inst-1',
+          pluginId: 'my:pl',
+          source: { kind: 'npm', raw: 'npm:my-pl@^1.2.0', spec: 'my-pl@^1.2.0' },
+          installPath: '/data/plugins/my:pl',
+          version: '1.3.0',
+          installedAt: 1_700_000_000_000,
+          updatedAt: 1_700_000_100_000,
+        },
+        summary: { id: 'my:pl', name: 'my:pl', locked: false, enabled: true, hooks: [], actions: [], tools: [] },
         changed: true,
         previousVersion: '1.2.0',
       },
     }),
+  })
+  const dataDir = await fsp.mkdtemp(os.tmpdir() + '/helm-cli-dx-')
+  try {
+    const r = await run(['plugins', 'update', 'my:pl'], hub.url, dataDir)
+    assert.equal(r.code, 0, r.err)
+    assert.equal(hub.hits[0]!.path, '/api/plugins/my%3Apl/update')
+    assert.equal(hub.hits[0]!.method, 'POST')
+    assert.deepEqual(hub.hits[0]!.body, {})
+    assert.ok(r.out.includes('my:pl'))
+    assert.ok(r.out.includes('1.2.0 -> 1.3.0'))
+  } finally {
+    await hub.close()
+  }
+})
+
+test('plugins remove：--json 非交互；--yes 与非交互无 --yes 的确认行为', { timeout: 60_000 }, async () => {
+  const hub = await startHub({
     'POST /api/plugins/my%3Apl/remove': () => ({
       body: { pluginId: 'my:pl', installPath: '/data/plugins/my:pl', wasEnabled: true, installId: 'inst-2' },
     }),
   })
   const dataDir = await fsp.mkdtemp(os.tmpdir() + '/helm-cli-dx-')
   try {
-    const r1 = await run(['plugins', 'install', npmSource, '--json'], hub.url, dataDir)
+    // --json：机器模式非交互（不由 CLI 发确认问题），直接请求
+    const r1 = await run(['plugins', 'remove', 'my:pl', '--json'], hub.url, dataDir)
     assert.equal(r1.code, 0, r1.err)
-    const install = JSON.parse(r1.out) as { record: { id: string }; summary: { managed?: { installId: string } } }
-    assert.equal(install.record.id, 'inst-1')
-    assert.equal(install.summary.managed?.installId, 'inst-1')
-    assert.deepEqual(hub.hits[0]!.body, { source: npmSource })
-
-    const r2 = await run(['plugins', 'update', 'my:pl', '--json'], hub.url, dataDir)
-    assert.equal(r2.code, 0, r2.err)
-    const update = JSON.parse(r2.out) as { changed: boolean; previousVersion: string }
-    assert.equal(update.changed, true)
-    assert.equal(update.previousVersion, '1.2.0')
-    assert.equal(hub.hits[1]!.path, '/api/plugins/my%3Apl/update')
-
-    const r3 = await run(['plugins', 'remove', 'my:pl', '--json'], hub.url, dataDir)
-    assert.equal(r3.code, 0, r3.err)
-    const remove = JSON.parse(r3.out) as { pluginId: string; wasEnabled: boolean }
+    assert.equal(hub.hits[0]!.path, '/api/plugins/my%3Apl/remove')
+    const remove = JSON.parse(r1.out) as { pluginId: string; wasEnabled: boolean }
     assert.equal(remove.pluginId, 'my:pl')
     assert.equal(remove.wasEnabled, true)
-    assert.equal(hub.hits[2]!.path, '/api/plugins/my%3Apl/remove')
 
-    // 缺位置参数显式报错，不请求 Hub
-    const miss = await run(['plugins', 'install'], hub.url, dataDir)
+    // 人类模式 --yes：非交互放行，输出已移除与清理目录
+    const r2 = await run(['plugins', 'remove', 'my:pl', '--yes'], hub.url, dataDir)
+    assert.equal(r2.code, 0, r2.err)
+    assert.equal(hub.hits[1]!.path, '/api/plugins/my%3Apl/remove')
+    assert.ok(r2.out.includes('已移除 my:pl'))
+    assert.ok(r2.out.includes('/data/plugins/my:pl'))
+
+    // 人类模式无 --yes（测试环境 stdin 非 TTY）：显式拒绝且不请求 Hub
+    const r3 = await run(['plugins', 'remove', 'my:pl'], hub.url, dataDir)
+    assert.notEqual(r3.code, 0)
+    assert.ok(r3.err.includes('--yes'))
+    assert.ok(r3.err.includes('confirmation_required') || r3.err.includes('移除'))
+    assert.equal(hub.hits.length, 2, '未确认前不得请求 Hub')
+
+    // 缺位置参数与多余位置参数均拒绝（不请求 Hub）
+    const miss = await run(['plugins', 'remove'], hub.url, dataDir)
     assert.notEqual(miss.code, 0)
-    assert.equal(hub.hits.length, 3)
+    const extra = await run(['plugins', 'update', 'a', 'b'], hub.url, dataDir)
+    assert.notEqual(extra.code, 0)
+    assert.equal(hub.hits.length, 2)
+  } finally {
+    await hub.close()
+  }
+})
+
+test('plugins install/update/remove：四种 source 透传与 Hub 错误信封上拋', { timeout: 60_000 }, async () => {
+  const sources = [
+    'npm:helm-plugin-foo@^1.2.0',
+    'git:https://github.com/user/helm-plugin-foo.git@v1.2.0',
+    'https://github.com/user/helm-plugin-foo.git#v1.2.0',
+    '/srv/helm-plugins/foo',
+    './relative-plugin',
+  ]
+  const seen: string[] = []
+  const hub = await startHub({
+    'POST /api/plugins/install': (body) => {
+      seen.push((body as { source: string }).source)
+      return { status: 201, body: { ok: true } }
+    },
+    'POST /api/plugins/bad%3Apl/remove': () => ({
+      status: 404,
+      body: { error: { code: 'plugin_not_managed', message: '插件非受管安装' } },
+    }),
+  })
+  const dataDir = await fsp.mkdtemp(os.tmpdir() + '/helm-cli-dx-')
+  try {
+    for (const source of sources) {
+      const r = await run(['plugins', 'install', source, '--json'], hub.url, dataDir)
+      assert.equal(r.code, 0, `source=${source}: ${r.err}`)
+    }
+    assert.deepEqual(seen, sources.map((source) => source))
+
+    // Hub 结构化错误原样上拋（code/message 保留）
+    const err = await run(['plugins', 'remove', 'bad:pl', '--yes', '--json'], hub.url, dataDir)
+    assert.notEqual(err.code, 0)
+    const envelope = JSON.parse(err.err) as { error: { code: string; message: string } }
+    assert.equal(envelope.error.code, 'plugin_not_managed')
   } finally {
     await hub.close()
   }
