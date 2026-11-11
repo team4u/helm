@@ -207,15 +207,26 @@ export class PluginPackageManager {
   // --- 安装 -------------------------------------------------------------
 
   /**
-   * 安装插件包：解析 source -> staging 获取 -> doctor 全链 -> 原子进入受管
-   * 目录 -> 持久化记录 -> 注册（默认 disabled；enable: true 安装后启用，启用
-   * 失败保留诊断且不回滚安装）。失败清理 staging，不留半产物。
+   * 安装插件包：解析 source -> staging 获取 -> 运行时依赖 -> doctor 全链 ->
+   * 原子进入受管目录 -> 持久化记录 -> 注册（默认 disabled）。
+   *
+   * 事务语义（不留半产物、不破坏运行中实例）：
+   * - 重复安装防护：同 pluginId 已有受管记录或已注册实例时显式 409
+   *   plugin_package_already_installed（不静默覆盖；需更新请走 update）；
+   * - 目标目录占用防护：target 已存在（残留目录或同名其它插件目录）时
+   *   显式 409，不先删后装；
+   * - rename 进位后任何失败（注册 / 持久化）：删除新 target 回滚，staging
+   *   一并清理，绝不留未注册目录与已注册实例的撕裂状态；
+   * - enable: true 启用失败不回滚安装（设计允许，失败诊断经 enableError
+   *   透传），但安装/记录链本身失败时必须完全回滚；启用失败时插件保持
+   *   disabled，记录已持久化，重启后可正常加载与重试 enable。
    */
   async install(source: string, options: { enable?: boolean } = {}): Promise<PluginInstallResult> {
     const parsed = parsePluginSource(source, this.cwd);
     return this.enqueue(async () => {
       await this.ensureStagingRoot();
       const staging = await mkdtemp(join(this.stagingRoot(), 'pkg-'));
+      let inPlace = false; // payload 已 rename 进受管 target
       try {
         const payloadDir = await this.fetchIntoStaging(parsed, staging);
         // 运行时依赖先于 doctor：带 package.json 的包（npm/git/local 同权）在
@@ -234,40 +245,105 @@ export class PluginPackageManager {
             { source: parsed, staging: payloadDir, report },
           );
         }
+        // 重复安装防护（先于任何目录操作）：已有受管记录或已注册实例均拒绝
+        if (this.store.getRecord(pluginId) !== undefined) {
+          throw new HelmError(
+            'plugin_package_already_installed',
+            `插件 ${pluginId} 已受管安装（请用 update 更新，或先 remove 后重装）`,
+            409,
+            { pluginId },
+          );
+        }
+        if (this.host.listSummaries().some((s) => s.id === pluginId)) {
+          throw new HelmError(
+            'plugin_package_already_installed',
+            `插件 ${pluginId} 已注册（可能是手放置入目录的外部插件），拒绝重复安装`,
+            409,
+            { pluginId },
+          );
+        }
         const target = join(this.pluginsDir(), safeDirName(dirName));
         assertInsideDataDir(this.pluginsDir(), target);
-        await this.removeExistingDir(target);
+        if (await pathExists(target)) {
+          throw new HelmError(
+            'plugin_package_target_occupied',
+            `安装目标目录已存在（未知来源残留，请人工检查后处理）：${target}`,
+            409,
+            { pluginId, target },
+          );
+        }
         await mkdir(dirname(target), { recursive: true });
         await rename(payloadDir, target);
-        // 注册（默认 disabled；enable 选项在注册成功后走真实 enable 链）
-        const registered = await this.host.registerManagedPlugin(target, { enabled: false });
+        inPlace = true;
+        // 注册 -> 持久化：任一失败删除新 target 完全回滚（未注册目录不残留）
+        let registered: Awaited<ReturnType<PackageManagerHost['registerManagedPlugin']>>;
+        try {
+          registered = await this.host.registerManagedPlugin(target, { enabled: false });
+        } catch (err) {
+          await rm(target, { recursive: true, force: true }).catch(() => {});
+          inPlace = false;
+          throw new HelmError(
+            'plugin_package_install_failed',
+            `插件 ${pluginId} 安装后注册失败，已回滚（新目录已删除）：${err instanceof Error ? err.message : String(err)}`,
+            500,
+            {
+              pluginId,
+              target,
+              rolledBack: true,
+              cause: err instanceof Error ? { message: err.message, stack: err.stack } : undefined,
+            },
+          );
+        }
         let summary = registered.summary;
         let enableError: { message: string; code: string } | undefined;
         if (options.enable === true) {
           try {
             summary = await this.host.enableManagedPlugin(registered.pluginId);
           } catch (err) {
+            // 启用失败不回滚安装（设计允许）：插件保持 disabled，诊断透传；
+            // 注册与目录均已在位，记录持久化后重启可加载重试。
             enableError = {
               message: err instanceof Error ? err.message : String(err),
               code: err instanceof HelmError ? err.code : 'plugin_enable_failed',
             };
+            const fallback = this.host.listSummaries().find((s) => s.id === registered.pluginId);
+            summary = { ...registered.summary, ...(fallback !== undefined ? { enabled: fallback.enabled } : {}) };
           }
         }
-        const record = await this.store.save({
-          pluginId: registered.pluginId,
-          source: parsed,
-          installPath: target,
-          version: summary.version ?? '',
-          installedAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-        return {
-          record,
-          summary: this.attachManaged(summary, record),
-          ...(enableError !== undefined ? { enableError } : {}),
-        };
+        try {
+          const record = await this.store.save({
+            pluginId: registered.pluginId,
+            source: parsed,
+            installPath: target,
+            version: summary.version ?? '',
+            installedAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+          return {
+            record,
+            summary: this.attachManaged(summary, record),
+            ...(enableError !== undefined ? { enableError } : {}),
+          };
+        } catch (err) {
+          // 持久化失败：目录与注册实例均已存在但无记录——不可靠状态，整体回滚
+          await this.host.removeManagedPlugin(registered.pluginId).catch(() => {});
+          await rm(target, { recursive: true, force: true }).catch(() => {});
+          inPlace = false;
+          throw new HelmError(
+            'plugin_package_install_failed',
+            `插件 ${pluginId} 安装记录持久化失败，已回滚（实例注销、新目录删除）：${err instanceof Error ? err.message : String(err)}`,
+            500,
+            {
+              pluginId,
+              target,
+              rolledBack: true,
+              cause: err instanceof Error ? { message: err.message, stack: err.stack } : undefined,
+            },
+          );
+        }
       } finally {
-        // staging 全量清理（committed 后 payload 已 rename 离开；余下目录删除）
+        // staging 全量清理；回滚路径下 target 已单独删除，不经过 staging
+        void inPlace;
         await rm(staging, { recursive: true, force: true }).catch(() => {});
       }
     });
@@ -540,10 +616,6 @@ export class PluginPackageManager {
       throw commandError('install', cmd, args, result);
     }
     return result;
-  }
-
-  private async removeExistingDir(target: string): Promise<void> {
-    await rm(target, { recursive: true, force: true });
   }
 }
 

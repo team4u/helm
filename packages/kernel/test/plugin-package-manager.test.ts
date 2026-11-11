@@ -153,6 +153,10 @@ interface TestEnv {
   registered: Map<string, { enabled: boolean }>
   /** 模拟在途任务：命中 id 的 assertManagedPluginUpdateSafe 抛 409。 */
   updateBlockedIds: Set<string>
+  /** 模拟注册失败：命中 id 的 registerManagedPlugin 抛错。 */
+  registerFailIds: Set<string>
+  /** 模拟启用失败：命中 id 的 enableManagedPlugin 抛错。 */
+  enableFailIds: Set<string>
   close(): void
 }
 
@@ -164,12 +168,15 @@ function makeEnv(runner?: PackageRunner): TestEnv {
   const registered = new Map<string, { enabled: boolean }>()
   const summaries = new Map<string, { id: string; version?: string; enabled: boolean }>()
   const updateBlockedIds = new Set<string>()
+  const registerFailIds = new Set<string>()
+  const enableFailIds = new Set<string>()
   const host = {
     async registerManagedPlugin(dir: string) {
       hostCalls.push(`register:${dir}`)
-      // 真实读取受管目录入口并注册（真实 loader 链）——由集成测试覆盖；
-      // 这里模拟注册成功并记录目录。
       const id = readPluginIdFromDir(dir)
+      if (registerFailIds.has(id)) {
+        throw new HelmError('plugin_register_failed_simulated', `模拟注册失败：${id}`, 500, { pluginId: id })
+      }
       registered.set(id, { enabled: false })
       summaries.set(id, { id, version: readPluginVersionFromDir(dir), enabled: false })
       return { summary: toSummary(summaries, id), pluginId: id }
@@ -178,6 +185,9 @@ function makeEnv(runner?: PackageRunner): TestEnv {
       hostCalls.push(`enable:${pluginId}`)
       const entry = registered.get(pluginId)
       if (!entry) throw new HelmError('unknown_plugin', `未注册的插件：${pluginId}`, 404, { pluginId })
+      if (enableFailIds.has(pluginId)) {
+        throw new HelmError('plugin_enable_failed_simulated', `模拟启用失败：${pluginId}`, 500, { pluginId })
+      }
       entry.enabled = true
       summaries.set(pluginId, { ...(summaries.get(pluginId) ?? { id: pluginId }), enabled: true })
       return toSummary(summaries, pluginId)
@@ -223,6 +233,8 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     hostCalls,
     registered,
     updateBlockedIds,
+    registerFailIds,
+    enableFailIds,
     close() {
       rmSync(dataDir, { recursive: true, force: true })
       rmSync(cwd, { recursive: true, force: true })
@@ -512,6 +524,87 @@ test('运行时依赖先于 doctor：带 package.json 的 local 插件依赖在 
     assert.ok(!existsSync(join(src, 'node_modules')), '用户源目录不得被安装依赖')
     assert.ok(existsSync(join(env.dataDir, 'plugins', 'deps-plugin', 'node_modules')), '受管目录应携带补装的依赖')
     rmSync(srcParent, { recursive: true, force: true })
+  } finally {
+    env.close()
+  }
+})
+
+test('install 事务：注册失败删除新 target 回滚，不留未注册目录', { timeout: 60_000 }, async () => {
+  const env = makeEnv()
+  try {
+    const src = writeLocalPlugin(env.cwd, 'rollback-plugin')
+    env.registerFailIds.add('rollback-plugin')
+    await assert.rejects(
+      env.manager.install(src),
+      (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_install_failed',
+    )
+    const target = join(env.dataDir, 'plugins', 'rollback-plugin')
+    assert.ok(!existsSync(target), '注册失败后新 target 必须被删除')
+    assert.ok(!env.registered.has('rollback-plugin'), '不得残留已注册实例')
+    assert.equal(env.store.getRecord('rollback-plugin'), undefined, '不得残留记录')
+    // 解除失败后重装成功（残留已消，不阻挡）
+    env.registerFailIds.delete('rollback-plugin')
+    const ok = await env.manager.install(src)
+    assert.equal(ok.record.pluginId, 'rollback-plugin')
+  } finally {
+    env.close()
+  }
+})
+
+test('install 重复安装防护：已受管记录 / 已注册实例 / 目标目录占用均 409', { timeout: 60_000 }, async () => {
+  const env = makeEnv()
+  try {
+    const src = writeLocalPlugin(env.cwd, 'dup-plugin')
+    await env.manager.install(src)
+    // 同源重复安装：已有受管记录
+    await assert.rejects(
+      env.manager.install(src),
+      (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_already_installed' && err.status === 409,
+    )
+    // 不同源但同 id：同样拒绝
+    const src2 = writeLocalPlugin(join(env.cwd, 'alt'), 'dup-plugin')
+    await assert.rejects(
+      env.manager.install(src2),
+      (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_already_installed',
+    )
+    // 目标目录占用：手工放置同名目录（无记录无注册）
+    const occupied = join(env.dataDir, 'plugins', 'occupied-plugin')
+    mkdirSync(occupied, { recursive: true })
+    writeFileSync(join(occupied, 'stale.txt'), 'residue')
+    const src3 = writeLocalPlugin(env.cwd, 'occupied-plugin')
+    await assert.rejects(
+      env.manager.install(src3),
+      (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_target_occupied' && err.status === 409,
+    )
+    assert.equal(readFileSync(join(occupied, 'stale.txt'), 'utf8'), 'residue', '占用目录不得被删除')
+  } finally {
+    env.close()
+  }
+})
+
+test('install enable 失败：插件保持 disabled、enableError 事实正确、记录可重启加载', { timeout: 60_000 }, async () => {
+  const env = makeEnv()
+  try {
+    const src = writeLocalPlugin(env.cwd, 'enablefail-plugin')
+    env.enableFailIds.add('enablefail-plugin')
+    const result = await env.manager.install(src, { enable: true })
+    // 安装成功、启用失败：事实如实
+    assert.equal(result.record.pluginId, 'enablefail-plugin')
+    assert.equal(result.summary.enabled, false, '启用失败后插件必须保持 disabled')
+    assert.ok(result.enableError, 'enableError 必须透传')
+    assert.equal(result.enableError.code, 'plugin_enable_failed_simulated')
+    // 记录已持久化（重启可加载）：新建 store 实例从磁盘恢复
+    const reloaded = new PluginPackageManagerStore(new ConfigService(env.dataDir))
+    await reloaded.load()
+    const record = reloaded.getRecord('enablefail-plugin')
+    assert.ok(record, '启用失败不影响记录持久化，重启后仍可加载')
+    assert.equal(record.source.kind, 'local')
+    // 解除后可单独重试：同一插件重复 install 现在 409（更新走 update）
+    env.enableFailIds.delete('enablefail-plugin')
+    await assert.rejects(
+      env.manager.install(src),
+      (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_already_installed',
+    )
   } finally {
     env.close()
   }
