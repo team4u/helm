@@ -1,190 +1,90 @@
 # 安装与配置指南
 
-本文介绍 Helm 的环境要求、部署流程、端口规划与凭据隔离机制。
-
----
+本文覆盖从环境依赖、服务启动、管理员初始化到端口规划与凭据隔离的完整部署流程。按顺序执行即可得到一个可用的单机环境；远端节点的接入方式见 [EnvFabric 分布式执行底座](../architecture/envfabric.md)。
 
 ## 环境要求
 
-部署前请确保环境满足以下要求：
-
-| 组件 | 最低要求 | 说明 |
+| 组件 | 最低版本 | 说明 |
 | :--- | :--- | :--- |
-| **Node.js** | `>= 24.12.0` | 推荐使用 LTS 最新稳定版 |
-| **pnpm** | `>= 9.0.0` | 管理 Monorepo 依赖与脚本 |
-| **Git** | `>= 2.30.0` | 支撑 Worktree 沙箱隔离能力 |
-| **操作系统** | Linux / macOS / WSL2 | 支持所有主流 POSIX 环境 |
+| Node.js | `>= 24.12.0` | `package.json` 的 `engines` 字段强制约束 |
+| pnpm | `>= 9.0.0` | Monorepo 依赖与脚本管理 |
+| Git | `>= 2.30.0` | 支撑 Worktree 沙箱派生 |
+| 操作系统 | Linux / macOS / WSL2 | 主流 POSIX 环境 |
 
----
-
-## 部署与启动流程
-
-### 1. 获取代码与安装依赖
-
-克隆代码仓库并安装依赖：
+获取代码并安装依赖：
 
 ```bash
-git clone https://github.com/helm/helm.git
-cd helm
+git clone <仓库地址> && cd helm
 pnpm install
-```
-
-编译所有包产物：
-
-```bash
 pnpm build
 ```
 
----
+## 启动服务
 
-### 2. 启动服务
-
-系统提供两种启动方式。
-
-#### 方式一：前后端联合启动（推荐）
-
-该命令同时启动 Web 控制台与微内核服务：
+推荐一条命令同时启动 Web 前端与内核 Hub：
 
 ```bash
 HELM_PORT=3202 pnpm dev
 ```
 
-启动完成后：
-- 前端 Web 访问地址为：`http://localhost:3201`
-- 内核 Hub 监听地址为：`http://localhost:3202`
-
-#### 方式二：组件分离启动
-
-如需单独调试前端或内核，可分窗口启动：
+启动后 Web 控制台在 `http://localhost:3201`，Hub API 在 `http://localhost:3202`。需要分窗口调试时用组件分离启动：
 
 ```bash
-# 窗口 1：仅启动微内核 Hub
-HELM_PORT=3202 pnpm dev:kernel
-
-# 窗口 2：仅启动 Web 前端
-pnpm dev:web
+HELM_PORT=3202 pnpm dev:kernel   # 窗口 1：仅内核 Hub
+pnpm dev:web                     # 窗口 2：仅前端（需 Hub 已在 3202 运行）
 ```
 
----
+### 端口规划
 
-### 3. 初始化管理员与登录
+前端 dev 服务器固定占用 `3201`（`strictPort: true`），并把 `/api` 与 `/ws` 代理到 Hub；Hub 监听端口由 `HELM_PORT` 控制，约定取 `3202`。
 
-系统首次部署时需要初始化管理员账户：
+| 服务 | 端口 | 说明 |
+| :--- | :--- | :--- |
+| Web 前端（Vite dev） | `3201` | 代理 `/api` 与 `/ws` 到 Hub |
+| 内核 Hub | `3202` | `HELM_PORT` 约定值，承载 HTTP API 与 WebSocket |
+
+以下端口为本机其他系统预留，Helm 任何组件不得占用：`3000`（外部公共开发服务）、`3001` / `3002`（`botd`）、`3101` / `3102`（`botx`）。
+
+## 初始化管理员与登录
+
+首次部署需要初始化管理员密码（密码以 scrypt 哈希存储），随后登录 CLI 并检查状态：
 
 ```bash
-# 初始化管理员密码（密码采用 scrypt 哈希存储）
-helm setup --password your-secure-password
+pnpm helm setup --password '<your-admin-password>'   # 初始化管理员并写入 CLI 凭据
+pnpm helm login --password '<your-admin-password>'   # 后续登录（凭据已存在时）
+pnpm helm status --json                              # 验证：configured 与 authenticated 均为 true
 ```
 
-使用 CLI 登录并存储认证凭据：
-
-```bash
-helm login --password your-secure-password
-```
-
-检查系统与组件状态：
-
-```bash
-helm status --json
-```
-
----
-
-## 端口约定与网络规划
-
-系统采用严格的端口规划，防止端口冲突：
-
-```mermaid
-flowchart LR
-    Browser["浏览器客户端"] -->|访问 3201| Web["@helm/web (3201)"]
-    Web -->|代理 /api 与 /ws| Hub["@helm/kernel (3202)"]
-    CLI["@helm/cli (helm 命令)"] -->|直连 3202| Hub
-    NodeDaemon["@helm/node (helm-node)"] -->|反向 WebSocket /ws/node| Hub
-```
-
-| 服务名称 | 端口号 | 协议 | 说明 |
-| :--- | :--- | :--- | :--- |
-| **Web 前端** | `3201` | HTTP / WS | Vite 开发服务器，强制使用 `strictPort: true` |
-| **微内核 Hub** | `3202` | HTTP / WS | 内核核心服务，承载 API 与 WebSocket 网关 |
-
-### 端口规避约束
-
-系统严禁占用以下预留端口：
-- `3000`：外部公共开发服务端口。
-- `3001` / `3002`：历史 `botd` 服务预留端口。
-- `3101` / `3102`：历史 `botx` 服务预留端口。
-
----
+`setup` 与 `login` 均会把 `{ hubUrl, token }` 写入 `<HELM_DATA_DIR>/cli-token`（权限 `0600`），此后所有 `helm` 命令自动携带该凭据。
 
 ## 环境变量参考
 
-你可以通过环境变量配置内核与客户端行为：
-
-| 变量名 | 默认值 | 适用组件 | 功能说明 |
+| 变量 | 默认值 | 适用组件 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `HELM_PORT` | `3202` | `@helm/kernel` | Hub 服务监听端口 |
-| `HELM_HOST` | `127.0.0.1` | `@helm/kernel` | Hub 服务绑定监听地址 |
-| `HELM_DATA_DIR` | `~/.helm` | 全部包 | 数据持久化与凭据存储主目录 |
-| `HELM_HUB_URL` | `http://127.0.0.1:3202` | `@helm/cli` | CLI 访问的目标 Hub 地址 |
-| `HELM_TOKEN` | 无 | `@helm/cli` | 临时覆盖磁盘凭据的访问令牌 |
+| `HELM_PORT` | `3202` | `@helm/kernel` / `@helm/web` | Hub 监听端口（前端代理目标跟随该值） |
+| `HELM_HOST` | `127.0.0.1` | `@helm/kernel` | Hub 绑定地址；远端节点接入需显式 `0.0.0.0` 或反代 |
+| `HELM_DATA_DIR` | `~/.helm` | 全部包 | 数据与凭据主目录，与旧系统 `~/.botx`、`~/.botd` 完全隔离 |
+| `HELM_HUB_URL` | `http://127.0.0.1:3202` | `@helm/cli` | CLI 目标 Hub 地址；与 `cli-token` 同源绑定 |
+| `HELM_TOKEN` | 无 | `@helm/cli` | 显式令牌，优先级高于磁盘凭据（不触碰磁盘） |
+| `HELM_CONVERSATION_ID` | 无 | `@helm/cli` | 供所有 `--current` 标志解析当前会话 |
+| `HELM_NODE_ID` | 无 | `@helm/cli` | 供节点命令的 `--current` 解析目标节点 |
 
----
+凭据解析优先级为 `HELM_TOKEN` / `HELM_HUB_URL` 环境变量优先，其次 `cli-token` 文件。令牌与 `hubUrl` 同源绑定：当 `HELM_HUB_URL` 指向另一个 Hub 时，CLI 不会把旧 Hub 的令牌发送过去。
 
-## 凭据隔离存储机制
+## 凭据物理隔离
 
-Helm 采用三层物理凭据隔离，杜绝机密扩散。
+三类凭据分别由三个组件独占管理，物理上互不读写，文件权限恒为 `0600`（被外部放宽时读路径会自动收敛修复）：
 
-```mermaid
-flowchart TD
-    subgraph Storage["数据目录 (~/.helm/)"]
-        CliToken["cli-token (权限 0600)
-        仅存 CLI 登录态 { hubUrl, token }"]
-        CredFile["credentials.json (权限 0600)
-        仅存模型 Key 与插件私密配置"]
-        NodeFile["node.json (权限 0600)
-        受控节点身份与接入令牌"]
-    end
+| 凭据文件 | 归属组件 | 内容 | 写入来源 |
+| :--- | :--- | :--- | :--- |
+| `<dataDir>/cli-token` | `@helm/cli` 独占 | `{ hubUrl, token }` | `helm setup` / `helm login` |
+| `<dataDir>/credentials.json` | `@helm/kernel` 独占 | 模型 API Key（`providers.<id>.value`）与插件私密配置 | Hub 的 CredentialService |
+| 节点机 `<dataDir>/node.json` | `@helm/node` 独占 | 节点 ID 与接入令牌 | `helm-node connect <hubUrl> --token <token>` |
 
-    CLI["@helm/cli"] -->|独占读写| CliToken
-    Hub["@helm/kernel"] -->|独占管理| CredFile
-    Node["@helm/node"] -->|节点端读取| NodeFile
-```
+`cli-token` 的写入走独立文件锁 + 临时文件原子重命名；`credentials.json` 具备进程内队列与跨进程文件锁双层互斥；`node.json` 由 `helm-node doctor` 校验完整性。
 
-### 1. CLI 登录凭据 (`cli-token`)
+### 边界与约束
 
-- **存储路径**：`<HELM_DATA_DIR>/cli-token`。
-- **文件权限**：严格限制为 `0600`。
-- **隔离规则**：
-  - 由 `helm setup` 与 `helm login` 命令写入。
-  - 仅包含 `{ hubUrl, token }`。
-  - 启用同源绑定，仅向匹配的 `hubUrl` 发送令牌。
-  - CLI 绝不读取或修改模型密钥文件。
-  - 通过 `cli-token.lock` 实现跨进程排他写入。
-
-### 2. 服务端机密库 (`credentials.json`)
-
-- **存储路径**：`<HELM_DATA_DIR>/credentials.json`。
-- **文件权限**：严格限制为 `0600`。
-- **隔离规则**：
-  - 由 Hub 的 `CredentialService` 独占管理。
-  - 存储模型 API Key（`providers.<id>.value`）。
-  - 存储插件私密配置（`pluginSecrets.<pluginId>.<key>`）。
-  - 启动时与非机密配置 `config.json` 在内存合并。
-  - 具备进程内队列与跨进程文件锁双层互斥。
-
-### 3. 受控节点身份 (`node.json`)
-
-- **存储路径**：节点机器数据目录下的 `node.json`。
-- **文件权限**：严格限制为 `0600`。
-- **隔离规则**：
-  - 在节点执行 `helm-node connect <hubUrl> --token <token>` 时生成。
-  - 记录节点 ID 与连接凭证。
-  - 守护进程读取该文件反向接入 `/ws/node` 通道。
-  - `helm-node doctor` 命令会自动验证文件完整性。
-
-### 4. 机密脱敏边界说明
-
-系统通过 `SecretStash` 机制管理会话机密。
-机密内容不会写入数据库，也不会进入模型上下文。
-受管 Shell 命令与同进程插件拥有本地宿主权限，可访问本地环境。
-文档如实记录该安全边界，不作夸大承诺。
+- `SecretStash` 承诺「不落库、不进模型上下文」，但任意 shell 命令与进程内插件拥有本地宿主权限，天然可读环境变量与内存——不承诺对它们的零泄漏。
+- CLI 绝不读取或修改模型密钥文件，Hub 绝不接触 `cli-token`，节点身份与 Hub 侧令牌体系彼此独立。
+- 数据目录遵循隔离约定：只读写 `~/.helm`（或 `HELM_DATA_DIR` 覆盖值），不得触碰旧系统运行数据。

@@ -177,6 +177,17 @@ export function truncateUtf8Tail(text: string, maxBytes: number): string {
 
 export type { ArtifactMetadata }
 
+/**
+ * 产物相对路径（POSIX 分隔符，落库与跨平台读取的唯一形态）。
+ *
+ * 绝不能经 path.join 生成：Windows 会得到反斜杠分隔的相对路径，而
+ * resolveStoredPath 的分段校验按 `/` 切分并显式拒绝反斜杠（防穿越），
+ * 于是所有产物在同一平台上写入后立刻读不出来。
+ */
+function artifactRelPath(conversationId: number, storedName: string): string {
+  return `artifacts/${String(conversationId)}/${storedName}`
+}
+
 export class ArtifactService {
   constructor(
     private readonly dataDir: string,
@@ -233,7 +244,7 @@ export class ArtifactService {
       id,
       conversationId,
       name,
-      path: join('artifacts', String(conversationId), storedName),
+      path: artifactRelPath(conversationId, storedName),
       mimeType,
       size,
       createdAt: Date.now(),
@@ -284,7 +295,7 @@ export class ArtifactService {
       id,
       conversationId,
       name: safeName,
-      path: join('artifacts', String(conversationId), storedName),
+      path: artifactRelPath(conversationId, storedName),
       mimeType,
       size,
       createdAt: Date.now(),
@@ -365,7 +376,7 @@ export class ArtifactService {
       id: randomUUID(),
       conversationId,
       name: fileName,
-      path: join('artifacts', String(conversationId), fileName),
+      path: artifactRelPath(conversationId, fileName),
       mimeType: 'text/plain',
       size: totalBytes,
       createdAt: Date.now(),

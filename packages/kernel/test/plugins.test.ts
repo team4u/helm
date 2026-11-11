@@ -25,6 +25,7 @@ import {
   type PluginHostBackend,
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
+import { pluginDataDirName } from '../src/plugins/plugin-dir-name.js';
 import type { UiRegistry, ClientModuleOptions } from '../src/plugins/ui-registry.js';
 
 // ---------------------------------------------------------------------------
@@ -1135,7 +1136,9 @@ test('ctx.dataDir 是插件专属子目录 join(root, plugins, id) 且已创建'
       seen = ctx.dataDir;
     },
   });
-  assert.equal(seen, join(dataDir, 'plugins', 'builtin:sub'));
+  // id 中的 `:` 落盘时转义为 %3A（Windows NTFS 交替数据流红线），
+  // 目录名经 pluginDataDirName 唯一权威点计算。
+  assert.equal(seen, join(dataDir, 'plugins', pluginDataDirName('builtin:sub')));
   assert.ok(existsSync(seen!), '插件数据目录应在注册时创建');
 });
 

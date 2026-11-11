@@ -1,133 +1,65 @@
 # Helm 文档中心
 
-Helm 是轻量持久微内核多智能体编排系统。
-系统集成持久状态机、确定性编排引擎与跨平台节点底座。
-本文档中心提供完整的系统指南、开发手册与运维参考。
+Helm 是极简持久微内核多智能体编排系统：内核只保留持久会话、跨平台节点执行底座、Model/Auth 与插件宿主四块通用机制，编排引擎、角色资产、终端协同等一切业务能力由插件提供。本文档中心是全部文档的总索引，先按角色选读入口，再按目录深入。
 
----
+## 按角色快速入门
 
-## 学习路径导航
+**初次使用者**：读[新手起步导览](getting-started/index.md)建立概念地图，按[安装与配置指南](getting-started/installation.md)跑起 Hub 与 Web 控制台，再用[编写首个工作流](getting-started/first-workflow.md)完成第一次确定性编排。
 
-根据你的目标选择对应的学习路线。
+**编排开发者**：从[原生 JavaScript DSL 手册](workflows/dsl-guide.md)掌握 `agent` / `parallel` / `pipeline` / `action` 原语；需要代码沙箱与验收时读 [Git Worktree 与代码门禁](workflows/worktree-and-gate.md)，需要断点续跑与恢复语义时读[状态流水与故障恢复](workflows/journaling-recovery.md)。
 
-### 1. 初学者路径
+**插件开发者**：先读[极简微内核哲学](architecture/overview.md)与[生命周期 Hook 与全界面扩展点](architecture/extension-points.md)理解机制边界，再读[插件系统设计与契约](plugins/overview.md)和[自定义插件开发实战](plugins/plugin-development.md)上手 `definePlugin(ctx)`。
 
-适合首次接触 Helm 的工程师。
-你可以快速建立本地开发环境并执行第一个多智能体工作流。
-
-```mermaid
-flowchart LR
-    A["环境安装与配置"] --> B["登录与状态检查"]
-    B --> C["启动首个会话"]
-    C --> D["执行确定性工作流"]
-```
-
-1. [新手起步导览](getting-started/index.md)：阅读学习目标与核心概念
-2. [环境准备与部署](getting-started/installation.md)：安装 Node.js、pnpm 与启动服务
-3. [编写首个工作流](getting-started/first-workflow.md)：执行原生 JavaScript 编排脚本
-
----
-
-### 2. 编排开发者路径
-
-适合需要构建多智能体工程任务的开发者。
-你可以掌握确定性编排、代码沙箱隔离与断点恢复机制。
-
-```mermaid
-flowchart LR
-    A["原生 JS DSL 语法"] --> B["Worktree 沙箱隔离"]
-    B --> C["代码门禁验证"]
-    C --> D["流水记录与断点续跑"]
-```
-
-1. [原生 JavaScript DSL 手册](workflows/dsl-guide.md)：学习 agent、parallel 与 phase 接口
-2. [Git Worktree 与代码门禁](workflows/worktree-and-gate.md)：使用独立工作树与自动化门禁
-3. [状态流水与故障恢复](workflows/journaling-recovery.md)：掌握执行流水与安全断点续跑
-
----
-
-### 3. 插件开发者路径
-
-适合需要扩展 Helm 功能的系统开发者。
-你可以通过生命周期 Hook 与全界面扩展点开发全功能插件。
-
-```mermaid
-flowchart LR
-    A["微内核架构哲学"] --> B["Hook 与 UI 扩展点机制"]
-    B --> C["插件契约 definePlugin"]
-    C --> D["交付前后端扩展"]
-```
-
-1. [极简微内核哲学](architecture/overview.md)：理解零业务角色硬编码设计
-2. [生命周期 Hook 与全界面扩展点](architecture/extension-points.md)：掌握后端生命周期 Hook 与前端界面扩展
-3. [插件系统设计与契约](plugins/overview.md)：掌握 `definePlugin(ctx)` 强类型规范
-4. [自定义插件开发实战](plugins/plugin-development.md)：开发包含 Action 与前端视图的完整插件
-
----
-
-### 4. 运维部署路径
-
-适合负责 Helm 集群部署与节点管理的运维工程师。
-你可以配置跨平台执行织网、守护进程服务与凭据隔离。
-
-```mermaid
-flowchart LR
-    A["网络与端口规划"] --> B["凭据与隔离存储"]
-    B --> C["EnvFabric 节点连接"]
-    C --> D["系统守护进程管理"]
-```
-
-1. [安装与配置指南](getting-started/installation.md)：掌握端口约定、环境变量与凭据隔离
-2. [EnvFabric 分布式执行底座](architecture/envfabric.md)：理解反向 WebSocket 与安全原子升级
-3. [CLI 全量命令参考手册](cli/reference.md)：查询 `helm` 与 `helm-node` 运维命令
-
----
+**运维与节点管理**：按[安装与配置指南](getting-started/installation.md)规划端口与凭据，读 [EnvFabric 分布式执行底座](architecture/envfabric.md)了解远端节点零 SSH 接入，日常操作查 [CLI 全量命令参考手册](cli/reference.md)。
 
 ## 文档索引
 
-### 新手入门 (Getting Started)
+### 新手入门
 
 | 文档 | 说明 |
 | :--- | :--- |
-| [导览与学习路径](getting-started/index.md) | 快速了解文档结构与起步步骤 |
-| [安装与部署配置](getting-started/installation.md) | 环境依赖、服务启动、端口约定与凭据隔离 |
-| [编写首个工作流](getting-started/first-workflow.md) | 从零编写并执行确定性多智能体编排 |
+| [新手起步导览](getting-started/index.md) | 核心概念速查与三步上手路径 |
+| [安装与配置指南](getting-started/installation.md) | 环境依赖、服务启动、端口规划、环境变量与凭据隔离 |
+| [编写首个工作流](getting-started/first-workflow.md) | 从选定目标会话到运行、观察、恢复 `demo` 工作流 |
 
-### 架构与原理 (Architecture)
+### 架构与原理
 
 | 文档 | 说明 |
 | :--- | :--- |
 | [极简微内核哲学](architecture/overview.md) | 零业务角色硬编码与五包单向依赖设计 |
-| [生命周期 Hook 与全界面扩展点](architecture/extension-points.md) | 后端生命周期 Hook 与前端界面扩展详解 |
-| [EnvFabric 分布式执行底座](architecture/envfabric.md) | 零 SSH 反向 WebSocket 连接与受管 Shell |
-| [pi-durable 持久会话状态机](architecture/pi-durable.md) | 五态状态机、SQLite/FTS5 与 AskDoc 乐观锁 |
+| [生命周期 Hook 与全界面扩展点](architecture/extension-points.md) | 后端可组合 Hook 与前端全界面插槽契约 |
+| [EnvFabric 分布式执行底座](architecture/envfabric.md) | 反向 WebSocket 连接、受管 Shell 与安全自升级 |
+| [pi-durable 持久会话状态机](architecture/pi-durable.md) | 五态状态机、SQLite/FTS5、机密隔离与 CAS 乐观锁 |
 
-### 确定性工作流 (Workflows)
-
-| 文档 | 说明 |
-| :--- | :--- |
-| [原生 JavaScript DSL 手册](workflows/dsl-guide.md) | `agent`、`parallel`、`phase` 编排语法规范 |
-| [Git Worktree 与自动化门禁](workflows/worktree-and-gate.md) | 代码工作树隔离机制与自动化 Gate 验收 |
-| [状态流水与故障恢复](workflows/journaling-recovery.md) | Journaling 执行流水、调用复用与断点续跑 |
-
-### 插件系统与内置生态 (Plugins)
+### 确定性工作流
 
 | 文档 | 说明 |
 | :--- | :--- |
-| [插件系统设计与契约](plugins/overview.md) | 宿主设计、Action 自动映射与在途任务保护 |
-| [确定性编排 (Workflow)](workflows/dsl-guide.md) | `builtin:workflow` 插件与原生 JS DSL 编排 |
-| [角色与技能底座 (Profile)](plugins/profile.md) | 角色资产、动态技能目录与跨 Profile `@` 点名协同 |
-| [长期记忆 (Memory)](plugins/memory.md) | 按 Profile 管理的长期记忆、开关与更新工具 |
-| [Herdr 终端协同主控 (Herdr)](plugins/herdr.md) | 终端 CLI Agent 调度、文件交接与原地自愈 |
-| [SuperAgent 双层中枢 (SuperAgent)](plugins/superagent.md) | 零阻塞路由、驻留 Worker 与两层看门狗巡检 |
-| [自动化触发器 (Triggers)](plugins/triggers.md) | Cron 定时编排与 Webhook 签名入站验签 |
-| [动态模型网关 (Magpie)](plugins/magpie.md) | 原生多协议分发与动态模型目录热重载 |
-| [自定义插件开发实战](plugins/plugin-development.md) | 前后端全栈插件开发、调试与打包发布 |
+| [原生 JavaScript DSL 手册](workflows/dsl-guide.md) | 执行模型、`meta` 约束与全部原语的权威参考 |
+| [Git Worktree 与代码门禁](workflows/worktree-and-gate.md) | WorktreeIsolation 生命周期、租约、Gate 验收与安全清理 |
+| [状态流水与故障恢复](workflows/journaling-recovery.md) | Journal 记账、前缀重放、不确定性判定与两阶段恢复 |
 
-### 命令手册与规范 (Reference & Conventions)
+### 插件系统与内置生态
 
 | 文档 | 说明 |
 | :--- | :--- |
-| [CLI 全量命令参考手册](cli/reference.md) | `helm` 与 `helm-node` 命令行参考字典 |
-| [Web 导航与 URL Hash 约定](conventions/web-navigation.md) | 前端路由深链、分屏与状态恢复规范 |
-| [历史设计与交接归档](archive/README.md) | 早期版本架构演进与阶段性开发验收记录 |
+| [插件系统设计与契约](plugins/overview.md) | 宿主架构、`definePlugin(ctx)` 契约与动作五端映射 |
+| [工作流编排插件](plugins/workflow.md) | `builtin:workflow`：三个模型工具、六个动作与运行面板 |
+| [角色与技能底座](plugins/profile.md) | `builtin:profile`：角色资产、技能目录与 `load_skill` |
+| [长期记忆](plugins/memory.md) | `builtin:memory`：按 Profile 管理的 `MEMORY.md` 与开关 |
+| [Herdr 终端协同](plugins/herdr.md) | `builtin:herdr`：终端 CLI Agent 调度、文件交接与远程审批 |
+| [SuperAgent 双层中枢](plugins/superagent.md) | `builtin:superagent`：零阻塞路由、驻留 Worker 与看门狗 |
+| [自动化触发器](plugins/triggers.md) | `builtin:triggers`：Cron 与 Webhook 入站连接器 |
+| [动态模型网关](plugins/magpie.md) | `builtin:magpie`：多协议分发与模型目录热重载 |
+| [JSON 卡片渲染](plugins/json-render.md) | `builtin:json-render`：声明式 JSON Spec 渲染原语与技能 |
+| [Mermaid 图表渲染](plugins/mermaid.md) | `builtin:mermaid`：聊天内 Mermaid 围栏渲染 |
+| [自定义插件开发实战](plugins/plugin-development.md) | 前后端全栈插件开发、调试与发布 |
+
+### 命令手册与开发规范
+
+| 文档 | 说明 |
+| :--- | :--- |
+| [CLI 全量命令参考手册](cli/reference.md) | `helm` 与 `helm-node` 全量命令字典（含 `--json` 与 `--current`） |
+| [Web 前端设计系统与开发约定](conventions/web-frontend.md) | 视图形态分级、Radix 原语与移动端规范 |
+| [Web 导航与 URL Hash 约定](conventions/web-navigation.md) | 深链、分屏与刷新恢复的路由规范 |
+| [历史设计与交接归档](archive/README.md) | 早期架构演进与阶段性验收记录（只读） |

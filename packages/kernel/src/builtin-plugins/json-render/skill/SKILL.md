@@ -19,11 +19,11 @@ managedByPlugin: builtin:json-render
 树状简写（推荐）：`{ "component": "Card", "title": "...", "children": [...] }`，children 数组可包含节点或字符串（字符串转 Text body）。
 扁平形态：`{ "root": "id", "elements": { "id": { "type": "Card", "props": {}, "children": ["childId"] } } }`，子节点须在 elements 中定义。
 
-聊天 UI 块使用独立 Spec，没有所属插件，不能订阅插件文档，也不注入 composer/screen 控制函数；当前协议没有通用 `$state` 表单 store，输入组件通过各自 action 的 `{$value}` 提交；表格行内 `{$row}` 同理。插件视图（screen/settings.panel 等声明式轨道）可订阅插件文档，求值域多出 `{$sessionDocs.<name>.<path>}`。
+聊天 UI 块使用独立 Spec，没有所属插件，不能订阅插件文档，也不注入 composer/screen 控制函数；当前协议没有通用 `$state` 表单 store，输入组件通过各自 action 的 `{$value}` 提交；表格行内 `{$row}` 同理。
 
 ## 表达式求值（$docs / $sessionDocs / $data / $row / $value）
 
-- `{$docs.<docName>.<path>}` / `{$data.<path>}`：插件公开 doc 与调用时传入的 data；插件视图另有 `{$sessionDocs.<name>.<path>}`（当前会话的公开会话文档）。
+- `{$docs.<docName>.<path>}` / `{$sessionDocs.<name>.<path>}` / `{$data.<path>}`：公开全局文档、当前会话公开文档与调用时传入的 data。
 - 整个属性值恰好为单个 `{...}` 表达式时保持原始 JS 类型（number/boolean/array/object）；嵌在长文本中则为字符串插值。
 - `{$row.<field>}` 仅在 Table 的 rowActions 内可用；`{$value}` 在表单组件的 action 内可用（提交值）。
 

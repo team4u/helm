@@ -29,6 +29,7 @@ import {
   type PluginHostBackend,
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
+import { pluginDataDirName } from '../src/plugins/plugin-dir-name.js';
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -308,7 +309,7 @@ test('getEnabled 抛错：注册零残留（注册表/数据目录/钩子/托管
   await rejectsCode(host.register(fullPlugin('p:boom', [])), 'io_broken');
 
   assert.equal(host.list().length, 0, '注册表零残留');
-  assert.equal(existsSync(join(dataDir, 'plugins', 'p:boom')), false, '插件数据目录未创建');
+  assert.equal(existsSync(join(dataDir, 'plugins', pluginDataDirName('p:boom'))), false, '插件数据目录未创建');
   assert.deepEqual(events.filter((e) => e.startsWith('manage:')), [], '未获取任何宿主资源');
   const r = await host.runHook('trigger', triggerPayload());
   assert.equal(r.action, 'continue', '钩子管道零残留');
@@ -348,7 +349,7 @@ test('getEnabled 返回非布尔值：显式拒绝（绝不 truthy 猜测），�
   const err = await rejectsCode(host.register(fullPlugin('p:lie', [])), 'plugin_enabled_state_invalid');
   assert.equal(err.status, 500);
   assert.equal(host.list().length, 0);
-  assert.equal(existsSync(join(dataDir, 'plugins', 'p:lie')), false);
+  assert.equal(existsSync(join(dataDir, 'plugins', pluginDataDirName('p:lie'))), false);
   assert.deepEqual(events.filter((e) => e.startsWith('manage:')), []);
 });
 

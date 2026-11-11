@@ -29,6 +29,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError, type PluginDefinition, type WorkflowRunSummary } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
 import { readJournal, type WorkflowJournalEntry } from '../src/builtin-plugins/workflow/engine/journal.js'
+import { pluginDataDirName } from '../src/plugins/plugin-dir-name.js'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -209,7 +210,7 @@ test('env.exec2: 普通插件动作 preflight invalid input 不锁死 resume；�
     assert.deepEqual(env.echoCalls, [], '非法输入不执行 handler')
 
     // 账本（引擎私有 journal）不得含 action_started，且无 non-idempotent uncertain。
-    const journalPath = join(env.dataDir, 'plugins', 'builtin:workflow', 'artifacts', String(env.convId), `workflow-${started.id}.jsonl`)
+    const journalPath = join(env.dataDir, 'plugins', pluginDataDirName('builtin:workflow'), 'artifacts', String(env.convId), `workflow-${started.id}.jsonl`)
     assert.ok(existsSync(journalPath), `journal 应存在：${journalPath}`)
     const journal = readJournal(journalPath)
     assert.equal(journal.actionUncertain, false, 'preflight 失败不得留下 uncertain')
@@ -296,7 +297,7 @@ test('env.exec3: 插件声明 idempotent: true 的动作在账本生效（resume
     assert.equal(handlerRuns, 1)
 
     // 账本失败终态行必须带 idempotent: true（定义端声明经 prepareAction 传递）。
-    const journalPath = join(dataDir, 'plugins', 'builtin:workflow', 'artifacts', String(ROOT_CONVERSATION_ID), `workflow-${first.id}.jsonl`)
+    const journalPath = join(dataDir, 'plugins', pluginDataDirName('builtin:workflow'), 'artifacts', String(ROOT_CONVERSATION_ID), `workflow-${first.id}.jsonl`)
     const journal = readJournal(journalPath)
     const failedAction = journal.entries.find((e): e is Extract<WorkflowJournalEntry, { type: 'action' }> => e.type === 'action' && !e.ok)
     assert.ok(failedAction, '失败终态行存在')

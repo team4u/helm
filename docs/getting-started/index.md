@@ -1,61 +1,44 @@
 # 新手起步导览
 
-欢迎使用 Helm。
-本专题帮助你在数分钟内完成环境搭建并理解核心工作方式。
-
----
-
-## 为什么选择 Helm
-
-传统 Agent 框架多采用黑盒对话循环或复杂的重型图 DSL。
-Helm 采用微内核架构，专注于工程任务的确定性与持久性。
-
-- **状态全量持久化**：会话采用 `pi-durable` 五态状态机，自动落盘 SQLite 与 FTS5。
-- **编排确定可审计**：使用原生 JavaScript 编写工作流，执行流水完整记录。
-- **跨机零 SSH 依赖**：通过 `EnvFabric` 与反向 WebSocket 连接受控节点。
-- **终端真实协同**：调度物理终端 CLI Agent，支持结构化文件交接与原地自愈。
-- **接口与命令行同权**：所有 HTTP 接口均提供对等的 `helm` CLI 命令与 `--json` 输出。
-
----
+本页帮助你用最短时间建立 Helm 的概念地图，并给出一条从安装到运行首个工作流的最短路径。各概念只做定位级介绍，机制细节由链接文档承接。
 
 ## 核心概念速查
 
-在开始之前，了解以下五个核心概念：
-
 | 概念 | 说明 |
 | :--- | :--- |
-| **微内核 (Kernel)** | 极简系统核心，零业务角色硬编码，统一托管插件与执行底座。 |
-| **持久会话 (Conversation)** | 绑定 `(nodeId, cwd)` 物理坐标的状态机，支持中断续接与全文检索。 |
-| **确定性工作流 (Workflow)** | 原生 JavaScript 编写的编排脚本，由 `builtin:workflow` 插件驱动，支持 `agent()` 与 `parallel()` 调度。 |
-| **受控节点 (Node)** | 部署 `helm-node` 守护进程的计算机器，反向接入 Hub 承载命令执行。 |
-| **凭据隔离 (Credentials)** | CLI 登录态、服务端模型密钥与节点身份采用物理文件隔离存储。 |
+| **内核** | `@helm/kernel` 只保留持久会话、节点执行底座、Model/Auth 与插件宿主四块机制，零业务角色硬编码 |
+| **会话 Conversation** | 绑定 `(nodeId, cwd)` 物理坐标的持久状态机：全量落盘 SQLite/FTS5，支持中断续接与全文检索 |
+| **角色 Profile** | 由 `builtin:profile` 管理的角色资产：每个 `profileId` 对应独立的系统提示词与可用技能目录 |
+| **工作流 Workflow** | 原生 JavaScript 编排脚本，由 `builtin:workflow` 插件在 Worker + `node:vm` 沙箱中确定性执行 |
+| **节点 Node** | 承载命令执行的计算机器：内建 `local` 节点，远端机器部署 `helm-node` 守护进程后经反向 WebSocket 接入 |
+| **插件 Plugin** | 经 `definePlugin(ctx)` 声明的扩展单元：注册工具、动作、Hook 与界面贡献，动作自动映射为 HTTP 端点与 CLI 命令 |
 
----
+一个直观的分工例子：会话说「在哪个节点的哪个目录工作」，Profile 决定「这个会话由什么角色扮演、会什么技能」，工作流决定「一批子智能体按什么脚本协作」，而这三者的具体实现都不在内核里。
 
-## 新手起步路线图
+## 三步上手
 
-建议按照以下顺序阅读本专题文档：
+**第一步：安装与初始化**。按[安装与配置指南](installation.md)确认 Node.js 24.12+、pnpm 9+ 与 Git 2.30+，然后启动前后端（`HELM_PORT=3202 pnpm dev`），初始化管理员并完成 CLI 登录。完成后 Web 控制台在 `3201` 端口可用，内核 Hub 在 `3202` 端口可用。
 
-```mermaid
-flowchart TD
-    Step1["1. 安装与部署配置"] --> Step2["2. 首次初始化与登录"]
-    Step2 --> Step3["3. 编写首个工作流"]
-    Step3 --> Step4["4. 检查执行流水与产出"]
+**第二步：会话与交互**。会话是 Helm 的基本交互单元。既可以在 Web 控制台直接对话，也可以用 CLI 驱动：
+
+```bash
+pnpm helm conversations list --json        # 查看现有会话
+pnpm helm send <id> "分析这个仓库的测试结构" --wait
 ```
 
-1. **[环境准备与部署配置](installation.md)**
-   - 检查 Node.js 与 pnpm 版本要求。
-   - 启动 Hub 内核服务与 Web 控制台。
-   - 完成管理员账户初始化与 CLI 登录。
-   - 理解多端凭据物理隔离机制。
+**第三步：首个工作流**。新工作流必须指定目标会话。选定或创建会话后，运行仓库自带的演示脚本并观察执行：
 
-2. **[编写首个工作流](first-workflow.md)**
-   - 学习原生 JavaScript 编排 DSL 基础结构。
-   - 编写包含并行翻译与汇总的轻量工作流。
-   - 通过 CLI 与 Web 检查器执行工作流。
-   - 观察阶段进度、日志时间线与产出结果。
+```bash
+pnpm helm conversations list --json
+pnpm helm workflows run demo/hello-orchestra.workflow.js \
+  --args '{"word":"开源"}' --conversation-id 1 --wait --json
+```
 
-3. **进阶学习指引**
-   - 深入理解架构：阅读 [微内核架构哲学](../architecture/overview.md) 与 [扩展点详解](../architecture/extension-points.md)。
-   - 编写高级编排：阅读 [原生 JS DSL 手册](../workflows/dsl-guide.md) 与 [Git Worktree 隔离](../workflows/worktree-and-gate.md)。
-   - 扩展系统功能：阅读 [插件系统设计](../plugins/overview.md) 与 [自定义插件开发](../plugins/plugin-development.md)。
+完整过程（含 Web 界面观察与断点恢复）见[编写首个工作流](first-workflow.md)。
+
+## 进阶阅读
+
+- **架构**：[极简微内核哲学](../architecture/overview.md)、[生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)、[EnvFabric 分布式执行底座](../architecture/envfabric.md)、[pi-durable 持久会话状态机](../architecture/pi-durable.md)
+- **编排**：[原生 JavaScript DSL 手册](../workflows/dsl-guide.md)、[Git Worktree 与代码门禁](../workflows/worktree-and-gate.md)、[状态流水与故障恢复](../workflows/journaling-recovery.md)
+- **插件**：[插件系统设计与契约](../plugins/overview.md)、[自定义插件开发实战](../plugins/plugin-development.md)
+- **参考**：[CLI 全量命令参考手册](../cli/reference.md)

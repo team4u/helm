@@ -37,11 +37,12 @@ afterEach(() => {
 /** node 环境无 Blob URL 模块加载：转独一 data URL，保证模块按次真实求值（含重试）。 */
 let moduleSeq = 0
 let nextDataUrl: string | undefined
+let nextCode = ''
 let nextHash = ''
 let objectUrlCalls = 0
 
 function installDataUrlModuleServing(): void {
-  globalThis.fetch = async () => new Response('', { headers: { 'x-helm-client-hash': nextHash } })
+  globalThis.fetch = async () => new Response(nextCode, { headers: { 'x-helm-client-hash': nextHash } })
   URL.createObjectURL = (() => {
     objectUrlCalls++
     const url = nextDataUrl
@@ -54,6 +55,7 @@ function installDataUrlModuleServing(): void {
 
 function serveModule(code: string, hash: string): void {
   nextHash = hash
+  nextCode = code
   nextDataUrl = `data:text/javascript;charset=utf-8,${encodeURIComponent(`/*helm-css-${++moduleSeq}*/\n${code}`)}`
 }
 

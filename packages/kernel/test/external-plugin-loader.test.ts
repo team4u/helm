@@ -27,6 +27,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
 import { loadExternalPlugins } from '../src/plugins/external-loader.js'
+import { pluginDataDirName } from '../src/plugins/plugin-dir-name.js'
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -131,8 +132,9 @@ test('约定入口 index.mjs 的外部插件在 createHelm 启动时被自动发
     // 预置外部插件目录（先于 createHelm，模拟用户手工放入）
     writeConventionPlugin(join(dataDir, 'plugins'))
     // 同时预置一个内置插件会留下的纯数据目录形态干扰项：builtin:memory
-    mkdirSync(join(dataDir, 'plugins', 'builtin:memory'), { recursive: true })
-    writeFileSync(join(dataDir, 'plugins', 'builtin:memory', 'notes.md'), 'memory plugin data')
+    const memoryDataDir = join(dataDir, 'plugins', pluginDataDirName('builtin:memory'))
+    mkdirSync(memoryDataDir, { recursive: true })
+    writeFileSync(join(memoryDataDir, 'notes.md'), 'memory plugin data')
 
     const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     try {
@@ -266,8 +268,9 @@ test('普通插件留下的纯数据目录（无 plugin.json / 约定入口）�
   try {
     const pluginsDir = join(dataDir, 'plugins')
     // 各种「纯数据目录」形态：随机数据文件、子目录、隐藏目录、空目录
-    mkdirSync(join(pluginsDir, 'builtin:herdr', 'state'), { recursive: true })
-    writeFileSync(join(pluginsDir, 'builtin:herdr', 'state', 'cache.json'), '{}')
+    const herdrDataDir = join(pluginsDir, pluginDataDirName('builtin:herdr'))
+    mkdirSync(join(herdrDataDir, 'state'), { recursive: true })
+    writeFileSync(join(herdrDataDir, 'state', 'cache.json'), '{}')
     mkdirSync(join(pluginsDir, 'some-plugin-data'), { recursive: true })
     writeFileSync(join(pluginsDir, 'some-plugin-data', 'MEMORY.md'), 'data only')
     mkdirSync(join(pluginsDir, '.hidden'), { recursive: true })
@@ -354,6 +357,25 @@ test('冒充 builtin: id 的外部插件降级登记为 failed，绝不静默放
     )
 
     await assertFailedRegistration(dataDir, 'invalid_plugin_definition', /builtin:/)
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('含冒号 id 的外部插件降级登记为 failed（与受管插件包 id 规则对齐）', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
+  try {
+    const dirPath = join(dataDir, 'plugins', 'colon-plugin')
+    mkdirSync(dirPath, { recursive: true })
+    writeFileSync(
+      join(dirPath, 'index.mjs'),
+      `export default {\n  id: 'vendor:plugin',\n  name: '含冒号',\n  async definePlugin() {},\n}\n`,
+    )
+
+    await assertFailedRegistration(dataDir, 'invalid_plugin_definition', /冒号/)
+    // 失败登记不得为含冒号 id 建数据目录（源目录即 ctx.dataDir 的不变量）
+    assert.equal(existsSync(join(dataDir, 'plugins', 'vendor:plugin')), false)
+    assert.equal(existsSync(join(dataDir, 'plugins', 'vendor%3Aplugin')), false)
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }

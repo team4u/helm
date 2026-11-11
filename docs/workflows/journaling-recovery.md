@@ -1,197 +1,101 @@
-# 确定性执行流水与异常恢复
+# 状态流水与故障恢复
 
-本文介绍 Helm 确定性执行流水（Journaling）、前缀重放与异常恢复机制。
+本文介绍 `builtin:workflow` 的确定性执行流水（Journaling）：账本如何记账、恢复时为何坚持前缀重放而非无序查表、Agent 与 Action 的不同失败语义，以及 Hub 重启后的两阶段恢复。所有机制位于插件引擎内（`engine/journal.ts` 与 `engine/runtime.ts`）。
 
----
+## 账本布局与事件契约
 
-## 为什么需要确定性执行流水
+每个工作流 run 拥有专属 JSONL 账本，这是引擎的私有恢复资产（不是公开 API 数据形状，HTTP / CLI 客户端不得依赖其字段细节做重放决策）：
 
-长链路多智能体编排面临网络超时、进程重启或模型限流等意外中断。
-传统系统只能整体从头重跑任务，浪费大量 Token 与时间。
+```
+<Hub 数据目录>/plugins/builtin%3Aworkflow/artifacts/<conversationId>/workflow-<runId>.jsonl
+```
 
-Helm 采用确定性执行流水方案：
+默认数据目录下示例：`~/.helm/plugins/builtin%3Aworkflow/artifacts/42/workflow-wf_1a2b3c4d5e6f.jsonl`（`runId` 形如 `wf_<12位十六进制>`）。已保存的工作流脚本位于 `<插件数据目录>/workflows/`；运行索引与完整记录持久化在插件私有 `records` 文档（Hub 的 `state.sqlite` 插件文档表），Web 界面摘要经按会话分片的 `runs` 投影订阅。
+
+每行一个 JSON 对象，三类事件行：
+
+| `type` | 语义 | 关键字段 |
+| :--- | :--- | :--- |
+| `agent` | 智能体调用终态 | `index`, `key`, `ok`, `text`（成功时的回复文本）, `resumed?` |
+| `action_started` | 动作执行意图（先于 handler 落盘） | `index`, `key`, `idempotent?` |
+| `action` | 动作调用终态 | `index`, `key`, `ok`, `result` / `error`, `idempotent?` |
+
+`index` 是调用发起位次（agent 与 action 共享同一全序，并发完成顺序不影响分配）；`seq` 是落盘物理单调序号（恢复时按 `index` 前缀校验、按 `seq` 去重）；`key` 是调用载荷的哈希摘要。
+
+**Key 计算**（SHA-256，取 32 位十六进制）：agent 的 Key 覆盖 `prompt`、`label`、`model`、`agentType`、`effort`、`isolation`、`gate`、`resume`、`attachments`（原样序列化，不去重不排序——ID 或次序变化都是不同调用；未提供与空数组语义不同，不归一化）与 `schema` 的序列化形式，采用带版本标记的固定槽 canonical 形态（新增字段只追加在版本号之后，杜绝槽位碰撞）。action 的 Key 覆盖全限定 `actionId` 与序列化后的输入。任何参数微调都会改变 Key，防止误用过期缓存。
+
+## 前缀重放，不是查表缓存
+
+恢复时引擎从第 0 位开始严格逐项匹配：调用位次 `index`、载荷哈希 `key`、调用类型（agent 槽位撞上 action 行视同失配）三项全等且终态 `ok` 才复用历史结果；遇到首个失配点立即断链，此后全部调用转为实时执行。
+
+为什么不做「输入相同就复用」的无序查表？因为在编排流程里，上游环境变化意味着后续调用处于不同业务状态——另一场 run 第 12 位恰好相同的 prompt 不是同一份工作。乱序复用后续匹配，等同于在不同上下文中冒用历史结果。前缀单调匹配保证：只有当此前的每一步都确认与账本一致时，本步的历史结果才有资格被复用。
+
+两类特殊失配的守卫：伪造或不一致的缓存行拒绝——`resumed` 标记必须与本次调用是否 resume 严格对应；重放命中的行若带 `schema`，还会用当前契约复检一次。前缀失配后命中「仅存在于账本缓存」的 resume 目标时显式失败（无活会话可续接，绝不伪造 live 续接）。
+
+## Agent 尽力记账 vs Action 强一致
+
+两类调用对账本的一致性要求完全不同。智能体推理的账本只是未来 resume 的优化，而外部动作有不可回滚的物理副作用（发消息、写数据、扣费）——后者必须先证明「可记账」才允许执行。
 
 ```mermaid
 flowchart TD
-    Run["工作流执行中"] --> Write["逐项记录 agent 与 action 调用流水"]
-    Write --> Crash["突发中断：进程重启或模型限流"]
-    Crash --> Read["读取 journal.jsonl 执行流水"]
-    Read --> Check{"检查 actionUncertain 不确定状态"}
-    Check -->|存在悬挂动作| Stop["拒绝自动重放，等待人工确认"]
-    Check -->|账本完好| Replay["执行前缀重放：复用历史成果"]
-    Replay --> Live["失配点转为 Live 实时执行"]
-```
-
-1. **精准记账**：每一步调用按序记录到独立流水文件中。
-2. **前缀复用**：恢复时跳过已成功的前缀节点，零 Token 消耗。
-3. **副作用保护**：动作执行前先持久化意图；遇到不确定状态时拒绝自动重放，避免盲目重复调用。不承诺外部系统的副作用恰好发生一次。
-
----
-
-## 执行流水存储与事件契约
-
-每个工作流任务拥有专属的 JSONL 流水文件（journal），由 `builtin:workflow` 保存在自己的插件数据目录中。
-
-- 执行流水：`<Hub 数据目录>/plugins/builtin:workflow/artifacts/<conversationId>/workflow-<runId>.jsonl`。默认示例：`~/.helm/plugins/builtin:workflow/artifacts/42/workflow-wf_abc123.jsonl`。
-- 已保存的工作流脚本：`<Hub 数据目录>/plugins/builtin:workflow/workflows/`。
-- 运行索引与完整记录：插件私有的 `records` 文档，持久化在 Hub 的 `state.sqlite` 插件文档表中。
-- 界面运行摘要：插件公开的 `runs` 文档，通过标准插件文档快照与事件同步。
-
-Hub 数据目录默认为 `~/.helm`，可用 `HELM_DATA_DIR` 覆盖。引擎接收的 `dataDir` 是插件的 `ctx.dataDir`，不是 Hub 数据目录。
-
-### 1. 事件行类型
-
-流水文件包含三类核心事件行：
-
-| 事件类型 (`type`) | 适用场景 | 核心字段 |
-| :--- | :--- | :--- |
-| `agent` | 智能体调用终态 | `index`, `key`, `ok`, `text`, `seq` |
-| `action_started` | 动作调用意图 | `index`, `key`, `seq` |
-| `action` | 动作调用终态 | `index`, `key`, `ok`, `result`, `error`, `seq` |
-
-- `index`：本次执行中的调用发起次序。智能体与动作共享全序。
-- `seq`：落盘物理单调序号，用于并发写入后稳定排序。
-- `key`：调用参数载荷的哈希摘要，保证输入一致性。
-
-### 2. 载荷哈希计算
-
-系统通过 SHA-256 算法生成唯一调用 Key：
-
-- **智能体 Key**：涵盖 `prompt`、`label`、`model`、`agentType`、`effort`、`isolation`、`gate`、`resume`、`schema` 与本轮 `attachments`。附件 ID 或顺序变化会使对应调用失配；附件内容不复制进账本。
-- **动作 Key**：涵盖全限定 `actionId` 与序列化后的输入对象。
-
-任何参数微调都会改变 Key，防止误用过期缓存。
-
----
-
-## 前缀重放机制
-
-Helm 坚持前缀重放原则，而非无序查表缓存。
-
-### 1. 前缀匹配与查表缓存的区别
-
-无序查表仅检查输入是否匹配。
-这会忽略上游环境的变化：
-
-- 在复杂流程中，上游环境改变意味着后续处于不同业务状态。
-- 乱序复用后续匹配等同于在不同上下文中冒用历史结果。
-
-### 2. 逐项前缀检查规则
-
-前缀重放从第 0 位开始严格比对：
-
-1. 比对当前调用的位次 `index` 与账本行是否匹配。
-2. 比对输入参数哈希 `key` 是否完全一致。
-3. 比对调用类型 `type` 是否一致。
-4. 若匹配成功且状态为 `ok`，直接复用历史结果。
-5. 一旦遇到首个失配点，系统立刻终止重放。
-6. 自失配点起，后续所有步骤自动转为实时执行。
-
----
-
-## 智能体与动作的不同失败语义
-
-智能体推理与动作执行具有完全不同的安全要求。
-
-```mermaid
-flowchart LR
-    subgraph Agent["智能体调用"]
-        A1["执行推理任务"] --> A2["记录 agent 结果行"]
-        A2 -.->|I/O 异常不阻断| A3["继续执行后续逻辑"]
+    subgraph Agent["agent：尽力记账"]
+        A1["执行智能体调用"] --> A2["终态落账（失败行也照记）"]
+        A2 -->|"append 异常"| A3["仅计数 ioErrors，不中断 run<br/>（损失的是恢复优化，不是正确性）"]
     end
-    subgraph Action["插件动作调用"]
-        B1["写入 action_started 并强制刷盘"] --> B2["执行动作 handler"]
-        B2 --> B3["写入 action 终态行并强制刷盘"]
-        B1 -.->|任一写异常| B4["抛出 fatal 致命异常"]
+    subgraph Action["action：意图先行 + 终态确认"]
+        B0["Pre-flight 校验前置"] --> B1["action_started 追加 + fsync"]
+        B1 --> B2["执行 handler"]
+        B2 --> B3["action 终态行落盘"]
+        B3 --> B4["才 resolve 调用 promise"]
+        B1 -.->|"任一写失败"| BF["fatal：workflow_action_uncertain"]
+        B3 -.->|"写失败"| BF
     end
 ```
 
-### 1. 智能体调用的弹性语义
+**Pre-flight 校验前置**：动作解析（未知动作、歧义短名）、插件启用状态、会话 scope 与 inputSchema 校验都发生在写入 `action_started` 之前。Pre-flight 失败时 handler 完全未执行（零副作用），引擎不写 `action_started`，只记一条幂等失败行（`ok: false, idempotent: true`）——避免参数拼写失误这类纯客户端错误把账本锁死为不可恢复。缓存复用分支同样受强一致约束：复用历史结果也要补记终态行，补记失败即 fatal（默默容忍会让新账本缺终态，下次 resume 无法复用而重执行副作用）。
 
-智能体节点的账本采用尽力记录策略；这不表示节点及其调用的工具没有副作用：
+**幂等承诺的边界**：`idempotent` 是动作作者（`PluginActionSpec.idempotent`）或脚本作者（`action(..., { idempotent: true })`）对「可安全重复执行（包括部分完成或中断状态下重试）」的主观承诺，不是引擎静态分析或动态检测所得。已声明幂等的动作，其悬挂 `action_started` 或失败终态行不触发不确定性拒绝；成功时前缀重放照常 100% 复用，失败或中断时允许 `resumeFromRunId` 放行并断链重跑。内建 `env.exec` 定义为非幂等。
 
-- 账本写入异常仅作为恢复优化损失，不阻断执行。
-- 系统上报 `ioErrors` 计数供排查参考。
-- 重放过程不会命中失败的智能体行，断点恢复时会重试该节点。任务作者需要自行保证节点重试安全；本机制不为智能体调用的文件写入、命令执行等副作用提供恰好一次保证。
+**后缀非幂等断链保护**：重放严格保持前缀单调。当首次前缀失配、执行失败或缺行发生断链时，若旧账本剩余后缀中存在任何非幂等动作（无论成功、失败还是未完成），恢复以 `workflow_action_uncertain` 显式拒绝——自动转 live 重跑会重复执行外部副作用，此时只能开新 run 或人工确认后处理旧账本。
 
-### 2. 动作调用的强一致与幂等语义
+**agent 的弹性语义**：账本写入异常仅计数 `ioErrors` 供宿主诊断；重放不会命中失败的 agent 行，断点恢复时该节点重试。节点重试安全由任务作者自行保证——引擎不为智能体调用执行命令、写文件等副作用提供恰好一次承诺。
 
-外部插件动作默认视为具有修改数据或发送消息等物理副作用，同时支持声明幂等性（只读或可重入动作）：
+## 恢复时的不确定性判定
 
-- **意图先行**：在执行非幂等动作前，必须先成功追加 `action_started` 并完成物理刷盘，才允许执行动作逻辑。
-- **Pre-flight 校验前置**：在写入 `action_started` 意图行之前，引擎会完成动作解析（检查未知动作或歧义短名）、插件启用状态、会话 scope 以及 inputSchema 校验。Pre-flight 失败时动作尚未执行（100% 零副作用），不会写入 `action_started`，而是仅记入幂等失败行（`idempotent: true`），避免因参数错误或动作名拼写失误将账本锁死为不可恢复。
-- **终态确认**：执行完毕后成功写入 `action` 终态行，才向调用方返回结果。
-- **幂等放行与承诺边界**：通过 `PluginActionSpec.idempotent: true` 或调用端 `action(..., { idempotent: true })` 标注的幂等动作，是**动作作者对该操作可安全重复执行（包含在部分完成或网络中断状态下重试）的主观承诺，不是引擎静态分析或动态检测所得**。其悬挂 `action_started` 或失败终态行（`ok: false`）不会触发 `actionUncertain`。成功时前缀重放照常 100% 缓存复用，失败或中断时允许 `resumeFromRunId` 安全放行并断链重跑。
-- **后缀非幂等断链保护**：重放严格保持前缀单调匹配。当首次前缀失配、执行失败或缺行发生断链时，若旧账本的剩余后缀中存在任何非幂等动作（无论是成功、未完成还是失败），系统显式判定为冲突并抛出 `workflow_action_uncertain`，阻止进入 live，防止重跑破坏后续已执行或未确认的非幂等外部状态。
-- **机密与环境变量说明**：内建 `env.exec` 的 `env` 选项只是普通的子进程环境变量键值，**不承诺任意明文机密不落源码或参数账本**；工作流中的机密传递应依赖 SecretStash 或节点环境预置。
+读取账本时，以下任一情形都无法证明「副作用未发生或已完整发生」，`readJournal` 置 `actionUncertain`：
 
----
+| 触发情形 | 说明 |
+| :--- | :--- |
+| 悬挂非幂等意图行 | 存在 `action_started`（未标 `idempotent`）且无对应终态行——不论 `seq` 位置 |
+| 损坏行无法判定类型 | 只有能从残余文本读出完整 `"type":"agent"` 前缀才归为 agent 行（计 ioError），其余一律保守 uncertain |
+| 非幂等动作失败终态 | 存在 `ok: false` 且未标幂等的 action 行（handler 抛错不等于零副作用） |
+| 文件不可读 | 权限或磁盘错误（`journal_read_failed`）；ENOENT 视为正常空账本 |
 
-## 恢复时的不确定性判定与安全原则
+一旦判定 uncertain，恢复以 `workflow_action_uncertain` 显式拒绝并附账本路径与计数，禁止自动重跑，必须人工确认外部系统实际状态后，从账本移除对应 action 行或放弃 resume。所有失败或中断的动作为幂等时放行断链恢复，从该步起 live 重跑。
 
-当调用方尝试恢复工作流时，系统先执行流水完整性审计。
-若存在不可判定的中间状态，系统将 `actionUncertain` 置为 true。
+## Hub 重启两阶段恢复
 
-### 1. 触发不确定状态的情形
+插件服务生命周期分两个阶段，由宿主的统一启动屏障保证顺序（全部插件 `prepare` 完成后才开始 `start`）：
 
-1. **悬挂非幂等意图行**：存在 `action_started` 且未标记 `idempotent: true`，缺少对应的 `action` 终态行。
-2. **损坏事件行**：流水行存在损坏且无法判定是否属于智能体调用。
-3. **非幂等动作执行失败**：存在 `ok: false` 且未标记 `idempotent: true` 的动作终态行。非幂等动作抛出异常不代表零副作用。
-4. **流水文件不可读**：发生权限异常或磁盘异常。
+**阶段一 `prepareRecovery`（全局 prepare 屏障内）**：只读遗留记录，为仍在 `running` 状态的 subagent run 关联的子会话落持久 abort 标记——不唤醒 SDK 调度器、不提交任何输入。此刻其他插件的工具尚未注册完成，任何输入提交都会产生孤儿回合。
 
-### 2. 保守安全优先原则
+**阶段二 `init`（服务 start）**：终止遗留任务、把跨重启的 `running` run 显式标 `failed` 并附原因（workflow 记 `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）`，subagent 记 `subagent run interrupted by process restart（可凭 conversationId/executionId 通过 resume 续接）`），经 outbox 补发父会话通知（`notifiedAt` 标记保证 at-least-once，不重复打扰）。此刻工具已注册，补发输入消费安全。
 
-一旦判定为 `actionUncertain`：
-
-- 系统显式抛出 `workflow_action_uncertain` 异常。
-- 严禁系统自动重跑该工作流。
-- 必须由人工介入检查外部系统的实际业务状态。
-- 若所有失败或中断的动作为幂等动作（`idempotent: true`），系统放行断点恢复，自动断链并从该步起 live 重跑。
-
----
-
-## 断点续跑实战操作
-
-开发者可以通过 CLI 命令完成工作流的执行、监控与断点恢复。
-
-### 1. 启动工作流
-
-执行工作流并等待终态输出：
+此后开发者可凭该 runId 安全续接：
 
 ```bash
-helm workflows run ./pipeline.js --args '{"batch": 100}' --wait
+# 从中断 run 恢复（省略 --conversation-id 时沿用原 run 的会话）
+helm workflows run ./pipeline.js --resume-from-run-id wf_1a2b3c4d5e6f --wait
+
+# subagent 类 run：不重放账本，改用 subagent resume 续接
+# （凭 execution.conversationId / executionId）
 ```
 
-### 2. 查询执行状态
+恢复执行继承原 run 的 `args`（显式传入可覆盖），已成功前缀的智能体调用零 Token 瞬间返回，自中断点起实时接续。
 
-列出工作流执行记录或检查特定任务详情：
+## 边界与约束
 
-```bash
-# 列出最近的工作流任务
-helm workflows runs
-
-# 查看指定任务的详细事件与账本状态
-helm workflows inspect run-1731118800-abc
-```
-
-### 3. 从断点恢复执行
-
-当任务发生中断或异常后，指定 `resume-from-run-id` 继续执行：
-
-```bash
-helm workflows run ./pipeline.js --resume-from-run-id run-1731118800-abc --wait
-```
-
-恢复执行时具有以下特征：
-
-- **沿用历史参数**：默认继承历史输入的 `args`，也允许显式传入新参数覆盖。
-- **零消耗跳过**：已成功完成的前缀智能体调用瞬间返回历史结果。
-- **实时接续**：自中断点开始继续调度执行。
-
-### 4. 系统崩溃自愈保障
-
-当 Helm 内核服务异常退出并重新启动时：
-
-- 系统启动时自动扫描工作流持久化记录。
-- 突发中断且账本完好的任务会自动打上标记：`run interrupted（账本完好，可经 resumeFromRunId 恢复）`。
-- 开发者可以通过 CLI 传入该 runId，安全继续执行未竟任务。
+- 账本字符串值落盘前经宿主统一脱敏（秘密替换为 marker）：重放只能取回脱敏值，机密传递应走 SecretStash 或节点环境预置，不能依赖重放还原。
+- 同一 run 仍处 `running` 时不可恢复（`409 conflict`）；恢复目标会话与原 run 不一致以 `400 validation_error` 拒绝。
+- 外部动作的副作用不承诺恰好一次：幂等承诺 + 意图先行 + 保守拒绝共同把风险收敛到「最多一次」与「显式失败」两种可处理状态，但不是分布式事务。
+- 本机制不为智能体调用（含其工具执行）的副作用提供恰好一次保证；需要该强度的操作应建模为声明幂等的 `action`。

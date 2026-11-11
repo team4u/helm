@@ -1,200 +1,117 @@
 # Git Worktree 与代码门禁
 
-本文介绍 Helm 代码沙箱隔离、自动化门禁验收与安全清理机制。
+本文介绍 `builtin:workflow` 插件的代码沙箱机制：`WorktreeIsolation` 如何经 `agent_spawn` 钩子包裹每一次派生、Gate 如何做到恰好一次验收、以及清理链如何在不丢代码的前提下安全回收工作树。机制全部位于 `builtin:workflow` 插件内（`isolation.ts` 与 `worktree.ts`），内核不参与。
 
----
+## WorktreeIsolation：经 agent_spawn 包裹的隔离生命周期
 
-## 为什么需要沙箱隔离
-
-多智能体编写代码时面临两大风险：
-
-1. **工作区污染**：不同智能体并发修改同名文件产生冲突。
-2. **代码丢失风险**：直接在开发工作区写代码可能覆盖未提交改动。
-
-Helm 提供基于 Git Worktree 的物理代码沙箱与自动化门禁保障：
+插件在 `agent_spawn` 管道上挂载一个 priority 200 的 around（continuation）钩子。priority 数值越大越外层：它先于外部运行时接管器（如 `builtin:herdr` 的 priority 100）执行，因此无论是原生派生还是 Herdr 等外部运行时的执行，都同样被租约与登记包裹。钩子只对两类派生介入，其余零开销透传：
 
 ```mermaid
 flowchart TD
-    Req["agent({ isolation: 'worktree', gate: 'pnpm test' })"] --> Alloc["builtin:workflow WorktreeAllocator 派生独立工作树"]
-    Alloc --> Branch["创建 helm/spawn-* 独立分支"]
-    Branch --> Exec["子智能体在沙箱目录中执行代码修改"]
-    Exec --> Gate["自动化门禁：执行 runGate 检查命令"]
-    Gate -->|通过| Pass["登记成功，输出产物"]
-    Gate -->|失败| Fail["gate_failed 显式抛出异常，阻断交付"]
-    Pass --> Clean["helm worktrees cleanup 安全回收"]
+    Spawn["agent_spawn 请求"] --> Resume{"resume 续接？"}
+    Resume -->|"已绑定隔离树"| Reuse["严格沿用原树<br/>（禁止中途迁移节点/cwd）"]
+    Resume -->|"无旧绑定但请求 isolation"| Reject["显式拒绝 resume_cwd_conflict"]
+    Resume -->|"普通 resume / 普通派生"| Track["不预分配：仅回填登记与租约"]
+    Spawn -->|"新建 + isolation: 'worktree'"| Ext{"外部运行时<br/>agentType 含 ':'？"}
+    Ext -->|"是"| Track
+    Ext -->|"否"| Alloc["WorktreeAllocator 预分配<br/>改写 cwd 为隔离树 -> next -> 终态收敛"]
 ```
 
----
+原生分配路径（`isolation: 'worktree'` 且非外部运行时）的完整时序：先经 `resolveSpawnTarget` 解析真实最终节点（显式 profile 绑定节点 > 父会话节点 > `local`），再在目标节点对源 `cwd` 执行 Git 派生，把最终请求的 `cwd` 改写为隔离树并清除 `isolation` 标记后调 `next` 进入真实执行链。
 
-## Git Worktree 隔离机制
+### 分配细节
 
-在编排 DSL 中声明 `isolation: 'worktree'` 即可启用独立代码沙箱：
+主工作树以 Git 权威清单定位：执行 `git worktree list --porcelain -z` 取首条登记即主工作树根目录——即使派生时已处于某个隔离 worktree 内，也总能定位到真正主仓，绝不以 `dirname` 猜根，也不会嵌套出 `.helm-worktrees/.helm-worktrees`。隔离目录建在主工作树同级：
 
-```javascript
-const result = await agent("重构认证模块并补齐单测", {
-  label: "认证重构",
-  isolation: "worktree",
-  gate: "pnpm test packages/auth",
-})
+- 目录：`<主仓同级>/.helm-worktrees/<repo>-<shortId>`
+- 分支：`helm/spawn-<shortId>`，基于分配时刻记录的 `baseCommit` 创建（不追易变 HEAD——锁内创建瞬间主仓 HEAD 可能已被推进）
+- 源状态：如实记录源工作区是否脏（`dirtySource`）。源仓库脏时，子智能体的提示词会附加明确告知：隔离树基于 HEAD 创建，不包含源工作区未提交的改动。
+
+所有 Git 命令经 EnvFabric 节点通道以 argv 数组直跑（无 shell 拼接），路径含空格或特殊字符在 Linux、macOS 与 Windows 上同样安全。分配成功后元数据持久化在插件私有文档：
+
+| 字段 | 说明 |
+| :--- | :--- |
+| `id` | 唯一标识，格式 `${nodeId}:${path}` |
+| `repoRoot` / `path` / `branch` / `baseCommit` | 主仓根、隔离树路径、分支名、基线提交 |
+| `dirtySource` | 派生时源工作区是否含未提交修改 |
+| `conversationId` / `executionId` | 绑定的子会话与执行标识（onResolved 回填） |
+| `origin` | `'native'`（引擎分配）或 `'external'`（外部运行时回传登记） |
+| `status` | `'active'` / `'removed'`；`branchDeleted` 单独记录分支删除状态 |
+
+外部运行时（`agentType` 含 `:` 的形态）不预分配——外部运行时自行决定隔离方式（如 Herdr 的 `worktree.create`）；插件只在其 `onResolved` 回传 worktree 时统一登记，使 cleanup 对两类记录一视同仁。
+
+### durable 租约（fail-closed）
+
+工作树占用采用持久租约保护，安全红线是「不能证明停止就不能清理」：
+
+- **占位先于副作用**：`git worktree add` 执行之前，先在租约文档持久登记占位（`phase: 'pending'`）并落盘。进程在此之后崩溃，重启后该占位仍在——清理时无法证明没有执行启动，会以 `worktree_execution_unknown` 显式阻塞，交人工确认。
+- **释放仅限两种确认状态**：执行确认成功；或执行确认从未启动（`next` 调用前就抛错，此时占位自身可证明无执行）。`onResolved` 失败、外部进程可能已启动但未回填标识、以及其他一切未知状态均保留租约。
+- **元数据机密检查**：将要落库的路径/分支/仓路径字段若包含已登记机密，以 `worktree_metadata_secret` 拒绝持久化（诊断输出使用脱敏值）。
+
+resume 与租约的交互：已绑定隔离树的子会话在 resume 时严格沿用原树——目录缺失经节点真实探测证实后显式失败（探测失败与目录缺失严格区分，绝不把节点离线当作缺失）；中途迁移节点或改写 `cwd` 显式拒绝（`resume_cwd_conflict`）。创建时未启用隔离的会话，不允许在 resume 时中途切换为 worktree 隔离。
+
+## Gate：恰好一次验收
+
+`gate` 是验收子智能体产出的 shell 命令（如 `pnpm test`）。执行权在宿主，语义是恰好一次：
+
+```mermaid
+sequenceDiagram
+    participant E as 编排引擎
+    participant X as 执行环境
+    participant H as 宿主 runGate
+    E->>X: spawn（携带 gate 命令，不重复传给 agent_spawn 管道）
+    X->>X: 子智能体完成后在自身工作目录执行 gate
+    X-->>E: onGateResult 回报结果
+    alt 未回报（如外部环境不支持）
+        E->>H: 宿主在确认过的工作目录补跑一次
+        H-->>E: 兜底结果
+    end
+    Note over E,H: 任一来源命中即定论，绝不二次执行；宿主缺 runGate 能力则显式失败该调用
 ```
 
-### 1. 主工作树权威解析
+判定标准：退出码为 0 且未超时即通过；非零退出码把该次 `agent` 调用判定为失败（节点状态记录 gate 输出，便于定位缺陷），确定性账本不会将门禁失败的调用记为成功结果。宿主自跑 fallback 的工作目录只使用引擎确认过的值（执行环境回传的 `cwd` 或父会话 `cwd`），绝不猜测远端目录。外部执行环境（如 Herdr 远端窗格）在其对应工作目录中执行同一命令并经 `onGateResult` 回报，回报优先采纳。
 
-受管工作树由 `builtin:workflow` 插件的 WorktreeAllocator 负责（完整租约、续接与安全清理均在该插件内，不在内核）。
-分配前调用 `git worktree list --porcelain -z` 获取仓库权威清单。
-首条记录即为仓库真正的主工作树根目录。
-即使调用方当前处于已有的 Worktree 中，算法依然能精准定位主根。
-这彻底避免了目录猜根失误与嵌套创建目录的问题。
+## 安全回收
 
-### 2. 独立目录与基线分支
+工作树完成使命后需要回收，但直接删除可能丢掉未合入的成果。清理链的设计目标：绝不误删人类目录、绝不丢失未合入代码、并发安全。
 
-WorktreeAllocator 在主工作树同级目录创建隔离环境：
+### 仓库级串行锁
 
-- **目录路径**：`.helm-worktrees/<repo>-<shortId>`。
-- **分支命名**：`helm/spawn-<shortId>`。
-- **基线锚定**：分支基于当前实际提交 `baseCommit` 创建。
-- **源状态记录**：如实记录源工作区的脏状态标记 `dirtySource`。
+每个 Git 仓库以 canonical `git common-dir` 真实路径为键维护进程内串行队列。同一仓库的不同 worktree 清理也按序串行，避免并发操作抢占 `.git/config.lock`。锁外先做占用快速失败检查，锁内再以最新记录复查一遍（并发清理与状态变更在锁内收敛到同一事实）。
 
-### 3. 跨平台同构执行
+### 五道清理安全检查
 
-所有 Git 操作通过 `EnvFabric` 节点通道执行。
-命令参数直接使用数组传递，无需拼接 Shell 字符串。
-这种机制消除了参数注入风险，在 Linux、macOS 与 Windows 保持一致。
+锁内重新取证权威 `git worktree list` 登记后，依次执行：
 
-### 4. 元数据登记
-
-分配成功后，元数据持久化存入 `builtin:workflow` 插件的文档存储（不再依赖内核私有存储）：
-
-| 属性 | 类型 | 说明 |
+| 检查 | 拒绝错误码 | force 可否越过 |
 | :--- | :--- | :--- |
-| `id` | `string` | 唯一标识符，格式为 `${nodeId}:${path}` |
-| `nodeId` | `string` | 目标节点标识符 |
-| `repoRoot` | `string` | 仓库主工作树根目录绝对路径 |
-| `path` | `string` | 分配的工作树绝对路径 |
-| `branch` | `string` | 创建的独立分支名称 |
-| `baseCommit` | `string` | 派生时的基线提交哈希 |
-| `dirtySource` | `boolean` | 派生时主工作区是否包含未提交修改 |
-| `status` | `'active' \| 'removed'` | 工作树当前生命周期状态 |
+| 1. 占用检查：关联子会话运行中（`working` / `blocked`），或路径仍被在途 spawn 执行 / 本插件租约引用 | `worktree_in_use` | 否 |
+| 2. 主根保护：登记路径即主工作树，或经 realpath 解析指向主工作树 | `worktree_owner_mismatch` | 否 |
+| 3. realpath 校验：登记路径经软链跳到其他工作树（登记可能已被替换）；附加权威登记的 path / branch / HEAD 归属匹配、prunable / locked 状态检查 | `worktree_owner_mismatch` / `worktree_locked` | 否 |
+| 4. 脏工作区保护：含未提交修改、未跟踪或被忽略文件（`--ignored=matching` 也计入） | `worktree_dirty` | 是（`force`） |
+| 5. 未合入保护：分支存在相对主工作树当前 HEAD 未合入的提交（`git rev-list --count`） | `worktree_dirty` | 是（`force`） |
 
-> [!SECURITY]
-> 若路径或分支名称中包含系统已登记的机密信息，插件拒绝落库。
-> 系统抛出异常并输出脱敏后的诊断日志。
+第 3 道中的 `locked` 是所有者显式加锁，任何情况下不可越过（请先解锁）。检查命令本身失败（如 `git status` 报错）会以 `worktree_check_failed` 显式中止清理，绝不当作干净或目录缺失。全部通过后执行真实 `git worktree remove`；分支删除部分失败时先固化「树已 removed」事实（`branchDeleted: false` 与诊断保留在记录上），可再次 cleanup 传 `deleteBranch` 重试。
 
----
+分支删除只允许 `helm/spawn-` 与 `helm/wf-` 两个受管前缀，绝不触碰人类分支。目录已不存在的记录以 `worktree_missing` 显式报错并保留登记（节点真实 fs stat 证明缺失才算），绝不全仓 `prune` 其他登记。
 
-## 代码门禁 (Gate) 机制
-
-代码门禁是验证智能体产出有效性的核心机制。
-未经门禁检验的代码绝不标记为执行成功。
-
-### 1. 恰好一次执行设计
-
-门禁执行严格遵循恰好一次原则：
-
-1. **原生执行环境**：在子智能体所在工作树内执行 `runGate`。
-2. **外部执行环境**：在远程窗格对应工作目录中执行门禁命令。
-3. **结果回传**：执行环境通过 `onGateResult` 回报验证结果。
-4. **宿主兜底**：若执行环境未回报结果，触发宿主 `runGate` 补跑。
-5. **拒绝静默放行**：宿主缺少 `runGate` 能力时显式抛出异常。
-
-### 2. 门禁验证语义
-
-门禁命令必须退出码为 0 且在时限内完成：
-
-```javascript
-await agent("修复类型异常", {
-  gate: "pnpm typecheck",
-})
-```
-
-- 若命令返回非零退出码，系统将任务判定为 `gate_failed`。
-- 执行日志会完整捕获门禁输出，便于定位代码缺陷。
-- 确定性账本不会将门禁失败的调用视为成功结果。
-
----
-
-## 安全回收机制与防丢代码保障
-
-工作树完成使命后需要安全回收。
-直接调用系统级删除可能导致丢失成果或损坏仓库。
-Helm 内置了多重防护机制。
-
-### 1. 仓库级串行互斥锁
-
-每个 Git 仓库的 `git common-dir` 维护独立的互斥锁。
-即使多个并发智能体同时请求清理同仓的不同工作树，也会按序串行执行。
-这有效避免了并发竞争 `.git/config.lock` 导致的锁冲突。
-
-### 2. 清理前严格检查链
-
-清理操作在获取互斥锁后执行四道严格检查：
-
-```mermaid
-flowchart TD
-    Lock["获取仓库互斥锁"] --> InUse["检查1: 子会话是否在执行或有任务引用"]
-    InUse --> Realpath["检查2: 真实路径与登记归属检查"]
-    Realpath --> Dirty["检查3: 脏工作区与未合入提交检查"]
-    Dirty --> Remove["执行 git worktree remove"]
-    Remove --> BranchDel["可选: 安全删除 helm/spawn-* 分支"]
-```
-
-1. **占用检查**：关联子会话处于执行中，或有任务引用该路径时拒绝清理。
-2. **根目录保护**：严格禁止清理仓库的主工作树。
-3. **软链接防逃逸**：通过 `realpath` 检查，拒绝跨目录软链接跳跃。
-4. **脏工作区保护**：检查是否存在未提交代码。
-5. **未合并保护**：检查分支提交是否已合入主工作树 HEAD。
-
-> [!CAUTION]
-> 存在未提交修改或未合并提交时，默认拒绝删除。
-> 必须显式传入强制标记 `force` 才会执行物理删除。
-
-### 3. 分支安全删除策略
-
-清理时可选择是否同步删除 Git 分支：
-
-- 仅允许删除以 `helm/spawn-` 或 `helm/wf-` 开头的受管分支。
-- 严禁删除开发者的个人分支或主干分支。
-- 若工作树已删除但分支删除失败，系统保留记录供后续重试。
-
-### 4. 节点文件互斥的边界
-
-内核 `EnvFabric` 提供按 `nodeId + canonicalPath` 为目标的文件互斥：读-改-写（RMW）序列在同一目标上串行化，防止两个受管工具并发改写同一文件。
-
-该互斥只约束经过 EnvFabric 的受管操作：同步 Shell 命令与外部编辑器直接写文件，不受它保证。并发场景中不要假设文件互斥能阻止进程外的写入。
-
----
-
-## 工作树管理与清理指令
-
-开发者可通过 CLI 或模型工具管理工作树。清理能力由 `builtin:workflow` 插件提供（默认启用；停用后 `helm worktrees cleanup` 命令与 `cleanup_worktree` 工具一并消失）。
-
-### 1. CLI 清理命令 (`helm worktrees cleanup`)
-
-命令行支持三种互斥选择器定位工作树：
+### CLI 与模型工具
 
 ```bash
-# 1. 按受管工作树登记 ID 清理（node:path 形式）
-helm worktrees cleanup --worktree-id local:/workspace/repo/.helm-worktrees/repo-abc
-
-# 2. 按关联子会话 ID 清理
+# 三种互斥选择器定位目标
+helm worktrees cleanup --worktree-id local:/repo/.helm-worktrees/repo-ab12cd34
 helm worktrees cleanup --conversation-id 42
+helm worktrees cleanup --path /repo/.helm-worktrees/repo-ab12cd34 --node-id local
 
-# 3. 按绝对路径与目标节点清理
-helm worktrees cleanup --path /workspace/repo/.helm-worktrees/repo-abc --node-id local
-```
-
-#### 进阶清理选项
-
-- `--delete-branch`：清理工作树的同时删除对应的 Git 分支。
-- `--force`：强制清理，允许删除脏工作区与未合入代码（不可越过占用、归属与 locked 校验）。
-
-```bash
-# 强制清理并删除对应分支
+# 选项：--delete-branch 一并删除受管分支；--force 越过脏工作区/未合入保护
+#（不可越过占用、归属与 locked 校验）
 helm worktrees cleanup --conversation-id 42 --delete-branch --force
 ```
 
-### 2. 智能体清理工具 (`cleanup_worktree`)
+同一能力暴露为模型工具 `cleanup_worktree`（参数同构：`worktreeId` / `conversationId` / `path` + `nodeId` / `deleteBranch` / `force`），子智能体可在任务收尾时自行清理。工具侧的 `--current` 语义：无任何显式选择器时以当前会话为选择器（即子会话自己的 worktree），显式选择器永不被上下文覆盖。清理前还有一道租约终检：存在重启中断或未确认停止的执行租约时以 `worktree_execution_unknown` 拒绝（见上文 fail-closed 红线）。
 
-`builtin:workflow` 插件向智能体暴露原子工具 `cleanup_worktree`。
-智能体可以在编排任务收尾时自行清理临时环境。
-工具调用完全复用上述安全检查链，保障仓库安全。
+## 边界与约束
+
+- 插件停用期间工作树登记与租约不清除，重新启用后 cleanup 仍可定位（不丢元数据）；停用插件时在途运行经 `liveTasks` 阻止（`409 plugin_has_live_tasks`），在途工作树占用经 `liveWorktrees` 声明。
+- 内核 `EnvFabric` 另提供按 `nodeId + canonicalPath` 的文件互斥，但只约束经过 EnvFabric 的受管操作：同步 shell 命令与外部编辑器直接写文件不受它保证。
+- 非常规仓库布局（裸仓库、`--separate-git-dir`）显式拒绝（`worktree_unsupported_layout`），不猜测主仓路径。

@@ -1,330 +1,163 @@
 # 原生 JavaScript 编排 DSL 手册
 
-本文介绍 Helm 原生 JavaScript 编排 DSL 的语法规范与执行机制。
+本手册是 Helm 工作流编排 DSL 的权威参考。工作流就是一段普通 JavaScript：脚本在独立的 Worker 线程与 `node:vm` 上下文中执行，所有副作用（派生智能体、调用动作）都以 RPC 消息出走宿主统一记账——这层边界换来两个核心性质：脚本是确定性的（同输入同执行轨迹，可安全前缀重放），且任意时刻可终止（`worker.terminate()` 能停掉自旋或卡死的脚本）。
 
----
+## 执行模型与脚本结构
 
-## 编排架构与设计理念
+两层边界构成执行模型：宿主线程与 Worker 线程之间以 `postMessage` 通信（Worker 层负责可杀性与消息协议），Worker 线程内再用 `node:vm` 创建受限 realm（VM 层负责确定性与事故防范）。`codeGeneration: { strings: false, wasm: false }` 使 `eval` 与 `Function` 构造器直接抛 `EvalError`。需要说明：这是确定性与可终止性边界，不是对恶意代码的安全沙箱——注入的宿主原语本身持有宿主能力，我们缩小表面但不声称封闭。
 
-Helm 采用原生 JavaScript 作为工作流编排 DSL。
-脚本执行在独立的 Worker 线程与 `node:vm` 上下文中。
-这种设计具备三大核心特征：
-
-```mermaid
-flowchart TD
-    VM["Worker 线程与 node:vm 沙箱"] --> Det["确定性约束：禁用 Date.now 与 Math.random"]
-    VM --> Guard["边界守卫：限制纯 JSON 跨边界传递"]
-    VM --> Proto["宿主通信：RPC 调用 agent 与 action 原语"]
-    Proto --> Jnl["执行流水：全序账本精确记账与恢复"]
-```
-
-1. **逻辑确定性**：禁用动态代码生成与非确定性 API。
-2. **状态可恢复**：所有副作用通过 RPC 交付宿主统一记账。
-3. **零额外学习成本**：直接使用标准 JavaScript 语言特性。
-
----
-
-## 脚本结构与元数据声明
-
-每个工作流脚本由顶部静态元数据和执行逻辑组成。
-
-### 1. 元数据对象 (`meta`)
-
-脚本顶部必须通过字面量导出 `meta` 对象。
-编排引擎在求值前通过静态扫描提取该对象。
+脚本由两部分组成。顶部是静态元数据 `meta`，引擎在执行前经字符串扫描提取并在空 VM 上下文求值该片段（阶段声明用于界面首帧分组）；其余部分是顶层 `await` 风格的执行体。`meta` 必须是纯静态字面量，支持的字段如下：
 
 ```javascript
 export const meta = {
-  name: "code-review-pipeline",
-  description: "多维度代码审查与自动化门禁流水线",
-  whenToUse: "当需要对拉取请求进行全面静态分析与测试时使用",
-  phases: [
-    { title: "准备工作区", detail: "拉取代码并准备独立环境" },
-    { title: "并行审查", detail: "多维度并行分析代码" },
-    { title: "汇总报告", detail: "聚合分析结果并输出建议" },
+  name: "code-review-pipeline",        // 必填：工作流唯一标识
+  description: "多维度代码审查流水线",   // 必填：功能描述
+  whenToUse: "需要对拉取请求做全面静态分析时使用",  // 可选：适用场景
+  phases: [                            // 可选：阶段声明，供界面预渲染
+    { title: "并行审查", detail: "多维度并行分析" },
+    { title: "汇总报告", detail: "聚合结果并输出建议", model: "openai/gpt-5" },
   ],
 }
 ```
 
-#### 元数据字段规范
-
-| 字段 | 类型 | 是否必填 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `name` | `string` | 是 | 工作流唯一标识符 |
-| `description` | `string` | 是 | 工作流功能描述 |
-| `whenToUse` | `string` | 否 | 适用场景说明 |
-| `phases` | `WorkflowPhaseMeta[]` | 否 | 阶段声明列表，用于界面预渲染 |
-
-> [!IMPORTANT]
-> `meta` 必须是纯静态字面量。
-> 禁止在 `meta` 中使用变量、函数调用、扩展运算符或模板插值。
-> 违规声明会导致解析抛出异常并拒绝执行。
-
-### 2. 动态输入参数 (`args`)
-
-外部传入的参数通过全局变量 `args` 访问。
-通过 CLI 传入 JSON 字符串：
+变量、函数调用、扩展运算符、模板插值（`${...}`）都是非法的，违规声明会在求值时抛错并拒绝执行。动态输入经全局 `args` 访问，CLI 传入的 JSON 字符串会被自动解包（最多两层，防模型双重序列化）：
 
 ```bash
 helm workflows run ./review.js --args '{"pr": 1024, "strict": true}'
 ```
 
-在脚本内部直接读取：
+## 全局注入原语
 
-```javascript
-const prId = args?.pr ?? 0
-const isStrict = Boolean(args?.strict)
-log(`开始处理拉取请求 #${prId}`)
-```
+沙箱为脚本注入以下全局量。所有 `agent` / `action` / `workflow` 调用必须被 `await` 或 `return`，脚本完成时仍存在未等待的调用会以致命错误收尾。
 
----
+### `args`
 
-## 沙箱内置原语参考
+外部传入的任意 JSON 值（对象、数组或标量均可），脚本内直接读取，如 `args?.pr ?? 0`。
 
-执行沙箱为脚本注入了一组异步原语。
+### `agent(prompt, options)`
 
-### 1. `agent(prompt, options)`
+派生子智能体执行推理与工具调用任务，返回其最终文本（失败或被跳过时返回 `null`）。
 
-调度子智能体执行推理或工具调用任务。
-
-#### 调用参数
-
-- `prompt` (`string`)：提示词文本，必须是非空字符串。
-- `options` (`object`)：可选配置项对象。
-
-| 配置项 | 类型 | 说明 |
+| 选项 | 类型 | 说明 |
 | :--- | :--- | :--- |
-| `label` | `string` | 任务展示标题 |
-| `phase` | `string` | 所属阶段名称 |
-| `model` | `string` | 指定使用的模型标识 |
-| `agentType` | `string` | 指定 Profile ID 或外部执行环境标识 |
-| `isolation` | `'worktree'` | 启用独立 Git Worktree 隔离 |
-| `gate` | `string` | 自动化代码门禁验收命令 |
-| `resume` | `string` | 续接的历史智能体会话标识 |
-| `effort` | `string` | 推理思考级别 |
-| `schema` | `object` | 结构化输出的 JSON Schema 规范 |
-| `attachments` | `string[]` | 本次调用携带的产物 ID；只允许当前编排会话或其父链有权使用的产物 |
+| `label` | `string` | 展示名；同时是本 run 内 `resume` 的引用句柄 |
+| `phase` | `string` | 所属阶段名（覆盖当前 ambient 阶段） |
+| `model` | `string` | 模型覆盖，如 `'provider/model'` |
+| `agentType` | `string` | Profile ID（专家 Bot 标识）或外部运行时标识（如 `herdr:agy`） |
+| `isolation` | `'worktree'` | 启用独立 Git Worktree 隔离（唯一合法值） |
+| `gate` | `string` | 验收 shell 命令，退出码非 0 判定失败 |
+| `resume` | `string` | 续接本 run 内既有智能体的 label |
+| `effort` | `string` | 思考力度：`minimal` / `low` / `medium` / `high` / `xhigh` / `max` |
+| `schema` | `object` | 结构化输出的 JSON Schema |
+| `attachments` | `string[]` | 本次调用携带的产物 ID 列表 |
 
-`effort` 可选值包括：`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。
+选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置），但允许与 `schema`、`gate`、`attachments` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments`。
 
-#### 选项互斥规则
-
-- `resume` 与 `agentType` 互斥。续接会话保持原类型。
-- `resume` 与 `model` 互斥。续接会话保持原模型。
-- `resume` 与 `isolation` 互斥。续接会话保持原工作目录。
-- `resume` 与 `effort` 互斥。续接会话保持原思考配置。
-- `resume` 允许与 `schema`、`gate` 和 `attachments` 组合使用。
-- `attachments` 只作用于本次调用；续接时不会自动继承上次调用的附件。
-
-#### 结构化输出 (`schema`)
-
-当配置 `schema` 时，宿主自动挂载结构化契约。
-子智能体会严格返回符合 Schema 的 JSON 字符串。
-引擎完成解析后返回 JavaScript 原生对象：
+**结构化输出**：配置 `schema` 时宿主为子智能体挂载结构化契约，引擎解析其 JSON 回复并按 Schema 校验，通过则返回原生对象，不通过（非 JSON 或不合契约）返回 `null`：
 
 ```javascript
-const result = await agent("提取提交信息中的修改范围与风险点", {
+const result = await agent("提取提交的修改范围与风险点", {
+  label: "风险提取",
   schema: {
     type: "object",
     properties: {
       scope: { type: "string" },
       riskLevel: { type: "string", enum: ["low", "medium", "high"] },
-      summary: { type: "string" },
     },
-    required: ["scope", "riskLevel", "summary"],
+    required: ["scope", "riskLevel"],
   },
 })
-
-log(`范围: ${result.scope}, 风险: ${result.riskLevel}`)
+if (result === null) throw new Error("结构化输出校验失败")
 ```
 
-若子智能体输出无法满足契约，返回 `null`。
+**跨 Profile 点名**：`agentType` 填真实 Profile ID（如 `reviewer`），不带 `@` 前缀，也不是显示名。用户在会话里写 `@reviewer` 是向当前智能体点名，与脚本中的 `agentType` 不是同一机制。外部运行时标识采用 `namespace:kind` 形式（含冒号），如 `herdr:agy`。
 
-#### 跨 Profile 点名与附件
+**attachments 授权边界**：只允许当前编排会话及其父链有权使用的产物；数组不能包含空 ID、纯空白 ID 或非字符串项（空数组合法，且与未提供在重放指纹上是不同调用）。宿主会校验产物存在性与授权。当前授权不覆盖子会话或兄弟会话——不能把上一个子代理产出的产物 ID 直接转交给下一个子代理，需要交接时先由有权读取的会话显式导出内容，再按接收方有权使用的方式登记。不同节点、目录与 Worktree 之间没有自动文件同步。
 
-`agentType` 使用真实 Profile ID，不使用显示名称或 `@` 前缀。用户在会话中写 `@reviewer` 是向当前智能体点名，并不直接执行脚本或绕过当前会话路由。
+**resume 的边界**：只有该子会话仍存在、归属校验通过且不忙时才能真正续接。`resume` 续接的是会话上下文，`resumeFromRunId` 重放的是工作流账本，两者是不同操作。前缀失配后命中「仅存在于账本缓存」的子结果时，引擎会显式失败而不是伪造续接。
 
-```javascript
-const review = await agent("只读审查附件中的变更说明，返回风险与依据", {
-  label: "reviewer",
-  agentType: "reviewer",
-  attachments: args.artifactIds,
-})
-if (review === null) throw new Error("审查未完成")
+### `parallel(thunks)` 与 `pipeline(items, ...stages)`
 
-return await agent(`请复核以下审查结论：\n${review}`, {
-  resume: "reviewer",
-})
-```
-
-示例要求 `reviewer` Profile 已存在，且 `args.artifactIds` 是当前编排会话有权使用的产物 ID 数组。数组可为空，但不能包含空 ID、纯空白 ID 或非字符串项。宿主会校验产物存在性与授权；附件不会绕过权限或远端可达性检查。
-
-不同节点、目录和 Worktree 之间没有自动文件同步。当前授权只覆盖调用会话及其父链，不包含其子会话或兄弟会话；不能将上一个子代理生成的产物 ID 直接转交给下一个子代理。需要交接时，先由有权读取文件的会话显式导出必要内容，再按接收方有权使用的方式登记或传递。
-
-原生子会话只有在仍存在、归属校验通过且不忙时才能续接。Herdr 外部执行上下文还受父回合或 Workflow 结算清理约束，不应假设跨回合、跨运行的 `resume` 一定有效。`resume` 续接会话上下文，`resumeFromRunId` 则重放工作流账本，两者不是同一操作。
-
-### 2. `parallel(thunks)`
-
-并发执行多个无依赖的异步任务。
-
-- `thunks`：无参异步函数数组，例如 `[() => taskA(), () => taskB()]`。
-- 容错语义：单个任务普通异常自动转为 `null`，不中断其余任务。
-- 致命异常：超出系统配额或账本失效时抛出异常。
-- 返回值：按原数组顺序返回每个任务的结算结果。
+`parallel` 接收无参异步函数数组，并发执行全部任务并按原顺序返回结算结果；`pipeline` 接收数据项数组与若干顺序处理函数，对每个 item 依次流过全部 stage（stage 签名为 `(value, item, index)`）。两者容错语义一致：普通失败折叠为 `null`（`parallel` 不影响其余任务；`pipeline` 跳过该 item 的后续 stage），只有致命错误（配额突破、账本失效）才向外抛出。
 
 ```javascript
-const [security, perf] = await parallel([
-  () => agent("审查代码安全隐患", { label: "安全审计" }),
-  () => agent("分析算法性能瓶颈", { label: "性能分析" }),
-])
-```
-
-### 3. `pipeline(items, ...stages)`
-
-流水线式按阶段处理数据数组。
-
-- `items`：待处理数据项列表。
-- `stages`：顺序处理函数序列。每个阶段接收 `(value, item, index)`。
-- 容错语义：某个阶段失败返回 `null`，跳过该项后续阶段。
-- 返回值：最终处理完成的结果数组。
-
-```javascript
-const files = ["src/a.ts", "src/b.ts"]
-
+// pipeline：item 在 stage 间流水推进，无需等全部 item 完成第一个 stage
 const reports = await pipeline(
-  files,
-  async (file) => {
-    return await agent(`检查文件语法: ${file}`)
-  },
-  async (syntaxReport, file) => {
-    return await agent(`基于语法报告优化代码: ${syntaxReport}`)
-  }
+  ["src/a.ts", "src/b.ts"],
+  async (file) => await agent(`检查文件语法: ${file}`),
+  async (syntaxReport, file) => await agent(`基于语法报告优化: ${syntaxReport}`),
 )
 ```
 
-### 4. `phase(title)`
+优先用 `pipeline` 而非手写 `parallel` 分批：`parallel` 的每一批是一次完整同步屏障（全部完成才进入下一步），`pipeline` 让不同 item 的 stage 天然错峰推进，减少不必要的等待。
 
-声明进入指定业务阶段。
+两者共享单次列表容量上限（4096 项，见配额表）。
 
-```javascript
-phase("架构分析")
-await agent("分析系统模块依赖关系")
-```
+### `action(id, input, options)`
 
-调用 `phase()` 后，后续调用的 `agent()` 和 `action()` 自动归入该阶段。
-若 `agent()` 自身指定了 `options.phase`，以自身选项为准。
+零 Token 调用插件注册的动作或内建命令执行，适合一切不需要模型推理的确定性步骤。
 
-### 5. `log(message)`
+- `id`（必填）：动作标识。全限定形式 `pluginId.actionName`（如 `memory.get`）；短名唯一时可用（如 `get`）；歧义短名会以 `ambiguous_action` 报错并列出候选。
+- `input`（可选，缺省 `{}`）：传给动作的 JSON 对象，经边界校验后由宿主做 inputSchema 校验。
+- `options.idempotent`（boolean）：调用端的幂等承诺声明，覆盖动作定义端的默认值。
+- `options.label` / `options.phase`：节点展示标签与阶段覆盖。
 
-向工作流执行时间线输出日志记录。
+`idempotent` 的准确语义：它是对「该动作可安全重复执行（包括部分完成或中断后重试）」的承诺，由动作作者或脚本作者作出，不是引擎检测所得。引擎用它决定恢复策略——已声明幂等的动作失败或中断后允许 `resumeFromRunId` 放行并断链重跑；未声明幂等的动作失败或存在悬挂意图行时，恢复会被保守拒绝（见[状态流水与故障恢复](journaling-recovery.md)）。注意内建 `env.exec` 定义为非幂等：脚本里对它显式标 `idempotent: true` 前，请确认命令真的可安全重放（如纯只读查询）。
 
-```javascript
-log("开始执行依赖安全性扫描")
-```
+**内建动作 `env.exec`（短名 `exec`）**：经内核 EnvFabric 在节点上执行命令。输入结构与返回值如下：
 
-日志会自动附带当前作用域前缀与阶段标识。
+| 输入字段 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `command` | `string \| string[]` | 必填。命令行或 argv 数组（数组不经 shell 解析，跨平台同构） |
+| `nodeId` | `string` | 可选。目标节点，缺省当前会话所在节点 |
+| `cwd` | `string` | 可选。跨平台绝对路径工作目录 |
+| `env` | `Record<string, string>` | 可选。注入的环境变量字典（普通参数，机密传递应走 SecretStash） |
+| `timeoutMs` | `number` | 可选。1 ~ 600000 毫秒 |
+| `allowFailure` | `boolean` | 可选。`true` 时非零退出码不抛异常，返回带退出码的结果对象 |
 
-### 6. `action(id, input, options)`
-
-零 Token 确定性调用 Helm 插件注册的动作能力或内建动作。
-
-- `id` (`string`)：插件动作标识符，格式为 `pluginId.actionName`（唯一时可使用短名），或内建受控命令执行动作 `"env.exec"`（短名 `"exec"`）。
-- `input` (`object`)：传给动作的输入参数对象（可选，缺省 `{}`）。
-- `options` (`object`)：调用选项配置（可选）：
-  - `idempotent` (`boolean`)：覆盖声明动作的幂等性。为 `true` 时表示脚本作者对动作可安全重复执行（包含部分完成或异常重试）的承诺（非引擎检测所得），失败或中断时允许恢复放行并断链重跑；引擎以此阻止已知不安全的非幂等自动重放，但不提供外部分布式事务保证。
-  - `label` (`string`)：节点自定义显示标签，呈现在检查器与运行摘要中。
-  - `phase` (`string`)：覆盖当前所属阶段名称。
-
-#### 内建命令执行动作：`env.exec`（或短名 `exec`）
-
-通过内核 `EnvFabric` 在当前会话绑定的计算节点与工作目录执行命令：
-
-- `command` (`string | string[]`)：必填，待执行命令或命令行参数数组。
-- `cwd` (`string`)：可选，跨平台绝对路径工作目录。
-- `nodeId` (`string`)：可选，目标节点 ID（缺省当前会话所在节点）。
-- `env` (`Record<string, string>`)：可选，注入的环境变量字典（普通参数，不承诺任意明文机密不落源码/args）。
-- `timeoutMs` (`number`)：可选，超时毫秒数（1 ~ 600000）。
-- `allowFailure` (`boolean`)：可选，为 `true` 时非零退出码不抛异常，直接返回包含退出码与输出的结果对象。
-
-返回值结构为 `{ ok: boolean, exitCode: number | null, output: string, timedOut: boolean }`。
+返回 `{ ok: boolean, exitCode: number | null, output: string, timedOut: boolean }`（`output` 为聚合的 stdout+stderr 且已经宿主脱敏）：
 
 ```javascript
-// 执行 git diff 命令，标记为幂等只读操作
-const diffResult = await action("env.exec", {
-  command: ["git", "diff", "main...feature"],
-}, {
-  idempotent: true,
-  label: "获取代码变更",
-})
+const diff = await action("env.exec", {
+  command: ["git", "diff", "--stat", "origin/main"],
+}, { idempotent: true, label: "差异提取" })
+if (diff.ok) log(diff.output)
 ```
 
-### 7. `workflow(ref, args)`
+### `workflow(ref, args)`
 
-嵌套调用其他已保存的工作流。
+嵌套调用其他工作流。`ref` 是已保存工作流名字符串，或 `{ scriptPath }` 对象（不提供则抛错）；`args` 原样传给子工作流。嵌套深度上限为 1：你已经在某个工作流内部时不能再 `workflow()`，应直接内联编排。子工作流的名字用于进度前缀与错误定位（进度条目会带子工作流派生前缀）。
 
-- `ref`：工作流名称字符串，或 `{ scriptPath: string }` 对象。
-- `args`：传递给子工作流的输入参数。
-- 嵌套限制：最大嵌套深度为 1。禁止多层嵌套调用。
+### `phase(title)` 与 `log(message)`
 
-```javascript
-const subResult = await workflow("lint-subflow", { target: "packages/core" })
-```
+`phase(title)` 声明进入指定业务阶段（非空字符串），之后的 `agent` / `action` 自动归入该阶段，直至下一次调用；`agent` / `action` 各自的 `options.phase` 可覆盖当前 ambient 阶段。阶段在首次出现时分配序号并发出进度事件，同名阶段复用同一序号。`log(message)` 输出一条时间线日志（自动附加嵌套作用域前缀）。`console.log` / `info` / `warn` / `error` / `debug` 是 `log` 的同义别名。
 
-### 8. `console` 与 `budget`
+### `budget`
 
-沙箱提供辅助全局对象：
+`budget.spent()` 返回当前 run 已消耗的模型输出 Token 数；`budget.remaining()` 返回剩余配额（当前实现恒为 `Infinity`）。`budget.total` 为 `null`。
 
-- `console.log(...)`：格式化输出内容并转为时间线日志。
-- `budget.spent()`：获取当前工作流已消耗的模型输出 Token 数量。
-- `budget.remaining()`：查询剩余 Token 配额。
+## 确定性约束与配额
 
----
+### 禁用的非确定性 API
 
-## 确定性保证与沙箱安全约束
+脚本体之前注入确定性前导垫片：`Date.now()`、`Math.random()`、无参 `new Date()` 全部抛出明确异常（`globalThis.Date` 别名同样被替换，不能绕过）；带参数的 `new Date(timestamp)` 放行。`eval` 与 `Function` 构造器因 VM 关闭代码生成而不可用。需要时间戳时经 `args` 外部传入，或在脚本返回后由宿主统一记录。
 
-为了保证断点续跑和重放一致性，沙箱施加了确定性限制。
+### 严格 JSON 边界
 
-### 1. 禁用非确定性时钟与随机数
+所有跨越沙箱边界的值（`args`、`agent` 附件与结果、`action` 输入输出、脚本根返回值）必须是可 JSON 往返的普通数据。深度递归检查拒绝：`undefined`（仅脚本根返回值豁免）、`BigInt`、`Symbol`（含 Symbol 键对象）、`Function`、非有限数值（`NaN` / `Infinity`）、稀疏数组、非普通对象（自定义原型链实例）、循环引用。
 
-沙箱在代码执行前注入了确定性前导垫片：
+### 资源配额
 
-- 拒绝 `Date.now()`：抛出明确异常。
-- 拒绝 `Math.random()`：抛出明确异常。
-- 拒绝无参数 `new Date()`：抛出明确异常。
-- 允许带参数 `new Date(timestamp)`：解析确定时间。
-
-> [!TIP]
-> 如果工作流需要时间戳，请通过 `args` 外部传入。
-> 也可以在工作流返回后由宿主统一记录时间。
-
-### 2. 严格 JSON 数据边界
-
-所有跨越沙箱边界的输入输出必须是合法的 JSON 数据。
-引擎会对数据执行深度递归检查，拒绝以下非法类型：
-
-1. `undefined`（工作流根返回值允许返回 undefined）。
-2. `BigInt` 与 `Symbol`。
-3. `Function` 与非有限数值（`NaN`、`Infinity`）。
-4. 稀疏数组与包含 Symbol 键的对象。
-5. 非普通对象（具有自定义原型链的实例）。
-6. 循环引用对象结构。
-
-### 3. 执行配额上限
-
-系统配置了硬性资源配额防止意外挂死：
-
-| 配额项 | 常量定义 | 上限阈值 |
+| 配额 | 常量 | 值 |
 | :--- | :--- | :--- |
 | 脚本源码长度 | `MAX_SCRIPT_LENGTH` | 512 KB |
-| 单次执行 Agent 总数 | `WORKFLOW_AGENT_CAP` | 1000 个 |
-| 单次列表项容量 | `WORKFLOW_ITEM_CAP` | 4096 项 |
-| 嵌套工作流调用次数 | `WORKFLOW_NESTED_CAP` | 256 次 |
+| 单 run 智能体总数 | `WORKFLOW_AGENT_CAP` | 1000 |
+| 单次 `parallel` / `pipeline` 列表项 | `WORKFLOW_ITEM_CAP` | 4096 |
+| 嵌套 `workflow()` 调用总数 | `WORKFLOW_NESTED_CAP` | 256 |
 
----
+脚本含控制字符（制表符、回车、换行除外）会在编译前被拒绝。并发智能体数量由宿主按 CPU 核数调度（上限 16，给宿主线程留两个核），超出并发的调用在信号量上排队。
 
-## 完整实战范例
-
-下面是一个包含多原语组合的完整代码审查工作流：
+## 完整示例
 
 ```javascript
 export const meta = {
@@ -338,23 +171,17 @@ export const meta = {
   ],
 }
 
-// 1. 读取外部参数
 const targetBranch = args?.targetBranch ?? "main"
-log(`开始针对分支 ${targetBranch} 执行审计`)
+log(`针对分支 ${targetBranch} 执行审计`)
 
-// 2. 阶段一：环境准备与差异提取
 phase("环境准备")
-const diffSummary = await action("env.exec", {
+const diff = await action("env.exec", {
   command: ["git", "diff", "--stat", `origin/${targetBranch}`],
-}, {
-  idempotent: true,
-  label: "差异提取",
-})
+}, { idempotent: true, label: "差异提取" })
 
-// 3. 阶段二：并行多维度代码审查
 phase("并行审查")
-const [securityFinding, styleFinding] = await parallel([
-  () => agent(`审查以下提交的代码安全隐患:\n${JSON.stringify(diffSummary)}`, {
+const [security, style] = await parallel([
+  () => agent(`审查以下提交的安全隐患:\n${diff.output}`, {
     label: "安全审查",
     effort: "high",
     schema: {
@@ -366,39 +193,27 @@ const [securityFinding, styleFinding] = await parallel([
       required: ["vulnerabilities", "score"],
     },
   }),
-  () => agent(`审查代码架构与设计规范:\n${JSON.stringify(diffSummary)}`, {
-    label: "架构审查",
-    effort: "medium",
-  }),
+  () => agent(`审查代码架构与设计规范:\n${diff.output}`, { label: "架构审查", effort: "medium" }),
 ])
 
-// 4. 阶段三：沙箱隔离修复与门禁验证
 phase("门禁验证")
-const fixResult = await agent("修复安全审查中发现的严重漏洞并验证测试", {
+const fix = await agent("修复安全审查中发现的严重漏洞并验证测试", {
   label: "自动化修复",
   isolation: "worktree",
   gate: "pnpm test",
 })
 
-// 5. 阶段四：汇总成果
 phase("总结报告")
-const finalReport = await agent("整理各阶段发现，生成最终审查简报", {
+const verdict = await agent("整理各阶段发现，生成最终审查简报", {
   label: "报告汇总",
   schema: {
     type: "object",
-    properties: {
-      approved: { type: "boolean" },
-      summary: { type: "string" },
-    },
+    properties: { approved: { type: "boolean" }, summary: { type: "string" } },
     required: ["approved", "summary"],
   },
 })
 
-log(`审计完成，批准状态: ${finalReport.approved}`)
-return {
-  security: securityFinding,
-  style: styleFinding,
-  fix: fixResult,
-  verdict: finalReport,
-}
+return { security, style, fix, verdict }
 ```
+
+`isolation: 'worktree'` 分配独立 Git Worktree、`gate` 执行恰好一次验收命令，两者的完整生命周期（租约、清理安全链）见[Git Worktree 与代码门禁](worktree-and-gate.md)；失败语义与恢复策略见[状态流水与故障恢复](journaling-recovery.md)。

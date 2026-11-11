@@ -2,8 +2,10 @@
  * 外部插件目录自动发现与动态加载器。
  *
  * `<dataDir>/plugins/` 下混杂两类目录（关键背景：PluginHost.register 会为每个
- * 已注册插件创建 `<dataDir>/plugins/<pluginId>` 作为其 ctx.dataDir）：
- * 1. 已注册插件的纯数据目录（如 `builtin:profile`、`builtin:herdr`）；
+ * 已注册插件创建 `<dataDir>/plugins/<pluginDataDirName(pluginId)>` 作为其 ctx.dataDir）：
+ * 1. 已注册插件的纯数据目录（如 `builtin%3Aprofile`、`builtin%3Aherdr`；
+ *    id 中的 `:` 落盘时统一转义为 `%3A`，否则 Windows 会把它当成 NTFS
+ *    交替数据流而无法建目录，见 plugin-dir-name.ts）；
  * 2. 用户放入的外部第三方插件目录（含 plugin.json 或约定入口文件）。
  *
  * 判定规则（只认「插件入口」标记，绝不靠目录名猜测）：
@@ -44,6 +46,7 @@ import {
   type PluginSummary,
 } from '@helm/protocol';
 import { registerPluginTsRoot, nextPluginGeneration } from './backend-ts-loader.js';
+import { isBuiltinPluginDataDirName } from './plugin-dir-name.js';
 
 /** 加载器所需的最小宿主形状（真实 PluginHost 结构兼容，便于独立测试）。 */
 export interface ExternalPluginHost {
@@ -124,11 +127,11 @@ function resolveFailedPluginId(
 ): { id: string; meta: Record<string, unknown> } {
   const meta = readManifestMeta(dirPath);
   const manifestId = meta['id'];
+  // 外部插件 id 禁止冒号（冒号仅作 builtin: 命名空间分隔符，与受管插件包
+  // PLUGIN_ID_PATTERN 对齐；否则源目录与 ctx.dataDir 会分叉，见 plugin-dir-name.ts）
   if (
     typeof manifestId === 'string' &&
-    manifestId.length > 0 &&
-    !manifestId.startsWith('builtin:') &&
-    /^[A-Za-z0-9:_-]+$/.test(manifestId) &&
+    /^[A-Za-z0-9_-]+$/.test(manifestId) &&
     !existingIds.has(manifestId)
   ) {
     return { id: manifestId, meta };
@@ -203,9 +206,9 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
   };
   await populateExisting();
   for (const entry of entries) {
-    // 数据目录（builtin:profile 等）与隐藏目录一律不参与外部插件发现
+    // 内置插件数据目录（builtin%3Aprofile 等）与隐藏目录一律不参与外部插件发现
     if (!entry.isDirectory()) continue;
-    if (entry.name.startsWith('.') || entry.name.startsWith('builtin:')) continue;
+    if (entry.name.startsWith('.') || isBuiltinPluginDataDirName(entry.name)) continue;
     const dirPath = resolve(pluginsDir, entry.name);
     // 为插件目录启用后端 TS 转译（含运行期动态 import 的相对 TS 依赖）。
     // 任一失败路径（导入 / id 冲突 / 宿主注册）都释放计数；成功注册则根常驻
@@ -558,8 +561,10 @@ export async function importPluginDefinition(
 
 /**
  * 边界校验外部模块导出的定义形状：非空字符串 id / name + definePlugin 函数；
- * id 禁止 builtin: 前缀。仅接受 protocol PluginDefinition 的 definePlugin，
- * setup 等兼容别名一律拒绝（项目明确不做向后兼容）。返回规范化定义。
+ * id 禁止 builtin: 前缀与冒号（冒号仅作 builtin: 命名空间分隔符；外部插件
+ * id 含冒号会破坏「源目录即 ctx.dataDir」不变量，见 plugin-dir-name.ts）。
+ * 仅接受 protocol PluginDefinition 的 definePlugin，setup 等兼容别名一律拒绝
+ * （项目明确不做向后兼容）。返回规范化定义。
  */
 export function assertExternalDefinition(candidate: unknown, dirPath: string): PluginDefinition {
   const fail = (detail: string): HelmError =>
@@ -578,6 +583,14 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
     throw new HelmError(
       'invalid_plugin_definition',
       `外部插件 ${dirPath} 的 id 不允许以 builtin: 开头（不冒充内置插件）: ${def.id}`,
+      400,
+      { dirPath, id: def.id },
+    );
+  }
+  if (def.id.includes(':')) {
+    throw new HelmError(
+      'invalid_plugin_definition',
+      `外部插件 ${dirPath} 的 id 不允许包含冒号（冒号仅作 builtin: 命名空间分隔符，与受管插件包 id 规则一致）: ${def.id}`,
       400,
       { dirPath, id: def.id },
     );
@@ -684,7 +697,7 @@ async function findPluginSource(
   const hits: PluginSourceLocation[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    if (entry.name.startsWith('.') || entry.name.startsWith('builtin:')) continue;
+    if (entry.name.startsWith('.') || isBuiltinPluginDataDirName(entry.name)) continue;
     const dirPath = resolve(pluginsDir, entry.name);
     // 其他目录损坏（坏 manifest / 坏入口）不应炸断整目录扫描：目录名与目标
     // id 不一致时即便修复也轮不到它命中，直接跳过；同名目录解析失败时目标
@@ -855,7 +868,7 @@ export async function rescanExternalPlugins(
   let skipped = 0;
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    if (entry.name.startsWith('.') || entry.name.startsWith('builtin:')) continue;
+    if (entry.name.startsWith('.') || isBuiltinPluginDataDirName(entry.name)) continue;
     const dirPath = resolve(pluginsDir, entry.name);
     if (existingIds.has(entry.name)) {
       skipped += 1; // 目录名同名已注册插件：快速跳过（不重载）

@@ -203,12 +203,21 @@ async function evaluateModuleCode(code: string): Promise<Record<string, unknown>
   const blobUrl = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))
   try {
     return (await import(/* @vite-ignore */ blobUrl)) as Record<string, unknown>
-  } catch {
-    const b64 = typeof Buffer !== 'undefined'
-      ? Buffer.from(code, 'utf8').toString('base64')
-      : btoa(unescape(encodeURIComponent(code)))
-    const dataUrl = `data:text/javascript;base64,${b64}`
-    return (await import(/* @vite-ignore */ dataUrl)) as Record<string, unknown>
+  } catch (err: unknown) {
+    const errCode = (err as { code?: string })?.code
+    const message = err instanceof Error ? err.message : String(err)
+    if (
+      errCode === 'ERR_UNSUPPORTED_ESM_URL_SCHEME' ||
+      message.includes('ERR_UNSUPPORTED_ESM_URL_SCHEME') ||
+      message.includes("protocol 'blob:'")
+    ) {
+      const b64 = typeof Buffer !== 'undefined'
+        ? Buffer.from(code, 'utf8').toString('base64')
+        : btoa(unescape(encodeURIComponent(code)))
+      const dataUrl = `data:text/javascript;base64,${b64}`
+      return (await import(/* @vite-ignore */ dataUrl)) as Record<string, unknown>
+    }
+    throw err
   } finally {
     URL.revokeObjectURL(blobUrl)
   }

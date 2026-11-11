@@ -1,118 +1,57 @@
-# Helm Web 界面基线
+# Helm Web 主控台
 
-`@helm/web` 是面向人类使用的主控台。后续插件界面沿用此包的布局、语义色、控件与声明式渲染协议。
+`@helm/web` 是面向人类的响应式主控台，基于 React 19 + Vite 6 与 Radix UI 无头交互原语构建。开发模式下 Vite 固定占用 `3201`（`strictPort: true`），并将 `/api` 与 `/ws` 反向代理到 Hub（默认 `3202`，可用 `HELM_PORT` 覆盖）；Hub 与 Web 默认只监听本机。
 
 ## 启动与验证
 
 ```bash
-# 从仓库根目录启动 Hub（3202）与 Web（3201）
-pnpm dev
+# 从仓库根目录：Hub（3202）与 Web（3201）并行启动
+HELM_PORT=3202 pnpm dev
 
-# 分别启动
+# 或分别启动（dev:web 需内核已在 3202）
 pnpm dev:kernel
 pnpm dev:web
 
+# 构建与检查
 pnpm build
 pnpm typecheck
-timeout 60s pnpm test
+timeout 50s pnpm test
 ```
 
-Vite 只占用 `3201`，并代理 `/api` 到 `HELM_PORT`（缺省 `3202`）。Hub 和 Web 均默认只监听本机。构建产物在 `packages/web/dist`；目前 Hub 不托管该静态目录，可通过反向代理同源提供静态页面与 `/api`。
+构建产物位于 `packages/web/dist`。可重复的浏览器验收服务见 `scripts/web-acceptance.mjs`：独立临时数据目录、真实内核与 HTTP、临时注册的样例插件（含 `client.tsx` 夹具）。
 
-## 视觉与布局
+## 架构要点
 
-- `src/styles.css` 定义 Quiet Surface 的全部基础变量和控件。`src/responsive.css` 统一窄面板、移动端、焦点和减少动画偏好。
-- 桌面使用 248px 导航栏、主工作区、可选并排视图、340px 工作台。视口不足时，工作台改为覆盖式抽屉；小屏导航收进菜单，双视图改为上下排列。
-- AI 正文直接铺在画布上。人类消息使用浅底胶囊。普通工具调用和结果合为 26px 一行，点击后查看完整入参与输出。
-- 业务卡、失败工具、子代理入口和工作流摘要直接展示。长代码保持完整，横向滚动；不在复制或渲染前截断。
-- 全界面使用纯文本和 `HelmIcon` 线性图标。颜色通过 `--fg`、`--fg-muted`、`--bg`、`--border`、`--accent`、`--ok`、`--warn`、`--err` 等语义变量取用，禁止插件自行硬编码另一套明暗色板。
+### 视图形态分级
 
-## 插件如何复用
+界面按信息量分级为三档，禁止把海量内容塞进居中弹窗：
 
-轻量界面优先使用 `ctx.ui` 的 JSON Spec。宿主已经消费全部 10 个注册方法，对应协议中的 7 类扩展点：侧栏条目/分组、全屏、时间线、工具、输入框胶囊/挂件、工作台、命令面板/设置。
+- **一级主舞台（Primary Stage）**：会话、插件 Screen、插件中心、应用中心等，占满中央视口，采用响应式卡片网格，顶部集成检索与分类；
+- **右侧深度配置抽屉（Detail Drawer）**：主舞台卡片点击后的详情、能力透视与动态配置表单，桌面端固定宽度 520px~560px，移动端（≤680px）自适应全宽；
+- **轻量居中模态（Centered Modal）**：仅限危险确认、短表单、凭据录入等轻量操作，宽度克制在 480px~640px。
 
-```ts
-ctx.ui.screen({
-  id: 'jobs',
-  label: '任务',
-  icon: 'layers',
-  docs: ['jobs'],
-  json: {
-    component: 'Stack',
-    children: [
-      { component: 'Text', variant: 'title', text: '任务列表' },
-      {
-        component: 'Table',
-        columns: [
-          { key: 'conversationId', label: '会话' },
-          { key: 'title', label: '标题' },
-        ],
-        rows: '{$docs.jobs.rows}',
-        rowActions: [{
-          label: '并排查看',
-          action: {
-            type: 'helm:open',
-            target: 'conversation:{$row.conversationId}',
-            split: true,
-          },
-        }],
-      },
-    ],
-  },
-})
-```
+### Radix UI 唯一交互原语底座
 
-`docs` 必须引用插件已声明为 public 的文档。宿主先加载文档，再随 `plugin.doc.updated` 更新组件。组件树也支持 `{ root, elements }` 扁平形态。
+`src/ui/` 下基于 `@radix-ui/react-*` 封装全部交互原语：`Dialog`、`AlertDialog`、`Select`、`DropdownMenu`、`Popover`、`Tabs`、`Tooltip`、`Switch`、`Checkbox`。全仓严禁使用原生 `<select>` 与手写无 WAI-ARIA / Focus Trap 的浮层；所有原语在 SSR 与单测环境下可直出降级渲染（`renderToString` 不依赖 Portal）。视觉层由 `src/styles.css`（Quiet Surface 语义变量与控件类）与 `src/responsive.css`（窄面板、移动端与减少动画偏好）统一承载，插件不得硬编码另一套色板。
 
-### 标准原语
+### 插件前端单轨机制（client.tsx）
 
-| 类别 | 组件 |
-| --- | --- |
-| 布局 | `Stack`、`Card`、`MetricGrid`、`Tabs`、`Accordion` |
-| 展示 | `Text`、`Badge`、`Markdown`、`MetricCard`、`KeyValueList`、`Callout`、`Steps`、`BarList`、`Table` |
-| 表单与动作 | `TextInput`、`Select`、`Switch`、`CheckboxGroup`、`Button`、`ActionBar` |
+插件视图统一经 `client.tsx` 编译为 ESM bundle（`GET /api/plugins/:id/client.mjs`，按 `contentHash` 缓存，停用即失效），由 `<PluginUiView />` 动态加载。编译期将 `react`、`react-dom`、`lucide-react` 与 `@helm/plugin-client` 虚拟化为 `globalThis.__helm_shared_*` 命名空间引用，运行时与宿主共享同一实例，绝不打包第二份 React；插件本地 CSS 经 `__helmClientCss` 导出托管注入与回收。
 
-宿主动作是 `helm:action`（插件动作）、`helm:open`（会话或 screen，可分屏）、`helm:send`（提交消息）。完整属性以 `src/ui/spec-primitives.tsx` 和 `src/ui/spec-action.ts` 为准。
+`@helm/plugin-client` 共享 SDK 提供响应式 Hook（`usePluginContext`、`usePluginDoc`、`usePluginSessionDoc`、`useConversations`、`useConversation`、`useToolActivity`）、无障碍控件（`Select` / `MultiSelect` / `Switch` / `Checkbox` / `Tabs` 系列）、内容组件（`MarkdownView` / `CodeBlockView` / `Callout` / `ViewBoundary`）与 `PluginSlot` 插件间子插槽原语，导出符号唯一真源为 `@helm/protocol` 的 `PLUGIN_CLIENT_SHARED_EXPORTS`。声明式 JSON 卡片与 Mermaid 图表不是宿主内置能力，分别由 `builtin:json-render` 与 `builtin:mermaid` 插件通过 `markdownCodeBlock` 扩展点提供，停用后对应围栏回退普通代码块。
 
-绑定支持 `{$docs.index.workers}`、`{$docs["recall-graph"].nodes}` 和 `/$docs/index/routerConversationId`。整串绑定返回数组、布尔、数字等原始值；混合文本才做字符串插值。表格动作在点击时才注入 `$row`；表单动作通过 `$value` 取得新值。
+### 状态同步与 URL Hash 导航
 
-### React 控件与通用样式
+- `src/lib/api.ts` 是 HTTP 唯一入口，统一携带 Bearer token；
+- `src/lib/live-state.ts` 按 SSE `seq` 处理全局快照与增量：忽略重复帧，缺帧或格式异常时重连并重取可见状态；
+- `src/lib/session-docs.ts` 按需订阅会话分片文档（如工作流 `runs`）的专用 SSE，不进入全局首帧；错误显式暴露给订阅者，绝不静默降级；
+- 全站位置由 `src/lib/url-hash-model.ts` 唯一管理：主屏 `sp.*` 与分屏 `ssp.*` 参数命名空间隔离，支持复制链接直达、刷新恢复与浏览器前进/后退；组件经 `HelmStoreProvider` 暴露的 `openTarget / closeSplit / setScreenParams` 等方法导航，不得另建平行路由。
 
-复杂的宿主界面使用以下统一类名：
+## 规范指引
 
-| 用途 | 入口 |
-| --- | --- |
-| 页面骨架 | `.helm-pane`、`.pane-topbar`、`.timeline-scroll` |
-| 按钮 | `.btn` + `.btn-primary` / `.btn-danger` / `.btn-ghost` / `.btn-sm` |
-| 状态 | `.badge` + `.badge-neutral` / `.badge-accent` / `.badge-ok` / `.badge-warn` / `.badge-err` |
-| 数据 | `.list > .row`、`.jr-table-wrap > .jr-table`、`.tabular-nums` |
-| 表单 | `.input`、`.select`、`.textarea`、`.config-fields` |
-| 对话框 | `.modal-backdrop > .modal`、`.modal-header`、`.modal-body`、`.modal-footer` |
-| 左右配置页 | `.asset-modal-body`、`.asset-modal-list` |
+编写或重构界面、新增视图/弹窗/抽屉、排查移动端样式或深链问题时，先阅读并遵守：
 
-对话框需有 `role="dialog"`、`aria-modal="true"` 和名称；图标按钮必须带名称；字段的 label 必须关联 input。使用 `ModalFocusScope` 维护 Tab 焦点及关闭后返回。`.tsx` 只导出组件，数据转换和可测试逻辑放在 `.ts`。
+- [Web 前端设计系统与开发约定](../../docs/conventions/web-frontend.md)：视图形态分级、Radix 原语底座、字体阶梯与零 Emoji 铁律；
+- [Web 导航与 URL Hash 开发约定](../../docs/conventions/web-navigation.md)：可恢复状态边界、Screen 参数契约与历史记录语义。
 
-## 数据和交互边界
-
-- `src/lib/api.ts` 是 HTTP 唯一入口，携带 Bearer token。`/api/models` 返回 provider/modelId/available，客户端在边界生成用于选择的完整 ID。
-- `src/lib/live-state.ts` 按 SSE `seq` 处理快照和增量，忽略重复帧，缺帧或格式异常时重连。重新连接后重取可见会话详情与插件文档，避免展示断线期间的旧状态。
-- `helm.input` 作为输入显示来源；原生重复输入去重。工具按 callId 配对。搜索返回的 `input:<submissionId>` / `entry:<id>` 会映射到真实时间线条目，必要时继续加载历史分页。
-- Profile PUT 整体替换基础配置。系统提示词与记忆仅在用户编辑过时提交，避免改名称覆盖后台新记忆。已配置密钥用占位提示呈现，未修改时不把 `******` 发回服务端。
-- 文件上传期间禁止发送，15 MiB 超限给出明确错误。预览和下载通过带鉴权 fetch 取得 Blob，组件卸载时释放 ObjectURL。未知文件类型提示下载，不冒充文本。
-- `ViewBoundary` 隔离声明式卡片的渲染错误。加载失败、连接中断、未配置模型都显示明确状态。
-
-## 当前交付范围
-
-个人助理对话、附件、审批、模型选择、搜索与分叉、角色与凭据编辑、插件设置、Herdr 总览、SuperAgent 图谱及 JSON Spec 扩展点已接入。Herdr/SuperAgent 的界面读取已有插件契约；触发器业务继续由其负责的 Agent 开发，Web 通用 screen 可渲染其 JSON Spec。
-
-`client.tsx` 第二轨道已接入：插件定义声明 `clientRoot` 后，`ui.*({ client: { module, export } })` 的扩展点由 `<PluginUiView />` 动态加载编译产物（`GET /api/plugins/:id/client.mjs`，Bearer fetch + Blob URL import，按 contentHash 缓存，停用即失效）。共享依赖（react / react-dom / lucide-react / `@helm/plugin-client`）在编译期被虚拟化为 `globalThis.__helm_shared_*` 命名空间引用，运行时与宿主共享同一实例，绝不打包第二份 React；import 的 named / namespace / default / as 别名 / `export * from` 全部由 esbuild 生成合法 ESM 绑定。组件内可 `import { usePluginContext, usePluginDoc } from '@helm/plugin-client'`：usePluginContext 返回 callAction/openScreen/openSplitScreen/getPluginDoc/conversationId/theme（全部真实宿主能力），usePluginDoc 响应式订阅本插件 public doc（SSE 实时更新，非 Promise 轮询）。双轨优先级：同时声明 `client` 与 `json` 时 client 优先。加载/导出/渲染错误显式展示，不静默空白。当前范围不含外部插件安装与 npm 包加载系统（clientRoot 由可信注册方传入；非共享裸依赖编译时显式拒绝）。已知成本：为支持插件引用任意 lucide 图标，宿主以全命名空间共享 lucide-react，index bundle 因此从约 627KB 增至约 1763KB（gzip 后约 394KB）——这是功能正确的取舍，后续如需优化可改按图标子集共享。浏览器验收中的模型回复由 SDK faux provider 提供，不代表真实服务商模型联通验收。
-
-## 可重复的浏览器验收服务
-
-```bash
-pnpm build
-node scripts/web-acceptance.mjs
-# 另一终端运行 pnpm dev:web，再访问 http://127.0.0.1:3201
-```
-
-该脚本新建独立临时数据目录、生成临时密码并打印，使用真实内核/SQLite/HTTP、真实本地 bash 工具、85 轮分页历史，以及一个临时注册的 JSON Spec 样例插件。样例包含表格行导航、布尔动作与 public doc 更新。它不读取用户运行数据，也不注册到生产实例。验收服务额外注册 `test:client-acceptance`（真实 clientRoot 夹具），左栏「client.tsx 验收」进入动态组件屏（含本地依赖闭包编译与计数交互），用于验证浏览器内真实动态加载。按 Ctrl+C 关闭服务；临时目录保留便于排查。
+`.tsx` 组件文件只导出组件与类型，纯函数放独立 `*-model.ts` 模块，保持 Fast Refresh 不失效。

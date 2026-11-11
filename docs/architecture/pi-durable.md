@@ -1,166 +1,108 @@
-# 持久化会话与状态机
+# 持久会话、存储、机密隔离与 CAS 审批
 
-本文介绍 Helm 的通用会话状态机、SQLite 与 FTS5 存储引擎、机密内存隔离及 CAS 乐观锁审批机制。
+Helm 的会话层构建在 `pi-durable` 之上：每个智能体执行上下文抽象为通用 `Conversation(nodeId, cwd)`，配合五态状态机、单一 SQLite 持久层、纯内存机密保险箱与 CAS 乐观锁审批流。这一层与业务正交——内核没有任何角色枚举，会话职责由 `profileId` 与 `tags` 表达（见[架构总览](overview.md)）。
 
----
-
-## 通用会话状态机模型
-
-Helm 将每个智能体执行上下文抽象为 `Conversation(nodeId, cwd)`。
-系统通过单调递增的序列号跟踪所有状态跃迁。
+## 五态状态机
 
 ```mermaid
 stateDiagram-v2
     [*] --> idle: 初始化创建
     idle --> working: 接收新输入
     done --> working: 接收新输入
-    working --> blocked: 触发 AskDoc 或等待确认
-    blocked --> working: 审批通过或超时恢复
-    working --> done: 回合正常完成 (unread=true)
-    working --> error: 发生未捕获错误
+    working --> blocked: 创建 AskDoc / 等待确认
+    blocked --> working: 审批通过 / 终端按键恢复
+    working --> done: 回合正常完成（unread=true）
+    working --> error: 未捕获错误（lastError 注入）
     error --> working: 重新提交输入重试
-    done --> idle: 用户聚焦或已读标记
+    done --> idle: 人类显式聚焦 / 标记已读
 ```
 
-### 五态生命周期定义
+| 状态 | 含义 |
+| :--- | :--- |
+| `idle` | 空闲且历史已读 |
+| `working` | 正在执行推理、工具调用或等待子代理 |
+| `blocked` | 挂起等待人类审批（pending AskDoc）或子代理终端确认 |
+| `done` | 本回合完毕待人类查阅（`unread = true`） |
+| `error` | 最近一轮因未捕获异常终止（`lastError` 携带诊断，下回合开始自动清除） |
 
-| 状态 | 标识 | 说明 |
+### 序列号水位线与并发策略
+
+两条单调递增序列号支撑前端同步与调度对账：`stateChangeSeq` 在任何状态跃迁、实时动作（`doing` 零 Token 摘要）或审批项更新时递增，既是 SSE 推送的水位线也是 AskDoc CAS 乐观锁基准；`completionSeq` 在每次回合终态（正常或出错）递增，供工作流调度器对账「回合是否真正结束」。`unread` 守恒：普通 API 读取不清零，仅人类在 Web/CLI 显式聚焦或显式 PATCH 时清零——自动化探针不会吞掉未读标记。
+
+会话正忙（`working`）时新输入的三种策略由 `WhenBusy` 表达：`steer`（内核默认）中止当前步骤并注入新指令；`followUp` 排队至当前回合结束后作为下轮输入；`reject` 直接拒绝并返回冲突。无第三种隐式行为，批处理投递请显式 `followUp`。
+
+### 输入来源、归属权与插件管理权
+
+每次提交的 `helm.input` entry 附着输入来源 `origin: 'human' | 'agent' | 'trigger'`，从 CLI/HTTP 一路透传到 `turn_settled` 钩子。后台 Worker 本回合消费的输入只要含任一 `agent / trigger` 来源，即向 `routerConversationId`（SuperAgent 中枢）投递汇报卡片；纯 `human` 回合仅静默更新召回图谱。
+
+会话归属权 `ownedBy: 'human' | 'bot' | 'helm'`（缺省 `human`）是 Watchdog 红线判定的唯一可信来源：对 `bot/helm` 归属的后台会话允许自动恢复或中止；对 `human` 的人类直连会话或 Herdr 终端窗格**严禁发送任何按键或中止指令**，仅允许只读诊断与通知。未标记一律按 `human` 对待。插件可经 `ctx.host.manageConversation(id)` 声明管理权——受管期间会话删除保护（`409 conversation_managed_by_plugin`），插件停用/回滚时宿主自动释放；`superagent` 的 router/watchdog 常驻会话、初始入口会话均受此保护且无 id 级删除豁免（删除后重启凭 tombstone 不复活、不补种）。
+
+## 单一 state.sqlite 存储架构
+
+全部持久化收敛到 `<dataDir>/state.sqlite` 一个数据库文件，pi-durable 原生表（`pi_` 前缀）与 Helm 扩展表共享同一连接与事务队列：
+
+| 分组 | 表 | 用途 |
 | :--- | :--- | :--- |
-| **空闲已读** | `idle` | 会话处于空闲状态，且历史消息已读 |
-| **执行中** | `working` | 正在执行模型推理、工具调用或等待子智能体 |
-| **等待审批** | `blocked` | 挂起等待人类审批通过或等待终端按键确认 |
-| **完成未读** | `done` | 当前回合执行完毕，等待人类查阅（`unread = true`） |
-| **执行错误** | `error` | 最近一轮执行因未捕获错误而中断退出 |
+| pi-durable 原生 | `pi_conversations` / `pi_entries` | 会话骨架与消息/事件流水（SDK 管理） |
+| Helm 扩展 | `helm_conversations` | 会话元数据：title、profile_id、tags、node_id、cwd、model、thinking_level、unread、pinned、state_change_seq、completion_seq |
+| Helm 扩展 | `helm_conversation_tool_links` | 子会话 ↔ 父工具调用 ID 关联 |
+| Helm 扩展 | `helm_asks` | AskDoc 审批（spec、status、expected_state_seq） |
+| Helm 扩展 | `helm_artifacts` | 产物索引（path、mime_type、size；按 conversation_id 索引） |
+| Helm 扩展 | `helm_plugin_docs` / `helm_plugin_session_docs` | 插件全局文档与会话分片文档 |
+| Helm 扩展 | `helm_seq` / `helm_tombstones` | 序列号发生器与删除墓碑 |
+| 派生索引 | `helm_conversation_fts` | FTS5 全文检索（见下） |
 
-### 序列号与并发策略
+连接纪律：所有 SQL 一律经同一 `NodeSqliteDatabase` adapter 排队执行——绕过 facade 的裸调用可能与 pi 事务互相回滚，绝不另开连接。打开时显式设置 PRAGMA：`journal_mode=WAL`（读写并发）、`synchronous=NORMAL`（性能与崩溃安全平衡）、`busy_timeout=5000`（避免并发争抢直接失败）、`wal_autocheckpoint=1000`（控制 WAL 体积）。
 
-1. **状态序列号（`stateChangeSeq`）**：
-   任何状态跃迁、实时动作（`doing`）或审批项更新均推进该序号。
-   该序号作为前端 SSE 推送的水位线与 CAS 乐观锁基准。
-2. **完成序列号（`completionSeq`）**：
-   每次回合正常结束或出错终止时单调递增，供工作流调度对账。
-3. **未读状态守恒**：
-   普通 API 读取不会清除 `unread` 状态。
-   仅在人类用户于 Web 或 CLI 显式聚焦会话时清零。
-4. **繁忙控制策略（`whenBusy`）**：
-   当会话处于 `working` 状态时，新输入支持三种策略：
-   - `steer`（默认）：插话引导，中止当前步骤并注入新指令。
-   - `followUp`：排队等待，在当前回合结束后作为下一轮输入执行。
-   - `reject`：拒绝接收，直接返回请求冲突错误。
+### FTS5：纯可重建的派生索引
 
----
+`helm_conversation_fts(conversation_id UNINDEXED, entry_id UNINDEXED, title, body)` 是**可重建的派生索引**，不是权威数据：`body` 只索引脱敏后的纯文本（secret 值永不入库），结构变更时经 `rebuildFts()` 全量重建即可恢复，绝不允许向其写入 `pi_*` 表语义。全文检索入口为 `GET /api/search?q=` 与 `helm search <query>`。
 
-## SQLite 单库与 FTS5 全文搜索
+## SecretStash：纯内存机密隔离
 
-系统采用单一 `state.sqlite` 数据库管理全量持久化数据。
-数据文件默认存储于 `~/.helm/state.sqlite`。
+机密值只存在于 Hub 进程内存（`StashedSecret` 对象），持久层与模型上下文仅见到 `[REDACTED:stash:<uuid>]` 占位符。生命周期为：用户或插件登记机密 → stash 生成 UUID 占位符 → 数据库/日志/时间线/FTS 全部只落占位符 → EnvFabric 执行命令前现场还原注入环境变量（`HELM_SECRET_*` 或登记时指定的环境变量名）→ 命令输出出站前过全局脱敏（占位符与已登记明文替换 `[REDACTED]`）。
 
-```mermaid
-flowchart TD
-    subgraph SQLite["单一 state.sqlite 数据库"]
-        subgraph Native["pi-durable 原生表"]
-            PiConv["pi_conversations"]
-            PiEntries["pi_entries 消息与事件流水"]
-        end
-
-        subgraph Helm["Helm 扩展元数据表"]
-            HConv["helm_conversations"]
-            HAsks["helm_asks 审批提问表"]
-            HArts["helm_artifacts 产物索引表"]
-            HDocs["helm_plugin_docs 插件文档表（含 workflow 运行记录）"]
-        end
-
-        subgraph FTS["FTS5 全文索引"]
-            FtsIndex["helm_conversation_fts 派生全文检索"]
-        end
-    end
-
-    PiEntries -.->|脱敏文本派生| FtsIndex
+```typescript
+// packages/kernel/src/services/secret-stash.ts（节选）
+export const REDACTED_PREFIX = '[REDACTED:stash:'
+export interface StashedSecret {
+  readonly conversationId: number   // 会话级命名空间隔离，杜绝跨会话串用
+  readonly uuid: string
+  readonly placeholder: string      // [REDACTED:stash:<uuid>]
+  readonly value: string
+  readonly name: string
+}
 ```
 
-### 连接队列与 WAL 模式参数
-
-为杜绝 SQLite 写入冲突与文件死锁，内核采用统一排队驱动：
-- **单一连接排队**：所有 SQL 均通过单一 `NodeSqliteDatabase` 适配器排队。
-- **WAL 模式**：配置 `journal_mode=WAL`，大幅提升读写并发性能。
-- **同步级别**：配置 `synchronous=NORMAL`，兼顾性能与崩溃安全性。
-- **锁等待超时**：配置 `busy_timeout=5000`，避免并发争抢导致写入失败。
-- **检查点刷新**：配置 `wal_autocheckpoint=1000`，稳定控制 WAL 日志体积。
-
-### FTS5 派生检索索引
-
-- **派生索引定位**：FTS5 全文索引是纯派生数据，不得修改 `pi_*` 核心表语义。
-- **结构定义**：`helm_conversation_fts(conversation_id UNINDEXED, entry_id UNINDEXED, title, body)`。
-- **脱敏文本索引**：`body` 字段仅索引脱敏后的纯文本，敏感凭据绝不入库。
-- **在线重建能力**：系统提供 `rebuildFts()` 接口，支持随时全量重建索引。
-
----
-
-## SecretStash 纯内存机密隔离
-
-用户凭据与密钥的安全隔离是多智能体系统的核心要求。
-Helm 设计了纯内存的 `SecretStash` 机密保险箱机制。
-
-```mermaid
-flowchart LR
-    UserInput["用户输入机密 (如 API Key)"] --> Stash["SecretStash 内存保险箱"]
-    Stash --> GenUUID["生成映射 [REDACTED:stash:uuid]"]
-    GenUUID --> Persist["数据库存储 (仅占位符)"]
-    GenUUID --> LLM["模型上下文 (仅占位符)"]
-    Stash -.->|命令执行前注入| ExecEnv["本地/远程执行环境 (真实密钥)"]
-```
-
-### 内存存储与占位符映射
-
-1. **纯内存驻留**：机密值只存储在 Node.js 进程内存中，绝不写入数据库与日志文件。
-2. **上下文脱敏**：大模型上下文与时间线仅包含 `[REDACTED:stash:<uuid>]` 占位符。
-3. **会话级隔离**：按会话隔离命名空间，杜绝跨会话串用机密。
-4. **实时还原注入**：在 EnvFabric 执行 Shell 命令前现场还原并注入环境变量。
+`addRedaction(value)` 登记全局逐值脱敏（如内核受管 `HELM_TOKEN`）：非环境变量、不计入统计、不随 `clear(conversationId)` 清除；多个登记可叠放同一值，全部解除后才停止脱敏。`AskDoc` 字段标记 `secret: true` 时，用户提交的答案直接进入 stash，持久层仅存占位符。插件私有 secrets 持久化于 `credentials.json` 的 `pluginSecrets.<pluginId>`（恒 0600），明文不进入公共文档、事件或模型上下文。
 
 ### 诚实安全边界
 
-系统如实声明机密安全边界：
-- 机密保险箱可以有效防止提示词泄漏与日志持久化泄露。
-- 但由于 Shell 命令与进程内插件具备宿主执行权限。
-- 系统无法防御受信任脚本在执行时主动读取环境变量或扫描进程内存。
+stash 防的是**持久化泄漏与上下文泄漏**：提示词注入、日志落盘、数据库文件被读取都拿不到明文。但它**不承诺对可信代码零泄漏**：任意 Shell 命令与进程内插件天然拥有宿主权限，可以读环境变量、扫描进程内存——这是可信代码的固有权限，本模块不设防也不应宣称设防。
 
----
+## AskDoc：CAS 乐观锁审批
 
-## AskDoc 乐观锁审批机制
+智能体需要人类授权时创建 `AskDoc` 并把会话置为 `blocked`。字段类型支持 `text`（文本输入）、`select`（单选列表，带 options）与 `confirm`（确认框）；`secret: true` 标记的答案走 SecretStash。`ctx.host.createAsk(spec)` 返回 Promise，正常三态终局（`answered / cancelled / superseded`）均 resolve，只有验证/I/O/宿主失败才 reject——调用方无需区分「人取消了」与「系统坏了」。
 
-当智能体需要人类授权时，会创建 `AskDoc` 审批文档并将状态置为 `blocked`。
+### expectedStateSeq 防双端竞态
+
+同一智能体可能同时连接 Web 控制台与 Herdr 终端窗格：人类在终端直接按键处理时，底层 `stateChangeSeq` 已推进，而 Web 端的审批卡片仍是旧水位——若无保护，Web 端迟到的提交会向终端重复发送回车。
 
 ```mermaid
 sequenceDiagram
     participant Agent as 智能体会话
-    participant Hub as Helm 内核
+    participant Hub as Hub
     participant Web as Web 控制台
-    participant Terminal as 终端窗口 (如 Herdr)
+    participant Terminal as Herdr 终端窗格
 
-    Agent->>Hub: 发起提问并记录 expectedStateSeq
-    Hub->>Hub: 会话状态置为 blocked
-    Hub-->>Web: 推送 AskDoc 审批卡片
-    alt 人类在 Web 端点击审批
-        Web->>Hub: POST /api/asks/:id/answer
-        Hub->>Hub: 校验 expectedStateSeq 一致
-        Hub->>Agent: 注入审批答案并唤醒执行
-    else 人类在终端直接按键交互
-        Terminal->>Hub: 终端按键上报推进 stateChangeSeq
-        Web->>Hub: 迟到的 Web 审批提交
-        Hub->>Hub: 检测到序列号推进 (CAS 校验不匹配)
-        Hub-->>Web: 状态标记为 superseded 销单
-    end
+    Agent->>Hub: createAsk（记录 expectedStateSeq = N）
+    Hub->>Hub: 会话置 blocked，推送审批卡片
+    Terminal->>Terminal: 人类直接按键处理
+    Terminal->>Hub: 按键上报（stateChangeSeq 推进至 N+1）
+    Web->>Hub: POST /api/asks/:id/answer（expectedStateSeq = N）
+    Hub->>Hub: CAS 校验失败（N < 当前水位）
+    Hub-->>Web: AskDoc 流转为 superseded 销单
+    Note over Hub: 不向终端重复发送任何按键
 ```
 
-### 提问字段与机密输入
-
-- **支持字段类型**：支持文本输入（`text`）、单选列表（`select`）与确认框（`confirm`）。
-- **机密输入标记**：字段配置 `secret: true` 时，用户提交的答案直接进入 `SecretStash`。
-
-### expectedStateSeq CAS 防竞态
-
-当同一个智能体同时连接 Web 控制台与终端界面时，可能发生双端审批竞态：
-1. **记录基准水位**：创建 `AskDoc` 时记录当时的 `expectedStateSeq`。
-2. **终端优先推进**：若人类直接在终端窗格完成按键输入，底层状态序号递增。
-3. **Web 端自动销单**：Web 端提交答案时 CAS 校验不匹配。
-4. **无害幂等终态**：该审批单自动流转为 `superseded`，防止向终端重复发送按键。
+CAS 水位的解析可注册异步 resolver（`ctx.host.registerAskSeqResolver`）——Herdr 场景下真实水位需经远端 IO 现查，而非创建时快照。`helm asks answer --expected-state-seq N` 在 CLI 侧提供同一保护。对 `ownedBy: 'human'` 会话的终端窗格，任何自动化路径（含 superseded 流转）都不得发送按键，这是归属权红线的直接推论。

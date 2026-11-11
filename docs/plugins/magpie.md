@@ -1,160 +1,58 @@
-# 动态模型网关插件
+# Magpie 动态模型网关插件
 
-本文介绍 `builtin:magpie` 插件的架构设计、原生协议分发、动态模型目录热重载与配额诊断机制。
+`builtin:magpie` 把 Magpie 动态模型网关接入 Helm（可选启用）：经 `ctx.provider` 注册 pi-ai 动态目录 Provider，宿主在服务启动前自动挂载、停用后自动注销——插件内不绕宿主手动挂卸。插件同时维护公开状态文档 `status` 驱动 Web 配置面板、命令面板与 `helm magpie` CLI，并在回合结算后后台静默刷新配额与路由。
 
----
+## 多协议自动分发
 
-## 插件定位与网关架构
+Provider 按模型 `api` 类型自动匹配协议族并动态修正 BaseURL（每次推理请求读取当前生效配置，绝不依赖目录缓存中的静态地址）：
 
-`builtin:magpie` 为系统提供大模型接入能力。
-插件将 Magpie 网关注册为标准的 `pi-ai` Provider。
-它管理模型目录拉取、供应商路由组解析与调用配额诊断。
-
-```mermaid
-flowchart TD
-    subgraph HelmCore["Helm 插件宿主"]
-        Plugin["builtin:magpie 插件"]
-        Provider["ctx.provider(pi-ai Provider)"]
-        StatusDoc["公共状态文档 ctx.doc('status')"]
-    end
-
-    subgraph MagpieGateway["Magpie 动态网关 (默认 127.0.0.1:3425)"]
-        CatalogAPI["GET /v1/models 动态模型目录"]
-        QuotaAPI["GET /api/quotas 配额诊断接口"]
-        TraceAPI["GET /api/trace 路由执行轨迹"]
-        Proxy["多协议反向代理"]
-    end
-
-    subgraph UpstreamProviders["上游大模型供应商"]
-        Anthropic["Anthropic (Messages 协议)"]
-        OpenAI["OpenAI (Completions 协议)"]
-        Gemini["Google (Gemini 协议)"]
-    end
-
-    Plugin --> Provider
-    Plugin --> StatusDoc
-    Provider --> CatalogAPI
-    Provider --> Proxy
-    Proxy --> UpstreamProviders
-    Plugin --> QuotaAPI
-    Plugin --> TraceAPI
-```
-
----
-
-## 原生多协议分发与 Provider 挂载
-
-插件通过 `ctx.provider` 声明模型供应商。
-宿主在服务启动前自动挂载 Provider，停用后自动注销。
-
-### 协议自动适配
-
-不同模型供应商使用不同的通信协议。
-Provider 根据模型类型动态匹配请求路径：
-
-1. **Anthropic 协议族**：
-   - 使用 Messages 规范。
-   - 请求端点自动指向网关根路径。
-2. **OpenAI 兼容协议族**：
-   - 使用 Chat Completions 规范。
-   - 请求端点自动追加 `/v1` 前缀。
-3. **动态 BaseURL 修正**：
-   - 每次推理请求动态读取当前生效配置。
-   - 系统绝不依赖静态文件中的历史地址。
-
----
-
-## 动态模型目录与热重载
-
-模型目录不再静态硬编码在代码库中。
-插件支持从网关拉取最新模型清单。
-
-```mermaid
-sequenceDiagram
-    participant Host as 宿主内核
-    participant Provider as Magpie Provider
-    participant Gateway as Magpie 网关
-    participant Cache as 本地磁盘缓存
-
-    Host->>Provider: 触发 refreshModels()
-    alt 网络正常
-        Provider->>Gateway: GET /v1/models
-        Gateway-->>Provider: 返回最新模型 JSON 数组
-        Provider->>Cache: 原子写回 models-store.json
-        Provider-->>Host: 广播目录更新通知
-    else 网络不可达
-        Provider->>Cache: 读取本地持久化缓存
-        Provider-->>Host: 抛出错误并保留旧模型清单
-    end
-```
-
-### 诚实性与安全更新契约
-
-1. **禁止假成功**：
-   - 网络不可达时刷新方法必须如实抛出错误。
-   - 宿主绝不向用户掩盖错误或误报成功。
-2. **离线缓存兜底**：
-   - 插件首次启动时优先从磁盘读取缓存模型。
-   - 离线加载不触发外部网络请求。
-3. **配置快照一致性守卫**：
-   - 数据读取过程绑定当前网关配置快照。
-   - 若拉取期间用户修改了网关地址。
-   - 插件丢弃挂起的旧请求结果，防止脏数据覆盖。
-
----
-
-## 配额与路由组状态诊断
-
-插件通过状态文档 `status` 实时公开网关状态。
-状态供 Web 配置面板与 CLI 命令行查询。
-
-### 核心状态字段
-
-| 字段名称 | 类型 | 说明 |
+| 协议族 | 规范 | BaseURL 修正 |
 | :--- | :--- | :--- |
-| `gatewayUrl` | string | 当前连接生效的网关根地址 |
-| `local` | boolean | 是否指向本机回环地址 |
-| `reachable` | boolean | 网关当前是否可以成功联通 |
-| `modelCount` | number | 当前可用模型总数量 |
-| `groupCount` | number | 路由分组总数量 |
-| `quotas` | array | 各供应商剩余配额数据快照 |
-| `routes` | array | 最近调用路由分配记录 |
-| `diagnostics` | array | 诊断告警信息列表 |
+| Anthropic | Messages | 网关根路径（如 `http://127.0.0.1:3425`） |
+| OpenAI 兼容 | Chat Completions | 根路径 + `/v1` |
+| Gemini | Google 协议 | 经 pi-ai compat 委托实现 |
 
-### 导出的受管 Action
+模型经 `magpie/<model>` 形式的 ID 进入全局模型目录；本机 loopback 网关免登录即用（auth.check 恒有效）。
 
-1. **`status`**：
-   - 查询当前网关连接状态与模型总数。
-2. **`refresh`**：
-   - 强制触发模型目录网络刷新。
-   - 若网关不可达，动作抛出 `magpie_gateway_unreachable` 错误。
-3. **`quota`**：
-   - 查询各上游渠道的账户额度与余量。
-4. **`groups` 与 `group`**：
-   - 查询供应商路由组规则与分流策略。
+## 动态模型目录与本地缓存
 
-### 静默后台自愈刷新
+模型目录不静态硬编码：Provider 的 `refreshModels` 经 `GET /v1/models` 从网关拉取最新清单，成功后原子写回内核持久缓存 `models-store.json`（按 provider 分区）；`allowNetwork: false` 的 cache-only 恢复只读磁盘缓存、不触网。目录恢复与发布按当前网关 root 过滤——切换网关后旧目录绝不冒充新网关的缓存。
 
-每个交互回合结算时触发 `turn_settled` 钩子：
+诚实性契约在此是硬约束：网络失败（含默认 loopback 网关未运行）一律 throw，通用目录刷新（`helm models refresh` / `POST /api/models/refresh`）把失败显式呈现在 `errors['magpie']`，绝不静默吞成「刷新成功」。插件 `service.start` 的后台刷新失败只更新 `reachable: false / lastError`，不阻断插件启用与内核启动；手动 `refresh` 动作显式抛 `502 magpie_gateway_unreachable`。`reachable: false` 时的 `modelCount` 是缓存计数，绝不冒充实时刷新成功。
 
-1. **静默刷新配额**：
-   - 插件后台请求携带 `?kept=1` 参数。
-   - 接口只复用网关本地缓存的指标。
-2. **零副作用保证**：
-   - 机制不消耗上游供应商调用配额。
-   - 刷新过程异步执行，绝不阻塞用户会话。
+**配置快照代数守卫**：所有网关读取都以「读取时刻冻结的 root + token 快照」执行，发布前经 `sameGateway` 校验快照仍是当前生效配置——fetch 期间用户切换了网关地址时，挂起的旧结果不发布到新网关名下（显式 `409 magpie_gateway_changed`），杜绝脏数据覆盖。
 
----
+## 状态文档与诊断
 
-## 机密隔离与安全红线
+公开文档 `status` 实时汇总网关状态，供配置面板与 CLI 消费。核心字段：
 
-大模型接入涉及敏感认证密钥。
-插件贯彻严格的机密隔离边界。
+| 字段 | 说明 |
+| :--- | :--- |
+| `gatewayUrl` | 当前生效网关根地址（配置切换后不残留旧 root） |
+| `configuredRoot` / `local` | 是否显式配置 / 是否本机 loopback |
+| `reachable` / `modelCount` / `groupCount` | 可达性与计数（不可达时模型数为缓存计数） |
+| `lastRefreshedAt` / `lastError` | 最近成功刷新时间 / 最近错误（成功后清除，不残留旧结论） |
+| `quotas` / `routes` | 配额快照与最近路由轨迹 |
+| `diagnostics` | 显式诊断列表（配额/轨迹不可用原因如实记录，绝不把「没有配额」伪装成「配额为空」） |
 
-1. **API Key 全局脱敏**：
-   - 网关 API Key 存储在 `credentials.json`。
-   - 系统将密钥注册到 `SecretStash` 中。
-   - 日志、事件与状态文档中严禁出现明文密钥。
-2. **区分本机与远端模式**：
-   - 本机回环地址默认使用预设通信凭据。
-   - 远端独立网关强制校验专属 Bearer 令牌。
+数据源隔离纪律：非默认端口的本机网关与远端网关不读本机 `magpie` CLI 数据（那是另一个实例，无法证明目标一致），只用所选网关自身的 trace 并如实标注 `source`；仅 `http://127.0.0.1:3425` 默认实例信任 CLI 读取的组定义。
+
+## 导出动作（五端复用）
+
+| 动作 | CLI | 说明 |
+| :--- | :--- | :--- |
+| `status` | `helm magpie status` | 网关状态快照；配置切换后 doc 指向旧 root 时如实返回新 root 的空结论（不冒充） |
+| `refresh` | `helm magpie refresh` | 强制网络刷新目录与配额路由；失败显式抛 `magpie_gateway_unreachable` |
+| `quota` | `helm magpie quota` | 实时查询配额（`GET /v1/magpie/quotas`），可按模型归属 provider 过滤 |
+| `groups` | `helm magpie groups` | 路由组列表与最近命中（本机默认实例 = CLI + trace 合并；否则仅 trace） |
+| `group` | `helm magpie group <id>` | 单组定义与最近路由决策；无可用信息显式 `404 magpie_group_not_found`，绝不编造 |
+
+另注册命令面板命令 `magpie-refresh`（`helm:action` 直连 refresh 动作）。
+
+## turn_settled 后台静默刷新
+
+每回合结算时，若该会话当前模型以 `magpie/` 开头（其他 Provider 的会话不触发任何网关读），插件后台异步刷新配额与路由，请求携带 `?kept=1`——只复用网关本地缓存指标、不问上游供应商、不消耗调用配额。刷新不 `await`，绝不阻塞回合结算；失败进 diagnostics 并发轻量通知，下一次结算重试。
+
+## 机密隔离
+
+网关 API Key 声明为 `secret: true`，持久化于 `credentials.json` 并入 `SecretStash` 全局脱敏。密钥只经 Bearer 头传输：动作输出、状态文档、错误文本（含网关错误页回显，统一剥离 Bearer 形态与已知 token 本体）中严禁出现明文密钥。本机 loopback 缺省凭据为 `magpie`，远端网关强制校验专属密钥。Web 配置面板（`settingsPanel` `Magpie 网关`）提供网关地址与密钥配置表单。

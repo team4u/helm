@@ -35,6 +35,7 @@ import { basename, isAbsolute, join, dirname, relative, resolve, sep } from 'nod
 import { gzipSync } from 'node:zlib';
 import { HelmError, PLUGIN_CLIENT_CSS_EXPORT } from '@helm/protocol';
 import { build, type Plugin as EsbuildPlugin } from 'esbuild';
+import { isCrossPlatformAbsolutePath } from './shared.js';
 
 /**
  * 宿主与插件共享的浏览器端运行时依赖：编译期拦截为虚拟 shim 模块（绝不解析
@@ -1035,6 +1036,10 @@ function containmentPlugin(
       // 相对导入：无需单独授权——包目录授权模型下相对目标天然位于已授权目录内
       //（如 mermaid.core.mjs -> ./chunks/*.mjs）；交回 esbuild 默认解析。
       b.onResolve({ filter: /^[^./]/ }, (args) => {
+        // 盘符 / UNC 绝对路径不是裸说明符：filter 只排除 `.` 与 `/` 开头，
+        // `D:\...`、`\\server\share\...` 会落进来（Windows 上入口与本地依赖
+        // 全为此形态）。交回 esbuild 默认解析。
+        if (isCrossPlatformAbsolutePath(args.path)) return null;
         // CSS 语法引用（url() 资源 / @import）不是 npm 说明符：交由 cssPolicyPlugin
         // 按资源策略处理（data:/https: 放行，本地相对显式拒绝），绝不误报裸依赖
         if (args.kind === 'url-token' || args.kind === 'import-rule') return null;

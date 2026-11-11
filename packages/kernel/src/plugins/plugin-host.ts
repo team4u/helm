@@ -60,6 +60,7 @@ import {
   resolvePluginEntry,
 } from './external-loader.js';
 import { doctorPluginDir } from './plugin-doctor.js';
+import { pluginDataDirName } from './plugin-dir-name.js';
 import { registerPluginTsRoot } from './backend-ts-loader.js';
 import {
   PluginPackageManager,
@@ -206,7 +207,7 @@ export class PluginHost {
       }
 
       const wantsEnabled = resolveInitialEnabled(definition, this.configStore, options);
-      const dataDir = join(this.options.dataDir, 'plugins', pluginId);
+      const dataDir = join(this.options.dataDir, 'plugins', pluginDataDirName(pluginId));
       mkdirSync(dataDir, { recursive: true });
 
       const state: PluginState = {
@@ -309,7 +310,7 @@ export class PluginHost {
         enabled: false,
         phase: 'idle',
         epoch: 1,
-        dataDir: join(this.options.dataDir, 'plugins', spec.id),
+        dataDir: join(this.options.dataDir, 'plugins', pluginDataDirName(spec.id)),
         hooks: new Set(),
         services: [],
         providers: [],

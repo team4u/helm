@@ -963,7 +963,9 @@ test('artifacts: register 复制登记、readContent 读取、list 与 deleteCon
   const meta = await artifacts.register(1, src, { name: 'report.md' })
   assert.equal(meta.conversationId, 1)
   assert.equal(meta.name, 'report.md')
-  assert.ok(meta.path.startsWith(join('artifacts', '1')))
+  // metadata.path 固定为 POSIX 分隔符（artifactRelPath），Windows 上也不得出现反斜杠
+  assert.ok(meta.path.startsWith('artifacts/1/'))
+  assert.ok(!meta.path.includes('\\'))
   assert.ok(meta.size > 0)
   assert.ok((await artifacts.readContent(meta.id)).includes('报告'))
   assert.equal((await artifacts.list(1)).length, 1)

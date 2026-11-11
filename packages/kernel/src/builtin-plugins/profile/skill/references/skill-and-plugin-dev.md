@@ -35,12 +35,12 @@ description: 发布流程手册（模型靠这句话判断何时加载）
 
 ## 开发外置插件（~/.helm/plugins/<dir>/）
 
-目录结构（入口二选一）：`plugin.json` 声明 `{ "id": "my-plugin", "main": "index.mjs" }`，或直接放约定入口（index.mjs / index.js / plugin.mjs / plugin.js）。
+优先使用 `helm plugins init <name>` 生成完整骨架（含 `plugin.json`、`index.ts`、`client/index.tsx`）；也可手工放置 `plugin.json` 声明 `{ "id": "my-plugin", "main": "index.ts", "clientRoot": "./client" }` 或约定入口（`index.ts` / `index.mjs` / `index.js`）。
 
-服务端入口直接导出符合 PluginDefinition 的对象，其中 definePlugin(ctx) 注册能力；无需运行时包装函数或前端包导入：
+服务端入口直接导出符合 PluginDefinition 的对象，其中 definePlugin(ctx) 注册能力；支持直接用 TypeScript（宿主按依赖闭包转译加载）：
 
-```js
-// ~/.helm/plugins/my-plugin/index.mjs
+```ts
+// ~/.helm/plugins/my-plugin/index.ts
 export default {
   id: "my-plugin",
   name: "我的插件",
@@ -58,7 +58,7 @@ export default {
       },
     })
     ctx.ui.sidebarItem({ id: "my", label: "我的插件", icon: "terminal", target: "screen:my-plugin/main" })
-    // 前端组件放 clientRoot（默认 <插件目录>/client/index.tsx）
+    // 前端组件放 clientRoot（如 <插件目录>/client/index.tsx）
     ctx.ui.screen({
       id: "main", label: "计数器",
       client: { module: "index.tsx", export: "CounterScreen" },
@@ -97,7 +97,7 @@ export function CounterScreen() {
 - `NODE_DETAIL_SECTION_SLOT` (`builtin:node/detail-section`) 是节点中心宿主保留插槽，不是 `builtin:node` 插件。用 `ctx.ui.slot` 注入已有节点的扩展区，Props 为 `{nodeId,isLocal,isOnline,isNew:false}`；不传令牌/连接命令，不在新节点接入表单挂载。
 - `ctx.action({ id, description, inputSchema, outputSchema, idempotent?, handler })` 将 Schema 动作统一映射到 HTTP、CLI、Workflow action()、Web；`idempotent: true` 标记只读/幂等动作，失败或中断时允许工作流断链重跑；模型可经 run_action 调用，设置 exposeAsTool: true 才直接列为工具。
 - `ctx.host.execEnv(req, opts?)` 经内核 EnvFabric 跨节点执行命令（复用 local / 远端 @helm/node 通道、SecretStash 注入与脱敏），纳入在途任务追踪（withTask）。
-- `ctx.doc(name, initial, { public: true })` 公开持久全局状态（进全局 SSE 首帧，更新广播全量）；界面通过 docs 列表订阅。`ctx.configSchema` 的 secret 字段进入凭据存储，避免公开到 doc。
+- `ctx.doc(name, initial, { public: true })` 公开持久全局状态（进全局 SSE 首帧，更新广播全量）；前端组件经 `usePluginDoc(name)` 订阅。`ctx.configSchema` 的 secret 字段进入凭据存储，避免公开到 doc。
 - `ctx.sessionDoc(name, initial, { public: true })` 按会话分片持久状态：句柄 `get/set/update/delete(conversationId, ...)`；不进全局首帧与全局广播，公开时经专用 SSE（`GET /api/plugins/:id/docs/:name/events?conversationId=N`）只推给订阅该会话的客户端；会话删除级联清理，删除后写入被拒。会话级 UI 状态（如每会话任务列表、运行详情）一律用 sessionDoc 而非 doc，避免全局写放大；doc 与 sessionDoc 禁止同名。
 - `ctx.service({ id, start, stop })` 管理后台服务；声明 liveTasks 可在停用前报告在途任务。
 
@@ -110,7 +110,7 @@ export function CounterScreen() {
 - 共享 Hook：useToolActivity(callId, active) 报告所在时间线回合的工具后台活动；usePluginDoc(name, pluginId?) 响应式订阅公开全局文档（可跨插件寻址）；usePluginSessionDoc(name, {conversationId?, pluginId?}?) 按当前会话订阅公开会话文档（多组件共享订阅，引用归零退订，重连首帧恢复）；useConversations() 全部会话摘要；useConversation(id) 单会话实时视图（summary/detail/live/pendingAsks）；usePlugins() 宿主插件清单与 Screen 贡献响应式快照（plugins + screens，SSE 实时同步，应用中心类视图据此感知已安装应用及其主视图启停）；<PluginSlot name> 声明子插槽；usePluginContext() 提供 callAction(actionId, input, {pluginId?, conversationId?})（可跨插件）、submitInput(text, {conversationId?, whenBusy?})、openScreen/openSplitScreen/openConversationDrawer/openArtifact/openWorkbench、notify 等。
 - 插件视图样式写在 clientRoot 内本地 .css（import 引入，esbuild 合并为保留导出 __helmClientCss，宿主托管注入与回收），不得写宿主 styles.css。
 - UI 文案严禁 Emoji；图标用 lucide 图标名。
-- 完整扩展点与双轨机制见仓库内 docs/architecture/extension-points.md 与 docs/plugins/plugin-development.md。
+- 完整扩展点与 client.tsx 单轨机制见仓库内 docs/architecture/extension-points.md 与 docs/plugins/plugin-development.md。
 
 ### sessionDoc 示例（每会话分片）
 
