@@ -13,6 +13,7 @@ import { ConversationTimeline } from './ConversationTimeline.js'
 import { resolveActiveWorkbenchTab, summarizeWorkbenchBadge } from './workbench-model.js'
 import { useWorkbenchTabs } from './workbench-hooks.js'
 import { matchConversationActions, splitConversationHeaderActions } from './action-model.js'
+import { TopicPicker } from './conversation-topic-picker.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import type { EditRequestTarget } from './timeline-model.js'
 
@@ -190,6 +191,25 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     store.openTarget({ kind: 'conversation', conversationId }, { split: true })
   }
 
+  // 新话题：继承当前会话环境（profile + 节点 + 目录），主顶栏与话题切换器共用同一语义
+  const createNewThread = (): void => {
+    void runAction(
+      'new-thread',
+      async () => {
+        const created = await conversationsApi.create({
+          profileId: conversation.profileId,
+          nodeId: currentNodeId,
+          cwd: conversation.cwd,
+        })
+        store.openTarget(
+          { kind: 'conversation', conversationId: created.id },
+          isSplit ? { split: true } : undefined,
+        )
+      },
+      '已新建对话',
+    )
+  }
+
   return (
     <div className="helm-pane">
       <header className="pane-topbar conversation-topbar">
@@ -236,6 +256,12 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               {conversation.title === '' ? `会话 #${conversationId}` : conversation.title}
             </span>
           )}
+          <TopicPicker
+            conversation={conversation}
+            isSplit={isSplit}
+            newTopicDisabled={actionPending !== null || !canCreateThread}
+            onNewTopic={canCreateThread ? createNewThread : undefined}
+          />
           <span className="pane-cwd-subtitle" title={envSubtitle.tooltip}>
             <span className="env-subtitle-full">{envSubtitle.text}</span>
             {remoteNodeTag !== null ? <span className="env-subtitle-compact">{remoteNodeTag}</span> : null}
@@ -248,21 +274,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               className="btn btn-sm"
               title="在当前智能体下新建对话"
               disabled={actionPending !== null}
-              onClick={() =>
-                void runAction(
-                  'new-thread',
-                  async () => {
-                    // 继承当前会话环境（profile + 节点 + 目录）：在远端会话内新话题不必重配环境
-                    const created = await conversationsApi.create({
-                      profileId: conversation.profileId,
-                      nodeId: currentNodeId,
-                      cwd: conversation.cwd,
-                    })
-                    store.openTarget({ kind: 'conversation', conversationId: created.id })
-                  },
-                  '已新建对话',
-                )
-              }
+              onClick={createNewThread}
             >
               <HelmIcon name={actionPending === 'new-thread' ? 'loader' : 'plus'} size={12} />
               <span className="pane-action-label">新话题</span>

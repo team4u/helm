@@ -16,14 +16,17 @@ import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs
 import {
   type AgentStanding,
   buildAgentStandings,
+  buildProfileTopics,
   collectEnabledPluginIds,
   conversationStatusBadgeClass,
   conversationStatusDotClass,
   conversationStatusLabel,
   conversationStatusTooltip,
   extractSidebarViews,
+  filterAgentStandings,
   filterConversationsByTag,
   filterDeletableConversations,
+  filterTopicList,
   fuzzyMatchConversations,
   isConversationDeletable,
   isHumanSelectableProfile,
@@ -572,6 +575,85 @@ test('filterDeletableConversations 过滤出可删除会话', { timeout: 60_000 
 })
 
 // ---------------------------------------------------------------------------
+// 双层导航纯函数：智能体行过滤 + 当前 Profile 话题列表
+// ---------------------------------------------------------------------------
+
+test('filterAgentStandings 按 label / profileId / 会话标题过滤智能体行', { timeout: 60_000 }, () => {
+  const standings = buildAgentStandings(standingsInput())
+  // 空 query 返回全部
+  assert.equal(filterAgentStandings(standings, '').length, standings.length)
+  assert.equal(filterAgentStandings(standings, '  ').length, standings.length)
+  // label 命中
+  assert.deepEqual(
+    filterAgentStandings(standings, '中枢').map((s) => s.profileId),
+    ['superagent'],
+  )
+  // profileId 命中
+  assert.deepEqual(
+    filterAgentStandings(standings, 'coder').map((s) => s.profileId),
+    ['coder'],
+  )
+  // 会话标题命中时保留整行（供用户进一步定位）
+  assert.deepEqual(
+    filterAgentStandings(standings, '周末计划').map((s) => s.profileId),
+    ['assistant'],
+  )
+  // 纯数字 id 命中
+  assert.deepEqual(
+    filterAgentStandings(standings, '40').map((s) => s.profileId),
+    ['coder'],
+  )
+  // 无命中返回空
+  assert.equal(filterAgentStandings(standings, '不存在的关键词').length, 0)
+})
+
+test('buildProfileTopics 构建当前 profile 的根话题列表：pinned/updatedAt/id 稳定排序', { timeout: 60_000 }, () => {
+  const topics = buildProfileTopics(
+    [
+      conv({ id: 1, profileId: 'assistant', updatedAt: 1000 }),
+      conv({ id: 10, profileId: 'assistant', updatedAt: 5000 }),
+      conv({ id: 11, profileId: 'assistant', updatedAt: 5000, pinned: true }),
+      conv({ id: 12, profileId: 'assistant', updatedAt: 9000 }),
+      // 非 profile 会话与子代理派生会话不进入话题列表
+      conv({ id: 40, profileId: 'coder', updatedAt: 9999 }),
+      conv({ id: 41, profileId: 'assistant', parentConversationId: 1, updatedAt: 9999 }),
+    ],
+    'assistant',
+    1,
+  )
+  assert.deepEqual(
+    topics.map((t) => t.conv.id),
+    [11, 12, 10, 1],
+  )
+  // 激活标记
+  assert.deepEqual(
+    topics.map((t) => t.active),
+    [false, false, false, true],
+  )
+  // markActiveId 为 null 时无激活项
+  const noActive = buildProfileTopics([conv({ id: 1, profileId: 'assistant' })], 'assistant', null)
+  assert.deepEqual(noActive.map((t) => t.active), [false])
+})
+
+test('filterTopicList 按标题与 #id 过滤话题', { timeout: 60_000 }, () => {
+  const items = buildProfileTopics(
+    [
+      conv({ id: 1, title: '周末计划', profileId: 'assistant' }),
+      conv({ id: 2, title: '代码审查', profileId: 'assistant' }),
+      conv({ id: 10, title: '杂记', profileId: 'assistant' }),
+    ],
+    'assistant',
+    null,
+  )
+  assert.deepEqual(filterTopicList(items, '').map((t) => t.conv.id), [10, 2, 1])
+  assert.deepEqual(filterTopicList(items, '周末').map((t) => t.conv.id), [1])
+  // #10 与 10 两种形式都命中 id 10（前缀命中）
+  assert.deepEqual(filterTopicList(items, '#10').map((t) => t.conv.id), [10])
+  assert.deepEqual(filterTopicList(items, '1').map((t) => t.conv.id), [10, 1])
+  assert.equal(filterTopicList(items, '不存在').length, 0)
+})
+
+// ---------------------------------------------------------------------------
 // 侧边栏批量管理与批量删除逻辑
 // ---------------------------------------------------------------------------
 
@@ -777,24 +859,27 @@ test('批量模式勾选框只存在于会话子项，机器人站位行绝不�
 })
 
 test('Sidebar 状态圆点渲染验证：五态圆点与单会话站位行', { timeout: 60_000 }, () => {
+  // 方式一契约：普通模式不渲染历史会话子树，多会话 Agent 仅展示主会话圆点与计数徽标。
   const store = makeTestStore({
     conversations: [
       conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
-      // updatedAt 递减保证这四条落在子列表预览窗口（前 5 条）内。
       conv({ id: 2, title: '任务 A', profileId: 'assistant', status: 'working', doing: '正在思考方案', updatedAt: 6000 }),
-      conv({ id: 3, title: '审批 B', profileId: 'assistant', status: 'blocked', updatedAt: 5000 }),
-      conv({ id: 4, title: '异常 C', profileId: 'assistant', status: 'error', updatedAt: 4000 }),
-      conv({ id: 5, title: '完成 D', profileId: 'assistant', status: 'done', updatedAt: 3000 }),
       conv({ id: 10, title: '空闲 E', profileId: 'assistant', status: 'idle', updatedAt: 2000 }),
     ],
     profiles: [
       { id: 'assistant', name: '个人助理' },
       { id: 'coder', name: '编码专员' },
+      { id: 'reviewer', name: '审阅专员' },
+      { id: 'auditor', name: '审计专员' },
+      { id: 'reporter', name: '报告专员' },
     ],
   })
-  // coder 单会话且 working：站位行头部直接渲染状态圆点而非文字徽章。
+  // 单会话 Agent 各自渲染一种状态圆点：working / blocked / error / done
   store.conversations.push(
     conv({ id: 20, title: '代码重构', profileId: 'coder', status: 'working', doing: '重构中' }),
+    conv({ id: 21, title: '审批 B', profileId: 'reviewer', status: 'blocked' }),
+    conv({ id: 22, title: '异常 C', profileId: 'auditor', status: 'error' }),
+    conv({ id: 23, title: '完成 D', profileId: 'reporter', status: 'done' }),
   )
   const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
 
@@ -815,10 +900,58 @@ test('Sidebar 状态圆点渲染验证：五态圆点与单会话站位行', { t
   assert.ok(html.includes('class="status-dot status-dot-done"'), '应渲染 done 圆点')
   assert.ok(html.includes('title="已完成"'), 'done 圆点提示')
 
-  // 4) 多会话 Agent 的子列表渲染勾选无关的圆点；单会话 coder 站位行也渲染 working 圆点
-  assert.ok(html.includes('agent-conversations-list'), '多会话 Agent 应展开子列表')
+  // 4) 方式一契约：普通模式不渲染会话子树；多会话智能体展示计数徽标，
+  //    单会话 coder 站位行渲染主会话 working 圆点。
+  assert.ok(!html.includes('agent-conversations-list'), '普通模式不得展开历史会话子列表')
+  assert.ok(html.includes('>3</span>'), '多会话智能体站位行应展示会话计数徽标')
   assert.ok(html.includes('title="运行中: 重构中"'), '单会话 Agent 站位行圆点应带 tooltip')
   assert.ok(!html.includes('badge-accent'), '不应再渲染文字徽章样式 badge-accent')
+})
+
+// ---------------------------------------------------------------------------
+// 双层导航：Activity Rail + Context Sidebar
+// ---------------------------------------------------------------------------
+
+test('Sidebar 双层导航：Activity Rail 空间切换与系统中心直达（SSR）', { timeout: 60_000 }, () => {
+  const store = makeTestStore()
+  const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
+
+  // Rail 结构：空间切换 + 系统中心 + 主题按钮均带 aria-label
+  assert.ok(html.includes('activity-rail'), '应渲染 Activity Rail 容器')
+  assert.ok(html.includes('aria-label="对话空间"'), '对话空间按钮')
+  assert.ok(html.includes('aria-label="视图空间"'), '视图空间按钮')
+  for (const label of ['角色 Profiles', '模型与凭据', '技能库 Skills', '计算节点 Nodes', '插件中心']) {
+    assert.ok(html.includes(`aria-label="${label}"`), `系统中心入口 ${label}`)
+  }
+  assert.ok(html.includes('aria-label="跟随系统"'), '主题按钮')
+
+  // 默认对话空间：智能体分组在 Context Sidebar 内；视图空间内容不渲染
+  assert.ok(html.includes('agent-standing-group'), '对话空间渲染智能体分组')
+  assert.ok(!html.includes('>视图</div>'), '默认不渲染视图空间分组')
+
+  // 紧凑搜索输入与 Cmd-K 按钮共存
+  assert.ok(html.includes('sidebar-search-input'), '智能体搜索输入')
+  assert.ok(html.includes('title="打开 Cmd K 全局搜索与命令面板"'), 'Cmd-K 按钮保留')
+
+  // 底栏兼容层保留：既有测试与移动端热区契约继续成立
+  assert.ok(html.includes('sidebar-footer'), '底栏容器保留')
+})
+
+test('Sidebar 双层导航：普通模式智能体行单行化，无会话子树（SSR）', { timeout: 60_000 }, () => {
+  const store = makeTestStore({
+    conversations: [
+      conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
+      conv({ id: 10, title: '周末计划', profileId: 'assistant' }),
+      conv({ id: 11, title: '代码审查', profileId: 'assistant' }),
+    ],
+    profiles: [{ id: 'assistant', name: '个人助理' }],
+  })
+  const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
+
+  assert.ok(!html.includes('agent-conversations-list'), '普通模式不得渲染会话子树')
+  assert.ok(!html.includes('nav-item-sub'), '普通模式不得渲染二级会话行')
+  assert.ok(html.includes('>3</span>'), '多会话智能体行展示计数徽标')
+  assert.ok(html.includes('title="在 个人助理 下新建对话"'), '智能体行新建按钮保留')
 })
 
 

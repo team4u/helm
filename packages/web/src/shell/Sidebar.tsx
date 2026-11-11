@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { AskSpec, ConversationSummary } from '@helm/protocol'
 import { asksApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
@@ -15,6 +15,7 @@ import {
   conversationStatusDotClass,
   conversationStatusTooltip,
   extractSidebarViews,
+  filterAgentStandings,
   filterConversationsByTag,
   filterDeletableConversations,
   isConversationDeletable,
@@ -253,7 +254,11 @@ function isConversationActive(store: HelmStoreValue, convId: number): boolean {
   return store.primaryTarget.kind === 'conversation' && store.primaryTarget.conversationId === convId
 }
 
-/** Agent 站位行（一级）。会话数 <= 1 时整行直接打开主会话；>= 2 时带折叠子列表。 */
+/**
+ * Agent 站位行（一级，普通模式仅占一行）：
+ * - 普通模式：图标 + 名称 + 状态 + 会话数 + 新建按钮；点击打开主会话，不渲染历史会话子树；
+ * - 批量模式：行首切换子列表展开，展开后渲染扁平会话清单供勾选删除。
+ */
 function AgentStandingItem({
   agent,
   store,
@@ -273,13 +278,13 @@ function AgentStandingItem({
 }) {
   // 批量模式下：只要该 Agent 有会话（length > 0），就展开子列表展示会话行供勾选删除；
   // 机器人的主站位行永远代表角色 Profile，绝不提供勾选框，避免用户误勾选机器人。
-  // 非批量模式下：只有多于 1 条会话时才折叠为子列表（单会话时行内直达主会话）。
-  const hasSubList = batchMode ? agent.conversations.length > 0 : agent.conversations.length > 1
+  // 普通模式下：永不渲染子列表（历史会话切换交给主舞台顶栏话题切换器）。
+  const hasSubList = batchMode ? agent.conversations.length > 0 : false
   const [expanded, setExpanded] = useState(true)
   const [showAll, setShowAll] = useState(false)
 
   const activeInAgent = agent.conversations.some((c) => isConversationActive(store, c.id))
-  const headerActive = activeInAgent && (!hasSubList || !expanded)
+  const headerActive = activeInAgent && !hasSubList
 
   const openPrimary = () => {
     if (batchMode) {
@@ -304,7 +309,6 @@ function AgentStandingItem({
     <div className="agent-standing">
       <div
         className={`nav-item agent-standing-row${headerActive ? ' nav-item-active' : ''}`}
-        style={{ minHeight: 30 }}
         onClick={() => {
           if (batchMode && hasSubList) {
             setExpanded((v) => !v)
@@ -312,12 +316,12 @@ function AgentStandingItem({
         }}
       >
         {hasSubList && (
-          <Tooltip content={expanded ? '收起历史对话' : '展开历史对话'} side="top">
+          <Tooltip content={expanded ? '收起会话清单' : '展开会话清单'} side="top">
             <button
               type="button"
               className="btn btn-ghost btn-icon-xs agent-collapse-btn"
-              title={expanded ? '收起历史对话' : '展开历史对话'}
-              aria-label={expanded ? '收起历史对话' : '展开历史对话'}
+              title={expanded ? '收起会话清单' : '展开会话清单'}
+              aria-label={expanded ? '收起会话清单' : '展开会话清单'}
               aria-expanded={expanded}
               onClick={(e) => {
                 e.stopPropagation()
@@ -352,23 +356,21 @@ function AgentStandingItem({
           {!hasSubList && agent.primaryConversation?.nodeId && agent.primaryConversation.nodeId !== 'local' && (
             <RemoteNodeTag nodeId={agent.primaryConversation.nodeId} />
           )}
-          {hasSubList && (
+          {agent.conversations.length > 1 && (
             <span className="badge badge-neutral tabular-nums">{agent.conversations.length}</span>
           )}
           {!batchMode && (
-            <>
-              <AgentNewConversationButton agent={agent} onCreate={onCreate} />
-              {agent.primaryConversation && !hasSubList && (
-                <span className="sidebar-split-action" style={{ display: 'inline-flex' }}>
-                  <HoverIconButton
-                    className="split-toggle-btn sidebar-split-btn"
-                    title="在右屏分屏打开"
-                    icon="columns"
-                    onClick={(e) => openSplit(e, agent.primaryConversation!.id)}
-                  />
-                </span>
-              )}
-            </>
+            <AgentNewConversationButton agent={agent} onCreate={onCreate} />
+          )}
+          {!batchMode && agent.primaryConversation && !hasSubList && (
+            <span className="sidebar-split-action" style={{ display: 'inline-flex' }}>
+              <HoverIconButton
+                className="split-toggle-btn sidebar-split-btn"
+                title="在右屏分屏打开"
+                icon="columns"
+                onClick={(e) => openSplit(e, agent.primaryConversation!.id)}
+              />
+            </span>
           )}
         </span>
       </div>
@@ -387,7 +389,7 @@ function AgentStandingItem({
   )
 }
 
-/** Agent 名下二级历史会话子列表：默认显示前 5 条，超出可展开；行内重命名/分屏。 */
+/** Agent 名下扁平会话清单（仅批量管理时渲染）：默认前 5 条，超出可展开；行内勾选删除。 */
 function AgentConversationsList({
   agent,
   store,
@@ -448,7 +450,7 @@ function AgentConversationsList({
   )
 }
 
-/** Agent 名下单个历史会话行（缩进渲染 + 悬停重命名/分屏）。 */
+/** Agent 名下单个历史会话行（批量模式缩进渲染 + 勾选）。 */
 function AgentConversationRow({
   conv,
   store,
@@ -589,12 +591,13 @@ function AgentConversationRow({
   )
 }
 
-/** 「智能体」分组：每个 Agent 一个固定站位，下挂各自历史对话。 */
+/** 「智能体」分组：每个 Agent 一行站位；批量管理时展开扁平会话清单。 */
 function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onNavigate?: () => void }) {
   const [batchMode, setBatchMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [deleting, setDeleting] = useState(false)
   const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
+  const [search, setSearch] = useState('')
 
   const agentStandings = useMemo(
     () =>
@@ -606,6 +609,10 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
         sidebarSections: store.groupedUi.sidebarSections,
       }),
     [store.profiles, store.conversations, store.plugins, store.groupedUi.sidebarItems, store.groupedUi.sidebarSections],
+  )
+  const visibleStandings = useMemo(
+    () => filterAgentStandings(agentStandings, search),
+    [agentStandings, search],
   )
   const createConversation = useMemo(
     () => createConversationFor(store, onNavigate),
@@ -720,6 +727,16 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
           </button>
         </Tooltip>
       </div>
+      <div className="sidebar-search">
+        <HelmIcon name="search" size={12} />
+        <input
+          className="sidebar-search-input"
+          value={search}
+          placeholder="搜索智能体"
+          aria-label="搜索智能体"
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
       {batchMode && (
         <div className="sidebar-batch-bar">
           <div className="sidebar-batch-bar-header">
@@ -764,18 +781,22 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
           </div>
         </div>
       )}
-      {agentStandings.map((agent) => (
-        <AgentStandingItem
-          key={agent.profileId}
-          agent={agent}
-          store={store}
-          onCreate={(profileId) => void createConversation(profileId)}
-          onNavigate={onNavigate}
-          batchMode={batchMode}
-          selectedIds={selectedIds}
-          onToggleSelect={toggleSelect}
-        />
-      ))}
+      {visibleStandings.length === 0 ? (
+        <div className="sidebar-search-empty">没有匹配的智能体</div>
+      ) : (
+        visibleStandings.map((agent) => (
+          <AgentStandingItem
+            key={agent.profileId}
+            agent={agent}
+            store={store}
+            onCreate={(profileId) => void createConversation(profileId)}
+            onNavigate={onNavigate}
+            batchMode={batchMode}
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelect}
+          />
+        ))
+      )}
       <ConfirmDialog
         open={batchDeleteConfirmOpen}
         onOpenChange={setBatchDeleteConfirmOpen}
@@ -969,133 +990,102 @@ function ViewNavGroup({ store }: { store: HelmStoreValue }) {
   )
 }
 
-export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
-  const store = useHelmStore()
+/** 系统中心目标键（Rail 高亮判定用）。 */
+const CENTER_TARGETS = ['profiles', 'models', 'skills', 'nodes', 'plugins'] as const
+type CenterKey = (typeof CENTER_TARGETS)[number]
 
+const CENTER_ICONS: Record<CenterKey, string> = {
+  profiles: 'bot',
+  models: 'key',
+  skills: 'sparkles',
+  nodes: 'network',
+  plugins: 'puzzle',
+}
+
+const CENTER_LABELS: Record<CenterKey, string> = {
+  profiles: '角色 Profiles',
+  models: '模型与凭据',
+  skills: '技能库 Skills',
+  nodes: '计算节点 Nodes',
+  plugins: '插件中心',
+}
+
+/** 侧栏空间（Space）：对话 | 视图。 */
+type SidebarSpace = 'conversations' | 'views'
+
+/** 根据 primaryTarget 推导应对齐展示的空间。 */
+function spaceForTarget(target: HelmStoreValue['primaryTarget']): SidebarSpace {
+  if (target.kind === 'screen') return 'views'
+  if (CENTER_TARGETS.includes(target.kind as CenterKey)) return 'views'
+  return 'conversations'
+}
+
+/**
+ * Activity Rail（48px）：空间切换 + 系统中心入口 + 主题按钮。
+ * 桌面与移动抽屉共用；点击系统中心直接 openTarget 并保持 aria-current 契约。
+ */
+function ActivityRail({
+  store,
+  space,
+  onSpaceChange,
+  onClose,
+}: {
+  store: HelmStoreValue
+  space: SidebarSpace
+  onSpaceChange: (space: SidebarSpace) => void
+  onClose?: () => void
+}) {
   return (
-    <aside className="helm-sidebar">
-      <div className="sidebar-header">
-        <div className="sidebar-brand">
-          <HelmIcon name="layers" size={16} />
-          Helm
-          <StatusDot connected={store.sseConnected} />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <Tooltip content="打开 Cmd K 全局搜索与命令面板" side="bottom">
-            <button
-              type="button"
-              className="btn btn-sm btn-icon"
-              title="打开 Cmd K 全局搜索与命令面板"
-              aria-label="打开 Cmd K 全局搜索与命令面板"
-              onClick={() => store.setActiveModal({ kind: 'command-palette' })}
-            >
-              <HelmIcon name="search" size={13} />
-            </button>
-          </Tooltip>
-          {onClose && (
-            <Tooltip content="关闭导航栏" side="bottom">
+    <nav className="activity-rail" aria-label="主导航">
+      <div className="activity-rail-spaces">
+        <Tooltip content="对话空间" side="right">
+          <button
+            type="button"
+            className={`rail-btn rail-space-btn${space === 'conversations' ? ' rail-btn-active' : ''}`}
+            title="对话空间"
+            aria-label="对话空间"
+            aria-current={space === 'conversations' ? 'page' : undefined}
+            onClick={() => onSpaceChange('conversations')}
+          >
+            <HelmIcon name="message-square" size={16} />
+          </button>
+        </Tooltip>
+        <Tooltip content="视图空间" side="right">
+          <button
+            type="button"
+            className={`rail-btn rail-space-btn${space === 'views' ? ' rail-btn-active' : ''}`}
+            title="视图空间"
+            aria-label="视图空间"
+            aria-current={space === 'views' ? 'page' : undefined}
+            onClick={() => onSpaceChange('views')}
+          >
+            <HelmIcon name="layout-grid" size={16} />
+          </button>
+        </Tooltip>
+      </div>
+      <div className="activity-rail-centers">
+        {CENTER_TARGETS.map((key) => {
+          const active = store.primaryTarget.kind === key
+          return (
+            <Tooltip content={CENTER_LABELS[key]} side="right" key={key}>
               <button
                 type="button"
-                className="btn btn-ghost btn-sm mobile-sidebar-close"
-                aria-label="关闭导航栏"
-                title="关闭导航栏"
-                onClick={onClose}
+                className={`rail-btn${active ? ' rail-btn-active' : ''}`}
+                title={CENTER_LABELS[key]}
+                aria-label={CENTER_LABELS[key]}
+                aria-current={active ? 'page' : undefined}
+                onClick={() => {
+                  store.openTarget({ kind: key })
+                  onClose?.()
+                }}
               >
-                <HelmIcon name="x" size={14} />
+                <HelmIcon name={CENTER_ICONS[key]} size={16} />
               </button>
             </Tooltip>
-          )}
-        </div>
+          )
+        })}
       </div>
-
-      <div className="sidebar-scroll">
-        <PendingAsksPanel store={store} />
-
-        <AgentStandingsGroup store={store} onNavigate={onClose} />
-
-        <SidebarSectionGroups store={store} />
-
-        <ViewNavGroup store={store} />
-      </div>
-
-      <div className="sidebar-footer">
-        <div style={{ display: 'flex', gap: 2 }}>
-          <Tooltip content="角色 Profiles" side="top">
-            <button
-              type="button"
-              className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'profiles' ? ' is-active' : ''}`}
-              title="角色 Profiles"
-              aria-label="角色 Profiles"
-              aria-current={store.primaryTarget.kind === 'profiles' ? 'page' : undefined}
-              onClick={() => {
-                store.openTarget({ kind: 'profiles' })
-                onClose?.()
-              }}
-            >
-              <HelmIcon name="bot" size={14} />
-            </button>
-          </Tooltip>
-          <Tooltip content="模型与凭据" side="top">
-            <button
-              type="button"
-              className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'models' ? ' is-active' : ''}`}
-              title="模型与凭据"
-              aria-label="模型与凭据"
-              aria-current={store.primaryTarget.kind === 'models' ? 'page' : undefined}
-              onClick={() => {
-                store.openTarget({ kind: 'models' })
-                onClose?.()
-              }}
-            >
-              <HelmIcon name="key" size={14} />
-            </button>
-          </Tooltip>
-          <Tooltip content="技能库 Skills" side="top">
-            <button
-              type="button"
-              className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'skills' ? ' is-active' : ''}`}
-              title="技能库 Skills"
-              aria-label="技能库 Skills"
-              aria-current={store.primaryTarget.kind === 'skills' ? 'page' : undefined}
-              onClick={() => {
-                store.openTarget({ kind: 'skills' })
-                onClose?.()
-              }}
-            >
-              <HelmIcon name="sparkles" size={14} />
-            </button>
-          </Tooltip>
-          <Tooltip content="计算节点 Nodes" side="top">
-            <button
-              type="button"
-              className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'nodes' ? ' is-active' : ''}`}
-              title="计算节点 Nodes"
-              aria-label="计算节点 Nodes"
-              aria-current={store.primaryTarget.kind === 'nodes' ? 'page' : undefined}
-              onClick={() => {
-                store.openTarget({ kind: 'nodes' })
-                onClose?.()
-              }}
-            >
-              <HelmIcon name="network" size={14} />
-            </button>
-          </Tooltip>
-          <Tooltip content="插件中心" side="top">
-            <button
-              type="button"
-              className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'plugins' ? ' is-active' : ''}`}
-              title="插件中心"
-              aria-label="插件中心"
-              aria-current={store.primaryTarget.kind === 'plugins' ? 'page' : undefined}
-              onClick={() => {
-                store.openTarget({ kind: 'plugins' })
-                onClose?.()
-              }}
-            >
-              <HelmIcon name="puzzle" size={14} />
-            </button>
-          </Tooltip>
-        </div>
+      <div className="activity-rail-footer">
         <Tooltip
           content={
             store.themePreference === 'system'
@@ -1104,7 +1094,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                 ? '浅色模式（点击切换为暗色模式）'
                 : '暗色模式（点击切换为跟随系统）'
           }
-          side="top"
+          side="right"
         >
           <button
             type="button"
@@ -1133,10 +1123,195 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                     ? 'sun'
                     : 'moon'
               }
-              size={14}
+              size={16}
             />
           </button>
         </Tooltip>
+      </div>
+    </nav>
+  )
+}
+
+export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
+  const store = useHelmStore()
+  const alignedSpace = spaceForTarget(store.primaryTarget)
+  const [space, setSpace] = useState<SidebarSpace>(alignedSpace)
+
+  // primaryTarget 空间类别变化时自动对齐（如从中心返回对话）。
+  useEffect(() => {
+    setSpace((current) => (current === alignedSpace ? current : alignedSpace))
+  }, [alignedSpace])
+
+  return (
+    <aside className="helm-sidebar">
+      <ActivityRail store={store} space={space} onSpaceChange={setSpace} onClose={onClose} />
+      <div className="sidebar-context">
+        <div className="sidebar-header">
+          <div className="sidebar-brand">
+            <HelmIcon name="layers" size={16} />
+            Helm
+            <StatusDot connected={store.sseConnected} />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Tooltip content="打开 Cmd K 全局搜索与命令面板" side="bottom">
+              <button
+                type="button"
+                className="btn btn-sm btn-icon"
+                title="打开 Cmd K 全局搜索与命令面板"
+                aria-label="打开 Cmd K 全局搜索与命令面板"
+                onClick={() => store.setActiveModal({ kind: 'command-palette' })}
+              >
+                <HelmIcon name="search" size={13} />
+              </button>
+            </Tooltip>
+            {onClose && (
+              <Tooltip content="关闭导航栏" side="bottom">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm mobile-sidebar-close"
+                  aria-label="关闭导航栏"
+                  title="关闭导航栏"
+                  onClick={onClose}
+                >
+                  <HelmIcon name="x" size={14} />
+                </button>
+              </Tooltip>
+            )}
+          </div>
+        </div>
+
+        <div className="sidebar-scroll">
+          {space === 'conversations' ? (
+            <>
+              <PendingAsksPanel store={store} />
+              <AgentStandingsGroup store={store} onNavigate={onClose} />
+              <SidebarSectionGroups store={store} />
+            </>
+          ) : (
+            <ViewNavGroup store={store} />
+          )}
+        </div>
+
+        <div className="sidebar-footer">
+          <div style={{ display: 'flex', gap: 2 }}>
+            <Tooltip content="角色 Profiles" side="top">
+              <button
+                type="button"
+                className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'profiles' ? ' is-active' : ''}`}
+                title="角色 Profiles"
+                aria-label="角色 Profiles"
+                aria-current={store.primaryTarget.kind === 'profiles' ? 'page' : undefined}
+                onClick={() => {
+                  store.openTarget({ kind: 'profiles' })
+                  onClose?.()
+                }}
+              >
+                <HelmIcon name="bot" size={14} />
+              </button>
+            </Tooltip>
+            <Tooltip content="模型与凭据" side="top">
+              <button
+                type="button"
+                className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'models' ? ' is-active' : ''}`}
+                title="模型与凭据"
+                aria-label="模型与凭据"
+                aria-current={store.primaryTarget.kind === 'models' ? 'page' : undefined}
+                onClick={() => {
+                  store.openTarget({ kind: 'models' })
+                  onClose?.()
+                }}
+              >
+                <HelmIcon name="key" size={14} />
+              </button>
+            </Tooltip>
+            <Tooltip content="技能库 Skills" side="top">
+              <button
+                type="button"
+                className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'skills' ? ' is-active' : ''}`}
+                title="技能库 Skills"
+                aria-label="技能库 Skills"
+                aria-current={store.primaryTarget.kind === 'skills' ? 'page' : undefined}
+                onClick={() => {
+                  store.openTarget({ kind: 'skills' })
+                  onClose?.()
+                }}
+              >
+                <HelmIcon name="sparkles" size={14} />
+              </button>
+            </Tooltip>
+            <Tooltip content="计算节点 Nodes" side="top">
+              <button
+                type="button"
+                className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'nodes' ? ' is-active' : ''}`}
+                title="计算节点 Nodes"
+                aria-label="计算节点 Nodes"
+                aria-current={store.primaryTarget.kind === 'nodes' ? 'page' : undefined}
+                onClick={() => {
+                  store.openTarget({ kind: 'nodes' })
+                  onClose?.()
+                }}
+              >
+                <HelmIcon name="network" size={14} />
+              </button>
+            </Tooltip>
+            <Tooltip content="插件中心" side="top">
+              <button
+                type="button"
+                className={`btn btn-ghost btn-sm${store.primaryTarget.kind === 'plugins' ? ' is-active' : ''}`}
+                title="插件中心"
+                aria-label="插件中心"
+                aria-current={store.primaryTarget.kind === 'plugins' ? 'page' : undefined}
+                onClick={() => {
+                  store.openTarget({ kind: 'plugins' })
+                  onClose?.()
+                }}
+              >
+                <HelmIcon name="puzzle" size={14} />
+              </button>
+            </Tooltip>
+          </div>
+          <Tooltip
+            content={
+              store.themePreference === 'system'
+                ? `跟随系统（当前${store.theme === 'dark' ? '暗色' : '浅色'}，点击切换为浅色模式）`
+                : store.themePreference === 'light'
+                  ? '浅色模式（点击切换为暗色模式）'
+                  : '暗色模式（点击切换为跟随系统）'
+            }
+            side="top"
+          >
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm sidebar-theme-toggle"
+              title={
+                store.themePreference === 'system'
+                  ? `跟随系统（当前${store.theme === 'dark' ? '暗色' : '浅色'}，点击切换为浅色模式）`
+                  : store.themePreference === 'light'
+                    ? '浅色模式（点击切换为暗色模式）'
+                    : '暗色模式（点击切换为跟随系统）'
+              }
+              aria-label={
+                store.themePreference === 'system'
+                  ? '跟随系统'
+                  : store.themePreference === 'light'
+                    ? '浅色模式'
+                    : '暗色模式'
+              }
+              onClick={store.toggleTheme}
+            >
+              <HelmIcon
+                name={
+                  store.themePreference === 'system'
+                    ? 'monitor'
+                    : store.themePreference === 'light'
+                      ? 'sun'
+                      : 'moon'
+                }
+                size={14}
+              />
+            </button>
+          </Tooltip>
+        </div>
       </div>
     </aside>
   )

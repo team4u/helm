@@ -389,3 +389,69 @@ export function filterDeletableConversations(conversations: ConversationSummary[
   return conversations.filter(isConversationDeletable)
 }
 
+// ---------------------------------------------------------------------------
+// 双层导航：智能体行过滤 + 当前 Profile 话题列表
+// ---------------------------------------------------------------------------
+
+/**
+ * 过滤智能体站位行：label / profileId 命中，或其名下任一会话标题 / #id 命中均保留
+ * （命中会话标题时整行保留，用户在 Popover 中再精确定位话题）。
+ */
+export function filterAgentStandings(
+  standings: AgentStanding[],
+  query: string,
+): AgentStanding[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return standings
+  const numeric = /^\d+$/.test(q) ? Number(q) : null
+  return standings.filter(
+    (agent) =>
+      agent.label.toLowerCase().includes(q) ||
+      agent.profileId.toLowerCase().includes(q) ||
+      agent.conversations.some(
+        (c) =>
+          c.title.toLowerCase().includes(q) ||
+          (numeric !== null && c.id === numeric),
+      ),
+  )
+}
+
+/** 当前 Profile 的话题（根会话）行：供主舞台顶栏话题切换 Popover 消费。 */
+export interface TopicListItem {
+  conv: ConversationSummary
+  active: boolean
+}
+
+/**
+ * 构建当前 profileId 的话题列表：仅取无父链的根会话，稳定按
+ * pinned 置顶 -> updatedAt 倒序 -> id 倒序排序；markActiveId 为当前激活会话。
+ */
+export function buildProfileTopics(
+  conversations: ConversationSummary[],
+  profileId: string,
+  markActiveId: number | null,
+): TopicListItem[] {
+  const roots = conversations.filter(
+    (c) => c.profileId === profileId && c.parentConversationId === undefined,
+  )
+  const sorted = [...roots].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+    if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt
+    return b.id - a.id
+  })
+  return sorted.map((conv) => ({ conv, active: conv.id === markActiveId }))
+}
+
+/** 过滤话题列表：标题、#id（#10 或 10 形式）模糊匹配。 */
+export function filterTopicList(items: TopicListItem[], query: string): TopicListItem[] {
+  const raw = query.trim().toLowerCase()
+  if (!raw) return items
+  const numeric = /^#?(\d+)$/.exec(raw)
+  const q = numeric ? numeric[1]! : raw
+  return items.filter(
+    (item) =>
+      item.conv.title.toLowerCase().includes(q) ||
+      (numeric !== null && String(item.conv.id).includes(q)),
+  )
+}
+
