@@ -63,12 +63,13 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .conversation-topbar .pane-parent-nav-btn { height: 22px; padding: 0 6px 0 5px; font-size: 11px; gap: 3px; }
   /* Magpie 式移动端顶栏：第一行放操作，第二行给 Tabs 独占整行并横向滑动。 */
   .conversation-topbar {
+    --mobile-title-left: max(48px, calc(env(safe-area-inset-left) + 44px));
     height: auto;
     min-height: 46px;
     flex-wrap: wrap;
     align-content: center;
     gap: 4px 8px;
-    padding: 0 12px 8px;
+    padding: 0 12px 8px var(--mobile-title-left);
     background: var(--bg-subtle);
   }
   .conversation-topbar .pane-title-group {
@@ -87,10 +88,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   }
   .topic-tabs {
     order: 3;
-    flex: 0 0 100%;
-    width: 100%;
-    max-width: 100%;
-    padding: 2px 0;
+    flex: 0 0 calc(100% + var(--mobile-title-left) + 12px);
+    width: calc(100% + var(--mobile-title-left) + 12px);
+    max-width: none;
+    margin-left: calc(-1 * var(--mobile-title-left));
+    margin-right: -12px;
+    padding: 2px 12px;
     overflow-x: auto;
     overscroll-behavior-x: contain;
   }
