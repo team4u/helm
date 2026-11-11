@@ -29,6 +29,13 @@
  * 不卸载已加载模块（同进程内重启/重新注册不重复初始化）；释放仅发生在
  * 加载失败回退时，只影响后续解析行为。
  *
+ * 受控代际加载（热重载底座）：nextPluginGeneration 为插件根预留下一代
+ * 代数号；调用方在入口 URL 附加 `?helmgen=<n>` 即可让该插件的相对依赖闭包
+ * 在本进程内重新初始化（新模块图、definePlugin 重新执行），而旧代数模块
+ * 保持可用（旧实例继续运行）。代际标记只沿插件根内的相对导入传播；
+ * 裸说明符（@helm/* 宿主公共包、npm 包、node: 内置）原生解析且不带标记，
+ * 与宿主及旧代数共享同一实例，绝不被代际加载污染。
+ *
  * 边界与诚实性：
  * - 根外代码不经本加载器转译，加载能力与结果由 Node 原生决定；根外
  *   .js/.cjs 等文件同样透传 Node——本加载器负责运行可信插件代码，不是
@@ -52,6 +59,53 @@ const JS_FAMILY_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 
 /** 已注册插件根目录（realpath）与引用计数。 */
 const rootRefCounts = new Map<string, number>();
+
+/**
+ * 模块代际计数（受控热重载用）：根 realpath -> 下一代代数号。
+ * reload 时对入口 URL 追加 `?helmgen=<n>` 使 Node ESM 缓存按新 URL 重新初始化
+ * 插件模块图；resolve 钩子会把该标记沿「插件根内的相对导入」逐层传播，
+ * 而裸说明符（@helm/*、npm 包、node: 内置）不带标记原生解析，仍与宿主共享
+ * 同一实例——代际隔离只作用于插件根内部，绝不污染根外模块。
+ */
+const rootGenerations = new Map<string, number>();
+
+/** 预留的代际查询参数前缀（不含 = 与值）。 */
+const GENERATION_QUERY_PREFIX = 'helmgen=';
+
+/**
+ * 取出 URL 的 helmgen 代数号（无标记返回 undefined）。
+ * 仅在插件根内的相对导入传播链上出现；入口由 reload/doctor 显式附加。
+ */
+function generationOfUrl(url: string): number | undefined {
+  const queryStart = url.lastIndexOf('?');
+  if (queryStart === -1) return undefined;
+  const params = url.slice(queryStart + 1).split('&');
+  for (const param of params) {
+    if (!param.startsWith(GENERATION_QUERY_PREFIX)) continue;
+    const value = Number(param.slice(GENERATION_QUERY_PREFIX.length));
+    if (Number.isSafeInteger(value) && value > 0) return value;
+  }
+  return undefined;
+}
+
+/** 给文件 URL 附加 helmgen 代数标记（已有标记时原样返回）。 */
+function withGenerationQuery(url: string, generation: number): string {
+  if (generationOfUrl(url) !== undefined) return url;
+  return `${url}?${GENERATION_QUERY_PREFIX}${generation}`;
+}
+
+/**
+ * 预留并返回插件根的下一代代数号（单调递增）。
+ * 调用方（doctor / reload）用它构造带 `?helmgen=<n>` 的入口 URL，实现受控热重载：
+ * 同一插件目录的新代数模块图独立初始化，旧代数模块在 ESM 缓存中保持可用
+ * （旧插件实例继续运行）；裸说明符依赖不受影响（与宿主同实例）。
+ */
+export function nextPluginGeneration(rootDir: string): number {
+  const root = realpathSync(rootDir);
+  const next = (rootGenerations.get(root) ?? 0) + 1;
+  rootGenerations.set(root, next);
+  return next;
+}
 
 /** 懒注册的钩子实例；全部根释放时 deregister（见文件头「生命周期」）。 */
 let hooks: ModuleHooks | undefined;
@@ -136,6 +190,15 @@ function ensureHooks(): void {
         return nextResolve(specifier, context);
       }
       if (specifier.startsWith('./') || specifier.startsWith('../')) {
+        // 代际传播：父模块携带 helmgen 标记时，解析结果若位于插件根内则附加
+        // 同一标记——新代数的相对依赖闭包整体重新初始化；裸说明符（@helm/* /
+        // npm / node:）不走此分支，与宿主及旧代数共享同一实例，绝不被污染。
+        const parentGeneration = generationOfUrl(parent);
+        /** 根内文件 URL 附加代际标记（根外文件不标记：共享模块不复制实例）。 */
+        const settle = (url: string): { url: string; shortCircuit?: boolean } =>
+          parentGeneration === undefined || !isInsideAnyRoot(url)
+            ? { url }
+            : { url: withGenerationQuery(url, parentGeneration), shortCircuit: true };
         let resolved: { url: string; shortCircuit?: boolean };
         try {
           resolved = nextResolve(specifier, context);
@@ -163,7 +226,7 @@ function ensureHooks(): void {
             if (!isInsideAnyRoot(pathToFileURL(real).href)) {
               throw rootEscapeError(specifier, candidate, real);
             }
-            return { url: pathToFileURL(real).href, shortCircuit: true };
+              return settle(pathToFileURL(real).href);
           }
           throw err;
         }
@@ -188,7 +251,17 @@ function ensureHooks(): void {
           if (!isInsideAnyRoot(pathToFileURL(real).href)) {
             throw rootEscapeError(specifier, resolvedUrl, real);
           }
-          return { url: pathToFileURL(real).href, shortCircuit: true };
+          return settle(pathToFileURL(real).href);
+        }
+        // 常规解析结果（含相对 .json / 根外合法目标）：根内文件补齐代际标记
+        //（Node 相对 URL 解析会丢弃父 query，防御性重新附加）。
+        if (
+          parentGeneration !== undefined &&
+          typeof resolvedUrl === 'string' &&
+          resolvedUrl.startsWith('file:') &&
+          generationOfUrl(resolvedUrl) === undefined
+        ) {
+          return settle(resolvedUrl);
         }
         return resolved;
       }
@@ -211,7 +284,8 @@ function ensureHooks(): void {
       if (!isInsideAnyRoot(url)) {
         return nextLoad(url, context);
       }
-      const ext = fileExtension(url);
+      // 扩展名按去 query 的真实路径计算（代际 URL 携带 ?helmgen=N 标记）。
+      const ext = fileExtension(fileURLToPath(url));
       // 插件内相对 .json：esbuild 转译会剥离 import attributes（源文件写也会被剥），
       // 由宿主在加载边界补注 type=json，插件源 `import x from './x.json'` 直接可用。
       if (ext === '.json') {

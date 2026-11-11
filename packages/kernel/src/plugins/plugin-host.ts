@@ -33,6 +33,9 @@ import {
   type PluginActionContext,
   type PluginConfigFieldSchema,
   type PluginDefinition,
+  type PluginDoctorReport,
+  type PluginReloadResult,
+  type PluginRescanResult,
   type PublicPluginDoc,
   type PublicPluginSessionDoc,
   type PluginSummary,
@@ -42,6 +45,12 @@ import {
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
 import { PluginTaskTracker } from './tracking.js';
 import { type ClientCompileResult } from './client-compiler.js';
+import {
+  findSourceDirByPluginId,
+  reloadExternalPlugin,
+  rescanExternalPlugins,
+} from './external-loader.js';
+import { doctorPluginDir } from './plugin-doctor.js';
 import {
   PluginDocRegistry,
   type PluginDocStore,
@@ -499,6 +508,96 @@ export class PluginHost {
     this.assertNotDisposed();
     return this.uiRegistry.listUi(this.getActiveEnabledPluginIds());
   }
+
+  // --- 外部插件 DX 闭环：doctor / reload / rescan --------------------------------
+
+  /**
+   * 外部插件源码静态自检（真实加载 + 真实注册 + 真实 client 编译）。
+   * 目标择一：dir/path（目录绝对路径）或 id（已注册插件，解析其源目录）。
+   * 委托 plugin-doctor 模块；临时宿主与代际导入细节见该模块文件头。
+   * id 无法解析到源目录时 404（请求目标错误，非插件缺陷）。
+   */
+  async doctorExternalPlugin(target: { dir?: string; id?: string }): Promise<PluginDoctorReport> {
+    this.assertNotDisposed();
+    let dir: string;
+    let requestedId: string | undefined;
+    if (target.id !== undefined) {
+      if (target.dir !== undefined) {
+        throw new HelmError('validation_error', 'doctor 目标 id 与 dir/path 互斥（择一提供）', 400);
+      }
+      const source = await findSourceDirByPluginId(this.options.dataDir, target.id);
+      if (source === undefined) {
+        throw new HelmError(
+          'plugin_source_missing',
+          `在 ${join(this.options.dataDir, 'plugins')} 下未找到 id 为 ${target.id} 的外部插件源目录`,
+          404,
+          { pluginId: target.id, pluginsDir: join(this.options.dataDir, 'plugins') },
+        );
+      }
+      dir = source;
+      requestedId = target.id;
+    } else if (target.dir !== undefined && target.dir.length > 0) {
+      dir = target.dir;
+    } else {
+      throw new HelmError('validation_error', 'doctor 需提供目标：dir/path（目录绝对路径）或 id（已注册插件）', 400);
+    }
+    const report = await doctorPluginDir(dir);
+    return requestedId === undefined ? report : { ...report, requestedId };
+  }
+
+  /**
+   * 外部插件受控热重载：先 doctor 全链预检（失败时旧实例保持不动），
+   * 再 unregister（在途任务 409 拒绝）+ 新代际导入重注册；启用状态保持重载前。
+   * 内置插件（builtin:*）一律 403 拒绝。委托 external-loader.reloadExternalPlugin。
+   */
+  async reloadExternalPlugin(pluginId: string): Promise<PluginReloadResult> {
+    this.assertNotDisposed();
+    // 在途任务预检先于 doctor：正在运行的实例受保护，不进入任何重载路径
+    //（doctor 与 unregister 各自还有兑底检查，这里是第一道门）。
+    const state = this.requirePlugin(pluginId);
+    assertNoLiveTasks(pluginId, state, this.tracker);
+    assertProvidersIdle(pluginId, state, this.options.providers);
+    const result = await reloadExternalPlugin(this.options.dataDir, pluginId, this, {
+      doctor: async (dir) => {
+        const report = await doctorPluginDir(dir);
+        if (!report.ok) {
+          const first = report.checks.find((c) => c.error !== undefined);
+          throw new HelmError(
+            'plugin_reload_preflight_failed',
+            `插件 ${pluginId} 重载预检失败（${first ? `${first.label}：${first.error!.message}` : '未知检查失败'}），旧实例保持不变`,
+            422,
+            { pluginId, dir, report },
+          );
+        }
+      },
+    });
+    const summary = this.list().find((s) => s.id === pluginId);
+    if (!summary) {
+      throw new HelmError(
+        'plugin_reload_failed',
+        `重载后未在宿主清单中发现插件 ${pluginId}（内部状态不一致）`,
+        500,
+        { pluginId },
+      );
+    }
+    return {
+      pluginId,
+      wasEnabled: result.wasEnabled,
+      generation: result.generation,
+      summary,
+    };
+  }
+
+  /**
+   * 增量重扫描插件目录：只注册新外部插件（默认 disabled），已注册插件不重载不干扰。
+   */
+  async rescanExternalPlugins(): Promise<PluginRescanResult> {
+    this.assertNotDisposed();
+    const result = await rescanExternalPlugins(this.options.dataDir, this);
+    return { registered: result.registered, skipped: result.skipped, plugins: this.list() };
+  }
+
+  // --- client.tsx 编译产物 --------------------------------------------------
 
   async getClientModule(pluginId: string, moduleRef: string): Promise<ClientCompileResult> {
     this.assertNotDisposed();

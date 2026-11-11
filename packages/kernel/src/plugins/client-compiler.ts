@@ -74,6 +74,8 @@ export interface ClientCompileResult {
   contentHash: string
   /** 产物 gzip 预压缩字节（供 HTTP 快速响应）。 */
   gzipped?: Uint8Array
+  /** 产物入口模块的具名导出清单（含 CSS 保留导出；doctor 消费做悬空 export 校验）。 */
+  exports: string[]
 }
 
 /** 校验 ClientComponentRef.module 形状（相对 .ts/.tsx，无绝对/越根/编码逃逸）。 */
@@ -151,6 +153,8 @@ interface DepsListFile {
   dependencies: Array<{ path: string; sha256: string }>
   /** 受控 npm 依赖：解析根标识 + 绝对路径 + 内容 sha256（v4 新增）。 */
   npmDependencies?: Array<{ root: string; path: string; sha256: string }>
+  /** 入口具名导出（旧清单缺省时缓存命中方拿不到 exports，需 exports 的调用方应重新编译或容错）。 */
+  exports?: string[]
 }
 
 /**
@@ -214,6 +218,7 @@ async function compileUncached(
   // 虚拟 outfile：esbuild 原生 CSS bundling 要求 JS→CSS import 有输出路径（write:false
   // 不落盘，仅用于命名 outputFiles；JS 与 CSS 分别取自 outputFiles）。
   let output = '';
+  let entryExports: string[] = [];
   let dependencies: string[];
   let npmDeps: Array<{ root: string; files: string[] }> = [];
   try {
@@ -259,6 +264,12 @@ async function compileUncached(
     const js = jsFiles[0]!.text;
     const css = cssFiles[0]?.text ?? '';
     output = appendCssExport(js, css);
+    // 入口具名导出（metafile 权威；键为相对 absWorkingDir 的虚拟 outfile 名，
+    // 与 outputFiles 绝对路径一一对应——上面已断言 JS 产物唯一，按后缀匹配安全）。
+    const jsMeta = Object.entries(result.metafile.outputs).find(
+      ([path]) => !path.endsWith('.css'),
+    )?.[1];
+    entryExports = [...(jsMeta?.exports ?? []), ...(css.length > 0 ? [PLUGIN_CLIENT_CSS_EXPORT] : [])];
     dependencies = collectLocalDependencies(result.metafile, rootReal);
     npmDeps = collectNpmDependencies(result.metafile, rootReal, npmRoots);
   } catch (err) {
@@ -271,7 +282,7 @@ async function compileUncached(
     });
   }
 
-  const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps);
+  const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, entryExports);
   mkdirSync(stagingDir, { recursive: true });
   atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.mjs`), output);
   let gzipped: Uint8Array | undefined;
@@ -283,7 +294,12 @@ async function compileUncached(
     /* 预压缩失败不影响编译产物主流程 */
   }
   atomicWrite(depsListPath, `${JSON.stringify(list)}\n`);
-  const finalResult: ClientCompileResult = { code: output, contentHash: list.contentHash, gzipped };
+  const finalResult: ClientCompileResult = {
+    code: output,
+    contentHash: list.contentHash,
+    gzipped,
+    exports: entryExports,
+  };
   recordMemoryCache(memKey, rootReal, depsListPath, finalResult);
   return finalResult;
 }
@@ -703,7 +719,7 @@ function readCachedResult(
         /* 读取预压缩文件失败则留空，由调用方按需生成 */
       }
     }
-    return { code, contentHash: list.contentHash, gzipped };
+    return { code, contentHash: list.contentHash, gzipped, exports: list.exports ?? [] };
   } catch {
     return undefined;
   }
@@ -752,6 +768,7 @@ function buildDepsList(
   moduleRef: string,
   dependencies: string[],
   npmDeps: Array<{ root: string; files: string[] }> = [],
+  entryExports: string[] = [],
 ): DepsListFile {
   const hash = createHash('sha256');
   hash.update(`helm-plugin-client-v${DEPS_LIST_VERSION}\n`);
@@ -776,6 +793,7 @@ function buildDepsList(
     contentHash: hash.digest('hex').slice(0, 24),
     dependencies: entries,
     ...(npmEntries.length > 0 ? { npmDependencies: npmEntries } : {}),
+    ...(entryExports.length > 0 ? { exports: entryExports } : {}),
   };
 }
 

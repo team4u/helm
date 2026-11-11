@@ -495,6 +495,56 @@ export interface ActionManifest {
 }
 
 // ---------------------------------------------------------------------------
+// 外部插件生态 DX 闭环（doctor / reload / rescan；helm plugins init 为 CLI 本地命令）
+// ---------------------------------------------------------------------------
+
+/** doctor 单项检查结果。 */
+export interface PluginDoctorCheck {
+  /** 检查项标识：manifest / backend / register / client。 */
+  id: string
+  /** 检查项人类可读标题。 */
+  label: string
+  /** ok 时省略；失败时为结构化诊断（code / message / details）。 */
+  error?: { code: string; message: string; details?: unknown }
+}
+
+/** 外部插件源码静态自检报告（POST /api/plugins/doctor）。 */
+export interface PluginDoctorReport {
+  /** 被检目录的绝对路径（请求方给定或经插件 id 解析后的源目录）。 */
+  dir: string
+  /** 请求目标：id 模式时为解析出的源目录；path/dir 模式时与 dir 一致。 */
+  requestedId?: string
+  /** 从目录真实清单/入口推导出的插件 id（未到达定义导出时缺省）。 */
+  pluginId?: string
+  ok: boolean
+  /** 逐项检查结果（按执行顺序）：manifest -> backend -> register -> client。 */
+  checks: PluginDoctorCheck[]
+  /** doctor 加载真实注册后得到的能力摘要（register 通过时存在）。 */
+  summary?: PluginSummary
+}
+
+/** 受控热重载结果（POST /api/plugins/:id/reload）。 */
+export interface PluginReloadResult {
+  pluginId: string
+  /** 重载前启用状态（重载保持该状态不变）。 */
+  wasEnabled: boolean
+  /** 本次重载使用的模块代际号（用于诊断，单调递增）。 */
+  generation: number
+  /** 重载成功后该插件当前清单。 */
+  summary: PluginSummary
+}
+
+/** 外部插件目录重扫描结果（POST /api/plugins/rescan）。 */
+export interface PluginRescanResult {
+  /** 本次扫描注册成功的外部插件 id（默认 disabled）。 */
+  registered: string[]
+  /** 扫描到的纯数据目录 / 已注册插件目录被跳过的数量（诊断用）。 */
+  skipped: number
+  /** 全部插件当前清单。 */
+  plugins: PluginSummary[]
+}
+
+// ---------------------------------------------------------------------------
 // 宿主运行时能力
 // ---------------------------------------------------------------------------
 

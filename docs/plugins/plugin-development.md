@@ -60,7 +60,7 @@ flowchart TD
    - 后端入口与相对依赖（含 `.js` 说明符映射到同名 `.ts`、无扩展名、目录 `index.ts`）在宿主进程内转译加载；`import.meta.url` 指向插件目录内的真实源文件。
    - 插件目录可自带 `node_modules`，Node 内置模块与第三方 npm 包按常规规则解析；`@helm/*` 公共包由宿主提供同一实例。
    - 插件根在注册成功后常驻宿主进程：插件运行期动态 `import()` 的 TS 依赖始终可转译；同一模块在同进程内只初始化一次。
-   - 停用或卸载插件不会卸载已加载的模块（同进程内重新启用/重新注册不重复初始化）；完全重新加载插件代码需重启 Hub 进程。
+   - 停用或卸载插件不会卸载已加载的模块（同进程内重新启用/重新注册不重复初始化）；完全重新加载插件代码用受控热重载（`helm plugins reload <id>`，见下文「开发闭环」），无需重启 Hub。
 
 ---
 
@@ -313,6 +313,77 @@ helm profiles update reviewer --starters '[]' --json
 ```
 
 引导词落入 `profile.json`，也可在角色详情编辑。仅真正空白且历史已加载完整的会话显示；点击回填后由用户确认发送。草稿、附件、历史编辑和在途上传/发送不被覆盖。最大六项，标题最多 24 个 Unicode 码点，提示词最多 4000 个码点。
+
+---
+
+## 开发闭环：脚手架、静态自检与受控热重载
+
+外部插件开发的完整迭代闭环（API 与 CLI 同权，全部支持 `--json`）：
+
+### 1. 脚手架：`helm plugins init`
+
+本地命令（不访问 Hub）：在目标目录生成插件骨架。
+
+```bash
+helm plugins init my-plugin                                # 生成到 ~/.helm/plugins/my-plugin/（默认 full 模板）
+helm plugins init my-plugin --dir ~/code                   # 生成到 ~/code/my-plugin/
+helm plugins init my-plugin --template minimal              # 仅后端探针动作（无前端文件）
+```
+
+产出（full 模板）：`plugin.json`（含 `clientRoot: "./client"`）、`index.ts`（含 doc 与 `increment` 动作示例）、`tsconfig.json`（本地类型检查配置；宿主运行时转译不依赖它，仅供编辑器与 CI）、`client/index.tsx`（`SamplePanel` 组件，引入 `@helm/plugin-client` 共享 Hook）、`README.md`。minimal 模板不声明 `clientRoot`、不生成前端文件。目标目录非空时默认拒绝（`--force` 继续，同名文件被覆盖）。
+
+### 2. 静态自检：`helm plugins doctor <id | dir>`
+
+对插件执行真实自检（不是近似检查）。目标择一：目录绝对路径（`--path`/`--dir`/位置参数）或已注册插件 id（服务端解析其源目录）。
+
+```bash
+helm plugins doctor /root/code/my-plugin    # 按目录
+helm plugins doctor my-plugin               # 按已注册插件 id
+```
+
+1. **manifest**：plugin.json 合法性、main 越根、入口存在；
+2. **backend**：TS 转译与模块代际导入（用独立代际号，不影响运行中实例）；
+3. **register**：临时 PluginHost 真实执行 definePlugin，与生产同一校验链
+   （action/tool/ui/doc/service/provider 形状、重复、scope）；
+4. **client**：对声明的全部 client.tsx 模块真实编译，并校验声明的具名导出
+   真实存在（悬空 `export` 引用在此暴露，不留到运行期渲染空白）。
+
+预检失败项逐条列出（code + message），不静默。注意 doctor 是静态自检：
+`definePlugin` 顶层依赖 `ctx.host.*` 调用的插件会在 register 检查处如实失败——
+宿主调用应放入动作处理器、服务生命周期或钩子内。
+
+### 3. 增量发现：`helm plugins rescan`
+
+扫描插件目录并只注册「当前未注册」的外部插件（默认停用）。已注册插件不重载、
+不干扰。放入新插件目录后无需重启 Hub：
+
+```bash
+helm plugins rescan
+helm plugins enable my-plugin
+```
+
+### 4. 受控热重载：`helm plugins reload <id>`
+
+修改插件代码后的重载链（不重启 Hub）：
+
+1. **在途保护**：插件存在在途任务（自定义任务、执行中 Tool、挂起 agent_spawn、
+   provider 在途流）时 `409 plugin_has_live_tasks` 拒绝（先于一切重载动作）；
+2. **dry-run 预检**：对源目录执行完整 doctor（见上）；任一失败则旧实例保持不动，
+   返回 `422 plugin_reload_preflight_failed`（含完整 doctor 报告）——坏代码
+   绝不打断在运行插件；
+3. **切换与回滚**：注销旧实例后以新代际模块图重新注册；新实例注册失败时用
+   旧代定义回滚（同一 definePlugin 引用，无重复初始化），旧实例继续可用
+   （错误附 `rolledBack: true`）；回滚本身失败则如实上报（插件已注销，需人工
+   修复，持久化启停状态未被破坏）；
+4. **启用状态保持**：重载前后启用状态不变（之前启用则新实例照常启用，服务
+   按同一 prepare→start 屏障启动）。
+
+内置插件（`builtin:*`）禁止热重载（403）；修改内置插件需重启 Hub。
+
+代际机制说明：重载用 `?helmgen=<n>` 标记入口 URL，标记沿插件根内的相对导入
+逐层传播，新代数模块图独立初始化；`@helm/*`、npm 包、Node 内置模块不带标记，
+与宿主及旧代数共享同一实例（无双重实例、无状态漂移）。旧代数模块在进程内
+保持可用，正在执行的旧实例回调不受影响。
 
 ---
 

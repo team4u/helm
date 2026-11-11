@@ -59,6 +59,10 @@ managedByPlugin: {{MANAGED_BY}}
 
 ### 插件与动作
 - `helm plugins list` / `helm plugins enable|disable <id>` / `helm plugins config <id> [--input <json>]` / `helm plugins client <id>`。
+- `helm plugins doctor <id|dir>`：外部插件源码静态自检（真实代际导入+真实注册断言+client 真实编译与悬空 export 校验）；目标择一：目录绝对路径或已注册插件 id；预检失败项逐条列出，不静默。
+- `helm plugins reload <id>`：外部插件受控热重载（先 doctor 预检，失败时旧实例保持不动；在途任务拒绝 409；启用状态保持）。
+- `helm plugins rescan`：增量重扫描插件目录（只注册新外部插件，默认停用）。
+- `helm plugins init [name] [--dir <父目录>] [--template minimal|full] [--force]`：本地脚手架生成外部插件骨架（默认 full：plugin.json + index.ts + tsconfig.json + client/index.tsx；minimal 仅后端），不访问 Hub。
 - `helm plugins doc <id> <name>`：读全局公共文档；会话文档加 `--conversation <n>`（或 `--current`），持续订阅加 `--watch`（专用 SSE，首帧即当前值，Ctrl-C 退出）。
 - `helm actions list`：全部插件动作清单（ActionManifest）。
 - `helm <plugin> <action>`：动作自动映射为 CLI（剥离 `builtin:` 前缀；如 `helm superagent dispatch_worker`）；用该命令的 `--help` 查询参数或用 `--input <json>`。

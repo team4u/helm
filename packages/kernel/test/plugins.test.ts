@@ -2131,6 +2131,7 @@ test('client 模块编译在途回归：同 ID 卸载后重新注册（epoch 重
         return {
           code: `console.log('compiled for ${pluginId}/${moduleRef}')`,
           contentHash: 'hash-v1',
+          exports: [],
         };
       },
     }),

@@ -540,6 +540,20 @@ async function route(
     if (second === undefined && method === 'GET') {
       return jsonOk(redactor, await kernel.plugins.list())
     }
+    // 外部插件 DX 闭环（无插件 id 段的顶点路由，先于 requireIdParam）。
+    if (second === 'doctor' && method === 'POST' && third === undefined) {
+      if (kernel.plugins.doctorExternalPlugin === undefined) {
+        return errorResponse(redactor, 501, 'not_supported', '当前内核未提供插件静态自检能力')
+      }
+      const body = await readJsonBody(ctx.request)
+      return jsonOk(redactor, await kernel.plugins.doctorExternalPlugin(parseDoctorTarget(body)))
+    }
+    if (second === 'rescan' && method === 'POST' && third === undefined) {
+      if (kernel.plugins.rescanExternalPlugins === undefined) {
+        return errorResponse(redactor, 501, 'not_supported', '当前内核未提供插件重扫描能力')
+      }
+      return jsonOk(redactor, await kernel.plugins.rescanExternalPlugins())
+    }
     const pluginId = requireIdParam(second ?? '', 'pluginId')
     // 核心管理面固定在第三段：enable/disable/config；其余仅剩 routes/ 动态路由。
     if (third === 'enable' && method === 'POST' && fourth === undefined) {
@@ -549,6 +563,13 @@ async function route(
     if (third === 'disable' && method === 'POST' && fourth === undefined) {
       await kernel.plugins.disable(pluginId)
       return jsonOk(redactor, await kernel.plugins.list())
+    }
+    // 外部插件受控热重载（POST /api/plugins/:id/reload）：预检失败旧实例保持不动。
+    if (third === 'reload' && method === 'POST' && fourth === undefined) {
+      if (kernel.plugins.reloadExternalPlugin === undefined) {
+        return errorResponse(redactor, 501, 'not_supported', '当前内核未提供插件热重载能力')
+      }
+      return jsonOk(redactor, await kernel.plugins.reloadExternalPlugin(pluginId))
     }
     if (third === 'config' && fourth === undefined) {
       if (method === 'GET') {
@@ -828,6 +849,50 @@ async function readOptionalJsonBody(request: Request): Promise<unknown> {
 }
 
 async function reloadModels(kernel: KernelRuntimeLike): Promise<void> {  await kernel.reloadModels?.()
+}
+
+/**
+ * POST /api/plugins/doctor body：目标择一——path / dir（目录绝对路径，dir 为
+ * path 的兼容别名，等价）或 id（已注册插件，服务端解析其源目录）。
+ * 边界处拒绝未知字段；目录存在性/入口合法性由 doctor 检查链真实判定。
+ */
+function parseDoctorTarget(body: Record<string, unknown>): { dir?: string; id?: string } {
+  const extra = Object.keys(body).filter((k) => k !== 'dir' && k !== 'path' && k !== 'id')
+  if (extra.length > 0) {
+    throw new ValidationError(`未知字段：${extra.join(', ')}（仅允许 path / dir / id）`)
+  }
+  const path = body['path']
+  const dir = body['dir']
+  const id = body['id']
+  const dirLike = (v: unknown, field: string): string | undefined => {
+    if (v === undefined) return undefined
+    if (typeof v !== 'string' || v.trim().length === 0) {
+      throw new ValidationError(`${field} 需为非空字符串（外部插件源目录绝对路径）`)
+    }
+    if (!v.startsWith('/') && !/^[a-zA-Z]:[\\/]/.test(v) && !v.startsWith('\\\\')) {
+      throw new ValidationError(`${field} 需为绝对路径（以 / 或盘符开头）`)
+    }
+    return v
+  }
+  const pathDir = dirLike(path, 'path')
+  const dirDir = dirLike(dir, 'dir')
+  if (pathDir !== undefined && dirDir !== undefined && pathDir !== dirDir) {
+    throw new ValidationError('path 与 dir 同时提供且不一致（两者为兼容别名，请只传其一）')
+  }
+  if (id !== undefined) {
+    if (typeof id !== 'string' || id.trim().length === 0) {
+      throw new ValidationError('id 需为非空字符串（已注册外部插件 id）')
+    }
+    if (pathDir !== undefined || dirDir !== undefined) {
+      throw new ValidationError('id 与 path/dir 互斥（择一提供）')
+    }
+    return { id }
+  }
+  const resolved = pathDir ?? dirDir
+  if (resolved === undefined) {
+    throw new ValidationError('需提供目标：path/dir（目录绝对路径）或 id（已注册插件）')
+  }
+  return { dir: resolved }
 }
 
 /** 节点 ID 路径段：字母数字开头，可含 . _ -（与 issue 校验同一规则）。 */

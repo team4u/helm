@@ -102,8 +102,8 @@ export function CounterScreen() {
 - `ctx.service({ id, start, stop })` 管理后台服务；声明 liveTasks 可在停用前报告在途任务。
 
 要点：
-- 外部插件 id 禁止 `builtin:` 前缀、禁止与已注册插件重名、不可自封 locked；放入目录后重启 Hub 自动发现并默认停用注册。
-- 启用：`helm plugins enable my-plugin`；修改入口代码后需重启 Hub 重新导入。停用/启用仅重建已有定义的生命周期。停用或卸载遇在途任务会显式拒绝（409 plugin_has_live_tasks）。
+- 外部插件 id 禁止 `builtin:` 前缀、禁止与已注册插件重名、不可自封 locked；放入目录后 `helm plugins rescan` 增量发现（或重启 Hub 自动发现），默认停用注册。
+- 启用：`helm plugins enable my-plugin`；修改入口代码后用 `helm plugins reload my-plugin` 受控热重载（先静态自检预检，失败时旧实例保持不动，无需重启 Hub）。停用/启用仅重建已有定义的生命周期。停用或卸载遇在途任务会显式拒绝（409 plugin_has_live_tasks）。
 - 不要在自己的回合内重启 Hub；先完成结果交付，再安排进程重启。
 - 前端 React 组件（client.tsx）经 esbuild 动态编译，可 import react / react-dom / lucide-react / @helm/plugin-client（宿主共享实例，不打包第二份 React）。@helm/plugin-client 另共享无障碍底座组件：Switch、Select、MultiSelect、Checkbox、Tabs/TabsList/TabsTrigger/TabsContent、SegmentedControl、HelmIcon、ViewBoundary、Callout、Dialog/DialogPortal/DialogOverlay/DialogContent/DialogTitle/DialogDescription/DialogClose/DialogTrigger、MarkdownView、MarkdownText、CodeBlockView、CopyButton、PluginSlot——复用宿主样式，不要另造原生控件。
 - 共享 Hook：useToolActivity(callId, active) 报告所在时间线回合的工具后台活动；usePluginDoc(name, pluginId?) 响应式订阅公开全局文档（可跨插件寻址）；usePluginSessionDoc(name, {conversationId?, pluginId?}?) 按当前会话订阅公开会话文档（多组件共享订阅，引用归零退订，重连首帧恢复）；useConversations() 全部会话摘要；useConversation(id) 单会话实时视图（summary/detail/live/pendingAsks）；<PluginSlot name> 声明子插槽；usePluginContext() 提供 callAction(actionId, input, {pluginId?, conversationId?})（可跨插件）、submitInput(text, {conversationId?, whenBusy?})、openScreen/openSplitScreen/openConversationDrawer/openArtifact/openWorkbench、notify 等。

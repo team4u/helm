@@ -29,6 +29,9 @@ import type {
   ModelProviderSummary,
   ModelProvidersRefreshResult,
   PluginConfigFieldSchema,
+  PluginDoctorReport,
+  PluginReloadResult,
+  PluginRescanResult,
   PluginSummary,
   ProviderConfig,
   PublicPluginDoc,
@@ -120,7 +123,22 @@ export interface PluginHost {
    * 获取已启用插件 client.tsx 编译产物（GET /api/plugins/:id/client.mjs?module=...）。
    * 停用/未注册/未声明 clientRoot/越根/编译失败显式抛错（HelmError 语义）。
    */
-  getClientModule(pluginId: string, moduleRef: string): Promise<{ code: string; contentHash: string; gzipped?: Uint8Array }>
+  getClientModule(pluginId: string, moduleRef: string): Promise<{ code: string; contentHash: string; gzipped?: Uint8Array; exports?: string[] }>
+  /**
+   * 外部插件源码静态自检（POST /api/plugins/doctor，body { path? , dir?, id? } 择一）：
+   * 真实代际导入 + 临时宿主真实注册 + client 真实编译；结果以报告返回
+   * （插件缺陷在 checks 内，不 reject）。id 模式解析该插件源目录；
+   * path/dir 为目录绝对路径（dir 为 path 的兼容别名，等价）。目标不存在/无法
+   * 解析时 404 reject（不是插件缺陷，是请求目标错误）。
+   */
+  doctorExternalPlugin?(target: { dir?: string; id?: string }): Promise<PluginDoctorReport>
+  /**
+   * 外部插件受控热重载（POST /api/plugins/:id/reload）：预检失败旧实例保持不动；
+   * 在途任务 409 拒绝；内置插件 403；启用状态保持。
+   */
+  reloadExternalPlugin?(pluginId: string): Promise<PluginReloadResult>
+  /** 增量重扫描（POST /api/plugins/rescan）：只注册新外部插件，默认 disabled。 */
+  rescanExternalPlugins?(): Promise<PluginRescanResult>
 }
 
 export type { SearchHit }
@@ -297,4 +315,4 @@ export interface HubHandle {
 }
 
 // 导出供测试构造完整 Profile
-export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, ConversationCompactResponse, ConversationWithdrawResponse }
+export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, ConversationCompactResponse, ConversationWithdrawResponse, PluginDoctorReport, PluginReloadResult, PluginRescanResult }
