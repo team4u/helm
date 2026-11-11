@@ -297,10 +297,10 @@ export function assertSafeMessageSurgery(
   let firstNonSystem = 0
   while (firstNonSystem < original.length && original[firstNonSystem]!['role'] === 'system') firstNonSystem += 1
   const historyLen = original.length - firstNonSystem
-  const tail = replacement.slice(replacement.length - historyLen)
+  const preservedHistory = replacement.slice(firstNonSystem, firstNonSystem + historyLen)
   if (historyLen > 0) {
     for (let i = 0; i < historyLen; i += 1) {
-      if (tail[i] !== original[firstNonSystem + i]!) {
+      if (preservedHistory[i] !== original[firstNonSystem + i]!) {
         throw fail('历史消息只允许在其后追加，不允许截断、重写或伪造（截断请走 rewrite/reset 通道）')
       }
     }
