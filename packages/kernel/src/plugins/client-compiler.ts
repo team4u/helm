@@ -65,8 +65,8 @@ export const CLIENT_SHARED_GLOBALS: Readonly<Record<string, string>> = Object.fr
 /** ClientComponentRef.module 允许的字符集（相对路径段：字母数字 . _ -，禁止空段与 ..）。 */
 const MODULE_REF_PATTERN = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*\.(ts|tsx)$/;
 
-/** 依赖清单（deps.json）结构版本；v2 为 CSS-as-JS 旧格式，v3 起原生 CSS bundling，v4 起含受控 npm 依赖，v5 起启用 esbuild minify 与预压缩，v6 起支持代码分割与异步 chunk 桥。 */
-const DEPS_LIST_VERSION = 6;
+/** 依赖清单（deps.json）结构版本；v2 为 CSS-as-JS 旧格式，v3 起原生 CSS bundling，v4 起含受控 npm 依赖，v5 起启用 esbuild minify 与预压缩，v6 起支持代码分割与异步 chunk 桥，v7 起共享 chunk 注册改用 esbuild 命名空间桥（key 含 pluginId/moduleRef）。 */
+const DEPS_LIST_VERSION = 7;
 
 export interface ClientCompileResult {
   /** 产物 JS 文本（自包含 ESM；共享依赖经 globalThis 命名空间运行时解析）。 */
@@ -109,7 +109,10 @@ const inflight = new Map<string, Promise<ClientCompileResult>>();
 
 interface MemoryCompiledEntry {
   result: ClientCompileResult;
+  /** 本地依赖 mtime 快照（相对 clientRoot 的绝对路径）。 */
   localMtimes: Map<string, number>;
+  /** 受控 npm 依赖 stat 指纹（path -> { mtimeMs, size }）：任一变化才做逐文件 sha256 复核。 */
+  npmStats?: Map<string, { mtimeMs: number; size: number }>;
   root: string;
 }
 
@@ -117,32 +120,6 @@ const memoryCompiledCache = new Map<string, MemoryCompiledEntry>();
 
 export function clearClientCompilerMemoryCache(): void {
   memoryCompiledCache.clear();
-}
-
-/** 从 Pass 1 生成的代码中解析具名与默认导出映射（exportedName -> localIdentifier）。 */
-export function parseExportMappings(code: string): Map<string, string> {
-  const mappings = new Map<string, string>();
-  const re = /export\s*\{([^}]+)\}/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(code)) !== null) {
-    const body = m[1]!;
-    const parts = body.split(',');
-    for (const part of parts) {
-      const trimmed = part.trim();
-      if (!trimmed) continue;
-      const asMatch = /^([A-Za-z0-9_$]+)\s+as\s+([A-Za-z0-9_$]+)$/.exec(trimmed);
-      if (asMatch) {
-        mappings.set(asMatch[2]!, asMatch[1]!);
-      } else if (/^[A-Za-z0-9_$]+$/.test(trimmed)) {
-        mappings.set(trimmed, trimmed);
-      }
-    }
-  }
-  const defMatch = /export\s+default\s+([A-Za-z0-9_$]+)\s*;/.exec(code);
-  if (defMatch) {
-    mappings.set('default', defMatch[1]!);
-  }
-  return mappings;
 }
 
 /**
@@ -312,7 +289,9 @@ async function compileUncached(
   );
   const entryReal = assertEntryInsideRoot(pluginId, rootReal, moduleRef);
 
-  // 1. 进程内内存缓存快路径（按本地文件 mtime 极速判定，跳过逐个 npm 依赖 sha256 磁盘遍历）
+  // 1. 进程内内存缓存快路径：本地依赖按 mtime 判定；受控 npm 依赖按 (mtime, size)
+  //    指纹判定，任一变化才退回逐文件 sha256 复核（磁盘清单复查），npm 内容更新后
+  //    绝不永久返回旧 bundle。
   const npmKey = npmRoots.map((r) => `${r.packageRoot}:${r.specifiers.join(',')}`).sort().join(';');
   const memKey = `${pluginId}\0${moduleRef}\0${rootReal}\0${npmKey}`;
   const memEntry = memoryCompiledCache.get(memKey);
@@ -327,6 +306,21 @@ async function compileUncached(
       } catch {
         fresh = false;
         break;
+      }
+    }
+    if (fresh) {
+      const npmStats = memEntry.npmStats ?? new Map();
+      for (const [path, st] of npmStats) {
+        try {
+          const cur = statSync(path);
+          if (cur.mtimeMs !== st.mtimeMs || cur.size !== st.size) {
+            fresh = false;
+            break;
+          }
+        } catch {
+          fresh = false;
+          break;
+        }
       }
     }
     if (fresh) {
@@ -613,24 +607,7 @@ async function compileUncached(
   }
   for (const chunk of Array.from(sharedAsyncChunks)) addSharedDeps(chunk);
 
-  // 步骤 B：防 Tree-shaking 丢失导出 & 注册 __helm_chunk_share
-  const filesToRegister = new Set<string>([...baseClosure, ...sharedAsyncChunks]);
-  filesToRegister.delete(entryBaseName);
-
-  for (const F of filesToRegister) {
-    const code = virtualFiles.get(F);
-    if (!code) continue;
-    const mappings = parseExportMappings(code);
-    if (mappings.size > 0) {
-      const entries = Array.from(mappings.entries()).map(
-        ([exp, loc]) => `${JSON.stringify(exp)}: ${loc}`,
-      ).join(',\n  ');
-      const regStmt = `\n;(globalThis.__helm_chunk_share ??= {})["__HELM_HASH__/" + ${JSON.stringify(F)}] = {\n  ${entries}\n};\n`;
-      virtualFiles.set(F, code + regStmt);
-    }
-  }
-
-  // 步骤 C：生成异步单元的前置共享依赖表 chunkDeps
+  // 步骤 C：生成异步单元的前置共享依赖表 chunkDeps（含共享 chunk 间的拓扑顺序）
   const chunkDeps: Record<string, string[]> = {};
   for (const d of dynamicTargets) {
     const staticClosure = dynStaticClosures.get(d) ?? new Set<string>();
@@ -676,11 +653,49 @@ async function compileUncached(
   const allUnits = new Set<string>([...sharedAsyncChunks, ...dynamicTargets]);
   const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, entryExports, Array.from(allUnits));
 
-  // 步骤 D：Pass 2 收敛构建（主包 + sharedAsyncChunks + dynamicTargets）
+  // 步骤 B（v7）：命名空间桥接注册 __helm_chunk_share。
+  // 对每个需注册的虚拟 chunk 生成 `import * as ns from <chunk>` 的桥接包装模块，
+  // 经 esbuild 生成「活 getter 命名空间对象」后整体写入 __helm_chunk_share：
+  // - 导出清单来自 Pass 1 metafile（生成器真实元数据），含 default / 再导出 /
+  //   字符串命名导出等全部形态，不再用正则猜测生成代码；
+  // - `import * as ns` 引用全部导出，Tree-shaking 无法丢弃任何绑定。
+  // key 按 pluginId \0 moduleRef \0 contentHash \0 chunk 隔离：两个插件同源同
+  // hash 时互不干扰，停用一个不会删掉另一个的共享表。
+  const chunkShareKeyExpr = (file: string): string =>
+    JSON.stringify(`${pluginId}\0${moduleRef}\0${list.contentHash}\0${file}`);
+  const filesToRegister = new Set<string>([...baseClosure, ...sharedAsyncChunks]);
+  filesToRegister.delete(entryBaseName);
+  const chunkNsBridges = new Map<string, string>(); // file -> 桥接包装模块的虚拟文件名
+  for (const F of filesToRegister) {
+    if (!virtualFiles.has(F)) continue;
+    const bridgeName = `__helm_ns__:${F}`;
+    chunkNsBridges.set(F, bridgeName);
+    virtualFiles.set(
+      bridgeName,
+      `import * as __helm_ns from ${JSON.stringify(`__helm_chunk__:${F}`)};\n` +
+        `;(globalThis.__helm_chunk_share ??= {})[${chunkShareKeyExpr(F)}] = __helm_ns;\n`,
+    );
+  }
+
+  // 步骤 D：Pass 2 收敛构建（主包 + 共享 chunk 命名空间桥 + 异步单元）
+  // 主包额外前置 baseClosure 各文件的注册导入（ESM 按序评估：先依赖、再注册、后入口），
+  // 主模块求值时 baseClosure 共享表即已填充——异步 chunk 的 proxy 无需等待额外网络请求。
+  // 同一 vfs 模块在主包内只内联一份（注册桥与入口依赖指向同一实例，不产生体积重复）。
+  const baseRegisterFiles = [...baseClosure].filter((f) => f !== entryBaseName && virtualFiles.has(f));
   async function bundleUnit(unitName: string, isMain: boolean): Promise<string> {
-    const unitCode = virtualFiles.get(unitName);
+    // 主包/异步单元直接编译自身；共享 chunk 经命名空间桥包装编译（防 tree-shaking +
+    // 写入 __helm_chunk_share）。桥内 import * as ns 引用全部导出，esbuild 会把
+    // Pass 1 虚拟 chunk 原样内联并生成活 getter 命名空间对象。
+    const isNsBridge = !isMain && sharedAsyncChunks.has(unitName);
+    let unitCode = virtualFiles.get(isNsBridge ? chunkNsBridges.get(unitName)! : unitName);
     if (unitCode === undefined) {
       throw new HelmError('client_compile_failed', `找不到虚拟文件 ${unitName}`, 500);
+    }
+    if (isMain && baseRegisterFiles.length > 0) {
+      const regImports = baseRegisterFiles
+        .map((f) => `import ${JSON.stringify(`__helm_ns__:${f}`)};`)
+        .join('\n');
+      unitCode = `${regImports}\n${unitCode}`;
     }
     const res = await build({
       stdin: {
@@ -708,6 +723,15 @@ async function compileUncached(
                 return { path: '__HELM_DYN_IMPORT__:' + target, external: true };
               }
               if (args.kind === 'import-statement') {
+                // 命名空间桥：`__helm_chunk__:<file>` 指向被桥接的 Pass 1 虚拟 chunk
+                // 本体（注意前缀判定必须在 basename 之前，basename 会剥掉前缀）
+                if (args.path.startsWith('__helm_chunk__:')) {
+                  return { path: basename(args.path.slice('__helm_chunk__:'.length)), namespace: 'vfs' };
+                }
+                // 主包前置注册导入：`__helm_ns__:<file>` 解析到对应注册桥模块
+                if (args.path.startsWith('__helm_ns__:')) {
+                  return { path: args.path, namespace: 'vfs' };
+                }
                 const target = basename(args.path);
                 if (isMain) {
                   return { path: target, namespace: 'vfs' };
@@ -725,7 +749,7 @@ async function compileUncached(
               const meta = metaByBase.get(T);
               const exports = meta?.exports || [];
               const proxyLines = [
-                `const __s = (globalThis.__helm_chunk_share ?? {})["__HELM_HASH__/" + ${JSON.stringify(T)}] || {};`,
+                `const __s = (globalThis.__helm_chunk_share ?? {})[${chunkShareKeyExpr(T)}] || {};`,
               ];
               for (const exp of exports) {
                 if (exp === 'default') {
@@ -755,7 +779,6 @@ async function compileUncached(
       const deps = chunkDeps[target] ?? [];
       return `globalThis.__helm_import_chunk(${JSON.stringify(pluginId)}, ${JSON.stringify(moduleRef)}, ${JSON.stringify(list.contentHash)}, ${JSON.stringify(target)}, ${JSON.stringify(deps)})`;
     });
-    out = out.replaceAll('__HELM_HASH__', list.contentHash);
     return out;
   }
 
@@ -841,9 +864,22 @@ function recordMemoryCache(
         /* ignore */
       }
     }
+    // 受控 npm 依赖：记录 stat 指纹（mtime + size），内容更新后快路径能可靠失效。
+    // stat 指纹与磁盘清单逐文件 sha256 复核共同构成两层防线：指纹变化直接失效；
+    // 指纹未变但清单 sha256 不一致（极端场景）也由磁盘复查兑底。
+    const npmStats = new Map<string, { mtimeMs: number; size: number }>();
+    for (const dep of list.npmDependencies ?? []) {
+      try {
+        const st = statSync(dep.path);
+        npmStats.set(dep.path, { mtimeMs: st.mtimeMs, size: st.size });
+      } catch {
+        /* 文件消失：不记录指纹，磁盘清单复查阶段会失效重编译 */
+      }
+    }
     memoryCompiledCache.set(memKey, {
       result,
       localMtimes,
+      ...(npmStats.size > 0 ? { npmStats } : {}),
       root: rootReal,
     });
   } catch {
@@ -1250,10 +1286,17 @@ function readCachedResult(
     }
     const chunks: Record<string, { code: string; gzipped?: Uint8Array }> = {};
     if (Array.isArray(list.chunks) && list.chunks.length > 0) {
+      // 主模块缓存命中不预读全部 chunk：逐 chunk 惰性读盘（getter 首次访问才落内存），
+      // 普通主模块请求零额外磁盘读；chunk 缺失同样惰性判定（缺失时机退回 undefined）。
       for (const chunkName of list.chunks) {
-        const c = readCachedChunk(stagingDir, baseName, list.contentHash, chunkName);
-        if (!c) return undefined; // chunk 缺失视为缓存失效，触发重编译
-        chunks[chunkName] = c;
+        let cached: { code: string; gzipped?: Uint8Array } | undefined | null = null;
+        Object.defineProperty(chunks, chunkName, {
+          enumerable: true,
+          get: () => {
+            if (cached === null) cached = readCachedChunk(stagingDir, baseName, list.contentHash, chunkName);
+            return cached;
+          },
+        });
       }
       registerNodeChunkLocation(pluginId, moduleRef, list.contentHash, stagingDir, baseName);
     }

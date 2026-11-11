@@ -294,7 +294,7 @@ test('缓存版本失效：旧 v5 清单不复用，强制重编译', { timeout:
   assert.ok(depsFile, '依赖清单必须已落盘')
   const realListPath = join(stagingDir, depsFile as string)
   const list = JSON.parse(await readFileP(realListPath, 'utf8')) as { version: number; contentHash: string }
-  assert.equal(list.version, 6, '新缓存清单版本为 v6（代码分割与异步 chunk 桥）')
+  assert.equal(list.version, 7, '新缓存清单版本为 v7（命名空间桥共享 chunk 注册）')
   await writeFileP(realListPath, `${JSON.stringify({ ...list, version: 5 })}\n`)
 
   // 再把产物改成“旧格式毒丸”：若 v4 清单被复用会原样返回毒丸；v5 校验必须重编译

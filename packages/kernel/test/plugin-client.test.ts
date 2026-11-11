@@ -841,3 +841,272 @@ test('HTTP Chunk 端点：200/gzip/immutable 缓存、304 协商、400 形状非
     (err: unknown) => err instanceof HelmError && err.code === 'client_chunk_not_found',
   )
 })
+
+test('HTTP Chunk 304：只接受完整 chunk ETag，裸 contentHash 不匹配（不误吞同 hash 其他 chunk）', { timeout: 60_000 }, async () => {
+  const result = await pluginHost.getClientModule('builtin:mermaid', 'index.tsx')
+  const contentHash = result.contentHash
+  const flowChunkName = Object.keys(result.chunks ?? {}).find((k) => k.includes('flowDiagram'))!
+  const pieChunkName = Object.keys(result.chunks ?? {}).find((k) => k.includes('pieDiagram'))!
+
+  // 裸 contentHash 不得命中任何 chunk（否则浏览器会把同 hash 下其他 chunk 的缓存误判为命中）
+  const resRawHash = await call(
+    handler,
+    'GET',
+    `/api/plugins/builtin%3Amermaid/client.mjs?module=index.tsx&chunk=${flowChunkName}&hash=${contentHash}`,
+    { headers: { 'if-none-match': contentHash } },
+  )
+  assert.equal(resRawHash.status, 200, '裸 contentHash 不得作为 chunk 304 匹配')
+
+  // 完整 chunk ETag 命中 304
+  const res304 = await call(
+    handler,
+    'GET',
+    `/api/plugins/builtin%3Amermaid/client.mjs?module=index.tsx&chunk=${flowChunkName}&hash=${contentHash}`,
+    { headers: { 'if-none-match': `"${contentHash}:${flowChunkName}"` } },
+  )
+  assert.equal(res304.status, 304)
+
+  // 不同 chunk 的完整 ETag 不命中其他 chunk
+  const resOtherChunk = await call(
+    handler,
+    'GET',
+    `/api/plugins/builtin%3Amermaid/client.mjs?module=index.tsx&chunk=${pieChunkName}&hash=${contentHash}`,
+    { headers: { 'if-none-match': `"${contentHash}:${flowChunkName}"` } },
+  )
+  assert.equal(resOtherChunk.status, 200, '另一 chunk 的完整 ETag 不得命中')
+
+  // 主模块请求保留裸 hash 兼容（现有行为）
+  const resMainRaw = await call(
+    handler,
+    'GET',
+    '/api/plugins/builtin%3Amermaid/client.mjs?module=index.tsx',
+    { headers: { 'if-none-match': contentHash } },
+  )
+  assert.equal(resMainRaw.status, 304, '主模块请求保留裸 hash 304 兼容')
+})
+
+test('内存缓存 npm 依赖失效：受控 npm 依赖内容变化后不得永久返回旧 bundle', { timeout: 60_000 }, async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'helm-client-npm-mem-'))
+  try {
+    // 构造受控 npm 根：packageRoot/node_modules/tiny-dep/index.js
+    const npmRoot = join(scratch, 'host-pkg')
+    const depDir = join(npmRoot, 'node_modules', 'tiny-dep')
+    await mkdir(depDir, { recursive: true })
+    const depEntry = join(depDir, 'index.js')
+    await writeFile(join(depDir, 'package.json'), JSON.stringify({ name: 'tiny-dep', main: 'index.js' }))
+    await writeFile(depEntry, 'export const value = () => 1\n')
+    const clientRoot = join(scratch, 'client-root')
+    await mkdir(clientRoot, { recursive: true })
+    await writeFile(
+      join(clientRoot, 'index.tsx'),
+      "import { value } from 'tiny-dep'\nexport const v = value()\n",
+    )
+    const npmRoots = [{ specifiers: ['tiny-dep'], packageRoot: npmRoot }]
+    const first = await compilePluginClientModule('test:npm-mem', clientRoot, 'index.tsx', scratch, { npmRoots })
+    // 第二次（内存缓存命中）与第一次一致
+    const second = await compilePluginClientModule('test:npm-mem', clientRoot, 'index.tsx', scratch, { npmRoots })
+    assert.equal(second.contentHash, first.contentHash)
+    // 首版产物真实求值：v === 1（npm 依赖第一版内容）
+    const evalMod = async (code: string): Promise<{ v: number }> =>
+      (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#${Math.random()}`)) as never
+    assert.equal((await evalMod(first.code)).v, 1)
+    // npm 依赖内容变化（保持本地源不变）：内存缓存必须失效，重新编译产出新 hash/新内容
+    await writeFile(depEntry, 'export const value = () => 2\n')
+    const third = await compilePluginClientModule('test:npm-mem', clientRoot, 'index.tsx', scratch, { npmRoots })
+    assert.notEqual(third.contentHash, first.contentHash, 'npm 依赖内容变化后内存缓存必须失效')
+    assert.equal((await evalMod(third.code)).v, 2, '新产物必须携带新版 npm 依赖内容（真实求值验证）')
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
+
+test('磁盘缓存 npm 依赖失效：跨进程重启后（清内存缓存）npm 依赖变化同样失效重编译', { timeout: 60_000 }, async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'helm-client-npm-disk-'))
+  try {
+    const npmRoot = join(scratch, 'host-pkg')
+    const depDir = join(npmRoot, 'node_modules', 'tiny-dep2')
+    await mkdir(depDir, { recursive: true })
+    const depEntry = join(depDir, 'index.js')
+    await writeFile(join(depDir, 'package.json'), JSON.stringify({ name: 'tiny-dep2', main: 'index.js' }))
+    await writeFile(depEntry, 'export const value = () => 10\n')
+    const clientRoot = join(scratch, 'client-root')
+    await mkdir(clientRoot, { recursive: true })
+    await writeFile(
+      join(clientRoot, 'index.tsx'),
+      "import { value } from 'tiny-dep2'\nexport const v = value()\n",
+    )
+    const npmRoots = [{ specifiers: ['tiny-dep2'], packageRoot: npmRoot }]
+    const first = await compilePluginClientModule('test:npm-disk', clientRoot, 'index.tsx', scratch, { npmRoots })
+    // 模拟进程重启：清空内存缓存，磁盘清单复查路径生效
+    const { clearClientCompilerMemoryCache } = await import('../src/plugins/client-compiler.js')
+    clearClientCompilerMemoryCache()
+    const cached = await compilePluginClientModule('test:npm-disk', clientRoot, 'index.tsx', scratch, { npmRoots })
+    assert.equal(cached.contentHash, first.contentHash, '未变化时磁盘缓存命中')
+    await writeFile(depEntry, 'export const value = () => 20\n')
+    clearClientCompilerMemoryCache()
+    const recompiled = await compilePluginClientModule('test:npm-disk', clientRoot, 'index.tsx', scratch, { npmRoots })
+    assert.notEqual(recompiled.contentHash, first.contentHash, 'npm 依赖变化后磁盘缓存必须失效')
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
+
+test('共享 Chunk 桥导出完整性：default 表达式 / 再导出 / 字符串命名导出全部可达（非正则注册）', { timeout: 60_000 }, async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'helm-client-ns-bridge-'))
+  try {
+    const clientRoot = join(scratch, 'client-root')
+    await mkdir(clientRoot, { recursive: true })
+    // shared：default 导出为表达式 + 命名导出 + 字符串命名导出（被消费不被 tree-shake）
+    await writeFile(
+      join(clientRoot, 'shared.ts'),
+      [
+        'const marker = "bridge"',
+        'export default (function makeDefault() { return { tag: "default-expr", marker } })()',
+        'export const plain = "plain-v1"',
+        'export { plain as "string-named" }',
+      ].join('\n'),
+    )
+    // lazy：再导出 default/命名/字符串命名导出（旧正则注册会漏绑定或注入未定义标识符）
+    await writeFile(
+      join(clientRoot, 'lazy.ts'),
+      [
+        "import sharedDefault, { plain, plain as stringNamed } from './shared'",
+        'export { sharedDefault as reDefault }',
+        'export { plain as rePlain }',
+        'export { plain as "re-string-named" }',
+        'export const combined = sharedDefault.tag + "/" + plain + "/" + sharedDefault.marker + "/" + stringNamed',
+      ].join('\n'),
+    )
+    await writeFile(
+      join(clientRoot, 'index.tsx'),
+      [
+        "import { plain } from './shared'",
+        "export const loadLazy = async () => (await import('./lazy')).combined",
+        'export const main = "main:" + plain',
+      ].join('\n'),
+    )
+    const { code, contentHash, chunks } = await compilePluginClientModule('test:ns-bridge', clientRoot, 'index.tsx', scratch)
+    assert.ok(Object.keys(chunks ?? {}).length > 0, '分包路径必须产出异步 chunk')
+    const g = globalThis as unknown as Record<string, unknown>
+    const shareBefore = g.__helm_chunk_share
+    const mod = (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`)) as {
+      main: string
+      loadLazy: () => Promise<string>
+    }
+    try {
+      assert.equal(mod.main, 'main:plain-v1')
+      // 主模块求值后：baseClosure 共享表已登记且按 pluginId\0module\0hash\0chunk 隔离
+      const share = g.__helm_chunk_share as Record<string, unknown> | undefined
+      assert.ok(share, '主模块求值后共享表已写入')
+      const sharedKey = Object.keys(share ?? {}).find((k) => k.startsWith(`test:ns-bridge\0index.tsx\0${contentHash}\0`))
+      assert.ok(sharedKey, '共享表 key 必须按 pluginId\0module\0hash\0chunk 隔离')
+      const sharedNs = share?.[sharedKey] as Record<string, unknown> | undefined
+      assert.ok(sharedNs && typeof sharedNs === 'object')
+      // default 导出为表达式时也可达（旧正则只匹配 `export default <标识符>`，表达式会漏）
+      assert.equal((sharedNs?.shared_default as { tag: string })?.tag, 'default-expr', 'default 表达式导出可达（旧正则会漏）')
+      assert.equal(sharedNs?.plain, 'plain-v1')
+      // 懒加载 chunk：再导出（default/命名/字符串命名）绑定运行时全部可用
+      const combined = await mod.loadLazy()
+      assert.equal(combined, 'default-expr/plain-v1/bridge/plain-v1')
+    } finally {
+      g.__helm_chunk_share = shareBefore
+    }
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
+
+test('两插件同源同 hash：停用 A 后 B 的 chunk 共享表条目不受影响，B 仍可加载渲染', { timeout: 60_000 }, async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'helm-client-iso-'))
+  try {
+    const clientRoot = join(scratch, 'client-root')
+    await mkdir(clientRoot, { recursive: true })
+    await writeFile(
+      join(clientRoot, 'shared.ts'),
+      'export const helper = () => "iso-helper"\nexport default { kind: "iso-default" }\n',
+    )
+    await writeFile(
+      join(clientRoot, 'lazy.ts'),
+      "import def, { helper } from './shared'\nexport const v = def.kind + ':' + helper()\nexport { helper as reHelper }\n",
+    )
+    await writeFile(
+      join(clientRoot, 'index.tsx'),
+      "import { helper } from './shared'\nexport const loadLazy = async () => (await import('./lazy')).v\nexport const main = helper()\n",
+    )
+    const compileA = await compilePluginClientModule('iso:pluginA', clientRoot, 'index.tsx', join(scratch, 'ca'))
+    const compileB = await compilePluginClientModule('iso:pluginB', clientRoot, 'index.tsx', join(scratch, 'cb'))
+    const g = globalThis as unknown as Record<string, unknown>
+    const shareBefore = g.__helm_chunk_share
+    try {
+      const evalMod = async (code: string): Promise<{ main: string; loadLazy: () => Promise<string> }> =>
+        (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#${Math.random()}`)) as never
+      const modA = await evalMod(compileA.code)
+      const modB = await evalMod(compileB.code)
+      assert.equal(modA.main, 'iso-helper')
+      assert.equal(modB.main, 'iso-helper')
+      const share = g.__helm_chunk_share as Record<string, unknown>
+      const aKeys = Object.keys(share).filter((k) => k.startsWith('iso:pluginA\0'))
+      const bKeys = Object.keys(share).filter((k) => k.startsWith('iso:pluginB\0'))
+      assert.ok(aKeys.length > 0 && bKeys.length > 0, '同源同 hash 两插件各自登记共享表')
+      // 模拟停用 A：只删 A 的共享条目（与前端 evict 语义一致）
+      for (const k of aKeys) delete share[k]
+      assert.equal(Object.keys(share).filter((k) => k.startsWith('iso:pluginA\0')).length, 0)
+      assert.equal(Object.keys(share).filter((k) => k.startsWith('iso:pluginB\0')).length, bKeys.length, '删 A 不影响 B 条目')
+      // B 的懒加载 chunk 仍可用（共享表命中 + 再导出绑定可用）
+      const lazyB = await modB.loadLazy()
+      assert.equal(lazyB, 'iso-default:iso-helper', '停用 A 后 B 的 chunk 仍可正常加载求值')
+    } finally {
+      g.__helm_chunk_share = shareBefore
+    }
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
+
+test('主模块缓存命中不预读全部 chunk：磁盘路径惰性读盘，chunk 端点仍可按需返回', { timeout: 60_000 }, async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'helm-client-lazy-'))
+  try {
+    const clientRoot = join(scratch, 'client-root')
+    await mkdir(clientRoot, { recursive: true })
+    await writeFile(join(clientRoot, 'shared.ts'), 'export const helper = () => "lazy-ok"\n')
+    await writeFile(
+      join(clientRoot, 'lazy.ts'),
+      "import { helper } from './shared'\nexport const v = helper()\n",
+    )
+    await writeFile(
+      join(clientRoot, 'index.tsx'),
+      "import { helper } from './shared'\nexport const loadLazy = async () => (await import('./lazy')).v\nexport const main = helper()\n",
+    )
+    const first = await compilePluginClientModule('test:lazy-chunks', clientRoot, 'index.tsx', scratch)
+    assert.ok(Object.keys(first.chunks ?? {}).length > 0, '分包产物必须含异步 chunk')
+    // 模拟进程重启（磁盘缓存路径）：主模块命中不预读 chunk 内容
+    const { clearClientCompilerMemoryCache } = await import('../src/plugins/client-compiler.js')
+    clearClientCompilerMemoryCache()
+    const mainHit = await compilePluginClientModule('test:lazy-chunks', clientRoot, 'index.tsx', scratch)
+    assert.equal(mainHit.contentHash, first.contentHash)
+    // 磁盘缓存命中的 chunks 是惰性 getter：访问前不读盘（描述符存在且为 get，无已求值 value）
+    const chunkName = Object.keys(mainHit.chunks ?? {})[0]!
+    const desc = Object.getOwnPropertyDescriptor(mainHit.chunks, chunkName)
+    assert.ok(desc && typeof desc.get === 'function' && desc.value === undefined, '磁盘缓存命中的 chunk 必须是未求值的惰性 getter')
+    // 首次访问才读盘（返回真实内容）；重复访问零新增（getter 内缓存）
+    const c1 = mainHit.chunks?.[chunkName]
+    assert.ok(c1 && c1.code.length > 0, '首次访问才读盘返回真实 chunk 内容')
+    const c2 = mainHit.chunks?.[chunkName]
+    assert.equal(c2?.code, c1.code)
+    // 产物语义完整：主模块 + 懒 chunk 真实求值可达
+    const g = globalThis as unknown as Record<string, unknown>
+    const shareBefore = g.__helm_chunk_share
+    try {
+      const mod = (await import(`data:text/javascript;base64,${Buffer.from(mainHit.code).toString('base64')}#${Math.random()}`)) as {
+        main: string
+        loadLazy: () => Promise<string>
+      }
+      assert.equal(mod.main, 'lazy-ok')
+      assert.equal(await mod.loadLazy(), 'lazy-ok', '磁盘缓存路径产物端到端可执行')
+    } finally {
+      g.__helm_chunk_share = shareBefore
+    }
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})

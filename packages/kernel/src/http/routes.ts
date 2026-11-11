@@ -671,7 +671,12 @@ async function route(
       const cacheControl = isImmutable ? 'private, max-age=31536000, immutable' : 'private, no-cache'
 
       const ifNoneMatch = ctx.request.headers.get('if-none-match')
-      if (ifNoneMatch && (ifNoneMatch === etag || ifNoneMatch === compiled.contentHash || ifNoneMatch === `W/${etag}`)) {
+      // chunk 请求只接受完整 chunk ETag（hash:chunk）匹配——裸 contentHash 会把同 hash 下
+      // 其他 chunk 的缓存误判为命中；主模块请求保留强 ETag / 裸 hash / W/ 三形态兼容。
+      const etagMatched = chunk !== undefined
+        ? ifNoneMatch === etag || ifNoneMatch === `W/${etag}`
+        : ifNoneMatch === etag || ifNoneMatch === compiled.contentHash || ifNoneMatch === `W/${etag}`
+      if (ifNoneMatch && etagMatched) {
         return new Response(null, {
           status: 304,
           headers: {

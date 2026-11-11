@@ -1,8 +1,15 @@
 /**
  * 插件 client.tsx 模块加载器（纯逻辑，无组件导出）：
  * - Bearer fetch 拉取编译产物（token 绝不进 URL）→ Blob URL 动态 import → 释放 URL；
+ *   浏览器 Blob import 失败即真实错误（client_module_import_failed），绝不回退
+ *   data URL 掩盖；Node/无 Blob 环境用 data URL（测试与 SSR 唯一可行路径）；
  * - 按 (pluginId, module, contentHash) 缓存模块命名空间（含已解析 resolved 快路径）；
  *   插件停用/卸载（uiContributions 移除）时失效缓存并回收其注入样式；
+ * - 共享 Chunk 桥（__helm_import_chunk）：preload fetch 全并发去重（同一 chunk 零重复
+ *   网络请求）、模块求值按拓扑顺序 await；epoch 守卫确保 evict/reset 后迟到的 chunk
+ *   不得回写 __helm_chunk_share（显式 client_module_invalidated，绝不静默）；
+ *   __helm_chunk_share 条目按 pluginId + moduleRef + contentHash + chunk 隔离，
+ *   两插件同源同 hash 时停用一个不会删掉另一个的共享表；
  * - 编译产物只携带样式文本（保留导出 __helmClientCss，绝不写 DOM）；模块解析成功且
  *   epoch / 插件 epoch / 缓存 entry 身份仍有效后，由本加载器统一注入或回收每个入口的
  *   单个 <style data-helm-plugin-css>，resolved 缓存发布发生在样式装载之后；
@@ -33,7 +40,14 @@ let cacheEpoch = 0
 const invalidationListeners = new Set<() => void>()
 
 const chunkPromiseCache = new Map<string, Promise<Record<string, unknown>>>()
+/** chunk 文本 fetch 去重：同 key 在途 fetch 共享同一 Promise（preload 并发不重复请求）。 */
+const chunkTextFetchCache = new Map<string, Promise<string>>()
 const pluginLoadedHashes = new Map<string, Set<string>>()
+
+/** 当前插件有效的缓存代（pluginEpoch + cacheEpoch）：失效后迟到 chunk 不得回写共享表。 */
+function pluginCacheGeneration(pluginId: string): string {
+  return `${cacheEpoch}:${pluginEpochs.get(pluginId) ?? 0}`
+}
 
 function trackPluginHash(pluginId: string, hash: string): void {
   let set = pluginLoadedHashes.get(pluginId)
@@ -140,20 +154,25 @@ export function evictPluginClientCache(pluginId: string): void {
       inflightLoads.delete(key)
     }
   }
-  for (const [key] of chunkPromiseCache) {
-    if (key.startsWith(`${pluginId}\0`)) {
-      chunkPromiseCache.delete(key)
+  for (const key of chunkPromiseCache) {
+    if (key[0].startsWith(`${pluginId}\0`)) {
+      chunkPromiseCache.delete(key[0])
     }
   }
+  for (const key of chunkTextFetchCache) {
+    if (key[0].startsWith(`${pluginId}\0`)) {
+      chunkTextFetchCache.delete(key[0])
+    }
+  }
+  // 共享表按 pluginId + moduleRef + contentHash + chunk 隔离清理：只删属于本插件的条目，
+  // 另一插件同源同 hash 的共享条目不受影响（key = pluginId\0moduleRef\0hash\0chunk）。
   const hashes = pluginLoadedHashes.get(pluginId)
   if (hashes && (globalThis as Record<string, unknown>).__helm_chunk_share) {
     const share = (globalThis as Record<string, unknown>).__helm_chunk_share as Record<string, unknown>
-    for (const hash of hashes) {
-      const prefix = `${hash}/`
-      for (const k of Object.keys(share)) {
-        if (k.startsWith(prefix)) {
-          delete share[k]
-        }
+    const prefix = `${pluginId}\0`
+    for (const k of Object.keys(share)) {
+      if (k.startsWith(prefix) && hashes.has(k.split('\0')[2] ?? '')) {
+        delete share[k]
       }
     }
     pluginLoadedHashes.delete(pluginId)
@@ -169,6 +188,7 @@ export function resetPluginClientCache(): void {
   cache.clear()
   inflightLoads.clear()
   chunkPromiseCache.clear()
+  chunkTextFetchCache.clear()
   pluginLoadedHashes.clear()
   if ((globalThis as Record<string, unknown>).__helm_chunk_share) {
     const share = (globalThis as Record<string, unknown>).__helm_chunk_share as Record<string, unknown>
@@ -192,6 +212,10 @@ export class PluginClientError extends Error {
   }
 }
 
+/**
+ * 模块代码求值：浏览器环境 Blob URL 动态 import（失败即真实错误，绝不回退 data URL
+ * 掩盖）；Node/无 Blob 环境用 data URL（测试与 SSR 唯一可行路径）。
+ */
 async function evaluateModuleCode(code: string): Promise<Record<string, unknown>> {
   if (typeof window === 'undefined' || typeof URL.createObjectURL !== 'function') {
     const b64 = typeof Buffer !== 'undefined'
@@ -268,22 +292,54 @@ async function fetchChunkText(
   return await res.text()
 }
 
+/**
+ * chunk 文本去重获取：同 key 在途 fetch 共享同一 Promise；失败时从缓存清除允许可重试。
+ * 失败的 Promise 不会被缓存（拒绝即清除），调用方拿到的拒绝都是自己 await 消费的，
+ * 不产生未处理 rejection。
+ */
+function getChunkTextDeduped(
+  pluginId: string,
+  moduleRef: string,
+  contentHash: string,
+  chunkName: string,
+): Promise<string> {
+  const key = `${pluginId}\0${moduleRef}\0${contentHash}\0${chunkName}`
+  const pending = chunkTextFetchCache.get(key)
+  if (pending !== undefined) return pending
+  const run = fetchChunkText(pluginId, moduleRef, contentHash, chunkName)
+  // 失败即清除（可重试）；成功保留到 evict/reset（内容寻址 + hash 锁定，不可变）。
+  run.then(
+    () => {},
+    () => {
+      chunkTextFetchCache.delete(key)
+    },
+  )
+  chunkTextFetchCache.set(key, run)
+  return run
+}
+
 async function loadSingleChunk(
   pluginId: string,
   moduleRef: string,
   contentHash: string,
   chunkName: string,
-  inFlightFetchTextPromise?: Promise<string>,
 ): Promise<Record<string, unknown>> {
   const key = `${pluginId}\0${moduleRef}\0${contentHash}\0${chunkName}`
   const pending = chunkPromiseCache.get(key)
   if (pending !== undefined) return pending
 
   trackPluginHash(pluginId, contentHash)
+  const generation = pluginCacheGeneration(pluginId)
   const run = (async () => {
-    const code = inFlightFetchTextPromise !== undefined
-      ? await inFlightFetchTextPromise
-      : await fetchChunkText(pluginId, moduleRef, contentHash, chunkName)
+    const code = await getChunkTextDeduped(pluginId, moduleRef, contentHash, chunkName)
+    // epoch 守卫：evict/reset 后迟到的 fetch 结果不得再求值/写入共享表，显式失效。
+    if (generation !== pluginCacheGeneration(pluginId)) {
+      throw new PluginClientError(
+        'client_module_invalidated',
+        `插件 ${pluginId} 的 chunk ${chunkName} 加载已失效，请重新加载`,
+        0,
+      )
+    }
     return await evaluateModuleCode(code)
   })().catch((err: unknown) => {
     chunkPromiseCache.delete(key)
@@ -293,6 +349,12 @@ async function loadSingleChunk(
   return run
 }
 
+/**
+ * 共享 Chunk 桥：preload 列表是拓扑序（依赖在前）——所有 preload 的 fetch 并发启动
+ * （getChunkTextDeduped 去重，同一 chunk 只发一次网络请求），但模块求值严格按拓扑
+ * 顺序 await（共享表先写依赖、后写使用者）。失败时：后续 preload 的 fetch 仍会被
+ * 并发消费（有 catch 兑底，不产生 unhandled rejection）；模块缓存失败即清除可重试。
+ */
 ;(globalThis as Record<string, unknown>).__helm_import_chunk = async (
   pluginId: string,
   moduleRef: string,
@@ -300,12 +362,24 @@ async function loadSingleChunk(
   chunkName: string,
   preloads: string[] = [],
 ): Promise<Record<string, unknown>> => {
-  if (preloads.length > 0) {
-    const preloadFetches = preloads.map((p) => fetchChunkText(pluginId, moduleRef, contentHash, p))
-    for (let i = 0; i < preloads.length; i++) {
-      const p = preloads[i]!
-      await loadSingleChunk(pluginId, moduleRef, contentHash, p, preloadFetches[i])
-    }
+  const seen = new Set<string>([chunkName])
+  const ordered = preloads.filter((p) => {
+    if (seen.has(p)) return false
+    seen.add(p)
+    return true
+  })
+  // 全部 preload fetch 并发启动（去重后同一 chunk 零重复网络）；失败被捕获为值，
+  // 不会产生 unhandled rejection，最终按拓扑顺序在对应位置显式抛出。
+  const fetches = ordered.map((p) =>
+    getChunkTextDeduped(pluginId, moduleRef, contentHash, p).then(
+      (text) => text,
+      (err: unknown) => err as Error,
+    ),
+  )
+  for (let i = 0; i < ordered.length; i++) {
+    const text = await fetches[i]
+    if (text instanceof Error) throw text
+    await loadSingleChunk(pluginId, moduleRef, contentHash, ordered[i]!)
   }
   return await loadSingleChunk(pluginId, moduleRef, contentHash, chunkName)
 }
