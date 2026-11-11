@@ -1,8 +1,9 @@
-import React from 'react'
+import React, { useContext } from 'react'
 import type { PluginSummary } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
+import { HelmStoreContext } from '../lib/store-context.js'
 import { Switch } from '../ui/Switch.js'
-import { getPluginDescription } from './plugin-card-model.js'
+import { getPluginDescription, listPluginScreens } from './plugin-card-model.js'
 import { isPluginFailed } from './plugin-center-model.js'
 
 export interface PluginCardProps {
@@ -12,7 +13,6 @@ export interface PluginCardProps {
   onToggle: (enabled: boolean) => Promise<void> | void
   toggling?: boolean
 }
-
 /**
  * 根据插件 ID 推导线性矢量图标名称
  */
@@ -46,9 +46,15 @@ export function PluginCard({
   onToggle,
   toggling = false,
 }: PluginCardProps): React.JSX.Element {
+  const store = useContext(HelmStoreContext)
   const iconName = getPluginIcon(plugin.id)
   const description = getPluginDescription(plugin)
   const isLocked = plugin.locked === true
+  // 已启用且有 Screen 贡献时提供快捷打开（主屏/右屏），经 store.openTarget 唯一导航。
+  const primaryScreen =
+    store !== null && plugin.enabled
+      ? listPluginScreens(store.groupedUi, plugin.id)[0] ?? null
+      : null
   // 源码/清单加载阶段失败（scan/load）：模块未成功导入，无有效 definition 可重试启用
   const isLoadBroken = plugin.error?.stage === 'scan' || plugin.error?.stage === 'load'
   const isSwitchDisabled = isLocked || toggling || isLoadBroken
@@ -172,24 +178,45 @@ export function PluginCard({
           )}
         </div>
 
-        <div
-          className="plugin-card-switch-wrap"
-          onClick={(e) => {
-            e.stopPropagation()
-          }}
-          onKeyDown={(e) => {
-            e.stopPropagation()
-          }}
-        >
-          <Switch
-            checked={plugin.enabled}
-            disabled={isSwitchDisabled}
-            onChange={(checked) => {
-              void onToggle(checked)
+        <div className="plugin-card-actions">
+          {primaryScreen !== null && (
+            <button
+              type="button"
+              className="btn btn-xs plugin-card-open-btn"
+              title="打开插件视图"
+              aria-label={`打开 ${plugin.name || plugin.id} 视图`}
+              onClick={(e) => {
+                e.stopPropagation()
+                store?.openTarget({
+                  kind: 'screen',
+                  pluginId: primaryScreen.pluginId,
+                  screenId: primaryScreen.screenId,
+                })
+              }}
+            >
+              <HelmIcon name="play" size={10} />
+              <span>打开视图</span>
+            </button>
+          )}
+          <div
+            className="plugin-card-switch-wrap"
+            onClick={(e) => {
+              e.stopPropagation()
             }}
-            aria-label={`${plugin.name || plugin.id} 开关`}
-            title={switchTitle}
-          />
+            onKeyDown={(e) => {
+              e.stopPropagation()
+            }}
+          >
+            <Switch
+              checked={plugin.enabled}
+              disabled={isSwitchDisabled}
+              onChange={(checked) => {
+                void onToggle(checked)
+              }}
+              aria-label={`${plugin.name || plugin.id} 开关`}
+              title={switchTitle}
+            />
+          </div>
         </div>
       </div>
     </div>

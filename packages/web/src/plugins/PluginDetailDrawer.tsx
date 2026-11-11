@@ -43,6 +43,7 @@ import {
   secretConfigured,
   type ConfigValue,
 } from '../modals/plugin-config-form-model.js'
+import { listPluginScreens } from './plugin-card-model.js'
 import { isPluginFailed } from './plugin-center-model.js'
 
 export interface PluginDetailDrawerProps {
@@ -404,6 +405,12 @@ export function PluginDetailDrawer({
   const versionLabel = plugin?.version ? `v${plugin.version.replace(/^v/, '')}` : null
   const settingsPanels =
     store?.groupedUi?.settingsPanels?.filter((p) => p.pluginId === plugin?.id) ?? []
+  // 已启用且有 Screen 贡献时提供快捷打开（主屏/右屏）；唯一导航机制 store.openTarget。
+  const pluginScreens =
+    plugin !== null && store !== null && plugin.enabled
+      ? listPluginScreens(store.groupedUi, plugin.id)
+      : []
+  const primaryScreen = pluginScreens[0] ?? null
 
   return (
     <Dialog
@@ -490,23 +497,67 @@ export function PluginDetailDrawer({
                       <span className="badge badge-neutral">已停用</span>
                     )}
                   </div>
-                  <button
-                    className={`btn btn-sm ${plugin.enabled ? 'btn' : 'btn-primary'}`}
-                    disabled={plugin.locked || toggling}
-                    onClick={() => void handleToggle(plugin.enabled ? false : true)}
-                  >
-                    {plugin.enabled ? (
+                  <div className="plugin-drawer-screen-actions">
+                    {primaryScreen !== null && store !== null && (
                       <>
-                        <HelmIcon name="square" size={12} />
-                        <span>停用插件</span>
-                      </>
-                    ) : (
-                      <>
-                        <HelmIcon name="play" size={12} />
-                        <span>启用插件</span>
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          title={
+                            pluginScreens.length > 1
+                              ? `打开主视图 ${primaryScreen.screenId}（共 ${pluginScreens.length} 个视图）`
+                              : '打开主视图'
+                          }
+                          onClick={() =>
+                            store.openTarget({
+                              kind: 'screen',
+                              pluginId: primaryScreen.pluginId,
+                              screenId: primaryScreen.screenId,
+                            })
+                          }
+                        >
+                          <HelmIcon name="play" size={12} />
+                          <span>打开视图</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          title="在右侧分屏并排打开"
+                          onClick={() =>
+                            store.openTarget(
+                              {
+                                kind: 'screen',
+                                pluginId: primaryScreen.pluginId,
+                                screenId: primaryScreen.screenId,
+                              },
+                              { split: true },
+                            )
+                          }
+                        >
+                          <HelmIcon name="columns" size={12} />
+                          <span>右屏打开</span>
+                        </button>
                       </>
                     )}
-                  </button>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${plugin.enabled ? 'btn' : 'btn-primary'}`}
+                      disabled={plugin.locked || toggling}
+                      onClick={() => void handleToggle(plugin.enabled ? false : true)}
+                    >
+                      {plugin.enabled ? (
+                        <>
+                          <HelmIcon name="square" size={12} />
+                          <span>停用插件</span>
+                        </>
+                      ) : (
+                        <>
+                          <HelmIcon name="play" size={12} />
+                          <span>启用插件</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
 
                 {actionError && (

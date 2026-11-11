@@ -4167,6 +4167,17 @@ input::placeholder {
   white-space: nowrap;
 }
 
+.plugin-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.plugin-card-open-btn {
+  color: var(--fg-muted);
+}
+
 .plugin-card-switch-wrap {
   display: inline-flex;
   align-items: center;
@@ -4326,6 +4337,15 @@ input::placeholder {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 抽屉操作区：视图快捷打开（主屏/右屏）与启停按钮；窄屏自动折行不溢出 */
+.plugin-drawer-screen-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .plugin-drawer-section {

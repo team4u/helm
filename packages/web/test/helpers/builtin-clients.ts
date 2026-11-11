@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { after } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { compilePluginClientModule } from '../../../kernel/src/plugins/client-compiler.js'
-import * as HelmPluginClient from '../../src/lib/plugin-client-context.js'
+import * as HelmPluginClient from '../../src/lib/plugin-client-sdk.js'
 
 export interface BuiltinClientStubOptions {
   /** docName → doc 值（usePluginDoc 按 docName 路由返回）。 */
@@ -54,6 +54,7 @@ const CLIENT_ROOTS: Record<string, string> = {
   'builtin:superagent': fileURLToPath(new URL('../../../kernel/src/builtin-plugins/superagent/client', import.meta.url)),
   'builtin:triggers': fileURLToPath(new URL('../../../kernel/src/builtin-plugins/triggers/client', import.meta.url)),
   'builtin:magpie': fileURLToPath(new URL('../../../kernel/src/builtin-plugins/magpie/client', import.meta.url)),
+  'builtin:apps': fileURLToPath(new URL('../../../kernel/src/builtin-plugins/apps/client', import.meta.url)),
 }
 
 export async function importBuiltinClientModule(

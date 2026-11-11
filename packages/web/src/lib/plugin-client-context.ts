@@ -12,7 +12,7 @@
  */
 import { createContext, useCallback, useContext, useEffect } from 'react'
 import { Switch } from '../ui/Switch.js'
-import type { AskSpec, ComposerController, ConversationDetail, ConversationLive, ConversationSummary, PluginClientContext as PluginClientContextType } from '@helm/protocol'
+import type { AskSpec, ComposerController, ConversationDetail, ConversationLive, ConversationSummary, PluginClientContext as PluginClientContextType, UsePluginsResult } from '@helm/protocol'
 import { conversationsApi } from './api.js'
 import { useHelmStore, usePluginDoc as usePluginDocFromStore, usePluginSessionDoc as usePluginSessionDocFromStore } from './store-context.js'
 import type { HelmStoreValue } from './types.js'
@@ -80,6 +80,20 @@ function useClientPluginSessionDocInternal<T = unknown>(
 /** 全部会话摘要（SSE 实时同步；与宿主左栏同一数据源，无 mock）。 */
 export function useConversations(): ConversationSummary[] {
   return useHelmStore().conversations
+}
+
+/**
+ * 宿主插件清单与 Screen 贡献响应式快照（与插件中心/左栏同一 SSE 数据源，无轮询）：
+ * - plugins：全部插件摘要，随 plugin.changed / 快照帧实时更新；
+ * - screens：已启用插件注册的 Screen 贡献（含 pluginId），停用插件贡献即时移除。
+ * 可在 <PluginUiView> 外使用（应用中心类全屏视图无会话上下文也可调用）。
+ */
+export function usePlugins(): UsePluginsResult {
+  const store = useHelmStore()
+  return {
+    plugins: store.plugins,
+    screens: store.groupedUi.screens,
+  }
 }
 
 /** useConversation 返回的单个会话实时视图。 */

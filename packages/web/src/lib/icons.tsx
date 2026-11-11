@@ -35,6 +35,7 @@ import {
   HardDrive,
   Key,
   Layers,
+  LayoutGrid,
   Loader2,
   Lock,
   Maximize2,
@@ -161,6 +162,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'message-square': MessageSquare,
   code: Code2,
   circle: Circle,
+  'layout-grid': LayoutGrid,
 }
 
 export interface HelmIconProps {

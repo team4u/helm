@@ -5,7 +5,8 @@
  * - 未声明时依据能力透视生成（tools/actions/hooks 计数），不按插件 ID
  *   硬编码任何业务特判——描述是插件自己的事，前端只负责展示。
  */
-import type { PluginSummary } from '@helm/protocol'
+import type { PluginSummary, ScreenSpec } from '@helm/protocol'
+import type { GroupedUiSpecs } from '../lib/types.js'
 
 export function getPluginDescription(plugin: PluginSummary): string {
   if (plugin.description && plugin.description.trim() !== '') {
@@ -62,4 +63,32 @@ export function extractPluginUsages(details?: Record<string, unknown>): PluginUs
     items.push({ kind: record['kind'], id: record['id'], label })
   }
   return items
+}
+
+// ---------------------------------------------------------------------------
+// 插件 ↔ Screen 关联（PluginSummary 不携带 screens，从 grouped UI 左连接）
+// ---------------------------------------------------------------------------
+
+export interface PluginScreenRef {
+  pluginId: string
+  screenId: string
+  spec: ScreenSpec
+}
+
+/** 取某插件的全部 Screen 贡献（按 grouped UI 注册顺序）。 */
+export function listPluginScreens(
+  grouped: Pick<GroupedUiSpecs, 'screens'>,
+  pluginId: string,
+): PluginScreenRef[] {
+  return grouped.screens
+    .filter((item) => item.pluginId === pluginId)
+    .map((item) => ({ pluginId: item.pluginId, screenId: item.spec.id, spec: item.spec }))
+}
+
+/** 插件是否具备可打开的主视图（enabled 且至少声明一个 Screen 贡献）。 */
+export function pluginHasOpenableScreen(
+  grouped: Pick<GroupedUiSpecs, 'screens'>,
+  plugin: Pick<PluginSummary, 'id' | 'enabled'>,
+): boolean {
+  return plugin.enabled && listPluginScreens(grouped, plugin.id).length > 0
 }

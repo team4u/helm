@@ -22,6 +22,7 @@ export interface PluginCenterProps {
 
 const CATEGORY_TABS: Array<{ key: PluginCategoryTab; label: string }> = [
   { key: 'all', label: '全部' },
+  { key: 'apps', label: '应用' },
   { key: 'runtime', label: '运行时' },
   { key: 'tools', label: '工具与能力' },
   { key: 'orchestration', label: '编排与流程' },
@@ -53,15 +54,18 @@ export function PluginCenter({
   const refreshGeneration = React.useRef(0)
 
   const plugins = store.plugins ?? []
-  const categoryCounts = useMemo(() => buildCategoryCounts(plugins), [plugins])
+  // Screen 贡献作为「应用」分类数据源（SSE 实时；内置插件视图不混入用户应用）
+  const screens = store.groupedUi?.screens ?? []
+  const categoryCounts = useMemo(() => buildCategoryCounts(plugins, screens), [plugins, screens])
   const summaryStats = useMemo(() => summarizePlugins(plugins), [plugins])
 
   const filteredPlugins = useMemo(() => {
     return filterPlugins(plugins, {
       query,
       categoryTab: activeTab,
+      screens,
     })
-  }, [plugins, query, activeTab])
+  }, [plugins, query, activeTab, screens])
 
   const selectedPluginId =
     store.primaryTarget.kind === 'plugins' ? store.primaryTarget.pluginId : undefined

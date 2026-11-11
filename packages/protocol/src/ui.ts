@@ -4,6 +4,7 @@
  */
 
 import type { ConversationAttachmentRef, ConversationEntry, ConversationScope, ConversationSummary, WhenBusy } from './conversation.js'
+import type { PluginSummary } from './plugin.js'
 
 /** 编译器保留的 CSS 文本导出名；加载器确认模块有效后才将其挂入页面。 */
 export const PLUGIN_CLIENT_CSS_EXPORT = '__helmClientCss' as const
@@ -410,7 +411,7 @@ export interface PluginClientContext {
  *
  * 导出符号唯一真源见 PLUGIN_CLIENT_SHARED_EXPORTS：
  * - hooks：usePluginContext / usePluginDoc / usePluginSessionDoc / useToolActivity /
- *   useConversations / useConversation；
+ *   useConversations / useConversation / usePlugins；
  * - 无障碍底座组件：Switch / Select / MultiSelect / Checkbox / Tabs 系列 /
  *   SegmentedControl / HelmIcon / ViewBoundary / Callout；
  * - 内容展示：MarkdownView（标准 Markdown 渲染）/ CodeBlockView（语法高亮代码块）/
@@ -418,6 +419,14 @@ export interface PluginClientContext {
  * - PluginSlot：插件间子插槽渲染原语。
  */
 export const HELM_PLUGIN_CLIENT_SHARED_MODULE = '@helm/plugin-client'
+
+/** usePlugins()：宿主插件清单与 Screen 贡献的响应式快照（SSE 实时驱动，无轮询）。 */
+export interface UsePluginsResult {
+  /** 宿主当前全部插件摘要（随 SSE plugin.changed 实时同步）。 */
+  plugins: PluginSummary[]
+  /** 当前全部已启用插件注册的 Screen 贡献列表（含所属 pluginId）。 */
+  screens: Array<{ pluginId: string; spec: ScreenSpec }>
+}
 
 /** GET /api/plugins/:id/client.mjs 响应元信息（错误时 HTTP 错误信封，不出 JS）。 */
 export interface PluginClientModuleInfo {
@@ -466,6 +475,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'useToolActivity',
   'useConversations',
   'useConversation',
+  'usePlugins',
   'PluginSlot',
   'Switch',
   'Select',

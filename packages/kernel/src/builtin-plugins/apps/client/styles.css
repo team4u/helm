@@ -1,8 +1,288 @@
-.apps-center-placeholder {
+/* builtin:apps 应用中心启动台样式（宿主 CSS 变量自适应暗/亮主题，零 Emoji） */
+
+.apps-center {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.apps-center-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.apps-center-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.apps-center-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.apps-center-subtitle {
+  font-size: 12px;
+}
+
+.apps-center-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.apps-center-stats {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.apps-center-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.apps-search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 200px;
+  min-width: 180px;
+  max-width: 320px;
+  padding: 0 8px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+}
+
+.apps-search-box input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.apps-category-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.apps-category-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg-secondary);
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.apps-category-pill:hover {
+  border-color: var(--fg-muted);
+}
+
+.apps-category-pill.is-active {
+  background: var(--nav-active-bg);
+  border-color: var(--fg-muted);
+  color: var(--fg);
+}
+
+.apps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.app-card {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 24px;
-  color: var(--text-muted);
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  min-height: 120px;
+  cursor: pointer;
+}
+
+.app-card:hover {
+  border-color: var(--fg-muted);
+}
+
+.app-card.is-disabled {
+  opacity: 0.7;
+}
+
+.app-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.app-card-icon-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--fg-secondary);
+}
+
+.app-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.app-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.app-card-name {
   font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.app-card-version {
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono, monospace);
+}
+
+.app-card-id {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono, monospace);
+}
+
+.app-card-desc {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.45;
+  min-height: 34px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.app-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.app-card-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.app-card-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.app-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.apps-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 48px 16px;
+  color: var(--fg-muted);
+}
+
+.apps-empty-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.apps-empty-hint {
+  font-size: 12px;
+  text-align: center;
+  max-width: 420px;
+  line-height: 1.5;
+}
+
+/* 窄屏折行：操作按钮不溢出视口 */
+@media (max-width: 680px) {
+  .apps-center-topbar,
+  .apps-center-topbar-actions,
+  .apps-center-toolbar,
+  .apps-category-pills {
+    width: 100%;
+  }
+
+  .apps-search-box {
+    max-width: none;
+  }
+
+  .apps-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .app-card-footer {
+    flex-wrap: wrap;
+  }
 }

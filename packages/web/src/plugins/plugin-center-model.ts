@@ -14,12 +14,15 @@ export type PluginCategoryTab =
   | 'orchestration'
   | 'system'
   | 'enabled'
+  | 'apps'
 
 export interface PluginFilterState {
   query: string
   status?: PluginStatusFilter
   category?: PluginCategory
   categoryTab?: PluginCategoryTab
+  /** grouped UI Screen 贡献（应用筛选数据源；缺省时 apps 标签返回空集）。 */
+  screens?: Array<{ pluginId: string }>
 }
 
 export interface PluginSummaryStats {
@@ -40,6 +43,7 @@ export interface PluginCategoryCounts {
   enabled: number
   builtin?: number
   external?: number
+  apps?: number
 }
 
 /**
@@ -77,11 +81,17 @@ export function derivePluginCategory(id: string): PluginCategory {
 }
 
 /**
- * 判断插件是否属于指定的分类药丸标签
+ * 判定插件是否属于指定的分类药丸标签（screens 为 grouped UI Screen 贡献，
+ * 用于「应用」筛选；缺省时不命中 apps）。
  */
-export function isPluginInTab(plugin: PluginSummary, tab: PluginCategoryTab): boolean {
+export function isPluginInTab(
+  plugin: PluginSummary,
+  tab: PluginCategoryTab,
+  screens?: Array<{ pluginId: string }>,
+): boolean {
   if (tab === 'all') return true
   if (tab === 'enabled') return Boolean(plugin.enabled)
+  if (tab === 'apps') return isAppPlugin(plugin, screens)
   const id = (plugin.id ?? '').toLowerCase()
   const category = derivePluginCategory(plugin.id)
 
@@ -107,9 +117,24 @@ export function isPluginInTab(plugin: PluginSummary, tab: PluginCategoryTab): bo
 }
 
 /**
- * 计算多维分类标签与状态的数量徽章统计
+ * 应用（全栈微应用）判定：非 builtin 外部插件且声明至少一个 Screen 视图。
+ * 内置系统插件的视图不混入用户应用列表；screens 缺省时一律返回 false。
  */
-export function buildCategoryCounts(plugins: PluginSummary[]): PluginCategoryCounts {
+export function isAppPlugin(
+  plugin: Pick<PluginSummary, 'id'>,
+  screens: Array<{ pluginId: string }> | undefined,
+): boolean {
+  if (screens === undefined || plugin.id.startsWith('builtin:')) return false
+  return screens.some((s) => s.pluginId === plugin.id)
+}
+
+/**
+ * 计算多维分类标签与状态的数量徽章统计（screens 用于「应用」计数，缺省为 0）
+ */
+export function buildCategoryCounts(
+  plugins: PluginSummary[],
+  screens?: Array<{ pluginId: string }>,
+): PluginCategoryCounts {
   const list = Array.isArray(plugins) ? plugins : []
   let enabled = 0
   let runtime = 0
@@ -118,6 +143,7 @@ export function buildCategoryCounts(plugins: PluginSummary[]): PluginCategoryCou
   let system = 0
   let builtin = 0
   let external = 0
+  let apps = 0
 
   for (const p of list) {
     if (p.enabled) enabled++
@@ -125,6 +151,7 @@ export function buildCategoryCounts(plugins: PluginSummary[]): PluginCategoryCou
     if (isPluginInTab(p, 'tools')) tools++
     if (isPluginInTab(p, 'orchestration')) orchestration++
     if (isPluginInTab(p, 'system')) system++
+    if (isPluginInTab(p, 'apps', screens)) apps++
     const cat = derivePluginCategory(p.id)
     if (cat === 'builtin') builtin++
     if (cat === 'external') external++
@@ -139,6 +166,7 @@ export function buildCategoryCounts(plugins: PluginSummary[]): PluginCategoryCou
     enabled,
     builtin,
     external,
+    apps,
   }
 }
 
@@ -172,9 +200,9 @@ export function filterPlugins(plugins: PluginSummary[], filter: PluginFilterStat
       if (pluginCategory !== category) return false
     }
 
-    // 3. 药丸标签分类筛选
+    // 3. 药丸标签分类筛选（含「应用」：外部插件 + Screen 贡献）
     if (categoryTab !== 'all') {
-      if (!isPluginInTab(plugin, categoryTab)) return false
+      if (!isPluginInTab(plugin, categoryTab, filter.screens)) return false
     }
 
     // 4. 关键字搜索匹配（name / id / tools / actions）
