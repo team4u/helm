@@ -18,8 +18,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import {
@@ -52,6 +53,15 @@ class MemoryDocStore implements PluginDocStore {
     this.store.set(key, structuredClone(value))
   }
   async flush(): Promise<void> {}
+}
+
+/** 真实临时文件原子写（与内核 atomicWriteFile 同语义：临时文件 + rename；
+ * 自举资产落盘语义与生产一致，不伪造内存 doc）。 */
+async function atomicWriteFileFixture(path: string, content: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true })
+  const tmp = `${path}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  await writeFile(tmp, content, 'utf8')
+  await rename(tmp, path)
 }
 
 function makeConversation(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
@@ -208,7 +218,7 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
     async completeText() { throw new HelmError('unsupported', '本 fixture 无模型', 501) },
     executionEnv: () => { throw new HelmError('unsupported', '本 fixture 无执行环境', 501) },
     withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() },
-    async atomicWriteFile() { throw new HelmError('unsupported', '本 fixture 无原子写', 501) },
+    atomicWriteFile: (path: string, content: string) => atomicWriteFileFixture(path, content),
     async refreshModels() { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) },
     async resolveSpawnTarget() { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) },
     listActiveSpawnExecutions: () => [],
@@ -466,6 +476,8 @@ test('竞态：collectWorkerSettlement await 期间发生 rewind——旧节点�
   const entryListeners = new Set<(conversationId: number, entry: ConversationEntry) => void>()
   const backend: PluginHostBackend = {
     ...hostBackendStub(),
+    // 真实临时文件原子写：superagent 自举 Profile/技能资产经公开宿主端口落盘。
+    atomicWriteFile: (path: string, content: string) => atomicWriteFileFixture(path, content),
     async dispatchTrigger() {},
     async submitInput(conversationId, _text, options) { submits.push({ conversationId, origin: options?.origin }) },
     async createConversation(init) {
@@ -498,12 +510,14 @@ test('竞态：collectWorkerSettlement await 期间发生 rewind——旧节点�
     getConversationOwnership: () => 'helm' as const,
     onEvent: (type, listener) => {
       if (type !== 'conversation.entry') return () => {}
-      const l = (payload: unknown) => {
-        const event = payload as { conversationId: number; entry: ConversationEntry }
-        listener({ conversationId: event.conversationId, entry: event.entry })
+      const l = (conversationId: number, entry: ConversationEntry) => {
+        // 公开事件载荷（ConversationEntryEvent 信封形状，与生产 EventHub -> 插件
+        // onEvent 同构）：type + conversationId + entry。旧的双参形状会被
+        // asConversationEntryEvent 边界守卫丢弃，不是合法载荷。
+        void listener({ type: 'conversation.entry', conversationId, entry })
       }
-      entryListeners.add(l as never)
-      return () => entryListeners.delete(l as never)
+      entryListeners.add(l)
+      return () => entryListeners.delete(l)
     },
     async getConversationDetail(id) {
       if (!rewound) {
