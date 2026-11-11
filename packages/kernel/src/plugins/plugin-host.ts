@@ -1011,9 +1011,15 @@ export class PluginHost {
 
   // --- client.tsx 编译产物 --------------------------------------------------
 
-  async getClientModule(pluginId: string, moduleRef: string): Promise<ClientCompileResult> {
+  async getClientModule(
+    pluginId: string,
+    moduleRef: string,
+    options?: { chunk?: string; hash?: string },
+  ): Promise<ClientCompileResult> {
     this.assertNotDisposed();
     return this.uiRegistry.getClientModule(pluginId, moduleRef, {
+      chunk: options?.chunk,
+      hash: options?.hash,
       getPluginLifecycle: (id) => {
         const s = this.plugins.get(id);
         if (!s) return undefined;

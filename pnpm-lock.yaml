@@ -227,6 +227,9 @@ importers:
         specifier: ^8.18.0
         version: 8.22.1
     devDependencies:
+      '@happy-dom/global-registrator':
+        specifier: ^21.0.4
+        version: 21.0.4
       '@helm/node':
         specifier: workspace:*
         version: link:../node

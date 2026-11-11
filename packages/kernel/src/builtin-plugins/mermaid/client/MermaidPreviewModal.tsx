@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
 import { usePluginContext } from '@helm/plugin-client'
+import mermaid from 'mermaid'
 import { getMermaidConfig } from './mermaid-theme.ts'
 
 export interface MermaidPreviewModalProps {
@@ -109,7 +110,6 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     const seq = ++seqRef.current
     void (async () => {
       try {
-        const mermaid = (await import('mermaid')).default
         mermaid.initialize(getMermaidConfig(theme))
         const id = `helm-mermaid-modal-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
         const { svg: out } = await mermaid.render(id, code)

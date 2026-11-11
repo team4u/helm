@@ -645,7 +645,7 @@ async function route(
         await kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId),
       )
     }
-    // 插件客户端模块：GET/HEAD /api/plugins/:pluginId/client.mjs?module=<相对路径>
+    // 插件客户端模块：GET/HEAD /api/plugins/:pluginId/client.mjs?module=<相对路径>&chunk=<chunkName>&hash=<contentHash>
     // （鉴权由 hub 统一前置；停用/未声明/编译失败返回结构化错误 JSON，绝不返回半产物）
     if (third === 'client.mjs' && (method === 'GET' || method === 'HEAD') && fourth === undefined) {
       const moduleRef = ctx.url.searchParams.get('module')
@@ -655,8 +655,21 @@ async function route(
       if (moduleRef.length > 256 || moduleRef.includes('..') || moduleRef.startsWith('/') || moduleRef.includes('\\')) {
         throw new ValidationError('module 需为 clientRoot 内相对 .ts/.tsx 路径（禁止绝对路径/..越根）')
       }
-      const compiled = await kernel.plugins.getClientModule(pluginId, moduleRef)
-      const etag = `"${compiled.contentHash}"`
+      const chunk = ctx.url.searchParams.get('chunk') ?? undefined
+      const hash = ctx.url.searchParams.get('hash') ?? undefined
+      if (chunk !== undefined) {
+        if (!/^[A-Za-z0-9._-]+\.js$/.test(chunk) || chunk.includes('..')) {
+          throw new HelmError('invalid_client_module', 'chunk 名称非法（需匹配 /^[A-Za-z0-9._-]+\\.js$/ 且不含 ..）', 400)
+        }
+      }
+      const compiled = await kernel.plugins.getClientModule(pluginId, moduleRef, {
+        ...(chunk !== undefined ? { chunk } : {}),
+        ...(hash !== undefined ? { hash } : {}),
+      })
+      const etag = chunk !== undefined ? `"${compiled.contentHash}:${chunk}"` : `"${compiled.contentHash}"`
+      const isImmutable = chunk !== undefined && hash !== undefined && hash === compiled.contentHash
+      const cacheControl = isImmutable ? 'private, max-age=31536000, immutable' : 'private, no-cache'
+
       const ifNoneMatch = ctx.request.headers.get('if-none-match')
       if (ifNoneMatch && (ifNoneMatch === etag || ifNoneMatch === compiled.contentHash || ifNoneMatch === `W/${etag}`)) {
         return new Response(null, {
@@ -664,7 +677,7 @@ async function route(
           headers: {
             etag,
             'x-helm-client-hash': compiled.contentHash,
-            'cache-control': 'private, no-cache',
+            'cache-control': cacheControl,
             vary: 'Accept-Encoding',
           },
         })
@@ -674,7 +687,7 @@ async function route(
         'content-type': 'text/javascript; charset=utf-8',
         'x-helm-client-hash': compiled.contentHash,
         etag,
-        'cache-control': 'private, no-cache',
+        'cache-control': cacheControl,
         vary: 'Accept-Encoding',
       }
 

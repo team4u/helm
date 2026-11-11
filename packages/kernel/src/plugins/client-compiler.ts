@@ -31,7 +31,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, realpathSync, statSync, readFileSync, writeFileSync, renameSync, existsSync, rmSync } from 'node:fs';
-import { isAbsolute, join, dirname, relative, resolve, sep } from 'node:path';
+import { basename, isAbsolute, join, dirname, relative, resolve, sep } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { HelmError, PLUGIN_CLIENT_CSS_EXPORT } from '@helm/protocol';
 import { build, type Plugin as EsbuildPlugin } from 'esbuild';
@@ -64,8 +64,8 @@ export const CLIENT_SHARED_GLOBALS: Readonly<Record<string, string>> = Object.fr
 /** ClientComponentRef.module 允许的字符集（相对路径段：字母数字 . _ -，禁止空段与 ..）。 */
 const MODULE_REF_PATTERN = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*\.(ts|tsx)$/;
 
-/** 依赖清单（deps.json）结构版本；v2 为 CSS-as-JS 旧格式，v3 起原生 CSS bundling，v4 起含受控 npm 依赖，v5 起启用 esbuild minify 与预压缩。 */
-const DEPS_LIST_VERSION = 5;
+/** 依赖清单（deps.json）结构版本；v2 为 CSS-as-JS 旧格式，v3 起原生 CSS bundling，v4 起含受控 npm 依赖，v5 起启用 esbuild minify 与预压缩，v6 起支持代码分割与异步 chunk 桥。 */
+const DEPS_LIST_VERSION = 6;
 
 export interface ClientCompileResult {
   /** 产物 JS 文本（自包含 ESM；共享依赖经 globalThis 命名空间运行时解析）。 */
@@ -76,6 +76,8 @@ export interface ClientCompileResult {
   gzipped?: Uint8Array
   /** 产物入口模块的具名导出清单（含 CSS 保留导出；doctor 消费做悬空 export 校验）。 */
   exports: string[]
+  /** 异步分包产物（code-splitting 路径生成；key 为 chunk 文件名）。 */
+  chunks?: Record<string, { code: string; gzipped?: Uint8Array }>
 }
 
 /** 校验 ClientComponentRef.module 形状（相对 .ts/.tsx，无绝对/越根/编码逃逸）。 */
@@ -114,6 +116,133 @@ const memoryCompiledCache = new Map<string, MemoryCompiledEntry>();
 
 export function clearClientCompilerMemoryCache(): void {
   memoryCompiledCache.clear();
+}
+
+/** 从 Pass 1 生成的代码中解析具名与默认导出映射（exportedName -> localIdentifier）。 */
+export function parseExportMappings(code: string): Map<string, string> {
+  const mappings = new Map<string, string>();
+  const re = /export\s*\{([^}]+)\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    const body = m[1]!;
+    const parts = body.split(',');
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const asMatch = /^([A-Za-z0-9_$]+)\s+as\s+([A-Za-z0-9_$]+)$/.exec(trimmed);
+      if (asMatch) {
+        mappings.set(asMatch[2]!, asMatch[1]!);
+      } else if (/^[A-Za-z0-9_$]+$/.test(trimmed)) {
+        mappings.set(trimmed, trimmed);
+      }
+    }
+  }
+  const defMatch = /export\s+default\s+([A-Za-z0-9_$]+)\s*;/.exec(code);
+  if (defMatch) {
+    mappings.set('default', defMatch[1]!);
+  }
+  return mappings;
+}
+
+/**
+ * 根据 (stagingDir, baseName, contentHash, chunkName) 读取单个 chunk 内容与 gzip 字节。
+ */
+export function readCachedChunk(
+  stagingDir: string,
+  baseName: string,
+  contentHash: string,
+  chunkName: string,
+): { code: string; gzipped?: Uint8Array } | undefined {
+  const chunkPath = join(stagingDir, `${baseName}.${contentHash}.chunk.${chunkName}`);
+  if (!existsSync(chunkPath)) return undefined;
+  try {
+    const code = readFileSync(chunkPath, 'utf8');
+    let gzipped: Uint8Array | undefined;
+    const gzPath = join(stagingDir, `${baseName}.${contentHash}.chunk.${chunkName}.gz`);
+    if (existsSync(gzPath)) {
+      try {
+        gzipped = readFileSync(gzPath);
+      } catch {
+        /* ignore */
+      }
+    }
+    return { code, gzipped };
+  } catch {
+    return undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Node 测试环境支持：本地 stagingDir 的 chunk 定位与 import_chunk 兜底
+// ---------------------------------------------------------------------------
+
+const nodeChunkLocations = new Map<string, { stagingDir: string; baseName: string }>();
+
+export function registerNodeChunkLocation(
+  pluginId: string,
+  moduleRef: string,
+  contentHash: string,
+  stagingDir: string,
+  baseName: string,
+): void {
+  nodeChunkLocations.set(`${pluginId}\0${moduleRef}\0${contentHash}`, { stagingDir, baseName });
+  ensureNodeGlobalImportChunk();
+}
+
+export function getNodeChunkText(
+  pluginId: string,
+  moduleRef: string,
+  contentHash: string,
+  chunkName: string,
+): string | undefined {
+  const loc = nodeChunkLocations.get(`${pluginId}\0${moduleRef}\0${contentHash}`);
+  if (!loc) return undefined;
+  const res = readCachedChunk(loc.stagingDir, loc.baseName, contentHash, chunkName);
+  return res?.code;
+}
+
+export function ensureNodeGlobalImportChunk(): void {
+  const g = globalThis as Record<string, unknown>;
+  if (typeof g.__helm_node_chunk_lookup !== 'function') {
+    g.__helm_node_chunk_lookup = getNodeChunkText;
+  }
+  if (typeof g.__helm_import_chunk !== 'function') {
+    const nodeChunkCache = new Map<string, Promise<Record<string, unknown>>>();
+    g.__helm_import_chunk = async (
+      pluginId: string,
+      moduleRef: string,
+      contentHash: string,
+      chunkName: string,
+      preloads: string[] = [],
+    ): Promise<Record<string, unknown>> => {
+      for (const p of preloads) {
+        await loadSingleNodeChunk(pluginId, moduleRef, contentHash, p, nodeChunkCache);
+      }
+      return await loadSingleNodeChunk(pluginId, moduleRef, contentHash, chunkName, nodeChunkCache);
+    };
+  }
+}
+
+async function loadSingleNodeChunk(
+  pluginId: string,
+  moduleRef: string,
+  contentHash: string,
+  chunkName: string,
+  cache: Map<string, Promise<Record<string, unknown>>>,
+): Promise<Record<string, unknown>> {
+  const key = `${pluginId}\0${moduleRef}\0${contentHash}\0${chunkName}`;
+  const pending = cache.get(key);
+  if (pending !== undefined) return pending;
+  const run = (async () => {
+    const code = getNodeChunkText(pluginId, moduleRef, contentHash, chunkName);
+    if (code === undefined) {
+      throw new HelmError('client_chunk_not_found', `Node 环境下未找到 chunk ${chunkName}（插件 ${pluginId}）`, 404);
+    }
+    const dataUrl = `data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`;
+    return (await import(/* @vite-ignore */ dataUrl)) as Record<string, unknown>;
+  })();
+  cache.set(key, run);
+  return run;
 }
 
 /**
@@ -155,6 +284,8 @@ interface DepsListFile {
   npmDependencies?: Array<{ root: string; path: string; sha256: string }>
   /** 入口具名导出（旧清单缺省时缓存命中方拿不到 exports，需 exports 的调用方应重新编译或容错）。 */
   exports?: string[]
+  /** 异步 chunk 文件名清单（v6 新增）。 */
+  chunks?: string[]
 }
 
 /**
@@ -208,34 +339,28 @@ async function compileUncached(
   const depsListPath = join(stagingDir, `${baseName}.deps.json`);
 
   // 缓存复查：清单合法且每个依赖 sha256 与磁盘一致时复用产物，零编译
-  const cached = readCachedResult(stagingDir, depsListPath, rootReal, moduleRef);
+  const cached = readCachedResult(stagingDir, depsListPath, rootReal, moduleRef, pluginId);
   if (cached) {
     recordMemoryCache(memKey, rootReal, depsListPath, cached);
     return cached;
   }
 
-  // 真实编译：metafile 收集实际依赖闭包；onLoad 逐文件 containment；裸依赖显式拒绝。
-  // 虚拟 outfile：esbuild 原生 CSS bundling 要求 JS→CSS import 有输出路径（write:false
-  // 不落盘，仅用于命名 outputFiles；JS 与 CSS 分别取自 outputFiles）。
-  let output = '';
-  let entryExports: string[] = [];
-  let dependencies: string[];
-  let npmDeps: Array<{ root: string; files: string[] }> = [];
+  // Pass 1：开启 splitting: true 的内存构建
+  let pass1Result: Awaited<ReturnType<typeof build>>;
   try {
-    const result = await build({
+    pass1Result = await build({
       entryPoints: [entryReal],
       bundle: true,
+      splitting: true,
       format: 'esm',
       target: 'es2022',
       platform: 'browser',
       jsx: 'automatic',
       write: false,
-      minifyWhitespace: true,
-      minifyIdentifiers: true,
       sourcemap: false,
       metafile: true,
       absWorkingDir: rootReal,
-      outfile: join(stagingDir, `${baseName}.virtual.mjs`),
+      outdir: join(stagingDir, '__virtual_out__'),
       logLevel: 'silent',
       plugins: [
         sharedShimPlugin(),
@@ -243,38 +368,8 @@ async function compileUncached(
         cssPolicyPlugin(pluginId),
       ],
     });
-    const jsFiles = result.outputFiles.filter((f) => !f.path.endsWith('.css'));
-    const cssFiles = result.outputFiles.filter((f) => f.path.endsWith('.css'));
-    if (jsFiles.length !== 1 || cssFiles.length > 1) {
-      throw new HelmError(
-        'client_compile_failed',
-        `插件 ${pluginId} 编译 ${moduleRef} 未产出唯一 JS 文件（JS=${jsFiles.length}，CSS=${cssFiles.length}）`,
-        500,
-        { pluginId, module: moduleRef },
-      );
-    }
-    if (Object.values(result.metafile.outputs).some((file) => file.exports?.includes(PLUGIN_CLIENT_CSS_EXPORT))) {
-      throw new HelmError(
-        'client_compile_failed',
-        `插件 ${pluginId} 模块 ${moduleRef} 占用了编译器保留导出名 "${PLUGIN_CLIENT_CSS_EXPORT}"，请改名该导出`,
-        422,
-        { pluginId, module: moduleRef, reservedExport: PLUGIN_CLIENT_CSS_EXPORT },
-      );
-    }
-    const js = jsFiles[0]!.text;
-    const css = cssFiles[0]?.text ?? '';
-    output = appendCssExport(js, css);
-    // 入口具名导出（metafile 权威；键为相对 absWorkingDir 的虚拟 outfile 名，
-    // 与 outputFiles 绝对路径一一对应——上面已断言 JS 产物唯一，按后缀匹配安全）。
-    const jsMeta = Object.entries(result.metafile.outputs).find(
-      ([path]) => !path.endsWith('.css'),
-    )?.[1];
-    entryExports = [...(jsMeta?.exports ?? []), ...(css.length > 0 ? [PLUGIN_CLIENT_CSS_EXPORT] : [])];
-    dependencies = collectLocalDependencies(result.metafile, rootReal);
-    npmDeps = collectNpmDependencies(result.metafile, rootReal, npmRoots);
   } catch (err) {
     if (err instanceof HelmError) throw err;
-    // esbuild 诊断（语法错误定位 / 越根 / 裸依赖拒绝 / CSS 资源策略）如实上抛，绝不静默截断
     const message = err instanceof Error ? err.message : String(err);
     throw new HelmError('client_compile_failed', `插件 ${pluginId} 编译 ${moduleRef} 失败：${message}`, 422, {
       pluginId,
@@ -282,23 +377,447 @@ async function compileUncached(
     });
   }
 
-  const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, entryExports);
+  const pass1Metafile = pass1Result.metafile;
+  const pass1OutputFiles = pass1Result.outputFiles;
+  if (!pass1Metafile || !pass1OutputFiles) {
+    throw new HelmError('client_compile_failed', `插件 ${pluginId} Pass 1 内存构建未产出 metafile 或 outputFiles`, 500);
+  }
+
+  // 校验保留导出
+  if (Object.values(pass1Metafile.outputs).some((file) => file.exports?.includes(PLUGIN_CLIENT_CSS_EXPORT))) {
+    throw new HelmError(
+      'client_compile_failed',
+      `插件 ${pluginId} 模块 ${moduleRef} 占用了编译器保留导出名 "${PLUGIN_CLIENT_CSS_EXPORT}"，请改名该导出`,
+      422,
+      { pluginId, module: moduleRef, reservedExport: PLUGIN_CLIENT_CSS_EXPORT },
+    );
+  }
+
+  const virtualFiles = new Map<string, string>();
+  const metaByBase = new Map<string, (typeof pass1Metafile.outputs)[string]>();
+  const cssFiles: string[] = [];
+
+  for (const f of pass1OutputFiles) {
+    const b = basename(f.path);
+    if (b.endsWith('.css')) {
+      cssFiles.push(f.text);
+    } else if (b.endsWith('.js')) {
+      virtualFiles.set(b, f.text);
+    }
+  }
+  for (const [outPath, meta] of Object.entries(pass1Metafile.outputs)) {
+    if (outPath.endsWith('.js')) {
+      metaByBase.set(basename(outPath), meta);
+    }
+  }
+
+  const css = cssFiles.join('\n');
+
+  // 寻找 entryBaseName
+  const relEntry = relative(rootReal, entryReal);
+  let entryBaseName = '';
+  for (const [b, meta] of metaByBase) {
+    if (meta.entryPoint && (meta.entryPoint === relEntry || meta.entryPoint === entryReal || meta.entryPoint.endsWith(moduleRef))) {
+      entryBaseName = b;
+      break;
+    }
+  }
+  if (!entryBaseName) {
+    if (virtualFiles.size === 1) {
+      entryBaseName = virtualFiles.keys().next().value!;
+    } else {
+      throw new HelmError(
+        'client_compile_failed',
+        `插件 ${pluginId} 编译 ${moduleRef} 无法唯一定位入口 JS 产物`,
+        500,
+        { pluginId, module: moduleRef },
+      );
+    }
+  }
+
+  const dependencies = collectLocalDependencies(pass1Metafile, rootReal);
+  const npmDeps = collectNpmDependencies(pass1Metafile, rootReal, npmRoots);
+
+  // 收集 baseClosure
+  const baseClosure = new Set<string>([entryBaseName]);
+  function visitBase(file: string): void {
+    const meta = metaByBase.get(file);
+    if (!meta || !meta.imports) return;
+    for (const imp of meta.imports) {
+      if (imp.kind === 'import-statement') {
+        const b = basename(imp.path);
+        if (metaByBase.has(b) && !baseClosure.has(b)) {
+          baseClosure.add(b);
+          visitBase(b);
+        }
+      }
+    }
+  }
+  visitBase(entryBaseName);
+
+  // 收集所有 dynamicTargets（从 baseClosure 及递归动态依赖可达）
+  const dynamicTargets = new Set<string>();
+  const dynQueue: string[] = [];
+  function checkDynImports(file: string): void {
+    const meta = metaByBase.get(file);
+    if (!meta || !meta.imports) return;
+    for (const imp of meta.imports) {
+      if (imp.kind === 'dynamic-import' && !imp.external) {
+        const b = basename(imp.path);
+        if (metaByBase.has(b) && !dynamicTargets.has(b)) {
+          dynamicTargets.add(b);
+          dynQueue.push(b);
+        }
+      }
+    }
+  }
+  for (const f of baseClosure) checkDynImports(f);
+  while (dynQueue.length > 0) {
+    const d = dynQueue.shift()!;
+    const visited = new Set<string>([d]);
+    const qStatic = [d];
+    while (qStatic.length > 0) {
+      const cur = qStatic.shift()!;
+      checkDynImports(cur);
+      const meta = metaByBase.get(cur);
+      if (meta && meta.imports) {
+        for (const imp of meta.imports) {
+          if (imp.kind === 'import-statement') {
+            const b = basename(imp.path);
+            if (metaByBase.has(b) && !visited.has(b)) {
+              visited.add(b);
+              qStatic.push(b);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const jsMeta = metaByBase.get(entryBaseName);
+  const entryExports = [...(jsMeta?.exports ?? []), ...(css.length > 0 ? [PLUGIN_CLIENT_CSS_EXPORT] : [])];
+
+  // 快路径（无代码分割的普通插件）
+  if (dynamicTargets.size === 0) {
+    let mainOutput = '';
+    try {
+      const pass2 = await build({
+        stdin: {
+          contents: virtualFiles.get(entryBaseName)!,
+          loader: 'js',
+          sourcefile: entryBaseName,
+        },
+        bundle: true,
+        format: 'esm',
+        target: 'es2022',
+        platform: 'browser',
+        write: false,
+        sourcemap: false,
+        minifyWhitespace: true,
+        minifyIdentifiers: true,
+        logLevel: 'silent',
+        plugins: [
+          {
+            name: 'vfs-resolver',
+            setup(b) {
+              b.onResolve({ filter: /.*/ }, (args) => {
+                const target = basename(args.path);
+                return { path: target, namespace: 'vfs' };
+              });
+              b.onLoad({ filter: /.*/, namespace: 'vfs' }, (args) => {
+                const c = virtualFiles.get(args.path);
+                if (c === undefined) return { errors: [{ text: `Missing virtual file: ${args.path}` }] };
+                return { contents: c, loader: 'js' };
+              });
+            },
+          },
+        ],
+      });
+      mainOutput = appendCssExport(pass2.outputFiles[0]!.text, css);
+    } catch (err) {
+      if (err instanceof HelmError) throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      throw new HelmError('client_compile_failed', `插件 ${pluginId} 编译 ${moduleRef} 收敛失败：${message}`, 422, {
+        pluginId,
+        module: moduleRef,
+      });
+    }
+
+    const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, entryExports);
+    mkdirSync(stagingDir, { recursive: true });
+    atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.mjs`), mainOutput);
+    let gzipped: Uint8Array | undefined;
+    try {
+      const gz = gzipSync(Buffer.from(mainOutput, 'utf8'));
+      atomicWriteBuffer(join(stagingDir, `${baseName}.${list.contentHash}.mjs.gz`), gz);
+      gzipped = gz;
+    } catch {}
+    atomicWrite(depsListPath, `${JSON.stringify(list)}\n`);
+    const finalResult: ClientCompileResult = {
+      code: mainOutput,
+      contentHash: list.contentHash,
+      gzipped,
+      exports: entryExports,
+      chunks: {},
+    };
+    recordMemoryCache(memKey, rootReal, depsListPath, finalResult);
+    return finalResult;
+  }
+
+  // 分包路径（dynamicTargets.size > 0）
+  // 步骤 A：划分三类模块集合
+  const dynStaticClosures = new Map<string, Set<string>>();
+  for (const d of dynamicTargets) {
+    const closure = new Set<string>();
+    function visitDyn(f: string): void {
+      const meta = metaByBase.get(f);
+      if (!meta || !meta.imports) return;
+      for (const imp of meta.imports) {
+        if (imp.kind === 'import-statement') {
+          const b = basename(imp.path);
+          if (metaByBase.has(b) && !baseClosure.has(b) && !closure.has(b)) {
+            closure.add(b);
+            visitDyn(b);
+          }
+        }
+      }
+    }
+    visitDyn(d);
+    dynStaticClosures.set(d, closure);
+  }
+
+  const refCount = new Map<string, number>();
+  for (const [, closure] of dynStaticClosures) {
+    for (const chunk of closure) {
+      refCount.set(chunk, (refCount.get(chunk) ?? 0) + 1);
+    }
+  }
+
+  const sharedAsyncChunks = new Set<string>();
+  for (const [chunk, count] of refCount) {
+    if (count >= 2) sharedAsyncChunks.add(chunk);
+  }
+  function addSharedDeps(chunk: string): void {
+    const meta = metaByBase.get(chunk);
+    if (!meta || !meta.imports) return;
+    for (const imp of meta.imports) {
+      if (imp.kind === 'import-statement') {
+        const b = basename(imp.path);
+        if (metaByBase.has(b) && !baseClosure.has(b) && !sharedAsyncChunks.has(b)) {
+          sharedAsyncChunks.add(b);
+          addSharedDeps(b);
+        }
+      }
+    }
+  }
+  for (const chunk of Array.from(sharedAsyncChunks)) addSharedDeps(chunk);
+
+  // 步骤 B：防 Tree-shaking 丢失导出 & 注册 __helm_chunk_share
+  const filesToRegister = new Set<string>([...baseClosure, ...sharedAsyncChunks]);
+  filesToRegister.delete(entryBaseName);
+
+  for (const F of filesToRegister) {
+    const code = virtualFiles.get(F);
+    if (!code) continue;
+    const mappings = parseExportMappings(code);
+    if (mappings.size > 0) {
+      const entries = Array.from(mappings.entries()).map(
+        ([exp, loc]) => `${JSON.stringify(exp)}: ${loc}`,
+      ).join(',\n  ');
+      const regStmt = `\n;(globalThis.__helm_chunk_share ??= {})["__HELM_HASH__/" + ${JSON.stringify(F)}] = {\n  ${entries}\n};\n`;
+      virtualFiles.set(F, code + regStmt);
+    }
+  }
+
+  // 步骤 C：生成异步单元的前置共享依赖表 chunkDeps
+  const chunkDeps: Record<string, string[]> = {};
+  for (const d of dynamicTargets) {
+    const staticClosure = dynStaticClosures.get(d) ?? new Set<string>();
+    const neededShared = new Set<string>();
+    for (const c of staticClosure) {
+      if (sharedAsyncChunks.has(c)) neededShared.add(c);
+    }
+    function collectMoreShared(c: string): void {
+      const meta = metaByBase.get(c);
+      if (!meta || !meta.imports) return;
+      for (const imp of meta.imports) {
+        if (imp.kind === 'import-statement') {
+          const b = basename(imp.path);
+          if (sharedAsyncChunks.has(b) && !neededShared.has(b)) {
+            neededShared.add(b);
+            collectMoreShared(b);
+          }
+        }
+      }
+    }
+    for (const c of Array.from(neededShared)) collectMoreShared(c);
+
+    const sorted: string[] = [];
+    const visited = new Set<string>();
+    function topoVisit(c: string): void {
+      if (visited.has(c)) return;
+      visited.add(c);
+      const meta = metaByBase.get(c);
+      if (meta && meta.imports) {
+        for (const imp of meta.imports) {
+          if (imp.kind === 'import-statement') {
+            const b = basename(imp.path);
+            if (neededShared.has(b)) topoVisit(b);
+          }
+        }
+      }
+      sorted.push(c);
+    }
+    for (const c of neededShared) topoVisit(c);
+    chunkDeps[d] = sorted;
+  }
+
+  const allUnits = new Set<string>([...sharedAsyncChunks, ...dynamicTargets]);
+  const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, entryExports, Array.from(allUnits));
+
+  // 步骤 D：Pass 2 收敛构建（主包 + sharedAsyncChunks + dynamicTargets）
+  async function bundleUnit(unitName: string, isMain: boolean): Promise<string> {
+    const unitCode = virtualFiles.get(unitName);
+    if (unitCode === undefined) {
+      throw new HelmError('client_compile_failed', `找不到虚拟文件 ${unitName}`, 500);
+    }
+    const res = await build({
+      stdin: {
+        contents: unitCode,
+        loader: 'js',
+        sourcefile: unitName,
+      },
+      bundle: true,
+      format: 'esm',
+      target: 'es2022',
+      platform: 'browser',
+      write: false,
+      sourcemap: false,
+      minifyWhitespace: true,
+      minifyIdentifiers: true,
+      minifySyntax: true,
+      logLevel: 'silent',
+      plugins: [
+        {
+          name: 'pass2-resolver',
+          setup(b) {
+            b.onResolve({ filter: /.*/ }, (args) => {
+              if (args.kind === 'dynamic-import') {
+                const target = basename(args.path);
+                return { path: '__HELM_DYN_IMPORT__:' + target, external: true };
+              }
+              if (args.kind === 'import-statement') {
+                const target = basename(args.path);
+                if (isMain) {
+                  return { path: target, namespace: 'vfs' };
+                } else {
+                  if ((baseClosure.has(target) || sharedAsyncChunks.has(target)) && target !== unitName) {
+                    return { path: target, namespace: 'proxy' };
+                  }
+                  return { path: target, namespace: 'vfs' };
+                }
+              }
+              return null;
+            });
+            b.onLoad({ filter: /.*/, namespace: 'proxy' }, (args) => {
+              const T = args.path;
+              const meta = metaByBase.get(T);
+              const exports = meta?.exports || [];
+              const proxyLines = [
+                `const __s = (globalThis.__helm_chunk_share ?? {})["__HELM_HASH__/" + ${JSON.stringify(T)}] || {};`,
+              ];
+              for (const exp of exports) {
+                if (exp === 'default') {
+                  proxyLines.push('export default __s["default"];');
+                } else {
+                  proxyLines.push(`export const ${exp} = __s[${JSON.stringify(exp)}];`);
+                }
+              }
+              if (exports.length === 0) {
+                proxyLines.push('export {};');
+              }
+              return { contents: proxyLines.join('\n'), loader: 'js' };
+            });
+            b.onLoad({ filter: /.*/, namespace: 'vfs' }, (args) => {
+              const content = virtualFiles.get(args.path);
+              if (content === undefined) {
+                return { errors: [{ text: `Missing virtual file: ${args.path}` }] };
+              }
+              return { contents: content, loader: 'js' };
+            });
+          },
+        },
+      ],
+    });
+    let out = res.outputFiles[0]!.text;
+    out = out.replace(/import\s*\(\s*["'`]__HELM_DYN_IMPORT__:([^"'`]+)["'`]\s*\)/g, (_match, target) => {
+      const deps = chunkDeps[target] ?? [];
+      return `globalThis.__helm_import_chunk(${JSON.stringify(pluginId)}, ${JSON.stringify(moduleRef)}, ${JSON.stringify(list.contentHash)}, ${JSON.stringify(target)}, ${JSON.stringify(deps)})`;
+    });
+    out = out.replaceAll('__HELM_HASH__', list.contentHash);
+    return out;
+  }
+
+  let mainJs: string;
+  try {
+    mainJs = await bundleUnit(entryBaseName, true);
+    mainJs = appendCssExport(mainJs, css);
+  } catch (err) {
+    if (err instanceof HelmError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    throw new HelmError('client_compile_failed', `插件 ${pluginId} 主包收敛编译失败：${message}`, 422, {
+      pluginId,
+      module: moduleRef,
+    });
+  }
+
+  const chunkOutputs: Record<string, { code: string; gzipped?: Uint8Array }> = {};
+  try {
+    await Promise.all(
+      Array.from(allUnits).map(async (unitName) => {
+        const code = await bundleUnit(unitName, false);
+        let gzipped: Uint8Array | undefined;
+        try {
+          gzipped = gzipSync(Buffer.from(code, 'utf8'));
+        } catch {}
+        chunkOutputs[unitName] = { code, gzipped };
+      }),
+    );
+  } catch (err) {
+    if (err instanceof HelmError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    throw new HelmError('client_compile_failed', `插件 ${pluginId} 分包收敛编译失败：${message}`, 422, {
+      pluginId,
+      module: moduleRef,
+    });
+  }
+
+  // 步骤 E：原子落盘与内存缓存
   mkdirSync(stagingDir, { recursive: true });
-  atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.mjs`), output);
+  atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.mjs`), mainJs);
   let gzipped: Uint8Array | undefined;
   try {
-    const gz = gzipSync(Buffer.from(output, 'utf8'));
+    const gz = gzipSync(Buffer.from(mainJs, 'utf8'));
     atomicWriteBuffer(join(stagingDir, `${baseName}.${list.contentHash}.mjs.gz`), gz);
     gzipped = gz;
-  } catch {
-    /* 预压缩失败不影响编译产物主流程 */
+  } catch {}
+
+  for (const [chunkName, chunkData] of Object.entries(chunkOutputs)) {
+    atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.chunk.${chunkName}`), chunkData.code);
+    if (chunkData.gzipped) {
+      atomicWriteBuffer(join(stagingDir, `${baseName}.${list.contentHash}.chunk.${chunkName}.gz`), chunkData.gzipped);
+    }
   }
+
   atomicWrite(depsListPath, `${JSON.stringify(list)}\n`);
+  registerNodeChunkLocation(pluginId, moduleRef, list.contentHash, stagingDir, baseName);
+
   const finalResult: ClientCompileResult = {
-    code: output,
+    code: mainJs,
     contentHash: list.contentHash,
     gzipped,
     exports: entryExports,
+    chunks: chunkOutputs,
   };
   recordMemoryCache(memKey, rootReal, depsListPath, finalResult);
   return finalResult;
@@ -533,11 +1052,7 @@ function containmentPlugin(
         if (args.importer !== '') {
           const importerReal = realpathOrNull(args.importer);
           if (importerReal !== null && isNpmAuthorized(importerReal)) {
-            const transitive = resolveTransitiveNpmSpecifier(args.path, importerReal);
-            if (transitive !== null) {
-              authorizeNpmPackageDir(dirname(findPackageDirOf(transitive)));
-              return { path: transitive };
-            }
+            return null;
           }
         }
         const importer = args.importer || '入口';
@@ -553,18 +1068,25 @@ function containmentPlugin(
         if (args.namespace !== 'file') return null;
         if (!/\.[cm]?[jt]sx?$|\.json$|\.css$/.test(args.path)) return null;
         const real = realpathOrNull(args.path);
-        if (real === null) return null; // 不存在的文件交回 esbuild 默认报错
+        if (real === null) return null;
         const inClientRoot = isInside(rootReal, real);
-        // 受控 npm 闭包：解析期授权表成员（相对导入等直达路径需授权校验）。
         const inNpmRoot = isNpmAuthorized(real);
         if (!inClientRoot && !inNpmRoot) {
+          // 仅对位于 node_modules 内的文件放行受控授权（绝不放行根外随意的本地/临时源码）
+          if (real.includes(sep + 'node_modules' + sep)) {
+            const pkgDir = findPackageDirOf(real);
+            if (pkgDir !== null) {
+              authorizeNpmPackageDir(pkgDir);
+              return null;
+            }
+          }
           return {
             errors: [{
               text: `插件 ${pluginId} 编译拒绝越界的文件（可能为 ../ 越根、符号链接逃逸或未声明的 npm 解析）：${real}`,
             }],
           };
         }
-        return null; // 交回 esbuild 默认 loader
+        return null;
       });
     },
   };
@@ -668,6 +1190,7 @@ function readCachedResult(
   depsListPath: string,
   rootReal: string,
   moduleRef: string,
+  pluginId: string,
 ): ClientCompileResult | undefined {
   if (!existsSync(depsListPath)) return undefined;
   let list: DepsListFile;
@@ -706,8 +1229,9 @@ function readCachedResult(
     }
     if (sha256(source) !== dep.sha256) return undefined;
   }
-  const codePath = join(stagingDir, `${safeFileName(moduleRef)}.${list.contentHash}.mjs`);
-  const gzPath = join(stagingDir, `${safeFileName(moduleRef)}.${list.contentHash}.mjs.gz`);
+  const baseName = safeFileName(moduleRef);
+  const codePath = join(stagingDir, `${baseName}.${list.contentHash}.mjs`);
+  const gzPath = join(stagingDir, `${baseName}.${list.contentHash}.mjs.gz`);
   if (!existsSync(codePath)) return undefined;
   try {
     const code = readFileSync(codePath, 'utf8');
@@ -719,7 +1243,16 @@ function readCachedResult(
         /* 读取预压缩文件失败则留空，由调用方按需生成 */
       }
     }
-    return { code, contentHash: list.contentHash, gzipped, exports: list.exports ?? [] };
+    const chunks: Record<string, { code: string; gzipped?: Uint8Array }> = {};
+    if (Array.isArray(list.chunks) && list.chunks.length > 0) {
+      for (const chunkName of list.chunks) {
+        const c = readCachedChunk(stagingDir, baseName, list.contentHash, chunkName);
+        if (!c) return undefined; // chunk 缺失视为缓存失效，触发重编译
+        chunks[chunkName] = c;
+      }
+      registerNodeChunkLocation(pluginId, moduleRef, list.contentHash, stagingDir, baseName);
+    }
+    return { code, contentHash: list.contentHash, gzipped, exports: list.exports ?? [], chunks };
   } catch {
     return undefined;
   }
@@ -769,6 +1302,7 @@ function buildDepsList(
   dependencies: string[],
   npmDeps: Array<{ root: string; files: string[] }> = [],
   entryExports: string[] = [],
+  chunks?: string[],
 ): DepsListFile {
   const hash = createHash('sha256');
   hash.update(`helm-plugin-client-v${DEPS_LIST_VERSION}\n`);
@@ -786,6 +1320,11 @@ function buildDepsList(
       return { root, path: abs, sha256: sha };
     }),
   );
+  if (chunks && chunks.length > 0) {
+    for (const c of [...chunks].sort()) {
+      hash.update(`--chunk:${c}\n`);
+    }
+  }
   return {
     version: DEPS_LIST_VERSION,
     module: moduleRef,
@@ -794,6 +1333,7 @@ function buildDepsList(
     dependencies: entries,
     ...(npmEntries.length > 0 ? { npmDependencies: npmEntries } : {}),
     ...(entryExports.length > 0 ? { exports: entryExports } : {}),
+    ...(chunks && chunks.length > 0 ? { chunks: [...chunks].sort() } : {}),
   };
 }
 
