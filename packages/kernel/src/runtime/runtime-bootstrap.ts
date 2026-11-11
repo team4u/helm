@@ -230,7 +230,7 @@ export async function teardownKernelRuntime(deps: {
   nodes: {
     dispose(): Promise<void>
   }
-  settledInflight: Promise<void>
+  settledInflight: () => Promise<void>
   store: HelmStore
   harness: Harness
   tracker: ConversationTracker
@@ -260,7 +260,7 @@ export async function teardownKernelRuntime(deps: {
   await deps.nodes.dispose()
   await deps.assetReloader.waitForInflight()
   await deps.modelsRegistry.dispose()
-  await deps.settledInflight
+  await deps.settledInflight()
   const closeAborts: Array<Promise<void>> = []
   for (const meta of deps.store.listConvs()) {
     const conversation = await deps.harness
@@ -278,7 +278,10 @@ export async function teardownKernelRuntime(deps: {
     )
   }
   await Promise.allSettled(closeAborts)
-  await deps.settledInflight
+  // abort 唤醒的回合在 settle 链上追加新的 turn_settled 回调：getter 现读
+  // 最新链再等待一轮，防止中止触发的结算写入与 store.close 竞态。
+  await deps.settledInflight()
+  await deps.settledInflight()
   await deps.pluginHost?.dispose()
   await deps.envFabric.dispose().catch(() => {})
   deps.processTokenHandle?.dispose()

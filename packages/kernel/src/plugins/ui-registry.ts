@@ -760,6 +760,19 @@ export class UiRegistry {
     return out;
   }
 
+  /** 本插件声明的全部 profile.runtime kind（停用预检的宿主引用探测源）。 */
+  getProfileRuntimeKinds(pluginId: string): string[] {
+    const list = this.ui.get(pluginId);
+    if (!list) return [];
+    const kinds: string[] = [];
+    for (const u of list) {
+      if (u.surface !== 'profile.runtime') continue;
+      const kind = (u.spec as { kind?: unknown }).kind;
+      if (typeof kind === 'string' && kind.length > 0) kinds.push(kind);
+    }
+    return kinds;
+  }
+
   getUiByPlugin(pluginId: string): PluginUiContribution[] {
     const list = this.ui.get(pluginId);
     if (!list) return [];

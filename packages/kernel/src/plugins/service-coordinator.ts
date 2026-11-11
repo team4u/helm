@@ -10,7 +10,7 @@ import {
   type JsonSafeErrorInfo,
 } from './shared.js';
 import type { PluginTaskTracker } from './tracking.js';
-import type { PluginState, ServiceEntry } from './types.js';
+import type { PluginInUseItem, PluginState, ServiceEntry } from './types.js';
 
 /**
  * 在受控停止 doc 写入窗口内执行服务 stop：stop 期间（含引擎 close 内部
@@ -239,6 +239,56 @@ export function listLiveWorktrees(
       }
       out.push(...declared);
     }
+  }
+  return out;
+}
+
+/**
+ * 停用/卸载前的持久资源占用聚合：遍历已启动且声明 inUse 的服务，合并
+ * 返回值。服务 inUse 抛错或返回非法形状时显式 plugin_in_use_check_failed
+ * （未知即占用原则），绝不静默当空放行。
+ */
+export async function collectServiceInUse(
+  pluginId: string,
+  state: PluginState,
+): Promise<PluginInUseItem[]> {
+  const out: PluginInUseItem[] = [];
+  for (const svc of state.services) {
+    if (!svc.started || svc.inUse === undefined) continue;
+    let declared: PluginInUseItem[];
+    try {
+      declared = (await svc.inUse()) as PluginInUseItem[];
+    } catch (err) {
+      throw new HelmError(
+        'plugin_in_use_check_failed',
+        `插件 ${pluginId} 服务 ${svc.id} 的 inUse 检查抛出异常，按占用处理拒绝停用`,
+        500,
+        { pluginId, serviceId: svc.id, error: toJsonSafeError(err) },
+      );
+    }
+    if (
+      !Array.isArray(declared) ||
+      declared.some(
+        (item) =>
+          typeof item !== 'object' ||
+          item === null ||
+          Array.isArray(item) ||
+          typeof (item as { kind?: unknown }).kind !== 'string' ||
+          (item as { kind: string }).kind.length === 0 ||
+          typeof (item as { id?: unknown }).id !== 'string' ||
+          (item as { id: string }).id.length === 0 ||
+          typeof (item as { label?: unknown }).label !== 'string' ||
+          (item as { label: string }).label.length === 0,
+      )
+    ) {
+      throw new HelmError(
+        'plugin_in_use_check_failed',
+        `插件 ${pluginId} 服务 ${svc.id} 的 inUse 必须返回 { kind, id, label } 均为非空字符串的数组`,
+        500,
+        { pluginId, serviceId: svc.id, returned: String(declared) },
+      );
+    }
+    out.push(...declared);
   }
   return out;
 }

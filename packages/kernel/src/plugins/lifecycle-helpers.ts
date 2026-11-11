@@ -4,6 +4,7 @@
 import {
   HelmError,
   type PluginDefinition,
+  type PluginDiagnosticError,
   type PluginSummary,
 } from '@helm/protocol';
 import type { CapabilityRegistry } from './capability-registry.js';
@@ -206,6 +207,31 @@ export async function teardownPlugin(
   }
 }
 
+/**
+ * 异常归一为结构化插件诊断（PluginDiagnosticError）：HelmError 保留
+ * code/status 与 details，其他异常包装为 plugin_execution_failed。
+ */
+export function toDiagnosticError(
+  err: unknown,
+  stage: PluginDiagnosticError['stage'],
+): PluginDiagnosticError {
+  if (err instanceof HelmError) {
+    return {
+      code: err.code,
+      message: err.message,
+      stage,
+      ...((err.details as Record<string, unknown> | undefined) !== undefined
+        ? { details: err.details as Record<string, unknown> }
+        : {}),
+    };
+  }
+  return {
+    code: 'plugin_execution_failed',
+    message: err instanceof Error ? err.message : String(err),
+    stage,
+  };
+}
+
 export function wrapRegistrationError(
   pluginId: string,
   seq: number,
@@ -255,6 +281,7 @@ export function pluginSummaryOf(
   state: PluginState,
   capabilityRegistry: CapabilityRegistry,
 ): PluginSummary {
+  const failed = state.lastError !== undefined;
   return {
     id: state.definition.id,
     name: state.definition.name ?? state.definition.id,
@@ -262,6 +289,8 @@ export function pluginSummaryOf(
     version: state.definition.version,
     locked: state.definition.locked === true,
     enabled: state.enabled,
+    status: failed ? 'failed' : state.enabled ? 'active' : 'disabled',
+    ...(failed ? { error: state.lastError } : {}),
     hooks: state.enabled ? [...state.hooks] : [],
     actions: state.enabled ? capabilityRegistry.getActionIds(state.definition.id) : [],
     tools: state.enabled ? capabilityRegistry.getToolNames(state.definition.id) : [],

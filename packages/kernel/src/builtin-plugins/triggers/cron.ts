@@ -709,6 +709,15 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
     liveTasks() {
       return [...inflight.keys()].map((id) => `cron-dispatch:${id}`)
     },
+    /** 持久占用声明：已启用的 cron 任务是停用预检（plugin_in_use）的占用项。 */
+    inUse() {
+      const jobs = parseCronDoc(doc.get()).jobs.filter((j) => j.enabled)
+      return jobs.map((j) => ({
+        kind: 'cron_job',
+        id: j.id,
+        label: `定时任务 "${j.id}" (${j.schedule})`,
+      }))
+    },
     async start() {
       stopping = false
       try {

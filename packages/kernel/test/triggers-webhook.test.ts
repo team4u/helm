@@ -699,7 +699,8 @@ test('停用/启用周期：secret 脱敏登记随 service stop 解除、重启�
   const h = await makeHarness()
   await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', { id: 'hook', secret: 'topsecret' })
   assert.ok(h.stash.redact('x topsecret y').includes('[REDACTED]'))
-  await h.host.disable(TRIGGERS_PLUGIN_ID)
+  // webhook 端点为持久占用（inUse）：知情后 force 停用。
+  await h.host.disable(TRIGGERS_PLUGIN_ID, { force: true })
   assert.equal(h.stash.redact('x topsecret y'), 'x topsecret y', '停用后脱敏登记应解除')
   await h.host.enable(TRIGGERS_PLUGIN_ID)
   assert.ok(h.stash.redact('x topsecret y').includes('[REDACTED]'), '重启后按持久 secret 重新登记')
@@ -826,8 +827,8 @@ test('停用门禁：dispatch 挂起时 disable 得 409 plugin_has_live_tasks；
   await rejectsCode(h.host.disable(TRIGGERS_PLUGIN_ID), 'plugin_has_live_tasks', 409)
   releaseGate()
   assert.equal((await pending).status, 202)
-  // 收敛后 disable 成功
-  await h.host.disable(TRIGGERS_PLUGIN_ID)
+  // 收敛后 disable 成功（webhook 端点持久占用 → force）
+  await h.host.disable(TRIGGERS_PLUGIN_ID, { force: true })
   assert.equal(h.stash.redact('x topsecret y'), 'x topsecret y', '停用后脱敏登记解除')
   // 停用后旧 handler 残留调用：显式拒绝（409），不再投递
   const staleSig = `sha256=${createHmac('sha256', 'topsecret').update('after-disable').digest('hex')}`
@@ -890,8 +891,8 @@ test('停用门禁：body 读取阶段（凭据已查、body 未读完）disable
   assert.equal(blockedAtBody, true, 'body 读取阶段的在途请求必须阻塞 disable（liveTasks 生效）')
   releaseBody()
   assert.equal((await inflight).status, 401, '签名不匹配（占位签名）→ 401')
-  // 收敛后 disable 成功
-  await h.host.disable(TRIGGERS_PLUGIN_ID)
+  // 收敛后 disable 成功（webhook 端点持久占用 → force）
+  await h.host.disable(TRIGGERS_PLUGIN_ID, { force: true })
   // 停用后旧 handler 残留调用：拒绝
   const staleSig = `sha256=${createHmac('sha256', 'topsecret').update('after').digest('hex')}`
   const stale = (await staleHandler(new Request(`http://hub${WEBHOOK_URL('hook')}`, {

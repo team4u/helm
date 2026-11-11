@@ -37,13 +37,29 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { HelmError, type PluginDefinition, type PluginSummary } from '@helm/protocol';
+import {
+  HelmError,
+  type PluginDefinition,
+  type PluginDiagnosticError,
+  type PluginSummary,
+} from '@helm/protocol';
 import { registerPluginTsRoot, nextPluginGeneration } from './backend-ts-loader.js';
 
 /** 加载器所需的最小宿主形状（真实 PluginHost 结构兼容，便于独立测试）。 */
 export interface ExternalPluginHost {
-  register(definition: PluginDefinition, options?: { enabled?: boolean }): Promise<void>;
+  register(
+    definition: PluginDefinition,
+    options?: { enabled?: boolean; isolateFailure?: boolean },
+  ): Promise<void>;
   list(): PluginSummary[] | Promise<PluginSummary[]>;
+  /** 可选：scan / load 阶段故障占位登记（真实 PluginHost 提供；测试 stub 未实现时保持旧行为上抛）。 */
+  registerFailed?(spec: {
+    id: string;
+    name?: string;
+    description?: string;
+    version?: string;
+    error: PluginDiagnosticError;
+  }): void;
 }
 
 /** reload/rescan 所需的完整宿主形状（含 unregister；真实 PluginHost 结构兼容）。 */
@@ -65,8 +81,110 @@ const CONVENTION_ENTRIES = [
 
 
 /**
+ * 扫描导入：先普通导入（兼容 top-level await；首次加载无缓存开销）；
+ * 若返回的 id 已被占用（可能是旧扫描的 ESM 缓存定义），换新一代代际导入
+ * 重试拿最新源码（用户可能已修复/换 id 重写目录）。仍冲突才真冲突。
+ */
+/**
+ * 扫描导入：先普通导入（兼容 top-level await；首次加载无缓存开销）；
+ * 若返回的 id 已被占用（可能是旧扫描的 ESM 缓存定义），换新一代代际导入
+ * 重试拿最新源码（用户可能已修复/换 id 重写目录）。仍冲突才真冲突。
+ */
+async function importScanDefinition(
+  dirPath: string,
+  entryPath: string,
+  existingIds: ReadonlySet<string>,
+): Promise<PluginDefinition> {
+  const plain = await importPluginDefinition(dirPath, entryPath);
+  if (!existingIds.has(plain.id)) return plain;
+  const generation = nextPluginGeneration(dirPath);
+  return importPluginDefinition(dirPath, entryPath, { generation });
+}
+
+/**
+ * 从 plugin.json 读取可选元数据（id/name/description/version），供故障占位
+ * 登记展示；manifest 不存在或损坏时返回空对象。
+ */
+function readManifestMeta(dirPath: string): Record<string, unknown> {
+  try {
+    return readManifest(join(dirPath, 'plugin.json'));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 故障插件占位 ID：优先 manifest 合法 id；否则目录名归一化（非法字符转 _，
+ * 不与已注册 id 冲突时直接用，冲突时追加目录名后缀）。
+ */
+function resolveFailedPluginId(
+  dirPath: string,
+  dirName: string,
+  existingIds: Set<string>,
+): { id: string; meta: Record<string, unknown> } {
+  const meta = readManifestMeta(dirPath);
+  const manifestId = meta['id'];
+  if (
+    typeof manifestId === 'string' &&
+    manifestId.length > 0 &&
+    !manifestId.startsWith('builtin:') &&
+    /^[A-Za-z0-9:_-]+$/.test(manifestId) &&
+    !existingIds.has(manifestId)
+  ) {
+    return { id: manifestId, meta };
+  }
+  const safe = dirName.replace(/[^A-Za-z0-9_-]/g, '_') || 'external';
+  let id = safe;
+  let n = 1;
+  while (existingIds.has(id)) {
+    id = `${safe}-${dirName.length}-${n++}`;
+  }
+  return { id, meta };
+}
+
+/**
+ * 单目录故障登记：归一异常为 PluginDiagnosticError 后调用 registerFailed；
+ * registerFailed 不可用（测试 stub）时保持旧行为上抛。
+ */
+async function registerScanFailure(
+  plugins: ExternalPluginHost,
+  dirPath: string,
+  dirName: string,
+  existingIds: Set<string>,
+  stage: PluginDiagnosticError['stage'],
+  err: unknown,
+): Promise<void> {
+  if (plugins.registerFailed === undefined) throw err;
+  const error: PluginDiagnosticError =
+    err instanceof HelmError
+      ? {
+          code: err.code,
+          message: err.message,
+          stage,
+          ...((err.details as Record<string, unknown> | undefined) !== undefined
+            ? { details: err.details as Record<string, unknown> }
+            : {}),
+        }
+      : {
+          code: 'plugin_scan_failed',
+          message: err instanceof Error ? err.message : String(err),
+          stage,
+        };
+  const { id, meta } = resolveFailedPluginId(dirPath, dirName, existingIds);
+  plugins.registerFailed({
+    id,
+    ...(typeof meta['name'] === 'string' && meta['name'].length > 0 ? { name: meta['name'] } : {}),
+    error: { ...error, details: { ...(error.details ?? {}), dirPath } },
+  });
+  existingIds.add(id);
+}
+
+/**
  * 扫描 `<dataDir>/plugins/` 并动态加载全部外部插件（默认停用注册）。
  * 返回本次成功注册的外部插件 id 列表（按目录扫描顺序）。
+ * 单目录故障（scan / load 阶段）经 registerFailed 登记为 failed 占位，
+ * 不阻断其他目录加载；register 期的 define / enable 故障由 PluginHost 的
+ * isolateFailure 机制降级为 failed 条目，同样不中断循环。
  */
 export async function loadExternalPlugins(dataDir: string, plugins: ExternalPluginHost): Promise<string[]> {
   const pluginsDir = join(dataDir, 'plugins');
@@ -78,13 +196,17 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
     throw err;
   }
   const registered: string[] = [];
+  const existingIds = new Set<string>();
+  const populateExisting = async () => {
+    existingIds.clear();
+    for (const summary of await plugins.list()) existingIds.add(summary.id);
+  };
+  await populateExisting();
   for (const entry of entries) {
     // 数据目录（builtin:profile 等）与隐藏目录一律不参与外部插件发现
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith('.') || entry.name.startsWith('builtin:')) continue;
     const dirPath = resolve(pluginsDir, entry.name);
-    const entryPath = await resolvePluginEntry(dirPath);
-    if (entryPath === undefined) continue; // 纯插件数据目录：静默跳过
     // 为插件目录启用后端 TS 转译（含运行期动态 import 的相对 TS 依赖）。
     // 任一失败路径（导入 / id 冲突 / 宿主注册）都释放计数；成功注册则根常驻
     // 本进程：插件运行期动态 import 依赖转译可用，已加载模块在 ESM 缓存中保持
@@ -93,8 +215,9 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
     const releaseTsRoot = registerPluginTsRoot(dirPath);
     let committed = false;
     try {
-      const definition = await importPluginDefinition(dirPath, entryPath);
-      const existingIds = new Set((await plugins.list()).map((summary) => summary.id));
+      const entryPath = await resolvePluginEntry(dirPath);
+      if (entryPath === undefined) continue; // 纯插件数据目录：静默跳过
+      const definition = await importScanDefinition(dirPath, entryPath, existingIds);
       if (existingIds.has(definition.id)) {
         throw new HelmError(
           'plugin_already_registered',
@@ -104,9 +227,14 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
         );
       }
       const normalized = normalizeDefinition(definition, dirPath);
-      await plugins.register(normalized, { enabled: false });
+      existingIds.add(normalized.id);
+      await plugins.register(normalized, { enabled: false, isolateFailure: true });
       committed = true;
       registered.push(normalized.id);
+    } catch (err) {
+      // 单目录故障降级登记（scan / load 阶段；register 期的 define / enable
+      // 故障已被 isolateFailure 吸收不会到这）：不阻断其他目录。
+      await registerScanFailure(plugins, dirPath, entry.name, existingIds, 'scan', err);
     } finally {
       if (!committed) releaseTsRoot();
     }
@@ -558,12 +686,19 @@ async function findPluginSource(
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith('.') || entry.name.startsWith('builtin:')) continue;
     const dirPath = resolve(pluginsDir, entry.name);
-    const entryPath = await resolvePluginEntry(dirPath);
-    if (entryPath === undefined) continue;
+    // 其他目录损坏（坏 manifest / 坏入口）不应炸断整目录扫描：目录名与目标
+    // id 不一致时即便修复也轮不到它命中，直接跳过；同名目录解析失败时目标
+    // 源码本身仍处于损坏态，交由上层按未找到源目录报错。
+    let entryPath: string | undefined;
     const releaseTsRoot = registerPluginTsRoot(dirPath);
     try {
+      entryPath = await resolvePluginEntry(dirPath);
+      if (entryPath === undefined) continue;
       const definition = await importPluginDefinition(dirPath, entryPath);
       if (definition.id === pluginId) hits.push({ dir: dirPath, definition });
+    } catch {
+      // 目录损坏或入口不可导入：跳过该目录继续扫描（修复后的目标目录仍能命中）。
+      continue;
     } finally {
       releaseTsRoot();
     }
@@ -722,32 +857,31 @@ export async function rescanExternalPlugins(
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith('.') || entry.name.startsWith('builtin:')) continue;
     const dirPath = resolve(pluginsDir, entry.name);
-    const entryPath = await resolvePluginEntry(dirPath);
-    if (entryPath === undefined) {
-      skipped += 1; // 纯插件数据目录
+    if (existingIds.has(entry.name)) {
+      skipped += 1; // 目录名同名已注册插件：快速跳过（不重载）
       continue;
-    }
-    if (existingIds.size > 0) {
-      // 已注册插件目录（按 id 判定需要真实导入；为避免与 reload 竞态，先按
-      // 目录名快速跳过同名已注册插件的常见情形，其余仍导入判定）
-      if (existingIds.has(entry.name)) {
-        skipped += 1;
-        continue;
-      }
     }
     const releaseTsRoot = registerPluginTsRoot(dirPath);
     let committed = false;
     try {
-      const definition = await importPluginDefinition(dirPath, entryPath);
+      const entryPath = await resolvePluginEntry(dirPath);
+      if (entryPath === undefined) {
+        skipped += 1; // 纯插件数据目录
+        continue;
+      }
+      const definition = await importScanDefinition(dirPath, entryPath, existingIds);
       if (existingIds.has(definition.id)) {
         skipped += 1; // 目录名与 id 不一致但已注册：跳过（不重载）
         continue;
       }
       const normalized = normalizeDefinition(definition, dirPath);
-      await plugins.register(normalized, { enabled: false });
-      committed = true;
       existingIds.add(normalized.id);
+      await plugins.register(normalized, { enabled: false, isolateFailure: true });
+      committed = true;
       registered.push(normalized.id);
+    } catch (err) {
+      // 单目录 scan / load 故障降级登记，不阻断其余目录。
+      await registerScanFailure(plugins, dirPath, entry.name, existingIds, 'scan', err);
     } finally {
       if (!committed) releaseTsRoot();
     }

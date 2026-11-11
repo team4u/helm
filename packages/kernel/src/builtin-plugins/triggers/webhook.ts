@@ -491,7 +491,20 @@ export function registerWebhook(
   })
 
   // ---- 服务生命周期：doc 读入验证 + secret 脱敏登记随启停 + 在途请求门禁 ----
-  ctx.service({ id: 'triggers-webhooks', start, stop, liveTasks })
+  ctx.service({
+    id: 'triggers-webhooks',
+    start,
+    stop,
+    liveTasks,
+    /** 持久占用声明：已配置的 webhook 端点是停用预检（plugin_in_use）的占用项。 */
+    inUse() {
+      return readDoc().webhooks.map((w) => ({
+        kind: 'webhook_endpoint',
+        id: w.id,
+        label: `Webhook 端点 "${w.id}"`,
+      }))
+    },
+  })
 
   return { createWebhook, listWebhooks, deleteWebhook }
 }

@@ -319,39 +319,43 @@ export default {
   }
 })
 
-test('TS 入口语法错误显式 plugin_load_failed（含文件与行列号诊断），绝不静默', { timeout: 60_000 }, async () => {
+test('TS 入口语法错误降级登记为 failed（含文件与行列号诊断），绝不静默', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-ts-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'broken-ts')
     mkdirSync(dirPath, { recursive: true })
     writeFileSync(join(dirPath, 'index.ts'), 'export function f(: string {\n  return 1\n}\n')
-    await assert.rejects(
-      createApp(dataDir),
-      (err: unknown) => {
-        assert.ok(err instanceof HostHelmError, `应为 HelmError，实际：${err}`)
-        assert.equal(err.code, 'plugin_load_failed')
-        assert.ok(err.message.includes('broken-ts/index.ts'), `诊断应含源文件路径：${err.message}`)
-        assert.ok(/:\d+:\d+/.test(err.message), `诊断应含行列号：${err.message}`)
-        return true
-      },
-    )
+    const app = await createApp(dataDir)
+    try {
+      const failed = app.kernel.plugins.list().find((p) => p.error !== undefined)
+      assert.ok(failed, '语法错误插件应登记为 failed 条目')
+      assert.equal(failed.error!.code, 'plugin_load_failed')
+      assert.ok(failed.error!.message.includes('broken-ts/index.ts'), `诊断应含源文件路径：${failed.error!.message}`)
+      assert.ok(/:\d+:\d+/.test(failed.error!.message), `诊断应含行列号：${failed.error!.message}`)
+    } finally {
+      await app.close().catch(() => {})
+    }
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
-test('TS 依赖闭包中的语法错误同样显式 plugin_load_failed', { timeout: 60_000 }, async () => {
+test('TS 依赖闭包中的语法错误同样降级登记为 failed', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-ts-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'broken-dep')
     mkdirSync(join(dirPath, 'lib'), { recursive: true })
     writeFileSync(join(dirPath, 'index.ts'), "import { x } from './lib/bad.js'\nexport default { id: 'broken-dep', tag: x, definePlugin() {} }\n")
     writeFileSync(join(dirPath, 'lib', 'bad.ts'), 'export const x = {{{\n')
-    await assert.rejects(
-      createApp(dataDir),
-      (err: unknown) =>
-        err instanceof HostHelmError && err.code === 'plugin_load_failed' && err.message.includes('lib/bad.ts'),
-    )
+    const app = await createApp(dataDir)
+    try {
+      const failed = app.kernel.plugins.list().find((p) => p.error !== undefined)
+      assert.ok(failed)
+      assert.equal(failed.error!.code, 'plugin_load_failed')
+      assert.ok(failed.error!.message.includes('lib/bad.ts'))
+    } finally {
+      await app.close().catch(() => {})
+    }
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
@@ -369,7 +373,7 @@ function makeOutsideEvil(sentinel: string): string {
   return evil
 }
 
-test('越根契约 1：plugin.json main 路径穿越到根外真实文件，显式 plugin_manifest_invalid，evil 绝不执行', { timeout: 60_000 }, async () => {
+test('越根契约 1：plugin.json main 路径穿越到根外真实文件，降级登记 failed，evil 绝不执行', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-esc1-'))
   const evil = makeOutsideEvil('__escMainSentinel')
   try {
@@ -381,10 +385,14 @@ test('越根契约 1：plugin.json main 路径穿越到根外真实文件，显�
     const reachable = join(dataDir, '..', '..', 'evil.ts')
     writeFileSync(reachable, `globalThis.__escMainSentinel = (globalThis.__escMainSentinel ?? 0) + 1\nexport default { id: 'evil', definePlugin() {} }\n`)
     rmSync(evil)
-    await assert.rejects(
-      createApp(dataDir),
-      (e: unknown) => e instanceof HostHelmError && e.code === 'plugin_manifest_invalid',
-    )
+    const app = await createApp(dataDir)
+    try {
+      const failed = app.kernel.plugins.list().find((p) => p.error !== undefined)
+      assert.ok(failed)
+      assert.equal(failed.error!.code, 'plugin_manifest_invalid')
+    } finally {
+      await app.close().catch(() => {})
+    }
     assert.equal(globalFlag('__escMainSentinel'), undefined, 'main 穿越被拒：evil 源码绝不能被导入执行')
     rmSync(reachable, { force: true })
   } finally {
@@ -400,17 +408,17 @@ test('越根契约 2：约定入口 symlink 指向根外真实 .ts，realpath �
     mkdirSync(dirPath, { recursive: true })
     // 词法在目录内、realpath 在目录外（symlink 逃逸），目标真实存在
     symlinkSync(evil, join(dirPath, 'index.ts'))
-    await assert.rejects(
-      createApp(dataDir),
-      (e: unknown) => {
-        assert.ok(e instanceof HostHelmError, `应为 HelmError，实际：${e}`)
-        assert.ok(
-          e.code === 'plugin_manifest_invalid' || e.code === 'plugin_load_failed',
-          `入口 symlink 越根应显式拒绝，实际 code：${e.code}`,
-        )
-        return true
-      },
-    )
+    const app = await createApp(dataDir)
+    try {
+      const failed = app.kernel.plugins.list().find((p) => p.error !== undefined)
+      assert.ok(failed, `应为 HelmError 登记，实际：无 failed 条目`)
+      assert.ok(
+        failed.error!.code === 'plugin_manifest_invalid' || failed.error!.code === 'plugin_load_failed',
+        `入口 symlink 越根应显式拒绝，实际 code：${failed.error!.code}`,
+      )
+    } finally {
+      await app.close().catch(() => {})
+    }
     assert.equal(globalFlag('__escEntrySentinel'), undefined, '入口 symlink 越根被拒：evil 绝不能被导入执行')
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -432,14 +440,14 @@ test('越根契约 3：插件根内依赖 symlink 指向根外真实 .ts，转�
 export default { id: 'dep-symlink', tag: x, definePlugin() {} }
 `,
     )
-    await assert.rejects(
-      createApp(dataDir),
-      (e: unknown) => {
-        assert.ok(e instanceof HostHelmError, `应为 HelmError，实际：${e}`)
-        assert.equal(e.code, 'plugin_load_failed', '根外 symlink 依赖不得被转译，显式失败')
-        return true
-      },
-    )
+    const app = await createApp(dataDir)
+    try {
+      const failed = app.kernel.plugins.list().find((p) => p.error !== undefined)
+      assert.ok(failed, `应为 HelmError 登记，实际：无 failed 条目`)
+      assert.equal(failed.error!.code, 'plugin_load_failed', '根外 symlink 依赖不得被转译，显式失败')
+    } finally {
+      await app.close().catch(() => {})
+    }
     assert.equal(globalFlag('__escDepSentinel'), undefined, '依赖 symlink 越根被拒：evil 绝不能被导入执行')
     rmSync(evil, { force: true })
   } finally {
@@ -464,16 +472,16 @@ test('越根契约 4：fallback 说明符（.js 家族）映射到根外真实 .
 export default { id: 'dotdot', tag: x, definePlugin() {} }
 `,
     )
-    await assert.rejects(
-      createApp(dataDir),
-      (e: unknown) => {
-        assert.ok(e instanceof HostHelmError, `应为 HelmError，实际：${e}`)
-        // fallback 把 .js 映射到根外 .ts：拒绝转译，显式 plugin_load_failed
-        assert.equal(e.code, 'plugin_load_failed')
-        assert.ok(e.message.includes('拒绝转译'), `诊断应说明拒绝原因：${e.message}`)
-        return true
-      },
-    )
+    const app = await createApp(dataDir)
+    try {
+      const failed = app.kernel.plugins.list().find((p) => p.error !== undefined)
+      assert.ok(failed, `应为 HelmError 登记，实际：无 failed 条目`)
+      // fallback 把 .js 映射到根外 .ts：拒绝转译，显式 plugin_load_failed
+      assert.equal(failed.error!.code, 'plugin_load_failed')
+      assert.ok(failed.error!.message.includes('拒绝转译'), `诊断应说明拒绝原因：${failed.error!.message}`)
+    } finally {
+      await app.close().catch(() => {})
+    }
     assert.equal(globalFlag('__escDotdotSentinel'), undefined, 'fallback 越根映射绝不能触发根外源码执行')
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -642,14 +650,16 @@ test('id 冲突失败后 TS 根释放：同目录换 id 重写后可重新加载
     writeFileSync(join(first, 'index.ts'), `export default { id: 'dup', definePlugin() {} }\n`)
     const app = await createApp(dataDir)
     try {
-      // 再放入同 id 的第二个目录：加载在 id 冲突处失败并释放根
+      // 再放入同 id 的第二个目录：冲突降级登记为 failed 条目（不再上抛阻断），
+      // 根被释放；后续同目录可修复重载。
       const second = join(dataDir, 'plugins', 'second')
       mkdirSync(second, { recursive: true })
       writeFileSync(join(second, 'index.ts'), `export default { id: 'dup', definePlugin() {} }\n`)
-      await assert.rejects(
-        loadExternalPlugins(dataDir, app.kernel.plugins),
-        (e: unknown) => e instanceof HostHelmError && e.code === 'plugin_already_registered',
-      )
+      const registered0 = await loadExternalPlugins(dataDir, app.kernel.plugins)
+      assert.ok(!registered0.includes('dup'), '冲突目录不得注册成功')
+      const conflicted = app.kernel.plugins.list().find((p) => p.id !== 'dup' && p.error !== undefined)
+      assert.ok(conflicted, 'id 冲突应降级登记为 failed 条目')
+      assert.equal(conflicted.error!.code, 'plugin_already_registered')
       // first 已被 createHelm 消费：移除其入口标记（降级为数据目录），后续直调
       // 只扫描 second，验证冲突释放后同目录可修复重载
       rmSync(join(first, 'index.ts'))

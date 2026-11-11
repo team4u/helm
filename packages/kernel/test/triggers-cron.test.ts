@@ -666,7 +666,8 @@ test('stop（disable）取消 timer 禁止后续投递；重新启用恢复调�
   await ready(h)
   await h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'r1', schedule: '*/5 * * * *', text: 'x' })
   assert.equal(h.clock.activeTimers(), 1)
-  await h.host.disable('builtin:triggers')
+  // 启用的 cron 任务为持久占用（inUse）：知情后 force 停用。
+  await h.host.disable('builtin:triggers', { force: true })
   assert.equal(h.clock.activeTimers(), 0, 'stop 后 timer 全部取消')
   await h.clock.advance(30 * MIN) // 停用期间推进：无投递
   assert.equal(h.dispatched.length, 0)
@@ -703,8 +704,8 @@ test('停用时有在途 tick：liveTasks 报在途，禁用被宿主 409 拒绝
   )
   release?.()
   await h.runtime.settle()
-  // 在途结束后停用成功
-  await h.host.disable('builtin:triggers')
+  // 在途结束后停用成功（cron 任务持久占用 → force）
+  await h.host.disable('builtin:triggers', { force: true })
   assert.equal(h.clock.activeTimers(), 0)
 })
 

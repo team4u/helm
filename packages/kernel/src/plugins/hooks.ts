@@ -229,6 +229,12 @@ export function assertHookPayload(name: HookName, value: unknown): void {
   }
 }
 
+/** turn_settled 单插件异常隔离的收集结果（PluginHost 发告警用）。 */
+export interface IsolatedHookError {
+  pluginId: string;
+  error: HelmError;
+}
+
 export class HookPipeline<K extends HookName> {
   private hooks: Array<RegisteredHook<K>> = [];
   private nextSeq = 0;
@@ -263,17 +269,41 @@ export class HookPipeline<K extends HookName> {
   }
 
   /**
-   * 执行整条管道，返回短路结果（若有）与最终载荷。
+   * 执行整条管道，返回短路结果（若有）、最终载荷与 turn_settled 隔离错误。
    * isParticipant 为空时执行全部；否则只执行返回 true 的处理器（宿主用它
    * 隔离未启用/正停用插件，绝不让其 handler 被调用）。
-   * 任一处理器异常或产物违约都显式抛出，绝不静默。
+   * 拦截/改写型钩子任一处理器异常或产物违约都显式抛出，绝不静默；
+   * turn_settled（结算通知型）改为单插件异常隔离：单个处理器抛错或产物
+   * 非法时不中断循环、不覆盖上一个合法载荷，错误收集进 isolatedErrors
+   * 由宿主统一发告警，后续插件照常结算。
    */
   async run(
     payload: HookPayloadMap[K],
     isParticipant?: (hook: RegisteredHook<K>) => boolean,
-  ): Promise<{ finalPayload: HookPayloadMap[K]; shortCircuit?: Extract<HookResult<unknown>, { action: 'handled' | 'block' }> }> {
+  ): Promise<{
+    finalPayload: HookPayloadMap[K];
+    shortCircuit?: Extract<HookResult<unknown>, { action: 'handled' | 'block' }>;
+    isolatedErrors?: IsolatedHookError[];
+  }> {
     assertHookPayload(this.name, payload);
     const allowed = HOOK_ALLOWED_ACTIONS[this.name];
+    const isolate = this.name === 'turn_settled';
+    const isolatedErrors: IsolatedHookError[] = [];
+    /** 单处理器执行与产物校验；isolate 模式下违约转为收集错误而非抛出。 */
+    const isolateError = (hook: RegisteredHook<K>, err: unknown): void => {
+      isolatedErrors.push({
+        pluginId: hook.pluginId,
+        error:
+          err instanceof HelmError
+            ? err
+            : new HelmError(
+                'hook_execution_failed',
+                `插件 ${hook.pluginId} 的 ${this.name} 钩子执行抛出异常：${err instanceof Error ? err.message : String(err)}`,
+                500,
+                { pluginId: hook.pluginId, hook: this.name },
+              ),
+      });
+    };
     let current = payload;
     for (const hook of this.entries()) {
       if (isParticipant && !isParticipant(hook)) continue;
@@ -281,59 +311,84 @@ export class HookPipeline<K extends HookName> {
       try {
         result = await (hook.handler as (payload: HookPayloadMap[K]) => unknown)(current) as HookResult<HookPayloadMap[K]> | void;
       } catch (err) {
-        if (err instanceof HelmError) throw err;
-        throw new HelmError(
-          'hook_execution_failed',
-          `插件 ${hook.pluginId} 的 ${this.name} 钩子执行抛出异常：${err instanceof Error ? err.message : String(err)}`,
-          500,
-          { pluginId: hook.pluginId, hook: this.name },
-        );
+        if (!isolate) {
+          if (err instanceof HelmError) throw err;
+          throw new HelmError(
+            'hook_execution_failed',
+            `插件 ${hook.pluginId} 的 ${this.name} 钩子执行抛出异常：${err instanceof Error ? err.message : String(err)}`,
+            500,
+            { pluginId: hook.pluginId, hook: this.name },
+          );
+        }
+        isolateError(hook, err);
+        continue;
       }
       if (result === undefined || result === null) continue; // void 等价 continue
       if (!isObj(result) || typeof result.action !== 'string') {
-        throw new HelmError(
+        const err = new HelmError(
           'invalid_hook_result',
           `插件 ${hook.pluginId} 的 ${this.name} 钩子返回了非法结果（缺少 action 字段）`,
           500,
           { pluginId: hook.pluginId, hook: this.name, result },
         );
+        if (!isolate) throw err;
+        isolateError(hook, err);
+        continue;
       }
       if (!allowed.has(result.action)) {
-        throw new HelmError(
+        const err = new HelmError(
           'invalid_hook_result',
           `插件 ${hook.pluginId} 的 ${this.name} 钩子返回了不支持的组合动作 "${result.action}"（允许：${[...allowed].join('|')}）`,
           500,
           { pluginId: hook.pluginId, hook: this.name, allowed: [...allowed] },
         );
+        if (!isolate) throw err;
+        isolateError(hook, err);
+        continue;
       }
       if (result.action === 'continue') continue;
       if (result.action === 'transform') {
         if (result.value === undefined) {
-          throw new HelmError(
+          const err = new HelmError(
             'invalid_hook_result',
             `插件 ${hook.pluginId} 的 ${this.name} 钩子返回 transform 但缺少 value`,
             500,
             { pluginId: hook.pluginId, hook: this.name },
           );
+          if (!isolate) throw err;
+          isolateError(hook, err);
+          continue;
         }
-        assertHookPayload(this.name, result.value);
+        try {
+          assertHookPayload(this.name, result.value);
+        } catch (err) {
+          if (!isolate) throw err;
+          isolateError(hook, err);
+          continue;
+        }
         current = result.value;
         continue;
       }
       if (result.action === 'block') {
         if (typeof result.reason !== 'string' || result.reason.length === 0) {
-          throw new HelmError(
+          const err = new HelmError(
             'invalid_hook_result',
             `插件 ${hook.pluginId} 的 ${this.name} 钩子返回 block 但缺少非空 reason`,
             500,
             { pluginId: hook.pluginId, hook: this.name },
           );
+          if (!isolate) throw err;
+          isolateError(hook, err);
+          continue;
         }
         return { finalPayload: current, shortCircuit: result };
       }
       return { finalPayload: current, shortCircuit: result }; // handled
     }
-    return { finalPayload: current };
+    return {
+      finalPayload: current,
+      ...(isolatedErrors.length > 0 ? { isolatedErrors } : {}),
+    };
   }
 
   /**

@@ -180,7 +180,8 @@ test('Magpie 经真实组合层注册、刷新、HTTP/CLI、缓存重启与停�
     assert.equal(app.kernel.listModelProviders().find((provider) => provider.id === 'magpie')?.modelCount, 3, '重启离线恢复目录')
     // 等待本周期目录刷新终态，再检查闲置插件的正常停用路径。
     await app.kernel.refreshModels({ providers: ['magpie'] })
-    await app.kernel.plugins.disable('builtin:magpie')
+    // 会话 #1 曾使用 magpie/* 模型（conversation_model 占用）：知情后 force 停用。
+    await app.kernel.plugins.disable('builtin:magpie', { force: true })
     assert.ok(!app.kernel.listModelProviders().some((provider) => provider.id === 'magpie'))
     assert.ok(!(await app.kernel.listModels()).models.some((model) => model.provider === 'magpie'))
     assert.ok(!app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie'))

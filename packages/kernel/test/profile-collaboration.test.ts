@@ -540,8 +540,9 @@ test('before_turn：托管插件停用隐藏其 Profile；runtime 无接管贡�
     assert.ok(catalog.text.includes('runtime="external:customrt"'))
     assert.ok(!catalog.text.includes('orphan-rt'), '无接管贡献的 runtime Profile 不进目录（不误导原生调用）')
 
-    // 接管插件停用：托管 Profile 随之隐藏；仅剩被排除的 orphan 后目录为空 → 不再注入
-    await env.host.disable('test:rt')
+    // 接管插件停用：托管 Profile 随之隐藏；仅剩被排除的 orphan 后目录为空 → 不再注入。
+    // （custom-worker 绑定 runtime kind 为本插件声明的 profile_runtime 占用 → force 知情停用）
+    await env.host.disable('test:rt', { force: true })
     const after = await env.host.runHook('before_turn', { ...turn, sections: [] } as never)
     const afterSections = after.action === 'transform' ? after.value.sections : turn.sections
     const afterCatalog = afterSections.find((s: { id: string }) => s.id === 'profile.catalog')

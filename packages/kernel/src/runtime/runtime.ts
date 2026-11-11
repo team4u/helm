@@ -755,7 +755,7 @@ export class KernelRuntime {
       modelsRegistry: this.modelsRegistry,
       assetReloader: this.svc.assetReloader,
       nodes: this.nodes,
-      settledInflight: this.settledInflight,
+      settledInflight: () => this.settledInflight,
       store: this.store,
       harness: this.harness,
       tracker: this.svc.tracker,

@@ -610,7 +610,8 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
     await auth.setup('setup-pw-triggers-1234')
     await app1.kernel.plugins.enable(TRIGGERS)
     await app1.kernel.plugins.invokeAction(TRIGGERS, 'webhook_create', { id: 'persist', secret: SECRET })
-    await app1.kernel.plugins.disable(TRIGGERS)
+    // webhook 端点为持久占用（inUse）：知情后 force 停用（secret 仍落盘供重启恢复）。
+    await app1.kernel.plugins.disable(TRIGGERS, { force: true })
   } finally {
     await app1.close()
   }
@@ -682,7 +683,12 @@ test('triggers11: disable 后路由撤下、动作拒绝；doc 404', { timeout: 
     requireTriggersRegistered(env)
     await enableTriggers(env)
     await env.app.kernel.plugins.invokeAction(TRIGGERS, 'webhook_create', { id: 'bye', secret: 'whsec_bye' })
-    await env.app.kernel.plugins.disable(TRIGGERS)
+    // webhook 端点为持久占用：先验证默认 409 拦截，再 force 停用。
+    await assert.rejects(
+      () => env.app.kernel.plugins.disable(TRIGGERS),
+      (err: unknown) => err instanceof HelmError && err.code === 'plugin_in_use' && err.status === 409,
+    )
+    await env.app.kernel.plugins.disable(TRIGGERS, { force: true })
 
     const host = env.app.kernel.plugins
     assert.deepEqual(host.listRoutes().filter((r) => r.pluginId === TRIGGERS), [])

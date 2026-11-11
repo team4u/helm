@@ -8,7 +8,8 @@
  * - 插件启停状态 → config.json `pluginEnabled` 映射（与 `plugins` 配置、
  *   credentials 完全分离；缺失表示从未持久化过，交由 PluginHost 回落到声明值）；
  * - `get` 同步返回两侧合并的有效配置（load 时预热内存镜像，写路径同步维持）；
- * - `set` 按 schema 完整校验（未知字段 / 类型 / required / default 固化）；
+ * - `set` 按 schema 完整校验（未知字段 / 类型 / required），只持久化用户显式
+ *   覆写值（不固化 schema.default），值 null 表示重置回默认（删除磁盘键）；
  * - 凭据或配置文件损坏时 `load()` 显式上抛（open 失败），绝不 catch 吞错后
  *   假装读写成功（诚实性纪律）。
  */
@@ -126,11 +127,29 @@ export class HelmPluginConfigStore implements PluginConfigStore {
   ): Promise<void> {
     if (!isPlainObject(value)) throw invalid(pluginId, '配置值必须是对象')
 
-    const nextPlain: Record<string, unknown> = {}
-    const nextSecrets: Record<string, string> = {}
+    const existingPlain = this.mirror.plain.get(pluginId) ?? {}
+    const existingSecrets = this.mirror.secrets.get(pluginId) ?? {}
+    /** 本次写入后的最终存储状态（required 校验基于合并后事实）。 */
+    const nextPlain: Record<string, unknown> = { ...existingPlain }
+    const nextSecrets: Record<string, string> = { ...existingSecrets }
+    /** 待从磁盘删除的键（null 重置），按 secret 归属分桶。 */
+    const removePlain: string[] = []
+    const removeSecrets: string[] = []
+
     for (const [key, fieldValue] of Object.entries(value)) {
       const field = schema[key]
       if (field === undefined) throw invalid(pluginId, `未知配置字段 ${key}（未在 configSchema 声明）`)
+      if (fieldValue === null) {
+        // null = 清除显式配置（重置回 default；由读取侧合成，磁盘只删不写）。
+        if (field.secret === true) {
+          delete nextSecrets[key]
+          removeSecrets.push(key)
+        } else {
+          delete nextPlain[key]
+          removePlain.push(key)
+        }
+        continue
+      }
       const expected = TYPE_OF[field.type]
       if (field.secret === true) {
         if (typeof fieldValue !== 'string') throw invalid(pluginId, `字段 ${key} 是 secret，必须是字符串`)
@@ -141,42 +160,54 @@ export class HelmPluginConfigStore implements PluginConfigStore {
         nextPlain[key] = fieldValue
       }
     }
-    // required 校验 + default 固化（缺省字段写 default，下次 get 稳定返回）。
+
+    // required 校验：合并本次修改后的最终存储必须包含必填且无 default 的字段
+    //（default 字段可缺省，由读取侧合成回退）。不再把 field.default 固化到磁盘。
     for (const [key, field] of Object.entries(schema)) {
-      if (key in value) continue
-      if (field.default !== undefined) {
-        if (field.secret === true) nextSecrets[key] = String(field.default)
-        else nextPlain[key] = field.default
-      } else if (field.required === true) {
-        throw invalid(pluginId, `缺少必填字段 ${key}`)
-      }
+      if (field.required !== true || field.default !== undefined) continue
+      const stored = field.secret === true ? nextSecrets[key] : nextPlain[key]
+      const empty = field.secret === true
+        ? typeof stored !== 'string' || stored.length === 0
+        : stored === undefined || stored === null || stored === ''
+      if (empty) throw invalid(pluginId, `缺少必填字段 ${key}`)
     }
 
     // 先持久化再更新镜像（失败不污染内存视角，错误显式上抛）。
     // 读改写全程在 ConfigService 同一把文件锁内以回调完成：只动本插件
     // 嵌套键，锁外无旧快照，间隙的其它模块写入不会被覆盖。
-    if (Object.keys(nextPlain).length > 0) {
+    const plainTouched = Object.keys(nextPlain).length > 0 || removePlain.length > 0
+    if (plainTouched) {
       await this.configService.updateBy((current) => {
         const plugins = current['plugins']
         if (plugins !== undefined && !isPlainObject(plugins)) {
           throw corrupt('plugins', `应为对象，实际：${typeof plugins}`)
         }
         const merged = isPlainObject(plugins) ? plugins : {}
-        return {
-          ...current,
-          plugins: { ...merged, [pluginId]: { ...(merged[pluginId] ?? {}), ...nextPlain } },
-        }
+        const bucket = { ...(isPlainObject(merged[pluginId]) ? (merged[pluginId] as Record<string, unknown>) : {}), ...nextPlain }
+        for (const key of removePlain) delete bucket[key]
+        if (Object.keys(bucket).length === 0) delete merged[pluginId]
+        else merged[pluginId] = bucket
+        return { ...current, plugins: merged }
       })
     }
-    for (const [key, secret] of Object.entries(nextSecrets)) {
-      await this.credentialService.setPluginSecret(pluginId, key, secret)
+    for (const [key, secret] of Object.entries(value)) {
+      if (secret === null) continue
+      const field = schema[key]
+      if (field?.secret === true && typeof secret === 'string') {
+        await this.credentialService.setPluginSecret(pluginId, key, secret)
+      }
     }
-    if (Object.keys(nextPlain).length > 0) {
-      this.mirror.plain.set(pluginId, { ...(this.mirror.plain.get(pluginId) ?? {}), ...nextPlain })
+    for (const key of removeSecrets) {
+      await this.credentialService.deletePluginSecret(pluginId, key)
     }
-    if (Object.keys(nextSecrets).length > 0) {
-      this.mirror.secrets.set(pluginId, { ...(this.mirror.secrets.get(pluginId) ?? {}), ...nextSecrets })
+
+    // 同步内存镜像（与磁盘一致：写入合并 + null 删除；空桶清理）。
+    if (plainTouched) {
+      if (Object.keys(nextPlain).length === 0) this.mirror.plain.delete(pluginId)
+      else this.mirror.plain.set(pluginId, { ...nextPlain })
     }
+    if (Object.keys(nextSecrets).length === 0) this.mirror.secrets.delete(pluginId)
+    else this.mirror.secrets.set(pluginId, { ...nextSecrets })
   }
 
   /** 插件启停状态读取（同步缓存；undefined = 从未持久化）。 */

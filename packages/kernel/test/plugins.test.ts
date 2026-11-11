@@ -300,20 +300,21 @@ test('tool_call block 携带 reason 短路；block 缺 reason 显式报错', { t
   );
 });
 
-test('钩子返回不支持的动作组合（turn_settled block）显式 invalid_hook_result', { timeout: 60_000 }, async () => {
+test('before_turn 返回 block 显式 invalid_hook_result；turn_settled block 转异常隔离告警不阻断下游', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:illegal',
     definePlugin: (ctx) => {
-      ctx.hook.onTurnSettled(() => ({ action: 'block', reason: 'not allowed' }) as never);
+      ctx.hook.onBeforeTurn(() => ({ action: 'block', reason: 'not allowed' }) as never);
     },
   });
   await assert.rejects(
-    host.runHook('turn_settled', {
+    host.runHook('before_turn', {
       conversation: makeConversation(1),
       inputs: [],
-      outcome: 'completed',
-      settledAt: 1,
+      tools: [],
+      sections: [],
+      messages: [],
     }),
     (err: unknown) => {
       assert.ok(err instanceof HelmError);
@@ -321,6 +322,39 @@ test('钩子返回不支持的动作组合（turn_settled block）显式 invalid
       return true;
     },
   );
+
+  // turn_settled 对不支持动作（block）做单插件异常隔离：发 notification 告警，
+  // 不阻断下游插件的结算处理器，也不向上抛错。
+  const host2 = makeHost();
+  const settled: string[] = [];
+  await host2.register({
+    id: 'p:settle-bad',
+    definePlugin: (ctx) => {
+      ctx.hook.onTurnSettled(() => ({ action: 'block', reason: 'not allowed' }) as never, { priority: 10 });
+    },
+  });
+  await host2.register({
+    id: 'p:settle-ok',
+    definePlugin: (ctx) => {
+      ctx.hook.onTurnSettled(() => {
+        settled.push('ok');
+        return { action: 'continue' };
+      });
+    },
+  });
+  const result = await host2.runHook('turn_settled', {
+    conversation: makeConversation(1),
+    inputs: [],
+    outcome: 'completed',
+    settledAt: 1,
+  });
+  assert.equal(result.action, 'transform');
+  assert.deepEqual(settled, ['ok'], '下游 turn_settled 处理器照常执行');
+  const notified = eventPayloads.filter((e) => e.type === 'notification');
+  assert.equal(notified.length, 1, '异常插件收到一条 warning 告警');
+  const payload = notified[0]!.payload as { level: string; title: string };
+  assert.equal(payload.level, 'warning');
+  assert.match(payload.title, /p:settle-bad 回合结算钩子异常/);
 });
 
 test('钩子返回 undefined 等价 continue；transform 缺 value / 破坏必要字段 / 未知 action 均显式报错', { timeout: 60_000 }, async () => {

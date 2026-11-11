@@ -8,6 +8,7 @@ import type {
   HookName,
   PluginConfigFieldSchema,
   PluginDefinition,
+  PluginDiagnosticError,
   PluginServiceSpec,
   PluginSkillAsset,
 } from '@helm/protocol';
@@ -137,6 +138,13 @@ export const STOP_WINDOW_HOST_CALLS: ReadonlySet<string> = new Set([
   'host.nodeIpc.call',
 ]);
 
+/** 持久资源占用项（停用预检聚合用；与 protocol PluginInUseItem 同形）。 */
+export interface PluginInUseItem {
+  kind: string;
+  id: string;
+  label: string;
+}
+
 export interface PluginState {
   definition: PluginDefinition;
   enabled: boolean;
@@ -159,4 +167,20 @@ export interface PluginState {
    * 此窗口内 STOP_WINDOW_HOST_CALLS 与 doc 写入放行，其余宿主调用与新任务照拒。
    */
   stopWindow: boolean;
+  /**
+   * 最近一次加载或启用失败的诊断（status: 'failed' 的判定源）。
+   * enable / disable 成功时清空；scan/load 阶段占位条目（loadFailed）恒保留
+   * 直到修复后 reload / 重启重新注册。
+   */
+  lastError?: PluginDiagnosticError;
+  /**
+   * scan / load 阶段失败的占位条目标记：definition 为空壳（definePlugin 为
+   * no-op），无有效能力注册；enable 直接 409 plugin_load_failed。
+   */
+  loadFailed?: boolean;
+  /**
+   * 注册时声明的故障隔离意愿（外部插件加载器传 isolateFailure:true）：
+   * define / enable / 启动屏障阶段失败降级为 failed 条目而不是阻断宿主。
+   */
+  isolateFailure?: boolean;
 }

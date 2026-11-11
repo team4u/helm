@@ -926,16 +926,30 @@ describe('真实 PluginHost 集成', { timeout: 60_000 }, () => {
         },
       })
       await kernel.plugins.setConfig('test:cfg', { apiKey: 'sk-secret-123' })
-      // get 合并有效配置（secret + default 固化的 retries）。
+      // get 合成有效配置：secret 显式值 + default 动态回退（不固化磁盘）。
       const merged = kernel.plugins.getConfig('test:cfg')
       assert.equal(merged['apiKey'], 'sk-secret-123')
       assert.equal(merged['retries'], 3)
+      // sources：apiKey 已配置，retries 回退默认值
+      const sources = kernel.plugins.getConfigSources('test:cfg')
+      assert.equal(sources['apiKey'], 'configured')
+      assert.equal(sources['retries'], 'default')
     } finally {
       await kernel.close()
     }
-    // 重启后配置仍有效（分离持久真实落盘）。
+    // 重启后配置仍有效（分离持久真实落盘；default 读时动态合成）。
     const kernel2 = await openRuntime(dir)
     try {
+      // default 合成依赖 configSchema：重新注册后读才包含回退值（磁盘不固化）。
+      await kernel2.plugins.register({
+        id: 'test:cfg',
+        definePlugin(ctx) {
+          ctx.configSchema({
+            apiKey: { type: 'string', secret: true, required: true, label: 'API Key' },
+            retries: { type: 'number', default: 3, label: '重试次数' },
+          })
+        },
+      })
       const merged = kernel2.plugins.getConfig('test:cfg')
       assert.equal(merged['apiKey'], 'sk-secret-123')
       assert.equal(merged['retries'], 3)

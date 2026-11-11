@@ -32,7 +32,9 @@ import {
   type HookResult,
   type PluginActionContext,
   type PluginConfigFieldSchema,
+  type PluginConfigFieldSource,
   type PluginDefinition,
+  type PluginDiagnosticError,
   type PluginDoctorReport,
   type PluginInstallResult,
   type PluginReloadResult,
@@ -45,7 +47,7 @@ import {
   type PluginToolContext,
   type PluginUiContribution,
 } from '@helm/protocol';
-import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
+import { HOOK_ALLOWED_ACTIONS, HookPipeline, type IsolatedHookError } from './hooks.js';
 import { PluginTaskTracker } from './tracking.js';
 import { type ClientCompileResult } from './client-compiler.js';
 import {
@@ -83,6 +85,7 @@ import type {
   PluginConfigStore,
   PluginHostBackend,
   PluginHostOptions,
+  PluginInUseItem,
   PluginPhase,
   PluginProviderPort,
   PluginState,
@@ -96,6 +99,7 @@ import {
 } from './provider-coordinator.js';
 import {
   assertNoLiveTasks,
+  collectServiceInUse,
   listLiveWorktrees,
   prepareServices,
   startServiceBarrier,
@@ -115,6 +119,7 @@ import {
   resolveInitialEnabled,
   settleLifecycleChanged,
   teardownPlugin,
+  toDiagnosticError,
   wrapEnableError,
   wrapRegistrationError,
 } from './lifecycle-helpers.js';
@@ -181,11 +186,18 @@ export class PluginHost {
 
   // --- 注册与生命周期 -------------------------------------------------------
 
-  async register(definition: PluginDefinition, options: { enabled?: boolean } = {}): Promise<void> {
+  async register(
+    definition: PluginDefinition,
+    options: { enabled?: boolean; isolateFailure?: boolean } = {},
+  ): Promise<void> {
     this.assertNotDisposed();
     assertDefinition(definition);
     const seq = ++this.registerSeq;
     const pluginId = definition.id;
+    // 外部插件故障隔离：仅非 builtin 插件且调用方显式声明 isolateFailure 时
+    // 生效（内置插件失败一律阻断，代码缺陷不容降级）。
+    const isolate =
+      options.isolateFailure === true && !definition.id.startsWith('builtin:');
 
     await this.enqueue(pluginId, async () => {
       this.assertNotDisposed();
@@ -209,6 +221,7 @@ export class PluginHost {
         configSchema: null,
         hostReleases: new Set(),
         stopWindow: false,
+        ...(isolate ? { isolateFailure: true } : {}),
       };
 
       this.plugins.set(pluginId, state);
@@ -217,6 +230,11 @@ export class PluginHost {
         await definition.definePlugin(this.createContext(state, state.epoch));
         this.validateUiDeclarations(definition.id, false);
       } catch (err) {
+        if (isolate) {
+          // 外部插件 define 阶段故障：清理残余注册但保留占位条目为 failed
+          await this.rollbackIsolated(state, err, 'define');
+          return;
+        }
         await this.rollbackAndRemove(state, seq, err, false);
       }
 
@@ -228,6 +246,12 @@ export class PluginHost {
           await registerProviders(state, this.options.providers);
           await this.activateServices(state);
         } catch (err) {
+          if (isolate) {
+            // 外部插件启用阶段故障：回滚挂载资源但保留条目为 failed；
+            // 磁盘 pluginEnabled 原值不动（不覆写用户意图）。
+            await this.rollbackIsolated(state, err, 'enable');
+            return;
+          }
           await this.rollbackAndRemove(state, seq, err, true);
         }
         state.phase = 'idle';
@@ -235,6 +259,10 @@ export class PluginHost {
         try {
           await this.teardownPlugin(state, { stopServices: false });
         } catch (err) {
+          if (isolate) {
+            await this.rollbackIsolated(state, err, 'define');
+            return;
+          }
           await this.rollbackAndRemove(state, seq, err, false);
         }
         state.epoch += 1;
@@ -242,6 +270,84 @@ export class PluginHost {
       }
       this.emitPluginChanged(state);
     });
+  }
+
+  /**
+   * 外部插件故障占位登记（scan / load 阶段失败，无有效 definition）：
+   * 在 this.plugins 中登记（或更新）一个 enabled:false、loadFailed:true、
+   * 携带 lastError 诊断的占位条目；不覆盖已注册的同名真实插件。
+   */
+  registerFailed(spec: {
+    id: string;
+    name?: string;
+    description?: string;
+    version?: string;
+    error: PluginDiagnosticError;
+  }): void {
+    this.assertNotDisposed();
+    const existing = this.plugins.get(spec.id);
+    if (existing !== undefined && !existing.loadFailed) {
+      // 已存在真实插件（同名冲突）：不覆盖，由调用方登记为冲突错误或跳过。
+      throw new HelmError(
+        'plugin_already_registered',
+        `插件 ${spec.id} 已注册（与故障占位冲突），拒绝覆盖`,
+        409,
+        { pluginId: spec.id },
+      );
+    }
+    const definition: PluginDefinition = {
+      id: spec.id,
+      name: spec.name ?? spec.id,
+      ...(spec.description !== undefined ? { description: spec.description } : {}),
+      ...(spec.version !== undefined ? { version: spec.version } : {}),
+      definePlugin() {},
+    };
+    const state: PluginState =
+      existing ??
+      ({
+        definition,
+        enabled: false,
+        phase: 'idle',
+        epoch: 1,
+        dataDir: join(this.options.dataDir, 'plugins', spec.id),
+        hooks: new Set(),
+        services: [],
+        providers: [],
+        configSchema: null,
+        hostReleases: new Set(),
+        stopWindow: false,
+      } satisfies PluginState);
+    state.definition = definition;
+    state.enabled = false;
+    state.phase = 'idle';
+    state.epoch += 1;
+    state.loadFailed = true;
+    state.lastError = spec.error;
+    this.clearRegistrations(state);
+    this.plugins.set(spec.id, state);
+    this.emitPluginChanged(state);
+  }
+
+  /**
+   * 外部插件隔离回滚：清理已登记能力与挂载资源，但保留 state 在注册表中
+   * 并标记 failed（enabled:false / lastError 附诊断），不向上抛错。
+   */
+  private async rollbackIsolated(
+    state: PluginState,
+    err: unknown,
+    stage: PluginDiagnosticError['stage'],
+  ): Promise<void> {
+    try {
+      await this.teardownPlugin(state, { stopServices: stage === 'enable' });
+    } catch {
+      // 清理失败的叠加错误不掩盖原始诊断；残余注册已尽力清理。
+    }
+    this.clearRegistrations(state);
+    state.enabled = false;
+    state.epoch += 1;
+    state.phase = 'idle';
+    state.lastError = toDiagnosticError(err, stage);
+    this.emitPluginChanged(state);
   }
 
   async unregister(pluginId: string): Promise<void> {
@@ -281,6 +387,15 @@ export class PluginHost {
       this.assertNotDisposed();
       const state = this.requirePlugin(pluginId);
       if (state.enabled) return;
+      if (state.loadFailed === true) {
+        // scan / load 阶段占位条目：无有效 definition，重 enable 无法自愈
+        throw new HelmError(
+          'plugin_load_failed',
+          `插件 ${pluginId} 加载失败（${state.lastError?.message ?? '未知错误'}），请修复插件源码后使用 reload 或重启 Hub`,
+          409,
+          { pluginId, error: state.lastError },
+        );
+      }
       const prevConfigSchema = state.configSchema;
       state.epoch += 1;
       this.clearRegistrations(state);
@@ -299,6 +414,7 @@ export class PluginHost {
         this.validateUiDeclarations(pluginId, true);
         state.enabled = true;
         state.phase = 'idle';
+        state.lastError = undefined;
       } catch (err) {
         await this.rollbackEnable(state, prevConfigSchema, err, persistedEnabled);
       }
@@ -306,15 +422,28 @@ export class PluginHost {
     });
   }
 
-  async disable(pluginId: string): Promise<void> {
+  async disable(pluginId: string, options: { force?: boolean } = {}): Promise<void> {
     this.assertNotDisposed();
     await this.enqueue(pluginId, async () => {
       this.assertNotDisposed();
       const state = this.requirePlugin(pluginId);
       assertNotLocked(state);
       if (!state.enabled) return;
+      // 运行中任务与 Provider 在途流：硬阻断，force 也绝不跳过（状态一致性优先）。
       assertNoLiveTasks(pluginId, state, this.tracker);
       assertProvidersIdle(pluginId, state, this.options.providers);
+      // 持久资源占用：非 force 时收集并 409 拦截（知情后可 force 停用）。
+      if (options.force !== true) {
+        const usages = await this.collectPluginInUse(pluginId, state);
+        if (usages.length > 0) {
+          throw new HelmError(
+            'plugin_in_use',
+            `插件 ${pluginId} 存在 ${usages.length} 处关联资源占用，停用后相关功能将不可用（确认后可传 force 强制停用）`,
+            409,
+            { pluginId, usages },
+          );
+        }
+      }
       state.phase = 'deactivating';
       let stopError: { err: unknown } | undefined;
       try {
@@ -325,6 +454,7 @@ export class PluginHost {
       state.enabled = false;
       state.epoch += 1;
       state.phase = 'idle';
+      state.lastError = undefined;
       let persistError: { err: unknown } | undefined;
       try {
         await persistEnabled(this.configStore, state, false);
@@ -392,7 +522,13 @@ export class PluginHost {
         rollbackError = rollbackError ?? toJsonSafeError(persistErr);
       }
     }
-    throw wrapEnableError(state.definition.id, err, rollbackError);
+    // 外部插件：记录 lastError 并广播 failed 状态（HTTP/CLI 依然收到原始错误）。
+    const pluginId = state.definition.id;
+    if (!pluginId.startsWith('builtin:')) {
+      state.lastError = toDiagnosticError(err, 'enable');
+      this.emitPluginChanged(state);
+    }
+    throw wrapEnableError(pluginId, err, rollbackError);
   }
 
   private clearRegistrations(state: PluginState): void {
@@ -417,6 +553,77 @@ export class PluginHost {
     await teardownPlugin(state, opts, (s) => this.clearRegistrations(s));
   }
 
+  /**
+   * 持久资源占用聚合：服务自声明（svc.inUse）+ 宿主通用引用探测
+   * （Profile.runtime kind / Profile.model / 会话 model 指向本插件 Provider）。
+   * 轻量测试宿主未实现 profiles.list / listConversations 时（501 unsupported）
+   * 仅跳过宿主资产探测，真实错误照常上抛。
+   */
+  private async collectPluginInUse(pluginId: string, state: PluginState): Promise<PluginInUseItem[]> {
+    const usages: PluginInUseItem[] = await collectServiceInUse(pluginId, state);
+
+    const runtimeKinds = new Set(this.uiRegistry.getProfileRuntimeKinds(pluginId));
+    const providerIds = state.providers.map((p) => p.provider.id);
+    if (runtimeKinds.size === 0 && providerIds.length === 0) return usages;
+
+    let profiles: Array<{
+      id: string;
+      name?: string;
+      model?: string;
+      runtime?: { kind: string };
+    }> = [];
+    if ((runtimeKinds.size > 0 || providerIds.length > 0) && this.options.host.profiles?.list) {
+      try {
+        profiles = (await this.options.host.profiles.list()) as typeof profiles;
+      } catch (err) {
+        if (!(err instanceof HelmError && err.code === 'unsupported')) throw err;
+      }
+    }
+    for (const profile of profiles) {
+      if (runtimeKinds.size > 0 && profile.runtime && runtimeKinds.has(profile.runtime.kind)) {
+        usages.push({
+          kind: 'profile_runtime',
+          id: profile.id,
+          label: `角色 "${profile.name || profile.id}" 绑定了外部运行时 ${profile.runtime.kind}`,
+        });
+      }
+      if (
+        providerIds.length > 0 &&
+        typeof profile.model === 'string' &&
+        providerIds.some((pid) => profile.model!.startsWith(`${pid}/`))
+      ) {
+        usages.push({
+          kind: 'profile_model',
+          id: profile.id,
+          label: `角色 "${profile.name || profile.id}" 默认模型使用了 ${profile.model}`,
+        });
+      }
+    }
+
+    if (providerIds.length > 0) {
+      let conversations: Array<{ id: number; model?: string }> = [];
+      try {
+        conversations = this.options.host.listConversations() as typeof conversations;
+      } catch (err) {
+        if (!(err instanceof HelmError && err.code === 'unsupported')) throw err;
+      }
+      for (const conv of conversations) {
+        if (
+          typeof conv.model === 'string' &&
+          conv.model.length > 0 &&
+          providerIds.some((pid) => conv.model!.startsWith(`${pid}/`))
+        ) {
+          usages.push({
+            kind: 'conversation_model',
+            id: String(conv.id),
+            label: `会话 #${conv.id} 正在使用模型 ${conv.model}`,
+          });
+        }
+      }
+    }
+    return usages;
+  }
+
   private async activateServices(state: PluginState): Promise<void> {
     if (this.servicesStarted) {
       await prepareServices(state);
@@ -430,13 +637,57 @@ export class PluginHost {
     if (this.startPromise) return this.startPromise;
     this.startPromise = (async () => {
       const enabled = [...this.plugins.values()].filter((s) => s.enabled);
-      await startServiceBarrier(enabled);
+      // 无隔离型插件：沿用原子启动屏障（任一失败回滚全部并显式抛错）。
+      if (!enabled.some((s) => s.isolateFailure === true)) {
+        await startServiceBarrier(enabled);
+        this.servicesStarted = true;
+        return;
+      }
+      // 含外部隔离型插件：阶段化启动——全局 prepare 先行，外部插件失败降级
+      // 为 failed 不阻断屏障；内置插件失败仍原子回滚全部已启动并阻断。
+      const prepared: PluginState[] = [];
+      for (const state of enabled) {
+        try {
+          await prepareServices(state);
+          prepared.push(state);
+        } catch (err) {
+          if (state.isolateFailure !== true) {
+            await this.rollbackStartBarrier(prepared);
+            throw err;
+          }
+          await this.rollbackIsolated(state, err, 'enable');
+        }
+      }
+      let startedIdx = 0;
+      for (const state of prepared) {
+        try {
+          await startServices(state);
+          startedIdx += 1;
+        } catch (err) {
+          if (state.isolateFailure !== true) {
+            await this.rollbackStartBarrier(prepared.slice(0, startedIdx));
+            throw err;
+          }
+          await this.rollbackIsolated(state, err, 'enable');
+        }
+      }
       this.servicesStarted = true;
     })();
     try {
       await this.startPromise;
     } finally {
       this.startPromise = undefined;
+    }
+  }
+
+  /** 非隔离插件屏障失败时的原子回滚：stop 失败静默聚合（不掩盖原始诊断）。 */
+  private async rollbackStartBarrier(started: PluginState[]): Promise<void> {
+    for (const prev of started.reverse()) {
+      try {
+        await stopServicesQuietly(prev);
+      } catch {
+        // 回滚失败不掩盖原始启动诊断
+      }
     }
   }
 
@@ -821,6 +1072,10 @@ export class PluginHost {
     let outcome: HookResult<HookPayloadMap[K]>;
     try {
       const r = await pipeline.run(payload, (h) => snapshot.has(h));
+      // turn_settled 单插件异常隔离：逐插件发 warning 告警，不阻断结算链。
+      if (r.isolatedErrors !== undefined && r.isolatedErrors.length > 0) {
+        this.notifyIsolatedHookErrors(r.isolatedErrors);
+      }
       if (r.shortCircuit) {
         outcome =
           r.shortCircuit.action === 'handled'
@@ -930,12 +1185,39 @@ export class PluginHost {
 
   getConfig(pluginId: string): Record<string, unknown> {
     this.assertNotDisposed();
-    return this.configStore ? { ...this.configStore.get(pluginId) } : {};
+    const state = this.plugins.get(pluginId);
+    // 合成有效配置：schema.default 先填底，磁盘显式值覆盖（未存或已 null
+    // 重置的字段动态反映最新 schema.default，不固化在磁盘上）。
+    const stored = this.configStore ? this.configStore.get(pluginId) : {};
+    const schema = state?.configSchema ?? {};
+    const merged: Record<string, unknown> = {};
+    for (const [key, field] of Object.entries(schema)) {
+      if (field.default !== undefined) {
+        merged[key] = field.secret === true ? String(field.default) : field.default;
+      }
+    }
+    return { ...merged, ...stored };
   }
 
   getConfigSchema(pluginId: string): Record<string, PluginConfigFieldSchema> {
     this.assertNotDisposed();
     return this.requirePlugin(pluginId).configSchema ? { ...this.requirePlugin(pluginId).configSchema } : {};
+  }
+
+  /** 配置字段来源映射：configured（磁盘显式）/ default（schema 回退）/ unset。 */
+  getConfigSources(pluginId: string): Record<string, PluginConfigFieldSource> {
+    this.assertNotDisposed();
+    const schema = this.requirePlugin(pluginId).configSchema ?? {};
+    const stored = this.configStore ? this.configStore.get(pluginId) : {};
+    const sources: Record<string, PluginConfigFieldSource> = {};
+    for (const [key, field] of Object.entries(schema)) {
+      const has = Object.hasOwn(stored, key) && stored[key] !== undefined;
+      const configured = field.secret === true ? has && typeof stored[key] === 'string' && (stored[key] as string).length > 0 : has;
+      if (configured) sources[key] = 'configured';
+      else if (field.default !== undefined) sources[key] = 'default';
+      else sources[key] = 'unset';
+    }
+    return sources;
   }
 
   async setConfig(pluginId: string, value: Record<string, unknown>): Promise<void> {
@@ -1021,6 +1303,19 @@ export class PluginHost {
   private emitDocUpdated(pluginId: string, name: string, value: unknown): void {
     const doc: PublicPluginDoc = { pluginId, name, value: jsonClone(value) };
     this.options.host.emitEvent('plugin.doc.updated', { type: 'plugin.doc.updated', doc });
+  }
+
+  /** turn_settled 隔离错误统一告警：逐插件发 warning notification（正文脱敏）。 */
+  private notifyIsolatedHookErrors(errors: IsolatedHookError[]): void {
+    const redact = this.options.redactText ?? ((t: string) => t);
+    for (const { pluginId, error } of errors) {
+      this.options.host.emitEvent('notification', {
+        type: 'notification',
+        level: 'warning',
+        title: `插件 ${pluginId} 回合结算钩子异常`,
+        body: redact(error.message),
+      });
+    }
   }
 
   /** 插件实际状态转换完成后向宿主发 plugin.changed 事件。 */
