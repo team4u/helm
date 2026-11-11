@@ -20,7 +20,7 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { HelmError, type RpcResult } from '@helm/protocol'
-import type { HerdrTransport } from '../../src/builtin-plugins/herdr/contracts.js'
+import type { HerdrEvent, HerdrTransport } from '../../src/builtin-plugins/herdr/contracts.js'
 
 /**
  * Map 形状的交接文件存储（真实落盘）：生产链路 readLocalOutput /
@@ -74,6 +74,28 @@ export interface ServedTransport {
 }
 
 /**
+ * 内部 HerdrEvent → 官方 wire 事件帧（{"event","data"}）。
+ *
+ * 全局 EventEnvelope 名称使用 snake_case（pane_created 等）；专用状态事件
+ * pane.agent_status_changed 保留点号。官方 pane.created/updated 的 EventData
+ * 携带完整 PaneInfo，但生产消费方只读取 pane 身份后重取快照，故 fixture
+ * 只发 pane_id；tab/workspace.closed 走拓扑身份字段——与生产 transport
+ * dispatchEventFrame 解析规则逐条对齐。
+ */
+function eventWireFrame(event: HerdrEvent): string {
+  if (event.type === 'tab.closed') {
+    return `${JSON.stringify({ event: 'tab_closed', data: { tab_id: event.tabId, workspace_id: event.workspaceId } })}\n`
+  }
+  if (event.type === 'workspace.closed') {
+    return `${JSON.stringify({ event: 'workspace_closed', data: { workspace_id: event.workspaceId } })}\n`
+  }
+  // 状态专用事件保留点号（官方契约）；全局 EventEnvelope 使用 snake_case。
+  const wireType = event.type === 'pane.agent_status_changed' ? event.type : event.type.replace('.', '_')
+  const data: Record<string, unknown> = { pane_id: event.paneId }
+  return `${JSON.stringify({ event: wireType, data })}\n`
+}
+
+/**
  * 把受控 FakeTransport 暴露为真实 UDS 行协议服务器（零参插件的生产
  * transport 直连）。targetOf 为每次协议调用的 HerdrTarget 解析函数。
  */
@@ -105,13 +127,20 @@ export async function serveTransport(
           const request = JSON.parse(line) as { id: string; method: string; params: Record<string, unknown> }
           try {
             if (request.method === 'events.subscribe') {
+              // 官方订阅请求：params.subscriptions 为过滤数组；逐窗格状态过滤
+              // （pane.agent_status_changed + pane_id）映射为 options.paneIds 传给
+              // 受控 transport，主树动态重建订阅（paneIds 集合变化）可被观测。
+              const filters = Array.isArray(request.params['subscriptions']) ? (request.params['subscriptions'] as Array<Record<string, unknown>>) : []
+              const paneIds = filters
+                .filter((f) => f['type'] === 'pane.agent_status_changed' && typeof f['pane_id'] === 'string' && f['pane_id'] !== '')
+                .map((f) => f['pane_id'] as string)
               const release = await transport.subscribe(targetOf(), (event) => {
-                writeFrame(`${JSON.stringify({ event })}\n`)
+                writeFrame(eventWireFrame(event))
               }, () => {
                 // 受控 transport 注入流故障：销毁订阅 socket 模拟真实断线，
                 // 客户端 close 路径如实触发其 onError（不静默吞掉注入故障）。
                 socket.destroy()
-              })
+              }, { paneIds })
               writeFrame(`${JSON.stringify({ id: request.id, result: { type: 'subscription_started' } })}\n`)
               // 生产 stop() 直接 socket.destroy()（FIN 不保证对端 close 事件同步
               // 到达）：fixture 在订阅 socket 结束（close 或 error）时同步释放受控
