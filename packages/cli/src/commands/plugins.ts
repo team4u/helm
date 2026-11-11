@@ -290,6 +290,7 @@ export function pluginsCommands(): CommandSpec[] {
     description: '获取插件 client.tsx 编译产物（GET /api/plugins/:id/client.mjs?module=...；--module 缺省 client.tsx）',
     flags: [
       { name: 'module', type: 'string', help: '相对插件 clientRoot 的模块路径（缺省 client.tsx）' },
+      { name: 'chunk', type: 'string', help: '可选 chunk 文件名（如 vendor.js）' },
       { name: 'output', type: 'string', help: '写入目标文件路径（缺省 stdout；--json 时仍写文件并打印元信息）' },
     ],
     positional: '<id>',
@@ -297,6 +298,7 @@ export function pluginsCommands(): CommandSpec[] {
       const parsed = parseFlags(
         [
           { name: 'module', type: 'string' },
+          { name: 'chunk', type: 'string' },
           { name: 'output', type: 'string' },
         ],
         ctx.args,
@@ -304,17 +306,27 @@ export function pluginsCommands(): CommandSpec[] {
       const id = requirePositional(parsed.positionals, 0, 'id')
       assertNoExtraPositionals(parsed.positionals, 1)
       const moduleRef = (parsed.flags.get('module') as string | undefined) ?? 'client.tsx'
+      const chunk = parsed.flags.get('chunk') as string | undefined
       if (parsed.flags.has('output') && typeof parsed.flags.get('output') !== 'string') {
         throw new CliError('--output 需要文件路径', 'invalid_flag_value')
       }
       const outPath = parsed.flags.get('output') as string | undefined
       const hub = await ctx.hub()
-      const path = `/api/plugins/${encodeURIComponent(id)}/client.mjs?module=${encodeURIComponent(moduleRef)}`
+      let path = `/api/plugins/${encodeURIComponent(id)}/client.mjs?module=${encodeURIComponent(moduleRef)}`
+      if (chunk !== undefined) {
+        path += `&chunk=${encodeURIComponent(chunk)}`
+      }
       const response = await hub.raw(path)
       const code = await response.text()
       const contentHash = response.headers.get('x-helm-client-hash') ?? ''
       if (ctx.json) {
-        printResult(ctx, { pluginId: id, module: moduleRef, contentHash, bytes: code.length })
+        printResult(ctx, {
+          pluginId: id,
+          module: moduleRef,
+          ...(chunk !== undefined ? { chunk } : {}),
+          contentHash,
+          bytes: code.length,
+        })
       }
       if (outPath !== undefined) {
         const { writeFile } = await import('node:fs/promises')

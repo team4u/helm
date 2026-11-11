@@ -10,6 +10,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { HelmIcon, CopyButton, Callout } from '@helm/plugin-client'
 import { usePluginContext } from '@helm/plugin-client'
 import type { MarkdownCodeBlockProps } from '@helm/protocol'
+import mermaid from 'mermaid'
 import { getMermaidConfig } from './mermaid-theme.ts'
 import { MermaidPreviewModal } from './MermaidPreviewModal.tsx'
 import './styles.css'
@@ -29,10 +30,7 @@ function setCachedSvg(key: string, svg: string): void {
   mermaidSvgCache.set(key, svg)
 }
 
-async function loadMermaid(): Promise<typeof import('mermaid')['default']> {
-  const mod = await import('mermaid')
-  return mod.default
-}
+export { mermaid }
 
 export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
   const { theme } = usePluginContext()
@@ -69,7 +67,6 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
     timer = setTimeout(() => {
       void (async () => {
         try {
-          const mermaid = await loadMermaid()
           mermaid.initialize(getMermaidConfig(theme))
           const id = `helm-mermaid-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
           const { svg: rendered } = await mermaid.render(id, code)

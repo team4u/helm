@@ -133,7 +133,11 @@ export interface PluginHost {
    * 获取已启用插件 client.tsx 编译产物（GET /api/plugins/:id/client.mjs?module=...）。
    * 停用/未注册/未声明 clientRoot/越根/编译失败显式抛错（HelmError 语义）。
    */
-  getClientModule(pluginId: string, moduleRef: string): Promise<{ code: string; contentHash: string; gzipped?: Uint8Array; exports?: string[] }>
+  getClientModule(
+    pluginId: string,
+    moduleRef: string,
+    options?: { chunk?: string; hash?: string },
+  ): Promise<{ code: string; contentHash: string; gzipped?: Uint8Array; exports?: string[] }>
   /**
    * 外部插件源码静态自检（POST /api/plugins/doctor，body { path? , dir?, id? } 择一）：
    * 真实代际导入 + 临时宿主真实注册 + client 真实编译；结果以报告返回

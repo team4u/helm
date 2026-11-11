@@ -32,6 +32,18 @@ let cacheEpoch = 0
 /** 缓存失效监听器（evict/reset 清理完成后通知；正常 load/seed 不通知，避免循环）。 */
 const invalidationListeners = new Set<() => void>()
 
+const chunkPromiseCache = new Map<string, Promise<Record<string, unknown>>>()
+const pluginLoadedHashes = new Map<string, Set<string>>()
+
+function trackPluginHash(pluginId: string, hash: string): void {
+  let set = pluginLoadedHashes.get(pluginId)
+  if (!set) {
+    set = new Set()
+    pluginLoadedHashes.set(pluginId, set)
+  }
+  set.add(hash)
+}
+
 /**
  * 订阅插件 client 缓存失效（evict/reset 清理完成后触发）。
  * 供仍挂载的组件经 useSyncExternalStore 感知缓存被整体回收后需重新加载，返回退订函数。
@@ -128,6 +140,24 @@ export function evictPluginClientCache(pluginId: string): void {
       inflightLoads.delete(key)
     }
   }
+  for (const [key] of chunkPromiseCache) {
+    if (key.startsWith(`${pluginId}\0`)) {
+      chunkPromiseCache.delete(key)
+    }
+  }
+  const hashes = pluginLoadedHashes.get(pluginId)
+  if (hashes && (globalThis as Record<string, unknown>).__helm_chunk_share) {
+    const share = (globalThis as Record<string, unknown>).__helm_chunk_share as Record<string, unknown>
+    for (const hash of hashes) {
+      const prefix = `${hash}/`
+      for (const k of Object.keys(share)) {
+        if (k.startsWith(prefix)) {
+          delete share[k]
+        }
+      }
+    }
+    pluginLoadedHashes.delete(pluginId)
+  }
   removePluginStyleSheets(pluginId)
   notifyCacheInvalidated()
 }
@@ -138,6 +168,14 @@ export function resetPluginClientCache(): void {
   pluginEpochs.clear()
   cache.clear()
   inflightLoads.clear()
+  chunkPromiseCache.clear()
+  pluginLoadedHashes.clear()
+  if ((globalThis as Record<string, unknown>).__helm_chunk_share) {
+    const share = (globalThis as Record<string, unknown>).__helm_chunk_share as Record<string, unknown>
+    for (const k of Object.keys(share)) {
+      delete share[k]
+    }
+  }
   removePluginStyleSheets(undefined)
   notifyCacheInvalidated()
 }
@@ -152,6 +190,115 @@ export class PluginClientError extends Error {
     this.code = code
     this.status = status
   }
+}
+
+async function evaluateModuleCode(code: string): Promise<Record<string, unknown>> {
+  if (typeof window === 'undefined' || typeof URL.createObjectURL !== 'function') {
+    const b64 = typeof Buffer !== 'undefined'
+      ? Buffer.from(code, 'utf8').toString('base64')
+      : btoa(unescape(encodeURIComponent(code)))
+    const dataUrl = `data:text/javascript;base64,${b64}`
+    return (await import(/* @vite-ignore */ dataUrl)) as Record<string, unknown>
+  }
+  const blobUrl = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))
+  try {
+    return (await import(/* @vite-ignore */ blobUrl)) as Record<string, unknown>
+  } catch {
+    const b64 = typeof Buffer !== 'undefined'
+      ? Buffer.from(code, 'utf8').toString('base64')
+      : btoa(unescape(encodeURIComponent(code)))
+    const dataUrl = `data:text/javascript;base64,${b64}`
+    return (await import(/* @vite-ignore */ dataUrl)) as Record<string, unknown>
+  } finally {
+    URL.revokeObjectURL(blobUrl)
+  }
+}
+
+async function fetchChunkText(
+  pluginId: string,
+  moduleRef: string,
+  contentHash: string,
+  chunkName: string,
+): Promise<string> {
+  const nodeLookup = (globalThis as Record<string, unknown>).__helm_node_chunk_lookup as
+    | ((pluginId: string, moduleRef: string, contentHash: string, chunkName: string) => string | undefined)
+    | undefined
+  if (typeof nodeLookup === 'function') {
+    const text = nodeLookup(pluginId, moduleRef, contentHash, chunkName)
+    if (text !== undefined) return text
+  }
+
+  const headers: Record<string, string> = {}
+  const token = getStoredToken()
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  const url = `/api/plugins/${encodeURIComponent(pluginId)}/client.mjs?module=${encodeURIComponent(moduleRef)}&chunk=${encodeURIComponent(chunkName)}&hash=${encodeURIComponent(contentHash)}`
+  let res: Response
+  try {
+    res = await fetch(url, { headers })
+  } catch (err) {
+    if (typeof nodeLookup === 'function') {
+      const text = nodeLookup(pluginId, moduleRef, contentHash, chunkName)
+      if (text !== undefined) return text
+    }
+    throw new PluginClientError(
+      'client_chunk_fetch_failed',
+      `加载插件 ${pluginId} chunk ${chunkName} 失败：${err instanceof Error ? err.message : String(err)}`,
+      0,
+    )
+  }
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`
+    try {
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      if (body?.error?.message) message = body.error.message
+    } catch {
+      /* ignore */
+    }
+    throw new PluginClientError('client_chunk_http_error', `插件 ${pluginId} chunk ${chunkName}：${message}`, res.status)
+  }
+  return await res.text()
+}
+
+async function loadSingleChunk(
+  pluginId: string,
+  moduleRef: string,
+  contentHash: string,
+  chunkName: string,
+  inFlightFetchTextPromise?: Promise<string>,
+): Promise<Record<string, unknown>> {
+  const key = `${pluginId}\0${moduleRef}\0${contentHash}\0${chunkName}`
+  const pending = chunkPromiseCache.get(key)
+  if (pending !== undefined) return pending
+
+  trackPluginHash(pluginId, contentHash)
+  const run = (async () => {
+    const code = inFlightFetchTextPromise !== undefined
+      ? await inFlightFetchTextPromise
+      : await fetchChunkText(pluginId, moduleRef, contentHash, chunkName)
+    return await evaluateModuleCode(code)
+  })().catch((err: unknown) => {
+    chunkPromiseCache.delete(key)
+    throw err
+  })
+  chunkPromiseCache.set(key, run)
+  return run
+}
+
+;(globalThis as Record<string, unknown>).__helm_import_chunk = async (
+  pluginId: string,
+  moduleRef: string,
+  contentHash: string,
+  chunkName: string,
+  preloads: string[] = [],
+): Promise<Record<string, unknown>> => {
+  if (preloads.length > 0) {
+    const preloadFetches = preloads.map((p) => fetchChunkText(pluginId, moduleRef, contentHash, p))
+    for (let i = 0; i < preloads.length; i++) {
+      const p = preloads[i]!
+      await loadSingleChunk(pluginId, moduleRef, contentHash, p, preloadFetches[i])
+    }
+  }
+  return await loadSingleChunk(pluginId, moduleRef, contentHash, chunkName)
 }
 
 async function fetchModuleText(pluginId: string, moduleRef: string): Promise<{ code: string; contentHash: string }> {
@@ -217,20 +364,14 @@ export async function loadPluginClientModule(pluginId: string, moduleRef: string
         assertCurrent()
         return { module, contentHash }
       }
-      const imported = (async () => {
-        const blobUrl = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))
-        try {
-          return (await import(/* @vite-ignore */ blobUrl)) as Record<string, unknown>
-        } catch (err) {
-          throw new PluginClientError(
-            'client_module_import_failed',
-            `插件 ${pluginId} client 模块 ${moduleRef} 导入失败：${err instanceof Error ? err.message : String(err)}`,
-            0,
-          )
-        } finally {
-          URL.revokeObjectURL(blobUrl)
-        }
-      })()
+      trackPluginHash(pluginId, contentHash)
+      const imported = evaluateModuleCode(code).catch((err) => {
+        throw new PluginClientError(
+          'client_module_import_failed',
+          `插件 ${pluginId} client 模块 ${moduleRef} 导入失败：${err instanceof Error ? err.message : String(err)}`,
+          0,
+        )
+      })
       const entry: CacheEntry = { pluginId, contentHash, namespaced: imported }
       // 样式装载与 resolved 发布都在调用方真正 await 的 namespaced 链上完成：import 迟到完成时
       // 若已失效（epoch / 插件 epoch / entry 身份任一不符）直接显式报错，绝不补挂样式，也绝不

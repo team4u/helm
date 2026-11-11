@@ -12,6 +12,7 @@ import { test, before, after } from 'node:test'
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import {
   AuthService,
   CredentialService,
@@ -20,6 +21,7 @@ import {
   SkillService,
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
+import { createMermaidPlugin } from '../src/builtin-plugins/mermaid.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { compilePluginClientModule } from '../src/plugins/client-compiler.js'
 import { createHubHandler } from '../src/http/index.js'
@@ -176,6 +178,7 @@ before(async () => {
       ctx.ui.screen({ id: 'panel', label: '夹具面板', client: { module: 'client.tsx', export: 'Panel' } })
     },
   })
+  await pluginHost.register(createMermaidPlugin())
 
   const kernel = makeKernel()
   handler = createHubHandler(kernel)
@@ -645,5 +648,196 @@ test('clientRoot 跨平台绝对路径：Windows 盘符合法、foo..bar 目录�
   await assert.rejects(
     pluginHost.register({ id: 'test:seg-root', clientRoot: `${dataDir}/a/../b`, definePlugin() {} }),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_definition',
+  )
+})
+
+// ---------------------------------------------------------------------------
+// 阶段 3（Code Splitting）：按需分包、零膨胀共享 Chunk 桥与端到端渲染
+// ---------------------------------------------------------------------------
+
+test('代码分割与共享 Chunk：builtin:mermaid 主包与异步 chunk 体积收敛，无重复内联膨胀', { timeout: 60_000 }, async () => {
+  const result = await pluginHost.getClientModule('builtin:mermaid', 'index.tsx')
+  assert.ok(result.code.length > 0, '主包代码不能为空')
+  assert.ok(result.gzipped, '必须产出 gzipped 字节')
+
+  // 1. builtin:mermaid 主包 .mjs gzip 体积 < 200 KB
+  assert.ok(
+    result.gzipped.length < 200 * 1024,
+    `主包 gzip 体积 (${result.gzipped.length} 字节) 必须 < 200 KB`,
+  )
+
+  const chunks = result.chunks ?? {}
+  const chunkEntries = Object.entries(chunks)
+  assert.ok(chunkEntries.length > 0, 'mermaid 必须产出异步 chunks')
+
+  // 2. flowDiagram 与 pieDiagram 异步 chunk gzip 体积 < 35 KB
+  const flowEntry = chunkEntries.find(([name]) => name.includes('flowDiagram'))
+  const pieEntry = chunkEntries.find(([name]) => name.includes('pieDiagram'))
+  assert.ok(flowEntry, '产物中必须包含 flowDiagram 异步 chunk')
+  assert.ok(pieEntry, '产物中必须包含 pieDiagram 异步 chunk')
+
+  assert.ok(
+    flowEntry[1].gzipped && flowEntry[1].gzipped.length < 35 * 1024,
+    `flowDiagram chunk gzip (${flowEntry[1].gzipped?.length} 字节) 必须 < 35 KB`,
+  )
+  assert.ok(
+    pieEntry[1].gzipped && pieEntry[1].gzipped.length < 35 * 1024,
+    `pieDiagram chunk gzip (${pieEntry[1].gzipped?.length} 字节) 必须 < 35 KB`,
+  )
+
+  // 3. 所有编译产物（主包 + 全部异步 chunk）gzip 总和 < 1.8 MB（证明无重复内联膨胀）
+  let totalGzipped = result.gzipped.length
+  for (const [, chunk] of chunkEntries) {
+    totalGzipped += chunk.gzipped?.length ?? 0
+  }
+  assert.ok(
+    totalGzipped < 1.8 * 1024 * 1024,
+    `所有编译产物 gzip 总和 (${totalGzipped} 字节) 必须 < 1.8 MB`,
+  )
+})
+
+test('端到端执行：编译产物在 Node 环境通过 __helm_import_chunk 按需加载图表并渲染有效 SVG', { timeout: 60_000 }, async () => {
+  const { GlobalRegistrator } = await import('@happy-dom/global-registrator')
+  GlobalRegistrator.register()
+  try {
+    const result = await pluginHost.getClientModule('builtin:mermaid', 'index.tsx')
+    assert.ok(result.code.length > 0)
+
+    // 挂载运行时依赖 mock
+    const g = globalThis as Record<string, unknown>
+    g.__helm_shared_react = {
+      useEffect: () => {},
+      useRef: () => ({ current: null }),
+      useState: (v: unknown) => [v, () => {}],
+    }
+    g.__helm_shared_plugin_client = {
+      usePluginContext: () => ({ theme: 'dark' }),
+      HelmIcon: () => null,
+      CopyButton: () => null,
+      Callout: () => null,
+    }
+
+    const modUrl = `data:text/javascript;base64,${Buffer.from(result.code, 'utf8').toString('base64')}`
+    const mod = (await import(modUrl)) as {
+      MermaidCodeBlock: unknown
+      mermaid: typeof import('mermaid').default
+    }
+
+    assert.equal(typeof mod.MermaidCodeBlock, 'function', '必须导出 MermaidCodeBlock 组件')
+    assert.ok(mod.mermaid, '必须导出 mermaid 实例')
+
+    // 初始化并渲染 flowchart 与 pie 图表，触发按需加载异步 chunk
+    mod.mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' })
+
+    const flowResult = await mod.mermaid.render('test-flow-render', 'graph TD;\nA-->B;')
+    assert.ok(flowResult.svg.includes('<svg'), 'Flowchart 渲染结果必须包含 <svg')
+
+    const pieResult = await mod.mermaid.render('test-pie-render', 'pie title Pets\n"Dogs" : 386\n"Cats" : 85')
+    assert.ok(pieResult.svg.includes('<svg'), 'Pie 图表渲染结果必须包含 <svg')
+  } finally {
+    GlobalRegistrator.unregister()
+  }
+})
+
+test('HTTP Chunk 端点：200/gzip/immutable 缓存、304 协商、400 形状非法、409 过时 hash、404 缺失与 409 停用防护', { timeout: 60_000 }, async () => {
+  const result = await pluginHost.getClientModule('builtin:mermaid', 'index.tsx')
+  const contentHash = result.contentHash
+  const chunks = result.chunks ?? {}
+  const flowChunkName = Object.keys(chunks).find((k) => k.includes('flowDiagram'))!
+  assert.ok(flowChunkName)
+
+  // 1. 有效 chunk 请求：200 OK，immutable 缓存头，gzip 内容
+  const res200 = await call(
+    handler,
+    'GET',
+    `/api/plugins/builtin%3Amermaid/client.mjs?module=index.tsx&chunk=${flowChunkName}&hash=${contentHash}`,
+    { headers: { 'accept-encoding': 'gzip' } },
+  )
+  assert.equal(res200.status, 200)
+  assert.equal(res200.headers.get('content-encoding'), 'gzip')
+  assert.equal(res200.headers.get('cache-control'), 'private, max-age=31536000, immutable')
+  assert.equal(res200.headers.get('etag'), `"${contentHash}:${flowChunkName}"`)
+  assert.equal(res200.headers.get('x-helm-client-hash'), contentHash)
+
+  const flowChunk = chunks[flowChunkName]
+  assert.ok(flowChunk)
+  const decompressed = gunzipSync(res200.buffer).toString('utf8')
+  assert.equal(decompressed, flowChunk.code)
+
+  // 2. 304 协商缓存命中
+  const res304 = await call(
+    handler,
+    'GET',
+    `/api/plugins/builtin%3Amermaid/client.mjs?module=index.tsx&chunk=${flowChunkName}&hash=${contentHash}`,
+    { headers: { 'if-none-match': `"${contentHash}:${flowChunkName}"` } },
+  )
+  assert.equal(res304.status, 304)
+  assert.equal(res304.text, '')
+  assert.equal(res304.headers.get('etag'), `"${contentHash}:${flowChunkName}"`)
+  assert.equal(res304.headers.get('cache-control'), 'private, max-age=31536000, immutable')
+
+  // 3. 非法 chunk 形状直接 400
+  for (const bad of ['../escape.js', 'a/../b.js', 'bad..js', 'noext', 'chunk.mjs', '/abs.js', 'dir/sub.js']) {
+    const resBad = await call(
+      handler,
+      'GET',
+      `/api/plugins/builtin%3Amermaid/client.mjs?module=index.tsx&chunk=${encodeURIComponent(bad)}&hash=${contentHash}`,
+    )
+    assert.equal(resBad.status, 400, `chunk=${bad} 应返回 400`)
+    const body = JSON.parse(resBad.text) as { error?: { code?: string } }
+    assert.equal(body.error?.code, 'invalid_client_module')
+  }
+
+  // 4. hash 失效保护（409 client_chunk_stale）
+  const resStale = await call(
+    handler,
+    'GET',
+    `/api/plugins/builtin%3Amermaid/client.mjs?module=index.tsx&chunk=${flowChunkName}&hash=000000000000000000000000`,
+  )
+  assert.equal(resStale.status, 409)
+  const bodyStale = JSON.parse(resStale.text) as { error?: { code?: string } }
+  assert.equal(bodyStale.error?.code, 'client_chunk_stale')
+
+  // 5. 不存在的 chunk（404 client_chunk_not_found）
+  const resMissing = await call(
+    handler,
+    'GET',
+    `/api/plugins/builtin%3Amermaid/client.mjs?module=index.tsx&chunk=nonexistent_chunk_404.js&hash=${contentHash}`,
+  )
+  assert.equal(resMissing.status, 404)
+  const bodyMissing = JSON.parse(resMissing.text) as { error?: { code?: string } }
+  assert.equal(bodyMissing.error?.code, 'client_chunk_not_found')
+
+  // 6. 停用插件（409 plugin_client_unavailable）
+  await pluginHost.disable('builtin:mermaid')
+  try {
+    const resDisabled = await call(
+      handler,
+      'GET',
+      `/api/plugins/builtin%3Amermaid/client.mjs?module=index.tsx&chunk=${flowChunkName}&hash=${contentHash}`,
+    )
+    assert.equal(resDisabled.status, 409)
+    const bodyDisabled = JSON.parse(resDisabled.text) as { error?: { code?: string } }
+    assert.equal(bodyDisabled.error?.code, 'plugin_client_unavailable')
+  } finally {
+    await pluginHost.enable('builtin:mermaid')
+  }
+
+  // 7. 直接调用 PluginHost getClientModule 检验
+  const directChunk = await pluginHost.getClientModule('builtin:mermaid', 'index.tsx', { chunk: flowChunkName })
+  assert.equal(directChunk.code, flowChunk.code)
+  assert.equal(directChunk.contentHash, contentHash)
+
+  await assert.rejects(
+    pluginHost.getClientModule('builtin:mermaid', 'index.tsx', { chunk: '../bad.js' }),
+    (err: unknown) => err instanceof HelmError && err.code === 'invalid_client_module',
+  )
+  await assert.rejects(
+    pluginHost.getClientModule('builtin:mermaid', 'index.tsx', { chunk: flowChunkName, hash: 'badhash' }),
+    (err: unknown) => err instanceof HelmError && err.code === 'client_chunk_stale',
+  )
+  await assert.rejects(
+    pluginHost.getClientModule('builtin:mermaid', 'index.tsx', { chunk: 'missing.js' }),
+    (err: unknown) => err instanceof HelmError && err.code === 'client_chunk_not_found',
   )
 })

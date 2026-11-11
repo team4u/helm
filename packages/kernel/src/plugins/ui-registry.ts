@@ -91,6 +91,8 @@ function assertArtifactMatchList(
 }
 
 export interface ClientModuleOptions {
+  chunk?: string;
+  hash?: string;
   getPluginLifecycle: (pluginId: string) => {
     identity: unknown;
     enabled: boolean;
@@ -788,6 +790,20 @@ export class UiRegistry {
       throw new HelmError('plugin_host_disposed', 'PluginHost 已 dispose', 409);
     }
     assertModuleRefShape(pluginId, moduleRef);
+    if (options.chunk !== undefined) {
+      if (
+        typeof options.chunk !== 'string' ||
+        !/^[A-Za-z0-9._-]+\.js$/.test(options.chunk) ||
+        options.chunk.includes('..')
+      ) {
+        throw new HelmError(
+          'invalid_client_module',
+          `插件 ${pluginId} 的 chunk 模块名称非法（需匹配 /^[A-Za-z0-9._-]+\\.js$/ 且不含 ..）：${String(options.chunk)}`,
+          400,
+          { pluginId, chunk: String(options.chunk) },
+        );
+      }
+    }
     const info = options.getPluginLifecycle(pluginId);
     if (!info || !info.enabled || info.phase !== 'idle') {
       throw new HelmError('plugin_client_unavailable', `插件 ${pluginId} 未启用，不提供 client 模块`, 409, {
@@ -832,6 +848,33 @@ export class UiRegistry {
         { pluginId, module: moduleRef },
       );
     }
+
+    if (options.chunk !== undefined) {
+      if (options.hash !== undefined && options.hash !== result.contentHash) {
+        throw new HelmError(
+          'client_chunk_stale',
+          `插件 ${pluginId} 请求的 chunk hash (${options.hash}) 与当前产物 hash (${result.contentHash}) 不匹配`,
+          409,
+          { pluginId, module: moduleRef, chunk: options.chunk, hash: options.hash, currentHash: result.contentHash },
+        );
+      }
+      const chunkData = result.chunks?.[options.chunk];
+      if (!chunkData) {
+        throw new HelmError(
+          'client_chunk_not_found',
+          `插件 ${pluginId} 模块 ${moduleRef} 未生成 chunk: ${options.chunk}`,
+          404,
+          { pluginId, module: moduleRef, chunk: options.chunk },
+        );
+      }
+      return {
+        code: chunkData.code,
+        contentHash: result.contentHash,
+        gzipped: chunkData.gzipped,
+        exports: [],
+      };
+    }
+
     return result;
   }
 

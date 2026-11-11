@@ -35,7 +35,8 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/ws": "^8.18.0",
-    "@helm/node": "workspace:*"
+    "@happy-dom/global-registrator": "^21.0.4",
+    "@helm/node": "workspace:*",
+    "@types/ws": "^8.18.0"
   }
 }
