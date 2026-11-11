@@ -98,13 +98,18 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
+  box-sizing: border-box;
 }
 
+.jr-table-wrap table.jr-table,
 .jr-table {
-  width: 100%;
+  display: table !important;
+  width: 100% !important;
   border-collapse: collapse;
+  margin: 0 !important;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
+  table-layout: auto;
 }
 
 .jr-table th {
@@ -114,12 +119,14 @@
   font-weight: 600;
   color: var(--fg-muted);
   background: var(--bg-subtle);
+  border: none;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 
 .jr-table td {
   padding: 7px 10px;
+  border: none;
   border-bottom: 1px solid var(--border);
   color: var(--fg);
   vertical-align: middle;
@@ -136,8 +143,37 @@
 /* 聊天代码块内联卡片容器（沿用宿主代码块外距节奏）。 */
 .jr-card-wrap {
   margin: 8px 0;
+  width: 100%;
 }
 
 .jr-card-wrap > .card {
   margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 卡片原语：纵向流与组件间距节奏（12px 呼吸间距，消灭 0px 贴边）。 */
+.jr-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.jr-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.jr-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.jr-card-subtitle {
+  font-size: 11.5px;
+  color: var(--fg-muted);
 }

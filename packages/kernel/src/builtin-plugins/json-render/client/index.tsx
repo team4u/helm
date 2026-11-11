@@ -8,6 +8,7 @@
  * - 原语样式全部在本插件 CSS（styles.css，编译为 __helmClientCss 宿主托管注入）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import './styles.css'
 import { usePluginContext, ViewBoundary, HelmIcon, Callout } from '@helm/plugin-client'
 import type { MarkdownCodeBlockProps } from '@helm/protocol'
 import { CopyButton } from '@helm/plugin-client'

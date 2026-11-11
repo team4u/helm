@@ -92,11 +92,11 @@ function CardImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
   const title = str(evalIn(node.props['title'], ctx.scope))
   const subtitle = str(evalIn(node.props['subtitle'], ctx.scope))
   return (
-    <div className="card">
+    <div className="card jr-card">
       {(title !== '' || subtitle !== '') && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: node.children.length > 0 ? 10 : 0 }}>
-          {title !== '' && <div style={{ fontSize: 13, fontWeight: 600 }}>{title}</div>}
-          {subtitle !== '' && <div style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{subtitle}</div>}
+        <div className="jr-card-header">
+          {title !== '' && <div className="jr-card-title">{title}</div>}
+          {subtitle !== '' && <div className="jr-card-subtitle">{subtitle}</div>}
         </div>
       )}
       {ctx.renderChildren(node.children)}
@@ -261,7 +261,7 @@ function StepsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
           <div key={i} className="row">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
               <span className={`badge ${meta.cls}`}>
-                <HelmIcon name={meta.icon} size={10} />
+                <HelmIcon name={meta.icon} size={10} className={item.status === 'running' ? 'spin-slow' : undefined} />
               </span>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
                 <span style={{ fontSize: 12.5 }}>{item.title}</span>
@@ -483,14 +483,15 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
       {label !== '' && (
-        <span style={{ fontSize: 11.5, color: 'var(--fg-secondary)' }}>
+        <span style={{ fontSize: 12, color: 'var(--fg-secondary)' }}>
           {label}
           {secret && <span style={{ color: 'var(--warn)' }}>（机密）</span>}
         </span>
       )}
-      <span className="jr-stack-row" style={{ gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
         <input
           className="input"
+          style={{ flex: 1, minWidth: 0 }}
           type={secret ? 'password' : 'text'}
           value={text}
           placeholder={placeholder}
@@ -500,7 +501,8 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
         {node.props['action'] !== undefined && (
           <button
             type="button"
-            className="btn"
+            className="btn btn-sm"
+            style={{ flexShrink: 0 }}
             disabled={pending}
             aria-busy={pending}
             onClick={() => ctx.runAction(node.props['action'], { ...ctx.scope, $value: text }, pendingKey)}
@@ -513,7 +515,7 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
             {pending ? '提交中' : succeeded ? '已提交' : '提交'}
           </button>
         )}
-      </span>
+      </div>
     </label>
   )
 }
@@ -533,7 +535,7 @@ function SelectImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
     : []
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-      {label !== '' && <span style={{ fontSize: 11.5, color: 'var(--fg-secondary)' }}>{label}</span>}
+      {label !== '' && <span style={{ fontSize: 12, color: 'var(--fg-secondary)' }}>{label}</span>}
       <Select
         value={selected}
         options={options}
@@ -627,7 +629,7 @@ function CheckboxGroupImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecR
   const pending = ctx.isPending(pendingKey)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      {label !== '' && <span style={{ fontSize: 11.5, color: 'var(--fg-secondary)' }}>{label}</span>}
+      {label !== '' && <span style={{ fontSize: 12, color: 'var(--fg-secondary)' }}>{label}</span>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         {options.map((o) => (
           <Checkbox

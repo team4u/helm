@@ -115,9 +115,12 @@ async function importCompiled(root: string, pluginId: string, npmRoots?: Array<{
   return import(f) as Promise<Record<string, unknown>>
 }
 
-test('json-render client 真实编译：模块可导入且导出 JsonRenderCodeBlock 组件', { timeout: 60_000 }, async () => {
+test('json-render client 真实编译：模块可导入且导出 JsonRenderCodeBlock 组件与插件样式', { timeout: 60_000 }, async () => {
   const mod = await importCompiled(JSON_RENDER_ROOT, 'builtin:json-render')
   assert.equal(typeof mod['JsonRenderCodeBlock'], 'function', 'JsonRenderCodeBlock 导出为组件函数')
+  assert.equal(typeof mod['__helmClientCss'], 'string', '__helmClientCss 导出为 string')
+  assert.ok((mod['__helmClientCss'] as string).includes('.jr-card'), '必须包含 .jr-card 样式')
+  assert.ok((mod['__helmClientCss'] as string).includes('.jr-metric-grid'), '必须包含 .jr-metric-grid 样式')
 })
 
 test('mermaid client 真实编译（受控 npm bundle）：模块可导入且不依赖宿主 mermaid 全局', { timeout: 120_000 }, async () => {
