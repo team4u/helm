@@ -14,10 +14,8 @@ import { ModelCenter } from '../src/models/ModelCenter.js'
 import {
   buildDefaultModelOptions,
   buildMergedProviders,
-  buildProviderCategoryCounts,
   DEFAULT_PROVIDERS,
   filterProviders,
-  getProviderIconName,
   summarizeProviders,
   UNSET_MODEL_VALUE,
   type ProviderItem,
@@ -58,35 +56,11 @@ test('model-center-model: 默认供应商列表包含指定的 9 大主流供应
     assert.equal(ids.includes(expected), true, `默认列表应包含供应商 ${expected}`)
   }
 
-  // 验证商业与本地分类划分
   const ollama = DEFAULT_PROVIDERS.find((p) => p.id === 'ollama')
-  assert.equal(ollama?.type, 'local')
   assert.equal(Boolean(ollama?.baseUrl), true)
 
   const anthropic = DEFAULT_PROVIDERS.find((p) => p.id === 'anthropic')
-  assert.equal(anthropic?.type, 'commercial')
   assert.equal(anthropic?.models && anthropic.models.length > 0, true)
-})
-
-test('filterProviders: 分类 Tab 过滤（all / configured / commercial / local）', { timeout: 60_000 }, () => {
-  const testProviders: ProviderItem[] = [
-    { id: 'p1', name: 'Cloud One', type: 'commercial', configured: true, modelsCount: 2 },
-    { id: 'p2', name: 'Cloud Two', type: 'commercial', configured: false, modelsCount: 1 },
-    { id: 'p3', name: 'Local One', type: 'local', configured: true, modelsCount: 3 },
-    { id: 'p4', name: 'Local Two', type: 'local', configured: false, modelsCount: 0 },
-  ]
-
-  const all = filterProviders(testProviders, { query: '', categoryTab: 'all' })
-  assert.equal(all.length, 4)
-
-  const configured = filterProviders(testProviders, { query: '', categoryTab: 'configured' })
-  assert.deepEqual(configured.map((p) => p.id), ['p1', 'p3'])
-
-  const commercial = filterProviders(testProviders, { query: '', categoryTab: 'commercial' })
-  assert.deepEqual(commercial.map((p) => p.id), ['p1', 'p2'])
-
-  const local = filterProviders(testProviders, { query: '', categoryTab: 'local' })
-  assert.deepEqual(local.map((p) => p.id), ['p3', 'p4'])
 })
 
 test('filterProviders: 模糊多维检索（支持名称、ID、描述及所包含的模型搜索，忽略大小写）', { timeout: 60_000 }, () => {
@@ -94,7 +68,6 @@ test('filterProviders: 模糊多维检索（支持名称、ID、描述及所包�
     {
       id: 'anthropic',
       name: 'Anthropic',
-      type: 'commercial',
       configured: true,
       modelsCount: 2,
       description: '前沿 Claude 系列大模型',
@@ -106,7 +79,6 @@ test('filterProviders: 模糊多维检索（支持名称、ID、描述及所包�
     {
       id: 'openai',
       name: 'OpenAI',
-      type: 'commercial',
       configured: false,
       modelsCount: 2,
       description: 'GPT-4o 与通用基座',
@@ -118,37 +90,23 @@ test('filterProviders: 模糊多维检索（支持名称、ID、描述及所包�
   ]
 
   // 按供应商名称搜索
-  const r1 = filterProviders(testProviders, { query: 'anthropic', categoryTab: 'all' })
+  const r1 = filterProviders(testProviders, { query: 'anthropic' })
   assert.deepEqual(r1.map((p) => p.id), ['anthropic'])
 
   // 按供应商 ID 搜索（大写）
-  const r2 = filterProviders(testProviders, { query: 'OPENAI', categoryTab: 'all' })
+  const r2 = filterProviders(testProviders, { query: 'OPENAI' })
   assert.deepEqual(r2.map((p) => p.id), ['openai'])
 
   // 按模型 ID / 名称搜索
-  const r3 = filterProviders(testProviders, { query: 'sonnet', categoryTab: 'all' })
+  const r3 = filterProviders(testProviders, { query: 'sonnet' })
   assert.deepEqual(r3.map((p) => p.id), ['anthropic'])
 
-  const r4 = filterProviders(testProviders, { query: 'Reasoning', categoryTab: 'all' })
+  const r4 = filterProviders(testProviders, { query: 'Reasoning' })
   assert.deepEqual(r4.map((p) => p.id), ['openai'])
 
   // 不存在项
-  const r5 = filterProviders(testProviders, { query: 'not-found-xyz', categoryTab: 'all' })
+  const r5 = filterProviders(testProviders, { query: 'not-found-xyz' })
   assert.equal(r5.length, 0)
-})
-
-test('buildProviderCategoryCounts: 准确汇总各 Tab 的计数', { timeout: 60_000 }, () => {
-  const testProviders: ProviderItem[] = [
-    { id: 'p1', name: 'C1', type: 'commercial', configured: true, modelsCount: 1 },
-    { id: 'p2', name: 'C2', type: 'commercial', configured: false, modelsCount: 1 },
-    { id: 'p3', name: 'L1', type: 'local', configured: true, modelsCount: 1 },
-  ]
-
-  const counts = buildProviderCategoryCounts(testProviders)
-  assert.equal(counts.all, 3)
-  assert.equal(counts.configured, 2)
-  assert.equal(counts.commercial, 2)
-  assert.equal(counts.local, 1)
 })
 
 test('summarizeProviders: 正确统计供应商总数与已配置数', { timeout: 60_000 }, () => {
@@ -192,21 +150,7 @@ test('buildMergedProviders: 正确与凭证、自定义网关及远程目录模�
 
   const vllm = merged.find((p) => p.id === 'custom-vllm')
   assert.equal(vllm?.name, '本地 vLLM')
-  assert.equal(vllm?.type, 'local')
   assert.equal(vllm?.configured, true)
-})
-
-test('getProviderIconName: 为各大供应商匹配正确的矢量图标', { timeout: 60_000 }, () => {
-  assert.equal(getProviderIconName('anthropic'), 'sparkles')
-  assert.equal(getProviderIconName('openai'), 'bot')
-  assert.equal(getProviderIconName('deepseek'), 'cpu')
-  assert.equal(getProviderIconName('gemini'), 'sparkles')
-  assert.equal(getProviderIconName('ollama'), 'hard-drive')
-  assert.equal(getProviderIconName('openrouter'), 'network')
-  assert.equal(getProviderIconName('mistral'), 'zap')
-  assert.equal(getProviderIconName('groq'), 'zap')
-  assert.equal(getProviderIconName('custom'), 'sliders')
-  assert.equal(getProviderIconName('unknown-model'), 'cpu')
 })
 
 test('buildDefaultModelOptions: 哨兵空值项、可用模型过滤与目录外保留', { timeout: 60_000 }, () => {
@@ -292,9 +236,8 @@ test('ModelCard SSR: 正确渲染供应商卡片头部、徽章、描述与模�
   // 4. 描述
   assert.match(html, /深度求索 R1 与通用基座。/)
 
-  // 5. 底部模型数量与类型胶囊
+  // 5. 底部模型数量
   assert.match(html, /2 个模型可用/)
-  assert.match(html, /商业云端/)
 
   // 6. 零 Emoji
   assert.equal(EMOJI_REGEX.test(html), false, '卡片渲染不得包含任何 Emoji')
@@ -324,9 +267,6 @@ test('ModelCard SSR: 未配置与选中态渲染断言', { timeout: 60_000 }, ()
 
   // 未配置徽章
   assert.match(html, /class="badge badge-neutral"[^>]*>未配置<\/span>/)
-
-  // 本地私有胶囊
-  assert.match(html, /本地私有/)
   assert.match(html, /3 个模型可用/)
 
   // 零 Emoji
@@ -364,7 +304,6 @@ test('ModelDetailDrawer SSR: inline={true} 渲染凭据表单、连通性按钮�
   assert.match(html, /OpenAI/)
   assert.match(html, /class="[^"]*mono[^"]*"[^>]*>openai<\/div>/)
   assert.match(html, /已配置/)
-  assert.match(html, /商业云端/)
 
   // 2. 表单字段（API Key 输入框与 Base URL 输入框）
   assert.match(html, /API 密钥/)
@@ -450,13 +389,7 @@ test('ModelCenter SSR: 完整渲染顶栏、Tab 栏、检索框、分类药丸�
   assert.match(html, /class="[^"]*primary-search-box[^"]*"/)
   assert.match(html, /placeholder="搜索供应商名称、ID 或包含的模型\.\.\."/)
 
-  // 4. 分类药丸
-  assert.match(html, /全部/)
-  assert.match(html, /已配置/)
-  assert.match(html, /商业云端/)
-  assert.match(html, /本地私有/)
-
-  // 5. 卡片网格流
+  // 4. 卡片网格流
   assert.match(html, /class="[^"]*primary-center-grid[^"]*"/)
   assert.match(html, /Anthropic/)
   assert.match(html, /OpenAI/)

@@ -71,20 +71,6 @@ export interface PluginConfigFormProps {
 }
 
 /**
- * 根据插件 ID 推导线性矢量图标名称
- */
-function getPluginIcon(id: string): string {
-  const norm = (id ?? '').toLowerCase()
-  if (norm.includes('assistant')) return 'bot'
-  if (norm.includes('workflow')) return 'workflow'
-  if (norm.includes('herdr')) return 'terminal'
-  if (norm.includes('superagent')) return 'sparkles'
-  if (norm.includes('trigger')) return 'webhook'
-  if (norm.includes('tool')) return 'wrench'
-  return 'boxes'
-}
-
-/**
  * 表单字段初始值推导纯函数
  */
 function initialFormValues(config: PluginConfigResponse): Record<string, ConfigValue> {
@@ -401,7 +387,6 @@ export function PluginDetailDrawer({
     await handleToggle(false, { force: true })
   }
 
-  const iconName = plugin ? getPluginIcon(plugin.id) : 'boxes'
   const versionLabel = plugin?.version ? `v${plugin.version.replace(/^v/, '')}` : null
   const settingsPanels =
     store?.groupedUi?.settingsPanels?.filter((p) => p.pluginId === plugin?.id) ?? []
@@ -430,9 +415,6 @@ export function PluginDetailDrawer({
           {/* 头部元信息 */}
           <div className="plugin-drawer-header">
             <div className="plugin-drawer-header-left">
-              <div className="plugin-drawer-icon-wrap">
-                <HelmIcon name={iconName} size={22} />
-              </div>
               <div className="plugin-drawer-title-col">
                 <div className="plugin-drawer-title-row">
                   <DialogTitle className="plugin-drawer-title">

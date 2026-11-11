@@ -1,28 +1,16 @@
 /**
- * 插件中心纯函数模型与分类过滤
+ * 插件中心纯函数模型与检索过滤
  *
- * 提供插件分类推导、多维检索（名称/ID/工具/动作）、状态筛选及指标统计。
+ * 提供多维检索（名称/ID/工具/动作）、状态筛选及指标统计。
+ * 遵循前端规范：纯属性驱动，零 ID 硬编码猜测。
  */
 import type { PluginSummary } from '@helm/protocol'
 
 export type PluginStatusFilter = 'all' | 'enabled' | 'disabled'
-export type PluginCategory = 'all' | 'builtin' | 'orchestration' | 'tools' | 'external'
-export type PluginCategoryTab =
-  | 'all'
-  | 'runtime'
-  | 'tools'
-  | 'orchestration'
-  | 'system'
-  | 'enabled'
-  | 'apps'
 
 export interface PluginFilterState {
-  query: string
+  query?: string
   status?: PluginStatusFilter
-  category?: PluginCategory
-  categoryTab?: PluginCategoryTab
-  /** grouped UI Screen 贡献（应用筛选数据源；缺省时 apps 标签返回空集）。 */
-  screens?: Array<{ pluginId: string }>
 }
 
 export interface PluginSummaryStats {
@@ -32,142 +20,6 @@ export interface PluginSummaryStats {
   failed: number
   totalTools: number
   totalActions: number
-}
-
-export interface PluginCategoryCounts {
-  all: number
-  runtime: number
-  tools: number
-  orchestration: number
-  system: number
-  enabled: number
-  builtin?: number
-  external?: number
-  apps?: number
-}
-
-/**
- * 根据插件 ID 推导其业务类别
- *
- * - orchestration: 协同编排类（如 builtin:workflow, builtin:herdr, builtin:superagent）
- * - tools: 工具扩展类（如 builtin:tools, tools:*）
- * - builtin: 核心系统内置插件（如 builtin:profile, builtin:triggers）
- * - external: 外部三方及社区自定义插件
- */
-export function derivePluginCategory(id: string): PluginCategory {
-  const normalized = (id ?? '').trim().toLowerCase()
-  if (
-    normalized === 'builtin:workflow' ||
-    normalized === 'builtin:herdr' ||
-    normalized === 'builtin:superagent' ||
-    normalized === 'workflow' ||
-    normalized === 'herdr' ||
-    normalized === 'superagent'
-  ) {
-    return 'orchestration'
-  }
-  if (
-    normalized === 'builtin:tools' ||
-    normalized === 'tools' ||
-    normalized.startsWith('tool:') ||
-    normalized.startsWith('tools:')
-  ) {
-    return 'tools'
-  }
-  if (normalized.startsWith('builtin:')) {
-    return 'builtin'
-  }
-  return 'external'
-}
-
-/**
- * 判定插件是否属于指定的分类药丸标签（screens 为 grouped UI Screen 贡献，
- * 用于「应用」筛选；缺省时不命中 apps）。
- */
-export function isPluginInTab(
-  plugin: PluginSummary,
-  tab: PluginCategoryTab,
-  screens?: Array<{ pluginId: string }>,
-): boolean {
-  if (tab === 'all') return true
-  if (tab === 'enabled') return Boolean(plugin.enabled)
-  if (tab === 'apps') return isAppPlugin(plugin, screens)
-  const id = (plugin.id ?? '').toLowerCase()
-  const category = derivePluginCategory(plugin.id)
-
-  if (tab === 'orchestration') {
-    return category === 'orchestration'
-  }
-  if (tab === 'runtime') {
-    return (
-      id.includes('herdr') ||
-      id.includes('runtime') ||
-      id.includes('node') ||
-      id.includes('sandbox') ||
-      (plugin.actions ?? []).some((a) => a.includes('bridge') || a.includes('exec') || a.includes('node'))
-    )
-  }
-  if (tab === 'tools') {
-    return category === 'tools' || (plugin.tools?.length ?? 0) > 0
-  }
-  if (tab === 'system') {
-    return category === 'builtin' && !id.includes('herdr')
-  }
-  return false
-}
-
-/**
- * 应用（全栈微应用）判定：非 builtin 外部插件且声明至少一个 Screen 视图。
- * 内置系统插件的视图不混入用户应用列表；screens 缺省时一律返回 false。
- */
-export function isAppPlugin(
-  plugin: Pick<PluginSummary, 'id'>,
-  screens: Array<{ pluginId: string }> | undefined,
-): boolean {
-  if (screens === undefined || plugin.id.startsWith('builtin:')) return false
-  return screens.some((s) => s.pluginId === plugin.id)
-}
-
-/**
- * 计算多维分类标签与状态的数量徽章统计（screens 用于「应用」计数，缺省为 0）
- */
-export function buildCategoryCounts(
-  plugins: PluginSummary[],
-  screens?: Array<{ pluginId: string }>,
-): PluginCategoryCounts {
-  const list = Array.isArray(plugins) ? plugins : []
-  let enabled = 0
-  let runtime = 0
-  let tools = 0
-  let orchestration = 0
-  let system = 0
-  let builtin = 0
-  let external = 0
-  let apps = 0
-
-  for (const p of list) {
-    if (p.enabled) enabled++
-    if (isPluginInTab(p, 'runtime')) runtime++
-    if (isPluginInTab(p, 'tools')) tools++
-    if (isPluginInTab(p, 'orchestration')) orchestration++
-    if (isPluginInTab(p, 'system')) system++
-    if (isPluginInTab(p, 'apps', screens)) apps++
-    const cat = derivePluginCategory(p.id)
-    if (cat === 'builtin') builtin++
-    if (cat === 'external') external++
-  }
-
-  return {
-    all: list.length,
-    runtime,
-    tools,
-    orchestration,
-    system,
-    enabled,
-    builtin,
-    external,
-    apps,
-  }
 }
 
 /**
@@ -186,26 +38,13 @@ export function filterPlugins(plugins: PluginSummary[], filter: PluginFilterStat
   if (!Array.isArray(plugins)) return []
   const query = filter.query?.trim().toLowerCase() ?? ''
   const status = filter.status ?? 'all'
-  const category = filter.category ?? 'all'
-  const categoryTab = filter.categoryTab ?? 'all'
 
   return plugins.filter((plugin) => {
     // 1. 状态筛选
     if (status === 'enabled' && !plugin.enabled) return false
     if (status === 'disabled' && plugin.enabled) return false
 
-    // 2. 分类筛选
-    if (category !== 'all') {
-      const pluginCategory = derivePluginCategory(plugin.id)
-      if (pluginCategory !== category) return false
-    }
-
-    // 3. 药丸标签分类筛选（含「应用」：外部插件 + Screen 贡献）
-    if (categoryTab !== 'all') {
-      if (!isPluginInTab(plugin, categoryTab, filter.screens)) return false
-    }
-
-    // 4. 关键字搜索匹配（name / id / tools / actions）
+    // 2. 关键字搜索匹配（name / id / tools / actions）
     if (query) {
       const matchName = (plugin.name ?? '').toLowerCase().includes(query)
       const matchId = (plugin.id ?? '').toLowerCase().includes(query)

@@ -505,6 +505,11 @@ export interface PluginSummary {
   name: string
   /** 插件简短功能描述（来自插件定义，前端直接展示，不做 ID 特判）。 */
   description?: string
+  /**
+   * 插件线性矢量图标名称（对应 HelmIcon name，可选）。
+   * 缺省时前端使用默认图标占位（DEFAULT_PLUGIN_ICON: 'puzzle'）。
+   */
+  icon?: string
   version?: string
   /** 常驻不可卸载（如 builtin:profile）。 */
   locked: boolean
@@ -1138,6 +1143,11 @@ export interface PluginDefinition {
   name?: string
   /** 插件简短功能描述：面向插件中心卡片与 CLI 列表展示，一句话说明职责边界。 */
   description?: string
+  /**
+   * 插件线性矢量图标名称（对应 HelmIcon name，可选）。
+   * 缺省时使用默认图标占位。
+   */
+  icon?: string
   version?: string
   /** true 表示常驻不可卸载（builtin:profile）。 */
   locked?: boolean

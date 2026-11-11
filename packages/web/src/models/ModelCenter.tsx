@@ -9,12 +9,9 @@ import { ModelCard } from './ModelCard.js'
 import { ModelDetailDrawer } from './ModelDetailDrawer.js'
 import {
   buildMergedProviders,
-  buildProviderCategoryCounts,
   DEFAULT_PROVIDERS,
   filterProviders,
-  PROVIDER_CATEGORY_TABS,
   summarizeProviders,
-  type ProviderCategoryTab,
   type ProviderItem,
   type ProviderModelItem,
 } from './model-center-model.js'
@@ -53,7 +50,6 @@ export function ModelCenter({
 }: ModelCenterProps): React.JSX.Element {
   const store = useHelmStore()
   const [query, setQuery] = useState('')
-  const [activeTab, setActiveTab] = useState<ProviderCategoryTab>('all')
 
   // 动态目录与全局默认模型状态
   const [catalog, setCatalog] = useState<ModelProviderSummary[]>([])
@@ -101,17 +97,13 @@ export function ModelCenter({
     )
   }, [customProviders, store.credentials, store.providers, store.models, catalog])
 
-  // 分类计数与总量统计
-  const categoryCounts = useMemo(() => buildProviderCategoryCounts(providers), [providers])
+  // 总量统计
   const summaryStats = useMemo(() => summarizeProviders(providers), [providers])
 
-  // 综合过滤（Tab 类别 + 关键词）
+  // 综合过滤（按关键词）
   const filteredProviders = useMemo(() => {
-    return filterProviders(providers, {
-      query,
-      categoryTab: activeTab,
-    })
-  }, [providers, query, activeTab])
+    return filterProviders(providers, { query })
+  }, [providers, query])
 
   // 路由与抽屉联动：支持主屏和分屏下的 providerId 与 tab
   const currentTarget =
@@ -307,28 +299,6 @@ export function ModelCenter({
               )}
             </div>
 
-            <div className="primary-category-pills" role="tablist">
-              {PROVIDER_CATEGORY_TABS.map((tab) => {
-                const count = categoryCounts[tab.key]
-                const isActive = activeTab === tab.key
-                return (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    role="tab"
-                    aria-selected={isActive}
-                    className={`primary-category-pill ${isActive ? 'is-active' : ''}`}
-                    onClick={() => setActiveTab(tab.key)}
-                  >
-                    <span>{tab.label}</span>
-                    <span className="badge badge-neutral mono" style={{ fontSize: 10 }}>
-                      {count}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-
             <button
               type="button"
               className="btn btn-sm btn-ghost"
@@ -353,15 +323,14 @@ export function ModelCenter({
               </div>
               <div className="primary-center-empty-text">未找到匹配的供应商</div>
               <div className="primary-center-empty-hint">
-                没有符合检索条件的大语言模型供应商，请尝试更换关键词或筛选类别。
+                没有符合检索条件的大语言模型供应商，请尝试更换关键词。
               </div>
-              {(query || activeTab !== 'all') && (
+              {query && (
                 <button
                   type="button"
                   className="btn btn-sm btn-ghost"
                   onClick={() => {
                     setQuery('')
-                    setActiveTab('all')
                   }}
                 >
                   重置筛选条件

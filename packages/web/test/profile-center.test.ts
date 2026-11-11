@@ -11,7 +11,6 @@ import {
   buildProfileCategoryCounts,
   buildProfileModelOptions,
   filterProfiles,
-  getProfileIcon,
   isHerdrProfile,
   isSystemProfile,
   profileIdValid,
@@ -49,6 +48,7 @@ const mockProfiles: [Profile, Profile, Profile, Profile, Profile] = [
     description: '系统全局总控与中枢协调路由',
     model: 'claude-3-7-sonnet',
     defaultModel: 'claude-3-7-sonnet',
+    managedByPlugin: 'builtin:superagent',
     tags: ['superagent', 'router'],
     system: '你作为超级代理中枢执行总控编排',
     skills: ['search', 'bash'],
@@ -224,17 +224,12 @@ test('profile-center-model：buildProfileCategoryCounts 与 summarizeProfiles', 
   })
 })
 
-test('profile-center-model：profileIdValid 与 getProfileIcon', { timeout: 60_000 }, () => {
+test('profile-center-model：profileIdValid 规则校验', { timeout: 60_000 }, () => {
   assert.equal(profileIdValid('code-reviewer'), true)
   assert.equal(profileIdValid('agent-1'), true)
   assert.equal(profileIdValid(''), false)
   assert.equal(profileIdValid('UPPER'), false)
   assert.equal(profileIdValid('with space'), false)
-
-  assert.equal(getProfileIcon({ id: 'superagent' }), 'sparkles')
-  assert.equal(getProfileIcon({ id: 'watchdog' }), 'shield')
-  assert.equal(getProfileIcon({ id: 'herdr-1', runtime: { kind: 'herdr', agent: 'agy' } }), 'terminal')
-  assert.equal(getProfileIcon({ id: 'custom-bot' }), 'bot')
 })
 
 test('profile-center-model：buildProfileModelOptions 仅展示已配置模型且未配置模型不出现', { timeout: 60_000 }, () => {

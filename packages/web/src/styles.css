@@ -4313,9 +4313,11 @@ input::placeholder {
 .plugin-card-meta {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 2px;
   flex: 1;
   min-width: 0;
+  text-align: left;
 }
 
 .plugin-card-title-row {
@@ -4323,6 +4325,7 @@ input::placeholder {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  width: 100%;
 }
 
 .plugin-card-name {
@@ -4332,6 +4335,7 @@ input::placeholder {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: left;
 }
 
 .plugin-card-version {
@@ -4358,6 +4362,8 @@ input::placeholder {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: left;
+  width: 100%;
 }
 
 .plugin-card-desc {
@@ -4481,7 +4487,7 @@ input::placeholder {
 
 .plugin-drawer-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   padding: 16px 20px;
@@ -4492,7 +4498,7 @@ input::placeholder {
 
 .plugin-drawer-header-left {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   min-width: 0;
   flex: 1;
@@ -4514,9 +4520,11 @@ input::placeholder {
 .plugin-drawer-title-col {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 3px;
   min-width: 0;
   flex: 1;
+  text-align: left;
 }
 
 .plugin-drawer-title-row {
@@ -4524,6 +4532,7 @@ input::placeholder {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  width: 100%;
 }
 
 .plugin-drawer-title {
@@ -4534,6 +4543,7 @@ input::placeholder {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: left;
 }
 
 .plugin-drawer-id {
@@ -4542,6 +4552,8 @@ input::placeholder {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: left;
+  width: 100%;
 }
 
 .plugin-drawer-desc {
@@ -4549,6 +4561,12 @@ input::placeholder {
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--fg-muted);
+  text-align: left;
+}
+
+.plugin-drawer-close-btn {
+  flex-shrink: 0;
+  margin-top: -2px;
 }
 
 .plugin-drawer-body {

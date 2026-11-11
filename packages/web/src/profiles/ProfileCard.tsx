@@ -1,7 +1,6 @@
 import React from 'react'
 import type { Profile } from './profile-center-model.js'
 import {
-  getProfileIcon,
   isHerdrProfile,
   isSystemProfile,
   resolveProfileModel,
@@ -16,7 +15,7 @@ export interface ProfileCardProps {
 
 /**
  * 智能体角色卡片组件：
- * - 消费 .primary-card 视觉规范，呈现角色名称、ID、系统锁、描述、模型胶囊与技能统计；
+ * - 消费 .primary-card 视觉规范，呈现角色名称、ID、系统锁、描述、模型胶囊与技能统计，零图标杂音；
  * - 键盘 Enter/Space 与点击激活；
  * - 严格遵循零 Emoji 铁律。
  */
@@ -28,7 +27,6 @@ export function ProfileCard({
   const isSystem = isSystemProfile(profile)
   const isHerdr = isHerdrProfile(profile)
   const model = resolveProfileModel(profile)
-  const iconName = getProfileIcon(profile)
   const displayName = profile.name || profile.id
 
   const skillsLabel =
@@ -54,9 +52,6 @@ export function ProfileCard({
       onKeyDown={handleKeyDown}
     >
       <div className="primary-card-header">
-        <div className="primary-card-icon-wrap">
-          <HelmIcon name={iconName} size={16} />
-        </div>
         <div className="primary-card-meta">
           <div className="primary-card-title-row">
             <span className="primary-card-name" title={displayName}>

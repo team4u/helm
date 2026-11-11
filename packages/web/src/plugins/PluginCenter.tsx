@@ -7,10 +7,8 @@ import { PluginCard } from './PluginCard.js'
 import { PluginDetailDrawer } from './PluginDetailDrawer.js'
 import { PluginInstallModal } from './PluginInstallModal.js'
 import {
-  buildCategoryCounts,
   filterPlugins,
   summarizePlugins,
-  type PluginCategoryTab,
 } from './plugin-center-model.js'
 
 export interface PluginCenterProps {
@@ -20,20 +18,10 @@ export interface PluginCenterProps {
   inlineDrawer?: boolean
 }
 
-const CATEGORY_TABS: Array<{ key: PluginCategoryTab; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'apps', label: '应用' },
-  { key: 'runtime', label: '运行时' },
-  { key: 'tools', label: '工具与能力' },
-  { key: 'orchestration', label: '编排与流程' },
-  { key: 'system', label: '系统与辅助' },
-  { key: 'enabled', label: '已启用' },
-]
-
 /**
  * 全屏插件中心（Plugin Center）主视图容器：
  * - 升格为系统一级主舞台视图，彻底淘汰旧的居中模态小弹窗；
- * - 顶部工具栏：多维检索搜索框、分类药丸标签栏与分类数量统计徽章；
+ * - 顶部工具栏：关键字检索搜索框；
  * - 响应式卡片网格：消费 PluginCard 自适应流式呈现；
  * - 详情与配置抽屉：右侧联动滑出 PluginDetailDrawer，深链与 URL Hash 闭环同步；
  * - 快捷启停与通知：安全调用 pluginsApi，提供在途任务冲突提示；
@@ -46,7 +34,6 @@ export function PluginCenter({
 }: PluginCenterProps): React.JSX.Element {
   const store = useHelmStore()
   const [query, setQuery] = useState('')
-  const [activeTab, setActiveTab] = useState<PluginCategoryTab>('all')
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [installOpen, setInstallOpen] = useState(false)
   // 刷新代数：安装/更新/卸载后拉取列表；SSE plugin.changed 到达时避免重复拉取覆盖当前 target
@@ -54,18 +41,11 @@ export function PluginCenter({
   const refreshGeneration = React.useRef(0)
 
   const plugins = store.plugins ?? []
-  // Screen 贡献作为「应用」分类数据源（SSE 实时；内置插件视图不混入用户应用）
-  const screens = store.groupedUi?.screens ?? []
-  const categoryCounts = useMemo(() => buildCategoryCounts(plugins, screens), [plugins, screens])
   const summaryStats = useMemo(() => summarizePlugins(plugins), [plugins])
 
   const filteredPlugins = useMemo(() => {
-    return filterPlugins(plugins, {
-      query,
-      categoryTab: activeTab,
-      screens,
-    })
-  }, [plugins, query, activeTab, screens])
+    return filterPlugins(plugins, { query })
+  }, [plugins, query])
 
   const selectedPluginId =
     store.primaryTarget.kind === 'plugins' ? store.primaryTarget.pluginId : undefined
@@ -214,7 +194,7 @@ export function PluginCenter({
         </div>
       </div>
 
-      {/* 检索与分类标签栏 */}
+      {/* 检索工具栏 */}
       <div className="plugin-center-toolbar">
         <div className="plugin-search-box">
           <HelmIcon name="search" size={14} />
@@ -237,26 +217,6 @@ export function PluginCenter({
               <HelmIcon name="x" size={12} />
             </button>
           )}
-        </div>
-
-        <div className="plugin-category-pills" role="tablist" aria-label="插件分类筛选">
-          {CATEGORY_TABS.map((tab) => {
-            const count = categoryCounts[tab.key] ?? 0
-            const isActive = activeTab === tab.key
-            return (
-              <button
-                key={tab.key}
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                className={`plugin-category-pill${isActive ? ' is-active' : ''}`}
-                onClick={() => setActiveTab(tab.key)}
-              >
-                <span className="plugin-category-pill-label">{tab.label}</span>
-                <span className="badge tabular-nums">{count}</span>
-              </button>
-            )
-          })}
         </div>
       </div>
 
@@ -282,19 +242,18 @@ export function PluginCenter({
             </div>
             <div className="plugin-center-empty-text">未找到匹配的插件</div>
             <div className="plugin-center-empty-hint text-subtle">
-              请尝试调整搜索关键字或切换分类标签。
+              请尝试调整搜索关键字。
             </div>
-            {(query || activeTab !== 'all') && (
+            {query && (
               <button
                 type="button"
                 className="btn btn-sm"
                 onClick={() => {
                   setQuery('')
-                  setActiveTab('all')
                 }}
               >
                 <HelmIcon name="rotate-ccw" size={12} />
-                <span>重置筛选条件</span>
+                <span>重置搜索条件</span>
               </button>
             )}
           </div>

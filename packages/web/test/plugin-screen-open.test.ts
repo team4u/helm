@@ -18,7 +18,6 @@ import * as ReactDOMClient from 'react-dom/client'
 import type { PluginSummary } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { PluginCard } from '../src/plugins/PluginCard.js'
-import { buildCategoryCounts, filterPlugins } from '../src/plugins/plugin-center-model.js'
 import { makeTestStore } from './helpers/store.js'
 import type { HelmStoreValue, ResolvedTarget } from '../src/lib/types.js'
 
@@ -167,38 +166,3 @@ test('PluginDetailDrawer 契约：enabled 插件经 store.openTarget 打开主�
   assert.doesNotMatch(src, /history\.(push|replace)State/, '不得直接操作浏览器历史')
 })
 
-// ---------------------------------------------------------------------------
-// PluginCenter 模型：「应用」分类
-// ---------------------------------------------------------------------------
-
-test('PluginCenter 模型：「应用」分类只统计非 builtin 且有 Screen 贡献的外部插件', { timeout: 60_000 }, () => {
-  const plugins = [
-    makePlugin({ id: 'todo-app', name: '待办应用', enabled: true }),
-    makePlugin({ id: 'tracker-app', name: '追踪应用', enabled: false }),
-    makePlugin({ id: 'community:plain', name: '无视图插件', enabled: true }),
-    makePlugin({ id: 'builtin:superagent', name: 'SuperAgent', enabled: true }),
-  ]
-  const screens = [
-    { pluginId: 'todo-app' },
-    { pluginId: 'tracker-app' },
-    { pluginId: 'builtin:superagent' },
-  ]
-
-  const counts = buildCategoryCounts(plugins, screens)
-  assert.equal(counts.apps, 2, '仅 todo-app 与 tracker-app（内置 superagent 视图不混入）')
-
-  const apps = filterPlugins(plugins, { query: '', categoryTab: 'apps', screens })
-  assert.deepEqual(apps.map((p) => p.id), ['todo-app', 'tracker-app'], '停用应用同样保留（可重新启用）')
-
-  // screens 缺省：应用标签返回空集，其余分类不受影响
-  const noScreens = filterPlugins(plugins, { query: '', categoryTab: 'apps' })
-  assert.deepEqual(noScreens, [])
-  assert.equal(buildCategoryCounts(plugins).apps, 0)
-
-  // 既有分类计数不受 screens 参数影响（回归保护；superagent 属编排类不计 system）
-  const countsNoScreens = buildCategoryCounts(plugins)
-  assert.equal(countsNoScreens.all, 4)
-  assert.equal(countsNoScreens.enabled, 3)
-  assert.equal(countsNoScreens.orchestration, 1, 'superagent 属编排与流程')
-  assert.equal(countsNoScreens.system, 0, '无其他 builtin 系统插件')
-})

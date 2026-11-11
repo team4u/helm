@@ -878,3 +878,34 @@ test('PluginConfigForm：必填且无 default 的字段不渲染重置按钮', {
     container.remove()
   }
 })
+
+test('PluginDetailDrawer：标题与 ID 靠左对齐，零图标渲染，右上角关闭按钮具备独立类名', { timeout: 60_000 }, () => {
+  const plugin = makePlugin({
+    id: 'custom:unspecified-icon',
+    name: '自定义扩展插件',
+    icon: undefined,
+  })
+
+  const html = renderToString(
+    e(PluginDetailDrawer, {
+      plugin,
+      open: true,
+      inline: true,
+      onClose: () => {},
+      onToggleEnabled: async () => {},
+      toggling: false,
+    }),
+  )
+
+  // 1. 标题与 ID 渲染
+  assert.match(html, /自定义扩展插件/)
+  assert.match(html, /custom:unspecified-icon/)
+  assert.match(html, /plugin-drawer-title-col/)
+  assert.match(html, /plugin-drawer-id/)
+
+  // 2. 右上角关闭按钮
+  assert.match(html, /plugin-drawer-close-btn/)
+
+  // 3. 杜绝图标容器
+  assert.doesNotMatch(html, /plugin-drawer-icon-wrap/)
+})

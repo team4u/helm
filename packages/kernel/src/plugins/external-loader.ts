@@ -579,6 +579,9 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
   if (def.name !== undefined && (typeof def.name !== 'string' || def.name.length === 0)) {
     throw fail('name 提供时必须是非空字符串');
   }
+  if (def.icon !== undefined && (typeof def.icon !== 'string' || def.icon.trim().length === 0)) {
+    throw fail('icon 提供时必须是非空字符串');
+  }
   if (def.id.startsWith('builtin:')) {
     throw new HelmError(
       'invalid_plugin_definition',

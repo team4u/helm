@@ -3,7 +3,6 @@ import type { Profile } from './profile-center-model.js'
 import type { StarterDraft } from './profile-center-model.js'
 import {
   buildProfileModelOptions,
-  getProfileIcon,
   isSystemProfile,
   profileIdValid,
   profilesApi,
@@ -302,12 +301,6 @@ export function ProfileDetailDrawer({
     }
   }
 
-  const iconName = getProfileIcon({
-    id: form.id || profile?.id,
-    tags: profile?.tags,
-    runtime: profile?.runtime,
-  })
-
   const titleText = isNew
     ? '新建智能体角色'
     : form.name || form.id || profile?.name || profile?.id || '角色详情'
@@ -330,9 +323,6 @@ export function ProfileDetailDrawer({
           {/* 抽屉头部 */}
           <div className="primary-drawer-header">
             <div className="primary-drawer-header-left">
-              <div className="primary-drawer-icon-wrap">
-                <HelmIcon name={iconName} size={20} />
-              </div>
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
                   <DialogTitle className="primary-drawer-title">

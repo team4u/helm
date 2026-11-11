@@ -49,6 +49,7 @@ export function createTriggersPlugin(): PluginDefinition {
     id: TRIGGERS_PLUGIN_ID,
     name: '触发器（cron + webhook）',
     description: '入站连接器：cron 定时与 webhook 入站触发，经防逃逸信封投递到目标会话。',
+    icon: 'webhook',
     version: '0.1.0',
     clientRoot: resolveTriggersClientRoot(),
     definePlugin(ctx) {

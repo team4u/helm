@@ -280,6 +280,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
     id: APPS_PLUGIN_ID,
     name: '应用中心',
     description: '全栈微应用目录与生命周期：validate/publish/list/remove 动作、应用中心视图与 app-builder 受管技能。',
+    icon: 'boxes',
     version: '0.1.0',
     locked: false,
     clientRoot: resolveClientRoot(),

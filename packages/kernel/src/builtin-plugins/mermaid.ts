@@ -39,6 +39,7 @@ export function createMermaidPlugin(): PluginDefinition {
     id: MERMAID_PLUGIN_ID,
     name: 'Mermaid 图表',
     description: '聊天 ```mermaid 代码块渲染：把 Mermaid 文本渲染为流程图/时序图/甘特图等矢量图表。',
+    icon: 'git-branch',
     version: '0.1.0',
     clientRoot: resolveClientRoot(),
     npmDependencies: { mermaid: resolveKernelPackageRoot() },

@@ -35,10 +35,6 @@ const { renderToString } = await import('react-dom/server')
 import type { PluginSummary } from '@helm/protocol'
 import { pluginsApi } from '../src/lib/api.js'
 import { HelmStoreContext } from '../src/lib/store-context.js'
-import {
-  buildCategoryCounts,
-  type PluginCategoryTab,
-} from '../src/plugins/plugin-center-model.js'
 import { makeTestStore } from './helpers/store.js'
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -122,24 +118,10 @@ const mockPluginsWithFailure: PluginSummary[] = [
 ]
 
 // ---------------------------------------------------------------------------
-// 1. buildCategoryCounts 模型单测
+// 1. PluginCenter SSR 与主体结构渲染
 // ---------------------------------------------------------------------------
 
-test('buildCategoryCounts：正确计算全量、运行时、工具、编排、系统与已启用计数', { timeout: 60_000 }, () => {
-  const counts = buildCategoryCounts(mockPlugins)
-  assert.equal(counts.all, 5, '全部插件总数')
-  assert.equal(counts.enabled, 4, '已启用总数')
-  assert.equal(counts.orchestration, 2, '编排与流程 (workflow, herdr)')
-  assert.equal(counts.runtime, 1, '运行时 (herdr)')
-  assert.equal(counts.tools, 3, '工具与能力 (assistant, workflow, calculator)')
-  assert.equal(counts.system, 2, '系统与辅助 (assistant, triggers)')
-})
-
-// ---------------------------------------------------------------------------
-// 2. PluginCenter SSR 与主体结构渲染
-// ---------------------------------------------------------------------------
-
-test('PluginCenter SSR：渲染搜索框、分类药丸、统计徽章与卡片网格', { timeout: 60_000 }, async () => {
+test('PluginCenter SSR：渲染搜索框、统计徽章与卡片网格', { timeout: 60_000 }, async () => {
   const { PluginCenter } = await import('../src/plugins/PluginCenter.js')
   const store = makeTestStore({
     plugins: mockPlugins,
@@ -157,15 +139,7 @@ test('PluginCenter SSR：渲染搜索框、分类药丸、统计徽章与卡片�
   assert.match(html, /class="[^"]*plugin-search-box[^"]*"/)
   assert.match(html, /placeholder="[^"]*搜索/)
 
-  // 3. 多维分类标签栏文案
-  assert.match(html, /全部/)
-  assert.match(html, /运行时/)
-  assert.match(html, /工具与能力/)
-  assert.match(html, /编排与流程/)
-  assert.match(html, /系统与辅助/)
-  assert.match(html, /已启用/)
-
-  // 4. 统计指标显示（无故障态时不展示异常计数）
+  // 3. 统计指标显示（无故障态时不展示异常计数）
   assert.match(html, /共\s*5\s*个插件/)
   assert.match(html, /4\s*个已启用/)
   assert.doesNotMatch(html, /个异常/)
@@ -205,7 +179,7 @@ test('PluginCenter SSR：存在 failed 故障态插件时顶栏统计追加异�
 // 3. DOM 交互测试：分类过滤、搜索过滤、卡片点击打开抽屉与关闭抽屉
 // ---------------------------------------------------------------------------
 
-test('PluginCenter DOM 交互：分类标签过滤与搜索过滤实时联动', { timeout: 60_000 }, async () => {
+test('PluginCenter DOM 交互：搜索过滤实时联动', { timeout: 60_000 }, async () => {
   const { PluginCenter } = await import('../src/plugins/PluginCenter.js')
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -227,18 +201,6 @@ test('PluginCenter DOM 交互：分类标签过滤与搜索过滤实时联动', 
   // 初始状态包含 5 个卡片
   let cards = host.querySelectorAll('.plugin-card')
   assert.equal(cards.length, 5)
-
-  // 点击“编排与流程”标签
-  const tabs = Array.from(host.querySelectorAll('.plugin-category-pill'))
-  const orchTab = tabs.find((t) => t.textContent?.includes('编排与流程'))
-  assert.ok(orchTab, '应存在编排与流程分类标签')
-
-  await act(async () => {
-    orchTab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-  })
-
-  cards = host.querySelectorAll('.plugin-card')
-  assert.equal(cards.length, 2, '编排与流程应仅包含 workflow 和 herdr')
 
   // 搜索框输入 "workflow"
   const searchInput = host.querySelector<HTMLInputElement>('.plugin-search-box input')

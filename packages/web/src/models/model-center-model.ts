@@ -1,17 +1,15 @@
 /**
- * 模型与凭证中心纯函数模型与分类过滤
+ * 模型与凭证中心纯函数模型与检索过滤
  *
  * 覆盖：
  * - 供应商与模型数据结构定义；
  * - 内置主流大语言模型供应商静态元数据（Anthropic, OpenAI, DeepSeek, Gemini, Ollama 等）；
  * - 多维检索（按供应商名称、ID、描述及所包含的模型名称搜索）；
- * - 分类过滤（全部、已配置、商业云端、本地私有）；
- * - 分类计数与指标统计。
+ * - 指标统计与默认模型选项构建。
+ * - 遵循前端规范：纯属性驱动，零 ID 字符串硬编码推测。
  */
 import type { ModelProviderSummary, ProviderConfig } from '@helm/protocol'
 import type { CredentialSummary, ModelDescriptor } from '../lib/api.js'
-
-export type ProviderType = 'commercial' | 'local'
 
 export interface ProviderModelItem {
   id: string
@@ -24,7 +22,7 @@ export interface ProviderModelItem {
 export interface ProviderItem {
   id: string
   name: string
-  type: ProviderType
+  type?: string
   configured: boolean
   modelsCount: number
   description?: string
@@ -36,11 +34,8 @@ export interface ProviderItem {
   models?: ProviderModelItem[]
 }
 
-export type ProviderCategoryTab = 'all' | 'configured' | 'commercial' | 'local'
-
 export interface FilterProvidersOptions {
-  query: string
-  categoryTab: ProviderCategoryTab
+  query?: string
 }
 
 export interface ProviderSummaryStats {
@@ -55,7 +50,6 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
   {
     id: 'anthropic',
     name: 'Anthropic',
-    type: 'commercial',
     configured: false,
     modelsCount: 3,
     description: 'Claude 系列前沿模型，支持超长上下文窗口与深度逻辑推理。',
@@ -68,7 +62,6 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
   {
     id: 'openai',
     name: 'OpenAI',
-    type: 'commercial',
     configured: false,
     modelsCount: 4,
     description: 'GPT-4o 与 o1/o3 深度推理大模型，行业顶级通用基座能力。',
@@ -82,7 +75,6 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
   {
     id: 'deepseek',
     name: 'DeepSeek',
-    type: 'commercial',
     configured: false,
     modelsCount: 2,
     description: '深度求索通用基座与 R1 满血强化学习推理大模型，极致高性价比。',
@@ -94,60 +86,50 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
   {
     id: 'gemini',
     name: 'Google Gemini',
-    type: 'commercial',
     configured: false,
     modelsCount: 3,
     description: '原生多模态大模型，支持百万级超长上下文与原生工具调用。',
     models: [
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', tags: ['极速', '多模态', '1M'], enabled: true },
-      { id: 'gemini-2.0-pro', name: 'Gemini 2.0 Pro', tags: ['旗舰分析', '2M'], enabled: true },
-      { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', tags: ['长文本', '多模态'], enabled: true },
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', tags: ['超长上下文', '2M'], enabled: true },
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', tags: ['低延迟', '多模态'], enabled: true },
+      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', tags: ['极速响应'], enabled: true },
     ],
   },
   {
     id: 'ollama',
     name: 'Ollama',
-    type: 'local',
     configured: false,
-    modelsCount: 3,
+    modelsCount: 0,
     baseUrl: 'http://127.0.0.1:11434',
-    description: '本地部署开源模型运行引擎，数据完全本地私密，无需外网凭证。',
-    models: [
-      { id: 'llama3.3:70b', name: 'Llama 3.3 70B', tags: ['开源旗舰', '本地私有'], enabled: true },
-      { id: 'qwen2.5-coder:32b', name: 'Qwen 2.5 Coder 32B', tags: ['代码专家', '本地'], enabled: true },
-      { id: 'deepseek-r1:14b', name: 'DeepSeek R1 14B', tags: ['本地推理', '蒸馏'], enabled: true },
-    ],
+    dynamic: true,
+    description: '本地私有化大模型运行平台，通过本地守护进程提供零外部依赖推理服务。',
+    models: [],
   },
   {
     id: 'openrouter',
     name: 'OpenRouter',
-    type: 'commercial',
     configured: false,
-    modelsCount: 3,
-    description: '大模型统一聚合路由网关，单一 API 密钥自由调度全球各家顶尖模型。',
-    models: [
-      { id: 'anthropic/claude-3.7-sonnet', name: 'Claude 3.7 Sonnet (Router)', tags: ['聚合路由'], enabled: true },
-      { id: 'openai/gpt-4o', name: 'GPT-4o (Router)', tags: ['聚合路由'], enabled: true },
-      { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B (Router)', tags: ['开源聚合'], enabled: true },
-    ],
+    modelsCount: 0,
+    baseUrl: 'https://openrouter.ai/api/v1',
+    dynamic: true,
+    description: '聚合全球数百家模型供应商的统一网关，支持智能路由与模型弹性调度。',
+    models: [],
   },
   {
     id: 'mistral',
     name: 'Mistral AI',
-    type: 'commercial',
     configured: false,
     modelsCount: 3,
-    description: '欧洲领先开源大模型提供商，在多语言逻辑、推理与代码生成表现优异。',
+    description: '欧洲顶级开源与商业大模型系列，兼具优秀的多语言与逻辑推理能力。',
     models: [
-      { id: 'mistral-large-latest', name: 'Mistral Large', tags: ['旗舰推理', '128K'], enabled: true },
-      { id: 'codestral-latest', name: 'Codestral', tags: ['代码补全', '256K'], enabled: true },
-      { id: 'mistral-small-latest', name: 'Mistral Small', tags: ['低延迟', '高并发'], enabled: true },
+      { id: 'mistral-large-latest', name: 'Mistral Large', tags: ['旗舰基座', '128K'], enabled: true },
+      { id: 'codestral-latest', name: 'Codestral', tags: ['代码生成', '32K'], enabled: true },
+      { id: 'ministral-8b-latest', name: 'Ministral 8B', tags: ['端侧极速'], enabled: true },
     ],
   },
   {
     id: 'groq',
     name: 'Groq',
-    type: 'commercial',
     configured: false,
     modelsCount: 2,
     description: '基于自研 LPU 芯片的超高吞吐推理加速平台，数百 Token/s 极低延迟响应。',
@@ -159,7 +141,6 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
   {
     id: 'magpie',
     name: 'Magpie 网关',
-    type: 'local',
     configured: false,
     modelsCount: 0,
     dynamic: true,
@@ -169,7 +150,6 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
   {
     id: 'custom',
     name: '自定义 OpenAI 兼容接口',
-    type: 'local',
     configured: false,
     modelsCount: 1,
     baseUrl: 'http://127.0.0.1:8000/v1',
@@ -180,50 +160,18 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
   },
 ]
 
-export const PROVIDER_CATEGORY_TABS: Array<{ key: ProviderCategoryTab; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'configured', label: '已配置' },
-  { key: 'commercial', label: '商业云端' },
-  { key: 'local', label: '本地私有' },
-]
-
-/**
- * 根据供应商 ID 推导线性矢量图标名称
- */
-export function getProviderIconName(id: string): string {
-  const norm = (id ?? '').toLowerCase().trim()
-  if (norm.includes('anthropic') || norm.includes('claude')) return 'sparkles'
-  if (norm.includes('openai') || norm.includes('gpt')) return 'bot'
-  if (norm.includes('deepseek')) return 'cpu'
-  if (norm.includes('gemini') || norm.includes('google')) return 'sparkles'
-  if (norm.includes('ollama')) return 'hard-drive'
-  if (norm.includes('openrouter')) return 'network'
-  if (norm.includes('mistral')) return 'zap'
-  if (norm.includes('groq')) return 'zap'
-  if (norm.includes('magpie')) return 'sparkles'
-  if (norm.includes('custom')) return 'sliders'
-  return 'cpu'
-}
-
 /**
  * 多维过滤供应商列表：
- * 1. 过滤分类 Tab（all / configured / commercial / local）；
- * 2. 匹配关键字（供应商名称、ID、描述或包含的模型 ID/名称）。
+ * 匹配关键字（供应商名称、ID、描述或包含的模型 ID/名称）。
  */
 export function filterProviders(
   providers: ProviderItem[],
   options: FilterProvidersOptions,
 ): ProviderItem[] {
   const term = (options.query ?? '').trim().toLowerCase()
-  const tab = options.categoryTab ?? 'all'
 
   return providers.filter((provider) => {
-    // 1. 分类匹配
-    if (tab === 'configured' && !provider.configured) return false
-    if (tab === 'commercial' && provider.type !== 'commercial') return false
-    if (tab === 'local' && provider.type !== 'local') return false
-
-    // 2. 搜索词匹配
+    // 搜索词匹配
     if (!term) return true
 
     if (provider.id.toLowerCase().includes(term)) return true
@@ -260,45 +208,36 @@ export const UNSET_MODEL_VALUE = '__unset__'
  */
 export function buildDefaultModelOptions(
   models: ModelDescriptor[],
-  currentModel: string,
+  currentValue?: string,
 ): Array<{ value: string; label: string; meta?: string }> {
-  const list: Array<{ value: string; label: string; meta?: string }> = [
-    { value: UNSET_MODEL_VALUE, label: '未设置（未配置模型的会话无法回复）' },
+  const options: Array<{ value: string; label: string; meta?: string }> = [
+    { value: UNSET_MODEL_VALUE, label: '未设置（继承系统基线）' },
   ]
+
   for (const m of models) {
     if (!m.available) continue
-    list.push({ value: m.id, label: m.label ? `${m.label} (${m.id})` : m.id, meta: m.provider })
+    options.push({
+      value: m.id,
+      label: m.label || m.modelId,
+      meta: m.provider,
+    })
   }
+
+  // 若当前配置的模型不在已启用可用模型列表中（如历史配置、已删除提供商或凭据未配），保留为首选显示项防静默丢失
+  const trimmed = currentValue?.trim()
   if (
-    currentModel !== '' &&
-    currentModel !== UNSET_MODEL_VALUE &&
-    !models.some((m) => m.id === currentModel && m.available)
+    trimmed &&
+    trimmed !== UNSET_MODEL_VALUE &&
+    !options.some((opt) => opt.value === trimmed)
   ) {
-    list.push({ value: currentModel, label: currentModel, meta: '目录外' })
-  }
-  return list
-}
-
-/**
- * 汇总各分类 Tab 下的供应商数量
- */
-export function buildProviderCategoryCounts(
-  providers: ProviderItem[],
-): Record<ProviderCategoryTab, number> {
-  const counts: Record<ProviderCategoryTab, number> = {
-    all: providers.length,
-    configured: 0,
-    commercial: 0,
-    local: 0,
+    options.push({
+      value: trimmed,
+      label: `${trimmed}（当前配置）`,
+      meta: '目录外',
+    })
   }
 
-  for (const p of providers) {
-    if (p.configured) counts.configured += 1
-    if (p.type === 'commercial') counts.commercial += 1
-    if (p.type === 'local') counts.local += 1
-  }
-
-  return counts
+  return options
 }
 
 /**
@@ -311,20 +250,6 @@ export function summarizeProviders(
     total: providers.length,
     configured: providers.filter((p) => p.configured).length,
   }
-}
-
-/**
- * 判断供应商是否属于本地私有类型
- */
-export function isLocalProvider(id: string): boolean {
-  const norm = (id ?? '').toLowerCase()
-  return (
-    norm.includes('ollama') ||
-    norm.includes('lmstudio') ||
-    norm.includes('local') ||
-    norm.includes('custom') ||
-    norm.includes('magpie')
-  )
 }
 
 /**
@@ -373,7 +298,6 @@ export function buildMergedProviders(
       providerMap.set(key, {
         id: cat.id,
         name: cat.name || cat.id,
-        type: isLocalProvider(cat.id) ? 'local' : 'commercial',
         configured: false,
         modelsCount: cat.modelCount ?? 0,
         baseUrl: cat.baseUrl,
@@ -399,53 +323,36 @@ export function buildMergedProviders(
       providerMap.set(key, {
         id: gw.id,
         name: gw.label || gw.id,
-        type: 'local',
-        custom: true,
         configured: Boolean(gw.enabled),
+        modelsCount: 0,
         baseUrl: gw.baseUrl,
-        modelsCount: gw.models?.length ?? 1,
-        description: '自定义 OpenAI 兼容协议接口网关。',
-        models: gw.models?.map((mid) => ({
-          id: mid,
-          name: mid,
-          tags: ['自定义'],
-          enabled: true,
-        })) ?? [{ id: 'default', name: 'Default Model', tags: ['自定义'], enabled: true }],
+        custom: true,
+        description: '运行时动态注册的模型网关。',
       })
     }
   }
 
-  // 4. 计算每个供应商的模型与已配置状态
-  const result: ProviderItem[] = []
-  for (const provider of providerMap.values()) {
-    const remoteModels = modelsByProvider.get(provider.id)
-    const isConfiguredByKey = configuredIds.has(provider.id.toLowerCase())
+  // 4. 校准凭据状态与模型数量（以 credentials 与实时目录为准）
+  for (const [key, p] of providerMap.entries()) {
+    const remoteModels = modelsByProvider.get(key)
+    const isConfiguredByKey = configuredIds.has(key)
     const hasAvailableModel = Boolean(remoteModels && remoteModels.some((m) => m.available))
-    const isConfigured = provider.configured || isConfiguredByKey || hasAvailableModel
+    p.configured = Boolean(p.configured || isConfiguredByKey || hasAvailableModel)
 
-    let models = provider.models
-    let modelsCount = provider.modelsCount
-
+    // 5. 聚合实时目录模型并更新模型数量
     if (remoteModels && remoteModels.length > 0) {
-      models = remoteModels.map((rm) => ({
-        id: rm.modelId,
-        name: rm.label || rm.modelId,
-        tags: rm.thinkingLevels?.filter((l) => l !== 'off').length > 0 ? ['思考模型'] : [],
-        enabled: rm.available,
+      p.modelsCount = remoteModels.length
+      p.models = remoteModels.map((m) => ({
+        id: m.modelId,
+        name: m.label || m.modelId,
+        enabled: Boolean(m.available),
+        tags: m.thinkingLevels && m.thinkingLevels.length > 1 ? ['思考模型'] : undefined,
       }))
-      modelsCount = models.length
     }
-
-    result.push({
-      ...provider,
-      configured: isConfigured,
-      models,
-      modelsCount,
-    })
   }
 
-  // 5. 排序：已配置优先，其次按名称字母升序
-  return result.sort(
+  // 6. 排序：已配置优先，其次按名称字母升序
+  return Array.from(providerMap.values()).sort(
     (a, b) =>
       Number(b.configured) - Number(a.configured) ||
       a.name.localeCompare(b.name),

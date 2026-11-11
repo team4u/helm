@@ -31,12 +31,7 @@ export const PROFILE_CATEGORY_TABS: Array<{ key: ProfileCategoryTab; label: stri
  * 判断是否为系统内置或受插件托管的保护角色
  */
 export function isSystemProfile(p: Profile): boolean {
-  return Boolean(
-    p.isSystem ||
-      p.id === 'superagent' ||
-      p.id === 'watchdog' ||
-      Boolean(p.managedByPlugin),
-  )
+  return Boolean(p.isSystem || p.managedByPlugin)
 }
 
 /**
@@ -170,20 +165,6 @@ export function summarizeProfiles(profiles: Profile[]): {
  */
 export function profileIdValid(id: string): boolean {
   return /^[a-z0-9][a-z0-9-]{0,63}$/.test(id)
-}
-
-/**
- * 根据 Profile ID、tags 或 runtime 推导线性矢量图标名称
- */
-export function getProfileIcon(p: Partial<Profile>): string {
-  const id = (p.id ?? '').toLowerCase()
-  const tags = p.tags ?? []
-  if (id === 'superagent' || tags.includes('superagent')) return 'sparkles'
-  if (id === 'watchdog' || tags.includes('watchdog')) return 'shield'
-  if (isHerdrProfile(p as Profile) || id.includes('herdr')) return 'terminal'
-  if (id.includes('workflow') || tags.includes('workflow')) return 'workflow'
-  if (id.includes('assistant')) return 'bot'
-  return 'bot'
 }
 
 /** 表单内编辑中的引导词条目（尚未保存，允许临时空值）。 */

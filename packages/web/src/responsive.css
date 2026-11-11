@@ -190,10 +190,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .conversation-drawer-close-btn { min-height: 44px; min-width: 44px; }
 }
 
-/* 插件设置头部小屏折行与防挤压 */
-.plugin-card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.plugin-card-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; flex: 1; }
-
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }

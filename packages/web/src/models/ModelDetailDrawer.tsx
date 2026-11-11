@@ -12,7 +12,6 @@ import {
   DialogTitle,
 } from '../ui/Dialog.js'
 import {
-  getProviderIconName,
   type ProviderItem,
   type ProviderModelItem,
 } from './model-center-model.js'
@@ -95,8 +94,6 @@ export function ModelDetailDrawer({
       setIsExpanded(false)
     }
   }, [provider])
-
-  const iconName = provider ? getProviderIconName(provider.id) : 'cpu'
 
   // 计算已启用的模型 ID 与过滤列表
   const enabledModelIds = useMemo(
@@ -287,9 +284,6 @@ export function ModelDetailDrawer({
             {/* 头部元信息 */}
             <div className="primary-drawer-header">
               <div className="primary-drawer-header-left">
-                <div className="primary-drawer-icon-wrap">
-                  <HelmIcon name={iconName} size={20} />
-                </div>
                 <div className="primary-drawer-title-col">
                   <div className="primary-drawer-title-row">
                     <DialogTitle className="primary-drawer-title">
@@ -300,9 +294,6 @@ export function ModelDetailDrawer({
                     ) : (
                       <span className="badge badge-neutral">未配置</span>
                     )}
-                    <span className="badge badge-neutral">
-                      {provider?.type === 'commercial' ? '商业云端' : '本地私有'}
-                    </span>
                     {provider?.dynamic && <span className="badge badge-neutral">动态同步</span>}
                   </div>
                   <div className="text-xs text-subtle mono">{provider?.id}</div>

@@ -20,7 +20,6 @@ import { HelmStoreContext } from '../src/lib/store-context.js'
 import {
   buildSkillCategoryCounts,
   filterSkills,
-  getSkillIcon,
   getSkillSourceBadge,
   isSkillBuiltin,
   isSkillPlugin,
@@ -97,7 +96,7 @@ const mockSkills: [SkillSummary, SkillSummary, SkillSummary, SkillSummary, Skill
 
 test('skill-center-model: 技能类别判定纯函数（内置 / 插件 / 工作区）', { timeout: 60_000 }, () => {
   const builtinAssistant = makeSkill({ id: 'assistant-helper', managedByPlugin: 'builtin:profile' })
-  const builtinCli = makeSkill({ id: 'helm-cli' })
+  const builtinCli = makeSkill({ id: 'helm-cli', managedByPlugin: 'builtin:profile' })
   const pluginManaged = makeSkill({ id: 'custom-skill', managedByPlugin: 'vendor:tools' })
   const workspacePrivate = makeSkill({ id: 'my-private-skill' })
 
@@ -190,15 +189,9 @@ test('skill-center-model: filterSkills 分类筛选与多维搜索（ID / 名称
   assert.equal(comboMismatch.length, 0)
 })
 
-test('skill-center-model: getSkillIcon 与 getSkillSourceBadge 映射正确', { timeout: 60_000 }, () => {
-  const cliSkill = makeSkill({ id: 'helm-cli' })
-  assert.equal(getSkillIcon(cliSkill), 'terminal')
-
+test('skill-center-model: getSkillSourceBadge 映射正确', { timeout: 60_000 }, () => {
+  const cliSkill = makeSkill({ id: 'helm-cli', managedByPlugin: 'builtin:profile' })
   const codeSkill = makeSkill({ id: 'code-review' })
-  assert.equal(getSkillIcon(codeSkill), 'file-code')
-
-  const toolSkill = makeSkill({ id: 'custom-tool' })
-  assert.equal(getSkillIcon(toolSkill), 'wrench')
 
   const badgeBuiltin = getSkillSourceBadge(cliSkill)
   assert.equal(badgeBuiltin.label, '内置')

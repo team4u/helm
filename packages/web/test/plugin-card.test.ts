@@ -18,6 +18,10 @@ const e = React.createElement
 
 // 动态导入待测组件（TDD 初始阶段因未实现将失败）
 const { PluginCard } = await import('../src/plugins/PluginCard.js')
+const {
+  resolvePluginIcon,
+  DEFAULT_PLUGIN_ICON,
+} = await import('../src/plugins/plugin-card-model.js')
 
 // ---------------------------------------------------------------------------
 // 辅助 Mock 插件数据
@@ -477,4 +481,66 @@ test('PluginCard：enable/define 阶段失败不禁用快捷开关（模块已�
     root.unmount()
   })
   container.remove()
+})
+
+test('resolvePluginIcon：纯属性驱动零硬编码推测——自声明 icon 优先，未提供统一回退默认占位（puzzle）', { timeout: 60_000 }, () => {
+  assert.equal(DEFAULT_PLUGIN_ICON, 'puzzle')
+
+  // 1. 显式提供自定义矢量图标名称（优先使用插件自己定义的 icon）
+  assert.equal(resolvePluginIcon({ icon: 'workflow' }), 'workflow')
+  assert.equal(resolvePluginIcon({ icon: 'zap' }), 'zap')
+  assert.equal(resolvePluginIcon({ icon: 'globe' }), 'globe')
+  assert.equal(resolvePluginIcon({ icon: ' sparkles ' }), 'sparkles')
+
+  // 2. 未声明 icon 时彻底杜绝任何 ID 字符串猜测，统一使用默认图标占位
+  assert.equal(resolvePluginIcon({}), 'puzzle')
+  assert.equal(resolvePluginIcon({ icon: undefined }), 'puzzle')
+  assert.equal(resolvePluginIcon({ icon: '' }), 'puzzle')
+  assert.equal(resolvePluginIcon({ icon: '   ' }), 'puzzle')
+  assert.equal(resolvePluginIcon(null), 'puzzle')
+  assert.equal(resolvePluginIcon(undefined), 'puzzle')
+})
+
+test('PluginCard：名称与 ID 垂直堆叠且靠左对齐，头部样式 contract 确保不被挤压重叠', { timeout: 60_000 }, () => {
+  const stylesCss = readFileSync(join(PKG_ROOT, 'src/styles.css'), 'utf8')
+
+  // .plugin-card-meta 必须为 column 纵向堆叠并靠左对齐
+  assert.match(
+    stylesCss,
+    /\.plugin-card-meta\s*\{[^}]*flex-direction:\s*column;/,
+    'styles.css 中 .plugin-card-meta 必须为 column 纵向排列',
+  )
+  assert.match(
+    stylesCss,
+    /\.plugin-card-meta\s*\{[^}]*align-items:\s*flex-start;/,
+    'styles.css 中 .plugin-card-meta 必须靠左对齐',
+  )
+
+  // .plugin-card-id 靠左对齐
+  assert.match(
+    stylesCss,
+    /\.plugin-card-id\s*\{[^}]*text-align:\s*left;/,
+    'styles.css 中 .plugin-card-id 必须靠左对齐',
+  )
+
+  // .plugin-drawer-header 必须为 align-items: flex-start 避免右上角关闭按钮落在奇怪的中间
+  assert.match(
+    stylesCss,
+    /\.plugin-drawer-header\s*\{[^}]*align-items:\s*flex-start;/,
+    'styles.css 中 .plugin-drawer-header 必须为 align-items: flex-start',
+  )
+})
+
+test('PluginCard：完全不渲染卡片图标容器，名称与 ID 靠左对齐', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(PluginCard, {
+      plugin: makePlugin({ id: 'test:no-icon', name: '无图标插件' }),
+      selected: false,
+      onSelect: () => {},
+      onToggle: () => {},
+    }),
+  )
+  assert.doesNotMatch(html, /plugin-card-icon-wrap/)
+  assert.match(html, /无图标插件/)
+  assert.match(html, /test:no-icon/)
 })

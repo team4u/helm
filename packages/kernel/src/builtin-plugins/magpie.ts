@@ -187,6 +187,7 @@ export function createMagpiePlugin(): PluginDefinition {
     id: MAGPIE_PLUGIN_ID,
     name: 'Magpie 网关',
     description: 'Magpie 模型网关接入：动态模型目录、配额与路由组，静默刷新与状态面板。',
+    icon: 'globe',
     version: '0.1.0',
     clientRoot: resolveMagpieClientRoot(),
     definePlugin(rawCtx) {

@@ -286,6 +286,7 @@ export function pluginSummaryOf(
     id: state.definition.id,
     name: state.definition.name ?? state.definition.id,
     description: state.definition.description,
+    ...(state.definition.icon ? { icon: state.definition.icon } : {}),
     version: state.definition.version,
     locked: state.definition.locked === true,
     enabled: state.enabled,

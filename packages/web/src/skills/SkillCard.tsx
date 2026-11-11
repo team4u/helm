@@ -1,7 +1,7 @@
 import React from 'react'
 import type { SkillSummary } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
-import { getSkillIcon, getSkillSourceBadge } from './skill-center-model.js'
+import { getSkillSourceBadge } from './skill-center-model.js'
 
 export interface SkillCardProps {
   skill: SkillSummary
@@ -12,7 +12,7 @@ export interface SkillCardProps {
 /**
  * 全屏技能中心单张技能卡片视图组件：
  * - 响应式网格流单元，遵循 1px 发丝边框与克制低饱和设计系统规范；
- * - 顶部展示矢量图标、名称、来源徽章（内置 / 工作区 / 插件）与等宽 ID；
+ * - 顶部展示名称、来源徽章（内置 / 工作区 / 插件）与等宽 ID，零图标杂音；
  * - 中部展示功能说明；
  * - 底部展示关联文件数量胶囊（N 个参考文件）；
  * - 支持鼠标点击与键盘无障碍交互（Enter / Space 激活）；
@@ -23,7 +23,6 @@ export function SkillCard({
   selected = false,
   onSelect,
 }: SkillCardProps): React.JSX.Element {
-  const iconName = getSkillIcon(skill)
   const sourceBadge = getSkillSourceBadge(skill)
   const refCount = skill.references?.length ?? 0
   const description = skill.description || '暂无描述'
@@ -60,11 +59,8 @@ export function SkillCard({
       onKeyDown={handleKeyDown}
       data-skill-id={skill.id}
     >
-      {/* 顶部头部：图标 + 标题/来源标签/ID */}
+      {/* 顶部头部：标题/来源标签/ID 靠左对齐 */}
       <div className="primary-card-header">
-        <div className="primary-card-icon-wrap">
-          <HelmIcon name={iconName} size={18} />
-        </div>
         <div className="primary-card-meta">
           <div className="primary-card-title-row">
             <span className="primary-card-name" title={skill.name || skill.id}>

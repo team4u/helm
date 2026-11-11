@@ -1,12 +1,29 @@
 /**
- * 插件描述裁决纯函数（无组件，供 PluginCard / PluginDetailDrawer 共用）。
+ * 插件描述与图标裁决纯函数（无组件，供 PluginCard / PluginDetailDrawer 共用）。
  *
- * - 优先展示插件定义自带的 description（summaryOf 透传，外部插件同样生效）；
- * - 未声明时依据能力透视生成（tools/actions/hooks 计数），不按插件 ID
- *   硬编码任何业务特判——描述是插件自己的事，前端只负责展示。
+ * - 优先展示插件定义自带的 description 与 icon（summaryOf 透传，外部插件同样生效）；
+ * - 未声明描述时依据能力透视生成（tools/actions/hooks 计数），未声明图标时回退
+ *   系统默认占位图标（DEFAULT_PLUGIN_ICON: 'puzzle'）；
+ * - 不按插件 ID 硬编码任何业务特判——属性是插件自己的事，前端只负责展示。
  */
 import type { PluginSummary, ScreenSpec } from '@helm/protocol'
 import type { GroupedUiSpecs } from '../lib/types.js'
+
+/** 插件中心默认占位图标（当插件未显式提供 icon 时使用）。 */
+export const DEFAULT_PLUGIN_ICON = 'puzzle'
+
+/**
+ * 插件线性矢量图标名称裁决：
+ * - 纯数据属性驱动，零 ID 字符串硬编码推测；
+ * - 优先展示插件定义自带声明的 icon（无论内置插件或外部插件，均在自身 PluginDefinition.icon 中显式声明）；
+ * - 若未提供 icon，统一展示系统默认占位图标（DEFAULT_PLUGIN_ICON: 'puzzle'）。
+ */
+export function resolvePluginIcon(plugin?: Pick<PluginSummary, 'icon'> | null): string {
+  if (plugin && typeof plugin.icon === 'string' && plugin.icon.trim() !== '') {
+    return plugin.icon.trim()
+  }
+  return DEFAULT_PLUGIN_ICON
+}
 
 export function getPluginDescription(plugin: PluginSummary): string {
   if (plugin.description && plugin.description.trim() !== '') {

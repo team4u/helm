@@ -10,7 +10,6 @@ import {
   DialogTitle,
 } from '../ui/Dialog.js'
 import {
-  getSkillIcon,
   getSkillSourceBadge,
   skillsApi,
 } from './skill-center-model.js'
@@ -86,7 +85,6 @@ export function SkillDetailDrawer({
       })
   }, [skill?.id, activePath, open, readSkill, initialContent])
 
-  const iconName = skill ? getSkillIcon(skill) : 'file-text'
   const sourceBadge = skill ? getSkillSourceBadge(skill) : null
   const badgeClass =
     sourceBadge?.variant === 'builtin'
@@ -116,9 +114,6 @@ export function SkillDetailDrawer({
           {/* 抽屉顶部头部 */}
           <div className="primary-drawer-header">
             <div className="primary-drawer-header-left">
-              <div className="primary-drawer-icon-wrap">
-                <HelmIcon name={iconName} size={20} />
-              </div>
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
                   <DialogTitle className="primary-drawer-title">

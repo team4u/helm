@@ -24,10 +24,9 @@ export interface SkillSummaryStats {
 /**
  * 判断技能是否为系统内置核心技能：
  * - managedByPlugin 声明以 'builtin:' 起头
- * - 或 ID 为系统内建受管技能 'helm-cli'
  */
 export function isSkillBuiltin(skill: SkillSummary): boolean {
-  return Boolean(skill.managedByPlugin?.startsWith('builtin:') || skill.id === 'helm-cli')
+  return Boolean(skill.managedByPlugin?.startsWith('builtin:'))
 }
 
 /**
@@ -40,10 +39,10 @@ export function isSkillPlugin(skill: SkillSummary): boolean {
 
 /**
  * 判断技能是否为本地工作区私有技能：
- * - 无 managedByPlugin 且非系统内建 'helm-cli'
+ * - 无 managedByPlugin
  */
 export function isSkillWorkspace(skill: SkillSummary): boolean {
-  return !skill.managedByPlugin && skill.id !== 'helm-cli'
+  return !skill.managedByPlugin
 }
 
 /**
@@ -133,20 +132,6 @@ export function summarizeSkills(skills: SkillSummary[]): SkillSummaryStats {
     plugins: counts.plugins,
     workspace: counts.workspace,
   }
-}
-
-/**
- * 根据技能 ID 或来源推导对应的线性矢量图标名称（严格对应 icons.tsx ICON_MAP 键）
- */
-export function getSkillIcon(skill: SkillSummary): string {
-  const id = (skill.id ?? '').toLowerCase()
-  if (id === 'helm-cli' || id.includes('cli')) return 'terminal'
-  if (id.includes('code') || id.includes('dev') || id.includes('script') || id.includes('test')) return 'file-code'
-  if (id.includes('tool') || id.includes('wrench')) return 'wrench'
-  if (id.includes('bot') || id.includes('agent') || id.includes('assistant')) return 'bot'
-  if (skill.managedByPlugin?.startsWith('builtin:')) return 'sparkles'
-  if (skill.managedByPlugin) return 'boxes'
-  return 'file-text'
 }
 
 /**

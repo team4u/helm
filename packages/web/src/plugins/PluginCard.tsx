@@ -3,7 +3,10 @@ import type { PluginSummary } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { HelmStoreContext } from '../lib/store-context.js'
 import { Switch } from '../ui/Switch.js'
-import { getPluginDescription, listPluginScreens } from './plugin-card-model.js'
+import {
+  getPluginDescription,
+  listPluginScreens,
+} from './plugin-card-model.js'
 import { isPluginFailed } from './plugin-center-model.js'
 
 export interface PluginCardProps {
@@ -13,28 +16,11 @@ export interface PluginCardProps {
   onToggle: (enabled: boolean) => Promise<void> | void
   toggling?: boolean
 }
-/**
- * 根据插件 ID 推导线性矢量图标名称
- */
-function getPluginIcon(id: string): string {
-  const norm = (id ?? '').toLowerCase()
-  if (norm.includes('profile')) return 'bot'
-  if (norm.includes('memory')) return 'sparkles'
-  if (norm.includes('workflow')) return 'workflow'
-  if (norm.includes('herdr')) return 'terminal'
-  if (norm.includes('superagent')) return 'sparkles'
-  if (norm.includes('trigger')) return 'webhook'
-  if (norm.includes('json-render')) return 'layout'
-  if (norm.includes('mermaid')) return 'git-branch'
-  if (norm.includes('magpie')) return 'globe'
-  if (norm.includes('tool')) return 'wrench'
-  return 'boxes'
-}
 
 /**
  * 全屏插件中心单张插件卡片视图组件：
  * - 响应式网格流单元，遵循 1px 发丝边框与克制低饱和设计规范；
- * - 顶部展示图标、名称、ID、版本与常驻徽章；
+ * - 顶部展示名称、ID（严格靠左对齐）、版本与常驻徽章，零图标杂音；
  * - 中部展示简要功能说明；
  * - 底部展示能力胶囊小徽章（Tools / Actions / Hooks）与快捷启停开关；
  * - 全程零 Emoji，符合无障碍与键盘导航规范。
@@ -47,7 +33,6 @@ export function PluginCard({
   toggling = false,
 }: PluginCardProps): React.JSX.Element {
   const store = useContext(HelmStoreContext)
-  const iconName = getPluginIcon(plugin.id)
   const description = getPluginDescription(plugin)
   const isLocked = plugin.locked === true
   // 已启用且有 Screen 贡献时提供快捷打开（主屏/右屏），经 store.openTarget 唯一导航。
@@ -99,11 +84,8 @@ export function PluginCard({
       onKeyDown={handleCardKeyDown}
       data-plugin-id={plugin.id}
     >
-      {/* 顶部头部：图标 + 标题/版本/锁定标签 */}
+      {/* 顶部头部：标题/版本/锁定标签 + ID 靠左对齐 */}
       <div className="plugin-card-header">
-        <div className="plugin-card-icon-wrap">
-          <HelmIcon name={iconName} size={18} />
-        </div>
         <div className="plugin-card-meta">
           <div className="plugin-card-title-row">
             <span className="plugin-card-name" title={plugin.name || plugin.id}>
