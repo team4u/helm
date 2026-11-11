@@ -416,6 +416,11 @@ describe('失败路径资源保留（防 continuation 收敛误删回归）', { 
       }
       assert.ok(resolved?.worktree, '取消前 onResolved 应回传 worktree')
       assert.ok(existsSync(join(resolved!.worktree!.path, 'cancel-marker.txt')), '取消前子会话应已写入产物')
+      // 产物写入发生在首轮工具调用；等待第二轮模型请求真正进入 held，
+      // 再发起取消，避免全量测试并发时过早 abort 只取消了首轮收敛。
+      const heldDeadline = Date.now() + 10_000
+      while (!entered && Date.now() < heldDeadline) await new Promise((r) => setTimeout(r, 25))
+      assert.ok(entered, '取消前应已进入挂起的真实模型回合')
 
       controller.abort()
       held.release(fauxAssistantMessage('不应作为结果'))
