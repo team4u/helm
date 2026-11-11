@@ -116,3 +116,43 @@ export function pluginPackageErrorText(err: unknown, action: string): string {
   }
   return err instanceof Error ? `${action}失败：${err.message}` : `${action}失败`
 }
+
+/**
+ * 从安装失败错误中提取 doctor 报告并做形状校验，无有效报告时返回 null（绝不伤造）。
+ *
+ * 真实 Hub 安装预检失败（422 plugin_package_doctor_failed）把完整报告放在
+ * HelmError.details.report，经 HTTP 错误信封到达 ApiClientError.details.report；
+ * 同时兼容早期测试挂载的 err.doctor 与 details.doctor 形状。
+ */
+export function extractDoctorReport(err: unknown): PluginDoctorReport | null {
+  const candidates: unknown[] = []
+  if (err !== null && typeof err === 'object') {
+    const details = (err as { details?: unknown }).details
+    if (details !== null && typeof details === 'object' && !Array.isArray(details)) {
+      candidates.push((details as Record<string, unknown>).report, (details as Record<string, unknown>).doctor)
+    }
+    candidates.push((err as { doctor?: unknown }).doctor)
+  }
+  for (const candidate of candidates) {
+    if (isDoctorReportShape(candidate)) return candidate
+  }
+  return null
+}
+
+/** 形状校验：dir 非空字符串、ok 布尔、checks 为逐项形状合法的数组；不满足即拒绝。 */
+function isDoctorReportShape(value: unknown): value is PluginDoctorReport {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const report = value as Record<string, unknown>
+  if (typeof report.dir !== 'string' || report.dir === '') return false
+  if (typeof report.ok !== 'boolean') return false
+  if (!Array.isArray(report.checks)) return false
+  return report.checks.every((check) => {
+    if (check === null || typeof check !== 'object' || Array.isArray(check)) return false
+    const c = check as Record<string, unknown>
+    if (typeof c.id !== 'string' || typeof c.label !== 'string') return false
+    if (c.error === undefined) return true
+    if (c.error === null || typeof c.error !== 'object') return false
+    const err = c.error as Record<string, unknown>
+    return typeof err.code === 'string' && typeof err.message === 'string'
+  })
+}

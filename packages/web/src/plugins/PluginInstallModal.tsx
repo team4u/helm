@@ -15,6 +15,7 @@ import { Switch } from '../ui/Switch.js'
 import {
   buildDoctorCheckItems,
   detectPluginSourceKind,
+  extractDoctorReport,
   isInstallSourceSubmittable,
   pluginPackageErrorText,
 } from './plugin-package-model.js'
@@ -73,10 +74,10 @@ export function PluginInstallModal({
       onInstalled(result.summary.id)
       onClose()
     } catch (err) {
-      // 安装失败时如实展示错误；doctor 报告（若服务端随错误返回）逐项渲染。
+      // 安装失败时如实展示错误；doctor 报告（真实 Hub 在 details.report，经形状校验）逐项渲染。
       setErrorText(pluginPackageErrorText(err, '安装'))
-      const report = (err as { doctor?: PluginDoctorReport } | null)?.doctor
-      if (report && typeof report === 'object') setDoctorReport(report)
+      const report = extractDoctorReport(err)
+      if (report) setDoctorReport(report)
     } finally {
       setInstalling(false)
     }

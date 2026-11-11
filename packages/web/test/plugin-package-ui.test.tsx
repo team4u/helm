@@ -234,7 +234,7 @@ test('PluginInstallModal：默认不启用（enable 不上送），失败展示�
   }
 })
 
-test('PluginInstallModal：doctor 失败结果逐项结构化渲染', { timeout: 60_000 }, async () => {
+test('PluginInstallModal：真实 Hub 422 失败时从 details.report 结构化渲染 doctor 检查', { timeout: 60_000 }, async () => {
   const { PluginInstallModal } = await import('../src/plugins/PluginInstallModal.js')
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -243,18 +243,25 @@ test('PluginInstallModal：doctor 失败结果逐项结构化渲染', { timeout:
   const originalInstall = pluginsApi.install
 
   pluginsApi.install = async () => {
-    const err = new ApiClientError('doctor_failed', '安装前自检未通过', 422) as ApiClientError & {
-      doctor?: unknown
-    }
-    err.doctor = {
-      dir: '/plugins/foo',
-      ok: false,
-      checks: [
-        { id: 'manifest', label: '清单检查' },
-        { id: 'backend', label: '后端加载', error: { code: 'entry_missing', message: 'dist/index.js 不存在' } },
-      ],
-    }
-    throw err
+    // 真实 Hub 安装预检失败形状：报告在 HelmError.details.report，
+    // 经 HTTP 错误信封解析为 ApiClientError.details.report
+    throw new ApiClientError(
+      'plugin_package_doctor_failed',
+      '插件包安装预检失败（后端加载：dist/index.js 不存在），已放弃安装',
+      422,
+      {
+        source: { kind: 'local', raw: '/plugins/foo', path: '/plugins/foo' },
+        staging: '/data/plugins/.staging/abc',
+        report: {
+          dir: '/data/plugins/.staging/abc',
+          ok: false,
+          checks: [
+            { id: 'manifest', label: '清单检查' },
+            { id: 'backend', label: '后端加载', error: { code: 'entry_missing', message: 'dist/index.js 不存在' } },
+          ],
+        },
+      },
+    )
   }
 
   try {
@@ -273,7 +280,7 @@ test('PluginInstallModal：doctor 失败结果逐项结构化渲染', { timeout:
     })
 
     const doctorBox = host.querySelector('.plugin-install-doctor')
-    assert.ok(doctorBox, '失败时必须渲染 doctor 检查结果区块')
+    assert.ok(doctorBox, '真实 422 失败时必须从 details.report 渲染 doctor 检查结果区块')
     assert.equal(doctorBox.getAttribute('data-doctor-ok'), 'false')
     const checks = doctorBox.querySelectorAll('.plugin-doctor-check')
     assert.equal(checks.length, 2)

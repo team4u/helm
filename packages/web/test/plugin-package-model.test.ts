@@ -14,6 +14,7 @@ import {
   buildDoctorCheckItems,
   buildDoctorConclusion,
   detectPluginSourceKind,
+  extractDoctorReport,
   formatInstalledAt,
   isGitSource,
   isInstallSourceSubmittable,
@@ -155,4 +156,72 @@ test('pluginPackageErrorText：409 在途任务给出明确指引', { timeout: 6
 test('pluginPackageErrorText：普通错误与非 Error 值如实回显', { timeout: 60_000 }, () => {
   assert.match(pluginPackageErrorText(new Error('boom'), '更新'), /更新失败：boom/)
   assert.match(pluginPackageErrorText('strange', '安装'), /安装失败/)
+})
+
+// ---------------------------------------------------------------------------
+// 5. 安装失败时的 doctor 报告提取（真实 Hub 错误形状）
+// ---------------------------------------------------------------------------
+
+test('extractDoctorReport：从 ApiClientError.details.report 提取真实 Hub 422 形状报告', { timeout: 60_000 }, () => {
+  // 真实 Hub：HelmError('plugin_package_doctor_failed', …, 422, { source, staging, report })
+  // 经 HTTP 错误信封 { error: { code, message, details } } 到达 ApiClientError.details.report
+  const err = new ApiClientError(
+    'plugin_package_doctor_failed',
+    '插件包安装预检失败（后端加载：dist/index.js 不存在），已放弃安装',
+    422,
+    {
+      source: { kind: 'local', raw: '/plugins/foo', path: '/plugins/foo' },
+      staging: '/data/plugins/.staging/xxx',
+      report: {
+        dir: '/data/plugins/.staging/xxx',
+        requestedId: undefined,
+        ok: false,
+        checks: [
+          { id: 'manifest', label: '清单检查' },
+          { id: 'backend', label: '后端加载', error: { code: 'entry_missing', message: 'dist/index.js 不存在' } },
+        ],
+      },
+    },
+  )
+  const report = extractDoctorReport(err)
+  assert.ok(report, 'details.report 中存在合法报告时必须提取成功')
+  assert.equal(report.ok, false)
+  assert.equal(report.checks.length, 2)
+  assert.equal(report.checks[1]?.error?.code, 'entry_missing')
+})
+
+test('extractDoctorReport：兼容 details.doctor 与 err.doctor 旧形状，均需形状合法', { timeout: 60_000 }, () => {
+  const valid = { dir: '/p', ok: true, checks: [{ id: 'manifest', label: '清单检查' }] }
+  const viaDetailsDoctor = new ApiClientError('x', 'x', 422, { doctor: valid })
+  assert.ok(extractDoctorReport(viaDetailsDoctor))
+
+  const plain = { doctor: valid } as unknown
+  assert.ok(extractDoctorReport(plain))
+})
+
+test('extractDoctorReport：形状不合法时返回 null，绝不伪造', { timeout: 60_000 }, () => {
+  // 缺 dir / ok 非布尔 / checks 非数组 / error 缺 code —— 全部拒绝
+  assert.equal(extractDoctorReport(new ApiClientError('x', 'x', 422, { report: { ok: false } })), null)
+  assert.equal(
+    extractDoctorReport(new ApiClientError('x', 'x', 422, { report: { dir: '/p', ok: 'yes', checks: [] } })),
+    null,
+  )
+  assert.equal(
+    extractDoctorReport(new ApiClientError('x', 'x', 422, { report: { dir: '/p', ok: true, checks: 'nope' } })),
+    null,
+  )
+  assert.equal(
+    extractDoctorReport(
+      new ApiClientError('x', 'x', 422, {
+        report: { dir: '/p', ok: false, checks: [{ id: 'm', label: '清单', error: { code: 1, message: 'x' } }] },
+      }),
+    ),
+    null,
+  )
+  // 无 details 的普通错误 / 非 ApiClientError 形状
+  assert.equal(extractDoctorReport(new Error('plain')), null)
+  assert.equal(extractDoctorReport(null), null)
+  assert.equal(extractDoctorReport(undefined), null)
+  // details.report 为数组或其他非对象值同样拒绝
+  assert.equal(extractDoctorReport(new ApiClientError('x', 'x', 422, { report: [1, 2] })), null)
 })
