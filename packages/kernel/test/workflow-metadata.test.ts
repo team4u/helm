@@ -375,39 +375,52 @@ describe('WorkflowService listRuns and settlement', () => {
     const state = makeStateStore()
     const host = makeExternalSpawnHost()
     const service = new WorkflowService({ dataDir, host, state })
-    const first = await service.run({ conversationId: 1, script: META('l1') + 'return 1' })
-    await service.wait(first.id)
-    // 第二个 run 带 agent（活跃中挂起 spawn 以验证实时 nodes）。
     let release: (() => void) | undefined
-    const realSpawn = host.spawnAgent.bind(host)
-    host.spawnAgent = async (request) => {
-      await new Promise<void>((r) => {
-        release = r
-      })
-      return realSpawn(request)
-    }
-    const second = await service.run({ conversationId: 1, script: META('l2') + 'return await agent("hang")' })
-    await new Promise((r) => setTimeout(r, 120))
-    let runs = service.listRuns()
-    assert.equal(runs.length, 2, 'both runs listed')
-    const active = runs.find((r) => r.id === second.id)
-    assert.ok(active !== undefined)
-    assert.equal(active.status, 'running')
-    assert.ok((active.nodes ?? []).length > 0, 'active run carries live nodes')
-    release?.()
-    await service.wait(second.id)
-
-    // 新实例同 state store（模拟跨重启）：全部 run 仍可列出。
-    const revived = new WorkflowService({
-      dataDir,
-      host: makeExternalSpawnHost(),
-      state,
+    let onSpawnStarted: (() => void) | undefined
+    const spawnStarted = new Promise<void>((r) => {
+      onSpawnStarted = r
     })
-    runs = revived.listRuns()
-    assert.equal(runs.length, 2, 'runs survive restart via state store')
-    assert.ok(runs.every((r) => r.status !== 'running'), 'no fake running after revival')
-    await revived.close()
-    await service.close()
+    try {
+      const first = await service.run({ conversationId: 1, script: META('l1') + 'return 1' })
+      await service.wait(first.id)
+      // 第二个 run 带 agent（活跃中挂起 spawn 以验证实时 nodes）。
+      const realSpawn = host.spawnAgent.bind(host)
+      host.spawnAgent = async (request) => {
+        onSpawnStarted?.()
+        await new Promise<void>((r) => {
+          release = r
+        })
+        return realSpawn(request)
+      }
+      const second = await service.run({ conversationId: 1, script: META('l2') + 'return await agent("hang")' })
+      // 确定性等待 spawn 启动并挂起，此时 live nodes 已注入活跃 run
+      await spawnStarted
+      let runs = service.listRuns()
+      assert.equal(runs.length, 2, 'both runs listed')
+      const active = runs.find((r) => r.id === second.id)
+      assert.ok(active !== undefined)
+      assert.equal(active.status, 'running')
+      assert.ok((active.nodes ?? []).length > 0, 'active run carries live nodes')
+      release?.()
+      await service.wait(second.id)
+
+      // 新实例同 state store（模拟跨重启）：全部 run 仍可列出。
+      const revived = new WorkflowService({
+        dataDir,
+        host: makeExternalSpawnHost(),
+        state,
+      })
+      try {
+        runs = revived.listRuns()
+        assert.equal(runs.length, 2, 'runs survive restart via state store')
+        assert.ok(runs.every((r) => r.status !== 'running'), 'no fake running after revival')
+      } finally {
+        await revived.close()
+      }
+    } finally {
+      release?.()
+      await service.close()
+    }
   })
 
   it('getRun/toSummary carry replayedFrom; resume replays without second gate execution', timeout, async () => {

@@ -3634,8 +3634,7 @@ button,
   padding: 8px 0;
 }
 
-.stack-row,
-.jr-stack-row {
+.stack-row {
   display: inline-flex;
   align-items: center;
   gap: 4px;
