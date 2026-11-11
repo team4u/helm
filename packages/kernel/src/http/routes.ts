@@ -23,6 +23,7 @@ import type {
 } from '@helm/protocol'
 import { realpath as nodeFsRealpath, readFile as nodeFsReadFile } from 'node:fs/promises'
 import { join as joinPath, sep as PATH_SEP } from 'node:path'
+import { gzipSync } from 'node:zlib'
 import {
   AuthAlreadyConfiguredError,
   InvalidCredentialsError,
@@ -586,9 +587,9 @@ async function route(
         await kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId),
       )
     }
-    // 插件客户端模块：GET /api/plugins/:pluginId/client.mjs?module=<相对路径>
+    // 插件客户端模块：GET/HEAD /api/plugins/:pluginId/client.mjs?module=<相对路径>
     // （鉴权由 hub 统一前置；停用/未声明/编译失败返回结构化错误 JSON，绝不返回半产物）
-    if (third === 'client.mjs' && method === 'GET' && fourth === undefined) {
+    if (third === 'client.mjs' && (method === 'GET' || method === 'HEAD') && fourth === undefined) {
       const moduleRef = ctx.url.searchParams.get('module')
       if (moduleRef === null || moduleRef.length === 0) {
         throw new ValidationError('缺少 module 查询参数（相对 clientRoot 的 .ts/.tsx 路径）')
@@ -597,13 +598,45 @@ async function route(
         throw new ValidationError('module 需为 clientRoot 内相对 .ts/.tsx 路径（禁止绝对路径/..越根）')
       }
       const compiled = await kernel.plugins.getClientModule(pluginId, moduleRef)
+      const etag = `"${compiled.contentHash}"`
+      const ifNoneMatch = ctx.request.headers.get('if-none-match')
+      if (ifNoneMatch && (ifNoneMatch === etag || ifNoneMatch === compiled.contentHash || ifNoneMatch === `W/${etag}`)) {
+        return new Response(null, {
+          status: 304,
+          headers: {
+            etag,
+            'x-helm-client-hash': compiled.contentHash,
+            'cache-control': 'private, no-cache',
+            vary: 'Accept-Encoding',
+          },
+        })
+      }
+
+      const headers: Record<string, string> = {
+        'content-type': 'text/javascript; charset=utf-8',
+        'x-helm-client-hash': compiled.contentHash,
+        etag,
+        'cache-control': 'private, no-cache',
+        vary: 'Accept-Encoding',
+      }
+
+      if (method === 'HEAD') {
+        return new Response(null, { status: 200, headers })
+      }
+
+      const acceptEncoding = ctx.request.headers.get('accept-encoding') ?? ''
+      if (/\bgzip\b/i.test(acceptEncoding)) {
+        headers['content-encoding'] = 'gzip'
+        const gzBuffer = compiled.gzipped ?? gzipSync(Buffer.from(compiled.code, 'utf8'))
+        return new Response(gzBuffer as unknown as BodyInit, {
+          status: 200,
+          headers,
+        })
+      }
+
       return new Response(compiled.code, {
         status: 200,
-        headers: {
-          'content-type': 'text/javascript; charset=utf-8',
-          'x-helm-client-hash': compiled.contentHash,
-          'cache-control': 'private, max-age=60',
-        },
+        headers,
       })
     }
     // 插件自定义动态路由：强制命名空间 /api/plugins/:pluginId/routes/...，

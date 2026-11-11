@@ -277,12 +277,12 @@ test('未导出的同名局部变量不撞名：entry 内 const __helmClientCss 
   assert.ok(!css.includes('plugin-local-value'))
 })
 
-test('缓存版本失效：旧 v3 清单（npm 依赖前时代）不复用，强制重编译', { timeout: 60_000 }, async () => {
+test('缓存版本失效：旧 v4 清单（minify 前时代）不复用，强制重编译', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'cache-version-src')
   await writePluginSource(root, { 'styles.css': '.v3 { color: red }' }, ["'./styles.css'"])
   const fresh = await compilePluginClientModule('test:css-cache-version', root, 'index.tsx', dataDir)
 
-  // 篡改磁盘上的依赖清单为 v2 旧格式（模拟历史缓存）：必须被识别为失效并重编译。
+  // 篡改磁盘上的依赖清单为 v4 旧格式（模拟历史缓存）：必须被识别为失效并重编译。
   // staging 目录名含 safeDirName 哈希后缀，直接扫描定位 deps.json 与产物。
   const { createHash } = await import('node:crypto')
   const safe = 'test_css-cache-version'.replace(/[^A-Za-z0-9_-]/g, '_')
@@ -294,10 +294,10 @@ test('缓存版本失效：旧 v3 清单（npm 依赖前时代）不复用，强
   assert.ok(depsFile, '依赖清单必须已落盘')
   const realListPath = join(stagingDir, depsFile as string)
   const list = JSON.parse(await readFileP(realListPath, 'utf8')) as { version: number; contentHash: string }
-  assert.equal(list.version, 4, '新缓存清单版本为 v4（受控 npm 依赖）')
-  await writeFileP(realListPath, `${JSON.stringify({ ...list, version: 3 })}\n`)
+  assert.equal(list.version, 5, '新缓存清单版本为 v5（受控 npm 依赖与预压缩）')
+  await writeFileP(realListPath, `${JSON.stringify({ ...list, version: 4 })}\n`)
 
-  // 再把产物改成“旧格式毒丸”：若 v2 清单被复用会原样返回毒丸；v3 校验必须重编译
+  // 再把产物改成“旧格式毒丸”：若 v4 清单被复用会原样返回毒丸；v5 校验必须重编译
   const codeFile = files.find((f) => f.endsWith('.mjs'))
   assert.ok(codeFile)
   await writeFileP(join(stagingDir, codeFile as string), 'export const POISON = 1\n')

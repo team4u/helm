@@ -156,3 +156,30 @@ test('插件样式随停用/登出回收：仅移除目标插件注入的 style�
   resetPluginClientCache()
   assert.equal(alphaLike.isConnected, false, '登出/全量重建必须回收全部插件样式')
 })
+
+test('并发加载同一插件模块合并为单次 fetch（in-flight 复用）', { timeout: 60_000 }, async () => {
+  let fetchCount = 0
+  const createObjectURL = URL.createObjectURL
+  const revokeObjectURL = URL.revokeObjectURL
+  URL.createObjectURL = () => 'data:text/javascript,export%20function%20Test()%20{}'
+  URL.revokeObjectURL = () => {}
+  globalThis.fetch = async () => {
+    fetchCount++
+    await new Promise((r) => setTimeout(r, 10))
+    return new Response('export function Test() {}', { headers: { 'x-helm-client-hash': 'hash-shared' } })
+  }
+  try {
+    const [a, b, c] = await Promise.all([
+      loadPluginClientModule('p-concurrent', 'index.tsx'),
+      loadPluginClientModule('p-concurrent', 'index.tsx'),
+      loadPluginClientModule('p-concurrent', 'index.tsx'),
+    ])
+    assert.equal(fetchCount, 1, '同屏多个图表/组件并发挂载时必须合并为 1 次 HTTP 请求')
+    assert.equal(a.contentHash, 'hash-shared')
+    assert.equal(b.contentHash, 'hash-shared')
+    assert.equal(c.contentHash, 'hash-shared')
+  } finally {
+    URL.createObjectURL = createObjectURL
+    URL.revokeObjectURL = revokeObjectURL
+  }
+})

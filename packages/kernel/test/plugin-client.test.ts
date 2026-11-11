@@ -126,12 +126,15 @@ async function call(
   handler: (req: Request) => Promise<Response>,
   method: string,
   path: string,
-  opts?: { auth?: boolean },
-): Promise<{ status: number; text: string; headers: Headers }> {
-  const headers: Record<string, string> = {}
+  opts?: { auth?: boolean; headers?: Record<string, string> },
+): Promise<{ status: number; text: string; buffer: Buffer; headers: Headers }> {
+  const headers: Record<string, string> = { ...(opts?.headers ?? {}) }
   if (opts?.auth !== false && token !== undefined) headers.authorization = `Bearer ${token}`
   const res = await handler(new Request(`http://127.0.0.1:3202${path}`, { method, headers }))
-  return { status: res.status, text: await res.text(), headers: res.headers }
+  const arrayBuf = await res.arrayBuffer()
+  const buffer = Buffer.from(arrayBuf)
+  const text = buffer.toString('utf8')
+  return { status: res.status, text, buffer, headers: res.headers }
 }
 
 /** 真实 clientRoot 夹具：client.tsx（依赖本地 helper.tsx + react external）。 */
@@ -358,6 +361,53 @@ test('HTTP：无 token 401；有效 token 200 返回 JS 与 hash 头', { timeout
   assert.match(ok.text, /__helm_shared_react/)
 })
 
+test('HTTP：If-None-Match 命中 contentHash 时返回 304 Not Modified 且无 body', { timeout: 60_000 }, async () => {
+  const first = await call(handler, 'GET', '/api/plugins/test%3Aclient-fixture/client.mjs?module=client.tsx')
+  assert.equal(first.status, 200)
+  assert.equal(first.headers.get('vary'), 'Accept-Encoding')
+  const hash = first.headers.get('x-helm-client-hash')!
+  const etag = first.headers.get('etag')!
+  assert.ok(hash)
+  assert.equal(etag, `"${hash}"`)
+
+  // 强 ETag / 裸 hash 匹配均返回 304
+  const res304 = await call(handler, 'GET', '/api/plugins/test%3Aclient-fixture/client.mjs?module=client.tsx', {
+    headers: { 'if-none-match': etag },
+  })
+  assert.equal(res304.status, 304)
+  assert.equal(res304.text, '')
+  assert.equal(res304.headers.get('etag'), etag)
+  assert.equal(res304.headers.get('x-helm-client-hash'), hash)
+  assert.equal(res304.headers.get('vary'), 'Accept-Encoding')
+
+  const res304RawHash = await call(handler, 'GET', '/api/plugins/test%3Aclient-fixture/client.mjs?module=client.tsx', {
+    headers: { 'if-none-match': hash },
+  })
+  assert.equal(res304RawHash.status, 304)
+})
+
+test('HTTP：Accept-Encoding: gzip 返回 Content-Encoding: gzip 且解压后与原产物一致', { timeout: 60_000 }, async () => {
+  const plain = await call(handler, 'GET', '/api/plugins/test%3Aclient-fixture/client.mjs?module=client.tsx')
+  assert.equal(plain.status, 200)
+
+  const gzRes = await call(handler, 'GET', '/api/plugins/test%3Aclient-fixture/client.mjs?module=client.tsx', {
+    headers: { 'accept-encoding': 'gzip, deflate, br' },
+  })
+  assert.equal(gzRes.status, 200)
+  assert.equal(gzRes.headers.get('content-encoding'), 'gzip')
+  const { gunzipSync } = await import('node:zlib')
+  const decompressed = gunzipSync(gzRes.buffer).toString('utf8')
+  assert.equal(decompressed, plain.text)
+})
+
+test('HTTP：HEAD 请求返回 200 与 headers 但无 body', { timeout: 60_000 }, async () => {
+  const head = await call(handler, 'HEAD', '/api/plugins/test%3Aclient-fixture/client.mjs?module=client.tsx')
+  assert.equal(head.status, 200)
+  assert.equal(head.text, '')
+  assert.match(head.headers.get('content-type') ?? '', /text\/javascript/)
+  assert.match(head.headers.get('x-helm-client-hash') ?? '', /^[0-9a-f]{24}$/)
+})
+
 test('HTTP：缺 module 参数 400；越根 module 400/404 错误信封', { timeout: 60_000 }, async () => {
   const noModule = await call(handler, 'GET', '/api/plugins/test%3Aclient-fixture/client.mjs')
   assert.equal(noModule.status, 400)
@@ -523,6 +573,13 @@ test('并发编译同 key：合并同一 Promise，产物一致（无临时文�
   } finally {
     await rm(join(clientRoot, 'concurrent.ts'), { force: true })
   }
+})
+
+test('编译器进程内内存缓存：本地依赖源未变时直接复用内存结果，避免重复磁盘读与哈希', { timeout: 60_000 }, async () => {
+  const first = await pluginHost.getClientModule('test:client-fixture', 'client.tsx')
+  const second = await pluginHost.getClientModule('test:client-fixture', 'client.tsx')
+  assert.equal(first.contentHash, second.contentHash)
+  assert.equal(first.code, second.code)
 })
 
 test('编译失败后可重试：失败不缓存，修复源后重新编译成功', { timeout: 60_000 }, async () => {

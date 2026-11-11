@@ -60,7 +60,7 @@ export function CodeBlockRenderer({ language, code, conversationId }: { language
   }
   return (
     <PluginCodeBlock
-      key={`${match.pluginId}:${match.spec.id}:${language}`}
+      key={`${match.pluginId}:${match.spec.id}:${language}:${getPluginClientCacheRevision(match.pluginId)}`}
       pluginId={match.pluginId}
       clientRef={match.spec.client}
       language={language}

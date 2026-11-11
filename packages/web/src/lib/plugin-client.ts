@@ -26,6 +26,7 @@ interface CacheEntry {
 }
 
 const cache = new Map<string, CacheEntry>()
+const inflightLoads = new Map<string, Promise<LoadedClientModule>>()
 const pluginEpochs = new Map<string, number>()
 let cacheEpoch = 0
 /** 缓存失效监听器（evict/reset 清理完成后通知；正常 load/seed 不通知，避免循环）。 */
@@ -122,7 +123,10 @@ function applyPluginClientCss(
 export function evictPluginClientCache(pluginId: string): void {
   pluginEpochs.set(pluginId, (pluginEpochs.get(pluginId) ?? 0) + 1)
   for (const [key, entry] of cache) {
-    if (entry.pluginId === pluginId) cache.delete(key)
+    if (entry.pluginId === pluginId) {
+      cache.delete(key)
+      inflightLoads.delete(key)
+    }
   }
   removePluginStyleSheets(pluginId)
   notifyCacheInvalidated()
@@ -133,6 +137,7 @@ export function resetPluginClientCache(): void {
   cacheEpoch++
   pluginEpochs.clear()
   cache.clear()
+  inflightLoads.clear()
   removePluginStyleSheets(undefined)
   notifyCacheInvalidated()
 }
@@ -191,55 +196,77 @@ export async function loadPluginClientModule(pluginId: string, moduleRef: string
       throw new PluginClientError('client_module_invalidated', `插件 ${pluginId} 的 client 模块加载已失效，请重新加载`, 0)
     }
   }
-  const { code, contentHash } = await fetchModuleText(pluginId, moduleRef)
-  assertCurrent()
-  const cached = cache.get(key)
-  if (cached && cached.contentHash === contentHash) {
-    const module = await cached.namespaced
+
+  // 1. 同一模块在途加载复用：并发挂载（如一个会话内多个同类图表代码块）共享同一个加载 Promise，
+  // 杜绝同时发起多次重复的 client.mjs 网络请求
+  const pending = inflightLoads.get(key)
+  if (pending !== undefined) {
+    const res = await pending
     assertCurrent()
-    return { module, contentHash }
+    return res
   }
-  const imported = (async () => {
-    const blobUrl = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))
+
+  let loadPromise: Promise<LoadedClientModule> | null = null
+  loadPromise = (async (): Promise<LoadedClientModule> => {
     try {
-      return (await import(/* @vite-ignore */ blobUrl)) as Record<string, unknown>
-    } catch (err) {
-      throw new PluginClientError(
-        'client_module_import_failed',
-        `插件 ${pluginId} client 模块 ${moduleRef} 导入失败：${err instanceof Error ? err.message : String(err)}`,
-        0,
-      )
+      const { code, contentHash } = await fetchModuleText(pluginId, moduleRef)
+      assertCurrent()
+      const cached = cache.get(key)
+      if (cached && cached.contentHash === contentHash) {
+        const module = await cached.namespaced
+        assertCurrent()
+        return { module, contentHash }
+      }
+      const imported = (async () => {
+        const blobUrl = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))
+        try {
+          return (await import(/* @vite-ignore */ blobUrl)) as Record<string, unknown>
+        } catch (err) {
+          throw new PluginClientError(
+            'client_module_import_failed',
+            `插件 ${pluginId} client 模块 ${moduleRef} 导入失败：${err instanceof Error ? err.message : String(err)}`,
+            0,
+          )
+        } finally {
+          URL.revokeObjectURL(blobUrl)
+        }
+      })()
+      const entry: CacheEntry = { pluginId, contentHash, namespaced: imported }
+      // 样式装载与 resolved 发布都在调用方真正 await 的 namespaced 链上完成：import 迟到完成时
+      // 若已失效（epoch / 插件 epoch / entry 身份任一不符）直接显式报错，绝不补挂样式，也绝不
+      // 碰新 epoch 已装载的样式；拒绝（import 失败 / 失效 / 样式契约非法）仅回收仍属于自己的
+      // entry（身份守卫确保不误删新 epoch 条目），允许同 hash 重试，不残留毒化 Promise。
+      entry.namespaced = imported.then(
+        (moduleNamespace) => {
+          if (epoch !== cacheEpoch || pluginEpoch !== pluginEpochs.get(pluginId) || cache.get(key) !== entry) {
+            throw new PluginClientError(
+              'client_module_invalidated',
+              `插件 ${pluginId} 的 client 模块加载已失效，请重新加载`,
+              0,
+            )
+          }
+          applyPluginClientCss(pluginId, moduleRef, contentHash, moduleNamespace)
+          // 样式装载成功后才发布同步 resolved 缓存，保证 getCachedClientComponent 命中时样式已在页面上。
+          entry.resolved = moduleNamespace
+          return moduleNamespace
+        },
+      ).catch((err: unknown) => {
+        if (cache.get(key) === entry) cache.delete(key)
+        throw err
+      })
+      cache.set(key, entry)
+      const module = await entry.namespaced
+      assertCurrent()
+      return { module, contentHash }
     } finally {
-      URL.revokeObjectURL(blobUrl)
+      if (inflightLoads.get(key) === loadPromise) {
+        inflightLoads.delete(key)
+      }
     }
   })()
-  const entry: CacheEntry = { pluginId, contentHash, namespaced: imported }
-  // 样式装载与 resolved 发布都在调用方真正 await 的 namespaced 链上完成：import 迟到完成时
-  // 若已失效（epoch / 插件 epoch / entry 身份任一不符）直接显式报错，绝不补挂样式，也绝不
-  // 碰新 epoch 已装载的样式；拒绝（import 失败 / 失效 / 样式契约非法）仅回收仍属于自己的
-  // entry（身份守卫确保不误删新 epoch 条目），允许同 hash 重试，不残留毒化 Promise。
-  entry.namespaced = imported.then(
-    (moduleNamespace) => {
-      if (epoch !== cacheEpoch || pluginEpoch !== pluginEpochs.get(pluginId) || cache.get(key) !== entry) {
-        throw new PluginClientError(
-          'client_module_invalidated',
-          `插件 ${pluginId} 的 client 模块加载已失效，请重新加载`,
-          0,
-        )
-      }
-      applyPluginClientCss(pluginId, moduleRef, contentHash, moduleNamespace)
-      // 样式装载成功后才发布同步 resolved 缓存，保证 getCachedClientComponent 命中时样式已在页面上。
-      entry.resolved = moduleNamespace
-      return moduleNamespace
-    },
-  ).catch((err: unknown) => {
-    if (cache.get(key) === entry) cache.delete(key)
-    throw err
-  })
-  cache.set(key, entry)
-  const module = await entry.namespaced
-  assertCurrent()
-  return { module, contentHash }
+
+  inflightLoads.set(key, loadPromise)
+  return await loadPromise
 }
 
 /**

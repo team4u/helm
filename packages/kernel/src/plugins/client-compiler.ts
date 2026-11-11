@@ -32,6 +32,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, realpathSync, statSync, readFileSync, writeFileSync, renameSync, existsSync, rmSync } from 'node:fs';
 import { isAbsolute, join, dirname, relative, resolve, sep } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { HelmError, PLUGIN_CLIENT_CSS_EXPORT } from '@helm/protocol';
 import { build, type Plugin as EsbuildPlugin } from 'esbuild';
 
@@ -63,14 +64,16 @@ export const CLIENT_SHARED_GLOBALS: Readonly<Record<string, string>> = Object.fr
 /** ClientComponentRef.module 允许的字符集（相对路径段：字母数字 . _ -，禁止空段与 ..）。 */
 const MODULE_REF_PATTERN = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*\.(ts|tsx)$/;
 
-/** 依赖清单（deps.json）结构版本；v2 为 CSS-as-JS 旧格式，v3 起原生 CSS bundling，v4 起含受控 npm 依赖。 */
-const DEPS_LIST_VERSION = 4;
+/** 依赖清单（deps.json）结构版本；v2 为 CSS-as-JS 旧格式，v3 起原生 CSS bundling，v4 起含受控 npm 依赖，v5 起启用 esbuild minify 与预压缩。 */
+const DEPS_LIST_VERSION = 5;
 
 export interface ClientCompileResult {
   /** 产物 JS 文本（自包含 ESM；共享依赖经 globalThis 命名空间运行时解析）。 */
   code: string
   /** 内容 hash（入口 + 全部本地依赖内容 sha256 + 编译参数）。 */
   contentHash: string
+  /** 产物 gzip 预压缩字节（供 HTTP 快速响应）。 */
+  gzipped?: Uint8Array
 }
 
 /** 校验 ClientComponentRef.module 形状（相对 .ts/.tsx，无绝对/越根/编码逃逸）。 */
@@ -98,6 +101,18 @@ export function assertModuleRefShape(pluginId: string, moduleRef: string): void 
 // ---------------------------------------------------------------------------
 
 const inflight = new Map<string, Promise<ClientCompileResult>>();
+
+interface MemoryCompiledEntry {
+  result: ClientCompileResult;
+  localMtimes: Map<string, number>;
+  root: string;
+}
+
+const memoryCompiledCache = new Map<string, MemoryCompiledEntry>();
+
+export function clearClientCompilerMemoryCache(): void {
+  memoryCompiledCache.clear();
+}
 
 /**
  * 编译插件客户端模块（并发安全：同 key 在途编译合并；缓存命中时零编译）。
@@ -127,7 +142,7 @@ export async function compilePluginClientModule(
 
 /** 依赖清单（deps.json）结构：跨重启可复查的缓存凭据。 */
 interface DepsListFile {
-  version: 4
+  version: typeof DEPS_LIST_VERSION
   module: string
   /** clientRoot realpath（根变更/移动后旧缓存直接失效，不误用）。 */
   root: string
@@ -161,13 +176,39 @@ async function compileUncached(
   );
   const entryReal = assertEntryInsideRoot(pluginId, rootReal, moduleRef);
 
+  // 1. 进程内内存缓存快路径（按本地文件 mtime 极速判定，跳过逐个 npm 依赖 sha256 磁盘遍历）
+  const npmKey = npmRoots.map((r) => `${r.packageRoot}:${r.specifiers.join(',')}`).sort().join(';');
+  const memKey = `${pluginId}\0${moduleRef}\0${rootReal}\0${npmKey}`;
+  const memEntry = memoryCompiledCache.get(memKey);
+  if (memEntry && memEntry.root === rootReal) {
+    let fresh = true;
+    for (const [abs, mtime] of memEntry.localMtimes) {
+      try {
+        if (statSync(abs).mtimeMs !== mtime) {
+          fresh = false;
+          break;
+        }
+      } catch {
+        fresh = false;
+        break;
+      }
+    }
+    if (fresh) {
+      return memEntry.result;
+    }
+    memoryCompiledCache.delete(memKey);
+  }
+
   const stagingDir = join(cacheDir, 'plugin-staging', safeDirName(pluginId));
   const baseName = safeFileName(moduleRef);
   const depsListPath = join(stagingDir, `${baseName}.deps.json`);
 
   // 缓存复查：清单合法且每个依赖 sha256 与磁盘一致时复用产物，零编译
   const cached = readCachedResult(stagingDir, depsListPath, rootReal, moduleRef);
-  if (cached) return cached;
+  if (cached) {
+    recordMemoryCache(memKey, rootReal, depsListPath, cached);
+    return cached;
+  }
 
   // 真实编译：metafile 收集实际依赖闭包；onLoad 逐文件 containment；裸依赖显式拒绝。
   // 虚拟 outfile：esbuild 原生 CSS bundling 要求 JS→CSS import 有输出路径（write:false
@@ -184,7 +225,8 @@ async function compileUncached(
       platform: 'browser',
       jsx: 'automatic',
       write: false,
-      minify: false,
+      minifyWhitespace: true,
+      minifyIdentifiers: true,
       sourcemap: false,
       metafile: true,
       absWorkingDir: rootReal,
@@ -232,8 +274,45 @@ async function compileUncached(
   const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps);
   mkdirSync(stagingDir, { recursive: true });
   atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.mjs`), output);
+  let gzipped: Uint8Array | undefined;
+  try {
+    const gz = gzipSync(Buffer.from(output, 'utf8'));
+    atomicWriteBuffer(join(stagingDir, `${baseName}.${list.contentHash}.mjs.gz`), gz);
+    gzipped = gz;
+  } catch {
+    /* 预压缩失败不影响编译产物主流程 */
+  }
   atomicWrite(depsListPath, `${JSON.stringify(list)}\n`);
-  return { code: output, contentHash: list.contentHash };
+  const finalResult: ClientCompileResult = { code: output, contentHash: list.contentHash, gzipped };
+  recordMemoryCache(memKey, rootReal, depsListPath, finalResult);
+  return finalResult;
+}
+
+function recordMemoryCache(
+  memKey: string,
+  rootReal: string,
+  depsListPath: string,
+  result: ClientCompileResult,
+): void {
+  try {
+    const list = JSON.parse(readFileSync(depsListPath, 'utf8')) as DepsListFile;
+    const localMtimes = new Map<string, number>();
+    for (const dep of list.dependencies) {
+      const abs = join(rootReal, dep.path);
+      try {
+        localMtimes.set(abs, statSync(abs).mtimeMs);
+      } catch {
+        /* ignore */
+      }
+    }
+    memoryCompiledCache.set(memKey, {
+      result,
+      localMtimes,
+      root: rootReal,
+    });
+  } catch {
+    /* ignore */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -612,9 +691,19 @@ function readCachedResult(
     if (sha256(source) !== dep.sha256) return undefined;
   }
   const codePath = join(stagingDir, `${safeFileName(moduleRef)}.${list.contentHash}.mjs`);
+  const gzPath = join(stagingDir, `${safeFileName(moduleRef)}.${list.contentHash}.mjs.gz`);
   if (!existsSync(codePath)) return undefined;
   try {
-    return { code: readFileSync(codePath, 'utf8'), contentHash: list.contentHash };
+    const code = readFileSync(codePath, 'utf8');
+    let gzipped: Uint8Array | undefined;
+    if (existsSync(gzPath)) {
+      try {
+        gzipped = readFileSync(gzPath);
+      } catch {
+        /* 读取预压缩文件失败则留空，由调用方按需生成 */
+      }
+    }
+    return { code, contentHash: list.contentHash, gzipped };
   } catch {
     return undefined;
   }
@@ -700,6 +789,22 @@ function atomicWrite(targetPath: string, content: string): void {
   const tmp = `${targetPath}.tmp-${randomUUID()}`;
   try {
     writeFileSync(tmp, content, 'utf8');
+    renameSync(tmp, targetPath);
+  } catch (err) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      /* 清理失败不掩盖原始错误 */
+    }
+    throw err;
+  }
+}
+
+function atomicWriteBuffer(targetPath: string, content: Buffer | Uint8Array): void {
+  mkdirSync(dirname(targetPath), { recursive: true });
+  const tmp = `${targetPath}.tmp-${randomUUID()}`;
+  try {
+    writeFileSync(tmp, content);
     renameSync(tmp, targetPath);
   } catch (err) {
     try {

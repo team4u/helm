@@ -125,9 +125,15 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
             </pre>
           </Callout>
         ) : (
-          <pre className="code-block-pre code-block-pre-flush selectable">
-            <code>{code}</code>
-          </pre>
+          <div className="mermaid-placeholder">
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: 'var(--fg-secondary)', padding: '4px 0 8px' }}>
+              <HelmIcon name="loader" size={13} className="spin-slow" />
+              <span>正在渲染 Mermaid 图表...</span>
+            </div>
+            <pre className="code-block-pre code-block-pre-flush selectable" style={{ opacity: 0.5 }}>
+              <code>{code}</code>
+            </pre>
+          </div>
         )}
       </div>
       {zoomOpen && <MermaidPreviewModal code={code} svg={svg} onClose={() => setZoomOpen(false)} />}
