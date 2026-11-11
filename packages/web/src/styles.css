@@ -4705,6 +4705,25 @@ input::placeholder {
   border-bottom-color: var(--fg);
 }
 
+/* 模型中心主 Tab 容器与激活内容区：恢复视口高度约束与原生滚动 */
+.model-center-main-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.model-center-main-tabs > .primary-center-content[data-state='active'] {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.model-center-main-tabs > .primary-center-content[data-state='inactive'] {
+  display: none;
+}
+
 .model-defaults-status {
   display: flex;
   align-items: center;

@@ -280,7 +280,7 @@ export function ModelCenter({
         <span className="text-subtle">继承链：临时覆盖 &gt; Profile 模型 &gt; 全局默认</span>
       </div>
 
-      <Tabs value={centerTab} onValueChange={handleTabChange}>
+      <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-main-tabs">
         {/* 供应商 Tab */}
         <TabsContent value="providers" className="primary-center-content">
           {/* 工具栏：搜索框、分类药丸与刷新目录 */}

@@ -589,3 +589,30 @@ test('静态代码扫描: 模型选择场景消费加宽下拉面板与哨兵空
   assert.match(panelSource, /UNSET_MODEL_VALUE/)
   assert.doesNotMatch(panelSource, /value: ''/) 
 })
+
+test('契约：ModelCenter 主 Tab 容器接入 model-center-main-tabs 保持视口高度约束与内容区可滚动', { timeout: 60_000 }, () => {
+  const modelCenterSource = readFileSync(join(PKG_ROOT, 'src', 'models', 'ModelCenter.tsx'), 'utf8')
+  const stylesSource = readFileSync(join(PKG_ROOT, 'src', 'styles.css'), 'utf8')
+
+  // 1. ModelCenter 主 Tabs 节点显式携带 model-center-main-tabs
+  assert.match(
+    modelCenterSource,
+    /<Tabs\s+value=\{centerTab\}\s+onValueChange=\{handleTabChange\}\s+className="model-center-main-tabs">/,
+    'ModelCenter 内部承载 TabsContent 的根容器必须声明 model-center-main-tabs 类名',
+  )
+
+  // 2. styles.css 为 .model-center-main-tabs 提供 flex: 1 与 min-height: 0 视口约束
+  assert.match(
+    stylesSource,
+    /\.model-center-main-tabs\s*\{[\s\S]*?flex:\s*1;[\s\S]*?min-height:\s*0;[\s\S]*?overflow:\s*hidden;/,
+    'model-center-main-tabs 必须具备 flex: 1 与 min-height: 0 视口约束',
+  )
+
+  // 3. 激活状态的内容区必须声明 flex: 1 与 overflow-y: auto 原生滚动
+  assert.match(
+    stylesSource,
+    /\.model-center-main-tabs\s*>\s*\.primary-center-content\[data-state=['"]active['"]\]\s*\{[\s\S]*?overflow-y:\s*auto;/,
+    '激活的 primary-center-content 必须具备 overflow-y: auto 原生滚动',
+  )
+})
+
