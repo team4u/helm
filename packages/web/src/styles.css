@@ -5704,8 +5704,9 @@ input::placeholder {
   color: var(--fg-muted);
 }
 
-/* 520px/540px 右侧滑出抽屉通用规范（模型/Profile/节点/技能四大中心） */
-.primary-drawer-backdrop {
+/* 520px/540px 右侧滑出抽屉通用规范（模型/Profile/节点/技能四大中心 + 应用中心） */
+.primary-drawer-backdrop,
+.app-detail-backdrop {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.28);

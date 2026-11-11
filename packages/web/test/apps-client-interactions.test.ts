@@ -92,16 +92,20 @@ function screen(pluginId: string, screenId: string, label: string): { pluginId: 
 }
 
 /** 可变参数容器：模拟宿主 setScreenParams → 状态更新 → 重新渲染链路。 */
-function mutableScreenProps(initial: Record<string, string> = {}): { props: ScreenProps } {
+function mutableScreenProps(
+  initial: Record<string, string> = {},
+  extra: Record<string, unknown> = {},
+): { props: ScreenProps & Record<string, unknown> } {
   const params: Record<string, string> = { ...initial }
-  const props: ScreenProps = {
+  const props = {
     pluginId: 'builtin:apps',
     screenId: 'center',
     isSplit: false,
+    ...extra,
     get params() {
       return { ...params }
     },
-    setParams: (patch) => {
+    setParams: (patch: Record<string, string | undefined>) => {
       setParamsCalls.push({ patch })
       for (const [key, value] of Object.entries(patch)) {
         if (value === undefined) delete params[key]
@@ -182,19 +186,19 @@ test('应用合并：仅非 builtin 且有 Screen 的外部插件进入列表，
   unmount()
 })
 
-test('打开应用与分屏打开：分别调用 ctx.openScreen / openSplitScreen（声明式目标字符串）', { timeout: 60_000 }, async () => {
+test('打开应用与分屏打开：整卡点击调用 ctx.openScreen，分屏按钮调用 openSplitScreen', { timeout: 60_000 }, async () => {
   stubStore([plugin('todo-app', { name: '待办应用' })], [screen('todo-app', 'main', '待办台')])
   const ctx = makeSpyCtx()
   const { host, unmount } = await mount(ctx, screenProps())
 
-  const openBtn = host.querySelector<HTMLButtonElement>('[data-app-id="todo-app"] .btn:not(.btn-icon-xs)')
-  assert.ok(openBtn, '应存在「打开应用」按钮')
+  const card = host.querySelector<HTMLElement>('[data-app-id="todo-app"]')
+  assert.ok(card, '应存在待办应用卡片')
   await act(async () => {
-    openBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    card.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
-  assert.deepEqual(ctx.screenCalls, ['screen:todo-app/main'], '打开应用走声明式目标字符串')
+  assert.deepEqual(ctx.screenCalls, ['screen:todo-app/main'], '卡片整卡点击打开应用走声明式目标字符串')
 
-  const splitBtn = host.querySelector<HTMLButtonElement>('[data-app-id="todo-app"] .btn-icon-xs')
+  const splitBtn = host.querySelector<HTMLButtonElement>('[data-app-id="todo-app"] button[aria-label="分屏打开应用"]')
   assert.ok(splitBtn, '应存在分屏打开按钮')
   await act(async () => {
     splitBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -203,14 +207,14 @@ test('打开应用与分屏打开：分别调用 ctx.openScreen / openSplitScree
   unmount()
 })
 
-test('停用应用：卡片标记 is-disabled，打开按钮不出现（无虚构视图）', { timeout: 60_000 }, async () => {
+test('停用应用：卡片标记 is-disabled，分屏按钮不出现（无虚构视图）', { timeout: 60_000 }, async () => {
   // 停用但宿主仍返回其 Screen 贡献的场景（防御：按贡献渲染但打开入口要求 enabled）
   stubStore([plugin('tracker-app', { enabled: false })], [screen('tracker-app', 'main', '看板')])
   const { host, unmount } = await mount(makeSpyCtx(), screenProps())
   const card = host.querySelector('[data-app-id="tracker-app"]')
   assert.ok(card?.classList.contains('is-disabled'))
-  const openBtn = Array.from(card?.querySelectorAll('button') ?? []).find((b) => b.textContent?.includes('打开应用'))
-  assert.equal(openBtn, undefined, '停用应用不得提供打开应用入口（提供插件中心启用）')
+  const splitBtn = card?.querySelector('button[aria-label="分屏打开应用"]')
+  assert.equal(splitBtn, null, '停用应用不得提供分屏打开入口（提供插件中心启用）')
   unmount()
 })
 
@@ -339,6 +343,49 @@ test('未登记 catalog 且无 Screen 的外部插件：不进入应用列表', 
   const { host, unmount } = await mount(makeSpyCtx(), screenProps())
   assert.equal(host.querySelectorAll('.app-card').length, 0)
   assert.match(host.textContent ?? '', /还没有全栈应用/)
+  unmount()
+})
+
+test('查看应用详情：点击卡片右下角 3 点按钮展开详情抽屉，遮罩具备正确类名与深链参数同步', { timeout: 60_000 }, async () => {
+  stubStore(
+    [plugin('todo-app', { name: '待办应用', version: '1.2.0' })],
+    [screen('todo-app', 'main', '待办台')],
+    { apps: { 'todo-app': { pluginId: 'todo-app', pinned: false, category: 'productivity' } } },
+  )
+  const { props } = mutableScreenProps({}, { inlineDrawer: true })
+  const { host, unmount, reRender } = await mount(makeSpyCtx(), props)
+
+  // 1. 卡片右下角 3 点详情按钮
+  const detailBtn = host.querySelector<HTMLButtonElement>('[data-app-id="todo-app"] button[aria-label="查看应用详情"]')
+  assert.ok(detailBtn, '应存在查看应用详情按钮')
+
+  await act(async () => {
+    detailBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  assert.ok(setParamsCalls.some((c) => c.patch['app'] === 'todo-app'), '点击 3 点按钮回写 app 参数')
+
+  // 2. 模拟宿主状态写回更新后重新渲染抽屉
+  await reRender()
+
+  const drawer = document.body.querySelector('.primary-drawer-content')
+  assert.ok(drawer, '详情抽屉应渲染展开并使用 primary-drawer-content 规范样式')
+  assert.match(drawer.textContent ?? '', /待办应用/)
+  assert.match(drawer.textContent ?? '', /v1.2.0/)
+  assert.match(drawer.textContent ?? '', /效率工具/)
+
+  // 3. 遮罩层必须具备 primary-drawer-backdrop 类名（确保 z-index: 90 低于抽屉主体 z-index: 100）
+  const overlay = document.body.querySelector('.primary-drawer-backdrop')
+  assert.ok(overlay, '遮罩层必须绑定 .primary-drawer-backdrop 通用层级规范')
+  assert.ok(overlay.classList.contains('modal-backdrop'), '遮罩层需保留基础毛玻璃类名')
+
+  // 4. 点击抽屉右上角关闭按钮
+  const closeBtn = drawer.querySelector<HTMLButtonElement>('button[aria-label="关闭"]')
+  assert.ok(closeBtn, '应存在关闭按钮')
+  await act(async () => {
+    closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  assert.ok(setParamsCalls.some((c) => c.patch['app'] === undefined), '关闭抽屉清理 app 深链参数')
+
   unmount()
 })
 

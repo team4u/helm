@@ -135,32 +135,18 @@ function AppCard({
         </div>
         <div className="app-card-actions">
           {isReady && target !== null ? (
-            <>
-              <button
-                type="button"
-                className="btn btn-xs"
-                title="在主屏打开应用"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpen(target)
-                }}
-              >
-                <HelmIcon name="play" size={10} />
-                <span>打开应用</span>
-              </button>
-              <button
-                type="button"
-                className="btn btn-xs btn-icon-xs"
-                title="在右侧分屏并排打开"
-                aria-label="分屏打开应用"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpenSplit(target)
-                }}
-              >
-                <HelmIcon name="columns" size={11} />
-              </button>
-            </>
+            <button
+              type="button"
+              className="btn btn-xs btn-icon-xs"
+              title="在右侧分屏并排打开"
+              aria-label="分屏打开应用"
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpenSplit(target)
+              }}
+            >
+              <HelmIcon name="columns" size={11} />
+            </button>
           ) : (
             <button
               type="button"
@@ -200,12 +186,14 @@ function AppCard({
  */
 function AppDetailDrawer({
   item,
+  inline,
   onClose,
   onPin,
   pinPending,
   pinError,
 }: {
   item: AppItem
+  inline?: boolean
   onClose: () => void
   onPin: (pluginId: string, pinned: boolean) => void
   pinPending: boolean
@@ -222,36 +210,82 @@ function AppDetailDrawer({
     ctx.openSplitScreen(iterateTarget)
   }
 
+  const versionLabel = plugin.version ? `v${plugin.version.replace(/^v/, '')}` : null
+  const description =
+    plugin.description && plugin.description.trim() !== ''
+      ? plugin.description
+      : screens.length > 0
+        ? `提供 ${screens.map((s) => s.label).join('、')} 视图。`
+        : '全栈微应用。'
+
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogPortal inline>
-        <DialogOverlay className="modal-backdrop" />
+      <DialogPortal inline={inline}>
+        <DialogOverlay className="modal-backdrop primary-drawer-backdrop" />
         <DialogContent
-          className="modal app-detail-drawer"
+          className="primary-drawer-content app-detail-drawer"
           role="dialog"
           aria-label={`${plugin.name || plugin.id} 应用详情`}
         >
-          <div className="modal-header">
-            <DialogTitle className="modal-title">
-              <HelmIcon name={catalog?.icon ?? 'layout-grid'} size={14} />
-              <span>{plugin.name || plugin.id}</span>
-            </DialogTitle>
+          {/* 抽屉头部：统一复用 primary-drawer-header 规范 */}
+          <div className="primary-drawer-header">
+            <div className="primary-drawer-header-left">
+              <div className="primary-drawer-icon-wrap">
+                <HelmIcon name={catalog?.icon ?? 'layout-grid'} size={18} />
+              </div>
+              <div className="primary-drawer-title-col">
+                <div className="primary-drawer-title-row">
+                  <DialogTitle className="primary-drawer-title">
+                    {plugin.name || plugin.id}
+                  </DialogTitle>
+                  {versionLabel && (
+                    <span className="badge badge-neutral mono" title={`版本 ${versionLabel}`}>
+                      {versionLabel}
+                    </span>
+                  )}
+                  <span className="badge badge-neutral">
+                    {APP_CATEGORY_LABELS[normalizeAppCategory(catalog?.category)]}
+                  </span>
+                  {catalog?.pinned === true && (
+                    <span className="badge badge-neutral" title="已置顶">
+                      已置顶
+                    </span>
+                  )}
+                  {plugin.enabled ? (
+                    <span className="badge badge-ok">已就绪</span>
+                  ) : (
+                    <span className="badge badge-neutral">已停用</span>
+                  )}
+                </div>
+                <div className="mono text-subtle text-xs" title={plugin.id}>
+                  {plugin.id}
+                </div>
+              </div>
+            </div>
             <DialogClose asChild>
               <button type="button" className="btn btn-ghost btn-sm" aria-label="关闭" title="关闭">
                 <HelmIcon name="x" size={14} />
               </button>
             </DialogClose>
           </div>
-          <div className="modal-body app-detail-body">
-            <div className="app-detail-meta">
+
+          {/* 抽屉主体：统一复用 primary-drawer-body 全高纵向滚动规范 */}
+          <div className="primary-drawer-body">
+            {description && (
+              <p className="text-secondary text-sm" style={{ margin: 0, lineHeight: 1.55 }}>
+                {description}
+              </p>
+            )}
+
+            <div className="section-flat">
               <div className="form-grid">
                 <span className="form-grid-label"><span>应用 ID</span></span>
                 <span className="form-grid-value mono selectable">{plugin.id}</span>
               </div>
-              {plugin.version !== undefined && plugin.version !== '' && (
+              {versionLabel && (
                 <div className="form-grid">
                   <span className="form-grid-label"><span>版本</span></span>
-                  <span className="form-grid-value mono">{`v${plugin.version.replace(/^v/, '')}`}</span>
+                  <span className="form-grid-value mono">{versionLabel}</span>
                 </div>
               )}
               <div className="form-grid">
@@ -261,7 +295,7 @@ function AppDetailDrawer({
                 </span>
               </div>
               <div className="form-grid">
-                <span className="form-grid-label"><span>置顶</span></span>
+                <span className="form-grid-label"><span>置顶状态</span></span>
                 <span className="form-grid-value">
                   <button
                     type="button"
@@ -357,7 +391,16 @@ function AppDetailDrawer({
               )}
             </div>
           </div>
-          <div className="modal-footer">
+
+          {/* 抽屉底部 */}
+          <div className="primary-drawer-footer">
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={onClose}
+            >
+              <span>关闭</span>
+            </button>
             <button
               type="button"
               className="btn btn-sm"
@@ -379,7 +422,11 @@ function AppDetailDrawer({
   )
 }
 
-export function AppCenterScreen(props: ScreenProps): ReactNode {
+export interface AppCenterScreenProps extends ScreenProps {
+  inlineDrawer?: boolean
+}
+
+export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
   const ctx = usePluginContext()
   const { plugins, screens } = usePlugins()
   const catalog = usePluginDoc<AppCatalogDoc | undefined>('catalog')
@@ -556,6 +603,7 @@ export function AppCenterScreen(props: ScreenProps): ReactNode {
       {selectedItem !== undefined && (
         <AppDetailDrawer
           item={selectedItem}
+          inline={props.inlineDrawer}
           onClose={() => props.setParams({ app: undefined })}
           onPin={(pluginId, pinned) => void handlePin(pluginId, pinned)}
           pinPending={pinPendingId === selectedItem.plugin.id}
