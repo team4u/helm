@@ -25,7 +25,7 @@
 HELM_PORT=3202 pnpm dev        # 前后端一起
 HELM_PORT=3202 pnpm dev:kernel # 只起内核
 pnpm dev:web                   # 只起前端（需内核已在 3202）
-pnpm build && pnpm typecheck && pnpm test
+pnpm build && pnpm typecheck && pnpm test:all   # 全量；本地开发默认 pnpm test:unit，见「测试分层执行」
 ```
 
 ## 架构铁律（微内核 + Hook/UI 扩展点 + 内置插件）
@@ -92,7 +92,11 @@ pnpm build && pnpm typecheck && pnpm test
   - **Radix UI 唯一交互原语底座**：凡涉及浮层、对话框、下拉、标签页、提示等交互组件，**一律基于 `packages/web/src/ui/` 下的 Radix Primitives 封装**（`Dialog` / `AlertDialog` / `Select` / `DropdownMenu` / `Popover` / `Tabs` / `Tooltip`）；全仓严禁使用原生 `<select>`，严禁手写无 WAI-ARIA/Focus Trap 的简陋浮层；表单与布局严格使用 `.form-grid`、`.section-flat`、`.list-item-btn` 原语类，严禁大面积内联样式。
   - **移动端与自适应字号规范**：保持紧凑克制，正文 13/14px，移动端（≤680px）与分屏下严禁输入框字号突兀放大；移动端抽屉与弹窗自适应 100% 宽。
 - **UI 极简无 Emoji 规范（重要）**：Web 界面与所有内置/外置插件 UI 遵循极简克制风格，**严禁在界面文案、左栏导航项、分组标题、按钮、状态徽章或卡片中使用任何 Emoji 表情图标**；图标统一使用 `lucide-react` 线性矢量图标或纯文本排版。
-- **单测防死锁**：单测显式声明 `{ timeout: 60_000 }`（runner 为 `tsx --test`）；测试命令必须加总超时（如 `timeout 50s ...`），保留完整日志，不用过滤管道隐藏失败。
+- **单测防死锁**：单测显式声明 `{ timeout: 60_000 }`（runner 为 `tsx --test`）；通过 `pnpm test:*` 运行，`scripts/run-tests.mjs` 内置跨平台单测超时、整套超时与进程树清理。不要依赖 Unix `timeout` 命令，也不要用过滤管道隐藏失败日志。
+- **测试分层执行（重要）**：分层入口为 `scripts/test-suites.mjs`（复用 `scripts/run-tests.mjs` 的跨平台 spawn/超时/进程树清理），命令三档：`pnpm test:unit` / `pnpm test:integration` / `pnpm test:all`（`pnpm test` 兼容旧语义，等于 `test:all`）。
+  - **执行规则**：本地改动默认跑 `test:unit`；改动 kernel/node 包跑 `test:integration`；改动同时影响两档契约时两档都跑；全量验收与 CI 跑 `test:all`。勿用 `HELM_TEST_SUITE_TIMEOUT_MS` 环境变量调总超时（kernel 的 `env-registry-races` 会因宿主残留 HELM_* 变量误报）。
+  - **分类保守原则**：当前为包级切分——`unit` = protocol + cli + web（web 含 happy-dom/React 交互测试，属进程内 DOM 模拟，不起真实服务）；`integration` = kernel + node（**全部**视为集成，含真实进程、SQLite、Git、WebSocket、`createHelm`、`@helm/node` daemon）。分类存疑时一律入 integration；新增包或新增测试文件未登记套件时脚本会拒绝执行并报错。
+  - **不变量**：`all` = unit ∪ integration，不重不漏（脚本内置断言）；新增测试文件必须落在已登记包的 test 目录下，新包需同步更新 `scripts/test-suites.mjs` 的 `SUITES` 分档。
 - **前端保 Fast Refresh**：`.tsx` 组件文件**只导出组件与 TS 类型**；纯函数/常量放独立模块。
 
 ## Web 导航与 URL Hash（重要）
