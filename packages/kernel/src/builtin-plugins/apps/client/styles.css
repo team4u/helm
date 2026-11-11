@@ -242,6 +242,71 @@
   flex-shrink: 0;
 }
 
+/* 应用详情使用一级视图右侧抽屉，而不是居中模态，保持与插件中心一致的 520px 详情面板。 */
+.app-detail-drawer {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(520px, 100vw);
+  height: 100vh;
+  max-width: none;
+  margin: 0;
+  border-radius: 0;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 95;
+  animation: drawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.app-detail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.app-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.app-detail-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.app-detail-screen-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.app-detail-screen-label,
+.app-detail-screen-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.app-detail-screen-label {
+  min-width: 0;
+  color: var(--fg-secondary);
+}
+
+.app-detail-screen-label > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .apps-empty {
   display: flex;
   flex-direction: column;
