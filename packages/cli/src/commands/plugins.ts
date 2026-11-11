@@ -3,7 +3,16 @@
  * （DX 闭环）与 actions list。config 除 --input <json> 外支持可重复 --set key=value
  * （值按 JSON boolean/number 语义解析，否则 string）。plugins init 为本地脚手架命令。
  */
-import type { ActionManifest, PluginDoctorReport, PluginReloadResult, PluginRescanResult, PluginSummary } from '@helm/protocol'
+import type {
+  ActionManifest,
+  PluginDoctorReport,
+  PluginInstallResult,
+  PluginReloadResult,
+  PluginRemoveResult,
+  PluginRescanResult,
+  PluginSummary,
+  PluginUpdateResult,
+} from '@helm/protocol'
 import { CliError } from '../errors.js'
 import { parseFlags } from '../args.js'
 import { printValue } from '../output.js'
@@ -389,6 +398,45 @@ export function pluginsCommands(): CommandSpec[] {
     positional: '[name]',
     async run(ctx: CommandContext) {
       await runPluginsInit(ctx)
+    },
+  })
+
+  cmds.push({
+    path: ['plugins', 'install'],
+    description: '从 npm/git/本地路径安装外部插件包（POST /api/plugins/install；契约已定义，服务端实现待补）',
+    positional: '<source>',
+    async run(ctx: CommandContext) {
+      const parsed = parseFlags([], ctx.args)
+      const source = requirePositional(parsed.positionals, 0, 'source')
+      assertNoExtraPositionals(parsed.positionals, 1)
+      const hub = await ctx.hub()
+      printResult(ctx, await hub.post<PluginInstallResult>('/api/plugins/install', { source }))
+    },
+  })
+
+  cmds.push({
+    path: ['plugins', 'update'],
+    description: '更新已安装的外部插件包（POST /api/plugins/:id/update；契约已定义，服务端实现待补）',
+    positional: '<id>',
+    async run(ctx: CommandContext) {
+      const parsed = parseFlags([], ctx.args)
+      const id = requirePositional(parsed.positionals, 0, 'id')
+      assertNoExtraPositionals(parsed.positionals, 1)
+      const hub = await ctx.hub()
+      printResult(ctx, await hub.post<PluginUpdateResult>(`/api/plugins/${encodeURIComponent(id)}/update`))
+    },
+  })
+
+  cmds.push({
+    path: ['plugins', 'remove'],
+    description: '移除已安装的外部插件包（POST /api/plugins/:id/remove；契约已定义，服务端实现待补）',
+    positional: '<id>',
+    async run(ctx: CommandContext) {
+      const parsed = parseFlags([], ctx.args)
+      const id = requirePositional(parsed.positionals, 0, 'id')
+      assertNoExtraPositionals(parsed.positionals, 1)
+      const hub = await ctx.hub()
+      printResult(ctx, await hub.post<PluginRemoveResult>(`/api/plugins/${encodeURIComponent(id)}/remove`))
     },
   })
 

@@ -755,6 +755,32 @@ minimal 模板仅生成 `plugin.json`（不声明 `clientRoot`）、`index.ts`�
 
 ---
 
+#### helm plugins install / update / remove
+
+外部插件包受管安装（契约已定义，服务端实现待补）。
+
+```bash
+# source 四种写法：npm 说明符 / git 前缀 / HTTPS Git URL / 本地路径
+helm plugins install npm:helm-plugin-foo@^1.2.0
+helm plugins install git:https://github.com/user/helm-plugin-foo.git@v1.2.0
+helm plugins install https://github.com/user/helm-plugin-foo.git#v1.2.0
+helm plugins install /root/code/helm-plugin-foo
+
+# 更新与移除（目标为受管安装的插件 id）
+helm plugins update helm-plugin-foo
+helm plugins remove helm-plugin-foo
+```
+
+| 命令 | 端点 | 说明 |
+| :--- | :--- | :--- |
+| `plugins install <source>` | `POST /api/plugins/install` | 安装并注册（默认停用）；返回 `{ record, summary }`。 |
+| `plugins update <id>` | `POST /api/plugins/:id/update` | 更新并重载；返回 `{ record, summary, changed, previousVersion }`。 |
+| `plugins remove <id>` | `POST /api/plugins/:id/remove` | 停用并清理安装目录与记录；返回 `{ pluginId, installPath, wasEnabled, installId }`。 |
+
+source 语法：`npm:<spec>`（npm 依赖说明符）、`git:<repo>@<ref>`（ref 可选，支持子目录）、HTTPS Git URL（`#<ref>` 可选）、绝对/相对本地路径。具体解析由 Hub 执行；当前实现待补，落地前用 `plugins init` + `rescan` 手管目录。
+
+---
+
 #### helm plugins doctor
 
 外部插件源码静态自检。真实代际导入 + 临时宿主真实注册 + 前端模块真实编译（含悬空 `export` 校验），不维护第二套近似校验器。插件缺陷以逐项检查结果呈现；预检失败时命令返回非零退出码（报告仍完整输出）。

@@ -516,6 +516,24 @@ export interface PluginSummary {
   hooks: HookName[]
   actions: string[]
   tools: string[]
+  /**
+   * 受管包安装元数据（additive，可选）：仅当插件来自包安装器
+   * （plugins install/update）时存在；手放置入目录的插件缺省。
+   * 内置插件（builtin:*）永无该字段。
+   */
+  managed?: PluginManagedMeta
+}
+
+/** 受管插件包元数据（PluginSummary.managed 的形状；additive 可选字段）。 */
+export interface PluginManagedMeta {
+  /** 安装来源（解析后的规范化形状；含 source 原文回显）。 */
+  source: PluginPackageSource
+  /** 安装记录 ID（与 PluginPackageRecord.id 一致）。 */
+  installId: string
+  /** 已安装版本（来自包清单 version；未读到时为空串）。 */
+  installedVersion: string
+  /** 最近一次安装/更新完成时间（epoch 毫秒）。 */
+  installedAt: number
 }
 
 /** 单个已注册动作的可串行化清单，供 CLI / Web / Workflow 消费。 */
@@ -584,6 +602,97 @@ export interface PluginRescanResult {
   skipped: number
   /** 全部插件当前清单。 */
   plugins: PluginSummary[]
+}
+
+// ---------------------------------------------------------------------------
+// 外部插件包管理（source grammar / 安装记录 / install / update / remove）
+// 仅可串行化类型；具体解析器（source 字符串 -> 规范化形状）与安装执行由
+// kernel 实现，protocol 不携带运行时。
+// ---------------------------------------------------------------------------
+
+/** npm 注册表来源：`npm:<spec>`（spec 为任意合法 npm 依赖说明符）。 */
+export interface PluginSourceNpm {
+  kind: 'npm'
+  /** 原始 source 字符串（规范回显，如 `npm:helm-plugin-foo@^1.2.0`）。 */
+  raw: string
+  /** npm 依赖说明符（去 `npm:` 前缀后的部分，如 `helm-plugin-foo@^1.2.0`）。 */
+  spec: string
+}
+
+/** Git 来源：`git:<repo>@<ref>` 或 HTTPS Git URL（`https://...git[#<ref>]`）。 */
+export interface PluginSourceGit {
+  kind: 'git'
+  /** 原始 source 字符串（规范回显）。 */
+  raw: string
+  /** Git 仓库地址（如 `https://github.com/user/helm-plugin-foo.git` 或 `git@host:path` 形式的 repo 部分）。 */
+  repo: string
+  /** 检出的 Git ref（分支/Tag/Commit；缺省由安装器决定，通常仓库默认分支）。 */
+  ref?: string
+  /** 仓库内子目录（monorepo 布局；缺省为仓库根）。 */
+  subdirectory?: string
+}
+
+/** 本地路径来源：绝对路径或相对 Hub cwd / 插件根目录的相对路径。 */
+export interface PluginSourceLocal {
+  kind: 'local'
+  /** 原始 source 字符串（规范回显，保留用户写法）。 */
+  raw: string
+  /** 解析后的绝对路径（安装器规范化；Windows 亦为绝对路径）。 */
+  path: string
+}
+
+/** 规范化插件包来源（判别联合，kind 判别）。 */
+export type PluginPackageSource = PluginSourceNpm | PluginSourceGit | PluginSourceLocal
+
+/** 受管插件包安装记录（持久化于安装器私有存储；非全局首帧/SSE 广播载荷）。 */
+export interface PluginPackageRecord {
+  /** 安装记录 ID（幂等稳定标识；同一插件重复 install 复用原 ID 更新记录）。 */
+  id: string
+  /** 安装目标插件 id（包清单声明；如 `my-plugin`）。 */
+  pluginId: string
+  /** 规范化安装来源。 */
+  source: PluginPackageSource
+  /** 安装目标磁盘绝对路径（<dataDir>/plugins/<pluginId>）。 */
+  installPath: string
+  /** 包清单声明版本；未读到时为空串（不虚构）。 */
+  version: string
+  /** 首次安装完成时间（epoch 毫秒）。 */
+  installedAt: number
+  /** 最近一次更新完成时间（epoch 毫秒）；从未更新时与 installedAt 相同。 */
+  updatedAt: number
+  /** 启用状态由插件系统自身管理，不在此记录（避免双源）。 */
+}
+
+/** 安装结果（POST /api/plugins/install）。 */
+export interface PluginInstallResult {
+  /** 安装记录（已持久化）。 */
+  record: PluginPackageRecord
+  /** 安装后插件当前清单（安装即注册，默认停用，与 rescan 同语义）。 */
+  summary: PluginSummary
+}
+
+/** 更新结果（POST /api/plugins/:id/update）。 */
+export interface PluginUpdateResult {
+  /** 更新后的安装记录（version / updatedAt 已推进）。 */
+  record: PluginPackageRecord
+  /** 更新并重载（或重新注册）后的插件清单。 */
+  summary: PluginSummary
+  /** 本次更新是否实际变更（源未变化时 false，幂等语义如实回报）。 */
+  changed: boolean
+  /** 更新前版本（诊断用；未读到时为空串）。 */
+  previousVersion: string
+}
+
+/** 移除结果（POST /api/plugins/:id/remove）。 */
+export interface PluginRemoveResult {
+  /** 被移除的插件 id。 */
+  pluginId: string
+  /** 被清理的安装目录绝对路径。 */
+  installPath: string
+  /** 移除前是否处于启用状态（启用中移除需先停用；此处回显事实）。 */
+  wasEnabled: boolean
+  /** 移除的安装记录 ID。 */
+  installId: string
 }
 
 // ---------------------------------------------------------------------------
