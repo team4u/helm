@@ -9,7 +9,7 @@
  *    新值才提交该字段。
  */
 
-import type { PluginConfigFieldSchema } from '@helm/protocol'
+import type { PluginConfigFieldSchema, PluginConfigFieldSource } from '@helm/protocol'
 
 export type ConfigValue = string | number | boolean
 
@@ -53,4 +53,25 @@ export function buildPluginConfigPayload(
     if (value !== undefined) payload[key] = value
   }
   return payload
+}
+
+/**
+ * 单字段可否重置：
+ * - source === 'configured'：磁盘存在用户显式覆写键，发送 null 可清除；
+ * - 未提供 sources（旧内核）时，对已配置的 secret 字段（回显掩码非空串）
+ *   同样允许清除，避免凭据无法收回。
+ */
+export function canResetConfigField(
+  fieldSchema: PluginConfigFieldSchema,
+  source?: PluginConfigFieldSource,
+  rawValue?: unknown,
+): boolean {
+  if (source === 'configured') return true
+  if (source !== undefined) return false
+  return fieldSchema.secret === true && secretConfigured(rawValue)
+}
+
+/** 单字段重置载荷：发送 { [key]: null } 清除显式覆写值，回退 schema.default。 */
+export function buildResetFieldPayload(key: string): Record<string, null> {
+  return { [key]: null }
 }

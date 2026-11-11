@@ -6,6 +6,10 @@ import { renderToString } from 'react-dom/server'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginSummary } from '@helm/protocol'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../src/lib/api.js'
+import {
+  buildResetFieldPayload,
+  canResetConfigField,
+} from '../src/modals/plugin-config-form-model.js'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions } from '../src/lib/types.js'
 import { makeTestStore } from './helpers/store.js'
@@ -520,6 +524,354 @@ test('PluginDetailDrawer：当 store 中存在 settingsPanels 扩展时正确挂
     assert.match(bodyText, /工作流高级调控/)
   } finally {
     pluginsApi.getConfig = originalGetConfig
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 7. 故障态（failed）展示：异常徽章与结构化诊断框
+// ---------------------------------------------------------------------------
+
+test('PluginDetailDrawer：status === failed 时状态栏显示异常徽章与错误诊断详情', { timeout: 60_000 }, () => {
+  const plugin = makePlugin({
+    id: 'external:broken',
+    name: '损坏插件',
+    enabled: false,
+    status: 'failed',
+    error: {
+      code: 'plugin_load_failed',
+      message: '入口文件 index.ts 转译失败：SyntaxError: Unexpected token',
+      stage: 'load',
+    },
+  })
+
+  const html = renderToString(
+    e(PluginDetailDrawer, {
+      plugin,
+      open: true,
+      inline: true,
+      onClose: () => {},
+      onToggleEnabled: async () => {},
+      toggling: false,
+    }),
+  )
+
+  // 1. 当前状态栏不再仅显示「已停用」，而是异常徽章
+  assert.match(html, /badge badge-err/)
+  assert.match(html, /<span>异常<\/span>/)
+
+  // 2. 显式错误诊断框：阶段 + 错误码 + 完整消息
+  assert.match(html, /callout callout--error/)
+  assert.match(html, /故障阶段：模块加载（load） · 错误码：/)
+  assert.match(html, /plugin_load_failed/)
+  assert.match(html, /入口文件 index\.ts 转译失败/)
+
+  // 3. 铁律：全界面 0 Emoji
+  assert.doesNotMatch(html, /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u)
+})
+
+test('PluginDetailDrawer：正常插件不渲染诊断框与异常徽章', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(PluginDetailDrawer, {
+      plugin: makePlugin({ enabled: true, status: 'active' }),
+      open: true,
+      inline: true,
+      onClose: () => {},
+      onToggleEnabled: async () => {},
+      toggling: false,
+    }),
+  )
+
+  assert.match(html, /已启用/)
+  assert.doesNotMatch(html, /故障阶段：/)
+  assert.doesNotMatch(html, /<span>异常<\/span>/)
+})
+
+// ---------------------------------------------------------------------------
+// 8. 409 plugin_in_use 占用确认与强制停用
+// ---------------------------------------------------------------------------
+
+test('PluginDetailDrawer：停用遇 409 plugin_in_use 时展示占用清单并支持强制停用', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  const originalGetConfig = pluginsApi.getConfig
+  pluginsApi.getConfig = async () => ({ values: {}, schema: {} })
+
+  const toggleCalls: Array<{ force?: boolean } | undefined> = []
+
+  try {
+    const plugin = makePlugin({ enabled: true, locked: false })
+    let failWithInUse = true
+
+    await act(async () => {
+      root.render(
+        e(PluginDetailDrawer, {
+          plugin,
+          open: true,
+          inline: true,
+          onClose: () => {},
+          onToggleEnabled: async (_p, _target, options) => {
+            toggleCalls.push(options)
+            if (failWithInUse) {
+              throw new ApiClientError(
+                'plugin_in_use',
+                '插件存在关联的配置或持久资源，停用后相关功能将失效',
+                409,
+                {
+                  pluginId: plugin.id,
+                  usages: [
+                    { kind: 'profile_runtime', id: 'coder', label: '角色 "coder" 绑定了运行时 herdr' },
+                    { kind: 'cron_job', id: 'nightly', label: 'Cron 定时任务 "nightly"（每晚 02:00）' },
+                  ],
+                },
+              )
+            }
+          },
+          toggling: false,
+        }),
+      )
+    })
+
+    // 点击停用插件
+    const disableBtn = Array.from(container.querySelectorAll('button')).find((btn) =>
+      btn.textContent?.includes('停用插件'),
+    ) as HTMLButtonElement | undefined
+    assert.ok(disableBtn)
+
+    await act(async () => {
+      disableBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+
+    // 占用确认条出现并列出所有占用项
+    const callout = container.querySelector('.callout--warning')
+    assert.ok(callout, '409 plugin_in_use 应展示占用确认提示条')
+    assert.match(callout.textContent || '', /插件资源占用确认/)
+    assert.match(callout.textContent || '', /角色 "coder" 绑定了运行时 herdr/)
+    assert.match(callout.textContent || '', /Cron 定时任务 "nightly"/)
+    assert.equal(toggleCalls.length, 1)
+    assert.equal(toggleCalls[0], undefined, '首次停用不携带 force')
+
+    // 取消按钮：关闭确认条且不触发强制停用
+    const cancelBtn = Array.from(callout.querySelectorAll('button')).find((btn) =>
+      btn.textContent?.includes('取消'),
+    ) as HTMLButtonElement | undefined
+    assert.ok(cancelBtn)
+    await act(async () => {
+      cancelBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.equal(container.querySelector('.callout--warning'), null, '点击取消应关闭占用确认条')
+
+    // 重新触发停用，这次点击「强制停用」
+    await act(async () => {
+      disableBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    const forceBtn = Array.from(container.querySelectorAll('button')).find((btn) =>
+      btn.textContent?.includes('强制停用'),
+    ) as HTMLButtonElement | undefined
+    assert.ok(forceBtn, '占用确认条必须提供强制停用按钮')
+
+    failWithInUse = false
+    await act(async () => {
+      forceBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+
+    assert.equal(toggleCalls.length, 3, '首次停用 + 重触停用 + 强制停用共三次调用')
+    assert.deepEqual(toggleCalls[2], { force: true }, '强制停用应以 force: true 重试')
+    assert.equal(container.querySelector('.callout--warning'), null, '强制停用成功后确认条消失')
+  } finally {
+    pluginsApi.getConfig = originalGetConfig
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('PluginDetailDrawer：409 plugin_has_live_tasks 仍保持硬阻断提示且不提供强制跳过', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  const originalGetConfig = pluginsApi.getConfig
+  pluginsApi.getConfig = async () => ({ values: {}, schema: {} })
+
+  try {
+    const plugin = makePlugin({ enabled: true, locked: false })
+
+    await act(async () => {
+      root.render(
+        e(PluginDetailDrawer, {
+          plugin,
+          open: true,
+          inline: true,
+          onClose: () => {},
+          onToggleEnabled: async () => {
+            throw new ApiClientError('plugin_has_live_tasks', 'Plugin has live tasks', 409)
+          },
+          toggling: false,
+        }),
+      )
+    })
+
+    const disableBtn = Array.from(container.querySelectorAll('button')).find((btn) =>
+      btn.textContent?.includes('停用插件'),
+    ) as HTMLButtonElement | undefined
+    assert.ok(disableBtn)
+
+    await act(async () => {
+      disableBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+
+    const callout = container.querySelector('.callout--error')
+    assert.ok(callout, '在途任务冲突应展示错误提示条')
+    assert.match(callout.textContent || '', /plugin_has_live_tasks/)
+    assert.match(callout.textContent || '', /请等待任务结束或中止后再试/)
+    assert.equal(container.querySelector('.callout--warning'), null, '在途任务不得提供强制停用入口')
+    assert.equal(container.textContent?.includes('强制停用'), false)
+  } finally {
+    pluginsApi.getConfig = originalGetConfig
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 9. 配置表单字段来源标识（sources）与单字段重置
+// ---------------------------------------------------------------------------
+
+test('canResetConfigField / buildResetFieldPayload：来源与 secret 掩码裁决纯函数', { timeout: 60_000 }, () => {
+  const stringSchema = { type: 'string' as const, label: '端点' }
+  const secretSchema = { type: 'string' as const, label: '密钥', secret: true }
+
+  // source === 'configured' 一律可重置
+  assert.equal(canResetConfigField(stringSchema, 'configured'), true)
+  assert.equal(canResetConfigField(secretSchema, 'configured', '******'), true)
+  // default / unset 不可重置
+  assert.equal(canResetConfigField(stringSchema, 'default'), false)
+  assert.equal(canResetConfigField(stringSchema, 'unset'), false)
+  // 旧内核未提供 sources：已配置 secret（掩码非空串）仍可清除
+  assert.equal(canResetConfigField(secretSchema, undefined, '******'), true)
+  assert.equal(canResetConfigField(secretSchema, undefined, ''), false)
+  assert.equal(canResetConfigField(stringSchema, undefined, 'http://x'), false)
+
+  // 重置载荷
+  assert.deepEqual(buildResetFieldPayload('timeout'), { timeout: null })
+  assert.deepEqual(buildResetFieldPayload('apiKey'), { apiKey: null })
+})
+
+test('PluginConfigForm：按 sources 渲染已配置/默认标识与单字段重置按钮', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  const originalGetConfig = pluginsApi.getConfig
+  const originalSetConfig = pluginsApi.setConfig
+
+  const setConfigCalls: Array<Record<string, unknown>> = []
+  let reloadCount = 0
+
+  pluginsApi.getConfig = async (_id: string) => ({
+    values: {
+      endpoint: 'http://10.0.0.1:9000',
+      timeout: 8000,
+      apiKey: '******',
+    },
+    schema: {
+      endpoint: { type: 'string', label: '服务端点', default: 'http://127.0.0.1:3425' },
+      timeout: { type: 'number', label: '超时', default: 5000 },
+      apiKey: { type: 'string', label: '访问令牌', secret: true },
+    },
+    sources: {
+      endpoint: 'configured',
+      timeout: 'default',
+      apiKey: 'configured',
+    },
+  })
+
+  pluginsApi.setConfig = async (_id: string, values: Record<string, unknown>) => {
+    setConfigCalls.push(values)
+    return { ok: true }
+  }
+
+  try {
+    await act(async () => {
+      root.render(
+        e(PluginConfigForm, {
+          pluginId: 'test:source',
+          config: await pluginsApi.getConfig('test:source'),
+          onSaved: () => {
+            reloadCount++
+          },
+        }),
+      )
+    })
+
+    // 1. 来源标识：endpoint 已配置徽章 / timeout 默认文案
+    assert.match(container.textContent || '', /已配置/)
+    assert.match(container.textContent || "", /默认/)
+
+    // 2. 重置按钮仅出现在可重置字段旁：endpoint（configured）与 apiKey（secret 已配置）
+    const resetBtns = Array.from(container.querySelectorAll('button')).filter((btn) =>
+      btn.textContent?.includes('重置') || btn.textContent?.includes('清除'),
+    )
+    assert.equal(resetBtns.length, 2, 'endpoint 重置 + apiKey 清除共两个按钮')
+    assert.match(resetBtns.map((b) => b.textContent || '').join('|'), /重置/)
+    assert.match(resetBtns.map((b) => b.textContent || '').join('|'), /清除/)
+
+    // 3. 点击 endpoint 的重置按钮：发送 { endpoint: null } 并触发 onSaved 重载
+    const endpointResetBtn = resetBtns.find((btn) => btn.textContent?.includes('重置'))
+    assert.ok(endpointResetBtn)
+    await act(async () => {
+      endpointResetBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.equal(setConfigCalls.length, 1)
+    assert.deepEqual(setConfigCalls[0], { endpoint: null })
+    assert.equal(reloadCount, 1, '重置成功后必须触发 onSaved 重新拉取配置')
+  } finally {
+    pluginsApi.getConfig = originalGetConfig
+    pluginsApi.setConfig = originalSetConfig
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('PluginConfigForm：必填且无 default 的字段不渲染重置按钮', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  try {
+    await act(async () => {
+      root.render(
+        e(PluginConfigForm, {
+          pluginId: 'test:required',
+          config: {
+            values: { token: 'abc' },
+            schema: {
+              token: { type: 'string', label: '必填令牌', required: true },
+            },
+            sources: { token: 'configured' },
+          },
+          onSaved: () => {},
+        }),
+      )
+    })
+
+    assert.match(container.textContent || '', /已配置/)
+    const resetBtns = Array.from(container.querySelectorAll('button')).filter((btn) =>
+      btn.textContent?.includes('重置') || btn.textContent?.includes('清除'),
+    )
+    assert.equal(resetBtns.length, 0, '必填且无默认值的字段不允许清除')
+  } finally {
     await act(async () => {
       root.unmount()
     })

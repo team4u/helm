@@ -26,6 +26,7 @@ import type {
   NodeUpgradeInput,
   NodeUpgradeResult,
   PluginConfigFieldSchema,
+  PluginConfigFieldSource,
   PluginDoctorReport,
   PluginInstallResult,
   PluginRemoveResult,
@@ -450,14 +451,21 @@ export const assetsApi = {
 export interface PluginConfigResponse {
   values: Record<string, unknown>
   schema: Record<string, PluginConfigFieldSchema>
+  /** 各字段当前生效来源（configured | default | unset）；旧内核可缺省。 */
+  sources?: Record<string, PluginConfigFieldSource>
 }
 
 export const pluginsApi = {
   list: () => apiRequest<PluginSummary[]>('GET', '/api/plugins'),
   enable: (id: string) =>
     apiRequest<PluginSummary[]>('POST', `/api/plugins/${encodeURIComponent(id)}/enable`),
-  disable: (id: string) =>
-    apiRequest<PluginSummary[]>('POST', `/api/plugins/${encodeURIComponent(id)}/disable`),
+  /** 停用插件；force: true 用于在知情前提下越过 409 plugin_in_use 占用拦截。 */
+  disable: (id: string, opts?: { force?: boolean }) =>
+    apiRequest<PluginSummary[]>(
+      'POST',
+      `/api/plugins/${encodeURIComponent(id)}/disable`,
+      opts?.force === true ? { force: true } : undefined,
+    ),
   getConfig: (id: string) =>
     apiRequest<PluginConfigResponse>('GET', `/api/plugins/${encodeURIComponent(id)}/config`),
   setConfig: (id: string, values: Record<string, unknown>) =>

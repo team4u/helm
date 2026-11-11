@@ -358,3 +358,123 @@ test('PluginCard 样式契约：styles.css 包含 .plugin-center-grid、.plugin-
   assert.match(css, /\.plugin-card-pill/, 'styles.css 必须包含 .plugin-card-pill 胶囊徽章样式')
   assert.match(css, /var\(--border\)/, '卡片样式必须遵循发丝边框变量规范')
 })
+
+// ---------------------------------------------------------------------------
+// 8. 故障态（failed）展示：异常徽章、错误摘要与快捷开关禁用
+// ---------------------------------------------------------------------------
+
+test('PluginCard：status === failed 时渲染异常徽章与错误摘要并标记 is-failed', { timeout: 60_000 }, () => {
+  const plugin = makePlugin({
+    id: 'external:broken',
+    name: '损坏插件',
+    enabled: false,
+    status: 'failed',
+    error: {
+      code: 'plugin_load_failed',
+      message: '入口文件 index.ts 缺失',
+      stage: 'load',
+    },
+  })
+
+  const html = renderToString(
+    e(PluginCard, {
+      plugin,
+      selected: false,
+      onSelect: () => {},
+      onToggle: () => {},
+    }),
+  )
+
+  // 1. 卡片容器追加 is-failed 故障态类名
+  assert.match(html, /class="[^"]*plugin-card[^"]*is-failed[^"]*"/)
+
+  // 2. 标题行渲染异常徽章（含 title 错误摘要）
+  assert.match(html, /class="[^"]*badge badge-err[^"]*"/)
+  assert.match(html, /title="入口文件 index\.ts 缺失"/)
+  assert.match(html, /<span>异常<\/span>/)
+
+  // 3. 描述区域附带错误摘要
+  assert.match(html, /plugin-card-error-summary/)
+})
+
+test('PluginCard：scan/load 阶段失败禁用快捷开关并提示查看错误详情', { timeout: 60_000 }, () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  const plugin = makePlugin({
+    id: 'external:bad-json',
+    enabled: false,
+    status: 'failed',
+    error: {
+      code: 'plugin_scan_failed',
+      message: 'plugin.json 语法损坏',
+      stage: 'scan',
+    },
+  })
+
+  act(() => {
+    root.render(
+      e(PluginCard, {
+        plugin,
+        selected: false,
+        onSelect: () => {},
+        onToggle: () => {},
+      }),
+    )
+  })
+
+  const switchBtn = container.querySelector('[role="switch"]') as HTMLButtonElement
+  assert.ok(switchBtn, '必须渲染 Switch 开关')
+  assert.equal(switchBtn.disabled, true, 'scan/load 阶段失败的插件快捷开关必须禁用')
+  assert.match(switchBtn.title || '', /插件加载失败/)
+
+  act(() => {
+    root.unmount()
+  })
+  container.remove()
+})
+
+test('PluginCard：enable/define 阶段失败不禁用快捷开关（模块已加载可重试）', { timeout: 60_000 }, () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  const plugin = makePlugin({
+    id: 'external:enable-fail',
+    enabled: false,
+    status: 'failed',
+    error: {
+      code: 'plugin_enable_failed',
+      message: '服务启动超时',
+      stage: 'enable',
+    },
+  })
+
+  let toggled: boolean | null = null
+  act(() => {
+    root.render(
+      e(PluginCard, {
+        plugin,
+        selected: false,
+        onSelect: () => {},
+        onToggle: (enabled: boolean) => {
+          toggled = enabled
+        },
+      }),
+    )
+  })
+
+  const switchBtn = container.querySelector('[role="switch"]') as HTMLButtonElement
+  assert.equal(switchBtn.disabled, false, 'enable 阶段失败仍允许重试启用')
+
+  act(() => {
+    switchBtn.click()
+  })
+  assert.equal(toggled, true, '点击禁用态之外的开关应触发 onToggle(true)')
+
+  act(() => {
+    root.unmount()
+  })
+  container.remove()
+})

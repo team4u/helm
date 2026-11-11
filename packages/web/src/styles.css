@@ -4348,6 +4348,74 @@ input::placeholder {
   gap: 6px;
 }
 
+/* 故障态卡片：发丝红边提示但不劫持全局布局 */
+.plugin-card.is-failed {
+  border-color: var(--err-border);
+}
+
+.plugin-card-error-summary {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--err);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 故障诊断框与占用确认内容排版 */
+.plugin-diagnostic-body,
+.plugin-inuse-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+}
+
+.plugin-diagnostic-title {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.plugin-diagnostic-message {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.plugin-inuse-list {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.plugin-inuse-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* 配置字段：控件与单字段重置微操作同行 */
+.plugin-config-field-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plugin-config-field-value .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.plugin-config-field-value .btn-xs {
+  flex-shrink: 0;
+}
+
 .plugin-drawer-capabilities {
   display: flex;
   flex-direction: column;

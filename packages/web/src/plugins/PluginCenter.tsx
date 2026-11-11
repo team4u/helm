@@ -116,7 +116,11 @@ export function PluginCenter({
     store.openTarget({ kind: 'plugins' })
   }
 
-  const handleTogglePlugin = async (plugin: PluginSummary, targetEnabled?: boolean) => {
+  const handleTogglePlugin = async (
+    plugin: PluginSummary,
+    targetEnabled?: boolean,
+    options?: { force?: boolean },
+  ) =>
     if (plugin.locked || togglingId === plugin.id) return
     setTogglingId(plugin.id)
     const nextEnabled = targetEnabled !== undefined ? targetEnabled : !plugin.enabled
@@ -130,7 +134,7 @@ export function PluginCenter({
           body: `${plugin.name || plugin.id} 已成功启用`,
         })
       } else {
-        await pluginsApi.disable(plugin.id)
+        await pluginsApi.disable(plugin.id, options)
         store.pushNotice({
           type: 'notification',
           level: 'info',
@@ -170,7 +174,8 @@ export function PluginCenter({
 
         <div className="plugin-center-topbar-actions">
           <div className="plugin-center-stats text-subtle">
-            {`共 ${summaryStats.total} 个插件 · ${summaryStats.enabled} 个已启用`}
+            {`共 ${summaryStats.total} 个插件 · ${summaryStats.enabled} 个已启用`
+              + (summaryStats.failed > 0 ? ` · ${summaryStats.failed} 个异常` : '')}
           </div>
           <button
             type="button"
@@ -288,7 +293,11 @@ export function PluginCenter({
         plugin={selectedPlugin}
         open={isDrawerOpen}
         onClose={handleCloseDrawer}
-        onToggleEnabled={(plugin) => handleTogglePlugin(plugin)}
+        onToggleEnabled={(
+          plugin: PluginSummary,
+          targetEnabled?: boolean,
+          options?: { force?: boolean },
+        ) => handleTogglePlugin(plugin, targetEnabled, options)}
         toggling={togglingId === selectedPlugin?.id}
         onPackageChanged={handlePackageChanged}
         onRemoved={handleRemoved}

@@ -15,6 +15,7 @@ import type { PluginSummary } from '@helm/protocol'
 import {
   derivePluginCategory,
   filterPlugins,
+  isPluginFailed,
   summarizePlugins,
   type PluginCategory,
   type PluginFilterState,
@@ -32,6 +33,8 @@ function makePlugin(overrides: Partial<PluginSummary> & { id: string }): PluginS
     hooks: overrides.hooks ?? [],
     actions: overrides.actions ?? [],
     tools: overrides.tools ?? [],
+    status: overrides.status,
+    error: overrides.error,
   }
 }
 
@@ -187,6 +190,7 @@ test('summarizePlugins: 空数组统计全零', { timeout: 60_000 }, () => {
     total: 0,
     enabled: 0,
     disabled: 0,
+    failed: 0,
     totalTools: 0,
     totalActions: 0,
   })
@@ -218,7 +222,47 @@ test('summarizePlugins: 正确统计总数、启停数、工具数与动作数',
     total: 3,
     enabled: 2,
     disabled: 1,
+    failed: 0,
     totalTools: 4,
     totalActions: 4,
   })
+})
+
+// ---------------------------------------------------------------------------
+// 7. 故障态判定与 failed 统计
+// ---------------------------------------------------------------------------
+
+test('isPluginFailed: status === failed 或携带 error 即故障态', { timeout: 60_000 }, () => {
+  assert.equal(isPluginFailed(makePlugin({ id: 'a', status: 'active' })), false)
+  assert.equal(isPluginFailed(makePlugin({ id: 'b', status: 'disabled' })), false)
+  assert.equal(isPluginFailed(makePlugin({ id: 'c', status: 'failed' })), true)
+  // 兼容旧内核未填 status 但携带诊断错误的降级情形
+  assert.equal(
+    isPluginFailed(
+      makePlugin({ id: 'd', error: { code: 'plugin_load_failed', message: '入口缺失', stage: 'scan' } }),
+    ),
+    true,
+  )
+})
+
+test('summarizePlugins: 正确统计 failed 数量（status 与 error 双入口去重）', { timeout: 60_000 }, () => {
+  const stats = summarizePlugins([
+    makePlugin({ id: 'ok-1', enabled: true }),
+    makePlugin({ id: 'ok-2', enabled: false }),
+    makePlugin({
+      id: 'bad-1',
+      enabled: false,
+      status: 'failed',
+      error: { code: 'plugin_load_failed', message: '模块导入失败', stage: 'load' },
+    }),
+    makePlugin({
+      id: 'bad-2',
+      enabled: false,
+      error: { code: 'plugin_enable_failed', message: '服务启动失败', stage: 'enable' },
+    }),
+  ])
+  assert.equal(stats.total, 4)
+  assert.equal(stats.enabled, 1)
+  assert.equal(stats.disabled, 3)
+  assert.equal(stats.failed, 2)
 })

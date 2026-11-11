@@ -109,6 +109,18 @@ const mockPlugins: PluginSummary[] = [
   }),
 ]
 
+// 包含一个 failed 故障态插件的变体数据集
+const mockPluginsWithFailure: PluginSummary[] = [
+  ...mockPlugins,
+  makePlugin({
+    id: 'external:broken',
+    name: '损坏插件',
+    enabled: false,
+    status: 'failed',
+    error: { code: 'plugin_load_failed', message: '入口文件缺失', stage: 'scan' },
+  }),
+]
+
 // ---------------------------------------------------------------------------
 // 1. buildCategoryCounts 模型单测
 // ---------------------------------------------------------------------------
@@ -153,9 +165,10 @@ test('PluginCenter SSR：渲染搜索框、分类药丸、统计徽章与卡片�
   assert.match(html, /系统与辅助/)
   assert.match(html, /已启用/)
 
-  // 4. 统计指标显示
+  // 4. 统计指标显示（无故障态时不展示异常计数）
   assert.match(html, /共\s*5\s*个插件/)
   assert.match(html, /4\s*个已启用/)
+  assert.doesNotMatch(html, /个异常/)
 
   // 5. 响应式自适应网格与所有卡片
   assert.match(html, /class="[^"]*plugin-center-grid[^"]*"/)
@@ -164,6 +177,28 @@ test('PluginCenter SSR：渲染搜索框、分类药丸、统计徽章与卡片�
   assert.match(html, /data-plugin-id="builtin:herdr"/)
   assert.match(html, /data-plugin-id="builtin:triggers"/)
   assert.match(html, /data-plugin-id="tools:calculator"/)
+})
+
+test('PluginCenter SSR：存在 failed 故障态插件时顶栏统计追加异常计数且卡片标记 is-failed', { timeout: 60_000 }, async () => {
+  const { PluginCenter } = await import('../src/plugins/PluginCenter.js')
+  const store = makeTestStore({
+    plugins: mockPluginsWithFailure,
+    primaryTarget: { kind: 'plugins' },
+  })
+
+  const html = renderToString(
+    e(HelmStoreContext.Provider, { value: store }, e(PluginCenter)),
+  )
+
+  // 1. 顶栏统计追加异常计数（failed 插件 enabled: false，不计入已启用）
+  assert.match(html, /共\s*6\s*个插件/)
+  assert.match(html, /4\s*个已启用/)
+  assert.match(html, /1\s*个异常/)
+
+  // 2. 故障卡片标记 is-failed 并渲染异常徽章
+  assert.match(html, /data-plugin-id="external:broken"/)
+  assert.match(html, /is-failed/)
+  assert.match(html, /<span>异常<\/span>/)
 })
 
 // ---------------------------------------------------------------------------

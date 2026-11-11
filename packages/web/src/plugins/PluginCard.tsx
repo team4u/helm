@@ -3,6 +3,7 @@ import type { PluginSummary } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { Switch } from '../ui/Switch.js'
 import { getPluginDescription } from './plugin-card-model.js'
+import { isPluginFailed } from './plugin-center-model.js'
 
 export interface PluginCardProps {
   plugin: PluginSummary
@@ -48,7 +49,17 @@ export function PluginCard({
   const iconName = getPluginIcon(plugin.id)
   const description = getPluginDescription(plugin)
   const isLocked = plugin.locked === true
-  const isSwitchDisabled = isLocked || toggling
+  // 源码/清单加载阶段失败（scan/load）：模块未成功导入，无有效 definition 可重试启用
+  const isLoadBroken = plugin.error?.stage === 'scan' || plugin.error?.stage === 'load'
+  const isSwitchDisabled = isLocked || toggling || isLoadBroken
+
+  const switchTitle = isLocked
+    ? '常驻插件不可停用'
+    : isLoadBroken
+      ? '插件加载失败，请点击查看错误详情'
+      : plugin.enabled
+        ? '点击停用'
+        : '点击启用'
 
   const handleCardClick = () => {
     onSelect()
@@ -65,6 +76,7 @@ export function PluginCard({
     'plugin-card',
     selected && 'is-selected',
     plugin.enabled ? 'is-enabled' : 'is-disabled',
+    isPluginFailed(plugin) && 'is-failed',
   ]
     .filter(Boolean)
     .join(' ')
@@ -102,6 +114,15 @@ export function PluginCard({
                 <span>常驻</span>
               </span>
             )}
+            {isPluginFailed(plugin) && (
+              <span
+                className="badge badge-err"
+                title={plugin.error?.message || '插件加载或启用失败'}
+              >
+                <HelmIcon name="alert-circle" size={10} />
+                <span>异常</span>
+              </span>
+            )}
           </div>
           <div className="plugin-card-id mono" title={plugin.id}>
             {plugin.id}
@@ -109,9 +130,23 @@ export function PluginCard({
         </div>
       </div>
 
-      {/* 中部：简短描述 */}
-      <div className="plugin-card-desc" title={description}>
-        {description}
+      {/* 中部：简短描述（故障时附带错误摘要，供不解开抽屉也能快速定位） */}
+      <div
+        className="plugin-card-desc"
+        title={
+          isPluginFailed(plugin) && plugin.error?.message
+            ? `${description}\n${plugin.error.message}`
+            : description
+        }
+      >
+        {isPluginFailed(plugin) && plugin.error?.message ? (
+          <>
+            {description}
+            <div className="plugin-card-error-summary">{plugin.error.message}</div>
+          </>
+        ) : (
+          description
+        )}
       </div>
 
       {/* 底栏：能力胶囊徽章 + 启停 Switch 开关 */}
@@ -153,7 +188,7 @@ export function PluginCard({
               void onToggle(checked)
             }}
             aria-label={`${plugin.name || plugin.id} 开关`}
-            title={isLocked ? '常驻插件不可停用' : plugin.enabled ? '点击停用' : '点击启用'}
+            title={switchTitle}
           />
         </div>
       </div>

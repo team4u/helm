@@ -26,3 +26,40 @@ export function getPluginDescription(plugin: PluginSummary): string {
 
   return '系统扩展插件组件。'
 }
+
+/** 故障阶段面向用户的可读文案（PluginDiagnosticError.stage）。 */
+export const PLUGIN_ERROR_STAGE_LABELS: Record<string, string> = {
+  scan: '清单/入口解析（scan）',
+  load: '模块加载（load）',
+  define: '定义注册（define）',
+  enable: '启用激活（enable）',
+}
+
+export function pluginErrorStageLabel(stage?: string): string {
+  return (stage !== undefined && PLUGIN_ERROR_STAGE_LABELS[stage]) || '未知阶段'
+}
+
+/** 409 plugin_in_use 错误 details.usages 中的占用项形状。 */
+export interface PluginUsageItem {
+  kind: string
+  id: string
+  label: string
+}
+
+/**
+ * 从 ApiClientError（409 plugin_in_use）的 details.usages 提取占用清单；
+ * 形状非法时返回空数组（由调用方回退到原始错误文案展示）。
+ */
+export function extractPluginUsages(details?: Record<string, unknown>): PluginUsageItem[] {
+  const raw = details?.['usages']
+  if (!Array.isArray(raw)) return []
+  const items: PluginUsageItem[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const record = entry as Record<string, unknown>
+    if (typeof record['kind'] !== 'string' || typeof record['id'] !== 'string') continue
+    const label = typeof record['label'] === 'string' ? record['label'] : record['id']
+    items.push({ kind: record['kind'], id: record['id'], label })
+  }
+  return items
+}
