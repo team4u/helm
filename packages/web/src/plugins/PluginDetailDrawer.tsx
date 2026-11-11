@@ -747,12 +747,12 @@ export function PluginDetailDrawer({
         }}
       >
         <AlertDialogPortal inline={inline}>
-          <AlertDialogOverlay className="modal-backdrop" />
-          <AlertDialogContent
-            className="modal plugin-remove-confirm"
-            role="alertdialog"
-            aria-label="确认卸载插件"
-          >
+          <AlertDialogOverlay className="modal-backdrop">
+            <AlertDialogContent
+              className="modal plugin-remove-confirm"
+              role="alertdialog"
+              aria-label="确认卸载插件"
+            >
             <div className="modal-header">
               <AlertDialogTitle className="modal-title">卸载插件</AlertDialogTitle>
             </div>
@@ -783,7 +783,8 @@ export function PluginDetailDrawer({
               </AlertDialogAction>
             </div>
           </AlertDialogContent>
-        </AlertDialogPortal>
+        </AlertDialogOverlay>
+      </AlertDialogPortal>
       </AlertDialog>
     </Dialog>
   )

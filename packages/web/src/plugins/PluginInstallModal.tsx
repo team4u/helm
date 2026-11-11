@@ -92,12 +92,12 @@ export function PluginInstallModal({
       }}
     >
       <DialogPortal inline={inline}>
-        <DialogOverlay className="modal-backdrop" />
-        <DialogContent
-          className="modal plugin-install-modal"
-          role="dialog"
-          aria-label="安装插件"
-        >
+        <DialogOverlay className="modal-backdrop">
+          <DialogContent
+            className="modal plugin-install-modal"
+            role="dialog"
+            aria-label="安装插件"
+          >
           <div className="modal-header">
             <DialogTitle className="modal-title">安装插件</DialogTitle>
             <DialogClose asChild>
@@ -232,7 +232,8 @@ export function PluginInstallModal({
             </button>
           </div>
         </DialogContent>
-      </DialogPortal>
-    </Dialog>
+      </DialogOverlay>
+    </DialogPortal>
+  </Dialog>
   )
 }

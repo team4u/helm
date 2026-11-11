@@ -90,6 +90,8 @@ test('PluginInstallModal：SSR 渲染安全提示、来源输入与安装后启�
   assert.match(html, /Hub 进程内运行/)
   assert.match(html, /不是沙箱/)
   assert.match(html, /安装后启用/)
+  assert.match(html, /modal-backdrop/, 'SSR 输出必须包含遮罩层容器')
+  assert.match(html, /plugin-install-modal/, 'SSR 输出必须包含安装模态容器')
   assert.doesNotMatch(html, /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u)
 })
 
@@ -103,6 +105,9 @@ test('PluginInstallModal：输入旁来源识别提示随输入实时变化', { 
     await act(async () => {
       root.render(e(PluginInstallModal, { open: true, onClose: () => {}, onInstalled: () => {}, inline: true }))
     })
+
+    const backdropModal = host.querySelector('.modal-backdrop .plugin-install-modal')
+    assert.ok(backdropModal, '安装模态必须置于 .modal-backdrop 内部以支持居中对齐与全屏遮罩')
 
     const input = host.querySelector<HTMLInputElement>('#plugin-install-source')
     assert.ok(input, '必须存在来源输入框')
@@ -212,6 +217,9 @@ test('PluginInstallModal：默认不启用（enable 不上送），失败展示�
       root.render(e(PluginInstallModal, { open: true, onClose: () => {}, onInstalled: () => {}, inline: true }))
     })
 
+    const backdropModal = host.querySelector('.modal-backdrop .plugin-install-modal')
+    assert.ok(backdropModal, '安装模态必须置于 .modal-backdrop 内部以支持居中对齐与全屏遮罩')
+
     const input = host.querySelector<HTMLInputElement>('#plugin-install-source')
     assert.ok(input, '模态内必须存在来源输入框')
     await act(async () => { typeIntoInput(input, 'git:https://github.com/u/r.git@main') })
@@ -268,6 +276,9 @@ test('PluginInstallModal：真实 Hub 422 失败时从 details.report 结构化�
     await act(async () => {
       root.render(e(PluginInstallModal, { open: true, onClose: () => {}, onInstalled: () => {}, inline: true }))
     })
+
+    const backdropModal = host.querySelector('.modal-backdrop .plugin-install-modal')
+    assert.ok(backdropModal, '安装模态必须置于 .modal-backdrop 内部以支持居中对齐与全屏遮罩')
 
     const input = host.querySelector<HTMLInputElement>('#plugin-install-source')
     assert.ok(input, '模态内必须存在来源输入框')
@@ -439,6 +450,8 @@ test('PluginDetailDrawer：卸载需 AlertDialog 确认，成功后关闭抽屉�
 
     const confirmBox = host.querySelector('[role="alertdialog"]')
     assert.ok(confirmBox, '必须弹出卸载确认 AlertDialog')
+    const confirmModal = host.querySelector('.modal-backdrop .plugin-remove-confirm')
+    assert.ok(confirmModal, '卸载确认框必须置于 .modal-backdrop 内部以支持居中对齐与全屏遮罩')
     assert.match(confirmBox.textContent ?? '', /不可恢复/)
     assert.equal(removedId, '', '未确认前不得发起移除请求')
 
@@ -559,8 +572,8 @@ test('PluginCenter 集成：安装成功后 syncPlugins 刷新列表并导航至
       installBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
 
-    let modal = host.querySelector('.plugin-install-modal')
-    assert.ok(modal, '点击后必须打开安装模态')
+    let modal = host.querySelector('.modal-backdrop .plugin-install-modal')
+    assert.ok(modal, '点击后必须在 .modal-backdrop 内部打开安装模态')
 
     // 服务端已注册新插件（模拟安装完成时刻的服务端状态）
     serverPlugins = [builtinPlugin, makeManagedPlugin()]
