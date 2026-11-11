@@ -1,5 +1,5 @@
 /* ==========================================================================
- * Helm Web UI Design System — Quiet Surface (inspired by magpie, built for Helm)
+ * Helm Web UI Design System — Quiet Surface
  * 视觉原则：
  * 1. 使用中性纸面底色、1px 发丝边框、半透明着色按钮、淡色侧栏选中背景
  *    与 tabular-nums 等宽数字对齐；保留 Helm 全视口多栏分屏骨架。
@@ -30,7 +30,7 @@
   --border-focus: #4f46e5;
   --line-2: #ececf0;
 
-  /* 分段控制器与导航滑轨阴影 (Magpie 原语) */
+  /* 分段控制器与导航滑轨阴影 */
   --seg-track: #e6e6eb;
   --seg-thumb: #ffffff;
   --seg-edge: 0 1px 2px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
@@ -327,7 +327,7 @@ textarea {
 
 
 /* ==========================================================================
- * 3. 左栏导航（对齐 Magpie 侧栏尺寸与选中态纯白微投影）
+ * 3. 左栏导航（侧栏尺寸与选中态纯白微投影）
  * 对应原 styles.css: 290-375 行、403-422 行、554-575 行
  * 目标选择器：.sidebar-header, .nav-item, .nav-item:hover, .nav-item-active,
  *            .nav-item-active .nav-item-meta, .agent-standing-group .agent-conversations-list,
@@ -660,7 +660,7 @@ textarea {
 
 
 /* ==========================================================================
- * 5. 居中模态弹窗 (Modals) 与 Magpie 经典大深影
+ * 5. 居中模态弹窗 (Modals) 与经典大深影
  * 对应原 styles.css: 2605-2651 行 及 2785-2793 行
  * 目标选择器：.modal-backdrop, .modal, .modal-header, .modal-title, .modal-body, .modal-footer
  * 规范：
@@ -1790,14 +1790,14 @@ textarea {
   justify-content: space-between;
   gap: 8px;
   height: 32px; /* 契约标称基准 */
-  height: 27px; /* Magpie 极简沉静收敛阶梯 */
+  height: 27px; /* 极简沉静收敛阶梯 */
   padding: 0 8px 0 9px;
   border-radius: 7px;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--fg);
   font-size: 13px; /* 契约标称基准 */
-  font-size: 12.5px; /* Magpie 极简收敛字阶 */
+  font-size: 12.5px; /* 极简收敛字阶 */
   font-family: inherit;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
@@ -1943,7 +1943,7 @@ textarea {
 }
 
 /* ==========================================================================
- * 模型药丸选择器原语 (Model Chips - 100% 严苛复刻 Magpie 原生规范)
+ * 模型药丸选择器原语 (Model Chips 规范)
  * ========================================================================== */
 
 .models,
@@ -1953,7 +1953,7 @@ textarea {
   gap: 6px;
 }
 
-/* 顶部批量操作栏 (Magpie .mbulk) */
+/* 顶部批量操作栏 */
 .mbulk,
 .model-chips-toolbar {
   display: flex;
@@ -1989,7 +1989,7 @@ textarea {
   margin-left: auto;
 }
 
-/* 批量操作按钮 (Magpie .text.action 原生规格) */
+/* 批量操作按钮 */
 .text.action,
 .model-chips-actions .btn {
   height: 27px;
@@ -2022,7 +2022,7 @@ textarea {
   transform: scale(0.96);
 }
 
-/* 平铺药丸容器 (Magpie .mchips 原生规范：绝对无灰框、无外边框、呼吸感平铺) */
+/* 平铺药丸容器（绝对无灰框、无外边框、呼吸感平铺） */
 .mchips,
 .model-drawer-tags-wrap {
   display: flex;
@@ -2049,7 +2049,7 @@ textarea {
   overflow-y: visible;
 }
 
-/* 模型胶囊药丸 (Magpie .mchip 原生规范：模型名称严格不加粗，选中态 hover 保持不变) */
+/* 模型胶囊药丸（模型名称严格不加粗，选中态 hover 保持不变） */
 .mchip,
 .model-drawer-tag {
   display: inline-flex;
@@ -2088,7 +2088,7 @@ textarea {
   transform: scale(0.96);
 }
 
-/* 激活勾选态 (Magpie .mchip.on 原生：名称不加粗，hover 不变色) */
+/* 激活勾选态（名称不加粗，hover 不变色） */
 .mchip.on,
 .model-drawer-tag.on {
   color: var(--accent) !important;
@@ -2107,7 +2107,7 @@ textarea {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent) !important;
 }
 
-/* 多选药丸勾选指示 (Magpie .mchip.pick 7px 左边距 + 零抖动占位 Check) */
+/* 多选药丸勾选指示 (7px 左边距 + 零抖动占位 Check) */
 .mchip.pick,
 .model-drawer-tag.pick {
   padding-left: 7px;
@@ -2154,9 +2154,9 @@ textarea {
   font-weight: 400 !important; /* 标签如思考模型、多模态等常规字重不加粗，清晰易读 */
   letter-spacing: 0.01em;
   border-radius: 4px;
-  background: var(--bg-muted); /* Magpie var(--pill) */
-  color: var(--fg-muted);      /* Magpie var(--muted) */
-  box-shadow: inset 0 0 0 1px var(--border); /* Magpie var(--line) */
+  background: var(--bg-muted);
+  color: var(--fg-muted);
+  box-shadow: inset 0 0 0 1px var(--border);
   vertical-align: middle;
   transition: none;
 }
@@ -2180,7 +2180,7 @@ textarea {
   font-weight: 400 !important;
 }
 
-/* 展开与折叠通栏按钮 (Magpie .mchips-fold 原生规范) */
+/* 展开与折叠通栏按钮 */
 .mchips-fold,
 .mchips-fold-btn {
   display: flex;
@@ -2260,7 +2260,7 @@ textarea {
   background: transparent;
   color: var(--fg);
   font-size: 13px; /* 契约标称基准 */
-  font-size: 12.5px; /* Magpie 极简收敛字阶 */
+  font-size: 12.5px; /* 极简收敛字阶 */
   text-align: left;
   cursor: pointer;
   white-space: nowrap;
@@ -2898,7 +2898,7 @@ textarea {
   justify-content: center;
   gap: 6px;
   height: 32px; /* 契约标称基准 */
-  height: 27px; /* Magpie 极简沉静收敛阶梯 */
+  height: 27px; /* 极简沉静收敛阶梯 */
   padding: 0 10px;
   border-radius: 6px;
   border: 1px solid var(--border);
@@ -3017,7 +3017,7 @@ textarea {
 .btn-icon-sm { width: 28px; height: 28px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .btn-icon-xs { width: 22px; height: 22px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
-/* 紧凑原生图标按钮（对齐 Magpie 26px x 26px，圆角 7px） */
+/* 紧凑原生图标按钮（26px x 26px，圆角 7px） */
 .icon-btn,
 .composer-icon-button,
 .composer-toolbar .composer-icon-button {
@@ -3368,7 +3368,7 @@ input[type="number"] {
 .input,
 .select {
   height: 32px; /* 契约标称基准 */
-  height: 27px; /* Magpie 极简沉静收敛阶梯 */
+  height: 27px; /* 极简沉静收敛阶梯 */
   line-height: 25px;
 }
 
@@ -3419,7 +3419,7 @@ input::placeholder {
   color: var(--fg-muted);
 }
 
-/* 独立搜索输入框原语（对齐 Magpie .am-search 极简质感） */
+/* 独立搜索输入框原语（极简质感） */
 .search-input {
   width: 100%;
   height: 28px;
@@ -3442,7 +3442,7 @@ input::placeholder {
 }
 
 /* ==========================================================================
- * 5. 居中模态弹窗 (Modals) 与 Magpie 经典大深影
+ * 5. 居中模态弹窗 (Modals) 与经典大深影
  * 规范：毛玻璃遮罩、14px 圆角、投影环发丝边与大深影、1px solid var(--line-2) 分隔
  * ========================================================================== */
 

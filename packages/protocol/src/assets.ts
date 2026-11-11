@@ -105,7 +105,7 @@ export interface ModelProviderSummary {
   name: string
   modelCount: number
   authMethods: Array<{ type: 'api_key' | 'oauth'; label: string }>
-  /** 是否支持远端动态目录刷新（实现了 refreshModels 的供应商，如 magpie、radius）。 */
+  /** 是否支持远端动态目录刷新（实现了 refreshModels 的供应商）。 */
   dynamic?: boolean
   /** 供应商公开网关根地址或 baseUrl（非机密展示）。 */
   baseUrl?: string

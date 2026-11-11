@@ -75,7 +75,7 @@ export interface PluginHostOptions {
   config?: PluginConfigStore;
   /**
    * 可选的插件 Provider 挂载端口（runtime 提供）：插件经 ctx.provider 声明的
-   * 自带模型 Provider（如 Magpie）在启用时挂载、停用/卸载时卸载。
+   * 自带模型 Provider 在启用时挂载、停用/卸载时卸载。
    */
   providers?: PluginProviderPort;
   /**

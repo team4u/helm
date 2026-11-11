@@ -454,7 +454,7 @@ export function ModelDetailDrawer({
                     )}
                   </div>
 
-                  {/* 模型列表管理 (Magpie Model Chips 原生交互) */}
+                  {/* 模型列表管理 (Model Chips 交互) */}
                   <div className="section-flat">
                     <div
                       className="section-flat-header"
@@ -481,7 +481,7 @@ export function ModelDetailDrawer({
                       </div>
                     ) : (
                       <div className="models model-chips-container">
-                        {/* 操作工具栏：过滤搜索与批量控制 (Magpie .mbulk 规范) */}
+                        {/* 操作工具栏：过滤搜索与批量控制 */}
                         <div className="mbulk model-chips-toolbar">
                           <input
                             type="text"
@@ -511,7 +511,7 @@ export function ModelDetailDrawer({
                           </div>
                         </div>
 
-                        {/* 平铺药丸胶囊群 (Magpie .mchips 规范：零外框、呼吸感白底平铺) */}
+                        {/* 平铺药丸胶囊群（零外框、呼吸感白底平铺） */}
                         <div
                           className={`mchips model-drawer-tags-wrap ${isExpanded ? 'open is-expanded' : ''}`}
                           role="group"
@@ -549,7 +549,7 @@ export function ModelDetailDrawer({
                           )}
                         </div>
 
-                        {/* 展开/折叠通栏按钮 (Magpie .mchips-fold 规范) */}
+                        {/* 展开/折叠通栏按钮 */}
                         {models.length > 12 && (
                           <button
                             type="button"
