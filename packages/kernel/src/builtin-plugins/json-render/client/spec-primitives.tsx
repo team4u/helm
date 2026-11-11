@@ -82,7 +82,7 @@ function StackImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
   const gap = evalIn<unknown>(node.props['gap'], ctx.scope)
   const style = typeof gap === 'number' && Number.isFinite(gap) ? { gap } : undefined
   return (
-    <div className={direction === 'horizontal' ? 'jr-stack-row' : 'jr-stack'} style={style}>
+    <div className={direction === 'horizontal' ? 'stack-row' : 'jr-stack'} style={style}>
       {ctx.renderChildren(node.children)}
     </div>
   )
@@ -192,9 +192,9 @@ function KeyValueListImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRe
   // 不预先 evalIn(items)：pointer key（'/$docs/...'）必须保持原始模板到本阶段再求值，
   // 否则 key 被提前转为具体值（如 number），resolveKeyValueItems 识别不出而显示破折号
   const items = resolveKeyValueItems(node.props['items'], (expr) => evaluateSpecValue(expr, ctx.scope))
-  // .jr-kv-list 是两列 grid：key 与 value 交替排列即自动成对
+  // .kv-list 是两列 grid：key 与 value 交替排列即自动成对
   return (
-    <div className="jr-kv-list">
+    <div className="kv-list">
       {items.map((item, i) => (
         <KeyValueRow key={i} label={item.label} value={item.value} />
       ))}
@@ -205,24 +205,24 @@ function KeyValueListImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRe
 function KeyValueRow({ label, value }: { label: string; value: string }) {
   return (
     <>
-      <div className="jr-kv-key">{label}</div>
-      <div className="jr-kv-val">{value}</div>
+      <div className="kv-key">{label}</div>
+      <div className="kv-val">{value}</div>
     </>
   )
 }
 
 const CALLOUT_TONE_CLASS: Record<string, string> = {
-  info: 'jr-callout',
-  warn: 'jr-callout jr-callout-warn',
-  err: 'jr-callout jr-callout-err',
-  ok: 'jr-callout jr-callout-ok',
+  info: 'callout',
+  warn: 'callout callout--warning',
+  err: 'callout callout--error',
+  ok: 'callout callout--success',
 }
 
 function CalloutImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
   const tone = str(evalIn(node.props['tone'], ctx.scope), 'info')
   const title = str(evalIn(node.props['title'], ctx.scope))
   const text = str(evalIn(node.props['text'], ctx.scope))
-  const cls = CALLOUT_TONE_CLASS[tone] ?? 'jr-callout'
+  const cls = CALLOUT_TONE_CLASS[tone] ?? 'callout'
   const iconName =
     tone === 'warn' ? 'alert-triangle' : tone === 'err' ? 'alert-circle' : tone === 'ok' ? 'check-circle' : 'alert-circle'
   return (
@@ -345,8 +345,8 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
   const colSpan = Math.max(1, columnKeys.length + (rowActions.length > 0 ? 1 : 0))
 
   return (
-    <div className="jr-table-wrap">
-      <table className="jr-table">
+    <div className="helm-table-wrap">
+      <table className="helm-table jr-table-selectable">
         {headerLabels.length > 0 && (
           <thead>
             <tr>
@@ -376,7 +376,7 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
                 ))}
                 {rowActions.length > 0 && (
                   <td style={{ textAlign: 'right' }}>
-                    <div className="jr-stack-row" style={{ justifyContent: 'flex-end', gap: 4 }}>
+                    <div className="stack-row" style={{ justifyContent: 'flex-end' }}>
                       {rowActions.map((ra, k) => (
                         <RowActionButton
                           key={k}
@@ -694,7 +694,7 @@ function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
   const actions = Array.isArray(rawActions) ? (rawActions as Array<Record<string, unknown>>) : []
   if (actions.length > 0) {
     return (
-      <div className="jr-stack-row">
+      <div className="stack-row">
         {actions.map((a, i) => {
           const label = str(evalIn(a['label'], ctx.scope), '操作')
           const icon = str(evalIn(a['icon'], ctx.scope))
@@ -722,7 +722,7 @@ function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
       </div>
     )
   }
-  return <div className="jr-stack-row">{ctx.renderChildren(node.children)}</div>
+  return <div className="stack-row">{ctx.renderChildren(node.children)}</div>
 }
 
 function TabsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
@@ -778,7 +778,7 @@ function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
   const fallback = node.children.length > 0 ? <SpecNodeList nodes={node.children} ctx={ctx} /> : undefined
   if (name === '') {
     return (
-      <div className="jr-callout jr-callout-warn">
+      <div className="callout callout--warning">
         <HelmIcon name="alert-triangle" size={13} />
         <span>Slot 原语缺少 name 属性</span>
       </div>
@@ -786,7 +786,7 @@ function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
   }
   if (ctx.pluginId === undefined) {
     return (
-      <div className="jr-callout jr-callout-warn">
+      <div className="callout callout--warning">
         <HelmIcon name="alert-triangle" size={13} />
         <span>Slot 原语仅在插件视图内可用（聊天代码块无插件宿主）</span>
       </div>
@@ -847,7 +847,7 @@ export function SpecNodeView({ node, ctx }: { node: NormalizedSpecNode; ctx: Spe
   const impl = (PRIMITIVES as Record<string, SpecPrimitiveImpl | undefined>)[node.component]
   if (impl === undefined) {
     return (
-      <div className="jr-callout jr-callout-warn">
+      <div className="callout callout--warning">
         <HelmIcon name="alert-triangle" size={13} />
         <span>未注册的组件: {node.component}</span>
       </div>

@@ -5,8 +5,9 @@
  * - TriggersSettingsPanel：设置面板（计数概览 + 管理入口引导）。
  *
  * secret 边界：webhook secret 不在 doc 中展示（hasSecret 布尔协作契约）；
- * 创建与删除沿用 helm CLI / HTTP 动作端点。样式全部为 tg- 前缀本地类 +
- * 宿主核心通用类（badge/btn），不依赖 json-render（jr-*）类。
+ * 创建与删除沿用 helm CLI / HTTP 动作端点。通用结构一律复用宿主设计系统原语
+ * （.screen-container / .helm-table / .kv-list / .callout / .loading-state），
+ * 仅保留 tg-note 业务专属提示样式。
  */
 import { useState } from 'react'
 import './styles.css'
@@ -25,7 +26,7 @@ import { Clock, ExternalLink, Loader2, Trash2, Webhook, Zap } from 'lucide-react
 
 function DocLoading({ label }: { label: string }): ReactNode {
   return (
-    <div className="tg-loading" role="status">
+    <div className="loading-state" role="status">
       <Loader2 size={12} className="spin-slow" />
       <span>{label}</span>
     </div>
@@ -34,7 +35,7 @@ function DocLoading({ label }: { label: string }): ReactNode {
 
 function ActionError({ message }: { message: string }): ReactNode {
   return (
-    <div className="tg-error" role="alert">
+    <div className="callout callout--error" role="alert">
       <span>{message}</span>
     </div>
   )
@@ -101,10 +102,10 @@ function RowAction({
 function CronTable({ jobs, loading, actions }: { jobs: CronJobRow[]; loading: boolean; actions: RowActionApi }): ReactNode {
   const { pending, error, run } = actions
   return (
-    <div className="tg-section">
+    <div className="screen-section">
       {error !== undefined ? <ActionError message={error} /> : null}
-      <div className="tg-table-wrap">
-        <table className="tg-table">
+      <div className="helm-table-wrap">
+        <table className="helm-table">
           <thead>
             <tr>
               <th>ID</th>
@@ -114,7 +115,7 @@ function CronTable({ jobs, loading, actions }: { jobs: CronJobRow[]; loading: bo
               <th>上次运行</th>
               <th>下次运行</th>
               <th>最近错误</th>
-              <th className="tg-th-actions">操作</th>
+              <th className="cell-actions">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -126,7 +127,7 @@ function CronTable({ jobs, loading, actions }: { jobs: CronJobRow[]; loading: bo
               </tr>
             ) : jobs.length === 0 ? (
               <tr>
-                <td colSpan={8} className="tg-table-empty">
+                <td colSpan={8} className="table-empty">
                   暂无数据
                 </td>
               </tr>
@@ -135,7 +136,7 @@ function CronTable({ jobs, loading, actions }: { jobs: CronJobRow[]; loading: bo
                 <tr key={job.id}>
                   <td>{job.id}</td>
                   <td>{job.schedule}</td>
-                  <td className="tg-text-cell" title={job.text}>{job.text}</td>
+                  <td className="cell-ellipsis" title={job.text}>{job.text}</td>
                   <td>
                     <span className={`badge badge-${job.enabled ? 'ok' : 'neutral'}`}>
                       <span>{job.enabled ? '启用' : '停用'}</span>
@@ -143,9 +144,9 @@ function CronTable({ jobs, loading, actions }: { jobs: CronJobRow[]; loading: bo
                   </td>
                   <td>{formatTime(job.lastRunAt) || '—'}</td>
                   <td>{formatTime(job.nextRunAt) || '—'}</td>
-                  <td className="tg-err-cell" title={job.lastError ?? ''}>{job.lastError ?? '—'}</td>
-                  <td className="tg-cell-actions">
-                    <div className="tg-row-actions">
+                  <td className="cell-error" title={job.lastError ?? ''}>{job.lastError ?? '—'}</td>
+                  <td className="cell-actions">
+                    <div className="row-actions-group">
                       <RowAction
                         label="立即触发"
                         icon={<Zap size={11} />}
@@ -175,17 +176,17 @@ function CronTable({ jobs, loading, actions }: { jobs: CronJobRow[]; loading: bo
 function WebhookTable({ webhooks, loading, actions }: { webhooks: WebhookRow[]; loading: boolean; actions: RowActionApi }): ReactNode {
   const { pending, error, run } = actions
   return (
-    <div className="tg-section">
+    <div className="screen-section">
       {error !== undefined ? <ActionError message={error} /> : null}
-      <div className="tg-table-wrap">
-        <table className="tg-table">
+      <div className="helm-table-wrap">
+        <table className="helm-table">
           <thead>
             <tr>
               <th>ID</th>
               <th>描述</th>
               <th>ThreadKey</th>
               <th>创建时间</th>
-              <th className="tg-th-actions">操作</th>
+              <th className="cell-actions">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -197,7 +198,7 @@ function WebhookTable({ webhooks, loading, actions }: { webhooks: WebhookRow[]; 
               </tr>
             ) : webhooks.length === 0 ? (
               <tr>
-                <td colSpan={5} className="tg-table-empty">
+                <td colSpan={5} className="table-empty">
                   暂无数据
                 </td>
               </tr>
@@ -205,11 +206,11 @@ function WebhookTable({ webhooks, loading, actions }: { webhooks: WebhookRow[]; 
               webhooks.map((hook) => (
                 <tr key={hook.id}>
                   <td>{hook.id}</td>
-                  <td className="tg-text-cell" title={hook.description ?? ''}>{hook.description ?? '—'}</td>
+                  <td className="cell-ellipsis" title={hook.description ?? ''}>{hook.description ?? '—'}</td>
                   <td>{hook.threadKey ?? '—'}</td>
                   <td>{formatTime(hook.createdAt) || '—'}</td>
-                  <td className="tg-cell-actions">
-                    <div className="tg-row-actions">
+                  <td className="cell-actions">
+                    <div className="row-actions-group">
                       <RowAction
                         label="删除"
                         icon={<Trash2 size={11} />}
@@ -238,28 +239,28 @@ export function TriggersManagerScreen(props: ScreenProps): ReactNode {
   const hooks = parseWebhooks(webhooks)
 
   return (
-    <div className="tg-screen">
-      <div className="tg-screen-header">
-        <div className="tg-screen-title">
+    <div className="screen-container">
+      <div className="screen-header">
+        <div className="screen-title">
           <Clock size={15} strokeWidth={1.75} />
           <span>触发器管理</span>
         </div>
-        <span className="tg-screen-subtitle">
+        <span className="screen-subtitle">
           Cron {jobs.length} · Webhook {hooks.length}
           {props.isSplit ? ' · 分屏' : ''}
         </span>
       </div>
 
-      <div className="tg-section">
-        <div className="tg-section-title">
+      <div className="screen-section">
+        <div className="screen-section-title">
           <Clock size={13} strokeWidth={1.75} />
           <span>Cron 定时任务</span>
         </div>
         <CronTable jobs={jobs} loading={crons === undefined} actions={actions} />
       </div>
 
-      <div className="tg-section">
-        <div className="tg-section-title">
+      <div className="screen-section">
+        <div className="screen-section-title">
           <Webhook size={13} strokeWidth={1.75} />
           <span>Webhook 端点</span>
         </div>
@@ -282,19 +283,19 @@ export function TriggersSettingsPanel(): ReactNode {
   const hooks = parseWebhooks(webhooks)
 
   return (
-    <div className="tg-screen">
-      <div className="tg-section-title">
+    <div className="screen-container">
+      <div className="screen-section-title">
         <Clock size={13} strokeWidth={1.75} />
         <span>触发器</span>
       </div>
       {crons === undefined || webhooks === undefined ? (
         <DocLoading label="触发器状态读取中..." />
       ) : (
-        <div className="tg-kv-list">
-          <div className="tg-kv-key">Cron 任务数</div>
-          <div className="tg-kv-val">{jobs.length}</div>
-          <div className="tg-kv-key">Webhook 端点数</div>
-          <div className="tg-kv-val">{hooks.length}</div>
+        <div className="kv-list">
+          <div className="kv-key">Cron 任务数</div>
+          <div className="kv-val">{jobs.length}</div>
+          <div className="kv-key">Webhook 端点数</div>
+          <div className="kv-val">{hooks.length}</div>
         </div>
       )}
       <div className="tg-note">

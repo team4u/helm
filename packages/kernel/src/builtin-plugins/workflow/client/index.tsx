@@ -550,8 +550,8 @@ function WorkflowRunCardBody(props: {
   }, [run.result])
 
   return (
-    <section className="card jr-stack workflow-run-card" aria-label={`工作流：${run.name}`}>
-      <div className="jr-stack-row">
+    <section className="card workflow-run-card" aria-label={`工作流：${run.name}`}>
+      <div className="stack-row workflow-run-header">
         <button type="button" className="btn btn-ghost btn-sm" onClick={props.onToggleCard} title={cardOpen ? '收起工作流卡' : '展开工作流卡'}>
           <Icon name={cardOpen ? 'chevron-down' : 'chevron-right'} size={12} />
         </button>
@@ -646,7 +646,7 @@ function WorkflowRunCardBody(props: {
               )}
             </div>
           ) : null}
-          {run.error !== undefined ? <p className="jr-callout jr-callout-err">{run.error}</p> : null}
+          {run.error !== undefined ? <p className="callout callout--error">{run.error}</p> : null}
         </>
       ) : null}
       {toolProps !== undefined ? <ToolCallDetailsInline input={toolProps.input} result={toolProps.result} artifactRef={toolProps.artifactRef} /> : null}
@@ -688,7 +688,7 @@ function WorkflowSubagentNodeCard({ node }: { node: WorkflowNodeState }): ReactN
           ) : null}
         </div>
       ) : null}
-      {node.error !== undefined ? <p className="jr-callout jr-callout-err">{node.error}</p> : null}
+      {node.error !== undefined ? <p className="callout callout--error">{node.error}</p> : null}
     </div>
   )
 }
@@ -781,11 +781,11 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
   return (
     <div className="workflow-node-detail">
       {rows.length > 0 ? (
-        <div className="jr-kv-list">
+        <div className="kv-list">
           {rows.map(([k, v]) => (
             <span key={k} style={{ display: 'contents' }}>
-              <span className="jr-kv-key">{k}</span>
-              <span className="jr-kv-val mono">{v}</span>
+              <span className="kv-key">{k}</span>
+              <span className="kv-val mono">{v}</span>
             </span>
           ))}
         </div>

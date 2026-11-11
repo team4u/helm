@@ -19,9 +19,9 @@ button, a, input, select, textarea { touch-action: manipulation; }
 .msg-ai-block:focus-within .msg-hover-bar,
 .msg-human-row:focus .msg-hover-bar,
 .msg-ai-block:focus .msg-hover-bar { opacity: 1; }
-.msg-ai-body table:not(.jr-table) { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; margin: 12px 0; }
-.msg-ai-body table:not(.jr-table) td, .msg-ai-body table:not(.jr-table) th { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
-.msg-ai-body table:not(.jr-table) th { background: var(--bg-subtle); }
+.msg-ai-body table:not(.helm-table):not(.jr-table) { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; margin: 12px 0; }
+.msg-ai-body table:not(.helm-table):not(.jr-table) td, .msg-ai-body table:not(.helm-table):not(.jr-table) th { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+.msg-ai-body table:not(.helm-table):not(.jr-table) th { background: var(--bg-subtle); }
 .msg-ai-body blockquote { border-left: 2px solid var(--border-strong); margin-left: 0; padding-left: 14px; color: var(--fg-secondary); }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .code-block-pre { white-space: pre; overflow-wrap: normal; }

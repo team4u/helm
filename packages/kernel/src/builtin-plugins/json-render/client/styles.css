@@ -1,55 +1,24 @@
 /*
  * builtin:json-render 插件样式（编译为保留导出 __helmClientCss，宿主托管注入与回收）。
- * 复用宿主设计令牌（--bg-subtle 等 CSS 变量）与通用类（.card / .btn / .badge /
- * .input / .tabs / .callout）；jr-* 是本插件私有 DSL 样式，随插件停用整体回收。
+ * 通用结构一律复用宿主设计系统原语（.callout / .kv-list / .helm-table-wrap /
+ * .helm-table / .stack-row 等）与设计令牌；jr-* 仅保留本插件私有的 DSL 布局
+ * 与特异性样式（user-select 豁免、卡片节奏、指标卡网格），随插件停用整体回收。
  */
 
-/* DSL 提示横幅（原语 Callout / 降级节点；复用宿主令牌色板） */
-.jr-callout {
-  padding: 9px 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-subtle);
-  font-size: 12.5px;
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-.jr-callout-warn {
-  background: var(--warn-bg);
-  border-color: var(--warn-border);
-  color: var(--warn);
-}
-.jr-callout-err {
-  background: var(--err-bg);
-  border-color: var(--err-border);
-  color: var(--err);
-}
-.jr-callout-ok {
-  background: var(--ok-bg);
-  border-color: var(--ok-border);
-  color: var(--ok);
-}
-
+/* DSL Markdown 与表格单元格允许自由选择复制（聊天流全局禁选的豁免点） */
 .jr-markdown {
   user-select: text;
 }
 
-.jr-table td {
+.helm-table.jr-table-selectable td {
   user-select: text;
 }
 
+/* 纵向堆叠（横向已复用宿主 .stack-row；宿主无通用纵向原语，属 DSL 私有） */
 .jr-stack {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-.jr-stack-row {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
 .jr-metric-grid {
@@ -77,67 +46,6 @@
   font-size: 18px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-}
-
-.jr-kv-list {
-  display: grid;
-  grid-template-columns: minmax(90px, auto) 1fr;
-  gap: 6px 14px;
-  font-size: 12.5px;
-}
-.jr-kv-key {
-  color: var(--fg-muted);
-}
-.jr-kv-val {
-  color: var(--fg);
-}
-
-.jr-table-wrap {
-  width: 100%;
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  box-sizing: border-box;
-}
-
-.jr-table-wrap table.jr-table,
-.jr-table {
-  display: table !important;
-  width: 100% !important;
-  border-collapse: collapse;
-  margin: 0 !important;
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-  table-layout: auto;
-}
-
-.jr-table th {
-  text-align: left;
-  padding: 7px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--fg-muted);
-  background: var(--bg-subtle);
-  border: none;
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-}
-
-.jr-table td {
-  padding: 7px 10px;
-  border: none;
-  border-bottom: 1px solid var(--border);
-  color: var(--fg);
-  vertical-align: middle;
-}
-
-.jr-table tr:last-child td {
-  border-bottom: none;
-}
-
-.jr-table tr:hover td {
-  background: var(--bg-hover);
 }
 
 /* 聊天代码块内联卡片容器（沿用宿主代码块外距节奏）。 */

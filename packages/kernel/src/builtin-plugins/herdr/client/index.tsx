@@ -12,7 +12,7 @@ import { useMemo, useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helm/protocol'
-import { usePluginContext, usePluginDoc } from '@helm/plugin-client'
+import { Callout, Select, usePluginContext, usePluginDoc } from '@helm/plugin-client'
 import {
   agentStatusTone,
   canFocusPane,
@@ -31,7 +31,6 @@ import {
 } from './models.ts'
 
 import {
-  AlertTriangle,
   Check,
   ChevronDown,
   Circle,
@@ -53,7 +52,6 @@ function Icon({ name, size = 12, className, style }: { name: string; size?: numb
     'refresh-cw': RefreshCw,
     'rotate-ccw': RotateCcw,
     terminal: Terminal,
-    'alert-triangle': AlertTriangle,
     x: X,
   }
   const Cmp = map[name] ?? Circle
@@ -68,8 +66,8 @@ function formatCompactTimestamp(ms: number): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
-/** 原生极简下拉（无宿主 Select 依赖；仅插件视图内使用）。 */
-function NativeSelect({
+/** 宿主 Radix Select 筛选器（复用 @helm/plugin-client 共享原语；零原生 <select>）。 */
+function FilterSelect({
   value,
   options,
   ariaLabel,
@@ -83,19 +81,15 @@ function NativeSelect({
   width?: number
 }): ReactNode {
   return (
-    <select
-      className="input"
-      style={{ width, padding: '4px 8px', fontSize: 12 }}
+    <Select
+      size="sm"
+      className="herdr-filter-select"
+      style={{ width }}
       value={value}
+      options={options}
       aria-label={ariaLabel}
       onChange={(e) => onChange(e.target.value)}
-    >
-      {options.map((opt) => (
-        <option key={opt.value} value={opt.value}>
-          {opt.label}
-        </option>
-      ))}
-    </select>
+    />
   )
 }
 
@@ -208,45 +202,44 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
       </div>
 
       {(doc?.stale === true || doc?.error !== undefined) && (
-        <div className="jr-callout jr-callout-warn" style={{ margin: '10px 16px 0' }}>
-          <Icon name="alert-triangle" size={13} style={{ flexShrink: 0, marginTop: 2 }} />
-          <span>
+        <div style={{ margin: '10px 16px 0' }}>
+          <Callout tone="warn">
             Herdr 连接降级或不可达：{doc?.error ?? '未知错误'}（以下为最后已知快照，时间 {formatCompactTimestamp(doc?.updatedAt ?? 0)}）
-          </span>
+          </Callout>
         </div>
       )}
 
       <div className="pane-actions herdr-overview-filters">
-        <NativeSelect
+        <FilterSelect
           width={140}
           value={filters.node}
           options={nodeFilterOptions}
           ariaLabel="节点筛选"
           onChange={(next) => updateFilter('node', next)}
         />
-        <NativeSelect
+        <FilterSelect
           width={140}
           value={filters.owner}
           options={OWNER_FILTER_OPTIONS}
           ariaLabel="归属筛选"
           onChange={(next) => updateFilter('owner', next)}
         />
-        <NativeSelect
+        <FilterSelect
           width={140}
           value={filters.status}
           options={STATUS_FILTER_OPTIONS}
           ariaLabel="状态筛选"
           onChange={(next) => updateFilter('status', next)}
         />
-        <span className="jr-metric-label">
+        <span className="text-subtle tabular-nums herdr-metric-label">
           {filtered.length}/{panes.length} 行
         </span>
       </div>
 
       <div className="herdr-overview-content">
         <div style={{ width: '100%', maxWidth: 1100, margin: '0 auto' }}>
-          <div className="herdr-table-wrap jr-table-wrap">
-            <table className="herdr-table jr-table">
+          <div className="helm-table-wrap">
+            <table className="helm-table">
               <thead>
                 <tr>
                   <th style={{ width: 75 }}>节点</th>
@@ -315,7 +308,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
                         )}
                       </td>
                       <td className="herdr-actions-cell" style={{ textAlign: 'right' }}>
-                        <div className="jr-stack-row" style={{ justifyContent: 'flex-end', gap: 4 }}>
+                        <div className="stack-row" style={{ justifyContent: 'flex-end' }}>
                           {canFocusPane(row) && (
                             <button
                               type="button"
@@ -368,9 +361,9 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
           {doc !== undefined && doc.asks.length > 0 && (
             <div className="card" style={{ marginTop: 12 }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>待审批（asks）</div>
-              <div className="jr-stack" style={{ gap: 4 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {doc.asks.map((ask, i) => (
-                  <div key={i} className="jr-stack-row" style={{ justifyContent: 'space-between' }}>
+                  <div key={i} className="stack-row" style={{ justifyContent: 'space-between' }}>
                     <span className="mono" style={{ fontSize: 12 }}>
                       {ask.paneId}@{ask.nodeId}
                     </span>

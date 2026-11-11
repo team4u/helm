@@ -3342,11 +3342,7 @@ button,
  * ========================================================================== */
 
 .helm-table-wrap,
-.table-wrap,
-.sa-table-wrap,
-.tg-table-wrap,
-.mp-table-wrap,
-.herdr-table-wrap {
+.table-wrap {
   width: 100%;
   overflow-x: auto;
   border: 1px solid var(--border);
@@ -3357,11 +3353,7 @@ button,
 }
 
 .helm-table,
-.table-wrap > table,
-.sa-table,
-.tg-table,
-.mp-table,
-.herdr-table {
+.table-wrap > table {
   width: 100%;
   border-collapse: collapse;
   margin: 0;
@@ -3371,11 +3363,7 @@ button,
 }
 
 .helm-table th,
-.table-wrap th,
-.sa-table th,
-.tg-table th,
-.mp-table th,
-.herdr-table th {
+.table-wrap th {
   text-align: left;
   padding: 8px 10px;
   font-size: 11px;
@@ -3388,11 +3376,7 @@ button,
 }
 
 .helm-table td,
-.table-wrap td,
-.sa-table td,
-.tg-table td,
-.mp-table td,
-.herdr-table td {
+.table-wrap td {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-subtle, var(--border));
   color: var(--fg);
@@ -3401,63 +3385,44 @@ button,
 }
 
 .helm-table tr:last-child td,
-.table-wrap tr:last-child td,
-.sa-table tr:last-child td,
-.tg-table tr:last-child td,
-.mp-table tr:last-child td,
-.herdr-table tr:last-child td {
+.table-wrap tr:last-child td {
   border-bottom: none;
 }
 
 .helm-table tr:hover td,
-.table-wrap tr:hover td,
-.sa-table tr:hover td,
-.tg-table tr:hover td,
-.mp-table tr:hover td,
-.herdr-table tr:hover td {
+.table-wrap tr:hover td {
   background: var(--bg-hover);
 }
 
 .table-actions,
-.cell-actions,
-.sa-cell-actions,
-.tg-cell-actions,
-.sa-th-actions,
-.tg-th-actions {
+.cell-actions {
   text-align: right;
   white-space: nowrap;
 }
 
 .table-actions-group,
-.row-actions-group,
-.sa-row-actions,
-.tg-row-actions {
+.row-actions-group {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
 }
 
-.table-empty,
-.sa-table-empty,
-.tg-table-empty,
-.mp-table-empty {
+.table-empty {
   color: var(--fg-muted);
   text-align: center;
   padding: 24px 10px;
   font-size: 12.5px;
 }
 
-.cell-ellipsis,
-.tg-text-cell {
+.cell-ellipsis {
   max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.cell-error,
-.tg-err-cell {
+.cell-error {
   max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3471,11 +3436,7 @@ button,
  * ========================================================================== */
 
 .screen-container,
-.screen-scroll-wrap,
-.sa-screen,
-.tg-screen,
-.mp-panel,
-.herdr-overview {
+.screen-scroll-wrap {
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -3485,10 +3446,7 @@ button,
   box-sizing: border-box;
 }
 
-.screen-header,
-.sa-screen-header,
-.tg-screen-header,
-.mp-header {
+.screen-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3496,9 +3454,7 @@ button,
   gap: 10px;
 }
 
-.screen-title,
-.sa-screen-title,
-.tg-screen-title {
+.screen-title {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3507,27 +3463,18 @@ button,
   color: var(--fg);
 }
 
-.screen-subtitle,
-.sa-screen-subtitle,
-.tg-screen-subtitle,
-.mp-summary {
+.screen-subtitle {
   font-size: 12px;
   color: var(--fg-muted);
 }
 
-.screen-section,
-.sa-section,
-.tg-section,
-.mp-section {
+.screen-section {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.screen-section-title,
-.sa-section-title,
-.tg-section-title,
-.mp-section-title {
+.screen-section-title {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3542,29 +3489,20 @@ button,
 
 .helm-kv-grid,
 .kv-grid,
-.kv-list,
-.sa-kv-list,
-.tg-kv-list,
-.mp-kv-list {
+.kv-list {
   display: grid;
   grid-template-columns: minmax(100px, auto) 1fr;
   gap: 6px 14px;
   font-size: 12.5px;
 }
 
-.kv-key,
-.sa-kv-key,
-.tg-kv-key,
-.mp-kv-key {
+.kv-key {
   color: var(--fg-muted);
   user-select: none;
 }
 
 .kv-val,
-.kv-value,
-.sa-kv-val,
-.tg-kv-val,
-.mp-kv-val {
+.kv-value {
   color: var(--fg);
   font-variant-numeric: tabular-nums;
   word-break: break-all;
@@ -3575,11 +3513,7 @@ button,
  * ========================================================================== */
 
 .helm-callout,
-.callout,
-.sa-error,
-.tg-error,
-.mp-error,
-.herdr-callout {
+.callout {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -3593,18 +3527,14 @@ button,
   word-break: break-all;
 }
 
-.callout-warn,
-.herdr-callout-warn {
+.callout-warn {
   background: var(--warn-bg, rgba(234, 179, 8, 0.08));
   border-color: var(--warn-border, rgba(234, 179, 8, 0.25));
   color: var(--warn, #eab308);
 }
 
 .callout-error,
-.callout-err,
-.sa-error,
-.tg-error,
-.mp-error {
+.callout-err {
   background: var(--err-bg, rgba(239, 68, 68, 0.08));
   border-color: var(--err-border, rgba(239, 68, 68, 0.25));
   color: var(--err, #ef4444);
@@ -3622,10 +3552,7 @@ button,
  * ========================================================================== */
 
 .loading-state,
-.state-loading,
-.sa-loading,
-.tg-loading,
-.mp-loading {
+.state-loading {
   display: flex;
   align-items: center;
   gap: 6px;

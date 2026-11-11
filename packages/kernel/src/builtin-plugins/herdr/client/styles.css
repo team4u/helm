@@ -1,7 +1,8 @@
 /**
  * builtin:herdr 插件自有样式（clientRoot 内本地 CSS）。
  *
- * 表格使用宿主统一原语（.helm-table-wrap 与 .helm-table），杜绝插件私有拷贝。
+ * 通用结构一律复用宿主设计系统原语（.helm-table-wrap / .helm-table / .callout /
+ * .stack-row / Callout 组件等），此处仅保留 Herdr 总览视图专属业务布局。
  */
 .herdr-overview {
   width: 100%;
@@ -31,37 +32,18 @@
   justify-content: flex-start;
 }
 
+/* 筛选下拉固定宽度契约（宿主 Select 默认 width: 100%，此处收窄为筛选条尺寸） */
+.herdr-filter-select .helm-select-trigger {
+  width: 100%;
+}
+
 .herdr-actions-cell {
   text-align: right;
   white-space: nowrap;
   min-width: 120px;
 }
 
-.herdr-metric-label,
-.jr-metric-label {
-  font-size: 11.5px;
-  color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
+/* 行计小字（复用 .text-subtle.tabular-nums；此处仅补左侧间距节奏） */
+.herdr-metric-label {
   margin-left: 4px;
-}
-
-/* 提示通知卡片 */
-.herdr-callout,
-.jr-callout {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm, 6px);
-  font-size: 12px;
-  line-height: 1.5;
-  border: 1px solid var(--border);
-  background: var(--bg-subtle);
-}
-
-.herdr-callout-warn,
-.jr-callout-warn {
-  background: var(--warn-bg, rgba(234, 179, 8, 0.08));
-  border-color: var(--warn-border, rgba(234, 179, 8, 0.25));
-  color: var(--warn, #eab308);
 }

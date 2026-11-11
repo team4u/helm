@@ -506,7 +506,14 @@
 
 .workflow-run-card {
   container: workflow-card / inline-size;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+}
+
+/* 运行卡头部（展开按钮 + 标题 + 徽章 + 统计 + 动作）；换行友好 */
+.workflow-run-header {
+  flex-wrap: wrap;
 }
 
 @container workflow-card (max-width: 420px) {

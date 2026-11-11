@@ -1,6 +1,6 @@
 /**
  * builtin:magpie 插件样式。
  *
- * 全面复用宿主设计系统原语（.mp-panel -> .screen-container、.table-wrap、.helm-table、.kv-list、.callout、.loading-state 等）。
- * 绝不私有重复拷贝，保持全平台视觉体验高度统一。
+ * 通用结构一律复用宿主设计系统原语（.screen-container / .helm-table-wrap /
+ * .helm-table / .kv-list / .callout / .loading-state 等），本插件无私有通用样式。
  */

@@ -1,14 +1,8 @@
 /**
- * builtin:triggers 插件自有样式（clientRoot 本地 CSS）。
- *
- * 仅使用宿主核心通用类（badge / btn / spin-slow）与全局设计变量；
- * 表格与 KV 布局用本插件 tg- 前缀类，不依赖 json-render（jr-*）类。
- */
-/**
  * builtin:triggers 插件样式。
  *
- * 全面复用宿主设计系统原语（.screen-container、.table-wrap、.helm-table、.kv-list、.callout、.loading-state 等）。
- * 杜绝私有重复拷贝，保持全平台视觉体验高度统一。
+ * 通用结构一律复用宿主设计系统原语（.screen-container / .helm-table / .kv-list /
+ * .callout / .loading-state），此处仅保留 tg-note 业务专属提示样式。
  */
 .tg-note {
   font-size: 12.5px;
