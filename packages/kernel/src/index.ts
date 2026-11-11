@@ -37,6 +37,16 @@ export {
   WATCHDOG_PROFILE_ID,
 } from './builtin-plugins/superagent.js';
 export { createTriggersPlugin, TRIGGERS_PLUGIN_ID } from './builtin-plugins/triggers.js';
+export {
+  createAppsPlugin,
+  APPS_PLUGIN_ID,
+  APPS_SCREEN_ID,
+  APP_BUILDER_SKILL_ID,
+  APP_CATEGORIES,
+  type AppCategory,
+  type AppCatalogEntry,
+  type AppsCatalogDoc,
+} from './builtin-plugins/apps.js';
 export { createMagpiePlugin, MAGPIE_PLUGIN_ID } from './builtin-plugins/magpie.js';
 export { MAGPIE_PROVIDER_ID, type MagpiePluginConfig, type MagpieStatusDoc } from './builtin-plugins/magpie/contracts.js';
 export type { HerdrPluginDependencies, HerdrTransport, HerdrTarget, HerdrEvent } from './builtin-plugins/herdr/contracts.js';

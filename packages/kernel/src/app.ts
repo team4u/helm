@@ -8,6 +8,7 @@ import { createHerdrPlugin } from './builtin-plugins/herdr.js';
 import { createSuperAgentPlugin } from './builtin-plugins/superagent.js';
 import { createTriggersPlugin } from './builtin-plugins/triggers.js';
 import { createMagpiePlugin } from './builtin-plugins/magpie.js';
+import { createAppsPlugin } from './builtin-plugins/apps.js';
 import { loadExternalPlugins } from './plugins/external-loader.js';
 
 export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'>;
@@ -21,6 +22,7 @@ export async function createHelm(options: HelmOptions = {}) {
     await kernel.plugins.register(createMemoryPlugin());
     await kernel.plugins.register(createJsonRenderPlugin());
     await kernel.plugins.register(createMermaidPlugin());
+    await kernel.plugins.register(createAppsPlugin({ hubCwd: options.cwd ?? process.cwd() }));
     await kernel.plugins.register(createHerdrPlugin(), { enabled: false });
     await kernel.plugins.register(createSuperAgentPlugin(), { enabled: false });
     await kernel.plugins.register(createTriggersPlugin(), { enabled: false });

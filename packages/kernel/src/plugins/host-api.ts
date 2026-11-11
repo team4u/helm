@@ -8,8 +8,12 @@ import {
   type ActionManifest,
   type HelmHostApi,
   type PluginActionContext,
-  type PluginUiContribution,
+  type PluginDoctorReport,
+  type PluginInstallResult,
+  type PluginRemoveResult,
   type PluginSummary,
+  type PluginUiContribution,
+  type PluginUpdateResult,
 } from '@helm/protocol';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { redactJsonValue } from '../redact.js';
@@ -45,6 +49,23 @@ export interface HostApiDependencies {
     context?: PluginActionContext,
   ): { idempotent: boolean };
   assertContextUsable(state: PluginState, epoch: number, what: string): void;
+}
+
+/**
+ * 【protocol-host 分支合并点】宿主受管插件包生命周期端口
+ * （未来 protocol HelmHostApi.plugins）。在 protocol 定义该字段前，后端
+ * （runtime-host-backend / 测试 fixture）可携带同名可选成员，此处经局部
+ * 断言透传给 ctx.host.plugins；protocol 合入后本接口删除、改为直接转发。
+ */
+export interface HostPluginsPortForward {
+  doctor(target: { dir?: string; id?: string }): Promise<PluginDoctorReport & { screens?: string[] }>
+  install(source: string, options?: { enable?: boolean }): Promise<PluginInstallResult>
+  update(pluginId: string): Promise<PluginUpdateResult>
+  remove(pluginId: string): Promise<PluginRemoveResult>
+  enable(pluginId: string): Promise<PluginSummary | void>
+  disable(pluginId: string, options?: { force?: boolean }): Promise<PluginSummary | void>
+  list(): PluginSummary[]
+  listUi(): PluginUiContribution[]
 }
 
 /**
@@ -130,10 +151,34 @@ export function wrapHostApi(
       };
     };
 
+  // 【protocol-host 分支合并点】受管插件包端口透传：protocol 定义
+  // HelmHostApi.plugins 前，后端携带的可选成员经局部断言转发（方法级
+  // guard + 任务跟踪，与其余宿主端口同一包装纪律）；未携带时字段不存在
+  // （消费方 builtin:apps 显式 501，不静默降级）。
+  const backendPlugins = (backend as PluginHostBackend & { plugins?: HostPluginsPortForward }).plugins
+  const pluginsPort: HostPluginsPortForward | undefined = backendPlugins === undefined ? undefined : {
+    doctor: (target) => tracked('host.plugins.doctor', () => backendPlugins.doctor(target)),
+    install: (source, options) => tracked('host.plugins.install', () => backendPlugins.install(source, options)),
+    update: (pluginId2) => tracked('host.plugins.update', () => backendPlugins.update(pluginId2)),
+    remove: (pluginId2) => tracked('host.plugins.remove', () => backendPlugins.remove(pluginId2)),
+    enable: (pluginId2) => tracked('host.plugins.enable', () => backendPlugins.enable(pluginId2)),
+    disable: (pluginId2, options) => tracked('host.plugins.disable', () => backendPlugins.disable(pluginId2, options)),
+    list: () => {
+      guard('host.plugins.list');
+      return backendPlugins.list();
+    },
+    listUi: () => {
+      guard('host.plugins.listUi');
+      return backendPlugins.listUi();
+    },
+  }
+
   return {
     get isClosing() {
       return backend.isClosing();
     },
+
+    ...(pluginsPort !== undefined ? { plugins: pluginsPort } : {}),
 
     // 1. profiles
     profiles: {
