@@ -1092,7 +1092,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                 onClose?.()
               }}
             >
-              <HelmIcon name="settings" size={14} />
+              <HelmIcon name="puzzle" size={14} />
             </button>
           </Tooltip>
         </div>

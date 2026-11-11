@@ -2137,7 +2137,7 @@ textarea {
   visibility: visible;
 }
 
-/* 药丸内标签 (Magpie .mchip .badge 原生规范：保持常规字重 400、9.5px、微灰胶囊底、内发丝阴影、hover 绝不改变样式) */
+/* 药丸内标签 (清晰易读规范：字号 10.5px、高度 16px、常规字重 400、微灰胶囊底、内发丝阴影、hover 绝不改变样式) */
 .mchip .badge,
 .mchip .mchip-tag,
 .mchip .mtell,
@@ -2147,12 +2147,12 @@ textarea {
   display: inline-flex;
   align-items: center;
   margin: 0 0 0 2px;
-  padding: 0 4.5px;
-  font-size: 9.5px;
-  line-height: 14px;
-  height: 14px;
-  font-weight: 400 !important; /* 标签如思考模型、多模态等常规字重不加粗 */
-  letter-spacing: 0.02em;
+  padding: 0 5px;
+  font-size: 10.5px;
+  line-height: 16px;
+  height: 16px;
+  font-weight: 400 !important; /* 标签如思考模型、多模态等常规字重不加粗，清晰易读 */
+  letter-spacing: 0.01em;
   border-radius: 4px;
   background: var(--bg-muted); /* Magpie var(--pill) */
   color: var(--fg-muted);      /* Magpie var(--muted) */

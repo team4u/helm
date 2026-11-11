@@ -120,7 +120,7 @@ export function PluginCenter({
       <div className="plugin-center-topbar">
         <div className="plugin-center-title-wrap">
           <div className="plugin-center-title">
-            <HelmIcon name="boxes" size={16} />
+            <HelmIcon name="puzzle" size={16} />
             <span>插件中心</span>
           </div>
           <span className="plugin-center-subtitle text-subtle">
