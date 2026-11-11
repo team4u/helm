@@ -711,18 +711,36 @@ export default {
 `
 
 const SCAFFOLD_CLIENT_INDEX_TSX = `import React from 'react'
-import { usePluginDoc } from '@helm/plugin-client'
+import { usePluginDoc, ScreenSection, DataTable, KvGrid } from '@helm/plugin-client'
 
 export function SamplePanel(): React.JSX.Element {
   const state = usePluginDoc<{ count: number }>('state')
+  const loading = state === undefined
   return (
-    <div className="section-flat">
-      <div className="font-medium">示例面板</div>
-      <div className="text-subtle">当前计数：{state?.count ?? 0}</div>
-      <div className="text-subtle text-xs">
-        调用 increment 动作更新计数（helm <plugin> increment --json）。
-      </div>
-    </div>
+    <ScreenSection title="示例面板">
+      {loading ? (
+        <div className="loading-state" role="status">计数读取中…</div>
+      ) : (
+        <KvGrid
+          items={[
+            { key: '当前计数', value: state.count },
+            { key: '更新方式', value: '调用 increment 动作更新计数' },
+          ]}
+        />
+      )}
+      <DataTable columns={1} empty={!loading && state !== undefined && state.count === 0} emptyLabel="计数为零">
+        <thead>
+          <tr>
+            <th>计数记录</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>count = {state === undefined ? '—' : state.count}</td>
+          </tr>
+        </tbody>
+      </DataTable>
+    </ScreenSection>
   )
 }
 `

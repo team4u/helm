@@ -414,6 +414,8 @@ export interface PluginClientContext {
  *   useConversations / useConversation / usePlugins；
  * - 无障碍底座组件：Switch / Select / MultiSelect / Checkbox / Tabs 系列 /
  *   SegmentedControl / HelmIcon / ViewBoundary / Callout；
+ * - 轻量布局原语：Screen（页面容器+页头）/ ScreenSection（分节）/
+ *   DataTable（组合式表格，统一 loading/empty）/ KvGrid（键值概览）；
  * - 内容展示：MarkdownView（标准 Markdown 渲染）/ CodeBlockView（语法高亮代码块）/
  *   CopyButton（复制按钮）；
  * - PluginSlot：插件间子插槽渲染原语。
@@ -500,5 +502,9 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'DialogDescription',
   'DialogClose',
   'DialogTrigger',
+  'Screen',
+  'ScreenSection',
+  'DataTable',
+  'KvGrid',
 ] as const
 

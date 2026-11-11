@@ -113,26 +113,64 @@ export default {
 | :--- | :--- |
 | Hooks | `usePluginContext`（`callAction / submitInput / openConversationDrawer / openArtifact / openWorkbench / notify / theme / composer` 等）、`usePluginDoc(docName, pluginId?)`、`usePluginSessionDoc(docName, options?)`、`useConversations()`、`useConversation(id)`、`useToolActivity(callId, active)` |
 | 无障碍底座组件 | `Switch`、`Select` / `MultiSelect`、`Checkbox`、`Tabs` 系列、`SegmentedControl`、`Dialog` 系列、`ViewBoundary`、`Callout` |
+| 布局原语 | `Screen`、`ScreenSection`、`DataTable`、`KvGrid`（见下方速查） |
 | 内容展示 | `HelmIcon`（lucide 线性图标宿主封装）、`MarkdownView`、`CodeBlockView`、`CopyButton` |
 | 插件间组合 | `PluginSlot` |
 
+#### 布局原语速查（优先复用，不要手写 CSS）
+
+全部为组合式、无状态、SSR 安全（无 Portal、无浏览器副作用），只复用宿主通用类，不引入新 CSS 主题：
+
+| 原语 | 用途 | 关键 Props |
+| :--- | :--- | :--- |
+| `Screen` | 全屏页面容器 + 页头 | `title` / `subtitle` / `actions`（可组合页头）；需要图标等复杂页头时传 `header` 整体替换 |
+| `ScreenSection` | 页面分节 | `title`（分节标题）、`titleExtra`（标题右侧补充） |
+| `DataTable` | 表格外壳，统一 loading/empty | `loading` / `loadingLabel`、`empty` / `emptyLabel`、`columns`（占位行 colSpan，缺省自动推断）；表头与数据行由 children JSX 自由表达 |
+| `KvGrid` | 键值概览两列网格 | `items: Array<{ key, value }>` |
+
 ```tsx
-import { Activity } from 'lucide-react';
-import { usePluginDoc, HelmIcon } from '@helm/plugin-client';
+import { usePluginDoc, HelmIcon, Screen, ScreenSection, DataTable, KvGrid } from '@helm/plugin-client';
 
 export function SampleWidget() {
-  const stats = usePluginDoc<{ totalCalls: number }>('stats');
+  const stats = usePluginDoc<{ totalCalls: number; failedCalls: number }>('stats');
+  const rows = usePluginDoc<Array<{ id: number; name: string }>>('rows');
   return (
-    <div className="p-4 border rounded-lg bg-card">
-      <div className="flex items-center gap-2 mb-2 font-medium">
-        <HelmIcon name="activity" size={14} />
-        <span>业务运行状态</span>
-      </div>
-      <p className="text-sm text-muted-foreground">累计调用：{stats?.totalCalls ?? 0}</p>
-    </div>
+    <Screen
+      title={<><HelmIcon name="activity" size={14} />业务运行状态</>}
+      subtitle={<>累计调用：{stats?.totalCalls ?? 0}</>}
+    >
+      <ScreenSection title="概览">
+        <KvGrid
+          items={[
+            { key: '累计调用', value: stats?.totalCalls ?? 0 },
+            { key: '失败调用', value: stats?.failedCalls ?? 0 },
+          ]}
+        />
+      </ScreenSection>
+      <ScreenSection title="记录" titleExtra={rows === undefined ? undefined : `共 ${rows.length} 条`}>
+        <DataTable loading={rows === undefined} empty={(rows?.length ?? 0) === 0}>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>名称</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows ?? []).map((row) => (
+              <tr key={row.id}>
+                <td>{row.id}</td>
+                <td>{row.name}</td>
+              </tr>
+            ))}
+          </tbody>
+        </DataTable>
+      </ScreenSection>
+    </Screen>
   );
 }
 ```
+
+**样式复用铁律**：通用结构（页面容器、分节、表格、键值概览、提示横幅、加载态）一律优先复用上述原语或宿主通用类；插件本地 `.css` 只写业务特异结构（如 Mermaid 缩放画布、DAG 执行图卡片）。不要为通用结构新增一套 CSS 主题。
 
 后端注册组件引用（module 为相对 clientRoot 的路径、export 为具名导出名）：
 

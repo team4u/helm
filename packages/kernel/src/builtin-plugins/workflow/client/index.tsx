@@ -781,7 +781,7 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
   return (
     <div className="workflow-node-detail">
       {rows.length > 0 ? (
-        <div className="kv-list">
+        <div className="kv-grid">
           {rows.map(([k, v]) => (
             <span key={k} style={{ display: 'contents' }}>
               <span className="kv-key">{k}</span>

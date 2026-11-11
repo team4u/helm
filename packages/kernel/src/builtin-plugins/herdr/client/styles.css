@@ -47,3 +47,10 @@
 .herdr-metric-label {
   margin-left: 4px;
 }
+
+/* 待审批列表：本插件专属纵向容器 */
+.herdr-ask-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}

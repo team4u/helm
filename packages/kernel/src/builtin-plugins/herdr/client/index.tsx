@@ -361,9 +361,9 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
           {doc !== undefined && doc.asks.length > 0 && (
             <div className="card" style={{ marginTop: 12 }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>待审批（asks）</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div className="herdr-ask-list">
                 {doc.asks.map((ask, i) => (
-                  <div key={i} className="stack-row" style={{ justifyContent: 'space-between' }}>
+                  <div key={i} className="stack-row" style={{ justifyContent: 'space-between', width: '100%' }}>
                     <span className="mono" style={{ fontSize: 12 }}>
                       {ask.paneId}@{ask.nodeId}
                     </span>

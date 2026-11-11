@@ -424,6 +424,11 @@ test('plugins init：本地生成骨架（默认 full 模板：plugin.json + ind
     assert.ok(client.includes('export function SamplePanel'))
     assert.ok(client.includes('@helm/plugin-client'), '标准模板引入宿主共享前端模块')
     assert.ok(client.includes('usePluginDoc'), '标准模板使用共享 Hook')
+    // 标准模板直接使用共享布局原语，不再出现伪 Tailwind 类名
+    for (const primitive of ['ScreenSection', 'DataTable', 'KvGrid']) {
+      assert.ok(client.includes(primitive), `标准模板应使用共享布局原语 ${primitive}`)
+    }
+    assert.ok(!/\b(font-medium|text-subtle|text-xs)\b/.test(client), '标准模板不得残留伪 Tailwind 类名')
     assert.ok(await fsp.stat(path.join(body.dir, 'README.md')))
 
     // 人类模式输出后续步骤

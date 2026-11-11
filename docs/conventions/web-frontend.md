@@ -36,7 +36,8 @@
   - 插件页面与分节原语：`.screen-container`（统一内边距与纵向滚动）、`.screen-header` / `.screen-title` / `.screen-subtitle`、`.screen-section` / `.screen-section-title`；
   - 键值概览原语：`.kv-grid` / `.kv-list`（两列自适应）、`.kv-key`、`.kv-val`；
   - 提示横幅原语：`.callout`（`.callout-warn` / `.callout-error` / `.callout-ok`，统一边框、浅色背景与圆角）；
-  - 加载中原语：`.loading-state`。
+  - 加载中原语：`.loading-state`；
+- **插件 client.tsx 布局原语组件（`@helm/plugin-client` 导出）**：`Screen`（页面容器+页头 title/subtitle/actions 或 header）、`ScreenSection`（分节）、`DataTable`（组合式表格外壳，统一 loading/empty）、`KvGrid`（键值概览）——上述通用结构与插件前端开发时优先使用这些组件而非手写 div+className，CSS 仅用于业务特异结构；
 - **强制样式复用铁律（杜绝各车间私有复制）**：
   - **全仓所有内置插件与外部插件必须优先复用主框架设计系统原语**，严禁在插件内私自复制通用表格、通用页面布局、通用键值列表或通用提示条样式；
   - 仅限插件独有的特异性业务结构（如 Mermaid 图表缩放画布、Workflow DAG 执行图卡片、Apps 启动台卡片网格）允许在插件 client CSS 内编写专属规则；所有通用排版与组件样式必须统一收敛在主框架中，确保全平台视觉与交互风格绝对统一。
