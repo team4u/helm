@@ -1037,6 +1037,10 @@ function ActivityRail({
 }) {
   return (
     <nav className="activity-rail" aria-label="主导航">
+      <div className="activity-rail-brand" title="Helm">
+        <HelmIcon name="layers" size={17} />
+        <StatusDot connected={store.sseConnected} />
+      </div>
       <div className="activity-rail-spaces">
         <Tooltip content="对话空间" side="right">
           <button
@@ -1147,10 +1151,9 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
       <ActivityRail store={store} space={space} onSpaceChange={setSpace} onClose={onClose} />
       <div className="sidebar-context">
         <div className="sidebar-header">
-          <div className="sidebar-brand">
-            <HelmIcon name="layers" size={16} />
-            Helm
-            <StatusDot connected={store.sseConnected} />
+          <div className="sidebar-context-title">
+            <HelmIcon name={space === 'conversations' ? 'message-square' : 'layout-grid'} size={14} />
+            <span>{space === 'conversations' ? '对话' : '视图'}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <Tooltip content="打开 Cmd K 全局搜索与命令面板" side="bottom">
@@ -1282,7 +1285,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
           >
             <button
               type="button"
-              className="btn btn-ghost btn-sm sidebar-theme-toggle"
+              className="btn btn-ghost btn-sm rail-btn sidebar-theme-toggle"
               title={
                 store.themePreference === 'system'
                   ? `跟随系统（当前${store.theme === 'dark' ? '暗色' : '浅色'}，点击切换为浅色模式）`

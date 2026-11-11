@@ -6207,3 +6207,39 @@ input::placeholder {
   .timeline-starters { gap: 6px; }
   .timeline-starter-btn { font-size: 12px; }
 }
+
+/* A 方案：系统中心只在 Activity Rail 出现，保留旧 footer 标记仅为兼容既有导航契约。 */
+.activity-rail-brand {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg);
+  flex-shrink: 0;
+}
+
+.activity-rail-brand .status-dot {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  box-shadow: 0 0 0 2px var(--bg-muted);
+}
+
+.sidebar-context-title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* 系统中心已提升到 Rail；旧 footer 保留 DOM 结构以兼容历史测试与外部扩展，不占视觉空间。 */
+.sidebar-context > .sidebar-footer {
+  display: none;
+}
