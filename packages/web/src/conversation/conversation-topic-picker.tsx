@@ -63,7 +63,7 @@ export function TopicPicker({ conversation, isSplit, newTopicDisabled, onNewTopi
               <Tooltip key={conv.id} content={dotClass ? `${label} · ${statusTooltip}` : label} side="bottom">
                 <button
                   type="button"
-                  className={`topic-tab${active ? ' topic-tab-active' : ''}`}
+                  className={`nav-item topic-tab${active ? ' nav-item-active' : ''}`}
                   aria-current={active ? 'page' : undefined}
                   onClick={() => {
                     // 点击当前话题：展开完整话题列表（含搜索与新建）
@@ -79,7 +79,9 @@ export function TopicPicker({ conversation, isSplit, newTopicDisabled, onNewTopi
                   ) : (
                     <span className="topic-picker-dot-spacer" />
                   )}
-                  <span className="topic-tab-title">{label}</span>
+                  <span className="nav-item-main">
+                    <span className="nav-item-label">{label}</span>
+                  </span>
                   {active && <HelmIcon name="chevron-down" size={11} className="topic-tab-chevron" />}
                 </button>
               </Tooltip>
@@ -90,12 +92,12 @@ export function TopicPicker({ conversation, isSplit, newTopicDisabled, onNewTopi
               <PopoverTrigger asChild>
                 <button
                   type="button"
-                  className="topic-tab topic-tab-more"
+                  className="nav-item topic-tab topic-tab-more"
                   aria-label={`查看全部 ${model.topicCount} 个话题`}
                   title={`查看全部 ${model.topicCount} 个话题`}
                 >
                   <HelmIcon name="chevron-down" size={12} />
-                  <span className="tabular-nums">{model.topicCount}</span>
+                  <span className="nav-item-label tabular-nums">{model.topicCount}</span>
                 </button>
               </PopoverTrigger>
             </Tooltip>

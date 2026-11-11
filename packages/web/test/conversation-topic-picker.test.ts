@@ -74,10 +74,11 @@ test('TopicPicker SSR：平铺话题 Tabs，当前项高亮且超出预览渲染
     e(HelmStoreContext.Provider, { value: store }, e(TopicPicker, { conversation: store.conversations[0]! })),
   )
   assert.ok(html.includes('topic-tabs'), '话题 Tab 容器')
-  assert.ok(html.includes('topic-tab-active'), '当前话题 Tab 激活态')
+  assert.ok(html.includes('nav-item topic-tab'), '话题 Tab 复用左栏 nav-item 原语样式')
+  assert.ok(html.includes('topic-tab nav-item-active'), '当前话题 Tab 复用 nav-item-active 激活态')
   assert.ok(html.includes('周末计划'), '平铺最近话题')
   // 3 个话题 = 3 个平铺 Tab（未超出预览 4，不渲染更多入口）
-  const tabCount = (html.match(/class="topic-tab( |")/g) ?? []).length
+  const tabCount = (html.match(/class="nav-item topic-tab(?: |")/g) ?? []).length
   assert.equal(tabCount, 3)
   assert.ok(!html.includes('topic-tab-more'), '未超出预览不渲染更多入口')
   // 关闭状态下 Popover 内容不渲染（Radix SSR 行为）

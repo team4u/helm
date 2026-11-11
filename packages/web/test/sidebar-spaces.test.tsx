@@ -164,11 +164,11 @@ test('TopicPicker 交互：点击当前话题 Tab 打开 Popover，搜索并切�
   render(store, e(TopicPicker, { conversation }))
   await act(async () => {})
 
-  const activeTab = document.body.querySelector('.topic-tab-active') as HTMLButtonElement
+  const activeTab = document.body.querySelector('.nav-item-active') as HTMLButtonElement
   assert.ok(activeTab, '当前话题 Tab 存在且激活')
   assert.ok(activeTab.textContent!.includes('个人助理'), '当前话题 Tab 展示话题标题')
   // 点击非当前 Tab 直接切换目标，不弹层
-  const otherTab = document.body.querySelector('.topic-tab:not(.topic-tab-active):not(.topic-tab-more)') as HTMLButtonElement
+  const otherTab = document.body.querySelector('.topic-tab:not(.nav-item-active):not(.topic-tab-more)') as HTMLButtonElement
   await act(async () => {
     otherTab.click()
   })
@@ -208,7 +208,7 @@ test('TopicPicker 分屏窗格：切换写入 split 目标', { timeout: 60_000 }
   render(store, e(TopicPicker, { conversation, isSplit: true }))
   await act(async () => {})
 
-  const otherTab = document.body.querySelector('.topic-tab:not(.topic-tab-active):not(.topic-tab-more)') as HTMLButtonElement
+  const otherTab = document.body.querySelector('.topic-tab:not(.nav-item-active):not(.topic-tab-more)') as HTMLButtonElement
   await act(async () => {
     otherTab.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))
     otherTab.click()

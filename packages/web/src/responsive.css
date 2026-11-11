@@ -61,10 +61,50 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .conversation-topbar .pane-title { min-width: 40px; }
   .conversation-topbar .pane-cwd-subtitle { max-width: 30vw; }
   .conversation-topbar .pane-parent-nav-btn { height: 22px; padding: 0 6px 0 5px; font-size: 11px; gap: 3px; }
-  /* 话题 Tabs：窄容器下收敛为仅当前话题 Tab（点击展开完整列表），收窄可用宽度 */
-  .topic-tabs { max-width: 46%; }
-  .topic-tab:not(.topic-tab-active):not(.topic-tab-more) { display: none; }
-  .topic-tab { max-width: 160px; }
+  /* Magpie 式移动端顶栏：第一行放操作，第二行给 Tabs 独占整行并横向滑动。 */
+  .conversation-topbar {
+    height: auto;
+    min-height: 46px;
+    flex-wrap: wrap;
+    align-content: center;
+    gap: 4px 8px;
+    padding: 0 12px 8px;
+    background: var(--bg-subtle);
+  }
+  .conversation-topbar .pane-title-group {
+    display: contents;
+  }
+  .conversation-topbar .pane-parent-nav-btn {
+    order: 1;
+    align-self: center;
+  }
+  .conversation-topbar .pane-actions {
+    order: 2;
+    margin-left: auto;
+  }
+  .conversation-topbar .pane-cwd-subtitle {
+    display: none;
+  }
+  .topic-tabs {
+    order: 3;
+    flex: 0 0 100%;
+    width: 100%;
+    max-width: 100%;
+    padding: 2px 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+  .topic-tabs > .nav-item {
+    max-width: none;
+    height: 40px;
+    min-height: 40px;
+    padding: 0 14px;
+    font-size: 14px;
+  }
+  .topic-tabs > .nav-item-active {
+    flex: 0 0 auto;
+    width: auto;
+  }
   .composer-widgets .card { padding: 8px 10px; }
 }
 @media (hover: none) {

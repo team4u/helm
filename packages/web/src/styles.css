@@ -1111,67 +1111,80 @@ button,
   color: var(--fg-muted);
 }
 
-/* 主舞台顶栏话题切换（方案一）：平铺话题 Tabs（当前项同左栏智能体高亮）+ 更多 Popover */
+/* 主舞台顶栏话题 Tabs：参考 Magpie 的无轨道横向 Seg。
+ * 只有当前项绘制选择面，其余项不画边框、不画圆角底色；移动端把 Tabs
+ * 放到自己的整行并横向滚动，避免在操作按钮之间被压成小胶囊。 */
 .topic-tabs {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 0;
   flex: 0 1 auto;
   min-width: 0;
   max-width: 60%;
-  overflow: hidden;
+  padding: 2px;
+  border-radius: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
 
-.topic-tab {
+.topic-tabs::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* 保留 nav-item 语义与无障碍结构，但顶栏 Tab 的尺寸按 Magpie Seg 规则独立。 */
+.topic-tabs > .nav-item {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 28px;
-  min-width: 0;
+  justify-content: center;
+  width: auto;
   max-width: 180px;
-  padding: 0 9px;
+  min-width: 0;
+  height: 24px;
+  min-height: 24px;
+  flex: 0 0 auto;
+  padding: 0 12px;
+  gap: 6px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: 6px;
   background: transparent;
+  box-shadow: none;
   color: var(--fg-muted);
   font-size: 12.5px;
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
-  cursor: pointer;
-  flex-shrink: 1;
-  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  transition: color 120ms ease, background 120ms ease, box-shadow 120ms ease;
 }
 
-.topic-tab:hover {
-  background: var(--bg-hover);
+.topic-tabs > .nav-item .nav-item-main {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.topic-tabs > .nav-item:hover:not(.nav-item-active) {
+  background: transparent;
   color: var(--fg);
+  box-shadow: none;
 }
 
-/* 当前话题：与左栏 nav-item-active 同一塞微浮起卡片视觉 */
-.topic-tab-active,
-.topic-tab-active:hover {
+/* 选择面使用与左栏智能体激活项相同的两个 Token。 */
+.topic-tabs > .nav-item-active,
+.topic-tabs > .nav-item-active:hover {
   background: var(--nav-active-bg);
   color: var(--nav-active-fg);
   box-shadow: var(--seg-edge);
-}
-
-.topic-tab-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-weight: 500;
 }
 
 .topic-tab-chevron {
   flex-shrink: 0;
   color: var(--fg-muted);
-}
-
-.topic-tab-more {
-  flex-shrink: 0;
-  padding: 0 8px;
-  gap: 4px;
-  font-size: 11.5px;
 }
 
 .topic-picker-dot-spacer {
