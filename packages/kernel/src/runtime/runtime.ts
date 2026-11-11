@@ -50,6 +50,8 @@ import {
   SkillService,
 } from '../services/index.js'
 import { PluginHost } from '../plugins/index.js'
+import { PluginPackageManager } from '../plugins/package-manager.js'
+import { PluginPackageManagerStore } from '../plugins/package-store.js'
 import type { EnvFabric } from '../env/index.js'
 import type { EventHub, SessionDocEventHub } from './events.js'
 import type { HelmDatabase } from './sqlite.js'
@@ -221,6 +223,18 @@ export class KernelRuntime {
       sessionDocs: createPluginSessionDocStore(this.store),
       config: this.svc.pluginConfig,
     })
+    // 受管包安装记录预热（config.json pluginPackages；损坏显式上抛）后接线安装器。
+    const packageStore = new PluginPackageManagerStore(this.svc.configSvc)
+    await packageStore.load()
+    this.pluginHost.attachPackageManager(
+      new PluginPackageManager({
+        dataDir: this.dataDir,
+        cwd: this.init.cwd,
+        store: packageStore,
+        host: this.pluginHost.asPackageManagerHost(),
+      }),
+      packageStore,
+    )
 
     await ensureInitialConversation({
       harness: this.harness,

@@ -669,6 +669,11 @@ export interface PluginInstallResult {
   record: PluginPackageRecord
   /** 安装后插件当前清单（安装即注册，默认停用，与 rescan 同语义）。 */
   summary: PluginSummary
+  /**
+   * enable: true 但启用失败时的结构化诊断（additive 可选）：安装与记录
+   * 已成功保留（不回滚），启用失败原因如实透出供调用方重试 enable。
+   */
+  enableError?: { code: string; message: string }
 }
 
 /** 更新结果（POST /api/plugins/:id/update）。 */

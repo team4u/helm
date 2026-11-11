@@ -34,8 +34,11 @@ import {
   type PluginConfigFieldSchema,
   type PluginDefinition,
   type PluginDoctorReport,
+  type PluginInstallResult,
   type PluginReloadResult,
+  type PluginRemoveResult,
   type PluginRescanResult,
+  type PluginUpdateResult,
   type PublicPluginDoc,
   type PublicPluginSessionDoc,
   type PluginSummary,
@@ -47,10 +50,20 @@ import { PluginTaskTracker } from './tracking.js';
 import { type ClientCompileResult } from './client-compiler.js';
 import {
   findSourceDirByPluginId,
+  importPluginDefinition,
+  loadExternalPlugins,
+  normalizeDefinition,
   reloadExternalPlugin,
   rescanExternalPlugins,
+  resolvePluginEntry,
 } from './external-loader.js';
 import { doctorPluginDir } from './plugin-doctor.js';
+import { registerPluginTsRoot } from './backend-ts-loader.js';
+import {
+  PluginPackageManager,
+  type PackageManagerHost,
+} from './package-manager.js';
+import { PluginPackageManagerStore } from './package-store.js';
 import {
   PluginDocRegistry,
   type PluginDocStore,
@@ -135,6 +148,10 @@ export class PluginHost {
   private servicesStarted: boolean;
   private startPromise?: Promise<void>;
   private lifecycle = new Map<string, Promise<unknown>>();
+  /** 受管包安装器（install/update/remove；可选接线，未接线时 501）。 */
+  private packageManager?: PluginPackageManager;
+  /** 受管包记录镜像（PluginSummary.managed 映射用）。 */
+  private packageStore?: PluginPackageManagerStore;
 
   constructor(private readonly options: PluginHostOptions) {
     this.configStore = options.config;
@@ -450,13 +467,29 @@ export class PluginHost {
 
   list(): PluginSummary[] {
     this.assertNotDisposed();
-    return [...this.plugins.values()].map((s) => pluginSummaryOf(s, this.capabilityRegistry));
+    return [...this.plugins.values()].map((s) => this.summaryWithManaged(s));
   }
 
   get(pluginId: string): PluginSummary | undefined {
     this.assertNotDisposed();
     const s = this.plugins.get(pluginId);
-    return s ? pluginSummaryOf(s, this.capabilityRegistry) : undefined;
+    return s ? this.summaryWithManaged(s) : undefined;
+  }
+
+  /** summary + 受管包元数据（包记录镜像存在时映射 managed；内置插件永无）。 */
+  private summaryWithManaged(state: PluginState): PluginSummary {
+    const base = pluginSummaryOf(state, this.capabilityRegistry);
+    const record = this.packageStore?.getRecord(base.id);
+    if (record === undefined || base.id.startsWith('builtin:')) return base;
+    return {
+      ...base,
+      managed: {
+        source: record.source,
+        installId: record.id,
+        installedVersion: record.version,
+        installedAt: record.updatedAt,
+      },
+    };
   }
 
   private getActiveEnabledPluginIds(): string[] {
@@ -550,26 +583,29 @@ export class PluginHost {
    * 再 unregister（在途任务 409 拒绝）+ 新代际导入重注册；启用状态保持重载前。
    * 内置插件（builtin:*）一律 403 拒绝。委托 external-loader.reloadExternalPlugin。
    */
-  async reloadExternalPlugin(pluginId: string): Promise<PluginReloadResult> {
+  async reloadExternalPlugin(pluginId: string, options: { doctor?: boolean } = {}): Promise<PluginReloadResult> {
     this.assertNotDisposed();
     // 在途任务预检先于 doctor：正在运行的实例受保护，不进入任何重载路径
     //（doctor 与 unregister 各自还有兑底检查，这里是第一道门）。
     const state = this.requirePlugin(pluginId);
     assertNoLiveTasks(pluginId, state, this.tracker);
     assertProvidersIdle(pluginId, state, this.options.providers);
+    const skipDoctor = options.doctor === false;
     const result = await reloadExternalPlugin(this.options.dataDir, pluginId, this, {
-      doctor: async (dir) => {
-        const report = await doctorPluginDir(dir);
-        if (!report.ok) {
-          const first = report.checks.find((c) => c.error !== undefined);
-          throw new HelmError(
-            'plugin_reload_preflight_failed',
-            `插件 ${pluginId} 重载预检失败（${first ? `${first.label}：${first.error!.message}` : '未知检查失败'}），旧实例保持不变`,
-            422,
-            { pluginId, dir, report },
-          );
-        }
-      },
+      doctor: skipDoctor
+        ? undefined
+        : async (dir) => {
+            const report = await doctorPluginDir(dir);
+            if (!report.ok) {
+              const first = report.checks.find((c) => c.error !== undefined);
+              throw new HelmError(
+                'plugin_reload_preflight_failed',
+                `插件 ${pluginId} 重载预检失败（${first ? `${first.label}：${first.error!.message}` : '未知检查失败'}），旧实例保持不变`,
+                422,
+                { pluginId, dir, report },
+              );
+            }
+          },
     });
     const summary = this.list().find((s) => s.id === pluginId);
     if (!summary) {
@@ -595,6 +631,124 @@ export class PluginHost {
     this.assertNotDisposed();
     const result = await rescanExternalPlugins(this.options.dataDir, this);
     return { registered: result.registered, skipped: result.skipped, plugins: this.list() };
+  }
+
+  // --- 外部插件包管理：install / update / remove ------------------------------
+
+  /**
+   * 接线受管包安装器（runtime 启动链调用；未接线时三端点 501）。
+   * store 同时用于 PluginSummary.managed 镜像映射。
+   */
+  attachPackageManager(manager: PluginPackageManager, store: PluginPackageManagerStore): void {
+    this.packageManager = manager;
+    this.packageStore = store;
+  }
+
+  /** PackageManagerHost 端口的真实实现（per-plugin 队列串行由本类 enqueue 保证）。 */
+  asPackageManagerHost(): PackageManagerHost {
+    return {
+      registerManagedPlugin: async (dir, options) => {
+        const entryPath = await resolvePluginEntry(dir);
+        if (entryPath === undefined) {
+          throw new HelmError(
+            'plugin_entry_missing',
+            `受管安装目录不含插件入口（无 plugin.json 且无约定入口）：${dir}`,
+            500,
+            { dir },
+          );
+        }
+        const definition = normalizeDefinition(
+          await importPluginDefinition(dir, entryPath),
+          dir,
+        );
+        const releaseTsRoot = registerPluginTsRoot(dir);
+        try {
+          await this.register(definition, { enabled: false });
+          if (options.enabled) {
+            await this.enable(definition.id);
+          }
+          const summary = this.list().find((s) => s.id === definition.id);
+          if (!summary) {
+            throw new HelmError(
+              'plugin_package_install_failed',
+              `受管安装注册后未在宿主清单中发现插件 ${definition.id}`,
+              500,
+              { pluginId: definition.id, dir },
+            );
+          }
+          return { summary, pluginId: definition.id };
+        } catch (err) {
+          releaseTsRoot();
+          throw err;
+        }
+      },
+      enableManagedPlugin: async (pluginId) => {
+        await this.enable(pluginId);
+        const summary = this.list().find((s) => s.id === pluginId);
+        if (!summary) {
+          throw new HelmError(
+            'plugin_enable_failed',
+            `启用后未在宿主清单中发现插件 ${pluginId}`,
+            500,
+            { pluginId },
+          );
+        }
+        return summary;
+      },
+      updateManagedPlugin: async (pluginId, dir, options) => {
+        const result = await this.reloadExternalPlugin(pluginId, { doctor: false });
+        void dir;
+        void options;
+        const summary = this.list().find((s) => s.id === pluginId);
+        if (!summary) {
+          throw new HelmError(
+            'plugin_package_update_failed',
+            `更新重载后未在宿主清单中发现插件 ${pluginId}`,
+            500,
+            { pluginId },
+          );
+        }
+        return { summary };
+      },
+      removeManagedPlugin: async (pluginId) => {
+        const current = this.list().find((s) => s.id === pluginId);
+        const wasEnabled = current?.enabled === true;
+        if (current !== undefined) {
+          await this.unregister(pluginId);
+        }
+        return { wasEnabled };
+      },
+      listSummaries: () => this.list(),
+    };
+  }
+
+  private requirePackageManager(): PluginPackageManager {
+    if (this.packageManager === undefined) {
+      throw new HelmError(
+        'not_supported',
+        '当前内核未接线插件包安装器（受管 install/update/remove 不可用）',
+        501,
+      );
+    }
+    return this.packageManager;
+  }
+
+  /** 安装插件包（默认 disabled；enable: true 安装后启用，失败诊断随结果返回）。 */
+  installPluginPackage(source: string, options: { enable?: boolean } = {}): Promise<PluginInstallResult> {
+    this.assertNotDisposed();
+    return this.requirePackageManager().install(source, options);
+  }
+
+  /** 更新受管插件包（重取 source + doctor + 原子替换 + 复用 reload 重注册）。 */
+  updatePluginPackage(pluginId: string): Promise<PluginUpdateResult> {
+    this.assertNotDisposed();
+    return this.requirePackageManager().update(pluginId);
+  }
+
+  /** 移除受管插件包（保护 builtin / 在途任务 / providers；local 只删受管副本）。 */
+  removePluginPackage(pluginId: string): Promise<PluginRemoveResult> {
+    this.assertNotDisposed();
+    return this.requirePackageManager().remove(pluginId);
   }
 
   // --- client.tsx 编译产物 --------------------------------------------------
@@ -866,7 +1020,7 @@ export class PluginHost {
   private emitPluginChanged(state: PluginState): void {
     this.options.host.emitEvent('plugin.changed', {
       type: 'plugin.changed',
-      plugin: pluginSummaryOf(state, this.capabilityRegistry),
+      plugin: this.summaryWithManaged(state),
       ui: state.enabled && state.phase === 'idle' ? this.uiRegistry.getUiByPlugin(state.definition.id) : [],
     });
   }

@@ -33,11 +33,14 @@ import type {
   PluginConfigResponse,
   PluginDiagnosticError,
   PluginDoctorReport,
+  PluginInstallResult,
   PluginInUseItem,
   PluginReloadResult,
+  PluginRemoveResult,
   PluginRescanResult,
   PluginStatus,
   PluginSummary,
+  PluginUpdateResult,
   ProviderConfig,
   PublicPluginDoc,
   PublicPluginSessionDoc,
@@ -146,6 +149,17 @@ export interface PluginHost {
   reloadExternalPlugin?(pluginId: string): Promise<PluginReloadResult>
   /** 增量重扫描（POST /api/plugins/rescan）：只注册新外部插件，默认 disabled。 */
   rescanExternalPlugins?(): Promise<PluginRescanResult>
+  /**
+   * 受管插件包安装（POST /api/plugins/install，body { source, enable? }）：
+   * npm/git/local 统一 staging 拷贝 + doctor 全链 + 原子进入受管目录；
+   * npm 安装永不运行 lifecycle scripts；失败清理 staging 不留半产物。
+   * 未接线时 HTTP 501。
+   */
+  installPluginPackage?(source: string, options?: { enable?: boolean }): Promise<PluginInstallResult>
+  /** 受管插件包更新（POST /api/plugins/:id/update）：重取 source + doctor + 原子替换 + reload 语义。 */
+  updatePluginPackage?(pluginId: string): Promise<PluginUpdateResult>
+  /** 受管插件包移除（POST /api/plugins/:id/remove）：保护 builtin/在途任务/providers；local 只删受管副本。 */
+  removePluginPackage?(pluginId: string): Promise<PluginRemoveResult>
 }
 
 export type { SearchHit }
@@ -322,4 +336,4 @@ export interface HubHandle {
 }
 
 // 导出供测试构造完整 Profile
-export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, PluginStatus, PluginDiagnosticError, PluginInUseItem, PluginConfigFieldSource, PluginConfigResponse, ActionManifest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, ConversationCompactResponse, ConversationWithdrawResponse, PluginDoctorReport, PluginReloadResult, PluginRescanResult }
+export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, PluginStatus, PluginDiagnosticError, PluginInUseItem, PluginConfigFieldSource, PluginConfigResponse, ActionManifest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, ConversationCompactResponse, ConversationWithdrawResponse, PluginDoctorReport, PluginReloadResult, PluginRescanResult, PluginInstallResult, PluginUpdateResult, PluginRemoveResult }

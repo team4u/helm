@@ -141,7 +141,36 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
     manifestExists = false;
   }
   if (!manifestExists) {
-    return probeConventionEntry(dirPath);
+    const probed = probeConventionEntry(dirPath);
+    if (probed !== undefined) return probed;
+    // npm 标准入口回落：package.json helm.main / main（.js 后缀重写同名 TS 源）
+    const helm = readHelmField(dirPath);
+    const mainSpec = helm?.main;
+    if (mainSpec !== undefined) {
+      // npm 产物习惯 .js 后缀指向转译前 .ts 源：同名 .ts/.tsx 存在时优先
+      const tsCandidate = mainSpec.replace(/\.js$/, '.ts').replace(/\.mjs$/, '.mts').replace(/\.cjs$/, '.cts');
+      const tryCandidates = tsCandidate !== mainSpec ? [tsCandidate, mainSpec] : [mainSpec];
+      let resolvedSpec: string | undefined;
+      for (const candidate of tryCandidates) {
+        if (statSync(join(dirPath, candidate)).isFile()) {
+          resolvedSpec = candidate;
+          break;
+        }
+      }
+      const spec = resolvedSpec ?? mainSpec;
+      const entry = resolve(dirPath, spec);
+      const rel = relative(realpathSync(dirPath), entry);
+      if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+        throw new HelmError(
+          'plugin_manifest_invalid',
+          `外部插件 ${dirPath} 的 package.json 入口越出插件目录: ${spec}`,
+          400,
+          { dirPath, main: spec },
+        );
+      }
+      return assertEntryFile(dirPath, spec, entry);
+    }
+    return undefined;
   }
   const manifest = readManifest(manifestPath);
   const main = manifest['main'];
@@ -240,6 +269,98 @@ function probeConventionEntry(dirPath: string): string | undefined {
     if (file) return assertEntryFile(dirPath, name, join(dirPath, name));
   }
   return undefined;
+}
+
+/**
+ * npm 标准入口发现（additive，不牺牲现有 plugin.json/约定入口格式）：
+ * package.json 的 `helm` 字段（{ main?, clientRoot? }）：
+ * - helm.main / package.json.main 指定后端入口（相对路径，越根校验同
+ *   plugin.json main；.js 后缀自动重写同名 .ts 源）；
+ * - helm.clientRoot 供包作者声明前端源根目录，由 readHelmClientRoot 透出，
+ *   normalizeDefinition 缺省仍为插件目录本身；
+ * - 优先级：plugin.json（main / 约定入口）> package.json helm.main >
+ *   package.json main > 约定入口探测；无任何命中则为纯数据目录。
+ */
+export interface HelmManifest {
+  /** package.json helm.clientRoot 声明（原始相对路径；未声明时缺省）。 */
+  clientRoot?: string;
+}
+
+/** 对外读取 package.json helm.clientRoot（normalizeDefinition 增强用）。 */
+export function readHelmClientRoot(dirPath: string): string | undefined {
+  return readHelmField(dirPath)?.clientRoot;
+}
+
+/** 读取 package.json 的 helm 字段（对象形状校验；无 package.json 返回 null）。 */
+function readHelmField(dirPath: string): { main?: string; clientRoot?: string } | null {
+  const pkgPath = join(dirPath, 'package.json');
+  let raw: string;
+  try {
+    raw = readFileSync(pkgPath, 'utf8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+    throw new HelmError(
+      'plugin_scan_failed',
+      `外部插件 package.json 不可读: ${pkgPath}（${err instanceof Error ? err.message : String(err)}）`,
+      500,
+      { dirPath, code },
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new HelmError(
+      'plugin_manifest_invalid',
+      `外部插件 package.json 不是合法 JSON: ${pkgPath}（${err instanceof Error ? err.message : String(err)}）`,
+      500,
+      { dirPath },
+    );
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const helm = (parsed as Record<string, unknown>)['helm'];
+  if (helm === undefined) {
+    // 无 helm 字段：回落 package.json main（npm 标准入口）
+    const main = (parsed as Record<string, unknown>)['main'];
+    if (typeof main === 'string' && main.length > 0) return { main };
+    return null;
+  }
+  if (typeof helm !== 'object' || helm === null || Array.isArray(helm)) {
+    throw new HelmError(
+      'plugin_manifest_invalid',
+      `外部插件 ${dirPath} 的 package.json helm 字段必须是对象`,
+      500,
+      { dirPath },
+    );
+  }
+  const result: { main?: string; clientRoot?: string } = {};
+  const main = (helm as Record<string, unknown>)['main'];
+  if (main !== undefined) {
+    if (typeof main !== 'string' || main.length === 0) {
+      throw new HelmError(
+        'plugin_manifest_invalid',
+        `外部插件 ${dirPath} 的 package.json helm.main 必须是非空字符串`,
+        500,
+        { dirPath },
+      );
+    }
+    result.main = main;
+  }
+  const clientRoot = (helm as Record<string, unknown>)['clientRoot'];
+  if (clientRoot !== undefined) {
+    if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
+      throw new HelmError(
+        'plugin_manifest_invalid',
+        `外部插件 ${dirPath} 的 package.json helm.clientRoot 必须是非空字符串`,
+        500,
+        { dirPath },
+      );
+    }
+    result.clientRoot = clientRoot;
+  }
+  if (result.main === undefined && result.clientRoot === undefined) return null;
+  return result;
 }
 
 /** 读取并解析 plugin.json；损坏 / 非对象一律显式 plugin_manifest_invalid。 */
@@ -351,6 +472,22 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
   delete normalized.locked;
   const clientRoot = normalized.clientRoot;
   if (clientRoot === undefined || clientRoot === '') {
+    // 未显式声明：npm 包可经 package.json helm.clientRoot 声明；否则默认插件目录本身
+    const helmClientRoot = readHelmClientRoot(dirPath);
+    if (helmClientRoot !== undefined) {
+      const resolvedRoot = resolve(dirPath, helmClientRoot);
+      const rel = relative(realpathSync(dirPath), resolvedRoot);
+      if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+        throw new HelmError(
+          'invalid_plugin_definition',
+          `外部插件 ${dirPath} 的 package.json helm.clientRoot 越出插件目录: ${helmClientRoot}`,
+          400,
+          { dirPath, clientRoot: helmClientRoot },
+        );
+      }
+      normalized.clientRoot = resolvedRoot;
+      return normalized;
+    }
     normalized.clientRoot = dirPath;
     return normalized;
   }

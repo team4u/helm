@@ -554,6 +554,17 @@ async function route(
       }
       return jsonOk(redactor, await kernel.plugins.rescanExternalPlugins())
     }
+    // 受管插件包安装（POST /api/plugins/install，body { source, enable? }）。
+    if (second === 'install' && method === 'POST' && third === undefined) {
+      if (
+        kernel.plugins.installPluginPackage === undefined
+      ) {
+        return errorResponse(redactor, 501, 'not_supported', '当前内核未提供插件包安装能力')
+      }
+      const body = await readJsonBody(ctx.request)
+      const { source, enable } = parsePluginInstallBody(body)
+      return jsonOk(redactor, await kernel.plugins.installPluginPackage(source, enable === true ? { enable: true } : {}))
+    }
     const pluginId = requireIdParam(second ?? '', 'pluginId')
     // 核心管理面固定在第三段：enable/disable/config；其余仅剩 routes/ 动态路由。
     if (third === 'enable' && method === 'POST' && fourth === undefined) {
@@ -573,6 +584,20 @@ async function route(
         return errorResponse(redactor, 501, 'not_supported', '当前内核未提供插件热重载能力')
       }
       return jsonOk(redactor, await kernel.plugins.reloadExternalPlugin(pluginId))
+    }
+    // 受管插件包更新（POST /api/plugins/:id/update，与 CLI stub 约定保持 POST）。
+    if (third === 'update' && method === 'POST' && fourth === undefined) {
+      if (kernel.plugins.updatePluginPackage === undefined) {
+        return errorResponse(redactor, 501, 'not_supported', '当前内核未提供插件包更新能力')
+      }
+      return jsonOk(redactor, await kernel.plugins.updatePluginPackage(pluginId))
+    }
+    // 受管插件包移除（POST /api/plugins/:id/remove；与 CLI stub 约定保持 POST）。
+    if (third === 'remove' && method === 'POST' && fourth === undefined) {
+      if (kernel.plugins.removePluginPackage === undefined) {
+        return errorResponse(redactor, 501, 'not_supported', '当前内核未提供插件包移除能力')
+      }
+      return jsonOk(redactor, await kernel.plugins.removePluginPackage(pluginId))
     }
     if (third === 'config' && fourth === undefined) {
       if (method === 'GET') {
@@ -905,6 +930,24 @@ function parseDoctorTarget(body: Record<string, unknown>): { dir?: string; id?: 
     throw new ValidationError('需提供目标：path/dir（目录绝对路径）或 id（已注册插件）')
   }
   return { dir: resolved }
+}
+
+/**
+ * POST /api/plugins/install body：{ source, enable? }。source 为包来源字符串
+ * （npm:<spec> / git:<repo>[@<ref>] / HTTPS Git URL / 本地路径）；边界处拒绝
+ * 未知字段；source grammar 由内核解析器完整校验。
+ */
+function parsePluginInstallBody(body: Record<string, unknown>): { source: string; enable?: boolean } {
+  rejectUnknownKeys(body, new Set(['source', 'enable']))
+  const source = body['source']
+  if (typeof source !== 'string' || source.trim().length === 0) {
+    throw new ValidationError('source 需为非空字符串（npm:<spec> / git:<repo>[@<ref>] / HTTPS Git URL / 本地路径）')
+  }
+  const enable = body['enable']
+  if (enable !== undefined && typeof enable !== 'boolean') {
+    throw new ValidationError('enable 需为 boolean')
+  }
+  return { source, ...(enable !== undefined ? { enable } : {}) }
 }
 
 /** 节点 ID 路径段：字母数字开头，可含 . _ -（与 issue 校验同一规则）。 */
