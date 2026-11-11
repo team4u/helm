@@ -36,7 +36,7 @@ test('HelmHostPluginsPort 七方法签名与既有结果模型（编译期形状
     list: (): PluginSummary[] => [],
     listUi: () => [],
     doctor: async (t: { dir?: string; id?: string }): Promise<PluginDoctorReport> =>
-      ({ dir: t.dir ?? '/x', ok: true, checks: [] }) as PluginDoctorReport,
+      ({ dir: t.dir ?? '/x', ok: true, checks: [], screens: ['main'] }) as PluginDoctorReport,
     install: async (s: string, o?: { enable?: boolean }): Promise<PluginInstallResult> =>
       ({ record: null as never, summary: null as never, ...(o?.enable ? {} : {}) }) as PluginInstallResult,
     update: async (): Promise<PluginUpdateResult> => ({ record: null as never, summary: null as never, changed: false, previousVersion: '' }),
@@ -46,6 +46,24 @@ test('HelmHostPluginsPort 七方法签名与既有结果模型（编译期形状
   } satisfies HelmHostPluginsPort
   assert.equal(typeof port.list, 'function')
   assert.equal(typeof port.doctor, 'function')
+})
+
+test('PluginDoctorReport.screens 为 additive 可选字段（register 通过时存在）', { timeout: 60_000 }, () => {
+  // register 通过：screens 携带真实 ui.screen 声明的视图 id 列表
+  const withScreens: PluginDoctorReport = {
+    dir: '/x',
+    pluginId: 'demo',
+    ok: true,
+    checks: [],
+    summary: null as never,
+    screens: ['main', 'detail'],
+  }
+  assert.deepEqual(withScreens.screens, ['main', 'detail'])
+  // register 未通过或无声明：缺省或空数组均为合法形状（不虚构）
+  const withoutScreens: PluginDoctorReport = { dir: '/x', ok: false, checks: [] }
+  assert.equal(withoutScreens.screens, undefined)
+  const emptyScreens: PluginDoctorReport = { dir: '/x', ok: true, checks: [], screens: [] }
+  assert.deepEqual(emptyScreens.screens, [])
 })
 
 test('BackendPluginsLifecyclePort 写面方法与 ctx.host.plugins 一一对应', { timeout: 60_000 }, () => {

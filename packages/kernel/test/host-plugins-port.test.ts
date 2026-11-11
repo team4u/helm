@@ -157,10 +157,11 @@ test('host.plugins 端口转发：doctor/install/update/enable/disable/remove �
     const api = await registerProbe(env.host)
     const src = writeLocalPlugin(env.srcParent, 'port-demo', '1.0.0')
 
-    // doctor（dir 模式，真实四阶段自检）
+    // doctor（dir 模式，真实四阶段自检；无 Screen 声明时 screens 为空数组）
     const report = await api.plugins.doctor({ dir: src })
     assert.equal(report.ok, true)
     assert.equal(report.pluginId, 'port-demo')
+    assert.deepEqual(report.screens, [], '无 ui.screen 声明时 screens 为空数组')
 
     // install（默认 disabled）
     const installed = await api.plugins.install(src)
@@ -213,6 +214,85 @@ test('host.plugins.disable 停用其他插件（经端口）与 disable(force) �
     await api.plugins.enable('port-target')
     const again = await api.plugins.disable('port-target', { force: true })
     assert.equal(again.enabled, false)
+  } finally {
+    await env.host.dispose()
+    env.close()
+  }
+})
+
+/** 带真实 ctx.ui.screen 声明的插件源（doctor 真实注册 + 真实 client 编译）。 */
+function writeScreenPlugin(parent: string, id: string): string {
+  const dir = join(parent, id)
+  mkdirSync(join(dir, 'client'), { recursive: true })
+  writeFileSync(
+    join(dir, 'index.ts'),
+    `function definePlugin(ctx: any) {
+  ctx.ui.screen({
+    id: 'main',
+    label: '主视图',
+    client: { module: 'client.tsx', export: 'MainScreen' },
+  })
+  ctx.ui.screen({
+    id: 'detail',
+    label: '详情',
+    client: { module: 'client.tsx', export: 'MainScreen' },
+  })
+}
+export default { id: '${id}', version: '1.0.0', definePlugin, clientRoot: './client' }
+`,
+  )
+  writeFileSync(
+    join(dir, 'client', 'client.tsx'),
+    `import React from 'react'
+
+export function MainScreen(): React.JSX.Element {
+  return React.createElement('div', null, 'app')
+}
+`,
+  )
+  return dir
+}
+
+// ---------------------------------------------------------------------------
+// doctor screens 捕获（真实注册阶段 ctx.ui.screen 声明收集）
+// ---------------------------------------------------------------------------
+
+test('doctor 报告捕获真实 ui.screen 声明：register 通过时 screens 携带全部视图 id', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    const api = await registerProbe(env.host)
+    const src = writeScreenPlugin(env.srcParent, 'screen-demo')
+    const report = await api.plugins.doctor({ dir: src })
+    assert.equal(report.ok, true, `doctor 应通过：${JSON.stringify(report.checks)}`)
+    assert.equal(report.pluginId, 'screen-demo')
+    assert.deepEqual(report.screens, ['main', 'detail'], 'screens 应携带真实 ui.screen 声明的全部视图 id（按声明顺序）')
+    // id 模式同样携带（已注册插件走 findSourceDirByPluginId 解析源目录）
+    await api.plugins.install(src)
+    const byId = await api.plugins.doctor({ id: 'screen-demo' })
+    assert.equal(byId.ok, true)
+    assert.deepEqual(byId.screens, ['main', 'detail'])
+  } finally {
+    await env.host.dispose()
+    env.close()
+  }
+})
+
+test('doctor 失败（register 未通过）时不出部分 screens：无 ui.screen 的纯后端插件 screens 为空数组', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    const api = await registerProbe(env.host)
+    // 纯后端插件：register 通过但无 ui.screen 声明 -> screens: []（事实空，非缺失）
+    const plain = writeLocalPlugin(env.srcParent, 'plain-demo')
+    const okReport = await api.plugins.doctor({ dir: plain })
+    assert.equal(okReport.ok, true)
+    assert.deepEqual(okReport.screens, [])
+
+    // manifest 失败（无入口）：register 未到达 -> screens 缺省（不虚构）
+    const emptyDir = join(env.srcParent, 'empty-dir')
+    mkdirSync(emptyDir, { recursive: true })
+    const bad = await api.plugins.doctor({ dir: emptyDir })
+    assert.equal(bad.ok, false)
+    assert.equal(bad.screens, undefined, 'register 未通过时不得携带部分 screens')
   } finally {
     await env.host.dispose()
     env.close()

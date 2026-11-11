@@ -176,6 +176,7 @@ export async function doctorPluginDir(
   if (!backendOk || definition === undefined) return report(dir, undefined, checks, undefined);
 
   const clientRefs: Array<{ module: string; export: string }> = [];
+  const screenIds: string[] = [];
   let summary: PluginSummary | undefined;
   // 真实注册 + client 编译共用一个 scratch 目录（临时 dataDir 与编译缓存），
   // doctor 结束后统一清理；不使用宿主生产目录，避免写竞争。
@@ -189,7 +190,7 @@ export async function doctorPluginDir(
           docs: new DoctorDocStore(),
           deferServices: true,
         });
-        await host.register(withClientCapture(definition!, clientRefs), { enabled: false });
+        await host.register(withClientCapture(definition!, clientRefs, screenIds), { enabled: false });
         const found = host.list().find((s) => s.id === definition!.id);
         if (!found) {
           throw new HelmError(
@@ -235,7 +236,7 @@ export async function doctorPluginDir(
   );
   void clientOk;
 
-  return report(dir, definition.id, checks, summary);
+  return report(dir, definition.id, checks, summary, screenIds);
 }
 
 function report(
@@ -243,6 +244,7 @@ function report(
   pluginId: string | undefined,
   checks: PluginDoctorCheck[],
   summary: PluginSummary | undefined,
+  screenIds?: string[],
 ): PluginDoctorReport {
   return {
     dir,
@@ -250,17 +252,20 @@ function report(
     ok: checks.every((c) => c.error === undefined),
     checks,
     ...(summary !== undefined ? { summary } : {}),
+    ...(screenIds !== undefined ? { screens: [...screenIds] } : {}),
   };
 }
 
 /**
  * 包装 definePlugin：在真实 ctx.ui.* 注册方法执行之外，顺带收集 client.tsx 模块
- * 引用（供 client 编译检查）。代理只读不改写——注册边界校验仍由真实 PluginHost
- * 的原始方法执行，这里零近似、零第二套校验。
+ * 引用（供 client 编译检查）与 ctx.ui.screen 声明的视图 id（供 PluginDoctorReport.
+ * screens）。代理只读不改写——注册边界校验仍由真实 PluginHost 的原始方法执行，
+ * 这里零近似、零第二套校验：只捕获通过真实 ui.screen 调用的声明，不做静态扫描。
  */
 function withClientCapture(
   definition: PluginDefinition,
   sink: Array<{ module: string; export: string }>,
+  screenIds: string[],
 ): PluginDefinition {
   const original = definition.definePlugin;
   return {
@@ -283,6 +288,11 @@ function withClientCapture(
                 module: (client as { module: string }).module,
                 export: (client as { export: string }).export,
               });
+            }
+            // 只记录通过真实 ui.screen 调用且最终注册成功（原始方法未抛错）的视图 id；
+            // spec.id 形状校验由原始 registerUi 执行，这里仅事后记录，不预判。
+            if (prop === 'screen' && spec !== undefined && typeof (spec as { id?: unknown }).id === 'string') {
+              screenIds.push((spec as { id: string }).id);
             }
             return (value as (...a: unknown[]) => unknown).apply(target, args);
           };

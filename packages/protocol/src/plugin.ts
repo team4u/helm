@@ -581,6 +581,13 @@ export interface PluginDoctorReport {
   checks: PluginDoctorCheck[]
   /** doctor 加载真实注册后得到的能力摘要（register 通过时存在）。 */
   summary?: PluginSummary
+  /**
+   * 真实注册阶段经 ctx.ui.screen 声明并通过原始注册校验的视图 id 列表
+   *（register 通过时存在；additive 可选字段）。供上层（如 builtin:apps 的
+   * validate/publish）在安装前硬性校验全栈应用至少声明一个 Screen。
+   * 只记录真实调用，不做静态扫描或近似推导。
+   */
+  screens?: string[]
 }
 
 /** 受控热重载结果（POST /api/plugins/:id/reload）。 */
@@ -824,7 +831,7 @@ export interface HelmHostPluginsPort {
   list(): PluginSummary[]
   /** 当前全部已启用插件的 UI 贡献清单（与 listUi() 同源；只读快照）。 */
   listUi(): PluginUiContribution[]
-  /** 静态自检：dir 为目录绝对路径，或 id 指向已注册外部插件（择一）。 */
+  /** 静态自检：dir 为目录绝对路径，或 id 指向已注册外部插件（择一）；register 通过时报告携带 screens（真实 ctx.ui.screen 声明的视图 id）。 */
   doctor(target: { dir?: string; id?: string }): Promise<PluginDoctorReport>
   /** 受管安装外部插件包；enable: true 时安装后立即启用。 */
   install(source: string, options?: { enable?: boolean }): Promise<PluginInstallResult>
