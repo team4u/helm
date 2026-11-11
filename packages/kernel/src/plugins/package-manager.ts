@@ -109,6 +109,8 @@ export interface PackageManagerHost {
   registerManagedPlugin(dir: string, options: { enabled: boolean }): Promise<{ summary: PluginSummary; pluginId: string }>;
   /** 安装后启用（install enable: true 路径；失败诊断向上透传，不回滚安装）。 */
   enableManagedPlugin(pluginId: string): Promise<PluginSummary>;
+  /** 更新切换前安全预检：在途任务 409 / provider 忙则拒绝（旧实例与旧目录不动）。 */
+  assertManagedPluginUpdateSafe(pluginId: string): Promise<void> | void;
   updateManagedPlugin(pluginId: string, dir: string, options: { keepEnabled: boolean }): Promise<{ summary: PluginSummary }>;
   removeManagedPlugin(pluginId: string): Promise<{ wasEnabled: boolean }>;
   listSummaries(): PluginSummary[];
@@ -214,11 +216,14 @@ export class PluginPackageManager {
     return this.enqueue(async () => {
       await this.ensureStagingRoot();
       const staging = await mkdtemp(join(this.stagingRoot(), 'pkg-'));
-      let committed = false;
       try {
         const payloadDir = await this.fetchIntoStaging(parsed, staging);
+        // 运行时依赖先于 doctor：带 package.json 的包（npm/git/local 同权）在
+        // staging 副本内补装 --omit=dev（不触碰用户 local 源：local 已是过滤拷贝），
+        // 否则依赖 npm 包的入口在 doctor 代际导入时即失败（误报为插件缺陷）。
+        await this.installRuntimeDeps(payloadDir);
         const { pluginId, dirName } = await this.identifyPlugin(payloadDir, parsed);
-        // 先 doctor staging 副本（现有 doctor 全链：manifest/backend/register/client）
+        // doctor 全链（manifest/backend/register/client）在依赖就绪后执行
         const report = await doctorPluginDir(payloadDir);
         if (!report.ok) {
           const first = report.checks.find((c) => c.error !== undefined);
@@ -229,14 +234,11 @@ export class PluginPackageManager {
             { source: parsed, staging: payloadDir, report },
           );
         }
-        // npm 来源：受管目录内补装运行时依赖（不运行 lifecycle scripts）
-        if (parsed.kind === 'npm') await this.installRuntimeDeps(payloadDir);
         const target = join(this.pluginsDir(), safeDirName(dirName));
         assertInsideDataDir(this.pluginsDir(), target);
         await this.removeExistingDir(target);
         await mkdir(dirname(target), { recursive: true });
         await rename(payloadDir, target);
-        committed = true;
         // 注册（默认 disabled；enable 选项在注册成功后走真实 enable 链）
         const registered = await this.host.registerManagedPlugin(target, { enabled: false });
         let summary = registered.summary;
@@ -251,7 +253,6 @@ export class PluginPackageManager {
             };
           }
         }
-        void committed;
         const record = await this.store.save({
           pluginId: registered.pluginId,
           source: parsed,
@@ -288,10 +289,14 @@ export class PluginPackageManager {
   // --- 更新 -------------------------------------------------------------
 
   /**
-   * 更新已安装插件包：重取 source 进 staging -> doctor -> 原子替换受管目录 ->
-   * 复用 reload 语义重注册（保持启用状态）-> 推进记录。
-   * source 未变化时如实返回 changed: false（幂等语义），但目录内容仍以最新
-   * source 为准重同步（local 源码编辑后 update 即重新拷贝）。
+   * 原子更新已安装插件包：
+   * 1. 安全预检（在途任务 409 / provider 忙）——旧实例与旧目录保持不动；
+   * 2. staging 重取 source -> 运行时依赖补装 -> doctor 全链（同样不动旧目录）；
+   * 3. 切换：旧目录 rename 到 staging backup -> 新 payload rename 进受管目录
+   *    -> reload 重注册（保持启用状态）；成功后删 backup；
+   * 4. 切换失败（reload/register 抛错）：新目录移回 staging，backup rename
+   *    回受管目录，再次 reload 恢复旧实例；回滚失败如实上报（需人工介入）。
+   * 记录仅在切换成功后推进。local 源码编辑后 update 即重新拷贝同步。
    */
   async update(pluginId: string): Promise<PluginUpdateResult> {
     return this.enqueue(async () => {
@@ -299,11 +304,16 @@ export class PluginPackageManager {
       if (record === undefined) {
         throw new HelmError('unknown_plugin_package', `插件 ${pluginId} 没有受管安装记录（仅受管安装的插件可 update）`, 404, { pluginId });
       }
+      // 1. 安全预检：在途任务 / provider 忙时拒绝，旧目录与旧实例不动
+      await this.host.assertManagedPluginUpdateSafe(pluginId);
       await this.ensureStagingRoot();
       const staging = await mkdtemp(join(this.stagingRoot(), 'pkg-'));
-      let committed = false;
+      const backup = join(staging, 'backup');
+      let switched = false;
       try {
+        // 2. staging 重取 + 依赖 + doctor（全部在 staging 内，旧目录不动）
         const payloadDir = await this.fetchIntoStaging(record.source, staging);
+        await this.installRuntimeDeps(payloadDir);
         const identified = await this.identifyPlugin(payloadDir, record.source);
         if (identified.pluginId !== pluginId) {
           throw new HelmError(
@@ -323,34 +333,67 @@ export class PluginPackageManager {
             { source: record.source, staging: payloadDir, report },
           );
         }
-        if (record.source.kind === 'npm') await this.installRuntimeDeps(payloadDir);
         const target = record.installPath;
         assertInsideDataDir(this.pluginsDir(), target);
         const previousVersion = record.version;
-        await this.removeExistingDir(target);
-        await rename(payloadDir, target);
-        committed = true;
-        // 复用 reload 语义（unregister + 新代际注册；保持启用状态）
-        const { summary } = await this.host.updateManagedPlugin(pluginId, target, { keepEnabled: true });
-        const newVersion = summary.version ?? '';
-        // 版本串未变但内容重同步仍是事实变更（local 源编辑后 update）；如实 true。
-        const changed = true;
-        void newVersion;
-        const updated = await this.store.save({
-          pluginId,
-          source: record.source,
-          installPath: target,
-          version: newVersion,
-          installedAt: record.installedAt,
-          updatedAt: Date.now(),
-        });
-        return {
-          record: updated,
-          summary: this.attachManaged(summary, updated),
-          changed,
-          previousVersion,
-        };
+        // 3. 原子切换：旧目录 -> staging backup，新 payload -> 受管目录
+        if (await pathExists(target)) {
+          await rename(target, backup);
+        }
+        try {
+          await rename(payloadDir, target);
+          switched = true;
+        } catch (err) {
+          // 新目录没进入：backup 立即回原位，旧实例未受任何影响
+          if (await pathExists(backup)) await rename(backup, target).catch(() => {});
+          throw err;
+        }
+        // reload 重注册（保持启用状态）；失败则回滚目录与实例
+        let reloadError: unknown;
+        try {
+          const { summary } = await this.host.updateManagedPlugin(pluginId, target, { keepEnabled: true });
+          const updated = await this.store.save({
+            pluginId,
+            source: record.source,
+            installPath: target,
+            version: summary.version ?? '',
+            installedAt: record.installedAt,
+            updatedAt: Date.now(),
+          });
+          return {
+            record: updated,
+            summary: this.attachManaged(summary, updated),
+            // 版本串未变但内容重同步仍是事实变更（local 源编辑后 update）；如实 true
+            changed: true,
+            previousVersion,
+          };
+        } catch (err) {
+          reloadError = err;
+        }
+        // 4. reload 失败回滚：新目录移回 staging，backup 回受管目录，旧实例重载
+        let rollbackError: { message: string } | undefined;
+        try {
+          await rename(target, join(staging, 'failed-new'));
+          if (await pathExists(backup)) await rename(backup, target);
+          await this.host.updateManagedPlugin(pluginId, target, { keepEnabled: true }).catch(() => {});
+        } catch (rollbackErr) {
+          rollbackError = { message: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr) };
+        }
+        throw new HelmError(
+          'plugin_package_update_failed',
+          `插件 ${pluginId} 更新后重载失败${rollbackError === undefined ? '（已回滚到更新前目录与实例，旧版本继续可用）' : `（回滚也失败：${rollbackError.message}，需人工检查受管目录后重试）`}：${reloadError instanceof Error ? reloadError.message : String(reloadError)}`,
+          500,
+          {
+            pluginId,
+            installPath: target,
+            rolledBack: rollbackError === undefined,
+            ...(rollbackError !== undefined ? { rollbackError } : {}),
+            cause: reloadError instanceof Error ? { message: reloadError.message, stack: reloadError.stack } : undefined,
+          },
+        );
       } finally {
+        // staging 清理：switched 成功后 backup（旧版本）随 staging 一并删除
+        void switched;
         await rm(staging, { recursive: true, force: true }).catch(() => {});
       }
     });
@@ -454,7 +497,11 @@ export class PluginPackageManager {
     return payload;
   }
 
-  /** 受管目录内安装运行时依赖（--omit=dev；永不运行 lifecycle scripts）。 */
+  /**
+   * staging 副本内安装运行时依赖（npm/git/local 同权：凡携带 package.json
+   * 即补装；--omit=dev 且永不运行 lifecycle scripts；local 源已是过滤拷贝，
+   * 用户源目录不受影响）。无 package.json 时为 no-op。
+   */
   private async installRuntimeDeps(dir: string): Promise<void> {
     const pkgJson = join(dir, 'package.json');
     const has = await stat(pkgJson).then(() => true).catch(() => false);
@@ -497,6 +544,17 @@ export class PluginPackageManager {
 
   private async removeExistingDir(target: string): Promise<void> {
     await rm(target, { recursive: true, force: true });
+  }
+}
+
+/** 路径存在性探测（目录或文件；IO 错误原样上抛，不肩吞）。 */
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await stat(target);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw err;
   }
 }
 

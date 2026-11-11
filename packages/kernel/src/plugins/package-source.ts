@@ -22,7 +22,59 @@ import { HelmError, type PluginPackageSource } from '@helm/protocol';
 /** npm 说明符最小合法性：非空、无空白（不在此重造 semver 解析器，交给 npm）。 */
 const NPM_SPEC_PATTERN = /^\S+$/;
 
-const REPO_SEGMENT = /[A-Za-z0-9._~:@!$'()*+,;%=-]+/;
+/**
+ * git 仓库地址严格校验（拒绝路径注入）：仅允许三种形态——
+ * - https URL（https://host/path）；
+ * - SCP 形态（user@host:path，user 可缺省为 git@host:path）；
+ * - host/path 短写（github.com/user/repo）。
+ * 拒绝：反斜杠、NUL、.. 路段、绝对路径（/ 或盘符开头）、明文 http://、
+ * file:// 及其它未知 scheme、含空白的地址。
+ */
+function assertGitRepo(repo: string, raw: string): void {
+  const fail = (detail: string): HelmError =>
+    new HelmError('validation_error', `git 来源仓库地址非法（${detail}）：${repo}`, 400, { raw, repo });
+  if (repo.length === 0) throw fail('空地址');
+  if (repo.includes('\\') || repo.includes('\0')) throw fail('含反斜杠或 NUL');
+  if (/\s/.test(repo)) throw fail('含空白');
+  if (repo.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(repo) || repo.startsWith('\\\\')) {
+    throw fail('绝对路径（本地插件请直接提供路径，不走 git:）');
+  }
+  if (repo.includes('..')) throw fail('含 .. 路段');
+  if (/^http:\/\//i.test(repo)) throw fail('明文 http://（请使用 https）');
+  if (/^file:/i.test(repo)) throw fail('file: 协议');
+  // scheme:// 形态：仅允许 https（其余 ssh://、git:// 等一律拒绝，避免与 SCP
+  // 形态歧义及未经审计的传输协议）
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(repo)) {
+    if (!/^https:\/\//i.test(repo)) throw fail('仅允许 https:// 形态（SCP 请用 user@host:path）');
+    let parsed: URL;
+    try {
+      parsed = new URL(repo);
+    } catch {
+      throw fail('URL 不可解析');
+    }
+    if (parsed.hostname === '' || /^\s+$/.test(parsed.hostname)) throw fail('缺少主机名');
+    return;
+  }
+  if (/^https:\/\//i.test(repo)) {
+    // 不可达：https:// 已在上方 scheme:// 分支处理；保留防御
+    return;
+  }
+  // SCP（user@host:path，含可选 port）：冒号前不是 scheme（scheme 需字母开头且
+  // 直接跟 :，SCP 的冒号前是 host 或 @host），路径段非空
+  const scpMatch = /^([a-zA-Z0-9._~-]+@)?([a-zA-Z0-9._~-]+(?::\d+)?):(.+)$/.exec(repo);
+  if (scpMatch !== null) {
+    if (scpMatch[3] === undefined || scpMatch[3].length === 0 || scpMatch[3].startsWith('/')) {
+      throw fail('SCP 路径段非法');
+    }
+    return;
+  }
+  // 其余 scheme 形态（xxx:...）拒绝
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(repo)) throw fail('未知协议');
+  // host/path 短写：host 段字母数字开头（拒绝 ./ ../ 等本地相对形态）
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._~-]*\/[a-zA-Z0-9._~\/:@!$'()*+,;%=-]+$/.test(repo)) {
+    throw fail('需为 https URL、SCP user@host:path 或 host/path 形态');
+  }
+}
 
 /** 细分 git repo 尾部：<repo>[@<ref>][#<subdirectory>]（ref 不得再含 @ #）。 */
 function splitGitTail(rest: string, raw: string): { repo: string; ref?: string; subdirectory?: string } {
@@ -105,9 +157,7 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
   }
   if (raw.startsWith('git:')) {
     const parsed = splitGitTail(raw.slice('git:'.length), raw);
-    if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(parsed.repo) && !REPO_SEGMENT.test(parsed.repo)) {
-      throw new HelmError('validation_error', `git 来源仓库地址非法：${parsed.repo}`, 400, { raw });
-    }
+    assertGitRepo(parsed.repo, raw);
     return { kind: 'git', raw, ...parsed };
   }
   if (/^https:\/\//i.test(raw)) {

@@ -695,6 +695,13 @@ export class PluginHost {
         }
         return summary;
       },
+      assertManagedPluginUpdateSafe: (pluginId) => {
+        // 更新切换前安全预检：在途任务 409 / provider 忙拒绝，旧实例不动
+        //（与 reloadExternalPlugin / disable 同一检查集）。
+        const state = this.requirePlugin(pluginId);
+        assertNoLiveTasks(pluginId, state, this.tracker);
+        assertProvidersIdle(pluginId, state, this.options.providers);
+      },
       updateManagedPlugin: async (pluginId, dir, options) => {
         const result = await this.reloadExternalPlugin(pluginId, { doctor: false });
         void dir;

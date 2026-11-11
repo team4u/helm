@@ -91,6 +91,22 @@ test('parsePluginSource：git 短写 / SCP / https 与 @ref / #subdirectory', { 
   }
 })
 
+test('parsePluginSource：git repo 严格校验（拒绝路径注入与本地相对路径）', { timeout: 60_000 }, () => {
+  // 合法三种形态（ssh:// 属未知传输协议，不放行；SCP 覆盖 SSH 场景）
+  for (const ok of ['git:https://github.com/user/repo.git', 'git:github.com/user/repo', 'git:git@github.com:user/repo.git']) {
+    const parsed = parsePluginSource(ok, '/wd')
+    assert.ok(parsed.kind === 'git', `应接受: ${ok}`)
+  }
+  // 拒绝：../ 越界、反斜杠、NUL、绝对路径、盘符、明文 http、file:、ssh://、未知 scheme、空白、裸本地路径
+  for (const bad of ['git:../evil', 'git:..\\..\\evil', 'git:repo/../../evil', 'git:/abs/path', 'git:C:\\repo', 'git:\\\\srv\\share', 'git:http://plain.example/r', 'git:file:///tmp/r', 'git:ssh://git@host:22/path', 'git:repo with space', 'git:local-dir', 'git:./relative']) {
+    assert.throws(
+      () => parsePluginSource(bad, '/wd'),
+      (err: unknown) => err instanceof HelmError && err.status === 400,
+      `应拒绝: ${bad}`,
+    )
+  }
+})
+
 test('parsePluginSource：local 绝对/相对路径解析', { timeout: 60_000 }, () => {
   const abs = parsePluginSource('/abs/plugins/foo', '/wd')
   assert.ok(abs.kind === 'local')
@@ -135,6 +151,8 @@ interface TestEnv {
   manager: PluginPackageManager
   hostCalls: string[]
   registered: Map<string, { enabled: boolean }>
+  /** 模拟在途任务：命中 id 的 assertManagedPluginUpdateSafe 抛 409。 */
+  updateBlockedIds: Set<string>
   close(): void
 }
 
@@ -145,6 +163,7 @@ function makeEnv(runner?: PackageRunner): TestEnv {
   const hostCalls: string[] = []
   const registered = new Map<string, { enabled: boolean }>()
   const summaries = new Map<string, { id: string; version?: string; enabled: boolean }>()
+  const updateBlockedIds = new Set<string>()
   const host = {
     async registerManagedPlugin(dir: string) {
       hostCalls.push(`register:${dir}`)
@@ -171,6 +190,14 @@ function makeEnv(runner?: PackageRunner): TestEnv {
       summaries.set(pluginId, { id: pluginId, version: readPluginVersionFromDir(join(dataDir, 'plugins', pluginId)), enabled: entry.enabled })
       return { summary: toSummary(summaries, pluginId) }
     },
+    assertManagedPluginUpdateSafe(pluginId: string) {
+      hostCalls.push(`assert-safe:${pluginId}`)
+      const entry = registered.get(pluginId)
+      if (!entry) throw new HelmError('unknown_plugin', `未注册的插件：${pluginId}`, 404, { pluginId })
+      if (updateBlockedIds.has(pluginId)) {
+        throw new HelmError('plugin_has_live_tasks', `插件 ${pluginId} 存在在途任务，拒绝更新切换`, 409, { pluginId })
+      }
+    },
     async removeManagedPlugin(pluginId: string) {
       hostCalls.push(`remove:${pluginId}`)
       const entry = registered.get(pluginId)
@@ -195,6 +222,7 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     manager,
     hostCalls,
     registered,
+    updateBlockedIds,
     close() {
       rmSync(dataDir, { recursive: true, force: true })
       rmSync(cwd, { recursive: true, force: true })
@@ -424,6 +452,66 @@ test('路径安全：local 自安装（受管树内部）拒绝、install 后记
       env.manager.install(inside),
       (err: unknown) => err instanceof HelmError && err.status === 400,
     )
+  } finally {
+    env.close()
+  }
+})
+
+test('update 安全预检：在途任务 409 拒绝且旧目录内容不变', { timeout: 60_000 }, async () => {
+  const env = makeEnv()
+  try {
+    const userSrc = writeLocalPlugin(env.cwd, 'busy-plugin', '1.0.0')
+    const installed = await env.manager.install(userSrc)
+    assert.equal(installed.record.version, '1.0.0')
+    const managed = join(env.dataDir, 'plugins', 'busy-plugin')
+    const manifestBefore = readFileSync(join(managed, 'plugin.json'), 'utf8')
+    // 源码升级 + 模拟在途任务：update 必须在切换前拒绝，旧目录不动
+    writeFileSync(join(userSrc, 'plugin.json'), JSON.stringify({ id: 'busy-plugin', version: '2.0.0', main: 'index.mjs' }, null, 2))
+    env.updateBlockedIds.add('busy-plugin')
+    await assert.rejects(
+      env.manager.update('busy-plugin'),
+      (err: unknown) => err instanceof HelmError && err.status === 409,
+    )
+    assert.ok(env.hostCalls.includes('assert-safe:busy-plugin'), '应调用安全预检')
+    assert.equal(readFileSync(join(managed, 'plugin.json'), 'utf8'), manifestBefore, '旧目录内容必须完全不变')
+    assert.ok(!env.hostCalls.includes('update:busy-plugin'), '不得进入 reload 切换')
+    // 解除阻塞后 update 正常
+    env.updateBlockedIds.delete('busy-plugin')
+    const updated = await env.manager.update('busy-plugin')
+    assert.equal(updated.record.version, '2.0.0')
+  } finally {
+    env.close()
+  }
+})
+
+test('运行时依赖先于 doctor：带 package.json 的 local 插件依赖在 staging 内补装后 doctor 通过', { timeout: 60_000 }, async () => {
+  const depsInstalled: string[] = []
+  // runner：npm install 记录 cwd 并产出 node_modules；其余命令放行
+  const runner: PackageRunner = async (cmd, args, opts) => {
+    if (cmd === 'npm' && args[0] === 'install') {
+      depsInstalled.push(opts.cwd)
+      mkdirSync(join(opts.cwd, 'node_modules'), { recursive: true })
+      return { code: 0, stdout: '', stderr: '' }
+    }
+    return { code: 0, stdout: '', stderr: '' }
+  }
+  const env = makeEnv(runner)
+  try {
+    const srcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-deps-'))
+    const src = join(srcParent, 'deps-plugin')
+    mkdirSync(src, { recursive: true })
+    writeFileSync(join(src, 'plugin.json'), JSON.stringify({ id: 'deps-plugin', version: '0.1.0', main: 'index.mjs' }))
+    writeFileSync(join(src, 'index.mjs'), PLUGIN_SRC('deps-plugin'))
+    // package.json 声明运行时依赖（doctor 导入入口时需要 node_modules 存在的形态）
+    writeFileSync(join(src, 'package.json'), JSON.stringify({ name: 'deps-plugin', version: '0.1.0', main: 'index.mjs', dependencies: { leftpad: '^1.0.0' } }))
+    const result = await env.manager.install(src)
+    assert.equal(result.record.pluginId, 'deps-plugin')
+    // 依赖安装在 staging 副本内（非用户源目录）
+    assert.equal(depsInstalled.length, 1, 'install 路径应恰好执行一次依赖补装')
+    assert.ok(depsInstalled[0]!.includes('.staging'), '依赖补装必须发生在 staging 内')
+    assert.ok(!existsSync(join(src, 'node_modules')), '用户源目录不得被安装依赖')
+    assert.ok(existsSync(join(env.dataDir, 'plugins', 'deps-plugin', 'node_modules')), '受管目录应携带补装的依赖')
+    rmSync(srcParent, { recursive: true, force: true })
   } finally {
     env.close()
   }
