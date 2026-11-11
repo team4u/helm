@@ -4395,6 +4395,137 @@ input::placeholder {
   }
 }
 
+/* ==========================================================================
+ * 插件包管理：安装模态 / 受管包元数据与操作 / doctor 检查结果
+ * ========================================================================== */
+
+.plugin-install-modal {
+  max-width: 560px;
+}
+
+.plugin-install-form {
+  gap: 14px;
+}
+
+.plugin-install-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plugin-source-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.plugin-source-hint.is-unknown {
+  color: var(--warn);
+}
+
+.plugin-install-security {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.plugin-install-doctor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.plugin-doctor-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plugin-doctor-check-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--ok);
+  margin-top: 1px;
+}
+.plugin-doctor-check.is-failed .plugin-doctor-check-mark {
+  color: var(--err);
+}
+
+.plugin-doctor-check-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.plugin-doctor-check-label {
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.plugin-doctor-check-error {
+  font-size: 11px;
+  color: var(--err);
+  word-break: break-all;
+}
+
+.plugin-package-section {
+  gap: 10px;
+}
+
+.plugin-package-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plugin-package-source-text {
+  margin-left: 6px;
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  word-break: break-all;
+}
+
+.plugin-package-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.plugin-remove-confirm {
+  max-width: 460px;
+}
+
+.plugin-remove-confirm-desc {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--fg-muted);
+  word-break: break-all;
+}
+
+.plugin-drawer-failed-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.plugin-drawer-failed-note .mono {
+  font-size: 11px;
+  color: var(--err);
+  word-break: break-all;
+}
+
 .attachment-image-thumb {
   display: inline-flex;
   border: 1px solid var(--border);

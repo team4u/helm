@@ -5,6 +5,7 @@ import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginCard } from './PluginCard.js'
 import { PluginDetailDrawer } from './PluginDetailDrawer.js'
+import { PluginInstallModal } from './PluginInstallModal.js'
 import {
   buildCategoryCounts,
   filterPlugins,
@@ -15,7 +16,7 @@ import {
 export interface PluginCenterProps {
   isSplit?: boolean
   onCloseSplit?: () => void
-  /** 显式指定详情抽屉是否内联渲染（便于测试与 SSR 统一断言） */
+  /** 显式指定详情抽屉与弹窗是否内联渲染（便于测试与 SSR 统一断言） */
   inlineDrawer?: boolean
 }
 
@@ -46,6 +47,10 @@ export function PluginCenter({
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<PluginCategoryTab>('all')
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [installOpen, setInstallOpen] = useState(false)
+  // 刷新代数：安装/更新/卸载后拉取列表；SSE plugin.changed 到达时避免重复拉取覆盖当前 target
+  const [refreshTick, setRefreshTick] = useState(0)
+  const refreshGeneration = React.useRef(0)
 
   const plugins = store.plugins ?? []
   const categoryCounts = useMemo(() => buildCategoryCounts(plugins), [plugins])
@@ -68,11 +73,46 @@ export function PluginCenter({
 
   const isDrawerOpen = Boolean(selectedPluginId && selectedPlugin)
 
+  /** 拉取全量插件清单并写入 store（插件列表以 SSE 为增量真相，此处仅按需全量校准）。 */
+  const refreshPlugins = async () => {
+    const generation = ++refreshGeneration.current
+    try {
+      const list = await pluginsApi.list()
+      // 迟到的旧响应不得覆盖新状态（代数竞争保护）
+      if (generation !== refreshGeneration.current) return
+      store.syncPlugins?.(list)
+    } catch {
+      // 静默失败：SSE 快照仍是权威数据源，无需打断用户
+    }
+  }
+
+  // 包操作（安装/更新/卸载）后请求一次全量刷新
+  const handlePackageChanged = () => {
+    setRefreshTick((t) => t + 1)
+  }
+
+  useEffect(() => {
+    if (refreshTick === 0) return
+    void refreshPlugins()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshTick])
+
   const handleSelectPlugin = (pluginId: string) => {
     store.openTarget({ kind: 'plugins', pluginId })
   }
 
   const handleCloseDrawer = () => {
+    store.openTarget({ kind: 'plugins' })
+  }
+
+  // 安装成功：刷新列表并导航至新插件详情抽屉（HTTP 结果先到，SSE 随后 upsert，两者幂等）
+  const handleInstalled = (pluginId: string) => {
+    store.openTarget({ kind: 'plugins', pluginId })
+    handlePackageChanged()
+  }
+
+  // 卸载成功：关闭抽屉并刷新列表（列表已无该插件，抽屉必须先收起）
+  const handleRemoved = () => {
     store.openTarget({ kind: 'plugins' })
   }
 
@@ -132,6 +172,16 @@ export function PluginCenter({
           <div className="plugin-center-stats text-subtle">
             {`共 ${summaryStats.total} 个插件 · ${summaryStats.enabled} 个已启用`}
           </div>
+          <button
+            type="button"
+            className="btn btn-sm"
+            title="从 npm、Git 或本地路径安装外部插件"
+            aria-label="安装插件"
+            onClick={() => setInstallOpen(true)}
+          >
+            <HelmIcon name="download" size={13} />
+            <span>安装插件</span>
+          </button>
           {isSplit && onCloseSplit && (
             <button
               type="button"
@@ -240,6 +290,16 @@ export function PluginCenter({
         onClose={handleCloseDrawer}
         onToggleEnabled={(plugin) => handleTogglePlugin(plugin)}
         toggling={togglingId === selectedPlugin?.id}
+        onPackageChanged={handlePackageChanged}
+        onRemoved={handleRemoved}
+        inline={inlineDrawer}
+      />
+
+      {/* 安装插件轻量模态：npm / git / 本地路径，成功后导航至新插件详情抽屉 */}
+      <PluginInstallModal
+        open={installOpen}
+        onClose={() => setInstallOpen(false)}
+        onInstalled={handleInstalled}
         inline={inlineDrawer}
       />
     </div>

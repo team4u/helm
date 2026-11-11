@@ -26,7 +26,11 @@ import type {
   NodeUpgradeInput,
   NodeUpgradeResult,
   PluginConfigFieldSchema,
+  PluginDoctorReport,
+  PluginInstallResult,
+  PluginRemoveResult,
   PluginSummary,
+  PluginUpdateResult,
   Profile,
   ProviderConfig,
   PublicPluginDoc,
@@ -458,6 +462,21 @@ export const pluginsApi = {
     apiRequest<PluginConfigResponse>('GET', `/api/plugins/${encodeURIComponent(id)}/config`),
   setConfig: (id: string, values: Record<string, unknown>) =>
     apiRequest<{ ok: boolean }>('PUT', `/api/plugins/${encodeURIComponent(id)}/config`, { values }),
+  /** 外部插件源码静态自检（POST /api/plugins/doctor）；body 为 { id } 或 { path }。 */
+  doctor: (target: { id: string } | { path: string }) =>
+    apiRequest<PluginDoctorReport>('POST', '/api/plugins/doctor', target),
+  /** 安装外部插件包（POST /api/plugins/install）。 */
+  install: (source: string, enable?: boolean) =>
+    apiRequest<PluginInstallResult>('POST', '/api/plugins/install', {
+      source,
+      ...(enable ? { enable: true } : {}),
+    }),
+  /** 更新已安装的外部插件包（POST /api/plugins/:id/update）。 */
+  update: (id: string) =>
+    apiRequest<PluginUpdateResult>('POST', `/api/plugins/${encodeURIComponent(id)}/update`),
+  /** 移除已安装的外部插件包（POST /api/plugins/:id/remove）。 */
+  remove: (id: string) =>
+    apiRequest<PluginRemoveResult>('POST', `/api/plugins/${encodeURIComponent(id)}/remove`),
   getPublicDoc: (pluginId: string, name: string) =>
     apiRequest<PublicPluginDoc>(
       'GET',

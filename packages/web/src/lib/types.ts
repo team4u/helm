@@ -411,6 +411,8 @@ export interface HelmStoreValue {
   onAuthenticated(token: string): Promise<void>
   logout(): void
   refreshAssets(): Promise<void>
+  /** 全量校准插件清单（包安装/更新/卸载后；SSE plugin.changed 仍为增量真相，幂等合并）。测试替身可省略。 */
+  syncPlugins?(plugins: PluginSummary[]): void
   refreshNodes(): Promise<NodeInfo[] | undefined>
   loadConversationDetail(conversationId: number, force?: boolean): Promise<ConversationDetail | undefined>
   loadEarlierEntries(conversationId: number): Promise<void>

@@ -5,6 +5,16 @@ import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/ap
 import { HelmIcon } from '../lib/icons.js'
 import { HelmStoreContext } from '../lib/store-context.js'
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogOverlay,
+  AlertDialogPortal,
+  AlertDialogTitle,
+} from '../ui/AlertDialog.js'
+import {
   Dialog,
   DialogClose,
   DialogContent,
@@ -14,6 +24,12 @@ import {
 } from '../ui/Dialog.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { Switch } from '../ui/Switch.js'
+import {
+  formatInstalledAt,
+  pluginPackageErrorText,
+  pluginSourceBadgeLabel,
+  pluginSourceDisplayText,
+} from './plugin-package-model.js'
 import {
   buildPluginConfigPayload,
   configFieldInitialValue,
@@ -27,6 +43,10 @@ export interface PluginDetailDrawerProps {
   onClose: () => void
   onToggleEnabled: (plugin: PluginSummary) => Promise<void>
   toggling: boolean
+  /** 插件包更新/卸载成功后请求父级刷新插件列表。 */
+  onPackageChanged?: () => void
+  /** 卸载成功后请求父级关闭抽屉（列表已无该插件）。 */
+  onRemoved?: () => void
   /** 显式指定是否内联渲染（便于测试与 SSR 统一断言） */
   inline?: boolean
 }
@@ -192,6 +212,8 @@ export function PluginDetailDrawer({
   onClose,
   onToggleEnabled,
   toggling,
+  onPackageChanged,
+  onRemoved,
   inline = false,
 }: PluginDetailDrawerProps): React.JSX.Element {
   const store = useContext(HelmStoreContext)
@@ -199,6 +221,9 @@ export function PluginDetailDrawer({
   const [loadingConfig, setLoadingConfig] = useState(false)
   const [configError, setConfigError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  // 包管理互斥状态：idle | updating | removing（与启停 toggling 独立）
+  const [packageOp, setPackageOp] = useState<'idle' | 'updating' | 'removing'>('idle')
+  const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false)
 
   // 代数并发保护：快速切换插件时迟到的旧响应不得写入新插件配置
   const configGeneration = useRef(0)
@@ -231,6 +256,8 @@ export function PluginDetailDrawer({
       setLoadingConfig(false)
       setConfigError(null)
       setActionError(null)
+      setPackageOp('idle')
+      setConfirmRemoveOpen(false)
     }
   }, [open, plugin?.id])
 
@@ -245,6 +272,55 @@ export function PluginDetailDrawer({
       } else {
         setActionError(err instanceof Error ? err.message : String(err))
       }
+    }
+  }
+
+  // 受管插件包：重新拉取安装来源最新版本并重载（源未变化时 changed=false，如实回显）。
+  const handleUpdatePackage = async () => {
+    if (!plugin?.managed || packageOp !== 'idle') return
+    setPackageOp('updating')
+    setActionError(null)
+    try {
+      const result = await pluginsApi.update(plugin.id)
+      const versionLabel = result.record.version || '未知版本'
+      const noticeBody = result.changed
+        ? `已更新到 ${versionLabel}（此前 ${result.previousVersion || '未知版本'}）`
+        : `源未变化，当前仍为 ${versionLabel}`
+      store?.pushNotice({
+        type: 'notification',
+        level: 'info',
+        title: '插件包已更新',
+        body: `${plugin.name || plugin.id}：${noticeBody}`,
+      })
+      onPackageChanged?.()
+    } catch (err) {
+      setActionError(pluginPackageErrorText(err, '更新'))
+    } finally {
+      setPackageOp('idle')
+    }
+  }
+
+  // 受管插件包卸载：确认后清理安装目录与注册记录；成功后关闭抽屉并刷新列表。
+  const handleRemovePackage = async () => {
+    if (!plugin?.managed || packageOp !== 'idle') return
+    setPackageOp('removing')
+    setActionError(null)
+    try {
+      await pluginsApi.remove(plugin.id)
+      store?.pushNotice({
+        type: 'notification',
+        level: 'info',
+        title: '插件包已卸载',
+        body: `${plugin.name || plugin.id} 已移除（${plugin.id}）`,
+      })
+      setConfirmRemoveOpen(false)
+      onRemoved?.()
+      onPackageChanged?.()
+    } catch (err) {
+      setActionError(pluginPackageErrorText(err, '卸载'))
+      setConfirmRemoveOpen(false)
+    } finally {
+      setPackageOp('idle')
     }
   }
 
@@ -294,6 +370,12 @@ export function PluginDetailDrawer({
                 {plugin && <div className="plugin-drawer-id mono">{plugin.id}</div>}
                 {plugin && (
                   <div className="plugin-drawer-desc">{getPluginDescription(plugin)}</div>
+                )}
+                {plugin?.status === 'failed' && plugin.error && (
+                  <div className="plugin-drawer-failed-note" role="note">
+                    <span className="badge badge-err">加载失败</span>
+                    <span className="mono selectable">{`${plugin.error.code}：${plugin.error.message}（阶段 ${plugin.error.stage}）`}</span>
+                  </div>
                 )}
               </div>
             </div>
@@ -350,6 +432,65 @@ export function PluginDetailDrawer({
                   <div className="callout callout--error" role="alert">
                     <HelmIcon name="alert-circle" size={13} />
                     <span className="selectable">{actionError}</span>
+                  </div>
+                )}
+
+                {/* 受管插件包：来源元数据 + 更新/卸载（内置或未受管插件不展示） */}
+                {plugin?.managed && (
+                  <div className="plugin-drawer-section plugin-package-section">
+                    <h4 className="plugin-drawer-section-title">
+                      <HelmIcon name="boxes" size={13} />
+                      <span>包管理</span>
+                    </h4>
+                    <div className="plugin-package-meta">
+                      <div className="form-grid">
+                        <span className="form-grid-label">
+                          <span>来源</span>
+                        </span>
+                        <span className="form-grid-value">
+                          <span className="badge badge-neutral mono" data-source-kind={plugin.managed.source.kind}>
+                            {pluginSourceBadgeLabel(plugin.managed.source)}
+                          </span>
+                          <span className="mono selectable plugin-package-source-text">
+                            {pluginSourceDisplayText(plugin.managed.source)}
+                          </span>
+                        </span>
+                      </div>
+                      {plugin.managed.installedVersion !== '' && (
+                        <div className="form-grid">
+                          <span className="form-grid-label">
+                            <span>已安装版本</span>
+                          </span>
+                          <span className="form-grid-value mono">{plugin.managed.installedVersion}</span>
+                        </div>
+                      )}
+                      {formatInstalledAt(plugin.managed.installedAt) !== '' && (
+                        <div className="form-grid">
+                          <span className="form-grid-label">
+                            <span>安装时间</span>
+                          </span>
+                          <span className="form-grid-value">{formatInstalledAt(plugin.managed.installedAt)}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="plugin-package-actions">
+                      <button
+                        className="btn btn-sm"
+                        disabled={packageOp !== 'idle'}
+                        onClick={() => void handleUpdatePackage()}
+                      >
+                        <HelmIcon name="refresh-cw" size={12} />
+                        <span>{packageOp === 'updating' ? '正在更新…' : '检查更新'}</span>
+                      </button>
+                      <button
+                        className="btn btn-danger btn-sm"
+                        disabled={packageOp !== 'idle'}
+                        onClick={() => setConfirmRemoveOpen(true)}
+                      >
+                        <HelmIcon name="trash-2" size={12} />
+                        <span>{packageOp === 'removing' ? '正在卸载…' : '卸载插件'}</span>
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -487,6 +628,54 @@ export function PluginDetailDrawer({
           </div>
         </DialogContent>
       </DialogPortal>
+
+      {/* 卸载危险二次确认：Radix AlertDialog（内联渲染与抽屉一致，便于测试断言） */}
+      <AlertDialog
+        open={confirmRemoveOpen && Boolean(plugin?.managed)}
+        inline={inline}
+        onOpenChange={(isOpen) => {
+          if (!isOpen && packageOp !== 'removing') setConfirmRemoveOpen(false)
+        }}
+      >
+        <AlertDialogPortal inline={inline}>
+          <AlertDialogOverlay className="modal-backdrop" />
+          <AlertDialogContent
+            className="modal plugin-remove-confirm"
+            role="alertdialog"
+            aria-label="确认卸载插件"
+          >
+            <div className="modal-header">
+              <AlertDialogTitle className="modal-title">卸载插件</AlertDialogTitle>
+            </div>
+            <div className="modal-body">
+              <AlertDialogDescription className="plugin-remove-confirm-desc">
+                确定卸载 {plugin?.name || plugin?.id}（{plugin?.id}）？将删除安装目录与注册记录，该操作不可恢复。
+              </AlertDialogDescription>
+            </div>
+            <div className="modal-footer">
+              <AlertDialogCancel asChild>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={packageOp === 'removing'}
+                  onClick={() => setConfirmRemoveOpen(false)}
+                >
+                  取消
+                </button>
+              </AlertDialogCancel>
+              <AlertDialogAction asChild>
+                <button
+                  className="btn btn-danger btn-sm"
+                  disabled={packageOp === 'removing'}
+                  onClick={() => void handleRemovePackage()}
+                >
+                  <HelmIcon name="trash-2" size={12} />
+                  <span>{packageOp === 'removing' ? '正在卸载…' : '确认卸载'}</span>
+                </button>
+              </AlertDialogAction>
+            </div>
+          </AlertDialogContent>
+        </AlertDialogPortal>
+      </AlertDialog>
     </Dialog>
   )
 }
