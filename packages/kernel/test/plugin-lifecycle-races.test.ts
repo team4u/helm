@@ -28,6 +28,7 @@ import {
   type PluginConfigStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js';
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -55,6 +56,7 @@ function makeConversation(id: number): ConversationSummary {
 
 function makeHostApi(events: string[]): PluginHostBackend {
   return {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async (init) => ({ ...makeConversation(42), title: init.title ?? 'new' }),
@@ -71,13 +73,19 @@ function makeHostApi(events: string[]): PluginHostBackend {
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
+    getConversationActivity(): { consecutiveErrors: number } {
+      return { consecutiveErrors: 0 }
+    },
+    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+      return 'human'
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: (type) => {
       events.push(`event:${type}`);

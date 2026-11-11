@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { getMermaidConfig, MERMAID_FONT_FAMILY } from '../src/conversation/mermaid-theme.js'
+import { readFileSync as readFile } from 'node:fs'
+import { getMermaidConfig, MERMAID_FONT_FAMILY } from '../../kernel/src/builtin-plugins/mermaid/client/mermaid-theme.js'
 
 test('getMermaidConfig: 浅色模式返回 neutral 主题与透明背景', { timeout: 60_000 }, () => {
   const config = getMermaidConfig('light')
@@ -67,50 +68,33 @@ test('getMermaidConfig: 字体栈使用系统真实字体，避免 Canvas 测量
   assert.equal(dark.themeVariables?.fontFamily, MERMAID_FONT_FAMILY)
 })
 
-test('MarkdownView 源码契约：MermaidBlock 依赖 theme 并使用 getMermaidConfig，主题切换平滑无闪烁', { timeout: 60_000 }, async () => {
-  const fs = await import('node:fs')
-  const content = fs.readFileSync(new URL('../src/conversation/MarkdownView.tsx', import.meta.url), 'utf8')
-  assert.match(content, /import\s*\{[^}]*getMermaidConfig[^}]*\}\s*from\s*['"]\.\/mermaid-theme(?:\.js)?['"]/)
-  assert.match(content, /useHelmStore\(\)/)
-  assert.match(content, /getMermaidConfig\(theme\)/)
-  assert.match(content, /helm-mermaid-\$\{theme\}-\$\{seq\}-/)
-  assert.match(content, /\[code,\s*theme\]/)
-
-  // 主题切换防闪烁断言：仅在 code 变化时清空 svg 并应用 250ms 防抖；纯主题变更不重置 svg 且 0ms 即时渲染
-  assert.match(content, /const\s+lastCodeRef\s*=\s*useRef<string\s*\|\s*null>\(null\)/)
-  assert.match(content, /const\s+isCodeChanged\s*=\s*lastCodeRef\.current\s*!==\s*code/)
-  assert.match(content, /if\s*\(isCodeChanged\)\s*\{[\s\n]*setSvg\(null\)/)
-  assert.match(content, /const\s+delay\s*=\s*isCodeChanged\s*\?\s*250\s*:\s*0/)
-
-  // 渲染稳定性断言：components 仅依赖稳定的 setActiveModal 与 conversationId，不依赖整个 store（弹窗开合不重挂载 Mermaid）
-  assert.match(content, /const\s+\{\s*setActiveModal\s*\}\s*=\s*useHelmStore\(\)/)
-  assert.match(content, /\[conversationId,\s*setActiveModal\]/)
-  assert.match(content, /mermaidSvgCache/)
+test('MermaidCodeBlock 源码契约：代际守卫与缓存路径（防旧代异步覆盖）', { timeout: 60_000 }, () => {
+  const content = readFile(new URL('../../kernel/src/builtin-plugins/mermaid/client/index.tsx', import.meta.url), 'utf8')
+  // 缓存命中分支也推进代际（seq 自增），迟到异步结果按代际丢弃
+  assert.match(content, /const seq = \+\+seqRef\.current/)
+  assert.match(content, /aliveRef\.current && seqRef\.current === seq/)
+  // 缓存容量上限与 LRU 淘汰
+  assert.match(content, /MERMAID_CACHE_LIMIT/)
+  // 错误态保留可复制源码
+  assert.match(content, /Mermaid 渲染失败/)
 })
 
-test('MermaidPreviewModal 源码契约：全屏画板支持主题重绘、透明图层与 var(--bg) 画布底色', { timeout: 60_000 }, async () => {
-  const fs = await import('node:fs')
-  const content = fs.readFileSync(new URL('../src/conversation/MermaidPreviewModal.tsx', import.meta.url), 'utf8')
-  assert.match(content, /import\s*\{[^}]*getMermaidConfig[^}]*\}\s*from\s*['"]\.\/mermaid-theme(?:\.js)?['"]/)
-  assert.match(content, /getMermaidConfig\(theme\)/)
-
-  // 保证画板画布底色为 var(--bg)，与暗黑模式图表节点背景 #1c1f24 形成明晰对比（非 var(--bg-subtle)）
-  assert.match(content, /className="mermaid-modal-stage"[\s\S]*?background:\s*['"]var\(--bg\)['"]/)
-  assert.doesNotMatch(content, /className="mermaid-modal-stage"[\s\S]*?background:\s*['"]var\(--bg-subtle\)['"]/)
-
-  const styles = fs.readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
-  assert.match(styles, /\.mermaid-body\s*\{[^}]*background:\s*transparent/)
-  assert.match(styles, /\.mermaid-svg-layer\s*\{[^}]*background:\s*transparent/)
+test('Mermaid 插件样式契约：图表专属样式在插件 CSS（不进宿主核心）', { timeout: 60_000 }, () => {
+  const pluginCss = readFile(new URL('../../kernel/src/builtin-plugins/mermaid/client/styles.css', import.meta.url), 'utf8')
+  assert.match(pluginCss, /\.mermaid-body\s*\{[\s\S]*?background:\s*transparent/)
+  assert.match(pluginCss, /\.mermaid-svg-layer\s*\{[\s\S]*?background:\s*transparent/)
+  assert.match(pluginCss, /\.mermaid-body\s+foreignObject[^}]*overflow:\s*visible\s*!important/)
+  assert.match(pluginCss, /\.mermaid-svg-layer\s+foreignObject[^}]*overflow:\s*visible\s*!important/)
+  assert.match(pluginCss, /foreignObject\s*>\s*div[^}]*width:\s*100%\s*!important/)
+  assert.match(pluginCss, /foreignObject\s*>\s*div[^}]*max-width:\s*100%\s*!important/)
 })
 
-test('styles.css 样式契约：Mermaid SVG 与 foreignObject 防文字截断规则', { timeout: 60_000 }, async () => {
-  const fs = await import('node:fs')
-  const styles = fs.readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
-  assert.match(styles, /\.mermaid-body\s+foreignObject[^}]*overflow:\s*visible\s*!important/)
-  assert.match(styles, /\.mermaid-svg-layer\s+foreignObject[^}]*overflow:\s*visible\s*!important/)
-  assert.match(styles, /foreignObject\s*>\s*div[^}]*width:\s*100%\s*!important/)
-  assert.match(styles, /foreignObject\s*>\s*div[^}]*max-width:\s*100%\s*!important/)
+test('宿主核心零 jr- 残留：styles.css 与 web src 不再定义/使用 json DSL 类', { timeout: 60_000 }, () => {
+  const styles = readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
+  assert.ok(!styles.includes('.jr-'), '宿主 styles.css 不得含 jr-* 定义')
+  // 通用 callout 原语在核心定义（与插件样式无关）
+  assert.match(styles, /\.callout\s*\{/)
+  assert.match(styles, /\.callout--error\s*\{/)
+  assert.match(styles, /\.callout--warning\s*\{/)
+  assert.match(styles, /\.callout--success\s*\{/)
 })
-
-
-

@@ -64,7 +64,8 @@ flowchart TD
 
 `MemoryStore` 直接管理 `<dataDir>/profiles/<profileId>/MEMORY.md`：
 
-- 复用内核 `fs-atomic` 通用原语（`withFileLock` / `atomicWriteFile` / `readTextFile`）：进程内按真实路径串行化，temp+rename 原子落盘；
+- `createMemoryPlugin()` 为零参工厂；`MemoryStore` 经公共 `ctx.host.profiles.directory(id)` 获取 Profile 目录，使用 `ctx.host.withFileLock` 串行读改写、`ctx.host.atomicWriteFile` 原子落盘。插件不导入内核私有文件服务，也不从插件数据目录推算 Profile 路径；
+- 文件锁约束同一 Hub 进程内使用该锁的调用方；可信插件、Shell 与其他进程可以绕过它，插件不是文件系统沙箱；
 - `MAX_MEMORY_CHARS = 64_000` 上限在**文件锁内对合并后的最终内容**统一强制：并发 `append` 不可能各自预读检查通过后叠加突破上限；超限显式抛 `400 memory_limit_exceeded`，不写半截文件；
 - 所有写入路径（`update_memory` 工具 / `set` 动作 / `configure` 携带 text）走同一防线，无绕过上限的参数；
 - 存量超限（外部手改绕过防线）：注入时截断并附显式说明，绝不静默截断、不修改源文件。

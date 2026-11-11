@@ -56,6 +56,6 @@ flowchart TD
    - 观察阶段进度、日志时间线与产出结果。
 
 3. **进阶学习指引**
-   - 深入理解架构：阅读 [微内核架构哲学](../architecture/overview.md) 与 [双 7 扩展点](../architecture/extension-points.md)。
+   - 深入理解架构：阅读 [微内核架构哲学](../architecture/overview.md) 与 [扩展点详解](../architecture/extension-points.md)。
    - 编写高级编排：阅读 [原生 JS DSL 手册](../workflows/dsl-guide.md) 与 [Git Worktree 隔离](../workflows/worktree-and-gate.md)。
    - 扩展系统功能：阅读 [插件系统设计](../plugins/overview.md) 与 [自定义插件开发](../plugins/plugin-development.md)。

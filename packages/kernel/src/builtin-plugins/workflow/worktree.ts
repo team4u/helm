@@ -38,10 +38,10 @@
 
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord'
+import type { ExecutionError, FileError, Result, ShellExecResult } from '@earendil-works/pi-durable/env'
 import { randomUUID } from 'node:crypto'
 import { HelmError } from '@helm/protocol'
-import type { EnvFabric } from '../env/fabric.js'
-import { pathRulesForShape, targetPathShape } from './tools.js'
+import { pathRulesForShape, targetPathShape } from '../../runtime/tools.js'
 
 /** 受管 worktree 持久化 key（docStore 命名空间 'runtime/worktrees'）。 */
 const DOC_KEY = 'runtime/worktrees'
@@ -77,8 +77,21 @@ export interface ManagedWorktreeRecord {
 }
 
 export interface WorktreeAllocatorDeps {
-  /** 跨节点执行底座（allocate/verify/cleanup 的 git 命令经目标节点执行）。 */
-  envFabric: Pick<EnvFabric, 'envFor'>
+  /**
+   * 目标节点执行端口（allocate/verify/cleanup 的 git 命令经目标节点真实执行）。
+   * exec：argv 数组直跑（与原 EnvFabric.exec 同契约——无 shell 解析、
+   * onOutput 逐块聚合、timeout 秒）；exists/canonicalPath：节点真实 fs 探测。
+   * 插件层用 ctx.host.execEnv + fs RPC 构造（本模块零内核依赖）。
+   */
+  exec: (
+    nodeId: string,
+    cwd: string,
+    args: readonly string[],
+    options: { cwd: string; timeout: number; onOutput: (text: string) => void },
+    context: Context,
+  ) => Promise<Result<ShellExecResult, ExecutionError>>
+  nodeExists: (nodeId: string, path: string, context: Context) => Promise<Result<boolean, FileError>>
+  nodeCanonicalPath: (nodeId: string, path: string, context: Context) => Promise<Result<string, FileError>>
   /** 持久化文档存储（get/set 同步；与 PluginDocStore 同契约；原始 JSON 落库不自动脱敏）。 */
   docStore: { get<T>(key: string, initial: T): T; set<T>(key: string, value: T): void }
   /** 文本脱敏（git 输出进错误诊断前过一遍；缺省原样）。 */
@@ -96,6 +109,19 @@ export interface AllocateInput {
   /** 人类可读标签提示（暂未参与命名；预留）。 */
   labelHint?: string
   signal?: AbortSignal
+  /**
+   * create 副作用（git worktree add）前回调（已在 repo 锁内、机密检查后）：
+   * 调用方可在此做持久占位登记（如 durable lease），保证「分配已开始」
+   * 这一事实先于任何 Git 副作用落盘；抛错则中止分配（不产生副作用）。
+   */
+  beforeCreate?: (pending: {
+    nodeId: string
+    repoRoot: string
+    path: string
+    branch: string
+    baseCommit: string
+    dirtySource: boolean
+  }) => Promise<void>
 }
 
 export interface RegisterExternalInput {
@@ -221,9 +247,10 @@ async function gitExec(
   signal?: AbortSignal,
 ): Promise<GitResult> {
   const redact = deps.redact ?? ((t: string) => t)
-  const env = deps.envFabric.envFor(nodeId, cwd)
   let combined = ''
-  const result = await env.exec(
+  const result = await deps.exec(
+    nodeId,
+    cwd,
     ['git', ...args],
     {
       cwd,
@@ -350,8 +377,7 @@ export class WorktreeAllocator {
   private async dirExistsOnNode(nodeId: string, path: string): Promise<boolean> {
     let failure: string
     try {
-      const env = this.deps.envFabric.envFor(nodeId, path)
-      const result = await env.exists(path, BACKGROUND_CONTEXT)
+      const result = await this.deps.nodeExists(nodeId, path, BACKGROUND_CONTEXT)
       if (result.ok) return result.value
       failure = `${result.error.code}: ${result.error.message}`
     } catch (error) {
@@ -367,8 +393,7 @@ export class WorktreeAllocator {
 
   /** 节点侧真实路径用于锁与归属校验；探测失败必须拒绝，不能退回词法路径。 */
   private async canonicalPathOnNode(nodeId: string, path: string): Promise<string> {
-    const env = this.deps.envFabric.envFor(nodeId, path)
-    const result = await env.canonicalPath(path, BACKGROUND_CONTEXT)
+    const result = await this.deps.nodeCanonicalPath(nodeId, path, BACKGROUND_CONTEXT)
     if (!result.ok) {
       throw new HelmError('worktree_check_failed', `节点 ${nodeId} 无法确认真实路径 ${this.redact(path)}：${this.redact(result.error.message)}`, 502)
     }
@@ -531,7 +556,18 @@ export class WorktreeAllocator {
 
     // Step F：per-repo 串行；worktree add 以记录的 baseCommit 为起点
     //（不追易变 HEAD——锁内创建瞬间主仓 HEAD 可能已被推进）。
+    // beforeCreate（若声明）在 git 副作用前执行：持久占位先于树创建落盘。
     return this.withRepoLock(nodeId, authority.canonicalCommonDir, async () => {
+      if (input.beforeCreate !== undefined) {
+        await input.beforeCreate({
+          nodeId,
+          repoRoot: authority.mainPath,
+          path: worktreePath,
+          branch,
+          baseCommit,
+          dirtySource,
+        })
+      }
       const add = await gitExec(
         this.deps,
         nodeId,
@@ -852,7 +888,10 @@ export class WorktreeAllocator {
           const del = await this.deleteManagedBranch(record.nodeId, authority.mainPath, record.branch, input.force === true, input.signal)
           branchDeleted = del.deleted
           if (del.deleted) {
-            this.updateRecord(record.id, (r) => ({ ...r, branchDeleted: true, branchDeleteError: undefined }))
+            this.updateRecord(record.id, (r) => {
+              const { branchDeleteError: _previousError, ...clean } = r
+              return { ...clean, branchDeleted: true }
+            })
           } else {
             this.updateRecord(record.id, (r) => ({ ...r, branchDeleted: false, branchDeleteError: (del.failureOutput ?? '').slice(0, 2000) }))
             throw new HelmError(
@@ -1097,12 +1136,11 @@ export class WorktreeAllocator {
           )
         }
       }
-      this.updateRecord(fresh.id, (r) => ({
-        ...r,
-        status: 'removed' as const,
-        removedAt: Date.now(),
-        ...(input.deleteBranch === true ? { branchDeleted: true, branchDeleteError: undefined } : {}),
-      }))
+      this.updateRecord(fresh.id, (r) => {
+        if (input.deleteBranch !== true) return { ...r, status: 'removed' as const, removedAt: Date.now() }
+        const { branchDeleteError: _previousError, ...clean } = r
+        return { ...clean, status: 'removed' as const, removedAt: Date.now(), branchDeleted: true }
+      })
       outcome = { removed: true, branchDeleted }
     })
 

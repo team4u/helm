@@ -26,7 +26,7 @@
 
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
-import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
+import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
 import {
   HelmError,
   type NodeEnvRpcFunctions,
@@ -38,6 +38,7 @@ import { randomUUID } from 'node:crypto'
 import { NodeRegistry } from './registry.js'
 import { RemoteExecutionEnv } from './remote-env.js'
 import { createScopedExecutionEnv, type EnvTarget, type ScopedExecutionEnv } from './scoped-env.js'
+import { envWithFileMutationQueue } from './file-mutation-queue.js'
 
 export { ExecOutputHub } from './exec-output.js'
 export { NodeRegistry, tokenAuthenticator, sha256hex } from './registry.js'
@@ -126,6 +127,18 @@ export interface EnvFabric {
   ): Promise<() => void>
   /** 节点注册时上报的 hubUrl（远端受管子进程回连地址守恒）。 */
   getNodeHubUrl(nodeId: string): string | undefined
+  /**
+   * 文件互斥队列（目标节点 canonical 路径串行）：在 (nodeId, cwd) 靶点内把
+   * fn 的读-改-写窗口与内核 write/edit 工具排同一队列（同文件不丢更新；
+   * 其他文件/节点互不等待；软链别名同 key；新文件按 canonical 父目录拼接）。
+   * local 直接在 Hub 进程队列执行；远端经短生命周期 RemoteExecutionEnv。
+   * 不是对 bash/外部进程的锁，也不可重入；详见 env/file-mutation-queue.ts。
+   */
+  withFileMutationQueue<T>(
+    target: { nodeId: string; cwd: string; path: string },
+    fn: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T>
   /**
    * 释放某会话的全部靶点缓存：仅移除 bases 条目（绝不调用 cleanup 杀
    * 该会话在途命令——在途 exec/reader 持旧实例自然完成，见文件头注释）。
@@ -313,6 +326,18 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
     getNodeHubUrl(nodeId: string): string | undefined {
       if (nodeId === 'local') return undefined
       return registry.get(nodeId)?.hubUrl
+    },
+
+    async withFileMutationQueue<T>(
+      target: { nodeId: string; cwd: string; path: string },
+      fn: () => Promise<T>,
+      signal?: AbortSignal,
+    ): Promise<T> {
+      // 短生命周期底座：队列在进程级 Map（key 含 env.id），不依赖实例缓存，
+      // 与 tools.ts 远端分支的 envFor 实例共享同一 key 空间。
+      const env = freshBase(target.nodeId, target.cwd)
+      const context: Context = signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT)
+      return envWithFileMutationQueue(env, target.path, fn, context)
     },
 
     evictConversation(conversationId: number): void {

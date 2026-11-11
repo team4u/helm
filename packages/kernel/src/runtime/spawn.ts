@@ -1,5 +1,5 @@
 /**
- * 原生 subagent：默认 agent_spawn 执行行。
+ * 原生 subagent：默认 agent_spawn 执行行（内核零 Git/worktree 语义）。
  *
  * - 在 pi-durable 创建原生子会话，onCreated 回调上报 convId；
  * - resume：严格校验 ref（纯数字 convId 或既有 agentId 映射），绝不静默新建假续接；
@@ -8,7 +8,6 @@
  *   （真实 SDK configure + 镜像持久化 + 模型继承链，不重建身份字段），
  *   effort 显式时经 updateConversation 同步覆盖与 SDK 配置；onResolved/Gate 用
  *   配置落定后的实际 cwd（与 SDK 一致）；
- * - signal：创建前已 abort 直接拒绝；运行中 abort -> conversation.abort 并等待 settle；
  * - schema：AJV 全量校验（复用 plugins/schema，$async 显式拒绝），回合内
  *   register_structured_output 工具自愈（per-child 扩展注入），工具拒绝错误
  *   参数同回合重试，最终未走工具可再文本追问一次，仍失败显式
@@ -16,10 +15,10 @@
  * - profile：经 resolveProfile 端口读取真实 Profile（model/runtime），无效
  *   profile 显式报错；herdr runtime 未被插件接管时 unsupported_runtime；
  * - gate：真实 shell 执行（runGate，cwd 用子会话实际 cwd），失败即 spawn 失败；
- * - isolation: 'worktree'：经 deps.worktrees（WorktreeAllocator）在源仓库同级
- *   .helm-worktrees 下建独立 worktree 与 helm/spawn-* 分支，子会话与 gate 均在
- *   worktree 目录内执行；resume 严格沿用原 worktree（改写 cwd 显式拒绝，目录
- *   被清理显式 worktree_missing）；deps.worktrees 缺失 -> 显式 unsupported_runtime。
+ * - isolation 等执行环境要求：内核不解释（零业务分支）。带非空 isolation 的
+ *   请求到达原生执行行时，说明没有插件经 agent_spawn continuation 兑现（如
+ *   builtin:workflow 停用时的 worktree 隔离），显式 unsupported_runtime，
+ *   绝不静默忽略。
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -29,7 +28,6 @@ import type { AgentSpawnRequest, ConversationPatch, ConversationSummary } from '
 import { HelmError } from '@helm/protocol'
 import type { Harness } from '@earendil-works/pi-durable'
 import { validateOrThrow } from '../plugins/schema.js'
-import type { ManagedWorktreeRecord, WorktreeAllocator } from './worktree.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { runGate } from './tools.js'
 
@@ -119,11 +117,6 @@ export interface NativeSpawnDeps extends HelmToolDeps {
    */
   resolveAttachmentsForPrompt?(): Promise<string>
   /**
-   * 受管隔离 worktree 分配器（isolation: 'worktree' 机制层）。
-   * 缺省时原生执行行不支持隔离，显式 unsupported_runtime。
-   */
-  worktrees?: WorktreeAllocator
-  /**
    * 子会话目标节点解析（Profile.nodeId + 父会话上下文 -> 实际 nodeId）。
    * 缺省回退 profile.nodeId ?? 父会话镜像 nodeId ?? 'local'。
    */
@@ -165,21 +158,14 @@ async function runNativeSpawnTurn(
   deps: NativeSpawnDeps,
   request: AgentSpawnRequest,
 ): Promise<unknown> {
-  if (request.isolation !== undefined && request.isolation !== null) {
-    if (request.isolation !== 'worktree') {
-      throw new HelmError(
-        'validation_error',
-        `isolation='${request.isolation}' 非法：仅允许 'worktree'（不合法值绝不静默丢弃）`,
-        400,
-      )
-    }
-    if (!deps.worktrees) {
-      throw new HelmError(
-        'unsupported_runtime',
-        `isolation='worktree' 暂不支持：原生 subagent 执行行未注入 WorktreeAllocator（请启用内核 worktree 机制或经外部运行时插件委派终端 CLI Agent）`,
-        400,
-      )
-    }
+  if (request.isolation !== undefined && request.isolation !== null && request.isolation !== '') {
+    // 内核零业务分支：非空 isolation 到达原生执行行 = 没有插件经 agent_spawn
+    // continuation 兑现（如 builtin:workflow 停用时的 worktree 隔离）。
+    throw new HelmError(
+      'unsupported_runtime',
+      `isolation='${request.isolation}' 暂不支持：原生 subagent 执行行不实现执行环境隔离（该能力由对应插件经 agent_spawn 钩子接管；当前未注册或未启用）`,
+      400,
+    )
   }
   if (request.signal?.aborted) {
     throw new HelmError('aborted', 'spawn 请求在创建前已取消（signal 已 abort）', 409)
@@ -260,28 +246,6 @@ async function runNativeSpawnTurn(
   }
 
   let summary: ConversationSummary | undefined = existing
-  // ---- worktree 隔离：resume 严格沿用原 worktree（不中途搬家、不二次创建）。
-  // 原会话创建时未启用 worktree 但 resume 突然传 isolation: 'worktree'：
-  // 显式拒绝（诚实性：不静默忽略也不中途搬家）。----
-  const existingWorktree = isResume ? deps.worktrees?.getForConversation(childId!) : undefined
-  if (isResume && existingWorktree === undefined && request.isolation === 'worktree') {
-    throw new HelmError(
-      'resume_cwd_conflict',
-      '子会话创建时未启用 worktree 隔离，不支持在 resume 时中途切换为 worktree 隔离',
-      409,
-      { conversationId: childId },
-    )
-  }
-  if (existingWorktree !== undefined) {
-    deps.assertNodeAvailable?.(existingWorktree.nodeId)
-    if ((existing!.nodeId ?? 'local') !== existingWorktree.nodeId || (profile.nodeId !== undefined && profile.nodeId !== existingWorktree.nodeId)) {
-      throw new HelmError('resume_cwd_conflict', '隔离子会话必须在原节点和工作树上续接，不能切换节点', 409, { conversationId: childId, nodeId: existingWorktree.nodeId })
-    }
-    // verifyForResume 拦截冲突 request.cwd（resume_cwd_conflict）与目录缺失
-    //（worktree_missing）；patch.cwd 已由上方与 existing.cwd 比较逻辑约束，
-    // 与 worktree path 不一致时在此拦截。
-    await deps.worktrees!.verifyForResume(existingWorktree, request.cwd, request.signal)
-  }
   if (isResume) {
     const patch: ConversationPatch = {}
     // 显式 agentType 与原子会话 Profile 不同才是变更（相同则不产生无意义写）。
@@ -309,27 +273,12 @@ async function runNativeSpawnTurn(
     ? (summary!.nodeId ?? 'local')
     : (deps.resolveNodeId?.(profile.nodeId, request.parentConversationId) ?? profile.nodeId ?? parentSummary?.nodeId ?? 'local')
   deps.assertNodeAvailable?.(targetNodeId)
-  // ---- 新建 + isolation: 'worktree'：先分配隔离工作树，子会话 cwd/gate cwd
-  // 均为 worktree 目录；创建中途失败尽力回收已分配资源（诚实性：不留孤儿
-  // worktree 也不掩盖原始错误）。----
-  let allocatedWorktree: ManagedWorktreeRecord | undefined
-  if (!isResume && request.isolation === 'worktree') {
-    const sourceCwd = request.cwd ?? profile.cwd ?? parentSummary?.cwd ?? deps.defaultCwd
-    allocatedWorktree = await deps.worktrees!.allocate({
-      nodeId: targetNodeId,
-      sourceCwd,
-      parentConversationId: request.parentConversationId,
-      signal: request.signal,
-    })
-  }
-  let childCwd: string
-  try {
-    childCwd = isResume
-      ? summary!.cwd
-      : (allocatedWorktree?.path ?? request.cwd ?? profile.cwd ?? parentSummary?.cwd ?? deps.defaultCwd)
-    // gate 与子会话同 cwd（resume 用更新后的实际 cwd，不依赖 main cwd）。
-    const gateCwd = childCwd
-
+  const childCwd = isResume
+    ? summary!.cwd
+    : (request.cwd ?? profile.cwd ?? parentSummary?.cwd ?? deps.defaultCwd)
+  // gate 与子会话同 cwd（resume 用更新后的实际 cwd，不依赖 main cwd）。
+  const gateCwd = childCwd
+  {
     let structured: StructuredOutputSession | undefined
     if (request.schema) {
       // 声明边界即拒绝 $async：AJV 异步校验返回 Promise，同步 boolean 判断会
@@ -377,18 +326,11 @@ async function runNativeSpawnTurn(
         thinkingLevel,
         targetNodeId,
       )
-      // worktree 绑定：子会话创建并登记后写回受管记录（后续 resume/cleanup 定位）。
-      if (allocatedWorktree !== undefined) {
-        deps.worktrees!.bindConversation(allocatedWorktree.path, allocatedWorktree.nodeId, childId)
-      }
-      // onResolved 在配置全部落定（创建 + 镜像登记 + worktree 绑定）后回传实际元数据。
+      // onResolved 在配置全部落定（创建 + 镜像登记）后回传实际元数据。
       request.onResolved?.({
         nodeId: targetNodeId,
         conversationId: childId,
         effectiveCwd: childCwd,
-        ...(allocatedWorktree !== undefined
-          ? { worktree: { path: allocatedWorktree.path, branch: allocatedWorktree.branch } }
-          : {}),
       })
     } else {
       // resume：显式 model/cwd/effort 变更已由 updateConversation 同步 SDK 与镜像。
@@ -402,9 +344,6 @@ async function runNativeSpawnTurn(
         nodeId: targetNodeId,
         conversationId: childId!,
         effectiveCwd: childCwd,
-        ...(existingWorktree !== undefined
-          ? { worktree: { path: existingWorktree.path, branch: existingWorktree.branch } }
-          : {}),
       })
     }
 
@@ -442,7 +381,7 @@ async function runNativeSpawnTurn(
         await conversation.abort(bg)
         throw new HelmError('aborted', '子代理启动期间已取消', 499, { conversationId: childId })
       }
-      return await driveTurn(deps, request, conversation, childId as number, structured, gateCwd, allocatedWorktree)
+      return await driveTurn(deps, request, conversation, childId as number, structured, gateCwd)
     } catch (error) {
       if (abortError !== undefined && error !== abortError) throw abortError
       throw error
@@ -450,20 +389,6 @@ async function runNativeSpawnTurn(
       if (request.signal) request.signal.removeEventListener('abort', onAbort)
       if (outputSessions.get(childId!) === structured) outputSessions.delete(childId!)
     }
-  } catch (error) {
-    // 子会话创建/登记中途失败：尽力回收刚分配的 worktree（诚实性：不留孤儿
-    // 资源也不掩盖原始错误；回收失败附诊断但不拦原始错误上抛）。
-    if (childId === undefined && allocatedWorktree !== undefined && allocatedWorktree.status === 'active') {
-      try {
-        await deps.worktrees!.cleanup({ path: allocatedWorktree.path, deleteBranch: true, signal: request.signal })
-      } catch (cleanupError) {
-        // 回收失败不掩盖原始错误：诊断进 details 之外，仅 stderr 级日志。
-        const note = cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
-        // eslint-disable-next-line no-console
-        console.error(`[helm] worktree 回收未竟（${allocatedWorktree.path}）：${note}`)
-      }
-    }
-    throw error
   }
 }
 
@@ -475,19 +400,13 @@ async function driveTurn(
   childId: number,
   structured: StructuredOutputSession | undefined,
   gateCwd: string,
-  allocatedWorktree?: ManagedWorktreeRecord,
 ): Promise<unknown> {
   // 附件：宿主已校验授权；拼在任务正文之后、交接契约之前。
   const attachmentBlock =
     request.attachments !== undefined && request.attachments.length > 0 && deps.resolveAttachmentsForPrompt
       ? `\n\n${await deps.resolveAttachmentsForPrompt()}\n`
       : ''
-  // Dirty 源仓库诚实提示：隔离工作树基于 HEAD 创建，不含源工作区未提交改动。
-  const worktreeNotice =
-    allocatedWorktree !== undefined && allocatedWorktree.dirtySource
-      ? `\n\n<worktree_isolation_notice>\n当前工作目录为独立 Git Worktree (${allocatedWorktree.path}，分支 ${allocatedWorktree.branch}，基于提交 ${allocatedWorktree.baseCommit.slice(0, 12)})。注意：源工作区存在未提交修改，本隔离工作树基于 HEAD 创建，不包含源工作区未提交的改动。\n</worktree_isolation_notice>`
-      : ''
-  const basePrompt = `${request.prompt}${attachmentBlock}${worktreeNotice}`
+  const basePrompt = `${request.prompt}${attachmentBlock}`
   const promptText = structured
     ? `${basePrompt}
 

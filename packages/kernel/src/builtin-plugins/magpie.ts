@@ -17,7 +17,15 @@
  * - reachable:false 时 modelCount 为缓存计数，绝不冒充实时刷新成功；
  * - 非 loopback 网关不读本机 magpie CLI 数据（那是另一个实例），只用所选
  *   网关 trace 并标注 source；apiKey 绝不进 doc / 动作输出 / 错误文本。
+ * - 零参工厂：目录刷新经 ctx.host.refreshModels({ providers: ['magpie'] })，
+ *   网络读取用 global fetch，本机 CLI 经 execFile 公开端口（runMagpieCli，
+ *   无注入后门；测试用 PATH fixture / global fetch mock）。
  */
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { HelmError, type PluginDefinition, type TurnSettledPayload } from '@helm/protocol'
 import {
   DEFAULT_MAGPIE_ROOT,
@@ -27,8 +35,8 @@ import {
   sameGateway,
   type MagpieGatewayRef,
   type MagpiePluginConfig,
-  type MagpiePluginDependencies,
   type MagpieStatusDoc,
+  type RunMagpieCli,
 } from './magpie/contracts.js'
 import { fetchQuotas, fetchTrace, resolveGateway } from './magpie/gateway.js'
 import { quotaRows } from './magpie/quota.js'
@@ -133,14 +141,53 @@ function sanitizeErrorText(error: unknown): string {
   return message.replace(/Bearer\s+\S+/g, 'Bearer ***').slice(0, 300)
 }
 
-export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefinition {
-  const fetchImpl = deps.fetchImpl ?? fetch
-  const runCli = deps.runMagpieCli
+/** clientRoot 兼容 src / dist 运行路径（与 workflow/herdr/memory 插件同机制）。 */
+function resolveMagpieClientRoot(): string {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const local = join(here, 'magpie', 'client')
+  if (existsSync(local)) return local
+  const pkgRoot = dirname(dirname(here))
+  const srcFallback = join(pkgRoot, 'src', 'builtin-plugins', 'magpie', 'client')
+  if (existsSync(srcFallback)) return srcFallback
+  throw new HelmError(
+    'magpie_plugin_client_missing',
+    `内置插件 ${MAGPIE_PLUGIN_ID} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
+    500,
+  )
+}
+
+const execFileAsync = promisify(execFile)
+
+/**
+ * 公开环境端口：本机 magpie CLI 经 execFile（PATH 解析，无隐藏注入）。
+ * 失败返回 { ok:false, error }；超时 10s；错误文本脱敏后限长。
+ */
+export function runMagpieCli(
+  args: readonly string[],
+  options?: { signal?: AbortSignal },
+): Promise<{ ok: boolean; stdout?: string; error?: string }> {
+  return execFileAsync('magpie', [...args], {
+    signal: options?.signal,
+    timeout: 10_000,
+    maxBuffer: 1024 * 1024,
+    encoding: 'utf8',
+  })
+    .then(({ stdout }) => ({ ok: true, stdout }))
+    .catch((error: unknown) => ({
+      ok: false,
+      error: sanitizeErrorText(error instanceof Error ? error : new Error(String(error))),
+    }))
+}
+
+export function createMagpiePlugin(): PluginDefinition {
+  const fetchImpl: typeof fetch = fetch
+  const runCli: RunMagpieCli = runMagpieCli
 
   return {
     id: MAGPIE_PLUGIN_ID,
     name: 'Magpie 网关',
     version: '0.1.0',
+    clientRoot: resolveMagpieClientRoot(),
     definePlugin(rawCtx) {
       const ctx = rawCtx
 
@@ -283,11 +330,12 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
           })
           // 非阻塞后台刷新：失败只更新 reachable:false / lastError，绝不阻断
           // 启用与内核启动（provider.refreshModels 本身 throw——那是给通用
-          // 目录刷新的显式信号；这里经 deps 端口拿 errors 映射，不 reject）。
+          // 目录刷新的显式信号；这里经 ctx.host.refreshModels 拿 errors 映射，
+          // 不 reject）。
           void (async () => {
             try {
               const snapshotInner = gateway()
-              const result = await deps.refreshProviderModels({ allowNetwork: true, force: true })
+              const result = await ctx.host.refreshModels({ providers: [MAGPIE_PROVIDER_ID], allowNetwork: true, force: true })
               const error = result.errors['magpie']
               if (error !== undefined) {
                 publishCatalogStatus(snapshotInner, false, error)
@@ -365,7 +413,7 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
         outputSchema: REFRESH_OUTPUT_SCHEMA,
         handler: async () => {
           const snapshot = gateway()
-          const result = await deps.refreshProviderModels({ allowNetwork: true, force: true })
+          const result = await ctx.host.refreshModels({ providers: [MAGPIE_PROVIDER_ID], allowNetwork: true, force: true })
           const error = result.errors['magpie']
           publishCatalogStatus(snapshot, error === undefined, error)
           if (error !== undefined) {
@@ -554,69 +602,12 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
         },
       })
 
-      // ---- 声明式 UI（@json-render；无 Emoji，icon 用 lucide 线性名） --------
+      // ---- 声明式 UI（client.tsx React 轨道；无 Emoji，icon 用 lucide 线性名） --------
       ctx.ui.settingsPanel({
         id: 'magpie-panel',
         label: 'Magpie 网关',
         order: 25,
-        docs: [MAGPIE_STATUS_DOC],
-        json: {
-          component: 'Stack',
-          children: [
-            { component: 'Text', variant: 'title', text: 'Magpie 网关' },
-            {
-              component: 'KeyValueList',
-              items: [
-                // JSON Pointer 语法 '/$docs/<doc>/<field>'（evaluator 双斜杠段式）
-                { key: '/$docs/status/gatewayUrl', label: '网关地址' },
-                { key: '/$docs/status/local', label: '本机 loopback' },
-                { key: '/$docs/status/reachable', label: '可达' },
-                { key: '/$docs/status/modelCount', label: '模型数' },
-                { key: '/$docs/status/groupCount', label: '路由组数' },
-                { key: '/$docs/status/lastError', label: '最近错误' },
-              ],
-            },
-            {
-              component: 'Button',
-              label: '刷新模型目录',
-              icon: 'refresh-cw',
-              action: { type: 'helm:action', actionId: 'refresh', input: {} },
-            },
-            { component: 'Text', variant: 'title', text: '诊断' },
-            {
-              component: 'Table',
-              columns: [{ key: 'message', label: '不可用项' }],
-              rows: '{$docs.status.diagnostics}',
-              empty: '无诊断信息',
-            },
-            { component: 'Text', variant: 'title', text: '配额' },
-            {
-              component: 'Table',
-              columns: [
-                { key: 'provider', label: 'Provider' },
-                { key: 'account', label: '账号' },
-                { key: 'windowLabel', label: '窗口' },
-                { key: 'remainingPercent', label: '剩余 %' },
-                { key: 'resetText', label: '重置' },
-              ],
-              rows: '{$docs.status.quotas}',
-              empty: '暂无配额数据',
-            },
-            { component: 'Text', variant: 'title', text: '路由轨迹' },
-            {
-              component: 'Table',
-              columns: [
-                { key: 'group', label: '路由组' },
-                { key: 'strategy', label: '策略' },
-                { key: 'provider', label: 'Provider' },
-                { key: 'model', label: '命中模型' },
-                { key: 'timestamp', label: '时间' },
-              ],
-              rows: '{$docs.status.routes}',
-              empty: '暂无路由记录',
-            },
-          ],
-        },
+        client: { module: 'index.tsx', export: 'MagpieSettingsPanel' },
       })
 
       ctx.ui.command({
@@ -625,7 +616,6 @@ export function createMagpiePlugin(deps: MagpiePluginDependencies): PluginDefini
         actionId: 'refresh',
         input: {},
         keywords: ['magpie', 'models', 'refresh'],
-        docs: [MAGPIE_STATUS_DOC],
       })
     },
   }

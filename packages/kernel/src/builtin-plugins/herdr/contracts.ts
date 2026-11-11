@@ -1,4 +1,3 @@
-import type { Context } from '@earendil-works/chord/context'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import type { AgentGateResult, AskFieldOption, Profile, RpcResult } from '@helm/protocol'
 import type { BlockedSnapshotAnalysis } from './prompt-options.js'
@@ -21,8 +20,9 @@ export function targetNodeId(target: HerdrTarget | undefined): string | undefine
 }
 
 /**
- * 跨节点通道：由内核 EnvFabric 或测试 fixture 提供，transport 借它在目标节点
- * 连接当地 Herdr IPC、读写交接文件并执行 Gate（彻底取代 ssh + python3 脚本）。
+ * 跨节点通道：由内核 EnvFabric 公共端口（nodeIpc / executionEnv）或测试
+ * fixture 提供，transport 借它在目标节点连接当地 Herdr IPC、读写交接文件
+ * 并执行 Gate（彻底取代 ssh + python3 脚本）。
  *
  * 端点语义（远端节点自解析，绝不携带 Hub 本机的平台/目录）：
  * - `endpoint` 仅在 target 显式给出 socketPath 时传递（可缺省）；
@@ -30,9 +30,8 @@ export function targetNodeId(target: HerdrTarget | undefined): string | undefine
  * - 目标节点自己解析 HERDR_SOCKET_PATH / 平台配置目录与端点形态（UDS 或
  *   Named Pipe），Hub 侧绝不把本机 resolveSocketPath 或 endpointKind 强加给远端。
  *
- * Context 契约（与 SDK ExecutionEnv 同源）：所有方法要求显式 Context；
- * 取消路径由调用方经 withAbortSignal(signal, BACKGROUND_CONTEXT) 派生，
- * 不接受 unknown 掩盖类型。
+ * 取消语义：所有方法接受普通 AbortSignal（与宿主公共端口同形），transport
+ * 内部文件/命令操作仍用 SDK Context 派生（见 HerdrNodeEnv）。
  */
 export interface HerdrNodeChannel {
   /** 节点是否在线（'local' 恒为 true）。 */
@@ -43,7 +42,7 @@ export interface HerdrNodeChannel {
   ipcCall(
     nodeId: string,
     input: { endpoint?: string; session?: string; line: string; timeoutMs?: number },
-    context: Context,
+    signal?: AbortSignal,
   ): Promise<RpcResult<string>>
   /** 在目标节点获取文件与命令执行环境。 */
   envFor(nodeId: string, cwd: string): HerdrNodeEnv
@@ -57,13 +56,13 @@ export interface HerdrNodeChannel {
     input: { endpoint?: string; session?: string; line: string },
     onLine: (line: string) => void,
     onClosed: (error?: string) => void,
-    context: Context,
+    signal?: AbortSignal,
   ): Promise<() => void>
 }
 
 /**
  * `HerdrNodeChannel.envFor` 的环境契约：SDK `ExecutionEnv` 核心子集的 Pick。
- * NodeExecutionEnv 结构可赋值（无 as 掩盖）；Context 为必需参数。
+ * NodeExecutionEnv / 宿主 executionEnv 端口结构可赋值（无 as 掩盖）。
  */
 export type HerdrNodeEnv = Pick<
   ExecutionEnv,
@@ -112,7 +111,6 @@ export interface HerdrTransport {
 }
 
 export interface HerdrPluginDependencies {
-  defaultCwd: string
   profiles: { get(id: string): Promise<Profile | undefined> }
   /**
    * 外部 spawn 环境变量：目标节点受管回连集合（stash + 受管 HELM_*）。

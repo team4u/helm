@@ -10,13 +10,15 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, type Profile } from '@helm/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
+import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
+import { FsOutputFiles, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrNodeChannel, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
 
 // ---------------------------------------------------------------------------
@@ -52,7 +54,7 @@ class FakeTransport implements HerdrTransport {
   panes = new Map<string, PaneState>()
   tabs = new Map<string, { closed: boolean }>()
   calls: Array<{ target: HerdrTarget; method: string; params: Record<string, unknown> }> = []
-  outputFiles = new Map<string, string>()
+  outputFiles = new FsOutputFiles()
   promptStatus: PaneStatus | Array<PaneStatus> = 'idle'
   onPrompt: ((pane: PaneState, text: string) => void) | undefined
 
@@ -183,6 +185,68 @@ class FakeTransport implements HerdrTransport {
 class FakeBackend implements PluginHostBackend {
   events: Array<{ type: string; payload: unknown }> = []
   conversations = new Map<number, { cwd: string }>([[1, { cwd: '/tmp/helm-parent' }]])
+  /** 受控 Profile 表（attachments 显式 nodeId 测试）。 */
+  profileStore = new Map<string, Profile>()
+  /** buildSpawnEnv 调用记录（serve target 折叠远端 nodeId）。 */
+  spawnEnvLog: Array<{ conversationId: number; cwd: string; nodeId?: string }> = []
+  profiles = {
+    list: async () => [...this.profileStore.values()],
+    get: async (id: string) => this.profileStore.get(id),
+    getSystem: async (id: string) => {
+      throw new HelmError('not_found', `Profile ${id} 无 SYSTEM.md`, 404)
+    },
+    save: async () => { throw new HelmError('unsupported', 'fixture 只读', 501) },
+    directory: async (id: string) => `/tmp/herdr-attach-fixture-profiles/${id}`,
+  }
+  skills = {
+    list: async () => [],
+    readFile: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+    directory: async (id: string) => `/tmp/herdr-attach-fixture-skills/${id}`,
+    ensureSkill: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+  }
+  secrets = {
+    get: async () => undefined,
+    set: async () => {},
+    delete: async () => {},
+    addRedaction: () => () => {},
+  }
+  setPluginConfig(): Promise<void> { return Promise.resolve() }
+  nodeIpc: import('@helm/protocol').HelmHostNodeIpcPort = {
+    isOnline: (nodeId: string) => nodeId === 'local',
+    getNodeHubUrl: () => undefined,
+    call: async () => ({ ok: false, error: { code: 'unknown', message: 'fixture 不承载 IPC' } }),
+    subscribe: async () => { throw new HelmError('unsupported', 'fixture 不承载 IPC 订阅', 501) },
+  }
+  redact = (text: string) => text.replaceAll('SECRET-TOKEN', '[REDACTED]')
+  buildSpawnEnv = (conversationId: number, cwd: string, nodeId: string) => {
+    this.spawnEnvLog.push({ conversationId, cwd, nodeId })
+    return {
+      HELM_ENV: '1',
+      HELM_HUB_URL: 'http://127.0.0.1:3202',
+      HELM_TOKEN: 'SECRET-TOKEN',
+      HELM_CWD: cwd,
+      HELM_CONVERSATION_ID: String(conversationId),
+    }
+  }
+  async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
+  async listArtifacts(): Promise<never[]> { return [] }
+  getArtifactImpl: ((id: string, conversationId: number) => Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }>) | undefined
+  async getArtifact(id: string, conversationId: number): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }> {
+    if (this.getArtifactImpl !== undefined) return this.getArtifactImpl(id, conversationId)
+    return undefined as never
+  }
+  async completeText(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型', 501) }
+  executionEnv = (_nodeId: string, cwd: string) => {
+    mkdirSync(cwd, { recursive: true })
+    return new NodeExecutionEnv({ cwd })
+  }
+  withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() }
+  async atomicWriteFile(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
+  async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
+  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
+  listActiveSpawnExecutions(): [] { return [] }
+  async probeNodeFs(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不探测节点 fs', 501) }
+  redactText(text: string): string { return text }
   async dispatchTrigger() {}
   async submitInput() {}
   async createConversation(): Promise<import('@helm/protocol').ConversationSummary> {
@@ -230,6 +294,15 @@ class FakeBackend implements PluginHostBackend {
     return () => {}
   }
   async abortConversation(): Promise<void> {}
+  getConversationActivity(): { consecutiveErrors: number } {
+    return { consecutiveErrors: 0 }
+  }
+  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    return 'human'
+  }
+  isClosing(): boolean {
+    return false
+  }
   async spawnAgent(): Promise<unknown> {
     return {}
   }
@@ -237,9 +310,6 @@ class FakeBackend implements PluginHostBackend {
     return { ok: true, output: '' }
   }
   async prepareInterruptedConversations(): Promise<void> {}
-  async cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
-    return { removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }
-  }
   async invokeAction(): Promise<unknown> {
     return {}
   }
@@ -249,6 +319,7 @@ class FakeBackend implements PluginHostBackend {
   async execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
     throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
   }
+  withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
   listActions(): [] {
     return []
   }
@@ -277,45 +348,57 @@ interface Env {
   close(): Promise<void>
 }
 
-async function makeEnv(opts: { withGetArtifact?: boolean; nodeChannel?: HerdrNodeChannel } = {}): Promise<Env> {
+class MemoryConfigStore {
+  constructor(private readonly initial: Record<string, unknown> = {}) {}
+  get(): Record<string, unknown> { return this.initial }
+  set(): void {}
+}
+
+async function makeEnv(opts: { withGetArtifact?: boolean; hubUrls?: Record<string, string> } = {}): Promise<Env> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-attach-'))
   const backend = new FakeBackend()
   const transport = new FakeTransport()
-  const profiles = new Map<string, Profile>()
+  const profiles = backend.profileStore
   const artifactLookups: Env['artifactLookups'] = []
-  const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-  await host.register(
-    createHerdrPlugin({
-      defaultCwd: '/tmp/helm-herdr-default',
-      profiles: { get: async (id) => profiles.get(id) },
-      buildSpawnEnv: (conversationId, cwd) => ({
-        HELM_ENV: '1',
-        HELM_HUB_URL: 'http://127.0.0.1:3202',
-        HELM_TOKEN: 'SECRET-TOKEN',
-        HELM_CWD: cwd,
-        HELM_CONVERSATION_ID: String(conversationId),
-      }),
-      redact: (text) => text.replaceAll('SECRET-TOKEN', '[REDACTED]'),
-      runLocalGate: async () => ({ ok: true, output: 'local gate ok' }),
-      ...(opts.withGetArtifact
-        ? {
-            getArtifact: async (id: string, conversationId: number) => {
-              artifactLookups.push({ id, conversationId })
-              return {
-                id,
-                name: 'spec.md',
-                mimeType: 'text/markdown',
-                size: 42,
-                absPath: `/data/artifacts/1/${id}-spec.md`,
-              }
-            },
-          }
-        : {}),
-      ...(opts.nodeChannel ? { nodeChannel: opts.nodeChannel } : {}),
-      transport,
-    }),
-    { enabled: true },
-  )
+  if (opts.withGetArtifact) {
+    backend.getArtifactImpl = async (id, conversationId) => {
+      artifactLookups.push({ id, conversationId })
+      return {
+        id,
+        name: 'spec.md',
+        mimeType: 'text/markdown',
+        size: 42,
+        absPath: `/data/artifacts/1/${id}-spec.md`,
+      }
+    }
+  }
+  // 受控协议服务器：远端 nodeId 目标经 backend.nodeIpc 路由到同一 fixture
+  // （hubUrl 事实由 nodeIpc.getNodeHubUrl 提供；本机 target 走配置 socketPath）。
+  const socketPath = join(dataDir, 'herdr.sock')
+  const served = await serveTransport(transport, socketPath, () => {
+    const last = backend.spawnEnvLog.at(-1)?.nodeId
+    if (last !== undefined && last !== 'local') return { nodeId: last }
+    return {}
+  })
+  const hubUrls = opts.hubUrls ?? {}
+  backend.nodeIpc = {
+    isOnline: (nodeId: string) => nodeId === 'local' || nodeId in hubUrls || nodeId === 'remote-node',
+    getNodeHubUrl: (nodeId: string) => hubUrls[nodeId],
+    // 远端行协议与本地同一受控 transport：经 nodeIpc（serve 侧把 target
+    // 折叠为对应 nodeId）一问一答。
+    call: async (nodeId: string, input: { endpoint?: string; session?: string; line: string; timeoutMs?: number }, signal?: AbortSignal) => {
+      signal?.throwIfAborted()
+      return ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
+    },
+    subscribe: async () => { throw new HelmError('unsupported', 'attachments fixture 不订阅远端事件', 501) },
+  }
+  const host = new PluginHost({
+    dataDir,
+    host: backend,
+    docs: new MemoryDocStore(),
+    config: new MemoryConfigStore({ socketPath }),
+  })
+  await host.register(createHerdrPlugin(), { enabled: true })
   return {
     host,
     transport,
@@ -323,6 +406,7 @@ async function makeEnv(opts: { withGetArtifact?: boolean; nodeChannel?: HerdrNod
     artifactLookups,
     async close() {
       await host.dispose().catch(() => {})
+      await served.close()
       rmSync(dataDir, { recursive: true, force: true })
     },
   }
@@ -528,19 +612,8 @@ test('resume 远端窗格携带附件且无可达 HELM_HUB_URL：同样拒绝', 
 // ---------------------------------------------------------------------------
 
 /** 只提供 getNodeHubUrl 的最小通道（协议细节由 transport 层测试覆盖）。 */
-function hubUrlChannel(hubUrls: Record<string, string>): HerdrNodeChannel {
-  return {
-    isOnline: (nodeId) => nodeId in hubUrls,
-    getNodeHubUrl: (nodeId) => hubUrls[nodeId],
-    ipcCall: async () => ({ ok: false, error: { code: 'unknown', message: 'fixture 不承载 IPC' } }),
-    envFor: () => {
-      throw new Error('fixture 不承载文件环境')
-    },
-  }
-}
-
 test('节点通道 hubUrl 可达：附件门禁通过并自动注入 HELM_HUB_URL 回连', { timeout: 60_000 }, async () => {
-  const env = await makeEnv({ withGetArtifact: true, nodeChannel: hubUrlChannel({ 'build-01': 'http://10.0.0.7:3202' }) })
+  const env = await makeEnv({ withGetArtifact: true, hubUrls: { 'build-01': 'http://10.0.0.7:3202' } })
   try {
     scriptSuccess(env, 'hub-ok')
     const result = await spawnDirect(env, {
@@ -557,7 +630,7 @@ test('节点通道 hubUrl 可达：附件门禁通过并自动注入 HELM_HUB_UR
 })
 
 test('节点自身注册的 loopback hubUrl 原样保留，支持同机 BYOM 或节点端隧道', { timeout: 60_000 }, async () => {
-  const env = await makeEnv({ withGetArtifact: true, nodeChannel: hubUrlChannel({ 'build-02': 'http://127.0.0.1:3202' }) })
+  const env = await makeEnv({ withGetArtifact: true, hubUrls: { 'build-02': 'http://127.0.0.1:3202' } })
   try {
     scriptSuccess(env, 'node-loopback-ok')
     assert.equal(await spawnDirect(env, { agentType: 'herdr:agy@build-02', attachments: ['art-x'] }), 'node-loopback-ok')
@@ -568,7 +641,7 @@ test('节点自身注册的 loopback hubUrl 原样保留，支持同机 BYOM 或
 })
 
 test('节点通道提供非法 URL 时不放行附件', { timeout: 60_000 }, async () => {
-  const env = await makeEnv({ nodeChannel: hubUrlChannel({ 'build-02': 'file:///not-a-hub' }) })
+  const env = await makeEnv({ hubUrls: { 'build-02': 'file:///not-a-hub' } })
   try {
     await assert.rejects(
       spawnDirect(env, { agentType: 'herdr:agy@build-02', attachments: ['a1'] }),
@@ -579,7 +652,7 @@ test('节点通道提供非法 URL 时不放行附件', { timeout: 60_000 }, asy
 })
 
 test('Profile 显式 hubUrl 优先于节点通道 hubUrl', { timeout: 60_000 }, async () => {
-  const env = await makeEnv({ nodeChannel: hubUrlChannel({ 'build-03': 'http://10.0.0.7:3202' }) })
+  const env = await makeEnv({ hubUrls: { 'build-03': 'http://10.0.0.7:3202' } })
   try {
     env.profiles.set('explicit-url', {
       id: 'explicit-url',

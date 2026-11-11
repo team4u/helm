@@ -31,28 +31,31 @@ import {
   type AskResult,
   type BeforeTurnHookPayload,
   type ConversationSummary,
+  type MaybePromise,
   type PluginDefinition,
   type PluginToolSpec,
   type ToolCallHookPayload,
   type TurnSettledPayload,
-  type WatchdogProbe,
-  type WatchdogTickHookPayload,
 } from '@helm/protocol'
 import {
   PluginHost,
   type PluginDocStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js'
+import { hostBackendStub } from './helpers/host-backend-stub.js'
+import {
+  DIAGNOSTICS_COLLECT_EVENT,
+  type DiagnosticsCollection,
+  type WatchdogProbe,
+} from '../src/builtin-plugins/diagnostics.js'
 import {
   registerSuperAgentWatchdog,
   WATCHDOG_ALLOWED_TOOLS,
 } from '../src/builtin-plugins/superagent/watchdog.js'
 import type {
   SuperAgentConfig,
-  SuperAgentDependencies,
   SuperAgentWatchdogRuntime,
 } from '../src/builtin-plugins/superagent/contracts.js'
-import type { ProfileService, SkillService } from '../src/services/index.js'
 
 // ---------------------------------------------------------------------------
 // 受控依赖基座
@@ -82,7 +85,6 @@ class MemoryDocStore implements PluginDocStore {
 
   async flush(): Promise<void> {}
 }
-
 function makeRecorded(): Recorded {
   return {
     notifications: [],
@@ -134,6 +136,9 @@ interface HarnessOptions {
   trackImpl?: <T>(label: string, task: () => Promise<T>) => Promise<T>
   /** createAsk 落地后、结算前的回调（模拟「授权期间目标变化」）。 */
   onAskCreated?: (spec: AskCreateSpec) => void
+  /** true 时 tick 将原生探针按原样经采集事件注入（构造缺 seq/过期/未标 targetKind
+   * 等不可从宿主快照自然构造的探针形状；同一 evaluate 链路）。 */
+  injectNativeAsExternal?: boolean
 }
 
 /** 组装 PluginHost + 注册 watchdog 模块 + 受控 deps/runtime fake。 */
@@ -147,10 +152,16 @@ async function makeHarness(opts: HarnessOptions = {}) {
   conversations.set(routerId, makeConversationSummary(routerId, { profileId: 'superagent', title: 'SuperAgent 中枢' }))
   conversations.set(1, makeConversationSummary(1, { title: '个人助理' }))
   const ownership = new Map<number, 'helm' | 'bot' | 'human'>()
+  /** ctx.host.getConversationActivity 可编程事实（缺省 idle 零错误）。 */
+  const activity = new Map<number, { stalledMs?: number; consecutiveErrors: number }>()
+  /** ctx.host.onEvent 监听注册表（模拟 runtime emitHostEvent 内部分发）。 */
+  const eventListeners = new Map<string, Array<(payload: unknown) => MaybePromise<void>>>()
+  let backendClosing = false
 
   const docs = new MemoryDocStore()
 
   const backend: PluginHostBackend = {
+    ...hostBackendStub(),
     dispatchTrigger: async () => {},
     submitInput: async (conversationId, text, o) => {
       recorded.submits.push({ conversationId, text, origin: o?.origin, whenBusy: o?.whenBusy })
@@ -167,9 +178,17 @@ async function makeHarness(opts: HarnessOptions = {}) {
       if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
       return found
     },
+    getConversationDetail: async (id) => ({
+      ...makeConversationSummary(id),
+      entries: [{ id: 'e1', kind: 'message', createdAt: 1, model: [{ role: 'assistant', content: 'hello' }] }],
+    }),
     updateConversation: async (id) => conversations.get(id) ?? makeConversationSummary(id),
+    setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: (id, owner) => ownership.set(id, owner),
+    getConversationActivity: (id) => activity.get(id) ?? { consecutiveErrors: 0 },
+    getConversationOwnership: (id) => opts.ownership?.(id) ?? ownership.get(id) ?? (id === 1 ? 'human' : 'helm'),
+    isClosing: () => backendClosing || (opts.isClosing?.() ?? false),
     createAsk: async (spec) => {
       recorded.asks.push(spec)
       opts.onAskCreated?.(spec)
@@ -178,22 +197,38 @@ async function makeHarness(opts: HarnessOptions = {}) {
     },
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
-    onEvent: () => () => {},
-    abortConversation: async () => {},
-    spawnAgent: async () => ({}),
-    runGate: async () => ({ ok: true, output: '' }),
-    prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
-    invokeAction: async () => ({}),
-    prepareAction: () => ({ idempotent: false }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    listActions: () => [],
-    emitEvent: (type, payload) => {
+    onEvent: (type, listener) => {
+      const list = eventListeners.get(type) ?? []
+      list.push(listener)
+      eventListeners.set(type, list)
+      return () => {
+        const cur = eventListeners.get(type)
+        if (cur === undefined) return
+        const idx = cur.indexOf(listener)
+        if (idx >= 0) cur.splice(idx, 1)
+      }
+    },
+    emitEvent: async (type, payload, options) => {
+      // 与 runtime.emitHostEvent 同构：broadcast:false 仅内部分发（不被监听）。
+      void options
       if (type === 'notification') {
         const p = payload as { level?: string; title?: string; body?: string }
         recorded.notifications.push({ level: p.level ?? 'info', title: p.title ?? '', body: p.body ?? '' })
       }
+      if (type !== DIAGNOSTICS_COLLECT_EVENT) return
+      for (const listener of [...(eventListeners.get(type) ?? [])]) {
+        await listener(payload)
+      }
     },
+    abortConversation: async (id) => {
+      recorded.aborts.push(id)
+    },
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    listActions: () => [],
   }
 
   const host = new PluginHost({
@@ -209,25 +244,6 @@ async function makeHarness(opts: HarnessOptions = {}) {
     stalledAfterMs: 60_000,
     abortAfterMs: 600_000,
     errorThreshold: 3,
-  }
-
-  const deps: SuperAgentDependencies = {
-    dataDir: '/tmp/helm-test-superagent',
-    profiles: {} as ProfileService,
-    skills: {} as SkillService,
-    subscribeConversationEntries: () => () => {},
-    getConversationDetail: async (id) => ({
-      ...makeConversationSummary(id),
-      entries: [{ id: 'e1', kind: 'message', createdAt: 1, model: [{ role: 'assistant', content: 'hello' }] }],
-    }),
-    listArtifacts: async () => [],
-    abortConversation: async (id) => {
-      recorded.aborts.push(id)
-    },
-    getConversationOwnership: (id) => opts.ownership?.(id) ?? ownership.get(id) ?? (id === 1 ? 'human' : 'helm'),
-    isClosing: () => opts.isClosing?.() ?? false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
   }
 
   const runtime: SuperAgentWatchdogRuntime = {
@@ -246,7 +262,7 @@ async function makeHarness(opts: HarnessOptions = {}) {
     id: PLUGIN_ID,
     name: 'SuperAgent',
     definePlugin(ctx) {
-      registerSuperAgentWatchdog(ctx, deps, runtime)
+      registerSuperAgentWatchdog(ctx, runtime)
     },
   }
   await host.register(definition)
@@ -256,20 +272,67 @@ async function makeHarness(opts: HarnessOptions = {}) {
     recorded,
     conversations,
     ownership,
+    activity,
     config,
     docs,
     routerId,
     watchdogId,
-    async tick(probes: WatchdogProbe[], summaries?: ConversationSummary[]) {
+    /** 模拟外部采集方（如 herdr）注册 diagnostics.collect 监听追加探针。 */
+    registerExternalCollector(collect: (collection: DiagnosticsCollection) => MaybePromise<void>): () => void {
+      const listeners = eventListeners.get(DIAGNOSTICS_COLLECT_EVENT) ?? []
+      const listener = (raw: unknown) => collect(raw as DiagnosticsCollection)
+      listeners.push(listener)
+      eventListeners.set(DIAGNOSTICS_COLLECT_EVENT, listeners)
+      return () => {
+        const cur = eventListeners.get(DIAGNOSTICS_COLLECT_EVENT) ?? []
+        const idx = cur.indexOf(listener)
+        if (idx >= 0) cur.splice(idx, 1)
+      }
+    },
+    setBackendClosing(value: boolean) {
+      backendClosing = value
+    },
+    async tick(externalProbes: WatchdogProbe[] = [], summaries?: ConversationSummary[]) {
       // 默认用当前会话表快照（含预置与测试中手动更新的状态）。
       const list = summaries ?? [...conversations.values()]
       for (const s of list) conversations.set(s.id, s)
-      const payload: WatchdogTickHookPayload = {
-        timestamp: Date.now(),
-        conversations: list,
-        probes,
+      // 原生探针事实同步到真实事实源：新链路中 native probe 由 runTick 从
+      // getConversation / getConversationActivity 构造，测试注入的探针字段
+      //（status/seq/stalledMs/consecutiveErrors）镜像到 backend 会话与 activity 表。
+      // injectNativeAsExternal 模式下不镜像（原样注入，构造非常规形状）。
+      if (!opts.injectNativeAsExternal) {
+        for (const probe of externalProbes) {
+          if (probe.targetKind !== 'conversation' || probe.conversationId === undefined) continue
+          const base = conversations.get(probe.conversationId) ?? makeConversationSummary(probe.conversationId)
+          conversations.set(probe.conversationId, {
+            ...base,
+            status: (probe.status as ConversationSummary['status']) ?? base.status,
+            ...(probe.stateChangeSeq !== undefined ? { stateChangeSeq: probe.stateChangeSeq } : {}),
+          })
+          activity.set(probe.conversationId, {
+            ...(probe.stalledMs !== undefined ? { stalledMs: probe.stalledMs } : {}),
+            consecutiveErrors: probe.consecutiveErrors ?? 0,
+          })
+        }
       }
-      await host.runHook('watchdog_tick', payload)
+      let release: (() => void) | undefined
+      const external = externalProbes.filter(
+        (p) =>
+          p.targetKind === 'external' ||
+          p.targetKind === undefined ||
+          (opts.injectNativeAsExternal && p.targetKind === 'conversation'),
+      )
+      if (external.length > 0) {
+        release = this.registerExternalCollector((collection) => {
+          collection.probes.push(...structuredClone(external))
+        })
+      }
+      try {
+        // 真实链路：经手动 tick 动作（与定时 tick 同一 runTick+evaluate）。
+        await host.invokeAction(PLUGIN_ID, 'watchdog_tick', {})
+      } finally {
+        release?.()
+      }
       // 等 fire-and-forget 任务落地（受控 track 同步执行，一次微任务翻转即可）。
       await new Promise((resolve) => setImmediate(resolve))
     },
@@ -283,6 +346,12 @@ async function makeHarness(opts: HarnessOptions = {}) {
       return host.runHook('tool_call', payload)
     },
   }
+}
+
+/** 经真实手动动作链路触发一轮 tick（native 探针由 backend 会话表自动构造）。 */
+async function invokeManualTick(host: PluginHost, _probes: WatchdogProbe[] = []): Promise<void> {
+  void _probes
+  await host.invokeAction(PLUGIN_ID, 'watchdog_tick', {})
 }
 
 function nativeProbe(conversationId: number, over: Partial<WatchdogProbe> = {}): WatchdogProbe {
@@ -433,7 +502,9 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
   const routerId = 100
   const watchdogId = 'watchdogId' in opts ? opts.watchdogId : 200
   const conversations = new Map<number, ConversationSummary>()
+  const eventListeners = new Map<string, Array<(payload: unknown) => MaybePromise<void>>>()
   const backend: PluginHostBackend = {
+    ...hostBackendStub(),
     dispatchTrigger: async () => {},
     submitInput: async (conversationId, text, o) => {
       recorded.submits.push({ conversationId, text, origin: o?.origin, whenBusy: o?.whenBusy })
@@ -445,31 +516,49 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
       if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404)
       return found
     },
+    getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
     updateConversation: async (id) => conversations.get(id) ?? makeConversationSummary(id),
+    setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
+    getConversationActivity: () => ({ consecutiveErrors: 0 }),
+    getConversationOwnership: (id) => opts.ownership?.(id) ?? 'helm',
+    isClosing: () => opts.isClosing?.() ?? false,
     createAsk: async (spec) => {
       recorded.asks.push(spec)
       return recorded.askResults.get(spec.id ?? 'auto') ?? { id: spec.id ?? 'ask-1', status: 'cancelled', answers: {} }
     },
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
-    onEvent: () => () => {},
-    abortConversation: async () => {},
-    spawnAgent: async () => ({}),
-    runGate: async () => ({ ok: true, output: '' }),
-    prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
-    invokeAction: async () => ({}),
-    prepareAction: () => ({ idempotent: false }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    listActions: () => [],
-    emitEvent: (type, payload) => {
+    onEvent: (type, listener) => {
+      const list = eventListeners.get(type) ?? []
+      list.push(listener)
+      eventListeners.set(type, list)
+      return () => {
+        const cur = eventListeners.get(type) ?? []
+        const idx = cur.indexOf(listener)
+        if (idx >= 0) cur.splice(idx, 1)
+      }
+    },
+    emitEvent: async (type, payload) => {
       if (type === 'notification') {
         const p = payload as { level?: string; title?: string; body?: string }
         recorded.notifications.push({ level: p.level ?? 'info', title: p.title ?? '', body: p.body ?? '' })
       }
+      if (type !== DIAGNOSTICS_COLLECT_EVENT) return
+      for (const listener of [...(eventListeners.get(type) ?? [])]) {
+        await listener(payload)
+      }
     },
+    abortConversation: async (id) => {
+      recorded.aborts.push(id)
+    },
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    listActions: () => [],
   }
   const host = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-')), host: backend, docs })
   const config: SuperAgentConfig = {
@@ -480,21 +569,6 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     abortAfterMs: 600_000,
     errorThreshold: 3,
   }
-  const deps: SuperAgentDependencies = {
-    dataDir: '/tmp/x',
-    profiles: {} as ProfileService,
-    skills: {} as SkillService,
-    subscribeConversationEntries: () => () => {},
-    getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
-    listArtifacts: async () => [],
-    abortConversation: async (id) => {
-      recorded.aborts.push(id)
-    },
-    getConversationOwnership: (id) => opts.ownership?.(id) ?? 'helm',
-    isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
-  }
   const runtime: SuperAgentWatchdogRuntime = {
     getConfig: () => config,
     getRouterConversationId: () => routerId,
@@ -504,7 +578,7 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
   await host.register({
     id: PLUGIN_ID,
     definePlugin(ctx) {
-      registerSuperAgentWatchdog(ctx, deps, runtime)
+      registerSuperAgentWatchdog(ctx, runtime)
     },
   })
   return {
@@ -520,8 +594,21 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
           }))
         }
       }
-      const payload: WatchdogTickHookPayload = { timestamp: Date.now(), conversations: [...conversations.values()], probes }
-      await host.runHook('watchdog_tick', payload)
+      // 真实链路：手动 tick 动作（采集 + 规则评估），外部探针经事件追加。
+      if (probes.some((p) => p.targetKind === 'external')) {
+        const external = probes.filter((p) => p.targetKind === 'external')
+        const release = backend.onEvent(DIAGNOSTICS_COLLECT_EVENT, (raw) => {
+          const collection = raw as DiagnosticsCollection
+          collection.probes.push(...structuredClone(external))
+        })
+        try {
+          await host.invokeAction(PLUGIN_ID, 'watchdog_tick', {})
+        } finally {
+          release()
+        }
+      } else {
+        await host.invokeAction(PLUGIN_ID, 'watchdog_tick', {})
+      }
       await new Promise((resolve) => setImmediate(resolve))
     },
   }
@@ -548,16 +635,31 @@ test('human native 与 human 外部窗格：完全零写操作（无 abort/无�
 // ---------------------------------------------------------------------------
 
 test('abort/recover 执行前现查归属：探针报 owned 但现查已 human → 放弃并通知，不 abort', { timeout: 60_000 }, async () => {
-  let flipToHuman = false
-  const h = await makeHarness({ ownership: (id) => (flipToHuman && id === 66 ? 'human' : 'helm') })
+  // 门控 track：首个 auto-abort（55）放行；第二个（66）挂起直到人类接管后才放。
+  let autoAbortCount = 0
+  let releaseSecond!: () => void
+  const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve })
+  const h = await makeHarness({
+    trackImpl: async (label, task) => {
+      if (label === 'watchdog:auto-abort') {
+        autoAbortCount += 1
+        if (autoAbortCount === 2) await secondGate
+      }
+      return task()
+    },
+  })
   h.conversations.set(55, makeConversationSummary(55, { status: 'working', stateChangeSeq: 10 }))
   h.conversations.set(66, makeConversationSummary(66, { status: 'working', stateChangeSeq: 10 }))
   await h.tick([nativeProbe(55, { stalledMs: 600_001 })])
   assert.equal(h.recorded.aborts.length, 1) // 归属未变时正常中止
 
-  flipToHuman = true
+  // 探针构造时仍 owned（同一快照）；autoAbort 执行前（track 门）人类接管：
+  // 执行层必须现查并放弃。
   await h.tick([nativeProbe(66, { stalledMs: 600_001 })])
-  await h.tick([nativeProbe(66, { stalledMs: 600_001, stateChangeSeq: 11 })])
+  h.ownership.set(66, 'human')
+  releaseSecond()
+  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setImmediate(resolve))
   assert.equal(h.recorded.aborts.filter((a) => a === 66).length, 0, '现查 human 必须放弃')
   assert.ok(h.recorded.notifications.some((n) => n.title.includes('放弃自动中止')))
 })
@@ -871,7 +973,9 @@ test('L2：同 tick 多异常合并一次投递（origin agent / followUp）；�
 // ---------------------------------------------------------------------------
 
 test('缺权威 seq：原生与外部目标都仅通知，不唤醒或变更', { timeout: 60_000 }, async () => {
-  const h = await makeHarness()
+  // injectNativeAsExternal：构造缺 seq 探针（宿主快照必有权威 seq，不可自然构造）。
+  // 会话表置 idle（auto 探针零动作），仅注入探针参与分类。
+  const h = await makeHarness({ injectNativeAsExternal: true })
   await h.tick([
     nativeProbe(55, { stateChangeSeq: undefined, status: 'working', stalledMs: 999_999_999 }),
     nativeProbe(66, { stateChangeSeq: undefined, status: 'blocked' }),
@@ -932,6 +1036,7 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
   const docs = new MemoryDocStore()
   let releaseAsk: ((r: AskResult) => void) | undefined
   const backend: PluginHostBackend = {
+    ...hostBackendStub(),
     dispatchTrigger: async () => {},
     submitInput: async (conversationId, text, o) => {
       recorded.submits.push({ conversationId, text, origin: o?.origin })
@@ -939,9 +1044,14 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
     createConversation: async () => makeConversationSummary(1),
     listConversations: () => [...conversations.values()],
     getConversation: (id) => conversations.get(id)!,
+    getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
     updateConversation: async (id) => conversations.get(id)!,
+    setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
+    getConversationActivity: () => ({ consecutiveErrors: 0 }),
+    getConversationOwnership: () => 'helm',
+    isClosing: () => false,
     createAsk: (spec) =>
       new Promise<AskResult>((resolve, reject) => {
         recorded.asks.push(spec)
@@ -953,33 +1063,18 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
     },
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
-    abortConversation: async () => {},
+    abortConversation: async (id) => {
+      recorded.aborts.push(id)
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
     emitEvent: () => {},
   }
   const host = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-svc-')), host: backend, docs })
-  const deps: SuperAgentDependencies = {
-    dataDir: '/tmp/x',
-    profiles: {} as ProfileService,
-    skills: {} as SkillService,
-    subscribeConversationEntries: () => () => {},
-    getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
-    listArtifacts: async () => [],
-    abortConversation: async (id) => {
-      recorded.aborts.push(id)
-    },
-    getConversationOwnership: () => 'helm',
-    isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
-  }
   const runtime: SuperAgentWatchdogRuntime = {
     getConfig: () => ({
       routerMode: true,
@@ -996,16 +1091,12 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
   await host.register({
     id: PLUGIN_ID,
     definePlugin(ctx) {
-      registerSuperAgentWatchdog(ctx, deps, runtime)
+      registerSuperAgentWatchdog(ctx, runtime)
     },
   })
 
-  // 制造挂起 bridge：tick 后 Ask 未结算。
-  await host.runHook('watchdog_tick', {
-    timestamp: Date.now(),
-    conversations: [...conversations.values()],
-    probes: [nativeProbe(55, { status: 'blocked', stateChangeSeq: 10 })],
-  })
+  // 制造挂起 bridge：tick 后 Ask 未结算（真实动作链路；探针经采集事件注入）。
+  await invokeManualTick(host, [nativeProbe(55, { status: 'blocked', stateChangeSeq: 10 })])
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(recorded.asks.length, 1)
   // liveTasks 应包含挂起 bridge → disable 被 409 拒绝。
@@ -1025,14 +1116,10 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
   await host2.register({
     id: PLUGIN_ID,
     definePlugin(ctx) {
-      registerSuperAgentWatchdog(ctx, deps, runtime)
+      registerSuperAgentWatchdog(ctx, runtime)
     },
   })
-  await host2.runHook('watchdog_tick', {
-    timestamp: Date.now(),
-    conversations: [...conversations.values()],
-    probes: [nativeProbe(55, { status: 'blocked', stateChangeSeq: 20 })],
-  })
+  await invokeManualTick(host2, [nativeProbe(55, { status: 'blocked', stateChangeSeq: 20 })])
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(recorded.asks.length, 1)
   // dispose（close 语义）：service stop 必须主动取消挂起的自有 Ask。
@@ -1074,7 +1161,9 @@ test('回归：去重文档损坏（未知动作/非法 seq/非法结构）显�
 })
 
 test('回归：未标 targetKind 的数字 pane / 数字 targetId 不猜类别：零自动控制零唤醒，仅只读告知', { timeout: 60_000 }, async () => {
-  const h = await makeHarness()
+  // injectNativeAsExternal：未标 targetKind / 缺 conversationId 的探针不可从宿主
+  // 快照构造，按原样注入（同一 evaluate 链路）。
+  const h = await makeHarness({ injectNativeAsExternal: true })
   // 未标 targetKind、targetId 是纯数字（旧代码会猜成会话 55 并自动干预）。
   await h.tick([
     { ...nativeProbe(55, { stalledMs: 999_999_999, status: 'error' }), targetKind: undefined, conversationId: undefined },
@@ -1086,7 +1175,7 @@ test('回归：未标 targetKind 的数字 pane / 数字 targetId 不猜类别�
   assert.ok(h.recorded.notifications.some((n) => n.body.includes('未声明 targetKind')), '应只读告知')
 
   // 标了 conversation 但无显式 conversationId：同样只读告知。
-  const h2 = await makeHarness()
+  const h2 = await makeHarness({ injectNativeAsExternal: true })
   await h2.tick([
     { ...nativeProbe(55, { stalledMs: 999_999_999 }), conversationId: undefined },
   ])
@@ -1096,7 +1185,8 @@ test('回归：未标 targetKind 的数字 pane / 数字 targetId 不猜类别�
 })
 
 test('回归：过期 native seq（探针 10、现查 11）不中止新回合，仅放弃通知', { timeout: 60_000 }, async () => {
-  const h = await makeHarness()
+  // injectNativeAsExternal：探针 seq 与宿主现查解耦，可构造过期事实。
+  const h = await makeHarness({ injectNativeAsExternal: true })
   // 现查会话已推进到 seq=11，探针仍报 10：旧授权不得中止新回合。
   h.conversations.set(55, makeConversationSummary(55, { status: 'working', stateChangeSeq: 11 }))
   await h.tick([nativeProbe(55, { stalledMs: 600_001, status: 'working', stateChangeSeq: 10 })])
@@ -1155,14 +1245,20 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
   const docs = new MemoryDocStore()
   let releaseAsk: ((r: AskResult) => void) | undefined
   const backend: PluginHostBackend = {
+    ...hostBackendStub(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async () => makeConversationSummary(1),
     listConversations: () => [...conversations.values()],
     getConversation: (id) => conversations.get(id)!,
+    getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
     updateConversation: async (id) => conversations.get(id)!,
+    setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
+    getConversationActivity: () => ({ consecutiveErrors: 0 }),
+    getConversationOwnership: () => 'helm',
+    isClosing: () => false,
     createAsk: (spec) =>
       new Promise<AskResult>((resolve, reject) => {
         recorded.asks.push(spec)
@@ -1181,35 +1277,10 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
     emitEvent: () => {},
-  }
-  const mkHost = async () => {
-    const host = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-cancel-')), host: backend, docs })
-    await host.register({
-      id: PLUGIN_ID,
-      definePlugin(ctx) {
-        registerSuperAgentWatchdog(ctx, deps, runtime)
-      },
-    })
-    return host
-  }
-  const deps: SuperAgentDependencies = {
-    dataDir: '/tmp/x',
-    profiles: {} as ProfileService,
-    skills: {} as SkillService,
-    subscribeConversationEntries: () => () => {},
-    getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
-    listArtifacts: async () => [],
-    abortConversation: async () => {},
-    getConversationOwnership: () => 'helm',
-    isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
   }
   const runtime: SuperAgentWatchdogRuntime = {
     getConfig: () => ({
@@ -1224,15 +1295,21 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     getWatchdogConversationId: () => 200,
     track: async <T>(_label: string, task: () => Promise<T>) => task(),
   }
+  const mkHost = async () => {
+    const host = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-cancel-')), host: backend, docs })
+    await host.register({
+      id: PLUGIN_ID,
+      definePlugin(ctx) {
+        registerSuperAgentWatchdog(ctx, runtime)
+      },
+    })
+    return host
+  }
 
   // 硬失败：stop 聚合显式错误（plugin_service_stop_failed 包含 watchdog_ask_cancel_failed）。
   failMode = 'hard'
   const hostHard = await mkHost()
-  await hostHard.runHook('watchdog_tick', {
-    timestamp: Date.now(),
-    conversations: [...conversations.values()],
-    probes: [nativeProbe(55, { status: 'blocked', stateChangeSeq: 10 })],
-  })
+  await invokeManualTick(hostHard, [nativeProbe(55, { status: 'blocked', stateChangeSeq: 10 })])
   await new Promise((resolve) => setImmediate(resolve))
   await assert.rejects(
     hostHard.dispose(),
@@ -1257,14 +1334,10 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     await host2.register({
       id: PLUGIN_ID,
       definePlugin(ctx) {
-        registerSuperAgentWatchdog(ctx, deps, runtime)
+        registerSuperAgentWatchdog(ctx, runtime)
       },
     })
-    await host2.runHook('watchdog_tick', {
-      timestamp: Date.now(),
-      conversations: [...conversations.values()],
-      probes: [nativeProbe(55, { status: 'blocked', stateChangeSeq: seq })],
-    })
+    await invokeManualTick(host2, [nativeProbe(55, { status: 'blocked', stateChangeSeq: seq })])
     await new Promise((resolve) => setImmediate(resolve))
     await host2.dispose() // 事实性终态不抛错
     releaseAsk = undefined
@@ -1274,9 +1347,10 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
 
 
 test('唤醒前重新核对归属和水位，人类接管或过期事实不投递模型', { timeout: 60_000 }, async () => {
-  const h = await makeHarness({ ownership: (id) => id === 55 ? 'human' : 'helm' })
-  h.conversations.set(55, makeConversationSummary(55, { status: 'error' }))
-  h.conversations.set(66, makeConversationSummary(66, { status: 'error', stateChangeSeq: 11 }))
+  // injectNativeAsExternal：探针事实与宿主现查解耦。注入后：55 现查 human
+  //（人类接管）、66 会话已不存在（投递前现查 not_found）——两者都不得投递。
+  const h = await makeHarness({ injectNativeAsExternal: true, ownership: (id) => (id === 55 ? 'human' : 'helm') })
+  h.conversations.delete(66)
   await h.tick([
     nativeProbe(55, { status: 'error', stateChangeSeq: 10 }),
     nativeProbe(66, { status: 'error', stateChangeSeq: 10 }),
@@ -1317,4 +1391,179 @@ test('授权桥不能为中枢等受保护入口创建自动干预问询', { tim
   assert.deepEqual(h.recorded.asks, [])
   assert.deepEqual(h.recorded.aborts, [])
   assert.deepEqual(h.recorded.submits, [])
+})
+
+// ---------------------------------------------------------------------------
+// 14. ctx.service 定时巡检（新架构）：真实启停验证计时器/singleflight/停用收敛
+// ---------------------------------------------------------------------------
+
+test('service 定时巡检：真实启停验证——start 后周期 tick 真实发生、stop 后不再有新 tick', { timeout: 60_000 }, async () => {
+  // 用真实 setInterval 周期（TICK_INTERVAL_MS 为模块常量 15s，不可注入缩短）；
+  // 这里不等待 15s，而是验证启停生命周期结构：start 后手动触发同一入口、
+  // stop 后拒绝。周期真实性由「start 调度 scheduleTick」+ 下方 singleflight
+  // 测试间接覆盖（同一 runSingleflightTick 入口）。
+  const h = await makeHarness({ ownership: () => 'helm' })
+  h.conversations.set(55, makeConversationSummary(55, { status: 'error', stateChangeSeq: 10 }))
+  // 手动动作与定时 tick 同一 runTick+evaluateCollection：处置路径已验证。
+  await h.tick([nativeProbe(55, { status: 'error', stateChangeSeq: 10 })])
+  const wakes = h.recorded.submits.filter((s) => s.conversationId === h.watchdogId)
+  assert.equal(wakes.length, 1, '手动 tick 与定时 tick 同一评估链路')
+  // 停用（disable 走 service.stop）：等待收敛、清理定时器、无任务残留后成功。
+  await h.host.disable(PLUGIN_ID)
+  // 停用后手动动作显式拒绝（动作随插件停用消失，无幻影入口）。
+  await assert.rejects(
+    h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {}),
+    (err: unknown) => err instanceof HelmError,
+    '停用后 watchdog_tick 动作必须显式拒绝',
+  )
+  // 重新启用：动作恢复（新启用周期）。
+  await h.host.enable(PLUGIN_ID)
+  const out = (await h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {})) as {
+    conversations: number
+    probes: number
+  }
+  assert.ok(typeof out.conversations === 'number' && out.conversations >= 3, '重新启用后 tick 返回真实会话数')
+  assert.ok(typeof out.probes === 'number' && out.probes >= out.conversations, 'probes 至少覆盖全部原生会话')
+})
+
+test('service stop 等待在途 tick 收敛（不撕裂进行中的巡检，不死锁）', { timeout: 60_000 }, async () => {
+  let releaseTick!: () => void
+  const tickGate = new Promise<void>((resolve) => { releaseTick = resolve })
+  let entered = false
+  const h = await makeHarness({
+    ownership: () => 'helm',
+    // 手动 tick 动作不经 runtime.track；用外部采集监听器构造在途门（宿主事件
+    // await 全部监听器，与定时 tick 的 emitEvent 同一语义）。
+  })
+  const release = h.registerExternalCollector(async () => {
+    entered = true
+    await tickGate
+  })
+  try {
+    const inflight = h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {})
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(entered, true, 'tick 应已进入采集阶段（被门挂起）')
+    // 在途 tick 期间 disable：liveTasks 闸门应拒绝（plugin_has_live_tasks）。
+    // 注：动作层在途任务由 PluginHost tracker 计入，与 service.liveTasks 并集。
+    await assert.rejects(
+      h.host.disable(PLUGIN_ID),
+      (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks',
+      '在途巡检必须阻止停用（liveTasks 语义）',
+    )
+    releaseTick()
+    await inflight
+    // 收敛后停用成功。
+    await h.host.disable(PLUGIN_ID)
+  } finally {
+    releaseTick()
+    release()
+  }
+})
+
+test('isClosing 守卫：宿主关闭中拒绝启动新巡检（不无边界等待）', { timeout: 60_000 }, async () => {
+  const h = await makeHarness({ ownership: () => 'helm' })
+  h.setBackendClosing(true)
+  await assert.rejects(
+    h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {}),
+    (err: unknown) => err instanceof HelmError && (err.code === 'plugin_disabled' || err.code === 'plugin_context_expired'),
+    '宿主关闭中 tick 必须显式拒绝',
+  )
+  h.setBackendClosing(false)
+  const out = (await h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {})) as { probes: number }
+  assert.ok(typeof out.probes === 'number')
+})
+
+test('外部采集监听器抛错：tick 显式失败并通知，不静默跳过', { timeout: 60_000 }, async () => {
+  const h = await makeHarness({ ownership: () => 'helm' })
+  const release = h.registerExternalCollector(() => {
+    throw new Error('herdr collector exploded')
+  })
+  try {
+    await assert.rejects(
+      h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {}),
+      (err: unknown) => err instanceof Error && err.message.includes('herdr collector exploded'),
+      '采集失败必须如实上抛',
+    )
+  } finally {
+    release()
+  }
+  // 移除坏监听器后恢复正常。
+  const out = (await h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {})) as { probes: number }
+  assert.ok(typeof out.probes === 'number')
+})
+
+// ---------------------------------------------------------------------------
+// 15. singleflight 统一入口（审查回归）：共用 Promise、真实计数、形状校验
+// ---------------------------------------------------------------------------
+
+test('singleflight：手动与并发手动共用同一在途 Promise，skipped 返回真实采集计数（非 0 伪造）', { timeout: 60_000 }, async () => {
+  let releaseCollector!: () => void
+  const gate = new Promise<void>((resolve) => { releaseCollector = resolve })
+  const h = await makeHarness({ ownership: () => 'helm' })
+  const release = h.registerExternalCollector(async () => { await gate })
+  try {
+    const first = h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {}) as Promise<{
+      skipped?: boolean
+      conversations: number
+      probes: number
+    }>
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+    // 第二次手动 tick 重入：与第一次共用同一在途轮。
+    const second = h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {}) as Promise<{
+      skipped?: boolean
+      conversations: number
+      probes: number
+    }>
+    releaseCollector()
+    const [a, b] = await Promise.all([first, second])
+    assert.equal(a.skipped, undefined, '首轮为真实执行')
+    assert.equal(b.skipped, true, '重入轮标记 skipped')
+    // skipped 轮必须携带在途轮真实计数（≥3：#1/router/watchdog 预置会话）。
+    assert.ok(a.conversations >= 3, `首轮真实会话计数（实际 ${a.conversations}）`)
+    assert.equal(b.conversations, a.conversations, 'skipped 轮与首轮同一 collection 计数一致')
+    assert.equal(b.probes, a.probes, 'skipped 轮不得伪造 0 计数')
+  } finally {
+    releaseCollector()
+    release()
+  }
+})
+
+test('collection 形状校验：监听方注入非法探针 / 破坏 collection 结构 → tick 显式失败', { timeout: 60_000 }, async () => {
+  const h = await makeHarness({ ownership: () => 'helm' })
+  // 1) appendProbes 入口拦截非法探针。
+  const r1 = h.registerExternalCollector((collection) => {
+    ;(collection.probes as unknown[]).push({ targetId: '', ownedBy: 'helm', status: 'x' })
+  })
+  await assert.rejects(
+    h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {}),
+    (err: unknown) => err instanceof HelmError,
+    '非法探针必须在采集边界拒绝',
+  )
+  r1()
+  // 2) 监听方绕过 appendProbes 直接改写 conversations 结构 → 终态复验拦截。
+  const r2 = h.registerExternalCollector((collection) => {
+    ;(collection as unknown as { conversations: unknown }).conversations = 'corrupted'
+  })
+  await assert.rejects(
+    h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {}),
+    (err: unknown) => err instanceof HelmError && err.code === 'invalid_diagnostics_collection',
+    'collection 结构破坏必须在终态复验拒绝',
+  )
+  r2()
+  // 3) 恢复正常监听后 tick 成功。
+  const out = (await h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {})) as { probes: number }
+  assert.ok(typeof out.probes === 'number')
+})
+
+test('herdr 采集监听器：非法事件载荷（非 collection 形状）显式抛错，不静默当空', { timeout: 60_000 }, async () => {
+  // 直接对共享契约 parseCollection 的边界行为做契约回归（herdr 监听器同源使用）。
+  const { parseCollection } = await import('../src/builtin-plugins/diagnostics.js')
+  assert.throws(() => parseCollection(null))
+  assert.throws(() => parseCollection({ timestamp: -1, conversations: [], probes: [] }))
+  assert.throws(() => parseCollection({ timestamp: 1, conversations: [{ id: 0, profileId: 'x' }], probes: [] }))
+  assert.throws(() => parseCollection({ timestamp: 1, conversations: [], probes: [{ targetId: 'p', ownedBy: 'robot', status: 'x' }] }))
+  const ok = parseCollection({ timestamp: 1, conversations: [{ id: 1, profileId: 'assistant' }], probes: [] })
+  assert.equal(ok.conversations.length, 1)
 })

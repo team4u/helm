@@ -1,6 +1,6 @@
 # helm 开发约定
 
-**helm** 是极简持久微内核个人助理、多智能体确定性编排与 Herdr 协同主控台系统（见 `docs/archive/20261106-helm极简微内核与双7扩展点设计文档.md`）。本文件约束所有参与开发的智能体与人类。
+**helm** 是极简持久微内核个人助理、多智能体确定性编排与 Herdr 协同主控台系统。本文件约束所有参与开发的智能体与人类；架构详情见 `docs/architecture/` 与 `docs/plugins/`。
 
 ## 工作目录与历史仓库隔离（重要）
 
@@ -28,20 +28,22 @@ pnpm dev:web                   # 只起前端（需内核已在 3202）
 pnpm build && pnpm typecheck && pnpm test
 ```
 
-## 架构铁律（微内核 + 双 7 扩展点 + 内置插件）
+## 架构铁律（微内核 + Hook/UI 扩展点 + 内置插件）
 
 1. **内核极度精简（零业务角色硬编码 + 跨平台节点底座 `EnvFabric`）**：
-   - `@helm/kernel`（`helm-hub`）包含核心通用机制：① `pi-durable` 持久会话增强（通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5、`AskDoc`、`SecretStash`、`Artifacts`、纯文件资产热重载）；② 跨平台执行编排底座 `EnvFabric` + `NodeRegistry`（`/ws/node`，内建 `local` 节点 + 远端 `@helm/node` 守护进程，驱动 `bash / read / write / edit / gate / env exec`，与任何插件是否启用正交）；③ 原生 `spawnAgent` 子会话派生与受管 Git Worktree 底座（`WorktreeAllocator`）；④ 唯一强类型插件宿主 `PluginHost`（`definePlugin(ctx)`）。**`subagent` / `SubagentWorkflow` / `cleanup_worktree` 模型工具与编排引擎不是内核能力**，由 `builtin:workflow` 插件提供（见第 3 点）。
+   - `@helm/kernel`（`helm-hub`）只保留四块通用机制：① `pi-durable` 持久会话增强（通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5、`AskDoc`、`SecretStash`、`Artifacts`、纯文件资产热重载）与原生 `spawnAgent` 子会话派生（`agent_spawn` Hook 管道 + 原生子会话默认行）；② 跨平台执行编排底座 `EnvFabric` + `NodeRegistry`（`/ws/node`，内建 `local` 节点 + 远端 `@helm/node` 守护进程，驱动 `bash / read / write / edit / gate / env exec` 与按 `nodeId + canonicalPath` 目标的文件互斥，与任何插件是否启用正交）；③ Model 与 Auth（模型供应商接入、凭据与令牌管理）；④ 唯一强类型插件宿主 `PluginHost`（`definePlugin(ctx)`）。**Git Worktree 租约/续接/清理（`WorktreeAllocator`）不在内核**，完整迁入 `builtin:workflow`；内核不再提供 `watchdog` 定时器与 `watchdog_tick` Hook。**`subagent` / `SubagentWorkflow` / `cleanup_worktree` 模型工具与编排引擎不是内核能力**，由 `builtin:workflow` 插件提供（见第 3 点）。
    - **严禁在内核硬编码 `'router' | 'worker' | 'watchdog'` 枚举**；会话职责一律通过 `profileId` 与 `tags` 表达。
-2. **前后端对称「双 7 扩展点」，零 `if/else` 业务特判**：
-   - **后端 7 大可组合生命周期 Hook**（支持 `continue | transform | handled | block`）：`trigger`、`input`、`before_turn`、`tool_call / tool_result`、`agent_spawn`、`turn_settled`（统一覆盖 `completed | failed | aborted`）、`watchdog_tick`。
-   - **前端 7 大全界面扩展点**（同时支持 `@json-render` JSON Spec 与 `client.tsx` React 组件）：`sidebar.item/section`、`screen`（全屏自定义视图，支持左右 Split View 并排展示）、`timeline.renderer`、`tool.view`、`composer.pill/widget`、`workbench.panel`、`commandPalette (⌘K) / settings.panel`。
+2. **生命周期 Hook + 全界面扩展点，零 `if/else` 业务特判**：
+   - **后端可组合生命周期 Hook**（支持 `continue | transform | handled | block`）：`trigger`、`input`、`before_turn`、`tool_call / tool_result`、`agent_spawn`、`turn_settled`（统一覆盖 `completed | failed | aborted`）。内核不内置巡检定时器；周期性任务由插件自管服务调度（如 `builtin:superagent` 用自有 `ctx.service` 驱动巡检周期，`builtin:herdr` 通过通用进程内事件采集终端诊断）。
+   - **前端全界面扩展点**（`client.tsx` 单轨；宿主核心不再内置声明式 JSON 渲染轨道）：`sidebar.item/section`、`screen`（全屏自定义视图，支持左右 Split View 并排展示）、`timeline.renderer`、`tool.view`、`composer.pill/widget`、`workbench.panel`、`commandPalette (⌘K) / settings.panel`，以及统一微操作 `ctx.ui.action({ target: 'conversation:header' | 'conversation:row' | 'timeline:entry' })`、`ctx.ui.markdownCodeBlock({ id, languages, priority?, client })` 与独立保留的 `composerCompleter / artifactPreviewer / profileRuntime / slot` 组合面（不为凑固定数量强行合并）。
 3. **内置插件正交职责**：
-   - `builtin:workflow`（**默认启用、非 locked 可停用**）：承载 `subagent` / `SubagentWorkflow` / `cleanup_worktree` 三个模型工具、DSL 编排引擎（`builtin-plugins/workflow/engine`）、6 个动作（`list / run / runs / inspect / abort / cleanup_worktree`，映射为 `helm workflows …` 与 `helm worktrees cleanup` 动态命令）与工作流运行卡/任务面板 UI。私有 run 记录经 `ctx.doc('records')` 持久化，完整 `runs` 经 `ctx.sessionDoc` 按父会话分片存 `state.sqlite`，只通过对应元组的专用 SSE 按需订阅（不进入全局首帧或全局广播）；全局 `run-badges` 仅保留紧凑导航摘要，不包含运行详情。不使用内存降级或内核私有存储注入；运行中任务经 `liveTasks` 阻止停用（`409 plugin_has_live_tasks`），在途工作树经 `liveWorktrees` 阻止误清理；停用后其动作、CLI 命令与 UI 贡献即时消失。
+   - `builtin:workflow`（**默认启用、非 locked 可停用**）：承载 `subagent` / `SubagentWorkflow` / `cleanup_worktree` 三个模型工具、DSL 编排引擎（`builtin-plugins/workflow/engine`）与完整的受管 Git Worktree 生命周期（`WorktreeAllocator` 全量迁入：租约分配、断点续接与安全清理），6 个动作（`list / run / runs / inspect / abort / cleanup_worktree`，映射为 `helm workflows …` 与 `helm worktrees cleanup` 动态命令）与工作流运行卡/任务面板 UI。私有 run 记录经 `ctx.doc('records')` 持久化，完整 `runs` 经 `ctx.sessionDoc` 按父会话分片存 `state.sqlite`，只通过对应元组的专用 SSE 按需订阅（不进入全局首帧或全局广播）；全局 `run-badges` 仅保留紧凑导航摘要，不包含运行详情。不使用内存降级或内核私有存储注入；运行中任务经 `liveTasks` 阻止停用（`409 plugin_has_live_tasks`），在途工作树经 `liveWorktrees` 声明占用、由本插件的清理链拒绝误清理；停用后其动作、CLI 命令与 UI 贡献即时消失。
    - `builtin:profile`（**常驻不可卸载**）：角色与技能底座——为所有会话按其绑定的 `profileId` 注入独立的 `SYSTEM.md`（`profile.system`）、可用技能目录（`profile.skills`，白名单 + 插件启停实时过滤）与 `load_skill` 工具，自举默认种子角色 `assistant` 与系统技能 `helm-cli`，并在左栏挂载 `conversation:profile:assistant` 站位（不依赖某一具体会话存在）。
    - `builtin:memory`（**默认启用、可停用**）：完全自治的长期记忆插件——`MemoryStore` 自管 `<dataDir>/profiles/<id>/MEMORY.md`（文件锁 + 64k 上限唯一权威点），单 Profile 开关与初始化标记持久化于插件私有 `ctx.doc`（磁盘全文是唯一权威，不进公共文档/全局首帧/SSE 广播），`before_turn` 按开关注入 `memory.content` / `memory.guide` / `memory.assets-missing` 并动态注入 `update_memory` 用法指引，提供 `get / set / configure` 三个动作（自动映射 `helm memory …`）；停用后工具/动作/UI 即时消失且不留幻影提示词。
    - `builtin:herdr`（**可选编程插件**）：拦截 `agent_spawn`，复用内核 `EnvFabric` 目标节点通道驱动当地 Herdr 的 23 种 CLI 工具（`herdr:agy`、`herdr:claude`、`herdr:codex`、`herdr:pi` 等），执行「后台标签页 + `.helm/wf-out-*` 文件交接与原地追问自愈」；监听节点 Herdr IPC（Unix Socket / Windows Named Pipe）实现带 `expectedStateSeq` CAS 乐观锁的 `blocked ↔ AskDoc` 远程审批桥；向终端侧栏投射 `$helm` 状态 Token。
-   - `builtin:superagent`（实验性双层中枢）：首次启用时动态创建并持久化两个专属常驻会话——`routerConversationId`（`SuperAgent 中枢`，`profileId: 'superagent'`）与 `watchdogConversationId`（`巡检看门狗`，`profileId: 'watchdog'`）；角色由 `profileId` 表达，不重复打角色 Tag；通过挂载 `trigger / before_turn / turn_settled / watchdog_tick` 钩子与自有 `ctx.doc`，实现 0 阻塞总控路由、点名调用任意 `Profile` 专家 Bot 派生后台驻留 Worker、一键归档（`archive_worker`）、按 `origin` 自动向中枢汇报、`ThreadKey` 0ms 直通、`RecallGraph` 召回图谱与基于 `Skill(references/)` 的两层 Watchdog 巡检。
+   - `builtin:superagent`（实验性双层中枢）：首次启用时动态创建并持久化两个专属常驻会话——`routerConversationId`（`SuperAgent 中枢`，`profileId: 'superagent'`）与 `watchdogConversationId`（`巡检看门狗`，`profileId: 'watchdog'`）；角色由 `profileId` 表达，不重复打角色 Tag；通过挂载 `trigger / before_turn / turn_settled` 钩子、自有 `ctx.service` 自管巡检调度与自有 `ctx.doc`，实现 0 阻塞总控路由、点名调用任意 `Profile` 专家 Bot 派生后台驻留 Worker、一键归档（`archive_worker`）、按 `origin` 自动向中枢汇报、`ThreadKey` 0ms 直通、`RecallGraph` 召回图谱与基于 `Skill(references/)` 的两层 Watchdog 巡检（巡检周期由插件服务驱动，不依赖内核定时器或 `watchdog_tick` Hook）。
+   - `builtin:json-render`（**默认启用、可停用**）：承接宿主剥离的声明式 JSON 渲染能力——JSON DSL、求值器（evaluator）、界面原语（primitives）与生成式技能全部归口本插件；停用后插件不再解析 JSON Spec，相关围栏回退为普通代码块展示。
+   - `builtin:mermaid`（**默认启用、可停用**）：提供 Markdown 代码块中 Mermaid 图表的渲染能力；停用后 ```mermaid 围栏回退为普通代码块展示，不影响其他插件。
    - `builtin:triggers`：`cron` 与 `webhook` 入站连接器，经 `defang` 防逃逸信封投入 `trigger` 管道。
 4. **明确不做的事**：
    - 不做 `PiExtensionAdapter` 服务端 TUI 兼容层（真正的 `pi` 直接在 Herdr 终端窗格中运行）；

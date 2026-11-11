@@ -12,7 +12,7 @@
  * 各服务的 Why 注释在各自模块；本文件只保留组合顺序与跨服务协同。
  */
 
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import {
   Harness,
   createRegistry,
@@ -26,6 +26,7 @@ import type {
   AskResult,
   AskSpec,
   ConversationDetail,
+  ConversationEntry,
   ConversationInit,
   ConversationInputResult,
   ConversationPatch,
@@ -38,14 +39,14 @@ import type {
   NodeUpgradeCheckInput,
   NodeUpgradeCheckResult,
   NodeUpgradeResult,
-  WorktreeCleanupRequest,
-  WorktreeCleanupResult,
   EnvExecRequest,
   EnvExecResponse,
   MaybePromise,
+  PluginSkillAsset,
 } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 import {
   ArtifactService as SvcArtifactService,
   AuthService as SvcAuthService,
@@ -56,8 +57,12 @@ import {
   ProviderService,
   SecretStash,
   SkillService,
+  assertProfileId,
+  assertSkillId,
+  atomicWriteFile,
   ensureDataDir,
   resolveDataDir,
+  withFileLock,
   type Profile,
 } from '../services/index.js'
 import { PluginHost } from '../plugins/index.js'
@@ -74,10 +79,8 @@ import type { HelmToolDeps } from './tool-deps.js'
 import { buildManagedEnv, runGate } from './tools.js'
 import { runNativeSpawn, THINKING_LEVELS, validateJsonSchema } from './spawn.js'
 import { assertSchemaCompilable } from '../plugins/schema.js'
-import { WorktreeAllocator } from './worktree.js'
 import { gateResultMissingError, sanitizeExecutionInfo, sanitizeGateResult } from './spawn/spawn-exec.js'
 import { HelmPluginConfigStore } from './plugin-config-store.js'
-import { redactJsonValue } from '../redact.js'
 import { ConversationService } from './conversation-service.js'
 import { NodeManager } from './node-manager.js'
 import { ModelRegistry } from './model-registry.js'
@@ -111,17 +114,33 @@ export interface KernelRuntimeOptions {
    * start() 启动恢复，防止恢复任务在工具未注册时被判 orphaned。
    */
   autoResume?: boolean
-  /**
-   * watchdog 巡检间隔毫秒（默认 15000；start 后启动 singleflight 定时器）。
-   * 传 0 关闭定时巡检（测试用；仍可手动 watchdogTick）。
-   */
-  watchdogIntervalMs?: number
   /** 节点升级等待 commit 确认的超时毫秒（缺省 120000；测试可缩短）。 */
   nodeUpgradeTimeoutMs?: number
 }
 
-/** watchdog 默认巡检间隔（singleflight 定时器；0 关闭）。 */
-const DEFAULT_WATCHDOG_INTERVAL_MS = 15_000
+/** Profile id 公共边界校验：非法 id 归一为 HelmError 400（不外泄私有构造器）。 */
+function assertProfileIdPublic(id: string): void {
+  try {
+    assertProfileId(id)
+  } catch (err) {
+    throw new HelmError(
+      'validation_error',
+      `Profile id 非法：${err instanceof Error ? err.message : String(err)}`,
+      400,
+      { profileId: id },
+    )
+  }
+}
+
+/** profiles.get/directory 边界归一：非法 id -> 400 validation_error；其余错误原样上抛。 */
+function normalizeProfileBoundaryError(id: string, err: unknown): unknown {
+  try {
+    assertProfileId(id)
+    return err
+  } catch {
+    return new HelmError('validation_error', `Profile id 非法：${String(id)}`, 400, { profileId: id })
+  }
+}
 
 export class KernelRuntime {
   readonly dataDir: string
@@ -148,8 +167,7 @@ export class KernelRuntime {
   /** 无 assistant 人类入口时合并并发的 trigger 缺省会话创建。 */
   private defaultTriggerTargetCreation: Promise<number> | undefined
   private pluginHost: PluginHost | undefined
-  readonly worktrees: WorktreeAllocator
-  /** 包含模型回合、结构化输出修复与 gate；用于阻止清理仍在使用的执行目录。 */
+  /** 包含模型回合、结构化输出修复与 gate；通用运行中执行事实面（供插件层占用判定）。 */
   private readonly activeSpawnExecutions = new Map<string, AgentExecutionInfo>()
   /** 会话插件管理权：conversationId -> 持有 pluginId 集合（删除保护）。 */
   private readonly managedConversations = new Map<number, Set<string>>()
@@ -159,10 +177,6 @@ export class KernelRuntime {
   readonly envFabric: EnvFabric
   /** 受管进程 token（createProcessToken 产物；close dispose）。 */
   private processTokenHandle: { tokenOf(): string | undefined; dispose(): void } | undefined
-  /** watchdog 定时器（singleflight；unref 不阻退出）。 */
-  private watchdogTimer: NodeJS.Timeout | undefined
-  private watchdogInflight = false
-  private watchdogPending: Promise<void> | undefined
   /** turn_settled 钩子的在途执行（waitForIdle 前等待）。 */
   private settledInflight: Promise<void> = Promise.resolve()
   /** tool_call handled 接管缓存（callId -> 结果与归属会话；execute 层包装器消费）。 */
@@ -173,7 +187,6 @@ export class KernelRuntime {
   private closed = false
   /** 实际 hub URL（setHubUrl 可更新；工具 env 每次读取最新值）。 */
   private hubUrlValue: string
-  private readonly watchdogIntervalMs: number
   /** start() 幂等守护：组合层完成插件/Workflow 挂接后显式启动调度。 */
   private started = false
   private startPromise: Promise<void> | undefined
@@ -279,7 +292,6 @@ export class KernelRuntime {
       seedKeyCache: apiKeyCache,
       autoResume: options.autoResume !== false,
       externalModels: modelsExternal,
-      watchdogIntervalMs: options.watchdogIntervalMs ?? DEFAULT_WATCHDOG_INTERVAL_MS,
       nodeUpgradeTimeoutMs: options.nodeUpgradeTimeoutMs ?? 120_000,
       modelsStore,
       redactReport: (fn: (text: string) => string) => {
@@ -312,7 +324,6 @@ export class KernelRuntime {
     seedKeyCache: Record<string, string>
     autoResume: boolean
     externalModels?: Models
-    watchdogIntervalMs: number
     /** 节点升级等待 commit 确认超时（毫秒；缺省 120000）。 */
     nodeUpgradeTimeoutMs: number
     /** 动态模型目录持久缓存（open 创建，实例全存续期共用）。 */
@@ -351,7 +362,6 @@ export class KernelRuntime {
     const hubUrl =
       init.hubUrl ?? `http://127.0.0.1:${process.env['HELM_PORT'] ?? '3202'}`
     this.hubUrlValue = hubUrl
-    this.watchdogIntervalMs = init.watchdogIntervalMs
 
     // ---- 模型集合注册表（Models/Provider 全家；外部注入时空操作）----
     this.modelsRegistry = new ModelRegistry(
@@ -430,17 +440,6 @@ export class KernelRuntime {
       // 自动升级（HELM_AUTO_UPGRADE_NODES=1 显式开启）：节点上线且上报版本
       // 严格落后 Hub 时异步触发同一 upgradeNode 路径；不阻塞注册回调。
       if (online && conn !== undefined) void this.nodes.autoUpgradeIfEligible(nodeId, conn.version)
-    })
-    this.worktrees = new WorktreeAllocator({
-      envFabric: this.envFabric,
-      docStore: this.documentStore,
-      redact: (text) => this.stashService.redact(text),
-      isConversationWorking: (id) => {
-        if (this.store.getConv(id) === undefined) return false
-        const status = this.tracker.summaryOf(id).status
-        return status === 'working' || status === 'blocked'
-      },
-      isPathInUse: (nodeId, path) => this.isPathInUseForWorktrees(nodeId, path),
     })
     this.store.ftsRedact = (t) => this.stashService.redact(t)
 
@@ -553,8 +552,6 @@ export class KernelRuntime {
       toolDeps: { defaultCwd: init.cwd },
       evictConversationBase: (id) => this.envFabric.evictConversation(id),
       managedConversations: this.managedConversations,
-      cleanupWorktree: (request) => this.cleanupWorktree(request),
-      worktrees: this.worktrees,
       cancelAsksByConversation: async (id) => {
         await this.asks.cancelByConversation(id)
       },
@@ -652,6 +649,50 @@ export class KernelRuntime {
         assertIdle: (pluginId) => this.modelsRegistry.assertRuntimeProvidersIdle(pluginId),
       },
       host: {
+        isClosing: () => this.closed,
+        profiles: {
+          list: () => this.profilesSvc.list(),
+          get: (id) =>
+            this.profilesSvc.get(id).catch((err: unknown) => {
+              // 非法 id：私有 assert Error 归一为公共 400 validation_error；
+              // 其余错误（EIO/EACCES 等）原样上抛，绝不吞。
+              throw normalizeProfileBoundaryError(id, err)
+            }),
+          getSystem: async (id) => {
+            try {
+              return await this.profilesSvc.getSystem(id)
+            } catch (err) {
+              // 公共端口规范化：私有 FileNotFoundError 不外泄给插件（公共契约
+              // 是 HelmError not_found 404）；其余 I/O 错误原样上抛。
+              if (err instanceof FileNotFoundError) {
+                throw new HelmError('not_found', `Profile '${id}' 的 SYSTEM.md 不存在`, 404, { profileId: id })
+              }
+              throw err
+            }
+          },
+          save: (profile) => this.profilesSvc.save(profile),
+          directory: (id) => this.profileDirectory(id),
+        },
+        skills: {
+          list: () => this.skillsSvc.list(),
+          readFile: (skillId, path) => this.skillsSvc.readFile(skillId, path),
+          directory: (id) => this.skillDirectory(id),
+          ensureSkill: (asset, pluginId) => this.ensurePluginSkill(asset, pluginId),
+        },
+        secrets: {
+          get: (pluginId, key) => this.credentialsSvc.getPluginSecret(pluginId, key),
+          set: (pluginId, key, value) => this.credentialsSvc.setPluginSecret(pluginId, key, value),
+          delete: (pluginId, key) => this.credentialsSvc.deletePluginSecret(pluginId, key),
+          addRedaction: (value) => this.stashService.addRedaction(value),
+        },
+        setPluginConfig: (pluginId, value) => this.pluginConfig.set(pluginId, value, this.pluginHost?.getConfigSchema(pluginId) ?? {}),
+        nodeIpc: {
+          isOnline: (nodeId) => this.envFabric.isOnline(nodeId),
+          getNodeHubUrl: (nodeId) => this.envFabric.getNodeHubUrl(nodeId),
+          call: (nodeId, input, signal) => this.envFabric.ipcCall(nodeId, input, signal),
+          subscribe: (nodeId, input, onLine, onClosed, signal) =>
+            this.envFabric.ipcSubscribe(nodeId, input, onLine, onClosed, signal),
+        },
         dispatchTrigger: (event) => this.dispatchTrigger(event),
         submitInput: async (id, text, opts) => {
           await this.submitInput(id, text, opts)
@@ -659,12 +700,31 @@ export class KernelRuntime {
         createConversation: (init) => this.createConversation(init),
         listConversations: (filter) => this.listConversations(filter),
         getConversation: (id) => this.getConversation(id),
+        getConversationDetail: (id, options) => this.getConversationDetail(id, options),
         updateConversation: (id, patch) => this.updateConversation(id, patch),
         abortConversation: (id) => this.abortConversation(id),
+        getConversationOwnership: (id) => this.getConversationOwnership(id),
+        getConversationActivity: (id) => this.getConversationActivity(id),
+        listArtifacts: (conversationId) => Promise.resolve(this.artifactsSvc.list(conversationId)),
+        getArtifact: (artifactId, conversationId) => this.resolveAuthorizedAttachment(conversationId, artifactId),
+        redact: (text) => this.stashService.redact(text),
+        refreshModels: (options) => this.refreshModels(options),
+        withFileLock: <T,>(path: string, fn: () => Promise<T>, opts?: { signal?: AbortSignal }) =>
+          withFileLock(path, async () => {
+            opts?.signal?.throwIfAborted()
+            return fn()
+          }),
+        atomicWriteFile: (path, content) => atomicWriteFile(path, content),
+        completeText: (input) => this.completeConversationText(input),
+        executionEnv: (nodeId, cwd) => this.envFabric.envFor(nodeId, cwd),
+        buildSpawnEnv: (conversationId, cwd, nodeId) => this.buildSpawnEnv(conversationId, cwd, nodeId),
         spawnAgent: (request) => this.spawnAgent(request),
         runGate: (command, options) => this.runGate(command, options),
         prepareInterruptedConversations: (ids) => this.prepareInterruptedConversations(ids),
-        cleanupWorktree: (request, signal) => this.cleanupWorktree(request, signal),
+        resolveSpawnTarget: (input) => this.resolveSpawnTarget(input),
+        listActiveSpawnExecutions: () => this.listActiveSpawnExecutions(),
+        probeNodeFs: (input) => this.probeNodeFs(input),
+        redactText: (text) => this.stash.redact(text),
         invokeAction: (pluginId, actionId, input, context) => this.plugins.invokeAction(pluginId, actionId, input, context),
         prepareAction: (pluginId, actionId, input, context) =>
           this.plugins.prepareAction(pluginId, actionId, input, context),
@@ -682,6 +742,10 @@ export class KernelRuntime {
             output: this.stash.redact(res.output),
           }
         },
+        // 文件互斥队列：插件读-改-写与内核 write/edit 共享同一目标节点队列
+        //（EnvFabric.withFileMutationQueue；语义见 env/file-mutation-queue.ts）。
+        withFileMutationQueue: (target, fn, opts) =>
+          this.envFabric.withFileMutationQueue(target, fn, opts?.signal),
         onEvent: (type, listener) => this.onEvent(type, listener),
         emitEvent: (type, payload, options) => this.emitHostEvent(type, payload, options),
       },
@@ -744,6 +808,21 @@ export class KernelRuntime {
    * - SYSTEM.md / MEMORY.md 由 builtin:profile / builtin:memory 在
    *   before_turn sections 注入，这里不写业务 system。
    */
+  /** 插件受管技能自举：委托 SkillService.ensureSkill（受管覆盖 + 只读登记）。
+   * frontmatter managedByPlugin 必须指向调用插件（技能目录可用性随插件启停过滤的前提）。 */
+  private async ensurePluginSkill(asset: PluginSkillAsset, pluginId: string): Promise<void> {
+    const managed = /^managedByPlugin:[ \t]*['\"]?([^'\"\n]+)['\"]?[ \t]*$/m.exec(asset.skillMd)
+    if (managed?.[1]?.trim() !== pluginId) {
+      throw new HelmError(
+        'invalid_plugin_skill',
+        `插件 ${pluginId} 自举技能 ${asset.id} 的 SKILL.md frontmatter 必须声明 managedByPlugin: ${pluginId}（实际：${managed?.[1] ?? '缺失'}）`,
+        400,
+        { pluginId, skillId: asset.id },
+      )
+    }
+    await this.skillsSvc.ensureSkill(asset)
+  }
+
   private async ensureInitialConversation(): Promise<void> {
     const thinking = await this.conversations.resolveEffectiveThinkingLevel(undefined, 'assistant')
     const effective = await this.conversations.resolveEffectiveModel(undefined, 'assistant')
@@ -863,28 +942,9 @@ export class KernelRuntime {
       // 屏障失败时保持未启动态（不 resume），错误如实上抛。
       if (this.pluginHost) await this.pluginHost.start()
       this.harness.resume()
-      this.startWatchdogTimer()
       this.started = true
     })()
     return this.startPromise
-  }
-
-  /**
-   * watchdog 定时巡检（默认 15s；intervalMs=0 关闭）：unref 不阻进程退出，
-   * singleflight 防重入；tick 异常显式通知（不静默吞）。
-   */
-  private startWatchdogTimer(): void {
-    if (this.watchdogIntervalMs <= 0 || this.watchdogTimer !== undefined) return
-    this.watchdogTimer = setInterval(() => {
-      void this.watchdogTick().catch((error) => {
-        this.events.publish('notification', {
-          level: 'error',
-          title: 'watchdog 巡检失败',
-          body: String(error instanceof Error ? error.message : error),
-        })
-      })
-    }, this.watchdogIntervalMs)
-    this.watchdogTimer.unref()
   }
 
   /** 恢复运行服务用：先持久标记旧任务取消，不唤醒 SDK 全局调度器。
@@ -1264,11 +1324,12 @@ export class KernelRuntime {
     await this.submitInput(target, final.text, { origin: 'trigger', whenBusy: 'followUp' })
   }
 
-  /** 子代理派生：agent_spawn hook -> 默认原生 subagent（transform 传最终 payload）。 */
+  /** 子代理派生：agent_spawn around 管道（continuation）-> 默认原生 subagent。
+   * 内核零 Git/worktree 语义：隔离等执行环境要求由插件层经 next(finalReq)
+   * 兑现；内核只保留通用保证（schema 校验/gate 回报对账/结果验证）。 */
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
     if (request.schema !== undefined) assertSchemaCompilable(request.schema)
     const token = randomUUID()
-    let succeeded = false
     if (request.resume !== undefined) {
       const resumeId = /^\d+$/.test(request.resume) ? Number(request.resume) : this.agentSessions.get(request.resume)
       const child = resumeId !== undefined ? this.store.getConv(resumeId) : undefined
@@ -1287,31 +1348,8 @@ export class KernelRuntime {
       onResolved: (raw) => {
         const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
         info.nodeId ??= info.conversationId !== undefined ? this.store.getConv(info.conversationId)?.nodeId : undefined
-        if (request.isolation === 'worktree' && info.worktree === undefined) {
-          throw new HelmError('unsupported_runtime', '执行方未兑现请求的 worktree 隔离，拒绝按非隔离任务继续', 502)
-        }
-        if (info.worktree !== undefined) {
-          if (info.nodeId === undefined) throw new HelmError('execution_info_invalid', '隔离工作树必须回传实际 nodeId，不能推测外部运行时的节点', 502)
-          const managed = this.worktrees.findActive({ path: info.worktree.path, nodeId: info.nodeId }) ?? this.worktrees.registerExternal({
-            nodeId: info.nodeId, path: info.worktree.path, branch: info.worktree.branch,
-            parentConversationId: request.parentConversationId,
-            ...(info.conversationId !== undefined ? { conversationId: info.conversationId } : {}),
-            ...(info.executionId !== undefined ? { executionId: info.executionId } : {}),
-          })
-          info.worktree = { ...info.worktree, id: managed.id, ...(managed.repoRoot !== '' ? { repoRoot: managed.repoRoot } : {}), ...(managed.baseCommit !== '' ? { baseCommit: managed.baseCommit, dirtySource: managed.dirtySource } : {}) }
-        }
-        if (info.worktree !== undefined) {
-          const safe = redactJsonValue(info, (text) => this.stashService.redact(text)) as AgentExecutionInfo
-          if (JSON.stringify(safe) !== JSON.stringify(info)) {
-            throw new HelmError('worktree_metadata_secret', `隔离执行元数据包含已登记机密，拒绝持久化；执行标识 ${safe.executionId ?? safe.conversationId ?? '未知'}`, 400, { execution: safe })
-          }
-        }
         execution = info
         this.activeSpawnExecutions.set(token, info)
-        if (info.worktree !== undefined) {
-          const leases = this.documentStore.get<Record<string, AgentExecutionInfo>>('runtime/worktree-execution-leases', {})
-          this.documentStore.set('runtime/worktree-execution-leases', { ...leases, [token]: info })
-        }
         originalResolved?.(info)
       },
       onGateResult: (raw) => {
@@ -1325,124 +1363,109 @@ export class KernelRuntime {
         const validation = validateJsonSchema(result, request.schema)
         if (!validation.ok) throw new HelmError('schema_validation_failed', `子代理最终结果未满足 Schema：${validation.errors.join('; ')}`, 502)
       }
-      if (request.isolation === 'worktree' && execution?.worktree === undefined) {
-        throw new HelmError('unsupported_runtime', '执行方未回传请求的隔离工作树，不能报告成功', 502)
-      }
       if (request.gate !== undefined && execution?.executionId !== undefined && gate === undefined) {
         throw gateResultMissingError({ agentId: request.agentId ?? 'subagent', executionId: execution.executionId, command: request.gate })
       }
       if (gate !== undefined && !gate.ok) throw new HelmError('gate_failed', `子代理验收命令失败：${gate.output}`, 502)
-      succeeded = true
       return result
     } finally {
-      if (execution?.worktree !== undefined && (succeeded || execution.executionId === undefined)) {
-        const leases = this.documentStore.get<Record<string, AgentExecutionInfo>>('runtime/worktree-execution-leases', {})
-        const updated = Object.fromEntries(Object.entries(leases).filter(([key, info]) => {
-          if (key === token) return false
-          if (info.nodeId !== execution!.nodeId) return true
-          if (execution!.conversationId !== undefined) return info.conversationId !== execution!.conversationId
-          return info.executionId !== execution!.executionId
-        }))
-        this.documentStore.set('runtime/worktree-execution-leases', updated)
-      }
       this.activeSpawnExecutions.delete(token)
     }
   }
 
   private async spawnAgentObserved(request: AgentSpawnRequest): Promise<unknown> {
     // 附件门禁在进入 hook 链之前：agent_spawn 钩子与原生执行行均受统一授权
-    // 保护（产物存在 + 父会话链归属）；transform 改写后再校验一次。
+    // 保护（产物存在 + 父会话链归属）；插件 next 改写后再校验一次。
     if (request.attachments !== undefined && request.attachments.length > 0) {
       await this.resolveAuthorizedAttachments(request.parentConversationId, request.attachments)
     }
-    const outcome = await this.hookBridge.runHookChain('agent_spawn', request)
-    if (outcome?.action === 'handled') return outcome.result
-    const finalRequest =
-      outcome?.action === 'transform' ? (outcome.value as AgentSpawnRequest) : request
-    if (
-      finalRequest.attachments !== undefined &&
-      finalRequest.attachments.length > 0 &&
-      finalRequest !== request
-    ) {
-      await this.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
-    }
-    const resolvedAttachments =
-      finalRequest.attachments !== undefined && finalRequest.attachments.length > 0
-        ? await this.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
-        : undefined
-    // 显式命名的 SpawnHost（原 60+ 行内联对象字面量的提炼）。
-    return runNativeSpawn(
-      buildSpawnHost({
+    // around（continuation）管道：插件可包裹完整生命周期（在 next 前分配资源、
+    // next 后收敛）；handled 仍可完全接管；无插件时直接默认原生执行。
+    return this.hookBridge.runHookAround('agent_spawn', request, async (finalRequest) => {
+      if (
+        finalRequest.attachments !== undefined &&
+        finalRequest.attachments.length > 0 &&
+        finalRequest !== request
+      ) {
+        await this.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
+      }
+      const resolvedAttachments =
+        finalRequest.attachments !== undefined && finalRequest.attachments.length > 0
+          ? await this.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
+          : undefined
+      // 显式命名的 SpawnHost（原 60+ 行内联对象字面量的提炼）。
+      return runNativeSpawn(
+        buildSpawnHost({
+          finalRequest,
+          source: {
+            toolDeps: this.toolDeps,
+            harness: this.harness,
+            tracker: { getLastAssistantText: (id) => this.tracker.getLastAssistantText(id) },
+            defaultModel: this.modelsRegistry.defaultModel,
+            defaultThinkingLevel: this.modelsRegistry.defaultThinkingLevel,
+            agentSessions: this.agentSessions,
+            resolvedAttachments,
+            isNodeOnline: (nodeId) => this.envFabric.isOnline(nodeId),
+            buildAttachmentBlock: (resolved) => this.conversations.buildAttachmentBlock(resolved),
+            readProfileForSpawn: (profileId) => this.conversations.readProfile(profileId),
+            getConvMeta: (childId) => this.store.getConv(childId),
+            getConversationSummary: (childId) => {
+              const meta = this.store.getConv(childId)
+              return meta ? this.tracker.summaryOf(childId) : undefined
+            },
+            updateConversation: (childId, patch) => this.updateConversation(childId, patch),
+            installExtension: (extension) => {
+              this.registry.install(extension as never)
+            },
+            registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, parentToolCallId) => {
+              const profile = await this.conversations.readProfile(profileId)
+              const now = Date.now()
+              this.store.upsertConv({
+                id: childId,
+                title: `子代理 ${childId}`,
+                profileId,
+                // 内核零角色硬编码：tags 由调用方策略决定（原生 spawn 传 []）。
+                tags,
+                parentConversationId: parentId,
+                ...(parentToolCallId !== undefined && parentToolCallId !== ''
+                  ? { parentToolCallId }
+                  : {}),
+                // 与普通创建一致：Profile 节点优先于父会话缺省节点。
+                nodeId: nodeId ?? profile?.nodeId ?? this.store.getConv(parentId)?.nodeId ?? 'local',
+                cwd: childCwd,
+                model: modelMirror,
+                thinkingLevel: thinkingLevel ?? '',
+                thinkingLevelOverride: finalRequest.effort,
+                ...(finalRequest.model !== undefined && finalRequest.model !== '' ? { modelOverride: finalRequest.model } : {}),
+                unread: false,
+                pinned: false,
+                stateChangeSeq: 1,
+                completionSeq: 0,
+                createdAt: now,
+                updatedAt: now,
+              })
+              // 原生 spawn 自动 helm 归属（Watchdog 红线判定唯一可信来源）。
+              this.markConversationOwnership(childId, 'helm')
+              await this.tracker.observe(childId)
+              // 创建瞬间即广播含 parentConversationId / parentToolCallId 的摘要：
+              // 前端在 subagent 运行期 0ms 关联子会话，不等首轮摘要指纹变化。
+              if (this.store.getConv(childId) !== undefined && !this.store.isDeleted(childId)) {
+                this.events.publish('conversation.upsert', this.conversations.withOwnership(this.tracker.summaryOf(childId)))
+              }
+            },
+            bindChildToolCall: (childId, parentToolCallId) => {
+              const meta = this.store.getConv(childId)
+              if (meta === undefined || meta.parentToolCallId === parentToolCallId) return
+              this.store.upsertConv({ ...meta, parentToolCallId, updatedAt: Date.now() })
+              if (!this.store.isDeleted(childId)) {
+                this.events.publish('conversation.upsert', this.conversations.withOwnership(this.tracker.summaryOf(childId)))
+              }
+            },
+          },
+        }),
         finalRequest,
-        source: {
-          toolDeps: this.toolDeps,
-          harness: this.harness,
-          tracker: { getLastAssistantText: (id) => this.tracker.getLastAssistantText(id) },
-          defaultModel: this.modelsRegistry.defaultModel,
-          defaultThinkingLevel: this.modelsRegistry.defaultThinkingLevel,
-          agentSessions: this.agentSessions,
-          worktrees: this.worktrees,
-          resolvedAttachments,
-          isNodeOnline: (nodeId) => this.envFabric.isOnline(nodeId),
-          buildAttachmentBlock: (resolved) => this.conversations.buildAttachmentBlock(resolved),
-          readProfileForSpawn: (profileId) => this.conversations.readProfile(profileId),
-          getConvMeta: (childId) => this.store.getConv(childId),
-          getConversationSummary: (childId) => {
-            const meta = this.store.getConv(childId)
-            return meta ? this.tracker.summaryOf(childId) : undefined
-          },
-          updateConversation: (childId, patch) => this.updateConversation(childId, patch),
-          installExtension: (extension) => {
-            this.registry.install(extension as never)
-          },
-          registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, parentToolCallId) => {
-            const profile = await this.conversations.readProfile(profileId)
-            const now = Date.now()
-            this.store.upsertConv({
-              id: childId,
-              title: `子代理 ${childId}`,
-              profileId,
-              // 内核零角色硬编码：tags 由调用方策略决定（原生 spawn 传 []）。
-              tags,
-              parentConversationId: parentId,
-              ...(parentToolCallId !== undefined && parentToolCallId !== ''
-                ? { parentToolCallId }
-                : {}),
-              // 与普通创建一致：Profile 节点优先于父会话缺省节点。
-              nodeId: nodeId ?? profile?.nodeId ?? this.store.getConv(parentId)?.nodeId ?? 'local',
-              cwd: childCwd,
-              model: modelMirror,
-              thinkingLevel: thinkingLevel ?? '',
-              thinkingLevelOverride: finalRequest.effort,
-              ...(finalRequest.model !== undefined && finalRequest.model !== '' ? { modelOverride: finalRequest.model } : {}),
-              unread: false,
-              pinned: false,
-              stateChangeSeq: 1,
-              completionSeq: 0,
-              createdAt: now,
-              updatedAt: now,
-            })
-            // 原生 spawn 自动 helm 归属（Watchdog 红线判定唯一可信来源）。
-            this.markConversationOwnership(childId, 'helm')
-            await this.tracker.observe(childId)
-            // 创建瞬间即广播含 parentConversationId / parentToolCallId 的摘要：
-            // 前端在 subagent 运行期 0ms 关联子会话，不等首轮摘要指纹变化。
-            if (this.store.getConv(childId) !== undefined && !this.store.isDeleted(childId)) {
-              this.events.publish('conversation.upsert', this.conversations.withOwnership(this.tracker.summaryOf(childId)))
-            }
-          },
-          bindChildToolCall: (childId, parentToolCallId) => {
-            const meta = this.store.getConv(childId)
-            if (meta === undefined || meta.parentToolCallId === parentToolCallId) return
-            this.store.upsertConv({ ...meta, parentToolCallId, updatedAt: Date.now() })
-            if (!this.store.isDeleted(childId)) {
-              this.events.publish('conversation.upsert', this.conversations.withOwnership(this.tracker.summaryOf(childId)))
-            }
-          },
-        },
-      }),
-      finalRequest,
-    )
+      )
+    })
   }
 
   /**
@@ -1470,63 +1493,103 @@ export class KernelRuntime {
     return runGate(this.toolDeps, command, { ...options, ...(nodeId !== undefined ? { nodeId } : {}) })
   }
 
-  async cleanupWorktree(request: WorktreeCleanupRequest, signal?: AbortSignal): Promise<WorktreeCleanupResult> {
-    return this.worktrees.cleanup({ ...request, signal })
-  }
-
   /**
-   * watchdog tick（singleflight）：只采集真实事实，无业务策略、不自动恢复；
-   * probe 携带 getProbeFacts 的真实 stalledMs/consecutiveErrors；
-   * human 归属仅只读诊断（红线由插件与 host 共同遵守）。
+   * 通用 spawn 靶点解析（ctx.host.resolveSpawnTarget 后端）：与原生执行行
+   * 同构的链——源目录 request.cwd > profile.cwd > 父会话 cwd；节点
+   * profile.nodeId > 父会话绑定节点 > 'local'。不含业务路由；父会话或
+   * Profile 不存在时如实抛 not_found，绝不编造。
    */
-  async watchdogTick(): Promise<unknown> {
-    if (this.closed) throw new HelmError('runtime_closed', '内核正在关闭，拒绝启动巡检', 503)
-    if (this.watchdogInflight) {
-      // singleflight：上一轮未结束时不叠加执行（事实采集不重入）。
-      return { skipped: true, reason: 'watchdog tick already running' }
-    }
-    this.watchdogInflight = true
-    let finishTick!: () => void
-    const pending = new Promise<void>((resolve) => { finishTick = resolve })
-    this.watchdogPending = pending
-    try {
-      const summaries = this.listConversations()
-      const probes = summaries.map((summary) => {
-        const facts = this.tracker.getProbeFacts(summary.id)
-        return {
-          targetId: String(summary.id),
-          /**
-           * 归属权判定依据显式登记的 ownership 标记（conversation-ownership doc），
-           * 绝不依赖用户可改的 tags/parent 推断；判不准一律 human 只读
-           * （红线：宁可漏管不可越权）。
-           */
-          ownedBy: this.getConversationOwnership(summary.id),
-          status: summary.status,
-          targetKind: 'conversation' as const,
-          conversationId: summary.id,
-          stateChangeSeq: summary.stateChangeSeq,
-          ...(facts.stalledMs !== undefined ? { stalledMs: facts.stalledMs } : {}),
-          ...(facts.consecutiveErrors > 0 ? { consecutiveErrors: facts.consecutiveErrors } : {}),
-          facts: { doing: summary.doing, pendingAskCount: summary.pendingAskCount },
-        }
+  async resolveSpawnTarget(input: {
+    parentConversationId: number
+    profileId?: string
+    requestCwd?: string
+  }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }> {
+    const parent = this.store.getConv(input.parentConversationId)
+    if (parent === undefined) {
+      throw new HelmError('not_found', `父会话 ${input.parentConversationId} 不存在，无法解析 spawn 靶点`, 404, {
+        parentConversationId: input.parentConversationId,
       })
-      const payload = { timestamp: Date.now(), conversations: summaries, probes }
-      const outcome = await this.hookBridge.runHookChain('watchdog_tick', payload)
-      // 插件（如 builtin:herdr）可经 transform 扩充 payload（如附加探针字段）：
-      // 巡检调用方拿到的是钩子链最终形态，而非初始快照。
-      if (outcome?.action === 'transform' && outcome.value !== undefined) {
-        return outcome.value
-      }
-      return payload
-    } finally {
-      this.watchdogInflight = false
-      if (this.watchdogPending === pending) this.watchdogPending = undefined
-      finishTick()
     }
+    const profileId = input.profileId ?? 'assistant'
+    const profile = await this.conversations.readProfile(profileId)
+    if (profile === undefined) {
+      throw new HelmError('not_found', `agentType '${profileId}' 不是已注册的 Profile（profiles/${profileId} 不存在）`, 404)
+    }
+    const nodeId = profile.nodeId ?? parent.nodeId ?? 'local'
+    const sourceCwd = input.requestCwd ?? profile.cwd ?? parent.cwd ?? this.toolDeps.defaultCwd
+    return { nodeId, sourceCwd, parentCwd: parent.cwd }
+  }
+
+  /** 当前进程内仍在执行的 spawn 执行事实（ctx.host.listActiveSpawnExecutions 后端）。 */
+  listActiveSpawnExecutions(): AgentExecutionInfo[] {
+    return [...this.activeSpawnExecutions.values()].map((info) => ({ ...info }))
   }
 
   /**
-   * 会话归属权现读（Watchdog 红线判定唯一可信来源；superagent 工厂注入用）：
+   * 目标节点真实 fs 探测（ctx.host.probeNodeFs 后端）：经 EnvFabric 在目标
+   * 节点真实执行 exists / canonicalPath；探测失败（节点离线/权限/超时）
+   * 如实 reject，绝不编造。输出经全局脱敏。
+   */
+  async probeNodeFs(input: {
+    nodeId: string
+    op: 'exists' | 'canonicalPath'
+    path: string
+    signal?: AbortSignal
+  }): Promise<{ value: string | boolean }> {
+    if (typeof input.nodeId !== 'string' || input.nodeId === '') {
+      throw new HelmError('validation_error', `probeNodeFs 需要非空 nodeId（收到 ${String(input.nodeId)}）`, 400)
+    }
+    if (input.op !== 'exists' && input.op !== 'canonicalPath') {
+      throw new HelmError('validation_error', `probeNodeFs op 仅允许 exists | canonicalPath（收到 ${String(input.op)}）`, 400)
+    }
+    if (typeof input.path !== 'string' || input.path === '') {
+      throw new HelmError('validation_error', 'probeNodeFs 需要非空 path', 400)
+    }
+    const env = this.envFabric.envFor(input.nodeId, input.path)
+    const context = input.signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(input.signal, BACKGROUND_CONTEXT)
+    const result = input.op === 'exists'
+      ? await env.exists(input.path, context)
+      : await env.canonicalPath(input.path, context)
+    if (!result.ok) {
+      throw new HelmError(
+        'node_fs_probe_failed',
+        `节点 ${input.nodeId} 上 ${input.op}('${this.stash.redact(input.path)}') 探测失败：${result.error.code}: ${this.stash.redact(result.error.message)}`,
+        502,
+        { nodeId: input.nodeId, op: input.op, path: this.stash.redact(input.path) },
+      )
+    }
+    return { value: result.value }
+  }
+
+  /**
+   * 技能目录坐标（仅 id 边界校验；目录可能尚不存在，宿主不 mkdir）。
+   */
+  private async skillDirectory(id: string): Promise<string> {
+    try {
+      assertSkillId(id)
+    } catch (err) {
+      throw new HelmError(
+        'validation_error',
+        `Skill id 非法：${err instanceof Error ? err.message : String(err)}`,
+        400,
+        { skillId: id },
+      )
+    }
+    return join(this.dataDir, 'skills', id)
+  }
+
+  /**
+   * Profile 资产目录坐标（仅 id 边界校验；目录可能尚不存在——首次初始化由
+   * 调用方创建，宿主不 mkdir）。供插件管理同目录自有资产，不做 ../.. 逃逸。
+   */
+  private async profileDirectory(id: string): Promise<string> {
+    // id 边界规范化：assertProfileId 私有 Error 归一为公共 HelmError 400
+    // （与 get() 同口径，不外泄 kernel 私有构造器）。
+    assertProfileIdPublic(id)
+    return join(this.dataDir, 'profiles', id)
+  }
+
+  /** 会话归属权现读（未标记一律 human）：
    * - 会话不存在（含已删除 tombstone）时抛 not_found，绝不把已删会话的
    *   残留登记当作可执行授权返回；
    * - 未标记/标记非法值一律 human（宁漏管不越权）。
@@ -1539,6 +1602,19 @@ export class KernelRuntime {
     const owners = this.documentStore.get<Record<string, string>>('conversation-ownership', {})
     const marked = owners[String(conversationId)]
     return marked === 'helm' || marked === 'bot' ? marked : 'human'
+  }
+
+  /**
+   * 只读运行事实（ctx.host.getConversationActivity 后端）：基于真实活动
+   * 变更与回合结算计数，无在途 run 时不报停滞（空闲非停滞）；策略消费
+   * 归插件（如 superagent Watchdog），内核零业务判定。
+   */
+  getConversationActivity(conversationId: number): { stalledMs?: number; consecutiveErrors: number } {
+    const meta = this.store.getConv(conversationId)
+    if (meta === undefined || this.store.isDeleted(conversationId)) {
+      throw new HelmError('not_found', `会话不存在：${conversationId}`, 404, { conversationId })
+    }
+    return this.tracker.getProbeFacts(conversationId)
   }
 
   // ------------------------------------------------------------------
@@ -1758,44 +1834,13 @@ export class KernelRuntime {
     return this.closed
   }
 
-  /** worktree isPathInUse 探测（构造器内闭包用；单方法拆出防构造器膨胀）。 */
-  private isPathInUseForWorktrees(nodeId: string, path: string): boolean {
-    const contains = (cwd: string) => {
-      const windows = /^[A-Za-z]:[\\/]|^\\\\/.test(path)
-      const normalize = (value: string) => {
-        const normalized = value.replaceAll('\\', '/').replace(/\/$/, '')
-        return windows ? normalized.toLowerCase() : normalized
-      }
-      const normalized = normalize(path)
-      const candidate = normalize(cwd)
-      return candidate === normalized || candidate.startsWith(`${normalized}/`)
-    }
-    const leases = this.documentStore.get<Record<string, AgentExecutionInfo>>('runtime/worktree-execution-leases', {})
-    for (const [leaseId, info] of Object.entries(leases)) {
-      if (info.nodeId !== nodeId || info.worktree === undefined || !contains(info.worktree.path)) continue
-      if (!this.activeSpawnExecutions.has(leaseId)) {
-        throw new HelmError('worktree_execution_unknown', '工作树存在重启中断或未确认停止的执行，不能清理；请先检视并续接收尾，或确认停止后在目标节点手动清理 Git 工作树', 409, { nodeId, path, executionId: info.executionId, conversationId: info.conversationId })
-      }
-      return true
-    }
-    return [...this.activeSpawnExecutions.values()].some((info) => info.nodeId === nodeId && info.effectiveCwd !== undefined && contains(info.effectiveCwd)) ||
-      this.listConversations().some((conv) => (conv.nodeId ?? 'local') === nodeId && contains(conv.cwd) && (conv.status === 'working' || conv.status === 'blocked')) ||
-      (this.pluginHost?.listLiveWorktrees() ?? []).some((wt) => wt.nodeId === nodeId && contains(wt.path))
-  }
-
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
     this.modelsRegistry.abortRefresh(new Error('kernel closing'))
-    // 1) 停定时器与资产监听（不再产生新副作用）。
-    if (this.watchdogTimer !== undefined) {
-      clearInterval(this.watchdogTimer)
-      this.watchdogTimer = undefined
-    }
+    // 1) 停资产监听（不再产生新副作用）。
     this.assetReloader.stop()
     await this.nodes.dispose()
-    // 先等已进入 Hook 管道的巡检收敛，避免插件释放后仍有回调写旧 Doc。
-    await this.watchdogPending
     // 2) 等待在途 reloadModels（可能还在写 models 引用）。
     await this.assetReloader.waitForInflight()
     await this.modelsRegistry.dispose()

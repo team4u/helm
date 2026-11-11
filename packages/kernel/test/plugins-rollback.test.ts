@@ -24,17 +24,16 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import {
-  HelmError,
-  type ConversationSummary,
-  type WatchdogProbe,
-} from '@helm/protocol'
+import { HelmError, type ConversationSummary } from '@helm/protocol'
+import type { DiagnosticsCollection, WatchdogProbe } from '../src/builtin-plugins/diagnostics.js'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
+import { hostBackendStub } from './helpers/host-backend-stub.js'
 import { createProfilePlugin } from '../src/builtin-plugins/profile.js'
 import { createMemoryPlugin, MAX_MEMORY_CHARS as MEM_MAX, MemoryStore } from '../src/builtin-plugins/memory.js'
+import { createProfileFileHost } from './helpers/profile-file-host.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { createSuperAgentPlugin } from '../src/builtin-plugins/superagent.js'
-import { ProfileService, SkillService } from '../src/services/index.js'
-import type { SuperAgentDependencies } from '../src/builtin-plugins/superagent/contracts.js'
+import { ProfileService } from '../src/services/index.js'
 
 // ---------------------------------------------------------------------------
 // 共享基建
@@ -73,7 +72,7 @@ function makeConversation(id: number, over: Partial<ConversationSummary> = {}): 
   }
 }
 
-interface ControlledBackend extends PluginHostBackend {
+interface ControlledBackend {
   conversations: Map<number, ConversationSummary>
   notifications: Array<{ title: string; body: string; level: string }>
   submits: Array<{ conversationId: number; origin?: string }>
@@ -83,12 +82,25 @@ interface ControlledBackend extends PluginHostBackend {
   submitRejector: ((conversationId: number) => Error | undefined) | undefined
 }
 
-function makeControlledBackend(): ControlledBackend {
+function makeControlledBackend(dataDir: string): ControlledBackend & PluginHostBackend {
   const conversations = new Map<number, ConversationSummary>()
   conversations.set(1, makeConversation(1, { tags: ['root'] }))
   const notifications: Array<{ title: string; body: string; level: string }> = []
   const submits: Array<{ conversationId: number; origin?: string }> = []
-  const backend: ControlledBackend = {
+  // 真实 ProfileService/SkillService（临时目录）：自举资产走真实文件路径。
+  // profiles/skills 子端口复用 createProfileFileHost 的公共适配（含
+  // FileNotFoundError -> HelmError not_found 的边界转换，插件侧据此判定
+  // 资产缺失；superagent 等插件经 ctx.host.profiles/skills 消费）。
+  const fileHost = createProfileFileHost(dataDir)
+  const rawBackend: ControlledBackend & Partial<PluginHostBackend> = {
+    ...createPluginHostBackendFixture(),
+    ...createProfileFileHost(dataDir),
+    profiles: fileHost.profiles,
+    skills: fileHost.skills,
+    getConversationDetail: async (id: number) => ({ ...makeConversation(id), entries: [] }) as never,
+    listArtifacts: async () => [],
+    redact: (t: string) => t,
+    setPluginConfig: async () => {},
     conversations,
     notifications,
     submits,
@@ -134,11 +146,12 @@ function makeControlledBackend(): ControlledBackend {
     async cancelAsk() {},
     registerAskSeqResolver() { return () => {} },
     onEvent() { return () => {} },
+    getConversationActivity: () => ({ consecutiveErrors: 0 }),
+    getConversationOwnership: () => 'human',
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
@@ -147,7 +160,7 @@ function makeControlledBackend(): ControlledBackend {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
     },
   }
-  return backend
+  return Object.assign(hostBackendStub(), rawBackend) as ControlledBackend & PluginHostBackend
 }
 
 // ---------------------------------------------------------------------------
@@ -158,12 +171,12 @@ test('memory：并发 append（跨实例、锁内合并检查）最终不超上�
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-mem-limit-'))
   try {
     // 预置接近上限：剩余空间只够一次追加。
-    const base = new MemoryStore(dataDir)
+    const base = new MemoryStore(createProfileFileHost(dataDir))
     await base.ensureMemory('assistant')
     await base.updateMemory('assistant', 'x'.repeat(MEM_MAX - 1_000), 'replace')
 
     // 跨实例并发 append（每个都单独看是合法的 800 字符）：合并后必有一笔超限。
-    const stores = Array.from({ length: 4 }, () => new MemoryStore(dataDir))
+    const stores = Array.from({ length: 4 }, () => new MemoryStore(createProfileFileHost(dataDir)))
     const outcomes = await Promise.allSettled(
       stores.map((store) => store.updateMemory('assistant', 'y'.repeat(800), 'append')),
     )
@@ -189,19 +202,19 @@ test('memory：set 动作超限在写盘前拒绝（MEMORY.md 不半截写入）
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
-    const backend = makeControlledBackend()
+    const backend = makeControlledBackend(dataDir)
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createMemoryPlugin({ profiles }), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
     await assert.rejects(
       () => host.invokeAction('builtin:memory', 'set', { profileId: 'assistant', text: 'M'.repeat(MEM_MAX + 1) }),
       (err: unknown) => err instanceof HelmError && err.code === 'memory_limit_exceeded' && err.status === 400,
     )
     // MEMORY.md 未被创建（超限拒绝不留半截）。
     const memoryExists = existsSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
-    assert.ok(!memoryExists || !(await new MemoryStore(dataDir).getMemory('assistant')).startsWith('M'.repeat(100)), '超限 memory 不得落盘')
+    assert.ok(!memoryExists || !(await new MemoryStore(createProfileFileHost(dataDir)).getMemory('assistant')).startsWith('M'.repeat(100)), '超限 memory 不得落盘')
     // 合法大小（恰在上限）通过。
     await host.invokeAction('builtin:memory', 'set', { profileId: 'assistant', text: 'M'.repeat(MEM_MAX) })
-    assert.equal((await new MemoryStore(dataDir).getMemory('assistant')).length, MEM_MAX)
+    assert.equal((await new MemoryStore(createProfileFileHost(dataDir)).getMemory('assistant')).length, MEM_MAX)
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
@@ -210,7 +223,7 @@ test('memory：set 动作超限在写盘前拒绝（MEMORY.md 不半截写入）
 test('memory：写入路径无绕过上限参数（任何调用均强制 64k）', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-mem-nolimit-'))
   try {
-    const store = new MemoryStore(dataDir)
+    const store = new MemoryStore(createProfileFileHost(dataDir))
     await store.ensureMemory('assistant')
     // MemoryStore 公开 API 无 maxChars 参数：超限即拒绝，无「不设限」路径。
     await assert.rejects(
@@ -231,12 +244,12 @@ test('memory：同 Profile 双会话并发 update_memory append 最终不超上�
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
-    await new MemoryStore(dataDir).updateMemory('assistant', 'x'.repeat(MEM_MAX - 1_000), 'replace')
-    const backend = makeControlledBackend()
+    await new MemoryStore(createProfileFileHost(dataDir)).updateMemory('assistant', 'x'.repeat(MEM_MAX - 1_000), 'replace')
+    const backend = makeControlledBackend(dataDir)
     backend.conversations.set(10, makeConversation(10))
     backend.conversations.set(20, makeConversation(20))
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createMemoryPlugin({ profiles }), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
 
     const outcomes = await Promise.allSettled([
       host.executeTool('update_memory', { text: 'y'.repeat(800), mode: 'append' }, { conversationId: 10 }),
@@ -248,7 +261,7 @@ test('memory：同 Profile 双会话并发 update_memory append 最终不超上�
     for (const r of rejected) {
       assert.ok(r.reason instanceof HelmError && r.reason.code === 'memory_limit_exceeded')
     }
-    const final = await new MemoryStore(dataDir).getMemory('assistant')
+    const final = await new MemoryStore(createProfileFileHost(dataDir)).getMemory('assistant')
     assert.ok(final.length <= MEM_MAX, `最终 ${final.length} ≤ 上限`)
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -260,10 +273,10 @@ test('profile/memory：SYSTEM 与已初始化 MEMORY 缺失时注入显式 asset
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
-    const backend = makeControlledBackend()
+    const backend = makeControlledBackend(dataDir)
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createProfilePlugin({ profiles, skills: new SkillService(dataDir), plugins: host }), { enabled: true })
-    await host.register(createMemoryPlugin({ profiles }), { enabled: true })
+    await host.register(createProfilePlugin(), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
 
     // 先跑一回合建立 memory initializedProfiles 标记（惰性初始化 MEMORY.md）。
     {
@@ -338,14 +351,14 @@ test('memory：权限/IO 错误不被吞（仅 FileNotFoundError 走缺失路径
     await profiles.ensureDefault()
     // 先建立已初始化状态，再把 MEMORY.md 换成同名目录：readFile 得 EISDIR
     //（真实 IO 错，非 ENOENT 缺失）。
-    await new MemoryStore(dataDir).ensureMemory('assistant')
+    await new MemoryStore(createProfileFileHost(dataDir)).ensureMemory('assistant')
     unlinkSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
     const { mkdirSync } = await import('node:fs')
     mkdirSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
 
-    const backend = makeControlledBackend()
+    const backend = makeControlledBackend(dataDir)
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    await host.register(createMemoryPlugin({ profiles }), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
     const turn = {
       conversation: makeConversation(1),
       sections: [],
@@ -376,33 +389,21 @@ test('memory：权限/IO 错误不被吞（仅 FileNotFoundError 走缺失路径
 
 interface SuperAgentEnv {
   host: PluginHost
-  backend: ControlledBackend
+  backend: ControlledBackend & Pick<PluginHostBackend, 'emitEvent' | 'markConversationOwnership'>
   docs: MemoryDocStore
   close(): Promise<void>
 }
 
 async function makeSuperAgentEnv(): Promise<SuperAgentEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-roll-'))
-  const backend = makeControlledBackend()
+  const backend = makeControlledBackend(dataDir)
   const docs = new MemoryDocStore()
+  await new ProfileService(dataDir).ensureDefault()
+  // Host 直接持有受控 backend 本体（不 clone）：测试对 backend 的失败注入
+  // （markConversationOwnership 覆盖 / submitRejector）与插件消费的
+  // ctx.host 必须是同一对象。
   const host = new PluginHost({ dataDir, host: backend, docs })
-  const profiles = new ProfileService(dataDir)
-  const skills = new SkillService(dataDir)
-  await profiles.ensureDefault()
-  const deps: SuperAgentDependencies = {
-    dataDir,
-    profiles,
-    skills,
-    subscribeConversationEntries: () => () => {},
-    getConversationDetail: async (id) => ({ ...makeConversation(id), entries: [] }) as never,
-    listArtifacts: async () => [],
-    abortConversation: async () => {},
-    getConversationOwnership: () => 'helm',
-    isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
-  }
-  await host.register(createSuperAgentPlugin(deps), { enabled: true })
+  await host.register(createSuperAgentPlugin(), { enabled: true })
   return {
     host,
     backend,
@@ -514,16 +515,18 @@ async function makeWatchdogHarness(opts: {
   ownership?: (id: number) => 'helm' | 'bot' | 'human'
 } = {}) {
   const recorded: WatchdogRecorded = { notifications: [], aborts: [], abortErrors: [], submits: [] }
-  /** 测试可变注入：true 时 abortConversation 拒绝（模拟调用失败）。 */
+  /** 测试可变注入：true 时 abortConversation 拒绝（模拟调用失败；插件消费 ctx.host.abortConversation）。 */
   let abortShouldFail = false
   const routerId = 100
   const watchdogId = 200
   const conversations = new Map<number, ConversationSummary>()
+  const eventListeners = new Map<string, Array<(payload: unknown) => unknown>>()
   conversations.set(watchdogId, makeConversation(watchdogId, { profileId: 'watchdog', title: '巡检看门狗' }))
   conversations.set(routerId, makeConversation(routerId, { profileId: 'superagent', title: 'SuperAgent 中枢' }))
   conversations.set(1, makeConversation(1, { title: '个人助理' }))
   const docs = new MemoryDocStore()
   const backend: PluginHostBackend = {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {},
     submitInput: async (conversationId, text, o) => {
       recorded.submits.push({ conversationId, text, origin: o?.origin })
@@ -546,20 +549,41 @@ async function makeWatchdogHarness(opts: {
     createAsk: async () => ({ id: 'ask-1', status: 'cancelled', answers: {} }),
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
-    onEvent: () => () => {},
-    abortConversation: async () => {},
+    onEvent: (type, listener) => {
+      const list = eventListeners.get(type) ?? []
+      list.push(listener)
+      eventListeners.set(type, list)
+      return () => {
+        const cur = eventListeners.get(type) ?? []
+        const idx = cur.indexOf(listener)
+        if (idx >= 0) cur.splice(idx, 1)
+      }
+    },
+    getConversationActivity: () => ({ consecutiveErrors: 0 }),
+    getConversationOwnership: (id) => opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helm'),
+    abortConversation: async (id) => {
+      if (abortShouldFail) {
+        recorded.abortErrors.push(id)
+        throw new HelmError('abort_failed', '测试注入：abort 调用失败', 500)
+      }
+      recorded.aborts.push(id)
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     listActions: () => [],
-    emitEvent: (type, payload) => {
+    emitEvent: async (type, payload) => {
       if (type === 'notification') {
         const p = payload as { level?: string; title?: string; body?: string }
         recorded.notifications.push({ level: p.level ?? 'info', title: p.title ?? '', body: p.body ?? '' })
+      }
+      if (type === 'diagnostics.collect') {
+        for (const listener of [...(eventListeners.get(type) ?? [])]) {
+          await listener(payload)
+        }
       }
     },
   }
@@ -576,30 +600,12 @@ async function makeWatchdogHarness(opts: {
     abortAfterMs: 600_000,
     errorThreshold: 3,
   }
-  const deps = {
-    dataDir: '/tmp/helm-test-wd',
-    profiles: {} as ProfileService,
-    skills: {} as SkillService,
-    getConversationDetail: async (id: number) => ({ ...makeConversation(id), entries: [] }),
-    listArtifacts: async () => [],
-    abortConversation: async (id: number) => {
-      if (abortShouldFail) {
-        recorded.abortErrors.push(id)
-        throw new HelmError('abort_failed', '测试注入：abort 调用失败', 500)
-      }
-      recorded.aborts.push(id)
-    },
-    getConversationOwnership: (id: number) => opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helm'),
-    isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t: string) => t,
-  }
   const { registerSuperAgentWatchdog } = await import('../src/builtin-plugins/superagent/watchdog.js')
   await host.register({
     id: 'builtin:superagent',
     name: 'SuperAgent',
     definePlugin(ctx) {
-      registerSuperAgentWatchdog(ctx, deps as never, {
+      registerSuperAgentWatchdog(ctx, {
         getConfig: () => config,
         getRouterConversationId: () => routerId,
         getWatchdogConversationId: () => watchdogId,
@@ -617,8 +623,17 @@ async function makeWatchdogHarness(opts: {
       abortShouldFail = value
     },
     async tick(probes: WatchdogProbe[]) {
-      const payload = { timestamp: Date.now(), conversations: [...conversations.values()], probes }
-      await host.runHook('watchdog_tick', payload as never)
+      // 真实链路：手动 tick 动作（探针经采集事件注入；runTick 会另行构造
+      // 全部原生会话探针——本 harness 预置会话为 idle，无自动处置）。
+      const release = backend.onEvent('diagnostics.collect', (raw) => {
+        const collection = raw as DiagnosticsCollection
+        collection.probes.push(...structuredClone(probes))
+      })
+      try {
+        await host.invokeAction('builtin:superagent', 'watchdog_tick', {})
+      } finally {
+        release()
+      }
       await new Promise((resolve) => setImmediate(resolve))
     },
     /** 直改去重文档（构造淘汰场景：预置大量陈旧/新鲜外部键）。 */

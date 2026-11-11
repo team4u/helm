@@ -16,7 +16,6 @@
 
 import { connect } from 'node:net'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import type { Context } from '@earendil-works/chord/context'
 import type { RpcResult } from '@helm/protocol'
 import type { HerdrNodeChannel, HerdrNodeEnv } from './contracts.js'
 import { isWindowsShapedPath } from './transport.js'
@@ -79,7 +78,7 @@ export class LocalNodeChannel implements HerdrNodeChannel {
   async ipcCall(
     nodeId: string,
     input: { endpoint?: string; session?: string; line: string; timeoutMs?: number },
-    context: Context,
+    signal?: AbortSignal,
   ): Promise<RpcResult<string>> {
     if (nodeId !== 'local') {
       return { ok: false, error: { code: 'invalid', message: `LocalNodeChannel 仅承载 'local' 节点（收到 '${nodeId}'）` } }
@@ -87,7 +86,7 @@ export class LocalNodeChannel implements HerdrNodeChannel {
     if (input.endpoint === undefined) {
       return { ok: false, error: { code: 'invalid', message: 'ipcCall requires an explicit endpoint' } }
     }
-    if (context.abortSignal?.aborted) {
+    if (signal?.aborted) {
       return { ok: false, error: { code: 'aborted', message: 'ipcCall aborted' } }
     }
     return await new Promise<RpcResult<string>>((resolve) => {
@@ -100,7 +99,7 @@ export class LocalNodeChannel implements HerdrNodeChannel {
         if (done) return
         done = true
         clearTimeout(timer)
-        context.abortSignal?.removeEventListener('abort', onAbort)
+        signal?.removeEventListener('abort', onAbort)
         socket.destroy()
         resolve(result)
       }
@@ -114,7 +113,7 @@ export class LocalNodeChannel implements HerdrNodeChannel {
       timer?.unref?.()
       let settledTimeout = false
       const onAbort = () => settle({ ok: false, error: { code: 'aborted', message: 'ipcCall aborted' } })
-      context.abortSignal?.addEventListener('abort', onAbort, { once: true })
+      signal?.addEventListener('abort', onAbort, { once: true })
       socket.on('connect', () => socket.write(`${input.line}\n`))
       socket.on('data', (chunk: Buffer) => {
         chunks.push(chunk)
@@ -123,7 +122,7 @@ export class LocalNodeChannel implements HerdrNodeChannel {
         if (newline >= 0) settle({ ok: true, value: joined.subarray(0, newline).toString('utf8') })
       })
       socket.once('close', () => {
-        if (settledTimeout || context.abortSignal?.aborted) return
+        if (settledTimeout || signal?.aborted) return
         const joined = Buffer.concat(chunks)
         settle(
           joined.length === 0
@@ -132,7 +131,7 @@ export class LocalNodeChannel implements HerdrNodeChannel {
         )
       })
       socket.once('error', (err) => {
-        if (settledTimeout || context.abortSignal?.aborted) return
+        if (settledTimeout || signal?.aborted) return
         settle({ ok: false, error: { code: 'unknown', message: err.message } })
       })
     })
@@ -145,7 +144,7 @@ export class LocalNodeChannel implements HerdrNodeChannel {
     const cached = this.envCache.get(cwd)
     if (cached !== undefined) return cached
     // NodeExecutionEnv 结构即满足 HerdrNodeEnv（Pick 子集）；取消由调用方
-    // 经 withAbortSignal(signal, BACKGROUND_CONTEXT) 派生的 context 携带。
+    // 在 exec 选项处派生（transport 层 withAbortSignal）。
     const env: HerdrNodeEnv = new NodeExecutionEnv({ cwd })
     this.envCache.set(cwd, env)
     return env

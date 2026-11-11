@@ -16,6 +16,7 @@ import {
   type PublicPluginSessionDoc,
 } from '@helm/protocol'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { SessionDocEventHub } from '../src/runtime/events.js'
 import { AuthService } from '../src/services/index.js'
 import { createHubHandler, startHub, type KernelRuntimeLike, type SessionDocEventPort } from '../src/http/index.js'
@@ -52,6 +53,7 @@ let metricsHandle: PluginSessionDocHandle<{ n: number }> | undefined
 let globalFrames: HelmEventFrame[] = []
 
 const backend: PluginHostBackend = {
+  ...createPluginHostBackendFixture(),
   dispatchTrigger: async () => {},
   submitInput: async () => {},
   createConversation: async () => makeConversation(42),
@@ -68,10 +70,15 @@ const backend: PluginHostBackend = {
   registerAskSeqResolver: () => () => {},
   onEvent: () => () => {},
   abortConversation: async () => {},
+  getConversationActivity(): { consecutiveErrors: number } {
+    return { consecutiveErrors: 0 }
+  },
+  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    return 'human'
+  },
   spawnAgent: async () => ({}),
   runGate: async () => ({ ok: true, output: '' }),
   prepareInterruptedConversations: async () => {},
-  cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
   invokeAction: async () => ({}),
   prepareAction: () => ({ idempotent: false }),
   execEnv: async () => {

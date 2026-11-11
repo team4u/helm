@@ -10,7 +10,7 @@
  * - CSS 符号链接逃逸与 @import 越根拒绝；
  * - 无 CSS 时不误产出保留导出；
  * - 插件自身占用保留导出名明确报错；
- * - 缓存版本失效（旧 v2 清单不复用，强制重编译）。
+ * - 缓存版本失效（旧 v3 清单不复用，强制重编译）。
  */
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
@@ -182,7 +182,7 @@ test('CSS 符号链接逃逸拒绝：根内 symlink 指向根外样式', { timeo
     await assert.rejects(
       () => compilePluginClientModule('test:css-symlink', root, 'index.tsx', dataDir),
       (err: unknown) =>
-        err instanceof HelmError && err.code === 'client_compile_failed' && /越出 clientRoot/.test(err.message),
+        err instanceof HelmError && err.code === 'client_compile_failed' && /越界/.test(err.message),
     )
   } finally {
     await rm(outsideDir, { recursive: true, force: true })
@@ -201,7 +201,7 @@ test('CSS @import 越根拒绝：../ 引用根外样式', { timeout: 60_000 }, a
   await assert.rejects(
     () => compilePluginClientModule('test:css-import-escape', root, 'index.tsx', dataDir),
     (err: unknown) =>
-      err instanceof HelmError && err.code === 'client_compile_failed' && /越出 clientRoot/.test(err.message),
+      err instanceof HelmError && err.code === 'client_compile_failed' && /越界/.test(err.message),
   )
 })
 
@@ -277,7 +277,7 @@ test('未导出的同名局部变量不撞名：entry 内 const __helmClientCss 
   assert.ok(!css.includes('plugin-local-value'))
 })
 
-test('缓存版本失效：旧 v2 清单（CSS-as-JS 时代）不复用，强制重编译', { timeout: 60_000 }, async () => {
+test('缓存版本失效：旧 v3 清单（npm 依赖前时代）不复用，强制重编译', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'cache-version-src')
   await writePluginSource(root, { 'styles.css': '.v3 { color: red }' }, ["'./styles.css'"])
   const fresh = await compilePluginClientModule('test:css-cache-version', root, 'index.tsx', dataDir)
@@ -294,8 +294,8 @@ test('缓存版本失效：旧 v2 清单（CSS-as-JS 时代）不复用，强制
   assert.ok(depsFile, '依赖清单必须已落盘')
   const realListPath = join(stagingDir, depsFile as string)
   const list = JSON.parse(await readFileP(realListPath, 'utf8')) as { version: number; contentHash: string }
-  assert.equal(list.version, 3, '新缓存清单版本为 v3')
-  await writeFileP(realListPath, `${JSON.stringify({ ...list, version: 2 })}\n`)
+  assert.equal(list.version, 4, '新缓存清单版本为 v4（受控 npm 依赖）')
+  await writeFileP(realListPath, `${JSON.stringify({ ...list, version: 3 })}\n`)
 
   // 再把产物改成“旧格式毒丸”：若 v2 清单被复用会原样返回毒丸；v3 校验必须重编译
   const codeFile = files.find((f) => f.endsWith('.mjs'))
@@ -304,7 +304,7 @@ test('缓存版本失效：旧 v2 清单（CSS-as-JS 时代）不复用，强制
 
   const after = await compilePluginClientModule('test:css-cache-version', root, 'index.tsx', dataDir)
   assert.equal(after.contentHash, fresh.contentHash)
-  assert.equal(after.code, fresh.code, 'v2 清单必须失效，绝不复用旧毒丸产物')
+  assert.equal(after.code, fresh.code, '旧版清单必须失效，绝不复用旧毒丸产物')
   const mod = await evalModule(after.code)
   assert.match(mod[PLUGIN_CLIENT_CSS_EXPORT] as string, /\.v3/)
 })

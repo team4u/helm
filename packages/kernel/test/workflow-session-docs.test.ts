@@ -19,7 +19,8 @@ import {
   type ConversationSummary,
   type PluginSessionDocHandle,
 } from '@helm/protocol'
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
+import { PluginHost, type PluginDocStore } from '../src/plugins/index.js'
+import { PluginHostBackendFixtureBase } from './helpers/plugin-host-backend.js'
 import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
 import { createHelm } from '../src/app.js'
 
@@ -43,10 +44,11 @@ function makeConversation(id: number): ConversationSummary {
   }
 }
 
-class FakeBackend implements PluginHostBackend {
+class FakeBackend extends PluginHostBackendFixtureBase {
   conversations = new Map<number, ConversationSummary>()
   events: Array<{ type: string; payload: unknown }> = []
   constructor() {
+    super()
     this.conversations.set(1, makeConversation(1))
     this.conversations.set(2, makeConversation(2))
   }
@@ -61,6 +63,8 @@ class FakeBackend implements PluginHostBackend {
   }
   updateConversation(id: number): Promise<ConversationSummary> { return Promise.resolve(this.getConversation(id)) }
   abortConversation(): Promise<void> { return Promise.resolve() }
+  getConversationActivity(): { consecutiveErrors: number } { return { consecutiveErrors: 0 } }
+  getConversationOwnership(): 'helm' | 'bot' | 'human' { return 'human' }
   spawnAgent(): Promise<unknown> { return Promise.resolve('spawned') }
   runGate(): Promise<{ ok: boolean; output: string }> { return Promise.resolve({ ok: true, output: '' }) }
   prepareInterruptedConversations(): Promise<void> { return Promise.resolve() }
@@ -70,6 +74,7 @@ class FakeBackend implements PluginHostBackend {
   invokeAction(): Promise<unknown> { return Promise.resolve({}) }
   prepareAction(): { idempotent: boolean } { return { idempotent: false } }
   execEnv(): Promise<never> { return Promise.reject(new HelmError('unsupported', '本 fixture 不执行节点命令', 501)) }
+  withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
   listActions(): never[] { return [] }
   manageConversation(): () => void { return () => {} }
   markConversationOwnership(): void {}

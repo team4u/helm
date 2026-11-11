@@ -288,7 +288,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
             </div>
           ) : null}
           {state.phase === 'error' ? (
-            <div className="jr-callout jr-callout-err">
+            <div className="callout callout--error">
               <HelmIcon name="alert-circle" size={13} />
               <span style={{ wordBreak: 'break-all' }}>产物加载失败：{state.message}</span>
             </div>
@@ -315,7 +315,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
                 />
               </div>
               {textState === 'exceeded' ? (
-                <div className="jr-callout">文本内容超过 {formatBytes(MAX_PREVIEW_TEXT_BYTES)} 预览上限，已停止解码，text 为 null。请下载文件查看完整内容。</div>
+                <div className="callout">文本内容超过 {formatBytes(MAX_PREVIEW_TEXT_BYTES)} 预览上限，已停止解码，text 为 null。请下载文件查看完整内容。</div>
               ) : null}
               <div>
                 <button
@@ -345,9 +345,9 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
             ) : isPdf ? (
               <iframe src={state.blobUrl} title={name} style={{ width: '100%', height: '64vh', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} />
             ) : !isTextLike ? (
-              <div className="jr-callout">此文件类型暂不支持在线预览，请下载后查看。</div>
+              <div className="callout">此文件类型暂不支持在线预览，请下载后查看。</div>
             ) : textState === 'exceeded' ? (
-              <div className="jr-callout">
+              <div className="callout">
                 文本内容超过 {formatBytes(MAX_PREVIEW_TEXT_BYTES)} 预览上限，已停止解码。请下载文件查看完整内容。
               </div>
             ) : markdown && view === 'rich' && text !== null ? (

@@ -125,15 +125,19 @@ test('节点插槽 client 轨：已有节点渲染贡献并如实传递 NodeDeta
   assert.doesNotMatch(html, EMOJI_REGEX)
 })
 
-test('节点插槽 JSON 轨：声明式 Slot 原语渲染贡献并透传 $data', { timeout: 60_000 }, () => {
+test('节点插槽 client 轨：组件收到真实 slotProps 数据', { timeout: 60_000 }, () => {
+  seedPluginClientModule('demo:ops', 'node-data.tsx', {
+    NodeData: (props: Record<string, unknown>) =>
+      e('section', { 'data-node-data': String(props['nodeId'] ?? '') }, `节点 ${String(props['nodeId'] ?? '')} 在线=${String(props['isOnline'])}`),
+  })
   const store = storeWith([
-    slotContribution('demo:ops', 'node-json', {
-      json: { component: 'Text', text: '节点 {$data.nodeId} 在线={$data.isOnline}' },
+    slotContribution('demo:ops', 'node-data', {
+      client: { module: 'node-data.tsx', export: 'NodeData' },
     }),
   ])
 
   const html = renderDrawer(store, { node: remoteNode() })
-  assert.match(html, /节点 worker-gpu-1 在线=true/, 'JSON 轨收到 slotProps 数据')
+  assert.match(html, /节点 worker-gpu-1 在线=true/, 'client 轨收到 slotProps 数据')
 })
 
 // ---------------------------------------------------------------------------
@@ -165,10 +169,14 @@ test('节点插槽挂载边界：接入新节点模式与未选节点不渲染�
 // ---------------------------------------------------------------------------
 
 test('节点插槽多贡献：priority 降序、order 升序稳定排序', { timeout: 60_000 }, () => {
+  const contribModule = (mark: string) => ({ [mark]: () => e('section', { 'data-mark': mark }, `贡献${mark}`) })
+  seedPluginClientModule('demo:a', 'a1.tsx', contribModule('A'))
+  seedPluginClientModule('demo:b', 'b1.tsx', contribModule('B'))
+  seedPluginClientModule('demo:c', 'c1.tsx', contribModule('C'))
   const store = storeWith([
-    slotContribution('demo:a', 'a1', { json: { component: 'Text', text: '贡献A' } }),
-    slotContribution('demo:b', 'b1', { json: { component: 'Text', text: '贡献B' }, priority: 10 }),
-    slotContribution('demo:c', 'c1', { json: { component: 'Text', text: '贡献C' }, priority: 10, order: 5 }),
+    slotContribution('demo:a', 'a1', { client: { module: 'a1.tsx', export: 'A' } }),
+    slotContribution('demo:b', 'b1', { client: { module: 'b1.tsx', export: 'B' }, priority: 10 }),
+    slotContribution('demo:c', 'c1', { client: { module: 'c1.tsx', export: 'C' }, priority: 10, order: 5 }),
   ])
 
   const html = renderDrawer(store, { node: remoteNode() })

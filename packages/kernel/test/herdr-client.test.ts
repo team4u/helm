@@ -17,10 +17,38 @@ import { HelmError, type ConversationSummary } from '@helm/protocol'
 import { PluginHost, type PluginHostBackend, type PluginDocStore } from '../src/plugins/index.js'
 import { compilePluginClientModule } from '../src/plugins/client-compiler.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
-import type { HerdrPluginDependencies } from '../src/builtin-plugins/herdr/contracts.js'
+import { hostBackendStub } from './helpers/host-backend-stub.js'
+import { serveTransport } from './helpers/herdr-unit-fixture.js'
 
 let dataDir: string
 let pluginHost: PluginHost
+let served: { close(): Promise<void> } | undefined
+
+class MemoryConfigStore {
+  constructor(private readonly initial: Record<string, unknown> = {}) {}
+  get(): Record<string, unknown> { return this.initial }
+  set(): void {}
+}
+
+/** 最小空协议 transport（snapshot 空会话；订阅空事件流）。 */
+function emptyTransport(): import('../src/builtin-plugins/herdr/contracts.js').HerdrTransport {
+  return {
+    async call(_target, method) {
+      if (method === 'session.snapshot') {
+        return { type: 'session_snapshot', snapshot: { version: 'test', protocol: 22, workspaces: [], tabs: [], layouts: [], panes: [], agents: [] } }
+      }
+      return { type: 'ok' }
+    },
+    async readOutput() { throw new HelmError('unsupported', 'client 编译测试不读交接文件', 501) },
+    async removeOutput() { throw new HelmError('unsupported', 'client 编译测试不删交接文件', 501) },
+    async runGate() { return { ok: true, output: '' } },
+    async subscribe(_target, onEvent, onError) {
+      void onEvent
+      void onError
+      return () => {}
+    },
+  }
+}
 
 function summary(id: number): ConversationSummary {
   return {
@@ -43,6 +71,7 @@ class MemoryDocStore implements PluginDocStore {
 
 function makeBackend(): PluginHostBackend {
   return {
+    ...hostBackendStub(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async () => summary(42),
@@ -58,46 +87,45 @@ function makeBackend(): PluginHostBackend {
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
+    getConversationActivity(): { consecutiveErrors: number } {
+      return { consecutiveErrors: 0 }
+    },
+    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+      return 'human'
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: () => {},
   }
 }
 
-function makeDeps(): HerdrPluginDependencies {
-  return {
-    defaultCwd: '/tmp',
-    profiles: { get: async () => undefined },
-    buildSpawnEnv: () => ({}),
-    redact: (text: string) => text,
-    runLocalGate: async () => ({ ok: true, output: '' }),
-    getArtifact: async () => {
-      throw new HelmError('not_found', '无产物', 404)
-    },
-    blockedBackoffBaseMs: 5,
-    blockedBackoffCapMs: 20,
-    pollIntervalMs: 5,
-  }
-}
-
 before(async () => {
   dataDir = await mkdtemp(join(tmpdir(), 'helm-herdr-client-'))
-  pluginHost = new PluginHost({ dataDir, host: makeBackend(), docs: new MemoryDocStore() })
+  // 受控空协议服务器：启用即连接（snapshot/subscribe 成功即注册完成）。
+  const socketPath = join(dataDir, 'herdr.sock')
+  served = await serveTransport(emptyTransport(), socketPath)
+  pluginHost = new PluginHost({
+    dataDir,
+    host: makeBackend(),
+    docs: new MemoryDocStore(),
+    config: new MemoryConfigStore({ socketPath }),
+  })
 })
 
 after(async () => {
   await pluginHost.dispose().catch(() => {})
+  await served?.close().catch(() => {})
   await rm(dataDir, { recursive: true, force: true })
 })
 
 test('client/index.tsx 真实编译：产物含 HerdrOverviewScreen 导出与样式文本', { timeout: 60_000 }, async () => {
-  const definition = createHerdrPlugin(makeDeps())
+  const definition = createHerdrPlugin()
   assert.ok(definition.clientRoot, '插件定义必须提供 clientRoot')
   const { code, contentHash } = await compilePluginClientModule('builtin:herdr', definition.clientRoot!, 'index.tsx', dataDir)
   assert.ok(typeof code === 'string' && code.length > 0, '编译产物非空')
@@ -108,7 +136,7 @@ test('client/index.tsx 真实编译：产物含 HerdrOverviewScreen 导出与样
 })
 
 test('模型函数：筛选 / 统计 / 参数解析纯函数（models.ts 编译产物导入）', { timeout: 60_000 }, async () => {
-  const definition = createHerdrPlugin(makeDeps())
+  const definition = createHerdrPlugin()
   const cacheDir = await mkdtemp(join(tmpdir(), 'helm-herdr-models-'))
   try {
     const { code } = await compilePluginClientModule('builtin:herdr', definition.clientRoot!, 'models.ts', cacheDir)
@@ -166,7 +194,7 @@ test('模型函数：筛选 / 统计 / 参数解析纯函数（models.ts 编译�
 })
 
 test('插件注册：screen client 引用与 profileRuntime 贡献如实进入 listUi', { timeout: 60_000 }, async () => {
-  await pluginHost.register(createHerdrPlugin(makeDeps()), { enabled: true })
+  await pluginHost.register(createHerdrPlugin(), { enabled: true })
   const ui = pluginHost.listUi()
   const screen = ui.find((u) => u.surface === 'screen' && (u.spec as { id: string }).id === 'overview')
   assert.ok(screen, 'overview screen 贡献存在')

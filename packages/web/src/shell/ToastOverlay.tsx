@@ -10,14 +10,14 @@ export function ToastOverlay() {
       {store.notices.map((n) => {
         const toneClass =
           n.level === 'error'
-            ? 'jr-callout-err'
+            ? 'callout callout--error'
             : n.level === 'warning'
-              ? 'jr-callout-warn'
+              ? 'callout callout--warning'
               : ''
         return (
           <div
             key={n.id}
-            className={`jr-callout toast-item ${toneClass}`}
+            className={`callout toast-item ${toneClass}`}
           >
             <div className="toast-content">
               <div className="toast-title">

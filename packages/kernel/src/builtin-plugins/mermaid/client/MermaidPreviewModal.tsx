@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { copyToClipboard } from './clipboard.js'
-import { HelmIcon } from '../lib/icons.js'
-import { useHelmStore } from '../lib/store-context.js'
-import { getMermaidConfig } from './mermaid-theme.js'
-import { Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
+import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
+import { usePluginContext } from '@helm/plugin-client'
+import { getMermaidConfig } from './mermaid-theme.ts'
 
 export interface MermaidPreviewModalProps {
   code: string
@@ -16,6 +14,16 @@ const MIN_SCALE = 0.1
 const MAX_SCALE = 5
 const SCALE_STEP = 0.15
 
+/** 剪贴板写入（navigator.clipboard 不可用时失败返回 false，不静默假装成功）。 */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Mermaid 放大预览弹窗：
  * - 纯全屏沉浸式画板（固定占满整屏视口，无多余窗口边距）；
@@ -26,7 +34,7 @@ const SCALE_STEP = 0.15
  * - 源码 / 图形切换与一键复制源码。
  */
 export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalProps) {
-  const { theme } = useHelmStore()
+  const { theme } = usePluginContext()
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [view, setView] = useState<'diagram' | 'source'>('diagram')
@@ -385,7 +393,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
   }
 
   const copySource = async (): Promise<void> => {
-    if (await copyToClipboard(code)) {
+    if (await copyText(code)) {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     }

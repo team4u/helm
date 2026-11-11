@@ -24,6 +24,7 @@ import {
   type CronDoc,
   type CronJob,
 } from '../src/builtin-plugins/triggers/cron.js'
+import { hostBackendStub } from './helpers/host-backend-stub.js'
 
 // ---------------------------------------------------------------------------
 // 测试基建：内存 doc store + 可控时钟 + host fake
@@ -95,8 +96,10 @@ interface Harness {
   dispatched: Array<{ envelope: ExternalTriggerEnvelope; targetProfileId?: string }>
   /** dispatch 行为注入：抛错模拟投递失败。 */
   dispatchImpl: (envelope: ExternalTriggerEnvelope, targetProfileId?: string) => Promise<void>
+  /** doc.flush 调用计数（假持久断言用）。 */
   flushCalls: number
-  /** flush 行为注入：抛错模拟持久化失败。 */
+  /** flush 行为注入：抛错模拟持久化失败（doc.flush 走 MemoryDocStore，此处
+   * 直接覆盖 store.flush 实现）。 */
   flushImpl: () => Promise<void>
   events: Array<{ type: string; payload: unknown }>
   runtime: ReturnType<typeof createCronScheduler>
@@ -126,10 +129,18 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
     registration: undefined as never,
     dataDir,
   }
+  // doc.flush 注入：生产走 doc 句柄 flush（真实 SQLite 排队冲刷），此处将
+  // 内存 store 的 flush 指向可控实现以模拟持久化失败。
+  const innerFlush = (): Promise<void> => {
+    h.flushCalls += 1
+    return h.flushImpl()
+  }
+  docs.flush = innerFlush
   const host = new PluginHost({
     dataDir,
     docs,
     host: {
+      ...hostBackendStub(),
       dispatchTrigger: async () => {},
       submitInput: async () => {},
       createConversation: async (init) => ({ id: 42, title: init.title ?? 'x' }) as never,
@@ -143,13 +154,20 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
       registerAskSeqResolver: () => () => {},
       onEvent: () => () => {},
     abortConversation: async () => {},
+    getConversationActivity(): { consecutiveErrors: number } {
+      return { consecutiveErrors: 0 }
+    },
+    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+      return 'human'
+    },
+    isClosing: () => false,
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
       emitEvent: (type, payload) => {
         events.push({ type, payload })
@@ -164,10 +182,6 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
           ctx,
           {
             dispatchTrigger: async (envelope, targetProfileId) => h.dispatchImpl(envelope, targetProfileId),
-            flush: async () => {
-              h.flushCalls += 1
-              await h.flushImpl()
-            },
           },
           clock.api,
         )

@@ -459,7 +459,7 @@ describe('原生 subagent', { timeout: 60_000 }, () => {
     }
   })
 
-  it('resume 用原 child convId；非 Git 目录的 worktree 请求显式报错', { timeout: 60_000 }, async () => {
+  it('resume 用原 child convId；未启用 workflow 插件时 worktree 请求显式不支持', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't16'))
     try {
       kernel.__faux.setResponses([fauxAssistantMessage('第一次结果'), fauxAssistantMessage('续接结果')])
@@ -482,7 +482,7 @@ describe('原生 subagent', { timeout: 60_000 }, () => {
             prompt: 'x',
             isolation: 'worktree',
           }),
-        (err: unknown) => err instanceof HelmError && err.code === 'not_a_git_repo',
+        (err: unknown) => err instanceof HelmError && err.code === 'unsupported_runtime',
       )
     } finally {
       await kernel.close()
@@ -957,25 +957,16 @@ describe('真实 PluginHost 集成', { timeout: 60_000 }, () => {
         },
       })
       assert.ok(childId !== undefined)
-      // 原生 spawn 自动 helm 归属（不靠 tags/parent 推断，无需手动登记）。
-      const tick = (await kernel.watchdogTick()) as {
-        probes: Array<{ targetId: string; ownedBy: string }>
-      }
-      const childProbe = tick.probes.find((p) => p.targetId === String(childId))
-      const rootProbe = tick.probes.find((p) => p.targetId === '1')
-      assert.ok(childProbe)
-      assert.equal(childProbe.ownedBy, 'helm')
-      assert.ok(rootProbe)
-      assert.equal(rootProbe.ownedBy, 'human')
+      // 原生 spawn 自动 helm 归属（不靠 tags/parent 推断，无需手动登记）；
+      // getConversationOwnership 为探针构造同源端口。
+      assert.equal(kernel.getConversationOwnership(childId), 'helm')
+      assert.equal(kernel.getConversationOwnership(1), 'human')
       // 用户直连会话（无标记）即使带 worker tags 也判 human。
       const manual = await kernel.createConversation({ tags: ['worker'] })
       kernel.__faux.setResponses([fauxAssistantMessage('人类回答')])
       await kernel.submitInput(manual.id, '人类直接输入')
       await kernel.waitForIdle(manual.id)
-      const tick2 = (await kernel.watchdogTick()) as {
-        probes: Array<{ targetId: string; ownedBy: string }>
-      }
-      assert.equal(tick2.probes.find((p) => p.targetId === String(manual.id))?.ownedBy, 'human')
+      assert.equal(kernel.getConversationOwnership(manual.id), 'human')
     } finally {
       await kernel.close()
     }

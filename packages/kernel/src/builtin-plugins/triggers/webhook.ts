@@ -8,14 +8,16 @@
  *   字节；timingSafeEqual 常时比较；无/错签名 401，id 不存在 404，成功 202
  *   {accepted:true}；
  * - secret 只落 credentials.json pluginSecrets['builtin:triggers']
- *   ['webhook:<id>']（0600）+ stash.addRedaction 全局脱敏；doc 只存元数据；
+ *   ['webhook:<id>']（0600，经 ctx.host.secrets 已绑定本插件 ID）+
+ *   secrets.addRedaction 全局脱敏；doc 只存元数据；
  * - webhook_create 拒绝带 conversationId 的调用上下文：raw secret 经
  *   run_action 参数已进入模型工具历史（handler 拒绝无法清理已入上下文的
  *   秘密）——secret 只允许人工 HTTP/CLI 配置，文档如实声明；
  * - create/delete 串行（mutationChain），secret 文件与 doc 无跨存储事务：
- *   create 先写 doc（含 hasSecret:true）并冲刷，再写 secret；secret 写失败即
- *   回滚移除 doc 条目；delete 先删 doc（幂等容错）再删 secret，secret 删除
- *   失败显式报错；两路径成功前均 await flushDocs，绝不返回假持久；
+ *   create 先写 doc（含 hasSecret:true）并经 doc.flush() 真实冲刷，再写
+ *   secret；secret 写失败即回滚移除 doc 条目；delete 先删 doc（幂等容错）
+ *   再删 secret，secret 删除失败显式报错；两路径成功前均 await flush，
+ *   绝不返回假持久；
  * - 成功投递走共享 dispatchTrigger helper（isClosing 检查在 helper 内），
  *   text 为原始 utf8 body、source 为 webhook:<id>；body 上限 256 KiB
  *   （复用 http readBody 流式限制，超限 cancel 并 413；验签基于原始字节，
@@ -90,22 +92,14 @@ export interface CreateWebhookInput {
 
 /**
  * 注册 webhook 连接器：public doc 'webhooks'、公开路由与生命周期 actions。
- * 返回 handler 复用面（测试/管理 UI 同一实现）。
+ * secrets / profiles / isClosing 直接消费 ctx.host 公共端口（零参工厂，
+ * 无注入式依赖）；返回 handler 复用面（测试/管理 UI 同一实现）。
  */
 export function registerWebhook(
   ctx: HelmPluginContext,
-  deps: {
-    credentials: {
-      getPluginSecret(pluginId: string, key: string): Promise<string | undefined>
-      setPluginSecret(pluginId: string, key: string, value: string): Promise<void>
-      deletePluginSecret(pluginId: string, key: string): Promise<void>
-    }
-    stash: { addRedaction(value: string): () => void }
-    profiles: { get(id: string): Promise<{ id: string } | undefined> }
-    dispatch: DispatchTriggerHelper
-    flushDocs(): Promise<void>
-  },
+  shared: { dispatch: DispatchTriggerHelper },
 ): RegisterWebhookResult {
+  const host = ctx.host
   const doc = ctx.doc<WebhooksDoc>('webhooks', { webhooks: [] }, { public: true })
 
   const readDoc = (): WebhooksDoc => assertWebhooksDoc(doc.get())
@@ -165,8 +159,8 @@ export function registerWebhook(
     readDoc()
     const metas = readDoc().webhooks
     for (const meta of metas) {
-      const secret = await deps.credentials.getPluginSecret(TRIGGERS_PLUGIN_ID, webhookSecretKey(meta.id))
-      if (secret !== undefined) secretRedactions.push(deps.stash.addRedaction(secret))
+      const secret = await host.secrets.get(webhookSecretKey(meta.id))
+      if (secret !== undefined) secretRedactions.push(host.secrets.addRedaction(secret))
     }
     active = true
   }
@@ -234,7 +228,7 @@ export function registerWebhook(
     // 死端点；投递制仍会现查，防创建后 Profile 被删）。
     if (input.targetProfileId !== undefined) {
       const profileId = input.targetProfileId
-      if (await deps.profiles.get(profileId) === undefined) {
+      if (await host.profiles.get(profileId) === undefined) {
         throw new HelmError(
           'validation_error',
           `targetProfileId 不存在：${profileId}（拒绝指向错误角色）`,
@@ -260,12 +254,12 @@ export function registerWebhook(
       // 移除 doc 条目并冲刷（入口未生效过）；回滚失败聚合显式上抛。
       try {
         writeDoc({ webhooks: [...readDoc().webhooks, meta] })
-        await deps.flushDocs()
-        await deps.credentials.setPluginSecret(TRIGGERS_PLUGIN_ID, webhookSecretKey(id), secret)
+        await doc.flush()
+        await host.secrets.set(webhookSecretKey(id), secret)
       } catch (secretError) {
         try {
           writeDoc({ webhooks: readDoc().webhooks.filter((w) => w.id !== id) })
-          await deps.flushDocs()
+          await doc.flush()
         } catch (rollbackError) {
           throw new HelmError(
             'webhook_create_rollback_failed',
@@ -279,7 +273,7 @@ export function registerWebhook(
         }
         throw secretError
       }
-      const release = deps.stash.addRedaction(secret)
+      const release = host.secrets.addRedaction(secret)
       secretRedactions.push(release)
       return { webhook: webhookPublicMeta(meta) }
     })
@@ -301,8 +295,8 @@ export function registerWebhook(
       // secret 无入口不再可利用，人工可经 credentials.json 清理）。
       writeDoc({ webhooks: current.webhooks.filter((w) => w.id !== id) })
       try {
-        await deps.flushDocs()
-        await deps.credentials.deletePluginSecret(TRIGGERS_PLUGIN_ID, webhookSecretKey(id))
+        await doc.flush()
+        await host.secrets.delete(webhookSecretKey(id))
       } catch (err) {
         throw new HelmError(
           'webhook_delete_secret_failed',
@@ -359,7 +353,7 @@ export function registerWebhook(
       if (meta === undefined) {
         return webhookError(404, 'not_found', `webhook 不存在: ${id}`)
       }
-      const secret = await deps.credentials.getPluginSecret(TRIGGERS_PLUGIN_ID, webhookSecretKey(id))
+      const secret = await host.secrets.get(webhookSecretKey(id))
       if (secret === undefined || secret === '') {
         // doc 有条目但 secret 缺失属持久层不一致：显式 500 诊断（诚实性纪律），
         // 绝不静默放行无签名请求。
@@ -392,7 +386,7 @@ export function registerWebhook(
         return webhookError(400, 'invalid_body', 'webhook body 不是合法 UTF-8')
       }
       // 请求体读取期间端点可能被删除或重建，拒绝用旧密钥投递到新配置。
-      const secretAtDispatch = await deps.credentials.getPluginSecret(TRIGGERS_PLUGIN_ID, webhookSecretKey(id))
+      const secretAtDispatch = await host.secrets.get(webhookSecretKey(id))
       if (!active) {
         return webhookError(409, 'plugin_disabled', 'builtin:triggers webhook 服务已停用，拒绝投递')
       }
@@ -404,7 +398,7 @@ export function registerWebhook(
         return webhookError(409, 'webhook_changed', 'webhook 配置已变更，请按当前密钥重新发送请求')
       }
       try {
-        await deps.dispatch(
+        await shared.dispatch(
           {
             id: `webhook:${id}:${randomUUID()}`,
             source: `webhook:${id}`,

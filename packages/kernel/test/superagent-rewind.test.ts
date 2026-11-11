@@ -18,8 +18,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import {
@@ -31,12 +32,12 @@ import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/
 import { EventHub } from '../src/runtime/events.js'
 import { ProfileService, SkillService } from '../src/services/index.js'
 import { createSuperAgentPlugin, REWIND_REPLAY_PAGE_SIZE } from '../src/builtin-plugins/superagent.js'
+import { hostBackendStub } from './helpers/host-backend-stub.js'
 import {
   rewindOmittedInputIds,
   removeRecallNodesByInputs,
   assertRecallDoc,
 } from '../src/builtin-plugins/superagent.js'
-import type { SuperAgentDependencies } from '../src/builtin-plugins/superagent/contracts.js'
 import type { ConversationEntry } from '@helm/protocol'
 
 // ---------------------------------------------------------------------------
@@ -52,6 +53,15 @@ class MemoryDocStore implements PluginDocStore {
     this.store.set(key, structuredClone(value))
   }
   async flush(): Promise<void> {}
+}
+
+/** 真实临时文件原子写（与内核 atomicWriteFile 同语义：临时文件 + rename；
+ * 自举资产落盘语义与生产一致，不伪造内存 doc）。 */
+async function atomicWriteFileFixture(path: string, content: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true })
+  const tmp = `${path}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  await writeFile(tmp, content, 'utf8')
+  await rename(tmp, path)
 }
 
 function makeConversation(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
@@ -115,6 +125,28 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
   const notifications: Array<{ title: string; body: string }> = []
   const submits: Array<{ conversationId: number; origin?: string; text?: string }> = []
   const detailCalls: number[] = []
+  const profilesSvc = new ProfileService(dataDir)
+  const skillsSvc = new SkillService(dataDir)
+  await profilesSvc.ensureDefault()
+  const profiles = {
+    list: () => profilesSvc.list(),
+    get: (id: string) => profilesSvc.get(id),
+    getSystem: (id: string) => profilesSvc.getSystem(id),
+    save: (p: Parameters<typeof profilesSvc.save>[0]) => profilesSvc.save(p),
+    directory: async (id: string) => join(dataDir, 'profiles', id),
+  }
+  const skills = {
+    list: () => skillsSvc.list(),
+    readFile: (skillId: string, path?: string) => skillsSvc.readFile(skillId, path),
+    directory: async (id: string) => join(dataDir, 'skills', id),
+    ensureSkill: (asset: Parameters<typeof skillsSvc.ensureSkill>[0]) => skillsSvc.ensureSkill(asset),
+  }
+  const secrets = {
+    get: async () => undefined,
+    set: async () => { throw new HelmError('unsupported', 'fixture 只读 secrets', 501) },
+    delete: async () => { throw new HelmError('unsupported', 'fixture 只读 secrets', 501) },
+    addRedaction: () => () => {},
+  }
   const backend: PluginHostBackend = {
     async dispatchTrigger() {},
     async submitInput(conversationId, text, options) {
@@ -151,38 +183,22 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
     registerAskSeqResolver() { return () => {} },
     onEvent() { return () => {} },
     abortConversation: async () => {},
-    spawnAgent: async () => ({}),
-    runGate: async () => ({ ok: true, output: '' }),
-    prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
-    invokeAction: async () => ({}),
-    prepareAction: () => ({ idempotent: false }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    listActions: () => [],
-    emitEvent(type, payload) {
-      if (type === 'notification') notifications.push(payload as { title: string; body: string })
+    getConversationActivity(): { consecutiveErrors: number } {
+      return { consecutiveErrors: 0 }
     },
-  }
-  const docs = new MemoryDocStore()
-  const host = new PluginHost({ dataDir, host: backend, docs })
-  const profiles = new ProfileService(dataDir)
-  const skills = new SkillService(dataDir)
-  await profiles.ensureDefault()
-
-  const hub = new EventHub({ initialSeq: 0, snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [] }) })
-
-  const deps: SuperAgentDependencies = {
-    dataDir,
+    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+      return 'human'
+    },
+    isClosing: () => false,
     profiles,
     skills,
-    subscribeConversationEntries: (listener) =>
-      // 与 app.ts 组合层同构：EventHub 帧过滤 conversation.entry 后转交。
-      hub.subscribe((frame) => {
-        const event = frame.event
-        if (event.type !== 'conversation.entry' || !('entry' in event)) return
-        listener(event.conversationId, event.entry)
-      }),
-    getConversationDetail: async (id, options) => {
+    secrets,
+    setPluginConfig: async () => {},
+    nodeIpc: undefined,
+    redact: (t: string) => t,
+    redactText: (t: string) => t,
+    buildSpawnEnv: () => ({}),
+    async getConversationDetail(id: number, options?: { cursor?: string }) {
       detailCalls.push(id)
       const failure = opts.detailError?.(id)
       if (failure !== undefined) throw failure
@@ -197,14 +213,43 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
         ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       }
     },
-    listArtifacts: async () => [],
-    abortConversation: async () => {},
-    getConversationOwnership: () => 'helm',
-    isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
+    async listArtifacts() { return [] },
+    async getArtifact() { throw new HelmError('not_found', '无产物', 404) },
+    async completeText() { throw new HelmError('unsupported', '本 fixture 无模型', 501) },
+    executionEnv: () => { throw new HelmError('unsupported', '本 fixture 无执行环境', 501) },
+    withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() },
+    atomicWriteFile: (path: string, content: string) => atomicWriteFileFixture(path, content),
+    async refreshModels() { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) },
+    async resolveSpawnTarget() { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) },
+    listActiveSpawnExecutions: () => [],
+    async probeNodeFs() { throw new HelmError('unsupported', '本 fixture 不探测节点 fs', 501) },
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
+    listActions: () => [],
+    emitEvent(type, payload) {
+      if (type === 'notification') notifications.push(payload as { title: string; body: string })
+    },
   }
-  await host.register(createSuperAgentPlugin(deps), { enabled: true })
+  const docs = new MemoryDocStore()
+  const host = new PluginHost({ dataDir, host: backend, docs })
+
+  const hub = new EventHub({ initialSeq: 0, snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [] }) })
+
+  // 与 app.ts 组合层同构：conversation.entry 经通用事件端口转交（真实 EventHub 帧）。
+  backend.onEvent = (type: string, listener: (payload: unknown) => void | Promise<void>) => {
+    if (type !== 'conversation.entry') return () => {}
+    return hub.subscribe((frame) => {
+      const event = frame.event
+      if (event.type !== 'conversation.entry' || !('entry' in event)) return
+      void listener(event)
+    })
+  }
+  await host.register(createSuperAgentPlugin(), { enabled: true })
   const routerId = ((docs.store.get('builtin:superagent:index') as { routerConversationId?: number } | undefined)?.routerConversationId)
   return {
     host,
@@ -425,69 +470,75 @@ test('竞态：collectWorkerSettlement await 期间发生 rewind——旧节点�
   const detailGate = new Promise<void>((resolve) => { releaseDetail = resolve })
   let rewound = false
   const docs = new MemoryDocStore()
-  const host = new PluginHost({
-    dataDir,
-    host: {
-      async dispatchTrigger() {},
-      async submitInput(conversationId, _text, options) { submits.push({ conversationId, origin: options?.origin }) },
-      async createConversation(init) {
-        const id = Math.max(0, ...conversations.keys()) + 1
-        const summary = makeConversation(id, { title: init.title ?? 'new', profileId: init.profileId ?? 'assistant', ...(init.tags ? { tags: init.tags } : {}) })
-        conversations.set(id, summary)
-        return summary
-      },
-      listConversations: () => [...conversations.values()],
-      getConversation(id) {
-        const found = conversations.get(id)
-        if (!found) throw new HelmError('not_found', 'no', 404)
-        return found
-      },
-      async updateConversation(id, patch) { const found = conversations.get(id)!; const next = { ...found, ...patch }; conversations.set(id, next); return next },
-      manageConversation: () => () => {},
-      markConversationOwnership: () => {},
-      async createAsk() { throw new HelmError('unsupported', 't', 400) },
-      async cancelAsk() {},
-      registerAskSeqResolver: () => () => {},
-      onEvent: () => () => {},
-    abortConversation: async () => {},
-    spawnAgent: async () => ({}),
-    runGate: async () => ({ ok: true, output: '' }),
-    prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
-    invokeAction: async () => ({}),
-    prepareAction: () => ({ idempotent: false }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    listActions: () => [],
-      emitEvent: (type, payload) => { if (type === 'notification') notifications.push(payload as { title: string; body: string }) },
-    } satisfies PluginHostBackend,
-    docs,
-  })
-  const profiles = new ProfileService(dataDir)
-  await profiles.ensureDefault()
+  const profilesSvc = new ProfileService(dataDir)
+  const skillsSvc = new SkillService(dataDir)
+  await profilesSvc.ensureDefault()
   const entryListeners = new Set<(conversationId: number, entry: ConversationEntry) => void>()
-  const deps: SuperAgentDependencies = {
-    dataDir,
-    profiles,
-    skills: new SkillService(dataDir),
-    subscribeConversationEntries: (listener) => {
-      entryListeners.add(listener)
-      return () => entryListeners.delete(listener)
+  const backend: PluginHostBackend = {
+    ...hostBackendStub(),
+    // 真实临时文件原子写：superagent 自举 Profile/技能资产经公开宿主端口落盘。
+    atomicWriteFile: (path: string, content: string) => atomicWriteFileFixture(path, content),
+    async dispatchTrigger() {},
+    async submitInput(conversationId, _text, options) { submits.push({ conversationId, origin: options?.origin }) },
+    async createConversation(init) {
+      const id = Math.max(0, ...conversations.keys()) + 1
+      const summary = makeConversation(id, { title: init.title ?? 'new', profileId: init.profileId ?? 'assistant', ...(init.tags ? { tags: init.tags } : {}) })
+      conversations.set(id, summary)
+      return summary
     },
-    getConversationDetail: async (id) => {
+    listConversations: () => [...conversations.values()],
+    getConversation(id) {
+      const found = conversations.get(id)
+      if (!found) throw new HelmError('not_found', 'no', 404)
+      return found
+    },
+    async updateConversation(id, patch) { const found = conversations.get(id)!; const next = { ...found, ...patch }; conversations.set(id, next); return next },
+    profiles: {
+      list: () => profilesSvc.list(),
+      get: (id: string) => profilesSvc.get(id),
+      getSystem: (id: string) => profilesSvc.getSystem(id),
+      save: (p: Parameters<typeof profilesSvc.save>[0]) => profilesSvc.save(p),
+      directory: async (id: string) => join(dataDir, 'profiles', id),
+    },
+    skills: {
+      list: () => skillsSvc.list(),
+      readFile: (skillId: string, path?: string) => skillsSvc.readFile(skillId, path),
+      directory: async (id: string) => join(dataDir, 'skills', id),
+      ensureSkill: (asset: Parameters<typeof skillsSvc.ensureSkill>[0]) => skillsSvc.ensureSkill(asset),
+    },
+    isClosing: () => false,
+    getConversationOwnership: () => 'helm' as const,
+    onEvent: (type, listener) => {
+      if (type !== 'conversation.entry') return () => {}
+      const l = (conversationId: number, entry: ConversationEntry) => {
+        // 公开事件载荷（ConversationEntryEvent 信封形状，与生产 EventHub -> 插件
+        // onEvent 同构）：type + conversationId + entry。旧的双参形状会被
+        // asConversationEntryEvent 边界守卫丢弃，不是合法载荷。
+        void listener({ type: 'conversation.entry', conversationId, entry })
+      }
+      entryListeners.add(l)
+      return () => entryListeners.delete(l)
+    },
+    async getConversationDetail(id) {
       if (!rewound) {
         // 首次调用（结算收集）挂起：等 rewind 先发生再放行，制造确定性竞态。
         await detailGate
       }
       return { ...(conversations.get(id) ?? makeConversation(id)), entries: [{ id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '旧回答' }] }] }] }
     },
-    listArtifacts: async () => [],
     abortConversation: async () => {},
-    getConversationOwnership: () => 'helm',
-    isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
+    spawnAgent: async () => ({}),
+    runGate: async () => ({ ok: true, output: '' }),
+    prepareInterruptedConversations: async () => {},
+    invokeAction: async () => ({}),
+    prepareAction: () => ({ idempotent: false }),
+    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
+    listActions: () => [],
+    emitEvent: (type: string, payload: unknown) => { if (type === 'notification') notifications.push(payload as { title: string; body: string }) },
   }
-  await host.register(createSuperAgentPlugin(deps), { enabled: true })
+  const host = new PluginHost({ dataDir, host: backend, docs })
+  await host.register(createSuperAgentPlugin(), { enabled: true })
   const routerId = (docs.store.get('builtin:superagent:index') as { routerConversationId?: number }).routerConversationId
   const reportCount = () => submits.filter((s) => s.conversationId === routerId && s.origin === 'agent').length
   try {

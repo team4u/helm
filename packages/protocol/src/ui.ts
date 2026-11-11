@@ -1,7 +1,6 @@
 /**
  * 前端扩展面：基础界面、微操作、运行时元数据与插件子插槽。
- * 每个扩展点双轨渲染：声明式 @json-render JSON Spec（零前端构建）
- * 或 client.tsx 具名导出引用（宿主共享 React 运行时，本包不引 React 类型）。
+ * 每个扩展点经 client.tsx 具名导出引用渲染（宿主共享 React 运行时，本包不引 React 类型）。
  */
 
 import type { ConversationAttachmentRef, ConversationEntry, ConversationScope, ConversationSummary, WhenBusy } from './conversation.js'
@@ -17,23 +16,13 @@ export interface ClientComponentRef {
   export: string
 }
 
-/** 所有 UI 扩展点公共形状。 */
+/** 所有 UI 扩展点公共形状（仅 client.tsx 轨道：声明式 JSON Spec 已整体迁出内核，由 builtin:json-render 插件经 markdown 代码块扩展提供）。 */
 export interface UiSpecBase {
   /** 扩展点内唯一 ID（最终寻址为 <extension>:<pluginId>/<id>）。 */
   id: string
   title?: string
-  /**
-   * 声明式 JSON Spec，由 @json-render 渲染。
-   * 双轨优先级：同时声明 json 与 client 时 client 优先（富交互完整能力），
-   * json 作为宿主不支持动态加载时的显式降级提示而非静默丢弃。
-   */
-  json?: Record<string, unknown>
-  /** client.tsx 组件引用（需插件定义提供 clientRoot；双轨并存时优先于 json）。 */
+  /** client.tsx 组件引用（需插件定义提供 clientRoot）。 */
   client?: ClientComponentRef
-  /** 声明式轨道订阅的本插件公开文档名（挂载至 $docs/<docName>）；必须是同插件 public doc。 */
-  docs?: string[]
-  /** 声明式轨道按需订阅的本插件公开会话文档，挂载至 $sessionDocs。 */
-  sessionDocs?: string[]
   /** 会话作用域：仅命中会话（或无会话上下文时）渲染本扩展点。 */
   scope?: ConversationScope
 }
@@ -74,6 +63,26 @@ export interface TimelineRendererSpec extends UiSpecBase {
   matchMeta?: { renderer: string }
 }
 
+// 3.5 markdown.codeBlock（按围栏语言接管 Markdown 代码块渲染）
+export interface MarkdownCodeBlockSpec extends UiSpecBase {
+  /** 接管的围栏语言列表（如 ['ui', 'json-render']、['mermaid']；不可为空、项不得重复）。 */
+  languages: string[]
+  /** 优先级降序；同优先级保持贡献顺序，缺省 0。同语言多插件冲突时取最高优先级，平级取贡献顺序在先者。 */
+  priority?: number
+  /** 组件引用（需插件定义提供 clientRoot）；无匹配注册或插件停用时回退普通代码块。 */
+  client: ClientComponentRef
+}
+
+/** markdown.codeBlock 组件收到的标准 Props。 */
+export interface MarkdownCodeBlockProps {
+  /** 小写化的围栏语言（与声明 languages 精确匹配，不做子串/前缀）。 */
+  language: string
+  /** 代码块原始文本（去尾部换行；未经任何解析——JSON 合法性由组件自行判定）。 */
+  code: string
+  /** 所在会话上下文（无会话渲染场景为 undefined）。 */
+  conversationId?: number
+}
+
 // 4. tool.view（按 toolName 接管工具调用内联卡片）
 export interface ToolViewSpec extends UiSpecBase {
   priority?: number
@@ -92,7 +101,6 @@ export interface ComposerPillSpec extends UiSpecBase {
 }
 
 export interface ComposerWidgetSpec extends UiSpecBase {}
-
 /** 补全仅插入文本，不执行候选携带的命令。 */
 export interface ComposerCompletionItem {
   id: string
@@ -117,8 +125,8 @@ export type ComposerCompletionSource =
   | { kind: 'action'; actionId: string; actionPluginId?: string }
   | { kind: 'doc' | 'sessionDoc'; name: string; itemsField: string }
 
-/** 补全由宿主统一渲染，不接受 client/json 回调或视图。'/' 保留给命令和技能。 */
-export interface ComposerCompleterSpec extends Omit<UiSpecBase, 'client' | 'json' | 'docs' | 'sessionDocs'> {
+/** 补全由宿主统一渲染，不接受 client 回调或视图。'/' 保留给命令和技能。 */
+export interface ComposerCompleterSpec extends Omit<UiSpecBase, 'client'> {
   label: string
   trigger: '@' | '#' | ':'
   priority?: number
@@ -201,19 +209,21 @@ export interface ProfileRuntimeUiSpec {
   order?: number
 }
 
-/** 微操作可以声明 actionId，或使用 JSON / client 自定义内容。 */
-export interface ConversationActionSpec extends UiSpecBase {
+/** UI 动作统一声明：同一形态服务三类微插槽（target 区分），不再维护三个重复方法。 */
+export interface UiActionSpec extends UiSpecBase {
+  target: 'conversation:header' | 'conversation:row' | 'timeline:entry'
   label: string
   icon?: string
   order?: number
+  /** 仅 conversation:header：'toolbar' 直出按钮组，'menu'（缺省）收纳下拉菜单。 */
   placement?: 'toolbar' | 'menu'
+  /** 绑定宿主代管执行的插件动作（与 client 二选一；两者皆缺在注册边界拒绝）。 */
   actionId?: string
   actionPluginId?: string
   input?: Record<string, unknown>
-}
-
-export interface TimelineEntryActionSpec extends ConversationActionSpec {
+  /** 仅 timeline:entry：接管条目 kind 列表（缺省匹配全部）。 */
   kinds?: string[]
+  /** 仅 timeline:entry：接管文本消息角色。 */
   roles?: Array<'user' | 'assistant'>
 }
 
@@ -255,6 +265,7 @@ export interface PluginUiRegistry {
   sidebarSection(spec: SidebarSectionSpec): void
   screen(spec: ScreenSpec): void
   timelineRenderer(spec: TimelineRendererSpec): void
+  markdownCodeBlock(spec: MarkdownCodeBlockSpec): void
   toolView(spec: ToolViewSpec): void
   composerPill(spec: ComposerPillSpec): void
   composerWidget(spec: ComposerWidgetSpec): void
@@ -264,9 +275,8 @@ export interface PluginUiRegistry {
   command(spec: CommandSpec): void
   settingsPanel(spec: SettingsPanelSpec): void
   profileRuntime(spec: ProfileRuntimeUiSpec): void
-  conversationHeaderAction(spec: ConversationActionSpec): void
-  conversationRowAction(spec: ConversationActionSpec): void
-  timelineEntryAction(spec: TimelineEntryActionSpec): void
+  /** UI 动作统一注册（conversation:header / conversation:row / timeline:entry 三类微插槽）。 */
+  action(spec: UiActionSpec): void
   slot(spec: PluginSlotContributionSpec): void
 }
 
@@ -396,18 +406,16 @@ export interface PluginClientContext {
 
 /**
  * 插件 client.tsx 可导入的宿主共享模块（编译器虚拟化为 __helm_shared_plugin_client
- * 全局命名空间，与 React 同机制共享，绝不打包第二份 React）：
+ * 全局命名空间，与 React 同机制共享，绝不打包第二份 React）。
  *
- *   import { usePluginContext, usePluginDoc, useToolActivity } from '@helm/plugin-client'
- *
- * - Switch：宿主共享的受控布尔开关组件（checked / onChange / disabled / label），
- *   插件复用宿主的 WAI-ARIA 与样式，不另外实现原生 checkbox。
- * - useToolActivity(callId: string | undefined, active: boolean)：报告所在时间线回合的
- *   工具后台活动（影响复制/分叉展示）；卸载/状态切换自动释放同一挂载来源的登记。
- *   无 callId 或不在时间线 Provider 内时不登记，不创建全局状态（工作台不影响时间线）。
- * - usePluginContext：等价宿主 React Context usePluginContext（必须在 <PluginUiView> 内）；
- * - usePluginDoc<T>(docName)：响应式订阅本插件 public doc（SSE plugin.doc.updated
- *   实时重渲染，与宿主 usePluginDoc 同一 store，不足 Promise 轮询）。
+ * 导出符号唯一真源见 PLUGIN_CLIENT_SHARED_EXPORTS：
+ * - hooks：usePluginContext / usePluginDoc / usePluginSessionDoc / useToolActivity /
+ *   useConversations / useConversation；
+ * - 无障碍底座组件：Switch / Select / MultiSelect / Checkbox / Tabs 系列 /
+ *   SegmentedControl / HelmIcon / ViewBoundary / Callout；
+ * - 内容展示：MarkdownView（标准 Markdown 渲染）/ CodeBlockView（语法高亮代码块）/
+ *   CopyButton（复制按钮）；
+ * - PluginSlot：插件间子插槽渲染原语。
  */
 export const HELM_PLUGIN_CLIENT_SHARED_MODULE = '@helm/plugin-client'
 
@@ -420,39 +428,13 @@ export interface PluginClientModuleInfo {
   contentHash: string
 }
 
-/** 声明式 @json-render 轨道支持的全部原语名称唯一真源。 */
-export const SPEC_PRIMITIVE_NAMES = [
-  'Stack',
-  'Card',
-  'Text',
-  'Badge',
-  'Markdown',
-  'MetricGrid',
-  'MetricCard',
-  'KeyValueList',
-  'Callout',
-  'Steps',
-  'BarList',
-  'Table',
-  'Accordion',
-  'TextInput',
-  'Select',
-  'Switch',
-  'CheckboxGroup',
-  'Button',
-  'ActionBar',
-  'Tabs',
-  'Slot',
-] as const
-
-export type SpecPrimitiveName = (typeof SPEC_PRIMITIVE_NAMES)[number]
-
 /** ctx.ui 全部注册方法名唯一真源（与 PluginUiRegistry 接口双向锁定）。 */
 export const PLUGIN_UI_METHOD_NAMES = [
   'sidebarItem',
   'sidebarSection',
   'screen',
   'timelineRenderer',
+  'markdownCodeBlock',
   'toolView',
   'composerPill',
   'composerWidget',
@@ -462,9 +444,7 @@ export const PLUGIN_UI_METHOD_NAMES = [
   'command',
   'settingsPanel',
   'profileRuntime',
-  'conversationHeaderAction',
-  'conversationRowAction',
-  'timelineEntryAction',
+  'action',
   'slot',
 ] as const satisfies readonly (keyof PluginUiRegistry)[]
 
@@ -484,6 +464,31 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'usePluginDoc',
   'usePluginSessionDoc',
   'useToolActivity',
+  'useConversations',
+  'useConversation',
   'PluginSlot',
+  'Switch',
+  'Select',
+  'MultiSelect',
+  'Checkbox',
+  'Tabs',
+  'TabsList',
+  'TabsTrigger',
+  'TabsContent',
+  'SegmentedControl',
+  'HelmIcon',
+  'MarkdownView',
+  'CodeBlockView',
+  'CopyButton',
+  'ViewBoundary',
+  'Callout',
+  'Dialog',
+  'DialogPortal',
+  'DialogOverlay',
+  'DialogContent',
+  'DialogTitle',
+  'DialogDescription',
+  'DialogClose',
+  'DialogTrigger',
 ] as const
 

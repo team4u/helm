@@ -1,6 +1,6 @@
 # 极简微内核哲学
 
-本文介绍 Helm 的微内核设计哲学、零业务角色硬编码机制与五包单向依赖架构。
+本文介绍 Helm 的微内核设计哲学、零业务角色硬编码机制与五包单向依赖架构。扩展点（后端生命周期 Hook 与前端界面插槽）的完整契约见[扩展点详解](extension-points.md)。
 
 ---
 
@@ -13,33 +13,35 @@ Helm 采用机制与策略分离的微内核架构。
 ```mermaid
 flowchart TD
     subgraph Core["@helm/kernel 微内核底座"]
-        Durable["pi-durable 持久会话增强"]
-        Fabric["EnvFabric 跨平台执行底座"]
-        Spawn["原生 spawnAgent 与 Worktree 底座"]
+        Durable["pi-durable 持久会话增强与原生 spawnAgent"]
+        Fabric["EnvFabric 跨平台执行底座与节点文件互斥"]
+        ModelAuth["Model 与 Auth 模型接入与凭据管理"]
         Host["PluginHost 强类型插件宿主"]
     end
 
     subgraph Plugins["内置与外部插件生态"]
-        Workflow["builtin:workflow 确定性编排"]
+        Workflow["builtin:workflow 确定性编排与 Worktree 租约"]
         Profile["builtin:profile 角色与技能底座"]
         Memory["builtin:memory 长期记忆"]
         Superagent["builtin:superagent 双层中枢"]
         Herdr["builtin:herdr 终端主控"]
         Triggers["builtin:triggers 定时与钩子"]
+        JsonRender["builtin:json-render 声明式渲染"]
+        Mermaid["builtin:mermaid 图表渲染"]
         Custom["社区自定义业务插件"]
     end
 
     Plugins --> Core
 ```
 
-内核专注于四项通用核心机制：
+内核只保留四块通用核心机制：
 
-1. **持久会话状态机与增强存储**：提供五态通用会话模型。集成 `state.sqlite` 单库、FTS5 全文检索、`AskDoc` 审批流与 `SecretStash` 机密隔离。
-2. **跨平台执行编排底座 `EnvFabric`**：提供反向 WebSocket 网关与令牌鉴权。支持受管命令执行、实时流传输与节点自升级。
-3. **原生子会话派生与工作树底座**：提供 `spawnAgent` 原生派生（`agent_spawn` Hook 管道 + 原生子会话默认行）与受管 Git Worktree 分配/清理机制。
+1. **持久会话状态机与增强存储**：提供五态通用会话模型与原生 `spawnAgent` 子会话派生（`agent_spawn` Hook 管道 + 原生子会话默认行）。集成 `state.sqlite` 单库、FTS5 全文检索、`AskDoc` 审批流与 `SecretStash` 机密隔离。
+2. **跨平台执行编排底座 `EnvFabric`**：提供反向 WebSocket 网关与令牌鉴权。支持受管命令执行、实时流传输、节点自升级，以及按 `nodeId + canonicalPath` 目标的文件互斥。
+3. **Model 与 Auth**：模型供应商接入与凭据、令牌管理。
 4. **强类型插件宿主 `PluginHost`**：提供基于 `definePlugin(ctx)` 的统一插件生命周期与多端复用机制。
 
-`subagent` / `SubagentWorkflow` / `cleanup_worktree` 模型工具与确定性编排引擎不在内核，由 `builtin:workflow` 插件提供。
+以下能力不在内核：`subagent` / `SubagentWorkflow` / `cleanup_worktree` 模型工具与确定性编排引擎由 `builtin:workflow` 提供；受管 Git Worktree 的租约分配、断点续接与安全清理（`WorktreeAllocator`）同样全部迁入 `builtin:workflow`；内核也不内置巡检定时器，周期性巡检由插件自管服务调度。
 
 ---
 
@@ -78,9 +80,7 @@ flowchart LR
 1. 路由中枢会话：配置 `profileId: 'superagent'`。
 2. 巡检看门狗会话：配置 `profileId: 'watchdog'`。
 
-内核将它们视为普通会话。
-内核只负责分发事件钩子与调度工具执行。
-业务层面的路由、派生与巡检完全由插件逻辑驱动。
+内核将它们视为普通会话。内核只负责分发事件钩子与调度工具执行；插件用自有后台服务驱动巡检周期，不依赖内核定时器。业务层面的路由、派生与巡检完全由插件逻辑驱动。
 
 ---
 

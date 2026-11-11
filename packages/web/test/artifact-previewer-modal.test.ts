@@ -242,7 +242,8 @@ test('scope 贡献：无会话上下文不可泛命中；会话元数据命中�
   installObjectUrlShim()
   const artifact = makeArtifact('art-7', new TextEncoder().encode('hello'), 'a.log', 'text/plain')
   installArtifactFetch([artifact])
-  const contribution = previewerContribution('demo:log', 'log', '日志视图', { extensions: ['.log'], scope: { tags: ['worker'] }, json: { component: 'Text', text: 'PLUGIN-LOG-VIEW' } })
+  seedPluginClientModule('demo:log', 'log.tsx', { LogView: () => e('div', null, 'PLUGIN-LOG-VIEW') })
+  const contribution = previewerContribution('demo:log', 'log', '日志视图', { extensions: ['.log'], scope: { tags: ['worker'] }, client: { module: 'log.tsx', export: 'LogView' } })
 
   // 无会话上下文（conversationId undefined 且 store 无该会话）
   const storeNoCtx = buildStore({ contributions: [contribution], artifacts: [artifact], conversationId: 999 })
@@ -264,7 +265,7 @@ test('scope 贡献：无会话上下文不可泛命中；会话元数据命中�
   await flush()
   const panel = previewPanel()
   assert.ok(panel !== null, '会话命中 scope 后插件视图渲染')
-  assert.match(panel!.textContent ?? '', /PLUGIN-LOG-VIEW/, 'JSON 轨（@json-render）同样挂载')
+  assert.match(panel!.textContent ?? '', /PLUGIN-LOG-VIEW/, 'client 轨同样挂载')
 
   act(() => { root.unmount() })
   
@@ -275,7 +276,8 @@ test('插件停用（贡献移除）：选择状态有效回退默认渲染', { 
   installObjectUrlShim()
   const artifact = makeArtifact('art-mv', new TextEncoder().encode('# hi'), 'readme.md', 'text/markdown')
   installArtifactFetch([artifact])
-  const contribution = previewerContribution('demo:md', 'md', 'MD 视图', { extensions: ['.md'], json: { component: 'Text', text: 'PLUGIN-MD' } })
+  seedPluginClientModule('demo:md', 'md.tsx', { MdView: () => e('div', null, 'PLUGIN-MD') })
+  const contribution = previewerContribution('demo:md', 'md', 'MD 视图', { extensions: ['.md'], client: { module: 'md.tsx', export: 'MdView' } })
   const store = buildStore({ contributions: [contribution], artifacts: [artifact] })
 
   resetBody()
@@ -401,7 +403,8 @@ test('深链元数据异步到达：命名元数据后到 → 扩展名命中插
   installObjectUrlShim()
   const svg = makeArtifact('art-svg2', new TextEncoder().encode('<svg/>'), 'chart.svg', 'image/svg+xml')
   installArtifactFetch([svg])
-  const contribution = previewerContribution('demo:svg', 'svg', 'SVG 视图', { extensions: ['.svg'], json: { component: 'Text', text: 'PLUGIN-SVG-2' } })
+  seedPluginClientModule('demo:svg', 'svg.tsx', { SvgView: () => e('div', null, 'PLUGIN-SVG-2') })
+  const contribution = previewerContribution('demo:svg', 'svg', 'SVG 视图', { extensions: ['.svg'], client: { module: 'svg.tsx', export: 'SvgView' } })
   const store = buildStore({ contributions: [contribution], artifacts: [svg], asyncMeta: true })
 
   resetBody()

@@ -34,6 +34,7 @@ import {
 import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { HELM_CLI_SKILL_ASSET } from '../src/builtin-plugins/profile.js'
 import { MemoryStore } from '../src/builtin-plugins/memory/store.js'
+import { createProfileFileHost } from './helpers/profile-file-host.js'
 import { createHelm } from '../src/app.js'
 import { startHub } from '../src/http/index.js'
 import { redactJsonValue } from '../src/redact.js'
@@ -223,7 +224,7 @@ test('集成1: createHelm 组合——profile/memory 默认协同、locked 保�
     ])
     await env.submitAndWait('请记住我最喜欢的颜色是青瓷绿')
 
-    const memoryFile = await new MemoryStore(kernel.dataDir).getMemory('assistant')
+    const memoryFile = await new MemoryStore(createProfileFileHost(kernel.dataDir)).getMemory('assistant')
     assert.ok(memoryFile.includes(MEMORY_FACT), 'MEMORY.md 应含新记忆（真实文件写入）')
 
     // 收尾轮请求带新记忆（跨模块：工具写入 → before_turn 重读 → 模型请求）
@@ -319,16 +320,20 @@ test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），
     const summary = skills.find((s) => s.id === 'helm-cli')
     assert.ok(summary, 'helm-cli 技能应经 builtin:profile 启动自举')
     assert.equal(summary.managedByPlugin, 'builtin:profile')
-    for (const ref of ['references/generative-ui.md', 'references/workflows-and-agents.md', 'references/skill-and-plugin-dev.md']) {
+    for (const ref of ['references/workflows-and-agents.md', 'references/skill-and-plugin-dev.md']) {
       assert.ok(summary.references.includes(ref), `references 应含 ${ref}`)
     }
+    // generative-ui 技能由 builtin:json-render 插件自举（默认启用），随插件启停过滤
+    const genUi = skills.find((sk) => sk.id === 'generative-ui')
+    assert.ok(genUi, 'generative-ui 技能应经 builtin:json-render 启动自举')
+    assert.equal(genUi.managedByPlugin, 'builtin:json-render')
 
     // 普通回合只注入技能目录，不把 UI/工作流手册全文塞入常驻上下文。
     env.faux.setResponses([env.capture()])
     await env.submitAndWait('你好')
     const sections = env.requests[0]!.systemSections.join('\n')
     assert.ok(sections.includes('helm-cli'), '普通回合应能发现内建技能')
-    assert.ok(sections.includes('references/generative-ui.md'), '目录应指向按需 UI 手册')
+    assert.ok(sections.includes('generative-ui'), '目录应含 json-render 插件技能（富展示入口）')
     assert.ok(!sections.includes('MetricGrid'), 'UI 组件字典不应常驻')
     assert.ok(!sections.includes('workflow(ref, args?)'), '工作流手册不应常驻')
 
@@ -342,8 +347,13 @@ test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），
       ) as Promise<{ text: string }>
     const main = await readSkill()
     assert.ok(main.text.includes('helm') && main.text.includes('--json'), 'SKILL.md 应含 CLI 铁律')
-    const ui = await readSkill('references/generative-ui.md')
-    assert.ok(ui.text.includes('MetricGrid') && ui.text.includes('helm:action'), 'generative-ui 应含组件契约与动作指令')
+    const ui = await host.executeTool(
+      'load_skill',
+      { skillId: 'generative-ui' },
+      { conversationId: env.initialConvId },
+    ) as { text: string }
+    assert.ok(ui.text.includes('```ui'), 'generative-ui 技能应含围栏用法')
+    assert.ok(ui.text.includes('primitives.md'), '应指向原语契约 references')
     const wf = await readSkill('references/workflows-and-agents.md')
     assert.ok(wf.text.includes('pipeline') && wf.text.includes('resumeFromRunId'), 'workflows 应含编排 API 与断点重放')
     const dev = await readSkill('references/skill-and-plugin-dev.md')
@@ -354,7 +364,7 @@ test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），
     const customMain = '---\nname: helm-cli\ndescription: 用户改写\n---\n我的版本\n'
     const customRef = '# 我改过的 UI 手册\n'
     writeFileSync(join(env.dataDir, 'skills', 'helm-cli', 'SKILL.md'), customMain)
-    writeFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'generative-ui.md'), customRef)
+    writeFileSync(join(env.dataDir, 'skills', 'generative-ui', 'SKILL.md'), customRef)
     rmSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'skill-and-plugin-dev.md'))
     writeSkill(env.dataDir, 'user-skill', '---\nname: user-skill\ndescription: 用户自建\n---\n正文\n', { 'notes.md': '# 用户笔记\n' })
     await env.app.close()
@@ -371,8 +381,8 @@ test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），
         '重启后 SKILL.md 必须回到源码版本',
       )
       assert.equal(
-        readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'generative-ui.md'), 'utf8'),
-        HELM_CLI_SKILL_ASSET.references['generative-ui.md']!,
+        readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'workflows-and-agents.md'), 'utf8'),
+        HELM_CLI_SKILL_ASSET.references['workflows-and-agents.md']!,
         '重启后受管 reference 必须回到源码版本',
       )
       const restored = readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'skill-and-plugin-dev.md'), 'utf8')

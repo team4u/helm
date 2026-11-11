@@ -7,7 +7,8 @@ import type {
   ComposerPillSpec,
   ComposerCompleterSpec,
   ComposerWidgetSpec,
-  ConversationActionSpec,
+  MarkdownCodeBlockSpec,
+  UiActionSpec,
   ConversationDetail,
   ConversationLive,
   ConversationScope,
@@ -26,7 +27,6 @@ import type {
   SidebarItemSpec,
   SidebarSectionSpec,
   SkillSummary,
-  TimelineEntryActionSpec,
   TimelineRendererSpec,
   ToolViewSpec,
   WorkbenchPanelSpec,
@@ -75,11 +75,15 @@ export interface QualifiedUiSpec<T> {
   spec: T
 }
 
+/** UI 动作贡献（groupUiContributions 按 surface 还原 target 语义）。 */
+export type QualifiedUiActionSpec = QualifiedUiSpec<UiActionSpec> & { target: UiActionSpec['target'] }
+
 export interface GroupedUiSpecs {
   sidebarItems: Array<QualifiedUiSpec<SidebarItemSpec>>
   sidebarSections: Array<QualifiedUiSpec<SidebarSectionSpec>>
   screens: Array<QualifiedUiSpec<ScreenSpec>>
   timelineRenderers: Array<QualifiedUiSpec<TimelineRendererSpec>>
+  markdownCodeBlocks: Array<QualifiedUiSpec<MarkdownCodeBlockSpec>>
   toolViews: Array<QualifiedUiSpec<ToolViewSpec>>
   composerPills: Array<QualifiedUiSpec<ComposerPillSpec>>
   composerWidgets: Array<QualifiedUiSpec<ComposerWidgetSpec>>
@@ -89,9 +93,7 @@ export interface GroupedUiSpecs {
   commands: Array<QualifiedUiSpec<CommandSpec>>
   settingsPanels: Array<QualifiedUiSpec<SettingsPanelSpec>>
   profileRuntimes: Array<QualifiedUiSpec<ProfileRuntimeUiSpec>>
-  conversationHeaderActions: Array<QualifiedUiSpec<ConversationActionSpec>>
-  conversationRowActions: Array<QualifiedUiSpec<ConversationActionSpec>>
-  timelineEntryActions: Array<QualifiedUiSpec<TimelineEntryActionSpec>>
+  uiActions: QualifiedUiActionSpec[]
   pluginSlots: Array<QualifiedUiSpec<PluginSlotContributionSpec>>
 }
 
@@ -117,6 +119,7 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
     sidebarSections: [],
     screens: [],
     timelineRenderers: [],
+    markdownCodeBlocks: [],
     toolViews: [],
     composerPills: [],
     composerWidgets: [],
@@ -126,9 +129,7 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
     commands: [],
     settingsPanels: [],
     profileRuntimes: [],
-    conversationHeaderActions: [],
-    conversationRowActions: [],
-    timelineEntryActions: [],
+    uiActions: [],
     pluginSlots: [],
   }
   for (const item of contributions) {
@@ -146,6 +147,9 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
         break
       case 'timeline.renderer':
         grouped.timelineRenderers.push({ pluginId: item.pluginId, spec: spec as unknown as TimelineRendererSpec })
+        break
+      case 'markdown.codeBlock':
+        grouped.markdownCodeBlocks.push({ pluginId: item.pluginId, spec: spec as unknown as MarkdownCodeBlockSpec })
         break
       case 'tool.view':
         grouped.toolViews.push({ pluginId: item.pluginId, spec: spec as unknown as ToolViewSpec })
@@ -173,13 +177,13 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
         grouped.profileRuntimes.push({ pluginId: item.pluginId, spec: spec as unknown as ProfileRuntimeUiSpec })
         break
       case 'conversation.header.action':
-        grouped.conversationHeaderActions.push({ pluginId: item.pluginId, spec: spec as unknown as ConversationActionSpec })
+        grouped.uiActions.push({ pluginId: item.pluginId, spec: spec as unknown as UiActionSpec, target: 'conversation:header' })
         break
       case 'conversation.row.action':
-        grouped.conversationRowActions.push({ pluginId: item.pluginId, spec: spec as unknown as ConversationActionSpec })
+        grouped.uiActions.push({ pluginId: item.pluginId, spec: spec as unknown as UiActionSpec, target: 'conversation:row' })
         break
       case 'timeline.entry.action':
-        grouped.timelineEntryActions.push({ pluginId: item.pluginId, spec: spec as unknown as TimelineEntryActionSpec })
+        grouped.uiActions.push({ pluginId: item.pluginId, spec: spec as unknown as UiActionSpec, target: 'timeline:entry' })
         break
       case 'plugin.slot':
         grouped.pluginSlots.push({ pluginId: item.pluginId, spec: spec as unknown as PluginSlotContributionSpec })
@@ -195,9 +199,10 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
   grouped.workbenchPanels.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
   grouped.settingsPanels.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
   grouped.profileRuntimes.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
-  grouped.conversationHeaderActions.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
-  grouped.conversationRowActions.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
-  grouped.timelineEntryActions.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
+  grouped.uiActions.sort((a, b) => {
+    if (a.target !== b.target) return a.target.localeCompare(b.target)
+    return (a.spec.order ?? 100) - (b.spec.order ?? 100)
+  })
   return grouped
 }
 

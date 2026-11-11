@@ -1,4 +1,4 @@
-export { createHelm, createHerdrNodeChannel, type HelmOptions } from './app.js';
+export { createHelm, type HelmOptions } from './app.js';
 export { KernelRuntime } from './runtime/index.js';
 export { createHubHandler, startHub } from './http/index.js';
 export {
@@ -38,7 +38,7 @@ export {
 } from './builtin-plugins/superagent.js';
 export { createTriggersPlugin, TRIGGERS_PLUGIN_ID } from './builtin-plugins/triggers.js';
 export { createMagpiePlugin, MAGPIE_PLUGIN_ID } from './builtin-plugins/magpie.js';
-export { MAGPIE_PROVIDER_ID, type MagpiePluginDependencies, type MagpiePluginConfig, type MagpieStatusDoc } from './builtin-plugins/magpie/contracts.js';
+export { MAGPIE_PROVIDER_ID, type MagpiePluginConfig, type MagpieStatusDoc } from './builtin-plugins/magpie/contracts.js';
 export type { HerdrPluginDependencies, HerdrTransport, HerdrTarget, HerdrEvent } from './builtin-plugins/herdr/contracts.js';
 export * from './plugins/index.js';
 export * from './services/index.js';

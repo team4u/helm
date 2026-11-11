@@ -28,7 +28,7 @@ async function buildApp(dataDir: string, model = 'faux/faux-1') {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model, models, watchdogIntervalMs: 0 })
+  const app = await createHelm({ dataDir, cwd: dataDir, model, models })
   return { faux, app }
 }
 

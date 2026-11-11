@@ -11,8 +11,12 @@
  *   入口探测）解析入口文件相对路径，严格校验不越出插件目录（防路径穿越，
  *   realpath 保证真实入口不越 root）。清单损坏 / 非对象 / main 非法 /
  *   入口越界 / 入口缺失一律显式 HelmError，绝不静默吞错（诚实性纪律）；
- * - 无 `plugin.json` → 依次探测 `index.mjs` / `index.js` / `plugin.mjs` /
- *   `plugin.js`；一个都不存在 → 只是普通插件数据目录，静默跳过。
+ * - 无 `plugin.json` → 依次探测 `index.ts` / `index.tsx` / `index.mjs` /
+ *   `index.js` / `plugin.ts` / `plugin.tsx` / `plugin.mjs` / `plugin.js`；
+ *   一个都不存在 → 只是普通插件数据目录，静默跳过。
+ * - 入口为 .ts/.tsx/.mts/.cts 时由 backend-ts-loader 在进程内转译加载
+ *   （源码即模块 URL，import.meta.url 指向插件真实源文件；相对 .js -> .ts
+ *   映射、Node 内置 / 插件目录 npm 依赖、@helm/* 宿主同一实例全部可用）。
  * - IO 错误区分：仅 ENOENT / ENOTDIR 表示「文件不存在」；EACCES 等其他
  *   IO 错误显式抛错，绝不误判为纯数据目录跳过。
  *
@@ -34,6 +38,7 @@ import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { HelmError, type PluginDefinition, type PluginSummary } from '@helm/protocol';
+import { registerPluginTsRoot } from './backend-ts-loader.js';
 
 /** 加载器所需的最小宿主形状（真实 PluginHost 结构兼容，便于独立测试）。 */
 export interface ExternalPluginHost {
@@ -41,8 +46,17 @@ export interface ExternalPluginHost {
   list(): PluginSummary[] | Promise<PluginSummary[]>;
 }
 
-/** 无 plugin.json（或 main 缺省）时的约定入口探测顺序。 */
-const CONVENTION_ENTRIES = ['index.mjs', 'index.js', 'plugin.mjs', 'plugin.js'] as const;
+/** 无 plugin.json（或 main 缺省）时的约定入口探测顺序（TypeScript 优先，同 pi 习惯）。 */
+const CONVENTION_ENTRIES = [
+  'index.ts',
+  'index.tsx',
+  'index.mjs',
+  'index.js',
+  'plugin.ts',
+  'plugin.tsx',
+  'plugin.mjs',
+  'plugin.js',
+] as const;
 
 /**
  * 扫描 `<dataDir>/plugins/` 并动态加载全部外部插件（默认停用注册）。
@@ -65,19 +79,31 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
     const dirPath = resolve(pluginsDir, entry.name);
     const entryPath = await resolvePluginEntry(dirPath);
     if (entryPath === undefined) continue; // 纯插件数据目录：静默跳过
-    const definition = await importPluginDefinition(dirPath, entryPath);
-    const existingIds = new Set((await plugins.list()).map((summary) => summary.id));
-    if (existingIds.has(definition.id)) {
-      throw new HelmError(
-        'plugin_already_registered',
-        `外部插件 ${dirPath} 的 id 与已注册插件冲突: ${definition.id}`,
-        409,
-        { dirPath, id: definition.id },
-      );
+    // 为插件目录启用后端 TS 转译（含运行期动态 import 的相对 TS 依赖）。
+    // 任一失败路径（导入 / id 冲突 / 宿主注册）都释放计数；成功注册则根常驻
+    // 本进程：插件运行期动态 import 依赖转译可用，已加载模块在 ESM 缓存中保持
+    // identity。因此插件停用/卸载不释放根、不卸载已加载模块（同进程内重新
+    // 注册不重复初始化）；释放仅发生在加载失败回退时。
+    const releaseTsRoot = registerPluginTsRoot(dirPath);
+    let committed = false;
+    try {
+      const definition = await importPluginDefinition(dirPath, entryPath);
+      const existingIds = new Set((await plugins.list()).map((summary) => summary.id));
+      if (existingIds.has(definition.id)) {
+        throw new HelmError(
+          'plugin_already_registered',
+          `外部插件 ${dirPath} 的 id 与已注册插件冲突: ${definition.id}`,
+          409,
+          { dirPath, id: definition.id },
+        );
+      }
+      const normalized = normalizeDefinition(definition, dirPath);
+      await plugins.register(normalized, { enabled: false });
+      committed = true;
+      registered.push(normalized.id);
+    } finally {
+      if (!committed) releaseTsRoot();
     }
-    const normalized = normalizeDefinition(definition, dirPath);
-    await plugins.register(normalized, { enabled: false });
-    registered.push(normalized.id);
   }
   return registered;
 }
@@ -255,11 +281,12 @@ async function importPluginDefinition(dirPath: string, entryPath: string): Promi
   try {
     mod = (await import(pathToFileURL(entryPath).href)) as { default?: unknown; plugin?: unknown };
   } catch (err) {
+    if (err instanceof HelmError) throw err; // 转译错误已带定位，原样上抛
     throw new HelmError(
       'plugin_load_failed',
       `外部插件模块加载失败: ${entryPath}（${err instanceof Error ? err.message : String(err)}）`,
       500,
-      { dirPath, entryPath },
+      { dirPath, entryPath, cause: err instanceof Error ? { message: err.message, stack: err.stack } : undefined },
     );
   }
   const candidate = mod.default ?? mod.plugin;

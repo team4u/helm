@@ -121,7 +121,7 @@ async function makeEnv(dataDir?: string): Promise<SuperAgentEnv> {
   const models = createModels()
   models.setProvider(faux.provider)
 
-  const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 })
+  const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
 
   const requests: SuperAgentEnv['requests'] = []
   faux.setResponses([])

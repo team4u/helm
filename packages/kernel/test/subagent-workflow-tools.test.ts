@@ -124,7 +124,6 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       cwd: dir,
       model: 'faux/faux-1',
       models: models as never,
-      watchdogIntervalMs: 0,
     })
     try {
       await kernel.plugins.register(createWorkflowPlugin())
@@ -214,7 +213,6 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       cwd: dir,
       model: 'faux/faux-1',
       models: models as never,
-      watchdogIntervalMs: 0,
     })
     try {
       await kernel.plugins.register(createWorkflowPlugin())
@@ -270,7 +268,6 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       cwd: dir,
       model: 'faux/faux-1',
       models: models as never,
-      watchdogIntervalMs: 0,
     })
     try {
       await kernel.plugins.register(createWorkflowPlugin())
@@ -313,7 +310,6 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       cwd: dir,
       model: 'faux/faux-1',
       models: models as never,
-      watchdogIntervalMs: 0,
     })
     try {
       await kernel.plugins.register(createWorkflowPlugin())
@@ -387,7 +383,6 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       cwd: dir,
       model: 'faux/faux-1',
       models: models as never,
-      watchdogIntervalMs: 0,
     })
     try {
       // --- script + args（对象）：脚本内 args.items.map 依赖真实结构 ---
@@ -462,7 +457,6 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       cwd: dir,
       model: 'faux/faux-1',
       models: models as never,
-      watchdogIntervalMs: 0,
     })
     try {
       faux.setResponses([
@@ -498,7 +492,6 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       cwd: dir,
       model: 'faux/faux-1',
       models: models as never,
-      watchdogIntervalMs: 0,
     })
     try {
       // 1. 模型传 JSON 字符串形式的 args 对象：'{"topics": ["星辰", "大海"], "n": 42}'
@@ -599,7 +592,6 @@ test('subagent 失败于子会话创建后：错误输出仍附 footer 与 execu
     cwd: dir,
     model: 'faux/faux-1',
     models: models as never,
-    watchdogIntervalMs: 0,
   })
   try {
     // 子代理回合只回思考无文本：driveTurn 在 onResolved 之后抛
@@ -648,7 +640,6 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
       cwd: dir,
       hubUrl: 'http://127.0.0.1:3999',
       model: 'faux/faux-1',
-      watchdogIntervalMs: 0,
     })
     try {
       process.env['HELM_SPAWN_SPY'] = 'host-secret'
@@ -690,7 +681,6 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',
-      watchdogIntervalMs: 0,
     })
     try {
       assert.throws(() => kernel.buildSpawnEnv(0, '/x'), (err: unknown) => {
@@ -740,7 +730,6 @@ describe('runGate/runShell options.env 注入（本机 Gate 与 Herdr 任务同�
       cwd: dir,
       hubUrl: 'http://127.0.0.1:3999',
       model: 'faux/faux-1',
-      watchdogIntervalMs: 0,
     })
     try {
       // 插件会传 Profile.runtime.env 与管理环境组成的 spawnEnv：自定义 CI 路径
@@ -794,7 +783,6 @@ describe('runGate/runShell options.env 注入（本机 Gate 与 Herdr 任务同�
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',
-      watchdogIntervalMs: 0,
     })
     try {
       process.env['HELM_GATE_TEST_BASE'] = 'from-host'

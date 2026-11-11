@@ -19,7 +19,7 @@ async function fixture() {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 })
+  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   return { kernel, faux, async close() { try { await kernel.close() } finally { await rm(dataDir, { recursive: true, force: true }) } } }
 }
 

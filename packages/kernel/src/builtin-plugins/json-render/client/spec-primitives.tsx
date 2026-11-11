@@ -6,16 +6,9 @@
  * 的 .jr-* / .btn / .badge / .card / .list / .tabs 既有类，零新增全局样式。
  */
 import { useEffect, useId, useState, type ReactNode } from 'react'
-import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import type { SpecPrimitiveName } from '@helm/protocol'
-import { HelmIcon } from '../lib/icons.js'
-import { Select } from './Select.js'
-import { Checkbox } from './Checkbox.js'
-import { Tabs, TabsList, TabsTrigger } from './Tabs.js'
-import { evaluateSpecValue, type EvalScope } from './evaluator.js'
-import { formatSpecText, normalizeSpec, resolveKeyValueItems, type NormalizedSpecNode } from './spec-normalize.js'
-import { PluginSlot } from './PluginSlot.js'
+import { HelmIcon, Select, Checkbox, Tabs, TabsList, TabsTrigger, PluginSlot, MarkdownText } from '@helm/plugin-client'
+import { evaluateSpecValue, type EvalScope } from './evaluator.ts'
+import { formatSpecText, normalizeSpec, resolveKeyValueItems, type NormalizedSpecNode } from './spec-normalize.ts'
 
 export interface SpecRenderContext {
   /** 属性求值作用域（$docs / $sessionDocs / $data / $row / $value）。 */
@@ -151,7 +144,7 @@ function MarkdownImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRender
   const text = typeof rawText === 'string' ? rawText : formatSpecText(rawText)
   return (
     <div className="jr-markdown msg-ai-body">
-      <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>
+      <MarkdownText text={text} />
     </div>
   )
 }
@@ -789,6 +782,14 @@ function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
       </div>
     )
   }
+  if (ctx.pluginId === undefined) {
+    return (
+      <div className="jr-callout jr-callout-warn">
+        <HelmIcon name="alert-triangle" size={13} />
+        <span>Slot 原语仅在插件视图内可用（聊天代码块无插件宿主）</span>
+      </div>
+    )
+  }
   return (
     <PluginSlot
       name={name}
@@ -806,6 +807,14 @@ function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
 // ---------------------------------------------------------------------------
 
 export type SpecPrimitiveImpl = (args: { node: NormalizedSpecNode; ctx: SpecRenderContext }) => ReactNode
+
+/** 本插件私有的原语名契约（从 protocol 迁出；注册表见文件尾）。 */
+export type SpecPrimitiveName =
+  | 'Stack' | 'Card' | 'Text' | 'Badge' | 'Markdown'
+  | 'MetricGrid' | 'MetricCard' | 'KeyValueList' | 'Callout'
+  | 'Steps' | 'BarList' | 'Table' | 'Accordion'
+  | 'TextInput' | 'Select' | 'Switch' | 'CheckboxGroup'
+  | 'Button' | 'ActionBar' | 'Tabs' | 'Slot'
 
 const PRIMITIVES: Record<SpecPrimitiveName, SpecPrimitiveImpl> = {
   Stack: StackImpl,

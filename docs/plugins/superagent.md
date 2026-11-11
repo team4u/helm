@@ -160,12 +160,11 @@ sequenceDiagram
 
 ## 两层巡检与看门狗红线
 
-巡检看门狗每分钟执行一次周期性系统巡检。
-巡检采用分层处理策略。
+巡检周期由插件自有后台服务（`ctx.service`）驱动：内核不内置巡检定时器，也不存在 `watchdog_tick` Hook；插件在自己的服务循环中按固定节奏采集探针并触发巡检，终端侧诊断（如 Herdr 窗格状态）通过通用进程内事件采集。
 
 ```mermaid
 flowchart TD
-    Tick["watchdog_tick 周期性触发"] --> Layer1["Layer 1: 机械探针采集"]
+    Tick["插件自管服务周期触发"] --> Layer1["Layer 1: 机械探针采集"]
     Layer1 --> Snapshot["汇总探针快照 WatchdogProbe"]
     Snapshot --> RuleCheck{"是否存在停滞或连续错误?"}
     RuleCheck -- 存在异常 --> Layer2["Layer 2: 投入看门狗模型会话"]
@@ -180,7 +179,7 @@ flowchart TD
 ### 两层巡检分工
 
 1. **Layer 1 机械探针**：
-   - 宿主无开销采集所有会话与终端窗格状态。
+   - 插件服务采集所有会话与终端窗格状态。
    - 记录状态停滞毫秒数 `stalledMs`。
    - 统计连续错误次数与尾部输出快照。
 2. **Layer 2 规则模型推理**：

@@ -56,130 +56,109 @@ flowchart TD
 3. **安全默认启用状态**：
    - 外部插件初次注册时默认为未启用状态。
    - 用户必须通过显式命令激活插件。
+4. **TS 入口与模块生命周期**：
+   - 后端入口与相对依赖（含 `.js` 说明符映射到同名 `.ts`、无扩展名、目录 `index.ts`）在宿主进程内转译加载；`import.meta.url` 指向插件目录内的真实源文件。
+   - 插件目录可自带 `node_modules`，Node 内置模块与第三方 npm 包按常规规则解析；`@helm/*` 公共包由宿主提供同一实例。
+   - 插件根在注册成功后常驻宿主进程：插件运行期动态 `import()` 的 TS 依赖始终可转译；同一模块在同进程内只初始化一次。
+   - 停用或卸载插件不会卸载已加载的模块（同进程内重新启用/重新注册不重复初始化）；完全重新加载插件代码需重启 Hub 进程。
 
 ---
 
 ## 后端逻辑开发
 
-插件通过导出标准的 `definePlugin(ctx)` 函数注入能力。
+插件通过导出标准定义对象（`export default { ... definePlugin(ctx) {...} }`）注入能力；外部加载器只接受对象形式的默认导出。
 
 ### 完整后端示例
 
 ```typescript
-import { HelmError, type PluginDefinition } from '@helm/protocol';
+import { type PluginDefinition } from '@helm/protocol';
 
-export default function createPlugin(): PluginDefinition {
-  return {
-    id: 'sample-plugin',
-    name: '示例业务插件',
-    version: '1.0.0',
-    definePlugin(ctx) {
-      // 1. 声明配置结构 (secret: true 自动存储至 credentials.json)
-      ctx.configSchema({
-        apiKey: {
-          type: 'string',
-          secret: true,
-          description: '远端服务认证密钥',
-        },
-        retryCount: {
-          type: 'number',
-          default: 3,
-        },
-      });
+// 外部插件：export default 定义对象（加载器只接受对象，不接受工厂函数）
+export default {
+  id: 'sample-plugin',
+  name: '示例业务插件',
+  version: '1.0.0',
+  definePlugin(ctx) {
+    // 1. 声明配置结构 (secret: true 自动存储至 credentials.json)
+    ctx.configSchema({
+      apiKey: {
+        type: 'string',
+        secret: true,
+        description: '远端服务认证密钥',
+      },
+      retryCount: {
+        type: 'number',
+        default: 3,
+      },
+    });
 
-      // 2. 声明持久状态文档
-      const statsDoc = ctx.doc('stats', { totalCalls: 0 }, { public: true });
+    // 2. 声明持久状态文档
+    const statsDoc = ctx.doc('stats', { totalCalls: 0 }, { public: true });
 
-      // 3. 注册单点 Schema 动作
-      ctx.action({
-        id: 'send_notice',
-        description: '发送业务通知消息',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            target: { type: 'string' },
-            content: { type: 'string' },
-          },
-          required: ['target', 'content'],
-          additionalProperties: false,
+    // 3. 注册单点 Schema 动作
+    ctx.action({
+      id: 'send_notice',
+      description: '发送业务通知消息',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target: { type: 'string' },
+          content: { type: 'string' },
         },
-        outputSchema: {
-          type: 'object',
-          properties: {
-            success: { type: 'boolean' },
-          },
-          required: ['success'],
-          additionalProperties: false,
+        required: ['target', 'content'],
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
         },
-        exposeAsTool: true,
-        async handler(input, context) {
-          statsDoc.update((state) => ({
-            ...state,
-            totalCalls: state.totalCalls + 1,
-          }));
-          return { success: true };
-        },
-      });
+        required: ['success'],
+        additionalProperties: false,
+      },
+      exposeAsTool: true,
+      async handler(input, context) {
+        statsDoc.update((state) => ({
+          ...state,
+          totalCalls: state.totalCalls + 1,
+        }));
+        return { success: true };
+      },
+    });
 
-      // 4. 注册生命周期服务与在途任务检查
-      let activeJobs = 0;
-      ctx.service({
-        id: 'worker-service',
-        async start() {},
-        async stop() {},
-        liveTasks() {
-          return activeJobs > 0 ? [`job-count:${activeJobs}`] : [];
-        },
-      });
-    },
-  };
-}
+    // 4. 注册生命周期服务与在途任务检查
+    let activeJobs = 0;
+    ctx.service({
+      id: 'worker-service',
+      async start() {},
+      async stop() {},
+      liveTasks() {
+        return activeJobs > 0 ? [`job-count:${activeJobs}`] : [];
+      },
+    });
+  },
+} satisfies PluginDefinition;
 ```
+
+### 外部插件加载机制
+
+外部插件入口支持直接使用 TypeScript（`.ts` / `.tsx`）：宿主加载器基于 Node 24 `module.registerHooks` 钩子加载源码，对 `.ts` / `.tsx` 文件用 esbuild 做 transform（不打包），按依赖闭包逐文件转译。模块内的 `import.meta.url` 始终指向真实源码文件 URL；裸 npm 说明符从插件自身目录解析；`@helm/protocol` 等宿主协议包与宿主共享同一实例，不重复加载。加载器不承诺解析 `tsconfig` 的 `paths` 别名，插件源码不要依赖 tsconfig aliases。
 
 ---
 
-## 前端双轨开发机制
+## 前端 client.tsx 单轨开发机制
 
-Helm 支持声明式 JSON 与原生 React 两种前端界面扩展轨道。
+Helm 视图类扩展点统一采用 `client.tsx` 原生 React 组件单轨：`UiSpecBase` 不再同时接受 `json / docs / sessionDocs` 与 `client` 双轨声明。声明式 JSON 渲染能力由 `builtin:json-render` 插件提供（默认启用、可停用），需要纯数据驱动的界面时依赖该插件的能力而非在视图声明中写 `json` 字段。
 
 ```mermaid
 flowchart LR
-    Submissions["前端 UI 贡献声明"] --> TrackChoice{"选择开发轨道"}
-    TrackChoice -- 轻量声明式 --> Track1["轨道一: @json-render (JSON Spec)"]
-    TrackChoice -- 高级交互式 --> Track2["轨道二: client.tsx (原生 React)"]
-    Track1 --> FastRender["无编译直出 UI 视图"]
-    Track2 --> Compiler["PluginClientCompiler 编译打包"]
+    Submissions["前端 UI 贡献声明"] --> Compiler["PluginClientCompiler 编译打包"]
     Compiler --> SharedRun["共享宿主 React 运行时执行（可信代码，非沙箱）"]
 ```
 
-### 轨道一：`@json-render` 声明式视图
+### `client.tsx` React 组件
 
-适合构建配置面板、表格与简单指标卡片。
-视图无需编写前端构建配置。
-
-```typescript
-ctx.ui.settingsPanel({
-  id: 'sample-settings',
-  label: '示例插件配置',
-  docs: ['stats'],
-  json: {
-    component: 'Stack',
-    children: [
-      { component: 'Text', variant: 'title', text: '业务统计总览' },
-      {
-        component: 'KeyValueList',
-        items: [
-          { key: '/$docs/stats/totalCalls', label: '调用总次数' },
-        ],
-      },
-    ],
-  },
-});
-```
-
-### 轨道二：`client.tsx` 原生 React 组件
-
-适合构建带复杂交互、动态图表或定制样式的视图。
+适合构建配置面板、指标卡片与带复杂交互、动态图表或定制样式的视图。
 
 1. **依赖共享规范**：
    - 组件引入 `react`、`react-dom` 与 `lucide-react`。
@@ -237,7 +216,7 @@ export function SampleWidget() {
 
 `ctx.callAction(actionId, input, { pluginId?, conversationId? })` 支持显式跨插件调用。`ctx.submitInput(text, { conversationId?, whenBusy? })` 向指定或当前会话提交输入；缺少会话时明确报错。
 
-Screen 组件通过 `ScreenProps.params / setParams` 管理可深链子页面，并通过 `isSplit` 区分主屏与分屏。输入区组件通过 `props.composer` 或 `ctx.composer` 读写草稿、插入文本、读取附件和提交输入。控制函数不注入声明式求值域；JSON 子插槽只接收数据。
+Screen 组件通过 `ScreenProps.params / setParams` 管理可深链子页面，并通过 `isSplit` 区分主屏与分屏。输入区组件通过 `props.composer` 或 `ctx.composer` 读写草稿、插入文本、读取附件和提交输入。
 
 `<PluginSlot name="cards" slotProps={{ selectedId }} />` 相对当前插件声明子插槽，贡献方注册 `ctx.ui.slot({ id: 'my-card', target: 'owner-plugin/cards', client: ... })`。`mode="single"` 用优先级选择单个贡献，默认 `list` 渲染全部。循环引用显示错误而不继续渲染。
 

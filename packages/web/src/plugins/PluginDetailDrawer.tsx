@@ -160,7 +160,7 @@ export function PluginConfigForm({
         })}
       </div>
       {error && (
-        <div className="jr-callout jr-callout-err" role="alert">
+        <div className="callout callout--error" role="alert">
           <HelmIcon name="alert-circle" size={13} />
           <span className="selectable">{error}</span>
         </div>
@@ -343,7 +343,7 @@ export function PluginDetailDrawer({
                 </div>
 
                 {actionError && (
-                  <div className="jr-callout jr-callout-err" role="alert">
+                  <div className="callout callout--error" role="alert">
                     <HelmIcon name="alert-circle" size={13} />
                     <span className="selectable">{actionError}</span>
                   </div>
@@ -433,7 +433,7 @@ export function PluginDetailDrawer({
                       <span>正在读取配置...</span>
                     </div>
                   ) : configError ? (
-                    <div className="jr-callout jr-callout-err" role="alert">
+                    <div className="callout callout--error" role="alert">
                       <HelmIcon name="alert-circle" size={13} />
                       <span className="selectable">{configError}</span>
                     </div>

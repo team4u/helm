@@ -36,6 +36,7 @@ import {
 } from '@helm/protocol'
 import { WorkflowService } from './workflow/engine/index.js'
 import { normalizeWorkflowArgs } from './workflow/engine/runtime.js'
+import { WorktreeIsolation } from './workflow/isolation.js'
 import { safeResultText } from '../runtime/runtime-helpers.js'
 import { executionOf, subagentFooter } from './workflow/tool-result.js'
 import { redactJsonValue } from '../redact.js'
@@ -146,6 +147,51 @@ export function createWorkflowPlugin(): PluginDefinition {
       // ---- 引擎私有 records 文档（键值 store：run 索引 + 每 run 记录） ----
       // 私有 doc：不进公共快照/事件；引擎经此持久化，重启恢复读同一命名空间。
       const records = ctx.doc<Record<string, unknown>>('records', {})
+
+      // ---- worktree 隔离资产文档（受管登记 + durable 租约；停用保留可重读） ----
+      // 与 records 同层：allocator 登记表 + 租约表 + agentId 绑定表。插件停用
+      // 期间不清除，重新启用后 cleanup 可继续定位（不丢 metadata）。
+      const worktreeDocs = ctx.doc<Record<string, unknown>>('worktree-state', {})
+      const worktreeDocStore = {
+        get<T>(key: string, initial: T): T {
+          const all = worktreeDocs.get()
+          const raw = all[key]
+          return raw === undefined ? initial : (structuredClone(raw) as T)
+        },
+        set<T>(key: string, value: T): void {
+          worktreeDocs.update((current) => ({ ...current, [key]: structuredClone(value) }))
+        },
+        flush: (): Promise<void> => worktreeDocs.flush(),
+      }
+
+      /**
+       * worktree 隔离生命周期（本插件自有 Git 能力）：
+       * - agent_spawn around（continuation）包襄完整派生：分配/续接/占用/租约；
+       * - priority 200（先于外部运行时接管器如 herdr 的 100 执行 = 更外层），
+       *   保证外部执行也被租约与登记包襄；
+       * - Git 命令经 ctx.host.execEnv（argv 直跑）在真实最终节点执行。
+       */
+      const isolation = new WorktreeIsolation({
+        host: {
+          resolveSpawnTarget: (input) => ctx.host.resolveSpawnTarget(input),
+          execEnv: (req, opts) => ctx.host.execEnv(req, opts),
+          probeNodeFs: (input) => ctx.host.probeNodeFs(input),
+          listActiveSpawnExecutions: () => ctx.host.listActiveSpawnExecutions(),
+          redactText: (text) => ctx.host.redactText(text),
+          getConversation: (id) => {
+            const conv = ctx.host.getConversation(id)
+            return { cwd: conv.cwd, nodeId: conv.nodeId, status: conv.status }
+          },
+        },
+        docStore: worktreeDocStore,
+      })
+
+      // ---- agent_spawn around（continuation）：worktree 隔离完整生命周期 ----
+      // priority 200：先于外部运行时接管器（如 herdr 的 100）执行 = 更外层，
+      // 外部执行同样被租约与登记包襄；不调 next 的接管器（handled）不受影响。
+      ctx.hook.onAgentSpawn(async (request, next) => {
+        await isolation.aroundSpawn(request, next)
+      }, { priority: 200 })
 
       // 受控 stop 时序：teardown 先置 deactivating 会废黜 doc 句柄，但 service.stop
       // 属宿主受控调用链——本插件在 stop 内最后再同步 runs 投影。为使 stop 期间的
@@ -620,7 +666,7 @@ export function createWorkflowPlugin(): PluginDefinition {
           const selectorConversationId =
             a['conversationId'] !== undefined ? Number(a['conversationId']) : hasExplicit ? undefined : context.conversationId
           try {
-            const result = await ctx.host.cleanupWorktree(
+            const result = await isolation.cleanup(
               {
                 ...(a['worktreeId'] !== undefined ? { worktreeId: String(a['worktreeId']) } : {}),
                 ...(selectorConversationId !== undefined ? { conversationId: selectorConversationId } : {}),
@@ -869,7 +915,7 @@ export function createWorkflowPlugin(): PluginDefinition {
           const hasExplicit = a['worktreeId'] !== undefined || a['path'] !== undefined || a['conversationId'] !== undefined
           const selectorConversationId =
             a['conversationId'] !== undefined ? Number(a['conversationId']) : hasExplicit ? undefined : context.conversationId
-          return ctx.host.cleanupWorktree(
+          return isolation.cleanup(
             {
               ...(a['worktreeId'] !== undefined ? { worktreeId: String(a['worktreeId']) } : {}),
               ...(selectorConversationId !== undefined ? { conversationId: selectorConversationId } : {}),
@@ -883,19 +929,17 @@ export function createWorkflowPlugin(): PluginDefinition {
         },
       })
 
-      // ---- UI 扩展点（client.tsx 轨道；sessionDocs 按会话订阅 runs 分片） ----
+      // ---- UI 扩展点（client.tsx 轨道；组件经 usePluginSessionDoc 自行订阅 runs 分片） ----
       ctx.ui.toolView({
         id: 'subagent-card',
         toolNames: ['subagent'],
         replaceRow: true,
-        sessionDocs: [WORKFLOW_RUNS_DOC],
         client: { module: 'index.tsx', export: 'SubagentToolView' },
       })
       ctx.ui.toolView({
         id: 'workflow-card',
         toolNames: ['SubagentWorkflow'],
         replaceRow: true,
-        sessionDocs: [WORKFLOW_RUNS_DOC],
         client: { module: 'index.tsx', export: 'WorkflowToolView' },
       })
       ctx.ui.workbenchPanel({
@@ -903,7 +947,6 @@ export function createWorkflowPlugin(): PluginDefinition {
         label: '工作流与子代理',
         icon: 'git-branch',
         order: 10,
-        sessionDocs: [WORKFLOW_RUNS_DOC],
         badge: { doc: WORKFLOW_RUN_BADGES_DOC, byConversationField: 'byConversation' },
         client: { module: 'index.tsx', export: 'WorkflowWorkbenchPanel' },
       })

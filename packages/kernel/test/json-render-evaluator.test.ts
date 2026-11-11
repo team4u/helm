@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { evaluateSpecValue, parseExpressionSegments, type EvalScope } from '../src/ui/evaluator.js'
+import { evaluateSpecValue, parseExpressionSegments, type EvalScope } from '../src/builtin-plugins/json-render/client/evaluator.js'
 
 const sampleScope: EvalScope = {
   $docs: {

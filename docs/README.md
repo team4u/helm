@@ -49,17 +49,17 @@ flowchart LR
 ### 3. 插件开发者路径
 
 适合需要扩展 Helm 功能的系统开发者。
-你可以通过前后端对称双 7 扩展点开发全功能插件。
+你可以通过生命周期 Hook 与全界面扩展点开发全功能插件。
 
 ```mermaid
 flowchart LR
-    A["微内核架构哲学"] --> B["双 7 扩展点机制"]
+    A["微内核架构哲学"] --> B["Hook 与 UI 扩展点机制"]
     B --> C["插件契约 definePlugin"]
     C --> D["交付前后端扩展"]
 ```
 
 1. [极简微内核哲学](architecture/overview.md)：理解零业务角色硬编码设计
-2. [前后端对称双 7 扩展点](architecture/extension-points.md)：掌握 7 大生命周期 Hook 与 7 大界面扩展
+2. [生命周期 Hook 与全界面扩展点](architecture/extension-points.md)：掌握后端生命周期 Hook 与前端界面扩展
 3. [插件系统设计与契约](plugins/overview.md)：掌握 `definePlugin(ctx)` 强类型规范
 4. [自定义插件开发实战](plugins/plugin-development.md)：开发包含 Action 与前端视图的完整插件
 
@@ -98,7 +98,7 @@ flowchart LR
 | 文档 | 说明 |
 | :--- | :--- |
 | [极简微内核哲学](architecture/overview.md) | 零业务角色硬编码与五包单向依赖设计 |
-| [前后端对称双 7 扩展点](architecture/extension-points.md) | 后端 7 大 Hook 与前端 7 大扩展点详解 |
+| [生命周期 Hook 与全界面扩展点](architecture/extension-points.md) | 后端生命周期 Hook 与前端界面扩展详解 |
 | [EnvFabric 分布式执行底座](architecture/envfabric.md) | 零 SSH 反向 WebSocket 连接与受管 Shell |
 | [pi-durable 持久会话状态机](architecture/pi-durable.md) | 五态状态机、SQLite/FTS5 与 AskDoc 乐观锁 |
 

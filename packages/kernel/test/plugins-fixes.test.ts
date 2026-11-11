@@ -21,17 +21,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
-import {
-  HelmError,
-  type ConversationSummary,
-  type WatchdogTickHookPayload,
-} from '@helm/protocol'
+import { HelmError, type ConversationSummary } from '@helm/protocol'
+import type { DiagnosticsCollection } from '../src/builtin-plugins/diagnostics.js'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
+import { hostBackendStub } from './helpers/host-backend-stub.js'
+import { serveTransport, ipcLineCall } from './helpers/herdr-unit-fixture.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
 import { createSuperAgentPlugin } from '../src/builtin-plugins/superagent.js'
 import { MAX_MEMORY_CHARS, createMemoryPlugin, MemoryStore } from '../src/builtin-plugins/memory.js'
+import { createProfileFileHost } from './helpers/profile-file-host.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
-import type { SuperAgentDependencies } from '../src/builtin-plugins/superagent/contracts.js'
 import { ProfileService, SkillService } from '../src/services/index.js'
 
 // ---------------------------------------------------------------------------
@@ -70,7 +70,7 @@ function makeConversation(id: number, over: Partial<ConversationSummary> = {}): 
   }
 }
 
-interface ControlledBackend extends PluginHostBackend {
+interface ControlledBackend {
   conversations: Map<number, ConversationSummary>
   notifications: Array<{ title: string; body: string; level: string }>
   submits: Array<{ conversationId: number; origin?: string }>
@@ -78,13 +78,16 @@ interface ControlledBackend extends PluginHostBackend {
   submitRejector: ((conversationId: number) => Error | undefined) | undefined
 }
 
-function makeControlledBackend(): ControlledBackend {
+function makeControlledBackend(dataDir: string): ControlledBackend & PluginHostBackend {
   const conversations = new Map<number, ConversationSummary>()
   conversations.set(1, makeConversation(1, { tags: ['root'] }))
   conversations.set(3, makeConversation(3))
+  const eventListeners = new Map<string, Array<(payload: unknown) => unknown>>()
   const notifications: Array<{ title: string; body: string; level: string }> = []
   const submits: Array<{ conversationId: number; origin?: string }> = []
-  const backend: ControlledBackend = {
+  const rawBackend: ControlledBackend & Partial<PluginHostBackend> = {
+    ...createPluginHostBackendFixture(),
+    ...createProfileFileHost(dataDir),
     conversations,
     notifications,
     submits,
@@ -124,21 +127,37 @@ function makeControlledBackend(): ControlledBackend {
     async createAsk() { throw new HelmError('unsupported', 'test', 400) },
     async cancelAsk() {},
     registerAskSeqResolver() { return () => {} },
-    onEvent() { return () => {} },
+    onEvent(type, listener) {
+      const list = eventListeners.get(type) ?? []
+      list.push(listener)
+      eventListeners.set(type, list)
+      return () => {
+        const cur = eventListeners.get(type) ?? []
+        const idx = cur.indexOf(listener)
+        if (idx >= 0) cur.splice(idx, 1)
+      }
+    },
+    getConversationActivity: () => ({ consecutiveErrors: 0 }),
+    getConversationOwnership: () => 'helm',
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
-    emitEvent(type, payload) {
+    async emitEvent(type, payload) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
+      if (type === 'diagnostics.collect') {
+        for (const listener of [...(eventListeners.get(type) ?? [])]) {
+          await listener(payload)
+        }
+      }
     },
   }
-  return backend
+  return Object.assign(hostBackendStub(), rawBackend) as ControlledBackend & PluginHostBackend
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +174,6 @@ interface FakePane {
 
 class ProbeTransport implements HerdrTransport {
   panes = new Map<string, FakePane>()
-  calls: Array<{ method: string; timeoutMs?: number }> = []
   agentGetDelayMs = 0
   private subscriptionErrorTriggers: Array<(error: Error) => void> = []
 
@@ -178,7 +196,7 @@ class ProbeTransport implements HerdrTransport {
     params: Record<string, unknown>,
     options?: { timeoutMs?: number },
   ): Promise<unknown> {
-    this.calls.push({ method, timeoutMs: options?.timeoutMs })
+    void options
     if (method === 'agent.get') {
       if (this.agentGetDelayMs > 0) await delay(this.agentGetDelayMs)
       const pane = this.panes.get(String(params['target']))
@@ -222,21 +240,26 @@ class ProbeTransport implements HerdrTransport {
 
 interface HerdrEnv {
   host: PluginHost
-  backend: ControlledBackend
+  backend: ControlledBackend & Pick<PluginHostBackend, 'emitEvent'>
   transport: ProbeTransport
+  /** 经 backend.nodeIpc.call 真实到达受控服务器的调用记录（含 timeoutMs）。 */
+  ipcCalls: Array<{ method: string; timeoutMs?: number }>
   close(): Promise<void>
 }
+
+/** 受管窗格的远端节点 ID：探针/快照经真实 nodeIpc 通道路由（timeoutMs 可观测）。 */
+const HERDR_REMOTE_NODE = 'n1'
 
 async function makeHerdrEnv(
   panes: Array<{ paneId: string; agentName: string; cwd: string; status?: string; seq?: number }>,
 ): Promise<HerdrEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-fix2-'))
-  const backend = makeControlledBackend()
+  const backend = makeControlledBackend(dataDir)
   const docs = new MemoryDocStore()
   docs.set('builtin:herdr:managed', {
     version: 1,
     panes: panes.map((p) => ({
-      target: {},
+      target: { nodeId: HERDR_REMOTE_NODE },
       paneId: p.paneId,
       tabId: `t-${p.paneId}`,
       effectiveCwd: p.cwd,
@@ -257,32 +280,60 @@ async function makeHerdrEnv(
       cwd: p.cwd,
     })
   }
-  const host = new PluginHost({ dataDir, host: backend, docs })
-  await host.register(
-    createHerdrPlugin({
-      defaultCwd: '/tmp',
-      profiles: { get: async () => undefined },
-      buildSpawnEnv: () => ({}),
-      redact: (t) => t,
-      runLocalGate: async () => ({ ok: true, output: '' }),
-      transport,
-    }),
-    { enabled: true },
+  // 受控协议服务器：零参插件的生产 transport 经插件配置 socketPath 直连。
+  // 受管窗格 target 带 nodeId：探针/远端快照走 backend.nodeIpc.call 真实
+  // 通道（ipcLineCall 转发到本 socket；timeoutMs 随 input 透传可断言）。
+  const socketPath = join(dataDir, 'herdr.sock')
+  const served = await serveTransport(
+    transport,
+    socketPath,
+    () => ({ nodeId: HERDR_REMOTE_NODE }),
   )
+  const ipcCalls: Array<{ method: string; timeoutMs?: number }> = []
+  backend.nodeIpc = {
+    isOnline: () => true,
+    call: async (_nodeId, input, signal) => {
+      const method = (JSON.parse(input.line) as { method: string }).method
+      ipcCalls.push({ method, timeoutMs: input.timeoutMs })
+      return ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
+    },
+    subscribe: async () => { throw new HelmError('unsupported', '本 fixture 不承载 IPC 订阅', 501) },
+  }
+  const host = new PluginHost({
+    dataDir,
+    host: backend,
+    docs,
+    config: new (class {
+      get(): Record<string, unknown> { return { socketPath } }
+      set(): void {}
+    })(),
+  })
+  try {
+    await host.register(createHerdrPlugin(), { enabled: true })
+  } catch (error) {
+    // register 失败也必须收尾受控 socket 与临时目录，避免进程悬挂。
+    await host.dispose().catch(() => {})
+    await served.close()
+    rmSync(dataDir, { recursive: true, force: true })
+    throw error
+  }
   return {
     host,
     backend,
     transport,
+    ipcCalls,
     async close() {
       await host.dispose().catch(() => {})
+      await served.close()
       rmSync(dataDir, { recursive: true, force: true })
     },
   }
 }
 
-async function runHerdrTick(env: HerdrEnv): Promise<WatchdogTickHookPayload> {
-  const payload: WatchdogTickHookPayload = { timestamp: Date.now(), conversations: [], probes: [] }
-  await env.host.runHook('watchdog_tick', payload)
+async function runHerdrTick(env: HerdrEnv): Promise<DiagnosticsCollection> {
+  const payload: DiagnosticsCollection = { timestamp: Date.now(), conversations: [], probes: [] }
+  // 真实链路：采集事件分发（herdr 监听器追加探针；await 语义）。
+  await env.backend.emitEvent('diagnostics.collect', payload)
   return payload
 }
 
@@ -296,11 +347,11 @@ test('herdr tick：agent.get / session.snapshot 全部带 5s 短超时', { timeo
   ])
   try {
     await runHerdrTick(env)
-    for (const call of env.transport.calls.filter((c) => c.method === 'agent.get')) {
-      assert.equal(call.timeoutMs, 5_000, `agent.get 应带 timeoutMs=5000（实际 ${String(call.timeoutMs)}）`)
-    }
-    for (const call of env.transport.calls.filter((c) => c.method === 'session.snapshot')) {
-      assert.equal(call.timeoutMs, 5_000, `session.snapshot 应带 timeoutMs=5000（实际 ${String(call.timeoutMs)}）`)
+    // 可观测契约：远端探针/快照经 backend.nodeIpc.call 直达，timeoutMs 随 input 透传。
+    const relevant = env.ipcCalls.filter((c) => c.method === 'agent.get' || c.method === 'session.snapshot')
+    assert.ok(relevant.length > 0, '应有 agent.get / session.snapshot 经 nodeIpc 通道到达受控服务器')
+    for (const call of relevant) {
+      assert.equal(call.timeoutMs, 5_000, `${call.method} 应带 timeoutMs=5000（实际 ${String(call.timeoutMs)}）`)
     }
   } finally {
     await env.close()
@@ -339,6 +390,12 @@ test('herdr 订阅断线：onError 后自动退避重连（watchdogEnabled 无�
   try {
     const before = env.transport.subscribeCount
     env.transport.failLatestSubscription(new Error('socket reset by peer'))
+    // 断线经真实 socket close 传播（异步事件），轮询等待通知到达。
+    const deadline = Date.now() + 2_000
+    while (!env.backend.notifications.some((n) => n.title === 'Herdr 事件订阅断开')) {
+      if (Date.now() > deadline) break
+      await delay(50)
+    }
     assert.ok(
       env.backend.notifications.some((n) => n.title === 'Herdr 事件订阅断开'),
       '断线应发出通知',
@@ -407,27 +464,41 @@ interface SuperAgentEnv {
 
 async function makeSuperAgentEnv(): Promise<SuperAgentEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-fix-'))
-  const backend = makeControlledBackend()
+  const backend = makeControlledBackend(dataDir)
   const docs = new MemoryDocStore()
-  const host = new PluginHost({ dataDir, host: backend, docs })
-  // 真实 ProfileService/SkillService（临时目录）：自举资产走真实文件路径。
+  // 真实 ProfileService/SkillService（临时目录）：自举资产走真实文件路径，
+  // 经公开 host 子端口注入受控 backend。额外端口直接挂在同一 backend 对象上
+  // （不 Object.assign 复制）：submitRejector 等动态注入靠 this 动态查找到。
   const profiles = new ProfileService(dataDir)
   const skills = new SkillService(dataDir)
   await profiles.ensureDefault()
-  const deps: SuperAgentDependencies = {
-    dataDir,
-    profiles,
-    skills,
-    subscribeConversationEntries: () => () => {},
-    getConversationDetail: async (id) => ({ ...makeConversation(id), entries: [] }) as never,
+  Object.assign(backend, {
+    profiles: {
+      list: () => profiles.list(),
+      get: (id: string) => profiles.get(id),
+      getSystem: (id: string) => profiles.getSystem(id),
+      save: (p: Parameters<typeof profiles.save>[0]) => profiles.save(p),
+      directory: async (id: string) => join(dataDir, 'profiles', id),
+    },
+    skills: {
+      list: () => skills.list(),
+      readFile: (skillId: string, path?: string) => skills.readFile(skillId, path),
+      directory: async (id: string) => join(dataDir, 'skills', id),
+      ensureSkill: (asset: Parameters<typeof skills.ensureSkill>[0]) => skills.ensureSkill(asset),
+    },
+    getConversationDetail: async (id: number) => ({ ...makeConversation(id), entries: [] }) as never,
     listArtifacts: async () => [],
-    abortConversation: async () => {},
-    getConversationOwnership: () => 'helm',
     isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t) => t,
+    setPluginConfig: async () => {},
+  })
+  const host = new PluginHost({ dataDir, host: backend, docs })
+  try {
+    await host.register(createSuperAgentPlugin(), { enabled: true })
+  } catch (error) {
+    await host.dispose().catch(() => {})
+    rmSync(dataDir, { recursive: true, force: true })
+    throw error
   }
-  await host.register(createSuperAgentPlugin(deps), { enabled: true })
   return {
     host,
     backend,
@@ -575,15 +646,15 @@ test('assistant：MEMORY.md 上限常量导出为 64000', { timeout: 60_000 }, (
 test('memory：update_memory 超限显式拒绝（append 累计与 replace 直写双路径）', { timeout: 60_000 }, async () => {
   const env = await makeAssistantEnv()
   try {
-    const pluginHostBackend = makeControlledBackend()
+    const pluginHostBackend = makeControlledBackend(env.dataDir)
     const docs = new MemoryDocStore()
     const host = new PluginHost({
       dataDir: env.dataDir,
       host: pluginHostBackend,
       docs,
     })
-    await host.register(createMemoryPlugin({ profiles: env.profiles }), { enabled: true })
-    const store = new MemoryStore(env.dataDir)
+    await host.register(createMemoryPlugin(), { enabled: true })
+    const store = new MemoryStore(createProfileFileHost(env.dataDir))
     const runUpdate = (input: { text: string; mode: string }) =>
       host.executeTool('update_memory', input, { conversationId: 1 })
 
@@ -620,10 +691,10 @@ test('memory：update_memory 超限显式拒绝（append 累计与 replace 直�
 test('memory：已初始化 Profile 的 MEMORY.md 被误删时告警并注入 memory.assets-missing（不重建）', { timeout: 60_000 }, async () => {
   const env = await makeAssistantEnv()
   try {
-    const backend = makeControlledBackend()
+    const backend = makeControlledBackend(env.dataDir)
     const docs = new MemoryDocStore()
     const host = new PluginHost({ dataDir: env.dataDir, host: backend, docs })
-    await host.register(createMemoryPlugin({ profiles: env.profiles }), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
 
     // 先跑一回合建立 initializedProfiles 标记。
     {
@@ -663,10 +734,10 @@ test('memory：已初始化 Profile 的 MEMORY.md 被误删时告警并注入 me
 test('memory：从未初始化的 Profile 首次回合惰性创建默认 MEMORY.md（不误报缺失）', { timeout: 60_000 }, async () => {
   const env = await makeAssistantEnv()
   try {
-    const backend = makeControlledBackend()
+    const backend = makeControlledBackend(env.dataDir)
     const docs = new MemoryDocStore()
     const host = new PluginHost({ dataDir: env.dataDir, host: backend, docs })
-    await host.register(createMemoryPlugin({ profiles: env.profiles }), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
 
     // 前置：MEMORY.md 不存在（ProfileService.ensureDefault 不再创建）。
     const memoryPath = join(env.dataDir, 'profiles', 'assistant', 'MEMORY.md')
@@ -717,10 +788,10 @@ test('memory：存量 MEMORY.md 超限注入时截断并附显式说明', { time
     const memoryDir = join(env.dataDir, 'profiles', 'assistant')
     writeFileSync(join(memoryDir, 'MEMORY.md'), 'M'.repeat(MAX_MEMORY_CHARS + 5_000))
 
-    const backend = makeControlledBackend()
+    const backend = makeControlledBackend(env.dataDir)
     const docs = new MemoryDocStore()
     const host = new PluginHost({ dataDir: env.dataDir, host: backend, docs })
-    await host.register(createMemoryPlugin({ profiles: env.profiles }), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
 
     const turn = {
       conversation: makeConversation(1),
@@ -751,11 +822,11 @@ test('profile：自举补写默认 Profile 的 managedByPlugin（缺失显式补
 
     const host = new PluginHost({
       dataDir: env.dataDir,
-      host: makeControlledBackend(),
+      host: makeControlledBackend(env.dataDir),
       docs: new MemoryDocStore(),
     })
     const { createProfilePlugin } = await import('../src/builtin-plugins/profile.js')
-    await host.register(createProfilePlugin({ profiles: env.profiles, skills: new SkillService(env.dataDir), plugins: host }), { enabled: true })
+    await host.register(createProfilePlugin(), { enabled: true })
 
     const after = await env.profiles.get('assistant')
     assert.equal(after?.managedByPlugin, 'builtin:profile', '插件自举后默认 Profile 显式声明托管')

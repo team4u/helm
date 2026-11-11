@@ -32,7 +32,7 @@ const dataDir = await mkdtemp(join(tmpdir(), 'helm-ui-ext-acceptance-'))
 
 // 2. 真实内核：SQLite + PluginHost + 内置 esbuild client 编译器全部就绪。
 //    不注入 models：本夹具零模型调用（会话创建与 UI/action 面不依赖模型）。
-const app = await createHelm({ dataDir, cwd: projectRoot, watchdogIntervalMs: 0 })
+const app = await createHelm({ dataDir, cwd: projectRoot })
 
 // 3. 随机测试密码 auth.setup（UUID 满足 >=8 位；info JSON mode 0600 落盘）
 const testPassword = crypto.randomUUID()

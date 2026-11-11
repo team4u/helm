@@ -45,7 +45,7 @@ async function makeEnv(): Promise<TestEnv> {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 })
+  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   faux.setResponses([])
   const handler = createHubHandler(app.kernel)
   const env: TestEnv = {
@@ -603,7 +603,7 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
   }
   // 第一进程：setup 鉴权 + 启用 + 建 webhook（secret 落 credentials.json）
   const first = mkModels()
-  const app1 = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: first.models, watchdogIntervalMs: 0 })
+  const app1 = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: first.models })
   try {
     const { AuthService } = await import('../src/services/index.js')
     const auth = new AuthService(dataDir)
@@ -617,7 +617,7 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
 
   // 第二进程（同 dataDir 重启）：启用沿用，secret 从凭据文件恢复
   const second = mkModels()
-  const app2 = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: second.models, watchdogIntervalMs: 0 })
+  const app2 = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: second.models })
   try {
     const summary = app2.kernel.plugins.list().find((p) => p.id === TRIGGERS)!
     assert.equal(summary.enabled, false, '重启后沿用持久化停用状态')
@@ -703,6 +703,42 @@ test('triggers11: disable 后路由撤下、动作拒绝；doc 404', { timeout: 
       assert.equal(res.status, 404)
     } finally {
       credential.dispose()
+    }
+  } finally {
+    await env.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 12. UI 贡献：client 单轨声明
+// ---------------------------------------------------------------------------
+
+test('triggers12: UI 贡献——管理视图与设置面板为 client 单轨', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    await enableTriggers(env)
+    const ui = env.app.kernel.plugins.listUi().filter((u) => u.pluginId === TRIGGERS)
+    const surfaces = ui.map((u) => u.surface).sort()
+    assert.deepEqual(surfaces, ['screen', 'settings.panel', 'sidebar.item'], '三个 UI 贡献面')
+    const expectedClientExports: Record<string, string> = {
+      screen: 'TriggersManagerScreen',
+      'settings.panel': 'TriggersSettingsPanel',
+    }
+    for (const [surface, exportName] of Object.entries(expectedClientExports)) {
+      const spec = ui.find((u) => u.surface === surface)!.spec as {
+        json?: unknown
+        docs?: unknown
+        client?: { module: string; export: string }
+      }
+      assert.equal(spec.json, undefined, `${surface} 不再声明 JSON Spec（单轨 client）`)
+      assert.equal(spec.docs, undefined, `${surface} 不再声明 docs（组件 usePluginDoc 自主订阅）`)
+      assert.deepEqual(spec.client, { module: 'index.tsx', export: exportName }, `${surface} client 引用`)
+    }
+    const screen = ui.find((u) => u.surface === 'screen')!.spec as { id: string }
+    assert.equal(screen.id, 'manager')
+    const emoji = /\p{Extended_Pictographic}/u
+    for (const item of ui) {
+      assert.equal(emoji.test(JSON.stringify(item.spec)), false, `UI ${item.surface} 不得含 Emoji`)
     }
   } finally {
     await env.close()

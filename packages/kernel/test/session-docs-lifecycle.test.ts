@@ -34,7 +34,6 @@ async function openApp(): Promise<App> {
     cwd: dataDir,
     model: 'faux/faux-1',
     models: models as never,
-    watchdogIntervalMs: 0,
     autoResume: false,
   })
   let metrics: PluginSessionDocHandle<{ n: number }> | undefined

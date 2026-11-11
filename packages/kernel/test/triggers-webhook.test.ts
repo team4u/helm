@@ -59,6 +59,11 @@ class FakeBackend implements PluginHostBackend {
   dispatched: ExternalTriggerEnvelope[] = []
   nextId = 100
   closing = false
+  /** 插件私有 secrets 后端存储（backend 契约带 pluginId 首参）。 */
+  secretsStore = new Map<string, string>()
+  redactions = new Set<string>()
+  /** 存在的 Profile id 集合（旧名 profiles 与新 profiles 端口重名，改 profileIds）。 */
+  profileIds = new Set(['assistant', 'worker', 'watchdog'])
   /** 可控门：dispatchTrigger 在此 pending，resolve 后才返回（并发门禁测试）。 */
   dispatchGate: Promise<void> | null = null
   /** body 读取门：首 chunk 已可读、第二 chunk 挂起（流式超限测试）。 */
@@ -114,6 +119,12 @@ class FakeBackend implements PluginHostBackend {
     return () => {}
   }
   async abortConversation(): Promise<void> {}
+  getConversationActivity(): { consecutiveErrors: number } {
+    return { consecutiveErrors: 0 }
+  }
+  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    return 'human'
+  }
   async spawnAgent(): Promise<unknown> {
     return {}
   }
@@ -121,9 +132,6 @@ class FakeBackend implements PluginHostBackend {
     return { ok: true, output: '' }
   }
   async prepareInterruptedConversations(): Promise<void> {}
-  async cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
-    return { removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }
-  }
   async invokeAction(): Promise<unknown> {
     return {}
   }
@@ -133,11 +141,66 @@ class FakeBackend implements PluginHostBackend {
   async execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
     throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
   }
+  withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
   listActions(): [] {
     return []
   }
   emitEvent(type: string, payload: unknown): void {
     this.events.push({ type, payload })
+  }
+  // ---- 零参工厂消费的宿主公共端口（与 kernel-host 后端同形；backend 契约
+  // 为 isClosing() 方法，PluginHost 归一为插件侧 getter） ----
+  isClosing(): boolean {
+    return this.closing
+  }
+  skills = {
+    list: async () => [],
+    readFile: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+    directory: async (id: string) => `/tmp/triggers-fixture-skills/${id}`,
+    ensureSkill: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+  }
+  setPluginConfig(): Promise<void> { return Promise.resolve() }
+  async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
+  async listArtifacts(): Promise<never[]> { return [] }
+  async getArtifact(): Promise<never> { throw new HelmError('not_found', '无产物', 404) }
+  redact(text: string): string { return text }
+  redactText(text: string): string { return text }
+  async completeText(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型', 501) }
+  executionEnv(): never { throw new HelmError('unsupported', '本 fixture 无执行环境', 501) }
+  withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() }
+  async atomicWriteFile(): Promise<void> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
+  buildSpawnEnv(): Record<string, string> { return {} }
+  async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
+  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
+  listActiveSpawnExecutions(): [] { return [] }
+  async probeNodeFs(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不探测节点 fs', 501) }
+  secrets = {
+    get: async (pluginId: string, key: string) => this.secretsStore.get(`${pluginId}:${key}`),
+    set: async (pluginId: string, key: string, value: string) => {
+      this.secretsStore.set(`${pluginId}:${key}`, value)
+    },
+    delete: async (pluginId: string, key: string) => {
+      this.secretsStore.delete(`${pluginId}:${key}`)
+    },
+    addRedaction: (value: string) => {
+      this.redactions.add(value)
+      return () => {
+        this.redactions.delete(value)
+      }
+    },
+  }
+  profiles = {
+    list: async () => [...this.profileIds].map((id) => ({ id })),
+    get: async (id: string) => (this.profileIds.has(id) ? { id } : undefined),
+    getSystem: async () => {
+      throw new HelmError('unsupported', '本 fixture 不提供 profiles.getSystem', 501)
+    },
+    save: async () => {
+      throw new HelmError('unsupported', '本 fixture 不提供 profiles.save', 501)
+    },
+    directory: async () => {
+      throw new HelmError('unsupported', '本 fixture 不提供 profiles.directory', 501)
+    },
   }
 }
 
@@ -169,22 +232,32 @@ async function makeHarness(over: Partial<{ closing: boolean }> = {}): Promise<Ha
   const backend = new FakeBackend()
   backend.closing = over.closing ?? false
   const docs = new MemoryDocStore()
-  const host = new PluginHost({ dataDir, host: backend, docs })
   const credentials = new CredentialService(dataDir)
   const stash = new SecretStash()
-  const plugin = createTriggersPlugin({
-    credentials,
-    stash,
-    profiles: {
-      get: async (id: string) =>
-        id === 'assistant' || id === 'worker' || id === 'watchdog' ? { id } : undefined,
+  // 零参工厂：直接注册（secrets/profiles/isClosing/doc.flush 全走宿主端口）。
+  // secrets 后端镜像写入真实 CredentialService 供落盘断言（0600 / 精确键 /
+  // 跨重启）——生产链路由 runtime 后端直连 credentialsSvc（见 kernel-host）。
+  const innerSecrets = backend.secrets
+  const host = new PluginHost({ dataDir, host: backend, docs })
+  backend.secrets = {
+    get: (pluginId, key) => {
+      void innerSecrets
+      return credentials.getPluginSecret(pluginId, key)
     },
-    isClosing: () => backend.closing,
-    flushDocs: async () => {
-      docs.flushCount += 1
+    set: async (pluginId, key, value) => {
+      await credentials.setPluginSecret(pluginId, key, value)
+      await innerSecrets.set(pluginId, key, value)
     },
-  })
-  await host.register(plugin)
+    delete: async (pluginId, key) => {
+      await credentials.deletePluginSecret(pluginId, key)
+      await innerSecrets.delete(pluginId, key)
+    },
+    addRedaction: (value) => {
+      const release = stash.addRedaction(value)
+      return () => release()
+    },
+  }
+  await host.register(createTriggersPlugin())
   return { host, backend, docs, credentials, stash, dataDir }
 }
 
@@ -248,9 +321,10 @@ test('工厂注册：cron/webhook 动作、路由与声明式贡献完整注册'
   assert.ok(ui.some((u) => u.surface === 'sidebar.item'))
   assert.ok(ui.some((u) => u.surface === 'screen'))
   assert.ok(ui.some((u) => u.surface === 'settings.panel'))
-  // screen 订阅 crons + webhooks 两个公共 doc
-  const screen = ui.find((u) => u.surface === 'screen')!.spec as { docs: string[] }
-  assert.deepEqual([...screen.docs].sort(), ['crons', 'webhooks'])
+  // screen 贡献指向 client.tsx 组件（doc 订阅由插件 client 经 plugin-client-sdk 完成）
+  const screen = ui.find((u) => u.surface === 'screen')!.spec as { client: { module: string; export: string } }
+  assert.equal(screen.client.module, 'index.tsx')
+  assert.equal(screen.client.export, 'TriggersManagerScreen')
   await h.host.dispose()
   rmSync(h.dataDir, { recursive: true, force: true })
 })

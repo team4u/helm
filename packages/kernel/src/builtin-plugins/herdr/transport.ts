@@ -600,7 +600,8 @@ async function subscribeLocal(
   return () => {
     stopped = true
     signal?.removeEventListener('abort', onAbort)
-    socket.destroy()
+    // 正常退订发送 FIN，让对端及时释放订阅；写侧结束后再销毁读侧，避免长驻 socket。
+    socket.end(() => socket.destroy())
   }
 }
 
@@ -661,7 +662,7 @@ async function callRemote(
       line,
       timeoutMs,
     },
-    contextOf(options?.signal, targetLabel),
+    options?.signal,
   )
   if (!result.ok) raiseChannelError(result.error.code, result.error.message, targetLabel)
   const envelope = parseJsonLine(result.value, targetLabel)
@@ -1218,7 +1219,7 @@ function subscribeNode(
               : new HerdrTransportError('herdr_disconnected', `subscription stream closed: ${error}`, targetLabel),
           )
         },
-        withAbortSignal(signal ?? new AbortController().signal, BACKGROUND_CONTEXT),
+        signal,
       )
       .then(
         (stop) => {

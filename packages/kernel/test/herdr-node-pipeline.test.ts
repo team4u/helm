@@ -37,7 +37,7 @@ function asNodeChannel(local: HerdrNodeChannel, nodeId: string): HerdrNodeChanne
   return {
     isOnline: (id) => id === nodeId && local.isOnline('local'),
     getNodeHubUrl: () => undefined,
-    ipcCall: (id, input, context: Context) => local.ipcCall('local', input, context),
+    ipcCall: (id, input, signal) => local.ipcCall('local', input, signal),
     envFor: (id, cwd) => local.envFor('local', cwd),
   }
 }
@@ -242,7 +242,7 @@ test('LocalNodeChannel 仅承载 local：isOnline 非 local 为 false，ipcCall/
   assert.equal(channel.isOnline('local'), true)
   assert.equal(channel.isOnline('node-a'), false)
   assert.equal(channel.isOnline('build-box'), false)
-  const rejected = await channel.ipcCall('node-a', { line: '{"id":"1"}' }, BACKGROUND_CONTEXT)
+  const rejected = await channel.ipcCall('node-a', { line: '{"id":"1"}' })
   assert.equal(rejected.ok, false)
   assert.throws(() => channel.envFor('node-a', '/tmp'))
 })
@@ -295,15 +295,15 @@ test('远端节点订阅：ipcSubscribe resolve 即就绪，onLine 只有事件�
   const outerChannel = {
     isOnline: () => true,
     getNodeHubUrl: () => undefined,
-    ipcCall: (nodeId: string, input: { endpoint?: string; session?: string; line: string; timeoutMs?: number }, context: import('@earendil-works/chord/context').Context) =>
-      fixture.channel.ipcCall(nodeId, input, context),
+    ipcCall: (nodeId: string, input: { endpoint?: string; session?: string; line: string; timeoutMs?: number }, signal?: AbortSignal) =>
+      fixture.channel.ipcCall(nodeId, input, signal),
     envFor: (nodeId: string, cwd: string) => fixture.channel.envFor(nodeId, cwd),
     async ipcSubscribe(
       nodeId: string,
       input: { endpoint?: string; session?: string; line: string },
       onLine: (line: string) => void,
       onClosed: (error?: string) => void,
-      _context: import('@earendil-works/chord/context').Context,
+      _signal?: AbortSignal,
     ) {
       assert.equal(nodeId, 'node-sub')
       const request = JSON.parse(input.line) as { id: string; method: string; params: { subscriptions: unknown[] } }

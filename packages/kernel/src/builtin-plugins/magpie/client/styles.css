@@ -1,0 +1,108 @@
+/**
+ * builtin:magpie 插件自有样式（clientRoot 本地 CSS）。
+ *
+ * 仅使用宿主核心通用类（badge / btn / spin-slow）与全局设计变量；
+ * 表格与 KV 布局用本插件 mp- 前缀类，不依赖 json-render（jr-*）类。
+ */
+.mp-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mp-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mp-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.mp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.mp-summary {
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+/* KV 概览（自管，不依赖 jr-kv-*） */
+.mp-kv-list {
+  display: grid;
+  grid-template-columns: minmax(90px, auto) 1fr;
+  gap: 6px 14px;
+  font-size: 12.5px;
+}
+.mp-kv-key {
+  color: var(--fg-muted);
+}
+.mp-kv-val {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+/* 表格（自管，不依赖 jr-table） */
+.mp-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+.mp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.mp-table th {
+  text-align: left;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.mp-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  vertical-align: middle;
+}
+.mp-table tr:last-child td {
+  border-bottom: none;
+}
+.mp-table tr:hover td {
+  background: var(--bg-hover);
+}
+.mp-table-empty {
+  color: var(--fg-muted);
+}
+.mp-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  padding: 8px 0;
+}
+.mp-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--err-bg);
+  border: 1px solid var(--err-border);
+  color: var(--err);
+  font-size: 12px;
+  word-break: break-all;
+}

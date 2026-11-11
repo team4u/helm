@@ -83,7 +83,7 @@ async function gatewayFixture() {
 
 test('Magpie 默认停用：插件配置可发现，供应商、动作与 UI 不注册', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-magpie-default-'))
-  const app = await createHelm({ dataDir, cwd: dataDir, watchdogIntervalMs: 0 })
+  const app = await createHelm({ dataDir, cwd: dataDir })
   try {
     const plugin = app.kernel.plugins.list().find((item) => item.id === 'builtin:magpie')
     assert.ok(plugin)
@@ -105,7 +105,7 @@ test('Magpie 经真实组合层注册、刷新、HTTP/CLI、缓存重启与停�
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   let releaseCredential: (() => void) | undefined
   try {
-    app = await createHelm({ dataDir, cwd: dataDir, watchdogIntervalMs: 0 })
+    app = await createHelm({ dataDir, cwd: dataDir })
     await app.kernel.plugins.setConfig('builtin:magpie', { gatewayUrl: gateway.root, apiKey: gateway.token })
     assert.equal(gateway.requests.length, 0, '配置停用插件不应连接网关')
     await app.kernel.plugins.enable('builtin:magpie')
@@ -175,7 +175,7 @@ test('Magpie 经真实组合层注册、刷新、HTTP/CLI、缓存重启与停�
     await hub.close(); hub = undefined
     releaseCredential(); releaseCredential = undefined
     await app.close(); app = undefined
-    app = await createHelm({ dataDir, cwd: dataDir, watchdogIntervalMs: 0 })
+    app = await createHelm({ dataDir, cwd: dataDir })
     assert.equal(app.kernel.plugins.list().find((plugin) => plugin.id === 'builtin:magpie')?.enabled, true)
     assert.equal(app.kernel.listModelProviders().find((provider) => provider.id === 'magpie')?.modelCount, 3, '重启离线恢复目录')
     // 等待本周期目录刷新终态，再检查闲置插件的正常停用路径。

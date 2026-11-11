@@ -795,10 +795,10 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
 /** 插件动态会话分组区（sidebar.section）：filterTag 分组通用渲染，支持 collapsible / defaultCollapsed。 */
 function SidebarSectionGroups({ store }: { store: HelmStoreValue }) {
   const sections = store.groupedUi.sidebarSections.filter((s) => s.spec.filterTag)
-  // 纯内容型 section（无 filterTag，但声明了 client/json 内容）：渲染内容本身，
+  // 纯内容型 section（无 filterTag，但声明了 client 内容）：渲染内容本身，
   // 不因缺少 filterTag 静默丢弃（与 sidebar.item 的 client 内容渲染同一策略）。
   const contentSections = store.groupedUi.sidebarSections.filter(
-    (s) => !s.spec.filterTag && (s.spec.client !== undefined || s.spec.json !== undefined),
+    (s) => !s.spec.filterTag && s.spec.client !== undefined,
   )
   return (
     <>

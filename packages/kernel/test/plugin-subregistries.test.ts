@@ -520,7 +520,6 @@ test('UiRegistry：界面扩展点收集、参数校验与依赖校验', { timeo
     id: 'p1Sidebar',
     label: 'Test Tab',
     icon: 'Terminal',
-    docs: ['statusDoc'],
   }, 'sidebarItem');
 
   // 重复 ID 抛 409
@@ -531,16 +530,8 @@ test('UiRegistry：界面扩展点收集、参数校验与依赖校验', { timeo
     (err: unknown) => err instanceof HelmError && err.code === 'duplicate_ui',
   );
 
-  // 校验 docs 依赖未注册公共 doc 时抛 400
-  assert.throws(
-    () => {
-      ui.assertUiDocsRegistered('p1', (doc) => doc === 'differentDoc');
-    },
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
-  );
-
-  // 校验通过
-  ui.assertUiDocsRegistered('p1', (doc) => doc === 'statusDoc');
+  // docs 声明已随声明式 JSON 轨道移除：assertUiDocsRegistered 为挂点，不再校验引用
+  ui.assertUiDocsRegistered('p1', () => false);
 
   const list = ui.listUi(['p1']);
   assert.equal(list.length, 1);

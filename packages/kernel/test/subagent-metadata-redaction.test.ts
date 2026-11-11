@@ -16,7 +16,7 @@ test('外部子代理执行元数据的工具正文与持久结果统一脱敏',
     setResponses(responses: unknown[]): void
   }
   models.setProvider(faux.provider)
-  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, models, model: 'faux/faux-1', watchdogIntervalMs: 0 })
+  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, models, model: 'faux/faux-1' })
   try {
     const secret = 'private-metadata-folder'
     kernel.stash.put(1, 'PATH_SECRET', secret)

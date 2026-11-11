@@ -15,7 +15,8 @@ import {
   type PluginDefinition,
   type WorkflowRunSummary,
 } from '@helm/protocol';
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js';
+import { PluginHost, type PluginDocStore } from '../src/plugins/index.js';
+import { PluginHostBackendFixtureBase } from './helpers/plugin-host-backend.js';
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -43,7 +44,7 @@ function makeConversation(id: number, over: Partial<ConversationSummary> = {}): 
 }
 
 /** 可编程会话面：scope 执行期校验经 host.getConversation 现取真实摘要。 */
-class FakeBackend implements PluginHostBackend {
+class FakeBackend extends PluginHostBackendFixtureBase {
   conversations = new Map<number, ConversationSummary>();
   events: Array<{ type: string; payload: unknown }> = [];
   /** 会话管理保护记录：(conversationId, pluginId) → 仍生效即存在。 */
@@ -52,6 +53,7 @@ class FakeBackend implements PluginHostBackend {
   workflowListeners = new Set<(run: WorkflowRunSummary) => void | Promise<void>>();
 
   constructor() {
+    super();
     this.conversations.set(1, makeConversation(1, { profileId: 'assistant', tags: ['root'] }));
     this.conversations.set(2, makeConversation(2, { profileId: 'superagent', tags: ['router'] }));
     this.conversations.set(3, makeConversation(3, { profileId: 'watchdog', tags: ['watchdog'] }));
@@ -81,6 +83,12 @@ class FakeBackend implements PluginHostBackend {
   abortConversation(): Promise<void> {
     return Promise.resolve();
   }
+  getConversationActivity(): { consecutiveErrors: number } {
+    return { consecutiveErrors: 0 };
+  }
+  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    return 'human';
+  }
   spawnAgent(): Promise<unknown> {
     return Promise.resolve({});
   }
@@ -104,6 +112,7 @@ class FakeBackend implements PluginHostBackend {
   execEnv(): Promise<EnvExecResponse> {
     return Promise.reject(new HelmError('unsupported', '本 fixture 不执行节点命令', 501));
   }
+  withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
   listActions(): [] {
     return [];
   }

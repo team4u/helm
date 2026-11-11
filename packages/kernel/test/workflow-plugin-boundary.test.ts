@@ -16,7 +16,8 @@ import {
   type PluginDefinition,
   type PluginToolContext,
 } from '@helm/protocol'
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
+import { PluginHost, type PluginDocStore } from '../src/plugins/index.js'
+import { PluginHostBackendFixtureBase } from './helpers/plugin-host-backend.js'
 import { pluginToolResult } from '../src/runtime/runtime-helpers.js'
 
 // ---------------------------------------------------------------------------
@@ -44,12 +45,13 @@ function makeConversation(id: number): ConversationSummary {
 }
 
 /** 可编程后端：emitEvent 可等待（内部监听器顺序执行、错误上抛）。 */
-class FakeBackend implements PluginHostBackend {
+class FakeBackend extends PluginHostBackendFixtureBase {
   conversations = new Map<number, ConversationSummary>()
   emitted: Array<{ type: string; payload: unknown }> = []
   private listeners = new Map<string, Set<(payload: unknown) => MaybePromise<void>>>()
 
   constructor() {
+    super()
     this.conversations.set(1, makeConversation(1))
     this.conversations.set(2, makeConversation(2))
   }
@@ -76,6 +78,12 @@ class FakeBackend implements PluginHostBackend {
   abortConversation(): Promise<void> {
     return Promise.resolve()
   }
+  getConversationActivity(): { consecutiveErrors: number } {
+    return { consecutiveErrors: 0 }
+  }
+  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    return 'human'
+  }
   spawnAgent(): Promise<unknown> {
     return Promise.resolve('spawned')
   }
@@ -85,8 +93,19 @@ class FakeBackend implements PluginHostBackend {
   prepareInterruptedConversations(): Promise<void> {
     return Promise.resolve()
   }
-  cleanupWorktree(): Promise<{ removed: boolean; worktreeId: string; path: string; branch: string; nodeId: string; branchDeleted: boolean }> {
-    return Promise.resolve({ removed: true, worktreeId: 'local:/x', path: '/x', branch: 'b', nodeId: 'local', branchDeleted: false })
+  // 供 cleanup_worktree 真实插件路径驱动：execEnv 返回失败 git 输出（不执行真实命令）。
+  execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
+    return Promise.resolve({ ok: false, exitCode: 128, output: 'fatal: not a git repository', timedOut: false })
+  }
+  listActiveSpawnExecutions(): never[] {
+    return []
+  }
+  redactText(text: string): string {
+    return text
+  }
+  probeNodeFs(input: { nodeId: string; op: 'exists' | 'canonicalPath'; path: string }): Promise<{ value: string | boolean }> {
+    if (input.op === 'exists') return Promise.resolve({ value: true })
+    return Promise.resolve({ value: input.path })
   }
   invokeAction(): Promise<unknown> {
     return Promise.resolve({})
@@ -94,9 +113,7 @@ class FakeBackend implements PluginHostBackend {
   prepareAction(): { idempotent: boolean } {
     return { idempotent: false }
   }
-  execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
-    return Promise.reject(new HelmError('unsupported', '本 fixture 不执行节点命令', 501))
-  }
+  withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
   listActions(): never[] {
     return []
   }
@@ -506,68 +523,6 @@ test('addUi 校验：workbench badge 形状非法拒绝（未知字段/doc 非 s
   await host.dispose()
 })
 
-test('addUi 末尾校验：docs 引用必须是本插件已注册的 public doc（私有/缺失拒绝）', { timeout: 60_000 }, async () => {
-  const host = makeHost()
-  // 缺失 doc
-  await assert.rejects(
-    () =>
-      host.register({
-        clientRoot: dataDir,
-        id: 'test:docs-missing',
-        name: 'bad',
-        definePlugin(ctx) {
-          ctx.ui.workbenchPanel({
-            id: 'p',
-            label: 'P',
-            docs: ['runs'],
-            client: { module: 'index.tsx', export: 'X' },
-          } as never)
-        },
-      }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec' && err.message.includes('public doc'),
-  )
-  // 私有 doc 拒绝
-  await assert.rejects(
-    () =>
-      host.register({
-        clientRoot: dataDir,
-        id: 'test:docs-private',
-        name: 'bad2',
-        definePlugin(ctx) {
-          ctx.doc('runs', {})
-          ctx.ui.workbenchPanel({
-            id: 'p',
-            label: 'P',
-            docs: ['runs'],
-            client: { module: 'index.tsx', export: 'X' },
-          } as never)
-        },
-      }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec' && err.message.includes('public doc'),
-  )
-  // doc 声明晚于 UI 声明：末尾统一校验允许（顺序自由）
-  await host.register({
-    id: 'test:docs-late',
-    name: 'late',
-    clientRoot: dataDir,
-    definePlugin(ctx) {
-      ctx.ui.workbenchPanel({
-        id: 'p',
-        label: 'P',
-        docs: ['runs'],
-        badge: { doc: 'runs', byConversationField: 'byConversation' },
-        client: { module: 'index.tsx', export: 'X' },
-      } as never)
-      ctx.doc('runs', {}, { public: true })
-    },
-  })
-  await host.dispose()
-})
-
-// ---------------------------------------------------------------------------
-// 5. builtin:workflow 动作边界：conversationId 冲突 / cleanup 选择器
-// ---------------------------------------------------------------------------
-
 test('workflow run 动作：input.conversationId 与调用上下文冲突显式拒绝', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register({
@@ -605,39 +560,48 @@ test('workflow run 动作：input.conversationId 与调用上下文冲突显式�
 })
 
 // ---------------------------------------------------------------------------
-// 6. cleanup_worktree 工具错误信封诚实性
+// 6. cleanup_worktree 工具错误信封诚实性（真实插件路径：WorktreeAllocator 自有 Git 能力）
 // ---------------------------------------------------------------------------
 
+/** 预置一条 active 受管 worktree 登记（插件私有 doc 键为 `builtin:workflow:worktree-state`）。 */
+function seedManagedWorktree(docStore: MemoryDocStore): void {
+  docStore.set('builtin:workflow:worktree-state', {
+    'runtime/worktrees': {
+      version: 1,
+      records: [{
+        id: 'local:/wt/x', nodeId: 'local', repoRoot: '/repo', path: '/wt/x', branch: 'helm/spawn-x',
+        baseCommit: 'a1b2c3', dirtySource: false, parentConversationId: 1, conversationId: 1,
+        origin: 'native', status: 'active', createdAt: 1,
+      }],
+    },
+  })
+}
+
 test('cleanup_worktree 工具：错误分支仅 ok:false+error，绝不伪造空 worktreeId/path/branch/nodeId', { timeout: 60_000 }, async () => {
-  // 直接验证插件在宿主 cleanupWorktree 失败时的工具信封（真实插件注册路径）。
+  // 新契约：cleanup 由插件 WorktreeAllocator 经 ctx.host.execEnv 真实执行 git，
+  // 宿主 cleanupWorktree 端口已删除；execEnv 失败 → 错误信封（ok:false+error）。
   const host = makeHost()
-  let cleanupCalls = 0
-  backend.cleanupWorktree = () => {
-    cleanupCalls += 1
-    return Promise.reject(new HelmError('worktree_dirty', '工作区含未提交修改', 409))
-  }
-  // 注册真实 workflow 插件需要 clientRoot —— 本测试聚焦信封形状，直接以
-  // executeTool 驱动已注册插件工具；clientRoot 缺失由 resolveClientRoot 探测
-  // src 目录（tsx 运行时存在），无需注入。
+  seedManagedWorktree(docs)
   const { createWorkflowPlugin } = await import('../src/builtin-plugins/workflow.js')
   await host.register(createWorkflowPlugin())
-  // 工具 execute 捕获宿主错误并返回 isError 信封（不向 SDK 抛裸异常）。
   const raw = (await host.executeTool('cleanup_worktree', { conversationId: 1 }, {
     conversationId: 1,
     callId: 'call-1',
   })) as { isError?: boolean; structuredOutput?: Record<string, unknown> }
   assert.equal(raw.isError, true)
   assert.deepEqual(Object.keys(raw.structuredOutput ?? {}).sort(), ['error', 'ok'])
-  assert.ok(cleanupCalls === 1, `cleanup 恰好被调用一次（实际 ${cleanupCalls}）`)
+  assert.equal(raw.structuredOutput?.['ok'], false)
+  // 真实诊断透传：execEnv 的 git 失败输出必须出现在 error 里（不伪造、不吞）。
+  assert.ok(String(raw.structuredOutput?.['error']).includes('not a git repository'))
   await host.dispose()
 })
 
 test('cleanup_worktree 工具错误信封：structuredOutput 仅 { ok:false, error }，无伪造 metadata', { timeout: 60_000 }, async () => {
+  // 无登记选择器未命中：not_found 诊断同样只走 ok:false+error 信封。
   const host = makeHost()
-  backend.cleanupWorktree = () => Promise.reject(new HelmError('worktree_in_use', 'worktree 正被运行中任务占用', 409))
   const { createWorkflowPlugin } = await import('../src/builtin-plugins/workflow.js')
   await host.register(createWorkflowPlugin())
-  const raw = (await host.executeTool('cleanup_worktree', { conversationId: 1 }, toolContext())) as {
+  const raw = (await host.executeTool('cleanup_worktree', { conversationId: 2 }, toolContext())) as {
     output: Array<{ type: string; text: string }>
     isError?: boolean
     structuredOutput?: Record<string, unknown>
@@ -649,6 +613,6 @@ test('cleanup_worktree 工具错误信封：structuredOutput 仅 { ok:false, err
     `错误信封字段必须仅 ok/error（实际 ${JSON.stringify(raw.structuredOutput)}）`,
   )
   assert.equal(raw.structuredOutput?.['ok'], false)
-  assert.ok(String(raw.structuredOutput?.['error']).includes('占用'), `error 保留真实诊断（实际 ${JSON.stringify(raw.structuredOutput)}）`)
+  assert.ok(String(raw.structuredOutput?.['error']).includes('未找到'), `error 保留真实诊断（实际 ${JSON.stringify(raw.structuredOutput)}）`)
   await host.dispose()
 })

@@ -24,6 +24,7 @@ import {
   type PluginConfigStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js';
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 import type { UiRegistry, ClientModuleOptions } from '../src/plugins/ui-registry.js';
 
 // ---------------------------------------------------------------------------
@@ -57,6 +58,7 @@ function makeConversation(id: number): ConversationSummary {
  */
 function makeHostApi(events: string[] = []): PluginHostBackend {
   return {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {
       events.push('dispatchTrigger');
     },
@@ -84,10 +86,15 @@ function makeHostApi(events: string[] = []): PluginHostBackend {
       events.push('unregister-workflow-settled');
     },
     abortConversation: async () => {},
+    getConversationActivity(): { consecutiveErrors: number } {
+      return { consecutiveErrors: 0 }
+    },
+    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+      return 'human'
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => {
@@ -846,10 +853,11 @@ test('UI 七类十函数统一收集可序列化 spec；不可序列化 spec 拒
   const host = makeHost();
   await host.register({
     id: 'p:ui',
+    clientRoot: process.cwd(),
     definePlugin: (ctx) => {
       ctx.ui.sidebarItem({ id: 'home', label: '个人助理', target: 'conversation:1' });
       ctx.ui.sidebarSection({ id: 'workers', label: 'Worker' });
-      ctx.ui.screen({ id: 'graph', label: '召回图谱', json: { render: 'mermaid' } });
+      ctx.ui.screen({ id: 'graph', label: '召回图谱', client: { module: 'index.tsx', export: 'Graph' } });
       ctx.ui.timelineRenderer({ id: 'report', kinds: ['worker.report'] });
       ctx.ui.toolView({ id: 'term', toolNames: ['bash'] });
       ctx.ui.composerPill({ id: 'pill', label: 'P' });
@@ -883,7 +891,8 @@ test('UI 七类十函数统一收集可序列化 spec；不可序列化 spec 拒
     host.register({
       id: 'p:ui-bad',
       definePlugin: (ctx) => {
-        ctx.ui.screen({ id: 'fn', label: 'x', json: { cb: () => 1 } as never });
+        // JSON-safe 边界：client 之外的任意 spec 字段携带函数必须拒绝（新契约无 json 字段）。
+        ctx.ui.screen({ id: 'fn', label: 'x', client: { module: 'index.tsx', export: 'X' }, cb: () => 1 } as never);
       },
     }),
     (err: unknown) => {
@@ -1607,7 +1616,7 @@ test('ui spec 边界拒 Map/Date/BigInt/循环/undefined：structuredClone 会�
   await host.register({
     id: 'p:ui-ok',
     definePlugin: (ctx) => {
-      ctx.ui.screen({ id: 'fine', label: 'Fine', json: { nums: [1, 2.5], nil: null, s: 'x' } });
+      ctx.ui.screen({ id: 'fine', label: 'Fine', nums: [1, 2.5], nil: null, s: 'x' } as never);
     },
   });
   const ui = host.listUi();

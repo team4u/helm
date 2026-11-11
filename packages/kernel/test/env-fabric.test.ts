@@ -445,7 +445,6 @@ describe('节点管理与 env/exec HTTP 路由', { timeout: 60_000 }, () => {
       cwd: dir,
       model: 'faux/faux-1',
       models: models as never,
-      watchdogIntervalMs: 0,
     })
     const hub = await startHub({
       kernel: kernel as never,
@@ -638,7 +637,6 @@ describe('节点管理与 env/exec HTTP 路由', { timeout: 60_000 }, () => {
       cwd: hubDir,
       model: 'faux/faux-1',
       models: models as never,
-      watchdogIntervalMs: 0,
     })
     const hub = await startHub({
       kernel: kernel as never,

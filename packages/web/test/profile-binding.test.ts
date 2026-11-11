@@ -19,6 +19,7 @@ import { ProfileService } from '../../kernel/src/services/profiles-skills.js'
 import { parseProfileBody } from '../../kernel/src/http/validate.js'
 import { buildProfileSavePayload, createDraft, editProfileField } from '../src/modals/profile-editor-model.js'
 import { MemoryStore } from '../../kernel/src/builtin-plugins/memory/store.js'
+import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 
 /** 模拟 GET /profiles/:id 返回的富化详情（profile.json 基础字段 + SYSTEM 全文）。 */
 async function detailOf(svc: ProfileService, id: string): Promise<Profile> {
@@ -44,7 +45,7 @@ test('只改 name 的载荷保存后完整保留执行配置；MEMORY.md 不受 
   const dir = await mkdtemp(join(tmpdir(), 'helm-profile-binding-'))
   try {
     const svc = new ProfileService(dir)
-    const memoryStore = new MemoryStore(dir)
+    const memoryStore = new MemoryStore(createProfileFileHost(dir, svc))
 
     // 初始落盘：完整配置（含执行节点/目录/运行时/tags）。
     const initial = await svc.save({

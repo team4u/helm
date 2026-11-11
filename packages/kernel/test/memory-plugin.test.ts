@@ -20,6 +20,8 @@ import { ProfileService } from '../src/services/index.js'
 import { createMemoryPlugin, isProfileMemoryEnabled, type MemoryPluginDoc } from '../src/builtin-plugins/memory.js'
 import { MemoryStore } from '../src/builtin-plugins/memory/store.js'
 import { createProfilePlugin } from '../src/builtin-plugins/profile.js'
+import { createProfileFileHost } from './helpers/profile-file-host.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 
 // ---------------------------------------------------------------------------
 // 基建
@@ -65,6 +67,7 @@ function makeBackend(): PluginHostBackend & {
   conversations.set(2, makeConversation(2, 'coder'))
   const notifications: Array<{ title: string; body: string; level: string }> = []
   const backend = {
+    ...createPluginHostBackendFixture(),
     conversations,
     notifications,
     async dispatchTrigger() {},
@@ -105,6 +108,12 @@ function makeBackend(): PluginHostBackend & {
       return () => {}
     },
     async abortConversation() {},
+    getConversationActivity(): { consecutiveErrors: number } {
+      return { consecutiveErrors: 0 }
+    },
+    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+      return 'human'
+    },
     async spawnAgent() {
       return {}
     },
@@ -127,7 +136,7 @@ function makeBackend(): PluginHostBackend & {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
     },
   }
-  return backend as PluginHostBackend & { notifications: Array<{ title: string; body: string; level: string }> }
+  return backend
 }
 
 function makeTurn(profileId: string, withMemoryTool = true) {
@@ -159,11 +168,11 @@ async function setup(
   const profiles = new ProfileService(dataDir)
   await profiles.ensureDefault()
   await profiles.save({ id: 'coder', name: ' coder '.trim(), tags: [] })
-  const backend = makeBackend()
+  const backend = Object.assign(makeBackend(), createProfileFileHost(dataDir, profiles))
   const host = new PluginHost({ dataDir, host: backend, docs })
-  await host.register(createMemoryPlugin({ profiles }), { enabled: true })
+  await host.register(createMemoryPlugin(), { enabled: true })
   for (const plugin of extraPlugins) await host.register(plugin, { enabled: true })
-  return { host, profiles, store: new MemoryStore(dataDir), backend }
+  return { host, profiles, store: new MemoryStore(createProfileFileHost(dataDir, profiles)), backend }
 }
 
 let scratchRoot: string
@@ -377,7 +386,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     const dir = join(scratchRoot, 't10')
     const profiles = new ProfileService(dir)
     await profiles.ensureDefault()
-    const host = new PluginHost({ dataDir: dir, host: makeBackend(), docs: new MemoryDocStore() })
+    const host = new PluginHost({ dataDir: dir, host: Object.assign(makeBackend(), createProfileFileHost(dir, profiles)), docs: new MemoryDocStore() })
     await host.register(
       {
         id: 'builtin:profile',
@@ -386,7 +395,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
       } as never,
       { enabled: true },
     )
-    await host.register(createMemoryPlugin({ profiles }), { enabled: true })
+    await host.register(createMemoryPlugin(), { enabled: true })
     void createProfilePlugin // 引用保持（组合层注册测试在 core.integration）
     await host.disable('builtin:memory')
     const summary = host.list().find((p) => p.id === 'builtin:memory')
@@ -464,7 +473,7 @@ test('memory 单 Profile 开关跨重启持久（真实 createHelm）', { timeou
       const faux = fauxProvider()
       const models = createModels()
       models.setProvider(faux.provider)
-      return createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models, watchdogIntervalMs: 0 })
+      return createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
     }
     const first = await build()
     try {

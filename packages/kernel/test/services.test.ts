@@ -14,7 +14,6 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   HelmError,
-  SPEC_PRIMITIVE_NAMES,
   PLUGIN_UI_METHOD_NAMES,
   PLUGIN_HOOK_NAMES,
   RESERVED_SLASH_COMMANDS,
@@ -23,7 +22,6 @@ import {
 } from '@helm/protocol'
 import {
   HELM_CLI_SKILL_MD,
-  HELM_CLI_GENERATIVE_UI_MD,
   HELM_CLI_SKILL_AND_PLUGIN_DEV_MD,
   HELM_CLI_SKILL_ASSET,
   renderSkillTemplate,
@@ -31,6 +29,7 @@ import {
 import { MANAGED_EXEC_ENV_VARS } from '../src/env/scoped-env.js'
 import { WATCHDOG_PLAYBOOK_SKILL_ASSET } from '../src/builtin-plugins/superagent/assets.js'
 import { MemoryStore } from '../src/builtin-plugins/memory/store.js'
+import { createProfileFileHost } from './helpers/profile-file-host.js'
 import { assert } from './helpers.js'
 import { waitFor } from './helpers.js'
 import {
@@ -306,29 +305,14 @@ test('profiles: SYSTEM_DEFAULT 分层——含 helm-cli 引导与 HELM_CONVERSAT
 })
 
 test('helm-cli 技能资产同步界面扩展与会话投影能力面（防回退）', { timeout: 60_000 }, () => {
-  // SKILL.md 与 generative-ui.md：原语计数与双向契约对齐
-  assert.ok(
-    HELM_CLI_SKILL_MD.includes(`${SPEC_PRIMITIVE_NAMES.length} 个原语`),
-    `SKILL.md 应含 ${SPEC_PRIMITIVE_NAMES.length} 个原语`,
-  )
-  assert.ok(
-    HELM_CLI_GENERATIVE_UI_MD.includes(`${SPEC_PRIMITIVE_NAMES.length} 个原语`),
-    `generative-ui 应含 ${SPEC_PRIMITIVE_NAMES.length} 个原语`,
-  )
-  for (const name of SPEC_PRIMITIVE_NAMES) {
-    assert.ok(
-      HELM_CLI_GENERATIVE_UI_MD.includes(`\`${name}\``),
-      `generative-ui 应列出原语 \`${name}\``,
-    )
-  }
+  // generative-ui 手册已迁 builtin:json-render 插件技能（随启停过滤）：
+  // helm-cli SKILL.md 不得残留指向已删除 references 的下钻索引。
+  assert.ok(!HELM_CLI_SKILL_MD.includes('references/generative-ui.md'), '不得引用已迁出的 generative-ui.md')
+  assert.ok(HELM_CLI_SKILL_MD.includes('generative-ui'), '应按可用技能目录引导富展示（非硬编码手册）')
 
   // SKILL.md：会话文档 CLI 参数
   assert.ok(HELM_CLI_SKILL_MD.includes('--conversation'), 'SKILL.md 应含 doc --conversation 会话文档读取')
   assert.ok(HELM_CLI_SKILL_MD.includes('--watch'), 'SKILL.md 应含 doc --watch 订阅')
-
-  // generative-ui：求值域与旧计数防御
-  assert.ok(HELM_CLI_GENERATIVE_UI_MD.includes('$sessionDocs'), '求值域应含 $sessionDocs')
-  assert.ok(!HELM_CLI_GENERATIVE_UI_MD.includes('20 个原语'), '不应残留旧计数')
 
   // 插件开发：ctx.ui 注册方法契约对齐
   assert.ok(
@@ -1342,9 +1326,9 @@ test('跨进程锁回归: 真实 CLI 子进程与 CredentialService 并发写 cr
 
 test('并发回归: 不同 MemoryStore 实例并发 append 不丢行', { timeout: 60_000 }, async () => {
   const dataDir = await freshDataDir()
-  const base = new MemoryStore(dataDir)
+  const base = new MemoryStore(createProfileFileHost(dataDir))
   await base.ensureMemory('assistant')
-  const stores = Array.from({ length: 5 }, () => new MemoryStore(dataDir))
+  const stores = Array.from({ length: 5 }, () => new MemoryStore(createProfileFileHost(dataDir)))
   await Promise.all(
     stores.map((store, i) => store.updateMemory('assistant', `行-${i}`, 'append')),
   )
@@ -1425,7 +1409,7 @@ test('credentials 回归: 保留 CLI 等未知顶层键、非法结构显式拒�
 test('集成: MemoryStore 原子更新被 watcher 实时捕获（无 temp 事件）', { timeout: 60_000 }, async () => {
   const dataDir = await freshDataDir()
   await ensureDataDir(dataDir)
-  const store = new MemoryStore(dataDir)
+  const store = new MemoryStore(createProfileFileHost(dataDir))
   await store.ensureMemory('assistant')
 
   const seen: string[] = []

@@ -26,6 +26,11 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HelmError, type PluginDefinition, type WorkflowRunSummary } from '@helm/protocol'
+import {
+  DIAGNOSTICS_COLLECT_EVENT,
+  appendProbes,
+  parseCollection,
+} from './diagnostics.js'
 import { createHerdrTransport } from './herdr/transport.js'
 import { targetNodeId, type HerdrConfig, type HerdrEvent, type HerdrPluginDependencies, type HerdrTarget, type HerdrTransport } from './herdr/contracts.js'
 import { AskCoordinator, type AskEntry } from './herdr/asks.js'
@@ -41,6 +46,7 @@ import {
 } from './herdr/rpc.js'
 import { isValidSessionName, isValidNodeId, resolveSocketPath } from './herdr/transport.js'
 import { normalizeStartupTimeoutMs } from './herdr/spawn-rules.js'
+import { assembleHerdrDepsFromHost, nodeChannelFromHost } from './herdr/host-ports.js'
 import { OverviewProjector, type OverviewDoc } from './herdr/overview.js'
 
 /**
@@ -69,16 +75,32 @@ const HERDR_AGENT_SUGGESTIONS: ReadonlyArray<string> = [
   'amp', 'grok', 'hermes', 'kilo', 'qodercli', 'qwen', 'maki', 'muse',
 ]
 
-export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefinition {
+export function createHerdrPlugin(): PluginDefinition {
   return {
     id: 'builtin:herdr',
     name: 'Herdr 终端',
     version: '0.1.0',
     clientRoot: resolveHerdrClientRoot(),
     definePlugin(ctx) {
+      // ---- 宿主公共端口组装（零参工厂：全部依赖来自 ctx.host）----
+      // definePlugin 阶段仅持有宿主引用（停用注册/定义收集不触网）；
+      // 依赖在 service.start 启用时组装（周期内冻结，热重接线不生效）。
+      const hostApi = ctx.host
       // ---- 状态（每次启用周期重建） ----
-      const transport: HerdrTransport =
-        deps.transport ?? createHerdrTransport({ redact: deps.redact, ...(deps.nodeChannel ? { nodeChannel: deps.nodeChannel } : {}) })
+      /** 本周期内部依赖与生产 transport（start 时组装；早期回调先于 start 时组装）。 */
+      const depsRef: { current?: HerdrPluginDependencies } = {}
+      const transportRef: { current?: HerdrTransport } = {}
+      function resolveDeps(): HerdrPluginDependencies {
+        const nodeChannel = nodeChannelFromHost(hostApi)
+        transportRef.current ??= createHerdrTransport({ redact: (text) => hostApi.redact(text), nodeChannel })
+        depsRef.current = assembleHerdrDepsFromHost(hostApi, { transport: transportRef.current })
+        return depsRef.current
+      }
+      const depsOf = (): HerdrPluginDependencies => depsRef.current ?? resolveDeps()
+      const transportOf = (): HerdrTransport => {
+        if (transportRef.current === undefined) depsOf()
+        return transportRef.current!
+      }
       const asks = new AskCoordinator(() => refreshOverview())
       const registryRef: { current?: PaneRegistry } = {}
       const projectorRef: { current?: MetadataProjector } = {}
@@ -125,7 +147,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           return id
         },
         notify(title: string, body: string, level: 'info' | 'error'): void {
-          ctx.host.emitEvent('notification', { type: 'notification', level, title: deps.redact(title), body: deps.redact(body) })
+          ctx.host.emitEvent('notification', { type: 'notification', level, title: depsOf().redact(title), body: depsOf().redact(body) })
         },
         createAsk(spec: Parameters<typeof ctx.host.createAsk>[0]) {
           return ctx.host.createAsk(spec)
@@ -140,12 +162,12 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           projectorRef.current = new MetadataProjector(
             (target, method, params) => {
               const pane = registryRef.current?.get(targetNodeId(target), String(params['pane_id']))
-              return transport.call(pane?.target ?? frozenLocalTarget, method, params, { timeoutMs: 5_000 })
+              return transportOf().call(pane?.target ?? frozenLocalTarget, method, params, { timeoutMs: 5_000 })
             },
             (paneId, error) => {
               host.notify(
                 'Herdr 状态投射失败',
-                `pane ${paneId} report_metadata 失败：${error instanceof Error ? deps.redact(error.message) : String(error)}`,
+                `pane ${paneId} report_metadata 失败：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
                 'error',
               )
             },
@@ -167,7 +189,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           if (stopping) return
           host.notify(
             'Herdr 事件处理失败',
-            `${event.type} ${'workspaceId' in event ? event.workspaceId : event.paneId}：${error instanceof Error ? deps.redact(error.message) : String(error)}`,
+            `${event.type} ${'workspaceId' in event ? event.workspaceId : event.paneId}：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
             'error',
           )
         })
@@ -233,7 +255,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
             rawRelease?.()
             rawRelease = undefined
           }
-          rawRelease = await transport.subscribe(
+          rawRelease = await transportOf().subscribe(
             frozenLocalTarget,
             trackPaneEvent,
             (error) => {
@@ -301,7 +323,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
             return
           }
           const info = parseAgentResult(
-            await transport.call(frozenLocalTarget, 'agent.get', { target: pane.paneId }, {
+            await transportOf().call(frozenLocalTarget, 'agent.get', { target: pane.paneId }, {
               signal: connectionAbort.signal,
               timeoutMs: 5_000,
             }),
@@ -334,7 +356,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           if (error instanceof HelmError && error.status === 404) return
           host.notify(
             'Herdr 审批销单失败',
-            `ask ${entry.askId} cancel 失败：${error instanceof Error ? deps.redact(error.message) : String(error)}`,
+            `ask ${entry.askId} cancel 失败：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
             'error',
           )
         }
@@ -352,12 +374,12 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
       async function reconcile(): Promise<void> {
         const registry = registryRef.current!
         const snapshots = new Map<string, ReturnType<typeof parseSessionSnapshot>>([
-          [JSON.stringify(frozenLocalTarget), parseSessionSnapshot(await transport.call(frozenLocalTarget, 'session.snapshot', {}, { timeoutMs: 5_000 }))],
+          [JSON.stringify(frozenLocalTarget), parseSessionSnapshot(await transportOf().call(frozenLocalTarget, 'session.snapshot', {}, { timeoutMs: 5_000 }))],
         ])
         for (const pane of registry.all()) {
           if (pane.outcome === 'settled') continue
           const key = JSON.stringify(pane.target)
-          if (!snapshots.has(key)) snapshots.set(key, parseSessionSnapshot(await transport.call(pane.target, 'session.snapshot', {}, { timeoutMs: 5_000 })))
+          if (!snapshots.has(key)) snapshots.set(key, parseSessionSnapshot(await transportOf().call(pane.target, 'session.snapshot', {}, { timeoutMs: 5_000 })))
           const agent = snapshots.get(key)!.agents.find((a) => a.paneId === pane.paneId)
           if (pane.outcome === 'failed') continue // 持久 failed：保留诊断现场
           if (agent === undefined) {
@@ -387,7 +409,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
             await executorRef.current!.closePane(pane, 'settled').catch((error) => {
               host.notify(
                 'Herdr 孤儿回收失败',
-                `pane ${pane.paneId} 对账回收失败：${error instanceof Error ? deps.redact(error.message) : String(error)}`,
+                `pane ${pane.paneId} 对账回收失败：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
                 'error',
               )
             })
@@ -435,7 +457,6 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         id: 'overview',
         label: 'Herdr 终端总览',
         icon: 'terminal',
-        docs: ['overview'],
         client: { module: 'index.tsx', export: 'HerdrOverviewScreen' },
       })
       ctx.ui.profileRuntime({
@@ -466,71 +487,71 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         await settleParentTurn(payload.conversation.id)
       })
 
-      // watchdog_tick（priority 100）：追加本插件自有窗格的真实 probes（含远端轮询）。
+      // diagnostics.collect 监听（原 watchdog_tick priority 100 钩子改道）：
+      // 巡检发起方（builtin:superagent Watchdog service）采集原生事实后经宿主
+      // 内部事件追加本插件自有窗格的真实 probes（含远端轮询）。事件在宿主
+      // await，采集失败如实上抛给发起方，绝不静默吞。
       // human 归属红线：非自有 pane 一律不产生 probe；总览重取为只读采集。
-      ctx.hook.onWatchdogTick(
-        async (payload) => {
-          const registry = registryRef.current
-          if (!registry) return
-          const overview = overviewRef.current
-          if (overview !== undefined) {
-            // cwd/seen 等无事件变化（官方 actions.rs:1780 只改 cwd 不发事件）
-            // 依赖本 tick 重取快照对齐；单飞合并，不新增独立定时器。
-            await overview.refresh(registry, asks, frozenLocalTarget)
-          }
-          const now = Date.now()
-          const activePanes = registry.all().filter((pane) => pane.outcome !== 'settled')
-          // 并发探针：单窗格 agent.get 带 5s 短超时且 Promise.all 并发采集，
-          // 防止单个慢/挂节点串行卡死全局 watchdogTick 预算。
-          const probes = await Promise.all(
-            activePanes.map(async (pane): Promise<ReturnType<typeof buildProbe> | undefined> => {
-              const scope = scopeKey(nodeIdOf(pane), pane.paneId)
-              let status = 'unknown'
-              let authoritySeq: number | undefined
-              try {
-                const info = parseAgentResult(
-                  await transport.call(
-                    pane.target,
-                    'agent.get',
-                    { target: pane.paneId },
-                    { signal: connectionAbort.signal, timeoutMs: 5_000 },
-                  ),
+      ctx.host.onEvent(DIAGNOSTICS_COLLECT_EVENT, async (raw) => {
+        // 事件入口边界校验：非法载荷显式抛错给发布方（await 语义），不猜不吞。
+        const collection = parseCollection(raw)
+        const registry = registryRef.current
+        if (!registry) return
+        const overview = overviewRef.current
+        if (overview !== undefined) {
+          // cwd/seen 等无事件变化（官方 actions.rs:1780 只改 cwd 不发事件）
+          // 依赖本 tick 重取快照对齐；单飞合并，不新增独立定时器。
+          await overview.refresh(registry, asks, frozenLocalTarget)
+        }
+        const now = Date.now()
+        const activePanes = registry.all().filter((pane) => pane.outcome !== 'settled')
+        // 并发探针：单窗格 agent.get 带 5s 短超时且 Promise.all 并发采集，
+        // 防止单个慢/挂节点串行卡死采集预算。
+        const probes = await Promise.all(
+          activePanes.map(async (pane): Promise<ReturnType<typeof buildProbe> | undefined> => {
+            const scope = scopeKey(nodeIdOf(pane), pane.paneId)
+            let status = 'unknown'
+            let authoritySeq: number | undefined
+            try {
+              const info = parseAgentResult(
+                await transportOf().call(
+                  pane.target,
                   'agent.get',
-                  'agent_info',
-                )
-                if (info.name !== pane.agentName || info.tabId !== pane.tabId) {
-                  registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
-                  forgetPaneCaches(nodeIdOf(pane), pane.paneId)
-                  return undefined
-                }
-                for (const superseded of asks.observeAuthority({
-                  paneId: pane.paneId,
-                  nodeId: nodeIdOf(pane),
-                  seq: info.stateChangeSeq,
-                  status: info.agentStatus,
-                })) {
-                  await cancelQuietly(superseded, 'superseded')
-                }
-                status = info.agentStatus
-                authoritySeq = info.stateChangeSeq
-                probeFailures.delete(scope)
-              } catch {
-                status = 'unreachable'
-                // 权威不可达：绝不猜造 seq；水位不变更（停滞继续累计），
-                // 连续失败计数如实递增。
-                probeFailures.set(scope, (probeFailures.get(scope) ?? 0) + 1)
+                  { target: pane.paneId },
+                  { signal: connectionAbort.signal, timeoutMs: 5_000 },
+                ),
+                'agent.get',
+                'agent_info',
+              )
+              if (info.name !== pane.agentName || info.tabId !== pane.tabId) {
+                registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+                forgetPaneCaches(nodeIdOf(pane), pane.paneId)
+                return undefined
               }
-              return buildProbe(pane, status, authoritySeq, now)
-            }),
-          )
-          for (const probe of probes) {
-            if (probe !== undefined) payload.probes.push(probe)
-          }
-        },
-        { priority: 100 },
-      )
+              for (const superseded of asks.observeAuthority({
+                paneId: pane.paneId,
+                nodeId: nodeIdOf(pane),
+                seq: info.stateChangeSeq,
+                status: info.agentStatus,
+              })) {
+                await cancelQuietly(superseded, 'superseded')
+              }
+              status = info.agentStatus
+              authoritySeq = info.stateChangeSeq
+              probeFailures.delete(scope)
+            } catch {
+              status = 'unreachable'
+              // 权威不可达：绝不猜造 seq；水位不变更（停滞继续累计），
+              // 连续失败计数如实递增。
+              probeFailures.set(scope, (probeFailures.get(scope) ?? 0) + 1)
+            }
+            return buildProbe(pane, status, authoritySeq, now)
+          }),
+        )
+        appendProbes(collection, probes.filter((probe) => probe !== undefined))
+      })
 
-      /** 单窗格探针构造（停滞水位维护与 facts 口径间 watchdogTick 主体）。 */
+      /** 单窗格探针构造（停滞水位维护与 facts 口径；采集事件主体）。 */
       function buildProbe(
         pane: ManagedPane,
         status: string,
@@ -671,14 +692,14 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         async handler(input) {
           const pane = resolvePane(input)
           const read = parsePaneRead(
-            await transport.call(pane.target, 'agent.read', {
+            await transportOf().call(pane.target, 'agent.read', {
               target: pane.paneId,
               source: 'recent_unwrapped',
               lines: 40,
               format: 'text',
             }),
           )
-          return { paneId: pane.paneId, nodeId: nodeIdOf(pane) ?? 'local', text: deps.redact(read.text) }
+          return { paneId: pane.paneId, nodeId: nodeIdOf(pane) ?? 'local', text: depsOf().redact(read.text) }
         },
       })
 
@@ -705,7 +726,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           // 真实协议（服务端源码 agents.rs:35-41）：agent.focus 返回
           // ResponseResult::AgentInfo { agent }（agent_info），非 ok。
           const info = parseAgentResult(
-            await transport.call(pane.target, 'agent.focus', { target: pane.paneId }),
+            await transportOf().call(pane.target, 'agent.focus', { target: pane.paneId }),
             'agent.focus',
             'agent_info',
           )
@@ -743,6 +764,9 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
           stopping = false
           connectionAbort = new AbortController()
           const config = ctx.getConfig() as Partial<HerdrConfig>
+          // 端口组装（周期内冻结；缺端口能力由宿主端口自身显式报错）。
+          resolveDeps()
+          const deps = depsRef.current!
           // 冻结本启用周期的本机连接目标（此后所有调用共用；热配置不再生效）。
           frozenLocalTarget = resolveLocalTarget(config)
           const startupTimeout = normalizeStartupTimeoutMs(config.startupTimeoutMs)
@@ -766,7 +790,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
               createAsk: host.createAsk,
               cancelAsk: host.cancelAsk,
             },
-            transport,
+            deps.transport!,
             frozenLocalTarget,
             deps.pollIntervalMs,
           )
@@ -775,7 +799,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
             { redact: deps.redact, notify: host.notify },
             (doc) => { if (!stopping) overviewDoc.set(doc) },
             async (target, signal) => {
-              const snapshot = () => transport.call(target, 'session.snapshot', {}, {
+              const snapshot = () => transportOf().call(target, 'session.snapshot', {}, {
                 signal,
                 timeoutMs: 5_000,
               }).then(parseSessionSnapshot)
@@ -796,7 +820,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
               if (pane === undefined) return undefined
               try {
                 const info = parseAgentResult(
-                  await transport.call(pane.target, 'agent.get', { target: paneId }, { timeoutMs: 5_000 }),
+                  await transportOf().call(pane.target, 'agent.get', { target: paneId }, { timeoutMs: 5_000 }),
                   'agent.get',
                   'agent_info',
                 )
@@ -915,7 +939,7 @@ export function createHerdrPlugin(deps: HerdrPluginDependencies): PluginDefiniti
         probeObservations.clear()
         probeFailures.clear()
         if (errors.length > 0) {
-          const detail = errors.map((e) => (e instanceof Error ? deps.redact(e.message) : String(e))).join('; ')
+          const detail = errors.map((e) => (e instanceof Error ? depsOf().redact(e.message) : String(e))).join('; ')
           throw new HelmError('plugin_service_stop_failed', `herdr 服务清理失败：${detail}`, 500, { errors: detail })
         }
       }

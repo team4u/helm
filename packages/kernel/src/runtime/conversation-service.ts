@@ -59,9 +59,6 @@ export interface ConversationServiceOptions {
   readonly evictConversationBase: (conversationId: number) => void
   /** 插件会话管理权（删除保护；宿主注入）。 */
   readonly managedConversations: Map<number, Set<string>>
-  /** 会话删除时的工作树回收（宿主注入 cleanupWorktree）。 */
-  readonly cleanupWorktree: (request: { worktreeId: string }) => Promise<unknown>
-  readonly worktrees: { getForConversation(id: number): { id: string; path: string; status: string } | undefined }
   /** 挂起 Ask 级联取消（删除会话时；宿主注入 asks.cancelByConversation）。 */
   readonly cancelAsksByConversation: (id: number) => Promise<void>
   /** 原地覆盖重发前挂起 Ask 销单 superseded（宿主注入 asks.listPendingByConversation + cancelAsk）。 */
@@ -574,17 +571,6 @@ export class ConversationService {
     }
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (conversation) await conversation.abort(BACKGROUND_CONTEXT)
-    const worktree = this.o.worktrees.getForConversation(id)
-    if (worktree?.status === 'active') {
-      try {
-        await this.o.cleanupWorktree({ worktreeId: worktree.id })
-      } catch (error) {
-        this.events.publish('notification', {
-          level: 'warning', title: '工作树已保留',
-          body: this.stash.redact(`会话 ${id} 删除时未回收工作树 ${worktree.path}：${error instanceof Error ? error.message : String(error)}。检视后可调用 cleanup_worktree({ worktreeId: ${JSON.stringify(worktree.id)} })。`),
-        })
-      }
-    }
     // 级联取消等待真实落盘；IO 失败必须向上 reject（阻止后续删除副作用），
     // 绝不吞错很成功。
     await this.o.cancelAsksByConversation(id)

@@ -19,7 +19,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createModels } from '@earendil-works/pi-ai/models'
@@ -27,15 +27,19 @@ import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/provid
 import {
   HelmError,
   type ConversationSummary,
-  type WatchdogProbe,
-  type WatchdogTickHookPayload,
 } from '@helm/protocol'
+import {
+  appendProbes,
+  collectionViolation,
+  type DiagnosticsCollection,
+  type WatchdogProbe,
+} from '../src/builtin-plugins/diagnostics.js'
 import { KernelRuntime } from '../src/runtime/index.js'
-import { HookPipeline } from '../src/plugins/hooks.js'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
+import { ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
-import type { Profile } from '@helm/protocol'
+import type { HelmHostNodeIpcPort, RpcResult } from '@helm/protocol'
 
 // ---------------------------------------------------------------------------
 // 共享测试基座
@@ -57,7 +61,6 @@ async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxH
     cwd: dir,
     model: 'faux/faux-1',
     models,
-    watchdogIntervalMs: 0,
   })
   return Object.assign(runtime, { __faux: faux })
 }
@@ -82,13 +85,12 @@ test('关闭内核后拒绝新输入，结算回调不能重新启动模型回�
 // 1. 原生 tick：权威 seq / ownership 即时更改 / root human
 // ---------------------------------------------------------------------------
 
-test('native tick：probe 携带 targetKind/conversationId/权威 stateChangeSeq；ownership 即时更改；root 恒 human', { timeout: 60_000 }, async () => {
+test('原生事实端口：getConversationOwnership/getConversationActivity 现读真实事实（探针构造同源）', { timeout: 60_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'helm-probe-native-'))
   const kernel = await openRuntime(join(root, 'k1'))
   try {
-    // 用户直连会话（未登记）：human。
+    // 用户直连会话（未登记）：human；spawn 子会话：自动 helm 归属。
     const manual = await kernel.createConversation({})
-    // spawn 子会话：自动 helm 归属。
     kernel.__faux.setResponses([fauxAssistantMessage('worker 完成')])
     let childId: number | undefined
     await kernel.spawnAgent({
@@ -100,40 +102,18 @@ test('native tick：probe 携带 targetKind/conversationId/权威 stateChangeSeq
     })
     assert.ok(childId !== undefined)
 
-    const tick1 = (await kernel.watchdogTick()) as WatchdogTickHookPayload
-    const rootProbe = tick1.probes.find((p) => p.targetId === '1')
-    const childProbe = tick1.probes.find((p) => p.targetId === String(childId))
-    const manualProbe = tick1.probes.find((p) => p.targetId === String(manual.id))
-    // root：恒 human + 原生目标字段齐全。
-    assert.ok(rootProbe)
-    assert.equal(rootProbe.targetKind, 'conversation')
-    assert.equal(rootProbe.conversationId, 1)
-    assert.equal(rootProbe.ownedBy, 'human')
-    assert.equal(typeof rootProbe.stateChangeSeq, 'number')
-    assert.ok(rootProbe.stateChangeSeq! >= 0)
-    // spawn 子会话：helm。
-    assert.ok(childProbe)
-    assert.equal(childProbe.targetKind, 'conversation')
-    assert.equal(childProbe.conversationId, childId)
-    assert.equal(childProbe.ownedBy, 'helm')
-    // 权威 seq 与会话摘要一致（不猜造）。
-    const childSummary = kernel.getConversation(childId)
-    assert.equal(childProbe.stateChangeSeq, childSummary.stateChangeSeq)
-    // 用户直连：human。
-    assert.ok(manualProbe)
-    assert.equal(manualProbe.ownedBy, 'human')
+    // 归属权事实由 getConversationOwnership 现读（superagent 探针构造同源端口）。
+    assert.equal(kernel.getConversationOwnership(1), 'human', 'root 恒 human')
+    assert.equal(kernel.getConversationOwnership(manual.id), 'human', '用户直连默认 human')
+    assert.equal(kernel.getConversationOwnership(childId), 'helm', 'spawn 子会话自动 helm')
+    // 活动事实端口：空闲会话无停滞、有连续错误计数（结构真实）。
+    const activity = kernel.getConversationActivity(childId)
+    assert.equal(activity.consecutiveErrors, 0)
+    assert.ok(activity.stalledMs === undefined, '空闲会话不报停滞（idle 非停滞）')
 
-    // 即时更改：manual 标记 bot 后下一 tick 立即生效。
+    // 即时更改：manual 标记 bot 后端口现读立即生效。
     kernel.markConversationOwnership(manual.id, 'bot')
-    const tick2 = (await kernel.watchdogTick()) as WatchdogTickHookPayload
-    assert.equal(
-      tick2.probes.find((p) => p.targetId === String(manual.id))?.ownedBy,
-      'bot',
-      'markConversationOwnership 即时生效',
-    )
-    // 同一 tick 内 stateChangeSeq 与摘要一致（权威现读，非缓存）。
-    const manual2 = tick2.probes.find((p) => p.targetId === String(manual.id))!
-    assert.equal(manual2.stateChangeSeq, kernel.getConversation(manual.id).stateChangeSeq)
+    assert.equal(kernel.getConversationOwnership(manual.id), 'bot', 'markConversationOwnership 即时生效')
   } finally {
     await kernel.close()
     rmSync(root, { recursive: true, force: true })
@@ -196,8 +176,8 @@ function makeSummary(id: number): ConversationSummary {
   }
 }
 
-function makeTickPayload(probes: WatchdogProbe[]): WatchdogTickHookPayload {
-  return { timestamp: Date.now(), conversations: [makeSummary(1)], probes }
+function makeTickPayload(probes: WatchdogProbe[]): DiagnosticsCollection {
+  return { timestamp: Date.now(), conversations: [{ id: 1, profileId: 'assistant' }], probes }
 }
 
 const validProbe: WatchdogProbe = {
@@ -212,7 +192,7 @@ const validProbe: WatchdogProbe = {
   facts: { doing: 'x' },
 }
 
-test('非法探针在管道入口即拒绝（invalid_hook_result），不进入下游处理器', { timeout: 60_000 }, async () => {
+test('非法探针在采集边界即拒绝（invalid_diagnostics_probe），不进入追加', { timeout: 60_000 }, async () => {
   const invalid: WatchdogProbe[] = [
     { ...validProbe, targetKind: 'session' as never }, // 非法枚举
     { ...validProbe, conversationId: 0 }, // 非正整数
@@ -227,22 +207,23 @@ test('非法探针在管道入口即拒绝（invalid_hook_result），不进入�
     { ...validProbe, facts: null as never }, // facts 非对象
   ]
   for (const probe of invalid) {
-    const pipeline = new HookPipeline<'watchdog_tick'>('watchdog_tick')
-    let downstreamCalled = false
-    pipeline.add('p:down', () => {
-      downstreamCalled = true
-    })
-    await assert.rejects(
-      () => pipeline.run(makeTickPayload([probe])),
-      (err: unknown) => err instanceof HelmError && err.code === 'invalid_hook_result',
-      `探针 ${JSON.stringify(probe)} 必须被边界拒绝`,
+    const collection: DiagnosticsCollection = makeTickPayload([validProbe])
+    let appended = false
+    assert.throws(
+      () => {
+        appendProbes(collection, [probe])
+        appended = true
+      },
+      (err: unknown) => err instanceof HelmError && err.code === 'invalid_diagnostics_probe',
+      `探针 ${JSON.stringify(probe)} 必须被采集边界拒绝`,
     )
-    assert.equal(downstreamCalled, false, '非法载荷绝不进入下游')
+    assert.equal(appended, false, '非法探针绝不进入 collection')
+    assert.equal(collection.probes.length, 1, '原集合不受污染')
   }
 })
 
-test('合法探针（含可选字段缺省与全部新字段）通过边界并到达下游', { timeout: 60_000 }, async () => {
-  // 缺省可选字段（旧形状探针）仍合法。
+test('合法探针（含可选字段缺省与全部新字段）通过采集边界', { timeout: 60_000 }, async () => {
+  // 缺省可选字段（最小形状探针）合法。
   const legacy: WatchdogProbe = { targetId: '1', ownedBy: 'human', status: 'idle' }
   // 全字段外部探针。
   const external: WatchdogProbe = {
@@ -255,28 +236,21 @@ test('合法探针（含可选字段缺省与全部新字段）通过边界并�
     stalledMs: 0,
     facts: { kind: 'herdr', parentConversationId: 3, pendingAskCount: 1 },
   }
-  const pipeline = new HookPipeline<'watchdog_tick'>('watchdog_tick')
-  let received: WatchdogTickHookPayload | undefined
-  pipeline.add('p:down', (payload) => {
-    received = payload
-  })
-  const { finalPayload } = await pipeline.run(makeTickPayload([legacy, external]))
-  assert.ok(received)
-  assert.equal(finalPayload.probes.length, 2)
-  assert.equal(finalPayload.probes[1]!.nodeId, 'build-01')
-  assert.equal(finalPayload.probes[1]!.stateChangeSeq, 9)
+  const collection = makeTickPayload([legacy])
+  appendProbes(collection, [external])
+  assert.equal(collection.probes.length, 2)
+  assert.equal(collection.probes[1]!.nodeId, 'build-01')
+  assert.equal(collection.probes[1]!.stateChangeSeq, 9)
 })
 
-test('transform 破坏探针字段同样拒绝（transform 后复验）', { timeout: 60_000 }, async () => {
-  const pipeline = new HookPipeline<'watchdog_tick'>('watchdog_tick')
-  pipeline.add('p:bad', () => ({
-    action: 'transform' as const,
-    value: makeTickPayload([{ ...validProbe, stateChangeSeq: -5 }]),
-  }))
-  await assert.rejects(
-    () => pipeline.run(makeTickPayload([validProbe])),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_hook_result',
-  )
+test('collection 整体形状校验：timestamp/conversations/probes 非法显式拒绝', { timeout: 60_000 }, async () => {
+  const base = makeTickPayload([])
+  assert.ok(collectionViolation({ ...base, timestamp: -1 }) !== null)
+  assert.ok(collectionViolation({ ...base, conversations: [{ id: 0, profileId: 'x' }] as never }) !== null)
+  assert.ok(collectionViolation({ ...base, conversations: 'x' as never }) !== null)
+  assert.ok(collectionViolation({ ...base, probes: 'x' as never }) !== null)
+  assert.ok(collectionViolation(null) !== null)
+  assert.equal(collectionViolation(base), null, '合法 collection 通过')
 })
 
 // ---------------------------------------------------------------------------
@@ -382,6 +356,43 @@ class ProbeFakeTransport implements HerdrTransport {
 class ProbeBackend implements PluginHostBackend {
   conversations = new Map<number, ConversationSummary>()
   notifications: Array<{ title: string; body: string; level: string }> = []
+  /** 内部事件监听注册表（模拟 runtime.emitHostEvent broadcast:false 分发）。 */
+  private listeners = new Map<string, Array<(payload: unknown) => Promise<void>>>()
+  profiles = {
+    list: async () => [],
+    get: async () => undefined,
+    getSystem: async () => { throw new HelmError('not_found', '无 SYSTEM.md', 404) },
+    save: async () => { throw new HelmError('unsupported', 'fixture 只读', 501) },
+    directory: async (id: string) => `/tmp/probe-fixture-profiles/${id}`,
+  }
+  skills = {
+    list: async () => [],
+    readFile: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+    directory: async (id: string) => `/tmp/probe-fixture-skills/${id}`,
+    ensureSkill: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+  }
+  secrets = {
+    get: async () => undefined,
+    set: async () => { throw new HelmError('unsupported', 'fixture 只读 secrets', 501) },
+    delete: async () => { throw new HelmError('unsupported', 'fixture 只读 secrets', 501) },
+    addRedaction: () => () => {},
+  }
+  setPluginConfig(): Promise<void> { return Promise.resolve() }
+  nodeIpc: HelmHostNodeIpcPort | undefined = undefined
+  redact(text: string): string { return text }
+  redactText(text: string): string { return text }
+  buildSpawnEnv(): Record<string, string> { return {} }
+  async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
+  async listArtifacts(): Promise<never[]> { return [] }
+  async getArtifact(): Promise<never> { throw new HelmError('not_found', '无产物', 404) }
+  async completeText(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型', 501) }
+  executionEnv(): never { throw new HelmError('unsupported', '本 fixture 无执行环境', 501) }
+  withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() }
+  async atomicWriteFile(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
+  async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
+  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
+  listActiveSpawnExecutions(): [] { return [] }
+  async probeNodeFs(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不探测节点 fs', 501) }
   constructor() {
     this.conversations.set(1, makeSummary(1))
     this.conversations.set(3, makeSummary(3))
@@ -417,10 +428,26 @@ class ProbeBackend implements PluginHostBackend {
   registerAskSeqResolver(): () => void {
     return () => {}
   }
-  onEvent(): () => void {
-    return () => {}
+  onEvent(type: string, listener: (payload: unknown) => unknown): () => void {
+    const list = this.listeners.get(type) ?? []
+    list.push(listener as (payload: unknown) => Promise<void>)
+    this.listeners.set(type, list)
+    return () => {
+      const cur = this.listeners.get(type) ?? []
+      const idx = cur.indexOf(listener as (payload: unknown) => Promise<void>)
+      if (idx >= 0) cur.splice(idx, 1)
+    }
   }
   async abortConversation(): Promise<void> {}
+  getConversationActivity(): { consecutiveErrors: number } {
+    return { consecutiveErrors: 0 }
+  }
+  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    return 'human'
+  }
+  isClosing(): boolean {
+    return false
+  }
   async spawnAgent(): Promise<unknown> {
     return {}
   }
@@ -428,9 +455,6 @@ class ProbeBackend implements PluginHostBackend {
     return { ok: true, output: '' }
   }
   async prepareInterruptedConversations(): Promise<void> {}
-  async cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
-    return { removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }
-  }
   async invokeAction(): Promise<unknown> {
     return {}
   }
@@ -440,13 +464,19 @@ class ProbeBackend implements PluginHostBackend {
   async execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
     throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
   }
+  withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
   listActions(): [] {
     return []
   }
-  emitEvent(type: string, payload: unknown): void {
+  async emitEvent(type: string, payload: unknown): Promise<void> {
     if (type === 'notification') {
       const n = payload as { title: string; body: string; level: string }
       this.notifications.push(n)
+    }
+    if (type === 'diagnostics.collect') {
+      for (const listener of [...(this.listeners.get(type) ?? [])]) {
+        await listener(payload)
+      }
     }
   }
 }
@@ -485,7 +515,11 @@ async function makeProbeEnv(
   docs.set('builtin:herdr:managed', {
     version: 1,
     panes: managedPanes.map((p) => ({
-      target: p.nodeId !== undefined ? { nodeId: p.nodeId } : {},
+      // 本机 managed 记录必须显式携带 socketPath：插件把 config.socketPath 冻结为
+      // 本机连接目标，但逐窗格调用按各自 target 路由——缺 socketPath 时
+      // resolveSocketPath 回退继承环境（HERDR_SOCKET_PATH），读到开发机真实
+      // herdr 会话，对账必然把受控 pane 误判 settled（0 probe 的根因）。
+      target: p.nodeId !== undefined ? { nodeId: p.nodeId } : { socketPath: join(dataDir, 'herdr.sock') },
       paneId: p.paneId,
       tabId: `t-${p.paneId}`,
       effectiveCwd: p.cwd,
@@ -515,40 +549,59 @@ async function makeProbeEnv(
       transport.remotePanes.set(p.nodeId, bucket)
     }
   }
+  // 受控协议服务器：零参插件的生产 transport 经插件配置 socketPath 直连。
+  const socketPath = join(dataDir, 'herdr.sock')
+  // 帧路由：远端单行 IPC 请求期间指向目标 nodeId，其余时间归位本机 socket
+  //（serveTransport 经 targetOf 感知，把帧分发进对应分桶，与真实 EnvFabric 同构）。
+  let routedNodeId: string | undefined
+  const served = await serveTransport(transport, socketPath, () =>
+    routedNodeId !== undefined && routedNodeId !== 'local' ? { nodeId: routedNodeId } : {},
+  )
+  backend.nodeIpc = {
+    isOnline: () => true,
+    getNodeHubUrl: () => undefined,
+    call: async (nodeId, input, signal): Promise<RpcResult<string>> => {
+      routedNodeId = nodeId
+      try {
+        return await ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
+      } finally {
+        routedNodeId = undefined
+      }
+    },
+    subscribe: async () => {
+      throw new HelmError('unsupported', '本 fixture 不承载远端 IPC 订阅', 501)
+    },
+  }
   const host = new PluginHost({
     dataDir,
     host: backend,
     docs,
+    config: new (class {
+      get(): Record<string, unknown> { return { socketPath } }
+      set(): void {}
+    })(),
   })
-  await host.register(
-    createHerdrPlugin({
-      defaultCwd: '/tmp',
-      profiles: { get: async () => undefined as Profile | undefined },
-      buildSpawnEnv: () => ({}),
-      redact: (t: string) => t,
-      runLocalGate: async () => ({ ok: true, output: '' }),
-      transport,
-    }),
-    { enabled: true },
-  )
+  await host.register(createHerdrPlugin(), { enabled: true })
   return {
     host,
     backend,
     transport,
     async close() {
       await host.dispose().catch(() => {})
+      await served.close()
       rmSync(dataDir, { recursive: true, force: true })
     },
   }
 }
 
 async function runHerdrTick(env: ProbeEnv): Promise<WatchdogProbe[]> {
-  const payload: WatchdogTickHookPayload = {
+  const payload: DiagnosticsCollection = {
     timestamp: Date.now(),
     conversations: [],
     probes: [],
   }
-  await env.host.runHook('watchdog_tick', payload)
+  // 真实链路：superagent 侧同款采集事件分发（herdr 监听器追加探针）。
+  await env.backend.emitEvent('diagnostics.collect', payload)
   if (payload.probes.length === 0) {
     // 诊断：对账可能把 pane 判为 settled，附通知尾部，绝不静默断言失败。
     assert.fail(
@@ -589,8 +642,8 @@ test('Herdr tick：同名 Agent 换至其他 tab 后不再投射自动化归属'
   ])
   try {
     env.transport.panes.get('w:p1')!.tabId = 'human-tab'
-    const payload: WatchdogTickHookPayload = { timestamp: Date.now(), conversations: [], probes: [] }
-    await env.host.runHook('watchdog_tick', payload)
+    const payload: DiagnosticsCollection = { timestamp: Date.now(), conversations: [], probes: [] }
+    await env.backend.emitEvent('diagnostics.collect', payload)
     assert.deepEqual(payload.probes, [])
     assert.equal(env.transport.calls.some((call) => call.method === 'tab.close'), false)
   } finally {
@@ -691,6 +744,14 @@ class UiBackend extends ProbeBackend {}
 
 async function makeUiHost(): Promise<{ host: PluginHost; dataDir: string }> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ui-docs-'))
+  // 真实 clientRoot 夹具：声明 client 组件引用的插件必须提供 clientRoot
+  //（注册边界强制），module 需为真实存在的相对 .ts/.tsx 源文件。
+  const clientRoot = join(dataDir, 'fixture-client')
+  mkdirSync(clientRoot, { recursive: true })
+  writeFileSync(
+    join(clientRoot, 'main-screen.tsx'),
+    `export function MainScreen(): string { return 'ok' }\n`,
+  )
   const host = new PluginHost({
     dataDir,
     host: new UiBackend(),
@@ -699,77 +760,28 @@ async function makeUiHost(): Promise<{ host: PluginHost; dataDir: string }> {
   return { host, dataDir }
 }
 
-test('UI docs：合法 docs 进入 listUi 快照；声明同名 public doc 正常共存', { timeout: 60_000 }, async () => {
+test('UI docs：screen spec 如实进入 listUi 快照；声明同名 public doc 正常共存（docs 订阅已迁 client 轨）', { timeout: 60_000 }, async () => {
   const { host, dataDir } = await makeUiHost()
   try {
     await host.register({
       id: 'test:docs-ok',
+      clientRoot: join(dataDir, 'fixture-client'),
       definePlugin(ctx) {
+        // docs 订阅由插件 client 代码经 plugin-client-sdk 完成；screen 只带
+        // client 引用，不再有声明式 docs 字段（json-render 类整体迁出内核）。
         ctx.doc('overview', { version: 1 }, { public: true })
-        ctx.ui.screen({ id: 'main', label: '主视图', docs: ['overview'] })
-        ctx.ui.workbenchPanel({ id: 'plain', label: '无 docs 面板' })
+        ctx.ui.screen({ id: 'main', label: '主视图', client: { module: 'main-screen.tsx', export: 'MainScreen' } })
+        ctx.ui.workbenchPanel({ id: 'plain', label: '普通面板' })
       },
     })
     const ui = host.listUi()
     const screen = ui.find((u) => u.surface === 'screen')!
     assert.ok(screen)
-    assert.deepEqual((screen.spec as { docs?: string[] }).docs, ['overview'])
-    // 无 docs 声明不受影响。
+    assert.deepEqual((screen.spec as { client?: unknown }).client, { module: 'main-screen.tsx', export: 'MainScreen' })
+    assert.equal((screen.spec as { docs?: string[] }).docs, undefined, 'docs 字段已删除')
+    // 无 client 面板不受影响。
     const panel = ui.find((u) => u.surface === 'workbench.panel')!
-    assert.equal((panel.spec as { docs?: string[] }).docs, undefined)
-  } finally {
-    await host.dispose().catch(() => {})
-    rmSync(dataDir, { recursive: true, force: true })
-  }
-})
-
-test('UI docs：非数组 / 空数组 / 非字符串项 / 非法文档名 / 重复名 显式拒绝', { timeout: 60_000 }, async () => {
-  const cases: Array<{ label: string; docs: unknown }> = [
-    { label: '非数组', docs: 'overview' },
-    { label: '对象冒充', docs: { 0: 'overview', length: 1 , flush: async () => {}} },
-    { label: '空数组', docs: [] },
-    { label: '非字符串项', docs: ['overview', 42] },
-    { label: '空字符串名', docs: [''] },
-    { label: '非法文档名字符', docs: ['over view!'] },
-    { label: '路径穿越名', docs: ['../evil'] },
-    { label: '重复名', docs: ['overview', 'overview'] },
-  ]
-  for (const c of cases) {
-    const { host, dataDir } = await makeUiHost()
-    try {
-      await assert.rejects(
-        () =>
-          host.register({
-            id: 'test:docs-bad',
-            definePlugin(ctx) {
-              ctx.ui.screen({ id: 'main', label: '主视图', docs: c.docs as string[] })
-            },
-          }),
-        (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
-        `docs=${JSON.stringify(c.docs)} 必须被拒绝（${c.label}）`,
-      )
-      // 注册失败必须零残留。
-      assert.equal(host.listUi().length, 0)
-    } finally {
-      await host.dispose().catch(() => {})
-      rmSync(dataDir, { recursive: true, force: true })
-    }
-  }
-})
-
-test('UI docs：多扩展点同名校验一致（sidebarItem 带 docs 同样走边界）', { timeout: 60_000 }, async () => {
-  const { host, dataDir } = await makeUiHost()
-  try {
-    await assert.rejects(
-      () =>
-        host.register({
-          id: 'test:docs-sidebar',
-          definePlugin(ctx) {
-            ctx.ui.sidebarItem({ id: 'nav', label: '导航', docs: [123] as unknown as string[] })
-          },
-        }),
-      (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
-    )
+    assert.deepEqual(panel.spec, { id: 'plain', label: '普通面板' })
   } finally {
     await host.dispose().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })

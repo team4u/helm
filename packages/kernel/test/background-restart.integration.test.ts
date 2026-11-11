@@ -262,7 +262,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     const faux = fauxProvider()
     const models = createModels()
     models.setProvider(faux.provider)
-    const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false, watchdogIntervalMs: 0 })
+    const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
     t.after(async () => {
       await kernel.close().catch(() => {})
     })

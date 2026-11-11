@@ -2,124 +2,33 @@ import { KernelRuntime } from './runtime/index.js';
 import { createProfilePlugin } from './builtin-plugins/profile.js';
 import { createMemoryPlugin } from './builtin-plugins/memory.js';
 import { createWorkflowPlugin } from './builtin-plugins/workflow.js';
+import { createJsonRenderPlugin } from './builtin-plugins/json-render.js';
+import { createMermaidPlugin } from './builtin-plugins/mermaid.js';
 import { createHerdrPlugin } from './builtin-plugins/herdr.js';
-import { createSuperAgentPlugin, SUPERAGENT_PLUGIN_ID } from './builtin-plugins/superagent.js';
+import { createSuperAgentPlugin } from './builtin-plugins/superagent.js';
 import { createTriggersPlugin } from './builtin-plugins/triggers.js';
 import { createMagpiePlugin } from './builtin-plugins/magpie.js';
-import { MAGPIE_PROVIDER_ID } from './builtin-plugins/magpie/contracts.js';
 import { loadExternalPlugins } from './plugins/external-loader.js';
-import type { HerdrNodeChannel, HerdrTransport } from './builtin-plugins/herdr/contracts.js';
-import { createBlockedSnapshotAnalyzer } from './builtin-plugins/herdr/snapshot-analysis.js';
-import type { EnvFabric } from './env/index.js';
-import type { SuperAgentDependencies } from './builtin-plugins/superagent/contracts.js';
 
-export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'> & {
-  /** 可注入同契约传输层；缺省复用内核 EnvFabric 连接目标节点的 Herdr IPC。 */
-  herdrTransport?: HerdrTransport;
-};
+export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'>;
 
-/** 插件使用 SDK Context；EnvFabric 的 IPC 端口仅消费其中的取消信号。 */
-export function createHerdrNodeChannel(fabric: EnvFabric): HerdrNodeChannel {
-  return {
-    isOnline: (id) => fabric.isOnline(id),
-    getNodeHubUrl: (id) => fabric.getNodeHubUrl(id),
-    envFor: (id, cwd) => fabric.envFor(id, cwd),
-    ipcCall: (id, input, context) => fabric.ipcCall(id, input, context.abortSignal),
-    ipcSubscribe: (id, input, onLine, onClosed, context) => fabric.ipcSubscribe(id, input, onLine, onClosed, context.abortSignal),
-  };
-}
-
-/**
- * builtin:herdr 的阻塞快照 AI 解析（策略层在 snapshot-analysis）：组合层
- * 只把内核通用文本补全端口接给插件 helper，不在内核/通用 ctx.host 复述
- * 任何插件语义。helper 只在 createHelm 内实例化一次。
- */
-
+/** 组合根只选择插件与缺省启用状态，不提供内置插件专属运行时依赖。 */
 export async function createHelm(options: HelmOptions = {}) {
-  const { herdrTransport, ...runtimeOptions } = options;
-  const kernel = await KernelRuntime.open({ ...runtimeOptions, autoResume: false });
+  const kernel = await KernelRuntime.open({ ...options, autoResume: false });
   try {
-    // builtin:workflow 首个注册（默认启用）：服务 prepare/start 由 PluginHost
-    // 启动屏障统一调度——kernel.start() 在全部插件注册完成后先执行全局
-    // prepare（workflow 的 prepareRecovery 只落 abort 标记，不唤醒 SDK）
-    // 再逐插件 start（workflow 的 init 终止遗留任务并补发通知，此刻工具已
-    // 全部注册），最后才 resume 调度器。引擎生命周期自包含于插件服务。
+    await kernel.plugins.register(createProfilePlugin());
     await kernel.plugins.register(createWorkflowPlugin());
-
-    const snapshotAnalyzer = createBlockedSnapshotAnalyzer(kernel);
-    await kernel.plugins.register(createProfilePlugin(kernel));
-    // builtin:memory：默认启用、可停用（locked: false）；单 Profile 记忆开关、
-    // MEMORY.md 注入与 update_memory 工具全部自治，停用后能力即时消失。
-    await kernel.plugins.register(createMemoryPlugin(kernel));
-    await kernel.plugins.register(createHerdrPlugin({
-      defaultCwd: runtimeOptions.cwd ?? process.cwd(),
-      profiles: kernel.profiles,
-      buildSpawnEnv: (id, cwd, nodeId) => kernel.buildSpawnEnv(id, cwd, nodeId),
-      nodeChannel: createHerdrNodeChannel(kernel.envFabric),
-      analyzeBlockedSnapshot: (input) => snapshotAnalyzer.analyze(input),
-      redact: (text) => kernel.stash.redact(text),
-      runLocalGate: (command, context) => kernel.runGate(command, { ...context, nodeId: 'local' }),
-      getArtifact: (id, conversationId) => kernel.resolveAuthorizedAttachment(conversationId, id),
-      ...(herdrTransport ? { transport: herdrTransport } : {}),
-    }), { enabled: false });
-    // builtin:superagent：默认停用注册；启用时 service.start 幂等自举
-    // Profile 资产、两个常驻会话与 Watchdog 挂载。业务依赖显式注入，
-    // 不向通用 ctx.host 扩张（组合层职责）。
-    const superagentDeps: SuperAgentDependencies = {
-      dataDir: kernel.dataDir,
-      profiles: kernel.profiles,
-      skills: kernel.skills,
-      getConversationDetail: (id, options) => kernel.getConversationDetail(id, options),
-      // 组合层订阅端口：内核 EventHub conversation.entry 事件过滤后转交插件
-      // （不扩张通用 ctx.host / 7 hooks，内核零插件转判）。
-      subscribeConversationEntries: (listener) =>
-        kernel.events.subscribe((frame) => {
-          const event = frame.event
-          if (event.type !== 'conversation.entry' || !('entry' in event)) return
-          listener(event.conversationId, event.entry)
-        }),
-      listArtifacts: (conversationId) => kernel.artifacts.list(conversationId),
-      abortConversation: (conversationId) => kernel.abortConversation(conversationId),
-      getConversationOwnership: (conversationId) => kernel.getConversationOwnership(conversationId),
-      isClosing: () => kernel.isClosing,
-      redact: (text) => kernel.stash.redact(text),
-      setRouterMode: async (enabled) => {
-        await kernel.plugins.setConfig(SUPERAGENT_PLUGIN_ID, {
-          ...kernel.plugins.getConfig(SUPERAGENT_PLUGIN_ID),
-          routerMode: enabled,
-        });
-      },
-    };
-    await kernel.plugins.register(createSuperAgentPlugin(superagentDeps), { enabled: false });
-    // builtin:triggers：cron + webhook 入站连接器，默认停用注册；启用后经
-    // trigger 管道投递（dispatchTrigger 统一 defang）。组合层依赖显式注入。
-    await kernel.plugins.register(createTriggersPlugin({
-      credentials: kernel.credentials,
-      stash: kernel.stash,
-      profiles: kernel.profiles,
-      isClosing: () => kernel.isClosing,
-      flushDocs: () => kernel.documentStore.flush(),
-    }), { enabled: false });
-    await kernel.plugins.register(createMagpiePlugin({
-      refreshProviderModels: async (pluginOptions) => {
-        const result = await kernel.refreshModels({ ...pluginOptions, providers: [MAGPIE_PROVIDER_ID] });
-        return {
-          errors: result.errors,
-          modelCount: result.providerCatalog.find((provider) => provider.id === MAGPIE_PROVIDER_ID)?.modelCount ?? 0,
-        };
-      },
-    }), { enabled: false });
-    // 外部插件目录 <dataDir>/plugins/<dir>/ 自动发现（内置插件数据目录静默跳过）；
-    // 默认停用注册，config.json.pluginEnabled 持久化 true 的自动恢复启用
+    await kernel.plugins.register(createMemoryPlugin());
+    await kernel.plugins.register(createJsonRenderPlugin());
+    await kernel.plugins.register(createMermaidPlugin());
+    await kernel.plugins.register(createHerdrPlugin(), { enabled: false });
+    await kernel.plugins.register(createSuperAgentPlugin(), { enabled: false });
+    await kernel.plugins.register(createTriggersPlugin(), { enabled: false });
+    await kernel.plugins.register(createMagpiePlugin(), { enabled: false });
     await loadExternalPlugins(kernel.dataDir, kernel.plugins);
-    // 恢复补发会提交父会话输入并启动 SDK，必须等全部工具与插件已注册。
+    // 全部工具注册后统一 prepare -> start，最后恢复 SDK 调度器。
     await kernel.start();
-    return {
-      kernel,
-      async close() {
-        await kernel.close();
-      },
-    };
+    return { kernel, close: () => kernel.close() };
   } catch (error) {
     await kernel.close();
     throw error;

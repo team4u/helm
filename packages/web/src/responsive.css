@@ -170,19 +170,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .form-grid { grid-template-columns: minmax(0, 1fr) !important; gap: 6px; }
   .config-fields > div { grid-template-columns: minmax(0, 1fr) !important; }
 }
-/* Mermaid 预览弹窗响应式 */
-.mermaid-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; }
-.mermaid-modal-title { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mermaid-modal-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.mermaid-modal-close { flex-shrink: 0; }
-
-@media (max-width: 680px) {
-  .mermaid-modal-header { flex-wrap: wrap; padding: 10px 12px; gap: 8px; }
-  .mermaid-modal-title { order: 1; flex: 1; min-width: 0; }
-  .mermaid-modal-close { order: 2; margin-left: auto; }
-  .mermaid-modal-actions { order: 3; width: 100%; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-start; }
-}
-
 /* 产物预览弹窗：移动端全屏时标题独占一行，操作按钮折到第二行 */
 @media (max-width: 680px) {
   .artifact-preview-header { flex-wrap: wrap; padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); gap: 8px 6px; }

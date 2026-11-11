@@ -16,7 +16,7 @@ function summaryCallback(kernel: KernelRuntime): (summary: ConversationSummary) 
 
 test('删除后迟到的 tracker 摘要不发布 upsert 复活会话', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-ownership-events-'))
-  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false, watchdogIntervalMs: 0 })
+  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
   try {
     const conversation = await kernel.createConversation({ title: '待删除的后台会话' })
     kernel.markConversationOwnership(conversation.id, 'helm')
@@ -42,7 +42,7 @@ test('删除后迟到的 tracker 摘要不发布 upsert 复活会话', { timeout
 
 test('归属文档读取失败不能伪造 human 摘要事件', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-ownership-error-'))
-  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false, watchdogIntervalMs: 0 })
+  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
   try {
     const conversation = await kernel.createConversation({ title: '归属异常' })
     const frames: HelmEventFrame[] = []

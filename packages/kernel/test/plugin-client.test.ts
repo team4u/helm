@@ -20,6 +20,7 @@ import {
   SkillService,
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { compilePluginClientModule } from '../src/plugins/client-compiler.js'
 import { createHubHandler } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike} from '../src/http/index.js'
@@ -49,6 +50,7 @@ function makeConversation(id: number): ConversationSummary {
 
 function makeBackend(): PluginHostBackend {
   return {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async (init) => ({ ...makeConversation(42), title: init.title ?? 'new' }),
@@ -62,13 +64,19 @@ function makeBackend(): PluginHostBackend {
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
+    getConversationActivity(): { consecutiveErrors: number } {
+      return { consecutiveErrors: 0 }
+    },
+    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+      return 'human'
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     listActions: () => [],
     emitEvent: () => {},
   }
@@ -488,7 +496,7 @@ test('依赖符号链接越根拒绝：本地 import 指向根外符号链接（
     await assert.rejects(
       pluginHost.getClientModule('test:client-fixture', 'entry-linked.ts'),
       (err: unknown) =>
-        err instanceof HelmError && err.code === 'client_compile_failed' && err.message.includes('越出 clientRoot'),
+        err instanceof HelmError && err.code === 'client_compile_failed' && err.message.includes('越界'),
     )
   } finally {
     await rm(join(clientRoot, 'linked-dep.ts'), { force: true })

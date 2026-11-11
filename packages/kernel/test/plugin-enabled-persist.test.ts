@@ -31,6 +31,7 @@ import {
   type PluginConfigStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js';
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -58,7 +59,9 @@ function makeConversation(id: number): ConversationSummary {
 
 function makeHostApi(events: string[]): PluginHostBackend & { __payload: Array<{ type: string; payload: unknown }> } {
   const payload: Array<{ type: string; payload: unknown }> = [];
-  const api = {
+  const api: PluginHostBackend & { __payload: Array<{ type: string; payload: unknown }> } = {
+    ...createPluginHostBackendFixture(),
+    __payload: payload,
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async (init: { title?: string }) => ({ ...makeConversation(42), title: init.title ?? 'new' }),
@@ -75,10 +78,15 @@ function makeHostApi(events: string[]): PluginHostBackend & { __payload: Array<{
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
+    getConversationActivity(): { consecutiveErrors: number } {
+      return { consecutiveErrors: 0 }
+    },
+    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+      return 'human'
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
-    cleanupWorktree: async () => ({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }),
     invokeAction: async () => ({}),
     prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
@@ -88,7 +96,7 @@ function makeHostApi(events: string[]): PluginHostBackend & { __payload: Array<{
       payload.push({ type, payload: p });
     },
   };
-  return Object.assign(api, { __payload: payload }) as PluginHostBackend & { __payload: typeof payload };
+  return Object.assign(api, { __payload: payload });
 }
 
 /** 事件载荷记录器（plugin.changed 断言用）。 */

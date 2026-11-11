@@ -300,17 +300,13 @@ describe('会话管理权与归属权', { timeout: 60_000 }, () => {
           childId = info.conversationId
         },
       })
-      // 原生 spawn 自动 helm 归属（watchdog 判定唯一可信来源）。
-      const tick = (await kernel.watchdogTick()) as {
-        probes: Array<{ targetId: string; ownedBy: string }>
-      }
-      assert.equal(tick.probes.find((p) => p.targetId === String(childId))?.ownedBy, 'helm')
+      assert.ok(childId !== undefined)
+      // 原生 spawn 自动 helm 归属（getConversationOwnership 现读：watchdog 探针
+      // 构造同源端口）。
+      assert.equal(kernel.getConversationOwnership(childId), 'helm')
       // 人类自建会话默认 human。
       const manual = await kernel.createConversation({})
-      const tick2 = (await kernel.watchdogTick()) as {
-        probes: Array<{ targetId: string; ownedBy: string }>
-      }
-      assert.equal(tick2.probes.find((p) => p.targetId === String(manual.id))?.ownedBy, 'human')
+      assert.equal(kernel.getConversationOwnership(manual.id), 'human')
     } finally {
       await kernel.close()
     }
@@ -517,20 +513,17 @@ describe('snapshot 与插件公共文档', { timeout: 60_000 }, () => {
   })
 })
 
-describe('watchdog tick', { timeout: 60_000 }, () => {
-  it('probe 携带真实 stalledMs/consecutiveErrors；失败回合后 consecutiveErrors 递增', { timeout: 60_000 }, async () => {
+describe('getConversationActivity（原 watchdog tick 活动事实端口）', { timeout: 60_000 }, () => {
+  it('携带真实 stalledMs/consecutiveErrors；失败回合后 consecutiveErrors 递增', { timeout: 60_000 }, async () => {
     const dir = join(root, 'w1')
-    const kernel = await openRuntime(dir, { model: 'faux/faux-1', watchdogIntervalMs: 0 })
+    const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
     try {
       // 成功回合。
       kernel.__faux.setResponses([fauxAssistantMessage('ok')])
       await kernel.submitInput(1, '第一问')
       await kernel.waitForIdle(1)
-      let tick = (await kernel.watchdogTick()) as {
-        probes: Array<{ targetId: string; consecutiveErrors?: number }>
-      }
-      const rootProbe = tick.probes.find((p) => p.targetId === '1')
-      assert.equal(rootProbe?.consecutiveErrors, undefined)
+      // 成功回合后无连续错误（探针构造省略 consecutiveErrors=0 字段同源）。
+      assert.equal(kernel.getConversationActivity(1).consecutiveErrors, 0)
 
       // 失败回合：consecutiveErrors=1（真实事实，内核不做自动恢复）。
       kernel.__faux.setResponses([
@@ -538,10 +531,7 @@ describe('watchdog tick', { timeout: 60_000 }, () => {
       ])
       await kernel.submitInput(1, '会失败的问题').catch(() => {})
       await kernel.waitForIdle(1).catch(() => {})
-      tick = (await kernel.watchdogTick()) as {
-        probes: Array<{ targetId: string; consecutiveErrors?: number }>
-      }
-      assert.equal(tick.probes.find((p) => p.targetId === '1')?.consecutiveErrors, 1)
+      assert.equal(kernel.getConversationActivity(1).consecutiveErrors, 1)
     } finally {
       await kernel.close()
     }

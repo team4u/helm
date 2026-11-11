@@ -3,20 +3,21 @@
  *
  * Layer 1（SKILL.md）：helm CLI 黄金法则、核心命令全景与 references 下钻索引，
  * 由 SkillService.ensureSkill 在插件启动时同步为源码版本（受管覆盖，常规接口只读）。
- * Layer 2（references/*.md）：生成式 UI、确定性工作流、技能与插件自举开发
- * 三个专题手册，模型经 load_skill({ skillId, path }) 按需读取，正文不常驻。
+ * Layer 2（references/*.md）：确定性工作流与技能插件自举开发两个专题手册，
+ * 模型经 load_skill({ skillId, path }) 按需读取，正文不常驻。
+ * 生成式 UI（```ui 代码块）手册由 builtin:json-render 插件自举的
+ * generative-ui 技能提供，随插件启停进入/离开可用技能目录。
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   HelmError,
-  SPEC_PRIMITIVE_NAMES,
   PLUGIN_UI_METHOD_NAMES,
   RESERVED_SLASH_COMMANDS,
   PLUGIN_HOOK_NAMES,
+  type PluginSkillAsset,
 } from '@helm/protocol'
-import type { BuiltinSkillAsset } from '../../services/index.js'
 
 /** 托管本技能资产与自举 Profile 的插件 ID（SKILL.md frontmatter managedByPlugin 值）。 */
 export const PROFILE_MANAGED_BY = 'builtin:profile'
@@ -81,7 +82,6 @@ const skillDir = resolveProfileSkillDir()
 const skillVars: Record<string, string> = {
   SKILL_ID: HELM_CLI_SKILL_ID,
   MANAGED_BY: PROFILE_MANAGED_BY,
-  PRIMITIVE_COUNT: String(SPEC_PRIMITIVE_NAMES.length),
   HOOK_COUNT: String(PLUGIN_HOOK_NAMES.length),
   HOOK_NAMES: PLUGIN_HOOK_NAMES.join('、'),
   UI_METHOD_COUNT: String(PLUGIN_UI_METHOD_NAMES.length),
@@ -90,11 +90,6 @@ const skillVars: Record<string, string> = {
 
 export const HELM_CLI_SKILL_MD = renderSkillTemplate(
   readFileSync(join(skillDir, 'SKILL.md'), 'utf-8'),
-  skillVars,
-)
-
-export const HELM_CLI_GENERATIVE_UI_MD = renderSkillTemplate(
-  readFileSync(join(skillDir, 'references', 'generative-ui.md'), 'utf-8'),
   skillVars,
 )
 
@@ -108,12 +103,11 @@ export const HELM_CLI_SKILL_AND_PLUGIN_DEV_MD = renderSkillTemplate(
   skillVars,
 )
 
-/** 汇总资产：id + SKILL.md + 3 个 references。SkillService.ensureSkill 受管覆盖同步。 */
-export const HELM_CLI_SKILL_ASSET: BuiltinSkillAsset = {
+/** 汇总资产：id + SKILL.md + 2 个 references。SkillService.ensureSkill 受管覆盖同步。 */
+export const HELM_CLI_SKILL_ASSET: PluginSkillAsset = {
   id: HELM_CLI_SKILL_ID,
   skillMd: HELM_CLI_SKILL_MD,
   references: {
-    'generative-ui.md': HELM_CLI_GENERATIVE_UI_MD,
     'workflows-and-agents.md': HELM_CLI_WORKFLOWS_AND_AGENTS_MD,
     'skill-and-plugin-dev.md': HELM_CLI_SKILL_AND_PLUGIN_DEV_MD,
   },

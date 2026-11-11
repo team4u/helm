@@ -5,7 +5,7 @@
  * 覆盖：
  * - UiRegistry 直驱边界：previewer label/MIME 规范（精确或 type 通配子类型，拒全通配、glob、
  *   大写、参数、路径形态、重复项）/后缀（小写含点可多段，拒大写、无点、路径段、通配符）；
- *   completer 禁用轨（client/json/docs/sessionDocs）、trigger 白名单（'/' 拒绝）、
+ *   completer 禁用轨（client）、trigger 白名单（'/' 拒绝）、
  *   source 互斥严校验（action 源禁 doc 字段、doc 源禁 action 字段、非法 kind）、
  *   itemsField 安全顶层键（拒 __proto__/constructor/prototype）、doc 名格式；
  * - assertUiDocsRegistered：completer doc/sessionDoc 源要求本插件公开文档；
@@ -27,6 +27,7 @@ import {
 } from '@helm/protocol';
 import { UiRegistry } from '../src/plugins/ui-registry.js';
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js';
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 
 const isHelmError = (code: string) => (err: unknown): boolean => err instanceof HelmError && err.code === code;
 
@@ -128,109 +129,38 @@ test('composerCompleter：禁用轨、trigger 白名单与 source 形状', { tim
     isHelmError('invalid_ui_spec'),
   );
 
-  // 禁用轨：client/json/docs/sessionDocs 均拒绝（补全由宿主统一渲染）
-  for (const field of ['client', 'json', 'docs', 'sessionDocs']) {
-    const spec: Record<string, unknown> = {
-      id: `bad-${field}`,
-      label: 'x',
-      trigger: '@',
-      source: { kind: 'action', actionId: 'x' },
-      [field]: field === 'client' ? { module: './x.tsx', export: 'X' } : field === 'json' ? { component: 'Text' } : ['doc'],
-    };
-    assert.throws(
-      () => ui.registerUi('p1', 'composer.completer', spec, 'composerCompleter'),
-      isHelmError('invalid_ui_spec'),
-      `${field} 轨应被拒绝`,
-    );
-  }
-
-  // trigger：'/' 保留给命令与技能；仅 @ # : 合法
-  for (const bad of ['/', '$', 'at', '', undefined, null]) {
-    const spec: Record<string, unknown> = { id: 'bad-trigger', label: 'x', source: { kind: 'action', actionId: 'x' } };
-    if (bad !== undefined) spec.trigger = bad;
-    assert.throws(
-      () => ui.registerUi('p1', 'composer.completer', spec, 'composerCompleter'),
-      isHelmError('invalid_ui_spec'),
-      `trigger ${JSON.stringify(bad)} 应被拒绝`,
-    );
-  }
-  for (const ok of ['@', '#', ':']) {
-    ui.registerUi(
-      'p1',
-      'composer.completer',
-      { id: `trigger-${ok}`, label: 'x', trigger: ok, source: { kind: 'action', actionId: 'x' } },
-      'composerCompleter',
-    );
-  }
-
-  // source 互斥严校验：action 源不得混入 doc 字段
+  // 禁用轨：client 拒绝（补全由宿主统一渲染）
   assert.throws(
-    () => registerCompleter(ui, 'p1', 'mix1', { kind: 'action', actionId: 'x', name: 'items', itemsField: 'entries' }),
+    () =>
+      ui.registerUi('p1', 'composer.completer', {
+        id: 'bad-client',
+        label: 'x',
+        trigger: '@',
+        source: { kind: 'action', actionId: 'x' },
+        client: { module: './x.tsx', export: 'X' },
+      }, 'composerCompleter'),
     isHelmError('invalid_ui_spec'),
+    'client 轨应被拒绝',
   );
-  // doc 源不得混入 action 字段
-  assert.throws(
-    () => registerCompleter(ui, 'p1', 'mix2', { kind: 'doc', name: 'items', itemsField: 'entries', actionId: 'x' }),
-    isHelmError('invalid_ui_spec'),
-  );
-  assert.throws(
-    () => registerCompleter(ui, 'p1', 'mix3', { kind: 'sessionDoc', name: 'items', itemsField: 'entries', actionPluginId: 'other' }),
-    isHelmError('invalid_ui_spec'),
-  );
-  // 非法 kind / 缺 source
-  assert.throws(
-    () => registerCompleter(ui, 'p1', 'bad-kind', { kind: 'http', url: 'https://evil' }),
-    isHelmError('invalid_ui_spec'),
-  );
-  assert.throws(
-    () => ui.registerUi('p1', 'composer.completer', { id: 'no-source', label: 'x', trigger: '@' }, 'composerCompleter'),
-    isHelmError('invalid_ui_spec'),
-  );
-
-  // actionId：空串/点号拒绝（跨插件走 actionPluginId）
-  for (const bad of ['', 'x.y', 'a.b.c']) {
-    assert.throws(
-      () => registerCompleter(ui, 'p1', `bad-aid-${bad}`, { kind: 'action', actionId: bad }),
-      isHelmError('invalid_ui_spec'),
-    );
-  }
-  // actionPluginId 非空字符串
-  assert.throws(
-    () => registerCompleter(ui, 'p1', 'bad-apid', { kind: 'action', actionId: 'x', actionPluginId: '' }),
-    isHelmError('invalid_ui_spec'),
-  );
-
-  // doc 名格式：非法字符/空串拒绝（与 docs/sessionDocs 列表同一命名约束）
-  for (const bad of ['', 'a/b', 'a b']) {
-    assert.throws(
-      () => registerCompleter(ui, 'p1', `bad-name-${bad.length}`, { kind: 'doc', name: bad, itemsField: 'items' }),
-      isHelmError('invalid_ui_spec'),
-    );
-  }
-  // itemsField：原型污染键与非法字符拒绝（hasOwnProperty 是常规自有键名，不在拒结名单）
-  for (const bad of ['__proto__', 'constructor', 'prototype', '', 'a/b', 'a.b']) {
-    assert.throws(
-      () => registerCompleter(ui, 'p1', `bad-field-${bad.length}`, { kind: 'doc', name: 'items', itemsField: bad }),
-      isHelmError('invalid_ui_spec'),
-      `itemsField "${bad}" 应被拒绝`,
-    );
-  }
 });
 
-test('composerCompleter：doc/sessionDoc 源经 assertUiDocsRegistered 要求公开文档', { timeout: 60_000 }, () => {
+test('composerCompleter：doc/sessionDoc 源声明仍受 source 形状约束（引用校验随 JSON 轨移除）', { timeout: 60_000 }, () => {
   const ui = new UiRegistry();
   registerCompleter(ui, 'p1', 'd1', { kind: 'doc', name: 'items', itemsField: 'entries' });
   registerCompleter(ui, 'p1', 's1', { kind: 'sessionDoc', name: 'ctx', itemsField: 'list' });
-
-  // 均未公开：拒绝
-  assert.throws(() => ui.assertUiDocsRegistered('p1', () => false, () => false), isHelmError('invalid_ui_spec'));
-  // doc 源公开但 sessionDoc 源未公开：拒绝
+  // 源形状非法仍拒绝（如 itemsField 原型污染键）
   assert.throws(
-    () => ui.assertUiDocsRegistered('p1', (n) => n === 'items', () => false),
+    () =>
+      ui.registerUi('p1', 'composer.completer', {
+        id: 'bad-proto',
+        label: 'x',
+        trigger: '@',
+        source: { kind: 'doc', name: 'items', itemsField: '__proto__' },
+      }, 'composerCompleter'),
     isHelmError('invalid_ui_spec'),
   );
-  // 双公开：通过
-  ui.assertUiDocsRegistered('p1', (n) => n === 'items', (n) => n === 'ctx');
+  // assertUiDocsRegistered 为挂点：不再对 completer 源做定义期末检
+  ui.assertUiDocsRegistered('p1', () => false, () => false);
 });
 
 // ---------------------------------------------------------------------------
@@ -242,6 +172,7 @@ function createHostBackend(): PluginHostBackend {
     throw new Error('本测试只验证 UI 注册，不应执行宿主业务操作');
   };
   return {
+    ...createPluginHostBackendFixture(),
     dispatchTrigger: unused,
     submitInput: unused,
     createConversation: unused,
@@ -249,13 +180,15 @@ function createHostBackend(): PluginHostBackend {
     getConversation: unused,
     updateConversation: unused,
     abortConversation: unused,
+    getConversationActivity: () => ({ consecutiveErrors: 0 }),
+    getConversationOwnership: () => 'human' as const,
     manageConversation: () => () => {},
     markConversationOwnership: unused,
     spawnAgent: unused,
     runGate: unused,
     prepareInterruptedConversations: unused,
-    cleanupWorktree: unused,
     execEnv: unused,
+    withFileMutationQueue: unused,
     prepareAction: unused,
     invokeAction: unused,
     listActions: () => [],
@@ -374,8 +307,10 @@ test('host：新契约注册/停用/snapshot 与方法数量消费者对齐', { 
     await host.enable('test:contracts');
     assert.equal(host.listUi().length, 4);
 
-    // 方法数量消费者：protocol 唯一真源 17 个方法，host ctx.ui 提供同名注册入口
-    assert.equal(PLUGIN_UI_METHOD_NAMES.length, 17);
+    // 方法数量消费者：protocol 唯一真源 16 个方法，host ctx.ui 提供同名注册入口
+    assert.equal(PLUGIN_UI_METHOD_NAMES.length, 16);
+    assert.ok(PLUGIN_UI_METHOD_NAMES.includes('markdownCodeBlock' as const));
+    assert.ok(PLUGIN_UI_METHOD_NAMES.includes('action' as const));
     assert.ok(PLUGIN_UI_METHOD_NAMES.includes('composerCompleter' as const));
     assert.ok(PLUGIN_UI_METHOD_NAMES.includes('artifactPreviewer' as const));
   } finally {

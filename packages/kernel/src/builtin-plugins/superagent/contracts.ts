@@ -1,35 +1,17 @@
 import type {
   ArtifactMetadata,
-  ConversationDetail,
-  ConversationEntry,
   HelmPluginContext,
   MaybePromise,
   PluginDocHandle,
   TurnOutcome,
-  WatchdogOwnership,
 } from '@helm/protocol'
-import type { ProfileService, SkillService } from '../../services/index.js'
 
-/** 业务策略依赖由组合层注入，不扩张通用 ctx.host。 */
-export interface SuperAgentDependencies {
-  dataDir: string
-  profiles: ProfileService
-  skills: SkillService
-  getConversationDetail(id: number, options?: { limit?: number; cursor?: string }): Promise<ConversationDetail>
-  /**
-   * 组合层注入的会话条目订阅端口：内核 EventHub conversation.entry 事件的
-   * 插件侧转交（app.ts 过滤 frame.event.type）。superagent 用它监听
-   * helm.rewind 截断标记联动清理 RecallGraph；返回退订函数。宿主未注入时
-   * 显式拒绝启用（禁静默降级）。
-   */
-  subscribeConversationEntries(listener: (conversationId: number, entry: ConversationEntry) => void): () => void
-  listArtifacts(conversationId: number): Promise<ArtifactMetadata[]>
-  abortConversation(conversationId: number): Promise<void>
-  getConversationOwnership(conversationId: number): WatchdogOwnership
-  isClosing(): boolean
-  setRouterMode(enabled: boolean): Promise<void>
-  redact(text: string): string
-}
+/*
+ * SuperAgentDependencies 已删除：业务依赖全部经公开 ctx.host 端口
+ *（profiles/skills/getConversationDetail/listArtifacts/abortConversation/
+ * getConversationOwnership/getConversationActivity/redact/isClosing/
+ * setConfig/onEvent('conversation.entry')），不再有组合层私有 DI 面。
+ */
 
 export interface SuperAgentConfig {
   routerMode: boolean
@@ -109,6 +91,5 @@ export interface SuperAgentWatchdogRuntime {
 
 export type RegisterSuperAgentWatchdog = (
   ctx: HelmPluginContext,
-  deps: SuperAgentDependencies,
   runtime: SuperAgentWatchdogRuntime,
 ) => void

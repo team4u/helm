@@ -2,11 +2,45 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import { normalizeSpec } from '../src/ui/spec-normalize.js'
-import type { SpecRenderContext } from '../src/ui/spec-primitives.js'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import * as HelmPluginClient from '../src/lib/plugin-client-sdk.js'
+import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
+import { normalizeSpec, type NormalizedSpecNode } from '../../kernel/src/builtin-plugins/json-render/client/spec-normalize.js'
+import type { EvalScope } from '../../kernel/src/builtin-plugins/json-render/client/evaluator.js'
+import type { ReactNode } from 'react'
+
+/** spec-primitives 的渲染上下文形状（client 目录不入 typecheck，此处本地最小声明）。 */
+interface SpecRenderContext {
+  scope: EvalScope
+  conversationId?: number
+  pluginId?: string
+  renderChildren(children: NormalizedSpecNode[]): ReactNode
+  runAction(rawAction: unknown, scope: EvalScope, pendingKey: string): void
+  isPending(pendingKey: string): boolean
+  isSucceeded?(pendingKey: string): boolean
+}
 
 ;(globalThis as Record<string, unknown>).React = React
-const { SpecNodeList } = await import('../src/ui/spec-primitives.js')
+;(globalThis as Record<string, unknown>).__helm_shared_react = React
+;(globalThis as Record<string, unknown>).__helm_shared_react_jsx_runtime = await import('react/jsx-runtime')
+;(globalThis as Record<string, unknown>).__helm_shared_plugin_client = HelmPluginClient
+;(globalThis as Record<string, unknown>).__helm_shared_lucide_react = await import('lucide-react')
+
+const here = dirname(fileURLToPath(import.meta.url))
+const CACHE = mkdtempSync(join(tmpdir(), 'helm-jr-feedback-'))
+const { code } = await compilePluginClientModule(
+  'builtin:json-render',
+  resolve(here, '../../kernel/src/builtin-plugins/json-render/client'),
+  'spec-primitives.tsx',
+  CACHE,
+)
+const f = join(CACHE, 'spec-primitives.mjs')
+writeFileSync(f, code, 'utf8')
+const { SpecNodeList } = await import(f)
+rmSync(CACHE, { recursive: true, force: true })
 
 function render(spec: Record<string, unknown>, pending: boolean, succeeded: boolean): string {
   const normalized = normalizeSpec(spec)
