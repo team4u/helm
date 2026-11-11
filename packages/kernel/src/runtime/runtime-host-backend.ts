@@ -30,6 +30,23 @@ export function normalizeProfileBoundaryError(id: string, err: unknown): unknown
 }
 
 /**
+ * 启用/停用后取插件清单：真实生命周期已在 PluginHost 完成，这里只做事实回读；
+ * 操作成功但清单缺失属于宿主状态不一致，如实报错不虚构。
+ */
+function requirePluginSummary(runtime: KernelRuntime, pluginId: string) {
+  const summary = runtime.plugins.list().find((p) => p.id === pluginId)
+  if (!summary) {
+    throw new HelmError(
+      'plugin_enable_failed',
+      `插件 ${pluginId} 生命周期操作后未在宿主清单中发现该插件（内部状态不一致）`,
+      500,
+      { pluginId },
+    )
+  }
+  return summary
+}
+
+/**
  * 构造 PluginHost 所需的宿主后端接口（PluginHostBackend）。
  */
 export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBackend {
@@ -74,6 +91,23 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
       call: (nodeId, input, signal) => runtime.envFabric.ipcCall(nodeId, input, signal),
       subscribe: (nodeId, input, onLine, onClosed, signal) =>
         runtime.envFabric.ipcSubscribe(nodeId, input, onLine, onClosed, signal),
+    },
+    // 宿主插件治理端口：直接委托 PluginHost 既有公共方法（与 HTTP 管理面同链：
+    // per-plugin 生命周期队列、在途任务跟踪、locked/在途保护全部复用，
+    // 不引入第二套包管理器）。enable/disable 后返回最新清单。
+    plugins: {
+      doctorPlugin: (target) => runtime.plugins.doctorExternalPlugin(target),
+      installPlugin: (source, options) => runtime.plugins.installPluginPackage(source, options),
+      updatePlugin: (pluginId) => runtime.plugins.updatePluginPackage(pluginId),
+      removePlugin: (pluginId) => runtime.plugins.removePluginPackage(pluginId),
+      enablePlugin: async (pluginId) => {
+        await runtime.plugins.enable(pluginId)
+        return requirePluginSummary(runtime, pluginId)
+      },
+      disablePlugin: async (pluginId, options) => {
+        await runtime.plugins.disable(pluginId, options)
+        return requirePluginSummary(runtime, pluginId)
+      },
     },
     dispatchTrigger: (event) => runtime.dispatchTrigger(event),
     submitInput: async (id, text, opts) => {

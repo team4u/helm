@@ -80,7 +80,7 @@ import {
   parseQualifiedActionId,
 } from './capability-registry.js';
 import { UiRegistry } from './ui-registry.js';
-import { jsonClone, toJsonSafeError, type JsonSafeErrorInfo } from './shared.js';
+import { isCrossPlatformAbsolutePath, jsonClone, toJsonSafeError, type JsonSafeErrorInfo } from './shared.js';
 import type {
   PluginConfigStore,
   PluginHostBackend,
@@ -809,6 +809,9 @@ export class PluginHost {
       if (target.dir !== undefined) {
         throw new HelmError('validation_error', 'doctor 目标 id 与 dir/path 互斥（择一提供）', 400);
       }
+      if (target.id.trim().length === 0) {
+        throw new HelmError('validation_error', 'doctor 目标 id 需为非空字符串', 400);
+      }
       const source = await findSourceDirByPluginId(this.options.dataDir, target.id);
       if (source === undefined) {
         throw new HelmError(
@@ -821,6 +824,19 @@ export class PluginHost {
       dir = source;
       requestedId = target.id;
     } else if (target.dir !== undefined && target.dir.length > 0) {
+      // dir 模式为目录绝对路径（与 HTTP parseDoctorTarget 同一约束；host.plugins
+      // 端口与 HTTP 同权，边界校验也同权）：拒绝相对路径与穿越段。
+      if (
+        !isCrossPlatformAbsolutePath(target.dir) ||
+        target.dir.split(/[\\/]/).includes('..')
+      ) {
+        throw new HelmError(
+          'validation_error',
+          `doctor 目标 dir 需为不含 .. 段的跨平台绝对目录路径（以 / 或盘符开头）：${target.dir}`,
+          400,
+          { dir: target.dir },
+        );
+      }
       dir = target.dir;
     } else {
       throw new HelmError('validation_error', 'doctor 需提供目标：dir/path（目录绝对路径）或 id（已注册插件）', 400);

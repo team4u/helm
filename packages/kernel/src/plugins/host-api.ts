@@ -1,19 +1,16 @@
 /**
  * host-api: 构造插件视角的 ctx.host 门面。
  * 全部方法显式转发到后端端口，并按功能分组封装：
- * profiles / skills / nodeIpc / secrets / env / conversations / agents / asks / events / triggers / actions / artifacts / models
+ * profiles / skills / nodeIpc / secrets / plugins / env / conversations / agents / asks / events / triggers / actions / artifacts / models
  */
 import {
   HelmError,
   type ActionManifest,
+  type BackendPluginsLifecyclePort,
   type HelmHostApi,
   type PluginActionContext,
-  type PluginDoctorReport,
-  type PluginInstallResult,
-  type PluginRemoveResult,
   type PluginSummary,
   type PluginUiContribution,
-  type PluginUpdateResult,
 } from '@helm/protocol';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { redactJsonValue } from '../redact.js';
@@ -49,23 +46,6 @@ export interface HostApiDependencies {
     context?: PluginActionContext,
   ): { idempotent: boolean };
   assertContextUsable(state: PluginState, epoch: number, what: string): void;
-}
-
-/**
- * 【protocol-host 分支合并点】宿主受管插件包生命周期端口
- * （未来 protocol HelmHostApi.plugins）。在 protocol 定义该字段前，后端
- * （runtime-host-backend / 测试 fixture）可携带同名可选成员，此处经局部
- * 断言透传给 ctx.host.plugins；protocol 合入后本接口删除、改为直接转发。
- */
-export interface HostPluginsPortForward {
-  doctor(target: { dir?: string; id?: string }): Promise<PluginDoctorReport & { screens?: string[] }>
-  install(source: string, options?: { enable?: boolean }): Promise<PluginInstallResult>
-  update(pluginId: string): Promise<PluginUpdateResult>
-  remove(pluginId: string): Promise<PluginRemoveResult>
-  enable(pluginId: string): Promise<PluginSummary | void>
-  disable(pluginId: string, options?: { force?: boolean }): Promise<PluginSummary | void>
-  list(): PluginSummary[]
-  listUi(): PluginUiContribution[]
 }
 
 /**
@@ -151,27 +131,73 @@ export function wrapHostApi(
       };
     };
 
-  // 【protocol-host 分支合并点】受管插件包端口透传：protocol 定义
-  // HelmHostApi.plugins 前，后端携带的可选成员经局部断言转发（方法级
-  // guard + 任务跟踪，与其余宿主端口同一包装纪律）；未携带时字段不存在
-  // （消费方 builtin:apps 显式 501，不静默降级）。
-  const backendPlugins = (backend as PluginHostBackend & { plugins?: HostPluginsPortForward }).plugins
-  const pluginsPort: HostPluginsPortForward | undefined = backendPlugins === undefined ? undefined : {
-    doctor: (target) => tracked('host.plugins.doctor', () => backendPlugins.doctor(target)),
-    install: (source, options) => tracked('host.plugins.install', () => backendPlugins.install(source, options)),
-    update: (pluginId2) => tracked('host.plugins.update', () => backendPlugins.update(pluginId2)),
-    remove: (pluginId2) => tracked('host.plugins.remove', () => backendPlugins.remove(pluginId2)),
-    enable: (pluginId2) => tracked('host.plugins.enable', () => backendPlugins.enable(pluginId2)),
-    disable: (pluginId2, options) => tracked('host.plugins.disable', () => backendPlugins.disable(pluginId2, options)),
+  /**
+   * 构造 ctx.host.plugins（宿主插件治理端口）：读面与 PluginHost 清单同源；
+   * 写面沿用现有生命周期、任务跟踪和包管理端口。自指 update/remove/disable
+   * 在进入目标插件队列前拒绝；doctor/install/update/remove 结果统一脱敏。
+   */
+  const assertPluginsPort = (what: string): BackendPluginsLifecyclePort => {
+    guard(`host.plugins.${what}`);
+    if (backend.plugins === undefined) {
+      throw new HelmError(
+        'not_supported',
+        `当前宿主未接线插件治理端口（host.plugins.${what} 不可用）`,
+        501,
+        { what },
+      );
+    }
+    return backend.plugins;
+  };
+
+  const assertNotSelfTarget = (op: 'update' | 'remove' | 'disable', targetPluginId: string): void => {
+    if (targetPluginId !== pluginId) return;
+    throw new HelmError(
+      'plugin_self_lifecycle_forbidden',
+      `插件 ${pluginId} 不得在自身运行任务中${op === 'update' ? '更新' : op === 'remove' ? '卸载' : '停用'}自身（会触发宿主生命周期队列自等待），请改由人工 HTTP/CLI 或其他插件执行`,
+      409,
+      { pluginId, op },
+    );
+  };
+
+  const redactPluginOpResult = <T,>(value: T): T => {
+    const redactText = deps.options.redactText;
+    return redactText ? (redactJsonValue(value, redactText) as T) : value;
+  };
+
+  const pluginsPort: HelmHostApi['plugins'] = {
     list: () => {
       guard('host.plugins.list');
-      return backendPlugins.list();
+      return deps.list();
     },
     listUi: () => {
       guard('host.plugins.listUi');
-      return backendPlugins.listUi();
+      return deps.listUi();
     },
-  }
+    doctor: (target) =>
+      tracked('host.plugins.doctor', async () =>
+        redactPluginOpResult(await assertPluginsPort('doctor').doctorPlugin(target))),
+    install: (source, options) =>
+      tracked('host.plugins.install', async () =>
+        redactPluginOpResult(await assertPluginsPort('install').installPlugin(source, options))),
+    update: (targetPluginId) => {
+      assertNotSelfTarget('update', targetPluginId);
+      return tracked('host.plugins.update', async () =>
+        redactPluginOpResult(await assertPluginsPort('update').updatePlugin(targetPluginId)));
+    },
+    remove: (targetPluginId) => {
+      assertNotSelfTarget('remove', targetPluginId);
+      return tracked('host.plugins.remove', async () =>
+        redactPluginOpResult(await assertPluginsPort('remove').removePlugin(targetPluginId)));
+    },
+    enable: (targetPluginId) =>
+      tracked('host.plugins.enable', async () =>
+        assertPluginsPort('enable').enablePlugin(targetPluginId)),
+    disable: (targetPluginId, options) => {
+      assertNotSelfTarget('disable', targetPluginId);
+      return tracked('host.plugins.disable', async () =>
+        assertPluginsPort('disable').disablePlugin(targetPluginId, options));
+    },
+  };
 
   return {
     get isClosing() {
@@ -282,6 +308,7 @@ export function wrapHostApi(
       const current = deps.getConfig(pluginId);
       await backend.setPluginConfig(pluginId, { ...current, ...patch });
     },
+    plugins: pluginsPort,
     listPlugins: () => {
       guard('host.listPlugins');
       return deps.list();

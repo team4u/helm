@@ -790,6 +790,54 @@ export interface HelmHostNodeIpcPort {
   ): Promise<() => void>
 }
 
+/**
+ * 宿主后端的插件治理端口（PluginHostBackend.plugins 的形状；类型层上拆窄：
+ * 只读入口复用 HelmHostApi 既有 listPlugins/listUi 成员；写面聚合在
+ * doctorPlugin/installPlugin/updatePlugin/removePlugin/enablePlugin/disablePlugin
+ * 六个与 PluginHost 公共方法同语义的后端成员）。宿主可整体不接线
+ * （undefined：轻量测试宿主），接线后修改操作沿用宿主现有生命周期队列、
+ * 在途任务跟踪与 locked/在途保护，不引入第二套包管理器。
+ */
+export interface BackendPluginsLifecyclePort {
+  /** 四阶段静态自检（目录绝对路径或已注册外部插件 id 择一；与 POST /api/plugins/doctor 同链）。 */
+  doctorPlugin(target: { dir?: string; id?: string }): Promise<PluginDoctorReport>
+  /** 受管安装（npm/git/local source；默认 disabled，enable: true 安装后启用）。 */
+  installPlugin(source: string, options?: { enable?: boolean }): Promise<PluginInstallResult>
+  /** 受管更新（重取 source + doctor 预检 + 原子热重载，保持启用状态）。 */
+  updatePlugin(pluginId: string): Promise<PluginUpdateResult>
+  /** 受管卸载（内置 403 / 在途任务 409 / 持久占用非 force 409）。 */
+  removePlugin(pluginId: string): Promise<PluginRemoveResult>
+  /** 启用已注册插件；返回启用后清单。 */
+  enablePlugin(pluginId: string): Promise<PluginSummary>
+  /** 停用已注册插件（locked 403 / 在途任务 409 / 持久占用非 force 409）；返回停用后清单。 */
+  disablePlugin(pluginId: string, options?: { force?: boolean }): Promise<PluginSummary>
+}
+
+/**
+ * 插件可用的宿主插件治理端口（ctx.host.plugins）：读面与 ctx.host.listPlugins/
+ * listUi 同源；写面为受管包生命周期。所有异步修改操作计入调用方插件的
+ * 在途任务跟踪（停用预检可见）；结构化结果出站前经宿主统一脱敏，
+ * 不把机密或源码内容无界带出。
+ */
+export interface HelmHostPluginsPort {
+  /** 当前全部已注册插件摘要（与 listPlugins() 同源；只读快照）。 */
+  list(): PluginSummary[]
+  /** 当前全部已启用插件的 UI 贡献清单（与 listUi() 同源；只读快照）。 */
+  listUi(): PluginUiContribution[]
+  /** 静态自检：dir 为目录绝对路径，或 id 指向已注册外部插件（择一）。 */
+  doctor(target: { dir?: string; id?: string }): Promise<PluginDoctorReport>
+  /** 受管安装外部插件包；enable: true 时安装后立即启用。 */
+  install(source: string, options?: { enable?: boolean }): Promise<PluginInstallResult>
+  /** 受管更新（保持启用状态与已有 ctx.doc 数据）。 */
+  update(pluginId: string): Promise<PluginUpdateResult>
+  /** 受管卸载（内置插件 403，在途任务 409）。 */
+  remove(pluginId: string): Promise<PluginRemoveResult>
+  /** 启用已注册插件；返回启用后清单。 */
+  enable(pluginId: string): Promise<PluginSummary>
+  /** 停用已注册插件（locked 403，在途任务 409，持久占用非 force 409）。 */
+  disable(pluginId: string, options?: { force?: boolean }): Promise<PluginSummary>
+}
+
 /** ctx.host：插件可调用的宿主内核能力（插件拿到的实现已绑定其 pluginId，不可伪造他人身份）。 */
 export interface HelmHostApi {
   /** 宿主关闭状态（get）：true 后拒绝新回合/新后台任务，插件据此停投递。 */
@@ -802,6 +850,12 @@ export interface HelmHostApi {
   readonly secrets: HelmHostSecretsPort
   /** 跨节点 IPC 机制端口（EnvFabric；herdr 等外部运行时桥接用）。 */
   readonly nodeIpc: HelmHostNodeIpcPort
+  /**
+   * 宿主插件治理端口（受管包生命周期；编排插件如 builtin:apps 消费）。
+   * 后端未接线包管理器时 doctor/install/update/remove 显式 501；
+   * 自指 update/remove/disable 一律 409 拒绝（防生命周期队列自等待）。
+   */
+  readonly plugins: HelmHostPluginsPort
   /**
    * 更新本插件自身配置（不可改其他插件）：与 HTTP PUT /api/plugins/:id/config
    * 同一校验与持久化链（configSchema 边界校验；secret 字段落 credentials.json）。

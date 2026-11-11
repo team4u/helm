@@ -56,6 +56,15 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     addRedaction: () => unsupported('host.secrets.addRedaction'),
   }
 
+  plugins: Port<'plugins'> = {
+    doctorPlugin: () => unsupported('host.plugins.doctor'),
+    installPlugin: () => unsupported('host.plugins.install'),
+    updatePlugin: () => unsupported('host.plugins.update'),
+    removePlugin: () => unsupported('host.plugins.remove'),
+    enablePlugin: () => unsupported('host.plugins.enable'),
+    disablePlugin: () => unsupported('host.plugins.disable'),
+  }!
+
   setPluginConfig(...args: Parameters<Port<'setPluginConfig'>>): ReturnType<Port<'setPluginConfig'>> {
     void args
     unsupported('host.setPluginConfig')
@@ -309,6 +318,14 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
       set: d.secrets.set,
       delete: d.secrets.delete,
       addRedaction: d.secrets.addRedaction,
+    },
+    plugins: {
+      doctorPlugin: d.plugins!.doctorPlugin,
+      installPlugin: d.plugins!.installPlugin,
+      updatePlugin: d.plugins!.updatePlugin,
+      removePlugin: d.plugins!.removePlugin,
+      enablePlugin: d.plugins!.enablePlugin,
+      disablePlugin: d.plugins!.disablePlugin,
     },
     setPluginConfig: f(d.setPluginConfig),
     dispatchTrigger: f(d.dispatchTrigger),
