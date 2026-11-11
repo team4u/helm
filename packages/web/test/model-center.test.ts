@@ -337,7 +337,7 @@ test('ModelCard SSR: 未配置与选中态渲染断言', { timeout: 60_000 }, ()
 // 3. ModelDetailDrawer SSR 渲染测试
 // ---------------------------------------------------------------------------
 
-test('ModelDetailDrawer SSR: inline={true} 渲染凭据表单、连通性按钮与模型多选下拉框，且绝对零 Emoji', { timeout: 60_000 }, () => {
+test('ModelDetailDrawer SSR: inline={true} 渲染凭据表单、连通性按钮与平铺模型药丸胶囊群（Magpie 规范），且绝对零 Emoji', { timeout: 60_000 }, () => {
   const provider: ProviderItem = {
     id: 'openai',
     name: 'OpenAI',
@@ -376,14 +376,17 @@ test('ModelDetailDrawer SSR: inline={true} 渲染凭据表单、连通性按钮�
   // 3. 测试连接按钮
   assert.match(html, /测试连接/)
 
-  // 4. 模型清单与多选下拉框
+  // 4. 模型清单与平铺模型药丸胶囊群（Magpie 规范）
   assert.match(html, /模型清单与路由控制/)
   assert.match(html, /aria-label="选择启用的模型"/)
-  assert.match(html, /helm-select-multi/)
+  assert.match(html, /mchips/)
+  assert.match(html, /mchip/)
   assert.match(html, /role="checkbox"/)
   assert.match(html, /GPT-4o/)
   assert.match(html, /多模态/)
   assert.match(html, /model-drawer-tags-wrap/)
+  assert.match(html, /全部启用/)
+  assert.match(html, /全部停用/)
 
   // 5. 保存配置按钮
   assert.match(html, /保存配置/)

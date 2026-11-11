@@ -1942,49 +1942,268 @@ textarea {
   user-select: none;
 }
 
-/* 模型抽屉标签胶囊网格 */
-.model-drawer-tags-wrap {
+/* ==========================================================================
+ * 模型药丸选择器原语 (Model Chips - 100% 严苛复刻 Magpie 原生规范)
+ * ========================================================================== */
+
+.models,
+.model-chips-container {
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 顶部批量操作栏 (Magpie .mbulk) */
+.mbulk,
+.model-chips-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 10px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  min-height: 38px;
-  align-items: center;
 }
 
-.model-drawer-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  font-size: 12px;
+.mbulk > input,
+.model-chips-search {
+  max-width: 260px;
+  flex: 1;
+  height: 27px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border);
   background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
   color: var(--fg);
+  outline: none;
+  transition: border-color 120ms ease;
 }
 
-.model-drawer-tag-remove {
+.mbulk > input:focus,
+.model-chips-search:focus {
+  border-color: var(--border-focus);
+}
+
+.model-chips-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* 批量操作按钮 (Magpie .text.action 原生规格) */
+.text.action,
+.model-chips-actions .btn {
+  height: 27px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg-secondary);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  border-radius: 50%;
+  border-radius: var(--radius-sm, 6px);
+  font-size: 11.5px;
+  font-weight: 400;
   cursor: pointer;
-  transition: color 100ms ease, background 100ms ease;
+  white-space: nowrap;
+  user-select: none;
+  transition: background 120ms, color 120ms, border-color 120ms;
 }
 
-.model-drawer-tag-remove:hover {
-  color: var(--danger, #ef4444);
-  background: var(--bg-hover);
+.text.action:hover,
+.model-chips-actions .btn:hover {
+  border-color: var(--fg-muted);
+  background: var(--bg-subtle);
+  color: var(--fg);
+}
+
+.text.action:active,
+.model-chips-actions .btn:active {
+  transform: scale(0.96);
+}
+
+/* 平铺药丸容器 (Magpie .mchips 原生规范：绝对无灰框、无外边框、呼吸感平铺) */
+.mchips,
+.model-drawer-tags-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: min(240px, 40vh);
+  overflow-y: auto;
+  padding: 1px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+.mchips::-webkit-scrollbar,
+.model-drawer-tags-wrap::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.mchips.open,
+.mchips.is-expanded,
+.model-drawer-tags-wrap.is-expanded {
+  max-height: none;
+  overflow-y: visible;
+}
+
+/* 模型胶囊药丸 (Magpie .mchip 原生规范：模型名称严格不加粗，选中态 hover 保持不变) */
+.mchip,
+.model-drawer-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 400;
+  font-family: inherit;
+  color: var(--fg-muted);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+
+/* 模型名称：严格不加粗 (font-weight: 400) */
+.mchip > span:not(.mtell):not(.badge):not(.mchip-tag):not(.mchip-check):not(.mchip-icon),
+.model-drawer-tag > span:not(.mtell):not(.badge):not(.mchip-tag):not(.mchip-check):not(.mchip-icon) {
+  font-weight: 400 !important;
+}
+
+/* 仅未选中态响应 hover */
+.mchip:not(.on):hover:not(:disabled),
+.model-drawer-tag:not(.on):hover:not(:disabled) {
+  color: var(--fg);
+  border-color: var(--fg-muted);
+}
+
+.mchip:active,
+.model-drawer-tag:active {
+  transform: scale(0.96);
+}
+
+/* 激活勾选态 (Magpie .mchip.on 原生：名称不加粗，hover 不变色) */
+.mchip.on,
+.model-drawer-tag.on {
+  color: var(--accent) !important;
+  background: var(--accent-bg) !important;
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent) !important;
+  font-weight: 400;
+}
+
+/* 选中的药丸：鼠标悬停完全不改变任何样式！保持原样不变色 */
+.mchip.on:hover,
+.model-drawer-tag.on:hover,
+.mchip.on:hover:not(:disabled),
+.model-drawer-tag.on:hover:not(:disabled) {
+  color: var(--accent) !important;
+  background: var(--accent-bg) !important;
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent) !important;
+}
+
+/* 多选药丸勾选指示 (Magpie .mchip.pick 7px 左边距 + 零抖动占位 Check) */
+.mchip.pick,
+.model-drawer-tag.pick {
+  padding-left: 7px;
+  font-weight: 400;
+}
+
+.mchip.pick.on,
+.model-drawer-tag.pick.on {
+  font-weight: 400;
+}
+
+.mchip .mchip-check,
+.mchip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 10px;
+  margin-right: -1px;
+  visibility: hidden;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.mchip.on .mchip-check,
+.mchip.on .mchip-icon {
+  visibility: visible;
+}
+
+/* 药丸内标签 (Magpie .mchip .badge 原生规范：加粗 600、9.5px、微灰胶囊底、内发丝阴影、hover 绝不改变样式) */
+.mchip .badge,
+.mchip .mchip-tag,
+.mchip .mtell,
+.model-drawer-tag .badge,
+.model-drawer-tag .mchip-tag,
+.model-drawer-tag .mtell {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0 0 2px;
+  padding: 0 4.5px;
+  font-size: 9.5px;
+  line-height: 14px;
+  height: 14px;
+  font-weight: 600 !important; /* 标签如思考模型、多模态等加粗 */
+  letter-spacing: 0.02em;
+  border-radius: 4px;
+  background: var(--bg-muted); /* Magpie var(--pill) */
+  color: var(--fg-muted);      /* Magpie var(--muted) */
+  box-shadow: inset 0 0 0 1px var(--border); /* Magpie var(--line) */
+  vertical-align: middle;
+  transition: none;
+}
+
+/* 药丸激活或 hover 时，里面的标签依然保持中性静止，鼠标移上去绝不改变样式 */
+.mchip.on .badge,
+.mchip.on .mchip-tag,
+.mchip.on .mtell,
+.model-drawer-tag.on .badge,
+.model-drawer-tag.on .mchip-tag,
+.model-drawer-tag.on .mtell,
+.mchip:hover .badge,
+.mchip:hover .mchip-tag,
+.mchip:hover .mtell,
+.mchip.on:hover .badge,
+.mchip.on:hover .mchip-tag,
+.mchip.on:hover .mtell {
+  background: var(--bg-muted) !important;
+  color: var(--fg-muted) !important;
+  box-shadow: inset 0 0 0 1px var(--border) !important;
+  font-weight: 600 !important;
+}
+
+/* 展开与折叠通栏按钮 (Magpie .mchips-fold 原生规范) */
+.mchips-fold,
+.mchips-fold-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  border: 1px solid var(--border);
+  padding: 4px 9px;
+  font-size: 11.5px;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  margin-top: 4px;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+
+.mchips-fold:hover,
+.mchips-fold-btn:hover {
+  color: var(--fg);
+  background: var(--bg-subtle);
+  border-color: var(--fg-muted);
 }
 
 .helm-select-sm .helm-select-trigger {
@@ -4074,6 +4293,13 @@ input::placeholder {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.plugin-drawer-desc {
+  margin-top: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--fg-muted);
 }
 
 .plugin-drawer-body {

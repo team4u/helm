@@ -11,7 +11,6 @@ import {
   DialogPortal,
   DialogTitle,
 } from '../ui/Dialog.js'
-import { Select } from '../ui/Select.js'
 import {
   getProviderIconName,
   type ProviderItem,
@@ -71,6 +70,8 @@ export function ModelDetailDrawer({
   const [saveError, setSaveError] = useState<string | null>(null)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [modelFilter, setModelFilter] = useState('')
+  const [isExpanded, setIsExpanded] = useState(false)
 
   // 当选中的供应商变化时同步本地表单状态
   useEffect(() => {
@@ -81,6 +82,8 @@ export function ModelDetailDrawer({
       setTestResult(null)
       setSaveError(null)
       setSaveSuccess(false)
+      setModelFilter('')
+      setIsExpanded(false)
     } else {
       setApiKey('')
       setBaseUrl('')
@@ -88,36 +91,44 @@ export function ModelDetailDrawer({
       setTestResult(null)
       setSaveError(null)
       setSaveSuccess(false)
+      setModelFilter('')
+      setIsExpanded(false)
     }
   }, [provider])
 
   const iconName = provider ? getProviderIconName(provider.id) : 'cpu'
 
-  // 计算已启用的模型 ID 与多选下拉选项
+  // 计算已启用的模型 ID 与过滤列表
   const enabledModelIds = useMemo(
     () => models.filter((m) => m.enabled).map((m) => m.id),
     [models],
   )
 
-  const modelOptions = useMemo(
-    () =>
-      models.map((m) => ({
-        value: m.id,
-        label: m.name,
-        meta: m.tags && m.tags.length > 0 ? m.tags.join(', ') : undefined,
-      })),
-    [models],
-  )
+  const filteredModels = useMemo(() => {
+    if (!modelFilter.trim()) return models
+    const q = modelFilter.trim().toLowerCase()
+    return models.filter(
+      (m) =>
+        m.id.toLowerCase().includes(q) ||
+        m.name.toLowerCase().includes(q) ||
+        m.tags?.some((t) => t.toLowerCase().includes(q)),
+    )
+  }, [models, modelFilter])
 
-  const handleModelsChange = (nextSelectedIds: string[]) => {
-    const set = new Set(nextSelectedIds)
-    setModels((prev) => prev.map((item) => ({ ...item, enabled: set.has(item.id) })))
+  const handleToggleModel = (modelId: string) => {
+    setModels((prev) =>
+      prev.map((item) =>
+        item.id === modelId ? { ...item, enabled: !item.enabled } : item,
+      ),
+    )
   }
 
-  const handleRemoveModel = (modelId: string) => {
-    setModels((prev) =>
-      prev.map((item) => (item.id === modelId ? { ...item, enabled: false } : item)),
-    )
+  const handleSelectAll = () => {
+    setModels((prev) => prev.map((item) => ({ ...item, enabled: true })))
+  }
+
+  const handleClearAll = () => {
+    setModels((prev) => prev.map((item) => ({ ...item, enabled: false })))
   }
 
   // 连通性测试
@@ -443,7 +454,7 @@ export function ModelDetailDrawer({
                     )}
                   </div>
 
-                  {/* 模型列表管理 */}
+                  {/* 模型列表管理 (Magpie Model Chips 原生交互) */}
                   <div className="section-flat">
                     <div
                       className="section-flat-header"
@@ -459,7 +470,7 @@ export function ModelDetailDrawer({
                     </div>
 
                     <p className="text-xs text-subtle" style={{ margin: '4px 0 10px' }}>
-                      通过多选下拉框勾选允许调用的模型，未选中的模型将被内核路由层过滤屏蔽。
+                      点击胶囊药丸切换模型启用状态，未启用的模型将被内核路由层过滤屏蔽。
                     </p>
 
                     {models.length === 0 ? (
@@ -469,52 +480,88 @@ export function ModelDetailDrawer({
                           : '该供应商暂未登记预置模型，保存端点配置后将自动同步目录。'}
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        <Select
-                          multiple
-                          id="model-drawer-models-multiselect"
-                          aria-label="选择启用的模型"
-                          placeholder="点击下拉框选择或切换启用的模型..."
-                          options={modelOptions}
-                          value={enabledModelIds}
-                          onChange={(e) => handleModelsChange(e.target.value)}
-                          inline={inline}
-                        />
+                      <div className="models model-chips-container">
+                        {/* 操作工具栏：过滤搜索与批量控制 (Magpie .mbulk 规范) */}
+                        <div className="mbulk model-chips-toolbar">
+                          <input
+                            type="text"
+                            className="input model-chips-search"
+                            placeholder="过滤模型..."
+                            value={modelFilter}
+                            onChange={(e) => setModelFilter(e.target.value)}
+                            aria-label="过滤模型"
+                          />
+                          <div className="model-chips-actions">
+                            <button
+                              type="button"
+                              className="text action"
+                              onClick={handleSelectAll}
+                              title="全部启用"
+                            >
+                              全部启用
+                            </button>
+                            <button
+                              type="button"
+                              className="text action"
+                              onClick={handleClearAll}
+                              title="全部停用"
+                            >
+                              全部停用
+                            </button>
+                          </div>
+                        </div>
 
-                        {/* 已选模型标签胶囊清单 */}
-                        <div className="model-drawer-tags-wrap">
-                          {enabledModelIds.length === 0 ? (
-                            <span className="text-xs text-subtle">
-                              未启用任何模型（请在上方多选框中勾选）
+                        {/* 平铺药丸胶囊群 (Magpie .mchips 规范：零外框、呼吸感白底平铺) */}
+                        <div
+                          className={`mchips model-drawer-tags-wrap ${isExpanded ? 'open is-expanded' : ''}`}
+                          role="group"
+                          aria-label="选择启用的模型"
+                        >
+                          {filteredModels.length === 0 ? (
+                            <span className="text-xs text-subtle" style={{ padding: '6px 8px' }}>
+                              未找到匹配的模型
                             </span>
                           ) : (
-                            models
-                              .filter((m) => m.enabled)
-                              .map((model) => (
-                                <span key={model.id} className="model-drawer-tag">
+                            filteredModels.map((model) => {
+                              const isChecked = Boolean(model.enabled)
+                              return (
+                                <button
+                                  key={model.id}
+                                  type="button"
+                                  role="checkbox"
+                                  aria-checked={isChecked}
+                                  className={`mchip pick model-drawer-tag ${isChecked ? 'on active' : ''}`}
+                                  onClick={() => handleToggleModel(model.id)}
+                                  title={`${model.name} (${model.id}) - 点击${isChecked ? '停用' : '启用'}`}
+                                >
+                                  <span className="mchip-check" aria-hidden="true">
+                                    <HelmIcon name="check" size={10} />
+                                  </span>
                                   <span>{model.name}</span>
                                   {model.tags?.map((tag) => (
-                                    <span
-                                      key={tag}
-                                      className="badge badge-neutral"
-                                      style={{ fontSize: 9, padding: '1px 4px' }}
-                                    >
+                                    <span key={tag} className="badge mi-effort mchip-tag mtell">
                                       {tag}
                                     </span>
                                   ))}
-                                  <button
-                                    type="button"
-                                    className="model-drawer-tag-remove"
-                                    onClick={() => handleRemoveModel(model.id)}
-                                    aria-label={`移除 ${model.name}`}
-                                    title={`停用 ${model.name}`}
-                                  >
-                                    <HelmIcon name="x" size={10} />
-                                  </button>
-                                </span>
-                              ))
+                                </button>
+                              )
+                            })
                           )}
                         </div>
+
+                        {/* 展开/折叠通栏按钮 (Magpie .mchips-fold 规范) */}
+                        {models.length > 12 && (
+                          <button
+                            type="button"
+                            className="mchips-fold"
+                            onClick={() => setIsExpanded((prev) => !prev)}
+                            aria-expanded={isExpanded}
+                            title={isExpanded ? '折叠列表' : '展开全部'}
+                          >
+                            <span>{isExpanded ? '折叠列表' : '展开全部'}</span>
+                            <HelmIcon name={isExpanded ? 'chevron-up' : 'chevron-down'} size={12} />
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
