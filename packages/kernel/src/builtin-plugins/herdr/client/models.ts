@@ -176,3 +176,27 @@ export function parseReadText(result: unknown): string {
     return String(result)
   }
 }
+
+/**
+ * 是否可对窗格执行聚焦操作：
+ * 1. 来源校验：必须由 helm 受管（row.ownedBy === 'helm'），human 窗格不由 builtin:herdr 管理；
+ * 2. 状态校验：当前尚未聚焦（!row.focused），任务未收尾（outcome !== 'settled'），且非 done 状态。
+ */
+export function canFocusPane(row: OverviewPaneRow): boolean {
+  if (row.ownedBy !== 'helm') return false
+  if (row.focused === true) return false
+  if (row.outcome === 'settled') return false
+  if (row.agentStatus === 'done') return false
+  return true
+}
+
+/**
+ * 是否可读取窗格快照：
+ * 1. 来源校验：必须由 helm 受管（row.ownedBy === 'helm'），human 窗格不由 builtin:herdr 管理；
+ * 2. 状态校验：任务未收尾（outcome !== 'settled'）。
+ */
+export function canSnapshotPane(row: OverviewPaneRow): boolean {
+  if (row.ownedBy !== 'helm') return false
+  if (row.outcome === 'settled') return false
+  return true
+}

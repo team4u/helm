@@ -15,6 +15,8 @@ import type { ScreenProps } from '@helm/protocol'
 import { usePluginContext, usePluginDoc } from '@helm/plugin-client'
 import {
   agentStatusTone,
+  canFocusPane,
+  canSnapshotPane,
   collectNodes,
   computeStats,
   filterPanes,
@@ -243,19 +245,19 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
 
       <div className="herdr-overview-content">
         <div style={{ width: '100%', maxWidth: 1100, margin: '0 auto' }}>
-          <div className="jr-table-wrap">
-            <table className="jr-table">
+          <div className="herdr-table-wrap jr-table-wrap">
+            <table className="herdr-table jr-table">
               <thead>
                 <tr>
-                  <th>节点</th>
-                  <th>窗格</th>
-                  <th>位置</th>
-                  <th>归属</th>
-                  <th>状态</th>
-                  <th>CLI</th>
+                  <th style={{ width: 75 }}>节点</th>
+                  <th style={{ width: 110 }}>窗格</th>
+                  <th style={{ width: 140 }}>位置</th>
+                  <th style={{ width: 65 }}>归属</th>
+                  <th style={{ width: 75 }}>状态</th>
+                  <th style={{ width: 85 }}>CLI</th>
                   <th>工作目录</th>
-                  <th>终态</th>
-                  <th style={{ textAlign: 'right' }}>操作</th>
+                  <th style={{ width: 75 }}>终态</th>
+                  <th style={{ width: 120, textAlign: 'right' }}>操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -312,27 +314,31 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
                           <span style={{ color: 'var(--fg-subtle)' }}>—</span>
                         )}
                       </td>
-                      <td style={{ textAlign: 'right' }}>
+                      <td className="herdr-actions-cell" style={{ textAlign: 'right' }}>
                         <div className="jr-stack-row" style={{ justifyContent: 'flex-end', gap: 4 }}>
-                          <button
-                            type="button"
-                            className="btn btn-sm"
-                            disabled={busyPane !== null}
-                            onClick={() => void focusPane(row)}
-                          >
-                            {busyPane === `focus:${key}` && <Icon name="loader" size={11} />}
-                            聚焦
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-sm"
-                            disabled={busyPane !== null}
-                            onClick={() => void readPane(row)}
-                          >
-                            {busyPane === `read:${key}` && <Icon name="loader" size={11} />}
-                            快照
-                          </button>
-                          {(row.pendingAsk === true || parentConversationId !== undefined) && (
+                          {canFocusPane(row) && (
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              disabled={busyPane !== null}
+                              onClick={() => void focusPane(row)}
+                            >
+                              {busyPane === `focus:${key}` && <Icon name="loader" size={11} />}
+                              聚焦
+                            </button>
+                          )}
+                          {canSnapshotPane(row) && (
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              disabled={busyPane !== null}
+                              onClick={() => void readPane(row)}
+                            >
+                              {busyPane === `read:${key}` && <Icon name="loader" size={11} />}
+                              快照
+                            </button>
+                          )}
+                          {row.ownedBy === 'helm' && (row.pendingAsk === true || parentConversationId !== undefined) && (
                             <button
                               type="button"
                               className="btn btn-sm btn-ghost"
@@ -347,6 +353,9 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
                               <Icon name="message-square" size={11} />
                               打开关联会话
                             </button>
+                          )}
+                          {!canFocusPane(row) && !canSnapshotPane(row) && !(row.ownedBy === 'helm' && (row.pendingAsk === true || parentConversationId !== undefined)) && (
+                            <span style={{ color: 'var(--fg-subtle)' }}>—</span>
                           )}
                         </div>
                       </td>

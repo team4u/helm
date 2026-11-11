@@ -31,7 +31,15 @@
   - 列表项：`.list-item-btn`（标准行高与 hover/active 激活背景 `--nav-active-bg`）；
   - 平坦化区域：`.section-flat`、`.section-flat-header`、`.section-flat-title`（移除嵌套卡片）；
   - 表单网格：`.form-grid`、`.form-grid-label`（两列弹性自适应，标签支持锁图标与必填星号）；
-  - 空状态：`.empty-state`（线性矢量图标 + 居中说明文本）。
+  - 空状态：`.empty-state`（线性矢量图标 + 居中说明文本）；
+  - 通用表格原语：`.helm-table-wrap` / `.table-wrap` 与 `.helm-table` / `.table`（统一 8px 10px 内边距、12.5px 字体、`border-collapse: collapse`、表头背景 `var(--bg-subtle)`、`tr:hover`、`.table-actions` 与 `.table-empty`）；
+  - 插件页面与分节原语：`.screen-container`（统一内边距与纵向滚动）、`.screen-header` / `.screen-title` / `.screen-subtitle`、`.screen-section` / `.screen-section-title`；
+  - 键值概览原语：`.kv-grid` / `.kv-list`（两列自适应）、`.kv-key`、`.kv-val`；
+  - 提示横幅原语：`.callout`（`.callout-warn` / `.callout-error` / `.callout-ok`，统一边框、浅色背景与圆角）；
+  - 加载中原语：`.loading-state`。
+- **强制样式复用铁律（杜绝各车间私有复制）**：
+  - **全仓所有内置插件与外部插件必须优先复用主框架设计系统原语**，严禁在插件内私自复制通用表格、通用页面布局、通用键值列表或通用提示条样式；
+  - 仅限插件独有的特异性业务结构（如 Mermaid 图表缩放画布、Workflow DAG 执行图卡片、Apps 启动台卡片网格）允许在插件 client CSS 内编写专属规则；所有通用排版与组件样式必须统一收敛在主框架中，确保全平台视觉与交互风格绝对统一。
 
 ### Radix UI 唯一无头交互原语底座
 

@@ -153,7 +153,7 @@ body,
   font-size: 13.5px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
-  user-select: none;
+  user-select: text;
 }
 
 /* 允许复制的文本区域显式开启 user-select: text */
@@ -185,6 +185,12 @@ textarea {
   font-family: inherit;
   font-size: inherit;
   color: inherit;
+}
+
+button,
+[role="button"],
+[role="tab"] {
+  user-select: none;
 }
 
 /* ==========================================================================
@@ -3327,6 +3333,312 @@ textarea {
 .form-grid-value {
   font-size: 11.5px;
   word-break: break-all;
+}
+
+/* ==========================================================================
+ * 通用设计系统表格原语 (Table Primitives)
+ * 供主框架全局及所有扩展插件（Herdr / SuperAgent / Triggers / Magpie 等）统一复用
+ * 杜绝每个插件自立门户重复拷贝表格样式
+ * ========================================================================== */
+
+.helm-table-wrap,
+.table-wrap,
+.sa-table-wrap,
+.tg-table-wrap,
+.mp-table-wrap,
+.herdr-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-elevated);
+  box-sizing: border-box;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.helm-table,
+.table-wrap > table,
+.sa-table,
+.tg-table,
+.mp-table,
+.herdr-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  table-layout: auto;
+}
+
+.helm-table th,
+.table-wrap th,
+.sa-table th,
+.tg-table th,
+.mp-table th,
+.herdr-table th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.helm-table td,
+.table-wrap td,
+.sa-table td,
+.tg-table td,
+.mp-table td,
+.herdr-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  color: var(--fg);
+  vertical-align: middle;
+  font-size: 12.5px;
+}
+
+.helm-table tr:last-child td,
+.table-wrap tr:last-child td,
+.sa-table tr:last-child td,
+.tg-table tr:last-child td,
+.mp-table tr:last-child td,
+.herdr-table tr:last-child td {
+  border-bottom: none;
+}
+
+.helm-table tr:hover td,
+.table-wrap tr:hover td,
+.sa-table tr:hover td,
+.tg-table tr:hover td,
+.mp-table tr:hover td,
+.herdr-table tr:hover td {
+  background: var(--bg-hover);
+}
+
+.table-actions,
+.cell-actions,
+.sa-cell-actions,
+.tg-cell-actions,
+.sa-th-actions,
+.tg-th-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.table-actions-group,
+.row-actions-group,
+.sa-row-actions,
+.tg-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.table-empty,
+.sa-table-empty,
+.tg-table-empty,
+.mp-table-empty {
+  color: var(--fg-muted);
+  text-align: center;
+  padding: 24px 10px;
+  font-size: 12.5px;
+}
+
+.cell-ellipsis,
+.tg-text-cell {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-error,
+.tg-err-cell {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--err);
+}
+
+/* ==========================================================================
+ * 通用设计系统页面与分节原语 (Screen & Section Primitives)
+ * 供全屏一级主舞台、扩展插件视图（Herdr / SuperAgent / Triggers / Magpie）统一排版
+ * ========================================================================== */
+
+.screen-container,
+.screen-scroll-wrap,
+.sa-screen,
+.tg-screen,
+.mp-panel,
+.herdr-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.screen-header,
+.sa-screen-header,
+.tg-screen-header,
+.mp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.screen-title,
+.sa-screen-title,
+.tg-screen-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.screen-subtitle,
+.sa-screen-subtitle,
+.tg-screen-subtitle,
+.mp-summary {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.screen-section,
+.sa-section,
+.tg-section,
+.mp-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.screen-section-title,
+.sa-section-title,
+.tg-section-title,
+.mp-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* ==========================================================================
+ * 通用键值对概览原语 (Key-Value Grid Primitives)
+ * ========================================================================== */
+
+.helm-kv-grid,
+.kv-grid,
+.kv-list,
+.sa-kv-list,
+.tg-kv-list,
+.mp-kv-list {
+  display: grid;
+  grid-template-columns: minmax(100px, auto) 1fr;
+  gap: 6px 14px;
+  font-size: 12.5px;
+}
+
+.kv-key,
+.sa-kv-key,
+.tg-kv-key,
+.mp-kv-key {
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+.kv-val,
+.kv-value,
+.sa-kv-val,
+.tg-kv-val,
+.mp-kv-val {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+/* ==========================================================================
+ * 通用提示横幅与通知原语 (Callout / Banner Primitives)
+ * ========================================================================== */
+
+.helm-callout,
+.callout,
+.sa-error,
+.tg-error,
+.mp-error,
+.herdr-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm, 6px);
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg);
+  word-break: break-all;
+}
+
+.callout-warn,
+.herdr-callout-warn {
+  background: var(--warn-bg, rgba(234, 179, 8, 0.08));
+  border-color: var(--warn-border, rgba(234, 179, 8, 0.25));
+  color: var(--warn, #eab308);
+}
+
+.callout-error,
+.callout-err,
+.sa-error,
+.tg-error,
+.mp-error {
+  background: var(--err-bg, rgba(239, 68, 68, 0.08));
+  border-color: var(--err-border, rgba(239, 68, 68, 0.25));
+  color: var(--err, #ef4444);
+}
+
+.callout-ok,
+.callout-info {
+  background: var(--ok-bg, rgba(34, 197, 94, 0.08));
+  border-color: var(--ok-border, rgba(34, 197, 94, 0.25));
+  color: var(--ok, #22c55e);
+}
+
+/* ==========================================================================
+ * 通用加载中与堆叠布局原语 (Loading & Stack Primitives)
+ * ========================================================================== */
+
+.loading-state,
+.state-loading,
+.sa-loading,
+.tg-loading,
+.mp-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  padding: 8px 0;
+}
+
+.stack-row,
+.jr-stack-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* ==========================================================================

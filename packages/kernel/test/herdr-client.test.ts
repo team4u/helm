@@ -147,6 +147,8 @@ test('模型函数：筛选 / 统计 / 参数解析纯函数（models.ts 编译�
     const computeStats = mod['computeStats'] as (p: unknown[], n: string[]) => Record<string, number>
     const parseManagedMap = mod['parseManagedMap'] as (r: unknown) => Record<string, number>
     const parseReadText = mod['parseReadText'] as (r: unknown) => string
+    const canFocusPane = mod['canFocusPane'] as (r: Record<string, unknown>) => boolean
+    const canSnapshotPane = mod['canSnapshotPane'] as (r: Record<string, unknown>) => boolean
     const suggestions = mod['HERDR_AGENT_SUGGESTIONS'] as string[]
 
     // 深链参数解析：非法值回退 all
@@ -184,6 +186,25 @@ test('模型函数：筛选 / 统计 / 参数解析纯函数（models.ts 编译�
     // read 结果解析：text 字段直取，缺失时 JSON 序列化兜底（不伪造空串）
     assert.equal(parseReadText({ text: 'tail' }), 'tail')
     assert.equal(parseReadText({ noText: 1 }), '{"noText":1}')
+
+    // 动作可用性判断：human 窗格严禁出现聚焦和快照按钮（防触发 404 不由 builtin:herdr 管理）
+    assert.equal(canFocusPane({ nodeId: 'local', paneId: 'w1:p1', ownedBy: 'human', agentStatus: 'idle' }), false)
+    assert.equal(canSnapshotPane({ nodeId: 'local', paneId: 'w1:p1', ownedBy: 'human', agentStatus: 'idle' }), false)
+
+    // helm 受管行状态细分：
+    // - 已聚焦窗格不展示聚焦按钮
+    assert.equal(canFocusPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'working', focused: true }), false)
+    // - 已收尾窗格不展示聚焦与快照按钮
+    assert.equal(canFocusPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'idle', outcome: 'settled' }), false)
+    assert.equal(canSnapshotPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'idle', outcome: 'settled' }), false)
+    // - done 状态不展示聚焦按钮，但允许排查快照
+    assert.equal(canFocusPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'done' }), false)
+    assert.equal(canSnapshotPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'done' }), true)
+    // - working / blocked / idle 等正常受管窗格允许聚焦与快照
+    assert.equal(canFocusPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'working', focused: false }), true)
+    assert.equal(canSnapshotPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'working' }), true)
+    assert.equal(canFocusPane({ nodeId: 'remote', paneId: 'p2', ownedBy: 'helm', agentStatus: 'blocked', focused: false }), true)
+    assert.equal(canSnapshotPane({ nodeId: 'remote', paneId: 'p2', ownedBy: 'helm', agentStatus: 'blocked' }), true)
 
     // 23 种 CLI 候选完整（Herdr detect::agent_label 全集）
     assert.equal(suggestions.length, 23)

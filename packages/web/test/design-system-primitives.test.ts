@@ -191,3 +191,54 @@ test('既有测试契约不受破坏：.btn-send, .pane-parent-nav-btn, .sidebar
     '.msg-hover-bar .btn 必须保持无边框',
   )
 })
+
+test('文本选择与复制契约：html/body/#root 默认允许 user-select: text，按钮原语保持 user-select: none', { timeout: 60_000 }, () => {
+  assert.match(
+    stylesCss,
+    /html,\s*\nbody,\s*\n#root\s*\{[\s\S]*?user-select:\s*text;/,
+    'html, body, #root 必须声明 user-select: text 以允许页面自由复制',
+  )
+  assert.match(
+    stylesCss,
+    /button,\s*\n\[role="button"\],\s*\n\[role="tab"\]\s*\{[\s\S]*?user-select:\s*none;/,
+    '交互按钮必须声明 user-select: none 防止误触全选高亮',
+  )
+})
+
+test('全平台设计系统原语契约：主框架统一提供表格、Screen 页面、KV、Callout 与加载态，杜绝插件私有拷贝', { timeout: 60_000 }, () => {
+  assert.match(
+    stylesCss,
+    /\.helm-table-wrap[\s\S]*?\{/,
+    '主框架必须提供 .helm-table-wrap 表格容器原语',
+  )
+  assert.match(
+    stylesCss,
+    /\.table-wrap[\s\S]*?\{/,
+    '主框架必须提供 .table-wrap 表格容器原语',
+  )
+  assert.match(
+    stylesCss,
+    /\.helm-table[\s\S]*?\{/,
+    '主框架必须提供 .helm-table 表格本体原语',
+  )
+  assert.match(
+    stylesCss,
+    /\.screen-container[\s\S]*?\{/,
+    '主框架必须提供 .screen-container 页面容器原语',
+  )
+  assert.match(
+    stylesCss,
+    /\.helm-kv-grid[\s\S]*?\{/,
+    '主框架必须提供 .helm-kv-grid 与 .kv-grid 键值列表原语',
+  )
+  assert.match(
+    stylesCss,
+    /\.helm-callout[\s\S]*?\{/,
+    '主框架必须提供 .helm-callout 与 .callout 横幅通知原语',
+  )
+  assert.match(
+    stylesCss,
+    /\.loading-state[\s\S]*?\{/,
+    '主框架必须提供 .loading-state 加载中原语',
+  )
+})

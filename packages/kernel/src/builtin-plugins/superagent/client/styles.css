@@ -1,8 +1,8 @@
 /**
- * builtin:superagent 插件自有样式（clientRoot 本地 CSS）。
+ * builtin:superagent 插件样式。
  *
- * 仅使用宿主核心通用类（badge / btn / spin-slow）与全局设计变量；
- * 表格与 KV 布局用本插件 sa- 前缀类，不依赖 json-render（jr-*）类。
+ * 全面复用宿主设计系统原语（.screen-container、.table-wrap、.helm-table、.kv-list、.callout、.loading-state 等）。
+ * 仅保留 SuperAgent 巡检特异性小部件与汇报卡片样式。
  */
 .sa-widget {
   display: flex;
@@ -28,98 +28,14 @@
   color: var(--fg-secondary);
   white-space: nowrap;
 }
-.sa-screen {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.sa-screen-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.sa-screen-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 15px;
-  font-weight: 650;
-}
-.sa-screen-subtitle {
-  font-size: 12px;
-  color: var(--fg-muted);
-}
-.sa-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.sa-section-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13.5px;
-  font-weight: 600;
-}
-/* 表格（自管，不依赖 jr-table）：容器 / 表体 / 列头 / 行 / 空态 */
-.sa-table-wrap {
-  width: 100%;
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-}
-.sa-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-}
-.sa-table th {
-  text-align: left;
-  padding: 7px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--fg-muted);
-  background: var(--bg-subtle);
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-}
-.sa-table td {
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--border);
-  color: var(--fg);
-  vertical-align: middle;
-}
-.sa-table tr:last-child td {
-  border-bottom: none;
-}
-.sa-table tr:hover td {
-  background: var(--bg-hover);
-}
-.sa-table .sa-cell-actions {
-  text-align: right;
-}
-.sa-table .sa-th-actions {
-  text-align: right;
-}
-.sa-table-empty {
-  color: var(--fg-muted);
-}
-.sa-row-actions {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-}
+
 .sa-summary-cell {
   max-width: 420px;
   white-space: pre-wrap;
   word-break: break-word;
 }
-/* 汇报时间线卡 */
+
+/* 汇报时间线卡（巡检专有业务结构） */
 .sa-report {
   display: flex;
   flex-direction: column;
@@ -148,39 +64,4 @@
   flex-wrap: wrap;
   font-size: 11px;
   color: var(--fg-subtle);
-}
-/* KV 概览（自管，不依赖 jr-kv-*） */
-.sa-kv-list {
-  display: grid;
-  grid-template-columns: minmax(90px, auto) 1fr;
-  gap: 6px 14px;
-  font-size: 12.5px;
-}
-.sa-kv-key {
-  color: var(--fg-muted);
-}
-.sa-kv-val {
-  color: var(--fg);
-  font-variant-numeric: tabular-nums;
-  word-break: break-all;
-}
-.sa-loading {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--fg-muted);
-  padding: 8px 0;
-}
-.sa-error {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-  background: var(--err-bg);
-  border: 1px solid var(--err-border);
-  color: var(--err);
-  font-size: 12px;
-  word-break: break-all;
 }
