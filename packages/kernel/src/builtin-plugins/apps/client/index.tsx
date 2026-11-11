@@ -33,17 +33,12 @@ import {
   mergeAppItems,
   normalizeAppCategory,
   parseAppTabParam,
+  isSameAppTab,
   summarizeAppItems,
   type AppCatalogDoc,
   type AppItem,
   type AppTabParam,
 } from './models.ts'
-
-function isSameTab(a: AppTabParam, b: AppTabParam): boolean {
-  if (a === b) return true
-  if (typeof a === 'object' && typeof b === 'object') return a.category === b.category
-  return false
-}
 
 /** 单个应用卡片：图标/名称/状态/描述 + 主视图快捷打开（主屏/右屏）。 */
 function AppCard({
@@ -506,8 +501,8 @@ export function AppCenterScreen(props: ScreenProps): ReactNode {
                 key={cat.key}
                 type="button"
                 role="tab"
-                aria-selected={isSameTab(tab, catTab)}
-                className={`apps-category-pill${isSameTab(tab, catTab) ? ' is-active' : ''}`}
+                aria-selected={isSameAppTab(tab, catTab)}
+                className={`apps-category-pill${isSameAppTab(tab, catTab) ? ' is-active' : ''}`}
                 onClick={() => setTab(catTab)}
               >
                 <span>{cat.label}</span>

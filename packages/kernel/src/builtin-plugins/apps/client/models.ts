@@ -101,6 +101,12 @@ export function mergeAppItems(
 /** URL 参数 `tab` 的解析结果：all / pinned / category:<AppCategory>。 */
 export type AppTabParam = 'all' | 'pinned' | { category: AppCategory }
 
+export function isSameAppTab(a: AppTabParam, b: AppTabParam): boolean {
+  if (a === b) return true
+  if (typeof a === 'object' && typeof b === 'object') return a.category === b.category
+  return false
+}
+
 export function parseAppTabParam(raw: string | undefined): AppTabParam {
   if (raw === undefined || raw === '' || raw === 'all') return 'all'
   if (raw === 'pinned') return 'pinned'
