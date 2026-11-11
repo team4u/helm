@@ -4,14 +4,18 @@
  * 从 runtime.ts 拆出：工具结果契约、before_turn sections/messages 手术、
  * rewind 区间解析、404 会话校验等跨模块复用的小函数。
  */
+import { join } from 'node:path'
 import type { JsonValue } from '@earendil-works/chord'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import type { ConversationSummary } from '@helm/protocol'
+import type { Models } from '@earendil-works/pi-ai'
 import { HelmError } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 import type { ConvMeta } from './store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import type { HelmStore } from './store.js'
+import { requireModelRef } from './models.js'
+import { assertProfileId, assertSkillId } from '../services/index.js'
 
 // ---------------------------------------------------------------------------
 // 通用序列化 / 转义
@@ -529,3 +533,124 @@ export function assertEditableHumanInput(
 }
 
 export type { ToolExecutionResult }
+
+/** models-store.json 启动损坏检测（open 阶段；语义同 ModelRegistry 内同名逻辑）。 */
+export async function assertModelsStoreHealthyAtBoot(models: Models): Promise<void> {
+  const result = await models.refresh({ allowNetwork: false })
+  for (const [, err] of result.errors) {
+    if (err instanceof HelmError && err.code === 'models_store_corrupted') {
+      throw new HelmError(
+        'models_store_corrupted',
+        `models-store.json 损坏（读取时发现）：${err.message}`,
+        500,
+      )
+    }
+  }
+}
+
+/** 文本补全底层实现 helper。 */
+export async function completeConversationTextHelper(
+  deps: {
+    store: HelmStore
+    conversations: { resolveEffectiveModel(modelOverride?: string, profileId?: string): Promise<string | undefined> }
+    modelsRegistry: { models: Models }
+    stash: { redact(text: string): string }
+  },
+  input: {
+    conversationId: number
+    systemPrompt: string
+    text: string
+    maxTokens?: number
+    signal?: AbortSignal
+  },
+): Promise<string> {
+  input.signal?.throwIfAborted()
+  const meta = deps.store.getConv(input.conversationId)
+  if (meta === undefined) {
+    throw new HelmError('not_found', `会话不存在：${input.conversationId}`, 404, { conversationId: input.conversationId })
+  }
+  const effective = await deps.conversations.resolveEffectiveModel(meta.modelOverride, meta.profileId)
+  if (effective === undefined || effective === '') {
+    throw new HelmError('model_not_configured', `会话 ${input.conversationId} 未解析出生效模型，无法执行文本补全`, 409, { conversationId: input.conversationId })
+  }
+  const ref = requireModelRef(effective)
+  const model = deps.modelsRegistry.models.getModel(ref.provider, ref.modelId)
+  if (model === undefined) {
+    throw new HelmError('model_not_found', `生效模型 '${effective}' 不在当前模型集合中（可能已热重载移除）`, 409, { model: effective })
+  }
+  input.signal?.throwIfAborted()
+  const message = await deps.modelsRegistry.models.completeSimple(
+    model,
+    {
+      systemPrompt: deps.stash.redact(input.systemPrompt),
+      messages: [
+        {
+          role: 'user',
+          content: deps.stash.redact(input.text),
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    {
+      signal: input.signal,
+      ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
+    },
+  )
+  input.signal?.throwIfAborted()
+  if (message.stopReason !== 'stop') {
+    throw new HelmError(
+      'model_completion_unavailable',
+      `文本补全未成功结束（stopReason=${message.stopReason}${message.errorMessage !== undefined ? `：${deps.stash.redact(String(message.errorMessage)).slice(0, 200)}` : ''}），拒绝返回部分文本`,
+      502,
+      { stopReason: message.stopReason },
+    )
+  }
+  const text = (message.content as Array<{ type?: string; text?: string }>)
+    .filter((part): part is { type: 'text'; text: string } => part.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('')
+  return deps.stash.redact(text)
+}
+
+/**
+ * 校验 Profile ID 是否合法（公开接口校验，统一抛 400 validation_error）。
+ */
+export function assertProfileIdPublic(id: string): void {
+  try {
+    assertProfileId(id)
+  } catch (err) {
+    throw new HelmError(
+      'validation_error',
+      `Profile id 非法：${err instanceof Error ? err.message : String(err)}`,
+      400,
+      { profileId: id },
+    )
+  }
+}
+
+/**
+ * 技能物理目录解析 Helper。
+ */
+export function skillDirectoryHelper(dataDir: string, id: string): string {
+  try {
+    assertSkillId(id)
+  } catch (err) {
+    throw new HelmError(
+      'validation_error',
+      `Skill id 非法：${err instanceof Error ? err.message : String(err)}`,
+      400,
+      { skillId: id },
+    )
+  }
+  return join(dataDir, 'skills', id)
+}
+
+/**
+ * Profile 物理目录解析 Helper。
+ */
+export function profileDirectoryHelper(dataDir: string, id: string): string {
+  assertProfileIdPublic(id)
+  return join(dataDir, 'profiles', id)
+}
+
+

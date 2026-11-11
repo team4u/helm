@@ -1,624 +1,202 @@
 /**
- * KernelRuntime：helm 微内核运行时组合根。
+ * @helm/kernel 极简运行时主类（微内核底座）。
  *
- * 重构后职责（机制组合，不含业务策略）：
- * - 打开单一 state.sqlite（pi-durable + helm 表 + FTS 共享 adapter 队列）；
- * - 构造并组合内聚服务：ConversationService（CRUD/submit/rewrite）、
- *   NodeManager（令牌/升级/execEnv）、ModelRegistry（模型全家）、
- *   HookBridge（7 类生命周期钩子桥）、内核工具工厂；
- * - PluginHost 组合（config/credentials 分离持久、工具热装）；
- * - 首次空库播种普通 assistant 入口会话与恢复调度（open/initialize/start/close）。
- *
- * 各服务的 Why 注释在各自模块；本文件只保留组合顺序与跨服务协同。
+ * 职责：
+ * - 组装并连接全部内核机制（pi-durable / SQLite / FTS5 / EnvFabric / PluginHost / Models）；
+ * - 统一生命周期管理（open / initialize / start / close）；
+ * - 提供外部 HTTP 路由与 CLI 消费的强类型门面 API；
+ * - 复杂业务编排与操作委托给专门的高内聚子模块：
+ *   RuntimeNodeOperations、RuntimeTriggerDispatcher、RuntimeAgentSpawn、
+ *   RuntimeOwnershipManager、createPluginHostBackend 与 RuntimeToolRegistry。
  */
 
-import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import {
-  Harness,
-  createRegistry,
-  type Registry,
-} from '@earendil-works/pi-durable'
-import type { ModelThinkingLevel, Models, ModelsStore } from '@earendil-works/pi-ai'
-import type {
-  AgentExecutionInfo,
-  AgentSpawnRequest,
-  AskCreateSpec,
-  AskResult,
-  AskSpec,
-  ConversationDetail,
-  ConversationEntry,
-  ConversationInit,
-  ConversationInputResult,
-  ConversationPatch,
-  ConversationSummary,
-  ConversationWithdrawResponse,
-  ExternalTriggerEnvelope,
-  ModelProvidersRefreshResult,
-  NodeInfo,
-  NodeIssuedToken,
-  NodeUpgradeCheckInput,
-  NodeUpgradeCheckResult,
-  NodeUpgradeResult,
-  EnvExecRequest,
-  EnvExecResponse,
-  MaybePromise,
-  PluginSkillAsset,
+  HelmError,
+  type AgentExecutionInfo,
+  type AgentSpawnRequest,
+  type AskCreateSpec,
+  type AskResult,
+  type AskSpec,
+  type ConversationDetail,
+  type ConversationInit,
+  type ConversationInputResult,
+  type ConversationPatch,
+  type ConversationSummary,
+  type ConversationWithdrawResponse,
+  type EnvExecRequest,
+  type EnvExecResponse,
+  type ExternalTriggerEnvelope,
+  type MaybePromise,
+  type ModelCatalog,
+  type ModelProvidersRefreshResult,
+  type NodeInfo,
+  type NodeIssuedToken,
+  type NodeUpgradeCheckInput,
+  type NodeUpgradeCheckResult,
+  type NodeUpgradeResult,
+  type PluginSkillAsset,
 } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
-import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import type { ConversationOwnership } from './runtime-ownership.js'
+import type { Harness, Registry, ToolRegistration } from '@earendil-works/pi-durable'
+import type { JsonValue } from '@earendil-works/chord'
 import {
   ArtifactService as SvcArtifactService,
   AuthService as SvcAuthService,
-  ConfigService,
   CredentialService,
-  FileNotFoundError,
   ProfileService,
   ProviderService,
   SecretStash,
   SkillService,
-  assertProfileId,
-  assertSkillId,
-  atomicWriteFile,
-  ensureDataDir,
-  resolveDataDir,
-  withFileLock,
-  type Profile,
 } from '../services/index.js'
 import { PluginHost } from '../plugins/index.js'
-import { createEnvFabric, tokenAuthenticator, type EnvFabric } from '../env/index.js'
-import { AskService } from './asks.js'
-import { ConversationTracker } from './conversations.js'
-import { EventHub, SessionDocEventHub } from './events.js'
-import { createFileModelsStore } from './models-store.js'
-import { buildModels, requireModelRef } from './models.js'
-import type { ModelCatalog } from '@helm/protocol'
-import { openHelmDatabase, type HelmDatabase } from './sqlite.js'
-import { HelmStore } from './store.js'
-import type { HelmToolDeps } from './tool-deps.js'
-import { buildManagedEnv, runGate } from './tools.js'
-import { runNativeSpawn, THINKING_LEVELS, validateJsonSchema } from './spawn.js'
-import { assertSchemaCompilable } from '../plugins/schema.js'
-import { gateResultMissingError, sanitizeExecutionInfo, sanitizeGateResult } from './spawn/spawn-exec.js'
-import { HelmPluginConfigStore } from './plugin-config-store.js'
-import { ConversationService } from './conversation-service.js'
-import { NodeManager } from './node-manager.js'
-import { ModelRegistry } from './model-registry.js'
-import { HookBridge, prepareToolResultWith } from './hook-bridge.js'
-import { RuntimeToolRegistry } from './tool-registry.js'
-import { AssetReloader } from './asset-reloader.js'
-import { buildSpawnHost } from './spawn-host.js'
+import type { EnvFabric } from '../env/index.js'
+import type { EventHub, SessionDocEventHub } from './events.js'
+import type { HelmDatabase } from './sqlite.js'
+import type { HelmStore } from './store.js'
+import { THINKING_LEVELS } from './spawn.js'
+import type { HelmPluginConfigStore } from './plugin-config-store.js'
+import type { ConversationService } from './conversation-service.js'
+import type { NodeManager } from './node-manager.js'
+import type { ModelRegistry } from './model-registry.js'
 import {
-  escapeXml,
-  requireConv,
-  safeResultText,
-  stripEnvelope,
+  assertProfileIdPublic,
+  completeConversationTextHelper,
+  profileDirectoryHelper,
+  skillDirectoryHelper,
   summaryOfFallback,
 } from './runtime-helpers.js'
+import type { RuntimeNodeOperations } from './runtime-nodes.js'
+import {
+  createGlobalDocumentStore,
+  createPluginHostBackend,
+  createPluginSessionDocStore,
+} from './runtime-host-backend.js'
+import {
+  bootstrapKernelRuntime,
+  ensureInitialConversation,
+  recoverExistingConversations,
+  teardownKernelRuntime,
+  type KernelBootOptions,
+} from './runtime-bootstrap.js'
+import {
+  assembleRuntimeServices,
+  type AssembledRuntimeServices,
+  type RuntimeServicesInit,
+} from './runtime-services.js'
 
-export interface KernelRuntimeOptions {
-  dataDir?: string
-  cwd?: string
-  /** 全局模型：启动参数 > HELM_MODEL > config.json.model。 */
-  model?: string
-  /** hub URL（测试 port:0 时注入；缺省按 HELM_PORT 生成）。 */
-  hubUrl?: string
-  /**
-   * 外部注入 Models（测试用 faux provider 时传入）。注入时模型集合完全由
-   * 调用方拥有：reloadModels 不重建、热重载不替换（防止把 faux 换成官方集）。
-   */
-  models?: Models
-  /**
-   * 是否在 open 内立即 resume 调度（默认 true，独立 runtime 即用）。
-   * 组合层（createHelm）传 false：先注册插件 / 待插件服务启动，再 await
-   * start() 启动恢复，防止恢复任务在工具未注册时被判 orphaned。
-   */
-  autoResume?: boolean
-  /** 节点升级等待 commit 确认的超时毫秒（缺省 120000；测试可缩短）。 */
-  nodeUpgradeTimeoutMs?: number
-}
-
-/** Profile id 公共边界校验：非法 id 归一为 HelmError 400（不外泄私有构造器）。 */
-function assertProfileIdPublic(id: string): void {
-  try {
-    assertProfileId(id)
-  } catch (err) {
-    throw new HelmError(
-      'validation_error',
-      `Profile id 非法：${err instanceof Error ? err.message : String(err)}`,
-      400,
-      { profileId: id },
-    )
-  }
-}
-
-/** profiles.get/directory 边界归一：非法 id -> 400 validation_error；其余错误原样上抛。 */
-function normalizeProfileBoundaryError(id: string, err: unknown): unknown {
-  try {
-    assertProfileId(id)
-    return err
-  } catch {
-    return new HelmError('validation_error', `Profile id 非法：${String(id)}`, 400, { profileId: id })
-  }
-}
+export type KernelRuntimeOptions = KernelBootOptions
 
 export class KernelRuntime {
   readonly dataDir: string
   private readonly database: HelmDatabase
   private readonly harness: Harness
-  private readonly registry: Registry
+  readonly registry: Registry<ToolRegistration<object, JsonValue>>
   private readonly store: HelmStore
   readonly events: EventHub
   /** 会话文档专用事件面（HTTP sessionDocEvents 端口；同一实例，构造器中接线）。 */
   readonly sessionDocEvents: SessionDocEventHub
-  private readonly tracker: ConversationTracker
-  private readonly asks: AskService
   private readonly stashService = new SecretStash()
-  private readonly toolDeps: HelmToolDeps
-  private readonly profilesSvc: ProfileService
-  private readonly skillsSvc: SkillService
-  private readonly artifactsSvc: SvcArtifactService
-  private readonly authSvc: SvcAuthService
-  private readonly credentialsSvc: CredentialService
-  private readonly providersSvc: ProviderService
-  private readonly configSvc: ConfigService
-  private readonly pluginConfig: HelmPluginConfigStore
-  private readonly agentSessions = new Map<string, number>()
-  /** 无 assistant 人类入口时合并并发的 trigger 缺省会话创建。 */
-  private defaultTriggerTargetCreation: Promise<number> | undefined
-  private pluginHost: PluginHost | undefined
-  /** 包含模型回合、结构化输出修复与 gate；通用运行中执行事实面（供插件层占用判定）。 */
-  private readonly activeSpawnExecutions = new Map<string, AgentExecutionInfo>()
-  /** 会话插件管理权：conversationId -> 持有 pluginId 集合（删除保护）。 */
-  private readonly managedConversations = new Map<number, Set<string>>()
-  /** 内部通用事件监听器（ctx.host.onEvent 后端；type -> listener 集合）。 */
   private readonly hostEventListeners = new Map<string, Set<(payload: unknown) => MaybePromise<void>>>()
-  /** 跨平台节点执行底座（local + 远端 BYOM 节点池；node-server 网关接线消费）。 */
   readonly envFabric: EnvFabric
-  /** 受管进程 token（createProcessToken 产物；close dispose）。 */
   private processTokenHandle: { tokenOf(): string | undefined; dispose(): void } | undefined
-  /** turn_settled 钩子的在途执行（waitForIdle 前等待）。 */
-  private settledInflight: Promise<void> = Promise.resolve()
-  /** tool_call handled 接管缓存（callId -> 结果与归属会话；execute 层包装器消费）。 */
-  private readonly handledToolCalls = new Map<
-    string,
-    { conversationId: number | undefined; result: { output: Array<{ type: 'text'; text: string }>; isError: boolean } }
-  >()
-  private closed = false
-  /** 实际 hub URL（setHubUrl 可更新；工具 env 每次读取最新值）。 */
   private hubUrlValue: string
-  /** start() 幂等守护：组合层完成插件/Workflow 挂接后显式启动调度。 */
+  private pluginHost: PluginHost | undefined
   private started = false
   private startPromise: Promise<void> | undefined
-  /** close 期间是否曾显式 abort 在途会话（保证 abort 结算至少一次）。 */
-  private closeAborts: Array<Promise<void>> = []
-  /** 工具装配器（helm-core 基础工具与 helm-plugins 插件衍生工具注册/热装）。 */
-  private readonly toolRegistry: RuntimeToolRegistry
-  /** 资产热重载协调器（watcher / 配置镜像 / reloadChain 抖动串行链）。 */
-  private readonly assetReloader: AssetReloader
-  /** 节点管理（令牌/升级/execEnv/磁盘；从上帝类拆出的内聚服务）。 */
+  private closed = false
+  private readonly handledToolCalls = new Map<
+    string,
+    {
+      conversationId: number | undefined
+      result: { output: Array<{ type: 'text'; text: string }>; isError: boolean }
+    }
+  >()
+  private settledInflight: Promise<void> = Promise.resolve()
   readonly nodes: NodeManager
-  /** 会话服务（CRUD/submit/rewrite/fork/reset；从上帝类拆出的内聚服务）。 */
   readonly conversations: ConversationService
-  /** 模型集合注册表（Models/Provider 全家；从上帝类拆出的内聚服务）。 */
   readonly modelsRegistry: ModelRegistry
-  /** hook 桥（7 类生命周期钩子 -> PluginHost runHook）。 */
-  private readonly hookBridge: HookBridge
-  /** 会话文档专用事件面（plugin.session_doc.updated 只进专用 SSE，不进全局广播）。 */
-  private readonly sessionDocStreams = new SessionDocEventHub()
-  /** 会话文档专用流生命周期订阅（plugin.changed / conversation.deleted 驱动关流）。 */
-  private sessionDocLifecycleRelease: (() => void) | undefined
+  readonly nodeOps: RuntimeNodeOperations
+  private readonly svc: AssembledRuntimeServices
+
+  readonly documentStore: {
+    get<T>(key: string, initial: T): T
+    set<T>(key: string, value: T): void
+    flush(): Promise<void>
+  }
 
   static async open(options: KernelRuntimeOptions = {}): Promise<KernelRuntime> {
-    const dataDir = resolveDataDir(options.dataDir)
-    await ensureDataDir(dataDir)
-    const database = await openHelmDatabase(dataDir)
-    const store = new HelmStore(database)
-    await store.load()
-
-    const providersSvc = new ProviderService(dataDir)
-    const credentials = new CredentialService(dataDir)
-
-    const providerConfigs = await providersSvc.list()
-    const apiKeyCache: Record<string, string> = {}
-    // 凭据按实际已存 ID 读取，不再维护内置供应商白名单；存储错误必须显式失败。
-    for (const id of await credentials.list()) {
-      const key = await credentials.get(id)
-      if (key) apiKeyCache[id] = key
-    }
-    const modelsExternal = options.models
-    const modelsStore = createFileModelsStore(dataDir)
-    const modelsInstance =
-      modelsExternal ??
-      buildModels({
-        providers: providerConfigs,
-        apiKeys: () => apiKeyCache,
-        modelsStore,
-      })
-    // 离线恢复：从 models-store.json 恢复已缓存动态目录（不发网络请求；
-    // 文件损坏时 refresh 内部 read 抛 models_store_corrupted，显式失败不静默）。
-    if (!modelsExternal) {
-      await assertModelsStoreHealthyAtBoot(modelsInstance)
-    }
-    const registry = createRegistry()
-
-    // Harness models 槽位：open 作用域可变引用，reloadModels 时经 setModels 热替换。
-    const modelsSlot = { current: modelsInstance }
-    // 脱敏槽位：onReport 先于 runtime 构造注册，经槽位引用 runtime stash
-    // （受管 token 创建后生效）；此前保持原样（startup 阶段尚无内部 token）。
-    const redactSlot: { current: (text: string) => string } = { current: (t) => t }
-
-    const harness = await Harness.open(
-      database.storage,
-      {
-        // models 用 getter：reloadModels 重建后无需重开 harness 即热生效。
-        models: () => modelsSlot.current,
-        registry,
-        settings: {
-          followUpMode: 'all',
-          steeringMode: 'all',
-        },
-        onReport: (report) => {
-          // 非致命失败显式上报（extension_error/task_faulted 等），绝不静默。
-          const description =
-            report.kind === 'extension_error'
-              ? `extension_error(${report.extension ?? 'unknown'})`
-              : report.kind === 'task_faulted' || report.kind === 'task_interrupted'
-                ? `${report.kind}(${report.task.kind})`
-                : report.kind
-          // 错误诊断统一过全局脱敏：宿主自身输出不得主动泄受管 token。
-          const errorText = String((report as { error?: unknown }).error ?? '')
-          console.error('[helm] durable report:', description, redactSlot.current(errorText))
-        },
-      },
-      BACKGROUND_CONTEXT,
-    )
-
+    const boot = await bootstrapKernelRuntime(options)
     const runtime = new KernelRuntime({
-      dataDir,
-      database,
-      harness,
-      registry,
-      store,
-      providersSvc,
-      credentials,
-      models: modelsInstance,
-      setModels: (m) => {
-        modelsSlot.current = m
-      },
+      ...boot,
       defaultModel: options.model || process.env['HELM_MODEL'] || undefined,
       cwd: options.cwd ?? process.cwd(),
       hubUrl: options.hubUrl,
-      seedKeyCache: apiKeyCache,
+      seedKeyCache: boot.apiKeyCache,
       autoResume: options.autoResume !== false,
-      externalModels: modelsExternal,
+      externalModels: options.models,
       nodeUpgradeTimeoutMs: options.nodeUpgradeTimeoutMs ?? 120_000,
-      modelsStore,
-      redactReport: (fn: (text: string) => string) => {
-        redactSlot.current = fn
-      },
     })
     try {
       await runtime.initialize()
     } catch (error) {
-      // 初始化失败同样释放本轮已创建资源（受管 token、SDK、数据库），不留泄漏。
       await runtime.close().catch(() => {})
       throw error
     }
     return runtime
   }
 
-  private constructor(private readonly init: {
-    dataDir: string
-    database: HelmDatabase
-    harness: Harness
-    registry: Registry
-    store: HelmStore
-    providersSvc: ProviderService
-    credentials: CredentialService
-    models: Models
-    setModels(m: Models): void
-    defaultModel?: string
-    cwd: string
-    hubUrl?: string
-    seedKeyCache: Record<string, string>
-    autoResume: boolean
-    externalModels?: Models
-    /** 节点升级等待 commit 确认超时（毫秒；缺省 120000）。 */
-    nodeUpgradeTimeoutMs: number
-    /** 动态模型目录持久缓存（open 创建，实例全存续期共用）。 */
-    modelsStore: ModelsStore
-    /** 接管 Harness onReport 诊断脱敏（stash 就绪后由构造器调用）。 */
-    redactReport(fn: (text: string) => string): void
-  }) {
+  private constructor(private readonly init: RuntimeServicesInit) {
     this.dataDir = init.dataDir
     this.database = init.database
     this.harness = init.harness
     this.registry = init.registry
     this.store = init.store
-    this.profilesSvc = new ProfileService(init.dataDir)
-    this.skillsSvc = new SkillService(init.dataDir)
-    this.configSvc = new ConfigService(init.dataDir)
-    this.credentialsSvc = init.credentials
-    this.providersSvc = init.providersSvc
-    this.pluginConfig = new HelmPluginConfigStore({
-      config: this.configSvc,
-      credentials: this.credentialsSvc,
-    })
-    // 同步镜像仓库（满足 ArtifactRepository 同步契约；持久化经 store 排队）。
-    const artifactRepo = {
-      get: (id: string) => this.store.getArtifact(id),
-      list: (conversationId: number) => this.store.listArtifacts(conversationId),
-      put: (meta: never) => {
-        this.store.putArtifact(meta)
-      },
-      deleteByConversation: (conversationId: number) => {
-        this.store.deleteArtifactsByConversation(conversationId)
-      },
-    }
-    this.artifactsSvc = new SvcArtifactService(init.dataDir, artifactRepo, this.stashService)
-    this.authSvc = new SvcAuthService(init.dataDir)
+    this.hubUrlValue = init.hubUrl ?? `http://127.0.0.1:${process.env['HELM_PORT'] ?? '3202'}`
+    this.documentStore = createGlobalDocumentStore(this.store)
 
-    const hubUrl =
-      init.hubUrl ?? `http://127.0.0.1:${process.env['HELM_PORT'] ?? '3202'}`
-    this.hubUrlValue = hubUrl
-
-    // ---- 模型集合注册表（Models/Provider 全家；外部注入时空操作）----
-    this.modelsRegistry = new ModelRegistry(
-      {
-        dataDir: init.dataDir,
-        providersSvc: this.providersSvc,
-        credentialsSvc: this.credentialsSvc,
-        configSvc: this.configSvc,
-        stash: this.stashService,
-        modelsStore: init.modelsStore,
-        setModels: init.setModels,
-        externalModels: init.externalModels !== undefined,
-        events: { publish: (type, payload) => this.events.publish(type, payload) },
-        pluginHost: () => this.pluginHost,
-        alignAllConversations: async () => {
-          for (const meta of this.store.listConvs()) {
-            await this.conversations.alignConversationModel(meta.id, true)
-          }
-        },
+    // 组装并连接全部内核内部服务
+    this.svc = assembleRuntimeServices(this, init, {
+      store: this.store,
+      stashService: this.stashService,
+      handledToolCalls: this.handledToolCalls,
+      dispatchTurnSettled: (payload, consumed) => this.dispatchTurnSettled(payload, consumed),
+      onSettleInflight: (run) => {
+        this.settledInflight = Promise.all([this.settledInflight, run]).then(() => undefined)
+        void this.settledInflight.catch(() => {})
       },
-      init.models,
-      { model: init.defaultModel },
-    )
-    Object.assign(this.modelsRegistry.apiKeyCache, init.seedKeyCache)
-
-    // ---- 跨平台节点底座（EnvFabric）------------------------------------
-    // fail-closed 鉴权：仅 config.json nodes 登记的 sha256(token) 可注册。
-    // 加载失败（config 损坏）在 initialize 阶段显式上抛，不静默无鉴权运行。
-    // envOptions 闭包延迟读 this.toolDeps（下一行赋值后才被真正调用）。
-    this.envFabric = createEnvFabric({
-      authenticate: tokenAuthenticator((nodeId) => this.nodes?.nodeDigestOf(nodeId)),
-      envOptions: ({ conversationId, cwd, nodeId }) =>
-        buildManagedEnv(this.toolDeps, cwd, conversationId, nodeId),
+      safeSummary: (id) => this.safeSummary(id),
+      submitInput: (id, text, opts) => this.submitInput(id, text, opts),
+      createConversation: (cInit) => this.createConversation(cInit),
+      updateConversation: (id, patch) => this.updateConversation(id, patch),
     })
 
-    // ---- 工具依赖面（hubUrl / cliBinDir 经 getter 每次读最新值）--------
-    const runtimeSelf: KernelRuntime = this
-    this.toolDeps = {
-      dataDir: init.dataDir,
-      defaultCwd: init.cwd,
-      // getter 每次读最新值：setHubUrl（如 port:0 真实端口）后新 exec 即生效。
-      get hubUrl(): string {
-        return runtimeSelf.hubUrlValue
-      },
-      stashEnvFor: (id) => this.stashService.envFor(id),
-      redact: (t) => this.stashService.redact(t),
-      processToken: () => this.processTokenHandle?.tokenOf(),
-      artifacts: this.artifactsSvc,
-      envFabric: this.envFabric,
-      nodeIdOf: (id) => this.store.getConv(id)?.nodeId ?? 'local',
-      get cliBinDir(): string | undefined {
-        return runtimeSelf.nodes?.cliBinDir
-      },
-    }
+    this.modelsRegistry = this.svc.modelsRegistry
+    this.envFabric = this.svc.envFabric
+    this.nodes = this.svc.nodes
+    this.nodeOps = this.svc.nodeOps
+    this.events = this.svc.events
+    this.sessionDocEvents = this.svc.sessionDocStreams
+    this.conversations = this.svc.conversations
 
-    this.nodes = new NodeManager({
-      dataDir: init.dataDir,
-      envFabric: this.envFabric,
-      configSvc: this.configSvc,
-      stash: this.stashService,
-      toolDeps: this.toolDeps,
-      events: { publish: (type, payload) => this.events.publish(type, payload) },
-      nodeUpgradeTimeoutMs: init.nodeUpgradeTimeoutMs,
-      convOf: (id) => requireConv(this.store, id),
-    })
-    // 节点上下线 -> node.changed SSE 事件（Web/CLI 实时感知）。
-    // removeNode 已先删 nodeTokenIndex 再触发 registry.disconnect 时，
-    // 离线事件交由 removeNode 统一发布（带 removed: true），此处不重复发。
-    this.envFabric.registry.onNodeChanged((nodeId, online) => {
-      if (!online && !this.nodes.hasNode(nodeId)) return
-      const conn = online ? this.envFabric.registry.get(nodeId) : undefined
-      this.events.publish('node.changed', {
-        type: 'node.changed',
-        node: this.nodes.byomNodeInfo(nodeId, conn),
-      })
-      // 自动升级（HELM_AUTO_UPGRADE_NODES=1 显式开启）：节点上线且上报版本
-      // 严格落后 Hub 时异步触发同一 upgradeNode 路径；不阻塞注册回调。
-      if (online && conn !== undefined) void this.nodes.autoUpgradeIfEligible(nodeId, conn.version)
-    })
-    this.store.ftsRedact = (t) => this.stashService.redact(t)
+    this.nodeOps.bindEvents()
 
-    // 受管进程 token：仅内存、入全局脱敏（任何落库/模型上下文/日志不可见明文）。
-    const managed = this.authSvc.createProcessToken()
+    // 受管进程 token
+    const managed = this.svc.authSvc.createProcessToken()
     this.processTokenHandle = {
       tokenOf: () => managed.token,
       dispose: () => managed.dispose(),
     }
     this.stashService.addRedaction(managed.token)
-    // 继承的 HELM_TOKEN（宿主自身凭据）同样登记脱敏：工具子进程用受管 token。
     if (process.env['HELM_TOKEN']) {
       this.stashService.addRedaction(process.env['HELM_TOKEN'])
     }
-    // Harness onReport 的诊断脱敏接线（槽位在此接管）。
     this.init.redactReport((t) => this.stashService.redact(t))
-
-    this.events = new EventHub({
-      initialSeq: this.store.eventSeqNow,
-      snapshot: () => ({
-        seq: this.store.eventSeqNow,
-        conversations: this.listConversations(),
-        pendingAsks: this.asks.listAsks('pending'),
-        plugins: this.pluginHost ? this.pluginHost.list() : [],
-        ui: this.pluginHost ? this.pluginHost.listUi() : [],
-        pluginDocs: this.pluginHost?.listPublicDocs() ?? [],
-        // 重连首帧即恢复活跃会话实时视图（含 queuedInputs 排队胶囊）：
-        // 从 tracker 权威镜像同步派生，不依赖上次推送缓存。
-        conversationLives: this.tracker.listLiveViews(),
-        // snapshot.nodes 与 node.changed 同源（listNodes 读取同一注册表），
-        // 首帧即携带全部已知节点与在线状态，重连凭水位对齐。
-        nodes: this.nodes.listNodesSync(),
-      }),
-      persistSeq: (seq) => this.store.setEventSeq(seq),
-    })
-    this.events.redactFn = (t) => this.stashService.redact(t)
-    this.sessionDocStreams.redact = (t) => this.stashService.redact(t)
-    this.sessionDocEvents = this.sessionDocStreams
-    // 会话文档专用流的事件驱动终止（非轮询）：plugin.changed enabled=false
-    // 关闭该插件的全部专用流，conversation.deleted 关闭该会话的全部专用流；
-    // kernel.close 时释放该订阅。
-    this.sessionDocLifecycleRelease = this.events.subscribe((frame) => {
-      const event = frame.event
-      if (event.type === 'plugin.changed' && 'plugin' in event && event.plugin.enabled === false) {
-        this.sessionDocStreams.closeForPlugin(event.plugin.id)
-      } else if (event.type === 'conversation.deleted' && 'conversationId' in event) {
-        this.sessionDocStreams.closeForConversation(event.conversationId)
-      }
-    })
-
-    this.asks = new AskService({
-      store: this.store,
-      stash: this.stashService,
-      // 创建前校验会话存在：不存在时在 putAsk 之前拒绝，不留孤儿审批。
-      validateConversation: (id) => this.store.getConv(id) !== undefined,
-      onEvent: (type, payload) => this.events.publish(type, payload),
-      onConvPendingChanged: (id) => {
-        this.tracker.setPendingAskCount(id, this.asks.pendingCount(id))
-      },
-    })
-
-    this.tracker = new ConversationTracker({
-      harness: this.harness,
-      store: this.store,
-      // 失败诊断摘要对外前先过 SecretStash 脱敏（与事件发布同源）：
-      // provider 原始错误可能回显请求中的秘密，绝不经 ConversationSummary 泄漏。
-      redactError: (text) => this.stashService.redact(text),
-      events: {
-        // tracker 摘要统一附加实时归属（ownedBy）：SSE 消费方（Web store/CLI）
-        // 与 getConversation/listConversations 读到同一形状。
-        onSummaryChanged: (summary) => {
-          if (this.store.getConv(summary.id) === undefined || this.store.isDeleted(summary.id)) return
-          this.events.publish('conversation.upsert', this.conversations.withOwnership(summary))
-        },
-        onInputCommitted: (conversationId, input) => {
-          this.store.indexFts(conversationId, `input:${input.id}`, this.store.getConv(conversationId)?.title ?? '', input.text)
-        },
-        onAssistantText: (conversationId, entryId, text) => {
-          this.tracker.recordAssistantText(conversationId, entryId, text)
-          this.store.indexFts(conversationId, `entry:${entryId}`, this.store.getConv(conversationId)?.title ?? '', text)
-        },
-        onEntryCommitted: (conversationId, entry) => {
-          // entry 已是协议形状（entries.ts 统一转换）；publish 边界统一脱敏。
-          this.events.publish('conversation.entry', { conversationId, entry })
-        },
-        onLiveChanged: (live) => {
-          this.events.publish('conversation.live', { live })
-        },
-        onTurnSettled: (payload, consumed) => {
-          const run = this.dispatchTurnSettled(payload, consumed)
-          this.settledInflight = Promise.all([this.settledInflight, run]).then(() => undefined)
-          // 关闭路径仍 await 并传播错误；此处仅避免后台 Promise 提前触发 unhandled。
-          void this.settledInflight.catch(() => {})
-          return run
-        },
-      },
-    })
-
-    // ---- 会话服务（CRUD/submit/rewrite；构造后 tracker/events 已就绪）----
-    this.conversations = new ConversationService({
-      harness: this.harness,
-      storage: this.database.storage,
-      store: this.store,
-      tracker: this.tracker,
-      events: this.events,
-      profilesSvc: this.profilesSvc,
-      artifactsSvc: this.artifactsSvc,
-      stash: this.stashService,
-      dataDir: init.dataDir,
-      toolDeps: { defaultCwd: init.cwd },
-      evictConversationBase: (id) => this.envFabric.evictConversation(id),
-      managedConversations: this.managedConversations,
-      cancelAsksByConversation: async (id) => {
-        await this.asks.cancelByConversation(id)
-      },
-      cancelPendingAsksForRewrite: async (id) => {
-        const pendingAsks = this.asks.listPendingByConversation(id)
-        await Promise.all(pendingAsks.map((ask) => this.asks.cancelAsk(ask.id, 'superseded')))
-      },
-      evictHandledToolCalls: (id) => this.evictHandledToolCalls(id),
-      markOwnership: (id, owner) => this.markConversationOwnership(id, owner),
-      ownershipOf: (id) => this.getConversationOwnership(id),
-      runInputHook: (payload) => this.hookBridge.runHookChain('input', payload),
-      isClosed: () => this.closed,
-      defaultModel: () => this.modelsRegistry.defaultModel,
-      defaultThinkingLevel: () => this.modelsRegistry.defaultThinkingLevel,
-      parseModelRefOrThrow: (ref) => this.modelsRegistry.parseModelRefOrThrow(ref),
-    })
-
-    // ---- hook 桥（SDK GenerationTask/ToolTask 钩子 -> 7 hook 管道）----
-    this.hookBridge = new HookBridge({
-      registry: this.registry,
-      pluginHost: () => this.pluginHost,
-      handledToolCalls: this.handledToolCalls,
-      prepareToolResult: (conversationId, result) =>
-        prepareToolResultWith(this.artifactsSvc, (t) => this.stash.redact(t), conversationId, result),
-      safeSummary: (id) => this.safeSummary(id),
-      currentRunInputs: (id) => this.tracker.currentRunInputs(id),
-      redact: (t) => this.stashService.redact(t),
-      artifacts: this.artifactsSvc,
-    })
-
-    // ---- 工具装配器（helm-core 基础工具 + helm-plugins 插件衍生工具）----
-    this.toolRegistry = new RuntimeToolRegistry({
-      registry: this.registry,
-      toolDeps: this.toolDeps,
-      getPluginHost: () => this.pluginHost,
-      isArtifactAuthorized: (convId, artifactConvId) =>
-        this.conversations.isArtifactAuthorized(convId, artifactConvId),
-      redact: (t) => this.stashService.redact(t),
-      handledToolCalls: this.handledToolCalls,
-    })
-
-    // ---- 资产热重载协调器（watcher / 配置镜像 / reloadChain 抖动串行链）----
-    this.assetReloader = new AssetReloader({
-      dataDir: this.dataDir,
-      externalModels: this.init.externalModels !== undefined,
-      reloadModels: () => this.reloadModels(),
-      reloadPluginConfig: () => this.pluginConfig.load(),
-      notifyError: (title, error) => {
-        this.events.publish('notification', {
-          level: 'error',
-          title,
-          body: error instanceof Error ? error.message : String(error),
-        })
-      },
-    })
   }
 
   private async initialize(): Promise<void> {
-    // 0) 跨平台节点底座先行：加载 config.json 节点签发表（损坏显式上抛），
-    //    生成 helm CLI 包装脚本（受管子进程可直接运行 helm）。
-    await this.nodes.loadNodeTokens()
-    await this.nodes.ensureCliBinDir()
-    // 预热 local 磁盘统计：首个 SSE 快照（listNodesSync）即含磁盘字段。
-    await this.nodes.ensureLocalDiskStats()
-    // 1) 默认 profiles 先于 root 创建（root 绑定 assistant profile）。
-    // 全局来源在内核统一解析；assistant Profile 的模型只属于该 Profile。
-    await this.profilesSvc.ensureDefault()
+    await this.nodeOps.initialize()
+    await this.svc.profilesSvc.ensureDefault()
     this.modelsRegistry.setThinkingLevelValidator(async (level) => {
       if (!THINKING_LEVELS.has(level)) {
         throw new HelmError('config_corrupt', `config.json.thinkingLevel 非法（合法值：${[...THINKING_LEVELS].join(' | ')}）`, 500)
@@ -626,191 +204,44 @@ export class KernelRuntime {
     })
     await this.modelsRegistry.loadDefaultsFromConfig()
 
-    // 2) 内核基础工具（bash/read/write/edit/read_artifact + run_action 元工具）
-    //    经扩展注册；subagent / SubagentWorkflow / cleanup_worktree 由 builtin:workflow
-    //    插件提供；插件衍生工具由 attachPluginHost/refreshPluginTools 热装。
-    this.toolRegistry.installKernelTools()
+    this.svc.toolRegistry.installKernelTools()
+    this.svc.hookBridge.install()
 
-    // 3) hook 桥：SDK GenerationTask/ToolTask 钩子 -> helm 7 hook 管道。
-    this.hookBridge.install()
-
-    // 4) PluginHost：内核内创建并接入（app 只消费 runtime.plugins，不再自建）。
-    //    config/credentials 分离持久经 HelmPluginConfigStore；损坏显式上抛。
-    await this.pluginConfig.load()
-    const host = new PluginHost({
+    await this.svc.pluginConfig.load()
+    this.pluginHost = new PluginHost({
       dataDir: this.dataDir,
-      // 启动屏障：注册期只登记服务，全部插件注册完成后由 kernel.start()
-      // -> PluginHost.start() 统一 prepare+start，先于调度器 resume。
       deferServices: true,
-      // 宿主统一脱敏（SecretStash）：插件间 ctx.host.invokeAction 输出过此脱敏。
       redactText: (text) => this.stashService.redact(text),
       providers: {
         register: (provider, pluginId) => this.modelsRegistry.registerRuntimeProvider(provider, pluginId),
         assertIdle: (pluginId) => this.modelsRegistry.assertRuntimeProvidersIdle(pluginId),
       },
-      host: {
-        isClosing: () => this.closed,
-        profiles: {
-          list: () => this.profilesSvc.list(),
-          get: (id) =>
-            this.profilesSvc.get(id).catch((err: unknown) => {
-              // 非法 id：私有 assert Error 归一为公共 400 validation_error；
-              // 其余错误（EIO/EACCES 等）原样上抛，绝不吞。
-              throw normalizeProfileBoundaryError(id, err)
-            }),
-          getSystem: async (id) => {
-            try {
-              return await this.profilesSvc.getSystem(id)
-            } catch (err) {
-              // 公共端口规范化：私有 FileNotFoundError 不外泄给插件（公共契约
-              // 是 HelmError not_found 404）；其余 I/O 错误原样上抛。
-              if (err instanceof FileNotFoundError) {
-                throw new HelmError('not_found', `Profile '${id}' 的 SYSTEM.md 不存在`, 404, { profileId: id })
-              }
-              throw err
-            }
-          },
-          save: (profile) => this.profilesSvc.save(profile),
-          directory: (id) => this.profileDirectory(id),
-        },
-        skills: {
-          list: () => this.skillsSvc.list(),
-          readFile: (skillId, path) => this.skillsSvc.readFile(skillId, path),
-          directory: (id) => this.skillDirectory(id),
-          ensureSkill: (asset, pluginId) => this.ensurePluginSkill(asset, pluginId),
-        },
-        secrets: {
-          get: (pluginId, key) => this.credentialsSvc.getPluginSecret(pluginId, key),
-          set: (pluginId, key, value) => this.credentialsSvc.setPluginSecret(pluginId, key, value),
-          delete: (pluginId, key) => this.credentialsSvc.deletePluginSecret(pluginId, key),
-          addRedaction: (value) => this.stashService.addRedaction(value),
-        },
-        setPluginConfig: (pluginId, value) => this.pluginConfig.set(pluginId, value, this.pluginHost?.getConfigSchema(pluginId) ?? {}),
-        nodeIpc: {
-          isOnline: (nodeId) => this.envFabric.isOnline(nodeId),
-          getNodeHubUrl: (nodeId) => this.envFabric.getNodeHubUrl(nodeId),
-          call: (nodeId, input, signal) => this.envFabric.ipcCall(nodeId, input, signal),
-          subscribe: (nodeId, input, onLine, onClosed, signal) =>
-            this.envFabric.ipcSubscribe(nodeId, input, onLine, onClosed, signal),
-        },
-        dispatchTrigger: (event) => this.dispatchTrigger(event),
-        submitInput: async (id, text, opts) => {
-          await this.submitInput(id, text, opts)
-        },
-        createConversation: (init) => this.createConversation(init),
-        listConversations: (filter) => this.listConversations(filter),
-        getConversation: (id) => this.getConversation(id),
-        getConversationDetail: (id, options) => this.getConversationDetail(id, options),
-        updateConversation: (id, patch) => this.updateConversation(id, patch),
-        abortConversation: (id) => this.abortConversation(id),
-        getConversationOwnership: (id) => this.getConversationOwnership(id),
-        getConversationActivity: (id) => this.getConversationActivity(id),
-        listArtifacts: (conversationId) => Promise.resolve(this.artifactsSvc.list(conversationId)),
-        getArtifact: (artifactId, conversationId) => this.resolveAuthorizedAttachment(conversationId, artifactId),
-        redact: (text) => this.stashService.redact(text),
-        refreshModels: (options) => this.refreshModels(options),
-        withFileLock: <T,>(path: string, fn: () => Promise<T>, opts?: { signal?: AbortSignal }) =>
-          withFileLock(path, async () => {
-            opts?.signal?.throwIfAborted()
-            return fn()
-          }),
-        atomicWriteFile: (path, content) => atomicWriteFile(path, content),
-        completeText: (input) => this.completeConversationText(input),
-        executionEnv: (nodeId, cwd) => this.envFabric.envFor(nodeId, cwd),
-        buildSpawnEnv: (conversationId, cwd, nodeId) => this.buildSpawnEnv(conversationId, cwd, nodeId),
-        spawnAgent: (request) => this.spawnAgent(request),
-        runGate: (command, options) => this.runGate(command, options),
-        prepareInterruptedConversations: (ids) => this.prepareInterruptedConversations(ids),
-        resolveSpawnTarget: (input) => this.resolveSpawnTarget(input),
-        listActiveSpawnExecutions: () => this.listActiveSpawnExecutions(),
-        probeNodeFs: (input) => this.probeNodeFs(input),
-        redactText: (text) => this.stash.redact(text),
-        invokeAction: (pluginId, actionId, input, context) => this.plugins.invokeAction(pluginId, actionId, input, context),
-        prepareAction: (pluginId, actionId, input, context) =>
-          this.plugins.prepareAction(pluginId, actionId, input, context),
-        listActions: () => this.plugins.listActions(),
-        // PluginHost 在插件侧绑定身份，后端必须接收明确的 pluginId。
-        manageConversation: (id, pluginId) => this.manageConversation(id, pluginId),
-        markConversationOwnership: (id, owner) => this.markConversationOwnership(id, owner),
-        createAsk: (spec) => this.createAsk(spec),
-        cancelAsk: (askId, reason) => this.cancelAsk(askId, reason),
-        registerAskSeqResolver: (resolver) => this.registerAskSeqResolver(resolver),
-        execEnv: async (req, opts) => {
-          const res = await this.execEnv(req, undefined, opts?.signal)
-          return {
-            ...res,
-            output: this.stash.redact(res.output),
-          }
-        },
-        // 文件互斥队列：插件读-改-写与内核 write/edit 共享同一目标节点队列
-        //（EnvFabric.withFileMutationQueue；语义见 env/file-mutation-queue.ts）。
-        withFileMutationQueue: (target, fn, opts) =>
-          this.envFabric.withFileMutationQueue(target, fn, opts?.signal),
-        onEvent: (type, listener) => this.onEvent(type, listener),
-        emitEvent: (type, payload, options) => this.emitHostEvent(type, payload, options),
-      },
+      host: createPluginHostBackend(this),
       docs: this.documentStore,
-      sessionDocs: {
-        get: (pluginId, name, conversationId) =>
-          this.store.getPluginSessionDoc(pluginId, name, conversationId),
-        put: (pluginId, name, conversationId, valueJson) =>
-          this.store.putPluginSessionDoc(pluginId, name, conversationId, valueJson),
-        delete: (pluginId, name, conversationId) =>
-          this.store.deletePluginSessionDoc(pluginId, name, conversationId),
-        listConversationIds: (pluginId, name) =>
-          this.store.listPluginSessionDocConversations(pluginId, name),
-        flush: () => this.store.flushPublic(),
-      },
-      config: this.pluginConfig,
+      sessionDocs: createPluginSessionDocStore(this.store),
+      config: this.svc.pluginConfig,
     })
-    this.pluginHost = host
 
-    // 5) 初始 assistant 入口会话（SDK root #1 承载，普通会话语义：无 id 级
-    //    删除豁免；用户删除后重启凭 tombstone 不复活、不补种）。
-    await this.ensureInitialConversation()
-
-    // 6) 恢复：autoResume 时立即启动调度；否则等组合层 await start()。
-    this.asks.reportOrphans()
-    await this.conversations.recover(async (id, parentConversationId) => {
-      const now = Date.now()
-      const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-      const agent = conversation ? await conversation.agent(BACKGROUND_CONTEXT).catch(() => undefined) : undefined
-      this.store.upsertConv({
-        id,
-        title: `会话 ${id}`,
-        profileId: 'assistant',
-        tags: [],
-        parentConversationId,
-        cwd: agent?.cwd ?? this.toolDeps.defaultCwd,
-        model:
-          agent?.model !== undefined
-            ? `${agent.model.provider}/${agent.model.modelId}`
-            : '',
-        thinkingLevel: (agent as { thinkingLevel?: string } | undefined)?.thinkingLevel ?? '',
-        nodeId: 'local',
-        unread: false,
-        pinned: false,
-        stateChangeSeq: 1,
-        completionSeq: 0,
-        createdAt: now,
-        updatedAt: now,
-      })
+    await ensureInitialConversation({
+      harness: this.harness,
+      store: this.store,
+      tracker: this.svc.tracker,
+      conversations: this.conversations,
+      modelsRegistry: this.modelsRegistry,
+      cwd: this.init.cwd,
     })
-    this.assetReloader.start()
+    this.svc.asks.reportOrphans()
+    await recoverExistingConversations({
+      conversations: this.conversations,
+      harness: this.harness,
+      store: this.store,
+      defaultCwd: this.svc.toolDeps.defaultCwd,
+    })
+    this.svc.assetReloader.start()
     if (this.init.autoResume) await this.start()
   }
 
-  /**
-   * 初始 assistant 入口会话（SDK root #1 承载，普通会话语义）：
-   * - 模型/思考档位走继承链：assistant profile.model > 全局；
-   * - 已删除（tombstone）后重启不复活：跳过镜像与观察，绝不补种——
-   *   SDK 保留的 #1 存储行只是内部机制，不再暴露为产品不变量；
-   * - SYSTEM.md / MEMORY.md 由 builtin:profile / builtin:memory 在
-   *   before_turn sections 注入，这里不写业务 system。
-   */
-  /** 插件受管技能自举：委托 SkillService.ensureSkill（受管覆盖 + 只读登记）。
-   * frontmatter managedByPlugin 必须指向调用插件（技能目录可用性随插件启停过滤的前提）。 */
-  private async ensurePluginSkill(asset: PluginSkillAsset, pluginId: string): Promise<void> {
+  async ensurePluginSkill(asset: PluginSkillAsset, pluginId: string): Promise<void> {
     const managed = /^managedByPlugin:[ \t]*['\"]?([^'\"\n]+)['\"]?[ \t]*$/m.exec(asset.skillMd)
     if (managed?.[1]?.trim() !== pluginId) {
       throw new HelmError(
@@ -820,49 +251,9 @@ export class KernelRuntime {
         { pluginId, skillId: asset.id },
       )
     }
-    await this.skillsSvc.ensureSkill(asset)
+    await this.svc.skillsSvc.ensureSkill(asset)
   }
 
-  private async ensureInitialConversation(): Promise<void> {
-    const thinking = await this.conversations.resolveEffectiveThinkingLevel(undefined, 'assistant')
-    const effective = await this.conversations.resolveEffectiveModel(undefined, 'assistant')
-    const modelRef = effective ? requireModelRef(effective) : undefined
-    const root = await this.harness.root(BACKGROUND_CONTEXT, {
-      agent: {
-        ...(modelRef ? { model: { provider: modelRef.provider, modelId: modelRef.modelId } } : {}),
-        ...(thinking ? { thinkingLevel: thinking as ModelThinkingLevel } : {}),
-      },
-    })
-    const id = root.id as number
-    if (this.store.isDeleted(id)) return // 用户已删除：不复活、不补种
-    if (!this.store.getConv(id)) {
-      this.store.upsertConv({
-        id,
-        title: '个人助理',
-        profileId: 'assistant',
-        tags: ['assistant'],
-        nodeId: 'local',
-        cwd: this.init.cwd,
-        model: effective ?? '',
-        thinkingLevel: thinking ?? '',
-        unread: false,
-        pinned: false,
-        stateChangeSeq: 1,
-        completionSeq: 0,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      })
-    }
-    await this.tracker.observe(id)
-  }
-
-  /**
-   * 插件宿主事件入口（ctx.host.emitEvent 后端）：发布到 SSE；type 为
-   * plugin.changed 时同步热装插件工具；其余类型同步触发内部 onEvent 监听器。
-   * 可等待：内部监听器（含异步监听器）的完成被同步等待，错误上抛给发布方
-   * （如引擎结算等待 herdr 清理监听器；失败进入结算诊断而非后台 notification）。
-   * SSE publish 同步完成，其错误同样上抛（不再吞成 notification）。
-   */
   emitHostEvent(type: string, payload: unknown, options?: { broadcast?: boolean }): MaybePromise<void> {
     if (options?.broadcast === false) {
       if (type === 'plugin.changed' || type === 'plugin.session_doc.updated' || type.trim() === '') {
@@ -873,8 +264,6 @@ export class KernelRuntime {
     if (type === 'plugin.changed') {
       this.refreshPluginTools()
       const envelope = payload as { type?: string; plugin?: unknown; ui?: unknown } | undefined
-      // 完整透传新 payload（含 ui 贡献）：快照 plugins 由 host.list() 实时提供，
-      // 事件只透传插件摘要与当前 UI 贡献，不丢弃字段。
       this.events.publish('plugin.changed', {
         type: 'plugin.changed',
         plugin: envelope?.plugin ?? {},
@@ -883,20 +272,13 @@ export class KernelRuntime {
       return
     }
     if (type === 'plugin.session_doc.updated') {
-      // 会话文档事件绝不进入全局 /api/events 广播：只投递内部订阅面
-      // （会话文档专用 SSE 流在 sessionDocStreams 消费），防止写放大与跨会话泄漏。
-      this.sessionDocStreams.dispatch(payload)
+      this.svc.sessionDocStreams.dispatch(payload)
       return this.dispatchInternalEvent(type, payload)
     }
     this.events.publish(type, payload)
     return this.dispatchInternalEvent(type, payload)
   }
 
-  /**
-   * 内部通用事件订阅（ctx.host.onEvent 后端）：插件监听宿主事件
-   * （如 'workflow.settled'）；返回解除函数。插件停用时由 PluginHost
-   * 释放句柄统一解除。
-   */
   onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void {
     let listeners = this.hostEventListeners.get(type)
     if (listeners === undefined) {
@@ -910,11 +292,6 @@ export class KernelRuntime {
     }
   }
 
-  /**
-   * 触发一类宿主内部事件的全部监听器（同步等待：任一监听器 throw/reject
-   * 即中断后续监听器并上抛给发布方——发布方按自身语义处理，如 run 结算
-   * 写入诊断；绝不再 fire-and-forget 吞成后台 notification）。
-   */
   private dispatchInternalEvent(type: string, payload: unknown): MaybePromise<void> {
     const listeners = this.hostEventListeners.get(type)
     if (listeners === undefined || listeners.size === 0) return
@@ -926,20 +303,10 @@ export class KernelRuntime {
     return run
   }
 
-  /**
-   * 显式启动调度（幂等）：组合层（createHelm）在完成全部插件注册后调用。
-   * 内部先执行 PluginHost.start() 服务启动屏障（全局 prepare 先于任何 start，
-   * 防止服务 init 提交输入唤醒 SDK 时工具/插件未就绪），再 resume 调度器；
-   * 随后恢复的 update_memory / load_skill / SubagentWorkflow 任务不会因工具
-   * 未注册被判 missing/orphaned。独立 open（autoResume 默认 true）同样先走
-   * host.start 屏障（initialize 内已注册内核工具；插件服务即时启动模式无影响）。
-   */
   async start(): Promise<void> {
     if (this.started) return
     if (this.startPromise) return this.startPromise
     this.startPromise = (async () => {
-      // 服务启动屏障：全部已启用插件 prepare + start 完成后才允许 resume。
-      // 屏障失败时保持未启动态（不 resume），错误如实上抛。
       if (this.pluginHost) await this.pluginHost.start()
       this.harness.resume()
       this.started = true
@@ -947,9 +314,6 @@ export class KernelRuntime {
     return this.startPromise
   }
 
-  /** 恢复运行服务用：先持久标记旧任务取消，不唤醒 SDK 全局调度器。
-   * ids 为空时不触及调度器状态检查：重新启用插件等无遗留任务的 prepare
-   * 不因调度器已恢复而被拒（无目标即无unsafe窗口）。 */
   async prepareInterruptedConversations(ids: number[]): Promise<void> {
     const targets = new Set(ids)
     if (targets.size === 0) return
@@ -959,13 +323,11 @@ export class KernelRuntime {
     }
     for (const task of inspection.tasks) {
       if (targets.has(task.record.conversationId as number)) {
-        // SDK abortTask 仅提交取消标记，不像 Conversation.abort()/submit() 那样 resume。
         await this.harness.abortTask(task.record.id, BACKGROUND_CONTEXT)
       }
     }
   }
 
-  /** 更新实际 hub URL（startHub(port:0) 拿到真实端口后调用；工具 env 即时生效）。 */
   setHubUrl(url: string): void {
     if (typeof url !== 'string' || url === '') {
       throw new HelmError('validation_error', `hub URL 必须是非空字符串：${String(url)}`, 400)
@@ -973,57 +335,35 @@ export class KernelRuntime {
     this.hubUrlValue = url
   }
 
-  /**
-   * 外部 spawn 环境变量（如 createHerdrPlugin 驱动远端/新窗格 CLI Agent）：
-   * 仅当前会话 SecretStash env + 受管 HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID /
-   * HELM_CWD / HELM_DATA_DIR / HELM_TOKEN（固定覆盖 stash 同名注入）；
-   * 绝不携带宿主 process.env（远端环境由目标机器自理，PATH/HOME 等不得外泄）。
-   * 仅供 app 组合层工厂注入，不进 protocol ctx.host。
-   */
   buildSpawnEnv(conversationId: number, cwd: string, nodeId?: string): Record<string, string> {
-    if (!Number.isInteger(conversationId) || conversationId <= 0) {
-      throw new HelmError(
-        'validation_error',
-        `buildSpawnEnv 需要正整数 conversationId（收到 ${String(conversationId)}）`,
-        400,
-        { conversationId },
-      )
-    }
-    if (typeof cwd !== 'string' || cwd === '') {
-      throw new HelmError('validation_error', `buildSpawnEnv 需要非空 cwd（收到 ${String(cwd)}）`, 400, {
-        cwd,
-      })
-    }
-    // 缺省解析会话绑定节点（显式 nodeId 优先；app 组合层注入 Herdr 用）。
-    const resolvedNodeId = nodeId ?? this.store.getConv(conversationId)?.nodeId ?? 'local'
-    return buildManagedEnv(this.toolDeps, cwd, conversationId, resolvedNodeId)
+    return this.svc.agentSpawn.buildSpawnEnv(conversationId, cwd, nodeId)
   }
 
   // ------------------------------------------------------------------
-  // 节点管理（NodeManager 委托）
+  // 节点管理委托（RuntimeNodeOperations）
   // ------------------------------------------------------------------
 
   async listNodes(): Promise<NodeInfo[]> {
-    return this.nodes.listNodes()
+    return this.nodeOps.listNodes()
   }
 
   async issueNodeToken(nodeId: string): Promise<NodeIssuedToken> {
-    return this.nodes.issueNodeToken(nodeId)
+    return this.nodeOps.issueNodeToken(nodeId)
   }
 
   async removeNode(nodeId: string): Promise<void> {
-    return this.nodes.removeNode(nodeId)
+    return this.nodeOps.removeNode(nodeId)
   }
 
   async checkNodeUpgrade(nodeId: string, input?: NodeUpgradeCheckInput): Promise<NodeUpgradeCheckResult> {
-    return this.nodes.checkNodeUpgrade(nodeId, input)
+    return this.nodeOps.checkNodeUpgrade(nodeId, input)
   }
 
   async upgradeNode(
     nodeId: string,
     input?: { targetVersion?: string; registryUrl?: string; force?: boolean },
   ): Promise<NodeUpgradeResult> {
-    return this.nodes.upgradeNode(nodeId, input)
+    return this.nodeOps.upgradeNode(nodeId, input)
   }
 
   async execEnv(
@@ -1031,21 +371,18 @@ export class KernelRuntime {
     onChunk?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void,
     signal?: AbortSignal,
   ): Promise<EnvExecResponse> {
-    return this.nodes.execEnv(req, onChunk, signal)
+    return this.nodeOps.execEnv(req, onChunk, signal)
   }
 
   // ------------------------------------------------------------------
-  // 产物授权 / 附件（ConversationService 委托）
+  // 产物授权 / 附件委托（ConversationService）
   // ------------------------------------------------------------------
 
   isArtifactAuthorized(conversationId: number, artifactConversationId: number): boolean {
     return this.conversations.isArtifactAuthorized(conversationId, artifactConversationId)
   }
 
-  async resolveAuthorizedAttachments(
-    conversationId: number,
-    attachmentIds: readonly string[],
-  ) {
+  async resolveAuthorizedAttachments(conversationId: number, attachmentIds: readonly string[]) {
     return this.conversations.resolveAuthorizedAttachments(conversationId, attachmentIds)
   }
 
@@ -1057,58 +394,36 @@ export class KernelRuntime {
   // 插件工具热装
   // ------------------------------------------------------------------
 
-  /**
-   * 插件宿主接入（外部已自建 PluginHost 的测试场景；正常路径由 initialize 自建）。
-   * listTools() 的 DerivedToolSpec 映射为真实 SDK 工具并经 registry 热装（同名扩展
-   * 原地替换，新回合生效，不影响在途回合）。
-   */
   attachPluginHost(host: PluginHost): void {
     this.pluginHost = host
-    this.toolRegistry.installPluginTools(host.listTools())
+    this.svc.toolRegistry.installPluginTools(host.listTools())
   }
 
-  /** 插件启停后热更新工具集（app 组合层与 enable/disable 路径调用）。 */
   refreshPluginTools(): void {
-    if (!this.pluginHost) return
-    this.toolRegistry.refreshPluginTools()
+    if (this.pluginHost === undefined) return
+    this.svc.toolRegistry.installPluginTools(this.pluginHost.listTools())
   }
 
   get plugins(): PluginHost {
-    if (!this.pluginHost) {
-      throw new HelmError('runtime_not_initialized', 'PluginHost 尚未初始化', 503)
+    if (this.pluginHost === undefined) {
+      throw new HelmError('internal_error', 'PluginHost 尚未接入 KernelRuntime（initialize 未调用）', 500)
     }
     return this.pluginHost
   }
 
-  private dispatchTurnSettled(payload: unknown, consumed: unknown): Promise<void> {
-    // 回合终态兑底：清理该会话未被 afterTool 消费的 handled 接管残留
-    //（block/abort/异常路径不会走 execute，残留会永久占据内存）。
-    const conversationId = (payload as { conversation?: { id?: number } }).conversation?.id
-    if (typeof conversationId === 'number') this.evictHandledToolCalls(conversationId)
-    const host = this.pluginHost
-    if (!host) return Promise.resolve()
-    void consumed
-    return host
-      .runHook('turn_settled', payload as never)
-      .then(() => undefined)
-      .catch((error) => {
-        this.events.publish('notification', {
-          level: 'error',
-          title: 'turn_settled 钩子执行失败',
-          body: String(error),
-        })
-      })
-  }
-
-  /** 清理指定会话在 handledToolCalls 中的未消费残留（回合终态/abort/删除兑底）。 */
-  private evictHandledToolCalls(conversationId: number): void {
-    for (const [callId, entry] of this.handledToolCalls) {
-      if (entry.conversationId === conversationId) this.handledToolCalls.delete(callId)
+  private async dispatchTurnSettled(payload: unknown, consumed: unknown): Promise<void> {
+    const convId = (payload as { conversationId: number }).conversationId
+    for (const [id, entry] of this.handledToolCalls) {
+      if (entry.conversationId === convId) this.handledToolCalls.delete(id)
     }
+    const turnEvent = { ...(payload as Record<string, unknown>), inputs: consumed }
+    const outcome = await this.svc.hookBridge.runHookChain('turn_settled', turnEvent)
+    if (outcome?.action === 'handled') return
+    this.events.publish('turn.settled', outcome?.action === 'transform' ? outcome.value : turnEvent)
   }
 
   // ------------------------------------------------------------------
-  // public：conversations（ConversationService 委托）
+  // 会话操作委托（ConversationService）
   // ------------------------------------------------------------------
 
   listConversations(filter?: { profileId?: string; tag?: string; status?: string }): ConversationSummary[] {
@@ -1119,10 +434,7 @@ export class KernelRuntime {
     return this.conversations.getConversation(id)
   }
 
-  async getConversationDetail(
-    id: number,
-    options?: { limit?: number; cursor?: string },
-  ): Promise<ConversationDetail> {
+  getConversationDetail(id: number, options?: Parameters<ConversationService['getConversationDetail']>[1]): Promise<ConversationDetail> {
     return this.conversations.getConversationDetail(id, options)
   }
 
@@ -1193,15 +505,6 @@ export class KernelRuntime {
     return this.conversations.alignProfileConversations(profileId)
   }
 
-  /**
-   * 通用单次文本补全端口（机制，不含任何业务策略）：
-   * - 模型解析与会话对齐：会话覆盖 > profile.model > 全局（resolveEffectiveModel，
-   *   解析失败如实上抛，绝不回退默认模型）；
-   * - 无 tools 单次请求（completeSimple），输入输出均过全局脱敏；
-   * - stopReason 非成功终态（error/aborted/length 等）显式拒绝，不返回部分文本；
-   * - signal 预先 aborted 或请求中取消立即以 aborted 上抛；超时与重试策略由
-   *   调用方（插件 helper）决定，本端口不做业务性 deadline。
-   */
   async completeConversationText(input: {
     conversationId: number
     systemPrompt: string
@@ -1209,271 +512,33 @@ export class KernelRuntime {
     maxTokens?: number
     signal?: AbortSignal
   }): Promise<string> {
-    input.signal?.throwIfAborted()
-    const meta = this.store.getConv(input.conversationId)
-    if (meta === undefined) {
-      throw new HelmError('not_found', `会话不存在：${input.conversationId}`, 404, { conversationId: input.conversationId })
-    }
-    const effective = await this.conversations.resolveEffectiveModel(meta.modelOverride, meta.profileId)
-    if (effective === undefined || effective === '') {
-      throw new HelmError('model_not_configured', `会话 ${input.conversationId} 未解析出生效模型，无法执行文本补全`, 409, { conversationId: input.conversationId })
-    }
-    const ref = requireModelRef(effective)
-    const model = this.modelsRegistry.models.getModel(ref.provider, ref.modelId)
-    if (model === undefined) {
-      throw new HelmError('model_not_found', `生效模型 '${effective}' 不在当前模型集合中（可能已热重载移除）`, 409, { model: effective })
-    }
-    // profile 解析是异步间隙：调用前再检查取消，取消后不得发起请求。
-    input.signal?.throwIfAborted()
-    // maxTokens 属于请求 options（completeSimple 第三参），不是 Context 字段；
-    // tools 不传即无工具单次请求。
-    const message = await this.modelsRegistry.models.completeSimple(model, {
-      systemPrompt: this.stash.redact(input.systemPrompt),
-      messages: [
-        {
-          role: 'user',
-          content: this.stash.redact(input.text),
-          timestamp: Date.now(),
-        },
-      ],
-    }, {
-      signal: input.signal,
-      ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
-    })
-    input.signal?.throwIfAborted()
-    if (message.stopReason !== 'stop') {
-      throw new HelmError(
-        'model_completion_unavailable',
-        `文本补全未成功结束（stopReason=${message.stopReason}${message.errorMessage !== undefined ? `：${this.stash.redact(String(message.errorMessage)).slice(0, 200)}` : ''}），拒绝返回部分文本`,
-        502,
-        { stopReason: message.stopReason },
-      )
-    }
-    const text = message.content
-      .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
-      .map((part) => part.text)
-      .join('')
-    return this.stash.redact(text)
+    return completeConversationTextHelper(
+      {
+        store: this.store,
+        conversations: this.conversations,
+        modelsRegistry: this.modelsRegistry,
+        stash: this.stashService,
+      },
+      input,
+    )
   }
 
   // ------------------------------------------------------------------
-  // trigger / spawn / workflow / watchdog
+  // 触发器委托（RuntimeTriggerDispatcher）
   // ------------------------------------------------------------------
 
-  /** defang 防逃逸信封：所有动态字段 XML 转义（防 </external_event> 注入）。 */
-  private defang(envelope: ExternalTriggerEnvelope): string {
-    const id = escapeXml(envelope.id)
-    const source = escapeXml(envelope.source)
-    const body = escapeXml(envelope.text)
-    return `<external_event id="${id}" source="${source}" untrusted="true">\n${body}\n</external_event>`
-  }
-
-  /**
-   * 无显式目标 trigger 的缺省投递靶点解析：
-   * - 无 targetConversationId 的信封（transform 可能已改写）进入本方法；
-   * - 选择 assistant Profile 下最新的无父链 human-owned 会话；ownership 只读权威
-   *   conversation-ownership 文档，不从 tags/parent 或摘要投影推断；
-   * - 没有候选时按需新建普通 assistant 会话，并合并同进程并发创建；Promise 完成后
-   *   即清理，不缓存可被删除的会话 ID，失败后可重试。
-   * 显式指定的目标在 trigger hook 运行前已校验存在，不会进入本方法。
-   */
-  private async resolveDefaultTriggerTarget(): Promise<number> {
-    const candidates = this.store
-      .listConvs()
-      .filter((c) =>
-        c.profileId === 'assistant' &&
-        c.parentConversationId === undefined &&
-        this.getConversationOwnership(c.id) === 'human',
-      )
-      .sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id)
-    if (candidates[0] !== undefined) return candidates[0].id
-
-    if (this.defaultTriggerTargetCreation !== undefined) return this.defaultTriggerTargetCreation
-    const creation = this.conversations.createConversation({
-      title: '个人助理',
-      profileId: 'assistant',
-      tags: ['assistant'],
-    }).then((created) => created.id)
-    this.defaultTriggerTargetCreation = creation
-    try {
-      return await creation
-    } finally {
-      if (this.defaultTriggerTargetCreation === creation) this.defaultTriggerTargetCreation = undefined
-    }
-  }
-
-  /** 外部触发：先校验原始显式目标，再运行可改写路由的 trigger hook。 */
   async dispatchTrigger(envelope: ExternalTriggerEnvelope): Promise<void> {
-    if (envelope.targetConversationId !== undefined) {
-      // Hook（包括 ThreadKey 直投）不得把无效的显式目标改写成有效目标来掩盖错误。
-      this.getConversation(envelope.targetConversationId)
-    }
-    const initial: ExternalTriggerEnvelope = { ...envelope, text: this.defang(envelope) }
-    const outcome = await this.hookBridge.runHookChain('trigger', initial)
-    if (outcome?.action === 'handled') return
-    let final = initial
-    if (outcome?.action === 'transform') {
-      final = outcome.value as ExternalTriggerEnvelope
-      // transform 后的 text 再防一次（插件可能替换了原文）。
-      final = { ...final, text: this.defang({ ...final, text: stripEnvelope(final.text) }) }
-    }
-    const target =
-      final.targetConversationId !== undefined
-        ? final.targetConversationId
-        : await this.resolveDefaultTriggerTarget()
-    await this.submitInput(target, final.text, { origin: 'trigger', whenBusy: 'followUp' })
+    return this.svc.triggers.dispatchTrigger(envelope)
   }
 
-  /** 子代理派生：agent_spawn around 管道（continuation）-> 默认原生 subagent。
-   * 内核零 Git/worktree 语义：隔离等执行环境要求由插件层经 next(finalReq)
-   * 兑现；内核只保留通用保证（schema 校验/gate 回报对账/结果验证）。 */
+  // ------------------------------------------------------------------
+  // 子代理派生委托（RuntimeAgentSpawn）
+  // ------------------------------------------------------------------
+
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
-    if (request.schema !== undefined) assertSchemaCompilable(request.schema)
-    const token = randomUUID()
-    if (request.resume !== undefined) {
-      const resumeId = /^\d+$/.test(request.resume) ? Number(request.resume) : this.agentSessions.get(request.resume)
-      const child = resumeId !== undefined ? this.store.getConv(resumeId) : undefined
-      if (child !== undefined && child.parentConversationId === request.parentConversationId) {
-        if ([...this.activeSpawnExecutions.values()].some((info) => info.conversationId === resumeId)) {
-          throw new HelmError('subagent_in_use', `子会话 ${resumeId} 仍有在途执行，不能并发续接`, 409)
-        }
-        this.activeSpawnExecutions.set(token, { conversationId: resumeId, nodeId: child.nodeId ?? 'local', effectiveCwd: child.cwd })
-      }
-    }
-    const originalResolved = request.onResolved
-    let execution: AgentExecutionInfo | undefined
-    let gate: ReturnType<typeof sanitizeGateResult> | undefined
-    const observed: AgentSpawnRequest = {
-      ...request,
-      onResolved: (raw) => {
-        const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
-        info.nodeId ??= info.conversationId !== undefined ? this.store.getConv(info.conversationId)?.nodeId : undefined
-        execution = info
-        this.activeSpawnExecutions.set(token, info)
-        originalResolved?.(info)
-      },
-      onGateResult: (raw) => {
-        gate = sanitizeGateResult(raw, { agentId: request.agentId ?? 'subagent' })
-        request.onGateResult?.(gate)
-      },
-    }
-    try {
-      const result = await this.spawnAgentObserved(observed)
-      if (request.schema !== undefined) {
-        const validation = validateJsonSchema(result, request.schema)
-        if (!validation.ok) throw new HelmError('schema_validation_failed', `子代理最终结果未满足 Schema：${validation.errors.join('; ')}`, 502)
-      }
-      if (request.gate !== undefined && execution?.executionId !== undefined && gate === undefined) {
-        throw gateResultMissingError({ agentId: request.agentId ?? 'subagent', executionId: execution.executionId, command: request.gate })
-      }
-      if (gate !== undefined && !gate.ok) throw new HelmError('gate_failed', `子代理验收命令失败：${gate.output}`, 502)
-      return result
-    } finally {
-      this.activeSpawnExecutions.delete(token)
-    }
+    return this.svc.agentSpawn.spawnAgent(request)
   }
 
-  private async spawnAgentObserved(request: AgentSpawnRequest): Promise<unknown> {
-    // 附件门禁在进入 hook 链之前：agent_spawn 钩子与原生执行行均受统一授权
-    // 保护（产物存在 + 父会话链归属）；插件 next 改写后再校验一次。
-    if (request.attachments !== undefined && request.attachments.length > 0) {
-      await this.resolveAuthorizedAttachments(request.parentConversationId, request.attachments)
-    }
-    // around（continuation）管道：插件可包裹完整生命周期（在 next 前分配资源、
-    // next 后收敛）；handled 仍可完全接管；无插件时直接默认原生执行。
-    return this.hookBridge.runHookAround('agent_spawn', request, async (finalRequest) => {
-      if (
-        finalRequest.attachments !== undefined &&
-        finalRequest.attachments.length > 0 &&
-        finalRequest !== request
-      ) {
-        await this.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
-      }
-      const resolvedAttachments =
-        finalRequest.attachments !== undefined && finalRequest.attachments.length > 0
-          ? await this.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
-          : undefined
-      // 显式命名的 SpawnHost（原 60+ 行内联对象字面量的提炼）。
-      return runNativeSpawn(
-        buildSpawnHost({
-          finalRequest,
-          source: {
-            toolDeps: this.toolDeps,
-            harness: this.harness,
-            tracker: { getLastAssistantText: (id) => this.tracker.getLastAssistantText(id) },
-            defaultModel: this.modelsRegistry.defaultModel,
-            defaultThinkingLevel: this.modelsRegistry.defaultThinkingLevel,
-            agentSessions: this.agentSessions,
-            resolvedAttachments,
-            isNodeOnline: (nodeId) => this.envFabric.isOnline(nodeId),
-            buildAttachmentBlock: (resolved) => this.conversations.buildAttachmentBlock(resolved),
-            readProfileForSpawn: (profileId) => this.conversations.readProfile(profileId),
-            getConvMeta: (childId) => this.store.getConv(childId),
-            getConversationSummary: (childId) => {
-              const meta = this.store.getConv(childId)
-              return meta ? this.tracker.summaryOf(childId) : undefined
-            },
-            updateConversation: (childId, patch) => this.updateConversation(childId, patch),
-            installExtension: (extension) => {
-              this.registry.install(extension as never)
-            },
-            registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, parentToolCallId) => {
-              const profile = await this.conversations.readProfile(profileId)
-              const now = Date.now()
-              this.store.upsertConv({
-                id: childId,
-                title: `子代理 ${childId}`,
-                profileId,
-                // 内核零角色硬编码：tags 由调用方策略决定（原生 spawn 传 []）。
-                tags,
-                parentConversationId: parentId,
-                ...(parentToolCallId !== undefined && parentToolCallId !== ''
-                  ? { parentToolCallId }
-                  : {}),
-                // 与普通创建一致：Profile 节点优先于父会话缺省节点。
-                nodeId: nodeId ?? profile?.nodeId ?? this.store.getConv(parentId)?.nodeId ?? 'local',
-                cwd: childCwd,
-                model: modelMirror,
-                thinkingLevel: thinkingLevel ?? '',
-                thinkingLevelOverride: finalRequest.effort,
-                ...(finalRequest.model !== undefined && finalRequest.model !== '' ? { modelOverride: finalRequest.model } : {}),
-                unread: false,
-                pinned: false,
-                stateChangeSeq: 1,
-                completionSeq: 0,
-                createdAt: now,
-                updatedAt: now,
-              })
-              // 原生 spawn 自动 helm 归属（Watchdog 红线判定唯一可信来源）。
-              this.markConversationOwnership(childId, 'helm')
-              await this.tracker.observe(childId)
-              // 创建瞬间即广播含 parentConversationId / parentToolCallId 的摘要：
-              // 前端在 subagent 运行期 0ms 关联子会话，不等首轮摘要指纹变化。
-              if (this.store.getConv(childId) !== undefined && !this.store.isDeleted(childId)) {
-                this.events.publish('conversation.upsert', this.conversations.withOwnership(this.tracker.summaryOf(childId)))
-              }
-            },
-            bindChildToolCall: (childId, parentToolCallId) => {
-              const meta = this.store.getConv(childId)
-              if (meta === undefined || meta.parentToolCallId === parentToolCallId) return
-              this.store.upsertConv({ ...meta, parentToolCallId, updatedAt: Date.now() })
-              if (!this.store.isDeleted(childId)) {
-                this.events.publish('conversation.upsert', this.conversations.withOwnership(this.tracker.summaryOf(childId)))
-              }
-            },
-          },
-        }),
-        finalRequest,
-      )
-    })
-  }
-
-  /**
-   * gate 门禁（独立 spawn 与 Workflow adapter 共用，只执行一次）。
-   * env：调用方（herdr 插件）注入 Profile.runtime.env 与管理环境组成的
-   * spawnEnv，使本机 Gate 读到与实际 Herdr 任务一致的 CI/工具路径；
-   * 受管变量（HELM_* 与受管 token）仍固定覆盖注入值（见 buildToolEnv）。
-   */
   runGate(
     command: string,
     options: {
@@ -1484,168 +549,90 @@ export class KernelRuntime {
       env?: Record<string, string>
     } = {},
   ): Promise<{ ok: boolean; output: string }> {
-    // 靶点解析与 execEnv 同铨：显式 nodeId > 会话绑定 > 'local'。
-    // 远端会话的 gate 必须在远端节点执行（绝不误跑 Hub 本机）。
-    let nodeId = options.nodeId
-    if (nodeId === undefined && options.conversationId !== undefined) {
-      nodeId = this.store.getConv(options.conversationId)?.nodeId
-    }
-    return runGate(this.toolDeps, command, { ...options, ...(nodeId !== undefined ? { nodeId } : {}) })
+    return this.svc.agentSpawn.runGate(command, options)
   }
 
-  /**
-   * 通用 spawn 靶点解析（ctx.host.resolveSpawnTarget 后端）：与原生执行行
-   * 同构的链——源目录 request.cwd > profile.cwd > 父会话 cwd；节点
-   * profile.nodeId > 父会话绑定节点 > 'local'。不含业务路由；父会话或
-   * Profile 不存在时如实抛 not_found，绝不编造。
-   */
   async resolveSpawnTarget(input: {
     parentConversationId: number
     profileId?: string
     requestCwd?: string
   }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }> {
-    const parent = this.store.getConv(input.parentConversationId)
-    if (parent === undefined) {
-      throw new HelmError('not_found', `父会话 ${input.parentConversationId} 不存在，无法解析 spawn 靶点`, 404, {
-        parentConversationId: input.parentConversationId,
-      })
-    }
-    const profileId = input.profileId ?? 'assistant'
-    const profile = await this.conversations.readProfile(profileId)
-    if (profile === undefined) {
-      throw new HelmError('not_found', `agentType '${profileId}' 不是已注册的 Profile（profiles/${profileId} 不存在）`, 404)
-    }
-    const nodeId = profile.nodeId ?? parent.nodeId ?? 'local'
-    const sourceCwd = input.requestCwd ?? profile.cwd ?? parent.cwd ?? this.toolDeps.defaultCwd
-    return { nodeId, sourceCwd, parentCwd: parent.cwd }
+    return this.svc.agentSpawn.resolveSpawnTarget(input)
   }
 
-  /** 当前进程内仍在执行的 spawn 执行事实（ctx.host.listActiveSpawnExecutions 后端）。 */
   listActiveSpawnExecutions(): AgentExecutionInfo[] {
-    return [...this.activeSpawnExecutions.values()].map((info) => ({ ...info }))
+    return this.svc.agentSpawn.listActiveSpawnExecutions()
   }
 
-  /**
-   * 目标节点真实 fs 探测（ctx.host.probeNodeFs 后端）：经 EnvFabric 在目标
-   * 节点真实执行 exists / canonicalPath；探测失败（节点离线/权限/超时）
-   * 如实 reject，绝不编造。输出经全局脱敏。
-   */
   async probeNodeFs(input: {
     nodeId: string
     op: 'exists' | 'canonicalPath'
     path: string
     signal?: AbortSignal
   }): Promise<{ value: string | boolean }> {
-    if (typeof input.nodeId !== 'string' || input.nodeId === '') {
-      throw new HelmError('validation_error', `probeNodeFs 需要非空 nodeId（收到 ${String(input.nodeId)}）`, 400)
-    }
-    if (input.op !== 'exists' && input.op !== 'canonicalPath') {
-      throw new HelmError('validation_error', `probeNodeFs op 仅允许 exists | canonicalPath（收到 ${String(input.op)}）`, 400)
-    }
-    if (typeof input.path !== 'string' || input.path === '') {
-      throw new HelmError('validation_error', 'probeNodeFs 需要非空 path', 400)
-    }
-    const env = this.envFabric.envFor(input.nodeId, input.path)
-    const context = input.signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(input.signal, BACKGROUND_CONTEXT)
-    const result = input.op === 'exists'
-      ? await env.exists(input.path, context)
-      : await env.canonicalPath(input.path, context)
-    if (!result.ok) {
-      throw new HelmError(
-        'node_fs_probe_failed',
-        `节点 ${input.nodeId} 上 ${input.op}('${this.stash.redact(input.path)}') 探测失败：${result.error.code}: ${this.stash.redact(result.error.message)}`,
-        502,
-        { nodeId: input.nodeId, op: input.op, path: this.stash.redact(input.path) },
-      )
-    }
-    return { value: result.value }
+    return this.svc.agentSpawn.probeNodeFs(input)
   }
 
-  /**
-   * 技能目录坐标（仅 id 边界校验；目录可能尚不存在，宿主不 mkdir）。
-   */
-  private async skillDirectory(id: string): Promise<string> {
-    try {
-      assertSkillId(id)
-    } catch (err) {
-      throw new HelmError(
-        'validation_error',
-        `Skill id 非法：${err instanceof Error ? err.message : String(err)}`,
-        400,
-        { skillId: id },
-      )
-    }
-    return join(this.dataDir, 'skills', id)
+  // ------------------------------------------------------------------
+  // 目录坐标查询
+  // ------------------------------------------------------------------
+
+  async skillDirectory(id: string): Promise<string> {
+    return skillDirectoryHelper(this.dataDir, id)
   }
 
-  /**
-   * Profile 资产目录坐标（仅 id 边界校验；目录可能尚不存在——首次初始化由
-   * 调用方创建，宿主不 mkdir）。供插件管理同目录自有资产，不做 ../.. 逃逸。
-   */
-  private async profileDirectory(id: string): Promise<string> {
-    // id 边界规范化：assertProfileId 私有 Error 归一为公共 HelmError 400
-    // （与 get() 同口径，不外泄 kernel 私有构造器）。
-    assertProfileIdPublic(id)
-    return join(this.dataDir, 'profiles', id)
+  async profileDirectory(id: string): Promise<string> {
+    return profileDirectoryHelper(this.dataDir, id)
   }
 
-  /** 会话归属权现读（未标记一律 human）：
-   * - 会话不存在（含已删除 tombstone）时抛 not_found，绝不把已删会话的
-   *   残留登记当作可执行授权返回；
-   * - 未标记/标记非法值一律 human（宁漏管不越权）。
-   */
-  getConversationOwnership(conversationId: number): 'helm' | 'bot' | 'human' {
-    const meta = this.store.getConv(conversationId)
-    if (meta === undefined || this.store.isDeleted(conversationId)) {
-      throw new HelmError('not_found', `会话不存在：${conversationId}`, 404, { conversationId })
-    }
-    const owners = this.documentStore.get<Record<string, string>>('conversation-ownership', {})
-    const marked = owners[String(conversationId)]
-    return marked === 'helm' || marked === 'bot' ? marked : 'human'
+  // ------------------------------------------------------------------
+  // 会话归属与运行事实委托（RuntimeOwnershipManager）
+  // ------------------------------------------------------------------
+
+  getConversationOwnership(conversationId: number): ConversationOwnership {
+    return this.svc.ownership.getOwnership(conversationId)
   }
 
-  /**
-   * 只读运行事实（ctx.host.getConversationActivity 后端）：基于真实活动
-   * 变更与回合结算计数，无在途 run 时不报停滞（空闲非停滞）；策略消费
-   * 归插件（如 superagent Watchdog），内核零业务判定。
-   */
   getConversationActivity(conversationId: number): { stalledMs?: number; consecutiveErrors: number } {
     const meta = this.store.getConv(conversationId)
     if (meta === undefined || this.store.isDeleted(conversationId)) {
       throw new HelmError('not_found', `会话不存在：${conversationId}`, 404, { conversationId })
     }
-    return this.tracker.getProbeFacts(conversationId)
+    return this.svc.tracker.getProbeFacts(conversationId)
   }
 
   // ------------------------------------------------------------------
-  // asks / models / services
+  // 异步审批委托（AskService）
   // ------------------------------------------------------------------
 
   listAsks(status?: string): AskSpec[] {
-    return this.asks.listAsks(status)
+    return this.svc.asks.listAsks(status)
   }
 
   async createAsk(spec: AskCreateSpec): Promise<AskResult> {
-    return this.asks.createAsk(spec)
+    return this.svc.asks.createAsk(spec)
   }
 
   async answerAsk(id: string, answers: Record<string, string>, expectedStateSeq?: number): Promise<AskSpec> {
-    return this.asks.answerAsk(id, answers, expectedStateSeq)
+    return this.svc.asks.answerAsk(id, answers, expectedStateSeq)
   }
 
   async cancelAsk(id: string, reason?: 'cancelled' | 'superseded'): Promise<void> {
-    await this.asks.cancelAsk(id, reason ?? 'cancelled')
+    await this.svc.asks.cancelAsk(id, reason ?? 'cancelled')
   }
 
   registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void {
-    return this.asks.registerSeqResolver(resolver)
+    return this.svc.asks.registerSeqResolver(resolver)
   }
+
+  // ------------------------------------------------------------------
+  // 模型集合与 Provider 管理委托（ModelRegistry）
+  // ------------------------------------------------------------------
 
   async listModels(): Promise<ModelCatalog> {
     return this.modelsRegistry.listModels()
   }
 
-  /** 设置全局默认模型与思考档位（config.json）：格式校验后原子写入并即时生效；空串删除键。 */
   async setDefaultModel(model?: string, thinkingLevel?: string): Promise<void> {
     const validateLevel = (level: string) => {
       if (!THINKING_LEVELS.has(level)) {
@@ -1663,17 +650,21 @@ export class KernelRuntime {
     return this.modelsRegistry.listModelProviders()
   }
 
-  /** 重建并发布模型集（providers/credentials/运行时供应商变化共用）。 */
   async reloadModels(): Promise<void> {
     return this.modelsRegistry.reloadModels()
   }
 
-  /** 运行时注册动态供应商（插件经 HostOptions.providers.register 注入）。 */
-  async registerRuntimeProvider(provider: Parameters<ModelRegistry['registerRuntimeProvider']>[0], pluginId?: string): Promise<() => Promise<void>> {
+  async registerRuntimeProvider(
+    provider: Parameters<ModelRegistry['registerRuntimeProvider']>[0],
+    pluginId?: string,
+  ): Promise<() => Promise<void>> {
     return this.modelsRegistry.registerRuntimeProvider(provider, pluginId)
   }
 
-  /** 刷新动态模型目录（POST /api/models/refresh）。 */
+  assertRuntimeProvidersIdle(pluginId: string): void {
+    this.modelsRegistry.assertRuntimeProvidersIdle(pluginId)
+  }
+
   async refreshModels(options?: {
     providers?: string[]
     allowNetwork?: boolean
@@ -1682,120 +673,33 @@ export class KernelRuntime {
     return this.modelsRegistry.refreshModels(() => this.closed, options)
   }
 
-  /** teardown 预检：插件 owner 的运行时供应商在途请求拒绝（409）。 */
-  assertRuntimeProvidersIdle(pluginId: string): void {
-    this.modelsRegistry.assertRuntimeProvidersIdle(pluginId)
+  markConversationOwnership(conversationId: number, owner: ConversationOwnership): void {
+    this.svc.ownership.markOwnership(conversationId, owner)
   }
 
-  /**
-   * 全局文档存储端口（PluginHost docs 与内核元数据共用同一 SQLite 镜像与队列）：
-   * - get(key, initial)：同步读，缺省返回 initial（不落盘）；
-   * - set(key, value)：同步镜像 + 排队持久化（helm_plugin_docs 全局命名空间）；
-   * - flush()：等待队列冲刷完成（失败显式抛 store_flush_failed）。
-   * PluginHost 使用 '<pluginId>:<doc>' 隔离插件文档，内核元数据使用独立键。
-   */
-  readonly documentStore: {
-    get<T>(key: string, initial: T): T
-    set<T>(key: string, value: T): void
-    flush(): Promise<void>
-  } = {
-    get: <T>(key: string, initial: T): T => {
-      const raw = this.store.getPluginDoc('__global', key)
-      if (raw === undefined) return initial
-      return JSON.parse(raw) as T
-    },
-    set: <T>(key: string, value: T): void => {
-      this.store.putPluginDoc('__global', key, JSON.stringify(value))
-    },
-    flush: () => this.store.flushPublic(),
-  }
-
-  /**
-   * 会话归属权标记（Watchdog 红线判定唯一可信来源）：
-   * - 不依赖用户可改的 tags/parent 推断；未标记一律视为 human（宁漏管不越权）；
-   * - 持久化于全局 doc（'conversation-ownership'），重启保留。
-   */
-  markConversationOwnership(conversationId: number, owner: 'helm' | 'bot' | 'human'): void {
-    const key = 'conversation-ownership'
-    const current = this.documentStore.get<Record<string, string>>(key, {})
-    const previous = current[String(conversationId)]
-    // 有效值对比：未标记与 human 等价（human = 移除自动化归属），无变化不发布事件。
-    const previousEffective = previous === 'helm' || previous === 'bot' ? previous : 'human'
-    if (previousEffective === owner) return
-    const next = owner === 'human'
-      ? (() => {
-          // 标记 human = 移除自动化归属（回退默认判定），不留冗余键。
-          const { [String(conversationId)]: _removed, ...rest } = current
-          void _removed
-          return rest
-        })()
-      : { ...current, [String(conversationId)]: owner }
-    this.documentStore.set(key, next)
-    // 归属变化即投射：现存会话发 conversation.upsert（携带最新 ownedBy），
-    // 前端 store 实时感知；已删会话（deleteConversation 兑底清理）无摘要可发，
-    // 静默跳过（conversation.deleted 已另行发布）。
-    if (this.store.getConv(conversationId) === undefined || this.store.isDeleted(conversationId)) return
-    this.events.publish('conversation.upsert', this.conversations.summaryWithOwnership(conversationId))
-  }
-
-  /**
-   * 插件会话管理权（删除保护）：仅已启用插件可持有；返回释放函数。
-   * 同一插件重复 manage 幂等（一次 release 即全释）；插件停用生命周期由
-   * PluginHost 调 releaseConversationOwnership 释放。
-   */
   manageConversation(conversationId: number, pluginId: string): () => void {
-    let owners = this.managedConversations.get(conversationId)
-    if (owners === undefined) {
-      owners = new Set()
-      this.managedConversations.set(conversationId, owners)
-    }
-    owners.add(pluginId)
-    let released = false
-    return () => {
-      if (released) return
-      released = true
-      this.releaseConversationOwnership(conversationId, pluginId)
-    }
+    return this.svc.ownership.manage(conversationId, pluginId)
   }
 
-  /** 释放指定插件对会话的管理权（无持有则幂等同式）。 */
-  private releaseConversationOwnership(conversationId: number, pluginId: string): void {
-    const owners = this.managedConversations.get(conversationId)
-    if (!owners) return
-    owners.delete(pluginId)
-    if (owners.size === 0) this.managedConversations.delete(conversationId)
-  }
+  // ------------------------------------------------------------------
+  // 服务与上下文 Getters
+  // ------------------------------------------------------------------
 
-  /** HTTP 固定消费面：public services（与 contracts.KernelRuntimeLike 一致）。 */
-  get profiles(): ProfileService {
-    return this.profilesSvc
-  }
+  get hubUrl(): string { return this.hubUrlValue }
+  get processToken(): string | undefined { return this.processTokenHandle?.tokenOf() }
+  get pluginConfigStore(): HelmPluginConfigStore { return this.svc.pluginConfig }
+  get profiles(): ProfileService { return this.svc.profilesSvc }
+  get skills(): SkillService { return this.svc.skillsSvc }
+  get artifacts(): SvcArtifactService { return this.svc.artifactsSvc }
+  get auth(): SvcAuthService { return this.svc.authSvc }
+  get credentials(): CredentialService { return this.svc.credentialsSvc }
+  get providers(): ProviderService { return this.svc.providersSvc }
+  get stash(): SecretStash { return this.stashService }
+  /** @internal 供测试与内部协调读取 tracker */
+  private get tracker() { return this.svc.tracker }
+  /** @internal 供测试读取内部 toolDeps */
+  private get toolDeps() { return this.svc.toolDeps }
 
-  get skills(): SkillService {
-    return this.skillsSvc
-  }
-
-  get artifacts(): SvcArtifactService {
-    return this.artifactsSvc
-  }
-
-  get auth(): SvcAuthService {
-    return this.authSvc
-  }
-
-  get credentials(): CredentialService {
-    return this.credentialsSvc
-  }
-
-  get providers(): ProviderService {
-    return this.providersSvc
-  }
-
-  get stash(): SecretStash {
-    return this.stashService
-  }
-
-  /** 兼容旧消费方的聚合入口（新代码请用具名 getter）。 */
   get services(): {
     profiles: ProfileService
     skills: SkillService
@@ -1806,25 +710,21 @@ export class KernelRuntime {
     stash: SecretStash
   } {
     return {
-      profiles: this.profilesSvc,
-      skills: this.skillsSvc,
-      artifacts: this.artifactsSvc,
-      auth: this.authSvc,
-      credentials: this.credentialsSvc,
-      providers: this.providersSvc,
+      profiles: this.svc.profilesSvc,
+      skills: this.svc.skillsSvc,
+      artifacts: this.svc.artifactsSvc,
+      auth: this.svc.authSvc,
+      credentials: this.svc.credentialsSvc,
+      providers: this.svc.providersSvc,
       stash: this.stashService,
     }
-  }
-
-  get safeSummaryRef() {
-    return (id: number) => this.safeSummary(id)
   }
 
   private safeSummary(id: number): ConversationSummary | undefined {
     const meta = this.store.getConv(id)
     if (!meta) return undefined
     try {
-      return this.conversations.withOwnership(this.tracker.summaryOf(id))
+      return this.conversations.withOwnership(this.svc.tracker.summaryOf(id))
     } catch {
       return this.conversations.withOwnership(summaryOfFallback(meta, 'idle', 0))
     }
@@ -1837,70 +737,23 @@ export class KernelRuntime {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
-    this.modelsRegistry.abortRefresh(new Error('kernel closing'))
-    // 1) 停资产监听（不再产生新副作用）。
-    this.assetReloader.stop()
-    await this.nodes.dispose()
-    // 2) 等待在途 reloadModels（可能还在写 models 引用）。
-    await this.assetReloader.waitForInflight()
-    await this.modelsRegistry.dispose()
-    // 3) 等待 turn_settled 钩子在途执行。
-    await this.settledInflight
-    // 4) 显式 abort 全部在途会话（SDK 任务收敛 + aborted 结算；空闲会话不结算）。
-    for (const meta of this.store.listConvs()) {
-      const conversation = await this.harness
-        .conversation(meta.id as never, BACKGROUND_CONTEXT)
-        .catch(() => undefined)
-      if (!conversation) continue
-      const wasBusy = this.tracker.hasLiveWork(meta.id)
-      this.closeAborts.push(
-        conversation
-          .abort(BACKGROUND_CONTEXT)
-          .then(() => {
-            if (wasBusy) this.tracker.settleAborted(meta.id)
-          })
-          .catch(() => {
-            /* abort 失败继续关停其余（close 本身会显式抛 store 错误） */
-          }),
-      )
-    }
-    await Promise.allSettled(this.closeAborts)
-    await this.settledInflight
-    await this.pluginHost?.dispose()
-    // 4.5) 节点底座：断开全部远端连接（关 socket/rpc、杀远端命令）。
-    await this.envFabric.dispose().catch(() => {
-      /* dispose 尽力而为；后续 store 错误仍如实上报 */
+    await teardownKernelRuntime({
+      modelsRegistry: this.modelsRegistry,
+      assetReloader: this.svc.assetReloader,
+      nodes: this.nodes,
+      settledInflight: this.settledInflight,
+      store: this.store,
+      harness: this.harness,
+      tracker: this.svc.tracker,
+      pluginHost: this.pluginHost,
+      envFabric: this.envFabric,
+      processTokenHandle: this.processTokenHandle,
+      database: this.database,
+      events: this.events,
+      sessionDocStreams: this.svc.sessionDocStreams,
+      sessionDocLifecycleRelease: this.svc.sessionDocLifecycleRelease,
+      stashService: this.stashService,
     })
-    // 5) 受管进程 token 销毁（此后工具子进程鉴权不再认它）。
-    this.processTokenHandle?.dispose()
     this.processTokenHandle = undefined
-    // 6) SDK 先关（此后无任何 SDK 写），再 flush store，最后关数据库。
-    await this.harness.close(BACKGROUND_CONTEXT)
-    const storeError = await this.store.close()
-    await this.database.close()
-    this.events.close()
-    this.sessionDocLifecycleRelease?.()
-    this.sessionDocLifecycleRelease = undefined
-    this.sessionDocStreams.close()
-    this.stashService.clear()
-    if (storeError !== undefined) {
-      throw new HelmError('store_flush_failed', `退出时持久化失败：${String(storeError)}`, 500, {
-        error: String(storeError),
-      })
-    }
-  }
-}
-
-/** models-store.json 启动损坏检测（open 阶段；语义同 ModelRegistry 内同名逻辑）。 */
-async function assertModelsStoreHealthyAtBoot(models: Models): Promise<void> {
-  const result = await models.refresh({ allowNetwork: false })
-  for (const [, err] of result.errors) {
-    if (err instanceof HelmError && err.code === 'models_store_corrupted') {
-      throw new HelmError(
-        'models_store_corrupted',
-        `models-store.json 损坏（读取时发现）：${err.message}`,
-        500,
-      )
-    }
   }
 }
