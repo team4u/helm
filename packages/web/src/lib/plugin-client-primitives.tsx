@@ -6,7 +6,7 @@
  * - 不使用 Portal、不触碰 document / window，renderToString 可直接渲染；
  * - 文件只导出组件与 TS 类型（宿主 Fast Refresh 契约同源）。
  */
-import { Fragment, type ReactNode } from 'react'
+import { Children, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { HelmIcon } from './icons.js'
 
 function joinClass(...parts: Array<string | undefined>): string {
@@ -114,21 +114,36 @@ export interface DataTableProps {
   children: ReactNode
 }
 
-/** 计算占位行 colSpan：显式声明优先，否则数 thead 第一行的 th/td 数量。 */
+/** 展开 JSX Fragment，保留有效 React 元素。 */
+function flattenElements(node: ReactNode): ReactElement[] {
+  return Children.toArray(node).flatMap((child) => {
+    if (!isValidElement(child)) return []
+    if (child.type === Fragment) {
+      const props = child.props as { children?: ReactNode }
+      return flattenElements(props.children)
+    }
+    return [child]
+  })
+}
+
+/** 计算占位行 colSpan：显式声明优先，否则统计 thead 第一行单元格的 colSpan。 */
 function inferColSpan(columns: number | undefined, children: ReactNode): number {
-  if (columns !== undefined && columns > 0) return columns
-  const rows: Array<{ props: { children?: ReactNode } }> =
-    Array.isArray(children) ? (children as Array<{ props: { children?: ReactNode } }>) : []
-  const thead = rows.find(
-    (child) => child !== null && typeof child === 'object' && 'props' in child,
-  )?.props?.children
-  const headRow = Array.isArray(thead) ? thead[0] : thead
-  if (headRow !== null && typeof headRow === 'object' && 'props' in headRow) {
-    const cells = (headRow as { props?: { children?: unknown } }).props?.children
-    if (Array.isArray(cells)) return cells.length
-    if (cells !== null && typeof cells === 'object' && 'props' in (cells as object)) return 1
-  }
-  return 1
+  if (columns !== undefined && Number.isInteger(columns) && columns > 0) return columns
+  const thead = flattenElements(children).find((child) => child.type === 'thead')
+  const row = thead === undefined
+    ? undefined
+    : flattenElements((thead.props as { children?: ReactNode }).children).find((child) => child.type === 'tr')
+  if (row === undefined) return 1
+
+  const cells = flattenElements((row.props as { children?: ReactNode }).children)
+  const span = cells.reduce((total, cell) => {
+    const cellProps = cell.props as { colSpan?: unknown }
+    const colSpan = typeof cellProps.colSpan === 'number' && Number.isInteger(cellProps.colSpan) && cellProps.colSpan > 0
+      ? cellProps.colSpan
+      : 1
+    return total + colSpan
+  }, 0)
+  return span || 1
 }
 
 /**

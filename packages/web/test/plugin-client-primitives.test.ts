@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
+import { Fragment } from 'react'
 import { renderToString } from 'react-dom/server'
 import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helm/protocol'
 import * as HelmPluginClient from '../src/lib/plugin-client-sdk.js'
@@ -86,6 +87,23 @@ test('DataTable：loading 态渲染统一加载行（role=status），不渲染 
   assert.doesNotMatch(html, /<thead/, 'loading 时不渲染 children 表头')
 })
 
+test('DataTable：缺省 columns 时从唯一 thead 及 Fragment 中正确推断 colSpan（含单元格 colSpan）', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(
+      DataTable,
+      {
+        loading: true,
+        children: e(
+          'thead',
+          null,
+          e('tr', null, e('th', { colSpan: 2 }, '分组'), e(Fragment, { key: 'status' }, e('th', null, '状态'))),
+        ),
+      },
+    ),
+  )
+  assert.match(html, /<td colSpan="3">/, '应将首行单元格的 colSpan 求和')
+})
+
 test('DataTable：empty 态渲染 .table-empty 占位行；数据态透传 children', { timeout: 60_000 }, () => {
   const empty = renderToString(
     e(DataTable, {
@@ -103,8 +121,8 @@ test('DataTable：empty 态渲染 .table-empty 占位行；数据态透传 child
     e(DataTable, {
       label: '任务表',
       children: [
-        e('thead', null, e('tr', null, e('th', null, 'ID'), e('th', null, '名称'))),
-        e('tbody', null, e('tr', null, e('td', null, '1'), e('td', null, '任务一'))),
+        e('thead', { key: 'head' }, e('tr', null, e('th', null, 'ID'), e('th', null, '名称'))),
+        e('tbody', { key: 'body' }, e('tr', null, e('td', null, '1'), e('td', null, '任务一'))),
       ],
     }),
   )
