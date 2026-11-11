@@ -561,7 +561,10 @@ async function route(
       return jsonOk(redactor, await kernel.plugins.list())
     }
     if (third === 'disable' && method === 'POST' && fourth === undefined) {
-      await kernel.plugins.disable(pluginId)
+      const opts = await parseOptionalJsonObjectBody(ctx.request, parsePluginDisableBody)
+      const queryForce = parseOptionalBooleanFlag(ctx.url, 'force')
+      const force = opts.force === true || queryForce === true
+      await kernel.plugins.disable(pluginId, force ? { force: true } : undefined)
       return jsonOk(redactor, await kernel.plugins.list())
     }
     // 外部插件受控热重载（POST /api/plugins/:id/reload）：预检失败旧实例保持不动。
@@ -573,13 +576,22 @@ async function route(
     }
     if (third === 'config' && fourth === undefined) {
       if (method === 'GET') {
-        const [raw, schema] = await Promise.all([
+        const [raw, schema, sources] = await Promise.all([
           Promise.resolve(kernel.plugins.getConfig(pluginId)),
           Promise.resolve(kernel.plugins.getConfigSchema(pluginId)),
+          Promise.resolve(
+            kernel.plugins.getConfigSources !== undefined
+              ? kernel.plugins.getConfigSources(pluginId)
+              : undefined,
+          ),
         ])
         // secret 字段按 schema 脱敏出站：绝不让明文离开服务端。
         const values = redactConfigValues(raw, schema)
-        return jsonOk(redactor, { values, schema })
+        return jsonOk(redactor, {
+          values,
+          schema,
+          ...(sources !== undefined ? { sources } : {}),
+        })
       }
       if (method === 'PUT') {
         const body = await readJsonBody(ctx.request)
@@ -1157,6 +1169,22 @@ function parseWaitFlag(url: URL): boolean {
   if (raw === null) return false
   if (raw === '1' || raw === 'true') return true
   throw new ValidationError('wait 需为 1（如 ?wait=1）')
+}
+
+function parseOptionalBooleanFlag(url: URL, param: string): boolean | undefined {
+  const raw = url.searchParams.get(param)
+  if (raw === null) return undefined
+  if (raw === '1' || raw === 'true') return true
+  if (raw === '0' || raw === 'false') return false
+  throw new ValidationError(`${param} 需为 1/0 或 true/false`)
+}
+
+function parsePluginDisableBody(body: Record<string, unknown>): { force?: boolean } {
+  rejectUnknownKeys(body, new Set(['force']))
+  const raw = body['force']
+  if (raw === undefined) return {}
+  if (typeof raw !== 'boolean') throw new ValidationError('force 需为 boolean')
+  return { force: raw }
 }
 
 function isSafeRelativePath(path: string): boolean {

@@ -407,6 +407,16 @@ export interface PluginDocOptions {
   public?: boolean
 }
 
+/** 插件服务声明的静态持久资源占用项（停用前 inUse 预检使用）。 */
+export interface PluginInUseItem {
+  /** 占用资源类别标识（如 'cron_job'、'webhook_endpoint'、'profile_runtime'、'profile_model'）。 */
+  kind: string
+  /** 资源唯一标识。 */
+  id: string
+  /** 面向用户的可读占用说明。 */
+  label: string
+}
+
 export interface PluginServiceSpec {
   id: string
   /**
@@ -426,6 +436,12 @@ export interface PluginServiceSpec {
   liveTasks?(): string[]
   /** 声明本服务当前正在占用的工作树/目录路径（通用机制面：供具备清理或探测能力的消费方拒绝误碰在途占用）。 */
   liveWorktrees?(): Array<{ nodeId: string; path: string }>
+  /**
+   * 声明本服务当前管辖的持久生效资源（非瞬态运行中任务）。
+   * 非空时默认阻止停用（409 plugin_in_use），除非调用方显式指定 force: true。
+   * 函数抛错时按「未知即占用」原则拒绝停用，绝不静默当空放行。
+   */
+  inUse?(): MaybePromise<PluginInUseItem[]>
 }
 
 /** Web Standard 原始路由（Request/Response 为 DOM lib 类型）。 */
@@ -458,9 +474,31 @@ export interface PluginConfigFieldSchema {
   required?: boolean
 }
 
+/** 插件配置字段来源：configured（用户显式持久化覆写）、default（回退 schema.default）、unset（未配置且无 default）。 */
+export type PluginConfigFieldSource = 'configured' | 'default' | 'unset'
+
+/** GET /api/plugins/:id/config 响应体。 */
+export interface PluginConfigResponse {
+  values: Record<string, unknown>
+  schema: Record<string, PluginConfigFieldSchema>
+  sources?: Record<string, PluginConfigFieldSource>
+}
+
 // ---------------------------------------------------------------------------
 // 可串行化清单（GET /api/plugins 与 GET /api/actions）
 // ---------------------------------------------------------------------------
+
+/** 插件运行状态：active（已启用且正常）、disabled（已停用）、failed（加载或启用失败）。 */
+export type PluginStatus = 'active' | 'disabled' | 'failed'
+
+/** 插件加载或启用失败时的结构化诊断信息。 */
+export interface PluginDiagnosticError {
+  code: string
+  message: string
+  /** 发生故障的阶段：scan（清单/入口解析）、load（模块导入/契约校验）、define（definePlugin/UI 校验）、enable（Provider 挂载/服务启动）。 */
+  stage: 'scan' | 'load' | 'define' | 'enable'
+  details?: Record<string, unknown>
+}
 
 export interface PluginSummary {
   id: string
@@ -471,6 +509,10 @@ export interface PluginSummary {
   /** 常驻不可卸载（如 builtin:profile）。 */
   locked: boolean
   enabled: boolean
+  /** 插件当前状态：active | disabled | failed。 */
+  status?: PluginStatus
+  /** 当 status === 'failed' 时携带结构化诊断信息。 */
+  error?: PluginDiagnosticError
   hooks: HookName[]
   actions: string[]
   tools: string[]

@@ -29,9 +29,14 @@ import type {
   ModelProviderSummary,
   ModelProvidersRefreshResult,
   PluginConfigFieldSchema,
+  PluginConfigFieldSource,
+  PluginConfigResponse,
+  PluginDiagnosticError,
   PluginDoctorReport,
+  PluginInUseItem,
   PluginReloadResult,
   PluginRescanResult,
+  PluginStatus,
   PluginSummary,
   ProviderConfig,
   PublicPluginDoc,
@@ -93,7 +98,7 @@ export interface PluginRouteInfo {
 export interface PluginHost {
   list(): PluginSummary[] | Promise<PluginSummary[]>
   enable(id: string): Promise<void> | void
-  disable(id: string): Promise<void> | void
+  disable(id: string, options?: { force?: boolean }): Promise<void> | void
   listActions(): ActionManifest[] | Promise<ActionManifest[]>
   invokeAction(
     pluginId: string,
@@ -105,6 +110,8 @@ export interface PluginHost {
   getConfig(id: string): Record<string, unknown> | Promise<Record<string, unknown>>
   /** 声明式配置 schema（含 secret 标记，供 HTTP 脱敏）。 */
   getConfigSchema(id: string): Record<string, PluginConfigFieldSchema> | Promise<Record<string, PluginConfigFieldSchema>>
+  /** 可选：配置字段来源映射（configured | default | unset）。 */
+  getConfigSources?(id: string): Record<string, PluginConfigFieldSource> | Promise<Record<string, PluginConfigFieldSource>>
   setConfig(id: string, values: Record<string, unknown>): Promise<void> | void
   /** 动态路由清单（实际挂载命名空间 /api/plugins/<encodedId>/routes/...）。 */
   listRoutes(): PluginRouteInfo[]
@@ -315,4 +322,4 @@ export interface HubHandle {
 }
 
 // 导出供测试构造完整 Profile
-export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, ActionManifest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, ConversationCompactResponse, ConversationWithdrawResponse, PluginDoctorReport, PluginReloadResult, PluginRescanResult }
+export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, PluginStatus, PluginDiagnosticError, PluginInUseItem, PluginConfigFieldSource, PluginConfigResponse, ActionManifest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, ConversationCompactResponse, ConversationWithdrawResponse, PluginDoctorReport, PluginReloadResult, PluginRescanResult }
