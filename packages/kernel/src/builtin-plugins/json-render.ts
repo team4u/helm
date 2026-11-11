@@ -59,6 +59,7 @@ export function createJsonRenderPlugin(): PluginDefinition {
   return {
     id: JSON_RENDER_PLUGIN_ID,
     name: 'JSON 卡片渲染',
+    description: '聊天 ```ui 代码块渲染：把模型输出的安全 JSON Spec 渲染为交互卡片（表单/列表/图表原语），并随插件启停维护 generative-ui 技能。',
     version: '0.1.0',
     clientRoot: resolveClientRoot(),
     definePlugin(ctx) {

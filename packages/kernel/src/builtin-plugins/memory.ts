@@ -92,6 +92,7 @@ export function createMemoryPlugin(): PluginDefinition {
   return {
     id: MEMORY_PLUGIN_ID,
     name: '长期记忆',
+    description: '自治长期记忆：按 Profile 管理 MEMORY.md 注入与启停，提供 update_memory 工具。',
     version: '0.1.0',
     locked: false,
     clientRoot: resolveClientRoot(),

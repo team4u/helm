@@ -129,6 +129,7 @@ export function createWorkflowPlugin(): PluginDefinition {
   return {
     id: WORKFLOW_PLUGIN_ID,
     name: '工作流与子代理编排',
+    description: '多智能体确定性编排：subagent / SubagentWorkflow 工具、受管 Git Worktree、运行记录与任务面板。',
     version: '0.1.0',
     clientRoot: resolveClientRoot(),
     definePlugin(ctx) {

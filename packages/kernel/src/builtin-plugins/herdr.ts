@@ -79,6 +79,7 @@ export function createHerdrPlugin(): PluginDefinition {
   return {
     id: 'builtin:herdr',
     name: 'Herdr 终端',
+    description: '跨节点 Herdr 协同：驱动远端 CLI 工具执行、终端审批桥（AskDoc CAS）与状态栏投射。',
     version: '0.1.0',
     clientRoot: resolveHerdrClientRoot(),
     definePlugin(ctx) {

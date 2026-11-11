@@ -2,6 +2,7 @@ import React from 'react'
 import type { PluginSummary } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { Switch } from '../ui/Switch.js'
+import { getPluginDescription } from './plugin-card-model.js'
 
 export interface PluginCardProps {
   plugin: PluginSummary
@@ -22,47 +23,11 @@ function getPluginIcon(id: string): string {
   if (norm.includes('herdr')) return 'terminal'
   if (norm.includes('superagent')) return 'sparkles'
   if (norm.includes('trigger')) return 'webhook'
+  if (norm.includes('json-render')) return 'layout'
+  if (norm.includes('mermaid')) return 'git-branch'
+  if (norm.includes('magpie')) return 'globe'
   if (norm.includes('tool')) return 'wrench'
   return 'boxes'
-}
-
-/**
- * 获取插件简短描述；未声明时依据 ID 或能力透视生成
- */
-function getPluginDescription(plugin: PluginSummary): string {
-  const norm = (plugin.id ?? '').toLowerCase()
-  if (norm === 'builtin:profile' || norm === 'profile') {
-    return '常驻角色与技能底座：注入 SYSTEM.md 与可用技能目录，提供 load_skill 与默认助理角色。'
-  }
-  if (norm === 'builtin:memory' || norm === 'memory') {
-    return '长期记忆：管理各 Profile 的 MEMORY.md 注入、单角色记忆启停与 update_memory 工具。'
-  }
-  if (norm === 'builtin:workflow' || norm === 'workflow') {
-    return '多智能体确定性工作流 DSL 引擎、受管工作树与动态任务面板。'
-  }
-  if (norm === 'builtin:herdr' || norm === 'herdr') {
-    return '跨节点 Herdr CLI 工具协同、终端审批桥与原地追问自愈。'
-  }
-  if (norm === 'builtin:superagent' || norm === 'superagent') {
-    return '双层中枢动态路由、按需专家派生与两层巡检看门狗。'
-  }
-  if (norm === 'builtin:triggers' || norm === 'triggers') {
-    return 'Cron 定时任务与 Webhook 入站触发器连接器，防逃逸管道投递。'
-  }
-
-  const toolCount = plugin.tools?.length ?? 0
-  const actionCount = plugin.actions?.length ?? 0
-  const hookCount = plugin.hooks?.length ?? 0
-
-  if (toolCount > 0 || actionCount > 0 || hookCount > 0) {
-    const parts: string[] = []
-    if (toolCount > 0) parts.push(`${toolCount} 个工具`)
-    if (actionCount > 0) parts.push(`${actionCount} 个动作`)
-    if (hookCount > 0) parts.push(`${hookCount} 个钩子`)
-    return `提供 ${parts.join('、')}能力支持。`
-  }
-
-  return '系统扩展插件组件。'
 }
 
 /**

@@ -1,4 +1,5 @@
 import React, { useContext, useEffect, useRef, useState } from 'react'
+import { getPluginDescription } from './plugin-card-model.js'
 import type { PluginSummary } from '@helm/protocol'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
@@ -291,6 +292,9 @@ export function PluginDetailDrawer({
                   )}
                 </div>
                 {plugin && <div className="plugin-drawer-id mono">{plugin.id}</div>}
+                {plugin && (
+                  <div className="plugin-drawer-desc">{getPluginDescription(plugin)}</div>
+                )}
               </div>
             </div>
             <DialogClose asChild>

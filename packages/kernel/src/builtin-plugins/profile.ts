@@ -78,6 +78,7 @@ export function createProfilePlugin(): PluginDefinition {
   return {
     id: 'builtin:profile',
     name: '角色与技能底座',
+    description: '常驻底座：按会话绑定的 Profile 注入 SYSTEM.md 与可用技能目录，提供 load_skill 工具与默认助理角色。',
     version: '0.1.0',
     locked: true,
     definePlugin(ctx) {

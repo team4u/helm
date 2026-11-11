@@ -969,6 +969,7 @@ export class PluginHost {
     return {
       id: s.definition.id,
       name: s.definition.name ?? s.definition.id,
+      description: s.definition.description,
       version: s.definition.version,
       locked: s.definition.locked === true,
       enabled: s.enabled,

@@ -465,6 +465,8 @@ export interface PluginConfigFieldSchema {
 export interface PluginSummary {
   id: string
   name: string
+  /** 插件简短功能描述（来自插件定义，前端直接展示，不做 ID 特判）。 */
+  description?: string
   version?: string
   /** 常驻不可卸载（如 builtin:profile）。 */
   locked: boolean
@@ -867,6 +869,8 @@ export interface PluginDefinition {
   /** 插件 ID，如 'builtin:profile'、'builtin:herdr'。 */
   id: string
   name?: string
+  /** 插件简短功能描述：面向插件中心卡片与 CLI 列表展示，一句话说明职责边界。 */
+  description?: string
   version?: string
   /** true 表示常驻不可卸载（builtin:profile）。 */
   locked?: boolean

@@ -403,6 +403,7 @@ export function createSuperAgentPlugin(): PluginDefinition {
   return {
     id: SUPERAGENT_PLUGIN_ID,
     name: 'SuperAgent 中枢',
+    description: '双层中枢：总控路由点名专家 Profile 派生后台 Worker，附归档汇报与两层巡检看门狗。',
     version: '0.1.0',
     clientRoot: resolveSuperAgentClientRoot(),
     definePlugin(ctx) {

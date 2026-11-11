@@ -41,6 +41,47 @@ function makePlugin(partial: Partial<PluginSummary> = {}): PluginSummary {
 // 1. SSR 渲染测试：卡片包含图标、名称、版本、锁定标签、Tools/Actions 胶囊徽章
 // ---------------------------------------------------------------------------
 
+test('PluginCard：优先展示插件定义自带的 description，不做 ID 特判', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(PluginCard, {
+      plugin: makePlugin({
+        id: 'builtin:json-render',
+        name: 'JSON 卡片渲染',
+        description: '聊天 ```ui 代码块渲染：把模型输出的安全 JSON Spec 渲染为交互卡片。',
+        tools: [],
+        actions: [],
+        hooks: [],
+      }),
+      selected: false,
+      onSelect: () => {},
+      onToggle: () => {},
+    }),
+  )
+  assert.match(html, /JSON Spec 渲染为交互卡片/)
+  assert.doesNotMatch(html, /系统扩展插件组件/)
+})
+
+test('PluginCard：未声明 description 时回退能力透视而非 ID 特判', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(PluginCard, {
+      plugin: makePlugin({
+        id: 'builtin:profile',
+        name: '角色与技能底座',
+        description: undefined,
+        tools: ['load_skill'],
+        actions: [],
+        hooks: [],
+      }),
+      selected: false,
+      onSelect: () => {},
+      onToggle: () => {},
+    }),
+  )
+  // 无后端描述时也不再返回硬编码的 profile 文案，而是能力透视
+  assert.match(html, /1 个工具/)
+  assert.doesNotMatch(html, /常驻角色与技能底座/)
+})
+
 test('PluginCard：SSR 渲染包含图标、名称、版本、常驻标签与能力胶囊徽章', { timeout: 60_000 }, () => {
   const plugin = makePlugin({
     id: 'builtin:workflow',
