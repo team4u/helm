@@ -43,3 +43,19 @@ export function computeTopicPickerModel({
 export function searchTopicList(items: TopicListItem[], query: string): TopicListItem[] {
   return filterTopicList(items, query)
 }
+
+/**
+ * 顶栏直接平铺的话题 Tab：当前话题恒在窗口内（不在则补插到首位），
+ * 其余位置按列表顺序（pinned/updatedAt/id）填充至 previewCount。
+ */
+export function visibleTopicTabs(items: TopicListItem[], previewCount: number): TopicListItem[] {
+  if (items.length === 0) return []
+  const activeIdx = items.findIndex((item) => item.active)
+  if (activeIdx !== -1 && activeIdx < previewCount) {
+    return items.slice(0, previewCount)
+  }
+  const active = items[activeIdx]
+  const rest = items.filter((item) => !item.active)
+  const fill = rest.slice(0, Math.max(0, previewCount - 1))
+  return active === undefined ? fill : [active, ...fill]
+}

@@ -2,10 +2,13 @@ import { useMemo, useState } from 'react'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { conversationStatusDotClass, conversationStatusTooltip } from '../shell/sidebar-model.js'
-import { Popover, PopoverTrigger, PopoverPortal, PopoverContent } from '../ui/Popover.js'
+import { Popover, PopoverTrigger, PopoverAnchor, PopoverPortal, PopoverContent } from '../ui/Popover.js'
 import { Tooltip } from '../ui/Tooltip.js'
-import { computeTopicPickerModel, searchTopicList } from './conversation-topic-model.js'
+import { computeTopicPickerModel, searchTopicList, visibleTopicTabs } from './conversation-topic-model.js'
 import type { ConversationSummary } from '@helm/protocol'
+
+/** 顶栏直接平铺的最近话题 Tab 数量（窄容器经 CSS 进一步收敛）。 */
+const TOPIC_TAB_PREVIEW = 4
 
 export interface TopicPickerProps {
   conversation: ConversationSummary
@@ -17,12 +20,16 @@ export interface TopicPickerProps {
 }
 
 /**
- * 主舞台顶栏话题切换器：紧凑展示当前智能体/当前话题身份，
- * Popover 内搜索并切换当前 profile 下的根会话（主屏或当前分屏目标）。
+ * 主舞台顶栏话题切换（方案一）：
+ * - PC 端直接平铺最近活跃话题 Tabs，当前话题用与左栏智能体一致的
+ *   nav-active 微浮起卡片高亮，其余话题安静透明，一键直切；
+ * - 超出预览数量时提供「更多」按钮；点击当前话题 Tab 同样展开完整列表
+ *   （搜索 + 全量话题 + 新建），窄屏/手机仅保留当前话题 Tab 也能进入列表。
  */
 export function TopicPicker({ conversation, isSplit, newTopicDisabled, onNewTopic }: TopicPickerProps) {
   const store = useHelmStore()
   const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
 
   const profile = store.profiles.find((p) => p.id === conversation.profileId)
   const model = useMemo(
@@ -34,6 +41,7 @@ export function TopicPicker({ conversation, isSplit, newTopicDisabled, onNewTopi
       }),
     [conversation, store.conversations, profile?.name],
   )
+  const tabs = useMemo(() => visibleTopicTabs(model.topics, TOPIC_TAB_PREVIEW), [model.topics])
   const visible = useMemo(() => searchTopicList(model.topics, query), [model.topics, query])
 
   const openTopic = (convId: number): void => {
@@ -44,25 +52,56 @@ export function TopicPicker({ conversation, isSplit, newTopicDisabled, onNewTopi
   }
 
   return (
-    <Popover>
-      <Tooltip content="切换当前智能体下的话题" side="bottom">
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="topic-picker-trigger"
-            aria-label={`话题切换器：${model.profileLabel} / ${model.currentTitle}`}
-            title={`切换当前智能体下的话题（共 ${model.topicCount} 个）`}
-          >
-            <span className="topic-picker-identity">
-              <span className="topic-picker-profile">{model.profileLabel}</span>
-              <span className="topic-picker-sep">/</span>
-              <span className="topic-picker-title">{model.currentTitle}</span>
-            </span>
-            <span className="topic-picker-count tabular-nums">{model.topicCount}</span>
-            <HelmIcon name="chevron-down" size={12} />
-          </button>
-        </PopoverTrigger>
-      </Tooltip>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverAnchor asChild>
+        <div className="topic-tabs" role="group" aria-label={`话题切换：${model.profileLabel}`}>
+          {tabs.map(({ conv, active }) => {
+            const dotClass = conversationStatusDotClass(conv.status)
+            const statusTooltip = conversationStatusTooltip(conv.status, conv.doing, conv.lastError)
+            const label = conv.title || `会话 #${conv.id}`
+            return (
+              <Tooltip key={conv.id} content={dotClass ? `${label} · ${statusTooltip}` : label} side="bottom">
+                <button
+                  type="button"
+                  className={`topic-tab${active ? ' topic-tab-active' : ''}`}
+                  aria-current={active ? 'page' : undefined}
+                  onClick={() => {
+                    // 点击当前话题：展开完整话题列表（含搜索与新建）
+                    if (active) {
+                      setOpen(true)
+                      return
+                    }
+                    openTopic(conv.id)
+                  }}
+                >
+                  {dotClass ? (
+                    <span className={dotClass} title={statusTooltip} aria-label={statusTooltip} />
+                  ) : (
+                    <span className="topic-picker-dot-spacer" />
+                  )}
+                  <span className="topic-tab-title">{label}</span>
+                  {active && <HelmIcon name="chevron-down" size={11} className="topic-tab-chevron" />}
+                </button>
+              </Tooltip>
+            )
+          })}
+          {model.topicCount > tabs.length ? (
+            <Tooltip content={`查看全部 ${model.topicCount} 个话题`} side="bottom">
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="topic-tab topic-tab-more"
+                  aria-label={`查看全部 ${model.topicCount} 个话题`}
+                  title={`查看全部 ${model.topicCount} 个话题`}
+                >
+                  <HelmIcon name="chevron-down" size={12} />
+                  <span className="tabular-nums">{model.topicCount}</span>
+                </button>
+              </PopoverTrigger>
+            </Tooltip>
+          ) : null}
+        </div>
+      </PopoverAnchor>
       <PopoverPortal>
         <PopoverContent className="topic-picker-popover" align="start" sideOffset={6}>
           <div className="topic-picker-search">

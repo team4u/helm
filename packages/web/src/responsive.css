@@ -61,9 +61,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .conversation-topbar .pane-title { min-width: 40px; }
   .conversation-topbar .pane-cwd-subtitle { max-width: 30vw; }
   .conversation-topbar .pane-parent-nav-btn { height: 22px; padding: 0 6px 0 5px; font-size: 11px; gap: 3px; }
-  /* 话题切换器紧凑身份：极窄分屏/手机下只保留当前话题标题与计数 */
-  .topic-picker-trigger { max-width: 180px; }
-  .topic-picker-profile, .topic-picker-sep { display: none; }
+  /* 话题 Tabs：窄容器下收敛为仅当前话题 Tab（点击展开完整列表），收窄可用宽度 */
+  .topic-tabs { max-width: 46%; }
+  .topic-tab:not(.topic-tab-active):not(.topic-tab-more) { display: none; }
+  .topic-tab { max-width: 160px; }
   .composer-widgets .card { padding: 8px 10px; }
 }
 @media (hover: none) {

@@ -1111,64 +1111,73 @@ button,
   color: var(--fg-muted);
 }
 
-/* 主舞台顶栏话题切换器：紧凑身份触发器 + Radix Popover 话题列表 */
-.topic-picker-trigger {
+/* 主舞台顶栏话题切换（方案一）：平铺话题 Tabs（当前项同左栏智能体高亮）+ 更多 Popover */
+.topic-tabs {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  flex-shrink: 0;
-  max-width: 300px;
-  height: 24px;
-  padding: 0 7px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-subtle);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  line-height: 1;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-
-.topic-picker-trigger:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-  color: var(--fg);
-}
-
-.topic-picker-identity {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+  gap: 2px;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 60%;
   overflow: hidden;
 }
 
-.topic-picker-profile {
-  font-size: 11px;
+.topic-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  min-width: 0;
+  max-width: 180px;
+  padding: 0 9px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--fg-muted);
-  white-space: nowrap;
-}
-
-.topic-picker-sep {
-  font-size: 11px;
-  color: var(--fg-subtle);
-}
-
-.topic-picker-title {
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 500;
-  color: var(--fg);
+  line-height: 1;
   white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 1;
+  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+.topic-tab:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+/* 当前话题：与左栏 nav-item-active 同一塞微浮起卡片视觉 */
+.topic-tab-active,
+.topic-tab-active:hover {
+  background: var(--nav-active-bg);
+  color: var(--nav-active-fg);
+  box-shadow: var(--seg-edge);
+}
+
+.topic-tab-title {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.topic-picker-count {
-  font-size: 10.5px;
+.topic-tab-chevron {
+  flex-shrink: 0;
   color: var(--fg-muted);
-  background: var(--bg-muted);
-  border-radius: 999px;
-  padding: 1px 6px;
+}
+
+.topic-tab-more {
+  flex-shrink: 0;
+  padding: 0 8px;
+  gap: 4px;
+  font-size: 11.5px;
+}
+
+.topic-picker-dot-spacer {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
 }
 
 .topic-picker-popover {
@@ -1260,12 +1269,6 @@ button,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.topic-picker-dot-spacer {
-  width: 7px;
-  height: 7px;
   flex-shrink: 0;
 }
 
@@ -6008,9 +6011,8 @@ input::placeholder {
   color: var(--fg-muted);
 }
 
-/* 520px/540px 右侧滑出抽屉通用规范（模型/Profile/节点/技能四大中心 + 应用中心） */
-.primary-drawer-backdrop,
-.app-detail-backdrop {
+/* 520px/540px 右侧滑出抽屉通用规范（模型/Profile/节点/技能四大中心） */
+.primary-drawer-backdrop {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.28);

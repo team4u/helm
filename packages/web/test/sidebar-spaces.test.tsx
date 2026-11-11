@@ -158,19 +158,26 @@ test('Sidebar 智能体搜索：输入关键字过滤智能体行', { timeout: 6
   assert.deepEqual(call?.target, { kind: 'conversation', conversationId: 40 })
 })
 
-test('TopicPicker 交互：打开 Popover、搜索并切换主屏目标', { timeout: 60_000 }, async () => {
+test('TopicPicker 交互：点击当前话题 Tab 打开 Popover，搜索并切换主屏目标', { timeout: 60_000 }, async () => {
   const store = makeStore()
   const conversation = store.conversations[0]!
   render(store, e(TopicPicker, { conversation }))
   await act(async () => {})
 
-  const trigger = document.body.querySelector('.topic-picker-trigger') as HTMLButtonElement
-  assert.ok(trigger, '触发器存在')
-  assert.ok(trigger.textContent!.includes('个人助理'), '触发器展示当前话题身份')
-
+  const activeTab = document.body.querySelector('.topic-tab-active') as HTMLButtonElement
+  assert.ok(activeTab, '当前话题 Tab 存在且激活')
+  assert.ok(activeTab.textContent!.includes('个人助理'), '当前话题 Tab 展示话题标题')
+  // 点击非当前 Tab 直接切换目标，不弹层
+  const otherTab = document.body.querySelector('.topic-tab:not(.topic-tab-active):not(.topic-tab-more)') as HTMLButtonElement
   await act(async () => {
-    trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))
-    trigger.click()
+    otherTab.click()
+  })
+  assert.deepEqual(store.openTargetCalls, [{ target: { kind: 'conversation', conversationId: 10 }, split: undefined }])
+
+  // 点击当前话题 Tab：展开完整列表
+  await act(async () => {
+    activeTab.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))
+    activeTab.click()
   })
   const searchInput = document.body.querySelector('.topic-picker-search-input') as HTMLInputElement
   assert.ok(searchInput, 'Popover 打开后渲染搜索框')
@@ -189,7 +196,10 @@ test('TopicPicker 交互：打开 Popover、搜索并切换主屏目标', { time
   await act(async () => {
     items[0]!.click()
   })
-  assert.deepEqual(store.openTargetCalls, [{ target: { kind: 'conversation', conversationId: 10 }, split: undefined }])
+  assert.deepEqual(store.openTargetCalls, [
+    { target: { kind: 'conversation', conversationId: 10 }, split: undefined },
+    { target: { kind: 'conversation', conversationId: 10 }, split: undefined },
+  ])
 })
 
 test('TopicPicker 分屏窗格：切换写入 split 目标', { timeout: 60_000 }, async () => {
@@ -198,15 +208,10 @@ test('TopicPicker 分屏窗格：切换写入 split 目标', { timeout: 60_000 }
   render(store, e(TopicPicker, { conversation, isSplit: true }))
   await act(async () => {})
 
-  const trigger = document.body.querySelector('.topic-picker-trigger') as HTMLButtonElement
+  const otherTab = document.body.querySelector('.topic-tab:not(.topic-tab-active):not(.topic-tab-more)') as HTMLButtonElement
   await act(async () => {
-    trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))
-    trigger.click()
-  })
-  const item = document.body.querySelector('.topic-picker-item:not(.topic-picker-item-active)') as HTMLElement
-  assert.ok(item, '存在其他可切换话题')
-  await act(async () => {
-    item.click()
+    otherTab.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))
+    otherTab.click()
   })
   assert.deepEqual(store.openTargetCalls.map((c) => c.split), [true])
 })

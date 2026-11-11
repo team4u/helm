@@ -12,7 +12,7 @@ import { HelmStoreContext } from '../src/lib/store-context.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
 import { makeTestStore } from './helpers/store.js'
 import { TopicPicker } from '../src/conversation/conversation-topic-picker.js'
-import { computeTopicPickerModel, searchTopicList } from '../src/conversation/conversation-topic-model.js'
+import { computeTopicPickerModel, searchTopicList, visibleTopicTabs } from '../src/conversation/conversation-topic-model.js'
 
 const e = React.createElement
 // SSR 渲染运行时依赖（与 shell-modals.test.ts 同策略）
@@ -58,6 +58,7 @@ function pickerStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
 
 test('TopicPicker 源码契约：Radix Popover 结构与无手写浮层', { timeout: 60_000 }, () => {
   assert.match(pickerSource, /import\s*\{[^}]*PopoverPortal[^}]*\}\s*from\s*'\.\.\/ui\/Popover\.js'/)
+  assert.match(pickerSource, /<PopoverAnchor asChild>/)
   assert.match(pickerSource, /<PopoverTrigger asChild>/)
   assert.match(pickerSource, /<PopoverPortal>/)
   assert.match(pickerSource, /<PopoverContent[^>]*topic-picker-popover/)
@@ -67,17 +68,36 @@ test('TopicPicker 源码契约：Radix Popover 结构与无手写浮层', { time
   assert.doesNotMatch(pickerSource, /<select/)
 })
 
-test('TopicPicker SSR：触发器展示当前智能体/话题身份与话题数', { timeout: 60_000 }, () => {
+test('TopicPicker SSR：平铺话题 Tabs，当前项高亮且超出预览渲染更多入口', { timeout: 60_000 }, () => {
   const store = pickerStore({ primaryTarget: { kind: 'conversation', conversationId: 1 } })
   const html = renderToString(
     e(HelmStoreContext.Provider, { value: store }, e(TopicPicker, { conversation: store.conversations[0]! })),
   )
-  assert.ok(html.includes('topic-picker-trigger'), '触发器类名')
-  assert.ok(html.includes('个人助理'), '当前 profile 名称')
-  assert.ok(html.includes('个人助理</span>') || html.includes('个人助理'), '当前话题标题')
-  assert.ok(html.includes('>3</span>'), '当前 profile 话题计数（含 #1/#10/#11）')
+  assert.ok(html.includes('topic-tabs'), '话题 Tab 容器')
+  assert.ok(html.includes('topic-tab-active'), '当前话题 Tab 激活态')
+  assert.ok(html.includes('周末计划'), '平铺最近话题')
+  // 3 个话题 = 3 个平铺 Tab（未超出预览 4，不渲染更多入口）
+  const tabCount = (html.match(/class="topic-tab( |")/g) ?? []).length
+  assert.equal(tabCount, 3)
+  assert.ok(!html.includes('topic-tab-more'), '未超出预览不渲染更多入口')
   // 关闭状态下 Popover 内容不渲染（Radix SSR 行为）
   assert.ok(!html.includes('topic-picker-search'), '关闭状态不渲染搜索框')
+})
+
+test('visibleTopicTabs：当前话题恒在窗口内，其余按最近度填充', { timeout: 60_000 }, () => {
+  const mk = (id: number, active = false) => ({
+    conv: conv({ id, title: `会话 ${id}` }),
+    active,
+  })
+  // 当前话题在窗口内：直接取前 previewCount 个
+  const inWindow = [mk(1), mk(2, true), mk(3), mk(4), mk(5)]
+  assert.deepEqual(visibleTopicTabs(inWindow, 4).map((t) => t.conv.id), [1, 2, 3, 4])
+  // 当前话题在窗口外（第 5 位）：补插到首位，其余按顺序填充
+  const outWindow = [mk(1), mk(2), mk(3), mk(4), mk(5, true)]
+  assert.deepEqual(visibleTopicTabs(outWindow, 4).map((t) => t.conv.id), [5, 1, 2, 3])
+  // 空列表与无激活项
+  assert.deepEqual(visibleTopicTabs([], 4), [])
+  assert.deepEqual(visibleTopicTabs([mk(1), mk(2)], 4).map((t) => t.conv.id), [1, 2])
 })
 
 test('TopicPicker 切换目标：分屏窗格 openTarget 带 split 选项', { timeout: 60_000 }, () => {
