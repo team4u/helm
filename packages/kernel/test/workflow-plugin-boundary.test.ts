@@ -107,14 +107,6 @@ class FakeBackend extends PluginHostBackendFixtureBase {
     if (input.op === 'exists') return Promise.resolve({ value: true })
     return Promise.resolve({ value: input.path })
   }
-  emitEvent(type: string, payload: unknown): MaybePromise<void> {
-    this.emitted.push({ type, payload })
-    const set = this.listeners.get(type)
-    if (set === undefined || set.size === 0) return
-    return (async () => {
-      for (const listener of [...set]) await listener(payload)
-    })()
-  }
   invokeAction(): Promise<unknown> {
     return Promise.resolve({})
   }

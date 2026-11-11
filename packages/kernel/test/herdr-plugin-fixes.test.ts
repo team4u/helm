@@ -562,7 +562,13 @@ async function makeEnv(options: EnvOptions = {}): Promise<Env> {
     docs,
     config: new MemoryConfigStore({ ...(options.config ?? {}), socketPath }),
   })
-  await host.register(createHerdrPlugin(), { enabled: true })
+  try {
+    await host.register(createHerdrPlugin(), { enabled: true })
+  } catch (error) {
+    await served.close().catch(() => {})
+    rmSync(dataDir, { recursive: true, force: true })
+    throw error
+  }
 
   return {
     host,

@@ -50,7 +50,6 @@ export async function herdrServerFixture(
     | { error: { code: string; message: string } },
 ): Promise<HerdrServerFixture> {
   const root = await mkdtemp(join(tmpdir(), 'helm-herdr-server-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
   const socketPath = join(root, 'herdr.sock')
   const requests: ServedRequest[] = []
   let connections = 0
@@ -95,6 +94,9 @@ export async function herdrServerFixture(
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
     await rm(root, { recursive: true, force: true })
   }
+  // 本 fixture 会建立长连接订阅；每个调用方即使只做默认 t.after 清理，也必须
+  // 真正关闭 server/socket，否则 node:test 的文件进程会被悬挂句柄拖住。
+  t.after(close)
   function requestResult(method: string): unknown {
     if (method === 'session.snapshot') {
       return { type: 'session_snapshot', snapshot }
