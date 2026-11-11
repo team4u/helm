@@ -45,6 +45,7 @@ export default {
   id: "my-plugin",
   name: "我的插件",
   version: "0.1.0",
+  clientRoot: "./client", // 前端组件放在 client/ 子目录时必须显式声明（缺省根为插件目录本身）
   definePlugin(ctx) {
     const state = ctx.doc("state", { count: 0 }, { public: true })
     ctx.action({
@@ -58,7 +59,7 @@ export default {
       },
     })
     ctx.ui.sidebarItem({ id: "my", label: "我的插件", icon: "terminal", target: "screen:my-plugin/main" })
-    // 前端组件放 clientRoot（如 <插件目录>/client/index.tsx）
+    // client.module 相对 clientRoot 解析（此处对应 <插件目录>/client/index.tsx）
     ctx.ui.screen({
       id: "main", label: "计数器",
       client: { module: "index.tsx", export: "CounterScreen" },
@@ -98,7 +99,7 @@ export function CounterScreen() {
 - `ctx.action({ id, description, inputSchema, outputSchema, idempotent?, handler })` 将 Schema 动作统一映射到 HTTP、CLI、Workflow action()、Web；`idempotent: true` 标记只读/幂等动作，失败或中断时允许工作流断链重跑；模型可经 run_action 调用，设置 exposeAsTool: true 才直接列为工具。
 - `ctx.host.execEnv(req, opts?)` 经内核 EnvFabric 跨节点执行命令（复用 local / 远端 @helm/node 通道、SecretStash 注入与脱敏），纳入在途任务追踪（withTask）。
 - `ctx.doc(name, initial, { public: true })` 公开持久全局状态（进全局 SSE 首帧，更新广播全量）；前端组件经 `usePluginDoc(name)` 订阅。`ctx.configSchema` 的 secret 字段进入凭据存储，避免公开到 doc。
-- `ctx.sessionDoc(name, initial, { public: true })` 按会话分片持久状态：句柄 `get/set/update/delete(conversationId, ...)`；不进全局首帧与全局广播，公开时经专用 SSE（`GET /api/plugins/:id/docs/:name/events?conversationId=N`）只推给订阅该会话的客户端；会话删除级联清理，删除后写入被拒。会话级 UI 状态（如每会话任务列表、运行详情）一律用 sessionDoc 而非 doc，避免全局写放大；doc 与 sessionDoc 禁止同名。
+- `ctx.sessionDoc(name, initial, { public: true })` 按会话分片持久状态：句柄 `get/set/update/delete(conversationId, ...)`（如 `metrics.update(input.conversationId, cur => ({ count: cur.count + 1 }))`），前端组件用 `usePluginSessionDoc("metrics")` 按当前会话订阅；不进全局首帧与全局广播，公开时经专用 SSE（`GET /api/plugins/:id/docs/:name/events?conversationId=N`）只推给订阅该会话的客户端；会话删除级联清理，删除后写入被拒。会话级 UI 状态（如每会话任务列表、运行详情）一律用 sessionDoc 而非 doc，避免全局写放大；doc 与 sessionDoc 禁止同名。
 - `ctx.service({ id, start, stop })` 管理后台服务；声明 liveTasks 可在停用前报告在途任务。
 
 要点：
@@ -112,25 +113,3 @@ export function CounterScreen() {
 - UI 文案严禁 Emoji；图标用 lucide 图标名。
 - 完整扩展点与 client.tsx 单轨机制见仓库内 docs/architecture/extension-points.md 与 docs/plugins/plugin-development.md。
 - client.tsx 涉及重型依赖、动态 import、首屏性能或异步 chunk 时，先读取 `references/plugin-client-code-splitting.md`；该手册规定 AI 应写的源码形态、禁止触碰的宿主桥接内部、验证命令与失败处理。
-
-### sessionDoc 示例（每会话分片）
-
-```js
-definePlugin(ctx) {
-    // 每会话独立分片：只在订阅该会话的客户端间流动，不广播全局
-    const metrics = ctx.sessionDoc("metrics", { count: 0 }, { public: true })
-    ctx.action({
-      id: "increment",
-      inputSchema: { type: "object", properties: { conversationId: { type: "integer" } }, required: ["conversationId"], additionalProperties: false },
-      handler(input) {
-        metrics.update(input.conversationId, (current) => ({ count: current.count + 1 }))
-        return metrics.get(input.conversationId)
-      },
-    })
-    // client.tsx 组件用 usePluginSessionDoc("metrics") 按当前会话订阅
-    ctx.ui.workbenchPanel({
-      id: "metrics", label: "会话指标",
-      client: { module: "index.tsx", export: "MetricsPanel" },
-    })
-  }
-```

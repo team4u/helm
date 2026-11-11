@@ -417,9 +417,40 @@ export interface HelmManifest {
   clientRoot?: string;
 }
 
-/** 对外读取 package.json helm.clientRoot（normalizeDefinition 增强用）。 */
+/** 对外读取 plugin.json clientRoot 或 package.json helm.clientRoot（normalizeDefinition 增强用；plugin.json 优先）。 */
 export function readHelmClientRoot(dirPath: string): string | undefined {
+  const manifestClientRoot = readManifestClientRoot(dirPath);
+  if (manifestClientRoot !== undefined) return manifestClientRoot;
   return readHelmField(dirPath)?.clientRoot;
+}
+
+/** 读取 plugin.json 的 clientRoot 字段（无 plugin.json 返回 undefined；存在但非字符串显式报错）。 */
+function readManifestClientRoot(dirPath: string): string | undefined {
+  const manifestPath = join(dirPath, 'plugin.json');
+  try {
+    if (!statSync(manifestPath).isFile()) return undefined;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
+    throw new HelmError(
+      'plugin_scan_failed',
+      `外部插件目录不可读: ${manifestPath}（${err instanceof Error ? err.message : String(err)}）`,
+      500,
+      { manifestPath, code },
+    );
+  }
+  const manifest = readManifest(manifestPath);
+  const clientRoot = manifest['clientRoot'];
+  if (clientRoot === undefined) return undefined;
+  if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
+    throw new HelmError(
+      'plugin_manifest_invalid',
+      `外部插件 ${dirPath} 的 plugin.json clientRoot 必须是非空字符串`,
+      500,
+      { dirPath, clientRoot: String(clientRoot) },
+    );
+  }
+  return clientRoot;
 }
 
 /** 读取 package.json 的 helm 字段（对象形状校验；无 package.json 返回 null）。 */
@@ -616,7 +647,7 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
   delete normalized.locked;
   const clientRoot = normalized.clientRoot;
   if (clientRoot === undefined || clientRoot === '') {
-    // 未显式声明：npm 包可经 package.json helm.clientRoot 声明；否则默认插件目录本身
+    // 未显式声明：可经 plugin.json clientRoot 或 package.json helm.clientRoot 声明；否则默认插件目录本身
     const helmClientRoot = readHelmClientRoot(dirPath);
     if (helmClientRoot !== undefined) {
       const resolvedRoot = resolve(dirPath, helmClientRoot);
@@ -624,7 +655,7 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
       if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
         throw new HelmError(
           'invalid_plugin_definition',
-          `外部插件 ${dirPath} 的 package.json helm.clientRoot 越出插件目录: ${helmClientRoot}`,
+          `外部插件 ${dirPath} 的清单 clientRoot 越出插件目录: ${helmClientRoot}`,
           400,
           { dirPath, clientRoot: helmClientRoot },
         );

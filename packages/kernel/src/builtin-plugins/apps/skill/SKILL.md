@@ -23,13 +23,14 @@ managedByPlugin: builtin:apps
 
 ```
 apps/<app-id>/
-  plugin.json          # { "id": "<app-id>", "main": "index.mjs" }（或用 TS 入口 index.ts + 声明）
-  index.ts             # 后端：ctx.doc / ctx.action / ctx.ui.screen
+  plugin.json          # { "id": "<app-id>", "main": "index.ts", "clientRoot": "./client" }
+  index.ts             # 后端：clientRoot: "./client" + ctx.doc / ctx.action / ctx.ui.screen
   client/index.tsx     # 前端：主 Screen 组件
   client/styles.css    # 本地样式（可选）
 ```
 
 - `app-id` 用 kebab-case（如 `bill-desk`），禁止 `builtin:` 前缀；
+- **clientRoot 必填**：前端组件放在 `client/` 子目录时，`index.ts` 的 `PluginDefinition`（或 `plugin.json`）必须显式声明 `clientRoot: './client'`——未声明时默认根是插件目录本身，`apps_validate` 会因找不到 `index.tsx` 报 client 模块不存在；
 - 界面文案与图标遵守零 Emoji 铁律；图标用 lucide 图标名（如 layout-grid、list-checks、wallet）。
 
 ### 2. 全栈编码约束

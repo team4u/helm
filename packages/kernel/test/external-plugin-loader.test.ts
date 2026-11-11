@@ -564,6 +564,49 @@ test('模块导出既无 definePlugin 也无 setup 降级登记为 failed', { ti
   }
 })
 
+test('plugin.json 声明 clientRoot: "./client"（模块导出未重复声明时）自动生效，可编译 client/index.tsx', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
+  try {
+    const dirPath = join(dataDir, 'plugins', 'manifest-client-root')
+    mkdirSync(join(dirPath, 'client'), { recursive: true })
+    writeFileSync(
+      join(dirPath, 'plugin.json'),
+      JSON.stringify({ id: 'manifest-client-root', main: 'index.mjs', clientRoot: './client' }),
+    )
+    writeFileSync(
+      join(dirPath, 'index.mjs'),
+      `export default {
+  id: 'manifest-client-root',
+  definePlugin(ctx) {
+    ctx.ui.screen({
+      id: 'main',
+      label: '主屏',
+      client: { module: 'index.tsx', export: 'MainScreen' },
+    })
+  },
+}
+`,
+    )
+    writeFileSync(
+      join(dirPath, 'client', 'index.tsx'),
+      `export function MainScreen() { return null }\n`,
+    )
+    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    try {
+      const summary = app.kernel.plugins.list().find((p) => p.id === 'manifest-client-root')
+      assert.ok(summary, '外部插件应被自动注册')
+      await app.kernel.plugins.enable('manifest-client-root')
+      const client = await app.kernel.plugins.getClientModule('manifest-client-root', 'index.tsx')
+      assert.ok(client.code.length > 0)
+      assert.ok(client.exports.includes('MainScreen'))
+    } finally {
+      await app.close()
+    }
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
 // ---------------------------------------------------------------------------
 // 独立 loader 直调（不经 createHelm，验证返回值与空目录语义）
 // ---------------------------------------------------------------------------

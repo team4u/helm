@@ -152,10 +152,10 @@ helm plugins client <plugin-id> --module client.tsx --chunk <chunk-name> --json
 相关测试：
 
 ```bash
-timeout 50s pnpm typecheck
-timeout 50s pnpm --filter @helm/kernel test test/plugin-client.test.ts
-timeout 50s pnpm --filter @helm/web test test/plugin-client-chunks.test.ts
-timeout 50s pnpm --filter @helm/web test test/plugin-client-css.test.ts test/plugin-client-runtime.test.ts
+pnpm typecheck
+pnpm --filter @helm/kernel test test/plugin-client.test.ts
+pnpm --filter @helm/web test test/plugin-client-chunks.test.ts
+pnpm --filter @helm/web test test/plugin-client-css.test.ts test/plugin-client-runtime.test.ts
 ```
 
 测试 case 遵守项目约定，显式设置 `{ timeout: 60_000 }`。命令失败时如实报告失败项和日志，不要用空实现、mock 数据或静默降级伪造通过。

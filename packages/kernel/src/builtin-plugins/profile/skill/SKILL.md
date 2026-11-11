@@ -39,7 +39,7 @@ managedByPlugin: {{MANAGED_BY}}
 
 ### Profile 与技能
 - `helm profiles list` / `helm profiles get <id>`
-- `helm profiles create [id] --name/--model/--thinking/--node/--cwd/--system[-file]/--memory[-file]/--input <json>`
+- `helm profiles create [id] --name/--model/--thinking/--node/--cwd/--system[-file]/--skills/--all-skills/--starters/--input <json>`（长期记忆由 `builtin:memory` 托管：`helm memory get|set|configure`）
 - `helm profiles update <id> ...`：语义化 flag 先 GET 再合并 PUT（不丢绑定字段）；`--input` 单独使用为全量替换。
 - `helm profiles delete <id>`（默认 assistant 不可删）。
 - `helm skills list` / `helm skills read <id> [--path references/xxx.md]`。内置 helm-cli 为系统受管只读技能，启动时按内置源码覆盖；需要扩展时创建自己的技能，不修改内置文件。
@@ -69,7 +69,7 @@ managedByPlugin: {{MANAGED_BY}}
 - `helm plugins doc <id> <name>`：读全局公共文档；会话文档加 `--conversation <n>`（或 `--current`），持续订阅加 `--watch`（专用 SSE，首帧即当前值，Ctrl-C 退出）。
 - `helm actions list`：全部插件动作清单（ActionManifest）。
 - `helm <plugin> <action>`：动作自动映射为 CLI（剥离 `builtin:` 前缀；如 `helm superagent dispatch_worker`）；用该命令的 `--help` 查询参数或用 `--input <json>`。
-- 可选插件启用后才能调用：`herdr` 管理终端 Agent，`superagent` 派工和召回，`triggers` 管理 cron/webhook，`magpie` 管理模型网关；详细动作以 `helm actions list --json` 为准。
+- 可选插件启用后才能调用：`memory` 管理 Profile 长期记忆（`get/set/configure`），`apps` 校验与发布全栈微应用（`validate/publish/list/remove`），`herdr` 管理终端 Agent，`superagent` 派工和召回，`triggers` 管理 cron/webhook，`magpie` 管理模型网关；详细动作以 `helm actions list --json` 为准。
 
 ### 审批、产物与逃生舱
 - `helm asks list` / `helm asks answer <id> --answers <json> [--expected-state-seq <n>]`（CAS 乐观锁）/ `helm asks cancel <id>`。
@@ -87,4 +87,4 @@ managedByPlugin: {{MANAGED_BY}}
   `load_skill({ skillId: "helm-cli", path: "references/skill-and-plugin-dev.md" })`。
 - 开发或优化插件 client.tsx，尤其涉及重型依赖、动态 import、首次加载性能或异步 chunk 前：
   `load_skill({ skillId: "helm-cli", path: "references/plugin-client-code-splitting.md" })`。
-- 交互式卡片/表单等富展示能力由可用技能目录中的 generative-ui 技能提供（托管插件 builtin:json-render）：目录中存在时按其指引输出，不在时用普通 Markdown。
+- 交互式卡片/表单等富展示能力由可用技能目录中的 generative-ui 技能提供（托管插件 builtin:json-render）；构建可复用的全栈微应用并发布到应用中心由 app-builder 技能提供（托管插件 builtin:apps）：目录中存在时按其指引输出，不在时用普通 Markdown。

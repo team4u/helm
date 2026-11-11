@@ -683,6 +683,7 @@ export default {
   id: '${id}',
   version: '0.1.0',
   description: '示例外部插件（helm plugins init 生成）',
+  clientRoot: './client',
   definePlugin(ctx) {
     const state = ctx.doc('state', { count: 0 }, { public: true })
     ctx.action({

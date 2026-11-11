@@ -15,7 +15,7 @@ apps/sample-desk/
 ## plugin.json
 
 ```json
-{ "id": "sample-desk", "main": "index.ts", "version": "0.1.0" }
+{ "id": "sample-desk", "main": "index.ts", "clientRoot": "./client", "version": "0.1.0" }
 ```
 
 ## index.ts（后端）
@@ -28,6 +28,7 @@ export default {
   name: '示例工作台',
   description: '最小全栈微应用模板：持久条目 + 增删 + 主视图。',
   version: '0.1.0',
+  clientRoot: './client',
   definePlugin(ctx) {
     // 持久业务数据：public doc 供前端 usePluginDoc 实时订阅
     const items = ctx.doc<{ list: Array<{ id: string; title: string; done: boolean; createdAt: number }> }>(
@@ -181,6 +182,7 @@ export function MainScreen(): ReactNode {
 
 ## 检查点对照
 
+- `index.ts`（及 `plugin.json`）显式声明 `clientRoot: './client'`（未声明时默认根为插件目录本身，会导致 `client/index.tsx` 找不到）；
 - 后端 `ctx.doc('items', ..., { public: true })` + 写后 `flush()`；
 - `ctx.action` 带 inputSchema/outputSchema，`exposeAsTool: true`；
 - `ctx.ui.screen({ id: 'main', client: { module: 'index.tsx', export: 'MainScreen' } })` 且前端确实导出 `MainScreen`；
