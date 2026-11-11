@@ -21,11 +21,10 @@ export function isNpmSource(input: string): boolean {
   return /^npm:[^\s]/.test(input.trim())
 }
 
-/** 识别 `git:<repo>@<ref>` 或 HTTPS Git URL（`https://…[.git][#<ref>]`）。 */
+/** 识别 `git:<repo>[@<ref>]` 或 HTTPS Git URL（可省略 `.git` 和 ref）。 */
 export function isGitSource(input: string): boolean {
   const value = input.trim()
-  if (/^git:[^\s]+@[^\s]+$/.test(value)) return true
-  return /^https:\/\/[^\s]+(\.git(?:#[^\s#]+)?|#\S+)?$/.test(value) && /\.git|^https:\/\/\S+#\S+$/.test(value)
+  return /^git:[^\s]+$/.test(value) || /^https:\/\/[^\s]+$/.test(value)
 }
 
 /** 识别本地路径：绝对路径（POSIX / Windows UNC）或显式 `./`、`../` 相对路径。 */

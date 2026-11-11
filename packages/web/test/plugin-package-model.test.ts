@@ -39,13 +39,14 @@ test('detectPluginSourceKind：npm 说明符识别（scoped / 范围 / 精确版
   assert.equal(isNpmSource('npmx:pkg'), false, '前缀必须精确为 npm:')
 })
 
-test('detectPluginSourceKind：git 来源识别（git:repo@ref 与 HTTPS Git URL）', { timeout: 60_000 }, () => {
+test('detectPluginSourceKind：git 来源识别（git repo/ref 与 HTTPS Git URL）', { timeout: 60_000 }, () => {
   assert.deepEqual(detectPluginSourceKind('git:https://github.com/user/repo.git@dev'), { kind: 'git', label: 'Git 仓库' })
   assert.deepEqual(detectPluginSourceKind('https://github.com/user/helm-plugin-foo.git'), { kind: 'git', label: 'Git 仓库' })
+  assert.deepEqual(detectPluginSourceKind('https://github.com/user/repo'), { kind: 'git', label: 'Git 仓库' })
   assert.deepEqual(detectPluginSourceKind('https://github.com/user/repo.git#v2.1.0'), { kind: 'git', label: 'Git 仓库' })
   assert.equal(isGitSource('git:user/repo@main'), true)
-  assert.equal(isGitSource('git:repo'), false, 'git: 缺 ref 部分不识别')
-  assert.equal(isGitSource('https://example.com/just-a-page'), false, '非 .git 且无 #ref 的 HTTPS URL 不识别')
+  assert.equal(isGitSource('git:user/repo'), true, 'git: 可省略 ref，使用远端默认分支')
+  assert.equal(isGitSource('https://example.com/just-a-page'), true, 'HTTPS Git URL 可省略 .git 与 ref，由服务端校验仓库')
 })
 
 test('detectPluginSourceKind：本地路径识别（POSIX 绝对 / Windows / UNC / 相对）', { timeout: 60_000 }, () => {
