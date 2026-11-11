@@ -111,6 +111,7 @@ export function CounterScreen() {
 - 插件视图样式写在 clientRoot 内本地 .css（import 引入，esbuild 合并为保留导出 __helmClientCss，宿主托管注入与回收），不得写宿主 styles.css。
 - UI 文案严禁 Emoji；图标用 lucide 图标名。
 - 完整扩展点与 client.tsx 单轨机制见仓库内 docs/architecture/extension-points.md 与 docs/plugins/plugin-development.md。
+- client.tsx 涉及重型依赖、动态 import、首屏性能或异步 chunk 时，先读取 `references/plugin-client-code-splitting.md`；该手册规定 AI 应写的源码形态、禁止触碰的宿主桥接内部、验证命令与失败处理。
 
 ### sessionDoc 示例（每会话分片）
 

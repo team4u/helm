@@ -85,4 +85,6 @@ managedByPlugin: {{MANAGED_BY}}
   `load_skill({ skillId: "helm-cli", path: "references/workflows-and-agents.md" })`。
 - 自举编写新技能（~/.helm/skills/<id>/SKILL.md）或开发外置插件（~/.helm/plugins/<id>/）前：
   `load_skill({ skillId: "helm-cli", path: "references/skill-and-plugin-dev.md" })`。
+- 开发或优化插件 client.tsx，尤其涉及重型依赖、动态 import、首次加载性能或异步 chunk 前：
+  `load_skill({ skillId: "helm-cli", path: "references/plugin-client-code-splitting.md" })`。
 - 交互式卡片/表单等富展示能力由可用技能目录中的 generative-ui 技能提供（托管插件 builtin:json-render）：目录中存在时按其指引输出，不在时用普通 Markdown。

@@ -3,7 +3,7 @@
  *
  * Layer 1（SKILL.md）：helm CLI 黄金法则、核心命令全景与 references 下钻索引，
  * 由 SkillService.ensureSkill 在插件启动时同步为源码版本（受管覆盖，常规接口只读）。
- * Layer 2（references/*.md）：确定性工作流与技能插件自举开发两个专题手册，
+ * Layer 2（references/*.md）：确定性工作流、技能/插件自举开发、client.tsx 代码分割三个专题手册，
  * 模型经 load_skill({ skillId, path }) 按需读取，正文不常驻。
  * 生成式 UI（```ui 代码块）手册由 builtin:json-render 插件自举的
  * generative-ui 技能提供，随插件启停进入/离开可用技能目录。
@@ -103,12 +103,18 @@ export const HELM_CLI_SKILL_AND_PLUGIN_DEV_MD = renderSkillTemplate(
   skillVars,
 )
 
-/** 汇总资产：id + SKILL.md + 2 个 references。SkillService.ensureSkill 受管覆盖同步。 */
+export const HELM_CLI_PLUGIN_CLIENT_CODE_SPLITTING_MD = renderSkillTemplate(
+  readFileSync(join(skillDir, 'references', 'plugin-client-code-splitting.md'), 'utf-8'),
+  skillVars,
+)
+
+/** 汇总资产：id + SKILL.md + 3 个 references。SkillService.ensureSkill 受管覆盖同步。 */
 export const HELM_CLI_SKILL_ASSET: PluginSkillAsset = {
   id: HELM_CLI_SKILL_ID,
   skillMd: HELM_CLI_SKILL_MD,
   references: {
     'workflows-and-agents.md': HELM_CLI_WORKFLOWS_AND_AGENTS_MD,
     'skill-and-plugin-dev.md': HELM_CLI_SKILL_AND_PLUGIN_DEV_MD,
+    'plugin-client-code-splitting.md': HELM_CLI_PLUGIN_CLIENT_CODE_SPLITTING_MD,
   },
 }

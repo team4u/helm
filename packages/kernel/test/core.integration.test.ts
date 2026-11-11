@@ -320,7 +320,11 @@ test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），
     const summary = skills.find((s) => s.id === 'helm-cli')
     assert.ok(summary, 'helm-cli 技能应经 builtin:profile 启动自举')
     assert.equal(summary.managedByPlugin, 'builtin:profile')
-    for (const ref of ['references/workflows-and-agents.md', 'references/skill-and-plugin-dev.md']) {
+    for (const ref of [
+      'references/workflows-and-agents.md',
+      'references/skill-and-plugin-dev.md',
+      'references/plugin-client-code-splitting.md',
+    ]) {
       assert.ok(summary.references.includes(ref), `references 应含 ${ref}`)
     }
     // generative-ui 技能由 builtin:json-render 插件自举（默认启用），随插件启停过滤
@@ -358,6 +362,11 @@ test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），
     assert.ok(wf.text.includes('pipeline') && wf.text.includes('resumeFromRunId'), 'workflows 应含编排 API 与断点重放')
     const dev = await readSkill('references/skill-and-plugin-dev.md')
     assert.ok(dev.text.includes('definePlugin') && dev.text.includes('ctx.action'), 'skill-and-plugin-dev 应含插件开发指南')
+    const splitting = await readSkill('references/plugin-client-code-splitting.md')
+    assert.ok(
+      splitting.text.includes('__helm_import_chunk') && splitting.text.includes('import()') && splitting.text.includes('helm plugins doctor'),
+      'plugin-client-code-splitting 应含 AI 使用规则、宿主桥接禁用项与验证命令',
+    )
 
     // 重启（重建 app）后受管覆盖：磁盘手工篡改的 SKILL.md 与 reference 回到
     // 源码版本，被删的 reference 补齐；用户自建技能不受影响且仍可写
@@ -366,6 +375,7 @@ test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），
     writeFileSync(join(env.dataDir, 'skills', 'helm-cli', 'SKILL.md'), customMain)
     writeFileSync(join(env.dataDir, 'skills', 'generative-ui', 'SKILL.md'), customRef)
     rmSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'skill-and-plugin-dev.md'))
+    rmSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'plugin-client-code-splitting.md'))
     writeSkill(env.dataDir, 'user-skill', '---\nname: user-skill\ndescription: 用户自建\n---\n正文\n', { 'notes.md': '# 用户笔记\n' })
     await env.app.close()
 
@@ -387,6 +397,11 @@ test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），
       )
       const restored = readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'skill-and-plugin-dev.md'), 'utf8')
       assert.equal(restored, HELM_CLI_SKILL_ASSET.references['skill-and-plugin-dev.md']!, '缺失的 reference 被补齐为源码版本')
+      assert.equal(
+        readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'plugin-client-code-splitting.md'), 'utf8'),
+        HELM_CLI_SKILL_ASSET.references['plugin-client-code-splitting.md']!,
+        '缺失的代码分割 reference 被补齐为源码版本',
+      )
       const again = await app2.kernel.skills.list()
       assert.equal(again.find((s) => s.id === 'helm-cli')?.description, HELM_CLI_SKILL_ASSET.skillMd.match(/description: (.+)/)?.[1])
 

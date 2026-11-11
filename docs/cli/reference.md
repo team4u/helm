@@ -143,7 +143,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helm plugins doc <pluginId> <name> [--conversation <id> | --current] [--watch]`** — 读取公开文档；会话文档必须给会话目标（`--conversation` 与 `--current` 互斥）；`--watch` 订阅专用 SSE（首帧快照 + 增量，Ctrl-C 退出）；私有文档、停用插件与不存在文档不可读。
 
-**`helm plugins client <id> [--module <m>] [--output <f>]`** — 获取 client.tsx 编译产物（缺省模块 `client.tsx`）；`--output` 写文件，否则 stdout；响应携带 `x-helm-client-hash` 内容哈希。
+**`helm plugins client <id> [--module <m>] [--chunk <name>] [--output <f>]`** — 获取 client.tsx 编译产物；缺省模块为 `client.tsx`，指定 `--chunk` 时读取对应异步 chunk；`--output` 写文件，否则 stdout；响应携带 `x-helm-client-hash` 内容哈希。
 
 **`helm plugins doctor [<id> | <dir>] [--path <dir>] [--dir <dir>] [--id <id>]`** — 外部插件源码静态自检（`POST /api/plugins/doctor`）：真实代际导入 + 临时宿主真实注册 + 前端模块真实编译。检查链 `manifest -> backend -> register -> client` 后继依赖前驱；位置参数为绝对路径时视为目录目标，否则视为插件 id。预检失败报告仍完整输出但退出码非零。注意 doctor 是静态自检：`definePlugin` 顶层依赖 `ctx.host.*` 的插件会在 register 阶段如实失败，宿主调用应放入动作处理器、服务生命周期或钩子内。
 
