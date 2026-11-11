@@ -19,7 +19,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createModels } from '@earendil-works/pi-ai/models'
@@ -37,9 +37,9 @@ import {
 import { KernelRuntime } from '../src/runtime/index.js'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
-import { serveTransport } from './helpers/herdr-unit-fixture.js'
+import { ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
-import type { Profile } from '@helm/protocol'
+import type { HelmHostNodeIpcPort, RpcResult } from '@helm/protocol'
 
 // ---------------------------------------------------------------------------
 // 共享测试基座
@@ -378,7 +378,7 @@ class ProbeBackend implements PluginHostBackend {
     addRedaction: () => () => {},
   }
   setPluginConfig(): Promise<void> { return Promise.resolve() }
-  nodeIpc = undefined
+  nodeIpc: HelmHostNodeIpcPort | undefined = undefined
   redact(text: string): string { return text }
   redactText(text: string): string { return text }
   buildSpawnEnv(): Record<string, string> { return {} }
@@ -515,7 +515,11 @@ async function makeProbeEnv(
   docs.set('builtin:herdr:managed', {
     version: 1,
     panes: managedPanes.map((p) => ({
-      target: p.nodeId !== undefined ? { nodeId: p.nodeId } : {},
+      // 本机 managed 记录必须显式携带 socketPath：插件把 config.socketPath 冻结为
+      // 本机连接目标，但逐窗格调用按各自 target 路由——缺 socketPath 时
+      // resolveSocketPath 回退继承环境（HERDR_SOCKET_PATH），读到开发机真实
+      // herdr 会话，对账必然把受控 pane 误判 settled（0 probe 的根因）。
+      target: p.nodeId !== undefined ? { nodeId: p.nodeId } : { socketPath: join(dataDir, 'herdr.sock') },
       paneId: p.paneId,
       tabId: `t-${p.paneId}`,
       effectiveCwd: p.cwd,
@@ -547,7 +551,27 @@ async function makeProbeEnv(
   }
   // 受控协议服务器：零参插件的生产 transport 经插件配置 socketPath 直连。
   const socketPath = join(dataDir, 'herdr.sock')
-  const served = await serveTransport(transport, socketPath)
+  // 帧路由：远端单行 IPC 请求期间指向目标 nodeId，其余时间归位本机 socket
+  //（serveTransport 经 targetOf 感知，把帧分发进对应分桶，与真实 EnvFabric 同构）。
+  let routedNodeId: string | undefined
+  const served = await serveTransport(transport, socketPath, () =>
+    routedNodeId !== undefined && routedNodeId !== 'local' ? { nodeId: routedNodeId } : {},
+  )
+  backend.nodeIpc = {
+    isOnline: () => true,
+    getNodeHubUrl: () => undefined,
+    call: async (nodeId, input, signal): Promise<RpcResult<string>> => {
+      routedNodeId = nodeId
+      try {
+        return await ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
+      } finally {
+        routedNodeId = undefined
+      }
+    },
+    subscribe: async () => {
+      throw new HelmError('unsupported', '本 fixture 不承载远端 IPC 订阅', 501)
+    },
+  }
   const host = new PluginHost({
     dataDir,
     host: backend,
@@ -720,6 +744,14 @@ class UiBackend extends ProbeBackend {}
 
 async function makeUiHost(): Promise<{ host: PluginHost; dataDir: string }> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ui-docs-'))
+  // 真实 clientRoot 夹具：声明 client 组件引用的插件必须提供 clientRoot
+  //（注册边界强制），module 需为真实存在的相对 .ts/.tsx 源文件。
+  const clientRoot = join(dataDir, 'fixture-client')
+  mkdirSync(clientRoot, { recursive: true })
+  writeFileSync(
+    join(clientRoot, 'main-screen.tsx'),
+    `export function MainScreen(): string { return 'ok' }\n`,
+  )
   const host = new PluginHost({
     dataDir,
     host: new UiBackend(),
@@ -733,18 +765,19 @@ test('UI docs：screen spec 如实进入 listUi 快照；声明同名 public doc
   try {
     await host.register({
       id: 'test:docs-ok',
+      clientRoot: join(dataDir, 'fixture-client'),
       definePlugin(ctx) {
         // docs 订阅由插件 client 代码经 plugin-client-sdk 完成；screen 只带
         // client 引用，不再有声明式 docs 字段（json-render 类整体迁出内核）。
         ctx.doc('overview', { version: 1 }, { public: true })
-        ctx.ui.screen({ id: 'main', label: '主视图', client: { module: 'index.tsx', export: 'MainScreen' } })
+        ctx.ui.screen({ id: 'main', label: '主视图', client: { module: 'main-screen.tsx', export: 'MainScreen' } })
         ctx.ui.workbenchPanel({ id: 'plain', label: '普通面板' })
       },
     })
     const ui = host.listUi()
     const screen = ui.find((u) => u.surface === 'screen')!
     assert.ok(screen)
-    assert.deepEqual((screen.spec as { client?: unknown }).client, { module: 'index.tsx', export: 'MainScreen' })
+    assert.deepEqual((screen.spec as { client?: unknown }).client, { module: 'main-screen.tsx', export: 'MainScreen' })
     assert.equal((screen.spec as { docs?: string[] }).docs, undefined, 'docs 字段已删除')
     // 无 client 面板不受影响。
     const panel = ui.find((u) => u.surface === 'workbench.panel')!
