@@ -33,7 +33,7 @@ import { createMemoryPlugin, MAX_MEMORY_CHARS as MEM_MAX, MemoryStore } from '..
 import { createProfileFileHost } from './helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { createSuperAgentPlugin } from '../src/builtin-plugins/superagent.js'
-import { ProfileService, SkillService } from '../src/services/index.js'
+import { ProfileService } from '../src/services/index.js'
 
 // ---------------------------------------------------------------------------
 // 共享基建
@@ -87,9 +87,20 @@ function makeControlledBackend(dataDir: string): ControlledBackend & PluginHostB
   conversations.set(1, makeConversation(1, { tags: ['root'] }))
   const notifications: Array<{ title: string; body: string; level: string }> = []
   const submits: Array<{ conversationId: number; origin?: string }> = []
+  // 真实 ProfileService/SkillService（临时目录）：自举资产走真实文件路径。
+  // profiles/skills 子端口复用 createProfileFileHost 的公共适配（含
+  // FileNotFoundError -> HelmError not_found 的边界转换，插件侧据此判定
+  // 资产缺失；superagent 等插件经 ctx.host.profiles/skills 消费）。
+  const fileHost = createProfileFileHost(dataDir)
   const rawBackend: ControlledBackend & Partial<PluginHostBackend> = {
     ...createPluginHostBackendFixture(),
     ...createProfileFileHost(dataDir),
+    profiles: fileHost.profiles,
+    skills: fileHost.skills,
+    getConversationDetail: async (id: number) => ({ ...makeConversation(id), entries: [] }) as never,
+    listArtifacts: async () => [],
+    redact: (t: string) => t,
+    setPluginConfig: async () => {},
     conversations,
     notifications,
     submits,
@@ -387,33 +398,11 @@ async function makeSuperAgentEnv(): Promise<SuperAgentEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-roll-'))
   const backend = makeControlledBackend(dataDir)
   const docs = new MemoryDocStore()
-  // 真实 ProfileService/SkillService（临时目录）：自举资产走真实文件路径，
-  // 经公开 host 子端口注入受控 backend。
-  const profiles = new ProfileService(dataDir)
-  const skills = new SkillService(dataDir)
-  await profiles.ensureDefault()
-  const fullBackend = Object.assign(hostBackendStub(), backend, {
-    profiles: {
-      list: () => profiles.list(),
-      get: (id: string) => profiles.get(id),
-      getSystem: (id: string) => profiles.getSystem(id),
-      save: (p: Parameters<typeof profiles.save>[0]) => profiles.save(p),
-      directory: async (id: string) => join(dataDir, 'profiles', id),
-    },
-    skills: {
-      list: () => skills.list(),
-      readFile: (skillId: string, path?: string) => skills.readFile(skillId, path),
-      directory: async (id: string) => join(dataDir, 'skills', id),
-      ensureSkill: (asset: Parameters<typeof skills.ensureSkill>[0]) => skills.ensureSkill(asset),
-    },
-    getConversationDetail: async (id: number) => ({ ...makeConversation(id), entries: [] }) as never,
-    listArtifacts: async () => [],
-    getConversationOwnership: () => 'helm' as const,
-    isClosing: () => false,
-    redact: (t: string) => t,
-    setPluginConfig: async () => {},
-  })
-  const host = new PluginHost({ dataDir, host: fullBackend, docs })
+  await new ProfileService(dataDir).ensureDefault()
+  // Host 直接持有受控 backend 本体（不 clone）：测试对 backend 的失败注入
+  // （markConversationOwnership 覆盖 / submitRejector）与插件消费的
+  // ctx.host 必须是同一对象。
+  const host = new PluginHost({ dataDir, host: backend, docs })
   await host.register(createSuperAgentPlugin(), { enabled: true })
   return {
     host,
@@ -526,7 +515,7 @@ async function makeWatchdogHarness(opts: {
   ownership?: (id: number) => 'helm' | 'bot' | 'human'
 } = {}) {
   const recorded: WatchdogRecorded = { notifications: [], aborts: [], abortErrors: [], submits: [] }
-  /** 测试可变注入：true 时 abortConversation 拒绝（模拟调用失败）。 */
+  /** 测试可变注入：true 时 abortConversation 拒绝（模拟调用失败；插件消费 ctx.host.abortConversation）。 */
   let abortShouldFail = false
   const routerId = 100
   const watchdogId = 200
@@ -572,7 +561,13 @@ async function makeWatchdogHarness(opts: {
     },
     getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: (id) => opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helm'),
-    abortConversation: async () => {},
+    abortConversation: async (id) => {
+      if (abortShouldFail) {
+        recorded.abortErrors.push(id)
+        throw new HelmError('abort_failed', '测试注入：abort 调用失败', 500)
+      }
+      recorded.aborts.push(id)
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},
@@ -604,24 +599,6 @@ async function makeWatchdogHarness(opts: {
     stalledAfterMs: 60_000,
     abortAfterMs: 600_000,
     errorThreshold: 3,
-  }
-  const deps = {
-    dataDir: '/tmp/helm-test-wd',
-    profiles: {} as ProfileService,
-    skills: {} as SkillService,
-    getConversationDetail: async (id: number) => ({ ...makeConversation(id), entries: [] }),
-    listArtifacts: async () => [],
-    abortConversation: async (id: number) => {
-      if (abortShouldFail) {
-        recorded.abortErrors.push(id)
-        throw new HelmError('abort_failed', '测试注入：abort 调用失败', 500)
-      }
-      recorded.aborts.push(id)
-    },
-    getConversationOwnership: (id: number) => opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helm'),
-    isClosing: () => false,
-    setRouterMode: async () => {},
-    redact: (t: string) => t,
   }
   const { registerSuperAgentWatchdog } = await import('../src/builtin-plugins/superagent/watchdog.js')
   await host.register({
