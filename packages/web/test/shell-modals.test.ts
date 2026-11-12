@@ -916,25 +916,40 @@ test('Sidebar 双层导航：Activity Rail 空间切换与系统中心直达（S
   const store = makeTestStore()
   const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
 
-  // Rail 结构：空间切换 + 系统中心 + 主题按钮均带 aria-label
+  // Rail 结构：三空间切换 + 主题按钮均带 aria-label；系统中心入口收敛到设置空间列表
   assert.ok(html.includes('activity-rail'), '应渲染 Activity Rail 容器')
   assert.ok(html.includes('aria-label="对话空间"'), '对话空间按钮')
   assert.ok(html.includes('aria-label="视图空间"'), '视图空间按钮')
-  for (const label of ['角色 Profiles', '模型与凭据', '技能库 Skills', '计算节点 Nodes', '插件中心']) {
-    assert.ok(html.includes(`aria-label="${label}"`), `系统中心入口 ${label}`)
-  }
+  assert.ok(html.includes('aria-label="设置空间"'), '设置空间按钮')
+  assert.ok(!html.includes('activity-rail-centers'), 'Rail 不再直接渲染系统中心图标')
   assert.ok(html.includes('aria-label="跟随系统"'), '主题按钮')
 
-  // 默认对话空间：智能体分组在 Context Sidebar 内；视图空间内容不渲染
+  // 默认对话空间：智能体分组在 Context Sidebar 内；视图/设置空间内容不渲染
   assert.ok(html.includes('agent-standing-group'), '对话空间渲染智能体分组')
   assert.ok(!html.includes('>视图</div>'), '默认不渲染视图空间分组')
+  assert.ok(!html.includes('settings-nav'), '默认不渲染设置空间分组')
 
   // 紧凑搜索输入与 Cmd-K 按钮共存
   assert.ok(html.includes('sidebar-search-input'), '智能体搜索输入')
   assert.ok(html.includes('title="打开 Cmd K 全局搜索与命令面板"'), 'Cmd-K 按钮保留')
 
-  // 底栏兼容层保留：既有测试与移动端热区契约继续成立
-  assert.ok(html.includes('sidebar-footer'), '底栏容器保留')
+  // 底栏已移除：系统中心入口收敛到设置空间
+  assert.ok(!html.includes('sidebar-footer'), '底栏容器已移除')
+})
+
+test('Sidebar 设置空间：系统中心纵向列表与激活高亮（SSR）', { timeout: 60_000 }, () => {
+  const store = makeTestStore({ primaryTarget: { kind: 'models' } })
+  const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
+
+  assert.ok(html.includes('settings-nav'), '设置空间渲染系统中心列表')
+  for (const label of ['角色', '模型与凭据', '技能库', '计算节点', '插件中心']) {
+    assert.ok(html.includes(`>${label}</span>`), `设置列表项 ${label}`)
+  }
+  // 当前中心为 models：设置列表项激活高亮
+  const idx = html.indexOf('>模型与凭据</span>')
+  assert.ok(idx > 0 && html.lastIndexOf('nav-item-active', idx) > 0, '模型与凭据为激活项')
+  // 设置空间不渲染智能体分组
+  assert.ok(!html.includes('agent-standing-group'), '设置空间不渲染智能体分组')
 })
 
 test('Sidebar 双层导航：手风琴单展开仅当前智能体显示话题子列表（SSR）', { timeout: 60_000 }, () => {

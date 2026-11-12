@@ -107,44 +107,27 @@ test('App.tsx 源码契约：主舞台与分屏舞台完整挂载四大一级中
 // 2. 侧栏底栏 5 大一级入口与高亮状态契约
 // ---------------------------------------------------------------------------
 
-test('Sidebar.tsx：底栏 5 大按钮统一导航至一级目标，且激活态与路由对齐', { timeout: 60_000 }, () => {
+test('Sidebar.tsx：设置空间 5 大入口统一导航至一级目标，且激活态与路由对齐', { timeout: 60_000 }, () => {
   const sidebarSrc = readFileSync(join(PKG_ROOT, 'src/shell/Sidebar.tsx'), 'utf-8')
 
-  // 1. 源码包含 5 大一级入口的分发与高亮
-  assert.match(sidebarSrc, /store\.primaryTarget\.kind === 'profiles'\s*\?\s*' is-active'/)
-  assert.match(sidebarSrc, /store\.openTarget\(\{\s*kind:\s*'profiles'\s*\}\)/)
-
-  assert.match(sidebarSrc, /store\.primaryTarget\.kind === 'models'\s*\?\s*' is-active'/)
-  assert.match(sidebarSrc, /store\.openTarget\(\{\s*kind:\s*'models'\s*\}\)/)
-
-  assert.match(sidebarSrc, /store\.primaryTarget\.kind === 'skills'\s*\?\s*' is-active'/)
-  assert.match(sidebarSrc, /store\.openTarget\(\{\s*kind:\s*'skills'\s*\}\)/)
-
-  assert.match(sidebarSrc, /store\.primaryTarget\.kind === 'nodes'\s*\?\s*' is-active'/)
-  assert.match(sidebarSrc, /store\.openTarget\(\{\s*kind:\s*'nodes'\s*\}\)/)
-
-  assert.match(sidebarSrc, /store\.primaryTarget\.kind === 'plugins'\s*\?\s*' is-active'/)
-  assert.match(sidebarSrc, /store\.openTarget\(\{\s*kind:\s*'plugins'\s*\}\)/)
+  // 1. 源码包含 5 大一级入口的纵向列表分发（表驱动 CENTER_TARGETS）
+  assert.match(sidebarSrc, /const CENTER_TARGETS = \['profiles', 'models', 'skills', 'nodes', 'plugins'\] as const/)
+  assert.match(sidebarSrc, /function SettingsNavGroup/)
 
   // 2. SSR 渲染断言激活高亮
   const targets = [
-    { kind: 'profiles' as const, label: '角色 Profiles' },
+    { kind: 'profiles' as const, label: '角色' },
     { kind: 'models' as const, label: '模型与凭据' },
-    { kind: 'skills' as const, label: '技能库 Skills' },
-    { kind: 'nodes' as const, label: '计算节点 Nodes' },
+    { kind: 'skills' as const, label: '技能库' },
+    { kind: 'nodes' as const, label: '计算节点' },
     { kind: 'plugins' as const, label: '插件中心' },
   ]
 
   for (const { kind, label } of targets) {
     const store = makeTestStore({ primaryTarget: { kind } })
     const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
-    assert.ok(
-      html.includes(`is-active" title="${label}"`) || html.includes(`is-active" aria-label="${label}"`),
-      `当 primaryTarget=${kind} 时，${label} 按钮应包含 is-active 样式类`,
-    )
-    assert.ok(
-      html.includes(`aria-current="page"`) && html.includes(`aria-label="${label}"`),
-      `当 primaryTarget=${kind} 时，${label} 按钮应设置 aria-current="page"`,
+    assert.ok(html.includes(`nav-item-active`), `当 primaryTarget=${kind} 时，${label} 行应高亮`)
+    assert.ok(html.includes(`aria-current="page"`), `当 primaryTarget=${kind} 时，${label} 行应设置 aria-current="page"`
     )
   }
 })

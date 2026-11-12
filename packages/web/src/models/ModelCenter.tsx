@@ -98,7 +98,6 @@ export function ModelCenter({
   }, [customProviders, store.credentials, store.providers, store.models, catalog])
 
   // 总量统计
-  const summaryStats = useMemo(() => summarizeProviders(providers), [providers])
 
   // 综合过滤（按关键词）
   const filteredProviders = useMemo(() => {
@@ -214,15 +213,9 @@ export function ModelCenter({
             <HelmIcon name="cpu" size={16} />
             <span>模型与凭证中心</span>
           </div>
-          <div className="primary-center-subtitle">
-            管理大语言模型供应商、API 凭证与模型路由配置
-          </div>
         </div>
 
         <div className="primary-center-topbar-actions">
-          <div className="primary-center-stats">
-            {`已配置 ${summaryStats.configured} / 共 ${summaryStats.total} 个供应商`}
-          </div>
           {isSplit && onCloseSplit && (
             <button
               type="button"

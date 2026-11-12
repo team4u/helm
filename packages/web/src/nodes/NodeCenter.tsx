@@ -47,7 +47,6 @@ export function NodeCenter({
 
   const nodes: NodeInfo[] = (store.nodes as NodeInfo[]) ?? []
   const categoryCounts = useMemo(() => buildNodeCategoryCounts(nodes), [nodes])
-  const summaryStats = useMemo(() => summarizeNodes(nodes), [nodes])
 
   const filteredNodes = useMemo(() => {
     return filterNodes(nodes, {
@@ -89,16 +88,9 @@ export function NodeCenter({
             <HelmIcon name="cpu" size={16} />
             <span>计算节点中心</span>
           </div>
-          <span className="primary-center-subtitle text-subtle">
-            管理本地微内核与分布式远程执行计算节点
-          </span>
         </div>
 
         <div className="primary-center-topbar-actions">
-          <div className="primary-center-stats text-subtle">
-            {`共 ${summaryStats.total} 个节点 · ${summaryStats.online} 个在线`}
-          </div>
-
           <button
             type="button"
             className="btn btn-sm btn-primary"

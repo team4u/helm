@@ -40,7 +40,6 @@ export function ProfileCenter({
 
   const profiles = store.profiles ?? []
   const categoryCounts = useMemo(() => buildProfileCategoryCounts(profiles), [profiles])
-  const summaryStats = useMemo(() => summarizeProfiles(profiles), [profiles])
 
   const filteredProfiles = useMemo(() => {
     return filterProfiles(profiles, {
@@ -112,22 +111,16 @@ export function ProfileCenter({
       className={`primary-center${isSplit ? ' is-split' : ''}`}
       data-view="profile-center"
     >
-      {/* 顶栏：标题、副标题、统计摘要与操作 */}
+      {/* 顶栏：标题与操作 */}
       <div className="primary-center-topbar">
         <div className="primary-center-title-wrap">
           <div className="primary-center-title">
             <HelmIcon name="bot" size={16} />
             <span>智能体角色中心</span>
           </div>
-          <span className="primary-center-subtitle">
-            管理常驻助理、专业角色、编排 Worker 与执行配置
-          </span>
         </div>
 
         <div className="primary-center-topbar-actions">
-          <div className="primary-center-stats">
-            {`共 ${summaryStats.total} 个角色 · ${summaryStats.system} 个内置 · ${summaryStats.custom} 个自定义`}
-          </div>
           <button
             type="button"
             className="btn btn-primary btn-sm"

@@ -41,7 +41,6 @@ export function PluginCenter({
   const refreshGeneration = React.useRef(0)
 
   const plugins = store.plugins ?? []
-  const summaryStats = useMemo(() => summarizePlugins(plugins), [plugins])
 
   const filteredPlugins = useMemo(() => {
     return filterPlugins(plugins, { query })
@@ -160,16 +159,9 @@ export function PluginCenter({
             <HelmIcon name="puzzle" size={16} />
             <span>插件中心</span>
           </div>
-          <span className="plugin-center-subtitle text-subtle">
-            管理系统核心内置、协同编排与三方扩展插件
-          </span>
         </div>
 
         <div className="plugin-center-topbar-actions">
-          <div className="plugin-center-stats text-subtle">
-            {`共 ${summaryStats.total} 个插件 · ${summaryStats.enabled} 个已启用`
-              + (summaryStats.failed > 0 ? ` · ${summaryStats.failed} 个异常` : '')}
-          </div>
           <button
             type="button"
             className="btn btn-sm"

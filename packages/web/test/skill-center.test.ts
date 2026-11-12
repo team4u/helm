@@ -476,16 +476,10 @@ test('SkillCenter: SSR 渲染顶栏、检索栏、网格流与零 Emoji 铁律',
     ),
   )
 
-  // 顶栏断言
+  // 顶栏断言（副标题与统计摘要已按极简顶栏契约移除）
   assert.ok(html.includes('primary-center-topbar'), '应包含 primary-center-topbar 顶栏')
   assert.ok(html.includes('技能中心'), '应展示技能中心标题')
-  assert.ok(
-    html.includes('管理大模型工具技能、规程与代码参考指引'),
-    '应展示副标题',
-  )
-  assert.ok(html.includes('共 5 个技能'), '应展示总计技能数')
-  assert.ok(html.includes('2 个内置'), '应展示内置技能数')
-  assert.ok(html.includes('2 个工作区'), '应展示工作区技能数')
+  assert.ok(!html.includes('primary-center-subtitle'), '不应再渲染副标题')
 
   // 检索栏与分类标签
   assert.ok(html.includes('primary-center-toolbar'), '应包含 primary-center-toolbar 工具栏')

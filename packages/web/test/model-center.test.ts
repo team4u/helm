@@ -303,7 +303,6 @@ test('ModelDetailDrawer SSR: inline={true} 渲染凭据表单、连通性按钮�
   // 1. 抽屉标题与元信息
   assert.match(html, /OpenAI/)
   assert.match(html, /class="[^"]*mono[^"]*"[^>]*>openai<\/div>/)
-  assert.match(html, /已配置/)
 
   // 2. 表单字段（API Key 输入框与 Base URL 输入框）
   assert.match(html, /API 密钥/)
@@ -378,10 +377,8 @@ test('ModelCenter SSR: 完整渲染顶栏、Tab 栏、检索框、分类药丸�
   // 1. 顶栏标题与副标题
   assert.match(html, /class="[^"]*primary-center-title[^"]*"/)
   assert.match(html, /模型与凭证中心/)
-  assert.match(html, /管理大语言模型供应商、API 凭证与模型路由配置/)
 
   // 2. 统计摘要、顶部 Tab 与全局默认状态行
-  assert.match(html, /已配置\s*2\s*\/\s*共\s*(?:9|10)\s*个供应商/)
   assert.match(html, /供应商<\/span>/)
   assert.match(html, /全局默认/)
 

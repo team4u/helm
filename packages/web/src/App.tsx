@@ -81,10 +81,7 @@ function HelmShellInner() {
       className={`helm-shell${sidebarOpen ? ' sidebar-open' : ''}`}
       onClick={(event) => {
         const target = event.target as HTMLElement
-        if (
-          target.closest('.nav-item') ||
-          target.closest('.sidebar-footer button')
-        ) {
+        if (target.closest('.nav-item')) {
           setSidebarOpen(false)
         }
       }}

@@ -121,15 +121,25 @@ test('Sidebar 空间切换：对话空间默认渲染智能体，视图空间渲
   assert.ok(!body.textContent!.includes('个人助理'), '视图空间不渲染智能体分组')
 })
 
-test('Sidebar 系统中心直达：Rail 点击插件中心调用 openTarget', { timeout: 60_000 }, async () => {
+test('Sidebar 设置空间：点击设置空间按钮切换列表，点击插件中心调用 openTarget', { timeout: 60_000 }, async () => {
   const store = makeStore()
   render(store, e(Sidebar))
   await act(async () => {})
 
-  const pluginsBtn = document.body.querySelector('button[aria-label="插件中心"]') as HTMLButtonElement
-  assert.ok(pluginsBtn, '插件中心 Rail 按钮存在')
+  // 切到设置空间
+  const settingsBtn = document.body.querySelector('button[aria-label="设置空间"]') as HTMLButtonElement
+  assert.ok(settingsBtn, '设置空间按钮存在')
   await act(async () => {
-    pluginsBtn.click()
+    settingsBtn.click()
+  })
+  assert.ok(document.body.querySelector('.settings-nav'), '设置空间渲染系统中心列表')
+
+  // 点击插件中心列表项（行主体 nav-item-main）
+  const items = [...document.body.querySelectorAll('.settings-nav-item .nav-item-main')] as HTMLButtonElement[]
+  const pluginsItem = items.find((el) => el.textContent!.includes('插件中心'))
+  assert.ok(pluginsItem, '插件中心设置项存在')
+  await act(async () => {
+    pluginsItem!.click()
   })
   assert.deepEqual(store.openTargetCalls, [{ target: { kind: 'plugins' }, split: undefined }])
 })

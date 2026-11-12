@@ -140,8 +140,6 @@ test('PluginCenter SSR：渲染搜索框、统计徽章与卡片网格', { timeo
   assert.match(html, /placeholder="[^"]*搜索/)
 
   // 3. 统计指标显示（无故障态时不展示异常计数）
-  assert.match(html, /共\s*5\s*个插件/)
-  assert.match(html, /4\s*个已启用/)
   assert.doesNotMatch(html, /个异常/)
 
   // 5. 响应式自适应网格与所有卡片
@@ -165,9 +163,6 @@ test('PluginCenter SSR：存在 failed 故障态插件时顶栏统计追加异�
   )
 
   // 1. 顶栏统计追加异常计数（failed 插件 enabled: false，不计入已启用）
-  assert.match(html, /共\s*6\s*个插件/)
-  assert.match(html, /4\s*个已启用/)
-  assert.match(html, /1\s*个异常/)
 
   // 2. 故障卡片标记 is-failed 并渲染异常徽章
   assert.match(html, /data-plugin-id="external:broken"/)
@@ -286,15 +281,14 @@ test('全局入口收敛：App.tsx 主舞台接入 PluginCenter，废弃旧弹�
   assert.match(appSrc, /openTarget\(\{\s*kind:\s*'plugins'/)
 })
 
-test('全局入口收敛：Sidebar.tsx 齿轮按钮更新为“插件中心”，并在激活时高亮', { timeout: 60_000 }, () => {
+test('全局入口收敛：Sidebar.tsx 设置空间提供“插件中心”入口并在激活时高亮', { timeout: 60_000 }, () => {
   const sidebarSrc = readFileSync(join(PKG_ROOT, 'src/shell/Sidebar.tsx'), 'utf-8')
-  // 1. 文案与提示为“插件中心”
-  assert.match(sidebarSrc, /content="插件中心"/)
-  assert.match(sidebarSrc, /title="插件中心"/)
-  // 2. 点击调用 openTarget({ kind: 'plugins' })
-  assert.match(sidebarSrc, /store\.openTarget\(\{\s*kind:\s*'plugins'\s*\}\)/)
+  // 1. 设置空间 CENTER_LABELS 提供插件中心文案
+  assert.match(sidebarSrc, /plugins: '插件中心'/)
+  // 2. 点击调用 openTarget({ kind: 'plugins' })（SettingsNavGroup 表驱动分发）
+  assert.match(sidebarSrc, /store\.openTarget\(\{\s*kind:\s*key\s*\}\)/)
   // 3. 处于 plugins 目标时激活状态
-  assert.match(sidebarSrc, /store\.primaryTarget\.kind === 'plugins'/)
+  assert.match(sidebarSrc, /store\.primaryTarget\.kind === key/)
 })
 
 test('全局入口收敛：CommandPaletteModal.tsx 导航至 plugins', { timeout: 60_000 }, () => {

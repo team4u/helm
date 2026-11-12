@@ -159,7 +159,7 @@ test('静音容器与空状态原语：.section-flat, .search-box, .empty-state 
   )
 })
 
-test('既有测试契约不受破坏：.btn-send, .pane-parent-nav-btn, .sidebar-footer .btn, .msg-hover-bar .btn', { timeout: 60_000 }, () => {
+test('既有测试契约不受破坏：.btn-send, .pane-parent-nav-btn, .msg-hover-bar .btn', { timeout: 60_000 }, () => {
   assert.match(
     stylesCss,
     /\.btn-send\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px;[^}]*border-radius:\s*50%/,
@@ -174,11 +174,6 @@ test('既有测试契约不受破坏：.btn-send, .pane-parent-nav-btn, .sidebar
     stylesCss,
     /\.pane-parent-nav-btn\s*\{[^}]*flex-shrink:\s*0;/,
     '.pane-parent-nav-btn 必须保持 flex-shrink: 0',
-  )
-  assert.match(
-    stylesCss,
-    /\.sidebar-footer\s+\.btn\s*\{[^}]*width:\s*28px;[^}]*height:\s*28px;[^}]*padding:\s*0\s*!important;/,
-    '.sidebar-footer .btn 必须保持 28x28 与 padding: 0 !important',
   )
   assert.match(
     stylesCss,

@@ -446,8 +446,6 @@ test('ProfileCenter：全屏中心顶栏、检索栏、卡片流网格与 0 Emoj
   // 1. 顶栏要素
   assert.match(html, /data-view="profile-center"/)
   assert.match(html, /智能体角色中心/)
-  assert.match(html, /管理常驻助理、专业角色、编排 Worker 与执行配置/)
-  assert.match(html, /共 5 个角色 · 3 个内置 · 2 个自定义/)
   assert.match(html, /新建角色/)
 
   // 2. 工具栏搜索与分类标签

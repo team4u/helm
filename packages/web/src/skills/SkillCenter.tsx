@@ -45,7 +45,6 @@ export function SkillCenter({
 
   const skills = store.skills ?? []
   const categoryCounts = useMemo(() => buildSkillCategoryCounts(skills), [skills])
-  const summaryStats = useMemo(() => summarizeSkills(skills), [skills])
 
   const filteredSkills = useMemo(() => {
     return filterSkills(skills, {
@@ -82,15 +81,9 @@ export function SkillCenter({
             <HelmIcon name="terminal" size={16} />
             <span>技能中心</span>
           </div>
-          <span className="primary-center-subtitle text-subtle">
-            管理大模型工具技能、规程与代码参考指引
-          </span>
         </div>
 
         <div className="primary-center-topbar-actions">
-          <div className="primary-center-stats text-subtle">
-            {`共 ${summaryStats.total} 个技能 · ${summaryStats.builtin} 个内置 · ${summaryStats.workspace} 个工作区`}
-          </div>
           {isSplit && onCloseSplit && (
             <button
               type="button"

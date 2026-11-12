@@ -50,8 +50,8 @@ test('App.tsx 在 Modal 激活或底栏工具触发时自动关闭移动端侧�
 
   assert.match(
     appSource,
-    /target\.closest\(['"]\.sidebar-footer button['"]\)/,
-    'App.tsx 点击底栏工具按钮时关闭移动侧栏抽屉',
+    /target\.closest\(['"]\.nav-item['"]\)/,
+    'App.tsx 点击导航项时关闭移动侧栏抽屉',
   )
 
   assert.doesNotMatch(
@@ -163,11 +163,6 @@ test('responsive.css 适配移动端视口安全区、触控热区与遮罩层�
     responsiveCss,
     /\.mobile-nav-toggle\s*\{[^}]*width:\s*36px;[^}]*height:\s*36px;/,
     '.mobile-nav-toggle 触控热区提升至 36x36px',
-  )
-  assert.match(
-    responsiveCss,
-    /\.sidebar-footer\s+\.btn\s*\{[^}]*min-width:\s*32px;[^}]*min-height:\s*32px;/,
-    '侧边栏底栏工具项触控热区至少 32x32px',
   )
 
   // 遮罩层级与样式

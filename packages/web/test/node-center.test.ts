@@ -413,8 +413,6 @@ test('NodeCenter: SSR 渲染顶栏、检索工具栏、分类药丸、网格流�
   assert.match(html, /primary-center/)
   assert.match(html, /node-center/)
   assert.match(html, /计算节点中心/)
-  assert.match(html, /管理本地微内核与分布式远程执行计算节点/)
-  assert.match(html, /共 3 个节点 · 2 个在线/)
   assert.match(html, /接入节点/)
 
   // 2. 检索栏与分类药丸

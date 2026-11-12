@@ -92,9 +92,6 @@ test('Mermaid 预览弹窗：纯全屏沉浸式画板、默认 1:1 实际比例�
 
 test('侧边栏页脚底栏按钮尺寸统一与内边距防挤压', { timeout: 60_000 }, () => {
   // 底部全部按钮尺寸统一为 28x28，内边距强制为 0 防图标挤压
-  assert.match(stylesCss, /\.sidebar-footer\s+\.btn\s*\{[^}]*width:\s*28px/)
-  assert.match(stylesCss, /\.sidebar-footer\s+\.btn\s*\{[^}]*height:\s*28px/)
-  assert.match(stylesCss, /\.sidebar-footer\s+\.btn\s*\{[^}]*padding:\s*0\s*!important/)
   assert.match(stylesCss, /\.sidebar-theme-toggle\s*\{[^}]*padding:\s*0\s*!important/)
 })
 

@@ -140,7 +140,16 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     width: 36px;
     height: 36px;
     padding: 0;
-    background: var(--bg);
+    /* 纯图标悬浮按钮：去掉 .btn 的边框/底色/投影，与页面融为一体 */
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    color: var(--fg-secondary);
+    border-radius: var(--radius-sm);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mobile-nav-toggle:active {
+    background: var(--bg-hover);
   }
   .sidebar-open .mobile-nav-toggle { display: none; }
   .mobile-sidebar-close {
@@ -156,17 +165,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     width: 38px;
     height: 38px;
   }
-  .sidebar-footer .btn {
-    min-width: 32px;
-    min-height: 32px;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
   .helm-panes > .helm-pane > .pane-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
+  /* 一级中心（角色/模型/技能/节点/插件）顶栏同样为左上角悬浮汉堡让位 */
+  .primary-center-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
   .helm-panes { flex-direction: column; }
   .helm-split-pane { width: 100%; height: 0; min-height: 0; border-left: 0; border-top: 1px solid var(--border-strong); }
   .modal-backdrop { padding: 10px; }
