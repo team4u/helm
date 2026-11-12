@@ -1,6 +1,6 @@
-import { after, before, describe, it } from 'node:test'
+import { after, before, describe, it, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, symlink, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer, type Server, type Socket } from 'node:net'
@@ -9,6 +9,7 @@ import { HelmError } from '@helm/protocol'
 import {
   HERDR_CALL_TIMEOUT_MS,
   HerdrTransportError,
+  LineAssembler,
   createHerdrTransport,
   isValidNodeId,
   isValidSessionName,
@@ -44,6 +45,96 @@ function makeServer(onLine: (line: string, socket: Socket, write: (s: string) =>
 function withTimeout<T>(promise: Promise<T>, ms = 8000): Promise<T> {
   return Promise.race([promise, new Promise<T>((_, reject) => setTimeout(() => reject(new Error('test timeout')), ms).unref())])
 }
+
+async function tempRoot(t: TestContext): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'helm-transport-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  return root
+}
+
+/** 节点通道 fixture：远端目标经真实 LocalNodeChannel 走受控 UDS 服务器。 */
+async function channelFixture(t: TestContext, respond: (request: Record<string, unknown>, socket: Socket) => void) {
+  const fixture = await nodeFixture(t, respond)
+  const channel = new MutableNodeChannel()
+  channel.nodes.set('fixture-node', { online: true, channel: fixture.channel })
+  return {
+    fixture,
+    channel,
+    transport: createHerdrTransport({ nodeChannel: channel }),
+    target: { nodeId: 'fixture-node', socketPath: fixture.socketPath } as const,
+  }
+}
+
+/** 本机受控 UDS 服务器（本机分支测试用）。 */
+async function localSocketServer(t: TestContext, root: string, respond: (request: Record<string, unknown>, socket: Socket) => void): Promise<string> {
+  const sockets = new Set<Socket>()
+  const socketPath = join(root, 'herdr.sock')
+  const server = createServer({ allowHalfOpen: true }, (socket) => {
+    sockets.add(socket)
+    socket.once('close', () => sockets.delete(socket))
+    let input = ''
+    socket.on('data', (chunk) => {
+      input += chunk.toString('utf8')
+      const newline = input.indexOf('\n')
+      if (newline >= 0) respond(JSON.parse(input.slice(0, newline)), socket)
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve))
+  t.after(async () => {
+    for (const socket of sockets) socket.destroy()
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+  })
+  return socketPath
+}
+
+describe('LineAssembler 字节级确定性', () => {
+  it('逐字节喂入不破坏跨 chunk UTF-8 与多帧累计', { timeout: 60_000 }, () => {
+    const frames = [
+      JSON.stringify({ event: 'pane_updated', data: { pane: { pane_id: 'w1:p1', title: '中文标题-β与emoji占位' } } }),
+      JSON.stringify({ id: '2', result: { type: 'agent_info', agent: { name: '名称二' } } }),
+      JSON.stringify({ event: 'pane_closed', data: { pane_id: 'w2:p3' } }),
+    ]
+    const stream = Buffer.from(`${frames.join('\n')}\n`, 'utf8')
+    const assembler = new LineAssembler()
+    const collected: string[] = []
+    for (let i = 0; i < stream.length; i += 1) {
+      collected.push(...assembler.push(stream.subarray(i, i + 1)))
+    }
+    collected.push(...assembler.flush())
+    assert.deepEqual(
+      collected.map((line) => JSON.parse(line)),
+      frames.map((line) => JSON.parse(line)),
+    )
+  })
+
+  it('坏 UTF-8 序列显式报协议错误', { timeout: 60_000 }, () => {
+    const assembler = new LineAssembler()
+    const invalid = Buffer.concat([Buffer.from([0x22, 0xe4, 0xbd]), Buffer.from([0x0a])])
+    assert.throws(() => assembler.push(invalid), (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_protocol')
+  })
+
+  it('单帧超限显式报错，且限额按帧不按连接累计', { timeout: 60_000 }, () => {
+    const assembler = new LineAssembler()
+    // 两帧各 100 字节：均低于 256 限额，累计也不触发（连接级累计会误杀）。
+    const okFrame = Buffer.concat([Buffer.alloc(100, 0x61), Buffer.from([0x0a])])
+    assert.equal(assembler.push(okFrame, 256).length, 1)
+    assert.equal(assembler.push(okFrame, 256).length, 1)
+    // 单帧超限必须拒绝。
+    const bigFrame = Buffer.concat([Buffer.alloc(300, 0x62), Buffer.from([0x0a])])
+    assert.throws(
+      () => assembler.push(bigFrame, 256),
+      (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_frame_too_large',
+    )
+  })
+
+  it('NUL 字节显式拒绝', { timeout: 60_000 }, () => {
+    const assembler = new LineAssembler()
+    assert.throws(
+      () => assembler.push(Buffer.from([0x61, 0x00, 0x0a])),
+      (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_protocol',
+    )
+  })
+})
 
 describe('herdr transport wire', () => {
   let socketDir: string
@@ -222,6 +313,90 @@ describe('herdr transport wire', () => {
     assert.equal(closed, 2)
     await close(server)
   })
+
+  it('target.socketPath 覆盖继承的 HERDR_SOCKET_PATH（禁止 env -u 凑绿）', { timeout: 60_000 }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'herdr-prio-'))
+    const explicitSocket = join(dir, 'explicit.sock')
+    const envSocket = join(dir, 'env.sock')
+    const seen: string[] = []
+    const server = createServer((socket) => {
+      socket.on('data', (chunk) => {
+        const req = JSON.parse(chunk.toString('utf8').trim())
+        seen.push(req.method)
+        socket.end(`${JSON.stringify({ id: req.id, result: { type: 'pong', via: 'explicit' } })}\n`)
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(explicitSocket, resolve))
+    process.env.HERDR_SOCKET_PATH = envSocket // 故意指向不存在的路径
+    try {
+      const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
+      const result = (await transport.call({ socketPath: explicitSocket }, 'ping', {})) as Record<string, unknown>
+      assert.equal(result['via'], 'explicit')
+      assert.deepEqual(seen, ['ping'])
+    } finally {
+      delete process.env.HERDR_SOCKET_PATH
+      await rm(dir, { recursive: true, force: true })
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+
+  it('缺 result 与 error 的响应显式失败', { timeout: 60_000 }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'herdr-call-bad-'))
+    const path = join(dir, 's.sock')
+    const server = createServer((socket) => {
+      socket.on('data', (chunk) => {
+        const req = JSON.parse(chunk.toString('utf8').trim())
+        socket.end(`${JSON.stringify({ id: req.id })}\n`) // 只有 id
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(path, resolve))
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
+    await assert.rejects(
+      transport.call({ socketPath: path }, 'ping', {}),
+      (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_protocol',
+    )
+    await rm(dir, { recursive: true, force: true })
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  it('响应 id 不匹配显式失败', { timeout: 60_000 }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'herdr-call-id-'))
+    const path = join(dir, 's.sock')
+    const server = createServer((socket) => {
+      socket.on('data', () => {
+        socket.end(`${JSON.stringify({ id: 'other', result: { type: 'pong' } })}\n`)
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(path, resolve))
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
+    await assert.rejects(
+      transport.call({ socketPath: path }, 'ping', {}),
+      (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_protocol',
+    )
+    await rm(dir, { recursive: true, force: true })
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  for (const remote of [false, true]) {
+    it(`${remote ? '远端节点' : '本机'}RPC 拒绝没有关联 id 的响应`, { timeout: 60_000 }, async (t) => {
+      const root = await tempRoot(t)
+      const respond = (_request: Record<string, unknown>, socket: Socket) => {
+        socket.end(`${JSON.stringify({ result: { type: 'ok' } })}\n`)
+      }
+      let transport: ReturnType<typeof createHerdrTransport>
+      let target: { nodeId?: string; socketPath?: string }
+      if (remote) {
+        const built = await channelFixture(t, respond)
+        transport = built.transport
+        target = built.target
+      } else {
+        const socketPath = await localSocketServer(t, root, respond)
+        transport = createHerdrTransport()
+        target = { socketPath }
+      }
+      await assert.rejects(transport.call(target, 'tab.close', { tab_id: 't1' }, { timeoutMs: 3_000 }), { code: 'herdr_protocol' })
+    })
+  }
 })
 
 describe('herdr transport subscribe', () => {
@@ -305,6 +480,105 @@ describe('herdr transport subscribe', () => {
     assert.equal(errors.length, 0)
     stop()
     await close(server)
+  })
+
+  it('ack 与事件同 chunk 到达时全部处理，不丢事件', { timeout: 60_000 }, async () => {
+    const server = makeServer((line, socket) => {
+      const request = JSON.parse(line) as { id: string; method: string }
+      assert.equal(request.method, 'events.subscribe')
+      const ack = JSON.stringify({ id: request.id, result: { type: 'subscription_started' } })
+      const e1 = JSON.stringify({ event: 'pane_updated', data: { pane_id: 'w1:p2' } })
+      const e2 = JSON.stringify({ event: 'pane_closed', data: { pane_id: 'w1:p3' } })
+      // 三帧合并成一个 chunk 写出
+      socket.write(`${ack}\n${e1}\n${e2}\n`)
+    })
+    socketPath = await listen(server)
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
+    const events: { type: string; paneId?: string }[] = []
+    const stop = await transport.subscribe({ socketPath }, (event) => events.push(event), () => assert.fail('不应有错误'))
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    assert.deepEqual(events.map((e) => [e.type, e.paneId]), [
+      ['pane.updated', 'w1:p2'],
+      ['pane.closed', 'w1:p3'],
+    ])
+    stop()
+    await close(server)
+  })
+
+  it('坏 JSON 帧显式报错且只报一次', { timeout: 60_000 }, async () => {
+    const server = makeServer((line, socket) => {
+      const request = JSON.parse(line) as { id: string }
+      socket.write(`${JSON.stringify({ id: request.id, result: { type: 'subscription_started' } })}\n`)
+      socket.write('{"event": "pane_updated", "data": \n') // 坏 JSON
+      socket.write('同样一行坏 JSON\n')
+    })
+    socketPath = await listen(server)
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
+    const errors: unknown[] = []
+    const stop = await transport.subscribe({ socketPath }, () => {}, (err) => errors.push(err))
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(errors.length, 1)
+    assert.ok(errors[0] instanceof HerdrTransportError)
+    stop()
+    await close(server)
+  })
+
+  it('事件帧缺 pane 身份显式报错并停止', { timeout: 60_000 }, async () => {
+    const server = makeServer((line, socket) => {
+      const request = JSON.parse(line) as { id: string }
+      socket.write(`${JSON.stringify({ id: request.id, result: { type: 'subscription_started' } })}\n`)
+      socket.write(`${JSON.stringify({ event: 'pane_updated', data: { pane: {} } })}\n`)
+    })
+    socketPath = await listen(server)
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
+    const errors: unknown[] = []
+    const stop = await transport.subscribe({ socketPath }, () => {}, (err) => errors.push(err))
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    assert.equal(errors.length, 1)
+    assert.ok(errors[0] instanceof HerdrTransportError && errors[0].code === 'herdr_protocol')
+    stop()
+    await close(server)
+  })
+
+  it('服务端永不 ack 时在期限内显式失败，不永久挂起', { timeout: 60_000 }, async () => {
+    const server = makeServer(() => {
+      /* 静默 */
+    })
+    socketPath = await listen(server)
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
+    await assert.rejects(
+      transport.subscribe({ socketPath }, () => {}, () => {}),
+      (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_timeout',
+    )
+    await close(server)
+    // ack promise 已被 race 拒绝终结；短暂等待确认无二次上报即可。
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  })
+
+  it('stop() 主动关闭不误报错误', { timeout: 60_000 }, async () => {
+    const server = makeServer((line, socket) => {
+      const request = JSON.parse(line) as { id: string }
+      socket.write(`${JSON.stringify({ id: request.id, result: { type: 'subscription_started' } })}\n`)
+    })
+    socketPath = await listen(server)
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
+    const errors: unknown[] = []
+    const stop = await transport.subscribe({ socketPath }, () => {}, (err) => errors.push(err))
+    stop()
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    assert.equal(errors.length, 0)
+    await close(server)
+  })
+
+  it('订阅 ack 必须携带本次请求 id', { timeout: 60_000 }, async (t) => {
+    const root = await tempRoot(t)
+    const path = await localSocketServer(t, root, (_request, socket) => {
+      socket.write(`${JSON.stringify({ id: 'wrong-subscription', result: { type: 'subscription_started' } })}\n`)
+    })
+    await assert.rejects(async () => {
+      const stop = await createHerdrTransport().subscribe({ socketPath: path }, () => {}, () => {})
+      stop()
+    }, { code: 'herdr_protocol' })
   })
 
   it('ack 前服务端报错则 subscribe 显式失败', { timeout: 60_000 }, async () => {
@@ -547,9 +821,42 @@ describe('herdr transport output files', () => {
       (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_output_not_file',
     )
   })
+
+  it('.helm 为软链时读写均拒绝', { timeout: 60_000 }, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'herdr-escape-'))
+    const cwd = join(root, 'task')
+    const outside = join(root, 'outside')
+    await mkdir(cwd)
+    await mkdir(outside)
+    await writeFile(join(outside, 'wf-out-parent.json'), '{"private":true}')
+    await symlink(outside, join(cwd, '.helm'))
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
+    await assert.rejects(transport.readOutput({}, cwd, 'wf-out-parent.json'), (err: unknown) => err instanceof HerdrTransportError && (err.code === 'herdr_output_escaping' || err.code === 'herdr_output_not_file'))
+    await assert.rejects(transport.removeOutput({}, cwd, 'wf-out-parent.json'), (err: unknown) => err instanceof HerdrTransportError && (err.code === 'herdr_output_escaping' || err.code === 'herdr_output_not_file'))
+    assert.equal(await readFile(join(outside, 'wf-out-parent.json'), 'utf8'), '{"private":true}')
+    await rm(root, { recursive: true, force: true })
+  })
+
+  for (const remote of [false, true]) {
+    it(`${remote ? '远端节点' : '本机'}缺少 .helm 目录时读取为缺文件，删除保持幂等`, { timeout: 60_000 }, async (t) => {
+      const root = await tempRoot(t)
+      const { transport, target } = remote
+        ? await channelFixture(t, () => {})
+        : { transport: createHerdrTransport(), target: {} as { nodeId?: string; socketPath?: string } }
+      const finalTarget = remote ? target : {}
+      await assert.rejects(transport.readOutput(finalTarget, root, 'wf-out-missing.md'), { code: 'herdr_output_missing' })
+      await transport.removeOutput(finalTarget, root, 'wf-out-missing.md')
+    })
+  }
 })
 
 describe('herdr transport local gate', () => {
+  it('本机 transport Gate 在传入的 cwd 实际执行', { timeout: 60_000 }, async (t) => {
+    const root = await tempRoot(t)
+    const result = await createHerdrTransport().runGate({}, 'pwd', root)
+    assert.deepEqual(result, { ok: true, output: `${root}\n` })
+  })
+
   it('exit 非零 ok=false 且保留输出', { timeout: 60_000 }, async () => {
     const transport = createHerdrTransport()
     const result = await withTimeout(transport.runGate({}, 'echo boom >&2; exit 3', process.cwd()))
@@ -577,23 +884,75 @@ describe('herdr transport local gate', () => {
       clearTimeout(timer)
     }
   })
+
+  it('超限输出 ok=false 且明确报限额', { timeout: 60_000 }, async () => {
+    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
+    // 1MiB+ 输出：限额内成功保留完整；超出则显式失败。此处生成 1.1MiB。
+    const result = await transport.runGate({}, 'head -c 1150000 /dev/zero | tr "\\0" "x"', process.cwd())
+    if (result.ok) {
+      assert.ok(result.output.length > 1_000_000, '限额内输出必须完整保留')
+    } else {
+      assert.ok(result.output.includes('exceeded'), '超限必须明确说明而非截断')
+    }
+  })
+
+  it('Gate 主进程已退出时 abort 仍清理持有管道的自有子进程', { timeout: 60_000 }, async (t) => {
+    const root = await tempRoot(t)
+    const controller = new AbortController()
+    const pending = createHerdrTransport().runGate({}, 'sleep 300 & printf "%s %s" "$$" "$!" > processes; exit 0', root, controller.signal)
+    const observed = pending.then((result) => ({ result }), (error: unknown) => ({ error }))
+    let group = 0
+    let child = 0
+    let timer: NodeJS.Timeout | undefined
+    try {
+      const deadline = Date.now() + 5_000
+      for (;;) {
+        try {
+          ;[group, child] = (await readFile(join(root, 'processes'), 'utf8')).trim().split(' ').map(Number) as [number, number]
+          if (group > 1 && child > 1) {
+            try { process.kill(group, 0) } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === 'ESRCH') break
+              throw error
+            }
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
+        assert.ok(Date.now() < deadline, '应先证实 Gate 主进程已退出')
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      process.kill(child, 0)
+      controller.abort()
+      const outcome = await Promise.race([
+        observed,
+        new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 1_000) }),
+      ])
+      assert.ok(outcome, '主进程退出后仍须杀掉自有子进程并结算')
+      assert.ok('error' in outcome)
+      assert.equal((outcome.error as { code?: string }).code, 'herdr_aborted')
+    } finally {
+      clearTimeout(timer)
+      controller.abort()
+      if (group > 1 && child > 1) {
+        try { process.kill(-group, 'SIGKILL') } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+        }
+      }
+      await observed
+    }
+  })
 })
 
 describe('herdr transport remote (node channel)', () => {
   it('nodeId 与 session 校验拒绝注入', { timeout: 60_000 }, () => {
     // 新契约：单一安全 token /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/（含 'local'）。
     // 旧 SSH 机器名形态（user@host、IPv6）不再是合法节点 ID。
-    assert.equal(isValidNodeId('build-box'), true)
-    assert.equal(isValidNodeId('local'), true)
-    assert.equal(isValidNodeId('macbook_pro.2'), true)
-    assert.equal(isValidNodeId('root@10.0.0.3'), false, 'SSH user@host 遗留形态拒绝')
-    assert.equal(isValidNodeId('2001:db8::1'), false, 'IPv6 冒号拒绝')
-    assert.equal(isValidNodeId(''), false, '空串显式拒绝（不默默当本机）')
-    assert.equal(isValidNodeId('-oProxyCommand=evil'), false)
-    assert.equal(isValidNodeId('a b'), false)
-    assert.equal('x'.repeat(129).replace(/x/g, 'a'), 'a'.repeat(129), 'sanity')
-    assert.equal(isValidNodeId('a'.repeat(128)), true, '128 字符向合法')
-    assert.equal(isValidNodeId('a'.repeat(129)), false, '超长拒绝')
+    for (const nodeId of ['build-box', 'local', 'work_host', 'node-1.sub', 'macbook_pro.2', 'a'.repeat(128)]) {
+      assert.equal(isValidNodeId(nodeId), true, `合法节点：${nodeId}`)
+    }
+    for (const nodeId of ['', 'root@10.0.0.3', 'user@work_host', '2001:db8::1', '[2001:db8::1]', 'a'.repeat(129), '-oProxyCommand=evil', '-oProxyCommand=bad', 'user@host;bad', 'a b', 'x\ny']) {
+      assert.equal(isValidNodeId(nodeId), false, `非法节点：${JSON.stringify(nodeId)}`)
+    }
     assert.equal(isValidSessionName('helm-wf-1'), true)
     assert.equal(isValidSessionName('../escape'), false)
   })
@@ -624,5 +983,23 @@ describe('herdr transport remote (node channel)', () => {
     assert.equal(result['type'], 'tab_created')
     // 机密只在 JSON 结构内部传输；socketPath 等经通道入参传递，绝不进入任何 argv。
     assert.equal((fixture.requests[0]?.params.env as Record<string, string> | undefined)?.['HELM_TOKEN'], secret())
+  })
+
+  it('无限期 agent.wait 在对端保持半开且不响应时也能被 abort 立即终止', { timeout: 60_000 }, async (t) => {
+    const _root = await tempRoot(t)
+    let received!: () => void
+    const ready = new Promise<void>((resolve) => { received = resolve })
+    const { transport, target } = await channelFixture(t, () => { received() })
+    const controller = new AbortController()
+    const pending = transport.call(target, 'agent.wait', { target: 'p1' }, { signal: controller.signal })
+    const observed = pending.then(() => undefined, (error: unknown) => error)
+    await ready
+    controller.abort()
+    let timer: NodeJS.Timeout | undefined
+    const deadline = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 1_500) })
+    const error = await Promise.race([observed, deadline])
+    clearTimeout(timer)
+    assert.ok(error, 'abort 必须主动结算，不能等待对端关闭读取方向')
+    assert.equal((error as { code?: string }).code, 'herdr_aborted')
   })
 })

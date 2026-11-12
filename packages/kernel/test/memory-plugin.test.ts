@@ -10,14 +10,14 @@
  * - 显式失效目标（不存在的 Profile）显式 404，不静默改投。
  */
 import { test } from 'node:test'
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import { HelmError, type ConversationSummary, type PluginDefinition } from '@helm/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { ProfileService } from '../src/services/index.js'
-import { createMemoryPlugin, isProfileMemoryEnabled, type MemoryPluginDoc } from '../src/builtin-plugins/memory.js'
+import { MAX_MEMORY_CHARS, createMemoryPlugin, isProfileMemoryEnabled, type MemoryPluginDoc } from '../src/builtin-plugins/memory.js'
 import { MemoryStore } from '../src/builtin-plugins/memory/store.js'
 import { createProfilePlugin } from '../src/builtin-plugins/profile.js'
 import { createProfileFileHost } from './helpers/profile-file-host.js'
@@ -371,6 +371,10 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     void profiles
   })
 
+  await t.test('MEMORY.md 上限常量导出为 64000', () => {
+    assert.equal(MAX_MEMORY_CHARS, 64_000)
+  })
+
   await t.test('64k 上限：replace/append 超限显式拒绝且不写半截（跨实例并发）', async () => {
     const dir = join(scratchRoot, 't9')
     const { host, store } = await setup(dir)
@@ -380,6 +384,55 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
       (err: unknown) => err instanceof HelmError && err.code === 'memory_limit_exceeded' && err.status === 400,
     )
     assert.equal((await store.getMemory('assistant')).length, 64_000 - 100, '拒绝后文件保持旧值')
+  })
+
+  await t.test('update_memory 超限显式拒绝（append 累计与 replace 直写双路径）', async () => {
+    const dir = join(scratchRoot, 't-limit-tool')
+    const { host, store } = await setup(dir)
+    const runUpdate = (input: { text: string; mode: string }) =>
+      host.executeTool('update_memory', input, { conversationId: 1 })
+
+    // 1) append 超限：先写接近上限，再追加使总和超限。
+    await store.updateMemory('assistant', 'x'.repeat(MAX_MEMORY_CHARS - 10), 'replace')
+    await assert.rejects(
+      () => runUpdate({ text: 'y'.repeat(20), mode: 'append' }),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmError)
+        assert.equal(err.code, 'memory_limit_exceeded')
+        assert.equal(err.status, 400)
+        assert.ok(/replace/.test(err.message), '错误信息应提示用 replace 整理')
+        return true
+      },
+    )
+    // 拒绝后文件保持旧值（不写半截）。
+    const afterReject = await store.getMemory('assistant')
+    assert.equal(afterReject.length, MAX_MEMORY_CHARS - 10)
+
+    // 2) replace 直写超限：单次 text 即超。
+    await assert.rejects(
+      () => runUpdate({ text: 'z'.repeat(MAX_MEMORY_CHARS + 1), mode: 'replace' }),
+      (err: unknown) => err instanceof HelmError && err.code === 'memory_limit_exceeded',
+    )
+
+    // 3) 合法 replace（恰在上限内）成功。
+    await runUpdate({ text: 'a'.repeat(MAX_MEMORY_CHARS), mode: 'replace' })
+    assert.equal((await store.getMemory('assistant')).length, MAX_MEMORY_CHARS)
+  })
+
+  await t.test('存量 MEMORY.md 超限注入时截断并附显式说明', async () => {
+    const dir = join(scratchRoot, 't-truncation')
+    const memoryDir = join(dir, 'profiles', 'assistant')
+    mkdirSync(memoryDir, { recursive: true })
+    writeFileSync(join(memoryDir, 'MEMORY.md'), 'M'.repeat(MAX_MEMORY_CHARS + 5_000))
+    const { host } = await setup(dir)
+    const turn = makeTurn('assistant')
+    const result = await host.runHook('before_turn', turn as never)
+    assert.ok(result.action === 'transform')
+    const sections = (result as { value: { sections: Array<{ id: string; text: string }> } }).value.sections
+    const memory = sections.find((s) => s.id === 'memory.content')
+    assert.ok(memory !== undefined, '超限仍应注入 memory.content section')
+    assert.ok(memory.text.includes('超过'), '截断应附显式说明')
+    assert.ok(memory.text.length <= MAX_MEMORY_CHARS + 500, '注入内容应截断到上限附近（含说明）')
   })
 
   await t.test('profile 插件与 memory 插件正交：停用 memory 不影响 load_skill 与 SYSTEM 注入', async () => {

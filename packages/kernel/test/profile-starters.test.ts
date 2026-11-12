@@ -7,7 +7,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
@@ -15,6 +15,10 @@ import { ProfileService } from '../src/services/profiles-skills.js'
 import { AuthService } from '../src/services/auth.js'
 import { createHubHandler, type KernelRuntimeLike } from '../src/http/index.js'
 import { PROFILE_STARTERS_MAX_ITEMS } from '@helm/protocol'
+import { PluginHost, type PluginDocStore } from '../src/plugins/index.js'
+import { createProfilePlugin } from '../src/builtin-plugins/profile.js'
+import { createProfileFileHost } from './helpers/profile-file-host.js'
+import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 
 async function freshDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'helm-starters-'))
@@ -171,4 +175,41 @@ test('profiles starters HTTP：POST/GET 回读、PUT [] 清空、非法 400 不�
   })
   assert.equal(tooMany.status, 400)
   assert.match(tooMany.json.error.message, /最多 6 项/)
+})
+
+test('profile：自举补写默认 Profile 的 managedByPlugin（缺失显式补、已有原样保留）', { timeout: 60_000 }, async () => {
+  // 场景 1：ensureDefault 创建的 Profile 无托管元数据（服务层不做归一化），
+  // 插件 service.start 显式补写 managedByPlugin: builtin:profile。
+  const dataDir = await freshDir()
+  const profiles = new ProfileService(dataDir)
+  await profiles.ensureDefault()
+  try {
+    const before = await profiles.get('assistant')
+    assert.equal(before?.managedByPlugin, undefined, 'ensureDefault 不写托管元数据（不兼容归一化红线）')
+
+    class MemoryDocStore implements PluginDocStore {
+      readonly store = new Map<string, unknown>()
+      get<T>(key: string, initial: T): T { return this.store.has(key) ? (this.store.get(key) as T) : initial }
+      set<T>(key: string, value: T): void { this.store.set(key, structuredClone(value)) }
+      async flush(): Promise<void> {}
+    }
+
+    const host = new PluginHost({
+      dataDir,
+      host: Object.assign(createPluginHostBackendFixture(), createProfileFileHost(dataDir, profiles), {
+        emitEvent: async () => {},
+      }),
+      docs: new MemoryDocStore(),
+    })
+    await host.register(createProfilePlugin(), { enabled: true })
+
+    const after = await profiles.get('assistant')
+    assert.equal(after?.managedByPlugin, 'builtin:profile', '插件自举后默认 Profile 显式声明托管')
+    // 其余字段原样保留（不覆盖用户改动）
+    assert.equal(after?.name, before?.name)
+
+    await host.dispose().catch(() => {})
+  } finally {
+    await rm(dataDir, { recursive: true, force: true })
+  }
 })

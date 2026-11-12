@@ -40,6 +40,7 @@ import {
 import { PluginHost, type PluginConfigStore, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
+import type { DiagnosticsCollection } from '../src/builtin-plugins/diagnostics.js'
 import { LocalNodeChannel } from '../src/builtin-plugins/herdr/local-node-channel.js'
 import type { HelmHostNodeIpcPort } from '@helm/protocol'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
@@ -1850,6 +1851,272 @@ test('单测E-8: 无 AI 选项（端口未注入）时自动补 allow-enter 并�
     env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'auto-enter')
     env.transport.consumeKeys(pane.paneId, 'done')
     assert.equal(await resultPromise, 'auto-enter')
+  } finally {
+    await env.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 探针短超时、并发采集与断线退避自愈
+// ---------------------------------------------------------------------------
+
+interface ProbeFakePane {
+  paneId: string
+  agentStatus: string
+  seq: number
+  name?: string
+  cwd: string
+}
+
+class ProbeTransport implements HerdrTransport {
+  panes = new Map<string, ProbeFakePane>()
+  agentGetDelayMs = 0
+  private subscriptionErrorTriggers: Array<(error: Error) => void> = []
+
+  private agentInfoOf(pane: ProbeFakePane) {
+    return {
+      pane_id: pane.paneId,
+      tab_id: `t-${pane.paneId}`,
+      workspace_id: 'w',
+      name: pane.name,
+      agent_status: pane.agentStatus,
+      interactive_ready: true,
+      state_change_seq: pane.seq,
+      cwd: pane.cwd,
+    }
+  }
+
+  async call(
+    _target: HerdrTarget,
+    method: string,
+    params: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ): Promise<unknown> {
+    void options
+    if (method === 'agent.get') {
+      if (this.agentGetDelayMs > 0) await delay(this.agentGetDelayMs)
+      const pane = this.panes.get(String(params['target']))
+      if (!pane) throw new HelmError('agent_not_found', 'no pane', 404)
+      return { type: 'agent_info', agent: this.agentInfoOf(pane) }
+    }
+    if (method === 'session.snapshot') {
+      return {
+        type: 'session_snapshot',
+        snapshot: {
+          version: 'test', protocol: 22, workspaces: [], tabs: [],
+          panes: [...this.panes.values()].map((p) => ({
+            pane_id: p.paneId, tab_id: `t-${p.paneId}`, workspace_id: 'w',
+            focused: false, agent_status: p.agentStatus, cwd: p.cwd,
+          })),
+          layouts: [],
+          agents: [...this.panes.values()].map((p) => this.agentInfoOf(p)),
+        },
+      }
+    }
+    return { type: 'ok' }
+  }
+  async readOutput(): Promise<string> { throw new HelmError('unsupported', 'test', 400) }
+  async removeOutput(): Promise<void> {}
+  async runGate() { return { ok: true, output: '' } }
+  async subscribe(
+    _target: HerdrTarget,
+    _onEvent: (event: HerdrEvent) => void,
+    onError: (error: unknown) => void,
+  ): Promise<() => void> {
+    this.subscriptionErrorTriggers.push((error) => onError(error))
+    return () => {}
+  }
+  failLatestSubscription(error: Error): void {
+    this.subscriptionErrorTriggers.at(-1)?.(error)
+  }
+  get subscribeCount(): number {
+    return this.subscriptionErrorTriggers.length
+  }
+}
+
+interface HerdrProbeEnv {
+  host: PluginHost
+  backend: FakeBackend
+  transport: ProbeTransport
+  ipcCalls: Array<{ method: string; timeoutMs?: number }>
+  close(): Promise<void>
+}
+
+const HERDR_REMOTE_NODE = 'n1'
+
+async function makeHerdrProbeEnv(
+  panes: Array<{ paneId: string; agentName: string; cwd: string; status?: string; seq?: number }>,
+): Promise<HerdrProbeEnv> {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-probe-'))
+  const backend = new FakeBackend()
+  const docs = new MemoryDocStore()
+  docs.set('builtin:herdr:managed', {
+    version: 1,
+    panes: panes.map((p) => ({
+      target: { nodeId: HERDR_REMOTE_NODE },
+      paneId: p.paneId,
+      tabId: `t-${p.paneId}`,
+      effectiveCwd: p.cwd,
+      agentName: p.agentName,
+      routing: { kind: 'agy' },
+      parentConversationId: 3,
+      outcome: 'keepalive',
+      createdAt: 1,
+    })),
+  })
+  const transport = new ProbeTransport()
+  for (const p of panes) {
+    transport.panes.set(p.paneId, {
+      paneId: p.paneId,
+      agentStatus: p.status ?? 'working',
+      seq: p.seq ?? 1,
+      name: p.agentName,
+      cwd: p.cwd,
+    })
+  }
+  const socketPath = join(dataDir, 'herdr.sock')
+  const served = await serveTransport(
+    transport,
+    socketPath,
+    () => ({ nodeId: HERDR_REMOTE_NODE }),
+  )
+  const ipcCalls: Array<{ method: string; timeoutMs?: number }> = []
+  backend.nodeIpc = {
+    isOnline: () => true,
+    getNodeHubUrl: () => undefined,
+    call: async (_nodeId, input, signal) => {
+      const method = (JSON.parse(input.line) as { method: string }).method
+      ipcCalls.push({ method, timeoutMs: input.timeoutMs })
+      return ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
+    },
+    subscribe: async () => { throw new HelmError('unsupported', '本 fixture 不承载 IPC 订阅', 501) },
+  }
+  const host = new PluginHost({
+    dataDir,
+    host: backend,
+    docs,
+    config: new MemoryConfigStore({ socketPath }),
+  })
+  try {
+    await host.register(createHerdrPlugin(), { enabled: true })
+  } catch (error) {
+    await host.dispose().catch(() => {})
+    await served.close()
+    rmSync(dataDir, { recursive: true, force: true })
+    throw error
+  }
+  return {
+    host,
+    backend,
+    transport,
+    ipcCalls,
+    async close() {
+      await host.dispose().catch(() => {})
+      await served.close()
+      rmSync(dataDir, { recursive: true, force: true })
+    },
+  }
+}
+
+async function runHerdrTick(env: HerdrProbeEnv): Promise<DiagnosticsCollection> {
+  const payload: DiagnosticsCollection = { timestamp: Date.now(), conversations: [], probes: [] }
+  await env.backend.emitEvent('diagnostics.collect', payload)
+  return payload
+}
+
+test('herdr tick：agent.get / session.snapshot 全部带 5s 短超时', { timeout: 60_000 }, async () => {
+  const env = await makeHerdrProbeEnv([
+    { paneId: 'w:p1', agentName: 'helm-wf-a', cwd: '/tmp/a', status: 'working', seq: 5 },
+  ])
+  try {
+    await runHerdrTick(env)
+    const relevant = env.ipcCalls.filter((c) => c.method === 'agent.get' || c.method === 'session.snapshot')
+    assert.ok(relevant.length > 0, '应有 agent.get / session.snapshot 经 nodeIpc 通道到达受控服务器')
+    for (const call of relevant) {
+      assert.equal(call.timeoutMs, 5_000, `${call.method} 应带 timeoutMs=5000（实际 ${String(call.timeoutMs)}）`)
+    }
+  } finally {
+    await env.close()
+  }
+})
+
+test('herdr tick：5 个 300ms 探针并发采集（串行 1.5s 应压到 1s 内）', { timeout: 60_000 }, async () => {
+  const panes = Array.from({ length: 5 }, (_, i) => ({
+    paneId: `w:p${i + 1}`,
+    agentName: `helm-wf-${i + 1}`,
+    cwd: `/tmp/${i + 1}`,
+    status: 'working',
+    seq: 1,
+  }))
+  const env = await makeHerdrProbeEnv(panes)
+  try {
+    env.transport.agentGetDelayMs = 300
+    const start = Date.now()
+    const payload = await runHerdrTick(env)
+    const elapsed = Date.now() - start
+    assert.equal(payload.probes.length, 5)
+    assert.ok(elapsed < 1_000, `并发采集应在 1s 内完成（实际 ${elapsed}ms，疑似串行）`)
+  } finally {
+    await env.close()
+  }
+})
+
+test('herdr 订阅断线：onError 后自动退避重连（watchdogEnabled 无关）', { timeout: 60_000 }, async () => {
+  const env = await makeHerdrProbeEnv([
+    { paneId: 'w:p1', agentName: 'helm-wf-a', cwd: '/tmp/a', status: 'working', seq: 1 },
+  ])
+  try {
+    const before = env.transport.subscribeCount
+    env.transport.failLatestSubscription(new Error('socket reset by peer'))
+    const deadline = Date.now() + 2_000
+    while (!env.backend.notifications.some((n) => n.title === 'Herdr 事件订阅断开')) {
+      if (Date.now() > deadline) break
+      await delay(50)
+    }
+    assert.ok(
+      env.backend.notifications.some((n) => n.title === 'Herdr 事件订阅断开'),
+      '断线应发出通知',
+    )
+    await delay(1_800) // 首次退避 ~1s + 余量
+    assert.ok(
+      env.transport.subscribeCount > before,
+      `断线后应自动重建订阅（before=${before} after=${env.transport.subscribeCount}）`,
+    )
+  } finally {
+    await env.close()
+  }
+})
+
+test('herdr 订阅重连后的流再次断线仍继续退避重试', { timeout: 60_000 }, async () => {
+  const env = await makeHerdrProbeEnv([])
+  try {
+    const before = env.transport.subscribeCount
+    env.transport.failLatestSubscription(new Error('down 1'))
+    await delay(1_800)
+    env.transport.failLatestSubscription(new Error('down 2'))
+    await delay(2_500)
+    assert.ok(
+      env.transport.subscribeCount >= before + 2,
+      `多次断线应持续重连（before=${before} after=${env.transport.subscribeCount}）`,
+    )
+  } finally {
+    await env.close()
+  }
+})
+
+test('herdr tick：归属变化窗格结算移除后不再产出 probe', { timeout: 60_000 }, async () => {
+  const env = await makeHerdrProbeEnv([
+    { paneId: 'w:p1', agentName: 'helm-wf-a', cwd: '/tmp/a', status: 'working', seq: 1 },
+  ])
+  try {
+    const first = await runHerdrTick(env)
+    assert.equal(first.probes.length, 1)
+    env.transport.panes.get('w:p1')!.name = 'human-agent'
+    const second = await runHerdrTick(env)
+    assert.equal(second.probes.length, 0, '归属变化窗格应结算移除，不再产出 probe')
+    env.transport.panes.get('w:p1')!.name = 'helm-wf-a'
+    const third = await runHerdrTick(env)
+    assert.equal(third.probes.length, 0)
   } finally {
     await env.close()
   }
