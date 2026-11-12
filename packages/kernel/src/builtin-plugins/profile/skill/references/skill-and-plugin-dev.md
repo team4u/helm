@@ -109,7 +109,34 @@ export function CounterScreen() {
 - `clientDependencies` 是前端 bundle 的精确裸说明符白名单；子路径（如 `lodash/map`）也必须逐项声明。解析根固定为插件自身目录，不能在外部插件代码中自定义 `npmDependencies` 解析根。
 - 对受管安装，`helm plugins install` / `helm plugins update` 会补装声明的前端依赖且使用 `--no-save`；建议同时把包及版本范围写入 `package.json.dependencies`，保证安装可复现。未声明版本范围的裸包名按包管理器当前解析结果安装。
 - `helm plugins doctor <dir>`、`helm apps validate <dir>` 与运行期 client 编译使用同一依赖边界；缺失依赖、未声明裸导入、相对路径越根都会显式失败，不能用普通 Markdown 或空组件假装通过。
-- 插件间依赖可写在 `plugin.json.dependencies` 或 `package.json.helm.dependencies`，例如 `["base-plugin"]`；它只接受插件 ID，不接受 npm 版本范围。启用前依赖插件必须已注册且已启用；依赖环路会被拒绝。
+- 插件间依赖可写在 `plugin.json.dependencies` 或 `package.json.helm.dependencies`，例如 `["base-plugin"]`；也可写在入口导出对象的 `dependencies` 字段（三处合并去重）。它只接受插件 ID，不接受 npm 版本范围。启用前依赖插件必须已注册且已启用；依赖环路会被拒绝；别人停用/卸载被你依赖的插件会被 `plugin_in_use` 拦下。
+- 依赖声明本身不是调用机制，它只提供保障（依赖一定在、一定先启动、不会被抽走）。真正调用另一个插件的功能用 `ctx.host.invokeAction`：
+
+```ts
+// 依赖方：声明 dependencies 后，service start 时可安全调用对方动作
+export default {
+  id: 'my-plugin',
+  dependencies: ['base-plugin'],
+  definePlugin(ctx) {
+    ctx.service({
+      id: 'worker',
+      async start() {
+        const result = await ctx.host.invokeAction(
+          'base-plugin', 'analyze', { text: 'hello' },
+        ) as { score: number }
+        // 调用经过防线：目标必须处于启用态（停用即显式报错，绝不静默空返回），
+        // 输入经对方 inputSchema 校验，输出经 outputSchema 校验并统一脱敏。
+      },
+      async stop() {},
+    })
+  },
+}
+```
+
+- 动态发现：`ctx.host.listActions()` 返回全部已启用插件的动作清单（pluginId / id / inputSchema / outputSchema / idempotent），可按需调用；调用前可用 `ctx.host.prepareAction(pluginId, actionId, input)` 做无副作用预检。
+- 异步通信用事件总线：`await ctx.host.emitEvent('my-plugin:done', payload)` 发布（其他插件 `ctx.host.onEvent` 订阅）；`onEvent` 返回退订函数，插件停用时宿主自动解除。
+- UI 组合用 `ctx.ui.slot` 向其他插件的命名插槽注入组件；前端跨插件读公开文档用 `usePluginDoc(name, pluginId)`，跨插件调动作用 `callAction(actionId, input, { pluginId })`。
+- 不要直接 import 另一个插件的代码：插件是独立模块图（支持代际热重载），直接 import 会焊死两个插件的生命周期；跨插件一律走 invokeAction / 事件 / 插槽这些接口导向通道。
 
 扩展入口：
 - 后端 Hook（{{HOOK_COUNT}} 个）：{{HOOK_NAMES}}；各 Hook 允许的 continue/transform/handled/block 结果以 protocol 契约为准。
