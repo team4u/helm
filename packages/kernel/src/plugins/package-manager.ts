@@ -583,7 +583,7 @@ export class PluginPackageManager {
    * dependencies（--no-save 绝不改写 package.json），但必须进 node_modules——
    * 否则 doctor / client 编译链因依赖缺失显式失败。版本优先取 package.json
    * 已声明 range（dependencies/devDependencies 均认，保证可复现），未声明
-   * 时按说明符原样安装（裸名 = 最新版，由包作者自担确定性）。
+   * 时按说明符对应的包名安装（子路径说明符只用于编译解析，不能作为 npm 包名）。
    */
   private async installRuntimeDeps(dir: string): Promise<void> {
     const pkgJson = join(dir, 'package.json');
@@ -612,7 +612,7 @@ export class PluginPackageManager {
     const installSpecs = clientSpecs.map((spec) => {
       const pkgName = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : (spec.split('/')[0] ?? spec);
       const range = ranges.get(pkgName);
-      return range !== undefined ? `${pkgName}@${range}` : spec;
+      return range !== undefined ? `${pkgName}@${range}` : pkgName;
     });
     const args = [
       'install', '--omit=dev', '--no-save', '--ignore-scripts', '--no-audit', '--no-fund',

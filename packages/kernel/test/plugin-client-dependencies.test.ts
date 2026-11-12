@@ -28,6 +28,7 @@ import {
 } from '../src/plugins/external-loader.js'
 import {
   clientNpmRootsOf,
+  clearClientCompilerMemoryCache,
   compilePluginClientModule,
 } from '../src/plugins/client-compiler.js'
 import { doctorPluginDir } from '../src/plugins/plugin-doctor.js'
@@ -145,6 +146,9 @@ test('plugin.json 与 package.json helm.clientDependencies 合并去重；非法
   const badPkg = makePluginDir()
   writeJson(join(badPkg, 'package.json'), { name: 'x', helm: { clientDependencies: [42] } })
   throwsCode(() => readHelmClientDependencies(badPkg), 'plugin_manifest_invalid')
+
+  const badName = makePluginDir({ clientDeps: ['foo:bar'] })
+  throwsCode(() => readHelmClientDependencies(badName), 'plugin_manifest_invalid')
 })
 
 test('normalizeDefinition：清单说明符映射 npmDependencies（解析根 = 插件目录），代码内声明剥离', { timeout: 60_000 }, async () => {
@@ -157,6 +161,11 @@ test('normalizeDefinition：清单说明符映射 npmDependencies（解析根 = 
   const normalized = normalizeDefinition(withCodeDeps, dir)
   assert.deepEqual(normalized.npmDependencies, { 'fake-chart-lib': dir })
   assert.equal(normalized.clientRoot, join(dir, 'client'))
+
+  assert.throws(
+    () => normalizeDefinition({ ...raw, dependencies: 'not-an-array' as unknown as string[] }, dir),
+    (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_definition',
+  )
 })
 
 test('插件间依赖：清单声明合并进入定义；package.json 顶层 dependencies 不误读', { timeout: 60_000 }, async () => {
@@ -242,6 +251,46 @@ test('编译链：声明说明符从插件目录 node_modules 解析进 bundle�
   )
 })
 
+test('磁盘缓存跨内存代际复用，且前端依赖声明变更使旧 bundle 失效', { timeout: 60_000 }, async () => {
+  const dir = makePluginDir({ clientDeps: ['fake-chart-lib'] })
+  const normalized = await importNormalized(dir)
+  const roots = clientNpmRootsOf(normalized.npmDependencies)
+  const cacheDir = join(workDir, 'cache-disk')
+  const first = await compilePluginClientModule(
+    'chart-plugin',
+    normalized.clientRoot!,
+    'index.tsx',
+    cacheDir,
+    { npmRoots: roots },
+  )
+  assert.ok(first.code.includes('fake-chart:'))
+
+  clearClientCompilerMemoryCache()
+  const second = await compilePluginClientModule(
+    'chart-plugin',
+    normalized.clientRoot!,
+    'index.tsx',
+    cacheDir,
+    { npmRoots: roots },
+  )
+  assert.equal(second.contentHash, first.contentHash)
+
+  clearClientCompilerMemoryCache()
+  await assert.rejects(
+    compilePluginClientModule(
+      'chart-plugin',
+      normalized.clientRoot!,
+      'index.tsx',
+      cacheDir,
+    ),
+    (err: unknown) =>
+      err instanceof HelmError &&
+      err.code === 'client_compile_failed' &&
+      err.message.includes('拒绝裸依赖'),
+    '撤销 clientDependencies 声明不得回放旧磁盘 bundle',
+  )
+})
+
 test('doctor 全链与生产同一编译口径：依赖就绪 ok，缺失时 client 检查结构化失败', { timeout: 60_000 }, async () => {
   const okDir = makePluginDir({ name: 'chart-plugin-ok', clientDeps: ['fake-chart-lib'] })
   await importNormalized(okDir) // 预热模块缓存（doctor 用新代际导入，互不影响）
@@ -288,7 +337,7 @@ test('受管安装补装清单前端依赖：--no-save、版本取已声明 rang
     version: '1.0.0',
     dependencies: { 'runtime-lib': '^1.0.0' },
     devDependencies: { 'client-chart': '^4.2.0' },
-    helm: { clientDependencies: ['client-chart', 'client-extra'] },
+    helm: { clientDependencies: ['client-chart', 'client-extra/subpath'] },
   })
 
   const manager = new PluginPackageManager({
@@ -319,7 +368,7 @@ test('受管安装补装清单前端依赖：--no-save、版本取已声明 rang
   assert.ok(installCall, '应有 npm install 调用')
   assert.ok(installCall.args.includes('--no-save'), '前端依赖补装不得改写 package.json')
   assert.ok(installCall.args.includes('client-chart@^4.2.0'), '版本取 package.json 已声明 range')
-  assert.ok(installCall.args.includes('client-extra'), '未声明 range 的说明符按原样补装')
+  assert.ok(installCall.args.includes('client-extra'), '子路径说明符按包名补装，不把子路径当 npm 包名')
   rmSyncFn(dataDir, { recursive: true, force: true })
 })
 

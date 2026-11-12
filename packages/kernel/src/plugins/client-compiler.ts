@@ -65,8 +65,8 @@ export const CLIENT_SHARED_GLOBALS: Readonly<Record<string, string>> = Object.fr
 /** ClientComponentRef.module 允许的字符集（相对路径段：字母数字 . _ -，禁止空段与 ..）。 */
 const MODULE_REF_PATTERN = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*\.(ts|tsx)$/;
 
-/** 依赖清单（deps.json）结构版本；v2 为 CSS-as-JS 旧格式，v3 起原生 CSS bundling，v4 起含受控 npm 依赖，v5 起启用 esbuild minify 与预压缩，v6 起支持代码分割与异步 chunk 桥，v7 起共享 chunk 注册改用 esbuild 命名空间桥（key 含 pluginId/moduleRef）。 */
-const DEPS_LIST_VERSION = 7;
+/** 依赖清单（deps.json）结构版本；v2 为 CSS-as-JS 旧格式，v3 起原生 CSS bundling，v4 起含受控 npm 依赖，v5 起启用 esbuild minify 与预压缩，v6 起支持代码分割与异步 chunk 桥，v7 起共享 chunk 注册改用 esbuild 命名空间桥（key 含 pluginId/moduleRef），v8 起记录受控 npm 依赖声明集。 */
+const DEPS_LIST_VERSION = 8;
 
 export interface ClientCompileResult {
   /** 产物 JS 文本（自包含 ESM；共享依赖经 globalThis 命名空间运行时解析）。 */
@@ -238,7 +238,7 @@ export async function compilePluginClientModule(
   options?: { npmRoots?: ReadonlyArray<ClientNpmRoot> },
 ): Promise<ClientCompileResult> {
   assertModuleRefShape(pluginId, moduleRef);
-  const npmKey = (options?.npmRoots ?? []).map((r) => `${r.packageRoot}:${r.specifiers.join(',')}`).sort().join(';');
+  const npmKey = npmRootsKey(options?.npmRoots ?? []);
   const key = `${pluginId}\0${moduleRef}\0${realPathOrThrow(clientRoot, `插件 ${pluginId} 的 clientRoot 不可访问：${clientRoot}`)}\0${npmKey}`;
   const pending = inflight.get(key);
   if (pending) return pending;
@@ -260,6 +260,8 @@ interface DepsListFile {
   dependencies: Array<{ path: string; sha256: string }>
   /** 受控 npm 依赖：解析根标识 + 绝对路径 + 内容 sha256（v4 新增）。 */
   npmDependencies?: Array<{ root: string; path: string; sha256: string }>
+  /** 受控 npm 依赖声明（解析根 + 精确说明符），用于防止声明撤销后回放旧 bundle。 */
+  npmSpecifiers?: string[]
   /** 入口具名导出（旧清单缺省时缓存命中方拿不到 exports，需 exports 的调用方应重新编译或容错）。 */
   exports?: string[]
   /** 异步 chunk 文件名清单（v6 新增）。 */
@@ -292,6 +294,17 @@ export function clientNpmRootsOf(
   return [...npmByRoot.entries()].map(([packageRoot, specifiers]) => ({ packageRoot, specifiers }));
 }
 
+function npmRootsKey(roots: ReadonlyArray<ClientNpmRoot>): string {
+  return roots
+    .map((root) => `${root.packageRoot}:${[...root.specifiers].sort().join(',')}`)
+    .sort()
+    .join(';');
+}
+
+function npmSpecifiersKey(roots: ReadonlyArray<ClientNpmRoot>): string[] {
+  return roots.flatMap((root) => root.specifiers.map((specifier) => `${root.packageRoot}\0${specifier}`)).sort();
+}
+
 async function compileUncached(
   pluginId: string,
   clientRoot: string,
@@ -308,7 +321,7 @@ async function compileUncached(
   // 1. 进程内内存缓存快路径：本地依赖按 mtime 判定；受控 npm 依赖按 (mtime, size)
   //    指纹判定，任一变化才退回逐文件 sha256 复核（磁盘清单复查），npm 内容更新后
   //    绝不永久返回旧 bundle。
-  const npmKey = npmRoots.map((r) => `${r.packageRoot}:${r.specifiers.join(',')}`).sort().join(';');
+  const npmKey = npmRootsKey(npmRoots);
   const memKey = `${pluginId}\0${moduleRef}\0${rootReal}\0${npmKey}`;
   const memEntry = memoryCompiledCache.get(memKey);
   if (memEntry && memEntry.root === rootReal) {
@@ -350,7 +363,7 @@ async function compileUncached(
   const depsListPath = join(stagingDir, `${baseName}.deps.json`);
 
   // 缓存复查：清单合法且每个依赖 sha256 与磁盘一致时复用产物，零编译
-  const cached = readCachedResult(stagingDir, depsListPath, rootReal, moduleRef, pluginId);
+  const cached = readCachedResult(stagingDir, depsListPath, rootReal, moduleRef, pluginId, npmRoots);
   if (cached) {
     recordMemoryCache(memKey, rootReal, depsListPath, cached);
     return cached;
@@ -554,7 +567,7 @@ async function compileUncached(
       });
     }
 
-    const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, entryExports);
+    const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, npmRoots, entryExports);
     mkdirSync(stagingDir, { recursive: true });
     atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.mjs`), mainOutput);
     let gzipped: Uint8Array | undefined;
@@ -667,7 +680,7 @@ async function compileUncached(
   }
 
   const allUnits = new Set<string>([...sharedAsyncChunks, ...dynamicTargets]);
-  const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, entryExports, Array.from(allUnits));
+  const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, npmRoots, entryExports, Array.from(allUnits));
 
   // 步骤 B（v7）：命名空间桥接注册 __helm_chunk_share。
   // 对每个需注册的虚拟 chunk 生成 `import * as ns from <chunk>` 的桥接包装模块，
@@ -1114,9 +1127,8 @@ function containmentPlugin(
             }],
           };
         }
-        // 传递依赖：导入方位于已授权包目录内时，从该包 node_modules 解析裸说明符
-        //（pnpm 符号链接布局天然支持）；解析成功即授权新包目录，逃逸路径无从
-        // 发生——一切裸说明符都必须经此解析器，未授权文件不可能进入 bundle。
+        // 传递依赖：导入方位于已授权包目录内时，交回 esbuild 原生解析；
+        // onLoad 会按实际文件路径做授权与 containment 校验。
         if (args.importer !== '') {
           const importerReal = realpathOrNull(args.importer);
           if (importerReal !== null && isNpmAuthorized(importerReal)) {
@@ -1132,6 +1144,17 @@ function containmentPlugin(
           }],
         };
       });
+      b.onResolve({ filter: /^\.\.?\// }, (args) => {
+        const importerReal = realpathOrNull(args.importer);
+        if (importerReal !== null && isNpmAuthorized(importerReal)) return null;
+        const candidate = realpathOrNull(resolve(args.resolveDir, args.path));
+        if (candidate === null || isInside(rootReal, candidate) || isNpmAuthorized(candidate)) return null;
+        return {
+          errors: [{
+            text: `插件 ${pluginId} 编译拒绝越界的相对导入（可能为 ../ 越根或未声明的 npm 文件）：${candidate}`,
+          }],
+        };
+      });
       b.onLoad({ filter: /.*/ }, (args) => {
         if (args.namespace !== 'file') return null;
         if (!/\.[cm]?[jt]sx?$|\.json$|\.css$/.test(args.path)) return null;
@@ -1140,7 +1163,8 @@ function containmentPlugin(
         const inClientRoot = isInside(rootReal, real);
         const inNpmRoot = isNpmAuthorized(real);
         if (!inClientRoot && !inNpmRoot) {
-          // 仅对位于 node_modules 内的文件放行受控授权（绝不放行根外随意的本地/临时源码）
+          // clientRoot 的相对越根导入已在 onResolve 阶段拒绝；来自已授权 npm
+          // 包的传递依赖由本回调按 node_modules 包目录逐步纳入授权。
           if (real.includes(sep + 'node_modules' + sep)) {
             const pkgDir = findPackageDirOf(real);
             if (pkgDir !== null) {
@@ -1193,17 +1217,18 @@ function findPackageDirOf(fileReal: string): string {
  * 读 package.json 入口（与直接声明同一入口语义）。找不到返回 null（按未声明拒绝）。
  */
 function resolveTransitiveNpmSpecifier(spec: string, importerReal: string): string | null {
-  const segs = importerReal.split(sep);
   const { pkg, sub } = splitNpmSpecifier(spec);
-  // 从导入文件向上找最近 node_modules（限定路径中出现 node_modules 的层级）
-  for (let i = segs.length - 1; i > 0; i--) {
-    if (segs[i] !== 'node_modules') continue;
-    const nm = segs.slice(0, i + 1).join(sep);
-    const pkgReal = realpathOrNull(join(nm, pkg));
-    if (pkgReal === null) continue;
-    return resolveNpmPackageEntry(pkgReal, sub === '' ? pkg : `${pkg}/${sub}`);
+  let dir = findPackageDirOf(importerReal);
+  for (;;) {
+    const pkgReal = realpathOrNull(join(dir, 'node_modules', pkg));
+    if (pkgReal !== null) {
+      const entry = resolveNpmPackageEntry(pkgReal, sub === '' ? pkg : `${pkg}/${sub}`);
+      if (entry !== null) return entry;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
   }
-  return null;
 }
 
 /**
@@ -1259,6 +1284,7 @@ function readCachedResult(
   rootReal: string,
   moduleRef: string,
   pluginId: string,
+  npmRoots: ReadonlyArray<ClientNpmRoot>,
 ): ClientCompileResult | undefined {
   if (!existsSync(depsListPath)) return undefined;
   let list: DepsListFile;
@@ -1272,7 +1298,8 @@ function readCachedResult(
     list.module !== moduleRef ||
     list.root !== rootReal ||
     typeof list.contentHash !== 'string' ||
-    !Array.isArray(list.dependencies)
+    !Array.isArray(list.dependencies) ||
+    JSON.stringify(list.npmSpecifiers ?? []) !== JSON.stringify(npmSpecifiersKey(npmRoots))
   ) {
     return undefined;
   }
@@ -1287,8 +1314,7 @@ function readCachedResult(
     if (sha256(source) !== dep.sha256) return undefined;
   }
   for (const dep of list.npmDependencies ?? []) {
-    // npm 解析根（node_modules realpath）消失或文件内容变化：失效重编译（不静默复用旧产物）
-    if (!existsSync(dep.root)) return undefined;
+    // npm 依赖文件的真实路径与内容变化：失效重编译；根标识仅用于诊断/哈希，不作为本地路径访问。
     let source: string;
     try {
       source = readFileSync(dep.path, 'utf8');
@@ -1376,12 +1402,16 @@ function buildDepsList(
   moduleRef: string,
   dependencies: string[],
   npmDeps: Array<{ root: string; files: string[] }> = [],
+  npmRoots: ReadonlyArray<ClientNpmRoot> = [],
   entryExports: string[] = [],
   chunks?: string[],
 ): DepsListFile {
   const hash = createHash('sha256');
   hash.update(`helm-plugin-client-v${DEPS_LIST_VERSION}\n`);
   hash.update(`module:${moduleRef}\n`);
+  for (const specifier of npmSpecifiersKey(npmRoots)) {
+    hash.update(`--npm-spec:${specifier}\n`);
+  }
   const entries = dependencies.map((abs) => {
     const rel = relative(rootReal, abs);
     const sha = sha256(readFileSync(abs, 'utf8'));
@@ -1407,6 +1437,7 @@ function buildDepsList(
     contentHash: hash.digest('hex').slice(0, 24),
     dependencies: entries,
     ...(npmEntries.length > 0 ? { npmDependencies: npmEntries } : {}),
+    npmSpecifiers: npmSpecifiersKey(npmRoots),
     ...(entryExports.length > 0 ? { exports: entryExports } : {}),
     ...(chunks && chunks.length > 0 ? { chunks: [...chunks].sort() } : {}),
   };

@@ -20,7 +20,7 @@
  *   doctor 处如实失败（报告给作者），不是 doctor 的缺陷；
  * - 临时 host 注册即 dispose（enabled: false，服务不启动，无副作用可泄漏）。
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -31,7 +31,7 @@ import {
   type PluginSummary,
 } from '@helm/protocol';
 import { PluginHost, type PluginHostBackend } from './plugin-host.js';
-import { nextPluginGeneration } from './backend-ts-loader.js';
+import { nextPluginGeneration, registerPluginTsRoot } from './backend-ts-loader.js';
 import {
   importPluginDefinition,
   normalizeDefinition,
@@ -139,7 +139,22 @@ function toErrorInfo(err: unknown): { code: string; message: string; details?: u
  * dir 由调用方校验为存在的目录；返回报告对象（插件自身缺陷以 checks 呈现），
  * 只有 doctor 基座故障（临时目录创建失败等）才 reject。
  */
-export async function doctorPluginDir(
+export async function doctorPluginDir(dir: string): Promise<PluginDoctorReport> {
+  let releaseTsRoot: (() => void) | undefined;
+  try {
+    if (statSync(dir).isDirectory()) releaseTsRoot = registerPluginTsRoot(dir);
+  } catch {
+    // 入口检查负责把不存在/不可读目录转换为结构化 doctor 报告；
+    // 无法注册 TS 根时继续执行，后端检查会如实暴露真实导入错误。
+  }
+  try {
+    return await doctorPluginDirInternal(dir);
+  } finally {
+    releaseTsRoot?.();
+  }
+}
+
+async function doctorPluginDirInternal(
   dir: string,
 ): Promise<PluginDoctorReport> {
   const checks: PluginDoctorCheck[] = [];

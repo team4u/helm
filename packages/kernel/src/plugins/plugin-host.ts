@@ -764,6 +764,19 @@ export class PluginHost {
         }
       }
     }
+    // 依赖者检查必须在所有异步引用探测结束后再收口一次；否则并发 enable
+    // 可能在 profiles.list() 等待期间提交，disable 会绕过 plugin_in_use。
+    const knownDependents = new Set(
+      usages.filter((usage) => usage.kind === 'plugin_dependency').map((usage) => usage.id),
+    );
+    for (const dependent of this.collectDependents(pluginId)) {
+      if (knownDependents.has(dependent.definition.id)) continue;
+      usages.unshift({
+        kind: 'plugin_dependency',
+        id: dependent.definition.id,
+        label: `插件 ${dependent.definition.id} 依赖 ${pluginId}（${dependent.enabled ? '当前已启用' : '正在启用'}）`,
+      });
+    }
     return usages;
   }
 
@@ -1060,21 +1073,21 @@ export class PluginHost {
   asPackageManagerHost(): PackageManagerHost {
     return {
       registerManagedPlugin: async (dir, options) => {
-        const entryPath = await resolvePluginEntry(dir);
-        if (entryPath === undefined) {
-          throw new HelmError(
-            'plugin_entry_missing',
-            `受管安装目录不含插件入口（无 plugin.json 且无约定入口）：${dir}`,
-            500,
-            { dir },
-          );
-        }
-        const definition = normalizeDefinition(
-          await importPluginDefinition(dir, entryPath),
-          dir,
-        );
         const releaseTsRoot = registerPluginTsRoot(dir);
         try {
+          const entryPath = await resolvePluginEntry(dir);
+          if (entryPath === undefined) {
+            throw new HelmError(
+              'plugin_entry_missing',
+              `受管安装目录不含插件入口（无 plugin.json 且无约定入口）：${dir}`,
+              500,
+              { dir },
+            );
+          }
+          const definition = normalizeDefinition(
+            await importPluginDefinition(dir, entryPath),
+            dir,
+          );
           await this.register(definition, { enabled: false });
           if (options.enabled) {
             await this.enable(definition.id);

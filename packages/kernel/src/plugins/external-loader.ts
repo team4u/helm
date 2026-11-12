@@ -440,7 +440,7 @@ function isValidClientDependencySpec(spec: string): boolean {
   if (spec.startsWith('.') || spec.startsWith('/') || spec.includes('\\')) return false;
   if (/\s/.test(spec)) return false;
   if (spec.split('/').includes('..')) return false;
-  return /^(@[A-Za-z0-9-~][A-Za-z0-9-._~]*\/)?[A-Za-z0-9-~][A-Za-z0-9-._~]*(\/.+)?$/.test(spec);
+  return /^(@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9._~-]+)*$/.test(spec);
 }
 
 /** 校验并去重清单声明的前端 npm 说明符（非法项显式 plugin_manifest_invalid）。 */
@@ -483,6 +483,24 @@ function normalizeManifestDependencies(dirPath: string, source: string, values: 
     out.push(dep);
   }
   return out.length > 0 ? out : undefined;
+}
+
+/** 校验外部插件代码声明的插件依赖；非法形状必须显式失败，不能在清单归一化时静默丢弃。 */
+function normalizeCodeDependencies(
+  dirPath: string,
+  pluginId: string,
+  values: unknown,
+): string[] {
+  if (values === undefined) return [];
+  if (!Array.isArray(values) || values.some((value) => typeof value !== 'string' || !MANIFEST_PLUGIN_ID_PATTERN.test(value))) {
+    throw new HelmError(
+      'invalid_plugin_definition',
+      `外部插件 ${dirPath} 的定义 ${pluginId}.dependencies 必须是插件 ID 字符串数组（仅允许字母数字 : _ -）`,
+      400,
+      { dirPath, pluginId, dependencies: Array.isArray(values) ? values.map((value) => String(value)) : String(values) },
+    );
+  }
+  return [...new Set(values as string[])];
 }
 
 /** 对外读取 plugin.json clientRoot 或 package.json helm.clientRoot（normalizeDefinition 增强用；plugin.json 优先）。 */
@@ -785,7 +803,7 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
   }
   // 插件间依赖：代码声明 + 清单声明（plugin.json 与 package.json helm 合并）合并去重
   //（自依赖由宿主注册边界拒绝）。
-  const codeDeps = Array.isArray(definition.dependencies) ? definition.dependencies : [];
+  const codeDeps = normalizeCodeDependencies(dirPath, definition.id, definition.dependencies);
   const manifestDeps = [
     ...(readManifestOptional(dirPath)?.dependencies ?? []),
     ...(readHelmField(dirPath)?.dependencies ?? []),
