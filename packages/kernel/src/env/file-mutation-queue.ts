@@ -58,13 +58,17 @@ async function unwrapOrThrow<T>(result: { ok: true; value: T } | { ok: false; er
 
 /**
  * canonical 路径：文件不存在时取「canonical 父目录 + 文件名」逐级上溯
- * （软链目录下的新文件与创建它的 write / 后续 edit 同 key）。
+ * （软链目录下的新文件与创建它的 write / 后续 edit 同 key）。ENOTDIR
+ * （路径中某段是文件而非目录，pi-durable 与节点侧 local-env 映射
+ * not_directory）与 ENOENT 同按「不存在」上溯：与 localCanonical 及内核
+ * 工具的探测链一致，否则同一 `/已存在文件/x` 路径会在两入口算出不同 key
+ *（local 直连上溯、env 入口抛错），双锁与报错分叉都由此而来。
  */
 async function canonicalPath(env: ExecutionEnv, absolutePath: string, context: Context): Promise<string> {
   const direct = await env.canonicalPath(absolutePath, context)
   if (direct.ok) return direct.value
   if (direct.error.code === 'not_supported') return absolutePath
-  if (direct.error.code !== 'not_found') throw direct.error
+  if (direct.error.code !== 'not_found' && direct.error.code !== 'not_directory') throw direct.error
   // 环境按分隔符拆分路径：名字可能含其他文件系统的分隔符字符。
   const parent = await unwrapOrThrow(await env.joinPath([absolutePath, '..'], context))
   if (parent === absolutePath || !absolutePath.startsWith(parent)) return absolutePath

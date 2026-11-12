@@ -6,6 +6,8 @@
  * - 首帧必须是 NodeTunnelHello（无 type 字段）且 ≤ 4096 字节；非法 JSON/
  *   结构不符/鉴权失败/pending 不存在或不匹配 → 回 NodeTunnelControl error
  *   帧后关闭（诚实拒绝，不静默挂死）；error 之后绝不进入数据期；
+ * - 首帧超时：从不发 hello 的连接在时限（缺省 10s，对照 /ws/node 的
+ *   registerTimeoutMs）后 close(4001)，防恶意/异常客户端堆积空闲连接；
  * - 成功路径：**先认证 + 一次性匹配 + epoch 复查全通过（acceptTunnel），
  *   再发 {type:'ok'}，随后 createWebSocketStream 交棒 grantTunnel**——
  *   ok 帧绝不早于认证；grantTunnel 发现 pending 已定格失败时销毁交来的
@@ -22,6 +24,8 @@ import type { NodeRegistry } from './registry.js'
 export interface NodeTunnelGatewayOptions {
   registry: NodeRegistry
   path?: string
+  /** 首帧 hello 超时（毫秒），缺省 10s（对照 /ws/node 网关）。 */
+  helloTimeoutMs?: number
   log?: (message: string) => void
 }
 
@@ -30,6 +34,9 @@ export interface NodeTunnelGateway {
 }
 
 const HELLO_MAX_BYTES = 4096
+
+/** 首帧 hello 超时缺省（对照 ws-gateway 的 registerTimeoutMs=10s）。 */
+const DEFAULT_HELLO_TIMEOUT_MS = 10_000
 
 const isHello = (data: unknown): data is NodeTunnelHello =>
   data !== null && typeof data === 'object' && !Array.isArray(data) &&
@@ -41,6 +48,7 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
   const {
     registry,
     path = '/ws/node-tunnel',
+    helloTimeoutMs = DEFAULT_HELLO_TIMEOUT_MS,
     log = (message: string) => console.error(`[helm] node tunnel gateway: ${message}`),
   } = options
   // 数据期单帧上限 1MiB（daemon 侧 stream 写侧 HWM 自适应分帧）；
@@ -68,7 +76,10 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
   }
 
   function handleConnection(ws: WebSocket): void {
+    // 首帧超时：从不发 hello 的连接到时关闭（不静默挂死，也不无限堆积）。
+    const helloTimer = setTimeout(() => ws.close(4001, 'tunnel hello timeout'), helloTimeoutMs)
     const onFirstFrame = (raw: unknown): void => {
+      clearTimeout(helloTimer)
       const bytes = typeof raw === 'string' ? Buffer.byteLength(raw) : (raw as Buffer).length
       if (bytes > HELLO_MAX_BYTES) {
         ws.removeListener('message', onFirstFrame)
@@ -115,9 +126,13 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
       })
     }
     ws.on('message', onFirstFrame)
-    ws.once('close', () => ws.removeListener('message', onFirstFrame))
+    ws.once('close', () => {
+      clearTimeout(helloTimer)
+      ws.removeListener('message', onFirstFrame)
+    })
     ws.once('error', (error) => {
       log(`隧道连接错误：${error instanceof Error ? error.message : String(error)}`)
+      clearTimeout(helloTimer)
       ws.removeListener('message', onFirstFrame)
       ws.terminate()
     })

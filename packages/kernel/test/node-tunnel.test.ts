@@ -280,3 +280,33 @@ test('tunnel 网关：首帧非 JSON / 非 hello 回 error 帧；未知 tunnelId
     await registry.close()
   }
 })
+
+test('tunnel 网关：从不发 hello 的连接在首帧超时后关闭（close 4001，不堆积）', { timeout: 60_000 }, async () => {
+  const registry = new NodeRegistry({ authenticate: () => true })
+  const server = http.createServer((_req, res) => { res.writeHead(404); res.end() })
+  const gateway = attachNodeTunnelGateway(server, { registry, helloTimeoutMs: 150 })
+  try {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    assert.ok(address !== null && typeof address === 'object')
+    const url = `ws://127.0.0.1:${address.port}/ws/node-tunnel`
+
+    // 连接后一言不发：必须在首帧超时后关闭（对照 /ws/node 的 4001 语义）。
+    const ws = new WebSocket(url)
+    let closeCode = -1
+    const closedAt = new Promise<void>((resolve) => {
+      ws.on('close', (code: number) => { closeCode = code; resolve() })
+    })
+    const opened = new Promise<void>((resolve) => ws.once('open', () => resolve()))
+    await opened
+    const startedAt = Date.now()
+    await closedAt
+    const elapsed = Date.now() - startedAt
+    assert.equal(closeCode, 4001, `静默连接应被超时关闭（close code ${closeCode}）`)
+    assert.ok(elapsed >= 140 && elapsed < 5_000, `超时应在时限附近触发（实际 ${elapsed}ms）`)
+  } finally {
+    await gateway.close()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await registry.close()
+  }
+})

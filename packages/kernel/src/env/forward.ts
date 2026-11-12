@@ -112,8 +112,13 @@ export class NodeForwardService {
     const pendingOpens = new Set<AbortController>()
     const events = new EventEmitter()
 
+    // listen 完成到 forward 赋值之间存在 await 窗口：连接回调必须判空兜底
+    //（未赋值即销毁 socket），消除对微任务时序的隐式依赖（TDZ）。赋值后
+    // 回调内一律使用此处捕获的引用，不再触及外层绑定。
+    let forward: ActiveForward | undefined
     const server = net.createServer((socket) => {
-      if (forward.sessionRemoved) { socket.destroy(); return }
+      const fwd = forward
+      if (fwd === undefined || fwd.sessionRemoved) { socket.destroy(); return }
       socket.on('error', () => undefined) // 防未处理 error 崩进程；真实清理在 cleanup
       session.totalConnections += 1
       // 建连期即绑 socket 生命周期：客户端先断开时立即取消在途建立，
@@ -145,7 +150,7 @@ export class NodeForwardService {
           socket.removeListener('error', onSocketGone)
         }
         // 建连期间客户端已断开或转发已停止：迟到 tunnel 立即销毁，不登记。
-        if (socketGone || forward.sessionRemoved) { tunnel.destroy(); socket.destroy(); return }
+        if (socketGone || fwd.sessionRemoved) { tunnel.destroy(); socket.destroy(); return }
         tunnels.add(tunnel)
         session.activeConnections += 1
         events.emit('event', { type: 'connection', count: session.activeConnections } satisfies NodeForwardEvent)
@@ -200,7 +205,9 @@ export class NodeForwardService {
       throw new HelmError('node_offline', '转发服务已关闭', 409)
     }
 
-    const forward: ActiveForward = {
+    // 自引用闭包（stopped/stop/租约）：仅在对象完成初始化并赋值后才可能被
+    // 调用，无 TDZ 风险。
+    const fwd: ActiveForward = {
       session,
       server,
       tunnels,
@@ -210,40 +217,41 @@ export class NodeForwardService {
       leaseTimer: undefined,
       stopPromise: undefined,
       sessionRemoved: false,
-      stopped: () => forward.stopPromise !== undefined,
+      stopped: () => fwd.stopPromise !== undefined,
       // 箭头函数：this 即 service（闭包捕获），供内部摘除登记。
       stop: (reason: string): Promise<void> => {
         // 幂等：并发/重复调用共享同一关闭 Promise（后续调用不再「立即返回」，
         // 而是等同一关闭完成）。
-        if (forward.stopPromise !== undefined) return forward.stopPromise
-        forward.sessionRemoved = true
-        if (forward.leaseTimer !== undefined) clearTimeout(forward.leaseTimer)
-        forward.stopPromise = (async () => {
+        if (fwd.stopPromise !== undefined) return fwd.stopPromise
+        fwd.sessionRemoved = true
+        if (fwd.leaseTimer !== undefined) clearTimeout(fwd.leaseTimer)
+        fwd.stopPromise = (async () => {
           // 终态帧先行（监控流收到后由 stopWaiters 正常关闭，不悬挂），
           // 再取消全部在途建连（迟到 tunnel 由各连接分支自行销毁，不登记）。
-          forward.events.emit('event', { type: 'stopped' } satisfies NodeForwardEvent)
-          for (const waiter of [...forward.stopWaiters]) waiter()
-          forward.stopWaiters.clear()
+          fwd.events.emit('event', { type: 'stopped' } satisfies NodeForwardEvent)
+          for (const waiter of [...fwd.stopWaiters]) waiter()
+          fwd.stopWaiters.clear()
           for (const controller of [...pendingOpens]) controller.abort()
           pendingOpens.clear()
-          for (const tunnel of [...forward.tunnels]) tunnel.destroy()
-          forward.tunnels.clear()
-          await new Promise<void>((resolve) => forward.server.close(() => resolve()))
+          for (const tunnel of [...fwd.tunnels]) tunnel.destroy()
+          fwd.tunnels.clear()
+          await new Promise<void>((resolve) => fwd.server.close(() => resolve()))
           this.#forwards.delete(forwardId)
           void reason
-          forward.events.removeAllListeners()
+          fwd.events.removeAllListeners()
         })()
-        return forward.stopPromise
+        return fwd.stopPromise
       },
     }
-    this.#forwards.set(forwardId, forward)
+    forward = fwd
+    this.#forwards.set(forwardId, fwd)
     // 前台租约：创建后未在期限内绑定持有者（acquireLease）即自动停止。
-    forward.leaseTimer = setTimeout(() => {
-      if (forward.holders === 0 && !forward.stopped()) {
-        void forward.stop('lease_timeout').catch(() => undefined)
+    fwd.leaseTimer = setTimeout(() => {
+      if (fwd.holders === 0 && !fwd.stopped()) {
+        void fwd.stop('lease_timeout').catch(() => undefined)
       }
     }, this.leaseTimeoutMs)
-    forward.leaseTimer.unref?.()
+    fwd.leaseTimer.unref?.()
     events.emit('event', { type: 'started', listenHost: session.listenHost, listenPort: session.listenPort } satisfies NodeForwardEvent)
     return { ...session }
   }

@@ -8,8 +8,9 @@
  *   交给 node:http.request——绝不把裸 Duplex 塞给 https.request 假装 TLS；
  * - 不聚合 request/response body：请求体流式转发，响应体以
  *   Readable.toWeb(res) 交还（SSE/流式响应完整透传）；
- * - 隧道（Duplex）寿命绑定 Response body：EOF/cancel/error 才销毁，
- *   响应头到达绝不提前关隧道；HEAD/204/304 body 为 null 并立即释放；
+ * - 隧道（Duplex）寿命绑定 Response body：EOF/cancel/error/连接关闭 才
+ *   销毁，响应头到达绝不提前关隧道；HEAD/204/304 body 为 null 并立即释放；
+ *   body 被弃置（不读不取消）时由 res close/error 与 GC 兜底销毁；
  * - AbortSignal 传播：请求期取消销毁 req 与隧道（duplex 的销毁驱动
  *   Response body 端 error/cancel）；
  * - 4xx/5xx 不是传输失败：原样构造 Response（含错误体），只有建隧道
@@ -25,6 +26,19 @@ import { HelmError } from '@helm/protocol'
 
 /** 本地（local 节点）TCP 直连缺省预算：与远端 registry.openTunnel 超时一致。 */
 const LOCAL_TUNNEL_CONNECT_TIMEOUT_MS = 10_000
+
+/**
+ * 弃置 body 兜底：调用方拿到 Response 后既不读也不 cancel（如只查
+ * status 的健康探测）时，pull/cancel 永不发生，隧道与调用方 signal 上的
+ * abort 监听会滞留（local 滞留 localTunnels、remote 滞留 activeTunnels
+ * 直到 dispose）。连接关闭路径已由 res close/error 监听确定性销毁；本
+ * 注册表只覆盖「上游连接永不断开 + body 被 GC」的残余场景——best-effort，
+ * 不保证及时（不引入会误杀 SSE 慢消费的空闲超时；Node 内部引用链若阻止
+ * body 流回收则仍滞留至连接终结）。
+ */
+const abandonedBodies = new FinalizationRegistry<() => void>((settle) => {
+  settle()
+})
 
 /**
  * local 节点的隧道实现：Hub 进程内 net.connect 直连（任意 host:port）。
@@ -253,12 +267,20 @@ export async function tunnelFetch(
         // 完整透传）。
         const source = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>
         const reader = source.getReader()
-        let bodyEnded = false
+        // 终结状态独立于 bodyStream 声明：FinalizationRegistry 的 held 值
+        //（settle 闭包）绝不能引用 bodyStream，否则注册表会把 target 强持在
+        // 手里，GC 永不发生、兜底永不触发。
+        const state = { ended: false, tunnel, signal, onAbort }
+        const settle = (): void => {
+          if (state.ended) return
+          state.ended = true
+          state.signal?.removeEventListener('abort', state.onAbort)
+          state.tunnel.destroy()
+        }
         const finishBody = (): void => {
-          if (bodyEnded) return
-          bodyEnded = true
-          signal?.removeEventListener('abort', onAbort)
-          tunnel.destroy()
+          if (state.ended) return
+          abandonedBodies.unregister(bodyStream)
+          settle()
         }
         const bodyStream = new ReadableStream<Uint8Array>({
           async pull(controller) {
@@ -283,6 +305,14 @@ export async function tunnelFetch(
             }
           },
         })
+        abandonedBodies.register(bodyStream, settle, bodyStream)
+        // 连接关闭即终结：close 时隧道不再有新数据——complete=true 的剩余
+        // 字节已全部进入 res 缓冲（destroy 不影响后续读取），传输中断则 body
+        // 再无干净终态。没人拉取时（如只查 status 的健康探测）这是唯一的
+        // 确定性销毁点，不再等永不发生的 pull/cancel。error 监听同时防未处理
+        // 'error' 崩进程（toWeb 的监听时序不做假设）。
+        res.once('error', finishBody)
+        res.once('close', finishBody)
         responseSettled = true
         resolve(new Response(bodyStream, { status, headers: outHeaders }))
       },
