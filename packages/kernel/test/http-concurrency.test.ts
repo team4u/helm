@@ -33,6 +33,9 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value))
   }
+  deletePlugin(pluginId: string): void {
+    this.store.delete(pluginId)
+  }
   async flush(): Promise<void> {}
 }
 
