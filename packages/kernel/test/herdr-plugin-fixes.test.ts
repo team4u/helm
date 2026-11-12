@@ -17,7 +17,12 @@
  * - Profile 不能覆盖受管 HELM_*；远端仅显式有效可达 http(s) HELM_HUB_URL；
  * - closePane settled 幂等 + abort 双路径单飞（不把 abort 变新失败）；
  * - 启动对账：真正 working/blocked 保留并报告、已结束 keepalive 孤儿回收、
- *   精确身份不符放弃所有权；stop 清理远端 pane 不半途丢弃。
+ *   精确身份不符放弃所有权；stop 清理远端 pane 不半途丢弃；
+ * - 第二轮并发返修：Ask 存续轮询瞬时故障容忍/持续失败销单不留孤儿/abort
+ *   销单风暴有界、workflow 批量清理逐项隔离与陈旧快照 failed 保留、人类
+ *   关窗后机密 env 释放、非 running 事件不登记幽灵 creating、乱序权威观测
+ *   不伪销毁、停用清算零残留、livelock 逃生门、prune 有界、md 稳定性复检、
+ *   MetadataProjector 单飞丢 token/seq 泄漏。
  */
 
 import test from 'node:test'
@@ -43,6 +48,7 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { FsOutputFiles, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
 import { askKey } from '../src/builtin-plugins/herdr/asks.js'
+import { EMPTY_MANAGED_DOC } from '../src/builtin-plugins/herdr/panes.js'
 
 // ---------------------------------------------------------------------------
 // 测试环境（与 herdr.test.ts 同构；独立维护以允许针对返修场景扩展）
@@ -1519,4 +1525,331 @@ test('订阅 ack 失败释放已注册的 CAS resolver 与 workflow listener', {
     assert.equal(backend.askSeqResolvers.size, 0)
     assert.equal(backend.workflowListeners.size, 0)
   } finally { await host.dispose(); await served.close(); rmSync(dataDir, { recursive: true, force: true }) }
+})
+
+// ---------------------------------------------------------------------------
+// 11. 并发缺陷返修（2025 第二轮）：审批标容错、批量清理隔离、生命周期清算
+// ---------------------------------------------------------------------------
+
+test('Ask 存续轮询瞬时故障（herdr_timeout）退避容忍，不击穿任务', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  const controller = new AbortController()
+  let observed: Promise<unknown> | undefined
+  try {
+    scriptSuccess(env, 'transient-ok')
+    env.transport.promptStatus = 'blocked'
+    let agentGetFailuresLeft = 0
+    let injected = 0
+    const original = env.transport.call.bind(env.transport)
+    const transport: HerdrTransport = env.transport
+    transport.call = async (target, method, params, options) => {
+      if (method === 'agent.get' && agentGetFailuresLeft > 0) {
+        agentGetFailuresLeft -= 1
+        injected += 1
+        throw new HelmError('herdr_timeout', 'transient blip', 504)
+      }
+      return original(target, method, params)
+    }
+    const pending = spawnDirect(env, { agentType: 'herdr:pi', signal: controller.signal })
+    observed = pending.then((value) => ({ value }), (error: unknown) => ({ error }))
+    await waitFor(() => env.backend.createdAsks.length === 1)
+    // 仅注入两次瞬时故障：轮询退避后恢复，绝不因一次抖动销单/击穿任务。
+    agentGetFailuresLeft = 2
+    await waitFor(() => injected === 2, 5000)
+    await delay(300)
+    const pane = [...env.transport.panes.values()][0]!
+    const askId = String(env.backend.createdAsks[0]!['id'])
+    env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
+    await waitFor(() => env.transport.sendKeysLog.length === 1)
+    env.transport.advancePane(pane.paneId, 'idle')
+    assert.deepEqual(await observed, { value: 'transient-ok' })
+    assert.equal(env.backend.pendingAskResolvers.size, 0)
+  } finally { controller.abort(); await observed; await env.close() }
+})
+
+test('Ask 存续轮询持续失败：先销宿主 AskDoc 再显式失败，不留孤儿 pending', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  const controller = new AbortController()
+  let observed: Promise<unknown> | undefined
+  try {
+    scriptSuccess(env, 'never-reached')
+    env.transport.promptStatus = 'blocked'
+    const original = env.transport.call.bind(env.transport)
+    const transport: HerdrTransport = env.transport
+    let persistentFailure = false
+    transport.call = async (target, method, params, options) => {
+      if (method === 'agent.get' && persistentFailure) {
+        throw new HelmError('herdr_timeout', 'node down', 504)
+      }
+      return original(target, method, params)
+    }
+    const pending = spawnDirect(env, { agentType: 'herdr:pi', signal: controller.signal })
+    observed = pending.catch((error: unknown) => error)
+    await waitFor(() => env.backend.createdAsks.length === 1)
+    persistentFailure = true
+    const askId = String(env.backend.createdAsks[0]!['id'])
+    const error = await observed as HelmError
+    assert.equal(error.code, 'herdr_timeout', '底层瞬时错误码如实穿透')
+    assert.ok(env.backend.cancelledAsks.some((ask) => ask.id === askId && ask.reason === 'cancelled'), '宿主 AskDoc 已销单')
+    assert.equal(env.backend.pendingAskResolvers.size, 0, '不得残留孤儿 pending 审批卡')
+    const pane = [...env.transport.panes.values()][0]!
+    assert.equal(env.transport.tabs.get(pane.tabId)!.closed, false, '失败现场保留')
+    const list = await env.host.invokeAction('builtin:herdr', 'list', {}) as { panes: Array<{ outcome: string }> }
+    assert.equal(list.panes[0]?.outcome, 'failed')
+  } finally { controller.abort(); await observed; await env.close() }
+})
+
+test('abort 后销单持续失败时退避有界，不形成取消风暴', { timeout: 60_000 }, async () => {
+  const backend = new FakeBackend()
+  const cancelCalls: string[] = []
+  const originalCancel = backend.cancelAsk.bind(backend)
+  void originalCancel
+  backend.cancelAsk = async (id: string) => {
+    cancelCalls.push(id)
+    throw new HelmError('ask_store_broken', 'cancel boom', 500)
+  }
+  const env = await makeEnv({ backend })
+  const controller = new AbortController()
+  let observed: Promise<unknown> | undefined
+  try {
+    scriptSuccess(env, 'never')
+    env.transport.promptStatus = 'blocked'
+    const pending = spawnDirect(env, { agentType: 'herdr:pi', signal: controller.signal })
+    observed = pending.catch((error: unknown) => error)
+    await waitFor(() => env.backend.createdAsks.length === 1)
+    const askId = String(env.backend.createdAsks[0]!['id'])
+    controller.abort()
+    const error = await observed as HelmError
+    assert.equal(error.code, 'aborted')
+    // 轮询销单 5 次（退避 200/400/800/1600ms）+ closePane 兑底 1 次：有界。
+    await delay(4_500)
+    const count = cancelCalls.filter((id) => id === askId).length
+    assert.ok(count >= 5 && count <= 7, `销单尝试有界（实际 ${count} 次）`)
+    const stormNotifications = backend.notifications.filter((n) => n.title === 'Herdr 审批销单失败').length
+    assert.ok(stormNotifications <= 7, `失败通知有界（实际 ${stormNotifications} 条）`)
+  } finally { controller.abort(); await observed; await env.close() }
+})
+
+test('workflow 批量清理逐项隔离：首项失败不中断；陈旧快照 failed 保留现场', { timeout: 60_000 }, async () => {
+  const docs = new MemoryDocStore()
+  const env = await makeEnv({ docs })
+  try {
+    // p1/p2：keepalive；p3：running（blocked，createAsk 挂起受控）。
+    scriptSuccess(env, 'p1-ok')
+    await spawnDirect(env, { agentType: 'herdr:pi', workflowRunId: 'wf_bulk' })
+    scriptSuccess(env, 'p2-ok')
+    await spawnDirect(env, { agentType: 'herdr:pi', workflowRunId: 'wf_bulk' })
+    const backend = env.backend
+    let askEntered = false
+    let releaseAsk!: () => void
+    const askGate = new Promise<void>((resolve) => { releaseAsk = resolve })
+    backend.createAsk = async (spec: { id?: string }) => {
+      askEntered = true
+      await askGate
+      throw new HelmError('ask_backend_broken', 'ask store down', 500)
+    }
+    env.transport.promptStatus = 'blocked'
+    const p3run = spawnDirect(env, { agentType: 'herdr:pi', workflowRunId: 'wf_bulk' }).catch((error: unknown) => error)
+    await waitFor(() => askEntered)
+    const [p1, p2, p3] = [...env.transport.panes.values()]
+    assert.ok(p1 && p2 && p3)
+    // p1 清理慢（agent.get 300ms）且 tab.close 失败；给 p3 失败留确定窗口。
+    let slowGetEntered = false
+    const original = env.transport.call.bind(env.transport)
+    const transport: HerdrTransport = env.transport
+    transport.call = async (target, method, params, options) => {
+      if (method === 'agent.get' && String(params['target']) === p1.paneId) {
+        slowGetEntered = true
+        await delay(300)
+      }
+      if (method === 'tab.close' && params['tab_id'] === p1.tabId) {
+        throw new HelmError('tab_close_failed', 'boom', 500)
+      }
+      return original(target, method, params)
+    }
+    const settled = (async () => {
+      for (const listener of backend.workflowListeners) {
+        await listener({ id: 'wf_bulk', name: 'n', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 2 })
+      }
+    })()
+    await waitFor(() => slowGetEntered)
+    // p1 清理在途期间 p3 任务失败（markFailed 置 failed）——settleWorkflow 快照已过时。
+    releaseAsk()
+    const p3error = await p3run as HelmError
+    assert.equal(p3error.code, 'ask_backend_broken')
+    await waitFor(() => (docs.get('builtin:herdr:managed', EMPTY_MANAGED_DOC).panes.some((p) => p.paneId === p3.paneId && p.outcome === 'failed')))
+    await settled
+    assert.equal(env.transport.tabs.get(p2.tabId)!.closed, true, '首项失败不中断同批其余清理')
+    assert.equal(env.transport.tabs.get(p1.tabId)!.closed, false, 'p1 关闭失败如实保留')
+    assert.equal(env.transport.tabs.get(p3.tabId)!.closed, false, '陈旧快照 failed 窗格保留现场')
+    const managed = docs.get('builtin:herdr:managed', EMPTY_MANAGED_DOC)
+    const p3row = managed.panes.find((p) => p.paneId === p3.paneId)!
+    assert.equal(p3row.outcome, 'failed')
+    assert.ok(p3row.failureNote, 'failureNote 不被 settled 覆盖丢失')
+    assert.ok(backend.notifications.some((n) => n.title === 'Herdr 窗格清理失败'))
+  } finally { await env.close() }
+})
+
+test('人类关闭在途窗格后机密 env 立即释放：gate 不再使用驻留 env，如实失败', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  let observed: Promise<unknown> | undefined
+  try {
+    env.transport.promptStatus = 'done'
+    env.transport.onPrompt = (pane, text) => {
+      env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileNameOf(text)}`, 'gate-content')
+      setTimeout(() => env.transport.emit({ type: 'pane.closed', paneId: pane.paneId }), 60)
+    }
+    observed = spawnDirect(env, { agentType: 'herdr:pi', gate: 'echo ok' }).catch((error: unknown) => error)
+    const error = await observed as HelmError
+    assert.equal(error.code, 'herdr_context_unavailable')
+    assert.equal(env.gateLog.length, 0, 'env 释放后 gate 不再执行（不驻留 HELM_TOKEN）')
+    const pane = [...env.transport.panes.values()][0]!
+    assert.equal(env.transport.tabs.get(pane.tabId)!.closed, false)
+  } finally { await observed; await env.close() }
+})
+
+test('keepalive 窗格的事件路径不登记幽灵 creating 审批条目', { timeout: 60_000 }, async () => {
+  const docs = new MemoryDocStore()
+  const env = await makeEnv({ docs })
+  try {
+    scriptSuccess(env, 'done-ok')
+    await spawnDirect(env, { agentType: 'herdr:pi' })
+    const pane = [...env.transport.panes.values()][0]!
+    // updatedAt 为毫秒精度：拉开与 spawn 期末次写入的时钟距离，保证事件后
+    // 的新采集时间戳严格大于基线（否则同毫秒内会误判未刷新）。
+    await delay(5)
+    const updatedAtBefore = docs.get('builtin:herdr:overview', { updatedAt: 0 } as { updatedAt: number }).updatedAt
+    pane.seq += 1
+    pane.agentStatus = 'blocked'
+    env.transport.emit({ type: 'pane.updated', paneId: pane.paneId })
+    await waitFor(() => docs.get('builtin:herdr:overview', { updatedAt: 0 } as { updatedAt: number }).updatedAt > updatedAtBefore)
+    await delay(100)
+    const overview = docs.get('builtin:herdr:overview', { asks: [] } as { asks: unknown[] })
+    assert.equal(overview.asks.length, 0, '非 running 窗格不预登记（无幽灵 pendingAsk）')
+  } finally { await env.close() }
+})
+
+test('md 交接稳定性复检：非原子分段写触发自愈追问，不把截断内容当结果', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    env.transport.promptStatus = 'done'
+    let prompts = 0
+    env.transport.onPrompt = (pane, text) => {
+      prompts += 1
+      const key = `${pane.cwd}/.helm/${fileNameOf(text)}`
+      if (prompts === 1) {
+        env.transport.outputFiles.set(key, 'partial-first-half')
+        setTimeout(() => env.transport.outputFiles.set(key, 'partial-first-half + rest'), 150)
+      } else {
+        env.transport.outputFiles.set(key, 'final-complete')
+      }
+    }
+    const result = await spawnDirect(env, { agentType: 'herdr:pi' })
+    assert.equal(result, 'final-complete')
+    assert.equal(prompts, 2, '首读不稳定触发一次自愈追问')
+    assert.ok(env.backend.notifications.some((n) => n.title === 'Herdr 交接自愈'))
+  } finally { await env.close() }
+})
+
+test('AskCoordinator：乱序旧观测不作废 pending 条目；seq 推进仍作废', { timeout: 60_000 }, async () => {
+  const { AskCoordinator } = await import('../src/builtin-plugins/herdr/asks.js')
+  const asks = new AskCoordinator(() => {})
+  const begun = asks.beginBlocked(undefined, 'w7:p1', 6)
+  assert.ok('owner' in begun)
+  asks.markPending(begun.owner)
+  const stale = asks.observeAuthority({ paneId: 'w7:p1', seq: 4, status: 'blocked' })
+  assert.equal(stale.length, 0, '旧 seq 观测不得伪销毁 pending AskDoc')
+  assert.equal(asks.get(undefined, 'w7:p1', 6), begun.owner)
+  const advanced = asks.observeAuthority({ paneId: 'w7:p1', seq: 7, status: 'idle' })
+  assert.equal(advanced.length, 1)
+  assert.equal(advanced[0]!.askId, begun.owner.askId)
+  assert.equal(asks.get(undefined, 'w7:p1', 6), undefined)
+})
+
+test('AskCoordinator：settleAllAsSuperseded 清空条目（跨启用周期零残留）', { timeout: 60_000 }, async () => {
+  const { AskCoordinator } = await import('../src/builtin-plugins/herdr/asks.js')
+  const asks = new AskCoordinator(() => {})
+  const begun = asks.beginBlocked(undefined, 'w9:p1', 3)
+  assert.ok('owner' in begun)
+  asks.markPending(begun.owner)
+  asks.settleAllAsSuperseded()
+  assert.equal(asks.pendingCount(), 0)
+  assert.equal(asks.describe().length, 0)
+  assert.equal(asks.get(undefined, 'w9:p1', 3), undefined, '同 (pane,seq) 下周期不再误判 duplicate')
+})
+
+test('AskCoordinator：keysSent=false 卡死同 seq 也可重开审批（livelock 逃生门）', { timeout: 60_000 }, async () => {
+  const { AskCoordinator } = await import('../src/builtin-plugins/herdr/asks.js')
+  const asks = new AskCoordinator(() => {})
+  const begun = asks.beginBlocked(undefined, 'w8:p1', 4)
+  assert.ok('owner' in begun)
+  asks.settle(begun.owner, { keysSent: false })
+  const reopened = asks.reopenUnresolved(undefined, 'w8:p1', 4)
+  assert.ok(reopened !== undefined, '未发键但同 seq 卡死也能重开')
+  assert.equal(reopened!.askId, `${begun.owner.key}:r1`)
+  assert.equal(reopened!.phase, 'creating')
+})
+
+test('PaneRegistry.prune：结算记录有界回收，running/keepalive 绝不动', { timeout: 60_000 }, async () => {
+  const { PaneRegistry } = await import('../src/builtin-plugins/herdr/panes.js')
+  let doc = EMPTY_MANAGED_DOC
+  const registry = new PaneRegistry({ get: () => doc, set: (next) => { doc = next } })
+  const paneOf = (paneId: string, outcome: 'settled' | 'failed' | 'running', at: number) => ({
+    target: { socketPath: '/tmp/herdr-prune.sock' },
+    paneId,
+    tabId: `t-${paneId}`,
+    effectiveCwd: '/tmp',
+    agentName: 'helm-wf-x',
+    routing: { kind: 'pi' },
+    parentConversationId: 1,
+    outcome,
+    createdAt: at,
+    settledAt: outcome === 'running' ? undefined : at,
+  })
+  registry.add(paneOf('p-run', 'running', 1))
+  for (let i = 0; i < 4; i += 1) registry.add(paneOf(`p-s-${i}`, 'settled', 10 + i))
+  registry.add(paneOf('p-f-0', 'failed', 5))
+  const removed = registry.prune({ maxSettled: 2, maxFailed: 0 })
+  assert.equal(removed, 3)
+  assert.ok(registry.get(undefined, 'p-run') !== undefined, 'running 绝不回收')
+  assert.equal(registry.get(undefined, 'p-s-0'), undefined)
+  assert.equal(registry.get(undefined, 'p-s-1'), undefined)
+  assert.ok(registry.get(undefined, 'p-s-2') !== undefined, '保留最近 settled')
+  assert.ok(registry.get(undefined, 'p-s-3') !== undefined)
+  assert.equal(doc.panes.length, 3, '持久镜像同步收敛')
+})
+
+test('MetadataProjector：单飞期间的新 token 不丢弃，forget 回收 seq 计数', { timeout: 60_000 }, async () => {
+  const { MetadataProjector } = await import('../src/builtin-plugins/herdr/metadata.js')
+  const tokens: string[] = []
+  let releaseFirst!: () => void
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+  let first = true
+  const slow = new MetadataProjector(
+    async (_target, method, params) => {
+      assert.equal(method, 'pane.report_metadata')
+      tokens.push((params['tokens'] as Record<string, string>)['helm']!)
+      if (first) { first = false; await firstGate }
+      return { type: 'ok' }
+    },
+    () => {},
+  )
+  const inFlight = slow.project(undefined, 'p1', 'run:x')
+  await delay(20)
+  await slow.project(undefined, 'p1', 'ask:y')
+  releaseFirst()
+  await inFlight
+  await delay(20)
+  assert.deepEqual(tokens, ['run:x', 'ask:y'], 'inFlight 完成后补投射最新 token')
+
+  const seqs: number[] = []
+  const fast = new MetadataProjector(
+    async (_target, method, params) => { seqs.push(params['seq'] as number); return { type: 'ok' } },
+    () => {},
+  )
+  await fast.project(undefined, 'pA', 'run:1')
+  await fast.project(undefined, 'pA', 'run:2')
+  fast.forget('pA')
+  await fast.project(undefined, 'pA', 'run:3')
+  assert.deepEqual(seqs, [1, 2, 1], 'forget 同步回收 seqCounters（重登记重新起算）')
 })

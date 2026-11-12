@@ -621,6 +621,14 @@ export class HerdrExecutor {
   /** 已结算的 blocked 水位先做短暂退避防抖；若发键后连续退避仍停留在同一 blocked seq，重开审批让人类重选。 */
   private static readonly MAX_SETTLED_BLOCKED_BACKOFFS = 2
 
+  /** Ask 存续复核对瞬时故障（herdr_timeout/节点闪断）的最大连续容忍次数（退避重试）；超过才销单并显式失败。 */
+  private static readonly MAX_ASK_POLL_TRANSIENT_FAILURES = 6
+  /** abort 后循环销单的最大尝试次数（防 cancel 持续失败时重试+通知风暴；剩余兑底交给 closePane）。 */
+  private static readonly MAX_ABORT_CANCEL_ATTEMPTS = 5
+  private static readonly ABORT_CANCEL_BACKOFF_CAP_MS = 3_200
+  /** md 交接稳定性复检的间隔（两次读一致才接受；json 有 schema 硬校验无需此检）。 */
+  private static readonly MD_STABLE_RECHECK_MS = 300
+
   /** 已结算的 blocked 水位只退避；新水位交给同一审批桥。 */
   private async waitUntilSettled(request: AgentSpawnRequest, pane: ManagedPane, initial: HerdrAgentInfo): Promise<void> {
     let info = initial
@@ -630,9 +638,11 @@ export class HerdrExecutor {
       if (info.agentStatus === 'blocked') {
         const entry = this.asks.get(nodeIdOf(pane), pane.paneId, info.stateChangeSeq)
         if (entry?.phase === 'settled') {
-          if (entry.keysSent && attempts >= HerdrExecutor.MAX_SETTLED_BLOCKED_BACKOFFS) {
-            // 闭环复核：send_keys 已发但终端仍停留在同一 seq 的 blocked（按键
-            // 未被接受）——重开审批让人类对照快照重新选择，绝不无限死锁。
+          if (attempts >= HerdrExecutor.MAX_SETTLED_BLOCKED_BACKOFFS) {
+            // 闭环逃生门：send_keys 已发但终端仍停留在同一 seq 的 blocked（按键
+            // 未被接受），或条目以 keysSent=false 结算（superseded/cancelled）后
+            // 终端同 seq 卡死——两者都依赖 seq 推进解环，若封顶退避后仍无进展，
+            // 重开审批让人类对照快照重新选择，绝不无限退避 livelock。
             this.asks.reopenUnresolved(nodeIdOf(pane), pane.paneId, info.stateChangeSeq)
             attempts = 0
             if (!await this.bridgeBlocked(request, pane, info)) {
@@ -708,7 +718,13 @@ export class HerdrExecutor {
       await this.project(pane, `ask:${entry.askId}`)
       const { outcome, plan } = await this.createAsk(request, pane, entry, this.host.askConversationId(request.parentConversationId))
       return this.consumeAskOutcome(request, pane, entry, outcome, plan)
-    }).catch((error: unknown) => {
+    }).catch(async (error: unknown) => {
+      // 任务链失败时条目若仍 pending（宿主 AskDoc 已入库未结算），必须先显式
+      // 销单再清条目——failCreate 只清协调器，否则宿主留下永远 pending 的
+      // 孤儿审批卡。
+      if (entry.phase === 'pending' && this.asks.get(nodeIdOf(pane), pane.paneId, entry.seq) === entry) {
+        await this.cancelAskQuietly(entry.askId, 'cancelled')
+      }
       this.asks.failCreate(entry)
       throw error
     }).finally(() => this.blockedTasks.delete(entry.askId))
@@ -826,14 +842,56 @@ export class HerdrExecutor {
     const monitor = new AbortController()
     const result = pending.finally(() => monitor.abort())
     const polling = (async () => {
+      // 存续复核容错边界：瞬时故障（herdr_timeout/节点闪断）退避重试，超过
+      // 上限才先销宿主 AskDoc 再显式失败；绝不让一次抖动击穿任务，也绝不
+      // 留下永远 pending 的孤儿审批卡。
+      let transientFailures = 0
+      let abortCancelAttempts = 0
       while (!monitor.signal.aborted) {
         try { await delay(this.pollIntervalMs, undefined, { signal: monitor.signal }) }
         catch (error) { if (monitor.signal.aborted) return; throw error }
         if (request.signal?.aborted) {
+          // abort 后销单退避有界：cancel 持续非 404 失败时不得每 100ms
+          // 重试+通知风暴；超限后交由 closePane 的 paneClosed 清单兑底。
+          if (abortCancelAttempts >= HerdrExecutor.MAX_ABORT_CANCEL_ATTEMPTS) return
+          if (abortCancelAttempts > 0) {
+            try {
+              await delay(
+                Math.min(this.pollIntervalMs * 2 ** abortCancelAttempts, HerdrExecutor.ABORT_CANCEL_BACKOFF_CAP_MS),
+                undefined,
+                { signal: monitor.signal },
+              )
+            } catch (error) { if (monitor.signal.aborted) return; throw error }
+          }
           await this.cancelAskQuietly(entry.askId, 'cancelled')
+          abortCancelAttempts += 1
           continue
         }
-        const current = await this.agentGet(targetOf(pane), pane.paneId, monitor.signal)
+        let current: HerdrAgentInfo
+        try {
+          current = await this.agentGet(targetOf(pane), pane.paneId, monitor.signal)
+          transientFailures = 0
+        } catch (error) {
+          if (monitor.signal.aborted) return
+          if ((error as { code?: string }).code === 'herdr_aborted') throw error
+          transientFailures += 1
+          if (transientFailures > HerdrExecutor.MAX_ASK_POLL_TRANSIENT_FAILURES) {
+            // 最终失败：异步销宿主 AskDoc 后立即上抛真实错误（不 await——
+            // 等待会让宿主 cancelled 终态先赢 Promise.race，把基础设施失败
+            // 伪装成「人类取消」abort 路径关掉失败现场）；兑底 cancel 由
+            // 任务链 catch 的同步销单保证，绝不留 pending 孤儿审批卡。
+            void this.cancelAskQuietly(entry.askId, 'cancelled')
+            throw error
+          }
+          try {
+            await delay(
+              Math.min(500 * 2 ** (transientFailures - 1), 4_000),
+              undefined,
+              { signal: monitor.signal },
+            )
+          } catch (error) { if (monitor.signal.aborted) return; throw error }
+          continue
+        }
         if (current.stateChangeSeq !== entry.seq || current.agentStatus !== 'blocked') {
           this.asks.observeAuthority({ nodeId: nodeIdOf(pane), paneId: pane.paneId, seq: current.stateChangeSeq, status: current.agentStatus })
           await this.cancelAskQuietly(entry.askId, 'superseded')
@@ -893,6 +951,11 @@ export class HerdrExecutor {
       this.asks.settle(entry, { keysSent: false })
       return true
     }
+    // 协议固有的 CAS 残窗（如实记录，不改行为）：上方权威 agent.get 与本次
+    // send_keys 之间没有协议级乐观锁，毫秒级窗口内人类在终端直接按键推进
+    // seq 不会被拦截（键仍会发出，可能造成一次重复输入）。彻底修复需 Herdr
+    // 端提供带 expected_seq 的 send_keys；当前由后续 agent.wait 的 seq 复核
+    // 兜底状态一致性。
     await assertOkResult(
       await this.transport.call(
         targetOf(pane),
@@ -951,14 +1014,33 @@ export class HerdrExecutor {
       }
     }
 
-    let attempt = await readOnce()
+    /**
+     * md 交接的稳定性复检：agent 非原子多段写 + agent.wait 返回 idle 但后台
+     * 仍在写时，首读可能拿到截断 Markdown——间隔短时复读一致才接受，否则
+     * 按可自愈失败走追问路径（json 路径已有 parse+schema 硬校验，无需此检；
+     * 残余风险：两次读间隔内恰好写完且不再变化的前缀截断仍无法区分，由
+     * 自愈追问兑底）。
+     */
+    const readOnceStable = async (): Promise<{ ok: true; value: unknown } | { ok: false; reason: string; recoverable: boolean }> => {
+      const first = await readOnce()
+      if (!first.ok || request.schema !== undefined) return first
+      await delay(HerdrExecutor.MD_STABLE_RECHECK_MS, undefined, { signal: request.signal })
+      const second = await readOnce()
+      if (!second.ok) return second
+      if (second.value !== first.value) {
+        return { ok: false, reason: '交接文件仍在写入（间隔复读内容不一致）', recoverable: true }
+      }
+      return first
+    }
+
+    let attempt = await readOnceStable()
     if (!attempt.ok) {
       this.host.notify('Herdr 交接自愈', `pane ${pane.paneId} 首次交接失败（${attempt.reason}），追问一次`, 'info')
       await this.project(pane, `heal:${pane.agentName}`)
       // 自愈追问本身也可能 blocked：同一审批桥等待真实进展后再读文件，
       // 不能读缺文件就判失败。
       await this.promptAndWaitHeal(request, pane, attempt.reason)
-      attempt = await readOnce()
+      attempt = await readOnceStable()
     }
     if (!attempt.ok) {
       await this.markFailed(pane, attempt.reason)
@@ -1179,8 +1261,11 @@ export class HerdrExecutor {
   // ------------------------------------------------------------------
 
   /**
-   * 关闭自有 pane（单飞 + settled 幂等）：
-   * - 已 settled / 正在关闭：直接返回（abort 与 settle 双路径并发安全）；
+   * 关闭自有 pane（单飞 + 结算幂等）：
+   * - 正在关闭：直接复用同一 close promise（abort 与 settle 双路径并发安全）；
+   * - 结局判定以 registry 当前值为准（调用方快照可能过时：等待期间任务可能
+   *   已 markFailed 置 failed——失败窗格保留现场，绝不能被批量清理关掉并
+   *   覆盖 failureNote）；已 settled / failed 均直接返回；
    * - 仅关自有资源：普通 tab.close；worktree workspace.close（close_group 防链组）；
    * - 失败 pane 保留现场；清理失败如实通知并上抛（不空 catch）。
    */
@@ -1189,12 +1274,12 @@ export class HerdrExecutor {
     reason: 'settled' | 'cancelled' | 'workflow-settled' | 'turn-settled',
     options: { volatileMark?: boolean } = {},
   ): Promise<void> {
-    if (pane.outcome === 'failed') return
     const key = `${nodeIdOf(pane) ?? 'local'}:${pane.paneId}`
     const existing = this.activeCloses.get(key)
     if (existing !== undefined) return existing
     const current = this.registry.get(nodeIdOf(pane), pane.paneId)
-    if (current !== undefined && current.outcome === 'settled') return
+    const outcome = current?.outcome ?? pane.outcome
+    if (outcome === 'failed' || outcome === 'settled') return
     const closing = (async () => {
       const target = targetOf(pane)
       try {
@@ -1242,6 +1327,17 @@ export class HerdrExecutor {
     })().finally(() => this.activeCloses.delete(key))
     this.activeCloses.set(key, closing)
     return closing
+  }
+
+  /**
+   * 外部结算路径（事件 pane.closed / 启动对账 / 探针归属不符）的 executor 侧
+   * 资源对齐：registry 置 settled 后 closePane 会因幂等早退，机密 paneEnvs
+   * （含 HELM_TOKEN）与未启动标记必须在此显式释放，生命周期与 registry
+   * outcome 对齐，绝不随人类关窗逐个驻留到停用重建。
+   */
+  releasePaneState(pane: ManagedPane): void {
+    this.paneEnvs.delete(this.paneKey(pane))
+    this.unstartedPanes.delete(this.paneKey(pane))
   }
 
   private async cancelAskQuietly(askId: string, reason: 'cancelled' | 'superseded'): Promise<void> {

@@ -317,6 +317,10 @@ export function createHerdrPlugin(): PluginDefinition {
             }
             if (stopping) return
             projector().forget(pane.paneId, nodeIdOf(pane))
+            // 外部结算路径同步释放 executor 侧机密 env/未启动标记：后续
+            // closePane 会因 settled 幂等早退，不在此对齐则每关一个在途窗格
+            // 就驻留一份 HELM_TOKEN 直到停用重建。
+            executorRef.current?.releasePaneState(pane)
             if (pane.outcome !== 'failed' && pane.outcome !== 'settled') {
               registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
             }
@@ -345,7 +349,12 @@ export function createHerdrPlugin(): PluginDefinition {
           const cacheKey = `local:${pane.paneId}`
           if ((eventSeqCache.get(cacheKey) ?? 0) >= info.stateChangeSeq) return
           eventSeqCache.set(cacheKey, info.stateChangeSeq)
-          if (info.agentStatus === 'blocked') asks.beginBlocked(nodeIdOf(pane), pane.paneId, info.stateChangeSeq)
+          // 仅在执行循环在途时预登记 blocked 墓位（供其 beginBlocked 复用去重）：
+          // 执行循环已越过该 seq 或 spawn 已结束时登记会成永不消费的幽灵
+          // creating 条目（overview pendingAsk 虚标）；非 running 窗格绝不登记。
+          if (info.agentStatus === 'blocked' && pane.outcome === 'running') {
+            asks.beginBlocked(nodeIdOf(pane), pane.paneId, info.stateChangeSeq)
+          }
         } finally {
           await refresh
         }
@@ -385,8 +394,9 @@ export function createHerdrPlugin(): PluginDefinition {
           const agent = snapshots.get(key)!.agents.find((a) => a.paneId === pane.paneId)
           if (pane.outcome === 'failed') continue // 持久 failed：保留诊断现场
           if (agent === undefined) {
-            // 窗格已消失：登记 settled（无资源可回收）。
+            // 窗格已消失：登记 settled（无资源可回收）+ executor 侧对齐。
             registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+            executorRef.current?.releasePaneState(pane)
             forgetPaneCaches(nodeIdOf(pane), pane.paneId)
             continue
           }
@@ -394,6 +404,7 @@ export function createHerdrPlugin(): PluginDefinition {
           // helm-wf-abc 不能认领 helm-wf-abcde）。身份不符放弃所有权，不误关。
           if (agent.name !== pane.agentName) {
             registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+            executorRef.current?.releasePaneState(pane)
             forgetPaneCaches(nodeIdOf(pane), pane.paneId)
             continue
           }
@@ -420,24 +431,39 @@ export function createHerdrPlugin(): PluginDefinition {
       }
 
       // ---- 双轨清理 ----
+      // 逐项隔离：单个 closePane 抛错（其内部已如实通知）不得中止同批其余
+      // keepalive 窗格的清理（事件一次性，错过即永久滞留）；executorRef 在
+      // stopResources 置空窗口内可能为 undefined，跳过而非 TypeError。
       async function settleWorkflow(run: WorkflowRunSummary): Promise<void> {
         const registry = registryRef.current
-        if (!registry) return
+        const executor = executorRef.current
+        if (!registry || !executor) return
         for (const pane of registry.findByWorkflow(run.id)) {
           if (pane.outcome === 'failed') continue
-          await executorRef.current!.closePane(pane, 'workflow-settled')
+          try {
+            await executor.closePane(pane, 'workflow-settled')
+          } catch (error) {
+            host.notify('Herdr workflow 清理中断项', `pane ${pane.paneId}（workflow ${run.id}）清理失败已跳过：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`, 'error')
+          }
         }
+        registry.prune()
       }
 
       async function settleParentTurn(conversationId: number): Promise<void> {
         const registry = registryRef.current
-        if (!registry) return
+        const executor = executorRef.current
+        if (!registry || !executor) return
         for (const pane of registry.findByParent(conversationId)) {
           if (pane.workflowRunId !== undefined) continue // workflow 轨道
           if (pane.outcome === 'failed') continue
           if (pane.outcome === 'running') continue // 同回合仍在途（并发 spawn）
-          await executorRef.current!.closePane(pane, 'turn-settled')
+          try {
+            await executor.closePane(pane, 'turn-settled')
+          } catch (error) {
+            host.notify('Herdr 回合清理中断项', `pane ${pane.paneId}（父会话 ${conversationId}）清理失败已跳过：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`, 'error')
+          }
         }
+        registry.prune()
       }
 
       // ---- 文档与 UI ----
@@ -527,6 +553,7 @@ export function createHerdrPlugin(): PluginDefinition {
               )
               if (info.name !== pane.agentName || info.tabId !== pane.tabId) {
                 registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+                executorRef.current?.releasePaneState(pane)
                 forgetPaneCaches(nodeIdOf(pane), pane.paneId)
                 return undefined
               }
@@ -841,6 +868,8 @@ export function createHerdrPlugin(): PluginDefinition {
             // subscribe ack 先行；任一步失败都释放解析器、监听与已获取资源。
             await synchronizeSubscription([], connectionAbort.signal)
             await reconcile()
+            // 对账后回收结算记录（doc 句柄有效；停用路径禁 flush 故不在此后回收）。
+            registry.prune()
             projector().start()
             const registry0 = registryRef.current
             if (registry0 !== undefined) await overviewRef.current?.refresh(registry0, asks, frozenLocalTarget)

@@ -11,20 +11,18 @@
  *    协调器条目；owner 若随后 createAsk 成功，markPending 重建条目后由
  *    宿主结算通道收尾，绝不留下无人认领的 pending Ask。
  * 4. 去重键 = herdr:<nodeId|local>:<paneId>:<stateChangeSeq>（Ask 预分配 ID
- *    同形）；条目内含结算通道，双路径（socket 事件与 spawn wait）中先到者
- *    成为 owner 负责 createAsk，后到者等待同一结算 promise。
+ *    同形）；双路径（socket 事件与 spawn wait）中先到者登记条目成为 owner
+ *    负责 createAsk，后到者经 duplicate 复用同一条目，绝不重建同 ID Ask。
  * 5. 取消/事件处理错误经显式通道上抛（通知或传回 spawn），不 catch 空吞。
+ * 6. 权威观测带方向：seq 严格推进才作废旧条目；seq 回退仅作废已结算的
+ *    墓碑（Herdr 重启 seq 归零后墓碑不得压制重新询问），绝不作废
+ *    pending/creating 活条目（并发 agent.get 乱序晚到的旧观测不能伪销毁
+ *    人类正在看的 AskDoc）。
  */
 
 import { HelmError } from '@helm/protocol'
 
 export type AskPhase = 'creating' | 'pending' | 'sent' | 'settled'
-
-/** Ask 终态（与 AskResult 对齐的插件内形状）。 */
-export interface AskOutcome {
-  status: 'answered' | 'cancelled' | 'superseded'
-  answers: Record<string, string>
-}
 
 export interface AskEntry {
   readonly key: string
@@ -58,30 +56,8 @@ export interface AuthorityUpdate {
  */
 export type BeginBlockedResult = { owner: AskEntry } | { duplicate: true }
 
-/**
- * 条目级结算通道：owner 创建后注入；等待方（spawn 路径）经 settlement()
- * 等待同一终态。通道由 owner 域外持有（协调器只存条目元数据）。
- */
-export class AskSettlement {
-  private resolveFn?: (outcome: AskOutcome) => void
-  readonly promise: Promise<AskOutcome>
-
-  constructor() {
-    this.promise = new Promise<AskOutcome>((resolve) => {
-      this.resolveFn = resolve
-    })
-  }
-
-  settle(outcome: AskOutcome): void {
-    this.resolveFn?.(outcome)
-    this.resolveFn = undefined
-  }
-}
-
 export class AskCoordinator {
   private readonly entries_map = new Map<string, AskEntry>()
-  /** askId（同 key 形）-> 结算通道；与 entries_map 键空间不同（防 NaN 误查）。 */
-  private readonly settlements = new Map<string, AskSettlement>()
   private readonly onChange: () => void
 
   constructor(onChange: () => void) {
@@ -90,7 +66,10 @@ export class AskCoordinator {
 
   /**
    * 终端权威状态更新（事件路径 / wait 返回 / 远端轮询）：
-   * seq 推进时清除同 pane 全部旧条目（含已结算保留项）并兜底结算其通道，
+   * - seq 严格推进：清除同 pane 全部旧条目（含已结算保留项）；
+   * - seq 回退（Herdr 重启 seq 归零）：仅作废已结算墓碑（防其压制后续同
+   *   seq 重新询问）；pending/creating 活条目不作废——乱序晚到的旧观测
+   *   不得伪销毁人类正在看的 AskDoc（真重启由执行循环的权威复核收尾）。
    * 返回仍 pending 的被作废条目（调用方对其实施 cancelAsk superseded）。
    */
   observeAuthority(update: AuthorityUpdate): AskEntry[] {
@@ -98,6 +77,7 @@ export class AskCoordinator {
     for (const entry of [...this.entries_map.values()]) {
       if (entry.paneId !== update.paneId || entry.nodeId !== update.nodeId) continue
       if (update.seq === entry.seq) continue
+      if (update.seq < entry.seq && entry.phase !== 'settled') continue
       this.removeEntry(entry)
       if (entry.phase === 'pending' || entry.phase === 'creating') superseded.push(entry)
     }
@@ -105,7 +85,7 @@ export class AskCoordinator {
     return superseded
   }
 
-  /** pane 关闭：清除全部条目（含保留项），兜底结算通道为 superseded。 */
+  /** pane 关闭：清除全部条目（含保留项）。 */
   paneClosed(paneId: string, nodeId?: string): AskEntry[] {
     const removed: AskEntry[] = []
     for (const entry of [...this.entries_map.values()]) {
@@ -170,15 +150,16 @@ export class AskCoordinator {
 
   /**
    * 同 seq 未解除阻塞时重开审批：send_keys 已发出但终端仍停留在同一
-   * (nodeId, paneId, seq) 的 blocked 状态（按键未被接受）。清理旧 askId 结算
-   * 通道，attempt 递增生成新 askId（`<key>:r<N>`，避开宿主 ask_id_conflict），
-   * 条目重回 creating；不满足重开条件（无条目/未结算/未发过键）返回 undefined。
+   * (nodeId, paneId, seq) 的 blocked 状态（按键未被接受），或条目已结算
+   * （含 superseded/cancelled，keysSent=false）但终端同 seq 卡死——两者都
+   * 需要重开让人类重新选择，否则退避循环永不逃生。attempt 递增生成新
+   * askId（`<key>:r<N>`，避开宿主 ask_id_conflict），条目重回 creating；
+   * 不满足重开条件（无条目/未结算）返回 undefined。
    */
   reopenUnresolved(nodeId: string | undefined, paneId: string, seq: number): AskEntry | undefined {
     const key = askKey(nodeId, paneId, seq)
     const entry = this.entries_map.get(key)
-    if (entry === undefined || entry.phase !== 'settled' || !entry.keysSent) return undefined
-    this.settleChannelOf(entry)
+    if (entry === undefined || entry.phase !== 'settled') return undefined
     entry.attempt += 1
     entry.askId = `${entry.key}:r${entry.attempt}`
     entry.phase = 'creating'
@@ -190,28 +171,7 @@ export class AskCoordinator {
 
   /** 创建失败（IO/宿主错误/销单确认）：条目移除（允许后续重试），错误由调用方上抛。 */
   failCreate(entry: AskEntry): void {
-    if (this.entries_map.get(entry.key) !== entry) {
-      // 已被事件路径销单清除：仍兜底结算其通道，等待方不得悬挂。
-      this.settleChannelOf(entry)
-      return
-    }
     this.removeEntry(entry)
-    this.onChange()
-  }
-
-  /** owner 绑定结算通道（此后等待方可等）。 */
-  bindSettlement(entry: AskEntry): AskSettlement {
-    let channel = this.settlements.get(entry.askId)
-    if (!channel) {
-      channel = new AskSettlement()
-      this.settlements.set(entry.askId, channel)
-    }
-    return channel
-  }
-
-  /** 等待方获取结算通道（未绑定时返回 undefined——owner 尚未就绪，调用方重试）。 */
-  settlementOf(entry: AskEntry): AskSettlement | undefined {
-    return this.settlements.get(entry.askId)
   }
 
   get(nodeId: string | undefined, paneId: string, seq: number): AskEntry | undefined {
@@ -262,23 +222,17 @@ export class AskCoordinator {
     }))
   }
 
-  /** 全部条目兜底结算（stop 清理路径：等待方不得悬挂）。 */
+  /** 停用清算：清空全部条目（调用方 stopResources 已先行销单宿主 Ask；
+   *  条目跨启用周期残留会伪装 pendingAsk 幽灵数据并误判 duplicate）。 */
   settleAllAsSuperseded(): void {
-    for (const channel of this.settlements.values()) channel.settle({ status: 'superseded', answers: {} })
-    this.settlements.clear()
-  }
-
-  private settleChannelOf(entry: AskEntry): void {
-    const channel = this.settlements.get(entry.askId)
-    if (channel) {
-      channel.settle({ status: 'superseded', answers: {} })
-      this.settlements.delete(entry.askId)
-    }
+    this.entries_map.clear()
+    this.onChange()
   }
 
   private removeEntry(entry: AskEntry): void {
+    if (this.entries_map.get(entry.key) !== entry) return
     this.entries_map.delete(entry.key)
-    this.settleChannelOf(entry)
+    this.onChange()
   }
 }
 
