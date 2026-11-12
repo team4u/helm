@@ -116,7 +116,7 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 | 子代理与执行 | `spawnAgent / runGate / execEnv / prepareInterruptedConversations / resolveSpawnTarget / listActiveSpawnExecutions / probeNodeFs / withFileMutationQueue` | `agent_spawn` 管道派生、门禁命令、跨节点执行（复用 EnvFabric 与脱敏） |
 | 动作互调 | `prepareAction / invokeAction / listActions` | 跨插件动作 preflight 与执行 |
 | 资产端口 | `profiles / skills / secrets` | Profile 读写与 SYSTEM.md、技能受管自举、插件私有机密（credentials.json `pluginSecrets.<pluginId>`，恒 0600） |
-| 节点与文件 | `nodeIpc / nodeFetch / executionEnv / withFileLock / atomicWriteFile / buildSpawnEnv` | 跨节点 IPC 桥（Herdr 用）、节点 loopback 透传 `fetch`（跨节点访问 `127.0.0.1:<port>` HTTP/SSE 服务）、目标节点执行环境、文件锁与原子写 |
+| 节点与文件 | `nodeIpc / nodeFetch / openTunnel / executionEnv / withFileLock / atomicWriteFile / buildSpawnEnv` | 跨节点 IPC 桥（Herdr 用）、节点 HTTP(S) 透传 `fetch`（任意 host，跨节点访问节点视角的 HTTP/HTTPS/SSE 服务）、任意 TCP 透传隧道（原始 Duplex）、目标节点执行环境、文件锁与原子写 |
 | 通用机制 | `redact / redactText / completeText / refreshModels / listPlugins / listUi / setConfig / isClosing` | 脱敏、无工具单次文本补全、目录刷新、清单读取、自身配置更新 |
 | 事件 | `onEvent(type, listener) / emitEvent(type, payload, opts)` | 订阅 `workflow.settled`、`conversation.entry` 等事件；`broadcast: false` 仅进程内分发；插件停用自动解除订阅 |
 

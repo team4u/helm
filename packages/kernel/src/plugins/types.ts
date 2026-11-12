@@ -7,6 +7,7 @@ import type {
   HelmHostApi,
   HelmHostNodeIpcPort,
   HelmHostNodeFetchPort,
+  HelmHostOpenTunnelPort,
   HookName,
   PluginConfigFieldSchema,
   PluginDefinition,
@@ -47,7 +48,7 @@ export interface PluginProviderPort {
  * secrets / setConfig 由 PluginHost 在此之上包装 pluginId 命名空间；isClosing
  * 归一为 getter；listPlugins 转发 PluginHost 自身 list()。
  */
-export type PluginHostBackend = Omit<HelmHostApi, 'manageConversation' | 'skills' | 'secrets' | 'setConfig' | 'isClosing' | 'listPlugins' | 'listUi' | 'nodeIpc' | 'plugins' | 'nodeFetch'> & {
+export type PluginHostBackend = Omit<HelmHostApi, 'manageConversation' | 'skills' | 'secrets' | 'setConfig' | 'isClosing' | 'listPlugins' | 'listUi' | 'nodeIpc' | 'plugins' | 'nodeFetch' | 'openTunnel'> & {
   /** 声明 pluginId 对会话的管理权；返回释放函数（受管期间删除保护）。 */
   manageConversation(id: number, pluginId: string): () => void;
   skills: Omit<HelmHostApi['skills'], 'ensureSkill'> & {
@@ -57,6 +58,8 @@ export type PluginHostBackend = Omit<HelmHostApi, 'manageConversation' | 'skills
   nodeIpc?: HelmHostNodeIpcPort;
   /** 节点本机 HTTP fetch 端口（EnvFabric.nodeFetch；未接线时调用显式报 501，不回退 local）。 */
   nodeFetch?: HelmHostNodeFetchPort;
+  /** 任意 TCP 透传隧道端口（EnvFabric.openTunnel；未接线时调用显式报 501，不回退 local）。 */
+  openTunnel?: HelmHostOpenTunnelPort;
   /**
    * 宿主插件治理后端（ctx.host.plugins 写面：doctor/install/update/remove/
    * enable/disable；未接线时修改操作显式 501，不静默降级）。真实实现由

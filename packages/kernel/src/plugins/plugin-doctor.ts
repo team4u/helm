@@ -75,6 +75,7 @@ function doctorBackend(): PluginHostBackend {
     skills: port as never,
     nodeIpc: undefined,
   nodeFetch: undefined,
+  openTunnel: undefined,
     secrets: port as never,
     setPluginConfig: () => unavailable('host.setConfig'),
     dispatchTrigger: () => unavailable('host.dispatchTrigger'),

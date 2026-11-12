@@ -53,6 +53,7 @@ import { PluginHost } from '../plugins/index.js'
 import { PluginPackageManager } from '../plugins/package-manager.js'
 import { PluginPackageManagerStore } from '../plugins/package-store.js'
 import type { EnvFabric } from '../env/index.js'
+import { NodeForwardService, type NodeForwardEvent, type NodeForwardInput, type NodeForwardSession } from '../env/forward.js'
 import type { EventHub, SessionDocEventHub } from './events.js'
 import type { HelmDatabase } from './sqlite.js'
 import type { HelmStore } from './store.js'
@@ -101,6 +102,8 @@ export class KernelRuntime {
   private readonly stashService = new SecretStash()
   private readonly hostEventListeners = new Map<string, Set<(payload: unknown) => MaybePromise<void>>>()
   readonly envFabric: EnvFabric
+  /** Hub 侧前台端口转发（监听器仅在命令期间存在；close 统一销毁）。 */
+  readonly nodeForward: NodeForwardService
   private processTokenHandle: { tokenOf(): string | undefined; dispose(): void } | undefined
   private hubUrlValue: string
   private pluginHost: PluginHost | undefined
@@ -175,6 +178,7 @@ export class KernelRuntime {
 
     this.modelsRegistry = this.svc.modelsRegistry
     this.envFabric = this.svc.envFabric
+    this.nodeForward = new NodeForwardService(this.svc.envFabric)
     this.nodes = this.svc.nodes
     this.nodeOps = this.svc.nodeOps
     this.events = this.svc.events
@@ -386,6 +390,30 @@ export class KernelRuntime {
     signal?: AbortSignal,
   ): Promise<EnvExecResponse> {
     return this.nodeOps.execEnv(req, onChunk, signal)
+  }
+
+  // ------------------------------------------------------------------
+  // Hub 侧前台端口转发（NodeForwardService）
+  // ------------------------------------------------------------------
+
+  async startNodeForward(nodeId: string, input: NodeForwardInput): Promise<NodeForwardSession> {
+    return await this.nodeForward.start(nodeId, input)
+  }
+
+  async stopNodeForward(forwardId: string): Promise<void> {
+    await this.nodeForward.stop(forwardId)
+  }
+
+  getNodeForward(forwardId: string): NodeForwardSession | undefined {
+    return this.nodeForward.get(forwardId)
+  }
+
+  listNodeForwards(): NodeForwardSession[] {
+    return this.nodeForward.list()
+  }
+
+  onNodeForwardEvent(forwardId: string, listener: (event: NodeForwardEvent) => void): () => void {
+    return this.nodeForward.onEvent(forwardId, listener)
   }
 
   // ------------------------------------------------------------------
@@ -770,6 +798,7 @@ export class KernelRuntime {
       harness: this.harness,
       tracker: this.svc.tracker,
       pluginHost: this.pluginHost,
+      nodeForward: this.nodeForward,
       envFabric: this.envFabric,
       processTokenHandle: this.processTokenHandle,
       database: this.database,

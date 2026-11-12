@@ -33,6 +33,7 @@ import type {
   NodeIpcEvent,
   NodeRegisterInput,
   NodeTunnelHello,
+  NodeTunnelTarget,
   NodeUpgradeResult,
 } from '@helm/protocol'
 import type { Context } from '@earendil-works/chord/context'
@@ -194,6 +195,34 @@ export class HelmUpgradeBusyError extends Error {}
 export class HelmUpgradeTimeoutError extends Error {}
 /** 升级等待被主动取消。 */
 export class HelmUpgradeCancelledError extends Error {}
+
+/** 隧道目标边界校验：port 1..65535 安全整数；host 非空、≤255 字符、无控制字符/首尾空白（非法即 HelmError validation_error，不静默改写）。 */
+export function normalizeTunnelTarget(target: NodeTunnelTarget): { host: string | undefined; port: number } {
+  if (target === null || typeof target !== 'object') {
+    throw new HelmError('validation_error', '隧道目标需为 { host?, port } 对象', 400)
+  }
+  const { host, port } = target as Partial<NodeTunnelTarget>
+  if (typeof port !== 'number' || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new HelmError('validation_error', '隧道目标 port 需为 1..65535 的安全整数', 400, { port })
+  }
+  if (host === undefined) return { host: undefined, port }
+  if (
+    typeof host !== 'string' ||
+    host.length === 0 ||
+    host.length > 255 ||
+    host.trim() !== host ||
+    // 控制字符与任何空白（含内部空格/Tab）一律拒绝：主机名不允许空白。
+    /\s/.test(host) ||
+    // 控制字符（含 NUL）一律拒绝。
+    [...host].some((ch) => {
+      const code = ch.charCodeAt(0)
+      return code < 0x20 || code === 0x7f
+    })
+  ) {
+    throw new HelmError('validation_error', '隧道目标 host 需为非空、无空白/控制字符的字符串（≤255 字符）', 400, { host })
+  }
+  return { host, port }
+}
 
 /** timing-safe 令牌校验回调（签发表存 sha256(wholeToken) 十六进制）。 */
 export function tokenAuthenticator(
@@ -472,7 +501,8 @@ export class NodeRegistry {
   }
 
   /**
-   * 建立到远端节点本机端口的字节管道：调用当前连接的 nodeTunnelOpen 后
+   * 建立到远端节点目标 host:port 的字节管道（任意 TCP；host 缺省
+   * 127.0.0.1，由节点解析连接）：调用当前连接的 nodeTunnelOpen 后
    * **立即**等待独立网关首帧（acceptTunnel），RPC 结果在后台对账——慢/断
    * RPC 不会卡住超时与 abort。失败语义（均 HelmError，绝不回退 local）：
    * - 节点离线 / 注册表关闭：node_offline（409）；
@@ -482,7 +512,8 @@ export class NodeRegistry {
    * 任何失败/取消路径都尽力通知节点 nodeTunnelAbort（catch observe，不等
    * 网络回包才 reject），pending/active 登记同步清理，不悬挂。
    */
-  async openTunnel(nodeId: string, port: number, signal?: AbortSignal): Promise<Duplex> {
+  async openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex> {
+    const { host, port } = normalizeTunnelTarget(target)
     if (this.#closed) {
       throw new HelmError('node_offline', `节点 ${nodeId} 离线，无法建立隧道`, 409, { nodeId })
     }
@@ -565,7 +596,7 @@ export class NodeRegistry {
 
     // RPC 结果后台对账：不 await（慢/断 RPC 不卡超时与 abort）；成功只用于
     // 提前定格失败（节点显式拒绝），rejection 亦 observe（不产生 unhandled）。
-    void open({ tunnelId, port }).then(
+    void open({ tunnelId, ...(host === undefined ? {} : { host }), port }).then(
       (result) => {
         if (pending.settled) return
         if (result.ok) return

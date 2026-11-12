@@ -20,8 +20,9 @@
  * - subscribe：首行 ACK（15s 超时）须为结构化的 subscription_started，
  *   之后每行经 onIpcEvent 转发；断开经 onIpcClosed 通知；不静默吞错。
  *
- * 节点侧 TCP 隧道（nodeTunnelOpen）：Hub 请求在节点本机 127.0.0.1:port
- * 建立 TCP，与 daemon 层注入的 openTunnelStream 双工流（WS 隧道，hubUrl/
+ * 节点侧 TCP 隧道（nodeTunnelOpen）：Hub 请求在节点侧向目标 host:port
+ *（host 缺省 127.0.0.1，由本节点解析与连接）建立 TCP，与 daemon 层注入的
+ * openTunnelStream 双工流（WS 隧道，hubUrl/
  * token 等凭据由 daemon 层封闭）双向 pipe——本层零凭据。draining/disposed
  * 拒绝新隧道；TCP 在隧道握手期间 pause，pipe 后不丢首包；dispose 销毁
  * 全部隧道 TCP/双工流并等待 settle。
@@ -46,6 +47,7 @@ import type {
   NodeIpcClosedEvent,
   NodeIpcEvent,
   NodeIpcSubscribeInput,
+  NodeTunnelOpenInput,
   RpcEnvError,
   RpcResult,
 } from '@helm/protocol';
@@ -314,9 +316,10 @@ export function resolveHerdrIpcEndpoint(
 /** NodeEnvRpcFunctions + dispose/内省 + IPC 端点解析（daemon 接线用）。 */
 export interface NodeEnvRpcServer extends NodeEnvRpcFunctions {
   /**
-   * 打开到节点本机 127.0.0.1:port 的 TCP 隧道，与 openTunnelStream 双工流
-   * 双向 pipe。严格校验入参（仅 tunnelId/port/timeoutMs）；draining/disposed
-   * 时返回 aborted；本机连接失败/握手失败返回结构化错误（绝不伪造成功）。
+   * 打开到目标 host:port（host 缺省 127.0.0.1，由本节点解析连接）的 TCP
+   * 隧道，与 openTunnelStream 双工流双向 pipe。严格校验入参（仅
+   * tunnelId/host/port/timeoutMs）；draining/disposed 时返回 aborted；
+   * 本机连接失败/握手失败返回结构化错误（绝不伪造成功）。
    */
   nodeTunnelOpen(input: NodeTunnelOpenInput): Promise<RpcResult<null>>;
   /** 取消在途隧道（握手中或已建立）：销毁该隧道的 TCP/WS 并立即返回。 */
@@ -339,20 +342,7 @@ export interface NodeEnvRpcServer extends NodeEnvRpcFunctions {
   getActiveTunnelCount(): number;
 }
 
-/**
- * nodeTunnelOpen 入参（本地最小契约：protocol 分支并入 NodeTunnel 类型前的
- * 结构化声明，字段与未来 protocol 定义一致；合并后改为 type import）。
- */
-export interface NodeTunnelOpenInput {
-  /** 隧道标识（1..128 非空字符串；由 Hub 生成，节点不解析语义）。 */
-  tunnelId: string;
-  /** 节点本机回环目标端口（1..65535 safe integer）。 */
-  port: number;
-  /** 隧道建立（TCP connect + 双工流握手）预算（毫秒，正有限数）。 */
-  timeoutMs?: number;
-}
-
-/** NodeEnvRpcFunctions + 节点隧道扩展（protocol 并入前的本地扩展面）。 */
+/** NodeEnvRpcFunctions + 节点隧道扩展（NodeTunnelOpenInput 统一引自 protocol）。 */
 type NodeEnvRpcWithTunnelFunctions = NodeEnvRpcFunctions & {
   nodeTunnelOpen(input: NodeTunnelOpenInput): Promise<RpcTunnelResult>;
   nodeTunnelAbort(tunnelId: string): Promise<void>;
@@ -656,9 +646,40 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
   };
 
   // —— 节点侧 TCP 隧道（nodeTunnelOpen / nodeTunnelAbort）————————————————
-  // 目标固定本机回环；隧道 WS 与凭据由 daemon 注入的 openTunnelStream 封闭。
+  // 目标 host:port 由 Hub 指定（host 缺省 127.0.0.1），由本节点解析与连接；
+  // 隧道 WS 与凭据由 daemon 注入的 openTunnelStream 封闭。
   /** 隧道建立（TCP connect + 双工流握手）总预算，自受理起算（非分段叠加）。 */
   const TUNNEL_OPEN_DEFAULT_MS = 15_000;
+  /** 目标 host 缺省值：节点本机回环（与既有 loopback 语义兼容）。 */
+  const TUNNEL_DEFAULT_HOST = '127.0.0.1';
+  /** host 上限：IPv6 文本形式最长约 45 字符，主机名一般 ≤253；适度留余。 */
+  const TUNNEL_HOST_MAX_CHARS = 255;
+
+  /**
+   * host 边界校验：非空字符串、≤255 字符、无控制字符/首尾空白；
+   * 非法即抛 invalid（绝不静默改写或回退回环）。
+   */
+  const assertValidTunnelHost = (raw: unknown): string | undefined => {
+    if (raw === undefined) return undefined;
+    if (typeof raw !== 'string' || raw.length === 0 || raw.length > TUNNEL_HOST_MAX_CHARS) {
+      throw Object.assign(
+        new Error(`nodeTunnelOpen host must be a non-empty string of 1..${TUNNEL_HOST_MAX_CHARS} characters`),
+        { code: 'invalid' },
+      );
+    }
+    // 控制字符（含 NUL/CR/LF/Tab）与任何空白（含内部空格）一律拒绝：
+    // 主机名不允许空白（防解析歧义与注入）。
+    for (let i = 0; i < raw.length; i++) {
+      const code = raw.charCodeAt(i);
+      if (code < 0x20 || code === 0x7f || code === 0x20) {
+        throw Object.assign(new Error('nodeTunnelOpen host must not contain control or whitespace characters'), { code: 'invalid' });
+      }
+    }
+    if (raw.trim() !== raw) {
+      throw Object.assign(new Error('nodeTunnelOpen host must not have leading/trailing whitespace'), { code: 'invalid' });
+    }
+    return raw;
+  };
 
   interface ActiveTunnel {
     tunnelId: string;
@@ -687,8 +708,13 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     if (activeTunnels.get(tunnel.tunnelId) !== tunnel) return;
     activeTunnels.delete(tunnel.tunnelId);
     tunnel.controller.abort(new Error('tunnel aborted'));
-    tunnel.tcp.destroy();
-    tunnel.duplex?.destroy();
+    try { tunnel.tcp.destroy(); } catch { /* 已销毁 */ }
+    if (tunnel.duplex !== undefined) {
+      // duplexify 无 error 监听时 destroy 会以未处理 'error' 崩进程；
+      // 兑底监听后 destroy（同步抛出与异步 rejection 均吸收）。
+      tunnel.duplex.once('error', () => undefined);
+      try { void Promise.resolve(tunnel.duplex.destroy()).catch(() => undefined); } catch { /* 同步抛出 */ }
+    }
     tunnelWaiters.delete(tunnel.lifecycle);
     tunnel.settle();
   };
@@ -696,7 +722,9 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
   const nodeTunnelOpenCore = async (raw: unknown): Promise<RpcTunnelResult> => {
     // 边界严格校验：plain object、字段白名单、值域——未知字段一律拒绝。
     if (!isRecord(raw) || Array.isArray(raw)) return invalidInput('nodeTunnelOpen input must be a plain object');
-    const unknownFields = Object.keys(raw).filter((key) => key !== 'tunnelId' && key !== 'port' && key !== 'timeoutMs');
+    const unknownFields = Object.keys(raw).filter(
+      (key) => key !== 'tunnelId' && key !== 'port' && key !== 'timeoutMs' && key !== 'host',
+    );
     if (unknownFields.length > 0) {
       return invalidInput(`nodeTunnelOpen rejects unknown field(s): ${unknownFields.join(', ')}`);
     }
@@ -707,6 +735,12 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     const port = raw['port'];
     if (typeof port !== 'number' || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
       return invalidInput('nodeTunnelOpen port must be a safe integer within 1..65535');
+    }
+    let host: string;
+    try {
+      host = assertValidTunnelHost(raw['host']) ?? TUNNEL_DEFAULT_HOST;
+    } catch (error) {
+      return rpcFail(error);
     }
     const rawTimeout = raw['timeoutMs'];
     if (rawTimeout !== undefined && (typeof rawTimeout !== 'number' || !Number.isFinite(rawTimeout) || rawTimeout <= 0)) {
@@ -732,8 +766,9 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     }
     // 总预算自受理起算（TCP connect 与 WS 握手共用，非各 15s）。
     const budgetMs = typeof rawTimeout === 'number' ? Math.floor(rawTimeout) : TUNNEL_OPEN_DEFAULT_MS;
-    // 固定本机回环目标（不解析主机名、不越出节点本机）。
-    const tcp = net.connect({ host: '127.0.0.1', port });
+    // 目标 host:port 由 Hub 指定：节点负责解析与连接（net.connect 支持主机名与 IP 文本）。
+    const target = `${host}:${port}`;
+    const tcp = net.connect({ host, port });
     const tunnel = newTunnel(tunnelId, tcp);
     // 统一 settle：整个建立过程（TCP connect + WS 握手）只结算一次。
     let settled = false;
@@ -748,10 +783,10 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     // TCP 错误归一 connect_failed（系统码保留在 message，不外溢到 code）。
     const connectFailed = (detail: string): { code: RpcTunnelErrorCode; message: string } => ({
       code: 'connect_failed',
-      message: `tunnel TCP connect to 127.0.0.1:${port} failed: ${detail}`,
+      message: `tunnel TCP connect to ${target} failed: ${detail}`,
     });
     const budgetTimer = setTimeout(() => {
-      settleOnce({ ok: false, error: { code: 'timeout', message: `tunnel open timed out after ${budgetMs}ms (127.0.0.1:${port})` } });
+      settleOnce({ ok: false, error: { code: 'timeout', message: `tunnel open timed out after ${budgetMs}ms (${target})` } });
       teardownTunnel(tunnel);
     }, budgetMs);
     // error 自 socket 创建起挂统一处理（connect 成功后不摘除）：握手等待期/

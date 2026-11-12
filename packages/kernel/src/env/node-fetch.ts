@@ -1,0 +1,260 @@
+/**
+ * 节点透传隧道的 HTTP/HTTPS 适配层：openTunnel（任意 TCP Duplex）之上的
+ * fetch 适配器。
+ *
+ * - http:  隧道 Duplex 直接作为 node:http.request 的 createConnection；
+ * - https: 在同一隧道 Duplex 上叠 node:tls.connect（servername 按目标
+ *   hostname 设置，证书校验遵循 Node 默认 CA/verify 链），再把 TLS 流
+ *   交给 node:http.request——绝不把裸 Duplex 塞给 https.request 假装 TLS；
+ * - 不聚合 request/response body：请求体流式转发，响应体以
+ *   Readable.toWeb(res) 交还（SSE/流式响应完整透传）；
+ * - 隧道（Duplex）寿命绑定 Response body：EOF/cancel/error 才销毁，
+ *   响应头到达绝不提前关隧道；HEAD/204/304 body 为 null 并立即释放；
+ * - AbortSignal 传播：请求期取消销毁 req 与隧道（duplex 的销毁驱动
+ *   Response body 端 error/cancel）；
+ * - 4xx/5xx 不是传输失败：原样构造 Response（含错误体），只有建隧道
+ *   失败、socket 异常中断、超时才抛 HelmError。
+ */
+
+import http from 'node:http'
+import tls from 'node:tls'
+import net from 'node:net'
+import { Readable } from 'node:stream'
+import type { Duplex } from 'node:stream'
+import { HelmError } from '@helm/protocol'
+
+/** 本地（local 节点）TCP 直连缺省预算：与远端 registry.openTunnel 超时一致。 */
+const LOCAL_TUNNEL_CONNECT_TIMEOUT_MS = 10_000
+
+/**
+ * local 节点的隧道实现：Hub 进程内 net.connect 直连（任意 host:port）。
+ * abort/超时/错误显式抛 HelmError 并保证 socket 释放（绝不半泄漏）。
+ */
+export function connectLocalTunnel(host: string, port: number, signal?: AbortSignal): Promise<Duplex> {
+  if (signal?.aborted) {
+    return Promise.reject(new HelmError('aborted', '隧道建立已取消', 499, { host, port }))
+  }
+  return new Promise<Duplex>((resolve, reject) => {
+    const socket = net.connect({ host, port })
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      reject(new HelmError(
+        'node_tunnel_timeout',
+        `连接 ${host}:${port} 超时（${LOCAL_TUNNEL_CONNECT_TIMEOUT_MS}ms）`,
+        504,
+        { host, port },
+      ))
+    }, LOCAL_TUNNEL_CONNECT_TIMEOUT_MS)
+    timer.unref?.()
+    const finishOk = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      resolve(socket)
+    }
+    const finishErr = (error: HelmError): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      socket.destroy()
+      reject(error)
+    }
+    const onAbort = (): void => {
+      finishErr(new HelmError('aborted', '隧道建立已取消', 499, { host, port }))
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    socket.once('connect', () => {
+      if (signal?.aborted) {
+        finishErr(new HelmError('aborted', '隧道建立已取消', 499, { host, port }))
+        return
+      }
+      finishOk()
+    })
+    socket.once('error', (error: Error) => {
+      finishErr(new HelmError(
+        'node_tunnel_connect_failed',
+        `连接 ${host}:${port} 失败：${error.message}`,
+        502,
+        { host, port },
+      ))
+    })
+  })
+}
+
+/**
+ * https：在已建立的隧道 TCP Duplex 上叠 TLS 握手（servername 按目标
+ * hostname 驱动 SNI 与证书校验），返回 TLSSocket。绝不把裸 Duplex 交给
+ * https.request 伪装 TLS。
+ */
+function tlsOverTunnel(tunnel: Duplex, host: string, signal?: AbortSignal): Promise<Duplex> {
+  if (signal?.aborted) {
+    return Promise.reject(new HelmError('aborted', 'TLS 握手已取消', 499, { host }))
+  }
+  return new Promise<Duplex>((resolve, reject) => {
+    const secure = tls.connect({ socket: tunnel, servername: host })
+    const timer = setTimeout(() => {
+      secure.destroy()
+      reject(new HelmError('node_tunnel_timeout', `TLS 握手超时（${host}）`, 504, { host }))
+    }, LOCAL_TUNNEL_CONNECT_TIMEOUT_MS)
+    timer.unref?.()
+    const onAbort = (): void => {
+      secure.destroy()
+      reject(new HelmError('aborted', 'TLS 握手已取消', 499, { host }))
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    secure.once('secureConnect', () => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      resolve(secure)
+    })
+    secure.once('error', (error: Error) => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      reject(new HelmError(
+        'node_tunnel_connect_failed',
+        `TLS 握手失败（${host}）：${error.message}`,
+        502,
+        { host },
+      ))
+    })
+  })
+}
+
+/** tunnelRequestBody：body 直接流式转发（不聚合）；GET/HEAD/null 无 body。 */
+function pipeRequestBody(request: Request, req: http.ClientRequest): void {
+  if (request.body === null) { req.end(); return }
+  const nodeStream = Readable.fromWeb(request.body as Parameters<typeof Readable.fromWeb>[0])
+  nodeStream.on('error', (error) => {
+    req.destroy(error instanceof Error ? error : new Error(String(error)))
+  })
+  nodeStream.pipe(req)
+}
+
+/** 经节点透传隧道执行单次 HTTP(S) 请求。openTunnel 是任意 TCP 原语，本函数
+ * 只负责在其上适配 HTTP(S) 语义；生命周期：duplex 寿命绑定 Response body。 */
+export async function tunnelFetch(
+  openTunnel: (target: { host?: string; port: number }, signal?: AbortSignal) => Promise<Duplex>,
+  nodeId: string,
+  request: Request,
+): Promise<Response> {
+  const url = new URL(request.url)
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new HelmError(
+      'node_tunnel_connect_failed',
+      `节点 fetch 仅支持 http/https（收到 ${url.protocol}）`,
+      400,
+      { nodeId, url: request.url },
+    )
+  }
+  const isHttps = url.protocol === 'https:'
+  const defaultPort = isHttps ? 443 : 80
+  const port = url.port === '' ? defaultPort : Number(url.port)
+  const hostname = url.hostname.replace(/^\[|\]$/g, '') // IPv6 文本去括号（net.connect 接受无括号形式）
+  const signal = request.signal ?? undefined
+  signal?.throwIfAborted()
+  let tcp: Duplex | undefined
+  try {
+    tcp = await openTunnel({ host: hostname, port }, signal)
+  } catch (error) {
+    if (error instanceof HelmError) throw error
+    throw new HelmError(
+      'node_tunnel_connect_failed',
+      `节点 ${nodeId} 隧道建立失败：${error instanceof Error ? error.message : String(error)}`,
+      502,
+      { nodeId, url: request.url },
+    )
+  }
+  let tunnel: Duplex = tcp
+  if (isHttps) {
+    try {
+      tunnel = await tlsOverTunnel(tcp, hostname, signal)
+    } catch (error) {
+      // tls.connect 已销毁 secure；底层 tcp 需显式释放（防半泄漏）。
+      tcp.destroy()
+      if (error instanceof HelmError) throw error
+      throw new HelmError(
+        'node_tunnel_connect_failed',
+        `节点 ${nodeId} TLS 建立失败：${error instanceof Error ? error.message : String(error)}`,
+        502,
+        { nodeId, url: request.url },
+      )
+    }
+  }
+
+  return await new Promise<Response>((resolve, reject) => {
+    const failTunnel = (code: string, message: string, status: number): void => {
+      const error = new HelmError(code, message, status, { nodeId, url: request.url })
+      tunnel.destroy(error)
+      reject(error)
+    }
+    const headers: Record<string, string> = {}
+    request.headers.forEach((value, name) => {
+      // host/connection/content-length 由 node:http 重建；其余单值复制。
+      if (name === 'host' || name === 'connection' || name === 'content-length') return
+      headers[name] = value
+    })
+    // 隧道是单次短生命周期连接：显式要求响应后关闭（防上游 keep-alive
+    // 让隧道 duplex 悬挂）；同时禁用压缩（node:http 不会自动解压，保留
+    // 透传语义，插件拿到的就是原始字节）。
+    headers['connection'] = 'close'
+    headers['accept-encoding'] = headers['accept-encoding'] ?? 'identity'
+    const req = http.request(
+      {
+        // createConnection 存在时 node:http 不会构建 Agent 连接池；
+        // false 明确禁用默认 agent（类型层窄化为 Agent 仅绕过联合签名）。
+        createConnection: () => tunnel,
+        agent: undefined,
+        protocol: 'http:',
+        host: hostname,
+        port,
+        method: request.method,
+        path: `${url.pathname}${url.search}`,
+        headers,
+      },
+      (res) => {
+        const status = res.statusCode ?? 502
+        const outHeaders = new Headers()
+        for (const [name, value] of Object.entries(res.headers)) {
+          if (value === undefined) continue
+          for (const v of Array.isArray(value) ? value : [value]) outHeaders.append(name, v)
+        }
+        // HEAD/204/304 禁止 body（new Response(stream, {status:204}) 会 throw）。
+        const nullBody = request.method === 'HEAD' || status === 204 || status === 304
+        if (nullBody) {
+          res.resume() // 丢弃（按 RFC 本就不该有 body）
+          resolve(new Response(null, { status, headers: outHeaders }))
+          // 无 body 可等：立即释放隧道。
+          tunnel.destroy()
+          return
+        }
+        const bodyStream = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>
+        // 隧道寿命绑定 body：EOF/cancel/error 由 stream 终结驱动，
+        // 响应头到达绝不提前 destroy（SSE 必须完整透传）。
+        resolve(new Response(bodyStream, { status, headers: outHeaders }))
+      },
+    )
+    req.once('error', (error) => {
+      failTunnel(
+        'node_tunnel_closed',
+        `节点 ${nodeId} 隧道请求失败：${error instanceof Error ? error.message : String(error)}`,
+        502,
+      )
+    })
+    const onAbort = (): void => {
+      req.destroy()
+      // duplex 的销毁驱动 Response body 端的 error/cancel。
+      tunnel.destroy(new HelmError('aborted', '节点 fetch 已取消', 499, { nodeId, url: request.url }))
+      reject(new HelmError('aborted', '节点 fetch 已取消', 499, { nodeId, url: request.url }))
+    }
+    if (signal?.aborted) { onAbort(); return }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    req.once('close', () => signal?.removeEventListener('abort', onAbort))
+    if (request.method === 'GET' || request.method === 'HEAD' || request.body === null) req.end()
+    else pipeRequestBody(request, req)
+  })
+}

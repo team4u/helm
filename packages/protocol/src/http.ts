@@ -97,6 +97,7 @@ export const CORE_CLI_COMMAND_PATHS = [
   'nodes issue',
   'nodes remove',
   'nodes upgrade',
+  'nodes forward',
   'env exec',
   'plugins list',
   'plugins enable',

@@ -240,6 +240,9 @@ export async function teardownKernelRuntime(deps: {
   envFabric: {
     dispose(): Promise<void>
   }
+  nodeForward?: {
+    close(): Promise<void>
+  }
   processTokenHandle?: {
     dispose(): void
   }
@@ -283,6 +286,7 @@ export async function teardownKernelRuntime(deps: {
   await deps.settledInflight()
   await deps.settledInflight()
   await deps.pluginHost?.dispose()
+  await deps.nodeForward?.close().catch(() => undefined)
   await deps.envFabric.dispose().catch(() => {})
   deps.processTokenHandle?.dispose()
   await deps.harness.close(BACKGROUND_CONTEXT)

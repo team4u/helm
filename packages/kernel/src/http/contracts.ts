@@ -57,6 +57,7 @@ import type {
   SkillService as RealSkillService,
 } from '../services/index.js'
 import type { EnvFabric } from '../env/index.js'
+import type { NodeForwardEvent, NodeForwardSession } from '../env/forward.js'
 
 export type { RealAuthService }
 export type {
@@ -315,6 +316,27 @@ export interface KernelRuntimeLike {
   checkNodeUpgrade?(nodeId: string, input?: NodeUpgradeCheckInput): Promise<NodeUpgradeCheckResult> | NodeUpgradeCheckResult
   /** 触发节点升级并等待 commit 确认（POST /api/nodes/:id/upgrade）。 */
   upgradeNode?(nodeId: string, input?: NodeUpgradeInput): Promise<NodeUpgradeResult> | NodeUpgradeResult
+  /**
+   * 启动前台端口转发（POST /api/nodes/:id/forward）：Hub 侧按需监听
+   * listenHost:listenPort，每个入站连接经任意 TCP 隧道到达目标节点
+   * targetHost:targetPort；监听器仅在命令生命周期内存在（监控流断开 /
+   * stop / 宿主 close 即销毁）。
+   */
+  startNodeForward?(
+    nodeId: string,
+    input: { listenHost: string; listenPort: number; targetHost?: string; targetPort: number },
+  ): Promise<NodeForwardSession> | NodeForwardSession
+  /** 停止端口转发（DELETE /api/nodes/forward/:forwardId）；幂等语义由 404 表达。 */
+  stopNodeForward?(forwardId: string): Promise<void> | void
+  /** 转发会话现读（GET /api/nodes/forward/:forwardId）。 */
+  getNodeForward?(forwardId: string): NodeForwardSession | undefined
+  /** 活动转发清单（GET /api/nodes/forward）。 */
+  listNodeForwards?(): NodeForwardSession[]
+  /** 转发事件订阅（GET /api/nodes/forward/:forwardId/events，NDJSON）；监控流断开不自动停止（由 CLI 显式 stop）。 */
+  onNodeForwardEvent?(
+    forwardId: string,
+    listener: (event: NodeForwardEvent) => void,
+  ): () => void
   /**
    * 跨节点命令执行（POST /api/env/exec）：靶点解析为显式 nodeId/cwd >
    * 会话绑定 > local；远端离线 409 node_offline；onChunk 逐块回放

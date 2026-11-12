@@ -147,6 +147,35 @@ function resolveNodeTarget(flags: Map<string, unknown>, positionalId: string | u
   throw new CliError('缺少节点目标：提供显式 <nodeId> 或 --current（读 HELM_NODE_ID）', 'missing_node_target')
 }
 
+/** nodes forward 的 host:port 端点解析：[host:]port；host 缺省 127.0.0.1（仅目标端可缺省）。 */
+function parseEndpoint(raw: string, what: string, allowBarePort: boolean): { host?: string; port: number } {
+  const trimmed = raw.trim()
+  if (trimmed === '') throw new CliError(`${what} 需为 host:port 形式（如 127.0.0.1:8080）`, 'invalid_flag_value')
+  // IPv6 文本形式：[::1]:port 或裸 ::1（含多个冒号时仅接受括号形式）。
+  const bracket = trimmed.match(/^\[(.+)\]:(\d+)$/)
+  if (bracket) {
+    const port = Number(bracket[2])
+    if (port < 1 || port > 65535) throw new CliError(`${what} 端口需为 1..65535`, 'invalid_flag_value')
+    return { host: bracket[1]!, port }
+  }
+  const lastColon = trimmed.lastIndexOf(':')
+  if (lastColon === -1) {
+    if (!allowBarePort) throw new CliError(`${what} 需为 host:port 形式（如 127.0.0.1:8080）`, 'invalid_flag_value')
+    if (!/^\d+$/.test(trimmed)) throw new CliError(`${what} 需为端口数字或 host:port`, 'invalid_flag_value')
+    const port = Number(trimmed)
+    if (port < 1 || port > 65535) throw new CliError(`${what} 端口需为 1..65535`, 'invalid_flag_value')
+    return { port }
+  }
+  const host = trimmed.slice(0, lastColon)
+  const portText = trimmed.slice(lastColon + 1)
+  if (host === '' || portText === '' || !/^\d+$/.test(portText)) {
+    throw new CliError(`${what} 需为 host:port 形式（如 127.0.0.1:8080；IPv6 用 [::1]:8080）`, 'invalid_flag_value')
+  }
+  const port = Number(portText)
+  if (port < 1 || port > 65535) throw new CliError(`${what} 端口需为 1..65535`, 'invalid_flag_value')
+  return { host, port }
+}
+
 export function nodesCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
 
@@ -253,6 +282,80 @@ export function nodesCommands(): CommandSpec[] {
       }
       if (ctx.json) printResult(ctx, upgraded)
       else printUpgradeResult(ctx.io, nodeId, upgraded)
+    },
+  })
+
+  cmds.push({
+    path: ['nodes', 'forward'],
+    description: '本地 TCP 端口转发（POST /api/nodes/:id/forward；Ctrl-C 退出并关闭）',
+    positional: '<nodeId> <listenHost:listenPort> [<targetHost>:]<targetPort>',
+    async run(ctx: CommandContext) {
+      const parsed = parseFlags([], ctx.args)
+      const nodeId = requirePositional(parsed.positionals, 0, 'nodeId')
+      const listenRaw = requirePositional(parsed.positionals, 1, 'listenHost:listenPort')
+      const targetRaw = requirePositional(parsed.positionals, 2, '[targetHost:]targetPort')
+      assertNoExtraPositionals(parsed.positionals, 3)
+      if (nodeId.trim() === '' || /[\/\s]/.test(nodeId)) throw new CliError('nodeId 需为非空节点 ID', 'invalid_id')
+      const listen = parseEndpoint(listenRaw, '<listenHost:listenPort>', false)
+      if (listen.host === undefined) throw new CliError('监听地址必须显式携带 host（如 127.0.0.1:8080）', 'invalid_flag_value')
+      const target = parseEndpoint(targetRaw, '<[targetHost:]targetPort>', true)
+      const hub = await ctx.hub()
+      // 创建转发（监听器只在本次命令期间存在）。
+      const created = await hub.post<{ forwardId: string; listenHost: string; listenPort: number }>(
+        `/api/nodes/${encodeURIComponent(nodeId)}/forward`,
+        {
+          listenHost: listen.host,
+          listenPort: listen.port,
+          targetPort: target.port,
+          ...(target.host === undefined ? {} : { targetHost: target.host }),
+        },
+      )
+      if (created === null || typeof created !== 'object' || typeof created.forwardId !== 'string') {
+        throw new CliError('Hub 转发创建响应缺少 forwardId', 'invalid_response')
+      }
+      const forwardId = created.forwardId
+      const stopForward = async (): Promise<void> => {
+        await hub.delete(`/api/nodes/forward/${encodeURIComponent(forwardId)}`).catch(() => undefined)
+      }
+      // 前台：信号退出时显式停止转发（监听器/隧道同步销毁）。
+      let stopping = false
+      const onSignal = (): void => {
+        if (stopping) return
+        stopping = true
+        process.removeListener('SIGINT', onSignal)
+        process.removeListener('SIGTERM', onSignal)
+        void stopForward().finally(() => process.exit(0))
+      }
+      process.on('SIGINT', onSignal)
+      process.on('SIGTERM', onSignal)
+      if (!ctx.json) {
+        printText(ctx.io, [
+          `转发已建立：${created.listenHost}:${created.listenPort} -> ${nodeId} ${target.host ?? '127.0.0.1'}:${target.port}`,
+          'Ctrl-C 退出并关闭转发。',
+        ].join('\n'))
+      }
+      try {
+        // NDJSON 事件流：前台阻塞；断开（Hub 重启/网络断）时退出。
+        await hub.streamNdjson('GET', `/api/nodes/forward/${encodeURIComponent(forwardId)}/events`, {
+          onLine: (value: unknown) => {
+            if (ctx.json) {
+              ctx.io.out(`${JSON.stringify(value)}\n`)
+              return
+            }
+            const event = value as { type?: string; count?: number; message?: string }
+            if (event?.type === 'connection') {
+              printText(ctx.io, `连接建立（活动 ${event.count ?? 0}）`)
+            } else if (event?.type === 'error') {
+              printText(ctx.io, `转发错误：${event.message ?? '未知'}`)
+            }
+          },
+        })
+      } finally {
+        await stopForward()
+      }
+      if (stopping) return
+      // 事件流意外结束（Hub 侧已停止）：如实退出非零。
+      throw new CliError('转发事件流已结束（Hub 侧转发可能已停止）', 'forward_stream_ended')
     },
   })
 

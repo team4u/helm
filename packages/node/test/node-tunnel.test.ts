@@ -2,9 +2,10 @@
  * 节点侧 TCP 隧道（nodeTunnelOpen / nodeTunnelAbort）测试：真实 TCP 回环 +
  * Duplex.from({readable,writable}) 构成的真实双工对（数据真的流经隧道双端，
  * 绝不用旁路 TCP 冒充隧道成功）。
- * 覆盖：入参严格校验（含严格端口拒绝）、端口拒绝 connect_failed、握手中
- * dispose 立即 settle、握手期对端断开、abort RPC 取消建连、banner 首包不丢、
- * 大 payload、end 语义 flush 完整响应。
+ * 覆盖：入参严格校验（含严格端口/host 拒绝）、端口拒绝 connect_failed、
+ * host 缺省 127.0.0.1 与显式 host 透传、握手中 dispose 立即 settle、握手期
+ * 对端断开、abort RPC 取消建连、banner 首包不丢、大 payload、end 语义
+ * flush 完整响应。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -78,6 +79,11 @@ test('nodeTunnelOpen：严格入参校验（未知字段/坏 tunnelId/严格端�
       { tunnelId: 't1', port: 80, extra: 1 },
       { tunnelId: 't1', port: 80, timeoutMs: -1 },
       { tunnelId: 't1', port: 80, timeoutMs: 'x' },
+      { tunnelId: 't1', port: 80, host: 123 },
+      { tunnelId: 't1', port: 80, host: '' },
+      { tunnelId: 't1', port: 80, host: ' 127.0.0.1' },
+      { tunnelId: 't1', port: 80, host: 'bad\nhost' },
+      { tunnelId: 't1', port: 80, host: 'a'.repeat(256) },
     ]) {
       const result = await server.nodeTunnelOpen(bad as never);
       assert.equal(result.ok, false, `应拒绝 ${JSON.stringify(bad)}`);
@@ -393,6 +399,72 @@ test('nodeTunnelOpen：draining 拒绝新隧道；dispose 销毁全部并等待 
   } finally {
     await server.dispose();
     await srv.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('nodeTunnelOpen：host 显式透传（localhost 域名解析后连接真实服务）', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helm-node-tunnel-');
+  const srv = await startBannerEchoServer('HOST-BANNER\r\n');
+  const pending: Array<Promise<DuplexType>> = [];
+  const server = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    openTunnelStream: async () => {
+      const [nodeSide, peerSide] = duplexPair();
+      pending.push(Promise.resolve(peerSide));
+      return nodeSide;
+    },
+  });
+  try {
+    // 显式 host=localhost：节点解析域名并连接（等价 127.0.0.1 上的测试服务）。
+    const opened = await server.nodeTunnelOpen({ tunnelId: 't-host', host: 'localhost', port: srv.port });
+    assert.equal(opened.ok, true);
+    const peer = await pending[0]!;
+    const got = await new Promise<string>((resolve) => {
+      let buf = '';
+      const timer = setTimeout(() => resolve(buf), 5_000);
+      peer.on('data', (chunk) => {
+        buf += chunk.toString();
+        if (buf.includes('HOST-BANNER')) { clearTimeout(timer); resolve(buf); }
+      });
+    });
+    assert.ok(got.includes('HOST-BANNER'), '经显式 host 建立的隧道真实读到 banner');
+    peer.destroy();
+    peer.on('error', () => undefined);
+    // host 缺省：默认 127.0.0.1（与既有 loopback 语义一致）。
+    const openedDefault = await server.nodeTunnelOpen({ tunnelId: 't-default', port: srv.port });
+    assert.equal(openedDefault.ok, true);
+    // 消费并关闭第二条隧道的 peer（模拟 Hub 端断开；未消费的 peer 在节点侧
+    // 销毁时会以未处理 error 崩溃——真实部署中 Hub 端必然持有消费者）。
+    const peerDefault = await pending[1]!;
+    peerDefault.on('error', () => undefined);
+    peerDefault.destroy();
+  } finally {
+    await server.dispose();
+    await srv.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('nodeTunnelOpen：host 目标连接失败归一 connect_failed（真实目标入 message）', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helm-node-tunnel-');
+  // 占用后立即释放：得到一个回环上必拒绝的端口。
+  const probe = await startBannerEchoServer('x');
+  const deadPort = probe.port;
+  await probe.close();
+  const server = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    openTunnelStream: async () => new PassThrough(),
+  });
+  try {
+    const result = await server.nodeTunnelOpen({ tunnelId: 't-refused-host', host: 'localhost', port: deadPort });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.error.code, 'connect_failed', '连接失败归一 connect_failed');
+      assert.match(result.error.message, new RegExp(`localhost:${deadPort}`), '错误信息包含真实目标 host:port');
+    }
+  } finally {
+    await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });

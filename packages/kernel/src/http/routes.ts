@@ -217,6 +217,52 @@ async function route(
       }
       return errorResponse(redactor, 404, 'not_found', '路由不存在')
     }
+    // ---- 前台端口转发：POST /:id/forward、forward 清单/详情/事件/停止 ----------
+    if (second !== undefined && third === 'forward' && fourth === undefined && method === 'POST') {
+      if (kernel.startNodeForward === undefined) {
+        throw new HelmError('not_implemented', '当前 runtime 未提供节点端口转发', 501)
+      }
+      const nodeId = requireNodeSegment(second)
+      const body = await parseOptionalJsonObjectBody(ctx.request, parseNodeForwardBody)
+      return jsonOk(redactor, await kernel.startNodeForward(nodeId, body), { status: 201 })
+    }
+    if (second === 'forward') {
+      // GET /api/nodes/forward：活动转发清单。
+      if (third === undefined && method === 'GET') {
+        if (kernel.listNodeForwards === undefined) {
+          throw new HelmError('not_implemented', '当前 runtime 未提供节点端口转发', 501)
+        }
+        return jsonOk(redactor, kernel.listNodeForwards())
+      }
+      const forwardId = third
+      if (forwardId !== undefined && fourth === undefined && method === 'GET') {
+        if (kernel.getNodeForward === undefined) {
+          throw new HelmError('not_implemented', '当前 runtime 未提供节点端口转发', 501)
+        }
+        const session = kernel.getNodeForward(requireForwardSegment(forwardId))
+        if (session === undefined) {
+          return errorResponse(redactor, 404, 'not_found', '转发不存在或已停止')
+        }
+        return jsonOk(redactor, session)
+      }
+      // GET /api/nodes/forward/:id/events：NDJSON 事件流（监控；断开不自动停止）。
+      if (forwardId !== undefined && fourth === 'events' && fifth === undefined && method === 'GET') {
+        return getNodeForwardEvents(ctx, kernel, requireForwardSegment(forwardId))
+      }
+      // DELETE /api/nodes/forward/:id：停止转发（关闭 Hub 侧监听器与全部隧道）。
+      if (forwardId !== undefined && fourth === undefined && method === 'DELETE') {
+        if (kernel.stopNodeForward === undefined) {
+          throw new HelmError('not_implemented', '当前 runtime 未提供节点端口转发', 501)
+        }
+        // 幂等语义由 404 表达：已不存在的转发停止时报 404（不伤二次退出）。
+        if (kernel.getNodeForward !== undefined && kernel.getNodeForward(requireForwardSegment(forwardId)) === undefined) {
+          return errorResponse(redactor, 404, 'not_found', '转发不存在或已停止')
+        }
+        await kernel.stopNodeForward(requireForwardSegment(forwardId))
+        return jsonOk(redactor, { ok: true })
+      }
+      return errorResponse(redactor, 404, 'not_found', '路由不存在')
+    }
     return errorResponse(redactor, 404, 'not_found', '路由不存在')
   }
 
@@ -1487,4 +1533,96 @@ async function readArtifactBytes(kernel: KernelRuntimeLike, metadata: ArtifactMe
     }
     throw error
   }
+}
+
+// ---------------------------------------------------------------------------
+// 节点前台端口转发（POST /api/nodes/:id/forward、/api/nodes/forward/*）
+// ---------------------------------------------------------------------------
+
+/** forwardId 路径段：fwd-<uuid>。 */
+function requireForwardSegment(raw: string): string {
+  const decoded = decodeSegment(raw)
+  if (!/^fwd-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(decoded)) {
+    throw new ValidationError('forwardId 需为 fwd-<uuid> 形式')
+  }
+  return decoded
+}
+
+/** POST /api/nodes/:id/forward body：listenHost/listenPort/targetPort 必填，targetHost 可选。 */
+function parseNodeForwardBody(
+  body: Record<string, unknown>,
+): { listenHost: string; listenPort: number; targetHost?: string; targetPort: number } {
+  const listenHost = body['listenHost']
+  if (typeof listenHost !== 'string' || listenHost.length === 0 || listenHost.length > 255 || listenHost.trim() !== listenHost || /\s/.test(listenHost)) {
+    throw new ValidationError('listenHost 需为非空、无空白的字符串（≤255 字符）')
+  }
+  for (const ch of listenHost) {
+    const code = ch.charCodeAt(0)
+    if (code < 0x20 || code === 0x7f) throw new ValidationError('listenHost 不得含控制字符')
+  }
+  const listenPort = body['listenPort']
+  if (typeof listenPort !== 'number' || !Number.isSafeInteger(listenPort) || listenPort < 1 || listenPort > 65535) {
+    throw new ValidationError('listenPort 需为 1..65535 的安全整数（不支持随机分配）')
+  }
+  const targetPort = body['targetPort']
+  if (typeof targetPort !== 'number' || !Number.isSafeInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
+    throw new ValidationError('targetPort 需为 1..65535 的安全整数')
+  }
+  const targetHost = body['targetHost']
+  if (
+    targetHost !== undefined &&
+    (typeof targetHost !== 'string' || targetHost.length === 0 || targetHost.length > 255 || targetHost.trim() !== targetHost || /\s/.test(targetHost))
+  ) {
+    throw new ValidationError('targetHost 需为非空、无空白的字符串（≤255 字符）')
+  }
+  if (typeof targetHost === 'string') {
+    for (const ch of targetHost) {
+      const code = ch.charCodeAt(0)
+      if (code < 0x20 || code === 0x7f) throw new ValidationError('targetHost 不得含控制字符')
+    }
+  }
+  rejectUnknownKeys(body, new Set(['listenHost', 'listenPort', 'targetHost', 'targetPort']))
+  return {
+    listenHost,
+    listenPort,
+    ...(targetHost === undefined ? {} : { targetHost }),
+    targetPort,
+  }
+}
+
+/** GET /api/nodes/forward/:id/events：NDJSON 事件流（转发监控；断开不自动停止）。 */
+async function getNodeForwardEvents(
+  ctx: RouteContext,
+  kernel: KernelRuntimeLike,
+  forwardId: string,
+): Promise<Response> {
+  if (kernel.getNodeForward === undefined || kernel.onNodeForwardEvent === undefined) {
+    throw new HelmError('not_implemented', '当前 runtime 未提供节点端口转发', 501)
+  }
+  const session = kernel.getNodeForward(forwardId)
+  if (session === undefined) {
+    return errorResponse(undefined, 404, 'not_found', '转发不存在或已停止')
+  }
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const send = (event: unknown): void => {
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
+        } catch {
+          // 已关闭。
+        }
+      }
+      send({ type: 'started', listenHost: session.listenHost, listenPort: session.listenPort })
+      const off = kernel.onNodeForwardEvent!(forwardId, send)
+      ctx.request.signal.addEventListener('abort', () => {
+        off()
+        try { controller.close() } catch { /* 已关闭 */ }
+      }, { once: true })
+    },
+  })
+  return new Response(stream, {
+    status: 200,
+    headers: { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' },
+  })
 }

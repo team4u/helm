@@ -32,20 +32,19 @@ import {
   type NodeEnvRpcFunctions,
   type NodeIpcCallInput,
   type NodeIpcSubscribeInput,
+  type NodeTunnelTarget,
   type RpcResult,
 } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
-import http from 'node:http'
-import { Readable } from 'node:stream'
 import type { Duplex } from 'node:stream'
-import type { Agent } from 'node:http'
-import { NodeRegistry } from './registry.js'
+import { NodeRegistry, normalizeTunnelTarget } from './registry.js'
 import { RemoteExecutionEnv } from './remote-env.js'
+import { connectLocalTunnel, tunnelFetch } from './node-fetch.js'
 import { createScopedExecutionEnv, type EnvTarget, type ScopedExecutionEnv } from './scoped-env.js'
 import { envWithFileMutationQueue } from './file-mutation-queue.js'
 
 export { ExecOutputHub } from './exec-output.js'
-export { NodeRegistry, tokenAuthenticator, sha256hex } from './registry.js'
+export { NodeRegistry, tokenAuthenticator, sha256hex, normalizeTunnelTarget } from './registry.js'
 export type { NodeRegistryOptions, NodeConnection, RegisterOutcome, HubConnectionLocal, NodeSideFunctions, UpgradeWaiterHandle } from './registry.js'
 export { HelmUpgradeBusyError, HelmUpgradeTimeoutError, HelmUpgradeCancelledError } from './registry.js'
 export { RemoteExecutionEnv } from './remote-env.js'
@@ -146,11 +145,21 @@ export interface EnvFabric {
     signal?: AbortSignal,
   ): Promise<T>
   /**
-   * 节点本机 HTTP fetch（安全版）：local 直接返回 globalThis.fetch；远端
-   * 仅允许 http + loopback hostname（127.0.0.1/localhost/[::1]）+ 显式 port，
-   * 经节点透传隧道（openTunnel → node:http.request over Duplex）转发，
+   * 一等公民任意 TCP 隧道：建立到目标节点 host:port 的原始 Duplex。
+   * - local：Hub 进程内 net.connect 直连；
+   * - 远端：复用 registry.openTunnel（既有 WS 隧道网关，不另建传输）；
+   * - 未知/离线节点显式 HelmError（node_offline 409），绝不回退 local；
+   * - abort/超时/错误显式抛出并保证资源释放（duplex 不泄漏）。
+   * host 由节点解析与连接（省略时目标为 127.0.0.1）。
+   */
+  openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex>
+  /**
+   * 节点本机 HTTP(S) fetch 适配层（基于 openTunnel）：local 直接返回
+   * globalThis.fetch；远端支持任意 host 与 http/https——http 经隧道
+   * Duplex 上的 node:http.request（createConnection），https 在隧道 Duplex
+   * 上叠 node:tls.connect（servername/证书校验）后交给 node:http.request；
    * 4xx/5xx 仍返回 Response，建立/传输/断开错误映射 HelmError，绝不回退
-   * local。供插件（ctx.host.nodeFetch）访问目标节点本机服务。
+   * local。供插件（ctx.host.nodeFetch）访问目标节点视角的 HTTP(S) 服务。
    */
   nodeFetch(nodeId: string): typeof fetch
   /**
@@ -342,13 +351,27 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       return registry.get(nodeId)?.hubUrl
     },
 
+    async openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex> {
+      const { host, port } = normalizeTunnelTarget(target)
+      if (signal?.aborted) {
+        throw new HelmError('aborted', '隧道建立已取消', 499, { nodeId })
+      }
+      // local：进程内 net.connect 直连（与远端同签名同语义；host 缺省 127.0.0.1）。
+      if (nodeId === 'local') {
+        return await connectLocalTunnel(host ?? '127.0.0.1', port, signal)
+      }
+      return await registry.openTunnel(nodeId, { ...(host === undefined ? {} : { host }), port }, signal)
+    },
+
     nodeFetch(nodeId: string): typeof fetch {
       if (nodeId === 'local') return globalThis.fetch
       return ((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-        // 显式端口必须在 Request 规范化前从原始输入捕获（WHATWG URL 会把
-        // 默认 :80 归一为空，事后无法区分「未写」与「显式写了 80」）。
         const request = new Request(input, init)
-        return nodeTunnelFetch(registry, nodeId, request, hasExplicitPortInRaw(input)) as ReturnType<typeof fetch>
+        return tunnelFetch(
+          (target, signal) => this.openTunnel(nodeId, target, signal),
+          nodeId,
+          request,
+        ) as ReturnType<typeof fetch>
       }) as typeof fetch
     },
 
@@ -410,159 +433,3 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 节点透传隧道 fetch 实现
-// ---------------------------------------------------------------------------
-
-/** 首版仅 IPv4 loopback / localhost（daemon 侧固定 IPv4 回连；[::1] 显式
- * 拒绝并诊断，绝不静默重解释目标为 127.0.0.1）。 */
-const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost'])
-
-/** 原始输入是否携带显式端口（仅 string 形态可考；URL/Request 已规范化
- * 丢失 :80 信息，按未写处理——fail-closed，不猜测）。 */
-function hasExplicitPortInRaw(raw: unknown): boolean {
-  if (typeof raw !== 'string') return false
-  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\/?#]*:[0-9]+/.test(raw)
-}
-
-/** tunnelRequestBody：body 直接流式转发（不聚合）；GET/HEAD/null 无 body。 */
-function pipeRequestBody(request: Request, req: http.ClientRequest): void {
-  if (request.body === null) { req.end(); return }
-  const nodeStream = Readable.fromWeb(request.body as Parameters<typeof Readable.fromWeb>[0])
-  nodeStream.on('error', (error) => {
-    req.destroy(error instanceof Error ? error : new Error(String(error)))
-  })
-  nodeStream.pipe(req)
-}
-
-/** 经节点透传隧道执行单次 HTTP 请求（远端 loopback 专用）。
- * 生命周期：duplex 寿命绑定 Response body——EOF/cancel/error 才销毁，
- * 响应头到达绝不提前关隧道（SSE/流式响应必须完整透传）。 */
-async function nodeTunnelFetch(
-  registry: NodeRegistry,
-  nodeId: string,
-  request: Request,
-  explicitPortInRaw: boolean,
-): Promise<Response> {
-  const url = new URL(request.url)
-  if (url.protocol !== 'http:') {
-    throw new HelmError(
-      'node_tunnel_connect_failed',
-      `节点 fetch 仅支持 http（收到 ${url.protocol}）`,
-      400,
-      { nodeId, url: request.url },
-    )
-  }
-  if (url.hostname.includes(':') || url.hostname.startsWith('[')) {
-    throw new HelmError(
-      'node_tunnel_connect_failed',
-      '节点 fetch 首版仅支持 IPv4 loopback（127.0.0.1/localhost）；IPv6 目标显式拒绝',
-      400,
-      { nodeId, url: request.url },
-    )
-  }
-  if (!LOOPBACK_HOSTNAMES.has(url.hostname)) {
-    throw new HelmError(
-      'node_tunnel_connect_failed',
-      `节点 fetch 仅允许 loopback hostname（收到 ${url.hostname}）`,
-      400,
-      { nodeId, url: request.url },
-    )
-  }
-  // 端口必须显式：非默认端口经 URL.port 保留；默认 80 需原始输入显式
-  // 写出（hasExplicitPortInRaw）；两者皆无 → 显式拒绝（不猜测默认 80）。
-  if (url.port === '' && !explicitPortInRaw) {
-    throw new HelmError('node_tunnel_connect_failed', '节点 fetch 需要显式端口', 400, {
-      nodeId,
-      url: request.url,
-    })
-  }
-  const port = url.port === '' ? 80 : Number(url.port)
-  const signal = request.signal ?? undefined
-  signal?.throwIfAborted()
-  let duplex: Duplex | undefined
-  try {
-    duplex = await registry.openTunnel(nodeId, port, signal)
-  } catch (error) {
-    if (error instanceof HelmError) throw error
-    throw new HelmError(
-      'node_tunnel_connect_failed',
-      `节点 ${nodeId} 隧道建立失败：${error instanceof Error ? error.message : String(error)}`,
-      502,
-      { nodeId, url: request.url },
-    )
-  }
-  const tunnel = duplex
-
-  return await new Promise<Response>((resolve, reject) => {
-    const failTunnel = (code: string, message: string, status: number): void => {
-      const error = new HelmError(code, message, status, { nodeId, url: request.url })
-      tunnel.destroy(error)
-      reject(error)
-    }
-    const headers: Record<string, string> = {}
-    request.headers.forEach((value, name) => {
-      // host/connection/content-length 由 node:http 重建；其余单值复制。
-      if (name === 'host' || name === 'connection' || name === 'content-length') return
-      headers[name] = value
-    })
-    // 隧道是单次短生命周期连接：显式要求响应后关闭（防上游 keep-alive
-    // 让隧道 duplex 悬挂）；同时禁用压缩（node:http 不会自动解压，保留
-    // 透传语义，插件拿到的就是原始字节）。
-    headers['connection'] = 'close'
-    headers['accept-encoding'] = headers['accept-encoding'] ?? 'identity'
-    const req = http.request(
-      {
-        // createConnection 存在时 node:http 不会构建 Agent 连接池；
-        // false 明确禁用默认 agent（类型层窄化为 Agent 仅绕过联合签名）。
-        createConnection: () => tunnel,
-        agent: undefined,
-        protocol: 'http:',
-        host: url.hostname,
-        port,
-        method: request.method,
-        path: `${url.pathname}${url.search}`,
-        headers,
-      },
-      (res) => {
-        const status = res.statusCode ?? 502
-        const outHeaders = new Headers()
-        for (const [name, value] of Object.entries(res.headers)) {
-          if (value === undefined) continue
-          for (const v of Array.isArray(value) ? value : [value]) outHeaders.append(name, v)
-        }
-        // HEAD/204/304 禁止 body（new Response(stream, {status:204}) 会 throw）。
-        const nullBody = request.method === 'HEAD' || status === 204 || status === 304
-        if (nullBody) {
-          res.resume() // 丢弃（按 RFC 本就不该有 body）
-          resolve(new Response(null, { status, headers: outHeaders }))
-          // 无 body 可等：立即释放隧道。
-          tunnel.destroy()
-          return
-        }
-        const bodyStream = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>
-        // 隧道寿命绑定 body：EOF/cancel/error 由 stream 终结驱动，
-        // 响应头到达绝不提前 destroy（SSE 必须完整透传）。
-        resolve(new Response(bodyStream, { status, headers: outHeaders }))
-      },
-    )
-    req.once('error', (error) => {
-      failTunnel(
-        'node_tunnel_closed',
-        `节点 ${nodeId} 隧道请求失败：${error instanceof Error ? error.message : String(error)}`,
-        502,
-      )
-    })
-    const onAbort = (): void => {
-      req.destroy()
-      // duplex 的销毁驱动 Response body 端的 error/cancel。
-      tunnel.destroy(new HelmError('aborted', '节点 fetch 已取消', 499, { nodeId, url: request.url }))
-      reject(new HelmError('aborted', '节点 fetch 已取消', 499, { nodeId, url: request.url }))
-    }
-    if (signal?.aborted) { onAbort(); return }
-    signal?.addEventListener('abort', onAbort, { once: true })
-    req.once('close', () => signal?.removeEventListener('abort', onAbort))
-    if (request.method === 'GET' || request.method === 'HEAD' || request.body === null) req.end()
-    else pipeRequestBody(request, req)
-  })
-}

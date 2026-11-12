@@ -7,6 +7,7 @@
 
 import type { Provider } from '@earendil-works/pi-ai'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
+import type { Duplex } from 'node:stream'
 import type { AskCreateSpec, AskResult } from './ask.js'
 import type {
   ConversationDetail,
@@ -804,13 +805,25 @@ export interface HelmHostNodeIpcPort {
 
 /**
  * 节点本机 HTTP fetch 端口（EnvFabric.nodeFetch 的插件面）：local 返回
- * globalThis.fetch；远端仅允许 http + loopback + 显式 port，经节点透传
- * 隧道转发，绝不回退 local。每次调用的返回函数均已纳入插件在途任务跟踪
- * 与周期守卫（新流在停用/停止窗口拒绝）。
+ * globalThis.fetch；远端支持任意 host 与 http/https，经节点透传隧道转发，
+ * 绝不回退 local。每次调用的返回函数均已纳入插件在途任务跟踪与周期
+ * 守卫（新流在停用/停止窗口拒绝）。
  */
 export interface HelmHostNodeFetchPort {
   /** 取目标节点的 fetch（可直接调用：fetch(input, init)）。 */
   (nodeId: string): typeof fetch
+}
+
+/**
+ * 节点透传隧道端口（EnvFabric.openTunnel 的插件面）：建立到目标节点
+ * host:port 的任意 TCP Duplex（进程内调用获得原始双工流）。生命周期
+ * 受插件在途任务跟踪：建立计入在途任务；返回的 Duplex 关闭（close/error/
+ * destroy）即结束任务——插件停用预检可见活动隧道，停用/宿主 dispose 时
+ * 统一销毁不泄漏。
+ */
+export interface HelmHostOpenTunnelPort {
+  /** 建立任意 TCP 隧道；host 缺省 127.0.0.1（由目标节点解析连接）。 */
+  (nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal): Promise<Duplex>
 }
 
 /**
@@ -874,10 +887,17 @@ export interface HelmHostApi {
   /** 跨节点 IPC 机制端口（EnvFabric；herdr 等外部运行时桥接用）。 */
   readonly nodeIpc: HelmHostNodeIpcPort
   /**
-   * 节点本机 HTTP fetch（跨节点 loopback 服务访问；模型/插件经此访问目标
-   * 节点本机服务）。未接线时调用显式报 501，绝不回退 local。
+   * 节点 HTTP(S) fetch 适配层（基于 openTunnel；任意 host 的 http/https，
+   * 模型/插件经此访问目标节点视角的服务）。未接线时调用显式报 501，
+   * 绝不回退 local。
    */
   readonly nodeFetch: HelmHostNodeFetchPort
+  /**
+   * 任意 TCP 透传隧道（进程内调用获得原始 Duplex）：local 进程内直连；
+   * 远端复用既有节点隧道传输。未接线时调用显式报 501，绝不回退 local。
+   * 活动隧道纳入插件在途任务跟踪（停用预检可见；停用/dispose 不泄漏）。
+   */
+  readonly openTunnel: HelmHostOpenTunnelPort
   /**
    * 宿主插件治理端口（受管包生命周期；编排插件如 builtin:apps 消费）。
    * 后端未接线包管理器时 doctor/install/update/remove 显式 501；

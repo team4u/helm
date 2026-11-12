@@ -8,6 +8,7 @@ import {
   type ActionManifest,
   type BackendPluginsLifecyclePort,
   type HelmHostApi,
+  type HelmHostOpenTunnelPort,
   type PluginActionContext,
   type PluginSummary,
   type PluginUiContribution,
@@ -300,6 +301,40 @@ export function wrapHostApi(
             return establish;
           },
         },
+
+    // 3.6 openTunnel：任意 TCP 透传隧道 —— 建立计入在途任务；返回的 Duplex
+    // close/error/destroy 时结束任务（停用预检可见活动隧道；停用/宿主 dispose
+    // 时 tracker 结束计数，duplex 本身由 registry/节点的换代清理链销毁）。
+    openTunnel: backend.openTunnel === undefined
+      ? ((nodeId: string): Promise<never> => {
+          guard(`host.openTunnel:${nodeId}`);
+          throw new HelmError(
+            'node_tunnel_not_supported',
+            `当前宿主未接线节点隧道端口（host.openTunnel(${nodeId}) 不可用）`,
+            501,
+            { nodeId },
+          );
+        })
+      : ((nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) => {
+          guard(`host.openTunnel:${nodeId}`);
+          const what = `host.openTunnel:${nodeId}`;
+          return deps.tracker.withTask(pluginId, what, async () => {
+            const duplex = await backend.openTunnel!(nodeId, target, signal);
+            // 任务结束点绑定 Duplex 生命周期（close 恰好一次）。
+            let ended = false;
+            const end = (): void => {
+              if (ended) return;
+              ended = true;
+              duplex.removeListener('close', end);
+              duplex.removeListener('error', end);
+              deps.tracker.end(pluginId, what);
+            };
+            duplex.once('close', end);
+            duplex.once('error', end);
+            if (duplex.destroyed) end();
+            return duplex;
+          });
+        }) as HelmHostOpenTunnelPort,
 
     // 3.5 nodeFetch：受控 fetch —— 每次调用先过周期守卫；返回的 fetch 每次
     // 调用（新流）入任务跟踪并再次守卫（停用/停止窗口拒绝新流）；在途跟踪

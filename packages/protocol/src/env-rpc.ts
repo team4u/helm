@@ -273,11 +273,19 @@ export interface NodeIpcSubscribeInput {
   line: string
 }
 
-/** 节点透传隧道：Hub 请求节点就地把一条 WS 升级为到目标端口的字节管道。 */
-export interface NodeTunnelOpenInput {
-  /** Hub 生成的隧道 ID（randomUUID；随独立网关 hello 认证一次性消费）。 */
+/** 隧道目标（host+port）：host 由节点侧解析并连接（省略默认 127.0.0.1）。 */
+export interface NodeTunnelTarget {
+  /** 目标主机（IP 或主机名；由节点解析/连接，Hub 不代解）。 */
+  host?: string
+  /** 目标端口（1..65535）。 */
+  port: number
+}
+
+/** 节点透传隧道：Hub 请求节点就地把一条 WS 升级为到目标 host:port 的字节管道。 */
+export interface NodeTunnelOpenInput extends NodeTunnelTarget {
+  /** 隧道 ID（randomUUID；随独立网关 hello 认证一次性消费）。 */
   tunnelId: string
-  /** 节点本机回连目标端口（仅限节点本机 loopback 服务）。 */
+  /** 目标端口（1..65535；继承自 NodeTunnelTarget）。 */
   port: number
   /** 节点侧建连超时（毫秒）；缺省由节点实现自定。 */
   timeoutMs?: number

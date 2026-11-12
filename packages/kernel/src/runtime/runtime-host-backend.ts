@@ -9,6 +9,7 @@
  */
 
 import { HelmError } from '@helm/protocol'
+import type { HelmHostOpenTunnelPort } from '@helm/protocol'
 import {
   FileNotFoundError,
   assertProfileId,
@@ -93,6 +94,8 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
         runtime.envFabric.ipcSubscribe(nodeId, input, onLine, onClosed, signal),
     },
     nodeFetch: (nodeId) => runtime.envFabric.nodeFetch(nodeId),
+    openTunnel: ((nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) =>
+      runtime.envFabric.openTunnel(nodeId, target, signal)) as HelmHostOpenTunnelPort,
     // 宿主插件治理端口：直接委托 PluginHost 既有公共方法（与 HTTP 管理面同链：
     // per-plugin 生命周期队列、在途任务跟踪、locked/在途保护全部复用，
     // 不引入第二套包管理器）。enable/disable 后返回最新清单。

@@ -1,6 +1,6 @@
 # EnvFabric 跨平台执行底座
 
-EnvFabric 是微内核的跨平台执行基础设施：对上以 pi-durable 的 `ExecutionEnv`（FileSystem + Shell）接口统一呈现，对下抹平本机进程与远端节点的物理差异。内核的 `bash / read / write / edit / gate / env exec` 工具、插件的受管执行、文件互斥与节点 loopback 透传隧道全部经由 EnvFabric 调度，与任何插件是否启用正交。本文覆盖其架构分层、反向连接与令牌认证、受管 Shell 流控、文件互斥、IPC 桥、节点透传隧道与安全自升级。
+EnvFabric 是微内核的跨平台执行基础设施：对上以 pi-durable 的 `ExecutionEnv`（FileSystem + Shell）接口统一呈现，对下抹平本机进程与远端节点的物理差异。内核的 `bash / read / write / edit / gate / env exec` 工具、插件的受管执行、文件互斥、节点任意 TCP 透传隧道（`openTunnel` 原语 + `nodeFetch` HTTP/HTTPS 适配层 + Hub 侧前台端口转发）全部经由 EnvFabric 调度，与任何插件是否启用正交。本文覆盖其架构分层、反向连接与令牌认证、受管 Shell 流控、文件互斥、IPC 桥、节点透传隧道与安全自升级。
 
 ## 架构定位与执行环境分层
 
@@ -111,7 +111,11 @@ ipcSubscribe({ endpoint?, session?, line }, onLine, onClosed): Promise<() => voi
 
 ## 节点透传隧道
 
-远端节点上常驻着只监听本机 loopback 的推理或业务服务（如沙盒内的 `127.0.0.1:8000`）。这类服务不对外开端口、所在机器的 IP 还会漂移，Hub 无法按地址直连。**节点透传隧道**复用既有反向连接拓扑，按需建立 Hub 到目标节点 loopback 的字节通道，再通过 `EnvFabric.nodeFetch(nodeId)` 与 `ctx.host.nodeFetch(nodeId)` 提供 HTTP 流式访问。
+远端节点上常驻着推理或业务服务（本机 loopback 或节点可达的任意 TCP 目标）。这类服务往往不对外开端口、所在机器的 IP 还会漂移，Hub 无法按地址直连。**节点透传隧道**复用既有反向连接拓扑，按需建立 Hub 到目标节点视角 `host:port` 的任意 TCP 字节通道：
+
+- **`EnvFabric.openTunnel(nodeId, target)` / `ctx.host.openTunnel(...)` 是一等公民原语**：返回原始 Node.js `Duplex`（任意协议字节流，host 由目标节点解析与连接，省略默认 `127.0.0.1`；`local` 节点为 Hub 进程内 `net.connect` 直连）；
+- **`EnvFabric.nodeFetch(nodeId)` / `ctx.host.nodeFetch(nodeId)` 是其上的 HTTP/HTTPS 适配层**：支持任意 host 与 `http`/`https`（HTTPS 在隧道 Duplex 上叠 `tls.connect`，`servername`/证书校验遵循 Node 默认链），保留 Response streaming、SSE、取消传播与状态码语义；
+- **Hub 侧前台端口转发**（`helm nodes forward`）在命令运行期于 Hub 主机按需监听，把本地端口逐连接转发到目标节点视角的 `host:port`，退出即关闭。
 
 本次实现仅覆盖核心隧道、节点生命周期与插件宿主端口，不修改 `ProviderConfig`、模型认证、Magpie 配置或 Web 模型表单。下文的 Provider 绑定是后续接入设计，不是现有可用配置。隧道不感知 OpenAI/Anthropic 语义，也不生成或替换 API Key。
 
@@ -189,8 +193,14 @@ sequenceDiagram
 新增集中在 `@helm/protocol` 的 `env-rpc.ts`，与既有 `ipcCall / ipcSubscribe` 同构：
 
 ```typescript
-/** 隧道打开请求：port 只能是目标节点自身的 loopback 服务。 */
-export interface NodeTunnelOpenInput {
+/** 隧道目标（host+port）：host 由节点解析与连接（省略默认 127.0.0.1）。 */
+export interface NodeTunnelTarget {
+  host?: string
+  port: number
+}
+
+/** 隧道打开请求：任意 TCP 目标（host 缺省为本机回环）。 */
+export interface NodeTunnelOpenInput extends NodeTunnelTarget {
   tunnelId: string
   port: number
   /** 建连预算，超时后 Hub 侧回收 pending 并拒绝本次请求。 */
@@ -221,7 +231,7 @@ export type NodeTunnelErrorCode =
 `NodeEnvRpcFunctions` 增加一个可选方法（可选保证与既有可选 RPC 一致，旧节点返回 `501 node_tunnel_not_supported` 而非崩溃）：
 
 ```typescript
-/** 请求节点为其 loopback 服务打开一条透传隧道（数据经 /ws/node-tunnel）。 */
+/** 请求节点向目标 host:port 打开一条透传隧道（数据经 /ws/node-tunnel）。 */
 nodeTunnelOpen?(input: NodeTunnelOpenInput): Promise<RpcResult<null>>
 ```
 
@@ -274,7 +284,7 @@ nodeTunnelOpen?(input: NodeTunnelOpenInput): Promise<RpcResult<null>>
    - **不挂载 Agent**：`agent: false` 会新建一个 Agent，仍可能走 Agent 的 socket 安装逻辑（如 `setNoDelay`）；使用 `agent: null` 并提供 `createConnection`，Node 24 会绕过 Agent，直接把 `createConnection` 返回的裸 `Duplex` 交给 `ClientRequest`，无需伪造 `net.Socket` 垫片；
    - **4xx/5xx 不是传输失败**：上游返回 `400 / 401 / 429 / 500` 说明隧道链路完全正常。`nodeFetch` 必须原样构造该 `Response`（含真实 JSON 错误体），让 SDK 的 `retryProviderRequest` 与 `normalizeProviderError` 按既有策略处理。只有建隧道失败、socket 异常中断、超时才抛错。
 4. **`ctx.host.nodeFetch(nodeId)`（插件同权复用）**：
-   `HelmHostApi` 同步暴露 `nodeFetch(nodeId: string): typeof fetch`（受宿主生命周期与 `liveTasks` 在途追踪保护）。任何安装在 Hub 上的插件（如 `builtin:magpie`、微应用或自定义业务插件）无需在节点端额外部署代码，直接调用 `ctx.host.nodeFetch(nodeId)('http://127.0.0.1:8188/...')` 即可安全穿透访问目标节点的 loopback 服务。
+   `HelmHostApi` 同步暴露 `openTunnel(nodeId, target)`（原始 Duplex；活动隧道计入在途任务跟踪——`close/error/destroy` 结束计数，插件停用预检可见）与 `nodeFetch(nodeId): typeof fetch`（HTTP/HTTPS 适配层；流生命周期受在途追踪保护）。任何安装在 Hub 上的插件（如 `builtin:magpie`、微应用或自定义业务插件）无需在节点端额外部署代码：`ctx.host.nodeFetch(nodeId)('http://127.0.0.1:8188/...')` 访问目标节点视角的 HTTP(S) 服务，`ctx.host.openTunnel(nodeId, { host, port })` 获得任意 TCP 双工流。
 
 ### 节点侧实现
 
@@ -282,8 +292,8 @@ nodeTunnelOpen?(input: NodeTunnelOpenInput): Promise<RpcResult<null>>
 
 1. **`NodeEnvRpcServerOptions` 注入 `openTunnelStream?: (tunnelId: string) => Promise<Duplex>`**：
    `daemon/index.ts` 实现该回调——将 `hubUrl` 的路径替换为 `/ws/node-tunnel`，发起 WebSocket 连接并发送 `NodeTunnelHello { nodeId, token, tunnelId }`，等待首帧 `{ type: 'ok' }` 后返回 `createWebSocketStream(ws)`。
-2. **入参边界校验与强制 loopback**：
-   `env-rpc-server.ts` 实现 `nodeTunnelOpen`：校验 `tunnelId` 为 `1..128` 字符非空字符串，`port` 为 `1..65535` 的安全整数（拒绝 `0`、负数、浮点数、字符串与未知字段）。`net.connect({ host: '127.0.0.1', port })` 的主机名是硬编码常量 `'127.0.0.1'`，`port` 之外的地址信息一律不受输入影响——从根源上杜绝 `http://` 前缀注入、`@` 认证段绕过、内网横向扫描或 `169.254.169.254` 云元数据探测。
+2. **入参边界校验与目标连接**：
+   `env-rpc-server.ts` 实现 `nodeTunnelOpen`：校验 `tunnelId` 为 `1..128` 字符非空字符串，`port` 为 `1..65535` 的安全整数，`host` 缺省 `127.0.0.1` 且必须为非空/≤255 字符/无控制字符与空白的字符串（拒绝未知字段；绝不静默改写目标）。`net.connect({ host, port })` 使用入参目标——目标主机由节点解析与连接（这是「任意 TCP」的语义来源），Hub 不代解也不限制为回环。信任边界随之明确：**该节点被授权访问的目标（含其可达的内网服务与云元数据端点）都可经隧道触达**，节点准入与令牌管理即该能力的准入控制。
 3. **排空联动与世代销毁**：
    `setDraining(true)`（自升级排空、候选待激活）期间拒绝新的 `nodeTunnelOpen`，返回 `{ ok: false, error: { code: 'aborted', message: '...' } }`，与 `envExec` 的排空行为一致。在途隧道记入 `activeTunnels`，新增 `getActiveTunnelCount()` 并入升级排空判据（`getActiveExecCount() === 0 && getActiveTunnelCount() === 0`），防止长耗时流式回答被节点自升级生硬切断；连接代 `dispose()` 时一并销毁全部在途隧道的 WS 流与本地 TCP socket。
 
@@ -297,7 +307,24 @@ nodeTunnelOpen?(input: NodeTunnelOpenInput): Promise<RpcResult<null>>
 | token 位置 | 在 WebSocket 建立后的首帧载荷中传输，**不进 URL Query**，与 `/ws/node` 同一条纪律（防代理与访问日志泄露） |
 | 首帧限长 | 握手阶段限制首帧载荷不超过 4096 字节，超限立即关闭连接，防止未认证客户端发送超大帧耗尽 Hub 内存 |
 | 端口暴露 | Hub 不新增任何监听端口：隧道挂在既有 HTTP server 的 `upgrade` 事件上，与 `/ws/node` 共用同一端口与 TLS 配置 |
-| 明文范围 | 隧道两端之间的载荷由 WebSocket 承载（`wss://` 时即为 TLS）；节点 loopback 段是本机明文 TCP，与「服务直连本机 8000」的安全等级相同，不额外夸大承诺 |
+| 明文范围 | 隧道两端之间的载荷由 WebSocket 承载（`wss://` 时即为 TLS）；节点到目标服务段是节点视角的明文 TCP，与「在节点上直连该服务」的安全等级相同，不额外夸大承诺 |
+
+### Hub 侧前台端口转发（helm nodes forward）
+
+CLI 一等公民映射（API/CLI 同权）：
+
+```bash
+helm nodes forward <nodeId> <listenHost:listenPort> [<targetHost>:]<targetPort>
+# 例：helm nodes forward gpu-a 127.0.0.1:8080 127.0.0.1:8000
+#   监听目标省略 host 时默认 127.0.0.1（节点视角）；IPv6 监听写 [::1]:8080。
+```
+
+生命周期与语义：
+- **监听器只在命令运行期间存在**：Hub 侧按需 `net.Server` 监听 `listenHost:listenPort`（显式端口，不随机分配），不新增任何永久 Hub 监听端口；
+- **逐连接开隧道**：每个入站连接经 `EnvFabric.openTunnel(nodeId, { host, port })` 建立任意 TCP 隧道并双向 pipe（背压原生传播）；
+- **前台退出即关闭**：CLI 前台运行并消费 NDJSON 事件流（started/connection/error）；Ctrl-C/SIGTERM 或流断开时显式 `DELETE` 停止，Hub 关闭监听器与全部隧道；宿主 close 时统一销毁；
+- **HTTP 同权端点**：`POST /api/nodes/:id/forward`（创建，body：`listenHost/listenPort/targetHost?/targetPort`）、`GET /api/nodes/forward`（清单）、`GET /api/nodes/forward/:id`（详情）、`GET /api/nodes/forward/:id/events`（NDJSON 事件流）、`DELETE /api/nodes/forward/:id`（停止）；
+- **严格校验**：监听/目标 host 非空/≤255 字符/无控制字符与空白，端口 1..65535；监听冲突（EADDRINUSE）显式 `409 node_forward_listen_failed`，不静默换端口。
 
 ### 后续接入：Provider 配置契约（本次不实现）
 
@@ -337,8 +364,8 @@ nodeTunnelOpen?(input: NodeTunnelOpenInput): Promise<RpcResult<null>>
 ### 诚实边界与测试分层
 
 - **单请求生命周期**：隧道只在**一次 HTTP 请求**的生命周期内存在；当前不做连接池复用，每次调用有一次 WebSocket 握手开销（约 1–2 RTT），池化位置留在 `nodeFetch` 内部，不改变对外契约。
-- **仅搬运明文 HTTP loopback**：远端 `nodeFetch` 限定节点本机 HTTP 地址；隧道不校验应用层内容，也不经 `SecretStash` 脱敏。调用方负责管理业务凭据与输出展示，传输层不对载荷做文本替换。
-- **测试分层**：按仓库分层纪律，隧道涉及 `kernel` + `node`，全部归入 `integration` 套件，覆盖真实 SSE 多字节边界保真、上游 `400` JSON 错误体透传、`AbortSignal` 中途取消传导至节点 TCP `FIN`、`tunnelId` 重放拒绝、非法端口拦截、节点断连 `node_tunnel_closed` 收敛以及 draining 期间拒绝新隧道。模型目录可用性与 Magpie 目标绑定的测试留待后续接入实现。
+- **分层定位**：`openTunnel` 是任意 TCP 原语（字节流，不感知协议）；`nodeFetch` 是其上的 HTTP/HTTPS 适配层（`http` 经 `createConnection` 直用隧道流，`https` 在隧道流上叠 `tls.connect`——`servername` 驱动 SNI、证书校验遵循 Node 默认信任链，绝不把裸 Duplex 伪装成 TLS）。隧道不校验应用层内容，也不经 `SecretStash` 脱敏；调用方负责管理业务凭据与输出展示，传输层不对载荷做文本替换。
+- **测试分层**：按仓库分层纪律，隧道涉及 `kernel` + `node`，全部归入 `integration` 套件，覆盖任意 TCP 二进制大 payload 双向保真、host 透传、连接关闭链路完整 flush、daemon 断连 duplex 销毁、`AbortSignal` 取消清理、真实 HTTPS（本地 TLS fixture + 子进程注入测试 CA）、上游 `400` JSON 错误体透传、`tunnelId` 重放拒绝、非法端口/host 拦截、draining 期间拒绝新隧道，以及 Hub 侧端口转发（`helm nodes forward`）的创建/事件/停止生命周期。模型目录可用性与 Magpie 目标绑定的测试留待后续接入实现。
 
 ## 安全原子自升级
 
