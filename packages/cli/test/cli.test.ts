@@ -13,6 +13,8 @@ import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { runCli } from '../src/index.js'
+import { updateCliCredentials } from '../src/credentials.js'
+import { CliError } from '../src/errors.js'
 
 /** 命中记录：方法 + 路径（含 query）+ 解析后的 JSON body。 */
 interface Hit {
@@ -27,9 +29,12 @@ interface Recorded {
 }
 
 /** 每个用例的模拟 Hub：routes 形如 { 'POST /api/x': (body) => entity }；GET /api/actions 缺省返回空数组。 */
-async function startHub(routes: Record<string, (body: unknown, req: http.IncomingMessage) => { status?: number; body?: unknown }>): Promise<{ url: string; recorded: Recorded; close: () => Promise<void> }> {
+async function startHub(
+  routes: Record<string, (body: unknown, req: http.IncomingMessage) => { status?: number; body?: unknown }>,
+  manifests: readonly unknown[] = [],
+): Promise<{ url: string; recorded: Recorded; hits: Hit[]; close: () => Promise<void> }> {
   const allRoutes: Record<string, (body: unknown, req: http.IncomingMessage) => { status?: number; body?: unknown }> = {
-    'GET /api/actions': () => ({ body: [] }),
+    'GET /api/actions': () => ({ body: [...manifests] }),
     ...routes,
   }
   const hits: Hit[] = []
@@ -72,6 +77,7 @@ async function startHub(routes: Record<string, (body: unknown, req: http.Incomin
   return {
     url: `http://127.0.0.1:${address.port}`,
     recorded: { hits },
+    hits,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   }
 }
@@ -1115,5 +1121,412 @@ test('cli-token 文件损坏时显式报错；HELM_TOKEN 环境变量优先短�
     assert.equal(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8'), '{ broken !!')
   } finally {
     await hub.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 工作流与核心接口对齐测试（原 cli-alignment 回填）
+// ---------------------------------------------------------------------------
+
+/** builtin:workflow 动作 manifest（与插件声明一致的最小契约形状）。 */
+const WF_RUN_MANIFESTS = [
+  {
+    pluginId: 'builtin:workflow',
+    id: 'run',
+    description: '启动工作流运行',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        script: { type: 'string' },
+        args: {},
+        resumeFromRunId: { type: 'string' },
+        conversationId: { type: 'number' },
+        wait: { type: 'boolean' },
+      },
+      additionalProperties: false,
+    },
+    outputSchema: { type: 'object', properties: { run: { type: 'object' } }, required: ['run'], additionalProperties: false },
+    cli: {
+      command: ['workflows', 'run'],
+      positional: [{ field: 'name', readFileInto: 'script' }],
+      timeoutMs: 0,
+    },
+  },
+  {
+    pluginId: 'builtin:workflow',
+    id: 'runs',
+    description: '列出工作流运行记录',
+    inputSchema: {
+      type: 'object',
+      properties: { conversationId: { type: 'number' } },
+      additionalProperties: false,
+    },
+    outputSchema: { type: 'object', properties: { runs: { type: 'array' } }, required: ['runs'], additionalProperties: false },
+    cli: { command: ['workflows', 'runs'] },
+  },
+]
+
+test('conversations get：--limit/--cursor 映射 query；--current 读 env', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startHub({
+    'GET /api/conversations/7': () => ({
+      body: { id: 7, title: 'x', entries: [], nextCursor: '{"a":1}' },
+    }),
+    'GET /api/conversations/7?limit=10': () => ({ body: { id: 7, entries: [] } }),
+    'GET /api/conversations/7?cursor=%7B%22a%22%3A1%7D': () => ({ body: { id: 7, entries: [] } }),
+    'GET /api/conversations/7?limit=10&cursor=%7B%22a%22%3A1%7D': () => ({ body: { id: 7, entries: [] } }),
+  })
+  try {
+    const plain = await run(['conversations', 'get', '7', '--json'], makeEnv(hub.url, dir))
+    assert.equal(plain.code, 0, plain.err)
+    assert.equal(JSON.parse(plain.out).id, 7)
+
+    const limited = await run(['conversations', 'get', '7', '--limit', '10', '--json'], makeEnv(hub.url, dir))
+    assert.equal(limited.code, 0, limited.err)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations/7?limit=10')
+
+    const cursor = await run(['conversations', 'get', '7', '--cursor', '{"a":1}', '--json'], makeEnv(hub.url, dir))
+    assert.equal(cursor.code, 0, cursor.err)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations/7?cursor=%7B%22a%22%3A1%7D')
+
+    const both = await run(['conversations', 'get', '--current', '--limit', '10', '--cursor', '{"a":1}', '--json'], {
+      ...makeEnv(hub.url, dir),
+      HELM_CONVERSATION_ID: '7',
+    })
+    assert.equal(both.code, 0, both.err)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations/7?limit=10&cursor=%7B%22a%22%3A1%7D')
+
+    // 非法 limit 显式报错（不发请求）
+    const bad = await run(['conversations', 'get', '7', '--limit', '0', '--json'], makeEnv(hub.url, dir))
+    assert.equal(bad.code, 1)
+    assert.equal((JSON.parse(bad.err) as { error: { code: string } }).error.code, 'invalid_flag_value')
+  } finally {
+    await hub.close()
+  }
+})
+
+test('conversations list：--profile 映射 profileId、--status 校验枚举后入 query', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startHub({
+    'GET /api/conversations': () => ({ body: [] }),
+    'GET /api/conversations?profileId=worker': () => ({ body: [] }),
+    'GET /api/conversations?status=idle': () => ({ body: [] }),
+    'GET /api/conversations?profileId=worker&status=working': () => ({ body: [] }),
+  })
+  try {
+    const byProfile = await run(['conversations', 'list', '--profile', 'worker', '--json'], makeEnv(hub.url, dir))
+    assert.equal(byProfile.code, 0, byProfile.err)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations?profileId=worker')
+
+    const byStatus = await run(['conversations', 'list', '--status', 'idle', '--json'], makeEnv(hub.url, dir))
+    assert.equal(byStatus.code, 0, byStatus.err)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations?status=idle')
+
+    const both = await run(['conversations', 'list', '--profile', 'worker', '--status', 'working', '--json'], makeEnv(hub.url, dir))
+    assert.equal(both.code, 0, both.err)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations?profileId=worker&status=working')
+
+    const bad = await run(['conversations', 'list', '--status', 'bogus', '--json'], makeEnv(hub.url, dir))
+    assert.equal(bad.code, 1)
+    assert.equal((JSON.parse(bad.err) as { error: { code: string } }).error.code, 'invalid_flag_value')
+  } finally {
+    await hub.close()
+  }
+})
+
+test('send --meta：JSON 对象入 body.meta；非对象 JSON 在 CLI 层显式拒绝', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startHub({
+    'POST /api/conversations/7/input': () => ({ status: 202, body: { submissionId: 'sub-9' } }),
+  })
+  const env = makeEnv(hub.url, dir)
+  try {
+    const ok = await run(['send', '7', '你好', '--meta', '{"source":"cron","n":1}', '--json'], env)
+    assert.equal(ok.code, 0, ok.err)
+    const hit = hub.hits.find((h) => h.path === '/api/conversations/7/input')!
+    assert.deepEqual(hit.body, { text: '你好', meta: { source: 'cron', n: 1 } })
+
+    const asArray = await run(['send', '7', 'x', '--meta', '[1]', '--json'], env)
+    assert.equal(asArray.code, 1)
+    assert.equal((JSON.parse(asArray.err) as { error: { code: string } }).error.code, 'invalid_flag_value')
+
+    // 不提供 --meta 时 body 不含 meta 键（保留 -- 分隔符文本行为：
+    // 全局 --json 在 -- 之前剥离，之后的 --json 作为待发送文本）
+    const noMeta = await run(['send', '7', '--json', '--', '--json'], env)
+    assert.equal(noMeta.code, 0, noMeta.err)
+    assert.deepEqual((hub.hits.at(-1)?.body as { text: string }).text, '--json')
+    assert.ok(!('meta' in (hub.hits.at(-1)?.body as Record<string, unknown>)))
+  } finally {
+    await hub.close()
+  }
+})
+
+test('send --wait：?wait=1；json 输出完整 result、人类模式直出回答文本', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const result = {
+    conversationId: 7,
+    submissionId: 'sub-9',
+    text: '你好',
+    entry: {
+      id: 'e1',
+      kind: 'pi.assistant',
+      model: [{ role: 'assistant', content: [{ type: 'text', text: '回答正文' }] }],
+    },
+  }
+  const hub = await startHub({
+    'POST /api/conversations/7/input?wait=1': () => ({ body: result }),
+    'POST /api/conversations/7/input': () => ({ status: 202, body: { submissionId: 'sub-9' } }),
+  })
+  const env = makeEnv(hub.url, dir)
+  try {
+    const json = await run(['send', '7', '你好', '--wait', '--json'], env)
+    assert.equal(json.code, 0, json.err)
+    assert.deepEqual(JSON.parse(json.out), result)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations/7/input?wait=1')
+
+    const human = await run(['send', '7', '你好', '--wait'], env)
+    assert.equal(human.code, 0, human.err)
+    assert.equal(human.out, '回答正文\n')
+
+    // wait 失败（input_unanswered 409）→ 非零退出 + 错误信封
+    const hub2 = await startHub({
+      'POST /api/conversations/7/input?wait=1': () => ({
+        status: 409,
+        body: { error: { code: 'input_unanswered', message: '输入未获回答（aborted）' } },
+      }),
+    })
+    try {
+      const failed = await run(['send', '7', 'x', '--wait', '--json'], makeEnv(hub2.url, dir))
+      assert.equal(failed.code, 1)
+      assert.equal((JSON.parse(failed.err) as { error: { code: string } }).error.code, 'input_unanswered')
+    } finally {
+      await hub2.close()
+    }
+  } finally {
+    await hub.close()
+  }
+})
+
+test('workflows runs：列出全部；--current 过滤 conversationId；多余位置参数拒绝', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startHub(
+    {
+      'POST /api/actions/builtin%3Aworkflow/runs': (body) => {
+        const input = (body as { input?: { conversationId?: number } }).input ?? {}
+        return {
+          body:
+            input.conversationId === 7
+              ? { runs: [] }
+              : { runs: [{ id: 'wf_1', name: 'demo', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 1 }] },
+        }
+      },
+    },
+    WF_RUN_MANIFESTS,
+  )
+  const env = makeEnv(hub.url, dir)
+  try {
+    const all = await run(['workflows', 'runs', '--json'], env)
+    assert.equal(all.code, 0, all.err)
+    assert.equal((JSON.parse(all.out) as { runs: Array<{ id: string }> }).runs[0]?.id, 'wf_1')
+    assert.equal(hub.hits.at(-1)?.path, '/api/actions/builtin%3Aworkflow/runs')
+
+    const filtered = await run(['workflows', 'runs', '--current', '--json'], { ...env, HELM_CONVERSATION_ID: '7' })
+    assert.equal(filtered.code, 0, filtered.err)
+    // --current 注入动作 conversationId 上下文（body.conversationId）；
+    // 服务端 runs 动作以它作为过滤器（input.conversationId 优先）。
+    const filteredBody = (hub.hits.at(-1) as { body?: { conversationId?: number } }).body
+    assert.equal(filteredBody?.conversationId, 7)
+
+    const stray = await run(['workflows', 'runs', 'wf_1', '--json'], env)
+    assert.equal(stray.code, 1)
+    assert.equal((JSON.parse(stray.err) as { error: { code: string } }).error.code, 'unexpected_positional')
+  } finally {
+    await hub.close()
+  }
+})
+
+test('workflows run --wait：终态成功输出 run/result；failed 非零退出', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const workflowName = `saved-${path.basename(dir)}`
+  const doneRun = {
+    id: 'wf_w',
+    name: workflowName,
+    conversationId: 1,
+    status: 'completed',
+    createdAt: 1,
+    updatedAt: 2,
+    result: { answer: 42 },
+  }
+  const hub = await startHub(
+    {
+      'POST /api/actions/builtin%3Aworkflow/run': (body) => {
+        const input = (body as { input?: { wait?: boolean } }).input ?? {}
+        if (input.wait === true) return { body: { run: doneRun } }
+        return {
+          status: 200,
+          body: { run: { id: 'wf_w', name: workflowName, conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 } },
+        }
+      },
+    },
+    WF_RUN_MANIFESTS,
+  )
+  const env = makeEnv(hub.url, dir)
+  try {
+    const json = await run(['workflows', 'run', workflowName, '--wait', '--json'], env)
+    assert.equal(json.code, 0, json.err)
+    assert.deepEqual((JSON.parse(json.out) as { run: unknown }).run, doneRun)
+    const waitBody = (hub.hits.at(-1) as { body?: { input?: { wait?: boolean; name?: string } } }).body
+    assert.equal(waitBody?.input?.wait, true)
+    assert.equal(waitBody?.input?.name, workflowName)
+
+    const human = await run(['workflows', 'run', workflowName, '--wait'], env)
+    assert.equal(human.code, 0, human.err)
+    assert.match(human.out, /wf_w/)
+    assert.match(human.out, /42/)
+
+    // 不带 --wait 返回运行中 run
+    const asyncRun = await run(['workflows', 'run', workflowName, '--json'], env)
+    assert.equal(asyncRun.code, 0, asyncRun.err)
+    assert.equal((JSON.parse(asyncRun.out) as { run: { status: string } }).run.status, 'running')
+
+    // failed 终态：Hub 错误信封 → 非零退出（不把空 result 当成功）
+    const hub2 = await startHub(
+      {
+        'POST /api/actions/builtin%3Aworkflow/run': () => ({
+          status: 500,
+          body: { error: { code: 'workflow_failed', message: 'boom', details: { runId: 'wf_f', status: 'failed' } } },
+        }),
+      },
+      WF_RUN_MANIFESTS,
+    )
+    try {
+      const failed = await run(['workflows', 'run', workflowName, '--wait', '--json'], makeEnv(hub2.url, dir))
+      assert.equal(failed.code, 1)
+      assert.equal((JSON.parse(failed.err) as { error: { code: string } }).error.code, 'workflow_failed')
+    } finally {
+      await hub2.close()
+    }
+  } finally {
+    await hub.close()
+  }
+})
+
+test('workflows run：文件位置参数读入 script、名称写入 name、--resume-from-run-id 与 --args 透传', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const workflowName = `saved-${path.basename(dir)}`
+  const hub = await startHub(
+    {
+      'POST /api/actions/builtin%3Aworkflow/run': () => ({ body: { run: { id: 'wf_x', status: 'running' } } }),
+    },
+    WF_RUN_MANIFESTS,
+  )
+  const env = makeEnv(hub.url, dir)
+  try {
+    const scriptPath = path.join(dir, 'demo.workflow.js')
+    await fsp.writeFile(scriptPath, 'export const meta = { name: "f" }\nreturn 1\n', 'utf8')
+
+    // 文件位置参数 -> readFileInto script
+    const byFile = await run(['workflows', 'run', scriptPath, '--json'], env)
+    assert.equal(byFile.code, 0, byFile.err)
+    let body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
+    assert.match(String(body?.input?.script), /name: "f"/)
+    assert.equal(body?.input?.name, undefined)
+
+    // ./ 前缀但文件不存在：显式报错（不猜含义）
+    const missing = await run(['workflows', 'run', './nope.js', '--json'], env)
+    assert.equal(missing.code, 1)
+    assert.equal((JSON.parse(missing.err) as { error: { code: string } }).error.code, 'positional_file_not_found')
+
+    // 名称（非路径形态）-> name 字段；--resume-from-run-id kebab 映射 camelCase
+    const byName = await run(
+      ['workflows', 'run', workflowName, '--args', JSON.stringify({ x: 1 }), '--resume-from-run-id', 'wf_prev', '--json'],
+      env,
+    )
+    assert.equal(byName.code, 0, byName.err)
+    body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
+    assert.equal(body?.input?.name, workflowName)
+    assert.equal(body?.input?.script, undefined)
+    assert.deepEqual(body?.input?.args, { x: 1 })
+    assert.equal(body?.input?.resumeFromRunId, 'wf_prev')
+
+    // 显式属性 flag 不经过 readFileInto，即使值指向真实目录也原样交给 Hub 校验。
+    const explicitName = await run(['workflows', 'run', '--name', dir, '--json'], env)
+    assert.equal(explicitName.code, 0, explicitName.err)
+    body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
+    assert.equal(body?.input?.name, dir)
+    assert.equal(body?.input?.script, undefined)
+  } finally {
+    await hub.close()
+  }
+})
+
+test('plugins doc：GET /api/plugins/:id/docs/:name；json 全量、人类模式直出值', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startHub({
+    'GET /api/plugins/builtin%3Astatusboard/docs/board': () => ({
+      body: { pluginId: 'builtin:statusboard', name: 'board', value: { count: 42 } },
+    }),
+    'GET /api/plugins/builtin%3Astatusboard/docs/notes': () => ({
+      body: { pluginId: 'builtin:statusboard', name: 'notes', value: '纯文本文档' },
+    }),
+    'GET /api/plugins/builtin%3Astatusboard/docs/secret': () => ({
+      status: 404,
+      body: { error: { code: 'plugin_doc_not_found', message: '无公共文档' } },
+    }),
+  })
+  const env = makeEnv(hub.url, dir)
+  try {
+    const json = await run(['plugins', 'doc', 'builtin:statusboard', 'board', '--json'], env)
+    assert.equal(json.code, 0, json.err)
+    assert.deepEqual(JSON.parse(json.out), { pluginId: 'builtin:statusboard', name: 'board', value: { count: 42 } })
+
+    const human = await run(['plugins', 'doc', 'builtin:statusboard', 'board'], env)
+    assert.equal(human.code, 0, human.err)
+    assert.match(human.out, /count/)
+    assert.match(human.out, /42/)
+
+    const textValue = await run(['plugins', 'doc', 'builtin:statusboard', 'notes'], env)
+    assert.equal(textValue.code, 0, textValue.err)
+    assert.equal(textValue.out, 'notes\n纯文本文档\n')
+
+    const missing = await run(['plugins', 'doc', 'builtin:statusboard', 'secret', '--json'], env)
+    assert.equal(missing.code, 1)
+    assert.equal((JSON.parse(missing.err) as { error: { code: string } }).error.code, 'plugin_doc_not_found')
+
+    const noArgs = await run(['plugins', 'doc', 'builtin:statusboard', '--json'], env)
+    assert.equal(noArgs.code, 1)
+    assert.equal((JSON.parse(noArgs.err) as { error: { code: string } }).error.code, 'missing_id')
+  } finally {
+    await hub.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 凭据锁权限异常（原 credentials-lock-errors 回填）
+// ---------------------------------------------------------------------------
+
+test('读取持有中的凭据锁遇到权限错误时显式失败，并保留锁与凭据', { timeout: 60_000 }, async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'helm-cli-lock-error-'))
+  const lockPath = path.join(dir, 'cli-token.lock')
+  const tokenPath = path.join(dir, 'cli-token')
+  const owner = `${process.pid} existing-owner\n`
+  await fsp.writeFile(lockPath, owner)
+  await fsp.writeFile(tokenPath, 'original')
+  const readFile = fsp.readFile.bind(fsp)
+  const stub = t.mock.method(fsp, 'readFile', async (...args: Parameters<typeof fsp.readFile>) => {
+    if (String(args[0]) === lockPath) throw Object.assign(new Error('access denied'), { code: 'EACCES' })
+    return readFile(...args)
+  })
+  try {
+    await assert.rejects(updateCliCredentials(dir, { token: 'replacement' }), (error: unknown) =>
+      error instanceof CliError && error.code === 'credentials_lock_failed')
+    stub.mock.restore()
+    assert.equal(await readFile(lockPath, 'utf8'), owner)
+    assert.equal(await readFile(tokenPath, 'utf8'), 'original')
+    assert.deepEqual((await fsp.readdir(dir)).sort(), ['cli-token', 'cli-token.lock'])
+  } finally {
+    stub.mock.restore()
+    await fsp.rm(dir, { recursive: true, force: true })
   }
 })
