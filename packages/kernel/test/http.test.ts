@@ -491,6 +491,22 @@ test('POST /api/auth/setup 弱密码 400 weak_password；重复 setup 409', { ti
   assert.equal(dup.body.error.code, 'already_setup')
 })
 
+test('POST /api/auth/login 未 setup 时 409 not_setup', { timeout: 60_000 }, async () => {
+  // 独立 dataDir：全局基座在首个鉴权测试前已完成 setup，无法覆盖未配置分支
+  const freshDir = await mkdtemp(join(tmpdir(), 'helm-http-nosetup-'))
+  try {
+    const freshKernel = makeKernel()
+    ;(freshKernel as { auth: AuthService }).auth = new AuthService(freshDir)
+    const handler = createHubHandler(freshKernel)
+    const res = await call(handler, 'POST', '/api/auth/login', { auth: false, body: { password: '{{SECRET_nsetup9q}}' } })
+    assert.equal(res.status, 409)
+    assert.equal(res.body.error.code, 'not_setup')
+    assert.equal(res.body.error.message, '尚未完成 setup，请先执行初始化')
+  } finally {
+    await rm(freshDir, { recursive: true, force: true })
+  }
+})
+
 test('POST /api/auth/login 正确密码 200 / 错误密码 401 invalid_credentials', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const ok = await call(handler, 'POST', '/api/auth/login', { auth: false, body: { password: 'hunter2hunter2' } })
