@@ -20,6 +20,7 @@ import {
 } from 'node:crypto'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
+import { HelmError } from '@helm/protocol'
 import { ConfigService } from './config.js'
 import { withFileLock } from './file-lock.js'
 
@@ -189,7 +190,8 @@ export class AuthService {
     return withFileLock(this.lockPath, async () => {
       const state = await this.readState()
       if (state === undefined) {
-        throw new Error('尚未完成 setup，请先执行初始化')
+        // 结构化错误码供 HTTP 层分类（对外仍映射 409 not_setup）。
+        throw new HelmError('auth_not_setup', '尚未完成 setup，请先执行初始化', 409)
       }
       const derived = await hashPassword(
         password,

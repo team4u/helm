@@ -32,7 +32,6 @@ import {
 } from '../services/index.js'
 import { MAX_ARTIFACT_BYTES } from '../services/artifacts.js'
 
-class AuthNotSetupError extends Error {}
 import type { KernelRuntimeLike, PluginRouteInfo } from './contracts.js'
 import {
   errorResponse,
@@ -120,10 +119,7 @@ function mapServiceError(redactor: JsonRedactor | undefined, error: unknown): Re
   if (error instanceof FileNotFoundError) {
     return errorResponse(redactor, 404, 'not_found', error.message)
   }
-  if (error instanceof AuthNotSetupError) {
-    return errorResponse(redactor, 409, 'not_setup', error.message)
-  }
-  if (error instanceof Error && error.message.includes('尚未完成 setup')) {
+  if (error instanceof HelmError && error.code === 'auth_not_setup') {
     return errorResponse(redactor, 409, 'not_setup', error.message)
   }
   return undefined
