@@ -120,6 +120,12 @@ class MemorySessionDocStore implements PluginSessionDocStore {
     }
     return out.sort((a, b) => a - b)
   }
+  deletePlugin(pluginId: string): void {
+    const prefix = `${pluginId}\u0000`
+    for (const key of [...this.store.keys()]) {
+      if (key.startsWith(prefix)) this.store.delete(key)
+    }
+  }
   async flush(): Promise<void> {}
 }
 
@@ -130,6 +136,12 @@ class MemoryDocStore {
   }
   set<T>(key: string, value: T): void {
     this.store.set(key, structuredClone(value))
+  }
+  deletePlugin(pluginId: string): void {
+    const prefix = `${pluginId}:`
+    for (const key of [...this.store.keys()]) {
+      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
+    }
   }
   async flush(): Promise<void> {}
 }

@@ -97,6 +97,12 @@ class MemoryDocStore implements PluginDocStore {
     this.store.set(key, structuredClone(value))
     this.writes.push(key)
   }
+  deletePlugin(pluginId: string): void {
+    const prefix = `${pluginId}:`
+    for (const key of [...this.store.keys()]) {
+      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
+    }
+  }
   async flush(): Promise<void> {}
 }
 
@@ -113,6 +119,12 @@ class MemorySessionDocStore {
   }
   delete(pluginId: string, name: string, conversationId: number): void {
     this.store.delete(`${pluginId}\0${name}\0${conversationId}`)
+  }
+  deletePlugin(pluginId: string): void {
+    const prefix = `${pluginId}\0`
+    for (const key of [...this.store.keys()]) {
+      if (key.startsWith(prefix)) this.store.delete(key)
+    }
   }
   listConversationIds(pluginId: string, name: string): number[] {
     const out: number[] = []

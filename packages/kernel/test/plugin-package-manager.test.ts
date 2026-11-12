@@ -216,6 +216,9 @@ function makeEnv(runner?: PackageRunner): TestEnv {
       summaries.delete(pluginId)
       return { wasEnabled: entry.enabled }
     },
+    purgePluginPersistentData(pluginId: string) {
+      hostCalls.push(`purge:${pluginId}`)
+    },
     listSummaries: () => [...summaries.values()].map((s) => toSummary(summaries, s.id)),
   }
   const manager = new PluginPackageManager({
@@ -334,6 +337,11 @@ test('local install：拷贝进受管目录（非 symlink）、记录持久化�
     const removed = await env.manager.remove('demo-local')
     assert.equal(removed.pluginId, 'demo-local')
     assert.equal(removed.wasEnabled, true)
+    // 卸载含持久化文档数据关联清理：注销实例之后、删目录之前
+    const removeAt = env.hostCalls.indexOf('remove:demo-local')
+    const purgeAt = env.hostCalls.indexOf('purge:demo-local')
+    assert.ok(removeAt >= 0, '应调用 removeManagedPlugin')
+    assert.ok(purgeAt > removeAt, '应调用 purgePluginPersistentData 且晚于实例注销')
     assert.ok(!existsSync(managed), '受管目录应被删除')
     assert.ok(existsSync(join(userSrc, 'index.mjs')), '用户源目录必须完好')
     assert.ok(existsSync(join(userSrc, 'user-notes.md')), '用户自有文件必须完好')

@@ -804,12 +804,14 @@ async function executeCleanupTool(
         if (key !== 'builtin:workflow:worktree-state') return
         docs.set(key, value)
       },
+      deletePlugin: () => {},
       flush: async () => {},
     },
     sessionDocs: {
       get: () => undefined,
       put: () => {},
       delete: () => {},
+      deletePlugin: () => {},
       listConversationIds: () => [],
       flush: async () => {},
     },

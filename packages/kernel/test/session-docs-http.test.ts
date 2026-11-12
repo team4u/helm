@@ -111,12 +111,19 @@ beforeEach(async () => {
     docs: {
       get: <T>(key: string, initial: T) => initial,
       set: () => {},
+      deletePlugin: () => {},
       flush: async () => {},
     },
     sessionDocs: {
       get: (p, n, c) => memorySessionStore.get(`${p}\0${n}\0${c}`),
       put: (p, n, c, v) => memorySessionStore.set(`${p}\0${n}\0${c}`, v),
       delete: (p, n, c) => memorySessionStore.delete(`${p}\0${n}\0${c}`),
+      deletePlugin: (p) => {
+        const prefix = `${p}\0`
+        for (const k of [...memorySessionStore.keys()]) {
+          if (k.startsWith(prefix)) memorySessionStore.delete(k)
+        }
+      },
       listConversationIds: (p, n) => [...memorySessionStore.keys()].filter((k) => k.startsWith(`${p}\0${n}\0`)).map((k) => Number(k.split('\0')[2])),
       flush: async () => {},
     },

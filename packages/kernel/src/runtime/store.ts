@@ -476,12 +476,32 @@ export class HelmStore {
     )
   }
 
-  deletePluginDocs(pluginId: string): void {
+  /**
+   * 删除全局文档存储中某插件的全部文档（卸载关联清理）。
+   *
+   * 全局文档统一挂在 `__global` 行下、name 为 `${pluginId}:${docName}`。
+   * 插件 id 本身允许含冒号（如 `foo:bar`），纯前缀匹配会交叉误删
+   * （删 `foo` 会误中 `foo:bar:doc`），而 doc 名禁冒号（assertValidId），
+   * 故精确判定为：前缀 `${pluginId}:` 命中且剩余部分不含冒号。
+   */
+  deleteGlobalPluginDocs(pluginId: string): void {
     this.assertWritable()
+    const prefix = `${pluginId}:`
+    const rowPrefix = `__global\0${prefix}`
     for (const key of [...this.pluginDocs.keys()]) {
-      if (key.startsWith(pluginId + '\0')) this.pluginDocs.delete(key)
+      if (!key.startsWith(rowPrefix)) continue
+      if (key.slice(rowPrefix.length).includes(':')) continue
+      this.pluginDocs.delete(key)
     }
-    this.enqueue(() => this.db.run('DELETE FROM helm_plugin_docs WHERE plugin_id = ?', pluginId))
+    this.enqueue(() =>
+      this.db.run(
+        `DELETE FROM helm_plugin_docs
+         WHERE plugin_id = '__global' AND substr(name, 1, ?) = ? AND instr(substr(name, ?), ':') = 0`,
+        prefix.length,
+        prefix,
+        prefix.length + 1,
+      ),
+    )
   }
 
   // ---------------- plugin session docs ----------------
@@ -523,6 +543,17 @@ export class HelmStore {
         name,
         conversationId,
       ),
+    )
+  }
+
+  /** 删除某插件的全部会话文档（卸载关联清理；表有独立 plugin_id 列，精确删除）。 */
+  deletePluginSessionDocs(pluginId: string): void {
+    this.assertWritable()
+    for (const key of [...this.pluginSessionDocs.keys()]) {
+      if (key.startsWith(pluginId + '\0')) this.pluginSessionDocs.delete(key)
+    }
+    this.enqueue(() =>
+      this.db.run('DELETE FROM helm_plugin_session_docs WHERE plugin_id = ?', pluginId),
     )
   }
 

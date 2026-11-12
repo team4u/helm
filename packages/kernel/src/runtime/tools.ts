@@ -59,9 +59,11 @@ import { redactJsonValue } from '../redact.js'
 import { isAbsoluteTargetPath, targetPathShape } from '@helm/protocol'
 import type { HelmToolDeps } from './tool-deps.js'
 
-// 形状判定纯函数已收口 @helm/protocol（浏览器安全）；依赖 node:path 规则的
-// pathRulesForShape/resolveTargetPath/isWithinBase 留在内核（Node 环境），
-// 下方定义并再导出 isAbsoluteTargetPath/targetPathShape 供既有相对路径引用保持稳定。
+// 形状判定与词法规则子集（normalize/join/dirname/basename）已收口
+// @helm/protocol（浏览器安全纯函数，内核与 builtin-plugins 共享）；依赖
+// node:path 完整实现的 resolve/relative 语义（进程 cwd / 大小写规则）留在
+// 内核（Node 环境），下方定义并再导出 isAbsoluteTargetPath/targetPathShape
+// 供既有相对路径引用保持稳定。
 export { isAbsoluteTargetPath, targetPathShape } from '@helm/protocol'
 
 import { posix, win32 } from 'node:path'
@@ -71,8 +73,11 @@ const WINDOWS_DRIVE = /^[A-Za-z]:/
 /** Windows 盘符相对（C:relative / 裸 C:）：语义依赖进程当前目录，靶点执行拒绝。 */
 const WINDOWS_DRIVE_RELATIVE = /^[A-Za-z]:($|[^\\/])/
 
-/** 按形状选纯路径规则（供 routes/runtime 复用；不依赖 Hub 宿主平台）。 */
-export function pathRulesForShape(shape: 'posix' | 'win32' | undefined): typeof posix | typeof win32 {
+/**
+ * 按形状选 node:path 完整规则（内核 Node 环境专用：resolve/relative 等
+ * 语义依赖 Node 实现；词法子集见 @helm/protocol pathRulesForShape）。
+ */
+function nodePathForShape(shape: 'posix' | 'win32' | undefined): typeof posix | typeof win32 {
   return shape === 'win32' ? win32 : posix
 }
 
@@ -85,7 +90,7 @@ export function resolveTargetPath(raw: string, base: string): { ok: true; abs: s
     return { ok: false, reason: `盘符相对路径依赖进程当前目录，拒绝：${raw}` }
   }
   const shape = targetPathShape(raw) ?? targetPathShape(base)
-  const rules = pathRulesForShape(shape)
+  const rules = nodePathForShape(shape)
   return { ok: true, abs: rules.resolve(base, raw) }
 }
 
@@ -98,7 +103,7 @@ export function isWithinBase(target: string, base: string): boolean {
   const shape = targetPathShape(target)
   const baseShape = targetPathShape(base)
   if (shape && baseShape && shape !== baseShape) return false
-  const rules = pathRulesForShape(shape ?? baseShape)
+  const rules = nodePathForShape(shape ?? baseShape)
   const relative = rules.relative(base, target)
   return relative === '' || (relative !== '..' && !relative.startsWith('..' + rules.sep) && !rules.isAbsolute(relative))
 }
@@ -743,7 +748,7 @@ async function resolveWritableTarget(
   // 权限错误（permission_denied）不是「不存在」：显式上抛，绝不误当缺失父目录。
   // dirname 按目标形状规则（win32 靶点下反斜杠才是分隔符；posix.dirname 会把
   // 'C:\workspace\src' 当无分隔符字符串，探测链会立即走错）。
-  const rules = pathRulesForShape(targetPathShape(absolute) ?? targetPathShape(base))
+  const rules = nodePathForShape(targetPathShape(absolute) ?? targetPathShape(base))
   let probe = rules.dirname(absolute)
   for (let depth = 0; depth < 64; depth += 1) {
     const probeR = await env.canonicalPath(probe, context)
@@ -816,7 +821,7 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
                 isError: true,
               }
             }
-            const fileName = pathRulesForShape(targetPathShape(targetAbs)).basename(targetAbs)
+            const fileName = nodePathForShape(targetPathShape(targetAbs)).basename(targetAbs)
             const meta = await deps.artifacts.writeUploaded(api.conversationId as number, {
               name: fileName,
               bytes: Buffer.from(args.content, 'utf8'),
@@ -869,7 +874,7 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
           // 新文件的父目录可能不存在：先确保目录（recursive，仍在 containment 内）；
           // dirname 按目标形状规则（win32 反斜杠分隔符）。
           return await envWithFileMutationQueue(env, target.abs, async () => {
-            const parent = pathRulesForShape(targetPathShape(target.abs)).dirname(target.abs)
+            const parent = nodePathForShape(targetPathShape(target.abs)).dirname(target.abs)
             const mkdirResult = await env.createDir(parent, { recursive: true }, context)
             if (!mkdirResult.ok) throw new Error(mkdirResult.error.message)
             const writeResult = await env.writeFile(target.abs, args.content, context)
@@ -907,7 +912,7 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
         // local 与远端共享同一进程级队列（localWithFileMutationQueue 的 key 前缀
         // 与 NodeExecutionEnv.id 一致，两种入口互斥）。
         return await localWithFileMutationQueue(target.abs, async () => {
-          await mkdir(pathRulesForShape(targetPathShape(target.abs)).dirname(target.abs), { recursive: true })
+          await mkdir(nodePathForShape(targetPathShape(target.abs)).dirname(target.abs), { recursive: true })
           await writeFile(target.abs, args.content, 'utf8')
           return await onWriteSuccess(target.abs, bytes)
         }, context.abortSignal)

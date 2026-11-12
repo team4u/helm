@@ -5,7 +5,7 @@
  * 插件（ctx.tool 声明）；内核只保留与插件无关的基础元工具。
  */
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
-import { safeResultText } from './runtime-helpers.js'
+import { safeResultText } from '@helm/protocol'
 
 /** 工具工厂的宿主能力面。 */
 export interface KernelToolHost {

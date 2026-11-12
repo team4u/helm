@@ -227,6 +227,7 @@ function createHost(): HostFixture {
     docs: {
       get: <T>(_key: string, initial: T): T => initial,
       set: () => {},
+      deletePlugin: () => {},
       flush: async () => {},
     },
     sessionDocs: {
@@ -237,6 +238,7 @@ function createHost(): HostFixture {
       delete: (pluginId, name, conversationId) => {
         sessionData.delete(sessionKey(pluginId, name, conversationId));
       },
+      deletePlugin: () => {},
       listConversationIds: () => [],
       flush: async () => {},
     },

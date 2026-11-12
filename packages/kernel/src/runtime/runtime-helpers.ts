@@ -9,7 +9,7 @@ import type { JsonValue } from '@earendil-works/chord'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import type { ConversationSummary } from '@helm/protocol'
 import type { Models } from '@earendil-works/pi-ai'
-import { HelmError } from '@helm/protocol'
+import { HelmError, safeResultText } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 import type { ConvMeta } from './store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
@@ -42,13 +42,6 @@ export function stripEnvelope(text: string): string {
     .replaceAll('&quot;', '"')
     .replaceAll('&amp;', '&')
   return tail.trim() === '' ? unescaped : `${unescaped}${tail}`
-}
-
-/** 任意值 -> 模型可见文本（对象 JSON 序列化）。 */
-export function safeResultText(value: unknown, redact: (text: string) => string = (text) => text): string {
-  if (typeof value === 'string') return redact(value)
-  if (value === undefined) return ''
-  return JSON.stringify(redactJsonValue(value, redact))
 }
 
 // ---------------------------------------------------------------------------

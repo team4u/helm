@@ -48,6 +48,12 @@ class DoctorDocStore {
   set<T>(key: string, value: T): void {
     this.values.set(key, structuredClone(value));
   }
+  deletePlugin(pluginId: string): void {
+    const prefix = `${pluginId}:`;
+    for (const key of [...this.values.keys()]) {
+      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.values.delete(key);
+    }
+  }
   async flush(): Promise<void> {}
 }
 

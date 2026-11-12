@@ -127,6 +127,7 @@ export class KernelRuntime {
   readonly documentStore: {
     get<T>(key: string, initial: T): T
     set<T>(key: string, value: T): void
+    deletePlugin(pluginId: string): void
     flush(): Promise<void>
   }
 

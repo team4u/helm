@@ -167,6 +167,12 @@ class JsonDocStore implements PluginDocStore {
     this.persisted.set(key, JSON.stringify(value))
     this.writes.push(key)
   }
+  deletePlugin(pluginId: string): void {
+    const prefix = `${pluginId}:`
+    for (const key of [...this.persisted.keys()]) {
+      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.persisted.delete(key)
+    }
+  }
   async flush(): Promise<void> {
     this.flushCalls += 1
     if (this.flushFail) throw this.flushFail
@@ -191,6 +197,12 @@ class JsonSessionDocStore {
   }
   delete(pluginId: string, name: string, conversationId: number): void {
     this.persisted.delete(`${pluginId}\0${name}\0${conversationId}`)
+  }
+  deletePlugin(pluginId: string): void {
+    const prefix = `${pluginId}\0`
+    for (const key of [...this.persisted.keys()]) {
+      if (key.startsWith(prefix)) this.persisted.delete(key)
+    }
   }
   listConversationIds(pluginId: string, name: string): number[] {
     const out: number[] = []

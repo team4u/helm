@@ -40,6 +40,7 @@ test('并发启用重复 slash：只发布一个插件，失败方回滚持久�
     docs: {
       get: <T>(key: string, initial: T): T => (docs.has(key) ? docs.get(key) as T : initial),
       set: (key, value) => { docs.set(key, value) },
+      deletePlugin: () => {},
       flush: async () => {},
     },
     config: {

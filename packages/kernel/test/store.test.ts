@@ -125,6 +125,65 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
+  it('deleteGlobalPluginDocs：前缀精确删除（含冒号 id 不交叉、元数据键不误删）、重启不复活', { timeout: 60_000 }, async () => {
+    const base = await mkdtemp(join(dir, 'purge-doc-'))
+    const { store, database } = await openStoreAt(base)
+    // 模拟 createGlobalDocumentStore 的写入形态：全局文档挂在 __global 行、name 为 `${pluginId}:${doc}`
+    store.putPluginDoc('__global', 'foo:records', '{"n":1}')
+    store.putPluginDoc('__global', 'foo:cfg', '{"n":2}')
+    store.putPluginDoc('__global', 'foo:bar:records', '{"n":3}') // 插件 foo:bar 的数据，不得被删 foo 误伤
+    store.putPluginDoc('__global', 'conversation-ownership', '{}') // 内核元数据（无冒号），不属任何插件
+    store.putPluginDoc('__global', 'other:records', '{"n":4}')
+    await store.flushPublic()
+
+    store.deleteGlobalPluginDocs('foo')
+    await store.flushPublic()
+    assert.equal(store.getPluginDoc('__global', 'foo:records'), undefined)
+    assert.equal(store.getPluginDoc('__global', 'foo:cfg'), undefined)
+    assert.equal(store.getPluginDoc('__global', 'foo:bar:records'), '{"n":3}', '含冒号插件 id 的数据不得交叉误删')
+    assert.equal(store.getPluginDoc('__global', 'conversation-ownership'), '{}', '无冒号的内核元数据键不受影响')
+    assert.equal(store.getPluginDoc('__global', 'other:records'), '{"n":4}')
+
+    // 再删含冒号 id：foo:bar 的数据被清，其他仍在
+    store.deleteGlobalPluginDocs('foo:bar')
+    await store.flushPublic()
+    assert.equal(store.getPluginDoc('__global', 'foo:bar:records'), undefined)
+    assert.equal(store.getPluginDoc('__global', 'conversation-ownership'), '{}')
+    await database.close()
+
+    const reopened = await openStoreAt(base)
+    assert.equal(reopened.store.getPluginDoc('__global', 'foo:records'), undefined, '重启后不得复活')
+    assert.equal(reopened.store.getPluginDoc('__global', 'foo:bar:records'), undefined)
+    assert.equal(reopened.store.getPluginDoc('__global', 'other:records'), '{"n":4}')
+    await reopened.database.close()
+    await rm(base, { recursive: true, force: true })
+  })
+
+  it('deletePluginSessionDocs：按插件整体删除（其他插件/其他会话保留）、重启不复活', { timeout: 60_000 }, async () => {
+    const base = await mkdtemp(join(dir, 'purge-session-'))
+    const { store, database } = await openStoreAt(base)
+    store.putPluginSessionDoc('foo', 'runs', 1, '{"a":1}')
+    store.putPluginSessionDoc('foo', 'runs', 2, '{"a":2}')
+    store.putPluginSessionDoc('foo', 'notes', 1, '{"b":1}')
+    store.putPluginSessionDoc('foobar', 'runs', 1, '{"c":1}') // 前缀相近插件，不得误删
+    await store.flushPublic()
+
+    store.deletePluginSessionDocs('foo')
+    await store.flushPublic()
+    assert.equal(store.getPluginSessionDoc('foo', 'runs', 1), undefined)
+    assert.equal(store.getPluginSessionDoc('foo', 'runs', 2), undefined)
+    assert.equal(store.getPluginSessionDoc('foo', 'notes', 1), undefined)
+    assert.equal(store.getPluginSessionDoc('foobar', 'runs', 1), '{"c":1}', '前缀相近的其他插件不得误删')
+    assert.deepEqual(store.listPluginSessionDocConversations('foo', 'runs'), [])
+    await database.close()
+
+    const reopened = await openStoreAt(base)
+    assert.equal(reopened.store.getPluginSessionDoc('foo', 'runs', 1), undefined, '重启后不得复活')
+    assert.equal(reopened.store.getPluginSessionDoc('foobar', 'runs', 1), '{"c":1}')
+    await reopened.database.close()
+    await rm(base, { recursive: true, force: true })
+  })
+
   it('SQL 失败：flushPublic 显式抛错（绝不虚称成功），错误后拒绝新写', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'fail-'))
     const { store, database } = await openStoreAt(base)

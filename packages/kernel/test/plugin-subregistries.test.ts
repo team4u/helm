@@ -31,6 +31,12 @@ class MemoryDocStore implements PluginDocStore {
   set<T>(key: string, value: T): void {
     this.data.set(key, value);
   }
+  deletePlugin(pluginId: string): void {
+    const prefix = `${pluginId}:`
+    for (const key of [...this.data.keys()]) {
+      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.data.delete(key)
+    }
+  }
   async flush(): Promise<void> {
     this.flushed = true;
   }
@@ -51,6 +57,12 @@ class MemorySessionDocStore implements PluginSessionDocStore {
   }
   delete(pluginId: string, name: string, conversationId: number): void {
     this.data.delete(this.key(pluginId, name, conversationId));
+  }
+  deletePlugin(pluginId: string): void {
+    const prefix = `${pluginId}\u0000`
+    for (const k of [...this.data.keys()]) {
+      if (k.startsWith(prefix)) this.data.delete(k)
+    }
   }
   listConversationIds(pluginId: string, name: string): number[] {
     const prefix = `${pluginId}\u0000${name}\u0000`;

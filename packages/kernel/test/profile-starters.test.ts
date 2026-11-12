@@ -191,6 +191,12 @@ test('profile：自举补写默认 Profile 的 managedByPlugin（缺失显式补
       readonly store = new Map<string, unknown>()
       get<T>(key: string, initial: T): T { return this.store.has(key) ? (this.store.get(key) as T) : initial }
       set<T>(key: string, value: T): void { this.store.set(key, structuredClone(value)) }
+  deletePlugin(pluginId: string): void {
+    const prefix = `${pluginId}:`
+    for (const key of [...this.store.keys()]) {
+      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
+    }
+  }
       async flush(): Promise<void> {}
     }
 

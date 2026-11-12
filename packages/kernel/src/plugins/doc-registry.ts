@@ -23,6 +23,8 @@ import { assertValidId, isPlainObject, jsonClone } from './shared.js';
 export interface PluginDocStore {
   get<T>(key: string, initial: T): T;
   set<T>(key: string, value: T): void;
+  /** 删除某插件在该存储中的全部全局文档（`${pluginId}:` 前缀键）；卸载关联清理用。 */
+  deletePlugin(pluginId: string): void;
   /** 等待全部排队写真正落盘（同步镜像 ≠ 持久化完成；失败显式 reject）。 */
   flush(): Promise<void>;
 }
@@ -37,6 +39,8 @@ export interface PluginSessionDocStore {
   get(pluginId: string, name: string, conversationId: number): string | undefined;
   put(pluginId: string, name: string, conversationId: number, valueJson: string): void;
   delete(pluginId: string, name: string, conversationId: number): void;
+  /** 删除某插件的全部会话文档（按 pluginId 整体清理）；卸载关联清理用。 */
+  deletePlugin(pluginId: string): void;
   listConversationIds(pluginId: string, name: string): number[];
   flush(): Promise<void>;
 }
@@ -456,5 +460,16 @@ export class PluginDocRegistry {
   removePlugin(pluginId: string): void {
     this.pluginDocs.delete(pluginId);
     this.sessionDocs.delete(pluginId);
+  }
+
+  /**
+   * 卸载关联清理：删除该插件持久化的全部文档数据（全局 doc + 全部会话文档）。
+   * 在插件实例注销之后调用（不再经过句柄守卫）；与 removePlugin 不同，本方法
+   * 真正清除底层持久数据，重新安装同 ID 插件不会读回旧数据。sessionStore 未
+   * 接线时该插件不可能存在会话文档数据，跳过即无数据可删（非降级）。
+   */
+  purgePlugin(pluginId: string): void {
+    this.store.deletePlugin(pluginId);
+    this.options.sessionStore?.deletePlugin(pluginId);
   }
 }

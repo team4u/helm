@@ -50,6 +50,12 @@ const memorySessionDocs: PluginSessionDocStore = {
   get(pluginId, name, conversationId) { return memorySessionDocData.get(`${pluginId}\0${name}\0${conversationId}`) },
   put(pluginId, name, conversationId, valueJson) { memorySessionDocData.set(`${pluginId}\0${name}\0${conversationId}`, valueJson) },
   delete(pluginId, name, conversationId) { memorySessionDocData.delete(`${pluginId}\0${name}\0${conversationId}`) },
+  deletePlugin(pluginId) {
+    const prefix = `${pluginId}\0`
+    for (const k of [...memorySessionDocData.keys()]) {
+      if (k.startsWith(prefix)) memorySessionDocData.delete(k)
+    }
+  },
   listConversationIds(pluginId, name) {
     return [...memorySessionDocData.keys()]
       .filter((k) => k.startsWith(`${pluginId}\0${name}\0`))
@@ -559,7 +565,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
   before(async () => {
     auth = new AuthService(dataDir)
     const handler = createHubHandler(
-      { dataDir, auth, events: new NoopEventHub(), plugins: new PluginHost({ dataDir, host: makeBackend(), docs: { get: <T>(_k: string, initial: T): T => initial, set: () => {} , flush: async () => {}} }) } as unknown as KernelRuntimeLike,
+      { dataDir, auth, events: new NoopEventHub(), plugins: new PluginHost({ dataDir, host: makeBackend(), docs: { get: <T>(_k: string, initial: T): T => initial, set: () => {} , deletePlugin: () => {}, flush: async () => {}} }) } as unknown as KernelRuntimeLike,
     )
     // 直接调 handler（不经网络）：setup 拿用户 token 备用。
     const res = await handler(
@@ -590,6 +596,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
           Object.assign(recordsDoc, copy)
         }
       },
+      deletePlugin: () => {},
       flush: async () => {},
     }
     const index = await seedRecordsDocInto(docsStore, join(dataDir, 'corrupt-index-seed'))
@@ -628,6 +635,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
           Object.assign(recordsDoc, copy)
         }
       },
+      deletePlugin: () => {},
       flush: async () => {},
     }
     const index = await seedRecordsDocInto(docsStore, join(dataDir, 'corrupt-record-seed'))

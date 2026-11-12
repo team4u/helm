@@ -993,6 +993,9 @@ export class PluginHost {
         }
         return { wasEnabled };
       },
+      purgePluginPersistentData: (pluginId) => {
+        this.docRegistry.purgePlugin(pluginId);
+      },
       listSummaries: () => this.list(),
     };
   }

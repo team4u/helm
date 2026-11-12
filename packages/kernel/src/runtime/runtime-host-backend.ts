@@ -174,6 +174,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
 export function createGlobalDocumentStore(store: HelmStore): {
   get<T>(key: string, initial: T): T
   set<T>(key: string, value: T): void
+  deletePlugin(pluginId: string): void
   flush(): Promise<void>
 } {
   return {
@@ -184,6 +185,9 @@ export function createGlobalDocumentStore(store: HelmStore): {
     },
     set: <T>(key: string, value: T): void => {
       store.putPluginDoc('__global', key, JSON.stringify(value))
+    },
+    deletePlugin: (pluginId: string): void => {
+      store.deleteGlobalPluginDocs(pluginId)
     },
     flush: () => store.flushPublic(),
   }
@@ -200,6 +204,7 @@ export function createPluginSessionDocStore(store: HelmStore): PluginSessionDocS
       store.putPluginSessionDoc(pluginId, name, conversationId, valueJson),
     delete: (pluginId, name, conversationId) =>
       store.deletePluginSessionDoc(pluginId, name, conversationId),
+    deletePlugin: (pluginId) => store.deletePluginSessionDocs(pluginId),
     listConversationIds: (pluginId, name) =>
       store.listPluginSessionDocConversations(pluginId, name),
     flush: () => store.flushPublic(),

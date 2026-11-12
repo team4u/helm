@@ -31,6 +31,7 @@ import {
   WORKFLOW_PLUGIN_ID,
   WORKFLOW_RUNS_DOC,
   WORKFLOW_RUN_BADGES_DOC,
+  safeResultText,
   type AgentExecutionInfo,
   type AgentSpawnRequest,
   type PluginDefinition,
@@ -41,7 +42,6 @@ import {
 import { WorkflowService } from './workflow/engine/index.js'
 import { normalizeWorkflowArgs } from './workflow/engine/runtime.js'
 import { WorktreeIsolation } from './workflow/isolation.js'
-import { safeResultText } from '../runtime/runtime-helpers.js'
 import { executionOf, subagentFooter } from './workflow/tool-result.js'
 
 export { WORKFLOW_PLUGIN_ID }

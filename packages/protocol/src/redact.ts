@@ -7,6 +7,13 @@
  */
 import { HelmError } from './error.js'
 
+/** 任意值 -> 模型可见文本（字符串原样过脱敏；对象 JSON 序列化并逐值脱敏；undefined 为空串）。 */
+export function safeResultText(value: unknown, redact: (text: string) => string = (text) => text): string {
+  if (typeof value === 'string') return redact(value)
+  if (value === undefined) return ''
+  return JSON.stringify(redactJsonValue(value, redact))
+}
+
 export function redactJsonValue(value: unknown, redact: (text: string) => string): unknown {
   const visiting = new WeakSet<object>()
   function visit(current: unknown): unknown {
