@@ -1048,6 +1048,35 @@ describe('workflow action primitive', () => {
     assert.equal(readFail.actionUncertain, false, 'idempotent failure must not lock journal uncertain')
     assert.equal(readFail.failedActions, 0)
   })
+
+  it('agent-line journal write failures are carried in WorkflowRunResult.journalIoErrors (run continues)', timeout, async () => {
+    // 记账失败只损失 resume 优化，不得中断 run；但错误必须随 result 暴露，
+    // 绝不静默吞掉（journal.ts 自我声明：计数暴露供宿主诊断，绝不隐瞒）。
+    const host = makeFakeHost()
+    const failingAppend = async (entry: JournalWriteInput) => {
+      if (entry.type === 'agent') throw new Error('agent journal io boom')
+    }
+    const result = await runWorkflow({
+      script: META('j-agent-io') + 'const a = await agent("one")\nreturn a',
+      host,
+      journal: { append: failingAppend },
+    })
+    assert.equal(result.status, 'completed', 'agent-line write failure must not fail the run')
+    assert.equal(result.value, 'ok:one')
+    assert.ok(
+      (result.journalIoErrors ?? []).some((message) => message.includes('agent journal io boom')),
+      `journalIoErrors must carry the append failure, got: ${JSON.stringify(result.journalIoErrors)}`,
+    )
+
+    // 对照：记账正常时不携带字段（缺省 = 无失败，不携带空数组噪声）。
+    const clean = await runWorkflow({
+      script: META('j-agent-io-clean') + 'const a = await agent("one")\nreturn a',
+      host,
+      journal: { append: () => {} },
+    })
+    assert.equal(clean.status, 'completed')
+    assert.equal(clean.journalIoErrors, undefined)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1543,6 +1572,40 @@ describe('WorkflowService', () => {
     } finally {
       rmSync(record.journalPath, { recursive: true, force: true })
     }
+    await service.close()
+  })
+
+  it('resume with corrupted-but-safe journal lines surfaces ioErrors in run diagnostics (not silently fewer replays)', timeout, async () => {
+    const host = makeServiceHost()
+    const state = makeStateStore()
+    const service = new WorkflowService({ dataDir, host, state })
+    const first = await service.run({
+      conversationId: 1,
+      script: META('svc-corrupt-resume') + 'const a = await agent("one")\nreturn a',
+    })
+    await service.wait(first.id)
+    const record = state.get<{ journalPath: string } | null>(`workflow/run/${first.id}`, null)
+    assert.ok(record !== null)
+
+    // 追加一行可判定为 agent 的截断行：ioErrors 计数但不阻断安全重放。
+    const { appendFileSync } = await import('node:fs')
+    appendFileSync(record.journalPath, '{"type":"agent","index":9,"key":"k9","ok":tr')
+    const resumed = await service.run({ resumeFromRunId: first.id })
+    await service.wait(resumed.id)
+    assert.equal(resumed.status, 'running', 'run() returns running summary before settle')
+
+    const final = service.getRun(resumed.id)
+    assert.equal(final.status, 'completed')
+    assert.ok(
+      (final.journalIoErrors ?? []).some((message) => message.includes('corrupt/unreadable line')),
+      `summary must carry journal ioErrors diagnostics, got: ${JSON.stringify(final.journalIoErrors)}`,
+    )
+    // 诊断也必须持久化（跨重启 inspect 可见）。
+    const persisted = state.get<{ journalIoErrors?: string[] } | null>(`workflow/run/${resumed.id}`, null)
+    assert.ok(
+      (persisted?.journalIoErrors ?? []).some((message) => message.includes('corrupt/unreadable line')),
+      'persisted record must carry journalIoErrors',
+    )
     await service.close()
   })
 

@@ -240,6 +240,11 @@ export interface WorkflowRunResult {
   agentCount: number
   /** 其中来自账本重放的数量。 */
   replayedCount: number
+  /**
+   * agent 行记账失败的诊断明细（尽力而为面：run 不中断，错误在此如实携带）。
+   * 空数组/缺省 = 无记账失败。消费方：service 结算时打 stderr 并入 run 诊断。
+   */
+  journalIoErrors?: string[]
 }
 
 /* ------------------------------------------------------------------------- *
@@ -612,7 +617,10 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
     return { hit: true, entry }
   }
 
-  /** agent 行记账尽力而为：写失败只计数，不中断 run（resume 优化损失）。 */
+  /**
+   * agent 行记账尽力而为：写失败不中断 run（resume 优化损失），错误记入
+   * journalIoErrors 随 WorkflowRunResult 暴露，绝不隐瞒。
+   */
   async function recordAgent(entry: Omit<Extract<JournalWriteInput, { type: 'agent' }>, 'type' | 'seq'>): Promise<void> {
     if (appendJournal === undefined) return
     try {
@@ -743,7 +751,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       inflight.clear()
       semaphore.drain()
       const settle = () =>
-        resolve({ ...result, meta, progress, agentCount, replayedCount })
+        resolve({ ...result, meta, progress, agentCount, replayedCount, ...(journalIoErrors.length > 0 ? { journalIoErrors: [...journalIoErrors] } : {}) })
       void worker.terminate().then(settle, settle)
     }
 

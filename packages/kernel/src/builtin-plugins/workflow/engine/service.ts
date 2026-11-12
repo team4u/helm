@@ -214,6 +214,11 @@ interface RunRecord {
   args?: unknown
   journalPath: string
   replayedFrom?: string
+  /**
+   * 账本记账失败诊断（agent 行写失败 / resume 旧账本損行），脱敏后持久；
+   * 不影响终态判定，仅为如实可见（summary 面透传）。
+   */
+  journalIoErrors?: string[]
   /** run 种类：DSL 工作流（缺省）或受信后台单子代理（startBackgroundAgent）。 */
   kind?: 'workflow' | 'subagent'
   /** 后台子代理终态是否须向父会话投递通知（notifiedAt 防重复投递）。 */
@@ -700,6 +705,8 @@ export class WorkflowService {
     const journalPath = this.journalPathFor(conversationId, runId)
 
     let replayEntries: readonly WorkflowJournalEntry[] = []
+    /** resume 读旧账本时的損行诊断（计数形态，结算时入 run 诊断面）。 */
+    let resumeJournalIoErrors: string[] | undefined
     if (replayFrom !== undefined) {
       const journal = readJournal(replayFrom.journalPath)
       if (journal.readFailed !== undefined) {
@@ -724,6 +731,14 @@ export class WorkflowService {
         )
       }
       replayEntries = journal.entries
+      // 損行不影响安全重放（已由 actionUncertain 把关），但记入本 run 诊断面：
+      // 账本健康度如实可见，绝不静默少重放。运行期 agent 行写失败由引擎经
+      // WorkflowRunResult.journalIoErrors 补充，这里只覆盖 resume 时的存量損行。
+      if (journal.ioErrors > 0) {
+        resumeJournalIoErrors = [
+          `journal ${replayFrom.id} has ${journal.ioErrors} corrupt/unreadable line(s) (replayed from ${replayFrom.journalPath})`,
+        ]
+      }
     }
 
     const abort = new AbortController()
@@ -791,6 +806,24 @@ export class WorkflowService {
           record.status = 'failed'
           const message = failure instanceof Error ? failure.message : failure !== undefined ? String(failure) : 'unknown workflow failure'
           record.error = this.redact(message)
+        }
+        // 账本记账失败诊断（保守面：run 不中断，但绝不隐瞒）。
+        // 三路来源合一：引擎 agent 行写失败（result 携带）+ resume 旧账本損行 +
+        // writer 层 agent 行写失败计数；脱敏后 stderr 可见 + 入 record 诊断面。
+        const journalIoErrors = [
+          ...(result?.journalIoErrors ?? []),
+          ...(resumeJournalIoErrors ?? []),
+          ...(run.writer.agentIoErrors > 0
+            ? [`${run.writer.agentIoErrors} journal agent-line append(s) failed (journal: ${journalPath})`]
+            : []),
+        ]
+        if (journalIoErrors.length > 0) {
+          const redacted = journalIoErrors.map((message) => this.redact(message))
+          // stderr 是宿主侧日志的最低保障可见面（与 persist/onRunSettled 失败同手法）。
+          for (const message of redacted) {
+            process.stderr.write(`workflow ${runId}: journal io error: ${message}\n`)
+          }
+          record.journalIoErrors = redacted
         }
         record.updatedAt = Date.now()
         // 只跟踪内建执行通道，不等待任意插件；取消后必须确认命令已退出，不能超时后假装完成清理。
@@ -2105,6 +2138,7 @@ export class WorkflowService {
       ...(record.nodes !== undefined ? { nodes: record.nodes } : {}),
       ...(record.progress !== undefined ? { progress: record.progress } : {}),
       ...(record.replayedFrom !== undefined ? { replayedFrom: record.replayedFrom } : {}),
+      ...(record.journalIoErrors !== undefined ? { journalIoErrors: record.journalIoErrors } : {}),
     }
   }
 
