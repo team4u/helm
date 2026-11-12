@@ -27,6 +27,8 @@ interface ProjectionState {
   lastSeq: number
   lastProjectedAt: number
   inFlight: boolean
+  /** inFlight 期间到达的新 token（latest 语义）：完成后补投射，绝不静默丢弃。 */
+  pendingToken?: string
 }
 
 export class MetadataProjector {
@@ -64,7 +66,12 @@ export class MetadataProjector {
       this.states.set(key, { nodeId, paneId, lastToken: '', lastSeq: 0, lastProjectedAt: 0, inFlight: false })
     }
     const cur = this.states.get(key)!
-    if (cur.inFlight) return
+    if (cur.inFlight) {
+      // 单飞期间的最新 token 记待补投射（latest 语义）：ask/run token 切换
+      // 恰逢投射在途时，新 token 不致整周期不上屏。
+      cur.pendingToken = token
+      return
+    }
     cur.inFlight = true
     cur.lastToken = token
     cur.lastProjectedAt = now
@@ -84,6 +91,12 @@ export class MetadataProjector {
       this.onError(paneId, error)
     } finally {
       cur.inFlight = false
+      const next = cur.pendingToken
+      cur.pendingToken = undefined
+      if (next !== undefined && next !== cur.lastToken) {
+        // 期间有更新的 token：立即补投射（每次完成至多补一次，不会自激循环）。
+        void this.project(cur.nodeId, cur.paneId, next)
+      }
     }
   }
 
@@ -96,16 +109,20 @@ export class MetadataProjector {
     this.timer = setInterval(() => {
       this.timer?.unref?.()
       for (const state of this.states.values()) {
-        if (state.lastToken === '') continue
+        // 心跳只续命不新增状态：inFlight 中的窗格跳过，避免旧 lastToken
+        // 覆盖待补投射的更新 pendingToken（latest 语义）。
+        if (state.lastToken === '' || state.inFlight) continue
         void this.project(state.nodeId, state.paneId, state.lastToken)
       }
     }, HEARTBEAT_MS)
     this.timer.unref?.()
   }
 
-  /** pane 关闭/结算后清理本地状态（不再心跳）。 */
+  /** pane 关闭/结算后清理本地状态（不再心跳；seq 计数随 pane 一并回收，防无界增长）。 */
   forget(paneId: string, nodeId?: string): void {
-    this.states.delete(`${nodeId ?? 'local'}:${paneId}`)
+    const key = `${nodeId ?? 'local'}:${paneId}`
+    this.states.delete(key)
+    this.seqCounters.delete(key)
   }
 
   /** 服务停止：清理心跳定时器。 */

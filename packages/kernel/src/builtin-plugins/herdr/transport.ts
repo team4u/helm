@@ -720,28 +720,48 @@ async function resolveLocalOutputPath(cwd: string, fileName: string, target: str
 
 async function readLocalOutput(cwd: string, fileName: string, signal: AbortSignal | undefined, target: string, redact: (s: string) => string): Promise<string> {
   const fs = await import('node:fs/promises')
+  const { dirname } = await import('node:path')
   checkAborted(signal, target)
   const path = await resolveLocalOutputPath(cwd, fileName, target)
-  let stat
+  // 以 O_NOFOLLOW 打开收敛 TOCTOU：lstat 与 readFile 分离时，窗口内文件可被
+  // 替换为符号链接越出 .helm；在打开时点拒绝 symlink 后从同一句柄 fstat+读
+  // （Windows 无 O_NOFOLLOW，退回读后 realpath 复核仍锚定 .helm 内）。
+  const noFollow = fs.constants.O_NOFOLLOW ?? 0
+  let fh: Awaited<ReturnType<typeof fs.open>>
   try {
-    stat = await fs.lstat(path)
+    fh = await fs.open(path, fs.constants.O_RDONLY | noFollow)
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') {
       throw new HelmError('herdr_output_missing', `交接文件不存在: ${path}`, 404)
     }
-    throw new HerdrTransportError('herdr_io', `failed to inspect output file: ${redact(String(err))}`, target, { cause: err })
+    if (code === 'ELOOP') {
+      throw new HerdrTransportError('herdr_output_escaping', `output path is a symlink: ${path}`, target)
+    }
+    throw new HerdrTransportError('herdr_io', `failed to open output file: ${redact(String(err))}`, target, { cause: err })
   }
-  if (!stat.isFile()) {
-    throw new HerdrTransportError('herdr_output_not_file', `output path is not a regular file: ${path}`, target)
+  try {
+    const stat = await fh.stat()
+    if (!stat.isFile()) {
+      throw new HerdrTransportError('herdr_output_not_file', `output path is not a regular file: ${path}`, target)
+    }
+    if (stat.size > MAX_OUTPUT_BYTES) {
+      throw new HerdrTransportError('herdr_output_too_large', `output exceeds ${MAX_OUTPUT_BYTES} bytes`, target)
+    }
+    const content = await fh.readFile('utf8')
+    if (Buffer.byteLength(content, 'utf8') > MAX_OUTPUT_BYTES) {
+      throw new HerdrTransportError('herdr_output_too_large', `output grew past limit while reading`, target)
+    }
+    if (!noFollow) {
+      const real = await fs.realpath(path)
+      if (!pathContains(await fs.realpath(dirname(path)), real)) {
+        throw new HerdrTransportError('herdr_output_escaping', `output resolves outside .helm`, target)
+      }
+    }
+    return content
+  } finally {
+    await fh.close().catch(() => {})
   }
-  if (stat.size > MAX_OUTPUT_BYTES) {
-    throw new HerdrTransportError('herdr_output_too_large', `output exceeds ${MAX_OUTPUT_BYTES} bytes`, target)
-  }
-  const content = await fs.readFile(path, 'utf8')
-  if (Buffer.byteLength(content, 'utf8') > MAX_OUTPUT_BYTES) {
-    throw new HerdrTransportError('herdr_output_too_large', `output grew past limit while reading`, target)
-  }
-  return content
 }
 
 async function removeLocalOutput(cwd: string, fileName: string, signal: AbortSignal | undefined, target: string, redact: (s: string) => string): Promise<void> {
@@ -881,6 +901,16 @@ async function readNodeOutput(
   const content = await env.readTextFile(filePath, context)
   if (!content.ok) {
     throw new HerdrTransportError('herdr_io', `failed to read output file: ${content.error.code}: ${content.error.message}`, targetLabel)
+  }
+  // 读后 canonical 复核（TOCTOU 收敛）：fileInfo(lstat) 与 readTextFile（跟随
+  // 软链）之间文件可被替换为符号链接越出 .helm；节点 env 无 O_NOFOLLOW 语义，
+  // 以 realpath 复核实际读到的路径仍锚定 realHelm 内（内容已读入但绝不返回）。
+  const canonical = await env.canonicalPath(filePath, context)
+  if (!canonical.ok) {
+    throw new HerdrTransportError('herdr_io', `failed to resolve ${filePath}: ${canonical.error.message}`, targetLabel)
+  }
+  if (!pathContains(realHelm, canonical.value)) {
+    throw new HerdrTransportError('herdr_output_escaping', `output resolves outside .helm`, targetLabel)
   }
   if (Buffer.byteLength(content.value, 'utf8') > MAX_OUTPUT_BYTES) {
     throw new HerdrTransportError('herdr_output_too_large', `output grew past limit while reading`, targetLabel)

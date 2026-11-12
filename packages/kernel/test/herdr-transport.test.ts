@@ -794,9 +794,10 @@ describe('herdr transport output files', () => {
     await writeFile(outside, '{}', 'utf8')
     await symlink(outside, join(workDir, '.helm', 'wf-out-link.json'))
     const transport = createHerdrTransport()
+    // O_NOFOLLOW 打开时点拒绝（ELOOP）：软链波定性为逃逸尝试而非普通非文件。
     await assert.rejects(
       transport.readOutput({}, workDir, 'wf-out-link.json'),
-      (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_output_not_file',
+      (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_output_escaping',
     )
     await assert.rejects(
       transport.readOutput({}, workDir, 'wf-out-missing.json'),

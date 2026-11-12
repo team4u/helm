@@ -88,6 +88,9 @@ export function nodeIdOf(pane: { target?: HerdrTarget }): string | undefined {
  * 窗格登记表（进程内权威状态 + 持久镜像写入端口）。
  */
 export class PaneRegistry {
+  /** 结算记录有界回收上限：settled 保留最近 N 条（tab 已关，仅对账/审计值）；failed 保留更久（现场排查记录）。 */
+  static readonly MAX_RETAINED_SETTLED = 50
+  static readonly MAX_RETAINED_FAILED = 20
   private readonly panes = new Map<string, ManagedPane>()
   private readonly mirror: { get(): ManagedDoc; set(doc: ManagedDoc): void }
 
@@ -159,6 +162,30 @@ export class PaneRegistry {
 
   remove(nodeId: string | undefined, paneId: string): void {
     if (this.panes.delete(scopeKey(nodeId, paneId))) this.flush()
+  }
+
+  /**
+   * 结算记录有界回收（防无界增长：每次 spawn 永久追加会使内存与持久 doc
+   * 全量重写、对账/stop 线性变慢）：按 settledAt（缺省 createdAt）保留最近
+   * N 条 settled 与 M 条 failed；running/keepalive 绝不回收。failed 保留更
+   * 久——failureNote 是现场排查记录（回收记录不关 tab，仅弃置登记）。
+   */
+  prune(options: { maxSettled?: number; maxFailed?: number } = {}): number {
+    const maxSettled = options.maxSettled ?? PaneRegistry.MAX_RETAINED_SETTLED
+    const maxFailed = options.maxFailed ?? PaneRegistry.MAX_RETAINED_FAILED
+    let removed = 0
+    for (const [outcome, max] of [['settled', maxSettled], ['failed', maxFailed]] as const) {
+      const stale = this.all()
+        .filter((p) => p.outcome === outcome)
+        .sort((a, b) => (b.settledAt ?? b.createdAt) - (a.settledAt ?? a.createdAt))
+        .slice(max)
+      for (const pane of stale) {
+        this.panes.delete(scopeKey(nodeIdOf(pane), pane.paneId))
+        removed += 1
+      }
+    }
+    if (removed > 0) this.flush()
+    return removed
   }
 
   /**
