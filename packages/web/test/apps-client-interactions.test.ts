@@ -36,14 +36,19 @@ before(async () => {
 interface SpyCtx extends PluginClientContextType {
   screenCalls: string[]
   splitCalls: string[]
+  actionCalls: Array<{ actionId: string; input: unknown }>
 }
 
 function makeSpyCtx(): SpyCtx {
   const screenCalls: string[] = []
   const splitCalls: string[] = []
+  const actionCalls: Array<{ actionId: string; input: unknown }> = []
   const base: PluginClientContextType = {
     pluginId: 'builtin:apps',
-    callAction: async () => ({}),
+    callAction: async (actionId, input) => {
+      actionCalls.push({ actionId, input })
+      return {}
+    },
     submitInput: async () => {},
     openScreen: (t) => {
       screenCalls.push(t)
@@ -60,7 +65,7 @@ function makeSpyCtx(): SpyCtx {
     getPluginSessionDoc: async () => undefined,
     theme: 'dark',
   }
-  return Object.assign(base, { screenCalls, splitCalls })
+  return Object.assign(base, { screenCalls, splitCalls, actionCalls })
 }
 
 function stubStore(plugins: Array<Record<string, unknown>>, screens: Array<{ pluginId: string; spec: Record<string, unknown> }>, catalog?: unknown): void {
@@ -345,27 +350,62 @@ test('未登记 catalog 且无 Screen 的外部插件：不进入应用列表', 
   unmount()
 })
 
-test('查看应用详情：点击卡片右下角 3 点按钮直接跳转插件中心详情（复用插件详情页与卸载能力）', { timeout: 60_000 }, async () => {
+test('查看应用详情与就地卸载：点击 3 点按钮就地展开详情抽屉（不跳出应用中心），底栏支持对话迭代与直接删除', { timeout: 60_000 }, async () => {
   stubStore(
     [plugin('todo-app', { name: '待办应用', version: '1.2.0' })],
     [screen('todo-app', 'main', '待办台')],
-    { apps: { 'todo-app': { pluginId: 'todo-app', pinned: false, category: 'productivity' } } },
+    { apps: { 'todo-app': { pluginId: 'todo-app', pinned: false, category: 'productivity', originConversationId: 42 } } },
   )
   const ctx = makeSpyCtx()
-  const { host, unmount } = await mount(ctx, screenProps())
+  const { props } = mutableScreenProps({}, { inlineDrawer: true })
+  const { host, unmount, reRender } = await mount(ctx, props)
 
-  // 卡片右下角 3 点详情按钮
+  // 1. 卡片右下角 3 点详情按钮
   const detailBtn = host.querySelector<HTMLButtonElement>('[data-app-id="todo-app"] button[aria-label="查看应用详情"]')
   assert.ok(detailBtn, '应存在查看应用详情按钮')
 
   await act(async () => {
     detailBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
+  assert.ok(setParamsCalls.some((c) => c.patch['app'] === 'todo-app'), '点击 3 点按钮在应用中心内部回写 app 参数，不跳转菜单')
+  assert.equal(ctx.screenCalls.length, 0, '就地展开抽屉，不触发全局页面跳转')
+
+  // 2. 模拟宿主状态写回更新后重新渲染抽屉
+  await reRender()
+
+  const drawer = document.body.querySelector('.primary-drawer-content')
+  assert.ok(drawer, '详情抽屉应渲染展开并使用 primary-drawer-content 规范样式')
+  assert.match(drawer.textContent ?? '', /待办应用/)
+  assert.match(drawer.textContent ?? '', /v1.2.0/)
+  assert.match(drawer.textContent ?? '', /效率工具/)
+  assert.match(drawer.textContent ?? '', /继续对话迭代/)
+
+  // 3. 校验遮罩层必须具备 primary-drawer-backdrop 类名
+  const overlay = document.body.querySelector('.primary-drawer-backdrop')
+  assert.ok(overlay, '遮罩层必须绑定 .primary-drawer-backdrop 通用层级规范')
+
+  // 4. 底栏删除按钮：点击后进入二次确认状态
+  const deleteBtn = Array.from(drawer.querySelectorAll('button')).find((b) => b.textContent?.includes('删除'))
+  assert.ok(deleteBtn, '底栏应存在删除按钮')
+
+  await act(async () => {
+    deleteBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  assert.match(drawer.textContent ?? '', /确认卸载并删除此应用？/, '点击删除后展示确认文案')
+
+  // 5. 点击「确认删除」调用 remove 动作
+  const confirmDeleteBtn = Array.from(drawer.querySelectorAll('button')).find((b) => b.textContent?.includes('确认删除'))
+  assert.ok(confirmDeleteBtn, '应出现确认删除按钮')
+
+  await act(async () => {
+    confirmDeleteBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
   assert.deepEqual(
-    ctx.screenCalls,
-    ['plugins:todo-app'],
-    '点击 3 点按钮应直接导航至 plugins:<pluginId>，统一复用插件详情页与卸载能力',
+    ctx.actionCalls,
+    [{ actionId: 'remove', input: { pluginId: 'todo-app' } }],
+    '确认删除应调用 builtin:apps 的 remove 动作卸载应用',
   )
+  assert.ok(setParamsCalls.some((c) => c.patch['app'] === undefined), '删除成功后关闭抽屉')
 
   unmount()
 })
