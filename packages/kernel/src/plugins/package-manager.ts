@@ -113,8 +113,11 @@ export interface PackageManagerHost {
   assertManagedPluginUpdateSafe(pluginId: string): Promise<void> | void;
   updateManagedPlugin(pluginId: string, dir: string, options: { keepEnabled: boolean }): Promise<{ summary: PluginSummary }>;
   removeManagedPlugin(pluginId: string): Promise<{ wasEnabled: boolean }>;
-  /** 卸载关联清理：删除该插件持久化文档数据（全局 doc + 会话文档）。 */
-  purgePluginPersistentData(pluginId: string): Promise<void> | void;
+  /**
+   * 卸载关联清理：删除该插件持久化文档数据（全局 doc + 会话文档）并等待
+   * DELETE 真实落盘；失败显式 reject，remove 据此保留目录与安装记录以便重试。
+   */
+  purgePluginPersistentData(pluginId: string): Promise<void>;
   listSummaries(): PluginSummary[];
 }
 
@@ -481,9 +484,10 @@ export class PluginPackageManager {
 
   /**
    * 移除受管安装：unregister（builtin/在途任务/providers 由 host 保护）->
-   * 关联清理持久化文档数据 -> 删除受管目录 -> 删除记录。local 来源只删受管副本
-   * 与记录，绝不触碰用户源目录（install 即拷贝，用户源从未进入受管树）。
-   * 清理在删目录/记录之前：任一步失败可重试（记录未删即幂等可续）。
+   * 关联清理持久化文档数据（等待 DELETE 真实落盘，失败显式拒绝）-> 删除
+   * 受管目录 -> 删除记录。local 来源只删受管副本与记录，绝不触碰用户源目录
+   * （install 即拷贝，用户源从未进入受管树）。清理在删目录/记录之前且等待
+   * 落盘：任一步失败可重试（记录未删即幂等可续）。
    */
   async remove(pluginId: string): Promise<PluginRemoveResult> {
     return this.enqueue(async () => {
@@ -495,6 +499,8 @@ export class PluginPackageManager {
         throw new HelmError('unknown_plugin_package', `插件 ${pluginId} 没有受管安装记录（手放置入目录的插件请直接删除目录）`, 404, { pluginId });
       }
       const { wasEnabled } = await this.host.removeManagedPlugin(pluginId);
+      // purge 等待 DELETE 真实落盘后才 resolve：失败在此显式拒绝，目录与
+      // 安装记录保持原样（记录未删即幂等可重试）。
       await this.host.purgePluginPersistentData(pluginId);
       const target = record.installPath;
       assertInsideDataDir(this.pluginsDir(), target);

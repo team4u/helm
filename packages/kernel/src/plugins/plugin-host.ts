@@ -993,8 +993,10 @@ export class PluginHost {
         }
         return { wasEnabled };
       },
-      purgePluginPersistentData: (pluginId) => {
-        this.docRegistry.purgePlugin(pluginId);
+      purgePluginPersistentData: async (pluginId) => {
+        // 等待 DELETE 真实落盘后才 resolve；持久化失败显式 reject（remove
+        // 据此不删目录与安装记录，保留受管记录以便重试）。
+        await this.docRegistry.purgePlugin(pluginId);
       },
       listSummaries: () => this.list(),
     };

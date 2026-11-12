@@ -467,9 +467,19 @@ export class PluginDocRegistry {
    * 在插件实例注销之后调用（不再经过句柄守卫）；与 removePlugin 不同，本方法
    * 真正清除底层持久数据，重新安装同 ID 插件不会读回旧数据。sessionStore 未
    * 接线时该插件不可能存在会话文档数据，跳过即无数据可删（非降级）。
+   *
+   * 两个 deletePlugin 均入队后等待各存储 flush：任一底层 DELETE 落盘失败时
+   * 显式 reject（调用方据此阻断删目录/删记录，保留安装记录以便重试），绝不
+   * 在未落盘前虚称清理成功。生产接线中两个端口共用同一 HelmStore（同一
+   * 持久化尾链），两次 flush 幂等、不产生额外等待或双重报错。
    */
-  purgePlugin(pluginId: string): void {
+  async purgePlugin(pluginId: string): Promise<void> {
+    const sessionStore = this.options.sessionStore;
     this.store.deletePlugin(pluginId);
-    this.options.sessionStore?.deletePlugin(pluginId);
+    sessionStore?.deletePlugin(pluginId);
+    await Promise.all([
+      this.store.flush(),
+      ...(sessionStore !== undefined ? [sessionStore.flush()] : []),
+    ]);
   }
 }

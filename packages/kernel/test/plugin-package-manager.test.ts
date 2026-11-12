@@ -157,6 +157,8 @@ interface TestEnv {
   registerFailIds: Set<string>
   /** 模拟启用失败：命中 id 的 enableManagedPlugin 抛错。 */
   enableFailIds: Set<string>
+  /** 模拟 purge 落盘失败：命中 id 的 purgePluginPersistentData 抛错。 */
+  purgeFailIds: Set<string>
   close(): void
 }
 
@@ -170,6 +172,7 @@ function makeEnv(runner?: PackageRunner): TestEnv {
   const updateBlockedIds = new Set<string>()
   const registerFailIds = new Set<string>()
   const enableFailIds = new Set<string>()
+  const purgeFailIds = new Set<string>()
   const host = {
     async registerManagedPlugin(dir: string) {
       hostCalls.push(`register:${dir}`)
@@ -216,8 +219,11 @@ function makeEnv(runner?: PackageRunner): TestEnv {
       summaries.delete(pluginId)
       return { wasEnabled: entry.enabled }
     },
-    purgePluginPersistentData(pluginId: string) {
+    async purgePluginPersistentData(pluginId: string) {
       hostCalls.push(`purge:${pluginId}`)
+      if (purgeFailIds.has(pluginId)) {
+        throw new HelmError('store_flush_failed_simulated', `模拟 purge 落盘失败：${pluginId}`, 500, { pluginId })
+      }
     },
     listSummaries: () => [...summaries.values()].map((s) => toSummary(summaries, s.id)),
   }
@@ -238,6 +244,7 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     updateBlockedIds,
     registerFailIds,
     enableFailIds,
+    purgeFailIds,
     close() {
       rmSync(dataDir, { recursive: true, force: true })
       rmSync(cwd, { recursive: true, force: true })
@@ -440,6 +447,37 @@ test('update：无记录 404；local 源编辑后 update 重同步版本推进',
     assert.equal(updated.changed, true)
     const managedManifest = JSON.parse(readFileSync(join(env.dataDir, 'plugins', 'up-plugin', 'plugin.json'), 'utf8')) as { version: string }
     assert.equal(managedManifest.version, '2.0.0', '受管目录应重同步到新版本')
+  } finally {
+    env.close()
+  }
+})
+
+test('remove：purge 落盘失败显式拒绝，目录与安装记录保留可重试', { timeout: 60_000 }, async () => {
+  const env = makeEnv()
+  try {
+    const src = writeLocalPlugin(env.cwd, 'purge-fail-plugin')
+    await env.manager.install(src)
+    const managed = join(env.dataDir, 'plugins', 'purge-fail-plugin')
+    assert.ok(existsSync(managed), '前置：安装目录存在')
+
+    // purge 落盘失败：remove 显式拒绝，不得继续删目录与安装记录
+    env.purgeFailIds.add('purge-fail-plugin')
+    await assert.rejects(
+      env.manager.remove('purge-fail-plugin'),
+      (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed_simulated',
+    )
+    assert.ok(existsSync(managed), 'purge 落盘失败时受管目录必须保留')
+    assert.ok(env.store.getRecord('purge-fail-plugin'), 'purge 落盘失败时安装记录必须保留')
+    // 实例已注销：重试时 removeManagedPlugin 幂等容忍
+    assert.ok(!env.registered.has('purge-fail-plugin'), '首次失败已注销实例')
+
+    // 故障恢复后重试：remove 完整成功
+    env.purgeFailIds.delete('purge-fail-plugin')
+    const removed = await env.manager.remove('purge-fail-plugin')
+    assert.equal(removed.pluginId, 'purge-fail-plugin')
+    assert.equal(removed.wasEnabled, false, '重试时实例已注销，wasEnabled 如实为 false')
+    assert.ok(!existsSync(managed), '重试成功后受管目录删除')
+    assert.equal(env.store.getRecord('purge-fail-plugin'), undefined, '重试成功后安装记录删除')
   } finally {
     env.close()
   }
