@@ -318,7 +318,7 @@ export function wrapHostApi(
             { nodeId },
           );
         })
-      : ((nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) => {
+      : (async (nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) => {
           guard(`host.openTunnel:${nodeId}`);
           const what = `host.openTunnel:${nodeId}`;
           // begin 先于建连：不能用 withTask 包住建立 Promise（那会在 resolve 后
@@ -330,27 +330,30 @@ export function wrapHostApi(
             ended = true;
             deps.tracker.end(pluginId, what);
           };
-          return backend
-            .openTunnel!(nodeId, target, signal)
-            .then(
-              (duplex) => {
-                // 建立成功：end 绑定 Duplex 生命周期（close/error 恰好一次；
-                // 极端情况下 resolve 时已销毁则立即结束）。
-                const onClosed = (): void => {
-                  duplex.removeListener('close', onClosed);
-                  duplex.removeListener('error', onClosed);
-                  end();
-                };
-                duplex.once('close', onClosed);
-                duplex.once('error', onClosed);
-                if (duplex.destroyed) onClosed();
-                return duplex;
-              },
-              (error: unknown) => {
-                end();
-                throw error;
-              },
-            );
+          try {
+            const duplex = await backend.openTunnel!(nodeId, target, signal);
+            const release = (): void => { duplex.destroy(); };
+            const onClosed = (): void => {
+              duplex.removeListener('close', onClosed);
+              duplex.removeListener('error', onClosed);
+              state.hostReleases.delete(release);
+              end();
+            };
+            duplex.once('close', onClosed);
+            duplex.once('error', onClosed);
+            try {
+              guard(what);
+            } catch (error) {
+              duplex.destroy();
+              throw error;
+            }
+            state.hostReleases.add(release);
+            if (duplex.destroyed) onClosed();
+            return duplex;
+          } catch (error) {
+            end();
+            throw error;
+          }
         }) as HelmHostOpenTunnelPort,
 
     // 3.5 nodeFetch：受控 fetch —— 每次调用先过周期守卫；返回的 fetch 每次
@@ -380,29 +383,29 @@ export function wrapHostApi(
               ended = true;
               deps.tracker.end(pluginId, what);
             };
-            return Promise.resolve(raw(input, init)).then((response) => {
+            return Promise.resolve().then(() => raw(input, init)).then((response) => {
               if (response.body === null) {
                 end();
                 return response;
               }
               const reader = response.body.getReader();
               const tracked = new ReadableStream<Uint8Array>({
-                start(controller) {
-                  const pump = (): void => {
-                    reader.read().then(
-                      ({ done, value }) => {
-                        if (done) { end(); controller.close(); return; }
-                        if (value !== undefined) controller.enqueue(value);
-                        pump();
-                      },
-                      (error: unknown) => { end(); controller.error(error); },
-                    );
-                  };
-                  pump();
+                async pull(controller) {
+                  try {
+                    const { done, value } = await reader.read();
+                    if (done) { end(); controller.close(); return; }
+                    if (value !== undefined) controller.enqueue(value);
+                  } catch (error) {
+                    end();
+                    controller.error(error);
+                  }
                 },
-                cancel(reason) {
-                  end();
-                  void reader.cancel(reason).catch(() => undefined);
+                async cancel(reason) {
+                  try {
+                    await reader.cancel(reason);
+                  } finally {
+                    end();
+                  }
                 },
               });
               return new Response(tracked, {

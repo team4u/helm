@@ -38,10 +38,7 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
     const socket = net.connect({ host, port })
     let settled = false
     const timer = setTimeout(() => {
-      if (settled) return
-      settled = true
-      socket.destroy()
-      reject(new HelmError(
+      finishErr(new HelmError(
         'node_tunnel_timeout',
         `连接 ${host}:${port} 超时（${LOCAL_TUNNEL_CONNECT_TIMEOUT_MS}ms）`,
         504,
@@ -96,32 +93,46 @@ function tlsOverTunnel(tunnel: Duplex, host: string, signal?: AbortSignal): Prom
     return Promise.reject(new HelmError('aborted', 'TLS 握手已取消', 499, { host }))
   }
   return new Promise<Duplex>((resolve, reject) => {
-    const secure = tls.connect({ socket: tunnel, servername: host })
-    const timer = setTimeout(() => {
+    // IP 参与证书身份校验，但不能放进仅允许 DNS 名称的 SNI 扩展。
+    const secure = tls.connect({ socket: tunnel, host, ...(net.isIP(host) === 0 ? { servername: host } : {}) })
+    let settled = false
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+    }
+    const fail = (error: HelmError): void => {
+      if (settled) return
+      settled = true
+      cleanup()
       secure.destroy()
-      reject(new HelmError('node_tunnel_timeout', `TLS 握手超时（${host}）`, 504, { host }))
+      reject(error)
+    }
+    const timer = setTimeout(() => {
+      fail(new HelmError('node_tunnel_timeout', `TLS 握手超时（${host}）`, 504, { host }))
     }, LOCAL_TUNNEL_CONNECT_TIMEOUT_MS)
     timer.unref?.()
     const onAbort = (): void => {
-      secure.destroy()
-      reject(new HelmError('aborted', 'TLS 握手已取消', 499, { host }))
+      fail(new HelmError('aborted', 'TLS 握手已取消', 499, { host }))
     }
     signal?.addEventListener('abort', onAbort, { once: true })
     secure.once('secureConnect', () => {
-      clearTimeout(timer)
-      signal?.removeEventListener('abort', onAbort)
+      if (settled) return
+      settled = true
+      cleanup()
       resolve(secure)
     })
     secure.once('error', (error: Error) => {
-      clearTimeout(timer)
-      signal?.removeEventListener('abort', onAbort)
-      reject(new HelmError(
+      fail(new HelmError(
         'node_tunnel_connect_failed',
         `TLS 握手失败（${host}）：${error.message}`,
         502,
         { host },
       ))
     })
+    secure.once('close', () => {
+      fail(new HelmError('node_tunnel_closed', `TLS 握手期间连接关闭（${host}）`, 502, { host }))
+    })
+    if (signal?.aborted) onAbort()
   })
 }
 
@@ -132,6 +143,8 @@ function pipeRequestBody(request: Request, req: http.ClientRequest): void {
   nodeStream.on('error', (error) => {
     req.destroy(error instanceof Error ? error : new Error(String(error)))
   })
+  // 上游提前响应或请求被取消时，停止读取调用者的上传流。
+  req.once('close', () => nodeStream.destroy())
   nodeStream.pipe(req)
 }
 
@@ -205,8 +218,8 @@ export async function tunnelFetch(
     headers['accept-encoding'] = headers['accept-encoding'] ?? 'identity'
     const req = http.request(
       {
-        // createConnection 存在时 node:http 不会构建 Agent 连接池；
-        // false 明确禁用默认 agent（类型层窄化为 Agent 仅绕过联合签名）。
+        // createConnection 与缺省 agent 组合直接使用此流；不能使用
+        // agent:false，它会另外创建 Agent 并要求流实现 net.Socket 方法。
         createConnection: () => tunnel,
         agent: undefined,
         protocol: 'http:',

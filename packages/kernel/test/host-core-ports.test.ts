@@ -15,7 +15,7 @@ import { PassThrough } from 'node:stream'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HelmError, type ConversationSummary, type PluginDefinition } from '@helm/protocol'
+import { HelmError, type ConversationSummary, type HelmHostApi, type PluginDefinition } from '@helm/protocol'
 import {
   PluginHost,
   type PluginDocStore,
@@ -67,6 +67,7 @@ function makeBackend(over: {
   subscribeDelayMs?: number
   /** openTunnel 桩（提供即接线 ctx.host.openTunnel）。 */
   openTunnel?: OpenTunnelStub
+  nodeFetch?: (nodeId: string) => typeof fetch
 }): PluginHostBackend {
   const calls = over.nodeIpcCalls ?? { subscribeStarted: [], stopCalls: 0 }
   return {
@@ -154,6 +155,7 @@ function makeBackend(over: {
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     emitEvent: () => {},
+    ...(over.nodeFetch === undefined ? {} : { nodeFetch: over.nodeFetch }),
     ...(over.openTunnel !== undefined
       ? {
           openTunnel: ((nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) => {
@@ -372,6 +374,61 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     await host.unregister('p:tunnel').catch(() => {})
     await host.unregister('p:tunnel2').catch(() => {})
     void host.dispose()
+  })
+
+  await t.test('nodeFetch：慢消费者保留背压，取消后释放任务，后端同步抛错不泄漏计数', { timeout: 60_000 }, async () => {
+    let pulls = 0
+    let cancelled = false
+    const raw = (() => Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1
+        controller.enqueue(new Uint8Array(32))
+        if (pulls === 64) controller.close()
+      },
+      cancel() { cancelled = true },
+    }, { highWaterMark: 0 })))) as typeof fetch
+    const backend = makeBackend({ nodeFetch: () => raw })
+    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+    let api!: HelmHostApi
+    await host.register({ id: 'p:fetch-flow', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
+    try {
+      const response = await api.nodeFetch('remote-1')('http://example.test')
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      assert.ok(pulls <= 1, `未消费时不可持续读取响应（实际 pull ${pulls} 次）`)
+      await assert.rejects(host.disable('p:fetch-flow'), { code: 'plugin_has_live_tasks' })
+      await response.body!.cancel()
+      assert.equal(cancelled, true)
+      await host.disable('p:fetch-flow')
+
+      const failure = new Error('同步 fetch 失败')
+      backend.nodeFetch = () => (() => { throw failure }) as typeof fetch
+      await host.register({ id: 'p:fetch-throw', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
+      await assert.rejects(api.nodeFetch('remote-1')('http://example.test'), failure)
+      await host.disable('p:fetch-throw')
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  await t.test('openTunnel：宿主 dispose 销毁活动及建立后迟到的 Duplex', { timeout: 60_000 }, async () => {
+    for (const delayMs of [0, 20]) {
+      const stub: OpenTunnelStub = { calls: [], delayMs, duplexes: [], failures: [] }
+      const host = new PluginHost({ dataDir, host: makeBackend({ openTunnel: stub }), docs: new MemoryDocStore() })
+      let api!: HelmHostApi
+      await host.register({ id: `p:tunnel-dispose-${delayMs}`, definePlugin(ctx) { api = ctx.host } }, { enabled: true })
+      const opening = api.openTunnel('local', { port: 9000 })
+      if (delayMs === 0) {
+        const duplex = await opening
+        await host.dispose()
+        assert.equal(duplex.destroyed, true)
+      } else {
+        const rejected = assert.rejects(opening, (error: unknown) =>
+          error instanceof HelmError && (error.code === 'plugin_host_disposed' || error.code === 'plugin_context_expired'))
+        await host.dispose()
+        await rejected
+        assert.equal(stub.duplexes[0]?.destroyed, true)
+      }
+    }
   })
 
   await t.test('onUpdate：partial 全串转发 output；结算后迟到 partial 静默丢弃', async () => {

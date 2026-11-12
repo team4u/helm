@@ -182,6 +182,8 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
   // **底座按会话靶点缓存**：仅 envForTarget（带 conversationId）使用——
   // 会话生命周期有界（evictConversation 释放）。无会话靶点每次新建。
   const bases = new Map<string, ExecutionEnv>()
+  const closing = new AbortController()
+  const localTunnels = new Set<Duplex>()
   const registry = new NodeRegistry({
     authenticate: options.authenticate ?? (() => false),
     ...(options.heartbeatIntervalMs === undefined ? {} : { heartbeatIntervalMs: options.heartbeatIntervalMs }),
@@ -356,9 +358,20 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       if (signal?.aborted) {
         throw new HelmError('aborted', '隧道建立已取消', 499, { nodeId })
       }
-      // local：进程内 net.connect 直连（与远端同签名同语义；host 缺省 127.0.0.1）。
+      if (closing.signal.aborted) {
+        throw new HelmError('node_offline', '节点隧道服务已关闭', 409, { nodeId })
+      }
+      // local 也必须参与关停：包括 await connect 期间尚未返回的 socket。
       if (nodeId === 'local') {
-        return await connectLocalTunnel(host ?? '127.0.0.1', port, signal)
+        const connectSignal = signal === undefined ? closing.signal : AbortSignal.any([signal, closing.signal])
+        const duplex = await connectLocalTunnel(host ?? '127.0.0.1', port, connectSignal)
+        if (closing.signal.aborted || signal?.aborted) {
+          duplex.destroy()
+          throw new HelmError('aborted', '隧道建立已取消', 499, { nodeId })
+        }
+        localTunnels.add(duplex)
+        duplex.once('close', () => localTunnels.delete(duplex))
+        return duplex
       }
       return await registry.openTunnel(nodeId, { ...(host === undefined ? {} : { host }), port }, signal)
     },
@@ -411,6 +424,9 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
     },
 
     async dispose(): Promise<void> {
+      closing.abort()
+      for (const duplex of localTunnels) duplex.destroy()
+      localTunnels.clear()
       // 先关闭节点连接，让在途请求按未知终态结束；离线清理不等待重连。
       await registry.close()
       // 再逐靶点硬清理（dispose 是关停语义，杀在途命令是预期的；Remote 的
