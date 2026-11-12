@@ -16,6 +16,12 @@ import {
   type ProviderModelItem,
 } from './model-center-model.js'
 
+/**
+ * 无过滤且未展开时最多渲染的模型胶囊数（首帧 DOM 上限）。
+ * 启用中的模型无论排序位置一律保留，避免 OpenRouter 数百模型一次性铺满抽屉。
+ */
+const CHIP_RENDER_LIMIT = 80
+
 export interface ModelDetailDrawerProps {
   provider: ProviderItem | null
   open: boolean
@@ -112,6 +118,21 @@ export function ModelDetailDrawer({
     )
   }, [models, modelFilter])
 
+  const hasModelFilter = modelFilter.trim() !== ''
+
+  // 轻量截断：无过滤且未展开时只渲染前 CHIP_RENDER_LIMIT 个胶囊，启用中的模型
+  // 无论排序位置都追加保留；有过滤词（便于搜索定位）或已展开时完整渲染。
+  const visibleModels = useMemo(() => {
+    if (hasModelFilter || isExpanded) return filteredModels
+    if (filteredModels.length <= CHIP_RENDER_LIMIT) return filteredModels
+    const head = filteredModels.slice(0, CHIP_RENDER_LIMIT)
+    const headIds = new Set(head.map((m) => m.id))
+    const enabledTail = filteredModels.filter((m) => m.enabled && !headIds.has(m.id))
+    return enabledTail.length > 0 ? [...head, ...enabledTail] : head
+  }, [filteredModels, hasModelFilter, isExpanded])
+
+  const hiddenModelCount = filteredModels.length - visibleModels.length
+
   const handleToggleModel = (modelId: string) => {
     setModels((prev) =>
       prev.map((item) =>
@@ -120,12 +141,24 @@ export function ModelDetailDrawer({
     )
   }
 
+  // 批量启停：无过滤词时作用于全量；有过滤词时仅作用于当前匹配结果，
+  // 不影响搜索之外的模型，保存仍提交完整清单（由本地状态统一保存）。
   const handleSelectAll = () => {
-    setModels((prev) => prev.map((item) => ({ ...item, enabled: true })))
+    const matchedIds = hasModelFilter ? new Set(filteredModels.map((m) => m.id)) : null
+    setModels((prev) =>
+      prev.map((item) =>
+        matchedIds === null || matchedIds.has(item.id) ? { ...item, enabled: true } : item,
+      ),
+    )
   }
 
   const handleClearAll = () => {
-    setModels((prev) => prev.map((item) => ({ ...item, enabled: false })))
+    const matchedIds = hasModelFilter ? new Set(filteredModels.map((m) => m.id)) : null
+    setModels((prev) =>
+      prev.map((item) =>
+        matchedIds === null || matchedIds.has(item.id) ? { ...item, enabled: false } : item,
+      ),
+    )
   }
 
   // 连通性测试
@@ -489,17 +522,21 @@ export function ModelDetailDrawer({
                               type="button"
                               className="text action"
                               onClick={handleSelectAll}
-                              title="全部启用"
+                              title={hasModelFilter ? '启用当前过滤匹配的模型' : '全部启用'}
                             >
-                              全部启用
+                              {hasModelFilter
+                                ? `启用匹配项（${filteredModels.length}）`
+                                : '全部启用'}
                             </button>
                             <button
                               type="button"
                               className="text action"
                               onClick={handleClearAll}
-                              title="全部停用"
+                              title={hasModelFilter ? '停用当前过滤匹配的模型' : '全部停用'}
                             >
-                              全部停用
+                              {hasModelFilter
+                                ? `停用匹配项（${filteredModels.length}）`
+                                : '全部停用'}
                             </button>
                           </div>
                         </div>
@@ -510,12 +547,12 @@ export function ModelDetailDrawer({
                           role="group"
                           aria-label="选择启用的模型"
                         >
-                          {filteredModels.length === 0 ? (
+                          {visibleModels.length === 0 ? (
                             <span className="text-xs text-subtle" style={{ padding: '6px 8px' }}>
                               未找到匹配的模型
                             </span>
                           ) : (
-                            filteredModels.map((model) => {
+                            visibleModels.map((model) => {
                               const isChecked = Boolean(model.enabled)
                               return (
                                 <button
@@ -551,7 +588,13 @@ export function ModelDetailDrawer({
                             aria-expanded={isExpanded}
                             title={isExpanded ? '折叠列表' : '展开全部'}
                           >
-                            <span>{isExpanded ? '折叠列表' : '展开全部'}</span>
+                            <span>
+                              {isExpanded
+                                ? '折叠列表'
+                                : hiddenModelCount > 0
+                                  ? `展开全部（省略 ${hiddenModelCount} 个）`
+                                  : '展开全部'}
+                            </span>
                             <HelmIcon name={isExpanded ? 'chevron-up' : 'chevron-down'} size={12} />
                           </button>
                         )}
