@@ -86,6 +86,8 @@ export interface ModelCatalogEntry {
   provider: string
   modelId: string
   available: boolean
+  /** 用户显式禁用该模型（目录标注用；available 仍表示凭据可用，两者独立）。 */
+  disabled?: boolean
 }
 
 /** `GET /api/models` 完整目录：模型列表 + 各模型思考档位（off/minimal/low/medium/high/xhigh/max）。 */
@@ -125,6 +127,17 @@ export interface ModelProvidersRefreshResult {
   models: ModelCatalogEntry[]
   /** 刷新后的最新供应商目录摘要。 */
   providerCatalog: ModelProviderSummary[]
+}
+
+/** `PUT /api/models/filter` 请求体：按 provider 设置显式禁用的模型 ID 集（空数组 = 清空该 provider 的全部禁用项；provider 缺省 = 清空全部）。 */
+export interface SetModelFilterBody {
+  provider?: string
+  disabledModels: string[]
+}
+
+/** `PUT /api/models/filter` 响应：更新后的完整模型目录。 */
+export interface SetModelFilterResult {
+  catalog: ModelCatalog
 }
 
 /**

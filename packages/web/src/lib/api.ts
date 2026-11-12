@@ -37,6 +37,7 @@ import type {
   PublicPluginDoc,
   PublicPluginSessionDoc,
   SearchHit,
+  SetModelFilterBody,
   SkillSummary,
   ConversationWithdrawRequest,
   ConversationWithdrawResponse,
@@ -358,6 +359,8 @@ export interface ModelDescriptor {
   provider: string
   modelId: string
   available: boolean
+  /** 用户显式禁用（目录标注；available 仍表示凭据可用，两者独立）。 */
+  disabled?: boolean
   label?: string
   /** 该模型支持的思考档位（缺省仅 off）。 */
   thinkingLevels: string[]
@@ -397,6 +400,7 @@ export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
       provider: entry.provider,
       modelId: entry.modelId,
       available: entry.available,
+      ...(entry.disabled === true ? { disabled: true } : {}),
       thinkingLevels: Array.isArray(levels) && levels.every((level) => typeof level === 'string') && levels.length > 0 ? levels as string[] : ['off'],
     }
   })
@@ -436,6 +440,8 @@ export const assetsApi = {
   listModelProviders: () => apiRequest<ModelProviderSummary[]>('GET', '/api/models/providers'),
   refreshModels: (providers?: string[]) =>
     apiRequest<ModelProvidersRefreshResult>('POST', '/api/models/refresh', providers && providers.length > 0 ? { providers } : {}),
+  setModelFilter: (body: SetModelFilterBody) =>
+    apiRequest<{ ok: boolean; catalog: ModelCatalogInfo }>('PUT', '/api/models/filter', body),
 
   listSkills: () => apiRequest<SkillSummary[]>('GET', '/api/skills'),
   readSkill: (id: string, path?: string) => {

@@ -129,6 +129,53 @@ test('summarizeProviders: 正确统计供应商总数与已配置数', { timeout
   assert.equal(summary.configured, 1)
 })
 
+test('buildMergedProviders: 目录中 disabled 的模型融合后显示为未勾选，available 语义独立', { timeout: 60_000 }, () => {
+  const credentials = [{ id: 'faux', configured: true }]
+  const catalogModels: ModelDescriptor[] = [
+    {
+      id: 'faux/faux-1',
+      provider: 'faux',
+      modelId: 'faux-1',
+      available: true,
+      thinkingLevels: ['off'],
+      label: 'Faux 1',
+    },
+    {
+      id: 'faux/faux-2',
+      provider: 'faux',
+      modelId: 'faux-2',
+      available: true,
+      disabled: true,
+      thinkingLevels: ['off'],
+      label: 'Faux 2',
+    },
+    {
+      id: 'faux/faux-3',
+      provider: 'faux',
+      modelId: 'faux-3',
+      available: false,
+      disabled: true,
+      thinkingLevels: ['off'],
+      label: 'Faux 3',
+    },
+  ]
+
+  const merged = buildMergedProviders(
+    [{ id: 'faux', name: 'Faux', configured: false, modelsCount: 0 }],
+    credentials,
+    [],
+    catalogModels,
+  )
+  const faux = merged.find((p) => p.id === 'faux')
+  assert.ok(faux)
+  const byId = new Map((faux.models ?? []).map((m) => [m.id, m]))
+  // 目录 disabled: true -> 融合后未勾选（即使凭据可用）。
+  assert.equal(byId.get('faux-1')?.enabled, true)
+  assert.equal(byId.get('faux-2')?.enabled, false)
+  // 凭据不可用叠加禁用：同样未勾选。
+  assert.equal(byId.get('faux-3')?.enabled, false)
+})
+
 test('buildMergedProviders: 正确与凭证、自定义网关及远程目录模型融合', { timeout: 60_000 }, () => {
   const credentials = [{ id: 'anthropic', configured: true }]
   const gateways: ProviderConfig[] = [

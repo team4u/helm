@@ -276,6 +276,8 @@ export interface KernelRuntimeLike {
 
   search(query: string): Promise<SearchHit[]> | SearchHit[]
   listModels(): Promise<ModelCatalog> | ModelCatalog
+  /** 设置模型禁用集（PUT /api/models/filter）；未实现时 HTTP 501。 */
+  setDisabledModels?(provider: string | undefined, disabledModels: string[]): Promise<ModelCatalog>
   /** 设置全局默认模型与思考档位（config.json）；空串清除。未实现时 HTTP 501。 */
   setDefaultModel?(model?: string, thinkingLevel?: string): Promise<void>
   /** Profile 保存后同步绑定会话的模型与思考档位。 */

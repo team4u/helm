@@ -647,6 +647,11 @@ export class KernelRuntime {
     return this.modelsRegistry.listModels()
   }
 
+  /** 设置模型禁用集（PUT /api/models/filter）：undefined provider 清空全部。 */
+  async setDisabledModels(provider: string | undefined, disabledModels: string[]): Promise<ModelCatalog> {
+    return this.modelsRegistry.setDisabledModels(provider, disabledModels)
+  }
+
   async setDefaultModel(model?: string, thinkingLevel?: string): Promise<void> {
     const validateLevel = (level: string) => {
       if (!THINKING_LEVELS.has(level)) {

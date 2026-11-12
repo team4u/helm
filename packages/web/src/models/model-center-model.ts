@@ -330,13 +330,13 @@ export function buildMergedProviders(
     const hasAvailableModel = Boolean(remoteModels && remoteModels.some((m) => m.available))
     p.configured = Boolean(p.configured || isConfiguredByKey || hasAvailableModel)
 
-    // 5. 聚合实时目录模型并更新模型数量
+    // 5. 聚合实时目录模型并更新模型数量（disabled 融合：目录中标记禁用的模型未勾选）
     if (remoteModels && remoteModels.length > 0) {
       p.modelsCount = remoteModels.length
       p.models = remoteModels.map((m) => ({
         id: m.modelId,
         name: m.label || m.modelId,
-        enabled: Boolean(m.available),
+        enabled: Boolean(m.available) && m.disabled !== true,
         tags: m.thinkingLevels && m.thinkingLevels.length > 1 ? ['思考模型'] : undefined,
       }))
     }

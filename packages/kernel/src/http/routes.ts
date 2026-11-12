@@ -470,6 +470,28 @@ async function route(
     const catalog = await kernel.listModels()
     return jsonOk(redactor, { ok: true, defaultModel: catalog.defaultModel ?? '', defaultThinkingLevel: catalog.defaultThinkingLevel ?? '' })
   }
+  if (head === 'models' && second === 'filter' && third === undefined && method === 'PUT') {
+    if (kernel.setDisabledModels === undefined) {
+      throw new HelmError('not_implemented', '当前 runtime 未提供模型禁用集设置', 501)
+    }
+    // 空 body / {} 均需校验：{ provider?: string; disabledModels: string[] }。
+    const raw = await readOptionalJsonBody(ctx.request)
+    if (raw === null || raw === undefined || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new HelmError('validation_error', '请求体需为 JSON 对象 { provider?: string; disabledModels: string[] }', 400)
+    }
+    const body = raw as Record<string, unknown>
+    rejectUnknownKeys(body, new Set(['provider', 'disabledModels']))
+    const provider = body['provider']
+    if (provider !== undefined && typeof provider !== 'string') {
+      throw new HelmError('validation_error', 'provider 必须为字符串（providerId；缺省清空全部禁用项）', 400)
+    }
+    const disabledModels = body['disabledModels']
+    if (!Array.isArray(disabledModels) || !disabledModels.every((id) => typeof id === 'string')) {
+      throw new HelmError('validation_error', 'disabledModels 必须为字符串数组（该 provider 的完整禁用集，全量替换）', 400)
+    }
+    const catalog = await kernel.setDisabledModels(provider as string | undefined, disabledModels as string[])
+    return jsonOk(redactor, { ok: true, catalog })
+  }
   if (head === 'models' && second === 'refresh' && third === undefined && method === 'POST') {
     // 空 body / {} 均合法（刷新全部）；provider 单选、providers 多选、force 可选。
     const raw = await readOptionalJsonBody(ctx.request)

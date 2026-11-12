@@ -170,7 +170,8 @@ export function ModelCenter({
     }
   }
 
-  // 凭证与模型配置保存
+  // 凭证与模型配置保存：凭据与模型启停（全量替换语义）分两次提交；
+  // 后端目录不存在的静态预设供应商跳过 filter 写入（目录无从标注，写了也无意义）。
   const handleSave = async (
     providerId: string,
     data: { apiKey?: string; baseUrl?: string; models?: ProviderModelItem[] },
@@ -180,18 +181,26 @@ export function ModelCenter({
       return
     }
 
+    const provider = providers.find((p) => p.id === providerId)
+    const filterEligible = Boolean(provider && (provider.dynamic || provider.custom || provider.pluginId || provider.baseUrl))
+
     try {
       if (data.apiKey) {
         await assetsApi.setCredential(providerId, data.apiKey)
+      }
+      if (data.models && filterEligible) {
+        // 全量替换：当前未勾选的模型 id 即该 provider 的完整禁用集（与后端语义一致）。
+        const disabledModels = data.models.filter((m) => !m.enabled).map((m) => m.id)
+        await assetsApi.setModelFilter({ provider: providerId, disabledModels })
       }
       store.pushNotice?.({
         type: 'notification',
         level: 'info',
         title: '供应商配置已更新',
-        body: `${providerId} 凭证配置已成功持久化。`,
+        body: `${providerId} 凭证与模型清单配置已成功持久化。`,
       })
       if (store.refreshAssets) {
-        void store.refreshAssets()
+        await store.refreshAssets()
       }
     } catch (err) {
       store.pushNotice?.({

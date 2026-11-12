@@ -553,7 +553,7 @@ export async function completeConversationTextHelper(
   deps: {
     store: HelmStore
     conversations: { resolveEffectiveModel(modelOverride?: string, profileId?: string): Promise<string | undefined> }
-    modelsRegistry: { models: Models }
+    modelsRegistry: { models: Models; isModelDisabled(providerId: string, modelId: string): boolean }
     stash: { redact(text: string): string }
   },
   input: {
@@ -577,6 +577,9 @@ export async function completeConversationTextHelper(
   const model = deps.modelsRegistry.models.getModel(ref.provider, ref.modelId)
   if (model === undefined) {
     throw new HelmError('model_not_found', `生效模型 '${effective}' 不在当前模型集合中（可能已热重载移除）`, 409, { model: effective })
+  }
+  if (deps.modelsRegistry.isModelDisabled(ref.provider, ref.modelId)) {
+    throw new HelmError('model_disabled', `模型 ${ref.provider}/${ref.modelId} 已被禁用，无法执行文本补全`, 409, { model: effective })
   }
   input.signal?.throwIfAborted()
   const message = await deps.modelsRegistry.models.completeSimple(

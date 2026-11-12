@@ -461,7 +461,7 @@ export function ModelDetailDrawer({
                     </div>
 
                     <p className="text-xs text-subtle" style={{ margin: '4px 0 10px' }}>
-                      点击胶囊药丸切换模型启用状态，未启用的模型将被内核路由层过滤屏蔽。
+                      点击胶囊药丸切换模型启用状态，未启用的模型将在目录中标记停用，且会话无法选用。
                     </p>
 
                     {models.length === 0 ? (

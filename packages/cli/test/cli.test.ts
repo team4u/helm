@@ -590,6 +590,64 @@ test('search、models、plugins、actions list、status', { timeout: 60_000 }, a
   }
 })
 
+test('models filter：查看禁用清单 / --disable 全量替换 / --clear 清空（PUT /api/models/filter）', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const catalog = {
+    models: [
+      { provider: 'faux', modelId: 'faux-1', available: true },
+      { provider: 'faux', modelId: 'faux-2', available: true, disabled: true },
+    ],
+    thinkingLevels: {},
+  }
+  const hub = await startHub({
+    'GET /api/models': () => ({ body: catalog }),
+    'PUT /api/models/filter': (body) => ({ body: { ok: true, catalog } }),
+  })
+  const env = makeEnv(hub.url, dir)
+  try {
+    // 无参数：展示当前目录中 disabled 的模型（人类可读分组展示）。
+    const listHuman = await run(['models', 'filter'], env)
+    assert.equal(listHuman.code, 0, listHuman.err)
+    assert.match(listHuman.out, /faux\/faux-2/)
+
+    // 无参数 --json：输出完整 catalog。
+    const listJson = await run(['models', 'filter', '--json'], env)
+    assert.equal(listJson.code, 0, listJson.err)
+    assert.deepEqual(JSON.parse(listJson.out), catalog)
+
+    // --provider + --disable（可重复）：全量替换该 provider 的禁用集。
+    const disable = await run([
+      'models', 'filter', '--provider', 'faux',
+      '--disable', 'faux-2', '--disable', 'faux-1', '--json',
+    ], env)
+    assert.equal(disable.code, 0, disable.err)
+    const lastPut = hub.recorded.hits.at(-1)
+    assert.equal(lastPut?.method, 'PUT')
+    assert.equal(lastPut?.path, '/api/models/filter')
+    assert.deepEqual(lastPut?.body, { provider: 'faux', disabledModels: ['faux-2', 'faux-1'] })
+
+    // --provider + --clear：置空该 provider 的禁用集。
+    const clear = await run(['models', 'filter', '--provider', 'faux', '--clear', '--json'], env)
+    assert.equal(clear.code, 0, clear.err)
+    assert.deepEqual(hub.recorded.hits.at(-1)?.body, { provider: 'faux', disabledModels: [] })
+
+    // 缺省 --clear：清空全部（无 provider 键）。
+    const clearAll = await run(['models', 'filter', '--clear', '--json'], env)
+    assert.equal(clearAll.code, 0, clearAll.err)
+    assert.deepEqual(hub.recorded.hits.at(-1)?.body, { disabledModels: [] })
+
+    // 无 --provider 携带 --disable：显式拒绝（服务端同样 400，CLI 前置拦截）。
+    const noProvider = await run(['models', 'filter', '--disable', 'faux-1'], env)
+    assert.notEqual(noProvider.code, 0)
+
+    // --clear 与 --disable 互斥。
+    const mutex = await run(['models', 'filter', '--provider', 'faux', '--clear', '--disable', 'faux-1'], env)
+    assert.notEqual(mutex.code, 0)
+  } finally {
+    await hub.close()
+  }
+})
+
 test('events watch：SSE snapshot + 增量，--json 每行输出', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
   const snapshot = {
