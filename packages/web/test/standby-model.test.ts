@@ -292,6 +292,11 @@ test('standbyDraftKey：完整入口坐标无歧义，空值规范化', { timeou
   // 空串等价于未设置；主/分屏同坐标不同键
   assert.equal(standbyDraftKey({ panel: 'primary', profileId: 'p', nodeId: '', cwd: '' }), plain.replace('assistant', 'p'))
   assert.notEqual(standbyDraftKey({ panel: 'split', profileId: 'assistant', nodeId: 'r1', cwd: '/a' }), r1)
+  assert.notEqual(
+    standbyDraftKey({ panel: 'primary', profileId: 'qa-helper', nodeId: 'node', cwd: '/a' }),
+    standbyDraftKey({ panel: 'primary', profileId: 'qa', nodeId: 'helper-node', cwd: '/a' }),
+    'React 实例与草稿必须共用无歧义坐标键，不能用连字符拼接不同字段',
+  )
 })
 
 test('resetEnvStandbyDraft：清除环境并转移正文；目标已有草稿不覆盖', { timeout: 60_000 }, () => {

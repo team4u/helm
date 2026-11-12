@@ -4,6 +4,7 @@ import { ModalFocusScope } from './shell/ModalFocusScope.js'
 import { ArtifactPreviewModal } from './conversation/ArtifactPreviewModal.js'
 import { ConversationPane } from './conversation/ConversationPane.js'
 import { AgentStandbyPane } from './conversation/AgentStandbyPane.js'
+import { standbyDraftKey } from './conversation/standby-model.js'
 import { ConversationDrawer } from './conversation/ConversationDrawer.js'
 import { WorkbenchDrawer } from './conversation/WorkbenchDrawer.js'
 import { HelmStoreProvider } from './lib/HelmStoreProvider.js'
@@ -120,7 +121,7 @@ function HelmShellInner() {
           />
         ) : store.primaryTarget.kind === 'agent' ? (
           <AgentStandbyPane
-            key={`primary-agent-${store.primaryTarget.profileId}-${store.primaryTarget.nodeId ?? ''}-${store.primaryTarget.cwd ?? ''}`}
+            key={standbyDraftKey({ panel: 'primary', ...store.primaryTarget })}
             profileId={store.primaryTarget.profileId}
             nodeId={store.primaryTarget.nodeId}
             cwd={store.primaryTarget.cwd}
@@ -154,7 +155,7 @@ function HelmShellInner() {
               />
             ) : store.splitTarget.kind === 'agent' ? (
               <AgentStandbyPane
-                key={`split-agent-${store.splitTarget.profileId}-${store.splitTarget.nodeId ?? ''}-${store.splitTarget.cwd ?? ''}`}
+                key={standbyDraftKey({ panel: 'split', ...store.splitTarget })}
                 profileId={store.splitTarget.profileId}
                 nodeId={store.splitTarget.nodeId}
                 cwd={store.splitTarget.cwd}
