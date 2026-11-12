@@ -349,8 +349,6 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                 <HelmIcon name="search" size={15} />
                 <input
                   ref={inputRef}
-                  className="input"
-                  style={{ border: 'none', background: 'transparent' }}
                   aria-label="搜索消息全文、跳转会话或执行命令"
                   placeholder="搜索消息全文、跳转会话或执行命令..."
                   value={query}

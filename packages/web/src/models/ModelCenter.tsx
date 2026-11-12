@@ -273,7 +273,7 @@ export function ModelCenter({
             <div className="primary-search-box">
               <HelmIcon name="search" size={14} />
               <input
-                type="search"
+                type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="搜索供应商名称、ID 或包含的模型..."

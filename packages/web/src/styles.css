@@ -2051,26 +2051,6 @@ button,
   flex-wrap: wrap;
 }
 
-.mbulk > input,
-.model-chips-search {
-  max-width: 260px;
-  flex: 1;
-  height: 27px;
-  padding: 0 8px;
-  font-size: 11.5px;
-  border-radius: var(--radius-sm, 6px);
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  color: var(--fg);
-  outline: none;
-  transition: border-color 120ms ease;
-}
-
-.mbulk > input:focus,
-.model-chips-search:focus {
-  border-color: var(--border-focus);
-}
-
 .model-chips-actions {
   display: flex;
   align-items: center;
@@ -3285,25 +3265,48 @@ button,
   color: var(--fg);
 }
 
-/* 统一搜索输入框原语 */
+/* 统一搜索输入框原语（容器式：描边/背景/focus 高亮全部由容器提供，
+   内层 input 透明无边框，遵循搜索框统一规范） */
 .search-box {
-  position: relative;
   display: flex;
   align-items: center;
-  width: 100%;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  box-sizing: border-box;
+  transition: border-color 0.15s ease;
+}
+.search-box:focus-within {
+  border-color: var(--accent);
+  color: var(--fg);
 }
 .search-box > svg {
-  position: absolute;
-  left: 9px;
   color: var(--fg-muted);
   pointer-events: none;
   flex-shrink: 0;
 }
 .search-box > .input,
 .search-box > input {
-  padding-left: 30px;
-  width: 100%;
+  flex: 1;
   min-width: 0;
+  width: 100%;
+  height: auto;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12.5px;
+  padding: 0;
+  box-shadow: none;
+}
+.search-box > .input:focus,
+.search-box > input:focus {
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .palette-close-btn {
@@ -3572,7 +3575,28 @@ button,
  *   - input[type="text"], input[type="password"], input[type="search"], etc.
  *   - .search-input (28px height, 8px radius, var(--bg-muted) -> focus glow)
  *   - .input:disabled, .input::placeholder
- * ========================================================================== */
+ * ==========================================================================
+ *
+ * 搜索框统一规范（全站唯一搜索外观）：
+ *   - 搜索输入一律用 type="text"，禁止 type="search"（原生自带清除 X，
+ *     会与自定义清除按钮叠出双 X，且易产生双层描边/高亮套高亮）。
+ *   - 外观统一交给容器类（.search-box / .primary-search-box /
+ *   .plugin-search-box / .sidebar-search），内层 input 必须
+ *     border: none; background: transparent，避免高亮套高亮。
+ *   - 清除按钮最多一个，由容器类内的自定义按钮提供。
+ *   - 兜底：即使误用 type="search"，也强制去掉原生清除按钮。
+ */
+
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+input[type="search"]::-moz-search-clear-button {
+  display: none;
+}
 
 .input,
 .select,
@@ -3649,27 +3673,12 @@ input::placeholder {
   color: var(--fg-muted);
 }
 
-/* 独立搜索输入框原语（极简质感） */
-.search-input {
-  width: 100%;
-  height: 28px;
-  padding: 0 9px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: var(--bg-muted);
-  color: var(--fg);
-  font-size: 12.5px;
-  font-family: inherit;
-  outline: none;
-  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
-  box-sizing: border-box;
-}
-
-.search-input:focus {
-  background: var(--bg-elevated);
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
-}
+/*
+ * 注意：搜索输入框不再使用独立原语 .search-input（已删，死代码）。
+ * 搜索框一律采用容器结构：.search-box / .primary-search-box / .plugin-search-box /
+ * .sidebar-search，描边/背景/focus 高亮由容器提供，内层 input 透明无边框，
+ * 并由文件末尾的统一兑底块中和全局 input 规则（见「搜索框统一规范兑底」）。
+ */
 
 /* ==========================================================================
  * 5. 居中模态弹窗 (Modals) 与经典大深影
@@ -4078,38 +4087,68 @@ input::placeholder {
   flex-wrap: wrap;
 }
 
+/*
+ * 搜索框统一规范：与 .primary-search-box 保持一致的结构与视觉
+ * （容器提供描边/背景/focus 高亮，内层 input 透明无边框，唯一清除按钮）。
+ */
 .plugin-search-box {
-  position: relative;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  width: min(320px, 100%);
+  gap: 8px;
+  padding: 0 10px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  min-width: 260px;
+  flex: 1;
+  max-width: 420px;
   color: var(--fg-muted);
+  transition: border-color 0.15s ease;
+  box-sizing: border-box;
+}
+
+.plugin-search-box:focus-within {
+  border-color: var(--accent);
+  color: var(--fg);
 }
 
 .plugin-search-box > svg {
-  position: absolute;
-  left: 10px;
   pointer-events: none;
   color: var(--fg-muted);
+  flex-shrink: 0;
 }
 
-.plugin-search-box .input {
+.plugin-search-box .input,
+.plugin-search-box input {
+  flex: 1;
+  min-width: 0;
   width: 100%;
-  padding-left: 32px;
-  padding-right: 28px;
-  height: 32px;
+  height: auto;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
   font-size: 12.5px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  padding: 0;
+  box-shadow: none;
+}
+
+.plugin-search-box .input:focus,
+.plugin-search-box input:focus {
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .plugin-search-clear {
-  position: absolute;
-  right: 4px;
-  width: 22px;
-  height: 22px;
-  padding: 0 !important;
+  flex-shrink: 0;
+  padding: 2px;
+  height: auto;
+  color: var(--fg-subtle);
+}
+
+.plugin-search-clear:hover {
+  color: var(--fg);
 }
 
 .plugin-center-content {
@@ -5825,4 +5864,49 @@ input::placeholder {
   color: var(--fg);
   font-size: 13px;
   font-weight: 600;
+}
+
+/* ==========================================================================
+ * 搜索框统一规范兑底（必须位于全局 input 规则之后）
+ * 全局 input[type="text"] / .input 规则会给内层 input 恢复描边/背景/光圈，
+ * 导致搜索容器出现双层描边、高亮套高亮。此处统一中和：描边/背景/focus 光晕
+ * 只由搜索容器（focus-within）提供，内层 input 永远透明无边框。
+ * ========================================================================== */
+
+.search-box > input,
+.search-box > .input,
+.primary-search-box input,
+.plugin-search-box input,
+.plugin-search-box .input,
+.sidebar-search-input {
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  padding: 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+.search-box > input:focus,
+.search-box > .input:focus,
+.primary-search-box input:focus,
+.plugin-search-box input:focus,
+.plugin-search-box .input:focus,
+.sidebar-search-input:focus {
+  border-color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* 原生 search 清除按钮兑底（防止未来误用 type="search" 再出双 X） */
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+input[type="search"]::-moz-search-clear-button {
+  display: none;
 }

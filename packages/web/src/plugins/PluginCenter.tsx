@@ -192,7 +192,6 @@ export function PluginCenter({
           <HelmIcon name="search" size={14} />
           <input
             type="text"
-            className="input"
             placeholder="搜索插件名称、ID、Tool 或 Action…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}

@@ -204,7 +204,6 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
               <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
                 <HelmIcon name="search" size={13} />
                 <input
-                  className="input"
                   aria-label="搜索模型"
                   placeholder="搜索模型…"
                   value={query}

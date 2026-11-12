@@ -121,7 +121,6 @@ export function NodeCenter({
           <HelmIcon name="search" size={14} />
           <input
             type="text"
-            className="input"
             placeholder="搜索节点 ID、名称、平台架构、版本或操作系统…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}

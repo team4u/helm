@@ -321,7 +321,7 @@ function MultiSelectInner<T extends string = string>({
       {searchable && options.length > 4 && (
         <div className="helm-select-search" onClick={(e) => e.stopPropagation()}>
           <input
-            type="search"
+            type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="搜索选项..."

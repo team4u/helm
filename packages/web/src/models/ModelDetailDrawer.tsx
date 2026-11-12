@@ -474,14 +474,16 @@ export function ModelDetailDrawer({
                       <div className="models model-chips-container">
                         {/* 操作工具栏：过滤搜索与批量控制 */}
                         <div className="mbulk model-chips-toolbar">
-                          <input
-                            type="text"
-                            className="input model-chips-search"
-                            placeholder="过滤模型..."
-                            value={modelFilter}
-                            onChange={(e) => setModelFilter(e.target.value)}
-                            aria-label="过滤模型"
-                          />
+                          <div className="search-box" style={{ flex: 1, minWidth: 0, maxWidth: 260 }}>
+                            <HelmIcon name="search" size={13} />
+                            <input
+                              type="text"
+                              placeholder="过滤模型..."
+                              value={modelFilter}
+                              onChange={(e) => setModelFilter(e.target.value)}
+                              aria-label="过滤模型"
+                            />
+                          </div>
                           <div className="model-chips-actions">
                             <button
                               type="button"
