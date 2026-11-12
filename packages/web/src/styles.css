@@ -442,15 +442,6 @@ button,
   gap: 8px;
 }
 
-.sidebar-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  font-size: 14px;
-  letter-spacing: -0.01em;
-}
-
 .sidebar-scroll {
   flex: 1;
   overflow-y: auto;
@@ -671,14 +662,6 @@ button,
   gap: 6px;
 }
 
-.list-item-btn-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px;
-  font-size: 11px;
-}
-
 /* 卡片与表单 */
 .card {
   background: var(--bg-elevated);
@@ -776,15 +759,6 @@ button,
   justify-content: space-between;
   border-bottom: 1px solid var(--border);
   gap: 8px;
-}
-
-.sidebar-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  font-size: 14px;
-  letter-spacing: -0.01em;
 }
 
 .sidebar-scroll {
@@ -1886,13 +1860,13 @@ button,
  *   - .helm-select-trigger, :hover, :focus, :disabled
  *   - .helm-select-prefix, .helm-select-label, .helm-select-chevron
  *   - .dropdown-panel
- *   - .helm-select-popover, .direction-up
+ *   - .helm-select-popover
  *   - .helm-select-actions, .helm-select-action-btn, .helm-select-search
- *   - .model-drawer-tags-wrap, .model-drawer-tag, .model-drawer-tag-remove
+ *   - .model-drawer-tags-wrap, .model-drawer-tag
  *   - .helm-select-sm .helm-select-trigger, .helm-select-sm .helm-select-option
  *   - .composer-env-select .helm-select-trigger, .composer-env-select .helm-select-option
  *   - .helm-select.mono
- *   - .provider-field .helm-select, .helm-select.w-full
+ *   - .helm-select.w-full
  *   - .helm-select-option, [data-highlighted], :hover, [data-state="checked"], :disabled
  *   - .helm-select-option-icon, .helm-select-option-label, .helm-select-option-meta, .helm-select-check
  * ========================================================================== */
@@ -2008,11 +1982,6 @@ button,
   display: flex;
   flex-direction: column;
   gap: 1px;
-}
-
-.helm-select-popover.direction-up {
-  top: auto;
-  bottom: calc(100% + 4px);
 }
 
 /* 多选下拉框专用快捷条与搜索框 */
@@ -2191,8 +2160,8 @@ button,
 }
 
 /* 模型名称：严格不加粗 (font-weight: 400) */
-.mchip > span:not(.mtell):not(.badge):not(.mchip-tag):not(.mchip-check):not(.mchip-icon),
-.model-drawer-tag > span:not(.mtell):not(.badge):not(.mchip-tag):not(.mchip-check):not(.mchip-icon) {
+.mchip > span:not(.mtell):not(.badge):not(.mchip-tag):not(.mchip-check),
+.model-drawer-tag > span:not(.mtell):not(.badge):not(.mchip-tag):not(.mchip-check) {
   font-weight: 400 !important;
 }
 
@@ -2239,8 +2208,7 @@ button,
   font-weight: 400;
 }
 
-.mchip .mchip-check,
-.mchip-icon {
+.mchip .mchip-check {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2252,8 +2220,7 @@ button,
   flex-shrink: 0;
 }
 
-.mchip.on .mchip-check,
-.mchip.on .mchip-icon {
+.mchip.on .mchip-check {
   visibility: visible;
 }
 
@@ -2301,8 +2268,7 @@ button,
 }
 
 /* 展开与折叠通栏按钮 */
-.mchips-fold,
-.mchips-fold-btn {
+.mchips-fold {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2319,8 +2285,7 @@ button,
   transition: background 120ms, color 120ms, border-color 120ms;
 }
 
-.mchips-fold:hover,
-.mchips-fold-btn:hover {
+.mchips-fold:hover {
   color: var(--fg);
   background: var(--bg-subtle);
   border-color: var(--fg-muted);
@@ -2363,7 +2328,6 @@ button,
   font-family: var(--font-mono);
 }
 
-.provider-field .helm-select,
 .helm-select.w-full {
   width: 100%;
 }
@@ -3138,7 +3102,6 @@ button,
 .btn-icon-xs { width: 22px; height: 22px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
 /* 紧凑原生图标按钮（26px x 26px，圆角 7px） */
-.icon-btn,
 .composer-icon-button,
 .composer-toolbar .composer-icon-button {
   width: 26px;
@@ -3157,13 +3120,11 @@ button,
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
 }
-.icon-btn:hover:not(:disabled),
 .composer-icon-button:hover:not(:disabled),
 .composer-toolbar .composer-icon-button:hover:not(:disabled) {
   background: var(--bg-muted);
   color: var(--fg);
 }
-.icon-btn:disabled,
 .composer-icon-button:disabled,
 .composer-toolbar .composer-icon-button:disabled {
   opacity: 0.48;
@@ -3271,13 +3232,6 @@ button,
   font-size: 12.5px;
   gap: 6px;
 }
-.list-item-btn-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px;
-  font-size: 11px;
-}
 
 /* 卡片与表单 */
 .card {
@@ -3329,38 +3283,6 @@ button,
   font-weight: 600;
   font-size: 12.5px;
   color: var(--fg);
-}
-
-/* Profile 编辑器可用技能区块：Checkbox 多选行与不可用保留行 */
-.profile-skill-list {
-  gap: 4px;
-}
-.profile-skill-option {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-.profile-skill-name {
-  color: inherit;
-}
-.profile-skill-id {
-  font-size: 11px;
-  color: var(--fg-subtle);
-}
-.profile-skill-unavailable {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.profile-skill-unavailable .helm-checkbox-wrap {
-  flex: 1;
-  min-width: 0;
-}
-.profile-skill-unavailable .profile-skill-id {
-  text-decoration: line-through;
-  text-decoration-color: var(--fg-subtle);
 }
 
 /* 统一搜索输入框原语 */
@@ -3508,13 +3430,11 @@ button,
   background: var(--bg-hover);
 }
 
-.table-actions,
 .cell-actions {
   text-align: right;
   white-space: nowrap;
 }
 
-.table-actions-group,
 .row-actions-group {
   display: inline-flex;
   align-items: center;
@@ -3549,8 +3469,7 @@ button,
  * 供全屏一级主舞台、扩展插件视图（Herdr / SuperAgent / Triggers / Magpie）统一排版
  * ========================================================================== */
 
-.screen-container,
-.screen-scroll-wrap {
+.screen-container {
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -3615,58 +3534,17 @@ button,
   user-select: none;
 }
 
-.kv-val,
-.kv-value {
+.kv-val {
   color: var(--fg);
   font-variant-numeric: tabular-nums;
   word-break: break-all;
 }
 
 /* ==========================================================================
- * 通用提示横幅与通知原语 (Callout / Banner Primitives)
- * ========================================================================== */
-
-.helm-callout,
-.callout {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm, 6px);
-  font-size: 12px;
-  line-height: 1.5;
-  border: 1px solid var(--border);
-  background: var(--bg-subtle);
-  color: var(--fg);
-  word-break: break-all;
-}
-
-.callout-warn {
-  background: var(--warn-bg, rgba(234, 179, 8, 0.08));
-  border-color: var(--warn-border, rgba(234, 179, 8, 0.25));
-  color: var(--warn, #eab308);
-}
-
-.callout-error,
-.callout-err {
-  background: var(--err-bg, rgba(239, 68, 68, 0.08));
-  border-color: var(--err-border, rgba(239, 68, 68, 0.25));
-  color: var(--err, #ef4444);
-}
-
-.callout-ok,
-.callout-info {
-  background: var(--ok-bg, rgba(34, 197, 94, 0.08));
-  border-color: var(--ok-border, rgba(34, 197, 94, 0.25));
-  color: var(--ok, #22c55e);
-}
-
-/* ==========================================================================
  * 通用加载中与堆叠布局原语 (Loading & Stack Primitives)
  * ========================================================================== */
 
-.loading-state,
-.state-loading {
+.loading-state {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3861,7 +3739,6 @@ input::placeholder {
   overflow: hidden;
 }
 
-.modal-sidebar,
 .asset-modal-list {
   width: 240px;
   min-width: 240px;
@@ -3870,16 +3747,6 @@ input::placeholder {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  overflow-y: auto;
-}
-
-.modal-main,
-.asset-modal-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
   overflow-y: auto;
 }
 
@@ -3913,27 +3780,18 @@ input::placeholder {
 
 /* 弹窗常用无内联布局原语 */
 .flex-1 { flex: 1; min-width: 0; }
-.justify-end { justify-content: flex-end; }
 .flex-row { display: flex; align-items: center; gap: 6px; }
 .flex-row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .flex-row-wrap { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .flex-col { display: flex; flex-direction: column; gap: 6px; }
 .flex-col-xs { display: flex; flex-direction: column; gap: 3px; }
-.flex-shrink-0 { flex-shrink: 0; }
 .border-accent { border-color: var(--accent) !important; }
 .text-muted { font-size: 12px; color: var(--fg-muted); }
 .text-subtle { font-size: 11px; color: var(--fg-subtle); }
 .text-err { color: var(--err); }
 .nowrap { white-space: nowrap; }
 .break-word { white-space: normal; word-break: break-word; }
-.badge-clickable { cursor: pointer; height: 24px; }
 .plugin-card-header > button { flex-shrink: 0; }
-.font-semibold { font-weight: 600; }
-.profile-args-textarea {
-  min-height: 64px;
-  font-size: 12px;
-  resize: vertical;
-}
 .profile-desc-textarea {
   min-height: 72px;
   padding: 8px 10px;
@@ -3971,13 +3829,6 @@ input::placeholder {
   font-size: 11px;
   color: var(--fg-subtle);
   line-height: 1.4;
-}
-.profile-tab-content {
-  flex: 1;
-  min-height: 280px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 
 .modal-footer {
@@ -4129,10 +3980,6 @@ input::placeholder {
   animation-duration: 0.9s;
 }
 
-.entry-anchor {
-  position: relative;
-}
-
 .trace-entry {
   display: flex;
   flex-direction: column;
@@ -4263,58 +4110,6 @@ input::placeholder {
   width: 22px;
   height: 22px;
   padding: 0 !important;
-}
-
-.plugin-category-pills {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.plugin-category-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 10px;
-  border-radius: var(--radius-pill);
-  font-size: 12px;
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  transition: all 0.15s ease;
-  user-select: none;
-  outline: none;
-}
-
-.plugin-category-pill:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-  border-color: var(--border-strong);
-}
-
-.plugin-category-pill.is-active {
-  background: var(--nav-active-bg);
-  color: var(--nav-active-fg);
-  border-color: var(--accent);
-  font-weight: 500;
-}
-
-.plugin-category-pill .badge {
-  font-size: 10.5px;
-  padding: 1px 5px;
-  border-radius: var(--radius-pill);
-  background: var(--bg-subtle);
-  color: var(--fg-muted);
-  border: 1px solid var(--border);
-}
-
-.plugin-category-pill.is-active .badge {
-  background: var(--bg-elevated);
-  color: var(--nav-active-fg);
-  border-color: var(--accent);
 }
 
 .plugin-center-content {
@@ -5060,22 +4855,6 @@ input::placeholder {
   font-size: 11px;
   color: var(--fg-muted);
   user-select: none;
-}
-
-.btn-group {
-  display: inline-flex;
-}
-.btn-group .btn + .btn {
-  margin-left: -1px;
-}
-.btn-group .btn:first-child {
-  border-radius: var(--radius-xs) 0 0 var(--radius-xs);
-}
-.btn-group .btn:last-child {
-  border-radius: 0 var(--radius-xs) var(--radius-xs);
-}
-.btn-group .btn:not(:first-child):not(:last-child) {
-  border-radius: 0;
 }
 
 /* ==========================================================================

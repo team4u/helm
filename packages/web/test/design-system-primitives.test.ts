@@ -72,7 +72,7 @@ test('分段控制器原语：.segmented-control 与 .segmented-control-btn 规�
   )
 })
 
-test('左右分栏模态弹窗：.modal-body-split 与 .asset-modal-body 水平伸缩，.modal-sidebar 与 .asset-modal-list 默认宽度 240px', { timeout: 60_000 }, () => {
+test('左右分栏模态弹窗：.modal-body-split 与 .asset-modal-body 水平伸缩，.asset-modal-list 默认宽度 240px', { timeout: 60_000 }, () => {
   assert.match(
     stylesCss,
     /(\.modal-body-split|\.asset-modal-body)[^{]*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*row;/,
@@ -80,8 +80,8 @@ test('左右分栏模态弹窗：.modal-body-split 与 .asset-modal-body 水平�
   )
   assert.match(
     stylesCss,
-    /(\.modal-sidebar|\.asset-modal-list)[^{]*\{[^}]*width:\s*240px;/,
-    '必须声明 .modal-sidebar / .asset-modal-list 默认宽度 240px',
+    /(\.asset-modal-list)[^{]*\{[^}]*width:\s*240px;/,
+    '必须声明 .asset-modal-list 默认宽度 240px',
   )
   assert.match(
     responsiveCss,
@@ -90,8 +90,8 @@ test('左右分栏模态弹窗：.modal-body-split 与 .asset-modal-body 水平�
   )
   assert.match(
     responsiveCss,
-    /(\.modal-sidebar|\.asset-modal-list)[^{]*\{[^}]*width:\s*100%\s*!important;/,
-    'responsive.css 必须在窄屏下支持 .modal-sidebar / .asset-modal-list 展开为 100% 宽度',
+    /(\.asset-modal-list)[^{]*\{[^}]*width:\s*100%\s*!important;/,
+    'responsive.css 必须在窄屏下支持 .asset-modal-list 展开为 100% 宽度',
   )
 })
 
@@ -228,8 +228,8 @@ test('全平台设计系统原语契约：主框架统一提供表格、Screen �
   )
   assert.match(
     stylesCss,
-    /\.helm-callout[\s\S]*?\{/,
-    '主框架必须提供 .helm-callout 与 .callout 横幅通知原语',
+    /\.callout--warning[\s\S]*?\{/,
+    '主框架必须提供 .callout 与 .callout--warning 横幅通知原语',
   )
   assert.match(
     stylesCss,

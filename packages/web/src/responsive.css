@@ -175,7 +175,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .modal-body { min-width: 0; }
   .modal-body-split,
   .asset-modal-body { flex-direction: column !important; }
-  .modal-sidebar,
   .asset-modal-list { width: 100% !important; min-width: 0 !important; max-width: none !important; max-height: 120px; flex-shrink: 0; }
   .form-grid { grid-template-columns: minmax(0, 1fr) !important; gap: 6px; }
   .config-fields > div { grid-template-columns: minmax(0, 1fr) !important; }
