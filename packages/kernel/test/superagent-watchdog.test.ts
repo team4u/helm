@@ -50,6 +50,7 @@ import {
 } from '../src/builtin-plugins/diagnostics.js'
 import {
   registerSuperAgentWatchdog,
+  TICK_COLLECT_TIMEOUT_MS,
   WATCHDOG_ALLOWED_TOOLS,
 } from '../src/builtin-plugins/superagent/watchdog.js'
 import type {
@@ -1497,6 +1498,35 @@ test('外部采集监听器抛错：tick 显式失败并通知，不静默跳过
   // 移除坏监听器后恢复正常。
   const out = (await h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {})) as { probes: number }
   assert.ok(typeof out.probes === 'number')
+})
+
+test('采集超时看护：挂死的 diagnostics.collect 监听器被有界放弃，singleflight 放行下一轮', { timeout: 60_000 }, async (t) => {
+  const h = await makeHarness({ ownership: () => 'helm' })
+  let entered = 0
+  // 挂死监听器：进入后永不 settle（模拟跨插件采集方挂死）
+  const release = h.registerExternalCollector(() => {
+    entered += 1
+    return new Promise<void>(() => {})
+  })
+  // 有界等待用 mock timers 驱动（真实 30s 不进测试）；仅 mock setTimeout，
+  // 微任务与 setImmediate 不受影响。
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const pending = h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {})
+    while (entered === 0) await new Promise((resolve) => setImmediate(resolve))
+    t.mock.timers.tick(TICK_COLLECT_TIMEOUT_MS)
+    await assert.rejects(
+      pending,
+      (err: unknown) => err instanceof HelmError && err.code === 'watchdog_collect_timeout',
+      '采集超时必须显式拒绝（不静默挂死）',
+    )
+  } finally {
+    t.mock.timers.reset()
+    release()
+  }
+  // singleflight 已结算：挂死轮不再被永久复用，下一轮巡检正常完成。
+  const out = (await h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {})) as { probes: number }
+  assert.ok(typeof out.probes === 'number' && out.probes >= 1, '超时后下一轮巡检应正常采集')
 })
 
 // ---------------------------------------------------------------------------

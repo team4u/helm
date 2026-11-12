@@ -4,7 +4,7 @@
  * 目标解析（§4.4，与 superagent trigger hook 的路由互补）：
  * - envelope.targetConversationId 优先（与第二参 targetProfileId 互斥）；
  * - 仅 targetProfileId：取该 Profile 现有会话中最低 ID；无会话则校验 Profile
- *   存在后创建新会话（绝不发给错误角色）；
+ *   存在后创建新会话（绝不发给错误角色；并发创建按 profileId 单飞合流）；
  * - 均无：保持缺省（不带 targetConversationId，由内核解析 assistant 入口，
  *   superagent trigger hook 可决定是否路由中枢）；
  * - text 传原始文本（runtime.dispatchTrigger 统一 defang 防逃逸包裹，
@@ -29,6 +29,8 @@ export function createDeliveryDispatch(options: {
   isClosing(): boolean
 }): DispatchTriggerHelper {
   const { host, profiles, isClosing } = options
+  /** per-profile 会话创建单飞（见 resolveProfileConversation 注释）。 */
+  const creationInflight = new Map<string, Promise<number>>()
   return async (event, targetProfileId) => {
     if (isClosing()) {
       throw new HelmError('runtime_closing', 'runtime 正在关闭，拒绝新的触发投递', 409, {
@@ -45,7 +47,7 @@ export function createDeliveryDispatch(options: {
       )
     }
     if (target === undefined && targetProfileId !== undefined) {
-      target = await resolveProfileConversation(host, profiles, targetProfileId)
+      target = await resolveProfileConversation(host, profiles, targetProfileId, creationInflight)
     }
     if (target !== undefined) {
       assertConversationExists(host, target)
@@ -78,11 +80,20 @@ function assertConversationExists(host: ConversationLookup, id: number): void {
   }
 }
 
-/** targetProfileId → 会话 ID：最低 ID 复用；无会话则校验存在后创建。 */
+/**
+ * targetProfileId → 会话 ID：最低 ID 复用；无会话则校验存在后创建。
+ * 创建段有 per-profileId 单飞（与内核缺省路径 resolveDefaultTriggerTarget 同
+ * 等待遇）：并发触发（多 cron job 同点指向同一新 Profile / webhook 突发）
+ * 只建一个会话，不产生后续投递永远取不到的孤儿会话。成功即清（不缓存
+ * 可被删除的会话 ID）；失败同样清缓存，允许下一次触发重试。list 为空与
+ * map 查询在同一同步段内，创建先行者必然可见（先入 store 后 resolve），
+ * 后来者要么看到新会话、要么加入在途 Promise，不会双建。
+ */
 async function resolveProfileConversation(
   host: ConversationLookup,
   profiles: ProfileLookup,
   profileId: string,
+  creationInflight: Map<string, Promise<number>>,
 ): Promise<number> {
   if (typeof profileId !== 'string' || /\s|[/\\]/.test(profileId) || profileId.length === 0 || profileId.length > 64) {
     throw new HelmError('validation_error', `targetProfileId 非法（收到：${String(profileId)}）`, 400, {})
@@ -98,9 +109,16 @@ async function resolveProfileConversation(
   }
   const existing = host.listConversations({ profileId }).sort((a, b) => a.id - b.id)
   if (existing.length > 0) return existing[0]!.id
-  const created = await host.createConversation({
+  const inflight = creationInflight.get(profileId)
+  if (inflight !== undefined) return inflight
+  const creation = host.createConversation({
     title: `触发器目标（${profileId}）`,
     profileId,
-  })
-  return created.id
+  }).then((created) => created.id)
+  creationInflight.set(profileId, creation)
+  try {
+    return await creation
+  } finally {
+    if (creationInflight.get(profileId) === creation) creationInflight.delete(profileId)
+  }
 }

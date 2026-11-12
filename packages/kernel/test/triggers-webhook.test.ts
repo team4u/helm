@@ -28,6 +28,7 @@ import { CredentialService, credentialsPath } from '../src/services/index.js'
 import { SecretStash } from '../src/services/secret-stash.js'
 import { createTriggersPlugin } from '../src/builtin-plugins/triggers.js'
 import { TRIGGERS_PLUGIN_ID, webhookSecretKey } from '../src/builtin-plugins/triggers/contracts.js'
+import { STOP_REQUEST_WAIT_MS } from '../src/builtin-plugins/triggers/webhook.js'
 
 /** POSIX 0600 断言：Windows 无 POSIX mode（NTFS 走 ACL），跳过模式位校验。 */
 async function assertCredentialsMode0600(dataDir: string): Promise<void> {
@@ -859,6 +860,58 @@ test('停用门禁：dispatch 挂起时 disable 得 409 plugin_has_live_tasks；
   const ok = await callWebhookRoute(h.host, 'hook', 'after-enable', 'topsecret')
   assert.equal(ok.status, 202)
   await h.host.dispose()
+  rmSync(h.dataDir, { recursive: true, force: true })
+})
+
+test('stop 有界等待：在途请求永不收敛时超时放行并如实记录（不挂死停用）', { timeout: 60_000 }, async (t) => {
+  const h = await makeHarness()
+  await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', { id: 'hook', secret: 'topsecret' })
+  const handler = h.host.listRoutes().find((r) => r.path.endsWith('/webhook/:id'))!.handler
+  // 慢客户端：首块可读、尾块永不到达（body 读取永久挂起，不 enqueue 不 close）
+  void (handler(
+    new Request(`http://hub${WEBHOOK_URL('hook')}`, {
+      method: 'POST',
+      headers: { 'x-helm-signature': 'sha256=' + '0'.repeat(64) },
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('partial'))
+        },
+      }),
+      duplex: 'half',
+    } as RequestInit),
+  ) as Promise<Response>)
+  // 前置：在途请求计入 liveTasks，非 force 停用被拒（同时验证登记已生效）
+  let blocked = false
+  for (let attempt = 0; attempt < 100 && !blocked; attempt++) {
+    try {
+      await h.host.disable(TRIGGERS_PLUGIN_ID)
+      break
+    } catch (err) {
+      if (err instanceof HelmError && err.code === 'plugin_has_live_tasks') blocked = true
+      else throw err
+    }
+  }
+  assert.equal(blocked, true, '前置：慢客户端请求应阻塞停用')
+
+  const errors: string[] = []
+  const originalError = console.error
+  console.error = (...args: unknown[]) => {
+    errors.push(args.map((a) => String(a)).join(' '))
+  }
+  // 有界等待用 mock timers 驱动（真实 10s 不进测试）；仅 mock setTimeout。
+  // 注：force disable 仍受 liveTasks 闸门拦截（保护不拆除在途请求）；无界等待
+  // 的真实风险面是 dispose（close 语义无条件 stop），故性此路径验证。
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const disposing = h.host.dispose()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    t.mock.timers.tick(STOP_REQUEST_WAIT_MS)
+    await disposing
+  } finally {
+    t.mock.timers.reset()
+    console.error = originalError
+  }
+  assert.ok(errors.some((line) => line.includes('未收敛')), '超时必须如实记录未收敛请求数')
   rmSync(h.dataDir, { recursive: true, force: true })
 })
 
