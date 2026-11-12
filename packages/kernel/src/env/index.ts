@@ -16,3 +16,5 @@ export type { NodeRpcResolver, RemoteExecutionEnvOptions } from './remote-env.js
 export { ExecOutputHub } from './exec-output.js'
 export { attachNodeWsGateway } from './ws-gateway.js'
 export type { NodeWsGateway, NodeWsGatewayOptions } from './ws-gateway.js'
+export { attachNodeTunnelGateway } from './ws-tunnel-gateway.js'
+export type { NodeTunnelGateway, NodeTunnelGatewayOptions } from './ws-tunnel-gateway.js'

@@ -803,6 +803,17 @@ export interface HelmHostNodeIpcPort {
 }
 
 /**
+ * 节点本机 HTTP fetch 端口（EnvFabric.nodeFetch 的插件面）：local 返回
+ * globalThis.fetch；远端仅允许 http + loopback + 显式 port，经节点透传
+ * 隧道转发，绝不回退 local。每次调用的返回函数均已纳入插件在途任务跟踪
+ * 与周期守卫（新流在停用/停止窗口拒绝）。
+ */
+export interface HelmHostNodeFetchPort {
+  /** 取目标节点的 fetch（可直接调用：fetch(input, init)）。 */
+  (nodeId: string): typeof fetch
+}
+
+/**
  * 宿主后端的插件治理端口（PluginHostBackend.plugins 的形状；类型层上拆窄：
  * 只读入口复用 HelmHostApi 既有 listPlugins/listUi 成员；写面聚合在
  * doctorPlugin/installPlugin/updatePlugin/removePlugin/enablePlugin/disablePlugin
@@ -862,6 +873,11 @@ export interface HelmHostApi {
   readonly secrets: HelmHostSecretsPort
   /** 跨节点 IPC 机制端口（EnvFabric；herdr 等外部运行时桥接用）。 */
   readonly nodeIpc: HelmHostNodeIpcPort
+  /**
+   * 节点本机 HTTP fetch（跨节点 loopback 服务访问；模型/插件经此访问目标
+   * 节点本机服务）。未接线时调用显式报 501，绝不回退 local。
+   */
+  readonly nodeFetch: HelmHostNodeFetchPort
   /**
    * 宿主插件治理端口（受管包生命周期；编排插件如 builtin:apps 消费）。
    * 后端未接线包管理器时 doctor/install/update/remove 显式 501；

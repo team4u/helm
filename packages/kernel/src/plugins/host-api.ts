@@ -301,6 +301,71 @@ export function wrapHostApi(
           },
         },
 
+    // 3.5 nodeFetch：受控 fetch —— 每次调用先过周期守卫；返回的 fetch 每次
+    // 调用（新流）入任务跟踪并再次守卫（停用/停止窗口拒绝新流）；在途跟踪
+    // 覆盖到 Response body EOF/cancel/error（响应头到达不结束任务，SSE
+    // 长流不脱离监控）。
+    nodeFetch: backend.nodeFetch === undefined
+      ? ((nodeId: string): typeof fetch => {
+          guard(`host.nodeFetch:${nodeId}`);
+          throw new HelmError(
+            'node_tunnel_not_supported',
+            `当前宿主未接线节点 fetch 端口（host.nodeFetch(${nodeId}) 不可用）`,
+            501,
+            { nodeId },
+          );
+        })
+      : ((nodeId: string): typeof fetch => {
+          guard(`host.nodeFetch:${nodeId}`);
+          const raw = backend.nodeFetch!(nodeId);
+          const what = `host.nodeFetch.call:${nodeId}`;
+          const controlled = ((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+            guard(what);
+            deps.tracker.begin(pluginId, what);
+            let ended = false;
+            const end = (): void => {
+              if (ended) return;
+              ended = true;
+              deps.tracker.end(pluginId, what);
+            };
+            return Promise.resolve(raw(input, init)).then((response) => {
+              if (response.body === null) {
+                end();
+                return response;
+              }
+              const reader = response.body.getReader();
+              const tracked = new ReadableStream<Uint8Array>({
+                start(controller) {
+                  const pump = (): void => {
+                    reader.read().then(
+                      ({ done, value }) => {
+                        if (done) { end(); controller.close(); return; }
+                        if (value !== undefined) controller.enqueue(value);
+                        pump();
+                      },
+                      (error: unknown) => { end(); controller.error(error); },
+                    );
+                  };
+                  pump();
+                },
+                cancel(reason) {
+                  end();
+                  void reader.cancel(reason).catch(() => undefined);
+                },
+              });
+              return new Response(tracked, {
+                status: response.status,
+                statusText: response.statusText,
+                headers: response.headers,
+              });
+            }, (error) => {
+              end();
+              throw error;
+            }) as ReturnType<typeof fetch>;
+          }) as typeof fetch;
+          return controlled;
+        }),
+
     // 4. secrets
     secrets: {
       get: (key) => tracked('host.secrets.get', () => backend.secrets.get(pluginId, key)),

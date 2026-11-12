@@ -8,6 +8,7 @@ export {
   RemoteExecutionEnv,
   ExecOutputHub,
   attachNodeWsGateway,
+  attachNodeTunnelGateway,
   tokenAuthenticator,
   sha256hex,
 } from './env/index.js';
@@ -24,6 +25,8 @@ export type {
   RemoteExecutionEnvOptions,
   NodeWsGateway,
   NodeWsGatewayOptions,
+  NodeTunnelGateway,
+  NodeTunnelGatewayOptions,
   sanitizeNodeHealth,
 } from './env/index.js';
 export { createProfilePlugin } from './builtin-plugins/profile.js';

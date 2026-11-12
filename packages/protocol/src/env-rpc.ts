@@ -193,7 +193,7 @@ export interface RpcLineScan {
 }
 
 export interface RpcEnvError {
-  code: RpcFileErrorCode | RpcExecutionErrorCode
+  code: RpcFileErrorCode | RpcExecutionErrorCode | NodeTunnelErrorCode
   message: string
   spillPath?: string
 }
@@ -273,6 +273,39 @@ export interface NodeIpcSubscribeInput {
   line: string
 }
 
+/** 节点透传隧道：Hub 请求节点就地把一条 WS 升级为到目标端口的字节管道。 */
+export interface NodeTunnelOpenInput {
+  /** Hub 生成的隧道 ID（randomUUID；随独立网关 hello 认证一次性消费）。 */
+  tunnelId: string
+  /** 节点本机回连目标端口（仅限节点本机 loopback 服务）。 */
+  port: number
+  /** 节点侧建连超时（毫秒）；缺省由节点实现自定。 */
+  timeoutMs?: number
+}
+
+/** 独立网关（/ws/node-tunnel）首帧 JSON 认证载荷（无 type 字段；≤ 4096 字节）。 */
+export interface NodeTunnelHello {
+  tunnelId: string
+  nodeId: string
+  /** 格式同 register：`<nodeId>:<secret>`。 */
+  token: string
+}
+
+/** 隧道错误码（RpcEnvError.code 的 string 扩展；保持向后兼容不收窄既有联合）。 */
+export type NodeTunnelErrorCode =
+  | 'aborted'
+  | 'connect_failed'
+  | 'not_found'
+  | 'permission_denied'
+  | 'timeout'
+  | 'invalid'
+  | 'unknown'
+
+/** 独立网关控制帧：成功应答或错误关停原因（首帧后不再有 JSON）。 */
+export type NodeTunnelControl =
+  | { type: 'ok' }
+  | { type: 'error'; code: NodeTunnelErrorCode; message: string }
+
 export interface NodeIpcEvent {
   subscribeId: string
   line: string
@@ -347,6 +380,11 @@ export interface NodeEnvRpcFunctions {
   nodeCheckUpgrade?(input: NodeUpgradeCheckInput): Promise<RpcResult<NodeUpgradeCheckResult>>
   /** 触发节点自升级（排空在途命令 → 拉包完整性校验 → 金丝雀启动替换守护进程 → 失败自动回滚）。 */
   nodeUpgrade?(input: NodeUpgradeRpcInput): Promise<RpcResult<NodeUpgradeResult>>
+
+  /** 请求节点监听本机端口并等待独立网关回连（字节管道经 /ws/node-tunnel 建立后直通）。 */
+  nodeTunnelOpen?(input: NodeTunnelOpenInput): Promise<RpcResult<null>>
+  /** 取消在途隧道建连（Hub 侧取消/超时后尽力通知节点释放就绪监听；必容错）。 */
+  nodeTunnelAbort?(tunnelId: string): Promise<void>
 }
 
 /** Hub 侧实现、节点回调的流式事件函数集。 */

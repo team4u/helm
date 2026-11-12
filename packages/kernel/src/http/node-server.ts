@@ -16,7 +16,7 @@ import { Readable } from 'node:stream'
 import { createHubHandler } from './hub.js'
 import { createStaticServe } from './static.js'
 import { HelmError } from '@helm/protocol'
-import { attachNodeWsGateway, type EnvFabric, type NodeWsGateway } from '../env/index.js'
+import { attachNodeWsGateway, attachNodeTunnelGateway, type EnvFabric, type NodeWsGateway } from '../env/index.js'
 import type { HubHandle, KernelRuntimeLike, StartHubOptions } from './contracts.js'
 
 const DEFAULT_PORT = 3202
@@ -136,6 +136,8 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
   const nodeGateway: NodeWsGateway | undefined = envFabric
     ? attachNodeWsGateway(server, { registry: envFabric.registry })
     : undefined
+  // 节点透传隧道独立网关（/ws/node-tunnel；与 /ws/node 同一 upgrade 事件按 path 分流）。
+  const tunnelGateway = envFabric ? attachNodeTunnelGateway(server, { registry: envFabric.registry }) : undefined
 
   // 长连接保活：SSE 显式不超时
   server.requestTimeout = 0
@@ -165,7 +167,8 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
     },
     server,
     async close() {
-      // 0) 先关 /ws/node 网关（不再接受节点连接；断开挂在适配层之前）。
+      // 0) 先关隧道网关，再关 /ws/node 网关（不再接受节点连接；断开挂在适配层之前）。
+      await tunnelGateway?.close().catch(() => undefined)
       await nodeGateway?.close().catch(() => undefined)
       // 1) 主动 abort 全部在途请求（SSE 流的 signal abort → 取消订阅）
       for (const controller of inflight) controller.abort()

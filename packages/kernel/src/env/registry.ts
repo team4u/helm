@@ -20,7 +20,8 @@
  * - disconnect(nodeId)：API 删除身份时立即断开当前 ws+rpc。
  */
 
-import { createHash, timingSafeEqual } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
+import type { Duplex } from 'node:stream'
 import type { WebSocket as WsSocket } from 'ws'
 import type { BirpcReturn } from 'birpc'
 import type {
@@ -31,9 +32,11 @@ import type {
   NodeIpcClosedEvent,
   NodeIpcEvent,
   NodeRegisterInput,
+  NodeTunnelHello,
   NodeUpgradeResult,
 } from '@helm/protocol'
 import type { Context } from '@earendil-works/chord/context'
+import { HelmError } from '@helm/protocol'
 
 /** 节点侧供 Hub 调用的函数集（env RPC 全集 + 连接控制）。 */
 export type NodeSideFunctions = NodeEnvRpcFunctions & {
@@ -133,6 +136,27 @@ interface Waiter {
   cancelled: () => void
 }
 
+/** 在途隧道登记（openTunnel 建立后等待独立网关首帧认证）。 */
+interface PendingTunnel {
+  tunnelId: string
+  nodeId: string
+  /** 发起时的撤销 epoch；节点换代（evict/替换）后 pending 立即失效。 */
+  epoch: number
+  timeoutMs: number
+  timer: NodeJS.Timeout
+  /** 认证通过后由网关交棒 Duplex（grant 填入流并 resolve pending）。 */
+  grant: (duplex: Duplex) => void
+  reject: (error: HelmError) => void
+  settled: boolean
+}
+
+/** 已建立隧道：Duplex 由注册表持有并在节点换代/关停时主动销毁。 */
+interface ActiveTunnel {
+  tunnelId: string
+  nodeId: string
+  duplex: Duplex
+}
+
 /** 升级等待器：有界内存承诺，仅由匹配的心跳 commit resolve。 */
 interface UpgradeWaiter {
   nodeId: string
@@ -201,6 +225,10 @@ export class NodeRegistry {
   readonly #upgradeWaiters = new Map<string, UpgradeWaiter>()
   /** 节点撤销 epoch：每次 evict/disconnect/替换递增；在途注册醒后必须校验。 */
   readonly #nodeEpoch = new Map<string, number>()
+  /** 在途隧道：tunnelId -> pending（openTunnel 发起后等待独立网关首帧）。 */
+  readonly #pendingTunnels = new Map<string, PendingTunnel>()
+  /** 已建立隧道：tunnelId -> active（Duplex 生命周期与登记项同步销毁）。 */
+  readonly #activeTunnels = new Map<string, ActiveTunnel>()
   #sweeper: NodeJS.Timeout | undefined
   #closed = false
 
@@ -426,6 +454,180 @@ export class NodeRegistry {
     return this.#upgradeWaiters.has(nodeId)
   }
 
+  // --- 节点透传隧道 ---------------------------------------------------------
+
+  /** 独立网关鉴权委托：复用注册鉴权（tokenAuthenticator / fail-closed）。 */
+  async authenticateToken(nodeId: string, token: string): Promise<boolean> {
+    if (this.#closed) return false
+    try {
+      return await this.#authenticate(nodeId, token)
+    } catch {
+      return false
+    }
+  }
+
+  /** 测试内省：在途/已建立隧道计数。 */
+  debugTunnelCounts(): { pending: number; active: number } {
+    return { pending: this.#pendingTunnels.size, active: this.#activeTunnels.size }
+  }
+
+  /**
+   * 建立到远端节点本机端口的字节管道：调用当前连接的 nodeTunnelOpen 后
+   * **立即**等待独立网关首帧（acceptTunnel），RPC 结果在后台对账——慢/断
+   * RPC 不会卡住超时与 abort。失败语义（均 HelmError，绝不回退 local）：
+   * - 节点离线 / 注册表关闭：node_offline（409）；
+   * - 节点未实现 nodeTunnelOpen：node_tunnel_not_supported（501）；
+   * - 网关回连超时（缺省 10s）：node_tunnel_timeout（504）；
+   * - RPC 显式失败 / 断连：node_tunnel_connect_failed（502）；abort：499。
+   * 任何失败/取消路径都尽力通知节点 nodeTunnelAbort（catch observe，不等
+   * 网络回包才 reject），pending/active 登记同步清理，不悬挂。
+   */
+  async openTunnel(nodeId: string, port: number, signal?: AbortSignal): Promise<Duplex> {
+    if (this.#closed) {
+      throw new HelmError('node_offline', `节点 ${nodeId} 离线，无法建立隧道`, 409, { nodeId })
+    }
+    const conn = this.#connections.get(nodeId)
+    if (conn === undefined) {
+      throw new HelmError('node_offline', `节点 ${nodeId} 离线，无法建立隧道`, 409, { nodeId })
+    }
+    const open = conn.rpc.nodeTunnelOpen
+    if (open === undefined) {
+      throw new HelmError('node_tunnel_not_supported', `节点 ${nodeId} 的守护进程不支持透传隧道`, 501, { nodeId })
+    }
+    const tunnelId = randomUUID()
+    const epoch = this.#epochOf(nodeId)
+    const timeoutMs = 10_000
+
+    /** 尽力通知节点取消就绪监听（必容错：断连/不支持时不阻塞本地清理）。 */
+    const abortNode = (): void => {
+      conn.rpc.nodeTunnelAbort?.(tunnelId).catch(() => undefined)
+    }
+
+    const pending: PendingTunnel = {
+      tunnelId,
+      nodeId,
+      epoch,
+      timeoutMs,
+      timer: undefined as unknown as NodeJS.Timeout,
+      grant: undefined as unknown as (duplex: Duplex) => void,
+      reject: undefined as unknown as (error: HelmError) => void,
+      settled: false,
+    }
+    const pendingPromise = new Promise<Duplex>((resolve, reject) => {
+      let granted: Duplex | undefined
+      const settle = (): void => {
+        const duplex = granted
+        if (pending.settled || duplex === undefined) return
+        pending.settled = true
+        clearTimeout(pending.timer)
+        this.#pendingTunnels.delete(tunnelId)
+        this.#activeTunnels.set(tunnelId, { tunnelId, nodeId, duplex })
+        duplex.once('close', () => {
+          if (this.#activeTunnels.get(tunnelId)?.duplex === duplex) {
+            this.#activeTunnels.delete(tunnelId)
+          }
+        })
+        resolve(duplex)
+      }
+      // 网关认证通过后交棒 Duplex（见 grantTunnel）：填入即结算。
+      pending.grant = (duplex) => {
+        if (pending.settled) { duplex.destroy(); return }
+        granted = duplex
+        settle()
+      }
+      pending.reject = (error) => {
+        if (pending.settled) return
+        pending.settled = true
+        clearTimeout(pending.timer)
+        this.#pendingTunnels.delete(tunnelId)
+        reject(error)
+      }
+    })
+    // 防未处理 rejection 观察者缺位（调用方 await 前同步 reject 的路径）。
+    pendingPromise.catch(() => undefined)
+    pending.timer = setTimeout(() => {
+      abortNode()
+      pending.reject(new HelmError(
+        'node_tunnel_timeout',
+        `节点 ${nodeId} 隧道 ${tunnelId} 未在 ${timeoutMs}ms 内回连`,
+        504,
+        { nodeId, tunnelId },
+      ))
+    }, timeoutMs)
+    pending.timer.unref?.()
+    this.#pendingTunnels.set(tunnelId, pending)
+
+    const onAbort = (): void => {
+      abortNode()
+      pending.reject(new HelmError('aborted', '隧道建立已取消', 499, { nodeId, tunnelId }))
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+
+    // RPC 结果后台对账：不 await（慢/断 RPC 不卡超时与 abort）；成功只用于
+    // 提前定格失败（节点显式拒绝），rejection 亦 observe（不产生 unhandled）。
+    void open({ tunnelId, port }).then(
+      (result) => {
+        if (pending.settled) return
+        if (result.ok) return
+        const code = result.error.code === 'timeout'
+          ? 'node_tunnel_timeout'
+          : result.error.code === 'aborted'
+            ? 'aborted'
+            : 'node_tunnel_connect_failed'
+        const status = code === 'node_tunnel_timeout' ? 504 : code === 'aborted' ? 499 : 502
+        abortNode()
+        pending.reject(new HelmError(
+          code,
+          `节点 ${nodeId} 建立隧道失败：${result.error.message}`,
+          status,
+          { nodeId, tunnelId, port },
+        ))
+      },
+      (error: unknown) => {
+        if (pending.settled) return
+        abortNode()
+        pending.reject(new HelmError(
+          'node_tunnel_connect_failed',
+          `节点 ${nodeId} 隧道 RPC 失败：${error instanceof Error ? error.message : String(error)}`,
+          502,
+          { nodeId, tunnelId, port },
+        ))
+      },
+    )
+
+    try {
+      return await pendingPromise
+    } finally {
+      signal?.removeEventListener('abort', onAbort)
+    }
+  }
+
+  /**
+   * 独立网关首帧的消费入口（纯认证/匹配，不发任何帧——发帧归网关）：
+   * 认证 + 一次性匹配 + epoch 复查全通过返回 true，网关随后交棒 Duplex
+   *（grantTunnel）并自行发 ok 帧；任一不匹配返回 false（网关回 error 帧
+   * 后关闭并自行销毁 stream，不泄漏）。
+   */
+  async acceptTunnel(
+    nodeId: string,
+    token: string,
+    tunnelId: string,
+  ): Promise<boolean> {
+    const pending = this.#pendingTunnels.get(tunnelId)
+    if (pending === undefined || pending.settled) return false
+    if (pending.nodeId !== nodeId) return false
+    if (pending.epoch !== this.#epochOf(nodeId)) return false
+    if (!(await this.authenticateToken(nodeId, token))) return false
+    if (pending.settled || this.#pendingTunnels.get(tunnelId) !== pending) return false
+    return true
+  }
+
+  /** 网关交棒 Duplex：认证已过（acceptTunnel true 后调用）；pending 已定格
+   * 失败则销毁交来的流（不泄漏）。 */
+  grantTunnel(tunnelId: string, duplex: Duplex): void {
+    this.#pendingTunnels.get(tunnelId)?.grant(duplex)
+  }
+
   /**
    * 升级心跳 commit 处理（noteHeartbeat 内部调用；已验证 conn 是当前连接），
    * 返回值即心跳 ACK：
@@ -576,8 +778,37 @@ export class NodeRegistry {
         }
       }
     }
+    // 断开时拒绝该节点全部在途隧道并销毁已建立隧道的 duplex：
+    // 隧道语义绑定当前连接代（epoch），换代即不可用，绝不悬挂。
+    this.#teardownNodeTunnels(nodeId)
     this.#notifyNodeChanged(nodeId, false)
     this.#wakeWaiters(nodeId)
+  }
+
+  /** 拒绝 nodeId 的全部 pending 隧道并销毁 active 隧道 duplex（换代/关停用）。 */
+  #teardownNodeTunnels(nodeId: string): void {
+    for (const [tunnelId, pending] of [...this.#pendingTunnels]) {
+      if (pending.nodeId !== nodeId) continue
+      this.#pendingTunnels.delete(tunnelId)
+      pending.reject(new HelmError(
+        'node_offline',
+        `节点 ${nodeId} 已断开，隧道 ${tunnelId} 建立中止`,
+        409,
+        { nodeId, tunnelId },
+      ))
+    }
+    for (const [tunnelId, active] of [...this.#activeTunnels]) {
+      if (active.nodeId !== nodeId) continue
+      this.#activeTunnels.delete(tunnelId)
+      // 销毁 duplex：消费方（nodeFetch）在 error/close 中感知断开并以
+      // node_tunnel_closed 收尾；destroy(error) 避免把断开伪装成正常 EOF。
+      active.duplex.destroy(new HelmError(
+        'node_offline',
+        `节点 ${nodeId} 已断开，隧道 ${tunnelId} 关闭`,
+        409,
+        { nodeId, tunnelId },
+      ))
+    }
   }
 
   #wakeWaiters(nodeId: string): void {
@@ -641,6 +872,23 @@ export class NodeRegistry {
     if (this.#sweeper !== undefined) {
       clearInterval(this.#sweeper)
       this.#sweeper = undefined
+    }
+    // 全部隧道终结（pending 拒绝；active 摘除登记，duplex 由消费方销毁）。
+    for (const [tunnelId, pending] of [...this.#pendingTunnels]) {
+      this.#pendingTunnels.delete(tunnelId)
+      pending.reject(new HelmError('node_offline', `注册表已关闭，隧道 ${tunnelId} 建立中止`, 409, {
+        tunnelId,
+      }))
+    }
+    // active 隧道逐一销毁（带错误终态，消费方感知断开），再清登记。
+    for (const [tunnelId, active] of [...this.#activeTunnels]) {
+      this.#activeTunnels.delete(tunnelId)
+      active.duplex.destroy(new HelmError(
+        'node_offline',
+        `注册表已关闭，隧道 ${tunnelId} 关闭`,
+        409,
+        { tunnelId },
+      ))
     }
     for (const [nodeId, waiter] of [...this.#upgradeWaiters]) {
       clearTimeout(waiter.timer)
