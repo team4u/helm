@@ -26,7 +26,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { HelmError } from '@helm/protocol'
 import type { HelmPluginContext, PluginActionContext } from '@helm/protocol'
-import { BodyError, readBody } from '../../http/http-utils.js'
+import { BodyError, readBody } from '@helm/protocol'
 import {
   MAX_DESCRIPTION,
   TRIGGERS_PLUGIN_ID,

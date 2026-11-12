@@ -40,8 +40,8 @@ import {
 import { JournalWriter, readJournal, type WorkflowJournalEntry } from './journal.js'
 import { extractMeta, hasMetaDeclaration, type WorkflowMeta } from './meta.js'
 import { collapse, type WorkflowEntry } from './progress.js'
-import { isAbsoluteTargetPath } from '../../../runtime/tools.js'
-import { redactExecutionMetadata, redactGateResult } from '../../../runtime/spawn/spawn-exec.js'
+import { isAbsoluteTargetPath, redactJsonValue } from '@helm/protocol'
+
 import {
   agentGateResultMissingError as gateResultMissingError,
   sanitizeAgentExecutionInfo as sanitizeExecutionInfo,
@@ -50,7 +50,6 @@ import {
 import {
   MAX_SCRIPT_LENGTH,
   normalizeWorkflowArgs,
-  redactJsonValue,
   runWorkflow,
   type WorkflowHost,
   type WorkflowRunResult,
@@ -1227,7 +1226,7 @@ export class WorkflowService {
                 : {}),
               // 通知面向父会话输入（可进模型上下文）：与持久面同标准脱敏。
               ...(executionInfo !== undefined
-                ? { execution: redactExecutionMetadata(executionInfo, this.redact) }
+                ? { execution: redactJsonValue(executionInfo, this.redact) as typeof executionInfo }
                 : {}),
             })
             record.notifiedAt = Date.now()
@@ -1326,7 +1325,7 @@ export class WorkflowService {
             ? { agentType: request.agentType }
             : {}),
           // 持久面统一脱敏（effectiveCwd/worktree 路径可能含秘密 token）。
-          execution: redactExecutionMetadata(info, this.redact),
+          execution: redactJsonValue(info, this.redact) as typeof info,
         }
         record.nodes = this.redactNodes([node])
         run.summary = this.toSummary(record)

@@ -337,16 +337,21 @@ export function normalizeWorkflowArgs(raw: unknown): unknown {
 }
 
 /**
- * 持久面值级脱敏：递归克隆并把每个字符串值经 redactText 替换（如 stash
- * secret → marker）。绝不做 stringify 后整体替换——嵌套深处的秘密必须同样
- * 被处理。边界安全值（纯对象/数组/标量）之外的原样返回。
+ * 持久面值级脱敏（宽松遍历，仅限引擎内部已过边界校验的值）：
+ * 递归克隆并把每个字符串值经 redactText 替换（如 stash secret → marker）。
+ * 绝不做 stringify 后整体替换——嵌套深处的秘密必须同样被处理。
+ * 边界安全值（纯对象/数组/标量）之外的原样返回。
+ *
+ * 与 @helm/protocol redactJsonValue（严格版，拒绝循环/稀疏/非纯对象并
+ * 脱敏键名）语义不同：本函数面向引擎内部已信任的持久面，不脱敏键名、
+ * 非纯对象原样返回。命名区分避免误用。
  */
-export function redactJsonValue(value: unknown, redactText: (text: string) => string): unknown {
+export function redactPlainValue(value: unknown, redactText: (text: string) => string): unknown {
   if (typeof value === 'string') return redactText(value)
-  if (Array.isArray(value)) return value.map((item) => redactJsonValue(item, redactText))
+  if (Array.isArray(value)) return value.map((item) => redactPlainValue(item, redactText))
   if (value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
     const out: Record<string, unknown> = {}
-    for (const [key, entry] of Object.entries(value)) out[key] = redactJsonValue(entry, redactText)
+    for (const [key, entry] of Object.entries(value)) out[key] = redactPlainValue(entry, redactText)
     return out
   }
   return value
@@ -1213,7 +1218,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
               index,
               key,
               ok: true,
-              result: redactJsonValue(replayed.entry.result, redactText),
+              result: redactPlainValue(replayed.entry.result, redactText),
               ...(effectiveReplayedIdempotent ? { idempotent: true } : {}),
             })
           } catch (error) {
@@ -1357,7 +1362,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                     index,
                     key,
                     ok: true,
-                    result: redactJsonValue(outcome.result, redactText),
+                    result: redactPlainValue(outcome.result, redactText),
                     ...(effectiveIdempotent ? { idempotent: true } : {}),
                   }
                 : {

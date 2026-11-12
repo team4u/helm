@@ -39,7 +39,6 @@ import { normalizeWorkflowArgs } from './workflow/engine/runtime.js'
 import { WorktreeIsolation } from './workflow/isolation.js'
 import { safeResultText } from '../runtime/runtime-helpers.js'
 import { executionOf, subagentFooter } from './workflow/tool-result.js'
-import { redactJsonValue } from '../redact.js'
 
 export { WORKFLOW_PLUGIN_ID }
 
@@ -983,6 +982,3 @@ function workflowResultEnvelope(run: WorkflowRunSummary): {
   }
 }
 
-// 引擎服务与运行时不再需要外部脱敏注入（宿主统一脱敏已覆盖边界）；
-// redactJsonValue 保留供未来插件内投影使用（当前 runs 投影为纯 summary）。
-void redactJsonValue

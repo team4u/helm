@@ -32,7 +32,7 @@ import { randomUUID } from 'node:crypto'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from './worktree.js'
 import type { Context } from '@earendil-works/chord'
 import { ExecutionError, FileError, type Result, type ShellExecResult } from '@earendil-works/pi-durable/env'
-import { redactJsonValue } from '../../redact.js'
+import { redactJsonValue } from '@helm/protocol'
 
 /** 外部运行时 agentType 命名空间形态：'namespace:kind'（通用约定，零插件点名）。 */
 function isExternalRuntimeAgentType(agentType: string | undefined): boolean {

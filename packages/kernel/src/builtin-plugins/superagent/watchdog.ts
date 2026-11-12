@@ -35,7 +35,7 @@ import {
   type HelmPluginContext,
   type TurnSettledPayload,
 } from '@helm/protocol'
-import { redactJsonValue } from './redact.js'
+import { redactJsonValue } from '@helm/protocol'
 import {
   DIAGNOSTICS_COLLECT_EVENT,
   assertValidCollection,

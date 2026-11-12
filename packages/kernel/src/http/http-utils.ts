@@ -10,6 +10,10 @@
 import { HelmError } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 
+// BodyError/readBody 已收口 @helm/protocol（内核与插件共享唯一实现）；
+// 此处导入内核内使用，并由本模块再导出供既有相对路径引用保持稳定。
+import { BodyError, readBody } from '@helm/protocol'
+
 export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024 // 1 MiB
 
 /** 允许携带凭据的前端开发源（不限制任何来源）。 */
@@ -136,12 +140,6 @@ export function preflightResponse(origin: string | null): Response {
 // Body：非法 JSON / 超限 / 编码统一拒绝
 // ---------------------------------------------------------------------------
 
-export class BodyError extends HelmError {
-  constructor(code: string, message: string, status = 400) {
-    super(code, message, status)
-  }
-}
-
 /** 读取任意 JSON 值（对象/数组/标量/null 均可）。 */
 export async function readJsonValue(
   request: Request,
@@ -167,37 +165,6 @@ export async function readJsonBody(
     throw new BodyError('invalid_json', '请求体需为 JSON 对象')
   }
   return parsed as Record<string, unknown>
-}
-
-export async function readBody(request: Request, maxBytes: number): Promise<Uint8Array> {
-  const declared = Number(request.headers.get('content-length'))
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    throw new BodyError('body_too_large', `请求体超过上限 ${maxBytes} 字节`, 413)
-  }
-  const reader = request.body?.getReader()
-  if (reader === undefined) return new Uint8Array(0)
-  const chunks: Uint8Array[] = []
-  let total = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value !== undefined) {
-      total += value.byteLength
-      if (total > maxBytes) {
-        // 必须取消 reader，否则连接悬挂。
-        await reader.cancel().catch(() => {})
-        throw new BodyError('body_too_large', `请求体超过上限 ${maxBytes} 字节`, 413)
-      }
-      chunks.push(value)
-    }
-  }
-  const out = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    out.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return out
 }
 
 /**
@@ -236,3 +203,5 @@ export async function readBinaryBodyWithLimit(request: Request, maxBytes: number
   }
   return out
 }
+
+export { BodyError, readBody }

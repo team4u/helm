@@ -4,7 +4,7 @@ import type {
   TurnOutcome,
   TurnSettledPayload,
 } from '@helm/protocol'
-import { redactJsonValue } from './redact.js'
+import { redactJsonValue } from '@helm/protocol'
 
 /** 从真实会话详情与产物列表收集结算摘要（不调用模型）。 */
 export async function collectWorkerSettlement(

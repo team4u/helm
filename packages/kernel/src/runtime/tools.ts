@@ -53,41 +53,27 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { bool, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
-import { posix, win32 } from 'node:path'
 import { composeExecutionEnv } from '../env/scoped-env.js'
 import { envWithFileMutationQueue, localWithFileMutationQueue } from '../env/file-mutation-queue.js'
 import { redactJsonValue } from '../redact.js'
+import { isAbsoluteTargetPath, targetPathShape } from '@helm/protocol'
 import type { HelmToolDeps } from './tool-deps.js'
 
-/**
- * Windows 盘符（不区分大小写）：C: / c: 等。
- */
+// 形状判定纯函数已收口 @helm/protocol（浏览器安全）；依赖 node:path 规则的
+// pathRulesForShape/resolveTargetPath/isWithinBase 留在内核（Node 环境），
+// 下方定义并再导出 isAbsoluteTargetPath/targetPathShape 供既有相对路径引用保持稳定。
+export { isAbsoluteTargetPath, targetPathShape } from '@helm/protocol'
+
+import { posix, win32 } from 'node:path'
+
+/** Windows 盘符（不区分大小写）：C: / c: 等。 */
 const WINDOWS_DRIVE = /^[A-Za-z]:/
-/** Windows 盘符绝对（C:\\x / C:/x：盘符后紧跟分隔符）。 */
-const WINDOWS_DRIVE_ABSOLUTE = /^[A-Za-z]:[\\/]/
 /** Windows 盘符相对（C:relative / 裸 C:）：语义依赖进程当前目录，靶点执行拒绝。 */
 const WINDOWS_DRIVE_RELATIVE = /^[A-Za-z]:($|[^\\/])/
-
-/**
- * 目标路径形状（按路径自身形式判定，与 Hub 宿主平台无关）：
- * - 'posix'：以 / 开头的 POSIX 绝对路径；
- * - 'win32'：Windows 盘符绝对（C:\\x / C:/x）或 UNC / 根反斜杠（\\\\server\\\\share）；
- * - undefined：相对路径（跟随会话 cwd 靶点的形状）。
- */
-export function targetPathShape(p: string): 'posix' | 'win32' | undefined {
-  if (p.startsWith('/')) return 'posix'
-  if (p.startsWith('\\') || WINDOWS_DRIVE_ABSOLUTE.test(p)) return 'win32'
-  return undefined
-}
 
 /** 按形状选纯路径规则（供 routes/runtime 复用；不依赖 Hub 宿主平台）。 */
 export function pathRulesForShape(shape: 'posix' | 'win32' | undefined): typeof posix | typeof win32 {
   return shape === 'win32' ? win32 : posix
-}
-
-/** 目标路径是否绝对（POSIX / 开头、Windows 盘符绝对或 UNC / 根反斜杠）。 */
-export function isAbsoluteTargetPath(p: string): boolean {
-  return p.startsWith('/') || p.startsWith('\\') || WINDOWS_DRIVE_ABSOLUTE.test(p)
 }
 
 /**
@@ -105,7 +91,7 @@ export function resolveTargetPath(raw: string, base: string): { ok: true; abs: s
 
 /**
  * containment（词法）：target 是否等于 base 或在 base 之下。
- * 用 target 自身形状的纯规则；base 为根目录（/ 或 C:\\）时不叠加分隔符
+ * 用 target 自身形状的纯规则；base 为根目录（/ 或 C:\）时不叠加分隔符
  * （base + sep 会形成 '//' 错误前缀，误拒根目录下合法文件）。
  */
 export function isWithinBase(target: string, base: string): boolean {

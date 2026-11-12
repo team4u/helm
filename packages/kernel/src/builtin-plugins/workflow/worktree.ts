@@ -41,7 +41,8 @@ import type { Context } from '@earendil-works/chord'
 import type { ExecutionError, FileError, Result, ShellExecResult } from '@earendil-works/pi-durable/env'
 import { randomUUID } from 'node:crypto'
 import { HelmError } from '@helm/protocol'
-import { pathRulesForShape, targetPathShape } from '../../runtime/tools.js'
+import { targetPathShape } from '@helm/protocol'
+import { pathRulesForShape } from '../../runtime/tools.js'
 
 /** 受管 worktree 持久化 key（docStore 命名空间 'runtime/worktrees'）。 */
 const DOC_KEY = 'runtime/worktrees'

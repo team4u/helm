@@ -1,10 +1,9 @@
 /**
- * 插件边界 JSON Schema 校验器（AJV 封装）。
+ * 插件边界 JSON Schema 校验器（AJV 封装，内核插件宿主专用）。
  *
- * 为什么集中封装：输入与输出统一在边界校验是内核铁律，失败必须显式报错
- * （validation_error / invalid_plugin_output），绝不静默放行。
- * 插件是可信进程内代码，但其产物（动作入参、动作输出、transform 载荷）
- * 仍需运行时边界校验——TypeScript 类型不跨运行时边界。
+ * 通用编译缓存与 validateOrThrow 已收口 @helm/protocol（内核与插件
+ * 共享唯一实现，含 $async 拒绝与编译错误诊断）；本文件保留内核插件
+ * 宿主专用语义：注册期预编译检查与动作入/出参的定制报错文案。
  */
 import { Ajv, type ValidateFunction } from 'ajv';
 import { HelmError, type JsonSchema } from '@helm/protocol';
@@ -78,16 +77,5 @@ export function validatePluginOutput(pluginId: string, actionId: string, schema:
   }
 }
 
-/** 通用边界校验（交接文件、路由参数等）。失败抛 HelmError。 */
-export function validateOrThrow(
-  schema: JsonSchema,
-  value: unknown,
-  message: string,
-  code = 'validation_error',
-  status = 400,
-): void {
-  const fn = compile(schema);
-  if (!fn(value)) {
-    throw new HelmError(code, `${message}：${formatErrors(fn.errors)}`, status, { errors: fn.errors });
-  }
-}
+/** 通用边界校验（交接文件、路由参数等）已收口 protocol，此处再导出供内核既有引用。 */
+export { validateOrThrow } from '@helm/protocol';
