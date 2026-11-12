@@ -330,16 +330,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       return
     }
     if (opts?.split) setSplitTarget(resolved)
-    else {
-      // 主屏切到具体会话是「进入会话现场」的导航收口：此时叠加的子会话抽屉与
-      // 工作台若继续保留，会形成关闭顺序不明的叠层（抽屉关掉工作台还在、反之亦然）。
-      // 只有主屏目标真的变成会话时才收口；切换其他一级中心不动用户的弹窗与工作台。
-      if (resolved.kind === 'conversation') {
-        setActiveModal((current) => (current?.kind === 'conversation-drawer' ? null : current))
-        setWorkbenchOpen(false)
-      }
-      setPrimaryTarget(resolved)
-    }
+    else setPrimaryTarget(resolved)
     if (resolved.kind === 'conversation' && opts?.highlightEntryId) setHighlightedEntry({ conversationId: resolved.conversationId, entryId: opts.highlightEntryId })
   }, [pushNotice])
   const closeSplit = useCallback(() => setSplitTarget(null), [])

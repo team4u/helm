@@ -203,8 +203,8 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               title={`返回父会话 #${conversation.parentConversationId}`}
               aria-label={`返回父会话 #${conversation.parentConversationId}`}
               onClick={() => {
-                // 抽屉中返回父会话 = 离开子会话现场：先关抽屉再导航，
-                // 主屏切到父会话的同时由导航收口同步收起工作台，避免叠层残留。
+                // 抽屉中返回父会话 = 后退导航：关抽屉 + 主屏切父会话；
+                // 工作台不动（它有自己的关闭按钮，生命周期独立）。
                 if (isDrawer) onCloseDrawer?.()
                 store.openTarget(
                   { kind: 'conversation', conversationId: conversation.parentConversationId! },

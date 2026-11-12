@@ -147,7 +147,7 @@ function reset(): void {
 
 afterEach(reset)
 
-test('子会话抽屉返回父会话：主屏切到父会话，抽屉与工作台同拍关闭', { timeout: 60_000 }, async () => {
+test('子会话抽屉返回父会话：主屏切到父会话，抽屉关闭、工作台保留', { timeout: 60_000 }, async () => {
   await mount('#/c/1?wb=artifacts&modal=drawer&id=11')
   assert.equal(observed?.primary.kind === 'conversation' ? observed.primary.conversationId : undefined, 1)
   assert.equal(observed?.modal?.kind, 'conversation-drawer')
@@ -155,7 +155,7 @@ test('子会话抽屉返回父会话：主屏切到父会话，抽屉与工作�
   await clickDrawerBack()
   assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 }, '应导航到父会话 #1')
   assert.equal(observed?.modal, null, '抽屉应关闭')
-  assert.equal(observed?.workbenchOpen, false, '工作台应一并关闭（导航收口）')
+  assert.equal(observed?.workbenchOpen, true, '工作台保留（有自己的关闭按钮，导航不动它）')
 })
 
 test('子会话抽屉普通关闭只关抽屉，不影响工作台', { timeout: 60_000 }, async () => {
