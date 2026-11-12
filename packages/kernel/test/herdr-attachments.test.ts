@@ -20,6 +20,7 @@ import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { FsOutputFiles, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrNodeChannel, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
+import { SEND_KEYS_CAS_CAPABILITY } from '../src/builtin-plugins/herdr/rpc.js'
 
 // ---------------------------------------------------------------------------
 // 受控 HerdrTransport（与 herdr.test.ts 同款裁剪版）
@@ -57,6 +58,13 @@ class FakeTransport implements HerdrTransport {
   outputFiles = new FsOutputFiles()
   promptStatus: PaneStatus | Array<PaneStatus> = 'idle'
   onPrompt: ((pane: PaneState, text: string) => void) | undefined
+  /** ping capabilities 通告：缺省模拟支持 send_keys CAS 的服务端；测试可改写模拟旧服务端。 */
+  pongCapabilities: Record<string, unknown> | null = {
+    live_handoff: false,
+    detached_server_daemon: false,
+    endpoint_protocol_generation: 1,
+    [SEND_KEYS_CAS_CAPABILITY]: true,
+  }
 
   async call(target: HerdrTarget, method: string, params: Record<string, unknown>): Promise<unknown> {
     this.calls.push({ target, method, params })
@@ -137,7 +145,24 @@ class FakeTransport implements HerdrTransport {
           },
         }
       }
+      case 'ping':
+        return {
+          type: 'pong',
+          version: 'test-server',
+          protocol: 22,
+          ...(this.pongCapabilities !== null ? { capabilities: { ...this.pongCapabilities } } : {}),
+        }
       case 'agent.send_keys': {
+        // CAS 契约（未来服务端行为）：expected_state_seq 必须匹配当前权威 seq，
+        // 不匹配以 stale_state 拒绝且键不写入（pane 不存在时保持旧宽容行为）。
+        const pane = this.panes.get(String(params['target']))
+        const expected = params['expected_state_seq']
+        if (typeof expected !== 'number' || !Number.isSafeInteger(expected) || expected < 0) {
+          throw new HelmError('invalid_params', 'agent.send_keys 必须携带非负整数 expected_state_seq（CAS 契约）', 400)
+        }
+        if (pane !== undefined && expected !== pane.seq) {
+          throw new HelmError('stale_state', `expected_state_seq=${expected} 与当前 state_change_seq=${pane.seq} 不符，按键未发送`, 409)
+        }
         return { type: 'ok' }
       }
       case 'agent.focus': {

@@ -129,13 +129,13 @@ function parseStatus(v: unknown, method: string): HerdrAgentStatus {
 }
 
 /** seq 严格非负整数（服务端 u64）：缺失/小数/负数/字符串都是违约，绝不伪造 0。 */
-function parseSeq(v: unknown, method: string): number {
+function parseSeq(v: unknown, method: string, field = 'state_change_seq'): number {
   if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) {
     throw new HelmError(
       'herdr_protocol_violation',
-      `${method} state_change_seq 缺失或非非负安全整数：${String(v)}`,
+      `${method} ${field} 缺失或非非负安全整数：${String(v)}`,
       502,
-      { method, resolvedType: typeof v },
+      { method, field, resolvedType: typeof v },
     )
   }
   return v
@@ -325,4 +325,109 @@ export function assertOkResult(result: unknown, method: string): void {
       { method, result },
     )
   }
+}
+
+// ---------------------------------------------------------------
+// agent.send_keys 协议级 CAS（helm 侧契约；等待 Herdr 服务端配套）
+//
+// 现状证据（/root/code/herdr 服务端源码，herdr 0.9.5 / protocol 22，只读核实）：
+// - `AgentSendKeysParams` 仅 `{target, keys}`（src/api/schema/agents.rs:18-22），
+//   无任何 CAS 字段；serde 无 deny_unknown_fields——盲发额外字段会被旧服务端
+//   **静默忽略并照常写键**，恰好复现本契约要关闭的审批桥残窗；
+// - `ping` -> `{type:'pong', version, protocol, capabilities}`（src/api/server.rs:337-347、
+//   src/api/schema/server.rs:17-24）是官方能力通告通道，字段按 serde(default) 前向兼容扩展。
+//
+// 因此 helm 侧契约（提案，需 Herdr 服务端发布配套后端到端生效）：
+// - 能力通告：pong.capabilities.`send_keys_expected_state_seq` === true；
+// - 请求字段：agent.send_keys params 增 `expected_state_seq: u64`（与 AgentInfo
+//   既有 `state_change_seq` 同词根，遵循协议 snake_case 惯例）；
+// - 拒绝语义：服务端当前 state_change_seq ≠ expected_state_seq 时返回 wire 错误
+//   `stale_state` 且**不写入任何按键**。
+// 在服务端配套发布前，executor 以能力门禁拒绝无 CAS 发键（绝不静默降级）。
+// ---------------------------------------------------------------
+
+/** pong.capabilities 中通告 agent.send_keys CAS 支持的字段名（wire 名）。 */
+export const SEND_KEYS_CAS_CAPABILITY = 'send_keys_expected_state_seq'
+
+/** 服务端 CAS 拒绝错误码（wire error.code；语义 = 键未发送）。 */
+export const STALE_STATE_ERROR_CODE = 'stale_state'
+
+/** agent.send_keys 请求（helm 内部 camelCase；wire 由 buildSendKeysParams 转换）。 */
+export interface SendKeysRequest {
+  target: string
+  keys: string[]
+  /** CAS 期望水位：必须等于审批条目观测的权威 state_change_seq。 */
+  expectedStateSeq: number
+}
+
+/** 构造 agent.send_keys wire params（边界校验：target/keys/seq 非法即显式拒绝）。 */
+export function buildSendKeysParams(request: SendKeysRequest): Record<string, unknown> {
+  if (typeof request.target !== 'string' || request.target.length === 0) {
+    throw new HelmError('validation_error', 'agent.send_keys target 必须是非空字符串', 400, { target: request.target })
+  }
+  if (
+    !Array.isArray(request.keys) ||
+    request.keys.length === 0 ||
+    request.keys.some((key) => typeof key !== 'string' || key.length === 0)
+  ) {
+    throw new HelmError('validation_error', 'agent.send_keys keys 必须是非空字符串数组', 400, { keys: request.keys })
+  }
+  if (typeof request.expectedStateSeq !== 'number' || !Number.isSafeInteger(request.expectedStateSeq) || request.expectedStateSeq < 0) {
+    throw new HelmError(
+      'validation_error',
+      `agent.send_keys expectedStateSeq 必须是非负安全整数：${String(request.expectedStateSeq)}`,
+      400,
+      { expectedStateSeq: request.expectedStateSeq },
+    )
+  }
+  return { target: request.target, keys: [...request.keys], expected_state_seq: request.expectedStateSeq }
+}
+
+/** ping -> pong 解析出的服务端能力摘要。 */
+export interface HerdrServerInfo {
+  version: string
+  protocol: number
+  /** agent.send_keys 是否支持 expected_state_seq CAS（capabilities 严格通告 true）。 */
+  sendKeysCas: boolean
+}
+
+/**
+ * pong 严格边界校验（真实形状：type='pong' + version + protocol + 可选 capabilities）：
+ * - version/protocol 缺失或类型不符 -> herdr_protocol_violation（坏数据不得成为
+ *   能力判断依据）；
+ * - capabilities 缺省/null -> sendKeysCas=false（旧服务端如实视为不支持）；
+ * - 能力字段存在但非布尔 -> 违约；仅在严格 === true 时视为支持。
+ */
+export function parsePong(result: unknown): HerdrServerInfo {
+  const obj = expectType(result, 'ping', 'pong')
+  const info: HerdrServerInfo = {
+    version: reqString(obj, 'ping', 'version'),
+    protocol: parseSeq(obj['protocol'], 'ping', 'protocol'),
+    sendKeysCas: false,
+  }
+  const capabilities = obj['capabilities']
+  if (capabilities === undefined || capabilities === null) return info
+  if (!isObj(capabilities)) {
+    throw new HelmError('herdr_protocol_violation', 'ping capabilities 必须是对象或 null', 502, { capabilities })
+  }
+  const flag = capabilities[SEND_KEYS_CAS_CAPABILITY]
+  if (flag === undefined) return info
+  if (typeof flag !== 'boolean') {
+    throw new HelmError(
+      'herdr_protocol_violation',
+      `ping capabilities.${SEND_KEYS_CAS_CAPABILITY} 必须是布尔值，实际：${JSON.stringify(flag)}`,
+      502,
+      { flag },
+    )
+  }
+  return { ...info, sendKeysCas: flag }
+}
+
+/**
+ * 服务端 CAS 拒绝判定：wire error.code === 'stale_state'（经 transport
+ * raiseWireError 成为 HerdrTransportError.code；结构化判定兼容进程内
+ * HelmError 形状）。语义 = 键未发送，调用方不得当作发送成功。
+ */
+export function isStaleStateError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === STALE_STATE_ERROR_CODE
 }

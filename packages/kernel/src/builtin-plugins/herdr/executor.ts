@@ -31,10 +31,14 @@ import { MetadataProjector } from './metadata.js'
 import { PaneRegistry, nodeIdOf, targetOf, type ManagedPane, type PaneRouting } from './panes.js'
 import {
   assertOkResult,
+  buildSendKeysParams,
+  isStaleStateError,
   parseAgentResult,
   parsePaneRead,
+  parsePong,
   parseTabCreated,
   parseWorktreeCreated,
+  SEND_KEYS_CAS_CAPABILITY,
   type HerdrAgentInfo,
 } from './rpc.js'
 import {
@@ -686,7 +690,7 @@ export class HerdrExecutor {
 
   /**
    * blocked 桥接：权威 agent.get 取 seq -> 协调器单飞 -> createAsk（预分配 id）
-   * -> 回答后复核 seq -> 一次性 send_keys。返回 false 表示人类取消。
+   * -> 回答后复核 seq -> 带 expected_state_seq 的 CAS send_keys。返回 false 表示人类取消。
    */
   private async bridgeBlocked(
     request: AgentSpawnRequest,
@@ -908,7 +912,7 @@ export class HerdrExecutor {
     }
   }
 
-  /** 消费终态：answered 且权威 seq 未推进 -> 复核 -> 一次性 send_keys；cancelled -> false。 */
+  /** 消费终态：answered 且权威 seq 未推进 -> 能力门禁 -> 带 expected_state_seq 的 CAS send_keys（stale_state 拒绝 = 键未发送，绝不重试）；cancelled -> false。 */
   private async consumeAskOutcome(
     request: AgentSpawnRequest,
     pane: ManagedPane,
@@ -951,23 +955,68 @@ export class HerdrExecutor {
       this.asks.settle(entry, { keysSent: false })
       return true
     }
-    // 协议固有的 CAS 残窗（如实记录，不改行为）：上方权威 agent.get 与本次
-    // send_keys 之间没有协议级乐观锁，毫秒级窗口内人类在终端直接按键推进
-    // seq 不会被拦截（键仍会发出，可能造成一次重复输入）。彻底修复需 Herdr
-    // 端提供带 expected_seq 的 send_keys；当前由后续 agent.wait 的 seq 复核
-    // 兜底状态一致性。
-    await assertOkResult(
-      await this.transport.call(
-        targetOf(pane),
+    // 协议级 CAS：send_keys 携带 expected_state_seq（entry.seq），彻底关闭上方
+    // 权威 agent.get 与写键之间的毫秒级残窗——人类在终端直接按键推进 seq 时
+    // 服务端必须以 stale_state 拒绝且不写入任何按键。
+    await this.assertSendKeysCas(targetOf(pane), request.signal)
+    try {
+      await assertOkResult(
+        await this.transport.call(
+          targetOf(pane),
+          'agent.send_keys',
+          buildSendKeysParams({ target: pane.paneId, keys, expectedStateSeq: entry.seq }),
+          { signal: request.signal },
+        ),
         'agent.send_keys',
-        { target: pane.paneId, keys },
-        { signal: request.signal },
-      ),
-      'agent.send_keys',
-    )
+      )
+    } catch (error) {
+      if (!isStaleStateError(error)) throw error
+      // 服务端 CAS 拒绝 = 键未发送：按「终端已先行推进」收敛（同 superseded
+      // 语义回主循环等权威状态），绝不重试同一批 keys，绝不记发送成功。
+      this.asks.settle(entry, { keysSent: false })
+      this.host.notify(
+        'Herdr 审批已过时',
+        `pane ${pane.paneId} 的按键选择因终端状态已推进（stale_state）被服务端拒绝，未发送任何按键；主循环将继续按权威状态收敛`,
+        'info',
+      )
+      return true
+    }
     this.asks.settle(entry, { keysSent: true, sentKeys: keys })
     this.host.notify('Herdr 审批已发送', `pane ${pane.paneId} 已按人类选择发送按键：${keys.join(' ')}`, 'info')
     return true
+  }
+
+  /**
+   * agent.send_keys 的 CAS 能力门禁（显式探测，绝不静默降级）：
+   * 目标 Herdr 未在 ping capabilities 通告 SEND_KEYS_CAS_CAPABILITY 时拒绝发键
+   * （herdr_cas_unsupported）——旧服务端 serde 忽略未知字段，盲发
+   * expected_state_seq 会被静默当作无 CAS 写键，恰好复现本修复要关闭的残窗。
+   * 探测结果在同一启用周期内按 target 冻结（Herdr 升级后重新启用插件生效）。
+   */
+  private readonly sendKeysCasSupport = new Map<string, boolean>()
+
+  private async assertSendKeysCas(target: HerdrTarget, signal?: AbortSignal): Promise<void> {
+    const key = JSON.stringify(target)
+    const cached = this.sendKeysCasSupport.get(key)
+    if (cached === true) return
+    if (cached === false) throw this.casUnsupportedError(target)
+    const pong = parsePong(await this.transport.call(target, 'ping', {}, { signal, timeoutMs: 5_000 }))
+    this.sendKeysCasSupport.set(key, pong.sendKeysCas)
+    if (!pong.sendKeysCas) throw this.casUnsupportedError(target, pong)
+  }
+
+  private casUnsupportedError(target: HerdrTarget, server?: { version: string; protocol: number }): HelmError {
+    const serverLabel = server !== undefined ? `（version ${server.version}, protocol ${server.protocol}）` : ''
+    return new HelmError(
+      'herdr_cas_unsupported',
+      `目标 Herdr${serverLabel} 未在 ping capabilities 通告 '${SEND_KEYS_CAS_CAPABILITY}'，拒绝无 CAS 的 agent.send_keys：旧服务端会静默忽略 expected_state_seq 并照常写键（复现审批桥 CAS 残窗）；请升级 Herdr 服务端至通告该能力的版本，并重新启用 herdr 插件`,
+      502,
+      {
+        capability: SEND_KEYS_CAS_CAPABILITY,
+        ...(server !== undefined ? { serverVersion: server.version, serverProtocol: server.protocol } : {}),
+        target: JSON.stringify(target),
+      },
+    )
   }
 
   // ------------------------------------------------------------------
