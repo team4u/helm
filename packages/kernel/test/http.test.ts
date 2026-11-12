@@ -29,7 +29,7 @@ import {
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
-import { HelmError, type ConversationSummary, type AskSpec, type PluginSummary, type HelmPluginContext } from '@helm/protocol'
+import { HelmError, type ConversationDetail, type ConversationInputResult, type ConversationPatch, type ConversationSummary, type AskSpec, type PluginSummary, type HelmPluginContext } from '@helm/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
 
@@ -133,6 +133,26 @@ const asks = new Map<string, AskSpec>()
 const submitted: Array<{ id: number; text: string; opts?: Record<string, unknown> }> = []
 const aborted: number[] = []
 const withdrawn: Array<{ id: number; submissionId: number }> = []
+let detailFixture: ConversationDetail | undefined
+const detailCalls: Array<{ id: number; opts?: { limit?: number; cursor?: string } }> = []
+const updateCalls: Array<{ id: number; patch: ConversationPatch }> = []
+let waitForInputResult: ConversationInputResult | undefined
+let waitForInputError: HelmError | undefined
+const waitForInputCalls: Array<{ id: number; submissionId: string }> = []
+const setHubUrlCalls: string[] = []
+
+function detailOf(overrides: Partial<ConversationDetail> = {}): ConversationDetail {
+  const base = summary(1, '个人助理')
+  return {
+    ...base,
+    entries: [
+      { id: 'e2', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '回答' }] }], createdAt: 2 },
+      { id: 'e1', kind: 'helm.input', data: { id: 'i1', text: '问', origin: 'human', createdAt: 1 } },
+    ],
+    nextCursor: '{"order":"descending","after":5}',
+    ...overrides,
+  }
+}
 
 function makeKernel(): KernelRuntimeLike {
   return {
@@ -150,27 +170,37 @@ function makeKernel(): KernelRuntimeLike {
     artifacts,
     plugins: pluginHost,
     stash,
-    async listConversations() {
-      return [...conversations.values()]
+    setHubUrl(url: string) {
+      setHubUrlCalls.push(url)
+    },
+    async listConversations(filter) {
+      let out = [...conversations.values()]
+      if (filter?.profileId) out = out.filter((c) => c.profileId === filter.profileId)
+      if (filter?.tag) out = out.filter((c) => c.tags.includes(filter.tag!))
+      if (filter?.status) out = out.filter((c) => c.status === filter.status)
+      return out
     },
     async getConversationDetail(id: number, opts?: { limit?: number; cursor?: string }) {
-      const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
-      // 模拟会话面：无持久时间线，返回空 entries（真实 kernel 由 SDK 分页提供）
-      void opts
-      return { ...found, entries: [] }
+      detailCalls.push({ id, opts })
+      if (!conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (detailFixture !== undefined) {
+        return { ...detailFixture, id }
+      }
+      return { ...conversations.get(id)!, entries: [] }
     },
     async createConversation(init) {
       const id = Math.max(0, ...conversations.keys()) + 1
       const created = summary(id, init?.title ?? `会话 ${id}`)
       if (init?.profileId !== undefined) created.profileId = init.profileId
+      if (init?.model !== undefined) created.model = init.model
       conversations.set(id, created)
       return created
     },
     async updateConversation(id, patch) {
+      updateCalls.push({ id, patch: { ...patch } })
       const found = conversations.get(id)
       if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
-      const next = { ...found, ...(patch.title !== undefined ? { title: patch.title } : {}), ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}) }
+      const next = { ...found, ...patch }
       conversations.set(id, next)
       return next
     },
@@ -189,7 +219,9 @@ function makeKernel(): KernelRuntimeLike {
       return { status: 'withdrawn' }
     },
     async waitForInput(id: number, submissionId: string) {
-      void id
+      waitForInputCalls.push({ id, submissionId })
+      if (waitForInputError) throw waitForInputError
+      if (waitForInputResult !== undefined) return waitForInputResult
       return { conversationId: id, submissionId, text: '', entry: { id: 'e', kind: 'pi.assistant' } }
     },
     async abortConversation(id) {
@@ -367,6 +399,19 @@ async function registerRoutePlugin(host: PluginHost): Promise<void> {
   })
 }
 
+async function registerDocPlugin(host: PluginHost): Promise<void> {
+  await host.register({
+    id: 'builtin:statusboard',
+    name: 'statusboard',
+    async definePlugin(ctx: HelmPluginContext) {
+      const pub = ctx.doc('board', { count: 0 }, { public: true })
+      pub.set({ count: 42 })
+      ctx.doc('secret-board', { hidden: true })
+    },
+  })
+  await host.enable('builtin:statusboard')
+}
+
 before(async () => {
   dataDir = await mkdtemp(join(tmpdir(), 'helm-http-test-'))
   auth = new AuthService(dataDir)
@@ -378,9 +423,11 @@ before(async () => {
   artifacts = new ArtifactService(dataDir, new InMemoryArtifactRepository(), stash)
   pluginHost = new PluginHost({ dataDir, host: hostApiForPluginHost(), docs: docStore() })
   await registerRoutePlugin(pluginHost)
+  await registerDocPlugin(pluginHost)
   hub0 = new TestEventHub()
   handler0 = createHubHandler(makeKernel())
   conversations.set(ROOT_CONVERSATION_ID, summary(1, '个人助理'))
+  conversations.set(2, { ...summary(2, '工人'), profileId: 'worker', tags: ['worker'] })
 })
 
 after(async () => {
@@ -551,6 +598,59 @@ test('POST /api/conversations 创建；PATCH 更新；DELETE 会话 200（无 id
   assert.equal(gone.status, 404)
 })
 
+test('POST /api/conversations（create）model 不接受空串：仍需 provider/model', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const res = await call(handler, 'POST', '/api/conversations', { body: { model: '' } })
+  assert.equal(res.status, 400)
+  assert.equal(res.body.error.code, 'validation_error')
+  const bad = await call(handler, 'POST', '/api/conversations', { body: { model: 'gpt-4o' } })
+  assert.equal(bad.status, 400)
+  const ok = await call(handler, 'POST', '/api/conversations', { body: { model: 'openai/gpt-4o' } })
+  assert.equal(ok.status, 201)
+})
+
+test('PATCH /:id model 覆盖与空串清覆盖边界；其他字段不受空串影响', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  // 合法 provider/model 覆盖透传
+  const set = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, {
+    body: { model: 'openai/gpt-4o' },
+  })
+  assert.equal(set.status, 200)
+  assert.deepEqual(updateCalls.at(-1)?.patch, { model: 'openai/gpt-4o' })
+
+  // 空串 = 清除覆盖（边界接受并透传；语义由 kernel.updateConversation 落实）
+  const clear = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, {
+    body: { model: '' },
+  })
+  assert.equal(clear.status, 200)
+  assert.deepEqual(updateCalls.at(-1)?.patch, { model: '' })
+
+  // 模型 ID 可以含斜杠（例如动态路由组）；首段仍是 provider。
+  const nested = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, { body: { model: 'gateway/group/smart' } })
+  assert.equal(nested.status, 200)
+  assert.deepEqual(updateCalls.at(-1)?.patch, { model: 'gateway/group/smart' })
+
+  // 错误形状仍 400：缺 provider、含空白、纯空格
+  for (const bad of ['gpt-4o', 'openai /gpt', 'openai/ gpt', ' ']) {
+    const res = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, { body: { model: bad } })
+    assert.equal(res.status, 400, `model=${JSON.stringify(bad)} 应 400`)
+    assert.equal(res.body.error.code, 'validation_error')
+  }
+  // 非字符串类型拒绝
+  const num = await call(handler, 'PATCH', `/api/conversations/${ROOT_CONVERSATION_ID}`, { body: { model: 42 } })
+  assert.equal(num.status, 400)
+})
+
+test('GET /api/conversations?profileId 过滤透传（与 tag/status 可组合语义在 kernel 侧）', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const res = await call(handler, 'GET', '/api/conversations?profileId=worker')
+  assert.equal(res.status, 200)
+  assert.equal(res.body.length, 1)
+  assert.equal(res.body[0].profileId, 'worker')
+  const none = await call(handler, 'GET', '/api/conversations?profileId=nobody')
+  assert.deepEqual(none.body, [])
+})
+
 test('非法 conversationId 与非法字段 400 validation_error', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const badId = await call(handler, 'GET', '/api/conversations/abc')
@@ -562,11 +662,49 @@ test('非法 conversationId 与非法字段 400 validation_error', { timeout: 60
   assert.equal(unknownField.status, 400)
 })
 
-test('GET /api/conversations/:id 已有端点正常返回', { timeout: 60_000 }, async () => {
+test('GET /:id 返回 detail（summary 字段 + entries + nextCursor 顶层结构）', { timeout: 60_000 }, async () => {
+  detailFixture = detailOf()
   const { handler } = makeHandlers()
   const res = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}`)
   assert.equal(res.status, 200)
+  // 顶层 summary 字段仍直接可访问（id/title/status...），entries/nextCursor 平铺
   assert.equal(res.body.id, ROOT_CONVERSATION_ID)
+  assert.equal(res.body.title, '个人助理')
+  assert.equal(res.body.status, 'idle')
+  assert.ok(Array.isArray(res.body.entries))
+  assert.equal(res.body.entries.length, 2)
+  assert.equal(res.body.entries[0].kind, 'pi.assistant')
+  assert.ok(Array.isArray(res.body.entries[0].model))
+  assert.equal(res.body.entries[1].kind, 'helm.input')
+  assert.deepEqual(res.body.entries[1].data, { id: 'i1', text: '问', origin: 'human', createdAt: 1 })
+  assert.equal(typeof res.body.nextCursor, 'string')
+})
+
+test('GET /:id?limit/cursor 透传 kernel.getConversationDetail；非法值 400', { timeout: 60_000 }, async () => {
+  detailFixture = detailOf()
+  const { handler } = makeHandlers()
+  const ok = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}?limit=10&cursor=${encodeURIComponent('{"a":1}')}`)
+  assert.equal(ok.status, 200)
+  const last = detailCalls.at(-1)!
+  assert.equal(last.id, ROOT_CONVERSATION_ID)
+  assert.deepEqual(last.opts, { limit: 10, cursor: '{"a":1}' })
+
+  for (const bad of ['limit=0', 'limit=-1', 'limit=abc', 'limit=501']) {
+    const res = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}?${bad}`)
+    assert.equal(res.status, 400, bad)
+    assert.equal(res.body.error.code, 'validation_error')
+  }
+  const emptyCursor = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}?cursor=`)
+  assert.equal(emptyCursor.status, 400)
+})
+
+test('GET /:id 会话不存在 404；多余段 404', { timeout: 60_000 }, async () => {
+  detailFixture = undefined
+  const { handler } = makeHandlers()
+  const missing = await call(handler, 'GET', '/api/conversations/999')
+  assert.equal(missing.status, 404)
+  const extra = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}/entries`)
+  assert.equal(extra.status, 404)
 })
 
 test('POST /:id/input 校验 origin/whenBusy 枚举并透传 kernel.submitInput', { timeout: 60_000 }, async () => {
@@ -586,6 +724,62 @@ test('POST /:id/input 校验 origin/whenBusy 枚举并透传 kernel.submitInput'
     body: { text: 'x', whenBusy: 'wait' },
   })
   assert.equal(badWhenBusy.status, 400)
+})
+
+test('POST input meta：纯 JSON 对象透传 opts.meta；数组/标量/未知字段 400', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const ok = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
+    body: { text: 'x', meta: { source: 'cron', extra: { nested: [1, 2] } } },
+  })
+  assert.equal(ok.status, 202)
+  assert.deepEqual(submitted.at(-1)?.opts, { meta: { source: 'cron', extra: { nested: [1, 2] } } })
+
+  const asArray = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
+    body: { text: 'x', meta: [1, 2] },
+  })
+  assert.equal(asArray.status, 400)
+  const asScalar = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
+    body: { text: 'x', meta: 'cron' },
+  })
+  assert.equal(asScalar.status, 400)
+  const unknown = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input`, {
+    body: { text: 'x', meta: {}, extra: true },
+  })
+  assert.equal(unknown.status, 400)
+  assert.equal(unknown.body.error.code, 'validation_error')
+})
+
+test('POST input?wait=1 调用 waitForInput 并返回 ConversationInputResult；非法 wait 400', { timeout: 60_000 }, async () => {
+  waitForInputResult = {
+    conversationId: ROOT_CONVERSATION_ID,
+    submissionId: 'sub-1',
+    text: '你好',
+    entry: { id: 'e9', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '答' }] }] },
+  }
+  const { handler } = makeHandlers()
+  const res = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input?wait=1`, {
+    body: { text: '你好' },
+  })
+  assert.equal(res.status, 200)
+  assert.equal(res.body.submissionId, 'sub-1')
+  assert.equal(res.body.conversationId, ROOT_CONVERSATION_ID)
+  assert.equal(res.body.entry.kind, 'pi.assistant')
+  assert.deepEqual(waitForInputCalls.at(-1), { id: ROOT_CONVERSATION_ID, submissionId: 'sub-mock' })
+
+  const bad = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input?wait=yes`, {
+    body: { text: 'x' },
+  })
+  assert.equal(bad.status, 400)
+
+  // wait 中 kernel 抛 HelmError（aborted 等）→ 错误信封如实透传
+  waitForInputError = new HelmError('input_unanswered', '输入未获回答（aborted）', 409, { reason: 'aborted' })
+  const failed = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input?wait=1`, {
+    body: { text: 'x' },
+  })
+  assert.equal(failed.status, 409)
+  assert.equal(failed.body.error.code, 'input_unanswered')
+  waitForInputError = undefined
+  waitForInputResult = undefined
 })
 
 test('POST /:id/input replaceFromEntryId 校验与透传；缺省时 opts 形状不变', { timeout: 60_000 }, async () => {
@@ -949,6 +1143,53 @@ test('profiles 托管保护：managedByPlugin 拒绝删除与篡改，POST 不�
   })
   assert.equal(inject.status, 403, 'PUT 不得给普通配置伪造托管身份')
   assert.equal((await profiles.get('ordinary'))?.managedByPlugin, undefined)
+
+  for (const invalid of [{ managedByPlugin: '' }, { managedByPlugin: '  ' }, { managedByPlugin: 42 }, { humanSelectable: 'false' }]) {
+    const bad = await call(handler, 'POST', '/api/profiles', { body: { id: 'bad-metadata', ...invalid } })
+    assert.equal(bad.status, 400)
+    assert.equal(bad.body.error.code, 'validation_error')
+  }
+})
+
+test('profiles runtime nodeId/workspace/env：合法保存回读；非法形状 400', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const ok = await call(handler, 'POST', '/api/profiles', {
+    body: {
+      id: 'ops-runner',
+      name: '运维',
+      runtime: {
+        kind: 'herdr',
+        agent: 'pi',
+        nodeId: 'ops-box',
+        workspace: '/srv/ops',
+        env: { HELM_ENV_ROLE: 'worker', LANG: 'C' },
+      },
+    },
+  })
+  assert.equal(ok.status, 201)
+  const got = await call(handler, 'GET', '/api/profiles/ops-runner')
+  assert.deepEqual(got.body.runtime, {
+    kind: 'herdr',
+    agent: 'pi',
+    nodeId: 'ops-box',
+    workspace: '/srv/ops',
+    env: { HELM_ENV_ROLE: 'worker', LANG: 'C' },
+  })
+
+  const cases: Array<{ runtime: unknown; why: string }> = [
+    { runtime: { kind: 'herdr', agent: 'pi', nodeId: '' }, why: 'nodeId 空串' },
+    { runtime: { kind: 'herdr', agent: 'pi', workspace: '' }, why: 'workspace 空串' },
+    { runtime: { kind: 'herdr', agent: 'pi', env: { K: 1 } }, why: 'env 值非字符串' },
+    { runtime: { kind: 'herdr', agent: 'pi', env: { '': 'v' } }, why: 'env 键空串' },
+    { runtime: { kind: 'herdr', agent: 'pi', env: ['a'] }, why: 'env 数组' },
+    { runtime: { kind: 'herdr', agent: 'pi', bogus: 1 }, why: 'runtime 未知键' },
+    { runtime: { kind: 'herdr', agent: 'pi', nodeId: 42 }, why: 'nodeId 非字符串' },
+  ]
+  for (const c of cases) {
+    const res = await call(handler, 'POST', '/api/profiles', { body: { id: 'bad-profile', runtime: c.runtime } })
+    assert.equal(res.status, 400, `${c.why} 应 400`)
+    assert.equal(res.body.error.code, 'validation_error', c.why)
+  }
 })
 
 test('profiles DELETE 默认 assistant 受保护（被根会话绑定或内核默认保护，不可经 HTTP 删除）', { timeout: 60_000 }, async () => {
@@ -1364,6 +1605,32 @@ test('plugins list；config PUT 保持 { values } 包裹', { timeout: 60_000 }, 
   assert.equal(badShape.body.error.code, 'validation_error')
 })
 
+test('GET /api/plugins/:id/docs/:name 返回 {pluginId,name,value}；私有/未声明/停用/未知 404', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const ok = await call(handler, 'GET', '/api/plugins/builtin:statusboard/docs/board')
+  assert.equal(ok.status, 200)
+  assert.deepEqual(ok.body, { pluginId: 'builtin:statusboard', name: 'board', value: { count: 42 } })
+
+  const priv = await call(handler, 'GET', '/api/plugins/builtin:statusboard/docs/secret-board')
+  assert.equal(priv.status, 404)
+  assert.ok(!JSON.stringify(priv.body).includes('hidden'))
+
+  const undeclared = await call(handler, 'GET', '/api/plugins/builtin:statusboard/docs/nope')
+  assert.equal(undeclared.status, 404)
+  const unknownPlugin = await call(handler, 'GET', '/api/plugins/builtin:ghost/docs/board')
+  assert.equal(unknownPlugin.status, 404)
+
+  // 鉴权不能绕过：无 token 401
+  const noAuth = await call(handler, 'GET', '/api/plugins/builtin:statusboard/docs/board', { auth: false })
+  assert.equal(noAuth.status, 401)
+
+  // 非法 doc name（以点开头）400；合法形状但未声明 404；多余段 404
+  const badName = await call(handler, 'GET', '/api/plugins/builtin:statusboard/docs/.hidden')
+  assert.equal(badName.status, 400)
+  const extra = await call(handler, 'GET', '/api/plugins/builtin:statusboard/docs/board/extra')
+  assert.equal(extra.status, 404)
+})
+
 test('真实 action：invoke 200；null 原样返回不伪造成功对象', { timeout: 60_000 }, async () => {
   // 追加一个返回 null 的动作（null 是合法输出）
   await pluginHost.register({
@@ -1537,6 +1804,26 @@ test('startHub 真实往返：编码 pluginId 经 node 服务器命中 action', 
   } finally {
     await handle.close().catch(() => {})
   }
+})
+
+test('startHub(port:0) 监听后 kernel.setHubUrl 收到真实 URL', { timeout: 60_000 }, async () => {
+  const kernel = makeKernel()
+  setHubUrlCalls.length = 0
+  const handle = await startHub({ kernel, port: 0 })
+  try {
+    assert.equal(setHubUrlCalls.length, 1)
+    assert.equal(setHubUrlCalls[0], handle.url)
+    // 真实往返仍通
+    const res = await fetch(`${handle.url}/api/conversations`, { headers: { authorization: `Bearer ${token}` } })
+    assert.equal(res.status, 200)
+  } finally {
+    await handle.close()
+  }
+  // 不提供 setHubUrl 的 kernel 也不报错
+  const bare = makeKernel()
+  delete (bare as { setHubUrl?: unknown }).setHubUrl
+  const handle2 = await startHub({ kernel: bare, port: 0 })
+  await handle2.close()
 })
 
 test('CORS：任意来源均反射并带凭据头', { timeout: 60_000 }, async () => {
