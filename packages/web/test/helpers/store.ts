@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { HelmStoreContext } from '../../src/lib/store-context.js'
 import { PluginClientContext, createPluginClientContext } from '../../src/lib/plugin-client-context.js'
-import { groupUiContributions, spaceForTarget, type HelmStoreValue } from '../../src/lib/types.js'
+import { groupUiContributions, type HelmStoreValue } from '../../src/lib/types.js'
 import {
   getSessionDocState,
   subscribeSessionDoc,
@@ -19,12 +19,12 @@ export function makeTestStore(overrides: Partial<HelmStoreValue> = {}): HelmStor
     groupedUi: groupUiContributions([]), pluginDocs: {}, nodes: [], profiles: [], assetsLoaded: true, models: [],
     providers: [], credentials: [], skills: [], actions: [],
     primaryTarget: { kind: 'conversation', conversationId: 1 }, splitTarget: null,
-    workbenchOpen: false, workbenchTab: 'artifacts', sidebarSpace: 'conversations', activeModal: null, highlightedEntry: null, notices: [],
+    workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices: [],
     setTheme: noop, setThemePreference: noop, toggleTheme: noop, checkAuth: asyncNoop,
     onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, syncPlugins: noop, refreshNodes: asyncNoop,
     loadConversationDetail: asyncNoop, loadEarlierEntries: asyncNoop, loadConversationArtifacts: asyncNoop,
     ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,
-    setWorkbenchTab: noop, setSidebarSpace: noop, setActiveModal: noop, dismissNotice: noop, pushNotice: noop,
+    setWorkbenchTab: noop, openSpace: noop, setActiveModal: noop, dismissNotice: noop, pushNotice: noop,
     invokePluginAction: asyncNoop,
     subscribeSessionDoc: (key: SessionDocKey, listener: () => void) => subscribeSessionDoc(key, listener),
     getSessionDocState,
@@ -32,8 +32,6 @@ export function makeTestStore(overrides: Partial<HelmStoreValue> = {}): HelmStor
     retrySessionDoc: noop,
     ...overrides,
   }
-  // 侧栏空间缺省跟随主屏隐含空间（与真实 Provider 的对齐行为一致），可显式覆写。
-  if (overrides.sidebarSpace === undefined) store.sidebarSpace = spaceForTarget(store.primaryTarget)
   return store
 }
 

@@ -9,7 +9,7 @@ import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary, PluginUiContribution } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
-import { groupUiContributions, type HelmStoreValue, type ResolvedTarget, type SidebarSpace } from '../src/lib/types.js'
+import { groupUiContributions, spaceForTarget, type HelmStoreValue, type ResolvedTarget, type SidebarSpace } from '../src/lib/types.js'
 import { makeTestStore } from './helpers/store.js'
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -88,11 +88,27 @@ function setInputValue(input: HTMLInputElement, text: string): void {
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-/** 侧栏空间挂具：真实 Sidebar 经 store.setSidebarSpace（唯一导航机制）切换空间；
- * 测试用本地 React 状态承载该 setter，验证 Rail 点击到空间切换的完整链路。 */
+/** 空间代表目标（模拟真实 Provider 的空间回跳：views 取首个可用 screen，settings 缺省角色中心）。
+ * 空间高亮由 primaryTarget 经 spaceForTarget 推导，不再有独立的 sidebarSpace 状态。 */
+const SPACE_REPRESENTATIVE: Record<SidebarSpace, ResolvedTarget> = {
+  conversations: { kind: 'conversation', conversationId: 1 },
+  views: { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' },
+  settings: { kind: 'profiles' },
+}
+
+/** 侧栏空间挂具：真实 Sidebar 经 store.openSpace（唯一导航机制）切换空间——主屏目标
+ * 直接切到该空间代表目标，空间高亮由 primaryTarget 推导，验证 Rail 点击到空间
+ * 切换的完整链路（与真实 Provider 的 openSpace 行为一致）。 */
 function SpaceAwareSidebar({ base }: { base: HelmStoreValue }): React.ReactElement {
-  const [space, setSpace] = React.useState<SidebarSpace>(base.sidebarSpace)
-  const store = React.useMemo(() => ({ ...base, sidebarSpace: space, setSidebarSpace: setSpace }), [base, space])
+  const [primary, setPrimary] = React.useState<ResolvedTarget>(base.primaryTarget)
+  const store = React.useMemo<HelmStoreValue>(() => ({
+    ...base,
+    primaryTarget: primary,
+    openSpace: (space: SidebarSpace) => {
+      if (spaceForTarget(primary) === space) return
+      setPrimary(SPACE_REPRESENTATIVE[space])
+    },
+  }), [base, primary])
   return e(HelmStoreContext.Provider, { value: store }, e(Sidebar))
 }
 

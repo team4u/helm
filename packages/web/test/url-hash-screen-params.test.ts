@@ -179,7 +179,7 @@ test('刷新深链恢复：sp.*/ssp.* 参数从地址栏还原，异步初始数
   stubFetch()
   t.after(() => (globalThis.fetch as unknown as { restore: () => void }).restore())
   snapshotDelayMs = 30 // SSE snapshot 延迟到达（异步初始数据）
-  resetLocation('#/s/test:nav/board?sp.tab=runs&sp.q=%E4%B8%AD%E6%96%87&split=s/test:nav/board&ssp.tab=logs')
+  resetLocation('#/views/test:nav/board?sp.tab=runs&sp.q=%E4%B8%AD%E6%96%87&split=views/test:nav/board&ssp.tab=logs')
   const app = mountApp()
   try {
     await app.settle()
@@ -192,11 +192,11 @@ test('刷新深链恢复：sp.*/ssp.* 参数从地址栏还原，异步初始数
       kind: 'screen', pluginId: 'test:nav', screenId: 'board',
       params: { tab: 'logs' },
     })
-    // 地址栏保持规范编码：split 值经 URLSearchParams 转义，中文参数值百分号编码；
-    // 键序为 formatLocationHash 的稳定插入序（split → sp.* 字典序 → ssp.*）。
+    // 地址栏保持规范编码：split 值为 canonical 目标路径（views/...）经 URLSearchParams 转义，
+    // 中文参数值百分号编码；键序为 formatLocationHash 的稳定插入序（split → sp.* 字典序 → ssp.*）。
     assert.equal(
       snapshot.hash,
-      '#/s/test:nav/board?split=s%2Ftest%3Anav%2Fboard&sp.q=%E4%B8%AD%E6%96%87&sp.tab=runs&ssp.tab=logs',
+      '#/views/test:nav/board?split=views%2Ftest%3Anav%2Fboard&sp.q=%E4%B8%AD%E6%96%87&sp.tab=runs&ssp.tab=logs',
     )
     // ScreenProps 探针拿到的是各自的参数（主/分屏不串）
     assert.deepEqual(app.primaryScreen()!.params, { tab: 'runs', q: '中文' })
@@ -212,7 +212,7 @@ test('setParams 默认 replace：仅参数变化不新增历史记录，地址�
   stubFetch()
   t.after(() => (globalThis.fetch as unknown as { restore: () => void }).restore())
   snapshotDelayMs = 0
-  resetLocation('#/s/test:nav/board?sp.tab=runs')
+  resetLocation('#/views/test:nav/board?sp.tab=runs')
   const app = mountApp()
   try {
     await app.settle()
@@ -236,7 +236,7 @@ test('setParams { push: true } 显式入栈，浏览器后退/前进还原参数
   stubFetch()
   t.after(() => (globalThis.fetch as unknown as { restore: () => void }).restore())
   snapshotDelayMs = 0
-  resetLocation('#/s/test:nav/board?sp.tab=runs')
+  resetLocation('#/views/test:nav/board?sp.tab=runs')
   const app = mountApp()
   try {
     await app.settle()
@@ -274,7 +274,7 @@ test('主屏与分屏同 screen 双开：setParams 各自独立，互不串扰',
   stubFetch()
   t.after(() => (globalThis.fetch as unknown as { restore: () => void }).restore())
   snapshotDelayMs = 0
-  resetLocation('#/s/test:nav/board?sp.tab=runs&split=s/test:nav/board&ssp.tab=logs')
+  resetLocation('#/views/test:nav/board?sp.tab=runs&split=views/test:nav/board&ssp.tab=logs')
   const app = mountApp()
   try {
     await app.settle()

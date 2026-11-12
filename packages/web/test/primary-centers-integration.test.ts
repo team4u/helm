@@ -12,7 +12,7 @@
  * 3. 命令面板（CommandPaletteModal）直达一级中心：
  *    - 四大快捷项执行 openTarget 并自动关闭面板；
  * 4. 路由契约与旧 URL 平滑升级：
- *    - 往返编解码支持 ?id=<id> 子项深链与分屏组合；
+ *    - 往返编解码支持 settings/<center>/<id> 路径段子项深链与分屏组合；
  *    - 旧 modal=profiles|providers|skills|nodes 自动升格为对应全屏一级视图；
  * 5. 四大中心组件群挂载与抽屉联动：
  *    - ProfileCenter、SkillCenter、NodeCenter、ModelCenter 渲染、卡片网格与抽屉交互；
@@ -159,14 +159,16 @@ test('CommandPaletteModal：4 大快捷项统一分发一级路由并关闭面�
 
 test('URL Hash 契约：四大中心往返编解码与子项深链', { timeout: 60_000 }, () => {
   const cases = [
-    { hash: '#/profiles', state: { primaryTarget: { kind: 'profiles' as const } } },
-    { hash: '#/profiles?id=watchdog', state: { primaryTarget: { kind: 'profiles' as const, profileId: 'watchdog' } } },
-    { hash: '#/skills', state: { primaryTarget: { kind: 'skills' as const } } },
-    { hash: '#/skills?id=helm-cli', state: { primaryTarget: { kind: 'skills' as const, skillId: 'helm-cli' } } },
-    { hash: '#/nodes', state: { primaryTarget: { kind: 'nodes' as const } } },
-    { hash: '#/nodes?id=local', state: { primaryTarget: { kind: 'nodes' as const, nodeId: 'local' } } },
-    { hash: '#/models', state: { primaryTarget: { kind: 'models' as const } } },
-    { hash: '#/models?id=anthropic', state: { primaryTarget: { kind: 'models' as const, providerId: 'anthropic' } } },
+    { hash: '#/settings/profiles', state: { primaryTarget: { kind: 'profiles' as const } } },
+    { hash: '#/settings/profiles/watchdog', state: { primaryTarget: { kind: 'profiles' as const, profileId: 'watchdog' } } },
+    { hash: '#/settings/skills', state: { primaryTarget: { kind: 'skills' as const } } },
+    { hash: '#/settings/skills/helm-cli', state: { primaryTarget: { kind: 'skills' as const, skillId: 'helm-cli' } } },
+    { hash: '#/settings/nodes', state: { primaryTarget: { kind: 'nodes' as const } } },
+    { hash: '#/settings/nodes/local', state: { primaryTarget: { kind: 'nodes' as const, nodeId: 'local' } } },
+    { hash: '#/settings/models', state: { primaryTarget: { kind: 'models' as const } } },
+    { hash: '#/settings/models/anthropic', state: { primaryTarget: { kind: 'models' as const, providerId: 'anthropic' } } },
+    { hash: '#/settings/models/defaults', state: { primaryTarget: { kind: 'models' as const, tab: 'defaults' as const } } },
+    { hash: '#/settings/models/anthropic/defaults', state: { primaryTarget: { kind: 'models' as const, providerId: 'anthropic', tab: 'defaults' as const } } },
   ]
 
   for (const { hash, state } of cases) {

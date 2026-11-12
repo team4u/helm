@@ -8,7 +8,7 @@ import { Checkbox } from '../ui/Checkbox.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
-import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, type HelmStoreValue, type SidebarSpace } from '../lib/types.js'
+import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type HelmStoreValue, type SidebarSpace } from '../lib/types.js'
 import {
   AGENT_SUB_LIST_PREVIEW,
   buildAgentStandings,
@@ -1114,8 +1114,8 @@ const CENTER_LABELS: Record<CenterKey, string> = {
   plugins: '插件中心',
 }
 
-/** 侧栏空间类型（SidebarSpace）与空间推导（spaceForTarget）在 lib/types.ts，
- * 与 URL Hash 契约（sidebar 参数）同源；Rail 点击经 store.setSidebarSpace 唯一导航。 */
+/** 侧栏空间由主屏目标唯一推导（spaceForTarget，lib/types.ts），不进 URL；
+ * Rail 点击经 store.openSpace 直接导航该空间的主舞台目标（含会话内空间记忆）。 */
 
 const SPACE_ICONS: Record<SidebarSpace, string> = {
   conversations: 'message-square',
@@ -1131,18 +1131,17 @@ const SPACE_LABELS: Record<SidebarSpace, string> = {
 
 /**
  * Activity Rail（48px）：仅空间切换（对话/视图/设置）+ 主题按钮。
- * 桌面与移动抽屉共用；系统中心入口收敛到「设置」空间内的纵向列表。
+ * 桌面与移动抽屉共用；空间按钮直接导航主舞台到对应空间的最近目标（store.openSpace），
+ * 系统中心入口收敛到「设置」空间内的纵向列表。
  */
 function ActivityRail({
   store,
   space,
-  onSpaceChange,
-  onClose,
+  onOpenSpace,
 }: {
   store: HelmStoreValue
   space: SidebarSpace
-  onSpaceChange: (space: SidebarSpace) => void
-  onClose?: () => void
+  onOpenSpace: (space: SidebarSpace) => void
 }) {
   return (
     <nav className="activity-rail" aria-label="主导航">
@@ -1159,7 +1158,7 @@ function ActivityRail({
               title={SPACE_LABELS[key]}
               aria-label={SPACE_LABELS[key]}
               aria-current={space === key ? 'page' : undefined}
-              onClick={() => onSpaceChange(key)}
+              onClick={() => onOpenSpace(key)}
             >
               <HelmIcon name={SPACE_ICONS[key]} size={16} />
             </button>
@@ -1244,13 +1243,20 @@ function SettingsNavGroup({ store, onNavigate }: { store: HelmStoreValue; onNavi
 
 export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   const store = useHelmStore()
-  // 侧栏空间是全局导航位置（store.sidebarSpace，sidebar 参数）：Rail 点击入栈，刷新/前进/后退可还原；
-  // 跨空间导航时由 Provider 自动对齐主屏隐含空间。
-  const space = store.sidebarSpace
+  // 侧栏空间由主屏目标唯一推导（不进 URL）；Rail 点击经 store.openSpace 直接导航
+  // 该空间最近的主舞台目标，URL 即该空间真实锚点，刷新/前进/后退天然可还原。
+  const space = spaceForTarget(store.primaryTarget)
 
   return (
     <aside className="helm-sidebar">
-      <ActivityRail store={store} space={space} onSpaceChange={store.setSidebarSpace} onClose={onClose} />
+      <ActivityRail
+        store={store}
+        space={space}
+        onOpenSpace={(nextSpace) => {
+          store.openSpace(nextSpace)
+          onClose?.()
+        }}
+      />
       <div className="sidebar-context">
         <div className="sidebar-header">
           <div className="sidebar-context-title">

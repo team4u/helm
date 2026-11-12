@@ -32,7 +32,7 @@ const CATEGORY_TABS: Array<{ key: SkillCategoryTab; label: string }> = [
  * - 检索栏：输入框支持模糊搜索 ID / 名称 / 描述 / 参考文件路径，联动分类药丸标签；
  * - 响应式卡片网格：消费 SkillCard 呈现流式卡片，零 Emoji；
  * - 详情与文档预览抽屉：联动 SkillDetailDrawer 展示 SKILL.md 与 references/*.md；
- * - 与 URL Hash 深度联动：支持 #/skills?id=<id> 深链直达与浏览器历史栈同步；
+ * - 与 URL Hash 深度联动：支持 #/settings/skills/<skillId> 深链直达与浏览器历史栈同步；
  * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
  */
 export function SkillCenter({

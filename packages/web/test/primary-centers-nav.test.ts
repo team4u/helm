@@ -25,12 +25,12 @@ const baseState = (target: ResolvedTarget): WorkspaceLocationState => ({
 // 1. serializeHash 与 formatLocationHash 序列化契约
 // ---------------------------------------------------------------------------
 
-test('serializeHash: 四大中心基础路由分别输出 #/profiles, #/skills, #/nodes, #/models', { timeout: 60_000 }, () => {
+test('serializeHash: 四大中心基础路由分别输出 #/settings/profiles, #/settings/skills, #/settings/nodes, #/settings/models', { timeout: 60_000 }, () => {
   const centers: Array<{ kind: 'profiles' | 'skills' | 'nodes' | 'models'; expected: string }> = [
-    { kind: 'profiles', expected: '#/profiles' },
-    { kind: 'skills', expected: '#/skills' },
-    { kind: 'nodes', expected: '#/nodes' },
-    { kind: 'models', expected: '#/models' },
+    { kind: 'profiles', expected: '#/settings/profiles' },
+    { kind: 'skills', expected: '#/settings/skills' },
+    { kind: 'nodes', expected: '#/settings/nodes' },
+    { kind: 'models', expected: '#/settings/models' },
   ]
 
   for (const { kind, expected } of centers) {
@@ -41,34 +41,43 @@ test('serializeHash: 四大中心基础路由分别输出 #/profiles, #/skills, 
   }
 })
 
-test('serializeHash: 携带选中子项时输出 ?id=<id>（参数正确编码）', { timeout: 60_000 }, () => {
+test('serializeHash: 携带选中子项时输出 #/settings/<center>/<id>（冒号路径段保持可读）', { timeout: 60_000 }, () => {
   assert.equal(
     serializeHash({ kind: 'profiles', profileId: 'superagent' }),
-    '#/profiles?id=superagent',
+    '#/settings/profiles/superagent',
   )
   assert.equal(
     serializeHash({ kind: 'profiles', profileId: 'worker:analysis' }),
-    '#/profiles?id=worker%3Aanalysis',
+    '#/settings/profiles/worker:analysis',
   )
   assert.equal(
     serializeHash({ kind: 'skills', skillId: 'git-commit' }),
-    '#/skills?id=git-commit',
+    '#/settings/skills/git-commit',
   )
   assert.equal(
     serializeHash({ kind: 'nodes', nodeId: 'gpu-server-1' }),
-    '#/nodes?id=gpu-server-1',
+    '#/settings/nodes/gpu-server-1',
   )
   assert.equal(
     serializeHash({ kind: 'models', providerId: 'anthropic' }),
-    '#/models?id=anthropic',
+    '#/settings/models/anthropic',
+  )
+  // defaults 是保留段：全局默认 Tab 与「供应商 + 默认 Tab」组合均收进路径段
+  assert.equal(
+    serializeHash({ kind: 'models', tab: 'defaults' }),
+    '#/settings/models/defaults',
+  )
+  assert.equal(
+    serializeHash({ kind: 'models', providerId: 'anthropic', tab: 'defaults' }),
+    '#/settings/models/anthropic/defaults',
   )
 })
 
 test('serializeHash: 空或空白 id 视为无选中子项，仅输出基础路由', { timeout: 60_000 }, () => {
-  assert.equal(serializeHash({ kind: 'profiles', profileId: '' }), '#/profiles')
-  assert.equal(serializeHash({ kind: 'skills', skillId: '' }), '#/skills')
-  assert.equal(serializeHash({ kind: 'nodes', nodeId: '' }), '#/nodes')
-  assert.equal(serializeHash({ kind: 'models', providerId: '' }), '#/models')
+  assert.equal(serializeHash({ kind: 'profiles', profileId: '' }), '#/settings/profiles')
+  assert.equal(serializeHash({ kind: 'skills', skillId: '' }), '#/settings/skills')
+  assert.equal(serializeHash({ kind: 'nodes', nodeId: '' }), '#/settings/nodes')
+  assert.equal(serializeHash({ kind: 'models', providerId: '' }), '#/settings/models')
 })
 
 test('serializeHash: 四大中心作为主屏时与分屏、工作台、弹窗正交组合', { timeout: 60_000 }, () => {
@@ -81,9 +90,8 @@ test('serializeHash: 四大中心作为主屏时与分屏、工作台、弹窗�
   }
   const hash = formatLocationHash(state)
   const search = new URLSearchParams(hash.slice(hash.indexOf('?') + 1))
-  assert.equal(hash.startsWith('#/profiles?'), true)
-  assert.equal(search.get('id'), 'superagent')
-  assert.equal(search.get('split'), 'models?id=anthropic')
+  assert.equal(hash.startsWith('#/settings/profiles/superagent?'), true)
+  assert.equal(search.get('split'), 'settings/models/anthropic')
   assert.equal(search.get('wb'), 'artifacts')
   assert.equal(search.get('modal'), 'drawer')
 })
@@ -93,38 +101,51 @@ test('serializeHash: 四大中心作为主屏时与分屏、工作台、弹窗�
 // ---------------------------------------------------------------------------
 
 test('parseHash: 基础路由正确还原为各中心目标', { timeout: 60_000 }, () => {
+  assert.deepEqual(parseHash('#/settings/profiles').primaryTarget, { kind: 'profiles' })
+  assert.deepEqual(parseHash('#/settings/skills').primaryTarget, { kind: 'skills' })
+  assert.deepEqual(parseHash('#/settings/nodes').primaryTarget, { kind: 'nodes' })
+  assert.deepEqual(parseHash('#/settings/models').primaryTarget, { kind: 'models' })
+  // 旧顶层路径形态（如 #/providers）整体非法，回退默认主屏（角色中心）
+  assert.deepEqual(parseHash('#/providers').primaryTarget, { kind: 'profiles' })
   assert.deepEqual(parseHash('#/profiles').primaryTarget, { kind: 'profiles' })
-  assert.deepEqual(parseHash('#/skills').primaryTarget, { kind: 'skills' })
-  assert.deepEqual(parseHash('#/nodes').primaryTarget, { kind: 'nodes' })
-  assert.deepEqual(parseHash('#/models').primaryTarget, { kind: 'models' })
-  // 兼容 #/providers 别名
-  assert.deepEqual(parseHash('#/providers').primaryTarget, { kind: 'models' })
 
   // 容忍尾部斜杠
-  assert.deepEqual(parseLocationHash('#/profiles/').primaryTarget, { kind: 'profiles' })
-  assert.deepEqual(parseLocationHash('#/skills/').primaryTarget, { kind: 'skills' })
+  assert.deepEqual(parseLocationHash('#/settings/profiles/').primaryTarget, { kind: 'profiles' })
+  assert.deepEqual(parseLocationHash('#/settings/skills/').primaryTarget, { kind: 'skills' })
 })
 
-test('parseHash: ?id=<id> 正确还原携带对应 ID 的目标', { timeout: 60_000 }, () => {
+test('parseHash: #/settings/<center>/<id> 正确还原携带对应 ID 的目标', { timeout: 60_000 }, () => {
   assert.deepEqual(
-    parseHash('#/profiles?id=superagent').primaryTarget,
+    parseHash('#/settings/profiles/superagent').primaryTarget,
     { kind: 'profiles', profileId: 'superagent' },
   )
   assert.deepEqual(
-    parseHash('#/skills?id=git-commit').primaryTarget,
+    parseHash('#/settings/skills/git-commit').primaryTarget,
     { kind: 'skills', skillId: 'git-commit' },
   )
   assert.deepEqual(
-    parseHash('#/nodes?id=local').primaryTarget,
+    parseHash('#/settings/nodes/local').primaryTarget,
     { kind: 'nodes', nodeId: 'local' },
   )
   assert.deepEqual(
-    parseHash('#/models?id=openai').primaryTarget,
+    parseHash('#/settings/models/openai').primaryTarget,
     { kind: 'models', providerId: 'openai' },
   )
+  // 容忍百分号编码冒号的形式
   assert.deepEqual(
-    parseHash('#/providers?id=anthropic').primaryTarget,
-    { kind: 'models', providerId: 'anthropic' },
+    parseHash('#/settings/profiles/worker%3Aanalysis').primaryTarget,
+    { kind: 'profiles', profileId: 'worker:analysis' },
+  )
+})
+
+test('parseHash: models 保留段 defaults 还原全局默认 Tab 与组合形态', { timeout: 60_000 }, () => {
+  assert.deepEqual(
+    parseHash('#/settings/models/defaults').primaryTarget,
+    { kind: 'models', tab: 'defaults' },
+  )
+  assert.deepEqual(
+    parseHash('#/settings/models/anthropic/defaults').primaryTarget,
+    { kind: 'models', providerId: 'anthropic', tab: 'defaults' },
   )
 })
 
@@ -138,6 +159,8 @@ test('roundtrip: 四大中心目标双向编解码往返无损', { timeout: 60_0
     baseState({ kind: 'nodes', nodeId: 'gpu-box' }),
     baseState({ kind: 'models' }),
     baseState({ kind: 'models', providerId: 'deepseek' }),
+    baseState({ kind: 'models', tab: 'defaults' }),
+    baseState({ kind: 'models', providerId: 'deepseek', tab: 'defaults' }),
     {
       primaryTarget: { kind: 'profiles', profileId: 'coder' },
       splitTarget: { kind: 'nodes', nodeId: 'local' },
@@ -271,7 +294,7 @@ test('shouldPushLocationHistory: 各中心从列表打开抽屉走 push，抽屉
 })
 
 // ---------------------------------------------------------------------------
-// 5. 兼容解析：旧的 #/c/1?modal=profiles|skills|nodes|providers 平滑升级
+// 5. 兼容解析：旧的 #/c/1?modal=profiles|skills|nodes|providers|plugins 平滑升级
 // ---------------------------------------------------------------------------
 
 test('upgradeLegacyLocationState: 旧 modal 参数平滑升级为对应一级全屏中心', { timeout: 60_000 }, () => {

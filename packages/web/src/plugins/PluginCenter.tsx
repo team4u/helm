@@ -24,7 +24,7 @@ export interface PluginCenterProps {
  * - 升格为系统一级主舞台视图，彻底淘汰旧的居中模态小弹窗；
  * - 顶部工具栏：关键字检索搜索框；
  * - 响应式卡片网格：消费 PluginCard 自适应流式呈现；
- * - 详情与配置抽屉：右侧联动滑出 PluginDetailDrawer，深链与 URL Hash 闭环同步；
+ * - 详情与配置抽屉：右侧联动滑出 PluginDetailDrawer，与 URL Hash 深链（#/settings/plugins/<pluginId>）闭环同步；
  * - 快捷启停与通知：安全调用 pluginsApi，提供在途任务冲突提示；
  * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
  */

@@ -44,66 +44,73 @@ test('parse: 会话主屏（#/c/<id>）与空 Hash 默认角色中心', { timeou
   }
 })
 
-test('parse: 插件全屏视图（#/s/<pluginId>/<screenId>，pluginId 含冒号保持可读）', { timeout: 60_000 }, () => {
-  const parsed = parseLocationHash('#/s/builtin:herdr/overview')
+test('parse: 插件全屏视图（#/views/<pluginId>/<screenId>，pluginId 含冒号保持可读）', { timeout: 60_000 }, () => {
+  const parsed = parseLocationHash('#/views/builtin:herdr/overview')
   assert.deepEqual(parsed.primaryTarget, { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' })
   // 百分号编码形式同样可解析（与 resolveTargetString 的 lastIndexOf 切分语义一致）
-  const encoded = parseLocationHash('#/s/builtin%3Aherdr/overview')
+  const encoded = parseLocationHash('#/views/builtin%3Aherdr/overview')
   assert.deepEqual(encoded.primaryTarget, { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' })
 })
 
 test('parse: 分屏参数 split（会话与插件视图、编码形式）', { timeout: 60_000 }, () => {
   const convSplit = parseLocationHash('#/c/1?split=c/42')
   assert.deepEqual(convSplit.splitTarget, { kind: 'conversation', conversationId: 42 })
-  const screenSplit = parseLocationHash('#/c/1?split=s/builtin:herdr/overview')
+  const screenSplit = parseLocationHash('#/c/1?split=views/builtin:herdr/overview')
   assert.deepEqual(screenSplit.splitTarget, { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' })
-  const encodedSplit = parseLocationHash('#/c/1?split=s%2Fbuiltin%3Aherdr%2Foverview')
+  const encodedSplit = parseLocationHash('#/c/1?split=views%2Fbuiltin%3Aherdr%2Foverview')
   assert.deepEqual(encodedSplit.splitTarget, { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' })
 })
 
-test('parse: 模型中心全局默认 Tab（#/models?tab=defaults）与旧 id=defaults 深链升级', { timeout: 60_000 }, () => {
-  // 新契约：tab=defaults 直达全局默认 Tab
-  assert.deepEqual(parseLocationHash('#/models?tab=defaults').primaryTarget, {
+test('parse: 模型中心全局默认 Tab（#/settings/models/defaults）与组合子路径', { timeout: 60_000 }, () => {
+  // defaults 是保留段：直达全局默认 Tab
+  assert.deepEqual(parseLocationHash('#/settings/models/defaults').primaryTarget, {
     kind: 'models',
     tab: 'defaults',
   })
-  // 与供应商抽屉深链正交组合：providerId + tab 同时保留
-  const combo = parseLocationHash('#/models?id=anthropic&tab=defaults')
-  assert.deepEqual(combo.primaryTarget, { kind: 'models', providerId: 'anthropic', tab: 'defaults' })
-  // 旧深链 id=defaults（虚拟卡片）自动升级为全局默认 Tab
-  assert.deepEqual(parseLocationHash('#/models?id=defaults').primaryTarget, {
+  // providerId 子段：供应商抽屉深链
+  assert.deepEqual(parseLocationHash('#/settings/models/anthropic').primaryTarget, {
     kind: 'models',
+    providerId: 'anthropic',
+  })
+  // 抽屉 + Tab 组合（分屏打开供应商时保留当前 Tab）
+  assert.deepEqual(parseLocationHash('#/settings/models/anthropic/defaults').primaryTarget, {
+    kind: 'models',
+    providerId: 'anthropic',
     tab: 'defaults',
   })
-  // 非法 tab 值静默丢弃（仅接受 defaults）
-  assert.deepEqual(parseLocationHash('#/models?tab=providers').primaryTarget, { kind: 'models' })
-  assert.deepEqual(parseLocationHash('#/models?tab=unknown').primaryTarget, { kind: 'models' })
-  // 分屏目标同样支持 tab=defaults
-  const split = parseLocationHash('#/c/1?split=models%3Ftab%3Ddefaults')
+  // defaults 保留段之后不允许再挂段；非 defaults 尾段判非法
+  assert.deepEqual(parseLocationHash('#/settings/models/defaults/x').primaryTarget, { kind: 'profiles' })
+  assert.deepEqual(parseLocationHash('#/settings/models/anthropic/providers').primaryTarget, { kind: 'profiles' })
+  // 分屏目标同样使用路径段
+  const split = parseLocationHash('#/c/1?split=settings%2Fmodels%2Fdefaults')
   assert.deepEqual(split.splitTarget, { kind: 'models', tab: 'defaults' })
 })
 
-test('format: 模型中心 tab=defaults 序列化与往返无损；providers 缺省不序列化', { timeout: 60_000 }, () => {
+test('format: 模型中心路径段序列化与往返无损；providers 缺省 Tab 不序列化', { timeout: 60_000 }, () => {
   assert.equal(
     formatLocationHash({ ...conversation(1), primaryTarget: { kind: 'models', tab: 'defaults' } }),
-    '#/models?tab=defaults',
+    '#/settings/models/defaults',
   )
   assert.equal(
     formatLocationHash({ ...conversation(1), primaryTarget: { kind: 'models', tab: 'providers' } }),
-    '#/models',
+    '#/settings/models',
   )
-  // providerId + tab 组合
+  // providerId 抽屉与组合
+  assert.equal(
+    formatLocationHash({ ...conversation(1), primaryTarget: { kind: 'models', providerId: 'anthropic' } }),
+    '#/settings/models/anthropic',
+  )
   assert.equal(
     formatLocationHash({
       ...conversation(1),
       primaryTarget: { kind: 'models', providerId: 'anthropic', tab: 'defaults' },
     }),
-    '#/models?id=anthropic&tab=defaults',
+    '#/settings/models/anthropic/defaults',
   )
   // 往返无损
   const state: WorkspaceLocationState = {
     ...conversation(1),
-    primaryTarget: { kind: 'models', tab: 'defaults' },
+    primaryTarget: { kind: 'models', providerId: 'anthropic', tab: 'defaults' },
   }
   assert.deepEqual(roundtrip(state), state)
   // tab 差异参与位置比较；同中心切 Tab 不入历史栈（replace）
@@ -180,7 +187,7 @@ test('format: 组合状态（视图主屏 + 会话分屏 + 工作台 + 弹窗子
   // 路径 segment 仅保留冒号可读（builtin:herdr）。
   assert.equal(
     hash,
-    '#/s/builtin:herdr/overview?split=c%2F42&wb=plugin%3Abuiltin%3Aherdr%2Fpanel-x&modal=skills&id=git-commit',
+    '#/views/builtin:herdr/overview?split=c%2F42&wb=plugin%3Abuiltin%3Aherdr%2Fpanel-x&modal=skills&id=git-commit',
   )
   // 用 URLSearchParams 解析断言等价：不依赖手写编码预期。
   const query = new URLSearchParams(hash.slice(hash.indexOf('?') + 1))
@@ -203,6 +210,9 @@ test('roundtrip: 全部位置形态双向往返无损', { timeout: 60_000 }, () 
       activeModal: null,
     },
     { ...conversation(1), splitTarget: { kind: 'conversation', conversationId: 42 } },
+    { ...conversation(1), splitTarget: { kind: 'plugins', pluginId: 'builtin:herdr' } },
+    { ...conversation(1), primaryTarget: { kind: 'profiles', profileId: 'watchdog' } },
+    { ...conversation(1), primaryTarget: { kind: 'models', providerId: 'anthropic', tab: 'defaults' } },
     { ...conversation(1), workbenchOpen: true, workbenchTab: 'artifacts' },
     { ...conversation(1), activeModal: { kind: 'profile-editor' } },
     { ...conversation(1), activeModal: { kind: 'profile-editor', profileId: 'watchdog' } },
@@ -224,15 +234,21 @@ test('roundtrip: 全部位置形态双向往返无损', { timeout: 60_000 }, () 
 // 边界防御：非法 / 脏 Hash 输入
 // ---------------------------------------------------------------------------
 
-test('parse: 非法主屏路径回退默认角色中心（无 NaN / 空段）', { timeout: 60_000 }, () => {
-  for (const raw of ['#/c/abc', '#/c/0', '#/c/-5', '#/c/1.5', '#/c/ 1', '#/unknown', '#/s/onlyone', '#/s//x', '#/s/x/', '#/c/9999999999999999999999']) {
+test('parse: 非法主屏路径回退默认角色中心（无 NaN / 空段 / 多余层级）', { timeout: 60_000 }, () => {
+  for (const raw of [
+    '#/c/abc', '#/c/0', '#/c/-5', '#/c/1.5', '#/c/ 1', '#/c/9999999999999999999999',
+    '#/unknown',
+    '#/views/onlyone', '#/views//x', '#/views/x/', '#/views/a/b/c',
+    '#/settings', '#/settings/', '#/settings/unknown', '#/settings//profiles',
+    '#/settings/profiles/a/b', '#/settings/profiles/%E0%A4%A',
+  ]) {
     const parsed = parseLocationHash(raw)
     assert.deepEqual(parsed.primaryTarget, { kind: 'profiles' }, raw)
   }
 })
 
 test('parse: 非法分屏值忽略为 null', { timeout: 60_000 }, () => {
-  for (const raw of ['#/c/1?split=bad', '#/c/1?split=', '#/c/1?split=c/0', '#/c/1?split=c/abc', '#/c/1?split=s/only-plugin', '#/c/1?split=x/1']) {
+  for (const raw of ['#/c/1?split=bad', '#/c/1?split=', '#/c/1?split=c/0', '#/c/1?split=c/abc', '#/c/1?split=views/only-plugin', '#/c/1?split=x/1', '#/c/1?split=settings/profiles/a/b', '#/c/1?split=settings/profiles/']) {
     assert.equal(parseLocationHash(raw).splitTarget, null, raw)
   }
 })
@@ -250,58 +266,61 @@ test('parse: 未知 modal 值与 artifact 缺 id 均丢弃为 null', { timeout: 
 })
 
 test('parse: 非法百分号序列不抛出（decode 失败按无效段回退默认）', { timeout: 60_000 }, () => {
-  assert.deepEqual(parseLocationHash('#/s/%E0%A4%A/x').primaryTarget, { kind: 'profiles' })
+  assert.deepEqual(parseLocationHash('#/views/%E0%A4%A/x').primaryTarget, { kind: 'profiles' })
+  assert.deepEqual(parseLocationHash('#/settings/skills/%E0%A4%A').primaryTarget, { kind: 'profiles' })
 })
 
 // ---------------------------------------------------------------------------
-// 侧栏空间（sidebar 参数）：Rail 点击入链，刷新/前进/后退可还原
+// 设置中心层级路径、旧路径回退与 sidebar 参数移除（开发阶段不保留兼容层）
 // ---------------------------------------------------------------------------
 
-test('parse: 侧栏空间 sidebar（偏离隐含空间时恢复；缺省/非法值回退隐含空间）', { timeout: 60_000 }, () => {
-  assert.equal(parseLocationHash('#/c/5?sidebar=settings').sidebarSpace, 'settings')
-  assert.equal(parseLocationHash('#/c/5?sidebar=views').sidebarSpace, 'views')
-  // 缺省不产生键 = 跟随主屏隐含空间（保持既有往返契约）
-  assert.equal(parseLocationHash('#/c/5').sidebarSpace, undefined)
-  assert.equal(parseLocationHash('#/profiles').sidebarSpace, undefined)
-  assert.equal(parseLocationHash('#/s/builtin:herdr/overview').sidebarSpace, undefined)
-  // 与隐含一致的显式值忠实保留（序列化时会去重省略）
-  assert.equal(parseLocationHash('#/profiles?sidebar=settings').sidebarSpace, 'settings')
-  // 非法值静默丢弃
-  for (const raw of ['#/c/5?sidebar=bogus', '#/c/5?sidebar=', '#/c/5?sidebar=constructor', '#/c/5?sidebar=Views']) {
-    assert.equal(parseLocationHash(raw).sidebarSpace, undefined, raw)
+test('parse/format: 设置中心层级路径（子项路径段 + 分段编码，往返无损）', { timeout: 60_000 }, () => {
+  assert.deepEqual(parseLocationHash('#/settings/profiles').primaryTarget, { kind: 'profiles' })
+  assert.deepEqual(parseLocationHash('#/settings/profiles/watchdog').primaryTarget, { kind: 'profiles', profileId: 'watchdog' })
+  assert.deepEqual(parseLocationHash('#/settings/skills/git-commit').primaryTarget, { kind: 'skills', skillId: 'git-commit' })
+  assert.deepEqual(parseLocationHash('#/settings/nodes/gpu-server').primaryTarget, { kind: 'nodes', nodeId: 'gpu-server' })
+  assert.deepEqual(parseLocationHash('#/settings/plugins/builtin:herdr').primaryTarget, { kind: 'plugins', pluginId: 'builtin:herdr' })
+  // 子项含斜杠/空格/中文：分段编码后不破坏层级，往返无损
+  for (const id of ['team/alpha', 'hello world', '中文', 'builtin:herdr']) {
+    const state: WorkspaceLocationState = { ...conversation(1), primaryTarget: { kind: 'profiles', profileId: id } }
+    assert.deepEqual(roundtrip(state), state, id)
   }
+  // 百分号编码形式同样可解析（冒号保持可读）
+  assert.deepEqual(parseLocationHash('#/settings/plugins/builtin%3Aherdr').primaryTarget, { kind: 'plugins', pluginId: 'builtin:herdr' })
+  assert.deepEqual(parseLocationHash('#/settings/profiles/team%2Falpha').primaryTarget, { kind: 'profiles', profileId: 'team/alpha' })
+  // serializeHash 直接收中心目标
+  assert.equal(serializeHash({ kind: 'skills' }), '#/settings/skills')
+  assert.equal(serializeHash({ kind: 'plugins', pluginId: 'builtin:herdr' }), '#/settings/plugins/builtin:herdr')
+  assert.equal(serializeHash({ kind: 'profiles', profileId: 'watchdog' }), '#/settings/profiles/watchdog')
 })
 
-test('format: 侧栏空间仅偏离隐含时序列化 sidebar；与其它参数共存且往返稳定', { timeout: 60_000 }, () => {
-  assert.equal(formatLocationHash({ ...conversation(5), sidebarSpace: 'settings' }), '#/c/5?sidebar=settings')
-  // 与隐含一致 / 未指定时不序列化，保持常用 URL 干净
-  assert.equal(formatLocationHash({ ...conversation(5), sidebarSpace: 'conversations' }), '#/c/5')
-  assert.equal(formatLocationHash(conversation(5)), '#/c/5')
-  // 主屏在设置中心时隐含 settings：仅对话/视图偏离才序列化
-  const center: WorkspaceLocationState = { ...conversation(5), primaryTarget: { kind: 'profiles' } }
-  assert.equal(formatLocationHash({ ...center, sidebarSpace: 'settings' }), '#/profiles')
-  assert.equal(formatLocationHash({ ...center, sidebarSpace: 'conversations' }), '#/profiles?sidebar=conversations')
-  // 与分屏/工作台共存往返无损
-  const state: WorkspaceLocationState = {
-    ...conversation(5),
-    splitTarget: { kind: 'conversation', conversationId: 9 },
-    workbenchOpen: true,
-    workbenchTab: 'artifacts',
-    sidebarSpace: 'views',
+test('parse: 旧路径与旧查询参数一律回退默认（不保留兼容层）', { timeout: 60_000 }, () => {
+  for (const raw of [
+    '#/profiles', '#/profiles?id=watchdog',
+    '#/models', '#/models?tab=defaults', '#/models?id=anthropic',
+    '#/skills?id=git-commit', '#/nodes', '#/plugins?p=builtin:herdr',
+    '#/providers',
+    '#/s/builtin:herdr/overview', '#/s/p/main',
+  ]) {
+    assert.deepEqual(parseLocationHash(raw).primaryTarget, { kind: 'profiles' }, raw)
   }
-  const back = roundtrip(state)
-  assert.equal(back.sidebarSpace, 'views')
-  assert.equal(isSameLocationState(back, state), true)
-  assert.equal(formatLocationHash(back), formatLocationHash(state))
+  // split 内旧 id/p/tab 查询与旧路径同样失效（子项走路径段）
+  assert.equal(parseLocationHash('#/c/1?split=profiles%3Fid%3Dwatchdog').splitTarget, null)
+  assert.equal(parseLocationHash('#/c/1?split=plugins%3Fp%3Dbuiltin%3Aherdr').splitTarget, null)
+  assert.equal(parseLocationHash('#/c/1?split=s%2Fp%2Fmain').splitTarget, null)
+  // split 内 settings 层级子项正常解析
+  assert.deepEqual(parseLocationHash('#/c/1?split=settings%2Fplugins%2Fbuiltin%3Aherdr').splitTarget, {
+    kind: 'plugins', pluginId: 'builtin:herdr',
+  })
 })
 
-test('isSameLocationState / shouldPushLocationHistory: 侧栏空间参与位置比较，单独变化默认 replace', { timeout: 60_000 }, () => {
-  const base = conversation(1)
-  // 显式值与隐含空间一致时等价（未指定 = 隐含）
-  assert.equal(isSameLocationState(base, { ...base, sidebarSpace: 'conversations' }), true)
-  assert.equal(isSameLocationState(base, { ...base, sidebarSpace: 'settings' }), false)
-  // 仅侧栏空间变化默认 replace；Rail 点击由 setSidebarSpace 显式标记 push
-  assert.equal(shouldPushLocationHistory(base, { ...base, sidebarSpace: 'settings' }), false)
+test('parse/format: sidebar 参数不再属于位置契约（解析忽略、序列化丢弃）', { timeout: 60_000 }, () => {
+  const parsed = parseLocationHash('#/c/5?sidebar=settings')
+  assert.deepEqual(parsed.primaryTarget, { kind: 'conversation', conversationId: 5 })
+  assert.equal((parsed as unknown as Record<string, unknown>).sidebarSpace, undefined)
+  // 整体往返后 sidebar 参数消失
+  assert.equal(formatLocationHash(parseLocationHash('#/c/5?sidebar=settings')), '#/c/5')
+  assert.equal(formatLocationHash(parseLocationHash('#/views/p/main?sidebar=settings&wb=')), '#/views/p/main?wb=artifacts')
 })
 
 // ---------------------------------------------------------------------------
@@ -599,9 +618,9 @@ test('契约: HelmStoreProvider 初始状态取自 Hash、监听外部变更、�
   assert.ok(writeBack.includes('pendingHistoryMode.current'), '显式历史标记须由唯一写回 effect 消费')
   const screenParamsImpl = source.slice(source.indexOf('const setScreenParams'), source.indexOf('const invokePluginAction'))
   assert.ok(!screenParamsImpl.includes('history.'), 'setScreenParams 不得直接操作浏览器历史')
-  // logout 用 replaceState 复位地址栏，不污染历史栈
+  // logout 用 replaceState 复位地址栏，不污染历史栈（默认角色中心的规范路径）
   const logoutBody = source.slice(source.indexOf('const logout'), source.indexOf('useEffect', source.indexOf('const logout')))
-  assert.match(logoutBody, /replaceState\(null, '', '#\/profiles'\)/)
+  assert.match(logoutBody, /replaceState\(null, '', '#\/settings\/profiles'\)/)
   // 诚实性纪律：snapshot 到达时不得静默重置 primaryTarget（仅保留 conversation.deleted 实时事件处理）
   assert.ok(!/applySnapshot[\s\S]{0,400}setPrimaryTarget/.test(source), 'snapshot 处理不得触碰 primaryTarget')
 })
@@ -611,7 +630,7 @@ test('契约: HelmStoreProvider 初始状态取自 Hash、监听外部变更、�
 // ---------------------------------------------------------------------------
 
 test('screen params: sp.* 归主屏、ssp.* 归分屏，同一 screen 双开参数互不串扰', { timeout: 60_000 }, () => {
-  const parsed = parseLocationHash('#/s/builtin:workflow/runs?sp.runId=wf_1&split=s/builtin:herdr/overview&ssp.node=local&ssp.status=blocked')
+  const parsed = parseLocationHash('#/views/builtin:workflow/runs?sp.runId=wf_1&split=views/builtin:herdr/overview&ssp.node=local&ssp.status=blocked')
   assert.deepEqual(parsed.primaryTarget, {
     kind: 'screen', pluginId: 'builtin:workflow', screenId: 'runs', params: { runId: 'wf_1' },
   })
@@ -630,9 +649,9 @@ test('screen params: sp.* 归主屏、ssp.* 归分屏，同一 screen 双开参�
 })
 
 test('screen params: 无参数时目标形状保持无 params 字段；切回会话自动丢弃命名空间参数', { timeout: 60_000 }, () => {
-  assert.deepEqual(parseLocationHash('#/s/p/main').primaryTarget, { kind: 'screen', pluginId: 'p', screenId: 'main' })
+  assert.deepEqual(parseLocationHash('#/views/p/main').primaryTarget, { kind: 'screen', pluginId: 'p', screenId: 'main' })
   // 主屏切回 c/<id>：sp.* 无处可挂，自然丢弃；ssp.* 仍属分屏保留
-  const parsed = parseLocationHash('#/c/1?sp.k=v&split=s/p/main&ssp.k2=v2')
+  const parsed = parseLocationHash('#/c/1?sp.k=v&split=views/p/main&ssp.k2=v2')
   assert.deepEqual(parsed.primaryTarget, { kind: 'conversation', conversationId: 1 })
   assert.deepEqual(parsed.splitTarget, { kind: 'screen', pluginId: 'p', screenId: 'main', params: { k2: 'v2' } })
   // 关闭分屏后 format 不再输出 ssp.*（状态里已无分屏目标）
@@ -648,23 +667,23 @@ test('screen params: 字典序稳定序列化，与其它查询参数共存', { 
     workbenchTab: 'tasks',
     activeModal: null,
   }
-  assert.equal(formatLocationHash(state), '#/s/p/main?sp.alpha=2&sp.mid=3&sp.zeta=1&wb=tasks')
+  assert.equal(formatLocationHash(state), '#/views/p/main?sp.alpha=2&sp.mid=3&sp.zeta=1&wb=tasks')
 })
 
 test('screen params: 非法键 / 空值 / 非法编码 / 未知前缀全部丢弃，不产生半损参数', { timeout: 60_000 }, () => {
   // 键不匹配 ^[A-Za-z0-9._-]+$（含空格、%、中文、括号）或空键：丢弃
   for (const raw of [
-    '#/s/p/main?sp.=v',
-    '#/s/p/main?sp.a%20b=v',
-    '#/s/p/main?sp.a%28b%29=v',
-    '#/s/p/main?sp.%E4%B8%AD=v',
-    '#/s/p/main?sp.a=',
-    '#/s/p/main?sp.%E0%A4%A=v',
+    '#/views/p/main?sp.=v',
+    '#/views/p/main?sp.a%20b=v',
+    '#/views/p/main?sp.a%28b%29=v',
+    '#/views/p/main?sp.%E4%B8%AD=v',
+    '#/views/p/main?sp.a=',
+    '#/views/p/main?sp.%E0%A4%A=v',
   ]) {
     assert.deepEqual(parseLocationHash(raw).primaryTarget, { kind: 'screen', pluginId: 'p', screenId: 'main' }, raw)
   }
   // 原型键不挂上对象
-  const proto = parseLocationHash('#/s/p/main?sp.__proto__=x&sp.constructor=y')
+  const proto = parseLocationHash('#/views/p/main?sp.__proto__=x&sp.constructor=y')
   assert.equal((proto.primaryTarget as { params?: Record<string, string> }).params, undefined)
   // 值里的特殊字符经 URLSearchParams 编码往返无损（空格、&、=、?、#）
   const weird = parseLocationHash(formatLocationHash({
@@ -674,7 +693,7 @@ test('screen params: 非法键 / 空值 / 非法编码 / 未知前缀全部丢�
   const weirdParams = weird.primaryTarget.kind === 'screen' ? weird.primaryTarget.params : undefined
   assert.deepEqual(weirdParams, { q: "a b&c=d?e#f", path: '/x/y' })
   // 非 sp./ssp. 前缀的键不属于任何 screen，不误吞
-  const noPrefix = parseLocationHash('#/s/p/main?runId=wf_1').primaryTarget
+  const noPrefix = parseLocationHash('#/views/p/main?runId=wf_1').primaryTarget
   assert.equal(noPrefix.kind === 'screen' ? noPrefix.params : undefined, undefined)
 })
 

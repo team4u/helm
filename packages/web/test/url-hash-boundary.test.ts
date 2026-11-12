@@ -32,8 +32,27 @@ test('Hash 边界：所有路径段、查询值都按各自层级编解码', { t
   }
 })
 
-test('Hash 边界：未编码的多余路径段不能冒充合法插件目标', { timeout: 60_000 }, () => {
-  // 非法 screen 目标整体判无效 -> 回退默认角色中心（与 base 的显式会话目标无关）
-  assert.deepEqual(parseLocationHash('#/s/a/b/c').primaryTarget, { kind: 'profiles' })
-  assert.equal(parseLocationHash('#/c/1?split=s/a/b/c').splitTarget, null)
+test('Hash 边界：设置中心子项段的编码斜杠不破坏层级', { timeout: 60_000 }, () => {
+  // 子项值内的斜杠必须编码：%2F 属于子项值，不拆层级
+  assert.deepEqual(parseLocationHash('#/settings/profiles/team%2Falpha').primaryTarget, {
+    kind: 'profiles',
+    profileId: 'team/alpha',
+  })
+  assert.deepEqual(parseLocationHash('#/views/a%2Fb/c').primaryTarget, {
+    kind: 'screen',
+    pluginId: 'a/b',
+    screenId: 'c',
+  })
+  // 裸斜杠会拆出多余层级段 → 判非法回退默认
+  assert.deepEqual(parseLocationHash('#/settings/profiles/team/alpha').primaryTarget, { kind: 'profiles' })
+  assert.deepEqual(parseLocationHash('#/settings/skills/a/b').primaryTarget, { kind: 'profiles' })
+  // 尾随斜杠归一化为中心列表页（与主路径归一化一致）；split 内不归一化，判无效
+  assert.deepEqual(parseLocationHash('#/settings/profiles/').primaryTarget, { kind: 'profiles' })
+  assert.equal(parseLocationHash('#/c/1?split=settings%2Fprofiles%2F').splitTarget, null)
+})
+
+test('Hash 边界：未编码的多余路径段不能冒充合法目标', { timeout: 60_000 }, () => {
+  // 非法目标整体判无效 -> 回退默认角色中心（与 base 的显式会话目标无关）
+  assert.deepEqual(parseLocationHash('#/views/a/b/c').primaryTarget, { kind: 'profiles' })
+  assert.equal(parseLocationHash('#/c/1?split=views/a/b/c').splitTarget, null)
 })

@@ -11,7 +11,7 @@ import type {
   SkillSummary,
 } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
-import { groupUiContributions, resolveTargetString, spaceForTarget, type HelmStoreValue } from '../src/lib/types.js'
+import { groupUiContributions, resolveTargetString, type HelmStoreValue } from '../src/lib/types.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import {
   type AgentStanding,
@@ -677,7 +677,6 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
     splitTarget: null,
     workbenchOpen: false,
     workbenchTab: 'artifacts',
-    sidebarSpace: 'conversations',
     activeModal: null,
     highlightedEntry: null,
     notices: [],
@@ -698,7 +697,7 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
     setScreenParams: () => {},
     setWorkbenchOpen: () => {},
     setWorkbenchTab: () => {},
-    setSidebarSpace: () => {},
+    openSpace: () => {},
     setActiveModal: () => {},
     dismissNotice: () => {},
     pushNotice: () => {},
@@ -709,8 +708,6 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
     retrySessionDoc: noop,
     ...partial,
   }
-  // 侧栏空间缺省跟随主屏隐含空间（与真实 Provider 的对齐行为一致），可显式覆写。
-  if (partial.sidebarSpace === undefined) store.sidebarSpace = spaceForTarget(store.primaryTarget)
   return store
 }
 

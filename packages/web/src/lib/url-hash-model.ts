@@ -1,8 +1,18 @@
-import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, SIDEBAR_SPACES, spaceForTarget, type ActiveModal, type ResolvedTarget, type SidebarSpace } from './types.js'
+import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, type ActiveModal, type ResolvedTarget } from './types.js'
 
 /**
  * 地址栏 Hash 所表达的工作台位置：主屏目标、右分屏、工作台抽屉与顶层弹窗。
  * 本模块零 React / DOM 依赖，仅做纯函数编解码与对比，语法契约见 test/url-hash.test.ts。
+ *
+ * 路径树（层级化路由：子项一律是路径段，不再是查询参数）：
+ * - `c/<id>`                                                     会话
+ * - `a/<profileId>`                                              智能体待命页
+ * - `views/<pluginId>/<screenId>`                                插件全屏视图
+ * - `settings/profiles[/<profileId>]`                            角色中心
+ * - `settings/models[/<providerId>|/defaults|/<providerId>/defaults]` 模型中心（defaults 为保留段 = 全局默认 Tab）
+ * - `settings/skills[/<skillId>]`                                技能中心
+ * - `settings/nodes[/<nodeId>]`                                  节点中心
+ * - `settings/plugins[/<pluginId>]`                              插件中心
  */
 export interface WorkspaceLocationState {
   primaryTarget: ResolvedTarget
@@ -10,8 +20,6 @@ export interface WorkspaceLocationState {
   splitTarget: ResolvedTarget | null
   workbenchOpen: boolean
   workbenchTab: string
-  /** 侧栏空间（sidebar 参数）：缺省 = 跟随主屏隐含空间；仅偏离隐含空间时序列化。 */
-  sidebarSpace?: SidebarSpace
   activeModal: ActiveModal
 }
 
@@ -20,7 +28,7 @@ type PersistedModal = Exclude<ActiveModal, null | { kind: 'command-palette' }>
 
 /**
  * 缺省主屏：智能体角色中心（无会话依赖，零会话/全部删除后仍可用；
- * 历史缺省 conversation:1 已随根会话特殊设计移除）。
+ * 序列化为 `#/settings/profiles`；历史缺省 conversation:1 已随根会话特殊设计移除）。
  */
 const DEFAULT_PRIMARY: ResolvedTarget = { kind: 'profiles' }
 const DEFAULT_WORKBENCH_TAB = 'artifacts'
@@ -119,15 +127,24 @@ function parseNamespacedParam(
   }
 }
 
-/** 从查询串提取命名空间 Screen 参数；非法项丢弃（静默防入侵），合法项不排序也可稳定往返。 */
+/** 从查询串提取命名空间 Screen 参数；非法项与重复键丢弃（静默防入侵）。 */
 function extractScreenParams(
   params: URLSearchParams,
   prefix: string,
 ): Record<string, string> | undefined {
-  const result: Record<string, string> = {}
+  const candidates = new Map<string, { key: string; value: string } | null>()
+  const duplicates = new Set<string>()
   for (const [rawKey, rawValue] of params) {
-    const parsed = parseNamespacedParam(rawKey, rawValue, prefix)
-    if (parsed !== null) result[parsed.key] = parsed.value
+    if (candidates.has(rawKey)) {
+      duplicates.add(rawKey)
+      continue
+    }
+    candidates.set(rawKey, parseNamespacedParam(rawKey, rawValue, prefix))
+  }
+  const result: Record<string, string> = {}
+  for (const [rawKey, parsed] of candidates) {
+    if (duplicates.has(rawKey) || parsed === null) continue
+    result[parsed.key] = parsed.value
   }
   return Object.keys(result).length === 0 ? undefined : result
 }
@@ -144,23 +161,12 @@ function formatScreenParams(
     .map((key) => [`${prefix}${key}`, target.params![key]] as [string, string])
 }
 
-/** 解析 `c/<id>` / `a/<profileId>` / `s/<pluginId>/<screenId>` / 各大一级全屏中心；先切分路径，再分别解码，避免 ID 中的转义斜杠破坏结构。 */
+/**
+ * 解析单个 canonical 目标路径（主屏路径与 split 值的路径部分共用）。
+ * 先按裸斜杠切分层级，再逐段解码——段内编码后的斜杠（%2F）不会破坏层级；
+ * 多余层级 / 空段 / 非法编码一律整体判无效（返回 null），不静默取前段。
+ */
 function parseTargetValue(raw: string): ResolvedTarget | null {
-  if (raw === 'plugins') {
-    return { kind: 'plugins' }
-  }
-  if (raw === 'profiles') {
-    return { kind: 'profiles' }
-  }
-  if (raw === 'skills') {
-    return { kind: 'skills' }
-  }
-  if (raw === 'nodes') {
-    return { kind: 'nodes' }
-  }
-  if (raw === 'models' || raw === 'providers') {
-    return { kind: 'models' }
-  }
   if (raw.startsWith('c/')) {
     const conversationId = parsePositiveInt(raw.slice(2))
     return conversationId === null ? null : { kind: 'conversation', conversationId }
@@ -173,8 +179,8 @@ function parseTargetValue(raw: string): ResolvedTarget | null {
     if (profileId === null) return null
     return { kind: 'agent', profileId }
   }
-  if (raw.startsWith('s/')) {
-    const rest = raw.slice(2)
+  if (raw.startsWith('views/')) {
+    const rest = raw.slice('views/'.length)
     const slashIdx = rest.indexOf('/')
     if (slashIdx <= 0 || slashIdx === rest.length - 1 || rest.indexOf('/', slashIdx + 1) !== -1) return null
     const pluginId = decodeSegment(rest.slice(0, slashIdx))
@@ -182,94 +188,104 @@ function parseTargetValue(raw: string): ResolvedTarget | null {
     if (pluginId === null || screenId === null) return null
     return { kind: 'screen', pluginId, screenId }
   }
+  if (raw.startsWith('settings/')) {
+    const rest = raw.slice('settings/'.length)
+    if (rest === '') return null
+    const slashIdx = rest.indexOf('/')
+    const center = slashIdx === -1 ? rest : rest.slice(0, slashIdx)
+    if (slashIdx === -1) {
+      // 中心列表页（无子项）
+      if (center === 'profiles') return { kind: 'profiles' }
+      if (center === 'models') return { kind: 'models' }
+      if (center === 'skills') return { kind: 'skills' }
+      if (center === 'nodes') return { kind: 'nodes' }
+      if (center === 'plugins') return { kind: 'plugins' }
+      return null
+    }
+    const sub = rest.slice(slashIdx + 1)
+    if (center === 'models') return parseModelsSubTarget(sub)
+    // 单子项中心：恰好一个路径段
+    if (sub === '' || sub.includes('/')) return null
+    const subId = decodeSegment(sub)
+    if (subId === null) return null
+    if (center === 'profiles') return { kind: 'profiles', profileId: subId }
+    if (center === 'skills') return { kind: 'skills', skillId: subId }
+    if (center === 'nodes') return { kind: 'nodes', nodeId: subId }
+    if (center === 'plugins') return { kind: 'plugins', pluginId: subId }
+    return null
+  }
   return null
+}
+
+/**
+ * 解析 models 中心子路径：`defaults` | `<providerId>` | `<providerId>/defaults`。
+ * `defaults` 是保留段（全局默认 Tab，历史虚拟卡片语义延续），不当作 providerId；
+ * `<providerId>/defaults` 表达「供应商抽屉 + 全局默认 Tab」组合（分屏打开供应商时保留当前 Tab）。
+ */
+function parseModelsSubTarget(sub: string): ResolvedTarget | null {
+  const slashIdx = sub.indexOf('/')
+  const first = slashIdx === -1 ? sub : sub.slice(0, slashIdx)
+  if (first === '') return null
+  if (first === 'defaults') {
+    return slashIdx === -1 ? { kind: 'models', tab: 'defaults' } : null
+  }
+  const providerId = decodeSegment(first)
+  if (providerId === null) return null
+  if (slashIdx === -1) return { kind: 'models', providerId }
+  if (sub.slice(slashIdx + 1) !== 'defaults') return null
+  return { kind: 'models', providerId, tab: 'defaults' }
 }
 
 function formatTargetValue(target: ResolvedTarget): string {
   if (target.kind === 'conversation') return `c/${target.conversationId}`
   if (target.kind === 'agent') return `a/${encodeSegment(target.profileId)}`
-  if (target.kind === 'screen') return `s/${encodeSegment(target.pluginId)}/${encodeSegment(target.screenId)}`
-  if (target.kind === 'plugins') return 'plugins'
-  if (target.kind === 'profiles') return 'profiles'
-  if (target.kind === 'skills') return 'skills'
-  if (target.kind === 'nodes') return 'nodes'
-  if (target.kind === 'models') return 'models'
+  if (target.kind === 'screen') return `views/${encodeSegment(target.pluginId)}/${encodeSegment(target.screenId)}`
+  if (target.kind === 'plugins') {
+    return target.pluginId === undefined || target.pluginId === '' ? 'settings/plugins' : `settings/plugins/${encodeSegment(target.pluginId)}`
+  }
+  if (target.kind === 'profiles') {
+    return target.profileId === undefined || target.profileId === '' ? 'settings/profiles' : `settings/profiles/${encodeSegment(target.profileId)}`
+  }
+  if (target.kind === 'skills') {
+    return target.skillId === undefined || target.skillId === '' ? 'settings/skills' : `settings/skills/${encodeSegment(target.skillId)}`
+  }
+  if (target.kind === 'nodes') {
+    return target.nodeId === undefined || target.nodeId === '' ? 'settings/nodes' : `settings/nodes/${encodeSegment(target.nodeId)}`
+  }
+  if (target.kind === 'models') {
+    const parts = ['settings/models']
+    // `defaults` 是保留段，不作为 providerId 序列化（providers 为缺省 Tab，不序列化）
+    if (target.providerId !== undefined && target.providerId !== '' && target.providerId !== 'defaults') {
+      parts.push(encodeSegment(target.providerId))
+    }
+    if (target.tab === 'defaults') parts.push('defaults')
+    return parts.join('/')
+  }
   return ''
 }
 
-/** 解析 models 目标 ?tab= 参数：仅接受 defaults（providers 为缺省，不序列化）。 */
-const parseModelsTabParam = (raw: string | null): 'defaults' | undefined =>
-  raw === 'defaults' ? 'defaults' : undefined
-
-/** 历史 id=defaults 深链升级：旧虚拟卡片已下线，重定向到全局默认 Tab。 */
-const upgradeLegacyModelsTarget = (target: { kind: 'models'; providerId?: string }): ResolvedTarget =>
-  target.providerId === 'defaults' ? { kind: 'models', tab: 'defaults' } : target
-
+/**
+ * 解析 split 值：与主屏共用同一套 canonical 目标路径（含 settings/views 层级与中心子项路径段）；
+ * 仅 agent 目标可在路径后再携带内嵌查询串 `?node=&cwd=`（中心子项与 Tab 已收进路径段，
+ * screen 参数始终在顶层 ssp.* 命名空间，均不再经 split 内查询传递）。
+ */
 function parseSplitTargetValue(raw: string): ResolvedTarget | null {
   const queryIdx = raw.indexOf('?')
   const path = queryIdx === -1 ? raw : raw.slice(0, queryIdx)
   const baseTarget = parseTargetValue(path)
   if (baseTarget === null) return null
   if (queryIdx === -1) return baseTarget
+  if (baseTarget.kind !== 'agent') return baseTarget
   const params = new URLSearchParams(raw.slice(queryIdx + 1))
-  const pluginParam = params.get('p')
-  const pluginId = pluginParam !== null && pluginParam.trim() !== '' ? pluginParam.trim() : undefined
-  const idParam = params.get('id')
-  const subId = idParam !== null && idParam.trim() !== '' ? idParam.trim() : undefined
-  if (baseTarget.kind === 'plugins') {
-    const pId = pluginId ?? subId
-    return pId !== undefined ? { kind: 'plugins', pluginId: pId } : baseTarget
-  }
-  if (baseTarget.kind === 'profiles' && subId !== undefined) {
-    return { kind: 'profiles', profileId: subId }
-  }
-  if (baseTarget.kind === 'skills' && subId !== undefined) {
-    return { kind: 'skills', skillId: subId }
-  }
-  if (baseTarget.kind === 'nodes' && subId !== undefined) {
-    return { kind: 'nodes', nodeId: subId }
-  }
-  if (baseTarget.kind === 'models') {
-    return upgradeLegacyModelsTarget({
-      kind: 'models',
-      ...(subId !== undefined ? { providerId: subId } : {}),
-      ...(parseModelsTabParam(params.get('tab')) !== undefined
-        ? { tab: parseModelsTabParam(params.get('tab')) as 'defaults' }
-        : {}),
-    })
-  }
-  if (baseTarget.kind === 'agent') {
-    return applyAgentEnv(baseTarget, extractAgentEnv(params))
-  }
-  return baseTarget
+  return applyAgentEnv(baseTarget, extractAgentEnv(params))
 }
 
 function formatSplitTarget(target: ResolvedTarget): string {
   const base = formatTargetValue(target)
   const agentEnv = formatAgentEnvParams(target)
-  if (agentEnv.length > 0) {
-    const env = new URLSearchParams(agentEnv).toString()
-    return `${base}?${env}`
-  }
-  if (target.kind === 'plugins' && target.pluginId) {
-    return `${base}?p=${encodeSegment(target.pluginId)}`
-  }
-  if (target.kind === 'profiles' && target.profileId) {
-    return `${base}?id=${encodeSegment(target.profileId)}`
-  }
-  if (target.kind === 'skills' && target.skillId) {
-    return `${base}?id=${encodeSegment(target.skillId)}`
-  }
-  if (target.kind === 'nodes' && target.nodeId) {
-    return `${base}?id=${encodeSegment(target.nodeId)}`
-  }
-  if (target.kind === 'models' && target.providerId) {
-    return `${base}?id=${encodeSegment(target.providerId)}${target.tab === 'defaults' ? '&tab=defaults' : ''}`
-  }
-  if (target.kind === 'models' && target.tab === 'defaults') {
-    return `${base}?tab=defaults`
-  }
-  return base
+  if (agentEnv.length === 0) return base
+  const env = new URLSearchParams(agentEnv).toString()
+  return `${base}?${env}`
 }
 
 /** 列表型弹窗的子项 ID（profileId / skillId / pluginId / nodeId）或抽屉会话 ID。 */
@@ -318,8 +334,8 @@ function parseActiveModal(params: URLSearchParams): ActiveModal {
 }
 
 /**
- * 解析 `#/path?searchParams` 形式的 Hash。所有非法段均回退默认
- * （角色中心 / 无分屏 / 工作台关闭 / 无弹窗），绝不抛出或产生 NaN。
+ * 解析 `#/path?searchParams` 形式的 Hash。所有非法段（含全部旧路径形态）均回退默认
+ * （角色中心 `#/settings/profiles` / 无分屏 / 工作台关闭 / 无弹窗），绝不抛出或产生 NaN。
  */
 export function parseLocationHash(rawHash: string): WorkspaceLocationState {
   const raw = rawHash.startsWith('#') ? rawHash.slice(1) : rawHash
@@ -328,46 +344,12 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
   const params = new URLSearchParams(queryIdx === -1 ? '' : raw.slice(queryIdx + 1))
   const splitRaw = params.get('split')
   const workbenchTab = params.get('wb')
-  // 侧栏空间：仅接受合法 sidebar 值；缺省 / 非法值不产生键（跟随主屏隐含空间）。
-  const sidebarRaw = params.get('sidebar')
-  const sidebarSpace =
-    sidebarRaw !== null && (SIDEBAR_SPACES as readonly string[]).includes(sidebarRaw)
-      ? (sidebarRaw as SidebarSpace)
-      : undefined
   let primaryTarget = parseTargetValue(path) ?? DEFAULT_PRIMARY
-  const splitTarget = splitRaw === null || splitRaw === '' ? null : parseSplitTargetValue(splitRaw)
-
-  const pluginParam = params.get('p')
-  const pluginId = pluginParam !== null && pluginParam.trim() !== '' ? pluginParam.trim() : undefined
-  const idParam = params.get('id')
-  const subId = idParam !== null && idParam.trim() !== '' ? idParam.trim() : undefined
-
-  if (primaryTarget.kind === 'plugins') {
-    const pId = pluginId ?? subId
-    if (pId !== undefined) {
-      primaryTarget = { kind: 'plugins', pluginId: pId }
-    }
-  } else if (primaryTarget.kind === 'profiles' && subId !== undefined) {
-    primaryTarget = { kind: 'profiles', profileId: subId }
-  } else if (primaryTarget.kind === 'skills' && subId !== undefined) {
-    primaryTarget = { kind: 'skills', skillId: subId }
-  } else if (primaryTarget.kind === 'nodes' && subId !== undefined) {
-    primaryTarget = { kind: 'nodes', nodeId: subId }
-  } else if (primaryTarget.kind === 'models') {
-    const upgraded = upgradeLegacyModelsTarget({
-      kind: 'models',
-      ...(subId !== undefined ? { providerId: subId } : {}),
-    })
-    const tab = parseModelsTabParam(params.get('tab'))
-    primaryTarget =
-      tab === undefined
-        ? upgraded
-        : upgraded.kind === 'models' && upgraded.providerId !== undefined
-          ? { kind: 'models', providerId: upgraded.providerId, tab }
-          : { kind: 'models', tab }
-  } else if (primaryTarget.kind === 'agent') {
+  // agent 待命主屏的草稿环境来自顶层 node/cwd 参数（split 内 agent 环境编码在 split 值内部）。
+  if (primaryTarget.kind === 'agent') {
     primaryTarget = applyAgentEnv(primaryTarget, extractAgentEnv(params))
   }
+  const splitTarget = splitRaw === null || splitRaw === '' ? null : parseSplitTargetValue(splitRaw)
 
   const state: WorkspaceLocationState = {
     primaryTarget:
@@ -380,7 +362,6 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
         : splitTarget,
     workbenchOpen: params.has('wb'),
     workbenchTab: workbenchTab !== null && workbenchTab !== '' ? workbenchTab : DEFAULT_WORKBENCH_TAB,
-    ...(sidebarSpace !== undefined ? { sidebarSpace } : {}),
     activeModal: parseActiveModal(params),
   }
   Object.defineProperty(state, 'target', {
@@ -401,38 +382,15 @@ function applyScreenParams(
   return params === undefined ? target : { ...target, params }
 }
 
-/** 始终返回以 `#/` 开头的规范形式；默认态输出 `#/profiles`，command-palette 不序列化。 */
+/** 始终返回以 `#/` 开头的规范形式；默认态输出 `#/settings/profiles`，command-palette 不序列化。 */
 export function formatLocationHash(state: WorkspaceLocationState): string {
   const query: Array<[string, string]> = []
-  if (state.primaryTarget.kind === 'plugins' && state.primaryTarget.pluginId !== undefined && state.primaryTarget.pluginId !== '') {
-    query.push(['p', state.primaryTarget.pluginId])
-  }
-  if (state.primaryTarget.kind === 'profiles' && state.primaryTarget.profileId !== undefined && state.primaryTarget.profileId !== '') {
-    query.push(['id', state.primaryTarget.profileId])
-  }
-  if (state.primaryTarget.kind === 'skills' && state.primaryTarget.skillId !== undefined && state.primaryTarget.skillId !== '') {
-    query.push(['id', state.primaryTarget.skillId])
-  }
-  if (state.primaryTarget.kind === 'nodes' && state.primaryTarget.nodeId !== undefined && state.primaryTarget.nodeId !== '') {
-    query.push(['id', state.primaryTarget.nodeId])
-  }
-  if (state.primaryTarget.kind === 'models' && state.primaryTarget.providerId !== undefined && state.primaryTarget.providerId !== '') {
-    query.push(['id', state.primaryTarget.providerId])
-  }
-  if (state.primaryTarget.kind === 'models' && state.primaryTarget.tab === 'defaults') {
-    query.push(['tab', 'defaults'])
-  }
   // agent 待命目标的草稿环境（node/cwd）序列化到主屏顶层命名空间；分屏在 split 串内自带。
   query.push(...formatAgentEnvParams(state.primaryTarget))
   if (state.splitTarget !== null) query.push(['split', formatSplitTarget(state.splitTarget)])
   // 主/分屏 Screen 参数各占 sp.* / ssp.* 命名空间：同一 screen 双开时参数互不串扰。
   query.push(...formatScreenParams(state.primaryTarget, PRIMARY_SCREEN_PARAM_PREFIX))
   if (state.splitTarget !== null) query.push(...formatScreenParams(state.splitTarget, SPLIT_SCREEN_PARAM_PREFIX))
-  // 侧栏空间仅偏离主屏隐含空间时序列化（sidebar 参数）；一致时省略，保持常用 URL 干净。
-  const impliedSpace = spaceForTarget(state.primaryTarget)
-  if (state.sidebarSpace !== undefined && state.sidebarSpace !== impliedSpace) {
-    query.push(['sidebar', state.sidebarSpace])
-  }
   if (state.workbenchOpen) {
     query.push(['wb', state.workbenchTab === '' ? DEFAULT_WORKBENCH_TAB : state.workbenchTab])
   }
@@ -463,9 +421,6 @@ export function isSameLocationState(a: WorkspaceLocationState, b: WorkspaceLocat
   if (!isSameResolvedTarget(a.splitTarget, b.splitTarget)) return false
   if (a.workbenchOpen !== b.workbenchOpen) return false
   if (a.workbenchOpen && a.workbenchTab !== b.workbenchTab) return false
-  // 侧栏空间归一比较：未指定 = 主屏隐含空间（显式与隐含一致时等价）。
-  const spaceOf = (s: WorkspaceLocationState): SidebarSpace => s.sidebarSpace ?? spaceForTarget(s.primaryTarget)
-  if (spaceOf(a) !== spaceOf(b)) return false
   const modalA = normalizeModal(a.activeModal)
   const modalB = normalizeModal(b.activeModal)
   if ((modalA === null) !== (modalB === null)) return false
@@ -514,9 +469,7 @@ const isTargetSlotChanged = (prev: ResolvedTarget | null, next: ResolvedTarget |
  *   避免筛选器/环境调整每次按键污染后退栈，需要入栈时由调用方显式强制；
  * - 产物预览切换不同 artifactId → push（每个预览是可独立直达的视图）；
  * - 同一列表型弹窗内仅切换子项、或工作台已打开时仅切 Tab → replace
- *   （避免弹窗内点选 10 项后要后退 10 次才能关掉弹窗）；
- * - 仅侧栏空间变化 → replace（Rail 点击由 setSidebarSpace 显式标记 push；
- *   跨空间导航自动对齐产生的空间变化随主屏变化一并判定，不单独入栈）。
+ *   （避免弹窗内点选 10 项后要后退 10 次才能关掉弹窗）。
  */
 export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: WorkspaceLocationState): boolean {
   const isOpeningDrawer = (prevT: ResolvedTarget, nextT: ResolvedTarget): boolean => {
@@ -542,7 +495,7 @@ export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: Wo
   if (isOpeningDrawer(prev.primaryTarget, next.primaryTarget)) {
     return true
   }
-  // 仅 params 变化（screen 坐标不变）或 plugins 抽屉内切换/关闭 → replace，避免筛选器每次按键污染后退栈；
+  // 仅 params 变化（screen 坐标不变）或中心抽屉内切换/关闭 → replace，避免筛选器每次按键污染后退栈；
   // 需要入栈时由调用方（setScreenParams push 标记）显式强制。
   if (isTargetSlotChanged(prev.primaryTarget, next.primaryTarget)) return true
   if (isTargetSlotChanged(prev.splitTarget, next.splitTarget)) return true
@@ -564,8 +517,8 @@ export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: Wo
 
 export type HashSerializable =
   | WorkspaceLocationState
-  | { target: ResolvedTarget; splitTarget?: ResolvedTarget | null; workbenchOpen?: boolean; workbenchTab?: string; sidebarSpace?: SidebarSpace; activeModal?: ActiveModal }
-  | { primaryTarget: ResolvedTarget; splitTarget?: ResolvedTarget | null; workbenchOpen?: boolean; workbenchTab?: string; sidebarSpace?: SidebarSpace; activeModal?: ActiveModal }
+  | { target: ResolvedTarget; splitTarget?: ResolvedTarget | null; workbenchOpen?: boolean; workbenchTab?: string; activeModal?: ActiveModal }
+  | { primaryTarget: ResolvedTarget; splitTarget?: ResolvedTarget | null; workbenchOpen?: boolean; workbenchTab?: string; activeModal?: ActiveModal }
   | ResolvedTarget
 
 /**
@@ -604,7 +557,6 @@ export function serializeHash(input: HashSerializable): string {
     splitTarget: input.splitTarget ?? null,
     workbenchOpen: input.workbenchOpen ?? false,
     workbenchTab: input.workbenchTab ?? DEFAULT_WORKBENCH_TAB,
-    ...(input.sidebarSpace !== undefined ? { sidebarSpace: input.sidebarSpace } : {}),
     activeModal: input.activeModal ?? null,
   })
 }

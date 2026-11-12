@@ -16,16 +16,26 @@
 - Hash 契约：`packages/web/src/lib/url-hash-model.ts`（唯一编解码真源）;
 - 浏览器同步：`packages/web/src/lib/HelmStoreProvider.tsx`。
 
-组件使用 `store.openTarget / closeSplit / setScreenParams / setWorkbenchOpen / setWorkbenchTab / setSidebarSpace / setActiveModal` 导航。不得另建平行路由、直接操作浏览器历史，或用组件本地状态管理已有的全局导航位置。
+组件使用 `store.openTarget / closeSplit / setScreenParams / setWorkbenchOpen / setWorkbenchTab / openSpace / setActiveModal` 导航。不得另建平行路由、直接操作浏览器历史，或用组件本地状态管理已有的全局导航位置。
 
-### 2.0 侧栏空间（sidebar 参数）
+### 2.0 层级化路径树与侧栏空间导航
 
-Activity Rail 的三档空间（`conversations | views | settings`）属于导航位置，不是组件内部状态：
+Hash 路径树采用层级化路由：中心子项与 Tab 一律是路径段，不再是查询参数：
 
-- Hash 以顶层参数 `sidebar=<space>` 序列化，仅当侧栏空间偏离主屏隐含空间（`spaceForTarget(primaryTarget)`）时写入，一致时省略保持 URL 干净；非法 `sidebar` 值静默丢弃、回退隐含空间；
-- Rail 点击经 `store.setSidebarSpace` 唯一导航机制切换，显式 push 入栈（复制链接直达、刷新恢复、前进/后退还原）；重复点击当前空间不产生历史项；
-- `openTarget` 跨空间导航（如会话 -> 系统中心）时由 Provider 自动把侧栏空间对齐到主屏隐含空间（该变化随主屏导航一次写回，不单独入栈）；同空间内切换不打断用户手动选定的空间；
-- 浏览器前进/后退（hashchange/popstate）以 URL 为唯一事实来源恢复空间，不由旧状态反向覆写。
+- `c/<id>` 会话；`a/<profileId>` 智能体待命页；
+- `views/<pluginId>/<screenId>` 插件全屏视图（视图空间）；
+- `settings/profiles[/<profileId>]` 角色中心；
+- `settings/models[/<providerId> | /defaults | /<providerId>/defaults]` 模型中心（`defaults` 为保留段 = 全局默认 Tab；`<providerId>/defaults` 表达「供应商抽屉 + 全局默认 Tab」组合）；
+- `settings/skills[/<skillId>]` 技能中心；
+- `settings/nodes[/<nodeId>]` 节点中心；
+- `settings/plugins[/<pluginId>]` 插件中心。
+
+侧栏空间（`conversations | views | settings`）由主屏目标唯一推导（`spaceForTarget`），不是独立 URL/Store 状态——URL 只表达主屏目标本身，不存在第二套空间参数：
+
+- Activity Rail 点击经 `store.openSpace` 直接导航主舞台到该空间最近记忆的主屏目标（无记忆时取空间缺省目标），经 `openTarget` push 入栈（复制链接直达、刷新恢复、前进/后退还原）；已在当前空间时 no-op，不产生历史项；
+- 空间记忆由主屏目标变化统一维护（`openTarget` / 删除回退共用同一入口）；记忆指向已失效目标时安全清理并回退空间缺省，缺省也不可用时显式通知并安全 no-op，绝不伪造不存在目标；
+- 浏览器前进/后退（hashchange/popstate）以 URL 为唯一事实来源恢复位置；
+- 路径段内斜杠必须编码（与目标分隔符区分），冒号保留可读；非法段（含全部旧路径形态）静默回退默认主屏 `#/settings/profiles`，不静默截取前段。
 
 ### 2.1 智能体待命目标（agent）与首次发送才落库
 
@@ -73,7 +83,7 @@ Activity Rail 的三档空间（`conversations | views | settings`）属于导�
 
 ## 6. 历史记录与错误语义
 
-- 切换主屏/分屏、开关工作台或持久弹窗时使用 push；Rail 空间切换（`setSidebarSpace`）同样使用 push；
+- 切换主屏/分屏、开关工作台或持久弹窗时使用 push；Rail 空间切换（`openSpace`）同样使用 push；
 - 在同一列表弹窗内切换子项、在工作台内切换 Tab、在同一 screen 内仅改参数、在同一 agent 待命目标内仅改草稿环境时使用 replace；
 - 历史策略统一维护在 `shouldPushLocationHistory`，调用方可经 `openTarget({ history })` 显式覆写下一拍；
 - 未认证时保留请求的深链；

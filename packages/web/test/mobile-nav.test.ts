@@ -106,6 +106,14 @@ test('Sidebar.tsx 点击 Agent 站位主区域在移动端导航后关闭抽屉'
   )
 })
 
+test('Sidebar.tsx Activity Rail 空间导航后关闭移动端抽屉', { timeout: 60_000 }, () => {
+  assert.match(
+    sidebarSource,
+    /onOpenSpace=\{\(nextSpace\) => \{\s*store\.openSpace\(nextSpace\)\s*onClose\?\.\(\)/,
+    'Rail 空间切换必须导航主舞台并关闭移动端抽屉',
+  )
+})
+
 test('App.tsx 在 workbench 打开时渲染移动端遮罩层并支持点击关闭', { timeout: 60_000 }, () => {
   assert.match(
     appSource,

@@ -36,9 +36,9 @@ export interface ModelCenterProps {
  * 全屏模型与供应商中心（Model Center）主视图容器：
  * - 系统一级主舞台全屏视图，彻底淘汰传统模态弹窗；
  * - 顶部 Tab 切换：「供应商」（检索 + 分类药丸 + 卡片网格）与「全局默认」（内联默认模型表单），
- *   Tab 状态经 URL Hash（#/models?tab=defaults）持久化，历史深链 id=defaults 自动升级；
+ *   Tab 状态经 URL Hash（#/settings/models/defaults）持久化，defaults 为路径保留段（全局默认 Tab）；
  * - 动态目录加载：实时拉取后端 PI 原生供应商与插件网关，支持全量展示与一键刷新；
- * - 详情与凭证抽屉：右侧联动滑出 ModelDetailDrawer，与 URL Hash 深链（#/models?id=xxx）双向同步；
+ * - 详情与凭证抽屉：右侧联动滑出 ModelDetailDrawer，与 URL Hash 深链（#/settings/models/<providerId>）双向同步；
  * - 绝对零 Emoji 铁律，遵循 Fast Refresh 与 WAI-ARIA 规范。
  */
 export function ModelCenter({

@@ -24,48 +24,48 @@ const baseState = (target: ResolvedTarget): WorkspaceLocationState => ({
 // 1. serializeHash 与 formatLocationHash 序列化契约
 // ---------------------------------------------------------------------------
 
-test('serializeHash: 插件中心基础路由输出 #/plugins', { timeout: 60_000 }, () => {
+test('serializeHash: 插件中心基础路由输出 #/settings/plugins', { timeout: 60_000 }, () => {
   const hashFromTarget = serializeHash({ target: { kind: 'plugins' } })
-  assert.equal(hashFromTarget, '#/plugins')
+  assert.equal(hashFromTarget, '#/settings/plugins')
 
   const hashFromPrimary = serializeHash({ primaryTarget: { kind: 'plugins' } })
-  assert.equal(hashFromPrimary, '#/plugins')
+  assert.equal(hashFromPrimary, '#/settings/plugins')
 
   const hashFromRawTarget = serializeHash({ kind: 'plugins' })
-  assert.equal(hashFromRawTarget, '#/plugins')
+  assert.equal(hashFromRawTarget, '#/settings/plugins')
 
   const hashFromFullState = formatLocationHash(baseState({ kind: 'plugins' }))
-  assert.equal(hashFromFullState, '#/plugins')
+  assert.equal(hashFromFullState, '#/settings/plugins')
 })
 
-test('serializeHash: 携带选中插件时输出 #/plugins?p=<pluginId>（参数正确编码）', { timeout: 60_000 }, () => {
+test('serializeHash: 携带选中插件时输出 #/settings/plugins/<pluginId>（冒号路径段保持可读）', { timeout: 60_000 }, () => {
   const hashFromTarget = serializeHash({
     target: { kind: 'plugins', pluginId: 'builtin:workflow' },
   })
-  assert.equal(hashFromTarget, '#/plugins?p=builtin%3Aworkflow')
+  assert.equal(hashFromTarget, '#/settings/plugins/builtin:workflow')
 
   const hashFromPrimary = serializeHash({
     primaryTarget: { kind: 'plugins', pluginId: 'builtin:workflow' },
   })
-  assert.equal(hashFromPrimary, '#/plugins?p=builtin%3Aworkflow')
+  assert.equal(hashFromPrimary, '#/settings/plugins/builtin:workflow')
 
   const hashFromRawTarget = serializeHash({
     kind: 'plugins',
     pluginId: 'builtin:workflow',
   })
-  assert.equal(hashFromRawTarget, '#/plugins?p=builtin%3Aworkflow')
+  assert.equal(hashFromRawTarget, '#/settings/plugins/builtin:workflow')
 
   const hashFromFullState = formatLocationHash(
     baseState({ kind: 'plugins', pluginId: 'builtin:workflow' }),
   )
-  assert.equal(hashFromFullState, '#/plugins?p=builtin%3Aworkflow')
+  assert.equal(hashFromFullState, '#/settings/plugins/builtin:workflow')
 })
 
-test('serializeHash: 空或空白 pluginId 视为无选中插件，输出 #/plugins', { timeout: 60_000 }, () => {
-  assert.equal(serializeHash({ target: { kind: 'plugins', pluginId: '' } }), '#/plugins')
+test('serializeHash: 空或空白 pluginId 视为无选中插件，输出 #/settings/plugins', { timeout: 60_000 }, () => {
+  assert.equal(serializeHash({ target: { kind: 'plugins', pluginId: '' } }), '#/settings/plugins')
   assert.equal(
     formatLocationHash(baseState({ kind: 'plugins', pluginId: '' })),
-    '#/plugins',
+    '#/settings/plugins',
   )
 })
 
@@ -79,8 +79,7 @@ test('serializeHash: 插件中心作为主屏时与分屏、工作台、弹窗�
   }
   const hash = formatLocationHash(state)
   const search = new URLSearchParams(hash.slice(hash.indexOf('?') + 1))
-  assert.equal(hash.startsWith('#/plugins?'), true)
-  assert.equal(search.get('p'), 'builtin:herdr')
+  assert.equal(hash.startsWith('#/settings/plugins/builtin:herdr?'), true)
   assert.equal(search.get('split'), 'c/10')
   assert.equal(search.get('wb'), 'artifacts')
   assert.equal(search.get('modal'), 'providers')
@@ -90,34 +89,36 @@ test('serializeHash: 插件中心作为主屏时与分屏、工作台、弹窗�
 // 2. parseHash 与 parseLocationHash 反向解析契约
 // ---------------------------------------------------------------------------
 
-test('parseHash: #/plugins 正确还原为 plugins 目标', { timeout: 60_000 }, () => {
-  const parsed = parseHash('#/plugins')
+test('parseHash: #/settings/plugins 正确还原为 plugins 目标', { timeout: 60_000 }, () => {
+  const parsed = parseHash('#/settings/plugins')
   assert.deepEqual(parsed.primaryTarget, { kind: 'plugins' })
   assert.deepEqual(parsed.target, { kind: 'plugins' })
   assert.equal(parsed.splitTarget, null)
   assert.equal(parsed.workbenchOpen, false)
   assert.equal(parsed.activeModal, null)
 
-  const parsedSlash = parseLocationHash('#/plugins/')
+  const parsedSlash = parseLocationHash('#/settings/plugins/')
   assert.deepEqual(parsedSlash.primaryTarget, { kind: 'plugins' })
 })
 
-test('parseHash: #/plugins?p=builtin%3Aworkflow 正确还原携带 pluginId 的目标', { timeout: 60_000 }, () => {
-  const parsed = parseHash('#/plugins?p=builtin%3Aworkflow')
+test('parseHash: #/settings/plugins/<pluginId> 正确还原携带 pluginId 的目标', { timeout: 60_000 }, () => {
+  const parsed = parseHash('#/settings/plugins/builtin:workflow')
   assert.deepEqual(parsed.primaryTarget, { kind: 'plugins', pluginId: 'builtin:workflow' })
   assert.deepEqual(parsed.target, { kind: 'plugins', pluginId: 'builtin:workflow' })
 
-  // 容忍直接携带未编码冒号的形式
-  const parsedColon = parseLocationHash('#/plugins?p=builtin:workflow')
+  // 容忍百分号编码冒号的形式
+  const parsedColon = parseLocationHash('#/settings/plugins/builtin%3Aworkflow')
   assert.deepEqual(parsedColon.primaryTarget, { kind: 'plugins', pluginId: 'builtin:workflow' })
 })
 
-test('parseHash: 空 p 参数或纯空白 p 还原为无子项的目标', { timeout: 60_000 }, () => {
-  const emptyP = parseHash('#/plugins?p=')
-  assert.deepEqual(emptyP.primaryTarget, { kind: 'plugins' })
+test('parseHash: 旧 ?p 查询参数不再参与解码，目标只来自路径段', { timeout: 60_000 }, () => {
+  // 旧 ?p 参数被静默忽略，路径段本身无子项
+  const parsed = parseHash('#/settings/plugins?p=builtin:workflow')
+  assert.deepEqual(parsed.primaryTarget, { kind: 'plugins' })
 
-  const spaceP = parseHash('#/plugins?p=%20%20')
-  assert.deepEqual(spaceP.primaryTarget, { kind: 'plugins' })
+  // 旧顶层 #/plugins 路径形态整体非法，回退默认主屏（角色中心）
+  const legacy = parseLocationHash('#/plugins?p=builtin:workflow')
+  assert.deepEqual(legacy.primaryTarget, { kind: 'profiles' })
 })
 
 test('roundtrip: plugins 目标双向编解码往返无损', { timeout: 60_000 }, () => {
@@ -298,22 +299,22 @@ test('浏览器前进/后退/replace 序列一致性验证', { timeout: 60_000 }
 
   // 2. 点击左侧栏插件中心 -> push
   navigate(baseState({ kind: 'plugins' }))
-  assert.equal(history[currentIndex]!, '#/plugins')
+  assert.equal(history[currentIndex]!, '#/settings/plugins')
   assert.equal(history.length, 2)
 
   // 3. 点击 workflow 卡片打开抽屉 -> push
   navigate(baseState({ kind: 'plugins', pluginId: 'builtin:workflow' }))
-  assert.equal(history[currentIndex]!, '#/plugins?p=builtin%3Aworkflow')
+  assert.equal(history[currentIndex]!, '#/settings/plugins/builtin:workflow')
   assert.equal(history.length, 3)
 
   // 4. 抽屉内切换至 herdr -> replace（栈深保持 3，未污染后退栈）
   navigate(baseState({ kind: 'plugins', pluginId: 'builtin:herdr' }))
-  assert.equal(history[currentIndex]!, '#/plugins?p=builtin%3Aherdr')
+  assert.equal(history[currentIndex]!, '#/settings/plugins/builtin:herdr')
   assert.equal(history.length, 3)
 
-  // 5. 用户按浏览器后退键（popstate）-> 退回上一历史帧 #/plugins（抽屉收起）
+  // 5. 用户按浏览器后退键（popstate）-> 退回上一历史帧 #/settings/plugins（抽屉收起）
   currentIndex--
-  assert.equal(history[currentIndex]!, '#/plugins')
+  assert.equal(history[currentIndex]!, '#/settings/plugins')
   const backToPlugins = parseLocationHash(history[currentIndex]!)
   assert.deepEqual(backToPlugins.primaryTarget, { kind: 'plugins' })
 
@@ -323,21 +324,21 @@ test('浏览器前进/后退/replace 序列一致性验证', { timeout: 60_000 }
   const backToConv = parseLocationHash(history[currentIndex]!)
   assert.deepEqual(backToConv.primaryTarget, { kind: 'conversation', conversationId: 1 })
 
-  // 7. 用户点击浏览器前进键 -> 回到 #/plugins
+  // 7. 用户点击浏览器前进键 -> 回到 #/settings/plugins
   currentIndex++
-  assert.equal(history[currentIndex]!, '#/plugins')
+  assert.equal(history[currentIndex]!, '#/settings/plugins')
 
   // 8. 用户再次点击浏览器前进键 -> 还原选中的插件抽屉状态
   currentIndex++
-  assert.equal(history[currentIndex]!, '#/plugins?p=builtin%3Aherdr')
+  assert.equal(history[currentIndex]!, '#/settings/plugins/builtin:herdr')
   const forwardToDetail = parseLocationHash(history[currentIndex]!)
   assert.deepEqual(forwardToDetail.primaryTarget, {
     kind: 'plugins',
     pluginId: 'builtin:herdr',
   })
 
-  // 9. 用户点击抽屉上的关闭按钮 -> replace 为 #/plugins（不增加历史栈深度）
+  // 9. 用户点击抽屉上的关闭按钮 -> replace 为 #/settings/plugins（不增加历史栈深度）
   navigate(baseState({ kind: 'plugins' }))
-  assert.equal(history[currentIndex]!, '#/plugins')
+  assert.equal(history[currentIndex]!, '#/settings/plugins')
   assert.equal(history.length, 3)
 })
