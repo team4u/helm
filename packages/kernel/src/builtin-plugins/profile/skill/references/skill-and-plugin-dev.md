@@ -98,6 +98,7 @@ export function CounterScreen() {
 - `NODE_DETAIL_SECTION_SLOT` (`builtin:node/detail-section`) 是节点中心宿主保留插槽，不是 `builtin:node` 插件。用 `ctx.ui.slot` 注入已有节点的扩展区，Props 为 `{nodeId,isLocal,isOnline,isNew:false}`；不传令牌/连接命令，不在新节点接入表单挂载。
 - `ctx.action({ id, description, inputSchema, outputSchema, idempotent?, handler })` 将 Schema 动作统一映射到 HTTP、CLI、Workflow action()、Web；`idempotent: true` 标记只读/幂等动作，失败或中断时允许工作流断链重跑；模型可经 run_action 调用，设置 exposeAsTool: true 才直接列为工具。
 - `ctx.host.execEnv(req, opts?)` 经内核 EnvFabric 跨节点执行命令（复用 local / 远端 @helm/node 通道、SecretStash 注入与脱敏），纳入在途任务追踪（withTask）。
+- `ctx.host.nodeFetch(nodeId): typeof fetch` / `ctx.host.openTunnel(nodeId, { host?, port }, signal?)` 经 EnvFabric 节点隧道跨节点访问目标节点视角的 HTTP(S)/SSE 服务，或获取任意 TCP 双工流（host 由节点解析，缺省 `127.0.0.1`；活动隧道计入在途任务追踪）。节点端无需部署配套插件代码。
 - `ctx.doc(name, initial, { public: true })` 公开持久全局状态（进全局 SSE 首帧，更新广播全量）；前端组件经 `usePluginDoc(name)` 订阅。`ctx.configSchema` 的 secret 字段进入凭据存储，避免公开到 doc。
 - `ctx.sessionDoc(name, initial, { public: true })` 按会话分片持久状态：句柄 `get/set/update/delete(conversationId, ...)`（如 `metrics.update(input.conversationId, cur => ({ count: cur.count + 1 }))`），前端组件用 `usePluginSessionDoc("metrics")` 按当前会话订阅；不进全局首帧与全局广播，公开时经专用 SSE（`GET /api/plugins/:id/docs/:name/events?conversationId=N`）只推给订阅该会话的客户端；会话删除级联清理，删除后写入被拒。会话级 UI 状态（如每会话任务列表、运行详情）一律用 sessionDoc 而非 doc，避免全局写放大；doc 与 sessionDoc 禁止同名。
 - `ctx.service({ id, start, stop })` 管理后台服务；声明 liveTasks 可在停用前报告在途任务。
