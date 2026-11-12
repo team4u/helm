@@ -67,15 +67,6 @@ export interface MagpieRefreshPort {
   }): Promise<{ errors: Record<string, string> }>
 }
 
-/**
- * 本机 magpie CLI 执行端口（公开环境端口：execFile 走 PATH，无隐藏注入）：
- * 输出 stdout 或 error 文本；信号取消与超时由实现统一处理。
- */
-export type RunMagpieCli = (
-  args: readonly string[],
-  options?: { signal?: AbortSignal },
-) => Promise<{ ok: boolean; stdout?: string; error?: string }>
-
 // ---------------------------------------------------------------------------
 // 公开 status doc（composer.pill / settings.panel / CLI helm magpie status 共用）
 // ---------------------------------------------------------------------------
