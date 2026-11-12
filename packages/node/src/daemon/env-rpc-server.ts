@@ -52,6 +52,12 @@ import type {
 
 type RpcErrorCode = RpcEnvError['code'];
 
+/**
+ * 隧道连接错误码（protocol 并行分支新增 RpcFileErrorCode 'connect_failed'，
+ * 合并后本别名自动收敛为同一联合；本地先以交叉声明自洽）。
+ */
+type RpcTunnelErrorCode = RpcErrorCode | 'connect_failed';
+
 export interface NodeEnvRpcServerOptions {
   /** 相对路径的基准目录（daemon 数据目录）。 */
   defaultCwd: string;
@@ -83,9 +89,10 @@ export interface NodeEnvRpcServerOptions {
   abortDrainGraceMs?: number;
   /**
    * 打开隧道双工流（daemon 层注入：连接 Hub 的 /ws/node-tunnel 并完成握手）。
-   * env-rpc-server 只消费该双工流，绝不感知 hubUrl/token 等凭据。
+   * signal 用于取消在途建连（nodeTunnelAbort / dispose）：实现应尽快
+   * reject 并销毁底层资源；env-rpc-server 只消费双工流，零凭据。
    */
-  openTunnelStream?: (tunnelId: string) => Promise<Duplex>;
+  openTunnelStream?: (tunnelId: string, signal?: AbortSignal) => Promise<Duplex>;
 }
 
 const toRpcError = (error: unknown): RpcEnvError => {
@@ -312,8 +319,9 @@ export interface NodeEnvRpcServer extends NodeEnvRpcFunctions {
    * 时返回 aborted；本机连接失败/握手失败返回结构化错误（绝不伪造成功）。
    */
   nodeTunnelOpen(input: NodeTunnelOpenInput): Promise<RpcResult<null>>;
-  /** 关闭全部 reader、杀死在途命令、销毁全部 IPC socket（连接断开或停机时调用）。幂等。 */
-  dispose(): Promise<void>;
+  /** 取消在途隧道（握手中或已建立）：销毁该隧道的 TCP/WS 并立即返回。 */
+  nodeTunnelAbort(tunnelId: string): Promise<void>;
+  /** 关闭全部 reader、杀死在途命令、销毁全部 IPC socket（连接断开或停机时调用）。幂等。 */  dispose(): Promise<void>;
   /**
    * 排空开关：true 期间新 envExec 受理即拒（升级排空/已提交让位/候选待激活），
    * 不影响已在途命令；false 恢复受理。幂等。
@@ -346,11 +354,18 @@ export interface NodeTunnelOpenInput {
 
 /** NodeEnvRpcFunctions + 节点隧道扩展（protocol 并入前的本地扩展面）。 */
 type NodeEnvRpcWithTunnelFunctions = NodeEnvRpcFunctions & {
-  nodeTunnelOpen(input: NodeTunnelOpenInput): Promise<RpcResult<null>>;
+  nodeTunnelOpen(input: NodeTunnelOpenInput): Promise<RpcTunnelResult>;
+  nodeTunnelAbort(tunnelId: string): Promise<void>;
 };
 
+/**
+ * 隧道 RPC 错误信封（本地最窄类型：code 含 protocol 并行分支正在新增的
+ * 'connect_failed'；protocol 合并后直接换成 RpcResult 即可，不提交副本）。
+ */
+type RpcTunnelResult = { ok: true; value: null } | { ok: false; error: { code: RpcTunnelErrorCode; message: string } };
+
 /** void 返回的 RPC（abort/cleanup/unsubscribe）：不做 RpcResult 边界包装。 */
-const VOID_RPC_METHODS = new Set(['envAbortExec', 'envCleanup', 'ipcAbortCall', 'ipcUnsubscribe']);
+const VOID_RPC_METHODS = new Set(['envAbortExec', 'envCleanup', 'ipcAbortCall', 'ipcUnsubscribe', 'nodeTunnelAbort']);
 
 export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEnvRpcServer {
   const {
@@ -640,15 +655,17 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     socket.destroy(); // 主动关闭不触发 onIpcClosed 异常通知
   };
 
-  // —— 节点侧 TCP 隧道（nodeTunnelOpen）—————————————————————————————
+  // —— 节点侧 TCP 隧道（nodeTunnelOpen / nodeTunnelAbort）————————————————
   // 目标固定本机回环；隧道 WS 与凭据由 daemon 注入的 openTunnelStream 封闭。
-  /** 隧道建立（TCP connect + 双工流握手）缺省预算。 */
+  /** 隧道建立（TCP connect + 双工流握手）总预算，自受理起算（非分段叠加）。 */
   const TUNNEL_OPEN_DEFAULT_MS = 15_000;
 
   interface ActiveTunnel {
     tunnelId: string;
     tcp: net.Socket;
     duplex?: Duplex;
+    /** 建连取消器：握手中 abort 立即失败，不等到预算耗尽。 */
+    controller: AbortController;
     /** 双端销毁后 resolve（dispose 排空用）。 */
     lifecycle: Promise<void>;
     settle(): void;
@@ -659,23 +676,24 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
   const newTunnel = (tunnelId: string, tcp: net.Socket): ActiveTunnel => {
     let settle!: () => void;
     const lifecycle = new Promise<void>((resolve) => { settle = resolve; });
-    const tunnel: ActiveTunnel = { tunnelId, tcp, lifecycle, settle };
+    const tunnel: ActiveTunnel = { tunnelId, tcp, controller: new AbortController(), lifecycle, settle };
     tunnelWaiters.add(lifecycle);
     activeTunnels.set(tunnelId, tunnel);
     return tunnel;
   };
 
-  /** 销毁单个隧道（幂等）：移除登记、销毁 TCP 与双工流并结算生命周期。 */
+  /** 销毁单个隧道（幂等）：abort 建连、销毁 TCP/双工流并结算生命周期。 */
   const teardownTunnel = (tunnel: ActiveTunnel): void => {
     if (activeTunnels.get(tunnel.tunnelId) !== tunnel) return;
     activeTunnels.delete(tunnel.tunnelId);
+    tunnel.controller.abort(new Error('tunnel aborted'));
     tunnel.tcp.destroy();
     tunnel.duplex?.destroy();
     tunnelWaiters.delete(tunnel.lifecycle);
     tunnel.settle();
   };
 
-  const nodeTunnelOpenCore = async (raw: unknown): Promise<RpcResult<null>> => {
+  const nodeTunnelOpenCore = async (raw: unknown): Promise<RpcTunnelResult> => {
     // 边界严格校验：plain object、字段白名单、值域——未知字段一律拒绝。
     if (!isRecord(raw) || Array.isArray(raw)) return invalidInput('nodeTunnelOpen input must be a plain object');
     const unknownFields = Object.keys(raw).filter((key) => key !== 'tunnelId' && key !== 'port' && key !== 'timeoutMs');
@@ -712,82 +730,122 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         },
       };
     }
+    // 总预算自受理起算（TCP connect 与 WS 握手共用，非各 15s）。
     const budgetMs = typeof rawTimeout === 'number' ? Math.floor(rawTimeout) : TUNNEL_OPEN_DEFAULT_MS;
     // 固定本机回环目标（不解析主机名、不越出节点本机）。
     const tcp = net.connect({ host: '127.0.0.1', port });
     const tunnel = newTunnel(tunnelId, tcp);
-    const fail = (error: unknown): RpcResult<null> => {
-      teardownTunnel(tunnel);
-      return rpcFail(error);
+    // 统一 settle：整个建立过程（TCP connect + WS 握手）只结算一次。
+    let settled = false;
+    let settleResult: (result: RpcTunnelResult) => void = () => undefined;
+    const rpcResult = new Promise<RpcTunnelResult>((resolve) => { settleResult = resolve; });
+    const settleOnce = (result: RpcTunnelResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(budgetTimer);
+      settleResult(result);
     };
-    // TCP 连接（有界预算）：失败/超时销毁并返回结构化错误（如端口拒绝）。
+    // TCP 错误归一 connect_failed（系统码保留在 message，不外溢到 code）。
+    const connectFailed = (detail: string): { code: RpcTunnelErrorCode; message: string } => ({
+      code: 'connect_failed',
+      message: `tunnel TCP connect to 127.0.0.1:${port} failed: ${detail}`,
+    });
+    const budgetTimer = setTimeout(() => {
+      settleOnce({ ok: false, error: { code: 'timeout', message: `tunnel open timed out after ${budgetMs}ms (127.0.0.1:${port})` } });
+      teardownTunnel(tunnel);
+    }, budgetMs);
+    // error 自 socket 创建起挂统一处理（connect 成功后不摘除）：握手等待期/
+    // pipe 期的 socket 错误统一 settle+teardown，绝不未捕获崩进程。
+    const onTcpError = (error: Error): void => {
+      if (activeTunnels.get(tunnelId) !== tunnel) return;
+      settleOnce({ ok: false, error: connectFailed(error.message) });
+      teardownTunnel(tunnel);
+    };
+    tcp.on('error', onTcpError);
+    // TCP 连接（共用总预算）：失败/超时销毁并返回结构化错误（如端口拒绝）。
     try {
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          reject(Object.assign(new Error(`tunnel TCP connect to 127.0.0.1:${port} timed out after ${budgetMs}ms`), { code: 'timeout' }));
-        }, budgetMs);
-        const onConnectError = (error: Error): void => {
-          clearTimeout(timer);
-          // 保留底层诊断（ECONNREFUSED 等）并附上目标，不静默截断。
-          reject(
-            Object.assign(
-              new Error(`tunnel TCP connect to 127.0.0.1:${port} failed: ${error.message}`),
-              { code: (error as NodeJS.ErrnoException).code ?? 'unknown' },
-            ),
-          );
-        };
-        tcp.once('connect', () => {
-          clearTimeout(timer);
-          tcp.removeListener('error', onConnectError);
-          resolve();
-        });
-        tcp.once('error', onConnectError);
+        tcp.once('connect', () => resolve());
+        // onTcpError 已统一 settle；此处仅防 promise 悬挂。
+        tcp.once('error', (error) => reject(connectFailed(error.message)));
+        tunnel.controller.signal.addEventListener(
+          'abort',
+          () => reject(Object.assign(new Error('tunnel aborted'), { code: 'aborted' })),
+          { once: true },
+        );
       });
-    } catch (error) {
-      return fail(error);
+    } catch {
+      // abort（nodeTunnelAbort/dispose）或连接失败：细节已 settle；teardown
+      // 后如实返回（abort 语义优先，未 settle 的极端路径按连接失败兜底）。
+      if (!settled) {
+        settleOnce(
+          tunnel.controller.signal.aborted
+            ? { ok: false, error: { code: 'aborted', message: 'tunnel aborted' } }
+            : { ok: false, error: connectFailed('connection failed') },
+        );
+      }
+      teardownTunnel(tunnel);
+      return await rpcResult;
     }
     // 暂停 TCP：openTunnelStream 握手期间缓冲对端首批数据，pipe 后不丢首包。
     tcp.pause();
-    // 双工流握手（有界预算；超时后迟到 resolve 的流立即销毁防泄漏）。
-    let abandoned = false;
-    const streamPromise = Promise.resolve(openTunnelStream(tunnelId));
+    // 双工流握手（共用总预算，传 signal：abort 立即失败不等预算；迟到
+    // resolve 的流立即销毁防泄漏）。
+    let handshakeDone = false;
+    const streamPromise = Promise.resolve(openTunnelStream(tunnelId, tunnel.controller.signal));
     void streamPromise.then(
-      (late) => { if (abandoned) late.destroy(); },
+      (late) => { if (handshakeDone || activeTunnels.get(tunnelId) !== tunnel) late.destroy(); },
       () => undefined, // 失败路径由下方 await 分支统一处理
     );
     let duplex: Duplex;
     try {
       duplex = await new Promise<Duplex>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          abandoned = true;
-          reject(Object.assign(new Error(`tunnel stream handshake timed out after ${budgetMs}ms`), { code: 'timeout' }));
-        }, budgetMs);
+        tunnel.controller.signal.addEventListener(
+          'abort',
+          () => reject(Object.assign(new Error('tunnel aborted'), { code: 'aborted' })),
+          { once: true },
+        );
         streamPromise.then(
-          (stream) => { if (!abandoned) { clearTimeout(timer); resolve(stream); } },
-          (error) => { clearTimeout(timer); reject(error); },
+          (stream) => resolve(stream),
+          (error) => reject(error),
         );
       });
     } catch (error) {
-      return fail(error);
-    }
-    tunnel.duplex = duplex;
-    // 双向 pipe：任一端 error/close/end/finish 都销毁两端（单用途连接，
-    // 不做半关闭状态机）；pipe 隐含 resume，pause 期间缓冲的首包此刻放行。
-    let torn = false;
-    const teardown = (): void => {
-      if (torn) return;
-      torn = true;
+      handshakeDone = true;
+      settleOnce(rpcFail(error));
       teardownTunnel(tunnel);
-    };
-    tcp.on('error', teardown);
-    duplex.on('error', teardown);
-    tcp.once('close', teardown);
+      return await rpcResult;
+    }
+    if (settled || activeTunnels.get(tunnelId) !== tunnel) {
+      // 建连期间已超时/abort：迟到到达的流立即销毁，绝不 pipe 到已销毁 TCP。
+      handshakeDone = true;
+      duplex.destroy();
+      return await rpcResult;
+    }
+    handshakeDone = true;
+    tunnel.duplex = duplex;
+    settleOnce({ ok: true, value: null });
+    // 正常结束走 pipe 的 end 语义：对端 end → duplex readable end →
+    // duplex.pipe(tcp) 触发 tcp.end()（flush 完整响应后 FIN）→ close 销毁
+    // 双端；error/close/aborted 才立即销毁两端，不掐断 flush 中的数据。
+    const teardown = (): void => teardownTunnel(tunnel);
+    duplex.once('error', teardown);
     duplex.once('close', teardown);
-    duplex.once('end', teardown);
-    duplex.once('finish', teardown);
+    duplex.once('aborted', teardown);
     tcp.pipe(duplex);
     duplex.pipe(tcp);
-    return { ok: true, value: null };
+    return await rpcResult;
+  };
+
+  /** 取消在途隧道（握手中或已建立）：立即销毁 TCP/WS 并返回。 */
+  const nodeTunnelAbort = async (tunnelId: string): Promise<void> => {
+    teardownTunnelById(tunnelId);
+  };
+
+  const teardownTunnelById = (tunnelId: string): void => {
+    const tunnel = activeTunnels.get(tunnelId);
+    if (tunnel === undefined) return;
+    teardownTunnel(tunnel);
   };
 
   /** Result 适配：void → null（JSON 序列化友好）；失败保结构。 */
@@ -1113,7 +1171,8 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
   };
   // 隧道 RPC 附着在 env 函数面之上（protocol 并入前的本地扩展）。
   const rpcFunctions: NodeEnvRpcWithTunnelFunctions = Object.assign(rpc, {
-    nodeTunnelOpen: (input: NodeTunnelOpenInput): Promise<RpcResult<null>> => nodeTunnelOpenCore(input),
+    nodeTunnelOpen: (input: NodeTunnelOpenInput): Promise<RpcTunnelResult> => nodeTunnelOpenCore(input),
+    nodeTunnelAbort,
   });
 
   /**

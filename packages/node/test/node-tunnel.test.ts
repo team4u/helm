@@ -1,8 +1,10 @@
 /**
- * 节点侧 TCP 隧道（nodeTunnelOpen）测试：真实 TCP 回环 + 注入式双工流。
- * 覆盖：入参严格校验（未知字段/坏 tunnelId/严格端口拒绝）、端口拒绝的
- * 结构化错误、pause 后双向 pipe 不丢首包、draining 拒新隧道、dispose
- * 销毁全部隧道并等待 settle、getActiveTunnelCount 计数。
+ * 节点侧 TCP 隧道（nodeTunnelOpen / nodeTunnelAbort）测试：真实 TCP 回环 +
+ * Duplex.from({readable,writable}) 构成的真实双工对（数据真的流经隧道双端，
+ * 绝不用旁路 TCP 冒充隧道成功）。
+ * 覆盖：入参严格校验（含严格端口拒绝）、端口拒绝 connect_failed、握手中
+ * dispose 立即 settle、握手期对端断开、abort RPC 取消建连、banner 首包不丢、
+ * 大 payload、end 语义 flush 完整响应。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +12,7 @@ import fs from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { PassThrough, type Duplex } from 'node:stream';
+import { Duplex, PassThrough, type Duplex as DuplexType } from 'node:stream';
 import { createNodeEnvRpcServer } from '../src/daemon/env-rpc-server.js';
 
 async function tempDir(prefix: string): Promise<string> {
@@ -19,10 +21,28 @@ async function tempDir(prefix: string): Promise<string> {
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** 回环 echo TCP 服务（收到即回显），返回端口与收到过的字节。 */
-async function startEchoServer(): Promise<{ port: number; received: Buffer[]; close(): Promise<void> }> {
+/** 真实双工对：a 与 b 互为对端，写入 a 的数据可从 b 读到（经隧道流真实转发）。 */
+function duplexPair(): [DuplexType, DuplexType] {
+  const toNode = new PassThrough();
+  const toHub = new PassThrough();
+  return [
+    Duplex.from({ readable: toNode, writable: toHub }),
+    Duplex.from({ readable: toHub, writable: toNode }),
+  ];
+}
+
+/** 回环 TCP 服务：accept 即发 banner；echo 其后收到的数据。 */
+async function startBannerEchoServer(banner: string): Promise<{
+  port: number;
+  received: Buffer[];
+  sockets: net.Socket[];
+  close(): Promise<void>;
+}> {
   const received: Buffer[] = [];
+  const sockets: net.Socket[] = [];
   const server = net.createServer((socket) => {
+    sockets.push(socket);
+    socket.write(banner);
     socket.on('data', (chunk) => {
       received.push(chunk);
       socket.write(chunk);
@@ -34,11 +54,16 @@ async function startEchoServer(): Promise<{ port: number; received: Buffer[]; cl
   return {
     port: address.port,
     received,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    sockets,
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => resolve());
+      }),
   };
 }
 
-test('nodeTunnelOpen：严格入参校验（未知字段/坏 tunnelId/坏 timeoutMs）', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen：严格入参校验（未知字段/坏 tunnelId/严格端口拒绝）', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir, openTunnelStream: async () => new PassThrough() });
   try {
@@ -65,10 +90,10 @@ test('nodeTunnelOpen：严格入参校验（未知字段/坏 tunnelId/坏 timeou
   }
 });
 
-test('nodeTunnelOpen：端口拒绝返回结构化错误，不静默伪造隧道', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen：端口拒绝归一 connect_failed，不静默伪造隧道', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
-  // 占用一个端口后立即关闭：绝大多数平台上该端口无监听（回环 connect 拒绝）。
-  const probe = await startEchoServer();
+  // 占用一个端口后立即关闭：该端口无监听（回环 connect 拒绝）。
+  const probe = await startBannerEchoServer('x');
   const deadPort = probe.port;
   await probe.close();
   const server = createNodeEnvRpcServer({ defaultCwd: dir, openTunnelStream: async () => new PassThrough() });
@@ -76,9 +101,8 @@ test('nodeTunnelOpen：端口拒绝返回结构化错误，不静默伪造隧道
     const result = await server.nodeTunnelOpen({ tunnelId: 't-refused', port: deadPort });
     assert.equal(result.ok, false);
     if (!result.ok) {
-      // TCP 层错误信封：ECONNREFUSED 等诊断保留在 message，不静默伪造隧道。
-      assert.equal(typeof result.error.message, 'string');
-      assert.match(result.error.message, /tunnel TCP/);
+      assert.equal(result.error.code, 'connect_failed', 'TCP 错误归一 connect_failed（系统码不外溢 code）');
+      assert.match(result.error.message, /ECONNREFUSED/, 'message 保留底层系统诊断');
     }
     assert.equal(server.getActiveTunnelCount(), 0, '失败隧道不残留');
   } finally {
@@ -87,64 +111,256 @@ test('nodeTunnelOpen：端口拒绝返回结构化错误，不静默伪造隧道
   }
 });
 
-test('nodeTunnelOpen：pause 后双向 pipe 不丢首包；重复 tunnelId 拒绝', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen：握手延迟后经隧道双工流读到 banner（pause 不丢首包）', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
-  const echo = await startEchoServer();
-  // 双工流延迟交付：模拟隧道握手耗时，验证 pause 的 TCP 不丢对端首批数据。
-  const openTunnelStream = async (): Promise<Duplex> => {
-    await delay(120);
-    return new PassThrough();
-  };
-  const server = createNodeEnvRpcServer({ defaultCwd: dir, openTunnelStream });
-  try {
-    const opened = await server.nodeTunnelOpen({ tunnelId: 't-echo', port: echo.port });
-    assert.equal(opened.ok, true);
-    assert.equal(server.getActiveTunnelCount(), 1);
-    // 对端立即写入（早于流握手完成）：TCP 数据在 pause 期间缓冲，pipe 后送达。
-    const client = net.connect({ host: '127.0.0.1', port: echo.port });
-    await new Promise<void>((resolve) => client.once('connect', resolve));
-    client.write('first-packet');
-    const echoed = await new Promise<string>((resolve) => {
-      client.once('data', (chunk) => resolve(chunk.toString()));
-      setTimeout(() => resolve('TIMEOUT'), 5_000);
-    });
-    assert.equal(echoed, 'first-packet', '首包经隧道双向 pipe 回达');
-    assert.equal(echo.received.length > 0 && echo.received[0]!.toString().includes('first-packet'), true, 'echo 服务收到首包');
-    // 首帧旁路：第二次 open 同 tunnelId 在流握手前即拒绝（in-flight 冲突）。
-    const dup = await server.nodeTunnelOpen({ tunnelId: 't-echo', port: echo.port });
-    assert.equal(dup.ok, false);
-    client.destroy();
-  } finally {
-    await server.dispose();
-    await echo.close();
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('nodeTunnelOpen：openTunnelStream 失败销毁两边并返回结构化错误', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-tunnel-');
-  const echo = await startEchoServer();
+  const banner = 'HELLO-BANNER\r\n';
+  const srv = await startBannerEchoServer(banner);
+  // 隧道对端流延迟交付（模拟 WS 握手耗时）；peer 侧代表 Hub 端流。
+  const pending: Array<Promise<DuplexType>> = [];
   const server = createNodeEnvRpcServer({
     defaultCwd: dir,
     openTunnelStream: async () => {
-      throw Object.assign(new Error('hub tunnel gateway rejected'), { code: 'invalid' });
+      await delay(150);
+      const [nodeSide, peerSide] = duplexPair();
+      pending.push(Promise.resolve(peerSide));
+      return nodeSide;
     },
   });
   try {
-    const result = await server.nodeTunnelOpen({ tunnelId: 't-fail', port: echo.port });
-    assert.equal(result.ok, false);
-    assert.equal(!result.ok && result.error.code, 'invalid');
-    assert.equal(server.getActiveTunnelCount(), 0, '握手失败后隧道销毁不残留');
+    const opened = await server.nodeTunnelOpen({ tunnelId: 't-banner', port: srv.port });
+    assert.equal(opened.ok, true);
+    // banner 在 TCP accept 即发出（早于流握手完成）：pause 缓冲、pipe 放行，
+    // peer 端经隧道流读到完整 banner——真实流经隧道，非旁路。
+    const peer = await pending[0]!;
+    const gotBanner = await new Promise<string>((resolve) => {
+      let buf = '';
+      const timer = setTimeout(() => resolve(buf), 5_000);
+      peer.on('data', (chunk) => {
+        buf += chunk.toString();
+        if (buf.includes(banner)) {
+          clearTimeout(timer);
+          resolve(buf);
+        }
+      });
+    });
+    assert.ok(gotBanner.includes(banner), `peer 应经隧道读到 banner，实际: ${JSON.stringify(gotBanner)}`);
+    // 经隧道流发数据 → 节点 TCP → echo 服务 → 回到 peer 端。
+    peer.write('ping-through-tunnel');
+    const echoed = await new Promise<string>((resolve) => {
+      let buf = '';
+      const timer = setTimeout(() => resolve(buf), 5_000);
+      peer.on('data', (chunk) => {
+        buf += chunk.toString();
+        if (buf.includes('ping-through-tunnel')) {
+          clearTimeout(timer);
+          resolve(buf);
+        }
+      });
+    });
+    assert.ok(echoed.includes('ping-through-tunnel'), '请求经隧道往返');
+    assert.ok(srv.received.some((c) => c.toString().includes('ping-through-tunnel')), 'echo 服务确实收到（真实转发）');
+    peer.destroy();
+    peer.on('error', () => undefined);
   } finally {
     await server.dispose();
-    await echo.close();
+    await srv.close();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
 
-test('nodeTunnelOpen：draining 拒绝新隧道；dispose 销毁全部隧道并等待 settle', { timeout: 60_000 }, async () => {
+test('nodeTunnelOpen：大 payload 经隧道双向完整传输', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-tunnel-');
-  const echo = await startEchoServer();
+  const srv = await startBannerEchoServer('');
+  const pending: Array<Promise<DuplexType>> = [];
+  const server = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    openTunnelStream: async () => {
+      const [nodeSide, peerSide] = duplexPair();
+      pending.push(Promise.resolve(peerSide));
+      return nodeSide;
+    },
+  });
+  try {
+    const opened = await server.nodeTunnelOpen({ tunnelId: 't-big', port: srv.port });
+    assert.equal(opened.ok, true);
+    const peer = await pending[0]!;
+    // 4 MiB 超过单帧/缓冲的高水位，验证分片重组后完整往返。
+    const payload = 'A'.repeat(4 * 1024 * 1024);
+    const chunks: Buffer[] = [];
+    let total = 0;
+    peer.on('data', (chunk) => {
+      chunks.push(chunk);
+      total += chunk.length;
+    });
+    peer.write(payload);
+    const echoed = await new Promise<string>((resolve) => {
+      const timer = setTimeout(() => resolve('TIMEOUT'), 10_000);
+      const check = (): void => {
+        if (total >= payload.length) {
+          clearTimeout(timer);
+          resolve(Buffer.concat(chunks).toString());
+        }
+      };
+      peer.on('data', check);
+      check();
+    });
+    assert.equal(echoed.length, payload.length, '大 payload 完整往返（长度一致）');
+    assert.equal(echoed, payload, '大 payload 完整往返（内容一致）');
+    peer.destroy();
+    peer.on('error', () => undefined);
+  } finally {
+    await server.dispose();
+    await srv.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('nodeTunnelOpen：正常 end 语义 flush 完整响应（不 destroy 掐断）', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helm-node-tunnel-');
+  // 服务收到请求后写大响应再 end：验证 pipe 的 end 链路完整 flush。
+  const response = 'R'.repeat(2 * 1024 * 1024);
+  const server = net.createServer((socket) => {
+    socket.on('data', (chunk) => {
+      if (chunk.toString().includes('req')) {
+        socket.end(response);
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as net.AddressInfo).port;
+  const pending: Array<Promise<DuplexType>> = [];
+  const rpc = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    openTunnelStream: async () => {
+      const [nodeSide, peerSide] = duplexPair();
+      pending.push(Promise.resolve(peerSide));
+      return nodeSide;
+    },
+  });
+  try {
+    const opened = await rpc.nodeTunnelOpen({ tunnelId: 't-flush', port });
+    assert.equal(opened.ok, true);
+    const peer = await pending[0]!;
+    const chunks: Buffer[] = [];
+    const got = new Promise<string>((resolve) => {
+      peer.on('data', (c) => chunks.push(c));
+      peer.on('end', () => resolve(Buffer.concat(chunks).toString()));
+      peer.on('close', () => resolve(Buffer.concat(chunks).toString()));
+    });
+    peer.end('req');
+    const echoed = await Promise.race([got, delay(10_000).then(() => 'TIMEOUT')]);
+    assert.equal(echoed, response, 'end 语义下完整响应 flush 回达，不被 destroy 掐断');
+  } finally {
+    await rpc.dispose();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('nodeTunnelOpen：握手中 dispose 立即销毁并 settle，不等预算耗尽', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helm-node-tunnel-');
+  const srv = await startBannerEchoServer('');
+  let resolveStream: ((stream: DuplexType) => void) | undefined;
+  const streamSignals: AbortSignal[] = [];
+  const server = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    openTunnelStream: (tunnelId, signal) =>
+      new Promise<DuplexType>((resolve, reject) => {
+        streamSignals.push(signal!);
+        resolveStream = resolve;
+        signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { code: 'aborted' })), { once: true });
+      }),
+  });
+  try {
+    const openPromise = server.nodeTunnelOpen({ tunnelId: 't-dispose', port: srv.port, timeoutMs: 15_000 });
+    // 等 TCP 连上、进入 WS 握手等待。
+    await delay(100);
+    assert.equal(server.getActiveTunnelCount(), 1);
+    const start = Date.now();
+    await server.dispose();
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 5_000, `dispose 应立即 settle（实际 ${elapsed}ms）`);
+    const result = await openPromise;
+    assert.equal(result.ok, false, '握手中的 open 随 dispose 失败');
+    if (!result.ok) {
+      assert.equal(result.error.code, 'aborted');
+    }
+    assert.equal(server.getActiveTunnelCount(), 0);
+    // dispose 后迟到的流 resolve 不得复活隧道/泄漏。
+    resolveStream?.(new PassThrough());
+    await delay(50);
+    assert.equal(server.getActiveTunnelCount(), 0, '迟到流不复活隧道');
+  } finally {
+    await server.dispose();
+    await srv.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('nodeTunnelAbort：握手中取消建连立即失败（不等预算），signal 已通知', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helm-node-tunnel-');
+  const srv = await startBannerEchoServer('');
+  const streamSignals: AbortSignal[] = [];
+  const server = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    openTunnelStream: (tunnelId, signal) =>
+      new Promise<DuplexType>(() => {
+        streamSignals.push(signal!);
+        // 永不 resolve：仅 signal 能终结。
+      }),
+  });
+  try {
+    const openPromise = server.nodeTunnelOpen({ tunnelId: 't-abort', port: srv.port, timeoutMs: 15_000 });
+    await delay(100);
+    assert.equal(server.getActiveTunnelCount(), 1);
+    const start = Date.now();
+    await server.nodeTunnelAbort('t-abort');
+    const result = await openPromise;
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 5_000, `abort 后 open 应立即失败（实际 ${elapsed}ms）`);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.error.code, 'aborted');
+    assert.equal(server.getActiveTunnelCount(), 0);
+    assert.equal(streamSignals[0]?.aborted, true, '建连 signal 已 abort（WS 立即断开）');
+    // 未知 tunnelId 幂等无害。
+    await server.nodeTunnelAbort('no-such');
+  } finally {
+    await server.dispose();
+    await srv.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('nodeTunnelOpen：握手期对端（服务）断开返回结构化错误', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helm-node-tunnel-');
+  const srv = await startBannerEchoServer('');
+  const server = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    // 握手永远悬挂：由 TCP 侧断开（服务销毁 socket）终结。
+    openTunnelStream: () => new Promise<DuplexType>(() => undefined),
+  });
+  try {
+    const openPromise = server.nodeTunnelOpen({ tunnelId: 't-early', port: srv.port, timeoutMs: 15_000 });
+    await delay(100);
+    // 服务侧主动断开：TCP error/close 必须被统一处理（不未捕获崩进程），
+    // open 以 connect_failed/aborted 结构化失败。
+    for (const socket of srv.sockets) socket.destroy();
+    const result = await openPromise;
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.ok(['connect_failed', 'aborted', 'timeout'].includes(result.error.code), `结构化错误，实际 ${result.error.code}`);
+    }
+    assert.equal(server.getActiveTunnelCount(), 0);
+  } finally {
+    await server.dispose();
+    await srv.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('nodeTunnelOpen：draining 拒绝新隧道；dispose 销毁全部并等待 settle', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helm-node-tunnel-');
+  const srv = await startBannerEchoServer('');
   const streams: PassThrough[] = [];
   const server = createNodeEnvRpcServer({
     defaultCwd: dir,
@@ -155,29 +371,28 @@ test('nodeTunnelOpen：draining 拒绝新隧道；dispose 销毁全部隧道并�
     },
   });
   try {
-    const a = await server.nodeTunnelOpen({ tunnelId: 't-a', port: echo.port });
-    const b = await server.nodeTunnelOpen({ tunnelId: 't-b', port: echo.port });
+    const a = await server.nodeTunnelOpen({ tunnelId: 't-a', port: srv.port });
+    const b = await server.nodeTunnelOpen({ tunnelId: 't-b', port: srv.port });
     assert.equal(a.ok && b.ok, true);
     assert.equal(server.getActiveTunnelCount(), 2);
 
     server.setDraining(true);
-    const rejected = await server.nodeTunnelOpen({ tunnelId: 't-c', port: echo.port });
+    const rejected = await server.nodeTunnelOpen({ tunnelId: 't-c', port: srv.port });
     assert.equal(rejected.ok, false);
     assert.equal(!rejected.ok && rejected.error.code, 'aborted', 'draining 期间新隧道被拒（aborted）');
     assert.equal(server.getActiveTunnelCount(), 2, '在途隧道不受 draining 影响');
 
-    // dispose：销毁全部隧道 TCP/双工流并等待 settle。
     await server.dispose();
     assert.equal(server.getActiveTunnelCount(), 0);
     for (const stream of streams) {
       assert.equal(stream.destroyed, true, '双工流已销毁');
     }
-    const afterDispose = await server.nodeTunnelOpen({ tunnelId: 't-d', port: echo.port });
+    const afterDispose = await server.nodeTunnelOpen({ tunnelId: 't-d', port: srv.port });
     assert.equal(afterDispose.ok, false);
     assert.equal(!afterDispose.ok && afterDispose.error.code, 'aborted', 'disposed 后拒绝（aborted）');
   } finally {
     await server.dispose();
-    await echo.close();
+    await srv.close();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });

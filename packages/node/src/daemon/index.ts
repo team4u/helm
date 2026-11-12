@@ -487,21 +487,21 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
   const hub = assertValidHubUrl(hubUrl);
 
   // —— 隧道 WS 地址（同源推导：保留协议 http->ws / https->wss、host/port 与
-  // base path；在 base path 之后拼接 /ws/node-tunnel，无 base path 则直接使用）。
-  const tunnelWsBase = `${hub.protocol === 'https:' ? 'wss' : 'ws'}://${hub.host}${hub.pathname.replace(/\/+$/, '')}`;
-  const tunnelWsUrl = (tunnelId: string): string =>
-    `${tunnelWsBase}/ws/node-tunnel?tunnelId=${encodeURIComponent(tunnelId)}`;
+  // base path；在 base path 之后拼接 /ws/node-tunnel，无 base path 则直接使用；
+  // 隧道身份仅随 hello 首帧传递，URL 不携带 tunnelId）。
+  const tunnelWsUrl = `${hub.protocol === 'https:' ? 'wss' : 'ws'}://${hub.host}${hub.pathname.replace(/\/+$/, '')}/ws/node-tunnel`;
 
   /**
    * 打开单条隧道双工流：新 ws 连接同源 /ws/node-tunnel，发送单行 JSON
-   * NodeTunnelHello，等待首帧 NodeTunnelControl——仅 type=ok 返回双工流，
-   * 否则关闭并抛错（不静默伪装成功）。回调绑当前 generation：旧代终结后
+   * hello（仅 { nodeId, token, tunnelId }），等待首帧 NodeTunnelControl——仅
+   * type=ok 返回双工流，否则关闭并抛错（不静默伪装成功）。signal 取消时
+   * 立即 terminate 底层 ws 并 reject；回调绑当前 generation：旧代终结后
    * 回调拒绝（旧代 server 已 draining/disposed，新代不受影响）。
    */
   const openTunnelStreamFor = (
     gen: NonNullable<typeof generation>,
-  ): ((tunnelId: string) => Promise<Duplex>) =>
-  (tunnelId): Promise<Duplex> => {
+  ): ((tunnelId: string, signal?: AbortSignal) => Promise<Duplex>) =>
+  (tunnelId, signal): Promise<Duplex> => {
     if (closed || generation !== gen || gen.registered !== true) {
       return Promise.reject(
         Object.assign(new Error('tunnel transport unavailable (connection generation retired)'), { code: 'aborted' }),
@@ -510,19 +510,47 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
     return new Promise<Duplex>((resolve, reject) => {
       let settled = false;
       let ws: WebSocket | undefined;
+      let connectTimer: NodeJS.Timeout | undefined;
+      let frameTimer: NodeJS.Timeout | undefined;
+      let onAbort: (() => void) | undefined;
+      // 兑底 error 处理：任何时候（含 cleanup 后 close 途中）的 ws error 都
+      // 必须被吸收，绝不未捕获崩进程；settled 后仅销毁。
+      const guardError = (err: Error): void => {
+        if (settled) {
+          try {
+            ws?.terminate();
+          } catch {
+            // 已销毁。
+          }
+          return;
+        }
+        cleanup(err);
+      };
       const cleanup = (error?: Error): void => {
         if (settled) return;
         settled = true;
-        clearTimeout(connectTimer);
-        clearTimeout(frameTimer);
+        if (connectTimer !== undefined) clearTimeout(connectTimer);
+        if (frameTimer !== undefined) clearTimeout(frameTimer);
+        if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort);
+        // 握手失败/取消路径：不再关心后续帧；保留 guardError 吸收 close 途中
+        // 的 error，取消时 terminate 立即断开（不等 close 握手）。
         ws?.removeAllListeners('message');
         ws?.removeAllListeners('open');
-        ws?.removeAllListeners('close');
-        ws?.removeAllListeners('error');
-        try {
-          ws?.close();
-        } catch {
-          ws?.terminate();
+        ws?.removeListener('error', guardError);
+        ws?.once('error', () => {
+          try {
+            ws?.terminate();
+          } catch {
+            // 已销毁。
+          }
+        });
+        if (signal?.aborted) ws?.terminate();
+        else {
+          try {
+            ws?.close();
+          } catch {
+            ws?.terminate();
+          }
         }
         reject(
           error ??
@@ -532,21 +560,31 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
             ),
         );
       };
-      const connectTimer = setTimeout(() => {
+      connectTimer = setTimeout(() => {
         cleanup(Object.assign(new Error(`tunnel WS connect timed out after ${TUNNEL_CONNECT_TIMEOUT_MS}ms`), { code: 'timeout' }));
       }, TUNNEL_CONNECT_TIMEOUT_MS);
-      const frameTimer = setTimeout(() => {
+      frameTimer = setTimeout(() => {
         cleanup(Object.assign(new Error(`tunnel control frame timed out after ${TUNNEL_FIRST_FRAME_TIMEOUT_MS}ms`), { code: 'timeout' }));
       }, TUNNEL_FIRST_FRAME_TIMEOUT_MS);
+      onAbort = (): void => {
+        cleanup(Object.assign(new Error('tunnel handshake aborted'), { code: 'aborted' }));
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
       try {
-        ws = new WebSocket(tunnelWsUrl(tunnelId));
+        ws = new WebSocket(tunnelWsUrl);
       } catch (error) {
         cleanup(error instanceof Error ? error : new Error(String(error)));
         return;
       }
+      ws.on('error', guardError);
       ws.once('open', () => {
+        // 连接已建立：connect 预算停止，此后由 frame 预算与 abort 接管。
+        if (connectTimer !== undefined) {
+          clearTimeout(connectTimer);
+          connectTimer = undefined;
+        }
         if (settled) return;
-        // 单行 JSON Hello：仅 { nodeId, token, tunnelId }（协议定义字段，
+        // 单行 JSON hello：仅 { nodeId, token, tunnelId }（协议定义字段，
         // 不自行追加 type/port 等；凭据仅存在于 daemon 层）。
         ws!.send(JSON.stringify({ nodeId: identity.nodeId, token: identity.token, tunnelId }));
       });
@@ -571,8 +609,9 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
         }
         // 切换 stream 前移除握手 listener：此后帧归 createWebSocketStream 的
         // 双工流，不再进入本握手分支。
-        clearTimeout(connectTimer);
-        clearTimeout(frameTimer);
+        if (frameTimer !== undefined) clearTimeout(frameTimer);
+        if (connectTimer !== undefined) clearTimeout(connectTimer);
+        if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort);
         ws!.removeListener('message', onMessage);
         if (record.type === 'ok') {
           settled = true;
@@ -594,9 +633,6 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
       };
       ws.on('message', onMessage);
       ws.once('close', () => cleanup());
-      ws.once('error', (err) => {
-        cleanup(err instanceof Error ? err : new Error(String(err)));
-      });
     });
   };
 
@@ -838,15 +874,15 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
       onIpcEvent: (event) => pushEvent('onIpcEvent', event),
       onIpcClosed: (event) => pushEvent('onIpcClosed', event),
       // 隧道传输由 daemon 层注入（持有 hubUrl/identity）：本代回调绑本代，
-      // 旧代终结后拒绝新隧道，env-rpc-server 层零凭据。
-      openTunnelStream: (tunnelId: string) => {
+      // 旧代终结后拒绝新隧道，env-rpc-server 层零凭据；signal 取消建连。
+      openTunnelStream: (tunnelId: string, signal?: AbortSignal) => {
         const gen = genHandle.current;
         if (gen === undefined) {
           return Promise.reject(
             Object.assign(new Error('tunnel transport unavailable (connection generation retired)'), { code: 'aborted' }),
           );
         }
-        return openTunnelStreamFor(gen)(tunnelId);
+        return openTunnelStreamFor(gen)(tunnelId, signal);
       },
     });
     if (drainingGlobally) server.setDraining(true);
