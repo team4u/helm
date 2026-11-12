@@ -550,7 +550,6 @@ export function registerSuperAgentWatchdog(
     readDedup()
     // 历史键安全淘汰（已删会话 / 超限外部目标）：防 7×24 无限膨胀。
     evictStaleTargets(collectActiveExternalKeys(payload.probes))
-    const shuttingDown = false
 
     // 防自激：排除 watchdog 自身 id 与一切 profileId=watchdog 的会话（含直聊）。
     const watchdogIds = new Set<number>()
@@ -586,7 +585,7 @@ export function registerSuperAgentWatchdog(
       }
     }
 
-    await executeOps(payload.timestamp, shuttingDown, findings, ops)
+    await executeOps(payload.timestamp, findings, ops)
   }
 
   function classifyNative(
@@ -791,7 +790,7 @@ export function registerSuperAgentWatchdog(
   // 动作执行：notify / abort / bridge / wake
   // ---------------------------------------------------------------------------
 
-  async function executeOps(tickAt: number, shuttingDown: boolean, findings: Finding[], ops: PlannedOp[]): Promise<void> {
+  async function executeOps(tickAt: number, findings: Finding[], ops: PlannedOp[]): Promise<void> {
     // 1) 通知（各自独立去重）。
     for (const op of ops) {
       if (op.type !== 'notify') continue
@@ -812,7 +811,7 @@ export function registerSuperAgentWatchdog(
       const finding = op.finding
       const seq = finding.stateChangeSeq ?? SENTINEL_SEQ
       if (!shouldFire(finding.key, 'abort', seq, Number.POSITIVE_INFINITY)) continue
-      if (closing || shuttingDown) continue
+      if (closing) continue
       fireAndForget('watchdog:auto-abort', () => autoAbort(finding))
     }
 
@@ -824,7 +823,7 @@ export function registerSuperAgentWatchdog(
       if (seq === undefined) continue // classify 已保证存在，双保险
       if (inFlightBridges.has(finding.key)) continue
       if (!shouldFire(finding.key, 'bridge', seq, Number.POSITIVE_INFINITY)) continue
-      if (closing || shuttingDown) continue
+      if (closing) continue
       fireAndForget('watchdog:bridge-ask', () => bridgeToAsk(finding))
     }
 
@@ -842,7 +841,7 @@ export function registerSuperAgentWatchdog(
       notify('warning', 'Watchdog 会话未就绪', '存在需认知排障的异常，但巡检会话尚未初始化，本轮仅记录事实')
       return
     }
-    if (closing || shuttingDown) return
+    if (closing) return
     const wakeKeys = dueWakes.map((op) => {
       const seq = op.finding.stateChangeSeq ?? SENTINEL_SEQ
       return `${op.finding.key}:${seq}`

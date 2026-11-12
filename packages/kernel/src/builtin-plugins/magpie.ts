@@ -18,8 +18,8 @@
  * - 非 loopback 网关不读本机 magpie CLI 数据（那是另一个实例），只用所选
  *   网关 trace 并标注 source；apiKey 绝不进 doc / 动作输出 / 错误文本。
  * - 零参工厂：目录刷新经 ctx.host.refreshModels({ providers: ['magpie'] })，
- *   网络读取用 global fetch，本机 CLI 经 execFile 公开端口（runMagpieCli，
- *   无注入后门；测试用 PATH fixture / global fetch mock）。
+ *   网络读取用 global fetch，本机 CLI 经 execFile 公开端口
+ *   （无注入后门；测试用 PATH fixture / global fetch mock）。
  */
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -36,7 +36,6 @@ import {
   type MagpieGatewayRef,
   type MagpiePluginConfig,
   type MagpieStatusDoc,
-  type RunMagpieCli,
 } from './magpie/contracts.js'
 import { fetchQuotas, fetchTrace, resolveGateway } from './magpie/gateway.js'
 import { quotaRows } from './magpie/quota.js'
@@ -158,11 +157,10 @@ function resolveMagpieClientRoot(): string {
 
 const execFileAsync = promisify(execFile)
 
-/**
- * 公开环境端口：本机 magpie CLI 经 execFile（PATH 解析，无隐藏注入）。
+/** 本机 magpie CLI 经 execFile（PATH 解析，无隐藏注入）。
  * 失败返回 { ok:false, error }；超时 10s；错误文本脱敏后限长。
  */
-export function runMagpieCli(
+function runMagpieCli(
   args: readonly string[],
   options?: { signal?: AbortSignal },
 ): Promise<{ ok: boolean; stdout?: string; error?: string }> {
@@ -181,7 +179,6 @@ export function runMagpieCli(
 
 export function createMagpiePlugin(): PluginDefinition {
   const fetchImpl: typeof fetch = fetch
-  const runCli: RunMagpieCli = runMagpieCli
 
   return {
     id: MAGPIE_PLUGIN_ID,
@@ -488,8 +485,8 @@ export function createMagpiePlugin(): PluginDefinition {
             const cliTrusted = snapshot.root === DEFAULT_MAGPIE_ROOT
             let cliGroups: GroupListRow[] | undefined
             let cliError: string | undefined
-            if (cliTrusted && runCli !== undefined) {
-              const run = await runCli(['groups'], { signal: controller.signal })
+            if (cliTrusted) {
+              const run = await runMagpieCli(['groups'], { signal: controller.signal })
               if (run.ok) cliGroups = parseGroupsList(run.stdout ?? '')
               else cliError = run.error
             }
@@ -558,8 +555,8 @@ export function createMagpiePlugin(): PluginDefinition {
             const cliTrusted = snapshot.root === DEFAULT_MAGPIE_ROOT
             let definition: ReturnType<typeof parseGroupShow> = undefined
             let definitionError: string | undefined
-            if (cliTrusted && runCli !== undefined) {
-              const run = await runCli(['group', short], { signal: controller.signal })
+            if (cliTrusted) {
+              const run = await runMagpieCli(['group', short], { signal: controller.signal })
               if (run.ok) {
                 definition = parseGroupShow(run.stdout ?? '')
                 if (definition === undefined) definitionError = 'magpie CLI 输出无法解析为组定义'

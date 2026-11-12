@@ -80,15 +80,6 @@ export const EMPTY_APPS_CATALOG: AppsCatalogDoc = { apps: {} }
 const CATALOG_DOC = 'catalog'
 
 // ---------------------------------------------------------------------------
-// 宿主受管包端口
-// ---------------------------------------------------------------------------
-
-/** 直接消费 protocol 定义的宿主插件治理端口，不复制第二套包管理契约。 */
-function hostPluginsPort(host: HelmHostApi): HelmHostApi['plugins'] {
-  return host.plugins
-}
-
-// ---------------------------------------------------------------------------
 // 资产目录解析（client / skill）
 // ---------------------------------------------------------------------------
 
@@ -321,7 +312,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
         idempotent: true,
         exposeAsTool: true,
         async handler(input, context) {
-          const port = hostPluginsPort(ctx.host)
+          const port = ctx.host.plugins
           const dir = resolveAppSourceDir(input.dir, context, { getConversation, hubCwd })
           return validateAppDir(port, dir)
         },
@@ -378,7 +369,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
         },
         exposeAsTool: true,
         async handler(input, context) {
-          const port = hostPluginsPort(ctx.host)
+          const port = ctx.host.plugins
           const resolvedDir = resolveAppSourceDir(input.dir, context, { getConversation, hubCwd })
           const category = input.category !== undefined ? assertCategory(input.category) : undefined
 
@@ -524,7 +515,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
         idempotent: true,
         exposeAsTool: true,
         async handler() {
-          const port = hostPluginsPort(ctx.host)
+          const port = ctx.host.plugins
           const summaries = port.list()
           const ui = port.listUi()
           const catalogState = catalog.get()
@@ -657,7 +648,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
         },
         async handler(input) {
           assertNotSelfTarget(input.pluginId)
-          const port = hostPluginsPort(ctx.host)
+          const port = ctx.host.plugins
           // 卸载（宿主端口对无受管记录的插件显式 404；不静默跳过）
           const result = await port.remove(input.pluginId)
           // catalog 清理（未登记条目也幂等清理，保持一致）
