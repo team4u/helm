@@ -17,8 +17,7 @@ import {
 } from './model-center-model.js'
 
 /**
- * 无过滤且未展开时最多渲染的模型胶囊数（首帧 DOM 上限）。
- * 启用中的模型无论排序位置一律保留，避免 OpenRouter 数百模型一次性铺满抽屉。
+ * 无过滤且未展开时最多渲染的模型胶囊数，避免海量目录一次性铺满抽屉。
  */
 const CHIP_RENDER_LIMIT = 80
 
@@ -120,15 +119,12 @@ export function ModelDetailDrawer({
 
   const hasModelFilter = modelFilter.trim() !== ''
 
-  // 轻量截断：无过滤且未展开时只渲染前 CHIP_RENDER_LIMIT 个胶囊，启用中的模型
-  // 无论排序位置都追加保留；有过滤词（便于搜索定位）或已展开时完整渲染。
+  // 无过滤且未展开时严格限制首帧数量；模型默认均为启用态，不能用 enabled 作为
+  // “用户特别选择”的标记，否则 OpenRouter 初始目录仍会一次性渲染全部模型。
+  // 搜索或显式展开后再显示完整结果。
   const visibleModels = useMemo(() => {
     if (hasModelFilter || isExpanded) return filteredModels
-    if (filteredModels.length <= CHIP_RENDER_LIMIT) return filteredModels
-    const head = filteredModels.slice(0, CHIP_RENDER_LIMIT)
-    const headIds = new Set(head.map((m) => m.id))
-    const enabledTail = filteredModels.filter((m) => m.enabled && !headIds.has(m.id))
-    return enabledTail.length > 0 ? [...head, ...enabledTail] : head
+    return filteredModels.slice(0, CHIP_RENDER_LIMIT)
   }, [filteredModels, hasModelFilter, isExpanded])
 
   const hiddenModelCount = filteredModels.length - visibleModels.length

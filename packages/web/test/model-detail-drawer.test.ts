@@ -67,7 +67,7 @@ function chipCheckedMap(container: HTMLElement): Map<string, boolean> {
 // 1. 模型胶囊首帧截断（无过滤且未展开时最多渲染前 80 个，启用项始终保留）
 // ---------------------------------------------------------------------------
 
-test('ModelDetailDrawer: 大目录未展开时首帧截断为 80 个胶囊，启用中的模型越过截断线仍保留', { timeout: 60_000 }, () => {
+test('ModelDetailDrawer: 大目录未展开时首帧严格截断为 80 个胶囊', { timeout: 60_000 }, () => {
   const provider = makeBulkProvider(100, ['m-95'])
 
   const html = renderToStaticMarkup(
@@ -77,13 +77,12 @@ test('ModelDetailDrawer: 大目录未展开时首帧截断为 80 个胶囊，启
   // 前 80 个（m-0..m-79）正常渲染
   assert.match(html, /Model 0\b/)
   assert.match(html, /Model 79\b/)
-  // 截断线外的未启用模型不渲染
+  // 截断线外模型不渲染，即使当前处于启用态；搜索或展开后可定位/查看
   assert.doesNotMatch(html, /Model 81\b/)
+  assert.doesNotMatch(html, /Model 95\b/)
   assert.doesNotMatch(html, /Model 99\b/)
-  // 启用中的 m-95 无论排序位置都必须保留
-  assert.match(html, /Model 95\b/)
-  // 省略数量提示：100 - 80 - 1 = 19
-  assert.match(html, /省略 19 个/)
+  // 省略数量提示：100 - 80 = 20
+  assert.match(html, /省略 20 个/)
   // 无过滤词时批量按钮保持全量语义文案
   assert.match(html, /全部启用/)
   assert.match(html, /全部停用/)
@@ -268,8 +267,8 @@ test('ModelDetailDrawer: 点击展开后渲染全部模型且省略提示消失�
     )
   })
 
-  // 初始截断：81 个胶囊（80 头部 + 1 个启用尾部）
-  assert.equal(container.querySelectorAll('button[role="checkbox"]').length, 81)
+  // 初始截断：只渲染前 80 个胶囊
+  assert.equal(container.querySelectorAll('button[role="checkbox"]').length, 80)
 
   // 展开：全部渲染
   await act(async () => {
@@ -277,14 +276,14 @@ test('ModelDetailDrawer: 点击展开后渲染全部模型且省略提示消失�
   })
   assert.equal(container.querySelectorAll('button[role="checkbox"]').length, 100)
   assert.match(container.textContent ?? '', /Model 99\b/)
-  assert.doesNotMatch(container.textContent ?? '', /省略 19 个/)
+  assert.doesNotMatch(container.textContent ?? '', /省略 20 个/)
 
   // 折叠：恢复截断与省略提示
   await act(async () => {
     findButtonByText(container, '折叠列表')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   })
-  assert.equal(container.querySelectorAll('button[role="checkbox"]').length, 81)
-  assert.match(container.textContent ?? '', /省略 19 个/)
+  assert.equal(container.querySelectorAll('button[role="checkbox"]').length, 80)
+  assert.match(container.textContent ?? '', /省略 20 个/)
 
   await act(async () => {
     root.unmount()
