@@ -216,6 +216,7 @@ export async function tunnelFetch(
     // 透传语义，插件拿到的就是原始字节）。
     headers['connection'] = 'close'
     headers['accept-encoding'] = headers['accept-encoding'] ?? 'identity'
+    let responseSettled = false
     const req = http.request(
       {
         // createConnection 与缺省 agent 组合直接使用此流；不能使用
@@ -240,18 +241,54 @@ export async function tunnelFetch(
         const nullBody = request.method === 'HEAD' || status === 204 || status === 304
         if (nullBody) {
           res.resume() // 丢弃（按 RFC 本就不该有 body）
+          signal?.removeEventListener('abort', onAbort)
+          responseSettled = true
           resolve(new Response(null, { status, headers: outHeaders }))
           // 无 body 可等：立即释放隧道。
           tunnel.destroy()
           return
         }
-        const bodyStream = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>
-        // 隧道寿命绑定 body：EOF/cancel/error 由 stream 终结驱动，
-        // 响应头到达绝不提前 destroy（SSE 必须完整透传）。
+        // 用 pull 适配保留 Web Stream 背压，并把隧道寿命绑定到 body：
+        // EOF/cancel/error 才销毁；响应头到达绝不提前 destroy（SSE 必须
+        // 完整透传）。
+        const source = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>
+        const reader = source.getReader()
+        let bodyEnded = false
+        const finishBody = (): void => {
+          if (bodyEnded) return
+          bodyEnded = true
+          signal?.removeEventListener('abort', onAbort)
+          tunnel.destroy()
+        }
+        const bodyStream = new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            try {
+              const { done, value } = await reader.read()
+              if (done) {
+                finishBody()
+                controller.close()
+                return
+              }
+              if (value !== undefined) controller.enqueue(value)
+            } catch (error) {
+              finishBody()
+              controller.error(error)
+            }
+          },
+          async cancel(reason) {
+            try {
+              await reader.cancel(reason)
+            } finally {
+              finishBody()
+            }
+          },
+        })
+        responseSettled = true
         resolve(new Response(bodyStream, { status, headers: outHeaders }))
       },
     )
     req.once('error', (error) => {
+      if (responseSettled) return
       failTunnel(
         'node_tunnel_closed',
         `节点 ${nodeId} 隧道请求失败：${error instanceof Error ? error.message : String(error)}`,
@@ -266,7 +303,10 @@ export async function tunnelFetch(
     }
     if (signal?.aborted) { onAbort(); return }
     signal?.addEventListener('abort', onAbort, { once: true })
-    req.once('close', () => signal?.removeEventListener('abort', onAbort))
+    req.once('close', () => {
+      // 响应 body 可能仍在消费；其终结由 finishBody 移除 abort 监听。
+      if (!responseSettled) signal?.removeEventListener('abort', onAbort)
+    })
     if (request.method === 'GET' || request.method === 'HEAD' || request.body === null) req.end()
     else pipeRequestBody(request, req)
   })

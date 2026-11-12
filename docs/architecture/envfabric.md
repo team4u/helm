@@ -255,7 +255,7 @@ nodeTunnelOpen?(input: NodeTunnelOpenInput): Promise<RpcResult<null>>
    ```typescript
    const duplex = await fabric.openTunnel(nodeId, { host: url.hostname, port }, init?.signal ?? undefined)
    const reqHeaders = normalizeOutgoingHeaders(init?.headers)
-   // 强制禁用传输压缩：node:http 不自动解压 gzip/br，loopback 走 identity 保证
+   // 强制禁用传输压缩：node:http 不自动解压 gzip/br，统一走 identity
    // Readable.toWeb(res) 交还给调用方（如 pi-ai SSE 解析器）的是原始明文字节流。
    reqHeaders['accept-encoding'] = 'identity'
 
