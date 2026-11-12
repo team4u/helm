@@ -164,7 +164,7 @@ function makeStore(conversation: ConversationSummary, opts: TestStoreOverrides =
     conversationArtifacts: { [conversation.id]: opts.artifacts ?? [] },
     pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: opts.ui ?? [],
     groupedUi: groupUiContributions(opts.ui ?? []), pluginDocs: opts.docs ?? {}, nodes: [],
-    profiles: [], models: [], providers: [], credentials: [], skills: [], actions: opts.actions ?? [],
+    profiles: [], assetsLoaded: true, models: [], providers: [], credentials: [], skills: [], actions: opts.actions ?? [],
     primaryTarget: { kind: 'conversation', conversationId: conversation.id }, splitTarget: null,
     workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices,
     setTheme: noop, setThemePreference: noop, toggleTheme: noop, checkAuth: asyncNoop,

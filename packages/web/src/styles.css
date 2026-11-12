@@ -5924,3 +5924,78 @@ input[type="search"]::-webkit-search-decoration {
 input[type="search"]::-moz-search-clear-button {
   display: none;
 }
+
+/* ---------------------------------------------------------------------------
+ * 智能体待命页（Agent Standby）：复用会话/输入区视觉，只补少量布局
+ * --------------------------------------------------------------------------- */
+.agent-standby-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px 16px;
+}
+
+.agent-standby-intro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.agent-standby-intro-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.agent-standby-intro-hint {
+  font-size: 12px;
+  color: var(--fg-muted);
+  max-width: 480px;
+}
+
+.agent-standby-env-bar .agent-standby-env-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.agent-standby-error {
+  margin: 0 12px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.agent-standby-error-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-standby-attachment-state {
+  flex-shrink: 0;
+}
+
+.agent-standby-anchored {
+  margin: 0 12px 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.agent-standby-anchored-text {
+  flex: 1;
+  min-width: 0;
+}

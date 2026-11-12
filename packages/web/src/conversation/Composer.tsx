@@ -70,6 +70,8 @@ export interface ComposerProps {
   } | null
   /** 真实发送请求开始/结束时通知父层（在途反馈；斜杠命令不触发）。 */
   onSendingChange?: (sending: boolean) => void
+  /** /new 新话题入口：进入本智能体待命页（首次发送才落库）；宿主传入面板位置明确的导航回调。 */
+  onNewThread?: () => void
 }
 
 type PopoverKind = 'slash' | null
@@ -308,7 +310,7 @@ function CommandPopover({
       return slashItems.filter((i) => i.id.toLowerCase().includes(q) || i.label.toLowerCase().includes(q))
     }
     const builtin: PopoverItem[] = [
-      { id: '/new', label: '/new', hint: '重置上下文', apply: '/new' },
+      { id: '/new', label: '/new', hint: '开始新话题', apply: '/new' },
       { id: '/clear', label: '/clear', hint: '重置上下文', apply: '/clear' },
       { id: '/compact', label: '/compact', hint: '精简上下文', apply: '/compact' },
     ]
@@ -592,7 +594,7 @@ function SessionEnvBar({
 // Composer 主体
 // ---------------------------------------------------------------------------
 
-export function Composer({ conversation, prefill, onSendingChange }: ComposerProps) {
+export function Composer({ conversation, prefill, onSendingChange, onNewThread }: ComposerProps) {
   const store = useHelmStore()
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
@@ -905,7 +907,22 @@ export function Composer({ conversation, prefill, onSendingChange }: ComposerPro
 
   const runSlashCommand = (raw: string): boolean => {
     const cmd = raw.trim()
-    if (cmd === '/new' || cmd === '/clear') {
+    if (cmd === '/new') {
+      // /new 是新话题入口：进入本智能体待命页（首次发送才落库），不再重置原会话；
+      // 未提供回调（非会话页宿主）时显式提示，不猜测目标也不伤原会话。
+      if (onNewThread !== undefined) {
+        onNewThread()
+      } else {
+        store.pushNotice({
+          type: 'notification',
+          level: 'warning',
+          title: '请从会话顶栏「新话题」开始新话题',
+          conversationId: conversation.id,
+        })
+      }
+      return true
+    }
+    if (cmd === '/clear') {
       void conversationsApi
         .reset(conversation.id)
         .then(() => {

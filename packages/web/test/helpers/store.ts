@@ -16,7 +16,7 @@ export function makeTestStore(overrides: Partial<HelmStoreValue> = {}): HelmStor
     connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark', themePreference: 'system',
     conversations: [], conversationDetails: {}, conversationLives: {}, conversationArtifacts: {},
     pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: [],
-    groupedUi: groupUiContributions([]), pluginDocs: {}, nodes: [], profiles: [], models: [],
+    groupedUi: groupUiContributions([]), pluginDocs: {}, nodes: [], profiles: [], assetsLoaded: true, models: [],
     providers: [], credentials: [], skills: [], actions: [],
     primaryTarget: { kind: 'conversation', conversationId: 1 }, splitTarget: null,
     workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices: [],

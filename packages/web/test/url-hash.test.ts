@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
+import { parseScreenTargetQuery } from '../src/lib/types.js'
 import {
   formatLocationHash,
   isSameLocationState,
   parseLocationHash,
+  serializeHash,
   shouldPushLocationHistory,
   type WorkspaceLocationState,
 } from '../src/lib/url-hash-model.js'
+import { isSameResolvedTarget, resolveTargetString } from '../src/lib/types.js'
 
 const conversation = (conversationId: number): WorkspaceLocationState => ({
   primaryTarget: { kind: 'conversation', conversationId },
@@ -541,8 +544,8 @@ test('契约: HelmStoreProvider 初始状态取自 Hash、监听外部变更、�
   const writeBack = source.slice(writeBackStart, writeBackEnd)
   assert.ok(writeBack.includes('nextHash === window.location.hash'), '写回前必须先比对当前地址栏')
   assert.ok(writeBack.includes('pushState') && writeBack.includes('replaceState'), '写回须区分 push/replace')
-  // setParams push 标记经唯一写回 effect 强制 push，组件不直接操作 history
-  assert.ok(writeBack.includes('pendingForcePush.current'), 'setScreenParams 的 push 标记须由唯一写回 effect 消费')
+  // setParams push 标记与 openTarget history 选项经唯一写回 effect 消费，组件不直接操作 history
+  assert.ok(writeBack.includes('pendingHistoryMode.current'), '显式历史标记须由唯一写回 effect 消费')
   const screenParamsImpl = source.slice(source.indexOf('const setScreenParams'), source.indexOf('const invokePluginAction'))
   assert.ok(!screenParamsImpl.includes('history.'), 'setScreenParams 不得直接操作浏览器历史')
   // logout 用 replaceState 复位地址栏，不污染历史栈
@@ -624,7 +627,7 @@ test('screen params: 非法键 / 空值 / 非法编码 / 未知前缀全部丢�
   assert.equal(noPrefix.kind === 'screen' ? noPrefix.params : undefined, undefined)
 })
 
-import { isSameResolvedTarget, parseScreenTargetQuery, resolveTargetString } from '../src/lib/types.js'
+// isSameResolvedTarget / resolveTargetString / parseScreenTargetQuery 已在文件头部统一导入。
 
 test('screen params: isSameResolvedTarget 浅比较 params，仅 params 变化不入历史栈', { timeout: 60_000 }, () => {
   const base = conversation(1)
@@ -692,4 +695,102 @@ test('resolveTargetString: 非法查询串整体判无效（重复键 / 空键�
   assert.equal(parseScreenTargetQuery(''), undefined)
   assert.equal(parseScreenTargetQuery('k=%E0%A4%A'), null)
   assert.deepEqual(parseScreenTargetQuery('b=2&a=1'), { a: '1', b: '2' })
+})
+
+// ---------------------------------------------------------------------------
+// agent 待命目标（#/a/<profileId>，草稿环境 node/cwd 主/分屏往返）
+// ---------------------------------------------------------------------------
+
+test('parse: agent 待命目标路径与非法形式', { timeout: 60_000 }, () => {
+  assert.deepEqual(parseLocationHash('#/a/assistant').primaryTarget, { kind: 'agent', profileId: 'assistant' })
+  // profileId 含冒号保持可读；百分号编码形式同样可解析
+  assert.deepEqual(parseLocationHash('#/a/builtin:herdr').primaryTarget, { kind: 'agent', profileId: 'builtin:herdr' })
+  assert.deepEqual(parseLocationHash('#/a/builtin%3Aherdr').primaryTarget, { kind: 'agent', profileId: 'builtin:herdr' })
+  // profileId 含斜杠必须编码；裸斜杠/空段/孤立 a 判非法回退默认
+  assert.deepEqual(parseLocationHash('#/a/team%2Falpha').primaryTarget, { kind: 'agent', profileId: 'team/alpha' })
+  for (const raw of ['#/a/', '#/a', '#/a/foo/bar', '#/a/%E0%A4%A']) {
+    assert.deepEqual(parseLocationHash(raw).primaryTarget, { kind: 'profiles' }, raw)
+  }
+})
+
+test('parse/format: agent 草稿环境 node/cwd 主屏与分屏各自往返', { timeout: 60_000 }, () => {
+  // 主屏：node 与 cwd 为顶层查询参数；cwd 斜杠由 URLSearchParams 编码
+  const primary = parseLocationHash('#/a/assistant?node=remote-1&cwd=%2Fremote%2Fwork')
+  assert.deepEqual(primary.primaryTarget, { kind: 'agent', profileId: 'assistant', nodeId: 'remote-1', cwd: '/remote/work' })
+  assert.equal(
+    formatLocationHash({ ...conversation(1), primaryTarget: primary.primaryTarget }),
+    '#/a/assistant?node=remote-1&cwd=%2Fremote%2Fwork',
+  )
+  assert.deepEqual(roundtrip({ ...conversation(1), primaryTarget: primary.primaryTarget }).primaryTarget, primary.primaryTarget)
+
+  // 只带 node 或只带 cwd 同样合法
+  assert.deepEqual(parseLocationHash('#/a/assistant?node=remote-1').primaryTarget, {
+    kind: 'agent', profileId: 'assistant', nodeId: 'remote-1',
+  })
+  assert.deepEqual(parseLocationHash('#/a/assistant?cwd=%2Fw').primaryTarget, {
+    kind: 'agent', profileId: 'assistant', cwd: '/w',
+  })
+  // 空串参数视为未设置
+  assert.deepEqual(parseLocationHash('#/a/assistant?node=&cwd=').primaryTarget, { kind: 'agent', profileId: 'assistant' })
+
+  // 分屏：agent 环境编码在 split 值内部，与主屏同名参数互不串扰
+  const splitHash = formatLocationHash({
+    ...conversation(1),
+    primaryTarget: { kind: 'agent', profileId: 'assistant', nodeId: 'main-node', cwd: '/main' },
+    splitTarget: { kind: 'agent', profileId: 'coder', nodeId: 'remote-1', cwd: '/remote/work' },
+  })
+  // split 值由 URLSearchParams 整体转义（内层 cwd 的 / 二次编码为 %252F）
+  assert.equal(splitHash, '#/a/assistant?node=main-node&cwd=%2Fmain&split=a%2Fcoder%3Fnode%3Dremote-1%26cwd%3D%252Fremote%252Fwork')
+  const parsedSplit = parseLocationHash(splitHash)
+  assert.deepEqual(parsedSplit.primaryTarget, { kind: 'agent', profileId: 'assistant', nodeId: 'main-node', cwd: '/main' })
+  assert.deepEqual(parsedSplit.splitTarget, { kind: 'agent', profileId: 'coder', nodeId: 'remote-1', cwd: '/remote/work' })
+  // 整体往返无损
+  assert.deepEqual(roundtrip(parseLocationHash(splitHash)), parseLocationHash(splitHash))
+
+  // 手写深链：split 内嵌查询串也能解析
+  const handWritten = parseLocationHash(`#/c/1?split=${encodeURIComponent('a/coder?cwd=/srv')}`)
+  assert.deepEqual(handWritten.splitTarget, { kind: 'agent', profileId: 'coder', cwd: '/srv' })
+})
+
+test('历史策略: agent 坐标级变化 push，仅草稿环境变化 replace', { timeout: 60_000 }, () => {
+  const base: WorkspaceLocationState = { ...conversation(1), primaryTarget: { kind: 'agent', profileId: 'assistant' } }
+  const envChanged: WorkspaceLocationState = {
+    ...base,
+    primaryTarget: { kind: 'agent', profileId: 'assistant', nodeId: 'remote-1', cwd: '/r' },
+  }
+  // 同 profileId 仅环境变化：位置不同但 replace（不污染后退栈）
+  assert.equal(isSameLocationState(base, envChanged), false)
+  assert.equal(shouldPushLocationHistory(base, envChanged), false)
+  assert.equal(shouldPushLocationHistory(envChanged, base), false)
+  // 会话 <-> 待命 / 不同智能体待命：坐标级变化 push
+  assert.equal(shouldPushLocationHistory(conversation(1), base), true)
+  assert.equal(shouldPushLocationHistory(base, conversation(1)), true)
+  const otherAgent: WorkspaceLocationState = { ...base, primaryTarget: { kind: 'agent', profileId: 'coder' } }
+  assert.equal(shouldPushLocationHistory(base, otherAgent), true)
+  // agent 与角色中心（profiles）互为坐标级变化
+  const profilesState: WorkspaceLocationState = { ...conversation(1), primaryTarget: { kind: 'profiles' } }
+  assert.equal(shouldPushLocationHistory(base, profilesState), true)
+  // serializeHash 直接接收 agent 目标
+  assert.equal(serializeHash({ kind: 'agent', profileId: 'assistant', nodeId: 'r', cwd: '/w' }), '#/a/assistant?node=r&cwd=%2Fw')
+})
+
+test('parse: 空缺 conversation:profile 仍返回 null（不静默降级到待命页）', { timeout: 60_000 }, () => {
+  // conversation:profile:<id> 保持常驻会话查找语义（插件 singleton 不受 agent 目标影响）
+  assert.equal(resolveTargetString('conversation:profile:none', []), null)
+  // agent:<id> 声明式目标进入待命态；空 id 判无效
+  assert.deepEqual(resolveTargetString('agent:assistant', []), { kind: 'agent', profileId: 'assistant' })
+  assert.equal(resolveTargetString('agent:', []), null)
+  assert.equal(resolveTargetString('agent', []), null)
+})
+
+test('isSameResolvedTarget: agent 目标按 profileId/nodeId/cwd 比较', { timeout: 60_000 }, () => {
+  const a = { kind: 'agent', profileId: 'p' } as const
+  assert.equal(isSameResolvedTarget(a, { kind: 'agent', profileId: 'p' }), true)
+  assert.equal(isSameResolvedTarget(a, { kind: 'agent', profileId: 'q' }), false)
+  assert.equal(isSameResolvedTarget({ kind: 'agent', profileId: 'p', nodeId: 'r' }, { kind: 'agent', profileId: 'p' }), false)
+  assert.equal(
+    isSameResolvedTarget({ kind: 'agent', profileId: 'p', nodeId: 'r', cwd: '/w' }, { kind: 'agent', profileId: 'p', nodeId: 'r', cwd: '/w' }),
+    true,
+  )
+  assert.equal(isSameResolvedTarget(a, { kind: 'profiles', profileId: 'p' }), false)
 })

@@ -684,6 +684,7 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
     pluginDocs: {},
     nodes: [],
     profiles: [{ id: 'assistant', name: '个人助理' }],
+    assetsLoaded: true,
     models: [
       {
         id: 'zhipu/glm-4.6',
@@ -783,40 +784,73 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
   assert.equal(selectedIds.size, 0)
 })
 
-test('批量删除重定向保护仿真：主屏/分屏活跃会话删除时回退角色中心', { timeout: 60_000 }, () => {
-  function simulateRedirection(
-    selectedIds: Set<number>,
-    primaryTarget: { kind: string; conversationId: number },
-    splitTarget: { kind: string; conversationId: number } | null,
+test('批量删除导航契约：Sidebar 不做二次导航，回退统一由 Provider 删除管道负责', { timeout: 60_000 }, () => {
+  const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
+  const batchStart = sidebarSource.indexOf('const executeBatchDelete')
+  const batchEnd = sidebarSource.indexOf('return (', batchStart)
+  assert.ok(batchStart > 0 && batchEnd > batchStart, 'executeBatchDelete 存在')
+  const batchBody = sidebarSource.slice(batchStart, batchEnd)
+  // 删除导航唯一 truth：成功 SSE conversation.deleted 事件 → Provider 按当前目标条件回退；
+  // Sidebar 不再基于旧快照/selectedIds 二次跳转（旧实现会连失败项一起跳走）。
+  assert.doesNotMatch(batchBody, /openTarget/, '批量删除不得在 Sidebar 内导航')
+  assert.doesNotMatch(batchBody, /closeSplit/, '批量删除不得在 Sidebar 内关分屏')
+  assert.match(batchBody, /conversationsApi\.remove/, '批量删除仍发起真实删除请求')
+})
+
+test('删除回退仿真：主屏/分屏/抽屉命中被删会话时回该智能体待命态', { timeout: 60_000 }, () => {
+  // 与 Provider conversation.deleted 管道同一决策函数形状：仅命中当前目标才回退，
+  // 待命目标继承被删会话的 profileId/nodeId/cwd（远端坐标不回落本机）。
+  function simulateFallback(
+    deleted: { id: number; profileId: string; nodeId?: string; cwd?: string },
+    primaryTarget: { kind: string; conversationId?: number },
+    splitTarget: { kind: string; conversationId?: number } | null,
+    drawerConversationId: number | null,
   ) {
-    let fellBackToCenter = false
-    let splitClosed = false
-    if (primaryTarget.kind === 'conversation' && selectedIds.has(primaryTarget.conversationId)) {
-      fellBackToCenter = true // 回退无会话依赖的角色中心（不指向另一个可能已删的会话）
+    const primaryHit = primaryTarget.kind === 'conversation' && primaryTarget.conversationId === deleted.id
+    const splitHit = splitTarget?.kind === 'conversation' && splitTarget.conversationId === deleted.id
+    const drawerHit = drawerConversationId === deleted.id
+    const fallback = {
+      kind: 'agent',
+      profileId: deleted.profileId,
+      ...(deleted.nodeId !== undefined && deleted.nodeId !== '' && deleted.nodeId !== 'local' ? { nodeId: deleted.nodeId } : {}),
+      ...(deleted.cwd !== undefined && deleted.cwd !== '' ? { cwd: deleted.cwd } : {}),
     }
-    if (splitTarget?.kind === 'conversation' && selectedIds.has(splitTarget.conversationId)) {
-      splitClosed = true
+    return {
+      primary: primaryHit ? fallback : primaryTarget,
+      splitClosed: splitHit,
+      drawerClosed: drawerHit,
     }
-    return { fellBackToCenter, splitClosed }
   }
 
-  // 场景 1：当前主屏为会话 10，分屏为会话 11；批量删除选中了 10 和 11
-  const r1 = simulateRedirection(
-    new Set([10, 11]),
+  // 场景 1：主屏会话 10（远端）被删：回待命态并继承节点与目录
+  const r1 = simulateFallback(
+    { id: 10, profileId: 'assistant', nodeId: 'remote-1', cwd: '/remote/work' },
     { kind: 'conversation', conversationId: 10 },
-    { kind: 'conversation', conversationId: 11 },
+    null,
+    null,
   )
-  assert.equal(r1.fellBackToCenter, true, '主屏正在查看的会话被删，回退角色中心')
-  assert.equal(r1.splitClosed, true, '分屏正在查看的会话被删，自动关闭分屏')
+  assert.deepEqual(r1.primary, { kind: 'agent', profileId: 'assistant', nodeId: 'remote-1', cwd: '/remote/work' })
 
-  // 场景 2：当前主屏为初始会话 1，分屏为会话 99；批量删除选中了 10
-  const r2 = simulateRedirection(
-    new Set([10]),
+  // 场景 2：分屏会话 11 被删：只关分屏，主屏不动
+  const r2 = simulateFallback(
+    { id: 11, profileId: 'assistant' },
+    { kind: 'conversation', conversationId: 1 },
+    { kind: 'conversation', conversationId: 11 },
+    null,
+  )
+  assert.deepEqual(r2.primary, { kind: 'conversation', conversationId: 1 })
+  assert.equal(r2.splitClosed, true)
+
+  // 场景 3：被删的不是当前目标：不重定向
+  const r3 = simulateFallback(
+    { id: 10, profileId: 'assistant' },
     { kind: 'conversation', conversationId: 1 },
     { kind: 'conversation', conversationId: 99 },
+    null,
   )
-  assert.equal(r2.fellBackToCenter, false, '未被删除的活跃主屏会话不被重定向')
-  assert.equal(r2.splitClosed, false, '未被删除的分屏会话不被关闭')
+  assert.deepEqual(r3.primary, { kind: 'conversation', conversationId: 1 })
+  assert.equal(r3.splitClosed, false)
+  assert.equal(r3.drawerClosed, false)
 })
 
 test('SSR 渲染回归：Sidebar 包含批量管理按钮与极简无 Emoji 验证', { timeout: 60_000 }, () => {
@@ -967,7 +1001,7 @@ test('Sidebar 双层导航：手风琴单展开仅当前智能体显示话题子
   assert.ok(html.includes('agent-conversations-list'), '当前智能体渲染话题子列表')
   assert.ok(html.includes('nav-item-sub'), '话题子行使用二级行样式')
   assert.ok(html.includes('>3</span>'), '多会话智能体行展示计数徽标')
-  assert.ok(html.includes('title="在 个人助理 下新建对话"'), '智能体行新建按钮保留')
+  assert.ok(html.includes('title="在 个人助理 下开始新话题"'), '智能体行新建按钮保留（进入待命态）')
 })
 
 

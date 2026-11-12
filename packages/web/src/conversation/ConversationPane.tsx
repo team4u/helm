@@ -173,22 +173,17 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     store.openTarget({ kind: 'conversation', conversationId }, { split: true })
   }
 
-  // 新话题：继承当前会话环境（profile + 节点 + 目录），主顶栏与话题切换器共用同一语义
-  const createNewThread = (): void => {
-    void runAction(
-      'new-thread',
-      async () => {
-        const created = await conversationsApi.create({
-          profileId: conversation.profileId,
-          nodeId: currentNodeId,
-          cwd: conversation.cwd,
-        })
-        store.openTarget(
-          { kind: 'conversation', conversationId: created.id },
-          isSplit ? { split: true } : undefined,
-        )
+  // 新话题：进入该智能体待命页并继承当前会话环境（远端节点/目录不回落本机）；
+  // 首次发送才创建会话，不再预建空会话。
+  const startNewThread = (): void => {
+    store.openTarget(
+      {
+        kind: 'agent',
+        profileId: conversation.profileId,
+        ...(currentNodeId !== 'local' ? { nodeId: currentNodeId } : {}),
+        ...(conversation.cwd !== '' ? { cwd: conversation.cwd } : {}),
       },
-      '已新建对话',
+      isSplit ? { split: true } : undefined,
     )
   }
 
@@ -244,9 +239,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
             <button
               type="button"
               className="btn btn-sm"
-              title="在当前智能体下新建对话"
+              title="在当前智能体下开始新话题"
               disabled={actionPending !== null}
-              onClick={createNewThread}
+              onClick={startNewThread}
             >
               <HelmIcon name={actionPending === 'new-thread' ? 'loader' : 'plus'} size={12} />
               <span className="pane-action-label">新话题</span>
@@ -427,7 +422,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         onRequestStarter={requestStarter}
       />
 
-      <Composer key={`composer-${conversation.id}`} conversation={conversation} prefill={prefill} onSendingChange={setSendingInFlight} />
+      <Composer key={`composer-${conversation.id}`} conversation={conversation} prefill={prefill} onSendingChange={setSendingInFlight} onNewThread={startNewThread} />
 
       <ConfirmDialog
         open={confirmAction === 'reset'}

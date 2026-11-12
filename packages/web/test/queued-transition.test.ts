@@ -29,7 +29,7 @@ function render(live: ConversationLive): string {
     loadErrors: {}, highlightedEntry: null, groupedUi: groupUiContributions([]), conversationArtifacts: {},
     authReady: true, authConfigured: true, authenticated: true, authError: null,
     connectionError: null, sseConnected: true, theme: 'dark', themePreference: 'dark',
-    profiles: [], models: [], providers: [], credentials: [], skills: [], actions: [],
+    profiles: [], assetsLoaded: true, models: [], providers: [], credentials: [], skills: [], actions: [],
     primaryTarget: { kind: 'conversation', conversationId: 1 }, splitTarget: null,
     workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, notices: [],
     setTheme: noop, setThemePreference: noop, toggleTheme: noop, checkAuth: asyncNoop,
