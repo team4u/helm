@@ -17,7 +17,7 @@
 
 ## 三步上手
 
-**第一步：安装与初始化**。按[安装与配置指南](installation.md)确认 Node.js 24.12+、pnpm 9+ 与 Git 2.30+，然后启动前后端（`HELM_PORT=3202 pnpm dev`），初始化管理员并完成 CLI 登录。完成后 Web 控制台在 `3201` 端口可用，内核 Hub 在 `3202` 端口可用。
+**第一步：安装与初始化**。按[安装与配置指南](installation.md)确认 Node.js 24.12+、pnpm 9+ 与 Git 2.30+，然后启动前后端（`HELM_PORT=3202 pnpm dev`），初始化管理员并完成 CLI 登录。完成后 Web 控制台在 `3201` 端口可用，内核 Hub 在 `3202` 端口可用；执行 `pnpm link:bins` 可把 `helm` / `helm-node` / `helm-hub` 挂为全局命令，后续示例即可省去 `pnpm` 前缀。
 
 **第二步：会话与交互**。会话是 Helm 的基本交互单元。既可以在 Web 控制台直接对话，也可以用 CLI 驱动：
 

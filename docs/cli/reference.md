@@ -1,6 +1,6 @@
 # CLI 命令参考
 
-本手册覆盖 `helm`（控制端客户端）与 `helm-node`（受控节点守护进程）的全量命令。所有命令与 Web API 严格同权；`--json` 全局生效：成功时 stdout 输出 JSON，失败时 stderr 输出 JSON 错误信封并返回非零退出码。命令分发的故障隔离设计：核心静态命令表优先精确匹配，仅当无核心匹配时才拉取 `GET /api/actions` 动态生成插件命令——管理面永不因坏插件 manifest 而不可用。
+本手册覆盖 `helm`（控制端客户端）与 `helm-node`（受控节点守护进程）的全量命令；`helm-hub` 为内核 Hub 服务端入口（`HELM_PORT=3202 pnpm dev:kernel` 同源）。三者分工与全局命令挂载（`pnpm link:bins`，源代码模式）见[安装与配置指南](../getting-started/installation.md)。所有命令与 Web API 严格同权；`--json` 全局生效：成功时 stdout 输出 JSON，失败时 stderr 输出 JSON 错误信封并返回非零退出码。命令分发的故障隔离设计：核心静态命令表优先精确匹配，仅当无核心匹配时才拉取 `GET /api/actions` 动态生成插件命令——管理面永不因坏插件 manifest 而不可用。
 
 ## 全局选项与环境变量
 

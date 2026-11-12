@@ -19,6 +19,34 @@ pnpm install
 pnpm build
 ```
 
+当前没有发布制品，上述流程即源代码模式安装：所有命令直接从仓库运行。下文启动服务、挂载 CLI 均在此模式下进行。
+
+## 三个可执行命令的分工
+
+| 命令 | 角色 | 说明 |
+| :--- | :--- | :--- |
+| `helm-hub` | 服务端 | 启动内核 Hub 进程：监听 `HELM_PORT`（默认 3202，仅本机回环），加载插件与 Web 静态资源；等价于 `pnpm dev:kernel` 的入口 |
+| `helm` | 客户端 | 控制端 CLI：经 HTTP/WS 连接已运行的 Hub，管理会话、调用动作与工作流 |
+| `helm-node` | 被控端 | 节点守护进程：部署在远端机器，经 `/ws/node` 反向接入 Hub 承载命令执行 |
+
+三者关系：`你 ── helm（CLI）/ Web ──→ helm-hub（Hub 内核）──→ helm-node（远端节点）`。`helm` 的动态插件命令（如 `helm workflows`）依赖 Hub 在线：Hub 未启动或未登录时仅静态命令可用。
+
+## 源代码模式挂载全局命令（可选）
+
+仓库根的 `pnpm helm` / `pnpm helm-node` / `pnpm helm-hub` 脚本可在仓内直接使用；若希望在任何目录直接敲 `helm` 等命令：
+
+```bash
+pnpm link:bins      # 在 /usr/local/bin 安装 helm / helm-node / helm-hub 包装脚本
+pnpm unlink:bins    # 一键撤销
+```
+
+特性与注意：
+
+- 包装脚本经仓库内 `tsx` 直跑各包 `src/` 入口，源码改动即时生效，无需重新 `pnpm build`（区别于 `npm link`：其软链指向 `dist/`，改码后须重新构建才能生效）；
+- 安装目录默认 `/usr/local/bin`，可用 `HELM_BIN_DIR` 覆盖；脚本仅支持 Linux/macOS；
+- 若目标位置已存在非本脚本产物的同名文件（例如 Kubernetes 的 `helm` 二进制），安装会显式拒绝覆盖，需人工处理；
+- `helm` 与 Kubernetes Helm 撞名：本机若同时需要 K8s Helm，请为其改用别名（如 `khelm`），或临时 `pnpm unlink:bins` 让位。
+
 ## 启动服务
 
 推荐一条命令同时启动 Web 前端与内核 Hub：
