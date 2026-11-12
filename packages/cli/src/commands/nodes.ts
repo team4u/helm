@@ -319,6 +319,7 @@ export function nodesCommands(): CommandSpec[] {
       }
       // 前台：信号退出时显式停止转发（监听器/隧道同步销毁）。
       let stopping = false
+      let hubStopped = false
       const onSignal = (): void => {
         if (stopping) return
         stopping = true
@@ -347,13 +348,16 @@ export function nodesCommands(): CommandSpec[] {
               printText(ctx.io, `连接建立（活动 ${event.count ?? 0}）`)
             } else if (event?.type === 'error') {
               printText(ctx.io, `转发错误：${event.message ?? '未知'}`)
+            } else if (event?.type === 'stopped') {
+              hubStopped = true
+              if (!ctx.json) printText(ctx.io, 'Hub 侧转发已停止')
             }
           },
         })
       } finally {
         await stopForward()
       }
-      if (stopping) return
+      if (stopping || hubStopped) return
       // 事件流意外结束（Hub 侧已停止）：如实退出非零。
       throw new CliError('转发事件流已结束（Hub 侧转发可能已停止）', 'forward_stream_ended')
     },

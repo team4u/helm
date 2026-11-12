@@ -11,6 +11,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { PassThrough } from 'node:stream'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -52,10 +53,20 @@ interface NodeIpcCalls {
   stopCalls: number
 }
 
+/** openTunnel 桩：受控延迟后交付受控 Duplex；记录调用与销毁供断言。 */
+interface OpenTunnelStub {
+  calls: Array<{ nodeId: string; target: { host?: string; port: number }; signal: AbortSignal | undefined }>
+  delayMs: number
+  duplexes: PassThrough[]
+  failures: Array<Error | undefined>
+}
+
 function makeBackend(over: {
   nodeIpcCalls?: NodeIpcCalls
   /** subscribe 建立前的延迟（默认 10ms，模拟慢建立）。 */
   subscribeDelayMs?: number
+  /** openTunnel 桩（提供即接线 ctx.host.openTunnel）。 */
+  openTunnel?: OpenTunnelStub
 }): PluginHostBackend {
   const calls = over.nodeIpcCalls ?? { subscribeStarted: [], stopCalls: 0 }
   return {
@@ -143,6 +154,32 @@ function makeBackend(over: {
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     emitEvent: () => {},
+    ...(over.openTunnel !== undefined
+      ? {
+          openTunnel: ((nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) => {
+            const stub = over.openTunnel!
+            stub.calls.push({ nodeId, target, signal })
+            return new Promise<PassThrough>((resolve, reject) => {
+              const timer = setTimeout(() => {
+                // 预置失败队列：FIFO 消费（一次 push 对下一次建连生效）。
+                const failure = stub.failures.shift()
+                if (failure !== undefined) { reject(failure); return }
+                const duplex = new PassThrough()
+                stub.duplexes.push(duplex)
+                resolve(duplex)
+              }, stub.delayMs)
+              signal?.addEventListener(
+                'abort',
+                () => {
+                  clearTimeout(timer)
+                  reject(new HelmError('aborted', '隧道建立已取消', 499))
+                },
+                { once: true },
+              )
+            })
+          }) as never,
+        }
+      : {}),
   }
 }
 
@@ -282,6 +319,59 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     assert.equal(calls.stopCalls >= 1, true, '停用应触发后端 stop（直接或晚到收割）')
     await host.unregister('p:ipc2').catch(() => {})
     void def
+  })
+
+  await t.test('openTunnel 生命周期跟踪：活动 Duplex 期间停用被拒，关闭后可停用；失败不泄漏计数', { timeout: 60_000 }, async () => {
+    const stub: OpenTunnelStub = { calls: [], delayMs: 20, duplexes: [], failures: [] }
+    const host = new PluginHost({ dataDir, host: makeBackend({ openTunnel: stub }), docs: new MemoryDocStore() })
+    let hostApi: Parameters<NonNullable<Parameters<typeof host.register>[0]['definePlugin']>>[0]['host'] | undefined
+    const def: PluginDefinition = {
+      id: 'p:tunnel',
+      definePlugin(ctx) {
+        hostApi = ctx.host
+      },
+    }
+    await host.register(def, { enabled: true })
+    assert.ok(hostApi)
+
+    // 1) 建立在途：begin 先于建连，停用预检可见。
+    const opening = hostApi!.openTunnel('remote-1', { host: 'db.internal', port: 5432 })
+    assert.equal(stub.calls.length, 1, '后端 openTunnel 已受理')
+    await assert.rejects(
+      host.disable('p:tunnel'),
+      (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks' && err.status === 409,
+    )
+    const duplex = await opening
+    // 2) 建立成功后 Duplex 存活：计数保持（withTask 立即 end 的回归点）。
+    await assert.rejects(
+      host.disable('p:tunnel'),
+      (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks',
+      '活动 Duplex 期间停用必须 409（计数不因建立完成而归零）',
+    )
+    // 3) Duplex 关闭：end 恰好一次，停用恢复可用。
+    duplex.destroy()
+    await new Promise((r) => setTimeout(r, 30))
+    await host.disable('p:tunnel')
+
+    // 4) 失败路径（独立周期，避免 enable 换 epoch 影响句柄）：
+    // 建立失败立即 end，不泄漏计数——失败后 disable 不再 409。
+    stub.failures.push(new HelmError('node_tunnel_connect_failed', '建立失败', 502))
+    let hostApi2: typeof hostApi | undefined
+    const defFail: PluginDefinition = {
+      id: 'p:tunnel2',
+      definePlugin(ctx) {
+        hostApi2 = ctx.host
+      },
+    }
+    await host.register(defFail, { enabled: true })
+    await assert.rejects(
+      hostApi2!.openTunnel('remote-1', { port: 5432 }),
+      (err: unknown) => err instanceof HelmError && err.code === 'node_tunnel_connect_failed',
+    )
+    await host.disable('p:tunnel2')
+    await host.unregister('p:tunnel').catch(() => {})
+    await host.unregister('p:tunnel2').catch(() => {})
+    void host.dispose()
   })
 
   await t.test('onUpdate：partial 全串转发 output；结算后迟到 partial 静默丢弃', async () => {

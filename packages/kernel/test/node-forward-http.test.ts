@@ -131,3 +131,41 @@ test('GET events：NDJSON 首帧 started，断开关闭流', { timeout: 60_000 }
   const missing = await handleApi(new Request('http://hub/api/nodes/forward/fwd-99999999-2222-3333-4444-555555555555/events'), kernel2)
   assert.equal(missing.status, 404)
 })
+
+test('GET events：stop 终态 stopped 帧后流正常结束（监控不悬挂）', { timeout: 60_000 }, async () => {
+  const over = { sessions: new Map<string, NodeForwardSession>(), events: [] as ((event: NodeForwardEvent) => void)[] }
+  const kernel = makeKernel(over)
+  const created = await post(kernel, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 8080 })
+  assert.equal(created.status, 201)
+  // 订阅终止通知（模拟 runtime 的 onNodeForwardStopped 接线）。
+  const stopWaiters = new Set<() => void>()
+  ;(kernel as { onNodeForwardStopped?: unknown }).onNodeForwardStopped = (_id: string, listener: () => void) => {
+    stopWaiters.add(listener)
+    return () => stopWaiters.delete(listener)
+  }
+  const controller = new AbortController()
+  const response = await handleApi(new Request('http://hub/api/nodes/forward/fwd-11111111-2222-3333-4444-555555555555/events', {
+    headers: { accept: 'application/x-ndjson' },
+    signal: controller.signal,
+  }), kernel)
+  assert.equal(response.status, 200)
+  assert.ok(response.body !== null)
+  const reader = response.body.getReader()
+  const readFirst = await reader.read()
+  const first = JSON.parse(new TextDecoder().decode(readFirst.value).trim()) as { type?: string }
+  assert.equal(first.type, 'started')
+  // 模拟 stop：先经事件通道发终态 stopped 帧（makeKernel 登记的 listener），
+  // 再触发终止通知——流应正常 close（done=true），不悬挂。
+  for (const listener of [...over.events]) listener({ type: 'stopped' })
+  for (const waiter of [...stopWaiters]) waiter()
+  const drained = await new Promise<boolean>((resolve) => {
+    void (async () => {
+      for (;;) {
+        const { done } = await reader.read()
+        if (done) { resolve(true); return }
+      }
+    })().catch(() => resolve(false))
+    setTimeout(() => resolve(false), 5_000)
+  })
+  assert.equal(drained, true, '终止通知后事件流应正常结束（done）')
+})

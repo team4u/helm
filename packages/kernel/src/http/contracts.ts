@@ -332,11 +332,13 @@ export interface KernelRuntimeLike {
   getNodeForward?(forwardId: string): NodeForwardSession | undefined
   /** 活动转发清单（GET /api/nodes/forward）。 */
   listNodeForwards?(): NodeForwardSession[]
-  /** 转发事件订阅（GET /api/nodes/forward/:forwardId/events，NDJSON）；监控流断开不自动停止（由 CLI 显式 stop）。 */
+  /** 转发事件订阅（GET /api/nodes/forward/:forwardId/events，NDJSON）；stop 终态 stopped 帧后正常关闭流（监控不悬挂）。 */
   onNodeForwardEvent?(
     forwardId: string,
     listener: (event: NodeForwardEvent) => void,
   ): () => void
+  /** 转发终止通知（终态 stopped 帧之后调用；已停止时立即回调）。 */
+  onNodeForwardStopped?(forwardId: string, listener: () => void): () => void
   /**
    * 跨节点命令执行（POST /api/env/exec）：靶点解析为显式 nodeId/cwd >
    * 会话绑定 > local；远端离线 409 node_offline；onChunk 逐块回放

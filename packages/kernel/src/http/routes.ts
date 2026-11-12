@@ -1590,7 +1590,8 @@ function parseNodeForwardBody(
   }
 }
 
-/** GET /api/nodes/forward/:id/events：NDJSON 事件流（转发监控；断开不自动停止）。 */
+/** GET /api/nodes/forward/:id/events：NDJSON 事件流。stop 终态 stopped 帧
+ * 后正常关闭（监控不悬挂）；订阅时转发已停止则先回放 stopped 帧再结束。 */
 async function getNodeForwardEvents(
   ctx: RouteContext,
   kernel: KernelRuntimeLike,
@@ -1606,18 +1607,38 @@ async function getNodeForwardEvents(
   const encoder = new TextEncoder()
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      let closed = false
+      const off = (): (() => void)[] => {
+        const stops: (() => void)[] = []
+        if (kernel.onNodeForwardStopped !== undefined) {
+          stops.push(kernel.onNodeForwardStopped(forwardId, () => finish()))
+        }
+        return stops
+      }
       const send = (event: unknown): void => {
+        if (closed) return
         try {
           controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
         } catch {
-          // 已关闭。
+          closed = true
         }
       }
-      send({ type: 'started', listenHost: session.listenHost, listenPort: session.listenPort })
-      const off = kernel.onNodeForwardEvent!(forwardId, send)
-      ctx.request.signal.addEventListener('abort', () => {
-        off()
+      const finish = (): void => {
+        if (closed) return
+        closed = true
+        for (const stop of offStops) stop()
+        offStops = []
         try { controller.close() } catch { /* 已关闭 */ }
+      }
+      let offStops: (() => void)[] = []
+      // 先登记终止通知（含已停止竞态：立即微任务回调），再回放首帧与订阅事件——
+      // 顺序保证 stop 与订阅交错时要么收到 stopped 帧、要么终止回调收尾。
+      offStops = off()
+      const offEvents = kernel.onNodeForwardEvent!(forwardId, send)
+      send({ type: 'started', listenHost: session.listenHost, listenPort: session.listenPort })
+      ctx.request.signal.addEventListener('abort', () => {
+        offEvents()
+        finish()
       }, { once: true })
     },
   })

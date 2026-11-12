@@ -416,6 +416,10 @@ export class KernelRuntime {
     return this.nodeForward.onEvent(forwardId, listener)
   }
 
+  onNodeForwardStopped(forwardId: string, listener: () => void): () => void {
+    return this.nodeForward.onStopped(forwardId, listener)
+  }
+
   // ------------------------------------------------------------------
   // 产物授权 / 附件委托（ConversationService）
   // ------------------------------------------------------------------

@@ -173,6 +173,74 @@ test('端口转发：close 全量销毁（宿主关停语义）', { timeout: 60_
   }
 })
 
+test('端口转发：建连期客户端断开——取消在途建立，迟到 tunnel 不登记不遗留', { timeout: 60_000 }, async () => {
+  const echo = await startEcho()
+  const stack = await startStack()
+  try {
+    assert.equal(stack.ready, true)
+    const session = await stack.forward.start('fwd-node', {
+      listenHost: '127.0.0.1',
+      listenPort: await freePort(),
+      targetPort: echo.port,
+    })
+    // 连上后立即断开（建连尚未完成：真实 daemon 链路建连有 RTT）。
+    const socket = net.connect({ host: '127.0.0.1', port: session.listenPort })
+    await new Promise<void>((resolve) => socket.once('connect', resolve))
+    socket.destroy()
+    // 等待建连窗口过去：迟到 tunnel 被销毁，不登记 activeConnections。
+    await delay(600)
+    const current = stack.forward.get(session.forwardId)
+    assert.ok(current !== undefined)
+    assert.equal(current.activeConnections, 0, '建连期断开不得计入活动连接')
+    // 后续连接仍可用（前一次断开不污染状态）。
+    const payload = Buffer.from('after-early-close')
+    const echoed = await tcRequest(session.listenPort, payload)
+    assert.ok(echoed.equals(payload), '早断开后转发仍可用')
+  } finally {
+    await stack.close()
+    await echo.close()
+  }
+})
+
+test('端口转发：stop 发终态 stopped 帧，监控事件序列正常终结（不悬挂）', { timeout: 60_000 }, async () => {
+  const echo = await startEcho()
+  const stack = await startStack()
+  try {
+    assert.equal(stack.ready, true)
+    const session = await stack.forward.start('fwd-node', {
+      listenHost: '127.0.0.1',
+      listenPort: await freePort(),
+      targetPort: echo.port,
+    })
+    const events: string[] = []
+    let notifyStopped: (() => void) | undefined
+    const stoppedPromise = new Promise<void>((resolve) => {
+      notifyStopped = resolve
+    })
+    const off = stack.forward.onEvent(session.forwardId, (event) => events.push(event.type))
+    const offStopped = stack.forward.onStopped(session.forwardId, () => notifyStopped?.())
+    // 先订阅，再停止：stopped 帧后终止通知到达。
+    await stack.forward.stop(session.forwardId)
+    await Promise.race([stoppedPromise, delay(5_000).then(() => { throw new Error('onStopped 未被调用') })])
+    assert.deepEqual(events.filter((t) => t === 'stopped'), ['stopped'], 'stop 应恰好发出一个终态 stopped 帧')
+    off()
+    offStopped()
+    // 已停止后再订阅 onStopped：立即回调（竞态安全）。
+    const immediate = new Promise<void>((resolve) => {
+      stack.forward.onStopped(session.forwardId, resolve)
+    })
+    await Promise.race([immediate, delay(1_000).then(() => { throw new Error('已停止后 onStopped 应立即回调') })])
+    // 已停止后 onEvent 404（会话已摘除）。
+    await assert.rejects(
+      new Promise(() => stack.forward.onEvent(session.forwardId, () => undefined)),
+      (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'not_found',
+    )
+  } finally {
+    await stack.close()
+    await echo.close()
+  }
+})
+
 /** 取一个空闲端口（listen 0 后立即释放；存在微小竞态但测试环境足够）。 */
 async function freePort(): Promise<number> {
   return await new Promise((resolve) => {

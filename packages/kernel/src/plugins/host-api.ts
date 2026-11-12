@@ -302,9 +302,12 @@ export function wrapHostApi(
           },
         },
 
-    // 3.6 openTunnel：任意 TCP 透传隧道 —— 建立计入在途任务；返回的 Duplex
-    // close/error/destroy 时结束任务（停用预检可见活动隧道；停用/宿主 dispose
-    // 时 tracker 结束计数，duplex 本身由 registry/节点的换代清理链销毁）。
+    // 3.6 openTunnel：任意 TCP 透传隧道 —— 生命周期跟踪与 Duplex 存活期对齐：
+    // begin 在建连前（停用预检可见在途建立）；成功后计数保持到 Duplex
+    // close/error/destroy（恰好一次 end）——插件持有活动隧道期间 disable
+    // 会被 409 plugin_has_live_tasks 拒绝；建立失败/已 destroyed 立即 end，
+    // 绝不泄漏计数。停用/宿主 dispose 时 duplex 本身由 registry/节点的
+    // 换代清理链销毁，这里只保证计数不悬挂。
     openTunnel: backend.openTunnel === undefined
       ? ((nodeId: string): Promise<never> => {
           guard(`host.openTunnel:${nodeId}`);
@@ -318,22 +321,36 @@ export function wrapHostApi(
       : ((nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) => {
           guard(`host.openTunnel:${nodeId}`);
           const what = `host.openTunnel:${nodeId}`;
-          return deps.tracker.withTask(pluginId, what, async () => {
-            const duplex = await backend.openTunnel!(nodeId, target, signal);
-            // 任务结束点绑定 Duplex 生命周期（close 恰好一次）。
-            let ended = false;
-            const end = (): void => {
-              if (ended) return;
-              ended = true;
-              duplex.removeListener('close', end);
-              duplex.removeListener('error', end);
-              deps.tracker.end(pluginId, what);
-            };
-            duplex.once('close', end);
-            duplex.once('error', end);
-            if (duplex.destroyed) end();
-            return duplex;
-          });
+          // begin 先于建连：不能用 withTask 包住建立 Promise（那会在 resolve 后
+          // 立即 end，Duplex 存活期计数归零，停用门禁形同虚设）。
+          deps.tracker.begin(pluginId, what);
+          let ended = false;
+          const end = (): void => {
+            if (ended) return;
+            ended = true;
+            deps.tracker.end(pluginId, what);
+          };
+          return backend
+            .openTunnel!(nodeId, target, signal)
+            .then(
+              (duplex) => {
+                // 建立成功：end 绑定 Duplex 生命周期（close/error 恰好一次；
+                // 极端情况下 resolve 时已销毁则立即结束）。
+                const onClosed = (): void => {
+                  duplex.removeListener('close', onClosed);
+                  duplex.removeListener('error', onClosed);
+                  end();
+                };
+                duplex.once('close', onClosed);
+                duplex.once('error', onClosed);
+                if (duplex.destroyed) onClosed();
+                return duplex;
+              },
+              (error: unknown) => {
+                end();
+                throw error;
+              },
+            );
         }) as HelmHostOpenTunnelPort,
 
     // 3.5 nodeFetch：受控 fetch —— 每次调用先过周期守卫；返回的 fetch 每次
