@@ -3,6 +3,9 @@
  * - PUT /api/models/filter 设置/清空禁用集（config.json.disabledModels 原子持久化）；
  * - GET /api/models 目录标注 disabled（available 语义不变，凭据可用性独立表达）；
  * - 禁用模型后会话显式选用与提交输入均被拒（409 model_disabled），绝不静默回退；
+ * - 原生 spawn 三条模型解析路径（显式 request / profile / 全局默认）创建前拒绝禁用模型；
+ * - HTTP POST/PUT /api/profiles 绑定禁用模型在落盘前拒绝；
+ * - setDisabledModels 更新后发布 models.changed 事件（已连接 Web 客户端刷新目录）；
  * - 重启语义：同一 dataDir 重新 createHelm 后禁用集仍生效（loadDefaultsFromConfig）；
  * - 校验边界：非法模型 id（空串/含 '/'）、无 provider 携带禁用项 400；非法 config 形状 config_corrupt。
  */
@@ -244,6 +247,117 @@ test('禁用模型后会话显式选用与提交输入被拒（409 model_disable
     await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: [] })
     const ok = await call(env, 'POST', `/api/conversations/${conv.id}/input`, { text: 'hello again' })
     assert.equal(ok.status, 202)
+  } finally {
+    await env.close()
+  }
+})
+
+test('禁用模型后原生 spawn 三条解析路径均在创建前拒绝（409 model_disabled），重新启用后恢复', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-spawn-'))
+  const faux = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
+  faux.setResponses([fauxAssistantMessage('ok')])
+  const models = createModels()
+  models.setProvider(faux.provider)
+  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  try {
+    const parent = app.kernel.listConversations().find((c) => c.profileId === 'assistant')
+    assert.ok(parent)
+
+    // 路径 1：显式 request.model。
+    await app.kernel.setDisabledModels('faux', ['faux-2'])
+    await assert.rejects(
+      () => app.kernel.spawnAgent({ parentConversationId: parent.id, prompt: 'x', model: 'faux/faux-2' }),
+      (err: unknown) => err instanceof Error && (err as { code?: string }).code === 'model_disabled',
+    )
+
+    // 路径 2：profile.model（spawnable profile 绑定禁用模型，请求不带显式 model）。
+    await app.kernel.profiles.save({ id: 'spawnable', name: 'S', model: 'faux/faux-2' })
+    await assert.rejects(
+      () => app.kernel.spawnAgent({ parentConversationId: parent.id, prompt: 'x', agentType: 'spawnable' }),
+      (err: unknown) => err instanceof Error && (err as { code?: string }).code === 'model_disabled',
+    )
+
+    // 路径 3：全局默认模型被禁用（无显式 model、无 profile.model）。
+    await app.kernel.setDisabledModels('faux', ['faux-1', 'faux-2'])
+    await assert.rejects(
+      () => app.kernel.spawnAgent({ parentConversationId: parent.id, prompt: 'x' }),
+      (err: unknown) => err instanceof Error && (err as { code?: string }).code === 'model_disabled',
+    )
+
+    // 拒绝发生在创建之前：不得残留子会话（父会话仍是唯一 assistant 会话）。
+    assert.equal(
+      app.kernel.listConversations().filter((c) => c.parentConversationId === parent.id).length,
+      0,
+      'spawn 被拒时不得创建子会话',
+    )
+
+    // 重新启用后 spawn 恢复（全局默认 faux-1）。
+    await app.kernel.setDisabledModels('faux', [])
+    const result = await app.kernel.spawnAgent({ parentConversationId: parent.id, prompt: '干活' })
+    assert.equal(result, 'ok')
+  } finally {
+    await app.close().catch(() => {})
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('禁用模型后 HTTP POST/PUT /api/profiles 绑定禁用模型在落盘前拒绝（409 model_disabled）', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
+
+    // POST 创建：绑定禁用模型拒绝且不落盘。
+    const created = await call(env, 'POST', '/api/profiles', {
+      id: 'disabled-bind',
+      name: '绑定禁用模型',
+      model: 'faux/faux-2',
+    })
+    assert.equal(created.status, 409)
+    assert.equal(created.body.error.code, 'model_disabled')
+    assert.equal(await env.app.kernel.profiles.get('disabled-bind'), undefined)
+
+    // PUT 更新既有 profile：改绑禁用模型拒绝，原值不变。
+    await env.app.kernel.profiles.save({ id: 'put-target', name: '既有角色', model: 'faux/faux-1' })
+    const putRejected = await call(env, 'PUT', '/api/profiles/put-target', {
+      name: '改绑禁用模型',
+      model: 'faux/faux-2',
+    })
+    assert.equal(putRejected.status, 409)
+    assert.equal(putRejected.body.error.code, 'model_disabled')
+    assert.equal((await env.app.kernel.profiles.get('put-target'))?.model, 'faux/faux-1')
+
+    // 合法模型仍可保存。
+    const ok = await call(env, 'PUT', '/api/profiles/put-target', {
+      name: '改绑可用模型',
+      model: 'faux/faux-1',
+    })
+    assert.equal(ok.status, 200)
+  } finally {
+    await env.close()
+  }
+})
+
+test('setDisabledModels 更新后发布 models.changed 事件（Web 客户端刷新目录）', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    const seen: Array<{ providers: unknown }> = []
+    env.app.kernel.events.subscribe((frame) => {
+      const event = frame.event as { type: string; payload?: unknown }
+      if (event.type === 'models.changed') {
+        seen.push(event.payload as { providers: unknown })
+      }
+    })
+    await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
+    assert.equal(seen.length, 1, '设置禁用集恰发布一次 models.changed')
+    assert.deepEqual(seen[0], { providers: ['faux'] })
+
+    await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: [] })
+    assert.equal(seen.length, 2, '清空同样发布')
+    assert.deepEqual(seen[1], { providers: ['faux'] })
+
+    await call(env, 'PUT', '/api/models/filter', { disabledModels: [] })
+    assert.equal(seen.length, 3, '缺省 provider 清空全部也发布')
+    assert.deepEqual(seen[2], { providers: [] })
   } finally {
     await env.close()
   }

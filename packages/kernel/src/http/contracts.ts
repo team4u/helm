@@ -278,6 +278,12 @@ export interface KernelRuntimeLike {
   listModels(): Promise<ModelCatalog> | ModelCatalog
   /** 设置模型禁用集（PUT /api/models/filter）；未实现时 HTTP 501。 */
   setDisabledModels?(provider: string | undefined, disabledModels: string[]): Promise<ModelCatalog>
+  /**
+   * 模型禁用预检（ModelRegistry.assertModelEnabled）：HTTP 保存 profile.model /
+   * 全局默认模型等入口在落盘前调用，禁用模型拒绝（409 model_disabled）。
+   * 可选端口：runtime 未提供时 HTTP 层不阻塞。
+   */
+  assertModelEnabled?(provider: string, modelId: string): void
   /** 设置全局默认模型与思考档位（config.json）；空串清除。未实现时 HTTP 501。 */
   setDefaultModel?(model?: string, thinkingLevel?: string): Promise<void>
   /** Profile 保存后同步绑定会话的模型与思考档位。 */

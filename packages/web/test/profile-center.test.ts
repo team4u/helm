@@ -295,6 +295,47 @@ test('profile-center-model：buildProfileModelOptions 仅展示已配置模型�
   assert.equal(options3.some((o) => o.value.includes('llama')), false, '其他未配置模型不得因当前项未配置而带出')
 })
 
+test('profile-center-model：buildProfileModelOptions 跳过已禁用模型，当前绑定恰为禁用模型时保留并标注已禁用', { timeout: 60_000 }, () => {
+  const testModels: ModelDescriptor[] = [
+    {
+      id: 'faux/faux-1',
+      provider: 'faux',
+      modelId: 'faux-1',
+      available: true,
+      thinkingLevels: ['off'],
+    },
+    {
+      id: 'faux/faux-2',
+      provider: 'faux',
+      modelId: 'faux-2',
+      available: true,
+      disabled: true,
+      thinkingLevels: ['off'],
+    },
+    {
+      id: 'faux/faux-3',
+      provider: 'faux',
+      modelId: 'faux-3',
+      available: false,
+      disabled: true,
+      thinkingLevels: ['off'],
+    },
+  ]
+
+  // 1. 禁用模型不作为正常可选项出现（无论凭据可用与否）。
+  const options1 = buildProfileModelOptions(testModels)
+  assert.deepEqual(options1, [
+    { value: '', label: '跟随系统默认' },
+    { value: 'faux/faux-1', label: 'faux/faux-1' },
+  ])
+
+  // 2. 当前绑定的模型恰为禁用模型：保留为当前配置项（不静默丢失）并标注已禁用，不重复。
+  const options2 = buildProfileModelOptions(testModels, 'faux/faux-2')
+  const hits = options2.filter((o) => o.value === 'faux/faux-2')
+  assert.equal(hits.length, 1, '禁用模型只应保留一项，不得重复添加')
+  assert.equal(hits[0]?.label, 'faux/faux-2（已禁用）')
+})
+
 // ---------------------------------------------------------------------------
 // 2. ProfileCard SSR 渲染与零 Emoji 断言
 // ---------------------------------------------------------------------------

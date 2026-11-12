@@ -38,6 +38,8 @@ export interface SpawnHostSource {
   }
   readonly defaultModel: string | undefined
   readonly defaultThinkingLevel: string | undefined
+  /** 模型禁用预检（ModelRegistry.assertModelEnabled；创建子会话前拒绝禁用模型）。 */
+  assertModelEnabled?(provider: string, modelId: string): void
   readonly agentSessions: Map<string, number>
   readonly resolvedAttachments: ResolvedAttachmentRef[] | undefined
   isNodeOnline(nodeId: string): boolean
@@ -98,6 +100,9 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
     harness: source.harness,
     getLastAssistantText: (id) => source.tracker.getLastAssistantText(id),
     resolveModel: () => requireModelRef(source.defaultModel),
+    ...(source.assertModelEnabled !== undefined
+      ? { assertModelEnabled: (provider: string, modelId: string) => source.assertModelEnabled!(provider, modelId) }
+      : {}),
     resolveThinkingLevel: () => source.defaultThinkingLevel,
     agentSessions: source.agentSessions,
     assertNodeAvailable: (nodeId) => {

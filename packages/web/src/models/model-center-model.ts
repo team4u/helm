@@ -194,8 +194,9 @@ export const UNSET_MODEL_VALUE = '__unset__'
 /**
  * 构造全局默认模型下拉选项：
  * - 首项恒为「未设置」哨兵项（显式表达清除语义）；
- * - 仅列出目录中可用的模型；
- * - 当前值不在可用目录（凭据失效/外部模型）时保留并标注「目录外」。
+ * - 仅列出目录中可用且未被用户禁用的模型；
+ * - 当前值不在可选列表（凭据失效/外部模型/已禁用）时保留并标注「目录外」或「已禁用」，
+ *   不静默丢失；标注项不重复添加。
  */
 export function buildDefaultModelOptions(
   models: ModelDescriptor[],
@@ -206,7 +207,7 @@ export function buildDefaultModelOptions(
   ]
 
   for (const m of models) {
-    if (!m.available) continue
+    if (!m.available || m.disabled === true) continue
     options.push({
       value: m.id,
       label: m.label || m.modelId,
@@ -214,17 +215,19 @@ export function buildDefaultModelOptions(
     })
   }
 
-  // 若当前配置的模型不在已启用可用模型列表中（如历史配置、已删除提供商或凭据未配），保留为首选显示项防静默丢失
+  // 若当前配置的模型不在可选列表中（如历史配置、已删除提供商、凭据未配或被禁用），
+  // 保留为首选显示项防静默丢失；已禁用单独标注（与目录外区分，提示需重新启用）。
   const trimmed = currentValue?.trim()
   if (
     trimmed &&
     trimmed !== UNSET_MODEL_VALUE &&
     !options.some((opt) => opt.value === trimmed)
   ) {
+    const disabled = models.some((m) => m.id === trimmed && m.disabled === true)
     options.push({
       value: trimmed,
-      label: `${trimmed}（当前配置）`,
-      meta: '目录外',
+      label: disabled ? `${trimmed}（已禁用）` : `${trimmed}（当前配置）`,
+      meta: disabled ? '已禁用' : '目录外',
     })
   }
 
@@ -330,13 +333,15 @@ export function buildMergedProviders(
     const hasAvailableModel = Boolean(remoteModels && remoteModels.some((m) => m.available))
     p.configured = Boolean(p.configured || isConfiguredByKey || hasAvailableModel)
 
-    // 5. 聚合实时目录模型并更新模型数量（disabled 融合：目录中标记禁用的模型未勾选）
+    // 5. 聚合实时目录模型并更新模型数量。勾选态是「路由启用」：仅由 disabled
+    //    决定，与凭据可用性（available）解耦——否则未配凭据的供应商填写密钥
+    //    保存时会把全部模型误写成禁用；available 供模型选择器/默认模型选项过滤。
     if (remoteModels && remoteModels.length > 0) {
       p.modelsCount = remoteModels.length
       p.models = remoteModels.map((m) => ({
         id: m.modelId,
         name: m.label || m.modelId,
-        enabled: Boolean(m.available) && m.disabled !== true,
+        enabled: m.disabled !== true,
         tags: m.thinkingLevels && m.thinkingLevels.length > 1 ? ['思考模型'] : undefined,
       }))
     }

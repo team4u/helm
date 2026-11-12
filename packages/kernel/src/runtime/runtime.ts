@@ -652,6 +652,11 @@ export class KernelRuntime {
     return this.modelsRegistry.setDisabledModels(provider, disabledModels)
   }
 
+  /** 模型禁用预检（HTTP profile 保存等入口；禁用模型 409 model_disabled）。 */
+  assertModelEnabled(provider: string, modelId: string): void {
+    this.modelsRegistry.assertModelEnabled(provider, modelId)
+  }
+
   async setDefaultModel(model?: string, thinkingLevel?: string): Promise<void> {
     const validateLevel = (level: string) => {
       if (!THINKING_LEVELS.has(level)) {

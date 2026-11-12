@@ -283,6 +283,9 @@ export class ModelRegistry {
       return merged
     })
     this.disabledModels = parseDisabledModelsConfig(next['disabledModels'])
+    // 内存快照已生效：发布 models.changed 让已连接的 Web 客户端重拉目录
+    //（publish 侧组装/脱敏失败会同步抛出，不静默吞掉）。
+    this.events.publish('models.changed', { providers: provider ? [provider] : [] })
     return this.listModels()
   }
 

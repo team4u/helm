@@ -169,6 +169,7 @@ export class RuntimeAgentSpawn {
             tracker: { getLastAssistantText: (id) => this.deps.tracker.getLastAssistantText(id) },
             defaultModel: this.deps.modelsRegistry.defaultModel,
             defaultThinkingLevel: this.deps.modelsRegistry.defaultThinkingLevel,
+            assertModelEnabled: (provider, modelId) => this.deps.modelsRegistry.assertModelEnabled(provider, modelId),
             agentSessions: this.agentSessions,
             resolvedAttachments,
             isNodeOnline: (nodeId) => this.deps.envFabric.isOnline(nodeId),
