@@ -785,6 +785,47 @@ test('profiles 详情读取失败显式报错，不返回可覆盖原文件的�
   assert.equal(result.body.system, undefined)
 })
 
+test('profiles POST/PUT 绑定禁用模型在落盘前拒绝（409 model_disabled），未提供端口时不阻塞', { timeout: 60_000 }, async () => {
+  // 基座 kernel 未提供 assertModelEnabled 端口：保存不阻塞（可选端口语义）。
+  {
+    const { handler } = makeHandlers()
+    const created = await call(handler, 'POST', '/api/profiles', {
+      body: { id: 'no-port-profile', name: '无端口', model: 'faux/model' },
+    })
+    assert.equal(created.status, 201)
+  }
+  // 提供端口：POST 与 PUT 绑定禁用模型均 409，且不落盘。
+  const kernel = makeKernel()
+  kernel.assertModelEnabled = (provider, modelId) => {
+    if (provider === 'faux' && modelId === 'disabled-model') {
+      throw new HelmError('model_disabled', `模型 ${provider}/${modelId} 已被禁用`, 409)
+    }
+  }
+  const handler = createHubHandler(kernel)
+  const rejected = await call(handler, 'POST', '/api/profiles', {
+    body: { id: 'disabled-bind', name: '绑定禁用模型', model: 'faux/disabled-model' },
+  })
+  assert.equal(rejected.status, 409)
+  assert.equal(rejected.body.error.code, 'model_disabled')
+  assert.equal(await profiles.get('disabled-bind'), undefined, 'POST 拒绝后不得落盘')
+
+  // PUT 同规：既有 profile 改绑禁用模型拒绝。
+  await profiles.save({ id: 'put-target', name: '既有角色' })
+  const putRejected = await call(handler, 'PUT', '/api/profiles/put-target', {
+    body: { name: '改绑禁用模型', model: 'faux/disabled-model' },
+  })
+  assert.equal(putRejected.status, 409)
+  assert.equal(putRejected.body.error.code, 'model_disabled')
+  assert.equal((await profiles.get('put-target'))?.model, undefined, 'PUT 拒绝后原值不变')
+
+  // 合法模型仍可正常保存；清除（缺 model 字段）不触发预检。
+  const ok = await call(handler, 'PUT', '/api/profiles/put-target', {
+    body: { name: '改绑可用模型', model: 'faux/model' },
+  })
+  assert.equal(ok.status, 200)
+  assert.equal(ok.body.model, 'faux/model')
+})
+
 test('profiles DELETE 仍被会话绑定返回 409 profile_in_use', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   await call(handler, 'POST', '/api/profiles', {

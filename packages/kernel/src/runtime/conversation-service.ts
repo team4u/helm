@@ -72,6 +72,8 @@ export interface ConversationServiceOptions {
   readonly defaultModel: () => string | undefined
   readonly defaultThinkingLevel: () => string | undefined
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
+  /** 模型禁用预检（ModelRegistry.assertModelEnabled；禁用模型拒绝选用与提交）。 */
+  readonly assertModelEnabled: (provider: string, modelId: string) => void
 }
 
 /** 提交输入的可选参数（HTTP/CLI/内部同构）。 */
@@ -254,7 +256,10 @@ export class ConversationService {
   async createConversation(init: ConversationInit = {}): Promise<ConversationSummary> {
     const profileId = await this.resolveProfileForCreate(init)
     const profile = await this.readProfile(profileId)
-    if (init.model !== undefined && init.model !== '') this.o.parseModelRefOrThrow(init.model)
+    if (init.model !== undefined && init.model !== '') {
+      const ref = this.o.parseModelRefOrThrow(init.model)
+      this.o.assertModelEnabled(ref.provider, ref.modelId)
+    }
     const effectiveModel = await this.resolveEffectiveModel(init.model, profileId)
     const effectiveRef = effectiveModel ? this.o.parseModelRefOrThrow(effectiveModel) : undefined
     const parentMeta =
@@ -330,7 +335,8 @@ export class ConversationService {
     if (patch.model === undefined) {
       nextOverride = meta.modelOverride
     } else if (patch.model !== '') {
-      this.o.parseModelRefOrThrow(patch.model)
+      const ref = this.o.parseModelRefOrThrow(patch.model)
+      this.o.assertModelEnabled(ref.provider, ref.modelId)
       nextOverride = patch.model
     }
     let nextThinkingOverride: string | undefined
@@ -482,6 +488,11 @@ export class ConversationService {
         503,
         { conversationId: id, profileId: convMeta.profileId },
       )
+    }
+    // 生效模型被禁用（如默认模型事后被禁用）：提交入口拒绝，绝不静默回退其它模型。
+    {
+      const effectiveRef = this.o.parseModelRefOrThrow(effectiveModelRef)
+      this.o.assertModelEnabled(effectiveRef.provider, effectiveRef.modelId)
     }
 
     const replaceFromEntryId = await this.rewind.validateReplaceTarget(conversation, id, opts?.replaceFromEntryId)

@@ -226,7 +226,7 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
                 </button>
               </Tooltip>
             </div>
-            {store.models.filter((model) => model.available && model.id.toLowerCase().includes(query.toLowerCase())).map((m) => (
+            {store.models.filter((model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(query.toLowerCase())).map((m) => (
               <button
                 key={m.id}
                 title={m.id}
@@ -238,7 +238,7 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
                 <span className="popover-item-meta">{m.provider}</span>
               </button>
             ))}
-            {store.models.every((model) => !model.available) && (
+            {store.models.every((model) => !model.available || model.disabled === true) && (
               <div className="popover-item" style={{ cursor: 'default', color: 'var(--fg-subtle)' }}>暂无可用模型；请先在「模型与凭据」配置供应商密钥</div>
             )}
             {supportsThinking ? (

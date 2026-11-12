@@ -59,6 +59,12 @@ export interface NativeSpawnDeps extends HelmToolDeps {
   getLastAssistantText(conversationId: number): string | undefined
   /** 全局默认模型 'provider/model'（未配置时抛 HelmError）。 */
   resolveModel(): { provider: string; modelId: string }
+  /**
+   * 模型禁用预检（ModelRegistry.assertModelEnabled 注入）：解析出最终
+   * resolvedModel 后、真实创建子会话前必须调用（409 model_disabled），
+   * 绝不让原生 spawn 绕过禁用约束。
+   */
+  assertModelEnabled?(provider: string, modelId: string): void
   /** 全局默认思考档位；未配置则使用 SDK off。 */
   resolveThinkingLevel?(): string | undefined
   /** agentId -> child convId（resume 映射，进程内稳定）。 */
@@ -263,6 +269,14 @@ async function runNativeSpawnTurn(
     if (Object.keys(patch).length > 0) {
       summary = await deps.updateConversation(childId!, patch)
     }
+    // resume 禁用预检：配置落定后、提交输入前对生效模型收口。显式 model 变更
+    // 已在 updateConversation 内检查；这里覆盖其余路径——子会话绑定/继承的
+    // 模型后来被用户禁用时拒绝 resume（409 model_disabled），绝不绕过禁用策略。
+    // 空模型沿用既有未配置语义（submit 阶段 no_model），不在此伪造错误。
+    if (summary!.model !== '') {
+      const resumeRef = parseSpawnModel(summary!.model)
+      deps.assertModelEnabled?.(resumeRef.provider, resumeRef.modelId)
+    }
   }
 
   // 新建路径 cwd 链：request > profile > 父会话镜像 cwd > 宿主缺省。
@@ -298,6 +312,9 @@ async function runNativeSpawnTurn(
       const modelRef = request.model ? parseSpawnModel(request.model) : undefined
       const profileModelRef = profile.model ? parseSpawnModel(profile.model) : undefined
       const resolvedModel = modelRef ?? profileModelRef ?? deps.resolveModel()
+      // 禁用模型在创建前显式拒绝（409 model_disabled）：三条解析路径
+      //（显式 request / profile / 全局默认）统一在此收口，绝不静默落到禁用模型。
+      deps.assertModelEnabled?.(resolvedModel.provider, resolvedModel.modelId)
       const createModelRef = `${resolvedModel.provider}/${resolvedModel.modelId}`
       const extension = structured ? buildStructuredOutputExtension(deps.harness) : undefined
       if (extension) deps.installChildExtension(extension)

@@ -311,6 +311,7 @@ export function assembleRuntimeServices(
     defaultModel: () => modelsRegistry.defaultModel,
     defaultThinkingLevel: () => modelsRegistry.defaultThinkingLevel,
     parseModelRefOrThrow: (ref) => modelsRegistry.parseModelRefOrThrow(ref),
+    assertModelEnabled: (provider, modelId) => modelsRegistry.assertModelEnabled(provider, modelId),
   })
 
   // ---- 原生子代理派生 ----

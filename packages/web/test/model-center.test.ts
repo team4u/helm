@@ -129,6 +129,65 @@ test('summarizeProviders: 正确统计供应商总数与已配置数', { timeout
   assert.equal(summary.configured, 1)
 })
 
+test('buildMergedProviders: 目录中 disabled 的模型融合后显示为未勾选，enabled 与 available（凭据可用性）解耦', { timeout: 60_000 }, () => {
+  const credentials = [{ id: 'faux', configured: false }]
+  const catalogModels: ModelDescriptor[] = [
+    {
+      id: 'faux/faux-1',
+      provider: 'faux',
+      modelId: 'faux-1',
+      available: true,
+      thinkingLevels: ['off'],
+      label: 'Faux 1',
+    },
+    {
+      id: 'faux/faux-2',
+      provider: 'faux',
+      modelId: 'faux-2',
+      available: true,
+      disabled: true,
+      thinkingLevels: ['off'],
+      label: 'Faux 2',
+    },
+    {
+      id: 'faux/faux-3',
+      provider: 'faux',
+      modelId: 'faux-3',
+      available: false,
+      disabled: true,
+      thinkingLevels: ['off'],
+      label: 'Faux 3',
+    },
+    {
+      id: 'faux/faux-4',
+      provider: 'faux',
+      modelId: 'faux-4',
+      available: false,
+      thinkingLevels: ['off'],
+      label: 'Faux 4',
+    },
+  ]
+
+  const merged = buildMergedProviders(
+    [{ id: 'faux', name: 'Faux', configured: false, modelsCount: 0 }],
+    credentials,
+    [],
+    catalogModels,
+  )
+  const faux = merged.find((p) => p.id === 'faux')
+  assert.ok(faux)
+  const byId = new Map((faux.models ?? []).map((m) => [m.id, m]))
+  // 可用且未禁用：勾选。
+  assert.equal(byId.get('faux-1')?.enabled, true)
+  // 目录 disabled: true -> 融合后未勾选（即使凭据可用）。
+  assert.equal(byId.get('faux-2')?.enabled, false)
+  // 凭据不可用叠加禁用：同样未勾选。
+  assert.equal(byId.get('faux-3')?.enabled, false)
+  // 凭据未配置（available=false）但未被用户禁用：路由仍勾选。
+  // 勾选态是「路由启用」而非凭据可用性，否则填写密钥保存会误禁全部模型。
+  assert.equal(byId.get('faux-4')?.enabled, true)
+})
+
 test('buildMergedProviders: 正确与凭证、自定义网关及远程目录模型融合', { timeout: 60_000 }, () => {
   const credentials = [{ id: 'anthropic', configured: true }]
   const gateways: ProviderConfig[] = [
@@ -204,6 +263,43 @@ test('buildDefaultModelOptions: 哨兵空值项、可用模型过滤与目录外
   const sentinelLast = sentinel[sentinel.length - 1]
   assert.ok(sentinelLast)
   assert.equal(sentinelLast.meta, 'anthropic')
+})
+
+test('buildDefaultModelOptions: 已禁用模型不作为正常可选项；当前值恰为禁用模型时保留并标注已禁用', { timeout: 60_000 }, () => {
+  const models: ModelDescriptor[] = [
+    {
+      id: 'faux/faux-1',
+      provider: 'faux',
+      modelId: 'faux-1',
+      available: true,
+      label: 'Faux 1',
+      thinkingLevels: ['off'],
+    },
+    {
+      id: 'faux/faux-2',
+      provider: 'faux',
+      modelId: 'faux-2',
+      available: true,
+      disabled: true,
+      label: 'Faux 2',
+      thinkingLevels: ['off'],
+    },
+  ]
+
+  // 无当前值：禁用模型不出现在可选项中。
+  const options = buildDefaultModelOptions(models, '')
+  assert.equal(options.some((o) => o.value === 'faux/faux-2'), false)
+  assert.deepEqual(
+    options.map((o) => o.value),
+    [UNSET_MODEL_VALUE, 'faux/faux-1'],
+  )
+
+  // 当前默认模型恰为禁用模型：保留为当前配置项（不静默丢失）并标注已禁用，且不重复。
+  const withDisabled = buildDefaultModelOptions(models, 'faux/faux-2')
+  const hits = withDisabled.filter((o) => o.value === 'faux/faux-2')
+  assert.equal(hits.length, 1, '禁用模型只应保留一项（不得既在可选项又在标注项重复出现）')
+  assert.equal(hits[0]?.label, 'faux/faux-2（已禁用）')
+  assert.equal(hits[0]?.meta, '已禁用')
 })
 
 // ---------------------------------------------------------------------------

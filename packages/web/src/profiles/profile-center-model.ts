@@ -54,9 +54,9 @@ export function resolveProfileModel(p: Profile): string | undefined {
 /**
  * 构造角色绑定的可选模型下拉列表：
  * - 第一项恒为「跟随系统默认」（value: ''）；
- * - 过滤只展示已配置的模型（m.available === true），未配置的不能出来；
- * - 若当前角色已配置的模型不在可用列表内（例如凭据失效或外部模型），
- *   保留该项并注明「未配置」，确保既有值不丢失且明确提示。
+ * - 过滤只展示已配置且未禁用的模型（available 且非 disabled），未配置/已禁用的不能作为正常可选项；
+ * - 若当前角色已配置的模型不在可选列表内（例如凭据失效、外部模型或已被禁用），
+ *   保留该项并分别标注「未配置」或「已禁用」，确保既有值不丢失且明确提示。
  */
 export function buildProfileModelOptions(
   models: ModelDescriptor[],
@@ -65,12 +65,16 @@ export function buildProfileModelOptions(
   const list: SelectOption<string>[] = [{ value: '', label: '跟随系统默认' }]
   const trimmedCurrent = currentModel?.trim() ?? ''
   for (const m of models) {
-    if (!m.available) continue
+    if (!m.available || m.disabled === true) continue
     const label = m.label ? `${m.label} (${m.id})` : m.id
     list.push({ value: m.id, label })
   }
-  if (trimmedCurrent !== '' && !models.some((m) => m.id === trimmedCurrent && m.available)) {
-    list.push({ value: trimmedCurrent, label: `${trimmedCurrent}（未配置）` })
+  if (trimmedCurrent !== '' && !list.some((o) => o.value === trimmedCurrent)) {
+    const disabled = models.some((m) => m.id === trimmedCurrent && m.disabled === true)
+    list.push({
+      value: trimmedCurrent,
+      label: disabled ? `${trimmedCurrent}（已禁用）` : `${trimmedCurrent}（未配置）`,
+    })
   }
   return list
 }

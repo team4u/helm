@@ -277,3 +277,18 @@ test('ModelPicker 内置原生动态模型刷新按钮，调用 assetsApi.refres
   assert.match(source, /aria-label="刷新动态模型目录"/, '具备无障碍描述')
   assert.match(source, /name="rotate-cw"/, '使用 rotate-cw 线性图标')
 })
+
+test('ModelPicker 候选模型双重过滤：available 且非 disabled（禁用模型不作为可选项）', { timeout: 60_000 }, () => {
+  // 模型候选列表过滤契约：凭据可用 + 未被用户禁用，两者独立表达。
+  assert.match(
+    source,
+    /store\.models\.filter\(\(model\) => model\.available && model\.disabled !== true &&/,
+    '模型候选必须同时过滤 available 与 disabled',
+  )
+  // 空态提示同步覆盖「全部不可用或全部禁用」两种情形。
+  assert.match(
+    source,
+    /store\.models\.every\(\(model\) => !model\.available \|\| model\.disabled === true\)/,
+    '空态判定需把禁用模型也视为不可选',
+  )
+})

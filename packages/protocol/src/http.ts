@@ -121,6 +121,7 @@ export const CORE_CLI_COMMAND_PATHS = [
   'models default',
   'models providers',
   'models refresh',
+  'models filter',
   'search',
   'api',
 ] as const

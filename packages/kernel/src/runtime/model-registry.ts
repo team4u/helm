@@ -35,6 +35,28 @@ function assertModelsStoreHealthy(result: { errors: ReadonlyMap<string, Error> }
   }
 }
 
+/**
+ * config.json.disabledModels 结构解析（providerId -> modelId[]）；缺省空集，
+ * 非法形状显式抛 config_corrupt（绝不静默丢弃）。
+ */
+function parseDisabledModelsConfig(raw: unknown): Record<string, string[]> {
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new HelmError('config_corrupt', 'config.json.disabledModels 必须为对象（providerId -> modelId[]）', 500)
+  }
+  const result: Record<string, string[]> = {}
+  for (const [providerId, ids] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof providerId !== 'string' || providerId === '') {
+      throw new HelmError('config_corrupt', `config.json.disabledModels 键需为非空 provider id：${String(providerId)}`, 500)
+    }
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string' && id !== '')) {
+      throw new HelmError('config_corrupt', `config.json.disabledModels['${providerId}'] 必须为非空字符串数组`, 500)
+    }
+    result[providerId] = [...(ids as string[])]
+  }
+  return result
+}
+
 export interface ModelRegistryOptions {
   readonly dataDir: string
   readonly providersSvc: ProviderService
@@ -82,6 +104,8 @@ export class ModelRegistry {
   defaultThinkingLevel: string | undefined
   /** 未配置模型时的 hooks 载荷占位（提交时 requireModelRef 显式报错）。 */
   modelPlaceholder = 'unconfigured'
+  /** 用户显式禁用的模型（providerId -> modelId[]；config.json.disabledModels）。 */
+  private disabledModels: Record<string, string[]> = {}
 
   constructor(options: ModelRegistryOptions, initialModels: Models, defaults: { model?: string; thinkingLevel?: string }) {
     this.providersSvc = options.providersSvc
@@ -119,7 +143,11 @@ export class ModelRegistry {
   }
 
   async listModels(): Promise<ModelCatalog> {
-    return listModelCatalog(this.modelsCurrent, { model: this.defaultModel, thinkingLevel: this.defaultThinkingLevel })
+    return listModelCatalog(this.modelsCurrent, {
+      model: this.defaultModel,
+      thinkingLevel: this.defaultThinkingLevel,
+      disabledModels: this.disabledModels,
+    })
   }
 
   listModelProviders() {
@@ -128,8 +156,9 @@ export class ModelRegistry {
 
   /** 从 config.json 读取全局默认模型与思考档位（启动时；格式非法显式抛）。 */
   async loadDefaultsFromConfig(): Promise<void> {
+    const raw: Record<string, unknown> = (await this.configSvc.get()) as Record<string, unknown>
     if (this.defaultModel === undefined) {
-      const configured = (await this.configSvc.get()).model
+      const configured = raw['model']
       if (configured !== undefined && configured !== '') {
         if (typeof configured !== 'string' || !/^[^/\s]+\/[^\s]+$/.test(configured)) {
           throw new HelmError('config_corrupt', 'config.json.model 必须为 provider/model 形式的字符串', 500)
@@ -138,14 +167,14 @@ export class ModelRegistry {
       }
     }
     if (this.defaultThinkingLevel === undefined) {
-      const rawCfg: Record<string, unknown> = (await this.configSvc.get()) as Record<string, unknown>
-      const configuredLevel = rawCfg['thinkingLevel'] as string | undefined | null
+      const configuredLevel = raw['thinkingLevel'] as string | undefined | null
       if (configuredLevel !== undefined && configuredLevel !== '') {
         // 枚举校验由宿主注入的校验器完成（THINKING_LEVELS 属 spawn 契约）。
         await this.configuredThinkingLevelValidated(configuredLevel as string)
         this.defaultThinkingLevel = configuredLevel as string
       }
     }
+    this.disabledModels = parseDisabledModelsConfig(raw['disabledModels'])
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
   }
 
@@ -166,7 +195,10 @@ export class ModelRegistry {
     validateThinkingLevel: (level: string) => void,
   ): Promise<void> {
     const trimmed = model?.trim()
-    if (trimmed !== undefined && trimmed !== '') this.parseModelRefOrThrow(trimmed)
+    if (trimmed !== undefined && trimmed !== '') {
+      const ref = this.parseModelRefOrThrow(trimmed)
+      this.assertModelEnabled(ref.provider, ref.modelId)
+    }
     let nextLevel: string | undefined
     if (thinkingLevel !== undefined) {
       const level = thinkingLevel.trim()
@@ -200,6 +232,61 @@ export class ModelRegistry {
       throw new HelmError('validation_error', `模型引用格式应为 'provider/model'：${ref}`)
     }
     return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
+  }
+
+  /** 同步查询模型是否被用户显式禁用（会话解析入口过滤用）。 */
+  isModelDisabled(providerId: string, modelId: string): boolean {
+    return this.disabledModels[providerId]?.includes(modelId) === true
+  }
+
+  /** 模型禁用时显式拒绝（409 model_disabled），供显式选用入口复用。 */
+  assertModelEnabled(providerId: string, modelId: string): void {
+    if (this.isModelDisabled(providerId, modelId)) {
+      throw new HelmError(
+        'model_disabled',
+        `模型 ${providerId}/${modelId} 已被禁用：请在「模型与凭证中心」或 helm models filter 重新启用后选用`,
+        409,
+        { provider: providerId, modelId },
+      )
+    }
+  }
+
+  /**
+   * 设置模型禁用集（PUT /api/models/filter）：provider 为 undefined 时清空全部
+   * （此时 modelIds 必须为空数组）；写入 config.json 原子持久化并返回最新目录。
+   * 后端不校验模型存在性（存储自由字符串；目录标注仅命中目录内模型）。
+   */
+  async setDisabledModels(provider: string | undefined, modelIds: string[]): Promise<ModelCatalog> {
+    if (provider === undefined || provider === '') {
+      if (modelIds.length > 0) {
+        throw new HelmError('validation_error', '未指定 provider 时只能清空全部禁用项（disabledModels 必须为空数组）', 400)
+      }
+    }
+    const unique: string[] = []
+    for (const id of modelIds) {
+      if (typeof id !== 'string' || id === '' || id.includes('/')) {
+        throw new HelmError('validation_error', `模型 ID 必须为非空字符串且不含 '/'（模型 id 不含 provider 前缀）：${String(id)}`, 400)
+      }
+      if (!unique.includes(id)) unique.push(id)
+    }
+    const next = await this.configSvc.updateBy((current) => {
+      const merged: Record<string, unknown> = { ...current }
+      if (provider === undefined || provider === '') {
+        delete merged['disabledModels']
+      } else {
+        const existing = parseDisabledModelsConfig(merged['disabledModels'])
+        if (unique.length === 0) delete existing[provider]
+        else existing[provider] = unique
+        if (Object.keys(existing).length === 0) delete merged['disabledModels']
+        else merged['disabledModels'] = existing
+      }
+      return merged
+    })
+    this.disabledModels = parseDisabledModelsConfig(next['disabledModels'])
+    // 内存快照已生效：发布 models.changed 让已连接的 Web 客户端重拉目录
+    //（publish 侧组装/脱敏失败会同步抛出，不静默吞掉）。
+    this.events.publish('models.changed', { providers: provider ? [provider] : [] })
+    return this.listModels()
   }
 
   /**

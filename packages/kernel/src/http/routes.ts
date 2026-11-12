@@ -344,6 +344,9 @@ async function route(
         if (existing?.managedByPlugin !== undefined) {
           throw new HelmError('profile_managed_by_plugin', `不可覆盖插件托管的 profile ${profile.id}`, 403)
         }
+        // 保存前拒绝绑定禁用模型（409 model_disabled），避免保存成功后所有
+        // 绑定会话在提交时才 409；仅 HTTP 边界，插件可信自举直写 ProfileService 不经此。
+        assertProfileModelEnabled(kernel, profile)
         const saved = await kernel.profiles.save(profile)
         await kernel.alignProfileConversations?.(saved.id)
         return jsonOk(redactor, await enrichProfile(saved), { status: 201 })
@@ -378,6 +381,8 @@ async function route(
             { profileId, managedByPlugin: existing.managedByPlugin },
           )
         }
+        // 与 POST 同规：绑定禁用模型在落盘前拒绝（PUT 整体替换，缺失 model = 清除，不触发预检）。
+        assertProfileModelEnabled(kernel, profile)
         const saved = await kernel.profiles.save({ ...profile, id: profileId })
         await kernel.alignProfileConversations?.(saved.id)
         return jsonOk(redactor, await enrichProfile(saved))
@@ -469,6 +474,28 @@ async function route(
     await kernel.setDefaultModel(hasModel ? model as string : undefined, hasLevel ? level as string : undefined)
     const catalog = await kernel.listModels()
     return jsonOk(redactor, { ok: true, defaultModel: catalog.defaultModel ?? '', defaultThinkingLevel: catalog.defaultThinkingLevel ?? '' })
+  }
+  if (head === 'models' && second === 'filter' && third === undefined && method === 'PUT') {
+    if (kernel.setDisabledModels === undefined) {
+      throw new HelmError('not_implemented', '当前 runtime 未提供模型禁用集设置', 501)
+    }
+    // 空 body / {} 均需校验：{ provider?: string; disabledModels: string[] }。
+    const raw = await readOptionalJsonBody(ctx.request)
+    if (raw === null || raw === undefined || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new HelmError('validation_error', '请求体需为 JSON 对象 { provider?: string; disabledModels: string[] }', 400)
+    }
+    const body = raw as Record<string, unknown>
+    rejectUnknownKeys(body, new Set(['provider', 'disabledModels']))
+    const provider = body['provider']
+    if (provider !== undefined && typeof provider !== 'string') {
+      throw new HelmError('validation_error', 'provider 必须为字符串（providerId；缺省清空全部禁用项）', 400)
+    }
+    const disabledModels = body['disabledModels']
+    if (!Array.isArray(disabledModels) || !disabledModels.every((id) => typeof id === 'string')) {
+      throw new HelmError('validation_error', 'disabledModels 必须为字符串数组（该 provider 的完整禁用集，全量替换）', 400)
+    }
+    const catalog = await kernel.setDisabledModels(provider as string | undefined, disabledModels as string[])
+    return jsonOk(redactor, { ok: true, catalog })
   }
   if (head === 'models' && second === 'refresh' && third === undefined && method === 'POST') {
     // 空 body / {} 均合法（刷新全部）；provider 单选、providers 多选、force 可选。
@@ -854,6 +881,13 @@ async function dispatchPluginRoute(
 // ---------------------------------------------------------------------------
 // 辅助
 // ---------------------------------------------------------------------------
+
+/** profile.model 禁用预检：解析出 provider/model 后调用可选端口（409 model_disabled）。 */
+function assertProfileModelEnabled(kernel: KernelRuntimeLike, profile: Profile): void {
+  if (profile.model === undefined || kernel.assertModelEnabled === undefined) return
+  const slash = profile.model.indexOf('/')
+  kernel.assertModelEnabled(profile.model.slice(0, slash), profile.model.slice(slash + 1))
+}
 
 /** providers/credentials 变更后热重载模型清单；未提供端口的 runtime 跳过。 */
 /** POST /api/models/refresh body：空/{} 合法；provider 单选、providers 多选、force 可选。 */

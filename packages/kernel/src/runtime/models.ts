@@ -186,14 +186,25 @@ export function parseModelRef(ref: string): ModelRefParts {
  * 列出全部模型目录（含未配置 key 的，标注 available）与各模型思考档位。
  * checkAuth 语义：undefined = 合法的「未配置凭据」；仅此情况记 available=false。
  * 读取错误 / 协议错误（ModelsError code auth 等）向上抛出诊断，绝不静默吞掉。
+ * disabledSnapshot：providerId -> 用户显式禁用的模型 ID 集（可用性语义不变，
+ * 禁用仅作为目录标注；过滤在会话模型解析入口执行）。
  */
-export async function listModelCatalog(models: Models, defaults?: { model?: string; thinkingLevel?: string }): Promise<ModelCatalog> {
+export async function listModelCatalog(
+  models: Models,
+  defaults?: { model?: string; thinkingLevel?: string; disabledModels?: Readonly<Record<string, readonly string[]>> },
+): Promise<ModelCatalog> {
   const entries: ModelCatalogEntry[] = []
   const thinkingLevels: Record<string, string[]> = {}
   for (const provider of models.getProviders()) {
     const auth = await models.checkAuth(provider.id)
+    const disabled = defaults?.disabledModels?.[provider.id]
     for (const model of models.getModels(provider.id)) {
-      entries.push({ provider: provider.id, modelId: model.id, available: auth !== undefined })
+      entries.push({
+        provider: provider.id,
+        modelId: model.id,
+        available: auth !== undefined,
+        ...(disabled !== undefined && disabled.includes(model.id) ? { disabled: true } : {}),
+      })
       thinkingLevels[`${provider.id}/${model.id}`] = [...getSupportedThinkingLevels(model)]
     }
   }

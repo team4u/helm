@@ -45,7 +45,7 @@ managedByPlugin: {{MANAGED_BY}}
 - `helm skills list` / `helm skills read <id> [--path references/xxx.md]`。内置 helm-cli 为系统受管只读技能，启动时按内置源码覆盖；需要扩展时创建自己的技能，不修改内置文件。
 
 ### 模型与网关
-- `helm models list` / `helm models default [--set <provider/model>] [--thinking <level>]` / `helm models providers` / `helm models refresh [--provider <id>]`。
+- `helm models list` / `helm models default [--set <provider/model>] [--thinking <level>]` / `helm models providers` / `helm models refresh [--provider <id>]` / `helm models filter [--provider <id> [--disable <modelId>... | --clear]]`（模型禁用集：无参数查看，全量替换语义）。
 - `helm providers list` / `helm providers set --input <json>`（整体替换网关数组，严禁含密钥）。
 - `helm credentials list` / `helm credentials set <id> --value <value>` / `helm credentials delete <id>`：服务端凭据管理。
 
