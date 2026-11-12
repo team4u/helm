@@ -54,3 +54,15 @@
   flex-direction: column;
   gap: 4px;
 }
+
+/* 终端快照模态：宿主 .modal 默认 680px，此处放宽到快照阅读宽度 */
+.herdr-snapshot-modal {
+  max-width: 860px;
+}
+
+.herdr-snapshot-modal .code-block-pre {
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
