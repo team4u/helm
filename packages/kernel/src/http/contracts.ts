@@ -119,6 +119,20 @@ export interface PluginHost {
   setConfig(id: string, values: Record<string, unknown>): Promise<void> | void
   /** 动态路由清单（实际挂载命名空间 /api/plugins/<encodedId>/routes/...）。 */
   listRoutes(): PluginRouteInfo[]
+  /**
+   * 单插件摘要现读：插件路由派发前的启用状态复查（listRoutes 快照可能
+   * 与停用完成交错；未提供时跳过复查）。注意摘要不含 lifecycle phase，
+   * teardown 期间（enabled 仍真）的拦截需要 PluginHost 公开 phase 感知
+   * 门禁（跨组）。
+   */
+  get?(pluginId: string): PluginSummary | undefined
+  /**
+   * 在途任务跟踪包装（与 action/tool 执行同源的 PluginTaskTracker）：
+   * route handler 执行期间计入 liveTasks，使 disable 的停用闸门
+   * assertNoLiveTasks 对在途 route 请求可见（409 plugin_has_live_tasks
+   * 而非半执行拆毁）。未提供时不包装。
+   */
+  withTask?<T>(pluginId: string, label: string, fn: () => Promise<T>): Promise<T>
   /** 读取插件公共文档；私有/停用/不存在一律 404（鉴权不能绕过可见性）。 */
   getPublicDoc(pluginId: string, name: string): Promise<PublicPluginDoc> | PublicPluginDoc
   /**

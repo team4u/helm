@@ -436,6 +436,10 @@ async function route(
       if (method === 'DELETE') {
         // 仍被任何会话绑定的 profile 拒绝删除：否则下一轮 before_turn 找
         // 不到文件，会话将带病运行。assistant 默认服务同理受锁保护（403）。
+        // 此处为快速路径；服务层 delete 内部落盘前兑底复核（同一检查），
+        // 双向复验闭环：创建/PATCH 绑定侧亦验 profile 存在
+        // （conversation-service resolveProfileForCreate/updateConfiguration），
+        // 残余窗口仅为复核 await 到 rm 之间的微任务级交错，可接受。
         const inUse = (await kernel.listConversations()).some((c) => c.profileId === profileId)
         if (inUse) {
           throw new HelmError('profile_in_use', `profile ${profileId} 仍被会话绑定，先解绑再删除`, 409)
@@ -451,7 +455,10 @@ async function route(
             { profileId, managedByPlugin: target.managedByPlugin },
           )
         }
-        await kernel.profiles.delete(profileId)
+        await kernel.profiles.delete(profileId, {
+          isProfileInUse: async (pid) =>
+            (await kernel.listConversations()).some((c) => c.profileId === pid),
+        })
         return jsonOk(redactor, { ok: true })
       }
       return methodNotAllowed(redactor, method)
@@ -917,7 +924,26 @@ async function dispatchPluginRoute(
     const rest = segments.slice(4).join('/')
     return errorResponse(redactor, 404, 'route_not_found', `插件路由不存在: ${method} /${rest}`)
   }
-  const response = await found.route.handler(request)
+  // 停用门禁 a)——摘要复查：listRoutes 只按 enabled 过滤，且快照取自派发
+  // 前，可能与停用完成交错；派发前按插件摘要现读复核，已停用即 409 拒绝
+  // （不把请求派发给已拆毁的插件半执行）。
+  const summary = kernel.plugins.get?.(found.pluginId)
+  if (summary !== undefined && summary.enabled !== true) {
+    throw new HelmError('plugin_disabled', `插件 ${found.pluginId} 已停用，路由不可用`, 409, {
+      pluginId: found.pluginId,
+    })
+  }
+  // 停用门禁 b)——在途跟踪：handler 执行计入 liveTasks（与 action/tool
+  // 同源 tracker，见 capability-registry 的 invokeAction/executeTool 包装），
+  // 使 disable 的 assertNoLiveTasks 闸门对在途 route 请求可见。
+  // 残余窗口（如实声明）：公开摘要不含 lifecycle phase，disable 进入
+  // teardown 后（enabled 仍真）新到请求仍会被派发——彻底闭合需要
+  // PluginHost 公开 phase 感知的派发门禁（lifecycle-helpers 的
+  // getActiveEnabledPluginIds 不查 phase，需跨组修改 plugins/）。
+  const invokeHandler = (): Promise<Response> => Promise.resolve(found.route.handler(request))
+  const response = await (kernel.plugins.withTask !== undefined
+    ? kernel.plugins.withTask(found.pluginId, `route:${found.route.method} ${found.route.path}`, invokeHandler)
+    : invokeHandler())
   if (!(response instanceof Response)) {
     throw new HelmError('invalid_route_handler_output', '插件路由 handler 必须返回 Response', 500)
   }
@@ -1442,10 +1468,23 @@ async function postConversationArtifact(
           })()
     bytes = await readBinaryBodyWithLimit(ctx.request, MAX_ARTIFACT_BYTES)
   }
+  // 服务层兑底：writeUploaded 落盘前复核会话存在（入口快速路径检查与写盘
+  // 之间隔整个上传体读取，最长可达 15 MiB 时长）；非 not_found 错误如实
+  // 上抛，不伪称会话缺失。
   const metadata = await kernel.artifacts.writeUploaded(id, {
     name,
     bytes,
     ...(mimeType !== undefined ? { mimeType } : {}),
+  }, {
+    conversationExists: async (cid) => {
+      try {
+        await kernel.getConversationDetail(cid, { limit: 1 })
+        return true
+      } catch (error) {
+        if (error instanceof HelmError && error.code === 'not_found') return false
+        throw error
+      }
+    },
   })
   return jsonOk(redactor, metadata, { status: 201 })
 }
@@ -1599,6 +1638,14 @@ async function getNodeForwardEvents(
   kernel: KernelRuntimeLike,
   forwardId: string,
 ): Promise<Response> {
+  // aborted 预检（对照 events.ts 两处 SSE 同款）：客户端可能在鉴权 await
+  //（verifyToken）期间已断开——对已 aborted 的 signal 注册 abort 监听永不
+  // 触发，后续 finish 不执行、租约永不释放。本函数体内无 await，入口
+  // 预检后到 ReadableStream 构造（start 同步执行）之间无交错窗口；此处
+  // 未取得任何资源，直接拒绝即可，无需清理。
+  if (ctx.request.signal.aborted) {
+    return errorResponse(undefined, 409, 'client_disconnected', '客户端已断开，不建立转发监控流')
+  }
   if (kernel.getNodeForward === undefined || kernel.onNodeForwardEvent === undefined) {
     throw new HelmError('not_implemented', '当前 runtime 未提供节点端口转发', 501)
   }
@@ -1612,21 +1659,25 @@ async function getNodeForwardEvents(
   const teardown = { run: (): void => undefined }
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      let closed = false
+      // finished 单一语义：清理已完成（幂等终态）。send 失败不再只置
+      // 标志——那会让 finish 的短路守卫跳过清理，租约/订阅/终止通知全部
+      // 残留；失败必须直接走完整 finish 清理路径。
+      let finished = false
       let releaseLease: (() => void) | undefined
       let offEvents: (() => void) | undefined
       const offStops: (() => void)[] = []
       const send = (event: unknown): void => {
-        if (closed) return
+        if (finished) return
         try {
           controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
         } catch {
-          closed = true
+          // enqueue 失败（流已被下游 errored）：等价断开，走完整清理。
+          finish()
         }
       }
       const finish = (): void => {
-        if (closed) return
-        closed = true
+        if (finished) return
+        finished = true
         releaseLease?.()
         releaseLease = undefined
         offEvents?.()
