@@ -542,6 +542,23 @@ export function wrapHostApi(
         Promise.resolve(backend.submitInput(id, text, opts)),
       );
     },
+    // 7.5 guarded 变更端口（自动化红线内核执行层）：未接线时显式 501，
+    // 绝不静默回退普通 submitInput/abortConversation（那会绕过内核原子复核）。
+    submitInputGuarded: (id, text, opts, mutationGuard) => {
+      guard('host.submitInputGuarded');
+      const port = backend.submitInputGuarded;
+      if (port === undefined) {
+        throw new HelmError(
+          'not_supported',
+          '当前宿主未接线自动化 guarded 提交端口（host.submitInputGuarded）',
+          501,
+          { conversationId: id },
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.submitInputGuarded', () =>
+        Promise.resolve(port(id, text, opts, mutationGuard)),
+      );
+    },
 
     // 8. conversations
     createConversation: (init) => tracked('host.createConversation', () => backend.createConversation(init)),
@@ -557,6 +574,21 @@ export function wrapHostApi(
       tracked('host.getConversationDetail', () => backend.getConversationDetail(id, options)),
     updateConversation: (id, patch) => tracked('host.updateConversation', () => backend.updateConversation(id, patch)),
     abortConversation: (id) => tracked('host.abortConversation', () => backend.abortConversation(id)),
+    abortConversationGuarded: (id, mutationGuard) => {
+      guard('host.abortConversationGuarded');
+      const port = backend.abortConversationGuarded;
+      if (port === undefined) {
+        throw new HelmError(
+          'not_supported',
+          '当前宿主未接线自动化 guarded 中止端口（host.abortConversationGuarded）',
+          501,
+          { conversationId: id },
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.abortConversationGuarded', () =>
+        Promise.resolve(port(id, mutationGuard)),
+      );
+    },
     getConversationOwnership: (id) => {
       guard('host.getConversationOwnership');
       return backend.getConversationOwnership(id);

@@ -31,6 +31,7 @@ import {
   type AskResult,
   type BeforeTurnHookPayload,
   type ConversationSummary,
+  type GuardedMutationExpectation,
   type MaybePromise,
   type PluginDefinition,
   type PluginToolSpec,
@@ -92,6 +93,46 @@ class MemoryDocStore implements PluginDocStore {
 
   async flush(): Promise<void> {}
 }
+/** 构造 watch 用的内核同构 guarded 端口（存在/归属/水位复核 + 记录）。 */
+function makeGuardedPorts(
+  conversations: Map<number, ConversationSummary>,
+  ownershipOf: (id: number) => 'helm' | 'bot' | 'human',
+  onAbort: (id: number) => void,
+  onSubmit: (id: number, text: string, o?: { origin?: string; whenBusy?: string }) => void,
+): Pick<PluginHostBackend, 'abortConversationGuarded' | 'submitInputGuarded'> {
+  const assertGuard = (id: number, guard?: GuardedMutationExpectation): void => {
+    const conv = conversations.get(id)
+    if (!conv) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+    const ownedBy = ownershipOf(id)
+    if (ownedBy === 'human' || (guard?.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
+      throw new HelmError(
+        'ownership_conflict',
+        `会话 ${id} 当前归属 ${ownedBy}，拒绝自动化变更（human 红线）`,
+        409,
+        { conversationId: id, currentOwnership: ownedBy },
+      )
+    }
+    if (guard?.expectedStateSeq !== undefined && conv.stateChangeSeq !== guard.expectedStateSeq) {
+      throw new HelmError(
+        'state_seq_conflict',
+        `会话 ${id} 权威水位 ${conv.stateChangeSeq} 与期望 ${guard.expectedStateSeq} 不一致（探针事实已过期）`,
+        409,
+        { conversationId: id, currentSeq: conv.stateChangeSeq, expectedSeq: guard.expectedStateSeq },
+      )
+    }
+  }
+  return {
+    abortConversationGuarded: async (id, guard) => {
+      assertGuard(id, guard)
+      onAbort(id)
+    },
+    submitInputGuarded: async (id, text, o, guard) => {
+      assertGuard(id, guard)
+      onSubmit(id, text, o)
+    },
+  }
+}
+
 function makeRecorded(): Recorded {
   return {
     notifications: [],
@@ -173,6 +214,12 @@ async function makeHarness(opts: HarnessOptions = {}) {
     submitInput: async (conversationId, text, o) => {
       recorded.submits.push({ conversationId, text, origin: o?.origin, whenBusy: o?.whenBusy })
     },
+    ...makeGuardedPorts(
+      conversations,
+      (id) => opts.ownership?.(id) ?? ownership.get(id) ?? (id === 1 ? 'human' : 'helm'),
+      (id) => recorded.aborts.push(id),
+      (id, text, o) => recorded.submits.push({ conversationId: id, text, origin: o?.origin, whenBusy: o?.whenBusy }),
+    ),
     createConversation: async (init) => {
       const id = conversations.size + 1
       const summary = makeConversationSummary(id, { title: init.title ?? 'new', profileId: init.profileId ?? 'assistant' })
@@ -516,6 +563,12 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     submitInput: async (conversationId, text, o) => {
       recorded.submits.push({ conversationId, text, origin: o?.origin, whenBusy: o?.whenBusy })
     },
+    ...makeGuardedPorts(
+      conversations,
+      (id) => opts.ownership?.(id) ?? 'helm',
+      (id) => recorded.aborts.push(id),
+      (id, text, o) => recorded.submits.push({ conversationId: id, text, origin: o?.origin, whenBusy: o?.whenBusy }),
+    ),
     createConversation: async () => makeConversationSummary(1),
     listConversations: () => [...conversations.values()],
     getConversation: (id) => {
@@ -825,6 +878,8 @@ test('watchdog_inspect：原生会话现查归属与时间线；外部 probe 只
 
 test('watchdog_recover/abort：owned 会话实际调用注入依赖；human/root/中枢/自身拒绝 403', { timeout: 60_000 }, async () => {
   const h = await makeHarness({ ownership: (id) => (id === 99 ? 'human' : id === 1 ? 'human' : 'helm') })
+  h.conversations.set(55, makeConversationSummary(55))
+  h.conversations.set(56, makeConversationSummary(56))
   await h.host.executeTool('watchdog_recover', { conversationId: 55, hint: '请重试' }, { conversationId: h.watchdogId })
   assert.equal(h.recorded.submits.filter((s) => s.conversationId === 55).length, 1)
 
@@ -849,6 +904,7 @@ test('专属工具仅实际 watchdog 会话可用：同 profile 直聊与非 wat
   h.conversations.set(321, makeConversationSummary(321, { profileId: 'watchdog' }))
   // 非 watchdog 会话（普通 finance 会话）调用工具：scope 先拦（工具不可见）。
   h.conversations.set(322, makeConversationSummary(322, { profileId: 'finance' }))
+  h.conversations.set(55, makeConversationSummary(55))
   await assert.rejects(
     h.host.executeTool('watchdog_abort', { conversationId: 55 }, { conversationId: 322 }),
     (err: unknown) => err instanceof HelmError && err.code === 'conversation_scope_violation',
@@ -1191,14 +1247,21 @@ test('回归：未标 targetKind 的数字 pane / 数字 targetId 不猜类别�
   assert.ok(h2.recorded.notifications.some((n) => n.body.includes('缺少显式 conversationId')))
 })
 
-test('回归：过期 native seq（探针 10、现查 11）不中止新回合，仅放弃通知', { timeout: 60_000 }, async () => {
+test('回归：过期 native seq（探针 10、现查 11）不中止新回合，内核 guarded 复核拒绝后放弃', { timeout: 60_000 }, async () => {
   // injectNativeAsExternal：探针 seq 与宿主现查解耦，可构造过期事实。
   const h = await makeHarness({ injectNativeAsExternal: true })
-  // 现查会话已推进到 seq=11，探针仍报 10：旧授权不得中止新回合。
+  // 现查会话已推进到 seq=11，探针仍报 10：旧授权不得中止新回合。seq CAS 由
+  // 内核 guarded 端口在生效点原子复核（fake 端口同构）——state_seq_conflict
+  // 属确定性放弃，保留水位标记仅限频告知。
   h.conversations.set(55, makeConversationSummary(55, { status: 'working', stateChangeSeq: 11 }))
   await h.tick([nativeProbe(55, { stalledMs: 600_001, status: 'working', stateChangeSeq: 10 })])
   assert.equal(h.recorded.aborts.length, 0, '过期水位不得中止新回合')
-  assert.ok(h.recorded.notifications.some((n) => n.title.includes('跳过自动中止') && n.body.includes('已过期')))
+  assert.ok(
+    h.recorded.notifications.some(
+      (n) => n.title.includes('放弃自动中止') && n.body.includes('state_seq_conflict') && n.body.includes('已过期'),
+    ),
+    '应通知内核守卫拒绝（state_seq_conflict）',
+  )
 })
 
 test('回归：wake 提交失败/未就绪不消耗水位，下一 tick 补投后恰占一次坑', { timeout: 60_000 }, async () => {

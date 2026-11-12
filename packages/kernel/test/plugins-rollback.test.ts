@@ -574,6 +574,23 @@ async function makeWatchdogHarness(opts: {
       }
       recorded.aborts.push(id)
     },
+    abortConversationGuarded: async (id, guard) => {
+      // 内核同构复核（存在性 + 归属 + 水位）后与普通 abort 同一注入通道。
+      const conv = conversations.get(id)
+      if (!conv) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+      const ownedBy = opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helm')
+      if (ownedBy === 'human' || (guard?.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
+        throw new HelmError('ownership_conflict', `会话 ${id} 当前归属 ${ownedBy}`, 409, { conversationId: id })
+      }
+      if (guard?.expectedStateSeq !== undefined && conv.stateChangeSeq !== guard.expectedStateSeq) {
+        throw new HelmError('state_seq_conflict', `会话 ${id} 水位不一致`, 409, { conversationId: id })
+      }
+      if (abortShouldFail) {
+        recorded.abortErrors.push(id)
+        throw new HelmError('abort_failed', '测试注入：abort 调用失败', 500)
+      }
+      recorded.aborts.push(id)
+    },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},

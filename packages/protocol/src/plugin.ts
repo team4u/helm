@@ -783,6 +783,23 @@ export interface ConversationActivity {
   consecutiveErrors: number
 }
 
+/**
+ * 自动化变更守卫期望（guarded mutation）：调用方携带授权时点的事实
+ * （探针 ownedBy / stateChangeSeq），内核在会话串行域内、于第一个不可逆
+ * 动作（SDK abort/submit 调用）之前同步复核；复核失败抛 409/404 且绝不
+ * 执行变更（Watchdog human-owned 红线的内核执行层兑现）。
+ */
+export interface GuardedMutationExpectation {
+  /**
+   * 授权时点的归属（探针事实）。内核硬性要求当前归属属自动化域
+   * （'bot' | 'helm'，'human' 永远拒绝）；提供具体值时进一步要求当前
+   * 归属与之精确相符（bot/helm 间移交视为新事实，保守拒绝）。
+   */
+  expectedOwnership?: 'bot' | 'helm'
+  /** 授权时点的权威水位（stateChangeSeq）；提供时当前值必须相等（CAS）。 */
+  expectedStateSeq?: number
+}
+
 /** 节点 IPC 机制端口（经内核 EnvFabric 跨节点 Unix Socket / Named Pipe；不静默回退本机）。 */
 export interface HelmHostNodeIpcPort {
   /** 节点是否在线（'local' 恒 true）。 */
@@ -927,6 +944,26 @@ export interface HelmHostApi {
       replaceFromEntryId?: number
     },
   ): Promise<void>
+  /**
+   * 自动化 guarded 提交（Watchdog 红线内核执行层）：全部准备工作（input 钩子、
+   * 模型解析、附件授权）完成后，在提交点（SDK submit 调用前、最后一个 await
+   * 之后）同步复核会话存在性、归属（严禁 human）与可选 CAS 水位；复核失败
+   * 抛 404/409 且不产生提交副作用（input 钩子可能已观察过输入文本，与普通
+   * 拒绝路径同口径）。不支持 replaceFromEntryId（自动化不重写历史）。guard
+   * 缺省时仅强制 human 红线（归属属自动化域）。
+   */
+  submitInputGuarded(
+    conversationId: number,
+    text: string,
+    opts?: {
+      origin?: InputOrigin
+      whenBusy?: WhenBusy
+      meta?: Record<string, unknown>
+      /** 跨重启幂等提交标识（重复提交同一 requestId 自动跳过）。 */
+      requestId?: string
+    },
+    guard?: GuardedMutationExpectation,
+  ): Promise<void>
   createConversation(init: ConversationInit): Promise<ConversationSummary>
   listConversations(filter?: { profileId?: string; tag?: string; status?: ConversationStatus }): ConversationSummary[]
   /** 读取单个会话摘要；不存在时抛 HelmError。 */
@@ -940,6 +977,13 @@ export interface HelmHostApi {
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
   /** 中止指定会话的在途执行。 */
   abortConversation(id: number): Promise<void>
+  /**
+   * 自动化 guarded 中止（Watchdog 红线内核执行层）：在会话串行域内、于
+   * 第一个不可逆动作（SDK abort 调用）前同步复核会话存在性、归属（严禁
+   * human）与可选 CAS 水位；复核失败抛 404 not_found / 409 ownership_conflict
+   * / 409 state_seq_conflict 且绝不发起中止。
+   */
+  abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void>
   /** 会话归属权现读（Watchdog 红线判定唯一可信来源；未标记一律 human）。 */
   getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
   /** 会话活动事实（stalledMs / consecutiveErrors；探针口径）。 */

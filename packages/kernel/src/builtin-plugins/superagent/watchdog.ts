@@ -21,7 +21,10 @@
  * - Watchdog 自身（id 或 profileId=watchdog）绝不做探针目标；其 failed/aborted
  *   仅通知（turn_settled），防自巡检死循环；
  * - ownedBy=human 与一切外部终端窗格只读：只允许 notify / 诊断，绝无按键、
- *   恢复注入、自动中止；mutation 前一律现查 ctx.host.getConversationOwnership；
+ *   恢复注入、自动中止；一切自动变更（abort / submitInput）统一走内核
+ *   guarded 端口（abortConversationGuarded / submitInputGuarded）——探针
+ *   ownedBy + stateChangeSeq 随调用传入，内核在第一个不可逆动作前的同一
+ *   串行域内原子复核，human 红线不再依赖插件层 check-then-act；
  * - 外部窗格的中止只能经由核对 facts.parentConversationId 指向的 owned 原生
  *   工作会话后由 L2/规则对该会话 abort，由 Herdr 原取消链清理；
  * - 外部探针 facts.stalledBasis='since-last-state-change'：stalledMs 只反映
@@ -32,6 +35,7 @@ import {
   HelmError,
   type AskResult,
   type BeforeTurnHookPayload,
+  type GuardedMutationExpectation,
   type HelmPluginContext,
   type TurnSettledPayload,
 } from '@helm/protocol'
@@ -944,16 +948,15 @@ export function registerSuperAgentWatchdog(
   }
 
   /**
-   * 0-Token 自动中止：守卫全部通过后才写去重标记（守卫失败不消耗水位），
-   * 执行前现查归属与在途状态——探针事实可能已过期（human 接管/已结束/
-   * 已删除都如实降级为限频通知）。
+   * 0-Token 自动中止：守卫全部通过后才写去重标记（守卫失败不消耗水位）。
    *
-   * human 红线残余窗口（如实记录）：归属检查到 abortConversation 调用之间
-   * 全部同步（无事件循环让出），插件侧无 TOCTOU；但内核 abortConversation
-   * 内部先 await harness.conversation 才调用 conversation.abort 生效，该
-   * await 让出期间人类接管（markOwnership 不推进 stateChangeSeq，seq 复验
-   * 拦不住纯归属翻转）仍会被中止。插件层无法进一步收窄（复验与生效点之间
-   * 必隔内核内部 await）；彻底关闭需内核原子 check-and-abort（跨组后续项）。
+   * 原子性（human 红线）：探针事实（ownedBy + stateChangeSeq）随调用传入内核
+   * abortConversationGuarded，内核在 SDK abort 调用（第一个不可逆动作）前的
+   * 同一串行域内同步复核——归属翻转/水位推进在任意 await 窗口内发生都会被
+   * 409 ownership_conflict / state_seq_conflict 拒绝，绝不执行中止。插件层
+   * 现查仅作快速失败与诊断；不再存在插件检查与内核生效点之间的 TOCTOU。
+   * 目标已变（冲突/缺失）与真实失败区分：前者是确定性放弃（保留水位标记，
+   * 限频告知），后者撤销标记可重试。
    */
   async function autoAbort(finding: Finding): Promise<void> {
     const conversationId = finding.conversationId
@@ -990,19 +993,22 @@ export function registerSuperAgentWatchdog(
       giveUp('info', 'Watchdog 跳过自动中止', `${finding.evidence}；当前状态 ${current.status} 无在途回合`)
       return
     }
-    // 现查权威水位：探针 seq 已过期意味着这是新回合/新事件，旧授权不得中止新回合。
-    if (finding.stateChangeSeq !== undefined && current.stateChangeSeq !== finding.stateChangeSeq) {
-      giveUp(
-        'info',
-        'Watchdog 跳过自动中止',
-        `${finding.evidence}；探针水位 ${finding.stateChangeSeq} 已过期（现查 ${current.stateChangeSeq}），不中止新回合`,
-      )
-      return
-    }
     markFired(finding.key, 'abort', seq)
     try {
-      await ctx.host.abortConversation(conversationId)
+      // 探针事实（ownedBy + stateChangeSeq）随调用传入：内核在 SDK abort 调用
+      // 前的同一串行域内原子复核（上方插件层现查仅快速失败）。
+      await ctx.host.abortConversationGuarded(conversationId, guardOf(finding, { withSeq: true }))
     } catch (err) {
+      if (isGuardConflict(err)) {
+        // 内核守卫拒绝：授权事实在生效点已失效（人类接管/水位推进/目标删除）。
+        // 确定性放弃——保留水位标记，下一 tick 按新事实重新评估。
+        giveUp(
+          'warning',
+          'Watchdog 放弃自动中止',
+          `${finding.evidence}；内核守卫拒绝：${describeError(err)}`,
+        )
+        return
+      }
       // 中止失败：撤销消费标记（与 bridge 失败语义一致），下一 tick 可重试；
       // 如实通知失败原因，绝不记成功。
       unmarkFired(finding.key, 'abort')
@@ -1148,11 +1154,12 @@ export function registerSuperAgentWatchdog(
       return
     }
     // 结算后现查：归属仍 owned、仍 blocked、本回合未结算（completionSeq 未变）。
-    // human 红线残余窗口（与 autoAbort 同构，如实记录）：此处检查到
-    // submitInput/abortConversation 调用之间全部同步，插件侧无 TOCTOU；但两个
-    // 内核入口内部均先 await harness.conversation 才产生副作用，该让出期间
-    // 人类接管（纯归属翻转不推进 stateChangeSeq/completionSeq，复验拦不住）
-    // 仍会命中。插件层无法进一步收窄；彻底关闭需内核原子守卫（跨组后续项）。
+    // 原子性（human 红线）：最终变更经内核 guarded 端口执行（探针 ownedBy 随
+    // 调用传入）；内核在 SDK abort/submit 调用（第一个不可逆动作）前的同一
+    // 串行域内同步复核归属——上方插件检查与内核生效点之间任意 await 窗口内
+    // 的人类接管都会被 409 拒绝，不再有插件层 TOCTOU 残余窗口。
+    // 注：Ask 创建/回答会推进 stateChangeSeq，故此处不携带探针 seq（机械比对
+    // 会误杀一切授权）；completionSeq 未变由下方检查保证。
     // 关闭中不执行任何变更（stop 已取消/将取消在途 Ask）。
     if (closing || ctx.host.isClosing) {
       notify('info', 'Watchdog 放弃执行授权', '内核/插件正在关闭，不执行授权变更', conversationId)
@@ -1185,32 +1192,64 @@ export function registerSuperAgentWatchdog(
     if (decision === 'recover') {
       void runtime
         .track('watchdog:bridge-recover', () =>
-          ctx.host.submitInput(
+          ctx.host.submitInputGuarded(
             conversationId,
             'Watchdog 恢复提示：上轮回合疑似阻塞，请检查在途工具与子代理状态，必要时重试或如实报告失败。',
             { origin: 'agent', whenBusy: 'steer' },
+            guardOf(finding),
           ),
         )
         .then(() => {
           notify('info', 'Watchdog 已注入恢复提示', `${finding.evidence}；已向会话 ${conversationId} 提交 agent 恢复输入`, conversationId)
         })
         .catch((err: unknown) => {
-          notify('error', 'Watchdog 恢复提示提交失败', `${finding.evidence}；${describeError(err)}`, conversationId)
+          notify(
+            isGuardConflict(err) ? 'warning' : 'error',
+            isGuardConflict(err) ? 'Watchdog 放弃执行授权' : 'Watchdog 恢复提示提交失败',
+            `${finding.evidence}；${describeError(err)}`,
+            conversationId,
+          )
         })
       return
     }
     void runtime
-      .track('watchdog:bridge-abort', () => ctx.host.abortConversation(conversationId))
+      .track('watchdog:bridge-abort', () =>
+        ctx.host.abortConversationGuarded(conversationId, guardOf(finding)),
+      )
       .then(() => {
         notify('error', 'Watchdog 已按授权中止会话', `${finding.evidence}；已中止会话 ${conversationId}`, conversationId)
       })
       .catch((err: unknown) => {
-        notify('error', 'Watchdog 授权中止失败', `${finding.evidence}；${describeError(err)}`, conversationId)
+        notify(
+          isGuardConflict(err) ? 'warning' : 'error',
+          isGuardConflict(err) ? 'Watchdog 放弃执行授权' : 'Watchdog 授权中止失败',
+          `${finding.evidence}；${describeError(err)}`,
+          conversationId,
+        )
       })
   }
 
   function describeError(err: unknown): string {
-    return err instanceof Error ? err.message : String(err)
+    // HelmError 附带稳定错误码（内核守卫拒绝的通知可被程序化判别）。
+    return err instanceof HelmError ? `[${err.code}] ${err.message}` : err instanceof Error ? err.message : String(err)
+  }
+
+  /** 探针事实 → 内核 guarded 变更期望（ownedBy 仅取自动化域；human 走不到这里）。 */
+  function guardOf(finding: Finding, extra: { withSeq?: boolean } = {}): GuardedMutationExpectation {
+    return {
+      ...(finding.ownedBy === 'bot' || finding.ownedBy === 'helm' ? { expectedOwnership: finding.ownedBy } : {}),
+      ...(extra.withSeq === true && finding.stateChangeSeq !== undefined
+        ? { expectedStateSeq: finding.stateChangeSeq }
+        : {}),
+    }
+  }
+
+  /** 内核守卫拒绝（目标已变）与真实失败区分：冲突/缺失是确定性放弃，可重试。 */
+  function isGuardConflict(err: unknown): boolean {
+    return (
+      err instanceof HelmError &&
+      (err.code === 'ownership_conflict' || err.code === 'state_seq_conflict' || err.code === 'not_found')
+    )
   }
 
   // ---------------------------------------------------------------------------
@@ -1372,17 +1411,38 @@ export function registerSuperAgentWatchdog(
     return redactJsonValue(value, (text) => ctx.host.redact(text))
   }
 
-  async function recoverCore(input: { conversationId: number; hint: string }, label: string): Promise<Record<string, unknown>> {
+  /**
+   * L2 工具变更统一走内核 guarded 端口：归属（严禁 human）在生效点原子复核，
+   * 可选 expectedStateSeq 由模型携带（watchdog_inspect 现查事实）作 CAS。
+   */
+  function toolGuard(input: { expectedStateSeq?: number }): GuardedMutationExpectation {
+    return input.expectedStateSeq !== undefined ? { expectedStateSeq: input.expectedStateSeq } : {}
+  }
+
+  async function recoverCore(
+    input: { conversationId: number; hint: string; expectedStateSeq?: number },
+    label: string,
+  ): Promise<Record<string, unknown>> {
     assertOwnedTarget(input.conversationId)
     await runtime.track(label, () =>
-      ctx.host.submitInput(input.conversationId, input.hint, { origin: 'agent', whenBusy: 'steer' }),
+      ctx.host.submitInputGuarded(
+        input.conversationId,
+        input.hint,
+        { origin: 'agent', whenBusy: 'steer' },
+        toolGuard(input),
+      ),
     )
     return { conversationId: input.conversationId, submitted: true }
   }
 
-  async function abortCore(input: { conversationId: number }, label: string): Promise<Record<string, unknown>> {
+  async function abortCore(
+    input: { conversationId: number; reason?: string; expectedStateSeq?: number },
+    label: string,
+  ): Promise<Record<string, unknown>> {
     assertOwnedTarget(input.conversationId)
-    await runtime.track(label, () => ctx.host.abortConversation(input.conversationId))
+    await runtime.track(label, () =>
+      ctx.host.abortConversationGuarded(input.conversationId, toolGuard(input)),
+    )
     notify('warning', 'Watchdog 会话已被手动中止', `会话 ${input.conversationId} 经 watchdog_abort 中止（操作方见审计日志）`, input.conversationId)
     return { conversationId: input.conversationId, aborted: true }
   }
@@ -1421,6 +1481,11 @@ export function registerSuperAgentWatchdog(
     properties: {
       conversationId: { type: 'integer', minimum: 1 },
       hint: { type: 'string', minLength: 1, description: '恢复提示文本（以 agent 来源提交给目标会话）' },
+      expectedStateSeq: {
+        type: 'integer',
+        minimum: 0,
+        description: '可选 CAS 水位（watchdog_inspect 现查 stateChangeSeq）；提供后目标状态已变则拒绝',
+      },
     },
     required: ['conversationId', 'hint'],
     additionalProperties: false,
@@ -1431,6 +1496,11 @@ export function registerSuperAgentWatchdog(
     properties: {
       conversationId: { type: 'integer', minimum: 1 },
       reason: { type: 'string', minLength: 1 },
+      expectedStateSeq: {
+        type: 'integer',
+        minimum: 0,
+        description: '可选 CAS 水位（watchdog_inspect 现查 stateChangeSeq）；提供后目标状态已变则拒绝',
+      },
     },
     required: ['conversationId'],
     additionalProperties: false,
@@ -1459,9 +1529,10 @@ export function registerSuperAgentWatchdog(
     },
   })
 
-  ctx.tool<{ conversationId: number; hint: string }>({
+  ctx.tool<{ conversationId: number; hint: string; expectedStateSeq?: number }>({
     name: WATCHDOG_TOOL_RECOVER,
-    description: '向 owned（helm/bot）原生会话提交恢复提示（agent 来源，不等待模型回合）；执行前现查归属，human 目标拒绝。',
+    description:
+      '向 owned（helm/bot）原生会话提交恢复提示（agent 来源，不等待模型回合）；归属经内核 guarded 端口在生效点原子复核，human 目标拒绝。',
     inputSchema: recoverSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
     async execute(input, context) {
@@ -1470,9 +1541,10 @@ export function registerSuperAgentWatchdog(
     },
   })
 
-  ctx.tool<{ conversationId: number; reason?: string }>({
+  ctx.tool<{ conversationId: number; reason?: string; expectedStateSeq?: number }>({
     name: WATCHDOG_TOOL_ABORT,
-    description: '中止 owned（helm/bot）原生会话；执行前现查归属，human/root/中枢/巡检自身拒绝。外部窗格只能经由其 owned 父会话间接中止。',
+    description:
+      '中止 owned（helm/bot）原生会话；归属经内核 guarded 端口在生效点原子复核，human/root/中枢/巡检自身拒绝。外部窗格只能经由其 owned 父会话间接中止。',
     inputSchema: abortSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
     async execute(input, context) {
@@ -1496,9 +1568,9 @@ export function registerSuperAgentWatchdog(
     },
   })
 
-  ctx.action<{ conversationId: number; hint: string }, Record<string, unknown>>({
+  ctx.action<{ conversationId: number; hint: string; expectedStateSeq?: number }, Record<string, unknown>>({
     id: WATCHDOG_TOOL_RECOVER,
-    description: '向 owned 原生会话提交恢复提示（agent 来源，不等待模型回合）',
+    description: '向 owned 原生会话提交恢复提示（agent 来源，不等待模型回合；内核 guarded 原子复核归属）',
     inputSchema: recoverSchema,
     outputSchema: mutationOutputSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
@@ -1508,9 +1580,9 @@ export function registerSuperAgentWatchdog(
     },
   })
 
-  ctx.action<{ conversationId: number; reason?: string }, Record<string, unknown>>({
+  ctx.action<{ conversationId: number; reason?: string; expectedStateSeq?: number }, Record<string, unknown>>({
     id: WATCHDOG_TOOL_ABORT,
-    description: '中止 owned 原生会话（human/root/中枢/巡检自身拒绝）',
+    description: '中止 owned 原生会话（human/root/中枢/巡检自身拒绝；内核 guarded 原子复核归属）',
     inputSchema: abortSchema,
     outputSchema: mutationOutputSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
@@ -1632,9 +1704,13 @@ export interface WatchdogInspectInput {
 export interface WatchdogRecoverInput {
   conversationId: number
   hint: string
+  /** 可选 CAS 水位（提供后目标状态已变则拒绝）。 */
+  expectedStateSeq?: number
 }
 
 export interface WatchdogAbortInput {
   conversationId: number
   reason?: string
+  /** 可选 CAS 水位（提供后目标状态已变则拒绝）。 */
+  expectedStateSeq?: number
 }

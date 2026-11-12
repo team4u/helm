@@ -4,6 +4,7 @@
 import type {
   BackendPluginsLifecyclePort,
   ConversationScope,
+  GuardedMutationExpectation,
   HelmHostApi,
   HelmHostNodeIpcPort,
   HelmHostNodeFetchPort,
@@ -48,9 +49,24 @@ export interface PluginProviderPort {
  * secrets / setConfig 由 PluginHost 在此之上包装 pluginId 命名空间；isClosing
  * 归一为 getter；listPlugins 转发 PluginHost 自身 list()。
  */
-export type PluginHostBackend = Omit<HelmHostApi, 'manageConversation' | 'skills' | 'secrets' | 'setConfig' | 'isClosing' | 'listPlugins' | 'listUi' | 'nodeIpc' | 'plugins' | 'nodeFetch' | 'openTunnel'> & {
+export type PluginHostBackend = Omit<HelmHostApi, 'manageConversation' | 'skills' | 'secrets' | 'setConfig' | 'isClosing' | 'listPlugins' | 'listUi' | 'nodeIpc' | 'plugins' | 'nodeFetch' | 'openTunnel' | 'abortConversationGuarded' | 'submitInputGuarded'> & {
   /** 声明 pluginId 对会话的管理权；返回释放函数（受管期间删除保护）。 */
   manageConversation(id: number, pluginId: string): () => void;
+  /**
+   * 自动化 guarded 中止（内核原子守卫端口）：未接线时 ctx.host 调用显式
+   * 501，绝不静默回退普通 abortConversation（那会绕过 human 红线复核）。
+   */
+  abortConversationGuarded?(id: number, guard: GuardedMutationExpectation): Promise<void>;
+  /**
+   * 自动化 guarded 提交（内核原子守卫端口）：未接线时 ctx.host 调用显式
+   * 501，绝不静默回退普通 submitInput（那会绕过 human 红线复核）。
+   */
+  submitInputGuarded?(
+    conversationId: number,
+    text: string,
+    opts?: Parameters<HelmHostApi['submitInputGuarded']>[2],
+    guard?: GuardedMutationExpectation,
+  ): Promise<void>;
   skills: Omit<HelmHostApi['skills'], 'ensureSkill'> & {
     ensureSkill(asset: PluginSkillAsset, pluginId: string): Promise<void>;
   };
@@ -138,12 +154,14 @@ export type PluginPhase = 'idle' | 'defining' | 'deactivating';
  * 通用表达，不按插件 ID 特判。其余调用——含 spawnAgent/submitInput/
  * createConversation/dispatchTrigger/createAsk/execEnv/executionEnv/
  * completeText 等一切新工作入口——在窗口内同样拒绝：停用语义是拆毁收尾，
- * 不是继续干活的宽限期。
+ * 不是继续干活的宽限期。guarded 中止随普通中止一并放行（收尾取消链）；
+ * guarded 提交属于新工作入口，窗口内照拒。
  */
 export const STOP_WINDOW_HOST_CALLS: ReadonlySet<string> = new Set([
   'host.listConversations',
   'host.getConversation',
   'host.abortConversation',
+  'host.abortConversationGuarded',
   'host.cancelAsk',
   'host.emitEvent',
   'host.redact',
