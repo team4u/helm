@@ -264,8 +264,10 @@ export class ModelRegistry {
     }
     const unique: string[] = []
     for (const id of modelIds) {
-      if (typeof id !== 'string' || id === '' || id.includes('/')) {
-        throw new HelmError('validation_error', `模型 ID 必须为非空字符串且不含 '/'（模型 id 不含 provider 前缀）：${String(id)}`, 400)
+      // modelId 允许含 '/'：聚合网关（OpenRouter、magpie）的模型 id 本身就是
+      // 'vendor/model' 形态，斜杠是模型名的一部分，不带 provider 前缀。
+      if (typeof id !== 'string' || id === '') {
+        throw new HelmError('validation_error', `模型 ID 必须为非空字符串：${String(id)}`, 400)
       }
       if (!unique.includes(id)) unique.push(id)
     }

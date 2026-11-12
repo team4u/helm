@@ -28,10 +28,10 @@ interface Env {
   close(): Promise<void>
 }
 
-/** 双模型 faux provider：faux-1（默认启用）/ faux-2（禁用目标）。 */
+/** 双模型 faux provider：faux-1（默认启用）/ faux-2（禁用目标）；nested/model 验证含斜杠模型 id。 */
 async function makeEnv(): Promise<Env> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-'))
-  const faux = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
+  const faux = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }, { id: 'nested/model' }] })
   faux.setResponses([fauxAssistantMessage('ok')])
   const models = createModels()
   models.setProvider(faux.provider)
@@ -98,11 +98,11 @@ function configPath(env: Env): string {
 test('PUT /api/models/filter 设置禁用集，GET /api/models 标注 disabled 且 config.json 持久化', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    // 初始目录：两个模型均可用、无 disabled 标注。
+    // 初始目录：三个模型均可用、无 disabled 标注。
     const before = await call(env, 'GET', '/api/models')
     assert.equal(before.status, 200)
     const fauxEntries = before.body.models.filter((m: any) => m.provider === 'faux')
-    assert.equal(fauxEntries.length, 2)
+    assert.equal(fauxEntries.length, 3)
     assert.ok(fauxEntries.every((m: any) => m.disabled === undefined))
 
     // 设置禁用集：faux provider 禁用 faux-2。
@@ -190,9 +190,10 @@ test('校验边界：非法模型 id / 无 provider 携带禁用项 / 未知字�
     const noProvider = await call(env, 'PUT', '/api/models/filter', { disabledModels: ['x'] })
     assert.equal(noProvider.status, 400)
 
-    // 模型 id 含 '/'（不得携带 provider 前缀）。
-    const withSlash = await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux/faux-2'] })
-    assert.equal(withSlash.status, 400)
+    // 模型 id 含 '/' 合法（聚合网关模型名本身含斜杠），仅空串/非字符串拒绝。
+    const slashed = await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['nested/model'] })
+    assert.equal(slashed.status, 200)
+    assert.equal(slashed.body.catalog.models.find((m: { modelId: string }) => m.modelId === 'nested/model')?.disabled, true)
 
     // 空字符串模型 id。
     const emptyId = await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: [''] })
