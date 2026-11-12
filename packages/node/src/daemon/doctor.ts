@@ -7,23 +7,23 @@
  *    提示，绝不输出 token；
  * 2. privilege：当前账户为 root 或具备免密 sudo 时显式 warn（Agent bash 将
  *    拥有整机最高权限，生产/边缘环境建议受限账户），否则 ok；
- * 3. hub：向 hubUrl 发起一次真实 /ws/node?nodeId=<id> 握手并调用 register
- *    （附带健康快照），测量 RTT 后立即关闭连接；失败或未配置报 error；
+ * 3. hub：向 hubUrl 发起一次真实 /ws/node?nodeId=<id> WebSocket 握手，测量
+ *    RTT 后立即关闭连接。只探测到握手层，**绝不发送 register**：Hub 注册表
+ *    按 nodeId 单连接，同 nodeId register 会顶替（evict）在线守护连接并
+ *    误杀其在途命令——诊断必须是纯只读的；令牌有效性不由本检查判定，
+ *    以守护进程自身的注册/心跳结果为准；
  * 4. herdr_ipc：解析本机 Herdr IPC 端点并 net.connect（1s 超时）探测可达性；
  *    socket 不存在/未运行仅标 info（可选能力，不阻断基础节点执行）。
  */
 
 import net from 'node:net';
-import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { WebSocket } from 'ws';
-import { createBirpc } from 'birpc';
-import type { NodeRegisterResult } from '@helm/protocol';
 import { resolveHerdrIpcEndpoint } from './env-rpc-server.js';
-import { collectNodeHealth, readNodeIdentity, resolveNodeDataDir, type HubSideFunctions } from './index.js';
+import { readNodeIdentity, resolveNodeDataDir } from './index.js';
 
 export type NodeDoctorCheckStatus = 'ok' | 'warn' | 'error' | 'info';
 
@@ -176,14 +176,8 @@ async function checkPrivilege(
   return { id: 'privilege', status: 'ok', message: '当前账户不具备 root 或免密 sudo 权限（受限权限运行）' };
 }
 
-/** hub 检查：真实 /ws/node 握手 + register（附健康快照），测量 RTT 后立即关闭。 */
-async function checkHub(
-  hubUrl: string,
-  nodeId: string,
-  token: string,
-  dataDir: string,
-  connectTimeoutMs: number,
-): Promise<NodeDoctorCheck & { heartbeatMs?: number }> {
+/** hub 检查：真实 /ws/node 握手（零寄存、零顶替），测量 RTT 后立即关闭。 */
+async function checkHub(hubUrl: string, nodeId: string, connectTimeoutMs: number): Promise<NodeDoctorCheck> {
   let parsed: URL;
   try {
     parsed = new URL(hubUrl);
@@ -191,21 +185,14 @@ async function checkHub(
     return { id: 'hub', status: 'error', message: `Hub 地址无法解析：${hubUrl}` };
   }
   const wsUrl = `${parsed.protocol === 'https:' ? 'wss' : 'ws'}://${parsed.host}${parsed.pathname.replace(/\/+$/, '')}/ws/node?nodeId=${encodeURIComponent(nodeId)}`;
-  const health = await collectNodeHealth(dataDir).catch(() => undefined);
-  return await new Promise<NodeDoctorCheck & { heartbeatMs?: number }>((resolve) => {
+  return await new Promise<NodeDoctorCheck>((resolve) => {
     let settled = false;
-    let hubRpc: ReturnType<typeof createBirpc<HubSideFunctions, object>> | undefined;
     const started = Date.now();
     const socket = new WebSocket(wsUrl);
-    const finish = (check: NodeDoctorCheck & { heartbeatMs?: number }): void => {
+    const finish = (check: NodeDoctorCheck): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      try {
-        hubRpc?.$close();
-      } catch {
-        // 已关闭。
-      }
       try {
         socket.terminate();
       } catch {
@@ -218,70 +205,14 @@ async function checkHub(
       connectTimeoutMs,
     );
     socket.once('open', () => {
-      hubRpc = createBirpc<HubSideFunctions, object>(
-        {
-          register: async () => ({ ok: true, heartbeatMs: 15_000 }),
-          heartbeat: async () => true,
-          onEnvExecOutput: () => undefined,
-        },
-        {
-          post: (data) => {
-            if (socket.readyState !== WebSocket.OPEN) throw new Error('ws closed');
-            socket.send(JSON.stringify(data));
-          },
-          on: (callback) => {
-            socket.on('message', (raw) => {
-              const text = typeof raw === 'string' ? String(raw) : Buffer.from(raw as ArrayBuffer).toString('utf8');
-              try {
-                callback(JSON.parse(text) as never);
-              } catch {
-                // 非法帧按无响应处理，由外层超时兜底。
-              }
-            });
-          },
-          off: (callback) => {
-            socket.off('message', callback as never);
-          },
-          serialize: (data) => data,
-          deserialize: (data) => data as never,
-        },
-      );
-      void hubRpc
-        .register({
-          nodeId,
-          token,
-          hostname: os.hostname(),
-          platform: process.platform,
-          hubUrl,
-          ...(health !== undefined ? { health } : {}),
-        })
-        .then((result: NodeRegisterResult) => {
-          const rttMs = Date.now() - started;
-          if (result?.ok === true) {
-            finish({
-              id: 'hub',
-              status: 'ok',
-              message: `Hub 连通正常（${hubUrl}，往返 ${rttMs}ms）`,
-              details: { hubUrl, rttMs, heartbeatMs: result.heartbeatMs },
-              heartbeatMs: result.heartbeatMs,
-            });
-            return;
-          }
-          finish({
-            id: 'hub',
-            status: 'error',
-            message: `Hub 注册被拒绝（${result?.reason ?? 'invalid token'}）：${hubUrl}`,
-            details: { hubUrl },
-          });
-        })
-        .catch((error: unknown) => {
-          finish({
-            id: 'hub',
-            status: 'error',
-            message: `Hub 注册调用失败（${error instanceof Error ? error.message : String(error)}）：${hubUrl}`,
-            details: { hubUrl },
-          });
-        });
+      const rttMs = Date.now() - started;
+      finish({
+        id: 'hub',
+        status: 'ok',
+        // 如实声明探测边界：只读握手不校验令牌（register 会顶替在线守护连接）。
+        message: `Hub 连通正常（${hubUrl}，握手往返 ${rttMs}ms；只读探测未发送 register，不校验令牌）`,
+        details: { hubUrl, rttMs },
+      });
     });
     socket.once('unexpected-response', (_req, res) => {
       try {
@@ -301,7 +232,7 @@ async function checkHub(
     });
     socket.once('close', () => {
       if (!settled) {
-        finish({ id: 'hub', status: 'error', message: `Hub 连接在注册完成前关闭：${hubUrl}`, details: { hubUrl } });
+        finish({ id: 'hub', status: 'error', message: `Hub 连接在握手完成前关闭：${hubUrl}`, details: { hubUrl } });
       }
     });
   });
@@ -375,7 +306,7 @@ export async function runNodeDoctor(options: NodeDoctorOptions = {}): Promise<No
           : '未配置 Hub 地址（--hub、环境变量 HELM_HUB_URL 或既绑定身份的 hubUrl）',
     });
   } else {
-    checks.push(await checkHub(hubUrl, identity.nodeId, identity.token, dataDir, connectTimeoutMs));
+    checks.push(await checkHub(hubUrl, identity.nodeId, connectTimeoutMs));
   }
 
   checks.push(await checkHerdrIpc(env));

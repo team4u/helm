@@ -22,6 +22,7 @@ import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type { NodeUpgradeCheckResult, NodeUpgradeResult } from '@helm/protocol';
+import { killProcessTree } from './local-env.js';
 
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
 
@@ -70,6 +71,7 @@ export interface PerformNodeUpgradeOptions {
     release: StagedNodeRelease,
     context: { attemptId: string; previousVersion: string; targetVersion: string },
   ) => Promise<PreparedNodeReplacement>;
+  /** 排空口径回调：返回仍需等待收敛的在途操作数（exec + 隧道 + 一次性 IPC call）。 */
   getActiveExecCount?: () => number;
   setDraining?: (value: boolean) => void;
   drainTimeoutMs?: number;
@@ -458,8 +460,10 @@ function resolveNpmCommand(): { command: string; args: string[] } {
   );
 }
 
-/** 运行 npm（有界超时）；失败错误包含退出码与输出最后 40 行诊断。 */
-function runNpm(args: string[], cwd: string, timeoutMs: number): Promise<void> {
+/** 运行 npm（有界超时）；失败错误包含退出码与输出最后 40 行诊断。
+ * POSIX 独立进程组：npm 生命周期脚本孙进程与 npm 同组，超时整组 SIGKILL
+ * （复用 killProcessTree），不留孤儿继续写正被清理的 staging 目录。 */
+export function runNpm(args: string[], cwd: string, timeoutMs: number): Promise<void> {
   let npm: { command: string; args: string[] };
   try {
     npm = resolveNpmCommand();
@@ -471,7 +475,13 @@ function runNpm(args: string[], cwd: string, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(npm.command, fullArgs, { cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, shell: false });
+      child = spawn(npm.command, fullArgs, {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+        windowsHide: true,
+        shell: false,
+      });
     } catch (error) {
       reject(new Error(`无法启动 ${displayCmd}（${npm.command}）：${error instanceof Error ? error.message : String(error)}`));
       return;
@@ -494,7 +504,8 @@ function runNpm(args: string[], cwd: string, timeoutMs: number): Promise<void> {
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill('SIGKILL');
+      // 杀整个进程组（npm + sh + 生命周期脚本孙进程）；单杀 npm 会留孤儿。
+      if (child.pid !== undefined) killProcessTree(child.pid);
       reject(new Error(`${displayCmd} 超时（${timeoutMs}ms）被终止。输出最后 ${NPM_OUTPUT_DIAG_LINES} 行：\n${lastLines(`${stdout}\n${stderr}`, NPM_OUTPUT_DIAG_LINES)}`));
     }, timeoutMs);
     child.on('error', (error) => finish(new Error(`${displayCmd} 启动失败：${error.message}`)));
@@ -774,8 +785,16 @@ export async function stageReleaseFromNpm(
 
     return { version: targetVersion, releaseDir: candidateDir, entryPath: finalEntry, cliBinDir: finalBin };
   } catch (error) {
-    // 只清理本次 staging（未改名的半成品）；历史候选一律保留。
-    await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+    // 只清理本次 staging（未改名的半成品）；历史候选一律保留。清理失败
+    // 不吞：把残留目录附注到错误消息（保留原错误类不被包装，升级事务
+    // 依赖 instanceof 判定回滚语义）。
+    try {
+      await fs.rm(stagingDir, { recursive: true, force: true });
+    } catch (rmError) {
+      if (error instanceof Error) {
+        error.message += `；staging 清理失败（${rmError instanceof Error ? rmError.message : String(rmError)}），残留目录待人工处理：${stagingDir}`;
+      }
+    }
     throw error;
   }
 }
@@ -889,7 +908,8 @@ export async function performNodeUpgrade(
         force: options?.force,
       });
 
-      // 进入排空：停止受理新命令，等待已受理 exec 全部结束（不强杀）。
+      // 进入排空：停止受理新命令（envExec/隧道/IPC call/IPC subscribe），
+      // 等待已受理 exec 与 IPC 调用全部结束（不强杀；长驻订阅不等待）。
       options?.setDraining?.(true);
 
       const getActiveExecCount = options?.getActiveExecCount ?? (() => 0);

@@ -9,13 +9,17 @@
  *     {type:'helm-node.activate', attemptId, version, previousVersion, pid}，
  *     等候选本机 {type:'helm-node.activated'} 确认才 resolve——Hub ACK 不作
  *     为本机 IPC 成功条件（候选侧 confirmUpgrade 本地落地后异步重试 Hub）；
- *  3) activate 发出后确认丢失（断开/超时/候选退出）只抛
- *     UpgradeCommitUnconfirmedError：绝不 kill 候选、绝不回滚 pid——候选
- *     可能已向 Hub 上报提交，反向回滚会让已成功的升级被撤销。
+ *  3) activate 发出后的确认丢失分两类：
+ *     - 写入失败（send 抛错/回调带错）＝确定未送达：候选永远不可能激活或
+ *       向 Hub 提交，抛普通错误走安全回滚（abort 杀候选 + CAS 还原旧 pid，
+ *       旧宿主继续服务），不留 10 分钟 pendingActivation 空窗；
+ *     - 已写入但回执丢失（断开/超时/候选退出）＝送达状态未知：只抛
+ *       UpgradeCommitUnconfirmedError，绝不 kill 候选、绝不回滚 pid——候选
+ *       可能已向 Hub 上报提交，反向回滚会让已成功的升级被撤销。
  *
- * 确定性未提交（候选显式 activate-rejected，或 activate 尚未发出的任何失败）
- * 才允许 abort()：杀自有 child 并按 instanceId CAS 还原旧 pid；留档已被他人
- * 接管时不动（绝不误删他人的 node.pid）。
+ * 确定性未提交（候选显式 activate-rejected，activate 写入失败，或 activate
+ * 尚未发出的任何失败）才允许 abort()：杀自有 child 并按 instanceId CAS
+ * 还原旧 pid；留档已被他人接管时不动（绝不误删他人的 node.pid）。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import fsp from 'node:fs/promises';
@@ -256,17 +260,27 @@ export async function prepareNodeReplacement(
   child.unref();
 
   // —— activate/ack 状态机 ————————————————————————————————————————
-  type Phase = 'ready' | 'activating' | 'activated' | 'rejected' | 'lost' | 'dead';
+  type Phase = 'ready' | 'activating' | 'activated' | 'rejected' | 'unsent' | 'lost' | 'dead';
   let phase: Phase = 'ready';
   let activateSent = false;
+  /** activate 写入结果：undefined＝未发出或回调未回；true＝已写入通道；false＝写入失败（确定未送达）。 */
+  let activateWritten: boolean | undefined;
+  /** 写入回调未回时候选退出：等回调定性（失败→unsent；成功→dead）。 */
+  let exitWhileWritePending = false;
   let pidWritten = false;
   let oldRecord: HandoffPidRecord | null = null;
   let rejectReason = '';
-  type AckOutcome = 'activated' | 'rejected' | 'lost' | 'dead' | 'timeout';
+  let unsentReason = '';
+  type AckOutcome = 'activated' | 'rejected' | 'unsent' | 'lost' | 'dead' | 'timeout';
   let settleAck: ((outcome: AckOutcome) => void) | undefined;
   const finishAck = (outcome: AckOutcome): void => {
     if (phase !== 'activating') return;
-    phase = outcome === 'activated' ? 'activated' : outcome === 'rejected' ? 'rejected' : outcome === 'dead' ? 'dead' : 'lost';
+    phase =
+      outcome === 'activated' ? 'activated'
+        : outcome === 'rejected' ? 'rejected'
+          : outcome === 'unsent' ? 'unsent'
+            : outcome === 'dead' ? 'dead'
+              : 'lost';
     settleAck?.(outcome);
     settleAck = undefined;
   };
@@ -282,17 +296,21 @@ export async function prepareNodeReplacement(
   };
   child.on('message', onAckMessage);
   child.once('exit', () => {
-    if (phase === 'activating') finishAck('dead');
-    else if (phase === 'ready') phase = 'dead';
+    if (phase === 'activating') {
+      // 写入结果未回时不立即定性：通道关闭会触发 send 回调（失败→unsent
+      // 安全回滚；成功→dead 按未确认处理）；已写入则直接按候选退出处理。
+      if (activateWritten === true) finishAck('dead');
+      else exitWhileWritePending = true;
+    } else if (phase === 'ready') phase = 'dead';
   });
-  child.once('disconnect', () => {
-    if (phase === 'activating') finishAck('lost');
-  });
+  // disconnect 不直接定性为 lost：通道关闭会触发 send 回调给出确定的写入结果
+  //（失败→unsent；成功→等 activated 或超时按未确认处理），避免把「确定未
+  // 送达」误归入「送达状态未知」而放弃快速回滚。
 
   const commit = async (): Promise<void> => {
     if (phase === 'activated') return; // 幂等
     if (phase !== 'ready') {
-      throw new Error(`候选不在可提交状态（${phase}${phase === 'dead' ? '：候选已退出' : ''}），activate 未发出`);
+      throw new Error(`候选不在可提交状态（${phase}${phase === 'dead' ? '：候选已退出或 IPC 通道断开' : ''}），activate 未发出`);
     }
     if (!child.connected) {
       phase = 'dead';
@@ -322,10 +340,19 @@ export async function prepareNodeReplacement(
       activateSent = true;
       try {
         child.send(activate, (error) => {
-          if (error !== undefined && error !== null) finishAck('lost'); // 写通道失败：送达状态未知，按丢失处理
+          // 写入结果定性：失败＝确定未送达（unsent，安全回滚）；成功但候选
+          // 已退出＝按未确认处理（可能已提交后崩溃）。
+          if (error !== undefined && error !== null) {
+            unsentReason = error.message;
+            finishAck('unsent');
+            return;
+          }
+          activateWritten = true;
+          if (exitWhileWritePending) finishAck('dead');
         });
-      } catch {
-        finishAck('lost');
+      } catch (error) {
+        unsentReason = error instanceof Error ? error.message : String(error);
+        finishAck('unsent'); // 同步抛错：消息未写入通道，确定未送达
       }
     });
     if (outcome === 'activated') {
@@ -340,20 +367,25 @@ export async function prepareNodeReplacement(
     if (outcome === 'rejected') {
       throw new Error(`候选拒绝激活：${rejectReason}（未提交，安全回滚）`);
     }
+    if (outcome === 'unsent') {
+      throw new Error(`activate 写入候选 IPC 通道失败（${unsentReason}，确定未送达，候选不可能已提交），安全回滚`);
+    }
     if (outcome === 'dead') {
-      throw new UpgradeCommitUnconfirmedError(`候选在激活确认前退出（activate 已发出，可能已完成本机提交），不回滚`);
+      throw new UpgradeCommitUnconfirmedError(`候选在激活确认前退出（activate 已写入，可能已完成本机提交），不回滚`);
     }
     if (outcome === 'timeout') {
-      throw new UpgradeCommitUnconfirmedError(`等待 activated 确认超时（${activateAckTimeoutMs}ms，activate 已发出），不回滚`);
+      throw new UpgradeCommitUnconfirmedError(`等待 activated 确认超时（${activateAckTimeoutMs}ms，activate 已写入），不回滚`);
     }
-    throw new UpgradeCommitUnconfirmedError('activate 已发出但本机 IPC 确认丢失（通道断开），不回滚');
+    throw new UpgradeCommitUnconfirmedError('activate 已写入但本机 IPC 确认丢失（通道断开），不回滚');
   };
 
   const abort = async (): Promise<void> => {
     if (phase === 'activated') {
       throw new Error('候选已激活：拒绝 abort（不得回滚已提交的替换）');
     }
-    if (activateSent && phase !== 'rejected') {
+    // activate 已写入通道（送达状态未知或已送达）且未收到显式拒绝：拒绝
+    // abort。写入失败（unsent）与显式拒绝一样属于「确定未激活」，允许安全回滚。
+    if (activateSent && activateWritten !== false && phase !== 'rejected') {
       throw new Error('activate 已发出且未收到显式拒绝：拒绝 abort（不得杀候选或回滚 pid）');
     }
     killChild();

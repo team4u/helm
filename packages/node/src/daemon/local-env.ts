@@ -789,7 +789,7 @@ function getShellEnv(
   return { ...process.env, ...baseEnv, ...extraEnv };
 }
 
-function killProcessTree(pid: number): void {
+export function killProcessTree(pid: number): void {
   if (process.platform === 'win32') {
     try {
       const child = spawn(
