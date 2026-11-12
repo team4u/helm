@@ -86,6 +86,14 @@ const TICK_INTERVAL_MS = 15_000
 /** stop 等待在途 tick 的有界上限（跨插件采集不可取消，防与慢监听方互挂死）。 */
 const STOP_TICK_WAIT_MS = 30_000
 
+/**
+ * 运行期单轮采集的有界上限（与 stop 口径一致）：跨插件 diagnostics.collect
+ * 监听器不可取消且可能永不 settle；不设上限会令 singleflight 永久占用，
+ * 后续巡检（定时与手动）全部静默复用挂死轮。超时按本轮采集失败处理，
+ * 放行下一轮。
+ */
+export const TICK_COLLECT_TIMEOUT_MS = 30_000
+
 /** 去重文档允许的动作类别（私有 Doc 只信本模块写出的形状）。 */
 const DEDUP_ACTIONS: ReadonlySet<string> = new Set(['notify', 'wake', 'abort', 'bridge'])
 
@@ -497,8 +505,35 @@ export function registerSuperAgentWatchdog(
       conversations: summaries.map((summary) => ({ id: summary.id, profileId: summary.profileId })),
       probes,
     }
-    // 外部采集（Herdr 等）：宿主事件会等待全部监听器，失败如实上抛。
-    await ctx.host.emitEvent(DIAGNOSTICS_COLLECT_EVENT, collection, { broadcast: false })
+    // 外部采集（Herdr 等）：宿主事件会等待全部监听器，失败如实上抛。有界
+    // 等待：监听器挂死时超时按本轮采集失败处理（不静默跳过），迟到 settle
+    // 的原 Promise 吞掉 rejection，避免未观察 rejection 崩溃进程。
+    const collect = Promise.resolve(
+      ctx.host.emitEvent(DIAGNOSTICS_COLLECT_EVENT, collection, { broadcast: false }),
+    )
+    let timeoutTimer: NodeJS.Timeout | undefined
+    try {
+      await Promise.race([
+        collect,
+        new Promise<never>((_, reject) => {
+          timeoutTimer = setTimeout(
+            () =>
+              reject(
+                new HelmError(
+                  'watchdog_collect_timeout',
+                  `巡检外部采集超过 ${TICK_COLLECT_TIMEOUT_MS}ms 未收敛（diagnostics.collect 监听器挂死或过慢），本轮按采集失败放弃`,
+                  500,
+                ),
+              ),
+            TICK_COLLECT_TIMEOUT_MS,
+          )
+          timeoutTimer.unref?.()
+        }),
+      ])
+    } finally {
+      if (timeoutTimer !== undefined) clearTimeout(timeoutTimer)
+      void collect.catch(() => {})
+    }
     // 终态复验：监听方直接改写 collection（绕过 appendProbes）或注入非法探针
     // 在此拦截，非法产物绝不进入规则表（诚实性纪律）。
     assertValidCollection(collection)
@@ -912,6 +947,13 @@ export function registerSuperAgentWatchdog(
    * 0-Token 自动中止：守卫全部通过后才写去重标记（守卫失败不消耗水位），
    * 执行前现查归属与在途状态——探针事实可能已过期（human 接管/已结束/
    * 已删除都如实降级为限频通知）。
+   *
+   * human 红线残余窗口（如实记录）：归属检查到 abortConversation 调用之间
+   * 全部同步（无事件循环让出），插件侧无 TOCTOU；但内核 abortConversation
+   * 内部先 await harness.conversation 才调用 conversation.abort 生效，该
+   * await 让出期间人类接管（markOwnership 不推进 stateChangeSeq，seq 复验
+   * 拦不住纯归属翻转）仍会被中止。插件层无法进一步收窄（复验与生效点之间
+   * 必隔内核内部 await）；彻底关闭需内核原子 check-and-abort（跨组后续项）。
    */
   async function autoAbort(finding: Finding): Promise<void> {
     const conversationId = finding.conversationId
@@ -1106,6 +1148,11 @@ export function registerSuperAgentWatchdog(
       return
     }
     // 结算后现查：归属仍 owned、仍 blocked、本回合未结算（completionSeq 未变）。
+    // human 红线残余窗口（与 autoAbort 同构，如实记录）：此处检查到
+    // submitInput/abortConversation 调用之间全部同步，插件侧无 TOCTOU；但两个
+    // 内核入口内部均先 await harness.conversation 才产生副作用，该让出期间
+    // 人类接管（纯归属翻转不推进 stateChangeSeq/completionSeq，复验拦不住）
+    // 仍会命中。插件层无法进一步收窄；彻底关闭需内核原子守卫（跨组后续项）。
     // 关闭中不执行任何变更（stop 已取消/将取消在途 Ask）。
     if (closing || ctx.host.isClosing) {
       notify('info', 'Watchdog 放弃执行授权', '内核/插件正在关闭，不执行授权变更', conversationId)

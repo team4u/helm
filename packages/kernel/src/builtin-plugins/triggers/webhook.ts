@@ -45,6 +45,13 @@ import type { DispatchTriggerHelper } from './delivery.js'
 /** 公开 webhook 请求 body 上限（原始字节；超出 413 明确错误）。 */
 export const MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 
+/**
+ * stop 等待在途公开路由请求收敛的上限：慢客户端 body 读取无读超时
+ * （protocol/src/http-body.ts 不归本插件改），无界等待会挂死 dispose；
+ * 超时后如实记录未收敛请求数并继续停用（与 watchdog stop 的有界口径一致）。
+ */
+export const STOP_REQUEST_WAIT_MS = 10_000
+
 const SIGNATURE_HEADER = 'x-helm-signature'
 const SIGNATURE_PREFIX = 'sha256='
 
@@ -165,13 +172,28 @@ export function registerWebhook(
     active = true
   }
 
-  /** 停用：先关门（新请求拒收/dispatch 前再拒），再等已进请求自然收敛。 */
+  /** 停用：先关门（新请求拒收/dispatch 前再拒），再有界等已进请求自然收敛；
+   * 超时不硬拆请求（拆不得：响应已并往连接），如实记录后继续释放插件资源。 */
   async function stop(): Promise<void> {
     active = false
     if (activeRequests.size > 0) {
-      await new Promise<void>((resolve) => {
+      let giveUpTimer: NodeJS.Timeout | undefined
+      const idle = new Promise<void>((resolve) => {
         idleWaiters.push(resolve)
       })
+      const deadline = new Promise<void>((resolve) => {
+        giveUpTimer = setTimeout(resolve, STOP_REQUEST_WAIT_MS)
+        giveUpTimer.unref?.()
+      })
+      await Promise.race([idle, deadline])
+      if (giveUpTimer !== undefined) clearTimeout(giveUpTimer)
+      if (activeRequests.size > 0) {
+        // 如实记录（不伪装收敛）：残留请求自行收敛时 trackRequest 的 finally
+        // 对已结束的等待者幂等 resolve，不影响任何后续周期。
+        console.error(
+          `[triggers] webhook 停用等待在途请求超过 ${STOP_REQUEST_WAIT_MS}ms，未收敛 ${activeRequests.size} 个（慢客户端可能仍在读 body），继续停用`,
+        )
+      }
     }
     for (const release of secretRedactions) release()
     secretRedactions = []

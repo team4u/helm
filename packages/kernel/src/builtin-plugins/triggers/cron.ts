@@ -11,6 +11,8 @@
  * - single-flight：同一 job 并发 tick 只允许一个在途；
  * - dispatch 失败如实写 lastError 并发 notification 事件，绝不假成功；
  *   本计划点不重试（最多一次尝试语义），下个时点正常调度；
+ * - 错误路径不变式：timer 触发即被消费，tick 内任何异常（求值/落盘）都
+ *   必须经 finally 重排，job 不因瞬时故障在重启前永久停摆；
  * - 大间隔 timer 先以 <=2^31-1 安全窗口触发再续排（规避 32 位溢出），unref。
  *
  * 定时器只经 ctx.service 生命周期管理，不触碰内核。
@@ -31,6 +33,10 @@ const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
 /** setTimeout 上限（2^31-1 ms ≈ 24.8 天）；更大延迟先触发再续排。 */
 const MAX_TIMEOUT_MS = 2_147_483_647
+
+/** 调度决策失败后的重试退避下限：表达式被外部写坏等持续失败时，按已过期的
+ * nextRunAt 重排会退化为热循环刷通知；隔一个下限再试，修复后自动恢复。 */
+const DECISION_RETRY_FLOOR_MS = 60_000
 
 export interface CronJob {
   id: string
@@ -472,69 +478,85 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
    * 单个 job 的一次调度处理（single-flight 由 tickJob 保证）。
    * 顺序：持久 claim（推进 lastRunAt/nextRunAt + flush）→ dispatch；
    * claim 落盘失败绝不投递（否则崩溃窗口产生重复投递）。
+   * 不变式：timer 在触发回调开头已被 timers.delete 消费，本方法任何出口
+   * （含异常逃逸）都必须重排——由 finally 统一保证（决策失败走退避下限，
+   * 防按过期 nextRunAt 热循环）；否则一次瞬时求值/落盘
+   * 异常就让该 job 永久停摆（仅一条通知，重启前无恢复）。已删除/禁用/
+   * 停机中的 job 由 scheduleJob 现读 doc 自然不排，删除/禁用语义不受影响。
    */
   const runJobTick = async (id: string): Promise<void> => {
     if (stopping) return
-    let job: CronJob | undefined
-    let decision: TickDecision
+    // 决策失败路径已自带退避重排时，finally 不再按 nextRunAt 重复重排。
+    let rescheduledByBackoff = false
     try {
-      job = readDoc().jobs.find((j) => j.id === id)
-      if (!job) return
-      decision = decideTick(job, clock.now())
-    } catch (err) {
-      emitError(`cron job ${id} 调度决策失败`, err)
-      return
-    }
-    if (decision.action === 'noop') {
-      scheduleJob(id)
-      return
-    }
-    if (decision.action === 'skip-to-future') {
-      // catchUp=false：错过时段直接跳至未来；同样 claim+flush 防重启回跳。
-      // lastRunAt 不动（没有真实投递发生，不伪造运行记录）。
-      const written = await tryUpdateJob(id, job.rev, (j) => ({ ...j, nextRunAt: decision.to }))
-      if (written) scheduleJob(id)
-      return
-    }
-    // fire：claim（清 lastError、记 lastRunAt、推进 nextRunAt）→ flush → dispatch
-    const fireAt = decision.at
-    let claimed: boolean
-    try {
-      claimed = await tryUpdateJob(
-        id,
-        job.rev,
-        (j) =>
-          clearLastError({
-            ...j,
-            lastRunAt: fireAt,
-            nextRunAt: advanceAfterFire(j.schedule, j.timezone, fireAt, clock.now()),
-          }),
-      )
-    } catch (err) {
-      // claim 未落盘：绝不能投递（否则崩溃窗口产生重复投递）
-      emitError(`cron job ${id} claim 持久化失败，本次不投递`, err)
-      scheduleJob(id)
-      return
-    }
-    if (!claimed || stopping) return
-    // flush 让出执行权期间任务可能被删除或重建，投递前复核创建代次。
-    if (!readDoc().jobs.some((current) => current.id === id && current.rev === job.rev && current.enabled)) return
-    try {
-      await deps.dispatchTrigger(buildCronEnvelope(job, fireAt), job.targetProfileId)
-    } catch (err) {
-      // 投递失败：如实写 lastError + notification；本计划点不重试，下个时点照常。
-      // (id, rev) 校验：dispatch 期间 job 若被删除重建，不把旧失败写到新 job 上。
-      const message = err instanceof Error ? err.message : String(err)
-      const written = await tryUpdateJob(id, job.rev, (j) => ({
-        ...j,
-        lastError: `投递失败 @${new Date(fireAt).toISOString()}：${message}`,
-      }))
-      if (!written) {
-        logDiagnostic(`cron job ${id} 投递失败，但 job 已被删除/重建，lastError 不写回（rev 换代）`)
+      let job: CronJob | undefined
+      let decision: TickDecision
+      try {
+        job = readDoc().jobs.find((j) => j.id === id)
+        if (!job) return
+        decision = decideTick(job, clock.now())
+      } catch (err) {
+        emitError(`cron job ${id} 调度决策失败`, err)
+        rescheduledByBackoff = true
+        scheduleJob(id, clock.now() + DECISION_RETRY_FLOOR_MS)
+        return
       }
-      emitError(`cron job ${id} 投递失败`, err)
+      if (decision.action === 'noop') return
+      if (decision.action === 'skip-to-future') {
+        // catchUp=false：错过时段直接跳至未来；同样 claim+flush 防重启回跳。
+        // lastRunAt 不动（没有真实投递发生，不伪造运行记录）。
+        // tryUpdateJob 抛错（落盘失败）时异常上抛由 timer 回调兜底通知；
+        // doc.set 镜像已推进，finally 重排按下一时点进行，job 不停摆。
+        await tryUpdateJob(id, job.rev, (j) => ({ ...j, nextRunAt: decision.to }))
+        return
+      }
+      // fire：claim（清 lastError、记 lastRunAt、推进 nextRunAt）→ flush → dispatch
+      const fireAt = decision.at
+      let claimed: boolean
+      try {
+        claimed = await tryUpdateJob(
+          id,
+          job.rev,
+          (j) =>
+            clearLastError({
+              ...j,
+              lastRunAt: fireAt,
+              nextRunAt: advanceAfterFire(j.schedule, j.timezone, fireAt, clock.now()),
+            }),
+        )
+      } catch (err) {
+        // claim 未落盘：绝不能投递（否则崩溃窗口产生重复投递）
+        emitError(`cron job ${id} claim 持久化失败，本次不投递`, err)
+        return
+      }
+      if (!claimed || stopping) return
+      // flush 让出执行权期间任务可能被删除或重建，投递前复核创建代次。
+      if (!readDoc().jobs.some((current) => current.id === id && current.rev === job.rev && current.enabled)) return
+      try {
+        await deps.dispatchTrigger(buildCronEnvelope(job, fireAt), job.targetProfileId)
+      } catch (err) {
+        // 投递失败：如实写 lastError + notification；本计划点不重试，下个时点照常。
+        // (id, rev) 校验：dispatch 期间 job 若被删除重建，不把旧失败写到新 job 上。
+        const message = err instanceof Error ? err.message : String(err)
+        try {
+          const written = await tryUpdateJob(id, job.rev, (j) => ({
+            ...j,
+            lastError: `投递失败 @${new Date(fireAt).toISOString()}：${message}`,
+          }))
+          if (!written) {
+            logDiagnostic(`cron job ${id} 投递失败，但 job 已被删除/重建，lastError 不写回（rev 换代）`)
+          }
+        } catch (writeErr) {
+          // lastError 落盘失败不掩盖原始投递失败（重排由 finally 保证，不逃逸）。
+          logDiagnostic(
+            `cron job ${id} 投递失败且 lastError 落盘失败：${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
+          )
+        }
+        emitError(`cron job ${id} 投递失败`, err)
+      }
+    } finally {
+      if (!rescheduledByBackoff) scheduleJob(id)
     }
-    scheduleJob(id)
   }
 
   /** single-flight：同 job 并发 tick 只跑一个，后到者直接复用在途 Promise。 */
@@ -546,8 +568,9 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
     return task
   }
 
-  /** 重排单个 job 的 timer；未启用/已删除不排。 */
-  const scheduleJob = (id: string): void => {
+  /** 重排单个 job 的 timer；未启用/已删除不排；notBefore 为触发时间下限
+   * （决策失败退避用，防按过期 nextRunAt 热循环）。 */
+  const scheduleJob = (id: string, notBefore?: number): void => {
     if (stopping) return
     timers.get(id)?.clear()
     timers.delete(id)
@@ -569,7 +592,8 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
       )
       return
     }
-    const delayMs = Math.max(0, job.nextRunAt - clock.now())
+    const at = notBefore === undefined ? job.nextRunAt : Math.max(job.nextRunAt, notBefore)
+    const delayMs = Math.max(0, at - clock.now())
     // 超长延迟先以安全窗口唤醒再续排（决策时未到点即 noop 重排），unref 不阻退出
     const handle = clock.setTimeout(() => {
       timers.delete(id)

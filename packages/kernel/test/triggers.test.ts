@@ -23,7 +23,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 
-import { HelmError, type ConversationSummary } from '@helm/protocol'
+import { HelmError, type ConversationSummary, type ExternalTriggerEnvelope } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
 import { createHubHandler } from '../src/http/index.js'
 import { createDeliveryDispatch } from '../src/builtin-plugins/triggers/delivery.js'
@@ -784,4 +784,90 @@ test('triggers13: Profile 查询期间进入关闭状态时，不再向会话投
   resolveProfile({ id: 'finance' })
   await assert.rejects(pending, { code: 'runtime_closing', status: 409 })
   assert.equal(delivered, false)
+})
+
+// ---------------------------------------------------------------------------
+// 14. Delivery 并发单飞：同一新 Profile 只建一个会话
+// ---------------------------------------------------------------------------
+
+test('triggers14: 并发触发同一新 Profile 单飞创建一个会话；失败清缓存可重试；成功后复用', { timeout: 60_000 }, async () => {
+  const conversations: ConversationSummary[] = []
+  const targets: Array<number | undefined> = []
+  let creations = 0
+  let createImpl!: (init: { title?: string; profileId?: string }) => Promise<ConversationSummary>
+  const makeFresh = (id: number, profileId = 'fresh'): ConversationSummary => ({
+    id,
+    title: `conv-${id}`,
+    profileId,
+    tags: [],
+    cwd: '/tmp',
+    model: '',
+    thinkingLevel: '',
+    status: 'idle',
+    stateChangeSeq: 1,
+    completionSeq: 0,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  })
+  const dispatch = createDeliveryDispatch({
+    host: {
+      listConversations: (filter?: { profileId?: string }) =>
+        filter?.profileId === undefined ? [...conversations] : conversations.filter((c) => c.profileId === filter.profileId),
+      getConversation: (id: number) => {
+        const found = conversations.find((c) => c.id === id)
+        if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+        return found
+      },
+      createConversation: (init) => createImpl(init),
+      dispatchTrigger: async (event) => {
+        targets.push(event.targetConversationId)
+      },
+    },
+    profiles: { get: async (id: string) => ({ id }) },
+    isClosing: () => false,
+  })
+  const event = (id: string): ExternalTriggerEnvelope => ({ id, source: `cron:${id}`, text: '载荷', createdAt: 1 })
+
+  // 阶段 1：并发两路触发（创建挂起期间第二路查空）——只允许一次创建
+  let releaseCreate!: () => void
+  const gate = new Promise<void>((resolve) => { releaseCreate = resolve })
+  createImpl = async (init) => {
+    creations += 1
+    await gate
+    const conv = makeFresh(42)
+    conversations.push(conv)
+    void init
+    return conv
+  }
+  const a = dispatch(event('e1'), 'fresh')
+  const b = dispatch(event('e2'), 'fresh')
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(creations, 1, '并发只发起一次创建（per-profileId 单飞）')
+  releaseCreate()
+  await Promise.all([a, b])
+  assert.deepEqual(targets, [42, 42], '两路投递命中同一新会话（无孤儿）')
+
+  // 阶段 2：另一新 Profile 创建失败——失败清缓存，下一次触发可重试
+  createImpl = async () => {
+    creations += 1
+    throw new Error('create failed')
+  }
+  await assert.rejects(dispatch(event('e3'), 'fresh2'), /create failed/)
+  assert.equal(creations, 2, '失败不缓存，可重试')
+
+  // 阶段 3：重试成功创建；随后复用（不再创建）
+  createImpl = async () => {
+    creations += 1
+    const conv = makeFresh(43, 'fresh2')
+    conversations.push(conv)
+    return conv
+  }
+  await dispatch(event('e4'), 'fresh2')
+  assert.equal(creations, 3)
+  await dispatch(event('e5'), 'fresh2')
+  assert.equal(creations, 3, '已有会话不再创建')
+  assert.equal(targets[targets.length - 1], 43)
 })

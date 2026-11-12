@@ -7,6 +7,7 @@
  * - 外部触发管道编排（dispatchTrigger 校验原始显式目标 -> trigger hook -> submitInput）。
  */
 
+import { HelmError } from '@helm/protocol'
 import type { ConversationInit, ConversationSummary, ExternalTriggerEnvelope } from '@helm/protocol'
 import type { HookBridge } from './hook-bridge.js'
 import { escapeXml, stripEnvelope } from './runtime-helpers.js'
@@ -90,10 +91,24 @@ export class RuntimeTriggerDispatcher {
       // transform 后的 text 再防一次（插件可能替换了原文）。
       final = { ...final, text: this.defang({ ...final, text: stripEnvelope(final.text) }) }
     }
-    const target =
-      final.targetConversationId !== undefined
-        ? final.targetConversationId
-        : await this.resolveDefaultTriggerTarget()
-    await this.deps.submitInput(target, final.text, { origin: 'trigger', whenBusy: 'followUp' })
+    if (final.targetConversationId !== undefined) {
+      // 显式目标（含 hook 改写）：失效副目标由 submitInput 的 requireConv 兑底
+      // 显式 not_found（诚实拒绝；失效的显式目标不得被重路由掩盖）。
+      await this.deps.submitInput(final.targetConversationId, final.text, { origin: 'trigger', whenBusy: 'followUp' })
+      return
+    }
+    // 缺省目标：resolve 与 submitInput 之间目标会话可能被删除（TOCTOU 窗口，
+    // 无法原子关闭）。submitInput 首行 requireConv 先于任何副作用，not_found
+    // 拒绝时对缺省路径重解析一次再投递——这是完成路由决策，不是对同一目标
+    // 的投递重试（不破坏 cron「本计划点不重试」语义）；再失败如实上抛
+    // （该次触发载荷丢失，语义与修复前一致）。
+    const target = await this.resolveDefaultTriggerTarget()
+    try {
+      await this.deps.submitInput(target, final.text, { origin: 'trigger', whenBusy: 'followUp' })
+    } catch (err) {
+      if (!(err instanceof HelmError && err.code === 'not_found')) throw err
+      const resolved = await this.resolveDefaultTriggerTarget()
+      await this.deps.submitInput(resolved, final.text, { origin: 'trigger', whenBusy: 'followUp' })
+    }
   }
 }

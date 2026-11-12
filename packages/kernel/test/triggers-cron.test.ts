@@ -597,6 +597,128 @@ test('claim 持久化失败（flush 抛错）：不投递，显式诊断', { tim
   assert.ok(h.events.some((e) => e.type === 'notification'))
 })
 
+test('skip-to-future 落盘失败：异常后仍重排（不停摆），下个时点照常投递', { timeout: 60_000 }, async () => {
+  const h = track(makeHarness(T0))
+  await ready(h)
+  await h.host.invokeAction('builtin:triggers', 'cron_create', { id: 's2', schedule: '*/5 * * * *', text: 'go' })
+  let flushFailures = 0
+  h.flushImpl = async () => {
+    if (flushFailures++ === 0) throw new HelmError('store_flush_failed', 'SQLite drain 失败', 500)
+  }
+  // 篡改 doc：nextRunAt 回拨两个时段（tick 时判 missed-multiple → skip-to-future；
+  // 不能用 docSeed 预置过期时点——service start 会先行归一化，轮不到 tick 决策）
+  const seeded = h.docs.store.get('builtin:triggers:crons') as CronDoc
+  seeded.jobs[0] = { ...seeded.jobs[0]!, nextRunAt: T0 - 5 * MIN }
+  h.docs.store.set('builtin:triggers:crons', seeded)
+  await h.clock.advance(5 * MIN) // T0_5 timer 触发：skip 写盘失败，异常上抛由 timer 回调兜底通知
+  await h.runtime.settle()
+  assert.ok(h.events.some((e) => e.type === 'notification'), '落盘失败必须显式通知')
+  assert.equal(h.dispatched.length, 0)
+  assert.equal(h.clock.activeTimers(), 1, '落盘失败后必须重排（job 不得停摆）')
+  // doc.set 先于 flush 生效（内存镜像不因持久化失败回滚，与 claim 路径同语义）
+  assert.equal((await soleJob(h)).nextRunAt, T10, '镜像已跳至未来')
+
+  await h.clock.advance(5 * MIN) // 到 T10 时点正常投递（flush 已恢复）
+  await h.runtime.settle()
+  assert.equal(h.dispatched.length, 1)
+  assert.equal(h.dispatched[0]!.envelope.id, `cron:s2:${T10}`)
+})
+
+test('投递失败且 lastError 落盘失败：仍通知原始失败并重排，下个时点照常', { timeout: 60_000 }, async () => {
+  const h = track(makeHarness(T0))
+  await ready(h)
+  let attempts = 0
+  h.dispatchImpl = async () => {
+    attempts += 1
+    throw new Error('downstream broken')
+  }
+  await h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'e2', schedule: '*/5 * * * *', text: 'go' })
+  let flushes = 0
+  h.flushImpl = async () => {
+    flushes += 1
+    // 第 1 次 flush 是 claim（成功）；第 2 次是 lastError 写回（失败）
+    if (flushes === 2) throw new HelmError('store_flush_failed', 'SQLite drain 失败', 500)
+  }
+  const stderr: string[] = []
+  const originalError = console.error
+  console.error = (...args: unknown[]) => {
+    stderr.push(args.map((a) => String(a)).join(' '))
+  }
+  try {
+    await h.clock.advance(5 * MIN)
+    await h.runtime.settle()
+  } finally {
+    console.error = originalError
+  }
+  assert.equal(attempts, 1)
+  assert.equal(h.dispatched.length, 0)
+  assert.ok(h.events.some((e) => e.type === 'notification'), '投递失败必须通知（不被落盘失败掩盖）')
+  assert.equal(h.clock.activeTimers(), 1, '双重失败后仍重排')
+  const job = await soleJob(h)
+  // doc.set 先于 flush：内存镜像已写 lastError（持久化失败已另行如实记录，不伪装成功）
+  assert.ok(
+    typeof job.lastError === 'string' && (job.lastError as string).includes('downstream broken'),
+    '内存镜像如实记录失败',
+  )
+  assert.ok(
+    stderr.some((line) => line.includes('lastError 落盘失败')),
+    '持久化失败必须显式记录',
+  )
+  assert.equal(job.nextRunAt, T10, 'claim 已推进（下时点照常）')
+
+  await h.clock.advance(5 * MIN) // T10：flush 恢复，lastError 正常落盘
+  await h.runtime.settle()
+  assert.equal(attempts, 2, '下个时点照常尝试')
+})
+
+test('调度决策失败（doc 中途损坏）：显式通知不崩溃；修复后经 tickNow 恢复投递', { timeout: 60_000 }, async () => {
+  const h = track(makeHarness(T0))
+  await ready(h)
+  await h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'c2', schedule: '*/5 * * * *', text: 'go' })
+  const snapshot = structuredClone(h.docs.store.get('builtin:triggers:crons'))
+  h.docs.store.set('builtin:triggers:crons', {
+    version: 1,
+    jobs: [{ ...seedJob({ id: 'c2' }), enabled: 'corrupt' as unknown as boolean }],
+  })
+  await h.clock.advance(5 * MIN) // 到点 tick：读 doc 即抛（调度决策失败）
+  await h.runtime.settle()
+  assert.equal(h.dispatched.length, 0)
+  assert.ok(
+    h.events.filter((e) => e.type === 'notification').length >= 1,
+    '决策失败必须显式通知（含重排时读取失败的双告警）',
+  )
+  assert.equal(h.clock.activeTimers(), 0, 'doc 损坏为终态：不排 timer（修复需人工/重启）')
+
+  h.docs.store.set('builtin:triggers:crons', snapshot)
+  await h.runtime.tickNow() // 修复后恢复：准点 fire（T0_5 即当前时刻）
+  await h.runtime.settle()
+  assert.equal(h.dispatched.length, 1)
+  assert.equal(h.dispatched[0]!.envelope.id, `cron:c2:${T0_5}`)
+})
+
+test('调度决策失败（表达式被写坏）：退避重排不热循环，修复后自动恢复', { timeout: 60_000 }, async () => {
+  const h = track(makeHarness(T0))
+  await ready(h)
+  await h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'c3', schedule: '*/5 * * * *', text: 'go' })
+  const snapshot = structuredClone(h.docs.store.get('builtin:triggers:crons'))
+  // 形状合法但表达式非法（parseCronDoc 只验字符串，cron-parser 求值才抛）
+  h.docs.store.set('builtin:triggers:crons', {
+    version: 1,
+    jobs: [{ ...seedJob({ id: 'c3' }), schedule: '61 * * * *', nextRunAt: T0_5 }],
+  })
+  await h.clock.advance(5 * MIN) // 到点 tick：decideTick 求值抛错
+  await h.runtime.settle()
+  assert.ok(h.events.some((e) => e.type === 'notification'), '决策失败必须显式通知')
+  assert.equal(h.dispatched.length, 0)
+  assert.equal(h.clock.activeTimers(), 1, '决策失败按退避下限重排（不热循环、不停摆）')
+
+  h.docs.store.set('builtin:triggers:crons', snapshot)
+  await h.clock.advance(60 * 1000) // 退避到期：修复后的 doc 正常补跑 T0_5
+  await h.runtime.settle()
+  assert.equal(h.dispatched.length, 1)
+  assert.equal(h.dispatched[0]!.envelope.id, `cron:c3:${T0_5}`)
+})
+
 test('single-flight：并发 tick 同 job 只投递一次', { timeout: 60_000 }, async () => {
   const h = track(makeHarness(T0))
   await ready(h)
