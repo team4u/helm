@@ -21,8 +21,9 @@ let deleteRequest: { conversationId: number; complete(): void } | undefined
 let eventController: ReadableStreamDefaultController<Uint8Array> | undefined
 let observed: { primary: ResolvedTarget; split: ResolvedTarget | null; modal: ActiveModal } | undefined
 let navigateTo: ((target: ResolvedTarget) => void) | undefined
+let historyLog: Array<{ method: 'push' | 'replace'; hash: string }> = []
 
-function summary(id: number): ConversationSummary {
+function summary(id: number, overrides: Partial<ConversationSummary> = {}): ConversationSummary {
   return {
     id,
     title: `会话 ${id}`,
@@ -40,10 +41,15 @@ function summary(id: number): ConversationSummary {
     pendingAskCount: 0,
     createdAt: id,
     updatedAt: id,
+    ...overrides,
   }
 }
 
-const conversations = [summary(1), summary(2), summary(3)]
+const conversations = [
+  summary(1),
+  summary(2),
+  summary(3, { nodeId: 'remote-node', cwd: '/remote/work' }),
+]
 
 function eventFrame(seq: number, event: unknown): Uint8Array {
   return new TextEncoder().encode(`event: message\ndata: ${JSON.stringify({ seq, event })}\n\n`)
@@ -177,9 +183,36 @@ function reset(): void {
   deleteRequest = undefined
   observed = undefined
   navigateTo = undefined
+  historyLog = []
 }
 
-afterEach(reset)
+afterEach(() => {
+  restoreHistorySpies()
+  reset()
+})
+
+let originalPushState: typeof history.pushState | undefined
+let originalReplaceState: typeof history.replaceState | undefined
+
+function spyHistory(): void {
+  originalPushState = history.pushState.bind(history)
+  originalReplaceState = history.replaceState.bind(history)
+  history.pushState = ((data: unknown, unused: string, url?: string | URL | null) => {
+    historyLog.push({ method: 'push', hash: url === undefined ? window.location.hash : String(url) })
+    return originalPushState!(data, unused, url)
+  }) as typeof history.pushState
+  history.replaceState = ((data: unknown, unused: string, url?: string | URL | null) => {
+    historyLog.push({ method: 'replace', hash: url === undefined ? window.location.hash : String(url) })
+    return originalReplaceState!(data, unused, url)
+  }) as typeof history.replaceState
+}
+
+function restoreHistorySpies(): void {
+  if (originalPushState !== undefined) history.pushState = originalPushState
+  if (originalReplaceState !== undefined) history.replaceState = originalReplaceState
+  originalPushState = undefined
+  originalReplaceState = undefined
+}
 
 test('删除分屏会话只关闭分屏，主屏会话保持不变', { timeout: 60_000 }, async () => {
   await mount('#/c/1?split=c/2')
@@ -202,22 +235,45 @@ test('删除抽屉会话只关闭对应抽屉', { timeout: 60_000 }, async () =>
   assert.equal(observed?.modal, null)
 })
 
-test('删除主屏会话回到角色中心', { timeout: 60_000 }, async () => {
+test('删除本机主屏会话 replace 回该智能体待命态（不选其他会话）', { timeout: 60_000 }, async () => {
+  spyHistory()
   await mount('#/c/1')
   await clickDelete(0)
   assert.equal(deleteRequest?.conversationId, 1)
   await finishDelete()
-  assert.deepEqual(observed?.primary, { kind: 'profiles' })
+  // 本机节点不显式携带（local 是缺省），但工作目录照常继承
+  assert.deepEqual(observed?.primary, { kind: 'agent', profileId: 'assistant', cwd: '/tmp' })
+  // 删除导航强制 replace：不污染前进/后退栈，也不会闪跳到别的历史会话。
+  const last = historyLog[historyLog.length - 1]
+  assert.ok(last, '删除后应有地址栏写回')
+  assert.equal(last.method, 'replace')
+  assert.equal(last.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
+  assert.equal(window.location.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
+})
+
+test('删除远端主屏会话：待命目标继承节点与目录，不悄悄切回本机', { timeout: 60_000 }, async () => {
+  spyHistory()
+  await mount('#/c/3')
+  await clickDelete(0)
+  assert.equal(deleteRequest?.conversationId, 3)
+  await finishDelete()
+  assert.deepEqual(observed?.primary, {
+    kind: 'agent',
+    profileId: 'assistant',
+    nodeId: 'remote-node',
+    cwd: '/remote/work',
+  })
+  assert.equal(window.location.hash, `#/a/assistant?node=remote-node&cwd=${encodeURIComponent('/remote/work')}`)
 })
 
 test('删除请求等待期间用户切换会话，迟到的删除事件不覆盖新导航', { timeout: 60_000 }, async () => {
   await mount('#/c/1')
   await clickDelete(0)
   await act(async () => {
-    navigateTo?.({ kind: 'conversation', conversationId: 3 })
+    navigateTo?.({ kind: 'conversation', conversationId: 2 })
   })
   await settle()
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 3 })
+  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 2 })
   await finishDelete()
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 3 })
+  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 2 })
 })

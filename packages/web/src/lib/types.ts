@@ -52,6 +52,7 @@ export type ModelsCenterTab = 'providers' | 'defaults'
 
 export type ResolvedTarget =
   | { kind: 'conversation'; conversationId: number }
+  | { kind: 'agent'; profileId: string; nodeId?: string; cwd?: string }
   | { kind: 'screen'; pluginId: string; screenId: string; params?: Record<string, string> }
   | { kind: 'plugins'; pluginId?: string }
   | { kind: 'profiles'; profileId?: string }
@@ -211,6 +212,7 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
  * - 'conversation:1' / 'conversation:42'
  * - 'conversation:profile:superagent' -> 查找该 profileId 的常驻或最新会话
  * - 'conversation:tag:worker' -> 查找含该 tag 的最新会话
+ * - 'agent:assistant' -> 打开该智能体的待命页（首次发送才创建会话）
  * - 'screen:builtin:herdr/overview' -> 打开全屏插件视图
  * - 'screen:<pluginId>/<screenId>?k1=v1&k2=v2' -> 打开携带路由参数的全屏插件视图
  *
@@ -258,6 +260,10 @@ export function resolveTargetString(
     // models:defaults 直达全局默认 Tab（历史虚拟卡片语义升级）
     if (sub === 'defaults') return { kind: 'models', tab: 'defaults' }
     return { kind: 'models', providerId: sub }
+  }
+  if (target.startsWith('agent:')) {
+    const profileId = target.slice('agent:'.length).trim()
+    return profileId === '' ? null : { kind: 'agent', profileId }
   }
   if (target.startsWith('conversation:profile:')) {
     const profileId = target.slice('conversation:profile:'.length).trim()
@@ -334,6 +340,9 @@ export function isSameResolvedTarget(a: ResolvedTarget | null, b: ResolvedTarget
   if (a.kind === 'conversation' && b.kind === 'conversation') {
     return a.conversationId === b.conversationId
   }
+  if (a.kind === 'agent' && b.kind === 'agent') {
+    return a.profileId === b.profileId && (a.nodeId ?? undefined) === (b.nodeId ?? undefined) && (a.cwd ?? undefined) === (b.cwd ?? undefined)
+  }
   if (a.kind === 'screen' && b.kind === 'screen') {
     if (a.pluginId !== b.pluginId || a.screenId !== b.screenId) return false
     const ap = a.params ?? {}
@@ -388,6 +397,8 @@ export interface HelmStoreValue {
 
   // 静态配置资产
   profiles: Profile[]
+  /** 静态资产（角色/模型/技能等）本轮会话是否已完成首次加载（待命页区分加载中与不存在）。 */
+  assetsLoaded: boolean
   models: ModelDescriptor[]
   providers: ProviderConfig[]
   credentials: CredentialSummary[]
@@ -426,7 +437,10 @@ export interface HelmStoreValue {
   getPluginSessionDoc(pluginId: string, docName: string, conversationId: number): Promise<unknown>
   /** 会话级文档显式重连（订阅错误后的 UI 重试入口）。 */
   retrySessionDoc(key: SessionDocKey): void
-  openTarget(target: string | ResolvedTarget, opts?: { split?: boolean; highlightEntryId?: string }): void
+  openTarget(
+    target: string | ResolvedTarget,
+    opts?: { split?: boolean; highlightEntryId?: string; history?: 'push' | 'replace' },
+  ): void
   closeSplit(): void
   /** 更新当前 screen 路由参数（undefined 值删除键）；split 省略时作用于主屏。 */
   setScreenParams(patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }): void

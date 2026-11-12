@@ -51,6 +51,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [conversationArtifacts, setConversationArtifacts] = useState<Record<number, ArtifactMetadata[]>>({})
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({})
   const [profiles, setProfiles] = useState<Profile[]>([])
+  /** 静态资产是否已完成本轮会话首次加载（待命页区分「加载中」与「角色不存在」）。 */
+  const [assetsLoaded, setAssetsLoaded] = useState(false)
   const [models, setModels] = useState<ModelDescriptor[]>([])
   const [providers, setProviders] = useState<ProviderConfig[]>([])
   const [credentials, setCredentials] = useState<CredentialSummary[]>([])
@@ -75,6 +77,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>())
   const targets = useRef({ primaryTarget, splitTarget })
   targets.current = { primaryTarget, splitTarget }
+  const activeModalRef = useRef(activeModal)
+  activeModalRef.current = activeModal
   const assetGeneration = useRef(0)
 
   const updateLive = useCallback((update: (state: LiveState) => LiveState) => {
@@ -180,6 +184,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     updateLive(emptyLiveState)
     setConversationArtifacts({})
     setLoadErrors({})
+    setAssetsLoaded(false)
     setProfiles([]); setModels([]); setProviders([]); setCredentials([]); setSkills([]); setActions([])
   }, [updateLive])
   useEffect(() => {
@@ -203,6 +208,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     if (results[3].status === 'fulfilled') setCredentials(results[3].value)
     if (results[4].status === 'fulfilled') setSkills(results[4].value)
     if (results[5].status === 'fulfilled') setActions(results[5].value)
+    // 无论单项成败，本轮已返回即可区分「加载中」与「不存在」（单项失败另有通知）。
+    setAssetsLoaded(true)
     const labels = ['角色', '模型', '网关', '凭据', '技能', '插件动作']
     results.forEach((result, index) => {
       if (result.status === 'rejected') pushNotice({ type: 'notification', level: 'error', title: `${labels[index]}加载失败`, body: errorText(result.reason) })
@@ -323,22 +330,27 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     return task
   }, [pushNotice, reportLoad, updateLive])
 
-  const openTarget = useCallback((target: string | ResolvedTarget, opts?: { split?: boolean; highlightEntryId?: string }) => {
+  const closeSplit = useCallback(() => setSplitTarget(null), [])
+
+  // 显式历史策略标记（openTarget history 选项 / setScreenParams push）：只标记下一拍，
+  // 实际 pushState/replaceState 由唯一的地址栏写回 effect 执行，组件不得直接操作 history。
+  const pendingHistoryMode = useRef<'push' | 'replace' | null>(null)
+
+  const openTarget = useCallback((target: string | ResolvedTarget, opts?: { split?: boolean; highlightEntryId?: string; history?: 'push' | 'replace' }) => {
     const resolved = typeof target === 'string' ? resolveTargetString(target, liveRef.current.conversations) : target
     if (!resolved) {
       pushNotice({ type: 'notification', level: 'warning', title: '目标未就绪', body: typeof target === 'string' ? target : '导航目标无效' })
       return
     }
+    // 显式历史策略只标记下一拍；实际 pushState/replaceState 仍由唯一写回 effect 执行。
+    if (opts?.history !== undefined) pendingHistoryMode.current = opts.history
     if (opts?.split) setSplitTarget(resolved)
     else setPrimaryTarget(resolved)
     if (resolved.kind === 'conversation' && opts?.highlightEntryId) setHighlightedEntry({ conversationId: resolved.conversationId, entryId: opts.highlightEntryId })
   }, [pushNotice])
-  const closeSplit = useCallback(() => setSplitTarget(null), [])
 
   // ---- Screen 路由参数更新（唯一导航机制内实现，组件不得直接操作 history） ----
-  // setParams(..., { push: true }) 只标记下一拍强制 push；实际 pushState 仍由
-  // 唯一的地址栏写回 effect 执行，保证与既有导航共用同一套同步与判重路径。
-  const pendingForcePush = useRef(false)
+  // setParams(..., { push: true }) 与 openTarget({ history }) 共用 pendingHistoryMode。
   const setScreenParams = useCallback((patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }) => {
     const entries = Object.entries(patch).filter(([key, value]) => {
       if (SCREEN_PARAM_KEY_PATTERN.test(key) && !isPrototypeParamKey(key) && (value === undefined || typeof value === 'string')) return true
@@ -347,7 +359,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     })
     const currentTarget = options?.split ? splitTarget : primaryTarget
     if (entries.length === 0 || currentTarget?.kind !== 'screen') return
-    if (options?.push) pendingForcePush.current = true
+    if (options?.push) pendingHistoryMode.current = 'push'
     const update = (current: ResolvedTarget): ResolvedTarget => {
       if (current.kind !== 'screen') return current
       const next: Record<string, string> = { ...(current.params ?? {}) }
@@ -404,15 +416,16 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     const nextHash = formatLocationHash(locationState)
     if (nextHash === window.location.hash) {
       lastSyncedLocation.current = locationState
-      pendingForcePush.current = false
+      pendingHistoryMode.current = null
       return
     }
-    if (pendingForcePush.current || shouldPushLocationHistory(lastSyncedLocation.current, locationState)) {
+    const override = pendingHistoryMode.current
+    if (override === 'push' || (override === null && shouldPushLocationHistory(lastSyncedLocation.current, locationState))) {
       window.history.pushState(null, '', nextHash)
     } else {
       window.history.replaceState(null, '', nextHash)
     }
-    pendingForcePush.current = false
+    pendingHistoryMode.current = null
     lastSyncedLocation.current = locationState
   }, [authenticated, locationState])
 
@@ -495,6 +508,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
             if (!gotSnapshot) throw new Error('实时连接缺少初始快照')
             const frame = payload as HelmEventFrame
             const oldSeq = liveRef.current.seq
+            // 删除事件先快照被删会话摘要（applyEventFrame 后列表即移除）：待命目标需
+            // 继承其 profileId/nodeId/cwd，防止远端坐标悄悄回落本机。
+            const deletedEvent = frame.event.type === 'conversation.deleted' && 'conversationId' in frame.event ? frame.event : undefined
+            const deletedSummary = deletedEvent !== undefined
+              ? liveRef.current.conversations.find((c) => c.id === deletedEvent.conversationId)
+              : undefined
             updateLive((state) => applyEventFrame(state, frame))
             if (frame.seq <= oldSeq) return
             const event = frame.event
@@ -518,13 +537,28 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
               if (visible && conv.status !== 'working') void loadConversationArtifacts(conv.id)
               if (visible && conv.unread) void conversationsApi.patch(conv.id, { unread: false }).catch((error: unknown) => reportLoad(`conversation:${conv.id}`, error))
             }
-            if (event.type === 'conversation.deleted' && 'conversationId' in event) {
-              const id = event.conversationId
-              // 当前主屏/分屏正在查看的会话被删：回退到无会话依赖的角色中心，
-              // 绝不指向另一个会话（可能也已不存在）。
-              setPrimaryTarget((current) => current.kind === 'conversation' && current.conversationId === id ? { kind: 'profiles' } : current)
-              setSplitTarget((current) => current?.kind === 'conversation' && current.conversationId === id ? null : current)
-              setActiveModal((current) => current?.kind === 'conversation-drawer' && current.conversationId === id ? null : current)
+            if (deletedEvent !== undefined) {
+              const id = deletedEvent.conversationId
+              // 删除导航唯一 truths：仅当被删的正是当前主屏/分屏/抽屉目标时，
+              // 以 replace 回到该智能体待命态（无 Profile 信息时显式回角色中心）；
+              // 绝不选中其他会话，批量连续删除不闪烁，用户已切走时不覆盖新导航。
+              const fallback: ResolvedTarget = deletedSummary !== undefined
+                ? {
+                    kind: 'agent',
+                    profileId: deletedSummary.profileId,
+                    ...(deletedSummary.nodeId !== undefined && deletedSummary.nodeId !== '' && deletedSummary.nodeId !== 'local'
+                      ? { nodeId: deletedSummary.nodeId }
+                      : {}),
+                    ...(deletedSummary.cwd !== undefined && deletedSummary.cwd !== '' ? { cwd: deletedSummary.cwd } : {}),
+                  }
+                : { kind: 'profiles' }
+              const primaryHit = targets.current.primaryTarget.kind === 'conversation' && targets.current.primaryTarget.conversationId === id
+              const splitHit = targets.current.splitTarget?.kind === 'conversation' && targets.current.splitTarget.conversationId === id
+              const drawerHit = activeModalRef.current?.kind === 'conversation-drawer' && activeModalRef.current.conversationId === id
+              if (primaryHit || splitHit || drawerHit) pendingHistoryMode.current = 'replace'
+              if (primaryHit) setPrimaryTarget(fallback)
+              if (splitHit) setSplitTarget(null)
+              if (drawerHit) setActiveModal(null)
               setConversationArtifacts((prev) => { const next = { ...prev }; delete next[id]; return next })
               evictSessionDocsOfConversation(id)
             }
@@ -557,12 +591,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   // Context value 需引用稳定：任何一处局部状态变化都不应触发全量消费组件重渲染。
   const store: HelmStoreValue = useMemo(
     () => ({
-      ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
+      ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
       setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
-      live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts,
+      live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
       setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],

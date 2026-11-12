@@ -68,6 +68,37 @@ const parsePositiveInt = (raw: string): number | null => {
 export const PRIMARY_SCREEN_PARAM_PREFIX = 'sp.'
 export const SPLIT_SCREEN_PARAM_PREFIX = 'ssp.'
 
+/** agent 目标草稿环境在 Hash 查询串中的参数名（主屏顶层与 split 内各一套，作用域互不重叠）。 */
+const AGENT_NODE_PARAM = 'node'
+const AGENT_CWD_PARAM = 'cwd'
+
+/** 从查询串提取 agent 草稿环境（仅非空值生效；空串视为未设置）。 */
+function extractAgentEnv(params: URLSearchParams): { nodeId?: string; cwd?: string } {
+  const node = params.get(AGENT_NODE_PARAM)
+  const cwd = params.get(AGENT_CWD_PARAM)
+  return {
+    ...(node !== null && node !== '' ? { nodeId: node } : {}),
+    ...(cwd !== null && cwd !== '' ? { cwd } : {}),
+  }
+}
+
+/** 仅在确实携带环境参数时才挂字段，保持无环境 agent 目标的形状稳定。 */
+function applyAgentEnv(
+  target: { kind: 'agent'; profileId: string },
+  env: { nodeId?: string; cwd?: string },
+): ResolvedTarget {
+  return env.nodeId === undefined && env.cwd === undefined ? target : { ...target, ...env }
+}
+
+/** agent 目标的环境参数序列化（字典序稳定；由 URLSearchParams 统一转义）。 */
+function formatAgentEnvParams(target: ResolvedTarget): Array<[string, string]> {
+  if (target.kind !== 'agent') return []
+  const pairs: Array<[string, string]> = []
+  if (target.nodeId !== undefined && target.nodeId !== '') pairs.push([AGENT_NODE_PARAM, target.nodeId])
+  if (target.cwd !== undefined && target.cwd !== '') pairs.push([AGENT_CWD_PARAM, target.cwd])
+  return pairs
+}
+
 /** 严格解析单个 `sp.<k>=<v>` / `ssp.<k>=<v>` 参数：非法键 / 空值 / 非法编码返回 null。 */
 function parseNamespacedParam(
   rawKey: string,
@@ -111,7 +142,7 @@ function formatScreenParams(
     .map((key) => [`${prefix}${key}`, target.params![key]] as [string, string])
 }
 
-/** 解析 `c/<id>` / `s/<pluginId>/<screenId>` / 各大一级全屏中心；先切分路径，再分别解码，避免 ID 中的转义斜杠破坏结构。 */
+/** 解析 `c/<id>` / `a/<profileId>` / `s/<pluginId>/<screenId>` / 各大一级全屏中心；先切分路径，再分别解码，避免 ID 中的转义斜杠破坏结构。 */
 function parseTargetValue(raw: string): ResolvedTarget | null {
   if (raw === 'plugins') {
     return { kind: 'plugins' }
@@ -132,6 +163,14 @@ function parseTargetValue(raw: string): ResolvedTarget | null {
     const conversationId = parsePositiveInt(raw.slice(2))
     return conversationId === null ? null : { kind: 'conversation', conversationId }
   }
+  if (raw.startsWith('a/')) {
+    const rest = raw.slice(2)
+    // profileId 编码后不含裸斜杠；多余斜杠判非法，不静默取前段。
+    if (rest === '' || rest.includes('/')) return null
+    const profileId = decodeSegment(rest)
+    if (profileId === null) return null
+    return { kind: 'agent', profileId }
+  }
   if (raw.startsWith('s/')) {
     const rest = raw.slice(2)
     const slashIdx = rest.indexOf('/')
@@ -146,6 +185,7 @@ function parseTargetValue(raw: string): ResolvedTarget | null {
 
 function formatTargetValue(target: ResolvedTarget): string {
   if (target.kind === 'conversation') return `c/${target.conversationId}`
+  if (target.kind === 'agent') return `a/${encodeSegment(target.profileId)}`
   if (target.kind === 'screen') return `s/${encodeSegment(target.pluginId)}/${encodeSegment(target.screenId)}`
   if (target.kind === 'plugins') return 'plugins'
   if (target.kind === 'profiles') return 'profiles'
@@ -196,11 +236,19 @@ function parseSplitTargetValue(raw: string): ResolvedTarget | null {
         : {}),
     })
   }
+  if (baseTarget.kind === 'agent') {
+    return applyAgentEnv(baseTarget, extractAgentEnv(params))
+  }
   return baseTarget
 }
 
 function formatSplitTarget(target: ResolvedTarget): string {
   const base = formatTargetValue(target)
+  const agentEnv = formatAgentEnvParams(target)
+  if (agentEnv.length > 0) {
+    const env = new URLSearchParams(agentEnv).toString()
+    return `${base}?${env}`
+  }
   if (target.kind === 'plugins' && target.pluginId) {
     return `${base}?p=${encodeSegment(target.pluginId)}`
   }
@@ -309,6 +357,8 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
         : upgraded.kind === 'models' && upgraded.providerId !== undefined
           ? { kind: 'models', providerId: upgraded.providerId, tab }
           : { kind: 'models', tab }
+  } else if (primaryTarget.kind === 'agent') {
+    primaryTarget = applyAgentEnv(primaryTarget, extractAgentEnv(params))
   }
 
   const state: WorkspaceLocationState = {
@@ -342,7 +392,7 @@ function applyScreenParams(
   return params === undefined ? target : { ...target, params }
 }
 
-/** 始终返回以 `#/` 开头的规范形式；默认态输出 `#/c/1`，command-palette 不序列化。 */
+/** 始终返回以 `#/` 开头的规范形式；默认态输出 `#/profiles`，command-palette 不序列化。 */
 export function formatLocationHash(state: WorkspaceLocationState): string {
   const query: Array<[string, string]> = []
   if (state.primaryTarget.kind === 'plugins' && state.primaryTarget.pluginId !== undefined && state.primaryTarget.pluginId !== '') {
@@ -363,6 +413,8 @@ export function formatLocationHash(state: WorkspaceLocationState): string {
   if (state.primaryTarget.kind === 'models' && state.primaryTarget.tab === 'defaults') {
     query.push(['tab', 'defaults'])
   }
+  // agent 待命目标的草稿环境（node/cwd）序列化到主屏顶层命名空间；分屏在 split 串内自带。
+  query.push(...formatAgentEnvParams(state.primaryTarget))
   if (state.splitTarget !== null) query.push(['split', formatSplitTarget(state.splitTarget)])
   // 主/分屏 Screen 参数各占 sp.* / ssp.* 命名空间：同一 screen 双开时参数互不串扰。
   query.push(...formatScreenParams(state.primaryTarget, PRIMARY_SCREEN_PARAM_PREFIX))
@@ -416,6 +468,13 @@ const isSameScreenSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): b
   return a.pluginId === b.pluginId && a.screenId === b.screenId
 }
 
+/** 同一 agent 待命坐标（profileId 相同）视为同一位置槽位；仅草稿环境变化不算坐标级切屏。 */
+const isSameAgentSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): boolean => {
+  if (a === null || b === null) return a === b
+  if (a.kind !== 'agent' || b.kind !== 'agent') return false
+  return a.profileId === b.profileId
+}
+
 /** 同一中心坐标（kind 均为对应的一级全屏中心）视为同一主舞台位置槽位；drawer 切换或关闭不算坐标级切屏。 */
 const isSamePrimaryCenterSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): boolean => {
   if (a === null || b === null) return a === b
@@ -427,15 +486,15 @@ const isSamePrimaryCenterSlot = (a: ResolvedTarget | null, b: ResolvedTarget | n
   return false
 }
 
-/** 主/分屏位置是否发生坐标级变化（会话 ID 变化、screen 坐标变化、视图类型变化、开/关分屏）。 */
+/** 主/分屏位置是否发生坐标级变化（会话 ID 变化、agent 坐标变化、screen 坐标变化、视图类型变化、开/关分屏）。 */
 const isTargetSlotChanged = (prev: ResolvedTarget | null, next: ResolvedTarget | null): boolean =>
-  !isSameResolvedTarget(prev, next) && !isSameScreenSlot(prev, next) && !isSamePrimaryCenterSlot(prev, next)
+  !isSameResolvedTarget(prev, next) && !isSameScreenSlot(prev, next) && !isSameAgentSlot(prev, next) && !isSamePrimaryCenterSlot(prev, next)
 
 /**
  * 判断状态迁移是否值得入历史栈（pushState）：
  * - 主屏、分屏、工作台开关、弹窗开关或弹窗类型变化 → push（前进/后退可还原）；
- * - 同一 screen 目标仅 params 变化 → replace，避免筛选器每次按键污染后退栈，
- *   需要入栈时由调用方（setScreenParams push 标记）显式强制；
+ * - 同一 screen 目标仅 params 变化、或同一 agent 待命目标仅草稿环境（node/cwd）变化 → replace，
+ *   避免筛选器/环境调整每次按键污染后退栈，需要入栈时由调用方显式强制；
  * - 产物预览切换不同 artifactId → push（每个预览是可独立直达的视图）；
  * - 同一列表型弹窗内仅切换子项、或工作台已打开时仅切 Tab → replace
  *   （避免弹窗内点选 10 项后要后退 10 次才能关掉弹窗）。
@@ -498,6 +557,7 @@ export function serializeHash(input: HashSerializable): string {
   if (
     'kind' in input &&
     (input.kind === 'conversation' ||
+      input.kind === 'agent' ||
       input.kind === 'screen' ||
       input.kind === 'plugins' ||
       input.kind === 'profiles' ||

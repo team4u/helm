@@ -43,7 +43,7 @@ function renderTimelineHtml(conversation: ConversationSummary, entries: Conversa
     conversationArtifacts: {}, groupedUi: groupUiContributions([]),
     authReady: true, authConfigured: true, authenticated: true, authError: null,
     connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark', themePreference: 'dark',
-    profiles: [], models: [], providers: [], credentials: [], skills: [], actions: [],
+    profiles: [], assetsLoaded: true, models: [], providers: [], credentials: [], skills: [], actions: [],
     primaryTarget: { kind: 'conversation', conversationId: 1 }, splitTarget: null,
     workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices: [],
     setTheme: noop, setThemePreference: noop, toggleTheme: noop, checkAuth: asyncNoop,

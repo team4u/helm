@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AskSpec, ConversationSummary } from '@helm/protocol'
 import { asksApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
@@ -188,28 +188,13 @@ function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
   )
 }
 
-/** 在指定 Agent 下新建对话并打开（唯一的新建入口路径）。 */
-function createConversationFor(
-  store: HelmStoreValue,
-  onNavigate?: () => void,
-): (profileId: string) => Promise<void> {
-  return async (profileId: string) => {
-    try {
-      const conv = await conversationsApi.create({ profileId })
-      store.openTarget({ kind: 'conversation', conversationId: conv.id })
-      onNavigate?.()
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '新建会话失败',
-        body: err instanceof Error ? err.message : String(err),
-      })
-    }
-  }
+/** 在指定 Agent 下进入待命页（所有用户新建入口的统一路径；首次发送才创建会话）。 */
+function openAgentStandby(store: HelmStoreValue, profileId: string, onNavigate?: () => void): void {
+  store.openTarget({ kind: 'agent', profileId })
+  onNavigate?.()
 }
 
-/** Agent 站位「+」按钮：仅 canCreateConversation 的 Agent 渲染。 */
+/** Agent 站位「+」按钮：进入待命页开始新话题（首次发送才创建会话）；仅人类可选 Agent 渲染。 */
 function AgentNewConversationButton({
   agent,
   onCreate,
@@ -219,12 +204,12 @@ function AgentNewConversationButton({
 }) {
   if (!agent.canCreateConversation) return null
   return (
-    <Tooltip content={`在 ${agent.label} 下新建对话`} side="right">
+    <Tooltip content={`在 ${agent.label} 下开始新话题`} side="right">
       <button
         type="button"
         className="btn btn-ghost btn-icon-xs agent-new-conv-btn"
-        title={`在 ${agent.label} 下新建对话`}
-        aria-label={`在 ${agent.label} 下新建对话`}
+        title={`在 ${agent.label} 下开始新话题`}
+        aria-label={`在 ${agent.label} 下开始新话题`}
         onClick={(e) => {
           e.stopPropagation()
           onCreate(agent.profileId)
@@ -254,8 +239,18 @@ function isConversationActive(store: HelmStoreValue, convId: number): boolean {
   return store.primaryTarget.kind === 'conversation' && store.primaryTarget.conversationId === convId
 }
 
-/** 手风琴跟随目标：当前主屏/分屏会话所属的 profileId（无则 null）。 */
+/** 该 Agent 的待命页是否正被主屏或分屏查看。 */
+function isAgentStandbyActive(store: HelmStoreValue, profileId: string): boolean {
+  return (
+    (store.primaryTarget.kind === 'agent' && store.primaryTarget.profileId === profileId) ||
+    (store.splitTarget?.kind === 'agent' && store.splitTarget.profileId === profileId)
+  )
+}
+
+/** 手风琴跟随目标：当前主屏/分屏会话或待命页所属的 profileId（无则 null）。 */
 function activeProfileIdOf(store: HelmStoreValue): string | null {
+  if (store.primaryTarget.kind === 'agent') return store.primaryTarget.profileId
+  if (store.splitTarget?.kind === 'agent') return store.splitTarget.profileId
   const ids: number[] = []
   if (store.primaryTarget.kind === 'conversation') ids.push(store.primaryTarget.conversationId)
   if (store.splitTarget?.kind === 'conversation') ids.push(store.splitTarget.conversationId)
@@ -301,8 +296,9 @@ function AgentStandingItem({
   const [showAll, setShowAll] = useState(false)
 
   const activeInAgent = agent.conversations.some((c) => isConversationActive(store, c.id))
+  const standbyActive = isAgentStandbyActive(store, agent.profileId)
   const isOpen = batchMode ? (hasSubList && expanded) : (hasSubList && accordionOpen)
-  const headerActive = activeInAgent && !isOpen
+  const headerActive = (activeInAgent || standbyActive) && !isOpen
 
   const toggleOpen = () => {
     if (batchMode) {
@@ -323,7 +319,8 @@ function AgentStandingItem({
       onNavigate?.()
       return
     }
-    if (agent.canCreateConversation) onCreate(agent.profileId)
+    // 零会话智能体：进入待命页（首次发送才创建），不自动新建空会话。
+    if (agent.canCreateConversation) openAgentStandby(store, agent.profileId, onNavigate)
   }
 
   const openSplit = (e: React.MouseEvent, convId: number) => {
@@ -653,8 +650,21 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
     })
   }, [store])
 
-  const activeStandings = useMemo(() => agentStandings.filter((a) => a.conversations.length > 0), [agentStandings])
-  const idleStandings = useMemo(() => agentStandings.filter((a) => a.conversations.length === 0), [agentStandings])
+  // 当前待命中的零会话智能体平铺在上（不埋进折叠闲置区，保持激活可见）。
+  const standbyProfileIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (store.primaryTarget.kind === 'agent') ids.add(store.primaryTarget.profileId)
+    if (store.splitTarget?.kind === 'agent') ids.add(store.splitTarget.profileId)
+    return ids
+  }, [store.primaryTarget, store.splitTarget])
+  const activeStandings = useMemo(
+    () => agentStandings.filter((a) => a.conversations.length > 0 || standbyProfileIds.has(a.profileId)),
+    [agentStandings, standbyProfileIds],
+  )
+  const idleStandings = useMemo(
+    () => agentStandings.filter((a) => a.conversations.length === 0 && !standbyProfileIds.has(a.profileId)),
+    [agentStandings, standbyProfileIds],
+  )
   const visibleStandings = useMemo(
     () => filterAgentStandings(agentStandings, search),
     [agentStandings, search],
@@ -667,8 +677,8 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
     () => idleStandings.filter((a) => visibleStandings.some((v) => v.profileId === a.profileId)),
     [idleStandings, visibleStandings],
   )
-  const createConversation = useMemo(
-    () => createConversationFor(store, onNavigate),
+  const openStandby = useCallback(
+    (profileId: string) => openAgentStandby(store, profileId, onNavigate),
     [store, onNavigate],
   )
 
@@ -725,20 +735,8 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
         })
       }
 
-      if (
-        store.primaryTarget.kind === 'conversation' &&
-        selectedIds.has(store.primaryTarget.conversationId)
-      ) {
-        // 删除当前主屏会话：回退到无会话依赖的角色中心。
-        store.openTarget({ kind: 'profiles' })
-      }
-
-      if (
-        store.splitTarget?.kind === 'conversation' &&
-        selectedIds.has(store.splitTarget.conversationId)
-      ) {
-        store.closeSplit()
-      }
+      // 导航不在此处做：仅依赖每个成功删除的 conversation.deleted SSE 事件，
+      // 由 Provider 按当前目标条件回退（避免旧快照/selectedIds 二次跳转误伤失败项与新导航）。
 
       setSelectedIds(new Set())
       setBatchMode(false)
@@ -843,7 +841,7 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
               key={agent.profileId}
               agent={agent}
               store={store}
-              onCreate={(profileId) => void createConversation(profileId)}
+              onCreate={openStandby}
               onNavigate={onNavigate}
               batchMode={batchMode}
               accordionOpen={accordionId === agent.profileId}
@@ -875,7 +873,7 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
                     key={agent.profileId}
                     agent={agent}
                     store={store}
-                    onCreate={(profileId) => void createConversation(profileId)}
+                    onCreate={openStandby}
                     onNavigate={onNavigate}
                     batchMode={false}
                     accordionOpen={false}
@@ -890,7 +888,7 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
                 key={agent.profileId}
                 agent={agent}
                 store={store}
-                onCreate={(profileId) => void createConversation(profileId)}
+                onCreate={openStandby}
                 onNavigate={onNavigate}
                 batchMode
                 accordionOpen={false}

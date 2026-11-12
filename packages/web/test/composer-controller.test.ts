@@ -177,7 +177,7 @@ function makeStore(conversation: ConversationSummary, ui: PluginUiContribution[]
     connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark' as const, themePreference: 'system' as const,
     conversations: [conversation], conversationDetails: {}, conversationLives: {}, conversationArtifacts: {},
     pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: ui,
-    groupedUi: groupUiContributions(ui), pluginDocs: {}, nodes: [], profiles: [], models: [],
+    groupedUi: groupUiContributions(ui), pluginDocs: {}, nodes: [], profiles: [], assetsLoaded: true, models: [],
     providers: [], credentials: [], skills: [], actions: [],
     primaryTarget: { kind: 'conversation', conversationId: conversation.id }, splitTarget: null,
     workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null,

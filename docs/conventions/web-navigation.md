@@ -18,6 +18,21 @@
 
 组件使用 `store.openTarget / closeSplit / setScreenParams / setWorkbenchOpen / setWorkbenchTab / setActiveModal` 导航。不得另建平行路由、直接操作浏览器历史，或用组件本地状态管理已有的全局导航位置。
 
+### 2.1 智能体待命目标（agent）与首次发送才落库
+
+- `ResolvedTarget` 的 `{ kind: 'agent'; profileId; nodeId?; cwd? }` 表达智能体待命页：智能体是稳定的会话入口，不把删除会话等同离开智能体；
+- Hash 形式：主屏 `#/a/<encodedProfileId>`，草稿环境用顶层查询参数 `node=<nodeId>&cwd=<cwd>` 序列化；分屏目标的环境编码在 `split` 值内部（`split=a/<id>?node=…&cwd=…`），两套命名空间互不串扰；仅 profileId 参与路径段（含斜杠/问号必须编码），环境参数空串视为未设置；
+- 待命态是真草稿：不预创建会话、不伪造 ConversationSummary；首次真正发送才 create -> （可选 patch thinkingLevel）-> 上传附件 -> submitInput；
+- 所有用户新建入口（Sidebar 名称/加号、会话页「新话题」、命令面板「新建对话」等）一律进入待命态，不 POST create；受管 singleton 依旧打开其真实会话；命令面板无当前 Profile 上下文时导航到角色中心选角色，不硬编码默认角色；
+- 删除导航集中在 Provider 的 `conversation.deleted` 管道：仅当被删的正是当前主屏/分屏/抽屉目标时，以 `history: 'replace'` 回到该智能体待命态并继承被删会话的 `nodeId/cwd`（无 Profile 信息时显式回角色中心），不选其他会话、不依赖组件快照；
+- 声明式目标字符串 `agent:<id>` 同样解析为待命目标；`conversation:profile:<id>` 保持「查找常驻会话」语义（插件 singleton 不受影响）。
+
+### 2.2 显式历史策略（history: 'push' | 'replace'）
+
+- `store.openTarget(target, { history })` 只标记下一拍的历史策略；实际 pushState/replaceState 仍由 HelmStoreProvider 的唯一地址栏写回 effect 执行，组件不得直接调用 `history.*`；
+- 约定：删除回退与 draft->真实会话迁移强制 `replace`（不污染后退栈）；普通手动导航继续 push；`replace` 只替换当前历史项，不能也不宣称清空整个历史栈；
+- 访问更早已删除的会话深链：显式提示不存在，不得自动路由循环或静默跳转。
+
 ## 3. 插件 Screen 路由参数
 
 `screen` 目标可携带字符串参数（`ResolvedTarget.params`），共三类入口：
@@ -49,10 +64,10 @@
 ## 6. 历史记录与错误语义
 
 - 切换主屏/分屏、开关工作台或持久弹窗时使用 push；
-- 在同一列表弹窗内切换子项、在工作台内切换 Tab、在同一 screen 内仅改参数时使用 replace；
-- 历史策略统一维护在 `shouldPushLocationHistory`；
+- 在同一列表弹窗内切换子项、在工作台内切换 Tab、在同一 screen 内仅改参数、在同一 agent 待命目标内仅改草稿环境时使用 replace；
+- 历史策略统一维护在 `shouldPushLocationHistory`，调用方可经 `openTarget({ history })` 显式覆写下一拍；
 - 未认证时保留请求的深链；
-- 合法但不存在的会话或不可用视图必须显式提示，不得仅因初始数据尚未返回而回到默认页面。
+- 合法但不存在的会话或不可用视图必须显式提示，不得仅因初始数据尚未返回而回到默认页面（角色资产未加载时待命页显式区分「加载中」与「不存在」）。
 
 ## 7. 导航验收
 

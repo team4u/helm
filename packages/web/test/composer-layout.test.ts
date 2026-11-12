@@ -174,11 +174,15 @@ test('会话顶栏极简：顶栏不显重复的状态/loading徽章（执行反
   assert.match(paneSource, /moreButtonRef\.current\?\.focus\(\)/)
 })
 
-test('新话题继承当前会话环境：远端会话内新建话题继续当前节点与目录', { timeout: 60_000 }, () => {
-  const threadSlice = paneSource.slice(paneSource.indexOf("'new-thread'"), paneSource.indexOf('已新建对话'))
+test('新话题进入待命页并继承当前会话环境：远端节点与目录不回落本机', { timeout: 60_000 }, () => {
+  const threadSlice = paneSource.slice(paneSource.indexOf('const startNewThread'), paneSource.indexOf('已新建对话'))
+  assert.ok(threadSlice.length > 0, '新话题入口 startNewThread 存在')
+  assert.match(threadSlice, /kind: 'agent'/)
   assert.match(threadSlice, /profileId: conversation\.profileId/)
-  assert.match(threadSlice, /nodeId: currentNodeId/)
-  assert.match(threadSlice, /cwd: conversation\.cwd/)
+  assert.match(threadSlice, /currentNodeId !== 'local' \? \{ nodeId: currentNodeId \}/)
+  assert.match(threadSlice, /conversation\.cwd !== '' \? \{ cwd: conversation\.cwd \}/)
+  // 待命态不预建空会话：入口不再直接 create。
+  assert.doesNotMatch(threadSlice, /conversationsApi\.create/)
 })
 
 test('Composer 空会话起始环境配置条：草稿式编辑，跨节点清空 cwd，阻塞未保存发送', { timeout: 60_000 }, () => {

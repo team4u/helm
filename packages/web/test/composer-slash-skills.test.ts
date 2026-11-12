@@ -119,7 +119,7 @@ function makeStore(conversation: ConversationSummary, opts: MountOptions): HelmS
       composerPills: [], composerWidgets: [], workbenchPanels: [], commands: [], settingsPanels: [],
       profileRuntimes: [], conversationHeaderActions: [], conversationRowActions: [], timelineEntryActions: [], pluginSlots: [],
     },
-    pluginDocs: {}, nodes: [], profiles: opts.profiles, models: [], providers: [], credentials: [],
+    pluginDocs: {}, nodes: [], profiles: opts.profiles, assetsLoaded: true, models: [], providers: [], credentials: [],
     skills: opts.skills ?? CATALOG, actions: [],
     primaryTarget: { kind: 'conversation', conversationId: conversation.id }, splitTarget: null,
     workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null,

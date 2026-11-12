@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SearchHit } from '@helm/protocol'
-import { conversationsApi, searchApi } from '../lib/api.js'
+import { searchApi } from '../lib/api.js'
 import { commandActionPluginId, commandHint, commandsForConversation } from '../lib/commands-model.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
@@ -63,27 +63,30 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
 
   const close = () => onClose()
 
+  // 当前 Profile 上下文：主屏待命页或会话所属角色；无上下文时不猜测默认角色。
+  const paletteProfileId = useMemo(() => {
+    if (store.primaryTarget.kind === 'agent') return store.primaryTarget.profileId
+    const target = store.primaryTarget
+    if (target.kind !== 'conversation') return undefined
+    return store.conversations.find((c) => c.id === target.conversationId)?.profileId
+  }, [store.primaryTarget, store.conversations])
+
   const builtinCommands = useMemo<Array<PaletteRow>>(() => {
     const rows: Array<PaletteRow> = [
       {
         kind: 'command',
         id: 'builtin:new-conversation',
         title: '新建对话',
+        hint: paletteProfileId !== undefined ? paletteProfileId : '先选择角色',
         icon: 'plus',
         run: () => {
-          void (async () => {
-            try {
-              const conv = await conversationsApi.create()
-              store.openTarget({ kind: 'conversation', conversationId: conv.id })
-            } catch (err) {
-              store.pushNotice({
-                type: 'notification',
-                level: 'error',
-                title: '新建会话失败',
-                body: err instanceof Error ? err.message : String(err),
-              })
-            }
-          })()
+          // 有当前 Profile 上下文进入待命态（首次发送才创建）；无上下文去角色中心选角色，
+          // 不硬编码默认 assistant。
+          store.openTarget(
+            paletteProfileId !== undefined
+              ? { kind: 'agent', profileId: paletteProfileId }
+              : { kind: 'profiles' },
+          )
         },
       },
       {
@@ -92,7 +95,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
         title: '打开个人助理角色',
         hint: 'assistant',
         icon: 'sparkles',
-        run: () => store.openTarget({ kind: 'profiles', profileId: 'assistant' }),
+        run: () => store.openTarget({ kind: 'agent', profileId: 'assistant' }),
       },
       {
         kind: 'command',
@@ -177,7 +180,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       })
     }
     return rows
-  }, [store])
+  }, [store, paletteProfileId])
 
   // 声明了 client 内容的插件命令：作为可选中命令行列出（选中即内联渲染）
   const pluginContentCommands = useMemo(

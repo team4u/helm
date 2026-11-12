@@ -3,6 +3,7 @@ import { HelmIcon } from './lib/icons.js'
 import { ModalFocusScope } from './shell/ModalFocusScope.js'
 import { ArtifactPreviewModal } from './conversation/ArtifactPreviewModal.js'
 import { ConversationPane } from './conversation/ConversationPane.js'
+import { AgentStandbyPane } from './conversation/AgentStandbyPane.js'
 import { ConversationDrawer } from './conversation/ConversationDrawer.js'
 import { WorkbenchDrawer } from './conversation/WorkbenchDrawer.js'
 import { HelmStoreProvider } from './lib/HelmStoreProvider.js'
@@ -117,6 +118,13 @@ function HelmShellInner() {
             key={`primary-conv-${store.primaryTarget.conversationId}`}
             conversationId={store.primaryTarget.conversationId}
           />
+        ) : store.primaryTarget.kind === 'agent' ? (
+          <AgentStandbyPane
+            key={`primary-agent-${store.primaryTarget.profileId}`}
+            profileId={store.primaryTarget.profileId}
+            nodeId={store.primaryTarget.nodeId}
+            cwd={store.primaryTarget.cwd}
+          />
         ) : store.primaryTarget.kind === 'screen' ? (
           <ScreenHost
             key={`primary-screen-${store.primaryTarget.pluginId}-${store.primaryTarget.screenId}`}
@@ -141,6 +149,15 @@ function HelmShellInner() {
               <ConversationPane
                 key={`split-conv-${store.splitTarget.conversationId}`}
                 conversationId={store.splitTarget.conversationId}
+                isSplit
+                onCloseSplit={store.closeSplit}
+              />
+            ) : store.splitTarget.kind === 'agent' ? (
+              <AgentStandbyPane
+                key={`split-agent-${store.splitTarget.profileId}`}
+                profileId={store.splitTarget.profileId}
+                nodeId={store.splitTarget.nodeId}
+                cwd={store.splitTarget.cwd}
                 isSplit
                 onCloseSplit={store.closeSplit}
               />
