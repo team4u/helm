@@ -97,6 +97,10 @@ export class ModelRegistry {
   private modelsGeneration = 0
   /** 运行时供应商在途使用计数（providerId -> streaming/refresh 未结算数；teardown 预检用）。 */
   private readonly runtimeProviderUsage = new Map<string, number>()
+  /** 注销中标记（仅 modelsChain 串行域内短暂存在）：rebuild 的 await 窗口内
+   *  新发起的 stream/refresh acquire 显式失败，收口「检查通过→窗口内在途→
+   *  不可检测」的 TOCTOU（usage 递增不在本串行域，见 wrapRuntimeProvider）。 */
+  private readonly retiringRuntimeProviders = new Set<string>()
   /** 同步读 key 缓存（启动预热 + reload 刷新；buildModels 闭包消费）。 */
   readonly apiKeyCache: Record<string, string> = {}
   private modelsCurrent: Models
@@ -410,6 +414,12 @@ export class ModelRegistry {
       if ((this.runtimeProviderUsage.get(provider.id) ?? 0) > 0) {
         throw new HelmError('plugin_has_live_tasks', `供应商 ${provider.id} 仍有在途请求`, 409, { providers: [provider.id] })
       }
+      // usage 检查与 retiring 标记之间无 await（串行域内同步段）：此后
+      // rebuild 的多个 await 窗口中，旧集合仍可能被新回合调起 stream（旧
+      // modelsCurrent 尚未替换）——窗口内新 acquire 显式失败，保证注销返回
+      // 后不再出现该供应商的在途流（否则 assertRuntimeProvidersIdle 因归属
+      // 已删而检测不到，停用/teardown 会与在途模型流并发）。
+      this.retiringRuntimeProviders.add(provider.id)
       this.runtimeProviders.delete(provider.id)
       this.runtimeProviderOwners.delete(provider.id)
       try {
@@ -418,6 +428,8 @@ export class ModelRegistry {
         this.runtimeProviders.set(provider.id, provider)
         if (owner !== undefined) this.runtimeProviderOwners.set(provider.id, owner)
         throw error
+      } finally {
+        this.retiringRuntimeProviders.delete(provider.id)
       }
     })
   }
@@ -522,6 +534,17 @@ export class ModelRegistry {
 
   /** 在途使用计数：目标 provider 各 +1；返回幂等释放函数（各 -1，归零清除）。 */
   private acquireRuntimeProviders(ids: readonly string[]): () => void {
+    for (const id of ids) {
+      // 注销窗口内的新请求显式失败：放行会成为归属已删、检测不到的在途流
+      if (this.retiringRuntimeProviders.has(id)) {
+        throw new HelmError(
+          'runtime_provider_retiring',
+          `供应商 ${id} 正在注销（插件停用中），拒绝新的模型请求`,
+          409,
+          { providers: [id] },
+        )
+      }
+    }
     for (const id of ids) {
       const owner = this.runtimeProviderOwners.get(id)
       if (owner !== undefined) this.pluginHost()?.assertProviderAvailable(owner)

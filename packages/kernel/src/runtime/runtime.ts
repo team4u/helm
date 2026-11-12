@@ -167,8 +167,17 @@ export class KernelRuntime {
       handledToolCalls: this.handledToolCalls,
       dispatchTurnSettled: (payload, consumed) => this.dispatchTurnSettled(payload, consumed),
       onSettleInflight: (run) => {
-        this.settledInflight = Promise.all([this.settledInflight, run]).then(() => undefined)
-        void this.settledInflight.catch(() => {})
+        // 逐项吸收错误：teardown 三处 await settledInflight()，任一 run reject
+        // 会中断关停（后续 store/database close 被跳过，句柄泄漏）且 fail-fast
+        // 毒化后续全部复合。失败如实记录日志，绝不静默吞掉。
+        const absorbed = run.then(
+          () => undefined,
+          (error) => {
+            console.error('[helm] turn 结算链失败（已吸收，不阻断关停）:', error)
+            return undefined
+          },
+        )
+        this.settledInflight = this.settledInflight.then(() => absorbed)
       },
       safeSummary: (id) => this.safeSummary(id),
       submitInput: (id, text, opts) => this.submitInput(id, text, opts),
@@ -280,7 +289,13 @@ export class KernelRuntime {
       return this.dispatchInternalEvent(type, payload)
     }
     if (type === 'plugin.changed') {
-      this.refreshPluginTools()
+      try {
+        this.refreshPluginTools()
+      } catch (error) {
+        // 工具热装失败不得阻断事件发布（客户端仍需拿到插件状态变化），
+        // 也不让异常穿透调用方；错误如实记录。
+        console.error('[helm] plugin.changed 后刷新插件工具失败:', error)
+      }
       const envelope = payload as { type?: string; plugin?: unknown; ui?: unknown } | undefined
       this.events.publish('plugin.changed', {
         type: 'plugin.changed',
@@ -313,9 +328,15 @@ export class KernelRuntime {
   private dispatchInternalEvent(type: string, payload: unknown): MaybePromise<void> {
     const listeners = this.hostEventListeners.get(type)
     if (listeners === undefined || listeners.size === 0) return
+    // 逐监听器隔离：调用方（plugin-host 的 emitEvent 语句调用）不 await 不
+    // catch，任一监听器抛错不得阻断其余监听器，也不得变成 unhandledRejection。
     const run = (async () => {
       for (const listener of [...listeners]) {
-        await listener(payload)
+        try {
+          await listener(payload)
+        } catch (error) {
+          console.error(`[helm] 内部事件监听器失败（${type}）:`, error)
+        }
       }
     })()
     return run
@@ -324,12 +345,20 @@ export class KernelRuntime {
   async start(): Promise<void> {
     if (this.started) return
     if (this.startPromise) return this.startPromise
-    this.startPromise = (async () => {
+    const attempt = (async () => {
       if (this.pluginHost) await this.pluginHost.start()
       this.harness.resume()
       this.started = true
     })()
-    return this.startPromise
+    this.startPromise = attempt
+    try {
+      await attempt
+    } catch (error) {
+      // 失败清除单飞句柄（身份校验防误清并发新尝试）：后续调用可重试，
+      // 而不是永远收到同一份陈旧拒绝。
+      if (this.startPromise === attempt) this.startPromise = undefined
+      throw error
+    }
   }
 
   async prepareInterruptedConversations(ids: number[]): Promise<void> {
@@ -467,9 +496,15 @@ export class KernelRuntime {
       if (entry.conversationId === convId) this.handledToolCalls.delete(id)
     }
     const turnEvent = { ...(payload as Record<string, unknown>), inputs: consumed }
-    const outcome = await this.svc.hookBridge.runHookChain('turn_settled', turnEvent)
-    if (outcome?.action === 'handled') return
-    this.events.publish('turn.settled', outcome?.action === 'transform' ? outcome.value : turnEvent)
+    try {
+      const outcome = await this.svc.hookBridge.runHookChain('turn_settled', turnEvent)
+      if (outcome?.action === 'handled') return
+      this.events.publish('turn.settled', outcome?.action === 'transform' ? outcome.value : turnEvent)
+    } catch (error) {
+      // 本 run 会被聚入 settledInflight（teardown 在等它收敛）：插件钩子或
+      // 事件发布抛错绝不 reject（会中断关停并毒化聚合链），如实记录后结束。
+      console.error(`[helm] turn_settled 分发失败（会话 ${String(convId)}）:`, error)
+    }
   }
 
   // ------------------------------------------------------------------
@@ -797,6 +832,9 @@ export class KernelRuntime {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    // autoResume=false 时 start() 可能仍在途：先等它收敛（失败不阻断关停），
+    // 避免 teardown 与插件启动并发交错（如服务 start 中途被 dispose）。
+    if (this.startPromise !== undefined) await this.startPromise.catch(() => {})
     await teardownKernelRuntime({
       modelsRegistry: this.modelsRegistry,
       assetReloader: this.svc.assetReloader,
