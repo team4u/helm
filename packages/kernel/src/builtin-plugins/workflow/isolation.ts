@@ -417,11 +417,17 @@ export class WorktreeIsolation {
     if (request.cwd !== undefined && request.cwd !== record.path) {
       throw new HelmError('resume_cwd_conflict', `子会话已绑定隔离 worktree '${record.path}'，不支持在 resume 时改写 cwd 为 '${request.cwd}'`, 409, { existingCwd: record.path, requestedCwd: request.cwd })
     }
-    await this.allocator.verifyForResume(record, request.cwd, request.signal)
+    // 占位租约先于远端验证打开：verifyForResume 的多次远端 git/fs 探测是秒级
+    // await 窗口，期间子会话不 working、无在途执行、无租约——并发 cleanup 可
+    // 通过全部占用检查移除树，resume 随后携 stale cwd 派生会话，并为已 removed
+    // 记录留永久占位租约。租约前置后 isPathInUse 在验证期即拒绝 cleanup（与
+    // spawnWithWorktree 的 beforeCreate 副作用前置同构）；验证失败走
+    // neverStarted 释放，不留占位。
+    const leaseToken = await this.openPendingLease(record.id)
     let enteredNext = false
     let execution: AgentExecutionInfo | undefined
-    const leaseToken = await this.openPendingLease(record.id)
     try {
+      await this.allocator.verifyForResume(record, request.cwd, request.signal)
       const finalRequest: AgentSpawnRequest = {
         ...request,
         cwd: record.path,
@@ -501,13 +507,23 @@ export class WorktreeIsolation {
           if (info.conversationId !== undefined) {
             this.recordAgentBinding(request.agentId, info.conversationId)
           }
-          // 首次回填：开租约（running；后续多次回调幂等更新）。
+          // 首次回填：开租约（running；后续多次回调幂等更新）。onResolved 是
+          // 同步回调无法 await flush：落盘失败不能静默（租约是 crash 窗口内拒绝
+          // cleanup 的唯一证据），也不撤销 staged 租约（同进程 isPathInUse 读
+          // doc 现值，撤销立即打开清理窗口）——即时 stderr 诊断，结算写同一
+          // doc 时会重试整页落盘（settleLease 的 flush 失败仍如实上抛）。
           if (leaseToken === undefined) {
             leaseToken = randomUUID()
             const map = this.listLeases()
             map.set(leaseToken, { phase: 'running', info: enriched, worktreeId: managed.id, createdAt: Date.now() })
             this.saveLeases(map)
-            void this.deps.docStore.flush()
+            void this.deps.docStore.flush().catch((error: unknown) => {
+              process.stderr.write(
+                `builtin:workflow: worktree 租约 ${managed.id} 落盘失败（执行期间崩溃将失去清理保护，结算写会重试）: ${
+                  error instanceof Error ? error.message : String(error)
+                }\n`,
+              )
+            })
           } else {
             this.updateLease(leaseToken, enriched)
           }

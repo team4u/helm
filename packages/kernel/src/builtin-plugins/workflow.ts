@@ -322,15 +322,32 @@ export function createWorkflowPlugin(): PluginDefinition {
           listActions: () => ctx.host.listActions(),
           getConversation: (id) => ctx.host.getConversation(id),
           abortConversation: (id) => ctx.host.abortConversation(id),
+          // 引擎侧签名是 void（各调用点 fire-and-forget 不 await）：适配器必须
+          // 自吞异常——runs 投影（listRuns 可抛 workflow_index_corrupt）与广播
+          // 失败只能诊断，逃逸会变成 unhandledRejection 拖垮进程（stop 路径
+          // 同款纪律：stderr + 显式 notification，绝不静默）。
           emitEvent: async (type, payload) => {
-            if (type === 'workflow.updated') {
-              syncRunsDoc()
-              // 全局只发布状态失效提示，详情经会话投影订阅，不旁路广播节点输出。
-              const run = (payload as { run: WorkflowRunSummary }).run
-              await ctx.host.emitEvent(type, { run: { id: run.id, conversationId: run.conversationId, status: run.status } })
-              return
+            try {
+              if (type === 'workflow.updated') {
+                syncRunsDoc()
+                // 全局只发布状态失效提示，详情经会话投影订阅，不旁路广播节点输出。
+                const run = (payload as { run: WorkflowRunSummary }).run
+                await ctx.host.emitEvent(type, { run: { id: run.id, conversationId: run.conversationId, status: run.status } })
+                return
+              }
+              await ctx.host.emitEvent(type, payload)
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error)
+              process.stderr.write(`builtin:workflow: emitEvent ${type} 投影/广播失败（run 状态以 records 持久层为准）: ${message}\n`)
+              Promise.resolve(
+                ctx.host.emitEvent('notification', {
+                  type: 'notification',
+                  level: 'warning',
+                  title: '工作流事件投影未同步',
+                  body: `同步 runs 投影或广播 ${type} 事件失败（运行终态以任务面板重查为准）：${message}`,
+                }),
+              ).catch(() => {})
             }
-            await ctx.host.emitEvent(type, payload)
           },
           onRunSettled: async (summary) => {
             syncRunsDoc()
