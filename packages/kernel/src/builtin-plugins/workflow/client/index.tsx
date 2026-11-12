@@ -13,7 +13,7 @@ import { useMemo, useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
 import type { ToolViewProps, WorkbenchPanelProps, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
-import { usePluginContext, useConversation, useConversations, useToolActivity } from '@helm/plugin-client'
+import { formatDurationMs, usePluginContext, useConversation, useConversations, useToolActivity } from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import {
   buildSubagentStatSegments,
@@ -23,7 +23,6 @@ import {
   canResumeWorkflowRun,
   extractWorkflowLogs,
   formatNodeOutputPreview,
-  formatDurationMs,
   hasNodeExtraDetail,
   formatWorkflowNodeStats,
   isLatestSubagentCallForTarget,

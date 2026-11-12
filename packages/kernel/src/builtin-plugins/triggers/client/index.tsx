@@ -13,9 +13,8 @@ import { useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helm/protocol'
-import { usePluginContext, usePluginDoc } from '@helm/plugin-client'
+import { formatTime, usePluginContext, usePluginDoc } from '@helm/plugin-client'
 import {
-  formatTime,
   parseCronJobs,
   parseWebhooks,
   type CronJobRow,

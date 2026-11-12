@@ -53,14 +53,6 @@ export function parseStatus(doc: MagpieStatusView | undefined): MagpieStatusView
   }
 }
 
-/** 展示用紧凑时间（本地时区；缺失返回空串）。 */
-export function formatTime(ms: number | undefined): string {
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return ''
-  const date = new Date(ms)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
-}
-
 /** 布尔展示：是 / 否。 */
 export function boolLabel(value: boolean): string {
   return value ? '是' : '否'

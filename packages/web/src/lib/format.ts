@@ -53,6 +53,14 @@ export function formatCompactTimestamp(ms: number, options?: { placeholder?: str
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
+/** 紧凑日期时间 `MM-DD HH:mm`（表格展示，如配额刷新时间 / Worker 创建时间）；本地时区，非法或缺失返回空串。 */
+export function formatTime(ms: number | undefined): string {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return ''
+  const date = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 /**
  * 消息展示时刻（主聊天流极简时间）：
  * - 当天返回 "HH:mm"（如 "14:28"）；

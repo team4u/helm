@@ -17,11 +17,10 @@ import { useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
 import type { ComposerScopeProps, ScreenProps, TimelineRendererProps, ToolViewProps } from '@helm/protocol'
-import { Switch, usePluginContext, usePluginDoc } from '@helm/plugin-client'
+import { formatTime, Switch, usePluginContext, usePluginDoc } from '@helm/plugin-client'
 import {
   dispatchedWorkerId,
   dispatchInput,
-  formatTime,
   outcomeLabel,
   outcomeTone,
   parseRecallNodes,

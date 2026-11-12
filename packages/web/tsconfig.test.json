@@ -2,7 +2,8 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "paths": {
-      "@helm/protocol": ["../protocol/src/index.ts"]
+      "@helm/protocol": ["../protocol/src/index.ts"],
+      "@helm/plugin-client": ["./src/lib/plugin-client-sdk.ts"]
     }
   },
   "include": ["test/**/*.ts", "test/**/*.tsx"]

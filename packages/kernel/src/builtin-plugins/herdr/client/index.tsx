@@ -12,7 +12,7 @@ import { useMemo, useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helm/protocol'
-import { Callout, Select, usePluginContext, usePluginDoc } from '@helm/plugin-client'
+import { Callout, formatCompactTimestamp, Select, usePluginContext, usePluginDoc } from '@helm/plugin-client'
 import {
   agentStatusTone,
   canFocusPane,
@@ -56,14 +56,6 @@ function Icon({ name, size = 12, className, style }: { name: string; size?: numb
   }
   const Cmp = map[name] ?? Circle
   return <Cmp size={size} strokeWidth={1.75} className={className} style={style} />
-}
-
-/** 紧凑时间戳 MM-DD HH:mm:ss（本地时区；0/缺失返回占位符）。 */
-function formatCompactTimestamp(ms: number): string {
-  if (!ms) return '未知'
-  const date = new Date(ms)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
 /** 宿主 Radix Select 筛选器（复用 @helm/plugin-client 共享原语；零原生 <select>）。 */

@@ -40,11 +40,3 @@ export function parseCronJobs(doc: { jobs?: unknown } | undefined): CronJobRow[]
 export function parseWebhooks(doc: { webhooks?: unknown } | undefined): WebhookRow[] {
   return Array.isArray(doc?.webhooks) ? (doc!.webhooks as WebhookRow[]) : []
 }
-
-/** 展示用紧凑时间（本地时区；缺失返回空串）。 */
-export function formatTime(ms: number | undefined): string {
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return ''
-  const date = new Date(ms)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
-}
