@@ -303,7 +303,8 @@ test('doctor：未绑定身份时 ok=false 且退出码 1', { timeout: 60_000 },
   }
 });
 
-test('doctor：node.json 权限 0644 时 identity 报 error（退出码 1）', { timeout: 60_000 }, async () => {
+test('doctor：node.json 权限 0644 时 identity 报 error（退出码 1；Windows 无 POSIX mode 跳过）', { timeout: 60_000 }, async () => {
+  if (process.platform === 'win32') return; // NTFS 走 ACL，stat.mode 不表达 0644，生产逻辑已对 win32 豁免
   const dir = await tempDir('helm-node-doctor-mode-');
   try {
     await writeNodeIdentity(dir, { nodeId: 'mode-node', token: 'mode-node:secret-1', hubUrl: 'http://127.0.0.1:3202' });

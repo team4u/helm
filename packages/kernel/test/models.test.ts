@@ -19,6 +19,7 @@ import { AddressInfo } from 'node:net'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import process from 'node:process'
 import type { ProviderConfig } from '@helm/protocol'
 import type { ApiKeyAuth, MutableModels } from '@earendil-works/pi-ai'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
@@ -393,12 +394,14 @@ describe('文件版动态目录缓存（models-store.json）', { timeout: 60_000
       assert.equal((await store.read('a'))?.checkedAt, 1)
       assert.equal((await store.read('b'))?.checkedAt, 2)
 
-      // 落盘为 0600 且顶层为对象。
+      // 落盘为 0600 且顶层为对象（Windows 无 POSIX mode，跳过模式位校验）。
       const raw = JSON.parse(await readFile(join(dataDir, 'models-store.json'), 'utf8')) as Record<string, unknown>
       assert.ok(typeof raw['p1'] === 'object')
-      const { stat } = await import('node:fs/promises')
-      const mode = (await stat(join(dataDir, 'models-store.json'))).mode & 0o777
-      assert.equal(mode, 0o600)
+      if (process.platform !== 'win32') {
+        const { stat } = await import('node:fs/promises')
+        const mode = (await stat(join(dataDir, 'models-store.json'))).mode & 0o777
+        assert.equal(mode, 0o600)
+      }
     } finally {
       await rm(dataDir, { recursive: true, force: true })
     }

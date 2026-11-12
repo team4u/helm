@@ -14,6 +14,7 @@ import http from 'node:http'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import process from 'node:process'
 import { runCli } from '../src/index.js'
 
 interface Hit {
@@ -396,11 +397,27 @@ test('readFileInto：文件读入目标字段；普通值按 schema 类型转换
     assert.equal(tildeMissing.code, 1)
     assert.equal(errorCode(tildeMissing), 'positional_file_not_found')
 
-    // 路径形态但目标不存在：显式报错（不静默当名字）
-    for (const p of ['./nope.js', '/definitely/not/here.js', 'C:\\nope\\f.js', '\\\\srv\\share\\f.js']) {
+    // 路径形态但目标不存在：显式报错（不静默当名字）。
+    // UNC 形态（\\srv\share\...）仅在非 Windows 断言 not_found：Windows 上 stat
+    // 会真实发起网络解析，不可达共享返回 EHOSTUNREACH/ENOENT 之外的 IO 错误，
+    // 生产逻辑如实报 unreadable（不伪装 not_found），此处接受平台真实结果。
+    const missing: string[] = ['./nope.js', '/definitely/not/here.js', 'C:\\nope\\f.js']
+    if (process.platform !== 'win32') missing.push('\\\\srv\\share\\f.js')
+    for (const p of missing) {
       const miss = await run(['gadget', 'deploy', p, '1', '--json'], env)
       assert.equal(miss.code, 1, `应报错：${p}`)
       assert.equal(errorCode(miss), 'positional_file_not_found', p)
+    }
+
+    if (process.platform === 'win32') {
+      // Windows 上 UNC 形态仍是路径形状：不得当普通值写入 field，必须是显式报错
+      // （网络不可达时为 unreadable；本地盘不存在的 \\?\ 前缀等价验证不触发网络解析）。
+      const unc = await run(['gadget', 'deploy', '\\\\srv\\share\\f.js', '1', '--json'], env)
+      assert.equal(unc.code, 1, 'UNC 路径形态必须显式报错，不得当普通值')
+      assert.ok(
+        errorCode(unc) === 'positional_file_unreadable' || errorCode(unc) === 'positional_file_not_found',
+        `接受平台真实 IO 结果：${errorCode(unc)}`,
+      )
     }
 
     // Windows 反斜杠显式相对与 ~ 形态：同样是路径，缺文件不得静默当名字

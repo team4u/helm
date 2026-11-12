@@ -138,11 +138,14 @@ test('记录读写：ENOENT 返回 null，0600 原子写，delete/clear 幂等',
   assert.equal(current?.version, '1.0.0');
   assert.equal(current?.cliBinDir, '/a/node_modules/.bin');
   const stat = rawFs.statSync(path.join(dir, 'current.json'));
-  assert.equal(stat.mode & 0o777, 0o600);
+  // Windows 无 POSIX mode（NTFS 走 ACL），跳过 0600 模式位断言。
+  if (process.platform !== 'win32') assert.equal(stat.mode & 0o777, 0o600);
 
   await writeBlockedRelease(dir, { version: '2.0.0', reason: 'canary failed', at: '2026-01-02T00:00:00.000Z' });
   assert.equal((await readBlockedRelease(dir))?.reason, 'canary failed');
-  assert.equal(rawFs.statSync(path.join(dir, 'update-blocked.json')).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') {
+    assert.equal(rawFs.statSync(path.join(dir, 'update-blocked.json')).mode & 0o777, 0o600);
+  }
 
   await deleteCurrentRelease(dir);
   await clearBlockedRelease(dir);

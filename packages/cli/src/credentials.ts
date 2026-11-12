@@ -189,8 +189,13 @@ async function atomicWrite0600(file: string, text: string): Promise<void> {
   }
 }
 
-/** 既有文件可能被外部放宽过权限：收敛回 0600，失败显式报错。 */
+/**
+ * 既有文件可能被外部放宽过权限：收敛回 0600，失败显式报错。
+ * Windows 无 POSIX mode（NTFS 走 ACL，stat.mode 不表达 0600），不校验也不
+ * chmod（POSIX chmod 在 Windows 上无效）；仅非 Windows 平台严格收敛。
+ */
 async function ensureMode0600(file: string): Promise<void> {
+  if (process.platform === 'win32') return
   const st = await fsp.stat(file)
   if ((st.mode & 0o777) !== 0o600) {
     await fsp.chmod(file, 0o600).catch((err) => {

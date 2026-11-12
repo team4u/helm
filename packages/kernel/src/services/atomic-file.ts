@@ -102,18 +102,28 @@ export async function copyFilePrivate(src: string, dest: string): Promise<void> 
   const tmp = join(dirname(dest), `.${randomUUID()}.tmp`)
   await copyFile(src, tmp)
   await rename(tmp, dest)
-  // rename 保留源模式位；机密边界统一收敛为 0600。
-  const handle = await open(dest, 'r')
-  try {
-    await handle.chmod(0o600)
-  } finally {
-    await handle.close()
+  // rename 保留源模式位；机密边界统一收敛为 0600（POSIX chmod 对 Windows 无意义，跳过）。
+  if (process.platform !== 'win32') {
+    const handle = await open(dest, 'r')
+    try {
+      await handle.chmod(0o600)
+    } finally {
+      await handle.close()
+    }
   }
 }
 
-/** 判定路径当前模式位是否不含 group/other 权限（即私有）。 */
+/**
+ * 判定路径当前模式位是否不含 group/other 权限（即私有）。
+ *
+ * Windows 的 NTFS/ACL 不承载 POSIX group/other 位，Node stat.mode 仅反映
+ * 只读位；0600 语义不可用，直接视为私有（与 node/doctor.ts 的平台约定一致）。
+ * 非 Windows 仍严格校验：模式位含 group/other 即非私有。
+ */
 export async function isPrivateMode(path: string): Promise<boolean> {
+  // 即使 Windows 不检查 POSIX mode，也要先 stat，避免把文件消失或权限错误静默视为私有。
   const s = await stat(path)
+  if (process.platform === 'win32') return true
   return (s.mode & 0o077) === 0
 }
 

@@ -3,11 +3,12 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { canConfigureSessionEnv, envDraftError, envDraftOnNodeChange, envDraftUnchanged, formatEnvSubtitle } from '../src/conversation/composer-model.js'
 
-const source = readFileSync(new URL('../src/conversation/Composer.tsx', import.meta.url), 'utf8')
-const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
-const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
-const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
-const responsive = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
+// 读取源码后统一换行（Windows checkout 下 autocrlf 会产生 CRLF，正则不得依赖 LF）
+const source = readFileSync(new URL('../src/conversation/Composer.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const responsive = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 const e = (kind: string) => ({ kind })
 
@@ -191,7 +192,7 @@ test('Composer 空会话起始环境配置条：草稿式编辑，跨节点清�
   // 保存失败保留草稿并显式报错。
   assert.match(source, /role="alert"/)
   // 未保存/保存中阻塞发送：发送函数自身与按钮同时拦截（覆盖 Enter）。
-  assert.match(source, /if \(envBlockedRef\.current\) \{[\s\S]*?请先保存或取消起始环境修改[\s\S]*?return\n    \}/)
+  assert.match(source, /if \(envBlockedRef\.current\) \{[\s\S]*?请先保存或取消起始环境修改[\s\S]*?return\r?\n    \}/)
   assert.match(source, /envBlocker\.blocked \|\| text\.trim\(\) === ''/)
   // 发送中禁止改环境：SessionEnvBar 接收 sendBlocked。
   assert.match(source, /sendBlocked=\{sendInFlight\}/)

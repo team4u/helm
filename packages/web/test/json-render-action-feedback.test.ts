@@ -5,7 +5,7 @@ import { renderToString } from 'react-dom/server'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import * as HelmPluginClient from '../src/lib/plugin-client-sdk.js'
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
 import { normalizeSpec, type NormalizedSpecNode } from '../../kernel/src/builtin-plugins/json-render/client/spec-normalize.js'
@@ -39,7 +39,8 @@ const { code } = await compilePluginClientModule(
 )
 const f = join(CACHE, 'spec-primitives.mjs')
 writeFileSync(f, code, 'utf8')
-const { SpecNodeList } = await import(f)
+// Windows 上裸绝对路径不是合法 ESM 说明符，统一经 file:// URL 动态导入
+const { SpecNodeList } = await import(pathToFileURL(f).href)
 rmSync(CACHE, { recursive: true, force: true })
 
 function render(spec: Record<string, unknown>, pending: boolean, succeeded: boolean): string {

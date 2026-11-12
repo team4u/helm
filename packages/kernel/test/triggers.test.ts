@@ -17,6 +17,7 @@ import { createHmac } from 'node:crypto'
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import process from 'node:process'
 import { DatabaseSync } from 'node:sqlite'
 
 import { createModels } from '@earendil-works/pi-ai/models'
@@ -31,6 +32,12 @@ const ROOT_CONVERSATION_ID = 1 as const
 
 const TRIGGERS = 'builtin:triggers'
 const WEBHOOK_BASE = '/api/plugins/builtin%3Atriggers/routes/webhook'
+
+/** POSIX 0600 断言：Windows 无 POSIX mode（NTFS 走 ACL），跳过模式位校验。 */
+function assertMode0600(file: string, stat: { mode: number }): void {
+  if (process.platform === 'win32') return
+  assert.equal(stat.mode & 0o777, 0o600, `${file} 必须 0600`)
+}
 
 interface TestEnv {
   dataDir: string
@@ -551,7 +558,7 @@ test('triggers9: secret 落 credentials.json 0600、不进 docs/SQLite、删除�
     const credPath = join(env.dataDir, 'credentials.json')
     await waitFor(() => existsSync(credPath))
     const credStat = statSync(credPath)
-    assert.equal(credStat.mode & 0o777, 0o600, 'credentials.json 必须 0600')
+    assertMode0600(credPath, credStat)
     const credRaw = readFileSync(credPath, 'utf8')
     assert.match(credRaw, /webhook:hook-a/)
     assert.match(credRaw, /webhook:hook-b/)

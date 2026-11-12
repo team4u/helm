@@ -22,6 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
+import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -198,7 +199,8 @@ test('start -d / status / stop：registered 来自真实注册，stop 后真实�
   assert.match(record.instanceId, /^[0-9a-f]{32}$/);
   assert.match(record.endpoint, /^\/tmp\/helm-node-[0-9a-f]{16}\.sock$/);
   const pidStat = await fs.stat(path.join(dir, 'node.pid'));
-  assert.equal(pidStat.mode & 0o777, 0o600);
+  // Windows 无 POSIX mode（NTFS 走 ACL），跳过 0600 模式位断言。
+  if (process.platform !== 'win32') assert.equal(pidStat.mode & 0o777, 0o600);
   assert.ok(realIsAlive(record.pid), '守护进程应真实存活');
 
   // 控制端点 socket 文件真实存在

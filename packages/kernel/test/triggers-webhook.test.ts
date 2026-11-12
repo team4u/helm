@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
+import process from 'node:process'
 import {
   HelmError,
   type ConversationSummary,
@@ -27,6 +28,13 @@ import { CredentialService, credentialsPath } from '../src/services/index.js'
 import { SecretStash } from '../src/services/secret-stash.js'
 import { createTriggersPlugin } from '../src/builtin-plugins/triggers.js'
 import { TRIGGERS_PLUGIN_ID, webhookSecretKey } from '../src/builtin-plugins/triggers/contracts.js'
+
+/** POSIX 0600 断言：Windows 无 POSIX mode（NTFS 走 ACL），跳过模式位校验。 */
+async function assertCredentialsMode0600(dataDir: string): Promise<void> {
+  if (process.platform === 'win32') return
+  const mode = (await import('node:fs/promises').then((f) => f.stat(credentialsPath(dataDir)))).mode & 0o777
+  assert.equal(mode, 0o600)
+}
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -346,11 +354,10 @@ test('webhook_create：secret 落 credentials.json 0600 + stash 脱敏 + doc 无
   assert.ok(Number.isFinite(created.webhook.createdAt))
   assert.ok(!JSON.stringify(created).includes('secret:'), 'action 输出不得含 secret 原文')
 
-  // credentials.json：精确键 + 0600
+  // credentials.json：精确键 + 0600（Windows 无 POSIX mode）
   const stored = await h.credentials.getPluginSecret(TRIGGERS_PLUGIN_ID, webhookSecretKey('deploy'))
   assert.equal(stored, secret)
-  const mode = (await import('node:fs/promises').then((f) => f.stat(credentialsPath(h.dataDir)))).mode & 0o777
-  assert.equal(mode, 0o600)
+  await assertCredentialsMode0600(h.dataDir)
 
   // doc：元数据无 secret 明文且携带 hasSecret；public doc 可读
   const doc = h.host.getPublicDoc(TRIGGERS_PLUGIN_ID, 'webhooks')
@@ -686,8 +693,7 @@ test('credentials.deletePluginSecret：精确删单键、空桶回收、幂等�
   assert.equal(raw.pluginSecrets['builtin:triggers'], undefined)
   assert.equal(raw.pluginSecrets['builtin:other']!['keep'], 'sk')
 
-  const mode = (await import('node:fs/promises').then((f) => f.stat(credentialsPath(dataDir)))).mode & 0o777
-  assert.equal(mode, 0o600)
+  await assertCredentialsMode0600(dataDir)
   rmSync(dataDir, { recursive: true, force: true })
 })
 

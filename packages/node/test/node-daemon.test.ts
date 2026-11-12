@@ -13,6 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
+import process from 'node:process';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBirpc, type BirpcReturn } from 'birpc';
 import type {
@@ -537,7 +538,10 @@ test('bindIdentityFromJoinToken：首次写入 0600、同 nodeId 轮换、跨 no
     assert.equal(first.nodeId, 'workstation-1');
     assert.equal(first.token, 'workstation-1:secret-1');
     const st = await fs.stat(path.join(dir, 'node.json'));
-    assert.equal(st.mode & 0o777, 0o600, 'node.json 权限应为 0600');
+    // Windows 无 POSIX mode（NTFS 走 ACL），跳过 0600 模式位断言。
+    if (process.platform !== 'win32') {
+      assert.equal(st.mode & 0o777, 0o600, 'node.json 权限应为 0600');
+    }
 
     // 同 nodeId 轮换 token
     const rotated = await bindIdentityFromJoinToken(dir, 'workstation-1:secret-2', 'http://127.0.0.2:3202');
@@ -1107,9 +1111,9 @@ test('runNodeCli connect --once --json：真实 Hub 注册一次即退出', { ti
     assert.equal(payload.ok, true);
     assert.equal(payload.nodeId, 'cli-1');
     assert.equal(payload.registered, true);
-    // 身份已持久化（0600）
+    // 身份已持久化（0600；Windows 无 POSIX mode，跳过模式位断言）
     const st = await fs.stat(path.join(dir, 'node.json'));
-    assert.equal(st.mode & 0o777, 0o600);
+    if (process.platform !== 'win32') assert.equal(st.mode & 0o777, 0o600);
     // Hub 收到注册
     assert.equal(hub.registrations.length, 1);
 

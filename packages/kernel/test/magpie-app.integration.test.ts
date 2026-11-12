@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import process from 'node:process'
 import { test } from 'node:test'
 import { createHelm } from '../src/app.js'
 import { startHub } from '../src/http/index.js'
@@ -156,7 +157,10 @@ test('Magpie 经真实组合层注册、刷新、HTTP/CLI、缓存重启与停�
     assert.equal(config.values.apiKey, '******')
     const catalog = await cli(['models', 'providers'])
     assert.equal(catalog.find((provider: { id: string }) => provider.id === 'magpie')?.pluginId, 'builtin:magpie')
-    assert.equal((await stat(join(dataDir, 'credentials.json'))).mode & 0o777, 0o600)
+    // Windows 无 POSIX mode（NTFS 走 ACL），跳过 0600 模式位断言。
+    if (process.platform !== 'win32') {
+      assert.equal((await stat(join(dataDir, 'credentials.json'))).mode & 0o777, 0o600)
+    }
     assert.ok(!(await readFile(join(dataDir, 'models-store.json'), 'utf8')).includes(gateway.token))
 
     // 凭据/静态供应商热重建不能遗失插件注册的动态供应商。

@@ -100,6 +100,19 @@ async function tempDir(): Promise<string> {
   return fsp.mkdtemp(path.join(os.tmpdir(), 'helm-cli-test-'))
 }
 
+/**
+ * 凭据文件权限断言：非 Windows 严格断言 POSIX 0600；Windows 无 POSIX mode
+ * （NTFS 走 ACL，stat.mode 不表达 0600），不断言模式位，仅确认文件存在。
+ */
+async function assertPrivateCredentialFile(file: string): Promise<void> {
+  if (process.platform === 'win32') {
+    await fsp.access(file)
+    return
+  }
+  const st = await fsp.stat(file)
+  assert.equal(st.mode & 0o777, 0o600)
+}
+
 /** 未存在的临时 dataDir 路径（跨进程锁回归用：目录不存在需首次创建）。 */
 function freshDataDirPath(): string {
   return path.join(os.tmpdir(), `helm-cli-fresh-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`)
@@ -130,8 +143,7 @@ test('setup/login 换 token 写 0600 cli-token，不碰 providers/pluginSecrets 
     assert.equal(r.code, 0, r.err)
     assert.equal(JSON.parse(r.out).token, 'tok-1')
     // 登录态落在独立 cli-token（0600），credentials.json 原样不动
-    const st = await fsp.stat(tokenFile)
-    assert.equal(st.mode & 0o777, 0o600)
+    await assertPrivateCredentialFile(tokenFile)
     const saved = JSON.parse(await fsp.readFile(tokenFile, 'utf8')) as Record<string, unknown>
     assert.deepEqual(saved, { hubUrl: hub.url, token: 'tok-1' })
     assert.equal(await fsp.readFile(credFile, 'utf8'), legacyBefore)
@@ -974,8 +986,7 @@ test('首次数据目录不存在时 setup 仍能落盘凭据（目录先建、�
     assert.equal(r.code, 0, r.err)
     const saved = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as { token: string }
     assert.equal(saved.token, 'tok-fresh')
-    const st = await fsp.stat(path.join(dir, 'cli-token'))
-    assert.equal(st.mode & 0o777, 0o600)
+    await assertPrivateCredentialFile(path.join(dir, 'cli-token'))
     // 锁与临时文件不残留
     const leftovers = (await fsp.readdir(dir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
     assert.deepEqual(leftovers, [])
@@ -1039,11 +1050,9 @@ test('跨进程并发：真实子进程 CLI 写 cli-token 与 Hub CredentialServ
         for (let i = 0; i < 4; i++) {
           assert.equal(final.providers[`provider-${i}`]?.value, `sk-value-${i}`)
         }
-        // 0600 与无锁/临时文件残留（两个文件均验）
-        const st = await fsp.stat(path.join(dataDir, 'credentials.json'))
-        assert.equal(st.mode & 0o777, 0o600)
-        const stToken = await fsp.stat(path.join(dataDir, 'cli-token'))
-        assert.equal(stToken.mode & 0o777, 0o600)
+        // 0600 与无锁/临时文件残留（两个文件均验；Windows 无 POSIX mode 仅验存在）
+        await assertPrivateCredentialFile(path.join(dataDir, 'credentials.json'))
+        await assertPrivateCredentialFile(path.join(dataDir, 'cli-token'))
         const leftovers = (await fsp.readdir(dataDir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
         assert.deepEqual(leftovers, [])
       } finally {
@@ -1066,8 +1075,7 @@ test('origin 绑定：cli-token 记录的 token 仅发给同源 Hub，换 Hub �
     assert.equal(login.code, 0, login.err)
     const tokenFile = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as Record<string, unknown>
     assert.deepEqual(tokenFile, { hubUrl: hub.url, token: 'tok-origin' })
-    const st = await fsp.stat(path.join(dir, 'cli-token'))
-    assert.equal(st.mode & 0o777, 0o600)
+    await assertPrivateCredentialFile(path.join(dir, 'cli-token'))
     // 同源请求携带 token
     const same = await run(['conversations', 'list', '--json'], { HELM_DATA_DIR: dir, HELM_TOKEN: '' })
     assert.equal(same.code, 0, same.err)

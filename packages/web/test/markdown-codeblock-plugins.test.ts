@@ -16,7 +16,7 @@ import { createRoot } from 'react-dom/client'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginUiContribution } from '@helm/protocol'
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
@@ -112,7 +112,8 @@ async function importCompiled(root: string, pluginId: string, npmRoots?: Array<{
   const { code } = await compilePluginClientModule(pluginId, root, 'index.tsx', CACHE, npmRoots ? { npmRoots } : undefined)
   const f = join(CACHE, `${pluginId.replace(/[^A-Za-z0-9]/g, '_')}.mjs`)
   writeFileSync(f, code, 'utf8')
-  return import(f) as Promise<Record<string, unknown>>
+  // Windows 上裸绝对路径不是合法 ESM 说明符，统一经 file:// URL 动态导入
+  return import(pathToFileURL(f).href) as Promise<Record<string, unknown>>
 }
 
 test('json-render client 真实编译：模块可导入且导出 JsonRenderCodeBlock 组件与插件样式', { timeout: 60_000 }, async () => {
