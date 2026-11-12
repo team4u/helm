@@ -17,7 +17,9 @@
     "dev:web": "pnpm --filter @helm/web dev",
     "helm": "tsx packages/cli/src/index.ts",
     "helm-hub": "tsx packages/kernel/src/main.ts",
-    "helm-node": "tsx packages/node/src/cli.ts"
+    "helm-node": "tsx packages/node/src/cli.ts",
+    "link:bins": "node scripts/link-bins.mjs",
+    "unlink:bins": "node scripts/link-bins.mjs --remove"
   },
   "devDependencies": {
     "@helm/cli": "workspace:*",
