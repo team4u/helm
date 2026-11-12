@@ -29,7 +29,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { WebSocket } from 'ws';
+import type { Duplex } from 'node:stream';
+import { WebSocket, createWebSocketStream } from 'ws';
 import { createBirpc, type BirpcReturn } from 'birpc';
 import type {
   EnvExecOutputEvent,
@@ -147,6 +148,11 @@ const HEARTBEAT_BUDGET_MIN_MS = 1_000;
 const HEARTBEAT_BUDGET_MAX_MS = 30_000;
 /** close 等待世代清理的兜底上限。 */
 const CLOSE_SETTLE_TIMEOUT_MS = 10_000;
+/** 隧道 WS 连接（TCP+HTTP upgrade）预算；超时销毁并拒绝本次隧道。 */
+const TUNNEL_CONNECT_TIMEOUT_MS = 10_000;
+/** 隧道首帧（NodeTunnelControl）等待预算与单帧字节上限。 */
+const TUNNEL_FIRST_FRAME_TIMEOUT_MS = 15_000;
+const TUNNEL_FIRST_FRAME_MAX_BYTES = 64 * 1024;
 /** NODE_ID 合法字符（JOIN 的 nodeId 段，非 local）。 */
 const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** JOIN 令牌 secret 段非空且不含控制字符/首尾空白。 */
@@ -480,6 +486,120 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
   const log = (message: string): void => writeLog(message.replaceAll(identity.token, '[REDACTED]'));
   const hub = assertValidHubUrl(hubUrl);
 
+  // —— 隧道 WS 地址（同源推导：保留协议 http->ws / https->wss、host/port 与
+  // base path；在 base path 之后拼接 /ws/node-tunnel，无 base path 则直接使用）。
+  const tunnelWsBase = `${hub.protocol === 'https:' ? 'wss' : 'ws'}://${hub.host}${hub.pathname.replace(/\/+$/, '')}`;
+  const tunnelWsUrl = (tunnelId: string): string =>
+    `${tunnelWsBase}/ws/node-tunnel?tunnelId=${encodeURIComponent(tunnelId)}`;
+
+  /**
+   * 打开单条隧道双工流：新 ws 连接同源 /ws/node-tunnel，发送单行 JSON
+   * NodeTunnelHello，等待首帧 NodeTunnelControl——仅 type=ok 返回双工流，
+   * 否则关闭并抛错（不静默伪装成功）。回调绑当前 generation：旧代终结后
+   * 回调拒绝（旧代 server 已 draining/disposed，新代不受影响）。
+   */
+  const openTunnelStreamFor = (
+    gen: NonNullable<typeof generation>,
+  ): ((tunnelId: string) => Promise<Duplex>) =>
+  (tunnelId): Promise<Duplex> => {
+    if (closed || generation !== gen || gen.registered !== true) {
+      return Promise.reject(
+        Object.assign(new Error('tunnel transport unavailable (connection generation retired)'), { code: 'aborted' }),
+      );
+    }
+    return new Promise<Duplex>((resolve, reject) => {
+      let settled = false;
+      let ws: WebSocket | undefined;
+      const cleanup = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(connectTimer);
+        clearTimeout(frameTimer);
+        ws?.removeAllListeners('message');
+        ws?.removeAllListeners('open');
+        ws?.removeAllListeners('close');
+        ws?.removeAllListeners('error');
+        try {
+          ws?.close();
+        } catch {
+          ws?.terminate();
+        }
+        reject(
+          error ??
+            Object.assign(
+              new Error('tunnel WebSocket closed before handshake completed'),
+              { code: 'aborted' },
+            ),
+        );
+      };
+      const connectTimer = setTimeout(() => {
+        cleanup(Object.assign(new Error(`tunnel WS connect timed out after ${TUNNEL_CONNECT_TIMEOUT_MS}ms`), { code: 'timeout' }));
+      }, TUNNEL_CONNECT_TIMEOUT_MS);
+      const frameTimer = setTimeout(() => {
+        cleanup(Object.assign(new Error(`tunnel control frame timed out after ${TUNNEL_FIRST_FRAME_TIMEOUT_MS}ms`), { code: 'timeout' }));
+      }, TUNNEL_FIRST_FRAME_TIMEOUT_MS);
+      try {
+        ws = new WebSocket(tunnelWsUrl(tunnelId));
+      } catch (error) {
+        cleanup(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      ws.once('open', () => {
+        if (settled) return;
+        // 单行 JSON Hello：仅 { nodeId, token, tunnelId }（协议定义字段，
+        // 不自行追加 type/port 等；凭据仅存在于 daemon 层）。
+        ws!.send(JSON.stringify({ nodeId: identity.nodeId, token: identity.token, tunnelId }));
+      });
+      const onMessage = (raw: unknown): void => {
+        if (settled) return;
+        let frame: unknown;
+        try {
+          const text = typeof raw === 'string' ? raw : Buffer.from(raw as ArrayBuffer).toString('utf8');
+          if (Buffer.byteLength(text, 'utf8') > TUNNEL_FIRST_FRAME_MAX_BYTES) {
+            cleanup(Object.assign(new Error('tunnel control frame exceeds 64KiB limit'), { code: 'invalid' }));
+            return;
+          }
+          frame = JSON.parse(text);
+        } catch {
+          cleanup(Object.assign(new Error('tunnel control frame is not valid JSON'), { code: 'invalid' }));
+          return;
+        }
+        const record = frame as { type?: unknown; message?: unknown } | null;
+        if (frame === null || typeof frame !== 'object' || typeof record?.type !== 'string') {
+          cleanup(Object.assign(new Error('tunnel control frame is not a JSON object'), { code: 'invalid' }));
+          return;
+        }
+        // 切换 stream 前移除握手 listener：此后帧归 createWebSocketStream 的
+        // 双工流，不再进入本握手分支。
+        clearTimeout(connectTimer);
+        clearTimeout(frameTimer);
+        ws!.removeListener('message', onMessage);
+        if (record.type === 'ok') {
+          settled = true;
+          resolve(createWebSocketStream(ws!));
+          return;
+        }
+        const detail = typeof record.message === 'string' ? record.message : JSON.stringify(frame).slice(0, 200);
+        settled = true;
+        try {
+          ws!.close();
+        } catch {
+          ws!.terminate();
+        }
+        reject(
+          Object.assign(new Error(`tunnel handshake rejected: ${detail}`), {
+            code: record.type === 'timeout' ? 'timeout' : 'invalid',
+          }),
+        );
+      };
+      ws.on('message', onMessage);
+      ws.once('close', () => cleanup());
+      ws.once('error', (err) => {
+        cleanup(err instanceof Error ? err : new Error(String(err)));
+      });
+    });
+  };
+
   // 远端 bash 必须能直接运行 helm：不可定位即启动失败（显式诊断，不静默降级）。
   const cliBin = await resolveManagedHelmBinDir(envServer.shellEnv?.['HELM_CLI_BIN_DIR'] as string | undefined);
 
@@ -707,6 +827,9 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
 
     // —— 新世代：连接尝试即建代（握手失败也要 dispose server/rpc）——
     const socket = new WebSocket(wsUrl);
+    // 惰性间接引用：gen 在 server 之后才组建，避免 TDZ；旧代终结后
+    // genHandle.current 置空，旧代回调立即拒绝新隧道。
+    const genHandle: { current?: NonNullable<typeof generation> } = {};
     const server = createNodeEnvRpcServer({
       defaultCwd: dataDir,
       ...envServer,
@@ -714,6 +837,17 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
       onExecOutput: (event) => pushEvent('onEnvExecOutput', event),
       onIpcEvent: (event) => pushEvent('onIpcEvent', event),
       onIpcClosed: (event) => pushEvent('onIpcClosed', event),
+      // 隧道传输由 daemon 层注入（持有 hubUrl/identity）：本代回调绑本代，
+      // 旧代终结后拒绝新隧道，env-rpc-server 层零凭据。
+      openTunnelStream: (tunnelId: string) => {
+        const gen = genHandle.current;
+        if (gen === undefined) {
+          return Promise.reject(
+            Object.assign(new Error('tunnel transport unavailable (connection generation retired)'), { code: 'aborted' }),
+          );
+        }
+        return openTunnelStreamFor(gen)(tunnelId);
+      },
     });
     if (drainingGlobally) server.setDraining(true);
     const hubRpc = createBirpc<HubSideFunctions, NodeEnvRpcFunctions>(
@@ -777,6 +911,7 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
       registered: false,
     };
     generation = gen;
+    genHandle.current = gen;
     let gone = false;
 
     /** 世代终结唯一路径：幂等，只处理本代。 */
@@ -1027,7 +1162,7 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
           ...(parsed?.attemptId !== undefined ? { attemptId: parsed.attemptId } : {}),
           currentVersion: getNodeVersion(),
           prepareReplacement: options.prepareUpgradeReplacement,
-          getActiveExecCount: () => generation?.server.getActiveExecCount() ?? 0,
+          getActiveExecCount: () => (generation?.server.getActiveExecCount() ?? 0) + (generation?.server.getActiveTunnelCount() ?? 0),
           setDraining: applyDraining,
           onScheduleShutdown: options.onUpgradeReplaced,
         });
