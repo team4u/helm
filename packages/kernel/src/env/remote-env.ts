@@ -35,6 +35,7 @@ import {
   type FileChange,
 } from '@earendil-works/pi-durable/env'
 import type { EnvExecOutputEvent, NodeEnvRpcFunctions, RpcEnvError, RpcResult } from '@helm/protocol'
+import { HelmError } from '@helm/protocol'
 import { ExecOutputHub } from './exec-output.js'
 
 /** 按 nodeId 解析节点 env RPC（由 fabric 的连接注册表接线）。 */
@@ -54,7 +55,17 @@ export interface NodeRpcResolver {
 export interface RemoteExecutionEnvOptions {
   nodeId: string
   cwd: string
+  /**
+   * 文件操作解析 RPC 连接的等待上限（毫秒），缺省 30s：文件操作可能运行在
+   * withFileMutationQueue 持锁窗口内，无限等重连会冻结该文件全部排队者
+   *（其他会话/插件）直至持锁者 turn 被中止；超时抛出 node_offline 释放锁。
+   * exec 不受限（长命令等待重连由调用方 context 取消语义管理）。
+   */
+  rpcWaitTimeoutMs?: number
 }
+
+/** #call 文件操作解析 RPC 的缺省等待上限。 */
+const DEFAULT_RPC_WAIT_TIMEOUT_MS = 30_000
 
 const fileError = (error: RpcEnvError, path?: string): FileError =>
   new FileError(error.code as FileError['code'], error.message, path)
@@ -81,6 +92,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
   readonly #resolver: NodeRpcResolver
   readonly #outputHub: ExecOutputHub
   readonly #nodeIdValue: string
+  readonly #rpcWaitTimeoutMs: number
   #sinkRegistered = false
   #liveExecsWithOutput = 0
 
@@ -90,6 +102,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     this.id = `remote:${options.nodeId}`
     this.#nodeIdValue = options.nodeId
     this.#outputHub = outputHub
+    this.#rpcWaitTimeoutMs = options.rpcWaitTimeoutMs ?? DEFAULT_RPC_WAIT_TIMEOUT_MS
   }
 
   /** sink 注册/注销按在途 exec 计数：首个带 onOutput 的 exec 注册，最后一个
@@ -151,13 +164,43 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     return this.#resolver.getNodeEnvRpc(this.#nodeIdValue) === rpc
   }
 
+  /**
+   * 文件操作入口的 RPC 解析（#call 专用）：等待重连有界（rpcWaitTimeoutMs）。
+   * 无界等待在持锁窗口内会把文件队列冻结到持锁者 turn 被中止；超时抛出
+   * node_offline（锁随异常释放），节点重连后调用方可显式重试。
+   */
+  async #rpcBounded(context: Context): Promise<NodeEnvRpcFunctions> {
+    const rpcPromise = this.#rpc(context)
+    // 超时先至时 rpcPromise 仍可能在等：observe 防未处理 rejection。
+    rpcPromise.catch(() => undefined)
+    let timer: NodeJS.Timeout | undefined
+    try {
+      return await Promise.race([
+        rpcPromise,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new HelmError(
+              'node_offline',
+              `节点 ${this.#nodeIdValue} 离线，等待重连超过 ${this.#rpcWaitTimeoutMs}ms（文件操作不无限等待）`,
+              409,
+              { nodeId: this.#nodeIdValue },
+            ))
+          }, this.#rpcWaitTimeoutMs)
+          timer.unref?.()
+        }),
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   /** RPC 调用包装：节点失联（连接断开抛错）归一为「结果未知」。 */
   async #call<T>(
     fn: (rpc: NodeEnvRpcFunctions) => Promise<RpcResult<T>>,
     context: Context,
     path?: string,
   ): Promise<Result<T, FileError>> {
-    const rpc = await this.#rpc(context)
+    const rpc = await this.#rpcBounded(context)
     try {
       return unwrapFile(await fn(rpc), path)
     } catch (error) {

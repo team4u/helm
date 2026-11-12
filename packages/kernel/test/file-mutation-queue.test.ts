@@ -453,6 +453,48 @@ describe('canonical 路径 key', { timeout: 60_000 }, () => {
     assert.equal(mutate, 'mutated')
     assert.equal(readFileSync(file, 'utf8'), 'v2')
   })
+
+  test('ENOTDIR（某段是文件）两入口同 key：env 入口上溯不抛错，与 local 入口互斥', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'enotdir')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'plain.txt')
+    writeFileSync(file, 'x')
+    // 路径中某一段是文件而非目录：realpath 报 ENOTDIR（pi-durable 映射
+    // not_directory；修复前 env 入口直接抛错，local 入口上溯——两入口分叉）。
+    const target = join(file, 'child')
+    const env = new NodeExecutionEnv({ cwd: dir })
+
+    // env 入口不再抛 not_directory：正常上溯到已存在文件拼 key 并执行。
+    const viaEnv = await envWithFileMutationQueue(env, target, async () => 'env-ok', BACKGROUND_CONTEXT)
+    assert.equal(viaEnv, 'env-ok')
+
+    // 两入口同 key：env 入口持锁不放时 local 入口必须排队（而非各锁各的）。
+    let releaseHolder!: () => void
+    const held = new Promise<void>((resolve) => { releaseHolder = resolve })
+    let holderRan = false
+    const envHold = envWithFileMutationQueue(
+      env,
+      target,
+      async () => {
+        holderRan = true
+        await held
+        return 'held'
+      },
+      BACKGROUND_CONTEXT,
+    )
+    while (!holderRan) await delay(5)
+    let localRan = false
+    const localTask = localWithFileMutationQueue(target, async () => {
+      localRan = true
+      return 'local'
+    })
+    await delay(80)
+    assert.equal(localRan, false, 'env 入口持锁期间 local 入口不得执行（同 key 互斥）')
+    releaseHolder()
+    assert.equal(await envHold, 'held')
+    assert.equal(await localTask, 'local')
+    assert.equal(fileMutationQueueSize(), 0)
+  })
 })
 
 // ---------------------------------------------------------------------------

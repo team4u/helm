@@ -77,6 +77,8 @@ export interface EnvFabricOptions {
   envOptions?: EnvOptionsComposer
   /** local exec 的 PATH 前置目录（helm CLI 包装目录；缺省不前置）。 */
   cliBinDir?: () => string | undefined
+  /** 远端文件操作解析 RPC 的等待重连上限（毫秒）；缺省见 remote-env.ts。 */
+  remoteRpcWaitTimeoutMs?: number
   /** 资源释放失败的诊断日志（dispose 尽力清理路径；缺省 console.error）。 */
   logReleaseError?: (message: string) => void
 }
@@ -209,7 +211,16 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
 
   /** 无缓存新建底座：local 进程内直建；远端 Remote（sink 由 exec 生命周期自管理）。 */
   const freshBase = (nodeId: string, cwd: string): ExecutionEnv =>
-    nodeId === 'local' ? new NodeExecutionEnv({ cwd }) : new RemoteExecutionEnv(remoteResolver, { nodeId, cwd })
+    nodeId === 'local'
+      ? new NodeExecutionEnv({ cwd })
+      : new RemoteExecutionEnv(
+          remoteResolver,
+          {
+            nodeId,
+            cwd,
+            ...(options.remoteRpcWaitTimeoutMs === undefined ? {} : { rpcWaitTimeoutMs: options.remoteRpcWaitTimeoutMs }),
+          },
+        )
 
   /** 取（或建）会话靶点专属底座（仅带 conversationId 的靶点进缓存）。 */
   const baseFor = (nodeId: string, cwd: string, conversationId: number): ExecutionEnv => {
