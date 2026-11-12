@@ -13,6 +13,9 @@
  *   入口探测）解析入口文件相对路径，严格校验不越出插件目录（防路径穿越，
  *   realpath 保证真实入口不越 root）。清单损坏 / 非对象 / main 非法 /
  *   入口越界 / 入口缺失一律显式 HelmError，绝不静默吞错（诚实性纪律）；
+ *   plugin.json 可选字段：`clientRoot`（前端源根目录）、`clientDependencies`
+ *   （前端受控 npm 说明符数组，映射解析根 = 插件目录）、`dependencies`
+ *   （插件间依赖 ID 数组）；非法值显式拒绝，绝不静默忽略。
  * - 无 `plugin.json` → 依次探测 `index.ts` / `index.tsx` / `index.mjs` /
  *   `index.js` / `plugin.ts` / `plugin.tsx` / `plugin.mjs` / `plugin.js`；
  *   一个都不存在 → 只是普通插件数据目录，静默跳过。
@@ -404,17 +407,100 @@ function probeConventionEntry(dirPath: string): string | undefined {
 
 /**
  * npm 标准入口发现（additive，不牺牲现有 plugin.json/约定入口格式）：
- * package.json 的 `helm` 字段（{ main?, clientRoot? }）：
+ * package.json 的 `helm` 字段（{ main?, clientRoot?, clientDependencies?, dependencies? }）：
  * - helm.main / package.json.main 指定后端入口（相对路径，越根校验同
  *   plugin.json main；.js 后缀自动重写同名 .ts 源）；
  * - helm.clientRoot 供包作者声明前端源根目录，由 readHelmClientRoot 透出，
  *   normalizeDefinition 缺省仍为插件目录本身；
+ * - helm.clientDependencies / plugin.json clientDependencies 声明前端受控 npm
+ *   依赖说明符（裸包名/子路径），归一映射到插件自身目录作为解析根；
+ * - helm.dependencies / plugin.json dependencies 声明插件间依赖（仅插件 ID）；
+ *   package.json 顶层 dependencies 保持 npm 语义（运行时依赖），绝不误读；
  * - 优先级：plugin.json（main / 约定入口）> package.json helm.main >
  *   package.json main > 约定入口探测；无任何命中则为纯数据目录。
  */
 export interface HelmManifest {
   /** package.json helm.clientRoot 声明（原始相对路径；未声明时缺省）。 */
   clientRoot?: string;
+  /** 前端受控 npm 依赖说明符（裸包名或子路径；已验证去重）。 */
+  clientDependencies?: string[];
+  /** 插件间依赖 ID 列表（已验证去重）。 */
+  dependencies?: string[];
+}
+
+/** 插件 ID 字符集（与宿主插件 id 同集：字母数字 : _ -）。 */
+const MANIFEST_PLUGIN_ID_PATTERN = /^[A-Za-z0-9:_-]+$/;
+
+/**
+ * 受控前端 npm 说明符合法性：非空、非路径形态（不以 . 或 / 开头）、无反斜杠、
+ * 无 .. 段、无空白；允许 @scope/name 与子路径（子路径需逐项声明，不做前缀通配）。
+ */
+function isValidClientDependencySpec(spec: string): boolean {
+  if (spec.length === 0 || spec.length > 214) return false;
+  if (spec.startsWith('.') || spec.startsWith('/') || spec.includes('\\')) return false;
+  if (/\s/.test(spec)) return false;
+  if (spec.split('/').includes('..')) return false;
+  return /^(@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9._~-]+)*$/.test(spec);
+}
+
+/** 校验并去重清单声明的前端 npm 说明符（非法项显式 plugin_manifest_invalid）。 */
+function normalizeClientDependencySpecs(dirPath: string, source: string, values: unknown): string[] | undefined {
+  if (values === undefined) return undefined;
+  if (!Array.isArray(values) || values.some((v) => typeof v !== 'string' || !isValidClientDependencySpec(v))) {
+    throw new HelmError(
+      'plugin_manifest_invalid',
+      `外部插件 ${dirPath} 的 ${source} 必须是受控 npm 说明符字符串数组（裸包名或子路径，禁止相对/绝对路径与 .. 段）`,
+      400,
+      { dirPath, source, values: Array.isArray(values) ? values.map((v) => String(v)) : String(values) },
+    );
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const spec of values as string[]) {
+    if (seen.has(spec)) continue;
+    seen.add(spec);
+    out.push(spec);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** 校验并去重清单声明的插件间依赖 ID（非法项显式 plugin_manifest_invalid）。 */
+function normalizeManifestDependencies(dirPath: string, source: string, values: unknown): string[] | undefined {
+  if (values === undefined) return undefined;
+  if (!Array.isArray(values) || values.some((v) => typeof v !== 'string' || !MANIFEST_PLUGIN_ID_PATTERN.test(v))) {
+    throw new HelmError(
+      'plugin_manifest_invalid',
+      `外部插件 ${dirPath} 的 ${source} 必须是插件 ID 字符串数组（仅允许字母数字 : _ -；npm 依赖请声明在 package.json dependencies）`,
+      400,
+      { dirPath, source, values: Array.isArray(values) ? values.map((v) => String(v)) : String(values) },
+    );
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const dep of values as string[]) {
+    if (seen.has(dep)) continue;
+    seen.add(dep);
+    out.push(dep);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** 校验外部插件代码声明的插件依赖；非法形状必须显式失败，不能在清单归一化时静默丢弃。 */
+function normalizeCodeDependencies(
+  dirPath: string,
+  pluginId: string,
+  values: unknown,
+): string[] {
+  if (values === undefined) return [];
+  if (!Array.isArray(values) || values.some((value) => typeof value !== 'string' || !MANIFEST_PLUGIN_ID_PATTERN.test(value))) {
+    throw new HelmError(
+      'invalid_plugin_definition',
+      `外部插件 ${dirPath} 的定义 ${pluginId}.dependencies 必须是插件 ID 字符串数组（仅允许字母数字 : _ -）`,
+      400,
+      { dirPath, pluginId, dependencies: Array.isArray(values) ? values.map((value) => String(value)) : String(values) },
+    );
+  }
+  return [...new Set(values as string[])];
 }
 
 /** 对外读取 plugin.json clientRoot 或 package.json helm.clientRoot（normalizeDefinition 增强用；plugin.json 优先）。 */
@@ -424,11 +510,28 @@ export function readHelmClientRoot(dirPath: string): string | undefined {
   return readHelmField(dirPath)?.clientRoot;
 }
 
-/** 读取 plugin.json 的 clientRoot 字段（无 plugin.json 返回 undefined；存在但非字符串显式报错）。 */
-function readManifestClientRoot(dirPath: string): string | undefined {
+/** 对外读取清单声明的前端受控 npm 说明符（plugin.json 与 package.json helm 合并去重；供受管安装补装）。 */
+export function readHelmClientDependencies(dirPath: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (specs: string[] | undefined): void => {
+    for (const spec of specs ?? []) {
+      if (seen.has(spec)) continue;
+      seen.add(spec);
+      out.push(spec);
+    }
+  };
+  add(readManifestOptional(dirPath)?.clientDependencies);
+  add(readHelmField(dirPath)?.clientDependencies);
+  return out;
+}
+
+/** 读取 plugin.json（不存在返回 undefined；IO 错误显式抛错，不静默当无清单）。 */
+function readManifestIfPresent(dirPath: string): Record<string, unknown> | undefined {
   const manifestPath = join(dirPath, 'plugin.json');
+  let exists = true;
   try {
-    if (!statSync(manifestPath).isFile()) return undefined;
+    exists = statSync(manifestPath).isFile();
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
@@ -439,7 +542,26 @@ function readManifestClientRoot(dirPath: string): string | undefined {
       { manifestPath, code },
     );
   }
-  const manifest = readManifest(manifestPath);
+  if (!exists) return undefined;
+  return readManifest(manifestPath);
+}
+
+/** 读取 plugin.json 的可选扩展字段（clientDependencies / dependencies；无 plugin.json 返回 undefined）。 */
+function readManifestOptional(dirPath: string): HelmManifest | undefined {
+  const manifest = readManifestIfPresent(dirPath);
+  if (manifest === undefined) return undefined;
+  const clientDependencies = normalizeClientDependencySpecs(dirPath, 'plugin.json clientDependencies', manifest['clientDependencies']);
+  const dependencies = normalizeManifestDependencies(dirPath, 'plugin.json dependencies', manifest['dependencies']);
+  return {
+    ...(clientDependencies !== undefined ? { clientDependencies } : {}),
+    ...(dependencies !== undefined ? { dependencies } : {}),
+  };
+}
+
+/** 读取 plugin.json 的 clientRoot 字段（无 plugin.json 返回 undefined；存在但非字符串显式报错）。 */
+function readManifestClientRoot(dirPath: string): string | undefined {
+  const manifest = readManifestIfPresent(dirPath);
+  if (manifest === undefined) return undefined;
   const clientRoot = manifest['clientRoot'];
   if (clientRoot === undefined) return undefined;
   if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
@@ -454,7 +576,9 @@ function readManifestClientRoot(dirPath: string): string | undefined {
 }
 
 /** 读取 package.json 的 helm 字段（对象形状校验；无 package.json 返回 null）。 */
-function readHelmField(dirPath: string): { main?: string; clientRoot?: string } | null {
+function readHelmField(
+  dirPath: string,
+): { main?: string; clientRoot?: string; clientDependencies?: string[]; dependencies?: string[] } | null {
   const pkgPath = join(dirPath, 'package.json');
   let raw: string;
   try {
@@ -496,8 +620,9 @@ function readHelmField(dirPath: string): { main?: string; clientRoot?: string } 
       { dirPath },
     );
   }
-  const result: { main?: string; clientRoot?: string } = {};
-  const main = (helm as Record<string, unknown>)['main'];
+  const result: { main?: string; clientRoot?: string; clientDependencies?: string[]; dependencies?: string[] } = {};
+  const helmObj = helm as Record<string, unknown>;
+  const main = helmObj['main'];
   if (main !== undefined) {
     if (typeof main !== 'string' || main.length === 0) {
       throw new HelmError(
@@ -509,7 +634,7 @@ function readHelmField(dirPath: string): { main?: string; clientRoot?: string } 
     }
     result.main = main;
   }
-  const clientRoot = (helm as Record<string, unknown>)['clientRoot'];
+  const clientRoot = helmObj['clientRoot'];
   if (clientRoot !== undefined) {
     if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
       throw new HelmError(
@@ -521,7 +646,26 @@ function readHelmField(dirPath: string): { main?: string; clientRoot?: string } 
     }
     result.clientRoot = clientRoot;
   }
-  if (result.main === undefined && result.clientRoot === undefined) return null;
+  const clientDependencies = normalizeClientDependencySpecs(
+    dirPath,
+    'package.json helm.clientDependencies',
+    helmObj['clientDependencies'],
+  );
+  if (clientDependencies !== undefined) result.clientDependencies = clientDependencies;
+  const dependencies = normalizeManifestDependencies(
+    dirPath,
+    'package.json helm.dependencies',
+    helmObj['dependencies'],
+  );
+  if (dependencies !== undefined) result.dependencies = dependencies;
+  if (
+    result.main === undefined &&
+    result.clientRoot === undefined &&
+    result.clientDependencies === undefined &&
+    result.dependencies === undefined
+  ) {
+    return null;
+  }
   return result;
 }
 
@@ -638,6 +782,12 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
 /**
  * 外部插件定义归一化：
  * - 剥离 locked（外部插件不可自封常驻不可卸载，启停权归用户持久化状态）；
+ * - 插件间依赖：代码声明与清单声明（plugin.json dependencies / package.json
+ *   helm.dependencies）合并去重进入定义；非法清单值在读取处已显式拒绝。
+ * - 前端受控 npm 依赖：清单声明的说明符（plugin.json clientDependencies /
+ *   package.json helm.clientDependencies）统一映射为 npmDependencies，解析根
+ *   恒为插件自身目录（受控边界）；代码内声明的 npmDependencies 一律剥离——
+ *   外部插件不得自指任意解析根（不放开任意裸依赖）。
  * - clientRoot 未设置 → 默认插件目录本身；必须是字符串（非字符串边界拒绝）；
  *   相对路径 → 解析为插件目录内绝对路径（越出插件目录显式拒绝，防穿越）；
  *   绝对路径原样保留。路径边界校验只是约定约束，不是安全沙箱承诺。
@@ -645,6 +795,31 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
 export function normalizeDefinition(definition: PluginDefinition, dirPath: string): PluginDefinition {
   const normalized = { ...definition };
   delete normalized.locked;
+  // 前端受控 npm 依赖：外部插件只认清单声明，解析根映射到插件自身目录。
+  const clientDeps = readHelmClientDependencies(dirPath);
+  delete normalized.npmDependencies;
+  if (clientDeps.length > 0) {
+    normalized.npmDependencies = Object.fromEntries(clientDeps.map((spec) => [spec, dirPath]));
+  }
+  // 插件间依赖：代码声明 + 清单声明（plugin.json 与 package.json helm 合并）合并去重
+  //（自依赖由宿主注册边界拒绝）。
+  const codeDeps = normalizeCodeDependencies(dirPath, definition.id, definition.dependencies);
+  const manifestDeps = [
+    ...(readManifestOptional(dirPath)?.dependencies ?? []),
+    ...(readHelmField(dirPath)?.dependencies ?? []),
+  ];
+  const seenDeps = new Set<string>();
+  const mergedDeps: string[] = [];
+  for (const dep of [...codeDeps, ...manifestDeps]) {
+    if (seenDeps.has(dep)) continue;
+    seenDeps.add(dep);
+    mergedDeps.push(dep);
+  }
+  if (mergedDeps.length > 0) {
+    normalized.dependencies = mergedDeps;
+  } else {
+    delete normalized.dependencies;
+  }
   const clientRoot = normalized.clientRoot;
   if (clientRoot === undefined || clientRoot === '') {
     // 未显式声明：可经 plugin.json clientRoot 或 package.json helm.clientRoot 声明；否则默认插件目录本身

@@ -20,7 +20,7 @@
  *   doctor 处如实失败（报告给作者），不是 doctor 的缺陷；
  * - 临时 host 注册即 dispose（enabled: false，服务不启动，无副作用可泄漏）。
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -31,13 +31,13 @@ import {
   type PluginSummary,
 } from '@helm/protocol';
 import { PluginHost, type PluginHostBackend } from './plugin-host.js';
-import { nextPluginGeneration } from './backend-ts-loader.js';
+import { nextPluginGeneration, registerPluginTsRoot } from './backend-ts-loader.js';
 import {
   importPluginDefinition,
   normalizeDefinition,
   resolvePluginEntry,
 } from './external-loader.js';
-import { compilePluginClientModule } from './client-compiler.js';
+import { clientNpmRootsOf, compilePluginClientModule } from './client-compiler.js';
 
 /** doctor 真实注册所需的临时 doc store（内存镜像，不触碰宿主持久层）。 */
 class DoctorDocStore {
@@ -145,7 +145,22 @@ function toErrorInfo(err: unknown): { code: string; message: string; details?: u
  * dir 由调用方校验为存在的目录；返回报告对象（插件自身缺陷以 checks 呈现），
  * 只有 doctor 基座故障（临时目录创建失败等）才 reject。
  */
-export async function doctorPluginDir(
+export async function doctorPluginDir(dir: string): Promise<PluginDoctorReport> {
+  let releaseTsRoot: (() => void) | undefined;
+  try {
+    if (statSync(dir).isDirectory()) releaseTsRoot = registerPluginTsRoot(dir);
+  } catch {
+    // 入口检查负责把不存在/不可读目录转换为结构化 doctor 报告；
+    // 无法注册 TS 根时继续执行，后端检查会如实暴露真实导入错误。
+  }
+  try {
+    return await doctorPluginDirInternal(dir);
+  } finally {
+    releaseTsRoot?.();
+  }
+}
+
+async function doctorPluginDirInternal(
   dir: string,
 ): Promise<PluginDoctorReport> {
   const checks: PluginDoctorCheck[] = [];
@@ -218,6 +233,9 @@ export async function doctorPluginDir(
 
   const clientOk = await withDoctorScratch(async (scratch) =>
     push('client', '前端模块真实编译与导出校验', async () => {
+      // 与生产 getClientModule 同一受控 npm 映射：清单 clientDependencies 归一
+      // 进 definition.npmDependencies 后在此生效（doctor/运行链同一编译口径）。
+      const npmRoots = clientNpmRootsOf(definition!.npmDependencies);
       const seen = new Set<string>();
       for (const ref of clientRefs) {
         const key = `${ref.module}#${ref.export}`;
@@ -228,6 +246,7 @@ export async function doctorPluginDir(
           definition!.clientRoot!,
           ref.module,
           scratch,
+          { npmRoots },
         );
         // 悬空 export 校验：编译产物的真实具名导出必须包含声明引用的名字，
         // 否则 UI 声明会在运行期渲染空白（悬空引用）。如实报告，不静默。
