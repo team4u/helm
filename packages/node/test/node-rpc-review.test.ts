@@ -823,12 +823,12 @@ test('升级排空纳入 IPC：draining 拒新 call/subscribe，在途 call 不�
   server.setDraining(true);
   const rejectedCall = await server.ipcCall!({ endpoint: echo.path, line: 'new-call', timeoutMs: 1_000 });
   assert.equal(rejectedCall.ok, false);
-  assert.equal(!rejectedCall.ok && rejectedCall.error.code, 'aborted');
+  assert.equal(!rejectedCall.ok && rejectedCall.error.code, 'node_draining');
   assert.match(!rejectedCall.ok ? rejectedCall.error.message : '', /draining/);
 
   const rejectedSub = await server.ipcSubscribe!({ subscribeId: 's-drain', endpoint: echo.path, line: 'new-sub' });
   assert.equal(rejectedSub.ok, false);
-  assert.equal(!rejectedSub.ok && rejectedSub.error.code, 'aborted');
+  assert.equal(!rejectedSub.ok && rejectedSub.error.code, 'node_draining');
   assert.match(!rejectedSub.ok ? rejectedSub.error.message : '', /draining/);
 
   // draining 不强杀在途：超时自然结算后计数归零
@@ -856,7 +856,7 @@ test('envCleanup：draining/disposed 显式拒绝（按 cwd 杀同 cwd 全部会
     () => server.envCleanup!(dir),
     (error: unknown) => {
       const err = error as { code?: string; message?: string };
-      assert.equal(err.code, 'aborted');
+      assert.equal(err.code, 'node_draining');
       assert.match(err.message ?? '', /draining/);
       return true;
     },

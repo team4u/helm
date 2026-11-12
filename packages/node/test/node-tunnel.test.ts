@@ -385,7 +385,7 @@ test('nodeTunnelOpen：draining 拒绝新隧道；dispose 销毁全部并等待 
     server.setDraining(true);
     const rejected = await server.nodeTunnelOpen({ tunnelId: 't-c', port: srv.port });
     assert.equal(rejected.ok, false);
-    assert.equal(!rejected.ok && rejected.error.code, 'aborted', 'draining 期间新隧道被拒（aborted）');
+    assert.equal(!rejected.ok && rejected.error.code, 'node_draining', 'draining 期间新隧道被拒（node_draining）');
     assert.equal(server.getActiveTunnelCount(), 2, '在途隧道不受 draining 影响');
 
     await server.dispose();

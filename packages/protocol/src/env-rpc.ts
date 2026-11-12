@@ -164,6 +164,10 @@ export type EnvExecStreamFrame =
 
 export type RpcFileKind = 'file' | 'directory' | 'symlink'
 
+/**
+ * 文件操作错误码（对齐 pi-durable FileError.code；节点升级排空不拒绝文件
+ * 操作，故本联合不含 node_draining——排空只作用于新命令/IPC/隧道）。
+ */
 export type RpcFileErrorCode =
   | 'aborted'
   | 'not_found'
@@ -174,8 +178,14 @@ export type RpcFileErrorCode =
   | 'not_supported'
   | 'unknown'
 
+/**
+ * 执行错误码：`node_draining` 表示节点正在升级排空、拒绝受理新命令
+ * （守护进程仍在运行、连接仍在，只是让位升级）——与 `aborted`（用户或
+ * 宿主主动取消/终止在途操作）语义严格区分，上层不得将其归并为取消。
+ */
 export type RpcExecutionErrorCode =
   | 'aborted'
+  | 'node_draining'
   | 'timeout'
   | 'shell_unavailable'
   | 'spawn_error'
@@ -192,6 +202,11 @@ export interface RpcLineScan {
   firstLineBytes: number
 }
 
+/**
+ * 统一 RPC 错误信封：ipcCall / ipcSubscribe 在节点升级排空期间的拒新拒绝
+ * 经本联合携带 `node_draining`（来自 RpcExecutionErrorCode / NodeTunnelErrorCode
+ * 分支；文件操作不排空）。
+ */
 export interface RpcEnvError {
   code: RpcFileErrorCode | RpcExecutionErrorCode | NodeTunnelErrorCode
   message: string
@@ -299,9 +314,14 @@ export interface NodeTunnelHello {
   token: string
 }
 
-/** 隧道错误码（RpcEnvError.code 的 string 扩展；保持向后兼容不收窄既有联合）。 */
+/**
+ * 隧道错误码（RpcEnvError.code 的 string 扩展；保持向后兼容不收窄既有联合）。
+ * `node_draining`：节点升级排空拒绝新隧道（区别于 `aborted` 的取消/终止；
+ * disposed 等连接级终态仍为 aborted）。
+ */
 export type NodeTunnelErrorCode =
   | 'aborted'
+  | 'node_draining'
   | 'connect_failed'
   | 'not_found'
   | 'permission_denied'

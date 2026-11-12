@@ -70,6 +70,13 @@ const DEFAULT_RPC_WAIT_TIMEOUT_MS = 30_000
 const fileError = (error: RpcEnvError, path?: string): FileError =>
   new FileError(error.code as FileError['code'], error.message, path)
 
+// 节点升级排空拒新（envExec 返回 node_draining）：pi-durable 的
+// ExecutionError/FileError 联合（外部包）无法承载节点态码，沿用既有
+// 运行时透传策略（与 connect_failed 同）：code 原样保留在错误对象上，
+// message 携带完整诊断——上层（如 tools.ts 的 shell 标签）可据此把
+// 「节点正在升级排空」与 aborted（取消）/unknown（断连结果未知）区分，
+// 绝不归并为 aborted，也不触发无声重试/等待重连。
+
 const execErrorFromRpc = (error: RpcEnvError): ExecutionError => {
   const e = new ExecutionError(error.code as ExecutionError['code'], error.message)
   if (error.spillPath !== undefined) e.spillPath = error.spillPath

@@ -508,6 +508,8 @@ export class NodeRegistry {
    * - 节点离线 / 注册表关闭：node_offline（409）；
    * - 节点未实现 nodeTunnelOpen：node_tunnel_not_supported（501）；
    * - 网关回连超时（缺省 10s）：node_tunnel_timeout（504）；
+   * - 节点升级排空拒新：node_draining（503，节点在线但让位升级，
+   *   不得与 node_offline 混淆，也不得归并为 aborted）；
    * - RPC 显式失败 / 断连：node_tunnel_connect_failed（502）；abort：499。
    * 任何失败/取消路径都尽力通知节点 nodeTunnelAbort（catch observe，不等
    * 网络回包才 reject），pending/active 登记同步清理，不悬挂。
@@ -604,8 +606,16 @@ export class NodeRegistry {
           ? 'node_tunnel_timeout'
           : result.error.code === 'aborted'
             ? 'aborted'
-            : 'node_tunnel_connect_failed'
-        const status = code === 'node_tunnel_timeout' ? 504 : code === 'aborted' ? 499 : 502
+            : result.error.code === 'node_draining'
+              ? 'node_draining'
+              : 'node_tunnel_connect_failed'
+        const status = code === 'node_tunnel_timeout'
+          ? 504
+          : code === 'aborted'
+            ? 499
+            : code === 'node_draining'
+              ? 503
+              : 502
         abortNode()
         pending.reject(new HelmError(
           code,
