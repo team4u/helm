@@ -1214,7 +1214,90 @@ test('superagent 记忆归属: 已初始化文件被删后重启/superagent 重�
     }
     void notifications
   } finally {
-    // dataDir 由第二个 app 的 finally 之后清理；此处兜底
+    // dataDir 由第二个 app 的拆除之后清理；此处兜底
     rmSync(env.dataDir, { recursive: true, force: true })
+  }
+})
+
+test('superagent18: dispatch_worker 提交失败完整回滚（无僵尸 Worker、threadKey 不锁死、发错误通知）', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    await enableSuperAgent(env)
+    const kernel = env.app.kernel
+    const notifications: Array<{ title: string; body: string }> = []
+    kernel.events.subscribe((frame) => {
+      const event = frame.event as { type?: string; title?: string; body?: string }
+      if (event.type === 'notification' && event.title) notifications.push({ title: event.title, body: event.body ?? '' })
+    })
+
+    const origSubmit = kernel.submitInput.bind(kernel)
+    kernel.submitInput = async (conversationId, text, opts) => {
+      const summary = kernel.getConversation(conversationId)
+      if (summary.tags.includes('worker')) {
+        throw new HelmError('conversation_not_accepting', '测试注入：提交被拒绝', 409)
+      }
+      return origSubmit(conversationId, text, opts)
+    }
+
+    await assert.rejects(
+      () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: '会失败的任务', threadKey: 'locked-key' }),
+      (err: unknown) => err instanceof HelmError && err.code === 'conversation_not_accepting',
+    )
+
+    // 回滚断言 1：index 无残留 worker 条目。
+    const indexAfter = (await readDocRaw(env, 'index')) as { workers: Array<{ conversationId: number }> }
+    assert.equal(indexAfter.workers.length, 0, '提交失败后 index 不得残留 worker 条目')
+
+    // 回滚断言 2：通知显式发出（不静默）。
+    assert.ok(notifications.some((n) => n.title.includes('提交失败')), '提交失败应显式通知')
+
+    // 回滚断言 3：同 threadKey 再派工不被 conflict 锁死。
+    kernel.submitInput = origSubmit
+    env.faux.setResponses([fauxAssistantMessage('Worker 开始执行')])
+    const retry = (await kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', {
+      prompt: '重试任务',
+      threadKey: 'locked-key',
+    })) as { workerConversationId: number }
+    assert.ok(Number.isInteger(retry.workerConversationId), '同 threadKey 重试应成功（未被失败派工锁死）')
+
+    // 回滚断言 4：失败空会话打上 worker-archived 标签。
+    const allConvs = kernel.listConversations()
+    const archivedFound = allConvs.some((c) => c.tags.includes('worker-archived'))
+    assert.ok(archivedFound, '提交失败的空会话应打上 worker-archived 标签')
+
+    // 回滚断言 5：subscriptions 只含成功那次绑定。
+    const subs = (await readDocRaw(env, 'subscriptions')) as { subscriptions: Array<{ threadKey: string; workerConversationId: number }> }
+    assert.equal(subs.subscriptions.length, 1)
+    assert.equal(subs.subscriptions[0]!.threadKey, 'locked-key')
+    assert.equal(subs.subscriptions[0]!.workerConversationId, retry.workerConversationId)
+  } finally {
+    await env.close()
+  }
+})
+
+test('superagent19: recall_context 只读（不写 routing doc）；已归档 Worker 侧栏分组声明', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    await enableSuperAgent(env)
+    const kernel = env.app.kernel
+    const routingBefore = JSON.stringify(await readDocRaw(env, 'routing'))
+    await kernel.plugins.invokeAction('builtin:superagent', 'recall_context', { query: '', limit: 5 })
+    const routingAfter = JSON.stringify(await readDocRaw(env, 'routing'))
+    assert.equal(routingAfter, routingBefore, 'recall_context 不得产生 doc 写副作用')
+
+    const sections = kernel.plugins
+      .listUi()
+      .filter((u) => u.pluginId === 'builtin:superagent' && u.surface === 'sidebar.section')
+      .map((u) => u.spec as { id: string; filterTag?: string; collapsible?: boolean; defaultCollapsed?: boolean; order?: number })
+    assert.equal(sections.length, 2, '应声明两个 sidebar.section（活跃 + 已归档）')
+    const archived = sections.find((s) => s.id === 'archived-workers')
+    assert.ok(archived !== undefined, '应声明 archived-workers 分组')
+    assert.equal(archived.filterTag, 'worker-archived')
+    assert.equal(archived.collapsible, true)
+    assert.equal(archived.defaultCollapsed, true)
+    assert.equal(archived.order, 90)
+    assert.doesNotMatch(JSON.stringify(sections), /\p{Extended_Pictographic}/u)
+  } finally {
+    await env.close()
   }
 })
