@@ -258,12 +258,25 @@ export async function teardownKernelRuntime(deps: {
     clear(): void
   }
 }): Promise<void> {
+  // 每步独立隔离：任一步失败只记录并继续关停其余资源（否则 harness/store/
+  // database/events 的 close 被跳过，SQLite 句柄泄漏）；全部执行完后统一上抛，
+  // 绝不流报成功关停。
+  const failures: string[] = []
+  const step = async (name: string, run: () => Promise<void>): Promise<void> => {
+    try {
+      await run()
+    } catch (error) {
+      failures.push(`${name}: ${String(error)}`)
+      console.error(`[helm] teardown 步骤 ${name} 失败（继续关停其余资源）:`, error)
+    }
+  }
+
   deps.modelsRegistry.abortRefresh(new Error('kernel closing'))
   deps.assetReloader.stop()
-  await deps.nodes.dispose()
-  await deps.assetReloader.waitForInflight()
-  await deps.modelsRegistry.dispose()
-  await deps.settledInflight()
+  await step('nodes.dispose', () => deps.nodes.dispose())
+  await step('assetReloader.waitForInflight', () => deps.assetReloader.waitForInflight())
+  await step('modelsRegistry.dispose', () => deps.modelsRegistry.dispose())
+  await step('settledInflight', () => deps.settledInflight())
   const closeAborts: Array<Promise<void>> = []
   for (const meta of deps.store.listConvs()) {
     const conversation = await deps.harness
@@ -283,23 +296,37 @@ export async function teardownKernelRuntime(deps: {
   await Promise.allSettled(closeAborts)
   // abort 唤醒的回合在 settle 链上追加新的 turn_settled 回调：getter 现读
   // 最新链再等待一轮，防止中止触发的结算写入与 store.close 竞态。
-  await deps.settledInflight()
-  await deps.settledInflight()
-  await deps.pluginHost?.dispose()
-  await deps.nodeForward?.close().catch(() => undefined)
-  await deps.envFabric.dispose().catch(() => {})
+  await step('settledInflight#2', () => deps.settledInflight())
+  await step('settledInflight#3', () => deps.settledInflight())
+  await step('pluginHost.dispose', () => deps.pluginHost?.dispose() ?? Promise.resolve())
+  await step('nodeForward.close', () => deps.nodeForward?.close() ?? Promise.resolve())
+  await step('envFabric.dispose', () => deps.envFabric.dispose())
   deps.processTokenHandle?.dispose()
-  await deps.harness.close(BACKGROUND_CONTEXT)
-  const storeError = await deps.store.close()
-  await deps.database.close()
+  await step('harness.close', () => deps.harness.close(BACKGROUND_CONTEXT))
+  let storeError: unknown
+  try {
+    storeError = await deps.store.close()
+  } catch (error) {
+    storeError = error
+    failures.push(`store.close: ${String(error)}`)
+    console.error('[helm] teardown 步骤 store.close 失败（继续关停其余资源）:', error)
+  }
+  await step('database.close', () => deps.database.close())
   deps.events.close()
   deps.sessionDocLifecycleRelease?.()
   deps.sessionDocStreams.close()
   deps.stashService.clear()
-  if (storeError !== undefined) {
-    throw new HelmError('store_flush_failed', `退出时持久化失败：${String(storeError)}`, 500, {
-      error: String(storeError),
-    })
+  if (storeError !== undefined || failures.length > 0) {
+    const detail = failures.join('; ')
+    if (storeError !== undefined) {
+      throw new HelmError(
+        'store_flush_failed',
+        `退出时持久化失败：${String(storeError)}` + (detail === '' ? '' : `；其余关停失败：${detail}`),
+        500,
+        { error: String(storeError), ...(detail === '' ? {} : { failures: detail }) },
+      )
+    }
+    throw new HelmError('teardown_failed', `退出关停部分失败：${detail}`, 500, { failures: detail })
   }
 }
 

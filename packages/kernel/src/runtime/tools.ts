@@ -52,7 +52,8 @@ import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { bool, int, obj, opt, str } from '@earendil-works/pi-schema'
-import { lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { lstat, mkdir, open, readFile, realpath, writeFile, type FileHandle } from 'node:fs/promises'
 import { composeExecutionEnv } from '../env/scoped-env.js'
 import { envWithFileMutationQueue, localWithFileMutationQueue } from '../env/file-mutation-queue.js'
 import { redactJsonValue } from '../redact.js'
@@ -198,6 +199,10 @@ export async function runShell(
         signal: null,
       }
     }
+    // isOnline 仅是「调用时已知晓离线」的快速失败提示；检查后到 RPC 之间
+    // 断连的行为由 RemoteExecutionEnv 统一决定：等待节点重连（尊重 context
+    // 取消，见 env/remote-env.ts 的离线韧性语义）。两条路径语义有意不同
+    //（前者已知的确定离线立即报错，后者在途韧性等待），不是遗漏。
     if (!deps.envFabric.isOnline(nodeId)) {
       return {
         ok: false,
@@ -642,29 +647,56 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
             isError: true,
           }
         }
-        const size = (await stat(targetReal)).size
-        if (size > READ_FILE_MAX_BYTES) {
-          return {
-            output: [
-              {
-                type: 'text',
-                text:
-                  `file_too_large: ${raw} 为 ${size} 字节，超过 read 工具 ${READ_FILE_MAX_BYTES} 字节上限。` +
-                  '请用 bash 命令输出到文件后经 read_artifact 分页读取，或用 head/tail/sed 取所需片段。',
-              },
-            ],
-            isError: true,
+        // fd 读取（TOCTOU 缓解）：realpath/lstat 之后、读取之前，目标可能被
+        // 替换为指向 cwd 外的软链——O_NOFOLLOW 打开不跟随最终组件上的软链
+        // （被替换时 ELOOP 显式拒绝而非跟随越界）；fstat 与读取同一 fd，
+        // 校验即所读内容。平台无 O_NOFOLLOW（Windows）时退化为跟随打开；
+        // 中间目录组件被替换的竞态不在本层承诺（fd 级防护需改底层原语）。
+        let handle: FileHandle
+        try {
+          handle = await open(targetReal, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+        } catch (error) {
+          if ((error as { code?: string }).code === 'ELOOP') {
+            return {
+              output: [{ type: 'text', text: `read_failed: ${raw} 在读取前被替换为软链，拒绝跟随` }],
+              isError: true,
+            }
           }
+          throw error
         }
-        const content = deps.redact(await readFile(targetReal, 'utf8'))
-        const spill = await deps.artifacts.spill(
-          api.conversationId as number,
-          `read-${api.callId}`,
-          content,
-        )
-        return {
-          output: [{ type: 'text', text: spill.text }],
-          structuredOutput: { path: raw, content: spill.text } as JsonValue,
+        try {
+          const statInfo = await handle.stat()
+          if (!statInfo.isFile()) {
+            return {
+              output: [{ type: 'text', text: `read_failed: ${raw} 在打开后不是普通文件，拒绝读取` }],
+              isError: true,
+            }
+          }
+          if (statInfo.size > READ_FILE_MAX_BYTES) {
+            return {
+              output: [
+                {
+                  type: 'text',
+                  text:
+                    `file_too_large: ${raw} 为 ${statInfo.size} 字节，超过 read 工具 ${READ_FILE_MAX_BYTES} 字节上限。` +
+                    '请用 bash 命令输出到文件后经 read_artifact 分页读取，或用 head/tail/sed 取所需片段。',
+                },
+              ],
+              isError: true,
+            }
+          }
+          const content = deps.redact(await handle.readFile({ encoding: 'utf8' }))
+          const spill = await deps.artifacts.spill(
+            api.conversationId as number,
+            `read-${api.callId}`,
+            content,
+          )
+          return {
+            output: [{ type: 'text', text: spill.text }],
+            structuredOutput: { path: raw, content: spill.text } as JsonValue,
+          }
+        } finally {
+          await handle.close()
         }
       } catch (error) {
         return {
@@ -774,6 +806,80 @@ async function resolveWritableTarget(
   return { ok: true, abs: absolute, baseReal }
 }
 
+/**
+ * local 写入互斥临界区内的写前复核（TOCTOU 收窄）：resolveWritableTarget
+ * 的 containment 在入队前完成，排队等待窗口内目标（或其已存在祖先）仍
+ * 可能被并发替换为指向 cwd 外的软链（队列不锁 bash/外部进程）。写前对
+ * 最近已存在祖先 realpath 复验仍 containment 内；新文件上溯父目录复验。
+ * 已存在但无法解析（悬空软链）保守拒绝（writeFile 会跟随软链，不得赌它
+ * 指向内）。复核 → 写入之间的微窗口是本层边界（fd 级防护需改写入原语）。
+ */
+async function assertLocalTargetContained(abs: string, baseReal: string): Promise<void> {
+  const rules = nodePathForShape(targetPathShape(abs))
+  let probe = abs
+  for (let depth = 0; depth < 64; depth += 1) {
+    const info = await lstat(probe).catch(() => undefined)
+    if (info === undefined) {
+      const parent = rules.dirname(probe)
+      if (parent === probe) return
+      probe = parent
+      continue
+    }
+    const real = await realpath(probe).catch(() => undefined)
+    if (real === undefined || !isWithinBase(real, baseReal)) {
+      throw new Error(
+        `path_escape_denied: ${abs}（写入前复核：${probe} ${
+          real === undefined ? '已存在但无法解析真实路径（可能是悬空软链）' : `解析为 ${real}，越出会话 cwd`
+        }，拒绝写入）`,
+      )
+    }
+    return
+  }
+}
+
+/**
+ * 远端写入互斥临界区内的写前复核（与 local 版同构，经 env canonicalPath +
+ * fileInfo RPC）：收窄「入队等待窗口」的替换竞态；复核 RPC 与节点实际写入
+ * 之间的网络微窗口是 RPC 协议边界，无法在本层消除。fileInfo 为 lstat 语义
+ * （软链 kind='symlink'），用于区分「真不存在」与「存在但解析失败」。
+ */
+async function assertRemoteTargetContained(
+  env: Parameters<typeof resolveWritableTarget>[0] & {
+    fileInfo(
+      path: string,
+      ctx: Context,
+    ): Promise<
+      { ok: true; value: { kind: string } } | { ok: false; error: { code: string; message: string } }
+    >
+  },
+  abs: string,
+  baseReal: string,
+  context: Context,
+): Promise<void> {
+  const rules = nodePathForShape(targetPathShape(abs))
+  let probe = abs
+  for (let depth = 0; depth < 64; depth += 1) {
+    const realR = await env.canonicalPath(probe, context)
+    if (!realR.ok) {
+      // 无法解析：区分「真不存在（上溯）」与「存在但悬空/无权（保守拒绝）」
+      const infoR = await env.fileInfo(probe, context)
+      if (infoR.ok) {
+        throw new Error(
+          `path_escape_denied: ${abs}（写入前复核：${probe} 已存在（kind=${infoR.value.kind}）但无法解析真实路径，拒绝写入）`,
+        )
+      }
+      const parent = rules.dirname(probe)
+      if (parent === probe) return
+      probe = parent
+      continue
+    }
+    if (!isWithinBase(realR.value, baseReal)) {
+      throw new Error(`path_escape_denied: ${abs}（写入前复核：${probe} 解析为 ${realR.value}，越出会话 cwd，拒绝写入）`)
+    }
+    return
+  }
+}
+
 const writeParameters = obj({
   path: str({ description: '目标文件路径（相对会话 cwd；允许在 cwd 内创建新文件或子目录）' }),
   content: str({ description: '要写入的 UTF-8 文本内容（整体覆盖）' }),
@@ -874,6 +980,8 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
           // 新文件的父目录可能不存在：先确保目录（recursive，仍在 containment 内）；
           // dirname 按目标形状规则（win32 反斜杠分隔符）。
           return await envWithFileMutationQueue(env, target.abs, async () => {
+            // 互斥临界区内写前复核：排队等待窗口内目标可能被替换为越界软链
+            await assertRemoteTargetContained(env, target.abs, target.baseReal, context)
             const parent = nodePathForShape(targetPathShape(target.abs)).dirname(target.abs)
             const mkdirResult = await env.createDir(parent, { recursive: true }, context)
             if (!mkdirResult.ok) throw new Error(mkdirResult.error.message)
@@ -912,6 +1020,8 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
         // local 与远端共享同一进程级队列（localWithFileMutationQueue 的 key 前缀
         // 与 NodeExecutionEnv.id 一致，两种入口互斥）。
         return await localWithFileMutationQueue(target.abs, async () => {
+          // 互斥临界区内写前复核：排队等待窗口内目标可能被替换为越界软链
+          await assertLocalTargetContained(target.abs, target.baseReal)
           await mkdir(nodePathForShape(targetPathShape(target.abs)).dirname(target.abs), { recursive: true })
           await writeFile(target.abs, args.content, 'utf8')
           return await onWriteSuccess(target.abs, bytes)
@@ -982,6 +1092,8 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
           }
           // 互斥队列：读-改-写整体持锁（读旧内容与写回之间不被其他变更插入）。
           return await envWithFileMutationQueue(env, target.abs, async () => {
+            // 持锁后先复核目标未被替换为越界软链，再读改写
+            await assertRemoteTargetContained(env, target.abs, target.baseReal, context)
             const readResult = await env.readTextFile(target.abs, context)
             if (!readResult.ok) throw new Error(readResult.error.message)
             const count = countOccurrences(readResult.value, args.oldText)
@@ -1037,6 +1149,8 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
           return { output: [{ type: 'text', text: target.message }], isError: true }
         }
         return await localWithFileMutationQueue(target.abs, async () => {
+          // 持锁后先复核目标未被替换为越界软链，再读改写
+          await assertLocalTargetContained(target.abs, target.baseReal)
           const content = await readFile(target.abs, 'utf8')
           const count = countOccurrences(content, args.oldText)
           if (count === 0) {
