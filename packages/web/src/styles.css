@@ -1199,7 +1199,7 @@ button,
 
 .pane-title {
   font-size: 13.5px;
-  font-weight: 600;
+  font-weight: 400;
   color: var(--fg);
   line-height: 46px;
   overflow: hidden;
