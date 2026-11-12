@@ -47,6 +47,7 @@ import { createHerdrPlugin } from '../src/builtin-plugins/herdr.js'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { FsOutputFiles, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
+import { SEND_KEYS_CAS_CAPABILITY } from '../src/builtin-plugins/herdr/rpc.js'
 import { askKey } from '../src/builtin-plugins/herdr/asks.js'
 import { EMPTY_MANAGED_DOC } from '../src/builtin-plugins/herdr/panes.js'
 
@@ -88,6 +89,13 @@ class FakeTransport implements HerdrTransport {
   /** false = agent.start 模拟真实 unknown/launch_pending 序列。 */
   startReady = false
   onPrompt: ((pane: PaneState, text: string) => void) | undefined
+  /** ping capabilities 通告：缺省模拟支持 send_keys CAS 的服务端；测试可改写模拟旧服务端。 */
+  pongCapabilities: Record<string, unknown> | null = {
+    live_handoff: false,
+    detached_server_daemon: false,
+    endpoint_protocol_generation: 1,
+    [SEND_KEYS_CAS_CAPABILITY]: true,
+  }
 
   private record(target: HerdrTarget, method: string, params: Record<string, unknown>): void {
     this.calls.push({ target, method, params })
@@ -208,8 +216,24 @@ class FakeTransport implements HerdrTransport {
         const pane = this.paneOf(params['target'])
         return { type: 'pane_read', read: { pane_id: pane.paneId, text: `tail of ${pane.paneId}: SECRET-VALUE line` } }
       }
+      case 'ping':
+        return {
+          type: 'pong',
+          version: 'test-server',
+          protocol: 22,
+          ...(this.pongCapabilities !== null ? { capabilities: { ...this.pongCapabilities } } : {}),
+        }
       case 'agent.send_keys': {
+        // CAS 契约（未来服务端行为）：expected_state_seq 必须匹配当前权威 seq，
+        // 不匹配以 stale_state 拒绝且不产生任何副作用。
         const pane = this.paneOf(params['target'])
+        const expected = params['expected_state_seq']
+        if (typeof expected !== 'number' || !Number.isSafeInteger(expected) || expected < 0) {
+          throw new HelmError('invalid_params', 'agent.send_keys 必须携带非负整数 expected_state_seq（CAS 契约）', 400)
+        }
+        if (expected !== pane.seq) {
+          throw new HelmError('stale_state', `expected_state_seq=${expected} 与当前 state_change_seq=${pane.seq} 不符，按键未发送`, 409)
+        }
         pane.seq += 1
         pane.agentStatus = 'working'
         this.sendKeysLog.push({ paneId: pane.paneId, keys: params['keys'] as string[] })
