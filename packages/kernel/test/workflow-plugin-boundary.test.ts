@@ -628,3 +628,80 @@ test('cleanup_worktree 工具错误信封：structuredOutput 仅 { ok:false, err
   assert.ok(String(raw.structuredOutput?.['error']).includes('未找到'), `error 保留真实诊断（实际 ${JSON.stringify(raw.structuredOutput)}）`)
   await host.dispose()
 })
+
+// ---------------------------------------------------------------------------
+// 7. emitEvent 适配器收口：runs 投影/广播失败不得逃逸为 unhandledRejection
+// ---------------------------------------------------------------------------
+
+/**
+ * 预置插件 records 文档：wf_a 为跨重启遗留 running（init 会标 failed 并发
+ * workflow.updated）；wf_c 索引项 conversationId 非法——适配器内 syncRunsDoc →
+ * listRuns 将抛 workflow_index_corrupt（观察面持久层故障），但
+ * prepareRecovery/init 逐记录读取仍可完成（记录本体存在且形状合法）。
+ */
+function seedCorruptRunsIndex(docStore: MemoryDocStore): void {
+  docStore.set('builtin:workflow:records', {
+    'workflow/runs': [
+      { id: 'wf_a', conversationId: 1, createdAt: 1 },
+      { id: 'wf_c', conversationId: 0, createdAt: 2 },
+    ],
+    'workflow/run/wf_a': {
+      id: 'wf_a',
+      name: 'a',
+      conversationId: 1,
+      status: 'running',
+      createdAt: 1,
+      updatedAt: 1,
+      kind: 'workflow',
+      journalPath: '/tmp/nonexistent-a.jsonl',
+    },
+    'workflow/run/wf_c': {
+      id: 'wf_c',
+      name: 'c',
+      conversationId: 1,
+      status: 'completed',
+      createdAt: 2,
+      updatedAt: 2,
+      kind: 'workflow',
+      journalPath: '/tmp/nonexistent-c.jsonl',
+    },
+  })
+}
+
+test('emitEvent 适配器：runs 投影损坏时引擎语义完整、显式诊断、无 unhandledRejection', { timeout: 60_000 }, async () => {
+  // 真实插件链路（服务适配器 async 且内部 syncRunsDoc 可抛）：遗留 run 照常被
+  // init 标 failed（终态写入 records），事件投影失败只诊断（stderr +
+  // notification），不得放大成 unhandledRejection 拖垮进程。
+  seedCorruptRunsIndex(docs)
+  const unhandled: unknown[] = []
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason)
+  }
+  process.on('unhandledRejection', onUnhandled)
+  let host: PluginHost | undefined
+  try {
+    host = makeHost()
+    const { createWorkflowPlugin } = await import('../src/builtin-plugins/workflow.js')
+    // start 末尾的 syncRunsDoc 会因索引损坏同步失败（既有诚实行为）；
+    // 关键在于 init 路径的 workflow.updated 事件不产生逃逸 rejection。
+    await assert.rejects(
+      () => host!.register(createWorkflowPlugin()),
+      (err: unknown) => err instanceof HelmError && err.code === 'workflow_index_corrupt',
+    )
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.deepEqual(unhandled, [], '事件适配器故障不得逃逸为 unhandledRejection')
+    // wf_a 仍被 init 如实标 failed（引擎终态语义不被观察面故障破坏）。
+    const records = docs.get<Record<string, { status?: string }>>('builtin:workflow:records', {})
+    assert.equal(records['workflow/run/wf_a']?.status, 'failed')
+    // 适配器收口后的显式诊断事件（区别于 stop 路径的「工作流最终投影未同步」）。
+    const notifications = backend.emitted.filter(
+      (e) =>
+        e.type === 'notification' &&
+        String((e.payload as { title?: string }).title).includes('工作流事件投影未同步'),
+    )
+    assert.ok(notifications.length > 0, `应发布投影失败诊断 notification（实际 ${JSON.stringify(backend.emitted.map((e) => e.type))}）`)
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+    await host?.dispose()
+  }
+})

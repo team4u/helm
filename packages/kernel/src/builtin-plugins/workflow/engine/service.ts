@@ -489,7 +489,7 @@ export class WorkflowService {
               this.writeRecord(target)
             })
           }
-          this.host.emitEvent('workflow.updated', { run: this.toSummary(record) })
+          this.emitEventSafe('workflow.updated', { run: this.toSummary(record) })
         }
         if (changed) await this.state.flush?.()
         this.recovered = true
@@ -766,11 +766,19 @@ export class WorkflowService {
       ...(replayFrom !== undefined ? { replayedFrom: replayFrom.id } : {}),
     }
 
+    // done 自注册进 active 起即为真实终点（deferred gate，由下方结算链 resolve）：
+    // 占位 Promise.resolve 会让「注册 → running 快照 flush → 结算链启动」之间
+    // 的 await 窗口内并发 wait()/abort() 立即假返回，违背「返回时 run 已终态」
+    // 契约（与 startBackgroundAgent 的 doneGate 同构）。
+    let resolveRunDone: () => void = () => {}
+    const doneGate = new Promise<void>((resolve) => {
+      resolveRunDone = resolve
+    })
     const run: ActiveRun = {
       runId,
       conversationId,
       abort,
-      done: Promise.resolve(),
+      done: doneGate,
       summary: this.toSummary(record),
       journalPath,
       writer: new JournalWriter(journalPath),
@@ -781,6 +789,10 @@ export class WorkflowService {
       lastPersistAt: createdAt,
       lastNodeEventAt: createdAt,
     }
+    // 停机屏障复查：入口检查后已经过 init() 与 resume 分支的 flush 等多个 await
+    // 点，close() 只快照当下 active 集合——漏检会让 run 越过屏障继续派生子会话。
+    // 本行到 active.set 之间无 await（单线程事件循环），此后 close 必然拍到本 run。
+    this.assertNotClosed()
     this.active.set(runId, run)
 
     /**
@@ -886,7 +898,7 @@ export class WorkflowService {
             run.settleError = run.settleError ?? settledError
           }
         }
-        this.host.emitEvent('workflow.updated', { run: { ...run.summary } })
+        this.emitEventSafe('workflow.updated', { run: { ...run.summary } })
         if (settleFailure !== undefined && run.settleError === undefined) {
           run.settleError = settleFailure
         }
@@ -899,15 +911,19 @@ export class WorkflowService {
       await this.state.flush?.()
     } catch (error) {
       // running 快照都没能落库：不启动执行，不留任何 active/writer。
+      // close() 快照可能已拍到本 run：gate 必须给终点，否则 close 永久挂起。
       await run.writer.close().catch(() => {})
       this.active.delete(runId)
+      resolveRunDone()
       throw error
     }
-    this.host.emitEvent('workflow.updated', { run: this.redactSummaryNodes({ ...run.summary }) })
+    this.emitEventSafe('workflow.updated', { run: this.redactSummaryNodes({ ...run.summary }) })
 
     const engineHost = this.makeEngineHost(run, parent)
 
-    run.done = (async () => {
+    // 真实结算链：结束后 resolve doneGate（wait/abort/close 自 active.set 起
+    // 等待的都是同一个 gate，再无占位窗口）。
+    void (async () => {
       let result: WorkflowRunResult | undefined
       let failure: unknown
       try {
@@ -970,7 +986,7 @@ export class WorkflowService {
             }
 
             const emitUpdated = (at: number): void => {
-              this.host.emitEvent('workflow.updated', {
+              this.emitEventSafe('workflow.updated', {
                 run: this.redactSummaryNodes({
                   ...run.summary,
                   updatedAt: at,
@@ -1013,7 +1029,18 @@ export class WorkflowService {
         // 引擎在 worker 启动前拒绝（坏 meta、超限等）：无进度可折叠，直接失败。
         failure = error
       }
-      await settleRun(result, failure)
+      try {
+        await settleRun(result, failure)
+      } catch (error) {
+        // settleRun 设计上吸收全部异常（终态落盘失败等经 settleError 如实浮出
+        // 给 wait/abort）；此 catch 仅防御缩程错误逃逸：gate 仍必须 resolve，
+        // 且不得留下 floating rejection。
+        process.stderr.write(
+          `workflow ${runId}: settle crashed: ${error instanceof Error ? error.message : String(error)}\n`,
+        )
+        run.settleError = run.settleError ?? error
+      }
+      resolveRunDone()
     })()
 
     return { ...run.summary }
@@ -1271,7 +1298,7 @@ export class WorkflowService {
             process.stderr.write(`workflow ${runId}: onBackgroundAgentSettled failed: ${message}\n`)
           }
         }
-        this.host.emitEvent('workflow.updated', { run: { ...run.summary } })
+        this.emitEventSafe('workflow.updated', { run: { ...run.summary } })
         this.active.delete(runId)
         settled = true
         if (settleError !== undefined) run.settleError = settleError
@@ -1334,7 +1361,7 @@ export class WorkflowService {
       resolveDone()
       throw persistError
     }
-    this.host.emitEvent('workflow.updated', { run: this.redactSummaryNodes({ ...run.summary }) })
+    this.emitEventSafe('workflow.updated', { run: this.redactSummaryNodes({ ...run.summary }) })
 
     // --- 组装 proto 并发起 spawn -----------------------------------------
     const proto: AgentSpawnRequest = {
@@ -1436,7 +1463,7 @@ export class WorkflowService {
       const message = persistError instanceof Error ? persistError.message : String(persistError)
       process.stderr.write(`workflow ${runId}: execution metadata persist failed: ${message}\n`)
     }
-    this.host.emitEvent('workflow.updated', { run: this.redactSummaryNodes({ ...run.summary }) })
+    this.emitEventSafe('workflow.updated', { run: this.redactSummaryNodes({ ...run.summary }) })
 
     return {
       run: this.redactSummaryNodes({ ...run.summary }),
@@ -2253,5 +2280,24 @@ export class WorkflowService {
 
   private assertNotClosed(): void {
     if (this.closed) throw new HelmError('closed', 'WorkflowService 已关闭', 409)
+  }
+
+  /**
+   * workflow.updated 事件的 fire-and-forget 收口：WorkflowServiceHost 的
+   * emitEvent 签名是 void，但真实适配器（插件层）为 async——投影/广播失败
+   * 只能诊断，不得逃逸为 unhandledRejection 拖垮进程（观察面失败不动摇
+   * run 生命周期；持久终态以 state store 为准）。
+   */
+  private emitEventSafe(type: string, payload: unknown): void {
+    const diagnose = (error: unknown): void => {
+      process.stderr.write(
+        `workflow: emitEvent ${type} failed: ${error instanceof Error ? error.message : String(error)}\n`,
+      )
+    }
+    try {
+      void Promise.resolve(this.host.emitEvent(type, payload)).catch(diagnose)
+    } catch (error) {
+      diagnose(error)
+    }
   }
 }
