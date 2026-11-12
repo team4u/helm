@@ -17,7 +17,11 @@
  *   service.start 执行 init（终止遗留任务、标 failed、补发通知）与 close；
  *   liveTasks/liveWorktrees 声明在途任务与工作树占用；
  * - 3 个模型工具（subagent / SubagentWorkflow / cleanup_worktree）与
- *   6 个动作（list/run/runs/inspect/abort/cleanup_worktree）五端复用。
+ *   6 个动作（list/run/runs/inspect/abort/cleanup_worktree）五端复用；
+ * - 嵌套深度契约：受管子代理（经本插件派生的原生/外部子会话）是编排
+ *   叶子——私有登记表持久化事实，before_turn 剥离派工工具、工具/动作入口
+ *   前置拒绝、agent_spawn 最高优先级兜底，三道防线显式报
+ *   subagent_depth_exceeded（fork / SuperAgent worker 不在表内，不受影响）。
  */
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -165,6 +169,51 @@ export function createWorkflowPlugin(): PluginDefinition {
         flush: (): Promise<void> => worktreeDocs.flush(),
       }
 
+      // ---- 受管子代理登记表（私有 doc；跨重启持久的事实来源） ----
+      // 「workflow 子代理」= 经 agent_spawn 管道成功派生、onResolved 回传
+      // conversationId 的子会话（本插件 subagent 工具与编排引擎是当前全部
+      // 调用方）。fork 会话与 SuperAgent worker（经 createConversation 创建，
+      // 不经 spawn 管道）天然不进表——嵌套限制绝不以 parentConversationId
+      // 或 tags 一刀切，也不依赖 ownership 猜测。
+      const subagentConvDoc = ctx.doc<Record<string, { agentType?: string; runId?: string; createdAt: number }>>(
+        'subagent-conversations',
+        {},
+      )
+
+      function isManagedSubagent(conversationId: number): boolean {
+        return subagentConvDoc.get()[String(conversationId)] !== undefined
+      }
+
+      function registerManagedSubagent(conversationId: number, meta: { agentType?: string; runId?: string }): void {
+        subagentConvDoc.update((current) => ({
+          ...current,
+          [String(conversationId)]: {
+            ...(meta.agentType !== undefined ? { agentType: meta.agentType } : {}),
+            ...(meta.runId !== undefined ? { runId: meta.runId } : {}),
+            createdAt: Date.now(),
+          },
+        }))
+        // 登记落盘失败显式诊断（不静默）：崩溃窗口内重启可能短暂放行。
+        void subagentConvDoc.flush().catch((error: unknown) => {
+          process.stderr.write(
+            `builtin:workflow: 受管子代理会话 ${conversationId} 登记落盘失败：${
+              error instanceof Error ? error.message : String(error)
+            }\n`,
+          )
+        })
+      }
+
+      /** 受管子代理是编排叶子：禁止再派生子代理或启动嵌套工作流。 */
+      function assertCanSpawn(conversationId: number): void {
+        if (!isManagedSubagent(conversationId)) return
+        throw new HelmError(
+          'subagent_depth_exceeded',
+          `会话 ${conversationId} 是工作流子代理（编排叶子），不能再派生子代理或启动嵌套工作流`,
+          403,
+          { conversationId },
+        )
+      }
+
       /**
        * worktree 隔离生命周期（本插件自有 Git 能力）：
        * - agent_spawn around（continuation）包襄完整派生：分配/续接/占用/租约；
@@ -187,12 +236,51 @@ export function createWorkflowPlugin(): PluginDefinition {
         docStore: worktreeDocStore,
       })
 
+      // ---- agent_spawn 深度守卫（兜底防线；priority 300 = 最外层） ----
+      // 先于 isolation（200）执行：受管子代理的派生请求在 worktree 分配之前
+      // 显式拒绝；成功派生（onResolved 回传 conversationId）登记进事实表——
+      // 任何入口（同步工具 / 后台 run / 引擎节点 / 未来调用方）派生的子会话
+      // 都被记账，重启后依旧生效。
+      ctx.hook.onAgentSpawn(async (request, next) => {
+        assertCanSpawn(request.parentConversationId)
+        if (request.onResolved === undefined) {
+          await next(request)
+          return
+        }
+        const original = request.onResolved
+        // continuation 契约：已调 next 的 handler 返回 void（next 的结果即
+        // 它的结果）；此处仅包裹 onResolved 记账，不得透传下游产物。
+        await next({
+          ...request,
+          onResolved: (info) => {
+            if (info.conversationId !== undefined) {
+              registerManagedSubagent(info.conversationId, {
+                ...(request.agentType !== undefined ? { agentType: request.agentType } : {}),
+                ...(request.workflowRunId !== undefined ? { runId: request.workflowRunId } : {}),
+              })
+            }
+            original(info)
+          },
+        })
+      }, { priority: 300 })
+
       // ---- agent_spawn around（continuation）：worktree 隔离完整生命周期 ----
       // priority 200：先于外部运行时接管器（如 herdr 的 100）执行 = 更外层，
       // 外部执行同样被租约与登记包襄；不调 next 的接管器（handled）不受影响。
       ctx.hook.onAgentSpawn(async (request, next) => {
         await isolation.aroundSpawn(request, next)
       }, { priority: 200 })
+
+      // ---- before_turn：受管子代理回合剥离派工工具（防线一） ----
+      // 默认优先级先于 profile 协作目录钩子（-100）：目录钩子看到的是剥离后
+      // 的工具清单，真正子代理自然不注入协作目录；fork / SuperAgent worker
+      // 不在登记表内，工具与目录不受影响。
+      ctx.hook.onBeforeTurn((turn) => {
+        if (!isManagedSubagent(turn.conversation.id)) return
+        const tools = turn.tools.filter((t) => t.name !== 'subagent' && t.name !== 'SubagentWorkflow')
+        if (tools.length === turn.tools.length) return
+        return { action: 'transform', value: { ...turn, tools } }
+      })
 
       // 受控 stop 时序：teardown 先置 deactivating 会废黜 doc 句柄，但 service.stop
       // 属宿主受控调用链——本插件在 stop 内最后再同步 runs 投影。为使 stop 期间的
@@ -508,6 +596,8 @@ export function createWorkflowPlugin(): PluginDefinition {
         structuredOutputSchema: subagentOutputSchema,
         async execute(args, context) {
           const a = args as Record<string, unknown>
+          // 嵌套深度前置拒绝（防线二）：受管子代理是叶子，不创建任何后台 run。
+          assertCanSpawn(context.conversationId)
           if (a['isolation'] !== undefined && a['isolation'] !== 'worktree') {
             return envelopeError(`subagent_failed: isolation 仅允许 'worktree'（收到 ${JSON.stringify(a['isolation'])}），不合法值绝不静默丢弃`, `invalid isolation: ${JSON.stringify(a['isolation'])}`)
           }
@@ -606,6 +696,8 @@ export function createWorkflowPlugin(): PluginDefinition {
         structuredOutputSchema: workflowOutputSchema,
         async execute(args, context) {
           const a = args as Record<string, unknown>
+          // 嵌套深度前置拒绝（防线二）：受管子代理是叶子，不创建任何 run 记录。
+          assertCanSpawn(context.conversationId)
           const input: Record<string, unknown> = {}
           if (a['script'] !== undefined) input['script'] = String(a['script'])
           if (a['scriptPath'] !== undefined) input['scriptPath'] = String(a['scriptPath'])
@@ -762,6 +854,14 @@ export function createWorkflowPlugin(): PluginDefinition {
           if (request.conversationId === undefined && context.conversationId !== undefined) {
             request.conversationId = context.conversationId
           }
+          // 嵌套深度前置拒绝（防线二）：受管子代理是叶子，在创建 run 记录前拦截。
+          // 显式 conversationId 优先；缺省用调用上下文；两者皆无时 workflows.run
+          // 会在落任何记录前报 validation_error，不属深度拦截职责。
+          const depthTarget =
+            typeof request.conversationId === 'number'
+              ? request.conversationId
+              : context.conversationId
+          if (depthTarget !== undefined) assertCanSpawn(depthTarget)
           const started = await workflows.run(request)
           syncRunsDoc()
           if (wait === true) {

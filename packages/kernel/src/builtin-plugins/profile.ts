@@ -198,13 +198,14 @@ export function createProfilePlugin(): PluginDefinition {
        * 协作目录统一计算（补全动作与 before_turn 注入共用同一事实源）：
        * - 排除自身 / humanSelectable:false / 托管插件未启用 / runtime.kind
        *   无已启用 profile.runtime UI 贡献对应（详见 catalog.ts 规则）；
-       * - 子会话（parentConversationId 存在）返回空：缺省不鼓励嵌套协作，
-       *   这不是安全沙箱或硬深度限制，只是默认策略；
+       * - 仅依据回合是否还有派工工具：builtin:workflow 对受管子代理（编排
+       *   叶子）在更高优先级钩子剥离 subagent/SubagentWorkflow 后，此处自然
+       *   返回空——不按 parentConversationId 一刀切（fork / SuperAgent worker
+       *   同样有父链，但应保留完整协作能力）；
        * - 每次调用实时重读 Profile 目录与插件状态（增删改 / 启停下次生效）。
        * 任一候选摘要读取的非 not_found 错误如实上抛（显式失败）。
        */
-      const computeCatalog = async (currentProfileId: string, isSubConversation: boolean): Promise<ProfileCatalogEntry[]> => {
-        if (isSubConversation) return []
+      const computeCatalog = async (currentProfileId: string): Promise<ProfileCatalogEntry[]> => {
         const [allProfiles, pluginSummaries, uiContributions] = await Promise.all([
           profiles.list(),
           ctx.host.listPlugins(),
@@ -236,11 +237,13 @@ export function createProfilePlugin(): PluginDefinition {
 
       ctx.hook.onBeforeTurn(
         async (turn) => {
-          // 只对顶层会话注入；无可用派工工具的回合也不注入目录（避免教唆
-          // 调用不存在的工具）。工具收敛后的 tools 只读，不改动。
+          // 无可用派工工具的回合不注入目录（避免教唆调用不存在的工具；真正
+          // 子代理的派工工具已被 builtin:workflow 钩子剥离，在此自然收敛）。
+          // 工具收敛后的 tools 只读，不改动；不按 parentConversationId 排除
+          // （fork / SuperAgent worker 同样有父链，应保留协作能力）。
           const tools = dispatchToolNames(turn.tools)
-          if (turn.conversation.parentConversationId !== undefined || tools.length === 0) return { action: 'continue' }
-          const entries = await computeCatalog(turn.conversation.profileId, false)
+          if (tools.length === 0) return { action: 'continue' }
+          const entries = await computeCatalog(turn.conversation.profileId)
           if (entries.length === 0) return { action: 'continue' }
           const sections = [...turn.sections, { id: 'profile.catalog', text: renderProfileCatalogSection(entries, { dispatchToolNames: tools }) }]
           return { action: 'transform', value: { ...turn, sections } }
@@ -304,9 +307,10 @@ export function createProfilePlugin(): PluginDefinition {
           }
           const conversation = ctx.host.getConversation(conversationId)
           const query = (input.query ?? '').trim().toLowerCase()
-          // 补全无回合工具清单：按顶层 + 插件可用性判定候选（不伪称能确定
-          // 最终工具清单——注入目录时另有回合级收敛，两者规则同源）。
-          const entries = await computeCatalog(conversation.profileId, conversation.parentConversationId !== undefined)
+          // 补全无回合工具清单：按插件可用性判定候选（不伪称能确定最终工具
+          // 清单——注入目录时另有回合级收敛，两者规则同源；嵌套子代理的
+          // 回合级剥离由 builtin:workflow 钩子完成，补全面不再按父链排除）。
+          const entries = await computeCatalog(conversation.profileId)
           const items = entries
             .filter((entry) => {
               if (query === '') return true

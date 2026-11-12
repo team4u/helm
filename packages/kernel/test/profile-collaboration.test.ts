@@ -6,12 +6,13 @@
  * - 纯函数：SYSTEM.md 摘要提取（frontmatter/代码块/标题跳过、转义、码点截断）、
  *   目录排除规则（自身/humanSelectable/托管插件停用/runtime 无接管）、
  *   位置展示继承语义、目录 XML 渲染转义与 runtime 标注；
- * - 集成（真实 PluginHost）：before_turn 目录注入（子会话不注入、无派工工具
- *   不注入、工具剥离后不注入——模拟默认优先级钩子先剥离 subagent）、
+ * - 集成（真实 PluginHost）：before_turn 目录注入（fork/worker 类子会话同样
+ *   注入、无派工工具不注入、工具剥离后不注入——模拟默认优先级钩子先剥离
+ *   subagent）、
  *   workflow 插件停用/启用对目录的影响、候选增删改实时生效、
  *   候选 SYSTEM 缺失不告警不伪造、候选 IO 错误显式上抛；
  * - 动作契约：list_mentionable 幂等补全（上下文会话身份不可被 body 伪造、
- *   显式 conversationId 校验、query 过滤、子会话空、schema 输出校验）、
+ *   显式 conversationId 校验、query 过滤、不再按父链排除子会话、schema 输出校验）、
  *   composerCompleter 声明进入 listUi 且停用即消失。
  * runner: tsx --test；每项 timeout: 60_000。
  */
@@ -442,7 +443,7 @@ test('before_turn：顶层 + 有派工工具时注入 profile.catalog；候选�
   }
 })
 
-test('before_turn：子会话不注入目录；无派工工具不注入（workflow 停用 / 工具被剥离）', { timeout: 60_000 }, async () => {
+test('before_turn：子会话不再一刀切排除；无派工工具不注入（workflow 停用 / 工具被剥离）', { timeout: 60_000 }, async () => {
   const env = await makeEnv([createWorkflowPlugin()], true)
   try {
     await seedProfile(env.profiles, env.dataDir, { id: 'coder', name: '编码' })
@@ -457,13 +458,15 @@ test('before_turn：子会话不注入目录；无派工工具不注入（workfl
     const topLevel = await env.host.runHook('before_turn', parentTurn as never)
     assert.ok(sectionsOf(topLevel, parentTurn).some((s) => s.id === 'profile.catalog'))
 
-    // 子会话（parentConversationId 存在）即使有工具也不注入
+    // 子会话（parentConversationId 存在，如 fork / SuperAgent worker）有工具同样
+    // 注入：不再按父链一刀切（真正子代理由 builtin:workflow 钩子剥离工具后
+    // 在此自然不注入）。
     const subTurn = {
       ...parentTurn,
       conversation: makeConversation(2, { parentConversationId: 1 }),
     }
     const sub = await env.host.runHook('before_turn', subTurn as never)
-    assert.ok(!sectionsOf(sub, subTurn).some((s) => s.id === 'profile.catalog'), '子会话不注入')
+    assert.ok(sectionsOf(sub, subTurn).some((s) => s.id === 'profile.catalog'), 'fork/worker 类子会话同样注入（不再父链一刀切）')
 
     // 顶层但派工工具被默认优先级钩子剥离（模拟路由模式收敛）→ 低优先级目录钩子看到最终清单，不注入
     const stripperEnv = await makeEnv([createWorkflowPlugin(), makeToolStripperPlugin(['subagent', 'SubagentWorkflow'])], true)
@@ -629,11 +632,14 @@ test('list_mentionable：上下文会话为真实身份来源；Workflow 启停�
     )) as { items: Array<{ id: string }> }
     assert.ok(enabled.items.some((i) => i.id === 'coder'), 'Workflow 重新启用后候选恢复')
 
-    // 无上下文 + 显式 conversationId：真实 getConversation 校验（子会话 → 空）
+    // 无上下文 + 显式 conversationId：真实 getConversation 校验。补全面不再
+    // 按父链排除（fork / SuperAgent worker 同样有父链但应保留协作能力；真正
+    // 子代理的回合级剥离由 builtin:workflow 钩子完成），有插件即有候选。
     const subCtx = (await env.host.invokeAction('builtin:profile', 'list_mentionable', { conversationId: 2 })) as {
-      items: unknown[]
+      items: Array<{ id: string }>
     }
-    assert.equal(subCtx.items.length, 0, '子会话上下文返回空候选')
+    assert.ok(subCtx.items.length > 0, '子会话上下文不再按父链一刀切排除（fork/worker 误伤修复）')
+    assert.ok(!subCtx.items.some((i) => i.id === 'coder'), '排除规则仍生效：自身 Profile 不进候选')
 
     // 无上下文 + 失效显式目标 → 404
     await assert.rejects(
