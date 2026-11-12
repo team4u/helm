@@ -25,13 +25,13 @@ after(async () => {
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-async function startStack() {
+async function startStack(leaseTimeoutMs?: number) {
   const fabric = createEnvFabric({
     authenticate: (id, token) => id === 'fwd-node' && token === 'fwd-node:secret',
     heartbeatIntervalMs: 60_000,
     heartbeatTimeoutMs: 60_000,
   })
-  const forward = new NodeForwardService(fabric)
+  const forward = new NodeForwardService(fabric, leaseTimeoutMs)
   const server = http.createServer((_req, res) => { res.writeHead(404); res.end() })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const hubPort = (server.address() as net.AddressInfo).port
@@ -251,3 +251,130 @@ async function freePort(): Promise<number> {
     })
   })
 }
+
+/** 多并发 echo 客户端：各自写 payload 并等回显完整。 */
+async function tcConcurrent(port: number, payloads: Buffer[]): Promise<Buffer[]> {
+  return await Promise.all(payloads.map(
+    (payload) => new Promise<Buffer>((resolve, reject) => {
+      const socket = net.connect({ host: '127.0.0.1', port })
+      socket.on('error', reject)
+      const chunks: Buffer[] = []
+      let received = 0
+      socket.on('data', (c) => {
+        chunks.push(c)
+        received += c.length
+        if (received >= payload.length) {
+          socket.end()
+          resolve(Buffer.concat(chunks))
+        }
+      })
+      socket.write(payload)
+    }),
+  ))
+}
+
+test('端口转发：多连接各自关闭不重复扣减活动计数（恰好一次清理）', { timeout: 60_000 }, async () => {
+  const echo = await startEcho()
+  const stack = await startStack()
+  try {
+    assert.equal(stack.ready, true)
+    const session = await stack.forward.start('fwd-node', {
+      listenHost: '127.0.0.1',
+      listenPort: await freePort(),
+      targetPort: echo.port,
+    })
+    // 3 个并发连接：各自回显后关闭；socket/tunnel 任一先关只清理一次。
+    const payloads = ['one'.repeat(5000), 'two'.repeat(5000), 'three'.repeat(5000)].map((s) => Buffer.from(s))
+    const echoed = await tcConcurrent(session.listenPort, payloads)
+    for (let i = 0; i < payloads.length; i++) {
+      assert.ok(echoed[i]!.equals(payloads[i]!), `第 ${i + 1} 条连接回显一致`)
+    }
+    await delay(150)
+    const current = stack.forward.get(session.forwardId)
+    assert.ok(current !== undefined)
+    assert.equal(current.activeConnections, 0, '全部连接关闭后活动计数精确归零（重复 decrement 会变负/吃掉他人计数——Math.max 只掩码不修正总账）')
+    assert.equal(current.totalConnections, 3, '累计连接数 = 3')
+    // 逐个再开两条：验证计数在前次并发清理后仍然准确。
+    const again = await tcConcurrent(session.listenPort, [Buffer.from('a'.repeat(3000)), Buffer.from('b'.repeat(3000))])
+    assert.equal(again.length, 2)
+    await delay(150)
+    assert.equal(stack.forward.get(session.forwardId)?.activeConnections, 0, '后续连接计数仍准确')
+  } finally {
+    await stack.close()
+    await echo.close()
+  }
+})
+
+test('端口转发：stop 幂等共享同一关闭 Promise（并发调用等同一结果）', { timeout: 60_000 }, async () => {
+  const echo = await startEcho()
+  const stack = await startStack()
+  try {
+    assert.equal(stack.ready, true)
+    const session = await stack.forward.start('fwd-node', {
+      listenHost: '127.0.0.1',
+      listenPort: await freePort(),
+      targetPort: echo.port,
+    })
+    // 并发 + 重复 stop：全部 resolve（不 404——共享关闭，不「立即返回」）。
+    await Promise.all([
+      stack.forward.stop(session.forwardId),
+      stack.forward.stop(session.forwardId),
+      stack.forward.stop(session.forwardId),
+    ])
+    assert.equal(stack.forward.get(session.forwardId), undefined, '关闭完成后摘除一次')
+    // 关闭后的显式 stop：会话已摘除，按 not_found 拒绝（与 HTTP 404 幂等口径一致）。
+    await assert.rejects(
+      stack.forward.stop(session.forwardId),
+      (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'not_found',
+    )
+  } finally {
+    await stack.close()
+    await echo.close()
+  }
+})
+
+test('端口转发：前台租约——未绑定事件流自动停止；最后一持有者释放停止', { timeout: 60_000 }, async () => {
+  const echo = await startEcho()
+  const stack = await startStack(150) // 注入短期限：150ms
+  try {
+    assert.equal(stack.ready, true)
+    // 1) 创建后未绑定持有者：租约到期自动停止（CLI 被杀/DELETE 失败不残留）。
+    const orphan = await stack.forward.start('fwd-node', {
+      listenHost: '127.0.0.1',
+      listenPort: await freePort(),
+      targetPort: echo.port,
+    })
+    await delay(400)
+    assert.equal(stack.forward.get(orphan.forwardId), undefined, '未绑定的转发起租约到期自动停止')
+    await assert.rejects(
+      tcRequest(orphan.listenPort, Buffer.from('x')).then(() => undefined, (e) => { throw e }),
+      undefined,
+    ).catch(() => undefined) // 监听器已关。
+
+    // 2) 绑定持有者后不自动停止；两持有者逐一释放，最后一个才停止。
+    const session = await stack.forward.start('fwd-node', {
+      listenHost: '127.0.0.1',
+      listenPort: await freePort(),
+      targetPort: echo.port,
+    })
+    const release1 = stack.forward.acquireLease(session.forwardId)
+    await delay(400) // 超过租约期限：仍存活（持有者存在）。
+    assert.ok(stack.forward.get(session.forwardId) !== undefined, '持有者存在时不因租约到期停止')
+    const payload = Buffer.from('lease-alive')
+    assert.ok((await tcRequest(session.listenPort, payload)).equals(payload), '持有期间转发可用')
+    const release2 = stack.forward.acquireLease(session.forwardId)
+    release1()
+    await delay(100)
+    assert.ok(stack.forward.get(session.forwardId) !== undefined, '仍有持有者时不停止')
+    release2()
+    await delay(200)
+    assert.equal(stack.forward.get(session.forwardId), undefined, '最后一持有者释放即停止')
+    await assert.rejects(
+      stack.forward.stop(session.forwardId),
+      (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'not_found',
+    )
+  } finally {
+    await stack.close()
+    await echo.close()
+  }
+})

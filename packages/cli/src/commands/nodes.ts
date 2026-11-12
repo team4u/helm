@@ -3,7 +3,13 @@
  * 纯管理面 API，与 `helm-node`（受控机器守护进程）职责分离。
  */
 import { CliError } from '../errors.js'
-import type { NodeInfo, NodeIssuedToken, NodeUpgradeCheckResult, NodeUpgradeResult } from '@helm/protocol'
+import type {
+  NodeForwardSession,
+  NodeInfo,
+  NodeIssuedToken,
+  NodeUpgradeCheckResult,
+  NodeUpgradeResult,
+} from '@helm/protocol'
 import { flagValue, parseFlags, type FlagSpec } from '../args.js'
 import type { Io } from '../options.js'
 import type { CommandContext, CommandSpec } from './shared.js'
@@ -176,6 +182,65 @@ function parseEndpoint(raw: string, what: string, allowBarePort: boolean): { hos
   return { host, port }
 }
 
+/** 校验 Hub 返回的转发会话形状（诚实性：非法响应显式报错）。 */
+function requireNodeForwardSession(value: unknown, what: string): NodeForwardSession {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new CliError(`${what} 需为对象`, 'invalid_response')
+  }
+  const v = value as Record<string, unknown>
+  if (
+    typeof v['forwardId'] !== 'string' ||
+    typeof v['nodeId'] !== 'string' ||
+    typeof v['listenHost'] !== 'string' ||
+    typeof v['listenPort'] !== 'number' ||
+    typeof v['targetHost'] !== 'string' ||
+    typeof v['targetPort'] !== 'number' ||
+    typeof v['activeConnections'] !== 'number' ||
+    typeof v['totalConnections'] !== 'number'
+  ) {
+    throw new CliError(`${what} 缺字段或字段非法（forwardId/nodeId/listen*/target*/activeConnections/totalConnections）`, 'invalid_response')
+  }
+  return value as NodeForwardSession
+}
+
+/** nodes forwards 人类模式固定列。 */
+const FORWARD_COLUMNS: ReadonlyArray<{ key: keyof NodeForwardSession; label: string }> = [
+  { key: 'forwardId', label: 'forwardId' },
+  { key: 'nodeId', label: 'node' },
+  { key: 'listenHost', label: 'listen' },
+  { key: 'listenPort', label: 'port' },
+  { key: 'targetHost', label: 'target' },
+  { key: 'targetPort', label: 'port' },
+  { key: 'activeConnections', label: 'active' },
+]
+
+function printForwardsTable(io: Io, forwards: NodeForwardSession[]): void {
+  if (forwards.length === 0) {
+    io.out('(empty)\n')
+    return
+  }
+  const rows = forwards.map((f) => FORWARD_COLUMNS.map(({ key }) => {
+    const value = f[key]
+    return value === undefined ? '' : String(value)
+  }))
+  const widths = FORWARD_COLUMNS.map(({ label }, i) => Math.max(label.length, ...rows.map((r) => r[i]!.length)))
+  io.out(FORWARD_COLUMNS.map(({ label }, i) => label.padEnd(widths[i]!)).join('  ') + '\n')
+  io.out(widths.map((w) => '-'.repeat(w)).join('  ') + '\n')
+  for (const row of rows) {
+    io.out(row.map((cell, i) => cell.padEnd(widths[i]!)).join('  ') + '\n')
+  }
+}
+
+function printForwardDetail(io: Io, forward: NodeForwardSession): void {
+  const lines = [
+    `转发 ${forward.forwardId}`,
+    `监听 ${forward.listenHost}:${forward.listenPort} -> 节点 ${forward.nodeId} ${forward.targetHost}:${forward.targetPort}`,
+    `活动连接 ${forward.activeConnections}（累计 ${forward.totalConnections}）`,
+  ]
+  if (forward.lastError !== undefined) lines.push(`最近错误 ${forward.lastError}`)
+  printText(io, lines.join('\n'))
+}
+
 export function nodesCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
 
@@ -287,21 +352,46 @@ export function nodesCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['nodes', 'forward'],
-    description: '本地 TCP 端口转发（POST /api/nodes/:id/forward；Ctrl-C 退出并关闭）',
-    positional: '<nodeId> <listenHost:listenPort> [<targetHost>:]<targetPort>',
+    description: '前台本地 TCP 端口转发（POST /api/nodes/:id/forward；Ctrl-C 退出并关闭）',
+    flags: [
+      { name: 'current', type: 'boolean', help: '读 HELM_NODE_ID 作为目标节点' },
+    ],
+    positional: '[<nodeId>] <listenHost:listenPort> [<targetHost>:]<targetPort>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([], ctx.args)
-      const nodeId = requirePositional(parsed.positionals, 0, 'nodeId')
-      const listenRaw = requirePositional(parsed.positionals, 1, 'listenHost:listenPort')
-      const targetRaw = requirePositional(parsed.positionals, 2, '[targetHost:]targetPort')
-      assertNoExtraPositionals(parsed.positionals, 3)
-      if (nodeId.trim() === '' || /[\/\s]/.test(nodeId)) throw new CliError('nodeId 需为非空节点 ID', 'invalid_id')
+      const FORWARD_FLAGS: readonly FlagSpec[] = [
+        { name: 'current', type: 'boolean', help: '读 HELM_NODE_ID 作为目标节点' },
+      ]
+      const parsed = parseFlags(FORWARD_FLAGS, ctx.args)
+      // 位置参数形态：[<nodeId>] <listenHost:listenPort> [<targetHost>:]<targetPort>。
+      // nodeId 可选：首参含 ':' 即为 listen 地址（nodeId 从 --current 解析）。
+      let nodeId: string
+      let listenIndex = 0
+      const first = parsed.positionals[0]
+      if (first !== undefined && !first.includes(':')) {
+        const current = parsed.flags.get('current') === true
+        if (current) throw new CliError('nodeId 与 --current 互斥（二选一）', 'invalid_flag_value')
+        if (first.trim() === '') throw new CliError('nodeId 需为非空节点 ID', 'invalid_id')
+        nodeId = first
+        listenIndex = 1
+      } else {
+        const current = parsed.flags.get('current') === true
+        if (!current) throw new CliError('缺少节点目标：提供显式 <nodeId> 或 --current（读 HELM_NODE_ID）', 'missing_node_target')
+        const raw = ctx.env['HELM_NODE_ID']
+        if (!raw || !raw.trim()) {
+          throw new CliError('--current 需要 env HELM_NODE_ID（当前未设置）', 'current_node_missing')
+        }
+        nodeId = raw.trim()
+      }
+      const listenRaw = requirePositional(parsed.positionals, listenIndex, 'listenHost:listenPort')
+      const targetRaw = requirePositional(parsed.positionals, listenIndex + 1, '[targetHost:]targetPort')
+      assertNoExtraPositionals(parsed.positionals, listenIndex + 2)
       const listen = parseEndpoint(listenRaw, '<listenHost:listenPort>', false)
       if (listen.host === undefined) throw new CliError('监听地址必须显式携带 host（如 127.0.0.1:8080）', 'invalid_flag_value')
       const target = parseEndpoint(targetRaw, '<[targetHost:]targetPort>', true)
       const hub = await ctx.hub()
-      // 创建转发（监听器只在本次命令期间存在）。
-      const created = await hub.post<{ forwardId: string; listenHost: string; listenPort: number }>(
+      // 创建转发（监听器只在本次命令期间存在；未及时绑定事件流时 Hub 侧
+      // 前台租约自动停止）。
+      const created = await hub.post<NodeForwardSession>(
         `/api/nodes/${encodeURIComponent(nodeId)}/forward`,
         {
           listenHost: listen.host,
@@ -310,56 +400,140 @@ export function nodesCommands(): CommandSpec[] {
           ...(target.host === undefined ? {} : { targetHost: target.host }),
         },
       )
-      if (created === null || typeof created !== 'object' || typeof created.forwardId !== 'string') {
-        throw new CliError('Hub 转发创建响应缺少 forwardId', 'invalid_response')
-      }
-      const forwardId = created.forwardId
+      const forward = requireNodeForwardSession(created, 'Hub 转发创建响应')
+      const forwardId = forward.forwardId
+
+      // 显式停止：只容忍已不存在（404）；其他错误如实上抛（不伪报清理成功）。
       const stopForward = async (): Promise<void> => {
-        await hub.delete(`/api/nodes/forward/${encodeURIComponent(forwardId)}`).catch(() => undefined)
+        await hub
+          .delete(`/api/nodes/forward/${encodeURIComponent(forwardId)}`)
+          .catch((error: unknown) => {
+            if (error instanceof CliError && error.code === 'not_found') return
+            throw error
+          })
       }
-      // 前台：信号退出时显式停止转发（监听器/隧道同步销毁）。
+
+      // 前台信号：标记取消并中断事件流（命令 Promise 自然走 finally 清理后
+      // 正常退出，不在信号回调里 process.exit——库内退出留给 runCli 调用方）。
+      const stopController = new AbortController()
       let stopping = false
-      let hubStopped = false
+      let cleanupError: unknown
       const onSignal = (): void => {
         if (stopping) return
         stopping = true
-        process.removeListener('SIGINT', onSignal)
-        process.removeListener('SIGTERM', onSignal)
-        void stopForward().finally(() => process.exit(0))
+        stopController.abort()
       }
-      process.on('SIGINT', onSignal)
-      process.on('SIGTERM', onSignal)
+      process.once('SIGINT', onSignal)
+      process.once('SIGTERM', onSignal)
+
+      let hubStopped = false
       if (!ctx.json) {
         printText(ctx.io, [
-          `转发已建立：${created.listenHost}:${created.listenPort} -> ${nodeId} ${target.host ?? '127.0.0.1'}:${target.port}`,
+          `转发已建立：${forward.listenHost}:${forward.listenPort} -> ${nodeId} ${target.host ?? '127.0.0.1'}:${target.port}`,
           'Ctrl-C 退出并关闭转发。',
         ].join('\n'))
       }
       try {
-        // NDJSON 事件流：前台阻塞；断开（Hub 重启/网络断）时退出。
-        await hub.streamNdjson('GET', `/api/nodes/forward/${encodeURIComponent(forwardId)}/events`, {
-          onLine: (value: unknown) => {
-            if (ctx.json) {
-              ctx.io.out(`${JSON.stringify(value)}\n`)
-              return
-            }
-            const event = value as { type?: string; count?: number; message?: string }
-            if (event?.type === 'connection') {
-              printText(ctx.io, `连接建立（活动 ${event.count ?? 0}）`)
-            } else if (event?.type === 'error') {
-              printText(ctx.io, `转发错误：${event.message ?? '未知'}`)
-            } else if (event?.type === 'stopped') {
-              hubStopped = true
-              if (!ctx.json) printText(ctx.io, 'Hub 侧转发已停止')
-            }
+        // NDJSON 事件流（即前台租约持有者）：前台阻塞；断开（Hub 停止/网络断
+        // /信号）时结束。无论 --json 与否都识别终态。signal 需透传给流请求。
+        await hub.streamNdjson(
+          'GET',
+          `/api/nodes/forward/${encodeURIComponent(forwardId)}/events`,
+          {
+            signal: stopController.signal,
+            onLine: (value: unknown) => {
+              const event = value as { type?: string; count?: number; message?: string }
+              if (event?.type === 'connection') {
+                if (ctx.json) ctx.io.out(`${JSON.stringify(value)}\n`)
+                else printText(ctx.io, `连接建立（活动 ${event.count ?? 0}）`)
+              } else if (event?.type === 'error') {
+                if (ctx.json) ctx.io.out(`${JSON.stringify(value)}\n`)
+                else printText(ctx.io, `转发错误：${event.message ?? '未知'}`)
+              } else if (event?.type === 'stopped') {
+                hubStopped = true
+                if (ctx.json) ctx.io.out(`${JSON.stringify(value)}\n`)
+                else printText(ctx.io, 'Hub 侧转发已停止')
+              }
+            },
           },
-        })
+        )
+      } catch (error) {
+        // 信号中断的流读取不是意外失败（走 finally 清理后正常退出）。
+        if (!(stopping && error instanceof CliError && error.code === 'aborted')) throw error
       } finally {
-        await stopForward()
+        process.removeListener('SIGINT', onSignal)
+        process.removeListener('SIGTERM', onSignal)
+        try {
+          await stopForward()
+        } catch (error) {
+          // 清理失败不得伪报成功：记录后在正常路径外显式报错。
+          cleanupError = error
+        }
+      }
+      if (cleanupError !== undefined) {
+        throw new CliError(
+          `转发已结束但停止清理失败：${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+          'forward_cleanup_failed',
+        )
       }
       if (stopping || hubStopped) return
-      // 事件流意外结束（Hub 侧已停止）：如实退出非零。
+      // 事件流意外结束且未收到终态（网络断/Hub 崩溃）：如实退出非零。
       throw new CliError('转发事件流已结束（Hub 侧转发可能已停止）', 'forward_stream_ended')
+    },
+  })
+
+  cmds.push({
+    path: ['nodes', 'forwards'],
+    description: '列出活动端口转发（GET /api/nodes/forward）',
+    async run(ctx: CommandContext) {
+      parseNoFlags(ctx)
+      const hub = await ctx.hub()
+      const forwards = await hub.get<NodeForwardSession[]>('/api/nodes/forward')
+      if (!Array.isArray(forwards)) throw new CliError('Hub 转发列表必须是数组', 'invalid_response')
+      const checked = forwards.map((f) => requireNodeForwardSession(f, 'Hub 转发列表项'))
+      if (ctx.json) {
+        printResult(ctx, checked)
+        return
+      }
+      printForwardsTable(ctx.io, checked)
+    },
+  })
+
+  cmds.push({
+    path: ['nodes', 'forward-inspect'],
+    description: '查看转发详情（GET /api/nodes/forward/:forwardId）',
+    positional: '<forwardId>',
+    async run(ctx: CommandContext) {
+      const parsed = parseFlags([], ctx.args)
+      const forwardId = requirePositional(parsed.positionals, 0, 'forwardId')
+      assertNoExtraPositionals(parsed.positionals, 1)
+      if (!/^fwd-[0-9a-f-]{36}$/.test(forwardId)) {
+        throw new CliError('forwardId 需为 fwd-<uuid> 形式', 'invalid_id')
+      }
+      const hub = await ctx.hub()
+      const detail = await hub.get<NodeForwardSession>(`/api/nodes/forward/${encodeURIComponent(forwardId)}`)
+      const checked = requireNodeForwardSession(detail, 'Hub 转发详情')
+      if (ctx.json) {
+        printResult(ctx, checked)
+        return
+      }
+      printForwardDetail(ctx.io, checked)
+    },
+  })
+
+  cmds.push({
+    path: ['nodes', 'forward-stop'],
+    description: '停止端口转发（DELETE /api/nodes/forward/:forwardId）',
+    positional: '<forwardId>',
+    async run(ctx: CommandContext) {
+      const parsed = parseFlags([], ctx.args)
+      const forwardId = requirePositional(parsed.positionals, 0, 'forwardId')
+      assertNoExtraPositionals(parsed.positionals, 1)
+      if (!/^fwd-[0-9a-f-]{36}$/.test(forwardId)) {
+        throw new CliError('forwardId 需为 fwd-<uuid> 形式', 'invalid_id')
+      }
+      const hub = await ctx.hub()
+      printResult(ctx, await hub.delete<{ ok: boolean }>(`/api/nodes/forward/${encodeURIComponent(forwardId)}`))
     },
   })
 

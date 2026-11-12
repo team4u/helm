@@ -50,7 +50,7 @@ managedByPlugin: {{MANAGED_BY}}
 - `helm credentials list` / `helm credentials set <id> --value <value>` / `helm credentials delete <id>`：服务端凭据管理。
 
 ### 节点与跨机执行
-- `helm nodes list`：节点与在线状态；`helm nodes issue <nodeId>`：签发接入令牌（明文仅返回一次）；`helm nodes remove <nodeId>`；`helm nodes upgrade <nodeId> [--check]`：检查或执行节点升级；`helm nodes forward <nodeId> <listenHost:listenPort> [<targetHost>:]<targetPort>`：前台本地 TCP 端口转发（Ctrl-C 退出并关闭，目标 host 省略默认 127.0.0.1）。
+- `helm nodes list`：节点与在线状态；`helm nodes issue <nodeId>`：签发接入令牌（明文仅返回一次）；`helm nodes remove <nodeId>`；`helm nodes upgrade <nodeId> [--check]`：检查或执行节点升级；`helm nodes forward [<nodeId> | --current] <listenHost:listenPort> [<targetHost>:]<targetPort>`：前台本地 TCP 端口转发（事件流即持有者，Ctrl-C 退出并关闭）；`helm nodes forwards` / `helm nodes forward-inspect <forwardId>` / `helm nodes forward-stop <forwardId>`：活动转发清单/详情/停止。
 - `helm env exec [--node <id>] [--cwd <dir>] [--timeout <ms>] [--stream] [--current] -- <command...>`：跨节点直接执行命令，超时单位毫秒。
 - `helm worktrees cleanup [--id <id> | --conversation <id> | --current | --path <path> [--node <nodeId>]] [--delete-branch] [--force]`：清理受管工作树；默认拒绝脏工作区、未合入提交和在用/未确认停止的执行。
 

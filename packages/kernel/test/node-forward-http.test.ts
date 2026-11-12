@@ -10,9 +10,13 @@ import { handleApi } from '../src/http/routes.js'
 import type { KernelRuntimeLike } from '../src/http/contracts.js'
 import type { NodeForwardEvent, NodeForwardSession } from '../src/env/forward.js'
 
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
 function makeKernel(over: {
   sessions: Map<string, NodeForwardSession>
   events: ((event: NodeForwardEvent) => void)[]
+  /** 租约记录（可选注入：acquire/release 计数与最后释放回调）。 */
+  lease?: { acquisitions: number; releases: number; onLastRelease?: () => void }
 }): KernelRuntimeLike {
   return {
     listNodes() { return [] },
@@ -43,6 +47,18 @@ function makeKernel(over: {
       over.events.push(listener)
       return () => undefined
     },
+    ...(over.lease !== undefined
+      ? {
+          acquireNodeForwardLease: (forwardId: string) => {
+            over.lease!.acquisitions += 1
+            return () => {
+              over.lease!.releases += 1
+              // 简化模拟：首 holder 释放即视为最后持有者（单 holder 测试）。
+              over.lease!.onLastRelease?.()
+            }
+          },
+        }
+      : {}),
   } as unknown as KernelRuntimeLike
 }
 
@@ -168,4 +184,48 @@ test('GET events：stop 终态 stopped 帧后流正常结束（监控不悬挂�
     setTimeout(() => resolve(false), 5_000)
   })
   assert.equal(drained, true, '终止通知后事件流应正常结束（done）')
+})
+
+test('GET events：事件流即持有者——建立 acquire、断开/取消 release（不泄漏租约）', { timeout: 60_000 }, async () => {
+  const lease = { acquisitions: 0, releases: 0, onLastRelease: undefined as (() => void) | undefined }
+  const over = { sessions: new Map<string, NodeForwardSession>(), events: [] as ((event: NodeForwardEvent) => void)[], lease }
+  const kernel = makeKernel(over)
+  const created = await post(kernel, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 8080 })
+  assert.equal(created.status, 201)
+
+  // 1) abort 断开：acquire 一次、release 一次。
+  const controller = new AbortController()
+  const response = await handleApi(new Request('http://hub/api/nodes/forward/fwd-11111111-2222-3333-4444-555555555555/events', {
+    headers: { accept: 'application/x-ndjson' },
+    signal: controller.signal,
+  }), kernel)
+  assert.equal(response.status, 200)
+  assert.ok(response.body !== null)
+  const reader = response.body.getReader()
+  await reader.read() // started 首帧
+  await delay(30)
+  assert.equal(lease.acquisitions, 1, '事件流建立即 acquire 租约')
+  assert.equal(lease.releases, 0, '持有期间未释放')
+  controller.abort()
+  await delay(30)
+  assert.equal(lease.releases, 1, '断开后释放租约（最后一持有者触发停止回调链）')
+
+  // 2) cancel（body.cancel）断开：同样释放。
+  const lease2 = { acquisitions: 0, releases: 0, onLastRelease: undefined as (() => void) | undefined }
+  const over2 = { sessions: new Map<string, NodeForwardSession>(), events: [] as ((event: NodeForwardEvent) => void)[], lease: lease2 }
+  const kernel2 = makeKernel(over2)
+  const created2 = await post(kernel2, '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 8080 })
+  assert.equal(created2.status, 201)
+  const controller2 = new AbortController()
+  const response2 = await handleApi(new Request('http://hub/api/nodes/forward/fwd-11111111-2222-3333-4444-555555555555/events', {
+    headers: { accept: 'application/x-ndjson' },
+    signal: controller2.signal,
+  }), kernel2)
+  assert.ok(response2.body !== null)
+  const reader2 = response2.body.getReader()
+  await reader2.read()
+  await reader2.cancel()
+  await delay(30)
+  assert.equal(lease2.acquisitions, 1)
+  assert.equal(lease2.releases, 1, '客户端主动 cancel 同样释放租约')
 })

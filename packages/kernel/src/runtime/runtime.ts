@@ -420,6 +420,10 @@ export class KernelRuntime {
     return this.nodeForward.onStopped(forwardId, listener)
   }
 
+  acquireNodeForwardLease(forwardId: string): () => void {
+    return this.nodeForward.acquireLease(forwardId)
+  }
+
   // ------------------------------------------------------------------
   // 产物授权 / 附件委托（ConversationService）
   // ------------------------------------------------------------------

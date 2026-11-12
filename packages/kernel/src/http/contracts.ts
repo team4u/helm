@@ -340,6 +340,12 @@ export interface KernelRuntimeLike {
   /** 转发终止通知（终态 stopped 帧之后调用；已停止时立即回调）。 */
   onNodeForwardStopped?(forwardId: string, listener: () => void): () => void
   /**
+   * 绑定前台租约持有者（events 事件流建立时）：清除创建租约；返回释放
+   * 函数（流断开/cancel 时调用）——最后一个持有者释放即停止转发。
+   * 只读 list/get 不走此端口（不是持有者）。
+   */
+  acquireNodeForwardLease?(forwardId: string): () => void
+  /**
    * 跨节点命令执行（POST /api/env/exec）：靶点解析为显式 nodeId/cwd >
    * 会话绑定 > local；远端离线 409 node_offline；onChunk 逐块回放
    * （NDJSON 流式模式）；signal 传播取消。

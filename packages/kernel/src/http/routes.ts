@@ -1590,8 +1590,10 @@ function parseNodeForwardBody(
   }
 }
 
-/** GET /api/nodes/forward/:id/events：NDJSON 事件流。stop 终态 stopped 帧
- * 后正常关闭（监控不悬挂）；订阅时转发已停止则先回放 stopped 帧再结束。 */
+/** GET /api/nodes/forward/:id/events：NDJSON 事件流。事件流即前台租约持有者：
+ * 建立（start）即 acquire、断开/取消（abort/cancel）即 release——最后一个
+ * 持有者离开即停止转发（Hub 不残留监听器）；stop 终态 stopped 帧后正常
+ * 关闭流（监控不悬挂）；订阅时转发已停止则先回放 stopped 帧再结束。 */
 async function getNodeForwardEvents(
   ctx: RouteContext,
   kernel: KernelRuntimeLike,
@@ -1605,16 +1607,15 @@ async function getNodeForwardEvents(
     return errorResponse(undefined, 404, 'not_found', '转发不存在或已停止')
   }
   const encoder = new TextEncoder()
+  // start/cancel 共享的释放引用（cancel 拿不到 start 闭包，经此桥接；
+  // 每个流实例独立，无并发串扰）。
+  const teardown = { run: (): void => undefined }
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       let closed = false
-      const off = (): (() => void)[] => {
-        const stops: (() => void)[] = []
-        if (kernel.onNodeForwardStopped !== undefined) {
-          stops.push(kernel.onNodeForwardStopped(forwardId, () => finish()))
-        }
-        return stops
-      }
+      let releaseLease: (() => void) | undefined
+      let offEvents: (() => void) | undefined
+      const offStops: (() => void)[] = []
       const send = (event: unknown): void => {
         if (closed) return
         try {
@@ -1626,20 +1627,30 @@ async function getNodeForwardEvents(
       const finish = (): void => {
         if (closed) return
         closed = true
-        for (const stop of offStops) stop()
-        offStops = []
+        releaseLease?.()
+        releaseLease = undefined
+        offEvents?.()
+        offEvents = undefined
+        for (const stop of offStops.splice(0)) stop()
         try { controller.close() } catch { /* 已关闭 */ }
       }
-      let offStops: (() => void)[] = []
-      // 先登记终止通知（含已停止竞态：立即微任务回调），再回放首帧与订阅事件——
-      // 顺序保证 stop 与订阅交错时要么收到 stopped 帧、要么终止回调收尾。
-      offStops = off()
-      const offEvents = kernel.onNodeForwardEvent!(forwardId, send)
+      teardown.run = finish
+      // 先登记终止通知（含已停止竞态：立即微任务回调），再绑定租约/回放首帧/
+      // 订阅事件——顺序保证 stop 与订阅交错时要么收到 stopped 帧、要么终止
+      // 回调收尾，两条路径都会释放租约。
+      if (kernel.onNodeForwardStopped !== undefined) {
+        offStops.push(kernel.onNodeForwardStopped(forwardId, () => finish()))
+      }
+      if (kernel.acquireNodeForwardLease !== undefined) {
+        releaseLease = kernel.acquireNodeForwardLease(forwardId)
+      }
+      offEvents = kernel.onNodeForwardEvent!(forwardId, send)
       send({ type: 'started', listenHost: session.listenHost, listenPort: session.listenPort })
-      ctx.request.signal.addEventListener('abort', () => {
-        offEvents()
-        finish()
-      }, { once: true })
+      ctx.request.signal.addEventListener('abort', finish, { once: true })
+    },
+    cancel() {
+      // 客户端主动取消（body.cancel()）：同样释放租约（最后一持有者即停止）。
+      teardown.run()
     },
   })
   return new Response(stream, {
