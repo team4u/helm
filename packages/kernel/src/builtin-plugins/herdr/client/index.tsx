@@ -12,7 +12,18 @@ import { useMemo, useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helm/protocol'
-import { Callout, Select, usePluginContext, usePluginDoc } from '@helm/plugin-client'
+import {
+  Callout,
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+  Select,
+  usePluginContext,
+  usePluginDoc,
+} from '@helm/plugin-client'
 import {
   agentStatusTone,
   canFocusPane,
@@ -21,6 +32,7 @@ import {
   computeStats,
   filterPanes,
   filtersToParamsPatch,
+  formatCompactTimestamp,
   outcomeLabel,
   paneRowKey,
   parseFilters,
@@ -56,14 +68,6 @@ function Icon({ name, size = 12, className, style }: { name: string; size?: numb
   }
   const Cmp = map[name] ?? Circle
   return <Cmp size={size} strokeWidth={1.75} className={className} style={style} />
-}
-
-/** 紧凑时间戳 MM-DD HH:mm:ss（本地时区；0/缺失返回占位符）。 */
-function formatCompactTimestamp(ms: number): string {
-  if (!ms) return '未知'
-  const date = new Date(ms)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
 /** 宿主 Radix Select 筛选器（复用 @helm/plugin-client 共享原语；零原生 <select>）。 */
@@ -379,22 +383,26 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
       </div>
 
       {snapshot !== null && (
-        <div className="modal-backdrop" onClick={() => setSnapshot(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 860 }}>
-            <div className="modal-header">
-              <div className="modal-title mono">终端快照：{snapshot.title}</div>
-              <button type="button" className="btn btn-sm btn-ghost" onClick={() => setSnapshot(null)}>
-                <Icon name="x" size={12} />
-                关闭
-              </button>
-            </div>
-            <div className="modal-body">
-              <pre className="code-block-pre selectable" style={{ background: 'var(--bg-subtle)', borderRadius: 'var(--radius-sm)', margin: 0 }}>
-                {snapshot.text}
-              </pre>
-            </div>
-          </div>
-        </div>
+        <Dialog open onOpenChange={(open) => { if (!open) setSnapshot(null) }}>
+          <DialogPortal>
+            <DialogOverlay className="modal-backdrop">
+              <DialogContent className="modal herdr-snapshot-modal" aria-label="终端快照">
+                <div className="modal-header">
+                  <DialogTitle className="modal-title mono">终端快照：{snapshot.title}</DialogTitle>
+                  <DialogClose asChild>
+                    <button type="button" className="btn btn-sm btn-ghost">
+                      <Icon name="x" size={12} />
+                      关闭
+                    </button>
+                  </DialogClose>
+                </div>
+                <div className="modal-body">
+                  <pre className="code-block-pre selectable">{snapshot.text}</pre>
+                </div>
+              </DialogContent>
+            </DialogOverlay>
+          </DialogPortal>
+        </Dialog>
       )}
     </div>
   )

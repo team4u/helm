@@ -200,3 +200,13 @@ export function canSnapshotPane(row: OverviewPaneRow): boolean {
   if (row.outcome === 'settled') return false
   return true
 }
+
+/** 紧凑时间戳 MM-DD HH:mm:ss（本地时区；0/缺失返回占位符）。
+ *  宿主 lib/format.ts 同名函数未导出到 @helm/plugin-client，插件侧本地实现；
+ *  待 plugin-client 补导出后应删除此处，直接复用宿主唯一实现。 */
+export function formatCompactTimestamp(ms: number): string {
+  if (!ms) return '未知'
+  const date = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
