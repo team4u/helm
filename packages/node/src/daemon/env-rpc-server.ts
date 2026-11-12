@@ -17,17 +17,24 @@
  * - call：写一行、读一行完整 UTF-8 JSON 后立即关 socket；带 callId 登记
  *   在途 socket，ipcAbortCall 可立即中断阻塞等待（如 agent.prompt --wait）；
  *   超时由调用方或显式服务器选项决定，取消与连接代关闭立即释放 socket；
- *   draining 时拒新，已在途的计入升级排空口径（不被旧宿主退出硬切断）；
+ *   draining 时拒新（node_draining），已在途的计入升级排空口径（不被旧宿主
+ *   退出硬切断）；取消/断连仍在途天折为 aborted；
  * - subscribe：首行 ACK（15s 超时）须为结构化的 subscription_started，
  *   之后每行经 onIpcEvent 转发；断开经 onIpcClosed 通知；不静默吞错。
- *   长驻语义：draining 时拒新，既有的由 dispose 统一优雅关闭并通知。
+ *   长驻语义：draining 时拒新（node_draining），既有的由 dispose 统一优雅
+ *   关闭并通知。
  *
  * 节点侧 TCP 隧道（nodeTunnelOpen）：Hub 请求在节点侧向目标 host:port
  *（host 缺省 127.0.0.1，由本节点解析与连接）建立 TCP，与 daemon 层注入的
  * openTunnelStream 双工流（WS 隧道，hubUrl/
  * token 等凭据由 daemon 层封闭）双向 pipe——本层零凭据。draining/disposed
- * 拒绝新隧道；TCP 在隧道握手期间 pause，pipe 后不丢首包；dispose 销毁
- * 全部隧道 TCP/双工流并等待 settle。
+ * 拒绝新隧道（draining 为 node_draining，disposed 为 aborted）；TCP 在隧道
+ * 握手期间 pause，pipe 后不丢首包；dispose 销毁全部隧道 TCP/双工流并等待
+ * settle。
+ *
+ * 错误码语义（升级排空 vs 取消）：draining 拒新请求（envExec / ipcCall /
+ * ipcSubscribe / nodeTunnelOpen / envCleanup）一律返回稳定码 node_draining；
+ * 用户/宿主取消、连接代终结、dispose 强制结算仍为 aborted——两者绝不互混。
  */
 
 import net from 'node:net';
@@ -61,6 +68,12 @@ type RpcErrorCode = RpcEnvError['code'];
  * 合并后本别名自动收敛为同一联合；本地先以交叉声明自洽）。
  */
 type RpcTunnelErrorCode = RpcErrorCode | 'connect_failed';
+
+/** 升级排空拒新错误信封：稳定码 node_draining + 人类可读诊断。 */
+const drainingRejection = (what: string): RpcEnvError => ({
+  code: 'node_draining',
+  message: `daemon is draining (upgrade in progress), rejecting new ${what}`,
+});
 
 export interface NodeEnvRpcServerOptions {
   /** 相对路径的基准目录（daemon 数据目录）。 */
@@ -325,8 +338,8 @@ export interface NodeEnvRpcServer extends NodeEnvRpcFunctions {
   /**
    * 打开到目标 host:port（host 缺省 127.0.0.1，由本节点解析连接）的 TCP
    * 隧道，与 openTunnelStream 双工流双向 pipe。严格校验入参（仅
-   * tunnelId/host/port/timeoutMs）；draining/disposed 时返回 aborted；
-   * 本机连接失败/握手失败返回结构化错误（绝不伪造成功）。
+   * tunnelId/host/port/timeoutMs）；draining 时返回 node_draining、disposed
+   * 时返回 aborted；本机连接失败/握手失败返回结构化错误（绝不伪造成功）。
    */
   nodeTunnelOpen(input: NodeTunnelOpenInput): Promise<RpcResult<null>>;
   /** 取消在途隧道（握手中或已建立）：销毁该隧道的 TCP/WS 并立即返回。 */
@@ -767,10 +780,10 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     if (draining || disposed) {
       return {
         ok: false,
-        error: {
-          code: 'aborted',
-          message: disposed ? 'server disposed' : 'daemon is draining (upgrade in progress), rejecting new tunnels',
-        },
+        // draining 拒新为稳定码 node_draining；disposed 是连接级终态，保持 aborted。
+        error: disposed
+          ? { code: 'aborted', message: 'server disposed' }
+          : drainingRejection('tunnels'),
       };
     }
     // 总预算自受理起算（TCP connect 与 WS 握手共用，非各 15s）。
@@ -1223,7 +1236,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       if (draining) {
         throw Object.assign(
           new Error('daemon is draining (upgrade in progress), rejecting envCleanup (would kill in-flight commands of all sessions sharing the cwd)'),
-          { code: 'aborted' },
+          { code: 'node_draining' },
         );
       }
       await Promise.all(
@@ -1265,7 +1278,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         const input = args[0];
         if (!input || typeof input !== 'object' || Array.isArray(input)) return invalidInput('RPC input must be an object');
         if (draining) {
-          return { ok: false, error: { code: 'aborted', message: 'daemon is draining (upgrade in progress), rejecting new commands' } };
+          return { ok: false, error: drainingRejection('commands') };
         }
         const operation = trackExec(
           Promise.resolve().then(() => (original as (...a: unknown[]) => Promise<RpcResult<unknown>>)(...args)),
@@ -1289,7 +1302,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         const input = args[0];
         if (!input || typeof input !== 'object' || Array.isArray(input)) return invalidInput('RPC input must be an object');
         if (draining) {
-          return { ok: false, error: { code: 'aborted', message: 'daemon is draining (upgrade in progress), rejecting new tunnels' } };
+          return { ok: false, error: drainingRejection('tunnels') };
         }
         const operation = Promise.resolve().then(() => (original as (...a: unknown[]) => Promise<RpcResult<unknown>>)(...args));
         pendingOperations.add(operation);
@@ -1311,7 +1324,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         const input = args[0];
         if (!input || typeof input !== 'object' || Array.isArray(input)) return invalidInput('RPC input must be an object');
         if (draining) {
-          return { ok: false, error: { code: 'aborted', message: 'daemon is draining (upgrade in progress), rejecting new IPC calls' } };
+          return { ok: false, error: drainingRejection('IPC calls') };
         }
         const operation = trackIpc(
           Promise.resolve().then(() => (original as (...a: unknown[]) => Promise<RpcResult<unknown>>)(...args)),
@@ -1336,7 +1349,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         const input = args[0];
         if (!input || typeof input !== 'object' || Array.isArray(input)) return invalidInput('RPC input must be an object');
         if (draining) {
-          return { ok: false, error: { code: 'aborted', message: 'daemon is draining (upgrade in progress), rejecting new IPC subscriptions' } };
+          return { ok: false, error: drainingRejection('IPC subscriptions') };
         }
         const operation = Promise.resolve().then(() => (original as (...a: unknown[]) => Promise<RpcResult<unknown>>)(...args));
         pendingOperations.add(operation);

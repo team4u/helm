@@ -118,12 +118,15 @@ export interface EnvFabric {
   waitForOnline(nodeId: string, context: Context): Promise<boolean>
   /**
    * 节点本机单次 IPC 调用（跨节点连接目标机器上的 Unix Socket / Named
-   * Pipe）。节点不支持 IPC 桥或节点离线时显式报错（fail-fast，不静默降级）。
+   * Pipe）。节点不支持 IPC 桥或节点离线时显式报错（fail-fast，不静默降级）；
+   * 节点升级排空拒新时 RpcResult 保留原始 node_draining 错误码（连接仍在、
+   * 与离线/取消可区分，由调用方如 builtin:herdr 自行分型）。
    */
   ipcCall(nodeId: string, input: NodeIpcCallInput, signal?: AbortSignal): Promise<RpcResult<string>>
   /**
    * 节点本机流式 IPC 订阅：onLine 逐行回调；onClosed 在结束/断开/取消时
-   * 恰好回调一次；返回的函数用于主动停止订阅。节点不支持时抛错。
+   * 恰好回调一次；返回的函数用于主动停止订阅。节点不支持时抛错；节点
+   * 升级排空拒新时抛 HelmError node_draining（503）。
    */
   ipcSubscribe(
     nodeId: string,
@@ -346,6 +349,16 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       if (!result.ok) {
         closed = true
         finish(result.error.message)
+        // 升级排空拒新：节点态条件，拋稳定的 node_draining（503）——与
+        // ipc_subscribe_failed（节点功能层失败）区分，不吞成普通失败。
+        if (result.error.code === 'node_draining') {
+          throw new HelmError(
+            'node_draining',
+            `节点 ${nodeId} 正在升级排空，拒绝新 IPC 订阅：${result.error.message}`,
+            503,
+            { nodeId },
+          )
+        }
         throw new HelmError('ipc_subscribe_failed', `节点 ${nodeId} IPC 订阅失败：${result.error.message}`, 502, {
           nodeId,
           code: result.error.code,

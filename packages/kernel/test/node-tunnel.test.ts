@@ -147,6 +147,52 @@ test('openTunnel：signal abort 清理 pending（499 aborted）', { timeout: 60_
   }
 })
 
+test('openTunnel：节点升级排空拒新映射 node_draining(503)，与 aborted(499)/timeout(504) 区分', { timeout: 60_000 }, async () => {
+  const registry = new NodeRegistry({ authenticate: () => true })
+  try {
+    // 节点 RPC 显式返回 node_draining（升级排空拒新）：映射为稳定的
+    // HelmError node_draining 503，不得归并为 aborted 或 connect_failed。
+    const socket = await registerFakeNode(registry, 'node-drain', async () => ({
+      ok: false,
+      error: { code: 'node_draining', message: 'daemon is draining (upgrade in progress), rejecting new tunnels' },
+    }))
+    await assert.rejects(
+      registry.openTunnel('node-drain', { port: 9300 }),
+      (error: unknown) =>
+        error instanceof HelmError &&
+        error.code === 'node_draining' &&
+        error.status === 503 &&
+        /draining/.test(error.message),
+    )
+    socket.close()
+
+    // 对照：节点侧 aborted（真实取消/终止）仍为 499 aborted，不被排空码污染。
+    const socket2 = await registerFakeNode(registry, 'node-abort', async () => ({
+      ok: false,
+      error: { code: 'aborted', message: 'tunnel aborted' },
+    }))
+    await assert.rejects(
+      registry.openTunnel('node-abort', { port: 9301 }),
+      (error: unknown) => error instanceof HelmError && error.code === 'aborted' && error.status === 499,
+    )
+    socket2.close()
+
+    // 对照：timeout 仍为 504 node_tunnel_timeout。
+    const socket3 = await registerFakeNode(registry, 'node-slow', async () => ({
+      ok: false,
+      error: { code: 'timeout', message: 'tunnel open timed out' },
+    }))
+    await assert.rejects(
+      registry.openTunnel('node-slow', { port: 9302 }),
+      (error: unknown) =>
+        error instanceof HelmError && error.code === 'node_tunnel_timeout' && error.status === 504,
+    )
+    socket3.close()
+  } finally {
+    await registry.close()
+  }
+})
+
 test('nodeFetch 端口：非 http(s) 拒绝、任意 host 放行；openTunnel 目标校验；local 直通', { timeout: 60_000 }, async () => {
   let fabric: EnvFabric | undefined
   try {

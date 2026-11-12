@@ -60,7 +60,7 @@ test('setDraining(true) 同步拒绝新 envExec；false 恢复；在途不受影
     server.setDraining(true);
     const rejected = await server.envExec({ execId: 'e-new', command: 'echo hi', timeout: 10 });
     assert.equal(rejected.ok, false);
-    assert.equal(!rejected.ok && rejected.error.code, 'aborted');
+    assert.equal(!rejected.ok && rejected.error.code, 'node_draining');
 
     const done = await slow;
     assert.equal(done.ok, true);
@@ -289,7 +289,7 @@ async function waitUntilDraining(rpc: BirpcReturn<NodeEnvRpcFunctions, object>, 
   let lastCode = '';
   for (let i = 0; Date.now() < deadline; i += 1) {
     const r = await rpc.envExec({ execId: `probe-${tag}-${i}`, command: 'echo hi', timeout: 10 });
-    if (!r.ok && r.error.code === 'aborted') return;
+    if (!r.ok && r.error.code === 'node_draining') return;
     lastCode = r.ok ? 'ok' : r.error.code;
     await delay(100);
   }
@@ -643,7 +643,7 @@ test('候选 pendingActivation：创建即拒新命令；confirmUpgrade 身份�
 
   const rejected = await rpc.envExec({ execId: 'pend-1', command: 'echo hi', timeout: 10 });
   assert.equal(rejected.ok, false);
-  assert.equal(!rejected.ok && rejected.error.code, 'aborted');
+  assert.equal(!rejected.ok && rejected.error.code, 'node_draining');
 
   // 身份对账：attemptId / version / pid 任一不匹配即拒绝且 gate 不解除
   const pid = process.pid;
