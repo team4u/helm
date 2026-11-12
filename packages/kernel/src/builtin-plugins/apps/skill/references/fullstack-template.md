@@ -15,7 +15,7 @@ apps/sample-desk/
 ## plugin.json
 
 ```json
-{ "id": "sample-desk", "main": "index.ts", "clientRoot": "./client", "version": "0.1.0" }
+{ "id": "sample-desk", "main": "index.ts", "clientRoot": "./client", "clientDependencies": ["dayjs"], "version": "0.1.0" }
 ```
 
 ## index.ts（后端）

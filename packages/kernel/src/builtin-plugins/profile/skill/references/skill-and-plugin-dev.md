@@ -85,6 +85,32 @@ export function CounterScreen() {
 }
 ```
 
+受控前端 npm 依赖与插件依赖：
+
+- client.tsx 默认只允许 `react`、`react-dom`、`lucide-react`、`@helm/plugin-client` 与插件目录内相对导入；第三方裸 npm 包必须显式声明。
+- 前端依赖可写在 `plugin.json`：
+
+```json
+{
+  "clientRoot": "./client",
+  "clientDependencies": ["dayjs", "katex"]
+}
+```
+
+  也可写在 `package.json` 的 `helm.clientDependencies`：
+
+```json
+{
+  "dependencies": { "dayjs": "^1.11.0" },
+  "helm": { "clientDependencies": ["dayjs", "katex"] }
+}
+```
+
+- `clientDependencies` 是前端 bundle 的精确裸说明符白名单；子路径（如 `lodash/map`）也必须逐项声明。解析根固定为插件自身目录，不能在外部插件代码中自定义 `npmDependencies` 解析根。
+- 对受管安装，`helm plugins install` / `helm plugins update` 会补装声明的前端依赖且使用 `--no-save`；建议同时把包及版本范围写入 `package.json.dependencies`，保证安装可复现。未声明版本范围的裸包名按包管理器当前解析结果安装。
+- `helm plugins doctor <dir>`、`helm apps validate <dir>` 与运行期 client 编译使用同一依赖边界；缺失依赖、未声明裸导入、相对路径越根都会显式失败，不能用普通 Markdown 或空组件假装通过。
+- 插件间依赖可写在 `plugin.json.dependencies` 或 `package.json.helm.dependencies`，例如 `["base-plugin"]`；它只接受插件 ID，不接受 npm 版本范围。启用前依赖插件必须已注册且已启用；依赖环路会被拒绝。
+
 扩展入口：
 - 后端 Hook（{{HOOK_COUNT}} 个）：{{HOOK_NAMES}}；各 Hook 允许的 continue/transform/handled/block 结果以 protocol 契约为准。
 - 前端 {{UI_METHOD_COUNT}} 个 ctx.ui 注册方法：基础 10 个（sidebarItem/sidebarSection、screen、timelineRenderer、markdownCodeBlock、toolView、composerPill/composerWidget、workbenchPanel、command、settingsPanel）+ 统一 UI 动作 action（target 三选一：conversation:header / conversation:row / timeline:entry；绑 actionId 后宿主代管按钮/pending/失败提示，scope 按标签过滤会话，timeline:entry 的 kinds/roles 过滤消息条目；宿主注入的真实 conversationId/entryId 强制覆盖 input 同名字段）+ profileRuntime（Profile 外部运行时元数据）+ slot（插件子插槽）+ artifactPreviewer（按 MIME/后缀预览产物）+ composerCompleter（输入引用候选源）。

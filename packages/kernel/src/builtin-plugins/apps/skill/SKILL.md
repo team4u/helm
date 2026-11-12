@@ -44,7 +44,7 @@ apps/<app-id>/
 
 前端 `client/index.tsx`（宿主共享 SDK，免安装直引）：
 
-- **允许的运行时裸导入仅限**：`react`、`react-dom`、`lucide-react`、`@helm/plugin-client`（类型可 `import type ... from '@helm/protocol'`）；禁止引入未声明的第三方裸 npm 包（esbuild 静态自检会直接拒绝）；
+- **允许的运行时裸导入仅限宿主共享模块**：`react`、`react-dom`、`lucide-react`、`@helm/plugin-client`；类型可使用 `import type ... from '@helm/protocol'`。需要第三方 npm 包时，先在 `plugin.json.clientDependencies` 或 `package.json.helm.clientDependencies` 中逐项声明，再在 `package.json.dependencies` 写明版本范围；否则 `apps_validate` 会按未声明裸依赖显式失败。
 - **`@helm/plugin-client` 共享导出清单**：
   - **响应式 Hooks**：`usePluginContext()`（提供 `callAction` / `submitInput` / `openScreen` / `openSplitScreen` / `openConversationDrawer` / `openArtifact` / `openWorkbench` / `notify`）、`usePluginDoc(name, pluginId?)`、`usePluginSessionDoc(name, opts?)`、`useConversations()`、`useConversation(id)`、`usePlugins()`、`useToolActivity(callId, active)`；
   - **页面布局原语（优先使用，免手搓页面骨架）**：`Screen`（全屏容器+标准页头 `title/subtitle/actions`）、`ScreenSection`（分节容器 `title/titleExtra`）、`DataTable`（组合式表格外壳，统一 `loading/empty` 占位，`thead/tbody` 由 JSX 表达）、`KvGrid`（`items: [{ key, value }]` 键值网格）；
