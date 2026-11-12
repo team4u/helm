@@ -993,8 +993,35 @@ button,
   color: var(--fg-muted);
 }
 
+/* 闲置智能体折叠区：0 会话智能体收纳，头部可点击展开 */
+.sidebar-idle-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.sidebar-idle-toggle {
+  width: 100%;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.sidebar-idle-toggle:hover {
+  background: var(--bg-hover);
+}
+
 .agent-collapse-btn {
   color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+/* 无子列表的智能体行：折叠按钮不渲染，标题前留出与折叠按钮等宽的缩进，
+ * 保证所有智能体行的图标与文本左对齐。 */
+.agent-standing-row .agent-standing-indent {
+  width: 22px;
+  flex: none;
 }
 
 .agent-new-conv-btn {
@@ -1111,211 +1138,9 @@ button,
   color: var(--fg-muted);
 }
 
-/* 主舞台顶栏话题 Tabs：参考 Magpie 的无轨道横向 Seg。
- * 只有当前项绘制选择面，其余项不画边框、不画圆角底色；移动端把 Tabs
- * 放到自己的整行并横向滚动，避免在操作按钮之间被压成小胶囊。 */
-.topic-tabs {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 60%;
-  padding: 2px;
-  border-radius: 8px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-}
+/* 话题切换已回归左栏手风琴（仅展开当前智能体），顶栏恢复单行标题。 */
 
-.topic-tabs::-webkit-scrollbar {
-  display: none;
-  width: 0;
-  height: 0;
-}
-
-/* 保留 nav-item 语义与无障碍结构，但顶栏 Tab 的尺寸按 Magpie Seg 规则独立。 */
-.topic-tabs > .nav-item {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: auto;
-  max-width: 180px;
-  min-width: 0;
-  height: 24px;
-  min-height: 24px;
-  flex: 0 0 auto;
-  padding: 0 12px;
-  gap: 6px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  box-shadow: none;
-  color: var(--fg-muted);
-  font-size: 12.5px;
-  font-weight: 500;
-  line-height: 1;
-  white-space: nowrap;
-  transition: color 120ms ease, background 120ms ease, box-shadow 120ms ease;
-}
-
-.topic-tabs > .nav-item .nav-item-main {
-  flex: 0 1 auto;
-  min-width: 0;
-}
-
-.topic-tabs > .nav-item:hover:not(.nav-item-active) {
-  background: transparent;
-  color: var(--fg);
-  box-shadow: none;
-}
-
-/* 选择面使用与左栏智能体激活项相同的两个 Token。 */
-.topic-tabs > .nav-item-active,
-.topic-tabs > .nav-item-active:hover {
-  background: var(--nav-active-bg);
-  color: var(--nav-active-fg);
-  box-shadow: var(--seg-edge);
-  font-weight: 500;
-}
-
-.topic-tab-chevron {
-  flex-shrink: 0;
-  color: var(--fg-muted);
-}
-
-.topic-picker-dot-spacer {
-  width: 7px;
-  height: 7px;
-  flex-shrink: 0;
-}
-
-.topic-picker-popover {
-  width: 300px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.topic-picker-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  color: var(--fg-muted);
-}
-
-.topic-picker-search-input {
-  flex: 1;
-  min-width: 0;
-  height: 26px;
-  border: none;
-  border-bottom: 1px solid var(--line-2);
-  background: transparent;
-  color: var(--fg);
-  font-size: 12px;
-  font-family: inherit;
-  outline: none;
-  padding: 0;
-}
-
-.topic-picker-list {
-  max-height: min(320px, 46vh);
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 2px 0;
-}
-
-.topic-picker-item {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  height: 28px;
-  padding: 0 8px;
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--fg-secondary);
-  font-size: 12px;
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.topic-picker-item:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
-
-.topic-picker-item-active {
-  background: var(--nav-active-bg);
-  color: var(--nav-active-fg);
-  box-shadow: var(--seg-edge);
-  font-weight: 500;
-}
-
-.topic-picker-item-title {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.topic-picker-item-id {
-  font-size: 10.5px;
-  color: var(--fg-muted);
-  flex-shrink: 0;
-}
-
-.topic-picker-item-node {
-  font-size: 10.5px;
-  color: var(--fg-muted);
-  max-width: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.topic-picker-empty {
-  padding: 12px 8px;
-  font-size: 12px;
-  color: var(--fg-muted);
-  text-align: center;
-}
-
-.topic-picker-new-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 28px;
-  margin-top: 2px;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.topic-picker-new-btn:hover:not(:disabled) {
-  color: var(--fg);
-  border-color: var(--accent);
-}
-
-.topic-picker-new-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* 话题切换已回归左栏手风琴（仅展开当前智能体），顶栏恢复单行标题。 */
 
 /* ==========================================================================
  * 4. 会话顶栏（Topbar）与对话主画布（Conversation Canvas）
@@ -1376,10 +1201,14 @@ button,
   font-size: 13.5px;
   font-weight: 600;
   color: var(--fg);
+  line-height: 46px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  cursor: pointer;
+  cursor: default;
+  display: block;
+  min-width: 0;
+  user-select: text;
 }
 
 .pane-cwd-subtitle {

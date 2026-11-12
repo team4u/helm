@@ -254,9 +254,22 @@ function isConversationActive(store: HelmStoreValue, convId: number): boolean {
   return store.primaryTarget.kind === 'conversation' && store.primaryTarget.conversationId === convId
 }
 
+/** 手风琴跟随目标：当前主屏/分屏会话所属的 profileId（无则 null）。 */
+function activeProfileIdOf(store: HelmStoreValue): string | null {
+  const ids: number[] = []
+  if (store.primaryTarget.kind === 'conversation') ids.push(store.primaryTarget.conversationId)
+  if (store.splitTarget?.kind === 'conversation') ids.push(store.splitTarget.conversationId)
+  for (const id of ids) {
+    const conv = store.conversations.find((c) => c.id === id)
+    if (conv) return conv.profileId
+  }
+  return null
+}
+
 /**
- * Agent 站位行（一级，普通模式仅占一行）：
- * - 普通模式：图标 + 名称 + 状态 + 会话数 + 新建按钮；点击打开主会话，不渲染历史会话子树；
+ * Agent 站位行（一级，手风琴单展开）：
+ * - 普通模式：整个侧栏仅当前展开的那 1 个智能体显示话题子列表（默认跟随当前会话
+ *   所属智能体自动展开，点击行首箭头可手动切换），其余智能体永远只占一行；
  * - 批量模式：行首切换子列表展开，展开后渲染扁平会话清单供勾选删除。
  */
 function AgentStandingItem({
@@ -265,6 +278,8 @@ function AgentStandingItem({
   onCreate,
   onNavigate,
   batchMode,
+  accordionOpen,
+  onToggleAccordion,
   selectedIds,
   onToggleSelect,
 }: {
@@ -273,22 +288,33 @@ function AgentStandingItem({
   onCreate: (profileId: string) => void
   onNavigate?: () => void
   batchMode?: boolean
+  /** 普通模式手风琴：本智能体是否为当前展开的那一个。 */
+  accordionOpen: boolean
+  onToggleAccordion: () => void
   selectedIds?: Set<number>
   onToggleSelect?: (id: number) => void
 }) {
   // 批量模式下：只要该 Agent 有会话（length > 0），就展开子列表展示会话行供勾选删除；
   // 机器人的主站位行永远代表角色 Profile，绝不提供勾选框，避免用户误勾选机器人。
-  // 普通模式下：永不渲染子列表（历史会话切换交给主舞台顶栏话题切换器）。
-  const hasSubList = batchMode ? agent.conversations.length > 0 : false
+  const hasSubList = agent.conversations.length > 0
   const [expanded, setExpanded] = useState(true)
   const [showAll, setShowAll] = useState(false)
 
   const activeInAgent = agent.conversations.some((c) => isConversationActive(store, c.id))
-  const headerActive = activeInAgent && !hasSubList
+  const isOpen = batchMode ? (hasSubList && expanded) : (hasSubList && accordionOpen)
+  const headerActive = activeInAgent && !isOpen
+
+  const toggleOpen = () => {
+    if (batchMode) {
+      if (hasSubList) setExpanded((v) => !v)
+      return
+    }
+    onToggleAccordion()
+  }
 
   const openPrimary = () => {
     if (batchMode) {
-      if (hasSubList) setExpanded((v) => !v)
+      toggleOpen()
       return
     }
     const primary = agent.primaryConversation
@@ -316,22 +342,23 @@ function AgentStandingItem({
         }}
       >
         {hasSubList && (
-          <Tooltip content={expanded ? '收起会话清单' : '展开会话清单'} side="top">
+          <Tooltip content={isOpen ? '收起话题列表' : '展开话题列表'} side="top">
             <button
               type="button"
               className="btn btn-ghost btn-icon-xs agent-collapse-btn"
-              title={expanded ? '收起会话清单' : '展开会话清单'}
-              aria-label={expanded ? '收起会话清单' : '展开会话清单'}
-              aria-expanded={expanded}
+              title={isOpen ? '收起话题列表' : '展开话题列表'}
+              aria-label={isOpen ? '收起话题列表' : '展开话题列表'}
+              aria-expanded={isOpen}
               onClick={(e) => {
                 e.stopPropagation()
-                setExpanded((v) => !v)
+                toggleOpen()
               }}
             >
-              <HelmIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={13} />
+              <HelmIcon name={isOpen ? 'chevron-down' : 'chevron-right'} size={13} />
             </button>
           </Tooltip>
         )}
+        {!hasSubList && <span className="agent-standing-indent" aria-hidden="true" />}
         <button
           type="button"
           className="nav-item-main nav-open"
@@ -350,10 +377,10 @@ function AgentStandingItem({
           <span className="nav-item-label">{agent.label}</span>
         </button>
         <span className="nav-item-meta" onClick={(e) => e.stopPropagation()}>
-          {!hasSubList && agent.primaryConversation && (
+          {!isOpen && agent.primaryConversation && (
             <ConversationStatusDot conv={agent.primaryConversation} />
           )}
-          {!hasSubList && agent.primaryConversation?.nodeId && agent.primaryConversation.nodeId !== 'local' && (
+          {!isOpen && agent.primaryConversation?.nodeId && agent.primaryConversation.nodeId !== 'local' && (
             <RemoteNodeTag nodeId={agent.primaryConversation.nodeId} />
           )}
           {agent.conversations.length > 1 && (
@@ -362,7 +389,7 @@ function AgentStandingItem({
           {!batchMode && (
             <AgentNewConversationButton agent={agent} onCreate={onCreate} />
           )}
-          {!batchMode && agent.primaryConversation && !hasSubList && (
+          {!batchMode && agent.primaryConversation && !isOpen && (
             <span className="sidebar-split-action" style={{ display: 'inline-flex' }}>
               <HoverIconButton
                 className="split-toggle-btn sidebar-split-btn"
@@ -374,7 +401,7 @@ function AgentStandingItem({
           )}
         </span>
       </div>
-      {hasSubList && expanded && (
+      {isOpen && (
         <AgentConversationsList
           agent={agent}
           store={store}
@@ -591,13 +618,18 @@ function AgentConversationRow({
   )
 }
 
-/** 「智能体」分组：每个 Agent 一行站位；批量管理时展开扁平会话清单。 */
+/**
+ * 「智能体」分组（手风琴单展开）：
+ * - 有活跃会话的智能体平铺在上（仅当前展开的那 1 个显示话题子列表）；
+ * - 0 会话的闲置智能体收进底部折叠区；批量管理时展开扁平会话清单。
+ */
 function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onNavigate?: () => void }) {
   const [batchMode, setBatchMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [deleting, setDeleting] = useState(false)
   const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const [idleOpen, setIdleOpen] = useState(false)
 
   const agentStandings = useMemo(
     () =>
@@ -610,9 +642,30 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
       }),
     [store.profiles, store.conversations, store.plugins, store.groupedUi.sidebarItems, store.groupedUi.sidebarSections],
   )
+
+  // 手风琴：默认跟随当前主屏会话所属智能体；同一时刻仅展开一个。
+  const [accordionId, setAccordionId] = useState<string | null>(() => activeProfileIdOf(store))
+  useEffect(() => {
+    setAccordionId((current) => {
+      const follow = activeProfileIdOf(store)
+      if (follow === null) return current
+      return current === follow ? current : follow
+    })
+  }, [store])
+
+  const activeStandings = useMemo(() => agentStandings.filter((a) => a.conversations.length > 0), [agentStandings])
+  const idleStandings = useMemo(() => agentStandings.filter((a) => a.conversations.length === 0), [agentStandings])
   const visibleStandings = useMemo(
     () => filterAgentStandings(agentStandings, search),
     [agentStandings, search],
+  )
+  const visibleActive = useMemo(
+    () => activeStandings.filter((a) => visibleStandings.some((v) => v.profileId === a.profileId)),
+    [activeStandings, visibleStandings],
+  )
+  const visibleIdle = useMemo(
+    () => idleStandings.filter((a) => visibleStandings.some((v) => v.profileId === a.profileId)),
+    [idleStandings, visibleStandings],
   )
   const createConversation = useMemo(
     () => createConversationFor(store, onNavigate),
@@ -781,21 +834,72 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
           </div>
         </div>
       )}
-      {visibleStandings.length === 0 ? (
+      {visibleActive.length === 0 && visibleIdle.length === 0 ? (
         <div className="sidebar-search-empty">没有匹配的智能体</div>
       ) : (
-        visibleStandings.map((agent) => (
-          <AgentStandingItem
-            key={agent.profileId}
-            agent={agent}
-            store={store}
-            onCreate={(profileId) => void createConversation(profileId)}
-            onNavigate={onNavigate}
-            batchMode={batchMode}
-            selectedIds={selectedIds}
-            onToggleSelect={toggleSelect}
-          />
-        ))
+        <>
+          {visibleActive.map((agent) => (
+            <AgentStandingItem
+              key={agent.profileId}
+              agent={agent}
+              store={store}
+              onCreate={(profileId) => void createConversation(profileId)}
+              onNavigate={onNavigate}
+              batchMode={batchMode}
+              accordionOpen={accordionId === agent.profileId}
+              onToggleAccordion={() =>
+                setAccordionId((current) => (current === agent.profileId ? null : agent.profileId))
+              }
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelect}
+            />
+          ))}
+          {visibleIdle.length > 0 && !batchMode && (
+            <div className="sidebar-idle-group">
+              <button
+                type="button"
+                className="sidebar-group-header sidebar-idle-toggle"
+                title={idleOpen ? '收起闲置智能体' : '展开闲置智能体'}
+                aria-expanded={idleOpen}
+                onClick={() => setIdleOpen((v) => !v)}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+                  <HelmIcon name={idleOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+                  <span className="nav-item-label">闲置智能体</span>
+                </span>
+                <span className="badge badge-neutral tabular-nums">{visibleIdle.length}</span>
+              </button>
+              {idleOpen &&
+                visibleIdle.map((agent) => (
+                  <AgentStandingItem
+                    key={agent.profileId}
+                    agent={agent}
+                    store={store}
+                    onCreate={(profileId) => void createConversation(profileId)}
+                    onNavigate={onNavigate}
+                    batchMode={false}
+                    accordionOpen={false}
+                    onToggleAccordion={() => {}}
+                  />
+                ))}
+            </div>
+          )}
+          {batchMode &&
+            visibleIdle.map((agent) => (
+              <AgentStandingItem
+                key={agent.profileId}
+                agent={agent}
+                store={store}
+                onCreate={(profileId) => void createConversation(profileId)}
+                onNavigate={onNavigate}
+                batchMode
+                accordionOpen={false}
+                onToggleAccordion={() => {}}
+                selectedIds={selectedIds}
+                onToggleSelect={toggleSelect}
+              />
+            ))}
+        </>
       )}
       <ConfirmDialog
         open={batchDeleteConfirmOpen}

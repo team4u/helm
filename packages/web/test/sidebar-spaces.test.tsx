@@ -1,7 +1,7 @@
 /**
  * 双层导航与话题切换器交互测试（happy-dom + 真实 React 事件）：
  * - Sidebar：对话/视图空间切换、搜索过滤智能体、智能体行导航；
- * - TopicPicker：打开 Popover、搜索话题、切换主屏/分屏目标。
+ * - 手风琴单展开：仅当前智能体展开话题子列表，切换智能体自动收起。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -18,7 +18,6 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 ;(globalThis as Record<string, unknown>).React = React
 const { Sidebar } = await import('../src/shell/Sidebar.js')
-const { TopicPicker } = await import('../src/conversation/conversation-topic-picker.js')
 
 const e = React.createElement
 
@@ -148,8 +147,7 @@ test('Sidebar 智能体搜索：输入关键字过滤智能体行', { timeout: 6
   assert.ok(document.body.textContent!.includes('编码专员'), '命中智能体保留')
   assert.ok(!document.body.textContent!.includes('个人助理</span>'), '未命中智能体过滤')
 
-  // 普通模式：智能体行点击打开主会话，不渲染会话子树
-  assert.ok(!document.body.querySelector('.agent-conversations-list'), '普通模式无会话子树')
+  // 命中智能体点击行主体打开主会话
   const row = document.body.querySelector('.agent-standing .nav-item-main') as HTMLButtonElement
   await act(async () => {
     row.click()
@@ -158,60 +156,54 @@ test('Sidebar 智能体搜索：输入关键字过滤智能体行', { timeout: 6
   assert.deepEqual(call?.target, { kind: 'conversation', conversationId: 40 })
 })
 
-test('TopicPicker 交互：点击当前话题 Tab 打开 Popover，搜索并切换主屏目标', { timeout: 60_000 }, async () => {
+test('Sidebar 手风琴单展开：仅当前会话所属智能体展开话题子列表，切换后自动收起', { timeout: 60_000 }, async () => {
   const store = makeStore()
-  const conversation = store.conversations[0]!
-  render(store, e(TopicPicker, { conversation }))
+  render(store, e(Sidebar))
   await act(async () => {})
 
-  const activeTab = document.body.querySelector('.nav-item-active') as HTMLButtonElement
-  assert.ok(activeTab, '当前话题 Tab 存在且激活')
-  assert.ok(activeTab.textContent!.includes('个人助理'), '当前话题 Tab 展示话题标题')
-  // 点击非当前 Tab 直接切换目标，不弹层
-  const otherTab = document.body.querySelector('.topic-tab:not(.nav-item-active):not(.topic-tab-more)') as HTMLButtonElement
-  await act(async () => {
-    otherTab.click()
-  })
-  assert.deepEqual(store.openTargetCalls, [{ target: { kind: 'conversation', conversationId: 10 }, split: undefined }])
+  // 当前会话 #1 属于 assistant：默认仅它展开话题子列表
+  const lists = document.body.querySelectorAll('.agent-conversations-list')
+  assert.equal(lists.length, 1, '仅一个智能体展开话题列表')
+  assert.ok(lists[0]!.textContent!.includes('周末计划'), '展开的话题列表包含当前智能体的会话')
+  assert.ok(lists[0]!.textContent!.includes('个人助理'), '当前话题在列表内')
 
-  // 点击当前话题 Tab：展开完整列表
+  // 点击另一个智能体（编码专员）行主体：切换主会话并自动收起上一个
+  const rows = [...document.body.querySelectorAll('.agent-standing-row .nav-item-main')] as HTMLButtonElement[]
+  const coderRow = rows.find((r) => r.textContent!.includes('编码专员'))!
   await act(async () => {
-    activeTab.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))
-    activeTab.click()
+    coderRow.click()
   })
-  const searchInput = document.body.querySelector('.topic-picker-search-input') as HTMLInputElement
-  assert.ok(searchInput, 'Popover 打开后渲染搜索框')
-
-  // 当前项激活态：#1 是当前话题
-  const activeItem = document.body.querySelector('.topic-picker-item-active') as HTMLElement
-  assert.ok(activeItem, '当前话题有激活态')
-  assert.ok(activeItem.textContent!.includes('个人助理'), '激活项为当前话题')
-
-  // 搜索并切换
-  await act(async () => {
-    setInputValue(searchInput, '周末')
-  })
-  const items = [...document.body.querySelectorAll('.topic-picker-item')] as HTMLElement[]
-  assert.equal(items.length, 1, '搜索过滤后仅剩一项')
-  await act(async () => {
-    items[0]!.click()
-  })
-  assert.deepEqual(store.openTargetCalls, [
-    { target: { kind: 'conversation', conversationId: 10 }, split: undefined },
-    { target: { kind: 'conversation', conversationId: 10 }, split: undefined },
-  ])
+  assert.deepEqual(
+    store.openTargetCalls.map((c) => c.target),
+    [{ kind: 'conversation', conversationId: 40 }],
+  )
 })
 
-test('TopicPicker 分屏窗格：切换写入 split 目标', { timeout: 60_000 }, async () => {
-  const store = makeStore()
-  const conversation = store.conversations[0]!
-  render(store, e(TopicPicker, { conversation, isSplit: true }))
+test('Sidebar 闲置智能体收纳：0 会话智能体进折叠区，默认不占主视野', { timeout: 60_000 }, async () => {
+  const store = makeTestStore({
+    conversations: [conv({ id: 1, title: '个人助理', profileId: 'assistant' })],
+    profiles: [
+      { id: 'assistant', name: '个人助理' },
+      { id: 'coder', name: '编码专员' },
+      { id: 'writer', name: '写作助手' },
+    ],
+    primaryTarget: { kind: 'conversation', conversationId: 1 },
+  })
+  render(store, e(Sidebar))
   await act(async () => {})
 
-  const otherTab = document.body.querySelector('.topic-tab:not(.nav-item-active):not(.topic-tab-more)') as HTMLButtonElement
+  // 0 会话的 coder/writer 收进折叠区，默认收起不占主视野
+  const idle = document.body.querySelector('.sidebar-idle-group') as HTMLElement
+  assert.ok(idle, '闲置智能体折叠区存在')
+  assert.ok(idle.textContent!.includes('闲置智能体'), '折叠区标题')
+  assert.ok(!idle.textContent!.includes('编码专员'), '收起时不平铺闲置智能体行')
+
+  // 展开：平铺闲置智能体行（单行，无子列表）
+  const toggle = idle.querySelector('.sidebar-idle-toggle') as HTMLButtonElement
   await act(async () => {
-    otherTab.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }))
-    otherTab.click()
+    toggle.click()
   })
-  assert.deepEqual(store.openTargetCalls.map((c) => c.split), [true])
+  assert.ok(idle.textContent!.includes('编码专员'), '展开后显示闲置智能体')
+  assert.ok(idle.textContent!.includes('写作助手'), '展开后显示全部闲置智能体')
 })
+

@@ -859,7 +859,7 @@ test('批量模式勾选框只存在于会话子项，机器人站位行绝不�
 })
 
 test('Sidebar 状态圆点渲染验证：五态圆点与单会话站位行', { timeout: 60_000 }, () => {
-  // 方式一契约：普通模式不渲染历史会话子树，多会话 Agent 仅展示主会话圆点与计数徽标。
+  // 手风琴契约：仅当前会话所属智能体展开话题子列表，其余智能体单行展示圆点与计数。
   const store = makeTestStore({
     conversations: [
       conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
@@ -900,9 +900,9 @@ test('Sidebar 状态圆点渲染验证：五态圆点与单会话站位行', { t
   assert.ok(html.includes('class="status-dot status-dot-done"'), '应渲染 done 圆点')
   assert.ok(html.includes('title="已完成"'), 'done 圆点提示')
 
-  // 4) 方式一契约：普通模式不渲染会话子树；多会话智能体展示计数徽标，
-  //    单会话 coder 站位行渲染主会话 working 圆点。
-  assert.ok(!html.includes('agent-conversations-list'), '普通模式不得展开历史会话子列表')
+  // 4) 手风琴契约：仅当前会话所属智能体（assistant）展开话题子列表；
+  //    多会话智能体展示计数徽标，单会话 coder 站位行渲染主会话 working 圆点。
+  assert.ok(html.includes('agent-conversations-list'), '当前智能体展开话题子列表')
   assert.ok(html.includes('>3</span>'), '多会话智能体站位行应展示会话计数徽标')
   assert.ok(html.includes('title="运行中: 重构中"'), '单会话 Agent 站位行圆点应带 tooltip')
   assert.ok(!html.includes('badge-accent'), '不应再渲染文字徽章样式 badge-accent')
@@ -937,7 +937,7 @@ test('Sidebar 双层导航：Activity Rail 空间切换与系统中心直达（S
   assert.ok(html.includes('sidebar-footer'), '底栏容器保留')
 })
 
-test('Sidebar 双层导航：普通模式智能体行单行化，无会话子树（SSR）', { timeout: 60_000 }, () => {
+test('Sidebar 双层导航：手风琴单展开仅当前智能体显示话题子列表（SSR）', { timeout: 60_000 }, () => {
   const store = makeTestStore({
     conversations: [
       conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
@@ -948,8 +948,9 @@ test('Sidebar 双层导航：普通模式智能体行单行化，无会话子树
   })
   const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
 
-  assert.ok(!html.includes('agent-conversations-list'), '普通模式不得渲染会话子树')
-  assert.ok(!html.includes('nav-item-sub'), '普通模式不得渲染二级会话行')
+  // 手风琴：当前会话所属智能体（assistant）展开话题子列表，标题行保持非激活
+  assert.ok(html.includes('agent-conversations-list'), '当前智能体渲染话题子列表')
+  assert.ok(html.includes('nav-item-sub'), '话题子行使用二级行样式')
   assert.ok(html.includes('>3</span>'), '多会话智能体行展示计数徽标')
   assert.ok(html.includes('title="在 个人助理 下新建对话"'), '智能体行新建按钮保留')
 })

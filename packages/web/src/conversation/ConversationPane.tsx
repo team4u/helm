@@ -13,7 +13,6 @@ import { ConversationTimeline } from './ConversationTimeline.js'
 import { resolveActiveWorkbenchTab, summarizeWorkbenchBadge } from './workbench-model.js'
 import { useWorkbenchTabs } from './workbench-hooks.js'
 import { matchConversationActions, splitConversationHeaderActions } from './action-model.js'
-import { TopicPicker } from './conversation-topic-picker.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import type { EditRequestTarget } from './timeline-model.js'
 
@@ -244,13 +243,11 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               }}
               onBlur={() => void saveTitle()}
             />
-          ) : null}
-          <TopicPicker
-            conversation={conversation}
-            isSplit={isSplit}
-            newTopicDisabled={actionPending !== null || !canCreateThread}
-            onNewTopic={canCreateThread ? createNewThread : undefined}
-          />
+          ) : (
+            <span className="pane-title">
+              {conversation.title === '' ? `会话 #${conversationId}` : conversation.title}
+            </span>
+          )}
           <span className="pane-cwd-subtitle" title={envSubtitle.tooltip}>
             <span className="env-subtitle-full">{envSubtitle.text}</span>
             {remoteNodeTag !== null ? <span className="env-subtitle-compact">{remoteNodeTag}</span> : null}

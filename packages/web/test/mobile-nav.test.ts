@@ -144,8 +144,8 @@ test('responsive.css 适配移动端视口安全区、触控热区与遮罩层�
   // 安全区 inset
   assert.match(
     responsiveCss,
-    /\.mobile-nav-toggle\s*\{[^}]*top:\s*max\(9px,\s*env\(safe-area-inset-top\)\)/,
-    '.mobile-nav-toggle 必须支持 top safe-area-inset-top',
+    /\.mobile-nav-toggle\s*\{[^}]*top:\s*calc\(max\(5px,\s*env\(safe-area-inset-top\)\)\)/,
+    '.mobile-nav-toggle 须与 46px 会话顶栏垂直居中并叠加 safe-area-inset-top',
   )
   assert.match(
     responsiveCss,

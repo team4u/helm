@@ -33,6 +33,8 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .code-highlight-error { display: block; padding: 4px 12px; color: var(--err); font-size: 11px; }
 @container (max-width: 680px) {
   .conversation-topbar { gap: 8px; padding: 0 12px; }
+  /* 移动端顶栏左侧让位汉堡菜单后标题在更窄的剩余空间里垂直居中 */
+  .conversation-topbar .pane-title { line-height: normal; align-self: center; }
   .conversation-topbar .pane-action-label { display: none; }
   /* 手机仍保留远端身份：副标题切紧凑模式（仅 @node，本机不渲染），title 保留完整坐标 */
   .conversation-topbar .pane-cwd-subtitle { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -61,53 +63,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .conversation-topbar .pane-title { min-width: 40px; }
   .conversation-topbar .pane-cwd-subtitle { max-width: 30vw; }
   .conversation-topbar .pane-parent-nav-btn { height: 22px; padding: 0 6px 0 5px; font-size: 11px; gap: 3px; }
-  /* Magpie 式移动端顶栏：第一行放操作，第二行给 Tabs 独占整行并横向滑动。 */
-  .conversation-topbar {
-    --mobile-title-left: max(48px, calc(env(safe-area-inset-left) + 44px));
-    height: auto;
-    min-height: 46px;
-    flex-wrap: wrap;
-    align-content: center;
-    gap: 4px 8px;
-    padding: 0 12px 8px var(--mobile-title-left);
-    background: var(--bg-subtle);
-  }
-  .conversation-topbar .pane-title-group {
-    display: contents;
-  }
-  .conversation-topbar .pane-parent-nav-btn {
-    order: 1;
-    align-self: center;
-  }
-  .conversation-topbar .pane-actions {
-    order: 2;
-    margin-left: auto;
-  }
-  .conversation-topbar .pane-cwd-subtitle {
-    display: none;
-  }
-  .topic-tabs {
-    order: 3;
-    flex: 0 0 calc(100% + var(--mobile-title-left) + 12px);
-    width: calc(100% + var(--mobile-title-left) + 12px);
-    max-width: none;
-    margin-left: calc(-1 * var(--mobile-title-left));
-    margin-right: -12px;
-    padding: 2px 12px;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-  }
-  .topic-tabs > .nav-item {
-    max-width: none;
-    height: 40px;
-    min-height: 40px;
-    padding: 0 14px;
-    font-size: 14px;
-  }
-  .topic-tabs > .nav-item-active {
-    flex: 0 0 auto;
-    width: auto;
-  }
+  /* 话题切换已回归左栏手风琴：顶栏恢复单行标题，恢复默认内边距。 */
   .composer-widgets .card { padding: 8px 10px; }
 }
 @media (hover: none) {
@@ -177,7 +133,8 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     align-items: center;
     justify-content: center;
     position: fixed;
-    top: max(9px, env(safe-area-inset-top));
+    /* 与 46px 会话顶栏垂直居中对齐（(46-36)/2 = 5px），叠加安全区偏移 */
+    top: calc(max(5px, env(safe-area-inset-top)));
     left: max(8px, env(safe-area-inset-left));
     z-index: 70;
     width: 36px;
