@@ -301,7 +301,12 @@ export function pluginSummaryOf(
 export function getActiveEnabledPluginIds(plugins: Map<string, PluginState>): string[] {
   const ids: string[] = [];
   for (const [id, s] of plugins) {
-    if (s.enabled) ids.push(id);
+    // 清单可见性要求 enabled+idle：拆毁期（disable 已置 phase=deactivating 而
+    // enabled 尚未落 false，teardown 至 clearRegistrations 之间）的插件必须从
+    // 工具/动作/路由/UI 清单即时消失，不再向已停服务派发新请求。register 与
+    // enable 的 enabled 与 idle 为同步相邻置位，不存在「enabled 已置而 phase
+    // 未 idle」的启动期窗口，清单出现时机不变。
+    if (s.enabled && s.phase === 'idle') ids.push(id);
   }
   return ids;
 }

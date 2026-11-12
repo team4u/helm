@@ -280,6 +280,23 @@ export class PluginPackageManager {
         try {
           registered = await this.host.registerManagedPlugin(target, { enabled: false });
         } catch (err) {
+          // 注册失败可能是并发宿主重扫描（rescan/load 链，不经本 manager 互斥）
+          // 已从同目录抢先注册同名插件：此时目录已归属那个活实例，rm 会掏空
+          // 其源目录与 dataDir。仅确认无同名已注册实例时才删目录回滚。
+          if (this.host.listSummaries().some((s) => s.id === pluginId)) {
+            inPlace = false;
+            throw new HelmError(
+              'plugin_package_install_failed',
+              `插件 ${pluginId} 安装后注册失败：检测到同名插件已注册（可能为并发扫描从同目录抢先注册），目录与该实例已保留，请人工确认后用 remove 接管（无受管安装记录）：${err instanceof Error ? err.message : String(err)}`,
+              500,
+              {
+                pluginId,
+                target,
+                rolledBack: false,
+                cause: err instanceof Error ? { message: err.message, stack: err.stack } : undefined,
+              },
+            );
+          }
           await rm(target, { recursive: true, force: true }).catch(() => {});
           inPlace = false;
           throw new HelmError(
@@ -325,19 +342,41 @@ export class PluginPackageManager {
             ...(enableError !== undefined ? { enableError } : {}),
           };
         } catch (err) {
-          // 持久化失败：目录与注册实例均已存在但无记录——不可靠状态，整体回滚
-          await this.host.removeManagedPlugin(registered.pluginId).catch(() => {});
-          await rm(target, { recursive: true, force: true }).catch(() => {});
-          inPlace = false;
+          // 持久化失败：注销实例后删目录整体回滚。注销失败（如在途任务 409）
+          // 时绝不对仍注册运行的实例 rm 掏空源目录——保留现状并如实报错。
+          let unregisterError: unknown;
+          try {
+            await this.host.removeManagedPlugin(registered.pluginId);
+          } catch (removeErr) {
+            unregisterError = removeErr;
+          }
+          if (unregisterError === undefined) {
+            await rm(target, { recursive: true, force: true }).catch(() => {});
+            inPlace = false;
+            throw new HelmError(
+              'plugin_package_install_failed',
+              `插件 ${pluginId} 安装记录持久化失败，已回滚（实例注销、新目录删除）：${err instanceof Error ? err.message : String(err)}`,
+              500,
+              {
+                pluginId,
+                target,
+                rolledBack: true,
+                cause: err instanceof Error ? { message: err.message, stack: err.stack } : undefined,
+              },
+            );
+          }
           throw new HelmError(
             'plugin_package_install_failed',
-            `插件 ${pluginId} 安装记录持久化失败，已回滚（实例注销、新目录删除）：${err instanceof Error ? err.message : String(err)}`,
+            `插件 ${pluginId} 安装记录持久化失败，且回滚注销实例失败（${unregisterError instanceof Error ? unregisterError.message : String(unregisterError)}）；目录与实例已保留（请清理在途任务后手动 remove）`,
             500,
             {
               pluginId,
               target,
-              rolledBack: true,
+              rolledBack: false,
               cause: err instanceof Error ? { message: err.message, stack: err.stack } : undefined,
+              rollbackError: unregisterError instanceof Error
+                ? { message: unregisterError.message, stack: unregisterError.stack }
+                : { message: String(unregisterError) },
             },
           );
         }
@@ -446,18 +485,30 @@ export class PluginPackageManager {
         } catch (err) {
           reloadError = err;
         }
-        // 4. reload 失败回滚：新目录移回 staging，backup 回受管目录，旧实例重载
+        // 4. reload 失败回滚：新目录移回 staging，backup 回受管目录，旧实例重载。
+        // 目录恢复与实例恢复分开如实上报：恢复性 reload 失败时实例可能已注销
+        //（reloadExternalPlugin 切换失败即注销），绝不吞错谎报「旧版本继续可用」。
         let rollbackError: { message: string } | undefined;
         try {
           await rename(target, join(staging, 'failed-new'));
           if (await pathExists(backup)) await rename(backup, target);
-          await this.host.updateManagedPlugin(pluginId, target, { keepEnabled: true }).catch(() => {});
         } catch (rollbackErr) {
-          rollbackError = { message: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr) };
+          rollbackError = {
+            message: `目录恢复失败：${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}，需人工检查受管目录`,
+          };
+        }
+        if (rollbackError === undefined) {
+          try {
+            await this.host.updateManagedPlugin(pluginId, target, { keepEnabled: true });
+          } catch (restoreErr) {
+            rollbackError = {
+              message: `旧目录已恢复，但旧实例重载失败：${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}，插件当前可能已注销，需人工处理后重试`,
+            };
+          }
         }
         throw new HelmError(
           'plugin_package_update_failed',
-          `插件 ${pluginId} 更新后重载失败${rollbackError === undefined ? '（已回滚到更新前目录与实例，旧版本继续可用）' : `（回滚也失败：${rollbackError.message}，需人工检查受管目录后重试）`}：${reloadError instanceof Error ? reloadError.message : String(reloadError)}`,
+          `插件 ${pluginId} 更新后重载失败${rollbackError === undefined ? '（已回滚到更新前目录与实例，旧版本继续可用）' : `（回滚不完整：${rollbackError.message}）`}：${reloadError instanceof Error ? reloadError.message : String(reloadError)}`,
           500,
           {
             pluginId,

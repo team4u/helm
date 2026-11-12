@@ -50,6 +50,38 @@ export interface HostApiDependencies {
 }
 
 /**
+ * 弃置 nodeFetch 响应的计数兜底：调用方拿到 Response 后既不消费也不
+ * cancel body（也不持引用）时，包装流的 end 永不触发，插件将永久 409
+ * plugin_has_live_tasks 不可停用。FinalizationRegistry 在 Response 被 GC 后
+ * 补 end——时机非确定（依赖 GC），是泄漏安全网而非契约替代；调用方仍应
+ * 消费或 cancel body（诚实声明：紧随弃置的 disable 可能仍短暂 409）。
+ */
+const abandonedNodeFetchResponses = new FinalizationRegistry<() => void>((end) => {
+  end();
+});
+
+/**
+ * setConfig 读-合-写串行链（per-plugin）：backend.setPluginConfig 是整值
+ * 写入（无原子 read-modify-write 端口），并发 patch 需在本包装层串行化，
+ * 否则后写覆盖前写丢更新。
+ */
+const pluginConfigWriteChains = new Map<string, Promise<unknown>>();
+
+function enqueuePluginConfigWrite(pluginId: string, op: () => Promise<void>): Promise<void> {
+  const prev = pluginConfigWriteChains.get(pluginId) ?? Promise.resolve();
+  const run = prev.then(op, op);
+  const tail = run.then(
+    () => {},
+    () => {},
+  );
+  pluginConfigWriteChains.set(pluginId, tail);
+  void tail.then(() => {
+    if (pluginConfigWriteChains.get(pluginId) === tail) pluginConfigWriteChains.delete(pluginId);
+  });
+  return run;
+}
+
+/**
  * executionEnv 受控代理：每个方法调用时重新校验周期（停用/re-enable 后旧
  * env 代理立即失效），异步操作入任务跟踪；绝不裸返回 backend 原始 env 实例。
  * 代理保留 SDK ExecutionEnv 完整形状（方法级包装，含可选方法）。
@@ -388,31 +420,41 @@ export function wrapHostApi(
                 end();
                 return response;
               }
-              const reader = response.body.getReader();
-              const tracked = new ReadableStream<Uint8Array>({
-                async pull(controller) {
-                  try {
-                    const { done, value } = await reader.read();
-                    if (done) { end(); controller.close(); return; }
-                    if (value !== undefined) controller.enqueue(value);
-                  } catch (error) {
-                    end();
-                    controller.error(error);
-                  }
-                },
-                async cancel(reason) {
-                  try {
-                    await reader.cancel(reason);
-                  } finally {
-                    end();
-                  }
-                },
-              });
-              return new Response(tracked, {
-                status: response.status,
-                statusText: response.statusText,
-                headers: response.headers,
-              });
+              try {
+                const reader = response.body.getReader();
+                const trackedBody = new ReadableStream<Uint8Array>({
+                  async pull(controller) {
+                    try {
+                      const { done, value } = await reader.read();
+                      if (done) { end(); controller.close(); return; }
+                      if (value !== undefined) controller.enqueue(value);
+                    } catch (error) {
+                      end();
+                      controller.error(error);
+                    }
+                  },
+                  async cancel(reason) {
+                    try {
+                      await reader.cancel(reason);
+                    } finally {
+                      end();
+                    }
+                  },
+                });
+                const wrapped = new Response(trackedBody, {
+                  status: response.status,
+                  statusText: response.statusText,
+                  headers: response.headers,
+                });
+                // 弃置兜底：Response 不可达后被 GC 时补结束计数（见注册处声明）
+                abandonedNodeFetchResponses.register(wrapped, end);
+                return wrapped;
+              } catch (error) {
+                // 包装失败（body 已锁定等）：尽力取消底层流并结束计数，绝不悬挂泄漏
+                response.body.cancel().catch(() => {});
+                end();
+                throw error;
+              }
             }, (error) => {
               end();
               throw error;
@@ -433,8 +475,10 @@ export function wrapHostApi(
     // 5. configuration & plugins
     setConfig: async (patch) => {
       guard('host.setConfig');
-      const current = deps.getConfig(pluginId);
-      await backend.setPluginConfig(pluginId, { ...current, ...patch });
+      return enqueuePluginConfigWrite(pluginId, async () => {
+        const current = deps.getConfig(pluginId);
+        await backend.setPluginConfig(pluginId, { ...current, ...patch });
+      });
     },
     plugins: pluginsPort,
     listPlugins: () => {

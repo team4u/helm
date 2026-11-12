@@ -154,6 +154,21 @@ export class PluginHost {
   private servicesStarted: boolean;
   private startPromise?: Promise<void>;
   private lifecycle = new Map<string, Promise<unknown>>();
+  /**
+   * 服务屏障读写门（写者优先）：start()/stop() 独占，register/enable/
+   * disable/unregister（经 enqueue）共享。
+   * Why: 启动屏障（prepare 可耗时）原先不持任何插件队列槽位，屏障期并发
+   * enable 的服务永不启动、并发 disable 后屏障仍会 start 已停插件服务、
+   * stop() 因 servicesStarted 未置位直接空跑。读锁保持跨插件生命周期 op
+   * 并行（enqueue 语义不变），写锁保证屏障与全量 stop 的原子性。
+   * 锁序恒为「per-plugin 队列 → 读门」；写门不经插件队列，无死锁环。
+   * 约定：插件服务 prepare/start/stop 代码不得等待本宿主生命周期 op
+   * （屏障持写门期间会自锁，属调用方进约，不做防御）。
+   */
+  private gateReaders = 0;
+  private gateWriterActive = false;
+  private gateWriterWaiting = false;
+  private gateWaiters: Array<() => void> = [];
   /** 受管包安装器（install/update/remove；可选接线，未接线时 501）。 */
   private packageManager?: PluginPackageManager;
   /** 受管包记录镜像（PluginSummary.managed 映射用）。 */
@@ -243,9 +258,13 @@ export class PluginHost {
         try {
           this.uiRegistry.assertCrossPluginUnique(definition.id, this.getActiveEnabledPluginIds());
           this.validateUiDeclarations(definition.id, true);
-          state.enabled = true;
           await registerProviders(state, this.options.providers);
           await this.activateServices(state);
+          // 与 enable() 同序：能力挂载完成后才同步置 enabled+idle，避免清单
+          //（按 enabled 过滤）先暴露能力而 invokeAction 因 phase 仍为 defining
+          // 409 的撕裂窗口。
+          state.enabled = true;
+          state.phase = 'idle';
         } catch (err) {
           if (isolate) {
             // 外部插件启用阶段故障：回滚挂载资源但保留条目为 failed；
@@ -255,7 +274,6 @@ export class PluginHost {
           }
           await this.rollbackAndRemove(state, seq, err, true);
         }
-        state.phase = 'idle';
       } else {
         try {
           await this.teardownPlugin(state, { stopServices: false });
@@ -445,6 +463,13 @@ export class PluginHost {
           );
         }
       }
+      // collectPluginInUse 含异步 IO 与任意插件代码 svc.inUse()，期间新任务可经
+      // assertActive 进入（服务 inUse 合法读 ctx.doc，不能提前置 deactivating
+      // 关门）。返回后二次门禁复查并同步相邻置 deactivating——自此至 teardown
+      // 无任何跨门 await，窗口内进入且未收敛的在途任务必被此处 409 拦截，
+      // 消除「检查通过即拆注册表」与在途任务并发的 TOCTOU。
+      assertNoLiveTasks(pluginId, state, this.tracker);
+      assertProvidersIdle(pluginId, state, this.options.providers);
       state.phase = 'deactivating';
       let stopError: { err: unknown } | undefined;
       try {
@@ -466,9 +491,20 @@ export class PluginHost {
     });
   }
 
+  /**
+   * per-plugin 生命周期队列 + 服务屏障共享门（读侧）：同插件 op 串行，且
+   * 全程持有共享门，与 start()/stop() 独占屏障互斥。
+   */
   private async enqueue<T>(pluginId: string, op: () => Promise<T>): Promise<T> {
     const prev = this.lifecycle.get(pluginId) ?? Promise.resolve();
-    const run = prev.then(op, op);
+    const run = prev.then(async () => {
+      await this.acquireGateRead();
+      try {
+        return await op();
+      } finally {
+        this.releaseGateRead();
+      }
+    });
     const tail = run.then(
       () => {},
       () => {},
@@ -478,6 +514,38 @@ export class PluginHost {
       if (this.lifecycle.get(pluginId) === tail) this.lifecycle.delete(pluginId);
     });
     return run;
+  }
+
+  private gateWakeAll(): void {
+    const waiters = this.gateWaiters.splice(0);
+    for (const wake of waiters) wake();
+  }
+
+  private async acquireGateRead(): Promise<void> {
+    while (this.gateWriterActive || this.gateWriterWaiting) {
+      await new Promise<void>((resolve) => this.gateWaiters.push(resolve));
+    }
+    this.gateReaders += 1;
+  }
+
+  private releaseGateRead(): void {
+    this.gateReaders -= 1;
+    if (this.gateReaders === 0) this.gateWakeAll();
+  }
+
+  private async acquireGateWrite(): Promise<void> {
+    this.gateWriterWaiting = true;
+    while (this.gateWriterActive || this.gateReaders > 0) {
+      await new Promise<void>((resolve) => this.gateWaiters.push(resolve));
+    }
+    this.gateWriterActive = true;
+    this.gateWriterWaiting = false;
+    this.gateWakeAll();
+  }
+
+  private releaseGateWrite(): void {
+    this.gateWriterActive = false;
+    this.gateWakeAll();
   }
 
   private async rollbackAndRemove(
@@ -636,7 +704,24 @@ export class PluginHost {
     this.assertNotDisposed();
     if (this.servicesStarted) return;
     if (this.startPromise) return this.startPromise;
-    this.startPromise = (async () => {
+    const run = this.runServicesBarrier();
+    this.startPromise = run;
+    try {
+      await run;
+    } finally {
+      this.startPromise = undefined;
+    }
+  }
+
+  /**
+   * 启动屏障（独占服务门）：与 register/enable/disable/unregister 互斥，
+   * 屏障期不再漏启动新启用插件的服务、不再复活并发停用的插件。等待门期间
+   * 状态被并发屏障改变时按双检结果处理。
+   */
+  private async runServicesBarrier(): Promise<void> {
+    await this.acquireGateWrite();
+    try {
+      if (this.servicesStarted) return;
       const enabled = [...this.plugins.values()].filter((s) => s.enabled);
       // 无隔离型插件：沿用原子启动屏障（任一失败回滚全部并显式抛错）。
       if (!enabled.some((s) => s.isolateFailure === true)) {
@@ -673,11 +758,8 @@ export class PluginHost {
         }
       }
       this.servicesStarted = true;
-    })();
-    try {
-      await this.startPromise;
     } finally {
-      this.startPromise = undefined;
+      this.releaseGateWrite();
     }
   }
 
@@ -694,24 +776,31 @@ export class PluginHost {
 
   async stop(): Promise<void> {
     this.assertNotDisposed();
-    if (!this.servicesStarted) return;
-    const errors: Array<{ pluginId: string; error: JsonSafeErrorInfo }> = [];
-    for (const state of [...this.plugins.values()].reverse()) {
-      if (!state.enabled) continue;
-      try {
-        await stopServicesQuietly(state);
-      } catch (err) {
-        errors.push({ pluginId: state.definition.id, error: toJsonSafeError(err) });
+    // 独占服务门：屏障进行中（servicesStarted 尚未置位）时等待其完成再停止，
+    // 不再空跑返回导致「stop 返回后服务仍被屏障拉起」。
+    await this.acquireGateWrite();
+    try {
+      if (!this.servicesStarted) return;
+      const errors: Array<{ pluginId: string; error: JsonSafeErrorInfo }> = [];
+      for (const state of [...this.plugins.values()].reverse()) {
+        if (!state.enabled) continue;
+        try {
+          await stopServicesQuietly(state);
+        } catch (err) {
+          errors.push({ pluginId: state.definition.id, error: toJsonSafeError(err) });
+        }
       }
-    }
-    this.servicesStarted = false;
-    if (errors.length > 0) {
-      throw new HelmError(
-        'plugin_service_stop_failed',
-        `部分插件服务停止失败：${errors.map((e) => e.pluginId).join(', ')}`,
-        500,
-        { errors },
-      );
+      this.servicesStarted = false;
+      if (errors.length > 0) {
+        throw new HelmError(
+          'plugin_service_stop_failed',
+          `部分插件服务停止失败：${errors.map((e) => e.pluginId).join(', ')}`,
+          500,
+          { errors },
+        );
+      }
+    } finally {
+      this.releaseGateWrite();
     }
   }
 
