@@ -3,7 +3,8 @@
  *
  * 覆盖：SSE 首帧 snapshot / 增量帧协议、abort 与 reader.cancel 退订、close() 清场、
  * 慢消费者字节背压关流、快照竞态无丢帧、快照脱敏、publish 序号时序、
- * plugin.changed 信封/直传双形状、CustomHelmEvent 透传、非法 payload 显式失败。
+ * plugin.changed 信封/直传双形状、CustomHelmEvent 透传、非法 payload 显式失败、
+ * conversation.upsert / ask.upsert / notification 逐字段严格校验（不静默降级）。
  * 纯内存 fixture（无真实模型、无真实 store；persistSeq 用 callback 捕获）。
  */
 import { strict as assert } from 'node:assert'
@@ -472,6 +473,128 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     const del2 = events[3] as { conversationId: number }
     assert.equal(del1.conversationId, 9)
     assert.equal(del2.conversationId, 10)
+  })
+
+  it('conversation.upsert 非法形状显式拒绝且不推进 seq（缺字段/错类型/可选字段类型不符）', { timeout: 60_000 }, () => {
+    const { hub, persistedSeqs } = makeFixture()
+    hub.publish('notification', { level: 'info', title: 'baseline' })
+    assert.equal(hub.seq, 1)
+    // 非对象。
+    assert.throws(() => hub.publish('conversation.upsert', 'not-a-summary'), /conversation\.upsert|invalid_event/)
+    // 缺核心字段（无 title/status/updatedAt 等）。
+    assert.throws(() => hub.publish('conversation.upsert', { id: 1, profileId: 'assistant' }), /conversation\.upsert/)
+    // 核心字段类型错（status 非五态、id 非整数、tags 混入非 string）。
+    assert.throws(
+      () => hub.publish('conversation.upsert', { ...summary(1, 'x'), status: 'busy' as never }),
+      /conversation\.upsert/,
+    )
+    assert.throws(
+      () => hub.publish('conversation.upsert', { ...summary(1, 'x'), id: 1.5 }),
+      /conversation\.upsert/,
+    )
+    assert.throws(
+      () => hub.publish('conversation.upsert', { ...summary(1, 'x'), tags: ['a', 2 as never] }),
+      /conversation\.upsert/,
+    )
+    // 可选字段存在但类型错（可缺不可错）。
+    assert.throws(
+      () => hub.publish('conversation.upsert', { ...summary(1, 'x'), ownedBy: 'alien' as never }),
+      /conversation\.upsert/,
+    )
+    assert.throws(
+      () => hub.publish('conversation.upsert', { ...summary(1, 'x'), parentConversationId: '7' as never }),
+      /conversation\.upsert/,
+    )
+    assert.throws(
+      () => hub.publish('conversation.upsert', { ...summary(1, 'x'), doing: 42 as never }),
+      /conversation\.upsert/,
+    )
+    // 合法摘要（含可选字段）不受影响。
+    hub.publish('conversation.upsert', {
+      ...summary(4, 'ok'),
+      ownedBy: 'bot',
+      parentConversationId: 1,
+      doing: 'bash: pnpm test',
+    })
+    assert.equal(hub.seq, 2)
+    assert.deepEqual(persistedSeqs, [1, 2])
+  })
+
+  it('ask.upsert 非法形状显式拒绝且不推进 seq（缺字段/错状态/field 形状非法）', { timeout: 60_000 }, () => {
+    const { hub, persistedSeqs } = makeFixture()
+    hub.publish('notification', { level: 'info', title: 'baseline' })
+    const baseAsk = {
+      id: 'ask-1',
+      conversationId: 3,
+      title: '部署审批',
+      fields: [{ name: 'approve', label: '是否批准', type: 'confirm' }],
+      status: 'pending',
+      createdAt: 1_000,
+    }
+    // 非对象。
+    assert.throws(() => hub.publish('ask.upsert', 'oops'), /ask\.upsert|invalid_event/)
+    // 缺核心字段。
+    assert.throws(() => hub.publish('ask.upsert', { id: 'ask-1' }), /ask\.upsert/)
+    // status 非四态。
+    assert.throws(() => hub.publish('ask.upsert', { ...baseAsk, status: 'expired' as never }), /ask\.upsert/)
+    // id 空串 / conversationId 非整数 / fields 空数组。
+    assert.throws(() => hub.publish('ask.upsert', { ...baseAsk, id: '' }), /ask\.upsert/)
+    assert.throws(() => hub.publish('ask.upsert', { ...baseAsk, conversationId: 3.5 }), /ask\.upsert/)
+    assert.throws(() => hub.publish('ask.upsert', { ...baseAsk, fields: [] }), /ask\.upsert/)
+    // field 形状非法（type 非三选一、select 缺 options）。
+    assert.throws(
+      () => hub.publish('ask.upsert', { ...baseAsk, fields: [{ name: 'x', label: 'X', type: 'radio' as never }] }),
+      /ask\.upsert/,
+    )
+    assert.throws(
+      () => hub.publish('ask.upsert', {
+        ...baseAsk,
+        fields: [{ name: 'env', label: '环境', type: 'select' as never }],
+      }),
+      /ask\.upsert/,
+    )
+    // 可选字段类型错（expectedStateSeq 非整数）。
+    assert.throws(
+      () => hub.publish('ask.upsert', { ...baseAsk, expectedStateSeq: '3' as never }),
+      /ask\.upsert/,
+    )
+    assert.equal(hub.seq, 1, '非法输入不推进 seq')
+    assert.deepEqual(persistedSeqs, [1])
+    // 合法 AskSpec（含可选字段）不受影响；answered 终态同样可发布。
+    hub.publish('ask.upsert', { ...baseAsk, expectedStateSeq: 7, ownerPluginId: 'builtin:herdr' })
+    hub.publish('ask.upsert', { ...baseAsk, id: 'ask-2', status: 'answered' as never })
+    assert.equal(hub.seq, 3)
+  })
+
+  it('notification 非法载荷显式拒绝且不推进 seq（不静默修正 level/title）', { timeout: 60_000 }, () => {
+    const { hub, persistedSeqs } = makeFixture()
+    hub.publish('notification', { level: 'info', title: 'baseline' })
+    assert.equal(hub.seq, 1)
+    // 非法 level：不再静默折回 'info'。
+    assert.throws(() => hub.publish('notification', { level: 'fatal', title: 'x' }), /notification|invalid_event/)
+    assert.throws(() => hub.publish('notification', { title: '缺 level' }), /notification/)
+    // 非法 title：不再静默替换为 'notification'。
+    assert.throws(() => hub.publish('notification', { level: 'info' }), /notification/)
+    assert.throws(() => hub.publish('notification', { level: 'info', title: '' }), /notification/)
+    assert.throws(() => hub.publish('notification', { level: 'info', title: 42 as never }), /notification/)
+    // body 存在但非 string。
+    assert.throws(() => hub.publish('notification', { level: 'info', title: 'x', body: 1 as never }), /notification/)
+    // conversationId 存在但非整数。
+    assert.throws(
+      () => hub.publish('notification', { level: 'info', title: 'x', conversationId: 1.5 }),
+      /notification/,
+    )
+    assert.throws(
+      () => hub.publish('notification', { level: 'info', title: 'x', conversationId: '3' as never }),
+      /notification/,
+    )
+    assert.equal(hub.seq, 1, '非法输入不推进 seq')
+    assert.deepEqual(persistedSeqs, [1], '非法输入不持久化序号')
+    // 合法载荷（可选字段省略/携带）不受影响。
+    hub.publish('notification', { level: 'warning', title: '仅标题' })
+    hub.publish('notification', { level: 'error', title: '全字段', body: '详情', conversationId: 9 })
+    assert.equal(hub.seq, 3)
+    assert.deepEqual(persistedSeqs, [1, 2, 3])
   })
 
   it('node.changed 接受信封/直传双形状，保留完整 NodeInfo 字段；removed 透传', { timeout: 60_000 }, () => {

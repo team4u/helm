@@ -13,6 +13,8 @@
  *   HelmError，绝不静默降级；core 类型入参同时接受调用方直接 payload 与完整事件信封
  *   （如 PluginHost emitEvent('plugin.changed', {type, plugin})），信封只拆包不二次嵌套；
  *   conversation.entry / conversation.live / plugin.doc.updated 同样接受双形状并校验字段；
+ *   conversation.upsert / ask.upsert / notification 同样逐字段校验，非法即抛，
+ *   不静默修正（如 notification 的非法 level 不再折回 'info'）；
  * - 未知 type 走 CustomHelmEvent {type, payload} 原样透传，不伪装成 notification；
  * - 背压有界：未决帧数/字节数超上限视为慢客户端，显式关流（客户端凭 snapshot 重连
  *   对齐），绝不静默丢帧；快照 provider 是同步的，无需异步快照系统。
@@ -50,6 +52,122 @@ interface QueuedFrame {
 
 /** 订阅建立到快照冲刷完成之间的未决帧数上限（溢出即慢客户端，关流重连）。 */
 const MAX_PENDING_EVENTS = 512
+
+const CONVERSATION_STATUSES = new Set(['working', 'blocked', 'done', 'idle', 'error'])
+const ASK_STATUSES = new Set(['pending', 'answered', 'cancelled', 'superseded'])
+const ASK_FIELD_TYPES = new Set(['text', 'select', 'confirm'])
+
+/**
+ * conversation.upsert 载荷校验：事件消费方（web live-state / cli / 协议类型）
+ * 实际读取的 ConversationSummary 核心字段；可选字段存在即校验，类型不符同样抛错
+ *（可缺不可错）。
+ */
+function assertConversationSummaryShape(value: unknown): void {
+  if (value === null || typeof value !== 'object') {
+    throw new HelmError('invalid_event', 'conversation.upsert 需要 ConversationSummary 形状的 conversation', 500)
+  }
+  const conv = value as Record<string, unknown>
+  if (
+    !Number.isInteger(conv['id']) ||
+    typeof conv['title'] !== 'string' ||
+    typeof conv['profileId'] !== 'string' ||
+    !Array.isArray(conv['tags']) ||
+    !conv['tags'].every((tag) => typeof tag === 'string') ||
+    typeof conv['cwd'] !== 'string' ||
+    typeof conv['model'] !== 'string' ||
+    typeof conv['thinkingLevel'] !== 'string' ||
+    !CONVERSATION_STATUSES.has(conv['status'] as string) ||
+    !Number.isInteger(conv['stateChangeSeq']) ||
+    !Number.isInteger(conv['completionSeq']) ||
+    typeof conv['unread'] !== 'boolean' ||
+    typeof conv['pinned'] !== 'boolean' ||
+    !Number.isInteger(conv['pendingAskCount']) ||
+    !Number.isFinite(conv['createdAt']) ||
+    !Number.isFinite(conv['updatedAt'])
+  ) {
+    throw new HelmError(
+      'invalid_event',
+      'conversation.upsert 需要 ConversationSummary 形状的 conversation（id/title/profileId/tags/cwd/model/thinkingLevel/status/stateChangeSeq/completionSeq/unread/pinned/pendingAskCount/createdAt/updatedAt）',
+      500,
+    )
+  }
+  if (
+    (conv['parentConversationId'] !== undefined && !Number.isInteger(conv['parentConversationId'])) ||
+    (conv['parentToolCallId'] !== undefined && typeof conv['parentToolCallId'] !== 'string') ||
+    (conv['ownedBy'] !== undefined &&
+      conv['ownedBy'] !== 'human' &&
+      conv['ownedBy'] !== 'helm' &&
+      conv['ownedBy'] !== 'bot') ||
+    (conv['nodeId'] !== undefined && typeof conv['nodeId'] !== 'string') ||
+    (conv['thinkingLevelOverride'] !== undefined && typeof conv['thinkingLevelOverride'] !== 'string') ||
+    (conv['doing'] !== undefined && typeof conv['doing'] !== 'string') ||
+    (conv['lastError'] !== undefined && typeof conv['lastError'] !== 'string')
+  ) {
+    throw new HelmError(
+      'invalid_event',
+      'conversation.upsert 的可选字段（parentConversationId/parentToolCallId/ownedBy/nodeId/thinkingLevelOverride/doing/lastError）存在时类型必须合法',
+      500,
+    )
+  }
+}
+
+/** ask.upsert 载荷校验：AskSpec 核心字段形状（业务级规则由 createAsk 的 validateAskSpec 把守）。 */
+function assertAskSpecShape(value: unknown): void {
+  if (value === null || typeof value !== 'object') {
+    throw new HelmError('invalid_event', 'ask.upsert 需要 AskSpec 形状的 ask', 500)
+  }
+  const ask = value as Record<string, unknown>
+  if (
+    typeof ask['id'] !== 'string' ||
+    ask['id'] === '' ||
+    !Number.isInteger(ask['conversationId']) ||
+    typeof ask['title'] !== 'string' ||
+    ask['title'] === '' ||
+    !Array.isArray(ask['fields']) ||
+    ask['fields'].length === 0 ||
+    !ASK_STATUSES.has(ask['status'] as string) ||
+    !Number.isFinite(ask['createdAt'])
+  ) {
+    throw new HelmError(
+      'invalid_event',
+      'ask.upsert 需要 AskSpec 形状的 ask（id/conversationId/title/fields/status/createdAt）',
+      500,
+    )
+  }
+  for (const field of ask['fields']) {
+    if (
+      field === null ||
+      typeof field !== 'object' ||
+      typeof (field as Record<string, unknown>)['name'] !== 'string' ||
+      typeof (field as Record<string, unknown>)['label'] !== 'string' ||
+      !ASK_FIELD_TYPES.has((field as Record<string, unknown>)['type'] as string)
+    ) {
+      throw new HelmError('invalid_event', 'ask.upsert 的 field 需要 { name: string; label: string; type: text|select|confirm } 形状', 500)
+    }
+    const f = field as Record<string, unknown>
+    if (f['type'] === 'select' && (!Array.isArray(f['options']) || f['options'].length === 0)) {
+      throw new HelmError('invalid_event', 'ask.upsert 的 select 字段需要非空 options（与 createAsk 校验一致）', 500)
+    }
+    if (
+      (f['options'] !== undefined &&
+        (!Array.isArray(f['options']) ||
+          !f['options'].every(
+            (o) => o !== null && typeof o === 'object' && typeof (o as Record<string, unknown>)['label'] === 'string' && typeof (o as Record<string, unknown>)['value'] === 'string',
+          ))) ||
+      (f['secret'] !== undefined && typeof f['secret'] !== 'boolean') ||
+      (f['required'] !== undefined && typeof f['required'] !== 'boolean')
+    ) {
+      throw new HelmError('invalid_event', 'ask.upsert 的 field 可选字段（options/secret/required）存在时类型必须合法', 500)
+    }
+  }
+  if (
+    (ask['ownerPluginId'] !== undefined && typeof ask['ownerPluginId'] !== 'string') ||
+    (ask['description'] !== undefined && typeof ask['description'] !== 'string') ||
+    (ask['expectedStateSeq'] !== undefined && !Number.isInteger(ask['expectedStateSeq']))
+  ) {
+    throw new HelmError('invalid_event', 'ask.upsert 的可选字段（ownerPluginId/description/expectedStateSeq）存在时类型必须合法', 500)
+  }
+}
 /** 流式阶段未读字节上限（默认 1 MiB，可用 maxPendingBytes 覆盖，测试用小值）。 */
 const DEFAULT_MAX_PENDING_BYTES = 1024 * 1024
 
@@ -370,7 +488,8 @@ export class EventHub {
    * 把 (type, payload) 组装为协议 HelmEvent；先 prune 可选 undefined，再整体递归
    * JSON 脱敏（字符串值与字段名都过 redact）。core 类型接受直接 payload 或完整
    * 事件信封；未知 type 走 CustomHelmEvent {type, payload} 原样透传（不伪报成
-   * notification）；任何非法 JSON 值（循环、Date、Map 等）抛 HelmError 不静默降级。
+   * notification）；任何非法 JSON 值（循环、Date、Map 等）或 core 类型字段形状不符
+   * 均抛 HelmError 不静默降级、不静默修正。
    */
   private buildEvent(type: string, payload: unknown): HelmEvent {
     if (typeof type !== 'string' || type.length === 0) {
@@ -386,8 +505,10 @@ export class EventHub {
 
     switch (type) {
       case 'conversation.upsert': {
-        const conversation = (envelope?.['conversation'] ?? record) as ConversationSummary
-        return { type, conversation }
+        const source = (envelope ?? record) as Record<string, unknown> | undefined
+        const conversation = source?.['conversation'] ?? source
+        assertConversationSummaryShape(conversation)
+        return { type, conversation: conversation as ConversationSummary }
       }
       case 'conversation.deleted': {
         const source = (envelope ?? record) as Record<string, unknown> | undefined
@@ -438,8 +559,10 @@ export class EventHub {
         return { type, live: live as ConversationLive }
       }
       case 'ask.upsert': {
-        const ask = (envelope?.['ask'] ?? record) as AskSpec
-        return { type, ask }
+        const source = (envelope ?? record) as Record<string, unknown> | undefined
+        const ask = source?.['ask'] ?? source
+        assertAskSpecShape(ask)
+        return { type, ask: ask as AskSpec }
       }
       case 'ask.resolved': {
         const source = (envelope ?? record) as Record<string, unknown> | undefined
@@ -524,19 +647,28 @@ export class EventHub {
       }
       case 'notification': {
         const source = (envelope ?? record) as Record<string, unknown> | undefined
-        const level =
-          source?.['level'] === 'warning' || source?.['level'] === 'error' ? source['level'] : 'info'
+        const level = source?.['level']
         const title = source?.['title']
         const body = source?.['body']
         const conversationId = source?.['conversationId']
+        if (level !== 'info' && level !== 'warning' && level !== 'error') {
+          throw new HelmError('invalid_event', "notification 需要 level 为 'info' | 'warning' | 'error'", 500)
+        }
+        if (typeof title !== 'string' || title === '') {
+          throw new HelmError('invalid_event', 'notification 需要 title 为非空字符串', 500)
+        }
+        if (body !== undefined && typeof body !== 'string') {
+          throw new HelmError('invalid_event', 'notification 的 body 若有必须为 string', 500)
+        }
+        if (conversationId !== undefined && (typeof conversationId !== 'number' || !Number.isInteger(conversationId))) {
+          throw new HelmError('invalid_event', 'notification 的 conversationId 若有必须为整数', 500)
+        }
         return {
           type,
           level,
-          title: typeof title === 'string' ? title : 'notification',
-          ...(typeof body === 'string' ? { body } : {}),
-          ...(typeof conversationId === 'number' && Number.isInteger(conversationId)
-            ? { conversationId }
-            : {}),
+          title,
+          ...(body !== undefined ? { body } : {}),
+          ...(conversationId !== undefined ? { conversationId } : {}),
         }
       }
       default: {
