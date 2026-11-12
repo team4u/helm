@@ -9,19 +9,18 @@
  * public 插件路由豁免与 routes.ts 的派发共用同一完整路径匹配器
  * （route-match.ts），两处语义不会漂移；路径段非法百分号编码统一 400。
  *
- * 跨站写防护：CORS 仅不加响应头，挡不住 no-cors 的 text/plain 简单 POST。
- * 故带 Origin 的状态变更请求（POST/PUT/PATCH/DELETE）仅允许同源或
- * ALLOWED_CORS_ORIGINS 白名单（本地 3201 前端 dev），否则 403
- * origin_not_allowed；不带 Origin 的 CLI/服务端调用不受影响。
+ * 跨源策略：本地个人助理场景（本机/局域网自用，无浏览器跨站防护
+ * 需求），有意不做跨站限制——带 Origin 的请求一律反射其 Origin 并
+ * 允许凭据（见 http-utils.ts 的 withCors），真实边界由 Bearer token
+ * 鉴权承担；不带 Origin 的 CLI/服务端调用不受影响。
  * JSON 端点同时校验 content-type application/json（charset 可选），
  * 拒绝跨站表单/text-simple POST 冒充 JSON；插件 public 原始路由不强制
- * JSON（webhook 载荷形态由插件自定），Origin 策略同样适用。
+ * JSON（webhook 载荷形态由插件自定）。
  *
  * SSE：kernel.events.response() 由 runtime 提供；HTTP 层不做缓存/转换，
  * 断开（signal abort）由 events 实现负责取消订阅。
  */
 import {
-  ALLOWED_CORS_ORIGINS,
   errorResponse,
   errorToResponse,
   makeJsonRedactor,
@@ -119,12 +118,6 @@ export function createHubHandler(
       // 去尾斜杠归一（/api/conversations/ 等价 /api/conversations）
       const normalized = url.pathname.length > 1 && url.pathname.endsWith('/') ? url.pathname.slice(0, -1) : url.pathname
 
-      // 跨站写防护：带 Origin 的状态变更请求仅放行同源/白名单源
-      // （auth/setup|login 是最高危写入口，必须先于公开放行执行）。
-      if (!originAllowed(request, origin, url)) {
-        return withCors(errorResponse(redactor, 403, 'origin_not_allowed', `Origin 不受信任: ${origin}`), origin)
-      }
-
       const segments = decodeSegments(normalized)
 
       if (PUBLIC_PATHS.has(normalized)) {
@@ -174,22 +167,6 @@ function redactText(kernel: KernelRuntimeLike): (text: string) => string {
   const stash = kernel.stash
   if (stash === undefined) return (text: string) => text
   return (text: string) => stash.redact(text)
-}
-
-/** 同源判定：Origin 与请求目标同 scheme/host/port。 */
-function isSameOrigin(origin: string, url: URL): boolean {
-  try {
-    return new URL(origin).origin === url.origin
-  } catch {
-    return false
-  }
-}
-
-/**
- * 状态变更请求的 Origin 门禁：不限制任何来源，全部放行。
- */
-function originAllowed(_request: Request, _origin: string | null, _url: URL): boolean {
-  return true
 }
 
 /** 是否 JSON 端点：除插件 public 原始路由与产物二进制上传外全部核心端点都是 JSON。 */

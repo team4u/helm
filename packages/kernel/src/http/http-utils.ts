@@ -16,9 +16,6 @@ import { BodyError, readBody } from '@helm/protocol'
 
 export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024 // 1 MiB
 
-/** 允许携带凭据的前端开发源（不限制任何来源）。 */
-export const ALLOWED_CORS_ORIGINS = ['*']
-
 /** 无 stash（未接机密服务）时的恒等脱敏：值本身已是安全产物。 */
 const identityRedact = (text: string): string => text
 
