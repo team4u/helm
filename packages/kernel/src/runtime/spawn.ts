@@ -27,7 +27,9 @@ import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { AgentSpawnRequest, ConversationPatch, ConversationSummary } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import type { Harness } from '@earendil-works/pi-durable'
+import type { Models } from '@earendil-works/pi-ai'
 import { validateOrThrow } from '../plugins/schema.js'
+import { clampThinkingLevelForModel } from './models.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { runGate } from './tools.js'
 
@@ -60,6 +62,11 @@ export interface NativeSpawnDeps extends HelmToolDeps {
   /** 全局默认模型 'provider/model'（未配置时抛 HelmError）。 */
   resolveModel(): { provider: string; modelId: string }
   /**
+   * 当前 Models 集合（思考档位能力收敛用；宿主注入 ModelRegistry.models）。
+   * 缺省不收敛（能力未知不破坏契约）。
+   */
+  modelsForClamp?(): Models | undefined
+  /**
    * 模型禁用预检（ModelRegistry.assertModelEnabled 注入）：解析出最终
    * resolvedModel 后、真实创建子会话前必须调用（409 model_disabled），
    * 绝不让原生 spawn 绕过禁用约束。
@@ -74,7 +81,9 @@ export interface NativeSpawnDeps extends HelmToolDeps {
    * HelmError('not_found')。childCwd 为子会话将使用的实际 cwd（gate 也用它）。
    * modelMirror 为本子会话最终生效的模型（'provider/model'，写入镜像；空串 = 未配置）。
    * tags 为子会话标签（宿主决定；原生 spawn 不打业务角色标签）。
-   * thinkingLevel 为实际 SDK 使用的档位，防止登记时重新读取继承源产生分歧。
+   * thinkingLevel 为实际 SDK 使用的档位（已按目标模型能力收敛），防止登记时
+   * 重新读取继承源产生分歧。thinkingLevelOverride 为收敛后的显式覆盖
+   *（request.effort 未提供时 undefined，镜像继承链语义）。
    */
   registerChildConversation(
     childId: number,
@@ -85,6 +94,7 @@ export interface NativeSpawnDeps extends HelmToolDeps {
     tags: string[],
     thinkingLevel?: string,
     nodeId?: string,
+    thinkingLevelOverride?: string,
   ): Promise<void>
   /**
    * resume 续接时把子会话的 parentToolCallId 更新为本次父会话工具调用 ID
@@ -318,7 +328,11 @@ async function runNativeSpawnTurn(
       const createModelRef = `${resolvedModel.provider}/${resolvedModel.modelId}`
       const extension = structured ? buildStructuredOutputExtension(deps.harness) : undefined
       if (extension) deps.installChildExtension(extension)
-      const thinkingLevel = request.effort ?? profile.thinkingLevel ?? deps.resolveThinkingLevel?.()
+      const inheritedLevel = request.effort ?? profile.thinkingLevel ?? deps.resolveThinkingLevel?.()
+      const modelsInstance = deps.modelsForClamp?.()
+      const thinkingLevel = modelsInstance
+        ? clampThinkingLevelForModel(modelsInstance, resolvedModel, inheritedLevel)
+        : inheritedLevel
       const agentChange: AgentChange = {
         model: { provider: resolvedModel.provider, modelId: resolvedModel.modelId },
         cwd: childCwd,
@@ -342,6 +356,7 @@ async function runNativeSpawnTurn(
         [],
         thinkingLevel,
         targetNodeId,
+        request.effort !== undefined ? thinkingLevel : undefined,
       )
       // onResolved 在配置全部落定（创建 + 镜像登记）后回传实际元数据。
       request.onResolved?.({

@@ -137,7 +137,7 @@ export async function ensureInitialConversation(deps: {
   store: HelmStore
   tracker: ConversationTracker
   conversations: {
-    resolveEffectiveThinkingLevel(levelOverride?: string, profileId?: string): Promise<string | undefined>
+    resolveEffectiveThinkingLevel(levelOverride?: string, profileId?: string, modelRef?: { provider: string; modelId: string }): Promise<string | undefined>
     resolveEffectiveModel(modelOverride?: string, profileId?: string): Promise<string | undefined>
   }
   modelsRegistry: {
@@ -145,9 +145,9 @@ export async function ensureInitialConversation(deps: {
   }
   cwd: string
 }): Promise<void> {
-  const thinking = await deps.conversations.resolveEffectiveThinkingLevel(undefined, 'assistant')
   const effective = await deps.conversations.resolveEffectiveModel(undefined, 'assistant')
   const modelRef = effective ? deps.modelsRegistry.parseModelRefOrThrow(effective) : undefined
+  const thinking = await deps.conversations.resolveEffectiveThinkingLevel(undefined, 'assistant', modelRef)
   const root = await deps.harness.root(BACKGROUND_CONTEXT, {
     agent: {
       ...(modelRef ? { model: { provider: modelRef.provider, modelId: modelRef.modelId } } : {}),

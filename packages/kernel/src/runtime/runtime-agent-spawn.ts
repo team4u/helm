@@ -169,6 +169,7 @@ export class RuntimeAgentSpawn {
             tracker: { getLastAssistantText: (id) => this.deps.tracker.getLastAssistantText(id) },
             defaultModel: this.deps.modelsRegistry.defaultModel,
             defaultThinkingLevel: this.deps.modelsRegistry.defaultThinkingLevel,
+            models: () => this.deps.modelsRegistry.models,
             assertModelEnabled: (provider, modelId) => this.deps.modelsRegistry.assertModelEnabled(provider, modelId),
             agentSessions: this.agentSessions,
             resolvedAttachments,
@@ -184,7 +185,7 @@ export class RuntimeAgentSpawn {
             installExtension: (extension) => {
               this.deps.registry.install(extension as never)
             },
-            registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, parentToolCallId) => {
+            registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, parentToolCallId, thinkingLevelOverride) => {
               const profile = await this.deps.conversations.readProfile(profileId)
               const now = Date.now()
               this.deps.store.upsertConv({
@@ -198,7 +199,9 @@ export class RuntimeAgentSpawn {
                 cwd: childCwd,
                 model: modelMirror,
                 thinkingLevel: thinkingLevel ?? '',
-                thinkingLevelOverride: finalRequest.effort,
+                // 收敛后的显式覆盖（原生执行行已按目标模型能力 clamp）；
+                // 未显式指定时保持继承链语义（不存 override）。
+                ...(thinkingLevelOverride !== undefined ? { thinkingLevelOverride } : {}),
                 ...(finalRequest.model !== undefined && finalRequest.model !== '' ? { modelOverride: finalRequest.model } : {}),
                 unread: false,
                 pinned: false,

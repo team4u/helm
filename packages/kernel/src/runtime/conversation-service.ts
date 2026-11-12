@@ -7,7 +7,7 @@
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness, AgentChange } from '@earendil-works/pi-durable'
-import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
+import type { ModelThinkingLevel, Models } from '@earendil-works/pi-ai'
 import type {
   ArtifactMetadata,
   ConversationAttachmentRef,
@@ -30,6 +30,7 @@ import {
   type RewindInterval,
 } from './runtime-helpers.js'
 import { toConversationEntry } from './entries.js'
+import { clampThinkingLevelForModel } from './models.js'
 import { THINKING_LEVELS } from './spawn.js'
 import type { HelmStore } from './store.js'
 import { ConversationAttachments } from './conversation-attachments.js'
@@ -71,6 +72,8 @@ export interface ConversationServiceOptions {
   /** 模型解析链（默认模型）。 */
   readonly defaultModel: () => string | undefined
   readonly defaultThinkingLevel: () => string | undefined
+  /** 当前 Models 集合（思考档位能力收敛用）。 */
+  readonly models: () => Models
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
   /** 模型禁用预检（ModelRegistry.assertModelEnabled；禁用模型拒绝选用与提交）。 */
   readonly assertModelEnabled: (provider: string, modelId: string) => void
@@ -156,6 +159,7 @@ export class ConversationService {
       store: this.store,
       events: this.events,
       profilesSvc: this.profilesSvc,
+      models: this.o.models,
       defaultModel: this.o.defaultModel,
       defaultThinkingLevel: this.o.defaultThinkingLevel,
       parseModelRefOrThrow: this.o.parseModelRefOrThrow,
@@ -228,8 +232,8 @@ export class ConversationService {
     return this.profileAlignment.resolveEffectiveModel(override, profileId)
   }
 
-  async resolveEffectiveThinkingLevel(override: string | undefined, profileId: string): Promise<string | undefined> {
-    return this.profileAlignment.resolveEffectiveThinkingLevel(override, profileId)
+  async resolveEffectiveThinkingLevel(override: string | undefined, profileId: string, modelRef?: { provider: string; modelId: string }): Promise<string | undefined> {
+    return this.profileAlignment.resolveEffectiveThinkingLevel(override, profileId, modelRef)
   }
 
   async alignConversationModel(id: number, emitEvent = false): Promise<void> {
@@ -281,7 +285,7 @@ export class ConversationService {
         { nodeId },
       )
     }
-    const effectiveThinking = await this.resolveEffectiveThinkingLevel(undefined, profileId)
+    const effectiveThinking = await this.resolveEffectiveThinkingLevel(undefined, profileId, effectiveRef)
     const conv = await this.harness.createConversation(
       {
         ownership: { kind: 'ownerless' },
@@ -356,7 +360,12 @@ export class ConversationService {
     const nextProfileId = patch.profileId ?? meta.profileId
     const effectiveModel = await this.resolveEffectiveModel(nextOverride, nextProfileId)
     const effectiveRef = effectiveModel ? this.o.parseModelRefOrThrow(effectiveModel) : undefined
-    const nextThinking = await this.resolveEffectiveThinkingLevel(nextThinkingOverride, nextProfileId)
+    // 模型/Profile 变化后：显式思考覆盖同样按目标模型能力收敛到 SDK
+    // 可用档位（单一收口 clampThinkingLevelForModel；能力未知时透传不破坏契约）。
+    const clampedOverride = effectiveRef
+      ? clampThinkingLevelForModel(this.o.models(), effectiveRef, nextThinkingOverride)
+      : nextThinkingOverride
+    const nextThinking = await this.resolveEffectiveThinkingLevel(clampedOverride, nextProfileId, effectiveRef)
     const configureChange: AgentChange = {
       ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
       model: effectiveRef ?? null,
@@ -375,7 +384,7 @@ export class ConversationService {
       ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
       model: effectiveModel ?? '',
       thinkingLevel: nextThinking ?? '',
-      thinkingLevelOverride: nextThinkingOverride,
+      thinkingLevelOverride: clampedOverride,
       ...(nextOverride !== undefined ? { modelOverride: nextOverride } : { modelOverride: undefined }),
       ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
       ...(patch.unread !== undefined ? { unread: patch.unread } : {}),

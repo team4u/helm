@@ -310,6 +310,7 @@ export function assembleRuntimeServices(
     isClosed: () => runtime.isClosing,
     defaultModel: () => modelsRegistry.defaultModel,
     defaultThinkingLevel: () => modelsRegistry.defaultThinkingLevel,
+    models: () => modelsRegistry.models,
     parseModelRefOrThrow: (ref) => modelsRegistry.parseModelRefOrThrow(ref),
     assertModelEnabled: (provider, modelId) => modelsRegistry.assertModelEnabled(provider, modelId),
   })

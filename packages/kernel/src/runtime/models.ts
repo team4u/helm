@@ -18,6 +18,7 @@
 import { anthropicMessagesApi } from '@earendil-works/pi-ai/api/anthropic-messages.lazy'
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy'
 import {
+  clampThinkingLevel as clampToModelLevels,
   createModels,
   createProvider,
   getSupportedThinkingLevels,
@@ -25,6 +26,7 @@ import {
   type AuthResult,
   type Model,
   type ModelInputModality,
+  type ModelThinkingLevel,
   type Models,
   type ModelsStore,
   type Provider,
@@ -226,4 +228,40 @@ export function requireModelRef(ref: string | undefined): ModelRefParts {
     )
   }
   return parseModelRef(ref)
+}
+
+/**
+ * 按目标模型能力收敛思考档位（setModel → setThinkingLevel 的内核收口）。
+ *
+ * 事实依据（pi-ai 1.5.0 源码）：
+ * - `getSupportedThinkingLevels`：reasoning:false → ['off']；reasoning:true 无
+ *   thinkingLevelMap → ['off'..'high']（xhigh/max 必须显式 map 才可用）；
+ * - `clampThinkingLevel`：不支持的档位按 SDK 可用档位序列就近收敛
+ *   （先向上找最近可用档，再向下找）。
+ *
+ * 透传豁免（能力未知不破坏契约）：
+ * - 模型不在当前 Models 集合（faux 测试模型、目录刷新窗口、外部注入集合）
+ *   时原样返回——helm 不虚构能力，绝不因查无元数据改写用户配置；
+ * - `reasoning:false` 且无 `thinkingLevelMap` 的模型不视为已声明能力边界，
+ *   档位原样透传，由底层适配器决定实际参数行为。
+ *
+ * 空串（未配置）原样返回：不把「跟随继承链」误变成显式 off。
+ */
+export function clampThinkingLevelForModel(
+  models: Models,
+  modelRef: ModelRefParts | undefined,
+  level: string | undefined,
+): string | undefined {
+  if (modelRef === undefined || level === undefined || level === '') return level
+  const model = models.getModel(modelRef.provider, modelRef.modelId)
+  if (model === undefined) return level
+  // 能力声明判定：显式 thinkingLevelMap 是唯一可信边界；reasoning:true 且
+  // 无 map 的模型按 pi-ai 缺省档位（off..high）收敛（例如 max → high）。
+  if (model.reasoning !== true && model.thinkingLevelMap === undefined) return level
+  const supported = getSupportedThinkingLevels(model)
+  if (supported.includes(level as ModelThinkingLevel)) return level
+  // SDK off 语义（generation: thinkingLevel==='off' 不发 reasoning 参数）对任何
+  // 模型都可满足，不被 clamp 抬升到最小可用档；用户显式关闭思考的意图保留。
+  if (level === 'off') return 'off'
+  return clampToModelLevels(model, level as ModelThinkingLevel)
 }

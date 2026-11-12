@@ -26,7 +26,7 @@ import {
 } from '../ui/DropdownMenu.js'
 import { Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '../ui/Popover.js'
 import { Select, type SelectOption } from '../ui/Select.js'
-import { Tabs, TabsList, TabsTrigger } from '../ui/Tabs.js'
+import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { AskDock } from './AskDock.js'
 import { CompletionPopover } from './CompletionPopover.js'
@@ -163,9 +163,20 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
   const currentModel = store.models.find((model) => model.id === conversation.model)
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
   const supportsThinking = currentLevels.some((level) => level !== 'off')
-  // 当前生效档位：显式覆盖优先，否则会话继承的默认档位；off 或不支持时不展示
-  const activeLevel = conversation.thinkingLevelOverride ?? conversation.thinkingLevel ?? 'off'
-  const showLevel = supportsThinking && activeLevel !== 'off'
+  // 徽章以内核生效档位（conversation.thinkingLevel）为唯一权威：目标目录明确
+  // 不支持该值时隐藏徽章（off / 目录缺失同样隐藏），不用 override 抢优先。
+  const activeLevel = conversation.thinkingLevel
+  const showLevel = supportsThinking && activeLevel !== '' && activeLevel !== 'off' && currentLevels.includes(activeLevel)
+  // 控件选中态优先级：受支持的 override > 旧 override 不被目录支持但生效档
+  // 受支持时选生效档 > 「默认」（跟随继承链；无 override 恒选默认）。
+  const selectedLevel =
+    conversation.thinkingLevelOverride !== undefined
+      ? currentLevels.includes(conversation.thinkingLevelOverride)
+        ? conversation.thinkingLevelOverride
+        : activeLevel !== '' && activeLevel !== 'off' && currentLevels.includes(activeLevel)
+          ? activeLevel
+          : ''
+      : ''
 
   return (
     <span className="composer-picker-root" ref={rootRef}>
@@ -247,40 +258,12 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
                   思考档位
                   <span style={{ color: 'var(--fg-subtle)' }}>{shortName}</span>
                 </div>
-                <Tabs
-                  value={conversation.thinkingLevelOverride || ''}
-                  onValueChange={(val) => {
-                    if (val === '') {
-                      void pickThinking('')
-                    } else {
-                      const level = val
-                      void pickThinking(level)
-                    }
-                  }}
-                  variant="segmented"
-                  style={{ width: '100%' }}
-                >
-                  <TabsList className="segmented-control composer-thinking-row" aria-label="思考档位">
-                    <TabsTrigger
-                      value=""
-                      disabled={pending}
-                      title="跟随模型 / Profile 默认档位"
-                      onClick={() => void pickThinking('')}
-                    >
-                      默认
-                    </TabsTrigger>
-                    {currentLevels.map((level) => (
-                      <TabsTrigger
-                        key={level}
-                        value={level}
-                        disabled={pending}
-                        onClick={() => void pickThinking(level)}
-                      >
-                        {level}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
-                </Tabs>
+                <ThinkingLevelControl
+                  value={selectedLevel}
+                  levels={currentLevels}
+                  disabled={pending}
+                  onPick={(level) => void pickThinking(level)}
+                />
               </>
             ) : null}
           </PopoverContent>

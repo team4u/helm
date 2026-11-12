@@ -7,6 +7,7 @@
  * NativeSpawnDeps（单一事实来源），文档在此逐端口说明宿主语义。
  */
 import type { Harness } from '@earendil-works/pi-durable'
+import type { Models } from '@earendil-works/pi-ai'
 import type { AgentSpawnRequest, ConversationAttachmentRef, ConversationPatch, ConversationSummary } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import type { Profile } from '../services/index.js'
@@ -38,6 +39,8 @@ export interface SpawnHostSource {
   }
   readonly defaultModel: string | undefined
   readonly defaultThinkingLevel: string | undefined
+  /** 当前 Models 集合（思考档位能力收敛用；缺省不收敛）。 */
+  readonly models?: () => Models
   /** 模型禁用预检（ModelRegistry.assertModelEnabled；创建子会话前拒绝禁用模型）。 */
   assertModelEnabled?(provider: string, modelId: string): void
   readonly agentSessions: Map<string, number>
@@ -70,6 +73,8 @@ export interface SpawnHostSource {
     thinkingLevel: string | undefined,
     nodeId: string | undefined,
     parentToolCallId: string | undefined,
+    /** 收敛后的显式思考档位覆盖（request.effort 未提供时 undefined）。 */
+    thinkingLevelOverride: string | undefined,
   ): Promise<void>
   /** resume 续接时更新子会话 parentToolCallId（镜像 + 广播）。 */
   bindChildToolCall(childId: number, parentToolCallId: string): void
@@ -104,6 +109,9 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
       ? { assertModelEnabled: (provider: string, modelId: string) => source.assertModelEnabled!(provider, modelId) }
       : {}),
     resolveThinkingLevel: () => source.defaultThinkingLevel,
+    ...(source.models !== undefined
+      ? { modelsForClamp: source.models }
+      : {}),
     agentSessions: source.agentSessions,
     assertNodeAvailable: (nodeId) => {
       if (!source.isNodeOnline(nodeId)) {
@@ -114,10 +122,10 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
       source.resolvedAttachments !== undefined
         ? async () => source.buildAttachmentBlock(source.resolvedAttachments!)
         : undefined,
-    registerChildConversation: (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId) =>
+    registerChildConversation: (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, thinkingLevelOverride) =>
       source.registerChildConversation(
         childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId,
-        finalRequest.parentToolCallId,
+        finalRequest.parentToolCallId, thinkingLevelOverride,
       ),
     bindChildToolCall: (childId, parentToolCallId) => source.bindChildToolCall(childId, parentToolCallId),
     resolveProfile: async (profileId) => {

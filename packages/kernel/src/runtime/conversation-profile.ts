@@ -11,10 +11,11 @@
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { AgentChange, Harness } from '@earendil-works/pi-durable'
-import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
+import type { ModelThinkingLevel, Models } from '@earendil-works/pi-ai'
 import type { ConversationSummary } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import { assertProfileId, type Profile, type ProfileService } from '../services/index.js'
+import { clampThinkingLevelForModel } from './models.js'
 import type { EventHub } from './events.js'
 import type { HelmStore } from './store.js'
 
@@ -23,6 +24,8 @@ export interface ConversationProfileHost {
   readonly store: HelmStore
   readonly events: EventHub
   readonly profilesSvc: ProfileService
+  /** 当前 Models 集合（能力收敛用；热重载后读到最新集合）。 */
+  readonly models: () => Models
   readonly defaultModel: () => string | undefined
   readonly defaultThinkingLevel: () => string | undefined
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
@@ -66,11 +69,16 @@ export class ConversationProfileService {
     return override || profile.model || this.host.defaultModel()
   }
 
-  /** 思考档位覆盖 > Profile.thinkingLevel > 全局默认。 */
-  async resolveEffectiveThinkingLevel(override: string | undefined, profileId: string): Promise<string | undefined> {
+  /**
+   * 思考档位覆盖 > Profile.thinkingLevel > 全局默认；再按生效模型能力
+   * 收敛到 SDK 可用档位（不支持的档位就近取可用档）。
+   * 未配置（undefined/空串）原样返回，不误变成显式 off。
+   */
+  async resolveEffectiveThinkingLevel(override: string | undefined, profileId: string, modelRef?: { provider: string; modelId: string }): Promise<string | undefined> {
     const profile = await this.readProfile(profileId)
     if (!profile) throw new HelmError('profile_not_found', `会话引用的 Profile 不存在：${profileId}`, 404, { profileId })
-    return override || profile.thinkingLevel || this.host.defaultThinkingLevel()
+    const inherited = override || profile.thinkingLevel || this.host.defaultThinkingLevel()
+    return clampThinkingLevelForModel(this.host.models(), modelRef, inherited)
   }
 
   async withConversationChange<T>(id: number, change: () => Promise<T>): Promise<T> {
@@ -90,8 +98,11 @@ export class ConversationProfileService {
       const meta = this.host.store.getConv(id)
       if (!meta) return
       const effective = await this.resolveEffectiveModel(meta.modelOverride, meta.profileId)
-      const thinking = await this.resolveEffectiveThinkingLevel(meta.thinkingLevelOverride, meta.profileId)
       const ref = effective ? this.host.parseModelRefOrThrow(effective) : undefined
+      // 对齐同样要持久化显式覆盖的收敛结果。否则 SDK/摘要虽已收敛，
+      // 镜像仍保留原覆盖值，下一次对齐会再次出现「生效值与覆盖值不一致」。
+      const clampedOverride = clampThinkingLevelForModel(this.host.models(), ref, meta.thinkingLevelOverride)
+      const thinking = await this.resolveEffectiveThinkingLevel(clampedOverride, meta.profileId, ref)
       const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
       if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
       const agent = await conversation.agent(BACKGROUND_CONTEXT)
@@ -103,13 +114,19 @@ export class ConversationProfileService {
       }
       const sdkChanged = Object.keys(change).length > 0
       if (sdkChanged) await conversation.configure(change, BACKGROUND_CONTEXT)
-      if (!sdkChanged && meta.model === (effective ?? '') && meta.thinkingLevel === (thinking ?? '')) return
+      if (
+        !sdkChanged &&
+        meta.model === (effective ?? '') &&
+        meta.thinkingLevel === (thinking ?? '') &&
+        meta.thinkingLevelOverride === clampedOverride
+      ) return
       const latest = this.host.store.getConv(id)
       if (!latest) return
       this.host.store.upsertConv({
         ...latest,
         model: effective ?? '',
         thinkingLevel: thinking ?? '',
+        thinkingLevelOverride: clampedOverride,
         stateChangeSeq: latest.stateChangeSeq + 1,
         updatedAt: Date.now(),
       })

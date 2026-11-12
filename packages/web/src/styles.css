@@ -2730,6 +2730,12 @@ button,
   text-align: center;
 }
 .composer-thinking-row .btn { flex-shrink: 0; min-height: 32px; }
+/* 角色抽屉表单内思考档位分段按钮组：复用分段原语，仅收敛边距与全宽 */
+.profile-thinking-row {
+  margin: 2px 0 4px;
+  width: 100%;
+}
+.profile-thinking-row .segmented-control-btn { flex: 1; text-align: center; }
 
 .composer-toolbar-left,
 .composer-toolbar-right {

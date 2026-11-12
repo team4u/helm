@@ -17,6 +17,7 @@ const { Tabs, TabsList, TabsTrigger, TabsContent, SegmentedControl } = await imp
 
 const stylesCss = readFileSync(join(PKG_ROOT, 'src/styles.css'), 'utf8')
 const composerSource = readFileSync(join(PKG_ROOT, 'src/conversation/Composer.tsx'), 'utf8')
+const thinkingControlSource = readFileSync(join(PKG_ROOT, 'src/ui/ThinkingLevelControl.tsx'), 'utf8')
 const artifactModalSource = readFileSync(join(PKG_ROOT, 'src/conversation/ArtifactPreviewModal.tsx'), 'utf8')
 const workbenchSource = readFileSync(join(PKG_ROOT, 'src/conversation/WorkbenchDrawer.tsx'), 'utf8')
 const profileDrawerSource = readFileSync(join(PKG_ROOT, 'src/profiles/ProfileDetailDrawer.tsx'), 'utf8')
@@ -400,9 +401,11 @@ test('设计系统契约：styles.css 完美映射 [data-state=active] 到 .segm
 })
 
 test('源码级重构契约：5 大业务组件均已迁移至 Radix Tabs / SegmentedControl', { timeout: 60_000 }, () => {
-  // 1. Composer 思考档位已使用 Tabs / SegmentedControl
-  assert.match(composerSource, /import\s*\{[^}]*Tabs[^}]*\}\s*from\s*['"]\.\.\/ui\/Tabs(?:\.js)?['"]/)
-  assert.match(composerSource, /<Tabs[\s\S]*?<TabsList[^>]*composer-thinking-row[\s\S]*?<TabsTrigger/)
+  // 1. Composer 思考档位：共享 ThinkingLevelControl（基于 Tabs segmented 原语）
+  assert.match(composerSource, /import\s*\{[^}]*ThinkingLevelControl[^}]*\}\s*from\s*['"]\.\.\/ui\/ThinkingLevelControl(?:\.js)?['"]/)
+  assert.match(thinkingControlSource, /import\s*\{[^}]*Tabs[^}]*\}\s*from\s*['"]\.\/Tabs(?:\.js)?['"]/)
+  assert.match(thinkingControlSource, /<Tabs[\s\S]*?<TabsList[^>]*segmented-control \$\{className\}[\s\S]*?<TabsTrigger/)
+  assert.match(thinkingControlSource, /className = 'composer-thinking-row'/)
 
   // 2. ArtifactPreviewModal 源码/富文本切换已使用 SegmentedControl
   assert.match(artifactModalSource, /import\s*\{[^}]*SegmentedControl[^}]*\}\s*from\s*['"]\.\.\/ui\/Tabs(?:\.js)?['"]/)

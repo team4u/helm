@@ -461,6 +461,49 @@ test('ProfileDetailDrawer：新建角色模式与可编辑 ID 渲染断言', { t
   assert.doesNotMatch(html, EMOJI_REGEX, '新建角色抽屉渲染输出严禁含有 Emoji')
 })
 
+test('ProfileDetailDrawer：思考档位随所选模型展示共享分段按钮组', { timeout: 60_000 }, () => {
+  // 显式绑定 claude-3-7-sonnet（thinkingLevels: off/low/medium/high）
+  const store = makeTestStore({ models: mockModels, skills: mockSkills })
+  const html = renderToStaticMarkup(
+    e(
+      HelmStoreContext.Provider,
+      { value: store },
+      e(ProfileDetailDrawer, {
+        profile: { ...mockProfiles[3]!, model: 'claude-3-7-sonnet', defaultModel: 'claude-3-7-sonnet' },
+        isNew: false,
+        open: true,
+        inline: true,
+        onClose: () => {},
+      }),
+    ),
+  )
+  assert.match(html, /思考档位/)
+  // 复用会话输入框同款分段按钮组（composer-thinking-row 原语）
+  assert.match(html, /composer-thinking-row/)
+  assert.match(html, /segmented-control-btn/)
+  // 首项恒为「默认」（跟随全局缺省），各档位来自模型目录
+  assert.match(html, /默认/)
+  assert.match(html, /medium/)
+  assert.doesNotMatch(html, EMOJI_REGEX)
+
+  // 未绑定模型的表单：跟随全局缺省，不渲染档位按钮组
+  const unbound = renderToStaticMarkup(
+    e(
+      HelmStoreContext.Provider,
+      { value: store },
+      e(ProfileDetailDrawer, {
+        profile: { ...mockProfiles[3]!, model: undefined, defaultModel: undefined },
+        isNew: false,
+        open: true,
+        inline: true,
+        onClose: () => {},
+      }),
+    ),
+  )
+  assert.match(unbound, /未绑定模型时跟随全局缺省思考档位/)
+  assert.doesNotMatch(unbound, /segmented-control-btn/)
+})
+
 // ---------------------------------------------------------------------------
 // 4. ProfileCenter 一级全屏中心 SSR 渲染测试
 // ---------------------------------------------------------------------------

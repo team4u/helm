@@ -5,6 +5,7 @@ import { canConfigureSessionEnv, envDraftError, envDraftOnNodeChange, envDraftUn
 
 // 读取源码后统一换行（Windows checkout 下 autocrlf 会产生 CRLF，正则不得依赖 LF）
 const source = readFileSync(new URL('../src/conversation/Composer.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const thinkingControlSource = readFileSync(new URL('../src/ui/ThinkingLevelControl.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
@@ -222,20 +223,20 @@ test('工具栏仅保留左右两组，模型归入左组，避免三个子项�
   const leftGroup = source.slice(source.indexOf('className="composer-toolbar-left"'), source.indexOf('className="composer-toolbar-right"'))
   assert.match(leftGroup, /<ModelPicker conversation=\{conversation\} \/>/)
   assert.match(source, /className="composer-model-label"/)
-  // 思考档位已并入模型浮层，工具栏不再有独立 <select>
+  // 思考档位已并入模型浮层，工具栏不再有独立 <select>；分段按钮组收敛到共享 ThinkingLevelControl
   assert.doesNotMatch(source, /composer-thinking-select/)
-  assert.match(source, /composer-thinking-row/)
+  assert.match(source, /<ThinkingLevelControl/)
+  assert.match(thinkingControlSource, /composer-thinking-row/)
   assert.match(styles, /\.composer-pills \{[^}]*overflow-x: auto;/)
   assert.match(styles, /\.composer-toolbar-right \{ justify-content: flex-end;/)
 })
 
 test('思考档位合并进模型浮层：按钮组切换，当前档位随模型短名展示', { timeout: 60_000 }, () => {
   assert.match(source, /composer-model-level/)
-  assert.match(source, /void pickThinking\(''\)/)
-  assert.match(source, /void pickThinking\(level\)/)
-  // 浮层内档位行为分段按钮组（默认 + 各档位），主按钮态表达当前选择
-  const popoverSlice = source.slice(source.indexOf('composer-thinking-row'))
-  assert.match(popoverSlice, /跟随模型 \/ Profile 默认档位/)
+  assert.match(source, /onPick=\{\(level\) => void pickThinking\(level\)\}/)
+  // 浮层内档位行为分段按钮组（默认 + 各档位），主按钮态表达当前选择（共享 ThinkingLevelControl）
+  assert.match(thinkingControlSource, /跟随模型 \/ Profile 默认档位/)
+  assert.match(thinkingControlSource, /composer-thinking-row/)
 })
 
 test('textarea 单行起步并自动长高：rows=1，发完回归单行', { timeout: 60_000 }, () => {

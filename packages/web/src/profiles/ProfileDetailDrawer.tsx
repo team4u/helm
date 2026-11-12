@@ -27,6 +27,7 @@ import {
 import { PluginSlot } from '../ui/PluginSlot.js'
 import { Select, type SelectOption } from '../ui/Select.js'
 import { Switch } from '../ui/Switch.js'
+import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
 import { PROFILE_DETAIL_SECTION_SLOT, PROFILE_STARTERS_MAX_ITEMS } from '@helm/protocol'
 
 export interface ProfileDetailDrawerProps {
@@ -44,12 +45,13 @@ interface FormState {
   name: string
   description: string
   model: string
+  thinkingLevel: string
   cwd: string
   system: string
   useAllSkills: boolean
   selectedSkillIds: string[]
   starters: StarterDraft[]
-  /** 保存时未暴露字段原样回传：nodeId/runtime/tags/thinkingLevel 等不得因表单裁剪而丢。 */
+  /** 保存时未暴露字段原样回传：nodeId/runtime/tags 等不得因表单裁剪而丢。 */
   source: Profile | null
 }
 
@@ -60,6 +62,7 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
       name: '',
       description: '',
       model: '',
+      thinkingLevel: '',
       cwd: '',
       system: '',
       useAllSkills: true,
@@ -74,6 +77,7 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
     name: profile.name ?? '',
     description: profile.description ?? '',
     model: resolveProfileModel(profile) ?? '',
+    thinkingLevel: profile.thinkingLevel ?? '',
     cwd: profile.cwd ?? '',
     system: profile.system ?? '',
     useAllSkills: profile.skills === undefined,
@@ -141,6 +145,7 @@ export function ProfileDetailDrawer({
               name: detail.name ?? prev.name,
               description: detail.description ?? prev.description,
               model: resolveProfileModel(detail) ?? prev.model,
+              thinkingLevel: detail.thinkingLevel ?? '',
               cwd: detail.cwd ?? prev.cwd,
               system: detail.system ?? prev.system,
               useAllSkills: detail.skills === undefined,
@@ -171,6 +176,7 @@ export function ProfileDetailDrawer({
         form.name.trim() !== '' ||
         form.description.trim() !== '' ||
         form.model.trim() !== '' ||
+        form.thinkingLevel !== '' ||
         form.cwd.trim() !== '' ||
         form.system.trim() !== '' ||
         !form.useAllSkills ||
@@ -183,6 +189,7 @@ export function ProfileDetailDrawer({
     if (form.name !== baseline.name) return true
     if (form.description !== baseline.description) return true
     if (form.model !== baseline.model) return true
+    if (form.thinkingLevel !== baseline.thinkingLevel) return true
     if (form.cwd !== baseline.cwd) return true
     if (form.system !== baseline.system) return true
     if (form.useAllSkills !== baseline.useAllSkills) return true
@@ -206,6 +213,16 @@ export function ProfileDetailDrawer({
   const modelOptions = useMemo<SelectOption<string>[]>(() => {
     return buildProfileModelOptions(store.models ?? [], form.model)
   }, [store.models, form.model])
+
+  // 所选模型支持的思考档位：未绑定模型时无档位（跟随全局缺省）；
+  // 目录缺失（模型未配置/外部）时无档位可选，仅保留既有值提示。
+  const profileThinkingLevels = useMemo(() => {
+    const found = (store.models ?? []).find((m) => m.id === form.model)
+    return found?.thinkingLevels ?? []
+  }, [store.models, form.model])
+  const profileThinkingSupported = profileThinkingLevels.some((level) => level !== 'off')
+  const profileThinkingLevelUnsupported =
+    form.thinkingLevel !== '' && !profileThinkingLevels.includes(form.thinkingLevel)
 
   // 可用技能列表
   const availableSkills = store.skills ?? []
@@ -255,6 +272,8 @@ export function ProfileDetailDrawer({
         skills: form.useAllSkills ? undefined : form.selectedSkillIds,
         ...(form.name.trim() !== '' ? { name: form.name.trim() } : {}),
         ...(form.model.trim() !== '' ? { model: form.model.trim() } : {}),
+        // 整体替换契约：thinkingLevel 必须显式提交（省略即清除，跟随全局缺省）
+        ...(form.thinkingLevel !== '' ? { thinkingLevel: form.thinkingLevel } : {}),
         ...(form.cwd.trim() !== '' ? { cwd: form.cwd.trim() } : {}),
         ...(form.starters.length > 0
           ? { starters: form.starters.map((s) => ({ label: s.label.trim(), prompt: s.prompt })) }
@@ -266,6 +285,7 @@ export function ProfileDetailDrawer({
       }
       if (form.name.trim() === '') delete (payload as { name?: string }).name
       if (form.model.trim() === '') delete (payload as { model?: string }).model
+      if (form.thinkingLevel === '') delete (payload as { thinkingLevel?: string }).thinkingLevel
       if (form.cwd.trim() === '') delete (payload as { cwd?: string }).cwd
 
       let saved: Profile
@@ -450,11 +470,53 @@ export function ProfileDetailDrawer({
                     popoverClassName="helm-select-popover-wide"
                     className="w-full mono"
                     onChange={(e) =>
-                      setForm((prev) => ({ ...prev, model: e.target.value }))
+                      setForm((prev) => {
+                        const model = e.target.value
+                        // 切换模型后：当前档位不在新模型支持列表时回落跟随全局缺省（与全局默认面板同法）
+                        if (prev.thinkingLevel !== '') {
+                          const levels = (store.models ?? []).find((m) => m.id === model)?.thinkingLevels ?? []
+                          if (!levels.includes(prev.thinkingLevel)) {
+                            return { ...prev, model, thinkingLevel: '' }
+                          }
+                        }
+                        return { ...prev, model }
+                      })
                     }
                     inline={inline}
                     placeholder="跟随系统默认"
                   />
+                </div>
+
+                <label className="form-grid-label form-grid-align-start" htmlFor="profile-form-thinking">
+                  思考档位
+                </label>
+                <div className="form-grid-value">
+                  {form.model.trim() === '' ? (
+                    <span className="text-subtle" id="profile-form-thinking">
+                      未绑定模型时跟随全局缺省思考档位。
+                    </span>
+                  ) : profileThinkingSupported ? (
+                    <ThinkingLevelControl
+                      value={form.thinkingLevel}
+                      levels={profileThinkingLevels}
+                      disabled={isSaving || isDeleting}
+                      defaultTitle="跟随全局缺省档位"
+                      defaultLabel="默认"
+                      className="composer-thinking-row profile-thinking-row"
+                      onPick={(level) =>
+                        setForm((prev) => ({ ...prev, thinkingLevel: level }))
+                      }
+                    />
+                  ) : (
+                    <span className="text-subtle" id="profile-form-thinking">
+                      所选模型不支持思考档位。
+                    </span>
+                  )}
+                  {profileThinkingLevelUnsupported && (
+                    <span className="text-subtle">
+                      当前档位 {form.thinkingLevel} 不在所选模型支持列表，保存前请调整。
+                    </span>
+                  )}
                 </div>
 
                 <label htmlFor="profile-form-cwd" className="form-grid-label">
