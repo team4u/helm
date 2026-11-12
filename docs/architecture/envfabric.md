@@ -1,6 +1,6 @@
 # EnvFabric 跨平台执行底座
 
-EnvFabric 是微内核的跨平台执行基础设施：对上以 pi-durable 的 `ExecutionEnv`（FileSystem + Shell）接口统一呈现，对下抹平本机进程与远端节点的物理差异。内核的 `bash / read / write / edit / gate / env exec` 工具、插件的受管执行与文件互斥全部经由 EnvFabric 调度，与任何插件是否启用正交。本文覆盖其架构分层、反向连接与令牌认证、受管 Shell 流控、文件互斥、IPC 桥与安全自升级。
+EnvFabric 是微内核的跨平台执行基础设施：对上以 pi-durable 的 `ExecutionEnv`（FileSystem + Shell）接口统一呈现，对下抹平本机进程与远端节点的物理差异。内核的 `bash / read / write / edit / gate / env exec` 工具、插件的受管执行、文件互斥与节点 loopback 透传隧道全部经由 EnvFabric 调度，与任何插件是否启用正交。本文覆盖其架构分层、反向连接与令牌认证、受管 Shell 流控、文件互斥、IPC 桥、节点透传隧道与安全自升级。
 
 ## 架构定位与执行环境分层
 
@@ -108,6 +108,237 @@ ipcSubscribe({ endpoint?, session?, line }, onLine, onClosed): Promise<() => voi
 ```
 
 `endpoint` 显式指定 socket/pipe 路径，缺省按 `session` 解析节点本机默认路径；`ipcAbortCall(callId)` 取消在途调用。这一机制彻底消除了「在目标机器上写 Python 桥接脚本 + SSH 端口转发」的传统方案——跨节点统一走 EnvFabric 通道。插件侧的对应宿主端口是 `ctx.host.nodeIpc`（`call / subscribe / isOnline`），节点不支持或离线时显式报错，不静默回退本机。
+
+## 节点透传隧道
+
+远端节点上常驻着只监听本机 loopback 的推理或业务服务（如沙盒内的 `127.0.0.1:8000`）。这类服务不对外开端口、所在机器的 IP 还会漂移，Hub 无法按地址直连。**节点透传隧道**复用既有反向连接拓扑，按需建立 Hub 到目标节点 loopback 的字节通道，再通过 `EnvFabric.nodeFetch(nodeId)` 与 `ctx.host.nodeFetch(nodeId)` 提供 HTTP 流式访问。
+
+本次实现仅覆盖核心隧道、节点生命周期与插件宿主端口，不修改 `ProviderConfig`、模型认证、Magpie 配置或 Web 模型表单。下文的 Provider 绑定是后续接入设计，不是现有可用配置。隧道不感知 OpenAI/Anthropic 语义，也不生成或替换 API Key。
+
+### 问题与目标
+
+要解决的核心矛盾是**地址不可依赖，但连接必须真实**：
+
+- 沙盒/容器的 IP 每次重建都变，写死地址必然失效；
+- 第三方隧道（`frp` / `chisel` / `ssh -R`）能在 Hub 上开一个固定端口，但要求用户在两台机器上分别下载二进制、写配置、保活进程——对一个要推广的框架，这是显著采用阻力，且 Windows Hub 的首装体验尤其差；
+- 沙盒可以直连外网、可以常驻任意进程，但已经被 Helm 的反向连接架构统一管理，不应该再引入第二套账号/令牌/端口体系。
+
+调用方在 Hub 侧使用 `ctx.host.nodeFetch(nodeId)` 访问节点本机服务；节点侧由已有的 `helm-node` 承担传输，不需要安装配套插件。判据如下：
+
+| 目标 | 判据 |
+| :--- | :--- |
+| 零额外依赖 | 不引入外部二进制、不需要用户配置第二个端口或第二套凭据 |
+| 字节保真 | SSE 分片、`chunked` 编码、任意多字节字符边界必须原样通过 |
+| 原生背压 | 下游读得慢时背压一路传回沙盒里的推理进程，不在 Hub 内存里堆积 |
+| 取消可传播 | 前端「停止生成」或 `AbortSignal` 触发时，沙盒侧立刻断开连接、停止推理 |
+| 失败显式 | 节点离线返回 `409 node_offline`，绝不静默回退本机直连 |
+
+### 为什么不是「把 HTTP 请求序列化后走 RPC」
+
+最直觉的做法是给 birpc 加一组 `httpRequest` / `onHttpChunk` 方法：Hub 发头与体，节点转成 `fetch`，响应按 chunk 经 Base64 回推。它能跑通，但把一条本可以透明的字节通道拆成了有状态协议机，代价不可逆：
+
+- **无原生背压**：事件推送是单向的，没有 TCP 滑动窗口，慢消费者只能靠丢弃或阻塞控制面；
+- **队头阻塞**：模型 token 流与节点心跳、`env exec` 输出挤在同一条 WebSocket 上；
+- **33% 编码损耗**：每个分片 Base64 再封 JSON，两侧反复序列化；
+- **协议细节复刻**：状态码、多值响应头、`Content-Length`、半关闭、`101` 之外的升级语义都要自己补齐。
+
+结论是：**要么不碰协议，要么就别做**。隧道只搬运字节，HTTP 语义交给两个端点各自的 Node 运行时。
+
+### 架构与握手时序
+
+隧道是 `/ws/node` 之外的一条独立 WebSocket（`/ws/node-tunnel`），专用于一条 TCP 连接：一条隧道对应一次 HTTP 请求，用完即关。节点始终是发起方，因此 NAT、防火墙、IP 漂移全部无关。
+
+```mermaid
+sequenceDiagram
+    participant Caller as Hub 插件
+    participant Bridge as EnvFabric.nodeFetch
+    participant Registry as NodeRegistry
+    participant Daemon as @helm/node
+    participant Target as 沙盒 127.0.0.1:8000
+
+    Caller->>Bridge: fetch(baseUrl + /v1/chat/completions)
+    Bridge->>Registry: openTunnel(nodeId, port, signal)
+    Registry->>Registry: pendingTunnels.set(tunnelId, ...)
+    Registry->>Daemon: RPC nodeTunnelOpen({ tunnelId, port })
+    Daemon->>Target: net.connect(127.0.0.1, port) + socket.pause()
+    alt 端口未监听 / 连接拒绝
+        Daemon-->>Registry: { ok: false, error: { code: 'connect_failed' } }
+        Registry-->>Bridge: reject(node_tunnel_connect_failed 502)
+    else 本地 TCP 已连通（paused）
+        Daemon-->>Registry: { ok: true, value: null } 已受理
+        Daemon->>Registry: WS /ws/node-tunnel 首帧 { nodeId, token, tunnelId }
+        Registry->>Registry: authenticateToken(nodeId, token) + 一次性消费 tunnelId
+        Registry-->>Daemon: 控制帧 { type: 'ok' }
+        Note over Registry,Daemon: 双方此后把 WS 转成 Duplex，停止解析控制帧
+        Registry-->>Bridge: resolve(Duplex)
+        Daemon->>Target: tcp.pipe(wsDuplex).pipe(tcp)（自动 resume）
+        Bridge->>Bridge: http.request({ createConnection: () => duplex })
+        Target-->>Caller: 原生 HTTP/SSE 字节流（不经任何 JSON 封装）
+    end
+```
+
+两个关键时序不变量：
+
+1. **本地 TCP 先连通并 `pause()`，再发起隧道 WS**：节点收到 `nodeTunnelOpen({ tunnelId, port })` 时，先在本地对 `127.0.0.1:<port>` 执行 `net.connect` 并立即 `socket.pause()`（由内核 TCP 接收窗口暂存可能到达的首包字节）。若端口未监听（如 `ECONNREFUSED`），RPC 直接同步返回 `{ ok: false, error: { code: 'connect_failed', message } }`——连 `/ws/node-tunnel` 都不必建立，Hub 0ms 拿到精确的 `502 node_tunnel_connect_failed`，省去废 WS 握手与反向错误帧。
+2. **握手与数据分离**：认证帧与确认帧在双方创建 `Duplex` 之前完成交换，此后这条 WebSocket 上不再出现任何控制帧，因此不存在「控制帧被当成流数据」或「流数据早于 `Duplex` 创建而丢失」的竞态。时序上必须满足：Hub 先发 `{ type: 'ok' }` 再创建 `Duplex`，节点收到 `{ type: 'ok' }` 后才创建 `Duplex` 并开始 `pipe`（`pipe` 自动触发 `tcp.resume()`）。
+
+数据通路是 `ws` 库内置的 `createWebSocketStream(ws)` 得到的标准 `Duplex`：节点侧 `tcp.pipe(duplex).pipe(tcp)`，Hub 侧该 `Duplex` 直接作为 socket 交给 `node:http`。二进制帧、背压、`FIN` 全部由库与内核处理，Helm 不写一行编解码。
+
+### 协议契约
+
+新增集中在 `@helm/protocol` 的 `env-rpc.ts`，与既有 `ipcCall / ipcSubscribe` 同构：
+
+```typescript
+/** 隧道打开请求：port 只能是目标节点自身的 loopback 服务。 */
+export interface NodeTunnelOpenInput {
+  tunnelId: string
+  port: number
+  /** 建连预算，超时后 Hub 侧回收 pending 并拒绝本次请求。 */
+  timeoutMs?: number
+}
+
+/** 隧道 WS 首帧（文本 JSON，限长 4096 字节）；Hub 侧校验后一次性消费 tunnelId。 */
+export interface NodeTunnelHello {
+  nodeId: string
+  token: string
+  tunnelId: string
+}
+
+/** 隧道 WS 控制帧（仅存在于首帧交换阶段）。 */
+export type NodeTunnelControl =
+  | { type: 'ok' }
+  | { type: 'error'; code: NodeTunnelErrorCode; message: string }
+
+export type NodeTunnelErrorCode =
+  | 'invalid_hello'      // 首帧结构非法或超长
+  | 'unauthorized'       // token 不匹配
+  | 'tunnel_unknown'     // tunnelId 不存在、已消费或已超时
+  | 'tunnel_mismatch'    // tunnelId 属于别的 nodeId 或旧连接代
+  | 'port_rejected'      // port 越界
+  | 'connect_failed'     // 节点侧 net.connect 失败
+```
+
+`NodeEnvRpcFunctions` 增加一个可选方法（可选保证与既有可选 RPC 一致，旧节点返回 `501 node_tunnel_not_supported` 而非崩溃）：
+
+```typescript
+/** 请求节点为其 loopback 服务打开一条透传隧道（数据经 /ws/node-tunnel）。 */
+nodeTunnelOpen?(input: NodeTunnelOpenInput): Promise<RpcResult<null>>
+```
+
+`nodeTunnelOpen` 返回 `{ ok: true, value: null }` 表示「节点本地 TCP 已连通并开始回连 `/ws/node-tunnel`」，**不代表隧道端到端就绪**——就绪由 Hub 侧 `pendingTunnels` 在收到 `/ws/node-tunnel` 首帧认证通过后 resolve `Duplex` 决定。
+
+### Hub 侧实现
+
+四处接线，全部复用既有机制，不新增监听端口：
+
+1. **`NodeRegistry`**：
+   - 新增 `#pendingTunnels: Map<string, PendingTunnel>`（按 `tunnelId`，含 `nodeId / epoch / port / resolve / reject / timer`）与 `#activeTunnels: Map<string, Set<Duplex>>`（按 `nodeId` 追踪已建立的在途隧道流）；
+   - `#evict(nodeId, conn)` 与 `revoke(nodeId)` 时，一并拒绝该节点全部 pending 隧道，并 `destroy()` 该节点全部在途 `activeTunnels`，确保节点断连或令牌吊销后在途隧道立即切断；
+   - 新增公开方法 `authenticateToken(nodeId, token)` 委托内部 `#authenticate`（隧道网关与控制网关共享同一常量时间令牌比对逻辑）；`close()` 时清空全部 pending 与 active 隧道。
+2. **隧道网关**（`packages/kernel/src/env/ws-tunnel-gateway.ts`，与 `ws-gateway.ts` 平行的 `attachNodeTunnelGateway(server, { registry, path = '/ws/node-tunnel' })`）：
+   - 握手阶段限制首帧大小（> 4096 字节直接 `1009` 关闭，防未认证连接打爆内存）；
+   - 首帧用一次性的 `ws.once('message', handler)` 读取并立即消费 `tunnelId`（无论成功或失败均单次删除，防重放）；
+   - 校验通过且 `NodeRegistry` 中该 `nodeId` 的连接代（`epoch`）未变更后，先发送 `{ type: 'ok' }`，再调用 `createWebSocketStream(ws)` 登记入 `#activeTunnels` 并 resolve 给调用方。
+3. **`EnvFabric.nodeFetch(nodeId)`**：
+   返回一个符合 Web Standard 的 `typeof fetch`。`local` 节点直接返回 `globalThis.fetch`；远端节点先 `const duplex = await registry.openTunnel(nodeId, port, signal)` 拿到就绪的 `Duplex`，再把 `host / port / path / method / headers / body` 交给 `node:http`：
+   ```typescript
+   const duplex = await registry.openTunnel(nodeId, port, init?.signal ?? undefined)
+   const reqHeaders = normalizeOutgoingHeaders(init?.headers)
+   // 强制禁用传输压缩：node:http 不自动解压 gzip/br，loopback 走 identity 保证
+   // Readable.toWeb(res) 交还给调用方（如 pi-ai SSE 解析器）的是原始明文字节流。
+   reqHeaders['accept-encoding'] = 'identity'
+
+   const req = http.request({
+     host: url.hostname,
+     port: url.port === '' ? 80 : Number(url.port),
+     path: `${url.pathname}${url.search}`,
+     method: init?.method ?? 'GET',
+     headers: reqHeaders,
+     agent: null,                            // 配合 createConnection 绕过 Agent；裸 Duplex 不具备 net.Socket 方法
+     createConnection: () => duplex,          // 唯一的「透传」桥接点
+     signal: init?.signal ?? undefined,
+   }, (res) => {
+     const headers = new Headers()
+     for (const [k, v] of Object.entries(res.headers)) {
+       if (Array.isArray(v)) { for (const item of v) headers.append(k, item) }
+       else if (typeof v === 'string') headers.set(k, v)
+     }
+     resolve(new Response(Readable.toWeb(res) as ReadableStream<Uint8Array>, {
+       status: res.statusCode ?? 502,
+       statusText: res.statusMessage ?? '',
+       headers,
+     }))
+   })
+   ```
+   两处细节必须显式处理：
+   - **不挂载 Agent**：`agent: false` 会新建一个 Agent，仍可能走 Agent 的 socket 安装逻辑（如 `setNoDelay`）；使用 `agent: null` 并提供 `createConnection`，Node 24 会绕过 Agent，直接把 `createConnection` 返回的裸 `Duplex` 交给 `ClientRequest`，无需伪造 `net.Socket` 垫片；
+   - **4xx/5xx 不是传输失败**：上游返回 `400 / 401 / 429 / 500` 说明隧道链路完全正常。`nodeFetch` 必须原样构造该 `Response`（含真实 JSON 错误体），让 SDK 的 `retryProviderRequest` 与 `normalizeProviderError` 按既有策略处理。只有建隧道失败、socket 异常中断、超时才抛错。
+4. **`ctx.host.nodeFetch(nodeId)`（插件同权复用）**：
+   `HelmHostApi` 同步暴露 `nodeFetch(nodeId: string): typeof fetch`（受宿主生命周期与 `liveTasks` 在途追踪保护）。任何安装在 Hub 上的插件（如 `builtin:magpie`、微应用或自定义业务插件）无需在节点端额外部署代码，直接调用 `ctx.host.nodeFetch(nodeId)('http://127.0.0.1:8188/...')` 即可安全穿透访问目标节点的 loopback 服务。
+
+### 节点侧实现
+
+节点侧职责切分遵循既有 `daemon/index.ts`（持有 `hubUrl`、`identity` 与连接代）与 `daemon/env-rpc-server.ts`（纯本地执行与资源生命周期）的分层：
+
+1. **`NodeEnvRpcServerOptions` 注入 `openTunnelStream?: (tunnelId: string) => Promise<Duplex>`**：
+   `daemon/index.ts` 实现该回调——将 `hubUrl` 的路径替换为 `/ws/node-tunnel`，发起 WebSocket 连接并发送 `NodeTunnelHello { nodeId, token, tunnelId }`，等待首帧 `{ type: 'ok' }` 后返回 `createWebSocketStream(ws)`。
+2. **入参边界校验与强制 loopback**：
+   `env-rpc-server.ts` 实现 `nodeTunnelOpen`：校验 `tunnelId` 为 `1..128` 字符非空字符串，`port` 为 `1..65535` 的安全整数（拒绝 `0`、负数、浮点数、字符串与未知字段）。`net.connect({ host: '127.0.0.1', port })` 的主机名是硬编码常量 `'127.0.0.1'`，`port` 之外的地址信息一律不受输入影响——从根源上杜绝 `http://` 前缀注入、`@` 认证段绕过、内网横向扫描或 `169.254.169.254` 云元数据探测。
+3. **排空联动与世代销毁**：
+   `setDraining(true)`（自升级排空、候选待激活）期间拒绝新的 `nodeTunnelOpen`，返回 `{ ok: false, error: { code: 'aborted', message: '...' } }`，与 `envExec` 的排空行为一致。在途隧道记入 `activeTunnels`，新增 `getActiveTunnelCount()` 并入升级排空判据（`getActiveExecCount() === 0 && getActiveTunnelCount() === 0`），防止长耗时流式回答被节点自升级生硬切断；连接代 `dispose()` 时一并销毁全部在途隧道的 WS 流与本地 TCP socket。
+
+### 安全边界
+
+| 面向 | 边界 |
+| :--- | :--- |
+| 目标范围 | 只能连目标节点**自身**的 `127.0.0.1:<port>`。节点侧主机名是常量，端口无法携带 `host`，无法被用来横向访问同网段其他机器或云元数据服务 |
+| 认证 | 首帧携带既有 `nodeId + token`，Hub 复用 `NodeRegistry.authenticateToken`（常量时间比对）。`tunnelId` 不承担鉴权职责，只做请求配对 |
+| `tunnelId` 生命周期 | 由 Hub 生成（UUIDv4，122 位随机），**一次性消费**：无论是认证成功、失败还是超时，取出即删除，不可重放 |
+| token 位置 | 在 WebSocket 建立后的首帧载荷中传输，**不进 URL Query**，与 `/ws/node` 同一条纪律（防代理与访问日志泄露） |
+| 首帧限长 | 握手阶段限制首帧载荷不超过 4096 字节，超限立即关闭连接，防止未认证客户端发送超大帧耗尽 Hub 内存 |
+| 端口暴露 | Hub 不新增任何监听端口：隧道挂在既有 HTTP server 的 `upgrade` 事件上，与 `/ws/node` 共用同一端口与 TLS 配置 |
+| 明文范围 | 隧道两端之间的载荷由 WebSocket 承载（`wss://` 时即为 TLS）；节点 loopback 段是本机明文 TCP，与「服务直连本机 8000」的安全等级相同，不额外夸大承诺 |
+
+### 后续接入：Provider 配置契约（本次不实现）
+
+以下保留原草稿中的目标契约，当前 `ProviderConfig` 尚不支持 `nodeId`，不能据此直接配置或调用。未来接入时拟增加可选字段 `nodeId?: string`，保持其余字段形态不变：
+
+```json
+{
+  "id": "openclaw",
+  "label": "OpenClaw Sandbox",
+  "protocol": "openai",
+  "nodeId": "openclaw-sbx",
+  "baseUrl": "http://127.0.0.1:8000/v1",
+  "models": ["deepseek-v3", "qwen-2.5-coder"],
+  "enabled": true
+}
+```
+
+语义与边界约定：
+
+- **`nodeId` 省略或为 `'local'`**：保持现有行为，`baseUrl` 是什么就连什么；
+- **`nodeId` 为远端节点**：`baseUrl` 表达的是**该节点视角**的地址，因此必须为 `http://` 协议、指向 loopback（`127.0.0.1` / `localhost` / `[::1]`）且带显式端口（`1..65535`）。该约束在 `validateProviderConfig` **配置保存边界**即刻校验，非法返回 `400 validation_error`，不等到发消息时才失败；
+- **请求流注入**：`runtime/models.ts` 在 `buildCompatProvider` 构造 provider 时，对带远端 `nodeId` 的配置包装 `stream / streamSimple`，当调用方未显式传入 `options.fetch` 时注入 `envFabric.nodeFetch(nodeId)`；
+- **凭据照常配置**：远端 loopback 服务的 API Key 仍由现有 `credentials.json` / 凭据 API 管理；隧道只改变请求的传输路径，不改变 pi-ai 认证流程、不生成占位密钥，也不把密钥写入 `providers.json`。调用者必须为需要鉴权的 Provider 配置真实凭据；服务端不校验密钥时，也不由隧道层伪造认证值；
+- **离线即不可用与实时目录联动**：远端节点的 `auth.apiKey.check()` 同时判断 `envFabric.isOnline(nodeId)`——节点离线时 `check()` 返回 `undefined`，模型目录如实展示 `available: false`；`auth.apiKey.resolve()` 在节点离线时直接抛出 `409 node_offline`，绝不回退 `local`。当 `NodeRegistry.onNodeChanged` 触发节点上下线时，若存在绑定该 `nodeId` 的 Provider，内核同步发布 `models.changed` SSE 事件，前端模型选择器实时亮起或置灰。
+
+### 错误码
+
+| 场景 | 错误码 | HTTP |
+| :--- | :--- | :--- |
+| 节点未连接 | `node_offline` | 409 |
+| 节点守护进程版本不支持隧道 | `node_tunnel_not_supported` | 501 |
+| 建隧道超时（默认 10s） | `node_tunnel_timeout` | 504 |
+| 节点侧 `net.connect` 失败（端口未监听） | `node_tunnel_connect_failed` | 502 |
+| 节点已断连导致在途流中断 | `node_tunnel_closed` | 502 |
+| `nodeId` 与 loopback `baseUrl` 约束不符 | `validation_error` | 400 |
+
+### 诚实边界与测试分层
+
+- **单请求生命周期**：隧道只在**一次 HTTP 请求**的生命周期内存在；当前不做连接池复用，每次调用有一次 WebSocket 握手开销（约 1–2 RTT），池化位置留在 `nodeFetch` 内部，不改变对外契约。
+- **仅搬运明文 HTTP loopback**：远端 `nodeFetch` 限定节点本机 HTTP 地址；隧道不校验应用层内容，也不经 `SecretStash` 脱敏。调用方负责管理业务凭据与输出展示，传输层不对载荷做文本替换。
+- **测试分层**：按仓库分层纪律，隧道涉及 `kernel` + `node`，全部归入 `integration` 套件，覆盖真实 SSE 多字节边界保真、上游 `400` JSON 错误体透传、`AbortSignal` 中途取消传导至节点 TCP `FIN`、`tunnelId` 重放拒绝、非法端口拦截、节点断连 `node_tunnel_closed` 收敛以及 draining 期间拒绝新隧道。模型目录可用性与 Magpie 目标绑定的测试留待后续接入实现。
 
 ## 安全原子自升级
 

@@ -9,8 +9,8 @@ Helm 是极简持久微内核的多智能体编排系统。内核只提供四块
 | 机制 | 核心内容 | 明确不包含 |
 | :--- | :--- | :--- |
 | `pi-durable` 持久会话增强 | 通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5、`AskDoc` 审批流、`SecretStash` 机密隔离、纯文件资产热重载、原生 `spawnAgent` 子会话派生（`agent_spawn` Hook 管道 + 原生子会话默认执行行） | 编排引擎、Worktree 租约（均在 `builtin:workflow`） |
-| `EnvFabric` + `NodeRegistry` | `/ws/node` 反向 WebSocket 网关、`local` 内建节点 + 远端 `@helm/node` 守护进程、`bash / read / write / edit / gate / env exec` 受管执行、按 `nodeId + canonicalPath` 的文件互斥 | 终端主控逻辑（`builtin:herdr`） |
-| Model 与 Auth | 模型供应商接入、Provider 配置、凭据与令牌管理（`credentials.json` + `cli-token`） | 业务级模型路由策略 |
+| `EnvFabric` + `NodeRegistry` | `/ws/node` 反向 WebSocket 网关、`/ws/node-tunnel` 节点 loopback 透传隧道（`nodeFetch`）、`local` 内建节点 + 远端 `@helm/node` 守护进程、`bash / read / write / edit / gate / env exec` 受管执行、按 `nodeId + canonicalPath` 的文件互斥 | 终端主控逻辑（`builtin:herdr`） |
+| Model 与 Auth | 模型供应商接入、Provider 配置、凭据与令牌管理（`credentials.json` + `cli-token`） | 业务级模型路由策略；Provider 远端节点绑定不在本次核心隧道实现范围 |
 | `PluginHost` | 唯一强类型插件宿主 `definePlugin(ctx)`：生命周期 Hook、动作/工具/路由注册、doc 持久化、服务协调 | 任何具体插件的功能实现 |
 
 ```mermaid
