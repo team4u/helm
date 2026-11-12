@@ -120,7 +120,7 @@ function HelmShellInner() {
           />
         ) : store.primaryTarget.kind === 'agent' ? (
           <AgentStandbyPane
-            key={`primary-agent-${store.primaryTarget.profileId}`}
+            key={`primary-agent-${store.primaryTarget.profileId}-${store.primaryTarget.nodeId ?? ''}-${store.primaryTarget.cwd ?? ''}`}
             profileId={store.primaryTarget.profileId}
             nodeId={store.primaryTarget.nodeId}
             cwd={store.primaryTarget.cwd}
@@ -154,7 +154,7 @@ function HelmShellInner() {
               />
             ) : store.splitTarget.kind === 'agent' ? (
               <AgentStandbyPane
-                key={`split-agent-${store.splitTarget.profileId}`}
+                key={`split-agent-${store.splitTarget.profileId}-${store.splitTarget.nodeId ?? ''}-${store.splitTarget.cwd ?? ''}`}
                 profileId={store.splitTarget.profileId}
                 nodeId={store.splitTarget.nodeId}
                 cwd={store.splitTarget.cwd}

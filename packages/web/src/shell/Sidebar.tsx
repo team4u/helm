@@ -298,7 +298,8 @@ function AgentStandingItem({
   const activeInAgent = agent.conversations.some((c) => isConversationActive(store, c.id))
   const standbyActive = isAgentStandbyActive(store, agent.profileId)
   const isOpen = batchMode ? (hasSubList && expanded) : (hasSubList && accordionOpen)
-  const headerActive = (activeInAgent || standbyActive) && !isOpen
+  // 待命激活不受话题列表展开影响：名称是稳定入口，展开历史时仍需保持选中可见。
+  const headerActive = standbyActive || (activeInAgent && !isOpen)
 
   const toggleOpen = () => {
     if (batchMode) {
@@ -313,14 +314,17 @@ function AgentStandingItem({
       toggleOpen()
       return
     }
+    // 名称是稳定待命入口：人类可选 Agent 一律进入待命态（首次发送才落库），
+    // 不自动跳进旧会话；仅不可新建的受管 singleton 打开其真实会话。
+    if (agent.canCreateConversation) {
+      openAgentStandby(store, agent.profileId, onNavigate)
+      return
+    }
     const primary = agent.primaryConversation
     if (primary) {
       store.openTarget({ kind: 'conversation', conversationId: primary.id })
       onNavigate?.()
-      return
     }
-    // 零会话智能体：进入待命页（首次发送才创建），不自动新建空会话。
-    if (agent.canCreateConversation) openAgentStandby(store, agent.profileId, onNavigate)
   }
 
   const openSplit = (e: React.MouseEvent, convId: number) => {

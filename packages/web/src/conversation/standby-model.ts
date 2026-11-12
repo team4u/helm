@@ -72,6 +72,9 @@ type DraftListener = () => void
 const drafts = new Map<string, StandbyDraftState>()
 const listeners = new Set<DraftListener>()
 let localFileSeq = 0
+/** 草稿生命周期世代：logout 等全量重置时递增；在途首发任务在每个 await 后验证，
+ * 世代已变则丢弃回包（不复活正文/附件、不继续上传/发送、不通知、不导航）。 */
+let draftEpoch = 0
 
 function notifyListeners(): void {
   for (const listener of listeners) listener()
@@ -82,9 +85,24 @@ function subscribeDrafts(listener: DraftListener): () => void {
   return () => listeners.delete(listener)
 }
 
-/** 草稿存储键：按面板（主/分屏）与 Profile 隔离。 */
-export function standbyDraftKey(panel: 'primary' | 'split', profileId: string): string {
-  return `${panel}:${profileId}`
+/** 草稿入口坐标：面板 + Profile + 继承环境。同 Profile 不同远端坐标是两份独立草稿，
+ * 防止上次导航继承的环境被当作用户编辑串到下一次首发。 */
+export interface StandbyCoordinate {
+  panel: 'primary' | 'split'
+  profileId: string
+  nodeId?: string
+  cwd?: string
+}
+
+/** 草稿存储键：规范化 JSON（字段定序、空值省略），同一入口坐标无歧义。 */
+export function standbyDraftKey(coordinate: StandbyCoordinate): string {
+  const normalized: Record<string, string> = {
+    panel: coordinate.panel,
+    profileId: coordinate.profileId,
+  }
+  if (coordinate.nodeId !== undefined && coordinate.nodeId !== '') normalized.nodeId = coordinate.nodeId
+  if (coordinate.cwd !== undefined && coordinate.cwd !== '') normalized.cwd = coordinate.cwd
+  return JSON.stringify(normalized)
 }
 
 export function getStandbyDraft(key: string): StandbyDraftState {
@@ -113,10 +131,27 @@ export function clearStandbyDraft(key: string): void {
   notifyListeners()
 }
 
-/** 清空全部待命草稿（测试隔离用）。 */
+/** 清空全部待命草稿并推进世代（logout 释放 / 测试隔离用）：在途任务回包一律作废。 */
 export function resetStandbyDrafts(): void {
+  draftEpoch++
   drafts.clear()
   notifyListeners()
+}
+
+/** 当前草稿世代（在途任务快照比对用）。 */
+export function currentStandbyDraftEpoch(): number {
+  return draftEpoch
+}
+
+/** 「恢复默认」时重置环境字段；目标坐标已有草稿时不覆盖（返回 false 由调用方显式告知）。 */
+export function resetEnvStandbyDraft(from: string, to: string): boolean {
+  if (!drafts.has(from)) return false
+  if (from !== to && drafts.has(to)) return false
+  const record = drafts.get(from)!
+  drafts.set(to, { ...record, envCustomized: false, envNodeId: undefined, envCwd: undefined })
+  if (from !== to) drafts.delete(from)
+  notifyListeners()
+  return true
 }
 
 /** React 绑定：草稿记录引用稳定（每次更新整体替换），供 useSyncExternalStore 消费。 */
@@ -134,6 +169,19 @@ export function inheritedEnvOf(target: { nodeId?: string; cwd?: string }): { nod
     ...(target.nodeId !== undefined && target.nodeId !== '' ? { nodeId: target.nodeId } : {}),
     ...(target.cwd !== undefined && target.cwd !== '' ? { cwd: target.cwd } : {}),
   }
+}
+
+/** 待命页命中的会话管理命令处置：/new 清理草稿；/clear 与 /compact 需已有会话，不作为普通输入发送。 */
+export type StandbyManageAction =
+  | { kind: 'clear-draft' }
+  | { kind: 'needs-conversation'; command: string }
+  | null
+
+export function standbyManageAction(payload: string): StandbyManageAction {
+  const cmd = payload.trim()
+  if (cmd === '/new') return { kind: 'clear-draft' }
+  if (cmd === '/clear' || cmd === '/compact') return { kind: 'needs-conversation', command: cmd }
+  return null
 }
 
 /** 环境定制后的校验（复用会话环境条规则：目录必填且必须绝对路径）。未定制时恒通过。 */
@@ -198,7 +246,7 @@ export interface StandbySendDeps {
   isStillViewing: () => boolean
 }
 
-export type StandbySendResult = 'sent' | 'invalid' | 'busy' | 'failed'
+export type StandbySendResult = 'sent' | 'invalid' | 'busy' | 'failed' | 'stale'
 
 /**
  * 执行首次发送。同步检查并占用 sending 标记（双击/Enter 并发第二次直接返回 busy），
@@ -217,19 +265,25 @@ export async function executeStandbySend(key: string, profileId: string, deps: S
   }
   // 同步占用：后续双击/Enter 在任何 await 之前被拒绝。
   updateStandbyDraft(key, { sending: true, error: null })
+  // 世代快照：logout/全量重置后，旧任务的任何回包都不得再触碰存储或外发。
+  const epoch = currentStandbyDraftEpoch()
+  const stale = (): boolean => epoch !== currentStandbyDraftEpoch()
   let conversationId = record.conversationId
   try {
     if (conversationId === undefined) {
       const created = await deps.create(buildStandbyCreateInit(profileId, record))
+      if (stale()) return 'stale'
       conversationId = created.id
       // 立即持久化锚点：后续任一步失败，重试不再重复 create。
       updateStandbyDraft(key, { conversationId })
     }
     if (record.thinkingLevel !== undefined && record.thinkingLevel !== '') {
       await deps.patchThinkingLevel(conversationId, record.thinkingLevel)
+      if (stale()) return 'stale'
     }
     for (const local of record.localFiles) {
       const meta = await deps.upload(conversationId, local.file)
+      if (stale()) return 'stale'
       // 已上传即转正：失败重试时不再重复上传该文件。
       const current = getStandbyDraft(key)
       updateStandbyDraft(key, {
@@ -243,15 +297,18 @@ export async function executeStandbySend(key: string, profileId: string, deps: S
       origin: 'human',
       ...(attachments.length > 0 ? { attachments } : {}),
     })
+    if (stale()) return 'stale'
     clearStandbyDraft(key)
     if (deps.isStillViewing()) deps.navigateToConversation(conversationId)
     else deps.notifySentInBackground(conversationId)
     return 'sent'
   } catch (err) {
+    if (stale()) return 'stale'
     patchStandbyDraftIfPresent(key, { error: err instanceof Error ? err.message : String(err) })
     deps.notifyError(conversationId !== undefined ? '发送失败，可重试（会话已创建）' : '创建会话失败，草稿已保留', err, conversationId)
     return 'failed'
   } finally {
-    patchStandbyDraftIfPresent(key, { sending: false })
+    // 世代已变时绝不复位：新世代可能已在同键写入新草稿，旧任务的收尾不得覆盖其 sending。
+    if (!stale()) patchStandbyDraftIfPresent(key, { sending: false })
   }
 }

@@ -18,7 +18,7 @@ GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { App } = await import('../src/App.js')
-const { resetStandbyDrafts } = await import('../src/conversation/standby-model.js')
+const { getStandbyDraft, resetStandbyDrafts, standbyDraftKey } = await import("../src/conversation/standby-model.js")
 
 const e = React.createElement
 const originalFetch = globalThis.fetch
@@ -72,10 +72,13 @@ const state = {
   uploadCalls: [] as Array<{ id: number; name: string }>,
   createGate: undefined as Gate | undefined,
   submitGate: undefined as Gate | undefined,
+  uploadGate: undefined as Gate | undefined,
   assetsGate: undefined as Gate | undefined,
   createFailures: 0,
   submitFailures: 0,
   uploadFailures: 0,
+  profilesFail: false,
+  resetCalls: [] as number[],
 }
 
 function resetState(): void {
@@ -85,12 +88,15 @@ function resetState(): void {
   state.submitCalls = []
   state.patchCalls = []
   state.uploadCalls = []
+  state.resetCalls = []
   state.createGate = undefined
   state.submitGate = undefined
+  state.uploadGate = undefined
   state.assetsGate = undefined
   state.createFailures = 0
   state.submitFailures = 0
   state.uploadFailures = 0
+  state.profilesFail = false
 }
 
 const profiles = [
@@ -146,6 +152,7 @@ function installFetch(): void {
     }
     if (url === '/api/profiles' && method === 'GET') {
       if (state.assetsGate !== undefined) await state.assetsGate.promise
+      if (state.profilesFail) return jsonResponse({ error: { code: 'internal_error', message: 'profiles down' } }, 500)
       return jsonResponse(profiles)
     }
     if (url === '/api/models' && method === 'GET') return jsonResponse(modelCatalog)
@@ -185,12 +192,18 @@ function installFetch(): void {
     if (uploadMatch && method === 'POST') {
       const id = Number(uploadMatch[1])
       const name = decodeURIComponent(new Headers(init?.headers as HeadersInit | undefined).get('X-Artifact-Filename') ?? 'attachment.bin')
+      if (state.uploadGate !== undefined) await state.uploadGate.promise
       state.uploadCalls.push({ id, name })
       if (state.uploadFailures > 0) {
         state.uploadFailures--
         return jsonResponse({ error: { code: 'internal_error', message: 'upload failed' } }, 500)
       }
       return jsonResponse({ id: `art-${state.uploadCalls.length}`, name, size: 5, mimeType: 'text/plain' })
+    }
+    const resetMatch = /^\/api\/conversations\/(\d+)\/reset$/.exec(url)
+    if (resetMatch && method === 'POST') {
+      state.resetCalls.push(Number(resetMatch[1]))
+      return jsonResponse(state.conversations.find((c) => c.id === Number(resetMatch[1])) ?? summary(1))
     }
     const patchMatch = /^\/api\/conversations\/(\d+)$/.exec(url)
     if (patchMatch && method === 'PATCH') {
@@ -529,4 +542,248 @@ test('模型与思考档位：模型随 create 提交，思考档位创建后 pa
   assert.equal((state.createCalls[0] as { model?: string }).model, 'faux/glm-4.6', '模型随 create 提交')
   assert.deepEqual(state.patchCalls, [{ id: 9, body: { thinkingLevel: 'high' } }], '思考档位创建后 patch')
   assert.equal(state.submitCalls.length, 1)
+})
+
+test('右屏待命首发：主屏会话保持不变，新会话只落在右屏', { timeout: 60_000 }, async () => {
+  await mount('#/c/1?split=a/assistant')
+  assert.ok(document.body.textContent?.includes('会话 1'), '主屏保持原会话')
+  const input = textarea(MAIN_LABEL)
+  act(() => { typeInto(input, '右屏首发') })
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.equal(state.createCalls.length, 1)
+  assert.equal(state.submitCalls.length, 1)
+  assert.equal(window.location.hash, '#/c/1?split=c%2F9', '新会话 replace 到右屏，不劫持主屏')
+  assert.ok(document.body.textContent?.includes('会话 1'), '主屏会话仍渲染')
+  const splitPanes = document.querySelectorAll('.helm-split-pane')
+  assert.ok(splitPanes.length > 0 && splitPanes[0]!.textContent?.includes('会话 9'), '右屏渲染新会话')
+})
+
+test('模型选择可恢复默认：显式选择后仍可点回跟随角色默认，create 不传 model', { timeout: 60_000 }, async () => {
+  await mount('#/a/assistant')
+  clickButton('button.composer-model-button')
+  const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+  const glm = [...popover!.querySelectorAll<HTMLButtonElement>('button.popover-item')]
+    .find((btn) => btn.textContent?.includes('glm-4.6'))
+  await act(async () => { glm!.click() })
+  await settle()
+  assert.ok(document.querySelector('button.composer-model-button')?.textContent?.includes('glm-4.6'))
+  await act(async () => { clickButton('button.composer-model-button') })
+  const popover2 = document.body.querySelector<HTMLElement>('.composer-model-popover')
+  const resetBtn = [...popover2!.querySelectorAll<HTMLButtonElement>('button.popover-item')]
+    .find((btn) => btn.textContent?.includes('跟随角色默认'))
+  assert.ok(resetBtn, '恢复默认项存在')
+  assert.equal(resetBtn!.disabled, false, '显式选择后仍可点回跟随默认')
+  await act(async () => { resetBtn!.click() })
+  await settle()
+  assert.ok(document.querySelector('button.composer-model-button')?.textContent?.includes('默认模型'))
+  const input = textarea(MAIN_LABEL)
+  act(() => { typeInto(input, '默认模型发送') })
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.deepEqual(state.createCalls[0], { profileId: 'assistant' }, '恢复默认后 create 不携带 model')
+})
+
+test('有历史智能体名称入口：点击站位行进待命态而非旧会话，且展开列表时保持激活', { timeout: 60_000 }, async () => {
+  await mount('#/c/1')
+  // assistant 拥有历史会话且列表展开（手风琴跟随当前会话）
+  assert.ok(document.querySelector('.agent-conversations-list'), '话题列表展开')
+  const nameBtn = [...document.querySelectorAll<HTMLButtonElement>('.nav-item-main')]
+    .find((btn) => btn.textContent?.includes('个人助理'))
+  assert.ok(nameBtn, '智能体站位行存在')
+  await act(async () => { nameBtn!.click() })
+  await settle()
+  assert.equal(window.location.hash, '#/a/assistant', '名称入口进入待命态，不跳旧会话')
+  assert.ok(document.querySelector('.agent-standby-pane'), '渲染待命页')
+  // 列表仍展开（跟随待命目标），站位行保持激活与 aria-current
+  assert.ok(document.querySelector('.agent-conversations-list'), '话题列表仍展开')
+  const row = nameBtn!.closest('.agent-standing')?.querySelector('.agent-standing-row')
+  assert.ok(row?.className.includes('nav-item-active'), '展开状态下待命行仍激活')
+  assert.equal(nameBtn!.getAttribute('aria-current'), 'page')
+  assert.equal(state.createCalls.length, 0)
+})
+
+test('真实会话 Composer /new：进入待命态并继承环境，不 reset 不 create', { timeout: 60_000 }, async () => {
+  await mount('#/c/1')
+  const composerInput = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="输入消息"]')
+  assert.ok(composerInput, '会话输入区存在')
+  act(() => { typeInto(composerInput!, '/new') })
+  // 第一次 Enter 被斜杠浮层捕获回填 '/new'，第二次 Enter 提交管理命令
+  await act(async () => { pressEnter(composerInput!); await new Promise((r) => setTimeout(r, 10)) })
+  await act(async () => { pressEnter(composerInput!); await new Promise((r) => setTimeout(r, 10)) })
+  await settle()
+  assert.equal(window.location.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`, '/new 进入待命态并继承当前目录')
+  assert.equal(state.resetCalls.length, 0, '/new 不再 reset 原会话')
+  assert.equal(state.createCalls.length, 0, '/new 不预建会话')
+})
+
+test('待命页管理命令：/new 清理草稿，/clear 提示需先创建会话，均不落库', { timeout: 60_000 }, async () => {
+  await mount('#/a/assistant')
+  const input = textarea(MAIN_LABEL)
+  act(() => { typeInto(input, '/new') })
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.equal(state.createCalls.length, 0)
+  assert.equal(state.submitCalls.length, 0)
+  assert.equal(input.value, '', '/new 清理草稿正文')
+  act(() => { typeInto(input, '/clear') })
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.equal(state.createCalls.length, 0, '/clear 不创建会话')
+  assert.equal(state.submitCalls.length, 0, '/clear 不作为普通输入发送')
+  assert.equal(input.value, '/clear', '/clear 保留草稿待用户处理')
+  assert.ok(document.body.textContent?.includes('需要已有会话'), '显式提示需先创建会话')
+})
+
+test('Profile 资产加载失败：显式错误与重试，不用完成信号伪装成功', { timeout: 60_000 }, async () => {
+  state.profilesFail = true
+  await mount('#/a/assistant')
+  assert.ok(document.body.textContent?.includes('角色信息加载失败'), '显示真实错误')
+  assert.ok(document.body.textContent?.includes('profiles down'), '携带错误详情')
+  assert.ok(!document.body.textContent?.includes('不存在或已删除'), '不得误判不存在')
+  assert.equal(document.querySelectorAll('textarea').length, 0, '错误态不渲染输入区')
+  const retry = [...document.querySelectorAll<HTMLButtonElement>('button')]
+    .find((btn) => btn.textContent?.trim() === '重试')
+  assert.ok(retry, '提供重试按钮')
+  state.profilesFail = false
+  await act(async () => { retry!.click() })
+  await settle()
+  assert.ok(textarea(MAIN_LABEL), '重试成功后渲染输入区')
+})
+
+// ---------------------------------------------------------------------------
+// A. 完整坐标草稿身份 / B. 锚定配置锁定 / C. logout 世代释放
+// ---------------------------------------------------------------------------
+
+function navigateHash(hash: string): void {
+  window.history.pushState(null, '', hash)
+  window.dispatchEvent(new Event('hashchange'))
+}
+
+test('同 Profile 不同远端坐标：草稿按坐标隔离，首发用各自坐标，旧坐标保留', { timeout: 60_000 }, async () => {
+  await mount('#/a/assistant?node=remote-1&cwd=%2Fremote%2Fwork')
+  act(() => { typeInto(textarea(MAIN_LABEL), 'r1 草稿') })
+  await act(async () => { navigateHash('#/a/assistant?node=remote-2&cwd=%2Fremote%2Fwork2') })
+  await settle()
+  const r2 = textarea(MAIN_LABEL)
+  assert.equal(r2.value, '', 'r2 坐标草稿从零开始，不串 r1 正文')
+  act(() => { typeInto(r2, 'r2 草稿') })
+  await act(async () => { pressEnter(r2) })
+  await settle()
+  assert.deepEqual(state.createCalls[0], {
+    profileId: 'assistant',
+    nodeId: 'remote-2',
+    cwd: '/remote/work2',
+  }, 'create 使用 r2 坐标，绝不带 r1 环境')
+  // 回到 r1：旧坐标草稿保留
+  await act(async () => { navigateHash('#/a/assistant?node=remote-1&cwd=%2Fremote%2Fwork') })
+  await settle()
+  assert.equal(textarea(MAIN_LABEL).value, 'r1 草稿', '旧坐标草稿保留')
+})
+
+test('在途首发切换同 Profile 其他环境：不抢导航不串草稿，回包转后台通知', { timeout: 60_000 }, async () => {
+  state.createGate = makeGate()
+  await mount('#/a/assistant?node=remote-1&cwd=%2Fremote%2Fwork')
+  const r1 = textarea(MAIN_LABEL)
+  act(() => { typeInto(r1, 'r1 在途') })
+  await act(async () => { pressEnter(r1) })
+  await act(async () => { navigateHash('#/a/assistant?node=remote-2&cwd=%2Fremote%2Fwork2') })
+  await settle()
+  const r2 = textarea(MAIN_LABEL)
+  assert.equal(r2.value, '', 'r2 草稿不受 r1 在途任务影响')
+  await act(async () => { state.createGate!.resolve(); await new Promise((r) => setTimeout(r, 30)) })
+  await settle()
+  assert.equal(state.submitCalls.length, 1, 'r1 任务完成提交（用 r1 配置）')
+  assert.deepEqual((state.createCalls[0] as { nodeId?: string }).nodeId, 'remote-1')
+  assert.equal(window.location.hash, '#/a/assistant?node=remote-2&cwd=%2Fremote%2Fwork2', '不抢新导航')
+  assert.ok(document.body.textContent?.includes('已发送并创建会话'), '转后台通知')
+})
+
+test('恢复默认（无冲突）：正文随坐标转移到默认环境并移除 URL 继承参数', { timeout: 60_000 }, async () => {
+  await mount(`#/a/assistant?node=remote-1&cwd=${encodeURIComponent('/remote/work')}`)
+  act(() => { typeInto(textarea(MAIN_LABEL), '跟随正文') })
+  const resetBtn = [...document.querySelectorAll<HTMLButtonElement>('button')]
+    .find((btn) => btn.textContent?.trim() === '恢复默认')
+  assert.ok(resetBtn, '恢复默认按钮存在（URL 坐标定制模式）')
+  await act(async () => { resetBtn!.click() })
+  await settle()
+  assert.equal(window.location.hash, '#/a/assistant', '唯一导航移除继承环境参数，刷新不复活')
+  assert.equal(textarea(MAIN_LABEL).value, '跟随正文', '正文随坐标转移')
+  assert.ok(document.body.textContent?.includes('执行环境跟随角色默认'), '环境回到默认态')
+})
+
+test('恢复默认（目标已有草稿）：不覆盖已有草稿并显式告知，源草稿保留', { timeout: 60_000 }, async () => {
+  await mount('#/a/assistant')
+  act(() => { typeInto(textarea(MAIN_LABEL), '默认坐标已有草稿') })
+  await act(async () => { navigateHash(`#/a/assistant?node=remote-1&cwd=${encodeURIComponent('/remote/work')}`) })
+  await settle()
+  assert.equal(textarea(MAIN_LABEL).value, '', 'r1 坐标草稿独立')
+  act(() => { typeInto(textarea(MAIN_LABEL), 'r1 正文') })
+  const resetBtn = [...document.querySelectorAll<HTMLButtonElement>('button')]
+    .find((btn) => btn.textContent?.trim() === '恢复默认')
+  await act(async () => { resetBtn!.click() })
+  await settle()
+  assert.equal(window.location.hash, '#/a/assistant')
+  assert.ok(document.body.textContent?.includes('默认环境已有其他草稿'), '显式告知未覆盖')
+  assert.equal(textarea(MAIN_LABEL).value, '默认坐标已有草稿', '已有草稿不被无声覆盖')
+  await act(async () => { navigateHash(`#/a/assistant?node=remote-1&cwd=${encodeURIComponent('/remote/work')}`) })
+  await settle()
+  assert.equal(textarea(MAIN_LABEL).value, 'r1 正文', '源草稿保留在原坐标')
+})
+
+test('锚定后锁定创建配置：模型/环境不可改，横幅提示绑定会话，正文附件仍可改后重试', { timeout: 60_000 }, async () => {
+  state.submitFailures = 1
+  await mount('#/a/assistant')
+  const input = textarea(MAIN_LABEL)
+  act(() => { typeInto(input, '首发锚定') })
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.ok(document.body.textContent?.includes('已创建会话 #9'), '锁定横幅可见')
+  assert.equal(document.querySelector<HTMLButtonElement>('button.composer-model-button')?.disabled, true, '模型选择锁定')
+  const customizeBtn = [...document.querySelectorAll<HTMLButtonElement>('button')]
+    .find((btn) => btn.textContent?.trim() === '自定义')
+  assert.equal(customizeBtn?.disabled, true, '起始环境锁定')
+  act(() => { typeInto(input, '（已修正）') })
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.equal(state.createCalls.length, 1, '重试复用会话')
+  assert.equal(state.submitCalls.length, 2)
+  assert.equal(window.location.hash, '#/c/9')
+})
+
+test('logout 于 create 等待期：释放草稿并作废在途回包，不复活不提交不通知', { timeout: 60_000 }, async () => {
+  state.createGate = makeGate()
+  await mount('#/a/assistant')
+  act(() => { typeInto(textarea(MAIN_LABEL), '将被释放') })
+  await act(async () => { pressEnter(textarea(MAIN_LABEL)) })
+  await act(async () => { window.dispatchEvent(new Event('helm:unauthorized')) })
+  await settle()
+  const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
+  assert.equal(getStandbyDraft(key).text, '', 'logout 同步释放草稿')
+  await act(async () => { state.createGate!.resolve(); await new Promise((r) => setTimeout(r, 30)) })
+  await settle()
+  assert.equal(state.createCalls.length, 1, '已发出的请求不假称能撤回')
+  assert.equal(state.submitCalls.length, 0, '世代作废后不继续 submit')
+  assert.equal(getStandbyDraft(key).conversationId, undefined, '回包不得写入锚点')
+  assert.equal(getStandbyDraft(key).text, '', '回包不得复活正文')
+  assert.ok(!document.body.textContent?.includes('已发送并创建会话'), '不发通知')
+})
+
+test('logout 于 upload 等待期：不继续 submit、不复活附件；重登同坐标草稿为空', { timeout: 60_000 }, async () => {
+  state.uploadGate = makeGate()
+  await mount('#/a/assistant')
+  const box = document.querySelector<HTMLElement>('.agent-standby-pane .composer-box')!
+  await act(async () => { dropFiles(box, [new File(['hi'], 'wait.txt', { type: 'text/plain' })]) })
+  await settle()
+  act(() => { typeInto(textarea(MAIN_LABEL), '上传中释放') })
+  await act(async () => { pressEnter(textarea(MAIN_LABEL)) })
+  await new Promise((r) => setTimeout(r, 10))
+  await act(async () => { window.dispatchEvent(new Event('helm:unauthorized')) })
+  await settle()
+  await act(async () => { state.uploadGate!.resolve(); await new Promise((r) => setTimeout(r, 30)) })
+  await settle()
+  const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
+  assert.equal(state.submitCalls.length, 0, '上传回包作废后不继续 submit')
+  assert.equal(getStandbyDraft(key).uploaded.length, 0, '回包不得复活附件')
+  assert.equal(getStandbyDraft(key).text, '', '重登同坐标无旧正文')
 })

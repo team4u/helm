@@ -5986,3 +5986,16 @@ input[type="search"]::-moz-search-clear-button {
 .agent-standby-attachment-state {
   flex-shrink: 0;
 }
+
+.agent-standby-anchored {
+  margin: 0 12px 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.agent-standby-anchored-text {
+  flex: 1;
+  min-width: 0;
+}

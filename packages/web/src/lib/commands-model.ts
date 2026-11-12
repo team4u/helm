@@ -103,7 +103,7 @@ export function buildSlashMenuItems(
   runPluginCommand: (cmd: QualifiedCommand) => void,
 ): SlashMenuItem[] {
   const builtin: SlashMenuItem[] = [
-    { id: '/new', label: '/new', hint: '重置上下文', apply: '/new' },
+    { id: '/new', label: '/new', hint: '开始新话题', apply: '/new' },
     { id: '/clear', label: '/clear', hint: '重置上下文', apply: '/clear' },
     { id: '/compact', label: '/compact', hint: '精简上下文', apply: '/compact' },
   ]

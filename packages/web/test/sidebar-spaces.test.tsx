@@ -157,13 +157,13 @@ test('Sidebar 智能体搜索：输入关键字过滤智能体行', { timeout: 6
   assert.ok(document.body.textContent!.includes('编码专员'), '命中智能体保留')
   assert.ok(!document.body.textContent!.includes('个人助理</span>'), '未命中智能体过滤')
 
-  // 命中智能体点击行主体打开主会话
+  // 命中智能体点击行主体进入待命态（名称是稳定入口，首次发送才落库）
   const row = document.body.querySelector('.agent-standing .nav-item-main') as HTMLButtonElement
   await act(async () => {
     row.click()
   })
   const call = store.openTargetCalls[0]
-  assert.deepEqual(call?.target, { kind: 'conversation', conversationId: 40 })
+  assert.deepEqual(call?.target, { kind: 'agent', profileId: 'coder' })
 })
 
 test('Sidebar 手风琴单展开：仅当前会话所属智能体展开话题子列表，切换后自动收起', { timeout: 60_000 }, async () => {
@@ -177,7 +177,7 @@ test('Sidebar 手风琴单展开：仅当前会话所属智能体展开话题子
   assert.ok(lists[0]!.textContent!.includes('周末计划'), '展开的话题列表包含当前智能体的会话')
   assert.ok(lists[0]!.textContent!.includes('个人助理'), '当前话题在列表内')
 
-  // 点击另一个智能体（编码专员）行主体：切换主会话并自动收起上一个
+  // 点击另一个智能体（编码专员）行主体：进入其待命态（不再跳进旧会话）
   const rows = [...document.body.querySelectorAll('.agent-standing-row .nav-item-main')] as HTMLButtonElement[]
   const coderRow = rows.find((r) => r.textContent!.includes('编码专员'))!
   await act(async () => {
@@ -185,7 +185,7 @@ test('Sidebar 手风琴单展开：仅当前会话所属智能体展开话题子
   })
   assert.deepEqual(
     store.openTargetCalls.map((c) => c.target),
-    [{ kind: 'conversation', conversationId: 40 }],
+    [{ kind: 'agent', profileId: 'coder' }],
   )
 })
 

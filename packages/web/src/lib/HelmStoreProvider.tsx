@@ -17,6 +17,7 @@ import {
   subscribeSessionDoc,
 } from './session-docs.js'
 import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.js'
+import { resetStandbyDrafts } from '../conversation/standby-model.js'
 import * as HelmPluginClient from './plugin-client-sdk.js'
 import { formatLocationHash, isSameLocationState, parseLocationHash, shouldPushLocationHistory, type WorkspaceLocationState } from './url-hash-model.js'
 import { groupUiContributions, isPrototypeParamKey, resolveTargetString, SCREEN_PARAM_KEY_PATTERN, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
@@ -168,6 +169,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     requests.current.clear()
     failedDocs.current.clear()
     assetGeneration.current++
+    // 释放待命草稿并作废在途首发任务：旧 create/upload/submit 回包不得复活正文/附件或继续发送。
+    resetStandbyDrafts()
     resetPluginClientCache()
     resetSessionDocSubscriptions()
     setStoredToken(null)
@@ -208,13 +211,16 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     if (results[3].status === 'fulfilled') setCredentials(results[3].value)
     if (results[4].status === 'fulfilled') setSkills(results[4].value)
     if (results[5].status === 'fulfilled') setActions(results[5].value)
+    // 角色资产单独记录成败：待命页据此区分「加载失败（可重试）」与「确实不存在」，
+    // 不得用全体 assets 的完成信号假装 Profile 加载成功。
+    reportLoad('assets:profiles', results[0].status === 'rejected' ? results[0].reason : undefined)
     // 无论单项成败，本轮已返回即可区分「加载中」与「不存在」（单项失败另有通知）。
     setAssetsLoaded(true)
     const labels = ['角色', '模型', '网关', '凭据', '技能', '插件动作']
     results.forEach((result, index) => {
       if (result.status === 'rejected') pushNotice({ type: 'notification', level: 'error', title: `${labels[index]}加载失败`, body: errorText(result.reason) })
     })
-  }, [pushNotice])
+  }, [pushNotice, reportLoad])
 
   // 全量校准插件清单：以服务端列表为基准合并本地 live 状态（SSE 增量优先保留，卸载项剔除）。
   const syncPlugins = useCallback((next: PluginSummary[]) => {

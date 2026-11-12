@@ -335,7 +335,7 @@ test('交互：busy 会话 Enter 走插话引导（whenBusy=steer），⌘Enter 
   }
 })
 
-test('交互：/new 等宿主管理命令不落输入请求（立即执行 reset）', { timeout: 60_000 }, async () => {
+test('交互：/new 无宿主回调时不 reset 不落 input；/clear 仍立即重置上下文', { timeout: 60_000 }, async () => {
   const captured: CapturedRequest[] = []
   const restore = stubFetch(captured, true)
   const { host, unmount } = mountComposer(summary(4, 'idle'), [])
@@ -350,13 +350,28 @@ test('交互：/new 等宿主管理命令不落输入请求（立即执行 reset
     // 第一次 Enter 被斜杠浮层捕获：回填选中项 '/new' 并关闭浮层
     await act(async () => {})
     assert.equal(ta.value, '/new')
-    // 第二次 Enter 提交：宿主管理命令立即执行 reset，不落 input
+    // 第二次 Enter 提交：/new 是新话题入口，无宿主回调时显式提示，不 reset 原会话也不落 input
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
     await act(async () => {})
     assert.equal(captured.filter((c) => c.path.endsWith('/input')).length, 0, '管理命令不走 input 提交')
-    assert.equal(captured.some((c) => c.path.endsWith('/reset')), true, '/new 触发 reset')
+    assert.equal(captured.some((c) => c.path.endsWith('/reset')), false, '/new 不再触发 reset')
+
+    // /clear 保持原有重置语义
+    await act(async () => {
+      typeInto(ta, '/clear')
+    })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    await act(async () => {})
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    await act(async () => {})
+    assert.equal(captured.some((c) => c.path.endsWith('/reset')), true, '/clear 触发 reset')
+    assert.equal(captured.filter((c) => c.path.endsWith('/input')).length, 0, '/clear 不走 input 提交')
   } finally {
     unmount()
     restore()

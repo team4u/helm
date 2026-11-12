@@ -7,12 +7,14 @@ import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import type { ArtifactMetadata, ConversationInit, ConversationSummary } from '@helm/protocol'
 import {
+  standbyManageAction,
   admitStandbyFiles,
   buildStandbyCreateInit,
   clearStandbyDraft,
   executeStandbySend,
   getStandbyDraft,
   inheritedEnvOf,
+  resetEnvStandbyDraft,
   resetStandbyDrafts,
   standbyDraftKey,
   standbyEnvError,
@@ -107,7 +109,7 @@ async function run(key: string, profileId: string, deps: StandbySendDeps): Promi
 }
 
 test('同步去重：sending 标记后的第二次调用直接 busy，不重复 create', { timeout: 60_000 }, async () => {
-  const key = standbyDraftKey('primary', 'assistant')
+  const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   let releaseCreate!: () => void
   const gate = new Promise<void>((r) => { releaseCreate = r })
@@ -129,7 +131,7 @@ test('同步去重：sending 标记后的第二次调用直接 busy，不重复 
 })
 
 test('步骤顺序：create -> patch thinkingLevel -> 逐个上传 -> submit 携带附件', { timeout: 60_000 }, async () => {
-  const key = standbyDraftKey('primary', 'assistant')
+  const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   const { draft } = admitStandbyFiles(getStandbyDraft(key), [makeFile('a.txt'), makeFile('b.txt')])
   updateStandbyDraft(key, { ...draft, text: '带附件', thinkingLevel: 'high', model: 'faux/glm-4.6' })
@@ -145,7 +147,7 @@ test('步骤顺序：create -> patch thinkingLevel -> 逐个上传 -> submit 携
 })
 
 test('thinkingLevel 未设置不 patch；环境未定制不携带', { timeout: 60_000 }, async () => {
-  const key = standbyDraftKey('primary', 'assistant')
+  const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   updateStandbyDraft(key, { text: '默认配置' })
   await run(key, 'assistant', makeDeps(log))
@@ -155,7 +157,7 @@ test('thinkingLevel 未设置不 patch；环境未定制不携带', { timeout: 6
 })
 
 test('create 失败：failed、无锚点、草稿保留；重试重新 create', { timeout: 60_000 }, async () => {
-  const key = standbyDraftKey('primary', 'assistant')
+  const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   log.failures.create = new Error('boom')
   updateStandbyDraft(key, { text: '第一条' })
@@ -172,7 +174,7 @@ test('create 失败：failed、无锚点、草稿保留；重试重新 create', 
 })
 
 test('submit 失败于 create 之后：保留真实 ID；重试不重复 create', { timeout: 60_000 }, async () => {
-  const key = standbyDraftKey('primary', 'assistant')
+  const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   log.failures.submit = new Error('submit boom')
   updateStandbyDraft(key, { text: '会创建但失败' })
@@ -185,7 +187,7 @@ test('submit 失败于 create 之后：保留真实 ID；重试不重复 create'
 })
 
 test('上传部分失败：已上传转正；重试只补传缺的文件', { timeout: 60_000 }, async () => {
-  const key = standbyDraftKey('primary', 'assistant')
+  const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   log.failures.uploadNames = ['b.txt']
   const { draft } = admitStandbyFiles(getStandbyDraft(key), [makeFile('a.txt'), makeFile('b.txt')])
@@ -203,7 +205,7 @@ test('上传部分失败：已上传转正；重试只补传缺的文件', { tim
 })
 
 test('用户已切走：不导航改后台通知；仍查看时才 replace 导航', { timeout: 60_000 }, async () => {
-  const awayKey = standbyDraftKey('primary', 'assistant')
+  const awayKey = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const awayLog = makeLog()
   awayLog.viewing = false
   updateStandbyDraft(awayKey, { text: '后台完成' })
@@ -211,7 +213,7 @@ test('用户已切走：不导航改后台通知；仍查看时才 replace 导�
   assert.deepEqual(awayLog.navigations, [], '不抢新导航')
   assert.deepEqual(awayLog.backgroundNotices, [9], '发出后台通知')
 
-  const hereKey = standbyDraftKey('split', 'assistant')
+  const hereKey = standbyDraftKey({ panel: 'split', profileId: 'assistant' })
   const hereLog = makeLog()
   updateStandbyDraft(hereKey, { text: '仍在查看' })
   await run(hereKey, 'assistant', makeDeps(hereLog))
@@ -220,7 +222,7 @@ test('用户已切走：不导航改后台通知；仍查看时才 replace 导�
 })
 
 test('成功清空后 finally 不复活空记录', { timeout: 60_000 }, async () => {
-  const key = standbyDraftKey('primary', 'assistant')
+  const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   updateStandbyDraft(key, { text: '清理校验' })
   await run(key, 'assistant', makeDeps(log))
@@ -270,4 +272,93 @@ test('inheritedEnvOf：空值不继承，local 节点按缺省处理由调用方
 test('clearStandbyDraft：不存在的键清理不广播报错', { timeout: 60_000 }, () => {
   clearStandbyDraft('missing:key')
   assert.equal(getStandbyDraft('missing:key').text, '')
+})
+
+test('standbyManageAction：/new 清草稿，/clear 与 /compact 需已有会话，其余为普通输入', { timeout: 60_000 }, () => {
+  assert.deepEqual(standbyManageAction('/new'), { kind: 'clear-draft' })
+  assert.deepEqual(standbyManageAction('  /new  '), { kind: 'clear-draft' })
+  assert.deepEqual(standbyManageAction('/clear'), { kind: 'needs-conversation', command: '/clear' })
+  assert.deepEqual(standbyManageAction('/compact'), { kind: 'needs-conversation', command: '/compact' })
+  assert.equal(standbyManageAction('/definitely-not-registered'), null)
+  assert.equal(standbyManageAction('请帮我执行 /new'), null, '非精确命中不拦截')
+})
+
+test('standbyDraftKey：完整入口坐标无歧义，空值规范化', { timeout: 60_000 }, () => {
+  const plain = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
+  const r1 = standbyDraftKey({ panel: 'primary', profileId: 'assistant', nodeId: 'r1', cwd: '/a' })
+  const r2 = standbyDraftKey({ panel: 'primary', profileId: 'assistant', nodeId: 'r2', cwd: '/b' })
+  assert.notEqual(plain, r1)
+  assert.notEqual(r1, r2)
+  // 空串等价于未设置；主/分屏同坐标不同键
+  assert.equal(standbyDraftKey({ panel: 'primary', profileId: 'p', nodeId: '', cwd: '' }), plain.replace('assistant', 'p'))
+  assert.notEqual(standbyDraftKey({ panel: 'split', profileId: 'assistant', nodeId: 'r1', cwd: '/a' }), r1)
+})
+
+test('resetEnvStandbyDraft：清除环境并转移正文；目标已有草稿不覆盖', { timeout: 60_000 }, () => {
+  const from = standbyDraftKey({ panel: 'primary', profileId: 'p', nodeId: 'r1', cwd: '/a' })
+  const to = standbyDraftKey({ panel: 'primary', profileId: 'p' })
+  updateStandbyDraft(from, { text: '跟随正文', envCustomized: true, envNodeId: 'r1', envCwd: '/a' })
+  assert.equal(resetEnvStandbyDraft(from, to), true)
+  const moved = getStandbyDraft(to)
+  assert.equal(moved.text, '跟随正文')
+  assert.equal(moved.envCustomized, false)
+  assert.equal(moved.envNodeId, undefined)
+  assert.equal(getStandbyDraft(from).text, '', '旧坐标记录随转移移除')
+
+  // 目标已有草稿：不覆盖、返回 false，源草稿保留
+  const from2 = standbyDraftKey({ panel: 'split', profileId: 'p', nodeId: 'r1', cwd: '/a' })
+  updateStandbyDraft(from2, { text: '分屏草稿' })
+  updateStandbyDraft(standbyDraftKey({ panel: 'split', profileId: 'p' }), { text: '已有默认草稿' })
+  assert.equal(resetEnvStandbyDraft(from2, standbyDraftKey({ panel: 'split', profileId: 'p' })), false)
+  assert.equal(getStandbyDraft(standbyDraftKey({ panel: 'split', profileId: 'p' })).text, '已有默认草稿')
+  assert.equal(getStandbyDraft(from2).text, '分屏草稿')
+})
+
+test('世代作废：reset 后在途回包返回 stale，不写入锚点不提交不通知', { timeout: 60_000 }, async () => {
+  const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
+  const log = makeLog()
+  let releaseCreate!: () => void
+  const gate = new Promise<void>((r) => { releaseCreate = r })
+  const deps = makeDeps(log)
+  deps.create = async (init) => {
+    log.creates.push(init)
+    await gate
+    return { id: 9, profileId: 'assistant' } as import('@helm/protocol').ConversationSummary
+  }
+  updateStandbyDraft(key, { text: '会被释放的草稿' })
+  const task = run(key, 'assistant', deps)
+  resetStandbyDrafts()
+  releaseCreate()
+  assert.equal(await task, 'stale')
+  assert.equal(getStandbyDraft(key).text, '', '回包不得复活正文')
+  assert.equal(getStandbyDraft(key).conversationId, undefined, '不得写入锚点')
+  assert.equal(log.submits.length, 0)
+  assert.equal(log.errors.length, 0, '不发通知')
+  assert.deepEqual(log.navigations, [], '不导航')
+
+  // 新世代同键新草稿：旧任务收尾不得覆盖其 sending 状态
+  updateStandbyDraft(key, { text: '新世代草稿' })
+  assert.equal(getStandbyDraft(key).sending, false)
+})
+
+test('世代作废：upload 等待期 reset 后不继续 submit、已上传转正作废', { timeout: 60_000 }, async () => {
+  const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
+  const log = makeLog()
+  let releaseUpload!: () => void
+  const gate = new Promise<void>((r) => { releaseUpload = r })
+  const deps = makeDeps(log)
+  deps.upload = async (id, file) => {
+    await gate
+    log.uploads.push({ id, name: file.name })
+    return { id: 'art-1', conversationId: id, name: file.name, path: '', mimeType: file.type, size: file.size, createdAt: 0 }
+  }
+  const { draft } = admitStandbyFiles(getStandbyDraft(key), [makeFile('wait.txt')])
+  updateStandbyDraft(key, { ...draft, text: '上传中释放' })
+  const task = run(key, 'assistant', deps)
+  await new Promise((r) => setTimeout(r, 5))
+  resetStandbyDrafts()
+  releaseUpload()
+  assert.equal(await task, 'stale')
+  assert.equal(log.submits.length, 0, '不继续 submit')
+  assert.equal(getStandbyDraft(key).uploaded.length, 0, '回包不得复活附件')
 })
