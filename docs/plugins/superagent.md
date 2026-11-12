@@ -61,9 +61,9 @@
 
 **Layer 2 认知推理**：Layer 1 判定需认知排障时，把异常事实（XML 转义防逃逸，不用反引号围栏杜绝 prompt 注入面）合并投递到看门狗会话（`origin: 'agent'` / `followUp`）。模型结合 `watchdog-playbooks` 技能手册推理根因与处置，经专属工具落地：`watchdog_inspect`（现查目标真实详情，只读）、`watchdog_recover`（向 owned 会话提交恢复提示）、`watchdog_abort`（中止 owned 会话，human/中枢/看门狗自身拒绝）。三个工具 `scope` 限定 watchdog Profile 且执行期核对实际 watchdog 会话 ID（防同 Profile 人类直聊滥用）；同名 `ctx.action` 供 HTTP/CLI（`helm superagent watchdog_*`）。
 
-### 归属权红线
+### 归属权红线（内核执行层强制）
 
-`ownedBy: 'human'` 的人类直连会话与 Herdr 终端窗格**严禁发送任何按键或中止指令**，仅允许只读诊断与通知；mutation 前一律现查 `ctx.host.getConversationOwnership`（未标记一律按 human 处理）。外部窗格的中止只能经核对 `facts.parentConversationId` 指向的 owned 原生工作会话后由 L2/规则对该会话 abort，由 Herdr 原取消链清理。外部探针的 `stalledBasis` 口径只反映状态翻转间隔、不含 working 内部活动——绝不单独作为自动中止证据。看门狗自身（含同 Profile 直聊会话）绝不做探针目标，其 failed/aborted 仅经 `turn_settled` 通知，防自巡检死循环。
+`ownedBy: 'human'` 的人类直连会话与 Herdr 终端窗格**严禁发送任何按键或中止指令**，仅允许只读诊断与通知（未标记一律按 human 处理）。一切自动化中止与输入提交统一走内核 guarded 端口（`ctx.host.abortConversationGuarded` / `submitInputGuarded`）：探针观测的 `ownedBy` 与 `stateChangeSeq` 随调用传入，内核在会话串行域内、于第一个不可逆动作前同步复核，human 红线在执行层原子兑现，不再依赖插件侧 check-then-act。外部窗格的中止只能经核对 `facts.parentConversationId` 指向的 owned 原生工作会话后由 L2/规则对该会话 abort，由 Herdr 原取消链清理。外部探针的 `stalledBasis` 口径只反映状态翻转间隔、不含 working 内部活动——绝不单独作为自动中止证据。看门狗自身（含同 Profile 直聊会话）绝不做探针目标，其 failed/aborted 仅经 `turn_settled` 通知，防自巡检死循环。
 
 ## UI 扩展
 

@@ -35,7 +35,7 @@ stateDiagram-v2
 
 每次提交的 `helm.input` entry 附着输入来源 `origin: 'human' | 'agent' | 'trigger'`，从 CLI/HTTP 一路透传到 `turn_settled` 钩子。后台 Worker 本回合消费的输入只要含任一 `agent / trigger` 来源，即向 `routerConversationId`（SuperAgent 中枢）投递汇报卡片；纯 `human` 回合仅静默更新召回图谱。
 
-会话归属权 `ownedBy: 'human' | 'bot' | 'helm'`（缺省 `human`）是 Watchdog 红线判定的唯一可信来源：对 `bot/helm` 归属的后台会话允许自动恢复或中止；对 `human` 的人类直连会话或 Herdr 终端窗格**严禁发送任何按键或中止指令**，仅允许只读诊断与通知。未标记一律按 `human` 对待。插件可经 `ctx.host.manageConversation(id)` 声明管理权——受管期间会话删除保护（`409 conversation_managed_by_plugin`），插件停用/回滚时宿主自动释放；`superagent` 的 router/watchdog 常驻会话、初始入口会话均受此保护且无 id 级删除豁免（删除后重启凭 tombstone 不复活、不补种）。
+会话归属权 `ownedBy: 'human' | 'bot' | 'helm'`（缺省 `human`）是 Watchdog 红线判定的唯一可信来源：对 `bot/helm` 归属的后台会话允许自动恢复或中止；对 `human` 的人类直连会话或 Herdr 终端窗格**严禁发送任何按键或中止指令**，仅允许只读诊断与通知。未标记一律按 `human` 对待。在内核执行层，一切自动化中止或输入提交必须走 `ctx.host.abortConversationGuarded(id, guard)` 与 `ctx.host.submitInputGuarded(id, text, opts, guard)`：调用方携带探针时刻的 `expectedOwnership`（严禁 `human`）与可选 `expectedStateSeq`，内核在会话串行域内、于第一个不可逆动作前同步复核，不匹配即抛 `409 ownership_conflict / state_seq_conflict` 且绝不产生副作用。插件可经 `ctx.host.manageConversation(id)` 声明管理权——受管期间会话删除保护（`409 conversation_managed_by_plugin`），插件停用/回滚时宿主自动释放；`superagent` 的 router/watchdog 常驻会话、初始入口会话均受此保护且无 id 级删除豁免（删除后重启凭 tombstone 不复活、不补种）。
 
 ## 单一 state.sqlite 存储架构
 

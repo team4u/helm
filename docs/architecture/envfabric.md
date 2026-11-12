@@ -221,6 +221,7 @@ export type NodeTunnelControl =
 
 export type NodeTunnelErrorCode =
   | 'aborted'
+  | 'node_draining'
   | 'connect_failed'
   | 'not_found'
   | 'permission_denied'
@@ -296,7 +297,7 @@ nodeTunnelOpen?(input: NodeTunnelOpenInput): Promise<RpcResult<null>>
 2. **入参边界校验与目标连接**：
    `env-rpc-server.ts` 实现 `nodeTunnelOpen`：校验 `tunnelId` 为 `1..128` 字符非空字符串，`port` 为 `1..65535` 的安全整数，`host` 缺省 `127.0.0.1` 且必须为非空/≤255 字符/无控制字符与空白的字符串（拒绝未知字段；绝不静默改写目标）。`net.connect({ host, port })` 使用入参目标——目标主机由节点解析与连接（这是「任意 TCP」的语义来源），Hub 不代解也不限制为回环。信任边界随之明确：**该节点被授权访问的目标（含其可达的内网服务与云元数据端点）都可经隧道触达**，节点准入与令牌管理即该能力的准入控制。
 3. **排空联动与世代销毁**：
-   `setDraining(true)`（自升级排空、候选待激活）期间拒绝新的 `nodeTunnelOpen`，返回 `{ ok: false, error: { code: 'aborted', message: '...' } }`，与 `envExec` 的排空行为一致。在途隧道记入 `activeTunnels`，新增 `getActiveTunnelCount()` 并入升级排空判据（`getActiveExecCount() === 0 && getActiveTunnelCount() === 0`），防止长耗时流式回答被节点自升级生硬切断；连接代 `dispose()` 时一并销毁全部在途隧道的 WS 流与本地 TCP socket。
+   `setDraining(true)`（自升级排空、候选待激活）期间拒绝新的 `nodeTunnelOpen`（与 `envExec` / `ipcCall` / `ipcSubscribe` 一样），返回类型化错误码 `node_draining`（区别于用户/宿主取消的 `aborted`）。在途隧道记入 `activeTunnels`，新增 `getActiveTunnelCount()` 并入升级排空判据（`getActiveExecCount() === 0 && getActiveTunnelCount() === 0`），防止长耗时流式回答被节点自升级生硬切断；连接代 `dispose()` 时一并销毁全部在途隧道的 WS 流与本地 TCP socket。
 
 ### 安全边界
 
@@ -324,7 +325,7 @@ helm nodes forward <nodeId> <listenHost:listenPort> [<targetHost>:]<targetPort>
 - **监听器只在命令运行期间存在**：Hub 侧按需 `net.Server` 监听 `listenHost:listenPort`（显式端口，不随机分配），不新增任何永久 Hub 监听端口；
 - **逐连接开隧道**：每个入站连接经 `EnvFabric.openTunnel(nodeId, { host, port })` 建立任意 TCP 隧道并双向 pipe（背压原生传播）；
 - **前台退出即关闭**：CLI 前台运行并消费 NDJSON 事件流（started/connection/error）；Ctrl-C/SIGTERM 或流断开时显式 `DELETE` 停止，Hub 关闭监听器与全部隧道；宿主 close 时统一销毁；
-- **HTTP 同权端点**：`POST /api/nodes/:id/forward`（创建，body：`listenHost/listenPort/targetHost?/targetPort`）、`GET /api/nodes/forward`（清单）、`GET /api/nodes/forward/:id`（详情）、`GET /api/nodes/forward/:id/events`（NDJSON 事件流）、`DELETE /api/nodes/forward/:id`（停止）；
+- **HTTP 与 CLI 同权端点**：`POST /api/nodes/:id/forward`（创建，body：`listenHost/listenPort/targetHost?/targetPort`）、`GET /api/nodes/forward`（`helm nodes forwards` 清单）、`GET /api/nodes/forward/:id`（`helm nodes forward-inspect <id>` 详情）、`GET /api/nodes/forward/:id/events`（NDJSON 事件流）、`DELETE /api/nodes/forward/:id`（`helm nodes forward-stop <id>` 停止）；
 - **严格校验**：监听/目标 host 非空/≤255 字符/无控制字符与空白，端口 1..65535；监听冲突（EADDRINUSE）显式 `409 node_forward_listen_failed`，不静默换端口。
 
 ### 后续接入：Provider 配置契约（本次不实现）
@@ -356,6 +357,7 @@ helm nodes forward <nodeId> <listenHost:listenPort> [<targetHost>:]<targetPort>
 | 场景 | 错误码 | HTTP |
 | :--- | :--- | :--- |
 | 节点未连接 | `node_offline` | 409 |
+| 节点正在升级排空，拒绝受理新命令/IPC/隧道 | `node_draining` | 409 |
 | 节点守护进程版本不支持隧道 | `node_tunnel_not_supported` | 501 |
 | 建隧道超时（默认 10s） | `node_tunnel_timeout` | 504 |
 | 节点侧 `net.connect` 失败（端口未监听） | `node_tunnel_connect_failed` | 502 |

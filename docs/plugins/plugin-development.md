@@ -120,7 +120,7 @@ export default {
 
 | 分类 | 符号 |
 | :--- | :--- |
-| Hooks | `usePluginContext`（`callAction / submitInput / openConversationDrawer / openArtifact / openWorkbench / notify / theme / composer` 等）、`usePluginDoc(docName, pluginId?)`、`usePluginSessionDoc(docName, options?)`、`useConversations()`、`useConversation(id)`、`useToolActivity(callId, active)` |
+| Hooks | `usePluginContext`（`callAction / submitInput / openScreen / openSplitScreen / openConversationDrawer / openArtifact / openWorkbench / notify / theme / composer` 等）、`usePluginDoc(docName, pluginId?)`、`usePluginSessionDoc(docName, options?)`、`useConversations()`、`useConversation(id)`、`usePlugins()`、`useToolActivity(callId, active)` |
 | 无障碍底座组件 | `Switch`、`Select` / `MultiSelect`、`Checkbox`、`Tabs` 系列、`SegmentedControl`、`Dialog` 系列、`ViewBoundary`、`Callout` |
 | 布局原语 | `Screen`、`ScreenSection`、`DataTable`、`KvGrid`（见下方速查） |
 | 内容展示 | `HelmIcon`（lucide 线性图标宿主封装）、`MarkdownView`、`CodeBlockView`、`CopyButton` |

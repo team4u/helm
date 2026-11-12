@@ -1,111 +1,87 @@
 # helm 开发约定
 
-**helm** 是极简持久微内核个人助理、多智能体确定性编排与 Herdr 协同主控台系统。本文件约束所有参与开发的智能体与人类；架构详情见 `docs/architecture/` 与 `docs/plugins/`。
+**helm** 是极简持久微内核个人助理、多智能体确定性编排与 Herdr 协同主控台系统。本文件约束所有参与开发的智能体与人类；按需深入的文档路标见文末第 7 节。
 
-## 工作目录与历史仓库隔离（重要）
+## 1. 环境、隔离与破坏性变更授权（最高优先级）
 
-- **必须在 `/root/code/helm` 下工作**：开发智能体的继承 `cwd` 可能位于 `/root/code/botx` 或 `/root/code/botd`（旧仓库），禁止沿用；每次开工先显式 `cd /root/code/helm`（或同级专属 `../helm-worktrees/<name>` 路径）。
-- `/root/code/botx`、`/root/code/botd` 与 `/root/code/herdr` **只读**：可参考其代码与 `node_modules` 验证 SDK / 协议行为，绝不修改。
-- 数据目录为 `~/.helm`（可通过 `HELM_DATA_DIR` 覆盖），与 `~/.botx`、`~/.botd` 完全隔离；不得读写旧系统的运行数据。
-
-## 开发阶段：不兼容、不迁移（重要）
-
-- 当前项目处于开发阶段，**不考虑任何向后兼容性，不做数据迁移**。
-- 按任务需要，**允许直接进行破坏性操作**：修改、删除或重建本项目代码、公共接口、配置、数据库结构和开发数据，以最新设计为准。
-- 不保留旧接口、旧格式读取、迁移脚本、双写或兼容适配层；旧开发数据可以直接清理并按新结构重建，测试同步采用新契约。
-- 上述授权限于 helm 项目与开发数据；历史仓库只读、旧系统运行数据隔离和端口约束继续有效。
-
-## 端口约定（3000/3001/3002/3101/3102 均被占用）
-
-- 前端 dev（Vite）：`3201`（`strictPort: true`），代理 `/api` 与 `/ws` 到 `3202`。
-- 内核（Hub）：`3202`（`HELM_PORT=3202`）。
-- 永不占用 `3000`（外部）、`3001/3002`（`botd`）、`3101/3102`（`botx`）。
+- **工作目录**：必须在 `/root/code/helm`（或同级 worktree `../helm-worktrees/<name>`）下工作；开发智能体的继承 `cwd` 可能位于旧仓库，每次开工先显式 `cd`。
+- **历史仓库严格只读**：`/root/code/botx`、`/root/code/botd`、`/root/code/herdr` 仅可参考代码与 `node_modules` 验证 SDK / 协议行为，**绝不修改**。
+- **运行数据隔离**：数据目录仅限 `~/.helm`（或 `HELM_DATA_DIR` 覆盖值），与 `~/.botx`、`~/.botd` 完全隔离，不得读写旧系统运行数据。
+- **端口铁律**：Web dev 固定 `3201`（`strictPort: true`，代理 `/api`、`/ws`），内核 Hub 固定 `3202`（`HELM_PORT=3202`）。**永不占用 `3000`（外部）、`3001/3002`（botd）、`3101/3102`（botx）**。
+- **开发阶段：不兼容、不迁移**：
+  - 允许对 helm 代码、公共接口、配置、数据库结构和开发数据**直接进行破坏性修改、删除或重建**，以最新设计为准。
+  - **严禁编写向后兼容层、旧格式读取、迁移脚本、双写或兼容适配**；旧开发数据直接清理按新结构重建，测试同步采用新契约。此授权限于 helm 项目与开发数据；历史仓库只读、数据隔离与端口约束继续有效。
 
 ```bash
-HELM_PORT=3202 pnpm dev        # 前后端一起
+HELM_PORT=3202 pnpm dev        # 前后端一起（Web 3201 -> Hub 3202）
 HELM_PORT=3202 pnpm dev:kernel # 只起内核
 pnpm dev:web                   # 只起前端（需内核已在 3202）
-pnpm build && pnpm typecheck && pnpm test:all   # 全量；本地开发默认 pnpm test:unit，见「测试分层执行」
+pnpm link:bins                 # 可选：在 /usr/local/bin 挂载 helm / helm-node / helm-hub 源码命令
+pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 节分层执行
 ```
 
-## 架构铁律（微内核 + Hook/UI 扩展点 + 内置插件）
+## 2. 架构边界与设计原则
 
-1. **内核极度精简（零业务角色硬编码 + 跨平台节点底座 `EnvFabric`）**：
-   - `@helm/kernel`（`helm-hub`）只保留四块通用机制：① `pi-durable` 持久会话增强（通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5、`AskDoc`、`SecretStash`、`Artifacts`、纯文件资产热重载）与原生 `spawnAgent` 子会话派生（`agent_spawn` Hook 管道 + 原生子会话默认行）；② 跨平台执行编排底座 `EnvFabric` + `NodeRegistry`（`/ws/node` 控制网关、`/ws/node-tunnel` 节点任意 TCP 透传隧道（`openTunnel` 原语 + `nodeFetch` HTTP/HTTPS 适配层），内建 `local` 节点 + 远端 `@helm/node` 守护进程，驱动 `bash / read / write / edit / gate / env exec` 与按 `nodeId + canonicalPath` 目标的文件互斥，与任何插件是否启用正交）；③ Model 与 Auth（模型供应商接入、凭据与令牌管理；Provider 的远端节点绑定不包含在核心隧道本次实现中）；④ 唯一强类型插件宿主 `PluginHost`（`definePlugin(ctx)`）。**Git Worktree 租约/续接/清理（`WorktreeAllocator`）不在内核**，完整迁入 `builtin:workflow`；内核不再提供 `watchdog` 定时器与 `watchdog_tick` Hook。**`subagent` / `SubagentWorkflow` / `cleanup_worktree` 模型工具与编排引擎不是内核能力**，由 `builtin:workflow` 插件提供（见第 3 点）。
-   - **严禁在内核硬编码 `'router' | 'worker' | 'watchdog'` 枚举**；会话职责一律通过 `profileId` 与 `tags` 表达。
-2. **生命周期 Hook + 全界面扩展点，零 `if/else` 业务特判**：
-   - **后端可组合生命周期 Hook**（支持 `continue | transform | handled | block`）：`trigger`、`input`、`before_turn`、`tool_call / tool_result`、`agent_spawn`、`turn_settled`（统一覆盖 `completed | failed | aborted`）。内核不内置巡检定时器；周期性任务由插件自管服务调度（如 `builtin:superagent` 用自有 `ctx.service` 驱动巡检周期，`builtin:herdr` 通过通用进程内事件采集终端诊断）。
-   - **前端全界面扩展点**（`client.tsx` 单轨；宿主核心不再内置声明式 JSON 渲染轨道）：`sidebar.item/section`、`screen`（全屏自定义视图，支持左右 Split View 并排展示）、`timeline.renderer`、`tool.view`、`composer.pill/widget`、`workbench.panel`、`commandPalette (⌘K) / settings.panel`，以及统一微操作 `ctx.ui.action({ target: 'conversation:header' | 'conversation:row' | 'timeline:entry' })`、`ctx.ui.markdownCodeBlock({ id, languages, priority?, client })` 与独立保留的 `composerCompleter / artifactPreviewer / profileRuntime / slot` 组合面（不为凑固定数量强行合并）。
-3. **内置插件正交职责**：
-   - `builtin:workflow`（**默认启用、非 locked 可停用**）：承载 `subagent` / `SubagentWorkflow` / `cleanup_worktree` 三个模型工具、DSL 编排引擎（`builtin-plugins/workflow/engine`）与完整的受管 Git Worktree 生命周期（`WorktreeAllocator` 全量迁入：租约分配、断点续接与安全清理），6 个动作（`list / run / runs / inspect / abort / cleanup_worktree`，映射为 `helm workflows …` 与 `helm worktrees cleanup` 动态命令）与工作流运行卡/任务面板 UI。私有 run 记录经 `ctx.doc('records')` 持久化，完整 `runs` 经 `ctx.sessionDoc` 按父会话分片存 `state.sqlite`，只通过对应元组的专用 SSE 按需订阅（不进入全局首帧或全局广播）；全局 `run-badges` 仅保留紧凑导航摘要，不包含运行详情。不使用内存降级或内核私有存储注入；运行中任务经 `liveTasks` 阻止停用（`409 plugin_has_live_tasks`），在途工作树经 `liveWorktrees` 声明占用、由本插件的清理链拒绝误清理；停用后其动作、CLI 命令与 UI 贡献即时消失。
-   - `builtin:profile`（**常驻不可卸载**）：角色与技能底座——为所有会话按其绑定的 `profileId` 注入独立的 `SYSTEM.md`（`profile.system`）、可用技能目录（`profile.skills`，白名单 + 插件启停实时过滤）与 `load_skill` 工具，自举默认种子角色 `assistant` 与系统技能 `helm-cli`，并在左栏挂载 `conversation:profile:assistant` 站位（不依赖某一具体会话存在）。
-   - `builtin:memory`（**默认启用、可停用**）：完全自治的长期记忆插件——`MemoryStore` 自管 `<dataDir>/profiles/<id>/MEMORY.md`（文件锁 + 64k 上限唯一权威点），单 Profile 开关与初始化标记持久化于插件私有 `ctx.doc`（磁盘全文是唯一权威，不进公共文档/全局首帧/SSE 广播），`before_turn` 按开关注入 `memory.content` / `memory.guide` / `memory.assets-missing` 并动态注入 `update_memory` 用法指引，提供 `get / set / configure` 三个动作（自动映射 `helm memory …`）；停用后工具/动作/UI 即时消失且不留幻影提示词。
-   - `builtin:herdr`（**可选编程插件**）：拦截 `agent_spawn`，复用内核 `EnvFabric` 目标节点通道驱动当地 Herdr 的 23 种 CLI 工具（`herdr:agy`、`herdr:claude`、`herdr:codex`、`herdr:pi` 等），执行「后台标签页 + `.helm/wf-out-*` 文件交接与原地追问自愈」；监听节点 Herdr IPC（Unix Socket / Windows Named Pipe）实现带 `expectedStateSeq` CAS 乐观锁的 `blocked ↔ AskDoc` 远程审批桥；向终端侧栏投射 `$helm` 状态 Token。
-   - `builtin:superagent`（实验性双层中枢）：首次启用时动态创建并持久化两个专属常驻会话——`routerConversationId`（`SuperAgent 中枢`，`profileId: 'superagent'`）与 `watchdogConversationId`（`巡检看门狗`，`profileId: 'watchdog'`）；角色由 `profileId` 表达，不重复打角色 Tag；通过挂载 `trigger / before_turn / turn_settled` 钩子、自有 `ctx.service` 自管巡检调度与自有 `ctx.doc`，实现 0 阻塞总控路由、点名调用任意 `Profile` 专家 Bot 派生后台驻留 Worker、一键归档（`archive_worker`）、按 `origin` 自动向中枢汇报、`ThreadKey` 0ms 直通、`RecallGraph` 召回图谱与基于 `Skill(references/)` 的两层 Watchdog 巡检（巡检周期由插件服务驱动，不依赖内核定时器或 `watchdog_tick` Hook）。
-   - `builtin:json-render`（**默认启用、可停用**）：承接宿主剥离的声明式 JSON 渲染能力——JSON DSL、求值器（evaluator）、界面原语（primitives）与生成式技能全部归口本插件；停用后插件不再解析 JSON Spec，相关围栏回退为普通代码块展示。
-   - `builtin:mermaid`（**默认启用、可停用**）：提供 Markdown 代码块中 Mermaid 图表的渲染能力；停用后 ```mermaid 围栏回退为普通代码块展示，不影响其他插件。
-   - `builtin:triggers`：`cron` 与 `webhook` 入站连接器，经 `defang` 防逃逸信封投入 `trigger` 管道。
-4. **明确不做的事**：
-   - 不做 `PiExtensionAdapter` 服务端 TUI 兼容层（真正的 `pi` 直接在 Herdr 终端窗格中运行）；
-   - 不做冗余的独立 `Space` CRUD 中间表（会话与 Profile 直接使用 `(nodeId, cwd)` 物理坐标），不在 `builtin:herdr` 中自建内嵌 Python 的 `ssh <machine>` 脚本（跨节点统一走 `EnvFabric` + `@helm/node` 守护进程）；
-   - 不把控制 Hub 的客户端 CLI（`@helm/cli`，`helm`）与被控节点守护进程（`@helm/node`，`helm-node`）混装在同一个包或同一个命令中；
-   - 不在 Web 端重复造 `Worktree Diff` 三键合入状态机（Git Worktree 交由 Herdr 与终端工具管理）；
-   - 不在 `Conversation` / `ModelProvider` 底层伪装终端 CLI Agent。
+**设计原则**：第一性原理推导最简正确实现（感觉笨重先怀疑设计，不打补丁）；KISS / YAGNI；命名自解释、注释只写 Why；一个模块只做好一件事；**机制与策略分离**（内核给机制，策略由插件/配置/用户层给）。
 
-## 设计原则
+1. **五包单向依赖**：`@helm/web` / `@helm/cli` → `@helm/protocol` ← `@helm/kernel` / `@helm/node`。`protocol` 是唯一共享契约包，零运行时重依赖；跨包公共接口先改 `protocol` 再同步全部消费方。
+2. **内核只保留四块通用机制**（`@helm/kernel` / `helm-hub`，零业务角色硬编码）：
+   - `pi-durable` 持久会话：通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5（**纯可重建派生索引，禁写 `pi_*` 表语义**）、`AskDoc`、`SecretStash`、`Artifacts`、纯文件资产热重载、原生 `spawnAgent` 子会话派生（`agent_spawn` Hook 管道 + 默认执行行）；
+   - `EnvFabric` + `NodeRegistry`：`/ws/node` 反向控制网关、`/ws/node-tunnel` 任意 TCP 透传隧道（`openTunnel` 原语 + `nodeFetch` 适配层 + `helm nodes forward` 端口转发），内建 `local` 节点 + 远端 `@helm/node` 守护进程，驱动 `bash / read / write / edit / gate / env exec` 与按 `nodeId + canonicalPath` 的文件互斥（与任何插件是否启用正交）；
+   - `Model 与 Auth`：模型供应商接入、模型禁用过滤、凭据与令牌管理；
+   - `PluginHost`：`definePlugin(ctx)` 唯一强类型宿主、受管包生命周期（`doctor / install / update / remove / reload`）、插件间 `dependencies` 拓扑启停与 `ctx.host` 运行时端口。
+3. **零角色枚举**：严禁在内核硬编码 `'router' | 'worker' | 'watchdog'`；会话身份由 `profileId` 表达，运行态标记由 `tags` 表达。
+4. **不在内核的能力**：`subagent / SubagentWorkflow / cleanup_worktree` 工具、DSL 编排引擎与 `WorktreeAllocator`（Worktree 租约/续接/清理）完整归属 `builtin:workflow`；内核无巡检定时器、无 `watchdog_tick` Hook、无内置声明式 JSON 渲染轨道（分别由 `builtin:superagent` 自管服务与 `builtin:json-render` 提供）。
+5. **扩展面契约（零 `if/else` 插件 ID 业务特判）**：
+   - **后端 7 个生命周期 Hook**（`continue | transform | handled | block`，`block` 仅限 `tool_call`）：`trigger`、`input`、`before_turn`、`tool_call`、`tool_result`、`agent_spawn`（额外支持 `next` around 包装）、`turn_settled`（统一覆盖 `completed | failed | aborted`）；
+   - **前端 16 个 `ctx.ui` 扩展点**（`client.tsx` React 单轨）：`sidebarItem`、`sidebarSection`、`screen`、`timelineRenderer`、`markdownCodeBlock`、`toolView`、`composerPill`、`composerWidget`、`composerCompleter`、`artifactPreviewer`、`workbenchPanel`、`command`、`settingsPanel`、`profileRuntime`、`action`（`conversation:header | row | timeline:entry`）、`slot`。
+6. **10 个内置插件**（深度文档见 `docs/plugins/<name>.md`）：
+   - **默认启用（6 个）**：`builtin:profile`（`locked` 常驻；SYSTEM.md / 技能目录 / `load_skill` / `@` 补全 / `helm-cli` 受管技能）、`builtin:workflow`（子代理三工具 + DSL 引擎 + Worktree 租约）、`builtin:memory`（单 Profile `MEMORY.md` 64k 文件锁与开关）、`builtin:apps`（全栈微应用 `catalog`、`validate/publish` 与 `app-builder` 技能）、`builtin:json-render`（`ui` 围栏卡片与 `generative-ui` 技能）、`builtin:mermaid`（`mermaid` 围栏图表）；
+   - **默认停用（4 个）**：`builtin:herdr`（拦截 `agent_spawn` 驱动 23 种终端 CLI、`.helm/wf-out-*` 文件交接自愈、CAS 审批桥、`$helm` 状态 Token）、`builtin:superagent`（双层中枢路由、驻留 Worker、RecallGraph、自管两层 Watchdog）、`builtin:triggers`（Cron 与 Webhook `defang` 入站）、`builtin:magpie`（动态模型网关）。
+   - **插件通用铁律**：① 停用后其工具、动作、CLI 命令、受管技能与 UI 贡献**即时消失，不留幻影提示词**；② 高频会话级状态（如 workflow `runs`）必须用 `ctx.sessionDoc` 专用 SSE 按需订阅，严禁进全局 `ctx.doc` 造成首帧/广播写放大（单文档上限 2 MiB，超限 `413`）；③ 全局启动先按依赖拓扑对全体服务执行 `prepare()` 再依次 `start()`（如 `builtin:workflow` 先于 SDK 调度器标记中断任务取消）；④ 停用/重载遇在途任务经 `liveTasks` 硬阻断（`409 plugin_has_live_tasks`，不可 force），遇持久占用或被依赖返回 `409 plugin_in_use`（可 `--force`）。
+7. **明确不做**：不做服务端 TUI 兼容层（真正的 `pi` 直接在 Herdr 终端窗格运行）；不建独立 `Space` CRUD 中间表（会话与 Profile 直接用 `(nodeId, cwd)` 物理坐标）；不写内嵌 Python 的 SSH 桥接脚本（跨节点统一走 `EnvFabric`）；不把 `helm`（控制 CLI）与 `helm-node`（节点守护进程）混装在同一包/命令；不造第二套微应用子宿主（全栈微应用即携带 `ctx.ui.screen` 的标准受管外部插件）；不在 Web 端重复造 Worktree Diff 合入状态机；不在 `Conversation` / `ModelProvider` 底层伪装终端 CLI Agent。
 
-- **第一性原理**：从问题本质推导最简正确实现；感觉笨重时先怀疑设计，不是打补丁。
-- **KISS / YAGNI / 最小惊讶**：用最少的代码解决问题；不实现用不到的能力；接口行为符合使用者预期。
-- **可读性优先**：代码是写给人看的。命名表达意图，结构自解释；注释只解释 Why（为什么这么做），不复述 What。
-- **UNIX 原则**：一个模块只做好一件事；组合优于聚合；**机制与策略分离**（内核提供机制，策略由配置/插件/用户层给）。
-- **边界清晰**：五包依赖方向单向——`@helm/web` / `@helm/cli` → `@helm/protocol` ← `@helm/kernel` / `@helm/node`；`protocol` 是唯一共享契约包，零运行时重依赖。跨包公共接口先改 `protocol` 并同步所有消费方。
-- **边界处校验**：所有外部输入（HTTP body、插件产物、DSL、事件载荷、Herdr `.helm/wf-out-*` 交接文件）在边界做类型/Schema 校验。
-- **公共接口消费方普查**：改动任何导出符号前，先全仓搜索引用（`kernel/node/cli/web/测试`），漏改即事故。
+## 3. 诚实性红线与安全不变量（禁止造假）
 
-## 诚实性纪律（禁止造假）
+- **边界处强校验**：所有外部输入（HTTP body、插件产物、工作流 DSL、事件载荷、Herdr `.helm/wf-out-*` 交接文件、RPC 响应）在入口边界做类型/Schema 校验，非法输入显式拒绝。
+- **禁止静默降级**：任何能力不支持、节点离线（`409 node_offline`）、升级排空拒新（`node_draining`）或交接失败（如 `.helm/wf-out-*` 缺失或 Schema 校验失败）必须显式报错并附诊断（Herdr 附终端尾部 40 行脱敏快照），**绝不静默回退本机、绝不截取终端脏屏幕文本冒充成功结果、绝不编造 fallback/mock 数据**。
+- **看门狗归属权红线（内核执行层强制）**：对 `ownedBy: 'human'`（缺省值）的人类直连会话或 Herdr 终端窗格**严禁发送任何按键或中止指令**，仅允许只读诊断与通知；对 `bot / helm` 归属的后台会话允许自动恢复或中止。一切自动化中止/提交统一走内核 `abortConversationGuarded` / `submitInputGuarded`，在会话串行域内原子复核 `expectedOwnership` 与 `expectedStateSeq`。
+- **CAS 乐观锁纪律**：`AskDoc` 携带 `expectedStateSeq`——终端 `stateChangeSeq` 已推进（人类已在终端按键）时，Web 端审批自动流转 `superseded` 销单，绝不重复发键；Herdr `agent.send_keys` 强制要求服务端 `send_keys_expected_state_seq` 能力门禁。
+- **机密边界如实**：`SecretStash` 保证「不落库、不进模型上下文」；但任意 shell 命令与进程内插件（含全栈微应用，属可信代码、拥有宿主权限）天然可读环境变量与内存——**不承诺对可信代码的零泄漏**，文档不得夸大。
+- **会话与路由不变量**：初始会话 `#1` 无 ID 级删除豁免（删除后重启凭 tombstone 不复活、不补种）；受管会话由 `ctx.host.manageConversation` 保护（`409 conversation_managed_by_plugin`），产品逻辑不依赖固定会话 ID。无显式目标的 `trigger` 在钩子链后选最新无父链 human-owned assistant 会话；失效的显式目标不得被 ThreadKey 路由掩盖；工作流新 run 必须显式指定会话或 `--current`，resume 沿用原 run 目标。忙时策略仅 `steer | followUp | reject`（内核默认 `steer`，批处理用 `followUp`）；输入来源 `origin: human | agent | trigger` 附着于 `helm.input`，后台 Worker 回合含 `agent / trigger` 输入即向 SuperAgent 中枢汇报，纯 `human` 回合仅静默更新召回图谱。
 
-- **禁止静默降级**：任何能力不支持或外部交接失败（例如 `herdr:<kind>` 未生成 `.helm/wf-out-*` 或 JSON Schema 校验失败）必须给出显式错误与诊断（附终端最后 40 行快照），**绝不静默截取终端脏屏幕文本冒充成功结果**，绝不编造 fallback 数据或 mock 完成结果。
-- **机密边界如实**：`SecretStash` 保证「不落库、不进模型上下文」；但任意 shell 命令与进程内插件（可信代码，拥有宿主权限）天然可读环境变量与内存——**不承诺对它们的零泄漏**，文档不得夸大。
-- **看门狗归属权红线**：Watchdog 对 `ownedBy: 'bot' | 'helm'` 的后台会话允许自动恢复或中止；对 `ownedBy: 'human'` 的人类直连会话或 Herdr 终端窗格**严禁发送任何按键或中止指令**，仅允许只读诊断与通知。
+## 4. 高频改动联动检查单（改 X 必须同步 Y）
 
-## 并发与正确性
+- **改动跨包类型 / 接口 / 导出符号** → 先改 `@helm/protocol`，再全仓搜索（`rg`）普查 `kernel / node / cli / web / 测试` 全部消费方并同步，漏改即事故。
+- **新增 / 变更面向用户的 HTTP 接口** → 同一次改动必须补齐 `helm` CLI 映射（`packages/cli/src/commands/`，含 `--json` 与 `--current` 会话/节点自动感知），并同步 `@helm/protocol` 的 `CORE_CLI_COMMAND_PATHS` 与 `builtin:profile` 的 `helm-cli` 技能文档（`services.test.ts` 双向锁定校验）。
+- **插件暴露业务能力** → 用 `ctx.action({ id, inputSchema, outputSchema })` 单点声明，自动获得五端映射：HTTP（`POST /api/actions/<pluginId>/<actionId>`）、CLI（`helm <plugin> <action>`，剥离 `builtin:` 前缀，`cli.command` 可覆写）、Agent Tool（`exposeAsTool` 或 `run_action`）、Workflow `action()` 与 Web UI。
+- **编写 / 重构 Web 界面或插件 `client.tsx`** → 先读 [`docs/conventions/web-frontend.md`](docs/conventions/web-frontend.md)（布局/组件/样式/移动端）与 [`docs/conventions/web-navigation.md`](docs/conventions/web-navigation.md)（路由/深链/分屏/待命页/弹窗），并遵守五条硬铁律：
+  1. **零 Emoji**：界面文案、导航、标题、按钮、徽章、卡片严禁 Emoji；图标统一 `lucide-react`（`HelmIcon`）或纯文本；
+  2. **视图形态三级**：海量项 / 多维检索 / 管理与市场类必须用「全屏一级主舞台卡片网格 + 右侧 520px~560px 详情抽屉」，严禁塞居中弹窗；
+  3. **Radix UI 唯一交互原语**：一律基于 `packages/web/src/ui/` 封装（全仓禁原生 `<select>` 与手写无障碍浮层）；插件优先复用 `@helm/plugin-client` 的 `Screen / ScreenSection / DataTable / KvGrid` 与宿主原语类，禁大面积内联样式或复制通用 CSS；正文 13/14px，移动端（≤680px）与分屏下禁输入框字号突兀放大；
+  4. **唯一 Hash 导航**：全站位置由 `url-hash-model.ts` + `HelmStoreProvider` 唯一管理（`#/a/<profileId>` 待命真草稿、`#/c/<id>` 会话、`#/s/<pluginId>/<screenId>` 视图、`sp.*`/`ssp.*` 参数、`split` 分屏、`sidebar` 空间）；组件统一调 `store.openTarget / setScreenParams / setSidebarSpace` 等，**新建对话进待命页、首次发送才落库**，严禁自建平行路由或直接操作 `history.*`；
+  5. **Fast Refresh**：`.tsx` 组件文件只导出组件与 TS 类型，纯函数/常量剥离至独立模块。
 
-- 初始入口会话（SDK 保留 `#1` 承载，普通 assistant 会话语义）：首次启动播种，**无 id 级删除豁免**——删除后重启凭 tombstone 不复活、不补种；通用保护是插件管理权（`409 conversation_managed_by_plugin`）与归属权（`ownedBy`，human 会话严禁自动按键/中止），产品逻辑不依赖任何固定会话 ID。`superagent` 插件的 `routerConversationId`（SuperAgent 中枢）与 `watchdogConversationId`（巡检看门狗）在插件首次启用时动态分配并持久化于 `SuperAgentIndexDoc`（不硬编码 ID，启用期间同样受删除保护，`409 conversation_managed_by_plugin`）。
-- 无显式目标的 trigger 在钩子链后选择最新的无父链、human-owned assistant 会话；没有候选时同进程并发共享一次在途创建。原始显式目标在 trigger 钩子前校验，失效目标不得由 ThreadKey 路由掩盖。工作流新 run 则必须提供显式会话或调用上下文（CLI `--current`），不使用 trigger 的缺省策略；resume 沿用原 run 目标。
-- 会话正忙时 `whenBusy` 仅有 `steer | followUp | reject`；批处理用 `settings.followUpMode = 'all'`。
-- 输入来源（`origin: 'human' | 'agent' | 'trigger'`）附着在每次提交的 `helm.input` entry 上；`turn_settled` 钩子统一覆盖 `completed | failed | aborted` 三种终态，后台 Worker 本回合消费的输入只要含任一 `agent / trigger` 来源即向 `routerConversationId`（SuperAgent 中枢）投递汇报卡片，纯 `human` 回合仅静默更新召回图谱。
-- `AskDoc` 支持 `expectedStateSeq` CAS 乐观锁：当终端窗格 `stateChangeSeq` 已推进（人类已在终端按键处理）时，Web 端对应的 `AskDoc` 自动流转为 `superseded` 销单，防止向终端重复发送回车。
-- 插件卸载遇在途任务（自定义任务、执行中 Tool、挂起 `agent_spawn`）时，显式拒绝并返回 `409 plugin_has_live_tasks`。
-- **插件服务统一启动屏障**：`PluginServiceSpec.prepare?` 是通用生命周期阶段——所有插件定义/工具/动作注册完毕后，`PluginHost.start` 先对全体服务执行 `prepare`（如 `builtin:workflow` 在 `prepareRecovery` 中先于 SDK 调度器恢复持久标记中断任务取消），再依次 `start`；`KernelRuntime.start` 负责调用 `PluginHost.start`，保证恢复取消先于任何插件 `start` 提交输入。
-- FTS5 是**可重建的派生索引**，不得写入 `pi_*` 表语义。
+## 5. 测试分层与执行规范
 
-## API 与 CLI 同权（重要）
+- **分层入口**：`scripts/test-suites.mjs`（复用 `scripts/run-tests.mjs` 的跨平台超时与进程树清理），三档命令：`pnpm test:unit` / `pnpm test:integration` / `pnpm test:all`（`pnpm test` 等同 `test:all`）。
+- **单测防死锁**：每个测试显式声明 `{ timeout: 60_000 }`（runner 为 `tsx --test`）；不依赖 Unix `timeout` 命令；不用过滤管道隐藏失败日志；**勿设 `HELM_TEST_SUITE_TIMEOUT_MS` 环境变量**（kernel 的 `env-registry-races` 会因宿主残留 HELM_* 变量误报）。
+- **分档与执行规则**：
+  - `unit` = `protocol + cli + web`（进程内 / happy-dom DOM 模拟，不起真实服务）——改协议、CLI、Web 时默认跑；
+  - `integration` = `kernel + node`（真实进程、SQLite、Git、WebSocket、`createHelm`、daemon，全部视为集成）——改 kernel / node 时必跑；
+  - 跨档契约变更两档都跑；合并前与全量验收跑 `test:all`。不变量 `all = unit ∪ integration` 不重不漏；新测试文件必须落在已登记包的 `test/` 目录，新包同步更新 `scripts/test-suites.mjs` 的 `SUITES` 分档。
 
-- Hub 新增/变更任何面向用户的 HTTP 接口时，**同一次改动**必须补齐 `helm` CLI 映射（`packages/cli/src/commands/`，含 `--json` 输出与 `--current` 当前会话自动感知）。
-- 插件通过 `ctx.action({ id, inputSchema, outputSchema })` 声明的动作，自动映射为 HTTP 端点（`POST /api/actions/<pluginId>/<actionId>`，`pluginId` 含 `:` 时按 URI 编码）、顶层语义化 CLI 命令 `helm <plugin> <action>`（剥离 `builtin:` 前缀，由 `cli.command` 可覆写）、Agent Tool、`SubagentWorkflow` `action()` 与 Web UI 动作。
-- `builtin:memory` 的 get/set/configure 由可选 `profileId` 显式选目标，省略时从调用会话上下文解析；两者都无则 `400 validation_error`，不猜测默认角色。开关影响后续调用与回合，不取消在途写入；删除 Profile 后同 ID 重建保留插件按 ID 持久化的状态。
+## 6. 开发流程与多智能体协作
 
-## 测试与前端规范
-
-- **Web 前端设计系统与开发约定（重要）**：编写、重构 Web 界面、新增主舞台/视图/弹窗/抽屉、排查移动端样式或字号问题时，**必须先阅读并遵守 [Web 前端设计系统与开发约定](docs/conventions/web-frontend.md)**。
-  - **视图形态分级**：轻量交互用模态；海量项、多维检索、管理与市场类（插件/技能/模板）**必须升格为全屏一级视图（主舞台卡片网格 + 右侧 520px 详情抽屉）**，严禁把海量扩展内容塞入居中弹窗。
-  - **Radix UI 唯一交互原语底座**：凡涉及浮层、对话框、下拉、标签页、提示等交互组件，**一律基于 `packages/web/src/ui/` 下的 Radix Primitives 封装**（`Dialog` / `AlertDialog` / `Select` / `DropdownMenu` / `Popover` / `Tabs` / `Tooltip`）；全仓严禁使用原生 `<select>`，严禁手写无 WAI-ARIA/Focus Trap 的简陋浮层；表单与布局严格使用 `.form-grid`、`.section-flat`、`.list-item-btn` 原语类，严禁大面积内联样式。
-  - **移动端与自适应字号规范**：保持紧凑克制，正文 13/14px，移动端（≤680px）与分屏下严禁输入框字号突兀放大；移动端抽屉与弹窗自适应 100% 宽。
-- **UI 极简无 Emoji 规范（重要）**：Web 界面与所有内置/外置插件 UI 遵循极简克制风格，**严禁在界面文案、左栏导航项、分组标题、按钮、状态徽章或卡片中使用任何 Emoji 表情图标**；图标统一使用 `lucide-react` 线性矢量图标或纯文本排版。
-- **单测防死锁**：单测显式声明 `{ timeout: 60_000 }`（runner 为 `tsx --test`）；通过 `pnpm test:*` 运行，`scripts/run-tests.mjs` 内置跨平台单测超时、整套超时与进程树清理。不要依赖 Unix `timeout` 命令，也不要用过滤管道隐藏失败日志。
-- **测试分层执行（重要）**：分层入口为 `scripts/test-suites.mjs`（复用 `scripts/run-tests.mjs` 的跨平台 spawn/超时/进程树清理），命令三档：`pnpm test:unit` / `pnpm test:integration` / `pnpm test:all`（`pnpm test` 兼容旧语义，等于 `test:all`）。
-  - **执行规则**：本地改动默认跑 `test:unit`；改动 kernel/node 包跑 `test:integration`；改动同时影响两档契约时两档都跑；全量验收与 CI 跑 `test:all`。勿用 `HELM_TEST_SUITE_TIMEOUT_MS` 环境变量调总超时（kernel 的 `env-registry-races` 会因宿主残留 HELM_* 变量误报）。
-  - **分类保守原则**：当前为包级切分——`unit` = protocol + cli + web（web 含 happy-dom/React 交互测试，属进程内 DOM 模拟，不起真实服务）；`integration` = kernel + node（**全部**视为集成，含真实进程、SQLite、Git、WebSocket、`createHelm`、`@helm/node` daemon）。分类存疑时一律入 integration；新增包或新增测试文件未登记套件时脚本会拒绝执行并报错。
-  - **不变量**：`all` = unit ∪ integration，不重不漏（脚本内置断言）；新增测试文件必须落在已登记包的 test 目录下，新包需同步更新 `scripts/test-suites.mjs` 的 `SUITES` 分档。
-- **前端保 Fast Refresh**：`.tsx` 组件文件**只导出组件与 TS 类型**；纯函数/常量放独立模块。
-
-## Web 导航与 URL Hash（重要）
-
-- 新增或修改会话入口、插件 Screen、分屏、工作台页签、管理弹窗或产物预览，以及排查刷新恢复、深链或浏览器前进/后退问题时，**必须先阅读并遵守 [Web 导航与 URL Hash 开发约定](docs/conventions/web-navigation.md)**。
-
-## 开发流程与安全
-
-- **主代理职责**：负责拆分任务、确定接口、协调子代理、审查结果与最终验收。重实现、大范围开发和成套测试交给子代理。
-- **子代理模型**：所有子代理统一使用 GLM（`glm-agent`），包括调查、审查、规划、实现与验收；除非用户明确变更此偏好。
-- **Worktree 隔离（严禁 `/tmp`）**：首 commit 后并行开发一律在主仓同级磁盘目录（`../helm-worktrees/<name>`）建 worktree，严禁建在 `/tmp`（避开 tmpfs 内存盘）；委派子代理提示词须显式指定该路径及核心约束，不设 `max_turns`。
+- **主代理职责**：拆分任务、确定接口、协调子代理、审查结果与最终验收；重实现、大范围开发和成套测试交给子代理。
+- **子代理模型**：所有子代理统一使用 GLM（`glm-agent`），覆盖调查、审查、规划、实现与验收；除非用户明确变更此偏好。
+- **Worktree 隔离（严禁 `/tmp`）**：首 commit 后并行开发一律在主仓同级磁盘目录 `../helm-worktrees/<name>` 建 worktree（避开 tmpfs 内存盘）；委派子代理提示词须显式指定该路径及核心约束，不设 `max_turns`。
 - **Git 提交**：中文 Conventional Commits（如 `feat(kernel): ...`），不加 `Co-Authored-By`。
+
+## 7. 文档中心速查（按需深入阅读）
+
+- **总览与入门**：`docs/README.md` · `docs/getting-started/`（installation / first-workflow）· `docs/cli/reference.md`（全量命令字典）
+- **架构机制**：`docs/architecture/overview.md`（微内核哲学与五包拓扑）· `extension-points.md`（Hook 与 16 个 UI 扩展点完整契约）· `envfabric.md`（反向 WS、隧道、文件互斥、自升级）· `pi-durable.md`（五态状态机、存储、机密、CAS 审批）
+- **编排引擎**：`docs/workflows/dsl-guide.md`（JS DSL 权威参考）· `worktree-and-gate.md`（Worktree 生命周期与 Gate 门禁）· `journaling-recovery.md`（账本重放与断点恢复）
+- **插件生态**：`docs/plugins/overview.md`（契约总纲）· `plugin-development.md`（外部插件开发实战）及各内置插件同名文档：`profile / workflow / memory / apps / herdr / superagent / triggers / magpie / json-render / mermaid`
+- **Web 约定**：`docs/conventions/web-frontend.md`（设计系统）· `docs/conventions/web-navigation.md`（URL Hash 与导航）

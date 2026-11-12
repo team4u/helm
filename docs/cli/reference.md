@@ -95,7 +95,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 ### 模型与网关
 
-**`helm models list`** — 可用模型目录。**`helm models providers`** — PI 供应商与认证方式。**`helm models default [--set <model>] [--thinking <level>]`** — 查看或设置全局默认（空串清除）。**`helm models refresh [--provider <id>]`** — 刷新动态供应商目录。
+**`helm models list`** — 可用模型目录。**`helm models providers`** — PI 供应商与认证方式。**`helm models default [--set <model>] [--thinking <level>]`** — 查看或设置全局默认（空串清除）。**`helm models refresh [--provider <id>]`** — 刷新动态供应商目录。**`helm models filter [--provider <id> [--disable <modelId>... | --clear]]`** — 查看或设置模型禁用集（无参数查看当前禁用模型；指定 `--provider` 时全量替换该供应商禁用集；无 `--provider` 且 `--clear` 时清空全部禁用项）。
 
 **`helm providers list` / `helm providers set --input <json>`** — 模型网关列表查看与整体替换（`ProviderConfig[]`，密钥置于环境变量，严禁写入配置体）。
 
@@ -110,6 +110,10 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 **`helm nodes remove <nodeId>`** — 注销节点并断开连接。
 
 **`helm nodes upgrade [<nodeId>] [--check] [--version <v>] [--registry <url>] [--force] [--current]`** — 检查（`--check` 与 `--version`/`--force` 互斥）或执行节点自升级；`--current` 读 `HELM_NODE_ID`；执行禁用客户端超时。
+
+**`helm nodes forward [<nodeId> | --current] <listenHost:listenPort> [<targetHost>:]<targetPort>`** — 前台本地 TCP 端口转发（`POST /api/nodes/:id/forward`）：在 Hub 主机按需监听并将连接经节点隧道转发到目标节点视角的 `host:port`（目标 host 缺省 `127.0.0.1`），NDJSON 事件流作为前台租约持有者，Ctrl-C 退出即关闭。
+
+**`helm nodes forwards` / `helm nodes forward-inspect <forwardId>` / `helm nodes forward-stop <forwardId>`** — 列出活动端口转发（`GET /api/nodes/forward`）、查看单个转发详情与停止指定转发（`forwardId` 形如 `fwd-<uuid>`）。
 
 **`helm env exec -- <command...>`** — 跨节点执行命令：
 
@@ -169,6 +173,8 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helm workflows run [nameOrFile]` | builtin:workflow | 启动工作流；位置参数为已保存名或本地脚本文件（自动读入 `script`）；`--args` 传 JSON 入参、`--resume-from-run-id` 断点重放、`--wait` 同步等终态（失败/中止非零退出）、`--conversation-id`/`--current` 指定目标会话（新 run 必须显式指定） |
 | `helm worktrees cleanup` | builtin:workflow | 清理受管 Git 工作树；选择器 `--worktree-id <node:path>` / `--conversation-id <id>` / `--path <path> [--node-id <id>]` 三选一互斥，无显式选择器时 `--current` 以当前会话为选择器；`--delete-branch` 一并删除 `helm/spawn-*` 分支；`--force` 清理脏工作树（不可越过占用、归属与 locked 校验） |
 | `helm memory get / set / configure` | builtin:memory | 长期记忆管理；均以 `--profile-id <id>` 或 `--current`（会话上下文）选目标，两者皆无则 `400 validation_error`。`get` 返回 `{profileId, enabled, content, initialized}`；`set --text <str> [--mode replace|append]` 写入 MEMORY.md（Profile 已关闭时 403）；`configure --enabled <bool> [--text <str>]` 先写文本后提交开关，失败不留半配置 |
+| `helm apps validate / publish / list / update_meta / remove` | builtin:apps | 全栈微应用生命周期：`validate <dir>` 四阶段 doctor + Screen 强制检查；`publish <dir> [--icon] [--category] [--pinned]` 预检通过后受管安装/热更新并登记 `catalog`；`list` 汇总全栈应用；`update_meta <pluginId>` 修改元数据；`remove <pluginId>` 卸载应用并清理登记 |
+| `helm profile list_mentionable` | builtin:profile | 列出当前会话可 `@` 点名协作的 Profile 候选（`--current` 或 `--conversation-id` 指定会话上下文） |
 | `helm cron list / create / delete / trigger` | builtin:triggers | cron 任务管理；create 必填 `--id --schedule --text`（标准五字段，timezone 默认 UTC），支持 `--target-conversation-id` / `--target-profile-id` / `--thread-key` 定向 |
 | `helm webhook create / list / delete` | builtin:triggers | webhook 端点管理（HMAC-SHA256 验签）；create 必填 `--id --secret`，secret 仅允许人工 HTTP/CLI 配置 |
 | `helm herdr list / read / focus` | builtin:herdr | 窗格管理；read 返回 40 行脱敏终端尾部快照，`--node-id` 消歧跨节点同 ID（歧义 409） |

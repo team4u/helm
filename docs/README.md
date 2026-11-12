@@ -47,6 +47,7 @@ Helm 是极简持久微内核多智能体编排系统：内核只保留持久会
 | [工作流编排插件](plugins/workflow.md) | `builtin:workflow`：三个模型工具、六个动作与运行面板 |
 | [角色与技能底座](plugins/profile.md) | `builtin:profile`：角色资产、技能目录与 `load_skill` |
 | [长期记忆](plugins/memory.md) | `builtin:memory`：按 Profile 管理的 `MEMORY.md` 与开关 |
+| [应用中心与微应用工坊](plugins/apps.md) | `builtin:apps`：全栈微应用目录、`validate/publish` 与 `app-builder` 技能 |
 | [Herdr 终端协同](plugins/herdr.md) | `builtin:herdr`：终端 CLI Agent 调度、文件交接与远程审批 |
 | [SuperAgent 双层中枢](plugins/superagent.md) | `builtin:superagent`：零阻塞路由、驻留 Worker 与看门狗 |
 | [自动化触发器](plugins/triggers.md) | `builtin:triggers`：Cron 与 Webhook 入站连接器 |

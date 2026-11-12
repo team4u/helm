@@ -10,7 +10,7 @@ Mermaid 图表库体量可观，且版本迭代频繁。本插件采用**受控 
 - 宿主 `PluginClientCompiler` 编译时把该说明符解析进 bundle，逐文件 containment 校验（不越解析根）；依赖文件内容 hash 随缓存清单持久化，缓存命中时复查——解析根消失或文件变化即失效重编译，绝不静默复用旧产物；
 - 浏览器端**零预加载**：宿主不预先加载任何图表库，`mermaid` 只在本插件的编译产物 chunk 中按需 `import()`，未启用本插件或页面无图表时零成本。
 
-外部插件不支持 `npmDependencies`（仅内置插件可声明）；外部插件如需第三方前端依赖，应自行打包进 client 源码。
+内置插件在定义中声明 `npmDependencies: { mermaid: <内核包根> }`；外部插件则在 `plugin.json` 或 `package.json` 的 `helm` 字段中声明 `clientDependencies: string[]`（裸包名或子路径说明符），宿主统一将其映射为「解析根 = 插件自身目录（`<插件目录>/node_modules`）」的受控 npm 依赖（代码内自指任意解析根对外部插件无效）。两者的编译、containment 校验与 hash 复查遵循同一管道。
 
 ## 渲染行为
 

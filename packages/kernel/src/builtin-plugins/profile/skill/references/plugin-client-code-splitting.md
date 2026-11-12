@@ -41,7 +41,7 @@ async function openAdvancedView(source: string) {
 const { default: chart } = await import('chart-library')
 ```
 
-内置插件可以通过受控 `npmDependencies` 声明该依赖。外部插件不能依赖宿主未声明的裸 npm 说明符，应在插件自己的构建阶段打包依赖。
+内置插件可以通过受控 `npmDependencies` 声明该依赖；外部插件在 `plugin.json.clientDependencies` 或 `package.json.helm.clientDependencies` 中逐项声明裸包名或子路径说明符（宿主将其映射为解析根指向插件自身目录的受控依赖，并在受管安装时自动补装），未声明的裸 npm 说明符会被编译器显式拒绝。
 
 ### 保持入口模块轻量
 

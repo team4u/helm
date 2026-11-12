@@ -37,7 +37,7 @@
 
 终端 Agent 阻塞等待交互（信任确认、菜单选择）时，插件把该阻塞桥接为 Web 端 AskDoc：权威 `agent.get` 现查窗格真实 `stateChangeSeq`，以该序号创建 Ask（预分配 ID `herdr:<nodeId>:<pane>:<seq>`），快照尾部自动提取游标菜单结构生成选项与按键映射（正则快路径识别标准菜单；非标 TUI 才异步调 AI 解析候选按键，失败回退通用选项并显式通知）。
 
-CAS 语义双向防冲突：**人类先在 Web 审批**——提交时经 `registerAskSeqResolver` 注册的异步解析器现查权威 seq，序号一致才把人类选择映射为按键序列一次性 `agent.send_keys` 发送终端；**人类先在终端按键**——终端 `stateChangeSeq` 推进后，对应 AskDoc 自动流转 `superseded` 销单，绝不向终端重复发送按键。发键后仍停留同 seq 的 blocked 时先退避防抖，连续退避仍无进展即重开审批让人类对照快照重选，绝不无限死锁。单飞协调器（`AskCoordinator`）保证同一 `(pane, seq)` 双路径（socket 事件与 spawn wait）只有先到者创建 Ask、后到者等待同一结算 promise。
+CAS 语义双向防冲突：**人类先在 Web 审批**——提交时经 `registerAskSeqResolver` 注册的异步解析器现查权威 seq，序号一致才把人类选择映射为按键序列，并以带 `expected_state_seq` 的 `agent.send_keys`（要求 Herdr 服务端 `ping` 通告 `capabilities.send_keys_expected_state_seq === true`；服务端当前水位不匹配返回 `stale_state` 且零按键写入，未通告该能力的旧服务端被门禁显式拒绝）一次性发送终端；**人类先在终端按键**——终端 `stateChangeSeq` 推进后，对应 AskDoc 自动流转 `superseded` 销单，绝不向终端重复发送按键。发键后仍停留同 seq 的 blocked 时先退避防抖，连续退避仍无进展即重开审批让人类对照快照重选，绝不无限死锁。单飞协调器（`AskCoordinator`）保证同一 `(pane, seq)` 双路径（socket 事件与 spawn wait）只有先到者创建 Ask、后到者等待同一结算 promise。
 
 ## `$helm` 状态 Token 投射
 

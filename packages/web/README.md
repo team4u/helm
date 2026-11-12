@@ -12,10 +12,10 @@ HELM_PORT=3202 pnpm dev
 pnpm dev:kernel
 pnpm dev:web
 
-# 构建与检查
+# 构建、类型检查与测试（按仓库分层执行，勿依赖 Unix timeout 命令）
 pnpm build
 pnpm typecheck
-timeout 50s pnpm test
+pnpm test:unit
 ```
 
 构建产物位于 `packages/web/dist`。可重复的浏览器验收服务见 `scripts/web-acceptance.mjs`：独立临时数据目录、真实内核与 HTTP、临时注册的样例插件（含 `client.tsx` 夹具）。
@@ -38,7 +38,7 @@ timeout 50s pnpm test
 
 插件视图统一经 `client.tsx` 编译为 ESM bundle（`GET /api/plugins/:id/client.mjs`，按 `contentHash` 缓存，停用即失效），由 `<PluginUiView />` 动态加载。编译期将 `react`、`react-dom`、`lucide-react` 与 `@helm/plugin-client` 虚拟化为 `globalThis.__helm_shared_*` 命名空间引用，运行时与宿主共享同一实例，绝不打包第二份 React；插件本地 CSS 经 `__helmClientCss` 导出托管注入与回收。
 
-`@helm/plugin-client` 共享 SDK 提供响应式 Hook（`usePluginContext`、`usePluginDoc`、`usePluginSessionDoc`、`useConversations`、`useConversation`、`useToolActivity`）、无障碍控件（`Select` / `MultiSelect` / `Switch` / `Checkbox` / `Tabs` 系列）、内容组件（`MarkdownView` / `CodeBlockView` / `Callout` / `ViewBoundary`）与 `PluginSlot` 插件间子插槽原语，导出符号唯一真源为 `@helm/protocol` 的 `PLUGIN_CLIENT_SHARED_EXPORTS`。声明式 JSON 卡片与 Mermaid 图表不是宿主内置能力，分别由 `builtin:json-render` 与 `builtin:mermaid` 插件通过 `markdownCodeBlock` 扩展点提供，停用后对应围栏回退普通代码块。
+`@helm/plugin-client` 共享 SDK 提供响应式 Hook（`usePluginContext`、`usePluginDoc`、`usePluginSessionDoc`、`useConversations`、`useConversation`、`usePlugins`、`useToolActivity`）、布局原语（`Screen`、`ScreenSection`、`DataTable`、`KvGrid`）、无障碍控件（`Select` / `MultiSelect` / `Switch` / `Checkbox` / `Tabs` / `Dialog` 系列）、内容组件（`MarkdownView` / `CodeBlockView` / `Callout` / `ViewBoundary`）与 `PluginSlot` 插件间子插槽原语，导出符号唯一真源为 `@helm/protocol` 的 `PLUGIN_CLIENT_SHARED_EXPORTS`。声明式 JSON 卡片与 Mermaid 图表不是宿主内置能力，分别由 `builtin:json-render` 与 `builtin:mermaid` 插件通过 `markdownCodeBlock` 扩展点提供，停用后对应围栏回退普通代码块。
 
 ### 状态同步与 URL Hash 导航
 

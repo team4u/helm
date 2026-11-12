@@ -70,6 +70,7 @@ flowchart TD
         P0["builtin:workflow (确定性编排与 Worktree 租约 / 默认启用)"]
         P1["builtin:profile (角色与技能底座 / 常驻)"]
         P1M["builtin:memory (长期记忆 / 默认启用)"]
+        PA["builtin:apps (应用中心与微应用工坊 / 默认启用)"]
         P2["builtin:herdr (终端 CLI Agent 主控)"]
         P3["builtin:superagent (双层中枢与看门狗)"]
         P4["builtin:triggers (Cron 与 Webhook 触发器)"]
@@ -251,6 +252,7 @@ Helm 采用微内核设计，所有扩展能力均由插件提供，停用后其
 | `builtin:workflow` | 确定性编排引擎 | 提供 `subagent` / `SubagentWorkflow` / `cleanup_worktree` 工具、编排引擎、Git Worktree 租约与 `helm workflows` / `helm worktrees cleanup` 动态命令 | 默认启用（可停用） |
 | `builtin:profile` | 角色与技能底座 | 为全部 Profile 注入 SYSTEM.md 与可用技能目录，提供 `load_skill` 工具与默认助理角色 | 常驻启用（不可卸载） |
 | `builtin:memory` | 长期记忆 | 自管各 Profile 的 MEMORY.md 注入、单角色记忆启停（`helm memory`）与 `update_memory` 工具 | 默认启用（可停用） |
+| `builtin:apps` | 应用中心与微应用工坊 | 全栈微应用目录（`catalog`）、`validate/publish/list/update_meta/remove` 动作（`helm apps`）与 `app-builder` 技能 | 默认启用（可停用） |
 | `builtin:herdr` | 终端 Agent 主控 | 连接 Herdr 终端 IPC，调度 23 种终端 CLI，负责结构化交接、追问自愈与 CAS 审批桥 | 默认停用，按需启用 |
 | `builtin:superagent` | 双层中枢与看门狗 | 零阻塞路由中枢、后台驻留 Worker、两层巡检与状态自愈（巡检周期由插件服务自管） | 默认停用（实验性） |
 | `builtin:triggers` | 自动化触发器 | 提供 Cron 定时调度与 Webhook 入站，验证签名并防逃逸投递 | 默认停用，按需启用 |
@@ -316,7 +318,7 @@ pnpm helm custom-checker lint --input '{"targetDir":"/workspace"}' --json
 | **系统与鉴权** | `helm setup --password <pwd>` | 首次初始化管理员并完成登录 |
 | | `helm login --password <pwd>` | 登录并保存凭据到 `~/.helm/cli-token` |
 | | `helm status --json` | 查看鉴权与管理员配置状态 |
-| **模型与角色** | `helm models list / providers / default / refresh` | 模型目录、供应商清单、默认模型与刷新 |
+| **模型与角色** | `helm models list / providers / default / refresh / filter` | 模型目录、供应商清单、默认模型、刷新与禁用过滤 |
 | | `helm profiles list / create / update / delete` | 角色配置管理（语义化 flag 或 `--input`） |
 | | `helm skills list` | 当前可用技能目录 |
 | | `helm providers set` / `helm credentials set / delete` | 供应商与密钥凭据管理 |
@@ -329,7 +331,7 @@ pnpm helm custom-checker lint --input '{"targetDir":"/workspace"}' --json
 | | `helm workflows run <file> --args '<json>' --conversation-id <id> --wait` | 启动工作流（`--current` / `--resume-from-run-id`） |
 | | `helm workflows inspect / abort <runId>` | 查看运行详情与中止在途任务 |
 | | `helm worktrees cleanup --conversation-id <id>` | 清理受管 Git Worktree |
-| **受控节点** | `helm nodes list / issue / remove / upgrade` | 节点清单、令牌签发、移除与升级 |
+| **受控节点** | `helm nodes list / issue / remove / upgrade / forward` | 节点清单、令牌签发、移除、升级与端口转发 |
 | | `helm env exec --node <id> --cwd <path> --stream -- <cmd>` | 跨节点流式执行命令 |
 | **插件治理与热重载** | `helm plugins list / enable / disable` | 插件状态与启停（停用遇在途任务返回 `409`） |
 | | `helm plugins init / doctor / rescan / reload` | 脚手架、四阶段静态自检、增量发现、受控热重载 |
@@ -366,6 +368,7 @@ pnpm helm custom-checker lint --input '{"targetDir":"/workspace"}' --json
   - [自定义插件开发实战](docs/plugins/plugin-development.md)：前后端全栈插件开发、自检与热重载
   - [角色与技能底座](docs/plugins/profile.md)：SYSTEM.md 注入、技能目录与默认助理角色
   - [长期记忆](docs/plugins/memory.md)：MEMORY.md 注入、单角色记忆启停与 `update_memory` 工具
+  - [应用中心与微应用工坊](docs/plugins/apps.md)：全栈微应用目录、预检发布与 `app-builder` 技能
   - [确定性编排引擎](docs/plugins/workflow.md)：编排引擎、Worktree 租约与运行记录分片
   - [Herdr 终端协同主控](docs/plugins/herdr.md)：终端 CLI 调度、结构化交接与追问自愈
   - [SuperAgent 双层中枢](docs/plugins/superagent.md)：零阻塞路由、驻留 Worker 与两层看门狗

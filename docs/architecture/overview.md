@@ -25,6 +25,7 @@ flowchart TD
         Workflow["builtin:workflow 编排与 Worktree 租约"]
         Profile["builtin:profile 角色技能底座"]
         Memory["builtin:memory 长期记忆"]
+        Apps["builtin:apps 应用中心与微应用工坊"]
         Superagent["builtin:superagent 双层中枢"]
         Herdr["builtin:herdr 终端主控"]
         Others["builtin:triggers / magpie / json-render / mermaid"]

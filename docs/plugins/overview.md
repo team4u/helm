@@ -1,6 +1,6 @@
 # 插件系统设计与契约
 
-本文是 Helm 插件系统的总纲：阐述微内核宿主架构、`definePlugin(ctx)` 强类型契约、9 个内置插件的全景分工，以及动作五端映射、持久文档、停用预检与故障隔离等横切机制。各内置插件的深度文档见同目录下的独立篇章。
+本文是 Helm 插件系统的总纲：阐述微内核宿主架构、`definePlugin(ctx)` 强类型契约、10 个内置插件的全景分工，以及动作五端映射、持久文档、停用预检与故障隔离等横切机制。各内置插件的深度文档见同目录下的独立篇章。
 
 ## 宿主架构：机制与策略分离
 
@@ -15,7 +15,7 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 
 ## 内置插件全景
 
-内核启动时由组合层（`app.ts`）按固定顺序注册 9 个内置插件。前 5 个默认启用，后 4 个默认停用、按需开启：
+内核启动时由组合层（`app.ts`）按固定顺序注册 10 个内置插件。前 6 个默认启用，后 4 个默认停用、按需开启：
 
 | 插件 ID | 名称 | 职责一句话 | 默认状态 | locked |
 | :--- | :--- | :--- | :--- | :--- |
@@ -24,12 +24,13 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 | `builtin:memory` | 长期记忆 | 按 Profile 管理 MEMORY.md 注入与启停，提供 `update_memory` 工具 | 启用 | 否 |
 | `builtin:json-render` | JSON 卡片渲染 | 接管 ```ui 代码围栏渲染声明式 JSON Spec 卡片，自举 `generative-ui` 技能 | 启用 | 否 |
 | `builtin:mermaid` | Mermaid 图表 | 接管 ```mermaid 代码围栏，把 Mermaid 文本渲染为矢量图表 | 启用 | 否 |
+| `builtin:apps` | 应用中心 | 全栈微应用目录（`catalog`）、`validate/publish/list/update_meta/remove` 动作、应用中心启动台与 `app-builder` 技能 | 启用 | 否 |
 | `builtin:herdr` | Herdr 终端 | 拦截 `agent_spawn` 驱动本机/远端 Herdr CLI Agent，带 CAS 审批桥 | 停用 | 否 |
 | `builtin:superagent` | SuperAgent 中枢 | 双层中枢（总控路由 + 驻留 Worker）与两层巡检看门狗 | 停用 | 否 |
 | `builtin:triggers` | 触发器 | Cron 定时与 Webhook 签名入站连接器 | 停用 | 否 |
 | `builtin:magpie` | Magpie 网关 | 动态模型网关接入：模型目录、配额与路由组诊断 | 停用 | 否 |
 
-9 个插件之间正交且可组合：`builtin:profile` 为所有会话提供认知底座；`builtin:memory` 与之正交（内核对记忆零感知）；`builtin:workflow` 的编排引擎消费 `builtin:herdr` 接管的外部运行时（经 `agent_spawn` 管道，对脚本层透明）；`builtin:superagent` 的 Watchdog 经 `diagnostics.collect` 进程内事件采集 Herdr 窗格探针；`builtin:json-render` 与 `builtin:mermaid` 是扩展点之上的普通消费者，停用即回退普通代码块，不影响其他插件。
+10 个插件之间正交且可组合：`builtin:profile` 为所有会话提供认知底座；`builtin:memory` 与之正交（内核对记忆零感知）；`builtin:apps` 经 `ctx.host.plugins` 受管包端口管理用户全栈微应用的预检与发布；`builtin:workflow` 的编排引擎消费 `builtin:herdr` 接管的外部运行时（经 `agent_spawn` 管道，对脚本层透明）；`builtin:superagent` 的 Watchdog 经 `diagnostics.collect` 进程内事件采集 Herdr 窗格探针；`builtin:json-render` 与 `builtin:mermaid` 是扩展点之上的普通消费者，停用即回退普通代码块，不影响其他插件。
 
 ## `definePlugin(ctx)` 契约
 
@@ -123,11 +124,11 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 | 分组 | 端口 | 说明 |
 | :--- | :--- | :--- |
 | 外部事件 | `dispatchTrigger(envelope)` | 投递防逃逸信封进 `trigger` 管道 |
-| 输入与会话 | `submitInput(id, text, opts)` | `requestId` 支持跨重启幂等提交；`origin: human/agent/trigger`；`whenBusy: steer/followUp/reject` |
-| 会话管理 | `createConversation / listConversations / getConversation / getConversationDetail / updateConversation / abortConversation` | 全套会话生命周期；`manageConversation` 声明删除保护（`409 conversation_managed_by_plugin`）；`markConversationOwnership` 标记归属权 |
+| 输入与会话 | `submitInput(id, text, opts)` / `submitInputGuarded(id, text, opts, guard)` | `requestId` 支持跨重启幂等提交；`origin: human/agent/trigger`；`whenBusy: steer/followUp/reject`；`submitInputGuarded` 在提交点原子复核归属（严禁 human）与 CAS 水位 |
+| 会话管理 | `createConversation / listConversations / getConversation / getConversationDetail / updateConversation / abortConversation / abortConversationGuarded` | 全套会话生命周期；`abortConversationGuarded` 在首个不可逆动作前原子复核归属与水位；`manageConversation` 声明删除保护（`409 conversation_managed_by_plugin`）；`markConversationOwnership` 标记归属权 |
 | 人机审批 | `createAsk / cancelAsk / registerAskSeqResolver` | AskDoc 创建与 CAS 水位解析器注册 |
 | 子代理与执行 | `spawnAgent / runGate / execEnv / prepareInterruptedConversations / resolveSpawnTarget / listActiveSpawnExecutions / probeNodeFs / withFileMutationQueue` | `agent_spawn` 管道派生、门禁命令、跨节点执行（复用 EnvFabric 与脱敏） |
-| 动作互调 | `prepareAction / invokeAction / listActions` | 跨插件动作 preflight 与执行 |
+| 动作互调与插件治理 | `prepareAction / invokeAction / listActions / plugins` | 跨插件动作 preflight 与执行；`ctx.host.plugins` 提供受管包生命周期（`list / listUi / doctor / install / update / remove / enable / disable`，拦截自指修改） |
 | 资产端口 | `profiles / skills / secrets` | Profile 读写与 SYSTEM.md、技能受管自举、插件私有机密（credentials.json `pluginSecrets.<pluginId>`，恒 0600） |
 | 节点与文件 | `nodeIpc / nodeFetch / openTunnel / executionEnv / withFileLock / atomicWriteFile / buildSpawnEnv` | 跨节点 IPC 桥（Herdr 用）、节点 HTTP(S) 透传 `fetch`（任意 host，跨节点访问节点视角的 HTTP/HTTPS/SSE 服务）、任意 TCP 透传隧道（原始 Duplex）、目标节点执行环境、文件锁与原子写 |
 | 通用机制 | `redact / redactText / completeText / refreshModels / listPlugins / listUi / setConfig / isClosing` | 脱敏、无工具单次文本补全、目录刷新、清单读取、自身配置更新 |
@@ -137,6 +138,6 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 
 ## 延伸阅读
 
-- 各内置插件深度文档：[workflow](workflow.md) · [profile](profile.md) · [memory](memory.md) · [herdr](herdr.md) · [superagent](superagent.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md)
+- 各内置插件深度文档：[workflow](workflow.md) · [profile](profile.md) · [memory](memory.md) · [apps](apps.md) · [herdr](herdr.md) · [superagent](superagent.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md)
 - 扩展点契约详解：[后端生命周期 Hook 与前端全界面扩展点](../architecture/extension-points.md)
 - 外部插件开发实战：[plugin-development.md](plugin-development.md)

@@ -20,11 +20,11 @@
 | `profile.system` | SYSTEM.md 非空白 | SYSTEM.md 原始全文（人格、语气与行为准则） |
 | `profile.assets-missing` | SYSTEM.md 缺失或为空 | `<profile_assets_missing>` 包裹的显式说明：本回合无该 Profile 人格，要求模型告知用户、谨慎回答、不假装特定人格 |
 | `profile.skills` | 可用技能非空 | `<available_skills>` 包裹的技能目录（id/name/description/references），提示经 `load_skill` 按需加载 |
-| `profile.catalog` | 顶层会话且当回合实际有 `subagent` / `SubagentWorkflow` 派工工具 | `<available_profiles>` 协作目录与委派指引 |
+| `profile.catalog` | 当回合实际有 `subagent` / `SubagentWorkflow` 派工工具 | `<available_profiles>` 协作目录与委派指引 |
 
 **资产缺失自愈防线**：外部误删 SYSTEM.md 时降级为空文本但不静默换人格——先向人类发一次性 warning 通知（按 profileId 独立去重，文件恢复即停、再次缺失可重新告警），再向模型注入 `profile.assets-missing` 显式说明，后续经 `helm profiles update --system` 等写入自愈重建（不是启动时自动恢复）。`not_found` 之外的 IO/权限错误如实上抛，不吞、不降级。
 
-`profile.catalog` 的注入钩子以低于默认值的 priority（-100）运行，确保在默认优先级的工具剥离钩子（如 superagent 路由模式收敛）之后、按届时的实际 `turn.tools` 决定注入与否——没有可用派工工具的回合不注入目录，避免教唆模型调用不存在的工具。子会话（`parentConversationId` 存在）不注入协作目录：缺省不鼓励嵌套协作，这是默认策略而非硬性递归限制或权限沙箱。
+`profile.catalog` 的注入钩子以低于默认值的 priority（-100）运行，确保在默认优先级的工具剥离钩子（如 superagent 路由模式收敛、`builtin:workflow` 对受管子代理剥离派工工具）之后、按届时的实际 `turn.tools` 决定注入与否——没有可用派工工具的回合不注入目录，避免教唆模型调用不存在的工具。不按 `parentConversationId` 一刀切排除（fork 会话或 SuperAgent 驻留 Worker 同样有父链，但只要当回合仍持有派工工具即保留完整协作能力）。
 
 ## 跨 Profile `@` 点名协同
 
