@@ -9,10 +9,9 @@
 import { useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
-import { usePluginContext, usePluginDoc } from '@helm/plugin-client'
+import { formatTime, usePluginContext, usePluginDoc } from '@helm/plugin-client'
 import {
   boolLabel,
-  formatTime,
   parseStatus,
   quotaTone,
   type MagpieStatusView,

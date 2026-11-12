@@ -17,27 +17,18 @@ import type {
   WorkflowNodeState,
   WorkflowRunSummary,
 } from '@helm/protocol'
+import { formatDurationMs } from '@helm/plugin-client'
 
 // ---------------------------------------------------------------------------
-// 格式化工具（原 lib/format.ts 相关子集）
+// 格式化工具（时长摘要统一复用宿主 lib/format.ts 经 @helm/plugin-client 共享的实现）
 // ---------------------------------------------------------------------------
 
-/** 毫秒时长摘要（工具耗时 / 工作流节点耗时）；非法或缺失返回空串。 */
 export function toolResultPreviewTruncated(preview: string | undefined): boolean {
   return preview?.endsWith('…') === true
 }
 
 export function isScrolledToBottom(element: { scrollHeight: number; scrollTop: number; clientHeight: number }): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= 36
-}
-
-export function formatDurationMs(ms: number | undefined): string {
-  if (ms === undefined || !Number.isFinite(ms) || ms < 0) return ''
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
-  const minutes = Math.floor(ms / 60_000)
-  const seconds = Math.round((ms % 60_000) / 1000)
-  return `${minutes}m${seconds}s`
 }
 
 /** 首行截断（trim 后超长加省略号）。 */

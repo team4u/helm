@@ -2,7 +2,11 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@helm/plugin-client": ["packages/web/src/lib/plugin-client-sdk.ts"]
+    }
   },
   "include": [
     "packages/protocol/src/**/*.ts",

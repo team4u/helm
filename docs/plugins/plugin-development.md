@@ -115,6 +115,7 @@ export default {
 | 无障碍底座组件 | `Switch`、`Select` / `MultiSelect`、`Checkbox`、`Tabs` 系列、`SegmentedControl`、`Dialog` 系列、`ViewBoundary`、`Callout` |
 | 布局原语 | `Screen`、`ScreenSection`、`DataTable`、`KvGrid`（见下方速查） |
 | 内容展示 | `HelmIcon`（lucide 线性图标宿主封装）、`MarkdownView`、`CodeBlockView`、`CopyButton` |
+| 格式化纯函数 | `formatTime`（`MM-DD HH:mm` 紧凑时间，缺失返回空串）、`formatCompactTimestamp`（`MM-DD HH:mm:ss` 日志时间戳，0/缺失返回占位符）、`formatDurationMs`（毫秒时长摘要） |
 | 插件间组合 | `PluginSlot` |
 
 #### 布局原语速查（优先复用，不要手写 CSS）

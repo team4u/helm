@@ -104,14 +104,6 @@ export function dispatchedWorkerId(props: ToolViewProps): number | undefined {
   return typeof id === 'number' && Number.isInteger(id) && id > 0 ? id : undefined
 }
 
-/** 展示用紧凑时间（本地时区；缺失返回空串）。 */
-export function formatTime(ms: number | undefined): string {
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return ''
-  const date = new Date(ms)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
-}
-
 /** 终态徽章色调：completed→ok，failed→err，aborted→warn，其他→neutral。 */
 export function outcomeTone(outcome: string | undefined): 'ok' | 'err' | 'warn' | 'neutral' {
   if (outcome === 'completed') return 'ok'

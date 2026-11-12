@@ -8,7 +8,8 @@
     "declaration": false,
     "sourceMap": false,
     "paths": {
-      "@helm/protocol": ["../protocol/src/index.ts"]
+      "@helm/protocol": ["../protocol/src/index.ts"],
+      "@helm/plugin-client": ["./src/lib/plugin-client-sdk.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"]
