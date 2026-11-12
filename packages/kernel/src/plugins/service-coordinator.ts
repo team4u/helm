@@ -304,7 +304,7 @@ export function assertNoLiveTasks(
   state: PluginState | undefined,
   tracker: PluginTaskTracker,
 ): void {
-  const labels = tracker.activeLabels(pluginId);
+  const labels: string[] = [];
   if (state) {
     for (const svc of state.services) {
       if (!svc.started || svc.liveTasks === undefined) continue;
@@ -333,6 +333,10 @@ export function assertNoLiveTasks(
       labels.push(...declared);
     }
   }
+  // tracker 标签最后读：svc.liveTasks 是任意同步插件代码，期间同步启动的任务
+  //（如同步调用 invokeAction）也会被尾读捕获；读完后至调用方置 deactivating
+  // 无 await，门禁闭合无窗口。
+  labels.push(...tracker.activeLabels(pluginId));
   if (labels.length > 0) {
     throw new HelmError(
       'plugin_has_live_tasks',

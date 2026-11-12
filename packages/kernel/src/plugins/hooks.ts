@@ -257,7 +257,10 @@ export class HookPipeline<K extends HookName> {
 
   entries(): Array<RegisteredHook<K>> {
     this.ensureSorted();
-    return this.hooks;
+    // Why: run/runAround 遍历期间会 await 任意插件 handler，并发 add() 置
+    // sorted=false 后另一路 runHook 触发原地 sort，会让正在遍历的活数组重排
+    //（handler 跳过或重复）。返回快照副本隔离；hook 数量小，复制成本可忽略。
+    return [...this.hooks];
   }
 
   private ensureSorted(): void {

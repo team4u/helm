@@ -277,7 +277,8 @@ test('启用挂载、停用卸载、再启用重挂载（真实所有权与顺�
     assert.deepEqual(events, ['service-start', 'service-stop']);
     assert.equal(registry.mounted.size, 0, '停用后 provider 必须全部卸载');
     const disableCalls = registry.calls.filter((c) => c.op === 'assertIdle');
-    assert.equal(disableCalls.length, 1, '停用前必须预检 provider 在途状态');
+    // 停用门禁双检：collectPluginInUse 前后各一次（TOCTOU 收口，见 disable 实现）
+    assert.equal(disableCalls.length, 2, '停用前必须预检 provider 在途状态');
 
     await host.enable('test:magpie');
     assert.deepEqual(events, ['service-start', 'service-stop', 'service-start']);
