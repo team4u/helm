@@ -66,7 +66,20 @@ export interface PluginDocRegistryOptions {
   assertConversationExists?: (conversationId: number) => void;
   /** 公共 sessionDoc 变更事件（delete 时 value 为初值且带 deleted: true）。 */
   emitSessionDocUpdated?: (doc: PublicPluginSessionDoc) => void;
+  /**
+   * 单文档 JSON 序列化字节上限（initial / set / update 统一口径）：缺省
+   * PLUGIN_DOC_MAX_JSON_BYTES（2 MiB）。仅供测试注入更小值；不改变拒绝语义。
+   */
+  maxDocJsonBytes?: number;
 }
+
+/**
+ * 插件文档（doc / sessionDoc）单值 JSON 序列化字节上限：2 MiB。
+ * 防线存在的原因：文档值会进入同步镜像、持久层排队写与公共事件载荷，
+ * 无上限的超大值会无声拖垮 SQLite 写队列与 SSE 首帧。超限一律在写入镜像与
+ * 发布事件之前拒绝（413 plugin_doc_too_large），旧值保持不变。
+ */
+export const PLUGIN_DOC_MAX_JSON_BYTES = 2 * 1024 * 1024;
 
 export class PluginDocRegistry {
   private pluginDocs = new Map<string, Map<string, DocRegistration>>();
@@ -77,6 +90,41 @@ export class PluginDocRegistry {
     private readonly emitDocUpdated: (pluginId: string, name: string, value: unknown) => void,
     private readonly options: PluginDocRegistryOptions = {},
   ) {}
+
+  /**
+   * 文档值体积防线：JSON 序列化结果超过上限时在写入镜像/持久层/发布事件之前
+   * 显式拒绝（413 plugin_doc_too_large，details 携带 pluginId/name/kind/bytes/
+   * maxBytes），旧值保持不变。入参应已经过 jsonClone（循环引用/undefined/
+   * 非纯对象等不可序列化值在那一步已显式失败，此处不再重复校验）。
+   */
+  private assertWithinLimit(
+    pluginId: string,
+    kind: 'doc' | 'sessionDoc',
+    name: string,
+    value: unknown,
+    extraDetails?: Record<string, unknown>,
+  ): void {
+    const maxBytes = this.options.maxDocJsonBytes ?? PLUGIN_DOC_MAX_JSON_BYTES;
+    const json = JSON.stringify(value);
+    // jsonClone 已拒绝 undefined/函数/循环引用；此处防御性兑底，绝不静默写空。
+    if (json === undefined) {
+      throw new HelmError(
+        'invalid_doc_value',
+        `插件 ${pluginId} ${kind} ${name} 的值不可 JSON 序列化（顶层为 undefined 或函数）`,
+        400,
+        { pluginId, name, kind, ...(extraDetails ?? {}) },
+      );
+    }
+    const bytes = Buffer.byteLength(json, 'utf8');
+    if (bytes > maxBytes) {
+      throw new HelmError(
+        'plugin_doc_too_large',
+        `插件 ${pluginId} ${kind} ${name} 的 JSON 序列化结果 ${bytes} 字节，超过上限 ${maxBytes} 字节（拒绝写入，旧值保持不变）`,
+        413,
+        { pluginId, name, kind, bytes, maxBytes, ...(extraDetails ?? {}) },
+      );
+    }
+  }
 
   registerDoc<TState>(
     pluginId: string,
@@ -110,6 +158,7 @@ export class PluginDocRegistry {
     const key = `${pluginId}:${name}`;
     const store = this.store;
     const normalizedInitial = jsonClone(initial);
+    this.assertWithinLimit(pluginId, 'doc', name, normalizedInitial);
 
     const handle: PluginDocHandle<TState> = {
       get: () => {
@@ -119,12 +168,15 @@ export class PluginDocRegistry {
       set: (next) => {
         assertUsable();
         const safe = jsonClone(next);
+        // 体积防线先于镜像写入与事件发布：拒绝时旧值保持不变。
+        this.assertWithinLimit(pluginId, 'doc', name, safe);
         store.set(key, safe);
         if (isPublic) this.emitDocUpdated(pluginId, name, safe);
       },
       update: (fn) => {
         assertUsable();
         const safe = jsonClone(fn(jsonClone(store.get<TState>(key, normalizedInitial))));
+        this.assertWithinLimit(pluginId, 'doc', name, safe);
         store.set(key, safe);
         if (isPublic) this.emitDocUpdated(pluginId, name, safe);
       },
@@ -191,6 +243,7 @@ export class PluginDocRegistry {
 
     const isPublic = opts?.public === true;
     const normalizedInitial = jsonClone(initial);
+    this.assertWithinLimit(pluginId, 'sessionDoc', name, normalizedInitial);
     const handle = this.createSessionDocHandle(
       pluginId,
       name,
@@ -267,12 +320,15 @@ export class PluginDocRegistry {
       set: (conversationId, next) => {
         assertTupleUsable(conversationId);
         const safe = jsonClone(next);
+        // 体积防线先于持久层 put 与事件发布：拒绝时旧值保持不变。
+        this.assertWithinLimit(pluginId, 'sessionDoc', name, safe, { conversationId });
         store.put(pluginId, name, conversationId, JSON.stringify(safe));
         emit(conversationId, safe);
       },
       update: (conversationId, fn) => {
         assertTupleUsable(conversationId);
         const safe = jsonClone(fn(jsonClone(readRaw(conversationId))));
+        this.assertWithinLimit(pluginId, 'sessionDoc', name, safe, { conversationId });
         store.put(pluginId, name, conversationId, JSON.stringify(safe));
         emit(conversationId, safe);
       },

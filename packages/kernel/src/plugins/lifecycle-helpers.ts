@@ -31,6 +31,7 @@ export function assertDefinition(definition: PluginDefinition): void {
   if (typeof definition.definePlugin !== 'function') {
     throw new HelmError('invalid_plugin_definition', `插件 ${definition.id} 缺少 definePlugin 函数`, 400);
   }
+  normalizeDependencies(definition);
   if (
     definition.clientRoot !== undefined &&
     (typeof definition.clientRoot !== 'string' ||
@@ -44,6 +45,133 @@ export function assertDefinition(definition: PluginDefinition): void {
       { pluginId: definition.id },
     );
   }
+}
+
+/** 插件间依赖 ID 字符集（与插件 id 同集：字母数字 : _ -）。 */
+const PLUGIN_DEPENDENCY_ID_PATTERN = /^[A-Za-z0-9:_-]+$/;
+
+/**
+ * 依赖声明边界归一：可选数组，逐项必须是非空且匹配插件 id 字符集的字符串；
+ * 按声明序去重（重复不是错误，但图与清单只保留一份）；自依赖是长度 1 的
+ * 环路，在此直接显式拒绝。返回归一后的列表（无依赖时为空数组）。
+ */
+export function normalizeDependencies(definition: PluginDefinition): string[] {
+  const deps = definition.dependencies;
+  if (deps === undefined) return [];
+  if (!Array.isArray(deps) || deps.some((d) => typeof d !== 'string' || !PLUGIN_DEPENDENCY_ID_PATTERN.test(d))) {
+    throw new HelmError(
+      'invalid_plugin_definition',
+      `插件 ${definition.id} 的 dependencies 必须是插件 ID 字符串数组（仅允许字母数字 : _ -，不支持版本说明符）`,
+      400,
+      { pluginId: definition.id, dependencies: Array.isArray(deps) ? deps.map((d) => String(d)) : String(deps) },
+    );
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const dep of deps) {
+    if (dep === definition.id) {
+      throw new HelmError(
+        'plugin_dependency_cycle',
+        `插件 ${definition.id} 声明了自依赖（依赖图环路）`,
+        409,
+        { pluginId: definition.id, cycle: [definition.id, definition.id] },
+      );
+    }
+    if (seen.has(dep)) continue;
+    seen.add(dep);
+    out.push(dep);
+  }
+  return out;
+}
+
+/**
+ * 依赖图环路检测：从起点插件的依赖声明出发，沿已注册插件的依赖边深度优先，
+ * 回到起点即成环。返回环路上的插件 ID 序列（不成环返回 undefined）。只追踪
+ * 已注册节点（起点依赖经 startDependencies 注入；未注册依赖是 enable 阶段的
+ * 缺失错误，不是环）。
+ */
+export function findDependencyCycle(
+  startPluginId: string,
+  startDependencies: readonly string[],
+  dependenciesOf: (pluginId: string) => string[] | undefined,
+): string[] | undefined {
+  const path: string[] = [startPluginId];
+  const onPath = new Set<string>([startPluginId]);
+  const visited = new Set<string>();
+  const walk = (pluginId: string, deps: readonly string[]): string[] | undefined => {
+    for (const dep of deps) {
+      if (dep === startPluginId) {
+        return [...path, startPluginId];
+      }
+      if (onPath.has(dep) || visited.has(dep)) continue;
+      const depDeps = dependenciesOf(dep);
+      if (depDeps === undefined) continue;
+      path.push(dep);
+      onPath.add(dep);
+      const found = walk(dep, depDeps);
+      if (found !== undefined) return found;
+      path.pop();
+      onPath.delete(dep);
+      visited.add(dep);
+    }
+    return undefined;
+  };
+  return walk(startPluginId, startDependencies);
+}
+
+/**
+ * 依赖拓扑排序（确定性 Kahn）：输入保持注册序，仅统计集合内依赖边（依赖
+ * 集合外/未注册插件的边不参与排序）；同层结点按注册序出队，被依赖者先出。
+ * 输入已无环（注册边界拒绝环路）；防御性兑底：若检测到环，抛
+ * plugin_dependency_cycle 而不是死循环。
+ */
+export function topoSortByDependencies<T>(
+  items: T[],
+  idOf: (item: T) => string,
+  dependenciesOf: (item: T) => readonly string[],
+): T[] {
+  const inSet = new Set(items.map(idOf));
+  const depsOf = new Map<string, Set<string>>();
+  const dependentsOf = new Map<string, string[]>();
+  for (const item of items) {
+    const id = idOf(item);
+    const deps = new Set(dependenciesOf(item).filter((d) => inSet.has(d) && d !== id));
+    depsOf.set(id, deps);
+    for (const dep of deps) {
+      const list = dependentsOf.get(dep) ?? [];
+      list.push(id);
+      dependentsOf.set(dep, list);
+    }
+  }
+  const pending = items.filter((item) => (depsOf.get(idOf(item))?.size ?? 0) === 0);
+  const queued = new Set(pending.map(idOf));
+  const out: T[] = [];
+  while (pending.length > 0) {
+    const item = pending.shift()!;
+    out.push(item);
+    const id = idOf(item);
+    for (const dependentId of dependentsOf.get(id) ?? []) {
+      const deps = depsOf.get(dependentId)!;
+      deps.delete(id);
+      if (deps.size === 0 && !queued.has(dependentId)) {
+        // 同层保持注册序：入队项按原注册序插入（dependentsOf 本身按注册序追加，
+        // 且 queued 防重复；多源同时解锁时出队顺序由解锁顺序决定，确定性是够的）。
+        queued.add(dependentId);
+        const source = items.find((i) => idOf(i) === dependentId)!;
+        pending.push(source);
+      }
+    }
+  }
+  if (out.length !== items.length) {
+    const stuck = items.filter((i) => !out.includes(i)).map(idOf);
+    throw new HelmError(
+      'plugin_dependency_cycle',
+      `插件依赖图存在环路，无法拓扑排序：${stuck.join(' -> ')}`,
+      409,
+      { pluginIds: stuck },
+    );
+  }
+  return out;
 }
 
 export function assertNotLocked(state: PluginState): void {
@@ -288,6 +416,7 @@ export function pluginSummaryOf(
     description: state.definition.description,
     ...(state.definition.icon ? { icon: state.definition.icon } : {}),
     version: state.definition.version,
+    ...(state.dependencies.length > 0 ? { dependencies: [...state.dependencies] } : {}),
     locked: state.definition.locked === true,
     enabled: state.enabled,
     status: failed ? 'failed' : state.enabled ? 'active' : 'disabled',
@@ -321,7 +450,14 @@ export async function disposePlugins(
   removeRegistries: (pluginId: string) => void,
 ): Promise<void> {
   const errors: Array<{ pluginId: string; error: JsonSafeErrorInfo }> = [];
-  for (const state of [...plugins.values()].reverse()) {
+  // 逆依赖拓扑序拆毁：依赖者先干依赖它的插件停止（依赖它的插件先停，被依赖
+  // 者后停）；无依赖关系的插件保持注册序的逆序，与既有行为一致。
+  const ordered = topoSortByDependencies(
+    [...plugins.values()],
+    (s) => s.definition.id,
+    (s) => s.dependencies,
+  ).reverse();
+  for (const state of ordered) {
     state.phase = 'deactivating';
     try {
       await teardown(state);

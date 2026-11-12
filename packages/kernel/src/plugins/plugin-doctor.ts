@@ -37,7 +37,7 @@ import {
   normalizeDefinition,
   resolvePluginEntry,
 } from './external-loader.js';
-import { compilePluginClientModule } from './client-compiler.js';
+import { clientNpmRootsOf, compilePluginClientModule } from './client-compiler.js';
 
 /** doctor 真实注册所需的临时 doc store（内存镜像，不触碰宿主持久层）。 */
 class DoctorDocStore {
@@ -212,6 +212,9 @@ export async function doctorPluginDir(
 
   const clientOk = await withDoctorScratch(async (scratch) =>
     push('client', '前端模块真实编译与导出校验', async () => {
+      // 与生产 getClientModule 同一受控 npm 映射：清单 clientDependencies 归一
+      // 进 definition.npmDependencies 后在此生效（doctor/运行链同一编译口径）。
+      const npmRoots = clientNpmRootsOf(definition!.npmDependencies);
       const seen = new Set<string>();
       for (const ref of clientRefs) {
         const key = `${ref.module}#${ref.export}`;
@@ -222,6 +225,7 @@ export async function doctorPluginDir(
           definition!.clientRoot!,
           ref.module,
           scratch,
+          { npmRoots },
         );
         // 悬空 export 校验：编译产物的真实具名导出必须包含声明引用的名字，
         // 否则 UI 声明会在运行期渲染空白（悬空引用）。如实报告，不静默。

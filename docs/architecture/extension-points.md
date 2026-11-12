@@ -127,7 +127,7 @@ export interface ComposerController {
 
 ## client.tsx 单轨渲染机制
 
-组件经 `ClientComponentRef { module, export }` 声明：`module` 是相对插件 `clientRoot` 的源文件路径（禁止绝对路径与 `../` 越根），`export` 是具名导出名。宿主用 esbuild 按源内容 hash（含本地依赖）编译缓存；编译产物不打包第二份 React。插件定义未声明 `clientRoot` 时，一切 client 引用在注册边界拒绝——不存在无法编译的悬空引用。内置插件可经 `npmDependencies` 声明受控 npm 依赖（说明符 → 内核包根解析根），编译器逐文件 containment 校验并随依赖 hash 复查。
+组件经 `ClientComponentRef { module, export }` 声明：`module` 是相对插件 `clientRoot` 的源文件路径（禁止绝对路径与 `../` 越根），`export` 是具名导出名。宿主用 esbuild 按源内容 hash（含本地依赖）编译缓存；编译产物不打包第二份 React。插件定义未声明 `clientRoot` 时，一切 client 引用在注册边界拒绝——不存在无法编译的悬空引用。受控 npm 依赖统一经 `npmDependencies`（说明符 → 解析根）声明：内置插件指向内核包根；外部插件在清单声明 `clientDependencies`（plugin.json 或 package.json `helm.clientDependencies`，说明符为裸包名/子路径），宿主归一映射到插件自身目录（`<插件目录>/node_modules`）并走同一编译链（doctor / 受管 install/update / reload / 运行期同一口径），编译器逐文件 containment 校验并随依赖 hash 复查——未声明的裸依赖显式拒绝，已声明未安装给出可诊断错误，不放开任意裸依赖。
 
 插件自有样式的托管链：本地 CSS 及根内 `@import` 由 esbuild 合并，通过保留导出 `__helmClientCss`（`PLUGIN_CLIENT_CSS_EXPORT`）内联为插件 JS 文本数据；宿主确认模块导入成功且加载仍有效后注入 `<style data-helm-plugin-css>`，入口更新时替换，停用/卸载或登出时回收。宿主样式表不承载插件业务类；资源 URL 支持 `data:` 与显式 HTTP(S)/协议相对地址，本地资源 URL 与远程 `@import` 显式拒绝。编译、导出校验或加载失败时宿主显示明确错误与重试入口，不把空白静默冒充加载成功。
 

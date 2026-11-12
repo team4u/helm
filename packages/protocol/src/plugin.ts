@@ -512,6 +512,8 @@ export interface PluginSummary {
    */
   icon?: string
   version?: string
+  /** 依赖的其他插件 ID 列表（注册边界去重归一；启用前必须全部已启用）。 */
+  dependencies?: string[]
   /** 常驻不可卸载（如 builtin:profile）。 */
   locked: boolean
   enabled: boolean
@@ -1188,6 +1190,16 @@ export interface PluginDefinition {
   /** true 表示常驻不可卸载（builtin:profile）。 */
   locked?: boolean
   /**
+   * 插件间依赖契约：依赖的其他插件 ID 列表（仅 ID，不做版本解析）。
+   * - 注册边界校验形状（非空字符串、插件 id 字符集）并按声明序去重；
+   * - 启用（含注册即启用）时逐项校验：依赖必须已注册且已启用（仅注册未启用的
+   *   依赖不满足），否则 409 plugin_dependency_missing / plugin_dependency_not_enabled；
+   * - 依赖图出现环路（含自依赖）在注册边界显式 409 plugin_dependency_cycle；
+   * - 全局服务启动屏障按依赖拓扑序 prepare/start（同层保持注册序），
+   *   stop/dispose 按逆拓扑序。
+   */
+  dependencies?: ReadonlyArray<string>
+  /**
    * 客户端源根目录（绝对路径，可选）：声明了 client.tsx 组件引用（UiSpecBase.client）
    * 的插件必须提供。宿主只允许 ClientComponentRef.module 解析到该目录内的相对
    * .ts/.tsx 源文件，编译产物按源内容（含本地依赖）hash 缓存；未声明时一切
@@ -1195,9 +1207,12 @@ export interface PluginDefinition {
    * 不属于用户可配置面。
    */
   clientRoot?: string
-  /** 插件自带的受控 npm 依赖（内置插件声明；外部插件不支持）：说明符 -> 提供包的解析根。
-   * 解析根须为内核包根（含锁定版本的 node_modules）；编译器把声明的说明符解析进
-   * bundle 并逐文件 containment 校验，随依赖 hash 与缓存复查。 */
+  /** 插件自带的受控 npm 依赖（说明符 -> 提供包的解析根）：解析根须为内核包根
+   * （含锁定版本的 node_modules，内置插件声明）或外部插件自身目录（由清单
+   * helm.clientDependencies / plugin.json clientDependencies 归一映射产生，见
+   * external-loader normalizeDefinition——外部插件不得在代码内自指解析根）。
+   * 编译器把声明的说明符解析进 bundle 并逐文件 containment 校验，随依赖
+   * hash 与缓存复查。 */
   npmDependencies?: Readonly<Record<string, string>>
   definePlugin(ctx: HelmPluginContext): MaybePromise<void>
 }

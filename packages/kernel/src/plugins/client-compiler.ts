@@ -276,6 +276,22 @@ export interface ClientNpmRoot {
   packageRoot: string;
 }
 
+/**
+ * 定义声明的 npmDependencies（说明符 -> 解析根）聚合为编译器可校验的 roots。
+ * ui-registry 运行链与 doctor 静态自检链共用，保证同一映射口径。
+ */
+export function clientNpmRootsOf(
+  npmDependencies: Readonly<Record<string, string>> | undefined,
+): ClientNpmRoot[] {
+  const npmByRoot = new Map<string, string[]>();
+  for (const [spec, packageRoot] of Object.entries(npmDependencies ?? {})) {
+    const list = npmByRoot.get(packageRoot) ?? [];
+    list.push(spec);
+    npmByRoot.set(packageRoot, list);
+  }
+  return [...npmByRoot.entries()].map(([packageRoot, specifiers]) => ({ packageRoot, specifiers }));
+}
+
 async function compileUncached(
   pluginId: string,
   clientRoot: string,
@@ -1086,6 +1102,17 @@ function containmentPlugin(
         if (npm !== null) {
           authorizeNpmPackageDir(npm.pkgDir);
           return { path: npm.path };
+        }
+        // 已声明但解析失败（未安装/入口缺失）：与未声明严格区分，绝不误导排查方向。
+        const declaredRoot = npmRoots.find((r) => r.specifiers.includes(args.path));
+        if (declaredRoot !== undefined) {
+          return {
+            errors: [{
+              text:
+                `插件 ${pluginId} 声明的前端依赖 "${args.path}" 在 ${join(declaredRoot.packageRoot, 'node_modules')} 内不可解析` +
+                '（依赖未安装或包入口缺失）；请在插件目录安装该依赖后重试（受管安装由 install/update 自动补装）',
+            }],
+          };
         }
         // 传递依赖：导入方位于已授权包目录内时，从该包 node_modules 解析裸说明符
         //（pnpm 符号链接布局天然支持）；解析成功即授权新包目录，逃逸路径无从
