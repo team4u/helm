@@ -139,15 +139,6 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
     ],
   },
   {
-    id: 'magpie',
-    name: 'Magpie 网关',
-    configured: false,
-    modelsCount: 0,
-    dynamic: true,
-    pluginId: 'builtin:magpie',
-    description: '内置 Magpie 模型网关接入，支持多路由组、动态配额调度与高可用故障转移。',
-  },
-  {
     id: 'custom',
     name: '自定义 OpenAI 兼容接口',
     configured: false,

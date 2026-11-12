@@ -7,6 +7,7 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import React from 'react'
 import { renderToStaticMarkup, renderToString } from 'react-dom/server'
 import type { ProviderConfig } from '@helm/protocol'
+import type { ModelProviderSummary } from '@helm/protocol'
 import type { ModelDescriptor } from '../src/lib/api.js'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { ModelCard } from '../src/models/ModelCard.js'
@@ -61,6 +62,15 @@ test('model-center-model: 默认供应商列表包含指定的 9 大主流供应
 
   const anthropic = DEFAULT_PROVIDERS.find((p) => p.id === 'anthropic')
   assert.equal(anthropic?.models && anthropic.models.length > 0, true)
+})
+
+test('model-center-model: 静态预设零插件供应商硬编码（插件网关仅来自后端实时目录）', { timeout: 60_000 }, () => {
+  // 插件供应商（如 builtin:magpie 的 'magpie'）的呈现与消失完全跟随插件启停；
+  // 前端静态预设不硬编码任何 pluginId，否则插件停用/启动失败后卡片残留。
+  for (const p of DEFAULT_PROVIDERS) {
+    assert.equal(p.pluginId, undefined, `静态供应商 ${p.id} 不得携带 pluginId`)
+  }
+  assert.equal(DEFAULT_PROVIDERS.some((p) => p.id === 'magpie'), false)
 })
 
 test('filterProviders: 模糊多维检索（支持名称、ID、描述及所包含的模型搜索，忽略大小写）', { timeout: 60_000 }, () => {
@@ -464,17 +474,46 @@ test('ModelCenter SSR: 目标携带 tab=defaults 时内联全局默认配置表�
   assert.equal(EMOJI_REGEX.test(html), false)
 })
 
-test('ModelCenter SSR: 正确呈现包含 Magpie 网关在内的全量动态供应商', { timeout: 60_000 }, () => {
+test('ModelCenter SSR: 后端目录返回插件网关时呈现动态供应商卡片与抽屉', { timeout: 60_000 }, () => {
   const store = makeTestStore({
     primaryTarget: { kind: 'models', providerId: 'magpie' },
   })
 
-  const html = renderToString(
+  // 插件网关（如 builtin:magpie）仅来自后端实时目录：插件启用时 catalog
+  // 才包含该条目；静态预设不硬编码任何插件供应商（停用后卡片必须消失）。
+  const catalog: ModelProviderSummary[] = [
+    {
+      id: 'magpie',
+      name: 'Magpie',
+      modelCount: 5,
+      dynamic: true,
+      baseUrl: 'http://127.0.0.1:3425/v1',
+      pluginId: 'builtin:magpie',
+      authMethods: [{ type: 'api_key', label: 'Magpie gateway' }],
+    },
+  ]
+
+  // listModelProviders 尚未返回前不渲染（初始 catalog 为空数组）
+  const htmlInitial = renderToString(
     e(HelmStoreContext.Provider, { value: store }, e(ModelCenter, { inlineDrawer: true })),
   )
+  assert.doesNotMatch(htmlInitial, /Magpie/)
 
-  // 包含 Magpie 卡片与抽屉
-  assert.match(html, /Magpie 网关/)
+  // 融合后端目录后卡片出现，抽屉联动（“动态同步”章节与刷新按钮）
+  const merged = buildMergedProviders(DEFAULT_PROVIDERS, [], [], [], catalog)
+  const magpie = merged.find((p) => p.id === 'magpie')
+  assert.equal(magpie?.pluginId, 'builtin:magpie')
+  assert.equal(magpie?.dynamic, true)
+  assert.equal(magpie?.modelsCount, 5)
+
+  const html = renderToString(
+    e(
+      HelmStoreContext.Provider,
+      { value: store },
+      e(ModelCenter, { providers: merged, inlineDrawer: true }),
+    ),
+  )
+  assert.match(html, /Magpie/)
   assert.match(html, /动态同步/)
   assert.match(html, /刷新目录/)
   assert.equal(EMOJI_REGEX.test(html), false)
