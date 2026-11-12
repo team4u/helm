@@ -431,6 +431,15 @@ export function PluginDetailDrawer({
                       <span>常驻</span>
                     </span>
                   )}
+                  {plugin?.dependencies && plugin.dependencies.length > 0 && (
+                    <span
+                      className="badge badge-neutral"
+                      title={`依赖插件：${plugin.dependencies.join('、')}（启用前必须已启用）`}
+                    >
+                      <HelmIcon name="network" size={10} />
+                      <span>{`依赖 ${plugin.dependencies.length}`}</span>
+                    </span>
+                  )}
                 </div>
                 {plugin && <div className="plugin-drawer-id mono">{plugin.id}</div>}
                 {plugin && (

@@ -160,6 +160,8 @@ export interface PluginInUseItem {
 
 export interface PluginState {
   definition: PluginDefinition;
+  /** 注册边界归一后的依赖插件 ID 列表（去重、保声明序；仅已注册依赖进入图）。 */
+  dependencies: string[];
   enabled: boolean;
   phase: PluginPhase;
   /** 启用周期号：每次 enable 开始与 disable 完成时递增，使旧上下文/句柄失效。 */

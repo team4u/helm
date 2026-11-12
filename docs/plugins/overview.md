@@ -55,6 +55,17 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 
 插件状态机覆盖「注册、启用、执行、停用、卸载」五个阶段。关键时序约束是**全局 prepare 后 start 屏障**：`PluginHost.start` 先对全体已启用服务执行 `prepare()`，全部完成后才依次执行 `start()`，最后恢复会话调度。热启用单个插件同样先 prepare 后 start。这一屏障存在的理由：`builtin:workflow` 需要在任何输入提交之前，先为重启中断的子会话落持久取消标记（`prepareInterruptedConversations`）——如果此刻其他插件的工具尚未注册，任何输入提交都会产生 orphan 回合。
 
+### 插件间依赖（仅 ID，不做版本解析）
+
+插件定义或清单可声明 `dependencies: string[]`（其他插件 ID）。宿主按确定性规则处理：
+
+- **启用门禁**：启用（含注册即启用）时逐项校验依赖已注册且已启用——仅注册未启用不满足，缺失/未启用分别报 `409 plugin_dependency_missing` / `409 plugin_dependency_not_enabled`；提交点同一同步段内终检，并发窗口不留悬挂启用态。
+- **环路拒绝**：依赖图成环（含自依赖）在注册边界拒绝（`409 plugin_dependency_cycle`），绝不死锁。
+- **拓扑时序**：全局启动屏障按依赖拓扑序 prepare/start（被依赖者先启，同层保持注册序），`stop` / `dispose` 按逆拓扑序。
+- **依赖者保护**：停用/注销被依赖插件时，依赖它的已启用插件（含传递依赖者）作为 `plugin_in_use` 占用项拦截；`--force` 停用后依赖者被显式标记为故障态（清单 `status=failed` 附诊断），绝不静默潜伏。
+
+`PluginSummary.dependencies` 透出归一后的依赖清单，CLI / Web 自动消费。
+
 `stop()` 必须取消或等待本服务的全部在途回调。宿主在 await `stop()` 链期间开启**受控停止窗口**：允许本插件当前启用周期的 doc 句柄完成最终写入（`builtin:workflow` 利用此窗口在 stop 内做最终 runs 投影并 `await flush()`）。`stop()` 返回后句柄失效，此后任何写入都会被 epoch 守卫拒绝。`flush()` 冲刷的是共享存储队列而非按文档划分的事务——需要「先落盘再派生副作用」时必须显式 await。
 
 ### `ctx.tool`：模型专用工具
@@ -91,13 +102,15 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 
 同一插件内 `doc` 与 `sessionDoc` 不能同名。句柄读写深拷贝状态，要求会话真实存在；`delete(conversationId)` 复位到初始值并通知订阅者，会话删除时宿主清理对应持久记录。
 
+两类文档共用一条**体积防线**：`initial` / `set` / `update` 的值经 JSON 序列化后超过 **2 MiB** 即在写入镜像、持久层与事件发布之前显式拒绝（`413 plugin_doc_too_large`，details 携带 pluginId / name / kind / bytes / maxBytes），旧值保持不变。文档是紧凑状态而非数据仓库——大体量内容应落盘为文件资产并在文档内保留引用。不可 JSON 序列化的值（undefined、循环引用、非纯对象等）在边界即显式拒绝（`invalid_json_value`）。
+
 ## 停用预检与故障隔离
 
 停用一个插件要过三道关卡，顺序固定：
 
 1. **locked 硬拒绝**：声明 `locked: true` 的插件（仅 `builtin:profile`）永久禁止停用或卸载，返回 `403 locked_plugin_cannot_be_disabled`。
 2. **在途任务硬阻断**：`liveTasks()` 返回非空（执行中的动作/工具/子代理派生/服务自声明任务）即 `409 plugin_has_live_tasks`，**不可 force 跳过**——状态一致性优先。`liveTasks()` 执行崩溃或返回非法数据时按 `500 plugin_live_tasks_check_failed` 拒绝，宿主绝不默认放行。
-3. **持久资源知情确认**：`inUse()` 声明持久生效资源（如 `builtin:triggers` 的已启用 cron 任务与 webhook 端点），非空默认 `409 plugin_in_use` 并列出占用清单；调用方显式 `--force` 可越过（磁盘配置保留，重新启用后恢复）。宿主还会通用探测 Profile.runtime 绑定与模型引用（`profile_runtime` / `profile_model` / `conversation_model`）。
+3. **持久资源知情确认**：`inUse()` 声明持久生效资源（如 `builtin:triggers` 的已启用 cron 任务与 webhook 端点），非空默认 `409 plugin_in_use` 并列出占用清单；调用方显式 `--force` 可越过（磁盘配置保留，重新启用后恢复）。宿主还会通用探测 Profile.runtime 绑定与模型引用（`profile_runtime` / `profile_model` / `conversation_model`）与依赖它的已启用插件（`plugin_dependency`，含传递依赖者）。
 
 `liveWorktrees()` 声明运行中任务占用的受管工作树路径，供 `builtin:workflow` 的清理链拒绝误碰在途占用——它不参与停用阻断（那是 `liveTasks` 的职责），而是清理安全机制。
 

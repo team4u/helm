@@ -23,11 +23,20 @@
   "name": "示例业务插件",
   "version": "1.0.0",
   "main": "index.ts",
-  "clientRoot": "./client"
+  "clientRoot": "./client",
+  "clientDependencies": ["chart.js"],
+  "dependencies": ["builtin:profile"]
 }
 ```
 
 清单约束：`id` 仅允许字母、数字、下划线与连字符，**禁止冒号**（冒号保留给 `builtin:` 命名空间）与 `builtin:` 前缀；外部插件禁止 `locked`（宿主加载时自动剥离）；`main` 缺省时按约定顺序探测 `index.ts / index.tsx / index.mjs / index.mts / index.js`（TypeScript 优先），也支持 `package.json` 的 `helm.main` / `main` 回落（`.js` 后缀自动重写同名 TS 源）。`clientRoot` 缺省为插件目录本身，必须是插件目录内的非空相对路径。首次注册默认停用，经 `helm plugins enable` 显式激活。
+
+可选字段 `clientDependencies` 与 `dependencies` 同样支持声明在 `package.json` 的 `helm` 字段（`helm.clientDependencies` / `helm.dependencies`，与 plugin.json 同名同义，两边声明合并去重）：
+
+- **`clientDependencies: string[]`** —— 前端受控 npm 依赖说明符（裸包名或子路径，如 `chart.js`、`@scope/pkg/lib.js` 子路径需逐项声明）。宿主把它们映射为「解析根 = 插件自身目录」的受控 npm 依赖：client.tsx 中的同名裸导入会被解析进 `<插件目录>/node_modules` 并逐文件 containment 校验后打进 bundle；未声明的裸依赖编译期显式拒绝，已声明但未安装的依赖在编译期给出「不可解析/未安装」诊断（受管安装/更新会按清单自动补装）。版本建议同时声明在 `package.json` 的 `dependencies` / `devDependencies`（受管安装优先取该 range，保证可复现）。在代码内声明 `npmDependencies`（自指任意解析根）对外部插件无效——宿主一律剥离，前端依赖只认清单声明。
+- **`dependencies: string[]`** —— 插件间依赖（仅插件 ID，如 `["builtin:profile"]`，不做版本解析）。启用前依赖必须已注册且已启用（仅注册未启用不满足，缺失/未启用分别报 `plugin_dependency_missing` / `plugin_dependency_not_enabled`）；依赖图成环在注册时拒绝（`plugin_dependency_cycle`）。全局服务启动屏障按依赖拓扑序 prepare/start（被依赖者先启），stop/关停按逆拓扑序。停用被依赖插件时，依赖它的已启用插件会作为 `plugin_in_use` 占用项拦截（传递依赖者同样计入；确认后可 `--force`，强制停用后依赖者会被显式标记为故障态，不会静默潜伏）。注意 `package.json` 顶层的 `dependencies` 保持 npm 运行时依赖语义，不会被误读为插件间依赖。
+
+插件定义对象（代码内）也可直接声明 `dependencies`（与清单声明合并去重）；`PluginSummary`（`helm plugins list --json` / Web 插件中心）会透出归一后的 `dependencies` 字段。
 
 ## 开发闭环四步曲
 

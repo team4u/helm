@@ -113,19 +113,23 @@ import {
   assertDefinition,
   assertNotLocked,
   disposePlugins,
+  findDependencyCycle,
   getActiveEnabledPluginIds,
   getIdleActivePluginIds,
+  normalizeDependencies,
   persistEnabled,
   pluginSummaryOf,
   resolveInitialEnabled,
   settleLifecycleChanged,
   teardownPlugin,
   toDiagnosticError,
+  topoSortByDependencies,
   wrapEnableError,
   wrapRegistrationError,
 } from './lifecycle-helpers.js';
 
-export type { PluginDocStore, PluginSessionDocStore } from './doc-registry.js';
+export type { PluginDocStore, PluginSessionDocStore, PluginDocRegistryOptions } from './doc-registry.js';
+export { PLUGIN_DOC_MAX_JSON_BYTES } from './doc-registry.js';
 export {
   type DerivedToolSpec,
   type PluginRouteEntry,
@@ -220,13 +224,32 @@ export class PluginHost {
       if (this.plugins.has(pluginId)) {
         throw new HelmError('plugin_already_registered', `插件已注册：${pluginId}`, 409, { pluginId });
       }
+      const dependencies = normalizeDependencies(definition);
+      // 依赖图环路在注册边界拒绝（含经已注册插件间接回到本插件的环）；
+      // 校验与写入在同一同步段内完成，并发注册不会漏检成环。
+      const cycle = findDependencyCycle(
+        pluginId,
+        dependencies,
+        (id) => this.plugins.get(id)?.dependencies,
+      );
+      if (cycle !== undefined) {
+        throw new HelmError(
+          'plugin_dependency_cycle',
+          `插件 ${pluginId} 的依赖声明成环：${cycle.join(' -> ')}，拒绝注册`,
+          409,
+          { pluginId, cycle },
+        );
+      }
 
       const wantsEnabled = resolveInitialEnabled(definition, this.configStore, options);
+      // 快速失败预检：注册即启用时依赖必须已满足（definePlugin 副作用之前拒绝）。
+      if (wantsEnabled) this.assertDependenciesSatisfied(pluginId, dependencies);
       const dataDir = join(this.options.dataDir, 'plugins', pluginDataDirName(pluginId));
       mkdirSync(dataDir, { recursive: true });
 
       const state: PluginState = {
         definition,
+        dependencies,
         enabled: false,
         phase: 'defining',
         epoch: 1,
@@ -258,6 +281,8 @@ export class PluginHost {
         try {
           this.uiRegistry.assertCrossPluginUnique(definition.id, this.getActiveEnabledPluginIds());
           this.validateUiDeclarations(definition.id, true);
+          // 提交点终检：依赖被停用的并发场景在此拦截，绝不留下依赖不满足的启用态。
+          this.assertDependenciesSatisfied(pluginId, dependencies);
           await registerProviders(state, this.options.providers);
           await this.activateServices(state);
           // 与 enable() 同序：能力挂载完成后才同步置 enabled+idle，避免清单
@@ -325,6 +350,7 @@ export class PluginHost {
       existing ??
       ({
         definition,
+        dependencies: [],
         enabled: false,
         phase: 'idle',
         epoch: 1,
@@ -337,6 +363,7 @@ export class PluginHost {
         stopWindow: false,
       } satisfies PluginState);
     state.definition = definition;
+    state.dependencies = [];
     state.enabled = false;
     state.phase = 'idle';
     state.epoch += 1;
@@ -375,6 +402,10 @@ export class PluginHost {
       this.assertNotDisposed();
       const state = this.requirePlugin(pluginId);
       assertNotLocked(state);
+      // 依赖者保护：被已启用（或正在启用，含 force 停用后遗留的故障态依赖者）
+      // 的插件依赖时不允许注销——依赖者会立即失去满足条件；先停用依赖它的
+      // 插件后再注销（无 force 逃生门）。
+      this.assertNoEnabledDependents(pluginId);
       if (!state.enabled) {
         await this.teardownPlugin(state, { stopServices: false });
         this.plugins.delete(pluginId);
@@ -415,6 +446,8 @@ export class PluginHost {
           { pluginId, error: state.lastError },
         );
       }
+      // 依赖预检先于任何状态变更：缺失/未启用的依赖让 enable 干净失败。
+      this.assertDependenciesSatisfied(pluginId, state.dependencies);
       const prevConfigSchema = state.configSchema;
       state.epoch += 1;
       this.clearRegistrations(state);
@@ -431,6 +464,8 @@ export class PluginHost {
         persistedEnabled = true;
         this.uiRegistry.assertCrossPluginUnique(pluginId, this.getActiveEnabledPluginIds());
         this.validateUiDeclarations(pluginId, true);
+        // 提交点终检（与 enabled=true 同一同步段）：并发停用依赖的窗口在此关闭。
+        this.assertDependenciesSatisfied(pluginId, state.dependencies);
         state.enabled = true;
         state.phase = 'idle';
         state.lastError = undefined;
@@ -481,6 +516,9 @@ export class PluginHost {
       state.epoch += 1;
       state.phase = 'idle';
       state.lastError = undefined;
+      // force 停用可能留下「依赖本插件但仍在启用」的依赖者：绝不让该错误态
+      // 静默潜伏——逐个标记结构化诊断（清单 status=failed 可见）并广播变更。
+      if (options.force === true) this.markDependentsBroken(pluginId);
       let persistError: { err: unknown } | undefined;
       try {
         await persistEnabled(this.configStore, state, false);
@@ -623,13 +661,116 @@ export class PluginHost {
   }
 
   /**
-   * 持久资源占用聚合：服务自声明（svc.inUse）+ 宿主通用引用探测
+   * 依赖满足性校验（enable / 注册即启用的提交门）：逐项依赖必须已注册且已
+   * 启用并处于稳定态。仅注册未启用（enabled=false）的依赖不满足条件；
+   * 正在切换中的依赖（defining/deactivating）同样不满足——并发窗口内宁可
+   * 干净失败重试，也不留下依赖不满足的启用态。
+   */
+  private assertDependenciesSatisfied(pluginId: string, dependencies: readonly string[]): void {
+    for (const dep of dependencies) {
+      const depState = this.plugins.get(dep);
+      if (depState === undefined) {
+        throw new HelmError(
+          'plugin_dependency_missing',
+          `插件 ${pluginId} 依赖的插件 ${dep} 未注册（请先安装/注册并启用它）`,
+          409,
+          { pluginId, dependency: dep },
+        );
+      }
+      if (!depState.enabled || depState.phase !== 'idle') {
+        throw new HelmError(
+          'plugin_dependency_not_enabled',
+          `插件 ${pluginId} 依赖的插件 ${dep} 未启用（依赖必须已注册且已启用，仅注册不满足）`,
+          409,
+          { pluginId, dependency: dep, dependencyEnabled: depState.enabled, dependencyPhase: depState.phase },
+        );
+      }
+    }
+  }
+
+  /**
+   * 依赖本插件且仍占用它的插件：已启用，或正处于启用过程中（defining；
+   * 其提交点终检会拦截，但停用侧也应把该窗口视为占用）。按注册序返回。
+   */
+  private collectDependents(pluginId: string): PluginState[] {
+    const out: PluginState[] = [];
+    const seen = new Set<string>([pluginId]);
+    const queue = [pluginId];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      for (const [id, s] of this.plugins) {
+        if (seen.has(id)) continue;
+        if ((!s.enabled && s.phase !== 'defining') || !s.dependencies.includes(current)) continue;
+        seen.add(id);
+        out.push(s);
+        queue.push(id);
+      }
+    }
+    return out;
+  }
+
+  /** 注销前依赖者硬保护：存在占用依赖者时拒绝（无 force 逃生门）。 */
+  private assertNoEnabledDependents(pluginId: string): void {
+    const dependents = this.collectDependents(pluginId);
+    if (dependents.length === 0) return;
+    throw new HelmError(
+      'plugin_in_use',
+      `插件 ${pluginId} 被 ${dependents.length} 个插件依赖（${dependents.map((s) => s.definition.id).join(', ')}），拒绝注销；请先停用或移除依赖它的插件`,
+      409,
+      {
+        pluginId,
+        usages: dependents.map((s) => ({
+          kind: 'plugin_dependency',
+          id: s.definition.id,
+          label: `插件 ${s.definition.id} 依赖 ${pluginId}（${s.enabled ? '当前已启用' : '正在启用'}）`,
+        })),
+      },
+    );
+  }
+
+  /**
+   * force 停用后的依赖者显式标记：仍在启用的依赖者不会被自动停用（force
+   * 语义只作用于目标插件），但依赖不满足是真实错误态——写入结构化诊断
+   * （清单 status=failed 可见）并广播 plugin.changed，绝不静默潜伏。
+   */
+  private markDependentsBroken(pluginId: string): void {
+    for (const dependent of this.collectDependents(pluginId)) {
+      if (!dependent.enabled) continue;
+      dependent.lastError = {
+        code: 'plugin_dependency_not_enabled',
+        message: `其依赖插件 ${pluginId} 已被强制停用，依赖不再满足；请停用本插件后先启用 ${pluginId} 再重新启用`,
+        stage: 'enable',
+        details: { pluginId: dependent.definition.id, dependency: pluginId, forced: true },
+      };
+      this.emitPluginChanged(dependent);
+    }
+  }
+
+  /** 已启用插件的依赖拓扑序（被依赖者在前；同层保持注册序）。 */
+  private enabledStatesInDependencyOrder(): PluginState[] {
+    return topoSortByDependencies(
+      [...this.plugins.values()].filter((s) => s.enabled),
+      (s) => s.definition.id,
+      (s) => s.dependencies,
+    );
+  }
+
+  /**
+   * 持久资源占用聚合：服务自声明（svc.inUse）+ 依赖者占用 + 宿主通用引用探测
    * （Profile.runtime kind / Profile.model / 会话 model 指向本插件 Provider）。
    * 轻量测试宿主未实现 profiles.list / listConversations 时（501 unsupported）
    * 仅跳过宿主资产探测，真实错误照常上抛。
    */
   private async collectPluginInUse(pluginId: string, state: PluginState): Promise<PluginInUseItem[]> {
     const usages: PluginInUseItem[] = await collectServiceInUse(pluginId, state);
+    // 依赖者占用：停用会破坏依赖它的已启用插件（非 force 硬拦截，与既有
+    // plugin_in_use 机制同一出口；force 路径由 markDependentsBroken 显式标记）。
+    const dependentItems: PluginInUseItem[] = this.collectDependents(pluginId).map((s) => ({
+      kind: 'plugin_dependency',
+      id: s.definition.id,
+      label: `插件 ${s.definition.id} 依赖 ${pluginId}（${s.enabled ? '当前已启用' : '正在启用'}）`,
+    }));
+    usages.unshift(...dependentItems);
 
     const runtimeKinds = new Set(this.uiRegistry.getProfileRuntimeKinds(pluginId));
     const providerIds = state.providers.map((p) => p.provider.id);
@@ -690,6 +831,19 @@ export class PluginHost {
         }
       }
     }
+    // 依赖者检查必须在所有异步引用探测结束后再收口一次；否则并发 enable
+    // 可能在 profiles.list() 等待期间提交，disable 会绕过 plugin_in_use。
+    const knownDependents = new Set(
+      usages.filter((usage) => usage.kind === 'plugin_dependency').map((usage) => usage.id),
+    );
+    for (const dependent of this.collectDependents(pluginId)) {
+      if (knownDependents.has(dependent.definition.id)) continue;
+      usages.unshift({
+        kind: 'plugin_dependency',
+        id: dependent.definition.id,
+        label: `插件 ${dependent.definition.id} 依赖 ${pluginId}（${dependent.enabled ? '当前已启用' : '正在启用'}）`,
+      });
+    }
     return usages;
   }
 
@@ -722,7 +876,8 @@ export class PluginHost {
     await this.acquireGateWrite();
     try {
       if (this.servicesStarted) return;
-      const enabled = [...this.plugins.values()].filter((s) => s.enabled);
+      // 依赖拓扑序：被依赖插件先 prepare/start；同层保持注册序（确定性）。
+      const enabled = this.enabledStatesInDependencyOrder();
       // 无隔离型插件：沿用原子启动屏障（任一失败回滚全部并显式抛错）。
       if (!enabled.some((s) => s.isolateFailure === true)) {
         await startServiceBarrier(enabled);
@@ -782,7 +937,8 @@ export class PluginHost {
     try {
       if (!this.servicesStarted) return;
       const errors: Array<{ pluginId: string; error: JsonSafeErrorInfo }> = [];
-      for (const state of [...this.plugins.values()].reverse()) {
+      // 逆依赖拓扑序停止：依赖者先停，被依赖者后停。
+      for (const state of this.enabledStatesInDependencyOrder().reverse()) {
         if (!state.enabled) continue;
         try {
           await stopServicesQuietly(state);
@@ -1005,21 +1161,21 @@ export class PluginHost {
   asPackageManagerHost(): PackageManagerHost {
     return {
       registerManagedPlugin: async (dir, options) => {
-        const entryPath = await resolvePluginEntry(dir);
-        if (entryPath === undefined) {
-          throw new HelmError(
-            'plugin_entry_missing',
-            `受管安装目录不含插件入口（无 plugin.json 且无约定入口）：${dir}`,
-            500,
-            { dir },
-          );
-        }
-        const definition = normalizeDefinition(
-          await importPluginDefinition(dir, entryPath),
-          dir,
-        );
         const releaseTsRoot = registerPluginTsRoot(dir);
         try {
+          const entryPath = await resolvePluginEntry(dir);
+          if (entryPath === undefined) {
+            throw new HelmError(
+              'plugin_entry_missing',
+              `受管安装目录不含插件入口（无 plugin.json 且无约定入口）：${dir}`,
+              500,
+              { dir },
+            );
+          }
+          const definition = normalizeDefinition(
+            await importPluginDefinition(dir, entryPath),
+            dir,
+          );
           await this.register(definition, { enabled: false });
           if (options.enabled) {
             await this.enable(definition.id);

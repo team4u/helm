@@ -15,7 +15,7 @@
  *   由 PluginHost 在启用提交块调用；默认停用的探测注册不占用全局名字。
  */
 import { HelmError, RESERVED_SLASH_COMMANDS, type PluginUiContribution, type UiActionSpec } from '@helm/protocol';
-import { assertModuleRefShape, compilePluginClientModule, type ClientCompileResult, type ClientNpmRoot } from './client-compiler.js';
+import { assertModuleRefShape, clientNpmRootsOf, compilePluginClientModule, type ClientCompileResult, type ClientNpmRoot } from './client-compiler.js';
 import { assertConversationScope, isPlainObject, jsonClone } from './shared.js';
 
 /** 宿主保留的命令斜杠触发词（skill: 前缀整体保留），插件不得占用。 */
@@ -818,17 +818,8 @@ export class UiRegistry {
     const identity = info.identity;
     const epoch = info.epoch;
     const compile = options.compile ?? compilePluginClientModule;
-    // 受控 npm 依赖：定义声明的 specifiers -> 解析根聚合为编译器可校验的 roots。
-    const npmByRoot = new Map<string, string[]>();
-    for (const [spec, packageRoot] of Object.entries(info.npmDependencies ?? {})) {
-      const list = npmByRoot.get(packageRoot) ?? [];
-      list.push(spec);
-      npmByRoot.set(packageRoot, list);
-    }
-    const npmRoots: ClientNpmRoot[] = [...npmByRoot.entries()].map(([packageRoot, specifiers]) => ({
-      packageRoot,
-      specifiers,
-    }));
+    // 受控 npm 依赖：定义声明的 specifiers -> 解析根聚合（与 doctor 链同一映射口径）。
+    const npmRoots: ClientNpmRoot[] = clientNpmRootsOf(info.npmDependencies);
     const result = await compile(pluginId, clientRoot, moduleRef, options.dataDir, {
       ...(npmRoots.length > 0 ? { npmRoots } : {}),
     });

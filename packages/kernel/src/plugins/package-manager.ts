@@ -34,6 +34,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { HelmError, type PluginInstallResult, type PluginPackageRecord, type PluginRemoveResult, type PluginPackageSource, type PluginSummary, type PluginUpdateResult } from '@helm/protocol';
 import { parsePluginSource } from './package-source.js';
 import { doctorPluginDir } from './plugin-doctor.js';
+import { readHelmClientDependencies } from './external-loader.js';
 import type { PluginPackageManagerStore } from './package-store.js';
 
 // ---------------------------------------------------------------------------
@@ -638,12 +639,46 @@ export class PluginPackageManager {
    * staging 副本内安装运行时依赖（npm/git/local 同权：凡携带 package.json
    * 即补装；--omit=dev 且永不运行 lifecycle scripts；local 源已是过滤拷贝，
    * 用户源目录不受影响）。无 package.json 时为 no-op。
+   *
+   * 前端受控依赖（清单 clientDependencies）单独补装：它们不是 runtime
+   * dependencies（--no-save 绝不改写 package.json），但必须进 node_modules——
+   * 否则 doctor / client 编译链因依赖缺失显式失败。版本优先取 package.json
+   * 已声明 range（dependencies/devDependencies 均认，保证可复现），未声明
+   * 时按说明符对应的包名安装（子路径说明符只用于编译解析，不能作为 npm 包名）。
    */
   private async installRuntimeDeps(dir: string): Promise<void> {
     const pkgJson = join(dir, 'package.json');
-    const has = await stat(pkgJson).then(() => true).catch(() => false);
-    if (!has) return;
-    const args = ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--foreground-scripts', '--no-package-lock-only'];
+    const hasPkg = await stat(pkgJson).then(() => true).catch(() => false);
+    const clientSpecs = readHelmClientDependencies(dir);
+    if (!hasPkg && clientSpecs.length === 0) return;
+    if (clientSpecs.length === 0) {
+      const args = ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--foreground-scripts', '--no-package-lock-only'];
+      const result = await this.run('npm', args, dir);
+      if (result.code !== 0) throw commandError('install', 'npm', args, result);
+      return;
+    }
+    const ranges = new Map<string, string>();
+    if (hasPkg) {
+      const { readFile } = await import('node:fs/promises');
+      const pkg = JSON.parse(await readFile(pkgJson, 'utf8')) as Record<string, unknown>;
+      for (const group of ['dependencies', 'devDependencies'] as const) {
+        const declared = pkg[group];
+        if (typeof declared !== 'object' || declared === null) continue;
+        for (const [name, range] of Object.entries(declared as Record<string, unknown>)) {
+          if (typeof range === 'string' && range.length > 0) ranges.set(name, range);
+        }
+      }
+    }
+    // 说明符取包名部分（子路径声明如 pkg/sub.js 的版本由包根 range 决定）。
+    const installSpecs = clientSpecs.map((spec) => {
+      const pkgName = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : (spec.split('/')[0] ?? spec);
+      const range = ranges.get(pkgName);
+      return range !== undefined ? `${pkgName}@${range}` : pkgName;
+    });
+    const args = [
+      'install', '--omit=dev', '--no-save', '--ignore-scripts', '--no-audit', '--no-fund',
+      '--foreground-scripts', ...installSpecs,
+    ];
     const result = await this.run('npm', args, dir);
     if (result.code !== 0) throw commandError('install', 'npm', args, result);
   }
