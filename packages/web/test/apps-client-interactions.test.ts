@@ -274,7 +274,7 @@ test('深链参数恢复：params.tab / params.q 初始即生效（sp.* 命名�
   unmount()
 })
 
-test('业务分类 Tab：category:* 参数过滤对应 catalog 分类应用', { timeout: 60_000 }, async () => {
+test('筛选药丸：仅保留「全部」与「已置顶」，移除多余业务分类标签', { timeout: 60_000 }, async () => {
   stubStore(
     [
       plugin('todo-app', { name: '待办应用' }),
@@ -283,24 +283,23 @@ test('业务分类 Tab：category:* 参数过滤对应 catalog 分类应用', { 
     [screen('todo-app', 'main', '待办台'), screen('bill-app', 'main', '看板')],
     {
       apps: {
-        'todo-app': { pluginId: 'todo-app', category: 'productivity' },
+        'todo-app': { pluginId: 'todo-app', category: 'productivity', pinned: true },
         'bill-app': { pluginId: 'bill-app', category: 'finance' },
       },
     },
   )
-  // 未登记分类的应用归入 other；点击「效率工具」仅显示 productivity 应用
-  const { props } = mutableScreenProps()
-  const { host, unmount, reRender } = await mount(makeSpyCtx(), props)
+  const { host, unmount } = await mount(makeSpyCtx(), screenProps())
   const pills = Array.from(host.querySelectorAll('.apps-category-pill'))
-  const productivityPill = pills.find((p) => p.textContent?.includes('效率工具'))
-  assert.ok(productivityPill, '应存在业务分类药丸')
-  await act(async () => {
-    productivityPill.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-  })
-  await reRender()
-  assert.equal(host.querySelectorAll('.app-card').length, 1)
-  assert.equal(host.querySelector('.app-card')?.getAttribute('data-app-id'), 'todo-app')
-  assert.ok(setParamsCalls.some((c) => c.patch['tab'] === 'category:productivity'), '分类 Tab 回写 category:<name> 参数')
+  assert.equal(pills.length, 2, '工具栏药丸应严格只保留「全部」和「已置顶」两项')
+  const first = pills[0]
+  const second = pills[1]
+  assert.ok(first)
+  assert.ok(second)
+  assert.match(first.textContent ?? '', /全部/)
+  assert.match(first.textContent ?? '', /2/)
+  assert.match(second.textContent ?? '', /已置顶/)
+  assert.match(second.textContent ?? '', /1/)
+  assert.equal(pills.some((p) => p.textContent?.includes('效率工具')), false, '业务分类标签已移除')
   unmount()
 })
 
@@ -346,45 +345,27 @@ test('未登记 catalog 且无 Screen 的外部插件：不进入应用列表', 
   unmount()
 })
 
-test('查看应用详情：点击卡片右下角 3 点按钮展开详情抽屉，遮罩具备正确类名与深链参数同步', { timeout: 60_000 }, async () => {
+test('查看应用详情：点击卡片右下角 3 点按钮直接跳转插件中心详情（复用插件详情页与卸载能力）', { timeout: 60_000 }, async () => {
   stubStore(
     [plugin('todo-app', { name: '待办应用', version: '1.2.0' })],
     [screen('todo-app', 'main', '待办台')],
     { apps: { 'todo-app': { pluginId: 'todo-app', pinned: false, category: 'productivity' } } },
   )
-  const { props } = mutableScreenProps({}, { inlineDrawer: true })
-  const { host, unmount, reRender } = await mount(makeSpyCtx(), props)
+  const ctx = makeSpyCtx()
+  const { host, unmount } = await mount(ctx, screenProps())
 
-  // 1. 卡片右下角 3 点详情按钮
+  // 卡片右下角 3 点详情按钮
   const detailBtn = host.querySelector<HTMLButtonElement>('[data-app-id="todo-app"] button[aria-label="查看应用详情"]')
   assert.ok(detailBtn, '应存在查看应用详情按钮')
 
   await act(async () => {
     detailBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
-  assert.ok(setParamsCalls.some((c) => c.patch['app'] === 'todo-app'), '点击 3 点按钮回写 app 参数')
-
-  // 2. 模拟宿主状态写回更新后重新渲染抽屉
-  await reRender()
-
-  const drawer = document.body.querySelector('.primary-drawer-content')
-  assert.ok(drawer, '详情抽屉应渲染展开并使用 primary-drawer-content 规范样式')
-  assert.match(drawer.textContent ?? '', /待办应用/)
-  assert.match(drawer.textContent ?? '', /v1.2.0/)
-  assert.match(drawer.textContent ?? '', /效率工具/)
-
-  // 3. 遮罩层必须具备 primary-drawer-backdrop 类名（确保 z-index: 90 低于抽屉主体 z-index: 100）
-  const overlay = document.body.querySelector('.primary-drawer-backdrop')
-  assert.ok(overlay, '遮罩层必须绑定 .primary-drawer-backdrop 通用层级规范')
-  assert.ok(overlay.classList.contains('modal-backdrop'), '遮罩层需保留基础毛玻璃类名')
-
-  // 4. 点击抽屉右上角关闭按钮
-  const closeBtn = drawer.querySelector<HTMLButtonElement>('button[aria-label="关闭"]')
-  assert.ok(closeBtn, '应存在关闭按钮')
-  await act(async () => {
-    closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-  })
-  assert.ok(setParamsCalls.some((c) => c.patch['app'] === undefined), '关闭抽屉清理 app 深链参数')
+  assert.deepEqual(
+    ctx.screenCalls,
+    ['plugins:todo-app'],
+    '点击 3 点按钮应直接导航至 plugins:<pluginId>，统一复用插件详情页与卸载能力',
+  )
 
   unmount()
 })

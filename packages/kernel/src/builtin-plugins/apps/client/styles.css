@@ -242,49 +242,6 @@
   flex-shrink: 0;
 }
 
-/* 应用详情视图行与动作标签排版（抽屉外壳与头部/底栏复用宿主 .primary-drawer-* 通用规范） */
-.app-detail-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.app-detail-section-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--fg-secondary);
-}
-
-.app-detail-screen-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.app-detail-screen-label,
-.app-detail-screen-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.app-detail-screen-label {
-  min-width: 0;
-  color: var(--fg-secondary);
-}
-
-.app-detail-screen-label > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .apps-empty {
   display: flex;
   flex-direction: column;

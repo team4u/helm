@@ -1,0 +1,15 @@
+.td-wrap { display: flex; flex-direction: column; gap: 12px; padding: 16px; max-width: 640px; }
+.td-header { display: flex; align-items: center; gap: 8px; }
+.td-header h2 { font-size: 16px; margin: 0; }
+.td-count { color: var(--fg-muted); font-size: 12px; margin-left: auto; }
+.td-form { display: flex; gap: 8px; }
+.td-input { flex: 1; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: var(--fg); }
+.td-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.td-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.td-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated); }
+.td-item label { flex: 1; font-size: 13px; cursor: pointer; }
+.td-done { text-decoration: line-through; color: var(--fg-muted); }
+.td-remove { border: none; background: transparent; color: var(--fg-muted); cursor: pointer; padding: 4px; border-radius: 4px; display: inline-flex; }
+.td-remove:hover { color: var(--fg); background: var(--bg-muted); }
+.td-empty { color: var(--fg-muted); font-size: 13px; text-align: center; padding: 24px 0; }
+.td-edit { padding: 2px 6px; font-size: 13px; }

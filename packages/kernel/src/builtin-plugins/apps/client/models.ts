@@ -7,21 +7,16 @@
  */
 import type { PluginSummary } from '@helm/protocol'
 
-export type AppCenterTab = 'all' | 'pinned' | 'category'
 export type AppCategory = 'productivity' | 'devops' | 'data' | 'finance' | 'automation' | 'other'
 
-export const APP_CATEGORY_TABS: Array<{ key: AppCategory; label: string }> = [
-  { key: 'productivity', label: '效率工具' },
-  { key: 'devops', label: '运维监控' },
-  { key: 'data', label: '数据看板' },
-  { key: 'finance', label: '财务记账' },
-  { key: 'automation', label: '自动化' },
-  { key: 'other', label: '其他' },
-]
-
-export const APP_CATEGORY_LABELS: Record<AppCategory, string> = Object.fromEntries(
-  APP_CATEGORY_TABS.map((t) => [t.key, t.label]),
-) as Record<AppCategory, string>
+export const APP_CATEGORY_LABELS: Record<AppCategory, string> = {
+  productivity: '效率工具',
+  devops: '运维监控',
+  data: '数据看板',
+  finance: '财务记账',
+  automation: '自动化',
+  other: '其他',
+}
 
 /** 归一化未知分类为 'other'（catalog 后端演进时的前端防御，不虚构未知类目）。 */
 export function normalizeAppCategory(raw: unknown): AppCategory {
@@ -53,11 +48,6 @@ export interface AppItem {
   plugin: PluginSummary
   screens: AppScreenRef[]
   catalog: AppCatalogEntry | undefined
-}
-
-/** catalog 是否登记了该插件（停用后 screens 为空时的应用身份保持依据）。 */
-export function isCatalogRegistered(catalog: AppCatalogDoc | undefined, pluginId: string): boolean {
-  return catalog?.apps[pluginId] !== undefined
 }
 
 /**
@@ -98,29 +88,17 @@ export function mergeAppItems(
     }))
 }
 
-/** URL 参数 `tab` 的解析结果：all / pinned / category:<AppCategory>。 */
-export type AppTabParam = 'all' | 'pinned' | { category: AppCategory }
-
-export function isSameAppTab(a: AppTabParam, b: AppTabParam): boolean {
-  if (a === b) return true
-  if (typeof a === 'object' && typeof b === 'object') return a.category === b.category
-  return false
-}
+/** URL 参数 `tab` 的解析结果：all / pinned。仅保留全部与已置顶。 */
+export type AppTabParam = 'all' | 'pinned'
 
 export function parseAppTabParam(raw: string | undefined): AppTabParam {
-  if (raw === undefined || raw === '' || raw === 'all') return 'all'
   if (raw === 'pinned') return 'pinned'
-  if (raw.startsWith('category:')) {
-    const category = raw.slice('category:'.length)
-    return category in APP_CATEGORY_LABELS ? { category: category as AppCategory } : 'all'
-  }
   return 'all'
 }
 
 export function formatAppTabParam(tab: AppTabParam): string | undefined {
-  if (tab === 'all') return undefined
   if (tab === 'pinned') return 'pinned'
-  return `category:${tab.category}`
+  return undefined
 }
 
 export interface AppFilterState {
@@ -128,14 +106,11 @@ export interface AppFilterState {
   tab: AppTabParam
 }
 
-/** 按分类 Tab 与关键字（名称/ID/描述）过滤应用列表（纯函数）。 */
+/** 按置顶 Tab 与关键字（名称/ID/描述）过滤应用列表（纯函数）。 */
 export function filterAppItems(items: AppItem[], filter: AppFilterState): AppItem[] {
   const query = filter.query.trim().toLowerCase()
   return items.filter((item) => {
     if (filter.tab === 'pinned' && item.catalog?.pinned !== true) return false
-    if (typeof filter.tab === 'object' && normalizeAppCategory(item.catalog?.category) !== filter.tab.category) {
-      return false
-    }
     if (query === '') return true
     const name = (item.plugin.name ?? '').toLowerCase()
     const id = (item.plugin.id ?? '').toLowerCase()
@@ -149,22 +124,18 @@ export interface AppCenterStats {
   ready: number
   stopped: number
   pinned: number
-  /** 各业务分类下的应用数（未登记 catalog 的应用归入 other）。 */
-  categories: Record<AppCategory, number>
 }
 
 export function summarizeAppItems(items: AppItem[]): AppCenterStats {
   let ready = 0
   let stopped = 0
   let pinned = 0
-  const categories = Object.fromEntries(APP_CATEGORY_TABS.map((t) => [t.key, 0])) as Record<AppCategory, number>
   for (const item of items) {
     if (item.plugin.enabled) ready++
     else stopped++
     if (item.catalog?.pinned === true) pinned++
-    categories[normalizeAppCategory(item.catalog?.category)]++
   }
-  return { total: items.length, ready, stopped, pinned, categories }
+  return { total: items.length, ready, stopped, pinned }
 }
 
 /** 主屏/分屏打开的目标字符串（声明式目标，含参数编码）。 */
