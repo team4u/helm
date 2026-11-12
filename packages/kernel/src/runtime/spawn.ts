@@ -269,6 +269,14 @@ async function runNativeSpawnTurn(
     if (Object.keys(patch).length > 0) {
       summary = await deps.updateConversation(childId!, patch)
     }
+    // resume 禁用预检：配置落定后、提交输入前对生效模型收口。显式 model 变更
+    // 已在 updateConversation 内检查；这里覆盖其余路径——子会话绑定/继承的
+    // 模型后来被用户禁用时拒绝 resume（409 model_disabled），绝不绕过禁用策略。
+    // 空模型沿用既有未配置语义（submit 阶段 no_model），不在此伪造错误。
+    if (summary!.model !== '') {
+      const resumeRef = parseSpawnModel(summary!.model)
+      deps.assertModelEnabled?.(resumeRef.provider, resumeRef.modelId)
+    }
   }
 
   // 新建路径 cwd 链：request > profile > 父会话镜像 cwd > 宿主缺省。

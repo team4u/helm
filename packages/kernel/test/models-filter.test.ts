@@ -4,6 +4,7 @@
  * - GET /api/models 目录标注 disabled（available 语义不变，凭据可用性独立表达）；
  * - 禁用模型后会话显式选用与提交输入均被拒（409 model_disabled），绝不静默回退；
  * - 原生 spawn 三条模型解析路径（显式 request / profile / 全局默认）创建前拒绝禁用模型；
+ * - 原生 spawn resume 既有子会话：绑定模型后来被禁用时提交输入前拒绝（409 model_disabled）；
  * - HTTP POST/PUT /api/profiles 绑定禁用模型在落盘前拒绝；
  * - setDisabledModels 更新后发布 models.changed 事件（已连接 Web 客户端刷新目录）；
  * - 重启语义：同一 dataDir 重新 createHelm 后禁用集仍生效（loadDefaultsFromConfig）；
@@ -295,6 +296,51 @@ test('禁用模型后原生 spawn 三条解析路径均在创建前拒绝（409 
     await app.kernel.setDisabledModels('faux', [])
     const result = await app.kernel.spawnAgent({ parentConversationId: parent.id, prompt: '干活' })
     assert.equal(result, 'ok')
+  } finally {
+    await app.close().catch(() => {})
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('resume 既有子会话：绑定模型后来被禁用时 409 model_disabled 且不提交输入', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-resume-'))
+  const faux = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
+  faux.setResponses([fauxAssistantMessage('ok')])
+  const models = createModels()
+  models.setProvider(faux.provider)
+  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  try {
+    const parent = app.kernel.listConversations().find((c) => c.profileId === 'assistant')
+    assert.ok(parent)
+
+    // 首次 spawn：显式绑定 faux-2（此时启用）成功创建子会话并完成回合。
+    const first = await app.kernel.spawnAgent({ parentConversationId: parent.id, prompt: 'x', model: 'faux/faux-2' })
+    assert.equal(first, 'ok')
+    const child = app.kernel.listConversations().find((c) => c.parentConversationId === parent.id)
+    assert.ok(child)
+    assert.equal(child.model, 'faux/faux-2')
+
+    // 绑定模型事后被禁用：resume 在提交输入前拒绝，不绕过禁用策略。
+    await app.kernel.setDisabledModels('faux', ['faux-2'])
+    const callsBefore = faux.state.callCount
+    await assert.rejects(
+      () => app.kernel.spawnAgent({ parentConversationId: parent.id, resume: String(child.id), prompt: '继续' }),
+      (err: unknown) => {
+        assert.ok(err instanceof Error)
+        assert.equal((err as { code?: string }).code, 'model_disabled')
+        assert.equal((err as { status?: number }).status, 409)
+        return true
+      },
+    )
+    assert.equal(faux.state.callCount, callsBefore, 'resume 被拒时不得提交输入（无新增模型请求）')
+
+    // 重新启用后 resume 恢复（走同一子会话续接，不新建）。
+    await app.kernel.setDisabledModels('faux', [])
+    faux.setResponses([fauxAssistantMessage('resumed ok')])
+    const resumed = await app.kernel.spawnAgent({ parentConversationId: parent.id, resume: String(child.id), prompt: '继续' })
+    assert.equal(resumed, 'resumed ok')
+    const children = app.kernel.listConversations().filter((c) => c.parentConversationId === parent.id)
+    assert.equal(children.length, 1, 'resume 不得新建子会话')
   } finally {
     await app.close().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })
