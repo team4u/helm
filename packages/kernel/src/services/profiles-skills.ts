@@ -259,6 +259,12 @@ function normalizeProfile(value: unknown, id: string): Profile {
   return validateProfileInput({ ...value, id })
 }
 
+/** 删除前绑定复核依赖：HTTP 层注入会话面查询，服务层兑底关闭
+ * 「路由快速路径检查 → 并发创建/PATCH 绑定 → 删除落盘」交错窗口。 */
+export interface ProfileDeleteDeps {
+  isProfileInUse(profileId: string): boolean | Promise<boolean>
+}
+
 export class ProfileService {
   constructor(private readonly dataDir: string) {}
 
@@ -321,11 +327,22 @@ export class ProfileService {
     return profile
   }
 
-  /** 删除 profile；默认 assistant 受保护不可删除。 */
-  async delete(id: string): Promise<void> {
+  /**
+   * 删除 profile；默认 assistant 受保护不可删除。
+   * deps.isProfileInUse（可选）：删除落盘前最后一刻复核无会话绑定，有则
+   * 409 profile_in_use——路由层快速路径检查与删除之间隔多个 await，并发
+   * 创建/PATCH 绑定可在窗口内穿过；不注入时仅保留默认 profile 保护
+   * （调用方自行保证无绑定）。
+   */
+  async delete(id: string, deps?: ProfileDeleteDeps): Promise<void> {
     assertProfileId(id)
     if (id === DEFAULT_PROFILE_ID) {
       throw new Error(`默认 profile '${DEFAULT_PROFILE_ID}' 不可删除`)
+    }
+    if (deps !== undefined && (await deps.isProfileInUse(id))) {
+      throw new HelmError('profile_in_use', `profile ${id} 仍被会话绑定，先解绑再删除`, 409, {
+        profileId: id,
+      })
     }
     await rm(profileDir(this.dataDir, id), { recursive: true, force: true })
   }

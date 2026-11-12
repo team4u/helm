@@ -104,6 +104,14 @@ export interface SpillResult {
   artifact?: ArtifactMetadata
 }
 
+/** 落盘前会话存在性复核依赖（HTTP 上传路径注入）：关闭「入口校验通过 →
+ * 会话删除 → 上传落盘」交错窗口（上传体读取可达整段 15 MiB 时长），
+ * 避免在 artifacts/<已删会话>/ 重建目录留下永久孤儿文件。未注入时
+ * 不复核（工具路径操作于活跃会话，会话 ID 来自受信执行上下文）。 */
+export interface WriteUploadedDeps {
+  conversationExists(conversationId: number): boolean | Promise<boolean>
+}
+
 const BINARY_MIME = 'application/octet-stream'
 
 /** 常见文本扩展名 → mime（缺省不猜，统一 BINARY_MIME，读方走缓冲区）。 */
@@ -263,6 +271,7 @@ export class ArtifactService {
   async writeUploaded(
     conversationId: number,
     input: { name: string; bytes: Uint8Array; mimeType?: string },
+    deps?: WriteUploadedDeps,
   ): Promise<ArtifactMetadata> {
     this.assertConversationId(conversationId)
     const safeName = sanitizeUploadFilename(input.name)
@@ -273,6 +282,12 @@ export class ArtifactService {
         413,
         { maxBytes: MAX_ARTIFACT_BYTES, actualBytes: input.bytes.byteLength },
       )
+    }
+    // 落盘前最后一刻复核会话存在：复核到写盘之间无 await（原子窗口），
+    // HTTP 路径的孤儿产物交错窗口由此闭合；非 not_found 错误由调用方回调
+    // 如实上抛，不在此伪称会话缺失。
+    if (deps !== undefined && !(await deps.conversationExists(conversationId))) {
+      throw new HelmError('not_found', `会话不存在：${conversationId}`, 404, { conversationId })
     }
     const mimeType =
       input.mimeType !== undefined && input.mimeType.trim() !== ''
