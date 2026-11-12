@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import {
   ArtifactService,
@@ -25,6 +25,7 @@ import {
   AuthService,
   MAX_ARTIFACT_BYTES,
   sanitizeUploadFilename,
+  ensureDataDir,
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHubHandler } from '../src/http/index.js'
@@ -403,4 +404,29 @@ test('HTTP 文本上传触发脱敏（秘密不落盘）；GET 列表包含全�
   assert.equal(list.status, 200)
   assert.ok(Array.isArray(list.body) && list.body.length > 0)
   assert.ok(list.body.some((m: { name: string }) => m.name === 'env.txt'))
+})
+
+test('产物读取拒绝跨会话元数据和软链越界，保持二进制字节', { timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'helm-artifact-boundary-'))
+  try {
+    await ensureDataDir(root)
+    const repository = new InMemoryArtifactRepository()
+    const artSvc = new ArtifactService(root, repository)
+    const source = join(root, 'example.png')
+    const bytes = Uint8Array.from([0, 255, 128, 10])
+    await writeFile(source, bytes)
+    const original = await artSvc.register(1, source)
+    assert.deepEqual([...await artSvc.readBuffer(original.id)], [...bytes])
+    repository.put({ ...original, id: 'other-conversation', conversationId: 2 })
+    await assert.rejects(artSvc.readBuffer('other-conversation'), /拒绝读取/)
+    const outside = join(root, 'outside.txt')
+    await writeFile(outside, 'outside-boundary-example')
+    const linkPath = join(root, 'artifacts', '1', 'outside-link.txt')
+    await symlink(outside, linkPath)
+    repository.put({ ...original, id: 'link', path: 'artifacts/1/outside-link.txt' })
+    await assert.rejects(artSvc.readContent('link'), /拒绝读取/)
+    await assert.rejects(artSvc.spill(-1, 'call', 'text'), /conversationId/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })

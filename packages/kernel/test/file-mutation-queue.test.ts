@@ -21,6 +21,7 @@
 import { test, describe, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -33,6 +34,7 @@ import {
   SecretStash,
   ensureDataDir,
 } from '../src/services/index.js'
+import { withProcessFileLock } from '../src/services/file-lock.js'
 import { createWriteTool, createEditTool } from '../src/runtime/tools.js'
 import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
 import type { EnvFabric } from '../src/env/index.js'
@@ -743,5 +745,21 @@ describe('错误语义与嵌套重入', { timeout: 60_000 }, () => {
     releaseOuter()
     assert.equal(await outer, 'outer')
     assert.equal(await inner, 'inner')
+  })
+
+  test('锁路径不可读取时保留原始 IO 错误，不伪报等待超时或删除锁', { timeout: 60_000 }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'helm-file-lock-error-'))
+    const target = join(dir, 'config.json')
+    const lock = `${target}.lock`
+    await mkdir(lock)
+    let ran = false
+    try {
+      await assert.rejects(withProcessFileLock(target, async () => { ran = true }), (error: unknown) =>
+        (error as NodeJS.ErrnoException).code === 'EISDIR')
+      assert.equal(ran, false)
+      assert.equal((await stat(lock)).isDirectory(), true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
