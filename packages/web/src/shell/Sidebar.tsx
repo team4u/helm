@@ -374,7 +374,6 @@ function AgentStandingItem({
           disabled={!batchMode && !agent.primaryConversation && !agent.canCreateConversation}
           aria-current={headerActive ? 'page' : undefined}
         >
-          <HelmIcon name={agent.icon} size={14} />
           <span className="nav-item-label">{agent.label}</span>
         </button>
         <span className="nav-item-meta" onClick={(e) => e.stopPropagation()}>

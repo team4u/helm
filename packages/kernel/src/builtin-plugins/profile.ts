@@ -380,7 +380,6 @@ export function createProfilePlugin(): PluginDefinition {
       ctx.ui.sidebarItem({
         id: 'assistant',
         label: '个人助理',
-        icon: 'sparkles',
         target: `conversation:profile:${DEFAULT_PROFILE_ID}`,
         order: 0,
       });

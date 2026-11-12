@@ -14,14 +14,12 @@ export function registerSuperAgentUi(ctx: HelmPluginContext): void {
   ctx.ui.sidebarItem({
     id: 'superagent-router',
     label: 'SuperAgent 中枢',
-    icon: 'network',
     target: `conversation:profile:${SUPERAGENT_PROFILE_ID}`,
     order: 10,
   })
   ctx.ui.sidebarItem({
     id: 'superagent-watchdog',
     label: '巡检看门狗',
-    icon: 'shield',
     target: `conversation:profile:${WATCHDOG_PROFILE_ID}`,
     order: 11,
   })

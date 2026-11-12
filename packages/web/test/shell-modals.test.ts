@@ -153,20 +153,16 @@ test('buildAgentStandings 生成独立的一级 Agent 站位（个人助理 / �
   )
   const assistant = standings[0]!
   assert.equal(assistant.label, '个人助理')
-  assert.equal(assistant.icon, 'sparkles')
   assert.equal(assistant.order, 0)
   assert.equal(assistant.canCreateConversation, true)
   const hub = standings[1]!
   assert.equal(hub.label, 'SuperAgent 中枢')
-  assert.equal(hub.icon, 'network')
   assert.equal(hub.canCreateConversation, false)
   const watchdog = standings[2]!
   assert.equal(watchdog.label, '巡检看门狗')
-  assert.equal(watchdog.icon, 'shield')
   assert.equal(watchdog.canCreateConversation, false)
   const coder = standings[3]!
   assert.equal(coder.label, '编码专员')
-  assert.equal(coder.icon, 'bot')
   assert.equal(coder.canCreateConversation, true)
 })
 
@@ -246,7 +242,6 @@ test('buildAgentStandings：Profile 已删的人类历史对话生成孤儿兜�
   )
   const orphan = standings.find((s) => s.profileId === 'deleted-expert')!
   assert.equal(orphan.label, 'deleted-expert')
-  assert.equal(orphan.icon, 'bot')
   assert.equal(orphan.order, 200)
   assert.equal(orphan.canCreateConversation, false)
   assert.deepEqual(orphan.conversations.map((c) => c.id), [70])
@@ -262,13 +257,12 @@ test('buildAgentStandings：资产未加载时按真实会话的 profileId 展�
   assert.equal(standings.length, 1)
   assert.equal(standings[0]!.profileId, 'loading-profile')
   assert.equal(standings[0]!.label, 'loading-profile')
-  assert.equal(standings[0]!.icon, 'bot')
   assert.equal(standings[0]!.canCreateConversation, false)
   assert.equal(standings[0]!.primaryConversation?.id, 80)
   assert.deepEqual(buildAgentStandings({ ...input, conversations: [] }), [])
 })
 
-test('buildAgentStandings：assistant 站位图标与排序由 sidebar.item pinMeta 驱动（order:0 sparkles）', { timeout: 60_000 }, () => {
+test('buildAgentStandings：assistant 站位排序由 sidebar.item pinMeta 驱动（order:0）', { timeout: 60_000 }, () => {
   const standings = buildAgentStandings({
     profiles: [],
     conversations: [conv({ id: 1, title: '个人助理', profileId: 'assistant' })],
@@ -278,9 +272,10 @@ test('buildAgentStandings：assistant 站位图标与排序由 sidebar.item pinM
     ],
     sidebarSections: [],
   })
-  assert.equal(standings[0]!.icon, 'sparkles')
   assert.equal(standings[0]!.label, '个人助理')
   assert.equal(standings[0]!.order, 0)
+  // 站位行不渲染图标：声明式 icon 仅对 screen 视图项生效，智能体行不再消费。
+  assert.equal('icon' in standings[0]!, false)
 })
 
 test('buildAgentStandings：子代理派生会话（有父链）不挂 Agent 站位', { timeout: 60_000 }, () => {
@@ -318,26 +313,6 @@ test('buildAgentStandings：同刻 updatedAt 按 id 倒序；被 sidebar.item �
   })
   // #10 被 sidebar.item 指向置顶 -> 其余（含 #1）同刻按 id 倒序（无根会话特判）
   assert.deepEqual(standings[0]!.conversations.map((c) => c.id), [10, 11, 1])
-})
-
-test('buildAgentStandings：runtime Profile 默认 terminal 图标，sidebar.item icon 优先', { timeout: 60_000 }, () => {
-  const standings = buildAgentStandings({
-    profiles: [
-      { id: 'assistant', name: '个人助理' },
-      { id: 'herdr-agent', name: '终端代理', runtime: { kind: 'herdr', agent: 'claude' } },
-      { id: 'plain', name: '普通专家' },
-    ],
-    conversations: [conv({ id: 1, profileId: 'assistant' })],
-    plugins: [{ id: 'builtin:profile', enabled: true }],
-    sidebarItems: [
-      { pluginId: 'builtin:profile', spec: { id: 'root', label: '个人助理', icon: 'sparkles', target: 'conversation:1' } },
-    ],
-    sidebarSections: [],
-  })
-  const byId = new Map(standings.map((s) => [s.profileId, s.icon]))
-  assert.equal(byId.get('assistant'), 'sparkles')
-  assert.equal(byId.get('herdr-agent'), 'terminal')
-  assert.equal(byId.get('plain'), 'bot')
 })
 
 // ---------------------------------------------------------------------------

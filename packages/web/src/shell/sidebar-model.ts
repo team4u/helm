@@ -71,8 +71,6 @@ export interface AgentStanding {
   profileId: string
   /** 左栏展示名（优先 sidebar.item 的 label -> profile.name -> profile.id）。 */
   label: string
-  /** 图标名（优先 sidebar.item 的 icon -> 有 runtime 用 'terminal' -> 默认 'bot'）。 */
-  icon: string
   /** 排序权重（根会话/assistant 为 0，sidebar.item 指定 order 次之，其余 Profile 默认 100，孤儿兜底 200）。 */
   order: number
   /** 是否允许人类在该 Agent 下新建多个对话（由 isHumanSelectableProfile 决定；常驻单例为 false）。 */
@@ -104,17 +102,16 @@ export interface AgentStandingsInput {
 /** Agent 名下二级历史会话子列表默认显示条数（超出可展开）。 */
 export const AGENT_SUB_LIST_PREVIEW = 5
 
-/** sidebar.item 会话指向项附带的展示元信息（按 profileId 归集）。 */
+/** 左栏展示名的 pin 元信息（按 profileId 归集）。 */
 interface SidebarPinMeta {
   label?: string
-  icon?: string
   order?: number
 }
 
 /**
  * 构建左栏智能体站位列表：
  * - 可见 Profile 各占一个一级站位；未加载资产的会话按实际 profileId 展示；
- * - 会话指向型 sidebar.item 的 label/icon/order 覆盖对应站位的默认展示；
+ * - 会话指向型 sidebar.item 的 label/order 覆盖对应站位的默认展示；
  * - 人类自由会话按 profileId 归集到各自 Agent 下（Profile 已删时生成孤儿兜底站位）；
  * - 插件停用后其 managedByPlugin 站位与 ownedBy=helm/bot 遗留会话自动隐藏。
  */
@@ -143,7 +140,7 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
       }
     }
     if (pid && !pinMeta.has(pid)) {
-      pinMeta.set(pid, { label: item.spec.label, icon: item.spec.icon, order: item.spec.order })
+      pinMeta.set(pid, { label: item.spec.label, order: item.spec.order })
     }
   }
 
@@ -206,7 +203,6 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
     standings.push({
       profileId,
       label: meta?.label || profile?.name || profileId,
-      icon: meta?.icon || (profile?.runtime !== undefined ? 'terminal' : 'bot'),
       order,
       canCreateConversation,
       conversations: sorted,
