@@ -20,7 +20,7 @@ import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.
 import { resetStandbyDrafts } from '../conversation/standby-model.js'
 import * as HelmPluginClient from './plugin-client-sdk.js'
 import { formatLocationHash, isSameLocationState, parseLocationHash, shouldPushLocationHistory, type WorkspaceLocationState } from './url-hash-model.js'
-import { groupUiContributions, isPrototypeParamKey, resolveTargetString, SCREEN_PARAM_KEY_PATTERN, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
+import { groupUiContributions, isPrototypeParamKey, resolveTargetString, SCREEN_PARAM_KEY_PATTERN, spaceForTarget, type ActiveModal, type HelmStoreValue, type ResolvedTarget, type SidebarSpace, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
 import { errorText } from './format.js'
 
 const getStoredPreference = (): ThemePreference => {
@@ -65,6 +65,10 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [splitTarget, setSplitTarget] = useState<ResolvedTarget | null>(initialLocation.splitTarget)
   const [workbenchOpen, setWorkbenchOpen] = useState(initialLocation.workbenchOpen)
   const [workbenchTab, setWorkbenchTab] = useState(initialLocation.workbenchTab)
+  // 侧栏空间（Activity Rail 三档）也是导航位置：经唯一 Hash 模型序列化（sidebar 参数）。
+  const [sidebarSpace, setSidebarSpaceState] = useState<SidebarSpace>(
+    () => initialLocation.sidebarSpace ?? spaceForTarget(initialLocation.primaryTarget),
+  )
   const [activeModal, setActiveModal] = useState<ActiveModal>(initialLocation.activeModal)
   // 最近一次与地址栏达成一致的位置：既是外部 Hash 变更的判重基准，也是 push/replace 决策的 prev。
   const lastSyncedLocation = useRef<WorkspaceLocationState>(initialLocation)
@@ -78,6 +82,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>())
   const targets = useRef({ primaryTarget, splitTarget })
   targets.current = { primaryTarget, splitTarget }
+  const sidebarSpaceRef = useRef(sidebarSpace)
+  sidebarSpaceRef.current = sidebarSpace
   const activeModalRef = useRef(activeModal)
   activeModalRef.current = activeModal
   const assetGeneration = useRef(0)
@@ -179,6 +185,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     setActiveModal(null)
     setSplitTarget(null)
     setPrimaryTarget({ kind: 'profiles' })
+    setSidebarSpaceState('settings')
     setWorkbenchOpen(false)
     setWorkbenchTab('artifacts')
     // 地址栏同步复位为默认深链（replaceState 不污染历史栈）；未认证期间禁用写回，避免覆盖用户粘贴的深链。
@@ -338,9 +345,18 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
 
   const closeSplit = useCallback(() => setSplitTarget(null), [])
 
-  // 显式历史策略标记（openTarget history 选项 / setScreenParams push）：只标记下一拍，
-  // 实际 pushState/replaceState 由唯一的地址栏写回 effect 执行，组件不得直接操作 history。
+  // 显式历史策略标记（openTarget history 选项 / setScreenParams push / setSidebarSpace）：
+  // 只标记下一拍，实际 pushState/replaceState 由唯一的地址栏写回 effect 执行，组件不得直接操作 history。
   const pendingHistoryMode = useRef<'push' | 'replace' | null>(null)
+
+  // 主屏目标变化的统一入口：跨空间导航时把侧栏空间对齐到主屏隐含空间；
+  // 同空间内切换（如会话 -> 会话）不打断用户手动选定的侧栏空间（与既有交互一致）。
+  const applyPrimaryTarget = useCallback((target: ResolvedTarget) => {
+    if (spaceForTarget(targets.current.primaryTarget) !== spaceForTarget(target)) {
+      setSidebarSpaceState(spaceForTarget(target))
+    }
+    setPrimaryTarget(target)
+  }, [])
 
   const openTarget = useCallback((target: string | ResolvedTarget, opts?: { split?: boolean; highlightEntryId?: string; history?: 'push' | 'replace' }) => {
     const resolved = typeof target === 'string' ? resolveTargetString(target, liveRef.current.conversations) : target
@@ -351,9 +367,17 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     // 显式历史策略只标记下一拍；实际 pushState/replaceState 仍由唯一写回 effect 执行。
     if (opts?.history !== undefined) pendingHistoryMode.current = opts.history
     if (opts?.split) setSplitTarget(resolved)
-    else setPrimaryTarget(resolved)
+    else applyPrimaryTarget(resolved)
     if (resolved.kind === 'conversation' && opts?.highlightEntryId) setHighlightedEntry({ conversationId: resolved.conversationId, entryId: opts.highlightEntryId })
-  }, [pushNotice])
+  }, [applyPrimaryTarget, pushNotice])
+
+  // Rail 空间切换是显式导航：push 入栈（浏览器后退可还原上一个侧栏空间）；
+  // 实际 pushState 仍由唯一写回 effect 执行，重复点击当前空间不产生历史项。
+  const setSidebarSpace = useCallback((space: SidebarSpace) => {
+    if (sidebarSpaceRef.current === space) return
+    pendingHistoryMode.current = 'push'
+    setSidebarSpaceState(space)
+  }, [])
 
   // ---- Screen 路由参数更新（唯一导航机制内实现，组件不得直接操作 history） ----
   // setParams(..., { push: true }) 与 openTarget({ history }) 共用 pendingHistoryMode。
@@ -401,6 +425,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       setSplitTarget(parsed.splitTarget)
       setWorkbenchOpen(parsed.workbenchOpen)
       setWorkbenchTab(parsed.workbenchTab)
+      setSidebarSpaceState(parsed.sidebarSpace ?? spaceForTarget(parsed.primaryTarget))
       setActiveModal(parsed.activeModal)
     }
     window.addEventListener('hashchange', applyUrlLocation)
@@ -414,8 +439,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   // 状态写回地址栏：仅在已认证后进行（AuthGate 阶段保留用户粘贴的深链 Hash）。
   // 视图级变化（主屏/分屏/弹窗开关）push 入栈，列表内选子项/切 Tab 用 replace 折叠历史。
   const locationState = useMemo<WorkspaceLocationState>(
-    () => ({ primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal }),
-    [primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal],
+    () => ({ primaryTarget, splitTarget, workbenchOpen, workbenchTab, sidebarSpace, activeModal }),
+    [primaryTarget, splitTarget, workbenchOpen, workbenchTab, sidebarSpace, activeModal],
   )
   useEffect(() => {
     if (!authenticated) return
@@ -562,7 +587,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
               const splitHit = targets.current.splitTarget?.kind === 'conversation' && targets.current.splitTarget.conversationId === id
               const drawerHit = activeModalRef.current?.kind === 'conversation-drawer' && activeModalRef.current.conversationId === id
               if (primaryHit || splitHit || drawerHit) pendingHistoryMode.current = 'replace'
-              if (primaryHit) setPrimaryTarget(fallback)
+              if (primaryHit) applyPrimaryTarget(fallback)
               if (splitHit) setSplitTarget(null)
               if (drawerHit) setActiveModal(null)
               setConversationArtifacts((prev) => { const next = { ...prev }; delete next[id]; return next })
@@ -591,20 +616,20 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     }
     void connect()
     return () => { active = false; if (timer) clearTimeout(timer); controller?.abort() }
-  }, [authenticated, logout, loadConversationDetail, loadConversationArtifacts, reportLoad, pushNotice, refreshAssets, updateLive])
+  }, [authenticated, logout, loadConversationDetail, loadConversationArtifacts, reportLoad, pushNotice, refreshAssets, updateLive, applyPrimaryTarget])
 
   const groupedUi = useMemo(() => groupUiContributions(live.uiContributions), [live.uiContributions])
   // Context value 需引用稳定：任何一处局部状态变化都不应触发全量消费组件重渲染。
   const store: HelmStoreValue = useMemo(
     () => ({
       ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts, assetsLoaded,
-      groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, sidebarSpace, activeModal, highlightedEntry, notices,
+      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, setSidebarSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
       live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts, assetsLoaded,
-      groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, sidebarSpace, activeModal, highlightedEntry, notices,
+      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, setSidebarSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],
   )
   useEffect(() => {

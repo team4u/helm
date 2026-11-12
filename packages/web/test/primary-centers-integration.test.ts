@@ -109,9 +109,10 @@ test('App.tsx 源码契约：主舞台与分屏舞台完整挂载四大一级中
 
 test('Sidebar.tsx：设置空间 5 大入口统一导航至一级目标，且激活态与路由对齐', { timeout: 60_000 }, () => {
   const sidebarSrc = readFileSync(join(PKG_ROOT, 'src/shell/Sidebar.tsx'), 'utf-8')
+  const typesSrc = readFileSync(join(PKG_ROOT, 'src/lib/types.ts'), 'utf-8')
 
-  // 1. 源码包含 5 大一级入口的纵向列表分发（表驱动 CENTER_TARGETS）
-  assert.match(sidebarSrc, /const CENTER_TARGETS = \['profiles', 'models', 'skills', 'nodes', 'plugins'\] as const/)
+  // 1. 源码包含 5 大一级入口的纵向列表分发（表驱动 CENTER_TARGETS，与侧栏空间推导共用，位于 lib/types）
+  assert.match(typesSrc, /export const CENTER_TARGETS = \['profiles', 'models', 'skills', 'nodes', 'plugins'\] as const/)
   assert.match(sidebarSrc, /function SettingsNavGroup/)
 
   // 2. SSR 渲染断言激活高亮

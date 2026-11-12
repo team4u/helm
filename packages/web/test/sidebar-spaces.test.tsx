@@ -9,7 +9,7 @@ import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary, PluginUiContribution } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
-import { groupUiContributions, type HelmStoreValue, type ResolvedTarget } from '../src/lib/types.js'
+import { groupUiContributions, type HelmStoreValue, type ResolvedTarget, type SidebarSpace } from '../src/lib/types.js'
 import { makeTestStore } from './helpers/store.js'
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -88,6 +88,14 @@ function setInputValue(input: HTMLInputElement, text: string): void {
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
+/** 侧栏空间挂具：真实 Sidebar 经 store.setSidebarSpace（唯一导航机制）切换空间；
+ * 测试用本地 React 状态承载该 setter，验证 Rail 点击到空间切换的完整链路。 */
+function SpaceAwareSidebar({ base }: { base: HelmStoreValue }): React.ReactElement {
+  const [space, setSpace] = React.useState<SidebarSpace>(base.sidebarSpace)
+  const store = React.useMemo(() => ({ ...base, sidebarSpace: space, setSidebarSpace: setSpace }), [base, space])
+  return e(HelmStoreContext.Provider, { value: store }, e(Sidebar))
+}
+
 function render(store: HelmStoreValue, element: React.ReactElement): void {
   // 先卸载上一棵树：Popover Portal 挂在 body 上，直接重置 innerHTML 会让卸载阶段找不到节点
   if (root) {
@@ -103,7 +111,7 @@ function render(store: HelmStoreValue, element: React.ReactElement): void {
 
 test('Sidebar 空间切换：对话空间默认渲染智能体，视图空间渲染 screen 贡献', { timeout: 60_000 }, async () => {
   const store = makeStore()
-  render(store, e(Sidebar))
+  render(store, e(SpaceAwareSidebar, { base: store }))
   await act(async () => {})
 
   const body = document.body
@@ -123,7 +131,7 @@ test('Sidebar 空间切换：对话空间默认渲染智能体，视图空间渲
 
 test('Sidebar 设置空间：点击设置空间按钮切换列表，点击插件中心调用 openTarget', { timeout: 60_000 }, async () => {
   const store = makeStore()
-  render(store, e(Sidebar))
+  render(store, e(SpaceAwareSidebar, { base: store }))
   await act(async () => {})
 
   // 切到设置空间

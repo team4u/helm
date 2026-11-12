@@ -8,7 +8,7 @@ import { Checkbox } from '../ui/Checkbox.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
-import { isSameResolvedTarget, resolveTargetString, type HelmStoreValue } from '../lib/types.js'
+import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, type HelmStoreValue, type SidebarSpace } from '../lib/types.js'
 import {
   AGENT_SUB_LIST_PREVIEW,
   buildAgentStandings,
@@ -1095,8 +1095,7 @@ function ViewNavGroup({ store }: { store: HelmStoreValue }) {
   )
 }
 
-/** 系统中心目标键（Rail 高亮判定用）。 */
-const CENTER_TARGETS = ['profiles', 'models', 'skills', 'nodes', 'plugins'] as const
+/** 系统中心目标键已迁至 lib/types（CENTER_TARGETS，与侧栏空间推导共用）。 */
 type CenterKey = (typeof CENTER_TARGETS)[number]
 
 const CENTER_ICONS: Record<CenterKey, string> = {
@@ -1115,15 +1114,8 @@ const CENTER_LABELS: Record<CenterKey, string> = {
   plugins: '插件中心',
 }
 
-/** 侧栏空间（Space）：对话 | 视图 | 设置。 */
-type SidebarSpace = 'conversations' | 'views' | 'settings'
-
-/** 根据 primaryTarget 推导应对齐展示的空间。 */
-function spaceForTarget(target: HelmStoreValue['primaryTarget']): SidebarSpace {
-  if (target.kind === 'screen') return 'views'
-  if (CENTER_TARGETS.includes(target.kind as CenterKey)) return 'settings'
-  return 'conversations'
-}
+/** 侧栏空间类型（SidebarSpace）与空间推导（spaceForTarget）在 lib/types.ts，
+ * 与 URL Hash 契约（sidebar 参数）同源；Rail 点击经 store.setSidebarSpace 唯一导航。 */
 
 const SPACE_ICONS: Record<SidebarSpace, string> = {
   conversations: 'message-square',
@@ -1252,17 +1244,13 @@ function SettingsNavGroup({ store, onNavigate }: { store: HelmStoreValue; onNavi
 
 export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   const store = useHelmStore()
-  const alignedSpace = spaceForTarget(store.primaryTarget)
-  const [space, setSpace] = useState<SidebarSpace>(alignedSpace)
-
-  // primaryTarget 空间类别变化时自动对齐（如从中心返回对话）。
-  useEffect(() => {
-    setSpace((current) => (current === alignedSpace ? current : alignedSpace))
-  }, [alignedSpace])
+  // 侧栏空间是全局导航位置（store.sidebarSpace，sidebar 参数）：Rail 点击入栈，刷新/前进/后退可还原；
+  // 跨空间导航时由 Provider 自动对齐主屏隐含空间。
+  const space = store.sidebarSpace
 
   return (
     <aside className="helm-sidebar">
-      <ActivityRail store={store} space={space} onSpaceChange={setSpace} onClose={onClose} />
+      <ActivityRail store={store} space={space} onSpaceChange={store.setSidebarSpace} onClose={onClose} />
       <div className="sidebar-context">
         <div className="sidebar-header">
           <div className="sidebar-context-title">

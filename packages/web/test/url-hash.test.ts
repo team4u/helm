@@ -254,6 +254,57 @@ test('parse: 非法百分号序列不抛出（decode 失败按无效段回退默
 })
 
 // ---------------------------------------------------------------------------
+// 侧栏空间（sidebar 参数）：Rail 点击入链，刷新/前进/后退可还原
+// ---------------------------------------------------------------------------
+
+test('parse: 侧栏空间 sidebar（偏离隐含空间时恢复；缺省/非法值回退隐含空间）', { timeout: 60_000 }, () => {
+  assert.equal(parseLocationHash('#/c/5?sidebar=settings').sidebarSpace, 'settings')
+  assert.equal(parseLocationHash('#/c/5?sidebar=views').sidebarSpace, 'views')
+  // 缺省不产生键 = 跟随主屏隐含空间（保持既有往返契约）
+  assert.equal(parseLocationHash('#/c/5').sidebarSpace, undefined)
+  assert.equal(parseLocationHash('#/profiles').sidebarSpace, undefined)
+  assert.equal(parseLocationHash('#/s/builtin:herdr/overview').sidebarSpace, undefined)
+  // 与隐含一致的显式值忠实保留（序列化时会去重省略）
+  assert.equal(parseLocationHash('#/profiles?sidebar=settings').sidebarSpace, 'settings')
+  // 非法值静默丢弃
+  for (const raw of ['#/c/5?sidebar=bogus', '#/c/5?sidebar=', '#/c/5?sidebar=constructor', '#/c/5?sidebar=Views']) {
+    assert.equal(parseLocationHash(raw).sidebarSpace, undefined, raw)
+  }
+})
+
+test('format: 侧栏空间仅偏离隐含时序列化 sidebar；与其它参数共存且往返稳定', { timeout: 60_000 }, () => {
+  assert.equal(formatLocationHash({ ...conversation(5), sidebarSpace: 'settings' }), '#/c/5?sidebar=settings')
+  // 与隐含一致 / 未指定时不序列化，保持常用 URL 干净
+  assert.equal(formatLocationHash({ ...conversation(5), sidebarSpace: 'conversations' }), '#/c/5')
+  assert.equal(formatLocationHash(conversation(5)), '#/c/5')
+  // 主屏在设置中心时隐含 settings：仅对话/视图偏离才序列化
+  const center: WorkspaceLocationState = { ...conversation(5), primaryTarget: { kind: 'profiles' } }
+  assert.equal(formatLocationHash({ ...center, sidebarSpace: 'settings' }), '#/profiles')
+  assert.equal(formatLocationHash({ ...center, sidebarSpace: 'conversations' }), '#/profiles?sidebar=conversations')
+  // 与分屏/工作台共存往返无损
+  const state: WorkspaceLocationState = {
+    ...conversation(5),
+    splitTarget: { kind: 'conversation', conversationId: 9 },
+    workbenchOpen: true,
+    workbenchTab: 'artifacts',
+    sidebarSpace: 'views',
+  }
+  const back = roundtrip(state)
+  assert.equal(back.sidebarSpace, 'views')
+  assert.equal(isSameLocationState(back, state), true)
+  assert.equal(formatLocationHash(back), formatLocationHash(state))
+})
+
+test('isSameLocationState / shouldPushLocationHistory: 侧栏空间参与位置比较，单独变化默认 replace', { timeout: 60_000 }, () => {
+  const base = conversation(1)
+  // 显式值与隐含空间一致时等价（未指定 = 隐含）
+  assert.equal(isSameLocationState(base, { ...base, sidebarSpace: 'conversations' }), true)
+  assert.equal(isSameLocationState(base, { ...base, sidebarSpace: 'settings' }), false)
+  // 仅侧栏空间变化默认 replace；Rail 点击由 setSidebarSpace 显式标记 push
+  assert.equal(shouldPushLocationHistory(base, { ...base, sidebarSpace: 'settings' }), false)
+})
+
+// ---------------------------------------------------------------------------
 // isSameLocationState 与 shouldPushLocationHistory
 // ---------------------------------------------------------------------------
 

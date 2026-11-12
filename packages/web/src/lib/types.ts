@@ -370,6 +370,22 @@ export function isSameResolvedTarget(a: ResolvedTarget | null, b: ResolvedTarget
   return false
 }
 
+/** 侧栏空间：对话 / 视图 / 设置（Activity Rail 的三档主导航）。 */
+export type SidebarSpace = 'conversations' | 'views' | 'settings'
+
+/** Hash `sidebar` 参数合法值域（与 SidebarSpace 一一对应）。 */
+export const SIDEBAR_SPACES: ReadonlyArray<SidebarSpace> = ['conversations', 'views', 'settings']
+
+/** 系统中心目标键（设置空间纵向列表与侧栏空间推导共用）。 */
+export const CENTER_TARGETS = ['profiles', 'models', 'skills', 'nodes', 'plugins'] as const
+
+/** 由主屏目标推导侧栏应对齐展示的空间：screen -> 视图，系统中心 -> 设置，其余 -> 对话。 */
+export function spaceForTarget(target: ResolvedTarget): SidebarSpace {
+  if (target.kind === 'screen') return 'views'
+  if ((CENTER_TARGETS as readonly string[]).includes(target.kind)) return 'settings'
+  return 'conversations'
+}
+
 export interface HelmStoreValue {
   // 鉴权与连接状态
   authReady: boolean
@@ -410,6 +426,8 @@ export interface HelmStoreValue {
   splitTarget: ResolvedTarget | null
   workbenchOpen: boolean
   workbenchTab: string // 'artifacts' | `plugin:${pluginId}/${panelId}`（动态页签，由 WorkbenchDrawer 回退）
+  /** 侧栏当前空间（Activity Rail 三档）；跨空间导航时由 Provider 自动对齐主屏隐含空间。 */
+  sidebarSpace: SidebarSpace
   activeModal: ActiveModal
   highlightedEntry: { conversationId: number; entryId: string } | null
   notices: ToastNotice[]
@@ -446,6 +464,8 @@ export interface HelmStoreValue {
   setScreenParams(patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }): void
   setWorkbenchOpen(open: boolean): void
   setWorkbenchTab(tab: string): void
+  /** 切换侧栏空间（Rail 点击；显式导航 push 入栈，刷新/前进/后退可还原）。 */
+  setSidebarSpace(space: SidebarSpace): void
   setActiveModal(modal: ActiveModal): void
   dismissNotice(id: string): void
   pushNotice(notice: Omit<ToastNotice, 'id' | 'createdAt'>): void

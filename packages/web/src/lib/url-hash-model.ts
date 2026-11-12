@@ -1,4 +1,4 @@
-import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, type ActiveModal, type ResolvedTarget } from './types.js'
+import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, SIDEBAR_SPACES, spaceForTarget, type ActiveModal, type ResolvedTarget, type SidebarSpace } from './types.js'
 
 /**
  * 地址栏 Hash 所表达的工作台位置：主屏目标、右分屏、工作台抽屉与顶层弹窗。
@@ -10,6 +10,8 @@ export interface WorkspaceLocationState {
   splitTarget: ResolvedTarget | null
   workbenchOpen: boolean
   workbenchTab: string
+  /** 侧栏空间（sidebar 参数）：缺省 = 跟随主屏隐含空间；仅偏离隐含空间时序列化。 */
+  sidebarSpace?: SidebarSpace
   activeModal: ActiveModal
 }
 
@@ -326,6 +328,12 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
   const params = new URLSearchParams(queryIdx === -1 ? '' : raw.slice(queryIdx + 1))
   const splitRaw = params.get('split')
   const workbenchTab = params.get('wb')
+  // 侧栏空间：仅接受合法 sidebar 值；缺省 / 非法值不产生键（跟随主屏隐含空间）。
+  const sidebarRaw = params.get('sidebar')
+  const sidebarSpace =
+    sidebarRaw !== null && (SIDEBAR_SPACES as readonly string[]).includes(sidebarRaw)
+      ? (sidebarRaw as SidebarSpace)
+      : undefined
   let primaryTarget = parseTargetValue(path) ?? DEFAULT_PRIMARY
   const splitTarget = splitRaw === null || splitRaw === '' ? null : parseSplitTargetValue(splitRaw)
 
@@ -372,6 +380,7 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
         : splitTarget,
     workbenchOpen: params.has('wb'),
     workbenchTab: workbenchTab !== null && workbenchTab !== '' ? workbenchTab : DEFAULT_WORKBENCH_TAB,
+    ...(sidebarSpace !== undefined ? { sidebarSpace } : {}),
     activeModal: parseActiveModal(params),
   }
   Object.defineProperty(state, 'target', {
@@ -419,6 +428,11 @@ export function formatLocationHash(state: WorkspaceLocationState): string {
   // 主/分屏 Screen 参数各占 sp.* / ssp.* 命名空间：同一 screen 双开时参数互不串扰。
   query.push(...formatScreenParams(state.primaryTarget, PRIMARY_SCREEN_PARAM_PREFIX))
   if (state.splitTarget !== null) query.push(...formatScreenParams(state.splitTarget, SPLIT_SCREEN_PARAM_PREFIX))
+  // 侧栏空间仅偏离主屏隐含空间时序列化（sidebar 参数）；一致时省略，保持常用 URL 干净。
+  const impliedSpace = spaceForTarget(state.primaryTarget)
+  if (state.sidebarSpace !== undefined && state.sidebarSpace !== impliedSpace) {
+    query.push(['sidebar', state.sidebarSpace])
+  }
   if (state.workbenchOpen) {
     query.push(['wb', state.workbenchTab === '' ? DEFAULT_WORKBENCH_TAB : state.workbenchTab])
   }
@@ -443,12 +457,15 @@ export function formatLocationHash(state: WorkspaceLocationState): string {
 const normalizeModal = (modal: ActiveModal): PersistedModal | null =>
   modal === null || modal.kind === 'command-palette' ? null : modal
 
-/** 逐一对比五个位置字段；workbenchTab 仅在工作台打开时参与（关闭时只是记忆值，不在 URL 中）。 */
+/** 逐一对比位置字段；workbenchTab 仅在工作台打开时参与（关闭时只是记忆值，不在 URL 中）。 */
 export function isSameLocationState(a: WorkspaceLocationState, b: WorkspaceLocationState): boolean {
   if (!isSameResolvedTarget(a.primaryTarget, b.primaryTarget)) return false
   if (!isSameResolvedTarget(a.splitTarget, b.splitTarget)) return false
   if (a.workbenchOpen !== b.workbenchOpen) return false
   if (a.workbenchOpen && a.workbenchTab !== b.workbenchTab) return false
+  // 侧栏空间归一比较：未指定 = 主屏隐含空间（显式与隐含一致时等价）。
+  const spaceOf = (s: WorkspaceLocationState): SidebarSpace => s.sidebarSpace ?? spaceForTarget(s.primaryTarget)
+  if (spaceOf(a) !== spaceOf(b)) return false
   const modalA = normalizeModal(a.activeModal)
   const modalB = normalizeModal(b.activeModal)
   if ((modalA === null) !== (modalB === null)) return false
@@ -497,7 +514,9 @@ const isTargetSlotChanged = (prev: ResolvedTarget | null, next: ResolvedTarget |
  *   避免筛选器/环境调整每次按键污染后退栈，需要入栈时由调用方显式强制；
  * - 产物预览切换不同 artifactId → push（每个预览是可独立直达的视图）；
  * - 同一列表型弹窗内仅切换子项、或工作台已打开时仅切 Tab → replace
- *   （避免弹窗内点选 10 项后要后退 10 次才能关掉弹窗）。
+ *   （避免弹窗内点选 10 项后要后退 10 次才能关掉弹窗）；
+ * - 仅侧栏空间变化 → replace（Rail 点击由 setSidebarSpace 显式标记 push；
+ *   跨空间导航自动对齐产生的空间变化随主屏变化一并判定，不单独入栈）。
  */
 export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: WorkspaceLocationState): boolean {
   const isOpeningDrawer = (prevT: ResolvedTarget, nextT: ResolvedTarget): boolean => {
@@ -545,8 +564,8 @@ export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: Wo
 
 export type HashSerializable =
   | WorkspaceLocationState
-  | { target: ResolvedTarget; splitTarget?: ResolvedTarget | null; workbenchOpen?: boolean; workbenchTab?: string; activeModal?: ActiveModal }
-  | { primaryTarget: ResolvedTarget; splitTarget?: ResolvedTarget | null; workbenchOpen?: boolean; workbenchTab?: string; activeModal?: ActiveModal }
+  | { target: ResolvedTarget; splitTarget?: ResolvedTarget | null; workbenchOpen?: boolean; workbenchTab?: string; sidebarSpace?: SidebarSpace; activeModal?: ActiveModal }
+  | { primaryTarget: ResolvedTarget; splitTarget?: ResolvedTarget | null; workbenchOpen?: boolean; workbenchTab?: string; sidebarSpace?: SidebarSpace; activeModal?: ActiveModal }
   | ResolvedTarget
 
 /**
@@ -585,6 +604,7 @@ export function serializeHash(input: HashSerializable): string {
     splitTarget: input.splitTarget ?? null,
     workbenchOpen: input.workbenchOpen ?? false,
     workbenchTab: input.workbenchTab ?? DEFAULT_WORKBENCH_TAB,
+    ...(input.sidebarSpace !== undefined ? { sidebarSpace: input.sidebarSpace } : {}),
     activeModal: input.activeModal ?? null,
   })
 }
