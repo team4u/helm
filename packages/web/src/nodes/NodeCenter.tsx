@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { NodeCard } from './NodeCard.js'
 import { NodeDetailDrawer } from './NodeDetailDrawer.js'
 import {
@@ -79,38 +80,46 @@ export function NodeCenter({
     setIsAddingNew(true)
   }
 
+  const toggleSplit = () => {
+    if (isSplit) {
+      onCloseSplit?.()
+      return
+    }
+    if (store.splitTarget !== null) {
+      store.closeSplit()
+      return
+    }
+    store.openTarget({ kind: 'nodes', nodeId: selectedNodeId }, { split: true })
+  }
+
   return (
     <div className={`primary-center node-center${isSplit ? ' is-split' : ''}`} data-view="node-center">
-      {/* 顶栏：标题、副标题、在线与总数统计、接入节点按钮、分屏关闭按钮 */}
-      <div className="primary-center-topbar">
-        <div className="primary-center-title-wrap">
+      {/* 顶栏：标题与操作 */}
+      <div className="primary-center-topbar pane-topbar">
+        <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
-            <HelmIcon name="cpu" size={16} />
+            <HelmIcon name="cpu" size={14} />
             <span>计算节点中心</span>
           </div>
         </div>
 
-        <div className="primary-center-topbar-actions">
+        <div className="primary-center-topbar-actions pane-actions">
           <button
             type="button"
-            className="btn btn-sm btn-primary"
+            className="btn btn-sm"
             onClick={handleOpenAddNew}
             title="接入新的分布式计算节点"
           >
-            <HelmIcon name="plus" size={13} />
-            <span>接入节点</span>
+            <HelmIcon name="plus" size={12} />
+            <span className="pane-action-label">接入节点</span>
           </button>
-
-          {isSplit && onCloseSplit && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              title="关闭分屏"
-              aria-label="关闭分屏"
-              onClick={onCloseSplit}
-            >
-              <HelmIcon name="x" size={14} />
-            </button>
+          {isSplit ? (
+            <CloseSplitButton onCloseSplit={onCloseSplit} />
+          ) : (
+            <SplitToggleButton
+              isSplitActive={store.splitTarget !== null}
+              onToggleSplit={toggleSplit}
+            />
           )}
         </div>
       </div>

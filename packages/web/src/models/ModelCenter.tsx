@@ -4,6 +4,7 @@ import { assetsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/Tabs.js'
+import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { GlobalDefaultsPanel } from './GlobalDefaultsPanel.js'
 import { ModelCard } from './ModelCard.js'
 import { ModelDetailDrawer } from './ModelDetailDrawer.js'
@@ -204,28 +205,50 @@ export function ModelCenter({
     }
   }
 
+  const toggleSplit = () => {
+    if (isSplit) {
+      onCloseSplit?.()
+      return
+    }
+    if (store.splitTarget !== null) {
+      store.closeSplit()
+      return
+    }
+    store.openTarget(
+      { kind: 'models', providerId: selectedProviderId, tab: centerTab as any },
+      { split: true },
+    )
+  }
+
   return (
-    <div className="primary-center">
+    <div className={`primary-center${isSplit ? ' is-split' : ''}`} data-view="model-center">
       {/* 顶栏 */}
-      <div className="primary-center-topbar">
-        <div className="primary-center-title-wrap">
+      <div className="primary-center-topbar pane-topbar">
+        <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
-            <HelmIcon name="cpu" size={16} />
+            <HelmIcon name="cpu" size={14} />
             <span>模型与凭证中心</span>
           </div>
         </div>
 
-        <div className="primary-center-topbar-actions">
-          {isSplit && onCloseSplit && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={onCloseSplit}
-              aria-label="关闭分屏"
-              title="关闭分屏"
-            >
-              <HelmIcon name="x" size={14} />
-            </button>
+        <div className="primary-center-topbar-actions pane-actions">
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={handleRefreshAll}
+            disabled={refreshingCatalog}
+            title="重新从所有供应商拉取最新模型目录"
+          >
+            <HelmIcon name="refresh-cw" size={12} className={refreshingCatalog ? 'spin' : undefined} />
+            <span className="pane-action-label">刷新目录</span>
+          </button>
+          {isSplit ? (
+            <CloseSplitButton onCloseSplit={onCloseSplit} />
+          ) : (
+            <SplitToggleButton
+              isSplitActive={store.splitTarget !== null}
+              onToggleSplit={toggleSplit}
+            />
           )}
         </div>
       </div>

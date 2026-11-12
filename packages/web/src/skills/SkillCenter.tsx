@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { SkillCard } from './SkillCard.js'
 import { SkillDetailDrawer } from './SkillDetailDrawer.js'
 import {
@@ -72,28 +73,46 @@ export function SkillCenter({
     store.openTarget({ kind: 'skills' }, isSplit ? { split: true } : undefined)
   }
 
+  const toggleSplit = () => {
+    if (isSplit) {
+      onCloseSplit?.()
+      return
+    }
+    if (store.splitTarget !== null) {
+      store.closeSplit()
+      return
+    }
+    store.openTarget({ kind: 'skills', skillId: selectedSkillId }, { split: true })
+  }
+
   return (
     <div className={`primary-center skill-center${isSplit ? ' is-split' : ''}`} data-view="skill-center">
-      {/* 顶栏：标题、副标题、统计与分屏操作 */}
-      <div className="primary-center-topbar">
-        <div className="primary-center-title-wrap">
+      {/* 顶栏：标题与操作 */}
+      <div className="primary-center-topbar pane-topbar">
+        <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
-            <HelmIcon name="terminal" size={16} />
+            <HelmIcon name="sparkles" size={14} />
             <span>技能中心</span>
           </div>
         </div>
 
-        <div className="primary-center-topbar-actions">
-          {isSplit && onCloseSplit && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              title="关闭分屏"
-              aria-label="关闭分屏"
-              onClick={onCloseSplit}
-            >
-              <HelmIcon name="x" size={14} />
-            </button>
+        <div className="primary-center-topbar-actions pane-actions">
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => void store.refreshAssets?.()}
+            title="刷新技能清单"
+          >
+            <HelmIcon name="refresh-cw" size={12} />
+            <span className="pane-action-label">刷新</span>
+          </button>
+          {isSplit ? (
+            <CloseSplitButton onCloseSplit={onCloseSplit} />
+          ) : (
+            <SplitToggleButton
+              isSplitActive={store.splitTarget !== null}
+              onToggleSplit={toggleSplit}
+            />
           )}
         </div>
       </div>

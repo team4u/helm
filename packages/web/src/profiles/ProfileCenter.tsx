@@ -11,6 +11,7 @@ import { ProfileCard } from './ProfileCard.js'
 import { ProfileDetailDrawer } from './ProfileDetailDrawer.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 
 export interface ProfileCenterProps {
   isSplit?: boolean
@@ -106,39 +107,48 @@ export function ProfileCenter({
     setActiveTab('all')
   }
 
+  const toggleSplit = () => {
+    if (isSplit) {
+      onCloseSplit?.()
+      return
+    }
+    if (store.splitTarget !== null) {
+      store.closeSplit()
+      return
+    }
+    store.openTarget({ kind: 'profiles', profileId: selectedProfileId }, { split: true })
+  }
+
   return (
     <div
       className={`primary-center${isSplit ? ' is-split' : ''}`}
       data-view="profile-center"
     >
       {/* 顶栏：标题与操作 */}
-      <div className="primary-center-topbar">
-        <div className="primary-center-title-wrap">
+      <div className="primary-center-topbar pane-topbar">
+        <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
-            <HelmIcon name="bot" size={16} />
+            <HelmIcon name="bot" size={14} />
             <span>智能体角色中心</span>
           </div>
         </div>
 
-        <div className="primary-center-topbar-actions">
+        <div className="primary-center-topbar-actions pane-actions">
           <button
             type="button"
-            className="btn btn-primary btn-sm"
+            className="btn btn-sm"
             onClick={handleCreateNew}
           >
-            <HelmIcon name="plus" size={13} />
-            <span>新建角色</span>
+            <HelmIcon name="plus" size={12} />
+            <span className="pane-action-label">新建角色</span>
           </button>
-          {isSplit && onCloseSplit && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              title="关闭分屏"
-              aria-label="关闭分屏"
-              onClick={onCloseSplit}
-            >
-              <HelmIcon name="x" size={14} />
-            </button>
+          {isSplit ? (
+            <CloseSplitButton onCloseSplit={onCloseSplit} />
+          ) : (
+            <SplitToggleButton
+              isSplitActive={store.splitTarget !== null}
+              onToggleSplit={toggleSplit}
+            />
           )}
         </div>
       </div>

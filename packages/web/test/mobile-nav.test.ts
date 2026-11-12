@@ -179,6 +179,7 @@ test('responsive.css 适配移动端视口安全区、触控热区与遮罩层�
 })
 
 const conversationPaneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
+const splitControlsSource = readFileSync(new URL('../src/ui/SplitControls.tsx', import.meta.url), 'utf8')
 
 test('ConversationPane.tsx 分屏顶栏：isSplit 时渲染显式关闭按钮，激活态分屏按钮可关闭', { timeout: 60_000 }, () => {
   // 共用关闭组件也用于加载中、加载失败分支；实际渲染行为见 subagent-live-card.test.ts。
@@ -187,10 +188,15 @@ test('ConversationPane.tsx 分屏顶栏：isSplit 时渲染显式关闭按钮，
     /isSplit && onCloseSplit !== undefined \? \(\s*<CloseSplitButton onCloseSplit=\{onCloseSplit\} \/>/,
     'ConversationPane 必须在 isSplit 顶栏渲染共用关闭按钮',
   )
-  // 主屏顶栏：分屏开启时按钮带 split-active 激活态类（窄屏保留可见可点）
   assert.match(
     conversationPaneSource,
-    /className=\{`btn btn-sm split-toggle-btn\$\{store\.splitTarget !== null \? ' btn-primary split-active' : ''\}`\}/,
+    /<SplitToggleButton\s+isSplitActive=\{store\.splitTarget !== null\}\s+onToggleSplit=\{toggleSplit\}\s*\/>/,
+    'ConversationPane 必须复用 SplitToggleButton 原语组件',
+  )
+  // 主屏顶栏：分屏开启时按钮带 split-active 激活态类（窄屏保留可见可点）
+  assert.match(
+    splitControlsSource,
+    /className=\{`btn btn-sm split-toggle-btn\$\{isSplitActive \? ' btn-primary split-active' : ''\}`\}/,
     '主屏 split-toggle-btn 在分屏开启时必须携带 split-active 激活态',
   )
 })

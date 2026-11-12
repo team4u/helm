@@ -9,6 +9,7 @@ import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import type { ResolvedTarget } from '../lib/types.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 
 export interface ScreenHostProps {
   pluginId: string
@@ -40,6 +41,26 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
     }
   }, [pluginId, screenId, isSplit, target, store])
 
+  const toggleSplit = () => {
+    if (isSplit) {
+      onCloseSplit?.()
+      return
+    }
+    if (store.splitTarget !== null) {
+      store.closeSplit()
+      return
+    }
+    store.openTarget(
+      {
+        kind: 'screen',
+        pluginId,
+        screenId,
+        params: target !== null && target.kind === 'screen' ? target.params : undefined,
+      },
+      { split: true },
+    )
+  }
+
   if (matched === undefined) {
     return (
       <div className="helm-pane">
@@ -50,14 +71,16 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
               未找到视图 {pluginId}/{screenId}
             </span>
           </div>
-          {isSplit && (
-            <div className="pane-actions">
-              <button type="button" className="btn btn-sm btn-ghost" onClick={onCloseSplit}>
-                <HelmIcon name="x" size={12} />
-                关闭分屏
-              </button>
-            </div>
-          )}
+          <div className="pane-actions">
+            {isSplit ? (
+              <CloseSplitButton onCloseSplit={onCloseSplit} />
+            ) : (
+              <SplitToggleButton
+                isSplitActive={store.splitTarget !== null}
+                onToggleSplit={toggleSplit}
+              />
+            )}
+          </div>
         </div>
         <div className="timeline-scroll">
           <div className="callout callout--warning">
@@ -86,14 +109,16 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
           {spec.icon !== undefined && <HelmIcon name={spec.icon} size={14} />}
           <span className="pane-title">{spec.label ?? `${pluginId}/${screenId}`}</span>
         </div>
-        {isSplit && (
-          <div className="pane-actions">
-            <button type="button" className="btn btn-sm btn-ghost" onClick={onCloseSplit}>
-              <HelmIcon name="x" size={12} />
-              关闭分屏
-            </button>
-          </div>
-        )}
+        <div className="pane-actions">
+          {isSplit ? (
+            <CloseSplitButton onCloseSplit={onCloseSplit} />
+          ) : (
+            <SplitToggleButton
+              isSplitActive={store.splitTarget !== null}
+              onToggleSplit={toggleSplit}
+            />
+          )}
+        </div>
       </div>
       <div className="timeline-scroll">
         <div className="timeline-inner" style={{ maxWidth: 1100 }}>

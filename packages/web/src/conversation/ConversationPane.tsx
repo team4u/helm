@@ -6,6 +6,7 @@ import { isConversationDeletable, isHumanSelectableProfile } from '../shell/side
 import { useHelmStore } from '../lib/store-context.js'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/DropdownMenu.js'
 import { Tooltip } from '../ui/Tooltip.js'
+import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
 import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
@@ -22,24 +23,6 @@ export interface ConversationPaneProps {
   onCloseSplit?: () => void
   isDrawer?: boolean
   onCloseDrawer?: () => void
-}
-
-/** 分屏窗格右上角关闭入口：加载中/加载失败早退分支同样可见，手机不被困住。 */
-function CloseSplitButton({ onCloseSplit }: { onCloseSplit: () => void }) {
-  return (
-    <Tooltip content="关闭本分屏" side="bottom">
-      <button
-        type="button"
-        className="btn btn-sm btn-ghost split-close-btn"
-        aria-label="关闭分屏"
-        title="关闭本分屏"
-        onClick={onCloseSplit}
-      >
-        <HelmIcon name="x" size={12} />
-        <span className="pane-action-label">关闭分屏</span>
-      </button>
-    </Tooltip>
-  )
 }
 
 /** 会话顶栏 + 时间线 + AskDock(Composer 内) + Composer 微操舱。 */
@@ -325,17 +308,10 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           ) : isSplit && onCloseSplit !== undefined ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
-            <Tooltip content={store.splitTarget !== null ? '关闭分屏' : '并排分屏'} side="bottom">
-              <button
-                type="button"
-                className={`btn btn-sm split-toggle-btn${store.splitTarget !== null ? ' btn-primary split-active' : ''}`}
-                aria-label={store.splitTarget !== null ? '关闭分屏' : '并排分屏'}
-                title="在右屏并排打开 / 关闭分屏"
-                onClick={toggleSplit}
-              >
-                <HelmIcon name="columns" size={12} />
-              </button>
-            </Tooltip>
+            <SplitToggleButton
+              isSplitActive={store.splitTarget !== null}
+              onToggleSplit={toggleSplit}
+            />
           )}
           <span className="pane-more-menu" ref={moreMenuRef}>
             <DropdownMenu open={moreOpen} onOpenChange={setMoreOpen}>

@@ -5,6 +5,7 @@ import { busyEnterMode, getComposerPlaceholder } from '../src/conversation/compo
 
 const composerSource = readFileSync(new URL('../src/conversation/Composer.tsx', import.meta.url), 'utf8')
 const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
+const splitControlsSource = readFileSync(new URL('../src/ui/SplitControls.tsx', import.meta.url), 'utf8')
 const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
 const timelineSource = readFileSync(new URL('../src/conversation/ConversationTimeline.tsx', import.meta.url), 'utf8')
 const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
@@ -70,8 +71,9 @@ test('横屏模式（高度 < 450px）适配：工具栏完整显示且不被挤
 })
 
 test('移动端窄屏（<860px）下隐藏顶部与侧栏中的分屏入口', { timeout: 60_000 }, () => {
-  // ConversationPane.tsx 顶部并排按钮携带 .split-toggle-btn
-  assert.match(paneSource, /className=\{`[^`]*split-toggle-btn/)
+  // ConversationPane.tsx 顶部并排按钮复用 SplitControls 中的 SplitToggleButton
+  assert.match(paneSource, /<SplitToggleButton/)
+  assert.match(splitControlsSource, /className=\{`[^`]*split-toggle-btn/)
 
   // Sidebar.tsx 会话行分屏按钮携带 split-toggle-btn / sidebar-split-btn
   assert.match(sidebarSource, /sidebar-split-btn|sidebar-split-action/)

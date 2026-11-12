@@ -6,6 +6,7 @@ import { useHelmStore } from '../lib/store-context.js'
 import { PluginCard } from './PluginCard.js'
 import { PluginDetailDrawer } from './PluginDetailDrawer.js'
 import { PluginInstallModal } from './PluginInstallModal.js'
+import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import {
   filterPlugins,
   summarizePlugins,
@@ -150,18 +151,30 @@ export function PluginCenter({
     }
   }
 
+  const toggleSplit = () => {
+    if (isSplit) {
+      onCloseSplit?.()
+      return
+    }
+    if (store.splitTarget !== null) {
+      store.closeSplit()
+      return
+    }
+    store.openTarget({ kind: 'plugins', pluginId: selectedPluginId }, { split: true })
+  }
+
   return (
     <div className={`plugin-center${isSplit ? ' is-split' : ''}`} data-view="plugin-center">
-      {/* 顶栏：标题、分屏操作与统计徽章 */}
-      <div className="plugin-center-topbar">
-        <div className="plugin-center-title-wrap">
-          <div className="plugin-center-title">
-            <HelmIcon name="puzzle" size={16} />
-            <span>插件中心</span>
+      {/* 顶栏：标题与操作 */}
+      <div className="primary-center-topbar pane-topbar">
+        <div className="primary-center-title-wrap pane-title-group">
+          <div className="primary-center-title">
+            <HelmIcon name="puzzle" size={14} />
+            <span>扩展插件中心</span>
           </div>
         </div>
 
-        <div className="plugin-center-topbar-actions">
+        <div className="primary-center-topbar-actions pane-actions">
           <button
             type="button"
             className="btn btn-sm"
@@ -169,19 +182,16 @@ export function PluginCenter({
             aria-label="安装插件"
             onClick={() => setInstallOpen(true)}
           >
-            <HelmIcon name="download" size={13} />
-            <span>安装插件</span>
+            <HelmIcon name="download" size={12} />
+            <span className="pane-action-label">安装插件</span>
           </button>
-          {isSplit && onCloseSplit && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              title="关闭分屏"
-              aria-label="关闭分屏"
-              onClick={onCloseSplit}
-            >
-              <HelmIcon name="x" size={14} />
-            </button>
+          {isSplit ? (
+            <CloseSplitButton onCloseSplit={onCloseSplit} />
+          ) : (
+            <SplitToggleButton
+              isSplitActive={store.splitTarget !== null}
+              onToggleSplit={toggleSplit}
+            />
           )}
         </div>
       </div>

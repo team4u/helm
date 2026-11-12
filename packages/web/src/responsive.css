@@ -35,7 +35,8 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .conversation-topbar { gap: 8px; padding: 0 12px; }
   /* 移动端顶栏左侧让位汉堡菜单后标题在更窄的剩余空间里垂直居中 */
   .conversation-topbar .pane-title { line-height: normal; align-self: center; }
-  .conversation-topbar .pane-action-label { display: none; }
+  .conversation-topbar .pane-action-label,
+  .primary-center-topbar .pane-action-label { display: none; }
   /* 手机仍保留远端身份：副标题切紧凑模式（仅 @node，本机不渲染），title 保留完整坐标 */
   .conversation-topbar .pane-cwd-subtitle { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .conversation-topbar .pane-cwd-subtitle .env-subtitle-full { display: none; }
