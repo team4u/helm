@@ -67,6 +67,19 @@ export const EMPTY_STANDBY_DRAFT: StandbyDraftState = {
 /** 附件大小上限与现有 Composer 一致（15 MiB）。 */
 export const STANDBY_FILE_MAX_BYTES = 15 * 1024 * 1024
 
+/**
+ * 只接受真实 Blob/File（必须可 arrayBuffer 读取，且 name/size 为原生字段）：
+ * 合成事件携带的普通对象（仅 name/size 的伪 File）在录入边界显式拒绝，
+ * 否则会混入草稿渲染出正常 chip，直到首发 uploadArtifact 调 file.arrayBuffer()
+ * 同步抛 TypeError，把已锚定的首发链路拦腰打断（浏览器实测：create 成功后
+ * 零 upload/零 input/零导航，仅失败 toast）。
+ */
+function isReadableFileLike(file: unknown): file is File {
+  if (file === null || typeof file !== 'object') return false
+  const candidate = file as Partial<Blob> & { name?: unknown }
+  return typeof candidate.arrayBuffer === 'function' && typeof candidate.size === 'number' && typeof candidate.name === 'string'
+}
+
 type DraftListener = () => void
 
 const drafts = new Map<string, StandbyDraftState>()
@@ -190,7 +203,7 @@ export function standbyEnvError(draft: Pick<StandbyDraftState, 'envCustomized' |
   return envDraftError({ nodeId: draft.envNodeId || 'local', cwd: draft.envCwd ?? '' } satisfies EnvDraft)
 }
 
-/** 本地暂存附件录入（15 MiB 上限与 Composer 一致；返回被拒绝文件的错误文案）。 */
+/** 本地暂存附件录入（真实 Blob/File 边界校验 + 15 MiB 上限；返回被拒绝项及用户可读原因）。 */
 export function admitStandbyFiles(
   draft: Pick<StandbyDraftState, 'localFiles'>,
   files: ReadonlyArray<File>,
@@ -199,6 +212,10 @@ export function admitStandbyFiles(
   const accepted: File[] = []
   const rejected: Array<{ file: File; reason: string }> = []
   for (const file of files) {
+    if (!isReadableFileLike(file)) {
+      rejected.push({ file, reason: '不支持的附件来源（非可读取的文件对象），请通过文件选择/拖拽/粘贴添加' })
+      continue
+    }
     if (file.size > STANDBY_FILE_MAX_BYTES) {
       rejected.push({ file, reason: '文件超过 15 MiB 上限' })
       continue

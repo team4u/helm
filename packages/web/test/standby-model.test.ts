@@ -367,3 +367,17 @@ test('世代作废：upload 等待期 reset 后不继续 submit、已上传转�
   assert.equal(log.submits.length, 0, '不继续 submit')
   assert.equal(getStandbyDraft(key).uploaded.length, 0, '回包不得复活附件')
 })
+
+test('admitStandbyFiles：伪 File 普通对象在录入边界拒绝，真实 File 正常暂存', { timeout: 60_000 }, () => {
+  // 合成事件携带的普通对象（仅 name/size 字段，无 arrayBuffer）：曾混入草稿并在
+  // 首发 uploadArtifact 的 file.arrayBuffer() 同步抛错，打断已锚定链路（浏览器实测）。
+  const fake = { name: 'fake.txt', size: 10, type: 'text/plain' } as unknown as File
+  const real = makeFile('real.txt')
+  const realBlobLike = Object.assign(new Blob(['blob']), { name: 'blob-named.txt' }) as unknown as File
+  const { draft, accepted, rejected } = admitStandbyFiles(getStandbyDraft('x'), [fake, real, realBlobLike])
+  assert.deepEqual(accepted.map((f) => f.name), ['real.txt', 'blob-named.txt'], '真实 Blob/File 均可暂存')
+  assert.equal(rejected.length, 1)
+  assert.equal(rejected[0]!.file, fake)
+  assert.ok(rejected[0]!.reason.includes('不支持的附件来源'), '显式给出用户可读原因')
+  assert.equal(draft.localFiles.length, 2, '伪对象绝不进入 localFiles')
+})

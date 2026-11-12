@@ -787,3 +787,50 @@ test('logout 于 upload 等待期：不继续 submit、不复活附件；重登�
   assert.equal(getStandbyDraft(key).uploaded.length, 0, '回包不得复活附件')
   assert.equal(getStandbyDraft(key).text, '', '重登同坐标无旧正文')
 })
+
+test('伪 File 注入边界拒绝：普通对象不进草稿不渲染 chip，发送不再被拦腰打断', { timeout: 60_000 }, async () => {
+  await mount('#/a/assistant')
+  // 模拟合成 change 事件携带仅含 name/size 的普通对象（浏览器 QA 曾注入的形态）：
+  // 旧实现渲染正常 chip，首发 create 成功后 uploadArtifact 的 file.arrayBuffer()
+  // 同步抛 TypeError，链路在 upload 前中断（零 upload/零 input/零导航）。
+  const fileInput = document.querySelector<HTMLInputElement>('.agent-standby-pane input[type=file]')
+  assert.ok(fileInput, '隐藏文件输入存在')
+  const fake = { name: 'fake-attach.txt', size: 20, type: 'text/plain' } as unknown as File
+  await act(async () => {
+    Object.defineProperty(fileInput!, 'files', { configurable: true, get: () => [fake] })
+    fileInput!.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await settle()
+  assert.ok(document.body.textContent?.includes('不支持的附件来源'), '录入边界显式拒绝并提示')
+  assert.equal(document.querySelectorAll('.attachment-chip').length, 0, '伪对象不渲染附件 chip')
+  // 正常正文发送不受影响：不因伪附件中断
+  const input = textarea(MAIN_LABEL)
+  act(() => { typeInto(input, '伪附件被拒后的正常首发') })
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.equal(state.createCalls.length, 1)
+  assert.equal(state.uploadCalls.length, 0)
+  assert.equal(state.submitCalls.length, 1, '全链路照常完成')
+  assert.equal(window.location.hash, '#/c/9')
+})
+
+test('真实 File 经 input change 事件路径首发全链路（create -> upload -> submit -> 导航）', { timeout: 60_000 }, async () => {
+  await mount('#/a/assistant')
+  const fileInput = document.querySelector<HTMLInputElement>('.agent-standby-pane input[type=file]')
+  assert.ok(fileInput)
+  const real = new File(['real input content'], 'real-input.txt', { type: 'text/plain' })
+  await act(async () => {
+    Object.defineProperty(fileInput!, 'files', { configurable: true, get: () => [real] })
+    fileInput!.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await settle()
+  assert.ok(document.body.textContent?.includes('real-input.txt'), '真实文件渲染 chip')
+  assert.equal(state.uploadCalls.length, 0, '发送前零上传')
+  const input = textarea(MAIN_LABEL)
+  act(() => { typeInto(input, '真实文件首发') })
+  await act(async () => { pressEnter(input) })
+  await settle()
+  assert.deepEqual(state.uploadCalls, [{ id: 9, name: 'real-input.txt' }], 'create 后上传到真实会话')
+  assert.deepEqual((state.submitCalls[0]!.body as { attachments?: string[] }).attachments, ['art-1'])
+  assert.equal(window.location.hash, '#/c/9')
+})
