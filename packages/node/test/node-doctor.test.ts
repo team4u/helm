@@ -356,42 +356,97 @@ test('doctor：root 权限 warn 但身份与 Hub 正常时整体 ok=true（退�
   }
 });
 
-test('doctor：真实 WS Hub mock 下 hub 项返回 rttMs 且 token 绝不出现', { timeout: 60_000 }, async () => {
+test('doctor：真实 WS Hub mock 下 hub 项只读探测（零 register、零顶替）且 token 绝不出现', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-node-doctor-hub-');
   const token = 'doctor-hub-node:secret-1';
+  // 同 nodeId 已有在线连接：register 会将其顶替（evict）——只读探测绝不能发送 register。
   const hub = await startDoctorHub(token);
+  t.after(async () => {
+    await hub.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  await writeNodeIdentity(dir, { nodeId: 'doctor-hub-node', token, hubUrl: hub.url });
+  const report = await runNodeDoctor({
+    dataDir: dir,
+    env: { ...process.env, HERDR_SOCKET_PATH: path.join(dir, 'no.sock') },
+    checkPrivilege: async () => ({ isRoot: false, passwordlessSudo: false }),
+  });
+  assert.equal(report.ok, true, JSON.stringify(report.checks));
+  const hubCheck = report.checks.find((c) => c.id === 'hub');
+  assert.equal(hubCheck?.status, 'ok');
+  assert.match(hubCheck?.message ?? '', /不校验令牌/);
+  const details = (hubCheck?.details ?? {}) as { rttMs?: number; hubUrl?: string };
+  assert.equal(typeof details.rttMs, 'number');
+  assert.ok(details.rttMs! >= 0);
+  assert.equal(details.hubUrl, hub.url);
+  // 只读红线：Hub 侧绝不收到 register（同 nodeId register 会 evict 在线守护）
+  assert.equal(hub.registrations.length, 0, 'doctor 不得发送 register');
+  // 报告全文绝不出现 token（secret）
+  const serialized = JSON.stringify(report);
+  assert.equal(serialized.includes(token), false, '报告中不得出现 token');
+  assert.equal(serialized.includes('secret-1'), false);
+  // CLI --json 输出同样不泄漏
+  const cli = await runCli(['doctor', '--data-dir', dir, '--json'], { HERDR_SOCKET_PATH: path.join(dir, 'no.sock') });
+  assert.equal(cli.code, 0, cli.out + cli.err);
+  assert.equal(cli.out.includes(token), false, 'CLI 输出不得出现 token');
+  const cliReport = JSON.parse(cli.out) as { ok: boolean; hubUrl: string };
+  assert.equal(cliReport.ok, true);
+  assert.equal(cliReport.hubUrl, hub.url);
+});
+
+test('doctor：在线 daemon 同 nodeId 时探测不干扰其连接（不断连、不重注册）', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('helm-node-doctor-live-');
+  const token = 'doctor-live-node:secret-1';
+  const hub = await startDoctorHub(token);
+  t.after(async () => {
+    await hub.close();
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  });
+  const daemon = await createNodeDaemon({
+    hubUrl: hub.url,
+    identity: { nodeId: 'doctor-live-node', token },
+    dataDir: dir,
+  });
   try {
-    await writeNodeIdentity(dir, { nodeId: 'doctor-hub-node', token, hubUrl: hub.url });
+    assert.equal(await daemon.waitUntilRegistered(10_000), true);
+    // doctor 从磁盘读取身份：补写 node.json（daemon 创建路径不落盘）。
+    await writeNodeIdentity(dir, { nodeId: 'doctor-live-node', token, hubUrl: hub.url });
+    const registrationsBefore = hub.registrations.length;
+
+    // 在 daemon 在线时执行 doctor：只读探测不得引发断连重连（旧实现会以同
+    // nodeId register 顶掉在线连接，真实 Hub 侧即 evict + 在途命令被杀）。
     const report = await runNodeDoctor({
       dataDir: dir,
       env: { ...process.env, HERDR_SOCKET_PATH: path.join(dir, 'no.sock') },
       checkPrivilege: async () => ({ isRoot: false, passwordlessSudo: false }),
     });
     assert.equal(report.ok, true, JSON.stringify(report.checks));
-    const hubCheck = report.checks.find((c) => c.id === 'hub');
-    assert.equal(hubCheck?.status, 'ok');
-    const details = (hubCheck?.details ?? {}) as { rttMs?: number; hubUrl?: string; heartbeatMs?: number };
-    assert.equal(typeof details.rttMs, 'number');
-    assert.ok(details.rttMs! >= 0);
-    assert.equal(details.hubUrl, hub.url);
-    // Hub 侧收到了真实 register（含 health 快照）
-    assert.ok(hub.registrations.length >= 1);
-    const registered = hub.registrations[0];
-    assert.equal(registered?.nodeId, 'doctor-hub-node');
-    assert.ok(registered?.health !== undefined);
-    // 报告全文绝不出现 token（secret）
-    const serialized = JSON.stringify(report);
-    assert.equal(serialized.includes(token), false, '报告中不得出现 token');
-    assert.equal(serialized.includes('secret-1'), false);
-    // CLI --json 输出同样不泄漏
-    const cli = await runCli(['doctor', '--data-dir', dir, '--json'], { HERDR_SOCKET_PATH: path.join(dir, 'no.sock') });
-    assert.equal(cli.code, 0, cli.out + cli.err);
-    assert.equal(cli.out.includes(token), false, 'CLI 输出不得出现 token');
-    const cliReport = JSON.parse(cli.out) as { ok: boolean; hubUrl: string };
-    assert.equal(cliReport.ok, true);
-    assert.equal(cliReport.hubUrl, hub.url);
+    assert.equal(daemon.isConnected(), true, 'doctor 不得干扰在线 daemon 连接');
+    assert.equal(hub.registrations.length, registrationsBefore, '不得触发重新注册');
+    await delay(300);
+    assert.equal(daemon.isConnected(), true, '探测后连接保持稳定');
   } finally {
-    await hub.close();
+    // fixture 的 hub.close 只关最新连接：daemon 必须先关（否则 server.close
+    // 等待 daemon 连接悬挂）。
+    await daemon.close().catch(() => undefined);
+  }
+});
+
+test('doctor：Hub 不可达时 hub 项报 error（握手失败如实呈现）', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helm-node-doctor-dead-');
+  try {
+    // 端口 1 上无服务：握手立即失败（连接拒绝）
+    await writeNodeIdentity(dir, { nodeId: 'doctor-dead-node', token: 'doctor-dead-node:secret-1', hubUrl: 'http://127.0.0.1:1' });
+    const report = await runNodeDoctor({
+      dataDir: dir,
+      env: { ...process.env, HERDR_SOCKET_PATH: path.join(dir, 'no.sock') },
+      connectTimeoutMs: 2_000,
+      checkPrivilege: async () => ({ isRoot: false, passwordlessSudo: false }),
+    });
+    assert.equal(report.ok, false);
+    const hubCheck = report.checks.find((c) => c.id === 'hub');
+    assert.equal(hubCheck?.status, 'error');
+  } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
 });

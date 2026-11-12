@@ -792,3 +792,152 @@ test('dispose 销毁活跃订阅并停发事件', { timeout: 60_000 }, async (t)
   assert.equal(events.length, before, 'dispose 后不再收到事件');
   assert.equal(server.getActiveIpcSubscriptionCount(), 0);
 });
+
+// ---------------------------------------------------------------------------
+// 11. 升级排空纳入 IPC：draining 拒新 call/subscribe，在途 call 计入排空口径
+// ---------------------------------------------------------------------------
+
+test('升级排空纳入 IPC：draining 拒新 call/subscribe，在途 call 不强杀且计入排空计数', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('drain-ipc-');
+  // 挂起服务器：收到请求不回（模拟 herdr:agy --wait 长等待）
+  const hold = startLineServer(dir, 'hold', () => undefined);
+  // 回声服务器：验证解除 draining 后恢复受理
+  const echo = startLineServer(dir, 'echo', (line, socket) => socket.write(`${line}-ok\n`));
+  t.after(async () => {
+    await hold.close();
+    await echo.close();
+  });
+  const server = createNodeEnvRpcServer({ defaultCwd: dir });
+  t.after(async () => {
+    await server.dispose();
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  });
+  await waitListening(hold.path);
+  await waitListening(echo.path);
+
+  // 在途一次性 call（无 callId）也计入排空口径：升级事务据此等待其收敛
+  const pending = server.ipcCall!({ endpoint: hold.path, line: 'wait-req', timeoutMs: 600 });
+  await delay(150);
+  assert.equal(server.getActiveIpcCallCount(), 1, '在途 IPC call 应计入排空计数');
+
+  server.setDraining(true);
+  const rejectedCall = await server.ipcCall!({ endpoint: echo.path, line: 'new-call', timeoutMs: 1_000 });
+  assert.equal(rejectedCall.ok, false);
+  assert.equal(!rejectedCall.ok && rejectedCall.error.code, 'aborted');
+  assert.match(!rejectedCall.ok ? rejectedCall.error.message : '', /draining/);
+
+  const rejectedSub = await server.ipcSubscribe!({ subscribeId: 's-drain', endpoint: echo.path, line: 'new-sub' });
+  assert.equal(rejectedSub.ok, false);
+  assert.equal(!rejectedSub.ok && rejectedSub.error.code, 'aborted');
+  assert.match(!rejectedSub.ok ? rejectedSub.error.message : '', /draining/);
+
+  // draining 不强杀在途：超时自然结算后计数归零
+  const settled = await pending;
+  assert.equal(settled.ok, false);
+  assert.equal(!settled.ok && settled.error.code, 'timeout');
+  assert.equal(server.getActiveIpcCallCount(), 0, '排空计数应随在途 call 结算归零');
+
+  // 恢复受理（升级失败回滚路径）
+  server.setDraining(false);
+  const okAgain = await server.ipcCall!({ endpoint: echo.path, line: 'after', timeoutMs: 2_000 });
+  assert.equal(okAgain.ok, true);
+});
+
+test('envCleanup：draining/disposed 显式拒绝（按 cwd 杀同 cwd 全部会话命令的锋利语义）', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('cleanup-guard-');
+  const server = createNodeEnvRpcServer({ defaultCwd: dir });
+  t.after(async () => {
+    await server.dispose().catch(() => undefined);
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  server.setDraining(true);
+  await assert.rejects(
+    () => server.envCleanup!(dir),
+    (error: unknown) => {
+      const err = error as { code?: string; message?: string };
+      assert.equal(err.code, 'aborted');
+      assert.match(err.message ?? '', /draining/);
+      return true;
+    },
+  );
+
+  server.setDraining(false);
+  await server.envCleanup!(dir); // 正常路径不抛
+
+  await server.dispose();
+  await assert.rejects(() => server.envCleanup!(dir), /disposed/);
+});
+
+// ---------------------------------------------------------------------------
+// 12. LineAssembler 限长闭合：带换行的完整超长行不再绕过单帧上限
+// ---------------------------------------------------------------------------
+
+test('ipcCall 单帧上限：带换行的完整超长行同样拒绝（不再整行进内存回传）', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('ipc-frame-limit-');
+  // 回一行超限内容 + '\n'：修复前完整行从不检查长度，直接通过
+  const srv = startLineServer(dir, 'bigline', (_line, socket) => {
+    socket.write(Buffer.concat([Buffer.alloc(32 * 1024 * 1024 + 1, 0x61), Buffer.from('\n')]));
+  });
+  t.after(async () => {
+    await srv.close();
+  });
+  const server = createNodeEnvRpcServer({ defaultCwd: dir });
+  t.after(async () => {
+    await server.dispose();
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  const result = await server.ipcCall!({ endpoint: srv.path, line: 'q', timeoutMs: 30_000 });
+  assert.equal(result.ok, false, '超限完整行必须被拒绝');
+  assert.match(!result.ok ? result.error.message : '', /exceeds/);
+});
+
+// ---------------------------------------------------------------------------
+// 13. birpc events 适配：on/off 包装引用配对（$close 后监听器完整摘除）
+// ---------------------------------------------------------------------------
+
+test('birpc events 适配：off 摘除包装监听，多路 on 各自独立摘除', { timeout: 60_000 }, async () => {
+  const { EventEmitter } = await import('node:events');
+  const { createSocketBirpcEvents } = await import('../src/daemon/birpc-events.js');
+  const socket = new EventEmitter();
+  const invalidFrames: string[] = [];
+  const events = createSocketBirpcEvents(socket as never, (message) => {
+    invalidFrames.push(message);
+  });
+
+  const receivedA: unknown[] = [];
+  const callbackA = (data: unknown): void => {
+    receivedA.push(data);
+  };
+  events.on(callbackA);
+  assert.equal(socket.listenerCount('message'), 1);
+
+  socket.emit('message', Buffer.from(JSON.stringify({ a: 1 })));
+  assert.deepEqual(receivedA, [{ a: 1 }]);
+
+  // 非法 JSON / 非对象帧走 onInvalidFrame，不进回调
+  socket.emit('message', Buffer.from('not-json'));
+  socket.emit('message', Buffer.from('[1,2]'));
+  assert.equal(invalidFrames.length, 2);
+  assert.deepEqual(receivedA, [{ a: 1 }]);
+
+  const receivedB: unknown[] = [];
+  const callbackB = (data: unknown): void => {
+    receivedB.push(data);
+  };
+  events.on(callbackB);
+  assert.equal(socket.listenerCount('message'), 2);
+
+  events.off(callbackA);
+  assert.equal(socket.listenerCount('message'), 1, 'off 必须摘除实际注册的包装监听');
+  socket.emit('message', Buffer.from(JSON.stringify({ b: 2 })));
+  assert.deepEqual(receivedA, [{ a: 1 }], '已摘除的回调不再收帧');
+  assert.deepEqual(receivedB, [{ b: 2 }]);
+
+  events.off(callbackB);
+  assert.equal(socket.listenerCount('message'), 0, '全部摘除后无 message 残留（$close 语义）');
+  // 未知回调的 off 幂等无害
+  events.off(callbackA);
+  assert.equal(socket.listenerCount('message'), 0);
+});

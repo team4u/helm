@@ -52,6 +52,7 @@ import type {
 } from '@helm/protocol';
 import { DEFAULT_NODE_ID } from '@helm/protocol';
 import { createNodeEnvRpcServer, type NodeEnvRpcServer, type NodeEnvRpcServerOptions } from './env-rpc-server.js';
+import { createSocketBirpcEvents } from './birpc-events.js';
 import {
   UpgradeCommitUnconfirmedError,
   UpgradeRejectedError,
@@ -912,28 +913,11 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
         onGone('RPC transport failed');
         return true;
       },
-      on: (callback) => {
-        socket.on('message', (raw) => {
-          const text = typeof raw === 'string' ? String(raw) : Buffer.from(raw as ArrayBuffer).toString('utf8');
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(text);
-          } catch {
-            // 非法 JSON 帧：协议级污染——关闭并诊断，绝不静默丢帧。
-            log(`收到非法 JSON 帧长度=${text.length}，终止连接`);
-            onGone('invalid frame');
-            return;
-          }
-          if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) callback(parsed);
-          else {
-            log('收到非法 RPC 帧，终止连接');
-            onGone('invalid frame');
-          }
-        });
-      },
-      off: (callback) => {
-        socket.off('message', callback as never);
-      },
+      // on/off 包装引用严格配对（见 birpc-events）：$close 后监听器完整摘除。
+      ...createSocketBirpcEvents(socket, (message) => {
+        log(`${message}，终止连接`);
+        onGone('invalid frame');
+      }),
       serialize: (data) => data,
       deserialize: (data) => data as never,
       timeout: 30 * 60 * 1000, // envExec 等长请求预算；register/heartbeat 单独限时
@@ -1198,7 +1182,10 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
           ...(parsed?.attemptId !== undefined ? { attemptId: parsed.attemptId } : {}),
           currentVersion: getNodeVersion(),
           prepareReplacement: options.prepareUpgradeReplacement,
-          getActiveExecCount: () => (generation?.server.getActiveExecCount() ?? 0) + (generation?.server.getActiveTunnelCount() ?? 0),
+          getActiveExecCount: () =>
+            (generation?.server.getActiveExecCount() ?? 0) +
+            (generation?.server.getActiveTunnelCount() ?? 0) +
+            (generation?.server.getActiveIpcCallCount() ?? 0),
           setDraining: applyDraining,
           onScheduleShutdown: options.onUpgradeReplaced,
         });

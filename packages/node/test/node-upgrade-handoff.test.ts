@@ -165,7 +165,9 @@ async function startHubFixture(options: { expectedToken: string }): Promise<HubF
  * activate；收到合法 activate 回 activated 并脱离父 IPC 存活。
  * 行为由 env HELM_FIXTURE_MODE 控制：
  *  - 'candidate'（缺省）：正常协议实现；
- *  - 'no-ack'：收到 activate 但不回 activated（模拟 ACK 丢失）；
+ *  - 'no-ack'：收到 activate 但不回 activated（模拟已送达但回执丢失）；
+ *  - 'vanish'：真实 registered 后断开父 IPC 但保持存活（模拟 activate 发出
+ *    前通道已亡——写入必失败，父侧必须按确定未送达安全回滚）；
  *  - 'starting'：上报 starting 不注册（Hub 不可达也一样）；
  *  - 'exit'：上报 starting 后立即退出。
  */
@@ -191,6 +193,7 @@ ws.on('message', (raw) => {
     const state = ok ? 'registered' : 'starting';
     try { process.send({ type: 'helm-node.ready', pid: process.pid, instanceId, state }); } catch {}
     if (mode === 'exit') { try { process.disconnect(); process.exit(0); } catch {} }
+    if (ok && mode === 'vanish') setTimeout(() => { try { process.disconnect(); } catch {} }, 30);
   }
 });
 ws.on('error', () => {
@@ -213,13 +216,14 @@ process.on('message', (message) => {
     try { process.send({ type: 'helm-node.activate-rejected', attemptId: message.attemptId, reason: 'context mismatch' }); } catch {}
     return;
   }
-  if (mode === 'no-ack') return; // 收到 activate 不应答：模拟 ACK 丢失
+  if (mode === 'no-ack' || mode === 'vanish') return; // 不应答：no-ack 模拟回执丢失；vanish 模拟通道已亡
   try { process.send({ type: 'helm-node.activated', attemptId: message.attemptId }); } catch {}
   try { if (process.connected) process.disconnect(); } catch {}
 });
 // 父断开：未激活即退出（协议约定）。
 process.on('disconnect', () => {
   if (mode === 'no-ack') { /* ACK 丢失场景父可能已断开：继续存活验证不回滚 */ }
+  else if (mode === 'vanish') { /* 自断开保持存活：验证父侧安全回滚杀候选 */ }
   else process.exit(0);
 });
 `;
@@ -416,6 +420,48 @@ test('prepareNodeReplacement：activate ACK 丢失抛 UpgradeCommitUnconfirmedEr
 
   process.kill(replacement!.pid, 'SIGKILL');
   await waitFor(() => !realIsAlive(replacement!.pid), 5_000, '候选退出');
+});
+
+test('prepareNodeReplacement：候选 ready 后自断 IPC——activate 确定未送达，安全回滚不留 10 分钟空窗', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('helm-handoff-vanish-');
+  t.after(async () => {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  });
+  const hub = await startHubFixture({ expectedToken: 'cand:s' });
+  t.after(async () => {
+    await hub.close();
+  });
+
+  const oldRecord: HandoffPidRecord = { pid: process.pid, instanceId: 'e'.repeat(32), endpoint: '/tmp/old5.sock' };
+  const { replacement, store, error } = await prepareWithFixture({
+    dir,
+    hubUrl: hub.url,
+    mode: 'vanish',
+    oldRecord,
+    activateAckTimeoutMs: 1_500,
+  });
+  assert.ok(replacement !== undefined, `准备失败：${error?.message}`);
+  assert.ok(realIsAlive(replacement.pid), '断开 IPC 前候选存活');
+  // 等父侧处理完 disconnect 事件（ready 阶段断开→dead）：消除 commit 与
+  // 自断开定时器之间的竞争，锁定「activate 从未送达」确定性场景。
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  // commit：确定未送达（写入失败或通道已亡）→ 普通错误（非未确认），
+  // 引擎据此走安全回滚；旧实现误按「未确认」保持 gate + 让位，节点空窗 10 分钟。
+  await assert.rejects(
+    () => replacement!.commit(),
+    (caught: unknown) => {
+      assert.equal(caught instanceof UpgradeCommitUnconfirmedError, false, '确定未送达不得按未确认处理');
+      assert.match(caught instanceof Error ? caught.message : String(caught), /未发出|安全回滚|不在可提交状态/);
+      return true;
+    },
+  );
+
+  // abort 允许（activate 从未送达）：杀候选 + instanceId CAS 还原旧 pid 留档
+  await replacement.abort();
+  await waitFor(() => !realIsAlive(replacement.pid), 5_000, '安全回滚必须杀候选');
+  assert.equal(store.get()?.pid, process.pid, 'pid 留档应还原为旧进程');
+  assert.equal(store.get()?.instanceId, 'e'.repeat(32));
 });
 
 test('prepareNodeReplacement：未发 activate 时 abort 杀候选且不触碰留档', { timeout: 60_000 }, async (t) => {

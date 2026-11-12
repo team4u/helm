@@ -982,3 +982,88 @@ test('stageReleaseFromNpm：npm 缓存复用时重新核对双包 package.json �
   );
   await fs.rm(dir, { recursive: true, force: true });
 });
+
+// ---------------------------------------------------------------------------
+// runNpm 超时进程组语义：npm 生命周期脚本的孙进程不留孤儿
+// ---------------------------------------------------------------------------
+
+test('runNpm 超时杀进程组：npm run 的孙进程同步被杀（不留孤儿继续写 staging）', { timeout: 60_000 }, async (t) => {
+  if (process.platform === 'win32') return; // POSIX 进程组语义；win32 走 taskkill /T 等效路径
+  const dir = await tempDir('npm-group-kill-');
+  const heartbeat = path.join(dir, 'beat.txt');
+  const grandPidFile = path.join(dir, 'grand.pid');
+  const runnerScript = path.join(dir, 'runner.cjs');
+  // runner（npm run 的直接子进程）再派生孙进程：孙进程持续写心跳文件，
+  // 模拟 install-script 在超时后继续写入正被清理的 staging 目录。
+  await fs.writeFile(
+    runnerScript,
+    [
+      "const fs = require('node:fs');",
+      "const { spawn } = require('node:child_process');",
+      "const g = spawn(process.execPath, ['-e', " +
+        JSON.stringify(
+          "const fs=require('node:fs');" +
+          "setInterval(()=>fs.appendFile(process.argv[1],'.',()=>{}),50);" +
+          "setInterval(()=>{},1000);",
+        ) +
+        ", process.argv[2]], { stdio: 'ignore' });",
+      "fs.writeFileSync(process.argv[3], String(g.pid));",
+      "setInterval(() => {}, 1000);",
+    ].join('\n'),
+    'utf8',
+  );
+  await fs.writeFile(
+    path.join(dir, 'package.json'),
+    JSON.stringify({ name: 'npm-group-hold', private: true, scripts: { hold: `node ${runnerScript} ${JSON.stringify(heartbeat)} ${JSON.stringify(grandPidFile)}` } }),
+    'utf8',
+  );
+  const cleanup = async (): Promise<void> => {
+    const raw = await fs.readFile(grandPidFile, 'utf8').catch(() => '');
+    const pid = Number(raw.trim());
+    if (Number.isInteger(pid) && pid > 0) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // 已死。
+      }
+    }
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  };
+  t.after(async () => {
+    await cleanup();
+  });
+
+  const { runNpm } = await import('../src/daemon/upgrader.js');
+  const npmPromise = runNpm(['run', 'hold'], dir, 6_000);
+  // 等 npm 拉起 runner 与孙进程（pid 文件落地）再让超时触发，确保被测对象存在
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    const exists = await fs.readFile(grandPidFile, 'utf8').then(
+      () => true,
+      () => false,
+    );
+    if (exists) break;
+    if (Date.now() > deadline) throw new Error('npm run 未能在预算内拉起孙进程（fixture 失败）');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  await assert.rejects(() => npmPromise, /超时/);
+
+  const rawPid = await fs.readFile(grandPidFile, 'utf8');
+  const grandPid = Number(rawPid.trim());
+  assert.ok(Number.isInteger(grandPid) && grandPid > 0, `孙进程 pid 非法：${rawPid}`);
+  const isAlive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // 进程组 kill 同步生效；小窗口重试吸收调度滞后
+  let alive = isAlive(grandPid);
+  for (let i = 0; i < 20 && alive; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    alive = isAlive(grandPid);
+  }
+  assert.equal(alive, false, '超时后孙进程必须随进程组被杀，不留孤儿');
+});

@@ -17,8 +17,10 @@
  * - call：写一行、读一行完整 UTF-8 JSON 后立即关 socket；带 callId 登记
  *   在途 socket，ipcAbortCall 可立即中断阻塞等待（如 agent.prompt --wait）；
  *   超时由调用方或显式服务器选项决定，取消与连接代关闭立即释放 socket；
+ *   draining 时拒新，已在途的计入升级排空口径（不被旧宿主退出硬切断）；
  * - subscribe：首行 ACK（15s 超时）须为结构化的 subscription_started，
  *   之后每行经 onIpcEvent 转发；断开经 onIpcClosed 通知；不静默吞错。
+ *   长驻语义：draining 时拒新，既有的由 dispose 统一优雅关闭并通知。
  *
  * 节点侧 TCP 隧道（nodeTunnelOpen）：Hub 请求在节点侧向目标 host:port
  *（host 缺省 127.0.0.1，由本节点解析与连接）建立 TCP，与 daemon 层注入的
@@ -149,7 +151,9 @@ const isValidHerdrSession = (session: string): boolean => {
 class LineAssembler {
   private buffer: Buffer = Buffer.alloc(0);
 
-  /** 推入一个 chunk，返回其中完整行（不含换行符）；无完整行返回空数组。 */
+  /** 推入一个 chunk，返回其中完整行（不含换行符）；无完整行返回空数组。
+   * 逐行长度检查：带换行的完整行与无换行残留同样受单帧上限约束，
+   * 否则对端一帧超长行只要带换行即绕过限制整行进内存。 */
   push(chunk: Buffer): string[] {
     this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
     const lines: string[] = [];
@@ -159,6 +163,9 @@ class LineAssembler {
       if (nl === -1) break;
       let end = nl;
       if (end > searchFrom && this.buffer[end - 1] === 0x0d) end -= 1; // 剥离 CR
+      if (end - searchFrom > MAX_IPC_FRAME_BYTES) {
+        throw new Error(`IPC frame exceeds ${MAX_IPC_FRAME_BYTES} bytes`);
+      }
       lines.push(this.buffer.subarray(searchFrom, end).toString('utf8'));
       searchFrom = nl + 1;
     }
@@ -326,17 +333,17 @@ export interface NodeEnvRpcServer extends NodeEnvRpcFunctions {
   nodeTunnelAbort(tunnelId: string): Promise<void>;
   /** 关闭全部 reader、杀死在途命令、销毁全部 IPC socket（连接断开或停机时调用）。幂等。 */  dispose(): Promise<void>;
   /**
-   * 排空开关：true 期间新 envExec 受理即拒（升级排空/已提交让位/候选待激活），
-   * 不影响已在途命令；false 恢复受理。幂等。
+   * 排空开关：true 期间新 envExec / ipcCall / ipcSubscribe 受理即拒（升级
+   * 排空/已提交让位/候选待激活），不影响已在途命令；false 恢复受理。幂等。
    */
   setDraining(value: boolean): void;
   /** 在途 envExec 数量（排空内省；含已受理未 spawn 的调用）。 */
   getActiveExecCount(): number;
   /** 打开的 reader 数量（内省/测试）。 */
   getOpenReaderCount(): number;
-  /** 在途 ipcCall 数量（内省/测试）。 */
+  /** 在途 ipcCall 数量（排空内省；含无 callId 的在途调用，受理即计数）。 */
   getActiveIpcCallCount(): number;
-  /** 活跃 ipcSubscribe 数量（内省/测试）。 */
+  /** 活跃 ipcSubscribe 数量（内省/测试；长驻订阅不计入排空等待）。 */
   getActiveIpcSubscriptionCount(): number;
   /** 在途隧道数量（排空内省；含 TCP 已发起未完成握手的隧道）。 */
   getActiveTunnelCount(): number;
@@ -354,7 +361,9 @@ type NodeEnvRpcWithTunnelFunctions = NodeEnvRpcFunctions & {
  */
 type RpcTunnelResult = { ok: true; value: null } | { ok: false; error: { code: RpcTunnelErrorCode; message: string } };
 
-/** void 返回的 RPC（abort/cleanup/unsubscribe）：不做 RpcResult 边界包装。 */
+/** void 返回的 RPC（abort/cleanup/unsubscribe）：不做 RpcResult 边界包装；
+ * envCleanup 因按 cwd 杀全部同 cwd 会话在途命令的破坏性语义，在函数内
+ * 自带 disposed/draining 显式拒绝（抛错经 birpc 错误信封如实回拒）。 */
 const VOID_RPC_METHODS = new Set(['envAbortExec', 'envCleanup', 'ipcAbortCall', 'ipcUnsubscribe', 'nodeTunnelAbort']);
 
 export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEnvRpcServer {
@@ -927,6 +936,16 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     return promise;
   };
 
+  // 在途一次性 ipcCall 的 settle promise：升级排空口径必须包含它们——
+  // 否则旧宿主退出时 dispose 硬销毁 socket，Hub 侧长等待（如 herdr --wait）
+  // 被拦腰切断且无重试约定。长驻 ipcSubscribe 不进此集合（见 guard 分支注释）。
+  const ipcWaiters = new Set<Promise<unknown>>();
+  const trackIpc = <T>(promise: Promise<T>): Promise<T> => {
+    ipcWaiters.add(promise);
+    void promise.finally(() => ipcWaiters.delete(promise)).catch(() => undefined);
+    return promise;
+  };
+
   const execOnce = async (input: EnvExecInput): Promise<RpcResult<EnvExecOk>> => {
     const { execId, command, cwd, timeout, spill, window } = input;
     if (typeof execId !== 'string' || execId.length === 0 || execId.length > 128) {
@@ -1190,7 +1209,23 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       running.get(execId)?.controller.abort(new Error('aborted by hub'));
     },
 
+    /**
+     * 按 cwd 粒度清理：杀同 cwd 下**全部**在途命令进程树（envs 被同节点多
+     * 会话共享，cwd 不是会话隔离键）——调用方必须明白这会误杀同 cwd 其他
+     * 会话的在途命令；Hub 侧 remote-env 刻意不调用本方法（连接级 dispose
+     * 兜底）。draining/disposed 时拒绝：排空期清杀等于破坏「排空不强杀」
+     * 的事务语义（birpc 错误信封如实回拒，不静默）。
+     */
     async envCleanup(cwd?: string): Promise<void> {
+      if (disposed) {
+        throw Object.assign(new Error('server disposed, rejecting envCleanup'), { code: 'aborted' });
+      }
+      if (draining) {
+        throw Object.assign(
+          new Error('daemon is draining (upgrade in progress), rejecting envCleanup (would kill in-flight commands of all sessions sharing the cwd)'),
+          { code: 'aborted' },
+        );
+      }
       await Promise.all(
         [...envs.values()].map(async (env) => {
           if (cwd !== undefined && env.cwd !== cwd) return;
@@ -1268,6 +1303,53 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       };
       continue;
     }
+    if (key === 'ipcCall') {
+      // 受理即登记：draining/disposed 拒新 IPC 调用；一次性 call 计入排空
+      // 口径（ipcWaiters），升级等待其收敛，不被旧宿主退出硬切断。
+      guarded[key] = async (...args: unknown[]): Promise<RpcResult<unknown>> => {
+        if (disposed) return { ok: false, error: { code: 'aborted', message: 'server disposed' } };
+        const input = args[0];
+        if (!input || typeof input !== 'object' || Array.isArray(input)) return invalidInput('RPC input must be an object');
+        if (draining) {
+          return { ok: false, error: { code: 'aborted', message: 'daemon is draining (upgrade in progress), rejecting new IPC calls' } };
+        }
+        const operation = trackIpc(
+          Promise.resolve().then(() => (original as (...a: unknown[]) => Promise<RpcResult<unknown>>)(...args)),
+        );
+        pendingOperations.add(operation);
+        try {
+          return await operation;
+        } catch (error) {
+          return rpcFail(error);
+        } finally {
+          pendingOperations.delete(operation);
+        }
+      };
+      continue;
+    }
+    if (key === 'ipcSubscribe') {
+      // 订阅是长驻语义：排空不等待它收敛（等待它等于禁止升级期间订阅存在），
+      // 但 draining 时拒新——旧宿主 dispose 前统一优雅关闭既有订阅并经
+      // onIpcClosed 通知 Hub，Hub 侧可自行重订。
+      guarded[key] = async (...args: unknown[]): Promise<RpcResult<unknown>> => {
+        if (disposed) return { ok: false, error: { code: 'aborted', message: 'server disposed' } };
+        const input = args[0];
+        if (!input || typeof input !== 'object' || Array.isArray(input)) return invalidInput('RPC input must be an object');
+        if (draining) {
+          return { ok: false, error: { code: 'aborted', message: 'daemon is draining (upgrade in progress), rejecting new IPC subscriptions' } };
+        }
+        const operation = Promise.resolve().then(() => (original as (...a: unknown[]) => Promise<RpcResult<unknown>>)(...args));
+        pendingOperations.add(operation);
+        try {
+          return await operation;
+        } catch (error) {
+          return rpcFail(error);
+        } finally {
+          pendingOperations.delete(operation);
+        }
+      };
+      continue;
+    }
     guarded[key] = async (...args: unknown[]): Promise<RpcResult<unknown>> => {
       if (disposed) return { ok: false, error: { code: 'aborted', message: 'server disposed' } };
       if (!args[0] || typeof args[0] !== 'object' || Array.isArray(args[0])) return invalidInput('RPC input must be an object');
@@ -1314,10 +1396,10 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     setDraining: (value: boolean): void => {
       draining = value === true;
     },
-    // 排空内省按「已受理」计数（execWaiters 在受理同步段登记，含尚未 spawn 的调用）。
+    // 排空内省按「已受理」计数（execWaiters/ipcWaiters 在受理同步段登记）。
     getActiveExecCount: () => execWaiters.size,
     getOpenReaderCount: () => readers.size,
-    getActiveIpcCallCount: () => activeIpcCalls.size,
+    getActiveIpcCallCount: () => ipcWaiters.size,
     getActiveIpcSubscriptionCount: () => activeIpcSubscriptions.size,
     getActiveTunnelCount: () => activeTunnels.size,
   }) as NodeEnvRpcServer;
