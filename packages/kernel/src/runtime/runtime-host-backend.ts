@@ -123,6 +123,10 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     getConversationDetail: (id, options) => runtime.getConversationDetail(id, options),
     updateConversation: (id, patch) => runtime.updateConversation(id, patch),
     abortConversation: (id) => runtime.abortConversation(id),
+    abortConversationGuarded: (id, guard) => runtime.abortConversationGuarded(id, guard),
+    submitInputGuarded: async (id, text, opts, guard) => {
+      await runtime.submitInputGuarded(id, text, opts, guard)
+    },
     getConversationOwnership: (id) => runtime.getConversationOwnership(id),
     getConversationActivity: (id) => runtime.getConversationActivity(id),
     listArtifacts: (conversationId) => Promise.resolve(runtime.artifacts.list(conversationId)),

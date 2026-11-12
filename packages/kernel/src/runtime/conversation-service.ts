@@ -17,6 +17,7 @@ import type {
   ConversationPatch,
   ConversationSummary,
   ConversationWithdrawResponse,
+  GuardedMutationExpectation,
   InputOrigin,
   WhenBusy,
 } from '@helm/protocol'
@@ -88,6 +89,12 @@ export interface SubmitInputOptions {
   replaceFromEntryId?: number
   /** 内部完成回报的持久幂等键；HTTP 输入不开放此字段。 */
   requestId?: string
+  /**
+   * @internal 内核 guarded mutation 通道（submitInputGuarded 注入；宿主 API
+   * 与 HTTP/CLI 均不暴露）：在提交点（SDK submit 调用前、最后一个 await
+   * 之后）同步复核归属与水位，失败 409/404 且不产生提交副作用。
+   */
+  mutationGuard?: GuardedMutationExpectation
 }
 
 export class ConversationService {
@@ -173,7 +180,144 @@ export class ConversationService {
       stash: this.stash,
       runInputHook: this.o.runInputHook,
       resolveAuthorizedAttachments: (convId, ids) => this.attachments.resolveAuthorizedAttachments(convId, ids),
+      assertMutationGuard: (id, guard) => this.assertMutationGuard(id, guard),
     })
+  }
+
+  // ------------------------------------------------------------------
+  // guarded mutation（自动化红线内核执行层）
+  // ------------------------------------------------------------------
+
+  /** 会话级 guarded 变更串行门（promise 尾链）：同一会话的自动化中止/提交
+   * 在「复核 + 第一个不可逆动作」临界区上完全有序，不同会话互不阻塞。 */
+  private readonly mutationGates = new Map<number, Promise<unknown>>()
+
+  private withMutationGate<T>(id: number, op: () => Promise<T>): Promise<T> {
+    const prev = this.mutationGates.get(id) ?? Promise.resolve()
+    // 前序失败不阻断后续（尾链吸收错误；op 每次真实执行）。
+    const run = prev.then(op, op)
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    this.mutationGates.set(id, tail)
+    void tail.then(() => {
+      if (this.mutationGates.get(id) === tail) this.mutationGates.delete(id)
+    })
+    return run
+  }
+
+  /** 守卫载荷边界校验（同步抛 400）：expectedOwnership 严禁 'human'。 */
+  private assertGuardShape(guard: GuardedMutationExpectation): void {
+    if (typeof guard !== 'object' || guard === null) {
+      throw new HelmError('validation_error', 'guarded mutation 需要 guard 对象', 400)
+    }
+    if (
+      guard.expectedOwnership !== undefined &&
+      guard.expectedOwnership !== 'bot' &&
+      guard.expectedOwnership !== 'helm'
+    ) {
+      throw new HelmError(
+        'validation_error',
+        `expectedOwnership 仅允许 'bot' | 'helm'（自动化红线严禁 human）：收到 ${String(guard.expectedOwnership)}`,
+        400,
+        { expectedOwnership: guard.expectedOwnership },
+      )
+    }
+    if (
+      guard.expectedStateSeq !== undefined &&
+      (!Number.isSafeInteger(guard.expectedStateSeq) || guard.expectedStateSeq < 0)
+    ) {
+      throw new HelmError(
+        'validation_error',
+        `expectedStateSeq 需为非负安全整数：收到 ${String(guard.expectedStateSeq)}`,
+        400,
+        { expectedStateSeq: guard.expectedStateSeq },
+      )
+    }
+  }
+
+  /**
+   * 守卫复核（同步、零 await）：会话存在性 + 归属（human 永远拒绝）+
+   * 可选 CAS 水位。调用方保证本复核与第一个不可逆动作（SDK abort/submit
+   * 调用）之间无任何事件循环让出——单线程内 markOwnership 无法插入，
+   * 这是 human 红线竞态窗口的真正关闭点。
+   */
+  assertMutationGuard(id: number, guard: GuardedMutationExpectation): void {
+    // getOwnership 对缺失/已删（tombstone）会话显式 not_found——显式目标
+    // 失效直接拒绝，绝不被缺省路由掩盖。
+    const ownedBy = this.o.ownershipOf(id)
+    if (ownedBy === 'human' || (guard.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
+      throw new HelmError(
+        'ownership_conflict',
+        `会话 ${id} 当前归属 ${ownedBy}${guard.expectedOwnership !== undefined ? `（期望 ${guard.expectedOwnership}）` : ''}，拒绝自动化变更（human 红线）`,
+        409,
+        {
+          conversationId: id,
+          currentOwnership: ownedBy,
+          ...(guard.expectedOwnership !== undefined ? { expectedOwnership: guard.expectedOwnership } : {}),
+        },
+      )
+    }
+    if (guard.expectedStateSeq !== undefined) {
+      const meta = this.store.getConv(id)
+      if (meta === undefined || this.store.isDeleted(id)) {
+        throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+      }
+      if (meta.stateChangeSeq !== guard.expectedStateSeq) {
+        throw new HelmError(
+          'state_seq_conflict',
+          `会话 ${id} 权威水位 ${meta.stateChangeSeq} 与期望 ${guard.expectedStateSeq} 不一致（探针事实已过期，不得作用于新回合）`,
+          409,
+          { conversationId: id, currentSeq: meta.stateChangeSeq, expectedSeq: guard.expectedStateSeq },
+        )
+      }
+    }
+  }
+
+  /**
+   * 自动化 guarded 中止：守卫复核与 SDK abort 调用（第一个不可逆动作）在
+   * 同一串行域内背靠背执行（零 await 间隔）；复核失败绝不发起中止。
+   * 普通 abortConversation 语义不变（人类/CLI 路径不绑定自动化守卫）。
+   */
+  async abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void> {
+    this.assertGuardShape(guard)
+    return this.withMutationGate(id, async () => {
+      const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
+      if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+      // 最终复核：与下方 abort 调用之间零 await（上方 await 窗口内的归属翻转在此拦截）。
+      this.assertMutationGuard(id, guard)
+      const wasBusy = this.tracker.hasLiveWork(id)
+      await conversation.abort(BACKGROUND_CONTEXT)
+      if (wasBusy) this.tracker.settleAborted(id)
+      this.o.evictHandledToolCalls(id)
+    })
+  }
+
+  /**
+   * 自动化 guarded 提交：入口同步快检（fail-fast，零副作用）后走完整输入管道；
+   * 钩子/模型解析等准备工作完成后，在提交点（SDK submit 调用前）原子复核
+   * （见 ConversationInputPipeline.submitFreshInput）。复核失败不产生提交副作用。
+   */
+  async submitInputGuarded(
+    id: number,
+    text: string,
+    opts?: SubmitInputOptions,
+    guard: GuardedMutationExpectation = {},
+  ): Promise<{ submissionId: string }> {
+    this.assertGuardShape(guard)
+    if (opts?.replaceFromEntryId !== undefined) {
+      throw new HelmError(
+        'validation_error',
+        '自动化 guarded 提交不支持 replaceFromEntryId（自动化不重写历史）',
+        400,
+        { conversationId: id, replaceFromEntryId: opts.replaceFromEntryId },
+      )
+    }
+    this.contextOps.assertOpen()
+    // 入口快检：任何持久副作用（钩子观察/标题派生/提交）之前拒绝。
+    this.assertMutationGuard(id, guard)
+    return this.submitInput(id, text, { ...opts, mutationGuard: guard })
   }
 
   // ------------------------------------------------------------------
@@ -510,6 +654,11 @@ export class ConversationService {
         ? await this.resolveAuthorizedAttachments(id, opts.attachments)
         : undefined
     const prepared = await this.inputPipeline.prepareInput(id, text, opts, initialAttachments)
+    // guarded 提交：钩子执行后、任何持久副作用（handled 接管返回/标题派生/
+    // 提交）之前复核；最终原子复核在提交点（submitFreshInput）执行。
+    if (opts?.mutationGuard !== undefined) {
+      this.assertMutationGuard(id, opts.mutationGuard)
+    }
     if (prepared.kind === 'handled') return { submissionId: prepared.submissionId }
 
     this.contextOps.assertOpen()
@@ -533,14 +682,21 @@ export class ConversationService {
         })
       })
     }
-    return this.inputPipeline.submitFreshInput(conversation, id, {
+    const freshSubmission = {
       finalInput: prepared.finalInput,
       finalWhenBusy: prepared.finalWhenBusy,
       effectiveText: prepared.effectiveText,
       resolvedAttachments: prepared.resolvedAttachments,
       content,
       requestId: opts?.requestId,
-    })
+      ...(opts?.mutationGuard !== undefined ? { mutationGuard: opts.mutationGuard } : {}),
+    }
+    if (opts?.mutationGuard !== undefined) {
+      // guarded 提交串行门：只覆盖「提交点复核 + SDK submit 调用」临界区，
+      // input 钩子在门外执行（钩子内再入 guarded 变更不会死锁）。
+      return this.withMutationGate(id, () => this.inputPipeline.submitFreshInput(conversation, id, freshSubmission))
+    }
+    return this.inputPipeline.submitFreshInput(conversation, id, freshSubmission)
   }
 
   // ------------------------------------------------------------------

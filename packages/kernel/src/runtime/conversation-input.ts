@@ -16,6 +16,7 @@ import type {
   ArtifactMetadata,
   ConversationAttachmentRef,
   ConversationInput,
+  GuardedMutationExpectation,
   WhenBusy,
 } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
@@ -37,6 +38,8 @@ export interface ConversationInputPipelineHost {
     conversationId: number,
     attachmentIds: readonly string[],
   ) => Promise<Array<{ ref: ConversationAttachmentRef; metadata: ArtifactMetadata; absPath: string }>>
+  /** guarded mutation 提交点复核（同步、零 await；宿主即 ConversationService.assertMutationGuard）。 */
+  readonly assertMutationGuard: (id: number, guard: GuardedMutationExpectation) => void
 }
 
 export type PreparedInputResult =
@@ -152,11 +155,18 @@ export class ConversationInputPipeline {
       resolvedAttachments: Array<{ ref: ConversationAttachmentRef; metadata: ArtifactMetadata; absPath: string }> | undefined
       content: string | Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>
       requestId: string | undefined
+      /** guarded mutation：提交点原子复核载荷（普通提交缺省）。 */
+      mutationGuard?: GuardedMutationExpectation
     },
   ): Promise<{ submissionId: string }> {
-    const { finalInput, finalWhenBusy, effectiveText, resolvedAttachments, content } = prepared
+    const { finalInput, finalWhenBusy, effectiveText, resolvedAttachments, content, mutationGuard } = prepared
     const key = this.host.tracker.registerInput(id, finalInput)
     try {
+      // 提交点最终复核：与下方 SDK submit 调用（第一个不可逆动作）之间零
+      // await——上方全部准备工作窗口内的归属翻转在此拦截，绝不产生提交。
+      if (mutationGuard !== undefined) {
+        this.host.assertMutationGuard(id, mutationGuard)
+      }
       const submission = await conversation.submit(
         {
           type: 'input',

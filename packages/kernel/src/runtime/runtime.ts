@@ -552,6 +552,24 @@ export class KernelRuntime {
     return this.conversations.abortConversation(id)
   }
 
+  /** 自动化 guarded 中止（Watchdog 红线内核执行层）：复核与 SDK abort 调用原子相邻。 */
+  async abortConversationGuarded(
+    id: number,
+    guard: Parameters<ConversationService['abortConversationGuarded']>[1],
+  ): Promise<void> {
+    return this.conversations.abortConversationGuarded(id, guard)
+  }
+
+  /** 自动化 guarded 提交：提交点原子复核归属/水位；失败 409/404 零提交副作用。 */
+  async submitInputGuarded(
+    id: number,
+    text: string,
+    opts?: Parameters<ConversationService['submitInput']>[2],
+    guard: Parameters<ConversationService['submitInputGuarded']>[3] = {},
+  ): Promise<{ submissionId: string }> {
+    return this.conversations.submitInputGuarded(id, text, opts, guard)
+  }
+
   async withdrawQueuedInput(id: number, opts: { submissionId: number }): Promise<ConversationWithdrawResponse> {
     return this.conversations.withdrawQueuedInput(id, opts)
   }
