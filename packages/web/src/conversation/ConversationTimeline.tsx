@@ -1146,7 +1146,8 @@ export function ConversationTimeline({
         scrollEl = matchedHeading
       }
     }
-    scrollEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    // 大纲定位：目标对齐到滚动区顶部（而非居中），便于从该条消息开始向下阅读
+    scrollEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
     setLocalHighlightEntryId(outlineScrollRequest.entryId)
     if (onActiveEntryChange !== undefined) {
       lastActiveEntryRef.current = outlineScrollRequest.entryId
