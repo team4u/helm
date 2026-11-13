@@ -15,15 +15,13 @@ import type { HelmHostApi } from '@helm/protocol'
 import type { HerdrNodeChannel, HerdrNodeEnv, HerdrPluginDependencies, HerdrTransport } from './contracts.js'
 import { createBlockedSnapshotAnalyzer } from './snapshot-analysis.js'
 
-/**
- * 公共端口 → 内部 HerdrNodeChannel 适配（生产唯一通道来源）：
- * - envFor = executionEnv（ExecutionEnv 结构满足 HerdrNodeEnv 的 Pick 子集）；
- * - nodeIpc.subscribe 宿主为必需端口（core 已类型化），通道透传。
- */
 export function nodeChannelFromHost(host: HelmHostApi): HerdrNodeChannel {
   return {
     isOnline: (nodeId) => host.nodeIpc.isOnline(nodeId),
     getNodeHubUrl: (nodeId) => host.nodeIpc.getNodeHubUrl?.(nodeId),
+    ...(host.nodeIpc.nodePlatform !== undefined
+      ? { nodePlatform: (nodeId: string) => host.nodeIpc.nodePlatform?.(nodeId) }
+      : {}),
     ipcCall: (nodeId, input, signal) => host.nodeIpc.call(nodeId, input, signal),
     envFor: (nodeId, cwd) => host.executionEnv(nodeId, cwd),
     ipcSubscribe: (nodeId, input, onLine, onClosed, signal) =>

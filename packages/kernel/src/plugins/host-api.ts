@@ -264,7 +264,8 @@ export function wrapHostApi(
       ensureSkill: (asset) => tracked('host.skills.ensureSkill', () => backend.skills.ensureSkill(asset, pluginId)),
     },
 
-    // 3. nodeIpc
+    // 3. nodeIpc（nodePlatform 为内核可选能力：NodeRegistry 可信平台上报，
+    // 缺席时插件侧远端平台未知，不猜不改写）。
     nodeIpc: backend.nodeIpc === undefined
       ? {
           isOnline: () => {
@@ -290,6 +291,14 @@ export function wrapHostApi(
                 getNodeHubUrl: (nodeId: string) => {
                   guard('host.nodeIpc.getNodeHubUrl');
                   return backend.nodeIpc!.getNodeHubUrl?.(nodeId);
+                },
+              }
+            : {}),
+          ...(backend.nodeIpc.nodePlatform !== undefined
+            ? {
+                nodePlatform: (nodeId: string): string | undefined => {
+                  guard('host.nodeIpc.nodePlatform');
+                  return backend.nodeIpc!.nodePlatform?.(nodeId);
                 },
               }
             : {}),

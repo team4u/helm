@@ -75,6 +75,11 @@ export class LocalNodeChannel implements HerdrNodeChannel {
     return undefined
   }
 
+  /** 本机节点即 Hub 宿主：平台就是 process.platform（cwd 规范化用）。 */
+  nodePlatform(nodeId: string): string | undefined {
+    return nodeId === 'local' ? process.platform : undefined
+  }
+
   async ipcCall(
     nodeId: string,
     input: { endpoint?: string; session?: string; line: string; timeoutMs?: number },

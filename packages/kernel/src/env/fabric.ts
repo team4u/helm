@@ -138,6 +138,12 @@ export interface EnvFabric {
   /** 节点注册时上报的 hubUrl（远端受管子进程回连地址守恒）。 */
   getNodeHubUrl(nodeId: string): string | undefined
   /**
+   * 节点平台（process.platform 口径）的最小只读端口：local 恒 Hub 宿主；
+   * 远端仅取注册登记值（未上报或离线返回 undefined）。调用方据此做目标
+   * 平台感知的路径规范化——平台未知时不猜、不 fallback Hub 宿主平台。
+   */
+  nodePlatformOf(nodeId: string): string | undefined
+  /**
    * 文件互斥队列（目标节点 canonical 路径串行）：在 (nodeId, cwd) 靶点内把
    * fn 的读-改-写窗口与内核 write/edit 工具排同一队列（同文件不丢更新；
    * 其他文件/节点互不等待；软链别名同 key；新文件按 canonical 父目录拼接）。
@@ -375,6 +381,14 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
     getNodeHubUrl(nodeId: string): string | undefined {
       if (nodeId === 'local') return undefined
       return registry.get(nodeId)?.hubUrl
+    },
+
+    nodePlatformOf(nodeId: string): string | undefined {
+      // local 与 Hub 同进程；远端仅取注册登记 platform（未上报/离线 →
+      // undefined，由调用方按「平台未知」语义处理，绝不代猜）。
+      if (nodeId === 'local') return process.platform
+      const platform = registry.get(nodeId)?.platform
+      return platform === undefined || platform === '' ? undefined : platform
     },
 
     async openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex> {

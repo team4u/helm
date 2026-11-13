@@ -70,7 +70,7 @@ export type PluginHostBackend = Omit<HelmHostApi, 'manageConversation' | 'skills
   skills: Omit<HelmHostApi['skills'], 'ensureSkill'> & {
     ensureSkill(asset: PluginSkillAsset, pluginId: string): Promise<void>;
   };
-  /** 节点 IPC 机制端口（EnvFabric 通道；测试宿主未提供时调用显式报 501，不静默降级）。 */
+  /** 节点 IPC 机制端口（EnvFabric 通道；测试宿主未提供时调用显式报 501，不静默降级）。nodePlatform 为 NodeRegistry 注册上报的可信节点平台，缺席即未知。 */
   nodeIpc?: HelmHostNodeIpcPort;
   /** 节点本机 HTTP fetch 端口（EnvFabric.nodeFetch；未接线时调用显式报 501，不回退 local）。 */
   nodeFetch?: HelmHostNodeFetchPort;

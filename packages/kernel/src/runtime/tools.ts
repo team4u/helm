@@ -21,6 +21,14 @@
  *   规则解析远端路径（Linux Hub 上 resolve('C:\\workspace') 会得到错误结果，
  *   Windows/mac/Linux 跨平台承诺即不成立）；盘符相对路径（C:relative）语义
  *   依赖进程当前目录，一律显式拒绝。
+ * - 目标节点平台感知的 cwd/path 规范化（唯一实现 runtime/target-platform.ts，
+ *   复用 @helm/protocol normalizeTargetPath/targetPlatformOf 原语，业务入口
+ *   不得各自另写规则）：local 用 Hub 宿主 process.platform，远端仅用
+ *   EnvFabric.nodePlatformOf 登记平台（未知则原样透传，不猜、不 fallback
+ *   local）；win32 目标上 WSL / Git Bash 的 POSIX 视图确定性转规范 Windows
+ *   路径，无法映射的裸 POSIX 根显式 invalid_path 并保留原始路径；
+ *   Linux/macOS 与远端 POSIX 语义不变；SDK NodeExecutionEnv / Remote 执行
+ *   只接收已规范化路径。
  * - env 注入（唯一权威在 env/scoped-env.ts 的 ScopedExecutionEnv）：local
  *   继承 process.env（真实 PATH/HOME）并剥除受管 HELM_* 变量（大小写
  *   不敏感），受管变量（HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID /
@@ -62,7 +70,13 @@ import { mkdir, open, readFile, realpath, stat, writeFile } from 'node:fs/promis
 import { composeExecutionEnv } from '../env/scoped-env.js'
 import { envWithFileMutationQueue, localWithFileMutationQueue } from '../env/file-mutation-queue.js'
 import { redactJsonValue } from '../redact.js'
-import { isAbsoluteTargetPath, targetPathShape } from '@helm/protocol'
+import {
+  isAbsoluteTargetPath,
+  normalizeTargetPath,
+  targetPathShape,
+  type TargetPlatform,
+} from '@helm/protocol'
+import { invalidPathText, normalizePathForTarget, targetPlatformForNode } from './target-platform.js'
 import type { HelmToolDeps } from './tool-deps.js'
 
 // 形状判定与词法规则子集（normalize/join/dirname/basename）已收口
@@ -91,10 +105,28 @@ function nodePathForShape(shape: 'posix' | 'win32' | undefined): typeof posix | 
  * 按目标形状解析绝对路径：base（会话 cwd）仅作相对路径基准，绝对路径与
  * ../ 跨目录均合法；盘符相对路径（C:relative / 裸 C:）一律拒绝（依赖进程
  * cwd，语义不可预测）。
+ *
+ * platform === 'win32'（目标节点平台已知为 Windows）：base 与绝对 raw 先经
+ * protocol normalizeTargetPath 做确定性规范化（WSL /mnt/<盘符>、Git Bash
+ * /<盘符>、//server/share POSIX 视图转规范 Windows 路径；无法映射的裸
+ * POSIX 根显式拒绝并保留原始路径），再按 win32 规则解析相对段。platform
+ * 缺省（远端平台未知）：沿用按形状选规则的既有语义（不猜平台），
+ * Linux/macOS 与远端 POSIX 语义不变。
  */
-export function resolveTargetPath(raw: string, base: string): { ok: true; abs: string } | { ok: false; reason: string } {
+export function resolveTargetPath(
+  raw: string,
+  base: string,
+  platform?: TargetPlatform,
+): { ok: true; abs: string } | { ok: false; reason: string } {
   if (WINDOWS_DRIVE.test(raw) && WINDOWS_DRIVE_RELATIVE.test(raw)) {
     return { ok: false, reason: `盘符相对路径依赖进程当前目录，拒绝：${raw}` }
+  }
+  if (platform === 'win32') {
+    const baseN = normalizeTargetPath(base, 'win32')
+    if (!baseN.ok) return { ok: false, reason: baseN.reason }
+    const rawN = isAbsoluteTargetPath(raw) ? normalizeTargetPath(raw, 'win32') : undefined
+    if (rawN !== undefined && !rawN.ok) return { ok: false, reason: rawN.reason }
+    return { ok: true, abs: win32.resolve(baseN.path, rawN !== undefined ? rawN.path : raw) }
   }
   const shape = targetPathShape(raw) ?? targetPathShape(base)
   const rules = nodePathForShape(shape)
@@ -164,7 +196,7 @@ export async function runShell(
     env?: Record<string, string>
   } = {},
 ): Promise<ShellRunResult> {
-  const cwd = options.cwd ?? deps.defaultCwd
+  const requestedCwd = options.cwd ?? deps.defaultCwd
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   assertTimeoutMs(timeoutMs)
   const maxOutputBytes = options.maxOutputBytes ?? MAX_OUTPUT_BYTES
@@ -179,6 +211,25 @@ export async function runShell(
     const base = deps.redact(text)
     return hostToken !== undefined && hostToken !== '' ? base.split(hostToken).join('[REDACTED]') : base
   }
+  // 目标平台感知的 cwd 规范化（唯一入口 normalizePathForTarget，复用
+  // protocol 原语）：local 用 Hub 宿主平台，远端仅用 EnvFabric 注册登记
+  // 平台（未知则原样透传，不猜、不 fallback local）；win32 目标上 WSL /
+  // Git Bash 的 POSIX 视图转换为规范 Windows 路径，无法映射的裸 POSIX 根
+  // 显式 invalid_path（保留原始路径）。SDK NodeExecutionEnv / Remote 执行
+  // 只接收已规范化路径（bash / runGate / POST /api/env/exec 与
+  // WorktreeAllocator execGit 均经本函数收敛，不得各自另写规则）。
+  const platformInfo = targetPlatformForNode(deps.envFabric, nodeId)
+  const cwdNorm = normalizePathForTarget(requestedCwd, platformInfo)
+  if (!cwdNorm.ok) {
+    return {
+      ok: false,
+      exitCode: null,
+      output: redactAll(invalidPathText(cwdNorm)),
+      timedOut: false,
+      signal: null,
+    }
+  }
+  const cwd = cwdNorm.path
   // 远端节点：经 EnvFabric 的 RemoteExecutionEnv 执行（绝不回退 local）；
   // 配置缺失（envFabric 未注入）与节点离线分别显式失败，绝不 fallthrough local。
   if (nodeId !== 'local') {
@@ -506,6 +557,10 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
       // 错误结果）；api.agent 与工具共享同一 SDK Context（cancel 传播到远端）。
       const sessionId = agent.cwd ?? deps.defaultCwd
       const nodeId = deps.nodeIdOf?.(api.conversationId as number) ?? 'local'
+      // 平台感知解析（与 bash 同一平台来源与原语）：远端平台未知时沿用按
+      // 形状选规则的既有语义（不猜平台）；win32 目标上 POSIX 视图路径
+      // 先确定性转换为规范 Windows 路径，无法映射的裸 POSIX 根显式拒绝。
+      const platformInfo = targetPlatformForNode(deps.envFabric, nodeId)
       if (!isAbsoluteTargetPath(sessionId)) {
         return {
           output: [
@@ -514,7 +569,11 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
           isError: true,
         }
       }
-      const resolvedR = resolveTargetPath(raw, sessionId)
+      const resolvedR = resolveTargetPath(
+        raw,
+        sessionId,
+        platformInfo.known ? platformInfo.platform : undefined,
+      )
       if (!resolvedR.ok) {
         return { output: [{ type: 'text', text: `invalid_path: ${resolvedR.reason}` }], isError: true }
       }
@@ -667,14 +726,16 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
 }
 
 /**
- * write/edit 共享：解析会话靶点 (nodeId, cwd)。
- * 会话 cwd 按其自身形状（POSIX/Windows）保留原样，绝不用 Hub 宿主 resolve
- * 污染（远端节点可能是 Windows 靶点，Hub 在 Linux 上 resolve 会得到错误结果）。
+ * write/edit 共享：解析会话靶点 (nodeId, cwd, platform)。会话 cwd 按其
+ * 自身形状（POSIX/Windows）保留原样，绝不用 Hub 宿主 resolve 污染（远端
+ * 节点可能是 Windows 靶点，Hub 在 Linux 上 resolve 会得到错误结果）；
+ * platform 为目标节点平台（远端未知时 undefined，按形状选规则——与
+ * bash/runShell 的平台来源同一原语，不在此另写规则）。
  */
 function resolveToolTarget(
   deps: HelmToolDeps,
   api: { agent(cwd: unknown): Promise<{ cwd?: string }>; conversationId: number | string },
-): { nodeId: string; base: string } | { error: string } {
+): { nodeId: string; base: string; platform: TargetPlatform | undefined } | { error: string } {
   // 同步取 agent cwd：read/write/edit 的 makeApi 测试替身与 SDK 契约均为
   // Promise<agent>；resolveToolTarget 改为 async 后由调用方 await。
   return (async () => {
@@ -684,7 +745,12 @@ function resolveToolTarget(
       return { error: `会话 cwd 非绝对路径（${base}），拒绝文件操作` }
     }
     const nodeId = deps.nodeIdOf?.(api.conversationId as number) ?? 'local'
-    return { nodeId, base }
+    const platformInfo = targetPlatformForNode(deps.envFabric, nodeId)
+    return {
+      nodeId,
+      base,
+      platform: platformInfo.known ? platformInfo.platform : undefined,
+    }
   })() as never
 }
 
@@ -707,9 +773,10 @@ async function resolveWritableTarget(
   },
   raw: string,
   base: string,
+  platform: TargetPlatform | undefined,
   context: Context,
 ): Promise<{ ok: true; abs: string } | { ok: false; message: string }> {
-  const resolvedR = resolveTargetPath(raw, base)
+  const resolvedR = resolveTargetPath(raw, base, platform)
   if (!resolvedR.ok) return { ok: false, message: `invalid_path: ${resolvedR.reason}` }
   const absolute = resolvedR.abs
   const targetRealR = await env.canonicalPath(absolute, context)
@@ -749,7 +816,7 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
       if ('error' in target0) {
         return { output: [{ type: 'text', text: `write_failed: ${target0.error}` }], isError: true }
       }
-      const { nodeId, base } = target0
+      const { nodeId, base, platform } = target0
       try {
         const onWriteSuccess = async (targetAbs: string, bytes: number) => {
           if (args.artifact === true) {
@@ -808,7 +875,7 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
             }
           }
           const env = deps.envFabric.envFor(nodeId, base)
-          const target = await resolveWritableTarget(env, args.path, base, context)
+          const target = await resolveWritableTarget(env, args.path, base, platform, context)
           if (!target.ok) {
             return { output: [{ type: 'text', text: target.message }], isError: true }
           }
@@ -846,6 +913,7 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
           },
           args.path,
           base,
+          platform,
           context,
         )
         if (!target.ok) {
@@ -899,7 +967,7 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
       if ('error' in target0) {
         return { output: [{ type: 'text', text: `edit_failed: ${target0.error}` }], isError: true }
       }
-      const { nodeId, base } = target0
+      const { nodeId, base, platform } = target0
       try {
         if (nodeId !== 'local') {
           if (deps.envFabric === undefined) {
@@ -920,7 +988,7 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
             }
           }
           const env = deps.envFabric.envFor(nodeId, base)
-          const target = await resolveWritableTarget(env, args.path, base, context)
+          const target = await resolveWritableTarget(env, args.path, base, platform, context)
           if (!target.ok) {
             return { output: [{ type: 'text', text: target.message }], isError: true }
           }
@@ -975,6 +1043,7 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
           },
           args.path,
           base,
+          platform,
           context,
         )
         if (!target.ok) {

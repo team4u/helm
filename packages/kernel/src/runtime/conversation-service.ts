@@ -41,6 +41,7 @@ import { ConversationDetailService } from './conversation-detail.js'
 import { ConversationInputPipeline } from './conversation-input.js'
 import { ConversationProfileService } from './conversation-profile.js'
 import { ConversationRewind, type RewindNewInput } from './conversation-rewind.js'
+import { normalizeSessionCwd, trustedPlatformFromEnvFabric, type TrustedNodePlatformSource } from './target-cwd.js'
 
 export interface ConversationServiceOptions {
   readonly harness: Harness
@@ -79,6 +80,11 @@ export interface ConversationServiceOptions {
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
   /** 模型禁用预检（ModelRegistry.assertModelEnabled；禁用模型拒绝选用与提交）。 */
   readonly assertModelEnabled: (provider: string, modelId: string) => void
+  /**
+   * 可信节点平台来源（EnvFabric.registry 上报；缺省仅 local 可解析）。
+   * create/update cwd 按目标节点平台规范化用（见 runtime/target-cwd.ts）。
+   */
+  readonly trustedPlatformOf?: TrustedNodePlatformSource
 }
 
 /** 提交输入的可选参数（HTTP/CLI/内部同构）。 */
@@ -423,11 +429,15 @@ export class ConversationService {
       init.nodeId ?? profile?.nodeId ?? parentMeta?.nodeId ?? 'local'
 
     const inheritedCwd = init.cwd ?? profile?.cwd ?? parentMeta?.cwd
+    /** cwd 按目标节点平台统一收口（词法规范化；零磁盘访问；坏 POSIX cwd 不落库）。 */
+    const platformSource = this.o.trustedPlatformOf ?? trustedPlatformFromEnvFabric(undefined)
+    const normalizeCwd = (raw: string): string =>
+      normalizeSessionCwd(raw, { nodeId, trustedPlatform: platformSource, entry: 'conversation.create' })
     let effectiveCwd: string
     if (inheritedCwd !== undefined) {
-      effectiveCwd = inheritedCwd
+      effectiveCwd = normalizeCwd(inheritedCwd)
     } else if (nodeId === 'local') {
-      effectiveCwd = this.o.toolDeps.defaultCwd
+      effectiveCwd = normalizeCwd(this.o.toolDeps.defaultCwd)
     } else {
       throw new HelmError(
         'validation_error',
@@ -517,8 +527,21 @@ export class ConversationService {
       ? clampThinkingLevelForModel(this.o.models(), effectiveRef, nextThinkingOverride)
       : nextThinkingOverride
     const nextThinking = await this.resolveEffectiveThinkingLevel(clampedOverride, nextProfileId, effectiveRef)
+    // 显式 cwd，或 nodeId 迁移时的既有 cwd，均按新目标节点平台统一收口，
+    // 再进入 SDK configure 与镜像持久化；坏 POSIX cwd 显式拒绝。
+    const nextNodeId = patch.nodeId ?? meta.nodeId
+    const cwdToNormalize =
+      patch.cwd !== undefined ? patch.cwd : patch.nodeId !== undefined ? meta.cwd : undefined
+    const effectivePatchCwd =
+      cwdToNormalize === undefined
+        ? undefined
+        : normalizeSessionCwd(cwdToNormalize, {
+            nodeId: nextNodeId,
+            trustedPlatform: this.o.trustedPlatformOf ?? trustedPlatformFromEnvFabric(undefined),
+            entry: 'conversation.update',
+          })
     const configureChange: AgentChange = {
-      ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
+      ...(effectivePatchCwd !== undefined ? { cwd: effectivePatchCwd } : {}),
       model: effectiveRef ?? null,
       thinkingLevel: (nextThinking as ModelThinkingLevel | undefined) ?? null,
     }
@@ -532,7 +555,7 @@ export class ConversationService {
       ...(patch.profileId !== undefined ? { profileId: patch.profileId } : {}),
       ...(patch.tags !== undefined ? { tags: patch.tags } : {}),
       ...(patch.nodeId !== undefined ? { nodeId: patch.nodeId } : {}),
-      ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
+      ...(effectivePatchCwd !== undefined ? { cwd: effectivePatchCwd } : {}),
       model: effectiveModel ?? '',
       thinkingLevel: nextThinking ?? '',
       thinkingLevelOverride: clampedOverride,

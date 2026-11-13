@@ -21,7 +21,7 @@
  */
 
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helm/protocol'
+import { HelmError, targetPlatformOf, type AgentExecutionInfo, type AgentSpawnRequest, type TargetPlatform } from '@helm/protocol'
 import type { CreateAskResultLike, CreateAskSpecLike, HerdrPluginDependencies, HerdrTarget } from './contracts.js'
 import { targetNodeId } from './contracts.js'
 import { validateOrThrow } from '@helm/protocol'
@@ -201,8 +201,10 @@ export class HerdrExecutor {
     if (existing === undefined) {
       // 新窗格：cwd 解析链 request.cwd > profile.workspace > 父 cwd；
       // 链尾无真实 cwd 时显式拒绝（绝不猜进程 cwd，更不让远端窗格默认落 Hub 目录）。
+      // 解析后按目标节点平台统一收口（local = process.platform；远端仅信
+      // NodeRegistry 注册上报，无可信信息则透传不改写）。
       const parentCwd = this.parentCwdOrThrow(request.parentConversationId)
-      const cwd = resolveCwd(request.cwd, routing, parentCwd)
+      const cwd = resolveCwd(request.cwd, routing, parentCwd, this.platformOfTarget(target))
       if (cwd === '') {
         throw new HelmError(
           'validation_error',
@@ -241,6 +243,18 @@ export class HerdrExecutor {
   private parentNodeIdOrThrow(parentConversationId: number): string | undefined {
     // 宿主可能复用同一 getConversation 调用；错误语义由实现保证如实。
     return this.host.parentNodeIdOf(parentConversationId)
+  }
+
+  /**
+   * 目标节点平台解析（cwd 规范化用）：本机目标 = process.platform；远端
+   * 仅信节点通道上报的注册事实（NodeRegistry platform），无上报 = undefined
+   * （不猜：透传不改写）。
+   */
+  private platformOfTarget(target: HerdrTarget): TargetPlatform | undefined {
+    const nodeId = targetNodeId(target)
+    if (nodeId === undefined) return targetPlatformOf(process.platform)
+    const raw = this.deps.nodeChannel?.nodePlatform?.(nodeId)
+    return raw !== undefined && raw !== '' ? targetPlatformOf(raw) : undefined
   }
 
   /** 建窗并登记（含 worktree 两步 + 中途失败回收已创建资源）。 */
