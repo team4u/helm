@@ -6265,6 +6265,10 @@ input[type="search"]::-moz-search-clear-button {
   color: var(--fg);
 }
 
+.conversation-outline-popover[data-state='closed'] {
+  display: none;
+}
+
 .conversation-outline-popover {
   width: min(360px, calc(100vw - 20px));
   max-height: min(460px, 72dvh);

@@ -182,6 +182,52 @@ function previewPanel(): HTMLElement | null {
 // 测试用例
 // ---------------------------------------------------------------------------
 
+test('Markdown 富文本预览复用会话大纲：显示章节数量并精确滚动到标题', { timeout: 60_000 }, async () => {
+  installObjectUrlShim()
+  const markdown = makeArtifact(
+    'art-outline',
+    new TextEncoder().encode('# 总览\n\n正文\n\n## 安装\n\n安装步骤\n\n### 验证\n\n验证步骤'),
+    'guide.md',
+    'text/markdown',
+  )
+  installArtifactFetch([markdown])
+  const store = buildStore({ artifacts: [markdown] })
+
+  resetBody()
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = mount(host, store, 'art-outline', 7)
+  await flush()
+
+  const trigger = document.querySelector<HTMLButtonElement>('.conversation-outline-trigger')
+  assert.ok(trigger !== null, 'Markdown 预览应显示大纲按钮')
+  assert.match(trigger.textContent ?? '', /3/, '大纲角标应显示章节数量')
+
+  await act(async () => { trigger.click() })
+  const options = [...document.querySelectorAll<HTMLButtonElement>('.conversation-outline-item')]
+  assert.equal(options.length, 3, 'Markdown 大纲只显示 H1~H3 章节，不显示会话提问切换')
+  const installOption = options.find((option) => (option.textContent ?? '').includes('安装'))
+  assert.ok(installOption !== undefined, '大纲应包含安装章节')
+
+  const scrolled: HTMLElement[] = []
+  const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+  HTMLElement.prototype.scrollIntoView = function () {
+    scrolled.push(this)
+  }
+  try {
+    await act(async () => { installOption!.click() })
+    const lastScrolled = scrolled.at(-1)
+    assert.ok(lastScrolled !== undefined, '点击章节应触发滚动')
+    assert.equal(lastScrolled.tagName.toLowerCase(), 'h2')
+    assert.equal(lastScrolled.dataset.headingIndex, '1')
+  } finally {
+    HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+  }
+
+  act(() => root.unmount())
+  resetBody()
+})
+
 test('client 轨插件预览器：真实 Props（会话上下文 / blobUrl / size / text）并保留默认切换', { timeout: 60_000 }, async (t) => {
   const received: ArtifactPreviewerProps[] = []
   seedPluginClientModule('demo:csv', 'csv.tsx', {

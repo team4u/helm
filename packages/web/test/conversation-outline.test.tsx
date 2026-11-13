@@ -7,6 +7,7 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
 import {
   buildConversationOutline,
+  buildMarkdownOutline,
   countOutlineTurns,
   extractMarkdownHeadings,
   filterOutlineNodes,
@@ -50,6 +51,14 @@ test('stripInlineMarkdown 与 summarizeHumanOutlineText：清理行内格式、�
   assert.equal(summarizeHumanOutlineText(''), '（空消息）')
 })
 
+test('buildMarkdownOutline：为 Markdown H1~H3 生成稳定定位节点', { timeout: 60_000 }, () => {
+  assert.deepEqual(buildMarkdownOutline('# 总览\n\n## 安装\n\n### 验证\n#### 细节'), [
+    { kind: 'heading', key: 'outline:markdown:0', entryId: 'markdown-preview', headingIndex: 0, level: 1, text: '总览' },
+    { kind: 'heading', key: 'outline:markdown:1', entryId: 'markdown-preview', headingIndex: 1, level: 2, text: '安装' },
+    { kind: 'heading', key: 'outline:markdown:2', entryId: 'markdown-preview', headingIndex: 2, level: 3, text: '验证' },
+  ])
+})
+
 test('extractMarkdownHeadings：提取 H1~H3 并严格跳过代码块围栏内的 # 注释', { timeout: 60_000 }, () => {
   const md = [
     '# 架构总览',
@@ -63,6 +72,7 @@ test('extractMarkdownHeadings：提取 H1~H3 并严格跳过代码块围栏内�
     '## python comment',
     '~~~',
     '### 1. 状态机设计 ###',
+    '> ### 引用中的章节',
     '#### H4 粒度过细不提取',
   ].join('\n')
 
@@ -71,6 +81,7 @@ test('extractMarkdownHeadings：提取 H1~H3 并严格跳过代码块围栏内�
     { level: 1, text: '架构总览' },
     { level: 2, text: '核心模块 kernel' },
     { level: 3, text: '1. 状态机设计' },
+    { level: 3, text: '引用中的章节' },
   ])
 })
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { HelmIcon } from '../lib/icons.js'
 import { formatMessageTime } from '../lib/format.js'
-import { Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '../ui/Popover.js'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/Popover.js'
 import {
   countOutlineTurns,
   filterOutlineNodes,
@@ -11,12 +11,31 @@ import {
 export interface OutlineJumpTarget {
   entryId: string
   headingIndex?: number
+  nodeKey?: string
 }
 
 export interface ConversationOutlinePopoverProps {
   nodes: ReadonlyArray<OutlineNode>
   /** 当前视口阅读位置对应的激活 entryId。 */
   activeEntryId?: string
+  /** 当前大纲节点的唯一 key；文档大纲使用它区分同一 entryId 下的不同标题。 */
+  activeNodeKey?: string
+  /** 触发按钮文案，默认「大纲」。 */
+  triggerLabel?: string
+  /** 触发按钮标题，默认显示会话轮数。 */
+  triggerTitle?: string
+  /** 触发按钮角标数量，未传时使用人类提问轮数。 */
+  badgeCount?: number
+  /** 搜索框占位文案。 */
+  searchPlaceholder?: string
+  /** 浮层与搜索框的无障碍名称。 */
+  accessibilityLabel?: string
+  /** 是否显示「全部 / 仅提问」切换，文档大纲不需要该切换。 */
+  showModeToggle?: boolean
+  /** 是否通过 Portal 渲染浮层；Dialog 内嵌使用 false 避免落到模态层外。 */
+  portalled?: boolean
+  /** 是否强制挂载浮层内容；嵌套 Dialog 中可避免 Radix Presence 首次打开丢失内容。 */
+  forceMount?: boolean
   /** 是否存在更早的未加载历史分页。 */
   hasEarlierHistory?: boolean
   loadingEarlierHistory?: boolean
@@ -33,6 +52,15 @@ export interface ConversationOutlinePopoverProps {
 export function ConversationOutlinePopover({
   nodes,
   activeEntryId,
+  activeNodeKey,
+  triggerLabel = '大纲',
+  triggerTitle,
+  badgeCount,
+  searchPlaceholder = '搜索提问或章节标题…',
+  accessibilityLabel = '会话大纲',
+  showModeToggle = true,
+  portalled = true,
+  forceMount,
   hasEarlierHistory = false,
   loadingEarlierHistory = false,
   onLoadEarlierHistory,
@@ -46,6 +74,7 @@ export function ConversationOutlinePopover({
   const listRef = useRef<HTMLDivElement | null>(null)
 
   const turnCount = useMemo(() => countOutlineTurns(nodes), [nodes])
+  const displayCount = badgeCount ?? turnCount
   const hasAnyHeadings = useMemo(() => nodes.some((n) => n.kind === 'heading'), [nodes])
 
   const filtered = useMemo(
@@ -58,6 +87,13 @@ export function ConversationOutlinePopover({
     if (!open) {
       setQuery('')
       return
+    }
+    if (activeNodeKey !== undefined) {
+      const idx = filtered.findIndex((n) => n.key === activeNodeKey)
+      if (idx >= 0) {
+        setSelectedIdx(idx)
+        return
+      }
     }
     if (activeEntryId !== undefined) {
       const idx = filtered.findIndex((n) => n.entryId === activeEntryId)
@@ -87,6 +123,7 @@ export function ConversationOutlinePopover({
     setOpen(false)
     onSelectTarget({
       entryId: node.entryId,
+      nodeKey: node.key,
       ...(node.kind === 'heading' ? { headingIndex: node.headingIndex } : {}),
     })
   }
@@ -112,36 +149,37 @@ export function ConversationOutlinePopover({
         <button
           type="button"
           className={`btn btn-sm conversation-outline-trigger${open ? ' is-open' : ''}`}
-          aria-label="会话大纲导航"
-          title={`会话大纲导航（共 ${turnCount} 轮提问）`}
+          aria-label={`${accessibilityLabel}导航`}
+          title={triggerTitle ?? `会话大纲导航（共 ${turnCount} 轮提问）`}
         >
           <HelmIcon name="list-tree" size={12} />
-          <span className="pane-action-label">大纲</span>
-          {turnCount > 0 ? (
-            <span className="badge badge-neutral tabular-nums">{turnCount}</span>
+          <span className="pane-action-label">{triggerLabel}</span>
+          {displayCount > 0 ? (
+            <span className="badge badge-neutral tabular-nums">{displayCount}</span>
           ) : null}
         </button>
       </PopoverTrigger>
-      <PopoverPortal>
-        <PopoverContent
-          align="end"
-          sideOffset={6}
-          className="conversation-outline-popover"
-          aria-label="会话大纲"
-          onOpenAutoFocus={(e) => {
-            e.preventDefault()
-            searchInputRef.current?.focus()
-          }}
-          onKeyDown={handleKeyDown}
-        >
+      <PopoverContent
+        portalled={portalled}
+        forceMount={forceMount ? true : undefined}
+        align="end"
+        sideOffset={6}
+        className="conversation-outline-popover"
+        aria-label={accessibilityLabel}
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          searchInputRef.current?.focus()
+        }}
+        onKeyDown={handleKeyDown}
+      >
           <div className="conversation-outline-header">
             <div className="search-box conversation-outline-search">
               <HelmIcon name="search" size={13} />
               <input
                 ref={searchInputRef}
                 type="text"
-                aria-label="筛选会话大纲"
-                placeholder="搜索提问或章节标题…"
+                aria-label={`筛选${accessibilityLabel}`}
+                placeholder={searchPlaceholder}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -160,7 +198,7 @@ export function ConversationOutlinePopover({
                 </button>
               ) : null}
             </div>
-            {hasAnyHeadings ? (
+            {hasAnyHeadings && showModeToggle ? (
               <div className="segmented-control conversation-outline-mode" role="group" aria-label="大纲层级切换">
                 <button
                   type="button"
@@ -204,7 +242,9 @@ export function ConversationOutlinePopover({
             ) : (
               filtered.map((node, idx) => {
                 const isSelected = idx === selectedIdx
-                const isActive = activeEntryId !== undefined && node.entryId === activeEntryId
+                const isActive = activeNodeKey !== undefined
+                  ? node.key === activeNodeKey
+                  : activeEntryId !== undefined && node.entryId === activeEntryId
 
                 if (node.kind === 'divider') {
                   return (
@@ -275,8 +315,7 @@ export function ConversationOutlinePopover({
               })
             )}
           </div>
-        </PopoverContent>
-      </PopoverPortal>
+      </PopoverContent>
     </Popover>
   )
 }

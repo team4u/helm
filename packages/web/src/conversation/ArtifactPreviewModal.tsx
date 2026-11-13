@@ -6,6 +6,8 @@ import { useHelmStore } from '../lib/store-context.js'
 import { useIsMobile } from './composer-model.js'
 import { detectLanguage } from './code-language.js'
 import { CodeBlockView, MarkdownView } from './MarkdownView.js'
+import { MarkdownOutlinePopover } from './MarkdownOutlinePopover.js'
+import { buildMarkdownOutline, resolveActiveOutlineEntryId } from './outline-model.js'
 import { CopyButton } from './CopyButton.js'
 import { formatBytes } from '../lib/format.js'
 import { Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
@@ -67,6 +69,9 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
   const [textState, setTextState] = useState<'idle' | 'decoding' | 'exceeded' | 'binary'>('idle')
   const [previewer, setPreviewer] = useState<PreviewerChoice | null>(null)
   const [desktopFullscreen, setDesktopFullscreen] = useState(false)
+  const [activeMarkdownHeading, setActiveMarkdownHeading] = useState<number | undefined>(undefined)
+  const modalBodyRef = useRef<HTMLDivElement | null>(null)
+  const markdownPreviewRef = useRef<HTMLDivElement | null>(null)
   // 移动端固定全屏呈现：小窗模式下标题栏按钮拥挤错位，且滚动区域过于局促。
   const isMobile = useIsMobile(680)
   const isFullscreen = isMobile || desktopFullscreen
@@ -199,6 +204,45 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
   const markdown = isMarkdown(meta?.name, mime)
   // Markdown 源码模式固定 markdown 高亮；其他文本产物按后缀 / mimeType 推导语言。
   const language = markdown ? 'markdown' : detectLanguage(meta?.name, mime)
+  const markdownOutline = useMemo(
+    () => markdown && text !== null ? buildMarkdownOutline(text) : [],
+    [markdown, text],
+  )
+
+  useEffect(() => {
+    setActiveMarkdownHeading(undefined)
+  }, [artifactId, text])
+
+  useEffect(() => {
+    if (!markdown || view !== 'rich' || selected !== undefined || markdownOutline.length === 0) return
+    const scrollContainer = modalBodyRef.current
+    const content = markdownPreviewRef.current
+    if (scrollContainer === null || content === null) return
+
+    const syncActiveHeading = (): void => {
+      const containerTop = scrollContainer.getBoundingClientRect().top
+      const offsets: Array<{ entryId: string; top: number }> = []
+      for (const heading of content.querySelectorAll<HTMLElement>('[data-heading-index]')) {
+        const index = heading.dataset.headingIndex
+        if (index !== undefined) {
+          offsets.push({ entryId: index, top: heading.getBoundingClientRect().top - containerTop })
+        }
+      }
+      const active = resolveActiveOutlineEntryId(offsets, 48)
+      setActiveMarkdownHeading(active !== undefined ? Number(active) : undefined)
+    }
+
+    syncActiveHeading()
+    scrollContainer.addEventListener('scroll', syncActiveHeading, { passive: true })
+    return () => scrollContainer.removeEventListener('scroll', syncActiveHeading)
+  }, [markdown, view, selected, markdownOutline.length, text])
+
+  const jumpToMarkdownHeading = (headingIndex: number): void => {
+    const target = markdownPreviewRef.current?.querySelector<HTMLElement>(`[data-heading-index="${headingIndex}"]`)
+    if (target === null || target === undefined) return
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    setActiveMarkdownHeading(headingIndex)
+  }
 
   const download = (): void => {
     void artifactsApi.downloadToBrowser(artifactId, name).catch((error: unknown) => store.pushNotice({ type: 'notification', level: 'error', title: '下载失败', body: error instanceof Error ? error.message : String(error) }))
@@ -243,6 +287,13 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
                 ]}
               />
             ) : null}
+            {markdown && effectivePreviewer === 'default' && view === 'rich' && markdownOutline.length > 0 ? (
+              <MarkdownOutlinePopover
+                text={text ?? ''}
+                activeHeadingIndex={activeMarkdownHeading}
+                onSelectHeading={jumpToMarkdownHeading}
+              />
+            ) : null}
             {markdown && effectivePreviewer === 'default' ? (
               <SegmentedControl<'rich' | 'source'>
                 value={view}
@@ -284,7 +335,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
             </DialogClose>
           </span>
         </div>
-        <div className="modal-body">
+        <div className="modal-body" ref={modalBodyRef}>
           {state.phase === 'loading' ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--fg-muted)', fontSize: 12, padding: 24, justifyContent: 'center' }}>
               <HelmIcon name="loader" size={14} className="spin-slow" />
@@ -355,7 +406,9 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
                 文本内容超过 {formatBytes(MAX_PREVIEW_TEXT_BYTES)} 预览上限，已停止解码。请下载文件查看完整内容。
               </div>
             ) : markdown && view === 'rich' && text !== null ? (
-              <MarkdownView text={text} conversationId={conversationId} />
+              <div ref={markdownPreviewRef} className="artifact-markdown-preview">
+                <MarkdownView text={text} conversationId={conversationId} />
+              </div>
             ) : (
               <div style={{ overflow: 'auto', minHeight: 200 }}>
                 <CodeBlockView code={text ?? '正在读取文本…'} language={language} />

@@ -9,6 +9,7 @@ import { useHelmStore } from '../lib/store-context.js'
 import { CodeBlockRenderer } from './CodeBlockRenderer.js'
 import { artifactsApi } from '../lib/api.js'
 import { markdownUrlTransform, parseArtifactUrl } from './artifact-link.js'
+import { remarkHeadingIndices } from './markdown-model.js'
 
 export interface MarkdownViewProps {
   text: string
@@ -204,7 +205,7 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId }:
   return (
     <div className="msg-ai-body">
       <Markdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkHeadingIndices]}
         urlTransform={markdownUrlTransform}
         components={components}
       >

@@ -65,6 +65,18 @@ export interface ExtractedHeading {
   text: string
 }
 
+/** 从独立 Markdown 文档构建可复用的大纲标题节点。 */
+export function buildMarkdownOutline(markdown: string): OutlineHeadingNode[] {
+  return extractMarkdownHeadings(markdown).map((heading, headingIndex) => ({
+    kind: 'heading',
+    key: `outline:markdown:${headingIndex}`,
+    entryId: 'markdown-preview',
+    headingIndex,
+    level: heading.level,
+    text: heading.text,
+  }))
+}
+
 /** 人类提问单行摘要默认最大长度。 */
 const HUMAN_SUMMARY_MAX_CHARS = 72
 /** Markdown 标题单行展示最大长度。 */
@@ -124,7 +136,7 @@ export function extractMarkdownHeadings(markdown: string): ExtractedHeading[] {
   let activeFence: string | null = null
 
   for (const rawLine of lines) {
-    const trimmedStart = rawLine.trimStart()
+    const trimmedStart = rawLine.trimStart().replace(/^(?:>\s*)+/, '')
     const fenceMatch = /^(`{3,}|~{3,})/.exec(trimmedStart)
     if (fenceMatch !== null) {
       const marker = fenceMatch[1]!
