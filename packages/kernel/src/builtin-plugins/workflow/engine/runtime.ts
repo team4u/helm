@@ -31,6 +31,7 @@ import {
 import { type CompiledSchema, compileJsonSchema } from './json-schema.js'
 import { extractMeta, type WorkflowMeta } from './meta.js'
 import type { AgentExecutionInfo, AgentGateResult } from '@helm/protocol'
+import { HARD_MAX_SUBAGENT_DEPTH } from '@helm/protocol'
 import type { WorkflowActionEntry, WorkflowAgentEntry, WorkflowEntry } from './progress.js'
 import { WORKER_SOURCE } from './worker-source.js'
 
@@ -88,6 +89,13 @@ export interface WorkflowSpawnRequest {
   schema?: CompiledSchema
   /** 由脚本 agent({ attachments }) 传入的产物 ID 列表（原样透传，宿主做存在性/授权校验）。 */
   attachments?: string[]
+  /**
+   * 显式授予该 agent 子代理于树的派生深度上限（可选整数，
+   * 1..HARD_MAX_SUBAGENT_DEPTH；缺省继承父会话生效上限）。策略授予字段：
+   * 不进入 agent 调用的重放指纹（缓存的节点结果复用不受授予变化影响，
+   * 活重跑时新授予自然生效）。
+   */
+  maxSubagentDepth?: number
   phaseIndex?: number
   phaseTitle?: string
   /**
@@ -413,6 +421,8 @@ interface AgentCallPayload {
   effort?: string
   schema?: unknown
   attachments?: string[]
+  /** 显式授予该 agent 子树的派生深度上限（worker 侧已验证；宿主边界二次校验）。 */
+  maxSubagentDepth?: number
 }
 
 interface ActionCallPayload {
@@ -823,6 +833,23 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         respond(callId, false, undefined, 'agent() opts.attachments must be an array of non-empty string artifact IDs.', true)
         return
       }
+      // 同上：maxSubagentDepth 是策略授予字段，非法值在边界显式拒绝（不钳制、
+      // 不静默丢弃）；仅对新鲜 spawn 下发，resume 续接沿用登记表既有事实。
+      if (
+        payload.maxSubagentDepth !== undefined &&
+        (!Number.isInteger(payload.maxSubagentDepth) ||
+          payload.maxSubagentDepth < 1 ||
+          payload.maxSubagentDepth > HARD_MAX_SUBAGENT_DEPTH)
+      ) {
+        respond(
+          callId,
+          false,
+          undefined,
+          `agent() opts.maxSubagentDepth must be an integer between 1 and ${HARD_MAX_SUBAGENT_DEPTH}.`,
+          true,
+        )
+        return
+      }
 
       if (agentCount >= agentCap) {
         respond(callId, false, undefined, `Workflow exceeded its cap of ${agentCap} agents.`, true)
@@ -1057,6 +1084,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                     agentType,
                     ...(model !== undefined ? { model } : {}),
                     ...(payload.effort !== undefined ? { effort: payload.effort } : {}),
+                    ...(payload.maxSubagentDepth !== undefined ? { maxSubagentDepth: payload.maxSubagentDepth } : {}),
                     ...(compiledSchema !== undefined ? { schema: compiledSchema } : {}),
                     ...(isolation !== undefined ? { isolation } : {}),
                     ...(payload.phaseIndex !== undefined ? { phaseIndex: payload.phaseIndex } : {}),

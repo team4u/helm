@@ -125,6 +125,19 @@ export interface WorkflowRunSummary {
 
 export type WorkflowRunState = WorkflowRunSummary
 
+/**
+ * 受管子代理默认派生深度上限：主会话直接派生的一层子代理默认可继续派生
+ * 二层（1 → 2），达到上限的会话即编排叶子。派生请求（AgentSpawnRequest
+ * .maxSubagentDepth）与插件配置可显式授予更深，协议不要求每次传参。
+ */
+export const DEFAULT_MAX_SUBAGENT_DEPTH = 2 as const
+
+/**
+ * 派生深度绝对上限：插件配置与 AgentSpawnRequest.maxSubagentDepth 的共同
+ * 钳制边界（安全护栏，防失控递归派生）。
+ */
+export const HARD_MAX_SUBAGENT_DEPTH = 5 as const
+
 /** 内置编排插件 ID 与公共运行态文档名。 */
 export const WORKFLOW_PLUGIN_ID = 'builtin:workflow' as const
 export const WORKFLOW_RUNS_DOC = 'runs' as const

@@ -6,7 +6,7 @@
 
 | 工具 | 核心入参 | 语义 |
 | :--- | :--- | :--- |
-| `subagent` | `prompt` 必填；`agentType`（Profile ID 或 `herdr:agy` 等外部运行时标识）、`cwd`、`background`、`isolation: 'worktree'`、`schema`、`gate`、`resume`、`model`、`effort`、`attachments` | 派生单个子代理。缺省同步等待最终结果；`background: true` 在执行环境就绪后立即返回 `runId`，后台完成后向父会话汇报 |
+| `subagent` | `prompt` 必填；`agentType`（Profile ID 或 `herdr:agy` 等外部运行时标识）、`cwd`、`background`、`isolation: 'worktree'`、`schema`、`gate`、`resume`、`model`、`effort`、`attachments`、`maxSubagentDepth`（显式授予子树深度上限，1..5，缺省继承 2） | 派生单个子代理。缺省同步等待最终结果；`background: true` 在执行环境就绪后立即返回 `runId`，后台完成后向父会话汇报 |
 | `SubagentWorkflow` | `script / scriptPath / name` 三择一；`args` 任意 JSON（字符串形 JSON 自动解包）；`resumeFromRunId` | 在当前会话执行确定性编排脚本，返回真实执行 summary（runId/status/nodes/result） |
 | `cleanup_worktree` | `worktreeId`（`node:path`）/ `conversationId` / `path`（可附 `nodeId` 消歧）三择一；`deleteBranch`、`force` | 清理一个受管隔离 Git Worktree；无任何显式选择器时以当前会话为选择器（`--current` 语义） |
 
@@ -37,12 +37,22 @@
 | :--- | :--- | :--- | :--- |
 | `records` | 私有 `ctx.doc` | run 索引 + 每 run 完整记录（引擎唯一持久层） | 仅插件内部，重启恢复读同一命名空间 |
 | `worktree-state` | 私有 `ctx.doc` | WorktreeAllocator 登记表 + durable 租约表 + agentId 绑定表 | 仅插件内部；停用期间不清除，重新启用后 cleanup 仍可定位 |
+| `subagent-conversations` | 私有 `ctx.doc` | 受管子代理登记表：`depth` / `parentConversationId` / `maxSubagentDepth`（子树上限快照）等派生事实 | 仅插件内部；跨重启持久，是深度契约的唯一事实来源 |
+| `config` | 私有 `ctx.doc` | 预留的显式扩展配置（`maxSubagentDepth?`，缺省 2；启动即校验 1..5，非法值显式失败） | 仅插件内部；当前无写入端，为配置面预留 |
 | `runs` | 公开 `ctx.sessionDoc` | 每父会话自身的 run 列表投影 | 不进全局首帧/全局 SSE；前端经专用 SSE 按会话订阅 |
 | `run-badges` | 公开 `ctx.doc` | 每会话紧凑角标（`count / tone / footerText`，如「2 运行中 · 1 失败」） | 有意全局：工作台导航角标需要跨会话可见；完整 run 摘要绝不进入 |
 
 不存在内存降级或内核私有存储注入：所有运行态经 `records` 落 state.sqlite，重启后恢复。runs 投影带值缓存（JSON 直比，值不变跳过写入、不发重复事件）；已删除的父会话不重建孤儿分片（store 级联清理），无 runs 的已持久会话清到空而非保留旧投影。
 
 引擎经 `emitEvent` 发布两个事件：`workflow.updated`（全局只发状态失效提示 `{run: {id, conversationId, status}}`，详情走会话投影订阅）与 `workflow.settled`（完整 summary，`broadcast: false` 进程内分发，`builtin:herdr` 的双轨保活清理监听它）。
+
+## 嵌套深度契约
+
+受管子代理（经 `subagent` 工具 / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）默认可嵌套 `DEFAULT_MAX_SUBAGENT_DEPTH`（2）层：主会话直接派生一层，一层子代理默认可继续派生二层，达到子树上限的会话即编排叶子。fork 会话与 SuperAgent worker（经 `createConversation` 创建，不经 spawn 管道）不进登记表，不受限制。
+
+三道防线共用登记表事实：`before_turn` 对叶子回合剥离 `subagent` / `SubagentWorkflow`（一层子代理保留派工工具与协作目录）；工具与 `run` 动作入口在创建任何 run 记录前拒绝（`403 subagent_depth_exceeded`，携带 `depth` / `maxSubagentDepth` 事实）；`agent_spawn` 钩子（priority 300，先于 worktree 分配）兜底拒绝并登记新事实。
+
+显式扩展到更深层：插件配置（私有 `config` doc 的 `maxSubagentDepth`，1..5）改全局缺省；派生请求（`subagent` 工具入参 / DSL `agent({ maxSubagentDepth })` / `AgentSpawnRequest.maxSubagentDepth`）显式授予子树上限——该字段只授予子树空间，不能为发起方自己解限，且统一钻制在 `HARD_MAX_SUBAGENT_DEPTH`（5）内；协议不要求每次传参，缺省零参数可用。旧登记记录缺省 `depth` / 上限字段时按 `depth=1`、默认上限兼容解读。
 
 ## 两阶段崩溃恢复
 

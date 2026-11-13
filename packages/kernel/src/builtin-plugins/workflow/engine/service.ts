@@ -1773,6 +1773,7 @@ export class WorkflowService {
       ...(request.model !== undefined ? { model: request.model } : {}),
       ...(request.effort !== undefined ? { effort: request.effort } : {}),
       ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
+      ...(request.maxSubagentDepth !== undefined ? { maxSubagentDepth: request.maxSubagentDepth } : {}),
       ...(request.schema !== undefined ? { schema: request.schema.schema } : {}),
       ...(request.attachments !== undefined ? { attachments: request.attachments } : {}),
       ...(resumeRef !== undefined ? { resume: resumeRef } : {}),

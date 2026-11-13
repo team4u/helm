@@ -19,15 +19,22 @@
  * - 3 个模型工具（subagent / SubagentWorkflow / cleanup_worktree）与
  *   8 个动作（list/run/runs/inspect/abort/cleanup_worktree/list_worktrees/
  *   inspect_worktree）五端复用；
- * - 嵌套深度契约：受管子代理（经本插件派生的原生/外部子会话）是编排
- *   叶子——私有登记表持久化事实，before_turn 剥离派工工具、工具/动作入口
+ * - 嵌套深度契约：受管子代理（经本插件派生的原生/外部子会话）默认可嵌套
+ *   DEFAULT_MAX_SUBAGENT_DEPTH（2）层——主会话直接派生一层，一层子代理
+ *   默认可继续派生二层，达到子树上限的会话即编排叶子。私有登记表持久
+ *   depth / parentConversationId / 子树上限等事实，before_turn 剥离派工工具、工具/动作入口
  *   前置拒绝、agent_spawn 最高优先级兜底，三道防线显式报
- *   subagent_depth_exceeded（fork / SuperAgent worker 不在表内，不受影响）。
+ *   subagent_depth_exceeded；显式扩展到更深层经插件配置（私有 config doc）
+ *   与 AgentSpawnRequest.maxSubagentDepth 请求字段（均钳制在
+ *   HARD_MAX_SUBAGENT_DEPTH 内，且只授予子树空间、不能为发起方解限）
+ *   （fork / SuperAgent worker 不在表内，不受影响）。
  */
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  DEFAULT_MAX_SUBAGENT_DEPTH,
+  HARD_MAX_SUBAGENT_DEPTH,
   HelmError,
   WORKFLOW_PLUGIN_ID,
   WORKFLOW_RUNS_DOC,
@@ -68,6 +75,34 @@ function resolveClientRoot(): string {
 
 /** subagent 工具 effort 合法枚举（与内核原生 spawn 执行行同源）。 */
 const SPAWN_EFFORT_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/** 深度超限统一错误（含事实细节，工具/动作入口与 agent_spawn 兜底共用）。 */
+function depthExceededError(depth: number, maxSubagentDepth: number, conversationId: number): HelmError {
+  return new HelmError(
+    'subagent_depth_exceeded',
+    `会话 ${conversationId} 是第 ${depth} 层受管子代理（子树派生上限 ${maxSubagentDepth} 层），已达上限，不能再派生子代理或启动嵌套工作流`,
+    403,
+    { conversationId, depth, maxSubagentDepth, attemptedChildDepth: depth + 1 },
+  )
+}
+
+/**
+ * 受管子代理登记条目（插件私有 doc `subagent-conversations` 持久事实）。
+ * 旧记录仅含 agentType/runId/createdAt：缺省 depth 按 1、缺省上限按
+ * DEFAULT_MAX_SUBAGENT_DEPTH 兼容解读（旧契约下受管子代理只能由非受管
+ * 会话派生，depth=1 是事实而非猜测）。
+ */
+interface ManagedSubagentEntry {
+  agentType?: string
+  runId?: string
+  createdAt: number
+  /** 自身派生深度：非受管会话直接派生 = 1，受管会话再派生 = 父深度 + 1。 */
+  depth?: number
+  /** 派生时的父会话 ID（树位置事实；resume 续接不改变）。 */
+  parentConversationId?: number
+  /** 该子代理子树的派生深度上限（派生时快照；配置后续变更不追溯）。 */
+  maxSubagentDepth?: number
+}
 
 const subagentOutputSchema = {
   type: 'object',
@@ -176,24 +211,85 @@ export function createWorkflowPlugin(): PluginDefinition {
       // 调用方）。fork 会话与 SuperAgent worker（经 createConversation 创建，
       // 不经 spawn 管道）天然不进表——嵌套限制绝不以 parentConversationId
       // 或 tags 一刀切，也不依赖 ownership 猜测。
-      const subagentConvDoc = ctx.doc<Record<string, { agentType?: string; runId?: string; createdAt: number }>>(
-        'subagent-conversations',
-        {},
-      )
+      const subagentConvDoc = ctx.doc<Record<string, ManagedSubagentEntry>>('subagent-conversations', {})
 
-      function isManagedSubagent(conversationId: number): boolean {
-        return subagentConvDoc.get()[String(conversationId)] !== undefined
+      // ---- 深度上限配置（私有 config doc；预留的显式扩展入口，暂无写入端） ----
+      // 值 { maxSubagentDepth?: number }，缺省 DEFAULT_MAX_SUBAGENT_DEPTH；
+      // 定义时即校验（正整数且 ≤ HARD_MAX_SUBAGENT_DEPTH），非法值显式失败，
+      // 绝不静默降级回默认值。
+      const depthConfigDoc = ctx.doc<{ maxSubagentDepth?: number }>('config', {})
+      function configuredMaxSubagentDepth(): number {
+        const raw = depthConfigDoc.get().maxSubagentDepth
+        if (raw === undefined) return DEFAULT_MAX_SUBAGENT_DEPTH
+        if (!Number.isInteger(raw) || raw < 1 || raw > HARD_MAX_SUBAGENT_DEPTH) {
+          throw new HelmError(
+            'validation_error',
+            `builtin:workflow 配置 maxSubagentDepth 非法：${JSON.stringify(raw)}（需 1..${HARD_MAX_SUBAGENT_DEPTH} 的整数）`,
+            500,
+            { configured: raw },
+          )
+        }
+        return raw
       }
 
-      function registerManagedSubagent(conversationId: number, meta: { agentType?: string; runId?: string }): void {
-        subagentConvDoc.update((current) => ({
-          ...current,
-          [String(conversationId)]: {
-            ...(meta.agentType !== undefined ? { agentType: meta.agentType } : {}),
-            ...(meta.runId !== undefined ? { runId: meta.runId } : {}),
-            createdAt: Date.now(),
-          },
-        }))
+      // 启动即校验配置：非法值在插件定义阶段显式失败，不带病运行。
+      configuredMaxSubagentDepth()
+
+      /** 登记事实归一化：合法深度值为 ≥1 整数，其余（缺省/损坏）返回 undefined。 */
+      function normalizeDepth(raw: unknown): number | undefined {
+        return typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 ? raw : undefined
+      }
+
+      /**
+       * 会话深度事实（登记表 + 旧记录兼容归一化）：
+       * - 非受管会话（顶层 / fork / SuperAgent worker）：depth=0，上限取当前配置；
+       * - 受管会话：depth / 子树上限取派生时快照（缺省字段按 depth=1、
+       *   DEFAULT_MAX_SUBAGENT_DEPTH 兼容解读，越界上限钳回绝对上限）。
+       */
+      function depthFactsOf(conversationId: number): { managed: boolean; depth: number; maxSubagentDepth: number } {
+        const entry = subagentConvDoc.get()[String(conversationId)]
+        if (entry === undefined) {
+          return { managed: false, depth: 0, maxSubagentDepth: configuredMaxSubagentDepth() }
+        }
+        const depth = normalizeDepth(entry.depth) ?? 1
+        const maxSubagentDepth = Math.min(
+          normalizeDepth(entry.maxSubagentDepth) ?? DEFAULT_MAX_SUBAGENT_DEPTH,
+          HARD_MAX_SUBAGENT_DEPTH,
+        )
+        return { managed: true, depth, maxSubagentDepth }
+      }
+
+      function registerManagedSubagent(
+        conversationId: number,
+        meta: {
+          agentType?: string
+          runId?: string
+          depth: number
+          parentConversationId: number
+          maxSubagentDepth: number
+          /** maxSubagentDepth 是否来自本次显式请求（resume 续接时才改写既有上限）。 */
+          ceilingExplicit: boolean
+        },
+      ): void {
+        subagentConvDoc.update((current) => {
+          const existing = current[String(conversationId)]
+          return {
+            ...current,
+            [String(conversationId)]: {
+              ...(existing ?? {}),
+              ...(meta.agentType !== undefined ? { agentType: meta.agentType } : {}),
+              ...(meta.runId !== undefined ? { runId: meta.runId } : {}),
+              // 树位置事实幂等保真：resume 续接重复登记不覆盖既有 depth/父链；
+              // 子树上限仅在显式请求时更新，否则保留原快照（配置后续变更不追溯）。
+              depth: existing?.depth ?? meta.depth,
+              parentConversationId: existing?.parentConversationId ?? meta.parentConversationId,
+              maxSubagentDepth: meta.ceilingExplicit
+                ? meta.maxSubagentDepth
+                : (existing?.maxSubagentDepth ?? meta.maxSubagentDepth),
+              createdAt: existing?.createdAt ?? Date.now(),
+            },
+          }
+        })
         // 登记落盘失败显式诊断（不静默）：崩溃窗口内重启可能短暂放行。
         void subagentConvDoc.flush().catch((error: unknown) => {
           process.stderr.write(
@@ -204,15 +300,14 @@ export function createWorkflowPlugin(): PluginDefinition {
         })
       }
 
-      /** 受管子代理是编排叶子：禁止再派生子代理或启动嵌套工作流。 */
+      /**
+       * 派生前置拒绝（防线二共用入口）：受管会话达到子树上限后不能再派生；
+       * 一层子代理（depth=1，上限 2）默认放行——可继续派二层。
+       */
       function assertCanSpawn(conversationId: number): void {
-        if (!isManagedSubagent(conversationId)) return
-        throw new HelmError(
-          'subagent_depth_exceeded',
-          `会话 ${conversationId} 是工作流子代理（编排叶子），不能再派生子代理或启动嵌套工作流`,
-          403,
-          { conversationId },
-        )
+        const facts = depthFactsOf(conversationId)
+        if (!facts.managed || facts.depth + 1 <= facts.maxSubagentDepth) return
+        throw depthExceededError(facts.depth, facts.maxSubagentDepth, conversationId)
       }
 
       /**
@@ -243,12 +338,32 @@ export function createWorkflowPlugin(): PluginDefinition {
       // 任何入口（同步工具 / 后台 run / 引擎节点 / 未来调用方）派生的子会话
       // 都被记账，重启后依旧生效。
       ctx.hook.onAgentSpawn(async (request, next) => {
-        assertCanSpawn(request.parentConversationId)
+        const parentFacts = depthFactsOf(request.parentConversationId)
+        const childDepth = parentFacts.depth + 1
+        if (parentFacts.managed && childDepth > parentFacts.maxSubagentDepth) {
+          throw depthExceededError(parentFacts.depth, parentFacts.maxSubagentDepth, request.parentConversationId)
+        }
+        // 显式扩展请求字段：无效值显式拒绝（不静默丢弃、不擅自锐化）。
+        const explicitCeiling = request.maxSubagentDepth
+        if (
+          explicitCeiling !== undefined &&
+          (!Number.isInteger(explicitCeiling) || explicitCeiling < 1 || explicitCeiling > HARD_MAX_SUBAGENT_DEPTH)
+        ) {
+          throw new HelmError(
+            'validation_error',
+            `maxSubagentDepth 必须是 1..${HARD_MAX_SUBAGENT_DEPTH} 的整数（收到 ${JSON.stringify(explicitCeiling)}）`,
+            400,
+            { maxSubagentDepth: explicitCeiling },
+          )
+        }
         if (request.onResolved === undefined) {
           await next(request)
           return
         }
         const original = request.onResolved
+        // 子代理事实在派生前定案：子树上限 = 显式请求 ?? 父会话生效上限
+        //（该字段只授予子树空间，永不为发起方自己解限——越深拒绝已在上方完成）。
+        const childCeiling = explicitCeiling ?? parentFacts.maxSubagentDepth
         // continuation 契约：已调 next 的 handler 返回 void（next 的结果即
         // 它的结果）；此处仅包裹 onResolved 记账，不得透传下游产物。
         await next({
@@ -258,6 +373,10 @@ export function createWorkflowPlugin(): PluginDefinition {
               registerManagedSubagent(info.conversationId, {
                 ...(request.agentType !== undefined ? { agentType: request.agentType } : {}),
                 ...(request.workflowRunId !== undefined ? { runId: request.workflowRunId } : {}),
+                depth: childDepth,
+                parentConversationId: request.parentConversationId,
+                maxSubagentDepth: childCeiling,
+                ceilingExplicit: explicitCeiling !== undefined,
               })
             }
             original(info)
@@ -272,12 +391,14 @@ export function createWorkflowPlugin(): PluginDefinition {
         await isolation.aroundSpawn(request, next)
       }, { priority: 200 })
 
-      // ---- before_turn：受管子代理回合剥离派工工具（防线一） ----
-      // 默认优先级先于 profile 协作目录钩子（-100）：目录钩子看到的是剥离后
-      // 的工具清单，真正子代理自然不注入协作目录；fork / SuperAgent worker
-      // 不在登记表内，工具与目录不受影响。
+      // ---- before_turn：达到子树上限的受管子代理回合剥离派工工具（防线一） ----
+      // 一层子代理默认未达上限（depth=1 < 2），保留 subagent / SubagentWorkflow
+      // 可继续派二层；仅叶子（depth ≥ 子树上限）剥离。默认优先级先于 profile
+      // 协作目录钩子（-100）：目录钩子看到的是剥离后的工具清单，叶子回合自然
+      // 不注入协作目录；fork / SuperAgent worker 不在登记表内，不受影响。
       ctx.hook.onBeforeTurn((turn) => {
-        if (!isManagedSubagent(turn.conversation.id)) return
+        const facts = depthFactsOf(turn.conversation.id)
+        if (!facts.managed || facts.depth < facts.maxSubagentDepth) return
         const tools = turn.tools.filter((t) => t.name !== 'subagent' && t.name !== 'SubagentWorkflow')
         if (tools.length === turn.tools.length) return
         return { action: 'transform', value: { ...turn, tools } }
@@ -584,7 +705,7 @@ export function createWorkflowPlugin(): PluginDefinition {
       ctx.tool({
         name: 'subagent',
         description:
-          '派生一个子代理；默认等待最终结果，background:true 在实际环境就绪后返回 runId，后台完成后向父会话汇报。agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；schema 校验输出，gate 在实际节点和工作目录中验收。支持 cwd、isolation:worktree、model、effort；凭 execution.conversationId/executionId 作为 resume 续接。result 与执行元数据独立；检视或合入后可用 cleanup_worktree 清理受管工作树。',
+          '派生一个子代理；默认等待最终结果，background:true 在实际环境就绪后返回 runId，后台完成后向父会话汇报。agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；schema 校验输出，gate 在实际节点和工作目录中验收。支持 cwd、isolation:worktree、model、effort、maxSubagentDepth（显式授予子树派生深度上限，1..5，缺省继承当前上限 2）；凭 execution.conversationId/executionId 作为 resume 续接。result 与执行元数据独立；检视或合入后可用 cleanup_worktree 清理受管工作树。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -606,6 +727,12 @@ export function createWorkflowPlugin(): PluginDefinition {
               enum: [...SPAWN_EFFORT_LEVELS],
               description: '思考力度（可选）',
             },
+            maxSubagentDepth: {
+              type: 'number',
+              minimum: 1,
+              maximum: HARD_MAX_SUBAGENT_DEPTH,
+              description: `显式授予该子代理子树的派生深度上限（1..${HARD_MAX_SUBAGENT_DEPTH}；缺省继承当前上限，默认 ${DEFAULT_MAX_SUBAGENT_DEPTH}）`,
+            },
             attachments: { type: 'array', items: { type: 'string' }, description: '随任务传递给子代理的产物 ID 列表（可选）' },
           },
           required: ['prompt'],
@@ -614,8 +741,17 @@ export function createWorkflowPlugin(): PluginDefinition {
         structuredOutputSchema: subagentOutputSchema,
         async execute(args, context) {
           const a = args as Record<string, unknown>
-          // 嵌套深度前置拒绝（防线二）：受管子代理是叶子，不创建任何后台 run。
+          // 嵌套深度前置拒绝（防线二）：达到子树上限的会话是叶子，不创建任何后台 run。
           assertCanSpawn(context.conversationId)
+          if (a['maxSubagentDepth'] !== undefined) {
+            const raw = a['maxSubagentDepth']
+            if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > HARD_MAX_SUBAGENT_DEPTH) {
+              return envelopeError(
+                `subagent_failed: maxSubagentDepth 必须是 1..${HARD_MAX_SUBAGENT_DEPTH} 的整数（收到 ${JSON.stringify(raw)}）`,
+                `invalid maxSubagentDepth: ${JSON.stringify(raw)}`,
+              )
+            }
+          }
           if (a['isolation'] !== undefined && a['isolation'] !== 'worktree') {
             return envelopeError(`subagent_failed: isolation 仅允许 'worktree'（收到 ${JSON.stringify(a['isolation'])}），不合法值绝不静默丢弃`, `invalid isolation: ${JSON.stringify(a['isolation'])}`)
           }
@@ -641,6 +777,7 @@ export function createWorkflowPlugin(): PluginDefinition {
             ...(a['resume'] !== undefined ? { resume: String(a['resume']) } : {}),
             ...(a['model'] !== undefined ? { model: String(a['model']) } : {}),
             ...(a['effort'] !== undefined ? { effort: String(a['effort']) } : {}),
+            ...(a['maxSubagentDepth'] !== undefined ? { maxSubagentDepth: Number(a['maxSubagentDepth']) } : {}),
             ...(Array.isArray(a['attachments']) ? { attachments: a['attachments'] as string[] } : {}),
             onResolved: (info) => {
               resolved = info
@@ -714,7 +851,7 @@ export function createWorkflowPlugin(): PluginDefinition {
         structuredOutputSchema: workflowOutputSchema,
         async execute(args, context) {
           const a = args as Record<string, unknown>
-          // 嵌套深度前置拒绝（防线二）：受管子代理是叶子，不创建任何 run 记录。
+          // 嵌套深度前置拒绝（防线二）：达到子树上限的会话是叶子，不创建任何 run 记录。
           assertCanSpawn(context.conversationId)
           const input: Record<string, unknown> = {}
           if (a['script'] !== undefined) input['script'] = String(a['script'])
@@ -872,7 +1009,7 @@ export function createWorkflowPlugin(): PluginDefinition {
           if (request.conversationId === undefined && context.conversationId !== undefined) {
             request.conversationId = context.conversationId
           }
-          // 嵌套深度前置拒绝（防线二）：受管子代理是叶子，在创建 run 记录前拦截。
+          // 嵌套深度前置拒绝（防线二）：达到子树上限的会话是叶子，在创建 run 记录前拦截。
           // 显式 conversationId 优先；缺省用调用上下文；两者皆无时 workflows.run
           // 会在落任何记录前报 validation_error，不属深度拦截职责。
           const depthTarget =

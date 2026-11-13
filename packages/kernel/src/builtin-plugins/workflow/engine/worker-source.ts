@@ -218,7 +218,7 @@ function optionalText(value, what) {
 
 const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
-const AGENT_OPTIONS = ["label", "phase", "model", "agentType", "isolation", "gate", "resume", "effort", "schema", "attachments"];
+const AGENT_OPTIONS = ["label", "phase", "model", "agentType", "isolation", "gate", "resume", "effort", "schema", "attachments", "maxSubagentDepth"];
 
 /* ------------------------------------------------------------------ *
  * Script globals
@@ -356,6 +356,15 @@ async function agentIn(scope, prompt, opts) {
   if (effort !== undefined && EFFORT_LEVELS.indexOf(effort) === -1) {
     throw new Error("agent() opts.effort must be one of: " + EFFORT_LEVELS.join(", ") + ".");
   }
+  // maxSubagentDepth：显式授予该子代理子树的派生深度上限（仅新鲜 spawn 生效；
+  // resume 续接沿用登记表既有事实）。缺省继承父会话生效上限（默认 2）。
+  const maxSubagentDepth = options.maxSubagentDepth;
+  if (
+    maxSubagentDepth !== undefined &&
+    (typeof maxSubagentDepth !== "number" || !Number.isInteger(maxSubagentDepth) || maxSubagentDepth < 1 || maxSubagentDepth > 5)
+  ) {
+    throw new Error("agent() opts.maxSubagentDepth must be an integer between 1 and 5.");
+  }
 
   if (resume !== undefined) {
     if (agentType !== undefined) {
@@ -400,6 +409,7 @@ async function agentIn(scope, prompt, opts) {
     effort: effort,
     schema: schema,
     attachments: attachments,
+    maxSubagentDepth: maxSubagentDepth,
   });
   if (result === undefined || result === null) return null;
   if (schema === undefined) return result;

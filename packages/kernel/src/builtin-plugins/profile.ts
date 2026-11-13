@@ -7,8 +7,8 @@
  * - before_turn 注入 profile.system（SYSTEM.md）、profile.skills（可用技能
  *   目录）与 profile.assets-missing（SYSTEM.md 缺失告警）；
  * - 低优先级 before_turn（在默认优先级的工具剥离钩子之后运行）按当回合
- *   实际 turn.tools 注入 profile.catalog（跨 Profile 协作目录；子会话不注入、
- *   builtin:workflow 停用时无派工工具则不注入）；
+ *   实际 turn.tools 注入 profile.catalog（跨 Profile 协作目录；派工工具被
+ *   剥离的叶子子代理不注入、builtin:workflow 停用时无派工工具则不注入）；
  * - 注册 load_skill 工具（Profile 白名单 + 插件启停实时判定）与
  *   list_mentionable 幂等动作（@ 补全源，自动映射 HTTP / helm profile
  *   list_mentionable CLI）；
@@ -198,10 +198,11 @@ export function createProfilePlugin(): PluginDefinition {
        * 协作目录统一计算（补全动作与 before_turn 注入共用同一事实源）：
        * - 排除自身 / humanSelectable:false / 托管插件未启用 / runtime.kind
        *   无已启用 profile.runtime UI 贡献对应（详见 catalog.ts 规则）；
-       * - 仅依据回合是否还有派工工具：builtin:workflow 对受管子代理（编排
-       *   叶子）在更高优先级钩子剥离 subagent/SubagentWorkflow 后，此处自然
-       *   返回空——不按 parentConversationId 一刀切（fork / SuperAgent worker
-       *   同样有父链，但应保留完整协作能力）；
+       * - 仅依据回合是否还有派工工具：builtin:workflow 对达到深度上限的受管
+       *   子代理（编排叶子）在更高优先级钩子剥离 subagent/SubagentWorkflow
+       *   后，此处自然返回空——不按 parentConversationId 一刀切（fork /
+       *   SuperAgent worker 同样有父链，但应保留完整协作能力；一层子代理
+       *   默认保留派工工具，同样注入目录）；
        * - 每次调用实时重读 Profile 目录与插件状态（增删改 / 启停下次生效）。
        * 任一候选摘要读取的非 not_found 错误如实上抛（显式失败）。
        */
@@ -237,10 +238,11 @@ export function createProfilePlugin(): PluginDefinition {
 
       ctx.hook.onBeforeTurn(
         async (turn) => {
-          // 无可用派工工具的回合不注入目录（避免教唆调用不存在的工具；真正
-          // 子代理的派工工具已被 builtin:workflow 钩子剥离，在此自然收敛）。
-          // 工具收敛后的 tools 只读，不改动；不按 parentConversationId 排除
-          // （fork / SuperAgent worker 同样有父链，应保留协作能力）。
+          // 无可用派工工具的回合不注入目录（避免教唆调用不存在的工具；深度
+          // 上限的叶子子代理派工工具已被 builtin:workflow 钩子剥离，在此自然
+          // 收敛）。工具收敛后的 tools 只读，不改动；不按 parentConversationId
+          // 排除（fork / SuperAgent worker 同样有父链，应保留协作能力；
+          // 一层子代理默认保留派工工具，同样注入目录）。
           const tools = dispatchToolNames(turn.tools)
           if (tools.length === 0) return { action: 'continue' }
           const entries = await computeCatalog(turn.conversation.profileId)

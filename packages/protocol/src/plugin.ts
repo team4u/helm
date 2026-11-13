@@ -149,6 +149,14 @@ export interface AgentSpawnRequest {
   onGateResult?: (result: AgentGateResult) => void
   /** 发起本次派生的 workflow run；非工作流派生缺省。 */
   workflowRunId?: string
+  /**
+   * 显式授予本次派生子代理子树的派生深度上限（可选整数，
+   * 1..HARD_MAX_SUBAGENT_DEPTH）。缺省继承父会话的生效上限（顶层派生取
+   * builtin:workflow 插件配置，默认 DEFAULT_MAX_SUBAGENT_DEPTH=2）。深度
+   * 守卫仍按父会话自身深度先行拒绝：该字段只授予子树空间，不能为发起方
+   * 自己解限。协议不要求每次传参——缺省路径零参数即可用。
+   */
+  maxSubagentDepth?: number
   cwd?: string
   /** 结构化输出 JSON Schema（文件交接时强制落盘校验）。 */
   schema?: JsonSchema

@@ -50,8 +50,9 @@ helm workflows run ./review.js --args '{"pr": 1024, "strict": true}'
 | `effort` | `string` | 思考力度：`minimal` / `low` / `medium` / `high` / `xhigh` / `max` |
 | `schema` | `object` | 结构化输出的 JSON Schema |
 | `attachments` | `string[]` | 本次调用携带的产物 ID 列表 |
+| `maxSubagentDepth` | `number` | 显式授予该子智能体子树的派生深度上限（1..5 整数；缺省继承当前上限，默认 2）。仅新鲜派生生效，`resume` 续接沿用登记表既有事实 |
 
-选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置），但允许与 `schema`、`gate`、`attachments` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments`。
+选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置），但允许与 `schema`、`gate`、`attachments` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, maxSubagentDepth`。
 
 **结构化输出**：配置 `schema` 时宿主为子智能体挂载结构化契约，引擎解析其 JSON 回复并按 Schema 校验，通过则返回原生对象，不通过（非 JSON 或不合契约）返回 `null`：
 
