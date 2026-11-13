@@ -30,7 +30,7 @@
 | 执行体 | 派生机制 | 深度登记 | 结果回传 |
 | :--- | :--- | :--- | :--- |
 | 原生 Profile 子会话 | 内核 `spawnAgent` 管道（`agent_spawn` Hook） | 进 `subagent-conversations` 登记表，受嵌套深度契约约束；支持 `resume` 续接 | 同步等待最终结果；后台经下文幂等汇报链投递父会话 |
-| 外部 Herdr Profile（`herdr:<kind>` 前缀或 `runtime.kind: 'herdr'` 的 Profile） | `builtin:herdr` 拦截 `agent_spawn`，在终端窗格执行并通过文件交接回传 | 派生入口检查调用方深度；窗格没有原生 `conversationId`，不登记为子会话 | 后台终态同样汇报父会话；不支持运行中 steer。调整任务须中止后重新发起；`resume` 仅适用于仍存在且可续接的执行 |
+| 外部 Herdr Profile（`herdr:<kind>` 前缀或 `runtime.kind: 'herdr'` 的 Profile） | `builtin:herdr` 拦截 `agent_spawn`，在终端窗格执行并通过文件交接回传 | 派生入口检查调用方深度；窗格没有原生 `conversationId`，不登记为子会话 | 后台终态同样汇报父会话；Herdr 原生 `agent.prompt` 支持向 working 代理补充输入，Helm 的 `workflow.steer` 尚未接入该能力；`resume` 仅适用于仍存在且空闲的执行 |
 | SuperAgent Worker | `builtin:superagent` 的 `dispatch_worker`：`createConversation`（不经 spawn 管道） | 不进登记表、不受深度契约约束 | 插件自有非阻塞协议：派工立即返回 `workerConversationId`、绝不同步等待；汇报走独立 `turn_settled` → 中枢路由链。它不是 `subagent` 的 `background` 参数，两者不得混用 |
 | fork / 人工会话 | 人类在 Web/CLI 直接创建或 fork 既有会话 | 不进登记表、不受深度限制 | 就是普通会话；人类直连（human-owned）即适用「缺省后台」策略 |
 
