@@ -12,7 +12,7 @@
 | `desktop-package` | 三平台（Linux/Windows/macOS）打安装包（`--publish never`）+ 打包 App 冒烟，产物作为 workflow artifact | 仅读取仓库 |
 | `desktop-release` | 汇总三平台安装包，创建草稿 Release 并上传附件 | GitHub Releases |
 
-依赖关系：`verify → build → (npm-payload ∥ desktop-package×3) → desktop-release`。`desktop-release` 同时需要 `npm-payload` 与全部 `desktop-package` 成功——**三平台打包/冒烟与 npm 发布结论齐备之前绝不创建安装包草稿**；npm-payload 失败则草稿不创建（配置好令牌后重跑即可）。
+依赖关系：`verify → build → desktop-package×3 → npm-payload → desktop-release`。npm 发布必须等待全量测试和三平台打包/冒烟通过。`desktop-release` 同时需要 `npm-payload` 与全部 `desktop-package` 成功；npm 发布失败时不创建草稿。
 
 ## npm Hub payload 发布（单一入口）
 
@@ -55,7 +55,7 @@ git commit -am "chore(release): v0.1.0"
 # 3. 打 tag 并推送
 git tag v0.1.0
 git push origin v0.1.0
-# 4. 在 Actions 观察 Release 流水线（verify → build → npm-payload ∥ desktop-package×3 → desktop-release）
+# 4. 在 Actions 观察 Release 流水线（verify → build → desktop-package×3 → npm-payload → desktop-release）
 # 5. 核对草稿 Release 内容后手动 Publish
 ```
 

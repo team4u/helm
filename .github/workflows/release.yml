@@ -1,6 +1,6 @@
 # Release 流水线：仅由 v* tag 触发，职责链——
-#   verify → build（ubuntu 全量构建与测试）→ 并行 [ npm-payload（仅 ubuntu，一次），
-#   desktop-package ×3 平台（--publish never 打安装包 + 打包 App 冒烟）]
+#   verify → build（ubuntu 全量构建与测试）→ desktop-package ×3 平台
+#   → npm-payload（全部验收通过后仅 ubuntu 发布一次）
 #   → desktop-release（汇总三平台安装包，创建草稿 Release 并上传附件）。
 #
 # npm 发布收敛为单一入口：唯一依据是 packages/payload/dist/package.json（构建产物；

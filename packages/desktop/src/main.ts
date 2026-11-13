@@ -212,6 +212,8 @@ async function runElectron(electron: ElectronApi): Promise<void> {
       mkdirSync(smokeDir, { recursive: true });
       const isolated: unknown = await win.webContents.executeJavaScript('typeof window.require === "undefined" && typeof window.process === "undefined"');
       if (isolated !== true) throw new Error('渲染进程隔离校验失败');
+      // DOM 就绪不等于合成帧已提交；截图必须等真实绘制，尤其是 Xvfb 软件合成。
+      await win.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))');
       const image = await win.webContents.capturePage();
       writeFileSync(join(smokeDir, 'window.png'), image.toPNG());
       const hubPid = boot.supervisor.childPid;
