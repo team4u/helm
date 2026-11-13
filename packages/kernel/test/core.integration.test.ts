@@ -1392,7 +1392,7 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
 
     const toolRun = await env.app.kernel.plugins!.executeTool(
       'SubagentWorkflow',
-      { script: workflowScript('tool-target') },
+      { script: workflowScript('tool-target'), background: false },
       { conversationId: cliConvId, callId: 'workflow-tool-target' },
     ) as { isError?: boolean; structuredOutput?: { summary?: { conversationId?: number } } }
     assert.equal(toolRun.isError, undefined)
@@ -1421,7 +1421,7 @@ test('subagent 派生：子会话摘要携带 parentToolCallId 并经 conversati
     // 父会话模型调用 subagent 工具；子代理 faux 独立回答。
     env.faux.setResponses([
       fauxAssistantMessage(
-        [fauxToolCall('subagent', { prompt: '子任务：检查构建' })],
+        [fauxToolCall('subagent', { prompt: '子任务：检查构建', background: false })],
         { stopReason: 'toolUse' },
       ),
       fauxAssistantMessage('子代理已返回，任务完成'),

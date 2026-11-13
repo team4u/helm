@@ -153,6 +153,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
               cwd: childCwd,
               model: 'faux/faux-1',
               effort: 'low',
+              background: false,
             }),
           ],
           { stopReason: 'toolUse' },
@@ -219,9 +220,9 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       const spawns: AgentSpawnRequest[] = []
       await kernel.plugins.register(spawnObserver(spawns))
 
-      // 首调：派生子会话。
+      // 首调：派生子会话（显式同步：人类交互会话缺省已是后台，本组断言同步结果链）。
       faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '第一轮' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '第一轮', background: false })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('第一轮回答'),
         fauxAssistantMessage('首回合完成'),
       ])
@@ -234,7 +235,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       // 续接：resume = 首调返回的 conversationId。
       faux.setResponses([
         fauxAssistantMessage(
-          [fauxToolCall('subagent', { prompt: '第二轮', resume: String(child.id) })],
+          [fauxToolCall('subagent', { prompt: '第二轮', resume: String(child.id), background: false })],
           { stopReason: 'toolUse' },
         ),
         fauxAssistantMessage('续接回答'),
@@ -333,7 +334,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
 
       faux.setResponses([
         fauxAssistantMessage(
-          [fauxToolCall('subagent', { prompt: '外部任务', agentType: 'herdr:agy' })],
+          [fauxToolCall('subagent', { prompt: '外部任务', agentType: 'herdr:agy', background: false })],
           { stopReason: 'toolUse' },
         ),
         fauxAssistantMessage('外部回合完成'),
@@ -391,7 +392,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
         'return args.items.map((x) => x * 2)'
       faux.setResponses([
         fauxAssistantMessage(
-          [fauxToolCall('SubagentWorkflow', { script: doubleScript, args: { items: [1, 2, 3] } })],
+          [fauxToolCall('SubagentWorkflow', { script: doubleScript, args: { items: [1, 2, 3] }, background: false })],
           { stopReason: 'toolUse' },
         ),
         fauxAssistantMessage('编排回合完成'),
@@ -417,7 +418,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       )
       faux.setResponses([
         fauxAssistantMessage(
-          [fauxToolCall('SubagentWorkflow', { scriptPath: scriptFile, args: { base: 12 } })],
+          [fauxToolCall('SubagentWorkflow', { scriptPath: scriptFile, args: { base: 12 }, background: false })],
           { stopReason: 'toolUse' },
         ),
         fauxAssistantMessage('scriptPath 回合完成'),
@@ -432,7 +433,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       // --- resumeFromRunId：断点恢复（账本前缀重放，结果与原 run 一致） ---
       faux.setResponses([
         fauxAssistantMessage(
-          [fauxToolCall('SubagentWorkflow', { resumeFromRunId: runId })],
+          [fauxToolCall('SubagentWorkflow', { resumeFromRunId: runId, background: false })],
           { stopReason: 'toolUse' },
         ),
         fauxAssistantMessage('恢复回合完成'),
@@ -505,6 +506,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
             fauxToolCall('SubagentWorkflow', {
               script: probeScript,
               args: '{"topics": ["星辰", "大海"], "n": 42}',
+              background: false,
             }),
           ],
           { stopReason: 'toolUse' },
@@ -548,6 +550,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
             fauxToolCall('SubagentWorkflow', {
               script: doubleScript,
               args: JSON.stringify('{"items": [10, 20]}'),
+              background: false,
             }),
           ],
           { stopReason: 'toolUse' },
@@ -598,7 +601,7 @@ test('subagent 失败于子会话创建后：错误输出仍附 footer 与 execu
     // subagent_failed（完成但无文本输出）——真实失败时机。
     faux.setResponses([
       fauxAssistantMessage(
-        [fauxToolCall('subagent', { prompt: '会失败的任务' }, { id: 'call-err-1' })],
+        [fauxToolCall('subagent', { prompt: '会失败的任务', background: false }, { id: 'call-err-1' })],
         { stopReason: 'toolUse' },
       ),
       fauxAssistantMessage([fauxThinking('只有思考没有正文')]),

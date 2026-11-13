@@ -260,7 +260,7 @@ describe('builtin:worktree 隔离派生（agent_spawn continuation）', { timeou
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
       env.faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '隔离任务', isolation: 'worktree' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '隔离任务', isolation: 'worktree', background: false })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('子代理完成'),
         fauxAssistantMessage('主回合完成'),
       ])

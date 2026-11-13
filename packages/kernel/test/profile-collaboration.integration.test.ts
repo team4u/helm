@@ -398,7 +398,7 @@ test('协作4: 点名委派真链路——subagent(agentType reviewer) 派生真
     // 协作目录后调用 subagent）→ 子代理回合 → 父收尾总结轮。
     env.faux.setResponses([
       env.scriptedStep(() => fauxAssistantMessage(
-        [fauxToolCall('subagent', { agentType: 'reviewer', prompt: '审查' })],
+        [fauxToolCall('subagent', { agentType: 'reviewer', prompt: '审查', background: false })],
         { stopReason: 'toolUse' },
       )),
       env.scriptedStep(() => fauxAssistantMessage(CHILD_REPLY)),

@@ -121,26 +121,7 @@ async function spawnChain(
   return created
 }
 
-/** 轮询会话的 subagent 后台 run 直至终态（后台结算链并不同步于回合 idle）。 */
-async function waitForBackgroundRunTerminal(
-  app: Awaited<ReturnType<typeof createHelm>>,
-  conversationId: number,
-  deadlineMs = 20_000,
-): Promise<{ id: string; kind?: string; status: string }> {
-  const start = Date.now()
-  for (;;) {
-    const { runs } = (await app.kernel.plugins.invokeAction('builtin:workflow', 'runs', {
-      conversationId,
-    })) as { runs: Array<{ id: string; kind?: string; status: string }> }
-    const bg = runs.find((r) => r.kind === 'subagent')
-    if (bg !== undefined && bg.status !== 'running') return bg
-    assert.ok(
-      Date.now() - start < deadlineMs,
-      `后台 run 应在 ${deadlineMs}ms 内到达终态（实际 ${JSON.stringify(runs)}）`,
-    )
-    await new Promise((resolve) => setTimeout(resolve, 100))
-  }
-}
+
 
 // ---------------------------------------------------------------------------
 // 1. 顶层派生一层：事实登记 + 一层子代理保留派工工具
@@ -152,9 +133,9 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
     const { models, faux } = makeFauxModels()
     const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
-      // 顶层：派生一个子代理（真实原生 spawn，真子会话）。
+      // 顶层：派生一个子代理（真实原生 spawn，真子会话；显式同步等待结果）。
       faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '子任务' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '子任务', background: false })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('子代理的回答'),
         fauxAssistantMessage('主回合完成'),
       ])
@@ -212,8 +193,8 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
       // 顶层 toolUse(subagent) → 一层子代理 toolUse(subagent) → 二层子代理文本
       // → 一层续答 → 顶层续答。
       faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '一层任务' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '二层任务' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '一层任务', background: false })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '二层任务', background: false })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('二层子代理的回答'),
         fauxAssistantMessage('一层子代理完成'),
         fauxAssistantMessage('主回合完成'),
@@ -357,39 +338,64 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 5. 后台 run：一层子代理派 background 子代理登记 depth=2 并汇报结算
+  // 5. 后台拒绝契约：受管子代理（helm-owned）显式 background:true 被显式拒绝
   // -------------------------------------------------------------------------
 
-  test('一层子代理派后台子代理（background:true 工具链）：登记 depth=2，结算后向一层父会话汇报', { timeout: 60_000 }, async () => {
+  test('受管子代理显式 background:true：显式拒绝（防早结算），不派生、不建 run；同步缺省仍可用', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth5')
     const { models, faux } = makeFauxModels()
     const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
       const child1 = (await spawnChain(app, faux, [1]))[0]!
-      // faux 响应是全共享 FIFO 队列；首个必须是 toolCall（一层回合调用
-      // subagent background:true），其后三个消费点（一层续答 / 后台二层回合 /
-      // 结算汇报触发的一层回合）到达次序不确定——一律供给同一良性文本。
+      // 一层子代理是 helm-owned 自动化会话：显式 background:true 必须显式报错，
+      // 不得静默改写为同步，也不得派生子会话/创建 run（防自动化调用方早结算）。
       faux.setResponses([
         fauxAssistantMessage(
-          [fauxToolCall('subagent', { prompt: '后台二层任务', background: true })],
+          [fauxToolCall('subagent', { prompt: '被拒的后台任务', background: true })],
           { stopReason: 'toolUse' },
         ),
-        ...Array.from({ length: 3 }, () => fauxAssistantMessage('良性回答')),
+        fauxAssistantMessage('一层续答'),
       ])
       await app.kernel.submitInput(child1, '派一个后台子代理')
       await app.kernel.waitForIdle(child1)
 
-      const bg = await waitForBackgroundRunTerminal(app, child1)
-      assert.equal(bg.status, 'completed', `后台 run 应回报终态（实际 ${bg.status}）`)
+      const detail = await app.kernel.getConversationDetail(child1, { limit: 30 })
+      const toolText = [...detail.entries]
+        .reverse()
+        .map((e) => JSON.stringify(e.model ?? ''))
+        .find((t) => t.includes('"subagent"')) ?? ''
+      assert.ok(
+        toolText.includes('subagent_failed') && toolText.includes('background'),
+        `拒绝信息应显式指出 background 不被允许：${toolText.slice(0, 300)}`,
+      )
+      const { runs } = (await app.kernel.plugins.invokeAction('builtin:workflow', 'runs', {
+        conversationId: child1,
+      })) as { runs: Array<{ id: string; kind?: string }> }
+      assert.equal(runs.length, 0, '被拒调用不得创建任何 run 记录')
+      assert.equal(
+        app.kernel.listConversations().filter((c) => c.parentConversationId === child1).length,
+        0,
+        '被拒调用不得派生子会话',
+      )
 
+      // 同一受管会话缺省（省略 background）仍走同步路径：直接等待结果。
+      faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall('subagent', { prompt: '同步二层任务' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('同步二层回答'),
+        fauxAssistantMessage('一层同步续答'),
+      ])
+      await app.kernel.submitInput(child1, '再派一个同步子代理')
+      await app.kernel.waitForIdle(child1)
       const child2 = app.kernel.listConversations().find((c) => c.parentConversationId === child1)
-      assert.ok(child2, '后台派生应创建二层子会话')
-      await app.kernel.waitForIdle(child2.id)
+      assert.ok(child2, '缺省同步调用应正常派生二层子会话')
       await app.kernel.documentStore.flush()
       const entry = registryEntry(dir, child2.id)
-      assert.equal(entry['depth'], 2, '后台派生的二层子代理登记 depth=2')
+      assert.equal(entry['depth'], 2, '同步派生的二层子代理同样登记 depth=2')
 
-      // 二层后台子代理是叶子：直调 spawnAgent 被拒。
+      // 二层子代理是叶子：直调 spawnAgent 被拒。
       await assert.rejects(
         () => app.kernel.spawnAgent({ parentConversationId: child2.id, prompt: '三层尝试' }),
         (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',

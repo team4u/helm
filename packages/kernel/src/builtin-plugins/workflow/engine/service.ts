@@ -7,7 +7,10 @@
  *   取消本 run + 其子会话子树内的全部后代 run（兄弟不牵连；取消窗口内拒绝
  *   该子树新 run/spawn，返回时全部 settle）；cancelRunsUnderConversation 供
  *   插件在父会话 abort 后取消子树内属于它的全部 run；子会话中止一律经宿主
- *   守卫端口（human 红线由内核原子复核，无普通中止回退）；
+ *   守卫端口（human 红线由内核原子复核，无普通中止回退）；经工具 background
+ *   启动的 workflow run（notifyParentOnSettle=true）与 subagent run 同款后台
+ *   语义：结算后恰一次向父会话投递通知（notifiedAt 防重复，init() outbox
+ *   补发）、重启恢复时守卫中止其在途子会话并标 failed(interrupted)；
  * - 持久化（单库设计）：run 索引与每 run summary 存入注入的 state store
  *   （@helm/kernel 唯一 state.sqlite 的命名空间 doc），启动恢复时把遗留
  *   running 显式标 failed(interrupted)。唯一文件例外是统一前缀重放账本
@@ -251,7 +254,12 @@ interface RunRecord {
   journalIoErrors?: string[]
   /** run 种类：DSL 工作流（缺省）或受信后台单子代理（startBackgroundAgent）。 */
   kind?: 'workflow' | 'subagent'
-  /** 后台子代理终态是否须向父会话投递通知（notifiedAt 防重复投递）。 */
+  /**
+   * 后台启动标记：终态结算后须向父会话投递通知（notifiedAt 防重复投递，
+   * init() outbox 补发）。subagent run 恒为后台；workflow run 仅在经工具
+   * background 启动时置位——它同时决定重启恢复语义（isBackgroundRecord：
+   * 在途子会话先落 abort 标记并守卫中止）。同步 workflow 不置位、不通知。
+   */
   notifyParentOnSettle?: boolean
   notifiedAt?: number
   /** 后台子代理的 Profile 与执行环境元数据（onResolved 回传后补全）。 */
@@ -467,7 +475,7 @@ export class WorkflowService {
     const childIds = new Set<number>()
     for (const entry of index) {
       const record = this.loadRecord(entry.id)
-      if (record.kind !== 'subagent' || record.status !== 'running') continue
+      if (record.status !== 'running' || !this.isBackgroundRecord(record)) continue
       const known = record.subagentMeta?.execution?.conversationId
       if (known !== undefined) childIds.add(known)
       for (const node of record.nodes ?? []) if (node.conversationId !== undefined) childIds.add(node.conversationId)
@@ -492,7 +500,6 @@ export class WorkflowService {
           const record = this.state.get<RunRecord | null>(runKey(entry.id), null)
           if (record === null) continue
           if (
-            record.kind === 'subagent' &&
             record.notifyParentOnSettle === true &&
             record.status !== 'running' &&
             record.notifiedAt === undefined
@@ -509,7 +516,7 @@ export class WorkflowService {
             })
           }
           if (record.status !== 'running') continue
-          if (record.kind === 'subagent') {
+          if (this.isBackgroundRecord(record)) {
             const children = new Set<number>()
             const known = record.subagentMeta?.execution?.conversationId
             if (known !== undefined) children.add(known)
@@ -533,15 +540,16 @@ export class WorkflowService {
             record.kind === 'subagent'
               ? 'subagent run interrupted by process restart（可凭 conversationId/executionId 通过 resume 续接）'
               : `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）：${record.error ?? ''}`.trim()
-          if (record.kind === 'subagent' && record.nodes !== undefined) {
+          if (this.isBackgroundRecord(record) && record.nodes !== undefined) {
             record.nodes = record.nodes.map((node) => node.status === 'running' || node.status === 'pending'
               ? { ...node, status: 'failed', settledAt: record.updatedAt, error: record.error }
               : node)
           }
           this.state.set(runKey(entry.id), record)
           changed = true
-          // interrupted 的 subagent 同样须补发通知（通知内容即 failed 终态本身）。
-          if (record.kind === 'subagent' && record.notifyParentOnSettle === true && record.notifiedAt === undefined) {
+          // interrupted 的后台 run（subagent 与后台 workflow）同样须补发通知
+          //（通知内容即 failed 终态本身）。
+          if (record.notifyParentOnSettle === true && record.notifiedAt === undefined) {
             const target = record
             pendingNotifies.push(async () => {
               if (this.host.onBackgroundAgentSettled === undefined) return
@@ -886,7 +894,7 @@ export class WorkflowService {
    */
   async run(
     request: WorkflowRunRequest,
-    context?: { parentToolCallId?: string },
+    context?: { parentToolCallId?: string; notifyParentOnSettle?: boolean },
   ): Promise<WorkflowRunSummary> {
     this.assertNotClosed()
     await this.init()
@@ -1058,6 +1066,9 @@ export class WorkflowService {
       createdAt,
       updatedAt: createdAt,
       kind: 'workflow',
+      // 后台启动（工具 background）：结算后向父会话投递通知并参与重启恢复
+      // 的守卫中止（isBackgroundRecord）；同步 run 不置位、不通知。
+      ...(context?.notifyParentOnSettle === true ? { notifyParentOnSettle: true } : {}),
       ...(meta?.description !== undefined ? { description: this.redact(meta.description) } : {}),
       ...(meta?.phases !== undefined
         ? { phases: redactJsonValue(meta.phases, this.redact) as RunRecord['phases'] }
@@ -1204,6 +1215,27 @@ export class WorkflowService {
               // 诊断补写尽力而为；settleError 已携带原始异常。
             }
             run.settleError = run.settleError ?? settledError
+          }
+        }
+        // 后台启动的 workflow run（notifyParentOnSettle）：终态落盘后向父会话
+        // 投递结算通知——与 startBackgroundAgent 同款 outbox 语义（恰一次，
+        // notifiedAt 防重复；失败/关停窗口不置位，init() 下次启动补发）。
+        if (
+          !this.closed &&
+          record.notifyParentOnSettle === true &&
+          record.notifiedAt === undefined &&
+          this.host.onBackgroundAgentSettled !== undefined
+        ) {
+          try {
+            await this.host.onBackgroundAgentSettled({ ...run.summary }, {
+              parentConversationId: conversationId,
+            })
+            record.notifiedAt = Date.now()
+            this.writeRecord(record)
+            await this.state.flush?.()
+          } catch (notifyError) {
+            const message = notifyError instanceof Error ? notifyError.message : String(notifyError)
+            process.stderr.write(`workflow ${runId}: onBackgroundAgentSettled failed: ${message}\n`)
           }
         }
         this.emitEventSafe('workflow.updated', { run: { ...run.summary } })
@@ -2765,6 +2797,18 @@ export class WorkflowService {
 
   private assertNotClosed(): void {
     if (this.closed) throw new HelmError('closed', 'WorkflowService 已关闭', 409)
+  }
+
+  /**
+   * 后台形态判定（恢复语义用）：kind=subagent 恒后台；kind=workflow 仅在
+   * notifyParentOnSettle=true（经工具 background 启动）时按后台恢复——重启后
+   * 其在途子会话须先落 abort 标记（prepareRecovery）再守卫中止，随后
+   * failed(interrupted) 并补发通知，否则后台工作流子会话会遗留。常规同步
+   * workflow（无 notify）沿用账本恢复语义：不中止子会话，报
+   * resumeFromRunId 提示，通知 outbox 与它无关。
+   */
+  private isBackgroundRecord(record: RunRecord): boolean {
+    return record.kind === 'subagent' || record.notifyParentOnSettle === true
   }
 
   /**

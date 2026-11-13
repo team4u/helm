@@ -12,9 +12,13 @@
  *   保留紧凑 `run-badges` 角标文档（每会话聚合 count/tone/footerText，按
  *   run.id 去重，无完整 run 摘要）；
  *   无进程内 Map fallback、无 kernel.documentStore 注入；
- * - 后台子代理结算（kind=subagent）经 submitInput(requestId) 向父会话投递
+ * - 后台 run 结算（kind=subagent 恒后台；kind=workflow 经工具 background 启动
+ *   时同样置 notifyParentOnSettle）经 submitInput(requestId) 向父会话投递
  *   汇报（跨重启幂等；父会话已删除时 notification 通知）；级联取消边界内的
  *   下级父会话不投递（防取消后复活），只向边界外拥有者单次结算汇报；
+ *   background 缺省以内核权威归属到 ownership=human 判定（不按 profileId/
+ *   runtime 角色硬编码）：人类交互会话缺省后台，自动化会话（bot/helm）缺省
+ *   同步且显式 background=true 显式拒绝（防子代理/驻留 Worker 早结算）；
  * - 级联取消：turn_settled（outcome=aborted）时取消该会话子树内属于它的
  *   全部在途 run（completed/failed 不取消合法后台任务）；受管子会话中止一律
  *   经 ctx.host.abortConversationGuarded 内核原子复核（human 红线），绝不
@@ -135,6 +139,7 @@ const workflowOutputSchema = {
   type: 'object',
   properties: {
     ok: { type: 'boolean' },
+    background: { type: 'boolean' },
     summary: {},
   },
   required: ['ok'],
@@ -312,6 +317,43 @@ export function createWorkflowPlugin(): PluginDefinition {
         const facts = depthFactsOf(conversationId)
         if (!facts.managed || facts.depth + 1 <= facts.maxSubagentDepth) return
         throw depthExceededError(facts.depth, facts.maxSubagentDepth, conversationId)
+      }
+
+      /**
+       * 会话是否人类交互会话（subagent / SubagentWorkflow 的 background 缺省
+       * 依据）：以内核权威归属 getConversationOwnership 为准——受管子代理/
+       * 驻留 Worker 派生登记即标 helm，触发会话标 helm/bot；人类接管（归属翻
+       * 转 human）后即按人类交互对待。不叠加 profileId / runtime kind / 受管
+       * 登记表条件（登记表只表达派生深度事实，人类接管后强制同步会误伤），
+       * 也不按 router/worker 等角色枚举便裁。
+       */
+      function isHumanInteractionSession(conversationId: number): boolean {
+        return ctx.host.getConversationOwnership(conversationId) === 'human'
+      }
+
+      /**
+       * background 缺省与显式拒绝：人类交互会话缺省后台（父回合不阻塞，完成后
+       * followUp 汇报）；自动化会话（bot/helm：受管子代理、驻留 Worker、触发
+       * 会话）缺省同步等待——后台完成汇报会驱动自动化会话早结算（把「后台已
+       * 启动」当终态消费），显式 background=true 一律显式拒绝，绝不静默改写。
+       */
+      function resolveBackground(
+        conversationId: number,
+        explicit: boolean | undefined,
+      ): { ok: true; background: boolean } | { ok: false; message: string; reason: string } {
+        const human = isHumanInteractionSession(conversationId)
+        if (explicit === undefined) return { ok: true, background: human }
+        if (explicit && !human) {
+          const ownership = ctx.host.getConversationOwnership(conversationId)
+          return {
+            ok: false,
+            reason: 'background_not_allowed',
+            message:
+              `background=true 仅允许人类交互会话使用；当前会话 ${conversationId} 归属 ${ownership}` +
+              '（自动化会话缺省同步等待最终结果，后台完成汇报会驱动早结算）；如需同步等待请省略 background',
+          }
+        }
+        return { ok: true, background: explicit }
       }
 
       /**
@@ -742,7 +784,8 @@ export function createWorkflowPlugin(): PluginDefinition {
           })
           return
         }
-        const requestId = `helm:subagent-report:${run.id}`
+        const isSubagent = run.kind === 'subagent'
+        const requestId = `helm:${isSubagent ? 'subagent' : 'workflow'}-report:${run.id}`
         const report = {
           runId: run.id,
           status: run.status,
@@ -752,12 +795,12 @@ export function createWorkflowPlugin(): PluginDefinition {
         }
         await ctx.host.submitInput(
           info.parentConversationId,
-          `后台子代理任务已结算。以下为运行 ${run.id} 的结果数据：\n${safeResultText(report)}`,
+          `${isSubagent ? '后台子代理任务' : '后台工作流任务'}已结算。以下为运行 ${run.id} 的结果数据：\n${safeResultText(report)}`,
           {
             origin: 'agent',
             whenBusy: 'followUp',
             requestId,
-            meta: { backgroundRunId: run.id, kind: 'subagent_report' },
+            meta: { backgroundRunId: run.id, kind: isSubagent ? 'subagent_report' : 'workflow_report' },
           },
         )
       }
@@ -837,14 +880,17 @@ export function createWorkflowPlugin(): PluginDefinition {
       ctx.tool({
         name: 'subagent',
         description:
-          '派生一个子代理；默认等待最终结果，background:true 在实际环境就绪后返回 runId，后台完成后向父会话汇报。agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；schema 校验输出，gate 在实际节点和工作目录中验收。支持 cwd、isolation:worktree、model、effort、maxSubagentDepth（显式授予子树派生深度上限，1..5，缺省继承当前上限 2）；凭 execution.conversationId/executionId 作为 resume 续接。result 与执行元数据独立；检视或合入后可用 cleanup_worktree 清理受管工作树。',
+          '派生一个子代理。人类交互会话缺省后台执行：执行环境就绪后立即返回 runId，后台完成后向本会话 followUp 汇报；自动化会话（受管子代理/驻留 Worker/触发会话，归属 bot/helm）缺省同步等待最终结果，显式 background=true 会被拒绝——后台汇报会驱动自动化调用方早结算。显式 background:false 可强制同步等待。agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；schema 校验输出，gate 在实际节点和工作目录中验收。支持 cwd、isolation:worktree、model、effort、maxSubagentDepth（显式授予子树派生深度上限，1..5，缺省继承当前上限 2）；凭 execution.conversationId/executionId 作为 resume 续接。result 与执行元数据独立；检视或合入后可用 cleanup_worktree 清理受管工作树。',
         inputSchema: {
           type: 'object',
           properties: {
             prompt: { type: 'string', description: '子代理任务指令' },
             agentType: { type: 'string', description: 'Profile ID 或外部运行时标识（缺省 assistant）' },
             cwd: { type: 'string', description: '子代理工作目录（绝对路径；缺省用 Profile/会话缺省）' },
-            background: { type: 'boolean', description: '执行环境就绪后返回运行句柄，后台完成后向父会话汇报（默认 false）' },
+            background: {
+              type: 'boolean',
+              description: '后台执行（执行环境就绪后返回运行句柄，完成后向本会话汇报）。人类交互会话缺省 true；自动化会话缺省 false 且显式 true 被拒绝',
+            },
             isolation: {
               type: 'string',
               enum: ['worktree'],
@@ -896,6 +942,14 @@ export function createWorkflowPlugin(): PluginDefinition {
           if (a['background'] !== undefined && typeof a['background'] !== 'boolean') {
             return envelopeError('subagent_failed: background 必须为 boolean', 'invalid background: 必须为 boolean')
           }
+          // background 缺省与显式拒绝（权威 ownership 判定，非角色枚举）。
+          const backgroundChoice = resolveBackground(
+            context.conversationId,
+            a['background'] === undefined ? undefined : a['background'] === true,
+          )
+          if (!backgroundChoice.ok) {
+            return envelopeError(`subagent_failed: ${backgroundChoice.message}`, backgroundChoice.reason)
+          }
           let resolved: AgentExecutionInfo | undefined
           const request: AgentSpawnRequest = {
             parentConversationId: context.conversationId,
@@ -917,7 +971,7 @@ export function createWorkflowPlugin(): PluginDefinition {
             signal: context.signal,
           }
           try {
-            if (a['background'] === true) {
+            if (backgroundChoice.background) {
               const started = await workflows.startBackgroundAgent(request, {
                 parentToolCallId: context.callId,
                 notifyParentOnSettle: true,
@@ -968,7 +1022,7 @@ export function createWorkflowPlugin(): PluginDefinition {
       ctx.tool({
         name: 'SubagentWorkflow',
         description:
-          '在当前会话执行 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本（字符串形 JSON 自动解包）。返回真实执行 summary（runId/status/nodes/result）。',
+          '在当前会话执行 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本（字符串形 JSON 自动解包）。人类交互会话缺省后台执行（background 缺省 true）：启动后立即返回运行中 summary，完成后向本会话 followUp 汇报；自动化会话（归属 bot/helm：受管子代理/驻留 Worker/触发会话）缺省同步等待终态（runId/status/nodes/result），显式 background=true 会被拒绝。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -977,6 +1031,10 @@ export function createWorkflowPlugin(): PluginDefinition {
             name: { type: 'string', description: '已保存工作流名（与 script、scriptPath 择一）' },
             args: { description: '传给脚本的任意 JSON args（对象/数组/标量均可，字符串形 JSON 自动解包）' },
             resumeFromRunId: { type: 'string', description: '断点恢复的既有 runId（可选）' },
+            background: {
+              type: 'boolean',
+              description: '后台执行：启动后立即返回运行句柄，完成后向本会话 followUp 汇报。人类交互会话缺省 true；自动化会话缺省 false 且显式 true 被拒绝（防早结算）',
+            },
           },
           additionalProperties: false,
         },
@@ -985,6 +1043,25 @@ export function createWorkflowPlugin(): PluginDefinition {
           const a = args as Record<string, unknown>
           // 嵌套深度前置拒绝（防线二）：达到子树上限的会话是叶子，不创建任何 run 记录。
           assertCanSpawn(context.conversationId)
+          if (a['background'] !== undefined && typeof a['background'] !== 'boolean') {
+            return {
+              output: [{ type: 'text', text: 'workflow_failed: background 必须为 boolean' }],
+              isError: true,
+              structuredOutput: { ok: false, summary: 'invalid background: 必须为 boolean' },
+            }
+          }
+          // background 缺省与显式拒绝（与 subagent 同款权威 ownership 判定）。
+          const backgroundChoice = resolveBackground(
+            context.conversationId,
+            a['background'] === undefined ? undefined : a['background'] === true,
+          )
+          if (!backgroundChoice.ok) {
+            return {
+              output: [{ type: 'text', text: `workflow_failed: ${backgroundChoice.message}` }],
+              isError: true,
+              structuredOutput: { ok: false, summary: backgroundChoice.reason },
+            }
+          }
           const input: Record<string, unknown> = {}
           if (a['script'] !== undefined) input['script'] = String(a['script'])
           if (a['scriptPath'] !== undefined) input['scriptPath'] = String(a['scriptPath'])
@@ -993,11 +1070,24 @@ export function createWorkflowPlugin(): PluginDefinition {
           // 对象序列化成字符串传入，这里统一解包（双层/标量原样语义不变）。
           if (a['args'] !== undefined) input['args'] = normalizeWorkflowArgs(a['args'])
           if (a['resumeFromRunId'] !== undefined) input['resumeFromRunId'] = String(a['resumeFromRunId'])
+          const runContext = {
+            ...(context.callId !== undefined ? { parentToolCallId: context.callId } : {}),
+            // 仅后台启动的 run 参与父会话通知与重启恢复的守卫中止。
+            ...(backgroundChoice.background ? { notifyParentOnSettle: true } : {}),
+          }
           try {
-            const started = await workflows.run(
-              { ...input, conversationId: context.conversationId },
-              context.callId !== undefined ? { parentToolCallId: context.callId } : undefined,
-            )
+            const started = await workflows.run({ ...input, conversationId: context.conversationId }, runContext)
+            if (backgroundChoice.background) {
+              // 后台模式：durable running 快照落盘即返回，不绑定父回合 signal
+              //（父回合结束不误杀；中止仅经 abort(runId)/级联取消）；完成后经
+              // notifyParentOnSettle outbox 向父会话幂等 followUp 汇报。
+              syncRunsDoc()
+              const payload = { ok: true, background: true, summary: started }
+              return {
+                output: [{ type: 'text', text: safeResultText(payload) }],
+                structuredOutput: payload,
+              }
+            }
             const onAbort = () => {
               void workflows.abort(started.id).catch(() => {})
             }

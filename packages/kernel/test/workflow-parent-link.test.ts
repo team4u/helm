@@ -66,7 +66,7 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
     // --- 1. 快速 run：完成后 summary.parentToolCallId 即真实工具 callId ---
     ;(faux as FauxHandle).setResponses([
       fauxAssistantMessage(
-        [fauxToolCall('SubagentWorkflow', { script: FAST_SCRIPT }, { id: 'call-fast-1' })],
+        [fauxToolCall('SubagentWorkflow', { script: FAST_SCRIPT, background: false }, { id: 'call-fast-1' })],
         { stopReason: 'toolUse' },
       ),
       fauxAssistantMessage('快完成'),
@@ -84,7 +84,7 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
     // 子代理（faux 子会话）不设响应 -> subagent 工具等待，父回合工具在途。
     ;(faux as FauxHandle).setResponses([
       fauxAssistantMessage(
-        [fauxToolCall('SubagentWorkflow', { script: SLOW_SCRIPT }, { id: 'call-slow-2' })],
+        [fauxToolCall('SubagentWorkflow', { script: SLOW_SCRIPT, background: false }, { id: 'call-slow-2' })],
         { stopReason: 'toolUse' },
       ),
       fauxAssistantMessage('慢完成'),

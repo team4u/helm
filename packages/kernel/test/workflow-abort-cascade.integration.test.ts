@@ -248,7 +248,7 @@ test('human 红线（同步信号桥）：父会话 abort 不杀 human 子会话
     // 第一轮：同步 subagent（工具阻塞等子会话）；子会话转 human 后中止父会话。
     env.parentQueue.push(
       fauxAssistantMessage(
-        [fauxToolCall('subagent', { prompt: 'HANG-CHILD 同步任务一' }, { id: 'call-sync-human' })],
+        [fauxToolCall('subagent', { prompt: 'HANG-CHILD 同步任务一', background: false }, { id: 'call-sync-human' })],
         { stopReason: 'toolUse' },
       ),
     )
@@ -271,7 +271,7 @@ test('human 红线（同步信号桥）：父会话 abort 不杀 human 子会话
     // 第二轮（对照）：helm-owned 同步子会话 → 父 abort 后子会话被守卫中止。
     env.parentQueue.push(
       fauxAssistantMessage(
-        [fauxToolCall('subagent', { prompt: 'HANG-CHILD 同步任务二' }, { id: 'call-sync-helm' })],
+        [fauxToolCall('subagent', { prompt: 'HANG-CHILD 同步任务二', background: false }, { id: 'call-sync-helm' })],
         { stopReason: 'toolUse' },
       ),
     )

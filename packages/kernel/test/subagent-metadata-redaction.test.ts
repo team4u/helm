@@ -37,7 +37,7 @@ test('外部子代理执行元数据的工具正文与持久结果统一脱敏',
       },
     })
     faux.setResponses([
-      fauxAssistantMessage([fauxToolCall('subagent', { prompt: '检查元数据', agentType: 'herdr:pi' })], { stopReason: 'toolUse' }),
+      fauxAssistantMessage([fauxToolCall('subagent', { prompt: '检查元数据', agentType: 'herdr:pi', background: false })], { stopReason: 'toolUse' }),
       fauxAssistantMessage('完成'),
     ])
     await kernel.submitInput(1, '执行任务')
