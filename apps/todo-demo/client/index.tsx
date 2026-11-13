@@ -93,7 +93,11 @@ export function MainScreen(): ReactNode {
               <Checkbox
                 id={`td-${it.id}`}
                 checked={it.done}
-                onChange={() => void callAction('set_done', { id: it.id, done: !it.done })}
+                onChange={() => {
+                  void callAction('set_done', { id: it.id, done: !it.done }).catch((err: unknown) =>
+                    notify('更新失败：' + (err instanceof Error ? err.message : String(err)), 'error'),
+                  )
+                }}
               />
               {editingId === it.id ? (
                 <input

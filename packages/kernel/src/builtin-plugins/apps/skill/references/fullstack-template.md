@@ -170,7 +170,11 @@ export function MainScreen(): ReactNode {
                 <td className="sd-col-check">
                   <Checkbox
                     checked={it.done}
-                    onChange={(checked) => void callAction('set_done', { id: it.id, done: checked })}
+                    onChange={(checked) => {
+                      void callAction('set_done', { id: it.id, done: checked }).catch((err: unknown) =>
+                        notify('更新失败：' + (err instanceof Error ? err.message : String(err)), 'error'),
+                      )
+                    }}
                   />
                 </td>
                 <td className={it.done ? 'sd-done' : ''}>{it.title}</td>
