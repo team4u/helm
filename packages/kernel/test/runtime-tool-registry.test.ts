@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { Extension, ToolRegistration } from '@earendil-works/pi-durable'
-import { HelmError } from '@helm/protocol'
+import { HelmError, type ActionManifest, type ConversationSummary } from '@helm/protocol'
 import {
   RuntimeToolRegistry,
   wrapToolExecute,
@@ -76,6 +76,16 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     }
 
     let invokedAction: { pluginId: string; actionId: string; input: unknown } | undefined
+    const demoManifest: ActionManifest = {
+      pluginId: 'demo',
+      id: 'test',
+      description: '测试动作',
+      inputSchema: { type: 'object', properties: { nested: { type: 'object', properties: { deep: { type: 'string' } } } }, required: ['nested'] },
+      outputSchema: { type: 'object' },
+      scope: { tags: ['alpha'] },
+    }
+    let listedActions: ActionManifest[] = [demoManifest]
+    let conversationTags: string[] = ['alpha']
     const fakeHost: PluginHostToolTarget = {
       invokeAction: async (pluginId: string, actionId: string, input: unknown) => {
         invokedAction = { pluginId, actionId, input }
@@ -85,6 +95,7 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
         throw new Error('not implemented')
       },
       listTools: () => [],
+      listActions: () => listedActions,
     }
 
     const registryModule = new RuntimeToolRegistry({
@@ -94,6 +105,23 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
       isArtifactAuthorized: (_c, _a) => true,
       redact: (t) => t.replace(/secret/g, '[REDACTED]'),
       handledToolCalls,
+      getConversation: (id) => ({
+        id,
+        title: 'test',
+        profileId: 'assistant',
+        tags: conversationTags,
+        cwd: '/tmp/test',
+        model: 'faux/faux-1',
+        thinkingLevel: '',
+        status: 'idle',
+        stateChangeSeq: 1,
+        completionSeq: 0,
+        unread: false,
+        pinned: false,
+        pendingAskCount: 0,
+        createdAt: 0,
+        updatedAt: 0,
+      }),
     })
 
     registryModule.installKernelTools()
@@ -137,6 +165,36 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
       {},
     )) as { output: Array<{ text: string }> }
     assert.equal(interceptedRes.output[0]!.text, 'handled-by-hook')
+
+    // describe 模式：返回完整 manifest（含嵌套 Schema），绝不执行 handler
+    invokedAction = undefined
+    const descRes = await runActionTool.execute({ actionId: 'demo.test', describe: true }, { conversationId: 1 }, {})
+    assert.equal(descRes.isError, undefined)
+    assert.equal(invokedAction, undefined, 'describe 模式不得触发 invokeAction')
+    const parsed = JSON.parse(descRes.output[0]!.text) as ActionManifest
+    assert.equal(parsed.pluginId, 'demo')
+    assert.equal(parsed.id, 'test')
+    assert.deepEqual(parsed.inputSchema, demoManifest.inputSchema, '嵌套 Schema 必须完整可读')
+    assert.deepEqual(parsed.outputSchema, demoManifest.outputSchema)
+
+    // describe：未知动作（未声明/未启用）显式拒绝
+    const unknownRes = await runActionTool.execute({ actionId: 'demo.missing', describe: true }, { conversationId: 1 }, {})
+    assert.equal(unknownRes.isError, true)
+    assert.ok(unknownRes.output[0]!.text.includes('未声明动作'))
+
+    // describe：scope 外会话拒绝，不泄露 Schema
+    conversationTags = ['beta']
+    const scopedOut = await runActionTool.execute({ actionId: 'demo.test', describe: true }, { conversationId: 1 }, {})
+    assert.equal(scopedOut.isError, true)
+    assert.ok(scopedOut.output[0]!.text.includes('scope'))
+    assert.ok(!scopedOut.output[0]!.text.includes('deep'), 'scope 外不得泄露 Schema 内容')
+    conversationTags = ['alpha']
+
+    // describe：插件停用（listActions 不再返回）同样拒绝
+    listedActions = []
+    const disabledRes = await runActionTool.execute({ actionId: 'demo.test', describe: true }, { conversationId: 1 }, {})
+    assert.equal(disabledRes.isError, true)
+    assert.ok(disabledRes.output[0]!.text.includes('未声明动作'))
   })
 
   it('installPluginTools 与 refreshPluginTools：热装与刷新插件 DerivedToolSpec', { timeout: 60_000 }, async () => {
@@ -178,6 +236,7 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
         throw new Error('not implemented')
       },
       listTools: () => currentTools,
+      listActions: () => [],
       executeTool: async (name: string, args: unknown, context: unknown) => {
         executedToolCall = { name, args, context }
         return `result contains token-123`
@@ -191,6 +250,23 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
       isArtifactAuthorized: () => true,
       redact: (t) => t.replace(/token-123/g, '***'),
       handledToolCalls,
+      getConversation: (id) => ({
+        id,
+        title: 'test',
+        profileId: 'assistant',
+        tags: [],
+        cwd: '/tmp/test',
+        model: 'faux/faux-1',
+        thinkingLevel: '',
+        status: 'idle',
+        stateChangeSeq: 1,
+        completionSeq: 0,
+        unread: false,
+        pinned: false,
+        pendingAskCount: 0,
+        createdAt: 0,
+        updatedAt: 0,
+      }),
     })
 
     registryModule.refreshPluginTools()

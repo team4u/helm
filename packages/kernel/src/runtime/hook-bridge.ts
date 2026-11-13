@@ -7,11 +7,17 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { GenerationTask, ToolTask, defineExtension, hook, type Extension, type ToolExecutionResult } from '@earendil-works/pi-durable'
 import type { ConversationSummary, ToolResultHookPayload } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import { HelmError, matchesConversationScope } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import type { PluginHost } from '../plugins/index.js'
 import { redactJsonValue } from '../redact.js'
+import {
+  actionCliCommand,
+  projectActionPromptSection,
+  renderAvailableActionsSection,
+  type ActionDirectoryEntry,
+} from './action-prompts.js'
 import {
   assertSafeMessageSurgery,
   normalizeToolResult,
@@ -152,11 +158,15 @@ export class HookBridge {
     summary: ConversationSummary,
     conversationId: number,
   ): Promise<{ messages: unknown } | undefined> {
+    const host = this.options.pluginHost()
     const runtimeTools = getCurrentTools(request.messages as never)
+    // scope 裁剪：插件工具全局安装（helm-plugins 扩展），但 scope 外会话不得
+    // 看到 declaration——进入钩子链前按本会话可用 spec 过滤，内核工具保留。
+    const effectiveTools = host !== undefined ? this.scopeLocalTools(host, summary, runtimeTools) : runtimeTools
     const payload = {
       conversation: summary,
       inputs: this.options.currentRunInputs(conversationId),
-      tools: runtimeTools.map((spec) => ({
+      tools: effectiveTools.map((spec) => ({
         name: spec.name,
         description: spec.description,
         inputSchema: spec.parameters as Record<string, unknown>,
@@ -168,11 +178,14 @@ export class HookBridge {
     // 宿主终局投射：无论钩子是否 transform，按最终 active tools 统一重写
     // prompt.tools.* 段（仅激活工具进提示词；停用/剥离的工具旧段一并清除，
     // 不留幻影文本）。投射基于 PluginHost 当前声明（含 prompt 元数据）。
-    const activeTools = this.activeToolPrompts(summary, payload.tools, outcome)
+    const activeTools = this.activeToolPrompts(summary, effectiveTools, outcome)
     const outcomeSections = outcome?.action === 'transform'
       ? (outcome.value as typeof payload).sections
       : payload.sections
-    const projected = projectToolPromptSections(outcomeSections, activeTools)
+    const projected = projectActionPromptSection(
+      projectToolPromptSections(outcomeSections, activeTools),
+      this.renderActionDirectory(host, summary, effectiveTools, outcome),
+    )
     if (outcome?.action !== 'transform' && projected === outcomeSections) return undefined
     const value: typeof payload = outcome?.action === 'transform'
       ? { ...(outcome.value as typeof payload), sections: projected }
@@ -192,6 +205,8 @@ export class HookBridge {
     if (messagesChanged) messages = assertSafeMessageSurgery(original, value.messages)
     if (sectionsChanged) messages = withSections(messages, value.sections)
 
+    // 声明重写基线是 SDK 原始解析工具集（含 scope 外插件工具）：只要最终集
+    // 与原始集有差（scope 裁剪或钩子剥离），都经 toolsRemoved/toolsAdded 重放。
     const initialNames = new Set(runtimeTools.map((tool) => tool.name))
     const declared = new Set(value.tools.map((tool) => tool.name))
     if (declared.size !== initialNames.size || [...declared].some((name) => !initialNames.has(name))) {
@@ -199,6 +214,54 @@ export class HookBridge {
     }
     if (messages === original) return undefined
     return { messages: messages as unknown as typeof request.messages }
+  }
+
+  /**
+   * 插件工具 scope 裁剪：全局安装的插件工具（helm-plugins）中，scope 不匹配
+   * 当前会话者在进入钩子链前剥离 declaration（内核工具与 scope 内插件工具
+   * 保留）。执行期 assertScopeAllows 二次校验不变；这里消除的是请求级泄露。
+   */
+  private scopeLocalTools<T extends { name: string }>(
+    host: PluginHost,
+    summary: ConversationSummary,
+    requestTools: T[],
+  ): T[] {
+    const globalNames = new Set(host.listTools().map((tool) => tool.name))
+    if (globalNames.size === 0) return requestTools
+    const localNames = new Set(host.listTools(summary).map((tool) => tool.name))
+    return requestTools.filter((tool) => !globalNames.has(tool.name) || localNames.has(tool.name))
+  }
+
+  /**
+   * 动作目录段渲染：仅当 run_action 在本请求工具与钩子最终工具的交集内
+   * （真实可达）时生成；scope 命中且非 exposeAsTool 直投（直投动作经各自
+   * 工具通道宣传，钩子剥离后也不经目录复活）。无可达动作返回 undefined
+   * （prompt.actions 旧段随之清除）。
+   */
+  private renderActionDirectory(
+    host: PluginHost | undefined,
+    summary: ConversationSummary,
+    requestTools: Array<{ name: string }>,
+    outcome: { action: string; value?: unknown } | undefined,
+  ): string | undefined {
+    if (host === undefined) return undefined
+    const requestNames = new Set(requestTools.map((tool) => tool.name))
+    const finalNames =
+      outcome?.action === 'transform'
+        ? new Set(
+            ((outcome.value as { tools?: Array<{ name?: unknown }> }).tools ?? [])
+              .filter((t) => typeof t.name === 'string')
+              .map((t) => t.name as string),
+          )
+        : requestNames
+    if (!requestNames.has('run_action') || !finalNames.has('run_action')) return undefined
+    const entries: ActionDirectoryEntry[] = []
+    for (const manifest of host.listActions()) {
+      if (manifest.exposeAsTool === true) continue
+      if (!matchesConversationScope(manifest.scope, summary)) continue
+      entries.push({ manifest, cliCommand: actionCliCommand(manifest) })
+    }
+    return renderAvailableActionsSection(entries)
   }
 
   /**

@@ -364,6 +364,7 @@ export function assembleRuntimeServices(
       conversations.isArtifactAuthorized(convId, artifactConvId),
     redact: (t) => options.stashService.redact(t),
     handledToolCalls: options.handledToolCalls,
+    getConversation: (id) => runtime.getConversation(id),
   })
 
   // ---- 资产热重载协调器 ----

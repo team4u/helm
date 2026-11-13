@@ -15,7 +15,8 @@ import {
   type Extension,
   type ToolRegistration,
 } from '@earendil-works/pi-durable'
-import { HelmError } from '@helm/protocol'
+import { HelmError, matchesConversationScope } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol'
 import type { DerivedToolSpec, PluginHost } from '../plugins/index.js'
 import type { HandledToolCallEntry } from './hook-bridge.js'
 import { createRunActionTool, type KernelToolHost } from './kernel-tools.js'
@@ -29,7 +30,7 @@ import {
   createWriteTool,
 } from './tools.js'
 
-export type PluginHostToolTarget = Pick<PluginHost, 'invokeAction' | 'executeTool' | 'listTools'>
+export type PluginHostToolTarget = Pick<PluginHost, 'invokeAction' | 'executeTool' | 'listTools' | 'listActions'>
 
 export interface RuntimeToolRegistryOptions {
   readonly registry: { install(extension: Extension): void }
@@ -38,6 +39,8 @@ export interface RuntimeToolRegistryOptions {
   readonly isArtifactAuthorized: (conversationId: number, artifactConversationId: number) => boolean
   readonly redact: (text: string) => string
   readonly handledToolCalls: Map<string, HandledToolCallEntry>
+  /** 会话摘要读取（run_action describe 模式的 scope 判定用）。 */
+  readonly getConversation: (conversationId: number) => ConversationSummary
 }
 
 /** 内核/插件工具 execute 包装：tool_call handled 接管结果优先返回（不执行真实工具）。 */
@@ -65,7 +68,7 @@ export class RuntimeToolRegistry {
    * subagent / SubagentWorkflow / cleanup_worktree 由 builtin:workflow 插件提供。
    */
   installKernelTools(): void {
-    const { registry, toolDeps, getPluginHost, isArtifactAuthorized, redact, handledToolCalls } = this.options
+    const { registry, toolDeps, getPluginHost, isArtifactAuthorized, redact, handledToolCalls, getConversation } = this.options
     const toolHost: KernelToolHost = {
       invokePluginAction: async (
         pluginId: string,
@@ -76,6 +79,37 @@ export class RuntimeToolRegistry {
         const host = getPluginHost()
         if (!host) throw new HelmError('runtime_not_initialized', '插件宿主未初始化', 503)
         return host.invokeAction(pluginId, actionId, input, context)
+      },
+      describePluginAction: async (
+        pluginId: string,
+        actionId: string,
+        context: { conversationId: number },
+      ) => {
+        const host = getPluginHost()
+        if (!host) throw new HelmError('runtime_not_initialized', '插件宿主未初始化', 503)
+        // 只读清单查询：绝不经 invokeAction（不执行 handler、不微输入校验、
+        // 不创建 liveTask）；启用过滤内建在 listActions（activeEnabledPluginIds）。
+        const manifest = host
+          .listActions()
+          .find((item) => item.pluginId === pluginId && item.id === actionId)
+        if (manifest === undefined) {
+          throw new HelmError(
+            'unknown_action',
+            `插件 ${pluginId} 未声明动作 ${actionId}（或未启用）`,
+            404,
+            { pluginId, actionId },
+          )
+        }
+        // scope 外会话不泄露 Schema：与执行期间同码拒绝（描述面与执行面一致）。
+        if (!matchesConversationScope(manifest.scope, getConversation(context.conversationId))) {
+          throw new HelmError(
+            'conversation_scope_violation',
+            `动作 ${pluginId}.${actionId} 不允许在会话 ${context.conversationId} 上查询（scope 未命中）`,
+            403,
+            { pluginId, actionId, conversationId: context.conversationId },
+          )
+        }
+        return manifest
       },
       redact: (text: string) => redact(text),
     }
