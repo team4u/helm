@@ -1,0 +1,19 @@
+{
+  "name": "@helm/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "helm 全平台 Electron 桌面壳：attach-or-spawn 127.0.0.1 Hub 监督器 + BrowserWindow/托盘。不直接 import kernel/web，Hub 一律子进程启动。",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test \"test/*.test.ts\"",
+    "smoke": "tsx src/smoke.ts",
+    "start": "tsx src/main.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}
