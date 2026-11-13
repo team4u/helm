@@ -8,8 +8,8 @@
  *
  *   unit        = protocol + cli + web（含 web 的 happy-dom/React 交互测试，
  *                 属进程内 DOM 模拟，不起真实服务）；
- *   integration = kernel + node + payload（全部文件，整体视为集成，含真实进程/SQLite/
- *                 Git/daemon；payload 驱动真实构建与启动子进程，同样归入集成）；
+ *   integration = kernel + node + payload + desktop（全部文件，整体视为集成，含真实进程/SQLite/
+ *                 Git/daemon、payload 组装与桌面壳 Hub 子进程监督）；
  *   all         = unit ∪ integration = 全部测试文件，等价于旧 `pnpm test`。
  *
  * 实现：Node fs 按 <root>/packages/<pkg>/test/ 目录枚举 *.test.ts(x)，显式传文件列表给
@@ -37,7 +37,7 @@ const packagesDir = path.join(repoRoot, 'packages');
 // 套件 → 包名。切分原则见文件头注释；调整分档时必须同步更新 AGENTS.md 的测试分层约定。
 const SUITES = {
   unit: ['protocol', 'cli', 'web'],
-  integration: ['kernel', 'node', 'payload'],
+  integration: ['kernel', 'node', 'payload', 'desktop'],
 };
 const ALL_PACKAGES = [...SUITES.unit, ...SUITES.integration];
 

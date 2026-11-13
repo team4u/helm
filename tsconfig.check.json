@@ -18,6 +18,8 @@
     "packages/cli/src/**/*.ts",
     "packages/cli/test/**/*.ts",
     "packages/payload/test/**/*.ts",
+    "packages/desktop/src/**/*.ts",
+    "packages/desktop/test/**/*.ts",
     "packages/web/test/**/*.ts",
     "packages/web/test/**/*.tsx"
   ],
