@@ -280,7 +280,7 @@ button,
   padding-bottom: 4px;
 }
 
-/* 设置空间导航列表：行结构同智能体站位行（折叠钮占位 + nav-item-main），
+/* 设置空间导航列表：行结构同智能体站位行（nav-item-main 图标文本），
  * 由 .nav-item 统一接管高度/内边距/高亮，这里只保留分组间距。 */
 .settings-nav {
   gap: 2px;
@@ -969,18 +969,6 @@ button,
 
 .sidebar-idle-toggle:hover {
   background: var(--bg-hover);
-}
-
-.agent-collapse-btn {
-  color: var(--fg-muted);
-  flex-shrink: 0;
-}
-
-/* 无子列表的智能体行：折叠按钮不渲染，标题前留出与折叠按钮等宽的缩进，
- * 保证所有智能体行的图标与文本左对齐。 */
-.agent-standing-row .agent-standing-indent {
-  width: 22px;
-  flex: none;
 }
 
 .agent-new-conv-btn {

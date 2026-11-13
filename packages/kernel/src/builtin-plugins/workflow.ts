@@ -213,6 +213,9 @@ export function createWorkflowPlugin(): PluginDefinition {
         maxSubagentDepth: {
           type: 'number',
           label: '子代理最大层级',
+          minimum: 1,
+          maximum: HARD_MAX_SUBAGENT_DEPTH,
+          integer: true,
           description: `1..${HARD_MAX_SUBAGENT_DEPTH} 的整数，默认 2。主会话为第 0 层；变更影响新派生的任务树，现有任务沿用其上限。`,
           default: DEFAULT_MAX_SUBAGENT_DEPTH,
         },

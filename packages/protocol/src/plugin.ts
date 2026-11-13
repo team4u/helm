@@ -481,6 +481,10 @@ export interface PluginConfigFieldSchema {
   default?: string | number | boolean
   secret?: boolean
   required?: boolean
+  /** 数值字段的边界约束；写入前由宿主统一校验。 */
+  minimum?: number
+  maximum?: number
+  integer?: boolean
 }
 
 /** 插件配置字段来源：configured（用户显式持久化覆写）、default（回退 schema.default）、unset（未配置且无 default）。 */

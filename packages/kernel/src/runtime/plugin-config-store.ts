@@ -157,6 +157,12 @@ export class HelmPluginConfigStore implements PluginConfigStore {
       } else if (typeof fieldValue !== expected) {
         throw invalid(pluginId, `字段 ${key} 类型应为 ${expected}`)
       } else {
+        if (typeof fieldValue === 'number') {
+          if (!Number.isFinite(fieldValue)) throw invalid(pluginId, `字段 ${key} 必须是有限数值`)
+          if (field.integer === true && !Number.isInteger(fieldValue)) throw invalid(pluginId, `字段 ${key} 必须是整数`)
+          if (field.minimum !== undefined && fieldValue < field.minimum) throw invalid(pluginId, `字段 ${key} 不能小于 ${field.minimum}`)
+          if (field.maximum !== undefined && fieldValue > field.maximum) throw invalid(pluginId, `字段 ${key} 不能大于 ${field.maximum}`)
+        }
         nextPlain[key] = fieldValue
       }
     }

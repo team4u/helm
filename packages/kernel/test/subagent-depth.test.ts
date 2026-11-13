@@ -638,8 +638,14 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
       const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
       try {
         assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2)
-        await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: 99 })
-        await assert.rejects(() => spawnChain(app, faux, [1]), /maxSubagentDepth/)
+        for (const invalid of [0, 99, 2.5, Number.NaN]) {
+          await assert.rejects(
+            () => app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: invalid }),
+            /maxSubagentDepth|字段 maxSubagentDepth/,
+            `配置值 ${String(invalid)} 应在持久化边界被拒绝`,
+          )
+        }
+        assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2, '非法配置不得污染有效配置')
         await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: 1 })
         const child = (await spawnChain(app, faux, [1]))[0]!
         await assert.rejects(

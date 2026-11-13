@@ -175,6 +175,9 @@ export function PluginConfigForm({
                     id={fieldId}
                     className="input"
                     type="number"
+                    min={schema.minimum}
+                    max={schema.maximum}
+                    step={schema.integer === true ? 1 : 'any'}
                     value={String(values[key] ?? '')}
                     onChange={(e) => setValues((prev) => ({ ...prev, [key]: Number(e.target.value) }))}
                     onInput={(e) =>
