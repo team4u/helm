@@ -7,7 +7,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import { hostname, loadavg, freemem, totalmem, uptime } from 'node:os'
-import { chmod, mkdir, statfs, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, readFile, statfs, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HelmError, type EnvExecRequest, type EnvExecResponse, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helm/protocol'
@@ -15,6 +15,7 @@ import { sha256hex, type EnvFabric } from '../env/index.js'
 import type { ConfigService } from '../services/index.js'
 import type { SecretStash } from '../services/index.js'
 import { isAbsoluteTargetPath, runShell } from './tools.js'
+import { buildPosixHostShim, buildWindowsCmdWrapper, buildWindowsPosixShim, type CliShimPlan } from './cli-shim.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { compareStrictSemVer, hubVersion, isStrictSemVer, normalizeExplicitVersion, rpcFailureToHelmError, safeJson, unwrapUpgradeCheckRpc, unwrapUpgradeRpc, validateUpgradeCheckResult, validateUpgradeResult } from './semver.js'
 
@@ -173,12 +174,21 @@ export class NodeManager {
   // ------------------------------------------------------------------
 
   /**
-   * 在 dataDir 下生成 <dataDir>/bin/helm 可执行包装脚本：
-   * `#!/bin/sh\nexec <node> <tsx cli.mjs> <repo cli index> "$@"`（0o755）。
-   * 使受管子进程在 PATH 中直接运行 helm 命令（--current 语义开箱即通）。
-   * 幂等：内容变化时重写，权限恒 0o755。
+   * 在 dataDir 下生成 <dataDir>/bin 包装脚本目录（使受管子进程在 PATH 中
+   * 直接运行 helm 命令，--current 语义开箱即通）：
+   * - POSIX host：helm = `#!/bin/sh` exec 直调（cli-shim.buildPosixHostShim）；
+   * - win32 host：helm.cmd = cmd.exe wrapper（历史行为不变）；helm = 面向
+   *   WSL / Git Bash 的 POSIX shim——运行时经 wslpath/cygpath 仅解析
+   *   node.exe 可执行文件，入口保持 Windows 路径；解析失败显式诊断并
+   *   127 退出，绝不回退 Linux node（cli-shim.buildWindowsPosixShim）。
+   * 幂等：内容变化时重写，权限恒 0o755。platform/execPath 缺省取当前
+   * 进程（测试注入模拟 win32 host；生成逻辑全部在 cli-shim.ts 纯函数）。
    */
-  async ensureCliBinDir(): Promise<void> {
+  async ensureCliBinDir(
+    override: { platform?: NodeJS.Platform; execPath?: string } = {},
+  ): Promise<void> {
+    const platform = override.platform ?? process.platform
+    const execPath = override.execPath ?? process.execPath
     const binDir = join(this.dataDir, 'bin')
     const helmPath = join(binDir, 'helm')
     // tsx CLI 与仓库 CLI 入口：以当前模块位置推导（源码运行与 dist 运行同构）。
@@ -186,27 +196,26 @@ export class NodeManager {
     const repoRoot = this.resolveRepoRoot(kernelDir)
     const compiledCli = join(repoRoot, 'packages', 'cli', 'dist', 'index.js')
     const sourceCli = join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
-    const fs = await import('node:fs/promises')
-    const compiled = await fs.access(compiledCli).then(() => true, () => false)
+    const compiled = await access(compiledCli).then(() => true, () => false)
     // 源码内核必须配套源码 CLI，避免旧 dist 命令表与新 protocol 契约混用。
     const useCompiled = basename(dirname(kernelDir)) !== 'src' && compiled
-    const args = useCompiled
-      ? [process.execPath, compiledCli]
-      : [process.execPath, join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), sourceCli]
-    const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\"'\"'")}'`
-    const script = `#!/bin/sh\nexec ${args.map(shellQuote).join(' ')} "$@"\n`
+    const plan: CliShimPlan = {
+      execPath,
+      entryArgs: useCompiled
+        ? [compiledCli]
+        : [join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), sourceCli],
+    }
+    const script =
+      platform === 'win32' ? buildWindowsPosixShim(plan) : buildPosixHostShim(plan)
     try {
       await mkdir(binDir, { recursive: true })
-      const existing = await import('node:fs/promises').then((fs) =>
-        fs.readFile(helmPath, 'utf8').catch(() => undefined),
-      )
+      const existing = await readFile(helmPath, 'utf8').catch(() => undefined)
       if (existing !== script) {
         await writeFile(helmPath, script, 'utf8')
       }
       await chmod(helmPath, 0o755)
-      if (process.platform === 'win32') {
-        const cmdArgs = args.map((value) => `"${value.replaceAll('%', '%%')}"`).join(' ')
-        await writeFile(join(binDir, 'helm.cmd'), `@echo off\r\n${cmdArgs} %*\r\n`, 'utf8')
+      if (platform === 'win32') {
+        await writeFile(join(binDir, 'helm.cmd'), buildWindowsCmdWrapper(plan), 'utf8')
       }
       this.cliBinDirValue = binDir
     } catch (error) {

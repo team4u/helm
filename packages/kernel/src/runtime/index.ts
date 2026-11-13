@@ -22,6 +22,13 @@ export { buildModels, parseModelRef, requireModelRef, listModelCatalog, listMode
 export { FileModelsStore, createFileModelsStore } from './models-store.js'
 export type { HelmToolDeps } from './tool-deps.js'
 export { NodeManager } from './node-manager.js'
+export {
+  shQuote,
+  buildPosixHostShim,
+  buildWindowsPosixShim,
+  buildWindowsCmdWrapper,
+  type CliShimPlan,
+} from './cli-shim.js'
 export { ModelRegistry } from './model-registry.js'
 export { HookBridge, prepareToolResultWith } from './hook-bridge.js'
 export { ConversationService, type ConversationServiceOptions, type SubmitInputOptions } from './conversation-service.js'
