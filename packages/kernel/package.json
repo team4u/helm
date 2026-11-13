@@ -16,7 +16,7 @@
   },
   "scripts": {
     "dev": "cd ../.. && tsx packages/kernel/src/main.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-plugin-clients.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test"
   },
