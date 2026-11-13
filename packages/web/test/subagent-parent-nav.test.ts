@@ -110,8 +110,13 @@ test('styles.css 与 responsive.css 规范祖先面包屑胶囊排版与窄屏�
   )
   assert.match(
     stylesCss,
-    /\.pane-breadcrumb\s*\{[^}]*overflow:\s*hidden;/,
-    'pane-breadcrumb 必须允许深链溢出裁剪',
+    /\.pane-breadcrumb\s*\{[^}]*overflow-x:\s*auto;/,
+    'pane-breadcrumb 必须允许横向滚动以访问深层祖先',
+  )
+  assert.match(
+    stylesCss,
+    /\.pane-breadcrumb\s*\{[^}]*max-width:\s*60%;/,
+    'pane-breadcrumb 必须限制宽度以保留标题与操作空间',
   )
 
   // 极窄容器查询微调：隐藏分隔符只留紧凑 ID 胶囊
