@@ -236,6 +236,8 @@ class FakeTransport implements HerdrTransport {
 interface ExecutorEnv {
   executor: HerdrExecutor
   transport: FakeTransport
+  /** executor 级 mkdtemp 根（可写 cwd 构造用；close 时一并清理）。 */
+  dataDir: string
   close(): Promise<void>
 }
 
@@ -295,6 +297,7 @@ async function openExecutor(platforms: Record<string, string>): Promise<Executor
   return {
     executor,
     transport,
+    dataDir,
     async close() {
       rmSync(dataDir, { recursive: true, force: true })
     },
@@ -341,14 +344,17 @@ test('executor：远端 win32 节点上的坏 POSIX cwd 在任何建窗副作用
 test('executor：节点平台未知（通道未上报）——cwd 透传不改写（既有行为保持）', { timeout: 60_000 }, async () => {
   const env = await openExecutor({})
   try {
+    // cwd 用 executor 可写区内的 POSIX 绝对路径：断言语义只关乎「透传不改写」
+    // （交接 mkdir <cwd>/.helm 需真实可写——/home/build 在非 root 环境 EACCES）。
+    const posixView = join(env.dataDir, 'posix-view')
     await env.executor.handle({
       parentConversationId: 1,
       prompt: '构建它',
       agentType: 'herdr:agy@win-build',
-      cwd: '/home/build/posix-view',
+      cwd: posixView,
     } as never)
     const create = env.transport.calls.find((c) => c.method === 'tab.create')!
-    assert.equal(create.params['cwd'], '/home/build/posix-view', '平台未知：POSIX 视图原样到达建窗')
+    assert.equal(create.params['cwd'], posixView, '平台未知：POSIX 视图原样到达建窗')
   } finally {
     await env.close()
   }

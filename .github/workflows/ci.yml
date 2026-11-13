@@ -39,6 +39,11 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # 测试依赖 workspace 包 dist 产物（@helm/kernel 等包 exports 指向
+      # ./dist；TLS fixture / CLI 贯通测试会真实 import 或执行它们）。
+      - name: Build packages
+        run: pnpm build
+
       - name: Run all tests on POSIX
         if: runner.os != 'Windows'
         run: pnpm test:all

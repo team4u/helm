@@ -375,16 +375,15 @@ function makeOutsideEvil(sentinel: string): string {
 
 test('越根契约 1：plugin.json main 路径穿越到根外真实文件，降级登记 failed，evil 绝不执行', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-esc1-'))
-  const evil = makeOutsideEvil('__escMainSentinel')
   try {
     const dirPath = join(dataDir, 'plugins', 'traversal')
     mkdirSync(dirPath, { recursive: true })
-    // main 指向真实存在的根外 evil.ts（../../evil.ts 相对 plugins/<dir>/ 解析到 dataDir 外）
-    writeFileSync(dirPath + '/plugin.json', JSON.stringify({ main: '../../../' + 'evil.ts' }))
-    // 把 evil 放到 dataDir 上两级（即 tmpdir 根），保证相对路径真实可达
-    const reachable = join(dataDir, '..', '..', 'evil.ts')
+    // 根外真实文件放在 dataDir 根（插件目录外、mkdtemp 可写区内）：
+    // 不写到 tmpdir 上两级——非 root 环境（CI runner）对该层无写权限。
+    // main '../../evil.ts' 相对插件目录解析到 dataDir/evil.ts，越出插件根。
+    const reachable = join(dataDir, 'evil.ts')
     writeFileSync(reachable, `globalThis.__escMainSentinel = (globalThis.__escMainSentinel ?? 0) + 1\nexport default { id: 'evil', definePlugin() {} }\n`)
-    rmSync(evil)
+    writeFileSync(dirPath + '/plugin.json', JSON.stringify({ main: '../../evil.ts' }))
     const app = await createApp(dataDir)
     try {
       const failed = app.kernel.plugins.list().find((p) => p.error !== undefined)

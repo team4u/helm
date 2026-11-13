@@ -454,13 +454,20 @@ test('readFileInto：目录不是普通文件；权限故障不静默当名字',
     assert.equal(asRelDir.code, 1)
     assert.equal(errorCode(asRelDir), 'positional_file_not_found')
 
-    // ./ 前缀且真实存在（相对 cwd 构造）：目录同样拒绝
-    const relDir = path.join(dir, 'rel-sub')
+    // ./ 前缀且真实存在（相对 cwd 构造）：目录同样拒绝。
+    // 目录建在 process.cwd() 下：跨卷环境（Windows CI 的 repo 在 D: 而 tmp 在
+    // C:）里 path.relative 对异卷返回绝对路径，`./<绝对路径>` 不再是合法
+    // 相对形态；cwd 下临时目录保证同卷可相对化。
+    const relName = `.helm-cli-dyn-rel-${process.pid}-${Date.now()}`
+    const relDir = path.join(process.cwd(), relName)
     await fsp.mkdir(relDir)
-    const rel = path.relative(process.cwd(), relDir)
-    const asRelExists = await run(['gadget', 'deploy', `./${rel}`, '1', '--json'], env)
-    assert.equal(asRelExists.code, 1)
-    assert.equal(errorCode(asRelExists), 'positional_not_a_file')
+    try {
+      const asRelExists = await run(['gadget', 'deploy', `./${relName}`, '1', '--json'], env)
+      assert.equal(asRelExists.code, 1)
+      assert.equal(errorCode(asRelExists), 'positional_not_a_file')
+    } finally {
+      await fsp.rm(relDir, { recursive: true, force: true })
+    }
 
     // 无读权限文件：EACCES 显式诊断（不静默当名字、不静默跳过）。
     // root 可绕过文件权限（DAC override），此时读成功属真实内核行为，跳过断言。
