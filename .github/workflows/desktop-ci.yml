@@ -1,15 +1,18 @@
-# Desktop CI：为 packages/desktop（未来 Electron 桌面版）预留的三平台验证。
+# Desktop CI：packages/desktop（Electron 桌面壳）三平台构建、测试、打包与冒烟。
 #
-# 现状约束（与 scripts/desktop-ci-contract.mjs 配套）：
-#   - packages/desktop 尚不存在：gate 任务先探测（以 package.json 为准），缺失时矩阵任务
-#     显示为 skipped，不阻塞合并、不影响现有 ci.yml；包落地后本工作流自动启用。
-#   - 只执行当前仓库真实存在的命令：pnpm typecheck / build / test:unit / test:all 与
-#     scripts/desktop-ci-contract.mjs；desktop 自有 test 脚本按探测结果条件执行，不虚构。
-#   - Linux 上一切可能拉起 Electron 的执行（全量测试、desktop 冒烟）一律包在
-#     xvfb-run -a 下（-a 自动分配隔离的虚拟显示）。
-#   - Windows 沿用主 CI 取舍只跑 unit（kernel/node 集成不在 Windows 执行）；macOS 为
-#     新增平台跑全量，若暴露平台性失败即为真实信号。
-#   - macos-latest 当前为 arm64；如需 Intel 架构自行扩 macos-13。
+# 职责边界（与 ci.yml 互补、不重复）：
+#   - ci.yml 负责仓库全量测试（Linux 全量 / Windows unit）；本工作流不在三个平台
+#     重复跑 pnpm test:all / test:unit，专注 desktop 包自身的验证与产物。
+#   - 三平台 matrix（Linux/Windows/macOS）：install frozen → typecheck/build
+#     （assemble-hub 依赖 workspace dist 产物）→ desktop 包测试 → dist:dir 解包应用
+#     → scripts/desktop-smoke.mjs --packaged 对打包 App 冒烟 → dist --publish never
+#     产出安装包（exe/dmg/zip/AppImage/deb）作为 CI artifact 上传，绝不自动发布。
+#   - 冒烟报告目录（smoke.json / 截图 / stdout.log / stderr.log）if: always() 上传，
+#     失败时保留现场供诊断。
+#   - Linux：Electron 无头运行需要 Xvfb 与 GPU/音频库；ubuntu-24.04 的 ALSA 运行时
+#     包为 libasound2t64（旧 libasound2 包名在 24.04 已不存在，装错会直接 apt 失败）。
+#   - desktop 包契约由 scripts/desktop-ci-contract.mjs 元数据驱动检查（缺失/缺 build
+#     脚本显式失败，不静默跳过）。
 
 name: Desktop CI
 
@@ -22,34 +25,8 @@ permissions:
   contents: read
 
 jobs:
-  gate:
-    name: 检测 packages/desktop
-    runs-on: ubuntu-latest
-    outputs:
-      desktop_exists: ${{ steps.detect.outputs.desktop_exists }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: 探测 desktop 包是否存在
-        id: detect
-        shell: bash
-        run: |
-          set -euo pipefail
-          exists="$(node scripts/desktop-ci-contract.mjs --detect)"
-          echo "desktop_exists=${exists}" >> "$GITHUB_OUTPUT"
-          if [ "$exists" = "true" ]; then
-            msg="检测到 packages/desktop：Desktop CI 三平台矩阵（Linux/Windows/macOS）将启用。"
-          else
-            msg="未检测到 packages/desktop/package.json：desktop 矩阵任务按设计跳过，不阻塞合并；包落地后本工作流自动启用。"
-          fi
-          echo "$msg"
-          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
-
   desktop:
     name: desktop / ${{ matrix.os }}
-    needs: gate
-    if: needs.gate.outputs.desktop_exists == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -77,15 +54,15 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Electron 无头运行需要 X server 与 GPU/音频库；xvfb-run 为下方测试/冒烟步骤
-      # 按需启动隔离的虚拟显示。
+      # 按需启动隔离的虚拟显示（-a 自动分配显示号）。
       - name: Install Xvfb and Electron runtime libs (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb libgbm1 libasound2
+          sudo apt-get install -y --no-install-recommends xvfb libgbm1 libasound2t64
 
-      # 契约检查：desktop 存在时必须有 name 与 build 脚本（pnpm -r build 会静默跳过
-      # 无 build 的包），并输出 desktop_name / desktop_has_test 供后续条件步骤使用。
+      # 契约检查：desktop 必须有 name 与 build 脚本（pnpm -r build 会静默跳过无 build
+      # 的包），并输出 desktop_name / desktop_has_test 供后续步骤引用。
       - name: Desktop package contract check
         id: contract
         shell: bash
@@ -94,27 +71,57 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # 测试依赖 workspace 包 dist 产物（同 ci.yml：包 exports 指向 ./dist）。
+      # assemble-hub 组装依赖 kernel/web dist 产物，必须先全仓构建。
       - name: Build packages
         run: pnpm build
 
-      - name: Run all tests (macOS)
-        if: runner.os == 'macOS'
-        run: pnpm test:all
+      # desktop 自有测试（Electron 相关执行在 Linux 上必须 xvfb-run 包裹）。
+      - name: Desktop package tests under Xvfb (Linux)
+        if: runner.os == 'Linux' && steps.contract.outputs.desktop_has_test == 'true'
+        run: xvfb-run -a pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run test
 
-      - name: Run all tests under Xvfb (Linux)
-        if: runner.os == 'Linux'
-        run: xvfb-run -a pnpm test:all
-
-      - name: Run unit tests (Windows)
-        if: runner.os == 'Windows'
-        run: pnpm test:unit
-
-      # desktop 自有测试脚本（探测存在才执行；不虚构脚本）：Linux 必须 xvfb-run 包裹。
       - name: Desktop package tests (Windows / macOS)
         if: runner.os != 'Linux' && steps.contract.outputs.desktop_has_test == 'true'
         run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run test
 
-      - name: Desktop package tests under Xvfb (Linux)
-        if: runner.os == 'Linux' && steps.contract.outputs.desktop_has_test == 'true'
-        run: xvfb-run -a pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run test
+      # 解包应用（release/<platform>-unpacked）：供打包形态冒烟，最快验证 App 可拉起。
+      - name: Build unpacked desktop app (dist:dir)
+        run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist:dir
+
+      # 打包 App 冒烟：wrapper 定位解包可执行文件，隔离 HELM_DATA_DIR、固定 3202 端口，
+      # 60s 超时杀树，依据 smoke.json 判定；报告落在 packages/desktop/release/smoke/。
+      - name: Smoke test packaged app under Xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/desktop-smoke.mjs --packaged
+
+      - name: Smoke test packaged app (Windows / macOS)
+        if: runner.os != 'Linux'
+        run: node scripts/desktop-smoke.mjs --packaged
+
+      # 截图 / smoke.json / 日志永远上传（失败现场比成功存档更重要）。
+      - name: Upload smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-report-${{ matrix.os }}
+          path: packages/desktop/release/smoke/
+          if-no-files-found: warn
+          retention-days: 7
+
+      # 安装包产物（NSIS exe / dmg / zip / AppImage / deb）：--publish never，
+      # 永不在此发布；任何平台一个安装包都没产出视为真实失败。
+      - name: Build desktop installers (publish never)
+        run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist -- --publish never
+
+      - name: Upload desktop installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          path: |
+            packages/desktop/release/*.exe
+            packages/desktop/release/*.dmg
+            packages/desktop/release/*.zip
+            packages/desktop/release/*.AppImage
+            packages/desktop/release/*.deb
+          if-no-files-found: error
+          retention-days: 14
