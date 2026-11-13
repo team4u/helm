@@ -19,6 +19,9 @@ src/
   electron-api.ts  Electron API 结构化类型 + 惰性 require（仓库无 electron 依赖也过 typecheck）
   main.ts          主进程：单实例锁 / BrowserWindow(hidden→show) / 托盘 / 关闭隐藏 / headless / 已安装 payload 入口选择
   smoke.ts         端到端 smoke（真实 kernel dist Hub；崩溃自愈 + 优雅停止）
+scripts/
+  assemble-hub.mjs 安装包 Hub payload 组装（kernel/web dist + 插件资产 → ./hub，extraResources 源）
+electron-builder.yml  生产打包配置（mac dmg/zip、win nsis、linux AppImage/deb；未签名）
 test/              纯 Node 测试（mini-hub 与假 registry 夹具，零 GUI 依赖，integration 档）
 ```
 
@@ -43,16 +46,65 @@ test/              纯 Node 测试（mini-hub 与假 registry 夹具，零 GUI �
 
 ```bash
 pnpm build                                # 先构建（kernel/web dist 为 Hub 子进程与窗口内容）
-pnpm --filter @helm/desktop test          # 纯 Node 测试（无需 electron / 显示）
+pnpm --filter @helm/desktop test          # 纯 Node 测试（无需显示环境）
 pnpm --filter @helm/desktop run smoke     # 真实 kernel dist 端到端 smoke
 
-# GUI（需要 electron，当前未列为 devDependency，避免全仓 install 强制下载二进制）：
-pnpm --filter @helm/desktop add -D electron   # 一次性：本地安装 electron 到桌面包（合入 pnpm-workspace allowBuilds 需同步审阅）
-npx electron packages/desktop                 # 加载 dist/main.js（先 pnpm --filter @helm/desktop build）
+# GUI（需要显示环境；electron 已列为 devDependency，pnpm install 自动下载其二进制，
+# 由 pnpm-workspace.yaml allowBuilds electron: true 放行）：
+pnpm --filter @helm/desktop exec electron .
 
 # 无显示环境（CI / 服务器）：
 HELM_DESKTOP_HEADLESS=1 HELM_DESKTOP_PORT=3399 pnpm --filter @helm/desktop run start
 ```
+
+## 生产打包（electron-builder，未签名）
+
+前置：仓库根 `pnpm build`（assemble-hub 依赖 kernel/web dist，缺失显式拒绝）；然后：
+
+```bash
+pnpm --filter @helm/desktop run assemble:hub   # 仅组装 Hub payload → packages/desktop/hub/
+pnpm --filter @helm/desktop run dist:dir       # 快速验证：仅解包应用（release/*-unpacked，不出安装包）
+pnpm --filter @helm/desktop run dist           # 当前平台安装包（见下表）
+```
+
+| 平台 | 目标 | 产物（release/） | 签名状态 |
+| --- | --- | --- | --- |
+| macOS | dmg + zip | `Helm-<版本>-<arch>.dmg` / `.zip` | 未签名（config 显式 `identity: null`）；首次打开需右键「打开」或 `xattr -dr com.apple.quarantine` |
+| Windows | nsis | `Helm Setup <版本>.exe` | 未签名，SmartScreen 会告警 |
+| Linux | AppImage + deb | `Helm-<版本>.AppImage` / `helm_..._amd64.deb` | 无签名机制要求 |
+
+入口与运行时布局（asar 策略的根据）：
+
+- 应用入口即 tsc 产物 `dist/main.js`（package.json `main`）；桌面壳本体纯 JS、无原生模块，
+  整体进 asar；
+- Hub payload 由 `scripts/assemble-hub.mjs` 组装（kernel dist + 内置插件 client/skill/assets
+  + web dist，与 @helm/payload 同布局），经 `extraResources` 落在 `<resources>/hub`，
+  **整体在 asar 之外**：Hub 以 `ELECTRON_RUN_AS_NODE` 子进程运行，kernel 运行时 native
+  esbuild 二进制与（未来 vendored 的）node_modules 必须是真实文件，进 asar 会被破坏；
+  `asarUnpack` 仅保留 `**/*.node` 防御性声明；
+- 安装包形态下 main.ts 自动注入默认入口（`HELM_DESKTOP_HUB_ENTRY=<resources>/hub/kernel/dist/main.js`、
+  `HELM_DESKTOP_WEB_DIST=<resources>/hub/web/dist`），用户 env 覆写优先级不变；
+- web dist 与 kernel 同级布局，命中 hub.ts `../../../web/dist` 默认探测，无需额外变量。
+
+已知未解决项（如实声明，勿宣称已支持）：
+
+1. **Hub 依赖自包含**：assemble-hub 不打包 node_modules（与 @helm/payload README「已知阻塞」
+   同源）。安装包内 Hub 启动若依赖不可解析，supervisor 会显式报告子进程崩溃
+   （ERR_MODULE_NOT_FOUND），绝不静默降级；vendored node_modules / 单文件 bundle 是后续课题；
+2. **未签名 / 未公证**：无证书资产，不虚构；接入时补 mac 签名+公证、win 证书与
+   NSIS 签名配置；
+3. **图标**：未提供应用图标，各平台使用 Electron 默认图标（接入真实图标时放
+   `build/icon.icns` / `icon.ico` / `icon.png` 并移除本声明）；
+4. **自动更新**：不在打包范围，`src/updater.ts` 仍为 Stub（见文末）。
+
+CI 与产物说明：
+
+- `desktop-ci.yml` 三平台矩阵只跑 build/typecheck/test（含 xvfb 包裹），**不产安装包**；
+- `release.yml` 的 desktop-release 作业目前是占位实现：它上传 `packages/desktop/dist/*`
+  （tsc 产物目录），与 electron-builder 产物目录 `packages/desktop/release/` **不一致**；
+  接入真实安装包发布时需同步把该 workflow 的上传路径改为
+  `packages/desktop/release/*.{dmg,zip,exe,AppImage,deb}` 并补三平台打包 job（本包只落
+  打包配置，不改 workflow）。
 
 ## Hub 子进程运行器与兼容性实测
 

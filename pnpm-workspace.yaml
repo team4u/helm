@@ -3,5 +3,11 @@ packages:
 
 allowBuilds:
   '@google/genai': false
+  electron: true
   esbuild: true
+  # electron-builder 传递依赖，仅 Squirrel(旧 win) 目标需要；本仓用 NSIS，显式拒绝其脚本
+  electron-winstaller: false
   protobufjs: false
+
+minimumReleaseAgeExclude:
+  - electron@45.3.2

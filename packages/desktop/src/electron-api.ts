@@ -2,10 +2,9 @@
  * Electron API 安全访问层：结构化最小类型 + 运行时惰性 require。
  *
  * Why 不直接 `import 'electron'`：
- * - 桌面壳骨架阶段 electron 未列为 devDependency（约百 MB 二进制下载），仓库
- *   typecheck / CI 必须零 GUI 依赖可跑；
- * - 结构化类型只声明用到的 API 面，真实 electron 就位后运行时经 createRequire
- *   取模块（Electron 主进程内建解析），类型不冲突、无占位伪造。
+ * - 结构化类型只声明用到的 API 面，typecheck 不依赖 electron 包类型（仓库
+ *   CI 零 GUI 依赖可跑）；electron 已列为 devDependency，仅打包/本地 GUI 用；
+ * - 运行时经 createRequire 取模块（Electron 主进程内建解析），无占位伪造。
  */
 import { createRequire } from 'node:module';
 
@@ -14,6 +13,8 @@ export interface ElectronEvent {
 }
 
 export interface ElectronApp {
+  /** 安装包形态（electron-builder 产物）判定，用于 Hub payload 默认路径。 */
+  readonly isPackaged: boolean;
   requestSingleInstanceLock(): boolean;
   whenReady(): Promise<void>;
   quit(): void;
