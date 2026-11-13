@@ -19,6 +19,7 @@ import {
 } from './skill-center-model.js'
 import {
   buildSkillFileList,
+  isSkillDescriptionLong,
   isSkillMarkdownFile,
   skillFileLanguage,
   stripMarkdownFrontmatter,
@@ -43,7 +44,10 @@ type SkillViewMode = 'rich' | 'source'
  * 全屏技能中心详情与紧凑文件阅读器抽屉组件：
  * - 基于 Radix UI Dialog 封装，520px-560px 右侧滑出抽屉；
  * - 顶部展示图标、名称、来源徽章（内置 / 共享 / 工作区 / 插件）、技能 ID 与关闭按钮；
- * - 单行文件工具条：多文件时以公共 Select 下拉切换（短文件名 + 目录辅助信息），
+ * - Header 下方是单行紧凑文件工具条，再下方的单一滚动阅读区占满剩余全部视口高度：
+ *   技能描述置于滚动区顶部随正文同流滚动，长描述（超阈值）默认 2 行截断并提供
+ *   「展开 / 收起」切换，避免 500+ 字符生态描述常驻压顶挤占正文面积；
+ * - 多文件时以公共 Select 下拉切换（短文件名 + 目录辅助信息），
  *   单文件时直接展示文件名，不再渲染多文件标签墙；
  * - Markdown 文件支持「富文本 / 源码」双模式阅读，富文本模式剥离头部重复展示的
  *   YAML frontmatter；代码类文件用 CodeBlockView 按后缀推导语言高亮；
@@ -63,6 +67,7 @@ export function SkillDetailDrawer({
   const [error, setError] = useState<string | null>(null)
   const [activePath, setActivePath] = useState<string>('')
   const [viewMode, setViewMode] = useState<SkillViewMode>('rich')
+  const [descExpanded, setDescExpanded] = useState(false)
   const loadGenerationRef = useRef(0)
 
   const files = useMemo(() => buildSkillFileList(skill?.references), [skill?.references])
@@ -75,10 +80,11 @@ export function SkillDetailDrawer({
   const isMarkdown = isSkillMarkdownFile(activePath)
   const richText = isMarkdown && viewMode === 'rich'
 
-  // 切换技能时重置到根规程 SKILL.md 与富文本模式
+  // 切换技能时重置到根规程 SKILL.md、富文本模式与描述折叠态
   useEffect(() => {
     setActivePath('')
     setViewMode('rich')
+    setDescExpanded(false)
   }, [skill?.id])
 
   // 异步获取规程文件内容，严格防竞态
@@ -131,6 +137,8 @@ export function SkillDetailDrawer({
   const displayText = richText ? stripMarkdownFrontmatter(content) : content
   const sourceLanguage = skillFileLanguage(activePath)
   const lineCount = content === '' ? 0 : content.split('\n').length
+  const descClampable = isSkillDescriptionLong(skill?.description)
+  const descCollapsed = descClampable && !descExpanded
 
   return (
     <Dialog
@@ -183,18 +191,13 @@ export function SkillDetailDrawer({
             </DialogClose>
           </div>
 
-          {/* 抽屉主体 */}
+          {/* 抽屉主体：外层不滚动，唯一滚动容器为阅读区 */}
           <div className="primary-drawer-body">
             {!skill ? (
               <div className="empty-state">未选择技能</div>
             ) : (
               <>
-                {/* 简短描述 */}
-                {skill.description && (
-                  <div className="skill-reader-desc">{skill.description}</div>
-                )}
-
-                {/* 紧凑文件阅读器：单行工具条 + 正文阅读区 */}
+                {/* 紧凑文件阅读器：单行工具条 + 单一滚动阅读区 */}
                 <div className="skill-reader">
                   <div className="skill-reader-toolbar" role="group" aria-label="技能文件阅读工具条">
                     <div className="skill-reader-file">
@@ -261,33 +264,59 @@ export function SkillDetailDrawer({
                       <span className="skill-reader-lines tabular-nums" title={`${activeDisplayPath} 总行数`}>
                         {lineCount > 0 ? `${lineCount} 行` : '--'}
                       </span>
-                      <CopyButton text={content} label="复制" />
+                      <CopyButton
+                        className="btn btn-ghost btn-sm skill-reader-copy"
+                        text={content}
+                        label="复制"
+                      />
                     </div>
                   </div>
 
-                  {/* 正文阅读区 */}
-                  <div className="skill-reader-body" data-mode={richText ? 'rich' : 'source'}>
-                    {error ? (
-                      <div className="callout callout--error" role="alert">
-                        <HelmIcon name="alert-circle" size={13} />
-                        <span>{`读取失败：${error}`}</span>
-                      </div>
-                    ) : loading && content === '' ? (
-                      <div className="skill-reader-placeholder text-subtle">
-                        <HelmIcon name="loader" size={13} className="spin" />
-                        <span>正在读取技能内容…</span>
-                      </div>
-                    ) : content === '' ? (
-                      <div className="skill-reader-placeholder text-subtle">文件内容为空</div>
-                    ) : richText ? (
-                      <div className="skill-reader-doc selectable">
-                        <MarkdownView text={displayText} />
-                      </div>
-                    ) : (
-                      <div className="skill-reader-code">
-                        <CodeBlockView code={content} language={sourceLanguage} />
+                  {/* 单一滚动阅读区：描述随正文同流滚动，长描述默认 2 行折叠 */}
+                  <div className="skill-reader-scroll">
+                    {skill.description && (
+                      <div
+                        className={descCollapsed ? 'skill-reader-desc is-collapsed' : 'skill-reader-desc'}
+                      >
+                        <div className="skill-reader-desc-text">{skill.description}</div>
+                        {descClampable && (
+                          <button
+                            type="button"
+                            className="skill-reader-desc-toggle"
+                            aria-expanded={descExpanded}
+                            title={descExpanded ? '收起技能描述' : '展开完整技能描述'}
+                            onClick={() => setDescExpanded((v) => !v)}
+                          >
+                            {descExpanded ? '收起' : '展开'}
+                          </button>
+                        )}
                       </div>
                     )}
+
+                    {/* 正文阅读区 */}
+                    <div className="skill-reader-body" data-mode={richText ? 'rich' : 'source'}>
+                      {error ? (
+                        <div className="callout callout--error" role="alert">
+                          <HelmIcon name="alert-circle" size={13} />
+                          <span>{`读取失败：${error}`}</span>
+                        </div>
+                      ) : loading && content === '' ? (
+                        <div className="skill-reader-placeholder text-subtle">
+                          <HelmIcon name="loader" size={13} className="spin" />
+                          <span>正在读取技能内容…</span>
+                        </div>
+                      ) : content === '' ? (
+                        <div className="skill-reader-placeholder text-subtle">文件内容为空</div>
+                      ) : richText ? (
+                        <div className="skill-reader-doc selectable">
+                          <MarkdownView text={displayText} />
+                        </div>
+                      ) : (
+                        <div className="skill-reader-code">
+                          <CodeBlockView code={content} language={sourceLanguage} />
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </>

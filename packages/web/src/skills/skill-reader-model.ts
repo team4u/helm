@@ -10,6 +10,9 @@ import { detectLanguage } from '../conversation/code-language.js'
 /** 主规程文件名（读取路径约定为空串，展示为 SKILL.md）。 */
 export const SKILL_MAIN_FILENAME = 'SKILL.md'
 
+/** 技能描述折叠阈值：超过该字符数判定为长描述，阅读区默认 2 行截断并提供展开/收起。 */
+export const SKILL_DESC_COLLAPSE_THRESHOLD = 90
+
 /** 阅读器中的单个技能文件条目。 */
 export interface SkillFileEntry {
   /** 读取路径：空串表示主规程 SKILL.md */
@@ -57,6 +60,15 @@ export function isSkillMarkdownFile(path: string): boolean {
   const dot = name.lastIndexOf('.')
   const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
   return ext === 'md' || ext === 'markdown'
+}
+
+/**
+ * 判定技能描述是否较长（超过 SKILL_DESC_COLLAPSE_THRESHOLD 字符）：
+ * 长描述在阅读区默认折叠为 2 行摘要并提供「展开 / 收起」切换，
+ * 避免生态技能 500+ 字符描述常驻压顶、挤占正文阅读面积。
+ */
+export function isSkillDescriptionLong(description: string | undefined | null): boolean {
+  return (description ?? '').trim().length > SKILL_DESC_COLLAPSE_THRESHOLD
 }
 
 /**

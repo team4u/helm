@@ -31,6 +31,7 @@ import {
 import { SkillCard } from '../src/skills/SkillCard.js'
 import {
   buildSkillFileList,
+  isSkillDescriptionLong,
   isSkillMarkdownFile,
   skillFileBasename,
   skillFileLanguage,
@@ -346,6 +347,16 @@ test('skill-reader-model: skillFileLanguage 按后缀推导语法语言', { time
   assert.equal(skillFileLanguage('bin/run.sh'), 'bash')
   // 无法识别返回空串（回退普通等宽样式，不猜造语言）
   assert.equal(skillFileLanguage('assets/unknown.custom'), '')
+})
+
+test('skill-reader-model: isSkillDescriptionLong 长描述折叠阈值判定', { timeout: 60_000 }, () => {
+  assert.equal(isSkillDescriptionLong(undefined), false)
+  assert.equal(isSkillDescriptionLong(null), false)
+  assert.equal(isSkillDescriptionLong(''), false)
+  assert.equal(isSkillDescriptionLong('生成符合规范的中文提交信息'), false)
+  assert.equal(isSkillDescriptionLong('测'.repeat(90)), false, '恰好 90 字符不算长描述')
+  assert.equal(isSkillDescriptionLong('测'.repeat(91)), true, '超过 90 字符判定为长描述')
+  assert.equal(isSkillDescriptionLong(`   ${'测'.repeat(91)}   `), true, '首尾空白不计入长度')
 })
 
 // ---------------------------------------------------------------------------
@@ -862,6 +873,171 @@ test('SkillDetailDrawer: 异步读取文件正文与代数防竞态 (loadGenerat
     root.unmount()
   })
   host.remove()
+})
+
+test('SkillDetailDrawer: 超长描述默认折叠为 2 行摘要，点击展开/收起切换全文', { timeout: 60_000 }, async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  const longDesc =
+    '浏览器自动化命令行工具，供智能体打开网站、填写表单、点击按钮、截图、抓取数据、自动化测试 Web 应用、登录站点或执行任何需要网页交互的任务；也适用于探索性测试、食粮验证与问题排查。'.repeat(2)
+  const longSkill = makeSkill({ id: 'agent-browser', description: longDesc })
+
+  await act(async () => {
+    root.render(
+      renderDrawerElement(
+        e(SkillDetailDrawer, {
+          skill: longSkill,
+          open: true,
+          inline: true,
+          initialContent: '# 规程正文',
+          onClose: () => {},
+        }),
+      ),
+    )
+  })
+
+  // 默认折叠：is-collapsed 类 + 展开按钮（aria-expanded=false）
+  const desc = host.querySelector('.skill-reader-desc') as HTMLElement
+  assert.ok(desc, '应渲染技能描述区块')
+  assert.ok(desc.classList.contains('is-collapsed'), '超长描述默认折叠为摘要')
+  const descText = host.querySelector('.skill-reader-desc-text') as HTMLElement
+  assert.ok(descText.textContent?.includes(longDesc.slice(0, 24)), '折叠时全文仍在 DOM（仅 CSS 截断）')
+  const toggle = host.querySelector('.skill-reader-desc-toggle') as HTMLButtonElement
+  assert.ok(toggle, '长描述应提供展开/收起切换按钮')
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false', '初始折叠态')
+  assert.ok(toggle.textContent?.includes('展开'), '初始按钮文案为展开')
+
+  // 点击展开全文
+  await act(async () => {
+    toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  assert.ok(!desc.classList.contains('is-collapsed'), '展开后移除折叠类')
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true', '展开态同步 aria-expanded')
+  assert.ok(toggle.textContent?.includes('收起'), '展开后按钮文案切换为收起')
+
+  // 再次点击收起
+  await act(async () => {
+    toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  assert.ok(desc.classList.contains('is-collapsed'), '可重新折叠回 2 行摘要')
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+
+  await act(async () => {
+    root.unmount()
+  })
+  host.remove()
+
+  // 短描述：不折叠、不渲染切换按钮
+  const host2 = document.createElement('div')
+  document.body.appendChild(host2)
+  const root2 = ReactDOMClient.createRoot(host2)
+  await act(async () => {
+    root2.render(
+      renderDrawerElement(
+        e(SkillDetailDrawer, {
+          skill: mockSkills[0], // 28 字符短描述
+          open: true,
+          inline: true,
+          initialContent: '# 规程正文',
+          onClose: () => {},
+        }),
+      ),
+    )
+  })
+  const shortDesc = host2.querySelector('.skill-reader-desc') as HTMLElement
+  assert.ok(shortDesc, '短描述仍渲染描述区块')
+  assert.ok(!shortDesc.classList.contains('is-collapsed'), '短描述不折叠')
+  assert.equal(host2.querySelector('.skill-reader-desc-toggle'), null, '短描述无展开/收起按钮')
+
+  await act(async () => {
+    root2.unmount()
+  })
+  host2.remove()
+})
+
+test('SkillDetailDrawer: 布局契约——工具条紧贴 Header，描述与正文同处单一滚动区', { timeout: 60_000 }, async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+
+  await act(async () => {
+    root.render(
+      renderDrawerElement(
+        e(SkillDetailDrawer, {
+          skill: mockSkills[0],
+          open: true,
+          inline: true,
+          initialContent: '# Helm CLI 技能规范\n\n正文。',
+          onClose: () => {},
+        }),
+      ),
+    )
+  })
+
+  const reader = host.querySelector('.skill-reader') as HTMLElement
+  assert.ok(reader, '应渲染 skill-reader 阅读器')
+  const children = Array.from(reader.children) as HTMLElement[]
+
+  // 工具条是阅读器第一个子节点：紧贴抽屉 Header，中间不夹长描述
+  assert.equal(children.length, 2, '阅读器仅含工具条与滚动阅读区两个子节点')
+  assert.ok(children[0]?.classList.contains('skill-reader-toolbar'), '工具条应为首子节点')
+  assert.ok(children[1]?.classList.contains('skill-reader-scroll'), '第二子节点应为单一滚动阅读区')
+
+  // 描述位于滚动区内部顶部（随正文同流滚动），不再常驻压顶
+  const scroll = children[1]!
+  assert.ok(scroll.querySelector('.skill-reader-desc'), '描述应位于滚动区内部')
+  assert.ok(scroll.querySelector('.skill-reader-body'), '正文阅读区应位于滚动区内部')
+  assert.ok(
+    !children.some((c) => c.classList.contains('skill-reader-desc')),
+    '描述不得作为阅读器直属子节点钉在工具条上方',
+  )
+  // 复制按钮携带 skill-reader-copy 类（移动端隐藏文字只留图标的新增样式钩子）
+  assert.ok(host.querySelector('.skill-reader-copy'), '复制按钮应携带 skill-reader-copy 类')
+
+  await act(async () => {
+    root.unmount()
+  })
+  host.remove()
+})
+
+test('SkillDetailDrawer: 样式契约——单一滚动容器与移动端单行工具条', { timeout: 60_000 }, () => {
+  const stylesSrc = readFileSync(join(PKG_ROOT, 'src/styles.css'), 'utf-8')
+  const responsiveSrc = readFileSync(join(PKG_ROOT, 'src/responsive.css'), 'utf-8')
+
+  // 桌面：抽屉主体外层不滚动，唯一滚动交给 .skill-reader-scroll
+  assert.match(
+    stylesSrc,
+    /\.skill-drawer-content \.primary-drawer-body\s*\{[^}]*overflow:\s*hidden/,
+    '抽屉主体应为 overflow: hidden，消除双层滚动',
+  )
+  assert.match(
+    stylesSrc,
+    /\.skill-reader-scroll\s*\{[^}]*flex:\s*1[^}]*overflow-y:\s*auto/,
+    '阅读区应 flex:1 占满剩余高度并作为唯一纵向滚动容器',
+  )
+  // 长描述 2 行折叠
+  assert.match(stylesSrc, /-webkit-line-clamp:\s*2/, '长描述默认 2 行截断')
+  // 阅读区自身不再内部滚动（消除与外层的双滚动冲突）
+  assert.doesNotMatch(stylesSrc, /\.skill-reader-doc\s*\{[^}]*overflow/, 'skill-reader-doc 不得内部滚动')
+
+  // 移动端：单行工具条 + 隐藏次要统计噪音 + 收紧头部与主体内边距
+  assert.match(responsiveSrc, /\.skill-reader-toolbar\s*\{\s*flex-wrap:\s*nowrap[^}]*\}/, '移动端工具条单行不折行')
+  assert.match(responsiveSrc, /\.skill-reader-file\s*\{\s*flex:\s*1 1 auto[^}]*\}/, '文件选择区自适应单行布局')
+  assert.match(responsiveSrc, /\.skill-reader-lines\s*\{\s*display:\s*none/, '移动端隐藏行数统计噪音')
+  assert.match(responsiveSrc, /\.skill-reader-copy\s*>\s*span\s*\{\s*display:\s*none/, '移动端复制按钮只留图标')
+  assert.match(
+    responsiveSrc,
+    /\.skill-drawer-content \.primary-drawer-header\s*\{[^}]*padding:\s*10px 14px/,
+    '移动端抽屉头部内边距收紧',
+  )
+  assert.match(
+    responsiveSrc,
+    /\.skill-drawer-content \.primary-drawer-body\s*\{[^}]*padding:\s*10px 12px/,
+    '移动端抽屉主体内边距收紧',
+  )
+  assert.match(responsiveSrc, /\.skill-reader-body\s*\{\s*min-height:\s*0/, '移动端阅读区 min-height 归零')
 })
 
 // ---------------------------------------------------------------------------
