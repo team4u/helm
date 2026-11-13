@@ -200,3 +200,47 @@ export class SseParser {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// SSE 空闲看门狗：卡死连接可靠检测（如 Vite dev 代理保留的挂起流）
+// ---------------------------------------------------------------------------
+
+/** SSE 客户端时序参数（集中定义；对象引用共享，测试可临时改写后复原）。 */
+export const sseClientTimings = {
+  /**
+   * 连接建立后持续未收到任何字节（含服务端 `: keepalive` 心跳注释行）即判定
+   * 连接卡死，中止当前连接并走既有重连路径；须显著大于内核心跳间隔
+   * （EventHub 默认 15s），避免误杀正常空闲连接。
+   */
+  idleTimeoutMs: 60_000,
+}
+
+/** 带空闲 Deadline 的单次读取结果：正常 chunk 或超时（连接卡死）。 */
+export type SseIdleRead =
+  | { kind: 'chunk'; chunk: ReadableStreamReadResult<Uint8Array> }
+  | { kind: 'idle' }
+
+/**
+ * 读取一个 SSE chunk 并附带空闲 Deadline：chunk 在超时内到达即返回（每次到达
+ * 自然重置下一轮 Deadline，不会误杀活跃连接）；超时返回 { kind: 'idle' }，
+ * 由调用方 abort 当前连接解开挂起的 reader.read() 并走统一重连路径。
+ * 读取 promise 已被 race 接管：超时取胜后迟到/拒绝的读取不会成为未处理 rejection。
+ */
+export async function readSseChunkWithDeadline(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  idleTimeoutMs: number,
+): Promise<SseIdleRead> {
+  let onIdle: () => void = () => {}
+  const idle = new Promise<void>((resolve) => {
+    onIdle = resolve
+  })
+  const timer = setTimeout(onIdle, idleTimeoutMs)
+  try {
+    return await Promise.race([
+      reader.read().then((chunk): SseIdleRead => ({ kind: 'chunk', chunk })),
+      idle.then((): SseIdleRead => ({ kind: 'idle' })),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}

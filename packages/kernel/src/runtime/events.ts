@@ -171,6 +171,9 @@ function assertAskSpecShape(value: unknown): void {
 /** 流式阶段未读字节上限（默认 1 MiB，可用 maxPendingBytes 覆盖，测试用小值）。 */
 const DEFAULT_MAX_PENDING_BYTES = 1024 * 1024
 
+/** SSE 空闲心跳间隔（默认 15s；注释行走统一字节背压路径，测试可用 keepaliveMs 覆盖）。 */
+const DEFAULT_KEEPALIVE_MS = 15_000
+
 /**
  * 递归剔除值为 undefined 的可选字段。
  * 仅对 plain object / array 递归；其余值（含 Date/Map 等非法 JSON 值）原样返回，
@@ -210,6 +213,8 @@ export class EventHub {
   private readonly persistSeq: (seq: number) => void
   private readonly streamClosers = new Set<() => void>()
   private readonly maxPendingBytes: number
+  /** SSE 空闲心跳间隔（非正值停用）；注释行让中间层/代理保活并可被客户端检测卡死。 */
+  private readonly keepaliveMs: number
   /** redact(text) -> 脱敏文本（secret 明文 -> marker；复用 redactJsonValue 递归）。 */
   redact: (text: string) => string = (t) => t
 
@@ -223,11 +228,14 @@ export class EventHub {
     persistSeq?: (seq: number) => void
     /** 流式阶段未读字节上限（慢客户端判定）；默认 1 MiB。 */
     maxPendingBytes?: number
+    /** SSE 空闲心跳间隔（毫秒）；默认 15s，非正值停用（测试用小值加速）。 */
+    keepaliveMs?: number
   }) {
     this.seqValue = options.initialSeq
     this.snapshot = options.snapshot
     this.persistSeq = options.persistSeq ?? (() => {})
     this.maxPendingBytes = options.maxPendingBytes ?? DEFAULT_MAX_PENDING_BYTES
+    this.keepaliveMs = options.keepaliveMs ?? DEFAULT_KEEPALIVE_MS
   }
 
   get seq(): number {
@@ -308,6 +316,9 @@ export class EventHub {
    * HTTP SSE 响应：立即返回 Response；首帧 snapshot，随后按 seq 增量。
    * request.signal abort 与 ReadableStream.cancel 都退订并关流；未决帧数/字节数
    * 超上限的慢客户端被明确关流（重连凭 snapshot 对齐）；无事件时保持连接，绝不回退 JSON。
+   * 空闲期间按 keepaliveMs 周期写入 `: keepalive` SSE 注释行（客户端解析器忽略，
+   * 不伪造业务事件、不推进 seq），让卡死连接可被客户端检测；心跳走统一 write
+   * 背压路径（堆积超限同样关流），abort/cancel/close 随 shutdown 一并清理 timer。
    */
   response(request: Request): Response {
     const encoder = new TextEncoder()
@@ -317,6 +328,7 @@ export class EventHub {
     let closed = false
     let unsubscribe: (() => void) | undefined
     let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined
+    let keepaliveTimer: ReturnType<typeof setInterval> | undefined
 
     const encodeFrame = (name: string, data: unknown): string =>
       `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
@@ -339,6 +351,10 @@ export class EventHub {
     const shutdown = (): void => {
       if (closed) return
       closed = true
+      if (keepaliveTimer !== undefined) {
+        clearInterval(keepaliveTimer)
+        keepaliveTimer = undefined
+      }
       request.signal.removeEventListener('abort', shutdown)
       unsubscribe?.()
       unsubscribe = undefined
@@ -408,6 +424,14 @@ export class EventHub {
             }
           }
           pending = []
+          // 空闲心跳：SSE 注释行（: 开头），客户端解析器忽略，绝不伪造业务事件、
+          // 不推进 seq；走统一 write 背压路径（不读的慢消费者堆积超限同样关流），
+          // 断开（abort/cancel/hub.close）随 shutdown 一并清理 timer。
+          if (this.keepaliveMs > 0) {
+            keepaliveTimer = setInterval(() => {
+              if (!write(': keepalive\n\n')) shutdown()
+            }, this.keepaliveMs)
+          }
         },
         cancel: () => {
           shutdown()

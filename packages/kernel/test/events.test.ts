@@ -42,7 +42,7 @@ function summary(id: number, title: string, doing?: string): ConversationSummary
   }
 }
 
-function makeFixture(opts?: { maxPendingBytes?: number; initialSeq?: number }): Fixture {
+function makeFixture(opts?: { maxPendingBytes?: number; initialSeq?: number; keepaliveMs?: number }): Fixture {
   const persistedSeqs: number[] = []
   const initialSeq = opts?.initialSeq ?? 0
   const fixture: Fixture = {
@@ -55,6 +55,7 @@ function makeFixture(opts?: { maxPendingBytes?: number; initialSeq?: number }): 
     snapshot: () => fixture.snapshotValue,
     persistSeq: (seq) => persistedSeqs.push(seq),
     ...(opts?.maxPendingBytes !== undefined ? { maxPendingBytes: opts.maxPendingBytes } : {}),
+    ...(opts?.keepaliveMs !== undefined ? { keepaliveMs: opts.keepaliveMs } : {}),
   })
   return fixture
 }
@@ -100,6 +101,24 @@ async function waitFor(cond: () => boolean, ms = 2000): Promise<void> {
   while (!cond()) {
     if (Date.now() > deadline) throw new Error('waitFor 超时')
     await new Promise((r) => setTimeout(r, 5))
+  }
+}
+
+/** 单次读取附带 Deadline：心跳未按时到达即显式失败（不让测试挂到套件超时）。 */
+async function readWithDeadline(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  ms = 2000,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`读取超时（${ms}ms）：心跳未到达`)), ms)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
   }
 }
 
@@ -775,5 +794,111 @@ describe('EventHub.sseStream 可编程消费', { timeout: 60_000 }, () => {
     const events = frames.slice(1) as HelmEventFrame[]
     assert.ok(events.length >= 1)
     assert.ok(events.every((f) => f.seq > snap.seq))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 空闲心跳（keepalive）：代理/中间层保活 + 客户端卡死检测依据
+// ---------------------------------------------------------------------------
+
+describe('EventHub SSE 空闲心跳', { timeout: 60_000 }, () => {
+  it('空闲连接周期收到 : keepalive 注释行：不携带 event/data、不伪造业务事件、不推进 seq', { timeout: 60_000 }, async () => {
+    const { hub } = makeFixture({ keepaliveMs: 20 })
+    const controller = new AbortController()
+    const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
+    assert.ok(response.body)
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    const first = await reader.read()
+    assert.match(decoder.decode(first.value ?? new Uint8Array()), /event: snapshot/)
+
+    // 下一个 chunk 应是心跳注释行（: 开头，无 event:/data:，解析不出任何帧）。
+    const beat = await readWithDeadline(reader)
+    const beatText = decoder.decode(beat.value ?? new Uint8Array())
+    assert.ok(beatText.startsWith(':'), `心跳应是 SSE 注释行，实际: ${beatText}`)
+    assert.ok(!beatText.includes('event:') && !beatText.includes('data:'), '心跳不得伪造业务事件')
+    // 真实客户端 SseParser 跳过 : 开头注释行（live-state.test.ts 已锁定）：
+    // 心跳文本解析不出任何携带 data 的帧。
+    assert.ok(parseSse(beatText).every((frame) => frame.data === null), '心跳不得携带数据帧')
+    assert.equal(hub.seq, 0, '心跳不推进事件序号')
+
+    // 心跳不干扰业务事件：发布后事件帧照常到达。
+    hub.publish('notification', { level: 'info', title: '心跳间事件' })
+    const eventChunk = await readWithDeadline(reader)
+    assert.match(decoder.decode(eventChunk.value ?? new Uint8Array()), /event: notification/)
+    controller.abort()
+    await reader.cancel().catch(() => {})
+  })
+
+  it('abort 后心跳 timer 随 shutdown 清理：退订关流，无后续字节（进程不因泄漏 timer 挂起）', { timeout: 60_000 }, async () => {
+    const { hub } = makeFixture({ keepaliveMs: 20 })
+    const controller = new AbortController()
+    const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
+    assert.ok(response.body)
+    const reader = response.body.getReader()
+    await reader.read() // snapshot
+    controller.abort()
+    assert.equal(hub.subscriberCount, 0, 'abort 后立即退订')
+
+    // 服务端已关流：耗尽已入队字节后读到 done。
+    let done = false
+    while (!done) {
+      const next = await reader.read()
+      done = next.done === true
+    }
+    // 等待多个心跳周期：泄漏的 interval 会保持事件循环存活使套件无法退出
+    // （本套件能正常结束即问接验证 timer 已清理），且不会再写入任何字节。
+    await new Promise((r) => setTimeout(r, 100))
+    const after = await reader.read()
+    assert.ok(after.done, '关流后不再有心跳字节')
+  })
+
+  it('ReadableStream.cancel 同样清理心跳 timer（客户端主动断开）', { timeout: 60_000 }, async () => {
+    const { hub } = makeFixture({ keepaliveMs: 20 })
+    const controller = new AbortController()
+    const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
+    assert.ok(response.body)
+    const reader = response.body.getReader()
+    await reader.read() // snapshot
+    await reader.cancel()
+    assert.equal(hub.subscriberCount, 0, 'cancel 后立即退订')
+    await new Promise((r) => setTimeout(r, 100))
+    assert.equal(hub.subscriberCount, 0)
+    controller.abort()
+  })
+
+  it('心跳受字节背压有界约束：不读的慢消费者堆积超限被明确关流', { timeout: 60_000 }, async () => {
+    // 128B 上限：单条心跳约 14B，10 次内必触发。
+    const { hub } = makeFixture({ keepaliveMs: 5, maxPendingBytes: 128 })
+    const controller = new AbortController()
+    const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
+    assert.ok(response.body)
+    const reader = response.body.getReader()
+    const first = await reader.read()
+    assert.match(new TextDecoder().decode(first.value ?? new Uint8Array()), /event: snapshot/)
+    // 不再读：心跳字节持续堆积，超限即慢客户端明确关流（绝不满仓无限排队）。
+    await waitFor(() => hub.subscriberCount === 0)
+    let done = false
+    while (!done) {
+      const next = await reader.read()
+      done = next.done === true
+    }
+    controller.abort()
+  })
+
+  it('keepaliveMs 非正值停用心跳：空闲流不再写入任何字节', { timeout: 60_000 }, async () => {
+    const { hub } = makeFixture({ keepaliveMs: 0 })
+    const controller = new AbortController()
+    const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
+    assert.ok(response.body)
+    const reader = response.body.getReader()
+    await reader.read() // snapshot
+    // 等待起过一个默认心跳周期仍无任何写入（read 持续 pending，用短 Deadline 反证）。
+    await new Promise((r) => setTimeout(r, 60))
+    const pending = reader.read()
+    const won = await Promise.race([pending.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 80))])
+    assert.equal(won, false, '停用心跳后空闲流不应再有字节到达')
+    controller.abort()
+    await reader.cancel().catch(() => {})
   })
 })

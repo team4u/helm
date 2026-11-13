@@ -6,7 +6,7 @@ import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
 import type { ActionManifest, ArtifactMetadata, ConversationDetail, ConversationSummary, HelmEventFrame, HelmSnapshot, PluginSummary, Profile, ProviderConfig, SkillSummary } from '@helm/protocol'
 import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, nodesApi, pluginsApi, setStoredToken, type CredentialSummary, type ModelDescriptor, type NodeInfo } from './api.js'
-import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, SseParser, type LiveState } from './live-state.js'
+import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, readSseChunkWithDeadline, sortNodes, SseParser, sseClientTimings, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
 import {
   evictSessionDocSubscriptions,
@@ -696,10 +696,18 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
         reader = response.body.getReader()
         const decoder = new TextDecoder()
         while (active) {
-          const chunk = await reader.read()
-          if (chunk.done) break
+          const read = await readSseChunkWithDeadline(reader, sseClientTimings.idleTimeoutMs)
+          if (read.kind === 'idle') {
+            // 连接卡死（如 dev 代理保留的挂起流，reader.read() 永不返回）：
+            // abort 解开挂起读取并走 finally 统一重连；重连 fetch 拿 401 即登出，
+            // 页面不再停留在旧状态。正常连接持续收到字节（含心跳注释）不会触发。
+            if (active) setConnectionError('实时连接空闲超时，正在重新连接')
+            controller.abort()
+            throw new Error('实时连接空闲超时')
+          }
+          if (read.chunk.done) break
           if (!active) return
-          parser.push(decoder.decode(chunk.value, { stream: true }))
+          parser.push(decoder.decode(read.chunk.value, { stream: true }))
         }
         if (active) throw new Error('实时连接已断开，正在重新同步')
       } catch (error) {
