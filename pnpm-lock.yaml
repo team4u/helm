@@ -253,6 +253,18 @@ importers:
         specifier: ^8.18.0
         version: 8.18.2
 
+  packages/payload:
+    devDependencies:
+      '@helm/cli':
+        specifier: workspace:*
+        version: link:../cli
+      '@helm/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+      '@helm/web':
+        specifier: workspace:*
+        version: link:../web
+
   packages/protocol:
     dependencies:
       ajv:
