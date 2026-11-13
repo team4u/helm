@@ -603,25 +603,35 @@ test('有历史智能体名称入口：点击站位行进待命态而非旧会�
   assert.equal(state.createCalls.length, 0)
 })
 
-test('侧栏折叠展开钮：仅展开列表不导航，手动展开不被实时更新弹回', { timeout: 60_000 }, async () => {
+test('侧栏无折叠钮且父子同时点亮：点击智能体展开其话题列表（参考 magpie）', { timeout: 60_000 }, async () => {
   state.conversations.push(summary(5, { profileId: 'coder' }))
   await mount('#/c/1')
-  // 点击另一个智能体（编码专员）的展开钮：只展开话题列表，不导航不点亮
-  const coderChevron = document.querySelector<HTMLButtonElement>('button[title="展开话题列表"]')
-  assert.ok(coderChevron, '存在收起中的编码专员折叠展开钮')
-  await act(async () => { coderChevron!.click() })
+  // 折叠展开钮已移除：点击智能体名称是唯一展开入口
+  assert.equal(document.querySelectorAll('.agent-collapse-btn').length, 0, '不渲染折叠展开钮')
+
+  // 父强子弱：当前会话所属智能体站位行（父）与当前会话子行（子）同时点亮
+  const standings0 = [...document.querySelectorAll('.agent-standing')]
+  const assistant0 = standings0.find((el) => el.querySelector('.nav-item-label')?.textContent === '个人助理')
+  assert.ok(assistant0?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), '当前会话所属智能体站位行点亮（父）')
+  const activeSub = assistant0?.querySelector('.nav-item-sub.nav-item-active')
+  assert.ok(activeSub?.textContent?.includes('会话 1'), '当前会话子行同时点亮（子）')
+
+  // 点击另一个智能体（编码专员）：进入其待命态并展开其话题列表，原智能体收起
+  const coderName = [...document.querySelectorAll('.agent-standing-row .nav-item-main')]
+    .find((btn) => btn.textContent?.includes('编码专员')) as HTMLButtonElement
+  await act(async () => { coderName.click() })
   await settle()
-  assert.equal(window.location.hash, '#/c/1', '折叠展开钮不导航，主屏保持当前会话')
+  assert.equal(window.location.hash, '#/a/coder', '点击智能体进入其待命态')
   assert.equal(state.createCalls.length, 0, '不预创建会话')
-
   const standings = [...document.querySelectorAll('.agent-standing')]
-  const coderStanding = standings.find((el) => el.querySelector('.nav-item-label')?.textContent === '编码专员')
-  const assistantStanding = standings.find((el) => el.querySelector('.nav-item-label')?.textContent === '个人助理')
-  assert.ok(coderStanding?.querySelector('.agent-conversations-list'), '编码专员话题列表展开')
-  assert.ok(!coderStanding?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), '被点击智能体不点亮')
-  assert.ok(assistantStanding?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), '高亮不跳转：当前会话智能体头部行承载')
+  const coder = standings.find((el) => el.querySelector('.nav-item-label')?.textContent === '编码专员')
+  const assistant = standings.find((el) => el.querySelector('.nav-item-label')?.textContent === '个人助理')
+  assert.ok(coder?.querySelector('.agent-conversations-list'), '编码专员话题列表随目标展开')
+  assert.ok(coder?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), '待命智能体站位行点亮')
+  assert.ok(!assistant?.querySelector('.agent-conversations-list'), '原智能体话题列表收起')
+  assert.ok(!assistant?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), '原智能体不再点亮')
 
-  // 模拟 SSE 实时更新（会话刷新产生新 store）：手动展开不得被弹回第一个智能体
+  // SSE 实时更新：展开与高亮由目标唯一推导，不被扰动
   await act(async () => {
     eventController?.enqueue(eventFrame(++eventSeq, {
       type: 'conversation.upsert',
@@ -629,10 +639,10 @@ test('侧栏折叠展开钮：仅展开列表不导航，手动展开不被实�
     }))
   })
   await settle()
-  const standingsAfter = [...document.querySelectorAll('.agent-standing')]
-  const coderAfter = standingsAfter.find((el) => el.querySelector('.nav-item-label')?.textContent === '编码专员')
-  assert.ok(coderAfter?.querySelector('.agent-conversations-list'), '实时更新后编码专员列表仍展开，不弹回')
-  assert.equal(window.location.hash, '#/c/1', '主屏目标不受影响')
+  const coderAfter = [...document.querySelectorAll('.agent-standing')]
+    .find((el) => el.querySelector('.nav-item-label')?.textContent === '编码专员')
+  assert.ok(coderAfter?.querySelector('.agent-conversations-list'), '实时更新后展开仍跟随目标')
+  assert.ok(coderAfter?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), '实时更新后高亮保持')
 })
 
 test('真实会话 Composer /new：进入待命态并继承环境，不 reset 不 create', { timeout: 60_000 }, async () => {

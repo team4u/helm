@@ -855,7 +855,7 @@ button,
 }
 
 .agent-standing-group .agent-conversations-list {
-  margin-left: 16px;
+  margin: 4px 0 2px 16px;
   padding-left: 6px;
   border-left: 1px solid var(--border);
   display: flex;

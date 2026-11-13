@@ -237,6 +237,13 @@ test('Sidebar 智能体行无折叠按钮：展开由当前目标唯一推导', 
   const lists = document.body.querySelectorAll('.agent-conversations-list')
   assert.equal(lists.length, 1, '仅当前目标所属智能体展开话题列表')
   assert.ok(lists[0]!.textContent!.includes('周末计划'), '展开的是当前会话所属智能体的话题')
+
+  // 父强子弱（参考 magpie）：站位行（父）与当前会话子行（子）同时点亮
+  const header = [...document.body.querySelectorAll('.agent-standing-row')]
+    .find((r) => r.textContent!.includes('个人助理'))!
+  assert.ok(header.className.includes('nav-item-active'), '当前会话所属智能体站位行点亮（父）')
+  const sub = document.body.querySelector('.nav-item-sub.nav-item-active')
+  assert.ok(sub?.textContent!.includes('个人助理'), '当前会话子行同时点亮（子）')
 })
 
 test('Sidebar 话题列表展开随目标切换：切换后自动收起原智能体，无关更新不扰动', { timeout: 60_000 }, async () => {

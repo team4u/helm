@@ -848,7 +848,7 @@ test('批量模式勾选框只存在于会话子项，机器人站位行绝不�
   const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
 
   // sidebar-batch-checkbox 仅出现在 AgentConversationRow（会话子行）内，
-  // 且位于其受控渲染块中；Agent 站位头部行只使用 agent-collapse-btn / nav-item-main 按钮。
+  // 且位于其受控渲染块中；Agent 站位头部行只使用 nav-item-main 名称按钮（折叠展开钮已移除）。
   const checkboxIdx = sidebarSource.indexOf('sidebar-batch-checkbox')
   assert.ok(checkboxIdx > 0, '会话子行应渲染 sidebar-batch-checkbox')
   const convRowStart = sidebarSource.lastIndexOf('function AgentConversationRow', checkboxIdx)
@@ -963,7 +963,7 @@ test('Sidebar 设置空间：系统中心纵向列表与激活高亮（SSR）', 
   assert.ok(!html.includes('agent-standing-group'), '设置空间不渲染智能体分组')
 })
 
-test('Sidebar 双层导航：手风琴单展开仅当前智能体显示话题子列表（SSR）', { timeout: 60_000 }, () => {
+test('Sidebar 双层导航：单展开仅当前智能体显示话题子列表，父子行同时点亮（SSR）', { timeout: 60_000 }, () => {
   const store = makeTestStore({
     conversations: [
       conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
@@ -974,11 +974,14 @@ test('Sidebar 双层导航：手风琴单展开仅当前智能体显示话题子
   })
   const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
 
-  // 手风琴：当前会话所属智能体（assistant）展开话题子列表，标题行保持非激活
+  // 单展开：当前会话所属智能体（assistant）展开话题子列表
   assert.ok(html.includes('agent-conversations-list'), '当前智能体渲染话题子列表')
   assert.ok(html.includes('nav-item-sub'), '话题子行使用二级行样式')
   assert.ok(html.includes('>3</span>'), '多会话智能体行展示计数徽标')
   assert.ok(html.includes('title="在 个人助理 下开始新话题"'), '智能体行新建按钮保留（进入待命态）')
+  // 父强子弱（参考 magpie）：站位行（父）与当前会话子行（子）同时点亮
+  assert.ok(html.includes('class="nav-item agent-standing-row nav-item-active"'), '站位行（父）保持激活')
+  assert.ok(html.includes('class="nav-item nav-item-sub nav-item-active"'), '当前会话子行（子）激活')
 })
 
 
