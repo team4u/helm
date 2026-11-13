@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { DesktopError } from './errors.js';
 import { join } from 'node:path';
 import { resolveDesktopConfig, type DesktopConfig } from './config.js';
 import { HubSupervisor, type HubSupervisorOptions, type StartResult } from './supervisor.js';
@@ -75,7 +76,10 @@ export class DesktopBoot {
   }
 
   async restore(error: Error): Promise<StartResult> {
-    if (this.candidate === null) throw error;
+    // 环境/存储故障并不证明载荷有缺陷；显式失败并保留重试机会，不能永久阻断版本。
+    if (this.candidate === null || (error instanceof DesktopError && [
+      'hub_port_conflict', 'hub_runner_probe_failed', 'hub_runner_incapable', 'updater_state_write_failed',
+    ].includes(error.code))) throw error;
     await this.supervisor.stop();
     await this.options.updater.reject(this.candidate, error);
     this.options.log?.(`更新 ${this.candidate.version} 启动失败，已保留上一版本：${error.message}`);
