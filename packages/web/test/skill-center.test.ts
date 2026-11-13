@@ -31,11 +31,12 @@ import {
 import { SkillCard } from '../src/skills/SkillCard.js'
 import {
   buildSkillFileList,
-  isSkillDescriptionLong,
+  extractSkillFrontmatter,
   isSkillMarkdownFile,
+  renderSkillDocMarkdown,
+  renderSkillFrontmatterTable,
   skillFileBasename,
   skillFileLanguage,
-  stripMarkdownFrontmatter,
 } from '../src/skills/skill-reader-model.js'
 import { makeTestStore } from './helpers/store.js'
 
@@ -321,22 +322,155 @@ test('skill-reader-model: skillFileBasename 与 isSkillMarkdownFile 判定', { t
   assert.equal(isSkillMarkdownFile('config.json'), false)
 })
 
-test('skill-reader-model: stripMarkdownFrontmatter 剥离头部元信息且不截断正文', { timeout: 60_000 }, () => {
-  // 常规 frontmatter：剥离围栏与后续空行
-  assert.equal(
-    stripMarkdownFrontmatter('---\nname: helm-cli\ndescription: 手册\n---\n\n# 正文\n\n段落。'),
-    '# 正文\n\n段落。',
+test('skill-reader-model: extractSkillFrontmatter 解析字段序列与正文（单行标量 / 块标量 / 引号）', { timeout: 60_000 }, () => {
+  // 常规 frontmatter：字段按原 YAML 顺序保留，正文剥离围栏与后续空行
+  const doc = extractSkillFrontmatter(
+    '---\nname: helm-cli\ndescription: 手册\nmanagedByPlugin: builtin:profile\n---\n\n# 正文\n\n段落。',
   )
+  assert.deepEqual(doc, {
+    fields: [
+      { key: 'name', value: 'helm-cli' },
+      { key: 'description', value: '手册' },
+      { key: 'managedByPlugin', value: 'builtin:profile' },
+    ],
+    body: '# 正文\n\n段落。',
+  })
+
   // ... 围栏结束同样支持
-  assert.equal(stripMarkdownFrontmatter('---\nname: x\n...\n# 标题'), '# 标题')
-  // 未闭合 frontmatter 原样返回
+  assert.deepEqual(extractSkillFrontmatter('---\nname: x\n...\n# 标题'), {
+    fields: [{ key: 'name', value: 'x' }],
+    body: '# 标题',
+  })
+
+  // 未闭合 / 无围栏 / 非围栏分隔线：返回 null，调用方原文回退
+  assert.equal(extractSkillFrontmatter('---\nname: x\n# 正文'), null)
+  assert.equal(extractSkillFrontmatter('# 标题\n\n正文'), null)
+  assert.equal(extractSkillFrontmatter('----\nname: x\n----\n# 正文'), null)
+  assert.equal(extractSkillFrontmatter(''), null)
+
+  // 块标量：折叠型 > / >- 空格拼接，保留型 | / |- 换行拼接（语义对齐 kernel parser）
+  assert.deepEqual(
+    extractSkillFrontmatter('---\ndescription: >\n  第一行\n  第二行\n---\n正文')?.fields,
+    [{ key: 'description', value: '第一行 第二行' }],
+  )
+  assert.deepEqual(
+    extractSkillFrontmatter('---\ndescription: >-\n  甲\n\n  乙\nname: x\n---\n正文')?.fields,
+    [
+      { key: 'description', value: '甲 乙' },
+      { key: 'name', value: 'x' },
+    ],
+  )
+  assert.deepEqual(
+    extractSkillFrontmatter('---\ndescription: |\n  第一行\n  第二行\n---\n正文')?.fields,
+    [{ key: 'description', value: '第一行\n第二行' }],
+  )
+  assert.deepEqual(
+    extractSkillFrontmatter('---\ndescription: |-\n  甲\n  乙\nname: x\n---\n正文')?.fields,
+    [
+      { key: 'description', value: '甲\n乙' },
+      { key: 'name', value: 'x' },
+    ],
+  )
+
+  // 单行值剥首尾对称引号与转义还原；不对称引号原样保留
+  assert.deepEqual(
+    extractSkillFrontmatter('---\nname: "quoted name"\ndescription: \'It\'\'s fine\'\n---\n正文')?.fields,
+    [
+      { key: 'name', value: 'quoted name' },
+      { key: 'description', value: "It's fine" },
+    ],
+  )
+  assert.deepEqual(
+    extractSkillFrontmatter('---\nname: a"b\n---\n正文')?.fields,
+    [{ key: 'name', value: 'a"b' }],
+  )
+
+  // 注释与空行不匹配键模式，跳过不进字段序列
+  assert.deepEqual(
+    extractSkillFrontmatter('---\n# 注释\nname: x\n\nlicense: MIT\n---\n正文')?.fields.map((f) => f.key),
+    ['name', 'license'],
+  )
+
+  // 全部为 frontmatter 时正文为空串；空 frontmatter 字段序列为空
+  assert.deepEqual(extractSkillFrontmatter('---\nname: x\n---\n'), {
+    fields: [{ key: 'name', value: 'x' }],
+    body: '',
+  })
+  assert.deepEqual(extractSkillFrontmatter('---\n---\n# 正文'), { fields: [], body: '# 正文' })
+})
+
+test('skill-reader-model: renderSkillFrontmatterTable 字段按序转为元数据表格且特殊字符安全', { timeout: 60_000 }, () => {
+  // 常规转换：标题 + 表头 + 字段行，顺序保留
+  assert.equal(
+    renderSkillFrontmatterTable([
+      { key: 'name', value: 'agent-browser' },
+      { key: 'description', value: 'Browser automation CLI' },
+      { key: 'managedByPlugin', value: 'builtin:profile' },
+    ]),
+    [
+      '## 技能元数据',
+      '',
+      '| 字段 | 内容 |',
+      '| --- | --- |',
+      '| name | agent-browser |',
+      '| description | Browser automation CLI |',
+      '| managedByPlugin | builtin:profile |',
+    ].join('\n'),
+  )
+
+  // 空字段序列返回空串（无可渲染内容，不注入空表）
+  assert.equal(renderSkillFrontmatterTable([]), '')
+
+  // 特殊字符安全转义：竖线 / 换行 / 尖括号 / 与号 / 反斜杠均不破坏表格列结构
+  const escaped = renderSkillFrontmatterTable([
+    { key: 'description', value: 'a | b\nsecond <hr> & "x" \\y' },
+  ])
+  assert.ok(
+    escaped.includes('| description | a \\| b second &lt;hr> &amp; "x" \\\\y |'),
+    '竖线转义、换行折空格、< 转字符引用、& 转义、反斜杠加倍',
+  )
+  // 转义后单元格仍为单行（换行折叠为空格，不破坏 GFM 表格行结构）
+  const cell = escaped.split('\n').find((l) => l.startsWith('| description |'))
+  assert.ok(cell !== undefined && !/\r|\n/.test(cell), '元数据单元格必须单行')
+})
+
+test('skill-reader-model: renderSkillDocMarkdown 统一文档视图（表格 + 正文同流，未闭合回退）', { timeout: 60_000 }, () => {
+  // 带 frontmatter：元数据表格在前，正文紧随其后
+  assert.equal(
+    renderSkillDocMarkdown('---\nname: helm-cli\ndescription: 手册\n---\n\n# 正文\n\n段落。'),
+    [
+      '## 技能元数据',
+      '',
+      '| 字段 | 内容 |',
+      '| --- | --- |',
+      '| name | helm-cli |',
+      '| description | 手册 |',
+      '',
+      '# 正文',
+      '',
+      '段落。',
+    ].join('\n'),
+  )
+
+  // 无 frontmatter：正文原样返回
+  assert.equal(renderSkillDocMarkdown('# 标题\n\n正文'), '# 标题\n\n正文')
+
+  // 未闭合 frontmatter：原文回退，绝不截断正文
   const unclosed = '---\nname: x\n# 正文'
-  assert.equal(stripMarkdownFrontmatter(unclosed), unclosed)
-  // 无 frontmatter、正文以分隔线开头但非围栏结构时均不误伤
-  assert.equal(stripMarkdownFrontmatter('# 标题\n\n正文'), '# 标题\n\n正文')
-  assert.equal(stripMarkdownFrontmatter('----\nname: x\n----\n# 正文'), '----\nname: x\n----\n# 正文')
-  // 全部为 frontmatter 时返回空串
-  assert.equal(stripMarkdownFrontmatter('---\nname: x\n---\n'), '')
+  assert.equal(renderSkillDocMarkdown(unclosed), unclosed)
+
+  // 非围栏分隔线开头：不误伤，原文返回
+  const dashes = '----\nname: x\n----\n# 正文'
+  assert.equal(renderSkillDocMarkdown(dashes), dashes)
+
+  // 只有 frontmatter：仅元数据表格
+  assert.equal(
+    renderSkillDocMarkdown('---\nname: x\n---\n'),
+    '## 技能元数据\n\n| 字段 | 内容 |\n| --- | --- |\n| name | x |',
+  )
+
+  // 空 frontmatter（无字段）：正文原样，不注入空表
+  assert.equal(renderSkillDocMarkdown('---\n---\n# 正文'), '# 正文')
 })
 
 test('skill-reader-model: skillFileLanguage 按后缀推导语法语言', { timeout: 60_000 }, () => {
@@ -347,16 +481,6 @@ test('skill-reader-model: skillFileLanguage 按后缀推导语法语言', { time
   assert.equal(skillFileLanguage('bin/run.sh'), 'bash')
   // 无法识别返回空串（回退普通等宽样式，不猜造语言）
   assert.equal(skillFileLanguage('assets/unknown.custom'), '')
-})
-
-test('skill-reader-model: isSkillDescriptionLong 长描述折叠阈值判定', { timeout: 60_000 }, () => {
-  assert.equal(isSkillDescriptionLong(undefined), false)
-  assert.equal(isSkillDescriptionLong(null), false)
-  assert.equal(isSkillDescriptionLong(''), false)
-  assert.equal(isSkillDescriptionLong('生成符合规范的中文提交信息'), false)
-  assert.equal(isSkillDescriptionLong('测'.repeat(90)), false, '恰好 90 字符不算长描述')
-  assert.equal(isSkillDescriptionLong('测'.repeat(91)), true, '超过 90 字符判定为长描述')
-  assert.equal(isSkillDescriptionLong(`   ${'测'.repeat(91)}   `), true, '首尾空白不计入长度')
 })
 
 // ---------------------------------------------------------------------------
@@ -519,12 +643,13 @@ test('SkillDetailDrawer: SSR 渲染单行文件工具条与富文本阅读区（
   assert.doesNotMatch(html, emojiRegex, 'SkillDetailDrawer 渲染输出严禁包含 Emoji 表情')
 })
 
-test('SkillDetailDrawer: 富文本模式剥离 SKILL.md 头部 YAML frontmatter，源码模式保留原文', { timeout: 60_000 }, async () => {
+test('SkillDetailDrawer: 富文本模式把 frontmatter 转为元数据表格与正文同流，源码模式保留原文', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
 
-  const frontmatterDoc = '---\nname: helm-cli\ndescription: 头部元信息\n---\n\n# 正文标题\n\n内容段落。'
+  const frontmatterDoc =
+    '---\nname: helm-cli\ndescription: 头部元信息\nmanagedByPlugin: builtin:profile\n---\n\n# 正文标题\n\n内容段落。'
   const reader = async () => ({ text: frontmatterDoc })
 
   await act(async () => {
@@ -541,16 +666,35 @@ test('SkillDetailDrawer: 富文本模式剥离 SKILL.md 头部 YAML frontmatter�
     )
   })
 
-  // 默认富文本：frontmatter 元信息不进入阅读区，正文保留
+  // 默认富文本：.skill-reader-doc 同一内容流同时包含元数据表格与正文
   const readerBody = host.querySelector('.skill-reader-body') as HTMLElement
   assert.equal(readerBody.getAttribute('data-mode'), 'rich', 'Markdown 文件默认富文本模式')
   const doc = host.querySelector('.skill-reader-doc') as HTMLElement
   assert.ok(doc, '富文本模式应渲染 MarkdownView 阅读区')
-  assert.ok(!doc.textContent?.includes('name: helm-cli'), '富文本模式不得展示 YAML frontmatter')
-  assert.ok(!doc.textContent?.includes('description: 头部元信息'), 'frontmatter 键值均不得泄漏')
-  assert.ok(doc.textContent?.includes('正文标题'), 'frontmatter 后的正文应保留')
 
-  // 切换源码模式：完整原文（含 frontmatter）以等宽代码呈现
+  // 元数据表格：标题 + 表头 + 字段行按原 YAML 顺序保留
+  assert.ok(doc.textContent?.includes('技能元数据'), '应渲染「技能元数据」标题')
+  const table = doc.querySelector('table') as HTMLTableElement
+  assert.ok(table, 'frontmatter 应转换为 Markdown 表格渲染')
+  const headerCells = Array.from(table.querySelectorAll('thead th')).map((c) => c.textContent)
+  assert.deepEqual(headerCells, ['字段', '内容'], '表头应为字段/内容两列')
+  const rows = Array.from(table.querySelectorAll('tbody tr')).map(
+    (tr) => Array.from(tr.querySelectorAll('td')).map((td) => td.textContent),
+  )
+  assert.deepEqual(rows, [
+    ['name', 'helm-cli'],
+    ['description', '头部元信息'],
+    ['managedByPlugin', 'builtin:profile'],
+  ], '字段按原 YAML 顺序保留')
+
+  // 正文紧随其后，同一内容流；原始 YAML 键值语法不泄漏
+  assert.ok(doc.textContent?.includes('正文标题'), 'frontmatter 后的正文应保留')
+  assert.ok(doc.textContent?.includes('内容段落。'), '正文段落应保留')
+  assert.ok(!doc.textContent?.includes('name: helm-cli'), '不得以 YAML 原文形式展示 frontmatter')
+  assert.ok(!doc.textContent?.includes('description: 头部元信息'), 'frontmatter 键值均不得泄漏')
+  assert.ok(!doc.textContent?.includes('---'), '富文本模式不得残留围栏分隔线')
+
+  // 切换源码模式：完整原文（含 frontmatter 的 --- 围栏）以等宽代码呈现
   const sourceBtn = Array.from(host.querySelectorAll('button')).find(
     (b) => b.textContent?.includes('源码'),
   ) as HTMLButtonElement
@@ -562,10 +706,11 @@ test('SkillDetailDrawer: 富文本模式剥离 SKILL.md 头部 YAML frontmatter�
   assert.equal(readerBody.getAttribute('data-mode'), 'source', '点击后应进入源码模式')
   const codeWrap = host.querySelector('.skill-reader-code .code-block-wrap') as HTMLElement
   assert.ok(codeWrap, '源码模式应使用 CodeBlockView 代码块')
+  assert.ok(codeWrap.textContent?.includes('---'), '源码模式应保留 YAML frontmatter 的 --- 围栏')
   assert.ok(codeWrap.textContent?.includes('name: helm-cli'), '源码模式应保留 YAML frontmatter 原文')
   assert.ok(codeWrap.textContent?.includes('# 正文标题'), '源码模式应保留正文原文')
 
-  // 切回富文本
+  // 切回富文本：表格 + 正文恢复，仍无原始 YAML
   const richBtn = Array.from(host.querySelectorAll('button')).find(
     (b) => b.textContent?.includes('富文本'),
   ) as HTMLButtonElement
@@ -573,7 +718,7 @@ test('SkillDetailDrawer: 富文本模式剥离 SKILL.md 头部 YAML frontmatter�
     richBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
   assert.equal(readerBody.getAttribute('data-mode'), 'rich', '可切回富文本模式')
-  assert.ok(host.querySelector('.skill-reader-doc'), '富文本阅读区恢复')
+  assert.ok(host.querySelector('.skill-reader-doc table'), '富文本阅读区恢复元数据表格')
 
   await act(async () => {
     root.unmount()
@@ -875,7 +1020,7 @@ test('SkillDetailDrawer: 异步读取文件正文与代数防竞态 (loadGenerat
   host.remove()
 })
 
-test('SkillDetailDrawer: 超长描述默认折叠为 2 行摘要，点击展开/收起切换全文', { timeout: 60_000 }, async () => {
+test('SkillDetailDrawer: skill.description 不再作为独立区块渲染，描述仅来自 frontmatter 表格', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
@@ -883,6 +1028,7 @@ test('SkillDetailDrawer: 超长描述默认折叠为 2 行摘要，点击展开/
   const longDesc =
     '浏览器自动化命令行工具，供智能体打开网站、填写表单、点击按钮、截图、抓取数据、自动化测试 Web 应用、登录站点或执行任何需要网页交互的任务；也适用于探索性测试、食粮验证与问题排查。'.repeat(2)
   const longSkill = makeSkill({ id: 'agent-browser', description: longDesc })
+  const docWithFrontmatter = '---\nname: agent-browser\ndescription: 文件内描述\n---\n\n# 规程正文'
 
   await act(async () => {
     root.render(
@@ -891,73 +1037,36 @@ test('SkillDetailDrawer: 超长描述默认折叠为 2 行摘要，点击展开/
           skill: longSkill,
           open: true,
           inline: true,
-          initialContent: '# 规程正文',
+          readSkill: async () => ({ text: docWithFrontmatter }),
           onClose: () => {},
         }),
       ),
     )
   })
 
-  // 默认折叠：is-collapsed 类 + 展开按钮（aria-expanded=false）
-  const desc = host.querySelector('.skill-reader-desc') as HTMLElement
-  assert.ok(desc, '应渲染技能描述区块')
-  assert.ok(desc.classList.contains('is-collapsed'), '超长描述默认折叠为摘要')
-  const descText = host.querySelector('.skill-reader-desc-text') as HTMLElement
-  assert.ok(descText.textContent?.includes(longDesc.slice(0, 24)), '折叠时全文仍在 DOM（仅 CSS 截断）')
-  const toggle = host.querySelector('.skill-reader-desc-toggle') as HTMLButtonElement
-  assert.ok(toggle, '长描述应提供展开/收起切换按钮')
-  assert.equal(toggle.getAttribute('aria-expanded'), 'false', '初始折叠态')
-  assert.ok(toggle.textContent?.includes('展开'), '初始按钮文案为展开')
+  // 模型级 skill.description 不再进入阅读区：无独立描述块、无展开/收起按钮
+  assert.equal(host.querySelector('.skill-reader-desc'), null, '不得渲染独立描述区块')
+  assert.equal(host.querySelector('.skill-reader-desc-text'), null, '不得渲染独立描述文本节点')
+  assert.equal(host.querySelector('.skill-reader-desc-toggle'), null, '不得渲染展开/收起按钮')
+  const readerEl = host.querySelector('.skill-reader') as HTMLElement
+  assert.ok(readerEl, '应渲染 skill-reader 阅读器')
+  assert.ok(!readerEl.textContent?.includes(longDesc), '模型字段 description 不得直接进入阅读区')
 
-  // 点击展开全文
-  await act(async () => {
-    toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-  })
-  assert.ok(!desc.classList.contains('is-collapsed'), '展开后移除折叠类')
-  assert.equal(toggle.getAttribute('aria-expanded'), 'true', '展开态同步 aria-expanded')
-  assert.ok(toggle.textContent?.includes('收起'), '展开后按钮文案切换为收起')
-
-  // 再次点击收起
-  await act(async () => {
-    toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-  })
-  assert.ok(desc.classList.contains('is-collapsed'), '可重新折叠回 2 行摘要')
-  assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+  // 描述信息仅来自 frontmatter 转换的元数据表格，与正文同处同一内容流
+  const doc = host.querySelector('.skill-reader-doc') as HTMLElement
+  assert.ok(doc, '应渲染统一文档内容流')
+  const cells = Array.from(doc.querySelectorAll('table td')).map((td) => td.textContent)
+  assert.ok(cells.includes('description'), '元数据表格应包含 description 字段行')
+  assert.ok(cells.includes('文件内描述'), '描述值应来自文件内 frontmatter 而非模型字段')
+  assert.ok(doc.textContent?.includes('规程正文'), '正文与元数据表格同流展示')
 
   await act(async () => {
     root.unmount()
   })
   host.remove()
-
-  // 短描述：不折叠、不渲染切换按钮
-  const host2 = document.createElement('div')
-  document.body.appendChild(host2)
-  const root2 = ReactDOMClient.createRoot(host2)
-  await act(async () => {
-    root2.render(
-      renderDrawerElement(
-        e(SkillDetailDrawer, {
-          skill: mockSkills[0], // 28 字符短描述
-          open: true,
-          inline: true,
-          initialContent: '# 规程正文',
-          onClose: () => {},
-        }),
-      ),
-    )
-  })
-  const shortDesc = host2.querySelector('.skill-reader-desc') as HTMLElement
-  assert.ok(shortDesc, '短描述仍渲染描述区块')
-  assert.ok(!shortDesc.classList.contains('is-collapsed'), '短描述不折叠')
-  assert.equal(host2.querySelector('.skill-reader-desc-toggle'), null, '短描述无展开/收起按钮')
-
-  await act(async () => {
-    root2.unmount()
-  })
-  host2.remove()
 })
 
-test('SkillDetailDrawer: 布局契约——工具条紧贴 Header，描述与正文同处单一滚动区', { timeout: 60_000 }, async () => {
+test('SkillDetailDrawer: 布局契约——工具条紧贴 Header，元数据与正文同处单一滚动区', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
@@ -980,19 +1089,18 @@ test('SkillDetailDrawer: 布局契约——工具条紧贴 Header，描述与正
   assert.ok(reader, '应渲染 skill-reader 阅读器')
   const children = Array.from(reader.children) as HTMLElement[]
 
-  // 工具条是阅读器第一个子节点：紧贴抽屉 Header，中间不夹长描述
+  // 工具条是阅读器第一个子节点：紧贴抽屉 Header，中间不夹描述等独立区块
   assert.equal(children.length, 2, '阅读器仅含工具条与滚动阅读区两个子节点')
   assert.ok(children[0]?.classList.contains('skill-reader-toolbar'), '工具条应为首子节点')
   assert.ok(children[1]?.classList.contains('skill-reader-scroll'), '第二子节点应为单一滚动阅读区')
 
-  // 描述位于滚动区内部顶部（随正文同流滚动），不再常驻压顶
+  // 滚动区内仅正文阅读区；元数据表格与正文同在 .skill-reader-doc 内容流内
   const scroll = children[1]!
-  assert.ok(scroll.querySelector('.skill-reader-desc'), '描述应位于滚动区内部')
+  const scrollChildren = Array.from(scroll.children) as HTMLElement[]
+  assert.equal(scrollChildren.length, 1, '滚动区仅含正文阅读区一个子节点')
+  assert.ok(scrollChildren[0]?.classList.contains('skill-reader-body'), '正文阅读区应为唯一子节点')
   assert.ok(scroll.querySelector('.skill-reader-body'), '正文阅读区应位于滚动区内部')
-  assert.ok(
-    !children.some((c) => c.classList.contains('skill-reader-desc')),
-    '描述不得作为阅读器直属子节点钉在工具条上方',
-  )
+  assert.equal(host.querySelector('.skill-reader-desc'), null, '不得存在工具条与正文之间的独立描述块')
   // 复制按钮携带 skill-reader-copy 类（移动端隐藏文字只留图标的新增样式钩子）
   assert.ok(host.querySelector('.skill-reader-copy'), '复制按钮应携带 skill-reader-copy 类')
 
@@ -1002,9 +1110,10 @@ test('SkillDetailDrawer: 布局契约——工具条紧贴 Header，描述与正
   host.remove()
 })
 
-test('SkillDetailDrawer: 样式契约——单一滚动容器与移动端单行工具条', { timeout: 60_000 }, () => {
+test('SkillDetailDrawer: 样式契约——单一滚动容器、无独立描述块与移动端/桌面不分叉', { timeout: 60_000 }, () => {
   const stylesSrc = readFileSync(join(PKG_ROOT, 'src/styles.css'), 'utf-8')
   const responsiveSrc = readFileSync(join(PKG_ROOT, 'src/responsive.css'), 'utf-8')
+  const drawerSrc = readFileSync(join(PKG_ROOT, 'src/skills/SkillDetailDrawer.tsx'), 'utf-8')
 
   // 桌面：抽屉主体外层不滚动，唯一滚动交给 .skill-reader-scroll
   assert.match(
@@ -1017,8 +1126,8 @@ test('SkillDetailDrawer: 样式契约——单一滚动容器与移动端单行�
     /\.skill-reader-scroll\s*\{[^}]*flex:\s*1[^}]*overflow-y:\s*auto/,
     '阅读区应 flex:1 占满剩余高度并作为唯一纵向滚动容器',
   )
-  // 长描述 2 行折叠
-  assert.match(stylesSrc, /-webkit-line-clamp:\s*2/, '长描述默认 2 行截断')
+  // 独立描述块已移除：不得残留任何 skill-reader-desc 样式钩子
+  assert.ok(!stylesSrc.includes('skill-reader-desc'), 'styles.css 不得残留 skill-reader-desc 样式')
   // 阅读区自身不再内部滚动（消除与外层的双滚动冲突）
   assert.doesNotMatch(stylesSrc, /\.skill-reader-doc\s*\{[^}]*overflow/, 'skill-reader-doc 不得内部滚动')
 
@@ -1038,6 +1147,23 @@ test('SkillDetailDrawer: 样式契约——单一滚动容器与移动端单行�
     '移动端抽屉主体内边距收紧',
   )
   assert.match(responsiveSrc, /\.skill-reader-body\s*\{\s*min-height:\s*0/, '移动端阅读区 min-height 归零')
+
+  // 桌面/移动不分叉：元数据表格与正文共用同一 .skill-reader-doc 内容流，
+  // responsive.css 不得为 skill-reader-doc / 元数据表格单独建移动端结构
+  assert.ok(
+    !responsiveSrc.includes('skill-reader-doc'),
+    'responsive.css 不得为 skill-reader-doc 建移动端专属覆盖',
+  )
+  assert.ok(
+    !responsiveSrc.includes('skill-reader-desc'),
+    'responsive.css 不得残留移动端描述块结构',
+  )
+  // 组件单一渲染路径：无 matchMedia / 视口分支，富文本统一走 renderSkillDocMarkdown
+  assert.ok(!drawerSrc.includes('matchMedia'), '抽屉不得按视口分叉渲染逻辑')
+  assert.ok(
+    drawerSrc.includes('renderSkillDocMarkdown(content)'),
+    '富文本模式应统一走 renderSkillDocMarkdown 单一转换入口',
+  )
 })
 
 // ---------------------------------------------------------------------------

@@ -19,10 +19,9 @@ import {
 } from './skill-center-model.js'
 import {
   buildSkillFileList,
-  isSkillDescriptionLong,
   isSkillMarkdownFile,
+  renderSkillDocMarkdown,
   skillFileLanguage,
-  stripMarkdownFrontmatter,
 } from './skill-reader-model.js'
 
 export interface SkillDetailDrawerProps {
@@ -44,13 +43,14 @@ type SkillViewMode = 'rich' | 'source'
  * 全屏技能中心详情与紧凑文件阅读器抽屉组件：
  * - 基于 Radix UI Dialog 封装，520px-560px 右侧滑出抽屉；
  * - 顶部展示图标、名称、来源徽章（内置 / 共享 / 工作区 / 插件）、技能 ID 与关闭按钮；
- * - Header 下方是单行紧凑文件工具条，再下方的单一滚动阅读区占满剩余全部视口高度：
- *   技能描述置于滚动区顶部随正文同流滚动，长描述（超阈值）默认 2 行截断并提供
- *   「展开 / 收起」切换，避免 500+ 字符生态描述常驻压顶挤占正文面积；
+ * - Header 下方是单行紧凑文件工具条，再下方的单一滚动阅读区占满剩余全部视口高度；
  * - 多文件时以公共 Select 下拉切换（短文件名 + 目录辅助信息），
  *   单文件时直接展示文件名，不再渲染多文件标签墙；
- * - Markdown 文件支持「富文本 / 源码」双模式阅读，富文本模式剥离头部重复展示的
- *   YAML frontmatter；代码类文件用 CodeBlockView 按后缀推导语言高亮；
+ * - Markdown 文件支持「富文本 / 源码」双模式阅读，桌面/移动端完全统一：
+ *   富文本模式把头部 YAML frontmatter 转换为「技能元数据」Markdown 表格，
+ *   与正文同处单一 .skill-reader-doc 内容流（不做移动端特殊元数据布局，
+ *   不在工具条与正文之间渲染独立描述块）；源码模式保留原始 YAML 不转换；
+ *   代码类文件用 CodeBlockView 按后缀推导语言高亮；
  * - 异步调用 skillsApi.read，使用代数防竞态（loadGenerationRef）防止多任务交错覆盖；
  * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
  */
@@ -67,7 +67,6 @@ export function SkillDetailDrawer({
   const [error, setError] = useState<string | null>(null)
   const [activePath, setActivePath] = useState<string>('')
   const [viewMode, setViewMode] = useState<SkillViewMode>('rich')
-  const [descExpanded, setDescExpanded] = useState(false)
   const loadGenerationRef = useRef(0)
 
   const files = useMemo(() => buildSkillFileList(skill?.references), [skill?.references])
@@ -80,11 +79,10 @@ export function SkillDetailDrawer({
   const isMarkdown = isSkillMarkdownFile(activePath)
   const richText = isMarkdown && viewMode === 'rich'
 
-  // 切换技能时重置到根规程 SKILL.md、富文本模式与描述折叠态
+  // 切换技能时重置到根规程 SKILL.md 与富文本模式
   useEffect(() => {
     setActivePath('')
     setViewMode('rich')
-    setDescExpanded(false)
   }, [skill?.id])
 
   // 异步获取规程文件内容，严格防竞态
@@ -134,11 +132,9 @@ export function SkillDetailDrawer({
     meta: f.meta,
   }))
 
-  const displayText = richText ? stripMarkdownFrontmatter(content) : content
+  const displayText = richText ? renderSkillDocMarkdown(content) : content
   const sourceLanguage = skillFileLanguage(activePath)
   const lineCount = content === '' ? 0 : content.split('\n').length
-  const descClampable = isSkillDescriptionLong(skill?.description)
-  const descCollapsed = descClampable && !descExpanded
 
   return (
     <Dialog
@@ -272,27 +268,8 @@ export function SkillDetailDrawer({
                     </div>
                   </div>
 
-                  {/* 单一滚动阅读区：描述随正文同流滚动，长描述默认 2 行折叠 */}
+                  {/* 单一滚动阅读区：元数据表格与正文同处一个内容流，随滚动同流阅读 */}
                   <div className="skill-reader-scroll">
-                    {skill.description && (
-                      <div
-                        className={descCollapsed ? 'skill-reader-desc is-collapsed' : 'skill-reader-desc'}
-                      >
-                        <div className="skill-reader-desc-text">{skill.description}</div>
-                        {descClampable && (
-                          <button
-                            type="button"
-                            className="skill-reader-desc-toggle"
-                            aria-expanded={descExpanded}
-                            title={descExpanded ? '收起技能描述' : '展开完整技能描述'}
-                            onClick={() => setDescExpanded((v) => !v)}
-                          >
-                            {descExpanded ? '收起' : '展开'}
-                          </button>
-                        )}
-                      </div>
-                    )}
-
                     {/* 正文阅读区 */}
                     <div className="skill-reader-body" data-mode={richText ? 'rich' : 'source'}>
                       {error ? (

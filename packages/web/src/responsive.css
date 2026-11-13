@@ -186,7 +186,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .artifact-preview-header > span:first-child { order: 1; flex: 1 1 100%; min-width: 0; }
   .artifact-preview-header > span:last-child { order: 2; justify-content: flex-start; }
   .modal-fullscreen .modal-body { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
-  /* 技能阅读器：移动端单行极致紧凑工具条（描述已折叠进滚动区顶部随正文滚动） */
+  /* 技能阅读器：移动端单行极致紧凑工具条（元数据表格与正文统一内容流，无移动端专属结构） */
   .skill-reader-toolbar { flex-wrap: nowrap; padding: 6px 8px; gap: 6px; }
   .skill-reader-file { flex: 1 1 auto; min-width: 0; }
   .skill-file-select { min-width: 0; max-width: none; }
