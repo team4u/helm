@@ -43,12 +43,13 @@ export function buildTar(entries: TarEntry[]): Buffer {
     return h;
   };
   for (const entry of entries) {
-    const isDir = entry.content === undefined;
+    const content = entry.content;
+    const isDir = content === undefined;
     const body = isDir
       ? Buffer.alloc(0)
-      : Buffer.isBuffer(entry.content)
-        ? entry.content
-        : Buffer.from(entry.content, 'utf8');
+      : Buffer.isBuffer(content)
+        ? content
+        : Buffer.from(content, 'utf8');
     blocks.push(headerFor(entry.name, body.length, isDir ? '5' : '0', entry.mode ?? (isDir ? 0o755 : 0o644)));
     if (!isDir) {
       blocks.push(body);
@@ -174,7 +175,7 @@ interface RegistryEntry {
 
 export class FakeNpmRegistry {
   private readonly server: Server;
-  readonly url: string;
+  url: string;
   private readonly versions = new Map<string, RegistryEntry>();
   private latest = '';
   private metadataDelayMs = 0;
