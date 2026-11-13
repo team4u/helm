@@ -49,11 +49,11 @@ dist 根 `package.json` 是可直接 `npm pack` / `npm publish` 的独立包（�
 
 - `files` 显式白名单（kernel/protocol/cli/web/start.mjs/manifest.json），tarball 内
   manifest/start 位于包根（不是 dist/ 子目录）；
-- 外部依赖精确锁定到仓库已安装 pnpm 实际版本，`@helm/protocol` 物化为 `file:./protocol`
-  （dist 携带其 dist/ 与 package.json）；
+- 外部直接依赖锁定到仓库已安装的精确版本；`@helm/protocol` 以 `file:./protocol.tgz`
+  安装为真实目录，避免 Windows junction 在候选改名后失效。dist 同时携带原始 protocol 产物；
 - 自动扫描闭包 peer 冲突生成 `overrides`（npm 严格 peer 解析 vs pnpm 宽松语义，如 chord
   钉 peer ws@8.21.0 而仓库锁定 8.22.1）——`.npmrc` 无法随 tarball 分发（npm 永久排除它），
-  overrides 是唯一可随包分发的对等手段；
+  发布包携带 overrides，安装过程使用相同的根依赖版本；
 - 消费侧契约：解包 tgz 后在包根执行 `npm install --omit=dev --ignore-scripts`（esbuild
   平台包经 optionalDependencies 按目标平台自动安装），随后 `node start.mjs check` 验收。
 
@@ -65,4 +65,5 @@ assemble-hub.mjs` 按当前打包 runner 架构物化依赖闭包解决，与本
 
 `packages/payload/test/payload.test.ts`（integration 档）：真实执行组装与启动子进程，
 覆盖 manifest/checksum 契约、资产落位、web 同级探测命中、无 node_modules 断言、依赖
-缺失/篡改场景的显式退出码。
+缺失/篡改场景的显式退出码。网络验收由 CI 专门设置 `PAYLOAD_NPM_SMOKE=1` 执行，
+验证真实 npm pack、安装、候选目录改名与 Hub 启动；默认全量测试跳过该网络用例。
