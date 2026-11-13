@@ -14,7 +14,7 @@
  * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
  */
 import { test } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -194,6 +194,51 @@ test('动作目录: 仅 ctx.action 的普通插件——启用即出现在最终
     await env.submitAndWait(env.initialConvId, '第三回合')
     const third = env.requests[0]!
     assert.ok(!((actionsSection(third) ?? '')).includes('&lt;xml&gt;'), '旧目录文本不得经回放复活')
+  } finally {
+    await env.close()
+  }
+})
+
+test('磁盘外部插件: rescan 后默认隐藏，启用即自动发现，停用即清理', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    const host = env.app.kernel.plugins!
+    const pluginDir = join(env.dataDir, 'plugins', 'external-notice')
+    mkdirSync(pluginDir, { recursive: true })
+    writeFileSync(join(pluginDir, 'plugin.json'), JSON.stringify({
+      id: 'external-notice', name: '外部通知', version: '1.0.0', main: 'index.mjs',
+    }))
+    writeFileSync(join(pluginDir, 'index.mjs'), `export default {
+      id: 'external-notice',
+      definePlugin(ctx) {
+        ctx.action({
+          id: 'send', description: '来自磁盘外部插件的通知动作',
+          promptGuidelines: ['EXTERNAL_NOTICE_GUIDE 核对收件人与通知内容'],
+          inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false },
+          outputSchema: { type: 'object', properties: { delivered: { type: 'boolean' } }, required: ['delivered'] },
+          handler() { return { delivered: true } },
+        })
+      },
+    }`)
+    const rescanned = await host.rescanExternalPlugins()
+    assert.ok(rescanned.registered.includes('external-notice'), '必须经真实外部加载器注册')
+    env.faux.setResponses([env.capture()])
+    await env.submitAndWait(env.initialConvId, '外部插件启用前')
+    assert.ok(!actionsSection(env.requests.at(-1)!)?.includes('external-notice'))
+
+    await host.enable('external-notice')
+    env.faux.setResponses([env.capture()])
+    await env.submitAndWait(env.initialConvId, '外部插件启用后')
+    const section = actionsSection(env.requests.at(-1)!)!
+    assert.ok(section.includes('external-notice.send'))
+    assert.ok(section.includes('EXTERNAL_NOTICE_GUIDE'))
+    assert.ok(section.includes('CLI: helm external-notice send'))
+
+    await host.disable('external-notice')
+    env.faux.setResponses([env.capture()])
+    await env.submitAndWait(env.initialConvId, '外部插件停用后')
+    assert.ok(!actionsSection(env.requests.at(-1)!)?.includes('external-notice'))
+    assert.ok(!JSON.stringify(env.requests.at(-1)!.sectionsById).includes('EXTERNAL_NOTICE_GUIDE'))
   } finally {
     await env.close()
   }
