@@ -386,7 +386,7 @@ test('SkillDetailDrawer: SSR 渲染抽屉主体、元信息、参考文件导航
   assert.doesNotMatch(html, emojiRegex, 'SkillDetailDrawer 渲染输出严禁包含 Emoji 表情')
 })
 
-test('SkillDetailDrawer: 共享根技能标注机器级共享根只读且不提供编辑入口', { timeout: 60_000 }, () => {
+test('SkillDetailDrawer: 共享根技能标注来源且不提供编辑入口', { timeout: 60_000 }, () => {
   const sharedSkill = mockSkills[5] // git-commit, source: agents
   const html = renderToString(
     e(SkillDetailDrawer, {
@@ -400,7 +400,7 @@ test('SkillDetailDrawer: 共享根技能标注机器级共享根只读且不提�
 
   assert.ok(html.includes('共享'), '共享根技能应展示「共享」徽章')
   assert.ok(html.includes('badge-accent'), '共享根技能应使用 badge-accent 徽章样式')
-  assert.ok(html.includes('机器级共享根 · 只读'), '共享根技能应标注只读来源')
+  assert.ok(html.includes('机器级共享根'), '共享根技能应标注来源')
   assert.ok(!html.includes('工作区'), '共享根技能不得标注工作区来源')
   assert.doesNotMatch(html, emojiRegex, 'SkillDetailDrawer 渲染输出严禁包含 Emoji 表情')
 })

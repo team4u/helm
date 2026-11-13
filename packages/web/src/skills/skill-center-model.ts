@@ -39,7 +39,7 @@ export function isSkillPlugin(skill: SkillSummary): boolean {
 }
 
 /**
- * 判断技能是否来自机器级共享只读根（~/.agents/skills，pi 生态技能库）：
+ * 判断技能是否来自机器级共享根（~/.agents/skills，pi 生态技能库）：
  * - source === 'agents'
  */
 export function isSkillAgents(skill: SkillSummary): boolean {

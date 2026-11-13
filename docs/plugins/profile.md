@@ -62,14 +62,15 @@ helm profile list_mentionable --input '{"query":"review","conversationId":42}' -
 
 托管技能额外要求其 `managedByPlugin` 对应插件处于启用状态。此配置是技能发现与加载策略，不是权限沙箱——bash 与其他工具仍可读文件。
 
-### 机器级共享只读根（~/.agents/skills）
+### 机器级共享技能来源（~/.agents/skills）
 
-除 `~/.helm/skills`（或 `HELM_DATA_DIR` 覆盖值）用户可写根外，内核自动合入机器级共享只读根 `~/.agents/skills`（pi 生态技能库，如 git-commit、herdr、actiondock 等）：
+除 `~/.helm/skills`（或 `HELM_DATA_DIR` 覆盖值）外，内核自动扫描机器级共享来源 `~/.agents/skills`（pi 生态技能库，如 git-commit、herdr、actiondock 等），并将技能摘要标记为 `source: 'agents'`：
 
-- **只读合入**：helm 对该根只扫描与读取，不写不删；摘要带 `source: 'agents'` 标识，且强制剥离其 frontmatter 可能携带的 `managedByPlugin`（共享技能不得伪装受管插件技能）。
-- **同名优先级**：按 id 去重，`~/.helm/skills` 条目绝对优先——受管技能（helm-cli / generative-ui 等）永不被外部同名遮蔽；用户往 dataDir 放同名技能即形成「本地覆盖」，对被覆盖 id 调 `writeFile` 也只写 dataDir 副本。
-- **条目过滤**：共享根是第三方内容，helm 不拥有其质量——根整体不存在视为空；单条目坏数据（非法 id、缺 SKILL.md、frontmatter 坏、软链目录、`node_modules`/隐藏目录噪音）跳过该条目，不拖垮整个技能目录；非 ENOENT 的真实 IO 错误如实上抛。安全校验（路径穿越、软链、realpath 包含）与 dataDir 完全同强度。
-- **白名单照常生效**：`profile.skills` 白名单与插件启停过滤对共享技能同样适用（普通目录条目口径）；外部技能可直接选入白名单。
+- **SkillService 的读写语义**：`SkillService` 从共享根扫描与读取；其 `writeFile` / `ensureSkill` 仍只写 dataDir。dataDir 同名条目优先，作为 Helm 技能目录内的本地覆盖。该语义只约束技能服务和插件自举资产，不是通用文件访问沙箱。
+- **通用命令权限**：`bash`、`read`、`write`、`edit` 按执行节点操作系统权限工作，不受会话 cwd 目录限制。因此，命令工具可以直接访问（包括写入）`~/.agents/skills`；共享来源标识不代表文件系统只读，也不构成安全边界。若当前执行节点与 Hub 不同，命令操作的是执行节点文件系统，技能扫描仍发生在 Hub 的共享根。
+- **加载与安全校验**：外部 frontmatter 中的 `managedByPlugin` 会被剥离，避免共享技能伪装成受管插件技能。`load_skill` / `SkillService.readFile` 仍只接受技能包内相对路径，并拒绝路径穿越和软链；这些校验限定该 API 的读取范围，不限制通用 `read`/`write`/`edit` 命令。
+- **条目过滤**：共享根整体不存在视为空；单条目坏数据（非法 id、缺 SKILL.md、frontmatter 坏、软链目录）跳过，不拖垮整个技能目录；非 ENOENT 的真实 IO 错误如实上抛。references 不列隐藏项、`node_modules`、构建产物目录或不符合 `load_skill` 路径格式的文件。
+- **白名单照常生效**：`profile.skills` 白名单与插件启停过滤对共享技能同样适用；共享技能可直接选入白名单。
 - **热生效**：每次回合重新读目录，共享根增删技能下一回合即生效，无需重启。
 
 ```bash

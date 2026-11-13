@@ -440,9 +440,10 @@ async function collectFiles(root: string, rel = ''): Promise<string[]> {
 }
 
 /**
- * 机器级共享只读技能根（pi 生态技能库，`~/.agents/skills`）：helm 只读
- * 合入，不写不删。与 HELM_DATA_DIR 互相独立（各表一个来源根）；由生产
- * 内核组装时注入，SkillService 自身缺省不含（保持给定目录的确定性）。
+ * 机器级共享技能根（pi 生态技能库，`~/.agents/skills`）：SkillService 将其
+ * 作为外部来源只读扫描与加载，不通过本服务的 writeFile/ensureSkill 写入。
+ * 这不是文件系统权限或命令工具沙箱；bash/read/write/edit 仍按操作系统权限访问。
+ * 与 HELM_DATA_DIR 独立；由生产内核组装时注入，SkillService 自身缺省不含。
  */
 export function defaultExternalSkillRoots(): string[] {
   return [join(homedir(), '.agents', 'skills')]
@@ -464,7 +465,7 @@ export class SkillService {
 
   private readonly dataDir: string
 
-  /** 只读合入的外部共享根（排在 dataDir 之后的解析顺序）。 */
+  /** 仅供 SkillService 扫描与 load_skill 读取的外部来源（排在 dataDir 之后）。 */
   private readonly externalRoots: readonly string[]
 
   /** 缺省不含外部根：本服务是「给定目录的纯确定性扫描」，机器级共享根由
@@ -610,8 +611,9 @@ export class SkillService {
 
   /** 创建/覆写技能文件（程序化写入入口，同样做安全校验）。
    * 受管技能（ensureSkill 自举登记的内置系统资产）在服务边界统一拒绝。
-   * 只写 dataDir 根：对外部共享根同名技能调 writeFile 会写入 dataDir 副本
-   * 从而遮蔽外部条目——这是有意的「本地覆盖」机制，外部根自身永不落写。 */
+   * 本服务只写 dataDir 根：对外部共享根同名技能调 writeFile 会写入 dataDir
+   * 副本从而遮蔽外部条目，形成「本地覆盖」。这不是文件系统写权限边界；
+   * bash/write/edit 等通用工具仍可按 OS 权限直接写任意路径。 */
   async writeFile(skillId: string, path: string, content: string): Promise<void> {
     assertSkillId(skillId)
     this.assertSkillMutable(skillId)
@@ -694,9 +696,9 @@ export class SkillService {
   }
 
   /** 技能资产目录坐标（宿主端口用，如插件自举补齐文件）：始终指向
-   * dataDir/skills/<id>，不解析到外部共享只读根。调用方可能通过
-   * atomicWriteFile 补齐资产；将共享根路径返回给它会绕过 writeFile 的
-   * 只写 dataDir 约束。宿主不 mkdir，缺省路径由调用方按需创建。 */
+   * dataDir/skills/<id>，不解析到外部来源。调用方可能通过 atomicWriteFile
+   * 自动补齐受管资产；避免插件启动副作用改写共享来源。此处不是通用命令
+   * 的路径权限边界；宿主不 mkdir，缺省路径由调用方按需创建。 */
   async directory(id: string): Promise<string> {
     try {
       assertSkillId(id)

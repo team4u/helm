@@ -133,7 +133,7 @@ export function SkillDetailDrawer({
                   </div>
                 )}
                 {skill?.source === 'agents' && (
-                  <div className="text-subtle text-xs">机器级共享根 · 只读</div>
+                  <div className="text-subtle text-xs">机器级共享根</div>
                 )}
               </div>
             </div>

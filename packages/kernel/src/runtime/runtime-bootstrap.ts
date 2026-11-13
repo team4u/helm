@@ -29,7 +29,7 @@ export interface KernelBootOptions {
   autoResume?: boolean
   models?: Models
   nodeUpgradeTimeoutMs?: number
-  /** 只读合入的机器级共享技能根（缺省 defaultExternalSkillRoots()，即
+  /** 合入技能扫描的机器级共享来源根（缺省 defaultExternalSkillRoots()，即
    * ~/.agents/skills；传空数组可完全隔离，测试用）。 */
   externalSkillRoots?: readonly string[]
 }
