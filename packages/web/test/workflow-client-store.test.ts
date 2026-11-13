@@ -291,12 +291,12 @@ test('动态工作台按 scope/order/public-doc badge 渲染，首帧前保留�
     ensurePluginDoc: async (id, doc) => { docs.push([id, doc]); return undefined } })
   const ui = mount()
   try {
-    await ui.render(store, e(WorkbenchDrawer, { conversationId: 1 }))
+    await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
     assert.deepEqual(selections, [], '初始快照前不能覆盖请求的合法深链')
     const conv = conversation(1)
     store = { ...store, sseConnected: true, conversations: [conv], groupedUi: groupUiContributions(panels),
       pluginDocs: { 'sample/stats': { byConversation: { '1': { count: 3, tone: 'warn', footerText: '3 项待处理' } } }, 'sample/hidden': { count: 100 } } }
-    await ui.render(store, e(WorkbenchDrawer, { conversationId: 1 }))
+    await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
     assert.deepEqual(selections, [], '快照到达后有效深链仍然有效')
     const labels = [...ui.host.querySelectorAll('.tab-btn')].map((button) => button.textContent)
     assert.deepEqual(labels, ['动态队列', '产物 (0)', '后置面板'])
@@ -311,11 +311,11 @@ test('动态工作台按 scope/order/public-doc badge 渲染，首帧前保留�
     assert.doesNotMatch(workbench.textContent!, /103/, '顶栏必须与抽屉使用同一 scope')
 
     store = { ...store, workbenchTab: 'plugin:sample/removed' }
-    await ui.render(store, e(WorkbenchDrawer, { conversationId: 1 }))
+    await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
     assert.deepEqual(selections, [requested], '不可用页签应回退排序后的首个可用页签，而非硬编码 artifacts')
     assert.match(ui.host.querySelector('.tab-btn-active')?.textContent ?? '', /动态队列/)
     store = { ...store, groupedUi: groupUiContributions([]) }
-    await ui.render(store, e(WorkbenchDrawer, { conversationId: 1 }))
+    await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
     assert.deepEqual(selections, [requested, 'artifacts'])
     assert.doesNotMatch(ui.host.textContent!, /动态队列|3 项待处理/)
   } finally { await ui.close() }

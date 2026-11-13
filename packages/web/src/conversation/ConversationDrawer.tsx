@@ -18,25 +18,23 @@ export function ConversationDrawer({ conversationId, onClose }: ConversationDraw
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogPortal>
-        <div className="conversation-drawer-wrapper">
-          <DialogOverlay
-            className="conversation-drawer-backdrop"
-            aria-label="关闭子会话抽屉"
+        <DialogOverlay
+          className="conversation-drawer-backdrop"
+          aria-label="关闭子会话抽屉"
+        />
+        <DialogContent
+          className="conversation-drawer"
+          aria-label={`子会话 #${conversationId} 抽屉`}
+        >
+          <DialogTitle style={{ display: 'none' }}>
+            {`子会话 #${conversationId} 抽屉`}
+          </DialogTitle>
+          <ConversationPane
+            conversationId={conversationId}
+            isDrawer
+            onCloseDrawer={onClose}
           />
-          <DialogContent
-            className="conversation-drawer"
-            aria-label={`子会话 #${conversationId} 抽屉`}
-          >
-            <DialogTitle style={{ display: 'none' }}>
-              {`子会话 #${conversationId} 抽屉`}
-            </DialogTitle>
-            <ConversationPane
-              conversationId={conversationId}
-              isDrawer
-              onCloseDrawer={onClose}
-            />
-          </DialogContent>
-        </div>
+        </DialogContent>
       </DialogPortal>
     </Dialog>
   )

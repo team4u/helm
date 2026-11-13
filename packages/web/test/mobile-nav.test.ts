@@ -7,6 +7,7 @@ const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8
 const authGateSource = readFileSync(new URL('../src/shell/AuthGate.tsx', import.meta.url), 'utf8')
 const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
 const workbenchSource = readFileSync(new URL('../src/conversation/WorkbenchDrawer.tsx', import.meta.url), 'utf8')
+const conversationDrawerSource = readFileSync(new URL('../src/conversation/ConversationDrawer.tsx', import.meta.url), 'utf8')
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
 const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
 const overlayStackSource = readFileSync(new URL('../src/ui/overlay-stack.ts', import.meta.url), 'utf8')
@@ -129,6 +130,16 @@ test('WorkbenchDrawer 自己渲染 Dialog 遮罩并支持点击关闭', { timeou
     workbenchSource,
     /onOpenChange=\{\(open\)\s*=>\s*\{\s*if\s*\(!open\)\s*setWorkbenchOpen\(false\)\s*\}\}/,
     'WorkbenchDrawer 必须把 Radix Dialog 关闭事件接回工作台状态',
+  )
+  assert.match(
+    workbenchSource,
+    /const inline = props\.inline \?\? false/,
+    '生产环境工作台必须通过 Portal 脱离主壳层叠上下文',
+  )
+  assert.doesNotMatch(
+    conversationDrawerSource,
+    /conversation-drawer-wrapper/,
+    'ConversationDrawer 不得再用 fixed wrapper 建立低于工作台的独立 stacking context',
   )
 })
 

@@ -54,13 +54,13 @@ export interface WorkbenchDrawerProps {
   conversation?: ConversationSummary
   /** 仅传 ID 时从 store 读取会话。 */
   conversationId?: number
-  /** 是否内联渲染；默认 true，保持工作台与主壳同一 DOM 树。 */
+  /** 测试用内联渲染；生产环境默认 Portal 到 body，脱离主壳层叠上下文。 */
   inline?: boolean
 }
 
 /** 右侧工作台抽屉：内置产物页签 + 插件 workbench.panel（动态排序与角标）。 */
 export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
-  const inline = props.inline ?? true
+  const inline = props.inline ?? false
   const store = useHelmStore()
   const conversationId =
     props.conversation?.id ??

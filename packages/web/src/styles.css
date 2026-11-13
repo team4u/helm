@@ -395,14 +395,9 @@ button,
 /* ==========================================================================
  * 2. 子代理会话侧边抽屉 (Conversation Drawer)
  * 对应原 styles.css: 256-285 行
- * 目标选择器：.conversation-drawer-wrapper, .conversation-drawer-backdrop, .conversation-drawer
+ * 目标选择器：.conversation-drawer-backdrop, .conversation-drawer
  * 规范：毛玻璃遮罩 (blur 8px saturate 1.1)、平滑全高滑出动效、深阴影
  * ========================================================================== */
-
-.conversation-drawer-wrapper {
-  position: fixed;
-  inset: 0;
-}
 
 .conversation-drawer-backdrop {
   position: fixed;
