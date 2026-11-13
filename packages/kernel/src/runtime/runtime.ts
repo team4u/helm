@@ -67,7 +67,6 @@ import {
   assertProfileIdPublic,
   completeConversationTextHelper,
   profileDirectoryHelper,
-  skillDirectoryHelper,
   summaryOfFallback,
 } from './runtime-helpers.js'
 import type { RuntimeNodeOperations } from './runtime-nodes.js'
@@ -142,6 +141,7 @@ export class KernelRuntime {
       seedKeyCache: boot.apiKeyCache,
       autoResume: options.autoResume !== false,
       externalModels: options.models,
+      externalSkillRoots: options.externalSkillRoots,
       nodeUpgradeTimeoutMs: options.nodeUpgradeTimeoutMs ?? 120_000,
     })
     try {
@@ -683,7 +683,9 @@ export class KernelRuntime {
   // ------------------------------------------------------------------
 
   async skillDirectory(id: string): Promise<string> {
-    return skillDirectoryHelper(this.dataDir, id)
+    // 委托 SkillService 多根解析（dataDir 优先，缺省回落 dataDir 路径）；
+    // 纯路径拼接口径见 skillDirectoryHelper（保留导出）。
+    return this.svc.skillsSvc.directory(id)
   }
 
   async profileDirectory(id: string): Promise<string> {

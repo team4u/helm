@@ -5,6 +5,7 @@
  * MEMORY.md 长期记忆由 builtin:memory 插件自治管理，不进本服务。
  */
 import { lstat, mkdir, readdir, readFile, realpath, rm } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import { HelmError, type Profile, type ProfileStarterPrompt, type SkillSummary } from '@helm/protocol'
 import {
@@ -405,7 +406,12 @@ export function assertSafeRelativePath(input: string): string {
   return input
 }
 
-/** 递归收集技能包内常规文件相对路径（符号链接与目录跳过，杜绝越界入口）。 */
+/** 递归收集技能包内常规文件相对路径。跳过：以 `.` 开头的隐藏文件/目录
+ * （.git/.gitignore 等）、依赖与构建产物目录（node_modules/__pycache__/dist，
+ * 工程型技能包直接扫会把整个依赖树塞爆目录）与符号链接（杜绝越界入口）；
+ * 仅收集能通过 assertSafeRelativePath 校验的路径——目录与 load_skill 共用
+ * 同一合法口径，保证列出的每个 reference 都真实可读（含空格/?/# 等字符
+ * 的路径直接不列，防言行不一）。 */
 async function collectFiles(root: string, rel = ''): Promise<string[]> {
   const dir = rel === '' ? root : join(root, rel)
   let entries
@@ -417,62 +423,143 @@ async function collectFiles(root: string, rel = ''): Promise<string[]> {
   }
   const out: string[] = []
   for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
     const relPath = rel === '' ? entry.name : `${rel}/${entry.name}`
     if (entry.isDirectory()) {
+      if (entry.name === 'node_modules' || entry.name === '__pycache__' || entry.name === 'dist') continue
       out.push(...(await collectFiles(root, relPath)))
     } else if (entry.isFile() && entry.name !== 'SKILL.md') {
-      out.push(relPath)
+      try {
+        out.push(assertSafeRelativePath(relPath))
+      } catch {
+        // 非法相对路径（空格/特殊字符）无法经 load_skill 读取，不进目录。
+      }
     }
   }
   return out.sort()
+}
+
+/**
+ * 机器级共享只读技能根（pi 生态技能库，`~/.agents/skills`）：helm 只读
+ * 合入，不写不删。与 HELM_DATA_DIR 互相独立（各表一个来源根）；由生产
+ * 内核组装时注入，SkillService 自身缺省不含（保持给定目录的确定性）。
+ */
+export function defaultExternalSkillRoots(): string[] {
+  return [join(homedir(), '.agents', 'skills')]
+}
+
+/** external 根单条目错误的跳过判定：形状/校验类错误（普通 Error，无 Node
+ * 错误码）与 ENOENT（SKILL.md/目录缺失）跳过该条目；真实 IO 错误
+ * （EACCES/EIO 等 code 非 ENOENT）如实上抛，不静默降级。 */
+function isSkippableExternalEntryError(err: unknown): boolean {
+  if (err instanceof FileNotFoundError) return true
+  const code = (err as { code?: unknown }).code
+  if (code === undefined) return true
+  return code === 'ENOENT'
 }
 
 export class SkillService {
   /** ensureSkill 自举登记的受管技能 id（进程内；常规写入口统一 403 拒绝）。 */
   private readonly managedSkillIds = new Set<string>()
 
-  constructor(private readonly dataDir: string) {}
+  private readonly dataDir: string
 
-  /** 全部技能摘要（含参考子文件路径，供 load_skill 目录注入）。 */
+  /** 只读合入的外部共享根（排在 dataDir 之后的解析顺序）。 */
+  private readonly externalRoots: readonly string[]
+
+  /** 缺省不含外部根：本服务是「给定目录的纯确定性扫描」，机器级共享根由
+   * 生产内核组装时经 defaultExternalSkillRoots() 注入（测试天然隔离）。 */
+  constructor(dataDir: string, options?: { externalRoots?: readonly string[] }) {
+    this.dataDir = dataDir
+    this.externalRoots = options?.externalRoots ?? []
+  }
+
+  /** 全部技能摘要（dataDir 根 + 外部共享根合并，供 load_skill 目录注入）。
+   * dataDir 根语义不变：非法 id 跳过、坏 frontmatter 如实抛错。外部根整体
+   * ENOENT 视为空；单条目坏数据（第三方内容，helm 不拥有其质量）跳过不
+   * 拖垮整个目录——与 dataDir 的严格抛错语义刻意不同。按 id 去重：
+   * dataDir 条目绝对优先（受管技能永不被外部同名遮蔽；用户往 dataDir 放
+   * 同名技能即形成「本地覆盖」），其后按根声明顺序取首个。按 id 稳定排序。 */
   async list(): Promise<SkillSummary[]> {
-    const skillsRoot = join(this.dataDir, 'skills')
-    let entries: string[]
+    const byId = new Map<string, SkillSummary>()
+    const dataRoot = join(this.dataDir, 'skills')
+    let dataEntries: string[]
     try {
-      entries = await readdir(skillsRoot)
+      dataEntries = await readdir(dataRoot)
     } catch (err) {
-      if ((err as { code?: string }).code === 'ENOENT') return []
-      throw err
+      if ((err as { code?: string }).code === 'ENOENT') dataEntries = []
+      else throw err
     }
-    const skills: SkillSummary[] = []
-    for (const entry of entries) {
-      try {
-        assertSkillId(entry)
-      } catch {
-        continue
+    if (dataEntries.length > 0) {
+      // readdir 成功即根存在；realpath 归一（macOS /var 等软链前缀）供包含校验。
+      const dataRootReal = await realpath(dataRoot)
+      for (const entry of dataEntries) {
+        try {
+          assertSkillId(entry)
+        } catch {
+          continue
+        }
+        const summary = await this.summarizeInRoot(dataRootReal, entry)
+        if (summary !== undefined) byId.set(entry, summary)
       }
-      const summary = await this.summarize(entry)
-      if (summary !== undefined) skills.push(summary)
     }
+    for (const extRoot of this.externalRoots) {
+      let extEntries: string[]
+      try {
+        extEntries = await readdir(extRoot)
+      } catch (err) {
+        // 共享根不存在视为空（未安装 pi 技能库），不报错。
+        if ((err as { code?: string }).code === 'ENOENT') continue
+        throw err
+      }
+      if (extEntries.length === 0) continue
+      const extRootReal = await realpath(extRoot)
+      for (const entry of extEntries) {
+        if (byId.has(entry)) continue // dataDir（或先序外部根）条目优先
+        try {
+          assertSkillId(entry)
+          const summary = await this.summarizeInRoot(extRootReal, entry, 'agents')
+          if (summary !== undefined) byId.set(entry, summary)
+        } catch (err) {
+          if (isSkippableExternalEntryError(err)) continue
+          throw err
+        }
+      }
+    }
+    const skills = [...byId.values()]
+    skills.sort((a, b) => a.id.localeCompare(b.id))
     return skills
   }
 
   /** 安全读取技能包文件：缺省 SKILL.md；严格拦截绝对路径/`..`/软链越界。
-   * 三层防御：① 技能目录自身软链直接拒绝；② realpath 双层包含校验
-   * （skillDir 真实路径必须在 skills 根内）；③ 逐段拒绝符号链接并
-   * 确认目标真实路径仍在 skillDir 内。
+   * 解析顺序 dataDir → 各外部共享根：技能目录在某根不存在则试下一根，
+   * 全部根都无此技能维持 FileNotFoundError（HTTP 404 口径不变）；安全校验
+   * 拒绝（软链/越界/非常规文件）在命中根立即上抛，绝不跨根回退。每根的
+   * 校验强度与 dataDir 策略完全一致——三层防御：① 技能目录自身软链直接
+   * 拒绝；② realpath 双层包含校验（skillDir 真实路径必须在所属 skills 根
+   * 内）；③ 逐段拒绝符号链接并确认目标真实路径仍在 skillDir 内。
    */
   async readFile(skillId: string, path = 'SKILL.md'): Promise<string> {
     assertSkillId(skillId)
     const rel = assertSafeRelativePath(path)
-    const skillsRoot = await this.requireSkillsRoot()
+    for (const skillsRoot of await this.resolveReadableRoots()) {
+      const content = await this.readFileInRoot(skillsRoot, skillId, rel)
+      if (content !== undefined) return content
+    }
+    throw new FileNotFoundError(join(this.dataDir, 'skills', skillId))
+  }
+
+  /** 单根内解析读取：返回文件内容；技能目录在该根不存在时返回 undefined
+   * （继续下一根）；技能存在但目标文件缺失抛 FileNotFoundError（该根条目
+   * 已生效，不跨根回退）。 */
+  private async readFileInRoot(skillsRoot: string, skillId: string, rel: string): Promise<string | undefined> {
     const root = join(skillsRoot, skillId)
     // 技能目录本身是软链即拒绝（即使解析后仍在 skills 根内，也不放宽）。
     const rootStat = await lstat(root).catch((err: unknown) => {
-      if ((err as { code?: string }).code === 'ENOENT') {
-        throw new FileNotFoundError(root)
-      }
+      if ((err as { code?: string }).code === 'ENOENT') return undefined
       throw err
     })
+    if (rootStat === undefined) return undefined
     if (rootStat.isSymbolicLink()) {
       throw new Error(`技能目录是符号链接，拒绝读取: ${skillId}`)
     }
@@ -506,8 +593,25 @@ export class SkillService {
     return readTextFile(target)
   }
 
+  /** 可读根解析（realpath 归一）：dataDir skills 根在前，其后依次外部共享
+   * 根；根 ENOENT 跳过（dataDir 根缺失不再全局抛错，最终由 readFile 统一
+   * FileNotFoundError）；悬空软链等其他 realpath 错误如实上抛。 */
+  private async resolveReadableRoots(): Promise<string[]> {
+    const roots: string[] = []
+    for (const raw of [join(this.dataDir, 'skills'), ...this.externalRoots]) {
+      const real = await realpath(raw).catch((err: unknown) => {
+        if ((err as { code?: string }).code === 'ENOENT') return undefined
+        throw err
+      })
+      if (real !== undefined) roots.push(real)
+    }
+    return roots
+  }
+
   /** 创建/覆写技能文件（程序化写入入口，同样做安全校验）。
-   * 受管技能（ensureSkill 自举登记的内置系统资产）在服务边界统一拒绝。 */
+   * 受管技能（ensureSkill 自举登记的内置系统资产）在服务边界统一拒绝。
+   * 只写 dataDir 根：对外部共享根同名技能调 writeFile 会写入 dataDir 副本
+   * 从而遮蔽外部条目——这是有意的「本地覆盖」机制，外部根自身永不落写。 */
   async writeFile(skillId: string, path: string, content: string): Promise<void> {
     assertSkillId(skillId)
     this.assertSkillMutable(skillId)
@@ -589,6 +693,41 @@ export class SkillService {
     }
   }
 
+  /** 技能物理目录解析（宿主端口用，如 superagent 自举与插件只读访问）：
+   * dataDir/skills/<id> 存在返回其 realpath；否则任一外部共享根存在返回
+   * 该处 realpath；都不存在返回 dataDir 缺省路径（保留「缺省 dataDir、
+   * 宿主不 mkdir」的创建语义，写入口仍只落 dataDir）。技能目录为符号
+   * 链接显式拒绝（与 readFile 同强度，不把目录解析成根外目标）。 */
+  async directory(id: string): Promise<string> {
+    try {
+      assertSkillId(id)
+    } catch (err) {
+      throw new HelmError(
+        'validation_error',
+        `Skill id 非法：${err instanceof Error ? err.message : String(err)}`,
+        400,
+        { skillId: id },
+      )
+    }
+    for (const root of [join(this.dataDir, 'skills'), ...this.externalRoots]) {
+      const skillDir = join(root, id)
+      const st = await lstat(skillDir).catch((err: unknown) => {
+        if ((err as { code?: string }).code === 'ENOENT') return undefined
+        throw err
+      })
+      if (st === undefined) continue
+      if (st.isSymbolicLink()) {
+        throw new Error(`技能目录是符号链接，拒绝解析: ${id}`)
+      }
+      const real = await realpath(skillDir)
+      if (!isWithin(real, await realpath(root))) {
+        throw new Error(`技能目录越界（软链指向 skills 根之外）: ${id}`)
+      }
+      return real
+    }
+    return join(this.dataDir, 'skills', id)
+  }
+
   /** 解析 skills 根的真实路径（不存在时抛错，绝不宽放）。 */
   private async requireSkillsRoot(): Promise<string> {
     const skillsRoot = join(this.dataDir, 'skills')
@@ -602,21 +741,26 @@ export class SkillService {
     }
   }
 
-  private async summarize(id: string): Promise<SkillSummary | undefined> {
-    const root = join(this.dataDir, 'skills', id)
-    const skillMd = await this.readFile(id, 'SKILL.md').catch((err: unknown) => {
+  /** 单根摘要：技能目录缺失返回 undefined（目录跳过该条目）；SKILL.md 缺失
+   * （FileNotFoundError）同样返回 undefined；frontmatter 坏数据如实上抛
+   * （由调用方决定 dataDir 严格抛错或外部根跳过策略）。外部根强制剥离
+   * managedByPlugin——共享根只可能是普通共享技能，绝不允许第三方文件
+   * 伪装成宿主受管插件技能。 */
+  private async summarizeInRoot(skillsRoot: string, id: string, source?: 'agents'): Promise<SkillSummary | undefined> {
+    const skillMd = await this.readFileInRoot(skillsRoot, id, 'SKILL.md').catch((err: unknown) => {
       if (err instanceof FileNotFoundError) return undefined
       throw err
     })
     if (skillMd === undefined) return undefined
     const { name, description, managedByPlugin } = parseSkillFrontmatter(skillMd)
-    const references = await collectFiles(root)
+    const references = await collectFiles(join(skillsRoot, id))
     return {
       id,
       name: name || id,
       ...(description !== '' ? { description } : {}),
-      ...(managedByPlugin !== undefined ? { managedByPlugin } : {}),
+      ...(source === undefined && managedByPlugin !== undefined ? { managedByPlugin } : {}),
       references,
+      ...(source !== undefined ? { source } : {}),
     }
   }
 }
@@ -668,9 +812,25 @@ async function writeManagedFile(path: string, content: string): Promise<void> {
   await atomicWriteFile(path, content)
 }
 
+/** 剥离 YAML 单行标量首尾对称的单/双引号（双引号还原 \" 与 \\ 转义，
+ * 单引号还原 '' 转义；不对称引号原样保留，不伪造解析）。 */
+function stripQuotedScalar(value: string): string {
+  if (value.length < 2) return value
+  const first = value[0]
+  const last = value[value.length - 1]
+  if ((first !== '"' || last !== '"') && (first !== "'" || last !== "'")) return value
+  const inner = value.slice(1, -1)
+  if (first === '"') return inner.replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+  return inner.replace(/''/g, "'")
+}
+
 /** 解析 SKILL.md 顶部 YAML frontmatter 的 name/description/managedByPlugin（缺失时回退 id/空）。
  * 仅接受当前字段名 managedByPlugin（无历史别名兼容）；键存在但值为空属非法形状，
- * 显式报错而非伪造无主数据（诚实失败，不静默降级）。 */
+ * 显式报错而非伪造无主数据（诚实失败，不静默降级）。
+ * 值语法覆盖 pi 生态共享技能库（~/.agents/skills）真实数据的最小集：单行
+ * 标量（剥首尾对称引号）与块标量——折叠型 > / >-（连续缩进行 trim 后以
+ * 空格拼接，适合长描述单行化）与保留型 | / |-（去公共缩进后以换行拼接）；
+ * 其余高级 YAML 语法（锚点/列表/嵌套等）不支持。 */
 export function parseSkillFrontmatter(text: string): {
   name: string
   description: string
@@ -680,9 +840,37 @@ export function parseSkillFrontmatter(text: string): {
   if (match === null) return { name: '', description: '' }
   const body = match[1] ?? ''
   const fields = new Map<string, string>()
-  for (const line of body.split(/\r?\n/)) {
+  const lines = body.split(/\r?\n/)
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
     const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(line)
-    if (m !== null && m[1] !== undefined) fields.set(m[1], (m[2] ?? '').trim())
+    if (m === null || m[1] === undefined) continue
+    const key = m[1]
+    const inline = (m[2] ?? '').trim()
+    // 块标量：> / >- / | / |- 后续连续缩进行（浅于首个非空行缩进即块结束）为值体。
+    if (inline === '>' || inline === '>-' || inline === '|' || inline === '|-') {
+      const block: string[] = []
+      let indent = -1
+      for (let j = i + 1; j < lines.length; j++) {
+        const raw = lines[j]!
+        if (raw.trim() === '') {
+          block.push('')
+          continue
+        }
+        const leading = raw.length - raw.trimStart().length
+        if (indent === -1) indent = leading
+        if (leading < indent) break
+        block.push(raw.slice(indent))
+        i = j
+      }
+      while (block.length > 0 && block[block.length - 1] === '') block.pop()
+      const value = inline.startsWith('>')
+        ? block.map((l) => l.trim()).filter((l) => l !== '').join(' ')
+        : block.join('\n')
+      fields.set(key, value.trim())
+      continue
+    }
+    fields.set(key, stripQuotedScalar(inline))
   }
   const managedRaw = fields.get('managedByPlugin')
   if (managedRaw !== undefined && managedRaw === '') {

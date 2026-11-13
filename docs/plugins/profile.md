@@ -62,6 +62,16 @@ helm profile list_mentionable --input '{"query":"review","conversationId":42}' -
 
 托管技能额外要求其 `managedByPlugin` 对应插件处于启用状态。此配置是技能发现与加载策略，不是权限沙箱——bash 与其他工具仍可读文件。
 
+### 机器级共享只读根（~/.agents/skills）
+
+除 `~/.helm/skills`（或 `HELM_DATA_DIR` 覆盖值）用户可写根外，内核自动合入机器级共享只读根 `~/.agents/skills`（pi 生态技能库，如 git-commit、herdr、actiondock 等）：
+
+- **只读合入**：helm 对该根只扫描与读取，不写不删；摘要带 `source: 'agents'` 标识，且强制剥离其 frontmatter 可能携带的 `managedByPlugin`（共享技能不得伪装受管插件技能）。
+- **同名优先级**：按 id 去重，`~/.helm/skills` 条目绝对优先——受管技能（helm-cli / generative-ui 等）永不被外部同名遮蔽；用户往 dataDir 放同名技能即形成「本地覆盖」，对被覆盖 id 调 `writeFile` 也只写 dataDir 副本。
+- **条目过滤**：共享根是第三方内容，helm 不拥有其质量——根整体不存在视为空；单条目坏数据（非法 id、缺 SKILL.md、frontmatter 坏、软链目录、`node_modules`/隐藏目录噪音）跳过该条目，不拖垮整个技能目录；非 ENOENT 的真实 IO 错误如实上抛。安全校验（路径穿越、软链、realpath 包含）与 dataDir 完全同强度。
+- **白名单照常生效**：`profile.skills` 白名单与插件启停过滤对共享技能同样适用（普通目录条目口径）；外部技能可直接选入白名单。
+- **热生效**：每次回合重新读目录，共享根增删技能下一回合即生效，无需重启。
+
 ```bash
 helm profiles update coder --skills '["helm-cli","git-commit"]' --json
 helm profiles update coder --skills '[]' --json

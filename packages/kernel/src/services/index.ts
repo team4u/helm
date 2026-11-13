@@ -44,6 +44,7 @@ export {
   parseSkillFrontmatter,
   assertSkillId,
   assertSafeRelativePath,
+  defaultExternalSkillRoots,
   type Profile,
   type SkillSummary,
   type BuiltinSkillAsset,

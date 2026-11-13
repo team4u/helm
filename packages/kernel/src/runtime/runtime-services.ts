@@ -18,6 +18,7 @@ import {
   AuthService as SvcAuthService,
   ConfigService,
   CredentialService,
+  defaultExternalSkillRoots,
   ProfileService,
   ProviderService,
   SecretStash,
@@ -53,6 +54,8 @@ export interface RuntimeServicesInit extends BootstrappedKernelContext {
   seedKeyCache: Record<string, string>
   autoResume: boolean
   externalModels?: unknown
+  /** 只读合入的机器级共享技能根（缺省 defaultExternalSkillRoots()）。 */
+  externalSkillRoots?: readonly string[]
   nodeUpgradeTimeoutMs: number
 }
 
@@ -100,7 +103,10 @@ export function assembleRuntimeServices(
   },
 ): AssembledRuntimeServices {
   const profilesSvc = new ProfileService(init.dataDir)
-  const skillsSvc = new SkillService(init.dataDir)
+  // 生产内核合入机器级共享只读技能根；显式传空数组可完全隔离（测试）。
+  const skillsSvc = new SkillService(init.dataDir, {
+    externalRoots: init.externalSkillRoots ?? defaultExternalSkillRoots(),
+  })
   const configSvc = new ConfigService(init.dataDir)
   const credentialsSvc = init.credentials
   const providersSvc = init.providersSvc
