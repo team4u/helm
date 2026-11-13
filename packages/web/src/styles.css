@@ -314,6 +314,15 @@ button,
   box-shadow: var(--seg-edge);
 }
 
+/* 空间按钮文字标签：桌面 48px 图标轨隐藏（Tooltip 提供悬停说明）；
+ * 移动端抽屉两段式点击的 rail-peek 展开态由 responsive.css 显示。 */
+.rail-space-label {
+  display: none;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 .activity-rail-footer {
   display: flex;
   flex-direction: column;

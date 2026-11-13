@@ -129,6 +129,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     transition: transform 150ms ease;
     padding-top: env(safe-area-inset-top);
     padding-bottom: env(safe-area-inset-bottom);
+    /* 抽屉宽度上界：为 rail-peek 展开留出空间，小算不动会溢出会挤压上下文列 */
+    width: min(336px, 100vw);
+    min-width: 0;
   }
   .sidebar-open .helm-sidebar { transform: translateX(0); }
   .sidebar-open .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 71; background: var(--bg-backdrop); border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
@@ -168,6 +171,32 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .rail-btn {
     width: 38px;
     height: 38px;
+  }
+  /* 一级空间图标两段式点击：首次点击展开文字标签（rail-peek，模拟悬停预览），
+     再次点击才导航（见 Sidebar.tsx）；宽度过渡呈现悬停展开感。 */
+  .activity-rail {
+    transition: width 150ms ease;
+  }
+  .activity-rail.rail-peek {
+    width: 128px;
+    min-width: 128px;
+    align-items: stretch;
+  }
+  .activity-rail.rail-peek .activity-rail-spaces {
+    align-items: stretch;
+  }
+  .activity-rail.rail-peek .rail-space-btn {
+    width: 100%;
+    justify-content: flex-start;
+    padding: 0 12px 0 11px;
+    gap: 8px;
+  }
+  .activity-rail.rail-peek .rail-space-label {
+    display: inline;
+  }
+  .activity-rail.rail-peek .activity-rail-brand,
+  .activity-rail.rail-peek .activity-rail-footer {
+    align-self: center;
   }
   .helm-panes > .helm-pane > .pane-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
   /* 一级中心（角色/模型/技能/节点/插件）顶栏同样为左上角悬浮汉堡让位 */
