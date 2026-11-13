@@ -5,6 +5,11 @@
  * 目标节点可能与 Hub 异平台，路径形状按路径自身形式判定，
  * 不得用宿主 node:path 规则判定。本模块不得依赖 Node 内置模块
  * （protocol 被 Web 端按源码打包）。
+ *
+ * 另提供 normalizeTargetPath：按目标平台做确定性规范化——win32 目标上把
+ * WSL / Git Bash 的 POSIX 视图（/mnt/<盘符>、/<盘符>、//server/share）转换为
+ * 规范 Windows 路径，无盘符 POSIX 根显式结构化失败（零探测、零猜测）；
+ * 非 win32 目标保持 POSIX 语义。
  */
 
 /**
@@ -235,4 +240,138 @@ const win32Rules: TargetPathRules = {
     while (start > floor && !isWinSeparator(q.charCodeAt(start - 1))) start -= 1
     return q.slice(start)
   },
+}
+
+// ---------------------------------------------------------------------------
+// 目标平台路径规范化（win32 目标上的 POSIX 视图确定性转换）
+// ---------------------------------------------------------------------------
+
+/**
+ * 目标平台语义：'win32' 触发 Windows 规范化（含 POSIX 视图转换），
+ * 其余一切平台按 POSIX 语义保持（darwin / linux 等共享 POSIX 规则）。
+ */
+export type TargetPlatform = 'win32' | 'posix'
+
+/** 宿主平台标识（如 process.platform）→ 目标平台语义（仅 win32 特判）。 */
+export function targetPlatformOf(platform: string): TargetPlatform {
+  return platform === 'win32' ? 'win32' : 'posix'
+}
+
+/** 规范化所循输入视图（诊断用：路径以何种形式被识别与转换）。 */
+export type TargetPathView =
+  /** 原生 Windows 形状（盘符绝对 / 根反斜杠 / UNC，分隔符可混用）或相对路径。 */
+  | 'win32'
+  /** POSIX 目标平台：POSIX 语义原样保持（仅词法归一，绝不反向转换）。 */
+  | 'posix'
+  /** 恰两前导斜杠的 POSIX 拼写 UNC 视图（//server/share/…）。 */
+  | 'unc'
+  /** WSL 挂载视图（/mnt/<盘符>/…）。 */
+  | 'wsl-mount'
+  /** 盘符根视图（/<盘符>/…，Git Bash / MSYS 约定）。 */
+  | 'drive'
+
+/** normalizeTargetPath 结果：成功携带规范路径与识别视图；失败为机器可读码 + 人读原因。 */
+export type NormalizeTargetPathResult =
+  | { ok: true; path: string; view: TargetPathView }
+  | {
+      /**
+       * POSIX 绝对路径在 win32 目标上无确定性盘符对应（裸 '/'、/home、/tmp、
+       * /mnt、/mnt/<非单字母段>、越出盘符根的 '..' 等）：WSL 发行版根的真实
+       * 位置在 \\wsl$\… 下，不经探测不可知，拒绝猜测（诚实性红线）。
+       */
+      ok: false
+      code: 'unmappable_posix_root'
+      reason: string
+    }
+
+/** 单字母段（A-Z / a-z）才是盘符视图的合法盘符段（'cd' / '一' 等一律拒绝）。 */
+function isSingleDriveSegment(segment: string): boolean {
+  return segment.length === 1 && isDriveLetter(segment.charCodeAt(0))
+}
+
+/** 盘符统一大写规范拼写（纯词法；UNC 与无盘符路径原样返回）。 */
+function canonicalWin32Drive(p: string): string {
+  return p.length >= 2 && isDriveLetter(p.charCodeAt(0)) && p.charCodeAt(1) === COLON
+    ? p.charAt(0).toUpperCase() + p.slice(1)
+    : p
+}
+
+function unmappablePosixRoot(input: string, normalized: string): NormalizeTargetPathResult {
+  return {
+    ok: false,
+    code: 'unmappable_posix_root',
+    reason:
+      `win32 目标上无法确定 POSIX 绝对路径 ${input}（词法归一为 ${normalized}）的 Windows 盘符对应：` +
+      '仅支持 /mnt/<盘符>/…（WSL 挂载视图）、/<盘符>/…（Git Bash / MSYS 盘符根视图）与 ' +
+      '//server/share/…（UNC 视图）三种确定性映射；其余 POSIX 根属于 WSL 发行版文件系统' +
+      '（真实位置在 \\\\wsl$\\… 下，不经探测不可知），拒绝静默猜测',
+  }
+}
+
+/**
+ * 目标平台路径规范化（确定性纯函数，零探测、零猜测）：
+ *
+ * - platform 'posix'：POSIX 词法归一（/mnt/c/… 在 Linux 等目标上是真实路径，
+ *   绝不做反向「智能」转换）。
+ * - platform 'win32'：
+ *   - win32 形状（盘符绝对 / 根反斜杠 / UNC，分隔符可混用）→ win32 词法归一；
+ *   - 恰两前导斜杠（//server/share/…）→ POSIX 拼写的 UNC 视图，按 win32 词法
+ *     归一（POSIX 把恰两前导斜杠语义留给实现，Git Bash / MSYS 同此把它传给
+ *     UNC；三斜杠及以上先归一为单根，再走盘符视图判定）；
+ *   - 其余 POSIX 形状先按 POSIX 词法归一（消解 '.'/'..'、折叠重复分隔符、保留
+ *     单个结尾分隔符），再对归一结果做确定性判定：
+ *     /mnt/<单字母盘符>/… → <大写盘符>:\…（WSL 挂载视图；挂载点大小写敏感，
+ *     仅小写 'mnt' 是 WSL 约定）；
+ *     /<单字母盘符>/… → <大写盘符>:\…（Git Bash / MSYS 盘符根视图）；
+ *     其余 POSIX 根（含越出盘符根的 '..'、POSIX 视图内混入的反斜杠段）显式
+ *     结构化失败（unmappable_posix_root），绝不静默猜测；
+ *   - 相对路径（含盘符相对 C:relative）→ win32 词法归一（本原语不做绝对化，
+ *     解析基准归调用方策略）。
+ *
+ * 盘符统一输出大写规范拼写（Windows 盘符大小写不敏感）；UNC server / share
+ * 保留输入大小写（规范拼写不经网络探测不可知，如实保留）。
+ */
+export function normalizeTargetPath(p: string, platform: TargetPlatform): NormalizeTargetPathResult {
+  if (platform !== 'win32') {
+    return { ok: true, path: posixRules.normalize(p), view: 'posix' }
+  }
+  const shape = targetPathShape(p)
+  if (shape !== 'posix') {
+    // win32 形状与相对路径：win32 词法归一（相对路径含盘符相对，不做绝对化）。
+    return { ok: true, path: canonicalWin32Drive(win32Rules.normalize(p)), view: 'win32' }
+  }
+  if (
+    p.charCodeAt(0) === FORWARD_SLASH &&
+    p.charCodeAt(1) === FORWARD_SLASH &&
+    p.charCodeAt(2) !== FORWARD_SLASH
+  ) {
+    return { ok: true, path: canonicalWin32Drive(win32Rules.normalize(p)), view: 'unc' }
+  }
+  // 先按 POSIX 词法归一再判定盘符视图：'.'/'..' 在此消解（越出盘符根自然落回
+  // 无盘符根而失败），重复分隔符折叠，单个结尾分隔符保留。
+  const normalized = posixRules.normalize(p)
+  const trailing = normalized.length > 1 && normalized.charCodeAt(normalized.length - 1) === FORWARD_SLASH
+  const segments = (trailing ? normalized.slice(0, -1) : normalized).slice(1).split('/')
+  const first = segments[0] ?? ''
+  let drive: string
+  let view: TargetPathView
+  if (first === 'mnt') {
+    const second = segments[1] ?? ''
+    if (!isSingleDriveSegment(second)) return unmappablePosixRoot(p, normalized)
+    drive = second
+    view = 'wsl-mount'
+    segments.splice(0, 2)
+  } else if (isSingleDriveSegment(first)) {
+    drive = first
+    view = 'drive'
+    segments.splice(0, 1)
+  } else {
+    return unmappablePosixRoot(p, normalized)
+  }
+  const tail = segments.join('\\')
+  return {
+    ok: true,
+    path: `${drive.toUpperCase()}:\\${tail}${trailing && tail.length > 0 ? '\\' : ''}`,
+    view,
+  }
 }
