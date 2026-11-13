@@ -52,8 +52,10 @@ test('紧凑签名: 必填/可选、类型、数组元素、嵌套对象与组�
   assert.ok(signature.includes('either: 复杂（describe 查询）（可选）'))
   assert.ok(signature.includes('refd: 复杂（describe 查询）（可选）'))
 
-  assert.equal(compactActionSignature({ type: 'object', properties: {} }), '（无参数）')
-  assert.equal(compactActionSignature({ type: 'object' }), '（无参数）')
+  assert.equal(compactActionSignature({ type: 'object', properties: {}, additionalProperties: false }), '（无参数）')
+  assert.equal(compactActionSignature({ type: 'object', additionalProperties: false }), '（无参数）')
+  assert.ok(compactActionSignature({ type: 'object' }).includes('describe 查询'), '开放对象不能误报为无参数')
+  assert.ok(compactActionSignature({ type: 'object', properties: {} }).includes('describe 查询'))
   assert.ok(compactActionSignature({ oneOf: [{ type: 'object' }, { type: 'null' }] }).includes('run_action describe 查询'))
   assert.ok(compactActionSignature({ type: 'string' }).includes('顶层类型 string'))
 })

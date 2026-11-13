@@ -26,9 +26,8 @@ export interface ActionDirectoryEntry {
  */
 export function actionCliCommand(manifest: ActionManifest): string | undefined {
   if (manifest.cli?.hidden === true) return undefined
-  const custom = manifest.cli?.command?.filter((segment) => typeof segment === 'string' && segment.length > 0)
-  if (custom !== undefined && custom.length > 0) return `helm ${custom.join(' ')}`
-  return `helm ${manifest.pluginId.replace(/^builtin:/, '')} ${manifest.id}`
+  const command = manifest.cli?.command ?? [manifest.pluginId.replace(/^builtin:/, ''), manifest.id]
+  return `helm ${command.join(' ')}`
 }
 
 /** 多行/多空白描述压成单行（目录每动作一行描述）。 */
@@ -79,11 +78,13 @@ export function compactActionSignature(schema: JsonSchema): string {
   if (schema['type'] !== undefined && schema['type'] !== 'object') {
     return `顶层类型 ${String(schema['type'])}，run_action describe 查询`
   }
+  const required = Array.isArray(schema['required']) ? new Set(schema['required'].map((name) => String(name))) : new Set<string>()
   const properties = schema['properties']
   if (properties === undefined || properties === null || typeof properties !== 'object' || Array.isArray(properties)) {
-    return '（无参数）'
+    return schema['additionalProperties'] === false && required.size === 0
+      ? '（无参数）'
+      : '对象结构未展开，run_action describe 查询'
   }
-  const required = Array.isArray(schema['required']) ? new Set(schema['required'].map((name) => String(name))) : new Set<string>()
   const parts: string[] = []
   for (const [name, prop] of Object.entries(properties)) {
     const { signature, complexity } = propSignature(prop)
@@ -91,7 +92,11 @@ export function compactActionSignature(schema: JsonSchema): string {
     const hint = complexity === 'plain' ? '' : '（describe 查询）'
     parts.push(`${name}: ${signature}${hint}（${optional}）`)
   }
-  if (parts.length === 0) return '（无参数）'
+  if (parts.length === 0) {
+    return schema['additionalProperties'] === false && required.size === 0
+      ? '（无参数）'
+      : '对象结构未展开，run_action describe 查询'
+  }
   return parts.join('、')
 }
 
@@ -100,7 +105,7 @@ export function renderAvailableActionsSection(entries: readonly ActionDirectoryE
   if (entries.length === 0) return undefined
   const header = [
     '<available_actions>',
-    '以下插件动作在当前会话经 run_action({ actionId: "pluginId.actionId", input }) 调用；目录为全量清单，无截断。',
+    '以下动作在当前会话经 run_action({ actionId: "pluginId.actionId", input }) 调用；直接暴露的动作已在模型工具列表展示。',
     '参数为紧凑签名（必填/可选与顶层类型），嵌套与复杂结构不展开：先 run_action({ actionId, describe: true }) 获取该动作完整 input/outputSchema（仅描述，不执行动作）；也可经 bash 执行 helm actions list --json 查看。CLI 为等效人工通道（本会话无 bash 时仍可经 run_action 调用）。',
   ]
   const groups = new Map<string, ActionDirectoryEntry[]>()

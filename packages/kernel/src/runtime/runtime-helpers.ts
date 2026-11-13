@@ -326,7 +326,7 @@ export function sectionsEqual(a: Array<{ id: string; text: string }>, b: Array<{
 
 /**
  * 把前导 system 消息的 sections 整体替换为 desired（保留 base content）。
- * 后续 system 段消息的旧 sections patch 通过 null 清除，避免回放残留。
+ * 后续 system 消息的 sections patch 已折叠进 desired，移除旧 patch 避免回放覆盖。
  */
 export function withSections(
   messages: ReadonlyArray<Record<string, unknown>>,
@@ -351,6 +351,12 @@ export function withSections(
     if (!(key in next)) next[key] = null
   }
   out[0] = { ...lead, sections: next }
+  for (let i = 1; i < out.length; i += 1) {
+    const message = out[i]!
+    if (message['role'] !== 'system' || message['sections'] === undefined) continue
+    const { sections: _sections, ...rest } = message
+    out[i] = rest
+  }
   return out
 }
 

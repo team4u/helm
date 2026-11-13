@@ -87,7 +87,7 @@ export class RuntimeToolRegistry {
       ) => {
         const host = getPluginHost()
         if (!host) throw new HelmError('runtime_not_initialized', '插件宿主未初始化', 503)
-        // 只读清单查询：绝不经 invokeAction（不执行 handler、不微输入校验、
+        // 只读清单查询：绝不经 invokeAction（不执行 handler、不做输入校验、
         // 不创建 liveTask）；启用过滤内建在 listActions（activeEnabledPluginIds）。
         const manifest = host
           .listActions()

@@ -107,8 +107,11 @@ async function makeEnv(): Promise<TestEnv> {
         .join('\n')
     },
     async close() {
-      await app.close().catch(() => {})
-      rmSync(dataDir, { recursive: true, force: true })
+      try {
+        await app.close()
+      } finally {
+        rmSync(dataDir, { recursive: true, force: true })
+      }
     },
   }
   return env

@@ -186,7 +186,6 @@ export class HookBridge {
       projectToolPromptSections(outcomeSections, activeTools),
       this.renderActionDirectory(host, summary, effectiveTools, outcome),
     )
-    if (outcome?.action !== 'transform' && projected === outcomeSections) return undefined
     const value: typeof payload = outcome?.action === 'transform'
       ? { ...(outcome.value as typeof payload), sections: projected }
       : { ...payload, sections: projected }

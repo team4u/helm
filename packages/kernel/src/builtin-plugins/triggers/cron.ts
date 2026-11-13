@@ -624,8 +624,8 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
     description: '创建 cron 定时任务（标准五字段：分 时 日 月 周；id/schedule/text 必填，timezone 默认 UTC）',
     promptGuidelines: [
       'schedule 是标准五字段周期 cron（分 时 日 月 周，如 "*/30 * * * *"），不是任意 shell 定时器：触发只把 text 文本投递到目标会话',
-      'timezone 用 IANA 区域名（如 Asia/Shanghai，缺省 UTC）；目标显式指定 targetConversationId 或 targetProfileId（互斥，缺省投递给最新 human 会话），不要含糊留空',
-      'text 是触发时投递的自包含指令文本（无附加上下文），把当次要做什么写清楚',
+      'timezone 使用 IANA 时区名（如 Asia/Shanghai，缺省 UTC）；根据用户意图指定 targetConversationId 或 targetProfileId（互斥），未指定时由 trigger 路由解析目标',
+      'text 会在未来投递到目标会话，应写清任务内容与必要条件，避免依赖当前时刻的隐含信息',
     ],
     inputSchema: {
       type: 'object',

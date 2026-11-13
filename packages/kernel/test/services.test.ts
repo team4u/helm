@@ -314,7 +314,10 @@ test('helm-cli 技能资产同步界面扩展与会话投影能力面（防回�
   // generative-ui 手册已迁 builtin:json-render 插件技能（随启停过滤）：
   // helm-cli SKILL.md 不得残留指向已删除 references 的下钻索引。
   assert.ok(!HELM_CLI_SKILL_MD.includes('references/generative-ui.md'), '不得引用已迁出的 generative-ui.md')
-  assert.ok(HELM_CLI_SKILL_MD.includes('generative-ui'), '应按可用技能目录引导富展示（非硬编码手册）')
+  assert.ok(HELM_CLI_SKILL_MD.includes('当回合可用技能描述'), '应按动态技能目录选择扩展输出能力')
+  for (const optionalSkill of ['generative-ui', 'app-builder']) {
+    assert.ok(!HELM_CLI_SKILL_MD.includes(optionalSkill), `通用 CLI 技能不应点名可选技能 ${optionalSkill}`)
+  }
 
   // SKILL.md：会话文档 CLI 参数
   assert.ok(HELM_CLI_SKILL_MD.includes('--conversation'), 'SKILL.md 应含 doc --conversation 会话文档读取')
