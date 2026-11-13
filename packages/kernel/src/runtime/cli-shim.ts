@@ -23,19 +23,36 @@ export function shQuote(value: string): string {
 export interface CliShimPlan {
   readonly execPath: string
   readonly entryArgs: readonly string[]
+  /**
+   * 额外注入 CLI 子进程的环境变量（缺省不注入，输出与历史逐字节一致）。
+   * 唯一现存用例：Electron 宿主（Hub 以 ELECTRON_RUN_AS_NODE 运行）时注入
+   * ELECTRON_RUN_AS_NODE=1，使 execPath（Electron 二进制）以 Node 模式执行 CLI。
+   */
+  readonly env?: Readonly<Record<string, string>>
 }
 
-/** POSIX host 原生 shim（与历史输出逐字节一致）。 */
+/** env 注入段（POSIX：`env K=V` 前置于 exec；与 shQuote 组合保持字面传递）。 */
+function posixEnvPrefix(env: Readonly<Record<string, string>> | undefined): string {
+  if (!env || Object.keys(env).length === 0) return ''
+  const assignments = Object.entries(env).map(([k, v]) => shQuote(`${k}=${v}`)).join(' ')
+  return `env ${assignments} `
+}
+
+/** POSIX host 原生 shim（无 env 时与历史输出逐字节一致）。 */
 export function buildPosixHostShim(plan: CliShimPlan): string {
-  return `#!/bin/sh\nexec ${[plan.execPath, ...plan.entryArgs].map(shQuote).join(' ')} "$@"\n`
+  return `#!/bin/sh\nexec ${posixEnvPrefix(plan.env)}${[plan.execPath, ...plan.entryArgs].map(shQuote).join(' ')} "$@"\n`
 }
 
-/** Windows host 的 helm.cmd（cmd.exe wrapper；% 加倍转义，与历史输出逐字节一致）。 */
+/** Windows host 的 helm.cmd（cmd.exe wrapper；% 加倍转义，无 env 时与历史输出逐字节一致）。 */
 export function buildWindowsCmdWrapper(plan: CliShimPlan): string {
+  const envLines = Object.entries(plan.env ?? {}).map(([k, v]) => `set "${k}=${v}"`)
+  // setlocal：环境变量只往本次 wrapper 进程注入，结束后丢弃——绝不污染人类 cmd.exe
+  // 会话后续启动的 Electron/Node 进程（无 env 时与历史输出逐字节一致，不含 setlocal）。
+  const prefix = envLines.length > 0 ? ['setlocal'] : []
   const cmdArgs = [plan.execPath, ...plan.entryArgs]
     .map((value) => `"${value.replaceAll('%', '%%')}"`)
     .join(' ')
-  return `@echo off\r\n${cmdArgs} %*\r\n`
+  return `@echo off\r\n${[...prefix, ...envLines, `${cmdArgs} %*`].join('\r\n')}\r\n`
 }
 
 /** Windows host 面向 POSIX shell（WSL / Git Bash / MSYS）的 helm shim。 */
@@ -67,7 +84,7 @@ export function buildWindowsPosixShim(plan: CliShimPlan): string {
     '  printf \'helm: use helm.cmd from cmd.exe/PowerShell, or ensure wslpath/cygpath is in PATH\\n\' >&2',
     '  exit 127',
     'fi',
-    `exec "$helm_node"${entries} "$@"`,
+    `exec ${posixEnvPrefix(plan.env)}"$helm_node"${entries} "$@"`,
   ]
   return `${lines.join('\n')}\n`
 }

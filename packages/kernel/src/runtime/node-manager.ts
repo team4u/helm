@@ -192,19 +192,33 @@ export class NodeManager {
     const execPath = override.execPath ?? process.execPath
     const binDir = join(this.dataDir, 'bin')
     const helmPath = join(binDir, 'helm')
-    // tsx CLI 与仓库 CLI 入口：以当前模块位置推导（源码运行与 dist 运行同构）。
-    const kernelDir = dirname(fileURLToPath(import.meta.url))
-    const repoRoot = this.resolveRepoRoot(kernelDir)
-    const compiledCli = join(repoRoot, 'packages', 'cli', 'dist', 'index.js')
-    const sourceCli = join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
-    const compiled = await access(compiledCli).then(() => true, () => false)
-    // 源码内核必须配套源码 CLI，避免旧 dist 命令表与新 protocol 契约混用。
-    const useCompiled = basename(dirname(kernelDir)) !== 'src' && compiled
-    const plan: CliShimPlan = {
-      execPath,
-      entryArgs: useCompiled
-        ? [compiledCli]
-        : [join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), sourceCli],
+    // Electron 宿主注入：Hub 以 ELECTRON_RUN_AS_NODE 运行时 process.execPath 是
+    // Electron 二进制，生成的 CLI wrapper 必须同样携带 ELECTRON_RUN_AS_NODE=1，
+    // 否则 wrapper exec 出的是 GUI 进程而非 Node CLI。仅注入这一个必要字段，
+    // 不把 Electron 环境泄漏给全部 shell。
+    const env = process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : undefined
+    let plan: CliShimPlan
+    // 显式 CLI 入口（安装包 payload 布局无 packages/cli 目录，上溯推导会落空；
+    // 由桌面主代理指向 <release>/cli/dist/index.js）。只接受单入口文件路径。
+    const explicitEntry = process.env.HELM_CLI_ENTRY
+    if (explicitEntry) {
+      plan = { execPath, entryArgs: [explicitEntry], ...(env ? { env } : {}) }
+    } else {
+      // tsx CLI 与仓库 CLI 入口：以当前模块位置推导（源码运行与 dist 运行同构）。
+      const kernelDir = dirname(fileURLToPath(import.meta.url))
+      const repoRoot = this.resolveRepoRoot(kernelDir)
+      const compiledCli = join(repoRoot, 'packages', 'cli', 'dist', 'index.js')
+      const sourceCli = join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
+      const compiled = await access(compiledCli).then(() => true, () => false)
+      // 源码内核必须配套源码 CLI，避免旧 dist 命令表与新 protocol 契约混用。
+      const useCompiled = basename(dirname(kernelDir)) !== 'src' && compiled
+      plan = {
+        execPath,
+        entryArgs: useCompiled
+          ? [compiledCli]
+          : [join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), sourceCli],
+        ...(env ? { env } : {}),
+      }
     }
     const script =
       platform === 'win32' ? buildWindowsPosixShim(plan) : buildPosixHostShim(plan)
