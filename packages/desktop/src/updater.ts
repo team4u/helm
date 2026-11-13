@@ -287,7 +287,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
    * - 显式锁定版本（pinnedVersion）：用户明确意图，版本不同即算更新（允许降级换装）。
    */
   private isNewerTarget(currentVersion: string, targetVersion: string): boolean {
-    if (this.pinnedVersion !== undefined) return currentVersion !== targetVersion;
+    if (this.pinnedVersion !== undefined && this.pinnedVersion !== 'latest') return currentVersion !== targetVersion;
     const ordering = compareSemVer(currentVersion, targetVersion);
     if (ordering === null) {
       // current.version 来自已通过严格校验的 manifest/meta，正常不可达；fail-closed 不放行。

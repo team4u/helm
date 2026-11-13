@@ -14,7 +14,8 @@ pnpm --filter @helm/desktop test
 无桌面环境也可以验证真实窗口：
 
 ```bash
-xvfb-run -a node scripts/desktop-smoke.mjs
+pnpm --filter @helm/desktop run dist:dir
+xvfb-run -a node scripts/desktop-smoke.mjs --packaged --port=32020
 ```
 
 测试会使用独立数据目录，检查 Hub、React 首帧、渲染进程隔离、Workflow/Mermaid 原生编译、退出后的端口释放，并保存截图、JSON 报告与日志。测试端口被占用时明确拒绝；可以显式传 `--port=32020` 使用其他测试端口。本机以 root 运行时，测试包装器才会增加 `--no-sandbox`。
@@ -38,7 +39,7 @@ Linux 运行窗口测试时使用 `xvfb-run -a`。打包产物在 `packages/desk
 
 启动时优先尝试已下载的候选，候选通过 Hub 就绪与 React 首帧检查后才写入当前版本。候选启动失败时记录诊断、阻断该候选，并启动上一版或内置基线。该保护针对启动故障，不承诺恢复新版本已经改写的业务数据。
 
-运行期间后台检查 npm、验证 SHA-512、解包到独立候选目录。若业务载荷缺少依赖，使用应用内置的 npm CLI 安装。下载完成只暂存，托盘提示下次启动安装；不会中断正在运行的会话或工作流。附着外部 Hub 时，更新由它原来的安装渠道负责。
+界面启动后以及每隔六小时后台检查 npm、验证 SHA-512、解包到独立候选目录。若业务载荷缺少依赖，使用应用内置的 npm CLI 安装。下载完成只暂存，托盘提示下次启动安装；不会中断正在运行的会话或工作流。附着外部 Hub 时，更新由它原来的安装渠道负责。
 
 Electron 底座目前通过托盘「下载桌面新版」打开 GitHub Releases 更新。当前仓库没有签名证书，安装包未签名、未公证；完整应用的无人值守替换尚未接入。macOS 和 Windows 的首次安装可能需要处理系统的开发者验证提示。
 

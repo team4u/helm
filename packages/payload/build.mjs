@@ -128,8 +128,11 @@ const distPackageJson = {
   version: payloadPkg.version,
   type: 'module',
   description: 'helm Hub 运行时载荷（kernel + protocol + cli + web dist 与零依赖启动入口）',
+  license: 'MIT',
+  repository: { type: 'git', url: 'git+https://github.com/team4u/helm.git', directory: 'packages/payload' },
+  publishConfig: { access: 'public' },
   engines: { node: rootPkg.engines?.node ?? '>=24.12.0' },
-  files: ['kernel', 'protocol', 'cli', 'web', 'start.mjs', 'manifest.json'],
+  files: ['kernel', 'protocol', 'cli', 'web', 'start.mjs', 'manifest.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md'],
   dependencies: Object.fromEntries(Object.keys(rootDependencies).sort().map((k) => [k, rootDependencies[k]])),
   ...(peerOverrides.size > 0
     ? { overrides: Object.fromEntries([...peerOverrides.entries()].sort(([a], [b]) => a.localeCompare(b))) }
@@ -148,6 +151,14 @@ cpSync(path.join(repoRoot, 'packages/cli/dist'), path.join(stagingDir, 'cli/dist
 cpSync(path.join(repoRoot, 'packages/cli/package.json'), path.join(stagingDir, 'cli/package.json'));
 cpSync(path.join(repoRoot, 'packages/web/dist'), path.join(stagingDir, 'web/dist'), { recursive: true });
 cpSync(path.join(payloadPkgRoot, 'src/start.mjs'), path.join(stagingDir, 'start.mjs'));
+cpSync(path.join(repoRoot, 'LICENSE'), path.join(stagingDir, 'LICENSE'));
+cpSync(path.join(repoRoot, 'THIRD_PARTY_NOTICES.md'), path.join(stagingDir, 'THIRD_PARTY_NOTICES.md'));
+// 运行时报告载荷发布版本，避免 Hub / CLI 仍报工作区旧版本。
+for (const component of ['kernel', 'protocol', 'cli']) {
+  const manifestPath = path.join(stagingDir, component, 'package.json');
+  const componentPackage = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  writeFileSync(manifestPath, `${JSON.stringify({ ...componentPackage, version: payloadPkg.version }, null, 2)}\n`);
+}
 writeFileSync(path.join(stagingDir, 'package.json'), `${JSON.stringify(distPackageJson, null, 2)}\n`);
 
 // 内置插件运行时资产：src/builtin-plugins/<name>/{client,skill,assets}

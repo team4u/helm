@@ -117,6 +117,8 @@ export interface SelectRunnerContext {
   /** 当前进程可执行文件（Electron 下为 electron 二进制）。 */
   execPath: string;
   env: NodeJS.ProcessEnv;
+  /** 打包后通过真实文件启动 IPC 桥，避免 Node 直接执行 ASAR 内的脚本。 */
+  childWrapper?: string;
   /** 探测实现（测试注入口）。 */
   probe?: (executable: string, options?: { timeoutMs?: number; env?: NodeJS.ProcessEnv }) => Promise<RunnerProbe>;
   onSkip?: (kind: RunnerKind, reason: string) => void;
@@ -136,7 +138,7 @@ export async function selectRunner(config: DesktopConfig, ctx: SelectRunnerConte
   }
   // resolveHubEntry 的 payload source 可携带附加参数（如 start.mjs 需要 start 子命令），
   // hub-entry source 恒无参数；custom 命令原样整体采用。
-  const hubArgs = entry === null ? [] : [fileURLToPath(new URL('../dist/hub-child.js', import.meta.url)), entry.entry, ...entry.args];
+  const hubArgs = entry === null ? [] : [ctx.childWrapper ?? fileURLToPath(new URL('../dist/hub-child.js', import.meta.url)), entry.entry, ...entry.args];
 
   // 2) 显式 node 覆写：仍需能力探测（保证能跑 kernel）。
   if (config.hubNode !== undefined) {

@@ -27,11 +27,16 @@ function resolveClientRoot(): string {
   )
 }
 
-/** 内核包根（提供锁定的 mermaid 解析；受控 npm 依赖边界，不感知其他包）。 */
+/** 从内核位置按 Node 的逐级 node_modules 规则找到声明依赖的解析根。 */
 function resolveKernelPackageRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  // dist/builtin-plugins/mermaid.js -> 包根；src/builtin-plugins/mermaid.ts -> 包根
-  return resolve(here, '../..')
+  let root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+  for (;;) {
+    if (existsSync(join(root, 'node_modules', 'mermaid', 'package.json'))) return root
+    const parent = dirname(root)
+    if (parent === root) break
+    root = parent
+  }
+  throw new HelmError('mermaid_dependency_missing', '内置 Mermaid 插件的运行时依赖未安装', 500)
 }
 
 export function createMermaidPlugin(): PluginDefinition {

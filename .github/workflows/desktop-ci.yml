@@ -24,10 +24,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   desktop:
     name: desktop / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -59,7 +64,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb libgbm1 libasound2t64
+          sudo apt-get install -y --no-install-recommends xvfb xauth libgbm1 libasound2t64
 
       # 契约检查：desktop 必须有 name 与 build 脚本（pnpm -r build 会静默跳过无 build
       # 的包），并输出 desktop_name / desktop_has_test 供后续步骤引用。
@@ -74,6 +79,12 @@ jobs:
       # assemble-hub 组装依赖 kernel/web dist 产物，必须先全仓构建。
       - name: Build packages
         run: pnpm build
+
+      - name: Verify npm payload pack/install/start (Linux)
+        if: runner.os == 'Linux'
+        env:
+          PAYLOAD_NPM_SMOKE: '1'
+        run: node scripts/run-tests.mjs packages/payload/test/payload.test.ts
 
       # desktop 自有测试（Electron 相关执行在 Linux 上必须 xvfb-run 包裹）。
       - name: Desktop package tests under Xvfb (Linux)

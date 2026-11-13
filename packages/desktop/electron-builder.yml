@@ -8,7 +8,7 @@
 #   node_modules 必须是真实文件，进 asar 会被破坏（这正是 files/asarUnpack 的设计原因）。
 # - 未签名 / 未公证：无证书资产，mac 显式 identity: null；NSIS / AppImage / deb 无签名。
 # - 未提供应用图标：使用 Electron 默认图标，不虚构图标资产。
-# - 不含自动更新（src/updater.ts 仍为 Stub，updater 不在本配置范围）。
+# - 业务载荷通过 npm 更新；Electron 底座完整替换仍由用户下载安装包。
 
 # 占位反向域名（无正式分发域名前可先用；接入签名/公证时统一调整）。
 appId: dev.helm.desktop
@@ -31,12 +31,15 @@ asarUnpack:
   - "**/*.node"
 
 extraResources:
+  - from: dist/hub-child.js
+    to: hub-child.mjs
   # assemble-hub.mjs 组装的 Hub payload → <resources>/hub（asar 之外）。
   # 缺失时先执行 pnpm --filter @helm/desktop run assemble:hub（需仓库根 pnpm build）。
-  - from: hub
-    to: hub
+  # electron-builder 总会过滤 from 根下的 node_modules；从父目录匹配 hub 子树可保留依赖。
+  - from: .
+    to: .
     filter:
-      - "**/*"
+      - "hub/**/*"
 
 mac:
   target:
@@ -55,6 +58,7 @@ nsis:
   allowToChangeInstallationDirectory: true
 
 linux:
+  executableName: helm-desktop
   target:
     - AppImage
     - deb

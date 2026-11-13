@@ -124,6 +124,11 @@ jobs:
       - name: Run all tests
         run: pnpm test:all
 
+      - name: Verify npm payload pack/install/start
+        env:
+          PAYLOAD_NPM_SMOKE: '1'
+        run: node scripts/run-tests.mjs packages/payload/test/payload.test.ts
+
   # ------------------------------------------------------------------
   # 阶段三 A：npm Hub payload 条件发布（唯一 npm 入口，仅 ubuntu 一次）。
   # ------------------------------------------------------------------
@@ -301,7 +306,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb libgbm1 libasound2t64
+          sudo apt-get install -y --no-install-recommends xvfb xauth libgbm1 libasound2t64
 
       - name: Desktop package contract check
         id: contract

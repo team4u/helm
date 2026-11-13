@@ -109,10 +109,12 @@ test('payload 发布包契约：dist 根 package.json 可独立 npm pack/publish
   assert.equal(distPkg.name, '@team4u/helm-hub', '默认发布包名必须是 @team4u/helm-hub');
   assert.equal(distPkg.type, 'module');
   assert.equal(distPkg.private, undefined, '发布包不得标记 private');
+  assert.equal(distPkg.repository.url, 'git+https://github.com/team4u/helm.git');
+  assert.equal(distPkg.license, 'MIT');
   // files 显式白名单：根 gitignore 的 dist/ 规则不得让 npm pack 剔除 kernel/dist 等。
   assert.deepEqual(
     (distPkg.files as string[]).slice().sort(),
-    ['cli', 'kernel', 'manifest.json', 'protocol', 'start.mjs', 'web'],
+    ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'cli', 'kernel', 'manifest.json', 'protocol', 'start.mjs', 'web'].sort(),
   );
   // @helm/protocol 物化为 file:./protocol；外部依赖全部精确版本（无 ^/~/>= 浮动）。
   assert.equal(distPkg.dependencies['@helm/protocol'], 'file:./protocol');
@@ -265,7 +267,10 @@ test('start.mjs 无参数：用法错误退出码 1', { timeout: 30_000 }, () =>
  * check 通过（依赖解析 + node:sqlite + esbuild transform 实测）→ start 真实拉起
  * Hub，HTTP 探活 /api/auth/status，SIGTERM 干净退出。
  */
-test('端到端：npm pack → 隔离 npm install → check → start 真实启动 Hub（仓库外）', { timeout: 480_000 }, async () => {
+test('端到端：npm pack → 隔离 npm install → check → start 真实启动 Hub（仓库外）', {
+  timeout: 60_000,
+  skip: process.env.PAYLOAD_NPM_SMOKE !== '1' ? '真实 npm 网络验收由 CI 的 PAYLOAD_NPM_SMOKE=1 专门步骤执行' : false,
+}, async () => {
   const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-payload-e2e-'));
   const packDir = path.join(outsideRoot, 'pack');
   const extractDir = path.join(outsideRoot, 'extracted');
@@ -277,7 +282,7 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
     const packRes = runCommand('npm', ['pack', '--json', '--pack-destination', packDir], stagingDir, 120_000);
     const packInfo = JSON.parse(packRes.stdout) as Array<{ filename: string }>;
     assert.equal(packInfo.length, 1, `期望单个 tarball: ${packRes.stdout}`);
-    const tgz = path.join(packDir, packInfo[0].filename);
+    const tgz = path.join(packDir, packInfo[0]!.filename);
     assert.ok(existsSync(tgz));
 
     // 2. 安全解包：全部成员必须位于 package/ 前缀且无 .. 段，manifest 在包根。
