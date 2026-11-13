@@ -32,6 +32,7 @@ managedByPlugin: {{MANAGED_BY}}
 - `helm conversations reset [id] [--current] [--handoff <text>]`（重置上下文，handoff 作为首条消息）
 - `helm conversations compact [id] [--current]` / `helm conversations fork <id> --entry-id <n> [--title <t>]` / `helm conversations delete <id>`
 - `helm send <id> "<text>"` 或 `helm send --current "<text>"`：提交输入；支持 `--wait`、`--when-busy steer|followUp|reject`（省略默认 steer）、`--meta <json>`、`--attach <artifactIds>`、`--replace-from <entryId>`（从指定历史条目起覆盖重发，截断该条及后续上下文）；代理代发时用 `--origin agent`。
+- `helm ask "<text>"`：一次性问答（内部创建会话并等待回答，stdout 默认只输出回答文本，`--json` 输出 `{conversationId,submissionId,entryId,answer,deleted}`）；stdin 管道内容（非 TTY）自动并入 prompt；`--profile/--title/--cwd/--model/--tags/--timeout <ms>/--delete-on-success`；失败时会话保留并在错误信封给出可查 conversationId。
 - `helm conversations withdraw [id] [--current] --submission-id <n>`：撤回排队中的输入（已进入执行或已结算时如实返回 already_placed/settled）。
 - `helm abort [id] [--current]`：中止当前回合；不要中止自己正在执行的回合。
 - `helm events watch`：订阅全局 SSE 事件（持续运行，用 Ctrl+C 结束）。

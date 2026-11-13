@@ -68,6 +68,18 @@ CLI 登录态保存于 `<dataDir>/cli-token`（0600，`{ hubUrl, token }`）；�
 
 **`helm abort [id] [--current]`** — 中止会话当前回合。
 
+**`helm ask [text]`** — 一次性问答（`POST /api/conversations` + `POST /api/conversations/:id/input?wait=1`，无新增端点）。内部创建会话、提交输入并同步等待回答；stdout 默认只输出回答文本（脚本管道友好），`--json` 输出 `{conversationId, submissionId, entryId, answer, deleted}`。stdin 管道内容（非 TTY）自动并入 prompt，与位置参数以空行拼接，二者至少其一（否则 `empty_input`）。
+
+| 标志 | 说明 |
+| :--- | :--- |
+| `--profile <id>` | 使用的 Profile |
+| `--title <str>` / `--tags <t>` | 会话标题 / 标签（便于追溯；`--tags` 接受 JSON 数组或逗号分隔） |
+| `--cwd <dir>` / `--model <m>` | 会话工作目录（绝对路径）/ 模型覆盖 |
+| `--timeout <ms>` | 等待回答的超时毫秒数（正整数，缺省无限等待）；超时后回答可能仍在生成，会话保留并给出 ID |
+| `--delete-on-success` | 仅在成功取得回答后删除会话；创建/生成/删除任一失败均保留诊断会话 |
+
+全新会话以 `whenBusy:reject` 提交（不应有在途回合，忙即显式失败）。生成失败（`turn_failed`/`turn_aborted`）、等待超时（`timeout`）等错误信封携带 `details.conversationId`，可用 `helm conversations get <id>` 排查后 `helm conversations delete <id>` 清理。
+
 ### 审批（AskDoc）
 
 **`helm asks list`** — 列出待答提问。

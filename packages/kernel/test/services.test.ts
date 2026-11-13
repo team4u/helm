@@ -356,7 +356,7 @@ test('helm-cli 技能资产同步界面扩展与会话投影能力面（防回�
   }
   assert.ok(HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes('sp.<key>'), '应 documenting sp./ssp. 深链命名空间')
 
-  // CLI 51 条核心命令全量对齐
+  // CLI 核心命令全量对齐（CORE_CLI_COMMAND_PATHS 为唯一真源，不定死条数）
   for (const cmdPath of CORE_CLI_COMMAND_PATHS) {
     const parts = cmdPath.split(' ')
     if (parts.length === 1) {

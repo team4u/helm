@@ -8,6 +8,7 @@ import type { CommandSpec } from './shared.js'
 import { CliError } from '../errors.js'
 import { authCommands } from './auth.js'
 import { conversationsCommands } from './conversations.js'
+import { askCommands } from './ask.js'
 import { asksCommands } from './asks.js'
 import { profilesCommands } from './profiles.js'
 import { providersCommands } from './providers.js'
@@ -101,6 +102,7 @@ export function coreCommands(): CommandSpec[] {
   const commands = [
     ...authCommands(),
     ...conversationsCommands(),
+    ...askCommands(),
     ...asksCommands(),
     ...profilesCommands(),
     ...providersCommands(),
