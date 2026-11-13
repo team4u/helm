@@ -218,6 +218,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .artifact-preview-header > span:first-child { order: 1; flex: 1 1 100%; min-width: 0; }
   .artifact-preview-header > span:last-child { order: 2; justify-content: flex-start; }
   .modal-fullscreen .modal-body { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+  /* 技能阅读器：文件选择与元信息操作折为两行，触控目标不缩小 */
+  .skill-reader-toolbar { gap: 6px 8px; }
+  .skill-reader-file { flex: 1 1 100%; }
+  .skill-file-select { max-width: none; }
+  .skill-reader-toolbar-meta { flex: 1 1 100%; justify-content: flex-end; flex-wrap: wrap; }
+  .skill-reader-body { min-height: 200px; }
 }
 
 /* 命令面板关闭按钮响应式 */
