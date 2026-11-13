@@ -6,6 +6,7 @@ import { useHelmStore } from '../lib/store-context.js'
 import { useIsMobile } from './composer-model.js'
 import { detectLanguage } from './code-language.js'
 import { CodeBlockView, MarkdownView } from './MarkdownView.js'
+import { CopyButton } from './CopyButton.js'
 import { formatBytes } from '../lib/format.js'
 import { Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
 import { Select } from '../ui/Select.js'
@@ -264,9 +265,12 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
                 {desktopFullscreen ? '窗口' : '全屏'}
               </button>
             ) : null}
-            <button type="button" className="btn btn-sm" onClick={download} title="下载文件">
+            {markdown && text !== null ? (
+              <CopyButton text={text} label={isMobile ? undefined : '复制'} className="btn btn-sm" />
+            ) : null}
+            <button type="button" className="btn btn-sm" onClick={download} title="下载">
               <HelmIcon name="download" size={12} />
-              {!isMobile ? '下载文件' : null}
+              {!isMobile ? '下载' : null}
             </button>
             <DialogClose asChild>
               <button

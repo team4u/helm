@@ -3,7 +3,7 @@ import { copyToClipboard } from './clipboard.js'
 import { HelmIcon } from '../lib/icons.js'
 
 /** 复制按钮：复制成功切换 check 图标 1.5s；失败显示警告提示防静默吞没。 */
-export function CopyButton({ text, label }: { text: string; label?: string }) {
+export function CopyButton({ text, label, className = 'btn btn-ghost btn-sm' }: { text: string; label?: string; className?: string }) {
   const [copied, setCopied] = useState(false)
   const [failed, setFailed] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -30,7 +30,7 @@ export function CopyButton({ text, label }: { text: string; label?: string }) {
   return (
     <button
       type="button"
-      className="btn btn-ghost btn-sm"
+      className={className}
       onClick={(e) => {
         e.stopPropagation()
         void onCopy()
