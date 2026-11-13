@@ -683,8 +683,7 @@ export class KernelRuntime {
   // ------------------------------------------------------------------
 
   async skillDirectory(id: string): Promise<string> {
-    // 委托 SkillService 多根解析（dataDir 优先，缺省回落 dataDir 路径）；
-    // 纯路径拼接口径见 skillDirectoryHelper（保留导出）。
+    // 插件自举目录始终指向可写 dataDir；共享根仅经 SkillService.readFile 读取。
     return this.svc.skillsSvc.directory(id)
   }
 

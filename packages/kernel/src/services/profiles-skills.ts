@@ -693,11 +693,10 @@ export class SkillService {
     }
   }
 
-  /** 技能物理目录解析（宿主端口用，如 superagent 自举与插件只读访问）：
-   * dataDir/skills/<id> 存在返回其 realpath；否则任一外部共享根存在返回
-   * 该处 realpath；都不存在返回 dataDir 缺省路径（保留「缺省 dataDir、
-   * 宿主不 mkdir」的创建语义，写入口仍只落 dataDir）。技能目录为符号
-   * 链接显式拒绝（与 readFile 同强度，不把目录解析成根外目标）。 */
+  /** 技能资产目录坐标（宿主端口用，如插件自举补齐文件）：始终指向
+   * dataDir/skills/<id>，不解析到外部共享只读根。调用方可能通过
+   * atomicWriteFile 补齐资产；将共享根路径返回给它会绕过 writeFile 的
+   * 只写 dataDir 约束。宿主不 mkdir，缺省路径由调用方按需创建。 */
   async directory(id: string): Promise<string> {
     try {
       assertSkillId(id)
@@ -708,22 +707,6 @@ export class SkillService {
         400,
         { skillId: id },
       )
-    }
-    for (const root of [join(this.dataDir, 'skills'), ...this.externalRoots]) {
-      const skillDir = join(root, id)
-      const st = await lstat(skillDir).catch((err: unknown) => {
-        if ((err as { code?: string }).code === 'ENOENT') return undefined
-        throw err
-      })
-      if (st === undefined) continue
-      if (st.isSymbolicLink()) {
-        throw new Error(`技能目录是符号链接，拒绝解析: ${id}`)
-      }
-      const real = await realpath(skillDir)
-      if (!isWithin(real, await realpath(root))) {
-        throw new Error(`技能目录越界（软链指向 skills 根之外）: ${id}`)
-      }
-      return real
     }
     return join(this.dataDir, 'skills', id)
   }

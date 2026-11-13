@@ -181,18 +181,20 @@ test('external: 根内路径穿越/软链拒绝（与 dataDir 同强度）', { t
   await assert.rejects(() => skills.readFile('another-link'), /符号链接|软链|越界/)
 })
 
-test('external: directory() 三态解析与非法 id HelmError 400', { timeout: 60_000 }, async () => {
+test('external: directory() 始终指向可写 dataDir 且非法 id 为 HelmError 400', { timeout: 60_000 }, async () => {
   const dataDir = await freshDir('dir-data')
   const ext = await freshDir('dir-ext')
   await seedSkill(join(dataDir, 'skills'), 'data-skill')
   await seedSkill(ext, 'ext-skill')
   const skills = new SkillService(dataDir, { externalRoots: [ext] })
 
-  // ① dataDir 存在 → realpath
+  // ① dataDir 已存在时仍返回 dataDir 资产坐标。
   assert.equal(await skills.directory('data-skill'), join(dataDir, 'skills', 'data-skill'))
-  // ② 仅 external 存在 → 该处 realpath
-  assert.equal(await skills.directory('ext-skill'), join(ext, 'ext-skill'))
-  // ③ 都不存在 → dataDir 缺省路径（不 mkdir）
+  // ② 即使仅 external 存在，也必须返回 dataDir 写入坐标：插件自举调用方
+  // 可能写文件，不能把共享只读根暴露为目录坐标。
+  const externalShadow = join(dataDir, 'skills', 'ext-skill')
+  assert.equal(await skills.directory('ext-skill'), externalShadow)
+  // ③ 技能都不存在时仍返回 dataDir 缺省路径（不 mkdir）
   const absent = join(dataDir, 'skills', 'not-created')
   assert.equal(await skills.directory('not-created'), absent)
   // 非法 id → HelmError 400（与原 skillDirectoryHelper 口径一致）
@@ -202,12 +204,8 @@ test('external: directory() 三态解析与非法 id HelmError 400', { timeout: 
     assert.equal(err.status, 400)
     return true
   })
-  // 软链技能目录拒绝解析成根外目标
-  const outside = join(scratchRoot, 'dir-outside')
-  await mkdir(join(outside, 'references'), { recursive: true })
-  await writeFile(join(outside, 'SKILL.md'), 'x')
-  await symlink(outside, join(dataDir, 'skills', 'linked-skill'))
-  await assert.rejects(() => skills.directory('linked-skill'), /符号链接|软链/)
+  // 目录坐标是写入目标，不探测/跟随任何外部根目录。
+  assert.notEqual(await skills.directory('ext-skill'), join(ext, 'ext-skill'))
 })
 
 test('external: dataDir 坏 frontmatter 仍如实抛错（严格语义不回退）', { timeout: 60_000 }, async () => {
