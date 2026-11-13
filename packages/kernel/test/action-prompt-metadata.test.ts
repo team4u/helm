@@ -96,6 +96,11 @@ test('坏提示元数据在注册边界显式拒绝：动作与工具同标准',
     expectHelmError('invalid_action_spec', 'promptGuidelines'),
   );
 
+  assert.throws(
+    () => cap.registerAction('p', baseAction({ promptGuidelines: new Array<string>(1) })),
+    expectHelmError('invalid_action_spec', 'promptGuidelines'),
+  );
+
   // 工具：同标准（invalid_tool_spec）
   assert.throws(
     () => cap.registerTool('p', baseTool({ promptSnippet: '\n' })),
@@ -103,6 +108,11 @@ test('坏提示元数据在注册边界显式拒绝：动作与工具同标准',
   );
   assert.throws(
     () => cap.registerTool('p', baseTool({ promptGuidelines: [' '] })),
+    expectHelmError('invalid_tool_spec', 'promptGuidelines'),
+  );
+
+  assert.throws(
+    () => cap.registerTool('p', baseTool({ promptGuidelines: new Array<string>(1) })),
     expectHelmError('invalid_tool_spec', 'promptGuidelines'),
   );
 

@@ -154,7 +154,7 @@ function validatedPromptFields(
     guidelines !== undefined &&
     (!Array.isArray(guidelines) ||
       guidelines.length === 0 ||
-      guidelines.some((item) => typeof item !== 'string' || item.trim().length === 0))
+      Array.from(guidelines).some((item) => typeof item !== 'string' || item.trim().length === 0))
   ) {
     throw new HelmError(code, `${what} 的 promptGuidelines 必须是非空字符串数组（每项非空非纯空白）`, 400);
   }
