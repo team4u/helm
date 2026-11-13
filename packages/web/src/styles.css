@@ -38,6 +38,17 @@
   --fg-subtle: #b9b9c2;
   --fg-on-solid: #ffffff;
 
+  /* Markdown 正文阅读色阶（Soft Ink）：正文约 88% 墨色去眩光，
+     标题/加粗压实锚点，列表符号与引用退灰，行内代码压印而非描框 */
+  --prose-fg: #2c2d35;
+  --prose-strong: #18181d;
+  --prose-muted: #5a5b66;
+  --prose-marker: #85858d;
+  --prose-code-fg: #24292f;
+  --prose-code-bg: #eceef2;
+  --prose-code-border: #dcdce2;
+  --prose-link: #4338ca;
+
   --border: #e3e3e8;
   --border-strong: #d0d0d6;
   --border-focus: #4f46e5;
@@ -119,6 +130,16 @@
   --fg-muted: #8b8b94;
   --fg-subtle: #56565f;
   --fg-on-solid: #14142a;
+
+  /* 深色正文降亮度消光晕（Halation）：标题/加粗才提亮，列表符号去噪 */
+  --prose-fg: #d9d9e0;
+  --prose-strong: #f2f2f7;
+  --prose-muted: #a0a0ab;
+  --prose-marker: #707079;
+  --prose-code-fg: #e2e4ed;
+  --prose-code-bg: #25262c;
+  --prose-code-border: #35363f;
+  --prose-link: #a5b4fc;
 
   --border: #333339;
   --border-strong: #404048;
@@ -1095,7 +1116,7 @@ button,
 }
 
 .msg-ai-body {
-  color: var(--fg);
+  color: var(--prose-fg);
   font-size: 14px;
   line-height: 1.68;
   word-break: break-word;
@@ -1115,6 +1136,18 @@ button,
   margin: 16px 0 8px;
   font-weight: 600;
   line-height: 1.35;
+  color: var(--prose-strong);
+}
+
+/* 加粗与标题同层压实；正文链接降饱和并柔化下划线 */
+.msg-ai-body strong {
+  color: var(--prose-strong);
+}
+
+.msg-ai-body a {
+  color: var(--prose-link);
+  text-decoration-color: color-mix(in srgb, var(--prose-link) 40%, transparent);
+  text-underline-offset: 3px;
 }
 
 .msg-ai-body ul,
@@ -1123,12 +1156,18 @@ button,
   padding-left: 20px;
 }
 
+/* 列表符号/序号退灰：AI 回复列表密集时左侧不再满屏亮色噪点 */
+.msg-ai-body li::marker {
+  color: var(--prose-marker);
+}
+
 .msg-ai-body code:not(pre code) {
   font-family: var(--font-mono);
   font-size: 13px;
   padding: 1.5px 5px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
+  color: var(--prose-code-fg);
+  background: var(--prose-code-bg);
+  border: 1px solid var(--prose-code-border);
   border-radius: 4px;
 }
 
@@ -1383,6 +1422,17 @@ button,
 
 .thinking-expanded-body .msg-ai-body code:not(pre code) {
   font-size: 12px;
+}
+
+/* 思考过程整体弱化：加粗/行内代码/链接继承弱化色，仅靠字重与底色区分 */
+.thinking-expanded-body .msg-ai-body strong,
+.thinking-expanded-body .msg-ai-body code:not(pre code),
+.thinking-expanded-body .msg-ai-body a {
+  color: inherit;
+}
+
+.thinking-expanded-body .msg-ai-body a {
+  text-decoration-color: currentColor;
 }
 
 /* 上下文重置 / 精简 26px 分割线 */
