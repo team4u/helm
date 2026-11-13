@@ -370,6 +370,77 @@ test('win32 helm shim 执行：不信任转换输出——空值与不可执行�
   }
 })
 
+// ---------------------------------------------------------------------------
+// 6. env 注入（Electron 宿主）与 HELM_CLI_ENTRY 显式入口（安装包 payload 布局）
+// ---------------------------------------------------------------------------
+
+test('env 注入：三种 wrapper 均以 env/set 注入 ELECTRON_RUN_AS_NODE=1，无 env 时与历史输出一致', { timeout: 60_000 }, () => {
+  const base: CliShimPlan = { execPath: '/opt/electron/helm', entryArgs: ['/release/cli/dist/index.js'] }
+  const withEnv: CliShimPlan = { ...base, env: { ELECTRON_RUN_AS_NODE: '1' } }
+
+  // POSIX host：exec env 'K=V' —— 经真实 /bin/sh 验证注入生效且参数透传不变。
+  const posix = buildPosixHostShim(withEnv)
+  assert.equal(
+    posix,
+    `#!/bin/sh\nexec env 'ELECTRON_RUN_AS_NODE=1' '/opt/electron/helm' '/release/cli/dist/index.js' "$@"\n`,
+  )
+  assert.equal(buildPosixHostShim(base), `#!/bin/sh\nexec '/opt/electron/helm' '/release/cli/dist/index.js' "$@"\n`, '无 env 时与历史输出逐字节一致')
+
+  // Windows cmd：setlocal + set "K=V"（不污染人类 cmd 会话）；无 env 时与历史输出一致。
+  const cmd = buildWindowsCmdWrapper(withEnv)
+  assert.equal(
+    cmd,
+    `@echo off\r\nsetlocal\r\nset "ELECTRON_RUN_AS_NODE=1"\r\n"/opt/electron/helm" "/release/cli/dist/index.js" %*\r\n`,
+  )
+  assert.equal(buildWindowsCmdWrapper(base), `@echo off\r\n"/opt/electron/helm" "/release/cli/dist/index.js" %*\r\n`, '无 env 时与历史输出逐字节一致')
+
+  // Windows POSIX shim（WSL/GitBash）：exec env 'K=V' "$helm_node"。
+  const winPosix = buildWindowsPosixShim(withEnv)
+  assert.ok(winPosix.includes(`exec env 'ELECTRON_RUN_AS_NODE=1' "$helm_node"`), '须以 env 注入')
+  assert.ok(!buildWindowsPosixShim(base).includes('exec env '), '无 env 时不得出现 env 前缀')
+})
+
+test('env 注入真实执行：POSIX shim 经 /bin/sh 生效（子进程可见 ELECTRON_RUN_AS_NODE=1）', { timeout: 60_000 }, async () => {
+  const dir = await mkdtemp(join(rootDir, 'env-real-'))
+  try {
+    // 用 node 本体当“Electron”：shim exec env ELECTRON_RUN_AS_NODE=1 node -e 'print env'
+    const plan: CliShimPlan = {
+      execPath: process.execPath,
+      entryArgs: ['-e', 'process.stdout.write(process.env.ELECTRON_RUN_AS_NODE ?? "<unset>")'],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    }
+    const shim = join(dir, 'helm')
+    await writeFile(shim, buildPosixHostShim(plan), 'utf8')
+    await chmod(shim, 0o755)
+    // 从一个故意带污染值的环境启动，验证 shim 内 env 覆盖而非继承。
+    const { stdout } = await run(shim, [], { env: { ...process.env, ELECTRON_RUN_AS_NODE: 'polluted' } })
+    assert.equal(stdout, '1', 'shim 必须把 ELECTRON_RUN_AS_NODE=1 注入 CLI 子进程')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('HELM_CLI_ENTRY：显式入口直接生成 shim，不做仓库上溯推导；未设置时行为不变', { timeout: 60_000 }, async () => {
+  const dir = await mkdtemp(join(rootDir, 'explicit-entry-'))
+  const entry = '/opt/helm-release/cli/dist/index.js'
+  const prev = process.env.HELM_CLI_ENTRY
+  try {
+    process.env.HELM_CLI_ENTRY = entry
+    const manager = makeManager(dir)
+    await manager.ensureCliBinDir()
+    const content = await readFile(join(dir, 'bin', 'helm'), 'utf8')
+    // 入口 = 显式路径单参数；不出现仓库 tsx/源码推导入口。
+    assert.ok(content.includes(shQuote(entry)), 'shim 须指向 HELM_CLI_ENTRY')
+    assert.ok(!content.includes('tsx'), '显式入口下不得出现仓库 tsx 推导')
+    assert.ok(!content.includes('src/index.ts'), '显式入口下不得出现仓库源码 CLI 推导')
+    assert.equal(content, buildPosixHostShim({ execPath: process.execPath, entryArgs: [entry] }))
+  } finally {
+    if (prev === undefined) delete process.env.HELM_CLI_ENTRY
+    else process.env.HELM_CLI_ENTRY = prev
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('teardown: 清理临时根目录', { timeout: 60_000 }, () => {
   rmSync(rootDir, { recursive: true, force: true })
 })
