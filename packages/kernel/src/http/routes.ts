@@ -16,6 +16,7 @@ import { redactJsonValue } from '../redact.js'
 import type {
   EnvExecStreamFrame,
   ArtifactMetadata,
+  ConversationListFilter,
   ConversationStatus,
   PluginConfigFieldSchema,
   Profile,
@@ -1312,17 +1313,33 @@ function requiredStringField(body: Record<string, unknown>, field: string): stri
   return value
 }
 
-function parseConversationFilter(url: URL): { profileId?: string; tag?: string; status?: ConversationStatus } {
+function parseConversationFilter(url: URL): ConversationListFilter {
   const profileId = url.searchParams.get('profileId') ?? undefined
   const tag = url.searchParams.get('tag') ?? undefined
   const status = url.searchParams.get('status') ?? undefined
   if (status !== undefined && !['working', 'blocked', 'done', 'idle', 'error'].includes(status)) {
     throw new ValidationError('status 需为 working|blocked|done|idle|error')
   }
+  // 降噪缺省：未显式指定 parent/all 时仅顶层会话；子会话经 ?parent=<id> 精确查看
+  // 或 ?all=1 全量列出。两者互斥，组合请求直接 400（不猜测优先级）。
+  const parentRaw = url.searchParams.get('parent')
+  const all = parseOptionalBooleanFlag(url, 'all')
+  if (parentRaw !== null && all === true) {
+    throw new ValidationError('all 与 parent 互斥：全量列出与精确于会话过滤不可同时指定')
+  }
+  let parentConversationId: number | undefined
+  if (parentRaw !== null) {
+    if (!/^\d+$/.test(parentRaw) || !Number.isSafeInteger(Number(parentRaw)) || Number(parentRaw) < 1) {
+      throw new ValidationError('parent 需为正整数会话 ID')
+    }
+    parentConversationId = Number(parentRaw)
+  }
   return {
     ...(profileId !== undefined ? { profileId } : {}),
     ...(tag !== undefined ? { tag } : {}),
     ...(status !== undefined ? { status: status as ConversationStatus } : {}),
+    ...(parentConversationId !== undefined ? { parentConversationId } : {}),
+    ...(parentConversationId === undefined && all !== true ? { topLevelOnly: true } : {}),
   }
 }
 

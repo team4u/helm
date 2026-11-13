@@ -88,6 +88,20 @@ export interface ConversationPatch {
   pinned?: boolean
 }
 
+/** 会话列表过滤器（`GET /api/conversations` 查询与 `host.listConversations` 共用）。
+ * 提供的字段之间 AND 组合；缺省字段不限。
+ * HTTP 入口在未显式指定 `parent`/`all` 时默认 `topLevelOnly: true`（降噪）；
+ * 进程内调用方（插件 host 端口）不受该默认影响，仍全量列出。 */
+export interface ConversationListFilter {
+  profileId?: string
+  tag?: string
+  status?: ConversationStatus
+  /** 精确匹配直接子会话（parentConversationId === 该值）。 */
+  parentConversationId?: number
+  /** 仅顶层会话（无 parentConversationId）；进程内缺省为 false。 */
+  topLevelOnly?: boolean
+}
+
 /** 单条会话输入（`POST /api/conversations/:id/input` 请求体）。 */
 export interface ConversationInput {
   id: string

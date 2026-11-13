@@ -81,11 +81,13 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations list ----
   cmds.push({
     path: ['conversations', 'list'],
-    description: '列出会话（GET /api/conversations）',
+    description: '列出会话（GET /api/conversations；默认仅顶层会话，--all 含子会话，--parent 精确直接子会话）',
     flags: [
       { name: 'profile', type: 'string', help: '按 profileId 过滤' },
       { name: 'status', type: 'string', help: '按状态过滤（working|blocked|done|idle|error）' },
       { name: 'tag', type: 'string', help: '按 tag 过滤' },
+      { name: 'all', type: 'boolean', help: '列出全部会话（含子代理等派生子会话；默认仅顶层）' },
+      { name: 'parent', type: 'number', help: '仅列出该会话的直接子会话' },
     ],
     async run(ctx: CommandContext) {
       const parsed = parseFlags(
@@ -93,6 +95,8 @@ export function conversationsCommands(): CommandSpec[] {
           { name: 'profile', type: 'string' },
           { name: 'status', type: 'string' },
           { name: 'tag', type: 'string' },
+          { name: 'all', type: 'boolean' },
+          { name: 'parent', type: 'number' },
         ],
         ctx.args,
       )
@@ -101,6 +105,19 @@ export function conversationsCommands(): CommandSpec[] {
       const profile = flagValue<string>(parsed.flags, 'profile')
       const status = flagValue<string>(parsed.flags, 'status')
       const tag = flagValue<string>(parsed.flags, 'tag')
+      const all = parsed.flags.get('all') === true
+      const parent = flagValue<number>(parsed.flags, 'parent')
+      if (all && parsed.flags.has('parent')) {
+        throw new CliError('--all 与 --parent 互斥：全量列出与精确子会话过滤不可同时指定', 'invalid_flag_value')
+      }
+      if (parent !== undefined) {
+        if (!Number.isInteger(parent) || parent < 1) {
+          throw new CliError(`--parent 需为正整数会话 ID，实得 "${parent}"`, 'invalid_flag_value')
+        }
+        query.set('parent', String(parent))
+      } else if (all) {
+        query.set('all', '1')
+      }
       if (profile !== undefined) query.set('profileId', profile)
       if (status !== undefined) {
         if (!['working', 'blocked', 'done', 'idle', 'error'].includes(status)) {

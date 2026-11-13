@@ -25,7 +25,7 @@ managedByPlugin: {{MANAGED_BY}}
 - `helm login --password <pwd>`：登录并保存凭据至 cli-token。
 
 ### 会话
-- `helm conversations list [--profile <id>] [--status <s>] [--tag <t>]`
+- `helm conversations list [--profile <id>] [--status <s>] [--tag <t>]`：默认仅顶层会话（降噪）；`--all` 含子代理等全部派生子会话，`--parent <id>` 精确列出某会话的直接子会话（与 --all 互斥）。
 - `helm conversations get [id] [--current] [--limit N] [--cursor <c>]`（含分页时间线）
 - `helm conversations create [--title <t>] [--profile-id <id>] [--node <nodeId>] [--cwd <dir>] [--model <m>] [--tags <t>]`
 - `helm conversations update <id> --title/--model/--thinking/--profile-id/--node/--cwd/--pinned/--unread`

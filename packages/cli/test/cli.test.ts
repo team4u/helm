@@ -162,6 +162,50 @@ test('setup/login 换 token 写 0600 cli-token，不碰 providers/pluginSecrets 
   }
 })
 
+test('conversations list 降噪查询契约：缺省不带参数、--all 发 all=1、--parent 发 parent=<id>、非法组合拒发', { timeout: 60_000 }, async () => {
+  const listBody: unknown[] = []
+  const hub = await startHub({
+    'GET /api/conversations': () => ({ body: listBody }),
+    'GET /api/conversations?all=1': () => ({ body: listBody }),
+    'GET /api/conversations?parent=3': () => ({ body: listBody }),
+    'GET /api/conversations?parent=3&profileId=worker': () => ({ body: listBody }),
+  })
+  const dir = await tempDir()
+  const env = makeEnv(hub.url, dir)
+  try {
+    // 缺省：不带任何 query（服务端默认仅顶层）
+    const top = await run(['conversations', 'list', '--json'], env)
+    assert.equal(top.code, 0, top.err)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations')
+    // --all：全量
+    const all = await run(['conversations', 'list', '--all', '--json'], env)
+    assert.equal(all.code, 0, all.err)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations?all=1')
+    // --parent：精确直接子会话
+    const parent = await run(['conversations', 'list', '--parent', '3', '--json'], env)
+    assert.equal(parent.code, 0, parent.err)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations?parent=3')
+    // 与既有过滤维度叠加（query 序列化顺序：parent 先于 profileId，与命令实现一致）
+    const combo = await run(['conversations', 'list', '--parent', '3', '--profile', 'worker', '--json'], env)
+    assert.equal(combo.code, 0, combo.err)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations?parent=3&profileId=worker')
+    // 非法 --parent：客户端直接拒绝，不发起请求
+    for (const bad of ['abc', '0', '-1', '2.5']) {
+      const res = await run(['conversations', 'list', '--parent', bad, '--json'], env)
+      assert.equal(res.code, 1, `--parent ${bad} 应报错`)
+      assert.ok(res.err.includes('parent'), `报错应提及 parent：${res.err}`)
+    }
+    assert.equal(hub.hits.filter((h) => h.path.includes('parent=')).length, 2, '非法 --parent 不得发起请求')
+    // --all 与 --parent 互斥：客户端拒绝
+    const conflict = await run(['conversations', 'list', '--all', '--parent', '3', '--json'], env)
+    assert.equal(conflict.code, 1)
+    assert.ok(conflict.err.includes('互斥'), `报错应说明互斥：${conflict.err}`)
+  } finally {
+    await hub.close()
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('思考档位 CLI 透传：全局部分更新、当前会话覆盖与 Profile 合并', { timeout: 60_000 }, async () => {
   const hub = await startHub({
     'PUT /api/models/default': (body) => ({ body }),

@@ -13,9 +13,9 @@ import type {
   ConversationDetail,
   ConversationInit,
   ConversationInput,
+  ConversationListFilter,
   ConversationPatch,
   ConversationScope,
-  ConversationStatus,
   ConversationSummary,
   InputOrigin,
   TurnSettledPayload,
@@ -965,7 +965,7 @@ export interface HelmHostApi {
     guard?: GuardedMutationExpectation,
   ): Promise<void>
   createConversation(init: ConversationInit): Promise<ConversationSummary>
-  listConversations(filter?: { profileId?: string; tag?: string; status?: ConversationStatus }): ConversationSummary[]
+  listConversations(filter?: ConversationListFilter): ConversationSummary[]
   /** 读取单个会话摘要；不存在时抛 HelmError。 */
   getConversation(id: number): ConversationSummary
   /** 会话详情（时间线条目 + 元数据；limit 1..500，cursor 分页）。 */

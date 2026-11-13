@@ -12,8 +12,8 @@ import type {
   ConversationDetail,
   ConversationInit,
   ConversationInputResult,
+  ConversationListFilter,
   ConversationPatch,
-  ConversationStatus,
   ConversationSummary,
   ConversationWithdrawResponse,
   EnvExecRequest,
@@ -235,11 +235,9 @@ export interface KernelRuntimeLike {
    */
   setHubUrl?(url: string): void
 
-  listConversations(filter?: {
-    profileId?: string
-    tag?: string
-    status?: ConversationStatus
-  }): Promise<ConversationSummary[]> | ConversationSummary[]
+  listConversations(
+    filter?: ConversationListFilter,
+  ): Promise<ConversationSummary[]> | ConversationSummary[]
   /** GET /api/conversations/:id 消费：摘要 + 分页时间线。 */
   getConversationDetail(
     id: number,

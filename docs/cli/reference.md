@@ -37,7 +37,7 @@ CLI 登录态保存于 `<dataDir>/cli-token`（0600，`{ hubUrl, token }`）；�
 
 ### 会话与输入
 
-**`helm conversations list [--profile <id>] [--status <st>] [--tag <tag>]`** — 列出会话。`--status` 取值 `working|blocked|done|idle|error`。
+**`helm conversations list [--profile <id>] [--status <st>] [--tag <tag>] [--all | --parent <id>]`** — 列出会话。`--status` 取值 `working|blocked|done|idle|error`。默认仅顶层会话（不含子代理等派生子会话）；`--all` 全量列出；`--parent <id>` 仅列出该会话的直接子会话（与 `--all` 互斥，需正整数）。
 
 **`helm conversations get [id] [--current] [--limit <n>] [--cursor <str>]`** — 会话详情与分页时间线；`--limit` 缺省 50，`--cursor` 回传上次响应 `nextCursor`。
 

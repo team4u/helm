@@ -228,6 +228,8 @@ export function assembleRuntimeServices(
     harness: init.harness,
     store: options.store,
     redactError: (text) => options.stashService.redact(text),
+    // 回合结算 unread 策略：背景派生子会话（helm/bot 归属且有父链）不置 unread。
+    ownershipOf: (id) => ownership.getOwnership(id),
     events: {
       onSummaryChanged: (summary) => {
         if (options.store.getConv(summary.id) === undefined || options.store.isDeleted(summary.id)) return

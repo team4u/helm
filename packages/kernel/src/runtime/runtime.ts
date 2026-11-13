@@ -20,6 +20,7 @@ import {
   type ConversationDetail,
   type ConversationInit,
   type ConversationInputResult,
+  type ConversationListFilter,
   type ConversationPatch,
   type ConversationSummary,
   type ConversationWithdrawResponse,
@@ -512,7 +513,7 @@ export class KernelRuntime {
   // 会话操作委托（ConversationService）
   // ------------------------------------------------------------------
 
-  listConversations(filter?: { profileId?: string; tag?: string; status?: string }): ConversationSummary[] {
+  listConversations(filter?: ConversationListFilter): ConversationSummary[] {
     return this.conversations.listConversations(filter)
   }
 

@@ -148,15 +148,22 @@ export class ConversationTracker {
     events: TrackerEvents
     /** 错误摘要对外脱敏（与运行时 SecretStash 同源）；缺省恒等（仅测试环境）。 */
     redactError?: (text: string) => string
+    /** 会话归属权现读（Runtime 注入 ownership.getOwnership）；缺省视为 human。
+     * 仅用于回合结算 unread 策略：背景派生子会话不制造人类未读。 */
+    ownershipOf?: (id: number) => 'helm' | 'bot' | 'human'
   }) {
     this.harness = options.harness
     this.store = options.store
     this.events = options.events
     this.redactError = options.redactError ?? ((text) => text)
+    this.ownershipOf = options.ownershipOf
   }
 
   /** 错误诊断摘要脱敏（Runtime 注入 stashService.redact；防 provider 错误回显已登记秘密）。 */
   private readonly redactError: (text: string) => string
+
+  /** 会话归属权现读（缺省恒 human）；仅回合结算 unread 策略消费。 */
+  private readonly ownershipOf: ((id: number) => 'helm' | 'bot' | 'human') | undefined
 
   /** 每次观察独立令牌；停观即删除，迟到异步结果不得复活状态。 */
   private readonly observeGenerations = new Map<number, symbol>()
@@ -870,9 +877,12 @@ export class ConversationTracker {
       }
       // 先推进持久水位，再构造结算快照；插件与读取接口观察同一终态。
       // completionSeq 推进 + unread 置位（human 显式 patch 才清零）。
+      // 背景派生子会话（ownedBy 非 human 且有父链，如受管 subagent / SuperAgent
+      // Worker）完成不制造人类未读；人类 fork（有父链但 human 归属）与顶层
+      // 直连会话保持 unread 语义。失败/中止一律不置 unread（既有契约）。
       const meta = this.store.getConv(conversationId)
       if (meta) {
-        const unread = outcome === 'completed'
+        const unread = outcome === 'completed' && !this.isBackgroundDerived(conversationId, meta)
         const updated: ConvMeta = {
           ...meta,
           unread,
@@ -920,6 +930,19 @@ export class ConversationTracker {
           this.endSettled(conversationId)
         },
       )
+    }
+  }
+
+  /** 背景派生子会话判定：有父链且归属非 human（受管 subagent / Worker 等）。
+   * 归属回调缺省或读取失败（含已删除）一律按 human 处理——宁多读不漏报，
+   * 绝不因归属不明而吞掉人类未读通知。 */
+  private isBackgroundDerived(conversationId: number, meta: ConvMeta): boolean {
+    if (meta.parentConversationId === undefined) return false
+    if (this.ownershipOf === undefined) return false
+    try {
+      return this.ownershipOf(conversationId) !== 'human'
+    } catch {
+      return false
     }
   }
 

@@ -178,6 +178,10 @@ function makeKernel(): KernelRuntimeLike {
       if (filter?.profileId) out = out.filter((c) => c.profileId === filter.profileId)
       if (filter?.tag) out = out.filter((c) => c.tags.includes(filter.tag!))
       if (filter?.status) out = out.filter((c) => c.status === filter.status)
+      if (filter?.parentConversationId !== undefined) {
+        out = out.filter((c) => c.parentConversationId === filter.parentConversationId)
+      }
+      if (filter?.topLevelOnly) out = out.filter((c) => c.parentConversationId === undefined)
       return out
     },
     async getConversationDetail(id: number, opts?: { limit?: number; cursor?: string }) {
@@ -434,6 +438,13 @@ before(async () => {
   handler0 = createHubHandler(makeKernel())
   conversations.set(ROOT_CONVERSATION_ID, summary(1, '个人助理'))
   conversations.set(2, { ...summary(2, '工人'), profileId: 'worker', tags: ['worker'] })
+  conversations.set(3, {
+    ...summary(3, '子代理 3'),
+    parentConversationId: ROOT_CONVERSATION_ID,
+    parentToolCallId: 'call-1',
+    ownedBy: 'helm',
+  })
+  conversations.set(4, { ...summary(4, '分叉 4'), parentConversationId: 2 })
 })
 
 after(async () => {
@@ -655,6 +666,51 @@ test('GET /api/conversations?profileId 过滤透传（与 tag/status 可组合�
   assert.equal(res.body[0].profileId, 'worker')
   const none = await call(handler, 'GET', '/api/conversations?profileId=nobody')
   assert.deepEqual(none.body, [])
+})
+
+test('会话列表降噪契约：缺省仅顶层、all=1 全量、parent=<id> 直接子会话、非法参数 400', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  // 缺省：仅顶层会话（无 parentConversationId）
+  const top = await call(handler, 'GET', '/api/conversations')
+  assert.equal(top.status, 200)
+  assert.ok(top.body.every((c: ConversationSummary) => c.parentConversationId === undefined), '缺省不得含子会话')
+  assert.ok(top.body.some((c: ConversationSummary) => c.id === ROOT_CONVERSATION_ID), '顶层入口会话必须在列')
+  // --all：全量（含子代理与分叉）
+  const all = await call(handler, 'GET', '/api/conversations?all=1')
+  assert.equal(all.status, 200)
+  assert.ok(all.body.some((c: ConversationSummary) => c.id === 3), 'all=1 应含子代理子会话')
+  assert.ok(all.body.some((c: ConversationSummary) => c.id === 4), 'all=1 应含分叉子会话')
+  // parent=<id>：精确直接子会话
+  const children = await call(handler, 'GET', `/api/conversations?parent=${ROOT_CONVERSATION_ID}`)
+  assert.equal(children.status, 200)
+  assert.deepEqual(
+    children.body.map((c: ConversationSummary) => c.id),
+    [3],
+    'parent=1 仅返回直接子会话',
+  )
+  const noneChildren = await call(handler, 'GET', '/api/conversations?parent=999')
+  assert.equal(noneChildren.status, 200)
+  assert.deepEqual(noneChildren.body, [])
+  // 与其它过滤维度 AND 组合（分叉 4 继承 worker profile：验证父子维度叠加）
+  const workerChild = await call(handler, 'GET', '/api/conversations?parent=2&profileId=assistant')
+  assert.equal(workerChild.status, 200)
+  assert.deepEqual(workerChild.body.map((c: ConversationSummary) => c.id), [4])
+  // 严格输入校验：非法 parent / all 与 parent 互斥 / 非法 all
+  for (const bad of ['abc', '0', '-1', '1.5', '999999999999999999999']) {
+    const res = await call(handler, 'GET', `/api/conversations?parent=${bad}`)
+    assert.equal(res.status, 400, `parent=${bad} 应 400`)
+    assert.equal(res.body.error.code, 'validation_error')
+  }
+  const conflict = await call(handler, 'GET', `/api/conversations?all=1&parent=${ROOT_CONVERSATION_ID}`)
+  assert.equal(conflict.status, 400)
+  assert.equal(conflict.body.error.code, 'validation_error')
+  const badAll = await call(handler, 'GET', '/api/conversations?all=yes')
+  assert.equal(badAll.status, 400)
+  assert.equal(badAll.body.error.code, 'validation_error')
+  // all=0 显式回缺省（仅顶层），与 parent 也可组合（all=0 不构成互斥冲突）
+  const allOff = await call(handler, 'GET', `/api/conversations?all=0&parent=${ROOT_CONVERSATION_ID}`)
+  assert.equal(allOff.status, 200)
+  assert.deepEqual(allOff.body.map((c: ConversationSummary) => c.id), [3])
 })
 
 test('非法 conversationId 与非法字段 400 validation_error', { timeout: 60_000 }, async () => {

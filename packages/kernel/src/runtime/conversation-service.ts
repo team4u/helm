@@ -14,6 +14,7 @@ import type {
   ConversationDetail,
   ConversationInit,
   ConversationInputResult,
+  ConversationListFilter,
   ConversationPatch,
   ConversationSummary,
   ConversationWithdrawResponse,
@@ -332,13 +333,19 @@ export class ConversationService {
     return { ...summary, ownedBy: this.o.ownershipOf(summary.id) }
   }
 
-  listConversations(filter?: { profileId?: string; tag?: string; status?: string }): ConversationSummary[] {
+  listConversations(filter?: ConversationListFilter): ConversationSummary[] {
     return this.store
       .listConvs()
       .map((meta) => this.summaryWithOwnership(meta.id))
       .filter((s) => (filter?.profileId ? s.profileId === filter.profileId : true))
       .filter((s) => (filter?.tag ? s.tags.includes(filter.tag) : true))
       .filter((s) => (filter?.status ? s.status === filter.status : true))
+      .filter((s) =>
+        filter?.parentConversationId !== undefined
+          ? s.parentConversationId === filter.parentConversationId
+          : true,
+      )
+      .filter((s) => (filter?.topLevelOnly ? s.parentConversationId === undefined : true))
   }
 
   getConversation(id: number): ConversationSummary {
