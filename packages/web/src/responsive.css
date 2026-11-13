@@ -25,12 +25,16 @@ button, a, input, select, textarea { touch-action: manipulation; }
 .msg-ai-body blockquote { border-left: 2px solid var(--border-strong); margin-left: 0; padding-left: 14px; color: var(--fg-secondary); }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .code-block-pre { white-space: pre; overflow-wrap: normal; }
-.hljs-comment, .hljs-quote { color: var(--fg-muted); font-style: italic; }
-.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type { color: var(--accent); }
-.hljs-string, .hljs-regexp, .hljs-template-tag, .hljs-addition { color: var(--ok); }
-.hljs-title, .hljs-section, .hljs-built_in { color: var(--fg); font-weight: 600; }
-.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-attr { color: var(--warn); }
-.code-highlight-error { display: block; padding: 4px 12px; color: var(--err); font-size: 11px; }
+.hljs-comment, .hljs-quote { color: var(--code-token-comment); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type { color: var(--code-token-keyword); }
+.hljs-string, .hljs-regexp, .hljs-template-tag { color: var(--code-token-string); }
+.hljs-addition { color: var(--code-token-addition); }
+.hljs-title, .hljs-section, .hljs-built_in, .hljs-name { color: var(--code-token-title); font-weight: 600; }
+.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-attr, .hljs-variable, .hljs-template-variable { color: var(--code-token-number); }
+.hljs-meta, .hljs-meta .hljs-keyword, .hljs-selector-class, .hljs-selector-id { color: var(--code-token-muted); }
+.hljs-params, .hljs-subst, .hljs-attribute { color: var(--code-token-muted); }
+.hljs-deletion { color: var(--code-token-deletion); }
+.code-highlight-error { display: block; padding: 5px 14px; border-bottom: 1px solid var(--code-border); color: var(--err); font-size: 11px; }
 @container (max-width: 680px) {
   .conversation-topbar { gap: 8px; padding: 0 12px; }
   /* 移动端顶栏左侧让位汉堡菜单后标题在更窄的剩余空间里垂直居中 */

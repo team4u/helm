@@ -19,6 +19,19 @@
   --bg-active: rgba(28, 28, 33, 0.08);
   --bg-backdrop: rgba(0, 0, 0, 0.28);
 
+  /* 代码区独立于页面底色，保持 GitHub 式阅读层次 */
+  --code-bg: #f6f8fa;
+  --code-header-bg: #eef1f4;
+  --code-border: #d0d7de;
+  --code-token-comment: #6e7781;
+  --code-token-keyword: #cf222e;
+  --code-token-string: #0a3069;
+  --code-token-title: #8250df;
+  --code-token-number: #0550ae;
+  --code-token-muted: #57606a;
+  --code-token-addition: #1a7f37;
+  --code-token-deletion: #cf222e;
+
   --fg: #1c1c21;
   --fg-secondary: #4b4b53;
   --fg-muted: #85858d;
@@ -87,6 +100,19 @@
   --bg-hover: #36363d;
   --bg-active: rgba(255, 255, 255, 0.09);
   --bg-backdrop: rgba(0, 0, 0, 0.55);
+
+  /* 代码区独立于页面底色，保持 GitHub 式阅读层次 */
+  --code-bg: #161b22;
+  --code-header-bg: #21262d;
+  --code-border: #30363d;
+  --code-token-comment: #8b949e;
+  --code-token-keyword: #ff7b72;
+  --code-token-string: #a5d6ff;
+  --code-token-title: #d2a8ff;
+  --code-token-number: #79c0ff;
+  --code-token-muted: #c9d1d9;
+  --code-token-addition: #3fb950;
+  --code-token-deletion: #f85149;
 
   --fg: #ededf1;
   --fg-secondary: #b9b9c1;
@@ -4111,34 +4137,66 @@ input::placeholder {
   color: var(--ok);
 }
 
-/* 代码块容器 */
+/* 代码块容器：独立底色、细边框和克制阴影，靠近 GitHub 的阅读层次 */
 .code-block-wrap {
-  margin: 8px 0;
-  border: 1px solid var(--border);
+  margin: 10px 0;
+  border: 1px solid var(--code-border);
   border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
+  background: var(--code-bg);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
+  isolation: isolate;
 }
 
 .code-block-header {
-  height: 28px;
-  padding: 0 10px;
+  min-height: 32px;
+  padding: 0 8px 0 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border);
+  gap: 10px;
+  border-bottom: 1px solid var(--code-border);
+  background: var(--code-header-bg);
   font-family: var(--font-mono);
   font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--fg-secondary);
+}
+
+.code-block-header > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-block-header .btn-ghost {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 7px;
   color: var(--fg-muted);
+}
+
+.code-block-header .btn-ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
 }
 
 .code-block-pre {
   margin: 0;
-  padding: 10px 12px;
+  padding: 12px 14px;
   overflow-x: auto;
+  background: var(--code-bg);
+  color: var(--fg);
   font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 12.5px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.code-block-pre code {
+  font-family: inherit;
 }
 
 .code-block-pre-flush {
@@ -4147,6 +4205,10 @@ input::placeholder {
 
 .code-block-wrap-flush {
   margin: 0 !important;
+}
+
+.code-block-wrap-flush .code-block-pre {
+  border-radius: 0;
 }
 
 .code-block-header-actions {
@@ -6188,6 +6250,14 @@ input[type="search"]::-moz-search-clear-button {
 /* ==========================================================================
  * 会话大纲快速导航浮层（ConversationOutlinePopover）
  * ========================================================================== */
+
+.artifact-markdown-preview {
+  min-width: 0;
+}
+
+.artifact-markdown-preview [data-heading-index] {
+  scroll-margin-top: 12px;
+}
 
 .conversation-outline-trigger.is-open {
   background: var(--bg-hover);
