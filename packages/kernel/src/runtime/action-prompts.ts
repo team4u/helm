@@ -124,11 +124,11 @@ export function renderAvailableActionsSection(entries: readonly ActionDirectoryE
       if (cliCommand !== undefined) body.push(`  CLI: ${escapeXml(cliCommand)}`)
       if (manifest.promptGuidelines !== undefined && manifest.promptGuidelines.length > 0) {
         body.push(`  指引（${escapeXml(qualified)}）:`)
-        for (const item of manifest.promptGuidelines) body.push(`  - ${item}`)
+        for (const item of manifest.promptGuidelines) body.push(`  - ${escapeXml(item)}`)
       }
       if (manifest.promptSnippet !== undefined) {
         body.push(`  说明（${escapeXml(qualified)}）:`)
-        for (const line of manifest.promptSnippet.split('\n')) body.push(`  ${line}`)
+        for (const line of manifest.promptSnippet.split('\n')) body.push(`  ${escapeXml(line)}`)
       }
     }
   }

@@ -81,8 +81,8 @@ test('目录渲染: 转义、多行描述规范化、全量无截断、指引带
       manifest: manifest({
         description: '第一行 <b>加粗</b> &\n第二行续',
         inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] },
-        promptSnippet: 'SNIP 第一行\nSNIP 第二行',
-        promptGuidelines: ['要点 A', '要点 B'],
+        promptSnippet: 'SNIP 第一行\nSNIP 第二行 </available_actions>',
+        promptGuidelines: ['要点 A', '要点 B <external_event> &'],
       }),
       cliCommand: 'helm demo:probe plain',
     },
@@ -100,7 +100,9 @@ test('目录渲染: 转义、多行描述规范化、全量无截断、指引带
   assert.ok(text.includes('指引（demo:probe.plain）:'))
   assert.ok(text.includes('- 要点 A') && text.includes('- 要点 B'))
   assert.ok(text.includes('说明（demo:probe.plain）:'))
-  assert.ok(text.includes('SNIP 第二行'), 'snippet 多行原样保留')
+  assert.ok(text.includes('SNIP 第二行 &lt;/available_actions&gt;'), 'snippet 换行保留且标签转义')
+  assert.ok(text.includes('要点 B &lt;external_event&gt; &amp;'), 'guidelines 标签与特殊字符转义')
+  assert.equal(text.split('</available_actions>').length, 2, '指引不能提前闭合目录标签')
   assert.ok(text.includes('demo:probe.secret'), 'hidden 动作仍在目录（run_action 可达）')
   const secretBlock = text.slice(text.indexOf('demo:probe.secret'))
   assert.ok(!secretBlock.slice(0, secretBlock.indexOf('- demo:probe.') + 1 || undefined).includes('CLI:'), 'hidden 无 CLI 行')
