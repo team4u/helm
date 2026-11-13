@@ -8,6 +8,7 @@ import { importWorkflowClientModule, mountSharedPluginNamespaces } from './helpe
 
 const iconsSource = readFileSync(new URL('../src/lib/icons.tsx', import.meta.url), 'utf8')
 const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
+const ancestrySource = readFileSync(new URL('../src/conversation/ancestry-model.ts', import.meta.url), 'utf8')
 const workbenchSource = readFileSync(new URL('../src/conversation/WorkbenchDrawer.tsx', import.meta.url), 'utf8')
 mountSharedPluginNamespaces({ realHooks: true })
 const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
@@ -20,49 +21,58 @@ test('icons.tsx 支持 arrow-left 与 chevron-left 矢量图标', { timeout: 60_
   assert.match(iconsSource, /'chevron-left':\s*ChevronLeft/)
 })
 
-test('ConversationPane.tsx 在存在 parentConversationId 时渲染父级回退胶囊按钮', { timeout: 60_000 }, () => {
-  // 必须在 .pane-title-group 内部且在标题前条件渲染
+test('ConversationPane.tsx 渲染任意深度祖先面包屑并复用 pane-parent-nav-btn 胶囊', { timeout: 60_000 }, () => {
+  // 面包屑链由 ancestry-model 从 store.conversations 推导（无平行路由）
+  assert.match(paneSource, /import \{ buildAncestorChain \} from '\.\/ancestry-model\.js'/)
+  assert.match(paneSource, /buildAncestorChain\(store\.conversations, conversationId/)
+
+  // 必须在 .pane-title-group 内部且在标题前条件渲染（ancestors.length > 0）
   assert.match(
     paneSource,
-    /<div\s+className=["']pane-title-group["']>[\s\S]*?conversation\.parentConversationId\s*!==\s*undefined[\s\S]*?pane-parent-nav-btn[\s\S]*?\{renaming\s*\?/,
-    '必须在 pane-title-group 内部标题前渲染父级返回按钮',
+    /<div\s+className=["']pane-title-group["']>\s*\{ancestors\.length > 0 \?[\s\S]*?pane-breadcrumb[\s\S]*?\{renaming\s*\?/,
+    '必须在 pane-title-group 内部标题前渲染祖先面包屑',
   )
 
   // 按钮类名与无障碍属性
   assert.match(
     paneSource,
     /className=["'][^"']*pane-parent-nav-btn[^"']*["']/,
-    '返回按钮必须携带 pane-parent-nav-btn 类名',
+    '祖先胶囊必须携带 pane-parent-nav-btn 类名',
   )
   assert.match(
     paneSource,
-    /title=\{`返回父会话\s*#\$\{conversation\.parentConversationId\}`\}/,
-    '返回按钮必须具备清晰的 title 属性',
-  )
-  assert.match(
-    paneSource,
-    /aria-label=\{`返回父会话\s*#\$\{conversation\.parentConversationId\}`\}/,
-    '返回按钮必须具备无障碍 aria-label 属性',
+    /aria-label=\{`前往祖先会话 #\$\{ancestorId\}`\}/,
+    '祖先胶囊必须具备无障碍 aria-label 属性',
   )
 
-  // 图标与标识文案
+  // 图标与标识文案：首个胶囊带返回箭头，均渲染 # 前缀的等宽 ID
   assert.match(
     paneSource,
     /<HelmIcon\s+name=["']arrow-left["']\s+size=\{12\}\s*\/>/,
-    '必须使用 arrow-left 12px 图标',
+    '首个祖先胶囊必须使用 arrow-left 12px 图标',
   )
   assert.match(
     paneSource,
-    /<span\s+className=["']pane-parent-nav-label["']>#\{conversation\.parentConversationId\}<\/span>/,
-    '必须渲染带有 # 前缀的父会话 ID 胶囊标签',
+    /<span\s+className=["']pane-parent-nav-label["']>\{label\}<\/span>/,
+    '必须渲染带有 # 前缀的祖先会话 ID 胶囊标签',
   )
 
-  // 导航逻辑契约：调用 store.openTarget 导航至父会话
+  // 导航逻辑契约：抽屉内不顶掉主屏（在屏则收抽屉，否则抽屉原位切换）；
+  // 主屏/分屏内仍通过 store.openTarget 导航
   assert.match(
     paneSource,
-    /store\.openTarget\(\s*\{\s*kind:\s*['"]conversation['"],\s*conversationId:\s*conversation\.parentConversationId!?\s*\}/,
-    '点击必须通过 store.openTarget 导航至父会话',
+    /store\.setActiveModal\(\{ kind: 'conversation-drawer', conversationId: ancestorId \}\)/,
+    '抽屉内点击非在屏祖先必须原位切换抽屉，不得改变主屏',
   )
+  assert.match(
+    paneSource,
+    /store\.openTarget\(\s*\{\s*kind:\s*['"]conversation['"],\s*conversationId:\s*ancestorId\s*\}/,
+    '主屏/分屏内点击必须通过 store.openTarget 导航至祖先会话',
+  )
+
+  // 祖谱纯函数契约：防环、防超深截断
+  assert.match(ancestrySource, /MAX_ANCESTRY_DEPTH = 32/)
+  assert.match(ancestrySource, /visited\.has\(parentId\)/)
 })
 
 test('宿主工作台仅挂载通用面板；真实编译子代理卡统一由抽屉承载且无并排按钮', { timeout: 60_000 }, async () => {
@@ -81,7 +91,7 @@ test('响应式样式不保留已删除的工作台/子代理并排按钮选择�
   assert.doesNotMatch(responsiveCss, /\.workbench-split-btn|\.subagent-split-btn/)
 })
 
-test('styles.css 与 responsive.css 规范父会话胶囊按钮排版与窄屏微调', { timeout: 60_000 }, () => {
+test('styles.css 与 responsive.css 规范祖先面包屑胶囊排版与窄屏微调', { timeout: 60_000 }, () => {
   // 胶囊结构与 hover 反馈
   assert.match(
     stylesCss,
@@ -98,12 +108,22 @@ test('styles.css 与 responsive.css 规范父会话胶囊按钮排版与窄屏�
     /\.pane-parent-nav-label\s*\{[^}]*font-family:\s*var\(--font-mono/,
     'pane-parent-nav-label 必须采用等宽字体排版 ID',
   )
+  assert.match(
+    stylesCss,
+    /\.pane-breadcrumb\s*\{[^}]*overflow:\s*hidden;/,
+    'pane-breadcrumb 必须允许深链溢出裁剪',
+  )
 
-  // 极窄容器查询微调
+  // 极窄容器查询微调：隐藏分隔符只留紧凑 ID 胶囊
   const container450 = responsiveCss.slice(responsiveCss.indexOf('@container (max-width: 450px)'))
   assert.match(
     container450,
     /\.pane-parent-nav-btn/,
     '@container (max-width: 450px) 下对胶囊按钮尺寸与间距进行微调',
+  )
+  assert.match(
+    container450,
+    /\.pane-breadcrumb-sep\s*\{[^}]*display:\s*none;/,
+    '@container (max-width: 450px) 下隐藏面包屑分隔符',
   )
 })

@@ -64,6 +64,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .conversation-topbar .pane-title { min-width: 40px; }
   .conversation-topbar .pane-cwd-subtitle { max-width: 30vw; }
   .conversation-topbar .pane-parent-nav-btn { height: 22px; padding: 0 6px 0 5px; font-size: 11px; gap: 3px; }
+  /* 深链祖先面包屑在窄容器隐藏分隔符，只留紧凑 ID 胶囊 */
+  .conversation-topbar .pane-breadcrumb { gap: 1px; }
+  .conversation-topbar .pane-breadcrumb-sep { display: none; }
   /* 话题切换已回归左栏手风琴：顶栏恢复单行标题，恢复默认内边距。 */
   .composer-widgets .card { padding: 8px 10px; }
 }

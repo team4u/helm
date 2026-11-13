@@ -10,6 +10,7 @@ import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
 import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
+import { buildAncestorChain } from './ancestry-model.js'
 import { ConversationTimeline } from './ConversationTimeline.js'
 import { resolveActiveWorkbenchTab, summarizeWorkbenchBadge } from './workbench-model.js'
 import { useWorkbenchTabs } from './workbench-hooks.js'
@@ -47,6 +48,14 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
       void loadDetail(conversationId, true)
     }
   }, [conversationId, detail, loadDetail])
+
+  // 祖先面包屑链（根在前）：仅由 store.conversations 摘要推导，不引入平行路由状态。
+  const ancestors = useMemo(
+    () => buildAncestorChain(store.conversations, conversationId, conversation),
+    [store.conversations, conversationId, conversation],
+  )
+  const ancestorTitle = (id: number): string =>
+    store.conversations.find((conv) => conv.id === id)?.title ?? ''
 
   // 切换会话时关闭更多菜单（组件复用时也保持确定语义）
   useEffect(() => {
@@ -173,6 +182,26 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     store.openTarget({ kind: 'conversation', conversationId }, { split: true })
   }
 
+  // 祖先导航：主屏/分屏内直接切换该面板目标；抽屉内不顶掉主屏——
+  // 祖先已在主屏/分屏时仅需收起抽屉，否则抽屉原位切换到祖先会话。
+  const navigateToAncestor = (ancestorId: number): void => {
+    if (isDrawer) {
+      const onStage = [store.primaryTarget, store.splitTarget].some(
+        (target) => target?.kind === 'conversation' && target.conversationId === ancestorId,
+      )
+      if (onStage) {
+        onCloseDrawer?.()
+        return
+      }
+      store.setActiveModal({ kind: 'conversation-drawer', conversationId: ancestorId })
+      return
+    }
+    store.openTarget(
+      { kind: 'conversation', conversationId: ancestorId },
+      isSplit ? { split: true } : undefined,
+    )
+  }
+
   // 新话题：进入该智能体待命页并继承当前会话环境（远端节点/目录不回落本机）；
   // 首次发送才创建会话，不再预建空会话。
   const startNewThread = (): void => {
@@ -191,25 +220,32 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     <div className="helm-pane">
       <header className="pane-topbar conversation-topbar">
         <div className="pane-title-group">
-          {conversation.parentConversationId !== undefined ? (
-            <button
-              type="button"
-              className="btn btn-sm pane-parent-nav-btn"
-              title={`返回父会话 #${conversation.parentConversationId}`}
-              aria-label={`返回父会话 #${conversation.parentConversationId}`}
-              onClick={() => {
-                // 抽屉中返回父会话 = 后退导航：关抽屉 + 主屏切父会话；
-                // 工作台不动（它有自己的关闭按钮，生命周期独立）。
-                if (isDrawer) onCloseDrawer?.()
-                store.openTarget(
-                  { kind: 'conversation', conversationId: conversation.parentConversationId! },
-                  isSplit ? { split: true } : undefined,
+          {ancestors.length > 0 ? (
+            <nav className="pane-breadcrumb" aria-label="祖先会话导航">
+              {ancestors.map((ancestorId, index) => {
+                const label = `#${ancestorId}`
+                const tooltip = ancestorTitle(ancestorId) !== '' ? `${label} ${ancestorTitle(ancestorId)}` : `会话 ${label}`
+                return (
+                  <span className="pane-breadcrumb-item" key={ancestorId}>
+                    {index > 0 ? (
+                      <span className="pane-breadcrumb-sep" aria-hidden="true">
+                        <HelmIcon name="chevron-right" size={10} />
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="btn btn-sm pane-parent-nav-btn"
+                      title={tooltip}
+                      aria-label={`前往祖先会话 #${ancestorId}`}
+                      onClick={() => navigateToAncestor(ancestorId)}
+                    >
+                      {index === 0 ? <HelmIcon name="arrow-left" size={12} /> : null}
+                      <span className="pane-parent-nav-label">{label}</span>
+                    </button>
+                  </span>
                 )
-              }}
-            >
-              <HelmIcon name="arrow-left" size={12} />
-              <span className="pane-parent-nav-label">#{conversation.parentConversationId}</span>
-            </button>
+              })}
+            </nav>
           ) : null}
           {renaming ? (
             <input

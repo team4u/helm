@@ -1105,6 +1105,29 @@ button,
   flex: 1;
 }
 
+.pane-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pane-breadcrumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.pane-breadcrumb-sep {
+  display: inline-flex;
+  align-items: center;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
 .pane-parent-nav-btn {
   display: inline-flex;
   align-items: center;
@@ -1709,6 +1732,16 @@ button,
 .ask-dock-title {
   font-weight: 600;
   font-size: 13.5px;
+}
+
+.ask-dock-source-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--fg-secondary);
+}
+
+.ask-dock-source-btn:hover {
+  color: var(--fg);
 }
 
 .ask-dock-desc {

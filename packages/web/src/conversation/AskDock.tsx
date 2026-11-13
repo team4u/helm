@@ -4,9 +4,16 @@ import { asksApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { Select } from '../ui/Select.js'
+import { collectSubtreeIds } from './ancestry-model.js'
 
 export interface AskDockProps {
   conversationId: number
+}
+
+/** 来源会话标注：ask 属于其他会话时展示，点击可打开对应子会话抽屉。 */
+interface AskSourceInfo {
+  conversationId: number
+  title: string
 }
 
 interface TerminalSnapshot {
@@ -113,7 +120,7 @@ function AskFieldInput({
   )
 }
 
-function AskCard({ ask }: { ask: AskSpec }) {
+function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
   const store = useHelmStore()
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState<'answer' | 'cancel' | null>(null)
@@ -161,6 +168,18 @@ function AskCard({ ask }: { ask: AskSpec }) {
           <span className="badge badge-neutral mono" title="CAS 水位线：终端已处理时自动销单">
             seq {ask.expectedStateSeq}
           </span>
+        ) : null}
+        {source !== undefined ? (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm ask-dock-source-btn"
+            title={source.title !== '' ? `打开子会话 #${source.conversationId}（${source.title}）` : `打开子会话 #${source.conversationId}抽屉`}
+            aria-label={`打开子会话 #${source.conversationId}抽屉`}
+            onClick={() => store.setActiveModal({ kind: 'conversation-drawer', conversationId: source.conversationId })}
+          >
+            <HelmIcon name="corner-down-right" size={11} />
+            来自 #{source.conversationId}
+          </button>
         ) : null}
       </div>
       {ask.description !== undefined && snapshot === undefined ? (
@@ -233,15 +252,35 @@ function AskCard({ ask }: { ask: AskSpec }) {
   )
 }
 
-/** 置底悬停审批坞：当前会话 pending AskDoc 卡片堆叠。 */
+/** 置底悬停审批坞：当前会话及其全部后代会话的 pending AskDoc 卡片堆叠。
+ * AskDoc 是会话级对象：answer/cancel 仍走原 asksApi（含 expectedStateSeq CAS），
+ * 此处只聚合展示，不改变审批链路。 */
 export function AskDock({ conversationId }: AskDockProps) {
   const store = useHelmStore()
-  const pending = store.pendingAsks.filter((a) => a.conversationId === conversationId && a.status === 'pending')
+  // 祖谱仅由 store.conversations 推导；后代会话的 pending asks 一并呈现。
+  const subtreeIds = useMemo(
+    () => collectSubtreeIds(store.conversations, conversationId),
+    [store.conversations, conversationId],
+  )
+  const pending = store.pendingAsks.filter(
+    (a) => a.status === 'pending' && subtreeIds.has(a.conversationId),
+  )
   if (pending.length === 0) return null
   return (
     <div className="ask-dock-stack">
       {pending.map((ask) => (
-        <AskCard key={ask.id} ask={ask} />
+        <AskCard
+          key={ask.id}
+          ask={ask}
+          {...(ask.conversationId !== conversationId
+            ? {
+                source: {
+                  conversationId: ask.conversationId,
+                  title: store.conversations.find((conv) => conv.id === ask.conversationId)?.title ?? '',
+                },
+              }
+            : {})}
+        />
       ))}
     </div>
   )
