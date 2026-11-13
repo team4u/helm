@@ -133,7 +133,9 @@ export async function selectRunner(config: DesktopConfig, ctx: SelectRunnerConte
   if (config.hubCommand !== undefined) {
     return { kind: 'custom', command: [...config.hubCommand], env: buildHubChildEnv(config, ctx.env), detail: '显式命令覆写' };
   }
-  const hubArgs = entry === null ? [] : [entry.entry];
+  // resolveHubEntry 的 payload source 可携带附加参数（如 start.mjs 需要 start 子命令），
+  // hub-entry source 恒无参数；custom 命令原样整体采用。
+  const hubArgs = entry === null ? [] : [entry.entry, ...entry.args];
 
   // 2) 显式 node 覆写：仍需能力探测（保证能跑 kernel）。
   if (config.hubNode !== undefined) {

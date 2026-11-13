@@ -27,6 +27,14 @@ export interface DesktopConfig {
   readonly webDistDir?: string;
   /** npm Hub payload 的 hub 入口 JS；设置则优先于 hubEntry。 */
   readonly payloadEntry?: string;
+  /** payload 入口附加参数（HELM_DESKTOP_PAYLOAD_ENTRY_ARGS，空格拆分；仅 payload 入口可用）。 */
+  readonly payloadEntryArgs?: string[];
+  /** npm payload 包名（HELM_PAYLOAD_PACKAGE）；不硬编码任何 @helm 名称。 */
+  readonly payloadPackage?: string;
+  /** npm registry base URL（HELM_PAYLOAD_REGISTRY；缺省公开 npm registry）。 */
+  readonly payloadRegistry?: string;
+  /** 锁定 payload 精确版本（HELM_PAYLOAD_VERSION）；缺省跟踪 dist-tags.latest。 */
+  readonly payloadVersion?: string;
   /** 仓库内 kernel dist 的 hub 入口（缺省 <repo>/packages/kernel/dist/main.js）。 */
   readonly hubEntry?: string;
   /** 完整命令覆写（最高优先，空格拆分自 HELM_DESKTOP_HUB_CMD）。 */
@@ -57,6 +65,10 @@ export type DesktopOverrides = Partial<
     | 'dataDir'
     | 'webDistDir'
     | 'payloadEntry'
+    | 'payloadEntryArgs'
+    | 'payloadPackage'
+    | 'payloadRegistry'
+    | 'payloadVersion'
     | 'hubEntry'
     | 'hubCommand'
     | 'hubNode'
@@ -103,6 +115,15 @@ function parsePositiveInt(raw: string | undefined, origin: string, min: number):
   return value;
 }
 
+/** npm 版本说明符（semver 及 prerelease/build 字符集，禁分隔符）。 */
+const SAFE_VERSION_RE = /^[a-zA-Z0-9.+~-]+$/;
+
+/** 空白拆分参数串；空串视为未配置。 */
+function parseArgList(raw: string | undefined): string[] | undefined {
+  const value = envValue(raw)?.trim();
+  return value === undefined ? undefined : value.split(/\s+/).filter((a) => a.length > 0);
+}
+
 /**
  * 解析桌面壳配置。env 优先读 HELM_DESKTOP_* 命名空间；overrides 显式覆盖一切
  * （测试与编程式调用通道）。非法值显式抛错，绝不静默回落。
@@ -114,13 +135,52 @@ export function resolveDesktopConfig(env: NodeJS.ProcessEnv, overrides: DesktopO
   if (hubCommand !== undefined && hubCommand.length === 0) {
     throw new DesktopError('config_invalid', 'hubCommand 不能为空');
   }
+  const payloadEntryArgs =
+    overrides.payloadEntryArgs ?? parseArgList(env['HELM_DESKTOP_PAYLOAD_ENTRY_ARGS']);
+  const payloadPackageRaw =
+    overrides.payloadPackage !== undefined ? overrides.payloadPackage : envValue(env['HELM_PAYLOAD_PACKAGE']);
+  const payloadPackage = payloadPackageRaw?.trim();
+  if (payloadPackage === '') {
+    throw new DesktopError('config_invalid', 'HELM_PAYLOAD_PACKAGE 不能是空白串');
+  }
+  const payloadRegistryRaw =
+    overrides.payloadRegistry !== undefined ? overrides.payloadRegistry : envValue(env['HELM_PAYLOAD_REGISTRY']);
+  if (payloadRegistryRaw !== undefined) {
+    try {
+      const parsed = new URL(payloadRegistryRaw);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        throw new Error(`协议 ${parsed.protocol} 不支持`);
+      }
+    } catch (error) {
+      throw new DesktopError(
+        'config_invalid',
+        `HELM_PAYLOAD_REGISTRY 必须是 http(s) URL（${error instanceof Error ? error.message : String(error)}）`,
+      );
+    }
+  }
+  const payloadVersionRaw =
+    overrides.payloadVersion !== undefined ? overrides.payloadVersion : envValue(env['HELM_PAYLOAD_VERSION']);
+  if (payloadVersionRaw !== undefined && payloadVersionRaw !== 'latest' && !SAFE_VERSION_RE.test(payloadVersionRaw)) {
+    throw new DesktopError('config_invalid', `HELM_PAYLOAD_VERSION 必须是版本号或 latest，实际: ${payloadVersionRaw}`);
+  }
+  const payloadEntry = overrides.payloadEntry ?? envValue(env['HELM_DESKTOP_PAYLOAD_ENTRY']);
+  if (payloadEntryArgs !== undefined && payloadEntry === undefined) {
+    throw new DesktopError(
+      'config_invalid',
+      'HELM_DESKTOP_PAYLOAD_ENTRY_ARGS 仅在 HELM_DESKTOP_PAYLOAD_ENTRY（payload 入口）配置后可用',
+    );
+  }
   const config: DesktopConfig = {
     port,
     hostname: '127.0.0.1',
     hubUrl: `http://127.0.0.1:${port}`,
     dataDir: overrides.dataDir ?? env['HELM_DESKTOP_DATA_DIR'],
     webDistDir: overrides.webDistDir ?? env['HELM_DESKTOP_WEB_DIST'],
-    payloadEntry: overrides.payloadEntry ?? env['HELM_DESKTOP_PAYLOAD_ENTRY'],
+    payloadEntry,
+    payloadEntryArgs,
+    payloadPackage,
+    payloadRegistry: payloadRegistryRaw,
+    payloadVersion: payloadVersionRaw,
     hubEntry: overrides.hubEntry ?? env['HELM_DESKTOP_HUB_ENTRY'] ?? defaultHubEntryPath(),
     hubCommand,
     hubNode: overrides.hubNode ?? env['HELM_DESKTOP_HUB_NODE'],
@@ -143,24 +203,30 @@ export function resolveDesktopConfig(env: NodeJS.ProcessEnv, overrides: DesktopO
   return config;
 }
 
-/**
- * 生效的 hub 入口与来源（payload 优先）。返回 null 表示使用 hubCommand 全命令。
- */
-export function resolveHubEntry(config: DesktopConfig): { entry: string; source: 'payload' | 'hub-entry' } | null {
+/** 生效的 hub 入口与来源（payload 优先）；args 为 payload 入口附加参数（契约上恒空）。 */
+export interface HubEntrySelection {
+  entry: string;
+  source: 'payload' | 'hub-entry';
+  args: readonly string[];
+}
+
+export function resolveHubEntry(config: DesktopConfig): HubEntrySelection | null {
   if (config.hubCommand !== undefined) return null;
-  if (config.payloadEntry !== undefined) return { entry: config.payloadEntry, source: 'payload' };
-  if (config.hubEntry !== undefined) return { entry: config.hubEntry, source: 'hub-entry' };
-  return { entry: defaultHubEntryPath(), source: 'hub-entry' };
+  if (config.payloadEntry !== undefined) {
+    return { entry: config.payloadEntry, source: 'payload', args: config.payloadEntryArgs ?? [] };
+  }
+  if (config.hubEntry !== undefined) return { entry: config.hubEntry, source: 'hub-entry', args: [] };
+  return { entry: defaultHubEntryPath(), source: 'hub-entry', args: [] };
 }
 
 /**
- * Hub 子进程环境：剥离 HELM_DESKTOP_*（防嵌套桌面壳语义），注入内核约定变量。
- * ELECTRON_RUN_AS_NODE 由 runner 层按需追加（见 runners.ts）。
+ * Hub 子进程环境：剥离 HELM_DESKTOP_* 与 HELM_PAYLOAD_*（防桌面壳语义泄漏到 Hub），
+ * 注入内核约定变量。ELECTRON_RUN_AS_NODE 由 runner 层按需追加（见 runners.ts）。
  */
 export function buildHubChildEnv(config: DesktopConfig, baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const child: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(baseEnv)) {
-    if (key.startsWith('HELM_DESKTOP_')) continue;
+    if (key.startsWith('HELM_DESKTOP_') || key.startsWith('HELM_PAYLOAD_')) continue;
     child[key] = value;
   }
   child['HELM_PORT'] = String(config.port);
