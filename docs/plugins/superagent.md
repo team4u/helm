@@ -30,6 +30,8 @@
 
 **路由收敛模式**（`routerMode`，默认开启）下，`before_turn` 对中枢会话剥离重度阻塞工具（`edit / write / bash / subagent / SubagentWorkflow`）并注入 `<active_workers>` 态势段落；`tool_call` 钩子对被剥离工具二次守卫 block（提示改用 `dispatch_worker` 派工）。中枢因此保持轻量回合——所有耗时执行都发生在 Worker 会话。`mutedSources` 配置（逗号/换行分隔的精确 source 名）命中的触发事件在 `trigger` 钩子 0-Token 丢弃。
 
+边界：`dispatch_worker` 是本插件专属的非阻塞 Worker 协议（`createConversation` + `origin: 'agent'` 输入，不经 `agent_spawn` 管道），与 `builtin:workflow` `subagent` 的 `background` 参数无关、不得当作通用后台派生入口使用，也绝不同步等待模型回合；Worker 结果经独立 `turn_settled` → 中枢汇报链回传（见「输入 origin 追踪与自动汇报」）。Worker 会话属 `ownedBy: 'helm'` 自动化会话，其派生任务按归属策略缺省同步。
+
 ## 输入 origin 追踪与自动汇报
 
 每次提交的输入携带来源 `origin: 'human' | 'agent' | 'trigger'`。Worker 回合结算时（`turn_settled` 统一覆盖 `completed / failed / aborted` 三态），插件先无条件把结算摘要写入 RecallGraph；随后检查本回合消费输入的来源——只要含任一 `agent` 或 `trigger` 来源，即向中枢投递结构化汇报卡片（`submitInput` 携带 `meta.renderer: 'superagent:worker-report'`，前端经 timelineRenderer 渲染为汇报卡）；纯 `human` 回合仅静默更新图谱，不打扰中枢。汇报失败显式上报错误（reportError 通道同步投递中枢），不吞。

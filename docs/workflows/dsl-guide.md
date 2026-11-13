@@ -71,7 +71,9 @@ const result = await agent("提取提交的修改范围与风险点", {
 if (result === null) throw new Error("结构化输出校验失败")
 ```
 
-**跨 Profile 点名**：`agentType` 填真实 Profile ID（如 `reviewer`），不带 `@` 前缀，也不是显示名。用户在会话里写 `@reviewer` 是向当前智能体点名，与脚本中的 `agentType` 不是同一机制。外部运行时标识采用 `namespace:kind` 形式（含冒号），如 `herdr:agy`。
+**跨 Profile 点名**：`agentType` 填真实 Profile ID（如 `reviewer`），不带 `@` 前缀，也不是显示名。用户在会话里写 `@reviewer` 是向当前智能体点名——那只是认知约定，实际执行仍由当前会话经 `subagent` 的 `agentType`（或脚本内 `agent()`）落地，点名本身不构成授权、也不改变派生方会话的生命周期缺省。目标 Profile 的类型（原生或外部运行时）同样不改变生命周期缺省（见 workflow 插件文档「默认后台协同」）。外部运行时标识采用 `namespace:kind` 形式（含冒号），如 `herdr:agy`。
+
+**同步节点语义**：`agent()` 没有也不接受 `background` 选项——run 内的 DSL 节点始终等待真实结果（可用键固定列表不含 `background`，传未知选项名直接报错）。后台策略发生在工具层：`subagent` / `SubagentWorkflow` 模型工具按当前会话归属缺省（人类直连会话缺省后台、自动化会话缺省同步且显式 `background: true` 被拒绝）；CLI/动作 `helm workflows run` 则是缺省启动即返回、`--wait` 才同步。三个入口互不混同，不要在脚本里期待后台句柄。
 
 **attachments 授权边界**：只允许当前编排会话及其父链有权使用的产物；数组不能包含空 ID、纯空白 ID 或非字符串项（空数组合法，且与未提供在重放指纹上是不同调用）。宿主会校验产物存在性与授权。当前授权不覆盖子会话或兄弟会话——不能把上一个子代理产出的产物 ID 直接转交给下一个子代理，需要交接时先由有权读取的会话显式导出内容，再按接收方有权使用的方式登记。不同节点、目录与 Worktree 之间没有自动文件同步。
 

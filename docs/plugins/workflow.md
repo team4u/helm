@@ -6,13 +6,43 @@
 
 | 工具 | 核心入参 | 语义 |
 | :--- | :--- | :--- |
-| `subagent` | `prompt` 必填；`agentType`（Profile ID 或 `herdr:agy` 等外部运行时标识）、`cwd`、`background`、`isolation: 'worktree'`、`schema`、`gate`、`resume`、`model`、`effort`、`attachments`、`maxSubagentDepth`（显式授予子树深度上限，1..5，缺省继承 2） | 派生单个子代理。缺省同步等待最终结果；`background: true` 在执行环境就绪后立即返回 `runId`，后台完成后向父会话汇报 |
-| `SubagentWorkflow` | `script / scriptPath / name` 三择一；`args` 任意 JSON（字符串形 JSON 自动解包）；`resumeFromRunId` | 在当前会话执行确定性编排脚本，返回真实执行 summary（runId/status/nodes/result） |
+| `subagent` | `prompt` 必填；`agentType`（Profile ID 或 `herdr:agy` 等外部运行时标识）、`cwd`、`background`、`isolation: 'worktree'`、`schema`、`gate`、`resume`、`model`、`effort`、`attachments`、`maxSubagentDepth`（显式授予子树深度上限，1..5，缺省继承 2） | 派生单个子代理。生命周期缺省按当前会话归属判定：人类直连会话缺省后台，自动化会话（非 human-owned）缺省同步等待最终结果；自动化会话显式 `background: true` 被拒绝。`agentType` 只选择目标执行体，不参与生命周期判定 |
+| `SubagentWorkflow` | `script / scriptPath / name` 三择一；`args` 任意 JSON（字符串形 JSON 自动解包）；`resumeFromRunId`；`background`（同一归属策略） | 在当前会话执行确定性编排脚本。生命周期缺省同 `subagent` 按会话归属判定（人类直连缺省后台、自动化缺省同步，自动化显式 `background: true` 拒绝）；后台启动即返回 running summary，终态经幂等汇报链投递；同步返回真实执行 summary（runId/status/nodes/result） |
 | `cleanup_worktree` | `worktreeId`（`node:path`）/ `conversationId` / `path`（可附 `nodeId` 消歧）三择一；`deleteBranch`、`force` | 清理一个受管隔离 Git Worktree；无任何显式选择器时以当前会话为选择器（`--current` 语义） |
 
 三个工具均返回结构化输出（`structuredOutput`），失败分支显式 `isError` 并附完整错误信息，绝不伪造空元数据。`subagent` 的 `resume` 凭上次执行的 `execution.conversationId` 或 `execution.executionId` 续接同一执行上下文；后台汇报经 `submitInput` 携带幂等 `requestId`（`helm:subagent-report:<runId>`），跨重启不重复投递。
 
 后台子代理的汇报链路有完整的诚实性设计：父会话已被删除时，汇报降级为全局 notification 通知（「后台任务已结束，可在任务列表检查结果」）；其余故障（store/IO/权限）如实上抛，由引擎 outbox（`notifiedAt` 不置位）在下次 `init` 时补发，绝不吞错。
+
+## 默认后台协同：按会话归属判定生命周期
+
+`subagent` 与 `SubagentWorkflow` 两个模型工具共享同一套后台策略：生命周期缺省不由目标 Profile 决定，而由**当前会话的归属**（`ownedBy`）判定。`profileId` / `agentType` 只选择目标执行体（原生 Profile 或 `herdr:agy` 等外部运行时），不参与生命周期判定——派生一个外部运行时任务与派生一个原生 Profile 任务，缺省策略完全相同。
+
+| 当前会话归属 | 缺省生命周期 | 显式 `background` |
+| :--- | :--- | :--- |
+| `human`（人类直连会话，缺省值） | 后台：执行环境就绪即返回运行句柄（`runId` + 实际 execution），父回合继续；终态后自动幂等汇报 | `background: false` 显式退回同步等待最终结果 |
+| `helm` / `bot`（trigger 派生会话、SuperAgent Worker、看门狗等自动化会话） | 同步：等待真实终态结果再返回，供确定性链路继续推进 | `background: true` 显式拒绝（显式报错并携带当前会话归属事实，绝不静默降级为同步） |
+
+设计动因：人类回合不应被长任务阻塞——后台执行、完成后汇报即可；自动化链路（中枢路由、批处理、编排脚本）需要真实结果才能推进，后台句柄只是把不确定性往后推。因此自动化会话显式要求后台属于契约错误，直接拒绝而不是猜测意图。
+
+### 四类执行体的区别
+
+| 执行体 | 派生机制 | 深度登记 | 结果回传 |
+| :--- | :--- | :--- | :--- |
+| 原生 Profile 子会话 | 内核 `spawnAgent` 管道（`agent_spawn` Hook） | 进 `subagent-conversations` 登记表，受嵌套深度契约约束；支持 `resume` 续接 | 同步等待最终结果；后台经下文幂等汇报链投递父会话 |
+| 外部 Herdr Profile（`herdr:<kind>` 前缀或 `runtime.kind: 'herdr'` 的 Profile） | `builtin:herdr` 拦截 `agent_spawn` 改道终端窗格执行，文件交接回传 | 同样进登记表、受深度契约约束（对上层编排透明） | 同一条幂等汇报链（父会话仍是原生 Helm 会话）。对外部窗格不支持 steer 插话（待能力）；补充指令经 `subagent` 的 `resume` 续接 |
+| SuperAgent Worker | `builtin:superagent` 的 `dispatch_worker`：`createConversation`（不经 spawn 管道） | 不进登记表、不受深度契约约束 | 插件自有非阻塞协议：派工立即返回 `workerConversationId`、绝不同步等待；汇报走独立 `turn_settled` → 中枢路由链。它不是 `subagent` 的 `background` 参数，两者不得混用 |
+| fork / 人工会话 | 人类在 Web/CLI 直接创建或 fork 既有会话 | 不进登记表、不受深度限制 | 就是普通会话；人类直连（human-owned）即适用「缺省后台」策略 |
+
+### 与 `workflows run` 动作/CLI 的区别
+
+`helm workflows run`（HTTP `run` 动作同款）是启动入口而非模型工具：缺省 `wait=false` 启动即返回（run 后台推进，进度经会话投影订阅），`--wait` 才同步等终态。它与模型工具的 `background` 策略是**不同参数、不同入口**：前者描述「这次启动要不要等」，后者描述「当前会话派生任务的缺省生命周期」。不要把两者写成同一开关。
+
+### 后台完成自动幂等汇报
+
+后台 run 到达终态（完成/失败/中止/中断）后，引擎经 `submitInput` 向父会话投递汇报，幂等键为 `requestId = helm:subagent-report:<runId>`：并发触发、终态后重复调用、Hub 重启恢复都恰好投递一次（持久去重）；父会话已删除时降级为全局 notification（见上文诚实性设计）。
+
+因此**禁止 sleep 轮询**：发起后台任务后不要用 `sleep`、循环 bash 或定时重查去等结果——汇报会自动到达本会话。需要主动核对进度时用只读的 `helm workflows inspect <runId>`（按需查询，不是等待手段）。
 
 ## 五端动作（11 个）
 
