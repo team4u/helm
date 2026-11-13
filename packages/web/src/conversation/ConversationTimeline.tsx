@@ -29,19 +29,33 @@ import {
   type FoldableStep,
   type HumanInputItem,
   type PluginCardItem,
+  type TimelineItem,
   type ToolTrace,
 } from './timeline-model.js'
+import { resolveActiveOutlineEntryId } from './outline-model.js'
 import { matchTimelineEntryActions, timelineEntryActionContextOf } from './action-model.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { formatBytes, formatDurationMs, formatFullTimestamp, formatMessageTime } from '../lib/format.js'
 
+export interface OutlineScrollRequest {
+  entryId: string
+  headingIndex?: number
+  tick: number
+}
+
 export interface ConversationTimelineProps {
   conversation: ConversationSummary
   detailEntries: ReadonlyArray<ConversationEntry>
   live?: ConversationLive
+  /** 外层已预计算的归一化时间线列表（避免 ConversationPane 与 Timeline 重复计算）。 */
+  timelineItems?: ReadonlyArray<TimelineItem>
   /** 发送请求在途且服务端尚未 working/blocked（轻量等待行，与 working 行互斥）。 */
   sendingPending?: boolean
+  /** 大纲点击/回车触发的滚动定位请求（每次递增 tick 支持重复点击同一条目）。 */
+  outlineScrollRequest?: OutlineScrollRequest | null
+  /** 滚动过程中通知外层当前视口顶部焦点的 entryId（供大纲浮层高亮当前位置）。 */
+  onActiveEntryChange?: (entryId: string | undefined) => void
   /** 请求将文本回填 Composer 并聚焦（编辑并重发；可携带历史 entryId 与附件）。 */
   onRequestEdit: (target: EditRequestTarget) => void
   /** 点击空白会话引导词：仅请求回填草稿，不是历史编辑。 */
@@ -780,13 +794,16 @@ function resolveAssistantAnchorEntry(
 // 高亮定位
 // ---------------------------------------------------------------------------
 
-function useEntryHighlight(conversationId: number): (entryId: string) => string {
+function useEntryHighlight(
+  conversationId: number,
+  localHighlightedEntryId: string | null,
+): (entryId: string) => string {
   const store = useHelmStore()
   return (entryId: string): string => {
     const h = store.highlightedEntry
-    return h !== null && h.conversationId === conversationId && h.entryId === entryId
-      ? ' entry-highlighted'
-      : ''
+    const matchedStore = h !== null && h.conversationId === conversationId && h.entryId === entryId
+    const matchedLocal = localHighlightedEntryId === entryId
+    return matchedStore || matchedLocal ? ' entry-highlighted' : ''
   }
 }
 
@@ -1015,32 +1032,39 @@ export function ConversationTimeline({
   conversation,
   detailEntries,
   live,
+  timelineItems,
   sendingPending = false,
+  outlineScrollRequest,
+  onActiveEntryChange,
   onRequestEdit,
   onRequestStarter,
   starters,
 }: ConversationTimelineProps) {
   const store = useHelmStore()
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const [localHighlightEntryId, setLocalHighlightEntryId] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const innerRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = useRef(true)
   const lastScrollTopRef = useRef(0)
   const lastHumanKeyRef = useRef<string | undefined>(undefined)
+  const lastOutlineTickRef = useRef<number | null>(null)
+  const lastActiveEntryRef = useRef<string | undefined>(undefined)
   const highlightScrollRef = useHighlightScroll(conversation.id)
-  const highlightClass = useEntryHighlight(conversation.id)
+  const highlightClass = useEntryHighlight(conversation.id, localHighlightEntryId)
 
   const isWorking = conversation.status === 'working'
   const items = useMemo(
     () =>
+      timelineItems ??
       buildTimelineItems(detailEntries, {
         ...(live !== undefined ? { live } : {}),
         working: isWorking,
         timelineRenderers: store.groupedUi.timelineRenderers,
         toolViews: store.groupedUi.toolViews,
       }),
-    [detailEntries, live, isWorking, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
+    [timelineItems, detailEntries, live, isWorking, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
   )
 
   // timeline.entry.action 锚点索引：以 props 传入的 detailEntries（经 rewind
@@ -1061,10 +1085,27 @@ export function ConversationTimeline({
     return undefined
   }, [items])
 
-  // 贴底吸附：仅当用户主动上滚时脱离贴底（内容增长导致 scrollHeight 变大不得误判为脱离）。
+  // 贴底吸附与视口当前阅读锚点追踪：仅当用户主动上滚时脱离贴底（内容增长导致 scrollHeight 变大不得误判为脱离）。
   useEffect(() => {
     const el = scrollRef.current
     if (el === null) return
+    const syncActiveOutlineEntry = (): void => {
+      if (onActiveEntryChange === undefined || innerRef.current === null) return
+      const containerTop = el.getBoundingClientRect().top
+      const nodes = innerRef.current.querySelectorAll<HTMLElement>('[data-entry-id]')
+      const offsets: Array<{ entryId: string; top: number }> = []
+      for (const node of nodes) {
+        const id = node.dataset.entryId
+        if (id !== undefined && id !== '') {
+          offsets.push({ entryId: id, top: node.getBoundingClientRect().top - containerTop })
+        }
+      }
+      const nextActive = resolveActiveOutlineEntryId(offsets, 96)
+      if (nextActive !== lastActiveEntryRef.current) {
+        lastActiveEntryRef.current = nextActive
+        onActiveEntryChange(nextActive)
+      }
+    }
     const onScroll = (): void => {
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
       if (el.scrollTop < lastScrollTopRef.current - 4 && distanceFromBottom > 80) {
@@ -1073,10 +1114,49 @@ export function ConversationTimeline({
         stickToBottomRef.current = true
       }
       lastScrollTopRef.current = el.scrollTop
+      syncActiveOutlineEntry()
     }
+    syncActiveOutlineEntry()
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [])
+  }, [onActiveEntryChange, items.length])
+
+  // 响应大纲面板点击定位：平滑滚动到对应消息块（或助手回复内指定的 h1~h3 标题）并触发闪烁高亮。
+  useEffect(() => {
+    if (!outlineScrollRequest || outlineScrollRequest.tick === lastOutlineTickRef.current) return
+    lastOutlineTickRef.current = outlineScrollRequest.tick
+    stickToBottomRef.current = false
+    const container = innerRef.current
+    if (container === null) return
+
+    let targetWrapper: HTMLElement | null = null
+    for (const el of container.querySelectorAll<HTMLElement>('[data-entry-id]')) {
+      if (el.dataset.entryId === outlineScrollRequest.entryId) {
+        targetWrapper = el
+        break
+      }
+    }
+    if (targetWrapper === null) return
+
+    let scrollEl: HTMLElement = targetWrapper
+    if (outlineScrollRequest.headingIndex !== undefined) {
+      const headings = targetWrapper.querySelectorAll<HTMLElement>('.msg-ai-body h1, .msg-ai-body h2, .msg-ai-body h3')
+      const matchedHeading = headings[outlineScrollRequest.headingIndex]
+      if (matchedHeading !== undefined) {
+        scrollEl = matchedHeading
+      }
+    }
+    scrollEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setLocalHighlightEntryId(outlineScrollRequest.entryId)
+    if (onActiveEntryChange !== undefined) {
+      lastActiveEntryRef.current = outlineScrollRequest.entryId
+      onActiveEntryChange(outlineScrollRequest.entryId)
+    }
+    const timer = setTimeout(() => {
+      setLocalHighlightEntryId((current) => (current === outlineScrollRequest.entryId ? null : current))
+    }, 2400)
+    return () => clearTimeout(timer)
+  }, [outlineScrollRequest, onActiveEntryChange])
 
   // 监听内部容器高度变化（思考流式增长、命令追加、分组自动展开/收起），贴底状态下实时跟随到底部。
   useEffect(() => {

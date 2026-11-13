@@ -11,12 +11,14 @@ import { ConfirmDialog } from '../ui/AlertDialog.js'
 import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
 import { buildAncestorChain } from './ancestry-model.js'
-import { ConversationTimeline } from './ConversationTimeline.js'
+import { ConversationOutlinePopover, type OutlineJumpTarget } from './ConversationOutlinePopover.js'
+import { ConversationTimeline, type OutlineScrollRequest } from './ConversationTimeline.js'
+import { buildConversationOutline } from './outline-model.js'
 import { resolveActiveWorkbenchTab, summarizeWorkbenchBadge } from './workbench-model.js'
 import { useWorkbenchTabs } from './workbench-hooks.js'
 import { matchConversationActions, splitConversationHeaderActions } from './action-model.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
-import type { EditRequestTarget } from './timeline-model.js'
+import { buildTimelineItems, type EditRequestTarget } from './timeline-model.js'
 
 export interface ConversationPaneProps {
   conversationId: number
@@ -39,8 +41,27 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const [prefill, setPrefill] = useState<{ text: string; entryId?: number; attachments?: ConversationAttachmentRef[]; tick: number; onlyIfEmpty?: boolean } | null>(null)
   const [sendingInFlight, setSendingInFlight] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'reset' | 'delete' | null>(null)
+  const [outlineScrollReq, setOutlineScrollReq] = useState<OutlineScrollRequest | null>(null)
+  const [activeOutlineEntryId, setActiveOutlineEntryId] = useState<string | undefined>(undefined)
+  const [loadingOlderOutline, setLoadingOlderOutline] = useState(false)
+  const outlineTickRef = useRef(0)
   const moreMenuRef = useRef<HTMLSpanElement | null>(null)
   const moreButtonRef = useRef<HTMLButtonElement | null>(null)
+
+  const live = store.conversationLives[conversationId]
+  const isWorking = conversation?.status === 'working'
+  const detailEntries = detail?.entries ?? []
+  const timelineItems = useMemo(
+    () =>
+      buildTimelineItems(detailEntries, {
+        ...(live !== undefined ? { live } : {}),
+        working: isWorking,
+        timelineRenderers: store.groupedUi.timelineRenderers,
+        toolViews: store.groupedUi.toolViews,
+      }),
+    [detailEntries, live, isWorking, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
+  )
+  const outlineNodes = useMemo(() => buildConversationOutline(timelineItems), [timelineItems])
 
   const loadDetail = store.loadConversationDetail
   useEffect(() => {
@@ -57,10 +78,27 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const ancestorTitle = (id: number): string =>
     store.conversations.find((conv) => conv.id === id)?.title ?? ''
 
-  // 切换会话时关闭更多菜单（组件复用时也保持确定语义）
+  // 切换会话时关闭更多菜单与重置大纲滚动状态（组件复用时也保持确定语义）
   useEffect(() => {
     setMoreOpen(false)
+    setOutlineScrollReq(null)
+    setActiveOutlineEntryId(undefined)
   }, [conversationId])
+
+  const jumpToOutlineTarget = (target: OutlineJumpTarget): void => {
+    outlineTickRef.current += 1
+    setOutlineScrollReq({
+      entryId: target.entryId,
+      ...(target.headingIndex !== undefined ? { headingIndex: target.headingIndex } : {}),
+      tick: outlineTickRef.current,
+    })
+  }
+
+  const loadEarlierForOutline = (): void => {
+    if (loadingOlderOutline || !detail?.nextCursor) return
+    setLoadingOlderOutline(true)
+    void store.loadEarlierEntries(conversationId).finally(() => setLoadingOlderOutline(false))
+  }
 
   // 工作台汇总角标：内置产物计数 + 各插件面板 badge（从 public doc 动态提取）。
   const workbenchTabs = useWorkbenchTabs(conversationId, conversation)
@@ -271,6 +309,14 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           </span>
         </div>
         <div className="pane-actions">
+          <ConversationOutlinePopover
+            nodes={outlineNodes}
+            activeEntryId={activeOutlineEntryId}
+            hasEarlierHistory={Boolean(detail?.nextCursor)}
+            loadingEarlierHistory={loadingOlderOutline}
+            onLoadEarlierHistory={loadEarlierForOutline}
+            onSelectTarget={jumpToOutlineTarget}
+          />
           {canCreateThread ? (
             <button
               type="button"
@@ -448,11 +494,12 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
 
       <ConversationTimeline
         conversation={conversation}
-        detailEntries={detail?.entries ?? []}
+        detailEntries={detailEntries}
+        timelineItems={timelineItems}
         sendingPending={sendingPending}
-        {...(store.conversationLives[conversationId] !== undefined
-          ? { live: store.conversationLives[conversationId] }
-          : {})}
+        outlineScrollRequest={outlineScrollReq}
+        onActiveEntryChange={setActiveOutlineEntryId}
+        {...(live !== undefined ? { live } : {})}
         starters={profileStarters}
         onRequestEdit={requestEdit}
         onRequestStarter={requestStarter}

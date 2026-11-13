@@ -36,6 +36,7 @@ import {
   Key,
   Layers,
   LayoutGrid,
+  ListTree,
   Loader2,
   Lock,
   Maximize2,
@@ -163,6 +164,8 @@ const ICON_MAP: Record<string, LucideIcon> = {
   code: Code2,
   circle: Circle,
   'layout-grid': LayoutGrid,
+  'list-tree': ListTree,
+  outline: ListTree,
 }
 
 export interface HelmIconProps {

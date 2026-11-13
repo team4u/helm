@@ -6184,3 +6184,180 @@ input[type="search"]::-moz-search-clear-button {
   flex: 1;
   min-width: 0;
 }
+
+/* ==========================================================================
+ * 会话大纲快速导航浮层（ConversationOutlinePopover）
+ * ========================================================================== */
+
+.conversation-outline-trigger.is-open {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.conversation-outline-popover {
+  width: min(360px, calc(100vw - 20px));
+  max-height: min(460px, 72dvh);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.conversation-outline-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.conversation-outline-search {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+}
+
+.conversation-outline-mode {
+  flex-shrink: 0;
+  height: 28px;
+}
+
+.conversation-outline-mode .segmented-control-btn {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11.5px;
+}
+
+.conversation-outline-earlier-bar {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0 2px;
+}
+
+.conversation-outline-earlier-btn {
+  width: 100%;
+  justify-content: center;
+  color: var(--fg-secondary);
+}
+
+.conversation-outline-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  scrollbar-width: thin;
+}
+
+.conversation-outline-empty {
+  padding: 18px 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  text-align: center;
+}
+
+.conversation-outline-item {
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-xs, 5px);
+  background: transparent;
+  color: var(--fg);
+  font-size: 12.5px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  transition: background 80ms ease, color 80ms ease;
+}
+
+.conversation-outline-item:hover,
+.conversation-outline-item.is-selected {
+  background: var(--bg-hover);
+}
+
+.conversation-outline-item.is-current {
+  background: var(--nav-active-bg);
+  color: var(--nav-active-fg);
+}
+
+.conversation-outline-item.is-current .conversation-outline-turn-badge {
+  color: var(--accent, var(--fg));
+  font-weight: 600;
+}
+
+.conversation-outline-turn-badge {
+  font-size: 11px;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+  min-width: 20px;
+}
+
+.conversation-outline-origin-icon {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.conversation-outline-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-outline-time {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  flex-shrink: 0;
+}
+
+.conversation-outline-heading {
+  min-height: 25px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.conversation-outline-heading-h1 {
+  padding-left: 18px;
+}
+
+.conversation-outline-heading-h2 {
+  padding-left: 26px;
+}
+
+.conversation-outline-heading-h3 {
+  padding-left: 34px;
+}
+
+.conversation-outline-heading-marker {
+  font-size: 10px;
+  color: var(--fg-subtle);
+  flex-shrink: 0;
+}
+
+.conversation-outline-divider {
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  justify-content: center;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  border-radius: 0;
+  margin: 2px 0;
+}
+
+.conversation-outline-divider-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
