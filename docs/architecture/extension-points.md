@@ -15,8 +15,11 @@
 | `CapabilityRegistry` | 动作、工具与原始路由的注册、Schema 校验与五端映射 |
 | `PluginDocRegistry` | 全局 `ctx.doc` 与按会话分片 `ctx.sessionDoc` 的持久化与发布 |
 | `UiRegistry` | 界面声明校验、跨插件冲突裁决（priority）、客户端组件编译与缓存 |
-| `RuntimeToolRegistry` | 每回合装配模型工具列表（按 scope 过滤 + promptSnippet 注入） |
+| `RuntimeToolRegistry` | 注册与热更新内核/插件工具；`run_action` 调用与只读 `describe` |
+| `HookBridge` | 每次模型请求按 scope 裁剪插件工具；钩子链收敛后投射 `prompt.tools.*` 与 `prompt.actions`，清理不可达能力的旧指引 |
 | `AssetReloader` | 纯文件资产（Profile/技能）的热重载协调 |
+
+动作与工具的认知入口均由声明驱动：`ctx.action` 默认进入 `<available_actions>` 目录，`exposeAsTool: true` 则使用独立工具声明，`ctx.tool` 提供模型专用工具。`promptSnippet` / `promptGuidelines` 仅在对应能力对当前会话可达时注入；动作目录依赖最终工具集保留 `run_action`。完整参数 Schema 可用 `run_action({ actionId, describe: true })` 按需只读获取，不执行 handler。内置与外部插件使用相同机制，具体范式见 [插件开发指南](../plugins/plugin-development.md#动作自动发现与会话目录)。
 
 ## 后端：7 个生命周期 Hook
 
