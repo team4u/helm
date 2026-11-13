@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import type { AskSpec, ConversationSummary } from '@helm/protocol'
 import { asksApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
@@ -247,7 +247,7 @@ function isAgentStandbyActive(store: HelmStoreValue, profileId: string): boolean
   )
 }
 
-/** 手风琴跟随目标：当前主屏/分屏会话或待命页所属的 profileId（无则 null）。 */
+/** 话题列表展开推导：当前主屏/分屏会话或待命页所属的 profileId（无则 null）。 */
 function activeProfileIdOf(store: HelmStoreValue): string | null {
   if (store.primaryTarget.kind === 'agent') return store.primaryTarget.profileId
   if (store.splitTarget?.kind === 'agent') return store.splitTarget.profileId
@@ -262,10 +262,10 @@ function activeProfileIdOf(store: HelmStoreValue): string | null {
 }
 
 /**
- * Agent 站位行（一级，手风琴单展开）：
- * - 普通模式：整个侧栏仅当前展开的那 1 个智能体显示话题子列表（默认跟随当前会话
- *   所属智能体自动展开，点击行首箭头可手动切换），其余智能体永远只占一行；
- * - 批量模式：行首切换子列表展开，展开后渲染扁平会话清单供勾选删除。
+ * Agent 站位行（一级，单展开，无折叠钮）：
+ * - 普通模式：点击名称进入待命态（首次发送才落库），名下话题列表展开由当前
+ *   目标唯一推导——仅当前目标所属智能体展开，其余智能体永远只占一行；
+ * - 批量模式：点击行或名称切换子列表展开，展开后渲染扁平会话清单供勾选删除。
  */
 function AgentStandingItem({
   agent,
@@ -273,8 +273,6 @@ function AgentStandingItem({
   onCreate,
   onNavigate,
   batchMode,
-  accordionOpen,
-  onToggleAccordion,
   selectedIds,
   onToggleSelect,
 }: {
@@ -283,9 +281,6 @@ function AgentStandingItem({
   onCreate: (profileId: string) => void
   onNavigate?: () => void
   batchMode?: boolean
-  /** 普通模式手风琴：本智能体是否为当前展开的那一个。 */
-  accordionOpen: boolean
-  onToggleAccordion: () => void
   selectedIds?: Set<number>
   onToggleSelect?: (id: number) => void
 }) {
@@ -297,21 +292,17 @@ function AgentStandingItem({
 
   const activeInAgent = agent.conversations.some((c) => isConversationActive(store, c.id))
   const standbyActive = isAgentStandbyActive(store, agent.profileId)
-  const isOpen = batchMode ? (hasSubList && expanded) : (hasSubList && accordionOpen)
-  // 待命激活不受话题列表展开影响：名称是稳定入口，展开历史时仍需保持选中可见。
-  const headerActive = standbyActive || (activeInAgent && !isOpen)
-
-  const toggleOpen = () => {
-    if (batchMode) {
-      if (hasSubList) setExpanded((v) => !v)
-      return
-    }
-    onToggleAccordion()
-  }
+  // 无折叠钮：展开由当前目标唯一推导（点击智能体即选中并展开）。
+  const isOpen = batchMode
+    ? hasSubList && expanded
+    : hasSubList && activeProfileIdOf(store) === agent.profileId
+  // 高亮策略（父强子弱，参考 magpie）：当前目标所属智能体的站位行恒点亮——
+  // 待命或任一会话激活时父行保持高亮，与当前会话子行同时点亮、互不排斥。
+  const headerActive = standbyActive || activeInAgent
 
   const openPrimary = () => {
     if (batchMode) {
-      toggleOpen()
+      if (hasSubList) setExpanded((v) => !v)
       return
     }
     // 名称是稳定待命入口：人类可选 Agent 一律进入待命态（首次发送才落库），
@@ -342,24 +333,6 @@ function AgentStandingItem({
           }
         }}
       >
-        {hasSubList && (
-          <Tooltip content={isOpen ? '收起话题列表' : '展开话题列表'} side="top">
-            <button
-              type="button"
-              className="btn btn-ghost btn-icon-xs agent-collapse-btn"
-              title={isOpen ? '收起话题列表' : '展开话题列表'}
-              aria-label={isOpen ? '收起话题列表' : '展开话题列表'}
-              aria-expanded={isOpen}
-              onClick={(e) => {
-                e.stopPropagation()
-                toggleOpen()
-              }}
-            >
-              <HelmIcon name={isOpen ? 'chevron-down' : 'chevron-right'} size={13} />
-            </button>
-          </Tooltip>
-        )}
-        {!hasSubList && <span className="agent-standing-indent" aria-hidden="true" />}
         <button
           type="button"
           className="nav-item-main nav-open"
@@ -619,8 +592,8 @@ function AgentConversationRow({
 }
 
 /**
- * 「智能体」分组（手风琴单展开）：
- * - 有活跃会话的智能体平铺在上（仅当前展开的那 1 个显示话题子列表）；
+ * 「智能体」分组（单展开，无折叠钮）：
+ * - 有活跃会话的智能体平铺在上（仅当前目标所属的那 1 个显示话题子列表）；
  * - 0 会话的闲置智能体收进底部折叠区；批量管理时展开扁平会话清单。
  */
 function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onNavigate?: () => void }) {
@@ -642,16 +615,6 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
       }),
     [store.profiles, store.conversations, store.plugins, store.groupedUi.sidebarItems, store.groupedUi.sidebarSections],
   )
-
-  // 手风琴：默认跟随当前主屏会话所属智能体；同一时刻仅展开一个。
-  const [accordionId, setAccordionId] = useState<string | null>(() => activeProfileIdOf(store))
-  useEffect(() => {
-    setAccordionId((current) => {
-      const follow = activeProfileIdOf(store)
-      if (follow === null) return current
-      return current === follow ? current : follow
-    })
-  }, [store])
 
   // 当前待命中的零会话智能体平铺在上（不埋进折叠闲置区，保持激活可见）。
   const standbyProfileIds = useMemo(() => {
@@ -847,10 +810,6 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
               onCreate={openStandby}
               onNavigate={onNavigate}
               batchMode={batchMode}
-              accordionOpen={accordionId === agent.profileId}
-              onToggleAccordion={() =>
-                setAccordionId((current) => (current === agent.profileId ? null : agent.profileId))
-              }
               selectedIds={selectedIds}
               onToggleSelect={toggleSelect}
             />
@@ -879,8 +838,6 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
                     onCreate={openStandby}
                     onNavigate={onNavigate}
                     batchMode={false}
-                    accordionOpen={false}
-                    onToggleAccordion={() => {}}
                   />
                 ))}
             </div>
@@ -894,8 +851,6 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
                 onCreate={openStandby}
                 onNavigate={onNavigate}
                 batchMode
-                accordionOpen={false}
-                onToggleAccordion={() => {}}
                 selectedIds={selectedIds}
                 onToggleSelect={toggleSelect}
               />
@@ -1212,8 +1167,8 @@ function ActivityRail({
   )
 }
 
-/** 设置空间导航：系统中心纵向列表，行结构与智能体站位行完全同构
- * （折叠钮占位 + nav-item-main 图标文本），保证两个空间的左缘视觉统一。 */
+/** 设置空间导航：系统中心纵向列表，行结构与智能体站位行同构
+ * （nav-item-main 图标文本），保证两个空间的左缘视觉统一。 */
 function SettingsNavGroup({ store, onNavigate }: { store: HelmStoreValue; onNavigate?: () => void }) {
   return (
     <div className="sidebar-group settings-nav">
@@ -1221,7 +1176,6 @@ function SettingsNavGroup({ store, onNavigate }: { store: HelmStoreValue; onNavi
         const active = store.primaryTarget.kind === key
         return (
           <div key={key} className={`nav-item settings-nav-item${active ? ' nav-item-active' : ''}`}>
-            <span className="agent-standing-indent" aria-hidden="true" />
             <button
               type="button"
               className="nav-item-main nav-open"

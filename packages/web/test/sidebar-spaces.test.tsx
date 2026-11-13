@@ -1,7 +1,8 @@
 /**
  * 双层导航与话题切换器交互测试（happy-dom + 真实 React 事件）：
  * - Sidebar：对话/视图空间切换、搜索过滤智能体、智能体行导航；
- * - 手风琴单展开：仅当前智能体展开话题子列表，切换智能体自动收起。
+ * - 双层导航与单展开：仅当前目标所属智能体展开话题子列表（无折叠钮，
+ *   点击智能体名称进入待命态并随之展开），切换目标自动收起原智能体。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -86,6 +87,19 @@ function setInputValue(input: HTMLInputElement, text: string): void {
   setter.call(input, text)
   tracker?.setValue(prev)
   input.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+/** 可变 store 挂具：同一挂载内模拟 Provider 在 SSE/导航后产出新 store 引用。 */
+function MutableStoreSidebar({
+  base,
+  apiRef,
+}: {
+  base: HelmStoreValue
+  apiRef: { current: { update?: (patch: Partial<HelmStoreValue>) => void } }
+}): React.ReactElement {
+  const [store, setStore] = React.useState<HelmStoreValue>(base)
+  apiRef.current.update = (patch) => setStore((current) => ({ ...current, ...patch }))
+  return e(HelmStoreContext.Provider, { value: store }, e(Sidebar))
 }
 
 /** 空间代表目标（模拟真实 Provider 的空间回跳：views 取首个可用 screen，settings 缺省角色中心）。
@@ -211,6 +225,42 @@ test('Sidebar 手风琴单展开：仅当前会话所属智能体展开话题子
     store.openTargetCalls.map((c) => c.target),
     [{ kind: 'agent', profileId: 'coder' }],
   )
+})
+
+test('Sidebar 智能体行无折叠按钮：展开由当前目标唯一推导', { timeout: 60_000 }, async () => {
+  const store = makeStore()
+  render(store, e(Sidebar))
+  await act(async () => {})
+
+  // 折叠展开按钮已移除：展开只跟随当前目标，点击名称是唯一入口
+  assert.equal(document.body.querySelectorAll('.agent-collapse-btn').length, 0, '不渲染折叠展开按钮')
+  const lists = document.body.querySelectorAll('.agent-conversations-list')
+  assert.equal(lists.length, 1, '仅当前目标所属智能体展开话题列表')
+  assert.ok(lists[0]!.textContent!.includes('周末计划'), '展开的是当前会话所属智能体的话题')
+})
+
+test('Sidebar 话题列表展开随目标切换：切换后自动收起原智能体，无关更新不扰动', { timeout: 60_000 }, async () => {
+  const store = makeStore()
+  const api: { current: { update?: (patch: Partial<HelmStoreValue>) => void } } = { current: {} }
+  render(store, e(MutableStoreSidebar, { base: store, apiRef: api }))
+  await act(async () => {})
+
+  // 主屏切到另一智能体的会话：其话题列表自动展开，原智能体收起
+  await act(async () => {
+    api.current.update!({ primaryTarget: { kind: 'conversation', conversationId: 40 } })
+  })
+  let lists = document.body.querySelectorAll('.agent-conversations-list')
+  assert.equal(lists.length, 1, '仅新目标所属智能体展开')
+  assert.ok(lists[0]!.textContent!.includes('重构方案'), '展开的是编码专员的话题')
+  assert.ok(!lists[0]!.textContent!.includes('周末计划'), '原智能体话题已收起')
+
+  // 模拟 SSE 常规更新（store 引用变化、目标未变）：展开保持稳定
+  await act(async () => {
+    api.current.update!({ conversations: store.conversations.map((c) => ({ ...c })) })
+  })
+  lists = document.body.querySelectorAll('.agent-conversations-list')
+  assert.equal(lists.length, 1, '展开不随无关 store 更新变化')
+  assert.ok(lists[0]!.textContent!.includes('重构方案'))
 })
 
 test('Sidebar 闲置智能体收纳：0 会话智能体进折叠区，默认不占主视野', { timeout: 60_000 }, async () => {

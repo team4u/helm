@@ -603,6 +603,38 @@ test('有历史智能体名称入口：点击站位行进待命态而非旧会�
   assert.equal(state.createCalls.length, 0)
 })
 
+test('侧栏折叠展开钮：仅展开列表不导航，手动展开不被实时更新弹回', { timeout: 60_000 }, async () => {
+  state.conversations.push(summary(5, { profileId: 'coder' }))
+  await mount('#/c/1')
+  // 点击另一个智能体（编码专员）的展开钮：只展开话题列表，不导航不点亮
+  const coderChevron = document.querySelector<HTMLButtonElement>('button[title="展开话题列表"]')
+  assert.ok(coderChevron, '存在收起中的编码专员折叠展开钮')
+  await act(async () => { coderChevron!.click() })
+  await settle()
+  assert.equal(window.location.hash, '#/c/1', '折叠展开钮不导航，主屏保持当前会话')
+  assert.equal(state.createCalls.length, 0, '不预创建会话')
+
+  const standings = [...document.querySelectorAll('.agent-standing')]
+  const coderStanding = standings.find((el) => el.querySelector('.nav-item-label')?.textContent === '编码专员')
+  const assistantStanding = standings.find((el) => el.querySelector('.nav-item-label')?.textContent === '个人助理')
+  assert.ok(coderStanding?.querySelector('.agent-conversations-list'), '编码专员话题列表展开')
+  assert.ok(!coderStanding?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), '被点击智能体不点亮')
+  assert.ok(assistantStanding?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), '高亮不跳转：当前会话智能体头部行承载')
+
+  // 模拟 SSE 实时更新（会话刷新产生新 store）：手动展开不得被弹回第一个智能体
+  await act(async () => {
+    eventController?.enqueue(eventFrame(++eventSeq, {
+      type: 'conversation.upsert',
+      conversation: { ...summary(1), updatedAt: 99 },
+    }))
+  })
+  await settle()
+  const standingsAfter = [...document.querySelectorAll('.agent-standing')]
+  const coderAfter = standingsAfter.find((el) => el.querySelector('.nav-item-label')?.textContent === '编码专员')
+  assert.ok(coderAfter?.querySelector('.agent-conversations-list'), '实时更新后编码专员列表仍展开，不弹回')
+  assert.equal(window.location.hash, '#/c/1', '主屏目标不受影响')
+})
+
 test('真实会话 Composer /new：进入待命态并继承环境，不 reset 不 create', { timeout: 60_000 }, async () => {
   await mount('#/c/1')
   const composerInput = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="输入消息"]')

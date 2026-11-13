@@ -863,6 +863,26 @@ button,
   gap: 2px;
 }
 
+/* 高亮策略（参考 magpie 父强子弱）：站位行（父）恒点亮——卡片底由 .nav-item-active
+ * 提供，叠加微投影描边；话题列表展开、当前会话子行（子）同时点亮时父行高亮不消失。 */
+.agent-standing-group .agent-standing-row.nav-item-active,
+.agent-standing-group .agent-standing-row.nav-item-active:hover {
+  box-shadow: var(--seg-edge);
+}
+
+/* 当前会话子行（子，弱高亮）：半透明药丸底 + 前景加重，无描边阴影，
+ * 与父行的实心卡片形成层级对比。 */
+.agent-standing-group .nav-item-sub.nav-item-active,
+.agent-standing-group .nav-item-sub.nav-item-active:hover {
+  background: color-mix(in srgb, var(--fg) 6.5%, transparent);
+  color: var(--fg);
+  box-shadow: none;
+}
+
+.agent-standing-group .nav-item-sub.nav-item-active .nav-item-label {
+  font-weight: 500;
+}
+
 .nav-item-sub {
   min-height: 28px;
   padding: 3px 8px;
