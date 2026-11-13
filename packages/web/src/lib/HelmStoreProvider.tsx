@@ -250,6 +250,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     setStoredToken(null)
     setAuthenticated(false)
     setSseConnected(false)
+    // 清除断线横幅：登出前的空闲超时/断连提示不得残留到重新登录后的新连接窗口。
+    setConnectionError(null)
     setActiveModal(null)
     setSplitTarget(null)
     setPrimaryTarget({ kind: 'profiles' })
@@ -699,11 +701,9 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
           const read = await readSseChunkWithDeadline(reader, sseClientTimings.idleTimeoutMs)
           if (read.kind === 'idle') {
             // 连接卡死（如 dev 代理保留的挂起流，reader.read() 永不返回）：
-            // abort 解开挂起读取并走 finally 统一重连；重连 fetch 拿 401 即登出，
-            // 页面不再停留在旧状态。正常连接持续收到字节（含心跳注释）不会触发。
-            if (active) setConnectionError('实时连接空闲超时，正在重新连接')
-            controller.abort()
-            throw new Error('实时连接空闲超时')
+            // 抛错走统一 catch（提示 + abort 解开挂起读取）与 finally 重连；
+            // 重连 fetch 拿 401 即登出。正常连接持续收到字节（含心跳注释）不会触发。
+            throw new Error('实时连接空闲超时，正在重新连接')
           }
           if (read.chunk.done) break
           if (!active) return
@@ -712,6 +712,9 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
         if (active) throw new Error('实时连接已断开，正在重新同步')
       } catch (error) {
         if (active && !controller.signal.aborted) setConnectionError(errorText(error))
+        // 出错连接一律主动中止：解开空闲超时下可能挂起的 reader.read()
+        //（其余路径连接本已坏，abort 幂等无害），finally 统一进入重连。
+        controller.abort()
       } finally {
         if (reader) { await reader.cancel().catch(() => {}); reader.releaseLock() }
         if (active) {
