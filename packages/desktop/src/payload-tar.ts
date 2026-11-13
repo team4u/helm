@@ -1,20 +1,17 @@
 /**
  * 最小安全 tar.gz 解包器（纯 Node 零依赖）：面向 npm 包 tarball（ustar + pax 扩展头 +
- * GNU longname/longlink），流式解压落盘，强制三重防线：
+ * GNU longname），流式解压落盘，强制三重防线：
  * 1. 条目名 containment：拒绝绝对路径 / `..` 穿越 / 反斜杠（Windows 语义不确定）/
- *    非 `package/` 前缀（npm 包布局铁律）；symlink/hardlink 目标同样 containment 校验；
- * 2. 类型白名单：仅文件 / 目录 / symlink / hardlink；设备文件与 FIFO 显式拒绝；
+ *    非 `package/` 前缀（npm 包布局铁律）；
+ * 2. 类型白名单：仅文件 / 目录；链接、设备文件与 FIFO 显式拒绝；
  * 3. 上限：条目数与解包总字节封顶（防解压炸弹）。
  * 任何违规显式抛 DesktopError（tar_*），绝不静默跳过。
  */
 import {
   closeSync,
-  copyFileSync,
   createReadStream,
-  existsSync,
   mkdirSync,
   openSync,
-  symlinkSync,
   writeSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -96,7 +93,7 @@ function parseOctal(field: Buffer, what: string): number {
   const text = field.toString('utf8').split('\0')[0]!.trim();
   if (text.length === 0) return 0;
   const value = Number.parseInt(text, 8);
-  if (Number.isNaN(value)) {
+  if (!/^[0-7]+$/.test(text) || !Number.isSafeInteger(value) || value < 0) {
     throw new DesktopError('tar_header_invalid', `tar 头部 ${what} 字段不是合法八进制: ${JSON.stringify(text)}`);
   }
   return value;
@@ -126,10 +123,12 @@ function parsePaxRecords(content: Buffer): Record<string, string> {
     if (!Number.isInteger(len) || len <= 0 || offset + len > content.length) {
       throw new DesktopError('tar_header_invalid', `pax 记录长度非法: ${len}`);
     }
-    const record = content.subarray(offset + spaceIdx + 1, offset + len).toString('utf8');
+    const record = content.subarray(spaceIdx + 1, offset + len).toString('utf8');
     const eq = record.indexOf('=');
     if (eq > 0 && record.endsWith('\n')) {
-      records[record.slice(0, eq)] = record.slice(eq + 1, -1);
+      const key = record.slice(0, eq);
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') throw new DesktopError('tar_header_invalid', 'pax 键非法');
+      records[key] = record.slice(eq + 1, -1);
     }
     offset += len;
   }
@@ -214,28 +213,35 @@ export async function extractTarGzip(
   const options: TarExtractOptions = { ...DEFAULTS, ...partial };
   const sourceStream = createReadStream(tgzPath);
   const gunzip = createGunzip();
+  sourceStream.on('error', (error) => gunzip.destroy(error));
   sourceStream.pipe(gunzip);
   const source = new BlockSource(gunzip[Symbol.asyncIterator]());
   const result: TarExtractResult = { files: 0, directories: 0, totalBytes: 0 };
   let longName: string | null = null;
-  let longLink: string | null = null;
   let nextPax: Record<string, string> | null = null;
   let globalPax: Record<string, string> = {};
+  let headerCount = 0;
+  let metadataBytes = 0;
 
   try {
     mkdirSync(destDir, { recursive: true });
     for (;;) {
       const header = await source.readExact(BLOCK_SIZE);
-      if (header === null) break; // 流结束（容忍缺失 end-block 的截尾归档）
+      if (header === null) throw new DesktopError('tar_truncated', 'tar 缺少结束标记');
       if (header.every((b) => b === 0)) break; // end-of-archive 标记块
       verifyChecksum(header);
       const rawName = stripTrailingNul(header.subarray(0, 100).toString('utf8'));
       const size = parseOctal(header.subarray(124, 136), 'size');
       const typeflag = String.fromCharCode(header[156]!);
-      const rawLinkname = stripTrailingNul(header.subarray(157, 257).toString('utf8'));
       const prefix = stripTrailingNul(header.subarray(345, 500).toString('utf8')).trim();
       const mode = parseOctal(header.subarray(100, 108), 'mode') & 0o777;
 
+      headerCount += 1;
+      if (headerCount > options.maxEntries || size > options.maxTotalBytes) throw new DesktopError('tar_size_limit', 'tar 元数据或条目超限');
+      if (typeflag === 'g' || typeflag === 'x' || typeflag === 'L') {
+        metadataBytes += size;
+        if (metadataBytes > Math.min(options.maxTotalBytes, 1024 * 1024)) throw new DesktopError('tar_size_limit', 'tar 扩展元数据超过上限');
+      }
       if (typeflag === 'g' || typeflag === 'x') {
         const content = await readFull(source, size);
         const records = parsePaxRecords(content);
@@ -244,10 +250,9 @@ export async function extractTarGzip(
         await skipPadding(source, size);
         continue;
       }
-      if (typeflag === 'L' || typeflag === 'K') {
+      if (typeflag === 'L') {
         const content = stripTrailingNul((await readFull(source, size)).toString('utf8'));
-        if (typeflag === 'L') longName = content;
-        else longLink = content;
+        longName = content;
         await skipPadding(source, size);
         continue;
       }
@@ -264,17 +269,10 @@ export async function extractTarGzip(
       } else if (prefix.length > 0) {
         name = `${prefix}/${rawName}`;
       }
-      let linkname = rawLinkname;
-      if (longLink !== null) {
-        linkname = longLink;
-        longLink = null;
-      } else if (typeof effective['linkpath'] === 'string') {
-        linkname = effective['linkpath'];
-      }
       let entrySize = size;
       if (typeof effective['size'] === 'string') {
         const paxSize = Number.parseInt(effective['size'], 10);
-        if (!Number.isInteger(paxSize) || paxSize < 0) {
+        if (!/^\d+$/.test(effective['size']) || !Number.isSafeInteger(paxSize) || paxSize < 0) {
           throw new DesktopError('tar_header_invalid', `pax size 记录非法: ${effective['size']}`);
         }
         entrySize = paxSize;
@@ -290,6 +288,7 @@ export async function extractTarGzip(
       const isDirectory =
         typeflag === '5' || ((typeflag === '0' || typeflag === '\0') && entrySize === 0 && name.endsWith('/'));
       if (isDirectory) {
+        if (entrySize !== 0) throw new DesktopError('tar_header_invalid', 'tar 目录不得含文件内容');
         const target = entryTarget(destDir, name.replace(/\/+$/, ''), options.stripPrefix, '目录');
         mkdirSync(target, { recursive: true });
         result.directories += 1;
@@ -303,47 +302,9 @@ export async function extractTarGzip(
         result.totalBytes += entrySize;
         continue;
       }
-      if (typeflag === '2') {
-        await skipPadding(source, entrySize);
-        const target = entryTarget(destDir, name, options.stripPrefix, 'symlink');
-        if (linkname.length === 0) {
-          throw new DesktopError('tar_entry_invalid', `symlink 条目缺少目标: ${name}`);
-        }
-        if (path.posix.isAbsolute(linkname)) {
-          throw new DesktopError('tar_link_escape', `symlink 目标是绝对路径: ${name} -> ${linkname}`);
-        }
-        const normalizedLink = path.posix.normalize(linkname);
-        if (normalizedLink === '..' || normalizedLink.startsWith('../')) {
-          throw new DesktopError('tar_link_escape', `symlink 目标逃逸 payload 目录: ${name} -> ${linkname}`);
-        }
-        const resolved = path.resolve(path.dirname(target), normalizedLink);
-        const containment = path.relative(destDir, resolved);
-        if (containment.startsWith('..') || path.isAbsolute(containment)) {
-          throw new DesktopError('tar_link_escape', `symlink 目标逃逸 payload 目录: ${name} -> ${linkname}`);
-        }
-        mkdirSync(path.dirname(target), { recursive: true });
-        symlinkSync(normalizedLink, target);
-        result.files += 1;
-        continue;
-      }
-      if (typeflag === '1') {
-        await skipPadding(source, entrySize);
-        const target = entryTarget(destDir, name, options.stripPrefix, 'hardlink');
-        if (linkname.length === 0) {
-          throw new DesktopError('tar_entry_invalid', `hardlink 条目缺少源: ${name}`);
-        }
-        const sourceFile = entryTarget(destDir, linkname, options.stripPrefix, 'hardlink 源');
-        if (!existsSync(sourceFile)) {
-          throw new DesktopError('tar_entry_invalid', `hardlink 源不存在（tar 中须先于引用出现）: ${linkname}`);
-        }
-        mkdirSync(path.dirname(target), { recursive: true });
-        copyFileSync(sourceFile, target);
-        result.files += 1;
-        continue;
-      }
       throw new DesktopError(
         'tar_unsupported_type',
-        `tar 条目类型不支持（typeflag=${JSON.stringify(typeflag)}，仅文件/目录/链接）: ${name}`,
+        `tar 条目类型不支持（typeflag=${JSON.stringify(typeflag)}，仅文件/目录）: ${name}`,
       );
     }
     return result;

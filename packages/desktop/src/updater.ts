@@ -151,7 +151,7 @@ function parseSemVer(value: string): { major: number; minor: number; patch: numb
 }
 
 /** SemVer 优先级比较（build metadata 忽略；release > prerelease；数字标识 < 字母标识）。 */
-function compareSemVer(a: string, b: string): number | null {
+export function compareSemVer(a: string, b: string): number | null {
   const pa = parseSemVer(a);
   const pb = parseSemVer(b);
   if (pa === null || pb === null) return null;
@@ -374,8 +374,9 @@ export class NpmPayloadUpdater implements PayloadUpdater {
       if (current !== null && current.releaseDir !== state.releaseDir) {
         writeJsonAtomic(this.previousFile, this.stateOf(current, at));
       }
-      writeJsonAtomic(this.currentFile, { ...state, at });
       this.clearPendingFor(state.name, state.version);
+      // current 是最后一个可失败的提交步骤，提交后不得再抛错触发反向恢复。
+      writeJsonAtomic(this.currentFile, { ...state, at });
     });
   }
 
@@ -540,20 +541,20 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     };
   }
 
-  /**
-   * 管理路径形态校验：必须 POSIX 绝对路径；显式拒绝 Windows 形态——盘符前缀（C:\ 与盘符相对
-   * C:foo）与任何反斜杠（\\server 等）。注：不能直接用 path.win32.isAbsolute 判定——POSIX
-   * 绝对路径（/ 开头）在 win32 语义下同样是 absolute，会误杀全部合法路径；Windows 特有
-   * 形态恰为盘符前缀与反斜杠两者，显式拒绝即完备。
-   */
+  /** 状态文件存本机绝对路径；Windows 本机盘符与 UNC 路径由后续 containment 验证。 */
   private checkManagedPath(value: unknown, problems: string[], what: string): value is string {
     if (typeof value !== 'string' || value.length === 0) {
       problems.push(`${what} 缺失或非字符串`);
       return false;
     }
-    if (!path.isAbsolute(value)) problems.push(`${what} 必须是绝对路径: ${value}`);
-    if (/^[A-Za-z]:/.test(value)) problems.push(`${what} 不得是 Windows 盘符路径形态（C:\ 或盘符相对）: ${value}`);
-    if (value.includes('\\')) problems.push(`${what} 不得包含反斜杠: ${value}`);
+    if (!path.isAbsolute(value)) {
+      problems.push(`${what} 必须是本机绝对路径: ${value}`);
+      return false;
+    }
+    if (process.platform !== 'win32' && (/^[A-Za-z]:/.test(value) || value.includes('\\'))) {
+      problems.push(`${what} 含其他平台的路径形态: ${value}`);
+      return false;
+    }
     return true;
   }
 

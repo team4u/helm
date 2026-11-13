@@ -131,8 +131,17 @@ test('buildHubChildEnv：注入 kernel 约定变量并剥离 HELM_DESKTOP_* 与 
   assert.equal(env['HELM_TOKEN'], 't');
 });
 
-test('buildHubChildEnv：未配置 dataDir/webDist 时不注入对应键', () => {
+test('buildHubChildEnv：未配置 dataDir/webDist 时不注入对应键', { timeout: 60_000 }, () => {
   const env = buildHubChildEnv(resolveDesktopConfig(BASE_ENV), BASE_ENV);
   assert.equal(env['HELM_DATA_DIR'], undefined);
   assert.equal(env['HELM_WEB_DIST_DIR'], undefined);
+});
+
+test('桌面端遵守 HELM_DATA_DIR 覆盖并给子进程绑定同版 CLI', { timeout: 60_000 }, () => {
+  const config = resolveDesktopConfig({ HELM_DATA_DIR: '/data/isolated' }, { cliEntry: '/payload/cli/dist/index.js' });
+  assert.equal(config.dataDir, '/data/isolated');
+  const child = buildHubChildEnv(config, { HELM_CWD: '/projects/demo' });
+  assert.equal(child.HELM_DATA_DIR, '/data/isolated');
+  assert.equal(child.HELM_CLI_ENTRY, '/payload/cli/dist/index.js');
+  assert.equal(child.HELM_CWD, '/projects/demo');
 });

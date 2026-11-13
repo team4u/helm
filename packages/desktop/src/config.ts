@@ -8,6 +8,7 @@
  *   配置后优先于仓库 kernel dist（payload 加载路径，不 import kernel）。
  */
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 import { DesktopError } from './errors.js';
 
 export const DESKTOP_DEFAULT_PORT = 3202;
@@ -25,6 +26,8 @@ export interface DesktopConfig {
   readonly dataDir?: string;
   /** 传给 Hub 子进程的 HELM_WEB_DIST_DIR；undefined = kernel 缺省探测。 */
   readonly webDistDir?: string;
+  /** 与当前载荷同版的 helm CLI 入口。 */
+  readonly cliEntry?: string;
   /** npm Hub payload 的 hub 入口 JS；设置则优先于 hubEntry。 */
   readonly payloadEntry?: string;
   /** payload 入口附加参数（HELM_DESKTOP_PAYLOAD_ENTRY_ARGS，空格拆分；仅 payload 入口可用）。 */
@@ -64,6 +67,7 @@ export type DesktopOverrides = Partial<
     | 'port'
     | 'dataDir'
     | 'webDistDir'
+    | 'cliEntry'
     | 'payloadEntry'
     | 'payloadEntryArgs'
     | 'payloadPackage'
@@ -174,8 +178,9 @@ export function resolveDesktopConfig(env: NodeJS.ProcessEnv, overrides: DesktopO
     port,
     hostname: '127.0.0.1',
     hubUrl: `http://127.0.0.1:${port}`,
-    dataDir: overrides.dataDir ?? env['HELM_DESKTOP_DATA_DIR'],
+    dataDir: overrides.dataDir ?? env['HELM_DESKTOP_DATA_DIR'] ?? env['HELM_DATA_DIR'],
     webDistDir: overrides.webDistDir ?? env['HELM_DESKTOP_WEB_DIST'],
+    cliEntry: overrides.cliEntry ?? env['HELM_CLI_ENTRY'],
     payloadEntry,
     payloadEntryArgs,
     payloadPackage,
@@ -233,5 +238,7 @@ export function buildHubChildEnv(config: DesktopConfig, baseEnv: NodeJS.ProcessE
   child['HELM_HOST'] = config.hostname;
   if (config.dataDir !== undefined) child['HELM_DATA_DIR'] = config.dataDir;
   if (config.webDistDir !== undefined) child['HELM_WEB_DIST_DIR'] = config.webDistDir;
+  if (config.cliEntry !== undefined) child['HELM_CLI_ENTRY'] = config.cliEntry;
+  child['HELM_CWD'] = baseEnv['HELM_CWD'] ?? homedir();
   return child;
 }

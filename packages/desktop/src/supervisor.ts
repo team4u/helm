@@ -132,12 +132,17 @@ export class HubSupervisor {
       throw new DesktopError(code, hint, { entry: entry.entry });
     }
 
-    this.runner = await selectRunner(this.config, {
+    try {
+      this.runner = await selectRunner(this.config, {
       isElectron: this.isElectron,
       execPath: this.execPath,
       env: this.env,
       onSkip: (kind, reason) => this.events.problem?.(new DesktopError('hub_runner_skipped', `运行器候选 ${kind} 被跳过: ${reason}`, { kind, reason })),
     });
+    } catch (error) {
+      this.setState('failed');
+      throw error;
+    }
     this.events.runnerSelected?.(this.runner);
 
     const handle = this.spawnChild(this.runner);
@@ -173,7 +178,7 @@ export class HubSupervisor {
 
     const handle = this.handle;
     if (handle.exited === null) {
-      handle.child.kill('SIGTERM');
+      this.requestShutdown(handle);
       const exited = await this.waitExit(handle, this.config.stopGraceMs);
       if (!exited) {
         handle.child.kill('SIGKILL');
@@ -213,7 +218,9 @@ export class HubSupervisor {
     const handle: ChildHandle = {
       child: spawn(runner.command[0]!, runner.command.slice(1), {
         env: runner.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: runner.env['HELM_CWD'],
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       }),
       runner,
       stderrTail: [],
@@ -243,7 +250,10 @@ export class HubSupervisor {
     const deadline = Date.now() + this.config.readyTimeoutMs;
     for (;;) {
       if (handle.exited !== null) throw this.classifyExit(handle);
-      if (await this.probeOnce()) return;
+      if (await this.probeOnce()) {
+        if (handle.exited !== null) throw this.classifyExit(handle);
+        return;
+      }
       if (Date.now() >= deadline) {
         await this.reap(handle);
         throw new DesktopError(
@@ -274,9 +284,19 @@ export class HubSupervisor {
     );
   }
 
+  private requestShutdown(handle: ChildHandle): void {
+    if (handle.runner.kind !== 'custom' && handle.child.connected) {
+      handle.child.send({ type: 'shutdown' }, (error) => {
+        if (error && handle.exited === null) handle.child.kill('SIGTERM');
+      });
+    } else {
+      handle.child.kill('SIGTERM');
+    }
+  }
+
   private async reap(handle: ChildHandle): Promise<void> {
     if (handle.exited === null) {
-      handle.child.kill('SIGTERM');
+      this.requestShutdown(handle);
       if (!(await this.waitExit(handle, this.config.stopGraceMs))) {
         handle.child.kill('SIGKILL');
         await this.waitExit(handle, 2_000);

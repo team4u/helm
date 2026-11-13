@@ -3,13 +3,14 @@
  * > 宿主 Node。候选运行器必须通过运行期能力探测（Node 版本 >= kernel floor 且 node:sqlite
  * 可用），探测结果如实记录；全部候选不可用时显式报错，绝不静默降级。
  *
- * 兼容性实测（2025-04，Electron 45.3.1 / 内嵌 Node 24.22.2）：
+ * 兼容性实测（Electron 45.3.1 / 内嵌 Node 24.22.2）：
  * - ELECTRON_RUN_AS_NODE=1 下 node:sqlite 可用、native esbuild 可用、
  *   kernel dist/main.js 完整启动并优雅退出；
  * - utilityProcess 需完整 Electron app 上下文，无显示环境不可独立验证，
  *   骨架统一用 child_process（验证过的路径），utilityProcess 留作后续隔离增强。
  */
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { DesktopError } from './errors.js';
 import type { DesktopConfig } from './config.js';
 import { buildHubChildEnv, resolveHubEntry } from './config.js';
@@ -135,7 +136,7 @@ export async function selectRunner(config: DesktopConfig, ctx: SelectRunnerConte
   }
   // resolveHubEntry 的 payload source 可携带附加参数（如 start.mjs 需要 start 子命令），
   // hub-entry source 恒无参数；custom 命令原样整体采用。
-  const hubArgs = entry === null ? [] : [entry.entry, ...entry.args];
+  const hubArgs = entry === null ? [] : [fileURLToPath(new URL('../dist/hub-child.js', import.meta.url)), entry.entry, ...entry.args];
 
   // 2) 显式 node 覆写：仍需能力探测（保证能跑 kernel）。
   if (config.hubNode !== undefined) {

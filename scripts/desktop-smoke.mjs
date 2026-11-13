@@ -30,7 +30,7 @@
  *     CI runner 非 root，不传该参数，保持与真实用户环境一致。
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,7 +73,7 @@ function parseArgs(argv) {
     console.error('[desktop-smoke] 缺少 --packaged：当前仅支持对打包解包产物冒烟（dev 模式用 pnpm --filter @helm/desktop run smoke）。');
     usage(2);
   }
-  if (!Number.isInteger(opts.port) || opts.port < 1 || opts.port > 65535) {
+  if (!Number.isInteger(opts.port) || opts.port < 1 || opts.port > 65535 || [3000, 3001, 3002, 3101, 3102].includes(opts.port)) {
     console.error(`[desktop-smoke] 非法 --port 值: ${opts.port}`);
     usage(2);
   }
@@ -170,12 +170,14 @@ function runChild(child, timeoutMs) {
       resolve(result);
     };
     let graceTimer;
+    let timedOut = false;
     // 超时先杀树；杀后 5 秒仍无 exit 事件则强制收尾（僵尸/不可杀时如实报告而非悬挂）。
     const killTimer = setTimeout(() => {
+      timedOut = true;
       killTree(child);
       graceTimer = setTimeout(() => finish({ code: null, signal: null, timedOut: true, killedAfterTimeout: true }), 5_000);
     }, timeoutMs);
-    child.once('exit', (code, signal) => finish({ code, signal, timedOut: false }));
+    child.once('close', (code, signal) => finish({ code, signal, timedOut }));
     child.once('error', (error) => finish({ error, code: null, signal: null, timedOut: false }));
   });
 }
@@ -196,9 +198,11 @@ function validateSmokeJson(outDir) {
   if (parsed === null || typeof parsed !== 'object' || parsed.ok !== true) {
     fail(outDir, `smoke.json 判定未通过（期望 ok:true）: ${JSON.stringify(parsed)}`);
   }
-  if (parsed.nativeCompiler !== true) {
-    fail(outDir, `smoke.json 判定未通过（期望 nativeCompiler:true，workflow/mermaid 编译不可用则如实失败）: ${JSON.stringify(parsed)}`);
+  for (const field of ['nativeCompiler', 'rendererIsolated', 'portReleased']) {
+    if (parsed[field] !== true) fail(outDir, `smoke.json 缺少通过的 ${field} 检查：${JSON.stringify(parsed)}`);
   }
+  const screenshot = path.join(outDir, 'window.png');
+  if (!existsSync(screenshot) || statSync(screenshot).size === 0) fail(outDir, '未生成窗口截图 window.png');
   return parsed;
 }
 
@@ -221,9 +225,11 @@ function runSmoke(exe, appArgs, env, outDir, opts) {
     process.stderr.write(`[app] ${chunk}`);
   });
 
-  runChild(child, opts.timeoutMs).then((result) => {
-    stdoutLog.end();
-    stderrLog.end();
+  runChild(child, opts.timeoutMs).then(async (result) => {
+    await Promise.all([
+      new Promise((resolve) => stdoutLog.end(resolve)),
+      new Promise((resolve) => stderrLog.end(resolve)),
+    ]);
     if (result.error) {
       fail(outDir, `无法启动 ${exe}: ${result.error.message}`);
     }
@@ -234,7 +240,7 @@ function runSmoke(exe, appArgs, env, outDir, opts) {
       fail(outDir, `App 退出码非 0（code=${result.code} signal=${result.signal ?? 'null'}）`);
     }
     const report = validateSmokeJson(outDir);
-    const artifacts = readdirSync(outDir).filter((name) => name !== 'data');
+    const artifacts = readdirSync(outDir).filter((name) => !name.startsWith('data-'));
     console.log(`[desktop-smoke] smoke.json: ${JSON.stringify(report)}`);
     console.log(`[desktop-smoke] 报告文件: ${artifacts.join(', ')}`);
     console.log('[desktop-smoke] SMOKE PASS（打包 App 自检通过）');
@@ -249,18 +255,18 @@ function main() {
 
   const exe = locateExecutable(releaseDir);
 
-  // 报告目录每次重建；数据目录独立于报告文件，作为 HELM_DATA_DIR 传给 App。
-  rmSync(outDir, { recursive: true, force: true });
+  // 仅清理本脚本创建的报告文件；数据目录逐次新建，避免删除用户指定目录中的其他文件。
   mkdirSync(outDir, { recursive: true });
-  const dataDir = path.join(outDir, 'data');
-  mkdirSync(dataDir, { recursive: true });
+  for (const file of ['smoke.json', 'window.png', 'stdout.log', 'stderr.log']) rmSync(path.join(outDir, file), { force: true });
+  const dataDir = mkdtempSync(path.join(outDir, 'data-'));
 
   const appArgs = ['--smoke-test', `--smoke-output=${outDir}`];
   if (needsNoSandbox()) appArgs.unshift('--no-sandbox');
 
   // 显式固定端口与数据目录：不继承宿主环境里的 HELM_PORT/HELM_DATA_DIR 漂移。
   const port = String(opts.port);
-  const env = { ...process.env, HELM_DATA_DIR: dataDir, HELM_PORT: port };
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^HELM_/i.test(key) && key !== 'ELECTRON_RUN_AS_NODE'));
+  const env = { ...baseEnv, HELM_DATA_DIR: dataDir, HELM_DESKTOP_DATA_DIR: dataDir, HELM_CWD: dataDir, HELM_PORT: port, HELM_DESKTOP_PORT: port };
 
   console.log(`[desktop-smoke] 可执行文件: ${exe}`);
   console.log(`[desktop-smoke] 参数: ${appArgs.join(' ')}`);

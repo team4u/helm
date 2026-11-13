@@ -129,7 +129,7 @@ jobs:
   # ------------------------------------------------------------------
   npm-payload:
     name: npm payload (conditional publish)
-    needs: [verify, build]
+    needs: [verify, build, desktop-package]
     permissions:
       contents: read
       id-token: write # npm provenance 依赖 OIDC 生成来源证明
@@ -333,7 +333,7 @@ jobs:
           retention-days: 7
 
       - name: Build desktop installers (publish never)
-        run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist -- --publish never
+        run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist
 
       - name: Upload desktop installers
         uses: actions/upload-artifact@v4
