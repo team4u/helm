@@ -6,6 +6,7 @@ const hubPort = process.env.HELM_PORT ?? '3202'
 const hubTarget = `http://127.0.0.1:${hubPort}`
 
 export default defineConfig({
+  clearScreen: false,
   plugins: [react()],
   resolve: {
     alias: { '@helm/protocol': fileURLToPath(new URL('../protocol/src/index.ts', import.meta.url)) },
