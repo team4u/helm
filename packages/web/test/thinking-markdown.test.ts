@@ -19,6 +19,14 @@ test('思考样式契约：.thinking-expanded-body 100% 宽度撑满，段落与
   assert.match(stylesCss, /\.thinking-expanded-body\s+\.msg-ai-body\s+h1[\s\S]*?max-width:\s*100%/)
 })
 
+test('消息正文与气泡宽度样式契约：AI 正文段落与列表解除 74ch 限制，人类消息气泡放宽至 720px', { timeout: 60_000 }, () => {
+  // 验证 .msg-ai-body p 与 ul/ol 不再包含 74ch
+  assert.doesNotMatch(stylesCss, /\.msg-ai-body\s+p\s*\{[^}]*max-width:\s*74ch/)
+  assert.doesNotMatch(stylesCss, /\.msg-ai-body\s+ul[\s\S]*?max-width:\s*74ch/)
+  // 验证 .msg-human-pill 放宽至 min(88%, 720px)
+  assert.match(stylesCss, /\.msg-human-pill\s*\{[^}]*max-width:\s*min\(88%,\s*720px\)/)
+})
+
 test('ThinkingRow 组件渲染：展开时使用 MarkdownView 渲染标题与列表并具备 thinking-expanded-body 类', { timeout: 60_000 }, () => {
   const markdownText = '# 深度思考\n\n- 步骤一\n- 步骤二'
   const html = renderToString(
