@@ -294,7 +294,7 @@
 .subagent-live-stream {
   max-height: 220px;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  /* 不设 overscroll-behavior: contain：滚动到边界须链回会话时间线，否则悬停卡片时滚轮被吞 */
   padding: 8px 10px;
   display: flex;
   flex-direction: column;
@@ -463,10 +463,9 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
   background: var(--bg-subtle);
-  /* 渐进披露：节点列表支持滚动，平铺胶囊卡清晰可见流动数据 */
+  /* 渐进披露：节点列表支持滚动，平铺胶囊卡清晰可见流动数据；滚动到边界须链回时间线（contain 会吞掉悬停整卡时的滚轮） */
   max-height: 360px;
   overflow-y: auto;
-  overscroll-behavior: contain;
 }
 
 .workflow-node-line {
@@ -610,7 +609,6 @@
   font-size: 11px;
   max-height: 140px;
   overflow-y: auto;
-  overscroll-behavior: contain;
 }
 
 .workflow-log-line {
