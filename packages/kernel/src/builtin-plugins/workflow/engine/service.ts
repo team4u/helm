@@ -10,7 +10,8 @@
  *   守卫端口（human 红线由内核原子复核，无普通中止回退）；经工具 background
  *   启动的 workflow run（notifyParentOnSettle=true）与 subagent run 同款后台
  *   语义：结算后恰一次向父会话投递通知（notifiedAt 防重复，init() outbox
- *   补发）、重启恢复时守卫中止其在途子会话并标 failed(interrupted)；
+ *   补发）、重启恢复时按即时持久化的 childConversationIds（onResolved 登记
+ *   即落盘）守卫中止其在途子会话并标 failed(interrupted)；
  * - 持久化（单库设计）：run 索引与每 run summary 存入注入的 state store
  *   （@helm/kernel 唯一 state.sqlite 的命名空间 doc），启动恢复时把遗留
  *   running 显式标 failed(interrupted)。唯一文件例外是统一前缀重放账本
@@ -159,9 +160,11 @@ export interface WorkflowServiceHost {
    */
   onRunSettled?(summary: WorkflowRunSummary): Promise<void> | void
   /**
-   * 后台单子代理（startBackgroundAgent）终态汇报回调：仅对 notifyParentOnSettle=true
-   * 的后台子代理触发（不影响常规 SubagentWorkflow）。调用方（app/kernel）向父
-   * 会话投递完成/失败/中止通知；恰一次（notifiedAt 防重复，init() 补发遗留）。
+   * 后台 run 终态汇报回调：对 notifyParentOnSettle=true 的后台 run 触发——
+   * 包括 startBackgroundAgent 的后台子代理与经工具 background 启动的
+   * workflow run（同步 SubagentWorkflow / 同步 workflow 不触发）。调用方
+   * （app/kernel）向父会话投递完成/失败/中止通知；恰一次（notifiedAt 防重复，
+   * init() 补发遗留）。
    */
   onBackgroundAgentSettled?(
     summary: WorkflowRunSummary,
@@ -264,6 +267,13 @@ interface RunRecord {
   notifiedAt?: number
   /** 后台子代理的 Profile 与执行环境元数据（onResolved 回传后补全）。 */
   subagentMeta?: { agentType?: string; execution?: AgentExecutionInfo }
+  /**
+   * 私有恢复元数据：本 run 派生过的子会话 ID 集（onResolved 登记即持久；
+   * writeRecord 统一从活跃 run 的 childConversations 合入，杜绝旧副本覆盖）。
+   * 后台 run 崩溃恢复（prepareRecovery/init 守卫中止）以这组持久 IDs 为权威
+   * 坐标——真实 run 运行期 nodes 要到 settleRun 才落盘，不能作为恢复依据。
+   */
+  childConversationIds?: number[]
 }
 
 /** 持久层读出的错误可打印形态（store 异常诊断用）。 */
@@ -323,6 +333,13 @@ function runRecordProblem(record: unknown): string | undefined {
   if (!Number.isFinite(r['createdAt']) || typeof r['createdAt'] !== 'number') return 'createdAt 非数值'
   if (!Number.isFinite(r['updatedAt']) || typeof r['updatedAt'] !== 'number') return 'updatedAt 非数值'
   if (typeof r['journalPath'] !== 'string') return 'journalPath 非字符串'
+  const childIds = r['childConversationIds']
+  if (
+    childIds !== undefined &&
+    (!Array.isArray(childIds) || !childIds.every((id) => Number.isInteger(id) && id >= 1))
+  ) {
+    return 'childConversationIds 非法（需正整数数组）'
+  }
   if (r['error'] !== undefined && typeof r['error'] !== 'string') return 'error 非字符串'
   return undefined
 }
@@ -350,6 +367,8 @@ interface ActiveRun {
    * 取消则立即补杀（防快照时序漏杀）。
    */
   childConversations: Set<number>
+  /** 本 run 的持久记录引用（同一对象）：子会话事实即时落盘与终态写共用。 */
+  record: RunRecord
   /** progress 持久化节流（timeline 非空后定期落盘）。 */
   lastPersistAt: number
   /** 节点开始/结束必须推送的 workflow.updated 事件（有界频率内的强制点）。 */
@@ -476,9 +495,7 @@ export class WorkflowService {
     for (const entry of index) {
       const record = this.loadRecord(entry.id)
       if (record.status !== 'running' || !this.isBackgroundRecord(record)) continue
-      const known = record.subagentMeta?.execution?.conversationId
-      if (known !== undefined) childIds.add(known)
-      for (const node of record.nodes ?? []) if (node.conversationId !== undefined) childIds.add(node.conversationId)
+      for (const id of this.backgroundChildIds(record)) childIds.add(id)
     }
     if (childIds.size > 0) await this.host.prepareInterruptedConversations([...childIds])
     this.recoveryPrepared = true
@@ -517,13 +534,11 @@ export class WorkflowService {
           }
           if (record.status !== 'running') continue
           if (this.isBackgroundRecord(record)) {
-            const children = new Set<number>()
-            const known = record.subagentMeta?.execution?.conversationId
-            if (known !== undefined) children.add(known)
-            for (const node of record.nodes ?? []) if (node.conversationId !== undefined) children.add(node.conversationId)
-            // 全部执行已在 prepareRecovery 持久标记取消；此处仅等待真实终态，
-            // 不能先回报 interrupted 却让旧模型回合继续运行。守卫中止逐个诊断：
-            // 单个子会话拒绝（human 接管等红线事实）不阻断其余恢复。
+            // 权威坐标 = 运行期即时持久化的 childConversationIds（合并 subagentMeta/
+            // nodes 冗余投影）。全部执行已在 prepareRecovery 持久标记取消；此处仅
+            // 等待真实终态，不能先回报 interrupted 却让旧模型回合继续运行。守卫
+            // 中止逐个诊断：单个子会话拒绝（human 接管等红线事实）不阻断其余恢复。
+            const children = new Set<number>(this.backgroundChildIds(record))
             await Promise.all([...children].map(async (id) => {
               try {
                 await this.host.abortConversationGuarded(id)
@@ -1093,6 +1108,7 @@ export class WorkflowService {
       runId,
       conversationId,
       abort,
+      record,
       done: doneGate,
       summary: this.toSummary(record),
       journalPath,
@@ -1487,6 +1503,7 @@ export class WorkflowService {
       runId,
       conversationId: request.parentConversationId,
       abort,
+      record,
       // done 立即挂后台兜底链：从创建第一刻起 wait/abort/close 都有可等的终点。
       done: doneGate.then(() => undefined),
       summary: this.toSummary(record),
@@ -2301,6 +2318,10 @@ export class WorkflowService {
           // 迟到 onResolved 补杀：abort 先于执行元数据落地时，abortAgent 的
           // 映射里还没有该子会话——在登记点立即补守卫中止，绝不因时序漏杀。
           if (run.abort.signal.aborted) this.abortChildConversation(run, info.conversationId)
+          // 子会话事实即时持久：崩溃恢复以这组 IDs 为权威坐标（见
+          // persistChildConversationFact）。同步/后台 workflow 一视同仁——
+          // 统一经 invokeSpawn，不按启动形态分支。
+          this.persistChildConversationFact(run, info.conversationId)
         }
         request.onResolved?.(info)
       },
@@ -2599,6 +2620,13 @@ export class WorkflowService {
 
   /** 写 run doc；新 run 同时追加索引。 */
   private writeRecord(record: RunRecord, options: { index?: boolean } = {}): void {
+    // 活跃 run 的在途子会话以内存 Set 为唯一真源：任何写入（onResolved 即时 /
+    // progress 节流 / 终态）统一从 active 合入 childConversationIds，杜绝用旧
+    // record 副本覆盖掉已登记的子会话事实。
+    const active = this.active.get(record.id)
+    if (active !== undefined && active.childConversations.size > 0) {
+      record.childConversationIds = [...active.childConversations]
+    }
     this.state.set(runKey(record.id), record)
     if (options.index === true) {
       const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
@@ -2797,6 +2825,47 @@ export class WorkflowService {
 
   private assertNotClosed(): void {
     if (this.closed) throw new HelmError('closed', 'WorkflowService 已关闭', 409)
+  }
+
+  /**
+   * 后台 run 恢复所需的在途子会话坐标：childConversationIds 是运行期即时持久
+   * 的权威面；subagentMeta/nodes 坐标是既有冗余投影（子代理路径/终态落盘），
+   * 恢复时合并去重，不做旧格式迁移读取。
+   */
+  private backgroundChildIds(record: RunRecord): number[] {
+    const ids = new Set<number>()
+    for (const id of record.childConversationIds ?? []) ids.add(id)
+    const known = record.subagentMeta?.execution?.conversationId
+    if (known !== undefined) ids.add(known)
+    for (const node of record.nodes ?? []) {
+      if (node.conversationId !== undefined) ids.add(node.conversationId)
+    }
+    return [...ids]
+  }
+
+  /**
+   * 子会话事实即时持久（onResolved 登记点）：崩溃恢复（prepareRecovery/init
+   * 守卫中止）依赖 running 记录里的 childConversationIds——晚到终态才落盘等于
+   * 重启后子会话脱管。写入失败必须显式诊断（stderr）：静默吞掉会让下次恢复
+   * 假装完备；内存 record 已登记，后续 progress/终态写入自动重试携带（终态
+   * 写失败另有 settleError 如实浮出，不假装可恢复）。
+   */
+  private persistChildConversationFact(run: ActiveRun, conversationId: number): void {
+    try {
+      this.writeRecord(run.record)
+      const flushed = this.state.flush?.()
+      if (flushed !== undefined) {
+        void flushed.catch((error: unknown) => {
+          process.stderr.write(
+            `workflow ${run.runId}: child conversation ${conversationId} persist flush failed: ${errorMessage(error)}\n`,
+          )
+        })
+      }
+    } catch (error) {
+      process.stderr.write(
+        `workflow ${run.runId}: child conversation ${conversationId} persist failed: ${errorMessage(error)}\n`,
+      )
+    }
   }
 
   /**

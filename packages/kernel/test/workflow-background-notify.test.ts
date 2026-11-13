@@ -11,6 +11,10 @@
  * - 进程重启恢复（后台 workflow running 记录）：prepareRecovery 收集其 nodes
  *   子会话先落 abort 标记，init 守卫中止这些子会话、标 failed(interrupted)
  *  （保留 resumeFromRunId 提示）并补发通知恰一次；
+ * - 真实启动崩溃恢复（非手工 seed）：真实 WorkflowService.run 启动后台 workflow，
+ *   挂起宿主在 onResolved 回报 conversationId 后永不返回——崩溃前 running 记录
+ *   已即时持久 childConversationIds（nodes 尚未落盘），第二服务读同一 state 做
+ *   prepareRecovery/init 按权威 IDs 标记、守卫中止并补发通知恰一次；
  * - 同步 workflow running 记录恢复语义不变：不守卫中止子会话、不通知。
  */
 
@@ -224,6 +228,69 @@ describe('后台 workflow run 通知与恢复', () => {
     assert.equal(host.settledCalls[0]!.parentConversationId, 1)
     const record = state.get<{ notifiedAt?: number } | null>('workflow/run/wf_bgdead000001', null)
     assert.ok(typeof record!.notifiedAt === 'number')
+    await service.close()
+  })
+
+  it('真实启动崩溃恢复：onResolved 子会话即时持久，第二服务按权威 IDs 标记/守卫中止/补发通知', timeout, async () => {
+    const host = makeHost()
+    const state = makeStateStore()
+    // 挂起宿主：真实宿主在子会话建立时经 onResolved 回报 conversationId=42，
+    // 随后进程在 spawn 返回前崩溃（promise 永不 settle，不手工 seed 任何记录）。
+    let resolveSpawned: () => void = () => {}
+    const spawned = new Promise<void>((resolve) => {
+      resolveSpawned = resolve
+    })
+    host.spawnAgent = async (request) => {
+      request.onResolved?.({ conversationId: 42 })
+      resolveSpawned()
+      await new Promise<never>(() => {})
+    }
+    const service = new WorkflowService({ dataDir, host, state })
+    const started = await service.run({ conversationId: 1, script: AGENT_SCRIPT }, { notifyParentOnSettle: true })
+    assert.equal(started.status, 'running')
+
+    let failLate: (error: Error) => void = () => {}
+    const watchdog = new Promise<never>((_, reject) => {
+      failLate = reject
+    })
+    const timer = setTimeout(() => failLate(new Error('等待 host.spawnAgent onResolved 超时')), 5_000)
+    timer.unref?.()
+    try {
+      await Promise.race([spawned, watchdog])
+    } finally {
+      clearTimeout(timer)
+    }
+
+    // 崩溃前事实：running 记录已持久权威子会话 IDs；nodes 尚未落盘（旧实现
+    // 此处没有任何子会话坐标，重启恢复无从标记/中止——本用例守护的缺陷）。
+    const crashed = state.get<{
+      status: string
+      childConversationIds?: number[]
+      nodes?: unknown
+    } | null>(`workflow/run/${started.id}`, null)
+    assert.equal(crashed!.status, 'running')
+    assert.deepEqual(crashed!.childConversationIds, [42], 'onResolved 子会话必须在 running 记录中即时持久')
+    assert.equal(crashed!.nodes, undefined, '真实运行中 nodes 尚未落盘，恢复不得依赖它')
+
+    // 模拟重启：第二个 WorkflowService 读同一 state 做恢复（首服务视为已死）。
+    const revived = new WorkflowService({ dataDir, host, state })
+    await revived.prepareRecovery()
+    assert.deepEqual(host.preparedIds, [[42]], 'prepareRecovery 必须按持久 IDs 落 abort 预标记')
+    await revived.init()
+    assert.deepEqual(host.guardedAborts, [42], 'init 必须守卫中止持久 IDs 指向的子会话')
+    const summary = revived.getRun(started.id)
+    assert.equal(summary.status, 'failed')
+    assert.ok(summary.error?.includes('interrupted by process restart'), summary.error)
+    assert.ok(summary.error?.includes('resumeFromRunId'), '中断须保留账本恢复提示')
+    assert.equal(host.settledCalls.length, 1, '中断的后台 run 须补发通知恰一次')
+    assert.equal(host.settledCalls[0]!.summary.id, started.id)
+    assert.equal(host.settledCalls[0]!.summary.status, 'failed')
+    assert.equal(host.settledCalls[0]!.parentConversationId, 1)
+    const record = state.get<{ notifiedAt?: number } | null>(`workflow/run/${started.id}`, null)
+    assert.ok(typeof record!.notifiedAt === 'number')
+
+    // 清理：终止仍挂起的首服务（其结算不再影响以上事实断言）。
+    await revived.close()
     await service.close()
   })
 
