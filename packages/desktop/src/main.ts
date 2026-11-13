@@ -7,9 +7,11 @@
  * - HELM_DESKTOP_HEADLESS=1：纯监督器模式（无窗口），CI / 无显示环境可完整验证
  *   attach-or-spawn / 崩溃重启 / 优雅停止。
  */
+import { existsSync } from 'node:fs';
 import { DesktopError } from './errors.js';
-import { resolveDesktopConfig } from './config.js';
+import { resolveDesktopConfig, type DesktopConfig } from './config.js';
 import { HubSupervisor, type StartResult } from './supervisor.js';
+import { createPayloadUpdater } from './updater.js';
 import { getElectron, type BrowserWindowLike, type ElectronApi, type TrayLike } from './electron-api.js';
 import { TRAY_ICON_DATA_URL } from './tray-icon.js';
 
@@ -26,8 +28,34 @@ function fail(error: unknown): never {
   process.exit(1);
 }
 
+/**
+ * 启动时选择已安装 payload 入口（仅当未显式配置入口/命令时）。
+ *
+ * 生命周期契约：updater 只负责安装（resolveCurrent 不重启 Hub）；换装发生在
+ * supervisor.stop() 之后、下一次 start() 采用新 entry——即本函数所在链路。
+ * current.json 损坏时如实记录同退到仓库 kernel dist（payload 是可选叠加层，不是静默降级）。
+ */
+function withCurrentPayloadEntry(config: DesktopConfig): DesktopConfig {
+  if (config.hubCommand !== undefined || config.payloadEntry !== undefined) return config;
+  const updater = createPayloadUpdater(config);
+  try {
+    const current = updater.resolveCurrent();
+    if (current?.entryPath !== undefined && existsSync(current.entryPath)) {
+      log(`使用已安装 payload: ${current.name}@${current.version}（${current.entryPath}）`);
+      return { ...config, payloadEntry: current.entryPath, payloadEntryArgs: [...(current.entryArgs ?? [])] };
+    }
+  } catch (error) {
+    log(
+      `诊断: 已安装 payload 状态不可用，本次启动用仓库 kernel dist（${
+        error instanceof DesktopError ? `${error.code}: ${error.message}` : String(error)
+      }）`,
+    );
+  }
+  return config;
+}
+
 function makeSupervisor(): HubSupervisor {
-  const config = resolveDesktopConfig(process.env);
+  const config = withCurrentPayloadEntry(resolveDesktopConfig(process.env));
   return new HubSupervisor({
     config,
     isElectron: process.versions.electron !== undefined,

@@ -2,7 +2,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { KERNEL_NODE_FLOOR, probeMeetsFloor, probeRunner, selectRunner, type RunnerProbe } from '../src/runners.js';
-import { resolveDesktopConfig } from '../src/config.js';
+import { resolveDesktopConfig, resolveHubEntry } from '../src/config.js';
 import { DesktopError } from '../src/errors.js';
 
 const BASE_ENV: NodeJS.ProcessEnv = { PATH: process.env['PATH'] };
@@ -92,4 +92,28 @@ test('selectRunner：非 Electron 环境 → 直接采用宿主 execPath', async
   assert.equal(info.kind, 'host-node');
   assert.equal(info.command[0], '/bin/node-host');
   assert.equal(info.env['ELECTRON_RUN_AS_NODE'], undefined);
+});
+
+test('selectRunner：payload 入口附加参数拼接入命令行（start.mjs start 契约）', async () => {
+  const config = resolveDesktopConfig(BASE_ENV, {
+    payloadEntry: '/payload/start.mjs',
+    payloadEntryArgs: ['start'],
+  });
+  assert.equal(resolveHubEntry(config)?.args.length, 1);
+  const info = await selectRunner(config, {
+    isElectron: false,
+    execPath: '/bin/node-host',
+    env: BASE_ENV,
+    probe: async () => ({ node: '24.12.0', electron: null, sqlite: true }),
+  });
+  assert.deepEqual(info.command, ['/bin/node-host', '/payload/start.mjs', 'start']);
+  // hub-entry source 恒无参数。
+  const plain = resolveDesktopConfig(BASE_ENV);
+  const plainInfo = await selectRunner(plain, {
+    isElectron: false,
+    execPath: '/bin/node-host',
+    env: BASE_ENV,
+    probe: async () => ({ node: '24.12.0', electron: null, sqlite: true }),
+  });
+  assert.deepEqual(plainInfo.command, ['/bin/node-host', plain.hubEntry!]);
 });
