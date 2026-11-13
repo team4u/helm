@@ -3,27 +3,36 @@
  * - SubagentToolView：时间线内 subagent 工具调用的双层胶囊实时卡
  *   （多次 resume 折叠：仅同目标最后一次调用挂载实时流）；
  * - WorkflowToolView：时间线内 SubagentWorkflow 工具调用的工作流运行卡；
- * - WorkflowWorkbenchPanel：工作台面板（当前会话工作流运行 + 子代理列表）。
+ * - WorkflowWorkbenchPanel：工作台面板（统一执行树：任意深度聚合 + 父节点下一级紧凑子项）。
  *
- * 全部数据经 @helm/plugin-client 共享 hooks（usePluginDoc / useConversations /
- * useConversation）从宿主 store 响应式读取；动作经 ctx.callAction 走
+ * 卡片统一消费 models.ts 的 ExecutionNode 递归视图模型（SubagentLiveCard =
+ * 会话节点卡、WorkflowRunCardBody = workflow 节点卡、WorkflowExecutionNodeCard /
+ * ExternalRunSummary = run 内与外部执行叶节点卡）；全部数据经
+ * @helm/plugin-client 共享 hooks（usePluginDoc / useConversations / useConversation）
+ * 从宿主 store 响应式读取；动作经 ctx.callAction 走
  * POST /api/actions/builtin:workflow/<actionId>，无任何宿主私有依赖。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
 import type { ToolViewProps, WorkbenchPanelProps, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
+import type { ExecutionNode } from './models.ts'
 import { CopyButton, formatDurationMs, usePluginContext, useConversation, useConversations, useToolActivity } from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import {
+  aggregateExecutionNodes,
+  buildExecutionTree,
   buildSubagentStatSegments,
   buildSubagentStreamLines,
-  buildWorkbenchSubagentItems,
   buildWorkflowPhaseSections,
   buildWorktreeInspectSelector,
   buildWorktreeReviewRequest,
   canResumeWorkflowRun,
   canRerunWorkflowRun,
+  collectExecutionApprovals,
+  collectExecutionFrontline,
+  executionNodeTitle,
+  executionToolStatus,
   extractWorkflowLogs,
   firstLineOf,
   formatNodeOutputPreview,
@@ -46,7 +55,7 @@ import {
   type WorktreeInspectView,
 } from './models.ts'
 import { usePluginSessionDoc, useStreamFollow, useElapsedNowMs } from './hooks.ts'
-import { SPIN, RUN_LABEL, RUN_BADGE, NODE_LABEL, NODE_BADGE, PHASE_ICON } from './presentation.ts'
+import { SPIN, RUN_LABEL, RUN_BADGE, NODE_LABEL, NODE_BADGE, PHASE_ICON, EXECUTION_LABEL, EXECUTION_BADGE, EXECUTION_ICON } from './presentation.ts'
 
 // ---------------------------------------------------------------------------
 // 图标（lucide-react 线性矢量，与宿主共享同一实例；无 Emoji）
@@ -78,7 +87,88 @@ function Icon({ name, size = 12, className }: { name: string; size?: number; cla
 }
 
 // ---------------------------------------------------------------------------
-// 子代理双层胶囊卡（原 SubagentLiveCard 语义）
+// 统一执行树：父卡内下一级紧凑子项（ExecutionNode 递归视图模型）
+// ---------------------------------------------------------------------------
+
+/** 下一级紧凑子项行：点击 / 回车打开任意深度会话抽屉（不冒泡触发父卡）。 */
+function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): ReactNode {
+  const ctx = usePluginContext()
+  if (nodes.length === 0) return null
+  return (
+    <div className="execution-children" onClick={(e) => e.stopPropagation()}>
+      {nodes.map((node) => {
+        const aggregated = node.aggregated
+        const title = executionNodeTitle(node)
+        const open =
+          node.conversationId !== undefined ? () => ctx.openConversationDrawer(node.conversationId!) : undefined
+        const doing =
+          aggregated.status === 'working' && node.summary?.doing !== undefined
+            ? node.summary.doing.trim()
+            : undefined
+        // 审批徽章只统计后代（自身 blocked 已由状态徽章表达）。
+        const descendantApprovals = aggregated.blocked - (node.status === 'blocked' ? 1 : 0)
+        return (
+          <div
+            key={node.key}
+            {...(open !== undefined
+              ? { role: 'button' as const, tabIndex: 0, 'aria-label': `打开会话 #${node.conversationId} 抽屉` }
+              : {})}
+            className={`execution-child-row execution-child-${aggregated.status}${open !== undefined ? ' execution-child-clickable' : ''}`}
+            title={
+              [
+                title,
+                open !== undefined ? `点击打开会话 #${node.conversationId} 抽屉` : undefined,
+              ]
+                .filter(Boolean)
+                .join('\n')
+            }
+            onClick={open}
+            onKeyDown={
+              open !== undefined
+                ? (e) => {
+                    if (e.target !== e.currentTarget) return
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      open()
+                    }
+                  }
+                : undefined
+            }
+          >
+            <Icon
+              name={EXECUTION_ICON[aggregated.status] ?? 'circle'}
+              size={11}
+              className={aggregated.status === 'working' ? SPIN : undefined}
+            />
+            {node.conversationId !== undefined ? (
+              <span className="execution-child-id">{`#${node.conversationId}`}</span>
+            ) : null}
+            <span className="execution-child-title">{title}</span>
+            {doing !== undefined && doing !== '' ? (
+              <span className="execution-child-doing" title={doing}>
+                {doing}
+              </span>
+            ) : null}
+            <span className="execution-child-right">
+              {descendantApprovals > 0 ? (
+                <span className="badge badge-warn">{`审批 ${descendantApprovals}`}</span>
+              ) : null}
+              {node.children.length > 0 ? (
+                <span className="execution-child-count tabular-nums">{`${aggregated.done}/${aggregated.total}`}</span>
+              ) : null}
+              <span className={`badge ${EXECUTION_BADGE[aggregated.status] ?? 'badge-neutral'}`}>
+                {EXECUTION_LABEL[aggregated.status] ?? aggregated.status}
+              </span>
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 子代理双层胶囊卡（原 SubagentLiveCard 语义；统一为 ExecutionNode 的会话节点卡）
 // ---------------------------------------------------------------------------
 
 export function SubagentLiveCard(props: {
@@ -95,6 +185,8 @@ export function SubagentLiveCard(props: {
   /** 展开态展示实时流与底部调用详情。 */
   expanded?: boolean
   callDetails?: Pick<ToolViewProps, 'input' | 'result' | 'artifactRef'>
+  /** 统一执行树下一级子节点（工作台 / 工作流节点卡注入；缺省不渲染深层子树）。 */
+  childNodes?: ExecutionNode[]
 }) {
   const ctx = usePluginContext()
   const { childConversationId, toolStatus, backgroundRun, worktree, toolSummary, startedAt } = props
@@ -140,6 +232,12 @@ export function SubagentLiveCard(props: {
       }),
     [badge.status, summary, live, detail?.entries, pendingAsk, backgroundRun, toolSummary, detailError],
   )
+
+  // 统一执行树：后代子树聚合 / 前线活动 / 后代审批（仅由真实数据提炼）。
+  const childNodes = props.childNodes ?? []
+  const descendants = useMemo(() => aggregateExecutionNodes(childNodes), [childNodes])
+  const frontline = useMemo(() => collectExecutionFrontline(childNodes, 2), [childNodes])
+  const approvals = useMemo(() => collectExecutionApprovals(childNodes, 3), [childNodes])
 
   // 隔离工作树：显式入参优先，其次回退后台 run 首个节点的 worktree。
   const wt = worktree ?? backgroundRun?.nodes?.find((n) => n.worktree !== undefined)?.worktree
@@ -195,6 +293,22 @@ export function SubagentLiveCard(props: {
           ) : null}
           {props.cached === true ? <span className="badge badge-warn">cached</span> : null}
           <span className={`badge ${badge.badge}`}>{badge.label}</span>
+          {descendants.total > 0 ? (
+            <span
+              className="badge badge-neutral tabular-nums"
+              title={`子树执行进度：${descendants.done}/${descendants.total} 完成、${descendants.running} 执行中`}
+            >
+              {`子树 ${descendants.done}/${descendants.total}`}
+            </span>
+          ) : null}
+          {descendants.blocked > 0 ? (
+            <span
+              className="badge badge-warn"
+              title={`后代等待审批：${approvals.map((item) => item.text).join('；')}`}
+            >
+              {`审批 ${descendants.blocked}`}
+            </span>
+          ) : null}
           {props.extraStats !== undefined && props.extraStats !== '' ? (
             <span className="subagent-live-stats workflow-node-stats tabular-nums">{props.extraStats}</span>
           ) : null}
@@ -261,6 +375,17 @@ export function SubagentLiveCard(props: {
           <span className="subagent-live-subline-text">{snippet.text}</span>
         </div>
       ) : null}
+      {frontline.length > 0 ? (
+        <div
+          className="subagent-live-subline execution-frontline"
+          title={frontline.map((item) => item.text).join('\n')}
+        >
+          <Icon name="corner-down-right" size={11} />
+          <span className="subagent-live-subline-tag">前线</span>
+          <span className="subagent-live-subline-text">{frontline.map((item) => item.text).join(' · ')}</span>
+        </div>
+      ) : null}
+      {childNodes.length > 0 ? <ExecutionChildrenRows nodes={childNodes} /> : null}
       {props.expanded === true && streamLines.length > 0 ? (
         <div className="subagent-live-stream" ref={stream.ref} onScroll={stream.onScroll}>
           {streamLines.slice(-30).map((line) =>
@@ -345,6 +470,19 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   const childStatus = conversations.find((conversation) => conversation.id === childId)?.status
   useToolActivity(props.callId, isLatest && (meta.run?.status === 'running' || childStatus === 'working' || childStatus === 'blocked'))
 
+  // 统一执行树：子会话的下一级子项（仅由真实会话链与 runs 分片构树，不虚构）。
+  const childNodes = useMemo(
+    () =>
+      childId === undefined
+        ? undefined
+        : buildExecutionTree({
+            rootConversationId: props.conversationId,
+            conversations,
+            runs: runsDoc?.runs ?? [],
+          }).find((node) => node.kind === 'conversation' && node.conversationId === childId)?.children,
+    [childId, props.conversationId, conversations, runsDoc],
+  )
+
   // 外部执行（无原生子会话，如 Herdr 窗格）：如实展示后台 run 摘要，不虚构子会话。
   if (childId === undefined) {
     return (
@@ -393,6 +531,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       toolSummary={toolSummary}
       startedAt={props.startedAt}
       expanded={false}
+      childNodes={childNodes}
     />
   )
 }
@@ -466,6 +605,7 @@ function ExternalRunSummary(props: {
 
 export function WorkflowToolView(props: ToolViewProps): ReactNode {
   const runsDoc = usePluginSessionDoc<{ runs: WorkflowRunSummary[] }>('runs', { conversationId: props.conversationId })
+  const conversations = useConversations()
   const [cardOpen, setCardOpen] = useState(true)
   const [busy, setBusy] = useState(false)
   const [resultOpen, setResultOpen] = useState(false)
@@ -478,6 +618,19 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
         runsDoc?.runs ?? [],
       ),
     [props.callId, props.result, props.conversationId, runsDoc],
+  )
+
+  // 统一执行树：run 节点的子树（agent 节点会话的深层后代经会话链递归）。
+  const childNodes = useMemo(
+    () =>
+      run === undefined
+        ? undefined
+        : buildExecutionTree({
+            rootConversationId: props.conversationId,
+            conversations,
+            runs: runsDoc?.runs ?? [],
+          }).find((node) => node.kind === 'workflow' && node.run?.id === run.id)?.children,
+    [run, props.conversationId, conversations, runsDoc],
   )
 
   useToolActivity(props.callId, run?.status === 'running')
@@ -494,6 +647,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   return (
     <WorkflowRunCardBody
       run={run}
+      childNodes={childNodes}
       cardOpen={cardOpen}
       onToggleCard={() => setCardOpen((v) => !v)}
       resultOpen={resultOpen}
@@ -506,7 +660,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   )
 }
 
-/** 工作流运行卡主体（时间线与工作台共用）。 */
+/** 工作流运行卡主体（时间线与工作台共用；统一为 ExecutionNode 的 workflow 节点卡）。 */
 function WorkflowRunCardBody(props: {
   run: WorkflowRunSummary
   cardOpen: boolean
@@ -517,6 +671,8 @@ function WorkflowRunCardBody(props: {
   setBusy: (v: boolean) => void
   toolProps?: { input?: unknown; result?: unknown; artifactRef?: string }
   inWorkbench: boolean
+  /** 统一执行树子节点（agent 节点会话的深层后代；缺省仅展示 run 自身节点）。 */
+  childNodes?: ExecutionNode[]
 }): ReactNode {
   const ctx = usePluginContext()
   const { run, cardOpen, busy, setBusy, toolProps, inWorkbench } = props
@@ -526,6 +682,13 @@ function WorkflowRunCardBody(props: {
   const sections = useMemo(() => buildWorkflowPhaseSections(run), [run])
   const logs = useMemo(() => extractWorkflowLogs(run), [run])
   const hasNamedPhases = sections.length > 1 || (sections.length === 1 && sections[0]!.title !== '')
+
+  // 统一执行树：子树计数与后代审批（存在深层后代时才展示，不虚构）。
+  const childNodes = props.childNodes ?? []
+  const subtree = useMemo(() => aggregateExecutionNodes(childNodes), [childNodes])
+  const deeperCount = subtree.total - nodes.length
+  const approvals = useMemo(() => collectExecutionApprovals(childNodes, 3), [childNodes])
+  const descendantApprovals = subtree.blocked
 
   // 运行中秒表（SSR 首帧确定性）。
   const nowMs = useElapsedNowMs(run.status === 'running')
@@ -586,9 +749,18 @@ function WorkflowRunCardBody(props: {
         <span style={{ flex: 1 }} />
         <span className="workflow-run-stats tabular-nums">
           {nodes.length > 0 ? <span>{`节点 ${done}/${nodes.length}`}</span> : null}
+          {deeperCount > 0 ? <span>{`子树 ${subtree.done}/${subtree.total}`}</span> : null}
           {tokens > 0 ? <span>{`${tokens.toLocaleString()} Tokens`}</span> : null}
           <span>{formatDurationMs(Math.max(0, elapsedMs))}</span>
         </span>
+        {descendantApprovals > 0 ? (
+          <span
+            className="badge badge-warn"
+            title={`后代等待审批：${approvals.map((item) => item.text).join('；')}`}
+          >
+            {`审批 ${descendantApprovals}`}
+          </span>
+        ) : null}
         {run.status === 'running' ? (
           <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={abort}>
             <Icon name="square" size={11} />
@@ -652,7 +824,12 @@ function WorkflowRunCardBody(props: {
                   </div>
                 ) : null}
                 {section.nodes.map((node) => (
-                  <WorkflowNodeCard key={node.id} node={node} runConversationId={run.conversationId} />
+                  <WorkflowNodeCard
+                    key={node.id}
+                    node={node}
+                    runConversationId={run.conversationId}
+                    childNodes={childNodes.find((child) => child.runNode?.id === node.id)?.children}
+                  />
                 ))}
               </div>
             ))}
@@ -683,8 +860,8 @@ function WorkflowRunCardBody(props: {
 }
 
 /** 工作流子代理节点：直接以一体化整卡直出（无手风琴折叠壳）。 */
-function WorkflowSubagentNodeCard(props: { node: WorkflowNodeState; runConversationId: number }): ReactNode {
-  const { node } = props
+function WorkflowSubagentNodeCard(props: { node: WorkflowNodeState; runConversationId: number; childNodes?: ExecutionNode[] }): ReactNode {
+  const { node, childNodes } = props
   const outputText = typeof node.output === 'string' ? node.output : undefined
   const nodeStats = useMemo(() => formatWorkflowNodeStats(node), [node])
   return (
@@ -703,6 +880,7 @@ function WorkflowSubagentNodeCard(props: { node: WorkflowNodeState; runConversat
           resultText: outputText,
         }}
         expanded={false}
+        childNodes={childNodes}
       />
       {node.gate !== undefined ? (
         <div className="workflow-node-gate-extra">
@@ -806,10 +984,10 @@ function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversa
 }
 
 /** 单节点卡片：子代理节点直出一体化整卡；动作节点直出扁平双层卡。全程无手风琴折叠。 */
-function WorkflowNodeCard(props: { node: WorkflowNodeState; runConversationId: number }): ReactNode {
-  const { node } = props
+function WorkflowNodeCard(props: { node: WorkflowNodeState; runConversationId: number; childNodes?: ExecutionNode[] }): ReactNode {
+  const { node, childNodes } = props
   if (node.conversationId !== undefined) {
-    return <WorkflowSubagentNodeCard node={node} runConversationId={props.runConversationId} />
+    return <WorkflowSubagentNodeCard node={node} childNodes={childNodes} runConversationId={props.runConversationId} />
   }
   return <WorkflowExecutionNodeCard node={node} runConversationId={props.runConversationId} />
 }
@@ -1216,25 +1394,24 @@ function WorkflowLibrarySection(props: { conversationId: number }): ReactNode {
 // WorkflowWorkbenchPanel：workbench.panel 扩展点组件
 // ---------------------------------------------------------------------------
 
+/** 工作台面板：统一执行树驱动（任意深度聚合，展示父节点下一级紧凑子项）。 */
 export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
-  const ctx = usePluginContext()
   const runsDoc = usePluginSessionDoc<{ runs: WorkflowRunSummary[] }>('runs', { conversationId: props.conversation.id })
   const conversations = useConversations()
-  const parent = useConversation(props.conversation.id)
   const [inspectRunId, setInspectRunId] = useState<string | undefined>(undefined)
 
   const runs = useMemo(
     () => (runsDoc?.runs ?? []).filter((r: WorkflowRunSummary) => r.conversationId === props.conversation.id),
     [runsDoc, props.conversation.id],
   )
-  const subagentItems = useMemo(
-    () => buildWorkbenchSubagentItems(conversations, props.conversation.id, runs),
-    [conversations, props.conversation.id, runs],
+  // 统一执行树：任意深度经 parentConversationId 递归；runs 分片仅含本会话，深层会话不虚构 run。
+  const tree = useMemo(
+    () => buildExecutionTree({ rootConversationId: props.conversation.id, conversations, runs }),
+    [props.conversation.id, conversations, runs],
   )
-  const workflowRuns = runs.filter((r) => r.kind !== 'subagent')
-  const externalSubagentRuns = runs.filter(
-    (r) => r.kind === 'subagent' && !(r.nodes ?? []).some((n) => n.conversationId !== undefined),
-  )
+  const workflowNodes = tree.filter((node) => node.kind === 'workflow' && node.run !== undefined)
+  const externalNodes = tree.filter((node) => node.kind === 'external' && node.run !== undefined)
+  const conversationNodes = tree.filter((node) => node.kind === 'conversation' && node.conversationId !== undefined)
   const inspectedRun = inspectRunId !== undefined ? runs.find((r) => r.id === inspectRunId) : undefined
 
   if (inspectedRun !== undefined) {
@@ -1245,6 +1422,7 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
         </button>
         <WorkflowRunCardBody
           run={inspectedRun}
+          childNodes={workflowNodes.find((node) => node.run?.id === inspectedRun.id)?.children}
           cardOpen
           onToggleCard={() => undefined}
           resultOpen
@@ -1260,13 +1438,14 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
       <WorkflowLibrarySection conversationId={props.conversation.id} />
-      {workflowRuns.length > 0 ? <div className="trace-section-label">工作流运行</div> : null}
-      {workflowRuns.map((run) => (
-        <div key={run.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {workflowNodes.length > 0 ? <div className="trace-section-label">工作流运行</div> : null}
+      {workflowNodes.map((node) => (
+        <div key={node.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}> 
           <WorkflowRunCardBody
-            run={run}
+            run={node.run!}
+            childNodes={node.children}
             cardOpen={false}
-            onToggleCard={() => setInspectRunId(run.id)}
+            onToggleCard={() => setInspectRunId(node.run!.id)}
             resultOpen={false}
             onToggleResult={() => undefined}
             busy={false}
@@ -1275,25 +1454,30 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
           />
         </div>
       ))}
-      {externalSubagentRuns.length > 0 ? <div className="trace-section-label">外部后台任务</div> : null}
-      {externalSubagentRuns.map((run) => (
-        <ExternalRunSummary key={run.id} run={run} toolStatus={run.status === 'running' ? 'running' : run.status === 'completed' ? 'done' : 'error'} />
+      {externalNodes.length > 0 ? <div className="trace-section-label">外部后台任务</div> : null}
+      {externalNodes.map((node) => (
+        <ExternalRunSummary
+          key={node.key}
+          run={node.run}
+          toolStatus={node.run!.status === 'running' ? 'running' : node.run!.status === 'completed' ? 'done' : 'error'}
+        />
       ))}
-      {subagentItems.length > 0 ? (
+      {conversationNodes.length > 0 ? (
         <>
           <div className="trace-section-label">子代理会话</div>
-          {subagentItems.map((item) => (
+          {conversationNodes.map((node) => (
             <SubagentLiveCard
-              key={item.conversationId}
-              childConversationId={item.conversationId}
-              toolStatus={item.summary?.status === 'working' ? 'running' : item.summary?.status === 'error' ? 'error' : item.backgroundRun?.status === 'running' ? 'running' : item.backgroundRun?.status === 'failed' || item.backgroundRun?.status === 'aborted' ? 'error' : 'done'}
-              backgroundRun={item.backgroundRun}
+              key={node.key}
+              childConversationId={node.conversationId!}
+              toolStatus={executionToolStatus(node.summary, node.run)}
+              backgroundRun={node.run}
+              childNodes={node.children}
               expanded={false}
             />
           ))}
         </>
       ) : null}
-      {runs.length === 0 && subagentItems.length === 0 ? (
+      {tree.length === 0 ? (
         <div className="workflow-phase-empty">当前会话暂无工作流运行或子代理；可从上方工作流库选择已保存定义运行。</div>
       ) : null}
     </div>

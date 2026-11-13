@@ -16,3 +16,13 @@ export const NODE_BADGE: Record<string, string> = {
 export const PHASE_ICON: Record<WorkflowPhaseSection['status'], string> = {
   pending: 'circle', running: 'loader', done: 'check', failed: 'x',
 }
+/** 统一执行树节点状态展示（ExecutionNodeStatus 五值枚举）。 */
+export const EXECUTION_LABEL: Record<string, string> = {
+  blocked: '等待审批', error: '异常', working: '执行中', done: '已完成', pending: '进行中',
+}
+export const EXECUTION_BADGE: Record<string, string> = {
+  blocked: 'badge-warn', error: 'badge-err', working: 'badge-accent', done: 'badge-ok', pending: 'badge-neutral',
+}
+export const EXECUTION_ICON: Record<string, string> = {
+  blocked: 'clock', error: 'x', working: 'loader', done: 'check', pending: 'circle',
+}

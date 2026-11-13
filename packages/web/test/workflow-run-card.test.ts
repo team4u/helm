@@ -2,7 +2,7 @@
  * builtin:workflow 插件 client 组件测试（kernel 真实 esbuild 编译产物 + SSR）：
  * - 纯逻辑（models.ts 编译产物）：resolveNodeSummaryText / buildWorkflowPhaseSections /
  *   extractWorkflowLogs / canResumeWorkflowRun / formatNodeOutputPreview /
- *   formatWorkflowNodeStats / buildWorkbenchSubagentItems；
+ *   formatWorkflowNodeStats / buildExecutionTree 工作台关联（Active-First 去重）；
  * - SSR（index.tsx 编译产物，共享 React 真实渲染）：
  *   工作流节点无手风琴直出、子代理一体化整卡、无并排按钮、无 Emoji。
  */
@@ -266,10 +266,10 @@ test('formatWorkflowNodeStats：模型短名 + 紧凑 token，无值返回空', 
 })
 
 // ---------------------------------------------------------------------------
-// 纯逻辑：buildWorkbenchSubagentItems（Active-First 去重）
+// 纯逻辑：buildExecutionTree 工作台关联（Active-First 去重，任意深度）
 // ---------------------------------------------------------------------------
 
-test('buildWorkbenchSubagentItems：单子代理后台 run 认领的子会话与独立子会话合并去重', { timeout: 60_000 }, () => {
+test('buildExecutionTree：单子代理后台 run 认领的子会话与独立子会话合并去重', { timeout: 60_000 }, () => {
   const conversations = [
     summary(11, 'done', 1),
     summary(12, 'working', 1),
@@ -280,18 +280,24 @@ test('buildWorkbenchSubagentItems：单子代理后台 run 认领的子会话与
     run({ id: 'wf_dsl', nodes: [node({ id: 'a', status: 'done', conversationId: 11 })] }),
     run({ id: 'wf_bg1', kind: 'subagent', nodes: [node({ id: 'b', status: 'running', conversationId: 12 })] }),
   ]
-  const items = m.buildWorkbenchSubagentItems(conversations, 1, runs)
+  const tree = m.buildExecutionTree({ rootConversationId: 1, conversations, runs })
+  const convNodes = tree.filter((n) => n.kind === 'conversation')
   assert.deepEqual(
-    items.map((it) => it.conversationId),
+    convNodes.map((n) => n.conversationId),
     [12, 13],
-    'DSL 认领的 #11 被排除；单子代理 run 认领的 #12 与独立 #13 合并去重',
+    'DSL 认领的 #11 挂 run 节点下；单子代理 run 认领的 #12 与独立 #13 合并去重',
   )
-  assert.equal(items[0]!.backgroundRun?.id, 'wf_bg1', '#12 应携带认领它的后台 run')
-  assert.equal(items[1]!.backgroundRun, undefined, '#13 独立子会话无后台 run')
-  assert.deepEqual(m.buildWorkbenchSubagentItems(conversations, 2, runs).map((it) => it.conversationId), [21])
+  assert.equal(convNodes[0]!.run?.id, 'wf_bg1', '#12 应携带认领它的后台 run')
+  assert.equal(convNodes[1]!.run, undefined, '#13 独立子会话无后台 run')
+  const wfNode = tree.find((n) => n.kind === 'workflow')!
+  assert.equal(wfNode.children[0]!.conversationId, 11, 'DSL 认领会话挂 run 节点下')
+  assert.deepEqual(
+    m.buildExecutionTree({ rootConversationId: 2, conversations, runs }).map((n) => n.conversationId),
+    [21],
+  )
 })
 
-test('buildWorkbenchSubagentItems：Active-First 排序 blocked > working > error > done，同级 updatedAt 降序', { timeout: 60_000 }, () => {
+test('buildExecutionTree：Active-First 排序 blocked > working > error > done，同级 updatedAt 降序', { timeout: 60_000 }, () => {
   const conversations = [
     { ...summary(31, 'idle', 1), updatedAt: 50 },
     { ...summary(32, 'working', 1), updatedAt: 40 },
@@ -300,22 +306,24 @@ test('buildWorkbenchSubagentItems：Active-First 排序 blocked > working > erro
     { ...summary(35, 'idle', 1), updatedAt: 10 },
     { ...summary(36, 'idle', 1), updatedAt: 60 },
   ]
-  const items = m.buildWorkbenchSubagentItems(conversations, 1, [])
+  const tree = m.buildExecutionTree({ rootConversationId: 1, conversations, runs: [] })
   assert.deepEqual(
-    items.map((it) => it.conversationId),
+    tree.map((n) => n.conversationId),
     [33, 32, 34, 36, 31, 35],
   )
-  const withBg = m.buildWorkbenchSubagentItems(
-    [{ ...summary(41, 'idle', 1), updatedAt: 5 }],
-    1,
-    [run({ id: 'wf_bg2', kind: 'subagent', status: 'running', createdAt: 1, updatedAt: 99, nodes: [node({ id: 'n', status: 'running', conversationId: 41 })] })],
-  )
+  // 子会话旧 idle + 后台 run running：树节点保持 working，不假完成
+  const withBg = m.buildExecutionTree({
+    rootConversationId: 1,
+    conversations: [{ ...summary(41, 'idle', 1), updatedAt: 5 }],
+    runs: [run({ id: 'wf_bg2', kind: 'subagent', status: 'running', createdAt: 1, updatedAt: 99, nodes: [node({ id: 'n', status: 'running', conversationId: 41 })] })],
+  })
   assert.equal(withBg[0]!.conversationId, 41)
   assert.equal(withBg[0]!.summary?.status, 'idle')
-  assert.equal(withBg[0]!.backgroundRun?.status, 'running')
+  assert.equal(withBg[0]!.run?.status, 'running')
+  assert.equal(withBg[0]!.status, 'working')
 })
 
-test('buildWorkbenchSubagentItems：多个后台 run 优先 parentToolCallId 精确匹配，反转数组仍取当前关联 run', { timeout: 60_000 }, () => {
+test('buildExecutionTree：多个后台 run 优先 parentToolCallId 精确匹配，反转数组仍取当前关联 run', { timeout: 60_000 }, () => {
   const oldRun = run({
     id: 'wf_old',
     kind: 'subagent',
@@ -337,13 +345,13 @@ test('buildWorkbenchSubagentItems：多个后台 run 优先 parentToolCallId 精
   })
   const child = { ...summary(12, 'working', 1), parentToolCallId: 'call_new' }
   for (const runs of [[oldRun, newRun], [newRun, oldRun]]) {
-    const items = m.buildWorkbenchSubagentItems([child], 1, runs)
-    assert.equal(items.length, 1)
-    assert.equal(items[0]!.backgroundRun?.id, 'wf_new', '必须按 parentToolCallId 精确匹配，与数组顺序无关')
+    const convNodes = m.buildExecutionTree({ rootConversationId: 1, conversations: [child], runs }).filter((n) => n.kind === 'conversation')
+    assert.equal(convNodes.length, 1)
+    assert.equal(convNodes[0]!.run?.id, 'wf_new', '必须按 parentToolCallId 精确匹配，与数组顺序无关')
   }
 })
 
-test('buildWorkbenchSubagentItems：最新 parentToolCallId 无匹配 run 时不关联旧 run，无 parentToolCallId 按 createdAt 最新', { timeout: 60_000 }, () => {
+test('buildExecutionTree：最新 parentToolCallId 无匹配 run 时不关联旧 run，无 parentToolCallId 按 createdAt 最新', { timeout: 60_000 }, () => {
   const oldRun = run({
     id: 'wf_old',
     kind: 'subagent',
@@ -354,9 +362,9 @@ test('buildWorkbenchSubagentItems：最新 parentToolCallId 无匹配 run 时不
     nodes: [node({ id: 'b', status: 'failed', conversationId: 12 })],
   })
   const child = { ...summary(12, 'working', 1), parentToolCallId: 'call_new' }
-  let items = m.buildWorkbenchSubagentItems([child], 1, [oldRun])
-  assert.equal(items.length, 1)
-  assert.equal(items[0]!.backgroundRun, undefined, 'parentToolCallId 有值但无匹配 run 时不得关联旧 run')
+  let tree = m.buildExecutionTree({ rootConversationId: 1, conversations: [child], runs: [oldRun] })
+  const conv12 = tree.find((n) => n.conversationId === 12)!
+  assert.equal(conv12.run, undefined, 'parentToolCallId 有值但无匹配 run 时不得关联旧 run')
 
   const legacy = { ...summary(13, 'working', 1) }
   const noCallRun = run({
@@ -367,13 +375,13 @@ test('buildWorkbenchSubagentItems：最新 parentToolCallId 无匹配 run 时不
     updatedAt: 6_000,
     nodes: [node({ id: 'c', status: 'running', conversationId: 13 })],
   })
-  items = m.buildWorkbenchSubagentItems([legacy], 1, [noCallRun, oldRun])
-  const item13 = items.find((it) => it.conversationId === 13)
-  assert.ok(item13 !== undefined)
-  assert.equal(item13!.backgroundRun?.id, 'wf_nocall')
+  tree = m.buildExecutionTree({ rootConversationId: 1, conversations: [legacy], runs: [noCallRun, oldRun] })
+  const conv13 = tree.find((n) => n.conversationId === 13)
+  assert.ok(conv13 !== undefined)
+  assert.equal(conv13.run?.id, 'wf_nocall')
 })
 
-test('buildWorkbenchSubagentItems：缺失真实 summary 时仅携带 run 确认的 conversationId，不虚构对象', { timeout: 60_000 }, () => {
+test('buildExecutionTree：缺失真实 summary 时仅携带 run 确认的 conversationId，不虚构对象', { timeout: 60_000 }, () => {
   const bgRun = run({
     id: 'wf_bg15',
     kind: 'subagent',
@@ -382,11 +390,12 @@ test('buildWorkbenchSubagentItems：缺失真实 summary 时仅携带 run 确认
     updatedAt: 2_000,
     nodes: [node({ id: 'n', status: 'running', conversationId: 15, label: '实现者' })],
   })
-  const items = m.buildWorkbenchSubagentItems([], 1, [bgRun])
-  assert.equal(items.length, 1)
-  assert.equal(items[0]!.conversationId, 15)
-  assert.equal(items[0]!.summary, undefined, '不得虚构 ConversationSummary 占位对象')
-  assert.equal(items[0]!.backgroundRun?.id, 'wf_bg15')
+  const tree = m.buildExecutionTree({ rootConversationId: 1, conversations: [], runs: [bgRun] })
+  assert.equal(tree.length, 1)
+  assert.equal(tree[0]!.conversationId, 15)
+  assert.equal(tree[0]!.summary, undefined, '不得虚构 ConversationSummary 占位对象')
+  assert.equal(tree[0]!.run?.id, 'wf_bg15')
+  assert.equal(tree[0]!.status, 'working', 'run running 不假完成')
 })
 
 test('resolveNodeSummaryText：done 节点不随后来 child blocked 改写为等待审批', { timeout: 60_000 }, () => {

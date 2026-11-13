@@ -1281,15 +1281,8 @@ export function parseWorkflowArgsInput(text: string): { ok: true; args?: unknown
 }
 
 // ---------------------------------------------------------------------------
-// 工作台子代理统一列表（Active-First）
+// 工作台节点统计工具
 // ---------------------------------------------------------------------------
-
-/** 工作台子代理条目。 */
-export interface WorkbenchSubagentItem {
-  conversationId: number
-  summary?: ConversationSummary
-  backgroundRun?: WorkflowRunSummary
-}
 
 /** 节点统计尾注：模型短名 + 紧凑 token。 */
 export function formatWorkflowNodeStats(node: WorkflowNodeState): string[] {
@@ -1300,35 +1293,6 @@ export function formatWorkflowNodeStats(node: WorkflowNodeState): string[] {
     segments.push(node.tokens >= 1000 ? `${(node.tokens / 1000).toFixed(1)}k` : `${node.tokens}`)
   }
   return segments
-}
-
-/** 工作台条目状态优先级。 */
-const WORKBENCH_STATUS_RANK: Record<SubagentCardStatus, number> = {
-  blocked: 0,
-  working: 1,
-  error: 2,
-  done: 3,
-  pending: 3,
-}
-
-function workbenchItemToolStatus(item: WorkbenchSubagentItem): 'running' | 'done' | 'error' | 'unknown' {
-  const status = item.summary?.status
-  if (status === 'working' || status === 'blocked') return 'running'
-  if (status === 'error') return 'error'
-  if (status !== undefined) return 'done'
-  const runStatus = item.backgroundRun?.status
-  if (runStatus === 'running') return 'running'
-  if (runStatus === 'failed' || runStatus === 'aborted') return 'error'
-  return 'done'
-}
-
-function workbenchItemRank(item: WorkbenchSubagentItem): number {
-  const badge = subagentBadge(item.summary?.status, workbenchItemToolStatus(item), item.backgroundRun?.status)
-  return WORKBENCH_STATUS_RANK[badge.status]
-}
-
-function itemUpdatedAt(item: WorkbenchSubagentItem): number {
-  return Math.max(item.summary?.updatedAt ?? 0, item.backgroundRun?.updatedAt ?? 0)
 }
 
 /** 从认领同一子会话的多个后台 run 中选出当前关联者。 */
@@ -1343,50 +1307,442 @@ function pickBackgroundRun(
   return runs.reduce((latest, r) => (r.createdAt > latest.createdAt ? r : latest))
 }
 
-/** 工作台子代理统一列表（去重 + Active-First）。 */
-export function buildWorkbenchSubagentItems(
-  conversations: ReadonlyArray<ConversationSummary>,
-  parentConversationId: number,
-  workflowRuns: ReadonlyArray<WorkflowRunSummary>,
-): WorkbenchSubagentItem[] {
-  const runsByClaimedId = new Map<number, WorkflowRunSummary[]>()
-  const claimedByDslRun = new Set<number>()
-  for (const r of workflowRuns) {
-    if (r.conversationId !== parentConversationId) continue
-    const convIds = (r.nodes ?? []).map((n) => n.conversationId).filter((id): id is number => id !== undefined)
-    if (r.kind === 'subagent') {
-      for (const id of convIds) {
-        const list = runsByClaimedId.get(id)
-        if (list !== undefined) list.push(r)
-        else runsByClaimedId.set(id, [r])
-      }
-    } else {
-      for (const id of convIds) claimedByDslRun.add(id)
+// ---------------------------------------------------------------------------
+// 统一执行树 ExecutionTree / ExecutionNode（任意深度递归视图模型）
+// ---------------------------------------------------------------------------
+
+/** 统一执行节点状态（与子会话卡片状态同一五值枚举）。 */
+export type ExecutionNodeStatus = SubagentCardStatus
+
+/** 聚合严重度：blocked > error > working > done > pending（数值越小越优先）。 */
+const EXECUTION_SEVERITY_ORDER: Record<ExecutionNodeStatus, number> = {
+  blocked: 0,
+  error: 1,
+  working: 2,
+  done: 3,
+  pending: 4,
+}
+
+/** 状态自底向上聚合：取最严重者；空集返回 pending。 */
+export function aggregateExecutionStatuses(statuses: ReadonlyArray<ExecutionNodeStatus>): ExecutionNodeStatus {
+  let worst: ExecutionNodeStatus | undefined
+  for (const status of statuses) {
+    if (worst === undefined || EXECUTION_SEVERITY_ORDER[status] < EXECUTION_SEVERITY_ORDER[worst]) {
+      worst = status
     }
   }
-  const items: WorkbenchSubagentItem[] = []
-  const seen = new Set<number>()
-  for (const c of conversations) {
-    if (c.parentConversationId !== parentConversationId) continue
-    seen.add(c.id)
-    const backgroundRun = pickBackgroundRun(runsByClaimedId.get(c.id) ?? [], c.parentToolCallId)
-    items.push(
-      backgroundRun !== undefined
-        ? { conversationId: c.id, summary: c, backgroundRun }
-        : { conversationId: c.id, summary: c },
-    )
+  return worst ?? 'pending'
+}
+
+/** 子树聚合统计（含自身与全部后代）。 */
+export interface ExecutionAggregate {
+  status: ExecutionNodeStatus
+  /** 子树节点总数（含自身）。 */
+  total: number
+  done: number
+  running: number
+  blocked: number
+  error: number
+}
+
+/** 执行树节点种类：原生子会话 / 工作流 run / run 内节点 / 外部执行。 */
+export type ExecutionNodeKind = 'conversation' | 'workflow' | 'workflow-node' | 'external'
+
+/** 统一执行树节点：SubagentLiveCard / WorkflowRunCard / WorkflowNodeCard / 外部执行摘要共用同一递归形状。 */
+export interface ExecutionNode {
+  key: string
+  kind: ExecutionNodeKind
+  /** 可打开的原生子会话 ID（workflow / workflow-node / 无会话 external 不携带）。 */
+  conversationId?: number
+  /** 关联工作流 run（conversation 节点为认领的后台 run；workflow / external 节点为自身 run）。 */
+  run?: WorkflowRunSummary
+  /** run 内原始节点（workflow 节点的子节点携带）。 */
+  runNode?: WorkflowNodeState
+  /** 展示标题（仅由真实数据提炼）。 */
+  label?: string
+  /** 实时会话摘要（存在时来自会话列表，绝不虚构）。 */
+  summary?: ConversationSummary
+  /** 叶子自身状态；整棵子树状态见 aggregated.status。 */
+  status: ExecutionNodeStatus
+  /** 下一级子节点。 */
+  children: ExecutionNode[]
+  /** 自底向上聚合（含自身与全部后代）。 */
+  aggregated: ExecutionAggregate
+  /** 排序用最新更新时间（summary / run 的最大值）。 */
+  updatedAt: number
+}
+
+/** 会话节点状态：与卡片徽章同源（subagentBadge 权威），保证树聚合与卡片展示一致；无任何数据时 pending，不假完成。 */
+export function executionConversationStatus(
+  summary: ConversationSummary | undefined,
+  backgroundRun: WorkflowRunSummary | undefined,
+  toolStatus?: 'running' | 'done' | 'error' | 'unknown',
+): ExecutionNodeStatus {
+  if (summary === undefined && backgroundRun === undefined && toolStatus === undefined) return 'pending'
+  return subagentBadge(
+    summary?.status,
+    toolStatus ?? executionToolStatus(summary, backgroundRun),
+    backgroundRun?.status,
+  ).status
+}
+
+/** 工作流 run 状态映射。 */
+export function executionRunStatus(run: Pick<WorkflowRunSummary, 'status'>): ExecutionNodeStatus {
+  if (run.status === 'running') return 'working'
+  if (run.status === 'failed' || run.status === 'aborted') return 'error'
+  return 'done'
+}
+
+/** run 内节点状态映射（skipped 视为已结算完成）。 */
+export function executionRunNodeStatus(node: Pick<WorkflowNodeState, 'status'>): ExecutionNodeStatus {
+  if (node.status === 'running') return 'working'
+  if (node.status === 'failed') return 'error'
+  if (node.status === 'pending') return 'pending'
+  return 'done'
+}
+
+/** 紧凑卡父工具状态推导（Active-First 排序与卡片徽章共用）。 */
+export function executionToolStatus(
+  summary: ConversationSummary | undefined,
+  run: WorkflowRunSummary | undefined,
+): 'running' | 'done' | 'error' {
+  if (summary?.status === 'working' || summary?.status === 'blocked') return 'running'
+  if (summary?.status === 'error') return 'error'
+  if (summary !== undefined) return 'done'
+  const runStatus = run?.status
+  if (runStatus === 'running') return 'running'
+  if (runStatus === 'failed' || runStatus === 'aborted') return 'error'
+  return 'done'
+}
+
+/** 节点展示标题：用户标题 > run 节点 label / prompt > 会话与 run 兜底描述（不虚构）。 */
+export function executionNodeTitle(node: ExecutionNode): string {
+  const label = node.label ?? node.runNode?.label
+  if (node.kind === 'conversation') {
+    const custom = compactCardTitle(node.summary?.title, node.conversationId ?? 0)
+    if (custom !== undefined) return custom
+    if (label !== undefined && label.trim() !== '' && label.trim() !== 'subagent') return firstLineOf(label, 60)
+    const prompt = node.runNode?.prompt
+    if (prompt !== undefined && prompt.trim() !== '') return firstLineOf(prompt, 60)
+    return `子会话 #${node.conversationId}`
   }
-  for (const [id, runs] of runsByClaimedId) {
-    if (seen.has(id) || claimedByDslRun.has(id)) continue
-    items.push({ conversationId: id, backgroundRun: pickBackgroundRun(runs, undefined) })
+  if (label !== undefined && label.trim() !== '') return firstLineOf(label, 60)
+  return node.run?.name ?? '外部执行'
+}
+
+/** 前线活动条目：子树内正在执行节点的单行摘要。 */
+export interface ExecutionFrontlineItem {
+  key: string
+  conversationId?: number
+  text: string
+}
+
+function executionFrontlineText(node: ExecutionNode): string | undefined {
+  if (node.status !== 'working') return undefined
+  if (node.kind === 'conversation') {
+    const doing = node.summary?.doing?.trim()
+    if (doing !== undefined && doing !== '') return `#${node.conversationId} ${doing}`
+    const title = compactCardTitle(node.summary?.title, node.conversationId ?? 0)
+    return `#${node.conversationId} ${title ?? '执行中'}`
   }
+  const name = node.runNode?.label ?? node.label ?? node.run?.name
+  return `${name ?? node.key} 执行中`
+}
+
+/** 前线活动摘要：深度优先收集子树内 working 节点（至多 limit 条）。 */
+export function collectExecutionFrontline(
+  nodes: ReadonlyArray<ExecutionNode>,
+  limit = 2,
+): ExecutionFrontlineItem[] {
+  const items: ExecutionFrontlineItem[] = []
+  const visit = (list: ReadonlyArray<ExecutionNode>): void => {
+    for (const node of list) {
+      if (items.length >= limit) return
+      const text = executionFrontlineText(node)
+      if (text !== undefined) {
+        items.push({
+          key: node.key,
+          text,
+          ...(node.conversationId !== undefined ? { conversationId: node.conversationId } : {}),
+        })
+      }
+      visit(node.children)
+    }
+  }
+  visit(nodes)
   return items
-    .filter((it) => !claimedByDslRun.has(it.conversationId))
-    .sort((a, b) => {
-      const rank = workbenchItemRank(a) - workbenchItemRank(b)
-      if (rank !== 0) return rank
-      return itemUpdatedAt(b) - itemUpdatedAt(a)
-    })
+}
+
+/** 后代审批条目（pendingAsk 标题不在会话列表数据中，仅以会话标识如实呈现）。 */
+export interface ExecutionApprovalItem {
+  key: string
+  conversationId?: number
+  text: string
+}
+
+/** 后代审批摘要：子树内 blocked 会话节点（至多 limit 条）。 */
+export function collectExecutionApprovals(
+  nodes: ReadonlyArray<ExecutionNode>,
+  limit = 3,
+): ExecutionApprovalItem[] {
+  const items: ExecutionApprovalItem[] = []
+  const visit = (list: ReadonlyArray<ExecutionNode>): void => {
+    for (const node of list) {
+      if (items.length >= limit) return
+      if (node.status === 'blocked' && node.kind === 'conversation' && node.conversationId !== undefined) {
+        const title = compactCardTitle(node.summary?.title, node.conversationId)
+        items.push({
+          key: node.key,
+          conversationId: node.conversationId,
+          text: title !== undefined ? `#${node.conversationId} ${title}` : `#${node.conversationId} 等待审批`,
+        })
+      }
+      visit(node.children)
+    }
+  }
+  visit(nodes)
+  return items
+}
+
+/** 合并一组节点的聚合（用于卡片头部统计直接子树，不含任何“自身”）。 */
+export function aggregateExecutionNodes(nodes: ReadonlyArray<ExecutionNode>): ExecutionAggregate {
+  let total = 0
+  let done = 0
+  let running = 0
+  let blocked = 0
+  let error = 0
+  let status: ExecutionNodeStatus | undefined
+  for (const node of nodes) {
+    const agg = node.aggregated
+    total += agg.total
+    done += agg.done
+    running += agg.running
+    blocked += agg.blocked
+    error += agg.error
+    status = status === undefined
+      ? agg.status
+      : EXECUTION_SEVERITY_ORDER[agg.status] < EXECUTION_SEVERITY_ORDER[status]
+        ? agg.status
+        : status
+  }
+  return { status: status ?? 'pending', total, done, running, blocked, error }
+}
+
+/** 子节点均已聚合的前提下计算自身聚合（含自身，后序遍历）。 */
+function finalizeExecutionNode(node: Omit<ExecutionNode, 'aggregated'>): ExecutionNode {
+  let done = 0
+  let running = 0
+  let blocked = 0
+  let error = 0
+  if (node.status === 'done') done = 1
+  else if (node.status === 'working') running = 1
+  else if (node.status === 'blocked') blocked = 1
+  else if (node.status === 'error') error = 1
+  let status = node.status
+  let total = 1
+  for (const child of node.children) {
+    const agg = child.aggregated
+    total += agg.total
+    done += agg.done
+    running += agg.running
+    blocked += agg.blocked
+    error += agg.error
+    if (EXECUTION_SEVERITY_ORDER[agg.status] < EXECUTION_SEVERITY_ORDER[status]) status = agg.status
+  }
+  return { ...node, aggregated: { status, total, done, running, blocked, error } }
+}
+
+/** 工作台排序：blocked > working > error > done/pending（Active-First），同级 updatedAt 降序。 */
+const EXECUTION_SORT_ORDER: Record<ExecutionNodeStatus, number> = {
+  blocked: 0,
+  working: 1,
+  error: 2,
+  done: 3,
+  pending: 3,
+}
+
+function sortExecutionSiblings(nodes: ExecutionNode[]): ExecutionNode[] {
+  return nodes.sort((a, b) => {
+    const rank = EXECUTION_SORT_ORDER[a.aggregated.status] - EXECUTION_SORT_ORDER[b.aggregated.status]
+    if (rank !== 0) return rank
+    return b.updatedAt - a.updatedAt
+  })
+}
+
+/** 构建执行树入参。 */
+export interface BuildExecutionTreeInput {
+  rootConversationId: number
+  /** 全量会话摘要（useConversations）；任意深度经 parentConversationId 递归。 */
+  conversations: ReadonlyArray<ConversationSummary>
+  /** 根会话的 runs 分片（usePluginSessionDoc('runs')）；深层会话暂无 run 数据时仅以会话链递归，不虚构。 */
+  runs?: ReadonlyArray<WorkflowRunSummary>
+}
+
+/** run 内无会话节点 / 会话在祖先链上的兜底叶子。 */
+function executionRunLeafNode(run: WorkflowRunSummary, node: WorkflowNodeState): Omit<ExecutionNode, 'aggregated'> {
+  return {
+    key: `node:${run.id}:${node.id}`,
+    kind: 'workflow-node',
+    run,
+    runNode: node,
+    label: node.label,
+    status: executionRunNodeStatus(node),
+    updatedAt: run.updatedAt,
+    children: [],
+  }
+}
+
+/**
+ * 构建统一执行树：rootConversationId 的下一级执行节点（任意深度递归）。
+ *
+ * - 会话子节点按 parentConversationId 递归；被 DSL run 认领的会话挂到 run 节点下，不重复出现；
+ * - 后台单子代理 run 认领的直接子会话保持会话节点并携带 run；会话列表缺失时仅携带 run，不虚构 summary；
+ * - 无任何会话关联的后台 run 为外部执行节点（run 内节点为叶子）；
+ * - parentConversationId 链成环时按祖先链防御性截断。
+ */
+export function buildExecutionTree(input: BuildExecutionTreeInput): ExecutionNode[] {
+  const { rootConversationId, conversations, runs = [] } = input
+  const convById = new Map<number, ConversationSummary>()
+  for (const conversation of conversations) convById.set(conversation.id, conversation)
+
+  const runsByParent = new Map<number, WorkflowRunSummary[]>()
+  const dslClaimedByParent = new Map<number, Set<number>>()
+  const subagentClaimsByParent = new Map<number, Map<number, WorkflowRunSummary[]>>()
+  for (const run of runs) {
+    const siblings = runsByParent.get(run.conversationId)
+    if (siblings !== undefined) siblings.push(run)
+    else runsByParent.set(run.conversationId, [run])
+    if (run.kind === 'subagent') {
+      let claims = subagentClaimsByParent.get(run.conversationId)
+      if (claims === undefined) {
+        claims = new Map()
+        subagentClaimsByParent.set(run.conversationId, claims)
+      }
+      for (const node of run.nodes ?? []) {
+        if (node.conversationId === undefined) continue
+        const list = claims.get(node.conversationId)
+        if (list !== undefined) list.push(run)
+        else claims.set(node.conversationId, [run])
+      }
+    } else {
+      let claimed = dslClaimedByParent.get(run.conversationId)
+      if (claimed === undefined) {
+        claimed = new Set()
+        dslClaimedByParent.set(run.conversationId, claimed)
+      }
+      for (const node of run.nodes ?? []) {
+        if (node.conversationId !== undefined) claimed.add(node.conversationId)
+      }
+    }
+  }
+
+  const childrenOf = (conversationId: number, ancestry: ReadonlySet<number>): ExecutionNode[] => {
+    const nodes: ExecutionNode[] = []
+    const dslClaimed = dslClaimedByParent.get(conversationId)
+    const claims = subagentClaimsByParent.get(conversationId)
+
+    // 1) 会话直接子节点：被 DSL run 认领的会话挂到 run 节点下，不在此重复出现。
+    const directIds = new Set<number>()
+    for (const conversation of conversations) {
+      if (conversation.parentConversationId !== conversationId) continue
+      directIds.add(conversation.id)
+      if (dslClaimed?.has(conversation.id) === true) continue
+      if (ancestry.has(conversation.id)) continue
+      const backgroundRun = claims?.get(conversation.id) !== undefined
+        ? pickBackgroundRun(claims.get(conversation.id) ?? [], conversation.parentToolCallId)
+        : undefined
+      nodes.push(
+        finalizeExecutionNode({
+          key: `conv:${conversation.id}`,
+          kind: 'conversation',
+          conversationId: conversation.id,
+          summary: conversation,
+          ...(backgroundRun !== undefined ? { run: backgroundRun } : {}),
+          status: executionConversationStatus(conversation, backgroundRun),
+          updatedAt: Math.max(conversation.updatedAt, backgroundRun?.updatedAt ?? 0),
+          children: childrenOf(conversation.id, new Set(ancestry).add(conversation.id)),
+        }),
+      )
+    }
+
+    // 2) 仅后台 run 可见的会话（会话列表缺失摘要）：如实携带 run，不虚构 summary。
+    if (claims !== undefined) {
+      for (const [claimedId, claimedRuns] of claims) {
+        if (directIds.has(claimedId) || dslClaimed?.has(claimedId) === true) continue
+        if (ancestry.has(claimedId)) continue
+        const run = pickBackgroundRun(claimedRuns, undefined)
+        nodes.push(
+          finalizeExecutionNode({
+            key: `conv:${claimedId}`,
+            kind: 'conversation',
+            conversationId: claimedId,
+            ...(run !== undefined ? { run } : {}),
+            status: executionConversationStatus(undefined, run),
+            updatedAt: run?.updatedAt ?? 0,
+            children: childrenOf(claimedId, new Set(ancestry).add(claimedId)),
+          }),
+        )
+      }
+    }
+
+    // 3) 本会话发起的 run：DSL 工作流挂节点子树；无会话关联的后台 run 为外部执行。
+    for (const run of runsByParent.get(conversationId) ?? []) {
+      const runNodes = run.nodes ?? []
+      if (run.kind === 'subagent') {
+        if (runNodes.some((n) => n.conversationId !== undefined)) continue // 会话关联 run 已在 1/2 挂载
+        nodes.push(
+          finalizeExecutionNode({
+            key: `run:${run.id}`,
+            kind: 'external',
+            run,
+            label: run.name,
+            status: executionRunStatus(run),
+            updatedAt: run.updatedAt,
+            children: runNodes.map((node) => finalizeExecutionNode(executionRunLeafNode(run, node))),
+          }),
+        )
+        continue
+      }
+      nodes.push(
+        finalizeExecutionNode({
+          key: `run:${run.id}`,
+          kind: 'workflow',
+          run,
+          label: run.name,
+          status: executionRunStatus(run),
+          updatedAt: run.updatedAt,
+          children: runNodes.map((node) => {
+            const convId = node.conversationId
+            if (convId === undefined || ancestry.has(convId)) return finalizeExecutionNode(executionRunLeafNode(run, node))
+            const summary = convById.get(convId)
+            const runNodeToolStatus: 'running' | 'done' | 'error' | 'unknown' =
+              node.status === 'running'
+                ? 'running'
+                : node.status === 'failed'
+                  ? 'error'
+                  : node.status === 'done'
+                    ? 'done'
+                    : 'unknown'
+            return finalizeExecutionNode({
+              key: `conv:${convId}`,
+              kind: 'conversation',
+              conversationId: convId,
+              summary,
+              run,
+              runNode: node,
+              label: node.label,
+              status: executionConversationStatus(summary, undefined, runNodeToolStatus),
+              updatedAt: Math.max(summary?.updatedAt ?? 0, run.updatedAt),
+              children: childrenOf(convId, new Set(ancestry).add(convId)),
+            })
+          }),
+        }),
+      )
+    }
+    return sortExecutionSiblings(nodes)
+  }
+
+  return childrenOf(rootConversationId, new Set([rootConversationId]))
 }
 
 // ---------------------------------------------------------------------------
