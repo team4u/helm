@@ -142,7 +142,7 @@ test('LocalExecutionEnv win32 exec：/mnt/<盘符> cwd 经同一原语解析；�
 
 test('LocalExecutionEnv win32 exec：会话 cwd 本身是 POSIX 视图时经同一原语规范化（缺失即显式失败）', { timeout: 60_000 }, async () => {
   const env = win32Env('/mnt/q/definitely-missing');
-  const r = await env.exec('true');
+  const r = await env.exec('true', undefined);
   assert.equal(r.ok, false);
   if (!r.ok) {
     assert.equal(r.error.code, 'spawn_error');

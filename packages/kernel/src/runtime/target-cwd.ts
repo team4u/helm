@@ -26,20 +26,27 @@ export type TrustedNodePlatformSource = (nodeId: string) => string | undefined
 
 /**
  * EnvFabric 的平台事实最小结构（结构性依赖：测试可注入轻量 stub，
- * 不必构造完整 NodeRegistry）。
+ * 不必构造完整 NodeRegistry）。生产 EnvFabric 提供 nodePlatformOf 只读
+ * 端口时优先使用（唯一事实出口，见 env/fabric.ts）；仅有 registry 的
+ * 结构性 stub 退回直读注册表，语义与端口一致。
  */
 export interface TrustedPlatformHost {
   registry: { get(nodeId: string): { platform: string } | undefined }
+  /** 可选最小只读平台端口（EnvFabric.nodePlatformOf）；提供时优先使用。 */
+  nodePlatformOf?(nodeId: string): string | undefined
 }
 
 /**
- * 生产可信来源：local → process.platform（Hub 本机即 local 节点）；
- * 远端 → NodeRegistry 注册上报的 platform（未注册 / 未上报 = undefined）。
+ * 生产可信来源：优先 EnvFabric.nodePlatformOf 唯一只读端口（local → 
+ * process.platform，Hub 本机即 local 节点；远端 → NodeRegistry 注册上报的
+ * platform，未注册 / 未上报 = undefined）；仅有 registry 的结构性 stub
+ * 退回直读注册表（同一语义）。
  */
 export function trustedPlatformFromEnvFabric(
   envFabric: EnvFabric | TrustedPlatformHost | undefined,
 ): TrustedNodePlatformSource {
   return (nodeId) => {
+    if (envFabric?.nodePlatformOf !== undefined) return envFabric.nodePlatformOf(nodeId)
     if (nodeId === 'local') return process.platform
     return envFabric?.registry.get(nodeId)?.platform || undefined
   }
