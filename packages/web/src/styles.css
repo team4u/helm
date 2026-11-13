@@ -1111,7 +1111,9 @@ button,
   gap: 2px;
   flex-shrink: 1;
   min-width: 0;
-  overflow: hidden;
+  max-width: 60%;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .pane-breadcrumb-item {

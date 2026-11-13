@@ -220,7 +220,8 @@ function worktreeFromFooterToken(token: string): { path: string; branch: string 
 /** subagent 工具调用的执行元数据（后台 run / 工作树 / 外部执行标识）。 */
 export interface SubagentExecutionMeta {
   run?: WorkflowRunSummary
-  worktree?: { path: string; branch: string }
+  /** 受管工作树坐标（run 节点路径携带登记 id/baseCommit 时如实保留，供精确检视/清理）。 */
+  worktree?: { path: string; branch: string; id?: string; baseCommit?: string }
   executionId?: string
   nodeId?: string
   effectiveCwd?: string
@@ -1085,18 +1086,14 @@ export function canResumeWorkflowRun(run: WorkflowRunSummary): boolean {
 }
 
 /**
- * 按已保存定义重跑可用判定：仅已完成的 DSL 工作流 run 且携带已保存工作流名。
- * 这是「发起一次全新运行」，与 resumeFromRunId 的断点恢复语义无关：
- * 不宣称命中旧 run 缓存，也不允许在内联脚本 run 上伪装可重跑（脚本源
- * 不在保存目录，UI 拿不到就不提供入口）。
+ * 已完成 run 重放可用判定：非 subagent 的 completed DSL run（含内联脚本）。
+ * resumeFromRunId 对 completed run 同样合法：engine 沿用原脚本源（已保存定义
+ * 重读最新文件、内联沿用源码）与原 args（显式 args 可覆盖），新 run 保留原会话。
+ * journal 缓存仅复用调用载荷完全相同的前缀节点，首次失配起真实重执行；
+ * 不承诺改参必命中缓存，含外部副作用的节点照实重跑。
  */
-export function canRerunWorkflowRun(run: WorkflowRunSummary): boolean {
-  return (
-    run.kind !== 'subagent' &&
-    run.status === 'completed' &&
-    typeof run.savedName === 'string' &&
-    run.savedName.trim() !== ''
-  )
+export function canReplayWorkflowRun(run: WorkflowRunSummary): boolean {
+  return run.kind !== 'subagent' && run.status === 'completed'
 }
 
 // ---------------------------------------------------------------------------
@@ -1132,7 +1129,21 @@ function inspectString(source: Record<string, unknown>, key: string): string | u
   return typeof value === 'string' && value !== '' ? value : undefined
 }
 
-/** 宽松解析 inspect_worktree 动作结果（结构非法返回 undefined，不伪造）。 */
+/** 非负安全整数（计数类字段类型边界）。 */
+function inspectCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+/**
+ * 宽松解析 inspect_worktree 动作结果（结构非法返回 undefined，不伪造）。
+ *
+ * 边界收紧：exists / dirtyFiles（纯 string[]）/ dirtyFileCount（非负安全整数，
+ * 不再回退数组长度）/ dirtyFilesTruncated / diffTruncated（boolean）/ diffBase
+ * （枚举）与 record 核心字段均为必需且类型正确；可选字段（unavailableReason /
+ * status / origin / commitsAhead 等）出现非法取值同样整体拒绝。缺字段或类型
+ * 错位的响应绝不降级显示成「已清理 / 无变更」，一律 undefined 拒收。
+ * 一致性不变式：未截断时 dirtyFileCount === dirtyFiles.length；截断时计数大于列表长度。
+ */
 export function parseWorktreeInspectResult(raw: unknown): WorktreeInspectView | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const result = raw as Record<string, unknown>
@@ -1144,43 +1155,65 @@ export function parseWorktreeInspectResult(raw: unknown): WorktreeInspectView | 
   const branch = inspectString(rec, 'branch')
   const nodeId = inspectString(rec, 'nodeId')
   if (worktreeId === undefined || path === undefined || branch === undefined || nodeId === undefined) return undefined
-  const dirtyFiles = Array.isArray(result['dirtyFiles'])
-    ? (result['dirtyFiles'] as unknown[]).filter((l): l is string => typeof l === 'string')
-    : []
-  const diffBase = inspectString(result, 'diffBase')
+  const baseCommit = rec['baseCommit']
+  if (baseCommit !== undefined && typeof baseCommit !== 'string') return undefined
+  const status = rec['status'] ?? 'active'
+  if (status !== 'active' && status !== 'removed') return undefined
+  const origin = rec['origin'] ?? 'native'
+  if (origin !== 'native' && origin !== 'external') return undefined
+  if (typeof result['exists'] !== 'boolean') return undefined
+  const dirtyFilesRaw = result['dirtyFiles']
+  if (!Array.isArray(dirtyFilesRaw) || dirtyFilesRaw.some((l) => typeof l !== 'string')) return undefined
+  const dirtyFiles = dirtyFilesRaw as string[]
+  if (!inspectCount(result['dirtyFileCount'])) return undefined
+  const dirtyFileCount: number = result['dirtyFileCount']
+  if (typeof result['dirtyFilesTruncated'] !== 'boolean') return undefined
+  const dirtyFilesTruncated: boolean = result['dirtyFilesTruncated']
+  if (typeof result['diffTruncated'] !== 'boolean') return undefined
+  const diffBase = result['diffBase']
+  if (diffBase !== 'baseCommit' && diffBase !== 'HEAD') return undefined
+  if (dirtyFilesTruncated ? dirtyFileCount <= dirtyFiles.length : dirtyFileCount !== dirtyFiles.length) return undefined
+  const unavailableReason = inspectString(result, 'unavailableReason')
+  if (unavailableReason !== undefined && unavailableReason !== 'removed' && unavailableReason !== 'directory_missing') {
+    return undefined
+  }
+  const currentBranch = inspectString(result, 'currentBranch')
+  const currentHead = inspectString(result, 'currentHead')
+  if (result['branchChanged'] !== undefined && typeof result['branchChanged'] !== 'boolean') return undefined
+  const commitsAhead = result['commitsAhead']
+  if (commitsAhead !== undefined && !inspectCount(commitsAhead)) return undefined
+  const diffStat = inspectString(result, 'diffStat')
+  const diffPreview = inspectString(result, 'diffPreview')
   return {
     worktreeId,
     nodeId,
     path,
     branch,
-    baseCommit: inspectString(rec, 'baseCommit') ?? '',
-    status: inspectString(rec, 'status') ?? 'active',
-    origin: inspectString(rec, 'origin') ?? '',
-    exists: result['exists'] === true,
-    ...(inspectString(result, 'unavailableReason') !== undefined
-      ? { unavailableReason: inspectString(result, 'unavailableReason') }
-      : {}),
-    ...(inspectString(result, 'currentBranch') !== undefined
-      ? { currentBranch: inspectString(result, 'currentBranch') }
-      : {}),
-    ...(inspectString(result, 'currentHead') !== undefined ? { currentHead: inspectString(result, 'currentHead') } : {}),
+    baseCommit: baseCommit ?? '',
+    status,
+    origin,
+    exists: result['exists'],
+    ...(unavailableReason !== undefined ? { unavailableReason } : {}),
+    ...(currentBranch !== undefined ? { currentBranch } : {}),
+    ...(currentHead !== undefined ? { currentHead } : {}),
     ...(result['branchChanged'] === true ? { branchChanged: true } : {}),
     dirtyFiles,
-    dirtyFileCount: typeof result['dirtyFileCount'] === 'number' ? result['dirtyFileCount'] : dirtyFiles.length,
-    dirtyFilesTruncated: result['dirtyFilesTruncated'] === true,
-    ...(typeof result['commitsAhead'] === 'number' ? { commitsAhead: result['commitsAhead'] } : {}),
-    ...(inspectString(result, 'diffStat') !== undefined ? { diffStat: inspectString(result, 'diffStat') } : {}),
-    ...(inspectString(result, 'diffPreview') !== undefined ? { diffPreview: inspectString(result, 'diffPreview') } : {}),
-    diffTruncated: result['diffTruncated'] === true,
-    diffBase: diffBase ?? 'baseCommit',
+    dirtyFileCount,
+    dirtyFilesTruncated,
+    ...(commitsAhead !== undefined ? { commitsAhead } : {}),
+    ...(diffStat !== undefined ? { diffStat } : {}),
+    ...(diffPreview !== undefined ? { diffPreview } : {}),
+    diffTruncated: result['diffTruncated'],
+    diffBase,
   }
 }
 
 /**
- * 构建 inspect_worktree 调用选择器：优先受管登记 ID（精确）；无 ID 时退化
- * path（+nodeId 消歧）。仅作用于已登记 worktree，绝不携带任意目录。
+ * 构建 worktree 动作（inspect_worktree / cleanup_worktree）调用选择器：
+ * 优先受管登记 ID（精确）；无 ID 时退化 path（+nodeId 消歧，避免跨节点
+ * 同名路径误满）。仅作用于已登记 worktree，绝不携带任意目录。
  */
-export function buildWorktreeInspectSelector(
+export function buildWorktreeSelector(
   worktree: { id?: string; path: string },
   nodeId?: string,
 ): { worktreeId: string } | { path: string; nodeId?: string } {
@@ -1232,38 +1265,50 @@ export interface SavedWorkflowView {
   phases?: Array<{ title: string; detail?: string; model?: string }>
 }
 
-/** 宽松解析 list 动作结果（非法形状返回 undefined，不伪造列表）。 */
+/**
+ * 宽松解析 list 动作结果（非法形状返回 undefined，不伪造列表）。
+ *
+ * 边界收紧：条目非对象、缺 name、phases 非数组或含非法阶段项时整体返回
+ * undefined——不把异常条目静默丢弃成看似完整的列表（缺项列表会误导用户
+ * 以为目录里只有这些工作流）。
+ */
 export function parseSavedWorkflowList(raw: unknown): SavedWorkflowView[] | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const workflows = (raw as Record<string, unknown>)['workflows']
   if (!Array.isArray(workflows)) return undefined
   const out: SavedWorkflowView[] = []
   for (const item of workflows) {
-    if (item === null || typeof item !== 'object' || Array.isArray(item)) continue
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return undefined
     const record = item as Record<string, unknown>
     const name = inspectString(record, 'name')
-    if (name === undefined) continue
+    if (name === undefined) return undefined
+    let phases: Array<{ title: string; detail?: string; model?: string }> | undefined
     const phasesRaw = record['phases']
-    const phases = Array.isArray(phasesRaw)
-      ? (phasesRaw as unknown[]).flatMap((p): Array<{ title: string; detail?: string; model?: string }> => {
-          if (p === null || typeof p !== 'object' || Array.isArray(p)) return []
-          const phase = p as Record<string, unknown>
-          const title = inspectString(phase, 'title')
-          if (title === undefined) return []
-          return [{
-            title,
-            ...(inspectString(phase, 'detail') !== undefined ? { detail: inspectString(phase, 'detail') } : {}),
-            ...(inspectString(phase, 'model') !== undefined ? { model: inspectString(phase, 'model') } : {}),
-          }]
+    if (phasesRaw !== undefined) {
+      if (!Array.isArray(phasesRaw)) return undefined
+      const parsedPhases: Array<{ title: string; detail?: string; model?: string }> = []
+      for (const p of phasesRaw) {
+        if (p === null || typeof p !== 'object' || Array.isArray(p)) return undefined
+        const phase = p as Record<string, unknown>
+        const title = inspectString(phase, 'title')
+        if (title === undefined) return undefined
+        const detail = inspectString(phase, 'detail')
+        const model = inspectString(phase, 'model')
+        parsedPhases.push({
+          title,
+          ...(detail !== undefined ? { detail } : {}),
+          ...(model !== undefined ? { model } : {}),
         })
-      : undefined
+      }
+      phases = parsedPhases.length > 0 ? parsedPhases : undefined
+    }
     out.push({
       name,
       ...(inspectString(record, 'path') !== undefined ? { path: inspectString(record, 'path') } : {}),
       ...(inspectString(record, 'metadataError') !== undefined ? { metadataError: inspectString(record, 'metadataError') } : {}),
       ...(inspectString(record, 'description') !== undefined ? { description: inspectString(record, 'description') } : {}),
       ...(inspectString(record, 'whenToUse') !== undefined ? { whenToUse: inspectString(record, 'whenToUse') } : {}),
-      ...(phases !== undefined && phases.length > 0 ? { phases } : {}),
+      ...(phases !== undefined ? { phases } : {}),
     })
   }
   return out

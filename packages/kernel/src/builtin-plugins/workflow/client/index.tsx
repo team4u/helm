@@ -25,10 +25,10 @@ import {
   buildSubagentStatSegments,
   buildSubagentStreamLines,
   buildWorkflowPhaseSections,
-  buildWorktreeInspectSelector,
+  buildWorktreeSelector,
   buildWorktreeReviewRequest,
   canResumeWorkflowRun,
-  canRerunWorkflowRun,
+  canReplayWorkflowRun,
   collectExecutionApprovals,
   collectExecutionFrontline,
   executionNodeTitle,
@@ -175,7 +175,13 @@ export function SubagentLiveCard(props: {
   childConversationId: number
   toolStatus: 'running' | 'done' | 'error' | 'unknown'
   backgroundRun?: WorkflowRunSummary
-  worktree?: { path: string; branch: string }
+  worktree?: { path: string; branch: string; id?: string; baseCommit?: string }
+  /**
+   * 工作树只读检视入口（独立子代理卡：单次/后台/工作台子会话）：提供时且存在
+   * 工作树坐标才渲染检视节；workflow 节点卡在外层自渲染检视，不传以避免重复。
+   * nodeId 用于无登记 ID 时的 path 消歧（缺省回退子会话绑定节点）。
+   */
+  worktreeInspect?: { parentConversationId: number; nodeId?: string }
   toolSummary?: { prompt?: string; startedAt?: number; durationMs?: number; resultText?: string; isError?: boolean }
   startedAt?: number
   /** 是否为缓存/历史重放任务。 */
@@ -196,6 +202,7 @@ export function SubagentLiveCard(props: {
   const live = conv.live
   const pendingAsk = conv.pendingAsks[0]
   const detailError = conv.loadError
+  const [cleaning, setCleaning] = useState(false)
 
   const badge = subagentBadge(summary?.status, toolStatus, backgroundRun?.status)
   const isWorking = badge.status === 'working'
@@ -241,6 +248,9 @@ export function SubagentLiveCard(props: {
 
   // 隔离工作树：显式入参优先，其次回退后台 run 首个节点的 worktree。
   const wt = worktree ?? backgroundRun?.nodes?.find((n) => n.worktree !== undefined)?.worktree
+  // 检视/清理共用消歧坐标：调用方显式 nodeId > 子会话绑定节点。
+  const inspectNodeId =
+    props.worktreeInspect?.nodeId ?? (summary?.nodeId !== undefined && summary.nodeId !== '' ? summary.nodeId : undefined)
   const streamLines = useMemo(
     () => (props.expanded === true && detail?.entries !== undefined ? buildSubagentStreamLines(detail.entries, live, badge.status === 'working') : []),
     [props.expanded, detail?.entries, live, badge.status],
@@ -338,16 +348,21 @@ export function SubagentLiveCard(props: {
             <button
               type="button"
               className="btn btn-xs"
-              title="清理隔离工作树"
+              disabled={cleaning}
+              title="清理隔离工作树（优先登记 ID 精确定位，避免跨节点同名路径歧义）"
               aria-label="清理隔离工作树"
               onClick={(e) => {
                 e.stopPropagation()
-                void ctx
-                  .callAction('cleanup_worktree', { path: wt.path })
+                if (cleaning) return
+                setCleaning(true)
+                ctx
+                  .callAction('cleanup_worktree', buildWorktreeSelector(wt, inspectNodeId))
+                  .then(() => ctx.notify(`已清理隔离工作树 ${wt.branch}`))
                   .catch((err: unknown) => ctx.notify(`清理工作树失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+                  .finally(() => setCleaning(false))
               }}
             >
-              <Icon name="rotate-cw" size={11} />
+              <Icon name="rotate-cw" size={11} className={cleaning ? SPIN : undefined} />
               <span className="subagent-action-label">清理工作树</span>
             </button>
           ) : null}
@@ -422,6 +437,21 @@ export function SubagentLiveCard(props: {
           result={props.callDetails !== undefined ? props.callDetails.result : toolSummary?.resultText}
           artifactRef={props.callDetails?.artifactRef}
         />
+      ) : null}
+      {props.worktreeInspect !== undefined && wt !== undefined ? (
+        <div className="subagent-inspect-slot" onClick={(e) => e.stopPropagation()}>
+          <WorktreeInspectSection
+            worktree={{
+              path: wt.path,
+              branch: wt.branch,
+              ...(wt.id !== undefined && wt.id !== '' ? { id: wt.id } : {}),
+            }}
+            nodeId={inspectNodeId}
+            baseCommit={wt.baseCommit}
+            taskLabel={taskTitle}
+            parentConversationId={props.worktreeInspect.parentConversationId}
+          />
+        </div>
       ) : null}
     </div>
   )
@@ -528,6 +558,10 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       toolStatus={props.status}
       backgroundRun={meta.run}
       worktree={meta.worktree}
+      worktreeInspect={{
+        parentConversationId: props.conversationId,
+        ...(meta.nodeId !== undefined && meta.nodeId !== '' ? { nodeId: meta.nodeId } : {}),
+      }}
       toolSummary={toolSummary}
       startedAt={props.startedAt}
       expanded={false}
@@ -607,7 +641,6 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   const runsDoc = usePluginSessionDoc<{ runs: WorkflowRunSummary[] }>('runs', { conversationId: props.conversationId })
   const conversations = useConversations()
   const [cardOpen, setCardOpen] = useState(true)
-  const [busy, setBusy] = useState(false)
   const [resultOpen, setResultOpen] = useState(false)
 
   const run = useMemo(
@@ -652,30 +685,31 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
       onToggleCard={() => setCardOpen((v) => !v)}
       resultOpen={resultOpen}
       onToggleResult={() => setResultOpen((v) => !v)}
-      busy={busy}
-      setBusy={setBusy}
       toolProps={props}
       inWorkbench={false}
     />
   )
 }
 
-/** 工作流运行卡主体（时间线与工作台共用；统一为 ExecutionNode 的 workflow 节点卡）。 */
+/** 工作流运行卡共用执行树视图，在途按钮用同步 ref 防止重复提交。 */
 function WorkflowRunCardBody(props: {
   run: WorkflowRunSummary
   cardOpen: boolean
   onToggleCard: () => void
   resultOpen: boolean
   onToggleResult: () => void
-  busy: boolean
-  setBusy: (v: boolean) => void
   toolProps?: { input?: unknown; result?: unknown; artifactRef?: string }
   inWorkbench: boolean
   /** 统一执行树子节点（agent 节点会话的深层后代；缺省仅展示 run 自身节点）。 */
   childNodes?: ExecutionNode[]
 }): ReactNode {
   const ctx = usePluginContext()
-  const { run, cardOpen, busy, setBusy, toolProps, inWorkbench } = props
+  const { run, cardOpen, toolProps, inWorkbench } = props
+  const [busy, setBusy] = useState(false)
+  const inFlight = useRef(false)
+  const [replayOpen, setReplayOpen] = useState(false)
+  const [replayArgs, setReplayArgs] = useState('')
+  const [replayError, setReplayError] = useState<string | undefined>(undefined)
   const nodes = run.nodes ?? []
   const done = nodes.filter((n) => n.status === 'done').length
   const tokens = nodes.reduce((sum, n) => sum + (n.tokens ?? 0), 0)
@@ -697,29 +731,48 @@ function WorkflowRunCardBody(props: {
       ? nowMs - run.createdAt
       : run.updatedAt - run.createdAt
 
-  const abort = (): void => {
+  /** 同步 ref 防重复：渲染尚未刷新时连点也不重复发请求；错误如实通知，不覆盖成功。 */
+  const guarded = (dispatch: () => Promise<unknown>, failMessage: string): void => {
+    if (inFlight.current) return
+    inFlight.current = true
     setBusy(true)
-    ctx
-      .callAction('abort', { runId: run.id })
-      .catch((err: unknown) => ctx.notify(`中止工作流失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
-      .finally(() => setBusy(false))
+    dispatch()
+      .catch((err: unknown) => ctx.notify(`${failMessage}：${err instanceof Error ? err.message : String(err)}`, 'error'))
+      .finally(() => {
+        inFlight.current = false
+        setBusy(false)
+      })
+  }
+  const abort = (): void => {
+    guarded(() => ctx.callAction('abort', { runId: run.id }), '中止工作流失败')
   }
   const resume = (): void => {
-    setBusy(true)
-    ctx
-      .callAction('run', { resumeFromRunId: run.id, conversationId: run.conversationId })
-      .catch((err: unknown) => ctx.notify(`断点恢复失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
-      .finally(() => setBusy(false))
+    guarded(
+      () => ctx.callAction('run', { resumeFromRunId: run.id, conversationId: run.conversationId }),
+      '断点恢复失败',
+    )
   }
-  // 重跑与 resume 语义无关：按已保存定义发起一次全新运行（沿用原 args 不成立，
-  // 也不宣称命中旧 run 的 journal 缓存；completed run 一律不使用 resumeFromRunId）。
-  const rerun = (): void => {
-    setBusy(true)
-    ctx
-      .callAction('run', { name: run.savedName })
-      .then(() => ctx.notify(`已按保存定义 ${run.savedName} 发起新运行`))
-      .catch((err: unknown) => ctx.notify(`重跑失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
-      .finally(() => setBusy(false))
+  // 重放：completed DSL run（含内联）经 resumeFromRunId 发起新 run，新 run 保留
+  // 原会话；空白 args 沿用原 args，显式 args 严格解析后覆盖。缓存只复用调用
+  // 载荷相同的前缀节点，首次失配起重执行——不承诺改参必命中缓存。
+  const replay = (): void => {
+    const parsed = parseWorkflowArgsInput(replayArgs)
+    if (!parsed.ok) {
+      setReplayError(parsed.error)
+      return
+    }
+    setReplayError(undefined)
+    guarded(
+      () =>
+        ctx
+          .callAction('run', {
+            resumeFromRunId: run.id,
+            conversationId: run.conversationId,
+            ...(parsed.args !== undefined ? { args: parsed.args } : {}),
+          })
+          .then(() => ctx.notify(`重放已受理（源 run ${run.id}；新 run 保留原会话与原脚本源）`)),
+      '重放失败',
+    )
   }
 
   const resultJson = useMemo(() => {
@@ -773,10 +826,19 @@ function WorkflowRunCardBody(props: {
             断点恢复
           </button>
         ) : null}
-        {canRerunWorkflowRun(run) ? (
-          <button type="button" className="btn btn-sm" disabled={busy} onClick={rerun} title={`按已保存定义 ${run.savedName} 发起一次全新运行（非断点恢复；不命中旧 run 缓存）`}>
+        {canReplayWorkflowRun(run) ? (
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy}
+            onClick={() => {
+              setReplayOpen((v) => !v)
+              setReplayError(undefined)
+            }}
+            title="打开重放表单（resumeFromRunId：沿用原会话与原脚本源，args 可覆盖）"
+          >
             <Icon name="rotate-cw" size={11} />
-            重跑
+            重放
           </button>
         ) : null}
         {!inWorkbench ? (
@@ -785,6 +847,40 @@ function WorkflowRunCardBody(props: {
           </button>
         ) : null}
       </div>
+      {replayOpen && canReplayWorkflowRun(run) ? (
+        <div className="workflow-replay-form">
+          <div className="workflow-replay-meta">
+            源 run <code className="mono">{run.id}</code>（会话 #{run.conversationId}；
+            {run.savedName !== undefined ? `已保存定义 ${run.savedName} 按最新文件内容执行` : '内联脚本沿用原源码'}）
+          </div>
+          <div className="workflow-replay-hint">缓存仅复用调用载荷完全相同的前缀节点；首次载荷失配起真实重执行，改参不保证命中缓存，含外部副作用的节点会照实重跑。</div>
+          <div className="workflow-replay-row">
+            <input
+              className="workflow-replay-args"
+              type="text"
+              placeholder="args JSON（可选；空白沿用原 args，非空严格解析）"
+              value={replayArgs}
+              onChange={(e) => {
+                setReplayArgs(e.target.value)
+                setReplayError(undefined)
+              }}
+              aria-label={`重放 run ${run.id} 的 args JSON 覆盖`}
+            />
+            <button
+              type="button"
+              className="btn btn-xs"
+              disabled={busy}
+              onClick={replay}
+              aria-label="发起重放"
+              title="按 resumeFromRunId 发起重放（新 run 保留原会话；空白 args 沿用原 args）"
+            >
+              <Icon name="rotate-cw" size={11} className={busy ? SPIN : undefined} />
+              发起重放
+            </button>
+          </div>
+          {replayError !== undefined ? <div className="callout callout--error">{replayError}</div> : null}
+        </div>
+      ) : null}
       {run.description !== undefined && run.description !== '' ? <p className="workflow-run-description">{run.description}</p> : null}
       {cardOpen ? (
         <>
@@ -1019,7 +1115,7 @@ function WorktreeInspectSection(props: {
     setLoading(true)
     setError(undefined)
     try {
-      const raw = await ctx.callAction('inspect_worktree', buildWorktreeInspectSelector(worktree, props.nodeId))
+      const raw = await ctx.callAction('inspect_worktree', buildWorktreeSelector(worktree, props.nodeId))
       if (generation.current !== current) return
       const parsed = parseWorktreeInspectResult(raw)
       if (parsed === undefined) {
@@ -1138,6 +1234,9 @@ function WorktreeInspectSection(props: {
               ) : data.exists ? (
                 <div className="workflow-phase-empty">工作区无未提交修改</div>
               ) : null}
+              {data.exists ? (
+                <div className="worktree-inspect-note">Diff 仅包含已跟踪文件；未跟踪文件见状态列表。</div>
+              ) : null}
               {data.diffStat !== undefined ? (
                 <div>
                   <div className="trace-section-label">Diff 统计（相对{data.diffBase === 'HEAD' ? ' HEAD' : '基线'}）</div>
@@ -1153,7 +1252,7 @@ function WorktreeInspectSection(props: {
                   <pre className="code-block-pre workflow-node-pre worktree-inspect-diff selectable"><code>{data.diffPreview}</code></pre>
                 </div>
               ) : data.exists ? (
-                <div className="workflow-phase-empty">无 diff 内容</div>
+                <div className="workflow-phase-empty">无已跟踪文件 diff</div>
               ) : null}
             </>
           ) : null}
@@ -1173,6 +1272,7 @@ function WorktreeInspectSection(props: {
 /** 无原生子会话节点的结构化明细。 */
 function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
   const ctx = usePluginContext()
+  const [cleaning, setCleaning] = useState(false)
   const rows: Array<[string, string]> = []
   if (node.agentType !== undefined) rows.push(['执行后端', node.agentType])
   if (node.executionId !== undefined) rows.push(['外部执行', node.executionId])
@@ -1231,11 +1331,23 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
         </div>
       ) : null}
       {node.worktree !== undefined ? (
-        <button type="button" className="btn btn-xs" onClick={() => {
-          void ctx.callAction('cleanup_worktree', { path: node.worktree!.path }).catch((err: unknown) =>
-            ctx.notify(`清理工作树失败：${err instanceof Error ? err.message : String(err)}`, 'error'),
-          )
-        }}>
+        <button
+          type="button"
+          className="btn btn-xs"
+          disabled={cleaning}
+          onClick={() => {
+            if (cleaning) return
+            setCleaning(true)
+            ctx
+              .callAction('cleanup_worktree', buildWorktreeSelector(node.worktree!, node.nodeId))
+              .then(() => ctx.notify(`已清理工作树 ${node.worktree!.branch}`))
+              .catch((err: unknown) =>
+                ctx.notify(`清理工作树失败：${err instanceof Error ? err.message : String(err)}`, 'error'),
+              )
+              .finally(() => setCleaning(false))
+          }}
+        >
+          <Icon name="rotate-cw" size={11} className={cleaning ? SPIN : undefined} />
           清理工作树
         </button>
       ) : null}
@@ -1247,7 +1359,7 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
 // 工作流库（list 动作：已保存定义 + 在当前会话选择运行）
 // ---------------------------------------------------------------------------
 
-/** 工作流库分节：列出已保存定义（含元数据诊断），支持在当前会话选择运行。 */
+/** 工作流库分节：列出已保存定义（含元数据诊断），支持在当前会话选择运行；每行独立 args 草稿。 */
 function WorkflowLibrarySection(props: { conversationId: number }): ReactNode {
   const ctx = usePluginContext()
   const [items, setItems] = useState<SavedWorkflowView[] | undefined>(undefined)
@@ -1255,8 +1367,8 @@ function WorkflowLibrarySection(props: { conversationId: number }): ReactNode {
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(true)
   const [runningName, setRunningName] = useState<string | undefined>(undefined)
-  const [argsDraft, setArgsDraft] = useState('')
-  const [argsError, setArgsError] = useState<string | undefined>(undefined)
+  // 每行独立草稿与解析错误（按 name 存）；组件由调用方以 conversationId 作 key，切会话重置。
+  const [drafts, setDrafts] = useState<Record<string, { draft: string; error?: string }>>({})
   const generation = useRef(0)
 
   const load = async (): Promise<void> => {
@@ -1286,12 +1398,12 @@ function WorkflowLibrarySection(props: { conversationId: number }): ReactNode {
   }, [])
 
   const runSaved = (name: string): void => {
-    const parsed = parseWorkflowArgsInput(argsDraft)
+    const draft = drafts[name]?.draft ?? ''
+    const parsed = parseWorkflowArgsInput(draft)
     if (!parsed.ok) {
-      setArgsError(parsed.error)
+      setDrafts((prev) => ({ ...prev, [name]: { draft, error: parsed.error } }))
       return
     }
-    setArgsError(undefined)
     setRunningName(name)
     ctx
       .callAction('run', {
@@ -1301,7 +1413,7 @@ function WorkflowLibrarySection(props: { conversationId: number }): ReactNode {
       })
       .then(() => {
         ctx.notify(`工作流 ${name} 已在当前会话启动`)
-        setArgsDraft('')
+        setDrafts((prev) => (prev[name] === undefined ? prev : { ...prev, [name]: { draft: '' } }))
       })
       .catch((err: unknown) => ctx.notify(`启动工作流失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
       .finally(() => setRunningName(undefined))
@@ -1366,8 +1478,8 @@ function WorkflowLibrarySection(props: { conversationId: number }): ReactNode {
                   className="workflow-library-args"
                   type="text"
                   placeholder="args JSON（可选，严格解析）"
-                  value={argsDraft}
-                  onChange={(e) => setArgsDraft(e.target.value)}
+                  value={drafts[item.name]?.draft ?? ''}
+                  onChange={(e) => setDrafts((prev) => ({ ...prev, [item.name]: { draft: e.target.value } }))}
                   aria-label={`工作流 ${item.name} 的 args JSON`}
                 />
                 <button
@@ -1381,9 +1493,11 @@ function WorkflowLibrarySection(props: { conversationId: number }): ReactNode {
                   运行
                 </button>
               </div>
+              {drafts[item.name]?.error !== undefined ? (
+                <div className="callout callout--error">{drafts[item.name]!.error}</div>
+              ) : null}
             </div>
           ))}
-          {argsError !== undefined ? <div className="callout callout--error">{argsError}</div> : null}
         </div>
       ) : null}
     </section>
@@ -1427,8 +1541,6 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
           onToggleCard={() => undefined}
           resultOpen
           onToggleResult={() => undefined}
-          busy={false}
-          setBusy={() => undefined}
           inWorkbench
         />
       </div>
@@ -1437,10 +1549,10 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
-      <WorkflowLibrarySection conversationId={props.conversation.id} />
+      <WorkflowLibrarySection key={props.conversation.id} conversationId={props.conversation.id} />
       {workflowNodes.length > 0 ? <div className="trace-section-label">工作流运行</div> : null}
       {workflowNodes.map((node) => (
-        <div key={node.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}> 
+        <div key={node.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <WorkflowRunCardBody
             run={node.run!}
             childNodes={node.children}
@@ -1448,8 +1560,6 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
             onToggleCard={() => setInspectRunId(node.run!.id)}
             resultOpen={false}
             onToggleResult={() => undefined}
-            busy={false}
-            setBusy={() => undefined}
             inWorkbench
           />
         </div>
@@ -1472,6 +1582,10 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
               toolStatus={executionToolStatus(node.summary, node.run)}
               backgroundRun={node.run}
               childNodes={node.children}
+              worktreeInspect={{
+                parentConversationId: props.conversation.id,
+                ...(node.summary?.nodeId ? { nodeId: node.summary.nodeId } : {}),
+              }}
               expanded={false}
             />
           ))}

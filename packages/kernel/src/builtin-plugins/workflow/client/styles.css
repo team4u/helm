@@ -537,6 +537,34 @@
   white-space: nowrap;
 }
 
+/* 已完成 run 重放小表单（源 run 标识 + args 覆盖输入 + 缓存语义说明） */
+.workflow-replay-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-subtle);
+}
+
+.workflow-replay-meta {
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+}
+
+.workflow-replay-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.workflow-replay-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 /* 同优先级的状态规则必须位于基础规则之后，避免状态色被覆盖。 */
 .phase-bar {
   display: flex;
@@ -885,6 +913,18 @@
   max-height: 260px;
 }
 
+.worktree-inspect-note {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* 独立子代理卡内嵌检视入口：点击不冒泡整卡导航（按钮键盘激活不受影响） */
+.subagent-inspect-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .worktree-inspect-actions {
   display: flex;
   align-items: center;
@@ -964,7 +1004,8 @@
   min-width: 0;
 }
 
-.workflow-library-args {
+.workflow-library-args,
+.workflow-replay-args {
   flex: 1;
   min-width: 0;
   height: 26px;
@@ -977,7 +1018,8 @@
   font-family: var(--font-mono);
 }
 
-.workflow-library-args:focus-visible {
+.workflow-library-args:focus-visible,
+.workflow-replay-args:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 1px;
 }

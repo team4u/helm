@@ -80,8 +80,8 @@ Worktree 隔离经 `agent_spawn` around continuation（priority 200，先于外�
 插件注册三个 client.tsx 视图（组件经 `usePluginSessionDoc` 自行订阅 runs 分片，动作经 `ctx.callAction`，零宿主私有依赖）：
 
 - `toolView` `subagent-card`（`replaceRow: true`）：时间线内 subagent 工具调用的双层胶囊实时卡，多次 resume 折叠展示；
-- `toolView` `workflow-card`（`replaceRow: true`）：时间线内 SubagentWorkflow 调用的工作流运行卡；已保存定义发起的已完成 run 提供「重跑」（全新运行，非断点恢复），失败/中止 run 提供「断点恢复」（仅同 run journal 前缀重放，沿用原脚本与 args）；
-- `workbenchPanel` `tasks`：工作台面板（工作流库 + 当前会话执行树），`badge` 绑定 `run-badges` 文档驱动动态角标。工作流库经 `list` 动作展示已保存定义并支持在当前会话选择运行（args 输入严格 JSON 解析）；有 worktree 的节点卡提供可折叠只读改动概览（`inspect_worktree`）与「让主会话审阅并合入」（仅向父会话提交审阅请求文本，Web 端不执行 git 写操作）。
+- `toolView` `workflow-card`（`replaceRow: true`）：时间线内 SubagentWorkflow 调用的工作流运行卡。已完成的 DSL run（含内联脚本）提供「重放」表单，经 `resumeFromRunId` 发起新 run，保留原会话；空白沿用原 args，显式 args 经 JSON 校验后覆盖。文件脚本重读最新内容，内联脚本沿用原源码。缓存仅复用调用载荷相同的前缀，首次失配起重新执行；副作用不确定时按引擎契约显式拒绝。失败/中止 run 提供「断点恢复」。重放、恢复和中止在途均防止重复提交。
+- `workbenchPanel` `tasks`：工作台面板（工作流库 + 当前会话执行树），`badge` 绑定 `run-badges` 文档。工作流库经 `list` 动作展示已保存定义并支持在当前会话运行；每行 args 草稿独立，按会话隔离并严格解析 JSON。有 worktree 的节点卡与独立子代理卡均提供只读改动概览（`inspect_worktree`），优先按登记 ID 定位，无 ID 时以 path 与节点消歧。审阅按钮仅向父会话提交请求，Web 不执行 git 写操作。Diff 仅覆盖已跟踪文件，未跟踪文件见状态列表；清理按钮使用同一精确选择器并在途禁用。
 
 执行卡片统一使用 `ExecutionNode` 视图模型连接子会话、工作流、动作及外部执行。每个实际执行只计数一次；卡片汇总后代的运行、异常、审批状态，在当前层展示直系子项，深层任务通过抽屉继续查看。审批与后代活动作为独立摘要呈现，工作流自身的结算结果仍以引擎记录为准。
 
