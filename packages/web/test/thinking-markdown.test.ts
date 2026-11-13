@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
@@ -10,7 +10,7 @@ import { makeTestStore as makeMockStore } from './helpers/store.js'
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 const { ConversationTimeline, ThinkingRow } = await import('../src/conversation/ConversationTimeline.js')
-const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+const stylesCss = readHostStyles()
 
 test('思考样式契约：.thinking-expanded-body 100% 宽度撑满，段落与列表解除 74ch 限制', { timeout: 60_000 }, () => {
   assert.match(stylesCss, /\.trace-expanded-body\.thinking-expanded-body\s*\{[^}]*max-width:\s*100%/)

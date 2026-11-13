@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
@@ -11,7 +12,7 @@ const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.ts
 const ancestrySource = readFileSync(new URL('../src/conversation/ancestry-model.ts', import.meta.url), 'utf8')
 const workbenchSource = readFileSync(new URL('../src/conversation/WorkbenchDrawer.tsx', import.meta.url), 'utf8')
 mountSharedPluginNamespaces({ realHooks: true })
-const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+const stylesCss = readHostStyles()
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
 
 test('icons.tsx 支持 arrow-left 与 chevron-left 矢量图标', { timeout: 60_000 }, () => {

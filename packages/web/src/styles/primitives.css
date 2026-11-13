@@ -1,0 +1,690 @@
+/* ==========================================================================
+ * 通用设计系统原语：按钮、徽章、行、卡片、表格、分屏与输入框
+ * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * ========================================================================== */
+/* 次级/轮廓操作按钮 */
+.btn-secondary {
+  height: 27px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg-secondary);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--fg-muted);
+  background: var(--bg-subtle);
+  color: var(--fg);
+}
+
+/* 主要操作按钮（Solid Accent） */
+.btn-primary {
+  height: 27px;
+  border: none;
+  background: var(--accent);
+  color: var(--fg-on-solid);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--accent);
+  border: none;
+  color: var(--fg-on-solid);
+}
+.btn-primary:active:not(:disabled) {
+  filter: brightness(0.96);
+}
+
+/* 危险操作按钮（软底色 + 警示红） */
+.btn-danger {
+  border: 1px solid var(--err-border);
+  background: var(--err-bg);
+  color: var(--err);
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--err);
+  border-color: var(--err);
+  color: var(--fg-on-solid);
+  filter: brightness(0.98);
+}
+
+/* 幽灵/文本操作按钮 */
+.btn-ghost {
+  height: 27px;
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  box-shadow: none;
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--bg-muted);
+  color: var(--fg);
+  border: none;
+}
+.btn-ghost:active:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+/* 尺寸阶梯修饰类 */
+.btn-sm {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  border-radius: var(--radius-xs);
+}
+
+/* 紧凑小按钮：胶囊卡头部 / 工作台窄列内联动作 */
+.btn-xs {
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
+  gap: 4px;
+  border-radius: var(--radius-xs);
+}
+
+.btn-pill {
+  border-radius: var(--radius-pill);
+}
+
+/* 纯图标按钮原语：固定正方形与内边距归零 */
+.btn-icon { width: 32px; height: 32px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.btn-icon-sm { width: 28px; height: 28px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.btn-icon-xs { width: 22px; height: 22px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+/* 紧凑原生图标按钮（26px x 26px，圆角 7px） */
+.composer-icon-button,
+.composer-toolbar .composer-icon-button {
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0 !important;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.composer-icon-button:hover:not(:disabled),
+.composer-toolbar .composer-icon-button:hover:not(:disabled) {
+  background: var(--bg-muted);
+  color: var(--fg);
+}
+.composer-icon-button:disabled,
+.composer-toolbar .composer-icon-button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+/* 1px 细线状态徽章 */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.badge-neutral {
+  background: var(--bg-subtle);
+  border-color: var(--border);
+  color: var(--fg-secondary);
+}
+.badge-accent {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+.badge-ok {
+  background: var(--ok-bg);
+  border-color: var(--ok-border);
+  color: var(--ok);
+}
+.badge-warn {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+.badge-err {
+  background: var(--err-bg);
+  border-color: var(--err-border);
+  color: var(--err);
+}
+
+/* 1px 发丝分隔列表 */
+.list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  overflow: hidden;
+  flex: none;
+}
+
+/* 行原语：列表内与平铺场景通用行骨架，相邻行间以 1px 发丝线分割 */
+.list > .row,
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 7px 12px 7px 14px;
+  border-bottom: none;
+}
+
+.list > .row + .row,
+.row + .row {
+  border-top: 1px solid var(--line-2);
+}
+
+.list > .row {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.list > .row:last-child {
+  border-bottom: none;
+}
+
+/* 列表导航交互项原语 */
+.list-item-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
+  user-select: none;
+}
+.list-item-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.list-item-btn.is-active,
+.list-item-btn[aria-pressed='true'] {
+  background: var(--nav-active-bg);
+  color: var(--nav-active-fg, var(--fg));
+  box-shadow: var(--seg-edge);
+  font-weight: 500;
+}
+.list-item-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.list-item-btn-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  font-weight: 500;
+  font-size: 12.5px;
+  gap: 6px;
+}
+
+/* 卡片与表单 */
+.card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+}
+
+/* 静音平铺容器原语 */
+.section-flat {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.section-flat-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+/* 同插件多 settings.panel：面板间分隔与独立挂载区域 */
+.plugin-settings-panels + .plugin-settings-panels {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.plugin-settings-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  margin-bottom: 4px;
+}
+/* 左栏会话行插件操作菜单：与 nav-item-row-actions 同层级的悬停入口 */
+.conv-row-actions-menu {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.conv-row-actions-popover {
+  top: calc(100% + 4px);
+  right: 0;
+  width: 200px;
+}
+.section-flat-title {
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--fg);
+}
+
+/* 统一搜索输入框原语（容器式：描边/背景/focus 高亮全部由容器提供，
+   内层 input 透明无边框，遵循搜索框统一规范） */
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  box-sizing: border-box;
+  transition: border-color 0.15s ease;
+}
+.search-box:focus-within {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.search-box > svg {
+  color: var(--fg-muted);
+  pointer-events: none;
+  flex-shrink: 0;
+}
+.search-box > .input,
+.search-box > input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  height: auto;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12.5px;
+  padding: 0;
+  box-shadow: none;
+}
+.search-box > .input:focus,
+.search-box > input:focus {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.palette-close-btn {
+  height: 22px;
+  padding: 0 6px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 统一空状态原语 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--fg-subtle);
+  gap: 8px;
+  min-height: 160px;
+}
+.empty-state-icon {
+  color: var(--fg-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+.empty-state-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--fg);
+  margin: 0;
+}
+.empty-state-compact {
+  padding: 16px 8px;
+  min-height: 60px;
+  font-size: 12px;
+}
+.empty-state-compact .empty-state-title {
+  font-size: 12px;
+}
+
+/* 表单两列网格对齐原语 */
+.form-grid {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 8px 12px;
+  align-items: center;
+}
+.form-grid-align-start {
+  align-items: start;
+}
+.form-grid-label {
+  font-size: 12px;
+  color: var(--fg-muted);
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  user-select: none;
+}
+.form-grid-value {
+  font-size: 11.5px;
+  word-break: break-all;
+}
+
+/* ==========================================================================
+ * 通用设计系统表格原语 (Table Primitives)
+ * 供主框架全局及所有扩展插件（Herdr / SuperAgent / Triggers / Magpie 等）统一复用
+ * 杜绝每个插件自立门户重复拷贝表格样式
+ * ========================================================================== */
+
+.helm-table-wrap,
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-elevated);
+  box-sizing: border-box;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.helm-table,
+.table-wrap > table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  table-layout: auto;
+}
+
+.helm-table th,
+.table-wrap th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.helm-table td,
+.table-wrap td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  color: var(--fg);
+  vertical-align: middle;
+  font-size: 12.5px;
+}
+
+.helm-table tr:last-child td,
+.table-wrap tr:last-child td {
+  border-bottom: none;
+}
+
+.helm-table tr:hover td,
+.table-wrap tr:hover td {
+  background: var(--bg-hover);
+}
+
+.cell-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.row-actions-group {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.table-empty {
+  color: var(--fg-muted);
+  text-align: center;
+  padding: 24px 10px;
+  font-size: 12.5px;
+}
+
+.cell-ellipsis {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-error {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--err);
+}
+
+/* ==========================================================================
+ * 通用设计系统页面与分节原语 (Screen & Section Primitives)
+ * 供全屏一级主舞台、扩展插件视图（Herdr / SuperAgent / Triggers / Magpie）统一排版
+ * ========================================================================== */
+
+.screen-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.screen-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.screen-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.screen-subtitle {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.screen-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.screen-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* ==========================================================================
+ * 通用键值对概览原语 (Key-Value Grid Primitives)
+ * ========================================================================== */
+
+.helm-kv-grid,
+.kv-grid,
+.kv-list {
+  display: grid;
+  grid-template-columns: minmax(100px, auto) 1fr;
+  gap: 6px 14px;
+  font-size: 12.5px;
+}
+
+.kv-key {
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+.kv-val {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+/* ==========================================================================
+ * 通用加载中与堆叠布局原语 (Loading & Stack Primitives)
+ * ========================================================================== */
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  padding: 8px 0;
+}
+
+.stack-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ==========================================================================
+ * 通用表单输入框、Textarea 与搜索栏原语
+ *
+ * 搜索框统一规范（全站唯一搜索外观）：
+ *   - 搜索输入一律用 type="text"，禁止 type="search"（原生自带清除 X，
+ *     会与自定义清除按钮叠出双 X，且易产生双层描边/高亮套高亮）。
+ *   - 外观统一交给容器类（.search-box / .primary-search-box /
+ *   .plugin-search-box / .sidebar-search），内层 input 必须
+ *     border: none; background: transparent，避免高亮套高亮。
+ *   - 清除按钮最多一个，由容器类内的自定义按钮提供。
+ *   - 兜底：即使误用 type="search"，也强制去掉原生清除按钮。
+ */
+
+.input,
+.select,
+.textarea,
+input[type="text"],
+input[type="password"],
+input[type="search"],
+input[type="email"],
+input[type="number"] {
+  width: 100%;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  outline: none;
+  font-size: 12.5px;
+  font-family: inherit;
+  transition: border-color 100ms ease, box-shadow 100ms ease, background 100ms ease;
+  box-sizing: border-box;
+}
+
+.input,
+.select {
+  height: 27px;
+  line-height: 25px;
+}
+
+.input,
+.select,
+input[type="text"],
+input[type="password"],
+input[type="search"],
+input[type="email"],
+input[type="number"] {
+  height: 27px;
+  line-height: 25px;
+}
+
+textarea.input,
+textarea.textarea,
+.textarea {
+  height: auto;
+  min-height: 72px;
+  padding: 6px 9px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus,
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="search"]:focus,
+input[type="email"]:focus,
+input[type="number"]:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.input:disabled,
+.select:disabled,
+.textarea:disabled,
+input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.input::placeholder,
+.textarea::placeholder,
+input::placeholder {
+  color: var(--fg-muted);
+}
+
+/*
+ * 注意：搜索输入框不再使用独立原语 .search-input（已删，死代码）。
+ * 搜索框一律采用容器结构：.search-box / .primary-search-box / .plugin-search-box /
+ * .sidebar-search，描边/背景/focus 高亮由容器提供，内层 input 透明无边框，
+ * 并由文件末尾的统一兑底块中和全局 input 规则（见「搜索框统一规范兑底」）。
+ */
+

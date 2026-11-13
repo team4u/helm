@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 
 const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
@@ -9,7 +10,7 @@ const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.me
 const workbenchSource = readFileSync(new URL('../src/conversation/WorkbenchDrawer.tsx', import.meta.url), 'utf8')
 const conversationDrawerSource = readFileSync(new URL('../src/conversation/ConversationDrawer.tsx', import.meta.url), 'utf8')
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
-const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+const stylesCss = readHostStyles()
 const overlayStackSource = readFileSync(new URL('../src/ui/overlay-stack.ts', import.meta.url), 'utf8')
 
 test('index.html viewport 配置包含 viewport-fit=cover', { timeout: 60_000 }, () => {

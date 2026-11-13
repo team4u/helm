@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import React from 'react'
 import { renderToString } from 'react-dom/server'
 import {
@@ -40,7 +41,7 @@ const composerSource = readFileSync(new URL('../src/conversation/Composer.tsx', 
 const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
 const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
 const workbenchSource = readFileSync(new URL('../src/conversation/WorkbenchDrawer.tsx', import.meta.url), 'utf8')
-const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+const stylesCss = readHostStyles()
 
 test('Popover 原语挂载、数据属性与无障碍属性（SSR）', { timeout: 60_000 }, () => {
   const openHtml = renderToString(

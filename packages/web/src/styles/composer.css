@@ -1,0 +1,189 @@
+/* ==========================================================================
+ * AskDoc 置底审批卡与 Composer 底栏
+ * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * ========================================================================== */
+/* ==========================================================================
+ * 6. AskDoc 置底悬停审批卡 & Composer 底栏微操舱
+ * ========================================================================== */
+
+.ask-dock-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ask-dock {
+  margin: 0 auto 10px;
+  width: calc(100% - 32px);
+  max-width: 820px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ask-dock-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ask-dock-title {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.ask-dock-source-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--fg-secondary);
+}
+
+.ask-dock-source-btn:hover {
+  color: var(--fg);
+}
+
+.ask-dock-desc {
+  font-size: 12.5px;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+}
+
+.ask-dock-snapshot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ask-dock-snapshot-btn {
+  width: fit-content;
+}
+
+.ask-dock-snapshot-pre {
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.ask-dock-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ask-dock-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ask-dock-label {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ask-dock-required {
+  color: var(--err);
+}
+
+.ask-dock-confirm-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.ask-dock-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ask-dock-secret-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ask-dock-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.composer-shell {
+  padding: 0 16px max(14px, env(safe-area-inset-bottom));
+  background: var(--bg);
+}
+
+.composer-inner {
+  max-width: 820px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+
+.composer-box {
+  position: relative;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 120ms ease;
+}
+
+.composer-box:focus-within {
+  border-color: var(--fg-muted);
+}
+
+/* 空会话起始环境配置条：开聊前可配节点与目录，发消息后不再渲染 */
+.composer-env-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 4px 12px 6px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
+.composer-env-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--fg-muted);
+}
+.composer-env-item svg {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
+}
+
+/* 修复：.input 默认 padding 6px 10px 会把 height:22px 的 select 文字裁切，
+   双类提升特异性并给足行高；移动端配合 16px 字号使用 30px 高。 */
+.input.composer-env-select {
+  height: 28px;
+  padding: 0 6px;
+  line-height: normal;
+}
+.composer-env-select {
+  width: auto;
+  min-width: 120px;
+  max-width: 200px;
+  font-size: 11.5px;
+  cursor: pointer;
+  flex-shrink: 1;
+}
+

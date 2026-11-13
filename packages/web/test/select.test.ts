@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import React, { act } from 'react'
@@ -332,7 +333,7 @@ test('契约：packages/web/src 下全部原生 select 已替换为公共 Select
 
 test('契约：ProfileDetailDrawer 中的模型选择采用公共 Select，且高度与字号契约对齐', { timeout: 60_000 }, () => {
   const profileDrawerSource = readFileSync(new URL('../src/profiles/ProfileDetailDrawer.tsx', import.meta.url), 'utf8')
-  const stylesSource = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+  const stylesSource = readHostStyles()
 
   // 1. Profile 中的默认模型使用 <Select>
   assert.match(profileDrawerSource, /import\s*\{[^}]*Select[^}]*\}\s*from\s*['"]\.\.\/ui\/Select(?:\.js)?['"]/)

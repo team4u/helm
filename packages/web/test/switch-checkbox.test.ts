@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -194,8 +195,7 @@ test('Checkbox：未选、勾选、半选（indeterminate）、无障碍与零 E
 // ---------------------------------------------------------------------------
 
 test('设计系统契约：人类消息对称微圆角、状态徽章发丝微圆角、Composer 环境条内嵌与 Switch/Checkbox 样式', { timeout: 60_000 }, () => {
-  const cssPath = join(PKG_ROOT, 'src/styles.css')
-  const css = readFileSync(cssPath, 'utf-8')
+  const css = readHostStyles()
 
   // 1. 人类消息气泡：去除社交 IM 缺尖角 (14px 14px 4px 14px)，使用统一对称微圆角 var(--radius-md)
   assert.match(css, /\.msg-human-pill\s*\{[^}]*border-radius:\s*var\(--radius-md\);/)

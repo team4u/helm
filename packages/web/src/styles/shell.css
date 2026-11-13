@@ -1,0 +1,213 @@
+/* ==========================================================================
+ * 全视口主控台骨架与右侧抽屉（Workbench / Conversation Drawer）
+ * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * ========================================================================== */
+/* ==========================================================================
+ * 2. 全视口多栏主控台骨架（Sidebar + Primary Pane + Split Pane + Workbench）
+ * ========================================================================== */
+
+.helm-shell {
+  display: flex;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.helm-sidebar {
+  width: 296px;
+  min-width: 296px;
+  height: 100%;
+  display: flex;
+  flex-direction: row;
+  background: var(--bg-subtle);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* Activity Rail：48px 空间切换 + 系统中心 + 主题 */
+.activity-rail {
+  width: 48px;
+  min-width: 48px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 max(8px, env(safe-area-inset-bottom));
+  background: var(--bg-muted);
+  border-right: 1px solid var(--border);
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.activity-rail-spaces,
+.activity-rail-centers {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+/* 系统中心入口已收敛到「设置」空间：中部区域仅作弹性占位。 */
+.activity-rail-centers {
+  flex: 1;
+  min-height: 0;
+  justify-content: flex-end;
+  padding-bottom: 4px;
+}
+
+/* 设置空间导航列表：行结构同智能体站位行（nav-item-main 图标文本），
+ * 由 .nav-item 统一接管高度/内边距/高亮，这里只保留分组间距。 */
+.settings-nav {
+  gap: 2px;
+}
+
+.rail-btn {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+.rail-btn:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.rail-btn-active,
+.rail-btn-active:hover {
+  background: var(--nav-active-bg);
+  color: var(--nav-active-fg);
+  box-shadow: var(--seg-edge);
+}
+
+.activity-rail-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-top: auto;
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+}
+
+/* Context Sidebar：随空间切换内容（约 248px） */
+.sidebar-context {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+
+.helm-main-stage {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  overflow: hidden;
+}
+
+.helm-pane {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+  position: relative;
+}
+
+.helm-split-pane {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+  position: relative;
+}
+
+/* 工作台抽屉遮罩：与 primary-drawer 同规范的毛玻璃遮罩，点击关闭 */
+.workbench-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(8px) saturate(1.1);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.helm-workbench {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(560px, 100vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  animation: drawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ==========================================================================
+ * 2. 子代理会话侧边抽屉 (Conversation Drawer)
+ * 规范：毛玻璃遮罩 (blur 8px saturate 1.1)、平滑全高滑出动效、深阴影
+ * ========================================================================== */
+
+.conversation-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(8px) saturate(1.1);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.conversation-drawer {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: min(720px, 92vw);
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: drawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 右侧滑出抽屉通用入场动效（conversation / plugin / workbench / primary 抽屉共用） */
+@keyframes drawerSlideIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes primaryDrawerSlideIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+

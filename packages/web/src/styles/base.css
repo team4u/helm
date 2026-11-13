@@ -1,0 +1,98 @@
+/* ==========================================================================
+ * 全局重置、选择控制与超细滚动条
+ * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * ========================================================================== */
+/* ==========================================================================
+ * 1. 全局重置与桌面应用级选择控制
+ * ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  user-select: text;
+}
+
+/* 允许复制的文本区域显式开启 user-select: text */
+.selectable,
+.msg-ai-body,
+.msg-human-pill,
+.trace-expanded-body,
+.code-block,
+pre,
+code,
+table,
+input,
+textarea {
+  user-select: text;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+button,
+[role="button"],
+[role="tab"] {
+  user-select: none;
+}
+
+/* ==========================================================================
+ * 1. 全局超细内嵌滚动条 (Overlay Scrollbars)
+ * 规范：8px 细槽、2px 透明内边距衬托 4px 居中悬浮滑块、悬停加深为 var(--fg-muted)
+ * ========================================================================== */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--fg-subtle);
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--fg-muted);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+

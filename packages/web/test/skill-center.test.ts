@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -1111,7 +1112,7 @@ test('SkillDetailDrawer: 布局契约——工具条紧贴 Header，元数据与
 })
 
 test('SkillDetailDrawer: 样式契约——单一滚动容器、无独立描述块与移动端/桌面不分叉', { timeout: 60_000 }, () => {
-  const stylesSrc = readFileSync(join(PKG_ROOT, 'src/styles.css'), 'utf-8')
+  const stylesSrc = readHostStyles()
   const responsiveSrc = readFileSync(join(PKG_ROOT, 'src/responsive.css'), 'utf-8')
   const drawerSrc = readFileSync(join(PKG_ROOT, 'src/skills/SkillDetailDrawer.tsx'), 'utf-8')
 

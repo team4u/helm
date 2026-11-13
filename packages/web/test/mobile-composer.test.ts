@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import { busyEnterMode, getComposerPlaceholder } from '../src/conversation/composer-model.js'
 
 const composerSource = readFileSync(new URL('../src/conversation/Composer.tsx', import.meta.url), 'utf8')
@@ -8,7 +9,7 @@ const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.ts
 const splitControlsSource = readFileSync(new URL('../src/ui/SplitControls.tsx', import.meta.url), 'utf8')
 const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
 const timelineSource = readFileSync(new URL('../src/conversation/ConversationTimeline.tsx', import.meta.url), 'utf8')
-const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+const stylesCss = readHostStyles()
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
 const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
 

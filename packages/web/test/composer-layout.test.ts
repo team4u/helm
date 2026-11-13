@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import { canConfigureSessionEnv, envDraftError, envDraftOnNodeChange, envDraftUnchanged, formatEnvSubtitle } from '../src/conversation/composer-model.js'
 
 // 读取源码后统一换行（Windows checkout 下 autocrlf 会产生 CRLF，正则不得依赖 LF）
@@ -8,7 +9,7 @@ const source = readFileSync(new URL('../src/conversation/Composer.tsx', import.m
 const thinkingControlSource = readFileSync(new URL('../src/ui/ThinkingLevelControl.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
-const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const styles = readHostStyles().replace(/\r\n/g, '\n')
 const responsive = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 const e = (kind: string) => ({ kind })

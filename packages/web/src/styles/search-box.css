@@ -1,0 +1,49 @@
+/* ==========================================================================
+ * 搜索框统一规范兑底（原级联约束：位于全部 input 规则之后）
+ * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * ========================================================================== */
+/* ==========================================================================
+ * 搜索框统一规范兑底（必须位于全局 input 规则之后）
+ * 全局 input[type="text"] / .input 规则会给内层 input 恢复描边/背景/光圈，
+ * 导致搜索容器出现双层描边、高亮套高亮。此处统一中和：描边/背景/focus 光晕
+ * 只由搜索容器（focus-within）提供，内层 input 永远透明无边框。
+ * ========================================================================== */
+
+.search-box > input,
+.search-box > .input,
+.primary-search-box input,
+.plugin-search-box input,
+.plugin-search-box .input,
+.sidebar-search-input {
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  padding: 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+.search-box > input:focus,
+.search-box > .input:focus,
+.primary-search-box input:focus,
+.plugin-search-box input:focus,
+.plugin-search-box .input:focus,
+.sidebar-search-input:focus {
+  border-color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* 原生 search 清除按钮兑底（防止未来误用 type="search" 再出双 X） */
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+input[type="search"]::-moz-search-clear-button {
+  display: none;
+}
+

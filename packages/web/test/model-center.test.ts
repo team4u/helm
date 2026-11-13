@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -646,7 +647,7 @@ test('静态代码扫描: 模型选择场景消费加宽下拉面板与哨兵空
     join(PKG_ROOT, 'src', 'profiles', 'ProfileDetailDrawer.tsx'),
     'utf8',
   )
-  const stylesSource = readFileSync(join(PKG_ROOT, 'src', 'styles.css'), 'utf8')
+  const stylesSource = readHostStyles()
 
   // 全局默认 Tab 与 Profile 角色抽屉的模型 Select 均接入加宽浮层
   assert.match(panelSource, /popoverClassName="helm-select-popover-wide"/)
@@ -660,7 +661,7 @@ test('静态代码扫描: 模型选择场景消费加宽下拉面板与哨兵空
 
 test('契约：ModelCenter 主 Tab 容器接入 model-center-main-tabs 保持视口高度约束与内容区可滚动', { timeout: 60_000 }, () => {
   const modelCenterSource = readFileSync(join(PKG_ROOT, 'src', 'models', 'ModelCenter.tsx'), 'utf8')
-  const stylesSource = readFileSync(join(PKG_ROOT, 'src', 'styles.css'), 'utf8')
+  const stylesSource = readHostStyles()
 
   // 1. ModelCenter 主 Tabs 节点显式携带 model-center-main-tabs
   assert.match(

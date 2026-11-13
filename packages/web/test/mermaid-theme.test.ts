@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync as readFile } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import { getMermaidConfig, MERMAID_FONT_FAMILY } from '../../kernel/src/builtin-plugins/mermaid/client/mermaid-theme.js'
 
 test('getMermaidConfig: 浅色模式返回 neutral 主题与透明背景', { timeout: 60_000 }, () => {
@@ -90,7 +91,7 @@ test('Mermaid 插件样式契约：图表专属样式在插件 CSS（不进宿�
 })
 
 test('宿主核心零 jr- 残留：styles.css 与 web src 不再定义/使用 json DSL 类', { timeout: 60_000 }, () => {
-  const styles = readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
+  const styles = readHostStyles()
   assert.ok(!styles.includes('.jr-'), '宿主 styles.css 不得含 jr-* 定义')
   // 通用 callout 原语在核心定义（与插件样式无关）
   assert.match(styles, /\.callout\s*\{/)

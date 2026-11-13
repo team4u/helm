@@ -32,7 +32,7 @@ pnpm test:unit
 
 ### Radix UI 唯一交互原语底座
 
-`src/ui/` 下基于 `@radix-ui/react-*` 封装全部交互原语：`Dialog`、`AlertDialog`、`Select`、`DropdownMenu`、`Popover`、`Tabs`、`Tooltip`、`Switch`、`Checkbox`。全仓严禁使用原生 `<select>` 与手写无 WAI-ARIA / Focus Trap 的浮层；所有原语在 SSR 与单测环境下可直出降级渲染（`renderToString` 不依赖 Portal）。视觉层由 `src/styles.css`（Quiet Surface 语义变量与控件类）与 `src/responsive.css`（窄面板、移动端与减少动画偏好）统一承载，插件不得硬编码另一套色板。
+`src/ui/` 下基于 `@radix-ui/react-*` 封装全部交互原语：`Dialog`、`AlertDialog`、`Select`、`DropdownMenu`、`Popover`、`Tabs`、`Tooltip`、`Switch`、`Checkbox`。全仓严禁使用原生 `<select>` 与手写无 WAI-ARIA / Focus Trap 的浮层；所有原语在 SSR 与单测环境下可直出降级渲染（`renderToString` 不依赖 Portal）。视觉层由 `src/styles.css` 入口按级联顺序聚合的 `src/styles/` 分片（Quiet Surface 语义变量与控件类，@import 顺序即规则顺序，调整前先核对覆盖关系）与 `src/responsive.css`（窄面板、移动端与减少动画偏好）统一承载，插件不得硬编码另一套色板。
 
 ### 插件前端单轨机制（client.tsx）
 

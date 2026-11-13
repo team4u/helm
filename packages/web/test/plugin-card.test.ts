@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -354,8 +355,7 @@ test('PluginCard：源码与渲染输出全程 0 Emoji', { timeout: 60_000 }, ()
 // ---------------------------------------------------------------------------
 
 test('PluginCard 样式契约：styles.css 包含 .plugin-center-grid、.plugin-card、.plugin-card-pill', { timeout: 60_000 }, () => {
-  const cssPath = join(PKG_ROOT, 'src/styles.css')
-  const css = readFileSync(cssPath, 'utf-8')
+  const css = readHostStyles()
 
   assert.match(css, /\.plugin-center-grid/, 'styles.css 必须包含 .plugin-center-grid 样式')
   assert.match(css, /\.plugin-card/, 'styles.css 必须包含 .plugin-card 样式')
@@ -502,7 +502,7 @@ test('resolvePluginIcon：纯属性驱动零硬编码推测——自声明 icon 
 })
 
 test('PluginCard：名称与 ID 垂直堆叠且靠左对齐，头部样式 contract 确保不被挤压重叠', { timeout: 60_000 }, () => {
-  const stylesCss = readFileSync(join(PKG_ROOT, 'src/styles.css'), 'utf8')
+  const stylesCss = readHostStyles()
 
   // .plugin-card-meta 必须为 column 纵向堆叠并靠左对齐
   assert.match(

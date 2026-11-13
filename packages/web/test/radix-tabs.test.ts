@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import React, { act } from 'react'
@@ -15,7 +16,7 @@ const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 
 const { Tabs, TabsList, TabsTrigger, TabsContent, SegmentedControl } = await import('../src/ui/Tabs.js')
 
-const stylesCss = readFileSync(join(PKG_ROOT, 'src/styles.css'), 'utf8')
+const stylesCss = readHostStyles()
 const composerSource = readFileSync(join(PKG_ROOT, 'src/conversation/Composer.tsx'), 'utf8')
 const thinkingControlSource = readFileSync(join(PKG_ROOT, 'src/ui/ThinkingLevelControl.tsx'), 'utf8')
 const artifactModalSource = readFileSync(join(PKG_ROOT, 'src/conversation/ArtifactPreviewModal.tsx'), 'utf8')

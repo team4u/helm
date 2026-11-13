@@ -7,7 +7,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 import { fileURLToPath } from 'node:url'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -27,7 +27,7 @@ import { makeTestStore } from './helpers/store.js'
 ;(globalThis as Record<string, unknown>).React = React
 const e = React.createElement
 const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}][\u{2600}-\u{26FF}]?[\u{2700}-\u{27BF}]?/u
-const STARTERS_CSS = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+const STARTERS_CSS = readHostStyles()
 const TIMELINE_CSS = STARTERS_CSS
 
 // ---------------------------------------------------------------------------

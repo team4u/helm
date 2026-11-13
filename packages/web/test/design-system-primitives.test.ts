@@ -1,8 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 
-const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+const stylesCss = readHostStyles()
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
 
 test('CSS Token 契约：--bg-inset 变量在亮色与暗色模式均声明为 var(--bg-subtle)', { timeout: 60_000 }, () => {

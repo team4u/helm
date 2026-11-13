@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { readHostStyles } from './helpers/host-styles.js'
 
 const mermaidSource = readFileSync(new URL('../../kernel/src/builtin-plugins/mermaid/client/MermaidPreviewModal.tsx', import.meta.url), 'utf8')
 const mermaidPluginCss = readFileSync(new URL('../../kernel/src/builtin-plugins/mermaid/client/styles.css', import.meta.url), 'utf8')
@@ -9,7 +10,7 @@ const pluginDrawerSource = readFileSync(new URL('../src/plugins/PluginDetailDraw
 const modelDrawerSource = readFileSync(new URL('../src/models/ModelDetailDrawer.tsx', import.meta.url), 'utf8')
 const commandPaletteSource = readFileSync(new URL('../src/modals/CommandPaletteModal.tsx', import.meta.url), 'utf8')
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
-const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+const stylesCss = readHostStyles()
 
 test('Mermaid 预览弹窗：头部标题自适应截断、操作组折行且关闭按钮始终可见', { timeout: 60_000 }, () => {
   // 标题必须具备防止折成单字竖排的样式：minWidth: 0, flex: 1, whiteSpace: nowrap, overflow: hidden, textOverflow: ellipsis

@@ -1,0 +1,884 @@
+/* ==========================================================================
+ * Toast 通知与 Radix 浮层原语（Popover / DropdownMenu / Tooltip）与补全浮层
+ * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * ========================================================================== */
+/* ==========================================================================
+ * 10. Toast 通知浮层
+ * ========================================================================== */
+
+.toast-overlay {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+}
+
+.toast-item {
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.toast-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.toast-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.toast-body {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  word-break: break-word;
+}
+
+.toast-action-btn {
+  width: fit-content;
+  padding: 0 4px;
+  margin-top: 2px;
+}
+
+.composer-model-popover .input { width: 100%; }
+
+
+/* 会话面板早退分支（加载失败/加载中）：错误信息与操作横排，分屏关闭入口始终可见 */
+.pane-error {
+  padding: 16px;
+  gap: 10px;
+}
+
+.pane-error-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pane-error-row p {
+  color: var(--err);
+  overflow-wrap: anywhere;
+}
+
+.pane-error-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pane-loading-split-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+/* ==========================================================================
+ * Radix UI Primitives: Popover, DropdownMenu, Tooltip
+ * 视觉规范：1px 发丝边框、--bg-elevated 背景、var(--radius-sm, 7px) 微圆角、极简低饱和
+ * ========================================================================== */
+
+[data-radix-popper-content-wrapper] {
+  z-index: 60;
+}
+
+/* Popover Content */
+.helm-popover-content {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 7px);
+  box-shadow: var(--shadow-lg, 0 10px 28px rgba(0, 0, 0, 0.16));
+  padding: 4px;
+  outline: none;
+  box-sizing: border-box;
+  max-width: calc(100vw - 16px);
+}
+
+.helm-popover-arrow {
+  fill: var(--bg-elevated);
+  stroke: var(--border-strong);
+  stroke-width: 1px;
+}
+
+/* Dropdown Menu Content */
+.helm-dropdown-content {
+  min-width: 180px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 7px);
+  box-shadow: var(--shadow-lg, 0 10px 28px rgba(0, 0, 0, 0.16));
+  padding: 4px;
+  outline: none;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  z-index: 60;
+}
+
+.helm-dropdown-arrow {
+  fill: var(--bg-elevated);
+  stroke: var(--border-strong);
+  stroke-width: 1px;
+}
+
+.helm-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-xs, 5px);
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+  box-sizing: border-box;
+  transition: background 80ms ease, color 80ms ease;
+}
+
+.helm-dropdown-item[data-highlighted],
+.helm-dropdown-item:hover:not([data-disabled]) {
+  background: var(--bg-hover);
+  color: var(--fg);
+  outline: none;
+}
+
+.helm-dropdown-item[data-disabled] {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.helm-dropdown-item-danger {
+  color: var(--err);
+}
+
+.helm-dropdown-item-danger[data-highlighted],
+.helm-dropdown-item-danger:hover:not([data-disabled]) {
+  background: var(--err-bg, rgba(224, 75, 59, 0.1));
+  color: var(--err);
+}
+
+.helm-dropdown-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.helm-dropdown-label {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+/* Tooltip Content */
+.helm-tooltip-content {
+  background: var(--bg-elevated);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 7px);
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.12));
+  padding: 4px 8px;
+  font-size: 11.5px;
+  line-height: 1.3;
+  z-index: 100;
+  user-select: none;
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.helm-tooltip-arrow {
+  fill: var(--bg-elevated);
+  stroke: var(--border-strong);
+  stroke-width: 1px;
+}
+
+/* Radix Popper Wrapper 嵌套适配 */
+[data-radix-popper-content-wrapper] .pane-more-popover {
+  position: static;
+  top: auto;
+  right: auto;
+  border-radius: var(--radius-sm, 7px);
+}
+
+[data-radix-popper-content-wrapper] .composer-model-popover {
+  position: static;
+  bottom: auto;
+  left: auto;
+  border-radius: var(--radius-sm, 7px);
+}
+
+[data-radix-popper-content-wrapper] .helm-select-popover {
+  position: static;
+  top: auto;
+  bottom: auto;
+  left: auto;
+  min-width: var(--radix-select-trigger-width, 100%);
+  max-width: var(--radix-select-content-available-width, 360px);
+  max-height: var(--radix-select-content-available-height, 240px);
+  border-radius: var(--radius-sm, 7px);
+}
+
+/* 加宽下拉面板：长模型 ID（如 anthropic/claude-…）完整可读，溢出省略并保留 title 提示 */
+.helm-select-popover-wide {
+  max-width: 520px;
+}
+
+[data-radix-popper-content-wrapper] .helm-select-popover-wide {
+  max-width: var(--radix-select-content-available-width, 520px);
+}
+
+.helm-select-viewport {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+
+
+/* --------------------------------------------------------------------------
+ * 全屏资源中心通用矩阵（Profiles / Skills / Nodes / Models）统一视觉系统
+ * 继承自 PluginCenter 规范架构：容器、顶栏、检索栏、网格与 540px 滑出抽屉
+ * -------------------------------------------------------------------------- */
+.primary-center {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  overflow: hidden;
+  position: relative;
+}
+
+.primary-center-topbar {
+  height: 46px;
+  min-height: 46px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.primary-center-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.primary-center-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--fg);
+  line-height: 46px;
+  white-space: nowrap;
+}
+
+.primary-center-subtitle {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.primary-center-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.primary-center-stats {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+/* 模型与凭证中心：全局默认模型状态横幅 */
+/* 模型中心顶部 Tab 栏（供应商 / 全局默认）与全局默认配置面板 */
+.model-center-tabs {
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+
+.model-center-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.model-center-tab-btn:hover {
+  color: var(--fg);
+}
+.model-center-tab-btn.tab-btn-active,
+.model-center-tab-btn[data-state='active'] {
+  color: var(--fg);
+  border-bottom-color: var(--fg);
+}
+
+/* 模型中心主 Tab 容器与激活内容区：恢复视口高度约束与原生滚动 */
+.model-center-main-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.model-center-main-tabs > .primary-center-content[data-state='active'] {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.model-center-main-tabs > .primary-center-content[data-state='inactive'] {
+  display: none;
+}
+
+.model-defaults-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-subtle);
+  font-size: 12px;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.model-defaults-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 640px;
+}
+
+/* 供应商 Tab 内部工具栏（位于滚动区内，去边框） */
+.model-toolbar-inline.primary-center-toolbar {
+  border-bottom: none;
+  padding: 0 0 12px;
+  flex-wrap: wrap;
+}
+
+.primary-center-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.primary-search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  min-width: 260px;
+  flex: 1;
+  max-width: 420px;
+  color: var(--fg-muted);
+  transition: border-color 0.15s ease;
+}
+
+.primary-search-box:focus-within {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+.primary-search-box input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  padding: 0;
+  min-width: 0;
+}
+
+.primary-search-clear {
+  padding: 2px;
+  height: auto;
+  color: var(--fg-subtle);
+}
+
+.primary-search-clear:hover {
+  color: var(--fg);
+}
+
+.primary-category-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  max-width: 100%;
+  padding-bottom: 2px;
+}
+
+.primary-category-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.primary-category-pill:hover {
+  background: var(--bg-subtle);
+  color: var(--fg);
+}
+
+.primary-category-pill.is-active {
+  background: var(--bg-elevated);
+  color: var(--nav-active-fg);
+  border-color: var(--accent);
+}
+
+.primary-center-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  min-height: 0;
+}
+
+.primary-center-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.primary-center-empty-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-subtle);
+  margin-bottom: 4px;
+}
+
+.primary-center-empty-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.primary-center-empty-hint {
+  font-size: 12px;
+  color: var(--fg-muted);
+  max-width: 320px;
+}
+
+.primary-center-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  width: 100%;
+}
+
+.primary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+  cursor: pointer;
+  outline: none;
+  position: relative;
+  min-height: 136px;
+}
+
+.primary-card:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-subtle);
+}
+
+.primary-card:focus-visible,
+.primary-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.primary-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.primary-card-icon-wrap {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--fg);
+}
+
+.primary-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.primary-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.primary-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.primary-card-desc {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.45;
+  min-height: 34px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.primary-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.primary-card-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.primary-card-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+}
+
+/* 520px/540px 右侧滑出抽屉通用规范（模型/Profile/节点/技能四大中心） */
+.primary-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(8px) saturate(1.1);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+}
+
+.primary-drawer-content {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(540px, 100vw);
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  outline: none;
+  animation: primaryDrawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.primary-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line-2);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+.primary-drawer-header-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.primary-drawer-icon-wrap {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--fg);
+}
+
+.primary-drawer-title-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.primary-drawer-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.primary-drawer-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.primary-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.primary-drawer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line-2);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .primary-drawer-content {
+    width: 100vw;
+    border-left: none;
+  }
+}
+
+/* 产物预览：插件预览器选择与插件视图容器 */
+.artifact-previewer-select {
+  width: 132px;
+  flex-shrink: 0;
+}
+
+.artifact-plugin-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.artifact-plugin-view > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ============================================================================
+ * composerCompleter 补全浮层（Radix Popover 锚定在 .composer-box 上方）
+ * ========================================================================== */
+.composer-completion-popover {
+  width: min(420px, calc(100vw - 16px));
+  max-height: 300px;
+  overflow-y: auto;
+}
+.composer-completion-list {
+  display: flex;
+  flex-direction: column;
+}
+.composer-completion-state {
+  cursor: default;
+  color: var(--fg-muted);
+  font-size: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.composer-completion-error {
+  color: var(--danger, var(--fg-muted));
+}
+
+/* Profile 详情抽屉：空白会话引导词编辑区块（紧凑列表，label/prompt 增删）。 */
+.profile-starters-header { justify-content: space-between; }
+.profile-starters-list { display: flex; flex-direction: column; gap: 8px; }
+.profile-starters-empty { padding: 2px 0; }
+.profile-starter-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 32px 8px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.profile-starter-fields { display: flex; flex-direction: column; gap: 6px; }
+.profile-starter-label { font-size: 13px; }
+.profile-starter-prompt { font-size: 13px; line-height: 1.5; resize: vertical; min-height: 44px; }
+.profile-starter-error { font-size: 11px; color: var(--danger); }
+.profile-starter-remove { position: absolute; top: 6px; right: 4px; }
+.profile-starter-add { margin-top: 6px; }
+
+/* ConversationTimeline：空白会话引导词按钮组（仅回填草稿，不直接发送）。 */
+.timeline-starters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 12px; }
+.timeline-starter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  text-align: left;
+}
+.timeline-starter-btn:hover {
+  background: var(--nav-active-bg);
+  border-color: var(--fg-muted);
+}
+.timeline-starter-btn .timeline-starter-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 680px) {
+  .profile-starter-item { padding: 6px 28px 6px 6px; }
+  .profile-starter-prompt { font-size: 13px; }
+  .timeline-starters { gap: 6px; }
+  .timeline-starter-btn { font-size: 12px; }
+}
+
+/* A 方案：系统中心只在 Activity Rail 出现，保留旧 footer 标记仅为兼容既有导航契约。 */
+.activity-rail-brand {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg);
+  flex-shrink: 0;
+}
+
+.activity-rail-brand .status-dot {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  box-shadow: 0 0 0 2px var(--bg-muted);
+}
+
+.sidebar-context-title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+

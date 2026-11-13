@@ -1,0 +1,178 @@
+/* ==========================================================================
+ * Helm Web UI Design System — Quiet Surface
+ * 视觉原则：
+ * 1. 使用中性纸面底色、1px 发丝边框、半透明着色按钮、淡色侧栏选中背景
+ *    与 tabular-nums 等宽数字对齐；保留 Helm 全视口多栏分屏骨架。
+ * 2. 零 Emoji 铁律：全界面仅使用纯文本 + lucide-react 矢量线性图标。
+ * 3. 层次分明：AI 正文无外框气泡，工具调用 26px 单行静音轨迹，业务卡片与审批卡突出。
+ * ========================================================================== */
+
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f4f6;
+  --bg-elevated: #ffffff;
+  --bg-subtle: #f9f9fb;
+  --bg-inset: var(--bg-subtle);
+  --bg-muted: #f1f1f4;
+  --bg-hover: #e9e9ee;
+  --bg-active: rgba(28, 28, 33, 0.08);
+  --bg-backdrop: rgba(0, 0, 0, 0.28);
+
+  /* 代码区独立于页面底色，保持 GitHub 式阅读层次 */
+  --code-bg: #f6f8fa;
+  --code-header-bg: #eef1f4;
+  --code-border: #d0d7de;
+  --code-token-comment: #6e7781;
+  --code-token-keyword: #cf222e;
+  --code-token-string: #0a3069;
+  --code-token-title: #8250df;
+  --code-token-number: #0550ae;
+  --code-token-muted: #57606a;
+  --code-token-addition: #1a7f37;
+  --code-token-deletion: #cf222e;
+
+  --fg: #1c1c21;
+  --fg-secondary: #4b4b53;
+  --fg-muted: #85858d;
+  --fg-subtle: #b9b9c2;
+  --fg-on-solid: #ffffff;
+
+  /* Markdown 正文阅读色阶（Soft Ink）：正文约 88% 墨色去眩光，
+     标题/加粗压实锚点，列表符号与引用退灰，行内代码压印而非描框 */
+  --prose-fg: #2c2d35;
+  --prose-strong: #18181d;
+  --prose-muted: #5a5b66;
+  --prose-marker: #85858d;
+  --prose-code-fg: #24292f;
+  --prose-code-bg: #eceef2;
+  --prose-code-border: #dcdce2;
+  --prose-link: #4338ca;
+
+  --border: #e3e3e8;
+  --border-strong: #d0d0d6;
+  --border-focus: #4f46e5;
+  --line-2: #ececf0;
+
+  /* 分段控制器与导航滑轨阴影 */
+  --seg-track: #e6e6eb;
+  --seg-thumb: #ffffff;
+  --seg-edge: 0 1px 2px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+
+  /* 侧栏选中项 */
+  --nav-active-bg: var(--bg-elevated);
+  --nav-active-fg: var(--fg);
+  --nav-active-muted: var(--fg-muted);
+
+  /* 主强调色与语义指示色 */
+  --accent: #4f46e5;
+  --accent-bg: #eeedfd;
+  --accent-border: rgba(79, 70, 229, 0.25);
+
+  --ok: #189a58;
+  --ok-bg: #e4f6ec;
+  --ok-border: rgba(24, 154, 88, 0.24);
+
+  --warn: #b45309;
+  --warn-bg: #fbf0df;
+  --warn-border: rgba(180, 83, 9, 0.24);
+
+  --err: #d64545;
+  --err-bg: #fbe9e9;
+  --err-border: rgba(214, 69, 69, 0.24);
+
+  /* 阴影层次 */
+  --shadow-sm: 0 1px 1px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 2px 8px rgba(20, 22, 30, 0.06), 0 0 0 0.5px rgba(20, 22, 30, 0.1);
+  --shadow-lg: 0 16px 44px rgba(20, 22, 30, 0.16), 0 2px 8px rgba(20, 22, 30, 0.06), 0 0 0 0.5px rgba(20, 22, 30, 0.1);
+  --pop-bg: rgba(255, 255, 255, 0.94);
+
+  /* 基础微圆角阶梯 */
+  --radius-xs: 5px;
+  --radius-sm: 7px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* 统一桌面原生字体栈 (Mac / iOS / Win / Linux 优雅回退) */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Cascadia Mono", monospace;
+  --font: var(--font-sans);
+  --code: var(--font-mono);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #1a1a1e;
+  --bg-elevated: #232327;
+  --bg-subtle: #1f1f23;
+  --bg-inset: var(--bg-subtle);
+  --bg-muted: #2d2d33;
+  --bg-hover: #36363d;
+  --bg-active: rgba(255, 255, 255, 0.09);
+  --bg-backdrop: rgba(0, 0, 0, 0.55);
+
+  /* 代码区独立于页面底色，保持 GitHub 式阅读层次 */
+  --code-bg: #161b22;
+  --code-header-bg: #21262d;
+  --code-border: #30363d;
+  --code-token-comment: #8b949e;
+  --code-token-keyword: #ff7b72;
+  --code-token-string: #a5d6ff;
+  --code-token-title: #d2a8ff;
+  --code-token-number: #79c0ff;
+  --code-token-muted: #c9d1d9;
+  --code-token-addition: #3fb950;
+  --code-token-deletion: #f85149;
+
+  --fg: #ededf1;
+  --fg-secondary: #b9b9c1;
+  --fg-muted: #8b8b94;
+  --fg-subtle: #56565f;
+  --fg-on-solid: #14142a;
+
+  /* 深色正文降亮度消光晕（Halation）：标题/加粗才提亮，列表符号去噪 */
+  --prose-fg: #d9d9e0;
+  --prose-strong: #f2f2f7;
+  --prose-muted: #a0a0ab;
+  --prose-marker: #707079;
+  --prose-code-fg: #e2e4ed;
+  --prose-code-bg: #25262c;
+  --prose-code-border: #35363f;
+  --prose-link: #a5b4fc;
+
+  --border: #333339;
+  --border-strong: #404048;
+  --border-focus: #a5b4fc;
+  --line-2: #2c2c32;
+
+  --seg-track: rgba(255, 255, 255, 0.035);
+  --seg-thumb: rgba(255, 255, 255, 0.15);
+  --seg-edge: inset 0 0.5px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.3);
+
+  --nav-active-bg: rgba(255, 255, 255, 0.08);
+  --nav-active-fg: var(--fg);
+  --nav-active-muted: var(--fg-muted);
+
+  --accent: #a5b4fc;
+  --accent-bg: #2b2c47;
+  --accent-border: rgba(165, 180, 252, 0.3);
+
+  --ok: #6fd99b;
+  --ok-bg: #1e3a2b;
+  --ok-border: rgba(111, 217, 155, 0.28);
+
+  --warn: #f2b544;
+  --warn-bg: #3f3220;
+  --warn-border: rgba(242, 181, 68, 0.3);
+
+  --err: #f28b82;
+  --err-bg: #45272a;
+  --err-border: rgba(242, 139, 130, 0.3);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+  --shadow-lg: 0 16px 44px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(255, 255, 255, 0.1);
+  --pop-bg: rgba(38, 38, 43, 0.96);
+}
+

@@ -1,0 +1,851 @@
+/* ==========================================================================
+ * 对话画布补充细节与全屏插件中心
+ * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * ========================================================================== */
+/* ==========================================================================
+ * 9. 对话画布与工作台补充细节样式
+ * ========================================================================== */
+
+@keyframes convSpin360 {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin,
+.spin-slow {
+  animation: convSpin360 1.1s linear infinite;
+}
+.spin {
+  animation-duration: 0.9s;
+}
+
+.trace-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+}
+.trace-entry .trace-row {
+  width: 100%;
+}
+
+.trace-section-label {
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
+.trace-toolview {
+  margin: 2px 0;
+}
+
+/* --------------------------------------------------------------------------
+ * 全屏插件中心：容器、顶栏、检索工具栏、卡片网格与空态
+ * -------------------------------------------------------------------------- */
+
+.plugin-center {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  overflow: hidden;
+  position: relative;
+}
+
+.plugin-center-topbar {
+  height: 46px;
+  min-height: 46px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.plugin-center-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.plugin-center-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--fg);
+  line-height: 46px;
+  white-space: nowrap;
+}
+
+.plugin-center-subtitle {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plugin-center-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.plugin-center-stats {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.plugin-center-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/*
+ * 搜索框统一规范：与 .primary-search-box 保持一致的结构与视觉
+ * （容器提供描边/背景/focus 高亮，内层 input 透明无边框，唯一清除按钮）。
+ */
+.plugin-search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  min-width: 260px;
+  flex: 1;
+  max-width: 420px;
+  color: var(--fg-muted);
+  transition: border-color 0.15s ease;
+  box-sizing: border-box;
+}
+
+.plugin-search-box:focus-within {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+.plugin-search-box > svg {
+  pointer-events: none;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.plugin-search-box .input,
+.plugin-search-box input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  height: auto;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12.5px;
+  padding: 0;
+  box-shadow: none;
+}
+
+.plugin-search-box .input:focus,
+.plugin-search-box input:focus {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.plugin-search-clear {
+  flex-shrink: 0;
+  padding: 2px;
+  height: auto;
+  color: var(--fg-subtle);
+}
+
+.plugin-search-clear:hover {
+  color: var(--fg);
+}
+
+.plugin-center-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  min-height: 0;
+}
+
+.plugin-center-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.plugin-center-empty-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-subtle);
+  margin-bottom: 4px;
+}
+
+.plugin-center-empty-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.plugin-center-empty-hint {
+  font-size: 12px;
+  color: var(--fg-muted);
+  max-width: 320px;
+}
+
+.plugin-center-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  width: 100%;
+}
+
+.plugin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+  cursor: pointer;
+  outline: none;
+  position: relative;
+  min-height: 136px;
+}
+
+.plugin-card:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-subtle);
+}
+
+.plugin-card:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.plugin-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.plugin-card.is-disabled {
+  opacity: 0.72;
+}
+
+.plugin-card.is-disabled:hover {
+  opacity: 0.9;
+}
+
+.plugin-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.plugin-card-icon-wrap {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--fg);
+}
+
+.plugin-card-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.plugin-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.plugin-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.plugin-card-version {
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono, monospace);
+}
+
+.plugin-card-locked-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+}
+
+.plugin-card-id {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  width: 100%;
+}
+
+.plugin-card-desc {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.45;
+  min-height: 34px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.plugin-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.plugin-card-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.plugin-card-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+}
+
+.plugin-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.plugin-card-open-btn {
+  color: var(--fg-muted);
+}
+
+.plugin-card-switch-wrap {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* 时间线内嵌自定义卡片重置内边距与外框，由内部 spec 自行定义结构 */
+[data-entry-id] > .plugin-card {
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  min-height: unset;
+  cursor: default;
+}
+
+/* 插件卡片悬停操作条：与消息 hover 条同语义（纯图标、悬停/聚焦可见） */
+.plugin-card-hover-bar {
+  opacity: 0;
+  transition: opacity 120ms ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  width: fit-content;
+  max-width: max-content;
+}
+
+.plugin-card:hover .plugin-card-hover-bar,
+.plugin-card:focus-within .plugin-card-hover-bar {
+  opacity: 1;
+}
+
+/* --------------------------------------------------------------------------
+ * 全屏插件中心：插件详情与深度配置抽屉 (PluginDetailDrawer)
+ * -------------------------------------------------------------------------- */
+
+.plugin-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(8px) saturate(1.1);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+}
+
+.plugin-drawer-content {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(540px, 100vw);
+  height: 100vh;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  outline: none;
+  overflow: hidden;
+  animation: drawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.plugin-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line-2);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+.plugin-drawer-header-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.plugin-drawer-icon-wrap {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--fg);
+}
+
+.plugin-drawer-title-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+
+.plugin-drawer-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.plugin-drawer-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.plugin-drawer-id {
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  width: 100%;
+}
+
+.plugin-drawer-desc {
+  margin-top: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--fg-muted);
+  text-align: left;
+}
+
+.plugin-drawer-close-btn {
+  flex-shrink: 0;
+  margin-top: -2px;
+}
+
+.plugin-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.plugin-drawer-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.plugin-drawer-status-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 抽屉操作区：视图快捷打开（主屏/右屏）与启停按钮；窄屏自动折行不溢出 */
+.plugin-drawer-screen-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.plugin-drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.plugin-drawer-section-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 故障态卡片：发丝红边提示但不劫持全局布局 */
+.plugin-card.is-failed {
+  border-color: var(--err-border);
+}
+
+.plugin-card-error-summary {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--err);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 故障诊断框与占用确认内容排版 */
+.plugin-diagnostic-body,
+.plugin-inuse-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+}
+
+.plugin-diagnostic-title {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.plugin-diagnostic-message {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.plugin-inuse-list {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.plugin-inuse-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* 配置字段：控件与单字段重置微操作同行 */
+.plugin-config-field-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plugin-config-field-value .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.plugin-config-field-value .btn-xs {
+  flex-shrink: 0;
+}
+
+.plugin-drawer-capabilities {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plugin-capability-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plugin-capability-group-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--fg-muted);
+}
+
+.plugin-capability-group-title {
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-mono, monospace);
+}
+
+.plugin-capability-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plugin-capability-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg-secondary);
+}
+
+@media (max-width: 640px) {
+  .plugin-drawer-content {
+    width: 100vw;
+    border-left: none;
+  }
+}
+
+/* ==========================================================================
+ * 插件包管理：安装模态 / 受管包元数据与操作 / doctor 检查结果
+ * ========================================================================== */
+
+.plugin-install-modal {
+  max-width: 560px;
+}
+
+.plugin-install-form {
+  gap: 14px;
+}
+
+.plugin-install-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plugin-source-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.plugin-source-hint.is-unknown {
+  color: var(--warn);
+}
+
+.plugin-install-security {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.plugin-install-doctor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.plugin-doctor-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plugin-doctor-check-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--ok);
+  margin-top: 1px;
+}
+.plugin-doctor-check.is-failed .plugin-doctor-check-mark {
+  color: var(--err);
+}
+
+.plugin-doctor-check-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.plugin-doctor-check-label {
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.plugin-doctor-check-error {
+  font-size: 11px;
+  color: var(--err);
+  word-break: break-all;
+}
+
+.plugin-package-section {
+  gap: 10px;
+}
+
+.plugin-package-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plugin-package-source-text {
+  margin-left: 6px;
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  word-break: break-all;
+}
+
+.plugin-package-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.plugin-remove-confirm {
+  max-width: 460px;
+}
+
+.plugin-remove-confirm-desc {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--fg-muted);
+  word-break: break-all;
+}
+
+.plugin-drawer-failed-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.plugin-drawer-failed-note .mono {
+  font-size: 11px;
+  color: var(--err);
+  word-break: break-all;
+}
