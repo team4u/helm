@@ -1,10 +1,10 @@
 /**
- * 跨进程文件锁（尽力而为）：以 O_CREAT|O_EXCL 原子创建锁文件为获取语义，持有者记录
- * pid 与获取时间；pid 已死或持有超时（staleMs）时允许接管（崩溃遗留自愈）。进程内另有
- * promise 链互斥，同进程并发调用确定性串行。
- *
- * 诚实边界：非内核级锁；极端竞态（双方同时判定 stale 同时接管）由后续 open('wx')
- * 失败自然收敛为单持有者，不构成正确性破坏。
+ * 跨进程安装互斥锁（fail-closed）：O_CREAT|O_EXCL 原子创建锁文件为获取语义，持有者
+ * 记录 pid 与获取时间。锁已被占用时仅有界等待持有者正常释放（删除锁文件），
+ * 绝不接管任何锁——pid 已死、持有超时、内容非法一律不构成接管理由：安装超时
+ * （10min）远超历史 stale 阈值（5min），自动接管会偷走存活进程的锁并互删对方
+ * 新建的锁、破坏对方 staging。崩溃遗留的锁文件由工具/用户按诊断信息确认后手动
+ * 移除（显式诊断优于静默自愈）。进程内另有 promise 链互斥，同进程并发调用确定性串行。
  */
 import { closeSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeSync } from 'node:fs';
 import path from 'node:path';
@@ -12,10 +12,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { DesktopError } from './errors.js';
 
 export interface PayloadLockOptions {
-  /** 获取锁的最长等待（ms）；超时抛 updater_lock_timeout。 */
+  /** 有界等待时长（ms）；超时抛 updater_lock_timeout（附持有者诊断）。 */
   acquireTimeoutMs?: number;
-  /** 持有超时（ms）：超过即视为崩溃遗留，允许接管。 */
-  staleMs?: number;
 }
 
 interface LockHolder {
@@ -23,19 +21,14 @@ interface LockHolder {
   at: number;
 }
 
-function isPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM = 进程存在但无权限探测，视为存活；其余（ESRCH）视为已死。
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
+function describeHolder(holder: LockHolder | null): string {
+  if (holder === null) return '未知（锁文件存在但无法读取）';
+  const heldMs = holder.at > 0 ? Math.max(0, Math.round(Date.now() - holder.at)) : null;
+  return `pid=${holder.pid > 0 ? holder.pid : '未知'}，已持有 ${heldMs !== null ? `${heldMs}ms` : '未知'}`;
 }
 
 export class PayloadFileLock {
   private readonly acquireTimeoutMs: number;
-  private readonly staleMs: number;
   private tail: Promise<unknown> = Promise.resolve();
 
   constructor(
@@ -43,7 +36,6 @@ export class PayloadFileLock {
     options: PayloadLockOptions = {},
   ) {
     this.acquireTimeoutMs = options.acquireTimeoutMs ?? 120_000;
-    this.staleMs = options.staleMs ?? 300_000;
   }
 
   /** 串行执行 fn：进程内排队 + 跨进程锁文件互斥；fn 抛错时锁必然释放。 */
@@ -58,35 +50,42 @@ export class PayloadFileLock {
     try {
       return await fn();
     } finally {
-      try {
-        rmSync(this.lockPath, { force: true });
-      } catch {
-        // 释放失败由 staleMs 接管兜底；不掩盖 fn 的原始结果
-      }
+      this.release();
     }
   }
 
+  /** 有界等待获取：他人持锁时轮询直至释放或超时；超时显式报错并附诊断，绝不删除他人锁。 */
   private async acquire(): Promise<void> {
-    const deadline = Date.now() + this.acquireTimeoutMs;
+    const startedAt = Date.now();
+    const deadline = startedAt + this.acquireTimeoutMs;
     let delay = 25;
+    let lastHolder: LockHolder | null = null;
     for (;;) {
       if (this.tryCreate()) return;
       const holder = this.readHolder();
-      if (holder !== null && this.isStealable(holder)) {
-        try {
-          rmSync(this.lockPath, { force: true });
-        } catch {
-          // 竞态：他人先删/先建，直接重试
-        }
-      } else if (Date.now() >= deadline) {
+      if (holder !== null) lastHolder = holder;
+      if (Date.now() >= deadline) {
         throw new DesktopError(
           'updater_lock_timeout',
-          `payload 安装锁等待超时（${this.acquireTimeoutMs}ms）: ${this.lockPath}`,
-          { lockPath: this.lockPath, holder: holder ?? null },
+          `payload 安装锁被占用，等待 ${this.acquireTimeoutMs}ms 未释放: ${this.lockPath}` +
+            `（持有者 ${describeHolder(lastHolder)}；本锁 fail-closed 不自动接管，` +
+            '请确认无安装进程仍在运行后手动删除该锁文件再重试）',
+          { lockPath: this.lockPath, holder: lastHolder, waitedMs: Date.now() - startedAt },
         );
       }
       await sleep(Math.min(delay, 200));
       delay = Math.min(delay * 2, 200);
+    }
+  }
+
+  /** 释放：只删除属于自己的锁文件（pid 匹配），绝不触碰他人持有的锁。 */
+  private release(): void {
+    const holder = this.readHolder();
+    if (holder === null || holder.pid !== process.pid) return;
+    try {
+      rmSync(this.lockPath, { force: true });
+    } catch {
+      // 释放失败不掩盖 fn 的原始结果；残留锁文件按 fail-closed 诊断由人工处置
     }
   }
 
@@ -115,15 +114,10 @@ export class PayloadFileLock {
       if (typeof pid === 'number' && Number.isInteger(pid) && typeof at === 'number' && Number.isFinite(at)) {
         return { pid, at };
       }
-      // 内容非法但存在：以 mtime 兜底，仅允许按持有超时接管。
+      // 内容非法但文件存在：仍 fail-closed，仅以 mtime 提供持有时长诊断。
       return { pid: -1, at: statSync(this.lockPath).mtimeMs };
     } catch {
       return null; // 锁文件消失 = 已释放，直接重试
     }
-  }
-
-  private isStealable(holder: LockHolder): boolean {
-    if (Date.now() - holder.at > this.staleMs) return true;
-    return holder.pid > 0 && holder.pid !== process.pid && !isPidAlive(holder.pid);
   }
 }
