@@ -1,9 +1,23 @@
-# Release 流水线：仅由 v* tag 触发，职责限定两件事——
-#   1) npm-payload：公开 npm 包（Hub payload）的门槛式发布（provenance / OIDC）；
-#   2) desktop-release：GitHub Release 草稿与 Electron 桌面安装包占位上传。
-# 常规 push/PR 校验全部在 ci.yml，本文件不参与，互不影响。
-# 诚实性约束：workspace 包均 private 时，npm-payload 必须走占位跳过分支，
-# 绝不执行注定失败或超出元数据授权范围的 npm publish。
+# Release 流水线：仅由 v* tag 触发，职责链——
+#   verify → build（ubuntu 全量构建与测试）→ 并行 [ npm-payload（仅 ubuntu，一次），
+#   desktop-package ×3 平台（--publish never 打安装包 + 打包 App 冒烟）]
+#   → desktop-release（汇总三平台安装包，创建草稿 Release 并上传附件）。
+#
+# npm 发布收敛为单一入口：唯一依据是 packages/payload/dist/package.json（构建产物；
+# 默认 name @team4u/helm-hub，构建期 env HELM_PAYLOAD_PACKAGE 可覆盖）。workspace 的
+# @helm/payload 永远是 private 组装器：发布必须在 dist 目录内 npm pack / npm publish
+# （tarball 根即 payload 根，manifest 落在根上）；绝不对 workspace 包执行 pnpm pack
+# ——那会把一切垫进 dist/ 路径前缀，updater 按根布局探测必然落空。
+#
+# 诚实性约束：
+#   - 发布门槛 = dist/package.json 的 private / version（与 tag 锁步）/ repository 字段
+#     + NPM_TOKEN（注入为 NODE_AUTH_TOKEN）存在性；任何一项不满足都在发布前显式失败
+#     或显式跳过，Release 说明只陈述实际结果，绝不伪称已发布；
+#   - 安装包草稿必须晚于三平台打包/冒烟全部成功（needs 链），安装包目录为
+#     packages/desktop/release/（非 tsc 的 dist/），绝不空发布；
+#   - npm payload 只在 ubuntu 构建发布一次；三平台桌面安装包 baseline 同源
+#     （各平台自行 assemble-hub 组装，不消费 npm 产物），客户端依赖由桌面端
+#     bundled npm 安装，与本流水线无关。
 
 name: Release
 
@@ -23,16 +37,14 @@ permissions:
 
 jobs:
   # ------------------------------------------------------------------
-  # 阶段一：tag 与包元数据校验（构建前把关，避免白跑构建）。
+  # 阶段一：tag 校验与 payload 组装器探测（构建前把关）。
   # ------------------------------------------------------------------
   verify:
-    name: Verify tag and versions
+    name: Verify tag
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.scan.outputs.version }}
-      publishable-count: ${{ steps.scan.outputs.publishable-count }}
-      publishable-packages: ${{ steps.scan.outputs.publishable-packages }}
-      desktop-present: ${{ steps.scan.outputs.desktop-present }}
+      payload-present: ${{ steps.scan.outputs.payload-present }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,19 +54,14 @@ jobs:
         with:
           node-version: 24.12.0
 
-      # 门槛规则是元数据驱动的，不维护包名单：
-      #   - tag 必须形如 v<semver>；
-      #   - 公开包（private !== true）版本必须与 tag 完全锁步，缺 repository 字段直接失败
-      #     （npm provenance 会校验发布源仓库，缺失必然被拒，提前在此报错）；
-      #   - private 包版本不一致仅告警，不阻断（允许桌面端等自有版本节奏）。
-      # 扫描 packages/ 至多两层（覆盖未来的 packages/desktop/payload），
-      # 排除 node_modules / dist / 点开头目录。
-      - name: Scan packages and verify versions
+      # 只校验 tag 形态与组装器存在性；npm 发布判定一律以构建产物
+      # packages/payload/dist/package.json 为准（见 npm-payload），不做全仓
+      # non-private 扫描——发布入口只有那一个。
+      - name: Verify tag and payload builder
         id: scan
         run: |
           node --input-type=module <<'EOF'
-          import { appendFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
-          import { dirname, join } from 'node:path';
+          import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 
           const fail = (msg) => { console.error(`::error::${msg.replace(/\n/g, '； ')}`); process.exit(1); };
           const warn = (msg) => console.log(`::warning::${msg}`);
@@ -66,72 +73,25 @@ jobs:
           if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(tagVersion)) {
             fail(`tag "${tag}" 中的版本号 "${tagVersion}" 不是合法 semver`);
           }
-
-          const found = [];
-          const walk = (dir, depth) => {
-            if (!existsSync(dir)) return;
-            for (const ent of readdirSync(dir, { withFileTypes: true })) {
-              if (ent.name === 'node_modules' || ent.name === 'dist' || ent.name.startsWith('.')) continue;
-              const p = join(dir, ent.name);
-              if (ent.isDirectory()) {
-                if (depth > 0) walk(p, depth - 1);
-              } else if (ent.name === 'package.json') {
-                found.push(p);
-              }
-            }
-          };
-          walk('packages', 2);
-          if (found.length === 0) fail('packages/ 下未发现任何 package.json');
-
-          const pkgs = found.map((file) => {
-            let raw;
-            try {
-              raw = JSON.parse(readFileSync(file, 'utf8'));
-            } catch (e) {
-              fail(`解析 ${file} 失败：${e.message}`);
-            }
-            return {
-              file,
-              dir: dirname(file),
-              name: typeof raw.name === 'string' ? raw.name : `(未命名 ${file})`,
-              version: typeof raw.version === 'string' ? raw.version : '',
-              isPrivate: raw.private === true,
-              hasRepository: raw.repository != null,
-            };
-          });
-
-          const publishable = pkgs.filter((p) => !p.isPrivate);
-
-          const mismatched = publishable.filter((p) => p.version !== tagVersion);
-          if (mismatched.length > 0) {
-            fail(
-              `以下公开包版本与 tag ${tag} 不一致，必须锁步后再打 tag：` +
-                mismatched.map((p) => `${p.name}@${p.version} (${p.file})`).join('； ')
-            );
-          }
-          const noRepo = publishable.filter((p) => !p.hasRepository);
-          if (noRepo.length > 0) {
-            fail(
-              `以下公开包缺少 repository 字段（npm provenance 必需）：` +
-                noRepo.map((p) => `${p.name} (${p.file})`).join('； ')
-            );
-          }
-          for (const p of pkgs.filter((x) => x.isPrivate && x.version !== tagVersion)) {
-            warn(`private 包 ${p.name}@${p.version} 与 tag 版本 ${tagVersion} 不一致（仅提示，不阻断）`);
-          }
-
           out('version', tagVersion);
-          out('publishable-count', publishable.length);
-          out('publishable-packages', JSON.stringify(publishable.map((p) => ({ name: p.name, dir: p.dir }))));
-          out('desktop-present', existsSync('packages/desktop') ? 'true' : 'false');
-          console.log(`tag=${tag} 公开可发布包 ${publishable.length}/${pkgs.length}：`);
-          for (const p of publishable) console.log(`  - ${p.name}@${p.version} (${p.dir})`);
+
+          const payloadPresent = existsSync('packages/payload/package.json');
+          out('payload-present', payloadPresent ? 'true' : 'false');
+          if (!payloadPresent) {
+            warn('packages/payload 不存在：npm-payload 将按占位跳过（不执行任何 npm publish）。');
+          } else {
+            const builder = JSON.parse(readFileSync('packages/payload/package.json', 'utf8'));
+            if (builder.private !== true) {
+              warn(`组装器 ${builder.name} 必须保持 private: true（npm 发布只认 packages/payload/dist/package.json，绝不 pack workspace 包）。`);
+            }
+            if (typeof builder.version === 'string' && builder.version !== tagVersion) {
+              warn(`组装器 ${builder.name}@${builder.version} 与 tag 版本 ${tagVersion} 不一致（payload 版本单一来源，建议锁步）。`);
+            }
+          }
           EOF
 
   # ------------------------------------------------------------------
-  # 阶段二：构建与测试（等价 ci.yml 的 ubuntu 通道，作为发布门槛）。
-  # 覆盖 protocol / kernel / node / cli / web，未来 workspace 内新增的
-  # payload / desktop 包（pnpm-workspace.yaml 登记）自动纳入。
+  # 阶段二：构建与全量测试（等价 ci.yml 的 ubuntu 通道，作为发布门槛）。
   # ------------------------------------------------------------------
   build:
     name: Build and test
@@ -165,9 +125,7 @@ jobs:
         run: pnpm test:all
 
   # ------------------------------------------------------------------
-  # 阶段三 A：npm Hub payload 条件发布。
-  # 门槛 = verify 输出的 publishable-count > 0；当前 workspace 全部包
-  # private: true，本作业稳定走占位跳过分支（绿色成功，不执行任何 publish）。
+  # 阶段三 A：npm Hub payload 条件发布（唯一 npm 入口，仅 ubuntu 一次）。
   # ------------------------------------------------------------------
   npm-payload:
     name: npm payload (conditional publish)
@@ -176,9 +134,12 @@ jobs:
       contents: read
       id-token: write # npm provenance 依赖 OIDC 生成来源证明
     runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.result.outputs.published }}
+      status-line: ${{ steps.result.outputs.status-line }}
     env:
-      PUBLISHABLE_PACKAGES: ${{ needs.verify.outputs.publishable-packages }}
-      PUBLISHABLE_COUNT: ${{ needs.verify.outputs.publishable-count }}
+      PAYLOAD_PRESENT: ${{ needs.verify.outputs.payload-present }}
+      TAG_VERSION: ${{ needs.verify.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -188,8 +149,8 @@ jobs:
         with:
           version: 12.16.1
 
-      # registry-url 让 setup-node 写入 ~/.npmrc，认证令牌来自
-      # NODE_AUTH_TOKEN（secret 引用，不入库、不打日志）。
+      # registry-url 让 setup-node 写入 ~/.npmrc，认证令牌来自 NODE_AUTH_TOKEN
+      # （secret 引用，不入库、不打日志）。
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -200,93 +161,221 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Publish gate
-        id: gate
+      # build 作业在独立 runner 上，此处重建 workspace 产物以组装 packages/payload/dist。
+      - name: Build packages (assemble payload dist)
+        run: pnpm build
+
+      # 以构建产物 dist/package.json 为唯一发布依据：缺文件 = 组装器契约破裂（显式
+      # 失败）；private = 明确不发布（跳过分支）；public 则校验 version 与 tag 锁步、
+      # repository 字段（provenance 必需）后才进入发布。
+      - name: Inspect payload npm package
+        id: payload
+        if: env.PAYLOAD_PRESENT == 'true'
         run: |
           set -eu
-          if [ "$PUBLISHABLE_COUNT" -gt 0 ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "检测到 $PUBLISHABLE_COUNT 个公开包，进入 npm 发布流程。"
-          else
+          pkg=packages/payload/dist/package.json
+          if [ ! -f "$pkg" ]; then
+            echo "::error::packages/payload 构建未产出 $pkg（组装器契约：dist 根必须有可发布的 package.json，含 name/version/files）。"
+            exit 1
+          fi
+          name=$(jq -r '.name // empty' "$pkg")
+          version=$(jq -r '.version // empty' "$pkg")
+          if [ -z "$name" ] || [ -z "$version" ]; then
+            echo "::error::$pkg 缺 name 或 version 字段，拒绝发布。"
+            exit 1
+          fi
+          echo "payload npm 包: ${name}@${version}"
+          if [ "$(jq -r '.private // false' "$pkg")" = "true" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::workspace 内全部包均为 private，无 npm payload 可发布，本作业按占位跳过（不执行任何 npm publish）。"
-            echo "::notice::接入方法见 docs/releasing.md：目标包去除 private、补 repository 字段、与 tag 锁步版本后，打 v* tag 即自动生效。"
+            echo "::notice::payload npm 包 ${name} 标记 private: true，按占位跳过（不执行任何 npm publish）。"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$version" != "$TAG_VERSION" ]; then
+            echo "::error::payload npm 包 ${name}@${version} 与 tag ${TAG_VERSION} 版本不一致，必须锁步后再打 tag。"
+            exit 1
+          fi
+          if [ "$(jq -r 'has("repository")' "$pkg")" != "true" ]; then
+            echo "::error::payload npm 包 ${name} 缺少 repository 字段（npm provenance 必需，且须指向本仓库）。"
+            exit 1
           fi
 
-      # 有待发布包但缺 secret 时在此快速失败，避免走到 publish 半途报错。
+      # 有待发布包但缺 secret 时在此快速失败：明确门禁，绝不伪称已发布。
       - name: Require NPM_TOKEN secret
-        if: steps.gate.outputs.skip == 'false'
+        if: env.PAYLOAD_PRESENT == 'true' && steps.payload.outputs.skip == 'false'
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -eu
           if [ -z "$NPM_TOKEN" ]; then
-            echo "::error::存在待发布公开包但未配置 NPM_TOKEN（Settings -> Secrets and variables -> Actions）。"
+            echo "::error::payload npm 包待发布但未配置 NPM_TOKEN（Settings -> Secrets and variables -> Actions），或改用 npm Trusted Publishing（未启用）。"
             exit 1
           fi
 
-      # build 作业在独立 runner 上，此处重建产物供 pack 使用。
-      - name: Build packages
-        if: steps.gate.outputs.skip == 'false'
-        run: pnpm build
-
-      # pnpm pack 解析 workspace 协议依赖后，用 npm 发布 tarball：
-      # provenance 对目录直发与 tarball 发布同样生效（npm >= 9.5，
-      # Node 24 自带的 npm 满足）。
-      - name: Publish to npm (provenance, public)
-        if: steps.gate.outputs.skip == 'false'
+      # 在 dist 目录内 npm pack / npm publish：tarball 根即 payload 根（manifest.json、
+      # package.json、start.mjs 在根上）。绝不 pnpm pack workspace 包——tar 会把 manifest
+      # 垫进 dist/ 路径前缀，updater 按根布局探测必然落空。
+      - name: Publish payload package from dist (provenance, public)
+        id: publish
+        if: env.PAYLOAD_PRESENT == 'true' && steps.payload.outputs.skip == 'false'
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # 修复点：setup-node(registry-url) 写入 ~/.npmrc 的键就是 NODE_AUTH_TOKEN，
+          # npm publish 实际读取它；此前只注入 NPM_TOKEN 导致认证必然失败。
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -eu
-          for dir in $(printf '%s' "$PUBLISHABLE_PACKAGES" | jq -r '.[].dir'); do
-            name=$(jq -r '.name' "$dir/package.json")
-            echo "== npm publish ${name} =="
-            dest="$RUNNER_TEMP/pack/$(basename "$dir")"
-            mkdir -p "$dest"
-            (cd "$dir" && pnpm pack --pack-destination "$dest" >/dev/null)
-            tgz=$(ls "$dest"/*.tgz | head -n 1)
-            echo "   tarball: $tgz"
-            npm publish "$tgz" --provenance --access public
-          done
+          dest="$RUNNER_TEMP/pack"
+          mkdir -p "$dest"
+          (cd packages/payload/dist && npm pack --pack-destination "$dest" >/dev/null)
+          tgz=$(ls "$dest"/*.tgz | head -n 1)
+          echo "tarball: $tgz ($(du -h "$tgz" | cut -f1))"
+          npm publish "$tgz" --provenance --access public
+
+      # 汇总实际结果供 desktop-release 的 Release 说明引用：只陈述事实。
+      - name: Record publish result
+        id: result
+        if: always()
+        env:
+          PAYLOAD_SKIP: ${{ steps.payload.outputs.skip }}
+          PAYLOAD_NAME: ${{ steps.payload.outputs.name }}
+          PAYLOAD_VERSION: ${{ steps.payload.outputs.version }}
+          PUBLISH_CONCLUSION: ${{ steps.publish.conclusion }}
+        run: |
+          set -eu
+          if [ "$PAYLOAD_PRESENT" != "true" ]; then
+            published=false
+            line='packages/payload 不存在，未执行 npm publish。'
+          elif [ "$PAYLOAD_SKIP" = "true" ]; then
+            published=false
+            line='payload npm 包标记 private（或未产出可发布 package.json），按占位跳过，未执行 npm publish。'
+          elif [ "$PUBLISH_CONCLUSION" = "success" ]; then
+            published=true
+            line="已发布 \`${PAYLOAD_NAME}@${PAYLOAD_VERSION}\` 至 npmjs.com（含 provenance），见 npm-payload 作业日志。"
+          else
+            published=false
+            line="npm 发布未完成（npm-payload 作业 ${PUBLISH_CONCLUSION:-未执行}），本草稿不包含 npm 发布结果。"
+          fi
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          echo "status-line<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$line" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "published=$published"
+          echo "status: $line"
 
   # ------------------------------------------------------------------
-  # 阶段三 B：GitHub Release（Electron 桌面安装包占位）。
-  # 与 npm-payload 职责严格分离：本作业只碰 GitHub Release，
-  # 不接触 npm registry。packages/desktop 不存在时仍创建占位草稿，
-  # 便于人工核对后发布；存在时上传其 dist/ 下全部安装包产物。
+  # 阶段三 B：三平台桌面打包与冒烟（与 desktop-ci.yml 同一套验证，--publish never）。
+  # 安装包与冒烟报告作为 workflow artifact 供 desktop-release 汇总。
   # ------------------------------------------------------------------
-  desktop-release:
-    name: GitHub Release (desktop placeholder)
+  desktop-package:
+    name: package / ${{ matrix.os }}
     needs: [verify, build]
-    permissions:
-      contents: write # 创建草稿 Release 并上传安装包附件
-    runs-on: ubuntu-latest
-    env:
-      PAYLOAD_COUNT: ${{ needs.verify.outputs.publishable-count }}
-      DESKTOP_PRESENT: ${{ needs.verify.outputs.desktop-present }}
-      GH_TOKEN: ${{ github.token }}
-      TAG: ${{ github.ref_name }}
-      REPO: ${{ github.repository }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.16.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.12.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Xvfb and Electron runtime libs (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb libgbm1 libasound2t64
+
+      - name: Desktop package contract check
+        id: contract
+        shell: bash
+        run: node scripts/desktop-ci-contract.mjs --github-output "$GITHUB_OUTPUT"
+
+      # assemble-hub 组装依赖 kernel/web dist 产物，必须先全仓构建。
+      - name: Build packages
+        run: pnpm build
+
+      - name: Build unpacked desktop app (dist:dir)
+        run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist:dir
+
+      - name: Smoke test packaged app under Xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/desktop-smoke.mjs --packaged
+
+      - name: Smoke test packaged app (Windows / macOS)
+        if: runner.os != 'Linux'
+        run: node scripts/desktop-smoke.mjs --packaged
+
+      - name: Upload smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-smoke-${{ matrix.os }}
+          path: packages/desktop/release/smoke/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Build desktop installers (publish never)
+        run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist -- --publish never
+
+      - name: Upload desktop installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          path: |
+            packages/desktop/release/*.exe
+            packages/desktop/release/*.dmg
+            packages/desktop/release/*.zip
+            packages/desktop/release/*.AppImage
+            packages/desktop/release/*.deb
+          if-no-files-found: error
+          retention-days: 7
+
+  # ------------------------------------------------------------------
+  # 阶段四：GitHub Release 草稿。needs 链保证：三平台打包/冒烟全部成功、npm 发布
+  # 有了确定结果（成功或明确跳过）之后才会创建草稿；npm-payload 失败则不创建。
+  # ------------------------------------------------------------------
+  desktop-release:
+    name: GitHub Release draft
+    needs: [verify, npm-payload, desktop-package]
+    permissions:
+      contents: write # 创建草稿 Release 并上传安装包附件
+    runs-on: ubuntu-latest
+    env:
+      NPM_STATUS_LINE: ${{ needs.npm-payload.outputs.status-line }}
+      TAG: ${{ github.ref_name }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          merge-multiple: true
+          path: installers
+
       - name: Create draft release
         run: |
           set -eu
-          if [ "$PAYLOAD_COUNT" -gt 0 ]; then
-            payload_line="npm Hub payload：$PAYLOAD_COUNT 个公开包已执行 npm publish（含 provenance），详见 npm-payload 作业日志。"
-          else
-            payload_line="npm Hub payload：workspace 内暂无公开包，npm 发布按占位跳过（接入指南见 docs/releasing.md）。"
-          fi
-          if [ "$DESKTOP_PRESENT" = "true" ]; then
-            desktop_line="桌面安装包（Electron）：见下方附件。"
-          else
-            desktop_line="桌面安装包（Electron）：尚未接入（packages/desktop 不存在），本 Release 为占位草稿。"
-          fi
           notes=$(mktemp --suffix=.md)
-          printf '## npm Hub payload\n%s\n\n## 桌面安装包（Electron）\n%s\n' "$payload_line" "$desktop_line" > "$notes"
+          printf '## npm Hub payload\n\n%s\n\n## 桌面安装包（Electron）\n\n三平台（Linux / Windows / macOS）打包与打包 App 冒烟全部通过后上传，见下方附件（NSIS exe / dmg / zip / AppImage / deb，未签名）。客户端依赖由桌面端 bundled npm 安装。\n' "${NPM_STATUS_LINE:-npm 发布结果未知（npm-payload 作业无输出），本草稿不包含 npm 发布结论。}" > "$notes"
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             echo "Release 已存在，更新草稿说明。"
             gh release edit "$TAG" --repo "$REPO" --draft --notes-file "$notes"
@@ -294,15 +383,16 @@ jobs:
             gh release create "$TAG" --repo "$REPO" --draft --generate-notes --notes-file "$notes" --title "$TAG"
           fi
 
-      # 桌面包存在但 dist 为空属真实故障，显式失败，不静默发空 Release。
+      # 下载不到任何安装包属真实故障（矩阵上传步骤 if-no-files-found: error 已挡一道，
+      # 此处兜底），显式失败，绝不发布空附件草稿。
       - name: Upload desktop installers
-        if: env.DESKTOP_PRESENT == 'true'
         run: |
           set -eu
           shopt -s nullglob
-          files=(packages/desktop/dist/*)
+          files=(installers/*)
           if [ ${#files[@]} -eq 0 ]; then
-            echo "::error::packages/desktop 存在但 dist/ 下没有任何安装包产物，拒绝空发布。"
+            echo "::error::未下载到任何安装包（desktop-package 矩阵产物缺失），拒绝空发布。"
             exit 1
           fi
+          ls -lh "${files[@]}"
           gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber
