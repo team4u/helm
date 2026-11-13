@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "allowImportingTsExtensions": true,
     "paths": {
       "@helm/protocol": ["../protocol/src/index.ts"],
       "@helm/plugin-client": ["./src/lib/plugin-client-sdk.ts"]

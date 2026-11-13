@@ -1,4 +1,4 @@
-import type { WorkflowPhaseSection } from './models.ts'
+import type { WorkflowPhaseSection } from './model-run.ts'
 
 export const SPIN = 'spin-slow'
 export const RUN_LABEL: Record<string, string> = {

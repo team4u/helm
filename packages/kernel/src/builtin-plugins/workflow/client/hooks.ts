@@ -5,7 +5,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorkflowRunSummary } from '@helm/protocol'
 import { useConversation, useConversations, usePluginContext, usePluginDoc, usePluginSessionDoc } from '@helm/plugin-client'
-import { isScrolledToBottom, parseSavedWorkflowList, type SavedWorkflowView } from './models.ts'
+import { isScrolledToBottom } from './model-format.ts'
+import { parseSavedWorkflowList } from './model-library.ts'
+import type { SavedWorkflowView } from './model-library.ts'
 
 /** 只在用户仍贴底时跟随流式输出；上滚阅读历史后不抢回滚动位置。 */
 export function useStreamFollow(content: unknown) {
