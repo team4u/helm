@@ -13,6 +13,7 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary } from '@helm/protocol'
+import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -122,7 +123,8 @@ function eventFrame(seq: number, event: unknown): Uint8Array {
 }
 
 let eventSeq = 1
-let eventController: ReadableStreamDefaultController<Uint8Array> | undefined
+/** 当前挂起的 /api/events 流发送器：流终结（abort/cancel）后自动失效。 */
+let sendEvent: SseFrameSender | undefined
 
 function installFetch(): void {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -132,23 +134,20 @@ function installFetch(): void {
       return jsonResponse({ configured: true, authenticated: true })
     }
     if (url === '/api/events') {
-      return new Response(new ReadableStream<Uint8Array>({
-        start(controller) {
-          eventController = controller
-          controller.enqueue(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify({
-            seq: eventSeq,
-            conversations: state.conversations,
-            pendingAsks: [],
-            plugins: [],
-            ui: [],
-            nodes: [
-              { id: 'local', name: '本机', online: true },
-              { id: 'remote-1', name: '远端一', online: true },
-            ],
-          })}\n\n`))
-        },
-        cancel() { eventController = undefined },
-      }), { status: 200, headers: { 'content-type': 'text/event-stream' } })
+      return new Response(hangingEventStream((send) => {
+        sendEvent = send
+        send(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify({
+          seq: eventSeq,
+          conversations: state.conversations,
+          pendingAsks: [],
+          plugins: [],
+          ui: [],
+          nodes: [
+            { id: 'local', name: '本机', online: true },
+            { id: 'remote-1', name: '远端一', online: true },
+          ],
+        })}\n\n`))
+      }, { signal: init?.signal, onTeardown: () => { sendEvent = undefined } }), { status: 200, headers: { 'content-type': 'text/event-stream' } })
     }
     if (url === '/api/profiles' && method === 'GET') {
       if (state.assetsGate !== undefined) await state.assetsGate.promise
@@ -173,7 +172,7 @@ function installFetch(): void {
       }
       const created = summary(state.nextId++, { profileId: String(body.profileId ?? 'assistant') })
       state.conversations = [created, ...state.conversations]
-      eventController?.enqueue(eventFrame(++eventSeq, { type: 'conversation.upsert', conversation: created }))
+      sendEvent?.(eventFrame(++eventSeq, { type: 'conversation.upsert', conversation: created }))
       return jsonResponse(created)
     }
     const inputMatch = /^\/api\/conversations\/(\d+)\/input$/.exec(url)
@@ -250,7 +249,7 @@ function reset(): void {
   host = undefined
   document.body.innerHTML = ''
   globalThis.fetch = originalFetch
-  eventController = undefined
+  sendEvent = undefined
   eventSeq = 1
   resetState()
   resetStandbyDrafts()
@@ -633,7 +632,7 @@ test('侧栏无折叠钮且父子同时点亮：点击智能体展开其话题�
 
   // SSE 实时更新：展开与高亮由目标唯一推导，不被扰动
   await act(async () => {
-    eventController?.enqueue(eventFrame(++eventSeq, {
+    sendEvent?.(eventFrame(++eventSeq, {
       type: 'conversation.upsert',
       conversation: { ...summary(1), updatedAt: 99 },
     }))

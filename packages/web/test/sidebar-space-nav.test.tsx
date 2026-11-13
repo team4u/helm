@@ -19,6 +19,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { HelmStoreProvider } from '../src/lib/HelmStoreProvider.js'
 import { useHelmStore } from '../src/lib/store-context.js'
+import { hangingEventStream } from './helpers/sse-stream.js'
 import type { ResolvedTarget, SidebarSpace } from '../src/lib/types.js'
 
 GlobalRegistrator.register()
@@ -68,17 +69,15 @@ const snapshotPayload = {
 function stubFetch(): void {
   const originalFetch = globalThis.fetch
   const encoder = new TextEncoder()
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path === '/api/auth/status') {
       return new Response(JSON.stringify({ configured: true, authenticated: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     }
     if (path === '/api/events') {
-      return new Response(new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(encoder.encode(`event: snapshot\ndata: ${JSON.stringify(snapshotPayload)}\n\n`))
-        },
-      }), { status: 200 })
+      return new Response(hangingEventStream((send) => {
+        send(encoder.encode(`event: snapshot\ndata: ${JSON.stringify(snapshotPayload)}\n\n`))
+      }, { signal: init?.signal }), { status: 200 })
     }
     // assistant 角色存在：agent 待命目标（#/a/assistant）的记忆回跳可用性校验依赖角色资产。
     if (path === '/api/profiles') {

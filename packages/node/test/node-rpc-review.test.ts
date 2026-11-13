@@ -20,6 +20,16 @@ async function tempDir(prefix: string): Promise<string> {
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 轮询等待可观察条件成立（替代固定 sleep），超时显式失败。 */
+async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await condition()) return;
+    await delay(20);
+  }
+  assert.ok(await condition(), `等待超时：${what}`);
+}
+
 /** 起 Unix Socket 行服务器（herdr 形状模拟）。 */
 function startLineServer(
   dir: string,
@@ -518,7 +528,7 @@ test('ipcSubscribe ACK 结构化判定：子串匹配的数据帧不再被误判
     await waitListening(goodSrv.path);
     const good = await server.ipcSubscribe!({ subscribeId: 's1b', endpoint: goodSrv.path, line: 'req' });
     assert.equal(good.ok, true, good.ok ? '' : good.error.message);
-    await delay(200);
+    await waitFor(() => events.some((l) => JSON.parse(l).event === 'real'), 5_000, '真 ACK 后事件转发');
     assert.ok(events.some((l) => JSON.parse(l).event === 'real'), '真 ACK 后事件正常转发');
   } finally {
     await goodSrv.close();
@@ -546,7 +556,7 @@ test('ipcSubscribe 事件帧 NUL 拒绝并走 onIpcClosed', { timeout: 60_000 },
 
   const ack = await server.ipcSubscribe!({ subscribeId: 's2', endpoint: srv.path, line: 'req' });
   assert.equal(ack.ok, true);
-  await delay(300);
+  await waitFor(() => server.getActiveIpcSubscriptionCount() === 0, 5_000, '坏帧后订阅关闭');
   assert.equal(server.getActiveIpcSubscriptionCount(), 0, '坏帧后订阅应关闭');
   const closedEvent = closed.find((c) => c.id === 's2');
   assert.ok(closedEvent !== undefined, 'onIpcClosed 应通知');
@@ -784,7 +794,7 @@ test('dispose 销毁活跃订阅并停发事件', { timeout: 60_000 }, async (t)
 
   const ack = await server.ipcSubscribe!({ subscribeId: 'sd', endpoint: srv.path, line: 'req' });
   assert.equal(ack.ok, true);
-  await delay(200);
+  await waitFor(() => events.length > 0, 5_000, 'dispose 前事件到达');
   const before = events.length;
   assert.ok(before > 0, 'dispose 前应有事件');
   await server.dispose();

@@ -35,6 +35,16 @@ async function tempDir(prefix: string): Promise<string> {
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 轮询等待可观察条件成立（替代固定 sleep），超时显式失败。 */
+async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await condition()) return;
+    await delay(20);
+  }
+  assert.ok(await condition(), `等待超时：${what}`);
+}
+
 // ---------------------------------------------------------------------------
 // 1. collectNodeHealth
 // ---------------------------------------------------------------------------
@@ -176,7 +186,7 @@ test('createNodeDaemon：register 与 heartbeat 真实携带 health 快照', { t
     assert.ok(Math.abs(registerHealth!.collectedAt - Date.now()) < 60_000);
 
     // 等至少一次心跳（heartbeatMs=100ms）
-    await delay(400);
+    await waitFor(() => hub.heartbeats.length >= 1, 10_000, '至少一次心跳');
     assert.ok(hub.heartbeats.length >= 1, '应收到心跳');
     for (const beat of hub.heartbeats) {
       assert.equal(beat.nodeId, 'health-node');

@@ -29,6 +29,7 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError } from '@helm/protocol'
+import { waitFor } from './helpers.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 
 type RuntimeWithFaux = KernelRuntime & { __faux: ReturnType<typeof fauxProvider> }
@@ -107,8 +108,7 @@ kernel.__faux.setResponses([
       fauxAssistantMessage('不该需要第二答'),
     ])
     void kernel.submitInput(1, '会被守卫拒绝中止的问题').catch(() => {})
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    assert.equal(kernel.getConversation(1).status, 'working')
+    await waitFor(() => kernel.getConversation(1).status === 'working')
 
     barrier = barrierConversationHandle(kernel)
     const attempt = kernel.abortConversationGuarded(1, { expectedOwnership: 'bot' })
@@ -143,8 +143,7 @@ kernel.__faux.setResponses([
       fauxAssistantMessage('不该需要第二答'),
     ])
     void kernel.submitInput(1, '证明 barrier 落在旧窗口内').catch(() => {})
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    assert.equal(kernel.getConversation(1).status, 'working')
+    await waitFor(() => kernel.getConversation(1).status === 'working')
 
     barrier = barrierConversationHandle(kernel)
     const attempt = kernel.abortConversation(1)
@@ -204,8 +203,7 @@ kernel.__faux.setResponses([
       fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 5 && echo done' })], { stopReason: 'toolUse' }),
     ])
     void kernel.submitInput(1, '会被授权中止的问题').catch(() => {})
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    assert.equal(kernel.getConversation(1).status, 'working')
+    await waitFor(() => kernel.getConversation(1).status === 'working')
 
     await kernel.abortConversationGuarded(1, { expectedOwnership: 'bot' })
     await kernel.waitForIdle(1).catch(() => {})

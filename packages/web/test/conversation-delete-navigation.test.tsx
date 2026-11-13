@@ -5,6 +5,7 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary } from '@helm/protocol'
+import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 import type { ResolvedTarget, ActiveModal } from '../src/lib/types.js'
 
 GlobalRegistrator.register()
@@ -18,7 +19,8 @@ const originalFetch = globalThis.fetch
 let root: Root | undefined
 let host: HTMLElement | undefined
 let deleteRequest: { conversationId: number; complete(): void } | undefined
-let eventController: ReadableStreamDefaultController<Uint8Array> | undefined
+/** 当前挂起的 /api/events 流发送器：流终结（abort/cancel）后自动失效。 */
+let sendEvent: SseFrameSender | undefined
 let observed: { primary: ResolvedTarget; split: ResolvedTarget | null; modal: ActiveModal } | undefined
 let navigateTo: ((target: ResolvedTarget) => void) | undefined
 let historyLog: Array<{ method: 'push' | 'replace'; hash: string }> = []
@@ -63,19 +65,16 @@ function installFetch(): void {
       return new Response(JSON.stringify({ configured: true, authenticated: true }), { status: 200 })
     }
     if (url === '/api/events') {
-      return new Response(new ReadableStream<Uint8Array>({
-        start(controller) {
-          eventController = controller
-          controller.enqueue(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify({
-            seq: 1,
-            conversations,
-            pendingAsks: [],
-            plugins: [],
-            ui: [],
-          })}\n\n`))
-        },
-        cancel() { eventController = undefined },
-      }), { status: 200, headers: { 'content-type': 'text/event-stream' } })
+      return new Response(hangingEventStream((send) => {
+        sendEvent = send
+        send(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify({
+          seq: 1,
+          conversations,
+          pendingAsks: [],
+          plugins: [],
+          ui: [],
+        })}\n\n`))
+      }, { signal: init?.signal, onTeardown: () => { sendEvent = undefined } }), { status: 200, headers: { 'content-type': 'text/event-stream' } })
     }
     const artifactMatch = /^\/api\/conversations\/(\d+)\/artifacts$/.exec(url)
     if (artifactMatch && method === 'GET') {
@@ -88,7 +87,7 @@ function installFetch(): void {
         deleteRequest = {
           conversationId,
           complete() {
-            eventController?.enqueue(eventFrame(2, { type: 'conversation.deleted', conversationId }))
+            sendEvent?.(eventFrame(2, { type: 'conversation.deleted', conversationId }))
             resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }))
           },
         }
@@ -179,7 +178,7 @@ function reset(): void {
   host = undefined
   document.body.innerHTML = ''
   globalThis.fetch = originalFetch
-  eventController = undefined
+  sendEvent = undefined
   deleteRequest = undefined
   observed = undefined
   navigateTo = undefined

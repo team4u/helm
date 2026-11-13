@@ -5,6 +5,7 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary } from '@helm/protocol'
+import { hangingEventStream } from './helpers/sse-stream.js'
 import type { ResolvedTarget, ActiveModal } from '../src/lib/types.js'
 
 /**
@@ -65,17 +66,15 @@ function installFetch(): void {
       return new Response(JSON.stringify({ configured: true, authenticated: true }), { status: 200 })
     }
     if (url === '/api/events') {
-      return new Response(new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify({
-            seq: 1,
-            conversations,
-            pendingAsks: [],
-            plugins: [],
-            ui: [],
-          })}\n\n`))
-        },
-      }), { status: 200, headers: { 'content-type': 'text/event-stream' } })
+      return new Response(hangingEventStream((send) => {
+        send(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify({
+          seq: 1,
+          conversations,
+          pendingAsks: [],
+          plugins: [],
+          ui: [],
+        })}\n\n`))
+      }, { signal: init?.signal }), { status: 200, headers: { 'content-type': 'text/event-stream' } })
     }
     const artifactMatch = /^\/api\/conversations\/(\d+)\/artifacts$/.exec(url)
     if (artifactMatch) return new Response(JSON.stringify([]), { status: 200 })

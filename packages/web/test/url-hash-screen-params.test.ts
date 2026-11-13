@@ -16,6 +16,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { HelmStoreProvider } from '../src/lib/HelmStoreProvider.js'
 import { useHelmStore } from '../src/lib/store-context.js'
+import { hangingEventStream } from './helpers/sse-stream.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
 
 GlobalRegistrator.register()
@@ -43,25 +44,23 @@ const snapshotPayload = {
   ],
 }
 
-/** SSE 流：先延迟（模拟异步初始数据），再发 snapshot 帧然后挂起（长连接不结束）。 */
-function makeEventStream(): ReadableStream<Uint8Array> {
+/** SSE 流：先延迟（模拟异步初始数据），再发 snapshot 帧然后挂起（长连接不结束）；abort 时立即关闭。 */
+function makeEventStream(signal?: AbortSignal | null): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      if (snapshotDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, snapshotDelayMs))
-      controller.enqueue(encoder.encode(`event: snapshot\ndata: ${JSON.stringify(snapshotPayload)}\n\n`))
-    },
-  })
+  return hangingEventStream(async (send) => {
+    if (snapshotDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, snapshotDelayMs))
+    send(encoder.encode(`event: snapshot\ndata: ${JSON.stringify(snapshotPayload)}\n\n`))
+  }, { signal })
 }
 
 function stubFetch(): void {
   const originalFetch = globalThis.fetch
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path === '/api/auth/status') {
       return new Response(JSON.stringify({ configured: true, authenticated: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     }
-    if (path === '/api/events') return new Response(makeEventStream(), { status: 200 })
+    if (path === '/api/events') return new Response(makeEventStream(init?.signal), { status: 200 })
     // 资产接口：慢返回空列表（模拟异步初始数据）
     await new Promise((resolve) => setTimeout(resolve, 5))
     return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } })

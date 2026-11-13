@@ -58,6 +58,16 @@ async function tempDir(prefix: string): Promise<string> {
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 轮询等待可观察条件成立（替代固定 sleep），超时显式失败。 */
+async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await condition()) return;
+    await delay(20);
+  }
+  assert.ok(await condition(), `等待超时：${what}`);
+}
+
 // ---------------------------------------------------------------------------
 // 1. NodeEnvRpcServer：文件/目录/Reader/exec/dispose
 // ---------------------------------------------------------------------------
@@ -406,14 +416,14 @@ test('ipcSubscribe 订阅流、事件转发与 ipcUnsubscribe 关闭', { timeout
   assert.equal(ack.ok, true, ack.ok ? '' : ack.error.message);
   assert.equal(server.getActiveIpcSubscriptionCount(), 1);
 
-  await delay(200); // 至少 3-4 个事件
+  await waitFor(() => events.length >= 3, 5_000, '流式事件至少 3 个');
   assert.ok(events.length >= 3, `应收到流式事件（实际 ${events.length}）`);
   assert.equal(events[0]?.subscribeId, 'sub-1');
   assert.equal(JSON.parse(events[0]!.line).event, 'tick');
 
   // 主动退订：不触发异常 onIpcClosed
   await server.ipcUnsubscribe!('sub-1');
-  await delay(150);
+  await waitFor(() => server.getActiveIpcSubscriptionCount() === 0, 5_000, '退订后订阅条目清零');
   assert.equal(server.getActiveIpcSubscriptionCount(), 0);
   assert.equal(closed.length, 0, '主动退订不触发 onIpcClosed');
   const countAfterUnsub = events.length;
@@ -736,7 +746,7 @@ test('createNodeDaemon：register + heartbeat + 反向 envExec/envReadTextFile/i
     assert.equal(hub.registrations[0]?.hubUrl, hub.url);
 
     // 等至少一次心跳
-    await delay(300);
+    await waitFor(() => hub.heartbeats.length >= 1, 10_000, '至少一次心跳');
     assert.ok(hub.heartbeats.length >= 1, '心跳应按 ack.heartbeatMs 发送');
 
     // 服务端反向调用：写文件 + 读回
@@ -758,7 +768,8 @@ test('createNodeDaemon：register + heartbeat + 反向 envExec/envReadTextFile/i
       timeout: 30,
     });
     assert.equal(exec.ok && exec.value.exitCode, 0);
-    await delay(300); // onEnvExecOutput 是事件推送，稍等落账
+    // onEnvExecOutput 是事件推送：轮询等落账
+    await waitFor(() => execOutputs.map((e) => e.text).join('').includes('via-hub-exec'), 10_000, '反向 envExec 输出回传');
     assert.match(execOutputs.map((e) => e.text).join(''), /via-hub-exec/);
 
     // 反向 ipcCall：经节点连本机 Herdr 模拟 socket
@@ -784,7 +795,11 @@ test('createNodeDaemon：register + heartbeat + 反向 envExec/envReadTextFile/i
       line: JSON.stringify({ id: 'sub', method: 'events.subscribe' }),
     });
     assert.equal(subAck.ok, true, subAck.ok ? '' : subAck.error.message);
-    await delay(400);
+    await waitFor(
+      () => ipcEvents.some((e) => e.subscribeId === 's1' && JSON.parse(e.line).event === 'hello'),
+      10_000,
+      'ipc 事件回传 Hub',
+    );
     assert.ok(ipcEvents.some((e) => e.subscribeId === 's1' && JSON.parse(e.line).event === 'hello'), 'ipc 事件应回传 Hub');
     await rpc!.ipcUnsubscribe!('s1');
     await subSrv.close();

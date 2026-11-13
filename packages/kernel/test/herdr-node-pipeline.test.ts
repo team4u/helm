@@ -5,7 +5,7 @@ import { test, type TestContext } from 'node:test'
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import { createHerdrTransport } from '../src/builtin-plugins/herdr/transport.js'
 import type { HerdrNodeChannel } from '../src/builtin-plugins/herdr/contracts.js'
-import { MutableNodeChannel, nodeFixture, type NodeFixture } from './herdr-node-fixture.js'
+import { MutableNodeChannel, nodeFixture, pollUntil, type NodeFixture } from './herdr-node-fixture.js'
 
 /**
  * 节点通道整链（取代历史 ssh+python3 stdin 通道）：
@@ -196,7 +196,8 @@ test('远端长 wait 经通道取消立即结算（底层 socket 即刻销毁）
   const controller = new AbortController()
   const pending = transport.call(target, 'agent.wait', { target: 'p1' }, { signal: controller.signal, timeoutMs: undefined })
   const observed = pending.then(() => undefined, (error: unknown) => error)
-  await new Promise((resolve) => setTimeout(resolve, 600)) // 让请求真正发出
+  // 等请求真正抵达节点服务（可观察：fixture.requests 落账）后再取消
+  await pollUntil(() => fixture.requests.some((r) => r.method === 'agent.wait'), 5_000, 'agent.wait 请求到达节点')
   controller.abort()
   let timer: NodeJS.Timeout | undefined
   const deadline = new Promise<undefined>((resolve) => {

@@ -41,6 +41,16 @@ import {
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 轮询等待可观察条件成立（替代固定 sleep），超时显式失败。 */
+async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await condition()) return;
+    await delay(20);
+  }
+  assert.ok(await condition(), `等待超时：${what}`);
+}
+
 async function tempDir(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
@@ -659,7 +669,7 @@ test('候选 pendingActivation：创建即拒新命令；confirmUpgrade 身份�
 
   // 正确 commit：resolve、立即心跳携带 upgradeCommit、gate 解除
   await stub.daemon.confirmUpgrade({ attemptId: 'att-pend-1', version, previousVersion: '6.6.5', pid });
-  await delay(300);
+  await waitFor(() => hub.heartbeatInputs.some((input) => input.upgradeCommit !== undefined), 10_000, '心跳携带 upgradeCommit');
   const commits = hub.heartbeatInputs.filter((input) => input.upgradeCommit !== undefined);
   assert.ok(commits.length >= 1, 'confirmUpgrade 后应立即/随后心跳携带 upgradeCommit');
   assert.equal(commits[0]?.upgradeCommit?.attemptId, 'att-pend-1');
@@ -691,7 +701,11 @@ test('断线重连后，commit 在内存保留并在新连接心跳重试', { ti
 
   // 非候选 daemon 的 confirmUpgrade 不做身份对账（普通心跳上报路径）
   await stub.daemon.confirmUpgrade({ attemptId: 'att-retry-1', version: '5.5.5', previousVersion: '5.5.4', pid: 777 });
-  await delay(300);
+  await waitFor(
+    () => hub.heartbeatInputs.some((input) => input.upgradeCommit?.attemptId === 'att-retry-1'),
+    10_000,
+    '首次心跳携带 commit',
+  );
   assert.ok(hub.heartbeatInputs.some((input) => input.upgradeCommit?.attemptId === 'att-retry-1'));
 
   await hub.close();
@@ -699,7 +713,11 @@ test('断线重连后，commit 在内存保留并在新连接心跳重试', { ti
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline && hub.registrations.length === 0) await delay(200);
   assert.equal(hub.registrations.length, 1, '应重连成功');
-  await delay(300);
+  await waitFor(
+    () => hub.heartbeatInputs.some((input) => input.upgradeCommit?.attemptId === 'att-retry-1'),
+    10_000,
+    '重连后心跳继续携带 commit',
+  );
   const retried = hub.heartbeatInputs.filter((input) => input.upgradeCommit?.attemptId === 'att-retry-1');
   assert.ok(retried.length >= 1, '重连后心跳应继续携带 commit');
   await hub.close();
