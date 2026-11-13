@@ -96,7 +96,9 @@ export type FixtureCorruption =
   | 'format-version'
   | 'checksums'
   | 'entry-missing'
-  | 'kernel-is-launcher';
+  | 'kernel-is-launcher'
+  | 'manifest-name'
+  | 'manifest-version';
 
 export interface FixturePayloadOptions {
   version: string;
@@ -146,6 +148,8 @@ export function fixturePayloadEntries(options: FixturePayloadOptions): TarEntry[
     },
   };
   if (options.corrupt === 'format-version') manifest['formatVersion'] = 2;
+  if (options.corrupt === 'manifest-name') manifest['name'] = 'evil-mismatched-payload';
+  if (options.corrupt === 'manifest-version') manifest['version'] = '9.9.9';
   if (options.corrupt === 'kernel-is-launcher') (manifest['entries'] as Record<string, unknown>)['kernel'] = 'start.mjs';
   if (options.corrupt === 'checksums') (manifest['entryChecksums'] as Record<string, unknown>)['kernel'] = '0'.repeat(64);
   let manifestText = `${JSON.stringify(manifest, null, 2)}\n`;

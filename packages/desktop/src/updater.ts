@@ -1,26 +1,28 @@
 /**
- * npm payload 更新器（真实实现，替换骨架 Stub）。
+ * npm payload 更新器（真实实现）。
  *
- * 路线（与 packages/payload/README.md 一致，不宣称解决 npm 自包含）：
- * 1. 从公开 npm registry 读取包元数据（dist-tags.latest 或锁定的精确版本）；
- * 2. 边界校验 name / version / dist.integrity（必须 sha512，base64 解码 64 字节）；
- * 3. 下载 tgz 到 <payloadRoot>/staging 临时区，流式落盘时校验 sha512 完整性；
- * 4. 解包（payload-tar.ts containment 强校验）到 staging/extract，经 manifest 契约
- *    校验后以 `start.mjs check` 验收；exit 3（依赖缺失）时经可注入 NpmInstaller 在
- *    payload 根目录安装生产依赖后复检；
- * 5. 验收通过后原子换名到 releases/<name>/<version>/ 不可变目录，原子写 current.json；
- *    安装失败按「制品缺陷」类错误码记录 blocked.json，当前版本绝不破坏。
+ * 生命周期（三段式：安装与激活分离，启动验收归属桌面壳，updater 不感知 Hub）：
+ * 1. stage(target)：registry 元数据强校验（严格 SemVer）→ 下载 tgz（sha512 流式校验）→
+ *    staging 解包（payload-tar.ts containment 强校验）→ manifest 契约校验（含与 registry
+ *    meta 的 name/version 一致性，不仅 format）→ `start.mjs check` 验收（exit 3 依赖缺失时
+ *    经可注入 NpmInstaller 安装生产依赖后复检）→ 原子晋升到
+ *    releases/<name>/<version>/<uuid> 不可变目录（绝不重命名/删除既有版本目录）→
+ *    原子写 pending.json；current.json 不动；
+ * 2. 桌面壳以 pending 入口启动新版本：健康则 activate(info)——previous.json 保存旧
+ *    baseline、current.json 原子切换、清除同一 pending；启动失败则 reject(info, error)——
+ *    记入 blocked.json、current 保持不动、清除同一 pending、不修改任何 release 目录；
+ * 3. resolveCurrent / resolvePending / resolvePrevious 读取时严格复验（状态文件与 release
+ *    manifest 的 name/version 一致、entryPath 与 manifest entries.kernel 一致、containment、
+ *    拒绝 Windows 绝对/盘符相对/反斜杠路径形态），损坏显式报错，绝不静默当空态。
  *
- * 生命周期边界：updater 只管理制品——不重启 Hub、不感知会话、不调用 Hub API。换装由
- * 桌面壳在 supervisor.stop() 之后、下一次 start() 时经 resolveCurrent() 选择新入口
- * （见 main.ts）；并发安装由文件锁串行（payload-lock.ts）。
+ * check() 更新判定：跟踪 latest 时仅「更大 SemVer」视为可更新（registry latest 回退不误报）；
+ * 显式锁定版本（HELM_PAYLOAD_VERSION / pinnedVersion）按用户意图比对相等性。
  *
- * 启动参数契约：payload 的 start.mjs 是「带命令参数的启动器」（check|start），不是
- * Hub 入口。本更新器把 manifest.entries.kernel 解析出的 kernel 入口作为 entryPath
- * 返回（entryArgs 恒空），manifest 校验显式拒绝 entries.kernel 指向 launcher 的声明，
- * 绝不把 start.mjs 当普通 Hub 入口直接启动。
+ * 生命周期边界：updater 只管理制品——不重启 Hub、不感知会话、不调用 Hub API。并发安装
+ * 由 fail-closed 文件锁串行（payload-lock.ts）：锁被占用仅有界等待，绝不自动接管。
+ * 安装失败按「制品缺陷」类错误码记录 blocked.json，当前版本绝不破坏。
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, openSync, closeSync, writeSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -38,7 +40,7 @@ import { HostNpmInstaller, type NpmInstaller } from './npm-installer.js';
 export interface PayloadInfo {
   readonly name: string;
   readonly version: string;
-  /** release 根目录（绝对路径）；安装完成后才存在。 */
+  /** release 目录（绝对路径，releases/<name>/<version>/<uuid> 不可变目录）；stage 后存在。 */
   readonly releaseDir?: string;
   /** Hub 入口（绝对路径，来自 payload manifest entries.kernel；非 start.mjs）。 */
   readonly entryPath?: string;
@@ -68,20 +70,31 @@ export interface PayloadInstallTarget {
 export interface PayloadUpdater {
   readonly id: string;
   check(): Promise<PayloadUpdateStatus>;
-  downloadAndInstall(target: PayloadInstallTarget): Promise<PayloadInfo>;
+  /** 下载并验收目标版本，写入 pending.json 等待激活决议；不影响 current。可重复执行。 */
+  stage(target: PayloadInstallTarget): Promise<PayloadInfo>;
+  /** 激活已 stage 的制品：previous.json 保存旧 baseline、current.json 原子切换、清除同一 pending。 */
+  activate(info: PayloadInfo): Promise<void>;
+  /** 拒绝已 stage 的制品：记入 blocked.json、保持 current、清除同一 pending、不动任何 release 目录。 */
+  reject(info: PayloadInfo, error: Error): Promise<void>;
+  /** 当前生效制品；无则 null；状态不满足契约时显式抛错。 */
   resolveCurrent(): PayloadInfo | null;
+  /** 待决议的已 stage 制品（pending.json）；无则 null；损坏显式抛错。 */
+  resolvePending(): PayloadInfo | null;
+  /** 最近一次激活前的 baseline（previous.json）；无则 null；损坏显式抛错。 */
+  resolvePrevious(): PayloadInfo | null;
 }
 
 // ---- 状态文件形状 ----
 
-interface CurrentState {
+/** current.json / pending.json / previous.json 共用形状（at = 写入时刻）。 */
+interface PayloadState {
   formatVersion: 1;
   name: string;
   version: string;
   releaseDir: string;
   entryPath: string;
   entryArgs: string[];
-  installedAt: string;
+  at: string;
 }
 
 interface BlockedEntry {
@@ -117,8 +130,49 @@ const ARTIFACT_FAULT_CODES = new Set([
   'tar_link_escape',
 ]);
 
-/** 版本号必须路径安全（semver 及 prerelease/build 字符集，禁分隔符）。 */
-const SAFE_VERSION_RE = /^[a-zA-Z0-9.+~-]+$/;
+// ---- 严格 SemVer（npm 版本号即 SemVer；不引运行时依赖，按 semver.org 优先级实现） ----
+
+/** 官方 SemVer 语法（build metadata 允许但优先级比较忽略）。 */
+const SEMVER_RE =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
+
+function parseSemVer(value: string): { major: number; minor: number; patch: number; prerelease: (number | string)[] } | null {
+  const matched = SEMVER_RE.exec(value);
+  if (matched === null) return null;
+  return {
+    major: Number(matched[1]),
+    minor: Number(matched[2]),
+    patch: Number(matched[3]),
+    prerelease:
+      matched[4] === undefined
+        ? []
+        : matched[4].split('.').map((identifier) => (/^\d+$/.test(identifier) ? Number(identifier) : identifier)),
+  };
+}
+
+/** SemVer 优先级比较（build metadata 忽略；release > prerelease；数字标识 < 字母标识）。 */
+function compareSemVer(a: string, b: string): number | null {
+  const pa = parseSemVer(a);
+  const pb = parseSemVer(b);
+  if (pa === null || pb === null) return null;
+  if (pa.major !== pb.major) return pa.major - pb.major;
+  if (pa.minor !== pb.minor) return pa.minor - pb.minor;
+  if (pa.patch !== pb.patch) return pa.patch - pb.patch;
+  if (pa.prerelease.length === 0 && pb.prerelease.length === 0) return 0;
+  if (pa.prerelease.length === 0) return 1;
+  if (pb.prerelease.length === 0) return -1;
+  const shared = Math.min(pa.prerelease.length, pb.prerelease.length);
+  for (let i = 0; i < shared; i++) {
+    const x = pa.prerelease[i]!;
+    const y = pb.prerelease[i]!;
+    if (x === y) continue;
+    if (typeof x === 'number' && typeof y === 'string') return -1;
+    if (typeof x === 'string' && typeof y === 'number') return 1;
+    if (typeof x === 'number' && typeof y === 'number') return x - y;
+    return x < y ? -1 : 1;
+  }
+  return pa.prerelease.length - pb.prerelease.length;
+}
 
 interface RegistryVersion {
   name: string;
@@ -154,8 +208,8 @@ export interface NpmPayloadUpdaterOptions {
   metadataTimeoutMs?: number;
   downloadTimeoutMs?: number;
   checkTimeoutMs?: number;
+  /** 安装互斥锁的有界等待时长（fail-closed：占用即等待/超时，绝不接管）。 */
   lockTimeoutMs?: number;
-  lockStaleMs?: number;
   maxTarballBytes?: number;
   maxExtractedBytes?: number;
   maxExtractEntries?: number;
@@ -201,7 +255,6 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     this.maxExtractEntries = options.maxExtractEntries ?? 200_000;
     this.lock = new PayloadFileLock(path.join(this.payloadRoot, '.lock'), {
       acquireTimeoutMs: options.lockTimeoutMs,
-      staleMs: options.lockStaleMs,
     });
     this.id = `npm:${this.packageName}@${this.registry}`;
   }
@@ -212,7 +265,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     const current = this.resolveCurrent();
     const meta = await this.fetchRegistryVersion(this.pinnedVersion ?? 'latest');
     const latest: PayloadInfo = { name: meta.name, version: meta.version };
-    if (current !== null && current.name === meta.name && current.version === meta.version) {
+    if (current !== null && current.name === meta.name && !this.isNewerTarget(current.version, meta.version)) {
       return { updateAvailable: false, current, latest, reason: 'up_to_date' };
     }
     const blockedEntry = this.readBlocked().entries[`${meta.name}@${meta.version}`];
@@ -228,9 +281,24 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     return { updateAvailable: true, current, latest };
   }
 
-  // ---- downloadAndInstall ----
+  /**
+   * 目标版本相对 current 是否值得更新：
+   * - 跟踪 latest：仅严格更大 SemVer 才算更新（registry latest 回退/持平不误报）；
+   * - 显式锁定版本（pinnedVersion）：用户明确意图，版本不同即算更新（允许降级换装）。
+   */
+  private isNewerTarget(currentVersion: string, targetVersion: string): boolean {
+    if (this.pinnedVersion !== undefined) return currentVersion !== targetVersion;
+    const ordering = compareSemVer(currentVersion, targetVersion);
+    if (ordering === null) {
+      // current.version 来自已通过严格校验的 manifest/meta，正常不可达；fail-closed 不放行。
+      return false;
+    }
+    return ordering < 0;
+  }
 
-  async downloadAndInstall(target: PayloadInstallTarget): Promise<PayloadInfo> {
+  // ---- stage：下载验收 + pending，不动 current ----
+
+  async stage(target: PayloadInstallTarget): Promise<PayloadInfo> {
     if (target.name !== this.packageName) {
       throw new DesktopError(
         'updater_target_mismatch',
@@ -238,12 +306,12 @@ export class NpmPayloadUpdater implements PayloadUpdater {
       );
     }
     const versionSpec = target.version.length > 0 ? target.version : 'latest';
-    return await this.lock.run(async () => this.installLocked(versionSpec));
+    return await this.lock.run(async () => this.stageLocked(versionSpec));
   }
 
-  private async installLocked(versionSpec: string): Promise<PayloadInfo> {
+  private async stageLocked(versionSpec: string): Promise<PayloadInfo> {
     const stagingRoot = path.join(this.payloadRoot, 'staging');
-    // 持锁清理崩溃遗留的 staging（上一进程未及清理的全部内容）。
+    // 持锁清理崩溃遗留的 staging：fail-closed 锁保证此刻无其他安装者。
     rmSync(stagingRoot, { recursive: true, force: true });
     mkdirSync(stagingRoot, { recursive: true });
     let meta: RegistryVersion | null = null;
@@ -254,13 +322,19 @@ export class NpmPayloadUpdater implements PayloadUpdater {
       if (blockedEntry !== undefined) {
         throw new DesktopError(
           'updater_version_blocked',
-          `${blockedKey} 此前安装失败已被标记阻断（${blockedEntry.code}: ${blockedEntry.message}）`,
+          `${blockedKey} 此前已被拒绝/安装失败（${blockedEntry.code}: ${blockedEntry.message}）`,
           { blocked: blockedEntry },
         );
       }
-      // 幂等快路径：目标版本即当前版本且制品完好 → 不重复下载。
+      // 幂等快路径 1：同版本 pending 仍待决议且制品完好 → 不重复下载。
+      const pending = this.resolvePendingSoft();
+      if (pending !== null && pending.name === meta.name && pending.version === meta.version) {
+        return pending;
+      }
+      // 幂等快路径 2：目标版本即当前生效版本 → 直接以待激活身份复用（不重下载、不毁 current）。
       const current = this.resolveCurrent();
-      if (current !== null && current.version === meta.version && current.name === meta.name) {
+      if (current !== null && current.name === meta.name && current.version === meta.version) {
+        writeJsonAtomic(this.pendingFile, this.stateOf(current, new Date().toISOString()));
         return current;
       }
 
@@ -273,9 +347,10 @@ export class NpmPayloadUpdater implements PayloadUpdater {
       });
       rmSync(tgzPath, { force: true });
 
-      const { kernelEntryPath, launcherPath } = this.loadPayloadManifest(extractDir);
+      const { kernelEntryPath, launcherPath } = this.loadPayloadManifest(extractDir, meta);
       await this.verifyWithInstaller(extractDir, launcherPath);
-      const info = this.promote(extractDir, meta, kernelEntryPath);
+      const info = this.promoteToImmutable(extractDir, meta, kernelEntryPath);
+      writeJsonAtomic(this.pendingFile, this.stateOf(info, new Date().toISOString()));
       this.unblockVersion(meta.version);
       return info;
     } catch (error) {
@@ -288,64 +363,247 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     }
   }
 
-  // ---- resolveCurrent ----
+  // ---- activate / reject：pending 决议 ----
+
+  async activate(info: PayloadInfo): Promise<void> {
+    await this.lock.run(async () => {
+      const state = this.validateInfo(info, 'payload_activate_invalid');
+      // current 损坏时显式抛错（fail-closed）：不能在旧状态不可信时静默换装。
+      const current = this.resolveCurrent();
+      const at = new Date().toISOString();
+      if (current !== null && current.releaseDir !== state.releaseDir) {
+        writeJsonAtomic(this.previousFile, this.stateOf(current, at));
+      }
+      writeJsonAtomic(this.currentFile, { ...state, at });
+      this.clearPendingFor(state.name, state.version);
+    });
+  }
+
+  async reject(info: PayloadInfo, error: Error): Promise<void> {
+    await this.lock.run(async () => {
+      const problems: string[] = [];
+      if (info.name !== this.packageName) problems.push(`name 与配置的 payload 包不一致: ${info.name}`);
+      if (typeof info.version !== 'string' || parseSemVer(info.version) === null) {
+        problems.push(`version 不是合法 SemVer: ${String(info.version)}`);
+      }
+      if (problems.length > 0) {
+        throw new DesktopError('payload_reject_invalid', 'reject 入参不满足契约', { problems });
+      }
+      // reject 是显式决议：无论错误类别一律记 blocked（环境类错误在 stage 内部已分流，不走到这里）。
+      const code = error instanceof DesktopError ? error.code : 'payload_rejected';
+      const details = error instanceof DesktopError ? (error.details as { stderrTail?: unknown } | undefined) : undefined;
+      this.writeBlockedEntry({
+        name: info.name,
+        version: info.version,
+        code,
+        message: error.message,
+        at: new Date().toISOString(),
+        stderrTail: Array.isArray(details?.stderrTail) ? (details!.stderrTail as string[]) : undefined,
+      });
+      this.clearPendingFor(info.name, info.version);
+    });
+  }
+
+  // ---- 状态读取（严格复验） ----
 
   resolveCurrent(): PayloadInfo | null {
-    const raw = readJsonState(this.currentFile, 'current.json');
+    return this.readStateInfo(this.currentFile, 'current.json', 'current_payload_invalid');
+  }
+
+  resolvePending(): PayloadInfo | null {
+    return this.readStateInfo(this.pendingFile, 'pending.json', 'pending_payload_invalid');
+  }
+
+  resolvePrevious(): PayloadInfo | null {
+    return this.readStateInfo(this.previousFile, 'previous.json', 'previous_payload_invalid');
+  }
+
+  /** pending 快路径专用：损坏/失效视为无待决议（pending 是派生状态，重 stage 会覆写）。 */
+  private resolvePendingSoft(): PayloadInfo | null {
+    try {
+      return this.resolvePending();
+    } catch {
+      return null;
+    }
+  }
+
+  private readStateInfo(file: string, what: string, code: string): PayloadInfo | null {
+    const raw = readJsonState(file, what);
     if (raw === undefined) return null;
-    const problems: string[] = [];
-    const c = raw as Partial<CurrentState>;
-    if (c.formatVersion !== 1) problems.push(`formatVersion 必须为 1，实际 ${JSON.stringify(c.formatVersion)}`);
-    if (typeof c.name !== 'string' || c.name.length === 0) problems.push('name 缺失');
-    if (typeof c.version !== 'string' || c.version.length === 0) problems.push('version 缺失');
-    if (typeof c.releaseDir !== 'string' || !path.isAbsolute(c.releaseDir)) problems.push('releaseDir 缺失或非绝对路径');
-    if (typeof c.entryPath !== 'string' || !path.isAbsolute(c.entryPath)) problems.push('entryPath 缺失或非绝对路径');
-    if (c.entryArgs !== undefined && (!Array.isArray(c.entryArgs) || c.entryArgs.some((a) => typeof a !== 'string'))) {
-      problems.push('entryArgs 必须是字符串数组');
-    }
-    if (typeof c.releaseDir === 'string' && path.isAbsolute(c.releaseDir)) {
-      const containment = path.relative(this.payloadRoot, c.releaseDir);
-      if (containment.startsWith('..') || path.isAbsolute(containment)) problems.push('releaseDir 逃逸 payload 管理目录');
-      else {
-        if (!existsSync(c.releaseDir) || !statSync(c.releaseDir).isDirectory()) problems.push(`releaseDir 不存在: ${c.releaseDir}`);
-        if (typeof c.entryPath === 'string' && path.isAbsolute(c.entryPath)) {
-          const entryContainment = path.relative(c.releaseDir, c.entryPath);
-          if (entryContainment.startsWith('..') || path.isAbsolute(entryContainment)) {
-            problems.push('entryPath 逃逸 releaseDir');
-          } else if (!existsSync(c.entryPath)) {
-            problems.push(`entryPath 不存在: ${c.entryPath}`);
-          }
-        }
-      }
-    }
-    if (problems.length > 0) {
-      throw new DesktopError('current_payload_invalid', '已安装 payload 状态不满足契约（current.json）', {
-        currentFile: this.currentFile,
-        problems,
-      });
-    }
-    return {
-      name: c.name!,
-      version: c.version!,
-      releaseDir: c.releaseDir,
-      entryPath: c.entryPath,
-      entryArgs: c.entryArgs ?? [],
-    };
+    return this.infoOf(this.validateState(raw, what, code));
   }
 
   private get currentFile(): string {
     return path.join(this.payloadRoot, 'current.json');
   }
 
+  private get pendingFile(): string {
+    return path.join(this.payloadRoot, 'pending.json');
+  }
+
+  private get previousFile(): string {
+    return path.join(this.payloadRoot, 'previous.json');
+  }
+
   private get blockedFile(): string {
     return path.join(this.payloadRoot, 'blocked.json');
+  }
+
+  private stateOf(info: PayloadInfo, at: string): PayloadState {
+    return {
+      formatVersion: 1,
+      name: info.name,
+      version: info.version,
+      releaseDir: info.releaseDir!,
+      entryPath: info.entryPath!,
+      entryArgs: [...(info.entryArgs ?? [])],
+      at,
+    };
+  }
+
+  private infoOf(state: PayloadState): PayloadInfo {
+    return {
+      name: state.name,
+      version: state.version,
+      releaseDir: state.releaseDir,
+      entryPath: state.entryPath,
+      entryArgs: state.entryArgs,
+    };
+  }
+
+  /** activate 入参复用状态文件的整套严格校验（不落盘，仅验证）。 */
+  private validateInfo(info: PayloadInfo, code: string): PayloadState {
+    return this.validateState(
+      {
+        formatVersion: 1,
+        name: info.name,
+        version: info.version,
+        releaseDir: info.releaseDir,
+        entryPath: info.entryPath,
+        entryArgs: info.entryArgs ?? [],
+      },
+      'activate 入参',
+      code,
+    );
+  }
+
+  /** 状态文件严格校验：形状 + 路径形态（拒 Windows 形态）+ containment + 存在性 + manifest 一致。 */
+  private validateState(raw: unknown, what: string, code: string): PayloadState {
+    const problems: string[] = [];
+    const s = (raw ?? {}) as Partial<PayloadState>;
+    if (s.formatVersion !== 1) problems.push(`formatVersion 必须为 1，实际 ${JSON.stringify(s.formatVersion)}`);
+    if (typeof s.name !== 'string' || s.name.length === 0 || s.name.includes('\\') || s.name.includes('..')) {
+      problems.push(`name 缺失或非法: ${JSON.stringify(s.name)}`);
+    } else if (s.name !== this.packageName) {
+      problems.push(`name 与 updater 配置的 payload 包不一致: ${s.name}`);
+    }
+    if (typeof s.version !== 'string' || parseSemVer(s.version) === null) {
+      problems.push(`version 不是合法 SemVer: ${JSON.stringify(s.version)}`);
+    }
+    const releaseDirOk = this.checkManagedPath(s.releaseDir, problems, 'releaseDir');
+    const entryPathOk = this.checkManagedPath(s.entryPath, problems, 'entryPath');
+    if (s.entryArgs !== undefined && (!Array.isArray(s.entryArgs) || s.entryArgs.some((a) => typeof a !== 'string'))) {
+      problems.push('entryArgs 必须是字符串数组');
+    }
+    if (releaseDirOk) {
+      const containment = path.relative(this.payloadRoot, s.releaseDir!);
+      if (containment.startsWith('..') || path.isAbsolute(containment)) {
+        problems.push('releaseDir 逃逸 payload 管理目录');
+      } else {
+        if (!existsSync(s.releaseDir!) || !statSync(s.releaseDir!).isDirectory()) {
+          problems.push(`releaseDir 不存在: ${s.releaseDir}`);
+        }
+        if (entryPathOk) {
+          const entryContainment = path.relative(s.releaseDir!, s.entryPath!);
+          if (entryContainment.startsWith('..') || path.isAbsolute(entryContainment)) {
+            problems.push('entryPath 逃逸 releaseDir');
+          } else if (!existsSync(s.entryPath!)) {
+            problems.push(`entryPath 不存在: ${s.entryPath}`);
+          }
+        }
+        if (typeof s.name === 'string' && s.name.length > 0 && typeof s.version === 'string' && s.version.length > 0) {
+          this.validateReleaseManifest(s.releaseDir!, s.name, s.version, entryPathOk ? s.entryPath! : null, problems);
+        }
+      }
+    }
+    if (problems.length > 0) {
+      throw new DesktopError(code, `已安装 payload 状态不满足契约（${what}）`, { what, problems });
+    }
+    return {
+      formatVersion: 1,
+      name: s.name!,
+      version: s.version!,
+      releaseDir: s.releaseDir!,
+      entryPath: s.entryPath!,
+      entryArgs: Array.isArray(s.entryArgs) ? s.entryArgs : [],
+      at: typeof s.at === 'string' ? s.at : '',
+    };
+  }
+
+  /**
+   * 管理路径形态校验：必须 POSIX 绝对路径；显式拒绝 Windows 形态——盘符前缀（C:\ 与盘符相对
+   * C:foo）与任何反斜杠（\\server 等）。注：不能直接用 path.win32.isAbsolute 判定——POSIX
+   * 绝对路径（/ 开头）在 win32 语义下同样是 absolute，会误杀全部合法路径；Windows 特有
+   * 形态恰为盘符前缀与反斜杠两者，显式拒绝即完备。
+   */
+  private checkManagedPath(value: unknown, problems: string[], what: string): value is string {
+    if (typeof value !== 'string' || value.length === 0) {
+      problems.push(`${what} 缺失或非字符串`);
+      return false;
+    }
+    if (!path.isAbsolute(value)) problems.push(`${what} 必须是绝对路径: ${value}`);
+    if (/^[A-Za-z]:/.test(value)) problems.push(`${what} 不得是 Windows 盘符路径形态（C:\ 或盘符相对）: ${value}`);
+    if (value.includes('\\')) problems.push(`${what} 不得包含反斜杠: ${value}`);
+    return true;
+  }
+
+  /** release 目录 manifest 复验：name/version 与状态文件一致，entryPath 与 entries.kernel 一致。 */
+  private validateReleaseManifest(releaseDir: string, name: string, version: string, entryPath: string | null, problems: string[]): void {
+    let manifest: unknown;
+    try {
+      manifest = JSON.parse(readFileSync(path.join(releaseDir, 'manifest.json'), 'utf8'));
+    } catch (error) {
+      problems.push(`release manifest.json 缺失或非法 JSON（${error instanceof Error ? error.message : String(error)}）`);
+      return;
+    }
+    const m = (manifest ?? {}) as Record<string, unknown>;
+    if (m['formatVersion'] !== 1) problems.push('release manifest formatVersion 必须为 1');
+    if (m['name'] !== name) problems.push(`release manifest name 与状态不一致: ${JSON.stringify(m['name'])} ≠ ${JSON.stringify(name)}`);
+    if (m['version'] !== version) {
+      problems.push(`release manifest version 与状态不一致: ${JSON.stringify(m['version'])} ≠ ${JSON.stringify(version)}`);
+    }
+    const entries = m['entries'];
+    const entriesRecord = typeof entries === 'object' && entries !== null ? (entries as Record<string, unknown>) : {};
+    const kernelRel = entriesRecord['kernel'];
+    if (typeof kernelRel !== 'string' || kernelRel.length === 0) {
+      problems.push('release manifest entries.kernel 缺失');
+      return;
+    }
+    const contained: string[] = [];
+    const resolved = this.containedIn(releaseDir, kernelRel, contained, 'entries.kernel');
+    if (contained.length > 0) {
+      problems.push(...contained);
+      return;
+    }
+    if (entryPath !== null && resolved !== path.resolve(entryPath)) {
+      problems.push(`entryPath 与 manifest entries.kernel 不一致: ${entryPath} ≠ ${resolved}`);
+    }
+  }
+
+  /** 清除与 (name, version) 匹配的 pending（其他版本的待决议保留）。 */
+  private clearPendingFor(name: string, version: string): void {
+    const raw = readJsonState(this.pendingFile, 'pending.json');
+    if (raw === undefined) return;
+    const pending = raw as Partial<PayloadState>;
+    if (pending.name !== name || pending.version !== version) return;
+    rmSync(this.pendingFile, { force: true });
   }
 
   // ---- registry 元数据 ----
 
   private async fetchRegistryVersion(spec: string): Promise<RegistryVersion> {
-    if (spec !== 'latest' && !SAFE_VERSION_RE.test(spec)) {
-      throw new DesktopError('registry_metadata_invalid', `版本说明符含非法字符: ${spec}`);
+    if (spec !== 'latest' && parseSemVer(spec) === null) {
+      throw new DesktopError('registry_metadata_invalid', `版本说明符不是合法 SemVer: ${spec}`);
     }
     const url = `${this.registry}/${encodeURIComponent(this.packageName)}`;
     let response: Response;
@@ -387,7 +645,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     return this.validateRegistryVersion(doc, spec);
   }
 
-  /** 边界强校验：name/version/dist.integrity(sha512)/dist.tarball 任一不满足显式拒绝。 */
+  /** 边界强校验：name/严格 SemVer version/dist.integrity(sha512)/dist.tarball 任一不满足显式拒绝。 */
   private validateRegistryVersion(doc: unknown, spec: string): RegistryVersion {
     const problems: string[] = [];
     const d = (doc ?? {}) as Record<string, unknown>;
@@ -395,8 +653,8 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     const distTags = d['dist-tags'];
     const latestTag = typeof distTags === 'object' && distTags !== null ? (distTags as Record<string, unknown>)['latest'] : undefined;
     const version = spec === 'latest' ? latestTag : spec;
-    if (typeof version !== 'string' || version.length === 0 || !SAFE_VERSION_RE.test(version)) {
-      problems.push(`无法解析目标版本（spec=${spec}，latest tag=${JSON.stringify(latestTag)}）`);
+    if (typeof version !== 'string' || parseSemVer(version) === null) {
+      problems.push(`无法解析合法 SemVer 目标版本（spec=${spec}，latest tag=${JSON.stringify(latestTag)}）`);
     }
     const versions = d['versions'];
     const entry =
@@ -510,7 +768,11 @@ export class NpmPayloadUpdater implements PayloadUpdater {
 
   // ---- payload manifest 契约 ----
 
-  private loadPayloadManifest(releaseDir: string): { kernelEntryPath: string; launcherPath: string } {
+  /** staging manifest 契约校验；meta 非空时同时强校验 name/version 与 registry 元数据一致。 */
+  private loadPayloadManifest(
+    releaseDir: string,
+    meta: RegistryVersion | null,
+  ): { kernelEntryPath: string; launcherPath: string } {
     let manifest: unknown;
     try {
       manifest = JSON.parse(readFileSync(path.join(releaseDir, 'manifest.json'), 'utf8'));
@@ -524,6 +786,12 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     const problems: string[] = [];
     const m = (manifest ?? {}) as Record<string, unknown>;
     if (m['formatVersion'] !== 1) problems.push(`formatVersion 必须为 1，实际 ${JSON.stringify(m['formatVersion'])}`);
+    if (meta !== null) {
+      if (m['name'] !== meta.name) problems.push(`manifest name 与 registry 元数据不一致: ${JSON.stringify(m['name'])} ≠ ${JSON.stringify(meta.name)}`);
+      if (m['version'] !== meta.version) {
+        problems.push(`manifest version 与 registry 元数据不一致: ${JSON.stringify(m['version'])} ≠ ${JSON.stringify(meta.version)}`);
+      }
+    }
     const entries = m['entries'];
     const entriesRecord = typeof entries === 'object' && entries !== null ? (entries as Record<string, unknown>) : {};
     const kernelRel = entriesRecord['kernel'];
@@ -546,12 +814,13 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     return { kernelEntryPath: kernelEntryPath!, launcherPath };
   }
 
-  /** 相对路径 containment 解析（manifest 声明同样不可逃逸 releaseDir）。 */
+  /** 相对路径 containment 解析（manifest 声明同样不可逃逸 releaseDir，且拒绝 Windows 形态：盘符前缀与反斜杠）。 */
   private containedIn(rootDir: string, rel: string, problems: string[], what: string): string {
     const normalized = path.posix.normalize(rel);
     if (
       normalized.length === 0 ||
       path.posix.isAbsolute(normalized) ||
+      /^[A-Za-z]:/.test(normalized) ||
       normalized === '..' ||
       normalized.startsWith('../') ||
       normalized.includes('\\')
@@ -681,50 +950,46 @@ export class NpmPayloadUpdater implements PayloadUpdater {
         throw new DesktopError('registry_metadata_invalid', `包名不可用作路径: ${name}`);
       }
     }
-    if (!SAFE_VERSION_RE.test(version)) {
-      throw new DesktopError('registry_metadata_invalid', `版本号含路径不安全字符: ${version}`);
+    if (parseSemVer(version) === null) {
+      throw new DesktopError('registry_metadata_invalid', `版本号不是合法 SemVer: ${version}`);
     }
     return path.join(this.payloadRoot, 'releases', ...segments, version);
   }
 
-  private promote(extractDir: string, meta: RegistryVersion, kernelEntryPath: string): PayloadInfo {
-    const releaseDir = this.releaseDirFor(meta.name, meta.version);
-    mkdirSync(path.dirname(releaseDir), { recursive: true });
-    // 同版本重装：旧目录暂挪 staging，新目录原子换名成功后再删；失败回滚保旧。
-    let trash: string | null = null;
-    if (existsSync(releaseDir)) {
-      trash = `${releaseDir}.old-${createHash('sha256').update(`${Date.now()}${process.pid}`).digest('hex').slice(0, 8)}`;
-      renameSync(releaseDir, trash);
-    }
+  /**
+   * 原子晋升到 releases/<name>/<version>/<uuid> 不可变目录：每次 stage 生成新 uuid，
+   * 绝不重命名/删除既有版本目录（同版本重装并存，激活由 current.json 指针决定）。
+   * 晋升失败（如目录被占位文件阻挡）显式报错，既有 current 与其他版本目录不受影响。
+   */
+  private promoteToImmutable(extractDir: string, meta: RegistryVersion, kernelEntryPath: string): PayloadInfo {
+    const versionRoot = this.releaseDirFor(meta.name, meta.version);
     try {
-      renameSync(extractDir, releaseDir);
+      mkdirSync(versionRoot, { recursive: true });
     } catch (error) {
-      if (trash !== null) {
-        try {
-          renameSync(trash, releaseDir);
-        } catch {
-          // 回滚尽力而为：换名失败本身已显式上抛
-        }
-      }
       throw new DesktopError(
         'payload_promote_failed',
-        `release 目录换名失败: ${releaseDir}（${error instanceof Error ? error.message : String(error)}）`,
+        `release 版本目录无法创建: ${versionRoot}（${error instanceof Error ? error.message : String(error)}）`,
+        { versionRoot },
       );
     }
-    const entryPath = path.join(releaseDir, path.relative(extractDir, kernelEntryPath));
-    writeJsonAtomic(this.currentFile, {
-      formatVersion: 1,
-      name: meta.name,
-      version: meta.version,
-      releaseDir,
-      entryPath,
-      entryArgs: [],
-      installedAt: new Date().toISOString(),
-    } satisfies CurrentState);
-    if (trash !== null) {
-      rmSync(trash, { recursive: true, force: true });
+    const entryRel = path.relative(extractDir, kernelEntryPath);
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const releaseDir = path.join(versionRoot, randomBytes(8).toString('hex'));
+      if (existsSync(releaseDir)) continue;
+      try {
+        renameSync(extractDir, releaseDir);
+      } catch (error) {
+        throw new DesktopError(
+          'payload_promote_failed',
+          `release 目录换名失败: ${releaseDir}（${error instanceof Error ? error.message : String(error)}）`,
+          { releaseDir },
+        );
+      }
+      return { name: meta.name, version: meta.version, releaseDir, entryPath: path.join(releaseDir, entryRel), entryArgs: [] };
     }
-    return { name: meta.name, version: meta.version, releaseDir, entryPath, entryArgs: [] };
+    throw new DesktopError('payload_promote_failed', `无法生成未占用的 release 目录（多次 uuid 冲突）: ${versionRoot}`, {
+      versionRoot,
+    });
   }
 
   // ---- blocked.json 维护 ----
@@ -739,25 +1004,15 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     return { formatVersion: 1, entries: b.entries };
   }
 
-  private recordBlockedIfArtifactFault(meta: RegistryVersion, error: DesktopError): void {
-    if (!ARTIFACT_FAULT_CODES.has(error.code)) return;
+  private writeBlockedEntry(entry: BlockedEntry): void {
     let state: BlockedState;
     try {
       state = this.readBlocked();
     } catch {
-      // blocked.json 损坏时安装错误优先上抛；此处不叠加侧信道失败
+      // blocked.json 损坏时原错误优先上抛；此处不叠加侧信道失败
       return;
     }
-    const details = error.details as { stderrTail?: unknown } | undefined;
-    const entry: BlockedEntry = {
-      name: meta.name,
-      version: meta.version,
-      code: error.code,
-      message: error.message,
-      at: new Date().toISOString(),
-      stderrTail: Array.isArray(details?.stderrTail) ? (details!.stderrTail as string[]) : undefined,
-    };
-    state.entries[`${meta.name}@${meta.version}`] = entry;
+    state.entries[`${entry.name}@${entry.version}`] = entry;
     // 超限淘汰最旧（对象键保持插入序）。
     const keys = Object.keys(state.entries);
     if (keys.length > BLOCKED_MAX_ENTRIES) {
@@ -768,6 +1023,19 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     } catch {
       // 记录失败不掩盖安装错误
     }
+  }
+
+  private recordBlockedIfArtifactFault(meta: RegistryVersion, error: DesktopError): void {
+    if (!ARTIFACT_FAULT_CODES.has(error.code)) return;
+    const details = error.details as { stderrTail?: unknown } | undefined;
+    this.writeBlockedEntry({
+      name: meta.name,
+      version: meta.version,
+      code: error.code,
+      message: error.message,
+      at: new Date().toISOString(),
+      stderrTail: Array.isArray(details?.stderrTail) ? (details!.stderrTail as string[]) : undefined,
+    });
   }
 
   private unblockVersion(version: string): void {
@@ -797,14 +1065,30 @@ export class UnconfiguredPayloadUpdater implements PayloadUpdater {
     return { updateAvailable: false, current: null, latest: null, reason: 'updater_not_configured' };
   }
 
-  async downloadAndInstall(_target: PayloadInstallTarget): Promise<never> {
+  async stage(_target: PayloadInstallTarget): Promise<never> {
     throw new DesktopError(
       'updater_not_configured',
       '未配置 payload npm 包名（HELM_PAYLOAD_PACKAGE 或 overrides.payloadPackage），无法自动安装',
     );
   }
 
+  async activate(_info: PayloadInfo): Promise<never> {
+    throw new DesktopError('updater_not_configured', '未配置 payload npm 包名，无法激活 payload');
+  }
+
+  async reject(_info: PayloadInfo, _error: Error): Promise<never> {
+    throw new DesktopError('updater_not_configured', '未配置 payload npm 包名，无法记录 payload 拒绝');
+  }
+
   resolveCurrent(): PayloadInfo | null {
+    return null;
+  }
+
+  resolvePending(): PayloadInfo | null {
+    return null;
+  }
+
+  resolvePrevious(): PayloadInfo | null {
     return null;
   }
 }
